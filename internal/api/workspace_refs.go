@@ -136,11 +136,18 @@ func (e *sourceRefusal) Error() string { return "workspace: " + e.err.Error() }
 // read-only (validateWorkspaceSources), and a write:<path> row turns any mount
 // at its path writable, whichever workspace the row came from. So the owner is
 // read here from the workspaces that hold the directory, not from the one
-// being folded: every member who holds it must be allowed to write it, and an
-// operator-owned holder passes as it always has. A directory no workspace
-// holds, or a list that cannot be read, refuses, since no owner can be named.
+// being folded.
+//
+// The holders that count are the run's own: attached is every workspace the
+// request names (the record door's one workspace), and each member-owned one
+// that holds the directory must be allowed to write it, while an operator-owned
+// one passes as it always has. A workspace that merely stores the same
+// directory is not part of the run and decides nothing about it. Only a
+// directory no attached workspace holds (a mount a policy authored) is held to
+// every stored holder, and there a directory no workspace holds, or a list
+// that cannot be read, refuses, since no owner can be named.
 // wasReadOnly is each mount's state before the fold, by index.
-func (s *Server) requirementWriteRefusal(ctx context.Context, mounts []types.WorkspaceMount, wasReadOnly []bool) *sourceRefusal {
+func (s *Server) requirementWriteRefusal(ctx context.Context, attached []types.Workspace, mounts []types.WorkspaceMount, wasReadOnly []bool) *sourceRefusal {
 	var widened []types.WorkspaceMount
 	for i, wm := range mounts {
 		if i < len(wasReadOnly) && wasReadOnly[i] && !wm.ReadOnlyOrDefault() {
@@ -153,32 +160,45 @@ func (s *Server) requirementWriteRefusal(ctx context.Context, mounts []types.Wor
 	refuse := func(reason string, err error) *sourceRefusal {
 		return &sourceRefusal{status: http.StatusUnprocessableEntity, reason: reason, err: err}
 	}
-	if s.cfg.Store == nil {
-		return refuse(reasonWorkspaceSourcesStoreUnavailable, errors.New("workspace onboarding requires a store, but none is configured"))
-	}
-	all, err := s.cfg.Store.ListWorkspaces(ctx)
-	if err != nil {
-		return refuse(reasonWorkspaceSourcesListUnavailable, fmt.Errorf("list workspaces: %w", err))
-	}
+	var stored []types.Workspace // read once, and only for a mount no attached workspace holds
 	for _, wm := range widened {
-		held := false
-		for _, ws := range all {
-			if !slices.ContainsFunc(ws.Sources, func(src types.WorkspaceSource) bool {
-				return src.Type == types.WorkspaceSourceTypeLocalDir && src.Path == wm.Source
-			}) {
-				continue
+		holders := localDirHolders(attached, wm.Source)
+		if len(holders) == 0 {
+			if stored == nil {
+				if s.cfg.Store == nil {
+					return refuse(reasonWorkspaceSourcesStoreUnavailable, errors.New("workspace onboarding requires a store, but none is configured"))
+				}
+				var err error
+				if stored, err = s.cfg.Store.ListWorkspaces(ctx); err != nil {
+					return refuse(reasonWorkspaceSourcesListUnavailable, fmt.Errorf("list workspaces: %w", err))
+				}
 			}
-			held = true
+			holders = localDirHolders(stored, wm.Source)
+		}
+		if len(holders) == 0 {
+			return refuse(reasonWorkspaceSourceNotOnboarded, fmt.Errorf(
+				"mount source %q is not an onboarded local directory (onboard it first via the workspaces API)", wm.Source))
+		}
+		for _, ws := range holders {
 			if err := userMountAllowed(s.cfg.UserMounts, ws.OwnedBy, wm); err != nil {
 				return refuse(reasonWorkspaceSourceMountNotAllowed, err)
 			}
 		}
-		if !held {
-			return refuse(reasonWorkspaceSourceNotOnboarded, fmt.Errorf(
-				"mount source %q is not an onboarded local directory (onboard it first via the workspaces API)", wm.Source))
-		}
 	}
 	return nil
+}
+
+// localDirHolders is the workspaces of list that carry path as a local_dir source.
+func localDirHolders(list []types.Workspace, path string) []types.Workspace {
+	var out []types.Workspace
+	for _, ws := range list {
+		if slices.ContainsFunc(ws.Sources, func(src types.WorkspaceSource) bool {
+			return src.Type == types.WorkspaceSourceTypeLocalDir && src.Path == path
+		}) {
+			out = append(out, ws)
+		}
+	}
+	return out
 }
 
 // userMountPosture is ONE run's member-mount posture, resolved once at

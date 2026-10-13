@@ -369,9 +369,11 @@ func TestApplyWorkspaceRequirements_WriteNarrowing(t *testing.T) {
 // TestApplyWorkspaceRequirements_WriteHeldToMemberWritableRoots: a write:<path>
 // row may not make a member's directory writable outside the member writable
 // roots (WARDYN_USER_WRITABLE_ROOTS). The fold answers for the directory's
-// owner, read from every stored workspace that holds it, so a row another
-// workspace supplies is held to the same roots, and an operator's directory
-// stays writable as before.
+// owner, read from the run's attached workspaces that hold it, so a row a
+// sibling attached workspace supplies is held to the same roots, and an
+// operator's directory stays writable as before, whoever else merely stores
+// it. Only a mount no attached workspace holds (one a policy authored) is held
+// to every stored holder.
 func TestApplyWorkspaceRequirements_WriteHeldToMemberWritableRoots(t *testing.T) {
 	root, project := memberProjectRoot(t)
 	disjoint, _ := memberProjectRoot(t)
@@ -386,23 +388,34 @@ func TestApplyWorkspaceRequirements_WriteHeldToMemberWritableRoots(t *testing.T)
 	}
 	member, operator := holder(ownerMemberSub), holder("")
 	bystander := types.Workspace{ID: uuid.New()} // operator-owned, holds no directory
+	ws := func(list ...types.Workspace) []types.Workspace { return list }
+	const refused = reasonWorkspaceSourceMountNotAllowed
 	for _, tc := range []struct {
 		name       string
 		writable   []string
-		stored     []types.Workspace
-		folded     types.Workspace
+		stored     []types.Workspace // every onboarded workspace
+		attached   []types.Workspace // the run's own
+		folded     types.Workspace   // the one whose row is folded
 		level      string
 		wantReason string // "" = admitted, and the mount is writable
 	}{
-		{"no writable roots, optional enabled", nil, []types.Workspace{member}, member, "optional", reasonWorkspaceSourceMountNotAllowed},
-		{"no writable roots, required", nil, []types.Workspace{member}, member, "required", reasonWorkspaceSourceMountNotAllowed},
-		{"disjoint writable roots, optional enabled", []string{disjoint}, []types.Workspace{member}, member, "optional", reasonWorkspaceSourceMountNotAllowed},
-		{"disjoint writable roots, required", []string{disjoint}, []types.Workspace{member}, member, "required", reasonWorkspaceSourceMountNotAllowed},
-		{"row supplied by another workspace", nil, []types.Workspace{member, bystander}, bystander, "required", reasonWorkspaceSourceMountNotAllowed},
-		{"an operator and a member both hold it", nil, []types.Workspace{operator, member}, operator, "required", reasonWorkspaceSourceMountNotAllowed},
-		{"no workspace holds it", nil, []types.Workspace{bystander}, bystander, "required", reasonWorkspaceSourceNotOnboarded},
-		{"inside the writable roots", []string{root}, []types.Workspace{member}, member, "optional", ""},
-		{"operator-owned, no writable roots", nil, []types.Workspace{operator}, operator, "required", ""},
+		// A member's run on their own workspace.
+		{"no writable roots, optional enabled", nil, ws(member), ws(member), member, "optional", refused},
+		{"no writable roots, required", nil, ws(member), ws(member), member, "required", refused},
+		{"disjoint writable roots, optional enabled", []string{disjoint}, ws(member), ws(member), member, "optional", refused},
+		{"disjoint writable roots, required", []string{disjoint}, ws(member), ws(member), member, "required", refused},
+		{"inside the writable roots", []string{root}, ws(member), ws(member), member, "optional", ""},
+		// The row comes from a sibling attached workspace; the holder in the run decides.
+		{"row supplied by a sibling, member holder attached", nil, ws(member, bystander), ws(member, bystander), bystander, "required", refused},
+		{"row supplied by a sibling, operator holder attached, a member's workspace merely stored", nil, ws(operator, member, bystander), ws(operator, bystander), bystander, "required", ""},
+		// An operator and a member both hold the directory.
+		{"operator and member holders both attached", nil, ws(operator, member), ws(operator, member), operator, "required", refused},
+		{"operator holder attached, the member's workspace merely stored", nil, ws(operator, member), ws(operator), operator, "required", ""},
+		{"operator-owned, no writable roots", nil, ws(operator), ws(operator), operator, "required", ""},
+		// A mount no attached workspace holds, as a policy authors one: every stored holder decides.
+		{"policy-authored mount, a member stores it", nil, ws(operator, member), nil, operator, "required", refused},
+		{"policy-authored mount, only an operator stores it", nil, ws(operator), nil, operator, "required", ""},
+		{"no workspace holds it", nil, ws(bystander), ws(bystander), bystander, "required", reasonWorkspaceSourceNotOnboarded},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			st := newOwnerStore()
@@ -415,7 +428,7 @@ func TestApplyWorkspaceRequirements_WriteHeldToMemberWritableRoots(t *testing.T)
 			folded := supplier(tc.folded, tc.level)
 			sel := map[string]client.WorkspaceSelection{folded.ID.String(): {WorkspaceID: folded.ID.String(), EnabledOptional: []string{"write:" + project}}}
 
-			_, refusal := srv.applyWorkspaceRequirements(context.Background(), spec, "claude-code", []types.Workspace{folded}, sel)
+			_, refusal := srv.applyWorkspaceRequirementsFor(context.Background(), nil, spec, "claude-code", []types.Workspace{folded}, tc.attached, sel)
 
 			if tc.wantReason == "" {
 				if refusal != nil || spec.WorkspaceMounts[0].ReadOnlyOrDefault() {

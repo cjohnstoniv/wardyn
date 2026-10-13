@@ -293,7 +293,7 @@ func TestIntegrationFold_MemberOwnKeySatisfiesRequirement(t *testing.T) {
 
 	spec := &types.RunPolicySpec{}
 	present := srv.presentSecretNamesFor(context.Background(), "bob")
-	srv.applyWorkspaceRequirementsFor(context.Background(), present, spec, "claude-code", ws, nil)
+	srv.applyWorkspaceRequirementsFor(context.Background(), present, spec, "claude-code", ws, ws, nil)
 	if n, want := len(apiKeyScopes(t, spec)), len(feedIntegration().Egress); n != want {
 		t.Fatalf("member-owned secret must author one credential grant per requirement host; got %d, want %d", n, want)
 	}

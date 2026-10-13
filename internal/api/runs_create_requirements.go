@@ -108,9 +108,10 @@ func resolveWorkspaceSelections(req createRunRequest) map[string]client.Workspac
 //
 // A non-nil refusal means a write:<path> row made a mount writable that the
 // member mount gate does not allow (requirementWriteRefusal): the caller
-// answers it and neither persists nor dispatches the spec.
+// answers it and neither persists nor dispatches the spec. The workspaces
+// folded here are the run's own attached ones: the record door's one workspace.
 func (s *Server) applyWorkspaceRequirements(ctx context.Context, spec *types.RunPolicySpec, agent string, wsRefs []types.Workspace, selections map[string]client.WorkspaceSelection) ([]requirementAuditEntry, *sourceRefusal) {
-	return s.applyWorkspaceRequirementsFor(ctx, nil, spec, agent, wsRefs, selections)
+	return s.applyWorkspaceRequirementsFor(ctx, nil, spec, agent, wsRefs, wsRefs, selections)
 }
 
 // applyWorkspaceRequirementsFor is applyWorkspaceRequirements with the
@@ -118,8 +119,11 @@ func (s *Server) applyWorkspaceRequirements(ctx context.Context, spec *types.Run
 // already computed (presentSecretNamesFor with secretOwnerFromRequest), so a
 // workspace's integration requirement resolves a member's own key exactly as
 // their run will; nil means the operator namespace, computed lazily — the
-// record route and every existing test keep that.
-func (s *Server) applyWorkspaceRequirementsFor(ctx context.Context, present map[string]bool, spec *types.RunPolicySpec, agent string, wsRefs []types.Workspace, selections map[string]client.WorkspaceSelection) ([]requirementAuditEntry, *sourceRefusal) {
+// record route and every existing test keep that. attached is every workspace
+// the request names, which a door that folds one workspace at a time passes
+// whole: a write row's mount is held to the owners among them
+// (requirementWriteRefusal).
+func (s *Server) applyWorkspaceRequirementsFor(ctx context.Context, present map[string]bool, spec *types.RunPolicySpec, agent string, wsRefs, attached []types.Workspace, selections map[string]client.WorkspaceSelection) ([]requirementAuditEntry, *sourceRefusal) {
 	var events []requirementAuditEntry
 	// The member mount gate ran on these mounts as they stand now. One a
 	// write: row below makes writable meets it again before this returns.
@@ -216,7 +220,7 @@ func (s *Server) applyWorkspaceRequirementsFor(ctx context.Context, present map[
 			})
 		}
 	}
-	return events, s.requirementWriteRefusal(ctx, spec.WorkspaceMounts, wasReadOnly)
+	return events, s.requirementWriteRefusal(ctx, attached, spec.WorkspaceMounts, wasReadOnly)
 }
 
 // effectiveRequirements is the contract a run actually consumes: the store's

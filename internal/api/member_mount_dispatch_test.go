@@ -249,6 +249,67 @@ func TestRunDoors_RequirementWriteOutsideMemberWritableRootsIs422(t *testing.T) 
 	}
 }
 
+// TestRunDoors_RequirementWriteReadsTheRunsOwnHolders: the owner a write row's
+// mount is held to is read from the workspaces the request attaches, all of
+// them, not from every workspace that stores the directory and not from the
+// one workspace being folded. An operator's workspace keeps its write while a
+// member's workspace merely stores the same directory, whichever attached
+// workspace supplies the row; with the member's workspace in the run, a row a
+// sibling supplies is refused.
+func TestRunDoors_RequirementWriteReadsTheRunsOwnHolders(t *testing.T) {
+	root, project := memberProjectRoot(t)
+	row := map[string]types.WorkspaceRequirement{"write:" + project: {Level: "required", Provenance: "operator_set"}}
+	dir := []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeLocalDir, Path: project}}
+	scratch := []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeEphemeral, Target: "/home/agent/scratch"}}
+	attach := func(ids ...uuid.UUID) string {
+		var sels []string
+		for _, id := range ids {
+			sels = append(sels, `{"workspace_id":"`+id.String()+`"}`)
+		}
+		return `{"agent":"claude-code","task":"do the thing","workspaces":[` + strings.Join(sels, ",") + `]}`
+	}
+	for _, tc := range []struct {
+		name string
+		// ownRow puts the row on the operator's workspace itself; otherwise a sibling carries it.
+		ownRow bool
+	}{{"the operator workspace's own row", true}, {"a sibling attached workspace's row", false}} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, st, fr := userDispatchHarness(t, runner.UserMountPolicy{Roots: []string{root}})
+			st.put(types.Workspace{OwnedBy: ownerMemberSub, Status: types.WorkspaceScanned, Sources: dir}) // stored, not in the run
+			op := types.Workspace{Status: types.WorkspaceScanned, Sources: dir}
+			ids := []uuid.UUID{uuid.Nil}
+			if tc.ownRow {
+				op.Requirements = row
+			} else {
+				ids = append(ids, st.put(types.Workspace{Status: types.WorkspaceScanned, Sources: scratch, Requirements: row}))
+			}
+			ids[0] = st.put(op)
+			w := do(t, srv, http.MethodPost, "/api/v1/runs", adminToken, attach(ids...))
+			if w.Code != http.StatusCreated {
+				t.Fatalf("code = %d, want 201: a member's workspace that only stores the directory decided this run; body=%s", w.Code, w.Body.String())
+			}
+			fr.waitForSandbox(t)
+			if m := mountFor(t, fr.lastSpec, composerWorkspaceTarget); m.ReadOnly {
+				t.Errorf("the operator workspace's bind %q is read-only; its write row must reach the driver", m.Source)
+			}
+		})
+	}
+
+	t.Run("a sibling's row with the member's workspace attached", func(t *testing.T) {
+		srv, st, fr := userDispatchHarness(t, runner.UserMountPolicy{Roots: []string{root}})
+		own := st.put(types.Workspace{OwnedBy: ownerMemberSub, Status: types.WorkspaceScanned, Sources: dir})
+		sibling := st.put(types.Workspace{Status: types.WorkspaceScanned, Sources: scratch, Requirements: row})
+		member := ssoSession(t, ownerMemberSub, "member@corp.example", oidc.RoleUser)
+		w := doSSO(t, srv, http.MethodPost, "/api/v1/runs", member, attach(own, sibling))
+		if w.Code != http.StatusUnprocessableEntity || reasonOf(t, w) != reasonWorkspaceSourceMountNotAllowed {
+			t.Fatalf("code = %d, want 422 %s; body=%s", w.Code, reasonWorkspaceSourceMountNotAllowed, w.Body.String())
+		}
+		if fr.createCalls != 0 {
+			t.Errorf("CreateSandbox calls = %d, want 0", fr.createCalls)
+		}
+	})
+}
+
 // recordListStore is recordLLMModeStore plus the two workspace reads the
 // record door makes: its own load, and the list the requirements fold reads a
 // directory's owner from.
