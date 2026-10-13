@@ -378,7 +378,7 @@ that ceiling down; each run receives only the minimal subset its task needs.
   - never `host`, which stays a warned-against override.
 - Plus the layer-cache registry, which is multi-homed and unauthenticated (the `registry` service in
   [`deploy/compose/docker-compose.yaml`](../deploy/compose/docker-compose.yaml)).
-- **Build record (0.9).** A workspace build records its inputs and the image it made. A rebuild reproduces the pinned base, features and claude-code version, or fails naming the input.
+- **Build record (0.9).** A workspace build records its inputs and the image it made. A rebuild reproduces the pinned base, features and claude-code version. When a pinned input is gone it fails naming that input.
   - This pins inputs, not bytes: feature scripts and package managers float, so a rebuilt image has a new id. A build that could not be pinned is recorded as not reproducible.
 - Residual #13.
 
@@ -1440,7 +1440,7 @@ hiding them would repeat the failure mode we are designed to avoid.
       - Nothing signs it. Comparing its SHA-256 with the append-only `run.build` row is the only tamper check, and it is manual in 0.9.
       - The first digest is trust on first use of the daemon's path to the registry. The daemon resolves digests while the builder fetches them, so the two paths can disagree.
       - The installer fields are what the build reported. A repository devcontainer's content can move at a fixed ref: it is recorded, never pinned. An envbuilder image override is not recorded.
-      - A crash between the image swap and the audit write leaves a swapped image with no `workspace.image.refresh` row.
+      - A crash between the image swap and the audit writes leaves a swapped image and record with no `run.build` row to compare against, and for a refresh no `workspace.image.refresh` row.
 
 14. **The control plane authenticates; it barely authorizes.**
     - Distinct from #9 (someone who already IS an admin): on any OIDC deployment every authenticated developer would hold admin powers, because an unconfigured deployment derives every session to the admin role.
@@ -2447,12 +2447,13 @@ hiding them would repeat the failure mode we are designed to avoid.
 66. **An extended egress baseline lowers two grades: the autonomy posture and the CC3 floor for an `api_key` [0.9].**
     - The composer's built-in baseline (`safeBaselineDomains`) now also takes exact hostnames (`SiteEgress.BaselineHosts`) and `internal_hosts` entries marked `baseline: true`, which cover their subdomains too.
     - A baseline host stops counting against the rubric's egress and secrets axes, and an `api_key` grant to it no longer raises `RequiredConfinementFloor` to CC3. Neither input allows a host.
-    - Only `PUT /governance/egress-baseline` writes either set: the security tier, held for a second human under `WARDYN_GOVERNANCE_SECOND_HUMAN`, audited `governance.egress_baseline.write` with the before and after sets.
-    - `PUT /site-config` carries stored marks forward and refuses a change to either set (`inlineBaselineRefusal`). The boot seed may mark an empty document once; an upgrade marks nothing.
+    - The security tier writes either set with `PUT /governance/egress-baseline`, held for a second human under `WARDYN_GOVERNANCE_SECOND_HUMAN` and audited `governance.egress_baseline.write` with the before and after sets.
+    - `PUT /site-config` carries stored marks forward and refuses a change to either set (`inlineBaselineRefusal`).
+    - The boot seed also writes its `internal_hosts`, marks included, whenever the stored list is empty, at any boot. That write is audited `site_config.seed` and takes no second-human hold. An upgrade marks no stored entry.
     - The guard refuses only a public suffix itself. A non-PSL parent such as `amazonaws.com` can still span tenants; the approving humans must assess its reach.
 
 67. **A run attached to several workspaces holds the union of their reach in one sandbox [0.9].**
-    - Since 0.9 a run attaches any number of workspaces, and each one's requirements, secrets, grants and egress fold into the run. Equal or nested targets across workspaces are refused (`workspace_target_overlap`).
+    - Since 0.9 a run attaches up to `32` workspaces, and each one's requirements, secrets, grants and egress fold into the run. Equal or nested targets across workspaces are refused (`workspace_target_overlap`).
     - So content from one workspace's repository, a prompt injection in a README included, drives an agent holding every other workspace's credentials: A's resident `env_secret` is readable, and B's git grant can push what A's sources authored.
     - The ceiling and grants bind the union, review attributes each folded requirement secret to its workspace, and two distinct model-provider pins or base images are refused.
     - Attribution is visibility, not separation: keep workspaces whose credentials differ in sensitivity in separate runs.
@@ -2463,7 +2464,7 @@ hiding them would repeat the failure mode we are designed to avoid.
     - The gateway relays bytes it cannot parse, so those rules hold only through the CLI, and `WARDYN_SYNC_DIR` is a start point, not a boundary.
     - **Ordinary files remain.** A pulled `Makefile`, package script, test or source file runs when the developer builds, with their credentials and none of Wardyn's controls.
     - Transfers are recorded as byte counts (`ssh.sync.transfer`), never content, and SFTP is unmasked (§4.1).
-    - A run on a runner takes no writable laptop folder in 0.9.0: a `local_dir` source or a `host_path` drive is refused `placement_local_path`.
+    - A run on a runner takes no laptop folder in 0.9.0: a `local_dir` source or a `host_path` drive is refused `placement_local_path`.
 
 69. **On a runner host the developer is root: every control binds the agent, not the developer, and everything a local run uses is developer-readable [0.9, client mode].**
     - A run placed `local` runs on its owner's laptop under `wardyn-runnerd`, with the same sandbox, proxy sidecar and gatewayless network as any Docker run (B12).
@@ -2554,7 +2555,7 @@ hiding them would repeat the failure mode we are designed to avoid.
     - The intent holds the run's task text, inline component definitions, and the names (never values) of the secrets, hosts and workspaces it asked for.
     - It is deleted with the run row and readable only by the run's creator, with no administrator bypass.
     - The run-document door refuses secret-shaped strings, so such a run keeps no intent (`document_refused`). Text the scan misses is kept, as the run row's own task is.
-    - Erasure (`run_tasks`, `components`, `run_setups`) deletes it. Every run insert takes a per-person lock shared and without waiting; the erase takes it exclusively and waits.
+    - Erasure (`run_tasks`, `components`, `run_setups`) deletes it. Every run insert that carries an intent takes a per-person lock shared and without waiting; the erase takes it exclusively and waits.
     - So the erase deletes every intent whose insert began before it, and a launch that meets a running or queued erase keeps none (`erasure_in_progress`).
     - Residual: a request decoded before the erase whose insert begins after it commits keeps its intent, the same boundary as the run row's task.
     - The console drops the New Run query when a different person signs in, so no template, run or launch-intent id of the previous person is replayed.
@@ -2576,8 +2577,9 @@ hiding them would repeat the failure mode we are designed to avoid.
 
 82. **A run template is content, never authority, and its secret scan is not proof [0.9].**
     - Using a template re-resolves the launcher's own policy, credentials, components, pools and drives. A template holds references, never values, and its audience sees those names.
-    - Each row is checked for read access, and a template a caller cannot read answers as a missing one. A copy is validated again for its target audience, and readers never see the publisher.
-    - A group write needs verified membership and a grant re-read inside the write's transaction, so a revoke and a write never both succeed. Per-audience limits are counted under a per-audience lock.
+    - Each row is checked for read access, and a template a caller cannot read answers as a missing one. The exception is a write to a group template by a caller whose group snapshot is missing or truncated, which answers `403` `template_group_unverified`.
+    - A copy is validated again for its target audience, and readers never see the publisher.
+    - A group write needs verified membership and a grant re-read inside the write's transaction, so a write never commits after its grant's revoke. Per-audience limits are counted under a per-audience lock.
     - Residual: the door refuses secret-shaped strings by format and key name. A bare password in free text passes.
     - Residual: access follows the group identifier the identity provider sends. A group re-created under a reused identifier inherits the old group's templates.
     - Residual: a template can reference an organisation component or drive its audience cannot use; the check at use refuses it.
@@ -2595,7 +2597,7 @@ hiding them would repeat the failure mode we are designed to avoid.
     - It adds one read: a names-only list of the caller's own secret namespace, used to offer a sign-in. It reads no value and gates nothing; create re-checks the credential.
     - The catalogue's CLI card state comes only from the caller's granted rows, so an ungranted row reads as none. It omits the SSO portal URL and subscription ids.
     - **Disk sizes.** A size the run's policy writes is a requirement, and a runner that cannot cap disk refuses it (`main_drive_unenforceable`). A requested or defaulted size is soft: such a runner runs it uncapped, and the run says so.
-    - A profile maximum below the deployment default no longer shrinks a member's sandbox below that default. Lower the deployment default, or set a smaller ceiling size, to bound it.
+    - A profile's CPU or memory maximum below the deployment default no longer shrinks a member's sandbox below that default. Lower the deployment default, or set a smaller ceiling size, to bound it. A disk maximum still cuts.
 
 ### The injected call is pinned on the wire (security INFO-1 / W6-S F3) — SHIPPED, not deferred
 
@@ -3308,9 +3310,12 @@ the sandbox, is still loaded, and the agent runs as the uid that owns it.
   - It omits `disableBypassPermissionsMode`, so a hold run at locked L2 lacks L1's bypass-refusal backstop. The drift probe pins `--permission-mode manual` overriding the document's `acceptEdits`.
   - The pinned CLI probe verifies repository SessionStart hooks do not run under the bypass flag, with an unsuppressed control. Other hook types and hold-lane flag combinations remain outside that probe.
 - **Interactive tool rules [0.9].** An interactive Claude Code run carries its tool rules as exact-name `permissions.allow`, `ask` and `deny` entries, with `allowManagedPermissionRulesOnly`, in the root-owned managed settings file (`WithToolRules`).
-  - Measured on the pinned CLI: a deny removes the tool even under `--dangerously-skip-permissions`, an ask prompts even under bypass and over repository rules or hooks, and an allow skips the prompt.
+  - A deny and an ask under the bypass flag were measured once, by hand, on the pinned CLI version. The in-tree drift probe re-checks only that a denied built-in tool is absent from the session.
   - Generation fails closed: any error refuses the run, and each tool name is validated as an exact name.
-  - A policy or ceiling `*: deny` has no Claude Code equivalent, so an interactive run asks for an unnamed tool instead of blocking it.
+  - **Accepted residual.** A policy or ceiling `*: deny` has no Claude Code equivalent, so an interactive run does not block an unnamed tool: Claude Code's own mode answers it.
+    - That is a prompt in default mode, and none when the session was seeded in bypass mode (`seed_auto_tools` at L2 or above), which only the L0 and L1 documents lock off.
+    - Named rules still hold in bypass mode: the managed settings document carries them, so a managed deny removes the tool and a managed ask still prompts.
+    - A governance profile whose tool rules hold or deny refuses `seed_auto_tools`. So only a tool that no rule names runs unasked on such a run.
   - A runner that cannot deliver managed files refuses a rule-carrying interactive run at dispatch, not at create. The vendor's behaviour must be re-proved on every CLI bump.
 - The flag is on the hold lane only: the autonomous lane already runs every tool (`--dangerously-skip-permissions`), and the interactive lanes have no Wardyn gate in the path.
 - The approver there is the human in the pane.
@@ -3805,7 +3810,7 @@ The **explicit kill** path (`handleKillRun`) runs this fixed order:
   contained, retry the kill.
 - SPIRE entry deletion arrives with SPIRE 🟡 **[planned]**; GitHub installation tokens are
   TTL-bound (no per-token revoke API) — residual #7.
-- **A run on an offline runner [0.9].** Step 2 waits as a pending action that the runner applies on reconnect, before any relay (`runner_action_pending`). Steps 3–4 run at once, so the run's tokens and broker credentials end on time (residual #77).
+- **A run on an offline runner [0.9].** Step 2 waits as a pending action that the runner applies on reconnect, before any relay (`runner_action_pending`). Steps 3–4 run at once, so the run's tokens and broker credentials end on time (residual #77). A person's kill records the waiting stop as `runner_error`; only the lifetime kill records `sandbox_stop: queued`.
 - Non-kill stops (completion, failure, idle auto-stop) also win the durable-state compare-and-swap
   *first* — same C002 invariant, a lost CAS never revokes a still-live run.
 - But the caller wins it BEFORE calling the shared `finalizeRunTail`, whose internal order is
