@@ -400,6 +400,7 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `START_MAIN` | deviation (owner-approved Files prototype 2026-10-13) | Main drive · /home/agent |
 | `SUBFOLDER_LABEL` | deviation (owner-approved Files prototype 2026-10-13) | Subfolder |
 | `FOLDERS_NONE` | pending (W-48) | No folders onboarded yet. Add one in Workspaces. |
+| `FOLDER_WITH_REPOS(workspace)` | pending (W-49) | This folder comes with {workspace}'s repositories. Remove them to remove it. |
 | `SUBFOLDER_PLACEHOLDER` | deviation (owner-approved Files prototype 2026-10-13) | e.g. src |
 | `SUBFOLDER_ERROR(name)` | deviation (owner-approved Files prototype 2026-10-13) | Use a folder inside {name}. |
 | `LIST_COMMA(a, b)` | deviation (owner-approved Files prototype 2026-10-13) | {a}, {b} |

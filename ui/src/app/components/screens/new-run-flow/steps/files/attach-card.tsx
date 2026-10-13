@@ -10,6 +10,7 @@
 import { ChevronRight } from "lucide-react";
 import { Button } from "../../../../ui/button";
 import { cn } from "../../../../ui/utils";
+import { InfoTip } from "../../../../wardyn/info-tip";
 import { Chip } from "../../../../wardyn/primitives";
 import { NR_FILES } from "../../../../wardyn/copy/new-run/files";
 import { NR_SHARED } from "../../../../wardyn/copy/new-run/shared";
@@ -65,9 +66,11 @@ export function AttachCard({ item, open, onToggle, onEdit, onRemove }: {
           {item.path && <PathText path={item.path} className="whitespace-nowrap [&_wbr]:hidden max-[520px]:whitespace-normal max-[520px]:[&_wbr]:inline" />}
         </span>
         <span className="min-w-0 whitespace-nowrap max-[760px]:justify-self-end max-[760px]:[grid-area:access]">{access}</span>
-        <span className="flex justify-end gap-0.5 max-[760px]:[grid-area:actions]">
+        <span className="flex items-center justify-end gap-0.5 max-[760px]:[grid-area:actions]">
           <Button type="button" variant="ghost" size="sm" aria-label={NR_FILES.EDIT_NAMED(item.name)} onClick={onEdit}>{NR_FILES.EDIT}</Button>
-          <Button type="button" variant="ghost" size="sm" aria-label={NR_FILES.REMOVE_NAMED(item.name)} onClick={onRemove}>{NR_SHARED.REMOVE}</Button>
+          <Button type="button" variant="ghost" size="sm" aria-label={NR_FILES.REMOVE_NAMED(item.name)} disabled={!!item.removeBlocked} onClick={onRemove}>{NR_SHARED.REMOVE}</Button>
+          {/* Why Remove is off, opened by a tap: the folder leaves only with its workspace's repositories. */}
+          {item.removeBlocked && <InfoTip label={item.removeBlocked}>{item.removeBlocked}</InfoTip>}
         </span>
       </div>
       {open && (

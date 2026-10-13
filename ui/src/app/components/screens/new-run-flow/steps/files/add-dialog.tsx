@@ -84,6 +84,8 @@ export interface AddDialogProps {
   /** The person may manage drives (Manage drives →). */
   operator: boolean;
   /** `previousKey`: the card an edit replaced, when it now names another source. */
+  /** Workspaces the person added a folder from (removeItem keeps their folders). */
+  foldersAdded?: ReadonlySet<string>;
   onSave: (apply: (intent: RunIntent) => RunIntent, item: { name: string; key: string; previousKey?: string }, mode: "add" | "edit") => void;
   /**
    * Seam for person-created drives: rendered under the user drives of the Choose step. `choose` selects a
@@ -129,7 +131,7 @@ export function AddDialog(props: AddDialogProps) {
   );
 }
 
-function DialogBody({ open, onClose, intent, src, items, folderReason, driveReason: catalogueReason, operator, onSave, createUserDrive, reloadDrives }: AddDialogProps & { open: DialogOpen }) {
+function DialogBody({ open, onClose, intent, src, items, folderReason, driveReason: catalogueReason, operator, onSave, createUserDrive, reloadDrives, foldersAdded }: AddDialogProps & { open: DialogOpen }) {
   const [s, setS] = React.useState<State>(() => initial(open, intent));
   const editing = open.mode === "edit" ? open.item : undefined;
   const options = s.kind ? optionsFor(s.kind, src) : [];
@@ -154,7 +156,7 @@ function DialogBody({ open, onClose, intent, src, items, folderReason, driveReas
       document.getElementById(DIALOG_PATH_ID)?.focus();
       return;
     }
-    onSave(saveChoice(choice, src, editing), { name: source?.name ?? editing?.name ?? "", key: choiceKey(choice), previousKey: editing?.key }, editing ? "edit" : "add");
+    onSave(saveChoice(choice, src, editing, foldersAdded), { name: source?.name ?? editing?.name ?? "", key: choiceKey(choice), previousKey: editing?.key }, editing ? "edit" : "add");
   };
   const title = editing ? NR_FILES.EDIT_NAMED(editing.name) : s.kind && s.step > 1 ? ADD_TITLE[s.kind] : NR_FILES.DIALOG_TITLE;
   const taken = (key: string) => items.some((x) => x.key === key && x.key !== editing?.key);

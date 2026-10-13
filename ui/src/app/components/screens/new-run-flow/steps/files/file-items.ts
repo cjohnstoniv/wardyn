@@ -25,16 +25,22 @@ import type { RepoRow } from "./files-seams";
 export type FileKind = "repo" | "userDrive" | "sharedDrive" | "folder" | "computer";
 export const KIND_ORDER: readonly FileKind[] = ["repo", "userDrive", "sharedDrive", "folder", "computer"];
 
-/** One workspace's host folders (its `local_dir` sources), attached together with none of its repositories. */
+/**
+ * One host folder (a `local_dir` source). Attaching it attaches its workspace with none of its repositories,
+ * and the server then attaches every folder of that workspace, so each shows as its own card.
+ */
 export interface FolderSource {
   key: string;
   workspaceId: string;
+  workspaceName: string;
   name: string;
   hostPath?: string;
   /** Where it appears when the person does not move it. */
   defaultPath: string;
-  /** Exactly one folder: the request may place it (`workspaces[].target`). */
+  /** Its workspace's only folder: the request may place it (`workspaces[].target`). */
   single: boolean;
+  /** Its workspace's first folder: where a start on the workspace with no repository opens. */
+  first: boolean;
   writable: boolean;
   unavailable?: string;
 }
@@ -48,15 +54,14 @@ export const folderPath = (name: string): string => `/home/agent/folders/${slug(
 export function folderSources(workspaces: readonly Workspace[]): FolderSource[] {
   return workspaces.flatMap((w) => {
     const dirs = (w.sources ?? []).filter((s) => s.type === "local_dir");
-    if (!dirs.length) return [];
-    const first = dirs[0];
-    const name = dirs.length === 1 && first.path ? baseName(first.path) : w.name;
-    return [{
-      key: `folder:${w.id}`, workspaceId: w.id, name, hostPath: first.path,
-      defaultPath: first.target || folderPath(name), single: dirs.length === 1,
-      writable: dirs.every((s) => s.writable !== false),
-      unavailable: w.available_to_you === false ? DENIED.WORKSPACE_NOT_AVAILABLE : undefined,
-    }];
+    return dirs.map((d, i) => {
+      const name = d.path ? baseName(d.path) : w.name;
+      return {
+        key: `folder:${w.id}:${i}`, workspaceId: w.id, workspaceName: w.name, name, hostPath: d.path,
+        defaultPath: d.target || folderPath(name), single: dirs.length === 1, first: i === 0, writable: d.writable !== false,
+        unavailable: w.available_to_you === false ? DENIED.WORKSPACE_NOT_AVAILABLE : undefined,
+      };
+    });
   });
 }
 
@@ -92,6 +97,8 @@ export interface FileItem {
   workspaceId?: string;
   repo?: string;
   driveId?: string;
+  /** Why Remove is off: a folder that comes with its workspace's attached repositories. */
+  removeBlocked?: string;
   /** Read for a repository's other repositories of the same workspace. */
   siblings?: readonly string[];
 }
@@ -111,10 +118,10 @@ export function fileItems(intent: RunIntent, src: ItemSources): FileItem[] {
   for (const entry of intent.workspaces ?? []) {
     const ws = entry.workspace_id;
     const rows = src.rows.filter((r) => r.workspaceId === ws && repoIncluded(intent, ws, r.repo));
-    const folder = src.folders.find((s) => s.workspaceId === ws);
+    const folders = src.folders.filter((s) => s.workspaceId === ws);
     for (const r of rows) {
       const ref = entry.repos?.find((x) => x.repo === r.repo)?.ref;
-      const alone = rows.length === 1 && !folder;
+      const alone = rows.length === 1 && !folders.length;
       const served = src.attachments.find((a) => a.kind === "repository" && a.workspace_id === ws && a.repo === r.repo)?.target;
       out.push({
         key: r.key, kind: "repo", name: r.name, path: (alone && entry.target) || served || r.path, branch: ref ?? r.ref,
@@ -122,14 +129,16 @@ export function fileItems(intent: RunIntent, src: ItemSources): FileItem[] {
         workspaceId: ws, repo: r.repo, siblings: r.siblings,
       });
     }
-    if (folder) {
-      const served = src.attachments.find((a) => a.kind === "folder" && a.workspace_id === ws)?.target;
+    // The server attaches every folder of an attached workspace, so each shows, whatever brought the workspace in.
+    for (const folder of folders) {
+      const served = src.attachments.filter((a) => a.kind === "folder" && a.workspace_id === ws)[folders.indexOf(folder)]?.target;
       const alone = folder.single && rows.length === 0;
       out.push({
         key: folder.key, kind: "folder", name: folder.name, path: (alone && entry.target) || served || folder.defaultPath,
         readOnly: !folder.writable || entry.read_only === true, locked: !folder.writable, pathEditable: alone,
         storedOn: [NR_FILES.FAMILY_HOST_FOLDER], hostPath: folder.hostPath,
-        starts: f?.attachment === ws && !f.repo && !f.drive_id && rows.length === 0, workspaceId: ws,
+        starts: folder.first && f?.attachment === ws && !f.repo && !f.drive_id && rows.length === 0, workspaceId: ws,
+        removeBlocked: rows.length ? NR_FILES.FOLDER_WITH_REPOS(folder.workspaceName) : undefined,
       });
     }
   }
@@ -186,11 +195,11 @@ export const choiceKey = (c: Pick<ItemChoice, "kind" | "sourceKey">): string =>
  * Adds or edits one item. Editing to another source takes the old one out first. A path is sent only
  * where the request may place the item, and for a repository only when it differs from the server's own.
  */
-export function saveChoice(choice: ItemChoice, src: ItemSources, editing?: FileItem): Apply {
+export function saveChoice(choice: ItemChoice, src: ItemSources, editing?: FileItem, foldersAdded?: ReadonlySet<string>): Apply {
   const legacyId = legacyIdOf(src.catalogue);
   return (intent) => {
     const moved = editing && editing.key !== choiceKey(choice);
-    let i = moved ? removeItem(editing, src)(intent) : intent;
+    let i = moved ? removeItem(editing, src, foldersAdded)(intent) : intent;
     if (choice.kind === "repo") {
       const row = src.rows.find((r) => r.key === choice.sourceKey);
       if (!row) return intent;
@@ -213,8 +222,12 @@ export function saveChoice(choice: ItemChoice, src: ItemSources, editing?: FileI
   };
 }
 
-/** Removes one item. The last repository of a workspace that also brings folders keeps the folders. */
-export function removeItem(item: FileItem, src: ItemSources): Apply {
+/**
+ * Removes one item. A folder goes with its workspace (Remove is off while the workspace's repositories are
+ * attached). The last repository of a workspace that also has folders keeps the folders only when the person
+ * added a folder from it (`foldersAdded`); otherwise the workspace detaches.
+ */
+export function removeItem(item: FileItem, src: ItemSources, foldersAdded: ReadonlySet<string> = new Set()): Apply {
   const legacyId = legacyIdOf(src.catalogue);
   return (intent) => {
     if (item.driveId) return detachDrive(intent, item.driveId, legacyId);
@@ -224,13 +237,13 @@ export function removeItem(item: FileItem, src: ItemSources): Apply {
     }
     const ws = item.workspaceId!;
     if (item.kind === "folder") return detachWorkspace(intent, ws);
-    const hasFolder = src.folders.some((f) => f.workspaceId === ws);
     const left = fileItems(intent, src).filter((x) => x.kind === "repo" && x.workspaceId === ws && x.key !== item.key);
-    if (hasFolder && !left.length) {
+    if (!left.length && foldersAdded.has(ws) && src.folders.some((f) => f.workspaceId === ws)) {
       const startsThere = intent.start_folder?.attachment === ws && intent.start_folder.repo === item.repo;
-      const entry = intent.workspaces!.find((w) => w.workspace_id === ws)!;
+      const lone = src.folders.find((f) => f.workspaceId === ws && f.single);
       return withKeys(intent, {
-        workspaces: intent.workspaces!.map((w) => (w === entry ? { workspace_id: ws, repos: [] } : w)),
+        // A lone folder is placed again where it shows (its target went while a repository shared the workspace).
+        workspaces: intent.workspaces!.map((w) => (w.workspace_id === ws ? { workspace_id: ws, repos: [], ...(lone ? { target: lone.defaultPath } : {}) } : w)),
         start_folder: startsThere ? undefined : intent.start_folder,
       });
     }
