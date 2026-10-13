@@ -316,8 +316,8 @@ func mcpHoldCases(t *testing.T) []mcpHoldCase {
 
 // askMCPHold sends one run, of harness under workload, to one door under the
 // deployment policy's tool rules and reports whether the door refused it for
-// the hold.
-func askMCPHold(t *testing.T, tc mcpHoldCase, door, harness string, workload map[string]any) {
+// the hold, with sentence and no other.
+func askMCPHold(t *testing.T, tc mcpHoldCase, door, harness string, workload map[string]any, sentence string) {
 	t.Helper()
 	f := newComponentFixture(t)
 	f.srv.cfg.AgentImages = composeAgentImages
@@ -328,9 +328,12 @@ func askMCPHold(t *testing.T, tc mcpHoldCase, door, harness string, workload map
 		body["components"] = []types.ComponentRef{mcpInline("Linear")}
 	}
 	w := f.ask(t, door, body)
-	refused := w.Code == http.StatusUnprocessableEntity && strings.Contains(w.Body.String(), accessSentences["harness_no_hold"])
+	refused := w.Code == http.StatusUnprocessableEntity && errorReason(w) == reasonRequestFieldUnavailable
 	if refused != tc.refused || (!refused && w.Code >= 300) {
 		t.Fatalf("= %d %s, want refused=%v", w.Code, w.Body.String(), tc.refused)
+	}
+	if refused && decodeErrorBody(t, w).Error != sentence {
+		t.Fatalf("refused with %s, want the sentence %q", w.Body.String(), sentence)
 	}
 }
 
@@ -341,7 +344,7 @@ func TestInheritedMCPHoldRefusesBackgroundCodex(t *testing.T) {
 	for _, tc := range mcpHoldCases(t) {
 		for _, door := range componentDoors {
 			t.Run(tc.name+door, func(t *testing.T) {
-				askMCPHold(t, tc, door, "codex-cli", map[string]any{"kind": "agent_task", "agent": "codex-cli", "task": "t"})
+				askMCPHold(t, tc, door, "codex-cli", map[string]any{"kind": "agent_task", "agent": "codex-cli", "task": "t"}, accessSentences["harness_no_hold"])
 			})
 		}
 	}
@@ -355,7 +358,7 @@ func TestInheritedMCPHoldRefusesACommandsHarness(t *testing.T) {
 		for _, tc := range mcpHoldCases(t) {
 			for _, door := range componentDoors {
 				t.Run(harness+"/"+tc.name+door, func(t *testing.T) {
-					askMCPHold(t, tc, door, harness, map[string]any{"kind": "command", "command": "make"})
+					askMCPHold(t, tc, door, harness, map[string]any{"kind": "command", "command": "make"}, accessSentences["command_no_hold"])
 				})
 			}
 		}
