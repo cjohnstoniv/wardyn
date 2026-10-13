@@ -272,7 +272,10 @@ func TestRunnerPoolAddAndRemoveResolveRunnersByName(t *testing.T) {
 			"GET /api/v1/me/runners":                      []sdk.RunnerView{{ID: mine, Name: "laptop-7"}},
 			c.remote:                                      []sdk.RemoteRunnerView{{RemoteRunner: sdk.RemoteRunner{ID: "docker", Name: "shared-docker"}}},
 			"PUT *":                                       sdk.RunnerPoolMember{PoolID: laptop},
-			"DELETE *":                                    nil,
+			"GET /api/v1/runner-pools/" + laptop.String() + "/members": []sdk.RunnerPoolMemberView{
+				{Kind: sdk.RunnerKindSelfHosted, ID: mine.String(), Name: "laptop-7"},
+				{Kind: sdk.RunnerKindRemoteHosted, ID: "docker", Name: "shared-docker"}},
+			"DELETE *": nil,
 		})
 		base := []string{"--url", srv.URL, "--token", "t"}
 		out, err := execCmdCapture(t, append([]string{"runner", "pool", "add", "Laptop", "laptop-7", "shared-docker"}, base...)...)
@@ -394,5 +397,56 @@ func TestRunnerSetAvailableToPeople(t *testing.T) {
 	out, err = execCmdCapture(t, "runner", "remote", "people", "set", "k8s", "--everyone", "--url", held.URL, "--token", "t")
 	if err != nil || !strings.Contains(out, "pending approval: 1 change(s) stored") {
 		t.Errorf("a held people policy = %v, printed %q, want exit 0 saying it waits", err, out)
+	}
+}
+
+// F-2: a removal names a runner the pool holds, looked up among the pool's own members. A remote-hosted
+// runner whose people policy no longer admits the person (so /me/remote-runners leaves it out) is still
+// removed by its name, and a name no member answers to is refused before any write, never reported gone.
+func TestRunnerPoolRemoveResolvesAgainstThePoolsMembers(t *testing.T) {
+	laptop := uuid.New()
+	srv := newPoolRoutes(t, map[string]any{
+		"GET /api/v1/runner-pools/" + laptop.String(): sdk.RunnerPool{ID: laptop, Name: "Laptop", Scope: sdk.RunnerPoolUser, Revision: 1},
+		"GET /api/v1/runner-pools/" + laptop.String() + "/members": []sdk.RunnerPoolMemberView{
+			{Kind: sdk.RunnerKindRemoteHosted, ID: "docker", Name: "shared-docker"}},
+		"GET /api/v1/me/runners":        []sdk.RunnerView{},
+		"GET /api/v1/me/remote-runners": []sdk.RemoteRunnerView{},
+		"DELETE *":                      nil,
+	})
+	base := []string{"--url", srv.URL, "--token", "t"}
+	if _, err := execCmdCapture(t, append([]string{"runner", "pool", "remove", laptop.String(), "shared-docker"}, base...)...); err != nil ||
+		!srv.sent(http.MethodDelete, "/api/v1/me/runner-pools/"+laptop.String()+"/remote-runners/docker") {
+		t.Fatalf("remove of a member no longer offered = %v, sent %+v", err, srv.reqs)
+	}
+	n := len(srv.reqs)
+	out, err := execCmdCapture(t, append([]string{"runner", "pool", "remove", laptop.String(), "shared-dokcer"}, base...)...)
+	if err == nil || !strings.Contains(err.Error(), `no runner in Laptop answers to "shared-dokcer"`) || strings.Contains(out, "no longer in") {
+		t.Errorf("remove of a name no member answers to = %v, printed %q", err, out)
+	}
+	for _, r := range srv.reqs[n:] {
+		if r.method == http.MethodDelete {
+			t.Errorf("a name no member answers to reached %s %s", r.method, r.path)
+		}
+	}
+}
+
+// N-1 (r2 review probe): a name that both one of your self-hosted runners and a remote-hosted runner
+// answer to is refused before any write.
+func TestRunnerPoolAmbiguousRunnerNameIsRefused(t *testing.T) {
+	laptop, mine := uuid.New(), uuid.New()
+	srv := newPoolRoutes(t, map[string]any{
+		"GET /api/v1/runner-pools/" + laptop.String(): sdk.RunnerPool{ID: laptop, Name: "Laptop", Scope: sdk.RunnerPoolUser, Revision: 1},
+		"GET /api/v1/me/runners":                      []sdk.RunnerView{{ID: mine, Name: "box"}},
+		"GET /api/v1/me/remote-runners":               []sdk.RemoteRunnerView{{RemoteRunner: sdk.RemoteRunner{ID: "docker", Name: "box"}}},
+		"PUT *":                                       sdk.RunnerPoolMember{PoolID: laptop},
+	})
+	_, err := execCmdCapture(t, "runner", "pool", "add", laptop.String(), "box", "--url", srv.URL, "--token", "t")
+	if err == nil || !strings.Contains(err.Error(), `2 runners answer to "box"`) {
+		t.Errorf("an ambiguous name = %v", err)
+	}
+	for _, r := range srv.reqs {
+		if r.method == http.MethodPut {
+			t.Errorf("an ambiguous name reached %s %s", r.method, r.path)
+		}
 	}
 }

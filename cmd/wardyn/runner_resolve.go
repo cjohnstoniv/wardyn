@@ -66,6 +66,33 @@ func resolveRunner(cmd *cobra.Command, c *sdk.Client, arg string, remotes func()
 	return runnerRef{}, fmt.Errorf("%d runners answer to %q; name it by id", len(found), arg)
 }
 
+// resolveMember reads <runner> for a removal: a runner the pool holds, by its id or name. One the pool
+// does not hold is refused, so a removal never reports a runner gone that was never matched.
+func resolveMember(pool sdk.RunnerPool, members []sdk.RunnerPoolMemberView, arg string) (runnerRef, error) {
+	var found []runnerRef
+	for _, m := range members {
+		if m.ID != arg && m.Name != arg {
+			continue
+		}
+		ref := runnerRef{remote: m.ID, name: arg}
+		if m.Kind == sdk.RunnerKindSelfHosted {
+			id, err := uuid.Parse(m.ID)
+			if err != nil {
+				return runnerRef{}, fmt.Errorf("runner %q in %s has no runner id", arg, pool.Name)
+			}
+			ref = runnerRef{self: &id, name: arg}
+		}
+		found = append(found, ref)
+	}
+	switch len(found) {
+	case 0:
+		return runnerRef{}, fmt.Errorf("no runner in %s answers to %q: name one of its runners by id or name", pool.Name, arg)
+	case 1:
+		return found[0], nil
+	}
+	return runnerRef{}, fmt.Errorf("%d runners in %s answer to %q; name it by id", len(found), pool.Name, arg)
+}
+
 // unlessRefused drops a server's 4xx refusal of a list the caller may not read (an admin credential has no
 // runners of its own; a person may not list every remote-hosted runner) and keeps any other error.
 func unlessRefused(err error) error {
