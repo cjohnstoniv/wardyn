@@ -15,6 +15,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -117,8 +118,8 @@ func TestDispatch_SelfHostedRunGoesToItsPersistedRunner(t *testing.T) {
 			t.Fatalf("created for runner %q, the run is bound to %q", got, bound)
 		}
 		// The create carries the runner's stored runs at once, the runner's own backstop.
-		if got := e.runner.fakeRunner.lastSpec.RunnerMaxRuns; got != types.RunnerMaxRunsDefault {
-			t.Fatalf("created with RunnerMaxRuns %d, want the runner's stored %d", got, types.RunnerMaxRunsDefault)
+		if got := e.runner.fakeRunner.lastSpec.RunnerMaxRuns; got != types.RunnerMaxRunsCeiling {
+			t.Fatalf("created with RunnerMaxRuns %d, want the runner's stored %d", got, types.RunnerMaxRunsCeiling)
 		}
 	}
 	// A spec that arrives naming another runner is overwritten by the persisted one.
@@ -129,5 +130,39 @@ func TestDispatch_SelfHostedRunGoesToItsPersistedRunner(t *testing.T) {
 	before := e.runner.fakeRunner.createCalls
 	if _, err := e.srv.createSandboxAtTarget(ctx, types.AgentRun{ID: uuid.New()}, runner.SandboxSpec{}); err != nil || e.runner.fakeRunner.createCalls != before+1 {
 		t.Fatalf("an unpooled run: %v", err)
+	}
+}
+
+// A run Wardyn launches itself (a sign-in, a probe, a source scan) is placed through no pool, yet it counts
+// on the remote-hosted runner it is dispatched to, with the size it is given, so people's runs there are
+// never admitted past that runner's limits beside it.
+func TestServerRunsCountOnTheRemoteRunner(t *testing.T) {
+	fr := &fakeRunner{}
+	srv, pool := pgHarnessWithRunner(t, fr)
+	ctx := context.Background()
+	usage := func() types.RunnerTally {
+		used, err := store.NewPG(pool).RunnerUsage(ctx, nil, []string{"fake"}, uuid.Nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return used["fake"]
+	}
+	before := usage()
+	now := time.Now().UTC()
+	run, err := srv.cfg.Store.CreateRun(ctx, types.AgentRun{ID: uuid.New(), CreatedAt: now, UpdatedAt: now, CreatedBy: "wardynd", Agent: "claude-code",
+		ConfinementClass: types.CC1, State: types.RunPending, SPIFFEID: "spiffe://wardyn.local/agent-run/" + uuid.NewString(), RunnerTarget: "docker"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := srv.createSandboxAtTarget(ctx, run, runner.SandboxSpec{RunID: run.ID, Resources: runner.Resources{CPUMillis: 1500, MemoryMiB: 3072, DiskMiB: 2048}}); err != nil {
+		t.Fatal(err)
+	}
+	after := usage()
+	if got, want := after, (types.RunnerTally{Runs: before.Runs + 1, CPUMillis: before.CPUMillis + 1500, MemoryMiB: before.MemoryMiB + 3072, DiskMiB: before.DiskMiB + 2048}); got != want {
+		t.Fatalf("the remote-hosted runner's in use = %+v, want %+v: a server run must count", got, want)
+	}
+	stored, err := srv.cfg.Store.GetRun(ctx, run.ID)
+	if err != nil || stored.RunnerPoolExecutor != "fake" || stored.RunnerPoolID != nil {
+		t.Fatalf("stored = %+v, %v; want it on fake and in no pool", stored, err)
 	}
 }

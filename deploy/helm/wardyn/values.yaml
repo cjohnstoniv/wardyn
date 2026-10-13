@@ -666,7 +666,9 @@ k8s:
   # Off by default: nodes are cluster-scoped, and a tenant of a shared cluster may not be granted them. The
   # warning compares a run's requests to node SIZE, never to free capacity (other namespaces' pods are
   # invisible here), and the scheduler stays the authority. The ResourceQuota read needs no flag: it is a
-  # namespaced `list` on `resourcequotas` in the runner Role.
+  # namespaced `list` on `resourcequotas` in the runner Role. With no quota in the runs namespace it also lets
+  # wardynd measure the cluster at boot (the nodes' allocatable CPU, memory and ephemeral storage) and propose
+  # the cluster runner's limits; without either it sets none (deploy/kind/quickstart.sh turns it on for that).
   readNodes: false
   # Confinement-Class -> RuntimeClass NAME pins (WARDYN_CONFINEMENT_MAP's k8s
   # form, e.g. CC2=gvisor;CC3=kata-qemu). A k8s RuntimeClass object name

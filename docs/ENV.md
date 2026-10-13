@@ -158,7 +158,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_SANDBOX_CAPACITY_WAIT` | duration | `15m` | how long a Kubernetes pod the scheduler reports `Unschedulable` waits for room, on top of `WARDYN_SANDBOX_START_TIMEOUT`; `0` turns the wait off (`-tags k8s`). [Details](#wardyn_sandbox_capacity_wait) |
 | `WARDYN_K8S_NAMESPACE` | string | the pod's own namespace (read from `/var/run/secrets/kubernetes.io/serviceaccount/namespace`), else `default` | Kubernetes namespace the `k8s` substrate (`-tags k8s`) creates every sandbox's Secret/NetworkPolicies/pods in |
 | `WARDYN_K8S_IMAGE_PULL_SECRET` | string | (unset) | optional pre-existing Secret name threaded onto `imagePullSecrets` for every pod the `k8s` substrate creates (agent, proxy, and the boot-time egress canary) (`-tags k8s`) |
-| `WARDYN_K8S_READ_NODES` | bool | off | list the cluster's nodes so preflight and create can warn that no node a run may be placed on is large enough for one of its pods (`-tags k8s`). Needs `list` on `nodes`. [Details](#wardyn_k8s_read_nodes) |
+| `WARDYN_K8S_READ_NODES` | bool | off | list the cluster's nodes so preflight and create can warn that no node a run may be placed on is large enough for one of its pods (`-tags k8s`); boot measures the cluster from them. Needs `list` on `nodes`. [Details](#wardyn_k8s_read_nodes) |
 | `WARDYN_K8S_SANDBOX_PLACEMENT` | JSON | (unset) | where the `k8s` substrate puts every pod it creates (`-tags k8s`): an object with any of `nodeSelector`, `tolerations`, `affinity`, `priorityClassName`, `podAnnotations`, `podLabels`; an unknown field is refused. [Details](#wardyn_k8s_sandbox_placement) |
 | `WARDYN_K8S_ALLOW_UNENFORCED_NETPOL` | bool | off | escape hatch: allow the `k8s` substrate to boot when its boot-time egress canary proves the cluster's CNI does NOT enforce NetworkPolicy, proceeding with UNCONFINED egress. Off by default (fail closed) (`-tags k8s`). [Details](#wardyn_k8s_allow_unenforced_netpol) |
 | `WARDYN_K8S_ACK_AMBIENT_DEFAULT_DENY` | bool | off | on a managed cluster where a platform team already applies a baseline default-deny NetworkPolicy, acknowledges the canary's failure shape and lets boot proceed (`-tags k8s`). Never proof of enforcement. [Details](#wardyn_k8s_ack_ambient_default_deny) |
@@ -675,6 +675,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - Needs `list` on `nodes` (a ClusterRole; chart: `k8s.readNodes`).
 - It compares requests to node allocatable, honouring `WARDYN_K8S_SANDBOX_PLACEMENT`, which is size and not free capacity: other namespaces' pods are invisible, and the scheduler stays the authority.
 - The runs namespace's ResourceQuota read needs no flag and no env.
+- Boot measures the cluster from that quota, else from the nodes this reads, and proposes the cluster runner's limits; with neither it sets none.
 
 ### `WARDYN_K8S_SANDBOX_PLACEMENT`
 
@@ -1928,6 +1929,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_ARTIFACT_CONFIG_B64` 🔒 | base64 | (unset) | artifact config blob |
 | `WARDYN_CLAUDE_MANAGED_B64` 🔒 | base64 | (unset) | managed Claude credential blob |
 | `WARDYN_AWS_SSO_CONFIG_B64` 🔒 | base64 | (unset) | captured AWS SSO session, delivered as a minimal synthetic `~/.aws` (config + SSO token cache) and materialized by `agent-run`; the sandbox SDK exchanges it for short-lived Bedrock role credentials |
+| `WARDYN_AZURE_CLI_CONFIG_B64` | base64 | (unset) | an Azure CLI component's generated `~/.azure`, materialized by `agent-run`: the profile listing its subscriptions and a token cache whose access token is an inert placeholder. It carries no credential (`authorAzureCLI`, [`internal/api/runs_dispatch_cli_azure.go`](../internal/api/runs_dispatch_cli_azure.go)) |
 | `WARDYN_AWS_SSO_ACCOUNT_ID` | string | (unset) | the AWS account a sign-in in the **container-login** sandbox may capture, seeded from the agent roster row's `sso_account_id`. Set together with the role below, or not at all. [Details](#wardyn_aws_sso_account_id) |
 | `WARDYN_AWS_SSO_ROLE_NAME` | string | (unset) | the IAM role the same sign-in may capture, seeded from the roster row's `sso_role_name` and verified in the pinned account. Set together with the account above. [Details](#wardyn_aws_sso_role_name) |
 
@@ -2157,6 +2159,8 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_FORCE_RESET` | bool | (unset = ask) | answer the destructive-reset confirmation non-interactively |
 | `WARDYN_FORCE_STOP_HOST` | bool | (unset = ask) | `WARDYN_FORCE_RESET`'s sibling, gated **separately** because it is the bigger act: `scripts/up.sh reset-all` stops a HOST-mode wardynd only when this is set too (`_confirm_host_stop`, [`scripts/up-reset.sh`](../scripts/up-reset.sh)). `WARDYN_FORCE_RESET` alone answers the volume-wipe confirmation and leaves a host daemon running |
 | `WARDYN_UP_NO_BROWSER` | bool | (unset = open one) | `1` stops [`scripts/up.sh`](../scripts/up.sh) and [`scripts/setup.sh`](../scripts/setup.sh) opening the console in a browser when they finish. Set it on headless boxes, in recorded demos, and anywhere `up` is driven by another script |
+| `WARDYN_SETUP_RUNNER_DISK_GB` | int (GB) | (unset = measured on this host, else asked at a terminal) | GB of disk free for runs on the server's Docker host when nothing measures it (Docker Desktop). [`scripts/lib/runner-limits.sh`](../scripts/lib/runner-limits.sh) proposes the runner's limits from it. Read by `make setup`, `make demo`, `make test-drive` and [`scripts/ci-run.sh`](../scripts/ci-run.sh) |
+| `WARDYN_SETUP_RUNNER_LIMITS` | string | (unset = the proposal) | the server runner's whole limit set as `wardyn runner set` flags, set instead of the proposal when the runner has none; the walk scripts set their own. Same readers as `WARDYN_SETUP_RUNNER_DISK_GB` |
 | `WARDYN_UP_SKIP_RUN_IMAGES` | bool | (unset = build them) | `1` makes [`scripts/up.sh`](../scripts/up.sh) skip building the agent + proxy run images, for a console-only look. Runs then fail until you build them: `make agent-images-core && docker compose -f deploy/compose/docker-compose.yaml --profile build-only build proxy-image` |
 | `WARDYN_SCM_SSH_HOSTS` | string (space-separated) | `github.com` | hosts [`scripts/setup.sh`](../scripts/setup.sh) fetches SSH host keys for while importing SCM credentials, e.g. `"github.com dev.azure.com"` |
 | `WARDYN_GEN_DEPLOY_KEY` | bool | (unset = ask) | `1` makes [`scripts/setup.sh`](../scripts/setup.sh) generate a per-repo deploy key headlessly instead of prompting for one |

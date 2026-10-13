@@ -26,9 +26,9 @@ var _ poolRunnerLister = store.PG{}
 // handleListRunnerPoolMembers is GET /api/v1/runner-pools/{id}/members: a pool's runners, both kinds,
 // for whoever may read the pool itself (GET /runner-pools/{id}): anyone who may use an organization
 // pool, a user pool's owner, and a security operator read-only with each runner's owner named. A
-// self-hosted member carries its runner view (name, machine name, state, online, runs at once and
-// running), only ever a runner the pool's owner holds; a remote-hosted member its name, whether this
-// server runs it and whether it answered its last health read. Another person's user pool is not in the
+// self-hosted member carries its runner view (name, machine name, state, online, limits and usage),
+// only ever a runner the pool's owner holds; a remote-hosted member its name, whether this server runs
+// it, whether it answered its last health read, and its limits and usage (every run on it). Another person's user pool is not in the
 // caller's catalogue, so it answers the unknown-id 404.
 func (s *Server) handleListRunnerPoolMembers(w http.ResponseWriter, r *http.Request) {
 	ps, ok := s.runnerPoolStore(w)
@@ -63,7 +63,8 @@ func (s *Server) handleListRunnerPoolMembers(w http.ResponseWriter, r *http.Requ
 		}
 		for i := range views {
 			v := views[i]
-			out = append(out, client.RunnerPoolMemberView{Kind: types.RunnerKindSelfHosted, ID: v.ID.String(), Name: v.Name, Online: v.Online, Runner: &v})
+			out = append(out, client.RunnerPoolMemberView{Kind: types.RunnerKindSelfHosted, ID: v.ID.String(), Name: v.Name, Online: v.Online, Runner: &v,
+				Limits: v.Limits, Usage: v.Usage})
 		}
 	}
 	if len(row.ExecutorIDs) > 0 {
@@ -71,18 +72,24 @@ func (s *Server) handleListRunnerPoolMembers(w http.ResponseWriter, r *http.Requ
 		if !ok {
 			return
 		}
+		used, err := s.runnersInUse(r.Context(), nil, row.ExecutorIDs)
+		if err != nil {
+			writeServerError(w, r, "read remote runner usage", err)
+			return
+		}
 		for _, id := range row.ExecutorIDs {
 			m := client.RunnerPoolMemberView{Kind: types.RunnerKindRemoteHosted, ID: id, Name: id, Configured: s.remoteRunnerConfigured(id)}
-			switch rr, err := rrs.GetRemoteRunner(r.Context(), id); {
+			rr := types.RemoteRunner{ID: id}
+			switch got, err := rrs.GetRemoteRunner(r.Context(), id); {
 			case err == nil:
-				m.Name = rr.Runner.Name
+				rr = got.Runner
+				m.Name, m.Limits = rr.Name, rr.Limits
 			case !errors.Is(err, store.ErrNotFound):
 				writeServerError(w, r, "read remote runner", err)
 				return
 			}
-			if m.Configured {
-				_, m.Online = s.executorFacts(r.Context(), id)
-			}
+			m.Usage = s.remoteUsage(r.Context(), rr, used[id])
+			m.Online = m.Usage.Online
 			out = append(out, m)
 		}
 	}

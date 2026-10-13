@@ -195,10 +195,15 @@ func (d *Driver) seedDriveVolume(ctx context.Context, runID uuid.UUID, image str
 	if err := remove(ctx); err != nil {
 		return err
 	}
+	// A runner's own label lets its orphan sweep tell its seeds from another's.
+	extra := map[string]string{labelDrive: drive.DriveID.String()}
+	if d.cfg.RunnerID != "" {
+		extra[runner.LabelRunnerID] = d.cfg.RunnerID
+	}
 	_, err := d.cli.ContainerCreate(ctx, client.ContainerCreateOptions{
 		Name: name,
 		Config: &container.Config{Image: image, Cmd: []string{"true"}, NetworkDisabled: true,
-			Labels: wardynLabels(runID, componentDriveSeed, map[string]string{labelDrive: drive.DriveID.String()})},
+			Labels: wardynLabels(runID, componentDriveSeed, extra)},
 		HostConfig: &container.HostConfig{
 			NetworkMode: "none",
 			Mounts:      []mount.Mount{{Type: mount.TypeVolume, Source: drive.ObjectName, Target: runner.DriveTarget}},

@@ -192,6 +192,7 @@ func BuildProxyConfig(runID uuid.UUID, pc ProxyConfig, port int) ([]byte, error)
 		ADOGrant:             pc.ADOGrant,
 		AzureGates:           pc.AzureGates,
 		GitHubAPI:            pc.GitHubAPI,
+		AzureARM:             pc.AzureARM,
 		UpstreamProxyURL:     pc.UpstreamProxyURL,
 		TrustedCAPEM:         pc.TrustedCAPEM,
 		InternalHosts:        pc.InternalHosts,

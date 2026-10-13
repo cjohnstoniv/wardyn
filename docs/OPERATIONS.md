@@ -42,7 +42,7 @@ user, same host](#second-user-same-host)". Deciding who can do what:
 - [Kubernetes: day-2](#kubernetes-day-2)
 - [High availability](#high-availability)
 - [Kubernetes: known gaps](operations/kubernetes-known-gaps.md#kubernetes-known-gaps)
-- Task pages under [`docs/operations/`](operations/): [Managed laptops: client-mode runners](operations/hybrid-laptops.md), [Launch presets](operations/launch-presets.md#launch-presets), [Console branding](operations/console-branding.md#console-branding)
+- Task pages under [`docs/operations/`](operations/): [Managed laptops: client-mode runners](operations/hybrid-laptops.md), [Runner pools](operations/runner-pools.md#runner-pools-where-a-run-goes), [Launch presets](operations/launch-presets.md#launch-presets), [Console branding](operations/console-branding.md#console-branding)
 
 </details>
 
@@ -1201,7 +1201,7 @@ erases one person's retained records by explicit scope, in one audited act
 | `run_tasks` | the task text of the runs the person created, and the launch intents of those runs |
 | `components` | the components the person saved, the launch intents of their runs, and what each run's snapshot of one they defined says about it; the run keeps a content-free row, which is what a revived run is checked against. A finished run's resolved policy and grants keep the hosts and secret names the run used, as for any other policy, and so do its `run.env_secret.resolve`, `run.file_secret.resolve`, `secret.read` and `run.policy.resolve` rows |
 | `run_setups` | the person's own run templates and every revision of them, the launch intents of their runs, their group template-manager grants, and their name as the author of shared templates, revisions and grants, which stay without it |
-| `runner_pools` | the person's own Self-Hosted runner pools, deleted as their own delete would, and their name on every pool row of theirs; their runners stay |
+| `runner_pools` | the person's own user pools, deleted as their own delete would, and their name on every pool row of theirs; their runners stay |
 | `audit_personal_fields` | the person's audit-seal key, every generation: each sealed audit field of theirs reads `[erased]` everywhere it was copied, and the chain still verifies |
 | `credentials` | the person's stored credentials, their encryption key and provider connection-change records (also erased by `DELETE /people/{principal}/credentials`) |
 
@@ -3442,6 +3442,7 @@ Moved, with the sections that followed it here, to [secrets-and-keys.md](operati
 - A `member` role (`=member` in `WARDYN_OIDC_ROLE_MAP`, or the default role) refuses boot: remap it to `user` or a user type id.
 - The `MEMBER` spellings of the `USER` variables refuse boot ([ENV.md](ENV.md#removed-in-09)).
 - A plain `http://` OIDC issuer under TLS refuses boot. A mesh that encrypts the internal issuer may set `WARDYN_OIDC_INTERNAL_ISSUER_PLAINTEXT=mesh`; the public issuer has no opt-out.
+- A remote-hosted runner whose limits the upgraded server cannot measure takes no run until they are set: `wardyn runner remote list --no-limits`, then `wardyn runner remote propose <id>` and `wardyn runner set <id>` ([runner pools](operations/runner-pools.md#a-remote-hosted-runners-limits)). `make setup` does this for its own stack.
 - First run `wardyn setup status --pre-upgrade`. It reads this shell's environment: load the Compose or desktop env file (`set -a; . FILE; set +a`), or give a chart's values as `--role-map` and `--default-role`. Exit 0 is clean, 1 leftovers.
 
 - Migrations are **forward-only**.
@@ -3799,8 +3800,10 @@ image digests in `wardyn.env`, not a re-run of anything
 - `0161` (`0161_run_human_author`) adds `agent_runs.human_author` (`0001`'s table), the principal accountable for the run at create (not proof that a person was present); existing runs keep it empty.
 - `0162` (`0162_run_queue`) widens `agent_runs`' state check with `QUEUED`, adds `agent_runs.admitted_at` and rebuilds its watcher sweep index (`0001`'s table) beside its new `run_queue` table, and re-creates `audit_retention_partitions` (as `0123` does).
 - `0163` (`0163_workspace_image_build`) adds `workspaces.image_build` (`0008`'s table), the image build record.
-- `0168` (`0168_runner_pool_owner`) adds `runner_pools.owner` and checks on `runner_pools` and `runner_pool_org_defaults` (`0152`'s tables), removes the ownerless Self-Hosted pools made before it, and clears an organisation preference for Self-Hosted.
-- `0173` (`0173_runner_pool_scope`) replaces `runner_pools.hosting_type` with `scope`, renames `runner_pool_members.executor_id` to `remote_runner_id` with a foreign key to its new `remote_runners` table and adds a generated `kind`, keeps one pool and the barrier on `runner_pool_org_defaults` (`0152`'s tables), rewrites each person's `runner_pool_defaults.v1` preference to `runner_pool_default.v2`, and rewrites a held remote-hosted runner add on `governance_changes` (`0126`'s table).
+- `0168` (`0168_runner_pool_owner`) adds `runner_pools.owner` and checks on `runner_pools` and `runner_pool_org_defaults` (`0152`'s tables), removes the ownerless user pools made before it, and clears an organisation preference for self-hosted runners.
+- `0172` (`0172_runner_max_runs`) adds `runners.max_runs` and `runners.machine_name` (`0139`'s table).
+- `0173` (`0173_runner_pool_scope`) replaces `runner_pools.hosting_type` with `scope`, renames `runner_pool_members.executor_id` to `remote_runner_id` with a foreign key to its new `remote_runners` table and adds a generated `kind`, keeps one pool and the barrier on `runner_pool_org_defaults` (`0152`'s tables), rewrites each person's `runner_pool_defaults.v1` preference to `runner_pool_default.v2`, and rewrites a held add on `governance_changes` (`0126`'s table); every pool change held for a second human then goes stale and is proposed again.
+- `0174` (`0174_runner_limits`) adds the six limit columns (`total_cpu_millis`, `total_memory_mib`, `total_disk_mib`, `run_cpu_millis`, `run_memory_mib`, `run_disk_mib`) to `runners` (`0139`'s table) and to `remote_runners` (`0173`'s table), with `max_runs` on `remote_runners`, and `reserved_cpu_millis`, `reserved_memory_mib` and `reserved_disk_mib` to `agent_runs` (`0001`'s table), backfilled for runs holding a sandbox.
 - `0085` is named for its `CREATE OR REPLACE FUNCTION push_content_paths_immutable()`,
   but it is not an instance of the hazard: it creates that function and the
   `push_content_paths` table in the same file, so the migrator owns both from the start.

@@ -27,4 +27,8 @@
 # docs/ENV.md 36605 adds 139 over 36466 (0.9 train 26): TA-4 WARDYN_MCP_SERVERS_JSON and the MCP broker variables.
 # docs/ENV.md 36642 adds 37 over 36605 (G-090-cleanup slice F, docs rows that contradict the code): measured; the lead re-measures at merge.
 # docs/ENV.md 36674 adds 32 over 36642: 0.9 final docs pass, measured: the Bedrock region overrides an AWS CLI component's default region.
-docs/ENV.md=36674 share=5
+# docs/ENV.md 36676 adds 34 over 36642 (the Azure CLI component): measured at merge.
+# docs/ENV.md 36761 adds 85 over 36676 (setup sets the server runner's limits): the two setup runner-limit variables; measured.
+# docs/ENV.md 36791 adds 30 over 36761 (setup-limits round 1): WARDYN_K8S_READ_NODES also lets boot measure the cluster; measured.
+# docs/ENV.md 36823 measured at merge: the final docs pass over the runner limits, pool words and Azure CLI lanes.
+docs/ENV.md=36823 share=5
