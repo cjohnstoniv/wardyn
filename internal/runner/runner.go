@@ -367,6 +367,19 @@ type ProxyStopper interface {
 	StopProxy(ctx context.Context, ref string) error
 }
 
+// LabelRunnerID carries the id of the self-hosted runner that created a
+// sandbox. The runner stamps it over any label the control plane supplied.
+const LabelRunnerID = "wardyn.runner-id"
+
+// RunnerSandboxProver is an OPTIONAL Runner capability for a self-hosted
+// runner: prove that ref, which the runner holds no durable record of, names a
+// sandbox Wardyn created for runnerID. A run whose local identity was lost can
+// still be contained; an unrelated container on the same engine cannot be
+// reached.
+type RunnerSandboxProver interface {
+	ProveRunnerSandbox(ctx context.Context, ref, runnerID string) error
+}
+
 // ProxyReviver is an OPTIONAL Runner capability: replace a sandbox's proxy
 // sidecar, running or stopped, with a new one while the agent keeps running.
 // The control plane reads the run's stored config (#1176), rewrites its token

@@ -102,7 +102,7 @@ func TestDispatcherRefGuardAndDurableExecIdentity(t *testing.T) {
 	defer cancel()
 	allowed, bound := false, false
 	generation := uuid.New()
-	d, err := New(Config{RunnerID: id, Substrate: cancelAfterExec{fake, cancel},
+	d, err := New(Config{RunnerID: id, Substrate: cancelAfterExec{fake, cancel}, HoldsSandbox: func(ref string) bool { return ref == sb.Ref },
 		BeforeCreate: func(context.Context, runner.SandboxSpec) error { return nil },
 		Created:      func(context.Context, runner.SandboxSpec, string) error { return nil },
 		CreateFailed: func(context.Context, runner.SandboxSpec) error { return nil },
