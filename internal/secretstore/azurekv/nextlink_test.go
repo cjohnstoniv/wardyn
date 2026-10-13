@@ -41,6 +41,8 @@ func TestSameOrigin(t *testing.T) {
 		{"foreign scheme", "https://v.vault.azure.net", "http://v.vault.azure.net/secrets", false},
 		{"http :443 is not https", "http://localhost", "http://localhost:443/secrets", false},
 		{"https :80 is not http", "https://v.vault.azure.net", "https://v.vault.azure.net:80/secrets", false},
+		{"http on the https port is not https", "https://v.vault.azure.net", "http://v.vault.azure.net:443/secrets", false},
+		{"https on the http port is not http", "http://localhost", "https://localhost:80/secrets", false},
 		{"userinfo", "https://v.vault.azure.net", "https://u:p@v.vault.azure.net/secrets", false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -68,6 +70,7 @@ func TestKidVersion_DefaultPortSpelledOut(t *testing.T) {
 		"https://v.vault.azure.net:8443/keys/wrap/" + ver,
 		"https://other.vault.azure.net:443/keys/wrap/" + ver,
 		"http://v.vault.azure.net/keys/wrap/" + ver,
+		"http://v.vault.azure.net:443/keys/wrap/" + ver,
 	} {
 		if _, err := k.kidVersion(kid, "wrap"); err == nil || !strings.Contains(err.Error(), "off this vault") {
 			t.Errorf("kidVersion(%q) = %v; want a refusal", kid, err)
