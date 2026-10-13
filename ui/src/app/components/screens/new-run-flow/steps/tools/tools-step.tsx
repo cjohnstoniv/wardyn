@@ -23,7 +23,7 @@ import { checkFailureText, useDraftIdentity, useIntentChecks } from "../../draft
 import { useLocalIssues, useNewRunDraft, type NewRunScreenProps } from "../../new-run-route";
 import { stepIssues } from "../../lenses/local-issues";
 import { needsSetup } from "../../lenses/tools-lens";
-import { flowSteps, StepShell } from "../step-shell";
+import { flowSteps, STEP_HEADING_ID, StepShell } from "../step-shell";
 import { AddTools } from "./catalogue";
 import { AlreadyIncluded } from "./already-included";
 import { HarnessSetup, providerNameFor } from "./harness-setup";
@@ -82,6 +82,14 @@ export function ToolsStep({ go }: NewRunScreenProps) {
     const name = providerNameFor(f.harness, draft.intent, harnessSet, status);
     return name ? [[f.harness, name] as const] : [];
   }));
+  // When a failure clears the alert and the button the person pressed go with it: focus goes to the step's heading,
+  // unless it is already on a live control (the person edited the draft instead).
+  const wasFailed = React.useRef(false);
+  React.useEffect(() => {
+    const active = document.activeElement;
+    if (wasFailed.current && failure === null && (!active || active === document.body || !active.isConnected)) document.getElementById(STEP_HEADING_ID)?.focus();
+    wasFailed.current = failure !== null;
+  }, [failure]);
   // Items finished here wait for the server's next answer: only that answer settles them.
   const [finished, setFinished] = React.useState<{ ids: ReadonlySet<string>; base: AccessFacts | undefined }>();
   const waiting = !!finished && (!answered || access === finished.base);

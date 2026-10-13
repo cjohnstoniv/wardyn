@@ -129,6 +129,30 @@ describe("Tools and access step", () => {
     expect(screen.queryByText(NR_TOOLS.SETUP_ALL_SET)).toBeNull();
   });
 
+  it("when Check again succeeds, focus moves to the step heading instead of dropping to the body", async () => {
+    const retry = vi.fn().mockResolvedValue(undefined);
+    h.checks.preview = { result: undefined, current: false, error: new Error(SENTENCE), busy: false, retry } as never;
+    const view = render(tree());
+    await userEvent.click(screen.getByRole("button", { name: NR_REVIEW.CHECK_AGAIN }));
+    h.checks.preview = { result: undefined, current: false, error: new Error(SENTENCE), busy: true, retry } as never;
+    view.rerender(tree());
+    answer(SCENARIO_ACCESS.member, true);
+    view.rerender(tree());
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.getByRole("heading", { level: 1 })).toHaveFocus();
+  });
+
+  it("a failure that clears while focus is on another live control leaves focus there", () => {
+    h.checks.preview = { result: undefined, current: false, error: new Error(SENTENCE), busy: false, retry: vi.fn() } as never;
+    const view = render(tree());
+    const elsewhere = screen.getByRole("button", { name: NR_SHARED.BACK });
+    elsewhere.focus();
+    answer(SCENARIO_ACCESS.member, true);
+    view.rerender(tree());
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(elsewhere).toHaveFocus();
+  });
+
   it("a failure with no sentence uses the shared fallback", () => {
     h.checks.preview = { result: undefined, current: false, error: new Error(""), busy: false, retry: vi.fn() } as never;
     render(tree());
