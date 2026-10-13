@@ -1218,6 +1218,8 @@ erases one person's retained records by explicit scope, in one audited act
   `person.erasure` row records a `failure` naming each scope's outcome, and a retry with the same scopes finishes the
   rest.
 - Erasure is reported complete (`200`, `outcome` success) only when every scope asked for finished.
+- No scope reaches runners, invitations or service identities; a [purge](#what-a-purge-removes) does, but a retired
+  service identity keeps its last sponsor.
 
 - **A launch intent (a run's setup, kept for Run again) is erased with every launch whose run insert began before the erase.**
   - A run's insert takes a per-person Postgres lock first, shared and without waiting, and writes the intent in the same transaction.
@@ -1332,10 +1334,10 @@ erases one person's retained records by explicit scope, in one audited act
 
 - An identity provider can tell Wardyn that a person has left.
 - Wardyn runs a SCIM 2.0 endpoint whose only job is to **remove access**:
-  - it suspends a person (sessions cut, API tokens revoked, SSH keys deleted, every live run killed, sign-in refused
-    on every replica)
+  - it suspends a person (sessions cut, API tokens revoked, SSH keys deleted, every live run killed, runners
+    refused, sign-in refused on every replica)
   - and, later or at once, purges them (stored credentials erased, workspaces handed to the operator, user grants
-    deleted).
+    deleted, runners revoked).
 - SCIM never grants anything: a user or group created over SCIM is stored and gives no access, and roles still come
   from the sign-in token and the role map.
 - It is off until `WARDYN_SCIM_TOKEN` is set, and it mounts only on a single-tenant, commercial-cloud Entra issuer.
@@ -1343,7 +1345,7 @@ erases one person's retained records by explicit scope, in one audited act
 | Provisioning event | What Wardyn does |
 |---|---|
 | `PATCH` with `active` false (or `POST` with `active` false) | **Suspend.** The answer is 5xx until every step is confirmed, so the identity provider retries; a restart or a failed teardown resumes the pending steps, including a run already `KILLED` whose teardown failed |
-| `PATCH` with `active` true | **Reactivate.** Clears the deactivation and the purge schedule and nothing else: no token, key, run or old session comes back, and the person signs in again |
+| `PATCH` with `active` true | **Reactivate.** Clears the deactivation and the purge schedule and nothing else: no token, key, run or old session comes back, and the person signs in again. Their runners connect again |
 | `DELETE /Users/{id}` | **Purge now**, 204 once every step is done. Suspends first if the person is not already suspended |
 | A suspended person past `WARDYN_SCIM_PURGE_AFTER` | **Purge**, by the sweeper on the elected sweeper leader; it also finishes any suspension or purge whose identity provider stopped retrying |
 
@@ -1374,7 +1376,9 @@ erases one person's retained records by explicit scope, in one audited act
 | Suspend | Completed first, if it is not already |
 | Erase | Stored credentials and their masking copies only, through the person-erasure entry point: see [Erase](#erase) |
 | Workspaces | With `WARDYN_SCIM_LEAVER_WORKSPACES` set to `reassign` (the default), each workspace the person owns goes to the operator, audited as `workspace.reassign`; `keep` leaves them |
-| Grants | User-subject grants and governance assignments, deleted by a direct store call; an email-alias row only while no other live principal holds it (a revoked or expired token holds nothing): see [Grants](#grants) |
+| Grants | User-subject grants and governance assignments: see [Grants](#grants) |
+| Runners | Revoked with their unused registration tokens (`DELETE /runners/...`) |
+| Invitations, service identities | Invitations to the person deleted, their name cleared from the rest. One they still sponsor keeps the purge pending until handed over (`PATCH /service-identities/{name}`) or retired |
 | Drives | Listed by name in `person.deprovision`, never reclaimed. Reclaim storage with the steps in "Reclaiming a departed person's storage" |
 
 - The identity row stays as a tombstone with `purged_at` set.
@@ -1430,11 +1434,7 @@ lose access now, do not wait for it:
   - Rate limits are per replica, so an HA install's effective limit is the per-replica limit times the replica count.
 - **Email recycling.**
   - For a person a sign-in has bound, an email alias widens the session cutoff only while no other principal holds
-    that address
-    - (another active identity, or a live API token or person row under a different principal:
-    - only a live holder counts, so a revoked or expired token, a deactivated person row and a principal whose
-      identity is deactivated or purged hold nothing),
-    - the same rule a purge uses for grants.
+    that address, the rule a purge uses for [Grants](#grants).
   - While another principal holds it, a suspension and a SCIM group removal write no cutoff or session cut under the
     address.
   - The person's own credentials are reached through their subject and object-id forms and the identity deactivation,
@@ -1768,8 +1768,8 @@ enforces, not a re-derivation:
   - the saved policy (id, and its name and content as they read at launch), an inline policy, the default, or the governance profile the run's creator was bound to.
   - It is recorded already redacted, because the run's creator can read that row through `GET /audit`.
 - **What changed at launch** is each difference, given a cause:
-  `workspace`, `source_control`, `mirror`, `model_access`, `git_broker`,
-  `profile`, `org_disk`, `pool_disk`, `restart`, `limits` or `launch`.
+  `workspace`, `source_control`, `component`, `mirror`, `model_access`, `git_broker`,
+  `overlay`, `profile`, `org_disk`, `pool_disk`, `restart`, `limits` or `launch`.
   - The launch audit rows (`run.egress.add`, `run.requirement.*`, `run.artifact.redirect`, `run.bedrock.configure`, `run.egress.confine`, `run.ceiling.reassert`, `run.revive`) name the cause first; the rest are derived; anything nothing names is `launch`. `limits` is only ever claimed for a member the governance bound applied to.
 - **Whether the saved policy has moved** (`stored_policy_now`) compares the
   saved policy today with its recorded launch content. A run from before the
@@ -1941,6 +1941,25 @@ and `template_group_labels`.
   stored policy.
 - Erasure's `run_setups` scope removes a person's templates and grants ([Erasing a person](#erasing-a-person)); the
   SCIM purge asks for it.
+
+## Harness images
+
+New Run offers a harness only when a sandbox image on this server carries its CLI. A launch that includes any other
+harness is refused `422` `harness_not_installed`.
+
+| Harness | On a published install | What the operator does |
+|---|---|---|
+| Claude Code | Mapped to the agent base image, which does not include the Claude CLI, so New Run refuses it | Build the image (`make agent-images`, [`deploy/images/README.md`](../deploy/images/README.md)), register it under `claude-code` in [`WARDYN_AGENT_IMAGES`](ENV.md) and restart wardynd |
+| Codex CLI | The published image carries the CLI | Nothing |
+| Two or more harnesses in one run | No published image carries two CLIs: refused `harness_set_no_image` | Build a set image (`make agent-image-harnesses`) and declare it under a `+` key |
+
+- A set key joins two or more harness ids with `+`, each once and in sorted order:
+  `WARDYN_AGENT_IMAGES='{"claude-code+codex-cli":"wardyn/agent-harnesses:local"}'`. wardynd refuses to start on a
+  malformed set key.
+- Set images are local builds only: no release publishes one. On Kubernetes, push yours to a registry the cluster
+  pulls from and declare that ref.
+- [The image a run's harnesses start from](operations/build-images.md#the-image-a-runs-harnesses-start-from) has the
+  selection rule and the build steps.
 
 ## Console branding
 
@@ -2411,6 +2430,7 @@ What you get depends on whether `ecosystem` is set:
 | empty (**network only**) | 🟢 yes | 🟢 yes | ⛔ no |
 
 - An ecosystem row gets the per-tool config file `EmitArtifactConfig` ([`internal/workspacescan/gen.go`](../internal/workspacescan/gen.go)) writes at workspace-import time — `.npmrc`, `.config/pip/pip.conf`, `.cargo/config.toml`, `.m2/settings.xml`, `GOPROXY`/`GOSUMDB`, or `.nuget/NuGet/NuGet.Config` — on top of the egress substitution and token injection every redirect gets.
+- A `go` redirect sets `GOSUMDB=off`: Go module redirects disable checksum-database verification, and the existing `go.sum` checks still apply. Keep each repository's `go.sum` committed.
 - A network-only row (empty `ecosystem`: a container registry, an internal appliance, a bare host or IP) gets the network half only: host substituted into the run's egress allowlist, token injected proxy-side.
 - But **no config file is written**.
 - There is no `.npmrc` equivalent for an arbitrary host.
@@ -2458,7 +2478,7 @@ The residuals an operator should plan for:
   - The remedy is raising `max_inspect_pack_mib` (bounded 0..64 at write time), never a console approval, because holding would ask a person to approve a push nobody inspected.
 - **`ssh_key` is ungovernable by construction.**
   - git's own SSH transport has no broker seam, so `push_rules` cannot be enforced on it.
-  - A policy that sets `push_rules` while `ssh_key` is the run's only git-capable grant is legal but graded a medium-risk item on the Review rail rather than blocked.
+  - A policy that sets `push_rules` while `ssh_key` is the run's only git-capable grant is legal but graded a medium-risk item in the policy's risk grade (the Policies screen's safety meter, and preflight's `risk_assessment`) rather than blocked.
 - **On `git_pat`, only WHERE is behind a switch.**
   - Branch-namespace confinement on the `git_pat` lane is off by default and needs the `pat` scope of `WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS`; `push_rules` applies to every `git_pat` push whatever that scope is set to.
   - Neither changes the PAT itself: it keeps whatever scope the operator issued it with.

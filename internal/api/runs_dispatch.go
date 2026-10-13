@@ -664,7 +664,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	if !s.completeMaskManifestWithFileSecrets(ctx, run, policy, &spec) {
 		return
 	}
-	if !s.classifyLocalDispatch(ctx, run, ceiling, siteCfg, &spec, orgConfigKeys, llm, adoRun, p.TrustedOutput) {
+	if !s.classifyLocalDispatch(ctx, run, ceiling, siteCfg, &spec, orgConfigKeys, llm, p.TrustedOutput) {
 		return
 	}
 	spec.ExecOutput = s.openExecOutput(run, p.Interactive)

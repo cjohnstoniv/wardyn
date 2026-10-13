@@ -6,7 +6,7 @@
 import { describe, expect, it } from "vitest";
 import golden from "../../../../../lib/tool-effect.golden.json";
 import type { ToolEffect } from "../../../../../lib/tool-effect";
-import { CLAUDE_GATED, CLAUDE_UNGATED, CODEX, CUSTOM } from "../../../../../lib/new-run-fixtures/scenarios/tools-harness";
+import { CLAUDE_ATTENDED, CLAUDE_GATED, CLAUDE_UNGATED, CODEX, CUSTOM } from "../../../../../lib/new-run-fixtures/scenarios/tools-harness";
 import type { ToolPolicyFact } from "../../../../../lib/types/new-run-access";
 import { defaultChoices, reasonText, ruleChoices } from "./tool-facts";
 
@@ -43,6 +43,22 @@ describe("ruleChoices", () => {
     const mcp = ruleChoices(CODEX, "Codex CLI", "mcp__jira__create_issue");
     expect(mcp.map((c) => [c.effect, c.available])).toEqual([["allow", true], ["hold", false], ["deny", true]]);
     expect(mcp[1].reason).toBe("Codex CLI can't pause a tool call for approval.");
+  });
+
+  it("on the attended lane, a tool no rule names takes the policy's \"*\" the server graded against, not the lane's", () => {
+    const opts = (refused: Partial<Record<ToolEffect, string>>) =>
+      (["allow", "hold", "deny"] as const).map((effect) => ({ effect, available: !refused[effect], ...(refused[effect] ? { reason: refused[effect] } : {}) }));
+    // The policy's "*" is allow (left out of policy_rules here); WebFetch asks first.
+    const fact: ToolPolicyFact = {
+      ...CLAUDE_ATTENDED,
+      rule_effects: opts({}),
+      policy_rules: [{ tool: "WebFetch", effect: "hold", source: { kind: "policy" } }],
+    };
+    expect(ruleChoices(fact, "Claude Code", "Bash").map((c) => c.available)).toEqual([true, true, true]);
+    expect(ruleChoices(fact, "Claude Code", "WebFetch").map((c) => c.available)).toEqual([false, true, true]);
+    // A "*" that asks first: Run it is stricter than the policy allows, for any tool no rule names.
+    const held = { ...fact, rule_effects: opts({ allow: "policy_stricter_tool" }) };
+    expect(ruleChoices(held, "Claude Code", "Bash").map((c) => c.available)).toEqual([false, true, true]);
   });
 
   it("offers only what the harness can honour before a tool is named", () => {

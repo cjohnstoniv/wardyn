@@ -227,9 +227,9 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 		return reviveResult{}, rerr
 	}
 	cfg.RunToken = id.Token
-	cfgJSON, err := json.Marshal(cfg)
-	if err != nil {
-		return reviveResult{}, reviveRefused(http.StatusInternalServerError, reasonReviveEncodeConfigFailed, "encode proxy config: "+err.Error())
+	cfgJSON, rerr := encodeRevivedConfig(cfg) // loaded as the new proxy will load it, before the claim
+	if rerr != nil {
+		return reviveResult{}, rerr
 	}
 
 	// F2 (Fable review): a slow first pull of the proxy image belongs BEFORE
@@ -720,7 +720,8 @@ type reasserted struct {
 // the proxy refuses the mint route for a brokered grant only while its grant
 // map is non-empty (isBrokeredGitGrant). A running agent's env cannot change,
 // so emptying the map would hand the sandbox a GitHub installation token on
-// request. A revive whose ceiling denies a broker-managed host is refused.
+// request. A revive whose ceiling denies a broker-managed host is refused, and
+// so is one whose ceiling denies the host of the run's Azure CLI door.
 func reassertProxyCeiling(run types.AgentRun, cfg *proxy.Config, c ownerCeiling) (reasserted, *reviveError) {
 	if cfg.RunID != run.ID {
 		return reasserted{}, reviveRefused(http.StatusConflict, reasonReviveConfigRunMismatch, "the run's proxy config names another run")
@@ -732,6 +733,9 @@ func reassertProxyCeiling(run types.AgentRun, cfg *proxy.Config, c ownerCeiling)
 	if len(cfg.GitGrants) > 0 && ceilingDeniesAny(c.deny, gitBrokerManagedHosts) {
 		return re, reviveRefused(http.StatusConflict, reasonReviveCeilingDeniesGitBroker,
 			"the owner's governance profile now denies GitHub, which this run's git broker needs; start a new run")
+	}
+	if rerr := azureCLIReviveRefusal(cfg, c.deny); rerr != nil {
+		return re, rerr
 	}
 	re.added = unionCeilingDenies(&cfg.Policy, c.deny)
 	cfg.Injection = slices.DeleteFunc(cfg.Injection, func(in proxy.InjectionConfig) bool {

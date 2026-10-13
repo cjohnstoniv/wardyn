@@ -216,6 +216,12 @@ func (q queuedCreate) answer(s *Server, w http.ResponseWriter, r *http.Request) 
 		writeServerError(w, r, "record run components", err)
 		return
 	}
+	// The harness set too, as create records it: revive, extend and the run.create row read this record.
+	if err := s.persistRunHarnesses(ctx, created.ID, q.f.harnesses); err != nil {
+		abort(createRunHarnessesAbortHint)
+		writeServerError(w, r, "record run harnesses", err)
+		return
+	}
 	s.recordCreateFolds(ctx, created.ID, q.f.reqEvents)
 	position, err := qs.RunQueuePosition(ctx, created.ID)
 	if err != nil {
@@ -396,6 +402,8 @@ func (s *Server) auditPoolRemovalCancels(ctx context.Context, ids []uuid.UUID) {
 const (
 	queueCancelSessionRevoked = "session_revoked"
 	queueCancelServiceRetired = "service_identity_retired"
+	// queueCancelRunnerRevoked is a run waiting for the one runner its launch named, revoked since.
+	queueCancelRunnerRevoked = "runner_revoked"
 	// queueCancelCreateAborted is a run a promoter took before its create had recorded it in full.
 	queueCancelCreateAborted = "create_aborted"
 )

@@ -36,10 +36,11 @@ func countLiveErr(err error) error {
 // reach is not nil, none may name a kek_id its domain's reach refuses.
 //
 // Both refusals count the rows per domain and name the remedy; the caller
-// prefixes what it is refusing. It is never to
-// delete rows: re-declare the domain, erase or destroy those subjects through
-// the API, then remove the domain. Destroyed generations hold no key and are not
-// counted.
+// prefixes what it is refusing. It is never to delete rows, and never an
+// erasure made to get past the check: keep the domain declared, and remove it
+// only once no live key names it. Every purpose counts, so a person's
+// audit-seal key keeps a domain live after their credentials are erased.
+// Destroyed generations hold no key and are not counted.
 func Verify(ctx context.Context, pool *pgxpool.Pool, declared []string, reach func(domain, kekID string) (kek.KEK, error)) error {
 	rows, err := pool.Query(ctx, `SELECT domain, kek_id, count(*) FROM principal_keys WHERE destroyed_at IS NULL GROUP BY domain, kek_id ORDER BY domain, kek_id`)
 	if err != nil {
@@ -77,7 +78,14 @@ func Verify(ctx context.Context, pool *pgxpool.Pool, declared []string, reach fu
 	return errors.New(strings.Join(problems, "; ") + ". " + domainRemedy)
 }
 
-// domainRemedy is the one instruction a domain refusal gives. It never suggests
-// deleting rows: a row deleted is a key lost, and what it sealed with it.
-const domainRemedy = "Re-declare the domain (or restore the key it names), then erase or destroy those subjects through the API " +
-	"(DELETE /api/v1/people/{principal}/credentials), and only then remove the domain. Never delete the rows"
+// domainRemedy is the one instruction a domain refusal gives. It leads with
+// the recovery that erases nothing, and tells a person's two keys apart:
+// credential erasure destroys the credential key only, and the audit-seal key
+// goes only with an irreversible erasure that a retention decision must allow.
+// It never suggests deleting rows: a row deleted is a key lost, and what it
+// sealed with it.
+const domainRemedy = "Keep the domain declared: re-declare it (or restore the key it names), which erases nothing. " +
+	"Remove the domain only once no live key names it. DELETE /api/v1/people/{principal}/credentials destroys a person's credential key " +
+	"and leaves their audit-seal key live; that key is destroyed only by the audit_personal_fields erasure scope " +
+	"(POST /api/v1/people/{principal}/erasure), which is irreversible: every sealed audit field of theirs then reads [erased]. " +
+	"Use it only where your retention decisions allow it; otherwise keep the domain declared. Never delete the rows"

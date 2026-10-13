@@ -14,6 +14,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/armscope"
 	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/hoptls"
@@ -794,4 +795,97 @@ func TestRevive_NarrowedPATRefusedWhenBrokerOff(t *testing.T) {
 			t.Fatalf("BrokeredPATGrantIDs = %v with the broker off, want none", got)
 		}
 	})
+}
+
+// TestReviveRun_AzureCLIDoorUnderAResourceManagerDeny: a remote run with the
+// Azure CLI door whose owner's profile now denies Resource Manager is refused
+// before its claim, with its proxy and its stored config as they were. Dropping
+// the credential and keeping the door gave it a proxy that exits at config
+// load, so a run with no egress at all. The same run under an unchanged profile
+// revives with its door, and a run dispatched under the deny (no door, the lane's
+// hosts closed) revives with the deny and with no entry for the Entra host.
+func TestReviveRun_AzureCLIDoorUnderAResourceManagerDeny(t *testing.T) {
+	arm, login := armscope.Host+":443", proxy.AzureLoginHost+":443"
+	cases := map[string]struct {
+		door, deny, live bool
+		code             int
+	}{
+		"the profile is unchanged":                  {door: true, code: http.StatusOK},
+		"the profile now denies Resource Manager":   {door: true, deny: true, code: http.StatusConflict},
+		"it does on a live run too":                 {door: true, deny: true, live: true, code: http.StatusConflict},
+		"the profile already denied it at dispatch": {deny: true, code: http.StatusOK},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			f := newReviveFixture(t)
+			f.st.run.Placement = types.PlacementRemote
+			pc := runner.ProxyConfig{RunToken: "old-token", ControlPlaneURL: "http://127.0.0.1:8081", MITMCACertPEM: "ca-cert", MITMCAKeyPEM: "ca-key",
+				Policy: types.RunPolicySpec{AllowedDomains: []string{"api.anthropic.com"}}}
+			if tc.door {
+				pc.Policy.AllowedDomains = append(pc.Policy.AllowedDomains, arm, login)
+				pc.AzureARM = &proxy.AzureARMGrant{TenantID: "tenant-1", Subscriptions: []string{azCLISubA}}
+				pc.Injection = []runner.InjectionGrant{{GrantID: uuid.New(), Rule: egress.InjectionRule{Host: armscope.Host, Header: "Authorization",
+					Format: "Bearer %s", SecretName: cliSecretName(uuid.NewString(), providerEntraPart), RequireTLS: true}}}
+			} else if tc.deny {
+				pc.Policy.DeniedDomains = []string{armscope.Host}
+			}
+			stored, err := runner.BuildProxyConfig(f.run.ID, pc, runner.ProxyListenPort)
+			if err != nil {
+				t.Fatal(err)
+			}
+			f.rs.cfg = stored
+			if tc.deny {
+				f.rs.profiles[0].Ceiling.DeniedDomains = append(f.rs.profiles[0].Ceiling.DeniedDomains, armscope.Host)
+			}
+			if tc.live {
+				f.st.run.LostAt, f.st.run.LostReason = nil, ""
+			}
+			w := do(t, f.srv, http.MethodPost, "/api/v1/runs/"+f.run.ID.String()+"/revive", adminToken, "")
+			if w.Code != tc.code {
+				t.Fatalf("revive: code %d (%s), want %d", w.Code, w.Body.String(), tc.code)
+			}
+			if tc.code != http.StatusOK {
+				if got := errorReason(w); got != "revive_ceiling_denies_azure_cli" {
+					t.Errorf("reason = %q, want the literal %q", got, "revive_ceiling_denies_azure_cli")
+				}
+				if lostAt, _ := f.st.lost(); len(f.rr.replaced) != 0 || (lostAt == nil) != tc.live || string(f.rs.cfg) != string(stored) {
+					t.Errorf("replaced %d, lost_at %v, stored config changed %v; want the proxy, the run and its stored config as they were",
+						len(f.rr.replaced), lostAt, string(f.rs.cfg) != string(stored))
+				}
+				return
+			}
+			cfg := f.newConfig(t) // loads: the door has its one credential, or there is no door
+			rules := 0
+			for _, in := range cfg.Injection {
+				if hostEqual(in.Host, armscope.Host) {
+					rules++
+				}
+			}
+			if (cfg.AzureARM != nil) != tc.door || (rules == 1) != tc.door {
+				t.Errorf("door %+v, Resource Manager rules %d; want door=%v with its one credential", cfg.AzureARM, rules, tc.door)
+			}
+			if tc.deny != ceilingDenies(cfg.Policy.DeniedDomains, armscope.Host) {
+				t.Errorf("denied domains = %v; want Resource Manager denied = %v", cfg.Policy.DeniedDomains, tc.deny)
+			}
+			if want := pc.Policy.AllowedDomains; !slices.Equal(cfg.Policy.AllowedDomains, want) {
+				t.Errorf("allowed domains = %v, want %v: a revive opens no host", cfg.Policy.AllowedDomains, want)
+			}
+		})
+	}
+}
+
+// TestReviveRun_AConfigTheProxyWouldRefuseIsRefusedBeforeTheClaim: the revive
+// loads the config it is about to hand the new proxy. One the proxy would exit
+// on (here the deployment's trusted CA, which the revive writes into it) is
+// refused while the run still has what it had, never after its proxy is gone.
+func TestReviveRun_AConfigTheProxyWouldRefuseIsRefusedBeforeTheClaim(t *testing.T) {
+	f := newReviveFixture(t)
+	f.srv.cfg.TrustedCAPEM = "not a certificate"
+	w := do(t, f.srv, http.MethodPost, "/api/v1/runs/"+f.run.ID.String()+"/revive", adminToken, "")
+	if w.Code != http.StatusConflict || errorReason(w) != "revive_config_does_not_load" {
+		t.Fatalf("revive: %d %s, want 409 revive_config_does_not_load", w.Code, w.Body.String())
+	}
+	if lostAt, _ := f.st.lost(); len(f.rr.replaced) != 0 || lostAt == nil {
+		t.Errorf("replaced %d, lost_at %v; want no proxy replaced and the run still lost", len(f.rr.replaced), lostAt)
+	}
 }
