@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"sync"
 	"time"
 
@@ -132,6 +133,8 @@ func Open(dir string, runID uuid.UUID) (*Spool, error) {
 			if e != nil {
 				return e
 			}
+			// A crash inside the first manifest write leaves its temporary file, which writeBytes replaces.
+			names = slices.DeleteFunc(names, func(n string) bool { return n == "write.tmp" })
 			if len(names) != 1 || names[0] != "lock" {
 				return errors.New("spool metadata missing beside existing data")
 			}
