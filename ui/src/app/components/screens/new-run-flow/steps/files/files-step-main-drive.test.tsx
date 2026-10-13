@@ -137,13 +137,61 @@ describe("main drive", () => {
   });
 
   it("names the server or the organisation when they, not the pool, set the cap", async () => {
-    checks.result = { ...filesPreflight(MAIN_DRIVE_FACTS.filesystem), runner_pools: [{ ...filesPreflight(MAIN_DRIVE_FACTS.filesystem).runner_pools![0], limits: [limitsFor("interactive", 4096, "deployment")] }] };
+    checks.result = { ...filesPreflight(MAIN_DRIVE_FACTS.filesystem), limits: limitsFor("interactive", 4096, "deployment") };
     show();
     await screen.findByText(NR_FILES.UP_TO(4));
     await userEvent.clear(size());
     await userEvent.type(size(), "9");
     await userEvent.tab();
     expect(screen.getByText(NR_FILES.CLAMP_SERVER(4))).toBeInTheDocument();
+  });
+
+  it("reads the cap and default from the run's own limits, never from a pool choice's", async () => {
+    const pre = filesPreflight(MAIN_DRIVE_FACTS.filesystem);
+    // A choice that also carries the pool's catalogue limits: the run's limits above it are what applies.
+    checks.result = { ...pre, runner_pools: [{ ...pre.runner_pools![0], limits: [limitsFor("interactive", 2048)] }] };
+    show();
+    expect(await screen.findByText(NR_FILES.UP_TO(8))).toBeInTheDocument();
+    expect(size()).toHaveValue(4);
+  });
+
+  it("names the organisation when its governance sets the cap, and Continue sends the clamped size", async () => {
+    checks.result = { ...filesPreflight(MAIN_DRIVE_FACTS.filesystem), limits: limitsFor("interactive", 6144, "governance") };
+    show();
+    await screen.findByText(NR_FILES.UP_TO(6));
+    await userEvent.clear(size());
+    await userEvent.type(size(), "9");
+    await userEvent.tab();
+    expect(size()).toHaveValue(6);
+    expect(screen.getByText(NR_FILES.CLAMP_ORG(6))).toBeInTheDocument();
+    expect(drawn().resources).toEqual({ disk_mib: 6144 });
+    // Typed over the cap again and sent straight on: Continue commits the clamped size.
+    await userEvent.clear(size());
+    await userEvent.type(size(), "12");
+    await userEvent.click(screen.getByRole("button", { name: NR_SHARED.CONTINUE_TO(NR_SHARED.STEP_TOOLS) }));
+    expect(drawn().resources).toEqual({ disk_mib: 6144 });
+  });
+
+  it("sends nothing for a default the person left untouched", async () => {
+    show();
+    await screen.findByText(NR_FILES.UP_TO(8));
+    expect(size()).toHaveValue(4);
+    expect(drawn().resources).toBeUndefined();
+  });
+
+  it("an answer with no limits, or limits for another run type, claims no cap and no default", async () => {
+    const { limits: _dropped, ...older } = filesPreflight(MAIN_DRIVE_FACTS.filesystem);
+    checks.result = older;
+    show();
+    await screen.findByText(NR_FILES.ENFORCED);
+    expect(screen.queryByText(/^Up to/)).toBeNull();
+    expect(size()).toHaveValue(null);
+    cleanup();
+    checks.result = { ...filesPreflight(MAIN_DRIVE_FACTS.filesystem), limits: limitsFor("background", 8192) };
+    show();
+    await screen.findByText(NR_FILES.ENFORCED);
+    expect(screen.queryByText(/^Up to/)).toBeNull();
+    expect(size()).toHaveValue(null);
   });
 
   it("keeps a size under the cap in whole MiB and sends it as resources.disk_mib", async () => {
@@ -164,7 +212,7 @@ describe("main drive", () => {
   });
 
   it("omits the cap line when nothing caps the size, and asks for a size when nothing defaults it", async () => {
-    checks.result = { ...filesPreflight(MAIN_DRIVE_FACTS.filesystem), runner_pools: [{ ...filesPreflight(MAIN_DRIVE_FACTS.filesystem).runner_pools![0], limits: [limitsFor("interactive")] }] };
+    checks.result = { ...filesPreflight(MAIN_DRIVE_FACTS.filesystem), limits: limitsFor("interactive") };
     show();
     await screen.findByText(NR_FILES.ENFORCED);
     expect(screen.queryByText(/^Up to/)).toBeNull();
@@ -179,7 +227,7 @@ describe("main drive", () => {
 
   it("with no size the summary asks for one and never reads done, and the map names the drive with no number", async () => {
     catalogue = NO_LEGACY;
-    checks.result = { ...filesPreflight(MAIN_DRIVE_FACTS.filesystem), runner_pools: [{ ...filesPreflight(MAIN_DRIVE_FACTS.filesystem).runner_pools![0], limits: [limitsFor("interactive")] }] };
+    checks.result = { ...filesPreflight(MAIN_DRIVE_FACTS.filesystem), limits: limitsFor("interactive") };
     show();
     await screen.findByText(NR_FILES.ENFORCED);
     await userEvent.click(screen.getByRole("radio", { name: NR_FILES.NO_EXTRA }));
@@ -198,10 +246,7 @@ describe("a filled size follows the pool", () => {
   // A pool with a 40 GiB cap and `mib` as its default.
   const withDefault = (mib: number) => ({
     ...filesPreflight(MAIN_DRIVE_FACTS.filesystem),
-    runner_pools: [{
-      ...filesPreflight(MAIN_DRIVE_FACTS.filesystem).runner_pools![0],
-      limits: [{ ...limitsFor("interactive", 40960), disk_mib: { default: { value: mib }, cap: { value: 40960 }, cap_source: "pool" as const } }],
-    }],
+    limits: { ...limitsFor("interactive", 40960), disk_mib: { default: { value: mib }, cap: { value: 40960 }, cap_source: "pool" as const } },
   });
 
   it("another pool's default replaces a size the person never changed", async () => {
@@ -222,7 +267,7 @@ describe("a filled size follows the pool", () => {
     // The run is moved to a pool with no default and no cap: an untouched run gets no size there.
     const open = withDefault(0);
     const none = { value: 0, unlimited: true };
-    open.runner_pools![0].limits![0].disk_mib = { default: none, cap: none, cap_source: "pool" };
+    open.limits.disk_mib = { default: none, cap: none, cap_source: "pool" };
     checks.result = open;
     act(() => external.edit((i) => ({ ...i, runner_pool_id: "pool-b" })));
     await waitFor(() => expect(size()).toHaveValue(null));
