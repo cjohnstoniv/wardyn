@@ -264,6 +264,7 @@ func TestPG_UpdateRunnerMaxRunsIsTheOwners(t *testing.T) {
 	pool := runsPGPoolIsolated(t)
 	pg := store.NewPG(pool)
 	r := newRunner("alice")
+	r.MaxRuns = 0
 	got, err := pg.CreateRunner(ctx, r)
 	if err != nil || got.MaxRuns != types.RunnerMaxRunsDefault {
 		t.Fatalf("a runner registered without max_runs = %d, %v; want the default", got.MaxRuns, err)

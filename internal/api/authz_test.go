@@ -238,7 +238,9 @@ var routeMatrix = map[string]classifiedRoute{
 	"PUT /api/v1/runners/settings":       {class: classAdmin},
 	"GET /api/v1/me/runners":             {class: classMember},
 	"GET /api/v1/me/runners/{id}":        {class: classMember},
-	"PUT /api/v1/me/runners/{id}":        {class: classMember},
+	// The owner's change of their own runner's runs at once (runner_limits.go), scoped to the caller's
+	// own runners inside the handler.
+	"PUT /api/v1/me/runners/{id}": {class: classMember},
 	// Runner pools (runner_pools.go): 501 until the pool storage lands. The
 	// catalogue reads and the person's own runner membership and defaults are
 	// member routes scoped to the caller's own data; organization pool writes,

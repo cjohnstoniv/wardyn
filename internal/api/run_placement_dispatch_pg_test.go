@@ -105,7 +105,7 @@ func TestDispatch_ExactTargetFence(t *testing.T) {
 func TestDispatch_SelfHostedRunGoesToItsPersistedRunner(t *testing.T) {
 	e := newPlacementEnv(t)
 	ctx := context.Background()
-	bound, later := uuid.New(), uuid.New()
+	bound, later := e.claimedRunner(e.personP), uuid.New()
 	pool := e.createPool("Laptops", types.RunnerPoolUser)
 	poolID := pool.ID
 	run := types.AgentRun{ID: uuid.New(), Placement: types.PlacementLocal, RunnerID: &bound, RunnerPoolID: &poolID}
@@ -115,6 +115,10 @@ func TestDispatch_SelfHostedRunGoesToItsPersistedRunner(t *testing.T) {
 		}
 		if got := e.runner.fakeRunner.lastSpec.RunnerID; got != bound.String() || got == later.String() {
 			t.Fatalf("created for runner %q, the run is bound to %q", got, bound)
+		}
+		// The create carries the runner's stored runs at once, the runner's own backstop.
+		if got := e.runner.fakeRunner.lastSpec.RunnerMaxRuns; got != types.RunnerMaxRunsDefault {
+			t.Fatalf("created with RunnerMaxRuns %d, want the runner's stored %d", got, types.RunnerMaxRunsDefault)
 		}
 	}
 	// A spec that arrives naming another runner is overwritten by the persisted one.
