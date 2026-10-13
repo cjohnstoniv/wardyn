@@ -205,6 +205,73 @@ func TestMigrate_RevocationOrderFreezesLegacyTokensAndKeys(t *testing.T) {
 	check("after a clock step")
 }
 
+// TestMigrate_RevocationOrderOrdersServiceTokensBySponsor (0194): a service identity's token is read against
+// its current sponsor's cuts and the global one, so the backfill orders it against those. A token created
+// after its sponsor's cut stays live, one created before a sponsor or global cut is ended, and after a
+// sponsor change the token is ordered against the new sponsor while one older than the change stays refused
+// by sponsor_since.
+func TestMigrate_RevocationOrderOrdersServiceTokensBySponsor(t *testing.T) {
+	pool := pgPoolIsolated(t)
+	ctx := context.Background()
+	exec := func(sql string, args ...any) {
+		t.Helper()
+		if _, err := pool.Exec(ctx, sql, args...); err != nil {
+			t.Fatalf("%s: %v", sql, err)
+		}
+	}
+	exec(`DROP TRIGGER oidc_session_revocations_stamp ON oidc_session_revocations`)
+	exec(`DROP TRIGGER oidc_session_cuts_stamp ON oidc_session_cuts`)
+	exec(`ALTER SEQUENCE oidc_revocation_seq RESTART WITH 1`)
+	// The global cut 4h ago, svc-alpha's sponsor cut 2h ago. svc-beta's sponsor moved from spon-old to
+	// spon-new 90m ago: spon-new was cut 3h ago, spon-old 20m ago.
+	exec(`INSERT INTO oidc_session_revocations (sub, revoked_at, seq) VALUES
+		('', now() - interval '4 hours', 0), ('spon-alpha', now() - interval '2 hours', 0),
+		('spon-new', now() - interval '3 hours', 0), ('spon-old', now() - interval '20 minutes', 0)`)
+	exec(`INSERT INTO service_identities (name, sponsor, sponsor_since, created_by) VALUES
+		('svc-alpha', 'spon-alpha', now() - interval '6 hours', 'admin'),
+		('svc-beta', 'spon-new', now() - interval '90 minutes', 'admin')`)
+	for _, c := range []struct{ name, service, created string }{
+		{"before-global", "svc-alpha", "5 hours"},
+		{"before-sponsor-cut", "svc-alpha", "3 hours"},
+		{"after-sponsor-cut", "svc-alpha", "1 hour"},
+		{"before-sponsor-change", "svc-beta", "2 hours"},
+		{"after-sponsor-change", "svc-beta", "1 hour"},
+	} {
+		exec(`INSERT INTO api_tokens (id, principal, email, name, token_sha256, created_at)
+			VALUES (gen_random_uuid(), 'service:' || $1, '', $2, $2, now() - $3::interval)`, c.service, c.name, c.created)
+	}
+	sql, err := migrationFS.ReadFile("migrations/0194_revocation_order.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	exec(string(sql))
+
+	// refused is what service-token authentication answers: not after sponsor_since, or a cut of the current
+	// sponsor or the global one that drew a greater seq than the token holds.
+	refused := func(name string) bool {
+		t.Helper()
+		var rev, cut int64
+		var afterSince bool
+		if err := pool.QueryRow(ctx, `SELECT t.rev_seq, COALESCE((SELECT max(r.seq) FROM oidc_session_revocations r
+				WHERE r.sub = s.sponsor OR r.sub = ''), 0), t.created_at > s.sponsor_since
+			FROM api_tokens t JOIN service_identities s ON t.principal = 'service:' || s.name WHERE t.name = $1`, name).Scan(&rev, &cut, &afterSince); err != nil {
+			t.Fatal(err)
+		}
+		if rev < 1 {
+			t.Fatalf("service token %s kept rev_seq %d: still compared on time", name, rev)
+		}
+		return !afterSince || cut > rev
+	}
+	for name, want := range map[string]bool{
+		"before-global": true, "before-sponsor-cut": true, "after-sponsor-cut": false,
+		"before-sponsor-change": true, "after-sponsor-change": false,
+	} {
+		if got := refused(name); got != want {
+			t.Errorf("service token %s refused = %v, want %v", name, got, want)
+		}
+	}
+}
+
 // TestMigrate_RevocationOrderTokenBeforeTheOldestCut (0194): a token or key created before the oldest cut
 // has no earlier cut to take a seq from. It takes the value reserved below every cut, so the oldest cut,
 // which draws the first seq the migration hands out, still ends it.
