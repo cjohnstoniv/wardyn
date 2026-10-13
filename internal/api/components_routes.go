@@ -364,18 +364,22 @@ func (s *Server) handlePutComponent(w http.ResponseWriter, r *http.Request) {
 	if !orgMCPKeyFree(w, r, cs, c) {
 		return
 	}
+	// The row is read, compared and written under the lock a sign-in's capture
+	// holds (lockCLIRow). Reading it first would let two writes race: one
+	// compares against a row the other is about to re-pin, sees no change and
+	// purges nothing, and a sign-in captured for the pin in between outlives it.
+	var unlock func()
+	if r, unlock, ok = s.lockDoor(w, r, db.SiteConfigLockClass, cliRowLockPart, id.String()); !ok {
+		return
+	}
+	defer unlock()
 	old, err := cs.GetComponent(r.Context(), id, "")
 	switch {
 	case err == nil:
 		// A row whose AWS sign-ins would point somewhere it no longer names, or
 		// whose Azure sign-ins were captured for subscriptions it no longer pins,
-		// takes them with it, before the write and under the lock a capture holds.
+		// takes them with it, before the write.
 		if cliSignInPinChanged(old.Definition, c.Definition) || azureCLISignInPinChanged(old.Definition, c.Definition) {
-			var unlock func()
-			if r, unlock, ok = s.lockDoor(w, r, db.SiteConfigLockClass, cliRowLockPart, id.String()); !ok {
-				return
-			}
-			defer unlock()
 			if err := s.purgeCLISignIns(r.Context(), id.String()); err != nil {
 				writeServerError(w, r, "purge cli sign-ins", err)
 				return

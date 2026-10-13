@@ -306,6 +306,26 @@ func TestAzureCLISignIn_RefusesARowThatIsNoLongerWhatStarted(t *testing.T) {
 	}
 }
 
+// The check that decides is the one under the row's lock at the write: a row
+// re-pinned AFTER the callback's first look at it, while the code is being
+// exchanged, stores nothing.
+func TestAzureCLISignIn_RowRepinnedDuringTheExchangeStoresNothing(t *testing.T) {
+	f := newAzCLIFixture(t, types.ComponentAccessRead, azCLISubA)
+	q, cookies, _ := f.begin(t)
+	// The tenant issues the token inside the exchange, after the pre-check.
+	f.fake.OnIssue(func(entrafake.IssuedToken) { f.setRow(t, azCLIRowDef(types.ComponentAccessRead, azCLISubB)) })
+	w := f.callback(f.owner, q, cookies)
+	if want := azureCLISignInErrorPath + azureCaptureRowChanged + azureCLIComponentParam(f.id.String()); w.Header().Get("Location") != want {
+		t.Fatalf("callback: %d %s, want a redirect to %s", w.Code, w.Header().Get("Location"), want)
+	}
+	if _, found := f.stored(t, f.owner); found {
+		t.Fatal("a sign-in landed for subscriptions the row no longer pins")
+	}
+	if live, ok := f.srv.azureCLIRow(context.Background(), f.id); !ok || !slices.Equal(live.Subscriptions, []string{azCLISubB}) {
+		t.Fatalf("the row was not re-pinned during the exchange: %+v", live)
+	}
+}
+
 // A forged stamp cannot point the capture at another row, another person
 // cannot finish someone's sign-in, and a callback missing a one-time cookie
 // spends nothing.
@@ -850,6 +870,10 @@ func TestAzureARM_ResolveSnapshotPinned(t *testing.T) {
 		{"the row turned into another kind", row(types.ComponentDefinition{Hosts: []string{"api.example.com"}}), http.StatusForbidden, reasonScopeChanged},
 		{"the run no longer carries the row", func(f *azCLIFixture, in runner.InjectionGrant) (string, egress.InjectionRule, uuid.UUID) {
 			f.st.attached = nil
+			return same(f, in)
+		}, http.StatusForbidden, reasonScopeChanged},
+		{"the run carries only a person's own component under that id", func(f *azCLIFixture, in runner.InjectionGrant) (string, egress.InjectionRule, uuid.UUID) {
+			f.st.attached[0].SelfDefined = true
 			return same(f, in)
 		}, http.StatusForbidden, reasonScopeChanged},
 		{"the console moved tenant", func(f *azCLIFixture, in runner.InjectionGrant) (string, egress.InjectionRule, uuid.UUID) {

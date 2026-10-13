@@ -173,6 +173,7 @@ func TestAzureARM_GateOnBothLanes(t *testing.T) {
 		{"a tenant-level provider", http.MethodGet, "/providers/Microsoft.Management/managementGroups"},
 		{"the batch door", http.MethodPost, "/batch?api-version=2020-06-01"},
 		{"a dot segment", http.MethodGet, "/subscriptions/" + armSub + "/%2e%2e/" + armOther + "/resourcegroups"},
+		{"a dot segment behind an encoded path parameter", http.MethodGet, "/subscriptions/" + armSub + "/..%3b/" + armOther + "/resourcegroups"},
 	} {
 		t.Run("tunnel refuses "+tc.name, func(t *testing.T) {
 			h := newARMHarness(t, false)

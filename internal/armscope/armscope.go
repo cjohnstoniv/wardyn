@@ -64,10 +64,15 @@ type Scope struct {
 // resource providers stay refused.
 var tenantReads = []string{"subscriptions", "providers", "tenants"}
 
-// methodOverrideHeaders are the spellings of "act as this method instead".
-// Whether Resource Manager honours one is not documented, so a request that
-// carries one is refused: the method Azure would act on is not knowable.
-var methodOverrideHeaders = []string{"X-HTTP-Method-Override", "X-HTTP-Method", "X-Method-Override"}
+// methodOverride reports whether a header name is a spelling of "act as this
+// method instead": X-HTTP-Method-Override, X-HTTP-Method, X-Method-Override,
+// X-Ms-Http-Method, in any case and with hyphens or underscores. Whether
+// Resource Manager honours one is not documented, so a request that carries
+// one is refused: the method Azure would act on is not knowable.
+func methodOverride(header string) bool {
+	name := strings.NewReplacer("-", "", "_", "").Replace(strings.ToLower(header))
+	return strings.Contains(name, "httpmethod") || strings.Contains(name, "methodoverride")
+}
 
 // Subscription is id as this package compares it: a GUID in lowercase. ok is
 // false for anything else.
@@ -122,7 +127,7 @@ func (s Scope) Admit(method, rawPath string, h http.Header) error {
 // DELETE write, and anything else is refused.
 func readMethod(method string, h http.Header) (bool, error) {
 	for k := range h {
-		if slices.ContainsFunc(methodOverrideHeaders, func(o string) bool { return strings.EqualFold(k, o) }) {
+		if methodOverride(k) {
 			return false, fmt.Errorf("%w: it carries %s", ErrUnreadable, k)
 		}
 	}
@@ -135,13 +140,19 @@ func readMethod(method string, h http.Header) (bool, error) {
 	return false, fmt.Errorf("%w: %q is not a method this gate classifies", ErrUnreadable, method)
 }
 
+// segmentMarks are the characters no segment may hold, written raw or
+// percent-encoded: a semicolon starts a path parameter some servers drop before
+// routing (so "..;" can route as ".."), a question mark and a hash end the
+// path, and a percent sign left after one decode is a second layer of encoding
+// a server that decodes again would read differently.
+const segmentMarks = ";?#%"
+
 // segments decodes rawPath into its lowercased segments. Resource Manager
 // compares paths without regard to case, so the comparison here does too. One
-// trailing slash is tolerated; an empty segment anywhere else, a backslash, a
-// semicolon (a path parameter some servers drop before routing), or a segment
-// adoscope.UnescapeName would not route as it reads (a dot segment, an encoded
-// separator, a second layer of encoding around either) is refused rather than
-// resolved.
+// trailing slash is tolerated. Refused rather than resolved: an empty segment
+// anywhere else, a backslash, a segment adoscope.UnescapeName would not route
+// as it reads (a dot segment, an encoded separator, a control character), and
+// any of segmentMarks in the path as it arrived or in a segment once decoded.
 func segments(rawPath string) ([]string, error) {
 	if !strings.HasPrefix(rawPath, "/") || strings.ContainsAny(rawPath, `\;?#`) {
 		return nil, fmt.Errorf("%w: its path is not a plain absolute path", ErrUnreadable)
@@ -156,7 +167,7 @@ func segments(rawPath string) ([]string, error) {
 			return nil, fmt.Errorf("%w: its path has an empty segment", ErrUnreadable)
 		}
 		seg, err := adoscope.UnescapeName(raw)
-		if err != nil {
+		if err != nil || strings.ContainsAny(seg, segmentMarks) {
 			return nil, fmt.Errorf("%w: a path segment is spelled so that it could be routed as another", ErrUnreadable)
 		}
 		parts[i] = strings.ToLower(seg)

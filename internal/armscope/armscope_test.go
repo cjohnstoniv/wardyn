@@ -93,6 +93,12 @@ func TestARMScope_UnreadableIsRefused(t *testing.T) {
 		base + "/../" + other, base + "/%2e%2e/" + other, base + "/%252e%252e/" + other,
 		base + "/a%2Fb", base + "/a%5Cb", base + `\resourcegroups`, base + "/a%zz", base + "/rg%00",
 		base + ";x/resourcegroups", base + "/..;/" + other, base + "?api-version=1", base + "#x",
+		// The same marks percent-encoded: a server that decodes, drops ";…" and
+		// then collapses ".." would route these into the other subscription.
+		base + "/..%3b/" + other, base + "/..%3B/" + other, base + "/.%3b/" + other, base + "/rg%3bx=1",
+		"/subscriptions%3bx/" + pinned, "/subscriptions/" + pinned + "%3b/resourcegroups",
+		base + "/..%253b/" + other, base + "/rg%2541", base + "/rg%25", base + "/rg%3Fx", base + "/rg%23x",
+		base + "/%2E%2E/" + other, base + "/rg%0a", base + "/rg%7f", base + "/%20rg", base + "/rg.",
 	} {
 		if err := scope(true).Admit(http.MethodGet, path, nil); !errors.Is(err, ErrUnreadable) {
 			t.Errorf("GET %q = %v, want ErrUnreadable", path, err)
@@ -103,9 +109,23 @@ func TestARMScope_UnreadableIsRefused(t *testing.T) {
 			t.Errorf("%q = %v, want ErrUnreadable", method, err)
 		}
 	}
-	for _, name := range []string{"X-HTTP-Method-Override", "x-http-method", "X-Method-Override"} {
+	for _, name := range []string{
+		"X-HTTP-Method-Override", "x-http-method", "X-Method-Override", "X_HTTP_Method_Override", "x_http_method",
+		"X-Ms-Http-Method", "X_MS_HTTP_METHOD", "X-Http-Method_Override", "X-MS-Method-Override",
+	} {
 		if err := scope(false).Admit(http.MethodGet, base, http.Header{name: {"DELETE"}}); !errors.Is(err, ErrUnreadable) {
 			t.Errorf("%s = %v, want ErrUnreadable", name, err)
+		}
+	}
+	// Headers the CLI really sends are not overrides.
+	sent := http.Header{"X-Ms-Client-Request-Id": {"1"}, "Commandname": {"group list"}, "Access-Control-Request-Method": {"GET"}, "Accept": {"application/json"}}
+	if err := scope(false).Admit(http.MethodGet, base, sent); err != nil {
+		t.Errorf("ordinary headers = %v, want admitted", err)
+	}
+	// A name with an encoded space or parenthesis is one segment that reads as itself.
+	for _, path := range []string{base + "/resourceGroups/my%20rg", base + "/resourceGroups/rg%28a%29"} {
+		if err := scope(false).Admit(http.MethodGet, path, nil); err != nil {
+			t.Errorf("GET %q = %v, want admitted", path, err)
 		}
 	}
 }
