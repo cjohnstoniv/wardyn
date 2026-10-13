@@ -612,6 +612,14 @@ and does not yet follow semantic versioning (interfaces are not stable).
   and pools, and My pools creates and manages your own user pools and adds your runner to them. `wardyn runner pool
   use-policy get|set|clear` does the same from the CLI, and `wardyn runner pool show` prints who may use a pool and
   the limits it sets.
+- `make setup`, `make demo`, `make test-drive` and `scripts/ci-run.sh` give the server's runner its limits once it
+  is up: half of what the host has, shown before they are set. Where the server cannot see the disk (Docker Desktop,
+  or `wardynd` in a container) setup asks for the free disk at a terminal, or reads `WARDYN_SETUP_RUNNER_DISK_GB`,
+  and stops naming the variable when neither is there; `WARDYN_SETUP_RUNNER_LIMITS` sets the whole set. Nothing is
+  defaulted. New: `wardyn runner remote propose <id> [--free-disk GB]` prints the limits registration's rule gives a
+  remote-hosted runner, as `wardyn runner set` flags, and sets nothing; `wardyn runner remote list --no-limits`
+  lists the runners that take no run until they have limits. The kind quickstart reads the cluster's nodes
+  (`k8s.readNodes`), so the server measures the cluster itself.
 
 ### Changed
 
