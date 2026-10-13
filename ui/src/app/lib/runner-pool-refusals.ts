@@ -99,7 +99,7 @@ export const RUNNER_POOL_REFUSAL = {
   KIND_MISMATCH: (name: string) => `${name} has no runner of the kind this run asks for. Choose another pool.`,
   ORG_POOL_SELF_HOSTED: () => "Organization pools take remote-hosted runners only. A self-hosted runner can join its owner's user pools.",
   REMOTE_NOT_CONFIGURED: (id: string) => `${id} isn't a remote-hosted runner this server is set up with.`,
-  REMOTE_NOT_AVAILABLE: (id: string) => `${id} isn't available to people's pools. Ask your admin to make it available.`,
+  REMOTE_NOT_AVAILABLE: (id: string) => `${id} is not available to people's pools. Ask your admin to make it available.`,
   UNAVAILABLE_SERVER: () => "This server does not manage runner pools yet.",
   RUN_TYPE_NOT_ALLOWED: (name: string, runType: keyof typeof RUN_TYPE_PLURAL) =>
     `${name} doesn't take ${RUN_TYPE_PLURAL[runType]}. Choose another pool or run type.`,

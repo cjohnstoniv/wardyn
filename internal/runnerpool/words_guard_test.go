@@ -42,14 +42,21 @@ func TestPoolWordsAreRetired(t *testing.T) {
 	literals = append(literals, glob("internal/types/remote_runner.go")...)
 	literals = append(literals, glob("internal/api/runner_pools*.go")...)
 	literals = append(literals, glob("internal/api/remote_runners.go")...)
+	literals = append(literals, glob("internal/api/runner_pool_main_drive.go")...)
+	literals = append(literals, glob("internal/api/run_placement_resolve.go")...)
+	literals = append(literals, glob("internal/api/run_placement_targets.go")...)
+	literals = append(literals, glob("internal/api/governance_change_gate.go")...)
 	literals = append(literals, glob("cmd/wardyn/runner_pool*.go")...)
 	literals = append(literals, glob("cmd/wardyn/runner_remote.go")...)
+	literals = append(literals, glob("cmd/wardyn/runner_resolve.go")...)
+	literals = append(literals, glob("cmd/wardyn/runner_inventory.go")...)
 	literals = append(literals, glob("cmd/wardyn/run_placement.go")...)
 	withComments = append(withComments, glob("pkg/client/runner_pools.go")...)
 	withComments = append(withComments, glob("pkg/client/remote_runners.go")...)
 	whole = append(whole, glob("ui/src/app/lib/types/runner-pools.ts")...)
 	whole = append(whole, glob("ui/src/app/lib/runner-pool-refusals.ts")...)
 	whole = append(whole, glob("ui/src/app/lib/runner-pool-refusals.golden.json")...)
+	whole = append(whole, glob("ui/src/app/lib/governance-copy.ts")...)
 
 	report := func(file string, pos token.Position, text string) {
 		if m := retiredPoolWords.FindString(text); m != "" {

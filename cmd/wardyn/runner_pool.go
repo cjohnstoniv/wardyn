@@ -20,7 +20,7 @@ import (
 // pools yet answers each with runner_pools_unavailable.
 //
 //	wardyn runner pool list
-//	wardyn runner pool default set <pool-id>
+//	wardyn runner pool default set <pool>
 //
 // A default only seeds a choice; it never grants a pool you could not choose.
 
@@ -99,17 +99,17 @@ func runnerPoolDefaultCmd(client clientFn) *cobra.Command {
 		return emitJSON(cmd.OutOrStdout(), d)
 	}}
 	set := &cobra.Command{
-		Use:   "set <pool-id>",
+		Use:   "set <pool>",
 		Short: "Make a pool you may use your default",
 		Long: "Make a pool you may use, an organization pool or one of your own user pools, your default:\n" +
 			"a run that names no pool starts there. Use `clear` to use the organisation's default again.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			id, err := poolIDFlag("pool id", args[0])
+			id, err := poolIDArg(cmd, client, args[0])
 			if err != nil {
 				return err
 			}
-			out, err := client().SetMyRunnerPoolDefaults(cmd.Context(), sdk.RunnerPoolDefaults{PoolID: id})
+			out, err := client().SetMyRunnerPoolDefaults(cmd.Context(), sdk.RunnerPoolDefaults{PoolID: &id})
 			if err != nil {
 				return err
 			}
