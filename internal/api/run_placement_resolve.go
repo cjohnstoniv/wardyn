@@ -572,6 +572,7 @@ func (p runPlacement) auditFields(run types.AgentRun) map[string]any {
 	if run.RunnerPoolExecutor != "" {
 		data["remote_runner_id"] = run.RunnerPoolExecutor
 	}
+	data["reserved"] = run.Reserved
 	return data
 }
 
