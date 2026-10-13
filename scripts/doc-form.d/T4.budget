@@ -6,5 +6,5 @@
 # threatmodel/THREAT-MODEL.md 52364 measured after the F-1508-author merge (human_author; four-eyes on service-identity create and sponsor change).
 # threatmodel/THREAT-MODEL.md 52492 measured after train 10 F-1508-author merge.
 # threatmodel/THREAT-MODEL.md 52620 adds 128 (0.9 DS1-S2a, train 12): the per-harness credential same-uid residual.
-# threatmodel/THREAT-MODEL.md 52661 adds 41 (section 5.1a): a subscription route-through host is inspected, an IPv6-literal one is not.
-threatmodel/THREAT-MODEL.md=52661 share=20
+# threatmodel/THREAT-MODEL.md 52641 adds 21 (section 5.1a): a subscription route-through host is inspected as the Anthropic schema.
+threatmodel/THREAT-MODEL.md=52641 share=20

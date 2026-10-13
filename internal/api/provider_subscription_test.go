@@ -194,12 +194,14 @@ func TestProviderSubscriptionDispatch(t *testing.T) {
 	})
 
 	t.Run("a route-through host joins another lane's channel hosts", func(t *testing.T) {
-		gw, direct, v6 := subProvider("gw"), subProvider("direct"), subProvider("v6")
-		gw.BaseURL, v6.BaseURL = "https://llm.corp.example:8443/anthropic", "https://[fd00::10]/anthropic"
+		gw, direct, v6, zoned := subProvider("gw"), subProvider("direct"), subProvider("v6"), subProvider("zoned")
+		gw.BaseURL, v6.BaseURL = "https://llm.corp.example:8443/anthropic", "https://[FD00::10]:8443/anthropic"
+		zoned.BaseURL = "https://[fe80::1%25eth0]/anthropic" // a key the proxy refuses, so none is sent
 		lane := func(p types.ModelProvider) llmTransport { return llmTransport{provider: &chosenProvider{provider: p}} }
 		azure := map[string]string{"foundry.test": "api.openai.com"}
-		got := providerSubscriptionChannelHosts([]llmTransport{lane(direct), lane(v6), {}, lane(gw)}, azure)
-		want := map[string]string{"foundry.test": "api.openai.com", "llm.corp.example": "api.anthropic.com"}
+		got := providerSubscriptionChannelHosts([]llmTransport{lane(direct), lane(v6), {}, lane(zoned), lane(gw)}, azure)
+		// The literal keeps the base URL's own spelling, brackets off, as its MITM entry does; the proxy lower-cases both.
+		want := map[string]string{"foundry.test": "api.openai.com", "llm.corp.example": "api.anthropic.com", "FD00::10": "api.anthropic.com"}
 		if !maps.Equal(got, want) {
 			t.Errorf("channel hosts = %v, want %v", got, want)
 		}
@@ -502,8 +504,17 @@ func TestOwnerSubscriptionTokenIsStrict(t *testing.T) {
 // proxy. What the proxy does with the pair is
 // TestMITM_SubscriptionRouteThroughHostIsScannedAsAnthropic (internal/egress/proxy).
 func TestDispatch_SubscriptionRouteThroughIsInspectedAsAnthropic(t *testing.T) {
+	t.Run("a hostname", func(t *testing.T) { dispatchSubscriptionRouteThrough(t, "llm.corp.example", "llm.corp.example:8443") })
+	// An IPv6 literal is keyed by its bare address, which the proxy's loader accepts.
+	t.Run("an IPv6 literal", func(t *testing.T) { dispatchSubscriptionRouteThrough(t, "fd00::10", "[fd00::10]:8443") })
+}
+
+// dispatchSubscriptionRouteThrough launches the run for a provider whose base
+// URL is on mitmEntry and checks the config the proxy loads names host.
+func dispatchSubscriptionRouteThrough(t *testing.T, host, mitmEntry string) {
+	t.Helper()
 	p := subProvider("claude")
-	p.BaseURL = "https://llm.corp.example:8443/anthropic"
+	p.BaseURL = "https://" + mitmEntry + "/anthropic"
 	srv, st, fr := userDispatchHarness(t, runner.UserMountPolicy{})
 	st.siteConfig = types.SiteConfig{ModelProviders: providerBlock(p)}
 	sec := &memSecrets{m: map[string][]byte{}}
@@ -531,11 +542,11 @@ func TestDispatch_SubscriptionRouteThroughIsInspectedAsAnthropic(t *testing.T) {
 	if err != nil {
 		t.Fatalf("the proxy refuses the dispatched config: %v", err)
 	}
-	if !slices.Contains(cfg.MITMHosts, "llm.corp.example:8443") {
-		t.Fatalf("MITMHosts = %v, want the gateway: the run did not dispatch on the route-through lane", cfg.MITMHosts)
+	if !slices.Contains(cfg.MITMHosts, mitmEntry) {
+		t.Fatalf("MITMHosts = %v, want %s: the run did not dispatch on the route-through lane", cfg.MITMHosts, mitmEntry)
 	}
-	if len(cfg.LLMChannelHosts) != 1 || cfg.LLMChannelHosts["llm.corp.example"] != "api.anthropic.com" {
-		t.Errorf("LLMChannelHosts = %v, want llm.corp.example inspected as api.anthropic.com: the proxy terminates the "+
-			"gateway and scans none of its bodies, on a run that requires an inspectable model transport", cfg.LLMChannelHosts)
+	if len(cfg.LLMChannelHosts) != 1 || cfg.LLMChannelHosts[host] != "api.anthropic.com" {
+		t.Errorf("LLMChannelHosts = %v, want %s inspected as api.anthropic.com: the proxy terminates the "+
+			"gateway and scans none of its bodies, on a run that requires an inspectable model transport", cfg.LLMChannelHosts, host)
 	}
 }

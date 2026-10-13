@@ -5,6 +5,7 @@ package proxy
 
 import (
 	"fmt"
+	"net/netip"
 	"strings"
 )
 
@@ -28,16 +29,26 @@ func compileChannelHosts(m map[string]string) map[string]string {
 	return out
 }
 
-// validateChannelHosts refuses a channel host that is not a bare hostname, or whose vendor is not one
-// of the two request schemas the scanner reads.
+// validateChannelHosts refuses a channel host that is neither a bare hostname nor a bare IPv6
+// address, or whose vendor is not one of the two request schemas the scanner reads.
 func (c *Config) validateChannelHosts() error {
 	for host, vendor := range c.LLMChannelHosts {
 		switch {
-		case strings.TrimSpace(host) == "" || strings.ContainsAny(host, ":/@ "):
-			return fmt.Errorf("config: llm_channel_hosts[%q]: the key must be a bare hostname", host)
+		case strings.TrimSpace(host) == "" || (strings.ContainsAny(host, ":/@ ") && !bareIPv6(host)):
+			return fmt.Errorf("config: llm_channel_hosts[%q]: the key must be a bare hostname or a bare IPv6 address", host)
 		case vendor != anthropicHost && vendor != openaiHost:
 			return fmt.Errorf("config: llm_channel_hosts[%q]: vendor %q must be %q or %q", host, vendor, anthropicHost, openaiHost)
 		}
 	}
 	return nil
+}
+
+// bareIPv6 reports whether host is an IPv6 address and nothing else: no brackets, no zone and no
+// port. That is the spelling a request's host has once splitHostPort has taken "[addr]:port" apart,
+// so a key in this form is the key a request to the literal is looked up by. Like a hostname key, it
+// is matched as lower-cased text, never as a parsed address: the MITM entry that terminates the same
+// host is matched that way, and the two are only ever right together.
+func bareIPv6(host string) bool {
+	addr, err := netip.ParseAddr(host)
+	return err == nil && addr.Is6() && addr.Zone() == ""
 }

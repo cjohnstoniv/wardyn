@@ -9,6 +9,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -85,17 +86,25 @@ func TestMITMGenericChannelBodyIsScannedWhateverTheHostClassification(t *testing
 // sees it. The MITM entry alone terminates the host and scans nothing, which
 // is why dispatch sends the pair
 // (TestDispatch_SubscriptionRouteThroughIsInspectedAsAnthropic, internal/api).
+// An IPv6-literal host is keyed by its bare address: the key the config loader
+// accepts is the host a request to "[addr]:443" is looked up by.
 func TestMITM_SubscriptionRouteThroughHostIsScannedAsAnthropic(t *testing.T) {
-	const gateway = "llm.corp.example"
+	const name, literal = "llm.corp.example", "2606:4700:4700::1111"
 	for _, tc := range []struct {
 		name     string
+		gateway  string
 		channels map[string]string
 		want     int
 	}{
-		{"terminated and named as an Anthropic host", map[string]string{gateway: anthropicHost}, http.StatusForbidden},
-		{"terminated only", nil, http.StatusOK},
+		{"terminated and named as an Anthropic host", name, map[string]string{name: anthropicHost}, http.StatusForbidden},
+		{"terminated only", name, nil, http.StatusOK},
+		{"an IPv6 literal, terminated and named", literal, map[string]string{literal: anthropicHost}, http.StatusForbidden},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			gateway := tc.gateway
+			if err := (&Config{LLMChannelHosts: tc.channels}).validateChannelHosts(); err != nil {
+				t.Fatalf("the config loader refuses the channel hosts: %v", err)
+			}
 			cu := captureUpstream(t, true, "upstream-ok")
 			certPEM, keyPEM := genTestCA(t)
 			ca, err := newCertAuthority(certPEM, keyPEM)
@@ -108,7 +117,7 @@ func TestMITM_SubscriptionRouteThroughHostIsScannedAsAnthropic(t *testing.T) {
 				Sink:            &decisionSink{out: &bytes.Buffer{}, ch: make(chan egress.DecisionLog, 8)},
 				Scanner:         scanEngine(t, "block", scanTestSecret),
 				CA:              ca,
-				MITMHosts:       []string{gateway + ":443"},
+				MITMHosts:       []string{net.JoinHostPort(gateway, "443")},
 				LLMChannelHosts: tc.channels,
 				Resolver:        publicResolver{},
 				TLSClientConfig: testInsecureTLSConfig,
@@ -118,8 +127,12 @@ func TestMITM_SubscriptionRouteThroughHostIsScannedAsAnthropic(t *testing.T) {
 			defer proxySrv.Close()
 
 			resp := mitmPost(t, proxySrv.URL, certPEM, gateway, "/anthropic/v1/messages", anthropicMessagesBody("leak "+scanTestSecret))
+			rb, _ := io.ReadAll(resp.Body)
 			if resp.StatusCode != tc.want || cu.reached != (tc.want == http.StatusOK) {
-				t.Fatalf("status = %d, reached the gateway = %v; want %d", resp.StatusCode, cu.reached, tc.want)
+				t.Fatalf("status = %d, reached the gateway = %v; want %d (body %q)", resp.StatusCode, cu.reached, tc.want, rb)
+			}
+			if tc.want == http.StatusForbidden && !strings.Contains(string(rb), "llm_content_blocked") {
+				t.Fatalf("refused, but not by the content scan: %q", rb)
 			}
 		})
 	}
@@ -129,7 +142,11 @@ func TestMITM_SubscriptionRouteThroughHostIsScannedAsAnthropic(t *testing.T) {
 // and returns the response the sandbox sees.
 func mitmPost(t *testing.T, proxyURL string, caPEM []byte, host, path, body string) *http.Response {
 	t.Helper()
-	conn, status := connectThrough(t, proxyURL, host+":443")
+	authority := host
+	if strings.Contains(host, ":") { // an IPv6 literal
+		authority = "[" + host + "]"
+	}
+	conn, status := connectThrough(t, proxyURL, authority+":443")
 	t.Cleanup(func() { _ = conn.Close() })
 	if !strings.Contains(status, "200") {
 		t.Fatalf("CONNECT status = %q, want 200", status)
@@ -143,7 +160,7 @@ func mitmPost(t *testing.T, proxyURL string, caPEM []byte, host, path, body stri
 		t.Fatalf("agent TLS handshake through the MITM tunnel: %v", err)
 	}
 	t.Cleanup(func() { _ = tlsConn.Close() })
-	req, _ := http.NewRequest(http.MethodPost, "https://"+host+path, strings.NewReader(body))
+	req, _ := http.NewRequest(http.MethodPost, "https://"+authority+path, strings.NewReader(body))
 	req.ContentLength = int64(len(body))
 	if err := req.Write(tlsConn); err != nil {
 		t.Fatal(err)

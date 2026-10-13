@@ -5,5 +5,5 @@
 # threatmodel/THREAT-MODEL.md 52431 after the via_org B6 bullet (H12, train 10).
 # threatmodel/THREAT-MODEL.md 52492 measured after train 10 F-1508-author merge.
 # threatmodel/THREAT-MODEL.md 52620 adds 128 (0.9 DS1-S2a, train 12): the per-harness credential same-uid residual.
-# threatmodel/THREAT-MODEL.md 52661 adds 41 (section 5.1a): a subscription route-through host is inspected, an IPv6-literal one is not.
-threatmodel/THREAT-MODEL.md=52661
+# threatmodel/THREAT-MODEL.md 52641 adds 21 (section 5.1a): a subscription route-through host is inspected as the Anthropic schema.
+threatmodel/THREAT-MODEL.md=52641

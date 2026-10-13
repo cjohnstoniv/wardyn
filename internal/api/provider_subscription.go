@@ -22,6 +22,7 @@ import (
 	"log/slog"
 	"maps"
 	"net/http"
+	"net/netip"
 	"slices"
 	"strings"
 	"time"
@@ -191,16 +192,20 @@ func (s *Server) authorProviderSubscriptionInjection(ctx context.Context, run ty
 // the vendor host adds nothing, since the proxy knows that host already.
 //
 // No entry can collide with another lane's: two providers that share a host
-// are refused before anything is authored (laneConflict). An IPv6-literal
-// host is left out, because the proxy refuses a channel key that holds a
-// colon (validateChannelHosts) and the entry would fail the whole run.
+// are refused before anything is authored (laneConflict).
+//
+// The key is the base URL's own host as written, brackets off: the text the
+// MITM entry beside it carries (gatewayHostPort) and the text the proxy looks
+// a request's host up by, so an IPv6 literal is keyed by its bare address. A
+// literal with a zone is left out: the proxy refuses that key
+// (validateChannelHosts), and the entry would fail the whole run.
 func providerSubscriptionChannelHosts(llms []llmTransport, channels map[string]string) map[string]string {
 	for _, l := range llms {
 		if !l.providerSubscription() || l.provider.provider.BaseURL == "" {
 			continue
 		}
 		host := gatewayHost(providerSubscriptionBase(l.provider.provider))
-		if host == "" || strings.Contains(host, ":") {
+		if addr, err := netip.ParseAddr(host); host == "" || (strings.Contains(host, ":") && (err != nil || addr.Zone() != "")) {
 			continue
 		}
 		channels = maps.Clone(channels)
