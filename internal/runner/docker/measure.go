@@ -48,5 +48,5 @@ func FreeDiskMiB(path string) int64 {
 	if syscall.Statfs(path, &st) != nil {
 		return 0
 	}
-	return int64(st.Bavail) * st.Bsize >> 20
+	return int64(st.Bavail) * int64(st.Bsize) >> 20 // Bsize is int64 on Linux, uint32 on macOS
 }
