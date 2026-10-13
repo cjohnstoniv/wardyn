@@ -129,6 +129,9 @@ func run(args []string) error {
 		// using syscall.Exec (which never returns), we run asciinema as a
 		// child when delivery options are set so we can upload afterwards.
 		cast := castFile(*castDir, *runID)
+		if err := removeStaleRecording(cast); err != nil {
+			return err
+		}
 		if *outDir == "" && *uploadURL == "" {
 			// No delivery: original fast-path — exec asciinema directly.
 			return execAsciinema(path, cast, agentArgv)
@@ -179,6 +182,22 @@ func deliverAndExit(srcPath, outDir string, upload func() error, exitCode int) e
 func castFile(dir, runID string) string { return filepath.Join(dir, runID+".cast") }
 func logFile(dir, runID string) string  { return filepath.Join(dir, runID+".log") }
 
+// removeStaleRecording deletes the cast and exit sidecar a previous wardyn-rec
+// call under the same run id left behind. A wrapped image runs two recorded
+// Execs in one sandbox (the selftest, then the task): asciinema refuses to
+// record over the selftest's non-empty cast and exits without running the
+// task, and the selftest's exit file would then be read back as the task's
+// code. An absent file is fine; any other failure refuses, and it runs before
+// the tail uploader so nothing is uploaded from a cast this call did not make.
+func removeStaleRecording(cast string) error {
+	for _, p := range []string{cast, agentExitFile(cast)} {
+		if err := os.Remove(p); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("remove stale recording file: %w", err)
+		}
+	}
+	return nil
+}
+
 // execAsciinema replaces the current process with asciinema (no return on
 // success). Used when no post-recording delivery is needed.
 func execAsciinema(asciinemaPath, cast string, agentArgv []string) error {
@@ -210,12 +229,14 @@ func runAsciinema(asciinemaPath, cast string, agentArgv []string) (int, error) {
 	cmd.Stderr = os.Stderr
 	runErr := cmd.Run()
 	// Prefer the sidecar exit code (the agent's true $?) when the trailer wrote
-	// it — this is the load-bearing value, not asciinema's own.
+	// it — this is the load-bearing value, not asciinema's own. run removes any
+	// earlier call's sidecar first, so a file found here is this call's.
 	if code, ok := readAgentExitFile(cast); ok {
 		return code, nil
 	}
-	// No sidecar (e.g. the shell died before the trailer ran): fall back to
-	// asciinema's exit code, which at least catches a hard recorder failure.
+	// No fresh sidecar (e.g. the shell died before the trailer ran, or asciinema
+	// refused to start): return asciinema's own exit code, which at least
+	// catches a hard recorder failure.
 	if runErr != nil {
 		var exitErr *exec.ExitError
 		if errors.As(runErr, &exitErr) {
