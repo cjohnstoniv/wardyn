@@ -568,6 +568,20 @@ describe("folders", () => {
     expect(card("datasets")).toBeDefined();
   });
 
+  it("a folder set Read-only stays read-only when the last repository of its workspace is removed", async () => {
+    show(BACKGROUND);
+    await openAdd();
+    await pickType(NR_FILES.FOLDER_TITLE);
+    await pickSource("datasets");
+    await userEvent.click(dialogButton(/^Continue/));
+    await userEvent.selectOptions(within(dialog()).getByLabelText(NR_FILES.ACCESS_LABEL), "read");
+    await userEvent.click(dialogButton(NR_FILES.ADD_CONFIRM));
+    await add(NR_FILES.REPOSITORY_BADGE, "data");
+    await userEvent.click(screen.getByRole("button", { name: NR_FILES.REMOVE_NAMED("data") }));
+    expect(drawn().workspaces).toEqual([{ workspace_id: "ws-data", repos: [], read_only: true, target: "/home/agent/folders/datasets" }]);
+    expect(within(card("datasets")).getByText(NR_FILES.ACCESS_READ)).toBeInTheDocument();
+  });
+
   it("a folder that shares its workspace shows where the server mounts it: its source's target, else /home/agent/work", async () => {
     show(BACKGROUND);
     await add(NR_FILES.REPOSITORY_BADGE, "data");

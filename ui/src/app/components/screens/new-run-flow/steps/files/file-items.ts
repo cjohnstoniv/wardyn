@@ -259,7 +259,12 @@ export function removeItem(item: FileItem, src: ItemSources, foldersAdded: Reado
       const lone = src.folders.find((f) => f.workspaceId === ws && f.single);
       return withKeys(intent, {
         // A lone folder is placed again where it shows (its target went while a repository shared the workspace).
-        workspaces: intent.workspaces!.map((w) => (w.workspace_id === ws ? { workspace_id: ws, repos: [], ...(lone ? { target: lone.defaultPath } : {}) } : w)),
+        // The entry keeps what the person set on it (Read-only); only its target is placed again.
+        workspaces: intent.workspaces!.map((w) => {
+          if (w.workspace_id !== ws) return w;
+          const { target: _placed, ...kept } = w;
+          return { ...kept, repos: [], ...(lone ? { target: lone.defaultPath } : {}) };
+        }),
         start_folder: startsThere ? undefined : intent.start_folder,
       });
     }
