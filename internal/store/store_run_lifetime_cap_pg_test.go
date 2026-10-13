@@ -77,7 +77,8 @@ func TestPG_RunLifetimeCap_LegacyRowReadsAsBefore(t *testing.T) {
 }
 
 // TestPG_ListRunsFiltered_NoEndKeepsLiveRunsWithNoEnd: the "No end" filter selects
-// live runs with ends_at NULL only: not a run with an end, not a finished one.
+// live runs with ends_at NULL only: not a run with an end, not a finished one, and not
+// a QUEUED run, whose end is empty only until its start writes it.
 func TestPG_ListRunsFiltered_NoEndKeepsLiveRunsWithNoEnd(t *testing.T) {
 	pool := runsPGPool(t)
 	ctx := context.Background()
@@ -89,12 +90,16 @@ func TestPG_ListRunsFiltered_NoEndKeepsLiveRunsWithNoEnd(t *testing.T) {
 	endsLater.EndsAt = &at
 	noEnd := newFilterRun(owner, types.RunRunning)
 	finished := newFilterRun(owner, types.RunCompleted)
-	for _, r := range []types.AgentRun{endsLater, noEnd, finished} {
+	queued := newFilterRun(owner, types.RunPending)
+	for _, r := range []types.AgentRun{endsLater, noEnd, finished, queued} {
 		if _, err := pg.CreateRun(ctx, r); err != nil {
 			t.Fatalf("create: %v", err)
 		}
 		id := r.ID
 		t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM agent_runs WHERE id=$1`, id) })
+	}
+	if _, err := pool.Exec(ctx, `UPDATE agent_runs SET state = 'QUEUED' WHERE id = $1`, queued.ID); err != nil {
+		t.Fatal(err)
 	}
 	got, err := pg.ListRunsFiltered(ctx, store.RunFilter{Owner: owner, NoEnd: true}, store.Page{})
 	if err != nil {
@@ -103,7 +108,7 @@ func TestPG_ListRunsFiltered_NoEndKeepsLiveRunsWithNoEnd(t *testing.T) {
 	if len(got) != 1 || got[0].ID != noEnd.ID {
 		t.Errorf("no_end filter returned %d rows %v; want only the live run with no end", len(got), got)
 	}
-	if all, err := pg.ListRunsFiltered(ctx, store.RunFilter{Owner: owner}, store.Page{}); err != nil || len(all) != 3 {
-		t.Errorf("unfiltered = %d rows, %v; want 3", len(all), err)
+	if all, err := pg.ListRunsFiltered(ctx, store.RunFilter{Owner: owner}, store.Page{}); err != nil || len(all) != 4 {
+		t.Errorf("unfiltered = %d rows, %v; want 4", len(all), err)
 	}
 }
