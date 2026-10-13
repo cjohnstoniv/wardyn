@@ -259,4 +259,25 @@ func TestBackend_ARunValueIsCommittedWhileItIsAlsoGlobal(t *testing.T) {
 	}
 }
 
+// The replica that evicts an expiring credential retires its row at the expiry.
+// The tombstone it reads next carries the eviction time, and must not pull that
+// retirement back.
+func TestBackend_ATombstoneReadKeepsTheEvictingReplicasRetirement(t *testing.T) {
+	r := NewRegistry()
+	r.SetBackend(&fakeBackend{})
+	run, v, now := uuid.New(), []byte("an-expiring-access-token"), time.Now()
+	row, expiry := uuid.New(), now.Add(time.Hour)
+	r.ApplyGlobal(row, "alice", "cred", v, expiry, time.Time{})
+	if err := r.EvictGlobal("alice", "cred", now); err != nil {
+		t.Fatal(err)
+	}
+	r.RetireGlobalValue(row, now)
+	if n := r.SweepGlobals(now.Add(time.Minute)); n != 0 || !masksValue(r, run, string(v)) {
+		t.Errorf("a sweep before the token's expiry dropped %d values: the tombstone read pulled the retirement back", n)
+	}
+	if n := r.SweepGlobals(expiry.Add(time.Second)); n != 1 || masksValue(r, run, string(v)) {
+		t.Errorf("the sweep past the token's expiry dropped %d values and masked=%v", n, masksValue(r, run, string(v)))
+	}
+}
+
 func (b *fakeBackend) GlobalGeneration(context.Context) (int64, error) { return 0, nil }

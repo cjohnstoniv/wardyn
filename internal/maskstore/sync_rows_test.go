@@ -7,6 +7,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
+	"math/rand"
 	"testing"
 	"time"
 
@@ -212,4 +214,133 @@ func (f *rowsFixture) resealed(order []row) []row {
 		out = append(out, f.row(r.id, version, "cred", 2, r.until, r.retiredAt))
 	}
 	return out
+}
+
+// modelRow is what one replica should hold of one row it applied and has not
+// yet let go.
+type modelRow struct {
+	hasRef    bool // the store tracks a ref
+	inReg     bool // the registry holds the row
+	until     time.Time
+	retiredAt time.Time
+}
+
+// Seeded histories of three rows of one value (two key generations of "cred",
+// one of "other"): delta reads, full reloads in any row order, tombstones,
+// eviction tombstones and the replica's own sweeps, on a simulated clock. After
+// every step the value is masked exactly while the model says a row holds it.
+func TestRows_RandomRowHistoriesMatchAPerRowModel(t *testing.T) {
+	ids := []uuid.UUID{w4CovRowA, w4CovRowB, w4CovRowC}
+	version := map[uuid.UUID]int{w4CovRowA: 1, w4CovRowB: 2, w4CovRowC: 1}
+	name := map[uuid.UUID]string{w4CovRowA: "cred", w4CovRowB: "cred", w4CovRowC: "other"}
+	for seed := int64(1); seed <= 400; seed++ {
+		rng := rand.New(rand.NewSource(seed))
+		f := newRowsFixture(t)
+		model := map[uuid.UUID]*modelRow{}
+		var trace []string
+		clock := w4CovT0
+		gen := int64(1)
+		check := func(step string) {
+			want := false
+			for _, m := range model {
+				want = want || m.inReg
+			}
+			trace = append(trace, step)
+			before := t.Failed()
+			f.wantMasked(fmt.Sprintf("seed %d after %v", seed, trace), want)
+			for id, m := range model {
+				if (f.ref(id) != nil) != m.hasRef {
+					t.Errorf("seed %d after %v: ref tracked for %s = %v, model says %v", seed, trace, id, f.ref(id) != nil, m.hasRef)
+				}
+			}
+			if !before && t.Failed() {
+				t.FailNow()
+			}
+		}
+		live := func(id uuid.UUID, until, retired time.Time) row {
+			var u, r *time.Time
+			if !until.IsZero() {
+				u = &until
+			}
+			if !retired.IsZero() {
+				r = &retired
+			}
+			gen++
+			return f.row(id, version[id], name[id], gen, u, r)
+		}
+		for step := 0; step < 14; step++ {
+			clock = clock.Add(time.Duration(1+rng.Intn(20)) * time.Minute)
+			id := ids[rng.Intn(3)]
+			m := model[id]
+			switch op := rng.Intn(8); {
+			case op <= 1: // the row is (re)written current, with or without an expiry
+				var until time.Time
+				if rng.Intn(3) == 0 {
+					until = clock.Add(time.Duration(rng.Intn(40)) * time.Minute)
+				}
+				f.read(false, live(id, until, time.Time{}))
+				model[id] = &modelRow{hasRef: true, inReg: true, until: until}
+				check(fmt.Sprintf("current(%s)", id.String()[35:]))
+			case op == 2: // the row is retired in place
+				if m == nil || !m.hasRef {
+					continue
+				}
+				f.read(false, live(id, m.until, clock))
+				model[id] = &modelRow{hasRef: true, inReg: true, until: m.until, retiredAt: clock}
+				check(fmt.Sprintf("retired(%s)", id.String()[35:]))
+			case op == 3: // a sweep or prune tombstone
+				gen++
+				f.read(false, rowsTomb(id, gen, nil))
+				if m != nil && m.hasRef {
+					m.hasRef, m.inReg = false, false
+				}
+				check(fmt.Sprintf("tomb(%s)", id.String()[35:]))
+			case op == 4: // an eviction tombstone
+				gen++
+				at := clock
+				f.read(false, rowsTomb(id, gen, &at))
+				if m != nil && m.hasRef {
+					if m.retiredAt.IsZero() {
+						m.hasRef, m.retiredAt = false, at // the registry keeps it through its grace
+					} else {
+						m.hasRef, m.inReg = false, false // the existing rule: an already-retired ref is dropped
+					}
+				}
+				check(fmt.Sprintf("evict(%s)", id.String()[35:]))
+			case op == 5: // the replica's own sweep
+				cutoff := clock.Add(-time.Duration(rng.Intn(30)) * time.Minute)
+				f.reg.SweepGlobals(cutoff)
+				for _, x := range model {
+					at := x.retiredAt
+					if at.IsZero() {
+						at = x.until
+					}
+					if x.inReg && !at.IsZero() && at.Before(cutoff) {
+						x.inReg = false
+					}
+				}
+				check("sweep")
+			default: // a full reload that returns a random subset of the rows the replica tracks, as they are
+				var rows []row
+				kept := map[uuid.UUID]bool{}
+				for _, rid := range ids {
+					if x := model[rid]; x != nil && x.hasRef && rng.Intn(2) == 0 {
+						rows = append(rows, live(rid, x.until, x.retiredAt))
+						kept[rid] = true
+					}
+				}
+				rng.Shuffle(len(rows), func(i, j int) { rows[i], rows[j] = rows[j], rows[i] })
+				f.read(true, rows...)
+				for rid, x := range model {
+					switch {
+					case kept[rid]:
+						x.inReg = true // re-applied as it is in the table
+					case x.hasRef:
+						x.hasRef, x.inReg = false, false
+					}
+				}
+				check("reload")
+			}
+		}
+	}
 }
