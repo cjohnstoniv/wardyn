@@ -24,12 +24,12 @@ const ENFORCEMENT: Record<MainDriveFacts["enforcement"], string | undefined> = {
 
 const FILE_PATHS = ["workspaces", "drive", "drives", "start_folder", "no_repositories_or_drives", "resources.disk_mib"];
 
-function AttachmentRow({ a }: { a: RunAttachment }) {
+export function AttachmentRow({ a }: { a: RunAttachment }) {
   return (
-    <div className="grid min-w-0 grid-cols-[minmax(110px,1fr)_minmax(140px,1.2fr)_auto] items-center gap-2 text-sm">
+    <div className="grid min-w-0 grid-cols-[minmax(110px,1fr)_minmax(140px,1.2fr)_auto] items-center gap-2 text-sm max-[520px]:grid-cols-1 max-[520px]:items-start">
       <strong className="font-medium">{a.name}</strong>
       <code className="font-mono text-xs break-all text-muted-foreground">{a.target}</code>
-      <span className="flex flex-wrap justify-end gap-1.5">
+      <span className="flex flex-wrap justify-end gap-1.5 max-[520px]:justify-start">
         {a.ref && <Chip>{a.ref}</Chip>}
         <Chip>{a.read_only ? NR_FILES.ACCESS_READ : NR_FILES.ACCESS_EDIT}</Chip>
         {a.starts_here && <Chip>{NR_FILES.STARTS_HERE}</Chip>}

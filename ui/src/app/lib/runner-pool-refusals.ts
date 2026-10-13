@@ -56,12 +56,14 @@ export const POOL_OFFLINE = {
 } as const;
 
 /**
- * A run that would start at once while each of the person's runners in the pool already holds its
- * "Runs at once" (runnerpool.RunnerAtCapacityMsg): the create and preflight runner_at_capacity.
+ * A run that would start at once while every runner in the pool is at one of its limits, its Runs at
+ * once or a total (runnerpool.RunnerAtCapacityMsg): the create and preflight runner_at_capacity. A pool
+ * none of whose runners has its limits set (runnerpool.RunnerLimitsUnsetMsg): runner_limits_unset.
  */
 export const RUNNER_CAPACITY = {
   RUNNER_AT_CAPACITY: (name: string) =>
-    `Your runners in ${name} are all running as many runs as they allow at once. Try again when one finishes, or raise Runs at once on your runner.`,
+    `Every runner in ${name} is at its limit. Try again when a run there finishes, or raise the runner's limits.`,
+  RUNNER_LIMITS_UNSET: (name: string) => `No runner in ${name} has its limits set. Every runner needs limits before it can run anything.`,
 } as const;
 
 /** How a sentence names runs of a type (types.RunnerPoolRunType.Plural). */
@@ -117,8 +119,7 @@ export const RUNNER_POOL_REFUSAL = {
 export const RUN_WAIT = {
   AT_CAPACITY: (name: string, max: number) => `${name} is running its limit of ${max}. This run starts when there's room.`,
   NO_RUNNER_FREE: (name: string) => `None of your runners in ${name} is online. This run starts when one is.`,
-  RUNNERS_AT_CAPACITY: (name: string) =>
-    `Your runners in ${name} are all running as many runs as they allow at once. This run starts when one has room.`,
+  RUNNERS_AT_CAPACITY: (name: string) => `Every runner in ${name} is at its limit. This run starts when one has room.`,
 } as const;
 
 /** The reason a waiting run carries for each RUN_WAIT sentence. */
