@@ -3422,6 +3422,7 @@ Moved, with the sections that followed it here, to [secrets-and-keys.md](operati
 - A `member` role (`=member` in `WARDYN_OIDC_ROLE_MAP`, or the default role) refuses boot: remap it to `user` or a user type id.
 - The `MEMBER` spellings of the `USER` variables refuse boot ([ENV.md](ENV.md#removed-in-09)).
 - A plain `http://` OIDC issuer under TLS refuses boot. A mesh that encrypts the internal issuer may set `WARDYN_OIDC_INTERNAL_ISSUER_PLAINTEXT=mesh`; the public issuer has no opt-out.
+- A remote-hosted runner whose limits the upgraded server cannot measure takes no run until they are set: `wardyn runner remote list --no-limits`, then `wardyn runner remote propose <id>` and `wardyn runner set <id>` ([runner pools](operations/runner-pools.md#a-remote-hosted-runners-limits)). `make setup` does this for its own stack.
 - First run `wardyn setup status --pre-upgrade`. It reads this shell's environment: load the Compose or desktop env file (`set -a; . FILE; set +a`), or give a chart's values as `--role-map` and `--default-role`. Exit 0 is clean, 1 leftovers.
 
 - Migrations are **forward-only**.

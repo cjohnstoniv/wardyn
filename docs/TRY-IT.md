@@ -61,6 +61,7 @@ A couple of config facts before you customize:
     - and separately, when the policy's confinement floor (an admin override above CC1, say) names a tier this host's runner can't actually enforce:
       - every run on that policy would otherwise be refused before it launches,
       - with the first symptom an opaque error on the first real attempt.
+- **The server's runner limits.** A runner takes no run until it has limits. `make setup` sets the server's Docker runner to half of this host; on Docker Desktop it asks for the free disk (or reads `WARDYN_SETUP_RUNNER_DISK_GB`). Change them with `wardyn runner set docker`, or in the console: Runners, the runner, Edit limits ([runner pools](operations/runner-pools.md#a-remote-hosted-runners-limits)).
 - **Secret-store durability.** `make setup` / [`scripts/up.sh`](../scripts/up.sh) mint and persist a `WARDYN_AGE_KEY`; only a hand-launched bare `wardynd` runs on an EPHEMERAL age key (secrets unreadable after restart) — run `wardynd -gen-age-key` to mint a durable one.
 
 ## Level 1 — governance demo (no keys)

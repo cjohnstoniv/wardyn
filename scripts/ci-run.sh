@@ -39,6 +39,10 @@
 #   WARDYN_CI_SKIP_BUILD     throwaway stack: 1 = reuse local images    [unset]
 #   WARDYN_ADMIN_TOKEN       throwaway stack: its own bootstrap bearer; [demo-admin-token]
 #                            never sent to WARDYN_URL
+#   WARDYN_SETUP_RUNNER_DISK_GB  throwaway stack: GB of disk free for runs, [measured here]
+#                            needed where this host cannot see Docker's disk (Docker Desktop)
+#   WARDYN_SETUP_RUNNER_LIMITS   throwaway stack: the runner's whole limit set as [half this host]
+#                            `wardyn runner set` flags (scripts/lib/runner-limits.sh)
 #
 # Exit code: the run's outcome from `wardyn run --wait` — 0 COMPLETED,
 # agent/command exit code on FAILED, 2 KILLED/STOPPED, 124 timeout.
@@ -47,6 +51,8 @@ set -uo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${REPO_ROOT}"
 source "${REPO_ROOT}/scripts/lib/common.sh"
+# shellcheck source=scripts/lib/runner-limits.sh
+source "${REPO_ROOT}/scripts/lib/runner-limits.sh"
 
 COMPOSE_FILE="${REPO_ROOT}/deploy/compose/docker-compose.yaml"
 CI_OVERLAY="${REPO_ROOT}/deploy/compose/docker-compose.ci.yaml"
@@ -110,6 +116,7 @@ if [[ -n "${REMOTE_URL}" ]]; then
   # WARDYN_TOKEN rides the environment, never argv. WARDYN_ADMIN_TOKEN is
   # cleared because the CLI tries it FIRST (cmd/wardyn/main.go): left ambient on
   # the runner it would silently win, and every write would land as the admin.
+  # shellcheck disable=SC2317 # called by wardyn_ensure_runner_limits
   wardyn() { WARDYN_ADMIN_TOKEN= WARDYN_TOKEN="${WARDYN_CI_TOKEN}" command wardyn "$@"; }
   POLICY_ARG="${POLICY_FILE}"
 else
@@ -274,6 +281,10 @@ else
     _cid="$("${COMPOSE[@]}" ps -q wardynd 2>/dev/null || true)"
   done
   log "wardynd healthy"
+  # The throwaway stack's Docker runner takes no run until it has limits (scripts/lib/runner-limits.sh):
+  # half of what this host has, or WARDYN_SETUP_RUNNER_DISK_GB / WARDYN_SETUP_RUNNER_LIMITS where the
+  # disk cannot be seen from here (Docker Desktop).
+  wardyn_ensure_runner_limits </dev/null || die "the throwaway stack's runner has no limits, so the run cannot start"
   "${COMPOSE[@]}" cp "${POLICY_FILE}" wardynd:/tmp/wardyn-ci-policy.json >/dev/null || die "copy policy into wardynd"
   POLICY_ARG=/tmp/wardyn-ci-policy.json
 fi
