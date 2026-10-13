@@ -29,7 +29,10 @@ type limitsServer struct {
 func newLimitsServer(t *testing.T, desk sdk.RunnerView, remote sdk.RemoteRunnerView, pool sdk.RunnerPool) *limitsServer {
 	t.Helper()
 	ls := &limitsServer{writes: map[string]string{}}
-	answer := func(w http.ResponseWriter, v any) { w.Header().Set("Content-Type", "application/json"); _ = json.NewEncoder(w).Encode(v) }
+	answer := func(w http.ResponseWriter, v any) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(v)
+	}
 	ls.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		key := r.Method + " " + r.URL.Path
