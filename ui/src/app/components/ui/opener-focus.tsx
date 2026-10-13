@@ -2,7 +2,8 @@ import * as React from "react";
 
 // Radix hands focus back on close only to a DialogTrigger. A dialog opened from state has none, so focus
 // fell to the page body. The content remembers the element that had focus when it mounted and, on close,
-// puts focus back there unless the consumer handled it, the element is gone, or it was only the body.
+// puts focus back there when focus would otherwise be lost: not if the consumer handled it, the caller already
+// moved focus elsewhere, the element is gone, or it was only the body.
 
 /** Rendered inside the dialog content, so its first render reads the focused element before autofocus moves it. */
 export function RememberOpener({ into }: { into: React.MutableRefObject<Element | null> }) {
@@ -10,7 +11,11 @@ export function RememberOpener({ into }: { into: React.MutableRefObject<Element 
   return null;
 }
 
-/** The content's onCloseAutoFocus: a consumer's own handler is passed through untouched. */
+/**
+ * The content's onCloseAutoFocus. Radix runs it after the exit animation, so a caller may already have put
+ * focus somewhere on purpose (a heading, the next field): that is left alone and Radix does what it did before.
+ * A consumer's own handler is passed through untouched.
+ */
 export function restoreOpenerFocus(
   opener: React.MutableRefObject<Element | null>,
   consumer?: (event: Event) => void,
@@ -19,6 +24,10 @@ export function restoreOpenerFocus(
     const el = opener.current;
     opener.current = null;
     if (consumer) return consumer(event);
+    const active = document.activeElement;
+    const placed =
+      active instanceof HTMLElement && active !== document.body && active.isConnected && !(event.currentTarget as Node | null)?.contains(active);
+    if (placed) return;
     if (el instanceof HTMLElement && el !== document.body && el.isConnected) {
       event.preventDefault();
       el.focus();

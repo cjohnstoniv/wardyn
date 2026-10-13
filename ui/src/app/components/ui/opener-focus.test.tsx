@@ -9,6 +9,7 @@ import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { AlertDialog, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogTitle } from "./alert-dialog";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "./dialog";
+import { holdExitAnimation } from "../../../test/exit-animation";
 
 afterEach(cleanup);
 
@@ -23,6 +24,7 @@ function Harness({ kind, onCloseAutoFocus, removeOpener }: { kind: "dialog" | "a
   );
   return (
     <>
+      <button type="button">Elsewhere</button>
       {!gone && <button type="button" onClick={() => setOpen(true)}>Open</button>}
       {kind === "dialog" ? (
         <Dialog open={open} onOpenChange={setOpen}>
@@ -87,5 +89,43 @@ describe.each(["dialog", "alert"] as const)("a state-opened %s", (kind) => {
     await waitFor(() => expect(screen.queryByText("Title")).toBeNull());
     await new Promise((r) => setTimeout(r, 30));
     expect(screen.getByRole("button", { name: "Open" })).not.toHaveFocus();
+  });
+});
+
+// Radix runs the close handler only after the exit animation. A caller that moved focus on close (a heading, the
+// next field) did it before then, and the handler must not pull focus back to the opener.
+describe.each(["dialog", "alert"] as const)("a state-opened %s with an exit animation", (kind) => {
+  it("keeps focus where the caller put it while the dialog was leaving", async () => {
+    const hold = holdExitAnimation();
+    try {
+      const user = userEvent.setup();
+      render(<Harness kind={kind} />);
+      await user.click(screen.getByRole("button", { name: "Open" }));
+      await screen.findByText("Title");
+      await user.keyboard("{Escape}");
+      // Still hidden from the accessibility tree while the dialog is leaving.
+      screen.getByRole("button", { name: "Elsewhere", hidden: true }).focus();
+      expect(screen.getByText("Title")).toBeTruthy();
+      await hold.finish();
+      await waitFor(() => expect(screen.queryByText("Title")).toBeNull());
+      expect(screen.getByRole("button", { name: "Elsewhere" })).toHaveFocus();
+    } finally {
+      hold.release();
+    }
+  });
+
+  it("still returns focus to the opener when nobody moved it", async () => {
+    const hold = holdExitAnimation();
+    try {
+      const user = userEvent.setup();
+      render(<Harness kind={kind} />);
+      await user.click(screen.getByRole("button", { name: "Open" }));
+      await screen.findByText("Title");
+      await user.keyboard("{Escape}");
+      await hold.finish();
+      await waitFor(() => expect(screen.getByRole("button", { name: "Open" })).toHaveFocus());
+    } finally {
+      hold.release();
+    }
   });
 });
