@@ -153,6 +153,7 @@ func remoteDockerRunner(t *testing.T, local substrate.Substrate, realWire bool) 
 	var held sync.Map
 	streams.HoldSandboxes(func(ref string) bool { _, ok := held.Load(ref); return ok })
 	dispatch, err := runneragent.New(runneragent.Config{RunnerID: row.ID.String(), Substrate: local,
+		HoldsSandbox: func(ref string) bool { _, ok := held.Load(ref); return ok },
 		BeforeCreate: func(context.Context, runner.SandboxSpec) error { return nil },
 		Created: func(_ context.Context, _ runner.SandboxSpec, ref string) error {
 			held.Store(ref, struct{}{})

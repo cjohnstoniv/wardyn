@@ -123,7 +123,7 @@ func localRunnerRuntime(ctx context.Context, identity runneridentity.Identity, s
 	}
 	reporter := posture.NewReporter()
 	dispatcher, err := runneragent.New(runneragent.Config{
-		RunnerID: identity.RunnerID.String(), Substrate: sub,
+		RunnerID: identity.RunnerID.String(), Substrate: sub, HoldsSandbox: manager.HoldsSandbox,
 		BeforeCreate: manager.BeforeCreate, Created: manager.Created, CreateFailed: manager.CreateFailed,
 		BeforeRefCall: manager.BeforeRefCall, AfterRefCall: manager.AfterRefCall,
 		MutationFinished: manager.MutationFinished,

@@ -140,7 +140,7 @@ func newRunnerLeaseFixture(t *testing.T) *runnerLeaseFixture {
 	}
 	t.Cleanup(func() { _ = f.manager.Close() })
 	m := f.manager
-	dispatcher, err := runneragent.New(runneragent.Config{RunnerID: id.String(), Substrate: f.sub,
+	dispatcher, err := runneragent.New(runneragent.Config{RunnerID: id.String(), Substrate: f.sub, HoldsSandbox: m.HoldsSandbox,
 		BeforeCreate: m.BeforeCreate, Created: m.Created, CreateFailed: m.CreateFailed,
 		BeforeRefCall: m.BeforeRefCall, AfterRefCall: m.AfterRefCall, MutationFinished: m.MutationFinished, ExecutionResult: m.ExecutionResult,
 		Streams: streams.Call, Output: streams.Output, BindOutput: streams.BindOutput, ForgetOutput: streams.ForgetOutput})
