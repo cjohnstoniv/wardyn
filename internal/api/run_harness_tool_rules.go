@@ -183,6 +183,22 @@ func (s *Server) toolRulesWithinPolicyRefusal(req createRunRequest, spec types.R
 	return nil
 }
 
+// inheritedMCPHoldRefusal refuses a background Codex CLI run under a policy that
+// holds an MCP tool (by name, or by its default), as harnessToolRulesRefusal
+// refuses the person's own: Codex CLI has no approval contract and no gated
+// lane, and the MCP broker passes a held call, so nothing would ask.
+func inheritedMCPHoldRefusal(req createRunRequest, spec types.RunPolicySpec) *runRefusal {
+	if req.Agent != codexHarness || requestIsInteractive(req) {
+		return nil
+	}
+	if slices.ContainsFunc(spec.ToolRules, func(r types.ToolRule) bool {
+		return r.Effect == types.ToolHold && (r.Tool == "*" || strings.HasPrefix(r.Tool, "mcp__"))
+	}) {
+		return runError(http.StatusUnprocessableEntity, reasonRequestFieldUnavailable, accessSentences["harness_no_hold"])
+	}
+	return nil
+}
+
 // harnessToolRulesRefusal refuses a rule or default the included harness has no
 // way to enforce. Codex CLI cannot pause a call, and Wardyn sees only its MCP
 // tools (its own tools have no approval contract); a harness without Wardyn's
