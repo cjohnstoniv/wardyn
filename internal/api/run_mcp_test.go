@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"slices"
 	"strings"
 	"testing"
@@ -274,5 +275,74 @@ func TestReviveMCPBindingsNarrows_BuiltinFirst(t *testing.T) {
 	narrowMCPBindings(&cfg, rows)
 	if len(cfg.MCPServers) != 1 || cfg.MCPServers[0].Key != "beta" || !slices.Equal(cfg.MCPBindings[0].Servers, []string{"beta"}) {
 		t.Fatalf("narrowed %+v %+v: want Beta kept and erased Alpha dropped", cfg.MCPServers, cfg.MCPBindings)
+	}
+}
+
+// mcpHoldCase is one resolved policy met by one run: whether the Linear MCP
+// server is attached, and whether the doors refuse it.
+type mcpHoldCase struct {
+	name    string
+	rules   []types.ToolRule
+	mcp     bool
+	refused bool
+}
+
+// mcpHoldCases is the cases an inherited MCP hold is judged by, for a harness
+// nothing can pause: an explicit hold on a tool of a bound server refuses, by
+// name or by the hold default; no rule at all (the broker's fallback), an exact
+// allow over the hold default, a hold on a server the run does not bind, and a
+// run with no MCP server are admitted.
+func mcpHoldCases(t *testing.T) []mcpHoldCase {
+	t.Helper()
+	example, err := os.ReadFile("../../examples/policies/autonomous-tool-rules.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var autonomous types.RunPolicySpec
+	if err := json.Unmarshal(example, &autonomous); err != nil {
+		t.Fatal(err)
+	}
+	hold := func(tool string) types.ToolRule { return types.ToolRule{Tool: tool, Effect: types.ToolHold} }
+	return []mcpHoldCase{
+		{"a hold on a tool of the bound server", []types.ToolRule{hold("mcp__linear__create_issue")}, true, true},
+		{"a hold default with a bound server", autonomous.ToolRules, true, true},
+		{"a hold default with no MCP server", autonomous.ToolRules, false, false},
+		{"no rule at all with a bound server", nil, true, false},
+		{"an exact allow over a hold default", []types.ToolRule{{Tool: "mcp__linear__create_issue", Effect: types.ToolAllow}, hold("*")}, true, false},
+		{"a hold on a server the run does not bind", []types.ToolRule{hold("mcp__github__create_issue")}, true, false},
+		{"a hold on an MCP tool with no MCP server", []types.ToolRule{hold("mcp__linear__create_issue")}, false, false},
+	}
+}
+
+// askMCPHold sends one run, of harness under workload, to one door under the
+// deployment policy's tool rules and reports whether the door refused it for
+// the hold.
+func askMCPHold(t *testing.T, tc mcpHoldCase, door, harness string, workload map[string]any) {
+	t.Helper()
+	f := newComponentFixture(t)
+	f.srv.cfg.AgentImages = composeAgentImages
+	f.srv.cfg.DefaultPolicy.ToolRules = tc.rules
+	body := map[string]any{"experience": "background", "workload": workload, "no_repositories_or_drives": true,
+		"tools": []map[string]any{{"id": harness, "kind": "harness"}}}
+	if tc.mcp {
+		body["components"] = []types.ComponentRef{mcpInline("Linear")}
+	}
+	w := f.ask(t, door, body)
+	refused := w.Code == http.StatusUnprocessableEntity && strings.Contains(w.Body.String(), accessSentences["harness_no_hold"])
+	if refused != tc.refused || (!refused && w.Code >= 300) {
+		t.Fatalf("= %d %s, want refused=%v", w.Code, w.Body.String(), tc.refused)
+	}
+}
+
+// A background Codex CLI run is refused at every door when the policy explicitly
+// holds a tool of an MCP server bound to it: Codex CLI cannot pause a call and
+// the broker passes a held one.
+func TestInheritedMCPHoldRefusesBackgroundCodex(t *testing.T) {
+	for _, tc := range mcpHoldCases(t) {
+		for _, door := range componentDoors {
+			t.Run(tc.name+door, func(t *testing.T) {
+				askMCPHold(t, tc, door, "codex-cli", map[string]any{"kind": "agent_task", "agent": "codex-cli", "task": "t"})
+			})
+		}
 	}
 }

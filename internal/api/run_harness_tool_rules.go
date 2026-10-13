@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
@@ -183,20 +184,40 @@ func (s *Server) toolRulesWithinPolicyRefusal(req createRunRequest, spec types.R
 	return nil
 }
 
-// inheritedMCPHoldRefusal refuses a background Codex CLI run under a policy that
-// holds an MCP tool (by name, or by its default), as harnessToolRulesRefusal
-// refuses the person's own: Codex CLI has no approval contract and no gated
-// lane, and the MCP broker passes a held call, so nothing would ask.
-func inheritedMCPHoldRefusal(req createRunRequest, spec types.RunPolicySpec) *runRefusal {
-	if req.Agent != codexHarness || requestIsInteractive(req) {
-		return nil
+// inheritedMCPHoldRefusal refuses a run whose resolved policy explicitly holds a
+// tool of an MCP server bound to a harness nothing can pause, as
+// harnessToolRulesRefusal refuses the person's own hold: a background Codex CLI
+// run has no approval contract and no gated lane, and the MCP broker passes a
+// held call, so nothing would ask.
+func inheritedMCPHoldRefusal(req createRunRequest, spec types.RunPolicySpec, comps runComponents) *runRefusal {
+	var harnesses []string
+	if req.Agent == codexHarness && !requestIsInteractive(req) {
+		harnesses = []string{codexHarness}
 	}
-	if slices.ContainsFunc(spec.ToolRules, func(r types.ToolRule) bool {
-		return r.Effect == types.ToolHold && (r.Tool == "*" || strings.HasPrefix(r.Tool, "mcp__"))
-	}) {
-		return runError(http.StatusUnprocessableEntity, reasonRequestFieldUnavailable, accessSentences["harness_no_hold"])
+	for _, h := range harnesses {
+		if slices.ContainsFunc(mcpServersFor(comps, h), func(key string) bool { return policyHoldsMCPServer(spec.ToolRules, key) }) {
+			return runError(http.StatusUnprocessableEntity, reasonRequestFieldUnavailable, accessSentences["harness_no_hold"])
+		}
 	}
 	return nil
+}
+
+// policyHoldsMCPServer reports whether rules explicitly hold a tool of the MCP
+// server key: a rule naming one of its tools decides for the server (a hold
+// among them holds it, and exact rules win over the default), else a hold
+// default ("*"). No rule at all is the broker's fallback, not an explicit hold.
+func policyHoldsMCPServer(rules []types.ToolRule, key string) bool {
+	prefixes := proxy.MCPToolPrefixes(key)
+	named, held, byDefault := false, false, false
+	for _, r := range rules {
+		switch {
+		case r.Tool == "*":
+			byDefault = r.Effect == types.ToolHold
+		case slices.ContainsFunc(prefixes, func(p string) bool { return strings.HasPrefix(r.Tool, p) }):
+			named, held = true, held || r.Effect == types.ToolHold
+		}
+	}
+	return held || (!named && byDefault)
 }
 
 // harnessToolRulesRefusal refuses a rule or default the included harness has no
