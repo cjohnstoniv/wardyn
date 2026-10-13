@@ -368,6 +368,15 @@ func (s *FSStore) StatAndTail(ctx context.Context, key string, tailBytes int64) 
 	return size, tail, nil
 }
 
+// maxCastKeyBytes bounds a whole cast key, suffixes included. FSStore names
+// its files "<key>.cast" and "<run>.lock" and a file name holds 255 bytes, so
+// 250 is the longest key that store can name at all; PGStore takes the same
+// bound so both keep the same recordings. The longest key the product writes
+// is a run id with an SSH session suffix, 77 bytes. Every "~" in a key is one
+// more ancestor for the erasure check to look up (fenceKeys), so the bound on
+// bytes is also the bound on that work.
+const maxCastKeyBytes = 250
+
 // validKey rejects a cast key (bare runID or "<runID>~<suffix>" composite)
 // that no Store should accept. Shared by every implementation: divergence
 // here means switching WARDYN_RECORDING_STORE silently changes which
@@ -375,6 +384,9 @@ func (s *FSStore) StatAndTail(ctx context.Context, key string, tailBytes int64) 
 func validKey(key string) error {
 	if key == "" {
 		return errors.New("recording: empty run id")
+	}
+	if len(key) > maxCastKeyBytes {
+		return errors.New("recording: invalid run id (too long)")
 	}
 	if strings.ContainsAny(key, "/\\\x00") {
 		return errors.New("recording: invalid run id (path separator)")

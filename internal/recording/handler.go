@@ -34,13 +34,16 @@ type Authorizer func(r *http.Request, runIDPrefix string) bool
 // run B's cast under an authorization scoped to run A. Both checks collapse
 // to the same 404 (no existence oracle). Store errors produce 500. A bare run
 // id is served joined across its tail-uploaded parts (OpenJoined).
+//
+// A key servableKey refuses gets that same 404 before authorize or the store
+// is asked anything.
 func Handler(store Store, authorize Authorizer) http.Handler {
 	r := chi.NewRouter()
 	r.Get("/{runID}", func(w http.ResponseWriter, req *http.Request) {
 		key := chi.URLParam(req, "runID")
 		outerID := chi.URLParam(req, "id")
 		prefix, _, _ := strings.Cut(key, castSep)
-		if !strings.EqualFold(prefix, outerID) || !authorize(req, prefix) {
+		if !servableKey(key) || !strings.EqualFold(prefix, outerID) || !authorize(req, prefix) {
 			http.Error(w, "recording not found", http.StatusNotFound)
 			return
 		}
@@ -66,4 +69,11 @@ func Handler(store Store, authorize Authorizer) http.Handler {
 		_, _ = io.Copy(w, rc)
 	})
 	return r
+}
+
+// servableKey reports whether key may be asked of the store at all. Handler
+// checks it itself rather than leaning on the store's validKey: a store
+// refusal is not a not-found, so it would reach the caller as a 500.
+func servableKey(key string) bool {
+	return len(key) <= maxCastKeyBytes
 }
