@@ -1072,8 +1072,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - Revoking a self-hosted runner ends the runs still waiting for it even when the revoke's own pass could not finish:
   the queue sweep retries from the runner's revoked state.
 - A push refused under push content rules because a ref points at a commit the request does not carry (for example a
-  branch created at a commit the forge already has) now names each such ref and no longer advises `git fetch
-  --unshallow`, which did not help; it is still refused.
+  branch created at a commit the forge already has) now names the refs (up to ten, and counts the rest) and no
+  longer advises `git fetch --unshallow`, which did not help; it is still refused.
 - A credential mint whose value cannot be recorded for output masking now fails without using up its single-use
   approval, and a GitHub token minted for it is revoked. Before, the approval was spent and nothing was delivered.
 
