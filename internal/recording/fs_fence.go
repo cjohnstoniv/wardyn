@@ -7,6 +7,8 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -59,6 +61,11 @@ func erasureDir(root *os.Root, create bool) (*os.File, error) {
 }
 
 func controlFile(dir *os.File, name string) (*os.File, error) {
+	// One name inside dir, never a path: openat walks every directory in name and
+	// O_NOFOLLOW guards only the last. validKey already refuses separators.
+	if !filepath.IsLocal(name) || strings.ContainsRune(name, filepath.Separator) {
+		return nil, errors.New("recording: invalid fence file name")
+	}
 	flags := unix.O_RDONLY | unix.O_NOFOLLOW | unix.O_NONBLOCK | unix.O_CLOEXEC
 	fd, err := unix.Openat(int(dir.Fd()), name, flags|unix.O_CREAT|unix.O_EXCL, 0o444)
 	created := err == nil

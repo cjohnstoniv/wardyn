@@ -62,15 +62,15 @@ func (e *placementEnv) runnersOn(on bool) {
 // T9: each reason a usable pool may be unavailable for, in the order the list checks them.
 func TestPoolListAvailabilityReasons(t *testing.T) {
 	e := newPlacementEnv(t)
-	remote := e.createPool("Remote", types.RunnerPoolRemoteProvided)
+	remote := e.createPool("Remote", types.RunnerPoolOrganization)
 	e.addExecutors(remote.ID, "alpha")
-	empty := e.createPool("Empty", types.RunnerPoolRemoteProvided)
-	off := e.createPool("Off", types.RunnerPoolRemoteProvided)
+	empty := e.createPool("Empty", types.RunnerPoolOrganization)
+	off := e.createPool("Off", types.RunnerPoolOrganization)
 	if w := e.admin(http.MethodPut, poolPath(off.ID), fmt.Sprintf(`{"revision":%d,"state":"disabled"}`, e.revision(off.ID))); w.Code != http.StatusOK {
 		t.Fatalf("disable = %d %s", w.Code, w.Body)
 	}
 	background := e.limitedPool("Background only", types.CC1, types.CC2, types.CC3)
-	home := e.createPool("Home server", types.RunnerPoolSelfHosted)
+	home := e.createPool("Home server", types.RunnerPoolUser)
 	e.addToPool(e.person, home.ID, e.claimedRunner(e.personP)) // claimed, never online
 	bare := e.createOwnPool(e.person, "Bare")
 
@@ -126,7 +126,7 @@ func TestPoolListAvailabilityReasons(t *testing.T) {
 // counted as capacity and never makes the pool available to the caller.
 func TestPoolListNeverNamesAnotherPersonsRunner(t *testing.T) {
 	e := newPlacementEnv(t)
-	home := e.createPool("Home server", types.RunnerPoolSelfHosted)
+	home := e.createPool("Home server", types.RunnerPoolUser)
 	mine := e.claimedRunner(e.personP)
 	e.addToPool(e.person, home.ID, mine)
 	theirs := e.laptop(e.otherP, 8000, 16384, types.CC1, types.CC2, types.CC3)
@@ -196,10 +196,10 @@ func TestPoolListManagerRowsCarryNoFacts(t *testing.T) {
 func TestPoolListSharedFieldsMatchTheDryDoors(t *testing.T) {
 	e := newPlacementEnv(t)
 	remote := e.sizedPool("Remote", types.RunnerPoolAmount{Default: 1000, Cap: 2000})
-	e.createPool("Empty", types.RunnerPoolRemoteProvided)
-	home := e.createPool("Home server", types.RunnerPoolSelfHosted)
+	e.createPool("Empty", types.RunnerPoolOrganization)
+	home := e.createPool("Home server", types.RunnerPoolUser)
 	e.addToPool(e.person, home.ID, e.claimedRunner(e.personP))
-	e.createPool("Not mine", types.RunnerPoolSelfHosted)
+	e.createPool("Not mine", types.RunnerPoolUser)
 
 	list, _ := e.list(e.person, "")
 	body := limitsBody(fmt.Sprintf(`"runner_pool_id":%q`, remote.ID))
@@ -277,9 +277,9 @@ func TestPoolListLimitsMatchPreflightForAnUntouchedRun(t *testing.T) {
 // not using (a self-hosted pool whose runner reads fail, say) cannot fail its create.
 func TestCreateNeverReadsThePoolChoices(t *testing.T) {
 	e := newPlacementEnv(t)
-	remote := e.createPool("Remote", types.RunnerPoolRemoteProvided)
+	remote := e.createPool("Remote", types.RunnerPoolOrganization)
 	e.addExecutors(remote.ID, "alpha")
-	e.createPool("Other", types.RunnerPoolSelfHosted)
+	e.createPool("Other", types.RunnerPoolUser)
 	ctx := operatorCtx(e.personP, "person@corp.example", oidc.RoleUser)
 	ceiling, err := e.srv.effectiveCeiling(ctx)
 	if err != nil {
@@ -317,7 +317,7 @@ func (c *countingInspector) ExecutorFacts(ctx context.Context, name string) (run
 func TestPoolListAsksEachExecutorOnce(t *testing.T) {
 	e := newPlacementEnv(t)
 	for _, name := range []string{"One", "Two", "Three"} {
-		p := e.createPool(name, types.RunnerPoolRemoteProvided)
+		p := e.createPool(name, types.RunnerPoolOrganization)
 		e.addExecutors(p.ID, "alpha", "beta")
 	}
 	counter := &countingInspector{poolRunner: e.runner, asked: map[string]int{}}

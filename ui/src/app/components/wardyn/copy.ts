@@ -170,13 +170,5 @@ export { TIER } from "./copy/tier";
 // keeps working unchanged.
 export { TERMINAL, TERMINAL_COPY, TERMINAL_LINK, TERMINAL_RENDERER } from "./copy/terminal";
 
-export {
-  RECORDING_DISABLED_TITLE,
-  RECORDING_DISABLED_DESC,
-  RAIL,
-  RAIL_CREDENTIAL,
-  RAIL_PROVIDER,
-  RAIL_RECORDING_ON,
-  RAIL_CHECK,
-  RAIL_SETUP,
-} from "./copy/new-run-rail";
+export { RECORDING_DISABLED_TITLE, RECORDING_DISABLED_DESC } from "./copy/recording-disabled";
+export { RAIL_PROVIDER, RAIL_CHECK } from "./copy/new-run-rail";

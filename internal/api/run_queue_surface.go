@@ -80,7 +80,8 @@ func (s *Server) slotCounts(ctx context.Context, poolIDs []uuid.UUID) map[uuid.U
 }
 
 // runnerPoolSlots is the resolved pool's slot answer on the dry doors, with the wait this run would
-// be given; nil for an unpooled run, a store that cannot count, or a failed count.
+// be given; nil for an unpooled run, a store that cannot count, or a failed count. A run whose runners
+// are all at their max_runs waits even where the pool has room.
 func (s *Server) runnerPoolSlots(ctx context.Context, p runPlacement, req createRunRequest) *client.PoolSlots {
 	if !p.pooled {
 		return nil
@@ -91,7 +92,11 @@ func (s *Server) runnerPoolSlots(ctx context.Context, p runPlacement, req create
 	}
 	interactive := runTypeForEnd(req.Experience) == types.RunnerPoolRunInteractive || (req.Experience == "" && requestIsInteractive(req))
 	wait, _ := queueWaitSec(req, interactive)
-	return poolSlots(p.row, c, wait)
+	slots := poolSlots(p.row, c, wait)
+	if p.runnersFull {
+		slots.Verdict = client.SlotsWaits
+	}
+	return slots
 }
 
 // projectRunQueue fills AgentRun.queue on each QUEUED run of runs from its queue row, in one read. It is

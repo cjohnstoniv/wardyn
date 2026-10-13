@@ -308,6 +308,10 @@ func parseCasts(ctx context.Context, root *os.Root) (castRun, error) {
 			return nil
 		}
 		defer f.Close()
+		if st, err := f.Stat(); err != nil || !st.Mode().IsRegular() {
+			run.failing = append(run.failing, "cast "+p+": is not a regular file")
+			return nil
+		}
 		if err := recording.CopyOutput(ctx, io.Discard, f); err != nil {
 			run.failing = append(run.failing, "cast "+p+": "+castProblem(err))
 		}

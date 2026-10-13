@@ -37,6 +37,13 @@ func TestReservedCoversTheIANANonGloballyReachableBlocks(t *testing.T) {
 		{"fec0::1", "fec0::/10 deprecated site-local (RFC3879), still configured on some enterprise LANs"},
 		{"2002:7f00:0001::1", "2002::/16 6to4 (RFC7526) embeds 127.0.0.1 at bits 16..48, which NAT64EmbeddedV4 cannot read"},
 		{"2002::1", "2002::/16 is denied wholesale, not only when its embedded v4 is interesting"},
+		{"2001::1", "2001::/32 TEREDO (RFC4380)"},
+		{"2001:2::1", "2001:2::/48 benchmarking (RFC5180)"},
+		{"2001:10::1", "2001:10::/28 deprecated ORCHID (RFC4843)"},
+		{"2001:db8::1", "2001:db8::/32 documentation (RFC3849)"},
+		{"3fff::1", "3fff::/20 documentation (RFC9637)"},
+		{"5f00::1", "5f00::/16 SRv6 SIDs (RFC9602)"},
+		{"100::1", "100::/64 discard-only (RFC6666)"},
 	} {
 		ok, why := PrivateReserved(net.ParseIP(tc.ip))
 		if !ok {
@@ -66,9 +73,31 @@ func TestReservedCoversTheIANANonGloballyReachableBlocks(t *testing.T) {
 		{"8.8.8.8", "ordinary public v4"},
 		{"93.184.216.34", "ordinary public v4"},
 		{"2606:4700:4700::1111", "ordinary public v6"},
+		{"2001:1::1", "2001:1::1/128 port control protocol anycast is globally reachable"},
+		{"2001:3::1", "2001:3::/32 AMT is globally reachable"},
+		{"2001:20::1", "2001:20::/28 ORCHIDv2 is globally reachable"},
 	} {
 		if ok, why := PrivateReserved(net.ParseIP(tc.ip)); ok {
 			t.Errorf("PrivateReserved(%s) = true (%s), want allowed — %s", tc.ip, why, tc.why)
+		}
+	}
+}
+
+// TestNeverLiftCarvesTheMetadataEndpointsOutOfLiftable: the AWS IPv6 metadata
+// block and the Alibaba metadata address sit inside the ULA and CGNAT ranges an
+// operator may lift, but must never be liftable.
+func TestNeverLiftCarvesTheMetadataEndpointsOutOfLiftable(t *testing.T) {
+	for _, ip := range []string{"fd00:ec2::254", "fd00:ec2::23", "100.100.100.200"} {
+		if InLiftable(net.ParseIP(ip)) {
+			t.Errorf("InLiftable(%s) = true, want false: a metadata endpoint is never liftable", ip)
+		}
+		if ok, _ := PrivateReserved(net.ParseIP(ip)); !ok {
+			t.Errorf("PrivateReserved(%s) = false, want still denied", ip)
+		}
+	}
+	for _, ip := range []string{"fd00::1", "100.64.0.1", "10.0.0.1"} {
+		if !InLiftable(net.ParseIP(ip)) {
+			t.Errorf("InLiftable(%s) = false, want true: ordinary liftable space", ip)
 		}
 	}
 }

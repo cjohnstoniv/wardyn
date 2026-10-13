@@ -55,7 +55,8 @@ func TestRunnerClaimUsesLocalFingerprintAndOrgBinding(t *testing.T) {
 func TestRunnerListAndTokensCommands(t *testing.T) {
 	id := uuid.New()
 	seen := time.Now().UTC().Add(-time.Hour).Truncate(time.Second)
-	views := []types.RunnerView{{ID: id, Owner: "alice@example.com", Name: "laptop-7", State: types.RunnerClaimed, Online: true, LastSeenAt: &seen, RunsActive: 2, KeyFingerprint: "abcd1234"}}
+	views := []types.RunnerView{{ID: id, Owner: "alice@example.com", Name: "laptop-7", State: types.RunnerClaimed, Online: true, LastSeenAt: &seen, RunsActive: 2, KeyFingerprint: "abcd1234",
+		MachineName: "alice-mbp.corp", MaxRuns: 4, Running: 1}}
 	srv := newCmdServer(t, http.StatusOK, views)
 
 	out, err := execCmdCapture(t, "runner", "list", "--all", "--state", "revoked", "--url", srv.URL, "--token", "t")
@@ -65,7 +66,7 @@ func TestRunnerListAndTokensCommands(t *testing.T) {
 	if req := srv.last(); req.path != "/api/v1/runners" || req.query != "state=revoked" {
 		t.Fatalf("--all request %s?%s", req.path, req.query)
 	}
-	for _, want := range []string{"alice@example.com", "laptop-7", "online", "abcd1234"} {
+	for _, want := range []string{"alice@example.com", "laptop-7", "MACHINE", "alice-mbp.corp", "AT ONCE", "1/4", "online", "abcd1234"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("admin list lacks %q:\n%s", want, out)
 		}
@@ -92,5 +93,14 @@ func TestRunnerListAndTokensCommands(t *testing.T) {
 	}
 	if _, err := execCmdCapture(t, "runner", "tokens", "revoke", "not-a-uuid", "--url", rsrv.URL, "--token", "t"); err == nil {
 		t.Fatal("a malformed token id was sent")
+	}
+
+	ssrv := newCmdServer(t, http.StatusOK, types.RunnerView{ID: id, Name: "laptop-7", MaxRuns: 3, Running: 1})
+	out, err = execCmdCapture(t, "runner", "set", "--max-runs", "3", id.String(), "--url", ssrv.URL, "--token", "t")
+	if req := ssrv.last(); err != nil || req.method != http.MethodPut || req.path != "/api/v1/me/runners/"+id.String() || !strings.Contains(out, "at most 3 at once") {
+		t.Fatalf("runner set: %v %+v\n%s", err, req, out)
+	}
+	if _, err := execCmdCapture(t, "runner", "set", id.String(), "--url", ssrv.URL, "--token", "t"); err == nil {
+		t.Fatal("runner set without --max-runs was accepted")
 	}
 }

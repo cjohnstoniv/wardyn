@@ -12,7 +12,7 @@ import { MY_COMPONENTS, ORG_BILLING, ORG_LINEAR, ORG_POSTGRES, SAVED_SECRETS } f
 import { SCENARIO_ACCESS } from "../../../../../lib/new-run-fixtures/scenarios/tools";
 import type { MyComponents } from "../../../../../lib/types/components";
 import type { AccessFacts, AccessRow } from "../../../../../lib/types/new-run-access";
-import { CUSTOM_COMPONENT as CC } from "../../../../wardyn/copy/components";
+import { ADD_ACCESS, CUSTOM_COMPONENT as CC } from "../../../../wardyn/copy/components";
 import { NR_SHARED } from "../../../../wardyn/copy/new-run/shared";
 import { NR_TOOLS } from "../../../../wardyn/copy/new-run/tools";
 import type { RunIntent } from "../../draft/run-intent";
@@ -23,7 +23,7 @@ import { AddTools } from "./catalogue";
 const h = vi.hoisted(() => ({ mine: vi.fn(), names: vi.fn(), saveMine: vi.fn(), answered: true }));
 vi.mock("../../../../../lib/api/components", () => ({ components: { mine: h.mine, saveMine: h.saveMine } }));
 vi.mock("../../../../../lib/api/secrets", () => ({ secrets: { listSecrets: h.names } }));
-vi.mock("../../../new-run/custom-component-dialog", () => ({
+vi.mock("../../checks/custom-component-dialog", () => ({
   CustomComponentDialog: (p: { context: string }) => <div role="dialog" aria-label="full editor">{p.context}</div>,
 }));
 
@@ -74,6 +74,8 @@ describe("catalogue", () => {
       expect(card(CLI_CARD[kind].name).queryByRole("button")).toBeNull();
     }
     expect(card(CLI_CARD.azure.name).queryByRole("button")).toBeNull();
+    // The owner's wording (T9): gh reaches Actions and the REST API, not issue or pull request lists.
+    expect(card(CLI_CARD.github.name).getByText(NR_TOOLS.CLI_GITHUB_BODY)).toBeTruthy();
     expect(screen.queryByText("Ungranted")).toBeNull();
   });
 
@@ -83,15 +85,39 @@ describe("catalogue", () => {
     const filter = within(screen.getByRole("group", { name: NR_TOOLS.CATEGORY_ARIA }));
     await userEvent.click(filter.getByRole("button", { name: NR_TOOLS.CATEGORY_MCP }));
     expect(screen.getByRole("heading", { name: "Linear" })).toBeTruthy();
-    expect(screen.getByRole("heading", { name: NR_TOOLS.MCP_CARD_TITLE })).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: NR_TOOLS.MCP_CARD_TITLE })).toBeNull();
     expect(screen.queryByRole("heading", { name: CLI_CARD.azure.name })).toBeNull();
     await userEvent.click(filter.getByRole("button", { name: NR_TOOLS.CATEGORY_SECRET }));
     expect(screen.getByRole("heading", { name: NR_TOOLS.SECRET_CARD_TITLE })).toBeTruthy();
     expect(screen.getByRole("heading", { name: NR_TOOLS.HOST_CARD_TITLE })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: NR_TOOLS.MCP_CARD_TITLE })).toBeTruthy();
     expect(screen.queryByRole("heading", { name: "Linear" })).toBeNull();
     await userEvent.click(filter.getByRole("button", { name: NR_TOOLS.CATEGORY_API }));
     expect(screen.getByRole("heading", { name: ORG_BILLING.name })).toBeTruthy();
-    expect(screen.getByRole("heading", { name: NR_TOOLS.CUSTOM_COMPONENT })).toBeTruthy();
+    // Custom component is the section's own button, whatever the category.
+    expect(screen.getByRole("button", { name: NR_TOOLS.CUSTOM_COMPONENT })).toBeTruthy();
+  });
+
+  it("shows what each card brings: its hosts, and how its credential reaches the run", async () => {
+    await show();
+    expect(await card(ORG_BILLING.name).findByText("billing.acme.internal")).toBeTruthy();
+    expect(card(ORG_BILLING.name).getByText(NR_TOOLS.DELIVERY_PROXY)).toBeTruthy();
+    expect(card(ORG_POSTGRES.name).getByText(NR_TOOLS.DELIVERY_ENV)).toBeTruthy();
+    expect(card("AWS ReadOnly-Dev").getByText("*.amazonaws.com")).toBeTruthy();
+    expect(card("AWS ReadOnly-Dev").getByText(NR_TOOLS.DELIVERY_SHORT_LIVED)).toBeTruthy();
+    expect(card(ORG_LINEAR.name).getByText(NR_TOOLS.FROM_ORG)).toBeTruthy();
+  });
+
+  it("a granted Azure CLI row says its credential stays with the proxy", async () => {
+    const azure = { id: "55555555-5555-4555-8555-555555555555", name: "Azure Dev", category: "cli" as const, hosts: [], secrets: [], config_keys: [],
+      cli: { kind: "azure" as const, subscriptions: 1, access: "read" } };
+    h.mine.mockResolvedValue(COMPONENTS({
+      org: [...MY_COMPONENTS.org, azure],
+      clis: MY_COMPONENTS.clis.map((c) => (c.kind === "azure" ? { ...c, state: "available" as const, rows: [azure.id] } : c)),
+    }));
+    await show();
+    expect(await card("Azure Dev").findByText(NR_TOOLS.DELIVERY_PROXY)).toBeTruthy();
+    expect(card("Azure Dev").queryByText(NR_TOOLS.DELIVERY_SHORT_LIVED)).toBeNull();
   });
 
   it("adds an organisation row by its id and removes it again", async () => {
@@ -121,7 +147,7 @@ describe("catalogue", () => {
       await show();
       const postgres = card(ORG_POSTGRES.name);
       expect(await postgres.findByText(CC.ERR.RESIDENT_OFF)).toBeTruthy();
-      expect((postgres.getByRole("button", { name: `${NR_TOOLS.CARD_ADD} Postgres` }) as HTMLButtonElement).disabled).toBe(true);
+      expect(postgres.queryByRole("button", { name: `${NR_TOOLS.CARD_ADD} Postgres` })).toBeNull();
       expect((card("Billing API").getByRole("button", { name: `${NR_TOOLS.CARD_ADD} Billing API` }) as HTMLButtonElement).disabled).toBe(false);
     });
 
@@ -315,12 +341,15 @@ describe("Custom component", () => {
     expect(await screen.findByRole("dialog", { name: "full editor" })).toBeTruthy();
   });
 
-  it("is not offered to a person who may not define components", async () => {
+  it("is held, with its reason, for a person who may not define components, and so is an MCP server by URL", async () => {
     h.mine.mockResolvedValue(COMPONENTS({ may_define: false }));
     await show();
     await screen.findByRole("heading", { name: "Linear" });
-    expect(screen.queryByRole("heading", { name: NR_TOOLS.CUSTOM_COMPONENT })).toBeNull();
-    expect(screen.queryByRole("heading", { name: NR_TOOLS.MCP_CARD_TITLE })).toBeNull();
+    for (const name of [NR_TOOLS.CUSTOM_COMPONENT, NR_TOOLS.MCP_CARD_BUTTON]) {
+      const button = screen.getByRole("button", { name }) as HTMLButtonElement;
+      expect(button.disabled).toBe(true);
+      expect(button).toHaveAccessibleDescription(ADD_ACCESS.NOT_ALLOWED);
+    }
   });
 });
 

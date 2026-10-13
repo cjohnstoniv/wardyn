@@ -11,4 +11,5 @@ docs/operations/console-branding.md=943 share=35
 # docs/operations/hybrid-laptops.md 662 adds 98 (0.9 H13): the "Resident credentials and posture" section and the keystore cell.
 # docs/operations/hybrid-laptops.md 700 measured after the 0.9.0 batch merge.
 # docs/operations/hybrid-laptops.md 798 measured after H13 merge-prep.
-docs/operations/hybrid-laptops.md=798 share=35
+# docs/operations/hybrid-laptops.md 827 adds 29 over 798 (G-090-cleanup slice F, docs rows that contradict the code): measured; the lead re-measures at merge.
+docs/operations/hybrid-laptops.md=827 share=35

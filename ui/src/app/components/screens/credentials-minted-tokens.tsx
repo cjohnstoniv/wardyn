@@ -9,6 +9,11 @@
 // with Revoke (the existing revoke-anyone's-token power, so a button, not a
 // privilege). Metadata only: a token value is never fetched or shown. Both
 // admin tiers read it, the same as the page above it.
+//
+// #1508: each row says where its token stands (the State column, from the row's `disposition`), and a
+// toggle adds the revoked rows, so a finished claim or move stays visible. The console shows the state
+// and nothing more: inviting the owner and moving the token are the CLI's (`wardyn person invite`,
+// `wardyn token move`).
 import * as React from "react";
 import { toast } from "sonner";
 import { KeyRound } from "lucide-react";
@@ -19,26 +24,56 @@ import { buttonVariants, Button } from "../ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../ui/table";
 import { Chip } from "../wardyn/primitives";
 import { ErrorState, TableSkeleton } from "../wardyn/states";
-import { MINTED } from "../wardyn/copy/credentials";
+import { DISPOSITION, MINTED } from "../wardyn/copy/credentials";
+import { inWords } from "../wardyn/copy/service-tokens";
+import { Checkbox } from "../ui/checkbox";
+import { Label } from "../ui/label";
 
 const personOf = (t: AdminMintedToken) => t.email || t.principal;
+
+// The State cell: a chip with the disposition's label and a line under it saying what is true now. A value this
+// console does not know shows as written in a neutral chip; a row with none (a daemon that predates the
+// field) shows nothing.
+function StateCell({ t }: { t: AdminMintedToken }) {
+  if (!t.disposition) return null;
+  const d = DISPOSITION[t.disposition];
+  return (
+    <>
+      <Chip tone={d?.tone ?? "neutral"} dot mono={!d}>
+        {d?.label ?? t.disposition}
+      </Chip>
+      {d && <span className="mt-1 block text-xs text-muted-foreground">{d.sub(t.revoked_at ? inWords(t.revoked_at) : "")}</span>}
+      {t.service_identity && (
+        <span className="mt-1 block text-xs text-muted-foreground">
+          {MINTED.SERVICE_IDENTITY} <span className="font-mono">{t.service_identity}</span>
+        </span>
+      )}
+    </>
+  );
+}
 
 export function AdminMintedTokens() {
   const [tokens, setTokens] = React.useState<AdminMintedToken[] | null>(null);
   const [failed, setFailed] = React.useState(false);
+  const [includeRevoked, setIncludeRevoked] = React.useState(false);
   const [target, setTarget] = React.useState<AdminMintedToken | null>(null);
   const [revoking, setRevoking] = React.useState(false);
   // A ref as well as the state: two clicks in one tick must revoke once.
   const inFlight = React.useRef(false);
 
+  // The list stays on screen while the toggle's request is out, so the toggle keeps its place and focus.
   const load = React.useCallback(() => {
     setFailed(false);
     credentialsApi
-      .listAdminMintedTokens()
+      .listAdminMintedTokens(includeRevoked)
       .then(setTokens)
       .catch(() => setFailed(true));
-  }, []);
+  }, [includeRevoked]);
   React.useEffect(load, [load]);
+
+  const live = tokens ? tokens.filter((t) => !t.revoked_at) : [];
+  const revokedShown = tokens ? tokens.length - live.length : 0;
+  const shown = includeRevoked ? (tokens ?? []) : live;
 
   const revoke = async () => {
     if (!target || inFlight.current) return;
@@ -58,6 +93,19 @@ export function AdminMintedTokens() {
     }
   };
 
+  const toggle = (
+    <div className="mt-3 flex items-center gap-2">
+      <Checkbox
+        id="minted-include-revoked"
+        checked={includeRevoked}
+        onCheckedChange={(v) => setIncludeRevoked(v === true)}
+      />
+      <Label htmlFor="minted-include-revoked" className="text-xs font-normal">
+        {MINTED.INCLUDE_REVOKED}
+      </Label>
+    </div>
+  );
+
   return (
     <section className="mt-6 overflow-hidden rounded-xl border border-border bg-card" aria-labelledby="admin-minted-title">
       <div className="p-4">
@@ -65,30 +113,38 @@ export function AdminMintedTokens() {
           <h2 id="admin-minted-title" className="text-sm font-semibold text-foreground">
             {MINTED.TITLE}
           </h2>
-          {tokens && tokens.length > 0 && <Chip tone="warning">{MINTED.CHIP(tokens.length)}</Chip>}
+          {live.length > 0 && <Chip tone="warning">{MINTED.CHIP(live.length)}</Chip>}
         </div>
 
         {failed ? (
           <ErrorState onRetry={load} />
         ) : !tokens ? (
           <TableSkeleton rows={2} cols={5} />
-        ) : tokens.length === 0 ? (
+        ) : shown.length === 0 ? (
           <div className="mt-3 space-y-1">
             <p className="flex items-center gap-2 text-sm text-foreground">
               <KeyRound className="size-4 text-muted-foreground" aria-hidden /> {MINTED.EMPTY}
             </p>
             <p className="text-xs text-muted-foreground">{MINTED.NOTE}</p>
+            {toggle}
           </div>
         ) : (
           <>
-            <p className="mt-2 text-xs text-muted-foreground">{MINTED.COUNT(tokens.length)}</p>
+            <p className="mt-2 text-xs text-muted-foreground">{live.length === 0 ? MINTED.NONE_LIVE : MINTED.COUNT(live.length)}</p>
             <p className="text-xs text-muted-foreground">{MINTED.NOTE}</p>
-            <div className="mt-3 overflow-x-auto">
+            {toggle}
+            {includeRevoked && revokedShown > 0 && (
+              <p role="status" className="mt-1.5 text-xs text-muted-foreground">
+                {MINTED.SHOWING_REVOKED(revokedShown)}
+              </p>
+            )}
+            <div className="mt-3 overflow-x-auto scroll-thin">
               <Table>
                 <TableHeader>
                   <TableRow className="hover:bg-transparent">
                     <TableHead>{MINTED.COL_PERSON}</TableHead>
                     <TableHead>{MINTED.COL_TOKEN}</TableHead>
+                    <TableHead>{MINTED.COL_STATE}</TableHead>
                     <TableHead>{MINTED.COL_CREATED_BY}</TableHead>
                     <TableHead>{MINTED.COL_ADDED}</TableHead>
                     <TableHead>{MINTED.COL_LAST_USED}</TableHead>
@@ -96,10 +152,13 @@ export function AdminMintedTokens() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {tokens.map((t) => (
+                  {shown.map((t) => (
                     <TableRow key={t.id}>
                       <TableCell className="whitespace-nowrap font-medium">{personOf(t)}</TableCell>
                       <TableCell className="font-mono text-xs">{t.name}</TableCell>
+                      <TableCell>
+                        <StateCell t={t} />
+                      </TableCell>
                       <TableCell className="text-muted-foreground">{t.minted_by}</TableCell>
                       <TableCell className="text-muted-foreground" title={absoluteTime(t.created_at)}>
                         {relativeTime(t.created_at)}
@@ -111,15 +170,24 @@ export function AdminMintedTokens() {
                         {t.last_used_at ? relativeTime(t.last_used_at) : MINTED.NEVER}
                       </TableCell>
                       <TableCell>
-                        <Button size="sm" variant="outline" onClick={() => setTarget(t)}>
-                          {MINTED.REVOKE}
-                        </Button>
+                        {!t.revoked_at && (
+                          <Button size="sm" variant="outline" onClick={() => setTarget(t)}>
+                            {MINTED.REVOKE}
+                          </Button>
+                        )}
                       </TableCell>
                     </TableRow>
                   ))}
                 </TableBody>
               </Table>
             </div>
+            <p className="mt-3 text-xs text-muted-foreground">
+              {MINTED.FOOTNOTE[0]}
+              <span className="font-mono">{MINTED.FOOTNOTE[1]}</span>
+              {MINTED.FOOTNOTE[2]}
+              <span className="font-mono">{MINTED.FOOTNOTE[3]}</span>
+              {MINTED.FOOTNOTE[4]}
+            </p>
           </>
         )}
       </div>

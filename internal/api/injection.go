@@ -132,6 +132,13 @@ func (s *Server) handleInternalInjection(w http.ResponseWriter, r *http.Request)
 	if s.resolveAzureFoundryInjection(w, r, claims, minted, grantID) {
 		return
 	}
+	// THE AZURE CLI: the run owner's own captured Entra sign-in for the Azure CLI row the run carries,
+	// redeemed for Azure Resource Manager and pinned to the dispatch-time snapshot — see
+	// resolveAzureARMInjection. Before the reserved-name check below, which refuses a
+	// wardyn-cli-<id>-entra name to every other grant.
+	if s.resolveAzureARMInjection(w, r, claims, minted, grantID) {
+		return
+	}
 
 	// Defense-in-depth at the SINK: never resolve a sink-reserved secret (signing/
 	// session key or a resident AWS Bedrock SigV4 credential) into an injectable header

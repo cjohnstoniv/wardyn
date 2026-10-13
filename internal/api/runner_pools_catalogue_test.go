@@ -38,7 +38,7 @@ func barrierRow(opts []client.BarrierOption) (reasons [3]runnerpool.BarrierReaso
 
 // T12: a pool's barriers by the governance floor, the pool's own limits and its known candidates' facts.
 func TestBarrierOptions(t *testing.T) {
-	remote := types.RunnerPool{HostingType: types.RunnerPoolRemoteProvided}
+	remote := types.RunnerPool{Scope: types.RunnerPoolOrganization}
 	onlyWall := remote
 	onlyWall.Limits = &types.RunnerPoolLimits{Barriers: []types.ConfinementClass{types.CC1, types.CC2}}
 	all := classes(types.CC1, types.CC2, types.CC3)
@@ -87,11 +87,11 @@ func TestBarrierOptions(t *testing.T) {
 
 // kvm_missing is said only of a remote pool whose every executor without Vault is the Docker one.
 func TestBarrierKVMMissingOnlyForTheDockerExecutor(t *testing.T) {
-	remote := types.RunnerPool{HostingType: types.RunnerPoolRemoteProvided}
+	remote := types.RunnerPool{Scope: types.RunnerPoolOrganization}
 	if kvmExplainsNoVault(remote, []poolTarget{{executor: dockerExecutor, facts: classes(types.CC1)}, {executor: "k8s", facts: classes(types.CC1)}}) {
 		t.Error("a non-Docker executor without Vault is explained by KVM")
 	}
-	if kvmExplainsNoVault(types.RunnerPool{HostingType: types.RunnerPoolSelfHosted}, []poolTarget{{executor: dockerExecutor, facts: classes(types.CC1)}}) {
+	if kvmExplainsNoVault(types.RunnerPool{Scope: types.RunnerPoolUser}, []poolTarget{{executor: dockerExecutor, facts: classes(types.CC1)}}) {
 		t.Error("a self-hosted pool's runners are explained by this host's KVM")
 	}
 }
@@ -99,7 +99,7 @@ func TestBarrierKVMMissingOnlyForTheDockerExecutor(t *testing.T) {
 // T13: Review's barriers carry this draft's policy floor and the Vault its access needs; the list has
 // neither.
 func TestPreflightBarrierOptionsDraftFloors(t *testing.T) {
-	pool := types.RunnerPool{HostingType: types.RunnerPoolRemoteProvided}
+	pool := types.RunnerPool{Scope: types.RunnerPoolOrganization}
 	ceiling := governanceCeiling{Spec: types.RunPolicySpec{MinConfinementClass: types.CC1}}
 	place := runPlacement{pooled: true, row: pool, targets: []poolTarget{{id: "a", facts: classes(types.CC1, types.CC2, types.CC3)}}}
 

@@ -45,6 +45,9 @@ var isOperatorCensus = map[string]int{
 	"secrets.go:handlePutSecret":                    1,
 	"secrets.go:secretOwnerParam":                   1,
 	"secrets.go:handleListSecrets":                  1,
+	// An operator reads every secret name, so removing one from a run is not an
+	// ownership question for it.
+	"run_overrides_apply.go:applySecretOverrides": 1,
 	// Reading a recording is a privacy surface, not a launch.
 	"recording.go:recordingAuthorizer": 1,
 	"recording.go:recordingReader":     1,

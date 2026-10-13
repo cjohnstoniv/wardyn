@@ -56,7 +56,10 @@ type SandboxSpec struct {
 	// RunnerID, when set, routes the create to the substrate of that registered
 	// runner (named "runner:<id>"); empty means the cluster. It is a routing
 	// carrier for the orchestrator, not something a substrate reads.
-	RunnerID         string
+	RunnerID string
+	// RunnerMaxRuns is that runner's max_runs when the create was sent: the runner refuses a create past
+	// it, a backstop to the control plane's own count. 0 sets no bound.
+	RunnerMaxRuns    int
 	Image            string // resolved agent/workspace OCI image
 	ConfinementClass types.ConfinementClass
 	// Env is non-secret environment. Credential material NEVER passes through
@@ -155,6 +158,8 @@ type ProxyConfig struct {
 	AzureGates []proxy.AzureGateConfig
 	// GitHubAPI is the run's GitHub CLI grant for the proxy's api.github.com door; nil == off.
 	GitHubAPI *proxy.GitHubAPIGrant
+	// AzureARM is the run's Azure CLI grant for the proxy's management.azure.com door; nil == off.
+	AzureARM *proxy.AzureARMGrant
 	// BrokeredPATGrantIDs is every git_pat grant id of the run while the PAT broker is on; the proxy refuses a raw mint of one.
 	BrokeredPATGrantIDs []uuid.UUID
 	// UpstreamProxyURL is the OPTIONAL corporate parent proxy the sidecar

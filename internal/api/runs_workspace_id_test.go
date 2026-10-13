@@ -174,7 +174,7 @@ func TestSeedRequestWorkspace(t *testing.T) {
 // dispatched verbatim.
 type wrapEchoImageBuilder struct{ fakeImageBuilder }
 
-func (wrapEchoImageBuilder) FinalizeBase(_ context.Context, baseRef, outputTag string, _ io.Writer) (BuiltImage, error) {
+func (wrapEchoImageBuilder) FinalizeBase(_ context.Context, baseRef, outputTag string, _ io.Writer, _ bool) (BuiltImage, error) {
 	return BuiltImage{Ref: outputTag}, nil
 }
 
@@ -705,7 +705,7 @@ type capturingByoiImageBuilder struct {
 	calls []string // base refs FinalizeBase was called with, in order
 }
 
-func (b *capturingByoiImageBuilder) FinalizeBase(_ context.Context, baseRef, _ string, _ io.Writer) (BuiltImage, error) {
+func (b *capturingByoiImageBuilder) FinalizeBase(_ context.Context, baseRef, _ string, _ io.Writer, _ bool) (BuiltImage, error) {
 	b.calls = append(b.calls, baseRef)
 	return BuiltImage{Ref: "wardyn-byoi/cached:" + baseRef}, nil
 }

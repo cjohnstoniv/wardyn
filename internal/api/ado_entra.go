@@ -399,6 +399,7 @@ func (s *Server) mountAzureDevOpsSignInRoutes(r chi.Router) {
 	r.Get(adoSignInCallbackRoute, s.handleADOCallback)
 	r.Delete("/scm/azure-devops/connection", s.handleADODisconnect) // ado_pat_console.go
 	s.mountAzureFoundrySignInRoutes(r)                              // azure_foundry_entra.go; its callback is the one above
+	s.mountAzureCLISignInRoutes(r)                                  // cli_azure_signin.go; likewise
 }
 
 // resolveADOEntra resolves this deployment's Azure DevOps configuration and
@@ -613,11 +614,15 @@ func (s *Server) handleADOCallback(w http.ResponseWriter, r *http.Request) {
 		writeErrorReason(w, http.StatusForbidden, reasonADOSignInNoSession, adoSignInNoSessionRefusal)
 		return
 	}
-	// One registered redirect URI serves both flows: an Azure Foundry capture
-	// announces itself by its own state cookie, matched against the returned
-	// state, and everything else is this handler's.
+	// One registered redirect URI serves every flow: an Azure Foundry or an
+	// Azure CLI capture announces itself by its own state cookie, matched
+	// against the returned state, and everything else is this handler's.
 	if stamp, ok := s.azureFoundryFlow(r); ok {
 		s.handleAzureFoundryCallback(w, r, subject, stamp)
+		return
+	}
+	if stamp, ok := s.azureCLIFlow(r); ok {
+		s.handleAzureCLICallback(w, r, subject, stamp)
 		return
 	}
 	cfg, ok := s.resolveADOEntra(w, r)

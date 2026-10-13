@@ -191,7 +191,7 @@ func TestSyncSession_RefusalQuotesTheGatewaysStderr(t *testing.T) {
 	done := make(chan struct{})
 	close(done)
 	s := &syncSession{ch: closedChannel{}, exited: done, errDone: done}
-	s.stderr.WriteString(hostileText)
+	_, _ = s.stderr.Write([]byte(hostileText))
 	if err := s.refusal(); rawControl(err.Error()) {
 		t.Errorf("refusal = %q, want no raw control byte", err)
 	}
