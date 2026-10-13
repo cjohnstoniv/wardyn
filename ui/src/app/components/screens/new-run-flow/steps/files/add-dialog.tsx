@@ -104,7 +104,7 @@ function optionsFor(kind: AttachKind, src: ItemSources): PickOption[] {
     return src.rows.map((r) => ({ key: r.key, name: r.name, chips: [], shownPath: r.path, defaultPath: r.path, locked: false, reason: r.unavailable, ref: r.ref, workspaceId: r.workspaceId, repo: r.repo }));
   }
   if (kind === "folder") {
-    return src.folders.map((f) => ({ key: f.key, name: f.name, chips: [NR_FILES.FAMILY_HOST_FOLDER], shownPath: f.hostPath, defaultPath: f.defaultPath, locked: !f.writable, reason: f.unavailable }));
+    return src.folders.map((f) => ({ key: f.key, name: f.name, chips: [NR_FILES.FAMILY_HOST_FOLDER, ...(f.writable ? [] : [NR_FILES.ACCESS_READ])], shownPath: f.hostPath, defaultPath: f.defaultPath, locked: !f.writable, reason: f.unavailable }));
   }
   return (src.catalogue?.drives ?? []).filter((d) => driveKind(d) === kind).map((d) => ({
     key: d.id, name: d.name, chips: [...driveChips(d), ...(d.writable ? [] : [NR_FILES.ACCESS_READ])], shownPath: d.target, defaultPath: d.target,
@@ -345,7 +345,7 @@ function DialogBody({ open, onClose, intent, src, items, folderReason, driveReas
             <div className="mt-4 flex flex-col gap-1.5">
               <label htmlFor="nr-mount-access" className={FIELD_LABEL}>{NR_FILES.ACCESS_LABEL}</label>
               {source?.locked ?? editing?.locked ? (
-                <LockedAccess id="nr-dialog" />
+                s.kind === "folder" ? <span className="flex min-h-[42px] items-center text-sm">{NR_FILES.ACCESS_READ}</span> : <LockedAccess id="nr-dialog" />
               ) : (
                 <select id="nr-mount-access" className={SELECT_CLASS} value={s.readOnly ? "read" : "edit"} onChange={(e) => setS((c) => ({ ...c, readOnly: e.target.value === "read" }))}>
                   <option value="edit">{NR_FILES.ACCESS_EDIT}</option>
