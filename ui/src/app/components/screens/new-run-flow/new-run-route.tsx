@@ -78,7 +78,7 @@ export const NEW_RUN_SCREENS: Record<NewRunScreenName, Screen> = {
 const screenOf = (loc: NewRunLocation): NewRunScreenName => (loc.screen === "step" ? loc.step : loc.screen);
 
 // Make's centred page column (snapshot CSS .center-stage, .flow-shell/.editor-shell, .review-shell):
-// Start 1040 px, the Guided steps and the document editor 900 px, Review 1120 px, a 20 px gutter each
+// Start 1040 px, the Guided steps and the document editor 900 px, Review 1120 px, Launched 580 px, a 20 px gutter each
 // side, and Make's top and bottom padding; a phone narrows the gutter and the top padding as Make does.
 const COLUMN = "mx-auto pb-[110px] max-[520px]:w-[calc(100%-24px)]";
 const STEP_COLUMN = `${COLUMN} w-[min(900px,calc(100%-40px))] pt-11 max-[520px]:pt-7`;
@@ -91,6 +91,8 @@ const FRAME: Partial<Record<NewRunScreenName, string>> = {
   tools: STEP_COLUMN,
   document: STEP_COLUMN,
   review: `${COLUMN} w-[min(1120px,calc(100%-40px))] pt-11 max-[520px]:pt-7`,
+  // Make's .success-shell (index.css:489): 580 px, the top padding scales with the viewport.
+  launched: "mx-auto w-[min(580px,calc(100%-40px))] pt-[clamp(80px,13vh,140px)] pb-[110px]",
 };
 
 /** Where the guard sends a scratch or composer draft, or undefined when the screen may open. */

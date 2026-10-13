@@ -47,7 +47,7 @@ export function lifecycleOf(intent: RunIntent, view: MainDriveView): Lifecycle {
   return { kind: "kept", grace: hoursText(keep.grace_sec), max: view.maxLifetimeSec ? hoursText(view.maxLifetimeSec) : undefined };
 }
 
-const lifecycleText = (l: Lifecycle): string | undefined =>
+export const lifecycleText = (l: Lifecycle): string | undefined =>
   l.kind === "deleted" ? NR_FILES.LIFE_DELETED
     : l.kind === "noEnd" ? NR_FILES.LIFE_NO_END
       : l.kind === "kept" ? (l.max ? NR_FILES.LIFE_KEPT(l.max, l.grace) : NR_FILES.LIFE_KEPT_UNLIMITED(l.grace))
