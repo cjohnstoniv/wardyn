@@ -721,7 +721,10 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	stopDispatchLease := s.holdRunWatcherLease(ctx, run.ID)
 	defer stopDispatchLease()
 
-	s.recordSandboxRef(ctx, run.ID, sb.Ref)
+	if err := s.recordSandboxRef(ctx, run.ID, sb.Ref); err != nil {
+		s.abortUnrecordedSandbox(ctx, run.ID, sb.Ref, err)
+		return
+	}
 
 	// Kill-race guard: advance STARTING->RUNNING CONDITIONALLY. CreateSandbox can
 	// be slow (image pull); a concurrent POST /runs/{id}/kill may have moved the
@@ -735,19 +738,9 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	applied, uerr := s.casRunState(ctx, run.ID, types.RunStarting, types.RunRunning)
 	if uerr != nil || !applied {
 		// Killed/stopped mid-dispatch (or a store error). Free the orphaned
-		// sandbox and bail without resurrecting the run. The note states only what
-		// was observed: whether the teardown actually happened is stopSandboxOrAudit's
-		// to report, never this event's to assert.
+		// sandbox and bail without resurrecting the run.
 		s.stopSandboxOrAudit(ctx, run.ID, sb.Ref, "run.dispatch")
-		data := map[string]any{
-			"sandbox_ref": sb.Ref,
-			"note":        "run left STARTING by a concurrent kill/stop during CreateSandbox; dispatch aborted",
-		}
-		if uerr != nil {
-			data["error"] = uerr.Error()
-		}
-		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.dispatch",
-			run.ID.String(), "failure", mustJSON(data)))
+		s.auditLostStart(ctx, run.ID, sb.Ref, uerr)
 		return
 	}
 

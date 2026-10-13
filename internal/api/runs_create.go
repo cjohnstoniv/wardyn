@@ -534,7 +534,9 @@ func warnCeilingDeniedWorkspaceEgress(ceiling governanceCeiling, wsRefs []types.
 // 500) and returns failed=true — the caller (one frame up, off-request-capable)
 // owns refreshing the run and answering the response; a WORKSPACE image build
 // failure is fail-open (keeps the convention image), since onboarding is a
-// convenience, not a gate. The resolved image is persisted for provenance
+// convenience, not a gate. Each build is one a kill of the run stops
+// (trackRunBuild); a run already terminal builds nothing and also returns
+// failed=true, with its state left as it is. The resolved image is persisted for provenance
 // (best-effort: a failed write must not block dispatch — the audit trail
 // still carries build events). Extracted verbatim from handleCreateRun; ctx is
 // already detached from client cancellation.
@@ -552,6 +554,9 @@ func (s *Server) resolveCreateRunImage(ctx context.Context, req createRunRequest
 	// CAS from PENDING so a run a concurrent kill already moved to KILLED is not
 	// silently clobbered back to FAILED (was: unconditional write), and audit.
 	buildFailed := func(auditData map[string]any) {
+		// Bounded, and not on the build's context: a kill that stopped the build does not stop this.
+		ctx, cancel := context.WithTimeout(ctx, killCascadeTimeout)
+		defer cancel()
 		// Surface the build failure under the FAILED badge, not only in the
 		// run.build audit row. The error text is already in auditData["error"].
 		hint := "the run's sandbox image could not be built"
@@ -569,10 +574,13 @@ func (s *Server) resolveCreateRunImage(ctx context.Context, req createRunRequest
 		// runtime selftest preflight off (a wrapped arbitrary image may still lack a
 		// shell or the harness binary).
 		outTag := "wardyn-byoi/" + runID.String() + ":latest"
-		buildCtx, cancelBuild := context.WithTimeout(ctx, imageBuildTimeout)
+		buildCtx, endBuild, live := s.trackRunBuild(ctx, runID)
+		if !live {
+			return "", true
+		}
 		s.announceImageBuild(ctx, runID)()
 		built, berr := s.cfg.ImageBuilder.FinalizeBase(buildCtx, req.Image, outTag, nil, false)
-		cancelBuild()
+		endBuild()
 		if berr != nil {
 			buildFailed(map[string]any{"byoi_base": req.Image, "error": berr.Error()})
 			return "", true
@@ -584,10 +592,13 @@ func (s *Server) resolveCreateRunImage(ctx context.Context, req createRunRequest
 			}, built.ID))))
 	case req.DevcontainerRepo != "" && s.cfg.ImageBuilder != nil:
 		outTag := "wardyn-devcontainer/" + runID.String() + ":latest"
-		buildCtx, cancelBuild := context.WithTimeout(ctx, imageBuildTimeout)
+		buildCtx, endBuild, live := s.trackRunBuild(ctx, runID)
+		if !live {
+			return "", true
+		}
 		s.announceImageBuild(ctx, runID)()
 		built, berr := s.cfg.ImageBuilder.BuildDevcontainer(buildCtx, req.DevcontainerRepo, req.DevcontainerRef, outTag, nil)
-		cancelBuild()
+		endBuild()
 		if berr != nil {
 			buildFailed(map[string]any{"devcontainer_repo": req.DevcontainerRepo, "error": berr.Error()})
 			return "", true
@@ -622,11 +633,14 @@ func (s *Server) resolveCreateRunImage(ctx context.Context, req createRunRequest
 			})
 			return "", true
 		}
-		buildCtx, cancelBuild := context.WithTimeout(ctx, imageBuildTimeout)
+		buildCtx, endBuild, live := s.trackRunBuild(ctx, runID)
+		if !live {
+			return "", true
+		}
 		if built, ok := s.resolveWorkspaceImage(buildCtx, runID, imageWS, nil, s.announceImageBuild(ctx, runID)); ok {
 			image = built
 		}
-		cancelBuild()
+		endBuild()
 	}
 
 	// Persist the resolved image for provenance (best-effort: a failed write
