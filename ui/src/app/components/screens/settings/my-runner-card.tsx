@@ -394,7 +394,7 @@ export function MyRunnerCard() {
         className="outline-none focus-visible:border-ring focus-visible:ring-ring focus-visible:ring-[3px]"
       >
         <div className="space-y-3">
-          <p className="text-body text-muted-foreground">{MY_POOLS.RUNNER_LEDE}</p>
+          <p className="text-body text-muted-foreground">{MY_RUNNER.LEDE}</p>
           {status === "error" ? (
             <div role="status" className="flex flex-wrap items-center gap-2">
               <p className="text-body text-muted-foreground">{MY_RUNNER.FETCH_FAILED}</p>

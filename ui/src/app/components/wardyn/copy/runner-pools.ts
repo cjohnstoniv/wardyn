@@ -44,7 +44,6 @@ export const RUNNER_KIND = {
 
 /** What the Runners tab, both drawers and the My runner card add to a runner (mock frames A0, RN1 to RN3). */
 export const RUNNER_V6 = {
-  LEAD: "A runner is what runs sandboxes. A self-hosted runner is a computer someone registered; a remote-hosted runner is a Docker host or Kubernetes cluster this server is set up with. Each runs several runs at once, up to its Runs at once, under your policy and audit. What a runner reports about itself is labelled as reported.",
   TAB_PURPOSE:
     "This tab lists every runner: its state, what it reports, its limits and how much is in use, and the pools it is in. Registration tokens and revoking are for self-hosted runners. The Pools tab is where runs go and their limits. A runner can be in several pools.",
   TABS_LABEL: "Runners sections",
@@ -345,8 +344,6 @@ export const POOL_FORM = {
 
 /** Your account -> My runner -> pools of a runner, and My pools (mock frames B1 to B16). */
 export const MY_POOLS = {
-  RUNNER_LEDE:
-    "A computer you registered runs your own runs, several at once up to its Runs at once, under your organization's policy and audit. One runner per computer is enough. While it's offline it runs nothing new.",
   NO_RUNNER_NEXT: "Register one, then put it in one of your pools. You can create a pool first.",
   REGISTER_ONE_PER_COMPUTER: "One runner per computer is enough: it runs several of your runs at the same time, up to its Runs at once.",
   REGISTER_ASKS_LIMITS:
