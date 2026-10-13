@@ -328,6 +328,66 @@ func TestGovCovProfileWriteExemptComparesTheResolvedComposition(t *testing.T) {
 	}
 }
 
+// TestGovCovProfileWriteExemptEmptiedUIApps pins both ways ui_apps can be emptied. A profile's OWN
+// ceiling list emptied is held: Clamp reads an empty ceiling list as no opinion, so members could then
+// run any UI app. An OVERLAY list emptied applies: the composition keeps the base's apps and denies
+// them (deny_ui_apps), a real narrowing of the resolved profile.
+func TestGovCovProfileWriteExemptEmptiedUIApps(t *testing.T) {
+	s, _ := govCovServer(t, &govCovStore{})
+	docs := []types.UIApp{{Name: "docs", Port: 8000}}
+	own := govCovStandalone(govCovPID, "p", "pypi.org")
+	own.Ceiling.UIApps = docs
+	p, res := govCovBuilt(t, s, []types.GovernanceProfile{own}, govCovPID,
+		`{"name":"p","ceiling":{"allowed_domains":["pypi.org"],"min_confinement_class":"CC2","ui_apps":[]}}`)
+	if s.profileWriteExempt([]types.GovernanceProfile{own}, p, res) {
+		t.Error("emptying a profile's own ui_apps applied without a second approver")
+	}
+
+	base := govCovStandalone(govCovBase, "base", "pypi.org")
+	base.Ceiling.UIApps = docs
+	all := []types.GovernanceProfile{base, govCovComposedOn(govCovPID, "p", govCovBase, "pypi.org")}
+	p, res = govCovBuilt(t, s, all, govCovPID,
+		`{"name":"p","base_profile_id":"`+govCovBase.String()+`","overlay":{"allowed_domains":["pypi.org"],"ui_apps":[]}}`)
+	if !res.Limits.DenyUIApps || len(res.Ceiling.UIApps) != 1 {
+		t.Fatalf("resolved ui_apps = %+v, deny_ui_apps = %v; want the base's app and the denial", res.Ceiling.UIApps, res.Limits.DenyUIApps)
+	}
+	if !s.profileWriteExempt(all, p, res) {
+		t.Error("an overlay that empties ui_apps, which resolves to a denial, was held")
+	}
+}
+
+// TestGovCovBaseWriteStrandsOnlyADisjointUIAppsOverlay: a base edit that leaves a descendant's
+// non-empty ui_apps sharing nothing with it is refused with 409, while a descendant whose overlay
+// sets ui_apps empty (a denial) composes over any base list.
+func TestGovCovBaseWriteStrandsOnlyADisjointUIAppsOverlay(t *testing.T) {
+	s, _ := govCovServer(t, &govCovStore{})
+	base := govCovStandalone(govCovBase, "base", "pypi.org")
+	base.Ceiling.UIApps = []types.UIApp{{Name: "docs", Port: 8000}}
+	edited := base
+	edited.Ceiling.UIApps = []types.UIApp{{Name: "jupyter", Port: 8888}}
+	for _, c := range []struct {
+		name     string
+		overlay  []types.UIApp
+		wantCode int
+	}{
+		{"an overlay naming the app the base drops", []types.UIApp{{Name: "docs", Port: 8000}}, http.StatusConflict},
+		{"an overlay that empties ui_apps", []types.UIApp{}, 0},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			child := govCovComposedOn(govCovPID, "child", govCovBase, "pypi.org")
+			child.Overlay.UIApps = &c.overlay
+			_, _, err := s.checkGraphWrite(edited, []types.GovernanceProfile{base, child})
+			var refusal *profileWriteError
+			switch {
+			case c.wantCode == 0 && err != nil:
+				t.Fatalf("checkGraphWrite = %v, want no refusal", err)
+			case c.wantCode != 0 && (!errors.As(err, &refusal) || refusal.status != c.wantCode || refusal.reason != reasonGovernanceOverlayUnsatisfiable):
+				t.Fatalf("checkGraphWrite = %v, want %d governance_overlay_unsatisfiable", err, c.wantCode)
+			}
+		})
+	}
+}
+
 func TestGovCovProfileWriteExempt(t *testing.T) {
 	s, _ := govCovServer(t, &govCovStore{})
 	cur := govCovStandalone(govCovPID, "p", "pypi.org", "github.com")

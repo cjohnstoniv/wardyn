@@ -310,8 +310,8 @@ func TestMeetMountsReposUIApps(t *testing.T) {
 
 // TestMeetUIAppsMatchLeq pins that the meet, strict validation, Leq and Clamp agree on
 // a ui_app: an overlay app must serve the path the base app serves (an absent
-// path and "/" are the same path), or it is a widening. A meet that leaves none of
-// the base's apps is refused rather than read by Clamp as no opinion.
+// path and "/" are the same path), or it is a widening. No meet over a base with
+// apps comes out as the empty list Clamp reads as no opinion.
 func TestMeetUIAppsMatchLeq(t *testing.T) {
 	docs, shell := types.UIApp{Name: "docs", Port: 8000}, types.UIApp{Name: "shell", Port: 9999}
 	for _, tc := range []struct {
@@ -355,14 +355,37 @@ func TestMeetUIAppsMatchLeq(t *testing.T) {
 			}
 		})
 	}
-	t.Run("an empty overlay over a base with apps", func(t *testing.T) {
+	// An empty overlay over a base with apps means "no UI apps": the base's list is kept, so a run is
+	// never handed the empty list Clamp reads as no opinion, and the composed limits deny UI apps. The
+	// lists are equal and the denial only narrows, so the result is within the base.
+	t.Run("an empty overlay over a base with apps denies them", func(t *testing.T) {
 		base := Authority{Ceiling: types.RunPolicySpec{MinConfinementClass: types.CC2, UIApps: []types.UIApp{docs}}}
 		ov := overlayOf(types.CeilingOverlay{UIApps: &[]types.UIApp{}})
-		wantOverlayErr(t, ValidateOverlay(base, ov), ReasonOverlayUnsatisfiable, "ui_apps")
+		if err := ValidateOverlay(base, ov); err != nil {
+			t.Fatalf("ValidateOverlay: %v", err)
+		}
+		got, warns, err := ApplyOverlay(base, ov)
+		if err != nil || len(warns) != 0 {
+			t.Fatalf("ApplyOverlay: err = %v, warnings = %v", err, warns)
+		}
+		if !slices.Equal(got.Ceiling.UIApps, base.Ceiling.UIApps) || !got.Limits.DenyUIApps {
+			t.Fatalf("ui_apps = %+v, deny_ui_apps = %v; want the base's list and the denial", got.Ceiling.UIApps, got.Limits.DenyUIApps)
+		}
+		if !Leq(got.Ceiling, base.Ceiling, got.Limits, base.Limits) {
+			t.Error("Leq(ApplyOverlay(base, ov), base) is false for an emptied overlay list")
+		}
+		if run, _ := Clamp(types.RunPolicySpec{UIApps: []types.UIApp{shell}}, got.Ceiling, got.Limits); len(run.UIApps) != 0 {
+			t.Errorf("Clamp read the result as no opinion and kept %+v", run.UIApps)
+		}
+	})
+	t.Run("a non-empty overlay sharing no app with the base is refused", func(t *testing.T) {
+		base := Authority{Ceiling: types.RunPolicySpec{MinConfinementClass: types.CC2, UIApps: []types.UIApp{docs}}}
+		ov := overlayOf(types.CeilingOverlay{UIApps: &[]types.UIApp{shell}})
+		wantOverlayErr(t, ValidateOverlay(base, ov), ReasonOverlayInvalid, "ui_apps")
 		_, _, err := ApplyOverlay(base, ov)
 		wantOverlayErr(t, err, ReasonOverlayUnsatisfiable, "ui_apps")
 		var oe *OverlayError
-		if want := "none of the base's UI apps (docs:8000) is in the overlay (); an empty ui_apps does not remove them, set limits.deny_ui_apps"; !errors.As(err, &oe) || oe.Detail != want {
+		if want := "none of the base's UI apps (docs:8000) is in the overlay (shell:9999); drop ui_apps from the overlay and set limits.deny_ui_apps"; !errors.As(err, &oe) || oe.Detail != want {
 			t.Errorf("detail = %q, want %q", oe.Detail, want)
 		}
 	})

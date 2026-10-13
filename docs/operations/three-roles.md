@@ -98,7 +98,7 @@ derives its role.
 | `workspace_mounts` | none | intersection by source and target; read-only if either side is |
 | `workspace_repos` | none | intersection by identity |
 | `llm_inspection` | none | the side that sets it; both set and different is unsatisfiable |
-| `ui_apps` | none | intersection by name, port and path (an overlay app that serves a different path than the base's is a widening); a base with apps met to none is unsatisfiable, since an empty list is no opinion: use `deny_ui_apps` |
+| `ui_apps` | none | intersection by name, port and path (an overlay app that serves a different path than the base's is a widening); an empty overlay list over a base with apps keeps them and sets `deny_ui_apps`; a non-empty one sharing none is unsatisfiable |
 | `resources` | the deployment's size | smaller, per field |
 | `tool_rules` | an unnamed tool is held | per tool named on either side, and `*`: the stricter effect |
 | `git_push_any_branch` | false | AND |
@@ -136,7 +136,7 @@ derives its role.
 - *A base that moves under an overlay.*
   - A write is strict, but a base edit, or a redeploy that narrows the deployment default, is someone else's act arriving later.
   - At resolve the meet drops what the base no longer covers: the run's `201` lists the drop in `clamp_warnings` (naming only the member's own profile), and an administrator sees it in that profile's `effective.warnings` on `GET /governance`.
-  - If nothing satisfies the base and the overlay together (the deployment default narrowed until their `allowed_methods` are disjoint, or an overlay's `ui_apps` that leave none of the base's, say), the launch and every live door refuse with `403 governance_overlay_unsatisfiable`, audited, until an administrator fixes it.
+  - If nothing satisfies the base and the overlay together (the deployment default narrowed until their `allowed_methods` are disjoint, or an overlay's non-empty `ui_apps` that share none of the base's, say), the launch and every live door refuse with `403 governance_overlay_unsatisfiable`, audited, until an administrator fixes it.
   - A chain that cannot be read, or one that loops or runs deeper than three, fails the same doors with a `500` or `503`.
   - Neither case is ever read as the deployment's policy.
   - An administrator sees which profile failed on `GET /governance` (`effective.error`).
@@ -193,7 +193,7 @@ Stated honestly: profiles narrow by omission — a profile that omits secret gra
   - The harness sign-in run is exempt, as it is at create.
   - `deny_ui_apps` strips `ui_apps` from a run at create, with a `clamp_warnings` sentence and a `dropped` row at target `runs.ui_apps`, and the UI gateway refuses a session into a run created under the profile.
   - An empty ceiling `ui_apps` is still no opinion, so a profile without the limit behaves as before.
-  - So emptying a profile's `ui_apps` is not a narrowing: the update waits for a second approver where one is required, and an overlay that leaves none of its base's apps is refused.
+  - So emptying a profile's own `ui_apps` is not a narrowing: the update waits for a second approver where one is required. An overlay's `ui_apps: []` denies UI apps instead.
   - A super admin is exempt from both at every door, as at create; a security admin is bound.
   - A limit set later reaches new sessions but does not sever ones already open: a terminal, SSH session or UI-app session opened before the limit was set runs until it ends.
   - `deny_ui_apps` does not close an SSH port forward to the app; `deny_interactive` does.

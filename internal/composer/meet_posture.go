@@ -164,7 +164,16 @@ func sameJSON(a, b any) bool {
 
 // meetUIApps keeps the (name, port, path) apps both sides name, the same
 // identity Leq compares. A base without any stays without any.
+//
+// An empty list is no opinion to Clamp, so it can never be the result over a base that names apps. An
+// overlay that sets ui_apps empty there means "no UI apps": the base's list is kept and the composed
+// limits deny UI apps (deny_ui_apps), which only narrows. A non-empty overlay sharing no app with
+// the base has no representable result, as a disjoint allowed_methods pair has none, and is refused.
 func (m *meeter) meetUIApps(base, ov []types.UIApp) []types.UIApp {
+	if len(ov) == 0 && len(base) > 0 {
+		m.out.Limits.DenyUIApps = true
+		return base
+	}
 	var out []types.UIApp
 	for _, o := range ov {
 		i := slices.IndexFunc(base, func(b types.UIApp) bool { return b.Name == o.Name && b.Port == o.Port })
@@ -184,10 +193,8 @@ func (m *meeter) meetUIApps(base, ov []types.UIApp) []types.UIApp {
 	slices.SortFunc(out, func(a, b types.UIApp) int {
 		return cmp.Or(strings.Compare(a.Name, b.Name), cmp.Compare(a.Port, b.Port))
 	})
-	// An empty list is no opinion to Clamp, so a base that names apps met to none has no representable
-	// result, as a disjoint allowed_methods pair has none: limits.deny_ui_apps is what removes them.
 	if len(base) > 0 && len(out) == 0 {
-		m.fail(ReasonOverlayUnsatisfiable, "ui_apps", "none of the base's UI apps (%s) is in the overlay (%s); an empty ui_apps does not remove them, set limits.deny_ui_apps", uiAppList(base), uiAppList(ov))
+		m.fail(ReasonOverlayUnsatisfiable, "ui_apps", "none of the base's UI apps (%s) is in the overlay (%s); drop ui_apps from the overlay and set limits.deny_ui_apps", uiAppList(base), uiAppList(ov))
 	}
 	return out
 }
