@@ -83,7 +83,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   is refused for every decider: decide such a run's pending approvals with the admin token, or let the run time out
   and launch it again.
 - Config keys that hold a secret word (for example `CLIENT_SECRET`, `SECRET_FILE`, `*_IMAGE_PULL_SECRET`) are now
-  refused in templates and component config; move such values to a secret reference.
+  refused in templates; move such values to a secret reference. Component config still accepts them.
 - Proxy compatibility: a run carrying `push_rule_base` or `harness_credentials` keys needs a proxy that reads
   them. An older proxy refuses them under strict decode, so upgrade proxies together with wardynd.
 - Migration `0162_run_queue` adds the QUEUED run state, `admitted_at` and the `run_queue` table; nothing changes
@@ -1031,6 +1031,13 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `revive_ceiling_denies_azure_cli`) and the run's proxy is left as it was. Before, the revive replaced the proxy
   with a configuration it could not load and the run lost all egress. A revive also loads the new proxy
   configuration before it touches the old proxy (`revive_config_does_not_load`).
+- Key domains: deleting a person's own assignment is refused (409 `key_domain_ambiguous_membership`) when their
+  groups are assigned to different domains, because their next key would then be refused. The boot and rewrap remedy
+  and the offboarding guide now say which call destroys which key: `DELETE /people/{principal}/credentials` destroys
+  the credential key only, and the audit-seal key is destroyed only by the irreversible `audit_personal_fields`
+  erasure scope.
+- A guarded secret delete (`If-Match` revision) no longer removes a row that was replaced while the delete waited.
+  Building a run's masker no longer slows with the square of the number of stored credential values.
 
 
 ## [0.8.9] — 2026-10-09
