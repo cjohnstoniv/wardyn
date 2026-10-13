@@ -157,13 +157,15 @@ export function BarrierCompareTable({
   );
 }
 
-const MARK_DISC = { yes: "bg-success-subtle", no: "bg-danger-subtle", caveat: "bg-warning-subtle" } as const;
+// Make's discs are opaque (--emerald-soft etc.): the subtle tint over the card colour, so the cell's wash does not
+// show through.
+const MARK_DISC = { yes: "var(--success-subtle)", no: "var(--danger-subtle)", caveat: "var(--warning-subtle)" } as const;
 
 // A caveat names its residual risk as text a screen reader reads, not only as a
 // hover title.
 function Mark({ mark, cc }: { mark: Parameters<typeof MarkCell>[0]["mark"]; cc: ConfinementClass }) {
   return (
-    <span className={cn("mx-auto grid size-[26px] place-items-center rounded-full", MARK_DISC[mark])}>
+    <span className="mx-auto grid size-[26px] place-items-center rounded-full bg-card" style={{ backgroundImage: `linear-gradient(${MARK_DISC[mark]}, ${MARK_DISC[mark]})` }}>
       <MarkCell mark={mark} cc={cc} caveatPrefix={CAVEAT_PREFIX} />
       {mark === "caveat" && (
         <span className="sr-only">

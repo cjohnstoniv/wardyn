@@ -73,7 +73,7 @@ export function TemplateRow({
       </div>
       <div className="min-w-0 space-y-1">
         <CellLabel>{T.COL_AVAILABLE}</CellLabel>
-        <Chip>{scopeLabel(t)}</Chip>
+        <Chip tone={t.scope === "person" ? "primary" : "neutral"}>{scopeLabel(t)}</Chip>
         {owner && <p className="text-xs text-muted-foreground">{owner}</p>}
       </div>
       <div className="min-w-0">

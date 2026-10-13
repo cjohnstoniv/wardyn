@@ -154,11 +154,11 @@ describe("Harnesses step: Autonomous", () => {
     expect(intentNow().startup).toBeUndefined();
   });
 
-  it("picks its one harness with Add a harness, and the select swaps it", async () => {
+  it("a new Autonomous task gets the roster's first harness as Make's Harness 1, and the select swaps it", async () => {
     const user = userEvent.setup();
     show(AUTONOMOUS);
-    await user.click(await screen.findByRole("button", { name: NR_HARNESSES.ADD_HARNESS }));
-    expect(intentNow().workload?.agent).toBe("claude-code");
+    await waitFor(() => expect(intentNow().workload?.agent).toBe("claude-code"));
+    expect(intentNow().startup).toBeUndefined();
     await user.selectOptions(screen.getByRole("combobox", { name: NR_HARNESSES.HARNESS_LABEL }), "codex-cli");
     expect(intentNow().tools?.map((t) => t.id)).toEqual(["codex-cli"]);
     expect(intentNow().workload?.agent).toBe("codex-cli");
@@ -175,6 +175,15 @@ describe("Harnesses step: Autonomous", () => {
     expect(await screen.findByText(NR_HARNESSES.TASK_ERROR)).toBeInTheDocument();
     setField(task, "x");
     expect(screen.queryByText(NR_HARNESSES.TASK_ERROR)).not.toBeInTheDocument();
+  });
+});
+
+describe("Harnesses step: Make's Harness 1", () => {
+  it("a new Interactive agent task gets the roster's first harness, started, as in Make", async () => {
+    show(INTERACTIVE);
+    expect(await screen.findByRole("switch", { name: NR_HARNESSES.START_IN_HARNESS })).toBeChecked();
+    expect(intentNow().tools?.map((t) => t.id)).toEqual(["claude-code"]);
+    expect(intentNow().startup).toEqual({ kind: "harness", tool: "claude-code" });
   });
 });
 

@@ -49,11 +49,13 @@ export function HarnessCard({ index, id, roster, mode, others, removable, starte
   const taskMissing = mode === "autonomous" && flagged && !text.trim();
 
   return (
-    <section aria-label={NR_HARNESSES.EYEBROW(index + 1)} className="flex flex-col gap-4 rounded-lg border border-border p-4">
-      <div className="flex items-start justify-between gap-3">
-        <div className="flex flex-col gap-1">
-          <span className="label-eyebrow">{NR_HARNESSES.EYEBROW(index + 1)}</span>
-          <strong>{name}</strong>
+    // Make's .harness-card (snapshot index.css:91, 286-292, 450): a ruled head with a teal eyebrow, then each
+    // behaviour block under its own rule.
+    <section aria-label={NR_HARNESSES.EYEBROW(index + 1)} className="flex flex-col rounded-[11px] border border-border bg-card p-[18px]">
+      <div className="mb-[17px] flex items-start justify-between gap-3 border-b border-border pb-3.5">
+        <div className="flex flex-col gap-0.5">
+          <span className="mb-[3px] text-meta font-semibold tracking-[0.12em] text-primary uppercase">{NR_HARNESSES.EYEBROW(index + 1)}</span>
+          <strong className="text-sm">{name}</strong>
         </div>
         <Button type="button" variant="ghost" disabled={!removable} onClick={onRemove}>{NR_SHARED.REMOVE}</Button>
       </div>
@@ -70,20 +72,20 @@ export function HarnessCard({ index, id, roster, mode, others, removable, starte
         <p id={`${selectId}-hint`} className="text-xs leading-snug text-muted-foreground">{harnessHint(roster, id)}</p>
       </div>
       {mode === "optional" && (
-        <div className="flex items-center gap-2 text-sm">
+        <div className="mt-4 flex items-center gap-2 border-t border-border pt-4 text-sm">
           <Chip>{NR_SHARED.OPTIONAL}</Chip>
           <span>{NR_HARNESSES.OPTIONAL_BEHAVIOUR}</span>
         </div>
       )}
       {mode === "interactive" && (
-        <div className="flex flex-col gap-3">
-          <div className="flex items-center gap-2 text-sm">
+        <div className="mt-4 flex flex-col gap-3.5 border-t border-border pt-4">
+          <div className="flex items-center gap-[9px] text-[11px] text-muted-foreground">
             <Switch checked={started} label={NR_HARNESSES.START_IN_HARNESS} onChange={onStart} />
             <span aria-hidden="true">{NR_HARNESSES.START_IN_HARNESS}</span>
           </div>
           {started && (
             <div className="flex flex-col gap-2">
-              <Label htmlFor={textId}>{NR_HARNESSES.STARTING_PROMPT} <Chip>{NR_SHARED.OPTIONAL}</Chip></Label>
+              <Label htmlFor={textId} className="w-full justify-between">{NR_HARNESSES.STARTING_PROMPT} <Chip>{NR_SHARED.OPTIONAL}</Chip></Label>
               <Textarea id={textId} value={text} placeholder={NR_HARNESSES.STARTING_PROMPT_PLACEHOLDER} aria-describedby={`${textId}-hint`} onChange={(e) => onText(e.target.value)} />
               <p id={`${textId}-hint`} className="text-xs leading-snug text-muted-foreground">{NR_HARNESSES.STARTING_PROMPT_HELP}</p>
             </div>
@@ -91,8 +93,8 @@ export function HarnessCard({ index, id, roster, mode, others, removable, starte
         </div>
       )}
       {mode === "autonomous" && (
-        <div className="flex flex-col gap-2">
-          <Label htmlFor={textId}>{NR_HARNESSES.TASK_LABEL} <Chip>{NR_SHARED.REQUIRED}</Chip></Label>
+        <div className="mt-4 flex flex-col gap-2 border-t border-border pt-4">
+          <Label htmlFor={textId} className="w-full justify-between">{NR_HARNESSES.TASK_LABEL} <Chip>{NR_SHARED.REQUIRED}</Chip></Label>
           <Textarea
             id={textId}
             value={text}
