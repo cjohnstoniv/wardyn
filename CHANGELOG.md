@@ -824,6 +824,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- A refused attach or UI-gateway ticket, a UI enter on the wrong host and a refused SSH key are audited at a bounded
+  rate, sharing the authentication-failure limit; rows past the burst are counted in
+  `wardyn_auth_failed_suppressed_total`.
 - `wardyn template save -` reads stdin again: `template save` takes `--format`.
 - A run a laptop submits with a device credential and no person is refused at launch when a per-person Azure DevOps
   connection covers one of its repositories (#731).
