@@ -14,6 +14,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/store"
@@ -124,16 +125,15 @@ func TestPG_LaunchIntentEraseLinearizesWithLaunches(t *testing.T) {
 	}()
 	waitAdvisoryWaiters(ctx, t, capHold, 2) // the erase waits for that launch
 	// The uncapped path (no WARDYN_MAX_CONCURRENT_RUNS) meets the queued erase too: it starts at once, with no intent.
-	// It runs on its own goroutine: this one holds capHold, and a second pool acquire here would trip the nested-acquire guard.
-	uncappedDone := make(chan created, 1)
-	go func() {
-		got, err := st.CreateRun(ctx, intentRun("alice", `{"agent":"claude-code","task":"uncapped"}`))
-		uncappedDone <- created{got, err}
-	}()
-	u := <-uncappedDone
-	uncapped := u.run
-	if u.err != nil || uncapped.LaunchIntent != nil {
-		t.Fatalf("CreateRun beside a queued erase = %v, kept %v; want started with no intent", u.err, uncapped.LaunchIntent != nil)
+	// Through a store on a pool of its own: this goroutine holds capHold, and a second acquire from its pool trips the nested-acquire guard.
+	other, err := pgxpool.New(ctx, pool.Config().ConnString())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer other.Close()
+	uncapped, err := store.NewPG(other).CreateRun(ctx, intentRun("alice", `{"agent":"claude-code","task":"uncapped"}`))
+	if err != nil || uncapped.LaunchIntent != nil {
+		t.Fatalf("CreateRun beside a queued erase = %v, kept %v; want started with no intent", err, uncapped.LaunchIntent != nil)
 	}
 	during := intentRun("alice", `{"agent":"claude-code","task":"during"}`)
 	duringDone := launch(during)
