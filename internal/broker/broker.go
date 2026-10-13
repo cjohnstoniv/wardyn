@@ -281,8 +281,9 @@ type Tx interface {
 }
 
 // Broker is the token broker. It is safe for concurrent use; all mutating
-// state lives in Postgres and every mint is serialized by SELECT ... FOR UPDATE
-// on the grant+approval rows.
+// state lives in Postgres and every approval burn is serialized by SELECT ...
+// FOR UPDATE on the grant+approval rows. Issuance runs before that lock, so a
+// losing contender's freshly minted credential is discarded.
 type Broker struct {
 	db       TxBeginner
 	secrets  secretstore.Store
@@ -403,8 +404,8 @@ func (b *Broker) MintForGrant(ctx context.Context, caller *identity.Claims, gran
 	if !spec.RequiresApproval {
 		// Auto-mintable: no approval row exists or is created, so there is no
 		// single-use guard — the grant is re-mintable BY DESIGN (credential-
-		// helper refresh semantics). Every mint is serialized by the grant-row
-		// FOR UPDATE lock, capped at the <=1h TTL, and individually audited.
+		// helper refresh semantics). Each mint commits under the grant-row FOR
+		// UPDATE lock, is capped at the <=1h TTL, and is individually audited.
 		return b.mint(ctx, caller, grantID, uuid.Nil)
 	}
 
