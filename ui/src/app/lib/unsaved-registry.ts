@@ -15,17 +15,28 @@
 import * as React from "react";
 
 const registry = new Map<string, () => string>();
+// Where each editor's draft still lives: a move between two such places (one form's own steps) leaves nothing.
+const scopes = new Map<string, (path: string) => boolean>();
 
 /** Registers `getText` under `id`; a second call with the same `id`
  *  overwrites the first — one editor, one entry. Returns the unregister,
  *  which is IDENTITY-CHECKED: it only deletes the entry if `id` still maps
  *  to THIS `getText` — a stale unregister from an overwritten registration
  *  (e.g. React re-invoking an effect) must never delete a newer one. */
-export function registerUnsaved(id: string, getText: () => string): () => void {
+export function registerUnsaved(id: string, getText: () => string, within?: (path: string) => boolean): () => void {
   registry.set(id, getText);
+  if (within) scopes.set(id, within);
+  else scopes.delete(id);
   return () => {
-    if (registry.get(id) === getText) registry.delete(id);
+    if (registry.get(id) !== getText) return;
+    registry.delete(id);
+    scopes.delete(id);
   };
+}
+
+/** True when every unsaved editor's draft lives on at `path` (a move within its own form), so nothing is lost. */
+export function unsavedStaysAt(path: string): boolean {
+  return registry.size > 0 && [...registry.keys()].every((id) => scopes.get(id)?.(path) === true);
 }
 
 /** null when nothing is registered (nothing unsaved anywhere); otherwise
@@ -42,19 +53,21 @@ export function unsavedSnapshot(): string | null {
  *  passing a fresh closure every render (the common case: it closes over the
  *  latest draft) doesn't re-register on every keystroke — only `id`/`dirty`
  *  changing does. */
-export function useRegisterUnsaved(id: string, dirty: boolean, getText: () => string): () => void {
+export function useRegisterUnsaved(id: string, dirty: boolean, getText: () => string, within?: (path: string) => boolean): () => void {
   const registration = React.useMemo(() => ({ id, release: () => {} }), [id]);
   const getTextRef = React.useRef(getText);
+  const withinRef = React.useRef(within);
   // Updated in an EFFECT, not during render: a ref write during render is a
   // side effect React doesn't know about (breaks under concurrent rendering,
   // and is the one difference from doing this inline that would otherwise
   // make this file and its #488 counterpart diverge).
   React.useEffect(() => {
     getTextRef.current = getText;
+    withinRef.current = within;
   });
   React.useEffect(() => {
     if (!dirty) return undefined;
-    const release = registerUnsaved(registration.id, () => getTextRef.current());
+    const release = registerUnsaved(registration.id, () => getTextRef.current(), (path) => withinRef.current?.(path) === true);
     registration.release = release;
     return release;
   }, [dirty, registration]);
