@@ -211,7 +211,7 @@ func (s *Server) memberDriveDoorRefusal(r *http.Request, ceiling governanceCeili
 		return nil
 	}
 	msg := memberDrivesDeniedByProfileMsg(ceiling.Profile.Name)
-	d := authz.Deny(authz.ReasonGovernanceProfile, "drives.member.create", msg)
+	d := authz.Deny(authz.ReasonGovernanceProfile, "drives.member.create", msg).WithPolicy(s.ceilingPolicy(r.Context(), ceiling))
 	return &runRefusal{status: http.StatusForbidden, decision: &d,
 		body: errorBody{Error: msg, Reason: reasonMemberDrivesDeniedByProfile}}
 }

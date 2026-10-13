@@ -186,3 +186,30 @@ func hasMountObject(calls []types.DriveMount, object string) bool {
 	}
 	return false
 }
+
+// TestMemberDriveErasureReachesTheStoredOwnerSpelling: create stores the
+// canonical form of the signed-in sub (session and API token both publish it
+// as the OIDC human), and the erasure matches the same form, so a sub with
+// capitals or spaces is reached however the admin spells the person.
+func TestMemberDriveErasureReachesTheStoredOwnerSpelling(t *testing.T) {
+	const sub = "Sub-Mixed-Case"
+	for _, typed := range []string{sub, "sub-mixed-case"} {
+		t.Run(typed, func(t *testing.T) {
+			st := newMemberDriveStore()
+			rn := &memberDriveRunner{reclaimRunner: reclaimRunner{outcome: runner.DriveReclaimDeleted}}
+			srv, _ := erasureDriveServer(st, rn)
+			if w := createMemberDrive(srv, personCtx(sub), "Notes"); w.Code != http.StatusCreated {
+				t.Fatalf("create = %d %s", w.Code, w.Body.String())
+			}
+			if got := st.owned(""); len(got) != 1 || got[0].OwnerSubject != types.CanonicalUserSubject(sub) {
+				t.Fatalf("stored drives = %+v, want one owned by the canonical sub", got)
+			}
+			if code, body := eraseMemberDrivesAs(srv, typed); code != http.StatusOK {
+				t.Fatalf("erasure of %q = %d %s, want 200", typed, code, body)
+			}
+			if len(st.owned("")) != 0 {
+				t.Errorf("erasure of %q left the drive", typed)
+			}
+		})
+	}
+}
