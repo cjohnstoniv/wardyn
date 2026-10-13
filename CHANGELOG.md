@@ -1058,13 +1058,24 @@ and does not yet follow semantic versioning (interfaces are not stable).
   only GitHub access is a declared clone beside a GitHub App grant. A model provider or Git API host given as an
   IPv6 literal on port 443 is reached; before, every request to it failed with 502.
 - Killing a run now stops its image build, including when another replica serves the kill; the build's audit row is
-  still written.
+  still written. A run whose state cannot be read just before its image build starts is failed instead of built, so a
+  brief database error fails a pending run.
 - A run whose sandbox reference cannot be saved is stopped and failed instead of running untracked.
 - A kill recovered by the sweep now settles for a run on an offline or revoked self-hosted runner; its `run.kill`
   row carries `sandbox_stop` = `queued` or `runner_revoked`, and neither says the sandbox is gone.
 - A resumed run restarts its quiet clock, so the idle-pause sweep no longer freezes it again straight away.
 - On a wrapped (bring-your-own) image with recording on, the task now runs after the image selftest; before, the
   recorder refused to overwrite the selftest's recording, the task did not run and the run ended COMPLETED.
+- A session log longer than 64 MiB (the fallback recording used when asciinema is absent) is no longer lost:
+  wardyn-rec streams it and uploads its first part with a truncation note. Logs up to 64 MiB still upload complete;
+  the rest of a longer log is not uploaded.
+- Revoking a self-hosted runner ends the runs still waiting for it even when the revoke's own pass could not finish:
+  the queue sweep retries from the runner's revoked state.
+- A push refused under push content rules because a ref points at a commit the request does not carry (for example a
+  branch created at a commit the forge already has) now names each such ref and no longer advises `git fetch
+  --unshallow`, which did not help; it is still refused.
+- A credential mint whose value cannot be recorded for output masking now fails without using up its single-use
+  approval, and a GitHub token minted for it is revoked. Before, the approval was spent and nothing was delivered.
 
 
 ## [0.8.9] — 2026-10-09
