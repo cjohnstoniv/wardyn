@@ -5,6 +5,8 @@ package api
 
 import (
 	"context"
+	"errors"
+	"log/slog"
 	"sync"
 
 	"github.com/google/uuid"
@@ -44,9 +46,11 @@ func (c *inflightCreates) cancel(runID uuid.UUID) {
 // holds in creates. The returned context is for the builder alone and carries the build's usual
 // deadline; recording and compensating the build stay on ctx. The run is re-read after the
 // registration, because a kill that landed before it found nothing to cancel: live is false for a
-// run that is already terminal, whose build must not start. Cancelling asks the builder to stop;
-// what a stopped build left on the host is the builder's and the image sweep's to remove.
-func (s *Server) trackRunBuild(ctx context.Context, runID uuid.UUID) (buildCtx context.Context, end func(), live bool) {
+// run that is already terminal, whose build must not start. A run that cannot be read may be one
+// of those, so that is errRunUnreadBeforeBuild, and the caller fails the run rather than build or
+// dispatch it. Cancelling asks the builder to stop; what a stopped build left on the host is the
+// builder's and the image sweep's to remove.
+func (s *Server) trackRunBuild(ctx context.Context, runID uuid.UUID) (buildCtx context.Context, end func(), live bool, err error) {
 	tracked, untrack := s.runBuilds.track(ctx, runID)
 	buildCtx, cancel := context.WithTimeout(tracked, imageBuildTimeout)
 	end = func() {
@@ -54,11 +58,22 @@ func (s *Server) trackRunBuild(ctx context.Context, runID uuid.UUID) (buildCtx c
 		untrack()
 	}
 	if s.cfg.ImageBuilder == nil {
-		return buildCtx, end, true // nothing can build, so there is no stale work to refuse
+		return buildCtx, end, true, nil // nothing can build, so there is no stale work to refuse
 	}
-	if run, err := s.cfg.Store.GetRun(ctx, runID); err == nil && isTerminalRunState(run.State) {
+	run, err := s.cfg.Store.GetRun(ctx, runID)
+	if err != nil {
 		end()
-		return buildCtx, end, false
+		slog.ErrorContext(ctx, "wardynd: the run could not be read before its image build; failing it",
+			slog.String("run_id", runID.String()), slog.Any("err", err))
+		return buildCtx, end, false, errRunUnreadBeforeBuild
 	}
-	return buildCtx, end, true
+	if isTerminalRunState(run.State) {
+		end()
+		return buildCtx, end, false, nil
+	}
+	return buildCtx, end, true, nil
 }
+
+// errRunUnreadBeforeBuild is trackRunBuild's answer for a run it could not read. Its text is the
+// member-visible failure hint, so the store's own error goes to the log instead.
+var errRunUnreadBeforeBuild = errors.New("the run's state could not be read before its image build")
