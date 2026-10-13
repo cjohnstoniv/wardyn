@@ -18,6 +18,7 @@ import { NR_SHARED } from "../../../../wardyn/copy/new-run/shared";
 import { workspaces } from "../../../../../lib/api/workspaces";
 import { useK8sRunner } from "../../../../../lib/use-k8s-runner";
 import { intentToWire } from "../../draft/intent-to-wire";
+import type { RunAttachment } from "../../../../../lib/types/new-run-contract";
 import type { RunIntent } from "../../draft/run-intent";
 import { attachDrive, chooseNothing, mibToGibText, parseGiB, setStartsAtDrive, setStartSubpath } from "../../lenses/files-lens";
 import { stepIssues } from "../../lenses/local-issues";
@@ -45,6 +46,22 @@ const FILES_CHOICE = "files_choice_required";
 /** The control a held Continue focuses while nothing is added or chosen (files_choice_required). */
 const ADD_ID = "nr-files-choice";
 const list = () => workspaces.listWorkspaces();
+
+/** The card an attachment belongs to: a repository or drive by its own ids, a folder by its place among its workspace's folders. */
+function cardKey(a: RunAttachment, all: readonly RunAttachment[]): string {
+  if (a.kind === "drive") return `drive:${a.drive_id ?? ""}`;
+  if (a.kind === "repository") return `${a.workspace_id}/${a.repo}`;
+  return `folder:${a.workspace_id}:${all.filter((x) => x.kind === "folder" && x.workspace_id === a.workspace_id).indexOf(a)}`;
+}
+
+/** The server's mount rows in the cards' order; a row with no card keeps its place after them. */
+function inCardOrder(attachments: readonly RunAttachment[], items: readonly FileItem[]): RunAttachment[] {
+  const at = (a: RunAttachment) => {
+    const i = items.findIndex((x) => x.key === cardKey(a, attachments));
+    return i < 0 ? items.length : i;
+  };
+  return [...attachments].sort((a, b) => at(a) - at(b));
+}
 
 /** Whether the person has chosen nothing for the step yet, the only time a default may be chosen for them. */
 export const nothingChosen = (intent: RunIntent): boolean =>
@@ -107,8 +124,11 @@ export function FilesStep({ go, createUserDrive }: NewRunScreenProps & Pick<AddD
       const next = apply(i);
       if (mode === "edit" || fileItems(next, src).some((x) => x.starts)) return next;
       // The first thing added is where the run starts, until the person moves it.
-      const added = fileItems(next, src).find((x) => x.key === saved.key);
-      return added ? startIn(added, legacyId)(next) : next;
+      const after = fileItems(next, src);
+      const added = after.find((x) => x.key === saved.key);
+      // A folder that cannot be a start brings its workspace's first folder, which can.
+      const first = added?.canStart ? added : after.find((x) => x.canStart && x.workspaceId === added?.workspaceId);
+      return first ? startIn(first, legacyId)(next) : next;
     });
     if (mode === "add") setExpanded((e) => [...e, saved.key]);
     const folderWs = folders.find((f) => f.key === saved.key)?.workspaceId;
@@ -123,7 +143,7 @@ export function FilesStep({ go, createUserDrive }: NewRunScreenProps & Pick<AddD
       const next = removeItem(item, src, foldersAdded)(i);
       if (!item.starts) return next;
       // The start moves to the first item left.
-      const first = [...fileItems(next, src)].sort(byAdded)[0];
+      const first = [...fileItems(next, src)].sort(byAdded).find((x) => x.canStart);
       return first ? startIn(first, legacyId)(next) : next;
     });
     if (item.starts) setSubText("");
@@ -216,8 +236,8 @@ export function FilesStep({ go, createUserDrive }: NewRunScreenProps & Pick<AddD
           )}
         </FilesGroup>
         {attempted && empty && (
-          <p className="flex items-center gap-1.5 text-sm text-danger">
-            <TriangleAlert className="size-3.5" aria-hidden="true" />
+          <p className="flex items-start gap-1.5 rounded-lg border border-[color-mix(in_srgb,var(--danger)_40%,var(--border))] bg-danger-subtle px-[13px] py-[11px] text-sm text-danger">
+            <TriangleAlert className="mt-0.5 size-3.5 flex-none" aria-hidden="true" />
             {NR_FILES.CHOOSE_FILES}
           </p>
         )}
@@ -231,7 +251,7 @@ export function FilesStep({ go, createUserDrive }: NewRunScreenProps & Pick<AddD
           }}
           onStart={(item) => edit(startIn(item, legacyId))}
         />
-        <MountMap attachments={attachments} size={sizeText} />
+        <MountMap attachments={inCardOrder(attachments, items)} size={sizeText} />
         <FilesSummary
           tone={settled ? "done" : attempted ? "error" : "prompt"}
           text={summaryText({

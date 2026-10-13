@@ -94,6 +94,8 @@ export interface FileItem {
   storedOn: string[];
   hostPath?: string;
   starts: boolean;
+  /** The run can start here. A workspace start with no repository opens its first folder, so no other folder can be one. */
+  canStart: boolean;
   workspaceId?: string;
   repo?: string;
   driveId?: string;
@@ -125,7 +127,11 @@ export function fileItems(intent: RunIntent, src: ItemSources): FileItem[] {
       const served = src.attachments.find((a) => a.kind === "repository" && a.workspace_id === ws && a.repo === r.repo)?.target;
       out.push({
         key: r.key, kind: "repo", name: r.name, path: (alone && entry.target) || served || r.path, branch: ref ?? r.ref,
-        readOnly: false, locked: false, pathEditable: alone, storedOn: [], starts: startsAt(intent, ws, r.repo, r.siblings.length),
+        readOnly: false, locked: false, pathEditable: alone, storedOn: [],
+        // The server opens a workspace start with no repository named in the workspace's first target, and folders
+        // come before repositories: a repository is the start only when named, or when no folder comes with it.
+        starts: f?.repo ? startsAt(intent, ws, r.repo, r.siblings.length) : !folders.length && startsAt(intent, ws, r.repo, r.siblings.length),
+        canStart: true,
         workspaceId: ws, repo: r.repo, siblings: r.siblings,
       });
     }
@@ -137,7 +143,7 @@ export function fileItems(intent: RunIntent, src: ItemSources): FileItem[] {
         key: folder.key, kind: "folder", name: folder.name, path: (alone && entry.target) || served || folder.defaultPath,
         readOnly: !folder.writable || entry.read_only === true, locked: !folder.writable, pathEditable: alone,
         storedOn: [NR_FILES.FAMILY_HOST_FOLDER], hostPath: folder.hostPath,
-        starts: folder.first && f?.attachment === ws && !f.repo && !f.drive_id && rows.length === 0, workspaceId: ws,
+        starts: folder.first && f?.attachment === ws && !f.repo && !f.drive_id, canStart: folder.first, workspaceId: ws,
         removeBlocked: rows.length ? NR_FILES.FOLDER_WITH_REPOS(folder.workspaceName) : undefined,
       });
     }
@@ -149,7 +155,7 @@ export function fileItems(intent: RunIntent, src: ItemSources): FileItem[] {
       key: legacy ? `drive:${legacy.id}` : LEGACY_KEY, kind: "userDrive", name: legacy?.name ?? NR_FILES.KIND_USER_DRIVE,
       path: legacy?.target ?? src.attachments.find((a) => a.kind === "drive" && !a.drive_id)?.target,
       readOnly: intent.drive.read_only === true || legacy?.writable === false, locked: legacy?.writable === false, pathEditable: false,
-      storedOn: legacy ? driveChips(legacy) : [], starts: f?.attachment === START_FOLDER_DRIVE, driveId: legacy?.id,
+      storedOn: legacy ? driveChips(legacy) : [], starts: f?.attachment === START_FOLDER_DRIVE, canStart: true, driveId: legacy?.id,
     });
   }
   for (const a of intent.drives ?? []) {
@@ -158,7 +164,7 @@ export function fileItems(intent: RunIntent, src: ItemSources): FileItem[] {
     out.push({
       key: `drive:${a.drive_id}`, kind: d ? driveKind(d) : "userDrive", name: d?.name ?? served?.name ?? a.drive_id,
       path: d?.target ?? served?.target, readOnly: a.read_only === true || d?.writable === false, locked: d?.writable === false,
-      pathEditable: false, storedOn: d ? driveChips(d) : [], starts: f?.drive_id === a.drive_id, driveId: a.drive_id,
+      pathEditable: false, storedOn: d ? driveChips(d) : [], starts: f?.drive_id === a.drive_id, canStart: true, driveId: a.drive_id,
     });
   }
   return out;

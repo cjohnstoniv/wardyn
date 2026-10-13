@@ -10,6 +10,7 @@
 import * as React from "react";
 import { Input } from "../../../../ui/input";
 import { Label } from "../../../../ui/label";
+import { Popover, PopoverContent, PopoverTrigger } from "../../../../ui/popover";
 import { Chip } from "../../../../wardyn/primitives";
 import { InfoTip } from "../../../../wardyn/info-tip";
 import { NR_FILES } from "../../../../wardyn/copy/new-run/files";
@@ -60,15 +61,19 @@ const ENFORCEMENT = {
   none: { word: NR_FILES.NOT_ENFORCED, tip: NR_FILES.NOT_ENFORCED_TIP, label: NR_FILES.NOT_ENFORCED_ARIA, tone: "warning" },
 } as const;
 
-/** W1: one chip per enforcement word, with its tooltip; unknown says nothing. */
+/** W1: one chip per enforcement word; the chip itself opens its tooltip on a tap. Unknown says nothing. */
 function Enforcement({ facts }: { facts: MainDriveFacts }) {
   if (facts.enforcement === "unknown") return null;
   const { word, tip, label, tone } = ENFORCEMENT[facts.enforcement];
   return (
-    <span className="inline-flex items-center gap-1">
-      <Chip tone={tone}>{facts.basis === "runner_asserted" ? `${word} ${NR_FILES.REPORTED_BY_RUNNER}` : word}</Chip>
-      <InfoTip label={label}>{tip}</InfoTip>
-    </span>
+    <Popover>
+      <PopoverTrigger asChild>
+        <button type="button" aria-label={label} className="rounded-full outline-none focus-visible:ring-[3px] focus-visible:ring-ring">
+          <Chip tone={tone}>{facts.basis === "runner_asserted" ? `${word} ${NR_FILES.REPORTED_BY_RUNNER}` : word}</Chip>
+        </button>
+      </PopoverTrigger>
+      <PopoverContent side="top" align="end" className="w-[250px] text-sm">{tip}</PopoverContent>
+    </Popover>
   );
 }
 
@@ -130,14 +135,15 @@ export function MainDriveSection({ view, size }: { view: MainDriveView; size: Re
       <div className="grid gap-3 px-[15px] py-3.5">
         <div className="grid grid-cols-[70px_125px_minmax(175px,1fr)_auto] items-center gap-2.5 text-sm max-[520px]:grid-cols-[1fr_auto]">
           <Label htmlFor={SIZE_INPUT_ID} className="font-medium text-muted-foreground max-[520px]:col-span-full">{NR_FILES.SIZE_LABEL}</Label>
-          <span className="relative flex items-center">
+          {/* At phone width the row stacks: label, the input across the row, the cap, then the chip. */}
+          <span className="relative flex items-center max-[520px]:col-span-full">
             <Input
               id={SIZE_INPUT_ID}
               type="number"
               inputMode="decimal"
               min={0}
               step={0.1}
-              className="pr-10"
+              className="h-[42px] pr-10"
               value={size.text}
               aria-invalid={showError || undefined}
               aria-describedby={showError ? errorId : undefined}
@@ -146,8 +152,8 @@ export function MainDriveSection({ view, size }: { view: MainDriveView; size: Re
             />
             <span aria-hidden="true" className="pointer-events-none absolute right-3 text-sm text-muted-foreground">{UNIT}</span>
           </span>
-          <span className="text-muted-foreground">{view.capMib !== undefined && NR_FILES.UP_TO(mibToGibText(view.capMib, "floor"))}</span>
-          <span>{view.facts && <Enforcement facts={view.facts} />}</span>
+          <span className="text-muted-foreground max-[520px]:col-span-full">{view.capMib !== undefined && NR_FILES.UP_TO(mibToGibText(view.capMib, "floor"))}</span>
+          <span className="max-[520px]:col-span-full">{view.facts && <Enforcement facts={view.facts} />}</span>
         </div>
         {size.note && <p className="text-sm text-muted-foreground">{size.note}</p>}
         {showError && <p id={errorId} className="text-sm text-danger">{NR_FILES.SIZE_ERROR}</p>}
@@ -157,13 +163,14 @@ export function MainDriveSection({ view, size }: { view: MainDriveView; size: Re
             <strong className="text-sm leading-[1.45] font-semibold">{life}</strong>
           </div>
         )}
-        <div className="flex items-center gap-2 border-t border-border pt-[11px] text-sm opacity-60">
-          <label className="flex items-center gap-2 font-semibold">
-            <input type="checkbox" disabled />
-            {NR_FILES.REUSE_LABEL}
-          </label>
-          <Chip>{NR_SHARED.COMING_SOON}</Chip>
-          <InfoTip label={NR_FILES.REUSE_ARIA}>{NR_FILES.REUSE_TIP}</InfoTip>
+        {/* Make's rule row: a 150 px column holding the checkbox, its label and Coming soon, then the tooltip. */}
+        <div className="grid grid-cols-[150px_1fr] items-start gap-3 border-t border-border pt-[11px] text-sm max-[520px]:grid-cols-1">
+          <span className="flex flex-wrap items-center gap-2 opacity-60">
+            <input id="nr-reuse-drive" type="checkbox" disabled className="size-4" />
+            <label htmlFor="nr-reuse-drive" className="font-semibold">{NR_FILES.REUSE_LABEL}</label>
+            <Chip>{NR_SHARED.COMING_SOON}</Chip>
+          </span>
+          <span><InfoTip label={NR_FILES.REUSE_ARIA}>{NR_FILES.REUSE_TIP}</InfoTip></span>
         </div>
       </div>
     </FilesGroup>
