@@ -108,6 +108,18 @@ describe("catalogue", () => {
     expect(card(ORG_LINEAR.name).getByText(NR_TOOLS.FROM_ORG)).toBeTruthy();
   });
 
+  it("a granted Azure CLI row says its credential stays with the proxy", async () => {
+    const azure = { id: "55555555-5555-4555-8555-555555555555", name: "Azure Dev", category: "cli" as const, hosts: [], secrets: [], config_keys: [],
+      cli: { kind: "azure" as const, subscriptions: 1, access: "read" } };
+    h.mine.mockResolvedValue(COMPONENTS({
+      org: [...MY_COMPONENTS.org, azure],
+      clis: MY_COMPONENTS.clis.map((c) => (c.kind === "azure" ? { ...c, state: "available" as const, rows: [azure.id] } : c)),
+    }));
+    await show();
+    expect(await card("Azure Dev").findByText(NR_TOOLS.DELIVERY_PROXY)).toBeTruthy();
+    expect(card("Azure Dev").queryByText(NR_TOOLS.DELIVERY_SHORT_LIVED)).toBeNull();
+  });
+
   it("adds an organisation row by its id and removes it again", async () => {
     await show();
     await userEvent.click(await within(await screen.findByRole("heading", { name: "Linear" }).then((el) => el.closest("li") as HTMLElement)).findByRole("button", { name: `${NR_TOOLS.CARD_ADD} Linear` }));
