@@ -9,7 +9,7 @@ Every string the New Run flow shows lives once in this file and once in the lazy
 | Approved mock | The owner-approved New Run mock: Start, the Guided steps, the run document editor, Review, Save as, Name and Launched. |
 | Tools and access prototype | The approved step 5 prototype. |
 | Templates prototype | The approved Templates screen prototype. |
-| Deviation tables | The owner-approved changes to the mock's wording: the Files wording W1-W5, the placement wording package, the harness and scheduling copy, the run document format. |
+| Deviation tables | The owner-approved changes to the mock's wording: the Files wording W1-W5, the placement wording package, the harness and scheduling copy, the run document format, the pool words (organization and user pools; self-hosted and remote-hosted runners). |
 | Pending wording | The recommended text for each new wording row, behind one constant until the owner answers. |
 
 ## 2. Behaviour summary
@@ -143,13 +143,13 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `REASON_INTERACTIVE_ONLY` | pending (W-03) | Interactive only |
 | `REASON_NOT_ALLOWED_PROFILE` | pending (W-03) | Not allowed by your profile |
 | `REASON_RUNNERS_OFF` | pending (W-03) | Runners are switched off |
-| `PLACEMENT_DENIED(profile, hosting)` | pending (W-03) | {profile} doesn't allow runs on {hosting} pools. |
+| `PLACEMENT_DENIED(profile, kind)` | pending (W-03) | {profile} doesn't allow runs on {kind} pools. |
 | `CAPACITY_LABEL` | mock | Total pool capacity |
 | `CAPACITY_ARIA` | mock | Total pool capacity used |
 | `USED_OF_MAX(used, max)` | mock | {used} of {max} running |
 | `RUNNING_ONLY(used)` | deviation (DS-5 §8) | {used} running |
 | `MAX_RUNS(max)` | mock | {max} runs maximum in this pool |
-| `NO_POOL_LIMIT` | deviation (DS-5 §8) | No pool limit |
+| `POOL_LIMIT_FROM_RUNNERS` | deviation (pool words) | Set by its runners |
 | `ALLOWANCE_LABEL` | mock | Your allowance |
 | `ALLOWANCE_ARIA` | deviation (DS-5 §8) | Your allowance used |
 | `ALLOWANCE_USED(active, max)` | deviation (DS-5 §8) | {active} of {max} running (all pools) |
@@ -628,7 +628,7 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `TIMING_INTERACTIVE` | mock | Interactive · Starts when launched |
 | `TIMING_NOW` | mock | Autonomous · Run Now |
 | `WHERE_VALUE(pool)` | mock | {pool} pool |
-| `WHERE_DETAIL(hosting, used, max)` | mock | {hosting} · {used} of {max} running |
+| `WHERE_DETAIL(kind, used, max)` | deviation (pool words) | {kind} · {used} of {max} running |
 | `WHERE_ONLINE(n)` | pending (W-03) | {n} of your runners online |
 | `RECORDING_LABEL` | pending (W-45) | Recording |
 | `RECORDING_ON` | pending (W-45) | Every keystroke and every outbound connection. |

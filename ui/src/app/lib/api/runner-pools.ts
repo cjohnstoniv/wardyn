@@ -7,7 +7,7 @@
 // runner membership and their own defaults. Typed stubs: the server answers
 // every route 501 runner_pools_unavailable until its pool storage lands, and the
 // console must show that sentence, never an empty catalogue. The admin routes
-// (pool writes, executor membership, the organisation default, the use policy)
+// (pool writes, remote-hosted runner membership, the organisation default, the use policy)
 // are authored by the admin lane's own module.
 import { asJson, asNoContent, wfetch } from "./core";
 import type { RunnerPool, RunnerPoolDefaults, RunnerPoolList, RunnerPoolMember } from "../types/runner-pools";
