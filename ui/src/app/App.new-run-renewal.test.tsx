@@ -127,7 +127,10 @@ function switchToAdmin() {
   fireEvent.click(screen.getByRole("button", { name: UNSAVED.DISCARD }));
 }
 
-const launchButton = () => screen.findByRole("button", { name: NR_REVIEW.LAUNCH_RUN });
+// Review is two lazy screens and a seeding read away from the mount, and the first case to run pays their
+// cold import. On a loaded runner that outlasts findBy's one-second default, so the wait is the test's own.
+const REVIEW_WAIT = { timeout: process.env.CI ? 10_000 : 3500 };
+const launchButton = () => screen.findByRole("button", { name: NR_REVIEW.LAUNCH_RUN }, REVIEW_WAIT);
 // The Name dialog's title is where the draft's one visible field lives; Review reopens it.
 async function openName() {
   if (!screen.queryByLabelText(NR_LAUNCH.TITLE_LABEL)) fireEvent.click(await launchButton());
