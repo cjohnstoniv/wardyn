@@ -120,7 +120,7 @@ type disconnectBuilder struct {
 	mu         sync.Mutex
 }
 
-func (b *disconnectBuilder) FinalizeBase(ctx context.Context, _, _ string, _ io.Writer) (BuiltImage, error) {
+func (b *disconnectBuilder) FinalizeBase(ctx context.Context, _, _ string, _ io.Writer, _ bool) (BuiltImage, error) {
 	b.mu.Lock()
 	b.buildCtx = ctx
 	b.mu.Unlock()

@@ -326,7 +326,8 @@ const perBuildBaseUntagTimeout = 30 * time.Second
 // Wardyn's runner tools, with no untrusted-code build container and no registry push — just a
 // host-side FROM+COPY, so it is wrap-only (assertWrapSafeBase refuses ONBUILD triggers). The base is
 // pulled only if absent; baseRef may be a mutable tag or digest-pinned (pinning honored, not enforced).
-func (b *Builder) FinalizeBase(ctx context.Context, baseRef, outputTag string, logSink io.Writer) (Built, error) {
+// forcePull pulls the base again even when it is present (a refresh): a pull failure fails the wrap.
+func (b *Builder) FinalizeBase(ctx context.Context, baseRef, outputTag string, logSink io.Writer, forcePull bool) (Built, error) {
 	toolsDir, err := b.validateToolsDir()
 	if err != nil {
 		return Built{}, err
@@ -338,14 +339,18 @@ func (b *Builder) FinalizeBase(ctx context.Context, baseRef, outputTag string, l
 	}
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	if err := b.ensureImage(ctx, baseRef); err != nil {
+	ensure := b.ensureImage
+	if forcePull {
+		ensure = func(ctx context.Context, ref string) error { return dockerutil.PullImage(ctx, b.cli, ref, "envbuild") }
+	}
+	if err := ensure(ctx, baseRef); err != nil {
 		return Built{}, fmt.Errorf("envbuild: BYOI base image %q not pullable/present: %w "+
 			"(pre-pull a private image on the host with `docker pull`)", baseRef, err)
 	}
 	if logSink == nil {
 		logSink = b.DefaultLogSink
 	}
-	// pullParent=false: ensureImage already made the base present locally; a registry pull here would fail for a local-only or digest-pinned user image.
+	// pullParent=false: the base is already present locally (ensured or force-pulled above); a registry pull here would fail for a local-only or digest-pinned user image.
 	return b.finalizeImage(ctx, baseRef, outputTag, toolsDir, logSink, false)
 }
 
