@@ -58,13 +58,29 @@ const PAIRS: { total: FieldId; per: FieldId; reported: (a: RunnerAmounts) => num
   { total: "td", per: "pd", reported: (a) => gb(a.disk_mib), unit: (n) => `${n} GB disk` },
 ];
 
-/** The first thing wrong with each field, in the mock's words. */
-export function validateLimits(v: Vals, reported?: RunnerAmounts): Errs {
+/** The amount each field will send, in the dialog's units: a field still showing what it loaded is its exact loaded value, not the rounded display. */
+function effective(v: Vals, loaded?: LoadedLimits | null): Record<FieldId, number> {
+  const was = loaded?.limits;
+  const exact: Record<FieldId, number | undefined> = {
+    rn: was?.runs_at_once,
+    tc: was && was.total.cpu_millis / 1000,
+    tm: was && was.total.memory_mib / 1024,
+    td: was && was.total.disk_mib / 1024,
+    pc: was && was.per_run.cpu_millis / 1000,
+    pm: was && was.per_run.memory_mib / 1024,
+    pd: was && was.per_run.disk_mib / 1024,
+  };
+  return Object.fromEntries(FIELDS.map((f) => [f, loaded && v[f] === loaded.vals[f] ? exact[f] : Number(v[f])])) as Record<FieldId, number>;
+}
+
+/** The first thing wrong with each field, in the mock's words; what a save would send is what is checked. */
+export function validateLimits(v: Vals, reported?: RunnerAmounts, loaded?: LoadedLimits | null): Errs {
   const errs: Errs = {};
-  if (v.rn === "" || !Number.isInteger(Number(v.rn)) || Number(v.rn) < 1) errs.rn = LIMITS_DIALOG.ERR_RUNS;
+  const n = effective(v, loaded);
+  if (v.rn === "" || !Number.isInteger(n.rn) || n.rn < 1) errs.rn = LIMITS_DIALOG.ERR_RUNS;
   for (const p of PAIRS) {
-    const total = Number(v[p.total]);
-    const per = Number(v[p.per]);
+    const total = n[p.total];
+    const per = n[p.per];
     if (!(total > 0)) errs[p.total] = LIMITS_DIALOG.ERR_ABOVE_ZERO;
     else if (reported && p.reported(reported) > 0 && total > p.reported(reported)) errs[p.total] = LIMITS_DIALOG.ERR_REPORTED(p.unit(p.reported(reported)));
     else if (p.total === "td" && !Number.isInteger(total)) errs.td = LIMITS_DIALOG.ERR_DISK_WHOLE;
@@ -193,7 +209,7 @@ export function LimitsDialog({
   };
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const found = validateLimits(vals, rep);
+    const found = validateLimits(vals, rep, loaded.current);
     setErrs(found);
     const first = FIELDS.find((f) => found[f]);
     if (first) {
