@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/google/uuid"
@@ -147,11 +148,29 @@ func TestBootHybrid_CosmeticOrgURLEditKeepsTheCredential(t *testing.T) {
 	}
 }
 
+// lockedLog is a log sink the forwarder goroutine writes while the test reads.
+type lockedLog struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (l *lockedLog) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.buf.Write(p)
+}
+
+func (l *lockedLog) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.buf.String()
+}
+
 // TestBootHybrid_WarnsEnrolmentIsDeprecated pins the 0.9 deprecation: a daemon
 // booted with WARDYN_ORG_URL logs that enrolment is removed in 1.0 and names
 // client mode; one without it logs nothing.
 func TestBootHybrid_WarnsEnrolmentIsDeprecated(t *testing.T) {
-	var logs bytes.Buffer
+	var logs lockedLog
 	prev := slog.Default()
 	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
 	t.Cleanup(func() { slog.SetDefault(prev) })
@@ -159,7 +178,7 @@ func TestBootHybrid_WarnsEnrolmentIsDeprecated(t *testing.T) {
 	if _, err := bootHybrid(context.Background(), context.Background(), "", "", unlocked(hybridSecrets{}), nil, nil); err != nil {
 		t.Fatal(err)
 	}
-	if logs.Len() != 0 {
+	if logs.String() != "" {
 		t.Fatalf("no org URL logged: %s", logs.String())
 	}
 

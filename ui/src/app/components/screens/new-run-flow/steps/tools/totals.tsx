@@ -7,8 +7,10 @@
 // server's `access` block. A host is Requested until the server has answered
 // this exact body; only then does its verdict show.
 
+import { AdoLaunchNote, AdoRunTokenLine, adoLaunchNoteKind } from "../../../../wardyn/ado-run-token-line";
 import { Chip } from "../../../../wardyn/primitives";
 import { NR_TOOLS } from "../../../../wardyn/copy/new-run/tools";
+import type { SCMAccessPAT } from "../../../../../lib/types/ado-pat";
 import type { AccessCredential, AccessFacts, AccessUnlisted } from "../../../../../lib/types/new-run-access";
 import { hostBadge, rowLabel, type HarnessNames, type HostBadge } from "../../lenses/tools-lens";
 
@@ -27,11 +29,19 @@ const BADGE: Record<HostBadge, { text: string; tone: "neutral" | "success" | "in
   not_allowed: { text: NR_TOOLS.NET_NOT_ALLOWED, tone: "danger" },
 };
 
+const TOTAL_CLASS = "flex min-w-0 flex-col gap-2.5 rounded-lg border border-border bg-surface-2 p-3.5";
+const POLICY_CLASS = "border-t border-dashed border-border pt-2.5 text-sm text-muted-foreground";
+
 /** A delivery code in words; a code this console does not know shows no label rather than a raw code. */
 export const deliveryLabel = (delivery: string): string | undefined => DELIVERY[delivery];
 
-/** The credential kinds the canon names; the rest show the row they are for and their delivery. */
-const credentialKind = (c: AccessCredential): string | undefined => (c.kind === "model_provider" ? NR_TOOLS.PROVIDER_LABEL : undefined);
+/**
+ * A credential's label: a model credential names its provider, or says Model
+ * provider before one is known. The other kinds carry no label on the wire, so
+ * they show the row they are for and their delivery.
+ */
+export const credentialLabel = (c: AccessCredential, harness: string | undefined, providers?: ReadonlyMap<string, string>): string | undefined =>
+  c.kind === "model_provider" ? (harness && providers?.get(harness)) || NR_TOOLS.PROVIDER_LABEL : undefined;
 
 /** "Anything else" for the clamped, effective spec, then whether the organisation's limits have been checked. */
 export function unlistedSentences(u: AccessUnlisted, answered: boolean): string[] {
@@ -58,11 +68,32 @@ export function unlistedSentences(u: AccessUnlisted, answered: boolean): string[
 export const renewalHolds = (credentials: readonly AccessCredential[]): boolean =>
   !credentials.some((c) => c.delivery === "sandbox_short_lived" && !c.renewed);
 
-export function Totals({ access, answered, names: harnessNames }: { access: AccessFacts | undefined; answered: boolean; names?: HarnessNames }) {
+/** The credential a repository on the Azure DevOps sign-in lane brings (the server's kind for it). */
+const ADO_SIGN_IN = "ado_signin";
+
+/**
+ * What the Credentials total says of this run's Azure DevOps credential when the person's row creates a
+ * token for each run: what that token carries, and the door when they have yet to connect.
+ */
+export interface AdoTokenFacts {
+  /** The caller's own Azure DevOps answer (the shell's setup status). */
+  access: SCMAccessPAT | undefined;
+  /** The run's policy capabilities; the row's default profile stands in when it names none. */
+  policyCaps: unknown;
+  connecting: boolean;
+  onConnect: () => void;
+  blockedUrl?: string | null;
+  onFallbackClick?: () => void;
+}
+
+export function Totals({ access, answered, names: harnessNames, providers, ado }: { access: AccessFacts | undefined; answered: boolean; names?: HarnessNames; providers?: ReadonlyMap<string, string>; ado?: AdoTokenFacts }) {
   const names = new Map((access?.rows ?? []).map((r) => [r.id, rowLabel(r, harnessNames)]));
+  const rowName = new Map((access?.rows ?? []).map((r) => [r.id, r.name]));
+  // Only a run that carries the Azure DevOps credential gets a token, so only its row says so.
+  const adoToken = ado?.access?.token_mode === "minted_pat" && !!access?.credentials.some((c) => c.kind === ADO_SIGN_IN) ? ado : undefined;
   return (
-    <section aria-label={NR_TOOLS.TOTALS_ARIA} className="grid gap-4 md:grid-cols-2">
-      <div className="flex min-w-0 flex-col gap-2">
+    <section aria-label={NR_TOOLS.TOTALS_ARIA} className="grid gap-3 [grid-template-columns:repeat(auto-fit,minmax(280px,1fr))]">
+      <div className={TOTAL_CLASS}>
         <h3 className="font-medium">{NR_TOOLS.NETWORK_TITLE}</h3>
         <ul className="flex flex-col gap-1.5">
           {access?.hosts.map((h) => {
@@ -80,13 +111,13 @@ export function Totals({ access, answered, names: harnessNames }: { access: Acce
           })}
           {answered && access?.hosts.length === 0 && <li className="text-sm text-muted-foreground">{NR_TOOLS.NO_HOSTS}</li>}
         </ul>
-        {access && <p className="text-sm text-muted-foreground">{unlistedSentences(access.unlisted, answered).join(" ")}</p>}
+        {access && <p className={POLICY_CLASS}>{unlistedSentences(access.unlisted, answered).join(" ")}</p>}
       </div>
-      <div className="flex min-w-0 flex-col gap-2">
+      <div className={TOTAL_CLASS}>
         <h3 className="font-medium">{NR_TOOLS.CREDENTIALS_TITLE}</h3>
         <ul className="flex flex-col gap-1.5">
           {access?.credentials.map((c) => {
-            const kind = credentialKind(c);
+            const kind = credentialLabel(c, rowName.get(c.row), providers);
             const delivery = deliveryLabel(c.delivery);
             return (
               <li key={c.id} className="flex flex-wrap items-center justify-between gap-2">
@@ -95,12 +126,20 @@ export function Totals({ access, answered, names: harnessNames }: { access: Acce
                   {names.has(c.row) && <span className="text-sm text-muted-foreground">{NR_TOOLS.FOR_ROW(names.get(c.row) ?? "")}</span>}
                 </span>
                 {delivery && <Chip className="whitespace-normal">{delivery}</Chip>}
+                {adoToken && c.kind === ADO_SIGN_IN && (
+                  <AdoRunTokenLine className="basis-full text-sm text-muted-foreground" policyCaps={adoToken.policyCaps} defaults={adoToken.access?.default_profile} />
+                )}
               </li>
             );
           })}
+          {adoToken && adoLaunchNoteKind(adoToken.access) && (
+            <li>
+              <AdoLaunchNote access={adoToken.access} connecting={adoToken.connecting} onConnect={adoToken.onConnect} blockedUrl={adoToken.blockedUrl} onFallbackClick={adoToken.onFallbackClick} />
+            </li>
+          )}
           {answered && access?.credentials.length === 0 && <li className="text-sm text-muted-foreground">{NR_TOOLS.NO_CREDENTIALS}</li>}
         </ul>
-        {access && renewalHolds(access.credentials) && <p className="text-sm text-muted-foreground">{NR_TOOLS.CREDENTIALS_POLICY}</p>}
+        {access && renewalHolds(access.credentials) && <p className={POLICY_CLASS}>{NR_TOOLS.CREDENTIALS_POLICY}</p>}
       </div>
     </section>
   );

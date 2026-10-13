@@ -4,7 +4,8 @@
  */
 
 import type { Page, Request } from "@playwright/test";
-import { ADMIN_TOKEN, expect, gotoConsole, navToRoute, test } from "./fixtures";
+import { ADMIN_TOKEN, expect, gotoConsole, navToRoute, newRunHeading, test } from "./fixtures";
+import { NR_START } from "../src/app/components/wardyn/copy/new-run/start";
 import { REAUTH_BAR, REAUTH_DIALOG, REAUTH_RENEW } from "../src/app/lib/reauth-copy";
 import { PROVIDERS } from "../src/app/lib/workspace-providers-copy";
 
@@ -236,11 +237,11 @@ test.describe("the renewal strip over New run", () => {
     await gotoConsole(page);
     await page.getByRole("button", { name: "New run" }).click();
     await expect(page).toHaveURL(/\/runs\/new$/);
-    // New Run is its own lazy chunk and focuses Title when it mounts. Wait for
+    // New Run is its own lazy chunk and focuses its heading when it mounts. Wait for
     // that: mounting after the strip took focus moves focus off Cancel, and
     // New Run's own Escape handler must already be there for staying put to
     // prove the strip consumed the key.
-    await expect(page.getByLabel("Title")).toBeFocused();
+    await expect(newRunHeading(page, NR_START.TITLE)).toBeFocused();
     await expect(page.getByText(EXPIRING_SOON)).toBeVisible();
 
     await page.getByRole("button", { name: REAUTH_RENEW.CTA }).click();
@@ -252,6 +253,6 @@ test.describe("the renewal strip over New run", () => {
     await expect(page.getByText(EXPIRING_SOON)).toBeVisible();
     await expect(page.getByRole("button", { name: REAUTH_RENEW.CTA })).toBeFocused();
     await expect(page).toHaveURL(/\/runs\/new$/);
-    await expect(page.getByRole("heading", { name: "New run" })).toBeVisible();
+    await expect(newRunHeading(page, NR_START.TITLE)).toBeVisible();
   });
 });

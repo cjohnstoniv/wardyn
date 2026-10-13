@@ -428,6 +428,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// Record the reservation the driver will apply (best-effort, like the disk cap above).
 	s.recordRunSizing(ctx, run.ID, resourceLimitsToRunner(policy.Resources), len(plan.azure.gates) > 0)
 	s.reassertCeilingDenies(ctx, run, &policy, &injections, ceiling, &p, sandboxEnv, &llm, &plan.bedrockMITMHosts, &p.Components.MITMHosts)
+	plan.azureCLI.closeWithheld(&policy, injections) // a door the ceiling withheld takes the hosts it opened with it
 
 	// Host bind mounts (policy WorkspaceMounts + the host-mode Bedrock ~/.aws
 	// read-only mount) — operator-authored, never agent-chosen; see buildRunMounts.
@@ -552,6 +553,9 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 			// Nil for every run not on that lane, which leaves the gate off.
 			ADOGrant:  ado.gate,
 			GitHubAPI: p.Components.GitHubAPI,
+			// The Azure CLI door's grant (runs_dispatch_cli_azure.go): nil without
+			// the row, and nil when a later phase withheld its credential.
+			AzureARM: plan.azureCLI.gateFor(injections),
 			// The azure_foundry lane's route gate and channel host (provider_azure.go). Empty for every
 			// run not on that lane, which leaves both off.
 			AzureGates:      plan.azure.gates,

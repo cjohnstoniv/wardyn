@@ -43,7 +43,8 @@ var ReservedV4 = []netip.Prefix{
 var ReservedV6 = []netip.Prefix{
 	netip.MustParsePrefix("fec0::/10"), // deprecated site-local (RFC3879) — still configured on some enterprise LANs
 	netip.MustParsePrefix("2002::/16"), // 6to4 (RFC7526, deprecated) — embeds an IPv4 at bits 16..48
-	// IANA IPv6 Special-Purpose registry rows whose "Globally Reachable" column is False. 2001::/23 is
+	// IANA IPv6 Special-Purpose registry rows whose "Globally Reachable" column is False (Teredo's reads N/A and is
+	// denied with them: it tunnels to an embedded IPv4). 2001::/23 is
 	// NOT listed wholesale: 2001:1::1/128, 2001:1::2/128, 2001:3::/32, 2001:4:112::/48, 2001:20::/28 and
 	// 2001:30::/28 inside it are globally reachable.
 	netip.MustParsePrefix("2001::/32"),     // TEREDO (RFC4380)

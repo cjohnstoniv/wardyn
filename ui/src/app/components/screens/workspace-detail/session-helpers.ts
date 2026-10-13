@@ -90,7 +90,7 @@ export function isRecording(ws: Workspace): boolean {
 // helper has no view of, and stay a documented gap (see egressPromotionDiff).
 function isModelProviderHost(host: string): boolean {
   const h = host.toLowerCase();
-  return h.endsWith("anthropic.com") || h === "api.openai.com";
+  return h === "anthropic.com" || h.endsWith(".anthropic.com") || h === "api.openai.com";
 }
 
 // EgressPromotionDiff buckets a session's observed+allowed hosts (Synthesize's

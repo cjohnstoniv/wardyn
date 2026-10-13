@@ -156,6 +156,12 @@ describe("light-theme WCAG AA contrast", () => {
     });
   }
 
+  // The shared-drive kind colour (Files step): 10px badge text on its opaque -subtle fill, and on white.
+  it("--violet text is >= 4.5:1 on white and on --violet-subtle", () => {
+    expect(ratio(token("violet"), WHITE)).toBeGreaterThanOrEqual(4.5);
+    expect(ratio(token("violet"), token("violet-subtle"))).toBeGreaterThanOrEqual(4.5);
+  });
+
   // F7-F1: the old #737373 measured 4.7417:1 on white — why this test alone
   // stayed green — but 4.3139:1 on --muted/--surface-2 (#f4f4f5), the ground
   // the real sites (the neutral Chip, 93 call sites, + both Notes) actually
@@ -235,6 +241,10 @@ describe("light-theme WCAG AA contrast", () => {
         expect(ratio(dtoken(t), dsubtleOverCard(t))).toBeGreaterThanOrEqual(4.5);
       });
     }
+    it("dark --violet text is >= 4.5:1 on --background and on --violet-subtle", () => {
+      expect(ratio(dtoken("violet"), dtoken("background"))).toBeGreaterThanOrEqual(4.5);
+      expect(ratio(dtoken("violet"), dtoken("violet-subtle"))).toBeGreaterThanOrEqual(4.5);
+    });
     it("dark --danger-foreground on the --danger fill is >= 4.5:1 (kill/delete buttons)", () => {
       expect(ratio(dtoken("danger-foreground"), dtoken("danger"))).toBeGreaterThanOrEqual(4.5);
     });

@@ -201,6 +201,29 @@ describe("record helpers — read the server-authored record fields", () => {
       expect(newEgressHosts(w, "code")).toEqual(diff.approvable);
     });
 
+    it("a host that only ends in the provider's name (notanthropic.com) is approvable, never plumbing", () => {
+      const rr: RecordResult = {
+        run_id: "r1",
+        mode: "auto",
+        status: "recorded",
+        observations: {
+          domains: [
+            { host: "notanthropic.com", allow_count: 1, deny_count: 0, pending_count: 0 },
+            { host: "anthropic.com.evil.example", allow_count: 1, deny_count: 0, pending_count: 0 },
+            { host: "anthropic.com", allow_count: 1, deny_count: 0, pending_count: 0 },
+          ],
+          minted_grant_ids: [],
+          exec_argv0s: [],
+          file_writes: [],
+          connects: [],
+          anomalies: [],
+        },
+      };
+      const diff = egressPromotionDiff(ws({ record_results: { code: rr } }), "code");
+      expect(diff.approvable.sort()).toEqual(["anthropic.com.evil.example", "notanthropic.com"]);
+      expect(diff.plumbing).toEqual(["anthropic.com"]);
+    });
+
     it("selfHost (the console's own origin) is plumbing when passed, ignored when omitted", () => {
       const rr: RecordResult = {
         run_id: "r1",

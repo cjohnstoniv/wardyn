@@ -122,6 +122,7 @@ func TestResponseDTOs_MatchTheServersWireTags(t *testing.T) {
 		{"ComponentFact", "internal/api/components_facts.go", "componentFact", client.ComponentFact{}},
 		{"ComponentSecretFact", "internal/api/components_facts.go", "componentSecretFact", client.ComponentSecretFact{}},
 		{"AccessFacts", "internal/api/run_access_facts.go", "accessBlock", client.AccessFacts{}},
+		{"WorkspaceBuild", "internal/api/workspace_build.go", "buildResponse", client.WorkspaceBuild{}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			want := serverJSONTags(t, tc.file, tc.server)

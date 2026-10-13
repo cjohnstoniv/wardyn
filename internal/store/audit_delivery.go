@@ -83,7 +83,7 @@ func (s PG) SetAuditDeliveryCursor(ctx context.Context, dest string, seq int64, 
 }
 
 // SetAuditDeliveryError records the collector's last answer and whether it halted delivery
-// until wardynd restarts (a terminal 4xx). An empty msg with halted false clears both.
+// until wardynd restarts or another replica takes over delivery (a terminal 4xx). An empty msg with halted false clears both.
 func (s PG) SetAuditDeliveryError(ctx context.Context, dest, msg string, halted bool) error {
 	const q = `UPDATE audit_delivery_cursors SET last_error = $2, halted = $3, updated_at = now() WHERE destination = $1`
 	if _, err := s.Pool.Exec(ctx, q, dest, msg, halted); err != nil {

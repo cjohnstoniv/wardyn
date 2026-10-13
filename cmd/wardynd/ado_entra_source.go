@@ -195,6 +195,25 @@ func azureFoundryEntraByRow(st siteConfigReader, login adoEntraLogin) func(ctx c
 	}
 }
 
+// azureCLIEntraByRow fills api.Config.AzureCLIEntra: the application an Azure
+// CLI component signs people in against, keyed to the component id it is
+// given. It is always the console's own sign-in application, so a console
+// without Entra login yields an unusable configuration that every door refuses.
+func azureCLIEntraByRow(login adoEntraLogin) func(componentID string) api.ADOEntraConfig {
+	return func(componentID string) api.ADOEntraConfig {
+		return api.ADOEntraConfig{
+			RowID:              componentID,
+			TenantID:           login.tenantID,
+			ClientID:           login.clientID,
+			ClientSecret:       login.clientSecret,
+			RedirectURL:        login.redirectURL,
+			LoginClientID:      login.clientID,
+			LoginTenantID:      login.tenantID,
+			AllowTestEndpoints: login.allowTestEndpoints,
+		}
+	}
+}
+
 // adoEntraConfigFor is the configuration row describes under login, with the
 // console's secret attached only where it may be redeemed.
 func adoEntraConfigFor(row types.GitProvider, login adoEntraLogin, mode types.ADOTokenMode, scopes []string) api.ADOEntraConfig {

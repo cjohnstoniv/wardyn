@@ -4,7 +4,7 @@
  */
 
 // The template field registry as the console reads it: every request and
-// policy field a template can carry, its owning wizard tab and refinement
+// policy field a template can carry, its refinement
 // part, and what leaving it out (or giving it an empty value) means. The Go
 // registry (internal/api/template_fields.go) is the source; this file is its
 // typed view of template-fields.golden.json, regenerated with
@@ -16,8 +16,6 @@
 
 import golden from "./template-fields.golden.json";
 import type { TemplatePart } from "./types/templates";
-
-export type TemplateTab = "runner" | "repositories_drives" | "tools_image" | "access";
 
 /** What leaving the field out means. */
 export type TemplateOmission = "baseline" | "unset_required" | "unset_optional";
@@ -32,7 +30,6 @@ export type TemplateSection = "run_wide" | "scm_entry" | "harness" | "component"
 
 export interface TemplateFieldRule {
   name: string;
-  tab?: TemplateTab;
   part?: TemplatePart;
   omitted?: TemplateOmission;
   empty?: TemplateEmptyMeaning;

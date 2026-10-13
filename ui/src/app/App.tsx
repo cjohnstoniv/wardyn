@@ -57,9 +57,9 @@ export const HEALTH_POLL_MS = 5000;
 // setup (the demo steps' own lazy chunk), asciinema-player on
 // run-detail/recordings. Rollup hoists
 // what several lazy routes share into its own chunk automatically.
-const NewRunScreen = React.lazy(() =>
-  import("./components/screens/new-run/new-run-screen").then((m) => ({
-    default: m.NewRunScreen,
+const NewRunRoute = React.lazy(() =>
+  import("./components/screens/new-run-flow/new-run-route").then((m) => ({
+    default: m.NewRunRoute,
   })),
 );
 const RunDetailScreen = React.lazy(() =>
@@ -762,7 +762,7 @@ export default function App() {
               path="/runs/new"
               element={
                 <React.Suspense fallback={<RouteFallback />}>
-                  <NewRunScreen />
+                  <NewRunRoute />
                 </React.Suspense>
               }
             />
