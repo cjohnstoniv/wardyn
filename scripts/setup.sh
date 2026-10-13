@@ -442,6 +442,8 @@ ensure_postgres
 # Already running? Leave it as-is and don't double-launch on the port.
 if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE" 2>/dev/null)" 2>/dev/null; then
   ok "Wardyn is already running (host mode) — PID $(cat "$PIDFILE"), UI ${URL}."
+  # A re-run finishes what a first run stopped at: the runner's limits (a runner with them is left alone).
+  host_runner_limits "$URL"
   ok "Stop it with:  make stop-host"
   exit 0
 fi
@@ -512,11 +514,7 @@ fi
 if $healthy; then
   # The server's Docker runner takes no run until it has limits; on Docker Desktop the server cannot measure
   # its disk (scripts/lib/runner-limits.sh).
-  # shellcheck disable=SC2317 # called by wardyn_ensure_runner_limits
-  wardyn() { WARDYN_URL="$URL" ./bin/wardyn "$@"; }
-  wardyn_ensure_runner_limits \
-    || die "the server's runner has no limits, so no run can start — set WARDYN_SETUP_RUNNER_DISK_GB and re-run, or set them by hand: ./bin/wardyn runner set docker ... (docs/OPERATIONS.md \"Runner limits\"); wardynd keeps running (make stop-host)"
-  unset -f wardyn
+  host_runner_limits "$URL"
   # Opt-in SCM credential import. SECURITY/PRIVACY: never copies a private key or
   # PAT without explicit consent (an env flag or an interactive yes; default No).
   # Detects a host GitHub/Azure DevOps PAT (env) and a private ~/.ssh key, and —

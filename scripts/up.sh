@@ -714,7 +714,7 @@ cmd_up() {
   # shellcheck disable=SC2317 # called by wardyn_ensure_runner_limits
   wardyn() { compose exec -T -e WARDYN_URL=http://localhost:8080 wardynd /usr/local/bin/wardyn "$@"; }
   wardyn_ensure_runner_limits \
-    || die "the server's runner has no limits, so no run can start — set WARDYN_SETUP_RUNNER_DISK_GB and re-run, or set them by hand: wardyn runner set docker ... (docs/OPERATIONS.md \"Runner limits\")"
+    || die "the server's runner has no limits, so no run can start — set WARDYN_SETUP_RUNNER_DISK_GB and run make setup again, or set them by hand (docs/operations/runner-pools.md#a-remote-hosted-runners-limits)"
   unset -f wardyn
 
   # W1-S1-3: the pick above ran BEFORE wardynd existed — host_llm_key_present can
