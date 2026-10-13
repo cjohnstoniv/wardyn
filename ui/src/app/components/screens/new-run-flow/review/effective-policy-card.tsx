@@ -50,7 +50,7 @@ export function EffectivePolicyCard({ draft, pre, preview }: { draft: NewRunDraf
           ))}
         </dl>
       )}
-      {unattendedPush && <p className="text-sm text-muted-foreground">{PUSH.RAIL_UNATTENDED}</p>}
+      {unattendedPush && <p className="border-t border-border px-[18px] py-3.5 text-sm text-muted-foreground">{PUSH.RAIL_UNATTENDED}</p>}
     </aside>
   );
 }
