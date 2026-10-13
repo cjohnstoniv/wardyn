@@ -3,5 +3,7 @@
 # docs/POLICIES.md 17856 adds 29 over 17827: 0.9 final docs pass, measured: tool rules route a background Claude Code run through the tool gate.
 # docs/POLICIES.md 17872 adds 16 over 17856: 0.9 final docs pass 2, measured: where the risk grade shows, and the GitHub CLI door beside the App lane.
 # docs/POLICIES.md 17895 adds 23 over 17872: docs fix: run --file overlay; a policy's own * rule stays in force on a routed run, measured.
-docs/POLICIES.md=17895 share=12
+# docs/POLICIES.md 17827 adds 692 for the 0.8.9 component docs: 56 (three bullets: a run with a shared component secret exports a record, not a reusable policy), 17 (pointer to docs/CREDENTIALS.md), 6+1+27+3 (`file_secret` in the pairing list, the kind row, a table row and `owner_only`), 34 (the `api_key` echo caveat and the `shared` mark), 5 (the switch is `WARDYN_ALLOW_USER_ENV_SECRET` and governs `file_secret`), 547 (the `file_secret` section and the Custom components section); the diff tool counts 696, the gate 692 (link text). Ratcheted to the measured 17794 in 0.9.0 with the exact-host GitHub deny note.
+# docs/POLICIES.md 17913 measured at merge: credentials merge: the exact-host deny note beside the routed-run wildcard sentences.
+docs/POLICIES.md=17913 share=12
 examples/policies/README.md=1349 share=5
