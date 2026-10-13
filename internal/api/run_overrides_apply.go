@@ -282,7 +282,7 @@ func (s *Server) applySecretOverrides(ctx context.Context, r *http.Request, spec
 		// is not asked): matching the policy's grants before this would
 		// tell a person which operator secrets it pairs, which a member never
 		// reads (policy reads strip the references).
-		if owner := s.secretOwnerFromRequest(r); owner != "" && !s.ownsSecretMemoized(ctx, owner, name) {
+		if !s.isOperator(r.Context()) && !s.ownsSecretMemoized(ctx, s.secretOwnerFromRequest(r), name) {
 			return runError(http.StatusUnprocessableEntity, reasonOverrideRefused, fmt.Sprintf(
 				"overrides.agent.remove_secrets[%d]: %s is not one of your stored secrets.", i, name))
 		}
