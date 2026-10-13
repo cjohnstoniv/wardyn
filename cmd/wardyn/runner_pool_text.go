@@ -14,7 +14,8 @@ import (
 // runner_pool_text.go — what `runner pool create`, `update` and `delete` say when they succeed. --json
 // prints the pool as the server returned it, and nothing else.
 
-// printPoolCreated says a pool now exists. A user pool made with no runner also says how to put one in.
+// printPoolCreated says a pool now exists. A user pool made with no runner also says how to put one in,
+// after its own limits when it was given any: only a pool with none follows its runners outright.
 func printPoolCreated(w io.Writer, p sdk.RunnerPool, asJSON, withRunners bool) error {
 	if asJSON {
 		return emitJSON(w, p)
@@ -26,7 +27,11 @@ func printPoolCreated(w io.Writer, p sdk.RunnerPool, asJSON, withRunners bool) e
 	if _, err := fmt.Fprintf(w, "created user pool %s (%s), yours, revision %d\n", p.Name, p.ID, p.Revision); err != nil || withRunners {
 		return err
 	}
-	_, err := fmt.Fprintf(w, "  limits: it follows its runners; it has none yet. Put a runner in it: wardyn runner pool add %s <runner>\n", shellWord(p.Name))
+	limits := "it follows its runners; it has none yet"
+	if own := poolLimitsText(p, sdk.RunnerAmounts{}); own != "none of its own: it follows its runners" {
+		limits = own + "; it has no runners yet"
+	}
+	_, err := fmt.Fprintf(w, "  limits: %s. Put a runner in it: wardyn runner pool add %s <runner>\n", limits, shellWord(p.Name))
 	return err
 }
 
