@@ -6,11 +6,11 @@ package main
 import (
 	"fmt"
 	"io"
-	"strings"
 
 	"github.com/google/uuid"
 	"github.com/spf13/cobra"
 
+	"github.com/cjohnstoniv/wardyn/internal/runnerpool"
 	sdk "github.com/cjohnstoniv/wardyn/pkg/client"
 )
 
@@ -38,7 +38,7 @@ func poolIDFlag(flag, s string) (*uuid.UUID, error) {
 
 func runnerPoolCmd(client clientFn) *cobra.Command {
 	cmd := &cobra.Command{Use: "pool", Short: "List the runner pools you may use, keep your own user pools and set your own default pool"}
-	var asJSON bool
+	var asJSON, all bool
 	list := &cobra.Command{Use: "list", Short: "List the runner pools you may use", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
 		out, err := client().ListRunnerPools(cmd.Context())
 		if err != nil {
@@ -47,46 +47,40 @@ func runnerPoolCmd(client clientFn) *cobra.Command {
 		if asJSON {
 			return emitJSON(cmd.OutOrStdout(), out)
 		}
-		return printRunnerPools(cmd.OutOrStdout(), out)
+		return printRunnerPools(cmd.OutOrStdout(), out, all)
 	}}
 	list.Flags().BoolVar(&asJSON, "json", false, "emit raw JSON")
+	list.Flags().BoolVar(&all, "all", false, "every row the server returned, with the owner of each user pool (an operator or security admin sees every person's)")
 	cmd.AddCommand(list, runnerPoolDefaultCmd(client), runnerPoolOrgDefaultCmd(client))
 	cmd.AddCommand(runnerPoolManageCmds(client)...)
 	return subcommandGroup(cmd)
 }
 
-func printRunnerPools(w io.Writer, list sdk.RunnerPoolList) error {
+// printRunnerPools is the list: ID NAME TYPE AVAILABILITY. A row the caller may only manage (availability
+// unavailable, reason runner_pool_not_found) is left out unless all is set, and then an OWNER column
+// is added.
+func printRunnerPools(w io.Writer, list sdk.RunnerPoolList, all bool) error {
 	tw := newTab(w)
-	fmt.Fprintln(tw, "ID\tNAME\tSCOPE\tAVAILABILITY\tBARRIERS")
+	head := "ID\tNAME\tTYPE\tAVAILABILITY"
+	if all {
+		head = "ID\tNAME\tTYPE\tOWNER\tAVAILABILITY"
+	}
+	fmt.Fprintln(tw, head)
 	for _, p := range list.Pools {
+		if !all && p.Availability == sdk.RunnerPoolUnavailable && p.Reason == runnerpool.ReasonNotFound {
+			continue
+		}
 		availability := p.Availability
 		if p.Reason != "" {
 			availability += " (" + string(p.Reason) + ")"
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", p.ID, p.Name, p.Scope, availability, barrierSummary(p.BarrierOptions))
+		if all {
+			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", p.ID, p.Name, p.Scope, p.Owner, availability)
+		} else {
+			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", p.ID, p.Name, p.Scope, availability)
+		}
 	}
 	return tw.Flush()
-}
-
-// barrierSummary names each barrier with * on the default and the reason one is not available, e.g.
-// "CC1 (below_floor) CC2* CC3 (not_offered: kvm_missing)".
-func barrierSummary(opts []sdk.BarrierOption) string {
-	cells := make([]string, 0, len(opts))
-	for _, o := range opts {
-		cell := string(o.Class)
-		if o.Default {
-			cell += "*"
-		}
-		if !o.Available {
-			reason := string(o.ReasonCode)
-			if o.ReasonDetail != "" {
-				reason += ": " + o.ReasonDetail
-			}
-			cell += " (" + reason + ")"
-		}
-		cells = append(cells, cell)
-	}
-	return strings.Join(cells, " ")
 }
 
 func runnerPoolDefaultCmd(client clientFn) *cobra.Command {
