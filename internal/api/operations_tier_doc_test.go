@@ -243,6 +243,17 @@ var docTierRows = []struct{ route, token string }{
 	{"POST /api/v1/people/{principal}/erasure", "`POST /people/{principal}/erasure`"},
 	{"GET /api/v1/scim/status", "`GET /scim/status`"},
 	{"GET /api/v1/model-providers/credentials", "`GET /model-providers/credentials`"},
+	// 0.9 #1508: the invitation, service-identity and token-move routes, one row each.
+	{"POST /api/v1/people/{principal}/invitations", "`POST /people/{principal}/invitations`"},
+	{"GET /api/v1/people/{principal}/invitations", "`GET /people/{principal}/invitations`"},
+	{"GET /api/v1/invitations", "`GET /invitations`"},
+	{"DELETE /api/v1/invitations/{id}", "`DELETE /invitations/{id}`"},
+	{"POST /api/v1/service-identities", "`POST /service-identities`"},
+	{"GET /api/v1/service-identities", "`GET /service-identities`"},
+	{"GET /api/v1/service-identities/{name}", "`DELETE /service-identities/{name}`"},
+	{"PATCH /api/v1/service-identities/{name}", "`DELETE /service-identities/{name}`"},
+	{"DELETE /api/v1/service-identities/{name}", "`DELETE /service-identities/{name}`"},
+	{"POST /api/v1/tokens/{id}/move", "`POST /tokens/{id}/move`"},
 }
 
 // docTierUndocumented names the gated routes the tier table does not cover, each
@@ -260,18 +271,6 @@ var docTierUndocumented = map[string]string{
 	// 0.9 H12 (#1964): the credential delivery policy's tier row is the docs pass's.
 	"GET /api/v1/governance/credential-delivery": "0.9 H12: the tier-table row is the docs pass's (the OPERATIONS.md prose budget is its to move)",
 	"PUT /api/v1/governance/credential-delivery": "0.9 H12: as the GET above",
-	// 0.9 #1508: the invitation tier rows are the docs lane's (the OPERATIONS.md prose budget is its to move).
-	"POST /api/v1/people/{principal}/invitations": "0.9 F-1508: the tier-table row is the docs pass's",
-	"GET /api/v1/people/{principal}/invitations":  "0.9 F-1508: as the POST above",
-	"GET /api/v1/invitations":                     "0.9 F-1508: as the POST above",
-	"DELETE /api/v1/invitations/{id}":             "0.9 F-1508: as the POST above",
-	// 0.9 #1508 service identities: the same docs-pass ownership.
-	"POST /api/v1/service-identities":          "0.9 F-1508: the tier-table row is the docs pass's",
-	"GET /api/v1/service-identities":           "0.9 F-1508: as the POST above",
-	"GET /api/v1/service-identities/{name}":    "0.9 F-1508: as the POST above",
-	"PATCH /api/v1/service-identities/{name}":  "0.9 F-1508: as the POST above",
-	"DELETE /api/v1/service-identities/{name}": "0.9 F-1508: as the POST above",
-	"POST /api/v1/tokens/{id}/move":            "0.9 F-1508: the tier-table row is the docs pass's",
 }
 
 // TestOperationsTierTableMatchesRouteMatrix pins the "What admin-only still
