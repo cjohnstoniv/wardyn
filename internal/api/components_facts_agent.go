@@ -13,10 +13,11 @@ import (
 
 // agentComponentFact describes the admitted harness and the one chosen model
 // lane. No credential value, provider id, access-portal URL or arbitrary
-// dispatch settings cross this boundary. Exec runs have no agent process.
+// dispatch settings cross this boundary. Exec runs and runs that name no
+// harness have no agent process.
 func agentComponentFact(f componentFactInputs) (componentFact, bool) {
 	req := *f.req
-	if req.TaskMode == "exec" {
+	if req.TaskMode == "exec" || req.Agent == "" {
 		return componentFact{}, false
 	}
 	a := &client.AgentFact{Agent: req.Agent, Hosts: []client.AgentHostFact{}, Secrets: []client.AgentSecretFact{}}

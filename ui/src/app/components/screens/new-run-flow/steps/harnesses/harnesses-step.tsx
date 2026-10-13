@@ -53,6 +53,13 @@ export function HarnessesStep({ go, deps }: NewRunScreenProps & { deps?: { load:
   });
   const addable = roster.harnesses.find((h) => !ids.includes(h.id) && !unavailableReason(h, taken, roster));
   const comingSoon = mode === "autonomous" && ids.length > 0;
+  // The Add button disables once nothing more can be added, so focus follows the new harness's select.
+  const focusNew = React.useRef<number | null>(null);
+  React.useEffect(() => {
+    if (focusNew.current === null) return;
+    document.getElementById(`nr-harness-${focusNew.current}`)?.focus();
+    focusNew.current = null;
+  }, [ids.length]);
 
   // Make gives a new Agent task one harness that starts the run (App.tsx:1258-1270). The roster's first addable
   // harness stands in for Make's fixed Claude Code (A14e). A template, a rerun or an import keeps what it carries.
@@ -111,6 +118,7 @@ export function HarnessesStep({ go, deps }: NewRunScreenProps & { deps?: { load:
           aria-describedby={blocked.length ? UNAVAILABLE_ID : undefined}
           onClick={() => {
             if (!addable) return;
+            focusNew.current = ids.length;
             edit((i) => addHarness(i, addable.id));
             announce(NR_HARNESSES.ADDED);
           }}
