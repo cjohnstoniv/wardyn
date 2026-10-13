@@ -27,7 +27,7 @@ export function makeRun(o: Partial<AgentRun> = {}): AgentRun {
     spiffe_id: "spiffe://wardyn/run-1",
     runner_target: "docker",
     // Every run has a placement on the wire, so the factory states one: remote,
-    // the organisation's own executor.
+    // a remote-hosted runner.
     placement: "remote",
     ...o,
   };

@@ -12,6 +12,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"maps"
 	"strings"
 	"sync"
 	"time"
@@ -29,6 +30,10 @@ import (
 type Config struct {
 	RunnerID  string
 	Substrate substrate.Substrate
+	// HoldsSandbox reports whether a local ref is a sandbox this runner created
+	// and durably holds. Any other ref reaches the substrate only when the
+	// substrate proves it a sandbox created for this runner.
+	HoldsSandbox func(string) bool
 	// BeforeCreate durably establishes a unique creation intent and live lease.
 	// Nil proves a NEW run; every existing or ambiguous intent must refuse.
 	BeforeCreate func(context.Context, runner.SandboxSpec) error
@@ -69,7 +74,7 @@ type Dispatcher struct {
 
 func New(cfg Config) (*Dispatcher, error) {
 	id, err := uuid.Parse(cfg.RunnerID)
-	if err != nil || id.String() != cfg.RunnerID || cfg.Substrate == nil || cfg.BeforeCreate == nil || cfg.Created == nil || cfg.CreateFailed == nil || cfg.BeforeRefCall == nil || cfg.AfterRefCall == nil || cfg.MutationFinished == nil || cfg.ExecutionResult == nil {
+	if err != nil || id.String() != cfg.RunnerID || cfg.Substrate == nil || cfg.HoldsSandbox == nil || cfg.BeforeCreate == nil || cfg.Created == nil || cfg.CreateFailed == nil || cfg.BeforeRefCall == nil || cfg.AfterRefCall == nil || cfg.MutationFinished == nil || cfg.ExecutionResult == nil {
 		return nil, errors.New("runner dispatcher requires a registered id, local substrate and durable lifecycle handlers")
 	}
 	if substrate.IsRemote(cfg.Substrate) {
@@ -168,6 +173,13 @@ func (d *Dispatcher) create(ctx context.Context, peer *runnerwire.Peer, id uint3
 	if err != nil {
 		return nil, err
 	}
+	// The label is what proves the sandbox this runner's own once its durable
+	// record is lost.
+	filled.Labels = maps.Clone(filled.Labels)
+	if filled.Labels == nil {
+		filled.Labels = map[string]string{}
+	}
+	filled.Labels[runner.LabelRunnerID] = d.cfg.RunnerID
 	sandbox, err := d.cfg.Substrate.CreateSandbox(ctx, filled)
 	if err != nil {
 		// A substrate may lose its create response or fail best-effort rollback.
@@ -222,6 +234,9 @@ func (d *Dispatcher) refCall(ctx context.Context, method string, args json.RawMe
 	if err != nil {
 		return nil, err
 	}
+	if err := d.owned(ctx, ref); err != nil {
+		return nil, err
+	}
 	changing := changesRef(method)
 	generation, err := executionGeneration(method, args)
 	if err != nil {
@@ -247,6 +262,24 @@ func (d *Dispatcher) refCall(ctx context.Context, method string, args json.RawMe
 		return nil, err
 	}
 	return result, nil
+}
+
+// owned refuses a ref the runner neither durably holds nor can prove it
+// created, so the control plane cannot stop, remove or read any other
+// container on the runner's engine. The proof keeps containment working for a
+// run whose local identity was lost.
+func (d *Dispatcher) owned(ctx context.Context, ref string) error {
+	if d.cfg.HoldsSandbox(ref) {
+		return nil
+	}
+	prover, ok := d.cfg.Substrate.(runner.RunnerSandboxProver)
+	if !ok {
+		return runnerwire.Refuse("sandbox reference is not a sandbox this runner created")
+	}
+	if err := prover.ProveRunnerSandbox(ctx, ref, d.cfg.RunnerID); err != nil {
+		return runnerwire.Refuse("sandbox reference is not a sandbox this runner created: %v", err)
+	}
+	return nil
 }
 
 func executionGeneration(method string, args json.RawMessage) (uuid.UUID, error) {

@@ -16,6 +16,7 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"golang.org/x/crypto/ssh"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
@@ -67,10 +68,25 @@ func newSponsorEnv(t *testing.T) sponsorEnv {
 	e.boss = accessSession(t, bossSub, "boss@corp.example", oidc.RoleAdmin, []string{})
 	e.mustCreate(t, svcName, svcSponsor)
 	e.mustCreate(t, bossBot, bossSub)
+	ageSponsorships(t, e.pool)
 	e.runner = &holderTestRunner{}
 	e.h.srv.cfg.Runner = e.runner
 	e.h.srv.cfg.Approvals = attentionApprovals{ApprovalService: e.h.srv.cfg.Approvals, st: e.st}
 	return e
+}
+
+// ageSponsorships moves every sponsor_since an hour into the past. A sponsor's entry is admitted only when
+// sponsor_since is not after the request's authority time, and that time is translated onto the database
+// clock by an anchor that moves it EARLIER by however long the app took to read its clock after the database
+// answered (a stall under load is tens of milliseconds, by design: toward revocation). A sponsorship written
+// a few milliseconds before the request is then "not yet" the sponsor's, the mint is refused as
+// attach_ticket_foreign_run, and a test asserting capability_feature flakes. Tests that exercise the grant
+// switch, not the cutoff, age the sponsorship; the ones that exercise the cutoff do not call this until after.
+func ageSponsorships(t *testing.T, pool *pgxpool.Pool) {
+	t.Helper()
+	if _, err := pool.Exec(context.Background(), `UPDATE service_identities SET sponsor_since = sponsor_since - interval '1 hour'`); err != nil {
+		t.Fatalf("age sponsorships: %v", err)
+	}
 }
 
 // seedRun stores a RUNNING run of owner (a principal), with a sandbox, and applies mut before the write.
@@ -461,6 +477,7 @@ func TestServiceIdentity_SponsorEntryEndsWithSponsorship(t *testing.T) {
 	if got := attach(roundTrip); got != http.StatusForbidden {
 		t.Errorf("a ticket redeemed after A to B to A: %d, want 403", got)
 	}
+	ageSponsorships(t, e.pool)
 	if w := e.mintTicket(t, e.sponsor, run); w.Code != http.StatusOK {
 		t.Errorf("the sponsor's fresh mint after A to B to A: %d %s, want 200", w.Code, w.Body.String())
 	}
@@ -474,6 +491,7 @@ func TestServiceIdentity_SponsorEntryEndsWithSponsorship(t *testing.T) {
 	if got := attach(changed); got != http.StatusForbidden {
 		t.Errorf("a ticket redeemed after the sponsor changed: %d, want 403", got)
 	}
+	ageSponsorships(t, e.pool)
 	if w := e.mintTicket(t, e.sponsor, run); !refusedAsForeign(w) {
 		t.Errorf("the previous sponsor's mint: %d %s, want the foreign-run 404", w.Code, w.Body.String())
 	}

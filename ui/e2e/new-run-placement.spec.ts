@@ -5,7 +5,7 @@
 
 // New Run, placement (DS-5 T24): a capped pool that is full tells Review, and
 // Launch lands on Waiting where the run can be cancelled; an offline
-// self-hosted pool is a blocker that links to the Run step; a pool the person
+// user pool is a blocker that links to the Run step; a pool the person
 // picks reaches the wire, and an untouched one sends none.
 //
 // Pools and the preflight are stubbed from the New Run scenario fixtures: the
@@ -116,7 +116,7 @@ test.describe("New Run, placement: a full pool and an offline pool", () => {
     // Review says it plainly, and still lets the run launch: waiting is not a refusal.
     await expect(page.getByText(RUN_WAIT.AT_CAPACITY("CI jobs", 40))).toBeVisible();
     await expect(page.getByText(NR_REVIEW.WHERE_VALUE("CI jobs"), { exact: true })).toBeVisible();
-    await expect(page.getByText(NR_REVIEW.WHERE_DETAIL("Remote Provided", 40, 40))).toBeVisible();
+    await expect(page.getByText(NR_REVIEW.WHERE_DETAIL("Organization pool", 40, 40))).toBeVisible();
 
     await nameAndLaunch(page, "waiting run");
     await expect(page.getByText(NR_LAUNCH.BADGE_WAITING, { exact: true })).toBeVisible();
@@ -135,7 +135,7 @@ test.describe("New Run, placement: a full pool and an offline pool", () => {
     await expect.poll(() => seen.killed).toEqual([RUN_ID]);
   });
 
-  test("an offline self-hosted pool is a blocker in the server's sentence, and it links to the Run step", async ({ page }) => {
+  test("an offline user pool is a blocker in the server's sentence, and it links to the Run step", async ({ page }) => {
     const sentence = POOL_OFFLINE.NO_ONLINE_RUNNER(LAPTOPS.name);
     await stub(page, { preflight: { status: 422, body: { error: sentence, reason: "runner_offline" } } });
     await openReview(page);

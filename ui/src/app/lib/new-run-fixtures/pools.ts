@@ -4,7 +4,7 @@
  */
 
 // The Runner tab's pool selector states (owner amendment, runner pools): one pool,
-// several, an empty Self-Hosted catalogue, a pool with none of the person's own
+// several, an empty user-pool catalogue, a pool with none of the person's own
 // runners, and the refused default. Preview data only: no server answers these
 // yet, and every sentence is the one the server will send.
 import type { RunnerDraft } from "../run-contract-draft";
@@ -35,24 +35,24 @@ const answer = (pools: RunnerPoolChoice[], runner_pool?: ResolvedRunnerPool) =>
 export const POOL_FIXTURES: FixtureBody[] = [
   {
     route: "runner/pool-single",
-    note: "One Remote Provided pool, seeded by the organisation default; the selector is still shown.",
+    note: "One organization pool, seeded by the organization default; the selector is still shown.",
     preview: answer([BUILD_FARM], resolved(BUILD_FARM, "organisation_default")),
     contract: draft({ poolId: BUILD_FARM.id }),
   },
   {
     route: "runner/pool-personal-default",
-    note: "Two Remote Provided pools; the person's own default beats the organisation's.",
+    note: "Two organization pools; the person's own default beats the organization's.",
     preview: answer([BUILD_FARM, GPU_FARM], resolved(GPU_FARM, "personal_default")),
     contract: draft({ poolId: GPU_FARM.id }),
   },
   {
     route: "runner/pool-self-empty",
-    note: "Self-Hosted with no permitted pool: the empty area carries the setup link, and Self-Hosted stays selectable.",
+    note: "User pools with no permitted pool: the empty area carries the setup link, and User pools stays selectable.",
     preview: answer([]),
   },
   {
     route: "runner/pool-self-no-own-runner",
-    note: "A Self-Hosted pool exists but none of the person's own runners is in it; never another person's.",
+    note: "A user pool exists but none of the person's own runners is in it; never another person's.",
     preview: answer([NO_OWN_RUNNER]),
     refusal: { status: 422, reason: "runner_pool_no_eligible_member", text: RUNNER_POOL_REFUSAL.NO_OWN_RUNNER(TEAM_LAPTOPS.name) },
   },

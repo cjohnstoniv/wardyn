@@ -87,7 +87,7 @@ export function ToolsGroup({ draft, pre, preview, docRows, go, dispatch }: Group
             const starts = interactive ? h.id === starter : startsAutomatically(intent, h.id, harnesses);
             const prompt = interactive ? (starts ? intent.startup?.prompt : undefined) : (starts ? intent.workload?.task : undefined);
             return (
-              <div key={h.id} className="grid grid-cols-[minmax(100px,1fr)_auto] items-center gap-x-2 gap-y-1 rounded-md border border-border bg-surface-2 px-2.5 py-2 text-sm">
+              <div key={h.id} className="grid grid-cols-[minmax(100px,1fr)_auto] items-center gap-x-2 gap-y-1 rounded-md border border-border bg-surface-2 px-2.5 py-2 text-sm max-[520px]:grid-cols-1 max-[520px]:justify-items-start">
                 <strong className="font-medium">{name(h.id)}</strong>
                 <Chip>{interactive ? (starts ? NR_REVIEW.HARNESS_STARTS : NR_REVIEW.HARNESS_AFTER) : (starts ? NR_REVIEW.HARNESS_AUTO : NR_REVIEW.HARNESS_NOT_AUTO)}</Chip>
                 <span className="col-span-full min-w-0 break-words text-xs text-muted-foreground">{prompt?.trim() ? prompt : NR_REVIEW.HARNESS_NO_PROMPT}</span>

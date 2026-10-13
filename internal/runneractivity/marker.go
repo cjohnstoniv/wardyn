@@ -13,6 +13,8 @@ import (
 	"os"
 
 	"github.com/google/uuid"
+
+	"github.com/cjohnstoniv/wardyn/internal/spoolowner"
 )
 
 const epochFile = "live-epoch.json"
@@ -119,9 +121,11 @@ func write(root *os.Root, name string, m Marker) error {
 		return err
 	}
 	defer root.Remove(temp) //nolint:errcheck // rename removes the temporary name
+	// The directory is the run's spool, shared by wardyn-runnerd and the proxy: the file keeps its owner.
+	oerr := spoolowner.Keep(root, f)
 	_, werr := f.Write(data)
 	cerr := f.Close()
-	if err := errors.Join(werr, cerr); err != nil {
+	if err := errors.Join(oerr, werr, cerr); err != nil {
 		return err
 	}
 	return root.Rename(temp, name)

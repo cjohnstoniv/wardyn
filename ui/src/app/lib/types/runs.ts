@@ -108,8 +108,8 @@ export interface AgentRun {
   // Empty while the run is QUEUED; written when it starts.
   spiffe_id: string;
   runner_target: string;
-  // Where the sandbox lives (0.9 client mode): "remote", the organisation's own
-  // executor, or "local", a runner the person registered. ALWAYS on the wire —
+  // Where the sandbox lives (0.9 client mode): "remote", a remote-hosted
+  // runner, or "local", a runner the person registered. ALWAYS on the wire —
   // "" is a run from before 0.9 or one whose placement nothing recorded yet, so
   // this is a plain string union and not an optional field. Not
   // `confinement_source`, which says who CHOSE the class.
