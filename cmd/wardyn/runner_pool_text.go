@@ -6,7 +6,7 @@ package main
 import (
 	"fmt"
 	"io"
-	"strings"
+	"regexp"
 
 	sdk "github.com/cjohnstoniv/wardyn/pkg/client"
 )
@@ -31,7 +31,7 @@ func printPoolCreated(w io.Writer, p sdk.RunnerPool, asJSON, withRunners bool) e
 	if own := poolLimitsText(p, sdk.RunnerAmounts{}); own != "none of its own: it follows its runners" {
 		limits = own + "; it has no runners yet"
 	}
-	_, err := fmt.Fprintf(w, "  limits: %s. Put a runner in it: wardyn runner pool add %s <runner>\n", limits, shellWord(p.Name))
+	_, err := fmt.Fprintf(w, "  limits: %s. Put a runner in it: wardyn runner pool add %s <runner>\n", limits, poolWord(p))
 	return err
 }
 
@@ -50,10 +50,14 @@ func printPoolDeleted(w io.Writer, p sdk.RunnerPool) error {
 	return err
 }
 
-// shellWord is name as one word on a command line: quoted when it holds a space.
-func shellWord(name string) string {
-	if strings.ContainsAny(name, " \t") {
-		return `"` + name + `"`
+// plainName is a pool name that is one safe word on any shell's command line.
+var plainName = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
+
+// poolWord is the pool as a printed command names it: by its name when that is one plain word, so the
+// line reads as the design's, and otherwise by its id, which is always safe to paste.
+func poolWord(p sdk.RunnerPool) string {
+	if plainName.MatchString(p.Name) {
+		return p.Name
 	}
-	return name
+	return p.ID.String()
 }
