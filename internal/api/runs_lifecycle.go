@@ -247,8 +247,8 @@ func (s *Server) stopSandboxOrAudit(ctx context.Context, runID uuid.UUID, ref, a
 // revokeRunCascade performs the identity + broker revocation half of the
 // kill-switch cascade for a run: it deny-lists the run token
 // (Identity.RevokeRun) and revokes any minted broker credentials
-// (Broker.RevokeRun). Both are nil-safe and best-effort; an error is audited as
-// run.revoke/failure and returned so durable receipt cleanup can retry.
+// (Broker.RevokeRun). Both are nil-safe and best-effort; an error is audited as run.revoke/failure and
+// returned so durable receipt cleanup can retry, but a pending run PAT revoke alone (the PAT sweep's) is not.
 // It is shared by handleKillRun and the completion watcher so EVERY terminal
 // transition revokes (matching the documented cascade-on-every-stop promise).
 func (s *Server) revokeRunCascade(ctx context.Context, runID uuid.UUID) error {
@@ -267,27 +267,21 @@ func (s *Server) revokeRunCascade(ctx context.Context, runID uuid.UUID) error {
 		data["proxy_config_error"] = perr.Error()
 	}
 	s.revokeRunPATs(ctx, runID, adoPATRevokeRunEnd)
-	// A run PAT Azure DevOps has not yet confirmed revoked is recorded here, but it is the run PAT sweep's
-	// to retry, on its own cadence: it does not leave the run's teardown incomplete, or the runner exit
-	// tail would run this whole cascade again on every sweep until Azure DevOps answers.
-	patPending := false
 	if st, ok := s.cfg.Store.(store.RunPATStore); ok {
 		rows, err := st.ListUnrevokedRunPATs(ctx, store.RunPATFilter{RunID: runID})
 		if err != nil {
 			data["pat_revoke_check_error"] = err.Error()
 		} else if len(rows) > 0 {
 			data["pat_revoke_pending"] = len(rows)
-			patPending = true
 		}
 	}
 	if len(data) > 0 {
-		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.revoke",
-			runID.String(), "failure", mustJSON(data)))
+		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.revoke", runID.String(), "failure", mustJSON(data)))
 	}
-	if len(data) > 0 && !(patPending && len(data) == 1) {
-		return fmt.Errorf("run revoke incomplete: %v", data)
+	if _, pending := data["pat_revoke_pending"]; len(data) == 0 || (pending && len(data) == 1) {
+		return ctx.Err()
 	}
-	return ctx.Err()
+	return fmt.Errorf("run revoke incomplete: %v", data)
 }
 
 // cancelRunApprovals is the approval half of the terminal cascade: every
