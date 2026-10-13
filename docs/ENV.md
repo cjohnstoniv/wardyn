@@ -1443,6 +1443,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - And a session that lapses **mid-run HOLDS** the sandbox's next `GetRoleCredentials` call while its owner signs in again (`WARDYN_CREDENTIAL_REAUTH_TIMEOUT`, below) instead of failing the run.
 - `off`: the pre-0.7.6 behaviour — the token is written into the sandbox, no `portal.sso` MITM, no hold, no sign-in requests.
 - An AWS CLI component has no `off` lane: with the switch off, every run door refuses it (`component_cli_aws_inject_off`), and so does dispatch.
+- On a run whose model provider is Bedrock, the sandbox's `AWS_REGION` is the Bedrock region, and it overrides an AWS CLI component's default region for `aws`. Pass `--region` where the two differ.
 - **`off` applies to NEW dispatches only**: the placeholder cache, the injection grant and the MITM entry are all authored at dispatch.
 - So a run already running keeps the lane it was authored with until it ends.
 - Flip it, then relaunch the runs that matter or wait them out.
