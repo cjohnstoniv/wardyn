@@ -42,6 +42,8 @@ vi.mock("../../../../wardyn/model-access-context", () => ({
     refresh: () => {},
   }),
 }));
+// The catalogue's own read is its tests' (catalogue.test.tsx): here it stays unanswered.
+vi.mock("../../../../../lib/api/components", () => ({ components: { mine: () => new Promise(() => {}), saveMine: vi.fn() } }));
 vi.mock("../../../../../lib/hooks/use-ado-connect", () => ({
   useAdoConnect: () => ({ connecting: false, connect: h.connect, connectFallback: h.connect, cancel: () => {}, blockedUrl: null }),
 }));
