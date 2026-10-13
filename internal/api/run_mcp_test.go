@@ -346,3 +346,18 @@ func TestInheritedMCPHoldRefusesBackgroundCodex(t *testing.T) {
 		}
 	}
 }
+
+// A command workload is refused at every door when the policy explicitly holds
+// a tool of an MCP server bound to a harness it includes, Claude Code or Codex
+// CLI: a harness a command starts is off the gated lane.
+func TestInheritedMCPHoldRefusesACommandsHarness(t *testing.T) {
+	for _, harness := range []string{"claude-code", "codex-cli"} {
+		for _, tc := range mcpHoldCases(t) {
+			for _, door := range componentDoors {
+				t.Run(harness+"/"+tc.name+door, func(t *testing.T) {
+					askMCPHold(t, tc, door, harness, map[string]any{"kind": "command", "command": "make"})
+				})
+			}
+		}
+	}
+}

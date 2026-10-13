@@ -187,11 +187,17 @@ func (s *Server) toolRulesWithinPolicyRefusal(req createRunRequest, spec types.R
 // inheritedMCPHoldRefusal refuses a run whose resolved policy explicitly holds a
 // tool of an MCP server bound to a harness nothing can pause, as
 // harnessToolRulesRefusal refuses the person's own hold: a background Codex CLI
-// run has no approval contract and no gated lane, and the MCP broker passes a
-// held call, so nothing would ask.
+// run has no approval contract and no gated lane, every harness a command
+// starts is off the gated lane, and the MCP broker passes a held call, so
+// nothing would ask.
 func inheritedMCPHoldRefusal(req createRunRequest, spec types.RunPolicySpec, comps runComponents) *runRefusal {
 	var harnesses []string
-	if req.Agent == codexHarness && !requestIsInteractive(req) {
+	switch {
+	case req.TaskMode == "exec":
+		for _, t := range req.Tools {
+			harnesses = append(harnesses, t.ID)
+		}
+	case req.Agent == codexHarness && !requestIsInteractive(req):
 		harnesses = []string{codexHarness}
 	}
 	for _, h := range harnesses {
