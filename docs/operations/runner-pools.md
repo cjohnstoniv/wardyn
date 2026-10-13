@@ -89,13 +89,16 @@ The pool list's `barrier_options` always answers Fence, Wall and Vault (`CC1`, `
 
 A launch waits, stored `QUEUED`, when its pool is running its Runs at once or when no runner that could take it has room. A waiting run holds no credential and no sandbox.
 
-| Wait reason | The run says |
-|---|---|
-| `runner_pool_at_capacity` | "{pool} is running its limit of {n}. This run starts when there's room." |
-| `runner_pool_runners_at_capacity` | "Every runner in {pool} is at its limit. This run starts when one has room." |
-| `runner_pool_no_runner_free` | "None of your runners in {pool} is online. This run starts when one is." |
+| Wait reason | When | The run says |
+|---|---|---|
+| `runner_pool_at_capacity` | The pool is running its Runs at once. | "{pool} is running its limit of {n}. This run starts when there's room." |
+| `runner_pool_runners_at_capacity` | A runner the run could start on is usable, and each one is at one of its limits. | "Every runner in {pool} is at its limit. This run starts when one has room." |
+| `runner_pool_no_runner_free` | No runner the run could start on is usable yet: each is offline, declares no limits or cannot enforce the run's barrier. | "None of your runners in {pool} is online. This run starts when one is." |
 
-- Waiting runs start in launch order, each after its owner's access, role and user type are checked again.
+- The oldest waiting run that can be placed starts first, after its owner's access, role and user type are checked again. A run that cannot be placed yet keeps its place.
+- A waiting run starts only on a runner its launch could use (`queueRunnerFree`, [`internal/api/run_queue_promote.go`](../../internal/api/run_queue_promote.go)): one that enforces the barrier the run was queued at, and the kind or the runner the launch named.
+- It never starts on one of your own runners when it has drives or could not have been launched there.
+- A waiting run is sized again for the runner it starts on, as a fresh launch there would be, and holds that size on it.
 - A run waits at most `86400` seconds (24 hours) as a background task and `3600` seconds (1 hour) as an interactive environment. `max_wait_sec` (`wardyn run --max-wait`) changes that, up to `604800` seconds (7 days).
 - A run that waits too long ends `FAILED` with `queue_timeout`. Killing a waiting run cancels it.
 - A waiting run also ends when its pool is deleted (`runner_pool_removed`) or its owner's sessions are revoked.
