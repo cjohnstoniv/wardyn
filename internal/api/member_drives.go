@@ -361,20 +361,22 @@ type memberDriveDeletion struct {
 func (s *Server) deleteMemberDrive(r *http.Request, ms store.MemberDriveStore, d types.UserDrive, started time.Time, by string) memberDriveDeletion {
 	// Past the tombstone the delete finishes even if the caller goes away, so
 	// the row is always removed or restored and the attempt audited.
+	// The substrate work after it (the lifecycle check and the reclaim) is
+	// bounded by driveReclaimTimeout; running out aborts and keeps the drive.
 	r = r.WithContext(context.WithoutCancel(r.Context()))
 	ctx := r.Context()
+	sctx, cancel := context.WithTimeout(ctx, driveReclaimTimeout)
+	defer cancel()
 	mount, err := memberDriveMount(d)
 	res := memberDriveDeletion{object: mount.ObjectName}
 	rc, ok := s.cfg.Runner.(runner.DriveReclaimer)
 	switch {
 	case err != nil:
 		res.outcome, res.reason = driveReclaimOutcomeFailed, reasonMemberDriveDeleteFailed
-	case !ok || d.Backend.RunnerTarget() != s.cfg.RunnerTarget || !s.memberDrivesDeletable(ctx):
+	case !ok || d.Backend.RunnerTarget() != s.cfg.RunnerTarget || !s.memberDrivesDeletable(sctx):
 		res.outcome, res.reason = driveReclaimOutcomeFailed, reasonMemberDriveDeleteUnavailable
 	default:
-		rctx, cancel := context.WithTimeout(ctx, driveReclaimTimeout)
-		outcome, rerr := rc.ReclaimDrive(rctx, mount)
-		cancel()
+		outcome, rerr := rc.ReclaimDrive(sctx, mount)
 		switch {
 		case rerr == nil:
 			res.outcome = string(outcome)

@@ -12,9 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"maps"
 	"net/http"
-	"slices"
 
 	"github.com/google/uuid"
 
@@ -28,11 +26,13 @@ import (
 // memberReachableDrives appends the caller's own member drives to out: matched
 // on the exact sign-in subject (never the email), each resolved through an
 // in-memory user-tier grant to its owner, so its home and object are the ones
-// delete reclaims. A drive being deleted is left out. None is legacy.
+// delete reclaims. A drive being deleted is left out. None is legacy. A
+// caller whose runs are created as someone else (a device, a service identity)
+// reaches none, since dispatch re-reads each drive under the run's creator.
 func (s *Server) memberReachableDrives(ctx context.Context, out []reachableDrive, ceiling driveSizeCeiling) ([]reachableDrive, error) {
 	ms, ok := s.cfg.Store.(store.MemberDriveStore)
 	owner := types.CanonicalUserSubject(oidcHumanFromContext(ctx))
-	if !ok || owner == "" {
+	if _, actor := actorFromContext(ctx, ""); !ok || owner == "" || types.CanonicalUserSubject(actor) != owner {
 		return out, nil
 	}
 	drives, err := ms.ListMemberDrivesOf(ctx, owner)
@@ -164,18 +164,19 @@ func (s *Server) templateMemberDrivesRefused(w http.ResponseWriter, r *http.Requ
 	}
 	var drives []client.DriveAttachment
 	var start client.StartFolder
-	paths := map[string]string{}
+	var named [][2]string // path, drive id, in document order
 	if json.Unmarshal(doc.Intent.Raw("drives"), &drives) == nil {
 		for i, a := range drives {
-			paths[fmt.Sprintf("intent.drives[%d]", i)] = a.DriveID
+			named = append(named, [2]string{fmt.Sprintf("intent.drives[%d]", i), a.DriveID})
 		}
 	}
 	if json.Unmarshal(doc.Intent.Raw("start_folder"), &start) == nil && start.DriveID != "" {
-		paths["intent.start_folder.drive_id"] = start.DriveID
+		named = append(named, [2]string{"intent.start_folder.drive_id", start.DriveID})
 	}
 	var diags []client.TemplateDiagnostic
-	for _, path := range slices.Sorted(maps.Keys(paths)) {
-		id, err := uuid.Parse(paths[path])
+	for _, n := range named {
+		path := n[0]
+		id, err := uuid.Parse(n[1])
 		if err != nil {
 			continue
 		}

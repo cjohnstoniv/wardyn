@@ -14,6 +14,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/placement"
@@ -380,5 +381,88 @@ func TestMemberDriveDeleteOutlivesTheRequest(t *testing.T) {
 				t.Error("the kept drive is not back in its owner's catalogue")
 			}
 		})
+	}
+}
+
+// blockingLifecycle is a substrate whose lifecycle check answers only when its
+// context ends.
+type blockingLifecycle struct{ *memberDriveRunner }
+
+func (blockingLifecycle) CanManageDrives(ctx context.Context) error {
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+// TestMemberDriveDeleteLifecycleCheckBounded: a lifecycle check that never
+// answers is cut off at driveReclaimTimeout; the delete is refused and the
+// tombstone cleared, so the drive is its owner's again.
+func TestMemberDriveDeleteLifecycleCheckBounded(t *testing.T) {
+	st := newMemberDriveStore()
+	srv, _ := memberDriveServer(st, blockingLifecycle{catalogueRunner()}, "docker")
+	d, err := st.CreateMemberDrive(context.Background(), types.UserDrive{Name: "Notes", Backend: types.DriveBackendDockerVolume, OwnerSubject: aliceSub}, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := d.ID.String()
+	done := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		done <- memberCall(personCtx(aliceSub), srv.handleDeleteMyDrive, http.MethodDelete, "/api/v1/me/drives/"+id, "", map[string]string{"id": id})
+	}()
+	select {
+	case w := <-done:
+		wantReason(t, w, http.StatusUnprocessableEntity, reasonMemberDriveDeleteUnavailable)
+	case <-time.After(driveReclaimTimeout + 15*time.Second):
+		t.Fatal("the delete is still waiting on the lifecycle check past driveReclaimTimeout")
+	}
+	if got := st.drives[d.ID]; got.DeleteStartedAt != nil {
+		t.Error("the tombstone stayed set after the lifecycle check ran out")
+	}
+}
+
+// agreeStore lets a refused dispatch fail a run that is not stored.
+type agreeStore struct{ *memberDriveStore }
+
+func (agreeStore) UpdateRunStateIf(context.Context, uuid.UUID, types.RunState, types.RunState) (bool, error) {
+	return false, nil
+}
+
+// TestMemberDriveAttachAndDispatchAgree: for every caller kind, a member drive
+// attach and the dispatch re-read agree. A person's session, their own API
+// token and a delegated caller attach it and dispatch keeps it; a device or a
+// service identity, whose runs are created as itself, cannot attach it and
+// does not see it.
+func TestMemberDriveAttachAndDispatchAgree(t *testing.T) {
+	st := newMemberDriveStore()
+	srv, _ := memberDriveServer(st, catalogueRunner(), "docker")
+	srv.cfg.Store = agreeStore{st}
+	alice := personCtx(aliceSub)
+	d, err := st.CreateMemberDrive(context.Background(), types.UserDrive{Name: "Notes", Backend: types.DriveBackendDockerVolume, OwnerSubject: aliceSub}, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, tc := range map[string]struct {
+		ctx    context.Context
+		attach bool
+	}{
+		"session":          {alice, true},
+		"own api token":    {withAPITokenID(alice, uuid.New()), true},
+		"delegated":        {audit.WithDelegation(alice, types.DelegationVia{}), true},
+		"device":           {context.WithValue(alice, deviceCtxKey{}, types.Device{ID: uuid.New()}), false},
+		"service identity": {withServiceIdentity(alice, "ci-bot", aliceSub), false},
+	} {
+		drives, f := authorizeDrives(srv, tc.ctx, drivesRequest(d.ID.String()))
+		if (f == nil) != tc.attach {
+			t.Errorf("%s: attach refusal = %+v, want attach %v", name, f, tc.attach)
+		}
+		if f != nil {
+			if f.body.Reason != string(authz.ReasonDriveNotFound) || len(meDrivesOf(t, srv, tc.ctx).Drives) != 0 {
+				t.Errorf("%s: refused as %q, or the catalogue still lists the drive", name, f.body.Reason)
+			}
+			continue
+		}
+		_, creator := actorFromContext(tc.ctx, "")
+		if !srv.memberDrivesStillThere(tc.ctx, types.AgentRun{ID: uuid.New(), CreatedBy: creator}, memberDriveOwners(drives)) {
+			t.Errorf("%s: attach admitted the drive but dispatch refused it", name)
+		}
 	}
 }

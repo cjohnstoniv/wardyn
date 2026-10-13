@@ -71,11 +71,12 @@ func TestMemberDriveNeverLegacyWinner(t *testing.T) {
 
 // TestPG_QueueStartMemberDriveRecheck: a member drive deleted, or being
 // deleted, while the run waited ends the promoted run FAILED as
-// drive_not_found, with nothing minted.
+// drive_not_found, with nothing minted; one still there starts with it.
 func TestPG_QueueStartMemberDriveRecheck(t *testing.T) {
 	for name, change := range map[string]string{
 		"deleted":       `DELETE FROM user_drives WHERE id = $1`,
 		"being deleted": `UPDATE user_drives SET delete_started_at = now() WHERE id = $1`,
+		"kept":          "",
 	} {
 		t.Run(name, func(t *testing.T) {
 			e := newQueueEnv(t)
@@ -93,6 +94,17 @@ func TestPG_QueueStartMemberDriveRecheck(t *testing.T) {
 			var queued queuedLaunchAnswer
 			if err := json.Unmarshal(w.Body.Bytes(), &queued); err != nil || w.Code != http.StatusCreated || queued.State != types.RunQueued {
 				t.Fatalf("launch with her drive into a full pool = %d %s; want 201 QUEUED", w.Code, w.Body)
+			}
+			if change == "" {
+				e.free(occupant)
+				e.waitStarted(queued.ID)
+				e.eventually("the sandbox with her drive", func() bool {
+					fr := e.runner.fakeRunner
+					fr.mu.Lock()
+					defer fr.mu.Unlock()
+					return fr.lastSpec.RunID == queued.ID && len(fr.lastSpec.Drives) == 1 && fr.lastSpec.Drives[0].DriveID == mine.ID
+				})
+				return
 			}
 			e.exec(change, mine.ID)
 			e.free(occupant)
