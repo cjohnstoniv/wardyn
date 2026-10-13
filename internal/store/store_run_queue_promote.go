@@ -359,14 +359,16 @@ func reservedOf(ctx context.Context, q Querier, ids []uuid.UUID) (map[uuid.UUID]
 }
 
 // promoteQueuedRun is the promotion CAS: QUEUED to PENDING, admitted_at and the watcher lease stamped,
-// the runner it now holds a place on written when runner or remote is set, and the run_queue row deleted in the
+// the runner it now holds a place on written when runner or remote is set (and the other kind's cleared, so
+// the run is counted on that one runner alone), and the run_queue row deleted in the
 // same statement, the run row before its queue row as every exit from the queue takes them. ok is false
 // when another exit won first.
 func promoteQueuedRun(ctx context.Context, q Querier, id uuid.UUID, owner string, runner *uuid.UUID, remote string) (types.AgentRun, bool, error) {
 	run, err := scanRun(q.QueryRow(ctx, `
 		WITH moved AS (
 			UPDATE agent_runs SET state=$2, updated_at=now(), admitted_at=now(), watcher_owner=$3, watcher_heartbeat=now(),
-				runner_id=COALESCE($5, runner_id), runner_pool_executor=COALESCE(NULLIF($6, ''), runner_pool_executor)
+				runner_id=CASE WHEN $6 <> '' THEN NULL ELSE COALESCE($5, runner_id) END,
+				runner_pool_executor=CASE WHEN $5::uuid IS NOT NULL THEN '' ELSE COALESCE(NULLIF($6, ''), runner_pool_executor) END
 			WHERE id=$1 AND state=$4 RETURNING `+runCols+`),
 		gone AS (DELETE FROM run_queue WHERE run_id IN (SELECT id FROM moved) RETURNING run_id)
 		SELECT `+runCols+` FROM moved`,
@@ -485,40 +487,44 @@ type QueueStart struct {
 	RunnerFallbacks    []uuid.UUID
 	EvidenceSource     types.RunEvidenceSource
 	RunnerPoolExecutor string
+	// RemoteFallbacks are the run's other remote-hosted runners, RunnerFallbacks' counterpart.
+	RemoteFallbacks []string
+	// Reserved is what the run holds on its runner as it starts: the start folds the run afresh, so
+	// this is the size it starts with, never the one it joined the queue with.
+	Reserved types.RunnerAmounts
 }
 
 // StartQueuedRun writes the start's columns on a run that was promoted (PENDING, admitted_at set) and
 // has not been dispatched, and returns the row. ok is false when the run is no longer in that state,
 // so a kill that won leaves nothing written. A run bound to a runner of either kind is held to that
-// runner's limits, what the run reserves counted and the run itself not, under the runner rows' locks:
-// RunnerID when it has room (the promotion found it room there), else the first of RunnerFallbacks
-// that has, else RunnerAtCapacityError; a remote-hosted run, its RunnerPoolExecutor.
+// runner's limits at the size it starts with (Reserved, written to the row in the same statement), the
+// run itself not counted, under the runner rows' locks: RunnerID when it has room (the promotion found
+// it room there), else the first of RunnerFallbacks that has, else RunnerAtCapacityError; a
+// remote-hosted run, RunnerPoolExecutor and then RemoteFallbacks, alike.
 func (s PG) StartQueuedRun(ctx context.Context, id uuid.UUID, st QueueStart) (run types.AgentRun, ok bool, err error) {
 	limits, err := json.Marshal(st.RunLimits)
 	if err != nil {
 		return types.AgentRun{}, false, fmt.Errorf("store: marshal run limits: %w", err)
 	}
 	err = s.inTx(ctx, func(q Querier) error {
-		needs, err := reservedOf(ctx, q, []uuid.UUID{id})
-		if err != nil {
-			return err
-		}
 		switch {
 		case st.RunnerID != nil:
 			keys := []string{st.RunnerID.String()}
 			for _, f := range st.RunnerFallbacks {
 				keys = append(keys, f.String())
 			}
-			chosen, err := admitOnFirstRunner(ctx, q, keys, needs[id], id)
+			chosen, err := admitOnFirstRunner(ctx, q, keys, st.Reserved, id)
 			if err != nil {
 				return err
 			}
 			bound := uuid.MustParse(chosen)
 			st.RunnerID = &bound
 		case st.RunnerPoolExecutor != "":
-			if err := admitOnRunner(ctx, q, st.RunnerPoolExecutor, needs[id], id); err != nil {
+			chosen, err := admitOnFirstRunner(ctx, q, append([]string{st.RunnerPoolExecutor}, st.RemoteFallbacks...), st.Reserved, id)
+			if err != nil {
 				return err
 			}
+			st.RunnerPoolExecutor = chosen
 		}
 		run, ok, err = startQueuedRun(ctx, q, id, st, limits)
 		return err
@@ -530,13 +536,14 @@ func startQueuedRun(ctx context.Context, q Querier, id uuid.UUID, st QueueStart,
 	run, err := scanRun(q.QueryRow(ctx, `
 		UPDATE agent_runs SET spiffe_id=$2, confinement_class=$3, model_provider_id=$4, autonomy_level=$5, ends_at=$6,
 			wait_budget_sec=$7, run_limits=$8, governance_profile_id=$9, lifetime_cap_at=$10, lifetime_cap_source=$11,
-			placement=$12, placement_filled=$13, runner_id=$14, evidence_source=$15, runner_pool_executor=$16, updated_at=now()
+			placement=$12, placement_filled=$13, runner_id=$14, evidence_source=$15, runner_pool_executor=$16, updated_at=now(),
+			reserved_cpu_millis=$18, reserved_memory_mib=$19, reserved_disk_mib=$20
 		WHERE id=$1 AND state=$17 AND admitted_at IS NOT NULL AND sandbox_ref = ''
 		RETURNING `+runCols,
 		id, st.SPIFFEID, string(st.ConfinementClass), st.ModelProviderID, string(st.AutonomyLevel), st.EndsAt,
 		st.WaitBudgetSec, limits, st.GovernanceProfileID, st.LifetimeCapAt, string(st.LifetimeCapSource),
 		string(st.Placement), st.PlacementFilled, st.RunnerID, string(st.EvidenceSource), st.RunnerPoolExecutor,
-		string(types.RunPending)))
+		string(types.RunPending), st.Reserved.CPUMillis, st.Reserved.MemoryMiB, st.Reserved.DiskMiB))
 	if errors.Is(err, ErrNotFound) {
 		return types.AgentRun{}, false, nil
 	}

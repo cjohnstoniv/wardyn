@@ -388,25 +388,28 @@ func MemberCap(ceiling, profileMax, untouched int) int {
 // RunnerCapacity is one runner's declared per-run limit: the most one run may reserve there.
 type RunnerCapacity struct{ CPUMillis, MemoryMiB, DiskMiB int64 }
 
-// RunnerCapacitySource is a pooled run's runner side of Effective: the LARGEST per-run limit among its
-// candidates, field by field, so the doors show the biggest run the pool can take; placement then keeps
-// only the candidates whose own per-run limit holds the size the run gets, so the runner it is placed
-// on always bounds it. It bounds CPU, memory and the main drive alike, so no resource of a pooled run
-// is unlimited. No candidate, or one that declares no limit, is an error: a missing limit refuses the
-// run, it is never read as zero or as unlimited.
+// RunnerCapacitySource is a pooled run's runner side of Effective: the per-run limit of ONE of its
+// candidates, the largest by CPU, then memory, then disk, so the size the run is cut to is one a real
+// runner takes whole. A cap built field by field from different runners (one's CPU, another's memory)
+// would be a size no runner takes. Placement then keeps only the candidates whose own per-run limit
+// holds the size the run gets, so the runner it is placed on always bounds it. It bounds CPU, memory and
+// the main drive alike, so no resource of a pooled run is unlimited. No candidate, or one that declares
+// no limit, is an error: a missing limit refuses the run, it is never read as zero or as unlimited.
 func RunnerCapacitySource(candidates ...RunnerCapacity) (SourceLimits, error) {
 	out := SourceLimits{Source: types.LimitSourceRunner}
 	if len(candidates) == 0 {
 		return out, errors.New("no candidate runner to take a limit from")
 	}
-	var cpu, mem, disk int64
+	best := candidates[0]
 	for _, c := range candidates {
 		if c.CPUMillis < 1 || c.MemoryMiB < 1 || c.DiskMiB < 1 {
 			return out, errors.New("a candidate runner declares no per-run limit")
 		}
-		cpu, mem, disk = max(cpu, c.CPUMillis), max(mem, c.MemoryMiB), max(disk, c.DiskMiB)
+		if cmp.Or(cmp.Compare(c.CPUMillis, best.CPUMillis), cmp.Compare(c.MemoryMiB, best.MemoryMiB), cmp.Compare(c.DiskMiB, best.DiskMiB)) > 0 {
+			best = c
+		}
 	}
 	clamp := func(v int64) *int { return Int(int(min(v, math.MaxInt32))) }
-	out.CPUMillis.Max, out.MemoryMiB.Max, out.DiskMiB.Max = clamp(cpu), clamp(mem), clamp(disk)
+	out.CPUMillis.Max, out.MemoryMiB.Max, out.DiskMiB.Max = clamp(best.CPUMillis), clamp(best.MemoryMiB), clamp(best.DiskMiB)
 	return out, nil
 }

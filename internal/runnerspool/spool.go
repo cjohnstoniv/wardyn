@@ -112,6 +112,11 @@ func Open(dir string, runID uuid.UUID) (*Spool, error) {
 		return nil, errors.New("unsafe spool lock file")
 	}
 	s := &Spool{root: root, lock: lock, runID: runID}
+	if err := s.own(lock); err != nil {
+		lock.Close()
+		root.Close()
+		return nil, err
+	}
 	err = s.locked(context.Background(), func() error {
 		m, err := s.readManifest()
 		if errors.Is(err, os.ErrNotExist) {
