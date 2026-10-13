@@ -20,7 +20,7 @@ export const STARTS_FOCUS_ID = "nr-starts-here";
 export const SUBFOLDER_ID = "nr-start-subfolder";
 
 const SELECT_CLASS =
-  "h-9 w-full rounded-md border border-input bg-input-background px-3 text-sm outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-60";
+  "h-[42px] w-full rounded-md border border-input bg-input-background px-3 text-sm outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-60";
 
 /** A subfolder must stay inside its item: no leading "/", no "..", no empty part. */
 export function cleanSubfolder(text: string): { value?: string; bad: boolean } {
@@ -37,24 +37,26 @@ export function StartingFolder({ items, text, onText, onStart }: {
   onText: (text: string) => void;
   onStart: (item: FileItem) => void;
 }) {
+  // Only what the run can start in: of a workspace's folders, the first (the server opens that one).
+  const choices = items.filter((i) => i.canStart);
   const start = items.find((i) => i.starts);
   const errorId = React.useId();
   const sub = cleanSubfolder(text);
-  const none = items.length === 0;
+  const none = choices.length === 0;
   const result = start?.path ? `${start.path}${sub.value && !sub.bad ? `/${sub.value}` : ""}` : "/home/agent";
 
   return (
     <FilesGroup titleId="nr-start-title" title={NR_FILES.START_TITLE} body={NR_FILES.START_BODY}>
       <div className="grid grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)] gap-3 px-[15px] py-3.5 max-[520px]:grid-cols-1">
         <div className="flex flex-col gap-1.5">
-          <label htmlFor={STARTS_FOCUS_ID} className="text-sm font-medium">{NR_FILES.START_FOLDER_LABEL}</label>
+          <label htmlFor={STARTS_FOCUS_ID} className="text-xs font-semibold">{NR_FILES.START_FOLDER_LABEL}</label>
           <select
             id={STARTS_FOCUS_ID}
             className={SELECT_CLASS}
             disabled={none}
             value={none ? "main" : start?.key ?? ""}
             onChange={(e) => {
-              const item = items.find((i) => i.key === e.target.value);
+              const item = choices.find((i) => i.key === e.target.value);
               if (!item) return;
               onText("");
               onStart(item);
@@ -63,18 +65,18 @@ export function StartingFolder({ items, text, onText, onStart }: {
             {none ? <option value="main">{NR_FILES.START_MAIN}</option> : (
               <>
                 {!start && <option value="" disabled hidden />}
-                {items.map((i) => <option key={i.key} value={i.key}>{NR_FILES.START_OPTION(i.name, i.path ?? "")}</option>)}
+                {choices.map((i) => <option key={i.key} value={i.key}>{NR_FILES.START_OPTION(i.name, i.path ?? "")}</option>)}
               </>
             )}
           </select>
         </div>
         <div className="flex flex-col gap-1.5">
-          <label htmlFor={SUBFOLDER_ID} className="flex items-center justify-between gap-2 text-sm font-medium">
+          <label htmlFor={SUBFOLDER_ID} className="flex items-center justify-between gap-2 text-xs font-semibold">
             {NR_FILES.SUBFOLDER_LABEL} <Chip tone="info">{NR_SHARED.OPTIONAL}</Chip>
           </label>
           <Input
             id={SUBFOLDER_ID}
-            className="font-mono"
+            className="h-[42px] font-mono"
             disabled={none || !start}
             value={text}
             placeholder={NR_FILES.SUBFOLDER_PLACEHOLDER}
@@ -82,7 +84,7 @@ export function StartingFolder({ items, text, onText, onStart }: {
             aria-describedby={sub.bad ? errorId : undefined}
             onChange={(e) => onText(e.target.value)}
           />
-          {sub.bad && start && <p id={errorId} className="flex items-center gap-1.5 text-sm text-danger"><TriangleAlert className="size-3.5 flex-none" aria-hidden="true" />{NR_FILES.SUBFOLDER_ERROR(start.name)}</p>}
+          {sub.bad && start && <p id={errorId} className="flex items-center gap-1.5 text-xs text-danger"><TriangleAlert className="size-3.5 flex-none" aria-hidden="true" />{NR_FILES.SUBFOLDER_ERROR(start.name)}</p>}
         </div>
         <p className="col-span-full flex flex-wrap items-baseline gap-2 border-t border-border pt-[11px] text-sm">
           <span className="font-semibold text-muted-foreground">{NR_FILES.STARTS_HERE}</span>
