@@ -46,7 +46,7 @@ func claimedLocalRunner(t *testing.T, st store.PG) types.Runner {
 	t.Helper()
 	id := uuid.New()
 	rn, err := st.CreateRunner(context.Background(), types.Runner{ID: id, Owner: maskOwner, Name: "laptop", PublicKey: make([]byte, 32),
-		KeyFingerprint: id.String(), Version: "0.9.0", OrgURLSHA256: federation.OrgURLSHA256(admissionOrgURL)})
+		KeyFingerprint: id.String(), Version: "0.9.0", OrgURLSHA256: federation.OrgURLSHA256(admissionOrgURL), Limits: roomyRunnerLimits()})
 	if err != nil {
 		t.Fatal(err)
 	}

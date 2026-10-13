@@ -111,14 +111,17 @@ func (s PG) markRunRevivedUnderCap(ctx context.Context, id uuid.UUID, from types
 			}
 		}
 		// The run keeps what it reserved, and is held to its runner's limits beside the OTHER runs there.
+		// A run no pool placed (one the server launched itself, stamped on its runner at dispatch) is
+		// counted there and exempt from its limits, at a revive as at its start.
 		var runner *uuid.UUID
 		var remote string
+		var pooled bool
 		var need types.RunnerAmounts
-		if err := q.QueryRow(ctx, `SELECT runner_id, runner_pool_executor, `+runReservedCols+` FROM agent_runs WHERE id = $1`, id).
-			Scan(&runner, &remote, &need.CPUMillis, &need.MemoryMiB, &need.DiskMiB); err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		if err := q.QueryRow(ctx, `SELECT runner_id, runner_pool_executor, runner_pool_id IS NOT NULL, `+runReservedCols+` FROM agent_runs WHERE id = $1`, id).
+			Scan(&runner, &remote, &pooled, &need.CPUMillis, &need.MemoryMiB, &need.DiskMiB); err != nil && !errors.Is(err, pgx.ErrNoRows) {
 			return fmt.Errorf("store: read revive runner: %w", err)
 		}
-		if key := runnerKeyOf(runner, remote); key != "" {
+		if key := runnerKeyOf(runner, remote); key != "" && (runner != nil || pooled) {
 			if err := admitOnRunner(ctx, q, key, need, id); err != nil {
 				return err
 			}

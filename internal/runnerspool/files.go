@@ -58,10 +58,12 @@ func (s *Spool) writeBytes(name string, b []byte) error {
 	if err != nil {
 		return err
 	}
+	// Before the rename: the file that replaces name is the spool owner's, as the one it replaces was.
+	ownErr := s.own(f)
 	_, writeErr := io.Copy(f, bytes.NewReader(b))
 	syncErr := f.Sync()
 	closeErr := f.Close()
-	if err := errors.Join(writeErr, syncErr, closeErr); err != nil {
+	if err := errors.Join(ownErr, writeErr, syncErr, closeErr); err != nil {
 		return err
 	}
 	if err := s.root.Rename(tmp, name); err != nil {

@@ -132,7 +132,7 @@ func (s *Server) catalogueEntry(r *http.Request, in *poolListInput, row store.Ru
 	e.MainDrive = s.poolMainDriveFor(row, st.own, func(x string) (runner.TargetFacts, bool) { return in.executorFacts(ctx, s, x) })
 	fit, _ := eligibleTargets(targets, placementDemand{floor: in.ceiling.Spec, reqCCOK: true, fits: in.fits})
 	for _, rt := range want {
-		sources, ref, err := s.limitSources(ctx, rt, &row.Pool, in.ceiling, in.untouched, runnerSource(fit, ""))
+		sources, ref, err := s.limitSources(ctx, rt, &row.Pool, in.ceiling, in.untouched, runnerSource(fit, "", types.RunnerAmounts{}))
 		if err != nil {
 			return client.RunnerPoolCatalogueEntry{}, runServerError("resolve pool limits", err)
 		}
