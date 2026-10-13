@@ -325,7 +325,8 @@ func checkFoldShape(t *testing.T, fset *token.FileSet, steps []foldStepDecl) {
 		}
 		for _, d := range f.Decls {
 			fn, ok := d.(*ast.FuncDecl)
-			if ok && takesFold(fn) && !slices.Contains(names, fn.Name.Name) {
+			// One that never reads a mode (runFold.launch, what both doors dispatch) has no mode branch to miss.
+			if ok && takesFold(fn) && !slices.Contains(names, fn.Name.Name) && readsMode(fn) {
 				t.Errorf("%s: %s takes a runFold or a foldMode but is not a runFoldSteps step: a mode branch there is invisible to this guard", file, fn.Name.Name)
 			}
 		}
@@ -348,6 +349,23 @@ func takesFold(fn *ast.FuncDecl) bool {
 		}
 	}
 	return false
+}
+
+// readsMode reports whether fn can branch on a fold's mode: it takes a foldMode, or reads a mode field.
+func readsMode(fn *ast.FuncDecl) bool {
+	for _, field := range fn.Type.Params.List {
+		if id, ok := field.Type.(*ast.Ident); ok && id.Name == "foldMode" {
+			return true
+		}
+	}
+	found := false
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		if sel, ok := n.(*ast.SelectorExpr); ok && sel.Sel.Name == "mode" {
+			found = true
+		}
+		return !found
+	})
+	return found
 }
 
 // gateScan collects the Server methods a door calls, in first-call order.
