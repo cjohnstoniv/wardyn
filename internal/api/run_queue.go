@@ -331,6 +331,8 @@ func (q queuedCreate) warnings(s *Server, r *http.Request, created types.AgentRu
 		}
 	}
 	warnings = append(warnings, q.f.autonomyWarns...)
+	warnings = append(warnings, s.managedSettingsUndeliveredWarning(ctx, managedSettingsRun{req: &q.req, spec: q.f.spec, harnesses: q.f.harnesses, level: q.f.autonomy.Level,
+		locked: ceilingForDispatch(q.f.ceiling, q.f.adoGrade, q.f.bedrockGrade).agentGuardrailLocks, class: q.f.enforced, place: q.f.place}, nil)...)
 	warnings = append(warnings, s.repoSourceWarnings(ctx, created.ID, q.f.spec, q.req)...)
 	warnings = append(warnings, q.f.fitWarnings...)
 	warnings = append(warnings, q.f.end.warnings(created)...)
