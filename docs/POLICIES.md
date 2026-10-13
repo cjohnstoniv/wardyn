@@ -857,7 +857,7 @@ What the check does and does not settle:
   - See [three-roles.md § Three roles, and who sets the walls](operations/three-roles.md#three-roles-and-who-sets-the-walls) for the rubric that decides it.
 - The level never rewrites `tool_rules`, but it decides whether they take effect.
 - Since 0.9 a background Claude Code run whose resolved policy holds or denies any tool is routed through the tool gate automatically. So is one where the person set a tool rule or default.
-  - Tools the rules do not name keep running without a prompt: the routed run's default is `*: allow`, with provenance `posture`.
+  - Tools the rules do not name keep running without a prompt: when the policy has no `*` rule of its own, the routed run's default is `*: allow`, with provenance `posture`. A policy `*` rule stays in force.
   - A run already on the gated lane (an explicit `tool_approvals: hold`, a governance profile, autonomy `L1`) keeps its own default: an unmatched tool is held.
   - Codex CLI and other harnesses without Wardyn's gate are not routed.
 
@@ -882,7 +882,7 @@ What the check does and does not settle:
 
 **It narrows; it never widens.**
 
-- A rule never makes a supervised run autonomous: a run on the gated lane keeps its hold default, and a routed run is never looser than the ungated run it replaces.
+- A rule never makes a supervised run autonomous: a run on the gated lane keeps its hold default. A routed run keeps the policy's own `*` rule and is never looser than the ungated run it replaces.
 - The worst a mistaken rule can do is ask a human more often, or refuse a call the agent wanted.
 - That holds across the member seam too: a member's `inline_policy` may narrow the operator's rules, never widen them.
 - The composer clamp raises any weaker effect to the operator's (`allow` < `hold` < `deny`) and carries the operator's own rules into the run.
