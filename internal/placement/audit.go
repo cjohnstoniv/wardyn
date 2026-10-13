@@ -15,6 +15,7 @@ const (
 	ActionRunnerDisconnect        = "runner.disconnect"
 	ActionRunnerActionRequest     = "runner.action.request"
 	ActionRunnerActionApply       = "runner.action.apply"
+	ActionRunnerActionRefuse      = "runner.action.refuse"
 	ActionRunnerPostureRecord     = "runner.posture.record"
 	ActionRunnerResidentErase     = "runner.resident.erase"
 	ActionCredentialDeliveryWrite = "credential.delivery.write"
@@ -27,7 +28,7 @@ const (
 // AuditActions lists them all.
 var AuditActions = []string{
 	ActionRunnerTokenCreate, ActionRunnerTokenRevoke, ActionRunnerEnrol, ActionRunnerClaim, ActionRunnerRevoke,
-	ActionRunnerConnect, ActionRunnerDisconnect, ActionRunnerActionRequest, ActionRunnerActionApply,
+	ActionRunnerConnect, ActionRunnerDisconnect, ActionRunnerActionRequest, ActionRunnerActionApply, ActionRunnerActionRefuse,
 	ActionRunnerPostureRecord, ActionRunnerResidentErase, ActionCredentialDeliveryWrite,
 	ActionSSHSyncTransfer, ActionRunnersEnabledSet, ActionRunnerInventoryHold, ActionRunnerUpdate,
 }

@@ -142,6 +142,7 @@ type ActionResult struct {
 	ID         uuid.UUID `json:"id"`
 	Outcome    string    `json:"outcome"`
 	ObservedAt time.Time `json:"observed_at"`
+	Reason     string    `json:"reason,omitempty"` // why a refused action was refused
 }
 
 // RunState is one run's entry in the STATE payload; all runner_asserted.

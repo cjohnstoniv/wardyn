@@ -28,7 +28,7 @@ func missingIdentityAction(a runnerwire.PendingAction) bool {
 // proof is lostProof's answer for the same action.
 func (m *Manager) containmentIdentity(a runnerwire.PendingAction, local string, proof error) (localRun, error) {
 	if !missingIdentityAction(a) {
-		return localRun{}, errors.New("missing local identity only permits exact queued containment")
+		return localRun{}, refusal(errors.New("missing local identity only permits exact queued containment"))
 	}
 	if proof != nil {
 		return localRun{}, proof
@@ -56,7 +56,11 @@ func (m *Manager) lostProof(ctx context.Context, a runnerwire.PendingAction) err
 	}
 	prove, cancel := context.WithTimeout(ctx, m.proofTimeout)
 	defer cancel()
-	return m.proveLost(prove, local)
+	err := m.proveLost(prove, local)
+	if err != nil && prove.Err() == nil {
+		return refusal(err)
+	}
+	return err
 }
 
 // proveLost refuses a lost-identity ref the substrate cannot prove a sandbox
@@ -75,7 +79,7 @@ func (m *Manager) proveLost(ctx context.Context, local string) error {
 }
 
 func (m *Manager) pendingRun(a runnerwire.PendingAction, proof error) (localRun, error) {
-	if a.ID == uuid.Nil {
+	if a.ID == uuid.Nil || a.RunID == uuid.Nil {
 		return localRun{}, errors.New("pending action has no identity")
 	}
 	r, ok := m.state.Runs[a.RunID]
@@ -89,7 +93,7 @@ func (m *Manager) pendingRun(a runnerwire.PendingAction, proof error) (localRun,
 		ok = true
 	}
 	if !ok || !belongs || local == "" || r.Ref != local {
-		return localRun{}, errors.New("pending action does not match a local run")
+		return localRun{}, refusal(errors.New("pending action does not match a local run"))
 	}
 	return r, nil
 }

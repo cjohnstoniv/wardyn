@@ -59,6 +59,9 @@ func (m *Manager) apply(ctx context.Context, a runnerwire.PendingAction) (runner
 		}
 	}
 	r, err := m.pendingRun(a, proof)
+	if refused := (actionRefusal{}); errors.As(err, &refused) {
+		return m.refuseAction(ctx, a, err)
+	}
 	if err != nil {
 		return runnerwire.ActionResult{}, err
 	}

@@ -172,6 +172,8 @@ type RunnerPendingAction struct {
 const (
 	RunnerActionSuccess  = "success"
 	RunnerActionDeferred = "deferred"
+	// RunnerActionRefused closes an action the runner can never apply.
+	RunnerActionRefused = "refused"
 )
 
 // CredentialDeliveryPolicyDoc is the stored local_credential_delivery document.
