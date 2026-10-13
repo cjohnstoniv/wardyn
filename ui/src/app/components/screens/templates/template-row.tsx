@@ -45,11 +45,12 @@ export function TemplateRow({
   const needs = needsSetupLabel(t);
   const owner = ownerLine(t);
   const why = t.writable ? null : whyReadOnly(t);
-  // aria-disabled, not disabled: the control stays focusable so the reason beside it is reachable.
+  // aria-disabled, not disabled: the control stays focusable and describes itself by the reason, which shows as
+  // a hover title as in the prototype (proto wardyn-templates.html:251-253).
   const locked = !t.writable;
   const guard = (act: () => void) => (locked ? undefined : act);
   const lockedProps = locked
-    ? { "aria-disabled": true as const, "aria-describedby": why ? `${nameId} ${whyId}` : nameId }
+    ? { "aria-disabled": true as const, "aria-describedby": why ? `${nameId} ${whyId}` : nameId, title: why ?? undefined }
     : { "aria-describedby": nameId };
   const lockedClass = cn(locked && "aria-disabled:cursor-not-allowed aria-disabled:opacity-50 aria-disabled:hover:bg-transparent");
 
@@ -72,7 +73,7 @@ export function TemplateRow({
       </div>
       <div className="min-w-0 space-y-1">
         <CellLabel>{T.COL_AVAILABLE}</CellLabel>
-        <Chip>{scopeLabel(t)}</Chip>
+        <Chip tone={t.scope === "person" ? "primary" : "neutral"}>{scopeLabel(t)}</Chip>
         {owner && <p className="text-xs text-muted-foreground">{owner}</p>}
       </div>
       <div className="min-w-0">
@@ -92,7 +93,7 @@ export function TemplateRow({
       </div>
       <div className="space-y-1.5 md:justify-self-end">
         <div className="flex flex-wrap gap-1.5 md:justify-end">
-          <Button asChild variant="outline" size="sm">
+          <Button asChild size="sm">
             <Link to={startHref(t)} aria-describedby={nameId}>
               {T.USE}
             </Link>
@@ -110,9 +111,9 @@ export function TemplateRow({
           )}
         </div>
         {why && (
-          <p id={whyId} className="max-w-[28ch] text-xs text-muted-foreground md:text-right">
+          <span id={whyId} className="sr-only">
             {why}
-          </p>
+          </span>
         )}
       </div>
     </li>
