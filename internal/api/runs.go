@@ -475,7 +475,7 @@ func newRunRow(ctx context.Context, in runRowInput) types.AgentRun {
 		RunnerPoolID: placed.RunnerPoolID, RunnerPoolRevision: placed.RunnerPoolRevision,
 		RunnerPoolSelection: placed.RunnerPoolSelection, RunnerPoolExecutor: placed.RunnerPoolExecutor,
 		// What it holds on that runner: the CPU and memory it gets and its main drive (runner limits).
-		Reserved: f.reserved(),
+		Reserved: f.place.reserved(f.mainDrive),
 	}
 }
 

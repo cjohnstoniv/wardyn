@@ -404,7 +404,7 @@ func (s *Server) queueLaunch(st *queuedStart, req createRunRequest, ceiling gove
 		LifetimeCapAt: anchor.LifetimeCapAt, LifetimeCapSource: anchor.LifetimeCapSource,
 		Placement: placed.Placement, PlacementFilled: placed.PlacementFilled, RunnerID: placed.RunnerID,
 		EvidenceSource: placed.EvidenceSource, RunnerPoolExecutor: placed.RunnerPoolExecutor, RunnerFallbacks: f.place.otherRunners(f.enforced, placed.RunnerID),
-		RemoteFallbacks: f.place.otherRemotes(f.enforced, placed.RunnerPoolExecutor), Reserved: f.reserved(),
+		RemoteFallbacks: f.place.otherRemotes(f.enforced, placed.RunnerPoolExecutor), Reserved: f.place.reserved(f.mainDrive),
 	})
 	switch {
 	case errors.Is(err, store.ErrRunnerAtCapacity):

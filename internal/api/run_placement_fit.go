@@ -136,9 +136,8 @@ func runnerSource(fit []poolTarget, pin string, ask types.RunnerAmounts) []runne
 }
 
 // reserved is what the run holds on its runner while it holds a sandbox there: the CPU and memory it
-// gets and its main drive, as this fold sized them. The insert writes it, and a queued run's start
+// gets and its main drive, as the fold sized them. The insert writes it, and a queued run's start
 // writes it again, since the start folds the run afresh.
-func (f *runFold) reserved() types.RunnerAmounts {
-	return types.RunnerAmounts{CPUMillis: int64(f.place.applied.CPUMillis.Applied), MemoryMiB: int64(f.place.applied.MemoryMiB.Applied),
-		DiskMiB: int64(f.mainDrive.MiB)}
+func (p runPlacement) reserved(drive mainDrive) types.RunnerAmounts {
+	return types.RunnerAmounts{CPUMillis: int64(p.applied.CPUMillis.Applied), MemoryMiB: int64(p.applied.MemoryMiB.Applied), DiskMiB: int64(drive.MiB)}
 }
