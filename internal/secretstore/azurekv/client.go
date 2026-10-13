@@ -518,7 +518,28 @@ func (c *client) authed(ctx context.Context, method, u, op string, body []byte) 
 // default port (https://v.vault.azure.net:443/...) still matches a base that
 // omits it. A link carrying userinfo never matches.
 func sameOrigin(base, u *url.URL) bool {
-	return u.User == nil && u.Scheme == base.Scheme && strings.EqualFold(u.Hostname(), base.Hostname()) && effectivePort(u) == effectivePort(base)
+	return u.User == nil && u.Scheme == base.Scheme && sameHost(u.Hostname(), base.Hostname()) && effectivePort(u) == effectivePort(base)
+}
+
+// sameHost compares two host names as DNS does: ASCII letters fold and nothing
+// else does. strings.EqualFold would also take a Kelvin sign for a k.
+func sameHost(a, b string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range len(a) {
+		x, y := a[i], b[i]
+		if 'A' <= x && x <= 'Z' {
+			x += 'a' - 'A'
+		}
+		if 'A' <= y && y <= 'Z' {
+			y += 'a' - 'A'
+		}
+		if x != y {
+			return false
+		}
+	}
+	return true
 }
 
 // effectivePort is u's port, or its scheme's default when it names none.
