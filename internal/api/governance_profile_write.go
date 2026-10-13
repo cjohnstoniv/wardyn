@@ -245,7 +245,7 @@ func (s *Server) writeGovernanceProfile(w http.ResponseWriter, r *http.Request, 
 		func(all []types.GovernanceProfile) (types.GovernanceProfile, error) {
 			p, res, err := s.buildGovernanceProfile(createdBy, id, req, all)
 			effective = res
-			if err == nil && mode == govQueue && !s.profileWriteExempt(all, p, res) {
+			if err == nil && mode == govQueue && !s.profileWriteExempt(r.Context(), all, p, res) {
 				held = &heldProfileWrite{all: all, row: p, res: res}
 				return p, errHoldForApproval
 			}

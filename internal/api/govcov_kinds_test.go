@@ -4,6 +4,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -321,7 +322,47 @@ func TestGovCovProfileWriteExemptComparesTheResolvedComposition(t *testing.T) {
 			if res.Ceiling.LLMInspection == nil {
 				t.Fatal("the resolved composition carries no inspection; the fixture is wrong")
 			}
-			if got := s.profileWriteExempt(all, p, res); got != c.want {
+			if got := s.profileWriteExempt(context.Background(), all, p, res); got != c.want {
+				t.Errorf("profileWriteExempt = %v, want %v", got, c.want)
+			}
+		})
+	}
+}
+
+// TestGovCovProfileWriteExemptHoldsARenameThatMaySelect: the resolver breaks an equal-priority tie
+// between two group assignments by profile name, so a rename of a profile in such a tie is held by
+// both proofs, the metadata-only one and the narrowing one. A rename with no such tie still applies,
+// a narrowing that keeps the name still applies, and an unreadable assignment list holds the rename.
+func TestGovCovProfileWriteExemptHoldsARenameThatMaySelect(t *testing.T) {
+	other := uuid.MustParse("dddddddd-0000-0000-0000-0000000000aa")
+	group := func(subject string, profile uuid.UUID, priority int) types.GovernanceAssignment {
+		return types.GovernanceAssignment{SubjectType: types.CapabilitySubjectGroup, Subject: subject, ProfileID: profile, Priority: priority}
+	}
+	tie := []types.GovernanceAssignment{group("eng", govCovPID, 5), group("ops", other, 5)}
+	rename := `{"name":"renamed","ceiling":{"allowed_domains":["pypi.org","github.com"],"min_confinement_class":"CC2"}}`
+	renameNarrow := `{"name":"renamed","ceiling":{"allowed_domains":["pypi.org"],"min_confinement_class":"CC2"}}`
+	for _, c := range []struct {
+		name        string
+		assignments []types.GovernanceAssignment
+		err         error
+		body        string
+		want        bool
+	}{
+		{"a rename in an equal-priority group tie is held", tie, nil, rename, false},
+		{"a rename plus a narrowing in the tie is held", tie, nil, renameNarrow, false},
+		{"a narrowing that keeps the name still applies", tie, nil, govCovProfileBody("p", "pypi.org"), true},
+		{"a rename with the groups at different priorities applies", []types.GovernanceAssignment{group("eng", govCovPID, 5), group("ops", other, 4)}, nil, rename, true},
+		{"a rename whose tie is with a user row applies", []types.GovernanceAssignment{group("eng", govCovPID, 5),
+			{SubjectType: types.CapabilitySubjectUser, Subject: "u@corp.example", ProfileID: other, Priority: 5}}, nil, rename, true},
+		{"a rename when two groups share the profile itself applies", []types.GovernanceAssignment{group("eng", govCovPID, 5), group("ops", govCovPID, 5)}, nil, rename, true},
+		{"a rename when the assignments cannot be read is held", nil, errors.New("boom"), rename, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s, _ := govCovServer(t, &govCovStore{assignments: c.assignments, assignErr: c.err})
+			all := []types.GovernanceProfile{govCovStandalone(govCovPID, "p", "pypi.org", "github.com"),
+				govCovStandalone(other, "q", "pypi.org")}
+			p, res := govCovBuilt(t, s, all, govCovPID, c.body)
+			if got := s.profileWriteExempt(context.Background(), all, p, res); got != c.want {
 				t.Errorf("profileWriteExempt = %v, want %v", got, c.want)
 			}
 		})
@@ -339,7 +380,7 @@ func TestGovCovProfileWriteExemptEmptiedUIApps(t *testing.T) {
 	own.Ceiling.UIApps = docs
 	p, res := govCovBuilt(t, s, []types.GovernanceProfile{own}, govCovPID,
 		`{"name":"p","ceiling":{"allowed_domains":["pypi.org"],"min_confinement_class":"CC2","ui_apps":[]}}`)
-	if s.profileWriteExempt([]types.GovernanceProfile{own}, p, res) {
+	if s.profileWriteExempt(context.Background(), []types.GovernanceProfile{own}, p, res) {
 		t.Error("emptying a profile's own ui_apps applied without a second approver")
 	}
 
@@ -351,7 +392,7 @@ func TestGovCovProfileWriteExemptEmptiedUIApps(t *testing.T) {
 	if !res.Limits.DenyUIApps || len(res.Ceiling.UIApps) != 1 {
 		t.Fatalf("resolved ui_apps = %+v, deny_ui_apps = %v; want the base's app and the denial", res.Ceiling.UIApps, res.Limits.DenyUIApps)
 	}
-	if !s.profileWriteExempt(all, p, res) {
+	if !s.profileWriteExempt(context.Background(), all, p, res) {
 		t.Error("an overlay that empties ui_apps, which resolves to a denial, was held")
 	}
 }
@@ -410,13 +451,13 @@ func TestGovCovProfileWriteExempt(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			p, res := govCovBuilt(t, s, c.all, govCovPID, c.body)
-			if got := s.profileWriteExempt(c.all, p, res); got != c.want {
+			if got := s.profileWriteExempt(context.Background(), c.all, p, res); got != c.want {
 				t.Errorf("profileWriteExempt = %v, want %v", got, c.want)
 			}
 		})
 	}
 	p, _ := govCovBuilt(t, s, all, govCovPID, govCovProfileBody("p", "pypi.org"))
-	if s.profileWriteExempt(all, p, nil) {
+	if s.profileWriteExempt(context.Background(), all, p, nil) {
 		t.Error("a write that did not resolve can never be exempt")
 	}
 }
