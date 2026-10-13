@@ -473,10 +473,10 @@ describe("IdentityWidget: Runs on and Evidence", () => {
       </OperatorProvider>,
     );
 
-  it("a local run's owner reads 'laptop-7 · Self-Hosted', Evidence 'Reported by laptop-7', and the note", () => {
+  it("a local run's owner reads 'laptop-7 · your computer', Evidence 'Reported by laptop-7', and the note", () => {
     renderAs(base, "me");
     expect(screen.getByText("Runs on")).toBeInTheDocument();
-    expect(screen.getByText("laptop-7 · Self-Hosted")).toBeInTheDocument();
+    expect(screen.getByText("laptop-7 · your computer")).toBeInTheDocument();
     expect(screen.getByText("Evidence")).toBeInTheDocument();
     expect(screen.getByText("Reported by laptop-7")).toBeInTheDocument();
     expect(screen.getByText("laptop-7 is a computer its owner administers, so this run's barrier, egress decisions made on laptop-7, recording, output and exit code are as laptop-7 reported them.")).toBeInTheDocument();
@@ -496,7 +496,7 @@ describe("IdentityWidget: Runs on and Evidence", () => {
 
   it("names a runner the server could not read by a short id, never an empty name", () => {
     renderAs({ ...base, runner_name: undefined } as AgentRun, "me");
-    expect(screen.getByText("Runner 11111111 · Self-Hosted")).toBeInTheDocument();
+    expect(screen.getByText("Runner 11111111 · your computer")).toBeInTheDocument();
   });
 
   // C2: a remote run's Identity is today's, unless the resolver filled the place.
@@ -504,13 +504,13 @@ describe("IdentityWidget: Runs on and Evidence", () => {
     renderAs({ ...base, placement: "remote", runner_id: undefined, runner_name: undefined, evidence_source } as AgentRun, "me");
     expect(screen.queryByText("Runs on")).not.toBeInTheDocument();
     expect(screen.queryByText("Evidence")).not.toBeInTheDocument();
-    expect(screen.queryByText(/Self-Hosted|Remote Provided/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/your computer|Remote-hosted runner/)).not.toBeInTheDocument();
     expect(screen.queryByText(/is a computer its owner administers/)).not.toBeInTheDocument();
   });
 
   it("a remote run the resolver placed says where, and that it was the only place", () => {
     renderAs({ ...base, placement: "remote", placement_filled: true, runner_id: undefined, runner_name: undefined, evidence_source: "substrate" } as AgentRun, "me");
-    expect(screen.getByText("Remote Provided")).toBeInTheDocument();
+    expect(screen.getByText("Remote-hosted runner")).toBeInTheDocument();
     expect(screen.getByText("The only place this run could run.")).toBeInTheDocument();
   });
 });

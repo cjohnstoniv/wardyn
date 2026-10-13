@@ -38,13 +38,43 @@ const (
 )
 
 // promotedStartCtxKey marks a request context as the queue's start replaying a promoted run. Its value
-// is the runner the promotion bound the run to, nil when it bound none.
+// is the run and the runner the promotion bound it to, nil when it bound none.
 type promotedStartCtxKey struct{}
 
-type promotedStart struct{ runner *uuid.UUID }
+type promotedStart struct {
+	run    uuid.UUID
+	runner *uuid.UUID
+	remote string
+	// noLocal is the launch's NoLocal: the start keeps the run off the person's own runners too.
+	noLocal bool
+}
 
-func withPromotedStart(ctx context.Context, runner *uuid.UUID) context.Context {
-	return context.WithValue(ctx, promotedStartCtxKey{}, promotedStart{runner: runner})
+func withPromotedStart(ctx context.Context, run uuid.UUID, runner *uuid.UUID, remote string, noLocal bool) context.Context {
+	return context.WithValue(ctx, promotedStartCtxKey{}, promotedStart{run: run, runner: runner, remote: remote, noLocal: noLocal})
+}
+
+// promotedNoLocal reports whether ctx is the start of a promoted run that cannot run on the person's own
+// runners (queuedLaunch.NoLocal).
+func promotedNoLocal(ctx context.Context) bool {
+	v, _ := ctx.Value(promotedStartCtxKey{}).(promotedStart)
+	return v.noLocal
+}
+
+// promotedTarget is the target id of the runner, either kind, a promoted run's start finds the run bound
+// to; "" outside a promoted start or when the promotion bound none.
+func promotedTarget(ctx context.Context) string {
+	v, _ := ctx.Value(promotedStartCtxKey{}).(promotedStart)
+	if v.runner != nil {
+		return v.runner.String()
+	}
+	return v.remote
+}
+
+// promotedRun is the run a promoted start replays, uuid.Nil outside one: what it holds on its runner is
+// its own, never counted against it.
+func promotedRun(ctx context.Context) uuid.UUID {
+	v, _ := ctx.Value(promotedStartCtxKey{}).(promotedStart)
+	return v.run
 }
 
 // startingPromoted reports whether ctx is a promoted run's start, whose capacity was admitted by the
@@ -137,7 +167,7 @@ func newQueuedStart(base, prep context.Context, p store.PromotedRun) (*queuedSta
 func (st *queuedStart) bind(a queueAuthority) error {
 	st.auth = a
 	st.base = a.context(st.daemon)
-	st.ctx = withPromotedStart(withCeilingMemo(withCapBatch(a.context(st.prep))), st.run.RunnerID)
+	st.ctx = withPromotedStart(withCeilingMemo(withCapBatch(a.context(st.prep))), st.run.ID, st.run.RunnerID, st.run.RunnerPoolExecutor, st.launch.NoLocal)
 	r, err := http.NewRequestWithContext(st.ctx, http.MethodPost, "/api/v1/runs", nil)
 	if err != nil {
 		return err
@@ -372,9 +402,9 @@ func (s *Server) queueLaunch(st *queuedStart, req createRunRequest, ceiling gove
 	f := st.f
 	qs, _ := s.queueStore()
 	run := st.run
-	// The promotion bound the run to a runner it found room on; the start keeps it while it can still
-	// take the run, and otherwise the store picks another of the run's runners that has room.
-	placed := types.AgentRun{ID: run.ID, RunnerID: run.RunnerID}
+	// The promotion bound the run to a runner of either kind it found room on; the start keeps it while
+	// it can still take the run, and otherwise the store picks another of the run's runners that has room.
+	placed := types.AgentRun{ID: run.ID, RunnerID: run.RunnerID, RunnerPoolExecutor: run.RunnerPoolExecutor}
 	if ref := f.place.apply(&placed, f.enforced); ref.write(s, st.cw, st.r) {
 		return st.refusalEnd()
 	}
@@ -394,6 +424,7 @@ func (s *Server) queueLaunch(st *queuedStart, req createRunRequest, ceiling gove
 		LifetimeCapAt: anchor.LifetimeCapAt, LifetimeCapSource: anchor.LifetimeCapSource,
 		Placement: placed.Placement, PlacementFilled: placed.PlacementFilled, RunnerID: placed.RunnerID,
 		EvidenceSource: placed.EvidenceSource, RunnerPoolExecutor: placed.RunnerPoolExecutor, RunnerFallbacks: f.place.otherRunners(f.enforced, placed.RunnerID),
+		RemoteFallbacks: f.place.otherRemotes(f.enforced, placed.RunnerPoolExecutor), Reserved: f.place.reserved(f.mainDrive),
 	})
 	switch {
 	case errors.Is(err, store.ErrRunnerAtCapacity):

@@ -272,6 +272,14 @@ func (f *fakeRunner) releaseWait() { close(f.gate) }
 
 func (f *fakeRunner) Name() string { return "fake" }
 
+// Measure implements runner.Measurer, as the Docker and Kubernetes substrates do: the stand-in says what
+// it has, so the boot step proposes its limits. A runner that measures nothing gets none and takes no
+// run. The size is the largest whose proposal the limits allow (a thousand runs at once), so runs left
+// by earlier tests in a shared database never fill it.
+func (f *fakeRunner) Measure(context.Context) (types.RunnerAmounts, error) {
+	return types.RunnerAmounts{CPUMillis: 2 * types.RunnerPoolCPUMillisMax, MemoryMiB: 2 * types.RunnerPoolMemoryMiBMax, DiskMiB: 2 * types.RunnerPoolDiskMiBMax}, nil
+}
+
 func (f *fakeRunner) Capabilities(context.Context) (runner.Capabilities, error) {
 	return runner.Capabilities{
 		Driver:             "fake",

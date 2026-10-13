@@ -57,7 +57,7 @@ func TestRunnerActionsPG_StatePageQueuesContainmentAndOnlyItsExactResultSettlesI
 
 	result := runnerwire.ActionResult{ID: pending[0].ID, Outcome: types.RunnerActionSuccess, ObservedAt: time.Now().Add(-time.Minute)}
 	event := runnerwire.Event{Kind: runnerwire.EventActionResult, RunID: &run.ID, Data: mustJSON(result)}
-	sibling, err := st.CreateRunner(ctx, types.Runner{ID: uuid.New(), Owner: rn.Owner, Name: "sibling", PublicKey: make([]byte, 32), KeyFingerprint: uuid.NewString()})
+	sibling, err := st.CreateRunner(ctx, types.Runner{ID: uuid.New(), Owner: rn.Owner, Name: "sibling", PublicKey: make([]byte, 32), KeyFingerprint: uuid.NewString(), Limits: roomyRunnerLimits()})
 	if err != nil {
 		t.Fatal(err)
 	}

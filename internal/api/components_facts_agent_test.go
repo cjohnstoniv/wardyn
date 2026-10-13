@@ -146,6 +146,18 @@ func TestComponentFacts_ActualSDKPreflightDecode(t *testing.T) {
 	}
 }
 
+// An environment run names no harness; step 5 must not be told about one with an empty name.
+func TestComponentFacts_NoHarnessNoAgentFact(t *testing.T) {
+	for _, req := range []createRunRequest{{}, {Shape: client.RunShapeEnvironment}} {
+		if fact, ok := agentComponentFact(componentFactInputs{req: &req}); ok {
+			t.Fatalf("a run with no harness got an agent fact: %+v", fact)
+		}
+	}
+	if _, ok := agentComponentFact(componentFactInputs{req: &createRunRequest{Agent: "claude-code"}}); !ok {
+		t.Fatal("a run that names a harness lost its agent fact")
+	}
+}
+
 func TestComponentFacts_ManagedPolicyResolutionAndTelemetry(t *testing.T) {
 	for _, locked := range []bool{false, true} {
 		req := createRunRequest{Agent: "claude-code", Task: "facts"}

@@ -45,6 +45,7 @@ describe("why it waits", () => {
   it("is the server's sentence for the reason, once the pool is known", () => {
     expect(waitingBody("runner_pool_at_capacity", { name: "CI jobs", max: 40 })).toBe("CI jobs is running its limit of 40. This run starts when there's room.");
     expect(waitingBody("runner_pool_no_runner_free", { name: "Laptops" })).toBe("None of your runners in Laptops is online. This run starts when one is.");
+    expect(waitingBody("runner_pool_runners_at_capacity", { name: "Laptops" })).toBe("Every runner in Laptops is at its limit. This run starts when one has room.");
     expect(waitingBody("runner_pool_at_capacity", undefined)).toBeUndefined();
     expect(waitingBody("runner_pool_at_capacity", { name: "CI jobs" })).toBeUndefined();
   });

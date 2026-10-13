@@ -65,15 +65,58 @@ export interface RunnerView {
   capacity?: RunnerCapacity;
   classes?: ConfinementClass[];
   allowed_roots?: string[];
-  runs_active: number;
-  /** The runner's "Runs at once" (1 to 64); only its owner changes it (PUT /me/runners/{id}). */
-  max_runs: number;
-  /** Runs holding a sandbox on the runner now: the count max_runs bounds. */
-  running: number;
+  kind: "self_hosted";
+  /**
+   * What the owner declared; only they change it (PUT /me/runners/{id}). null while not all of it is
+   * set, and then the runner takes no run.
+   */
+  limits: RunnerLimits | null;
+  /** What its runs hold now: the figures placement counts. Its owner and operators only. */
+  usage: RunnerUsage;
   /** The host name the runner last reported (registration, then each connect): runner-reported, never an identity. */
   machine_name?: string;
-  /** The owner's live self-hosted pools this runner is a member of; [] for none. */
+  /** The owner's live user pools this runner is a member of; [] for none. */
   pools: RunnerPoolRef[];
+}
+
+/** Go: types.RunnerAmounts: CPU in milli-CPU, memory and disk in MiB. */
+export interface RunnerAmounts {
+  cpu_millis: number;
+  memory_mib: number;
+  disk_mib: number;
+}
+
+/**
+ * Go: types.RunnerLimits. A runner's declared limits, either kind: Runs at once (self-hosted 1 to 64,
+ * remote-hosted 1 to 1024), the total all its runs at once may reserve and what one run may reserve.
+ * At least 1 CPU; disk in whole GiB; per run never past the total.
+ */
+export interface RunnerLimits {
+  runs_at_once: number;
+  total: RunnerAmounts;
+  per_run: RunnerAmounts;
+}
+
+/** Go: types.RunnerTally: a number of runs and the CPU, memory and disk they reserve. */
+export interface RunnerTally {
+  runs: number;
+  cpu_millis: number;
+  memory_mib: number;
+  disk_mib: number;
+}
+
+/**
+ * Go: types.RunnerUsage. `in_use` is every run holding a sandbox on the runner, from every pool;
+ * `available` is the total less that, all zero while offline or with no limits. `disk_capped` false:
+ * the runner cannot cap a run's disk, so its disk is counted, not capped. `reported` is what the
+ * runner says it has, never a limit.
+ */
+export interface RunnerUsage {
+  online: boolean;
+  in_use: RunnerTally;
+  available: RunnerTally;
+  disk_capped: boolean;
+  reported?: RunnerAmounts;
 }
 
 /** Go: types.RunnerPoolRef: one pool a runner is a member of. */
@@ -106,7 +149,8 @@ export interface RunnerRegistration {
   fingerprint: string;
   state: RunnerState;
   org_url_sha256: string;
-  max_runs: number;
+  /** The limits the server stored; null on a runner registered before they existed. */
+  limits: RunnerLimits | null;
 }
 
 /** The revoke answers' body (an inline map in internal/api/runner_revoke.go). */
@@ -121,9 +165,9 @@ export interface RunnerClaimRequest {
   fingerprint: string;
 }
 
-/** Go: types.RunnerUpdateRequest: an owner's change to their own runner. `max_runs` is required. */
+/** Go: types.RunnerUpdateRequest: an owner's change to their own runner, the whole limit set. */
 export interface RunnerUpdateRequest {
-  max_runs: number;
+  limits: RunnerLimits;
 }
 
 /** Go: types.RunnerSettingsRequest. `enabled` is required; the answer is site.ts's RunnerSettings. */
@@ -142,4 +186,4 @@ export type RunnerManagementReason =
   | "runner_session_required"
   | "runners_org_url_invalid"
   | "runners_enabled_required"
-  | "runner_max_runs_invalid";
+  | "runner_limits_invalid";

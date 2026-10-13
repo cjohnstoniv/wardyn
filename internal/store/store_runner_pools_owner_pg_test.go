@@ -32,7 +32,7 @@ func claimedRunnerOf(t *testing.T, pg store.PG, owner string) uuid.UUID {
 	ctx := context.Background()
 	id := uuid.New()
 	fp := "fp-" + id.String()
-	if _, err := pg.CreateRunner(ctx, types.Runner{ID: id, Owner: owner, Name: "laptop", PublicKey: append(id[:], id[:]...), KeyFingerprint: fp, OrgURLSHA256: ownerTestOrgHash}); err != nil {
+	if _, err := pg.CreateRunner(ctx, types.Runner{ID: id, Owner: owner, Name: "laptop", PublicKey: append(id[:], id[:]...), KeyFingerprint: fp, OrgURLSHA256: ownerTestOrgHash, Limits: roomyLimits(types.RunnerMaxRunsCeiling)}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := pg.ClaimRunner(ctx, id, owner, fp, time.Now()); err != nil {
@@ -129,7 +129,7 @@ func TestPG_DeleteRunnerPoolsByOwnerWaitsForCreates(t *testing.T) {
 func TestPG_BootstrapIgnoresPersonOwnedPools(t *testing.T) {
 	pg := store.NewPG(runsPGPoolIsolated(t))
 	ownPool(t, pg, "sub-early", "Laptop")
-	if _, err := pg.EnsureRemoteRunners(context.Background(), []string{"docker"}); err != nil {
+	if _, _, err := pg.EnsureRemoteRunners(context.Background(), []string{"docker"}, nil); err != nil {
 		t.Fatal(err)
 	}
 	created, defaults, err := pg.BootstrapRunnerPools(context.Background(), []string{"docker"}, "Organization")
