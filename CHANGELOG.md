@@ -841,6 +841,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
   owner name (defence in depth; no known caller reached the old gap).
 - A recording's review no longer files a host that only ends in a model provider's name (for example
   notanthropic.com) as provider traffic; it now shows on the list you approve, as the server already treated it.
+- Adding a workspace refuses a second folder with no mount path: both would mount at /home/agent/work, and every
+  launch with that workspace failed. New Run's Files step shows a folder that shares its workspace at the path the
+  server mounts it, and shows a folder read-only unless its source is writable.
+- An Azure DevOps git push held for approval no longer records a denied decision when the client hangs up before the
+  approval is decided; the hold just ends, as it already did for the Azure DevOps REST lane.
 
 
 ## [0.8.9] — 2026-10-09

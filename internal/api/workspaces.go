@@ -133,17 +133,22 @@ func decodeWorkspaceRequest(w http.ResponseWriter, r *http.Request, ado adoHosts
 		// resolves to the same in-sandbox mount/clone path, which
 		// validatePolicyWorkspaces then 422s on every subsequent run — an
 		// onboarding-time 400 naming both sources catches it before it's
-		// even possible to run. An EMPTY target (no explicit choice — the
-		// caller relies on the per-attach default) is deliberately not
-		// checked here, same as validatePolicyWorkspaces: the default dest
-		// isn't derived until attach/clone time (buildRepoRecords).
-		if src.Target == "" {
+		// even possible to run. A repository's EMPTY target (no explicit
+		// choice — the caller relies on the per-attach default) is deliberately
+		// not checked here, same as validatePolicyWorkspaces: the default dest
+		// isn't derived until attach/clone time (buildRepoRecords). A folder's
+		// empty target is known now: every one mounts at composerWorkspaceTarget.
+		target := src.Target
+		if target == "" && src.Type == types.WorkspaceSourceTypeLocalDir {
+			target = composerWorkspaceTarget
+		}
+		if target == "" {
 			continue
 		}
-		if j, dup := seenTargets[src.Target]; dup {
-			return workspaceRequest{}, fmt.Sprintf("sources[%d]: target %q duplicates sources[%d]", i, src.Target, j)
+		if j, dup := seenTargets[target]; dup {
+			return workspaceRequest{}, fmt.Sprintf("sources[%d]: target %q duplicates sources[%d]", i, target, j)
 		}
-		seenTargets[src.Target] = i
+		seenTargets[target] = i
 	}
 	if msg := validateWorkspaceBaseImage(req.BaseImage); msg != "" {
 		return workspaceRequest{}, msg
