@@ -5,7 +5,7 @@
 
 // What the limits dialog refuses before the server is asked. Strings are written out.
 import { describe, expect, it } from "vitest";
-import { validateLimits } from "./limits-dialog";
+import { limitsToSave, validateLimits } from "./limits-dialog";
 
 const vals = (over: Partial<Parameters<typeof validateLimits>[0]> = {}) => ({ rn: "3", tc: "6", tm: "12", td: "200", pc: "2", pm: "4", pd: "50", ...over });
 const reported = { cpu_millis: 8000, memory_mib: 16 * 1024, disk_mib: 500 * 1024 };
@@ -30,5 +30,20 @@ describe("limits the dialog refuses", () => {
     expect(validateLimits(vals({ tc: "", pc: "0" }))).toEqual({ tc: "Set a number above 0.", pc: "Set a number above 0." });
     // A remote-hosted runner reports nothing to hold its totals to.
     expect(validateLimits(vals({ tm: "640", td: "9000" }))).toEqual({});
+  });
+});
+
+// The dialog shows CPUs and GB to one decimal. A field still showing what it loaded is sent exactly as
+// loaded; only a field the person changed converts from what they typed.
+describe("what a save sends", () => {
+  const LOADED = { runs_at_once: 3, total: { cpu_millis: 6000, memory_mib: 12288, disk_mib: 204800 }, per_run: { cpu_millis: 1250, memory_mib: 1700, disk_mib: 51200 } };
+  const shown = vals({ pc: "1.3", pm: "1.7" });
+
+  it("an edit to Runs at once leaves 1250 milli-CPU and 1700 MiB as they were", () => {
+    expect(limitsToSave({ ...shown, rn: "2" }, { vals: shown, limits: LOADED })).toEqual({ ...LOADED, runs_at_once: 2 });
+  });
+
+  it("a changed field converts as typed", () => {
+    expect(limitsToSave({ ...shown, pm: "2" }, { vals: shown, limits: LOADED }).per_run).toEqual({ cpu_millis: 1250, memory_mib: 2048, disk_mib: 51200 });
   });
 });
