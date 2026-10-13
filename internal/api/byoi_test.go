@@ -24,7 +24,7 @@ func (fakeImageBuilder) BuildDevcontainer(context.Context, string, string, strin
 func (fakeImageBuilder) BuildFromDevcontainerFiles(context.Context, map[string]string, string, io.Writer) (BuiltImage, error) {
 	return BuiltImage{}, nil
 }
-func (fakeImageBuilder) FinalizeBase(context.Context, string, string, io.Writer) (BuiltImage, error) {
+func (fakeImageBuilder) FinalizeBase(context.Context, string, string, io.Writer, bool) (BuiltImage, error) {
 	return BuiltImage{}, nil
 }
 

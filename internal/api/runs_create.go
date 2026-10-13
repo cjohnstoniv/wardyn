@@ -566,7 +566,7 @@ func (s *Server) resolveCreateRunImage(ctx context.Context, req createRunRequest
 		outTag := "wardyn-byoi/" + runID.String() + ":latest"
 		buildCtx, cancelBuild := context.WithTimeout(ctx, imageBuildTimeout)
 		s.announceImageBuild(ctx, runID)()
-		built, berr := s.cfg.ImageBuilder.FinalizeBase(buildCtx, req.Image, outTag, nil)
+		built, berr := s.cfg.ImageBuilder.FinalizeBase(buildCtx, req.Image, outTag, nil, false)
 		cancelBuild()
 		if berr != nil {
 			buildFailed(map[string]any{"byoi_base": req.Image, "error": berr.Error()})
