@@ -21,7 +21,8 @@ fail() { echo "test-runner-units: FAIL: $*" >&2; exit 1; }
 
 unset DOCKER_HOST
 WORK="$(mktemp -d)"
-trap 'rm -rf "$WORK"' EXIT
+RT_TMP=""
+trap 'rm -rf "$WORK" ${RT_TMP:+"$RT_TMP"}' EXIT
 
 bash -n "$INSTALL" || fail "install.sh has a syntax error"
 if command -v shellcheck >/dev/null 2>&1; then
@@ -53,7 +54,7 @@ cat >"$WORK/wardyn-runnerd" <<'STUB'
 #!/usr/bin/env bash
 case "$1" in
   --version) echo "wardyn-runnerd version ${STUB_VERSION:-0.9.0}" ;;
-  register) echo registered >>"$STUB_LOG"; mkdir -p "$STUB_STATE"; : >"$STUB_STATE/runner.json" ;;
+  register) echo registered >>"$STUB_LOG"; d="${STUB_STATE:-${XDG_CONFIG_HOME:-$HOME/.config}/wardyn/runner}"; mkdir -p "$d"; : >"$d/runner.json" ;;
 esac
 STUB
 chmod +x "$WORK/wardyn-runnerd"
@@ -66,7 +67,7 @@ run_install() {
   export STUB_LOG="$home/stub.log" STUB_STATE
   : >"$STUB_LOG"
   set +e
-  OUT="$(HOME="$home" PATH="$BIN:$PATH" env -u XDG_CONFIG_HOME -u XDG_DATA_HOME bash "$INSTALL" "$@" 2>&1)"
+  OUT="$(HOME="$home" PATH="$BIN:$PATH" env -u XDG_CONFIG_HOME -u XDG_DATA_HOME ${XDG_CFG:+"XDG_CONFIG_HOME=$XDG_CFG"} bash "$INSTALL" "$@" 2>&1)"
   RC=$?
   set -e
 }
@@ -102,7 +103,10 @@ grep -qx 'WARDYN_INTERNAL_NETWORK=wardyn-internal' "$H/.config/wardyn/runnerd.en
 grep -q 'enable --now wardyn-runnerd.service' "$H/stub.log" || fail "the unit was not enabled and started"
 grep -q '^registered$' "$H/stub.log" || fail "the first install did not register"
 if command -v systemd-analyze >/dev/null 2>&1; then
-  systemd-analyze verify --user "$RENDERED" >"$WORK/verify.out" 2>&1 || fail "systemd-analyze rejected the rendered unit: $(cat "$WORK/verify.out")"
+  # A hosted runner sets no XDG_RUNTIME_DIR and the user manager cannot start without one. Keep the path short: a long one breaks socket-unit parsing.
+  RT="${XDG_RUNTIME_DIR:-}"
+  [ -n "$RT" ] || { RT="$(mktemp -d /tmp/wardyn-rt.XXXXXX)"; RT_TMP="$RT"; }
+  XDG_RUNTIME_DIR="$RT" systemd-analyze verify --user "$RENDERED" >"$WORK/verify.out" 2>&1 || fail "systemd-analyze rejected the rendered unit: $(cat "$WORK/verify.out")"
 fi
 
 STUB_STATE="$H/.config/wardyn/runner" run_install linux --org https://wardyn.example --binary "$WORK/wardyn-runnerd"
@@ -115,6 +119,16 @@ for gone in "$RENDERED" "$H/.config/wardyn/runnerd.env" "$H/.local/share/wardyn/
   [ ! -e "$gone" ] || fail "uninstall left ${gone#"$H"/}"
 done
 [ -e "$H/.config/wardyn/runner/runner.json" ] || fail "uninstall removed the runner identity"
+
+# A login shell that sets XDG_CONFIG_HOME must not split the unit and the identity from where the
+# service manager and `serve` look: both stay under $HOME/.config. (A stub register that follows
+# XDG_CONFIG_HOME, as the real one does through os.UserConfigDir, writes where it is told.)
+XH="$WORK/home-xdgcfg"
+XDG_CFG="$XH/cfg" STUB_STATE='' run_install xdgcfg --org https://wardyn.example --binary "$WORK/wardyn-runnerd" --token-file "$WORK/token"
+[ "$RC" -eq 0 ] || fail "an install with XDG_CONFIG_HOME set failed (rc=$RC): $OUT"
+[ -f "$XH/.config/systemd/user/wardyn-runnerd.service" ] || fail "XDG_CONFIG_HOME moved the unit out of ~/.config"
+[ -f "$XH/.config/wardyn/runner/runner.json" ] || fail "XDG_CONFIG_HOME moved the runner identity out of ~/.config"
+[ ! -e "$XH/cfg" ] || fail "XDG_CONFIG_HOME split the install: $(find "$XH/cfg" -type f)"
 
 # A release download has no exec bit: a readable --binary still installs, executable in place.
 cp "$WORK/wardyn-runnerd" "$WORK/wardyn-runnerd-linux-amd64"
