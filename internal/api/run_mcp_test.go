@@ -289,9 +289,10 @@ type mcpHoldCase struct {
 
 // mcpHoldCases is the cases an inherited MCP hold is judged by, for a harness
 // nothing can pause: an explicit hold on a tool of a bound server refuses, by
-// name or by the hold default; no rule at all (the broker's fallback), an exact
-// allow over the hold default, a hold on a server the run does not bind, and a
-// run with no MCP server are admitted.
+// name or by the hold default, and an exact allow lifts neither from the
+// server's other tools; no rule at all (the broker's fallback), an allow or
+// block default with no hold on the server, a hold on a server the run does not
+// bind, and a run with no MCP server are admitted.
 func mcpHoldCases(t *testing.T) []mcpHoldCase {
 	t.Helper()
 	example, err := os.ReadFile("../../examples/policies/autonomous-tool-rules.json")
@@ -303,12 +304,16 @@ func mcpHoldCases(t *testing.T) []mcpHoldCase {
 		t.Fatal(err)
 	}
 	hold := func(tool string) types.ToolRule { return types.ToolRule{Tool: tool, Effect: types.ToolHold} }
+	allow := func(tool string) types.ToolRule { return types.ToolRule{Tool: tool, Effect: types.ToolAllow} }
 	return []mcpHoldCase{
 		{"a hold on a tool of the bound server", []types.ToolRule{hold("mcp__linear__create_issue")}, true, true},
 		{"a hold default with a bound server", autonomous.ToolRules, true, true},
 		{"a hold default with no MCP server", autonomous.ToolRules, false, false},
 		{"no rule at all with a bound server", nil, true, false},
-		{"an exact allow over a hold default", []types.ToolRule{{Tool: "mcp__linear__create_issue", Effect: types.ToolAllow}, hold("*")}, true, false},
+		{"an exact allow does not lift a hold default from the server's other tools", []types.ToolRule{allow("mcp__linear__create_issue"), hold("*")}, true, true},
+		{"an exact hold under an allow default", []types.ToolRule{hold("mcp__linear__create_issue"), allow("*")}, true, true},
+		{"an allow default with a bound server", []types.ToolRule{allow("*")}, true, false},
+		{"an exact allow over a block default", []types.ToolRule{allow("mcp__linear__create_issue"), {Tool: "*", Effect: types.ToolDeny}}, true, false},
 		{"a hold on a server the run does not bind", []types.ToolRule{hold("mcp__github__create_issue")}, true, false},
 		{"a hold on an MCP tool with no MCP server", []types.ToolRule{hold("mcp__linear__create_issue")}, false, false},
 	}
