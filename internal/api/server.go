@@ -925,6 +925,7 @@ func New(cfg Config) *Server {
 		branchLimiter: principalLimiter{rate: branchListRatePerSec, burst: branchListBurst, max: branchListMaxPeople},
 		deviceRouteState: deviceRouteState{
 			enrolLimiter:         principalLimiter{rate: enrolRatePerSec, burst: enrolBurst, max: enrolLimiterMaxPeers},
+			registerLimiter:      principalLimiter{rate: enrolRatePerSec, burst: enrolBurst, max: enrolLimiterMaxPeers},
 			ingestFailureLimiter: principalLimiter{rate: ingestFailureRatePerSec, burst: ingestFailureBurst, max: ingestFailureMaxDevices},
 		},
 	}
