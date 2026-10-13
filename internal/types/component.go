@@ -16,6 +16,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/armscope"
 	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/ghscope"
 )
@@ -577,6 +578,10 @@ const (
 	CLIKindGitHub = "github"
 )
 
+// CLISecretPrefix starts every person's CLI sign-in capture:
+// wardyn-cli-<component id>-{sso,entra}.
+const CLISecretPrefix = "wardyn-cli-"
+
 // MaxCLIAzureSubscriptions bounds the subscriptions one Azure CLI row pins.
 const MaxCLIAzureSubscriptions = 16
 
@@ -621,6 +626,16 @@ type CLIAWS struct {
 type CLIAzure struct {
 	Subscriptions []string `json:"subscriptions"` // 1..MaxCLIAzureSubscriptions GUIDs
 	Access        string   `json:"access"`        // read (GET and HEAD only) | write
+}
+
+// SubscriptionIDs is the row's subscriptions as Azure compares them: lowercase
+// GUIDs, in the row's order. An entry that is not a GUID is "".
+func (a CLIAzure) SubscriptionIDs() []string {
+	ids := make([]string, len(a.Subscriptions))
+	for i, sub := range a.Subscriptions {
+		ids[i], _ = armscope.Subscription(sub)
+	}
+	return ids
 }
 
 var (
@@ -711,11 +726,14 @@ func (a *CLIAzure) validate() error {
 	if n := len(a.Subscriptions); n == 0 || n > MaxCLIAzureSubscriptions {
 		return fmt.Errorf("cli.azure.subscriptions: must list 1 to %d subscriptions", MaxCLIAzureSubscriptions)
 	}
+	// Azure compares a subscription id without regard to case, so two
+	// spellings of one id are one subscription listed twice.
+	ids := a.SubscriptionIDs()
 	for i, sub := range a.Subscriptions {
-		if _, err := uuid.Parse(sub); err != nil || len(sub) != 36 {
+		if ids[i] == "" {
 			return fmt.Errorf("cli.azure.subscriptions[%d]: %q is not a subscription GUID", i, sub)
 		}
-		if slices.Contains(a.Subscriptions[:i], sub) {
+		if slices.Contains(ids[:i], ids[i]) {
 			return fmt.Errorf("cli.azure.subscriptions[%d]: %q is listed twice", i, sub)
 		}
 	}
