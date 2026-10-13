@@ -83,10 +83,15 @@ func (g *GitHubAPIGrant) holds(id uuid.UUID) bool {
 }
 
 // serveAPIDoor serves a request on a host an API door owns — the GitHub CLI's,
-// or a git_pat grant's with api: true (pat_api.go) — and reports whether it did.
+// the Azure CLI's (azure_arm_door.go), or a git_pat grant's with api: true
+// (pat_api.go) — and reports whether it did.
 func (p *Proxy) serveAPIDoor(w http.ResponseWriter, r *http.Request, host string, port int) bool {
 	if p.isGitHubAPIHost(host) {
 		p.serveGitHubAPI(w, r, host, port)
+		return true
+	}
+	if p.isAzureARMHost(host) {
+		p.serveAzureARM(w, r, host, port)
 		return true
 	}
 	if grant, ok := p.patAPI[patAPIHost(host)]; ok {
