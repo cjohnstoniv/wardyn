@@ -24,7 +24,7 @@ import (
 // Missing origins (including an unrecognised late author) fail closed. The
 // entry refusal remains until routing and credential authoring are ready.
 func (s *Server) classifyLocalDispatch(ctx context.Context, run types.AgentRun, ceiling dispatchCeiling,
-	sc types.SiteConfig, spec *runner.SandboxSpec, orgConfigKeys []string, llm llmTransport, ado adoEntraRun, trustedOutput bool,
+	sc types.SiteConfig, spec *runner.SandboxSpec, orgConfigKeys []string, llm llmTransport, trustedOutput bool,
 ) bool {
 	if remotePlacement(run.Placement) {
 		return true
@@ -33,7 +33,7 @@ func (s *Server) classifyLocalDispatch(ctx context.Context, run types.AgentRun, 
 		s.failAndRevoke(ctx, run.ID, types.RunStarting, "This run was not launched: its placement is not one this server can classify")
 		return false
 	}
-	p, err := s.localResolvedPlan(ctx, run, ceiling.localSelfDefinedComponents, sc, *spec, orgConfigKeys, llm, ado)
+	p, err := s.localResolvedPlan(ctx, run, ceiling.localSelfDefinedComponents, sc, *spec, orgConfigKeys, llm)
 	if err != nil {
 		s.failAndRevoke(ctx, run.ID, types.RunStarting, "local dispatch provenance could not be read")
 		return false
@@ -65,8 +65,11 @@ func (s *Server) classifyLocalDispatch(ctx context.Context, run types.AgentRun, 
 	return true
 }
 
+// localResolvedPlan is the one classification of a local run's spec, at dispatch and at revive. llm is the
+// dispatch transport whose resident model secrets the spec carries; the identity lanes are derived here
+// (localIdentityLanes) so the two callers cannot classify one stored credential from different inputs.
 func (s *Server) localResolvedPlan(ctx context.Context, run types.AgentRun, selfDefinedAllowed bool, sc types.SiteConfig,
-	spec runner.SandboxSpec, orgConfigKeys []string, llm llmTransport, ado adoEntraRun,
+	spec runner.SandboxSpec, orgConfigKeys []string, llm llmTransport,
 ) (placement.LocalPlan, error) {
 	if fields := localDispatchUnclassified(); len(fields) != 0 {
 		return placement.LocalPlan{}, fmt.Errorf("%s: unclassified dispatch metadata", fields[0])
@@ -94,7 +97,8 @@ func (s *Server) localResolvedPlan(ctx context.Context, run types.AgentRun, self
 	s.localPolicyGrantOrigins(ctx, owner, rows, &p)
 	s.localProxyGrantOrigins(ctx, owner, byID, &p)
 	s.localResidentOrigins(ctx, owner, rows, llm, &p)
-	s.localIdentityOrigins(ctx, owner, ado, llm, &p)
+	ado, azure := localIdentityLanes(run, sc, spec, owner)
+	s.localIdentityOrigins(ctx, owner, ado, azure, &p)
 	return p, s.localPlanFacts(ctx, &p, egressBaselineOf(sc), run.RunnerID)
 }
 
@@ -237,15 +241,32 @@ func (s *Server) localProxyGrantOrigins(ctx context.Context, owner string, byID 
 	}
 }
 
-func (s *Server) localIdentityOrigins(ctx context.Context, owner string, ado adoEntraRun, llm llmTransport, p *placement.LocalPlan) {
+// localIdentityLanes is the Azure DevOps lane and the Azure Foundry lane a local run's identity
+// credentials are classified from, resolved from the run, its spec's repositories and the site
+// configuration the way dispatch resolves them (resolveADOEntraRun, providerLaneForRun).
+func localIdentityLanes(run types.AgentRun, sc types.SiteConfig, spec runner.SandboxSpec, owner string) (adoEntraRun, *providerAzureLane) {
+	ado, _ := resolveADOEntraRun(sc, repoLocatorsOf(spec.ProxyConfig.Policy.WorkspaceRepos), owner)
+	p, found := modelProviderByID(sc.ModelProviders, run.ModelProviderID)
+	if !found || p.Disabled || p.Kind != types.ModelProviderAzureFoundry {
+		return ado, nil
+	}
+	lane, ok := providerAzureLaneFor(p, run.Agent)
+	if !ok {
+		return ado, nil
+	}
+	lane.owner = owner
+	return ado, &lane
+}
+
+func (s *Server) localIdentityOrigins(ctx context.Context, owner string, ado adoEntraRun, azure *providerAzureLane, p *placement.LocalPlan) {
 	spec := p.Spec
 	if spec.ProxyConfig.ADOGrant != nil {
 		p.Origins["ProxyConfig.ADOGrant"] = s.localADOOrigin(ctx, owner, ado)
 	}
-	if llm.azure != nil && llm.azure.owner == owner {
-		own := s.ownsSecretMemoized(ctx, owner, providerSecretName(llm.azure.provider.UID, providerEntraPart))
+	if azure != nil && azure.owner == owner {
+		own := s.ownsSecretMemoized(ctx, owner, providerSecretName(azure.provider.UID, providerEntraPart))
 		for i, g := range spec.ProxyConfig.AzureGates {
-			if g.Host == llm.azure.host && g.Route == llm.azure.route {
+			if g.Host == azure.host && g.Route == azure.route {
 				p.Origins[placementCredentialIndex("ProxyConfig.AzureGates", i)] = placement.CredentialOrigin{Class: placement.ClassOwn, Stored: true, OwnNamespace: own, OwnerOnly: own}
 			}
 		}

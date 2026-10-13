@@ -41,7 +41,7 @@ func TestLocalResolvedInjectionRequiresExactScopePinsAndStoredOwnerOnly(t *testi
 	spec := runner.SandboxSpec{ProxyConfig: runner.ProxyConfig{Injection: []runner.InjectionGrant{{GrantID: g.ID, Rule: rule}}}}
 	classify := func(t *testing.T, spec runner.SandboxSpec, wantRefusal bool) {
 		t.Helper()
-		p, err := f.srv.localResolvedPlan(context.Background(), run, false, types.SiteConfig{}, spec, nil, llmTransport{}, adoEntraRun{})
+		p, err := f.srv.localResolvedPlan(context.Background(), run, false, types.SiteConfig{}, spec, nil, llmTransport{})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -89,6 +89,34 @@ func TestLocalReviveRefusesBeforeOperatorSecretReadsAndStripsCopy(t *testing.T) 
 	}
 }
 
+// A revive classifies the stored identity credentials from the run and today's
+// site configuration, as dispatch does: the owner's own-PAT Azure DevOps lane and
+// own Azure Foundry sign-in revive.
+func TestLocalReviveClassifiesOwnADOAndAzureLanesAsDispatchDoes(t *testing.T) {
+	f := newComponentFixture(t)
+	f.srv.cfg.Store = localPlanTestStore{f.st}
+	foundry := types.ModelProvider{ID: "foundry", UID: "uid-foundry", Kind: types.ModelProviderAzureFoundry,
+		Azure:     &types.AzureSettings{Endpoint: "https://res.services.ai.azure.com", Route: types.AzureRouteAnthropic},
+		Harnesses: []types.ProviderHarness{{Harness: azureMessagesHarness, Model: "deploy-1"}}}
+	f.st.siteConfig = adoSite(ownPATTestRow())
+	f.st.siteConfig.ModelProviders = &types.ModelProviders{Providers: []types.ModelProvider{foundry}}
+	owned := f.srv.cfg.Secrets.(*memSecrets).owned[capSub]
+	owned[adoOwnPATSecretName(ownPATRowID)] = []byte("pat")
+	owned[providerSecretName(foundry.UID, providerEntraPart)] = []byte("sign-in")
+	run := types.AgentRun{ID: uuid.New(), CreatedBy: capSub, Placement: types.PlacementLocal, Agent: azureMessagesHarness, ModelProviderID: foundry.ID}
+	for name, cfg := range map[string]proxy.Config{
+		"own-PAT Azure DevOps lane": {RunID: run.ID,
+			Policy:   types.RunPolicySpec{WorkspaceRepos: []types.WorkspaceRepo{{Repo: ownPATOrgKey + "/proj/_git/repo"}}},
+			ADOGrant: &proxy.ADOGrantConfig{Organization: "contoso", Hosts: []string{"dev.azure.com"}}},
+		"Azure Foundry gate": {RunID: run.ID,
+			AzureGates: []proxy.AzureGateConfig{{Host: "res.services.ai.azure.com", Route: types.AzureRouteAnthropic, Models: []string{"deploy-1"}}}},
+	} {
+		if ref := f.srv.reviveOwnerRecheck(context.Background(), run, &cfg, types.ActorSystem, "wardynd"); ref != nil {
+			t.Errorf("%s: revive = %+v, want it admitted", name, ref)
+		}
+	}
+}
+
 func TestLocalAllModelProviderKindsHaveOwnClassification(t *testing.T) {
 	f := newComponentFixture(t)
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/runs", nil).WithContext(utCtx("user", "", nil))
@@ -129,7 +157,7 @@ func TestLocalDispatchP3RidesTheCeilingAndNamesNoPersonalComponent(t *testing.T)
 	srv.cfg.Store = localClassifyStore{dispatchTestStore: st, comps: []types.RunComponent{{Name: personal, SelfDefined: true}}}
 	ceiling := ceilingForDispatch(governanceCeiling{}, adoEntraUngraded(), bedrockCredUngraded())
 	spec := runner.SandboxSpec{RunID: run.ID}
-	if srv.classifyLocalDispatch(context.Background(), run, ceiling, types.SiteConfig{}, &spec, nil, llmTransport{}, adoEntraRun{}, false) {
+	if srv.classifyLocalDispatch(context.Background(), run, ceiling, types.SiteConfig{}, &spec, nil, llmTransport{}, false) {
 		t.Fatal("a self-defined component passed P3 by default")
 	}
 	ev := findAudit(audit.events, run.ID, "run.dispatch", "failure")
