@@ -138,3 +138,55 @@ func TestPG_WaitingRunWithADriveIsNotEndedForThePersonsOwnRunner(t *testing.T) {
 		t.Fatalf("once alpha has room the run is %s on runner %v executor %q (%s); want it RUNNING on alpha", got.State, got.RunnerID, got.RunnerPoolExecutor, got.StatusDetail)
 	}
 }
+
+// bothFull is a mixed pool whose laptop (one run at once) and remote-hosted runner alpha are each full
+// with an inserted run.
+func bothFull(e *queueEnv) (types.RunnerPool, uuid.UUID) {
+	e.t.Helper()
+	pool, laptop := e.mixedPool("Mixed")
+	e.maxRuns(laptop, e.personP, 1)
+	e.stream(laptop, types.CC1, types.CC2, types.CC3)
+	pool = e.reread(pool)
+	e.occupyRunner(pool, laptop, e.personP)
+	occupyRemote(e.placementEnv, pool, "alpha")
+	return pool, laptop
+}
+
+// A run accepted to wait for the remote-hosted runner is never ended because a runner it cannot use
+// became free. On a deployment whose upstream proxy credential cannot go to a person's runner, the
+// local-eligibility step refuses every run on the laptop: the launch waits on alpha, keeps waiting when
+// the laptop frees first, and starts on alpha once alpha has room though the laptop is idle.
+func TestPG_WaitingRunIsNotEndedWhenARunnerItCannotUseFrees(t *testing.T) {
+	e := newQueueEnv(t)
+	if _, err := e.pg.PutSiteConfig(context.Background(), types.SiteConfig{Runners: &types.RunnerSettings{Enabled: true}, UpstreamProxySecretRef: "corporate-parent"}); err != nil {
+		t.Fatal(err)
+	}
+	pool, laptop := bothFull(e)
+	waiting := e.waitsFor(runBody(fmt.Sprintf(`"runner_pool_id":%q`, pool.ID)), "both runners are full")
+	if launch := e.waitingLaunch(waiting.ID); !launch.NoLocal || waiting.Placement != types.PlacementRemote {
+		t.Fatalf("the launch waits on %q and records no_local %v, want it waiting on the remote-hosted kind and kept off the person's own", waiting.Placement, launch.NoLocal)
+	}
+	e.endOccupant(laptop.String())
+	if got := e.settles(waiting.ID); got.State != types.RunQueued {
+		t.Fatalf("with the laptop freed and alpha full the run is %s (%s: %s); want it still QUEUED for alpha", got.State, got.StatusDetail, got.FailureHint)
+	}
+	e.endOccupant("alpha")
+	if got := e.settles(waiting.ID); got.State != types.RunRunning || got.RunnerID != nil || got.RunnerPoolExecutor != "alpha" {
+		t.Fatalf("once alpha has room the run is %s on runner %v executor %q (%s: %s); want it RUNNING on alpha", got.State, got.RunnerID, got.RunnerPoolExecutor, got.StatusDetail, got.FailureHint)
+	}
+}
+
+// The mirror: a run that can run on the person's own runner is still promoted onto the laptop when it
+// frees first.
+func TestPG_WaitingRunThatCanRunLocallyTakesTheFreedLaptop(t *testing.T) {
+	e := newQueueEnv(t)
+	pool, laptop := bothFull(e)
+	waiting := e.waitsFor(runBody(fmt.Sprintf(`"runner_pool_id":%q`, pool.ID)), "both runners are full")
+	if launch := e.waitingLaunch(waiting.ID); launch.NoLocal {
+		t.Fatal("a launch its own runner can take records no_local")
+	}
+	e.endOccupant(laptop.String())
+	if got := e.settles(waiting.ID); got.State != types.RunRunning || got.RunnerID == nil || *got.RunnerID != laptop {
+		t.Fatalf("with the laptop freed the run is %s on runner %v executor %q (%s); want it RUNNING on the laptop", got.State, got.RunnerID, got.RunnerPoolExecutor, got.FailureHint)
+	}
+}

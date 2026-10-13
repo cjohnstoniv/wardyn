@@ -136,7 +136,7 @@ func (s *Server) queueRunnerFree(ctx context.Context, pool types.RunnerPool, lau
 	// for, none the profile denies, no runner of the person's for a run with drives) and the same demand
 	// on each (placementDemand.refusal: online, the barrier the run was queued at, limits declared). A
 	// ceiling that cannot be read denies nothing here: the start judges the run against it again.
-	in := placementInput{req: &req, reqCC: launch.Barrier, reqCCOK: launch.Barrier != "", drives: launch.Drives}
+	in := placementInput{req: &req, reqCC: launch.Barrier, reqCCOK: launch.Barrier != "", drives: launch.Drives, noLocal: launch.NoLocal}
 	if ceiling, err := s.effectiveCeiling(ctx); err == nil {
 		in.ceiling = ceiling
 	}
