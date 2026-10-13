@@ -17,12 +17,14 @@ The other starting points sit outside the Start screen's cards.
 | Start from | How you get there | Where you land |
 |---|---|---|
 | **Saved template** | **Use** on the [Templates screen](#templates), or **Start from** on the Shape step | Review, on the revision you picked |
-| **Run again** | **Start from** on the Shape step, then **Previous run** | Review, on that run's kept setup |
+| **Run again** | **Start from** on the Shape step, then **Previous run**; or **Start a run like this one** on an ended run's page | Review, on that run's kept setup |
 | **From scratch** | The Shape step default. **New run from scratch** on the Templates screen opens the Start screen | A blank draft |
 
 - A scratch draft cannot skip ahead. Opening a later step or Review sends you back to the first step with a missing answer.
 - **Run again** lists your own earlier runs (`GET /api/v1/me/launch-intents`). Only the creator reads a kept setup. Anyone else gets the `404` a missing run gets; the creator of a run that kept none gets `launch_intent_not_found`.
 - A kept setup omits the title, description and wait limit. See [Run again](sdk.md#run-again).
+- **Start a run like this one** on a run that kept no setup opens Review prefilled from what the run's row and audit trail still hold.
+- A template or Run again link that cannot be read shows the server's sentence and **New run from scratch**.
 
 ## The steps
 
@@ -46,7 +48,8 @@ Pick one of three shapes. The server records it as `shape` ([run documents](sdk.
 | **Environment sandbox** | Interactive · Your drive is attached when you have one | A reusable workspace for development or analysis |
 | **Application sandbox** | Automation / script · Application / server coming soon | A sandboxed command that runs on its own |
 
-- Choosing a shape opens step 2. Picking **Saved template** or **Run again** hides the shapes, and **Continue** opens Review.
+- Choosing a shape opens step 2. Choosing the shape a draft already has changes nothing: its starter, prompt and task stay.
+- Picking **Saved template** or **Run again** hides the shapes, and **Continue** opens Review.
 
 ### Step 2: Run
 
@@ -76,7 +79,7 @@ A harness is an agent tool the sandbox holds, such as a coding CLI.
 
 The step shows the main drive, one list of items, a starting folder and a mount map.
 
-- **Main drive** is the sandbox's own disk, and every run has one. **Size** is in GiB and required. The pool's default fills it, and a size above the cap is clamped with a note naming who set the cap.
+- **Main drive** is the sandbox's own disk, and every run has one. **Size** is in GiB and required. The pool's default fills it, and a size above the cap is clamped with a note naming who set the cap. With no size the step's summary reads "Set a size for the main drive."
 - A chip says whether the runner holds the size: **Enforced**, **Enforced by stopping the run** or **Not enforced on this runner**.
 - **What happens to it** says whether the drive is deleted when the run ends or kept so you can resume. **Reuse it across runs** is disabled and marked **Coming soon**.
 
@@ -112,6 +115,8 @@ The step reads the server's policy preview for the draft ([the `access` block](s
 | **Network** and **Credentials** | The total the run can reach |
 | **Setup still needed** | Open items, each with a button: **Sign in**, **Choose**, **Add** or **Connect Azure DevOps** |
 
+- A run that carries an Azure DevOps credential, on a connection that creates a token for each run, says so under **Credentials**: "Azure DevOps: a token for this run with …. It's revoked when the run ends."
+- If you have not connected, that card also reads "Connect Azure DevOps once before launching; Wardyn creates the run's token from that connection." beside **Connect Azure DevOps**.
 - Hosts read **Requested** until the server has answered this exact draft. Then each reads **Allowed**, **Needs approval** or **Not allowed** against the clamped policy.
 - A line under the host list says what happens to a host nothing lists: refused, held for review, or allowed. It follows your organisation's `first_use_approval` mode.
 - Each harness has a **Model provider** list. The server's default or only candidate stands in until you choose; when it needs your choice the field reads "Required before launch."
@@ -142,6 +147,8 @@ Review shows what Wardyn will create and where each value came from. The **Prett
 - Each value carries a source chip such as **Added by you**, **Organisation default** or **Source policy**. A field only a run document can set shows **Run document**.
 - **Change** opens an editor in place for the pool, barrier, command, CPU or **Memory MiB**; **Done** closes it. **Edit run and timing**, **Edit files**, **Edit harnesses** and **Edit tools and access** jump to the step.
 - **Effective policy** shows "What the sandbox can actually do": barrier, network, credentials, files and tool handling. **Only what I changed** filters it.
+  - A policy that grants Azure DevOps access adds one line that starts "Azure DevOps:" and names what it grants.
+  - A background run whose policy holds pushes for review adds "Nobody is here to answer, so a push that would be held is refused instead."
 - **YAML** and **JSON** show the draft as a read-only `kind: Run` document with **Copy**. **Edit YAML** (or **Edit JSON**) opens the editor.
 
 ### Blockers and notices
@@ -207,6 +214,7 @@ The `wardyn template` commands are listed in [Run templates](sdk.md#run-template
 
 - The dialog checks the draft again (**Checking…**, then **Checked just now**). **Launch** stays off until it ends.
 - A refusal shows the server's sentence, and what you typed stays.
+- A launch the run's Azure DevOps token refused adds a note. Either connect again with **Connect Azure DevOps**, after which the dialog checks once more, or read that your organisation restricts who can create personal access tokens.
 
 The Launched screen opens at `?launched=<run id>`. It refreshes every 4 seconds while the run is starting or waiting.
 

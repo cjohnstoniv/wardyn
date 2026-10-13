@@ -2761,7 +2761,7 @@ exactly these terms.
 
 **Where this table is now stated to the person launching the run.**
 
-- The New Run rail's "What this run can do" panel — the summary read immediately before Launch, and the one a security reviewer screenshots — states the run's MODEL credential residency rather than asserting it.
+- New Run's Tools and access step — the Credentials summary read before Launch, and the one a security reviewer screenshots — states where each credential lives ("Proxy only", "In the sandbox, short-lived") from the server's answer rather than asserting it.
 - Through v0.7.4 that line was unconditional static copy ("Minted at launch, injected by the proxy. Never written into the sandbox."), which is false for every row of this table.
   - A false assurance, not a confusing one, delivered at the exact moment someone decides whether a per-user AWS credential may sit inside a CC1 shared-kernel container.
 - Residency is a property of the model provider's kind, so it is graded server-side (`kindResidency`, [`internal/api/credential_residency.go`](../internal/api/credential_residency.go)) and never from what the run asked for.
