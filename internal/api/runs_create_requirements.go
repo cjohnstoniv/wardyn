@@ -131,6 +131,9 @@ func (s *Server) applyWorkspaceRequirementsFor(ctx context.Context, present map[
 	for i, wm := range spec.WorkspaceMounts {
 		wasReadOnly[i] = wm.ReadOnlyOrDefault()
 	}
+	// suppliers is, per mount index, each folded workspace whose write: row
+	// granted that mount writable: the gate holds them too.
+	suppliers := map[int][]types.Workspace{}
 	// Resolved at most once per call, lazily on the first integration key
 	// found — effectiveIntegrations reads the site-config
 	// store, a full secret listing, and peeks the subscription/Bedrock state,
@@ -210,7 +213,14 @@ func (s *Server) applyWorkspaceRequirementsFor(ctx context.Context, present map[
 				}
 				events = append(events, s.applyIntegrationRequirement(ctx, present, integrationRows, spec, name)...)
 			case "write":
-				applyWriteNarrowing(spec, name, enabled, sel.ReadOnly)
+				narrow := sel.ReadOnly
+				if readOnlyPinned(attached, selections, name) {
+					pinned := true
+					narrow = &pinned
+				}
+				for _, i := range applyWriteNarrowing(spec, name, enabled, narrow) {
+					suppliers[i] = append(suppliers[i], ws)
+				}
 			}
 		}
 		if len(addedEgress) > 0 {
@@ -220,7 +230,7 @@ func (s *Server) applyWorkspaceRequirementsFor(ctx context.Context, present map[
 			})
 		}
 	}
-	return events, s.requirementWriteRefusal(ctx, attached, spec.WorkspaceMounts, wasReadOnly)
+	return events, s.requirementWriteRefusal(ctx, attached, spec.WorkspaceMounts, wasReadOnly, suppliers)
 }
 
 // effectiveRequirements is the contract a run actually consumes: the store's
@@ -270,6 +280,19 @@ func (s *Server) skipRequiredSecret(agent, secretName string) (requirementAuditE
 	return requirementSkip(secretName, reasonRequirementModelHost, map[string]any{"secret_name": secretName, "host": p.host}), true
 }
 
+// readOnlyPinned reports whether the run asked for path read-only: an attached
+// workspace that holds it was selected read_only. Every write row for the path
+// then folds narrowed, whichever workspace supplies it, so a workspace folded
+// later cannot turn the run's own read-only choice back to writable.
+func readOnlyPinned(attached []types.Workspace, selections map[string]client.WorkspaceSelection, path string) bool {
+	for _, ws := range localDirHolders(attached, path) {
+		if ro := selections[ws.ID.String()].ReadOnly; ro != nil && *ro {
+			return true
+		}
+	}
+	return false
+}
+
 // applyWriteNarrowing resolves ONE write:<path> requirement's effective mount
 // writability onto every spec.WorkspaceMounts entry whose Source is path (a
 // no-op when path isn't actually mounted this run — e.g. a multi-source
@@ -280,17 +303,22 @@ func (s *Server) skipRequiredSecret(agent, secretName string) (requirementAuditE
 // write); narrow=false or nil never WIDENS past grantedDefault (a run may not
 // add an Optional write it never enabled by putting the key in
 // EnabledOptional — only Level/EnabledOptional can grant write, never this
-// field alone).
-func applyWriteNarrowing(spec *types.RunPolicySpec, path string, grantedDefault bool, narrow *bool) {
+// field alone). It returns the index of every mount it left writable.
+func applyWriteNarrowing(spec *types.RunPolicySpec, path string, grantedDefault bool, narrow *bool) []int {
 	granted := grantedDefault
 	if narrow != nil && *narrow {
 		granted = false
 	}
+	var writable []int
 	for i := range spec.WorkspaceMounts {
 		if spec.WorkspaceMounts[i].Source != path {
 			continue
 		}
 		ro := !granted
 		spec.WorkspaceMounts[i].ReadOnly = &ro
+		if granted {
+			writable = append(writable, i)
+		}
 	}
+	return writable
 }

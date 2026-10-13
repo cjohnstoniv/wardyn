@@ -411,6 +411,9 @@ func TestApplyWorkspaceRequirements_WriteHeldToMemberWritableRoots(t *testing.T)
 		// An operator and a member both hold the directory.
 		{"operator and member holders both attached", nil, ws(operator, member), ws(operator, member), operator, "required", refused},
 		{"operator holder attached, the member's workspace merely stored", nil, ws(operator, member), ws(operator), operator, "required", ""},
+		// The member's workspace is in the fold though not attached, and its own row is the one that grants the write.
+		{"operator holder attached, the member's workspace supplies the row", nil, ws(operator, member), ws(operator), member, "required", refused},
+		{"operator holder attached, an operator's workspace supplies the row", nil, ws(operator, bystander), ws(operator), bystander, "required", ""},
 		{"operator-owned, no writable roots", nil, ws(operator), ws(operator), operator, "required", ""},
 		// A mount no attached workspace holds, as a policy authors one: every stored holder decides.
 		{"policy-authored mount, a member stores it", nil, ws(operator, member), nil, operator, "required", refused},
@@ -443,6 +446,37 @@ func TestApplyWorkspaceRequirements_WriteHeldToMemberWritableRoots(t *testing.T)
 				t.Errorf("refusal = %d %s (%v), want 422 %s", refusal.status, refusal.reason, refusal, tc.wantReason)
 			}
 		})
+	}
+}
+
+// TestApplyWorkspaceRequirements_ReadOnlySelectionPinsThePath: a run that
+// selects an attached workspace read_only keeps that workspace's directory
+// read-only, though another folded workspace's required write row names the
+// same directory and its owner may write it. Without the selection the row
+// grants the write.
+func TestApplyWorkspaceRequirements_ReadOnlySelectionPinsThePath(t *testing.T) {
+	root, project := memberProjectRoot(t)
+	dir := []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeLocalDir, Path: project}}
+	operator := types.Workspace{ID: uuid.New(), Sources: dir}
+	member := types.Workspace{ID: uuid.New(), OwnedBy: ownerMemberSub, Sources: dir,
+		Requirements: map[string]types.WorkspaceRequirement{"write:" + project: {Level: "required", Provenance: "scan_seeded"}}}
+	srv := New(Config{UserMounts: runner.UserMountPolicy{Roots: []string{root}, WritableRoots: []string{root}}})
+	for _, pinned := range []bool{true, false} {
+		ro := true
+		spec := &types.RunPolicySpec{WorkspaceMounts: []types.WorkspaceMount{{Source: project, Target: "/home/agent/work", ReadOnly: &ro}}}
+		sel := map[string]client.WorkspaceSelection{}
+		if pinned {
+			sel[operator.ID.String()] = client.WorkspaceSelection{WorkspaceID: operator.ID.String(), ReadOnly: &ro}
+		}
+		attached := []types.Workspace{operator}
+		for _, ws := range []types.Workspace{operator, member} { // the fold step's order: attached, then referenced
+			if _, refusal := srv.applyWorkspaceRequirementsFor(context.Background(), nil, spec, "claude-code", []types.Workspace{ws}, attached, sel); refusal != nil {
+				t.Fatalf("pinned=%v: refused: %v", pinned, refusal)
+			}
+		}
+		if got := spec.WorkspaceMounts[0].ReadOnlyOrDefault(); got != pinned {
+			t.Errorf("pinned=%v: read-only = %v; the run's read_only selection must hold, and only it", pinned, got)
+		}
 	}
 }
 

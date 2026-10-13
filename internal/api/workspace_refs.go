@@ -146,12 +146,21 @@ func (e *sourceRefusal) Error() string { return "workspace: " + e.err.Error() }
 // directory no attached workspace holds (a mount a policy authored) is held to
 // every stored holder, and there a directory no workspace holds, or a list
 // that cannot be read, refuses, since no owner can be named.
-// wasReadOnly is each mount's state before the fold, by index.
-func (s *Server) requirementWriteRefusal(ctx context.Context, attached []types.Workspace, mounts []types.WorkspaceMount, wasReadOnly []bool) *sourceRefusal {
+//
+// The workspace whose row made the mount writable is held as well, whether or
+// not it is attached: a workspace pulled into the run because it holds the same
+// directory (referencedWorkspacesIn's index keeps one holder per directory) can
+// carry a required write row its member owner set, and the attached holders
+// alone would not answer for that member.
+// wasReadOnly is each mount's state before the fold, and suppliers the
+// workspaces whose write rows granted it, both by index.
+func (s *Server) requirementWriteRefusal(ctx context.Context, attached []types.Workspace, mounts []types.WorkspaceMount, wasReadOnly []bool, suppliers map[int][]types.Workspace) *sourceRefusal {
 	var widened []types.WorkspaceMount
+	var supplied [][]types.Workspace
 	for i, wm := range mounts {
 		if i < len(wasReadOnly) && wasReadOnly[i] && !wm.ReadOnlyOrDefault() {
 			widened = append(widened, wm)
+			supplied = append(supplied, suppliers[i])
 		}
 	}
 	if len(widened) == 0 {
@@ -161,7 +170,12 @@ func (s *Server) requirementWriteRefusal(ctx context.Context, attached []types.W
 		return &sourceRefusal{status: http.StatusUnprocessableEntity, reason: reason, err: err}
 	}
 	var stored []types.Workspace // read once, and only for a mount no attached workspace holds
-	for _, wm := range widened {
+	for k, wm := range widened {
+		for _, ws := range supplied[k] {
+			if err := userMountAllowed(s.cfg.UserMounts, ws.OwnedBy, wm); err != nil {
+				return refuse(reasonWorkspaceSourceMountNotAllowed, err)
+			}
+		}
 		holders := localDirHolders(attached, wm.Source)
 		if len(holders) == 0 {
 			if stored == nil {

@@ -310,6 +310,67 @@ func TestRunDoors_RequirementWriteReadsTheRunsOwnHolders(t *testing.T) {
 	})
 }
 
+// newestFirstStore lists its workspaces in a fixed order, newest first as the
+// real store does, so the source index (last wins) picks a known holder.
+type newestFirstStore struct {
+	*ownerStore
+	order []uuid.UUID
+}
+
+func (s newestFirstStore) ListWorkspaces(ctx context.Context) ([]types.Workspace, error) {
+	all, err := s.ownerStore.ListWorkspaces(ctx)
+	byID := map[uuid.UUID]types.Workspace{}
+	for _, ws := range all {
+		byID[ws.ID] = ws
+	}
+	out := make([]types.Workspace, 0, len(s.order))
+	for _, id := range s.order {
+		out = append(out, byID[id])
+	}
+	return out, err
+}
+
+// TestRunDoors_RequirementWriteHoldsTheSupplyingWorkspace: a member's older
+// workspace M on a directory carries a required write row on it; an operator's
+// newer workspace O holds the same directory read-only. The member attaches O
+// only, the source index pulls M into the run (it keeps the oldest holder),
+// and M's row is what makes the directory writable. M's owner is held to the
+// member writable roots although M is not attached, at every door. With an
+// operator's workspace in M's place the write is granted.
+func TestRunDoors_RequirementWriteHoldsTheSupplyingWorkspace(t *testing.T) {
+	root, project := memberProjectRoot(t)
+	member := ssoSession(t, ownerMemberSub, "member@corp.example", oidc.RoleUser)
+	dir := []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeLocalDir, Path: project}}
+	row := map[string]types.WorkspaceRequirement{"write:" + project: {Level: "required", Provenance: "scan_seeded"}}
+	setup := func(supplierOwner string) (*Server, *fakeRunner, string) {
+		srv, st, fr := userDispatchHarness(t, runner.UserMountPolicy{Roots: []string{root}}) // no writable roots
+		older := st.put(types.Workspace{OwnedBy: supplierOwner, Status: types.WorkspaceScanned, Sources: dir, Requirements: row})
+		newer := st.put(types.Workspace{Status: types.WorkspaceScanned, Sources: dir})
+		srv.cfg.Store = newestFirstStore{ownerStore: st, order: []uuid.UUID{newer, older}}
+		return srv, fr, `{"agent":"claude-code","task":"do the thing","workspaces":[{"workspace_id":"` + newer.String() + `"}]}`
+	}
+
+	srv, fr, body := setup(ownerMemberSub)
+	for _, door := range componentDoors {
+		w := doSSO(t, srv, http.MethodPost, door, member, body)
+		if w.Code != http.StatusUnprocessableEntity || reasonOf(t, w) != reasonWorkspaceSourceMountNotAllowed {
+			t.Errorf("%s: code = %d, want 422 %s; body=%s", door, w.Code, reasonWorkspaceSourceMountNotAllowed, w.Body.String())
+		}
+	}
+	if fr.createCalls != 0 {
+		t.Errorf("CreateSandbox calls = %d, want 0: the refusal must happen before dispatch", fr.createCalls)
+	}
+
+	srv, fr, body = setup("")
+	if w := doSSO(t, srv, http.MethodPost, "/api/v1/runs", member, body); w.Code != http.StatusCreated {
+		t.Fatalf("control, an operator's workspace supplies the row: code = %d, want 201; body=%s", w.Code, w.Body.String())
+	}
+	fr.waitForSandbox(t)
+	if m := mountFor(t, fr.lastSpec, composerWorkspaceTarget); m.ReadOnly {
+		t.Errorf("control: the bind %q is read-only; the operator workspace's write row must reach the driver", m.Source)
+	}
+}
+
 // recordListStore is recordLLMModeStore plus the two workspace reads the
 // record door makes: its own load, and the list the requirements fold reads a
 // directory's owner from.
