@@ -173,7 +173,7 @@ func run() error {
 
 	slog.InfoContext(ctx, "wardyn-tetragon-ingest: tailing export to the control plane groundtruth endpoint",
 		slog.String("export_path", *exportPath),
-		slog.String("endpoint", *controlURL+"/api/v1/internal/groundtruth"),
+		slog.String("endpoint", sink.endpoint),
 		slog.Duration("heartbeat", heartbeatIval),
 	)
 

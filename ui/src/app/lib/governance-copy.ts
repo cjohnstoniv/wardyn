@@ -293,6 +293,90 @@ export const GOVERNANCE = {
     "Something went wrong reaching the server. Profiles that are already assigned still bound every run — this list just can't show them right now.",
 } as const;
 
+// Governance -> Runner credentials (packet M-RN-4, DP1/DP2; docs/design/governance-prompt.md §7.14): the
+// local_credential_delivery editor. Approved strings, plus the pending ones marked F1649-P<n>, which the owner
+// has not answered; governance-copy.test.ts parses §7.14 back out and compares every approved key.
+export const DELIVERY = {
+  TAB: "Runner credentials",
+  LEAD: "How a credential your organisation holds can reach a run on a person's own runner. Anything not allowed here can't go to a runner, and runs that need it run on your organisation's runners. A person's own key or sign-in always works on their runner.",
+  MODE: {
+    via_org: "Keep in the organisation",
+    runner_resident: "Store on the runner",
+    refuse: "Don't allow",
+  },
+  MODE_HINT: {
+    via_org: "The runner sends this traffic to Wardyn, which adds the credential. The person can use it during the run but never sees it.",
+    runner_resident: "Wardyn hands it to the runner's system keychain for the run. The person can read it.",
+    refuse: "Runs that need it run on your organisation's runners.",
+  },
+  LOCAL_DELIVERY: {
+    via_org: "Stays in your org",
+    runner_resident: "Stored on your runner",
+    refuse: "Not available on your runner",
+  },
+  PEOPLE_SEE: (label: string) => `People see: ${label}`,
+  POSTURE_TITLE: "Require on the runner",
+  POSTURE_MDM: "Managed by MDM",
+  POSTURE_DISK: "Disk encrypted",
+  OS_MIN: (os: string) => `Lowest ${os}`,
+  OS_NAME: {
+    darwin: "macOS",
+    windows: "Windows",
+    linux: "Linux",
+  },
+  POSTURE_REPORTED: "Reported by each runner, not verified.",
+  RESIDENT_HONESTY: "A person who administers their own computer can read a credential stored on it. Pair this with short-lived or rotated secrets.",
+  RESIDENT_FLOOR: "A run whose barrier floor covers this credential still can't use it on a runner: a runner's barrier is reported, not verified.",
+  NOT_IN_RELEASE: "Not used in this release",
+  RUNNERS_OFF_NOTE: "Runners are off, so nothing here applies yet. You can set it now; it takes effect when runners are turned on.",
+  CLASS: {
+    api_key: "Header API keys",
+    bedrock_bearer: "Shared Amazon Bedrock API keys",
+    aws_sso_bearer: "Shared AWS sign-ins",
+    azure_foundry_token: "Shared Azure Foundry sign-ins",
+    bedrock_role_credentials: "AWS role credentials",
+    env_secret: "Secrets as environment variables",
+    file_secret: "Secrets as files",
+    ssh_key: "Organisation SSH keys",
+    git_pat_broker: "Git tokens through the Git broker",
+    git_pat_helper: "Git tokens through the credential helper",
+    github_token: "GitHub App tokens",
+    ado_minted_pat: "Azure DevOps tokens Wardyn mints",
+    oauth_subscription: "Claude subscriptions",
+    cloud_sts: "Cloud credentials (STS)",
+  },
+  CLASS_HINT: {
+    api_key: "Model and service keys sent in a header.",
+    bedrock_bearer: "A Bedrock API key your organisation holds.",
+    aws_sso_bearer: "An AWS sign-in captured once for everyone.",
+    azure_foundry_token: "An Azure sign-in captured once for everyone. Each person's own Azure Foundry sign-in isn't this.",
+    bedrock_role_credentials: "Credentials the agent signs requests with itself.",
+    env_secret: "Organisation secrets set in the sandbox's environment.",
+    file_secret: "Organisation secrets written into the sandbox as files.",
+    ssh_key: "Keys the run uses for Git over SSH.",
+    git_pat_broker: "Tokens Wardyn's Git route adds to requests.",
+    git_pat_helper: "Tokens handed to git inside the sandbox.",
+    github_token: "Installation tokens Wardyn mints for a run.",
+    ado_minted_pat: "Tokens minted from a person's Azure DevOps sign-in.",
+  },
+  FIXED_OWN: "Always the person's own",
+  FIXED_CLOUD_STS: "Never on a runner: needs attestation a laptop sandbox doesn't have.",
+  BOUND_NO_VIA_ORG: "Can't stay in the organisation: the run reads it inside the sandbox.",
+  BOUND_NO_RESIDENT_GITHUB: "Can't be stored on a runner: it would skip branch rules and push review.",
+  SAVE: "Save",
+  SAVED: "Saved. New runs use this; runs already going keep what they started with.",
+  REFUSED_TITLE: "This can't be saved as written",
+  CHANGE_KIND: "Runner credentials",
+  FETCH_FAILED_TITLE: "Couldn't load runner credentials",
+  FETCH_FAILED_BODY: "Something went wrong reaching the server. The policy already saved still applies — this page just can't show it right now.",
+  /** pending F1649-P1: recommended text until the owner answers. */
+  ADO_RESIDENT_HINT: "Each Azure DevOps connection must also allow this before its tokens are stored on a runner.",
+  /** pending F1649-P2: recommended text until the owner answers. */
+  OS_MIN_HINT: "Leave all three empty for no minimum. Once you set one, a runner on an OS you left empty can't use this.",
+  /** pending F1649-P4: recommended text until the owner answers. */
+  OS_MIN_INVALID: "Use a version such as 15.0 or 10.0.22631.",
+} as const;
+
 // 0.8.6 four-eyes on governance writes (mock packet M3, S2-S4) — the Changes tab, its drawer and the
 // submitted-for-approval note shown at every covered write site. Approved strings; the console adds none
 // of its own. The server's own sentence on a refused decision renders verbatim under DECIDE_REFUSED_TITLE.
@@ -317,7 +401,9 @@ export const CHANGES = {
     key_domain_assignment: "Key domain assignment",
     egress_baseline: "Egress baseline",
     runner_pool_use_policy: "Runner pool use policy",
+    remote_runner_people_policy: "Available to people's pools",
     service_identity: "Service identity",
+    local_credential_delivery: DELIVERY.CHANGE_KIND,
   } as Record<string, string>,
   // By op. An op this console predates shows its raw name.
   OP: {

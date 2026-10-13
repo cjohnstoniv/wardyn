@@ -104,7 +104,7 @@ func TestRecoveryManifest_DisabledSpoolCreatesAndVerifies(t *testing.T) {
 	if err := createRecoveryManifest(ctx, in); err != nil {
 		t.Fatalf("create with the spool disabled: %v", err)
 	}
-	m, err := readRecoveryManifest(set)
+	m, err := readRecoveryManifest(set, "verify the set")
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}
@@ -122,7 +122,7 @@ func TestRecoveryManifest_ReadRefusesASpoolPath(t *testing.T) {
 		set := t.TempDir()
 		body := `{"manifest":` + strconv.Itoa(recoveryManifestVersion) + `,"audit_spool":{"basename":` + strconv.Quote(base) + `}}`
 		writeFixtureFile(t, filepath.Join(set, recoveryManifestFile), body)
-		if _, err := readRecoveryManifest(set); err == nil || !strings.Contains(err.Error(), "plain file name") {
+		if _, err := readRecoveryManifest(set, "verify the set"); err == nil || !strings.Contains(err.Error(), "plain file name") {
 			t.Errorf("basename %q: err = %v, want a refusal", base, err)
 		}
 	}

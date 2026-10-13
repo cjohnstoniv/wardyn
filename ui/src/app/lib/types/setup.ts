@@ -187,6 +187,12 @@ export interface SetupHarnessTool {
   // cannot tell those two apart without this fact (setupModelProviderState's
   // capVisible already narrows model_providers to granted ones before the wire).
   providers_ungranted?: boolean;
+  // A sandbox image this server launches carries this harness's CLI (Go:
+  // harnessInstalled). False when the only image is Wardyn's agent base. The
+  // server always sends both; optional here because an older daemon omits them.
+  installed?: boolean;
+  // Wardyn can hold this harness's tool calls for approval on an autonomous run.
+  approval_hold?: boolean;
 }
 
 // THIS PRINCIPAL's Azure DevOps access state (internal/api.SCMAccess) —
@@ -396,6 +402,10 @@ export interface SetupStatus {
   // pending consolidation onto this field. Optional for the same
   // fixture-compat reason as `llm_ready`.
   harnesses?: SetupHarnessTool[];
+  // Each combination of two or more harnesses one declared sandbox image
+  // carries, as sorted ids; only combinations of harnesses in `harnesses`.
+  // Optional for the fixture-compat reason above.
+  harness_sets?: string[][];
   // UI-ONLY, never on the wire: set by api.getSetupStatus()'s fallback when the
   // daemon couldn't answer (network error / non-ok). The Go contract does not
   // emit it. Consumers must treat the rest of the payload as UNTRUSTWORTHY —

@@ -73,6 +73,10 @@ func runGetCmd(client clientFn) *cobra.Command {
 			if err := tw.Flush(); err != nil {
 				return err
 			}
+			if q := run.Queue; q != nil {
+				fmt.Fprintf(cmd.OutOrStdout(), "\nwaiting: %d ahead in pool %s; queued %s, gives up %s (%s)\n",
+					q.Position, q.PoolID, q.QueuedAt.Format(time.RFC3339), q.DeadlineAt.Format(time.RFC3339), q.Reason)
+			}
 			// A FAILED run must not hide its reason on the default surface. Surface
 			// the failure reason from audit inline; fall back to a pointer so the
 			// user is never left with a bare "FAILED".

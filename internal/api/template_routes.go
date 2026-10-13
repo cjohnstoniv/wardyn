@@ -4,17 +4,13 @@
 package api
 
 import (
-	"net/http"
-
 	"github.com/go-chi/chi/v5"
 )
 
-// The run template routes (0.9). They are mounted behind their final router
-// tiers so routeMatrix (authz_test.go) knows them before any storage exists,
-// and every one answers 501 templates_unavailable until the template store
-// lands, except POST /templates/import: it validates a document and stores
-// nothing (template_import.go). The handler of each is the one place the
-// storage lane writes:
+// The run template routes (0.9). A store with no template seam answers 501
+// templates_unavailable on every one except POST /templates/import, which
+// validates a document and stores nothing (template_import.go); the Postgres
+// store has the seam.
 //
 //	every /templates route        member at the router; the handler then checks the
 //	                              caller against the template's scope with
@@ -25,24 +21,20 @@ import (
 //
 // The {id} routes are classMember with handler-side scoping rather than
 // classOwner: a template is owned by a person, an organisation or a group, so
-// "the caller owns it" is one arm of the check and not the whole of it. The
-// storage lane therefore probes foreign ids by hand (every {id} route, every
-// scope, every caller) and answers a template the caller cannot see with the
-// 404 a missing one gets.
+// "the caller owns it" is one arm of the check and not the whole of it. A
+// template the caller cannot see answers the 404 a missing one gets
+// (readableTemplate), which TestTemplateForeignIDIsTheMissingID404 probes on
+// every {id} route, every scope and every caller.
 func (s *Server) mountTemplateRoutes(r, operatorOnly chi.Router) {
-	r.Get("/templates", s.handleTemplatesUnavailable)
-	r.Post("/templates", s.handleTemplatesUnavailable)
+	r.Get("/templates", s.handleListTemplates)
+	r.Post("/templates", s.handleCreateTemplate)
 	r.Post("/templates/import", s.handleImportTemplate)
-	r.Get("/templates/{id}", s.handleTemplatesUnavailable)
-	r.Get("/templates/{id}/revisions/{revision}", s.handleTemplatesUnavailable)
-	r.Put("/templates/{id}", s.handleTemplatesUnavailable)
-	r.Delete("/templates/{id}", s.handleTemplatesUnavailable)
-	r.Post("/templates/{id}/copy", s.handleTemplatesUnavailable)
-	operatorOnly.Get("/admin/template-group-admins", s.handleTemplatesUnavailable)
-	operatorOnly.Put("/admin/template-group-admins", s.handleTemplatesUnavailable)
-	operatorOnly.Delete("/admin/template-group-admins", s.handleTemplatesUnavailable)
-}
-
-func (s *Server) handleTemplatesUnavailable(w http.ResponseWriter, _ *http.Request) {
-	writeErrorReason(w, http.StatusNotImplemented, reasonTemplatesUnavailable, templatesUnavailableMsg())
+	r.Get("/templates/{id}", s.handleGetTemplate)
+	r.Get("/templates/{id}/revisions/{revision}", s.handleGetTemplateRevision)
+	r.Put("/templates/{id}", s.handleUpdateTemplate)
+	r.Delete("/templates/{id}", s.handleDeleteTemplate)
+	r.Post("/templates/{id}/copy", s.handleCopyTemplate)
+	operatorOnly.Get("/admin/template-group-admins", s.handleListTemplateGroupAdmins)
+	operatorOnly.Put("/admin/template-group-admins", s.handlePutTemplateGroupAdmin)
+	operatorOnly.Delete("/admin/template-group-admins", s.handleDeleteTemplateGroupAdmin)
 }

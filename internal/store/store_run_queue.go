@@ -60,11 +60,11 @@ func jsonOrEmpty(raw json.RawMessage) json.RawMessage {
 	return raw
 }
 
-// CreateQueuedRun inserts r (state QUEUED, bound to a pool) and its queue row in one transaction that
-// holds the pool row FOR NO KEY UPDATE, the lock promotion takes first, so the owner's waiting count
-// and the insert cannot interleave with a promotion. maxPerOwner <= 0 is unlimited; otherwise an owner
-// with that many runs already waiting for the pool gets ErrRunQueueFull and nothing is written. The
-// queue row's pool and owner are the run's own.
+// CreateQueuedRun inserts r (state QUEUED, bound to a pool), its launch intent when it carries one,
+// and its queue row in one transaction that holds the pool row FOR NO KEY UPDATE, the lock promotion
+// takes first, so the owner's waiting count and the insert cannot interleave with a promotion.
+// maxPerOwner <= 0 is unlimited; otherwise an owner with that many runs already waiting for the pool
+// gets ErrRunQueueFull and nothing is written. The queue row's pool and owner are the run's own.
 func (s PG) CreateQueuedRun(ctx context.Context, r types.AgentRun, e RunQueueEntry, maxPerOwner int) (types.AgentRun, error) {
 	if r.State != types.RunQueued || r.RunnerPoolID == nil {
 		return types.AgentRun{}, errors.New("store: a queued run is QUEUED and bound to a runner pool")
@@ -82,6 +82,10 @@ func (s PG) CreateQueuedRun(ctx context.Context, r types.AgentRun, e RunQueueEnt
 		if err := checkIdentityGuard(ctx, tx, g); err != nil {
 			return types.AgentRun{}, err
 		}
+	}
+	keep, err := lockLaunchIntent(ctx, tx, r)
+	if err != nil {
+		return types.AgentRun{}, err
 	}
 	var locked uuid.UUID
 	if err := tx.QueryRow(ctx, `SELECT id FROM runner_pools WHERE id = $1 FOR NO KEY UPDATE`, *r.RunnerPoolID).Scan(&locked); err != nil {
@@ -112,6 +116,11 @@ func (s PG) CreateQueuedRun(ctx context.Context, r types.AgentRun, e RunQueueEnt
 	created, err := scanRun(tx.QueryRow(ctx, createRunSQL, args...))
 	if err != nil {
 		return types.AgentRun{}, runInsertErr(err)
+	}
+	if keep {
+		if created, err = insertLaunchIntent(ctx, tx, created, r.LaunchIntent); err != nil {
+			return types.AgentRun{}, err
+		}
 	}
 	if _, err := tx.Exec(ctx, `INSERT INTO run_queue (`+runQueueCols+`) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
 		created.ID, *r.RunnerPoolID, r.CreatedBy, e.QueuedAt, e.DeadlineAt,

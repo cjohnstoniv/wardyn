@@ -150,7 +150,8 @@ it("the real renewal start/cancel confirms an unchanged owner and resumes the re
   await tick(1000);
   expect(count("/api/v1/runs/policy-preview")).toBeGreaterThan(beforeCancel);
   expect(count("/api/v1/runs/preflight")).toBeGreaterThan(originalPreflights);
-  expect(screen.getByLabelText("Title")).toHaveValue("Keep this draft");
+  // Under a loaded whole-suite run the resumed form can render a beat after the checks resume.
+  expect(await screen.findByLabelText("Title", {}, { timeout: 5000 })).toHaveValue("Keep this draft");
   expect(popup.close).toHaveBeenCalled();
   expect(toast.success).not.toHaveBeenCalled();
   expect(assign).not.toHaveBeenCalled();

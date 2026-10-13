@@ -21,4 +21,9 @@
 # docs/ENV.md 36360 measured after the F-1508-author merge (human_author; four-eyes on service-identity create and sponsor change).
 # docs/ENV.md 36330 adds 12 over 36318 (0.9 DS1-S2a r1): the WARDYN_TOOLGATE_CREDENTIAL row names the credential file and its mode on each substrate.
 # docs/ENV.md 36372 measured after train 12 DS1-S2a merge.
-docs/ENV.md=36372 share=5
+# docs/ENV.md 36340 adds 22 (0.9 A-L4): the WARDYN_START_FOLDER row.
+# docs/ENV.md 36396 measured after A-L4 merge (train 19).
+# docs/ENV.md 36444 adds 48 over 36396 (0.9 DS1-S2, train 19): the WARDYN_HARNESSES and WARDYN_START_HARNESS rows.
+# docs/ENV.md 36605 adds 139 over 36466 (0.9 train 26): TA-4 WARDYN_MCP_SERVERS_JSON and the MCP broker variables.
+# docs/ENV.md 36642 adds 37 over 36605 (G-090-cleanup slice F, docs rows that contradict the code): measured; the lead re-measures at merge.
+docs/ENV.md=36642 share=5

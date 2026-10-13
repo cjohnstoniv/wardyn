@@ -579,10 +579,10 @@ func TestTemplateImportValidation(t *testing.T) {
 		{"dependency listed", ``, ""},
 		{"needs setup for a present field", `{` + head + `"coverage":"partial","intent":{"agent":"a"},"needs_setup":[{"field":"agent"}]}`, reasonTemplateFieldInvalid + "@needs_setup[0].field"},
 		{"needs setup for an unknown field", `{` + head + `"coverage":"partial","intent":{"agent":"a"},"needs_setup":[{"field":"nope"}]}`, reasonTemplateFieldInvalid + "@needs_setup[0].field"},
-		{"shape check shared with the run", `{` + head + `"coverage":"partial","intent":{"workspaces":[{"workspace_id":"w","target":"work"}]}}`, reasonWorkspaceTargetInvalid + "@intent"},
+		{"shape check shared with the run", `{` + head + `"coverage":"partial","intent":{"workspaces":[{"workspace_id":"11111111-1111-1111-1111-111111111111","target":"work"}]}}`, reasonWorkspaceTargetInvalid + "@intent"},
 		{"unavailable: local placement", `{` + head + `"coverage":"partial","intent":{"placement":"local"}}`, reasonTemplateFieldUnavailable + "@intent.placement"},
 		{"unavailable: allowed image", `{` + head + `"coverage":"partial","intent":{"allowed_image":"img"}}`, reasonTemplateFieldUnavailable + "@intent.allowed_image"},
-		{"unavailable: built-in component", `{` + head + `"coverage":"partial","intent":{"components":[{"builtin":"github","org":"acme","repos":["acme/api"]}]}}`, reasonTemplateFieldUnavailable + "@intent.components[0]"},
+		{"unavailable: built-in azure_devops component", `{` + head + `"coverage":"partial","intent":{"components":[{"builtin":"azure_devops","org":"acme"}]}}`, reasonTemplateFieldUnavailable + "@intent.components[0]"},
 		{"plain setting named like a secret is a plain setting", ``, ""},
 	}
 	for _, tc := range cases {
@@ -619,6 +619,7 @@ func TestTemplateUnavailableMirrorsRunRefusal(t *testing.T) {
 		"runner pool":          `{"runner_pool_id":"6f1c2a52-5b1e-4d45-9d6b-0c4f1b2a7e10"}`,
 		"overrides":            `{"overrides":{"agent":{"add_hosts":["a.example.com"]}}}`,
 		"built-in":             `{"components":[{"builtin":"github","org":"acme","repos":["acme/api"]}]}`,
+		"built-in ado":         `{"components":[{"builtin":"azure_devops","org":"acme"}]}`,
 		"remote placement":     `{"placement":"remote"}`,
 		"inline component":     `{"components":[{"inline":{"hosts":["a.example.com"]}}]}`,
 		"resources":            `{"resources":{"cpu_millis":1000}}`,
@@ -762,7 +763,6 @@ func TestTemplateRunModeIsHeldToTheRunsOwnRules(t *testing.T) {
 	const head = `"api_version":"wardyn/v1","kind":"RunTemplate","coverage":"partial"`
 	cases := []struct{ name, body, path, reason string }{
 		{"run mode: a component tool is not available yet", `{` + head + `,"intent":{"tools":[{"id":"x","kind":"component","component":{"inline":{"hosts":["a.example.com"]}}}]}}`, "intent.tools[0]", reasonTemplateFieldUnavailable},
-		{"run mode: a folder inside an attachment is not available yet", `{` + head + `,"intent":{"start_folder":{"kind":"attachment","attachment":"drive","subpath":"src"}}}`, "intent.start_folder", reasonTemplateFieldUnavailable},
 		{"run mode: the older fields do not ride beside it", `{` + head + `,"intent":{"experience":"interactive","agent":"claude-code"}}`, "intent", reasonRunModeConflict},
 		{"run mode: a background task has no idle stop", `{` + head + `,"intent":{"experience":"background","workload":{"kind":"command","command":"make"},"inline_policy":{"auto_stop_after_sec":600}}}`, "intent", reasonRunModeConflict},
 		{"run mode: no repositories beside a repository", `{` + head + `,"intent":{"no_repositories_or_drives":true,"repo":"acme/api"}}`, "intent", reasonRunModeConflict},

@@ -109,6 +109,10 @@ type RunStartup struct {
 	Tool string `json:"tool,omitempty"`
 	// Command is the startup command a command startup runs once at boot.
 	Command string `json:"command,omitempty"`
+	// Prompt is the starting prompt a harness startup opens with: the startup
+	// harness's first message. A harness startup only; it is task text, held to
+	// the same scans and limits as a task.
+	Prompt string `json:"prompt,omitempty"`
 }
 
 // StartFolderKind says where the run's one working directory comes from.
@@ -127,8 +131,16 @@ const (
 type StartFolder struct {
 	Kind StartFolderKind `json:"kind"`
 	// Attachment is the workspace id of one of the request's attachments, or
-	// StartFolderDrive for the person's drive.
+	// StartFolderDrive for the person's drive. An attachment kind names exactly
+	// one of Attachment and DriveID.
 	Attachment string `json:"attachment,omitempty"`
+	// Repo, with a workspace Attachment, names one of the repositories the run
+	// clones from it: the folder is that clone. Without it the folder is the
+	// workspace's first attachment.
+	Repo string `json:"repo,omitempty"`
+	// DriveID names one drive of the run's drive list. Refused with
+	// request_field_unavailable until the server attaches several drives.
+	DriveID string `json:"drive_id,omitempty"`
 	// Subpath is a relative path inside the attachment's mount: no "..", no
 	// leading "/". Empty is the mount's root.
 	Subpath string `json:"subpath,omitempty"`

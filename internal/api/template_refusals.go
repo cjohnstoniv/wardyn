@@ -75,7 +75,7 @@ func templateScopeForbiddenMsg(scope string) string {
 	case types.TemplateScopeOrg:
 		return "Only an organisation administrator can publish templates for the organisation."
 	case types.TemplateScopeGroup:
-		return "Only an administrator of that group can publish templates to it."
+		return "Only the template managers of that group can publish templates to it."
 	}
 	return "A personal template belongs to the person who owns it."
 }
@@ -96,6 +96,39 @@ func templateRevisionConflictMsg(current int) string {
 	return fmt.Sprintf("This template changed to revision %d since you opened it. Reload it, then apply your edit again.", current)
 }
 
+// templateGrantOwnerRefusalMsg words one of resolveSecretOwner's refusals for
+// the group template-manager grant; the reason stays the resolver's. outcome is
+// what did not happen: "written" for a grant, "removed" for a revoke.
+func templateGrantOwnerRefusalMsg(refusal, outcome string) string {
+	if refusal == secretOwnerAmbiguousMsg {
+		return "That matches more than one person, so no grant was " + outcome + ". Use the person's subject exactly, as the Audit log shows it."
+	}
+	msg := "That email address doesn't match anyone this deployment knows, so no grant was " + outcome + ". " +
+		"Use the person's subject, as the Audit log shows it"
+	if outcome == templateGrantRemoved {
+		return msg + "."
+	}
+	return msg + ", or grant after they first sign in."
+}
+
+// The outcomes templateGrantOwnerRefusalMsg names.
+const (
+	templateGrantWritten = "written"
+	templateGrantRemoved = "removed"
+)
+
+func templateNameTakenMsg() string {
+	return "Another template available to the same people already uses this name."
+}
+
+func templateLimitReachedMsg(limit int) string {
+	return fmt.Sprintf("This scope already holds %d templates, the most it can. Delete one first.", limit)
+}
+
+func templatePolicyFieldRefusedMsg(path string) string {
+	return fmt.Sprintf("%s is not a network, credential or access rule. A policy holds only those; save a template instead.", path)
+}
+
 // templateDenialRefusal answers one TemplateAuthorize denial. A read that is
 // denied is a missing template, and so is a write to a template the caller
 // cannot see (another person's, a group they are not in): the id is never an
@@ -103,7 +136,7 @@ func templateRevisionConflictMsg(current int) string {
 // answer is the same 404. A write that same snapshot cannot answer says so
 // (403 group_unverified): the caller already holds the id. A member of a group
 // who is not its administrator, and anyone refused on org scope, learn only
-// that they may not publish there.
+// that they may not publish there. No answer names the group.
 func templateDenialRefusal(d types.TemplateDenial, action types.TemplateAction, owner types.TemplateOwner) *runRefusal {
 	switch d {
 	case types.TemplateAllowed:

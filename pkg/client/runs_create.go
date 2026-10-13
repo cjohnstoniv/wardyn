@@ -5,6 +5,7 @@ package client
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 
 	"github.com/google/uuid"
@@ -59,6 +60,14 @@ type CreateRunRequest struct {
 	// (mounts pass the same deny-list; api_key grants must reference an existing
 	// secret) and attaches it with no stored policy id.
 	InlinePolicy *RunPolicySpec `json:"inline_policy,omitempty"`
+	// PolicyOverlay lays the policy keys it names onto the caller's default
+	// policy (their governance ceiling, or the deployment default); a key it
+	// leaves out keeps the default's value. A non-empty JSON object of
+	// RunPolicySpec keys, never beside PolicyID or InlinePolicy (400
+	// policy_overlay_conflict). The keys it names are bounded by the caller's
+	// ceiling like an inline policy; the rest stay as the default has them. In a
+	// run document it is written under intent.inline_policy.
+	PolicyOverlay json.RawMessage `json:"policy_overlay,omitempty"`
 	// DevcontainerRepo, when set AND an image builder is wired (WARDYN_ENVBUILD),
 	// triggers a devcontainer build of that git repo whose resulting image becomes
 	// the sandbox image. Ignored (degrades to the convention image) when no builder
@@ -108,16 +117,18 @@ type CreateRunRequest struct {
 	// Request-scoped like TaskMode — never persisted on the run row, carried to
 	// the sandbox as WARDYN_TOOL_APPROVALS.
 	ToolApprovals string `json:"tool_approvals,omitempty"`
-	// Workspaces carries PER-WORKSPACE options — which of a workspace's
-	// OPTIONAL requirements (types.Workspace.Requirements, level="optional")
-	// this run enables, and a read-only narrowing — for the workspaces this run
-	// attaches. Additive to WorkspaceID, which stays a working SINGLE-selection
-	// alias: a caller that sets only WorkspaceID (never touching Workspaces)
-	// gets exactly today's behavior — no optional requirement enabled, no
-	// narrowing. A REQUIRED requirement needs no entry here at all; it applies
-	// automatically whenever its workspace is used. A selection naming a
-	// workspace this run does not otherwise attach (via WorkspaceID or a
-	// policy's workspace_mounts/workspace_repos) does nothing.
+	// Workspaces lists the workspaces this run attaches, in order, each with its
+	// per-run options: which OPTIONAL requirements (types.Workspace.Requirements,
+	// level="optional") it enables, a read-only narrowing, its in-sandbox
+	// target and which of its repositories it clones. Every entry is attached;
+	// Workspaces[0] is the PRIMARY. At most 32, each named once. WorkspaceID stays a working SINGLE-selection
+	// alias: alone it attaches that one workspace with no option, and sent beside
+	// Workspaces it must equal Workspaces[0] (400 workspace_selection_invalid
+	// otherwise). A REQUIRED requirement needs no option; it applies whenever its
+	// workspace is attached. An entry for a workspace the run's policy already
+	// attaches (workspace_mounts/workspace_repos), other than the one WorkspaceID
+	// names, adds its options only: its paths and repositories are the policy's,
+	// so a target or repos there is 422.
 	Workspaces []WorkspaceSelection `json:"workspaces,omitempty"`
 	// IntegrationID no longer chooses a model credential: a run naming one is
 	// refused with a 422. Use ModelProvider.
@@ -136,6 +147,12 @@ type CreateRunRequest struct {
 	// their own identity, so this flag can only ever ask for the storage the
 	// caller was already granted.
 	Drive *DriveSelection `json:"drive,omitempty"`
+	// Drives attaches drives from GET /me/drives by id, each at the target the
+	// catalogue shows; the person's legacy drive keeps /home/agent/drive. Each
+	// is authorised through the caller's own grants. Sending both Drive and
+	// Drives is 400 drive_selection_conflict. One drive that cannot be mounted
+	// refuses the run; none is dropped.
+	Drives []DriveAttachment `json:"drives,omitempty"`
 	// Components attaches custom components to this run: each entry names a
 	// stored component by id or carries a run-only definition inline. Nil and
 	// empty are the same and attach nothing, byte for byte today.
@@ -161,16 +178,23 @@ type CreateRunRequest struct {
 	// Accepted and validated; a server that cannot honour pools yet refuses it
 	// with request_field_unavailable, never ignores it.
 	RunnerPoolID string `json:"runner_pool_id,omitempty"`
-	// Resources is the CPU and memory this run asks for, clamped by the server
-	// to the caps of the placement it lands on. Absent leaves the source
-	// policy's own resources or the platform default in effect, and a request
-	// value beats the policy's. Accepted and validated; the clamp is applied by
-	// the placement-aware resources lane.
+	// Resources is the CPU and memory this run asks for. A field set here beats
+	// the source policy's own; a field left out keeps the policy's, else the
+	// default. The server applies it within the strictest of the pool's, the
+	// person's governance, the deployment's and (on their own runner) the
+	// runner's limits: an over-ask is reduced to that cap, never refused.
+	// CreateRunResult.ResourcesApplied and the dry runs say what was applied.
 	Resources *RunResources `json:"resources,omitempty"`
 	// Overrides are the person's per-component edits on the New Run cards
 	// (OD-1), applied inside the resolve fold before the ceiling clamp. See
 	// RunOverrides.
 	Overrides *RunOverrides `json:"overrides,omitempty"`
+	// MaxWaitSec is how long this run may wait for a slot when its runner pool is at its
+	// concurrent-run limit, in seconds (1 to 604800; more is cut to 7 days with a warning). Absent
+	// is 24 hours for a Background run and 1 hour for an Interactive one. At the end of the wait
+	// the run is FAILED with the reason queue_timeout. Ignored by a pool with no limit. A pointer, so
+	// a 0 is sent and refused rather than read as absent.
+	MaxWaitSec *int `json:"max_wait_sec,omitempty"`
 	// ModeContract marks a request as a 0.9 client's, whatever else it carries:
 	// it is RunModeContractV09 and nothing else. The server then holds the
 	// request to the run-mode contract, so an unset Experience is refused
@@ -256,6 +280,15 @@ type DriveSelection struct {
 	ReadOnly *bool `json:"read_only,omitempty"`
 }
 
+// DriveAttachment is one entry of CreateRunRequest.Drives.
+type DriveAttachment struct {
+	// DriveID is a drive id from GET /me/drives, in its canonical spelling.
+	DriveID string `json:"drive_id"`
+	// ReadOnly narrows only, as DriveSelection.ReadOnly does: false against a
+	// read-only drive is 422.
+	ReadOnly *bool `json:"read_only,omitempty"`
+}
+
 // WorkspaceSelection is one per-run option set for an attached workspace. See
 // CreateRunRequest.Workspaces.
 type WorkspaceSelection struct {
@@ -274,18 +307,59 @@ type WorkspaceSelection struct {
 	// leaves the contract's own resolved default in effect.
 	ReadOnly *bool `json:"read_only,omitempty"`
 	// Target is where this workspace appears inside the sandbox. It must be an
-	// absolute, cleaned path strictly under /home/agent with no ".." element.
-	// Equal or nested targets across different workspaces (a user drive's
-	// included) are refused with 422 workspace_target_overlap; nesting inside
-	// one workspace's own sources stays allowed. Empty keeps the workspace's own
-	// source targets.
+	// absolute, cleaned path strictly under /home/agent with no ".." element,
+	// and outside the drive roots. It names one place, so it applies to a
+	// workspace that attaches exactly one repository or folder (see Repos);
+	// otherwise it is 422. Empty keeps the workspace's own source targets.
 	//
-	// The PRIMARY workspace is Workspaces[0]: the run is listed under it, and
-	// once the multi-workspace lane lands its model-provider pin and base image
-	// are the ones every attached workspace must agree with. The order of the
-	// list is therefore meaningful. Accepted and validated here; applied by the
-	// multi-workspace lane.
+	// Every resolved target of the run is compared, not only the ones a request
+	// names: equal or nested targets across different workspaces (a drive's
+	// included), or two repositories cloning into one directory, are refused
+	// with 422 workspace_target_overlap. Nesting inside one workspace's own
+	// sources stays allowed.
+	//
+	// The PRIMARY workspace is Workspaces[0]: the run is listed under it. Every
+	// attached workspace must agree on the model-provider pin, the base image
+	// and the Azure DevOps organisation (422 workspace_pin_conflict,
+	// image_conflict, workspace_ado_org_conflict).
 	Target string `json:"target,omitempty"`
+	// Repos picks which of this workspace's repository sources the run clones,
+	// each at an optional ref. Nil: every repository source at its onboarded
+	// ref. Present: exactly these, so an empty list clones none (a pointer, so
+	// an explicit [] survives json.Marshal). A repo the workspace does not carry
+	// is 422 workspace_repo_unknown. The workspace's other sources attach as
+	// they would without it.
+	Repos *[]RepoSelection `json:"repos,omitempty"`
+}
+
+// RepoSelection is one repository a WorkspaceSelection clones.
+type RepoSelection struct {
+	// Repo is the repository exactly as the workspace source stores it.
+	Repo string `json:"repo"`
+	// Ref is a branch, tag or full commit. Empty is the source's own ref, else
+	// the remote's default branch. A ref that could read as a git option or a
+	// revision expression (a leading "-", "..", "@{", control characters) is
+	// 400 run_ref_invalid.
+	Ref string `json:"ref,omitempty"`
+}
+
+// RunAttachment is one entry of the server's mount map for a run, as the
+// preflight and the policy preview return it: what is mounted or cloned where.
+type RunAttachment struct {
+	// Kind is repository, folder (a host local_dir source, shown read-only in
+	// Review) or drive.
+	Kind        string `json:"kind"`
+	WorkspaceID string `json:"workspace_id,omitempty"`
+	Repo        string `json:"repo,omitempty"`
+	// Ref is the ref the clone checks out; "" is the remote's default branch.
+	Ref     string `json:"ref,omitempty"`
+	DriveID string `json:"drive_id,omitempty"`
+	// Name is the workspace or drive NAME, never a host path.
+	Name     string `json:"name"`
+	Target   string `json:"target"`
+	ReadOnly bool   `json:"read_only"`
+	// StartsHere marks the attachment that holds the run's starting folder.
+	StartsHere bool `json:"starts_here"`
 }
 
 // CreateRunResult is the decoded POST /api/v1/runs 201 reply. AgentRun is
@@ -301,6 +375,9 @@ type CreateRunResult struct {
 	// them: the run is live either way, so a dropped warning is a silently
 	// degraded run.
 	Warnings []string `json:"warnings,omitempty"`
+	// ResourcesApplied is the CPU and memory the run asked for and got, and
+	// which limit bound each.
+	ResourcesApplied *AppliedResources `json:"resources_applied,omitempty"`
 }
 
 // CreateRun submits a new agent run and answers once the run row exists (state
@@ -343,9 +420,13 @@ type PreflightResult struct {
 	Components []ComponentFact `json:"components,omitempty"`
 	// Provenance explains which source contributed each resolved policy entry.
 	Provenance []ProvenanceEntry `json:"provenance"`
-	// Resources is what each placement offers this run, keyed by placement and
-	// runner. Empty until the resources lane fills it.
-	Resources []PlacementResources `json:"resources"`
+	// Limits is what this run may get: the resolved pool's, the person's
+	// governance and the deployment's limits for the run's type, folded.
+	// ResourcesApplied is the CPU and memory it asked for and would get.
+	Limits           *EffectiveRunLimits `json:"limits,omitempty"`
+	ResourcesApplied *AppliedResources   `json:"resources_applied,omitempty"`
+	// MainDrive is the main-drive size it asked for and would get, with its basis.
+	MainDrive *MainDriveApplied `json:"main_drive,omitempty"`
 	// LocalPlacement says per host, workspace source and component whether the
 	// person's runner can honour it. Empty until the placement lane fills it.
 	LocalPlacement []LocalPlacementFact `json:"local_placement"`
@@ -360,6 +441,16 @@ type PreflightResult struct {
 	// lane fills it. Neither is admission: a launch re-checks both.
 	RunnerPool  *ResolvedRunnerPool `json:"runner_pool,omitempty"`
 	RunnerPools []RunnerPoolChoice  `json:"runner_pools"`
+	// BarrierOptions are the resolved pool's three barriers under this draft's
+	// floors (policy_floor and access_floor appear only here); empty when unpooled.
+	BarrierOptions []BarrierOption `json:"barrier_options"`
+	// RunnerPoolSlots is the resolved pool's slot counts, with the run's max_wait_sec; absent when
+	// unpooled. Advisory: the launch decides.
+	RunnerPoolSlots *PoolSlots `json:"runner_pool_slots,omitempty"`
+	// Access is what the run brings in: its rows, hosts, credentials, the line
+	// for an unlisted host and the setup still needed. The policy preview
+	// answers the same block for the same request.
+	Access *AccessFacts `json:"access,omitempty"`
 }
 
 // Preflight DRY-RUNs a create-run request: the server resolves the policy

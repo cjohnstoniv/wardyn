@@ -54,7 +54,7 @@ func newAdmissionFixture(t *testing.T) *admissionFixture {
 	pub, key, _ := ed25519.GenerateKey(rand.Reader)
 	id := uuid.New()
 	rn, err := st.CreateRunner(ctx, types.Runner{ID: id, Owner: "admission-owner", Name: "laptop", PublicKey: pub, KeyFingerprint: id.String(),
-		Version: "0.9.0", OrgURLSHA256: federation.OrgURLSHA256(admissionOrgURL)})
+		Version: "0.9.0", OrgURLSHA256: federation.OrgURLSHA256(admissionOrgURL), MaxRuns: types.RunnerMaxRunsCeiling})
 	if err != nil {
 		t.Fatal(err)
 	}

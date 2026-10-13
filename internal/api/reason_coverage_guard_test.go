@@ -68,8 +68,8 @@ var bareWriteErrorAllowlist = map[string]bareWriteErrorEntry{
 	// "block-unreadable" reason-less; TestRunModelProviderDoors' "a
 	// credential that cannot be read refuses with the sentence alone" case
 	// pins the second.
-	"run_provider_authorization.go:Server.authorizeRunModelProvider": {1, "moved provider-block-unreadable 503; same reason-less contract pinned by TestProviderJoin_DoorsEveryKind"},
-	"run_model_provider.go:Server.enforceRunModelProvider":           {1, "credential-unreadable 503: a transient store failure is no door (multi-provider §5.8); TestProviderJoin_DoorsEveryKind and TestRunModelProviderDoors pin it reason-less"},
+	"run_provider_authorization.go:Server.chooseRunModelProvider": {1, "moved provider-block-unreadable 503; same reason-less contract pinned by TestProviderJoin_DoorsEveryKind"},
+	"run_model_provider.go:Server.enforceChosenModelProvider":     {1, "credential-unreadable 503: a transient store failure is no door (multi-provider §5.8); TestProviderJoin_DoorsEveryKind and TestRunModelProviderDoors pin it reason-less"},
 	// handleRecordWorkspace's two: the record door's answers for the same unreadable
 	// provider block and unreadable credential as enforceRunModelProvider's two
 	// sites above — the bare 503 sentences, byte-equal to create's.

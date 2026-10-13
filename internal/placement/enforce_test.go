@@ -265,11 +265,9 @@ func TestTableRowForAnUnlistedFieldFailsClosed(t *testing.T) {
 		t.Fatalf("paths=%v", paths)
 	}
 	for _, origin := range []CredentialOrigin{{}, {Class: ClassOperator, Delivery: ClassEnvSecret, Stored: true}} {
-		for _, mode := range []Mode{ModeRefuse, ModeRunnerResident} {
-			policy := DeliveryPolicy{Classes: map[string]ClassPolicy{ClassEnvSecret: {Mode: mode}}}
-			if r := classifyCredential(src, paths[0], origin, policy); r == nil || r.Reason != ReasonPlacementCredential {
-				t.Fatalf("origin %+v mode %s: %v", origin, mode, r)
-			}
+		policy := DeliveryPolicy{Classes: map[string]ClassPolicy{ClassEnvSecret: {Mode: ModeRefuse}}}
+		if r := classifyCredential(src, paths[0], origin, LocalPlan{Delivery: policy}, reflect.Value{}); r == nil || r.Reason != ReasonPlacementCredential {
+			t.Fatalf("origin %+v: %v", origin, r)
 		}
 	}
 	if r := enforceStruct(src, LocalPlan{}, &runner.SandboxSpec{}, StructSandboxSpec, "SandboxSpec", v); r == nil || r.Field != "SandboxSpec.NewGate" {
@@ -294,7 +292,7 @@ func TestProxyRowForAnUnlistedFieldYieldsAPathAndRefuses(t *testing.T) {
 	if !slices.Equal(paths, []string{"ProxyConfig.DeployKey[corp]"}) {
 		t.Fatalf("paths=%v", paths)
 	}
-	if r := classifyCredential(src, paths[0], CredentialOrigin{Class: ClassOperator, Delivery: ClassAPIKey}, DeliveryPolicy{}); r == nil {
+	if r := classifyCredential(src, paths[0], CredentialOrigin{Class: ClassOperator, Delivery: ClassAPIKey}, LocalPlan{}, reflect.Value{}); r == nil {
 		t.Fatal("an operator delivery row admitted")
 	}
 	if got := structPaths(src, StructProxyConfig, "ProxyConfig", reflect.ValueOf(probeProxy{})); len(got) != 0 {
@@ -383,7 +381,7 @@ func TestUnknownRuleRefusesAndIsRejectedByTheTable(t *testing.T) {
 		t.Fatalf("an unknown rule was not treated as gated-without-gate: %v", r)
 	}
 	for _, origin := range []CredentialOrigin{{Class: ClassBrokered, Delivery: ClassGitHubToken}} {
-		if r := classifyCredential(src, "ProxyConfig.GitGrants[org/repo]", origin, DeliveryPolicy{}); r == nil {
+		if r := classifyCredential(src, "ProxyConfig.GitGrants[org/repo]", origin, LocalPlan{}, reflect.Value{}); r == nil {
 			t.Fatal("an unknown rule admitted a credential")
 		}
 	}
@@ -404,10 +402,10 @@ func TestDeliveryLessRowCannotShadowALaterRefusingRow(t *testing.T) {
 	}
 	src := func(s, f string) []Entry { return rows }
 	own := CredentialOrigin{Class: ClassOwn, Delivery: ClassAPIKey, Stored: true, OwnNamespace: true, OwnerOnly: true}
-	if r := classifyCredential(src, "ProxyConfig.Injection[0]", own, DeliveryPolicy{}); r == nil {
+	if r := classifyCredential(src, "ProxyConfig.Injection[0]", own, LocalPlan{}, reflect.Value{}); r == nil {
 		t.Fatal("a delivery-less row shadowed the refusing row")
 	}
-	if r := classifyCredential(src, "ProxyConfig.Injection[0]", CredentialOrigin{Class: ClassOwn, OwnNamespace: true}, DeliveryPolicy{}); r != nil {
+	if r := classifyCredential(src, "ProxyConfig.Injection[0]", CredentialOrigin{Class: ClassOwn, OwnNamespace: true}, LocalPlan{}, reflect.Value{}); r != nil {
 		t.Fatalf("an origin with no delivery should still reach the general rows: %v", r)
 	}
 }

@@ -141,10 +141,14 @@ func (s PG) PutRunComponents(ctx context.Context, runID uuid.UUID, comps []types
 	}
 	err := s.inTx(ctx, func(q Querier) error {
 		const ins = `
-			INSERT INTO run_components (run_id, ordinal, component_id, owner, name, version, definition, self_defined)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`
+			INSERT INTO run_components (run_id, ordinal, component_id, owner, name, version, definition, self_defined, mcp_harnesses)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`
 		for i, c := range comps {
-			if _, err := q.Exec(ctx, ins, runID, i, c.ComponentID, c.Owner, c.Name, c.Version, defs[i], c.SelfDefined); err != nil {
+			harnesses := c.MCPHarnesses
+			if harnesses == nil {
+				harnesses = []string{}
+			}
+			if _, err := q.Exec(ctx, ins, runID, i, c.ComponentID, c.Owner, c.Name, c.Version, defs[i], c.SelfDefined, harnesses); err != nil {
 				return err
 			}
 		}
@@ -164,7 +168,7 @@ func (s PG) PutRunComponents(ctx context.Context, runID uuid.UUID, comps []types
 
 // ListRunComponents — see ComponentStore.
 func (s PG) ListRunComponents(ctx context.Context, runID uuid.UUID) ([]types.RunComponent, error) {
-	const q = `SELECT run_id, ordinal, self_defined, component_id, owner, name, version, definition
+	const q = `SELECT run_id, ordinal, self_defined, component_id, owner, name, version, definition, mcp_harnesses
 		FROM run_components WHERE run_id = $1 ORDER BY ordinal`
 	return collect(ctx, s.Pool, "list", "run components", q, []any{runID}, scanRunComponent)
 }
@@ -206,8 +210,11 @@ func scanRunComponent(row pgx.Row) (types.RunComponent, error) {
 	var owner, name *string
 	var version *int
 	var def []byte
-	if err := row.Scan(&c.RunID, &c.Ordinal, &c.SelfDefined, &c.ComponentID, &owner, &name, &version, &def); err != nil {
+	if err := row.Scan(&c.RunID, &c.Ordinal, &c.SelfDefined, &c.ComponentID, &owner, &name, &version, &def, &c.MCPHarnesses); err != nil {
 		return types.RunComponent{}, fmt.Errorf("store: scan run component: %w", err)
+	}
+	if len(c.MCPHarnesses) == 0 {
+		c.MCPHarnesses = nil
 	}
 	if owner == nil {
 		c.Erased = true

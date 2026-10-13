@@ -6,14 +6,23 @@
 // half only constrains what POST /runs will ACCEPT; this package is the agent-side expression of a level,
 // and is PURE — no I/O, no server state.
 //
-// SECURITY invariant: documents are FROZEN LITERALS, not a struct marshalled per call — each is byte for
-// byte the file exercised against the pinned CLI (CLAUDE_CODE_VERSION 2.1.231), and testdata/ holds the
-// same bytes so the golden test compares against evidence, not this file's own opinion. A marshalled
-// struct would carry an error path that fails OPEN; frozen text has none. Re-run the pinned-CLI checks on
-// every CLI version bump — these keys are a contract with one vendor's parser, not a standard.
+// SECURITY invariant: each level's document is a FROZEN LITERAL, not a struct marshalled per call — byte
+// for byte the file exercised against the pinned CLI (CLAUDE_CODE_VERSION 2.1.231), and testdata/ holds
+// the same bytes so the golden test compares against evidence, not this file's own opinion. The one
+// generated part is an interactive run's tool rules (WithToolRules): permissions.allow/ask/deny arrays of
+// exact names written into a frozen document, plus allowManagedPermissionRulesOnly. A marshalled document
+// carries an error path that would fail OPEN, so WithToolRules returns every error and its callers refuse
+// the run; testdata/ holds the generated documents the pinned CLI was exercised with. Re-run the pinned-CLI
+// checks on every CLI version bump — these keys are a contract with one vendor's parser, not a standard.
 package agentpolicy
 
 import (
+	"encoding/json"
+	"fmt"
+	"regexp"
+	"slices"
+	"strings"
+
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -80,6 +89,15 @@ const (
   "allowManagedPermissionRulesOnly": true
 }
 `
+	// The base of an interactive run that carries tool rules at a level that brings no document (no
+	// level, or L3): the CLI's own default mode, which the rules are then written into. Nothing here
+	// disables bypass, so a launch flag that asks for it (seed_auto_tools) works as it does without a file.
+	claudeAttended = `{
+  "permissions": {
+    "defaultMode": "default"
+  }
+}
+`
 )
 
 // ForAgent returns the managed-settings file a run's agent should launch under at level, or ok=false when
@@ -129,4 +147,103 @@ func IsLocked(content []byte) bool { return string(content) == claudeL2Locked }
 // allowManagedPermissionRulesOnly — which the locked L2 document carries).
 func HoldTakesOver(level types.AutonomyLevel, locked bool) bool {
 	return level == "" || level == types.AutonomyL3 || (level == types.AutonomyL2 && !locked)
+}
+
+// DisablesBypass reports whether content locks bypass mode off, so an interactive run under it can never
+// skip asking (the console's attended_no_skip).
+func DisablesBypass(content []byte) bool {
+	return strings.Contains(string(content), `"disableBypassPermissionsMode": "disable"`)
+}
+
+// AcceptsEdits reports whether content starts the session in acceptEdits mode, where Claude Code runs a
+// file edit without asking.
+func AcceptsEdits(content []byte) bool {
+	return strings.Contains(string(content), `"defaultMode": "acceptEdits"`)
+}
+
+// exactToolName is one tool's exact name, as Claude Code reports it (Bash, WebFetch, mcp__server__tool).
+// Claude Code reads a permission rule as a pattern ("Bash(git:*)", or "mcp__server" for every tool of a
+// server), so a name it would read wider than one tool is refused rather than written: no pattern
+// characters, and an MCP name names its tool.
+var (
+	exactToolName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]*$`)
+	mcpToolName   = regexp.MustCompile(`^mcp__.+__.+$`)
+)
+
+func isExactToolName(name string) bool {
+	return exactToolName.MatchString(name) && (!strings.HasPrefix(name, "mcp__") || mcpToolName.MatchString(name))
+}
+
+// permissionKey is the Claude Code permission list each effect is written to.
+var permissionKey = map[types.ToolEffect]string{types.ToolAllow: "allow", types.ToolHold: "ask", types.ToolDeny: "deny"}
+
+// WithToolRules writes an interactive run's tool rules into doc (nil: the attended base, for a level that
+// brings no document) as Claude Code's own permission rules, sorted, with allowManagedPermissionRulesOnly so
+// no repository or user rule answers a call first. "*" is not written: Claude Code has no rule for a tool
+// nobody names, so the document's mode answers it (it asks). With no named rule, doc is returned as it came,
+// nil included. Any error means the rules could not be written exactly, and the run must not launch.
+func WithToolRules(doc []byte, rules []types.ToolRule) ([]byte, error) {
+	lists, err := permissionLists(rules)
+	if err != nil {
+		return nil, err
+	}
+	if len(lists) == 0 {
+		return doc, nil
+	}
+	if doc == nil {
+		doc = []byte(claudeAttended)
+	}
+	var top, perms map[string]json.RawMessage
+	if err := json.Unmarshal(doc, &top); err != nil {
+		return nil, fmt.Errorf("read the managed settings: %w", err)
+	}
+	if err := json.Unmarshal(top["permissions"], &perms); err != nil {
+		return nil, fmt.Errorf("read the managed settings' permissions: %w", err)
+	}
+	for key, tools := range lists {
+		if _, taken := perms[key]; taken {
+			return nil, fmt.Errorf("the managed settings already carry permissions.%s", key)
+		}
+		slices.Sort(tools)
+		raw, err := json.Marshal(slices.Compact(tools))
+		if err != nil {
+			return nil, fmt.Errorf("write permissions.%s: %w", key, err)
+		}
+		perms[key] = raw
+	}
+	if top["permissions"], err = json.Marshal(perms); err != nil {
+		return nil, fmt.Errorf("write the managed settings' permissions: %w", err)
+	}
+	top["allowManagedPermissionRulesOnly"] = json.RawMessage("true")
+	out, err := json.MarshalIndent(top, "", "  ")
+	if err != nil {
+		return nil, fmt.Errorf("write the managed settings: %w", err)
+	}
+	return append(out, '\n'), nil
+}
+
+// CheckToolRules reports the first rule WithToolRules could not write, so a door can refuse a run before
+// dispatch would.
+func CheckToolRules(rules []types.ToolRule) error {
+	_, err := permissionLists(rules)
+	return err
+}
+
+// permissionLists is rules as Claude Code's permission lists, by key; "*" is left out.
+func permissionLists(rules []types.ToolRule) (map[string][]string, error) {
+	lists := map[string][]string{}
+	for _, r := range rules {
+		if r.Tool == "*" {
+			continue
+		}
+		key, ok := permissionKey[r.Effect]
+		if !ok {
+			return nil, fmt.Errorf("tool rule %q: effect %q is not allow, hold or deny", r.Tool, r.Effect)
+		}
+		if !isExactToolName(r.Tool) {
+			return nil, fmt.Errorf("tool rule %q is not one tool's exact name, and Claude Code would read it as a pattern", r.Tool)
+		}
+		lists[key] = append(lists[key], r.Tool)
+	}
+	return lists, nil
 }

@@ -157,14 +157,22 @@ var gates = map[string]func(LocalPlan) *Refusal{
 		}
 		return nil
 	},
-	"SandboxSpec.Drive": func(p LocalPlan) *Refusal {
-		if d := p.Spec.Drive; d != nil {
+	"SandboxSpec.Drives": func(p LocalPlan) *Refusal {
+		for i, d := range p.Spec.Drives {
+			path := indexed("SandboxSpec.Drives", i)
 			if d.Backend != types.DriveBackendHostPath {
-				return refuse(ReasonPlacementCapability, "SandboxSpec.Drive", "organisation storage cannot be sent to a local runner")
+				return refuse(ReasonPlacementCapability, path, "organisation storage cannot be sent to a local runner")
 			}
-			if !p.VerifiedLocalPaths["SandboxSpec.Drive"] {
-				return refuse(ReasonPlacementLocalPath, "SandboxSpec.Drive", "drive path is not bound to this runner's allowed roots")
+			if !p.VerifiedLocalPaths[path] {
+				return refuse(ReasonPlacementLocalPath, path, "drive path is not bound to this runner's allowed roots")
 			}
+		}
+		return nil
+	},
+	// The organisation's App token never leaves the organisation's proxy.
+	"ProxyConfig.GitHubAPI": func(p LocalPlan) *Refusal {
+		if p.Spec.ProxyConfig.GitHubAPI != nil {
+			return refuse(ReasonPlacementCredential, "ProxyConfig.GitHubAPI", "the GitHub CLI's App token cannot be sent to a local runner")
 		}
 		return nil
 	},

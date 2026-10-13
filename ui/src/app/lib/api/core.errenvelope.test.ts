@@ -33,12 +33,12 @@ describe("errEnvelope / asJson — the envelope's machine-readable reason", () =
 
   it("a non-string reason is ignored, never rendered", async () => {
     const res = new Response(JSON.stringify({ error: "x", reason: 42 }), { status: 422 });
-    expect(await errEnvelope(res)).toEqual({ message: "x", reason: "", org: "", provider: "", kind: "" });
+    expect(await errEnvelope(res)).toEqual({ message: "x", reason: "", org: "", provider: "", kind: "", tool: "" });
   });
 
   it("a raw (non-envelope) body carries no reason", async () => {
     const res = new Response("plain", { status: 500 });
-    expect(await errEnvelope(res)).toEqual({ message: "plain", reason: "", org: "", provider: "", kind: "" });
+    expect(await errEnvelope(res)).toEqual({ message: "plain", reason: "", org: "", provider: "", kind: "", tool: "" });
   });
 
   it('{"error":"…","reason":"git_credential","org":"…"} -> an HttpError carrying the org', async () => {
@@ -54,7 +54,7 @@ describe("errEnvelope / asJson — the envelope's machine-readable reason", () =
 
   it("a non-string org is ignored, never rendered", async () => {
     const res = new Response(JSON.stringify({ error: "x", org: 42 }), { status: 422 });
-    expect(await errEnvelope(res)).toEqual({ message: "x", reason: "", org: "", provider: "", kind: "" });
+    expect(await errEnvelope(res)).toEqual({ message: "x", reason: "", org: "", provider: "", kind: "", tool: "" });
   });
 
   it('{"error":"…","provider":"corp","kind":"custom_endpoint"} -> an HttpError naming the refused provider and kind (#532, #535, #543)', async () => {
@@ -67,6 +67,13 @@ describe("errEnvelope / asJson — the envelope's machine-readable reason", () =
     expect(err.kind).toBe("custom_endpoint");
     expect(new HttpError(422, "x").provider).toBe("");
     expect(new HttpError(422, "x").kind).toBe("");
+  });
+
+  it('{"error":"…","tool":"claude-code"} -> an HttpError naming the harness the refusal is about', async () => {
+    const res = new Response(JSON.stringify({ error: "refused", reason: "harness_not_installed", tool: "claude-code" }), { status: 422 });
+    const err = (await asJson(res).catch((e: unknown) => e)) as HttpError;
+    expect(err.tool).toBe("claude-code");
+    expect(new HttpError(422, "x").tool).toBe("");
   });
 
   it("errText is the envelope's message, byte for byte", async () => {
