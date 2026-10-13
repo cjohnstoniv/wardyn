@@ -38,12 +38,11 @@ export interface StepShellPrimary {
   arrow?: boolean;
 }
 
-export interface StepShellProps {
+interface StepShellBase {
   title: string;
   lede?: React.ReactNode;
   eyebrow?: string;
   progress?: { label: string; steps: FlowStep[] };
-  back?: { label: string; onBack: () => void };
   /** None: no primary button and no Ctrl/Cmd+Enter (Shape from scratch, where a choice moves on). */
   primary?: StepShellPrimary;
   /** Local issues: the primary action then focuses the first one's control instead of running. */
@@ -52,12 +51,18 @@ export interface StepShellProps {
   headingAside?: React.ReactNode;
   /** Where the aside sits against the heading: Review centres it, the document editor sets it on the bottom line. */
   headingAsideAlign?: "center" | "end";
-  /** More footer actions: `start` on the left in place of Back, `end` just before the primary (Review's Save and Check again). */
-  footerExtras?: { start?: React.ReactNode; end?: React.ReactNode };
   /** Pins the footer to the bottom of the view while the step scrolls (Tools and access's bar). */
   stickyFooter?: boolean;
   children?: React.ReactNode;
 }
+
+/** The footer's left side is Back or the extras, never both: with extras Back is not drawn, so the type refuses the pair. */
+export type StepShellProps = StepShellBase &
+  (
+    | { back?: { label: string; onBack: () => void }; footerExtras?: never }
+    /** More footer actions: `start` on the left in place of Back, `end` just before the primary (Review's Save and Check again). */
+    | { back?: never; footerExtras?: { start?: React.ReactNode; end?: React.ReactNode } }
+  );
 
 export function StepShell({ title, lede, eyebrow, progress, back, primary, issues, headingAside, headingAsideAlign = "center", footerExtras, stickyFooter, children }: StepShellProps) {
   const heading = React.useRef<HTMLHeadingElement>(null);
