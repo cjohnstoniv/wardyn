@@ -249,8 +249,8 @@ func TestPG_LocalRun_OverAskReducedToRunnerCapacity(t *testing.T) {
 	if created.RunnerID == nil || *created.RunnerID != small || created.ResourcesApplied == nil {
 		t.Fatalf("created = %+v, want a run on %s with its applied size", created, small)
 	}
-	wantAmount(t, "cpu", created.ResourcesApplied.CPUMillis, 2000, true, types.LimitSourceRunnerCapacity, "")
-	wantAmount(t, "memory", created.ResourcesApplied.MemoryMiB, 2048, true, types.LimitSourceRunnerCapacity, "")
+	wantAmount(t, "cpu", created.ResourcesApplied.CPUMillis, 2000, true, types.LimitSourceRunner, "")
+	wantAmount(t, "memory", created.ResourcesApplied.MemoryMiB, 2048, true, types.LimitSourceRunner, "")
 	spec := e.dispatchedSpec(created.ID)
 	if spec.RunnerID != small.String() || spec.Resources.CPUMillis != 2000 || spec.Resources.MemoryMiB != 2048 {
 		t.Errorf("dispatched to %q with %+v, want %s at 2000 m / 2048 MiB", spec.RunnerID, spec.Resources, small)

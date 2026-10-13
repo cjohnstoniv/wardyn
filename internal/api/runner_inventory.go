@@ -64,7 +64,7 @@ func (s *Server) runnerView(row types.Runner, runs, running int, admin bool) typ
 		KeyFingerprint: row.KeyFingerprint, Version: row.Version, CreatedAt: row.CreatedAt,
 		ClaimedAt: row.ClaimedAt, LastSeenAt: row.LastSeenAt, RevokedAt: row.RevokedAt,
 		RevokedBy: row.RevokedBy, RevokeReason: row.RevokeReason,
-		PostureSource: row.PostureSource, RunsActive: runs, MaxRuns: row.MaxRuns, Running: running,
+		PostureSource: row.PostureSource, Kind: types.RunnerKindSelfHosted, Usage: types.RunnerUsage{InUse: types.RunnerTally{Runs: running}},
 		MachineName: row.MachineName,
 	}
 	if admin {

@@ -211,7 +211,7 @@ func TestCreateAndDispatchAgreeOnAppliedSize_RunnerCapacity(t *testing.T) {
 	// placement nor dispatch cuts the runner's 1200.
 	e.assignSizedProfile("under", nil, types.GovernanceLimits{MaxCPUMillis: 1000})
 	plan, ceiling := e.placeOnOwnRunner(laptops, small, &client.RunResources{CPUMillis: 4000})
-	wantAmount(t, "cpu", plan.applied.CPUMillis, 1200, true, types.LimitSourceRunnerCapacity, "")
+	wantAmount(t, "cpu", plan.applied.CPUMillis, 1200, true, types.LimitSourceRunner, "")
 	policy := types.RunPolicySpec{Resources: &types.ResourceLimits{CPUMillis: plan.applied.CPUMillis.Applied, MemoryMiB: plan.applied.MemoryMiB.Applied}}
 	res, _, _ := ephemeralDispatch(t, policy, types.SiteConfig{}, ceiling)
 	if int(res.CPUMillis) != plan.applied.CPUMillis.Applied || int(res.MemoryMiB) != plan.applied.MemoryMiB.Applied {
@@ -228,8 +228,8 @@ func TestOverAskOnSmallRunnerIsReducedNotRefused(t *testing.T) {
 	e.addToPool(e.person, laptops.ID, small)
 	e.assignSizedProfile("eight", &types.ResourceLimits{CPUMillis: 8000, MemoryMiB: 16384}, types.GovernanceLimits{})
 	plan, _ := e.placeOnOwnRunner(laptops, small, &client.RunResources{CPUMillis: 4000, MemoryMiB: 8192})
-	wantAmount(t, "cpu", plan.applied.CPUMillis, 2000, true, types.LimitSourceRunnerCapacity, "")
-	wantAmount(t, "memory", plan.applied.MemoryMiB, 2048, true, types.LimitSourceRunnerCapacity, "")
+	wantAmount(t, "cpu", plan.applied.CPUMillis, 2000, true, types.LimitSourceRunner, "")
+	wantAmount(t, "memory", plan.applied.MemoryMiB, 2048, true, types.LimitSourceRunner, "")
 	if len(plan.eligible) != 1 || plan.eligible[0].id != small.String() {
 		t.Errorf("eligible = %+v, want the person's runner", plan.eligible)
 	}

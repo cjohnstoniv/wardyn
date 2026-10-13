@@ -73,7 +73,7 @@ func (s *Server) handleUpdateMyRunner(w http.ResponseWriter, r *http.Request) {
 	if !decodeStrict(w, r, &req) {
 		return
 	}
-	if req.MaxRuns == nil || !types.ValidRunnerMaxRuns(*req.MaxRuns) {
+	if req.Limits == nil || !types.ValidRunnerMaxRuns(req.Limits.RunsAtOnce) {
 		writeErrorReason(w, http.StatusBadRequest, reasonRunnerMaxRunsInvalid,
 			"max_runs must be a whole number from 1 to "+strconv.Itoa(types.RunnerMaxRunsCeiling))
 		return
@@ -84,7 +84,7 @@ func (s *Server) handleUpdateMyRunner(w http.ResponseWriter, r *http.Request) {
 	}
 	var before int
 	if err == nil {
-		before, row, err = rs.UpdateRunnerMaxRuns(r.Context(), id, owner, *req.MaxRuns)
+		before, row, err = rs.UpdateRunnerMaxRuns(r.Context(), id, owner, req.Limits.RunsAtOnce)
 	}
 	if errors.Is(err, store.ErrNotFound) {
 		writeErrorReason(w, http.StatusNotFound, reasonRunnerNotFound, "runner not found")

@@ -44,7 +44,7 @@ func registerWith(t *testing.T, srv *Server, f *runnerRegistrationFake, maxRuns 
 	if err != nil {
 		t.Fatal(err)
 	}
-	body, _ := json.Marshal(types.RunnerRegisterRequest{Token: raw, PublicKey: pub, Name: "laptop", MaxRuns: maxRuns, MachineName: machine})
+	body, _ := json.Marshal(types.RunnerRegisterRequest{Token: raw, PublicKey: pub, Name: "laptop", Limits: &types.RunnerLimits{RunsAtOnce: maxRuns}, MachineName: machine})
 	w := do(t, srv, http.MethodPost, "/api/v1/runners/register", "", string(body))
 	var out types.RunnerRegistration
 	_ = json.Unmarshal(w.Body.Bytes(), &out)
@@ -59,7 +59,7 @@ func registerWith(t *testing.T, srv *Server, f *runnerRegistrationFake, maxRuns 
 func TestRunnerRegistrationStoresMaxRunsAndMachineName(t *testing.T) {
 	srv, f, _ := newRunnerRegistrationServer(t)
 	code, reg, _, _ := registerWith(t, srv, f, 5, "alice-mbp.corp")
-	if code != http.StatusCreated || reg.MaxRuns != 5 || f.rows[reg.RunnerID].MaxRuns != 5 || f.rows[reg.RunnerID].MachineName != "alice-mbp.corp" {
+	if code != http.StatusCreated || f.rows[reg.RunnerID].MaxRuns != 5 || f.rows[reg.RunnerID].MachineName != "alice-mbp.corp" {
 		t.Fatalf("explicit: %d %+v row %+v", code, reg, f.rows[reg.RunnerID])
 	}
 	code, reg, _, _ = registerWith(t, srv, f, 0, "")
@@ -99,7 +99,7 @@ func TestRunnerMaxRunsIsTheOwnersToChange(t *testing.T) {
 	alice := memberModeSSOSession(t, "alice", "alice@example.com", oidc.RoleUser, false)
 	w := doSSO(t, srv, http.MethodPut, path, alice, `{"max_runs":4}`)
 	var v types.RunnerView
-	if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &v) != nil || v.MaxRuns != 4 || f.rows[row.ID].MaxRuns != 4 {
+	if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &v) != nil || f.rows[row.ID].MaxRuns != 4 {
 		t.Fatalf("owner update = %d %s", w.Code, w.Body.String())
 	}
 	ev := lastAuditEvent(t, h.audit.snapshot(), "runner.update")

@@ -154,10 +154,10 @@ func TestRegisterSendsMaxRunsExplicitOrSuggested(t *testing.T) {
 			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 				t.Error(err)
 			}
-			sent = req.MaxRuns
+			sent = req.Limits.RunsAtOnce
 			w.WriteHeader(http.StatusCreated)
 			_ = json.NewEncoder(w).Encode(types.RunnerRegistration{RunnerID: uuid.New(), Fingerprint: runnerwire.Fingerprint(req.PublicKey),
-				State: types.RunnerUnclaimed, OrgURLSHA256: federation.OrgURLSHA256(org), MaxRuns: req.MaxRuns})
+				State: types.RunnerUnclaimed, OrgURLSHA256: federation.OrgURLSHA256(org)})
 		}))
 		org = srv.URL
 		root := t.TempDir()

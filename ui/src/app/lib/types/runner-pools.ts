@@ -14,7 +14,7 @@
 // (`remote_hosted`); the run's transport value stays `placement` remote / local.
 
 import type { BarrierReason, PoolAvailabilityReason, RunnerPoolReason } from "../runner-pool-refusals";
-import type { RunnerView } from "./runners";
+import type { RunnerAmounts, RunnerLimits, RunnerTally, RunnerUsage, RunnerView } from "./runners";
 import type { ConfinementClass } from "./runs";
 
 export type RunnerPoolScope = "organization" | "user";
@@ -37,7 +37,7 @@ export type RunnerPoolAvailability = "available" | "unavailable" | "unknown";
 export type RunnerPoolRunType = "background" | "interactive";
 
 /** Which bound an effective limit came from (Go: types.LimitSource). */
-export type LimitSource = "pool" | "governance" | "deployment" | "runner_capacity";
+export type LimitSource = "pool" | "governance" | "deployment" | "runner";
 
 /** Why the platform ended a run (Go: types.RunEndReason). */
 export type RunEndReason =
@@ -274,8 +274,23 @@ export interface RunnerPoolCatalogueEntry extends RunnerPoolChoice {
   /** Every one of the caller's own runners in the pool, whether or not it can take a run now. */
   my_runners?: PoolRunner[];
   slots?: PoolSlots;
+  capacity?: PoolCapacity;
   /** A user pool's owner: the caller, or the person on an administrator's oversight row. */
   owner?: string;
+}
+
+/**
+ * Go: client.PoolCapacity. The pool's runners added up, numbers only and never whose. `available` adds
+ * only online members and is zero for a switched-off pool; `largest_per_run` is the biggest run a member
+ * takes.
+ */
+export interface PoolCapacity {
+  total: RunnerTally;
+  in_use: RunnerTally;
+  available: RunnerTally;
+  largest_per_run: RunnerAmounts;
+  runners: number;
+  runners_online: number;
 }
 
 /** Go: client.PersonAllowance. Counts only; absent for a caller outside governance. */
@@ -338,6 +353,8 @@ export interface RemoteRunner {
   people_pools: RemoteRunnerPeoplePools;
   /** Set when people_pools is listed; an emptied list admits nobody. Never on a person's own list. */
   people_subjects?: RunnerPoolSubject[];
+  /** null while any of it is unset: the runner then takes no run. */
+  limits: RunnerLimits | null;
   revision: number;
   updated_by?: string;
   created_at: string;
@@ -350,12 +367,15 @@ export interface RemoteRunnerView extends RemoteRunner {
   configured: boolean;
   online: boolean;
   pools: RemoteRunnerPoolRef[];
+  /** Every run on it, from every pool. */
+  usage: RunnerUsage;
 }
 
 /** Go: client.UpdateRemoteRunnerRequest (admin). */
 export interface UpdateRemoteRunnerRequest {
   revision: number;
   name?: string;
+  limits?: RunnerLimits;
 }
 
 /** Go: client.RemoteRunnerPeoplePolicyRequest. Turning it off is the DELETE route. */
@@ -376,4 +396,6 @@ export interface RunnerPoolMemberView {
   configured?: boolean;
   /** A self-hosted member's runner view; its owner is named on an operator's read. */
   runner?: RunnerView;
+  limits: RunnerLimits | null;
+  usage: RunnerUsage;
 }
