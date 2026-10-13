@@ -24,10 +24,12 @@ import { Button } from "../../ui/button";
 import { Chip } from "../../wardyn/primitives";
 import * as RL from "../../wardyn/copy/run-lifetime";
 
-// reviveBulkMax (run_revive.go): the server 400s a restart request naming
-// more ids than this — a fleet with more out-of-window runs than one batch
-// covers must go in several requests, not fail outright.
-const RESTART_BATCH_MAX = 100;
+// The server restarts a request's runs one after another (reviveBulkMax, run_revive.go, only caps
+// how many one request may name), so a request's time grows with its ids and the console's default
+// 60s deadline would abort a large one with the rest unrefused. Small batches, each with a deadline
+// sized to its own runs, keep every request inside its deadline.
+const RESTART_BATCH_SIZE = 5;
+const RESTART_PER_RUN_TIMEOUT_MS = 30_000;
 
 export function AdminOlderLimitsCard() {
   const operator = useOperator();
@@ -60,21 +62,21 @@ export function AdminOlderLimitsCard() {
   const restart = async () => {
     if (!outsideIds) return;
     setBusy(true);
+    // Every batch's results are kept, including those a later failing batch leaves behind. That
+    // batch's own runs are unknown (a restart the server claimed survives the request that
+    // timed out), so the listing is refreshed whatever happened.
+    const collected: AdminRestartResult[] = [];
     try {
-      // Batched, never one request over RESTART_BATCH_MAX ids (the server's
-      // own reviveBulkMax would 400 the whole thing otherwise) — each
-      // batch's own failures don't stop the rest.
-      const collected: AdminRestartResult[] = [];
-      for (let i = 0; i < outsideIds.length; i += RESTART_BATCH_MAX) {
-        const batch = outsideIds.slice(i, i + RESTART_BATCH_MAX);
-        const res = await runsApi.restartAdminRuns(batch);
+      for (let i = 0; i < outsideIds.length; i += RESTART_BATCH_SIZE) {
+        const batch = outsideIds.slice(i, i + RESTART_BATCH_SIZE);
+        const res = await runsApi.restartAdminRuns(batch, batch.length * RESTART_PER_RUN_TIMEOUT_MS);
         collected.push(...res.results);
       }
-      setResults(collected);
-      load();
     } catch (err) {
       toast.error("Couldn't restart these runs", { description: getErrorMessage(err) });
     } finally {
+      if (collected.length > 0) setResults(collected);
+      load();
       setBusy(false);
     }
   };
