@@ -189,7 +189,7 @@ The spec always strict-decodes as a policy. Whether it passes policy validation 
 
 #### `changes`
 
-Never `null`. Each item is a `cause` (`workspace`, `source_control`, `mirror`, `model_access`, `git_broker`, `overlay`, `profile`, `org_disk`, `pool_disk`, `restart`, `limits`, `launch`), a `field` (a policy JSON name), the `added` and `removed` entries, `profile` for `profile`, `at` for `restart`, and the narrowing sentences in `detail` for `limits`.
+Never `null`. Each item is a `cause` (`workspace`, `source_control`, `component`, `mirror`, `model_access`, `git_broker`, `overlay`, `profile`, `org_disk`, `pool_disk`, `restart`, `limits`, `launch`), a `field` (a policy JSON name), the `added` and `removed` entries, `profile` for `profile`, `at` for `restart`, and the narrowing sentences in `detail` for `limits`.
 Grants read `kind:host` or `kind:repo,repo`, mounts by target, repos `repo@ref`: never a hidden value.
 
 ## Following a run's lifecycle
@@ -310,7 +310,7 @@ From a shell, `wardyn run sign-in <run-id>` prints the same answer.
 
 | Request | Result |
 |---|---|
-| Neither | The effective default end. An untouched Interactive run with no default from the pool, the profile or the deployment ends after `24h`; a Background run in that case has no end |
+| Neither | The effective default end. An untouched run whose request says `experience: interactive`, with no default from the pool, the profile or the deployment, ends after `24h`. A Background run, or a request that carries no `experience`, has no end in that case |
 | `ends_after_sec` (1 to 2147483647) | That end. Past the lowest limit it is cut to it and the `201` carries a warning naming the limit |
 | `no_end` | No end, only where the pool and the deployment leave the lifetime unlimited and the profile has `allow_no_end` with `user_changes_limits`; otherwise `403`. When the default is already No end it is `201` without either |
 | Both | `400` `run_end_conflicting_fields` |
@@ -522,6 +522,9 @@ if errors.As(err, &apiErr) && apiErr.Reason == "scope_changed" {
     // that has since changed.
 }
 ```
+
+A `400` from `PUT /model-providers` for an Azure provider may also carry `field`, the dotted path of the request
+field it is about (for example `azure.endpoint`). It is absent on every other refusal; read it from `apiErr.Body`.
 
 **Coverage is uniform (#204, #656): every non-2xx body this API writes
 carries `reason`, or is one of a small, reviewed, named exception.**
@@ -906,7 +909,7 @@ console depends on for its own sign-in/connect doors ([`ui/src/app/lib/api/runs.
 | Reason | Meaning |
 |---|---|
 | `model_credential` | `POST /runs`' dispatch-time model-credential gate (`runs_dispatch_llm_mechanism.go`): the run was refused specifically over a model credential — the class the console's sign-in door opens on, deliberately not narrowed further (a renewal that merely did not complete grades live and offers no button). |
-| `git_credential` | The New Run rail's per-user Azure DevOps connect gate (`scmaccess.go`, the 0.7.7 relaunch path): admitted, but this person has not connected their own git credential yet. |
+| `git_credential` | New Run's per-user Azure DevOps connect gate (`scmaccess.go`, the 0.7.7 relaunch path): admitted, but this person has not connected their own git credential yet. |
 
 ## Pending approval (governance writes)
 

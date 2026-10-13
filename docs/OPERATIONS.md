@@ -1762,8 +1762,8 @@ enforces, not a re-derivation:
   - the saved policy (id, and its name and content as they read at launch), an inline policy, the default, or the governance profile the run's creator was bound to.
   - It is recorded already redacted, because the run's creator can read that row through `GET /audit`.
 - **What changed at launch** is each difference, given a cause:
-  `workspace`, `source_control`, `mirror`, `model_access`, `git_broker`,
-  `profile`, `org_disk`, `pool_disk`, `restart`, `limits` or `launch`.
+  `workspace`, `source_control`, `component`, `mirror`, `model_access`, `git_broker`,
+  `overlay`, `profile`, `org_disk`, `pool_disk`, `restart`, `limits` or `launch`.
   - The launch audit rows (`run.egress.add`, `run.requirement.*`, `run.artifact.redirect`, `run.bedrock.configure`, `run.egress.confine`, `run.ceiling.reassert`, `run.revive`) name the cause first; the rest are derived; anything nothing names is `launch`. `limits` is only ever claimed for a member the governance bound applied to.
 - **Whether the saved policy has moved** (`stored_policy_now`) compares the
   saved policy today with its recorded launch content. A run from before the
@@ -1935,6 +1935,25 @@ and `template_group_labels`.
   stored policy.
 - Erasure's `run_setups` scope removes a person's templates and grants ([Erasing a person](#erasing-a-person)); the
   SCIM purge asks for it.
+
+## Harness images
+
+New Run offers a harness only when a sandbox image on this server carries its CLI. A launch that includes any other
+harness is refused `422` `harness_not_installed`.
+
+| Harness | On a published install | What the operator does |
+|---|---|---|
+| Claude Code | Mapped to the agent base image, which does not include the Claude CLI, so New Run refuses it | Build the image (`make agent-images`, [`deploy/images/README.md`](../deploy/images/README.md)), register it under `claude-code` in [`WARDYN_AGENT_IMAGES`](ENV.md) and restart wardynd |
+| Codex CLI | The published image carries the CLI | Nothing |
+| Two or more harnesses in one run | No published image carries two CLIs: refused `harness_set_no_image` | Build a set image (`make agent-image-harnesses`) and declare it under a `+` key |
+
+- A set key joins two or more harness ids with `+`, each once and in sorted order:
+  `WARDYN_AGENT_IMAGES='{"claude-code+codex-cli":"wardyn/agent-harnesses:local"}'`. wardynd refuses to start on a
+  malformed set key.
+- Set images are local builds only: no release publishes one. On Kubernetes, push yours to a registry the cluster
+  pulls from and declare that ref.
+- [The image a run's harnesses start from](operations/build-images.md#the-image-a-runs-harnesses-start-from) has the
+  selection rule and the build steps.
 
 ## Console branding
 
@@ -2405,6 +2424,7 @@ What you get depends on whether `ecosystem` is set:
 | empty (**network only**) | 🟢 yes | 🟢 yes | ⛔ no |
 
 - An ecosystem row gets the per-tool config file `EmitArtifactConfig` ([`internal/workspacescan/gen.go`](../internal/workspacescan/gen.go)) writes at workspace-import time — `.npmrc`, `.config/pip/pip.conf`, `.cargo/config.toml`, `.m2/settings.xml`, `GOPROXY`/`GOSUMDB`, or `.nuget/NuGet/NuGet.Config` — on top of the egress substitution and token injection every redirect gets.
+- A `go` redirect sets `GOSUMDB=off`: Go module redirects disable checksum-database verification, and the existing `go.sum` checks still apply. Keep each repository's `go.sum` committed.
 - A network-only row (empty `ecosystem`: a container registry, an internal appliance, a bare host or IP) gets the network half only: host substituted into the run's egress allowlist, token injected proxy-side.
 - But **no config file is written**.
 - There is no `.npmrc` equivalent for an arbitrary host.
@@ -2452,7 +2472,7 @@ The residuals an operator should plan for:
   - The remedy is raising `max_inspect_pack_mib` (bounded 0..64 at write time), never a console approval, because holding would ask a person to approve a push nobody inspected.
 - **`ssh_key` is ungovernable by construction.**
   - git's own SSH transport has no broker seam, so `push_rules` cannot be enforced on it.
-  - A policy that sets `push_rules` while `ssh_key` is the run's only git-capable grant is legal but graded a medium-risk item on the Review rail rather than blocked.
+  - A policy that sets `push_rules` while `ssh_key` is the run's only git-capable grant is legal but graded a medium-risk item in the policy's risk grade (the Policies screen's safety meter, and preflight's `risk_assessment`) rather than blocked.
 - **On `git_pat`, only WHERE is behind a switch.**
   - Branch-namespace confinement on the `git_pat` lane is off by default and needs the `pat` scope of `WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS`; `push_rules` applies to every `git_pat` push whatever that scope is set to.
   - Neither changes the PAT itself: it keeps whatever scope the operator issued it with.
