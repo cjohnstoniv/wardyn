@@ -212,3 +212,27 @@ describe("an edit keeps the durations it did not touch", () => {
     expect(never.interactive?.idle).toEqual({ default_sec: 900, unlimited: true });
   });
 });
+
+describe("an edit validates and sends what it will send, field by field", () => {
+  const ODD: RunnerPoolLimits = { background: { lifetime: { default_sec: 90, max_sec: 150 } }, barriers: ["CC1"] };
+  const SHORT: RunnerPoolLimits = { background: { lifetime: { default_sec: 10, max_sec: 20 } }, barriers: ["CC1"] };
+
+  it("a maximum-only change leaves the 90 s default as read", () => {
+    const v = fromPool({ name: "odd", limits: ODD });
+    const edited = { ...v, bg: { ...v.bg, lifeMn: "1", lifeMu: "hours" as const } };
+    expect(validate(edited, ODD)).toEqual({});
+    expect(toLimits(edited, ODD).background?.lifetime).toEqual({ default_sec: 90, max_sec: 3600 });
+  });
+
+  it("a rename of a pool with a sub-30 s duration saves, sent as read", () => {
+    const v = { ...fromPool({ name: "short", limits: SHORT }), name: "shorter" };
+    expect(validate(v, SHORT)).toEqual({});
+    expect(toLimits(v, SHORT)).toEqual(SHORT);
+  });
+
+  it("a default typed over the untouched maximum is checked against the maximum as read", () => {
+    const v = fromPool({ name: "short", limits: SHORT });
+    const e = validate({ ...v, bg: { ...v.bg, lifeDn: "1", lifeDu: "minutes" } }, SHORT);
+    expect(e["bg.life"]).toBe("Background tasks, lifetime: the default (1 minute) can't be longer than the maximum (20 seconds).");
+  });
+});
