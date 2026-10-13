@@ -796,6 +796,17 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - Component config schemas refuse data after the single JSON value. Config-key secret detection also catches
   `signing_key`, `encryption_key` and `connection_string`, and `SECRET_FILE`, `SECRET_PATH` and `SECRET_STORE` read
   as plain settings.
+- Egress proxy: a host verdict the proxy does not recognise is denied as `policy:evaluator-error` instead of falling
+  through.
+- SSRF guard: the IANA non-globally-reachable IPv6 blocks (`2001::/32`, `2001:2::/48`, `2001:10::/28`,
+  `2001:db8::/32`, `3fff::/20`, `5f00::/16`, `100::/64`) are denied. The AWS IPv6 metadata block `fd00:ec2::/64` and
+  `100.100.100.200` are never liftable by `internal_hosts`, and the daemon proxy bypasses `fd00:ec2::254` too.
+- Egress denial text: a non-canonical literal IP (`10.1`, `127.1`, a zoned IPv6) gets the "denied unconditionally"
+  sentence, not the `internal_hosts` remedy.
+- Azure DevOps git refusals name the governing policy only when policy decided them, and a request whose client
+  hangs up mid-hold no longer records a denial.
+- Proxy shutdown keeps part of its deadline for the audit drain and survives a cancelled caller, so the last
+  decision rows reach the control plane; it returns both the HTTP and the sink errors.
 
 
 ## [0.8.9] — 2026-10-09
