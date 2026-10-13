@@ -536,7 +536,8 @@ func warnCeilingDeniedWorkspaceEgress(ceiling governanceCeiling, wsRefs []types.
 // failure is fail-open (keeps the convention image), since onboarding is a
 // convenience, not a gate. Each build is one a kill of the run stops
 // (trackRunBuild); a run already terminal builds nothing and also returns
-// failed=true, with its state left as it is. The resolved image is persisted for provenance
+// failed=true, with its state left as it is, and a run that cannot be read
+// builds nothing and is failed. The resolved image is persisted for provenance
 // (best-effort: a failed write must not block dispatch — the audit trail
 // still carries build events). Extracted verbatim from handleCreateRun; ctx is
 // already detached from client cancellation.
@@ -568,14 +569,25 @@ func (s *Server) resolveCreateRunImage(ctx context.Context, req createRunRequest
 			runID.String(), "failure", mustJSON(auditData)))
 	}
 
+	// startBuild registers the build (trackRunBuild). ok is false when the build must not run: the
+	// run ended, or it could not be read, which fails it with fields as the build's failure row.
+	startBuild := func(fields map[string]any) (buildCtx context.Context, end func(), ok bool) {
+		buildCtx, end, live, err := s.trackRunBuild(ctx, runID)
+		if err != nil {
+			fields["error"] = err.Error()
+			buildFailed(fields)
+		}
+		return buildCtx, end, live
+	}
+
 	switch {
 	case req.Image != "": // validated up front: ImageBuilder is non-nil, not XOR'd
 		// The wardyn-byoi/ output tag is also the discriminator dispatch keys the
 		// runtime selftest preflight off (a wrapped arbitrary image may still lack a
 		// shell or the harness binary).
 		outTag := "wardyn-byoi/" + runID.String() + ":latest"
-		buildCtx, endBuild, live := s.trackRunBuild(ctx, runID)
-		if !live {
+		buildCtx, endBuild, ok := startBuild(map[string]any{"byoi_base": req.Image})
+		if !ok {
 			return "", true
 		}
 		s.announceImageBuild(ctx, runID)()
@@ -592,8 +604,8 @@ func (s *Server) resolveCreateRunImage(ctx context.Context, req createRunRequest
 			}, built.ID))))
 	case req.DevcontainerRepo != "" && s.cfg.ImageBuilder != nil:
 		outTag := "wardyn-devcontainer/" + runID.String() + ":latest"
-		buildCtx, endBuild, live := s.trackRunBuild(ctx, runID)
-		if !live {
+		buildCtx, endBuild, ok := startBuild(map[string]any{"devcontainer_repo": req.DevcontainerRepo})
+		if !ok {
 			return "", true
 		}
 		s.announceImageBuild(ctx, runID)()
@@ -633,8 +645,8 @@ func (s *Server) resolveCreateRunImage(ctx context.Context, req createRunRequest
 			})
 			return "", true
 		}
-		buildCtx, endBuild, live := s.trackRunBuild(ctx, runID)
-		if !live {
+		buildCtx, endBuild, ok := startBuild(map[string]any{"workspace_id": imageWS.ID.String()})
+		if !ok {
 			return "", true
 		}
 		if built, ok := s.resolveWorkspaceImage(buildCtx, runID, imageWS, nil, s.announceImageBuild(ctx, runID)); ok {

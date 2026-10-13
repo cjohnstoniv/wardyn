@@ -71,22 +71,27 @@ func (a *liveCtxAudit) Record(ctx context.Context, ev types.AuditEvent) error {
 
 // runBuildDoors are the four places a run's image is built: the three arms of
 // create (a wrapped base image, a devcontainer repo, an onboarded workspace) and
-// a workspace run's launch.
+// a workspace run's launch. build reports whether the launch goes on to
+// dispatch the run.
 var runBuildDoors = []struct {
 	name  string
-	build func(*Server, context.Context, uuid.UUID)
+	build func(*Server, context.Context, uuid.UUID) bool
 }{
-	{"create wraps a base image", func(s *Server, ctx context.Context, id uuid.UUID) {
-		s.resolveCreateRunImage(ctx, createRunRequest{Agent: "claude-code", Image: "ubuntu:24.04"}, id, nil)
+	{"create wraps a base image", func(s *Server, ctx context.Context, id uuid.UUID) bool {
+		_, failed := s.resolveCreateRunImage(ctx, createRunRequest{Agent: "claude-code", Image: "ubuntu:24.04"}, id, nil)
+		return !failed
 	}},
-	{"create builds a devcontainer repo", func(s *Server, ctx context.Context, id uuid.UUID) {
-		s.resolveCreateRunImage(ctx, createRunRequest{Agent: "claude-code", DevcontainerRepo: "https://github.com/acme/widgets"}, id, nil)
+	{"create builds a devcontainer repo", func(s *Server, ctx context.Context, id uuid.UUID) bool {
+		_, failed := s.resolveCreateRunImage(ctx, createRunRequest{Agent: "claude-code", DevcontainerRepo: "https://github.com/acme/widgets"}, id, nil)
+		return !failed
 	}},
-	{"create builds a workspace's image", func(s *Server, ctx context.Context, id uuid.UUID) {
-		s.resolveCreateRunImage(ctx, createRunRequest{Agent: "claude-code"}, id, []types.Workspace{buildDoorWorkspace()})
+	{"create builds a workspace's image", func(s *Server, ctx context.Context, id uuid.UUID) bool {
+		_, failed := s.resolveCreateRunImage(ctx, createRunRequest{Agent: "claude-code"}, id, []types.Workspace{buildDoorWorkspace()})
+		return !failed
 	}},
-	{"a workspace run builds its image", func(s *Server, ctx context.Context, id uuid.UUID) {
-		s.workspaceRunImage(ctx, id, buildDoorWorkspace())
+	{"a workspace run builds its image", func(s *Server, ctx context.Context, id uuid.UUID) bool {
+		_, err := s.workspaceRunImage(ctx, id, buildDoorWorkspace())
+		return err == nil
 	}},
 }
 
@@ -198,6 +203,76 @@ func TestRunBuild_AKilledRunBuildsNothing(t *testing.T) {
 	}
 }
 
+// builtImageStore is createDetachStore that also caches a workspace's built image.
+type builtImageStore struct{ *createDetachStore }
+
+func (builtImageStore) SetWorkspaceBuiltImage(context.Context, uuid.UUID, string, string, string, *types.ImageBuild) (bool, error) {
+	return true, nil
+}
+
+// unreadRunStore is builtImageStore whose run reads fail.
+type unreadRunStore struct{ builtImageStore }
+
+func (unreadRunStore) GetRun(context.Context, uuid.UUID) (types.AgentRun, error) {
+	return types.AgentRun{}, errors.New("store: get run: connection reset")
+}
+
+// TestRunBuild_AnUnreadRunIsNotBuiltOrDispatched: a run that cannot be read
+// when its build registers may be one a kill ended before the registration, so
+// at each door no build starts and the launch does not go on to dispatch. The
+// build's failure row names why; a run still PENDING is failed, and a run the
+// kill already ended stays KILLED. A readable live run still builds and
+// dispatches.
+func TestRunBuild_AnUnreadRunIsNotBuiltOrDispatched(t *testing.T) {
+	for _, door := range runBuildDoors {
+		for _, tc := range []struct {
+			name      string
+			killed    bool
+			unread    bool
+			wantState types.RunState
+		}{
+			{name: "killed before the registration", killed: true, unread: true, wantState: types.RunKilled},
+			{name: "still pending", unread: true, wantState: types.RunFailed},
+			{name: "readable and live", wantState: types.RunPending},
+		} {
+			t.Run(door.name+", "+tc.name, func(t *testing.T) {
+				b := newStoppableBuilder()
+				close(b.release)
+				srv, st, audit, run, ctx := runBuildFixture(t, b)
+				if tc.killed {
+					killClaim(t, srv, run)
+				}
+				srv.cfg.Store = builtImageStore{st}
+				if tc.unread {
+					srv.cfg.Store = unreadRunStore{builtImageStore{st}}
+				}
+
+				dispatches := door.build(srv, ctx, run.ID)
+
+				if builds := b.calls.Load(); (builds != 0) != !tc.unread {
+					t.Errorf("builds = %d, want one only for a readable run", builds)
+				}
+				if dispatches != !tc.unread {
+					t.Errorf("dispatches = %t, want %t", dispatches, !tc.unread)
+				}
+				if door.name == "a workspace run builds its image" {
+					return // the launch's own abort fails the run (TestLaunchRecordRun_AnUnreadRunAborts)
+				}
+				if got := st.state(run.ID); got != tc.wantState {
+					t.Errorf("state = %s, want %s", got, tc.wantState)
+				}
+				row := findAudit(audit.snapshot(), run.ID, "run.build", "failure")
+				if (row != nil) != tc.unread {
+					t.Fatalf("run.build failure row = %v, want one exactly when the run could not be read", row)
+				}
+				if row != nil && (!strings.Contains(string(row.Data), errRunUnreadBeforeBuild.Error()) || strings.Contains(string(row.Data), "connection reset")) {
+					t.Errorf("run.build failure row = %s, want the fixed reason and not the store's error", row.Data)
+				}
+			})
+		}
+	}
+}
+
 // launchStore is dispatchTestStore with the image write a launch makes.
 type launchStore struct{ *dispatchTestStore }
 
@@ -291,4 +366,46 @@ func TestRunBuild_KeepsTheQueueAndDispatchRegistrations(t *testing.T) {
 			t.Errorf("state = %s, want KILLED", got)
 		}
 	})
+}
+
+// unreadRecordStore is recordAbortStore whose run reads fail.
+type unreadRecordStore struct{ *recordAbortStore }
+
+func (unreadRecordStore) GetRun(context.Context, uuid.UUID) (types.AgentRun, error) {
+	return types.AgentRun{}, errors.New("store: get run: connection reset")
+}
+
+// TestLaunchRecordRun_AnUnreadRunAborts: a workspace run whose run cannot be
+// read before its image build is not launched on the convention image in the
+// built one's place: the launch aborts, which fails the run, revokes it and
+// frees the workspace's step slot, and no sandbox is created.
+func TestLaunchRecordRun_AnUnreadRunAborts(t *testing.T) {
+	h := newHarness(t)
+	fake := &recordAbortStore{ws: buildDoorWorkspace()}
+	fake.ws.Kind, fake.ws.Source, fake.ws.Status = types.WorkspaceKindLocalDir, "/w", types.WorkspaceScanned
+	b := newStoppableBuilder()
+	close(b.release)
+	rn := &fakeRunner{}
+	cfg := baseTestConfig(h, unreadRecordStore{fake})
+	cfg.Runner, cfg.Broker, cfg.ImageBuilder = rn, h.broker, b
+	cfg.DefaultPolicy = types.RunPolicySpec{AllowedDomains: []string{"api.anthropic.com"}, MinConfinementClass: types.CC2}
+	srv := New(cfg)
+
+	_, _, err := srv.launchRecordRun(context.Background(), "alice@example.com", fake.ws, "build", "build", false)
+	if !errors.Is(err, errRunUnreadBeforeBuild) {
+		t.Fatalf("launch err = %v, want errRunUnreadBeforeBuild", err)
+	}
+	if builds := b.calls.Load(); builds != 0 {
+		t.Errorf("builds = %d, want none for a run nobody could read", builds)
+	}
+	if rn.createCalls != 0 {
+		t.Errorf("sandboxes created = %d, want none", rn.createCalls)
+	}
+	if !fake.stateUpdated || fake.stateFrom != types.RunPending || fake.stateTo != types.RunFailed || !fake.clearedActive {
+		t.Errorf("abort: updated=%v %q->%q cleared=%v; want the run failed from PENDING and the slot freed",
+			fake.stateUpdated, fake.stateFrom, fake.stateTo, fake.clearedActive)
+	}
+	if len(h.broker.revoked) == 0 || h.broker.revoked[len(h.broker.revoked)-1] != fake.createdRunID {
+		t.Errorf("broker.revoked = %v, want the aborted run %s revoked", h.broker.revoked, fake.createdRunID)
+	}
 }
