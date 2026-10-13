@@ -8,6 +8,7 @@ import (
 	"cmp"
 	"encoding/json"
 	"fmt"
+	"io"
 	"math"
 	"regexp"
 	"slices"
@@ -154,12 +155,13 @@ type ConfigIssue struct {
 	Message string `json:"message"`
 }
 
-var configSecretWordRE = regexp.MustCompile(`(?:^|[^a-z0-9])(?:pass(?:word|wd|phrase)?|api_?key|token|credential|private_?key|authorization|bearer|cookie)(?:[^a-z0-9]|$)`)
+var configSecretWordRE = regexp.MustCompile(`(?:^|[^a-z0-9])(?:pass(?:word|wd|phrase)?|api_?key|token|credential|private_?key|signing_?key|encryption_?key|connection_?string|authorization|bearer|cookie)(?:[^a-z0-9]|$)`)
 
 // configSecretNamesNotValues are the words after "secret" that make a key the
 // name of a stored secret (SECRET_NAME, SECRET_REF) or a pattern for finding
 // one (detect_secret_patterns) rather than its value.
-var configSecretNamesNotValues = map[string]bool{"name": true, "names": true, "ref": true, "refs": true, "id": true, "ids": true, "patterns": true}
+var configSecretNamesNotValues = map[string]bool{"name": true, "names": true, "ref": true, "refs": true, "id": true, "ids": true, "patterns": true,
+	"file": true, "files": true, "path": true, "paths": true, "store": true, "stores": true}
 
 // ConfigKeyLooksSecret reports whether a config key names a secret by one of
 // its words (GITHUB_TOKEN, apiKey, db-password, CLIENT_SECRET,
@@ -203,7 +205,8 @@ func DecodeComponentConfigSchema(data []byte) (ComponentConfigSchema, []ConfigIs
 	if err := dec.Decode(&s); err != nil {
 		return s, []ConfigIssue{{"schema", err.Error()}}
 	}
-	if dec.More() {
+	// More reports false at a stray ] or }; only the end of the input proves nothing follows.
+	if _, err := dec.Token(); err != io.EOF {
 		return s, []ConfigIssue{{"schema", "must be exactly one JSON value"}}
 	}
 	return s, ValidateComponentConfigSchema(s)
