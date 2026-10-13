@@ -50,7 +50,8 @@ function renderDrawer(p: RunnerPool, props: Props = {}, operator = true) {
 
 beforeEach(() => {
   for (const m of [usePolicyMock, setUsePolicyMock, clearUsePolicyMock, updateMock, removeMock, removeMineMock]) m.mockReset();
-  usePolicyMock.mockResolvedValue({ pool_id: "p-ci", subjects: [], revision: 1, updated_at: "" });
+  // What the server answers for a pool with no policy: no subjects, and the zero time.
+  usePolicyMock.mockResolvedValue({ pool_id: "p-ci", subjects: [], revision: 1, updated_at: "0001-01-01T00:00:00Z" });
 });
 afterEach(() => cleanup());
 
