@@ -36,6 +36,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/armscope"
 	"github.com/cjohnstoniv/wardyn/internal/egress"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 const (
@@ -231,9 +232,17 @@ func azureTenantSafe(tenant string) bool {
 // (the door runs only on a terminated connection), a tenant or a subscription
 // that is not one, no subscription at all, or anything but exactly one TLS-only,
 // unpinned injection rule on the Resource Manager host — the door is that
-// rule's only gate, and without the rule it has no token to add.
+// rule's only gate, and without the rule it has no token to add. It also
+// refuses the reverse: a rule that names a CLI sign-in with no door in front
+// of it, or on any other host, which the plain forward lane would otherwise
+// credential with nothing judging the request.
 func (c *Config) validateAzureARM() error {
 	g := c.AzureARM
+	for i, inj := range c.Injection {
+		if strings.HasPrefix(inj.SecretName, types.CLISecretPrefix) && (g == nil || patAPIHost(strings.TrimSpace(inj.Host)) != armscope.Host) {
+			return fmt.Errorf("config: injection[%d]: a CLI sign-in is injected only on %s behind azure_arm", i, armscope.Host)
+		}
+	}
 	if g == nil {
 		return nil
 	}

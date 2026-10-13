@@ -367,9 +367,10 @@ func (s *Server) handlePutComponent(w http.ResponseWriter, r *http.Request) {
 	old, err := cs.GetComponent(r.Context(), id, "")
 	switch {
 	case err == nil:
-		// A row whose AWS sign-ins would point somewhere it no longer names takes
-		// them with it, before the write and under the lock a capture holds.
-		if cliSignInPinChanged(old.Definition, c.Definition) {
+		// A row whose AWS sign-ins would point somewhere it no longer names, or
+		// whose Azure sign-ins were captured for subscriptions it no longer pins,
+		// takes them with it, before the write and under the lock a capture holds.
+		if cliSignInPinChanged(old.Definition, c.Definition) || azureCLISignInPinChanged(old.Definition, c.Definition) {
 			var unlock func()
 			if r, unlock, ok = s.lockDoor(w, r, db.SiteConfigLockClass, cliRowLockPart, id.String()); !ok {
 				return
