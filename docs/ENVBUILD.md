@@ -97,12 +97,12 @@ Each workspace image build records what it built from and the image it produced.
 
 ### Rebuild from a record
 
-A rebuild happens when the cache key matches but the image is gone from the host (`image_missing`).
+A rebuild happens when a run launches and the cache key matches but the image is gone from the host (`image_missing`).
 
 | Condition | Outcome |
 |---|---|
 | Generated lane, record current | Rebuilds from the record's pins and resolves nothing again (`buildGeneratedImage`) |
-| A pinned base or feature no longer exists in its registry | No build. The `run.build` failure carries `difference`, and `GET …/build` reports `failed` |
+| A pinned base or feature no longer exists in its registry | No build. The `run.build` failure carries `difference`, and the run starts on the convention image |
 | An input the record left unpinned | Floats on the rebuild; the new record stays not reproducible |
 | BYOI or repo lane, or no current record | A fresh build. The BYOI wrap uses whichever base the host holds or pulls, and records its digest; it does not reuse the recorded one |
 
@@ -250,7 +250,7 @@ still execute inside the build container's namespaces. Two gaps remain:
   - The per-build tag is still appended on top of that override, so it never reintroduces one shared ref across builds.
   - See Builder.pushedBaseRef.
   - A real-registry TestBuild_SmokeDockerd validates the exact ref.
-- envbuilder's layer cache is not used. Each build pushes under its own tag (`<CacheRepo>:<build-uuid>`), which kaniko cannot use as a cache repository, so every build logs a non-fatal cache-upload error per layer and resolves every input fresh.
+- envbuilder's layer cache is not used. Each build pushes under its own tag (`<CacheRepo>:<build-uuid>`), which kaniko cannot use as a cache repository, so every build logs a non-fatal cache-upload error per layer and fetches every layer fresh.
   - A shared cache would let one build replace the layers every other build replays, and the build registry is unauthenticated, so Wardyn does not share one.
 - Build logs are streamed to the io.Writer supplied in BuildSpec.LogSink. If LogSink is nil, the Builder's DefaultLogSink takes over; only when both are nil is build output discarded.
 - The build container itself is always removed on completion or timeout, regardless of success or failure (fail closed on orphaned containers).
