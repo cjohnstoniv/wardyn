@@ -6,7 +6,6 @@ package main
 import (
 	"fmt"
 	"io"
-	"regexp"
 
 	sdk "github.com/cjohnstoniv/wardyn/pkg/client"
 )
@@ -31,7 +30,7 @@ func printPoolCreated(w io.Writer, p sdk.RunnerPool, asJSON, withRunners bool) e
 	if own := poolLimitsText(p, sdk.RunnerAmounts{}); own != "none of its own: it follows its runners" {
 		limits = own + "; it has no runners yet"
 	}
-	_, err := fmt.Fprintf(w, "  limits: %s. Put a runner in it: wardyn runner pool add %s <runner>\n", limits, poolWord(p))
+	_, err := fmt.Fprintf(w, "  limits: %s. Put a runner in it: wardyn runner pool add %s <runner>\n", limits, p.ID)
 	return err
 }
 
@@ -48,16 +47,4 @@ func printPoolDeleted(w io.Writer, p sdk.RunnerPool) error {
 		"  runs that were waiting for it ended: \"The pool this run was waiting for was removed.\"\n"+
 		"  runs already running were not stopped; its runners were taken out of it, not touched\n", p.Name, p.ID)
 	return err
-}
-
-// plainName is a pool name that is one safe word on any shell's command line.
-var plainName = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
-
-// poolWord is the pool as a printed command names it: by its name when that is one plain word, so the
-// line reads as the design's, and otherwise by its id, which is always safe to paste.
-func poolWord(p sdk.RunnerPool) string {
-	if plainName.MatchString(p.Name) {
-		return p.Name
-	}
-	return p.ID.String()
 }

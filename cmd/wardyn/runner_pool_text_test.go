@@ -287,27 +287,18 @@ func TestPoolLimitsTextSaysTheLifetimesThePoolSets(t *testing.T) {
 	}
 }
 
-// The next step create prints names the pool by its id when its name is not one plain word: a name with
-// a dollar sign or a quote pasted into a shell would run or break.
+// The next step create prints always names the pool by its id: a name with a dollar sign or a quote
+// pasted into a shell would run or break, and a plain one such as "--help" would be read as a flag.
 func TestPoolCreatedNamesThePoolByItsIDInTheCommand(t *testing.T) {
-	id := uuid.New()
-	var sb strings.Builder
-	if err := printPoolCreated(&sb, sdk.RunnerPool{ID: id, Name: `$(touch x) "dana's"`, Scope: sdk.RunnerPoolUser, Revision: 1}, false, false); err != nil {
-		t.Fatal(err)
-	}
-	_, cmd, _ := strings.Cut(sb.String(), "Put a runner in it: ")
-	if want := "wardyn runner pool add " + id.String() + " <runner>\n"; cmd != want {
-		t.Errorf("next step = %q, want %q", cmd, want)
-	}
-}
-
-// A plain name stays in the command, as the design's own line has it.
-func TestPoolCreatedNamesAPlainPoolByItsName(t *testing.T) {
-	var sb strings.Builder
-	if err := printPoolCreated(&sb, sdk.RunnerPool{ID: uuid.New(), Name: "Laptop", Scope: sdk.RunnerPoolUser, Revision: 1}, false, false); err != nil {
-		t.Fatal(err)
-	}
-	if _, cmd, _ := strings.Cut(sb.String(), "Put a runner in it: "); cmd != "wardyn runner pool add Laptop <runner>\n" {
-		t.Errorf("next step = %q", cmd)
+	for _, name := range []string{`$(touch x) "dana's"`, "--help", "Laptop"} {
+		id := uuid.New()
+		var sb strings.Builder
+		if err := printPoolCreated(&sb, sdk.RunnerPool{ID: id, Name: name, Scope: sdk.RunnerPoolUser, Revision: 1}, false, false); err != nil {
+			t.Fatal(err)
+		}
+		_, cmd, _ := strings.Cut(sb.String(), "Put a runner in it: ")
+		if want := "wardyn runner pool add " + id.String() + " <runner>\n"; cmd != want {
+			t.Errorf("pool %q: next step = %q, want %q", name, cmd, want)
+		}
 	}
 }
