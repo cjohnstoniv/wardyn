@@ -11,7 +11,7 @@ import (
 	sdk "github.com/cjohnstoniv/wardyn/pkg/client"
 )
 
-// `wardyn runner remote propose` prints registration's proposal for what the runner reports, as the flags
+// `wardyn runner remote propose` prints the server's boot proposal for what the runner reports, as the flags
 // `wardyn runner set` takes: half of each as the total, Runs at once half its CPUs, per run the total
 // divided by Runs at once, in whole GB. --free-disk stands in for the runner's report, and an amount
 // nobody measured is refused, naming the flag: nothing is guessed.
@@ -34,6 +34,9 @@ func TestRunnerRemotePropose(t *testing.T) {
 		"--free-disk replaces what the runner reports": {
 			reported: amounts(8000, 16384, 409600), freeDisk: "40",
 			want: "--max-runs 4 --total-cpu 4 --total-memory 8 --total-disk 20 --per-run-cpu 1 --per-run-memory 2 --per-run-disk 5"},
+		"a host past 128 CPUs: Runs at once is the remote-hosted ceiling's, not a self-hosted runner's 64": {
+			reported: amounts(300000, 1048576, 2097152),
+			want:     "--max-runs 150 --total-cpu 150 --total-memory 512 --total-disk 1024 --per-run-cpu 1 --per-run-memory 3 --per-run-disk 6"},
 		"no free disk reported and none given": {reported: amounts(32000, 36075, 0), want: "--free-disk", refused: true},
 		"nothing reported at all":              {want: "no CPU or memory", refused: true},
 		"no memory reported":                   {reported: amounts(4000, 0, 0), freeDisk: "100", want: "no CPU or memory", refused: true},
