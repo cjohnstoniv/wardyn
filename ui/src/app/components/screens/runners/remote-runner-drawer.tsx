@@ -55,6 +55,7 @@ export function RemoteRunnerDrawer({
   if (!runner) return null;
   const res = runnerRes(runner.limits, runner.usage);
   const available = runner.people_pools !== "off";
+  const listed = runner.people_pools === "listed";
 
   const setAvailable = async (on: boolean) => {
     setBusy(true);
@@ -129,11 +130,13 @@ export function RemoteRunnerDrawer({
                 </div>
               )}
               <label className="inline-flex items-center gap-2 text-body font-normal">
-                <Checkbox checked={available} disabled={!superAdmin || busy} onCheckedChange={(v) => void setAvailable(v === true)} />
+                {/* A listed runner's people are kept on the command line: unchecking here would discard the list,
+                    so the box only shows that it is available, and the line below says where the list changes. */}
+                <Checkbox checked={available} disabled={!superAdmin || busy || listed} onCheckedChange={(v) => void setAvailable(v === true)} />
                 {RUNNER_V6.AVAILABLE_CHECK}
               </label>
               <Hint>{RUNNER_V6.AVAILABLE_HINT}</Hint>
-              {runner.people_pools === "listed" && <Hint>{RUNNER_V6.AVAILABLE_LISTED}</Hint>}
+              {listed && <Hint>{RUNNER_V6.AVAILABLE_LISTED}</Hint>}
               {error && (
                 <p role="alert" className="mt-1.5 text-body text-danger">
                   {error}
