@@ -17,6 +17,7 @@ import { NR_LAUNCH } from "../src/app/components/wardyn/copy/new-run/launch";
 import { NR_REVIEW } from "../src/app/components/wardyn/copy/new-run/review";
 import { NR_SAVE } from "../src/app/components/wardyn/copy/new-run/save";
 import { NR_SHAPE } from "../src/app/components/wardyn/copy/new-run/shape";
+import { NR_SHARED } from "../src/app/components/wardyn/copy/new-run/shared";
 import { NR_START } from "../src/app/components/wardyn/copy/new-run/start";
 import { NR_TEMPLATES as T } from "../src/app/components/wardyn/copy/new-run/templates";
 import { SCENARIO_PREFLIGHT } from "../src/app/lib/new-run-fixtures/scenarios/preflight";
@@ -141,8 +142,8 @@ test.describe("Templates: filters and rows", () => {
     const platform = rowOf(page, PLATFORM_BASELINE.name);
     await expect(platform.getByText(T.NEEDS_SETUP("Model provider"))).toBeVisible();
     await expect(platform.getByText(T.GROUP_LABEL("Platform"), { exact: true })).toBeVisible();
-    await expect(platform.getByText(T.TEMPLATE_MANAGERS)).toBeVisible();
-    await expect(rowOf(page, ORG_BASELINE.name).getByText(T.ORG_ADMINS)).toBeVisible();
+    await expect(platform.getByText(T.TEMPLATE_MANAGERS, { exact: true })).toBeVisible();
+    await expect(rowOf(page, ORG_BASELINE.name).getByText(T.ORG_ADMINS, { exact: true })).toBeVisible();
   });
 
   test("an empty catalogue and a search with no match say so and offer the way on", async ({ page }) => {
@@ -176,7 +177,8 @@ test.describe("Templates: Use", () => {
     await expect(page).toHaveURL(new RegExp(`/runs/new\\?template=${PLATFORM_BASELINE.id}&rev=1$`));
     await expect(page.getByRole("heading", { name: NR_REVIEW.TITLE })).toBeVisible();
     await expect(page.getByText(NR_REVIEW.BLOCKERS_ONE)).toBeVisible();
-    await expect(page.locator("#nr-blockers").getByRole("button", { name: T.NEEDS_SETUP("Model provider") })).toBeVisible();
+    // What a template leaves to set up has no step of its own, so the blocker is a line, not a link.
+    await expect(page.locator("#nr-blockers").getByText(T.NEEDS_SETUP("Model provider"))).toBeVisible();
     await expect(page.getByRole("button", { name: NR_REVIEW.LAUNCH_RUN })).toBeDisabled();
   });
 
@@ -264,7 +266,8 @@ test.describe("Templates: Rename, Delete and the reasons a row cannot change", (
     const confirm = page.getByRole("alertdialog", { name: T.DELETE_TITLE(WEEKLY.name) });
     await confirm.getByRole("button", { name: T.DELETE_CONFIRM }).click();
     await expect(confirm).toContainText(refusal);
-    await expect(rowOf(page, WEEKLY.name)).toHaveCount(1);
+    // The open confirmation hides the page behind it from role queries, so the row is read by its element.
+    await expect(page.locator("li").filter({ has: page.getByText(WEEKLY.name, { exact: true }) })).toHaveCount(1);
   });
 
   test("Rename and Delete stay disabled on a row the person cannot write, with who can change it", async ({ page }) => {
@@ -396,8 +399,8 @@ test.describe("Start from a saved template and Run again", () => {
   async function startFrom(page: Page, source: string) {
     await gotoConsole(page);
     await navToRoute(page, "/runs/new");
-    await press(page, NR_START.GUIDED_FOOT);
-    await page.getByRole("radio", { name: source }).click();
+    await page.getByRole("button", { name: NR_START.GUIDED_FOOT }).click();
+    await press(page, source);
   }
 
   test("Run again lists the person's earlier runs and opens Review with that run's settings", async ({ page }) => {
@@ -414,6 +417,8 @@ test.describe("Start from a saved template and Run again", () => {
     await expect(page.getByText(NR_SHAPE.AGAIN_NOTE)).toBeVisible();
     await page.getByRole("combobox", { name: NR_SHAPE.PREVIOUS_LABEL }).click();
     await page.getByRole("option", { name: new RegExp(PREVIOUS.title) }).click();
+    // The picker only shows a row; Continue opens Review on it.
+    await press(page, NR_SHARED.CONTINUE);
 
     await expect(page).toHaveURL(new RegExp(`again=${RUN_ID}&step=review$`));
     await expect(page.getByRole("heading", { name: NR_REVIEW.TITLE })).toBeVisible();
@@ -438,8 +443,10 @@ test.describe("Start from a saved template and Run again", () => {
     await stubCatalogue(page, { rows: CATALOGUE, publish: ME_ONLY });
     await startFrom(page, NR_SHAPE.SOURCE_TEMPLATE);
     await page.getByRole("combobox", { name: NR_SHAPE.TEMPLATE_LABEL }).click();
-    await expect(page.getByRole("option", { name: new RegExp(`${PACKAGES.name}.*${T.POLICY_BADGE}`) })).toBeVisible();
+    // Both kinds are plain options: the policy is listed beside the template.
+    await expect(page.getByRole("option", { name: new RegExp(PACKAGES.name) })).toBeVisible();
     await page.getByRole("option", { name: new RegExp(NIGHTLY.name) }).click();
+    await press(page, NR_SHARED.CONTINUE);
     await expect(page).toHaveURL(new RegExp(`template=${NIGHTLY.id}&rev=2&step=review$`));
     await expect(page.getByRole("heading", { name: NR_REVIEW.TITLE })).toBeVisible();
   });

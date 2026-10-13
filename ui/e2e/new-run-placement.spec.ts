@@ -11,7 +11,7 @@
 // Pools and the preflight are stubbed from the New Run scenario fixtures: the
 // seeded backend runs no runner and holds no pool.
 import type { Page } from "@playwright/test";
-import { test, expect, gotoConsole, navToRoute } from "./fixtures";
+import { test, expect, fillMainDriveSize, gotoConsole, navToRoute } from "./fixtures";
 import { NR_DOCUMENT } from "../src/app/components/wardyn/copy/new-run/document";
 import { NR_LAUNCH } from "../src/app/components/wardyn/copy/new-run/launch";
 import { NR_REVIEW } from "../src/app/components/wardyn/copy/new-run/review";
@@ -43,7 +43,9 @@ interface Seen {
 /** Pools, status and the run endpoints; a Waiting run when `queued`. */
 async function stub(page: Page, opts: { preflight: object | { status: number; body: object }; queued?: boolean }): Promise<Seen> {
   const seen: Seen = { preflight: [], create: [], killed: [] };
-  const pools = SCENARIO_POOLS.admin.pools.map((p) => ({
+  // The full pool is in the list too: the Launched screen reads a waiting run's pool from it.
+  const ci = { ...SHARED, id: FULL.runner_pool!.id, name: FULL.runner_pool!.name, slots: { ...SHARED.slots!, used: 40, max: 40 } };
+  const pools = [...SCENARIO_POOLS.admin.pools, ci].map((p) => ({
     ...p,
     run_types: ["background", "interactive"],
     run_types_source: "pool",
@@ -70,7 +72,7 @@ async function stub(page: Page, opts: { preflight: object | { status: number; bo
     const next = opts.preflight;
     return "status" in next ? route.fulfill({ status: next.status as number, json: (next as { body: object }).body }) : route.fulfill({ json: next });
   });
-  const queue = { pool_id: "pool-ci", queued_at: new Date().toISOString(), deadline_at: new Date(Date.now() + 86_400_000).toISOString(), position: 1, reason: RUN_WAIT_REASON.AT_CAPACITY };
+  const queue = { pool_id: ci.id, queued_at: new Date().toISOString(), deadline_at: new Date(Date.now() + 86_400_000).toISOString(), position: 1, reason: RUN_WAIT_REASON.AT_CAPACITY };
   await page.route(`**/api/v1/runs/${RUN_ID}`, (route) => route.fulfill({ json: { id: RUN_ID, state: opts.queued ? "QUEUED" : "PENDING", ...(opts.queued && { queue }) } }));
   await page.route(`**/api/v1/runs/${RUN_ID}/kill`, (route) => {
     seen.killed.push(RUN_ID);
@@ -113,17 +115,17 @@ test.describe("New Run, placement: a full pool and an offline pool", () => {
 
     // Review says it plainly, and still lets the run launch: waiting is not a refusal.
     await expect(page.getByText(RUN_WAIT.AT_CAPACITY("CI jobs", 40))).toBeVisible();
-    await expect(page.getByText(NR_REVIEW.WHERE_VALUE("CI jobs"))).toBeVisible();
+    await expect(page.getByText(NR_REVIEW.WHERE_VALUE("CI jobs"), { exact: true })).toBeVisible();
     await expect(page.getByText(NR_REVIEW.WHERE_DETAIL("Remote Provided", 40, 40))).toBeVisible();
 
     await nameAndLaunch(page, "waiting run");
-    await expect(page.getByText(NR_LAUNCH.BADGE_WAITING)).toBeVisible();
+    await expect(page.getByText(NR_LAUNCH.BADGE_WAITING, { exact: true })).toBeVisible();
     await expect(page.getByText(NR_LAUNCH.WAITING_BODY("CI jobs", 40))).toBeVisible();
-    await expect(page.getByText(NR_LAUNCH.POSITION)).toBeVisible();
+    await expect(page.getByText(NR_LAUNCH.POSITION, { exact: true })).toBeVisible();
     // position is 1 on the wire; the console says the place in line, one more.
     await expect(page.getByText(NR_LAUNCH.IN_LINE("2nd"))).toBeVisible();
-    await expect(page.getByText(NR_LAUNCH.WAITING_SINCE)).toBeVisible();
-    await expect(page.getByText(NR_LAUNCH.GIVES_UP)).toBeVisible();
+    await expect(page.getByText(NR_LAUNCH.WAITING_SINCE, { exact: true })).toBeVisible();
+    await expect(page.getByText(NR_LAUNCH.GIVES_UP, { exact: true })).toBeVisible();
 
     // Cancel goes through the same kill dialog the Runs board uses.
     await press(page, NR_LAUNCH.CANCEL_RUN);
@@ -154,12 +156,12 @@ test.describe("New Run, placement: the pool a person picks", () => {
     await page.getByRole("button", { name: NR_START.GUIDED_FOOT }).click();
     await press(page, NR_SHAPE.ENV_TITLE);
     if (pool) {
-      await page.getByRole("combobox", { name: NR_RUN.POOL_LABEL }).click();
-      await page.getByRole("option", { name: new RegExp(pool) }).click();
+      await page.getByRole("combobox", { name: NR_RUN.POOL_LABEL }).selectOption({ label: pool });
     }
     await press(page, NR_SHARED.CONTINUE_TO(NR_SHARED.STEP_HARNESSES));
     await press(page, NR_SHARED.CONTINUE_TO(NR_SHARED.STEP_FILES));
     await page.getByRole("radio", { name: NR_FILES.NO_EXTRA }).check();
+    await fillMainDriveSize(page);
     await press(page, NR_SHARED.CONTINUE_TO(NR_SHARED.STEP_TOOLS));
     await press(page, NR_TOOLS.REVIEW_RUN);
     await expect(page.getByRole("heading", { name: NR_REVIEW.TITLE })).toBeVisible();
