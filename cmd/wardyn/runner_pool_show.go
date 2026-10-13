@@ -116,21 +116,29 @@ func poolCaps(l *sdk.RunnerPoolLimits) (caps sdk.RunnerAmounts) {
 	return caps
 }
 
-// poolLimitsText is what the pool narrows beyond its runners, or that it narrows nothing.
+// poolLimitsText is the pool's own limits beside its runners': the resources it narrows below what they
+// allow, the ones it sets without narrowing them (a maximum equal to or wider than theirs, whose default
+// still applies), and its own runs maximum. It says the pool has none of its own only when it sets none.
 func poolLimitsText(p sdk.RunnerPool, runners sdk.RunnerAmounts) string {
 	var parts []string
 	caps := poolCaps(p.Limits)
-	var narrowed []string
+	var narrowed, set []string
 	for _, r := range []struct {
 		what         string
 		cap, biggest int64
 	}{{"cpu", caps.CPUMillis, runners.CPUMillis}, {"memory", caps.MemoryMiB, runners.MemoryMiB}, {"disk", caps.DiskMiB, runners.DiskMiB}} {
-		if r.cap > 0 && r.cap < r.biggest {
+		switch {
+		case r.cap > 0 && r.cap < r.biggest:
 			narrowed = append(narrowed, r.what)
+		case r.cap > 0:
+			set = append(set, r.what)
 		}
 	}
 	if len(narrowed) > 0 {
 		parts = append(parts, strings.Join(narrowed, ", ")+" per run narrowed by this pool")
+	}
+	if len(set) > 0 {
+		parts = append(parts, strings.Join(set, ", ")+" per run set by this pool")
 	}
 	if p.Limits != nil && p.Limits.MaxConcurrentRuns != nil {
 		parts = append(parts, fmt.Sprintf("%d runs maximum in this pool", *p.Limits.MaxConcurrentRuns))

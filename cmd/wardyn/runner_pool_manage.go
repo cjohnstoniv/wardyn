@@ -59,12 +59,12 @@ func runnerPoolMemberCmd(client clientFn, add bool) *cobra.Command {
 		return makePoolDefault(cmd, client(), pool)
 	}}
 	if add {
-		cmd.Flags().BoolVar(&makeDefault, "default", false, "also make the pool your default; your other defaults are kept")
+		cmd.Flags().BoolVar(&makeDefault, "default", false, "also make the pool your default, the one New Run starts with")
 	}
 	return cmd
 }
 
-// makePoolDefault makes pool the caller's default, keeping their default barrier.
+// makePoolDefault makes pool the caller's default pool; whatever else the read carried is sent back as read.
 func makePoolDefault(cmd *cobra.Command, c *sdk.Client, pool sdk.RunnerPool) error {
 	d, err := c.GetMyRunnerPoolDefaults(cmd.Context())
 	if err != nil {

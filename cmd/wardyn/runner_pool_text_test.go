@@ -195,3 +195,43 @@ func TestRunnerPoolAddKnowsWhatIsAlreadyThere(t *testing.T) {
 		t.Errorf("default sent %q, want the pool and the kept barrier", put)
 	}
 }
+
+// A pool's own limits are said as its own whether they narrow its runners or not: a maximum equal to or
+// wider than theirs still carries a default every untouched run gets. Only a pool that sets none "follows
+// its runners", in show and in what create prints.
+func TestPoolLimitsTextSaysWhatThePoolSets(t *testing.T) {
+	runners := types.RunnerAmounts{CPUMillis: 4000, MemoryMiB: 16 << 10, DiskMiB: 100 << 10}
+	two := 2
+	amount := func(def, cap int) *sdk.RunnerPoolAmount { return &sdk.RunnerPoolAmount{Default: def, Cap: cap} }
+	for _, tc := range []struct {
+		name   string
+		limits *sdk.RunnerPoolLimits
+		want   string
+	}{
+		{"none", &sdk.RunnerPoolLimits{Background: &types.RunnerPoolBackgroundLimits{}}, "none of its own: it follows its runners"},
+		{"no limits at all", nil, "none of its own: it follows its runners"},
+		{"lower", &sdk.RunnerPoolLimits{Background: &types.RunnerPoolBackgroundLimits{MemoryMiB: amount(2<<10, 8<<10)}}, "memory per run narrowed by this pool"},
+		{"equal", &sdk.RunnerPoolLimits{Background: &types.RunnerPoolBackgroundLimits{MemoryMiB: amount(2<<10, 16<<10)}}, "memory per run set by this pool"},
+		{"wider", &sdk.RunnerPoolLimits{Background: &types.RunnerPoolBackgroundLimits{CPUMillis: amount(1000, 64000)}}, "cpu per run set by this pool"},
+		{"all three and a runs maximum", &sdk.RunnerPoolLimits{MaxConcurrentRuns: &two, Background: &types.RunnerPoolBackgroundLimits{
+			CPUMillis: amount(1000, 64000), MemoryMiB: amount(2<<10, 8<<10), DiskMiB: amount(20<<10, 100<<10)}},
+			"memory per run narrowed by this pool; cpu, disk per run set by this pool; 2 runs maximum in this pool"},
+	} {
+		if got := poolLimitsText(sdk.RunnerPool{Limits: tc.limits}, runners); got != tc.want {
+			t.Errorf("%s: %q, want %q", tc.name, got, tc.want)
+		}
+	}
+
+	id := uuid.New()
+	var sb strings.Builder
+	own := sdk.RunnerPool{ID: id, Name: "Home server", Scope: sdk.RunnerPoolUser, Revision: 1,
+		Limits: &sdk.RunnerPoolLimits{MaxConcurrentRuns: &two, Background: &types.RunnerPoolBackgroundLimits{MemoryMiB: amount(2<<10, 8<<10)}}}
+	if err := printPoolCreated(&sb, own, false, false); err != nil {
+		t.Fatal(err)
+	}
+	want := "created user pool Home server (" + id.String() + "), yours, revision 1\n" +
+		"  limits: memory per run set by this pool; 2 runs maximum in this pool; it has no runners yet. Put a runner in it: wardyn runner pool add \"Home server\" <runner>\n"
+	if sb.String() != want {
+		t.Errorf("create with its own limits:\n%q\nwant\n%q", sb.String(), want)
+	}
+}
