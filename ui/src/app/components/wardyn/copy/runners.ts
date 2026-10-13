@@ -168,6 +168,7 @@ export const MY_RUNNER = {
 export const RUN_PLACEMENT = {
   LABEL: "Runs on",
   REMOTE: "Remote-hosted runner",
+  /** pending W-51: the recommended text until the owner answers. */
   MINE: (name: string) => `${name} · your computer`,
   OTHERS: (name: string, owner: string) => `${name} · ${owner}'s runner`,
   /**

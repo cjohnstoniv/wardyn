@@ -149,7 +149,7 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `USED_OF_MAX(used, max)` | mock | {used} of {max} running |
 | `RUNNING_ONLY(used)` | deviation (DS-5 §8) | {used} running |
 | `MAX_RUNS(max)` | mock | {max} runs maximum in this pool |
-| `POOL_LIMIT_FROM_RUNNERS` | deviation (pool words) | Set by its runners |
+| `POOL_LIMIT_FROM_RUNNERS` | pending (W-50) | Set by its runners |
 | `ALLOWANCE_LABEL` | mock | Your allowance |
 | `ALLOWANCE_ARIA` | deviation (DS-5 §8) | Your allowance used |
 | `ALLOWANCE_USED(active, max)` | deviation (DS-5 §8) | {active} of {max} running (all pools) |
