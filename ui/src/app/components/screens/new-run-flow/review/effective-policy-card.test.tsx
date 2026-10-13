@@ -11,7 +11,11 @@ import { NR_RUN } from "../../../wardyn/copy/new-run/run";
 import { SCENARIO_PREFLIGHT } from "../../../../lib/new-run-fixtures/scenarios/preflight";
 import { initialDraft, type NewRunDraft, type RunIntent } from "../draft/run-intent";
 import { EffectivePolicyCard } from "./effective-policy-card";
+import { AccessGroup } from "./groups/access-group";
+import { SCENARIO_ACCESS } from "../../../../lib/new-run-fixtures/scenarios/tools";
+import type { ReviewPreflight } from "./review-seams";
 import { changedRows } from "./policy-rows";
+import type { PolicyPreviewResult } from "../../../../lib/types/policy-preview";
 
 afterEach(cleanup);
 
@@ -69,5 +73,27 @@ describe("Effective policy card", () => {
     render(<EffectivePolicyCard draft={draftOf({ ...BASE, tool_approvals: "hold" })} pre={null} preview={null} />);
     expect(screen.getByText(NR_REVIEW.POLICY_HOLD)).toBeInTheDocument();
     expect(screen.queryByText(NR_REVIEW.POLICY_AUTOMATIC)).toBeNull();
+  });
+
+  it.each([[["pypi.org"], NR_REVIEW.POLICY_HOST_ONE], [["pypi.org", "registry.npmjs.org"], NR_REVIEW.POLICY_HOSTS(2)]])(
+    "counts the allowed hosts with a singular for one (%j)", (hosts, text) => {
+      const preview = { spec: { allowed_domains: hosts }, source: { name: "Source" } } as unknown as PolicyPreviewResult;
+      render(<EffectivePolicyCard draft={draftOf(BASE)} pre={null} preview={preview} />);
+      expect(screen.getByText(text)).toBeInTheDocument();
+    },
+  );
+
+  it("shows Network and the Access value whenever the server's access facts carry hosts, and the barrier with its strength word", () => {
+    const one = SCENARIO_ACCESS.member.hosts[0];
+    const access = { ...SCENARIO_ACCESS.member, hosts: [one, { ...one, host: "pypi.org" }] };
+    const pre = { ...SCENARIO_PREFLIGHT.member, access } as ReviewPreflight;
+    render(<EffectivePolicyCard draft={draftOf(BASE)} pre={pre} preview={null} />);
+    const network = document.querySelector('[data-policy-row="network"]') as HTMLElement;
+    expect(within(network).getByText(NR_REVIEW.POLICY_HOSTS(2))).toBeInTheDocument();
+    const barrier = document.querySelector('[data-policy-row="barrier"]') as HTMLElement;
+    expect(within(barrier).getByText(NR_RUN.TAGLINE_WALL)).toBeInTheDocument();
+    cleanup();
+    render(<AccessGroup draft={draftOf(BASE)} pre={pre} preview={null} docRows={[]} go={() => {}} dispatch={() => {}} />);
+    expect(screen.getByText(NR_REVIEW.POLICY_HOSTS(2))).toBeInTheDocument();
   });
 });

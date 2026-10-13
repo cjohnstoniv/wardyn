@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// The true notices: the pool is at its limit, a size was narrowed, and the server's own preflight warnings.
+// The true notices: the pool is at its limit, a size was narrowed, and each of the server's own preflight warnings.
 
 import { Notice } from "../../../wardyn/notice";
 import { NR_REVIEW } from "../../../wardyn/copy/new-run/review";
@@ -77,13 +77,11 @@ export function Notices({ poolName, slots, applied, askedByYou, warnings }: Noti
           </p>
         </Notice>
       ))}
-      {server.length > 0 && (
-        <Notice tone="warning" title={NR_REVIEW.WARNINGS_TITLE}>
-          <ul className="list-disc pl-4">
-            {server.map((w, i) => <li key={`${i}:${w}`}>{w}</li>)}
-          </ul>
+      {server.map((w, i) => (
+        <Notice key={`${i}:${w}`} tone="warning">
+          {w}
         </Notice>
-      )}
+      ))}
     </div>
   );
 }
