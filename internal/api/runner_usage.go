@@ -26,7 +26,7 @@ func (s *Server) runnersInUse(ctx context.Context, runners []uuid.UUID, remotes 
 	if !ok || (len(runners) == 0 && len(remotes) == 0) {
 		return map[string]types.RunnerTally{}, nil
 	}
-	return rs.RunnerUsage(ctx, runners, remotes)
+	return rs.RunnerUsage(ctx, runners, remotes, uuid.Nil)
 }
 
 // diskCapped reports whether a target's disk limits are enforced, not just counted.

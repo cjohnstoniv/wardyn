@@ -209,6 +209,11 @@ func (s *Server) ownRunnerTargets(ctx context.Context, req *createRunRequest, ps
 	if err != nil {
 		return nil, runServerError("count runs by runner", err)
 	}
+	// A promoted run's start finds the run itself holding the place its promotion took on its runner:
+	// that place is this run's, so the runner is not full for it.
+	if bound := promotedRunner(ctx); bound != nil && held[*bound] > 0 {
+		held[*bound]--
+	}
 	out := make([]poolTarget, 0, len(ids))
 	for _, id := range ids {
 		id := id

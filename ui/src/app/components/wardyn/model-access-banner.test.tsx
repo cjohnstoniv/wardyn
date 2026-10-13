@@ -115,7 +115,7 @@ describe("the door itself", () => {
 
     await userEvent.click(screen.getByRole("button", { name: AGENTS.SIGN_IN_AWS }));
     expect(screen.getByRole("heading", { name: MODEL_ACCESS_BANNER.DIALOG_TITLE })).toBeInTheDocument();
-    await userEvent.click(screen.getByRole("button", { name: `fake pane ${bedrock.id}` }));
+    await userEvent.click(await screen.findByRole("button", { name: `fake pane ${bedrock.id}` }));
     expect(onRefresh).toHaveBeenCalledTimes(1);
     expect(success).toHaveBeenCalledWith(MODEL_ACCESS_BANNER.SIGNED_IN_TOAST);
     expect(screen.queryByRole("heading", { name: MODEL_ACCESS_BANNER.DIALOG_TITLE })).toBeNull();

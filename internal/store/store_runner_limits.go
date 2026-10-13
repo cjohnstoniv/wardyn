@@ -118,15 +118,16 @@ func runnerUsage(ctx context.Context, q Querier, runners []uuid.UUID, remotes []
 }
 
 // RunnerUsage is the In use of each runner named, by key, without a lock: what every read shows and
-// placement chooses by, never the authority. A runner with nothing on it is absent.
-func (s PG) RunnerUsage(ctx context.Context, runners []uuid.UUID, remotes []string) (map[string]types.RunnerTally, error) {
-	return runnerUsage(ctx, s.Pool, runners, remotes, uuid.Nil)
+// placement chooses by, never the authority. except is a run never counted (uuid.Nil for none): a
+// promoted run's start does not count the run's own place. A runner with nothing on it is absent.
+func (s PG) RunnerUsage(ctx context.Context, runners []uuid.UUID, remotes []string, except uuid.UUID) (map[string]types.RunnerTally, error) {
+	return runnerUsage(ctx, s.Pool, runners, remotes, except)
 }
 
 // RunnerSlotHolders is the number of sandbox-holding runs on each of ids (RunnerUsage's runs). A runner
 // with none is absent.
 func (s PG) RunnerSlotHolders(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]int, error) {
-	used, err := s.RunnerUsage(ctx, ids, nil)
+	used, err := s.RunnerUsage(ctx, ids, nil, uuid.Nil)
 	if err != nil {
 		return nil, err
 	}

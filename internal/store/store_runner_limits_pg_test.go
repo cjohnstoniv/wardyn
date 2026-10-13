@@ -375,7 +375,7 @@ func TestPG_RunnerTotalsHoldUnderRace(t *testing.T) {
 	if got := race(t, 8, onRemote, create); got != 2 {
 		t.Fatalf("%d of 8 racing creates landed on a remote-hosted runner whose totals hold 2, want exactly 2", got)
 	}
-	used, err := pg.RunnerUsage(ctx, []uuid.UUID{runner.ID}, []string{remote})
+	used, err := pg.RunnerUsage(ctx, []uuid.UUID{runner.ID}, []string{remote}, uuid.Nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -416,6 +416,29 @@ func TestRunnerUsageMatchesAdmission(t *testing.T) {
 		if _, err := pg.CreateRun(ctx, mk(types.RunRunning)); err != nil {
 			t.Fatal(err)
 		}
+		// A run never counts against itself: excluded, its own place and reservation are not in use.
+		self := mk(types.RunRunning)
+		if _, err := pg.CreateRun(ctx, self); err != nil {
+			t.Fatal(err)
+		}
+		key := runner.ID.String()
+		if self.RunnerID == nil {
+			key = remote
+		}
+		with, err := pg.RunnerUsage(ctx, []uuid.UUID{runner.ID}, []string{remote}, uuid.Nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		without, err := pg.RunnerUsage(ctx, []uuid.UUID{runner.ID}, []string{remote}, self.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if with[key].Runs-without[key].Runs != 1 || with[key].MemoryMiB-without[key].MemoryMiB != oneRun().MemoryMiB {
+			t.Fatalf("%s: excluding a run left %+v of %+v, want its one place and its reservation gone", key, without[key], with[key])
+		}
+		if _, err := pool.Exec(ctx, `UPDATE agent_runs SET state = 'COMPLETED' WHERE id = $1`, self.ID); err != nil {
+			t.Fatal(err)
+		}
 		lost, err := pg.CreateRun(ctx, mk(types.RunRunning))
 		if err != nil {
 			t.Fatal(err)
@@ -424,7 +447,7 @@ func TestRunnerUsageMatchesAdmission(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	used, err := pg.RunnerUsage(ctx, []uuid.UUID{runner.ID}, []string{remote})
+	used, err := pg.RunnerUsage(ctx, []uuid.UUID{runner.ID}, []string{remote}, uuid.Nil)
 	if err != nil {
 		t.Fatal(err)
 	}

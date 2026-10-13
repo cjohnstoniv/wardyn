@@ -305,6 +305,7 @@ func TestInvitation_CreateRefusals(t *testing.T) {
 	e := newInviteEnv(t)
 	legacy := e.seedLegacyToken(t, personSub, oidc.RoleUser, "sec")
 	own := e.seedLegacyToken(t, personSub, oidc.RoleUser, "")
+	others := e.seedLegacyToken(t, "other-sub", oidc.RoleUser, "sec")
 	for _, tc := range []struct {
 		name, principal, body string
 		as                    *http.Cookie
@@ -317,6 +318,7 @@ func TestInvitation_CreateRefusals(t *testing.T) {
 		{"a principal with a space", "a%20b", `{}`, e.sec, http.StatusUnprocessableEntity, reasonInvitationTargetInvalid},
 		{"an unknown person", "nobody-sub", `{}`, e.sec, http.StatusUnprocessableEntity, reasonInvitationTargetUnknown},
 		{"a token of another person", personSub, `{"replaces_token_id":"` + uuid.NewString() + `"}`, e.sec, http.StatusUnprocessableEntity, reasonInvitationReplacesInvalid},
+		{"a live admin-minted token of another person", personSub, `{"replaces_token_id":"` + others.ID.String() + `"}`, e.sec, http.StatusUnprocessableEntity, reasonInvitationReplacesInvalid},
 		{"a self-minted token", personSub, `{"replaces_token_id":"` + own.ID.String() + `"}`, e.sec, http.StatusUnprocessableEntity, reasonInvitationReplacesInvalid},
 		{"a lifetime over 14 days", personSub, `{"expires_in_seconds":1209601}`, e.sec, http.StatusBadRequest, reasonInvitationTTLInvalid},
 		{"a negative lifetime", personSub, `{"expires_in_seconds":-1}`, e.sec, http.StatusBadRequest, reasonInvitationTTLInvalid},

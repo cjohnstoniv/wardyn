@@ -19,6 +19,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
+	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
 
 const (
@@ -55,13 +56,8 @@ func (s *Server) invitationStoreOr501(w http.ResponseWriter) (store.InvitationSt
 	return is, ok
 }
 
-// createInvitationRequest is the POST /people/{principal}/invitations body; every field is optional.
-type createInvitationRequest struct {
-	ExpiresInSeconds int64      `json:"expires_in_seconds,omitempty"`
-	TokenName        string     `json:"token_name,omitempty"`
-	TokenTTLSeconds  int64      `json:"token_ttl_seconds,omitempty"`
-	ReplacesTokenID  *uuid.UUID `json:"replaces_token_id,omitempty"`
-}
+// createInvitationRequest IS the SDK's body (dto_alias_test.go pins it).
+type createInvitationRequest = client.CreateInvitationRequest
 
 // handleCreateInvitation is POST /api/v1/people/{principal}/invitations, refusing in the order of the
 // design's table. The target is exactly the path's principal: never inferred from an email, a role or the caller.
@@ -254,11 +250,8 @@ func (s *Server) handleRevokeInvitation(w http.ResponseWriter, r *http.Request) 
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// claimInvitationRequest is the POST /me/invitations/{id}/claim body.
-type claimInvitationRequest struct {
-	Name       string `json:"name"`
-	TTLSeconds int64  `json:"ttl_seconds,omitempty"`
-}
+// claimInvitationRequest IS the SDK's body (dto_alias_test.go pins it).
+type claimInvitationRequest = client.ClaimInvitationRequest
 
 // notPendingBody is the 409 an invitation's own target hears, with the state it is in.
 type notPendingBody struct {

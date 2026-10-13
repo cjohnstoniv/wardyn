@@ -94,9 +94,9 @@ func (s *Server) resolveSSHKeyOwner(ctx context.Context, raw string) (principal,
 	}
 	switch refusal {
 	case secretOwnerUnresolvedMsg:
-		refusal = "no known principal matches that email address; name the subject exactly"
+		refusal = "no known principal matches that email address; name the subject exactly, as the Audit log shows it"
 	case secretOwnerAmbiguousMsg:
-		refusal = "more than one known principal matches; name the subject exactly"
+		refusal = "more than one known principal matches; name the subject exactly, as the Audit log shows it"
 	}
 	return principal, refusal, reason, nil
 }

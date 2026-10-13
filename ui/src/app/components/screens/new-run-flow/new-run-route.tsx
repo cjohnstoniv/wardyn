@@ -65,7 +65,7 @@ const pending = (name: NewRunScreenName): Screen => function PendingScreen() {
 export const NEW_RUN_SCREENS: Record<NewRunScreenName, Screen> = {
   start: React.lazy(() => import("./start/start-screen").then((m) => ({ default: m.StartScreen }))),
   shape: React.lazy(() => import("./steps/shape/shape-step").then((m) => ({ default: m.ShapeStep }))),
-  run: pending("run"),
+  run: React.lazy(() => import("./steps/run/run-step").then((m) => ({ default: m.RunStep }))),
   harnesses: React.lazy(() => import("./steps/harnesses/harnesses-step").then((m) => ({ default: m.HarnessesStep }))),
   files: pending("files"),
   tools: pending("tools"),

@@ -29,7 +29,7 @@ func TestFinalizeImage_IDComesFromTheBuildStream(t *testing.T) {
 	b := newWithClient(f, "envbuilder:test", "")
 	b.ToolsDir = toolsDirWithRequired(t)
 
-	built, err := b.FinalizeBase(context.Background(), "ubuntu:24.04", "wardyn-byoi/run-id:latest", nil)
+	built, err := b.FinalizeBase(context.Background(), "ubuntu:24.04", "wardyn-byoi/run-id:latest", nil, false)
 	if err != nil {
 		t.Fatalf("FinalizeBase: %v", err)
 	}
@@ -51,7 +51,7 @@ func TestFinalizeImage_NoAuxIDLeavesTheIDEmpty(t *testing.T) {
 	b := newWithClient(f, "envbuilder:test", "")
 	b.ToolsDir = toolsDirWithRequired(t)
 
-	built, err := b.FinalizeBase(context.Background(), "ubuntu:24.04", "wardyn-byoi/run-noid:latest", nil)
+	built, err := b.FinalizeBase(context.Background(), "ubuntu:24.04", "wardyn-byoi/run-noid:latest", nil, false)
 	if err != nil {
 		t.Fatalf("a stream with no aux.ID must not fail the build: %v", err)
 	}
@@ -82,7 +82,7 @@ func TestFinalizeBase_WrapsByDigestWhenTheBaseHasOne(t *testing.T) {
 	b := newWithClient(f, "envbuilder:test", "")
 	b.ToolsDir = toolsDirWithRequired(t)
 
-	built, err := b.FinalizeBase(context.Background(), "ubuntu:24.04", "wardyn-byoi/run-dg:latest", nil)
+	built, err := b.FinalizeBase(context.Background(), "ubuntu:24.04", "wardyn-byoi/run-dg:latest", nil, false)
 	if err != nil {
 		t.Fatalf("FinalizeBase: %v", err)
 	}
@@ -101,7 +101,7 @@ func TestFinalizeBase_WrapsByRefWhenTheBaseHasNoDigest(t *testing.T) {
 	b := newWithClient(f, "envbuilder:test", "")
 	b.ToolsDir = toolsDirWithRequired(t)
 
-	built, err := b.FinalizeBase(context.Background(), "myco/dev:latest", "wardyn-byoi/run-lo:latest", nil)
+	built, err := b.FinalizeBase(context.Background(), "myco/dev:latest", "wardyn-byoi/run-lo:latest", nil, false)
 	if err != nil {
 		t.Fatalf("FinalizeBase: %v", err)
 	}
@@ -175,7 +175,7 @@ func TestFinalizeBase_IDEqualsTheDaemonsAuxID(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
-	built, err := b.FinalizeBase(ctx, "busybox:latest", tag, nil)
+	built, err := b.FinalizeBase(ctx, "busybox:latest", tag, nil, false)
 	if err != nil {
 		t.Fatalf("FinalizeBase: %v", err)
 	}

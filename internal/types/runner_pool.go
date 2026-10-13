@@ -159,6 +159,7 @@ func (m RunnerPoolMember) Validate(scope RunnerPoolScope) error {
 	case hasRunner == hasRemote:
 		return errors.New("a pool member names one runner")
 	case hasRunner && scope != RunnerPoolUser:
+		//lint:ignore ST1005 the sentence the refused person reads, as the pool editor shows it
 		return errors.New(OrgPoolSelfHostedMsg)
 	case hasRunner && *m.RunnerID == uuid.Nil:
 		return errors.New("runner_id is not a runner id")

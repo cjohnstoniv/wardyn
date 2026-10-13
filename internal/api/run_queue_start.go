@@ -37,18 +37,38 @@ const (
 	queueStartFailedLogName = "wardynd: queue start"
 )
 
-// promotedStartCtxKey marks a request context as the queue's start replaying a promoted run.
+// promotedStartCtxKey marks a request context as the queue's start replaying a promoted run. Its value
+// is the run and the runner the promotion bound it to, nil when it bound none.
 type promotedStartCtxKey struct{}
 
-func withPromotedStart(ctx context.Context) context.Context {
-	return context.WithValue(ctx, promotedStartCtxKey{}, true)
+type promotedStart struct {
+	run    uuid.UUID
+	runner *uuid.UUID
+}
+
+func withPromotedStart(ctx context.Context, run uuid.UUID, runner *uuid.UUID) context.Context {
+	return context.WithValue(ctx, promotedStartCtxKey{}, promotedStart{run: run, runner: runner})
+}
+
+// promotedRun is the run a promoted start replays, uuid.Nil outside one: what it holds on its runner is
+// its own, never counted against it.
+func promotedRun(ctx context.Context) uuid.UUID {
+	v, _ := ctx.Value(promotedStartCtxKey{}).(promotedStart)
+	return v.run
 }
 
 // startingPromoted reports whether ctx is a promoted run's start, whose capacity was admitted by the
 // promotion; the fold reads it as runFold.promoted.
 func startingPromoted(ctx context.Context) bool {
-	v, _ := ctx.Value(promotedStartCtxKey{}).(bool)
-	return v
+	_, ok := ctx.Value(promotedStartCtxKey{}).(promotedStart)
+	return ok
+}
+
+// promotedRunner is the runner a promoted run's start finds the run already holding a place on: the one
+// its promotion bound it to. nil outside a promoted start, or when the promotion bound no runner.
+func promotedRunner(ctx context.Context) *uuid.UUID {
+	v, _ := ctx.Value(promotedStartCtxKey{}).(promotedStart)
+	return v.runner
 }
 
 // queueEnd is how a start that cannot go on ends the run: the queue reason (the status_detail token,
@@ -76,6 +96,8 @@ type queuedStart struct {
 	daemon, prep context.Context
 	// f is the replayed fold, set once it has run.
 	f runFold
+	// classRaised: the organisation raised its default barrier while the run waited and the start took it.
+	classRaised bool
 }
 
 // startQueuedRun starts one promoted run, in the process that promoted it, detached. It holds the
@@ -125,7 +147,7 @@ func newQueuedStart(base, prep context.Context, p store.PromotedRun) (*queuedSta
 func (st *queuedStart) bind(a queueAuthority) error {
 	st.auth = a
 	st.base = a.context(st.daemon)
-	st.ctx = withPromotedStart(withCeilingMemo(withCapBatch(a.context(st.prep))))
+	st.ctx = withPromotedStart(withCeilingMemo(withCapBatch(a.context(st.prep))), st.run.ID, st.run.RunnerID)
 	r, err := http.NewRequestWithContext(st.ctx, http.MethodPost, "/api/v1/runs", nil)
 	if err != nil {
 		return err
@@ -144,14 +166,9 @@ func (s *Server) runQueuedStart(st *queuedStart) *queueEnd {
 	if end := s.queueCurrentRole(st); end != nil {
 		return end
 	}
-	var req createRunRequest
-	if err := json.Unmarshal(st.launch.Request, &req); err != nil {
+	req, err := st.request()
+	if err != nil {
 		return &queueEnd{hint: queueStartFailedHint}
-	}
-	// Re-resolve the pool and the provider the run was admitted with, never the current defaults.
-	req.RunnerPoolID = st.run.RunnerPoolID.String()
-	if req.ModelProvider == "" {
-		req.ModelProvider = st.launch.ProviderID
 	}
 	ceiling, end := s.queueGovernance(st, req)
 	if end != nil {
@@ -164,20 +181,73 @@ func (s *Server) runQueuedStart(st *queuedStart) *queueEnd {
 	if refusal.write(s, st.cw, st.r) {
 		return st.refusalEnd()
 	}
+	var f runFold
+	var ok bool
 	if st.launch.ConfinementDefault != "" {
 		// The launch named no class: it keeps the one the create resolved, not a fresh pick of the
-		// organisation's default. The fold still holds that class to the floor and to what the pool offers.
+		// organisation's default, unless the organisation has since raised its default to a class the
+		// pool offers. The fold still holds the class to the floor and to what the pool offers.
 		reqCC = st.run.ConfinementClass
+		var end *queueEnd
+		if f, req, ok, end = s.foldRaisedDefault(st, req, ceiling); end != nil {
+			return end
+		}
 	}
-	f, ok := s.foldRunRequest(st.cw, st.r, foldCreate, &req, ceiling, reqCC)
 	if !ok {
-		return st.refusalEnd()
+		if f, ok = s.foldRunRequest(st.cw, st.r, foldCreate, &req, ceiling, reqCC); !ok {
+			return st.refusalEnd()
+		}
 	}
 	st.f = f
 	if end := s.queueNarrowOnly(st); end != nil {
 		return end
 	}
 	return s.queueLaunch(st, req, ceiling)
+}
+
+// request is the launch's request as the start folds it afresh: the pool and the provider the run was
+// admitted with, never the current defaults.
+func (st *queuedStart) request() (createRunRequest, error) {
+	var req createRunRequest
+	if err := json.Unmarshal(st.launch.Request, &req); err != nil {
+		return req, err
+	}
+	req.RunnerPoolID = st.run.RunnerPoolID.String()
+	if req.ModelProvider == "" {
+		req.ModelProvider = st.launch.ProviderID
+	}
+	return req, nil
+}
+
+// foldRaisedDefault is the start of a run whose create chose its class by default: when the
+// organisation's default barrier is now stronger than the class the run holds, the fold is tried with
+// that class, which it holds to the floor and to what the pool offers. ok is false, with no end, when
+// the default is not stronger or the pool does not offer it, and the caller folds the stored class. A
+// class only ever rises here, so the replay can still never weaken what the run was reviewed under.
+func (s *Server) foldRaisedDefault(st *queuedStart, req createRunRequest, ceiling governanceCeiling) (runFold, createRunRequest, bool, *queueEnd) {
+	ps, hasPools := s.cfg.Store.(store.RunnerPoolStore)
+	if !hasPools {
+		return runFold{}, req, false, nil
+	}
+	org, err := ps.GetRunnerPoolOrgDefaults(st.ctx)
+	if err != nil {
+		slog.ErrorContext(st.base, queueStartFailedLogName+": read the organisation defaults", slog.String("run_id", st.run.ID.String()), slog.Any("err", err))
+		return runFold{}, req, false, &queueEnd{hint: queueStartFailedHint}
+	}
+	if org.Barrier.Rank() <= st.run.ConfinementClass.Rank() {
+		return runFold{}, req, false, nil
+	}
+	raised, err := st.request()
+	if err != nil {
+		return runFold{}, req, false, &queueEnd{hint: queueStartFailedHint}
+	}
+	cw := newQueueRefusalCapture()
+	f, ok := s.foldRunRequest(cw, st.r, foldCreate, &raised, ceiling, org.Barrier)
+	if !ok {
+		return runFold{}, req, false, nil
+	}
+	st.cw, st.classRaised = cw, true
+	return f, raised, true, nil
 }
 
 // refusalEnd turns the answer a replayed gate wrote into the run's end: the gate's reason is the token
@@ -389,6 +459,11 @@ func (s *Server) auditQueueStart(st *queuedStart, started, anchor types.AgentRun
 	}
 	if st.launch.ConfinementDefault != "" {
 		data["confinement_default"] = st.launch.ConfinementDefault
+	}
+	if st.classRaised {
+		// The organisation raised its default while the run waited: the run starts under the stronger class,
+		// chosen by the organisation.
+		data["confinement_default"], data["confinement_default_raised"] = runnerpool.BarrierDefaultOrganisation, true
 	}
 	if c, ok := s.cfg.Store.(interface {
 		CountRunnerPoolSlotHolders(ctx context.Context, poolID uuid.UUID) (int, error)
