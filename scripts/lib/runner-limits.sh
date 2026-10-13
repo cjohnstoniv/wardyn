@@ -66,12 +66,15 @@ _rl_propose() {
     wardyn runner remote propose "$1" --free-disk "${WARDYN_SETUP_RUNNER_DISK_GB}" </dev/null
     return
   fi
-  if _rl_flags="$(wardyn runner remote propose "$1" </dev/null 2>&1)" && [ -n "${_rl_flags}" ]; then
+  # The flags are stdout alone: anything the CLI says on stderr never reaches `wardyn runner set`. Its
+  # refusal is read by a second call, only when the first failed.
+  if _rl_flags="$(wardyn runner remote propose "$1" </dev/null 2>/dev/null)" && [ -n "${_rl_flags}" ]; then
     _rl_say "$1: CPU, memory and free disk as the runner reports them"
     printf '%s\n' "${_rl_flags}"
     return
   fi
-  case "${_rl_flags}" in
+  _rl_why="$(wardyn runner remote propose "$1" </dev/null 2>&1 >/dev/null)" || true
+  case "${_rl_why}" in
     *"no CPU or memory"*)
       _rl_say "$1 reports no CPU or memory to propose from, so there is no proposal. Set WARDYN_SETUP_RUNNER_LIMITS to the whole set of \`wardyn runner set\` flags."
       return 1

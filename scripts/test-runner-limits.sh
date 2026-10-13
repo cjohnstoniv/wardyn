@@ -29,7 +29,7 @@ calls="${dir}/calls"; err="${dir}/err"
 
 HEADER="ID  NAME  SET UP HERE  ONLINE  PEOPLE'S POOLS  POOLS"
 # What the fake server says: the runners with no limits, and whether the runner reports its free disk.
-unset_runners="" reports_disk=0 reports_size=1 set_rc=0
+unset_runners="" reports_disk=0 reports_size=1 set_rc=0 noisy=0
 # The proposal the fake CLI prints: half of the free disk it was handed, everything else fixed.
 proposal() { echo "--max-runs 4 --total-cpu 4 --total-memory 8 --total-disk $(($1 / 2)) --per-run-cpu 1 --per-run-memory 2 --per-run-disk $(($1 / 8))"; }
 wardyn() {
@@ -38,6 +38,7 @@ wardyn() {
     "runner remote list --no-limits") echo "${HEADER}"; for r in ${unset_runners}; do echo "${r}  ${r}  yes  yes  off  Organization"; done ;;
     "runner remote propose docker"*)
       if [ "${reports_size}" = 0 ]; then echo "wardyn: the runner reports no CPU or memory to propose from: set its limits with \`wardyn runner set\`" >&2; return 1; fi
+      [ "${noisy}" = 1 ] && echo "wardyn: notice: this server is older than the CLI" >&2
       case "$*" in *--free-disk*) proposal "${!#}"; return ;; esac
       if [ "${reports_disk}" = 1 ]; then proposal 400; else echo "wardyn: the runner does not report its free disk: pass --free-disk" >&2; return 1; fi ;;
     "runner set docker "*) return "${set_rc}" ;;
@@ -63,6 +64,13 @@ grep -q "already has its limits; nothing changed" "${err}" || fail "the helper d
 unset_runners=docker reports_disk=1
 [ "$(run)" = 0 ] || fail "a runner that reports everything was not given limits: $(cat "${err}")"
 [ "$(set_call)" = "runner set docker $(proposal 400)" ] || fail "set ran as '$(set_call)', want the runner's own proposal"
+
+# 2b) A line the CLI writes to stderr on a successful propose never becomes a flag: set gets exactly the
+# proposal.
+noisy=1
+[ "$(run)" = 0 ] || fail "a propose that also wrote to stderr made the helper fail: $(cat "${err}")"
+[ "$(set_call)" = "runner set docker $(proposal 400)" ] || fail "with stderr on a successful propose, set ran as '$(set_call)', want exactly the proposal"
+noisy=0
 
 # 3) Nothing measured the disk and no variable gives it: it fails, names the variable, and sets nothing.
 reports_disk=0
