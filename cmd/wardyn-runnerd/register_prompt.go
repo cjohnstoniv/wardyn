@@ -19,10 +19,17 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// isTerminal is whether in is a person at a keyboard: nothing is asked of a pipe or a file.
-func isTerminal(in io.Reader) bool {
-	f, ok := in.(*os.File)
+// isTerminal is whether stream is a terminal rather than a pipe, a file or a test's buffer.
+func isTerminal(stream any) bool {
+	f, ok := stream.(*os.File)
 	return ok && term.IsTerminal(int(f.Fd()))
+}
+
+// asksAt is whether register may ask for limits: only of a person who can both read the questions and
+// answer them. With the output sent to a file the questions would be written where nobody sees them
+// while the command waited at the keyboard, so then nothing is asked, as with no terminal at all.
+func asksAt(in io.Reader, out io.Writer) bool {
+	return isTerminal(in) && isTerminal(out)
 }
 
 // ask offers each limit not given as a flag, Enter taking the suggestion shown. An answer goes through
