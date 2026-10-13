@@ -54,24 +54,25 @@ export function summaryText(f: SummaryFacts): string {
 export type SummaryTone = "done" | "prompt" | "error";
 
 export function FilesSummary({ text, tone = "done" }: { text: string; tone?: SummaryTone }) {
-  const [shown, setShown] = React.useState(text);
+  // The sentence and its icon change together, so a check never sits beside the empty-state sentence.
+  const [shown, setShown] = React.useState({ text, tone });
   React.useEffect(() => {
-    const timer = setTimeout(() => setShown(text), SUMMARY_DEBOUNCE_MS);
+    const timer = setTimeout(() => setShown({ text, tone }), SUMMARY_DEBOUNCE_MS);
     return () => clearTimeout(timer);
-  }, [text]);
+  }, [text, tone]);
   return (
     <div
       data-testid="nr-files-summary"
-      data-tone={tone}
+      data-tone={shown.tone}
       className={cn(
         "sticky bottom-2.5 z-[8] flex items-start gap-2 rounded-[9px] border bg-card/95 px-3.5 py-3 shadow-floating",
-        tone === "error" ? "border-[color-mix(in_srgb,var(--danger)_40%,var(--border))]" : "border-[color-mix(in_srgb,var(--primary)_35%,var(--border))]",
+        shown.tone === "error" ? "border-[color-mix(in_srgb,var(--danger)_40%,var(--border))]" : "border-[color-mix(in_srgb,var(--primary)_35%,var(--border))]",
       )}
     >
-      <span aria-hidden="true" className={cn("mt-0.5", tone === "done" ? "text-primary" : tone === "error" ? "text-danger" : "text-muted-foreground")}>
-        {tone === "done" ? <Check className="size-[15px]" /> : <TriangleAlert className="size-[15px]" />}
+      <span aria-hidden="true" className={cn("mt-0.5", shown.tone === "done" ? "text-primary" : shown.tone === "error" ? "text-danger" : "text-muted-foreground")}>
+        {shown.tone === "done" ? <Check className="size-[15px]" /> : <TriangleAlert className="size-[15px]" />}
       </span>
-      <p role="status" aria-live="polite" className="text-sm leading-[1.45] font-semibold">{shown}</p>
+      <p role="status" aria-live="polite" className="text-sm leading-[1.45] font-semibold">{shown.text}</p>
     </div>
   );
 }

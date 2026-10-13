@@ -68,8 +68,12 @@ const ADD_TITLE: Record<AttachKind, string> = {
 
 const STEPS: [Step, string][] = [[1, NR_FILES.STEP_TYPE], [2, NR_FILES.STEP_CHOOSE], [3, NR_FILES.STEP_MOUNT]];
 
+// Make's .files-link: the accent colour, weight 600, no underline.
+const FILES_LINK = "text-sm font-semibold text-primary hover:underline";
+const FIELD_LABEL = "text-xs font-semibold";
+
 const SELECT_CLASS =
-  "h-9 w-full max-w-[220px] rounded-md border border-input bg-input-background px-3 text-sm outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring";
+  "h-[42px] w-full max-w-[220px] rounded-md border border-border-strong bg-input-background px-3 text-sm outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring";
 
 export interface AddDialogProps {
   open: DialogOpen | null;
@@ -277,7 +281,7 @@ function DialogBody({ open, onClose, intent, src, items, folderReason, driveReas
           )}
           {s.kind === "repo" && source?.workspaceId && (
             <div className="mt-3.5 flex flex-col items-start gap-1.5">
-              <span className="text-sm font-medium">{NR_FILES.BRANCH_LABEL}</span>
+              <span className={FIELD_LABEL}>{NR_FILES.BRANCH_LABEL}</span>
               <BranchPicker
                 workspaceId={source.workspaceId}
                 repo={source.repo!}
@@ -292,15 +296,15 @@ function DialogBody({ open, onClose, intent, src, items, folderReason, driveReas
             </div>
           )}
           <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2 text-sm">
-            {s.kind === "repo" && <Link to="/workspaces" className="font-medium underline underline-offset-4">{NR_FILES.ADD_REPOSITORY}</Link>}
+            {s.kind === "repo" && <Link to="/workspaces" className={FILES_LINK}>{NR_FILES.ADD_REPOSITORY}</Link>}
             {s.kind === "userDrive" && createUserDrive?.({ choose: (id) => setS((c) => ({ ...c, sourceKey: id })), reload: reloadDrives })}
             {s.kind === "sharedDrive" && (
               <>
                 <span className="inline-flex items-center gap-2">
-                  <button type="button" disabled className="font-medium text-muted-foreground disabled:cursor-not-allowed">{NR_FILES.CREATE_SHARED_DRIVE}</button>
+                  <button type="button" disabled className="font-semibold text-muted-foreground opacity-70 disabled:cursor-not-allowed">{NR_FILES.CREATE_SHARED_DRIVE}</button>
                   <Chip>{NR_SHARED.COMING_SOON}</Chip>
                 </span>
-                {operator && <Link to="/admin/drives" className="font-medium underline underline-offset-4">{NR_FILES.MANAGE_DRIVES}</Link>}
+                {operator && <Link to="/admin/drives" className={FILES_LINK}>{NR_FILES.MANAGE_DRIVES}</Link>}
               </>
             )}
           </div>
@@ -316,30 +320,30 @@ function DialogBody({ open, onClose, intent, src, items, folderReason, driveReas
             {s.kind === "repo" && <code className="font-mono text-[13px] text-muted-foreground">{s.branch ?? source?.ref ?? editing?.branch ?? NR_FILES.BRANCH_PLACEHOLDER}</code>}
           </div>
           <div className="flex flex-col gap-1.5">
-            <label htmlFor={DIALOG_PATH_ID} className="text-sm font-medium">{NR_FILES.STEP_MOUNT}</label>
+            <label htmlFor={DIALOG_PATH_ID} className={FIELD_LABEL}>{NR_FILES.STEP_MOUNT}</label>
             {editable ? (
               <Input
                 id={DIALOG_PATH_ID}
-                className="font-mono text-[13px]"
+                className="h-[42px] font-mono text-[13px]"
                 value={s.path}
                 aria-invalid={(s.attempted && !!error) || undefined}
                 aria-describedby={errorId}
                 onChange={(e) => setS((c) => ({ ...c, path: e.target.value }))}
               />
             ) : (
-              <output id={DIALOG_PATH_ID} className="flex min-h-9 items-center rounded-md border border-border bg-muted px-3">
+              <output id={DIALOG_PATH_ID} className="flex min-h-[42px] items-center rounded-md border border-border bg-muted px-3">
                 <PathText path={shownPath} />
               </output>
             )}
             {s.attempted && error ? (
-              <p id={errorId} className="flex items-center gap-1.5 text-sm text-danger"><TriangleAlert className="size-3.5 flex-none" aria-hidden="true" />{error}</p>
+              <p id={errorId} className="flex items-center gap-1.5 text-xs text-danger"><TriangleAlert className="size-3.5 flex-none" aria-hidden="true" />{error}</p>
             ) : (
               <small id={errorId} className="text-xs text-muted-foreground">{NR_FILES.MOUNT_HINT}</small>
             )}
           </div>
           {s.kind !== "repo" && (
-            <div className="flex flex-col gap-1.5">
-              <label htmlFor="nr-mount-access" className="text-sm font-medium">{NR_FILES.ACCESS_LABEL}</label>
+            <div className="mt-4 flex flex-col gap-1.5">
+              <label htmlFor="nr-mount-access" className={FIELD_LABEL}>{NR_FILES.ACCESS_LABEL}</label>
               {source?.locked ?? editing?.locked ? (
                 <LockedAccess id="nr-dialog" />
               ) : (

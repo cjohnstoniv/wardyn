@@ -347,6 +347,76 @@ describe("the list and the Add dialog", () => {
   });
 });
 
+describe("coverage kept from the old list", () => {
+  it("a truncated branch list ends with Other…, which opens the typed field", async () => {
+    branches = { ...LISTED, truncated: true };
+    show(BACKGROUND);
+    await openAdd();
+    await pickType(NR_FILES.REPOSITORY_BADGE);
+    await pickSource("payments");
+    const picker = await within(dialog()).findByRole("combobox", { name: NR_FILES.BRANCH_ARIA("payments") });
+    await waitFor(() => expect(within(picker).getByRole("option", { name: NR_FILES.BRANCH_OTHER })).toBeInTheDocument());
+    await userEvent.selectOptions(picker, NR_FILES.BRANCH_OTHER);
+    const field = await within(dialog()).findByRole("textbox", { name: NR_FILES.BRANCH_ARIA("payments") });
+    expect(within(dialog()).queryByText(NR_FILES.BRANCH_FALLBACK, { exact: false })).toBeNull();
+    await userEvent.clear(field);
+    await userEvent.type(field, "v2");
+    expect(within(dialog()).getByText(NR_FILES.REF_NOT_CHECKED)).toBeInTheDocument();
+    await userEvent.click(dialogButton(/^Continue/));
+    await userEvent.click(dialogButton(NR_FILES.ADD_CONFIRM));
+    expect(drawn().workspaces?.[0].repos).toEqual([{ repo: "github.com/acme/payments", ref: "v2" }]);
+  });
+
+  it("an unavailable repository already in the draft still has its card and can be taken out", async () => {
+    const [payments, docs] = SCENARIO_FILES_WORKSPACES.member;
+    workspaceList = [{ ...payments, available_to_you: false }, docs];
+    show({ ...BACKGROUND, workspaces: [{ workspace_id: "ws-payments", repos: [{ repo: "github.com/acme/payments" }] }], start_folder: { kind: "attachment", attachment: "ws-payments", repo: "github.com/acme/payments" } });
+    const remove = await screen.findByRole("button", { name: NR_FILES.REMOVE_NAMED("payments") });
+    expect(remove).toBeEnabled();
+    await userEvent.click(remove);
+    expect(drawn().workspaces ?? []).toEqual([]);
+    expect(screen.queryAllByTestId("nr-attach-card")).toHaveLength(0);
+  });
+});
+
+describe("where the server starts a workspace (first target: folders before repositories)", () => {
+  const TWO_FOLDERS: Workspace = { ...FOLDER_WS, sources: [...FOLDER_WS.sources!, { type: "local_dir", path: "/srv/models", writable: true }] };
+  const starting = (name: string) => within(card(name)).queryByText(NR_FILES.STARTS_HERE);
+  const folderSelect = () => screen.findByLabelText(NR_FILES.START_FOLDER_LABEL);
+
+  it("a start on a workspace with no repository named is its first folder, not its repository", async () => {
+    show({ ...BACKGROUND, workspaces: [{ workspace_id: "ws-data", repos: [{ repo: "github.com/acme/data" }] }], start_folder: { kind: "attachment", attachment: "ws-data" } });
+    await screen.findByRole("button", { name: NR_FILES.EDIT_NAMED("data") });
+    expect(starting("datasets")).toBeInTheDocument();
+    expect(starting("data")).toBeNull();
+    // Choosing the repository names it, and the start moves; choosing the folder again sends the workspace alone.
+    await userEvent.selectOptions(await folderSelect(), "ws-data/github.com/acme/data");
+    expect(drawn().start_folder).toEqual({ kind: "attachment", attachment: "ws-data", repo: "github.com/acme/data" });
+    expect(starting("data")).toBeInTheDocument();
+    expect(starting("datasets")).toBeNull();
+    await userEvent.selectOptions(await folderSelect(), "folder:ws-data:0");
+    expect(drawn().start_folder).toEqual({ kind: "attachment", attachment: "ws-data" });
+    expect(starting("datasets")).toBeInTheDocument();
+    expect(starting("data")).toBeNull();
+  });
+
+  it("offers only a workspace's first folder as a start", async () => {
+    workspaceList = [...SCENARIO_FILES_WORKSPACES.member, TWO_FOLDERS];
+    show({ ...BACKGROUND, workspaces: [{ workspace_id: "ws-data", repos: [] }], start_folder: { kind: "attachment", attachment: "ws-data" } });
+    await screen.findByRole("button", { name: NR_FILES.EDIT_NAMED("models") });
+    const options = within(await folderSelect()).getAllByRole("option").map((o) => (o as HTMLOptionElement).value);
+    expect(options).toEqual(["folder:ws-data:0"]);
+    expect(starting("datasets")).toBeInTheDocument();
+    expect(starting("models")).toBeNull();
+  });
+
+  it("a repository with no folder beside it is the start whether or not it is named", async () => {
+    show({ ...BACKGROUND, workspaces: [{ workspace_id: "ws-payments", repos: [{ repo: "github.com/acme/payments" }] }], start_folder: { kind: "attachment", attachment: "ws-payments" } });
+    await screen.findByRole("button", { name: NR_FILES.EDIT_NAMED("payments") });
+    expect(starting("payments")).toBeInTheDocument();
+  });
+});
+
 describe("drives (GET /me/drives)", () => {
   it("adds the person's drive by its catalogue id, at the path Wardyn assigns, narrowed to read-only when asked", async () => {
     show(BACKGROUND);
@@ -547,6 +617,21 @@ describe("mount map and summary", () => {
     expect(within(card("payments")).getByTitle("/srv/checkout/payments")).toBeInTheDocument();
   });
 
+  it("lists the server's rows in the cards' order", async () => {
+    checks.result = {
+      ...filesPreflight(MAIN_DRIVE_FACTS.filesystem, 8192, "background"),
+      attachments: [
+        { kind: "drive", drive_id: YOUR_DRIVE.id, name: "Your drive", target: "/home/agent/drive", read_only: false, starts_here: false },
+        { ...REPO_ATTACHMENT, starts_here: true },
+      ],
+    };
+    show({ ...BACKGROUND, workspaces: [{ workspace_id: "ws-payments", repos: [{ repo: "github.com/acme/payments" }] }], drives: [{ drive_id: YOUR_DRIVE.id }], start_folder: { kind: "attachment", attachment: "ws-payments", repo: "github.com/acme/payments" } });
+    const map = screen.getByRole("region", { name: NR_FILES.MOUNT_TITLE });
+    await within(map).findByText("└ /home/agent/drive");
+    await screen.findByRole("button", { name: NR_FILES.EDIT_NAMED("payments") });
+    expect(within(map).getAllByRole("listitem").map((li) => li.querySelector("code")?.textContent)).toEqual(["/", "└ /home/agent/work/payments", "└ /home/agent/drive"]);
+  });
+
   it("keeps the last server answer through an edit instead of guessing a map from the draft", async () => {
     checks.result = { ...filesPreflight(MAIN_DRIVE_FACTS.filesystem), attachments: [REPO_ATTACHMENT, { kind: "drive", drive_id: "d1", name: "Notes", target: "/home/agent/drives/notes", read_only: false, starts_here: false }] };
     show({ ...INTERACTIVE, workspaces: [{ workspace_id: "ws-payments" }, { workspace_id: "ws-docs" }], start_folder: { kind: "attachment", attachment: "ws-payments" } });
@@ -577,13 +662,14 @@ describe("mount map and summary", () => {
     await add(NR_FILES.KIND_USER_DRIVE, "Your drive");
     await add(NR_FILES.FOLDER_TITLE, "datasets");
     await add(NR_FILES.KIND_SHARED_DRIVE, "Data team share");
-    expect(screen.getByTestId("nr-files-summary")).toHaveAttribute("data-tone", "done");
     // In the order they were added, not the draft's workspaces-then-drives order.
     expect(screen.getAllByTestId("nr-attach-card").map((c) => c.querySelector("strong")?.textContent))
       .toEqual(["payments", "Your drive", "datasets", "Data team share"]);
     await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent(
       `starts in payments · ${NR_FILES.SUMMARY_KEPT_MANY("Your drive, datasets and Data team share")}`,
     ), { timeout: 3000 });
+    // The icon changes with the sentence, never ahead of it.
+    expect(screen.getByTestId("nr-files-summary")).toHaveAttribute("data-tone", "done");
   });
 });
 
@@ -606,7 +692,7 @@ describe("choices and Continue", () => {
     expect(screen.getByRole("button", { name: NR_FILES.ADD_ARIA })).toHaveFocus();
     expect(go).not.toHaveBeenCalled();
     expect(screen.getAllByText(NR_FILES.CHOOSE_FILES).length).toBeGreaterThanOrEqual(1);
-    expect(screen.getByTestId("nr-files-summary")).toHaveAttribute("data-tone", "error");
+    await waitFor(() => expect(screen.getByTestId("nr-files-summary")).toHaveAttribute("data-tone", "error"), { timeout: 3000 });
     await userEvent.click(screen.getByRole("radio", { name: NR_FILES.NO_EXTRA }));
     await userEvent.click(continueButton());
     expect(go).toHaveBeenCalledWith({ screen: "step", step: "tools" });

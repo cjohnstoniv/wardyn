@@ -19,6 +19,8 @@ import { KIND_INFO, kindStyle, KindBadge, KindTile, PathText } from "./kind-visu
 import { LockedAccess } from "./locked-access";
 
 const LABEL = "text-sm font-medium text-muted-foreground";
+// Make's ghost button in a card row: 12 px, muted until hovered.
+const ACTION = "px-2.5 text-xs font-semibold text-muted-foreground hover:text-foreground max-[520px]:px-2";
 
 export function AttachCard({ item, open, onToggle, onEdit, onRemove }: {
   item: FileItem;
@@ -58,7 +60,11 @@ export function AttachCard({ item, open, onToggle, onEdit, onRemove }: {
           <span className="flex min-w-0 flex-wrap items-center gap-1.5">
             <strong className="font-semibold [overflow-wrap:anywhere]">{item.name}</strong>
             <KindBadge kind={kind} />
-            {item.starts && <Chip tone="success">{NR_FILES.STARTS_HERE}</Chip>}
+            {item.starts && (
+              <span className="inline-flex items-center whitespace-nowrap rounded-full border border-[color-mix(in_srgb,var(--success)_30%,var(--border))] bg-success-subtle px-[7px] py-[3px] text-[10px] font-semibold leading-[1.3] text-success">
+                {NR_FILES.STARTS_HERE}
+              </span>
+            )}
           </span>
         </button>
         <span className="min-w-0 truncate text-muted-foreground max-[760px]:pl-[60px] max-[760px]:[grid-area:path] max-[520px]:pl-[29px] max-[520px]:whitespace-normal">
@@ -67,8 +73,8 @@ export function AttachCard({ item, open, onToggle, onEdit, onRemove }: {
         </span>
         <span className="min-w-0 whitespace-nowrap max-[760px]:justify-self-end max-[760px]:[grid-area:access]">{access}</span>
         <span className="flex items-center justify-end gap-0.5 max-[760px]:[grid-area:actions]">
-          <Button type="button" variant="ghost" size="sm" aria-label={NR_FILES.EDIT_NAMED(item.name)} onClick={onEdit}>{NR_FILES.EDIT}</Button>
-          <Button type="button" variant="ghost" size="sm" aria-label={NR_FILES.REMOVE_NAMED(item.name)} disabled={!!item.removeBlocked} onClick={onRemove}>{NR_SHARED.REMOVE}</Button>
+          <Button type="button" variant="ghost" size="sm" className={ACTION} aria-label={NR_FILES.EDIT_NAMED(item.name)} onClick={onEdit}>{NR_FILES.EDIT}</Button>
+          <Button type="button" variant="ghost" size="sm" className={ACTION} aria-label={NR_FILES.REMOVE_NAMED(item.name)} disabled={!!item.removeBlocked} onClick={onRemove}>{NR_SHARED.REMOVE}</Button>
           {/* Why Remove is off, opened by a tap: the folder leaves only with its workspace's repositories. */}
           {item.removeBlocked && <InfoTip label={item.removeBlocked}>{item.removeBlocked}</InfoTip>}
         </span>
