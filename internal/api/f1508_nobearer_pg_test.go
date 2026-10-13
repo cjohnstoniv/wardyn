@@ -256,7 +256,7 @@ func (w *credentialWalk) present(t *testing.T, route string, c walkCaller, fc fo
 		return true
 	case "wdr_":
 		pub, _, _ := ed25519.GenerateKey(rand.Reader)
-		body, _ := json.Marshal(types.RunnerRegisterRequest{Token: fc.value, PublicKey: pub, Name: "walk-runner"})
+		body, _ := json.Marshal(types.RunnerRegisterRequest{Token: fc.value, PublicKey: pub, Name: "walk-runner", Limits: testRunnerLimits()})
 		r := w.ask(t, nil, "", http.MethodPost, "/api/v1/runners/register", string(body))
 		if r.Code != http.StatusCreated {
 			t.Errorf("%s: the runner registration door answered %d %s, want 201", who, r.Code, r.Body.String())

@@ -40,10 +40,10 @@ func Int(n int) *int { return &n }
 // sourceRank orders sources for a tie: the most specific source is named as the
 // one that bound a value two sources both bound, whatever order they came in.
 var sourceRank = map[types.LimitSource]int{
-	types.LimitSourcePool:           0,
-	types.LimitSourceGovernance:     1,
-	types.LimitSourceRunnerCapacity: 2,
-	types.LimitSourceDeployment:     3,
+	types.LimitSourcePool:       0,
+	types.LimitSourceGovernance: 1,
+	types.LimitSourceRunner:     2,
+	types.LimitSourceDeployment: 3,
 }
 
 // Effective is the one function that decides a run's CPU, memory, main-drive
@@ -249,9 +249,18 @@ func PoolSource(p types.RunnerPool, runType types.RunnerPoolRunType) (SourceLimi
 	if !l.AllowsRunType(runType) {
 		return out, &Refusal{Reason: ReasonRunTypeNotAllowed, Name: p.Name, RunType: runType}
 	}
-	amount := func(a types.RunnerPoolAmount) Bound { return Bound{Max: Int(a.Cap), Default: Int(a.Default)} }
-	duration := func(d types.RunnerPoolDuration) Bound {
+	// A field the pool leaves out is no bound of the pool's: its runners, governance and the deployment set it.
+	amount := func(a *types.RunnerPoolAmount) Bound {
+		if a == nil {
+			return Bound{}
+		}
+		return Bound{Max: Int(a.Cap), Default: Int(a.Default)}
+	}
+	duration := func(d *types.RunnerPoolDuration) Bound {
 		var b Bound
+		if d == nil {
+			return b
+		}
 		if !d.Unlimited {
 			b.Max = Int(d.MaxSec)
 		}
@@ -264,15 +273,11 @@ func PoolSource(p types.RunnerPool, runType types.RunnerPoolRunType) (SourceLimi
 	case types.RunnerPoolRunBackground:
 		b := l.Background
 		out.CPUMillis, out.MemoryMiB, out.LifetimeSec = amount(b.CPUMillis), amount(b.MemoryMiB), duration(b.Lifetime)
-		if b.DiskMiB != nil {
-			out.DiskMiB = amount(*b.DiskMiB)
-		}
+		out.DiskMiB = amount(b.DiskMiB)
 	case types.RunnerPoolRunInteractive:
 		i := l.Interactive
 		out.CPUMillis, out.MemoryMiB, out.LifetimeSec = amount(i.CPUMillis), amount(i.MemoryMiB), duration(i.Lifetime)
-		if i.DiskMiB != nil {
-			out.DiskMiB = amount(*i.DiskMiB)
-		}
+		out.DiskMiB = amount(i.DiskMiB)
 		out.IdleSec = duration(i.Idle)
 	}
 	out.ConcurrentRuns = l.MaxConcurrentRuns
@@ -380,26 +385,31 @@ func MemberCap(ceiling, profileMax, untouched int) int {
 	return max(size, untouched)
 }
 
-// RunnerCapacity is what one runner advertises for a single run.
-type RunnerCapacity struct{ CPUMillis, MemoryMiB int64 }
+// RunnerCapacity is one runner's declared per-run limit: the most one run may reserve there.
+type RunnerCapacity struct{ CPUMillis, MemoryMiB, DiskMiB int64 }
 
-// RunnerCapacitySource is a self-hosted run's runner-capacity side of Effective:
-// the weakest of its candidates, because the run may land on any of them and a
-// pool must not offer more than its smallest eligible runner can give. No
-// candidate, or one that reports no capacity, is an error: a missing fact refuses
-// the run, it is never read as zero or as unlimited.
+// RunnerCapacitySource is a pooled run's runner side of Effective: the per-run limit of ONE of its
+// candidates, the largest by CPU, then memory, then disk, so the size the run is cut to is one a real
+// runner takes whole. A cap built field by field from different runners (one's CPU, another's memory)
+// would be a size no runner takes. Placement then keeps only the candidates whose own per-run limit
+// holds the size the run gets, so the runner it is placed on always bounds it. It bounds CPU, memory and
+// the main drive alike, so no resource of a pooled run is unlimited. No candidate, or one that declares
+// no limit, is an error: a missing limit refuses the run, it is never read as zero or as unlimited.
 func RunnerCapacitySource(candidates ...RunnerCapacity) (SourceLimits, error) {
-	out := SourceLimits{Source: types.LimitSourceRunnerCapacity}
+	out := SourceLimits{Source: types.LimitSourceRunner}
 	if len(candidates) == 0 {
-		return out, errors.New("no candidate runner to take a capacity from")
+		return out, errors.New("no candidate runner to take a limit from")
 	}
-	cpu, mem := int64(math.MaxInt32), int64(math.MaxInt32)
+	best := candidates[0]
 	for _, c := range candidates {
-		if c.CPUMillis < 1 || c.MemoryMiB < 1 {
-			return out, errors.New("a candidate runner reports no capacity")
+		if c.CPUMillis < 1 || c.MemoryMiB < 1 || c.DiskMiB < 1 {
+			return out, errors.New("a candidate runner declares no per-run limit")
 		}
-		cpu, mem = min(cpu, c.CPUMillis), min(mem, c.MemoryMiB)
+		if cmp.Or(cmp.Compare(c.CPUMillis, best.CPUMillis), cmp.Compare(c.MemoryMiB, best.MemoryMiB), cmp.Compare(c.DiskMiB, best.DiskMiB)) > 0 {
+			best = c
+		}
 	}
-	out.CPUMillis.Max, out.MemoryMiB.Max = Int(int(cpu)), Int(int(mem))
+	clamp := func(v int64) *int { return Int(int(min(v, math.MaxInt32))) }
+	out.CPUMillis.Max, out.MemoryMiB.Max, out.DiskMiB.Max = clamp(best.CPUMillis), clamp(best.MemoryMiB), clamp(best.DiskMiB)
 	return out, nil
 }

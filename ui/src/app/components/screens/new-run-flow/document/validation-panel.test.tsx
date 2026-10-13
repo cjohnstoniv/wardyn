@@ -18,6 +18,13 @@ describe("ValidationPanel", () => {
     expect(screen.getByText(C.VALID)).toBeInTheDocument();
   });
 
+  it("says one issue in the singular and the plural line is unchanged", () => {
+    const { rerender } = render(<ValidationPanel id="s" status={{ kind: "issues", count: 1, lines: ["one"] }} copy={C} />);
+    expect(screen.getByText("1 issue must be fixed")).toBeInTheDocument();
+    rerender(<ValidationPanel id="s" status={{ kind: "issues", count: 2, lines: ["one", "two"] }} copy={C} />);
+    expect(screen.getByText("2 issues must be fixed")).toBeInTheDocument();
+  });
+
   it("heads the problems with their count and lists only the lines it was given", () => {
     render(<ValidationPanel id="s" status={{ kind: "issues", count: 3, lines: ["one", "two"] }} copy={C} />);
     expect(screen.getByText(C.ISSUES(3))).toBeInTheDocument();

@@ -44,7 +44,7 @@ func TestPG_PoolRunnersAndRunnerPoolsNeverCrossPeople(t *testing.T) {
 	}
 
 	own := runnersOf(e.call(e.person, http.MethodGet, path, ""))
-	if len(own) != 1 || own[0].ID != mine || own[0].Owner != "" || own[0].MaxRuns != types.RunnerMaxRunsDefault {
+	if len(own) != 1 || own[0].ID != mine || own[0].Owner != "" {
 		t.Fatalf("the owner's read of their pool = %+v, want only their own runner", own)
 	}
 	if len(own[0].Pools) != 1 || own[0].Pools[0].ID != pool.ID || own[0].Pools[0].Name != "Laptop" {
