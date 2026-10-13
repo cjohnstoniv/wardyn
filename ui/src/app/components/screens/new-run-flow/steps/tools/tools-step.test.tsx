@@ -29,7 +29,8 @@ const h = vi.hoisted(() => ({
   refresh: vi.fn(),
   connect: vi.fn(),
 }));
-vi.mock("../../draft/use-intent-checks", () => ({
+vi.mock("../../draft/use-intent-checks", async (orig) => ({
+  ...(await orig<typeof import("../../draft/use-intent-checks")>()),
   useDraftIdentity: () => ({ principal: "alice", resolved: true, revision: 1, authGeneration: 0 }),
   useIntentChecks: (params: unknown) => { h.params(params); return h.checks; },
 }));
@@ -87,6 +88,52 @@ afterEach(() => {
 });
 
 describe("Tools and access step", () => {
+  const SENTENCE = "This tool cannot be added to this run.";
+  // A fresh element each time, so a rerender is not skipped as identical.
+  const tree = () => (
+    <NewRunDraftProvider owner="alice">
+      <Seed intent={READY}><ToolsStep {...props} /><Revision /></Seed>
+    </NewRunDraftProvider>
+  );
+
+  it("Check again stays mounted and focused while the re-check is out, with no all-clear and no cards", async () => {
+    const retry = vi.fn().mockResolvedValue(undefined);
+    h.checks.preview = { result: undefined, current: false, error: new Error(SENTENCE), busy: false, retry } as never;
+    const view = render(tree());
+    const button = screen.getByRole("button", { name: NR_REVIEW.CHECK_AGAIN });
+    await userEvent.click(button);
+    expect(retry).toHaveBeenCalledTimes(1);
+    // The hook keeps the old error and turns busy on the moment the retry starts.
+    h.checks.preview = { result: undefined, current: false, error: new Error(SENTENCE), busy: true, retry } as never;
+    view.rerender(tree());
+    expect(screen.getByRole("alert")).toHaveTextContent(SENTENCE);
+    expect(screen.getByRole("button", { name: NR_REVIEW.CHECK_AGAIN })).toBe(button);
+    expect(button).toHaveFocus();
+    expect(button).toHaveAttribute("aria-busy", "true");
+    await userEvent.click(button);
+    expect(retry).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText(NR_TOOLS.SETUP_ALL_SET)).toBeNull();
+    expect(screen.queryByRole("heading", { name: NR_TOOLS.INCLUDED_TITLE })).toBeNull();
+  });
+
+  it("a refusal after an earlier answer shows no all-clear anywhere, footer included", () => {
+    const retry = vi.fn();
+    answer(SCENARIO_ACCESS.member, true);
+    const view = render(tree());
+    expect(screen.getByText(NR_TOOLS.STICKY_DONE)).toBeInTheDocument();
+    h.checks.preview = { result: undefined, current: false, error: new Error(SENTENCE), busy: false, retry } as never;
+    view.rerender(tree());
+    expect(screen.getByRole("alert")).toHaveTextContent(SENTENCE);
+    expect(screen.queryByText(NR_TOOLS.STICKY_DONE)).toBeNull();
+    expect(screen.queryByText(NR_TOOLS.SETUP_ALL_SET)).toBeNull();
+  });
+
+  it("before the first answer there is no \"Nothing else to set up\"", () => {
+    answer(undefined, false);
+    render(tree());
+    expect(screen.queryByText(NR_TOOLS.SETUP_ALL_SET)).toBeNull();
+  });
+
   it("a refused or failed preview shows the server's sentence and a way to ask again, never an all-clear", async () => {
     const retry = vi.fn().mockResolvedValue(undefined);
     const sentence = "No sandbox image on this server includes Claude Code and Codex CLI together, so the run was not created.";
