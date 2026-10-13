@@ -14,13 +14,12 @@ import { useModelAccessDoor, useShellSetupStatus } from "../../../../wardyn/mode
 import { NR_SHARED } from "../../../../wardyn/copy/new-run/shared";
 import { NR_REVIEW } from "../../../../wardyn/copy/new-run/review";
 import { NR_TOOLS } from "../../../../wardyn/copy/new-run/tools";
-import { getErrorMessage } from "../../../../../lib/format";
 import { useAdoConnect } from "../../../../../lib/hooks/use-ado-connect";
 import type { SCMAccessPAT } from "../../../../../lib/types/ado-pat";
 import type { AccessFacts } from "../../../../../lib/types/new-run-access";
 import type { HarnessSetFact } from "../../../../../lib/types/new-run-contract";
 import { intentToWire } from "../../draft/intent-to-wire";
-import { useDraftIdentity, useIntentChecks } from "../../draft/use-intent-checks";
+import { checkFailureText, useDraftIdentity, useIntentChecks } from "../../draft/use-intent-checks";
 import { useLocalIssues, useNewRunDraft, type NewRunScreenProps } from "../../new-run-route";
 import { stepIssues } from "../../lenses/local-issues";
 import { needsSetup } from "../../lenses/tools-lens";
@@ -55,8 +54,10 @@ function useAccess() {
   if (current) last.current = { access: current, harnessSet: checks.preview.result?.harness_set };
   return {
     access: current ?? last.current?.access, harnessSet: last.current?.harnessSet, answered: checks.preview.current && !!current, recheck: checks.invalidateChecks,
-    // The server refused or could not answer this body: the step has nothing true to list, and says so.
-    failure: !current && !checks.preview.busy && checks.preview.error ? getErrorMessage(checks.preview.error) || "No reason was given." : null,
+    // The server refused or could not answer this body: the step has nothing true to list, and says so. It stays
+    // up while the next check is out, so the button the person pressed is not replaced by an all-clear.
+    failure: !current && checks.preview.error ? checkFailureText(checks.preview.error) : null,
+    asking: checks.preview.busy,
     retry: checks.preview.retry,
     // The run's own Azure DevOps capabilities, as its policy resolves them.
     adoCaps: checks.preview.result?.spec?.azure_devops_capabilities,
@@ -65,7 +66,7 @@ function useAccess() {
 
 export function ToolsStep({ go }: NewRunScreenProps) {
   const draft = useNewRunDraft();
-  const { access, harnessSet, answered, recheck, adoCaps, failure, retry } = useAccess();
+  const { access, harnessSet, answered, recheck, adoCaps, failure, asking, retry } = useAccess();
   const { status } = useShellSetupStatus();
   const door = useModelAccessDoor();
   const ado = useAdoConnect();
@@ -108,7 +109,7 @@ export function ToolsStep({ go }: NewRunScreenProps) {
         start: <Button type="button" variant="ghost" onClick={() => go({ screen: "step", step: "files" })}>{NR_SHARED.BACK}</Button>,
         end: (
           <span aria-live="polite" className="self-center text-sm text-muted-foreground">
-            {access && !waiting && (missing.length === 0 ? NR_TOOLS.STICKY_DONE : missing.length === 1 ? NR_TOOLS.STICKY_ONE : NR_TOOLS.STICKY_MANY(missing.length))}
+            {access && answered && failure === null && !waiting && (missing.length === 0 ? NR_TOOLS.STICKY_DONE : missing.length === 1 ? NR_TOOLS.STICKY_ONE : NR_TOOLS.STICKY_MANY(missing.length))}
           </span>
         ),
       }}
@@ -121,7 +122,7 @@ export function ToolsStep({ go }: NewRunScreenProps) {
       ) : (
         <div role="alert" className="flex flex-col items-start gap-2 rounded-lg border border-danger/40 bg-danger-subtle p-4 text-sm text-danger">
           <p>{failure}</p>
-          <Button type="button" variant="outline" onClick={() => void retry()}>{NR_REVIEW.CHECK_AGAIN}</Button>
+          <Button type="button" variant="outline" aria-busy={asking || undefined} aria-disabled={asking || undefined} onClick={() => { if (!asking) void retry(); }}>{NR_REVIEW.CHECK_AGAIN}</Button>
         </div>
       )}
       <AddTools access={access} answered={answered} intent={draft.intent} />
@@ -141,7 +142,8 @@ export function ToolsStep({ go }: NewRunScreenProps) {
               onFallbackClick: () => void connectAdo(ado.connectFallback),
             }}
           />
-          <SetupNeeded items={items} pending={pending} done={settled} intent={draft.intent} names={names} onDone={finish} />
+          {/* Before the first answer there is nothing to say yet, not "Nothing else to set up". */}
+          {access && <SetupNeeded items={items} pending={pending} done={settled} intent={draft.intent} names={names} onDone={finish} />}
         </>
       )}
     </StepShell>
