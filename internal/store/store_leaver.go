@@ -370,10 +370,13 @@ func (s PG) SuspendIdentity(ctx context.Context, p SuspendPlan) (SuspendResult, 
 			return SuspendResult{}, fmt.Errorf("store: reset deprovision jobs: %w", err)
 		}
 	}
+	// The cutoff step also records the deactivated_at this suspension leaves on the identity: the purge's
+	// proof that the identity's current deactivation is its own (ownSuspension).
 	detail, _ := json.Marshal(map[string]int{"sessions_cut": len(cutoffSubs)})
 	if _, err = tx.Exec(ctx, `
 		INSERT INTO deprovision_jobs (identity_id, kind, step, target, state, attempts, detail)
-		VALUES ($1, $2, $3, '', 'done', 1, $4)
+		VALUES ($1, $2, $3, '', 'done', 1, $4::jsonb || jsonb_build_object('deactivated_at_us',
+		        (SELECT (extract(epoch FROM i.deactivated_at) * 1000000)::bigint FROM principal_identities i WHERE i.id = $1)))
 		ON CONFLICT (identity_id, kind, step, target) DO UPDATE
 		   SET state = 'done', attempts = deprovision_jobs.attempts + 1, detail = EXCLUDED.detail, updated_at = now()`,
 		p.IdentityID, JobKindSuspend, JobStepCutoff, detail); err != nil {

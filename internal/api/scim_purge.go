@@ -304,10 +304,11 @@ func (s *Server) SweepSCIMPurge(ctx context.Context) error {
 		due, err := st.PurgeDueIdentities(ctx, scimSweepBatch)
 		errs = append(errs, err)
 		for _, d := range due {
-			// A schedule on an identity no suspension of its own was recorded for came with another identity's
-			// suspension; it is left for an admin, and /scim/status keeps it listed as deactivated.
+			// A schedule with no proof that the identity's current deactivation is its own suspension's came
+			// with another identity's suspension, or from a version that did not record the proof; it is left
+			// for an admin, and /scim/status keeps it listed as deactivated.
 			if !d.Suspended {
-				slog.WarnContext(ctx, "api: scim: not purging a deactivated identity with no suspension of its own on the ledger",
+				slog.WarnContext(ctx, "api: scim: not purging a deactivated identity whose current deactivation is not proved its own suspension's",
 					slog.String("identity", d.ID.String()))
 				continue
 			}

@@ -343,6 +343,79 @@ func TestSCIMSweeperLeavesAScheduleWithNoSuspensionOfItsOwn(t *testing.T) {
 	}
 }
 
+// P's own suspension completed and P was reactivated; an earlier release then deactivated P alongside the
+// SCIM leaver Y, whose entra:<tenant>:<object> form is P's principal, and scheduled P's purge. P's old
+// suspension rows are no proof that its current deactivation is its own, whether this release recorded
+// them or an earlier one did: the candidate read does not count P as suspended, the mark under the row
+// lock refuses it, and the sweeper past the purge delay leaves P's identity, credential, workspace and grant
+// alone while it still purges Y on schedule.
+func TestSCIMSweeperLeavesAScheduleAfterAnOldSuspensionOfItsOwn(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		legacy bool
+	}{{"old suspension recorded by this release", false}, {"old suspension recorded by an earlier release", true}} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newSCIMEnv(t, func(c *Config) { c.SCIM.PurgeAfter = time.Hour })
+			ctx := t.Context()
+			f := e.seedPurgeSubject(purgeSub, purgeEmail, purgeOID)
+			o := e.seedOtherIssuersPrincipal("entra:"+e.tenant+":"+purgeOID, purgeOID)
+			p, err := e.st.GetIdentityByObject(ctx, o.issuer, e.tenant, purgeOID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			// P's own suspension, completed, then P's reactivation.
+			if _, err := e.st.SuspendIdentity(ctx, store.SuspendPlan{IdentityID: p.ID, Principal: o.p, Principals: []string{o.p}}); err != nil {
+				t.Fatal(err)
+			}
+			if tc.legacy {
+				if _, err := e.pool.Exec(ctx, `UPDATE deprovision_jobs SET detail = detail - 'deactivated_at_us' WHERE identity_id = $1`, p.ID); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err := e.st.ApplyIdentityUpdate(ctx, p.ID, store.IdentityUpdate{Reactivate: true}, time.Now().UTC()); err != nil {
+				t.Fatal(err)
+			}
+			// Y's suspension deactivates P alongside; the schedule on P is the one an earlier release wrote.
+			e.suspendOn(e.a, purgeEmail)
+			if _, err := e.pool.Exec(ctx, `UPDATE principal_identities SET purge_after = now() - interval '1 minute' WHERE id = $1`, p.ID); err != nil {
+				t.Fatal(err)
+			}
+			if p, err = e.st.GetIdentity(ctx, p.ID); err != nil || p.DeactivatedAt == nil || p.PurgeAfter == nil {
+				t.Fatalf("control: %q's identity = %+v (%v), want it deactivated and scheduled", o.p, p, err)
+			}
+			if jobs, err := e.st.ListDeprovisionJobs(ctx, p.ID, store.JobKindSuspend); err != nil || len(jobs) == 0 {
+				t.Fatalf("control: %q's suspension ledger = %+v (%v), want its old rows kept", o.p, jobs, err)
+			}
+
+			due, err := e.st.PurgeDueIdentities(ctx, 50)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, d := range due {
+				if d.ID == p.ID && d.Suspended {
+					t.Errorf("the candidate read counts %q's old suspension as proof of its current deactivation", o.p)
+				}
+			}
+			if marked, err := e.st.MarkIdentityPurged(ctx, p.ID, true); err != nil || marked {
+				t.Fatalf("the sweeper's mark on %q = %v (%v), want it refused under the row lock", o.p, marked, err)
+			}
+			if err := e.sweepPastThePurgeDelay(); err != nil {
+				t.Errorf("sweep: %v", err)
+			}
+			e.keptRecords(o, "after the sweeper")
+			if p, err = e.st.GetIdentity(ctx, p.ID); err != nil || p.PurgedAt != nil {
+				t.Errorf("%q's identity = %+v (%v), want it not purged", o.p, p, err)
+			}
+			if row := e.identity(f.id); row.PurgedAt == nil {
+				t.Errorf("the leaver's identity = %+v, want it purged on schedule", row)
+			}
+			if n := e.credentialCount(purgeSub); n != 0 {
+				t.Errorf("the leaver kept %d credentials", n)
+			}
+		})
+	}
+}
+
 // A SCIM row no sign-in bound, whose entra:<tenant>:<object> form is another issuer's principal P: the
 // suspension cuts the form, and the purge refuses its destructive steps, so P's credential, workspace and
 // grant survive the DELETE and the sweeper.

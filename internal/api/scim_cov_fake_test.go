@@ -485,7 +485,7 @@ func (s *scimCovStore) SuspendIdentity(_ context.Context, p store.SuspendPlan) (
 		})
 	}
 	cutoff := store.JobKey{Step: store.JobStepCutoff}
-	detail := map[string]int{"sessions_cut": len(p.CutoffSubs)}
+	detail := map[string]int{"sessions_cut": len(p.CutoffSubs), "deactivated_at_us": int(target.DeactivatedAt.UnixMicro())}
 	if j := s.findJob(p.IdentityID, store.JobKindSuspend, cutoff); j != nil {
 		j.Done, j.Attempts, j.Detail = true, j.Attempts+1, detail
 	} else {
@@ -609,7 +609,7 @@ func (s *scimCovStore) MarkIdentityPurged(_ context.Context, id uuid.UUID, requi
 	if !ok {
 		return false, store.ErrNotFound
 	}
-	due := i.DeactivatedAt != nil && i.PurgeAfter != nil && !i.PurgeAfter.After(s.now)
+	due := i.DeactivatedAt != nil && i.PurgeAfter != nil && !i.PurgeAfter.After(s.now) && s.ownSuspension(i)
 	if i.PurgedAt != nil || (requireDue && !due) {
 		return false, nil
 	}
@@ -621,6 +621,13 @@ func (s *scimCovStore) MarkIdentityPurged(_ context.Context, id uuid.UUID, requi
 	return true, nil
 }
 
+// ownSuspension mirrors the store's proof that i's current deactivation is its own suspension's: its done
+// cutoff step records the deactivated_at i carries now. Callers hold s.mu.
+func (s *scimCovStore) ownSuspension(i *store.PrincipalIdentity) bool {
+	j := s.findJob(i.ID, store.JobKindSuspend, store.JobKey{Step: store.JobStepCutoff})
+	return j != nil && j.Done && i.DeactivatedAt != nil && j.Detail["deactivated_at_us"] == int(i.DeactivatedAt.UnixMicro())
+}
+
 func (s *scimCovStore) PurgeDueIdentities(_ context.Context, _ int) ([]store.DueIdentity, error) {
 	s.mu.Lock()
 	if err := s.enter("PurgeDueIdentities"); err != nil {
@@ -630,9 +637,7 @@ func (s *scimCovStore) PurgeDueIdentities(_ context.Context, _ int) ([]store.Due
 	var suspended, out []store.DueIdentity
 	for _, id := range s.order {
 		if i := s.idents[id]; i.PurgedAt == nil && i.DeactivatedAt != nil && i.PurgeAfter != nil && !i.PurgeAfter.After(s.now) {
-			d := store.DueIdentity{ID: id, Suspended: slices.ContainsFunc(s.jobs, func(j *store.DeprovisionJob) bool {
-				return j.IdentityID == id && j.Kind == store.JobKindSuspend
-			})}
+			d := store.DueIdentity{ID: id, Suspended: s.ownSuspension(i)}
 			if d.Suspended {
 				suspended = append(suspended, d)
 			} else {
