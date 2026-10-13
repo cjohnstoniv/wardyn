@@ -61,7 +61,6 @@ describe("StepShell", () => {
     render(
       <StepShell
         title="Review"
-        back={{ label: "Back", onBack: vi.fn() }}
         primary={{ label: "Launch run", onActivate: vi.fn(), arrow: false }}
         headingAside={<span>Toggle</span>}
         footerExtras={{ start: <button type="button">Save</button>, end: <button type="button">Check again</button> }}
@@ -71,6 +70,13 @@ describe("StepShell", () => {
     const footer = screen.getByRole("contentinfo");
     expect([...footer.querySelectorAll("button")].map((b) => b.textContent)).toEqual(["Save", "Check again", "Launch run"]);
     expect(screen.queryByRole("button", { name: "Back" })).toBeNull();
+  });
+
+  it("refuses Back together with footer extras by type, since extras replace Back", () => {
+    // The directive is the assertion: `tsc -p tsconfig.check.json` fails when the pair is accepted.
+    // @ts-expect-error back and footerExtras are exclusive
+    render(<StepShell title="Review" back={{ label: "Back", onBack: vi.fn() }} footerExtras={{ start: <span>Save</span> }} />);
+    expect(screen.getByText("Save")).toBeInTheDocument();
   });
 
   it("pins the footer to the bottom only when asked", () => {
