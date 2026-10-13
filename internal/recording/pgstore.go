@@ -59,6 +59,41 @@ func readCapped(r io.Reader, limit int) ([]byte, error) {
 	}
 }
 
+// castSaveSlots is the process's payload-buffer budget for PGStore saves, shared
+// by every PGStore: an admitted save may regrow its buffer once to the full
+// cap, so two slots spend 2 x 64 MiB = 128 MiB of read buffers. pgx then
+// copies the bytea twice while sending it (parameter buffer, wire buffer), so
+// two maximum saves can briefly hold about 2 x 192 MiB = 384 MiB, which leaves
+// room inside the chart's 512 MiB limit for caller snapshots (an attach
+// session's is at most 8 MiB) and the rest of the daemon. Two is also the
+// number of concurrent maximum uploads readCapped is written to survive.
+//
+// ponytail: a slot is held while the upload streams in, so slow uploads queue
+// faster ones behind them; a byte-weighted admission at the regrow would lift
+// that if small casts ever need to pass large ones.
+var castSaveSlots = make(chan struct{}, 2)
+
+// castSaveWait runs when a save finds every slot held and is about to wait.
+var castSaveWait = func() {}
+
+// admitCastSave takes a castSaveSlots slot, waiting until one frees or ctx
+// ends; a waiter that leaves holds nothing.
+func admitCastSave(ctx context.Context) (release func(), err error) {
+	release = func() { <-castSaveSlots }
+	select {
+	case castSaveSlots <- struct{}{}:
+		return release, nil
+	default:
+	}
+	castSaveWait()
+	select {
+	case castSaveSlots <- struct{}{}:
+		return release, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
 // PGStore is a Postgres-backed Store. Unlike FSStore (per-pod directory), a cast saved via
 // one replica is immediately visible through any other. The zero value is unusable; use
 // NewPGStore.
@@ -89,6 +124,12 @@ func (s *PGStore) SaveCast(ctx context.Context, runID string, r io.Reader) error
 	if err := validKey(runID); err != nil {
 		return err
 	}
+	// Admitted before the first byte is buffered, held until the row is sent.
+	release, err := admitCastSave(ctx)
+	if err != nil {
+		return err
+	}
+	defer release()
 	// Read fully (bounded), not streamed: pgx sends a bytea parameter as a
 	// single []byte, so a too-large cast is rejected before any INSERT.
 	data, err := readCapped(contextReader{ctx, r}, maxCastBytes)
