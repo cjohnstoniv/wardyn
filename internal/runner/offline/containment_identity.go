@@ -25,17 +25,38 @@ func missingIdentityAction(a runnerwire.PendingAction) bool {
 
 // containmentIdentity requires a previously checked deterministic local ref.
 // The org action may recover containment authority, never execution identity.
-func (m *Manager) containmentIdentity(ctx context.Context, a runnerwire.PendingAction, local string) (localRun, error) {
+// proof is lostProof's answer for the same action.
+func (m *Manager) containmentIdentity(a runnerwire.PendingAction, local string, proof error) (localRun, error) {
 	if !missingIdentityAction(a) {
 		return localRun{}, errors.New("missing local identity only permits exact queued containment")
 	}
-	if err := m.proveLost(ctx, local); err != nil {
-		return localRun{}, err
+	if proof != nil {
+		return localRun{}, proof
 	}
 	r := localRun{RunID: a.RunID, Ref: local, ContainmentOnly: true, Lease: runnerwire.Lease{RunID: a.RunID}}
 	m.state.Runs[a.RunID] = r
 	m.state.Actions[a.ID] = appliedAction{Action: a}
 	return r, m.save()
+}
+
+// errNoProof answers for an action whose run the runner held when lostProof
+// looked; it reaches containment only if the run was dropped since.
+var errNoProof = errors.New("lost-identity proof was not taken; retry the action")
+
+// lostProof proves, outside the manager lock and within proofTimeout, the ref
+// a queued containment action names when the runner holds no record of its
+// run, so a hung engine never holds up other manager calls.
+func (m *Manager) lostProof(ctx context.Context, a runnerwire.PendingAction) error {
+	m.mu.Lock()
+	_, held := m.state.Runs[a.RunID]
+	m.mu.Unlock()
+	local, belongs := strings.CutPrefix(a.Ref, placement.RunnerRefPrefix(m.runnerID.String()))
+	if held || !belongs || local == "" || local != m.expectedRef(a.RunID) || !missingIdentityAction(a) {
+		return errNoProof
+	}
+	prove, cancel := context.WithTimeout(ctx, m.proofTimeout)
+	defer cancel()
+	return m.proveLost(prove, local)
 }
 
 // proveLost refuses a lost-identity ref the substrate cannot prove a sandbox
@@ -53,7 +74,7 @@ func (m *Manager) proveLost(ctx context.Context, local string) error {
 	return nil
 }
 
-func (m *Manager) pendingRun(ctx context.Context, a runnerwire.PendingAction) (localRun, error) {
+func (m *Manager) pendingRun(a runnerwire.PendingAction, proof error) (localRun, error) {
 	if a.ID == uuid.Nil {
 		return localRun{}, errors.New("pending action has no identity")
 	}
@@ -61,7 +82,7 @@ func (m *Manager) pendingRun(ctx context.Context, a runnerwire.PendingAction) (l
 	local, belongs := strings.CutPrefix(a.Ref, placement.RunnerRefPrefix(m.runnerID.String()))
 	if !ok && belongs && local != "" && local == m.expectedRef(a.RunID) {
 		var err error
-		r, err = m.containmentIdentity(ctx, a, local)
+		r, err = m.containmentIdentity(a, local, proof)
 		if err != nil {
 			return localRun{}, err
 		}
