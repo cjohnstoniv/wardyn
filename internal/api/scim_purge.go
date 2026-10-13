@@ -32,7 +32,9 @@ import (
 //  3. every step below, each idempotent and recorded in deprovision_jobs under kind purge: stored
 //     credentials and masking copies erased through erasure.Orchestrate, workspaces handed to the
 //     operator, user-subject grants and assignments deleted, runners and their unused registration
-//     tokens revoked, then one person.deprovision row.
+//     tokens revoked, the person's invitations deleted and their name cleared from others' invitations
+//     and from service identities, then one person.deprovision row. A service identity they still
+//     sponsor keeps its step pending, naming it, until it is handed to another sponsor or retired.
 //
 // The grants and assignments are deleted by a direct store call, not the GOV4 apply path. That is the one
 // ungoverned delete of deny rows, and it is safe because the tombstone's subject can never authenticate
@@ -43,6 +45,8 @@ const (
 	jobStepWorkspaces = "workspaces"
 	jobStepGrants     = "grants"
 	jobStepRunners    = "runners"
+	jobStepInvites    = "invitations"
+	jobStepSponsor    = "service_identities"
 
 	// scimSweepBatch caps how many identities one sweep tick handles of each kind; the rest wait a tick.
 	scimSweepBatch = 50
@@ -103,7 +107,7 @@ func (s *Server) finishPurge(ctx context.Context, st scimStore, id uuid.UUID, sl
 	isEmail := func(t string) bool { return strings.Contains(t, "@") && !slices.Contains(forms.bound, t) }
 	principals := slices.DeleteFunc(slices.Clone(forms.targets), isEmail)
 	emails := slices.DeleteFunc(slices.Clone(forms.targets), func(t string) bool { return !isEmail(t) })
-	keys := []store.JobKey{{Step: jobStepWorkspaces}, {Step: jobStepGrants}, {Step: jobStepRunners}}
+	keys := []store.JobKey{{Step: jobStepWorkspaces}, {Step: jobStepGrants}, {Step: jobStepRunners}, {Step: jobStepInvites}, {Step: jobStepSponsor}}
 	for _, p := range principals {
 		keys = append(keys, store.JobKey{Step: jobStepErase, Target: p})
 	}
@@ -125,6 +129,12 @@ func (s *Server) finishPurge(ctx context.Context, st scimStore, id uuid.UUID, sl
 		}),
 		s.purgeStep(ctx, st, id, jobs, store.JobKey{Step: jobStepRunners}, func() (map[string]int, error) {
 			return s.revokeLeaverRunners(ctx, principals)
+		}),
+		s.purgeStep(ctx, st, id, jobs, store.JobKey{Step: jobStepInvites}, func() (map[string]int, error) {
+			return eraseLeaverInvitations(ctx, s.cfg.Store, principals)
+		}),
+		s.purgeStep(ctx, st, id, jobs, store.JobKey{Step: jobStepSponsor}, func() (map[string]int, error) {
+			return eraseLeaverSponsorships(ctx, s.cfg.Store, principals)
 		}),
 	}
 	for _, p := range principals {
@@ -227,6 +237,53 @@ func (s *Server) revokeLeaverRunners(ctx context.Context, owners []string) (map[
 				mustJSON(map[string]any{"owner": t.Owner, "minted_by": t.MintedBy, "expires_at": t.ExpiresAt})))
 			detail["runner_tokens_revoked"]++
 		}
+	}
+	return detail, nil
+}
+
+// eraseLeaverInvitations deletes the invitations that target the principals and clears them from the
+// ones they created or revoked. A store without invitations holds none.
+func eraseLeaverInvitations(ctx context.Context, st store.Store, principals []string) (map[string]int, error) {
+	detail := map[string]int{"invitations_deleted": 0, "invitations_cleared": 0}
+	pg, ok := st.(store.PG)
+	if !ok {
+		return detail, nil
+	}
+	for _, p := range principals {
+		deleted, cleared, err := pg.EraseInvitationsOf(ctx, p)
+		if err != nil {
+			return nil, err
+		}
+		detail["invitations_deleted"] += deleted
+		detail["invitations_cleared"] += cleared
+	}
+	return detail, nil
+}
+
+// errStillSponsoring keeps a purge's service-identity step pending: a sponsor is what the identity's
+// tokens and runs are checked against, so it is handed over or the identity retired, never cleared.
+var errStillSponsoring = errors.New("the person still sponsors service identities")
+
+// eraseLeaverSponsorships clears the principals as the creator, suspender or retirer of a service
+// identity, and fails, naming them, while one still sponsors an identity that is not retired.
+func eraseLeaverSponsorships(ctx context.Context, st store.Store, principals []string) (map[string]int, error) {
+	detail := map[string]int{"service_identities_cleared": 0}
+	pg, ok := st.(store.PG)
+	if !ok {
+		return detail, nil
+	}
+	var sponsored []string
+	for _, p := range principals {
+		cleared, names, err := pg.EraseServiceIdentityAttributionOf(ctx, p)
+		if err != nil {
+			return nil, err
+		}
+		detail["service_identities_cleared"] += cleared
+		sponsored = append(sponsored, names...)
+	}
+	if len(sponsored) > 0 {
+		return nil, fmt.Errorf("%w: %s; hand each to another sponsor (PATCH /service-identities/{name}) or retire it (DELETE)",
+			errStillSponsoring, strings.Join(sponsored, ", "))
 	}
 	return detail, nil
 }

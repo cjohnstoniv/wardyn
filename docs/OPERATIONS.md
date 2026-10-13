@@ -1212,6 +1212,8 @@ erases one person's retained records by explicit scope, in one audited act
   `person.erasure` row records a `failure` naming each scope's outcome, and a retry with the same scopes finishes the
   rest.
 - Erasure is reported complete (`200`, `outcome` success) only when every scope asked for finished.
+- No scope reaches runners, invitations or service identities; a [purge](#what-a-purge-removes) does, but a retired
+  service identity keeps its last sponsor.
 
 - **A launch intent (a run's setup, kept for Run again) is erased with every launch whose run insert began before the erase.**
   - A run's insert takes a per-person Postgres lock first, shared and without waiting, and writes the intent in the same transaction.
@@ -1370,6 +1372,7 @@ erases one person's retained records by explicit scope, in one audited act
 | Workspaces | With `WARDYN_SCIM_LEAVER_WORKSPACES` set to `reassign` (the default), each workspace the person owns goes to the operator, audited as `workspace.reassign`; `keep` leaves them |
 | Grants | User-subject grants and governance assignments: see [Grants](#grants) |
 | Runners | Revoked with their unused registration tokens (`DELETE /runners/...`) |
+| Invitations, service identities | Invitations to the person deleted, their name cleared from the rest. One they still sponsor keeps the purge pending until handed over (`PATCH /service-identities/{name}`) or retired |
 | Drives | Listed by name in `person.deprovision`, never reclaimed. Reclaim storage with the steps in "Reclaiming a departed person's storage" |
 
 - The identity row stays as a tombstone with `purged_at` set.
