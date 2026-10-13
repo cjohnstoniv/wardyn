@@ -66,9 +66,22 @@ func poolMembers(cmd *cobra.Command, c *sdk.Client, pool sdk.RunnerPool, runnerA
 		}
 		return c.ListRemoteRunners(ctx)
 	}
+	var members []sdk.RunnerPoolMemberView
+	if !add {
+		var err error
+		if members, err = c.ListRunnerPoolMembers(ctx, pool.ID); err != nil {
+			return err
+		}
+	}
 	var done []string
 	for _, arg := range runnerArgs {
-		ref, err := resolveRunner(cmd, c, arg, remotes)
+		var ref runnerRef
+		var err error
+		if add {
+			ref, err = resolveRunner(cmd, c, arg, remotes)
+		} else {
+			ref, err = resolveMember(pool, members, arg)
+		}
 		if err != nil {
 			return err
 		}
