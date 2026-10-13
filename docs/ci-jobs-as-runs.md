@@ -13,7 +13,7 @@
 | Deployment default policy | The policy for every principal no profile binds, and the grant eligibility a profile can only narrow (which secret a grant may name) | Operator, at boot | `WARDYN_DEFAULT_POLICY` |
 | Governance profile | The CI principal's ceiling: egress list, confinement floor, eligible grants; no interactive runs, no user drive, a cap on concurrent runs | Admin | `wardyn governance set` |
 | Image capability | The one custom image the CI principal may launch | Admin | `/permissions` |
-| Runner token | Stored by the CI principal, delivered to the run as an `env_secret` grant | CI principal | `wardyn secret set` |
+| Runner token | Stored by an admin as a shared secret, because a service identity's token is refused `secret set`; delivered to the run as an `env_secret` grant | Admin | `wardyn secret set --shared` |
 | Run policy | This job's own egress list and grants, inside the ceiling | Your repo | `--policy-file` |
 | Launch | `wardyn run --wait`: the job's exit code is the command's | Your launcher | `wardyn run` |
 
@@ -21,9 +21,9 @@
 
 1. **A control plane with sign-in, and a CI principal that is not an admin.**
    - A profile binds a signed-in principal below `admin`; the admin token and local mode are exempt from every ceiling ([three-roles.md](operations/three-roles.md#three-roles-and-who-sets-the-walls)).
-   - Give CI a dedicated person (role `user`) and mint that person's own `wdn_` token, as [CI.md](CI.md#cis-identity) describes.
+   - Give CI a dedicated service identity, `service:<name>`, with a named person as its sponsor, and have the sponsor mint its `wdn_` token, as [CI.md](CI.md#cis-identity) describes. A person's token is not the CI credential.
    - Export it as `WARDYN_TOKEN` on the launcher.
-   - `CI_USER` below is that person's email or sign-in subject.
+   - `CI_USER` below is the identity's principal, `service:<name>`.
 2. **The CLI on the launcher**, with `WARDYN_URL` set to the control plane.
 3. **The forge's address as `host:port`**, in `FORGE`.
    - A forge on a private address is refused by the proxy's private-address guard unless it is declared.
@@ -51,8 +51,7 @@ cat > deployment-default.json <<'EOF'
   "eligible_grants": [
     {
       "kind": "env_secret",
-      "scope": {"name": "RUNNER_TOKEN", "secret_name": "runner-registration-token"},
-      "owner_only": true
+      "scope": {"name": "RUNNER_TOKEN", "secret_name": "runner-registration-token"}
     }
   ],
   "auto_stop_after_sec": 3600
@@ -99,8 +98,7 @@ cat > ci-governance.json <<EOF
         "eligible_grants": [
           {
             "kind": "env_secret",
-            "scope": {"name": "RUNNER_TOKEN", "secret_name": "runner-registration-token"},
-            "owner_only": true
+            "scope": {"name": "RUNNER_TOKEN", "secret_name": "runner-registration-token"}
           }
         ],
         "auto_stop_after_sec": 3600
@@ -161,19 +159,19 @@ curl -sS -X PUT "$WARDYN_URL/api/v1/permissions/availability/image/${RUNNER_IMAG
 
 ## 4. Store the runner token
 
-- The CI principal stores its own row.
-- `owner_only` in the grant means a run reads that row and never the operator's.
+- A service identity's token cannot store a secret: `secret set` answers `403` `service_scope`, and nothing else writes into its namespace.
+- So an admin stores the row as a shared secret, in the operator namespace.
+- The grants above leave out `owner_only`, so the run reads the CI principal's own namespace first and falls back to that shared row. An `owner_only` grant would fail closed on every run.
 - The value is the registration token your forge issues (see the worked example below), and it comes from stdin because argv is readable in `ps`.
 
 ```sh
-# ci
-printf '%s' "$RUNNER_TOKEN_VALUE" | wardyn secret set runner-registration-token
-wardyn secret list
+# admin
+printf '%s' "$RUNNER_TOKEN_VALUE" | wardyn secret set runner-registration-token --shared
+wardyn secret list --shared
 ```
 
-- `secret list` shows `runner-registration-token (mine)`.
 - There is no command that reads the value back.
-- Rotate it by running `secret set` again.
+- Rotate it by running `secret set --shared` again.
 
 ## 5. Write the run policy
 
@@ -190,8 +188,7 @@ cat > ci-runner-policy.json <<EOF
   "eligible_grants": [
     {
       "kind": "env_secret",
-      "scope": {"name": "RUNNER_TOKEN", "secret_name": "runner-registration-token"},
-      "owner_only": true
+      "scope": {"name": "RUNNER_TOKEN", "secret_name": "runner-registration-token"}
     }
   ],
   "auto_stop_after_sec": 3600
@@ -345,7 +342,7 @@ wardyn audit "$RUN_ID"
 | `run.create` | Who launched it, the task mode, the confinement class, whether the policy was inline, and any clamp warnings |
 | `run.build` | The wrapped image and, as `byoi_base`, the exact image ref the job started from |
 | `run.ceiling.reassert` | The governance profile that bounded it, by name |
-| `run.env_secret.resolve` | The variable name, the secret name and whose row was read (`own`). Never the value |
+| `run.env_secret.resolve` | The variable name, the secret name and whose row was read (`own` or `operator`). Never the value |
 | `run.policy.resolve` | The effective policy after clamping |
 | `run.exec` | The command the sandbox ran |
 | `egress.allow` / `egress.deny` | Every outbound decision: host, path, port, method and the `rule_source` that decided it. A repeated decision collapses into one row with a repeat count |
@@ -450,6 +447,6 @@ echo "exit $?"
 - Every command above ran, as written, against a throwaway compose install of this tree
   - (`wardynd` built from source, the `sso` profile with Dex as the identity provider, Docker as the runner so only the Fence class exists)
   - and a Forgejo 11 container, using Forgejo runner v11.3.1.
-- The CI principal was a real signed-in `user` with its own token.
+- The CI principal was a real signed-in `user` with its own token, which stored its own row; the service-identity form (steps 1 and 4) was not re-run.
 - The step 1 settings were applied to that install as described, and the workflow file was pushed through Forgejo's API rather than `git push`.
 - The Helm chart route is named, not run.
