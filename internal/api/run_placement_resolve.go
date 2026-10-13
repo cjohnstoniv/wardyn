@@ -61,6 +61,9 @@ type runPlacement struct {
 	// waitsForRoom: no runner of the pool that could take the run has room for it now (its Runs at once
 	// or a total), so the run waits in the pool's queue rather than being refused.
 	waitsForRoom bool
+	// unbound is the size the run gets before a runner's per-run limit bounds it (a disk of 0: its
+	// runner's per-run disk), set by stepPlacement on a launch that waits.
+	unbound *types.RunnerAmounts
 }
 
 // placementInput is what the fold knows of the run when it resolves where it goes.
@@ -284,7 +287,13 @@ func (s *Server) offerKind(ctx context.Context, f placementInput, pool types.Run
 	}
 	ask := types.RunnerAmounts{CPUMillis: int64(f.ask.CPUMillis), MemoryMiB: int64(f.ask.MemoryMiB), DiskMiB: int64(cmp.Or(requestDisk, f.policyDiskMiB))}
 	fit, _ := eligibleTargets(targets, demand)
-	limits, applied, refusal := s.runSize(ctx, f, &pool, runnerSource(fit, f.req.RunnerID, ask))
+	// A promoted run's start is sized by the runner its promotion found room on, the size the promotion
+	// admitted it at, so the start and the promotion agree.
+	source := f.req.RunnerID
+	if bound := promotedTarget(ctx); source == "" && slices.ContainsFunc(fit, func(t poolTarget) bool { return t.id == bound }) {
+		source = bound
+	}
+	limits, applied, refusal := s.runSize(ctx, f, &pool, runnerSource(fit, source, ask))
 	if refusal != nil {
 		return kindOffer{}, refusal
 	}
