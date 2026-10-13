@@ -163,8 +163,6 @@ export const POOLS = {
   RUN_TYPES_BACKGROUND: "Background only",
   RUN_TYPES_INTERACTIVE: "Interactive only",
   NARROWED: (resources: string) => `${resources} per run narrowed`,
-  /** pending owner wording: a pool that sets an amount without narrowing its runners' maximum. */
-  SET: (resources: string) => `${resources} per run set`,
   RUNS_MAX: (n: number) => `${n} runs maximum`,
   POOL_LIMITS: (parts: string) => `Pool limits: ${parts}`,
   DEFAULT_MADE: (name: string) => `${name} is now the organization default`,
