@@ -159,11 +159,62 @@ func orNop(f func()) func() {
 // "building" only while a build is actually running. nil for a caller whose id
 // is not a run (the workspace Build step passes a build id).
 func (s *Server) resolveWorkspaceImage(ctx context.Context, runID uuid.UUID, primary types.Workspace, logSink io.Writer, announceBuild func()) (string, bool) {
+	res := s.resolveWorkspaceImageWith(ctx, runID, primary, logSink, announceBuild, imageResolveOpts{})
+	return res.Image, res.OK
+}
+
+// imageResolveOpts are what the workspace Build door asks of resolveWorkspaceImageWith beyond a
+// run launch's resolve.
+type imageResolveOpts struct {
+	// Refresh rebuilds from fresh inputs whatever the row caches (reason `refresh`): no cache hit
+	// is taken, the generated lane resolves its inputs anew, and a wrapped base is pulled again.
+	Refresh bool
+	// ObservedRef is the image_ref the requester saw; a Refresh swaps against it, not against a
+	// ref read after the build.
+	ObservedRef string
+	// ReclaimLoser removes a build's own tag when its swap is lost, and reports the loss as not
+	// OK. The build door sets it; a run launch keeps its image, which its run is about to start.
+	ReclaimLoser bool
+}
+
+// observedRef is the ref the swap compares against: what the requester saw (a refresh) or
+// the row snapshot.
+func (o imageResolveOpts) observedRef(primary types.Workspace) string {
+	if o.Refresh {
+		return o.ObservedRef
+	}
+	return primary.ImageRef
+}
+
+// reason is why the build runs: a refresh says so, else the cache's own answer.
+func (o imageResolveOpts) reason(primary types.Workspace, key string) string {
+	if o.Refresh {
+		return types.ImageBuildReasonRefresh
+	}
+	return imageBuildReason(primary, key)
+}
+
+// imageResolveResult is resolveWorkspaceImageWith's answer. Superseded is a lost swap: the image
+// built, but another build owns image_ref. With ReclaimLoser the loser's tag is gone and OK is false.
+type imageResolveResult struct {
+	Image          string
+	OK, Superseded bool
+	Record         *types.ImageBuild
+}
+
+// resolveWorkspaceImageWith is resolveWorkspaceImage with opts, and the full answer.
+func (s *Server) resolveWorkspaceImageWith(ctx context.Context, runID uuid.UUID, primary types.Workspace, logSink io.Writer,
+	announceBuild func(), opts imageResolveOpts) imageResolveResult {
 	announce := orNop(announceBuild)
+	fail := imageResolveResult{}
+	reasonFor := func(key string) string { return opts.reason(primary, key) }
 	buildAudit := func(outcome string, extra map[string]any) {
 		extra["workspace_id"] = primary.ID.String()
 		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.build",
 			runID.String(), outcome, mustJSON(extra)))
+	}
+	commit := func(rec *types.ImageBuild, extra map[string]any) imageResolveResult {
+		return s.commitImage(ctx, primary, opts, rec, extra, buildAudit)
 	}
 
 	// An explicit base-image CHOICE takes precedence over everything below.
@@ -181,7 +232,7 @@ func (s *Server) resolveWorkspaceImage(ctx context.Context, runID uuid.UUID, pri
 				"source": "base_image:" + b.Kind, "base": b.Image,
 				"reason": "no image builder wired; base image dropped for the convention image",
 			})
-			return "", false
+			return fail
 		}
 		// Cache the wrap PER (workspace, base ref): without it, a record/replay
 		// session would re-wrap the SAME base image on every single session
@@ -193,11 +244,11 @@ func (s *Server) resolveWorkspaceImage(ctx context.Context, runID uuid.UUID, pri
 		// to a different base ref) always busts the cache instead of reading a
 		// stale image built for a different source.
 		byoiHash := byoiCacheKey(b.Kind, b.Image)
-		if primary.ImageRef != "" && primary.BuiltProfileHash == byoiHash && s.cachedImageStillPresent(ctx, primary.ImageRef) {
+		if !opts.Refresh && primary.ImageRef != "" && primary.BuiltProfileHash == byoiHash && s.cachedImageStillPresent(ctx, primary.ImageRef) {
 			hit := map[string]any{"source": "base_image:" + b.Kind, "base": b.Image, "image": primary.ImageRef, "cache_hit": true}
 			s.addCacheHitFields(ctx, primary, hit)
 			buildAudit("success", hit)
-			return primary.ImageRef, true
+			return imageResolveResult{Image: primary.ImageRef, OK: true}
 		}
 		// Wrap the operator's base image the SAME way the workspace_id door does:
 		// FinalizeBase copies the runner tools + agent-run in and tags it
@@ -208,28 +259,25 @@ func (s *Server) resolveWorkspaceImage(ctx context.Context, runID uuid.UUID, pri
 		// "custom" Steps are not layered here (no builder method layers Dockerfile
 		// lines on a base yet) — same as the req.Image path's own verbatim wrap.
 		outTag := "wardyn-byoi/" + runID.String() + ":latest"
-		reason := imageBuildReason(primary, byoiHash)
+		reason := reasonFor(byoiHash)
 		announce()
-		built, berr := s.cfg.ImageBuilder.FinalizeBase(ctx, b.Image, outTag, logSink)
+		built, berr := s.cfg.ImageBuilder.FinalizeBase(ctx, b.Image, outTag, logSink, opts.Refresh)
 		if berr != nil {
 			buildAudit("failure", map[string]any{"source": "base_image:" + b.Kind, "base": b.Image, "error": berr.Error()})
-			return "", false
+			return fail
 		}
 		in := types.ImageBuildInputs{Base: types.ImageBuildRef{Ref: b.Image, Digest: built.BaseDigest}}
 		rec := newImageBuild(types.ImageBuildLaneBYOI, byoiHash, runID, reason, in, built, s.cfg.Now())
-		extra := map[string]any{"source": "base_image:" + b.Kind, "base": b.Image}
-		s.commitBuiltImage(ctx, primary, rec, extra)
-		buildAudit("success", extra)
-		return built.Ref, true
+		return commit(rec, map[string]any{"source": "base_image:" + b.Kind, "base": b.Image})
 	}
 
 	if s.cfg.ImageBuilder == nil {
-		return "", false
+		return fail
 	}
 
 	p, ok := workspaceProfile(primary)
 	if !ok {
-		return "", false // unscanned/malformed → convention image
+		return fail // unscanned/malformed → convention image
 	}
 
 	// A repo PRIMARY source (Sources[0]) carrying its OWN devcontainer: respect
@@ -250,26 +298,23 @@ func (s *Server) resolveWorkspaceImage(ctx context.Context, runID uuid.UUID, pri
 		// every session (a fixed tag, but no cache-hit check before building
 		// it), even though nothing about the repo ref had changed between sessions.
 		repoHash := repoDevcontainerCacheKey(url, repoSrc.Ref)
-		if primary.ImageRef != "" && primary.BuiltProfileHash == repoHash && s.cachedImageStillPresent(ctx, primary.ImageRef) {
+		if !opts.Refresh && primary.ImageRef != "" && primary.BuiltProfileHash == repoHash && s.cachedImageStillPresent(ctx, primary.ImageRef) {
 			hit := map[string]any{"source": "repo-devcontainer", "image": primary.ImageRef, "cache_hit": true}
 			s.addCacheHitFields(ctx, primary, hit)
 			buildAudit("success", hit)
-			return primary.ImageRef, true
+			return imageResolveResult{Image: primary.ImageRef, OK: true}
 		}
 		tag := "wardyn-workspace/" + primary.ID.String() + ":devcontainer-" + runID.String()[:8]
-		reason := imageBuildReason(primary, repoHash)
+		reason := reasonFor(repoHash)
 		announce()
-		if built, err := s.cfg.ImageBuilder.BuildDevcontainer(ctx, url, repoSrc.Ref, tag, logSink); err == nil {
-			in := types.ImageBuildInputs{Repo: &types.ImageBuildRepo{URL: repoRecordURL(url), Ref: repoSrc.Ref}}
-			rec := newImageBuild(types.ImageBuildLaneRepo, repoHash, runID, reason, in, built, s.cfg.Now())
-			extra := map[string]any{"source": "repo-devcontainer"}
-			s.commitBuiltImage(ctx, primary, rec, extra)
-			buildAudit("success", extra)
-			return built.Ref, true
-		} else {
+		built, err := s.cfg.ImageBuilder.BuildDevcontainer(ctx, url, repoSrc.Ref, tag, logSink)
+		if err != nil {
 			buildAudit("failure", map[string]any{"source": "repo-devcontainer", "error": err.Error()})
-			return "", false
+			return fail
 		}
+		in := types.ImageBuildInputs{Repo: &types.ImageBuildRepo{URL: repoRecordURL(url), Ref: repoSrc.Ref}}
+		rec := newImageBuild(types.ImageBuildLaneRepo, repoHash, runID, reason, in, built, s.cfg.Now())
+		return commit(rec, map[string]any{"source": "repo-devcontainer"})
 	}
 	if len(primary.Sources) > 0 && primary.Sources[0].Type == types.WorkspaceSourceTypeRepo && p.HasDevcontainer {
 		if _, ssh := sshCloneHost(primary.Sources[0].Source); ssh {
@@ -279,14 +324,14 @@ func (s *Server) resolveWorkspaceImage(ctx context.Context, runID uuid.UUID, pri
 
 	hash := p.CacheKey()
 	// Reuse a cached generated image when the profile is unchanged.
-	if primary.ImageRef != "" && primary.BuiltProfileHash == hash && s.cachedImageStillPresent(ctx, primary.ImageRef) {
+	if !opts.Refresh && primary.ImageRef != "" && primary.BuiltProfileHash == hash && s.cachedImageStillPresent(ctx, primary.ImageRef) {
 		hit := map[string]any{"source": "generated-devcontainer", "image": primary.ImageRef, "cache_hit": true}
 		s.addCacheHitFields(ctx, primary, hit)
 		buildAudit("success", hit)
-		return primary.ImageRef, true
+		return imageResolveResult{Image: primary.ImageRef, OK: true}
 	}
 
-	return s.buildGeneratedImage(ctx, runID, primary, p, hash, logSink, announce, buildAudit)
+	return s.buildGeneratedImage(ctx, runID, primary, p, hash, reasonFor(hash), logSink, announce, buildAudit, commit)
 }
 
 // buildGeneratedImage builds the generated devcontainer for p and records it. A fresh build
@@ -295,13 +340,13 @@ func (s *Server) resolveWorkspaceImage(ctx context.Context, runID uuid.UUID, pri
 // the record's pins and resolves nothing (ruling Q4): an input the registry no longer has fails
 // the build naming it, and an input the record left unpinned floats and stays unpinned.
 func (s *Server) buildGeneratedImage(ctx context.Context, runID uuid.UUID, primary types.Workspace, p workspacescan.WorkspaceProfile,
-	hash string, logSink io.Writer, announce func(), buildAudit func(string, map[string]any)) (string, bool) {
-	fail := func(extra map[string]any) (string, bool) {
+	hash, reason string, logSink io.Writer, announce func(), buildAudit func(string, map[string]any),
+	commit func(*types.ImageBuild, map[string]any) imageResolveResult) imageResolveResult {
+	fail := func(extra map[string]any) imageResolveResult {
 		extra["source"] = "generated-devcontainer"
 		buildAudit("failure", extra)
-		return "", false
+		return imageResolveResult{}
 	}
-	reason := imageBuildReason(primary, hash)
 	in, err := workspacescan.GeneratedInputs(p, workspacescan.Pins{})
 	if err != nil {
 		return fail(map[string]any{"error": err.Error()})
@@ -337,10 +382,25 @@ func (s *Server) buildGeneratedImage(ctx context.Context, runID uuid.UUID, prima
 		in = withObservedInstaller(in, built.PinFile)
 	}
 	rec := newImageBuild(types.ImageBuildLaneGenerated, hash, runID, reason, in, built, s.cfg.Now())
-	extra := map[string]any{"source": "generated-devcontainer"}
-	s.commitBuiltImage(ctx, primary, rec, extra)
+	return commit(rec, map[string]any{"source": "generated-devcontainer"})
+}
+
+// commitImage swaps the built image in and audits the build a success. A refresh that could not
+// write its swap changed nothing, so it is a failure and keeps no tag.
+func (s *Server) commitImage(ctx context.Context, primary types.Workspace, opts imageResolveOpts, rec *types.ImageBuild,
+	extra map[string]any, buildAudit func(string, map[string]any)) imageResolveResult {
+	superseded, werr := s.commitBuiltImage(ctx, primary, opts.observedRef(primary), rec, extra, opts.ReclaimLoser)
+	if werr != nil && opts.Refresh {
+		s.removeStaleImage(ctx, rec.Image.Ref, "")
+		extra["error"] = "could not record the refreshed image: " + werr.Error()
+		buildAudit("failure", extra)
+		return imageResolveResult{}
+	}
 	buildAudit("success", extra)
-	return built.Ref, true
+	if superseded && opts.ReclaimLoser {
+		return imageResolveResult{Superseded: true, Record: rec}
+	}
+	return imageResolveResult{Image: rec.Image.Ref, OK: true, Superseded: superseded, Record: rec}
 }
 
 // commitBuiltImage caches the built image and its record on the workspace for
@@ -350,21 +410,31 @@ func (s *Server) buildGeneratedImage(ctx context.Context, runID uuid.UUID, prima
 // reclaimed only after an applied swap. A write error or a lost swap is
 // non-fatal: the image built and is usable now, so the cause rides the audit row
 // as cache_warn. extra gains the build's identity (addBuildRecordFields).
-func (s *Server) commitBuiltImage(ctx context.Context, primary types.Workspace, rec *types.ImageBuild, extra map[string]any) {
+//
+// It reports a lost swap and a write error. reclaimLoser removes the loser's own tag on a lost
+// swap — and only that tag, since the winner may own the old one; a run launch keeps it, its
+// run is about to start it.
+func (s *Server) commitBuiltImage(ctx context.Context, primary types.Workspace, observed string, rec *types.ImageBuild, extra map[string]any, reclaimLoser bool) (superseded bool, err error) {
 	addBuildRecordFields(extra, rec)
 	if s.cfg.Store == nil {
-		s.removeStaleImage(ctx, primary.ImageRef, rec.Image.Ref)
-		return
+		s.removeStaleImage(ctx, observed, rec.Image.Ref)
+		return false, nil
 	}
-	applied, err := s.cfg.Store.SetWorkspaceBuiltImage(ctx, primary.ID, primary.ImageRef, rec.Image.Ref, rec.CacheKey, rec)
+	applied, err := s.cfg.Store.SetWorkspaceBuiltImage(ctx, primary.ID, observed, rec.Image.Ref, rec.CacheKey, rec)
 	switch {
 	case err != nil:
 		extra["cache_warn"] = err.Error()
+		return false, err
 	case !applied:
 		extra["cache_warn"] = "superseded"
+		if reclaimLoser {
+			s.removeStaleImage(ctx, rec.Image.Ref, "")
+		}
+		return true, nil
 	default:
-		s.removeStaleImage(ctx, primary.ImageRef, rec.Image.Ref)
+		s.removeStaleImage(ctx, observed, rec.Image.Ref)
 	}
+	return false, nil
 }
 
 // repoOwnDevcontainerURL returns the clone URL resolveWorkspaceImage builds

@@ -21,6 +21,14 @@
 -- organisation pool still called "Remote Provided" is renamed "Organization" unless that name is taken.
 -- A held executor attach or detach waiting for a second human names the remote runner instead; it was
 -- reviewed against the old state, so it goes stale at its decision.
+-- It runs once: a schema whose members already name remote_runner_id has nothing left to convert.
+DO $$
+BEGIN
+IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema()
+               AND table_name = 'runner_pool_members' AND column_name = 'executor_id') THEN
+    RETURN;
+END IF;
+
 CREATE TABLE IF NOT EXISTS remote_runners (
     id              TEXT PRIMARY KEY CHECK (id ~ '^[a-z0-9][a-z0-9_.-]{0,62}$'
                         AND id !~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'),
@@ -86,3 +94,4 @@ ALTER TABLE runner_pool_org_defaults RENAME COLUMN remote_provided TO pool_id;
 UPDATE governance_changes
 SET payload = (payload - 'executor') || jsonb_build_object('remote_runner_id', payload->'executor')
 WHERE target_kind = 'runner_pool_use_policy' AND state = 'pending' AND payload ? 'executor';
+END $$;

@@ -17,7 +17,7 @@ import (
 // be WIRED.
 type fakeDevcontainerBuilder struct{ tag string }
 
-func (b fakeDevcontainerBuilder) FinalizeBase(context.Context, string, string, io.Writer) (BuiltImage, error) {
+func (b fakeDevcontainerBuilder) FinalizeBase(context.Context, string, string, io.Writer, bool) (BuiltImage, error) {
 	return BuiltImage{Ref: b.tag}, nil
 }
 

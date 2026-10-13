@@ -68,6 +68,7 @@ type fakeEnvbuilderDocker struct {
 
 	// Track call counts for assertions.
 	pullCalled bool
+	pullErr    error // when set, ImagePull fails with it
 	// pulledRefs records every ref passed to ImagePull, so a test can assert which
 	// image was pulled rather than only that some pull happened.
 	pulledRefs   []string
@@ -212,6 +213,10 @@ func (f *fakeEnvbuilderDocker) ImagePull(_ context.Context, ref string, _ client
 	f.mu.Lock()
 	f.pullCalled = true
 	f.pulledRefs = append(f.pulledRefs, ref)
+	if f.pullErr != nil {
+		f.mu.Unlock()
+		return nil, f.pullErr
+	}
 	if f.imagesPresent == nil {
 		f.imagesPresent = map[string]bool{}
 	}

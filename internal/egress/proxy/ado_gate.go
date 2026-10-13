@@ -339,6 +339,9 @@ func (p *Proxy) refuseADO(w http.ResponseWriter, r *http.Request, host string, p
 		if ok, msg = p.awaitADOCapability(r.Context(), host, *held, adoRequestDetail(r), msg); ok {
 			return true
 		}
+		if r.Context().Err() != nil {
+			return false // the client hung up mid-hold; it was never refused, so no row and no body
+		}
 	}
 	if p.sink != nil {
 		p.sink.emit(decisionLog(p.reqOf(r, host, port), egress.Deny, ruleSourceADODenied))

@@ -97,14 +97,25 @@ func templateRevisionConflictMsg(current int) string {
 }
 
 // templateGrantOwnerRefusalMsg words one of resolveSecretOwner's refusals for
-// the group template-manager grant; the reason stays the resolver's.
-func templateGrantOwnerRefusalMsg(refusal string) string {
+// the group template-manager grant; the reason stays the resolver's. outcome is
+// what did not happen: "written" for a grant, "removed" for a revoke.
+func templateGrantOwnerRefusalMsg(refusal, outcome string) string {
 	if refusal == secretOwnerAmbiguousMsg {
-		return "That matches more than one person, so no grant was written. Use the person's subject exactly, as the Audit log shows it."
+		return "That matches more than one person, so no grant was " + outcome + ". Use the person's subject exactly, as the Audit log shows it."
 	}
-	return "That email address doesn't match anyone this deployment knows, so no grant was written. " +
-		"Use the person's subject, as the Audit log shows it, or grant after they first sign in."
+	msg := "That email address doesn't match anyone this deployment knows, so no grant was " + outcome + ". " +
+		"Use the person's subject, as the Audit log shows it"
+	if outcome == templateGrantRemoved {
+		return msg + "."
+	}
+	return msg + ", or grant after they first sign in."
 }
+
+// The outcomes templateGrantOwnerRefusalMsg names.
+const (
+	templateGrantWritten = "written"
+	templateGrantRemoved = "removed"
+)
 
 func templateNameTakenMsg() string {
 	return "Another template available to the same people already uses this name."

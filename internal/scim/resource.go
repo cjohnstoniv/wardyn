@@ -28,7 +28,7 @@ func ParseUser(body []byte) (*User, *Error) {
 	active := !in.Active.set || in.Active.v
 	return &User{
 		Schemas: []string{SchemaUser}, ExternalID: in.ExternalID, UserName: in.UserName,
-		DisplayName: in.DisplayName, Emails: in.Emails, Active: active,
+		DisplayName: in.DisplayName, Emails: in.Emails, Active: active, ActiveSet: in.Active.set,
 	}, nil
 }
 

@@ -40,7 +40,7 @@ Scope: reachable from `./cmd/...` under the production build tags `docker,k8s`.
 | `github.com/coreos/go-oidc/v3/oidc` | Apache-2.0 | https://github.com/coreos/go-oidc/blob/v3.21.0/LICENSE |
 | `github.com/davecgh/go-spew/spew` | ISC | https://github.com/davecgh/go-spew/blob/d8f796af33cc/LICENSE |
 | `github.com/distribution/reference` | Apache-2.0 | https://github.com/distribution/reference/blob/v0.6.0/LICENSE |
-| `github.com/docker/go-connections` | Apache-2.0 | https://github.com/docker/go-connections/blob/v0.7.0/LICENSE |
+| `github.com/docker/go-connections` | Apache-2.0 | https://github.com/docker/go-connections/blob/v0.8.1/LICENSE |
 | `github.com/docker/go-units` | Apache-2.0 | https://github.com/docker/go-units/blob/v0.5.0/LICENSE |
 | `github.com/emicklei/go-restful/v3` | MIT | https://github.com/emicklei/go-restful/blob/v3.13.0/LICENSE |
 | `github.com/felixge/httpsnoop` | MIT | https://github.com/felixge/httpsnoop/blob/v1.0.4/LICENSE.txt |
@@ -78,8 +78,8 @@ Scope: reachable from `./cmd/...` under the production build tags `docker,k8s`.
 | `github.com/json-iterator/go` | MIT | https://github.com/json-iterator/go/blob/v1.1.12/LICENSE |
 | `github.com/kr/fs` | BSD-3-Clause | https://github.com/kr/fs/blob/v0.1.0/LICENSE |
 | `github.com/moby/docker-image-spec/specs-go/v1` | Apache-2.0 | https://github.com/moby/docker-image-spec/blob/v1.3.1/LICENSE |
-| `github.com/moby/moby/api` | Apache-2.0 | https://github.com/moby/moby/blob/api/v1.56.0/api/LICENSE |
-| `github.com/moby/moby/client` | Apache-2.0 | https://github.com/moby/moby/blob/client/v0.6.0/client/LICENSE |
+| `github.com/moby/moby/api` | Apache-2.0 | https://github.com/moby/moby/blob/api/v1.56.1/api/LICENSE |
+| `github.com/moby/moby/client` | Apache-2.0 | https://github.com/moby/moby/blob/client/v0.6.1/client/LICENSE |
 | `github.com/moby/spdystream` | Apache-2.0 | https://github.com/moby/spdystream/blob/v0.5.1/LICENSE |
 | `github.com/moby/spdystream/spdy` | BSD-3-Clause | https://github.com/moby/spdystream/blob/v0.5.1/spdy/LICENSE |
 | `github.com/modern-go/concurrent` | Apache-2.0 | https://github.com/modern-go/concurrent/blob/bacd9c7ef1dd/LICENSE |
@@ -90,7 +90,7 @@ Scope: reachable from `./cmd/...` under the production build tags `docker,k8s`.
 | `github.com/pkg/sftp` | BSD-2-Clause | https://github.com/pkg/sftp/blob/v1.13.11/LICENSE |
 | `github.com/spf13/cobra` | Apache-2.0 | https://github.com/spf13/cobra/blob/v1.10.2/LICENSE.txt |
 | `github.com/spf13/pflag` | BSD-3-Clause | https://github.com/spf13/pflag/blob/v1.0.10/LICENSE |
-| `github.com/spiffe/go-spiffe/v2/spiffeid` | Apache-2.0 | https://github.com/spiffe/go-spiffe/blob/v2.8.2/LICENSE |
+| `github.com/spiffe/go-spiffe/v2/spiffeid` | Apache-2.0 | https://github.com/spiffe/go-spiffe/blob/v2.9.0/LICENSE |
 | `github.com/x448/float16` | MIT | https://github.com/x448/float16/blob/v0.8.4/LICENSE |
 | `github.com/zalando/go-keyring` | MIT | https://github.com/zalando/go-keyring/blob/v0.2.8/LICENSE |
 | `go.opentelemetry.io/auto/sdk` | Apache-2.0 | https://github.com/open-telemetry/opentelemetry-go-instrumentation/blob/sdk/v1.2.1/sdk/LICENSE |
@@ -112,10 +112,10 @@ Scope: reachable from `./cmd/...` under the production build tags `docker,k8s`.
 | `gopkg.in/evanphx/json-patch.v4` | BSD-3-Clause | https://github.com/evanphx/json-patch/blob/v4.13.0/LICENSE |
 | `gopkg.in/inf.v0` | BSD-3-Clause | https://github.com/go-inf/inf/blob/v0.9.1/LICENSE |
 | `gopkg.in/yaml.v3` | MIT | https://github.com/go-yaml/yaml/blob/v3.0.1/LICENSE |
-| `k8s.io/api` | Apache-2.0 | https://github.com/kubernetes/api/blob/v0.37.0/LICENSE |
-| `k8s.io/apimachinery/pkg` | Apache-2.0 | https://github.com/kubernetes/apimachinery/blob/v0.37.0/LICENSE |
-| `k8s.io/apimachinery/third_party/forked/golang` | BSD-3-Clause | https://github.com/kubernetes/apimachinery/blob/v0.37.0/third_party/forked/golang/LICENSE |
-| `k8s.io/client-go` | Apache-2.0 | https://github.com/kubernetes/client-go/blob/v0.37.0/LICENSE |
+| `k8s.io/api` | Apache-2.0 | https://github.com/kubernetes/api/blob/v0.37.1/LICENSE |
+| `k8s.io/apimachinery/pkg` | Apache-2.0 | https://github.com/kubernetes/apimachinery/blob/v0.37.1/LICENSE |
+| `k8s.io/apimachinery/third_party/forked/golang` | BSD-3-Clause | https://github.com/kubernetes/apimachinery/blob/v0.37.1/third_party/forked/golang/LICENSE |
+| `k8s.io/client-go` | Apache-2.0 | https://github.com/kubernetes/client-go/blob/v0.37.1/LICENSE |
 | `k8s.io/klog/v2` | Apache-2.0 | https://github.com/kubernetes/klog/blob/v2.140.0/LICENSE |
 | `k8s.io/kube-openapi/pkg` | Apache-2.0 | https://github.com/kubernetes/kube-openapi/blob/d427ff9ee9ad/LICENSE |
 | `k8s.io/kube-openapi/pkg/internal/third_party/go-json-experiment/json` | BSD-3-Clause | https://github.com/kubernetes/kube-openapi/blob/d427ff9ee9ad/pkg/internal/third_party/go-json-experiment/json/LICENSE |
@@ -133,39 +133,39 @@ Scope: reachable from `./cmd/...` under the production build tags `docker,k8s`.
 | package | version | licence |
 |---|---|---|
 | `@babel/runtime` | 7.29.7 | MIT |
-| `@floating-ui/core` | 1.7.5 | MIT |
-| `@floating-ui/dom` | 1.7.6 | MIT |
-| `@floating-ui/react-dom` | 2.1.8 | MIT |
-| `@floating-ui/utils` | 0.2.11 | MIT |
+| `@floating-ui/core` | 1.8.0 | MIT |
+| `@floating-ui/dom` | 1.8.0 | MIT |
+| `@floating-ui/react-dom` | 2.1.9 | MIT |
+| `@floating-ui/utils` | 0.2.12 | MIT |
 | `@fontsource/inter` | 5.3.0 | OFL-1.1 |
 | `@fontsource/jetbrains-mono` | 5.3.0 | OFL-1.1 |
 | `@radix-ui/number` | 1.1.3 | MIT |
 | `@radix-ui/primitive` | 1.1.7 | MIT |
-| `@radix-ui/react-alert-dialog` | 1.1.23 | MIT |
-| `@radix-ui/react-arrow` | 1.1.15 | MIT |
-| `@radix-ui/react-checkbox` | 1.3.11 | MIT |
-| `@radix-ui/react-collection` | 1.1.15 | MIT |
+| `@radix-ui/react-alert-dialog` | 1.1.24 | MIT |
+| `@radix-ui/react-arrow` | 1.1.16 | MIT |
+| `@radix-ui/react-checkbox` | 1.3.12 | MIT |
+| `@radix-ui/react-collection` | 1.1.16 | MIT |
 | `@radix-ui/react-compose-refs` | 1.1.3, 1.1.5 | MIT |
 | `@radix-ui/react-context` | 1.2.2 | MIT |
-| `@radix-ui/react-dialog` | 1.1.23 | MIT |
-| `@radix-ui/react-direction` | 1.1.4 | MIT |
-| `@radix-ui/react-dismissable-layer` | 1.1.19 | MIT |
-| `@radix-ui/react-dropdown-menu` | 2.1.24 | MIT |
+| `@radix-ui/react-dialog` | 1.2.0 | MIT |
+| `@radix-ui/react-direction` | 1.1.5 | MIT |
+| `@radix-ui/react-dismissable-layer` | 1.1.20 | MIT |
+| `@radix-ui/react-dropdown-menu` | 2.1.25 | MIT |
 | `@radix-ui/react-focus-guards` | 1.1.6 | MIT |
-| `@radix-ui/react-focus-scope` | 1.1.16 | MIT |
+| `@radix-ui/react-focus-scope` | 1.2.0 | MIT |
 | `@radix-ui/react-id` | 1.1.2, 1.1.4 | MIT |
-| `@radix-ui/react-label` | 2.1.15 | MIT |
-| `@radix-ui/react-menu` | 2.1.24 | MIT |
-| `@radix-ui/react-popover` | 1.1.23 | MIT |
-| `@radix-ui/react-popper` | 1.3.7 | MIT |
-| `@radix-ui/react-portal` | 1.1.17 | MIT |
-| `@radix-ui/react-presence` | 1.1.10 | MIT |
-| `@radix-ui/react-primitive` | 2.1.6, 2.1.10 | MIT |
-| `@radix-ui/react-radio-group` | 1.4.7 | MIT |
-| `@radix-ui/react-roving-focus` | 1.1.19 | MIT |
-| `@radix-ui/react-select` | 2.3.7 | MIT |
-| `@radix-ui/react-slot` | 1.3.0, 1.3.3 | MIT |
-| `@radix-ui/react-tabs` | 1.1.21 | MIT |
+| `@radix-ui/react-label` | 2.1.16 | MIT |
+| `@radix-ui/react-menu` | 2.1.25 | MIT |
+| `@radix-ui/react-popover` | 1.2.0 | MIT |
+| `@radix-ui/react-popper` | 1.3.8 | MIT |
+| `@radix-ui/react-portal` | 1.1.18 | MIT |
+| `@radix-ui/react-presence` | 1.1.11 | MIT |
+| `@radix-ui/react-primitive` | 2.1.6, 2.1.11 | MIT |
+| `@radix-ui/react-radio-group` | 1.4.8 | MIT |
+| `@radix-ui/react-roving-focus` | 1.1.20 | MIT |
+| `@radix-ui/react-select` | 2.3.8 | MIT |
+| `@radix-ui/react-slot` | 1.3.0, 1.4.0 | MIT |
+| `@radix-ui/react-tabs` | 1.1.22 | MIT |
 | `@radix-ui/react-use-callback-ref` | 1.1.4 | MIT |
 | `@radix-ui/react-use-controllable-state` | 1.2.6 | MIT |
 | `@radix-ui/react-use-effect-event` | 0.0.5 | MIT |
@@ -173,15 +173,14 @@ Scope: reachable from `./cmd/...` under the production build tags `docker,k8s`.
 | `@radix-ui/react-use-layout-effect` | 1.1.2, 1.1.4 | MIT |
 | `@radix-ui/react-use-previous` | 1.1.4 | MIT |
 | `@radix-ui/react-use-rect` | 1.1.4 | MIT |
-| `@radix-ui/react-use-size` | 1.1.4 | MIT |
-| `@radix-ui/react-visually-hidden` | 1.2.11 | MIT |
+| `@radix-ui/react-use-size` | 1.1.5 | MIT |
+| `@radix-ui/react-visually-hidden` | 1.2.12 | MIT |
 | `@radix-ui/rect` | 1.1.3 | MIT |
 | `@solid-primitives/refs` | 1.1.3 | MIT |
 | `@solid-primitives/transition-group` | 1.1.2 | MIT |
 | `@solid-primitives/utils` | 6.4.0 | MIT |
-| `@types/prop-types` | 15.7.15 | MIT |
-| `@types/react` | 18.3.12 | MIT |
-| `@types/react-dom` | 18.3.1 | MIT |
+| `@types/react` | 19.3.0 | MIT |
+| `@types/react-dom` | 19.3.0 | MIT |
 | `@xterm/addon-clipboard` | 0.2.0 | MIT |
 | `@xterm/addon-fit` | 0.11.0 | MIT |
 | `@xterm/addon-unicode11` | 0.9.0 | MIT |
@@ -202,13 +201,13 @@ Scope: reachable from `./cmd/...` under the production build tags `docker,k8s`.
 | `js-base64` | 3.9.4 | BSD-3-Clause |
 | `js-tokens` | 4.0.0 | MIT |
 | `loose-envify` | 1.4.0 | MIT |
-| `lucide-react` | 1.47.0 | ISC |
+| `lucide-react` | 1.52.0 | ISC |
 | `object-assign` | 4.1.1 | MIT |
 | `prop-types` | 15.8.1 | MIT |
-| `react` | 18.3.1 | MIT |
-| `react-dom` | 18.3.1 | MIT |
-| `react-draggable` | 4.7.1 | MIT |
-| `react-grid-layout` | 2.2.4 | MIT |
+| `react` | 19.3.0 | MIT |
+| `react-dom` | 19.3.0 | MIT |
+| `react-draggable` | 4.7.2 | MIT |
+| `react-grid-layout` | 2.3.0 | MIT |
 | `react-is` | 16.13.1 | MIT |
 | `react-remove-scroll` | 2.7.2 | MIT |
 | `react-remove-scroll-bar` | 2.3.8 | MIT |
@@ -217,7 +216,7 @@ Scope: reachable from `./cmd/...` under the production build tags `docker,k8s`.
 | `react-router-dom` | 7.18.4 | MIT |
 | `react-style-singleton` | 2.2.3 | MIT |
 | `resize-observer-polyfill` | 1.5.1 | MIT |
-| `scheduler` | 0.23.2 | MIT |
+| `scheduler` | 0.28.0 | MIT |
 | `seroval` | 1.6.8 | MIT |
 | `seroval-plugins` | 1.6.8 | MIT |
 | `set-cookie-parser` | 2.7.2 | MIT |
@@ -250,31 +249,31 @@ canonical text for that licence is in `licenses/texts/common/`.
 |---|---|---|---|
 | `@radix-ui/number` | 1.1.3 | MIT | https://radix-ui.com/primitives |
 | `@radix-ui/primitive` | 1.1.7 | MIT | https://radix-ui.com/primitives |
-| `@radix-ui/react-alert-dialog` | 1.1.23 | MIT | https://radix-ui.com/primitives |
-| `@radix-ui/react-arrow` | 1.1.15 | MIT | https://radix-ui.com/primitives |
-| `@radix-ui/react-checkbox` | 1.3.11 | MIT | https://radix-ui.com/primitives |
-| `@radix-ui/react-collection` | 1.1.15 | MIT | https://radix-ui.com/primitives |
+| `@radix-ui/react-alert-dialog` | 1.1.24 | MIT | https://radix-ui.com/primitives |
+| `@radix-ui/react-arrow` | 1.1.16 | MIT | https://radix-ui.com/primitives |
+| `@radix-ui/react-checkbox` | 1.3.12 | MIT | https://radix-ui.com/primitives |
+| `@radix-ui/react-collection` | 1.1.16 | MIT | https://radix-ui.com/primitives |
 | `@radix-ui/react-compose-refs` | 1.1.3, 1.1.5 | MIT | https://radix-ui.com/primitives |
 | `@radix-ui/react-context` | 1.2.2 | MIT | https://radix-ui.com/primitives |
-| `@radix-ui/react-dialog` | 1.1.23 | MIT | https://radix-ui.com/primitives |
-| `@radix-ui/react-direction` | 1.1.4 | MIT | https://radix-ui.com/primitives |
-| `@radix-ui/react-dismissable-layer` | 1.1.19 | MIT | https://radix-ui.com/primitives |
-| `@radix-ui/react-dropdown-menu` | 2.1.24 | MIT | https://radix-ui.com/primitives |
+| `@radix-ui/react-dialog` | 1.2.0 | MIT | https://radix-ui.com/primitives |
+| `@radix-ui/react-direction` | 1.1.5 | MIT | https://radix-ui.com/primitives |
+| `@radix-ui/react-dismissable-layer` | 1.1.20 | MIT | https://radix-ui.com/primitives |
+| `@radix-ui/react-dropdown-menu` | 2.1.25 | MIT | https://radix-ui.com/primitives |
 | `@radix-ui/react-focus-guards` | 1.1.6 | MIT | https://radix-ui.com/primitives |
-| `@radix-ui/react-focus-scope` | 1.1.16 | MIT | https://radix-ui.com/primitives |
+| `@radix-ui/react-focus-scope` | 1.2.0 | MIT | https://radix-ui.com/primitives |
 | `@radix-ui/react-id` | 1.1.2, 1.1.4 | MIT | https://radix-ui.com/primitives |
-| `@radix-ui/react-label` | 2.1.15 | MIT | https://radix-ui.com/primitives |
-| `@radix-ui/react-menu` | 2.1.24 | MIT | https://radix-ui.com/primitives |
-| `@radix-ui/react-popover` | 1.1.23 | MIT | https://radix-ui.com/primitives |
-| `@radix-ui/react-popper` | 1.3.7 | MIT | https://radix-ui.com/primitives |
-| `@radix-ui/react-portal` | 1.1.17 | MIT | https://radix-ui.com/primitives |
-| `@radix-ui/react-presence` | 1.1.10 | MIT | https://radix-ui.com/primitives |
-| `@radix-ui/react-primitive` | 2.1.6, 2.1.10 | MIT | https://radix-ui.com/primitives |
-| `@radix-ui/react-radio-group` | 1.4.7 | MIT | https://radix-ui.com/primitives |
-| `@radix-ui/react-roving-focus` | 1.1.19 | MIT | https://radix-ui.com/primitives |
-| `@radix-ui/react-select` | 2.3.7 | MIT | https://radix-ui.com/primitives |
-| `@radix-ui/react-slot` | 1.3.0, 1.3.3 | MIT | https://radix-ui.com/primitives |
-| `@radix-ui/react-tabs` | 1.1.21 | MIT | https://radix-ui.com/primitives |
+| `@radix-ui/react-label` | 2.1.16 | MIT | https://radix-ui.com/primitives |
+| `@radix-ui/react-menu` | 2.1.25 | MIT | https://radix-ui.com/primitives |
+| `@radix-ui/react-popover` | 1.2.0 | MIT | https://radix-ui.com/primitives |
+| `@radix-ui/react-popper` | 1.3.8 | MIT | https://radix-ui.com/primitives |
+| `@radix-ui/react-portal` | 1.1.18 | MIT | https://radix-ui.com/primitives |
+| `@radix-ui/react-presence` | 1.1.11 | MIT | https://radix-ui.com/primitives |
+| `@radix-ui/react-primitive` | 2.1.6, 2.1.11 | MIT | https://radix-ui.com/primitives |
+| `@radix-ui/react-radio-group` | 1.4.8 | MIT | https://radix-ui.com/primitives |
+| `@radix-ui/react-roving-focus` | 1.1.20 | MIT | https://radix-ui.com/primitives |
+| `@radix-ui/react-select` | 2.3.8 | MIT | https://radix-ui.com/primitives |
+| `@radix-ui/react-slot` | 1.3.0, 1.4.0 | MIT | https://radix-ui.com/primitives |
+| `@radix-ui/react-tabs` | 1.1.22 | MIT | https://radix-ui.com/primitives |
 | `@radix-ui/react-use-callback-ref` | 1.1.4 | MIT | https://radix-ui.com/primitives |
 | `@radix-ui/react-use-controllable-state` | 1.2.6 | MIT | https://radix-ui.com/primitives |
 | `@radix-ui/react-use-effect-event` | 0.0.5 | MIT | https://radix-ui.com/primitives |
@@ -282,19 +281,18 @@ canonical text for that licence is in `licenses/texts/common/`.
 | `@radix-ui/react-use-layout-effect` | 1.1.2, 1.1.4 | MIT | https://radix-ui.com/primitives |
 | `@radix-ui/react-use-previous` | 1.1.4 | MIT | https://radix-ui.com/primitives |
 | `@radix-ui/react-use-rect` | 1.1.4 | MIT | https://radix-ui.com/primitives |
-| `@radix-ui/react-use-size` | 1.1.4 | MIT | https://radix-ui.com/primitives |
-| `@radix-ui/react-visually-hidden` | 1.2.11 | MIT | https://radix-ui.com/primitives |
+| `@radix-ui/react-use-size` | 1.1.5 | MIT | https://radix-ui.com/primitives |
+| `@radix-ui/react-visually-hidden` | 1.2.12 | MIT | https://radix-ui.com/primitives |
 | `@radix-ui/rect` | 1.1.3 | MIT | https://radix-ui.com/primitives |
-| `@types/prop-types` | 15.7.15 | MIT | https://github.com/DefinitelyTyped/DefinitelyTyped/tree/master/types/prop-types |
-| `@types/react` | 18.3.12 | MIT | https://github.com/DefinitelyTyped/DefinitelyTyped/tree/master/types/react |
-| `@types/react-dom` | 18.3.1 | MIT | https://github.com/DefinitelyTyped/DefinitelyTyped/tree/master/types/react-dom |
+| `@types/react` | 19.3.0 | MIT | https://github.com/DefinitelyTyped/DefinitelyTyped/tree/master/types/react |
+| `@types/react-dom` | 19.3.0 | MIT | https://github.com/DefinitelyTyped/DefinitelyTyped/tree/master/types/react-dom |
 | `@xterm/xterm` | 6.0.0 | MIT | https://github.com/xtermjs/xterm.js#readme |
 | `prop-types` | 15.8.1 | MIT | https://facebook.github.io/react/ |
-| `react` | 18.3.1 | MIT | https://reactjs.org/ |
-| `react-dom` | 18.3.1 | MIT | https://reactjs.org/ |
+| `react` | 19.3.0 | MIT | https://react.dev/ |
+| `react-dom` | 19.3.0 | MIT | https://react.dev/ |
 | `react-is` | 16.13.1 | MIT | https://reactjs.org/ |
 | `react-remove-scroll-bar` | 2.3.8 | MIT | Anton Korzunov |
-| `scheduler` | 0.23.2 | MIT | https://reactjs.org/ |
+| `scheduler` | 0.28.0 | MIT | https://react.dev/ |
 
 ## In-tree components derived from third-party projects
 

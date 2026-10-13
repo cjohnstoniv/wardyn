@@ -362,10 +362,18 @@ func refuseKEKRequired(required bool, s secretstore.Store) error {
 }
 
 // localRowsCounter is the store's count of rows still wrapped by the local key,
-// or nil for a store that keeps none.
+// or nil for a store that keeps none. It looks through the audit wrapper main
+// hands it, or the kek_local_rows setup row never appears.
 func localRowsCounter(s secretstore.Store) func(context.Context) (int, error) {
-	if ps, ok := s.(*secretstorepg.Store); ok {
-		return ps.LocalRows
+	for s != nil {
+		if ps, ok := s.(*secretstorepg.Store); ok {
+			return ps.LocalRows
+		}
+		u, ok := s.(interface{ Unwrap() secretstore.Store })
+		if !ok {
+			return nil
+		}
+		s = u.Unwrap()
 	}
 	return nil
 }
