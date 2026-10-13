@@ -41,6 +41,22 @@ describe("StepShell", () => {
     expect(screen.getByLabelText("Choice")).toHaveAttribute("aria-invalid", "true");
   });
 
+  it("clears the invalid mark once the issue that put it there is gone", () => {
+    const view = render(
+      <StepShell title="Run" primary={{ label: "Continue", onActivate: vi.fn() }} issues={[issue("run", "pool_required")]}>
+        <select id="nr-pool" aria-label="Pool"><option>One</option></select>
+      </StepShell>,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    expect(screen.getByLabelText("Pool")).toHaveAttribute("aria-invalid", "true");
+    view.rerender(
+      <StepShell title="Run" primary={{ label: "Continue", onActivate: vi.fn() }} issues={[]}>
+        <select id="nr-pool" aria-label="Pool"><option>One</option></select>
+      </StepShell>,
+    );
+    expect(screen.getByLabelText("Pool")).not.toHaveAttribute("aria-invalid");
+  });
+
   it("Back goes back, and Ctrl+Enter continues a complete step", () => {
     const onBack = vi.fn();
     const onActivate = vi.fn();
