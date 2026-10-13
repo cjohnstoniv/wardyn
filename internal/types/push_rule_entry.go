@@ -299,7 +299,7 @@ func serverPathNames(remote string, segs []string, basePath string) (names, base
 		for _, seg := range strings.Split(bp, "/") {
 			name, err := adoscope.UnescapeName(seg)
 			if err != nil {
-				return nil, nil, fmt.Errorf("Azure DevOps Server base path %q: %w", basePath, err)
+				return nil, nil, fmt.Errorf("the Azure DevOps Server base path %q: %w", basePath, err)
 			}
 			base = append(base, name)
 		}
