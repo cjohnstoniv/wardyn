@@ -35,6 +35,10 @@ type AttachLeaseStore interface {
 	// AcquireAttachLease takes runID's lease for l.HolderID when it is free, has lapsed, or is
 	// held by from (uuid.Nil: nobody in particular), for ttl. It reports whether it did.
 	AcquireAttachLease(ctx context.Context, l AttachLease, from uuid.UUID, ttl time.Duration) (bool, error)
+	// ReacquireAttachLease takes runID's lease back for l.HolderID, a holder that had it, when
+	// the row is gone, has lapsed or is still l.HolderID's, for ttl. It never takes a live row of
+	// another holder, a reservation for a take-over's taker included. It reports whether it did.
+	ReacquireAttachLease(ctx context.Context, l AttachLease, ttl time.Duration) (bool, error)
 	// RenewAttachLease extends holderID's lease by ttl, reporting whether holderID still held it.
 	RenewAttachLease(ctx context.Context, runID, holderID uuid.UUID, ttl time.Duration) (bool, error)
 	// HoldsAttachLease reports whether holderID holds runID's lease right now, unlapsed.
@@ -67,6 +71,24 @@ func (s PG) AcquireAttachLease(ctx context.Context, l AttachLease, from uuid.UUI
 		l.RunID, l.HolderID, l.Replica, l.Principal, l.Source, l.Since, ttl.String(), from)
 	if err != nil {
 		return false, fmt.Errorf("store: acquire the attach lease: %w", err)
+	}
+	return tag.RowsAffected() == 1, nil
+}
+
+// ReacquireAttachLease — see AttachLeaseStore. AcquireAttachLease's rule without its two
+// hand-over arms: no from, and no reservation taken by its taker's principal.
+func (s PG) ReacquireAttachLease(ctx context.Context, l AttachLease, ttl time.Duration) (bool, error) {
+	tag, err := s.Pool.Exec(ctx, `
+		INSERT INTO run_attach_leases (run_id, holder_id, replica, principal, source, since, expires_at)
+		VALUES ($1, $2, $3, $4, $5, $6, now() + $7::interval)
+		ON CONFLICT (run_id) DO UPDATE SET
+			holder_id = EXCLUDED.holder_id, replica = EXCLUDED.replica, principal = EXCLUDED.principal,
+			source = EXCLUDED.source, since = EXCLUDED.since, expires_at = EXCLUDED.expires_at,
+			epoch = run_attach_leases.epoch + 1
+		WHERE run_attach_leases.expires_at <= now() OR run_attach_leases.holder_id = EXCLUDED.holder_id`,
+		l.RunID, l.HolderID, l.Replica, l.Principal, l.Source, l.Since, ttl.String())
+	if err != nil {
+		return false, fmt.Errorf("store: take back the attach lease: %w", err)
 	}
 	return tag.RowsAffected() == 1, nil
 }
