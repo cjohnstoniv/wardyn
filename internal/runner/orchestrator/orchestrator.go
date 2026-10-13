@@ -424,6 +424,19 @@ func (o *Orchestrator) ExecutorFacts(ctx context.Context, executor string) (runn
 		KeepsEnded: keeps, UserDrives: cs.UserDrives}, true
 }
 
+// MeasureExecutor implements runner.ExecutorMeasurer: what one configured executor has, when its
+// substrate can say (runner.Measurer); all zero otherwise.
+func (o *Orchestrator) MeasureExecutor(ctx context.Context, executor string) (types.RunnerAmounts, error) {
+	sub, ok := o.local(executor)
+	if !ok {
+		return types.RunnerAmounts{}, fmt.Errorf("%w: %q is not an executor of this deployment", runner.ErrExecutorUnavailable, executor)
+	}
+	if m, ok := sub.(runner.Measurer); ok {
+		return m.Measure(ctx)
+	}
+	return types.RunnerAmounts{}, nil
+}
+
 // CreateSandboxOn creates the sandbox on the named configured executor only. An executor this
 // deployment does not run, or one that cannot enforce the run's class, fails
 // runner.ErrExecutorUnavailable: the run was admitted against that executor, so no other serves it.

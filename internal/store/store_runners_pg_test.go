@@ -20,12 +20,22 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// newRunner is a runner of owner that may hold as many runs at once as any runner may, so a fixture's
-// runs are never refused for its max_runs; a test of max_runs sets its own.
+// newRunner is a runner of owner that may hold as many runs at once as any runner may, and as much as
+// any runner may declare, so a fixture's runs are never refused for its limits; a test of limits sets
+// its own.
 func newRunner(owner string) types.Runner {
 	id := uuid.New()
 	return types.Runner{ID: id, Owner: owner, Name: "laptop", PublicKey: make([]byte, 32), KeyFingerprint: "fp-" + id.String(), Version: "0.9.0",
-		MaxRuns: types.RunnerMaxRunsCeiling}
+		Limits: roomyLimits(types.RunnerMaxRunsCeiling)}
+}
+
+// roomyLimits is a limit set of runs at once with the largest totals and per-run amounts a runner may
+// declare.
+func roomyLimits(runs int) *types.RunnerLimits {
+	most := types.RunnerAmounts{CPUMillis: types.RunnerPoolCPUMillisMax, MemoryMiB: types.RunnerPoolMemoryMiBMax, DiskMiB: types.RunnerPoolDiskMiBMax}
+	each := most
+	each.DiskMiB = most.DiskMiB / int64(runs) / types.RunnerDiskStepMiB * types.RunnerDiskStepMiB
+	return &types.RunnerLimits{RunsAtOnce: runs, Total: most, PerRun: each}
 }
 
 func TestPG_Runners_CreateStartsUnclaimedAndFingerprintIsUnique(t *testing.T) {

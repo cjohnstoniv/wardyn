@@ -136,6 +136,10 @@ declare -A ALLOWLIST=(
   # nothing compares it against the clock.
   ["cmd/wardyn/run_inspect_test.go"]=1
   ["cmd/wardyn/run_queue_wait_test.go"]=1
+  # The approved runner design's own command-line frame: `use-policy get` prints the policy's time verbatim
+  # ("revision 9, updated 2026-10-09T14:02:11Z"), and both tests hold the CLI to that line. Never compared to the clock.
+  ["cmd/wardyn/runner_design_lines_test.go"]=1
+  ["cmd/wardyn/runner_pool_use_policy_test.go"]=2
   # New Run Launched: the wait/elapsed words are computed from a fixed reference instant passed in as now;
   # nothing reads the real clock.
   ["ui/src/app/components/screens/new-run-flow/launch/launched-model.test.ts"]=1

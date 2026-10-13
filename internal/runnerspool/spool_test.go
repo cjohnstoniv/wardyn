@@ -6,14 +6,18 @@ package runnerspool
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/egress"
+	"github.com/cjohnstoniv/wardyn/internal/spoolowner"
 	"github.com/google/uuid"
 )
 
@@ -318,5 +322,143 @@ func TestSpoolRefusesCorruptionAndUnsafeState(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// The spool has two writers that may be different users: wardyn-runnerd, and the proxy as the user the
+// directory was handed to. Every file one of them creates (each rewrite of state.json is a new file
+// renamed into place) is given to the directory's owner before it replaces anything and stays 0600, so
+// the other writer can still open it: append, acknowledge, append again all succeed.
+func TestRewriteKeepsTheSpoolOwner(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "spool")
+	id := uuid.New()
+	ctx := context.Background()
+	owner := os.Geteuid()
+	var handed []string
+	spoolowner.Chown = func(f *os.File, uid, gid int) error {
+		handed = append(handed, fmt.Sprintf("%s %d", filepath.Base(f.Name()), uid))
+		return f.Chown(uid, gid)
+	}
+	t.Cleanup(func() {
+		spoolowner.ProcessUID, spoolowner.Chown = os.Geteuid, func(f *os.File, uid, gid int) error { return f.Chown(uid, gid) }
+	})
+
+	proxy, err := Open(dir, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer proxy.Close()
+	if err := proxy.Append(ctx, decision(id)); err != nil {
+		t.Fatal(err)
+	}
+	if len(handed) != 0 {
+		t.Fatalf("the spool's own owner handed files over: %v", handed)
+	}
+
+	// wardyn-runnerd, as another user than the spool's owner, replays and acknowledges.
+	spoolowner.ProcessUID = func() int { return owner + 1 }
+	runnerd, err := Open(dir, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runnerd.Close()
+	if err := runnerd.Replay(ctx, func(context.Context, []Record) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(handed, fmt.Sprintf("write.tmp %d", owner)) {
+		t.Fatalf("the acknowledgement's rewrite was handed to %v, want its new file given to the spool's owner %d before the rename", handed, owner)
+	}
+	st, err := os.Stat(filepath.Join(dir, "state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := int(st.Sys().(*syscall.Stat_t).Uid); got != owner || st.Mode().Perm() != 0o600 {
+		t.Fatalf("state.json after the acknowledgement: owner %d mode %v, want the spool's owner %d and 0600", got, st.Mode().Perm(), owner)
+	}
+
+	// The proxy, the spool's owner again, records the next decision.
+	spoolowner.ProcessUID = os.Geteuid
+	if err := proxy.CanRecord(ctx); err != nil {
+		t.Fatalf("the proxy after an acknowledgement: %v", err)
+	}
+	if err := proxy.Append(ctx, decision(id)); err != nil {
+		t.Fatalf("the proxy's next append after an acknowledgement: %v", err)
+	}
+}
+
+// A name that already exists in the spool is handed to the spool's owner only when it has no other link:
+// a hard link planted under the lock name, or the writer lock's, is refused and never chowned, so a file
+// outside the spool cannot be handed over through it.
+func TestSpoolRefusesToHandOverAHardLinkedLock(t *testing.T) {
+	owner := os.Geteuid()
+	var handed []string
+	spoolowner.Chown = func(f *os.File, uid, gid int) error {
+		handed = append(handed, filepath.Base(f.Name()))
+		return f.Chown(uid, gid)
+	}
+	t.Cleanup(func() {
+		spoolowner.ProcessUID, spoolowner.Chown = os.Geteuid, func(f *os.File, uid, gid int) error { return f.Chown(uid, gid) }
+	})
+	plant := func(dir, name string) {
+		t.Helper()
+		outside := filepath.Join(t.TempDir(), "outside")
+		if err := os.WriteFile(outside, nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Link(outside, filepath.Join(dir, name)); err != nil {
+			t.Skipf("hard links are not available here: %v", err)
+		}
+	}
+	id := uuid.New()
+
+	// The lock: another user (wardyn-runnerd as root) opens a spool whose lock name is a planted link.
+	dir := filepath.Join(t.TempDir(), "spool")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	plant(dir, "lock")
+	spoolowner.ProcessUID = func() int { return owner + 1 }
+	if s, err := Open(dir, id); err == nil {
+		s.Close()
+		t.Fatal("a spool whose lock is a hard link was opened and handed over")
+	}
+	if len(handed) != 0 {
+		t.Fatalf("a hard-linked lock was chowned: %v", handed)
+	}
+
+	// The writer lock: a clean spool, then a planted link under the writer lock's name at the seal.
+	spoolowner.ProcessUID = os.Geteuid
+	clean := filepath.Join(t.TempDir(), "spool")
+	s, err := Open(clean, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	receipt, err := s.Receipt(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	plant(clean, "writer.lock")
+	spoolowner.ProcessUID = func() int { return owner + 1 }
+	handed = nil
+	if sealed, err := s.Seal(t.Context(), receipt); err == nil || sealed {
+		t.Fatalf("a seal over a hard-linked writer lock = %v, %v; want it refused", sealed, err)
+	}
+	if slices.Contains(handed, "writer.lock") {
+		t.Fatalf("a hard-linked writer lock was chowned: %v", handed)
+	}
+
+	// A writer lock that fails the seal's own checks (here its mode) is refused before it is handed over.
+	if err := os.Remove(filepath.Join(clean, "writer.lock")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(clean, "writer.lock"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(filepath.Join(clean, "writer.lock"), 0o644); err != nil { // whatever the umask
+		t.Fatal(err)
+	}
+	if sealed, err := s.Seal(t.Context(), receipt); err == nil || sealed || len(handed) != 0 {
+		t.Fatalf("a seal over a writer lock that is not 0600 = %v, %v, handed %v; want it refused and nothing handed over", sealed, err, handed)
 	}
 }
