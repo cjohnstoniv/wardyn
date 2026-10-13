@@ -57,10 +57,14 @@ OS="$(uname -s)"
 case "$OS" in
   Linux)
     DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/wardyn"
-    # Pinned under $HOME/.config: the systemd user manager does not inherit a login shell's
-    # XDG_CONFIG_HOME, so the unit and the identity register writes must not follow it.
-    export XDG_CONFIG_HOME="$HOME/.config"
+    # The systemd user manager does not inherit a login shell's XDG_CONFIG_HOME, so the unit
+    # stays under $HOME/.config. The identity directory is passed to register and serve
+    # explicitly (--state-dir) so neither follows the environment they happen to run in: the one
+    # an earlier install already registered under, else $HOME/.config.
     STATE_DIR="$HOME/.config/wardyn/runner"
+    if [ ! -e "$STATE_DIR/runner.json" ] && [ -n "${XDG_CONFIG_HOME:-}" ] && [ -e "$XDG_CONFIG_HOME/wardyn/runner/runner.json" ]; then
+      STATE_DIR="$XDG_CONFIG_HOME/wardyn/runner"
+    fi
     ENV_FILE="$HOME/.config/wardyn/runnerd.env"
     UNIT_FILE="$HOME/.config/systemd/user/$UNIT"
     ;;
@@ -145,6 +149,16 @@ fi
 for value in "$ORG" "$PROXY_IMAGE" "$NETWORK" "${DOCKER_HOST:-x}"; do
   [[ "$value" =~ $SAFE ]] || die "unsupported characters in a setting: $value"
 done
+# Linux: the state dir reaches the env file, and the user manager must be able to find the unit
+# BEFORE register spends the single-use token.
+STATE_FLAG=()
+if [ "$OS" = Linux ]; then
+  [[ "$STATE_DIR" =~ $SAFE ]] || die "unsupported characters in the runner state directory: $STATE_DIR"
+  STATE_FLAG=(--state-dir "$STATE_DIR")
+  unit_path="$(systemctl --user show -p UnitPath --value 2>/dev/null || true)"
+  [[ " $unit_path " == *" $(dirname "$UNIT_FILE") "* ]] \
+    || die "the systemd user manager does not search $(dirname "$UNIT_FILE") for units, so it could not find the service: no token was spent"
+fi
 
 docker info >/dev/null 2>&1 \
   || die "docker is not usable as this user: on Linux add yourself to the docker group, on macOS start Docker Desktop"
@@ -168,7 +182,7 @@ if [ "$HAVE_IDENTITY" = 0 ]; then
   # register asks only when both its input and output are a terminal; say so first, so a person watching
   # knows the questions are coming and a log shows why none were asked.
   echo "Registering this computer. At a terminal it asks for the runner's limits (Enter takes each suggestion); otherwise it registers with the limits it suggests."
-  "$INSTALLED" register --org "$ORG" --token-file "$TOKEN_FILE"
+  "$INSTALLED" register --org "$ORG" --token-file "$TOKEN_FILE" ${STATE_FLAG[@]+"${STATE_FLAG[@]}"}
 fi
 
 case "$OS" in
@@ -179,6 +193,7 @@ case "$OS" in
       echo "WARDYN_RUNNER_ORG_URL=$ORG"
       echo "WARDYN_PROXY_IMAGE=$PROXY_IMAGE"
       echo "WARDYN_INTERNAL_NETWORK=$NETWORK"
+      echo "WARDYN_RUNNER_STATE_DIR=$STATE_DIR"
       [ -z "${DOCKER_HOST:-}" ] || echo "DOCKER_HOST=$DOCKER_HOST"
     } >"$ENV_FILE"
     chmod 0600 "$ENV_FILE"
@@ -187,6 +202,7 @@ case "$OS" in
     systemctl --user enable --now "$UNIT"
     echo "Started the wardyn-runnerd user service. Logs: journalctl --user -u wardyn-runnerd"
     echo "To keep it running when you are logged out: loginctl enable-linger $USER"
+    [ -z "${XDG_CONFIG_HOME:-}" ] || echo "XDG_CONFIG_HOME is set here, so pass --state-dir $STATE_DIR to wardyn runner claim."
     ;;
   Darwin)
     mkdir -p "$(dirname "$PLIST_FILE")" "$(dirname "$LOG_FILE")"
