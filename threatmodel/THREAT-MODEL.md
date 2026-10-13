@@ -2481,7 +2481,7 @@ hiding them would repeat the failure mode we are designed to avoid.
     - **Theft.** Whoever copies the key file reaches what the runner reaches until it is revoked: the owner's local runs, their own credentials, and those runs' tokens and evidence.
     - It cannot create a run, reach another person's, or read a `via_org` value. No TPM or Secure Enclave binds the key in 0.9.
     - **A stolen registration token** buys only an `unclaimed` runner. *My runner* shows its fingerprint abbreviated (`abbreviateFingerprint`), so a claim must carry the full fingerprint, read where the key lives.
-    - **Revocation**, by an admin, a security admin or the owner (`not_mine`), ends every unfinished run on the runner KILLED and revokes its credentials in one transaction (`revokeRunner`). A live session closes; an offline runner learns it on reconnect (#77).
+    - **Revocation**, by an admin, a security admin or the owner (`not_mine`), ends every unfinished run on the runner KILLED in one transaction (`revokeRunner`), then runs each run's kill cascade. A live session closes; an offline runner learns it on reconnect (#77).
 
 71. **The relay is opaque, and the local relay listener answers any process on the laptop that holds a run token [0.9, client mode].**
     - The runner relays TLS that ends at wardynd, so it sees ciphertext only (B6). Its listener binds the Docker host-gateway address, which any laptop process can open with a run token the developer can read (#69).
@@ -3339,6 +3339,8 @@ The labelled series, every label, and where its values come from:
 | `wardyn_runs_cpu_millis_held`, `wardyn_runs_memory_mib_held` | `runner` | the runner kind recorded on the run (`runner_kind`, else `runner_target`): `docker` or `k8s` |
 | `wardyn_approval_decisions_total` | `decision` | `approved` or `denied` (`approvalDecided`) |
 | `wardyn_drive_refusals_total` | `reason` | the closed `driveRefusalReasons` list |
+| `wardyn_runner_pool_queue_depth`, `wardyn_runner_pool_slots_used` | `pool_id` | the runner pool's id (a UUID, never its name or owner) |
+| `wardyn_runner_pool_queue_wait_seconds` | `outcome` | the closed `queueOutcomes` list (`started`, `timeout`, `cancelled`, `refused`) |
 | `wardyn_sso_refresh_total` | `outcome` | the closed list `success`, `spent`, `transport_error`, `unavailable` |
 | `wardyn_credential_reauth_total` | `outcome` | the closed list `requested`, `resolved`, `expired`, `cancelled`, `timeout` |
 | `wardyn_run_start_wait_seconds_sum`, `_count` | `reason` | the closed `startWaitReasons` list (Kubernetes wait reasons, else `other`) |

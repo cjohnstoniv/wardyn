@@ -92,7 +92,8 @@
 # docs/sdk.md 16987 measured after RP-1: organization and user pools, remote-hosted runners.
 # docs/sdk.md 16942 adds 120 over 16822 (G-090-cleanup slice F, docs rows that contradict the code): measured; the lead re-measures at merge.
 # docs/sdk.md 17107 measured after G-090-cleanup slice F: docs rows that contradicted the code.
-docs/sdk.md=17107 share=21
+# docs/sdk.md 17151 adds 44 over 17107: 0.9 final docs pass, measured: the error field on an Azure provider refusal, the component cause and the interactive default end.
+docs/sdk.md=17151 share=21
 # Runner admission adds 10 measured words for the two default-off/config-read refusal reasons.
 # Registration adds 65 measured words for five request/setup reasons and two shared placement refusals.
 # Combined runner registration, baseline and identity changes: measured docs/sdk.md 12463 prose words.

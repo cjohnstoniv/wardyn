@@ -354,6 +354,7 @@ That has two consequences worth knowing before you hit them:
 - With the opt-in, and the `ado_minted_pat` class set to `runner_resident` with its posture requirement met, the token is held in the runner's OS keystore. The runner's own proxy injects it, so the REST gate and capability holds keep running there.
 - `entra.runner_resident_sandbox` also puts the token in the sandbox. The agent can then use it past the REST gate and holds. It requires `entra.runner_resident`.
 - A resident token is static for the run: its lifetime caps the run's Azure DevOps access.
+- `runner_resident` values are not yet delivered to runners in 0.9.0, so a run that needs such a token is still refused (`placement_credential`).
 - `TestLocalEligibility_ADOResidentIsOffByDefault` in [`internal/placement/resident_test.go`](../internal/placement/resident_test.go) pins the opt-in.
 - The refusal is `classifyCredential` ([`internal/placement/eligibility.go`](../internal/placement/eligibility.go)).
 - Where each thing lives is in [Managed laptops: client-mode runners](operations/hybrid-laptops.md#where-each-thing-lives). The delivery rules are in [Credential delivery (OD-12)](design/0.9/PLAN.md#7-credential-delivery-od-12).

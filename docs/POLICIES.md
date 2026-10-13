@@ -54,7 +54,7 @@
 | `workspace_mounts` | `[]WorkspaceMount` | `[]` | Operator-authored host bind mounts. Never agent-chosen. |
 | `workspace_repos` | `[]WorkspaceRepo` | `[]` | Additional git repos cloned into the run — the clone counterpart of `workspace_mounts`. |
 | `ui_apps` | `[]UIApp` | `[]` | In-sandbox loopback HTTP apps the UI gateway may relay to a browser. Operator-authored, never agent-chosen, and never a command string. |
-| `tool_rules` | `[]ToolRule` | `[]` | Per-tool effects for an autonomous run's own tool calls: `allow`, `hold` or `deny`. Narrows `tool_approvals=hold` from "ask about everything" to a policy. Operator-authored, evaluated proxy-side. |
+| `tool_rules` | `[]ToolRule` | `[]` | Per-tool effects for an autonomous run's tool calls: `allow`, `hold` or `deny`. A `hold` or `deny` rule routes a background Claude Code run through the tool gate. Operator-authored, evaluated proxy-side. |
 | `git_push_any_branch` | `bool` | `false` | Turns OFF branch-namespace confinement (default **ON**) for this run's brokered pushes on every brokered lane; operator-authored, never agent-settable. See [`git_push_any_branch`](#git_push_any_branch). |
 | `push_rules` | `PushRulesSpec` | omitted = **no content rules** | Content rules for this run's brokered git pushes — WHAT a push may touch, alongside `git_push_any_branch`'s WHERE. Enforced on every brokered git lane, and on the Azure DevOps REST door, before a push is forwarded: see ["`push_rules` — `PushRulesSpec`"](#push_rules--pushrulesspec) below. |
 | `azure_devops_capabilities` | `[]string` | omitted = the provider row's `default_profile` | This run's Azure DevOps capabilities on the per-person (Entra) lane, chosen only within the row's `capability_ceiling`; unknown or unpermitted choices are refused. See [`azure_devops_capabilities`](#azure_devops_capabilities). |
@@ -856,7 +856,10 @@ What the check does and does not settle:
   - and the 201 carries a warning saying so (an agent with no tool-approval lane is refused instead)
   - See [three-roles.md § Three roles, and who sets the walls](operations/three-roles.md#three-roles-and-who-sets-the-walls) for the rubric that decides it.
 - The level never rewrites `tool_rules`, but it decides whether they take effect.
-- Under `auto` the tool gate is not wired and the rules are never consulted, so the `L1` switch to `hold` is what brings a run's `tool_rules` into force.
+- Since 0.9 a background Claude Code run whose resolved policy holds or denies any tool is routed through the tool gate automatically. So is one where the person set a tool rule or default.
+  - Tools the rules do not name keep running without a prompt: the routed run's default is `*: allow`, with provenance `posture`.
+  - A run already on the gated lane (an explicit `tool_approvals: hold`, a governance profile, autonomy `L1`) keeps its own default: an unmatched tool is held.
+  - Codex CLI and other harnesses without Wardyn's gate are not routed.
 
 ```json
 {
@@ -879,7 +882,7 @@ What the check does and does not settle:
 
 **It narrows; it never widens.**
 
-- Rules are consulted only for a run already in `hold`, so adding one cannot make a supervised run autonomous.
+- A rule never makes a supervised run autonomous: a run on the gated lane keeps its hold default, and a routed run is never looser than the ungated run it replaces.
 - The worst a mistaken rule can do is ask a human more often, or refuse a call the agent wanted.
 - That holds across the member seam too: a member's `inline_policy` may narrow the operator's rules, never widen them.
 - The composer clamp raises any weaker effect to the operator's (`allow` < `hold` < `deny`) and carries the operator's own rules into the run.
