@@ -533,7 +533,7 @@ func (s *Server) decide(w http.ResponseWriter, r *http.Request, approve bool) {
 // (helpers.go), even though its own comment calls itself the package's single
 // JSON-body decode primitive. decodeStrict 400s EVERY decode error including
 // io.EOF, and three shipped shell clients POST approve with no body at all and
-// assert 200|202 (scripts/test-drive.sh:465 and :579, test/e2e/e2e.sh:420) —
+// assert 200|202 (two in scripts/test-drive.sh, one in test/e2e/e2e.sh) —
 // all three would break. It also sets DisallowUnknownFields, which would reject
 // an older or newer client sending a field this build does not know.
 //

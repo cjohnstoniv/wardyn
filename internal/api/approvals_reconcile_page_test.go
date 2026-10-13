@@ -159,8 +159,11 @@ func TestReconcileNewestWinsAcrossPages(t *testing.T) {
 	if _, err := f.srv.ReconcileWorkspaceEgressDecisions(t.Context()); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
-	if reads.pageCalls < 6 || reads.listCalls != 0 {
-		t.Fatalf("page reads = %d, List calls = %d; want a multi-page projection walk and no List", reads.pageCalls, reads.listCalls)
+	// 7 approve·always rows in pages of 2 (2,2,2,1, then empty) and 3 deny·always
+	// rows (2,1, then empty): 8 reads. A cursor taken from anywhere but the last
+	// row of a page re-reads rows and takes more.
+	if reads.pageCalls != 8 || reads.listCalls != 0 {
+		t.Fatalf("page reads = %d, List calls = %d; want exactly 8 projection pages and no List", reads.pageCalls, reads.listCalls)
 	}
 	approved, denied := f.egressLists(t, ws)
 	if !slices.Contains(approved, "a.example.com") || slices.Contains(denied, "a.example.com") {
@@ -176,5 +179,39 @@ func TestReconcileNewestWinsAcrossPages(t *testing.T) {
 	}
 	if slices.Contains(approved, "old-allow.example.com") || slices.Contains(denied, "old-deny.example.com") {
 		t.Errorf("a verdict older than the list edit was replayed: approved=%v denied=%v", approved, denied)
+	}
+}
+
+// noPagerApprovals is an approval backend without the decided always-egress
+// projection: embedding the interface promotes only ApprovalService's methods.
+type noPagerApprovals struct {
+	ApprovalService
+	listCalls int
+}
+
+func (n *noPagerApprovals) List(ctx context.Context, state types.ApprovalState) ([]types.ApprovalRequest, error) {
+	n.listCalls++
+	return n.ApprovalService.List(ctx, state)
+}
+
+// TestReconcileWithoutTheProjectionErrors: a backend without the projection
+// makes the heal fail, and it never falls back to listing decided rows in full.
+func TestReconcileWithoutTheProjectionErrors(t *testing.T) {
+	f := newScopeFixture(t)
+	ws := f.seedWorkspace(t, nil, nil)
+	now := time.Now().UTC()
+	rcSeedAt(f, "registry.npmjs.org", types.ApprovalApproved, types.ScopeAlways, now.Add(-time.Hour), now, "")
+	backend := &noPagerApprovals{ApprovalService: f.approval}
+	f.srv.cfg.Approvals = backend
+
+	n, err := f.srv.ReconcileWorkspaceEgressDecisions(t.Context())
+	if err == nil || n != 0 {
+		t.Fatalf("reconcile = (%d, %v), want an error and nothing reconciled", n, err)
+	}
+	if backend.listCalls != 0 {
+		t.Fatalf("the heal listed decided approvals in full %d times", backend.listCalls)
+	}
+	if approved, denied := f.egressLists(t, ws); len(approved) != 0 || len(denied) != 0 {
+		t.Fatalf("approved=%v denied=%v, want both empty", approved, denied)
 	}
 }

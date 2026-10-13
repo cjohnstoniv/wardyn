@@ -63,7 +63,7 @@ func TestPG_ListDecidedAlwaysEgressPage(t *testing.T) {
 	for i, host := range []string{"a1", "a2", "a3", "a4", "a5"} {
 		at := base.Add(time.Duration(i) * time.Minute)
 		if i == 4 {
-			at = base.Add(3 * time.Minute) // shares a3's requested_at
+			at = base.Add(3 * time.Minute) // shares a4's requested_at
 		}
 		want[types.ApprovalApproved] = append(want[types.ApprovalApproved], seed(types.ApprovalEgressDomain, host+".example.com", at, types.ApprovalApproved, types.ScopeAlways, "always"))
 	}
@@ -115,5 +115,65 @@ func TestPG_ListDecidedAlwaysEgressPage(t *testing.T) {
 		if !slices.Equal(ids, w) {
 			t.Fatalf("%s: walked %d rows %v, want exactly the %d always-scoped egress verdicts %v", state, len(ids), ids, len(w), w)
 		}
+	}
+}
+
+// TestPG_ListDecidedAlwaysEgressPageSplitsATie puts a page boundary inside a
+// requested_at tie: three verdicts share one request time and are walked two at
+// a time, so the second page starts between tied rows. The keyset must carry the
+// id across that boundary, or the third row is skipped.
+func TestPG_ListDecidedAlwaysEgressPageSplitsATie(t *testing.T) {
+	pool := runsPGPoolIsolated(t)
+	ctx := context.Background()
+	pg := store.NewPG(pool)
+	run := persistRun(t, ctx, pool, newRun(types.RunRunning))
+	tied := time.Now().UTC().Truncate(time.Microsecond).Add(-time.Hour)
+
+	var want []uuid.UUID
+	for _, host := range []string{"t1", "t2", "t3"} {
+		ap, err := pg.CreateApproval(ctx, types.ApprovalRequest{
+			ID: uuid.New(), RunID: run.ID, Kind: types.ApprovalEgressDomain,
+			RequestedScope: []byte(`{"host":"` + host + `.example.com"}`),
+			State:          types.ApprovalPending, RequestedAt: tied,
+		})
+		if err != nil {
+			t.Fatalf("create approval: %v", err)
+		}
+		if _, err := pg.DecideApproval(ctx, ap.ID, types.ApprovalDecision{
+			State: types.ApprovalDenied, DecidedBy: "op@example.com", Scope: types.ScopeAlways,
+		}); err != nil {
+			t.Fatalf("decide approval: %v", err)
+		}
+		want = append(want, ap.ID)
+	}
+
+	var got []uuid.UUID
+	var afterAt time.Time
+	afterID := uuid.Nil
+	var sizes []int
+	for pages := 0; ; pages++ {
+		if pages > 5 {
+			t.Fatal("the keyset walk did not end")
+		}
+		page, err := pg.ListDecidedAlwaysEgressPage(ctx, types.ApprovalDenied, afterAt, afterID, 2)
+		if err != nil {
+			t.Fatalf("page: %v", err)
+		}
+		sizes = append(sizes, len(page))
+		if len(page) == 0 {
+			break
+		}
+		for _, ap := range page {
+			got = append(got, ap.ID)
+		}
+		afterAt, afterID = page[len(page)-1].RequestedAt, page[len(page)-1].ID
+	}
+	if !slices.Equal(sizes, []int{2, 1, 0}) {
+		t.Fatalf("page sizes = %v, want [2 1 0]: the second page must start inside the tie", sizes)
+	}
+	slices.SortFunc(got, func(a, b uuid.UUID) int { return bytes.Compare(a[:], b[:]) })
+	slices.SortFunc(want, func(a, b uuid.UUID) int { return bytes.Compare(a[:], b[:]) })
+	if !slices.Equal(got, want) {
+		t.Fatalf("walked %v, want each of the three tied verdicts once: %v", got, want)
 	}
 }
