@@ -5,6 +5,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 
 	"github.com/google/uuid"
@@ -110,16 +111,50 @@ func (d placementDemand) withFit(t poolTarget) poolTarget {
 	return t
 }
 
-// runnerSource is the runner limit source's candidates: the per-run limits of the candidates that
-// passed every demand, narrowed to the pinned one when the request names one. The fold takes the
-// largest of them, so a dry door shows the biggest run the pool can take, and placement then keeps only
-// candidates whose per-run limit holds the applied size.
-func runnerSource(fit []poolTarget, pin string) []runnerpool.RunnerCapacity {
-	var out []runnerpool.RunnerCapacity
+// runnerSource is the runner limit source's candidate: one real runner among the candidates that
+// passed every demand (the pinned one when the request names one), so the size the run is cut to is a
+// size that runner takes whole. A runner whose per-run limit holds everything the run asks for (ask; a
+// 0 is not asked) is preferred, so an ask one runner can take is never cut for another's sake; among
+// those, or among all when none does, the fold takes the largest by CPU, memory, then disk. Placement
+// then keeps only candidates whose per-run limit holds the applied size.
+func runnerSource(fit []poolTarget, pin string, ask types.RunnerAmounts) []runnerpool.RunnerCapacity {
+	var all, whole []runnerpool.RunnerCapacity
 	for _, t := range fit {
-		if t.limits != nil && (pin == "" || t.id == pin) {
-			out = append(out, runnerpool.RunnerCapacity{CPUMillis: t.limits.PerRun.CPUMillis, MemoryMiB: t.limits.PerRun.MemoryMiB, DiskMiB: t.limits.PerRun.DiskMiB})
+		if t.limits == nil || (pin != "" && t.id != pin) {
+			continue
+		}
+		p := t.limits.PerRun
+		c := runnerpool.RunnerCapacity{CPUMillis: p.CPUMillis, MemoryMiB: p.MemoryMiB, DiskMiB: p.DiskMiB}
+		all = append(all, c)
+		if ask.CPUMillis <= p.CPUMillis && ask.MemoryMiB <= p.MemoryMiB && ask.DiskMiB <= p.DiskMiB {
+			whole = append(whole, c)
 		}
 	}
-	return out
+	if len(whole) > 0 {
+		return whole
+	}
+	return all
+}
+
+// insertRoomRefusal answers the insert's own refusal under the runner's row lock, nil for any other
+// error: another launch took the runner's last room after placement read it (runner_at_capacity), or
+// the runner's limits were lowered under the run's size since, so it could never take it
+// (placement_capability).
+func insertRoomRefusal(err error, pool types.ResolvedRunnerPool) *runRefusal {
+	var full *store.RunnerAtCapacityError
+	if !errors.As(err, &full) {
+		return nil
+	}
+	reason := placement.ReasonRunnerAtCapacity
+	if full.NeverFits {
+		reason = placement.ReasonPlacementCapability
+	}
+	return targetRefusal(reason, pool.Name, pool.Scope)
+}
+
+// reserved is what the run holds on its runner while it holds a sandbox there: the CPU and memory it
+// gets and its main drive, as the fold sized them. The insert writes it, and a queued run's start
+// writes it again, since the start folds the run afresh.
+func (p runPlacement) reserved(drive mainDrive) types.RunnerAmounts {
+	return types.RunnerAmounts{CPUMillis: int64(p.applied.CPUMillis.Applied), MemoryMiB: int64(p.applied.MemoryMiB.Applied), DiskMiB: int64(drive.MiB)}
 }

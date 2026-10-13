@@ -214,7 +214,7 @@ func (q queuedCreate) answer(s *Server, w http.ResponseWriter, r *http.Request) 
 	if row := q.f.place.row; row.Limits != nil && row.Limits.MaxConcurrentRuns != nil {
 		capMax = *row.Limits.MaxConcurrentRuns
 	}
-	if err := qs.SetQueueWait(ctx, created.ID, statusDetailQueuePrefix+string(runnerpool.WaitAtCapacity)); err != nil {
+	if err := qs.SetQueueWait(ctx, created.ID, statusDetailQueuePrefix+string(q.waitReason())); err != nil {
 		slog.WarnContext(ctx, "wardynd: record queue wait", slog.String("run_id", created.ID.String()), slog.Any("err", err))
 	}
 	// One bounded promotion attempt for this pool: a free slot starts the run now. On the bound it rolls
@@ -225,13 +225,26 @@ func (q queuedCreate) answer(s *Server, w http.ResponseWriter, r *http.Request) 
 		created = got
 	}
 	if created.State == types.RunQueued {
-		warnings = append(warnings, runnerpool.WaitAtCapacityMsg(pool.Name, capMax))
+		sentence := runnerpool.WaitAtCapacityMsg(pool.Name, capMax)
+		if q.f.place.waitsForRoom {
+			sentence = runnerpool.WaitRunnersAtCapacityMsg(pool.Name)
+		}
+		warnings = append(warnings, sentence)
 		runs := []types.AgentRun{created}
 		s.projectStatusDetailFor(r, runs) // the 201 carries the same wait reason and place a GET does
 		created = runs[0]
 	}
 	w.Header().Set("Location", s.cfg.BasePath+"/api/v1/runs/"+created.ID.String())
 	writeJSON(w, http.StatusCreated, createRunResponse{AgentRun: created, Warnings: warnings})
+}
+
+// waitReason is why the launch waits: the pool is at its own cap, or (a pool with none) every runner
+// that could take the run is at one of its limits.
+func (q queuedCreate) waitReason() runnerpool.WaitReason {
+	if q.f.place.waitsForRoom {
+		return runnerpool.WaitRunnersAtCapacity
+	}
+	return runnerpool.WaitAtCapacity
 }
 
 // entry is the run_queue row a launch is stored with.
@@ -277,8 +290,8 @@ func (s *Server) auditQueuedCreate(ctx context.Context, q queuedCreate, created 
 	stampDriveAudit(createData, q.f.drives)
 	stampHarnessSet(createData, q.f.harnesses, q.f.image)
 	createData["queue"] = map[string]any{
-		"pool_id": e.PoolID, "position": position, "max_wait_sec": waitSec, "deadline_at": e.DeadlineAt, "capped": true,
-		"reason": string(runnerpool.WaitAtCapacity),
+		"pool_id": e.PoolID, "position": position, "max_wait_sec": waitSec, "deadline_at": e.DeadlineAt, "capped": !q.f.place.waitsForRoom,
+		"reason": string(q.waitReason()),
 	}
 	q.f.comps.stampRunCreate(createData)
 	maps.Copy(createData, q.f.place.auditFields(created))

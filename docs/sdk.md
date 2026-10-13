@@ -645,7 +645,7 @@ start.
 | `runner_posture_unmet` | `422`: a `runner_resident` credential the runner's reported posture does not meet (the detail names the field), or a run with a CC3 floor, which a runner-asserted class never meets for a resident credential. |
 | `placement_denied` | `403`: your governance profile's `deny_placements` refuses the run's placement, at create, preflight, policy preview and source scans; audited `authz.denied` (target `runs.placement`). At revive the same `403` is audited `run.revive` denied; at dispatch the run fails and is audited `run.dispatch` failure with this `reason`. A managed-harness sign-in is exempt at every door; a site-config probe at create and dispatch. |
 | `runner_offline` | `422`: a `placement: "local"` run whose runner is offline or has not reported its capabilities yet, or none of your runners is online. |
-| `runner_at_capacity` | `422`: a revive onto a runner at one of its limits (Runs at once, or a total). A launch whose runners are all at their limits waits in the pool's queue instead. |
+| `runner_at_capacity` | `422`: a revive onto a runner at one of its limits (Runs at once, or a total); or a launch that lost the runner's last room to another launch between placement and the insert (launch it again). A launch whose runners are all at their limits waits in the pool's queue instead. |
 | `runner_limits_unset` | `422`: no runner of the pool that could take the run has declared its limits. |
 | `override_refused` | `422`: a widening, base-host removal or foreign secret the narrowing table never allows. |
 | `request_field_unavailable` / `main_drive_unenforceable` | `422`: a field this server cannot honour yet, refused and never dropped; or a disk size the run's policy sets that the pool's runners cannot cap. |

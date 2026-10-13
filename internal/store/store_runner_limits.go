@@ -34,9 +34,12 @@ import (
 var ErrRunnerAtCapacity = errors.New("store: runner is running its limit of runs at once")
 
 // RunnerAtCapacityError names the runner and its Runs at once for the sentence; it is ErrRunnerAtCapacity.
+// NeverFits says the run could not go there however empty the runner is: it is past the per-run limit,
+// or the runner declares no limits.
 type RunnerAtCapacityError struct {
-	Runner string
-	Max    int
+	Runner    string
+	Max       int
+	NeverFits bool
 }
 
 func (e *RunnerAtCapacityError) Error() string { return ErrRunnerAtCapacity.Error() }
@@ -165,12 +168,12 @@ func (r runnerRoom) runsLeft() int {
 	return r.limits.RunsAtOnce - r.used.Runs
 }
 
-func (r runnerRoom) refusal() error {
+func (r runnerRoom) refusal(need types.RunnerAmounts) error {
 	runs := 0
 	if r.limits != nil {
 		runs = r.limits.RunsAtOnce
 	}
-	return &RunnerAtCapacityError{Runner: r.name, Max: runs}
+	return &RunnerAtCapacityError{Runner: r.name, Max: runs, NeverFits: runnerpool.Fits(r.limits, r.used, need) != runnerpool.FitNoRoom}
 }
 
 // lockRunnerRooms locks the runners keys name, self-hosted rows then remote-hosted rows, each FOR NO KEY
@@ -236,7 +239,7 @@ func admitOnFirstRunner(ctx context.Context, q Querier, keys []string, need type
 			return k, nil
 		}
 	}
-	return "", rooms[keys[0]].refusal()
+	return "", rooms[keys[0]].refusal(need)
 }
 
 // admitOnRunner locks one runner and refuses with a RunnerAtCapacityError when a run reserving need
@@ -248,7 +251,7 @@ func admitOnRunner(ctx context.Context, q Querier, key string, need types.Runner
 		return err
 	}
 	if room, ok := rooms[key]; ok && !room.fits(need) {
-		return room.refusal()
+		return room.refusal(need)
 	}
 	return nil
 }

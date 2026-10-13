@@ -310,7 +310,7 @@ func TestBindKeepsThePreferredRunner(t *testing.T) {
 		{id: b.String(), runnerID: &b, facts: runner.TargetFacts{Classes: []types.ConfinementClass{types.CC1}}},
 	}}
 	runID := uuid.New()
-	picked, refusal := p.bind(runID, types.CC1, nil)
+	picked, refusal := p.bind(runID, types.CC1, "")
 	if refusal != nil || picked.runnerID == nil {
 		t.Fatalf("bind = %+v %+v", picked, refusal)
 	}
@@ -318,12 +318,29 @@ func TestBindKeepsThePreferredRunner(t *testing.T) {
 	if *picked.runnerID == a {
 		other = b
 	}
-	if got, _ := p.bind(runID, types.CC1, &other); got.runnerID == nil || *got.runnerID != other {
+	if got, _ := p.bind(runID, types.CC1, other.String()); got.runnerID == nil || *got.runnerID != other {
 		t.Fatalf("bind preferring %s = %v; want the preferred runner kept", other, got.runnerID)
 	}
 	gone := uuid.New()
-	if got, _ := p.bind(runID, types.CC1, &gone); got.runnerID == nil || *got.runnerID != *picked.runnerID {
+	if got, _ := p.bind(runID, types.CC1, gone.String()); got.runnerID == nil || *got.runnerID != *picked.runnerID {
 		t.Fatalf("bind preferring a runner no longer eligible = %v; want the run's own pick %s", got.runnerID, *picked.runnerID)
+	}
+	// A remote-hosted runner is kept the same way.
+	remote := runPlacement{pooled: true, eligible: []poolTarget{
+		{id: "alpha", executor: "alpha", facts: runner.TargetFacts{Classes: []types.ConfinementClass{types.CC1}}},
+		{id: "beta", executor: "beta", facts: runner.TargetFacts{Classes: []types.ConfinementClass{types.CC1}}},
+	}}
+	own, _ := remote.bind(runID, types.CC1, "")
+	kept := "alpha"
+	if own.executor == "alpha" {
+		kept = "beta"
+	}
+	if got, _ := remote.bind(runID, types.CC1, kept); got.executor != kept {
+		t.Fatalf("bind preferring the remote-hosted runner %s = %q; want it kept", kept, got.executor)
+	}
+	run := types.AgentRun{ID: runID, RunnerPoolExecutor: kept}
+	if ref := remote.apply(&run, types.CC1); ref != nil || run.RunnerPoolExecutor != kept {
+		t.Fatalf("apply on a run already bound to %s = %q %v; want it kept", kept, run.RunnerPoolExecutor, ref)
 	}
 }
 

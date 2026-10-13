@@ -591,6 +591,9 @@ func (s *Server) stepPlacement(f *runFold, rec *foldRecorder) bool {
 	in := placementInput{req: f.req, floor: confinementFloorSpec(f.spec, f.comps), baseline: f.baseline, reqCC: f.reqCC, reqCCOK: true,
 		ceiling: f.ceiling, untouched: resourceBaseline(f.source, f.spec), ask: resourceAsk(f.req.Resources, sourceSize(f.source, f.ceiling)),
 		promoted: f.promoted, drives: len(f.drives) > 0}
+	if f.spec.Resources != nil {
+		in.policyDiskMiB = f.spec.Resources.DiskMiB
+	}
 	if f.mode != foldCreate {
 		in.dryDoor = true
 	}
