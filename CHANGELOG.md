@@ -131,7 +131,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - The server's Docker host or Kubernetes cluster gets its limits measured at the first boot. When an amount cannot
   be measured (often disk: on Docker Desktop, or when `wardynd` runs in a container) none is set, and runs there are
   refused `runner_limits_unset` until an admin sets them all with `wardyn runner set <id> …`. Read them with
-  `wardyn runner remote show <id> --json`.
+  `wardyn runner remote show <id> --json`. A stack brought up with `make setup` is given its limits by setup; any
+  other install sets them once: `wardyn runner remote list --no-limits`, then `wardyn runner remote propose <id>` and
+  `wardyn runner set <id>` (or Runners → the runner → Edit limits).
 - A launch can now wait. One whose pool is running its Runs at once, or whose runners are all at their limits, is
   stored `QUEUED` (`201`, wait reason `runner_pool_at_capacity` or `runner_pool_runners_at_capacity`) in every
   pool. A create that loses a runner's last room to another launch as it is stored is refused
@@ -612,6 +614,14 @@ and does not yet follow semantic versioning (interfaces are not stable).
   and pools, and My pools creates and manages your own user pools and adds your runner to them. `wardyn runner pool
   use-policy get|set|clear` does the same from the CLI, and `wardyn runner pool show` prints who may use a pool and
   the limits it sets.
+- `make setup`, `make demo`, `make test-drive` and `scripts/ci-run.sh` give the server's runner its limits once it
+  is up: half of what the host has, shown before they are set. Where the server cannot see the disk (Docker Desktop,
+  or `wardynd` in a container) setup asks for the free disk at a terminal, or reads `WARDYN_SETUP_RUNNER_DISK_GB`,
+  and stops naming the variable when neither is there; `WARDYN_SETUP_RUNNER_LIMITS` sets the whole set. Nothing is
+  defaulted. New: `wardyn runner remote propose <id> [--free-disk GB]` prints the limits registration's rule gives a
+  remote-hosted runner, as `wardyn runner set` flags, and sets nothing; `wardyn runner remote list --no-limits`
+  lists the runners that take no run until they have limits. The kind quickstart reads the cluster's nodes
+  (`k8s.readNodes`), so the server measures the cluster itself.
 
 ### Changed
 
@@ -945,6 +955,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - Tools and access no longer shows "Nothing else to set up" when the policy preview failed or has not answered: it
   shows the server's sentence with "Check again". A run with no harness no longer gets a blank harness row there.
   The run document says "1 issue" in the singular.
+- New Run, Files: the Subfolder field and the "Starts here" line no longer keep a subfolder typed for an earlier
+  start after that start was replaced or removed; the next start begins at its own top, as the run is sent. A drive
+  list that fails to load no longer closes an edit in progress.
 
 
 ## [0.8.9] — 2026-10-09
