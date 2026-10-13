@@ -151,6 +151,14 @@ func zeroNil(p *int64) int64 {
 	return *p
 }
 
+// offDeployment reports whether a holding row is bound to a placement outside this deployment: a
+// registered runner (its id, or placement local once the runner is erased), or an executor that is
+// not one of its own substrates. localExecutor nil treats every executor as one.
+func offDeployment(runnerID *uuid.UUID, placed, executor string, localExecutor func(string) bool) bool {
+	return runnerID != nil || placed == string(types.PlacementLocal) ||
+		(executor != "" && localExecutor != nil && !localExecutor(executor))
+}
+
 // RunCapacity reads every non-terminal row in one query (the positive
 // types.NonTerminalRunStates list, never NOT IN terminal, so a new terminal state cannot be
 // counted as active) and folds it per the state table in the 0.8.6 fleet design: STARTING,
@@ -159,8 +167,8 @@ func zeroNil(p *int64) int64 {
 // QUEUED run holds no slot and no reservation, but wardyn_runs_active still reports it). A kept
 // row whose agent still runs (HoldsSandboxSQL: kept after an outage, before its end) also
 // holds its agent's reservation, without the proxy that was stopped. A run bound to a placement
-// outside this deployment (a registered runner, or an executor it does not run) is counted in States
-// and Kept only: its sizing, whatever runner_kind it was stamped with and even when unstamped, is not
+// outside this deployment (a registered runner, or an executor it does not run) is counted in States,
+// Kept and Paused only: its sizing, whatever runner_kind it was stamped with and even when unstamped, is not
 // this deployment's.
 func (s PG) RunCapacity(ctx context.Context, o RunCapacityOpts) (RunCapacity, error) {
 	states := make([]string, 0, len(types.NonTerminalRunStates))
@@ -221,12 +229,11 @@ func (s PG) RunCapacity(ctx context.Context, o RunCapacityOpts) (RunCapacity, er
 			}
 			pc, pm = new(int64), new(int64) // its proxy was stopped
 		}
-		if runnerID != nil || placed == string(types.PlacementLocal) ||
-			(executor != "" && o.LocalExecutor != nil && !o.LocalExecutor(executor)) {
-			continue
-		}
 		if paused != nil {
 			out.Paused++
+		}
+		if offDeployment(runnerID, placed, executor, o.LocalExecutor) {
+			continue
 		}
 		// A legacy row is attributed to its runner through runner_target.
 		k := rtgt

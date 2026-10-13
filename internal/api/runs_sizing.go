@@ -50,19 +50,19 @@ func (s *Server) runOnDeployment(run types.AgentRun) bool {
 	if run.RunnerID != nil || run.Placement == types.PlacementLocal {
 		return false
 	}
-	return run.RunnerPoolExecutor == "" || s.deploymentExecutor(run.RunnerPoolExecutor)
+	return run.RunnerPoolExecutor == "" || s.remoteRunnerConfigured(run.RunnerPoolExecutor)
 }
 
-// recordRunSizing writes the dispatch-time sizing record. A failure is logged and leaves the
+// recordRunSizing writes the dispatch-time sizing record of a run on this deployment (runOnDeployment). A failure is logged and leaves the
 // row NULL; it never blocks dispatch.
-func (s *Server) recordRunSizing(ctx context.Context, runID uuid.UUID, res runner.Resources, azure bool) {
+func (s *Server) recordRunSizing(ctx context.Context, run types.AgentRun, res runner.Resources, azure bool) {
 	setter, ok := s.cfg.Store.(runSizingSetter)
-	if !ok {
+	if !ok || !s.runOnDeployment(run) {
 		return
 	}
-	if err := setter.SetRunSizing(ctx, runID, runSizing(s.cfg.RunnerTarget, res, azure)); err != nil {
+	if err := setter.SetRunSizing(ctx, run.ID, runSizing(s.cfg.RunnerTarget, res, azure)); err != nil {
 		slog.WarnContext(ctx, "wardynd: persist run sizing failed",
-			slog.String("run_id", runID.String()), slog.Any("err", err))
+			slog.String("run_id", run.ID.String()), slog.Any("err", err))
 	}
 }
 

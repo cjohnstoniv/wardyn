@@ -58,7 +58,7 @@ func (s *Server) writeFleetGauges(r *http.Request, w io.Writer) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), storePingTimeout)
 	defer cancel()
-	c, ok := s.fleet.get(ctx, reader, s.cfg.RunnerTarget, s.deploymentExecutor)
+	c, ok := s.fleet.get(ctx, reader, s.cfg.RunnerTarget, s.remoteRunnerConfigured)
 	if !ok {
 		return
 	}
