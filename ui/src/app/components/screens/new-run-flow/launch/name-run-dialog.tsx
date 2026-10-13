@@ -23,6 +23,7 @@ import { NR_LAUNCH } from "../../../wardyn/copy/new-run/launch";
 import { NR_REVIEW } from "../../../wardyn/copy/new-run/review";
 import { NR_SHARED } from "../../../wardyn/copy/new-run/shared";
 import { useModelAccessDoor } from "../../../wardyn/model-access-context";
+import { PolicyRemedy } from "../../../wardyn/policy-remedy";
 import { useAdoLaunchDoor } from "../checks/use-ado-launch-door";
 import { intentToWire } from "../draft/intent-to-wire";
 import type { RunIntent } from "../draft/run-intent";
@@ -195,6 +196,7 @@ function NameRunForm({ onOpenChange, onCreated }: Pick<NameRunDialogProps, "onOp
         {sentence && (
           <p id="name-run-sentence" role="alert" className="text-sm text-danger">
             {sentence}
+            {create.refusal && <PolicyRemedy policy={create.policy} className="mt-1 block" />}
           </p>
         )}
 

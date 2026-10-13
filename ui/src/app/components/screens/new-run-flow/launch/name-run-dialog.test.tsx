@@ -12,6 +12,7 @@ import { HttpError } from "../../../../lib/api/core";
 import { runs } from "../../../../lib/api/runs";
 import { SCENARIO_PREFLIGHT } from "../../../../lib/new-run-fixtures/scenarios/preflight";
 import { ADO } from "../../../../lib/ado-entra-copy";
+import { POLICY_REMEDY } from "../../../../lib/governance-copy";
 import type { PreflightResult } from "../../../../lib/types/preflight";
 import { NR_LAUNCH } from "../../../wardyn/copy/new-run/launch";
 import { NR_REVIEW } from "../../../wardyn/copy/new-run/review";
@@ -213,6 +214,20 @@ describe("Name this run: a create the check did not foresee", () => {
     await userEvent.click(launchButton());
     await waitFor(() => expect(onCreated).toHaveBeenCalledTimes(1));
     expect(within(box).queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("a refusal that names its policy says who owns it and where to ask, under the sentence", async () => {
+    const policy = { source: "profile", name: "Contractors", owner: "Platform Security", request_url: "https://example.com/access" };
+    create.mockRejectedValueOnce(Object.assign(refusal(422, BREACH, "run_quota"), { policy }));
+    open();
+    const box = await dialog();
+    await userEvent.type(within(box).getByLabelText(NR_LAUNCH.TITLE_LABEL), "policy refusal");
+    await within(box).findByText(NR_LAUNCH.CHECKED_JUST_NOW);
+    await userEvent.click(launchButton());
+    const alert = await within(box).findByRole("alert");
+    expect(alert).toHaveTextContent(BREACH);
+    expect(within(alert).getByTestId("policy-remedy")).toHaveTextContent(POLICY_REMEDY.OWNER(policy.owner));
+    expect(within(alert).getByRole("link", { name: new RegExp(POLICY_REMEDY.LINK) })).toHaveAttribute("href", policy.request_url);
   });
 
   it("a model_credential refusal that names its provider opens that provider's sign-in, which re-checks", async () => {
