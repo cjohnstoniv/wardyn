@@ -42,6 +42,7 @@ import (
 	"github.com/google/uuid"
 	"golang.org/x/oauth2"
 
+	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -141,7 +142,7 @@ func (s *Server) componentAzureCLIAdmitted(r *http.Request, adm *componentAdmiss
 	signedIn := false
 	if s.credentialPerson(adm.caller) && !previewHidesOwnCredential(r.Context()) {
 		var err error
-		if signedIn, err = s.azureCLISignedIn(r.Context(), adm.caller, id); err != nil {
+		if signedIn, err = s.azureCLISignedIn(secretstore.WithPurpose(r.Context(), secretstore.PurposeStatus), adm.caller, id); err != nil {
 			return &componentRefusal{refusal: runServerError("read the Azure CLI sign-in", err), reason: reasonStoreError,
 				ordinal: i, source: c.source, id: c.snapshot.ComponentID}
 		}
