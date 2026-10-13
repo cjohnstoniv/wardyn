@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/jackc/pgx/v5"
 
 	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/store"
@@ -113,7 +113,7 @@ func TestPG_LaunchIntentEraseLinearizesWithLaunches(t *testing.T) {
 
 	before := intentRun("alice", `{"agent":"claude-code","task":"before"}`)
 	beforeDone := launch(before)
-	waitAdvisoryWaiters(ctx, t, pool, 1) // holds alice's lock, waits on the cap
+	waitAdvisoryWaiters(ctx, t, capHold, 1) // holds alice's lock, waits on the cap
 	erased := make(chan int, 1)
 	go func() {
 		n, err := st.DeleteLaunchIntentsCreatedBy(ctx, "alice")
@@ -122,15 +122,22 @@ func TestPG_LaunchIntentEraseLinearizesWithLaunches(t *testing.T) {
 		}
 		erased <- n
 	}()
-	waitAdvisoryWaiters(ctx, t, pool, 2) // the erase waits for that launch
+	waitAdvisoryWaiters(ctx, t, capHold, 2) // the erase waits for that launch
 	// The uncapped path (no WARDYN_MAX_CONCURRENT_RUNS) meets the queued erase too: it starts at once, with no intent.
-	uncapped, err := st.CreateRun(ctx, intentRun("alice", `{"agent":"claude-code","task":"uncapped"}`))
-	if err != nil || uncapped.LaunchIntent != nil {
-		t.Fatalf("CreateRun beside a queued erase = %v, kept %v; want started with no intent", err, uncapped.LaunchIntent != nil)
+	// It runs on its own goroutine: this one holds capHold, and a second pool acquire here would trip the nested-acquire guard.
+	uncappedDone := make(chan created, 1)
+	go func() {
+		got, err := st.CreateRun(ctx, intentRun("alice", `{"agent":"claude-code","task":"uncapped"}`))
+		uncappedDone <- created{got, err}
+	}()
+	u := <-uncappedDone
+	uncapped := u.run
+	if u.err != nil || uncapped.LaunchIntent != nil {
+		t.Fatalf("CreateRun beside a queued erase = %v, kept %v; want started with no intent", u.err, uncapped.LaunchIntent != nil)
 	}
 	during := intentRun("alice", `{"agent":"claude-code","task":"during"}`)
 	duringDone := launch(during)
-	waitAdvisoryWaiters(ctx, t, pool, 3) // met the queued erase, now waits on the cap
+	waitAdvisoryWaiters(ctx, t, capHold, 3) // met the queued erase, now waits on the cap
 	if err := capHold.Commit(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -155,12 +162,14 @@ func TestPG_LaunchIntentEraseLinearizesWithLaunches(t *testing.T) {
 	}
 }
 
-// waitAdvisoryWaiters returns once n sessions wait on an advisory lock.
-func waitAdvisoryWaiters(ctx context.Context, t *testing.T, pool *pgxpool.Pool, n int) {
+// waitAdvisoryWaiters returns once n sessions wait on an advisory lock. It polls
+// through q, the connection the test already holds: a second pool acquire while
+// the cap holder is out would trip the nested-acquire guard.
+func waitAdvisoryWaiters(ctx context.Context, t *testing.T, q pgx.Tx, n int) {
 	t.Helper()
 	for {
 		var waiting int
-		if err := pool.QueryRow(ctx, `SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND NOT granted`).Scan(&waiting); err != nil {
+		if err := q.QueryRow(ctx, `SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND NOT granted`).Scan(&waiting); err != nil {
 			t.Fatalf("poll pg_locks (want %d waiting): %v", n, err)
 		}
 		if waiting >= n {
