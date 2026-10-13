@@ -187,7 +187,7 @@ describe("Run step: pool summary", () => {
   it("with no pool maximum, shows the running count as text and no meter", async () => {
     show(AGENT, list([{ ...SHARED, slots: { used: 4, waiting: 0, verdict: "starts_now" } }]));
     expect(await screen.findByText(NR_RUN.RUNNING_ONLY(4))).toBeInTheDocument();
-    expect(screen.getByText(NR_RUN.NO_POOL_LIMIT)).toBeInTheDocument();
+    expect(screen.getByText(NR_RUN.POOL_LIMIT_FROM_RUNNERS)).toBeInTheDocument();
     expect(screen.queryByRole("meter", { name: NR_RUN.CAPACITY_LABEL })).not.toBeInTheDocument();
   });
 
@@ -251,7 +251,7 @@ describe("Run step: pool summary", () => {
   it("shows each per-run limit with its own source, and an unbounded one as no maximum", async () => {
     const limits = effectiveLimits("interactive", {
       cpu_millis: { default: { value: 1000 }, cap: { value: 2000 }, cap_source: "governance" },
-      memory_mib: { default: { value: 1024 }, cap: { value: 4096 }, cap_source: "runner_capacity" },
+      memory_mib: { default: { value: 1024 }, cap: { value: 4096 }, cap_source: "runner" },
       lifetime_sec: { default: { value: 0, unlimited: true }, cap: { value: 0, unlimited: true } },
       disk_mib: { default: { value: 5120 }, cap: { value: 10240 }, cap_source: "pool" },
     });

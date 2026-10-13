@@ -71,7 +71,8 @@ func assertedSubjectTx(ctx context.Context, tx pgx.Tx, runnerID uuid.UUID, row r
 // action without any run lock: there is no run row. The order is runner FOR
 // SHARE, then the action. A success settles the earlier deferred actions of
 // its obligation ('chain'); nothing else in the org changes.
-func recordAssertedActionResultTx(ctx context.Context, tx pgx.Tx, runnerID, runID, actionID uuid.UUID, outcome string, observedAt time.Time) (types.RunnerPendingAction, bool, error) {
+func recordAssertedActionResultTx(ctx context.Context, tx pgx.Tx, runnerID, runID, actionID uuid.UUID, outcome, reason string, observedAt time.Time,
+	prepare func(context.Context, types.AuditEvent) (types.AuditEvent, error)) (types.RunnerPendingAction, bool, error) {
 	var claimed bool
 	err := tx.QueryRow(ctx, `SELECT true FROM runners WHERE id = $1 AND state = 'claimed' AND revoked_at IS NULL FOR SHARE`, runnerID).Scan(&claimed)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -97,6 +98,12 @@ func recordAssertedActionResultTx(ctx context.Context, tx pgx.Tx, runnerID, runI
 		WHERE id = $1 AND applied_at IS NULL RETURNING `+actionCols, actionID, outcome, observedAt))
 	if err != nil {
 		return types.RunnerPendingAction{}, false, err
+	}
+	if outcome == types.RunnerActionRefused {
+		// An asserted subject has no run row for the audit row to name.
+		if err := recordRunnerActionRefusalTx(ctx, tx, a, nil, reason, prepare); err != nil {
+			return types.RunnerPendingAction{}, false, err
+		}
 	}
 	if outcome == types.RunnerActionSuccess {
 		if _, err := tx.Exec(ctx, `UPDATE runner_pending_actions SET settled_at = clock_timestamp(), settlement = 'chain', settled_by = $2

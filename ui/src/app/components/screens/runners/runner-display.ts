@@ -4,9 +4,8 @@
  */
 
 // How a runner reads, shared by the Admin -> Runners page and the My runner card: the one state word,
-// the posture and capacity lines, the barrier names and the waiting runner's remaining time. Every
-// posture, capacity, barrier and folder fact is what the runner reported; absent is "Not reported
-// yet", never a guess.
+// the posture lines, the barrier names and the waiting runner's remaining time. Every posture, barrier
+// and folder fact is what the runner reported; absent is "Not reported yet", never a guess.
 import { BARRIER_LABEL } from "../../../lib/runner-pool-refusals";
 import type { RunnerPosture, RunnerView } from "../../../lib/types/runners";
 import { RUNNER } from "../../wardyn/copy/runners";
@@ -38,26 +37,9 @@ const OS_NAME: Record<string, string> = { darwin: "macOS", windows: "Windows", l
 
 export const osLine = (p: RunnerPosture): string => RUNNER.OS(OS_NAME[p.os] ?? p.os, p.os_version).trim();
 
-/** The table cell: OS, MDM and disk, short. */
-export function postureShort(p?: RunnerPosture): string {
-  if (!p) return RUNNER.NOT_REPORTED;
-  return [osLine(p), p.mdm_managed ? RUNNER.MDM_SHORT : RUNNER.MDM_NO_SHORT, p.disk_encrypted ? RUNNER.DISK_SHORT : RUNNER.DISK_NO_SHORT].join(" · ");
-}
-
 /** The drawer and card lines, full words. */
 export function postureLines(p: RunnerPosture): string[] {
   return [osLine(p), p.mdm_managed ? RUNNER.MDM_YES : RUNNER.MDM_NO, p.disk_encrypted ? RUNNER.DISK_YES : RUNNER.DISK_NO];
-}
-
-// CPUs from milli-CPUs, one decimal at most.
-const cpus = (millis: number) => Number((millis / 1000).toFixed(1));
-
-export function capacityShort(c?: RunnerView["capacity"]): string {
-  return c ? RUNNER.CAPACITY_SHORT(cpus(c.cpu_millis_max), c.memory_mib_max) : RUNNER.NOT_REPORTED;
-}
-
-export function capacityValue(c?: RunnerView["capacity"]): string {
-  return c ? RUNNER.CAPACITY_VALUE(cpus(c.cpu_millis_max), c.memory_mib_max) : RUNNER.NOT_REPORTED;
 }
 
 /** Barrier names in the order the runner reported them (strongest last). */

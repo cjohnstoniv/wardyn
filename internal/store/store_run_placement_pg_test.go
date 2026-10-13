@@ -35,7 +35,7 @@ func TestPG_RunPlacement_RoundTripsEveryColumn(t *testing.T) {
 	runnerID := uuid.New()
 	_, err := store.NewPG(pool).CreateRunner(ctx, types.Runner{
 		ID: runnerID, Owner: "placement@example.com", Name: "laptop",
-		PublicKey: make([]byte, 32), KeyFingerprint: "fp-" + runnerID.String(), Version: "0.9.0",
+		PublicKey: make([]byte, 32), KeyFingerprint: "fp-" + runnerID.String(), Version: "0.9.0", Limits: roomyLimits(types.RunnerMaxRunsCeiling),
 	})
 	if err != nil {
 		t.Fatalf("create runner: %v", err)
@@ -195,7 +195,7 @@ func TestPG_RunPlacement_RunnerErasureKeepsTheRun(t *testing.T) {
 	runnerID := uuid.New()
 	if _, err := store.NewPG(pool).CreateRunner(ctx, types.Runner{
 		ID: runnerID, Owner: "erase@example.com", Name: "laptop",
-		PublicKey: make([]byte, 32), KeyFingerprint: "fp-" + runnerID.String(), Version: "0.9.0",
+		PublicKey: make([]byte, 32), KeyFingerprint: "fp-" + runnerID.String(), Version: "0.9.0", Limits: roomyLimits(types.RunnerMaxRunsCeiling),
 	}); err != nil {
 		t.Fatalf("create runner: %v", err)
 	}

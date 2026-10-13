@@ -19,8 +19,8 @@ import { onlineRunners } from "../review-seams";
 import { SELECT_CLASS } from "../save-as-dialog";
 import type { GroupProps } from "./group-props";
 
-// The pool line's current canon; RP-4 rewords it with the rest of the console copy.
-const POOL_KIND_LABEL = { organization: "Remote Provided", user: "Self-Hosted" } as const;
+// The pool line names the pool's kind (canon: new-run-canon.md WHERE_DETAIL, pool words).
+const POOL_KIND_LABEL = { organization: "Organization pool", user: "User pool" } as const;
 const BARRIER_NAME: Record<ConfinementClass, string> = { CC1: NR_SHARED.BARRIER_FENCE, CC2: NR_SHARED.BARRIER_WALL, CC3: NR_SHARED.BARRIER_VAULT };
 
 /** Change, in place: the pool and the barrier as the Run step offers them (its pool list and barrier rows), then Done. */
@@ -70,11 +70,11 @@ export function WhereGroup({ draft, pre, docRows, dispatch }: GroupProps) {
   const pool = pre?.runner_pool;
   const slots = pre?.runner_pool_slots;
   const online = onlineRunners(pre);
-  const hosting = pool ? POOL_KIND_LABEL[pool.scope] : undefined;
-  const poolLine = !hosting ? undefined
-    : !slots ? hosting
-    : slots.max === undefined ? NR_SHARED.JOIN(hosting, NR_RUN.RUNNING_ONLY(slots.used))
-    : NR_REVIEW.WHERE_DETAIL(hosting, slots.used, slots.max);
+  const kind = pool ? POOL_KIND_LABEL[pool.scope] : undefined;
+  const poolLine = !kind ? undefined
+    : !slots ? kind
+    : slots.max === undefined ? NR_SHARED.JOIN(kind, NR_RUN.RUNNING_ONLY(slots.used))
+    : NR_REVIEW.WHERE_DETAIL(kind, slots.used, slots.max);
   const detail = online === undefined ? poolLine : poolLine ? NR_SHARED.JOIN(poolLine, NR_REVIEW.WHERE_ONLINE(online)) : NR_REVIEW.WHERE_ONLINE(online);
   const cc = pre?.enforced_confinement_class ?? draft.intent.confinement_class;
   const provenance = pool

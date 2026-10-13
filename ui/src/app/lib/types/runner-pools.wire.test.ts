@@ -66,6 +66,7 @@ describe("runner pool carriers", () => {
     [clientGo, "RunnerPoolList", "RunnerPoolList"],
     [clientGo, "RunnerPoolCatalogueEntry", "RunnerPoolCatalogueEntry"],
     [clientGo, "PoolRunner", "PoolRunner"],
+    [clientGo, "PoolCapacity", "PoolCapacity"],
     [clientGo, "MainDriveFacts", "MainDriveFacts"],
     [clientGo, "MainDriveKeep", "MainDriveKeep"],
     [clientGo, "PersonAllowance", "PersonAllowance"],

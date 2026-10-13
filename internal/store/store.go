@@ -82,10 +82,10 @@ func (s PG) Ping(ctx context.Context) error {
 // AgentRun
 
 // createRunSQL is CreateRun's statement: one placeholder per runInsertCols
-// column, in order (TestCreateRunBindsEveryInsertColumn).
+// and runReservedCols column, in order (TestCreateRunBindsEveryInsertColumn).
 var createRunSQL = `
-		INSERT INTO agent_runs (` + runInsertCols + `)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39,$40,$41,$42,` + runnerPoolFence + `,$44,$45,$46,$47)
+		INSERT INTO agent_runs (` + runInsertCols + `, ` + runReservedCols + `)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39,$40,$41,$42,` + runnerPoolFence + `,$44,$45,$46,$47,$48,$49,$50)
 		RETURNING ` + runCols
 
 // runnerPoolFence is the value of the runner_pool_id column in createRunSQL: the pool read through its
@@ -154,8 +154,9 @@ var ErrRunCapReached = errors.New("store: deployment run cap reached")
 // transaction-scoped advisory lock, so two replicas racing at the cap admit
 // exactly the cap. limit <= 0 is unlimited and takes no lock. Rows are counted,
 // not kept in a counter, so a crashed path cannot drift it. A run bound to a
-// registered runner is also held to that runner's max_runs under its row lock,
-// cap or none (RunnerAtCapacityError).
+// runner of either kind is also held to that runner's limits (Runs at once, its
+// totals and its per-run limit, what it reserves counted) under its row lock, cap
+// or none (RunnerAtCapacityError).
 func (s PG) CreateRunUnderCap(ctx context.Context, r types.AgentRun, limit int) (types.AgentRun, error) {
 	if limit <= 0 && !holdsRunnerSlot(r) {
 		return s.CreateRun(ctx, r)
@@ -204,7 +205,7 @@ func (s PG) CreateRunUnderCap(ctx context.Context, r types.AgentRun, limit int) 
 		}
 	}
 	if holdsRunnerSlot(r) {
-		if err := admitOnRunner(ctx, tx, *r.RunnerID, uuid.Nil); err != nil {
+		if err := admitOnRunner(ctx, tx, runnerKeyOf(r.RunnerID, r.RunnerPoolExecutor), r.Reserved, uuid.Nil); err != nil {
 			return types.AgentRun{}, err
 		}
 	}
@@ -287,6 +288,7 @@ func (s PG) createRunArgs(r types.AgentRun) ([]any, error) {
 		r.Preset, r.PresetVersion, r.OperatorOwned, r.CreatedVia, r.DiskMiB,
 		string(r.Placement), r.PlacementFilled, r.RunnerID, string(r.EvidenceSource), string(r.Experience),
 		r.LifetimeCapAt, string(r.LifetimeCapSource), r.RunnerPoolID, r.RunnerPoolRevision, string(r.RunnerPoolSelection), r.RunnerPoolExecutor, r.HumanAuthor,
+		r.Reserved.CPUMillis, r.Reserved.MemoryMiB, r.Reserved.DiskMiB,
 	}, nil
 }
 
@@ -456,6 +458,11 @@ func (s PG) TouchRun(ctx context.Context, id uuid.UUID) error {
 const runInsertCols = `id, created_at, updated_at, created_by, agent, repo, task, policy_id, confinement_class, state, spiffe_id, runner_target, sandbox_ref, interactive, workspace_path, workspace_id, source_id, image, auto_stop_after_sec, agent_exec_id, title, description, workspace_ids, autonomy_level, ` +
 	`ends_at, wait_budget_sec, run_limits, governance_profile_id, model_provider_id, user_type, preset, preset_version, operator_owned, created_via, disk_mib, placement, placement_filled, runner_id, ` +
 	`evidence_source, experience, lifetime_cap_at, lifetime_cap_source, runner_pool_id, runner_pool_revision, runner_pool_selection, runner_pool_executor, human_author`
+
+// runReservedCols are what a run holds on its runner (0174, types.AgentRun.Reserved): written at
+// insert and summed by runnerUsageSQL, never read back into a run.
+const runReservedCols = `reserved_cpu_millis, reserved_memory_mib, reserved_disk_mib`
+
 const runCols = runInsertCols + `, failure_hint, status_detail, lost_at, lost_reason, containment_error, containment_error_at, ended_at, paused_at, paused_reason, active_at, end_tightened_at, admitted_at`
 
 // scanRun is the ONE reader for runCols. A new column is appended to

@@ -36,7 +36,7 @@ describe("Review notices", () => {
     ["the ceiling", { source: "governance", source_name: "Platform team" } as const, NR_REVIEW.NARROWED_BY("Platform team"), NR_REVIEW.NARROWED_TAIL_CEILING],
     ["the pool", { source: "pool", source_name: "CI jobs" } as const, NR_REVIEW.NARROWED_BY("CI jobs"), NR_REVIEW.NARROWED_TAIL_POOL("CI jobs")],
     ["the server", { source: "deployment" } as const, undefined, NR_REVIEW.NARROWED_TAIL_SERVER],
-    ["the runners", { source: "runner_capacity" } as const, undefined, NR_REVIEW.NARROWED_TAIL_RUNNERS],
+    ["the runners", { source: "runner" } as const, undefined, NR_REVIEW.NARROWED_TAIL_RUNNERS],
   ])("says what narrowed the request: %s", (_name, source, title, tail) => {
     render(<Notices poolName="General" applied={narrowedBy(source)} askedByYou />);
     if (title) expect(screen.getByText(title)).toBeInTheDocument();

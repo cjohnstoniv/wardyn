@@ -5,10 +5,13 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/cjohnstoniv/wardyn/internal/types"
+	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
 
 // bootDoors posts body to create, preflight and the policy preview as c and fails unless each admits it.
@@ -92,6 +95,18 @@ func TestPG_BootstrapLetsALaunchNameNoPool(t *testing.T) {
 	}
 	if made := e.audits(auditRemoteRunnerCreate); len(made) != 1 || made[0].Target != "fake" {
 		t.Errorf("remote_runner.create rows = %+v, want one for the configured runner", made)
+	}
+	// A runner this server could not measure declares no limits, so it takes no run until an
+	// administrator sets them (the upgrade note's step); then the launch is admitted.
+	if w := e.call(e.person, http.MethodPost, "/api/v1/runs/preflight", runBody("")); w.Code != http.StatusUnprocessableEntity ||
+		!strings.Contains(w.Body.String(), "runner_limits_unset") {
+		t.Fatalf("a launch before the runner's limits are set = %d %s, want 422 runner_limits_unset", w.Code, w.Body)
+	}
+	rr, _ := e.pg.GetRemoteRunner(ctx, "fake")
+	limits := roomyRemoteLimits()
+	set, _ := json.Marshal(client.UpdateRemoteRunnerRequest{Revision: rr.Runner.Revision, Limits: &limits})
+	if w := e.admin(http.MethodPut, "/api/v1/remote-runners/fake", string(set)); w.Code != http.StatusOK {
+		t.Fatalf("an administrator sets the runner's limits = %d %s", w.Code, w.Body)
 	}
 	e.bootDoors("no pool or placement named", runBody(""))
 	if err := e.srv.BootstrapRunnerPools(ctx); err != nil {
