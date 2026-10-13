@@ -147,7 +147,8 @@ func inetAtonPart(s string) (uint64, bool) {
 	if s == "" {
 		return 0, false
 	}
-	v, err := strconv.ParseUint(s, base, 64)
+	// 32 bits: no part, not even a lone one, names more than the whole address.
+	v, err := strconv.ParseUint(s, base, 32)
 	if err != nil {
 		return 0, false
 	}
