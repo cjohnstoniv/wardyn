@@ -39,6 +39,9 @@ func (s *Spool) Seal(ctx context.Context, expected types.RunnerSpoolReceipt) (se
 		return false, err
 	}
 	defer func() { err = errors.Join(err, writer.Close()) }()
+	if err = s.own(writer); err != nil {
+		return false, err
+	}
 	st, err := writer.Stat()
 	link, linkErr := s.root.Lstat("writer.lock")
 	if err != nil || linkErr != nil || !st.Mode().IsRegular() || st.Mode().Perm() != 0600 || link.Mode()&os.ModeSymlink != 0 || !os.SameFile(st, link) {
