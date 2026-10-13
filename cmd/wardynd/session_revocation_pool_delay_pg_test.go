@@ -50,7 +50,7 @@ func TestPG_RevocationBeforeCookiePoolWaitDoesNotLoseCutoff(t *testing.T) {
 		_, _ = migrationPool.Exec(context.Background(), `DELETE FROM oidc_session_revocations WHERE sub=$1`, sub)
 	})
 	issued := appClock()
-	if status, err := rev.SessionStatus(ctx, sub, "", issued, 0); err != nil || status != oidc.SessionLive {
+	if status, err := rev.SessionStatus(ctx, sub, "", oidc.Issue{At: issued}, 0); err != nil || status != oidc.SessionLive {
 		t.Fatalf("pre-cut control status=%d err=%v", status, err)
 	}
 	time.Sleep(25 * time.Millisecond)
@@ -68,7 +68,10 @@ func TestPG_RevocationBeforeCookiePoolWaitDoesNotLoseCutoff(t *testing.T) {
 		err    error
 	}
 	result := make(chan response, 1)
-	go func() { status, err := rev.SessionStatus(ctx, sub, "", issued, 0); result <- response{status, err} }()
+	go func() {
+		status, err := rev.SessionStatus(ctx, sub, "", oidc.Issue{At: issued}, 0)
+		result <- response{status, err}
+	}()
 	// Old code samples before the wait; repaired code samples after Scan.
 	// Release on the same bounded timer in either case; the assertion is unchanged.
 	timer := time.NewTimer(200 * time.Millisecond)

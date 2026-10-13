@@ -51,6 +51,10 @@ func (s *erasureTestStore) PrincipalEntraNames(context.Context, string) ([]strin
 	return nil, nil
 }
 
+func (s *erasureTestStore) PrincipalsSharingObject(context.Context, string) ([]string, error) {
+	return nil, nil
+}
+
 func (s *erasureTestStore) EraseGovernanceChangePersonalFields(context.Context, []string, []string) (int, error) {
 	return 0, nil
 }

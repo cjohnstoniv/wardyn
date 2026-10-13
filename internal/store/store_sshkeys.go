@@ -23,11 +23,11 @@ import (
 func (s PG) AddSSHKey(ctx context.Context, k types.SSHPublicKey) (types.SSHPublicKey, error) {
 	const q = `
 		INSERT INTO ssh_public_keys (` + sshKeyCols + `)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
 		RETURNING ` + sshKeyCols
 	var out types.SSHPublicKey
 	err := s.guarded(ctx, func(qr queryRower) (e error) {
-		out, e = scanSSHKey(qr.QueryRow(ctx, q, k.Fingerprint, k.Principal, k.Name, k.PublicKey, k.Role, k.RoleCheckedAt, k.Capped, k.CreatedAt))
+		out, e = scanSSHKey(qr.QueryRow(ctx, q, k.Fingerprint, k.Principal, k.Name, k.PublicKey, k.Role, k.RoleCheckedAt, k.Capped, k.CreatedAt, k.RevSeq))
 		return e
 	})
 	if err != nil {
@@ -110,11 +110,11 @@ func (s PG) DeleteSSHKeys(ctx context.Context, principal string) (int, error) {
 // sshKeyCols is THE ssh_public_keys column list, in scanSSHKey's order (four
 // call sites). One list, not two: every column is written at registration;
 // RefreshSSHKeyRoles updates two in place rather than adding any.
-const sshKeyCols = `fingerprint, principal, name, public_key, role, role_checked_at, capped, created_at`
+const sshKeyCols = `fingerprint, principal, name, public_key, role, role_checked_at, capped, created_at, rev_seq`
 
 func scanSSHKey(row pgx.Row) (types.SSHPublicKey, error) {
 	var k types.SSHPublicKey
-	err := row.Scan(&k.Fingerprint, &k.Principal, &k.Name, &k.PublicKey, &k.Role, &k.RoleCheckedAt, &k.Capped, &k.CreatedAt)
+	err := row.Scan(&k.Fingerprint, &k.Principal, &k.Name, &k.PublicKey, &k.Role, &k.RoleCheckedAt, &k.Capped, &k.CreatedAt, &k.RevSeq)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return types.SSHPublicKey{}, ErrNotFound
 	}

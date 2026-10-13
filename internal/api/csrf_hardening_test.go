@@ -200,7 +200,7 @@ func TestAttachWS_CrossOriginRefusalIsAudited(t *testing.T) {
 	srv.cfg.OIDCRedirectURL = csrfRedirectURL
 
 	tok, err := mintAttachTicket(context.Background(), srv.cfg.Store, run.ID,
-		types.ActorHuman, holderOwner, oidc.RoleAdmin, time.Now())
+		types.ActorHuman, holderOwner, oidc.RoleAdmin, oidc.Issue{At: time.Now()})
 	if err != nil {
 		t.Fatalf("mint ticket: %v", err)
 	}

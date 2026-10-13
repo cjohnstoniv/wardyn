@@ -165,7 +165,7 @@ func (s *Server) apiTokenAuth(next, fallback http.Handler) http.Handler {
 		if s.cfg.SessionRevocations != nil {
 			// The same read asks whether the owner's identity is deactivated (a token has no epoch of
 			// its own: a suspension revokes the tokens it can see, and the mint guard refuses the rest).
-			status, rerr := oidc.CheckSession(r.Context(), s.cfg.SessionRevocations, t.Principal, t.Email, t.CreatedAt, -1)
+			status, rerr := oidc.CheckSession(r.Context(), s.cfg.SessionRevocations, t.Principal, t.Email, oidc.Issue{At: t.CreatedAt, Seq: t.RevSeq}, -1)
 			if rerr != nil {
 				slog.ErrorContext(r.Context(), "api: session-revocation lookup failed; this api token could not be authenticated",
 					"error", rerr, "path", r.URL.Path)
@@ -209,7 +209,7 @@ func (s *Server) apiTokenAuth(next, fallback http.Handler) http.Handler {
 		}
 		ctx := withHumanIdentity(r.Context(), t.Principal, t.Email, t.Role, t.UserType, t.Groups,
 			t.GroupsTruncated == nil || *t.GroupsTruncated)
-		next.ServeHTTP(w, r.WithContext(withAPITokenID(ctx, t.ID)))
+		next.ServeHTTP(w, r.WithContext(withAPITokenID(oidc.WithRevocationSeq(ctx, t.Principal, t.RevSeq), t.ID)))
 	})
 }
 
@@ -442,7 +442,8 @@ func (s *Server) prepareMint(w http.ResponseWriter, r *http.Request, sub string,
 	//
 	// An unanswerable check fails closed with the same 500 the store errors
 	// below give — never as "not revoked".
-	if !s.mintSessionLive(w, r, sub, authorizedAt) {
+	issue, ok := s.mintSessionLive(w, r, sub, authorizedAt)
+	if !ok {
 		return types.APIToken{}, false
 	}
 	var expiresAt *time.Time
@@ -460,26 +461,33 @@ func (s *Server) prepareMint(w http.ResponseWriter, r *http.Request, sub string,
 		Name:            name,
 		CreatedAt:       authorizedAt,
 		ExpiresAt:       expiresAt,
+		RevSeq:          issue.Seq,
 	}, true
 }
 
 // mintSessionLive is the late session re-check both mint doors end on: false after writing the refusal when
 // the minting person's session was cut off at or before authorizedAt (the same sentence as no signed-in
-// human) or the check could not be answered (500).
-func (s *Server) mintSessionLive(w http.ResponseWriter, r *http.Request, sub string, authorizedAt time.Time) bool {
-	if s.cfg.SessionRevocations == nil {
-		return true
+// human) or the check could not be answered (500). It returns the Issue the new credential records,
+// read before the re-check so a cut that lands after it still orders above the credential.
+func (s *Server) mintSessionLive(w http.ResponseWriter, r *http.Request, sub string, authorizedAt time.Time) (oidc.Issue, bool) {
+	issue, ierr := s.mintIssue(r.Context(), sub, authorizedAt)
+	if ierr != nil {
+		writeServerError(w, r, "create api token", ierr)
+		return oidc.Issue{}, false
 	}
-	revoked, rerr := s.cfg.SessionRevocations.IsSessionRevoked(r.Context(), sub, oidcEmailFromContext(r.Context()), authorizedAt)
+	if s.cfg.SessionRevocations == nil {
+		return issue, true
+	}
+	revoked, rerr := oidc.IsRevoked(r.Context(), s.cfg.SessionRevocations, sub, oidcEmailFromContext(r.Context()), admittedIssue(r.Context(), sub, authorizedAt))
 	if rerr != nil {
 		writeServerError(w, r, "create api token", rerr)
-		return false
+		return oidc.Issue{}, false
 	}
 	if revoked {
 		writeErrorReason(w, http.StatusForbidden, reasonAPITokenNoHuman, apiTokenNoHumanRefusal)
-		return false
+		return oidc.Issue{}, false
 	}
-	return true
+	return issue, true
 }
 
 // mintAuditDetail is the data of a token.create row; an invitation's claim adds the invitation id.

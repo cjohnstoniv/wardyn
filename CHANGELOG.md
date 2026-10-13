@@ -10,6 +10,12 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Before you upgrade
 
+- Session, API token and SSH key revocation is now ordered by a database sequence instead of by comparing
+  clock times; the upgrade adds that sequence and records the order of the API tokens and SSH keys that already
+  exist. Sessions signed in before the upgrade keep the time comparison until they expire. During a rolling
+  upgrade a revocation written by a replica that has not been upgraded is not ordered against a sign-in that is
+  in flight, and tokens or keys it creates keep the time comparison: revoke again once the rollout finishes, or
+  upgrade one replica at a time.
 - Split-role installs (`WARDYN_PG_MIGRATE_DSN` set) whose app role does not pick up new tables through the
   `ALTER DEFAULT PRIVILEGES` step in Operations: grant the app role `SELECT, INSERT, UPDATE, DELETE` on `runners`,
   `runner_pending_actions`, `provider_connection_changes`, `runner_inventories`, `runner_pool_members`,

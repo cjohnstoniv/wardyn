@@ -25,6 +25,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/audit"
+	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -366,7 +367,14 @@ func (s *Server) sessionRevokedSince(r *http.Request, principal string, openedAt
 			return false
 		}
 	}
-	revoked, err := s.cfg.SessionRevocations.IsSessionRevoked(r.Context(), principal, oidcEmailFromContext(r.Context()), openedAt)
+	issue := admittedIssue(r.Context(), principal, openedAt)
+	// A stream an API token or a delegated token admitted is checked as that token is (epoch -1): a
+	// revoke or a deactivated identity ends it, a browser-only cut (sign-out) does not.
+	if _, delegated := audit.DelegationFrom(r.Context()); delegated || apiTokenIDFromContext(r.Context()) != uuid.Nil {
+		status, err := oidc.CheckSession(r.Context(), s.cfg.SessionRevocations, principal, oidcEmailFromContext(r.Context()), issue, -1)
+		return err != nil || status != oidc.SessionLive
+	}
+	revoked, err := oidc.IsRevoked(r.Context(), s.cfg.SessionRevocations, principal, oidcEmailFromContext(r.Context()), issue)
 	return err != nil || revoked
 }
 
