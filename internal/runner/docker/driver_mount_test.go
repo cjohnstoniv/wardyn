@@ -10,6 +10,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/google/uuid"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -662,7 +663,7 @@ func TestCreateSandbox_ReservedSpecMountIsRefusedBeforeTheDriveIsAllocated(t *te
 			spec := testSpec()
 			spec.Mounts = []runner.Mount{{Source: src, Target: runner.DriveTarget + "/shared"}}
 			if withDrive {
-				spec.Drive = dockerVolumeDrive()
+				spec.Drives = []types.DriveMount{*dockerVolumeDrive()}
 			}
 			_, err := d.CreateSandbox(context.Background(), spec)
 			if err == nil || !strings.Contains(err.Error(), "reserved") {
@@ -753,7 +754,7 @@ func TestDriveMount_HostPathCeilingIsUnconditional(t *testing.T) {
 	drive := hostPathDrive(home)
 
 	d := newWithClient(newFakeDocker(), Config{ProxyImage: "wardyn-proxy:dev", UserDriveHostRoots: []string{root}})
-	got, err := d.driveMount(context.Background(), drive, true)
+	got, err := d.driveMount(context.Background(), drive, uuid.Nil, "busybox:latest", true)
 	if err != nil {
 		t.Fatalf("driveMount for an in-root share: %v", err)
 	}
@@ -767,7 +768,7 @@ func TestDriveMount_HostPathCeilingIsUnconditional(t *testing.T) {
 	// The SAME drive, on a deployment that configured no roots: refused. No
 	// flag, provenance stamp or backend detail sits between the two calls.
 	unset := newWithClient(newFakeDocker(), Config{ProxyImage: "wardyn-proxy:dev"})
-	if _, err := unset.driveMount(context.Background(), drive, true); err == nil {
+	if _, err := unset.driveMount(context.Background(), drive, uuid.Nil, "busybox:latest", true); err == nil {
 		t.Error("driveMount bound a share on a deployment with no WARDYN_USER_DRIVE_HOST_ROOTS — the ceiling must run unconditionally")
 	} else if !strings.Contains(err.Error(), "denied user drive") {
 		t.Errorf("the refusal should identify the denied drive, got: %v", err)
@@ -788,7 +789,9 @@ func createWithDriveOn(t *testing.T, class types.ConfinementClass, runtimes []st
 
 	spec := testSpec()
 	spec.ConfinementClass = class
-	spec.Drive = drive
+	if drive != nil {
+		spec.Drives = []types.DriveMount{*drive}
+	}
 	if _, err := d.CreateSandbox(context.Background(), spec); err != nil {
 		return f, nil, err
 	}

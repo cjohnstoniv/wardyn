@@ -686,6 +686,46 @@ func TestListSecretsScoped_DecodesMine(t *testing.T) {
 	}
 }
 
+// #1510: the explicit namespaces list on their own routes, with the server's truncation signal.
+func TestListMyAndSharedSecrets_HitTheirRoute(t *testing.T) {
+	for _, c := range []struct {
+		path string
+		list func(*client.Client) ([]string, bool, error)
+	}{
+		{"/api/v1/me/secrets", func(c *client.Client) ([]string, bool, error) {
+			return c.ListMySecretsPage(context.Background(), client.ListOpts{Limit: 2})
+		}},
+		{"/api/v1/shared-secrets", func(c *client.Client) ([]string, bool, error) {
+			return c.ListSharedSecretsPage(context.Background(), client.ListOpts{Limit: 2})
+		}},
+	} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodGet || r.URL.Path != c.path || r.URL.Query().Get("limit") != "2" {
+				t.Errorf("unexpected request: %s %s", r.Method, r.URL.String())
+			}
+			checkAuth(t, r)
+			w.Header().Set("X-Wardyn-Truncated", "true")
+			writeJSON(w, http.StatusOK, map[string]any{"names": []string{"a-key", "b-key"}})
+		}))
+		names, truncated, err := c.list(newTestClient(srv))
+		srv.Close()
+		if err != nil || len(names) != 2 || names[0] != "a-key" || !truncated {
+			t.Errorf("%s: names %v truncated %v err %v, want [a-key b-key] true", c.path, names, truncated, err)
+		}
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, http.StatusForbidden, map[string]any{"error": "no person", "reason": "secret_personal_needs_person"})
+	}))
+	defer srv.Close()
+	var ae *client.APIError
+	if _, err := newTestClient(srv).ListMySecrets(context.Background()); !errors.As(err, &ae) || ae.Status != http.StatusForbidden {
+		t.Errorf("ListMySecrets on a 403 = %v, want an *APIError 403", err)
+	}
+	if _, err := newTestClient(srv).ListSharedSecrets(context.Background()); !errors.As(err, &ae) {
+		t.Errorf("ListSharedSecrets on a 403 = %v, want an *APIError", err)
+	}
+}
+
 func TestSetSecret_Success(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPut || r.URL.Path != "/api/v1/secrets/anthropic-api-key" {

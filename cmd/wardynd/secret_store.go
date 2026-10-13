@@ -216,6 +216,22 @@ func buildSecretStore(ctx context.Context, pool *pgxpool.Pool, ageKey string, pl
 // for the pg store's Migrate and Reconcile, which never Get
 // (secretStoreMaintenance).
 func newSecretStore(ctx context.Context, pool *pgxpool.Pool, ageKey string, platform *age.X25519Identity, storeName string, c storeClients, rec audit.Recorder) (secretstore.Store, error) {
+	s, id, err := unconvertedSecretStore(pool, ageKey, platform, storeName, c)
+	if err != nil {
+		return nil, err
+	}
+	storeMode := storeName != "" && storeName != "pg"
+	keyService := c.kek != nil && c.kekWrites
+	if err := convertSecretStore(ctx, s, id, ageKey == "" && !storeMode && !keyService, rec); err != nil {
+		return nil, err
+	}
+	return s, nil
+}
+
+// unconvertedSecretStore builds the store from the key configuration without touching a row: no conversion,
+// no write. It returns the age identity it parsed (nil with none). A nil pool is allowed for a caller
+// that reads through a connection of its own (secretstorepg.Store.CheckRows).
+func unconvertedSecretStore(pool *pgxpool.Pool, ageKey string, platform *age.X25519Identity, storeName string, c storeClients) (secretstore.Store, *age.X25519Identity, error) {
 	storeMode := storeName != "" && storeName != "pg"
 	keyService := c.kek != nil && c.kekWrites
 	var id *age.X25519Identity
@@ -227,7 +243,7 @@ func newSecretStore(ctx context.Context, pool *pgxpool.Pool, ageKey string, plat
 	case ageKey == "":
 		id, err = age.GenerateX25519Identity()
 		if err != nil {
-			return nil, fmt.Errorf("generate age identity: %w", err)
+			return nil, nil, fmt.Errorf("generate age identity: %w", err)
 		}
 		// F10: log the PUBLIC recipient as a fingerprint, never the secret identity.
 		// The old message printed the full AGE-SECRET-KEY- to a log file created at
@@ -239,11 +255,11 @@ func newSecretStore(ctx context.Context, pool *pgxpool.Pool, ageKey string, plat
 		)
 	default:
 		if isKnownPublicAgeKey(ageKey) {
-			return nil, fmt.Errorf("refusing to start: WARDYN_AGE_KEY is a publicly-known key (published in this repo's git history) — secrets encrypted under it are not protected; unset WARDYN_AGE_KEY to generate an ephemeral key, or mint your own with `wardynd -gen-age-key`")
+			return nil, nil, fmt.Errorf("refusing to start: WARDYN_AGE_KEY is a publicly-known key (published in this repo's git history) — secrets encrypted under it are not protected; unset WARDYN_AGE_KEY to generate an ephemeral key, or mint your own with `wardynd -gen-age-key`")
 		}
 		id, err = age.ParseX25519Identity(ageKey)
 		if err != nil {
-			return nil, fmt.Errorf("parse age identity: %w", err)
+			return nil, nil, fmt.Errorf("parse age identity: %w", err)
 		}
 	}
 	deps := secretstore.Deps{Pool: pool, External: c.ext, ExternalTimeout: c.timeout, KEK: c.kek, KEKWrites: c.kekWrites, PrincipalKeys: c.principalKeys, KeyDomains: c.keyDomains}
@@ -260,12 +276,9 @@ func newSecretStore(ctx context.Context, pool *pgxpool.Pool, ageKey string, plat
 	}
 	s, err := secretstore.New(storeName, deps)
 	if err != nil {
-		return nil, fmt.Errorf("secret store: %w", err)
+		return nil, nil, fmt.Errorf("secret store: %w", err)
 	}
-	if err := convertSecretStore(ctx, s, id, ageKey == "" && !storeMode && !keyService, rec); err != nil {
-		return nil, err
-	}
-	return s, nil
+	return s, id, nil
 }
 
 // ephemeralKeyRecoverySQL deletes every row sealed under a local key: the way
@@ -349,10 +362,18 @@ func refuseKEKRequired(required bool, s secretstore.Store) error {
 }
 
 // localRowsCounter is the store's count of rows still wrapped by the local key,
-// or nil for a store that keeps none.
+// or nil for a store that keeps none. It looks through the audit wrapper main
+// hands it, or the kek_local_rows setup row never appears.
 func localRowsCounter(s secretstore.Store) func(context.Context) (int, error) {
-	if ps, ok := s.(*secretstorepg.Store); ok {
-		return ps.LocalRows
+	for s != nil {
+		if ps, ok := s.(*secretstorepg.Store); ok {
+			return ps.LocalRows
+		}
+		u, ok := s.(interface{ Unwrap() secretstore.Store })
+		if !ok {
+			return nil
+		}
+		s = u.Unwrap()
 	}
 	return nil
 }

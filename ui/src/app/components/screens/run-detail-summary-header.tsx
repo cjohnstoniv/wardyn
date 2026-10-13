@@ -11,7 +11,7 @@
 // every fact this bar carries fits in one row's width down at `lg` (1024px).
 import * as React from "react";
 import { Link } from "react-router-dom";
-import { Check, Clock, Link as LinkIcon, Pencil, RotateCcw, ShieldAlert, Skull, TerminalSquare } from "lucide-react";
+import { Check, Clock, Laptop, Link as LinkIcon, Pencil, RotateCcw, ShieldAlert, Skull, TerminalSquare } from "lucide-react";
 import type { RunDetail } from "../../lib/types";
 import { runHeadline } from "../../lib/types";
 import { Button } from "../ui/button";
@@ -25,6 +25,7 @@ import { KillRunDialog } from "../wardyn/kill-run-dialog";
 import { useOperator, useOperatorResolved, usePrincipal } from "../wardyn/operator-context";
 import { mayEnterRunOrUnknown } from "../../lib/run-entry";
 import { RUN_FACTS } from "../wardyn/copy/door";
+import { RUN_PLACEMENT, runnerLabel } from "../wardyn/copy/runners";
 import {
   isTerminalStatusReason,
   PENDING_NO_DETAIL,
@@ -369,6 +370,14 @@ export function SummaryHeader({
       <div className="flex shrink-0 items-center gap-2">
         {run.model_provider_id && <RunProviderChip run={run} />}
         <ConfinementChip value={run.confinement_class} />
+        {/* 0.9 (M-RN-3 RS3): where a LOCAL run is. Neutral, and absent for a remote run, whose default
+            place needs no chip (RN-Q14), so an ordinary run's header is what it was. */}
+        {run.placement === "local" && (
+          <Chip tone="neutral" className="gap-1">
+            <Laptop className="size-3" aria-hidden />
+            {RUN_PLACEMENT.CHIP(runnerLabel(run))}
+          </Chip>
+        )}
         {/* run.autonomy_level (#97) freezes the level resolveRunAutonomy
             capped this run at, at create time. Empty for a run under no
             profile, a profile with no rubric, or one created before this

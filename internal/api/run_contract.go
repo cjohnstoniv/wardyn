@@ -33,25 +33,27 @@ import (
 //     posture and that nothing applies yet. It never drops one: a person who
 //     asked to narrow a run must not be handed a wider one with a 201.
 //
-// Fields that only tune a run (resources, a workspace target) are accepted and
-// not yet applied; their doc comments on pkg/client say so. Each behaviour lane
+// A field that only tunes a run (resources) is accepted and not yet applied;
+// its doc comment on pkg/client says so. Each behaviour lane
 // deletes its case in unappliedFieldsRefusal and adds its own step to
 // runFoldSteps:
 //
+//	run-mode carriers (run_mode.go) -> A-L3, A-L9, A-L14, A-L4, A-L7, D-112-113
 //	overrides                     -> A-L3
 //	built-in components           -> A-L14
 //	allowed_image, image facts     -> the image lane (A-L4/A-L6)
 //	placement local               -> the placement lane (#117)
-//	runner_pool_id                -> the runner pool lane: resolve through runnerpool.Resolve and
-//	                                 admit the exact target; an omitted pool stays accepted until then
-//	resources clamp, targets      -> A-L5, A-L4 (accepted, applied nowhere yet)
 const (
 	maxRunOverrideEntries  = 64
 	maxRunOverrideValueLen = 256
-	maxRunResourceCPU      = 1_000_000 // milli-CPU: a thousand CPUs
-	maxRunResourceMemory   = 16 << 20  // MiB: 16 TiB
+	maxRunResourceCPU      = 1_000_000                  // milli-CPU: a thousand CPUs
+	maxRunResourceMemory   = 16 << 20                   // MiB: 16 TiB
+	maxRunResourceDisk     = types.RunnerPoolDiskMiBMax // MiB: 16 TiB, the pool disk limit's bound
 	runUserHome            = "/home/agent"
 	runDriveName           = "your drive"
+	// maxRunWorkspaces bounds workspaces[]: each entry is a store read and an
+	// authorization before anything is folded.
+	maxRunWorkspaces = 32
 )
 
 // runContractRefusal answers the first refusal of the contract fields, shape
@@ -69,7 +71,8 @@ func (s *Server) runContractRefusal(req createRunRequest) *runRefusal {
 // runContractShapeChecks are the contract's shape checks, in answer order. A
 // template document is held to the same list when it is imported.
 var runContractShapeChecks = []func(createRunRequest) *runRefusal{
-	placementShapeRefusal, runnerPoolShapeRefusal, resourcesRefusal, allowedImageRefusal, workspaceTargetsRefusal, runOverridesRefusal, builtinComponentsRefusal,
+	placementShapeRefusal, runnerPoolShapeRefusal, resourcesRefusal, allowedImageRefusal, workspaceTargetsRefusal, driveSelectionRefusal, runOverridesRefusal, builtinComponentsRefusal,
+	runModeShapeRefusal, runShapeRefusal, runEndShapeRefusal,
 }
 
 func placementShapeRefusal(req createRunRequest) *runRefusal {
@@ -113,9 +116,10 @@ func resourcesRefusal(req createRunRequest) *runRefusal {
 	if r == nil {
 		return nil
 	}
-	if r.CPUMillis < 0 || r.CPUMillis > maxRunResourceCPU || r.MemoryMiB < 0 || r.MemoryMiB > maxRunResourceMemory {
+	if r.CPUMillis < 0 || r.CPUMillis > maxRunResourceCPU || r.MemoryMiB < 0 || r.MemoryMiB > maxRunResourceMemory ||
+		r.DiskMiB < 0 || r.DiskMiB > maxRunResourceDisk {
 		return runError(http.StatusBadRequest, reasonResourcesInvalid, fmt.Sprintf(
-			"resources: cpu_millis must be 0 to %d and memory_mib 0 to %d", maxRunResourceCPU, maxRunResourceMemory))
+			"resources: cpu_millis must be 0 to %d, memory_mib 0 to %d and disk_mib 0 to %d", maxRunResourceCPU, maxRunResourceMemory, maxRunResourceDisk))
 	}
 	return nil
 }
@@ -136,47 +140,84 @@ func pathWithin(inner, outer string) bool {
 	return inner == outer || strings.HasPrefix(inner, outer+"/")
 }
 
-// workspaceTargetsRefusal validates each selection's target and refuses equal or
-// nested targets across different workspaces (OD-3), a drive's included. Only the
-// targets the request names are compared: the multi-workspace lane widens the
-// check to every resolved default.
+// workspaceTargetsRefusal checks the shape of the workspaces[] list: at most
+// maxRunWorkspaces, each id once, workspace_id equal to the first entry when both are sent, each target
+// and each repos entry well formed. Whether the targets collide is answered
+// over every resolved target once the workspaces are seeded (stepWorkspaces).
+//
+// A target inside the drive's own path, with the drive on, answers
+// workspace_target_overlap rather than _invalid: the drive mounts there.
 func workspaceTargetsRefusal(req createRunRequest) *runRefusal {
-	type placed struct{ id, target string }
-	var seen []placed
+	if len(req.Workspaces) > maxRunWorkspaces {
+		return runError(http.StatusBadRequest, reasonWorkspaceSelectionInvalid, fmt.Sprintf("workspaces: attach at most %d workspaces.", maxRunWorkspaces))
+	}
 	drive := req.Drive != nil && req.Drive.Enabled
+	seen := make(map[uuid.UUID]bool, len(req.Workspaces))
 	for i, sel := range req.Workspaces {
-		t := sel.Target
-		if t == "" {
-			continue
+		id, err := uuid.Parse(sel.WorkspaceID)
+		switch {
+		case err != nil || id == uuid.Nil || id.String() != sel.WorkspaceID:
+			// The canonical spelling only: the selection's options are keyed by it,
+			// so another spelling of the same id would drop them.
+			return runError(http.StatusBadRequest, reasonWorkspaceSelectionInvalid, fmt.Sprintf("workspaces[%d].workspace_id: give a workspace id.", i))
+		case seen[id]:
+			return runError(http.StatusBadRequest, reasonWorkspaceSelectionInvalid, fmt.Sprintf("workspaces[%d]: %s is listed twice.", i, sel.WorkspaceID))
+		case i == 0 && req.WorkspaceID != nil && *req.WorkspaceID != id:
+			return runError(http.StatusBadRequest, reasonWorkspaceSelectionInvalid,
+				"workspace_id and workspaces[0] name different workspaces. Send one primary workspace.")
 		}
-		if drive && pathWithin(t, runner.DriveTarget) && path.IsAbs(t) && path.Clean(t) == t {
-			return overlapRefusal(t, sel.WorkspaceID, runDriveName, runner.DriveTarget)
-		}
-		if err := workspaceTargetShape(t); err != nil {
-			return runError(http.StatusBadRequest, reasonWorkspaceTargetInvalid, fmt.Sprintf("workspaces[%d].target: %v", i, err))
-		}
-		for _, p := range seen {
-			if p.id != sel.WorkspaceID && (pathWithin(t, p.target) || pathWithin(p.target, t)) {
-				return overlapRefusal(t, sel.WorkspaceID, p.id, p.target)
+		seen[id] = true
+		if t := sel.Target; t != "" {
+			if drive && pathWithin(t, runner.DriveTarget) && path.IsAbs(t) && path.Clean(t) == t {
+				return overlapRefusal(t, "", runDriveName, runner.DriveTarget)
+			}
+			if err := workspaceTargetShape(t); err != nil {
+				return runError(http.StatusBadRequest, reasonWorkspaceTargetInvalid, fmt.Sprintf("workspaces[%d].target: %v", i, err))
 			}
 		}
-		seen = append(seen, placed{sel.WorkspaceID, t})
+		if refusal := repoSelectionsRefusal(i, sel.Repos); refusal != nil {
+			return refusal
+		}
 	}
 	return nil
 }
 
-// overlapRefusal words an overlap of this selection's target t with another
-// mount, otherPath. A nested pair names the inner path and the outer mount.
-func overlapRefusal(t, self, other, otherPath string) *runRefusal {
-	msg := workspaceOverlapEqualMsg(t, other)
-	switch {
-	case t == otherPath:
-	case pathWithin(t, otherPath):
-		msg = workspaceOverlapNestedMsg(t, other, otherPath)
-	default:
-		msg = workspaceOverlapNestedMsg(otherPath, self, t)
+// repoSelectionsRefusal checks one selection's repos: each repo named once,
+// each ref one validRunRef accepts.
+func repoSelectionsRefusal(i int, repos *[]client.RepoSelection) *runRefusal {
+	if repos == nil {
+		return nil
 	}
-	return runError(http.StatusUnprocessableEntity, reasonWorkspaceTargetOverlap, msg)
+	seen := make(map[string]bool, len(*repos))
+	for j, rs := range *repos {
+		switch {
+		case rs.Repo == "" || len(rs.Repo) > maxRunRepoLen || !controlCharFree(rs.Repo):
+			return runError(http.StatusBadRequest, reasonRunRefInvalid, fmt.Sprintf("workspaces[%d].repos[%d].repo: name a repository of this workspace.", i, j))
+		case seen[rs.Repo]:
+			return runError(http.StatusBadRequest, reasonRunRefInvalid, fmt.Sprintf("workspaces[%d].repos: %s is listed twice.", i, rs.Repo))
+		case rs.Ref != "" && !validRunRef(rs.Ref):
+			return runError(http.StatusBadRequest, reasonRunRefInvalid, fmt.Sprintf("workspaces[%d].repos[%d].ref: give a branch, tag or commit name.", i, j))
+		}
+		seen[rs.Repo] = true
+	}
+	return nil
+}
+
+// validRunRef is the shape of a per-run ref: what git check-ref-format accepts
+// for a branch or tag name, or a commit. The leading "-" rule is the one that
+// matters most: clone_one passes the ref to `git fetch ... origin "$ref"`,
+// where a leading "-" is read as an option (--upload-pack=...).
+func validRunRef(ref string) bool {
+	if len(ref) > 255 || strings.HasPrefix(ref, "-") || strings.Contains(ref, "..") || strings.Contains(ref, "@{") ||
+		strings.ContainsAny(ref, " ~^:?*[\\") || strings.HasSuffix(ref, "/") || strings.HasSuffix(ref, ".lock") {
+		return false
+	}
+	for _, r := range ref {
+		if r < 0x21 || r > 0x7e {
+			return false
+		}
+	}
+	return true
 }
 
 func overrideInvalid(format string, args ...any) *runRefusal {
@@ -185,7 +226,7 @@ func overrideInvalid(format string, args ...any) *runRefusal {
 
 // runOverridesRefusal validates the overrides' shape, then refuses every edit the
 // narrowing table never allows from a request. What is left is allowed or
-// ceiling-clamped; applying it is unappliedFieldsRefusal's stub today.
+// ceiling-clamped; applyRunOverrides applies it inside the policy fold.
 func runOverridesRefusal(req createRunRequest) *runRefusal {
 	o := req.Overrides
 	if o == nil {
@@ -230,7 +271,48 @@ func overridesShapeRefusal(o client.RunOverrides) *runRefusal {
 	if refusal := gitPATOverridesShape(o.GitPAT); refusal != nil {
 		return refusal
 	}
+	if refusal := runHostOverridesShape(o.Hosts); refusal != nil {
+		return refusal
+	}
+	if e := o.Egress; e != nil {
+		if e.FirstUseApproval != "" && !e.FirstUseApproval.Valid() {
+			return overrideInvalid("egress.first_use_approval: %q is not one of always_deny, deny_with_review, wait_for_review", e.FirstUseApproval)
+		}
+		if e.AllowAllEgress != nil && !*e.AllowAllEgress {
+			return overrideInvalid("egress.allow_all_egress: set it to true, or leave it out")
+		}
+	}
 	return pushRuleOverridesShape(o.PushRules)
+}
+
+// runHostOverridesShape checks the run-wide host lists. An allowed host is a bare
+// DNS name (the table refuses wildcards); a denied one may be a wildcard, since a
+// deny only takes reach away. Any removal is refused by name.
+func runHostOverridesShape(h *client.RunHostOverrides) *runRefusal {
+	if h == nil {
+		return nil
+	}
+	for name, n := range map[string]int{"hosts.add_allowed": len(h.AddAllowed), "hosts.add_denied": len(h.AddDenied),
+		"hosts.remove_allowed": len(h.RemoveAllowed), "hosts.remove_denied": len(h.RemoveDenied)} {
+		if refusal := overrideListLen(name, n); refusal != nil {
+			return refusal
+		}
+	}
+	for i, host := range h.AddAllowed {
+		if err := overrideHost(host); err != nil {
+			return overrideInvalid("hosts.add_allowed[%d]: %v", i, err)
+		}
+	}
+	for i, host := range h.AddDenied {
+		if !overrideText(host) || net.ParseIP(host) != nil || strings.ContainsAny(host, ":/ ") || proxy.ValidDomainEntry(host) != nil {
+			return overrideInvalid("hosts.add_denied[%d]: %q must be a DNS name such as api.example.com, or a wildcard such as *.example.com", i, host)
+		}
+	}
+	if len(h.RemoveAllowed)+len(h.RemoveDenied) > 0 {
+		return runError(http.StatusUnprocessableEntity, reasonOverrideRefused,
+			"An override cannot remove a host of the base policy: its hosts are read-only on a run. Add a denied host instead, or choose another base.")
+	}
+	return nil
 }
 
 // overrideText is a printable single-line value within the entry's length cap.
@@ -353,10 +435,9 @@ func pushRuleOverridesShape(rules []client.PushRuleOverride) *runRefusal {
 	}
 	for i, p := range rules {
 		switch {
-		case p.Provider != string(types.GitProviderGitHub) && p.Provider != string(types.GitProviderAzureDevOps):
-			return overrideInvalid("push_rules[%d].provider: %q is not one of github, azure_devops", i, p.Provider)
-		case !overrideText(p.Org):
-			return overrideInvalid("push_rules[%d].org: name the organisation these rules belong to", i)
+		case p.PushRuleKey() == "":
+			_, err := types.PushRuleKey(p.Provider, p.Host, p.Org)
+			return overrideInvalid("push_rules[%d]: %v", i, err)
 		case slices.ContainsFunc(rules[:i], func(o client.PushRuleOverride) bool { return o.PushRuleKey() == p.PushRuleKey() }):
 			return overrideInvalid("push_rules[%d]: %s already has rules in this request", i, p.PushRuleKey())
 		case len(p.DenyPaths)+len(p.RequireReviewPaths) == 0:
@@ -391,21 +472,17 @@ func builtinComponentsRefusal(req createRunRequest) *runRefusal {
 // unappliedFieldsRefusal is the stub half: every field above that changes the
 // run's posture and that no lane applies yet. Each is refused by name.
 func unappliedFieldsRefusal(req createRunRequest) *runRefusal {
+	if refusal := runModeUnavailableRefusal(req); refusal != nil {
+		return refusal
+	}
 	switch {
-	case req.RunnerPoolID != "":
-		return runError(http.StatusUnprocessableEntity, reasonRequestFieldUnavailable,
-			"runner_pool_id: this server does not manage runner pools yet, so the run was not created.")
 	case req.AllowedImage != "":
 		return runError(http.StatusUnprocessableEntity, reasonRequestFieldUnavailable,
 			"allowed_image: this server does not apply an image choice yet, so the run was not created.")
-	case req.Overrides != nil && len(req.Overrides.Items()) > 0:
-		return runError(http.StatusUnprocessableEntity, reasonRequestFieldUnavailable,
-			"overrides: this server does not apply per-run overrides yet, so the run was not created.")
 	}
 	for i, ref := range req.Components {
-		if ref.Builtin != "" {
-			return runError(http.StatusUnprocessableEntity, reasonRequestFieldUnavailable, fmt.Sprintf(
-				"components[%d]: built-in %s access is not available on this server yet, so the run was not created.", i, ref.Builtin))
+		if ref.Builtin == types.ComponentBuiltinAzureDevOps {
+			return builtinUnavailable(i, ref.Builtin)
 		}
 	}
 	return nil

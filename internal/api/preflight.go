@@ -80,20 +80,41 @@ type preflightResponse struct {
 	// Provenance says why each entry of the resolved spec is there; the policy
 	// preview returns the same rows for the same request. Never null.
 	Provenance []provenanceRow `json:"provenance"`
-	// Resources and LocalPlacement are the policy preview's, with the same
-	// meaning: always an array, empty until the lane that fills them lands.
-	Resources      []client.PlacementResources `json:"resources"`
-	LocalPlacement []client.LocalPlacementFact `json:"local_placement"`
+	// Limits is what this run may get (the resolved pool, the caller's
+	// governance and the deployment, for the run's type) and ResourcesApplied
+	// the CPU and memory it asked for and gets; the policy preview's, with the
+	// same meaning. LocalPlacement is the preview's too: always an array, empty
+	// until the lane that fills it lands.
+	Limits           *types.EffectiveRunLimits   `json:"limits,omitempty"`
+	ResourcesApplied *client.AppliedResources    `json:"resources_applied,omitempty"`
+	LocalPlacement   []client.LocalPlacementFact `json:"local_placement"`
+	// MainDrive is the main-drive size the run asked for and gets, the number dispatch creates
+	// the sandbox with; the policy preview's too.
+	MainDrive *client.MainDriveApplied `json:"main_drive,omitempty"`
 	// Image is the image the run would start from and its source, absent until
 	// the image lane resolves it; AllowedImages are the organisation's allowed
 	// choices, an array that is empty until that lane fills it.
 	Image         *client.ImageFact     `json:"image,omitempty"`
 	AllowedImages []client.AllowedImage `json:"allowed_images"`
+	// HarnessSet is the run's included harnesses as this door resolved them
+	// (harnessSetFact); absent for an older client's request and a run with no
+	// harness. ModelCredential above is graded from the most resident of them.
+	HarnessSet *client.HarnessSetFact `json:"harness_set,omitempty"`
 	// RunnerPool is the pool the request resolves to, absent until the pool lane
 	// resolves one; RunnerPools are the permitted choices, an array that is
 	// empty until that lane fills it.
 	RunnerPool  *client.ResolvedRunnerPool `json:"runner_pool,omitempty"`
 	RunnerPools []client.RunnerPoolChoice  `json:"runner_pools"`
+	// BarrierOptions are the resolved pool's three barriers under this draft's floors; empty when unpooled.
+	BarrierOptions []client.BarrierOption `json:"barrier_options"`
+	// RunnerPoolSlots is the resolved pool's slot counts and this run's max_wait_sec; absent when unpooled. Advisory: the launch decides.
+	RunnerPoolSlots *client.PoolSlots `json:"runner_pool_slots,omitempty"`
+	// Access is what the run brings in (accessFacts), the same projection the
+	// policy preview answers for the same request.
+	Access *accessBlock `json:"access,omitempty"`
+	// Attachments is the run's mount map: each repository, folder and drive at
+	// the path the run uses it at. Never null.
+	Attachments []client.RunAttachment `json:"attachments"`
 }
 
 // preflightBurst and preflightLimiterMaxPeople size the per-person preflight
@@ -105,32 +126,29 @@ const (
 )
 
 // refusePreflightRate answers 429 when this person is over the preflight rate, true when it has
-// answered. A person only; the admin token is one shared actor name, so limiting it would pool
-// every CI job into one bucket.
+// answered. A person or a service identity; the admin token is one shared actor name, so limiting it would
+// pool every CI job into one bucket.
 func (s *Server) refusePreflightRate(w http.ResponseWriter, r *http.Request) bool {
 	if s.preflightLimiter == nil {
 		return false
 	}
-	if t, who := actorFromRequest(r); t != types.ActorHuman || s.preflightLimiter.allow(who, s.cfg.Now()) {
+	if who, limited := rateLimitedActor(r); !limited || s.preflightLimiter.allow(who, s.cfg.Now()) {
 		return false
 	}
 	writeErrorReason(w, http.StatusTooManyRequests, reasonPreflightRateLimited, "too many preflight checks; slow down")
 	return true
 }
 
-// advertisedConfinement is the classes the runner advertises, for Review's
-// default-class math, best-effort: no runner, or one that cannot answer, is
-// nil — the default then stays at the policy minimum and Review never refuses
-// on it (handlePreflightRun).
-func (s *Server) advertisedConfinement(ctx context.Context) []types.ConfinementClass {
-	if s.cfg.Runner == nil {
-		return nil
-	}
-	caps, err := s.cfg.Runner.Capabilities(ctx)
+// advertisedConfinement is the classes the request's placement advertises, for
+// Review's default-class math, best-effort: no executor, or one that cannot
+// answer (a runner that is offline included), is nil — the default then stays
+// at the policy minimum and Review never refuses on it (handlePreflightRun).
+func (s *Server) advertisedConfinement(ctx context.Context, req createRunRequest) []types.ConfinementClass {
+	pc, err := s.requestCapabilities(ctx, req)
 	if err != nil {
 		return nil
 	}
-	return caps.ConfinementClasses
+	return pc.ConfinementClasses
 }
 
 // handlePreflightRun is a DRY-RUN of handleCreateRun's resolution + gating: it
@@ -214,7 +232,7 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 		writeServerError(w, r, "get site config", rerr)
 		return
 	} else if msg != "" {
-		writeErrorReason(w, http.StatusUnprocessableEntity, reasonAgentNotEnabled, msg)
+		runError(http.StatusUnprocessableEntity, reasonAgentNotEnabled, msg).forTool(harnessRefusalTool(req)).write(s, w, r)
 		return
 	}
 	// Same member request-field denial launch runs (runs_create.go's
@@ -257,6 +275,9 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 		writeErrorReason(w, http.StatusUnprocessableEntity, reasonIntegrationIDRetired, mpRunNoIntegration)
 		return
 	}
+	// Last, as in decodeAndValidateCreateRun: the same derivation create applies,
+	// so the facts below describe the tool_approvals value launch dispatches with.
+	req.ToolApprovals = effectiveToolApprovals(req, ceiling)
 
 	// Every launch gate from policy resolution to the quota fit, through the
 	// SAME fold launch runs (runFoldSteps) — called, not re-implemented, so a
@@ -324,7 +345,7 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 		llmAccess = runLLMAccess(req, mpChoice)
 	}
 
-	items := s.deriveSetupItems(ctx, s.secretOwnerFromRequest(r), runInput, spec, f.present, llmAccess)
+	items := s.deriveRunSetupItems(ctx, s.secretOwnerFromRequest(r), runInput, spec, f.present, llmAccess, f.wsRefs)
 
 	// credentialConfinementAdvisory (#150): the SAME shared helper the create
 	// path calls (appendCredentialConfinementAdvisory, runs_create.go), off the
@@ -343,11 +364,17 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 		OverallRisk:              overallRisk,
 		Warnings:                 warnings,
 		Provenance:               f.prov,
-		Resources:                []client.PlacementResources{},
 		LocalPlacement:           []client.LocalPlacementFact{},
 		AllowedImages:            []client.AllowedImage{},
 		RunnerPools:              []client.RunnerPoolChoice{},
+		Attachments:              f.attachments,
 	}
+	resp.RunnerPool, resp.RunnerPools = f.place.facts()
+	resp.BarrierOptions = f.barrierOptions
+	resp.Image, resp.HarnessSet = f.image, harnessSetFact(f.harnesses, f.harnessChoices)
+	resp.Limits, resp.ResourcesApplied = f.place.sizeFacts()
+	resp.RunnerPoolSlots = s.runnerPoolSlots(ctx, f.place, *f.req)
+	resp.MainDrive = f.mainDrive.applied()
 	if modelCred.Residency != "" {
 		resp.ModelCredential = &modelCred
 	}
@@ -365,8 +392,15 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	resp.GitCredential = s.gitCredentialFactForRepos(ctx, oidcHumanFromContext(ctx), runRepos)
 	resp.Components = componentFacts(componentFactInputs{
 		req: f.req, spec: f.spec, comps: f.comps, baseline: f.baseline, scmSite: f.scmSite,
-		ceiling: f.ceiling, mpChoice: f.mpChoice, autonomy: f.autonomy,
+		ceiling: f.ceiling, mpChoice: f.mpChoice, pushSets: f.pushSets, autonomy: f.autonomy,
 		credentialChecked: true, autonomyResolved: true,
 	}, resp.GitCredential)
+	access, err := s.accessFor(r, accessInputs{req: f.req, spec: f.spec, prov: f.prov, source: f.source,
+		scmSite: f.scmSite, mpChoice: f.mpChoice, comps: f.comps, facts: resp.Components, level: f.autonomy.Level})
+	if err != nil {
+		writeServerError(w, r, "resolve capability", err)
+		return
+	}
+	resp.Access = access
 	writeJSON(w, http.StatusOK, resp)
 }

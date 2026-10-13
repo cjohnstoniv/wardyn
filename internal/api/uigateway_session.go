@@ -120,6 +120,9 @@ type uiSession struct {
 	// otherwise. The relay audits on the daemon's context, so the session
 	// carries it onto every row it writes after the entry (#1234).
 	Via *types.DelegationVia `json:"v,omitempty"`
+	// Service is the service identity whose run the session entered as its sponsor (#1508), empty
+	// otherwise; every row the session writes names it with entry=sponsor.
+	Service string `json:"c,omitempty"`
 }
 
 // auditUISession writes one ui.* row for sess: its run, its principal, and the
@@ -127,6 +130,9 @@ type uiSession struct {
 func (s *Server) auditUISession(sess uiSession, action, target, outcome string, data map[string]any) {
 	if sess.Via != nil {
 		data["via"] = sess.Via
+	}
+	if sess.Service != "" {
+		data["service_identity"], data["entry"] = sess.Service, sponsorEntry
 	}
 	s.recordStreamAudit(s.cfg.BaseCtx, sess.SandboxRef, s.auditEvent(&sess.Run, types.ActorHuman, sess.Principal, action, target, outcome, mustJSON(data)))
 }
@@ -262,7 +268,8 @@ func (s *Server) decodeUISession(r *http.Request, now time.Time) (uiSession, boo
 // is what catches that one, and a session opened through a portal is also
 // bound to the portal's grant (#1475). The ownership rule is mayEnterRun's, so
 // an admin cookie minted before the entry rule narrowed dies on a person's run
-// at its next re-assert.
+// at its next re-assert. A sponsor's session rides the same call: it ends at the next
+// re-assert once the sponsor changed or the identity was suspended or retired.
 //
 // NOT covered, deliberately: a ROLE demotion. sess.Role is the cookie's
 // login-time snapshot and is never re-derived, exactly as the console session's
@@ -286,9 +293,13 @@ func (s *Server) uiSessionStillAuthorized(ctx context.Context, sess uiSession, r
 				http.StatusServiceUnavailable, uiSessionUnverifiableMsg)
 		}
 	}
-	if !mayEnterRun(run, sess.Principal, sess.Role == oidc.RoleAdmin) {
+	if !s.mayEnterRunOrSponsor(ctx, run, sess.Principal, sess.Role == oidc.RoleAdmin, time.Unix(sess.AuthorizedAt, 0).UTC()) {
 		return s.uiDenyReassert(sess, uiDeniedReasonNotAuthorized,
 			http.StatusForbidden, uiSessionNoLongerAuthorizedMsg)
+	}
+	if backgroundOnlyRefusal(run, "web application gateway") != nil {
+		return s.uiDenyReassert(sess, reasonRunBackgroundOnly,
+			http.StatusConflict, runBackgroundOnlyMsg("web application gateway"))
 	}
 	if s.cfg.SessionRevocations == nil {
 		return nil
@@ -311,6 +322,14 @@ func (s *Server) uiSessionStillAuthorized(ctx context.Context, sess uiSession, r
 			http.StatusForbidden, uiSessionNoLongerAuthorizedMsg)
 	}
 	return nil
+}
+
+// uiRefuseBackground answers uiEnterCommon's refusal of a background task, for
+// any caller (a super admin included): audited, no cookie, no redirect.
+func (s *Server) uiRefuseBackground(w http.ResponseWriter, r *http.Request, rf *runRefusal, runID uuid.UUID, app string, ta ticketActor) {
+	s.auditUI(&runID, types.ActorHuman, ta.principal, "ui.authorize", app, "denied",
+		ta.withVia(map[string]any{"reason": reasonRunBackgroundOnly}))
+	rf.write(s, w, r)
 }
 
 // uiDenyReassert audits the refusal and returns it. One place, so an arm cannot

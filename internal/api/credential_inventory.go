@@ -187,7 +187,8 @@ func (s *Server) handleCredentialInventory(w http.ResponseWriter, r *http.Reques
 // read, and no principal without a paired email gets one invented.
 func (s *Server) emailsByPrincipal(ctx context.Context) map[string]string {
 	out := map[string]string{}
-	for _, p := range s.knownPrincipals(ctx) {
+	known, _ := s.knownPrincipals(ctx) // a list it cannot read pairs nothing
+	for _, p := range known {
 		if p.email == "" {
 			continue
 		}

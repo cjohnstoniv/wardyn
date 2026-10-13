@@ -21,11 +21,14 @@ import (
 // design rev 4, §2.3, RL-4). Extending the end within the run's captured max is
 // always allowed — extending is the lease. Shortening it, setting No end and
 // changing the wait need the run's captured user_changes_limits gate. An
-// over-ask is capped at the limit and the response says so. Only a super admin
-// is exempt, bounded by the deployment alone, the way a super admin's own run
-// captures no profile limits; a security admin is bounded like any user. A
-// later end or No end also re-checks the owner's authority (extendRefusal),
-// whoever asks.
+// over-ask is capped at the limit and the response says so. The limit is the
+// earlier of the captured governance lease (now plus max_end_ahead_sec) and the
+// run's lifetime_cap_at, the pool's and the deployment's maximum measured from
+// launch; the response names which one bound it. A super admin skips governance
+// only (O10-A, #1319) and is still bounded by the captured cap, the way a super
+// admin's own run captures no profile limits; a security admin is bounded like
+// any user. A later end or No end also re-checks the owner's authority
+// (extendRefusal), whoever asks.
 //
 // A run lost to a reboot or a control-plane outage is still extendable, even
 // past its end (F1, long-holds design rev 4 §2.3): extending is how it
@@ -50,6 +53,9 @@ type runEndWaitResponse struct {
 	Capped []string `json:"capped"`
 	// LatestEnd is the furthest the end may be set now; absent is no limit.
 	LatestEnd *time.Time `json:"latest_end,omitempty"`
+	// LatestEndSource names the limit LatestEnd comes from (pool, governance or
+	// deployment), so the console can say whose limit it is.
+	LatestEndSource types.LimitSource `json:"latest_end_source,omitempty"`
 	// MaxWaitSec is the longest wait allowed; absent is no limit.
 	MaxWaitSec int `json:"max_wait_sec,omitempty"`
 	// EndsCapLoosened is true when the end was capped by the limit this run
@@ -109,11 +115,7 @@ func (s *Server) handleSetRunEndAndWait(w http.ResponseWriter, r *http.Request) 
 	case present["wait_budget_sec"] && req.WaitBudgetSec == nil:
 		writeErrorReason(w, http.StatusBadRequest, reasonRunWaitBudgetNotANumber, "wait_budget_sec must be a number of seconds")
 		return
-	case isTerminalRunState(run.State):
-		writeErrorReason(w, http.StatusConflict, reasonRunEndWaitAlreadyFinished, "run has already finished (state="+string(run.State)+")")
-		return
-	case run.LostReason == types.LostEnded && !s.endedFilesKept(run, s.cfg.Now()):
-		writeErrorReason(w, http.StatusConflict, reasonRunEndWaitFilesGone, "run has ended and its files are no longer kept; its end cannot be moved")
+	case s.endWaitRunRefusal(w, run):
 		return
 	}
 	leaser, ok := s.cfg.Store.(store.RunLeaser)
@@ -157,13 +159,10 @@ func (s *Server) handleSetRunEndAndWait(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 	if p.endChanged {
-		data := map[string]any{
-			"from": run.EndsAt, "to": p.resp.EndsAt, "max": run.RunLimits.MaxEndAheadSec,
-			"capped": slices.Contains(p.resp.Capped, "ends_at"), "limits_exempt": exempt,
+		if run.Placement == types.PlacementLocal {
+			s.renewLeaseAfterEndChange(r.Context(), run.ID)
 		}
-		if p.resp.EndsCapLoosened {
-			data["ends_cap_loosened"] = true
-		}
+		data := endSetAudit(run, p.resp, exempt)
 		s.recordAudit(r.Context(), s.auditEvent(&run.ID, actorType, actor, "run.end.set", run.ID.String(),
 			"success", mustJSON(data)))
 	}
@@ -175,6 +174,42 @@ func (s *Server) handleSetRunEndAndWait(w http.ResponseWriter, r *http.Request) 
 			})))
 	}
 	writeJSON(w, http.StatusOK, p.resp)
+}
+
+// endWaitRunRefusal answers a PATCH on a run whose state no longer lets its end
+// or wait move, and reports whether it did: a finished run; a run at or past
+// its lifetime cap, which the lease sweep is ending; a run kept by its end whose
+// files are gone. A run waiting in a pool's queue has no end yet: it is set when the run starts.
+func (s *Server) endWaitRunRefusal(w http.ResponseWriter, run types.AgentRun) bool {
+	switch {
+	case run.State == types.RunQueued:
+		writeErrorReason(w, http.StatusConflict, reasonRunQueued, "this run is waiting for a slot in its pool; its end is set when it starts")
+	case isTerminalRunState(run.State):
+		writeErrorReason(w, http.StatusConflict, reasonRunEndWaitAlreadyFinished, "run has already finished (state="+string(run.State)+")")
+	case run.LifetimeCapAt != nil && !s.cfg.Now().Before(*run.LifetimeCapAt):
+		writeErrorReason(w, http.StatusConflict, reasonRunEndWaitMaxLifetime, "run has reached its maximum lifetime and is being ended; its end and wait cannot be changed")
+	case run.LostReason == types.LostEnded && !s.endedFilesKept(run, s.cfg.Now()):
+		writeErrorReason(w, http.StatusConflict, reasonRunEndWaitFilesGone, "run has ended and its files are no longer kept; its end cannot be moved")
+	default:
+		return false
+	}
+	return true
+}
+
+// endSetAudit is the run.end.set success row's data.
+func endSetAudit(run types.AgentRun, resp runEndWaitResponse, exempt bool) map[string]any {
+	capped := slices.Contains(resp.Capped, "ends_at")
+	data := map[string]any{
+		"from": run.EndsAt, "to": resp.EndsAt, "max": run.RunLimits.MaxEndAheadSec,
+		"capped": capped, "limits_exempt": exempt,
+	}
+	if resp.EndsCapLoosened {
+		data["ends_cap_loosened"] = true
+	}
+	if capped && resp.LatestEndSource != "" {
+		data["source"] = resp.LatestEndSource
+	}
+	return data
 }
 
 // endsCapLoosened reports whether the profile this run launched under now
@@ -200,8 +235,8 @@ func (s *Server) endsCapLoosened(ctx context.Context, run types.AgentRun) bool {
 }
 
 // planRunEndWait decides a PATCH against the bounds the run captured at
-// create, never the profile's current ones. exempt (a super admin) swaps them
-// for the deployment's alone.
+// create, never the profile's current ones. exempt (a super admin) skips the
+// governance limits only: the run's lifetime cap still binds (O10-A).
 func planRunEndWait(run types.AgentRun, req runEndWaitRequest, present map[string]bool, exempt bool,
 	now time.Time, deploymentWait time.Duration) endWaitPlan {
 	l := run.RunLimits
@@ -212,7 +247,7 @@ func planRunEndWait(run types.AgentRun, req runEndWaitRequest, present map[strin
 		ID: run.ID, EndsAt: run.EndsAt, WaitBudgetSec: run.WaitBudgetSec, Capped: []string{},
 	}}
 	if present["ends_at"] {
-		p.planEnd(run.EndsAt, req.EndsAt, l, now)
+		p.planEnd(run.EndsAt, req.EndsAt, l, runCap{at: run.LifetimeCapAt, source: run.LifetimeCapSource}, now)
 	}
 	if p.refusal == "" && present["wait_budget_sec"] {
 		p.planWait(run.WaitBudgetSec, *req.WaitBudgetSec, l, deploymentWait)
@@ -220,19 +255,69 @@ func planRunEndWait(run types.AgentRun, req runEndWaitRequest, present map[strin
 	return p
 }
 
-func (p *endWaitPlan) planEnd(cur, asked *time.Time, l types.RunLimits, now time.Time) {
-	latest := now.Add(maxRunLimitSec * time.Second).Truncate(time.Second)
-	if l.MaxEndAheadSec > 0 {
-		latest = now.Add(time.Duration(l.MaxEndAheadSec) * time.Second).Truncate(time.Second)
-		p.resp.LatestEnd = &latest
+// runCap is a run's absolute lifetime cap (agent_runs.lifetime_cap_at) and which
+// source bound it; at is nil for no cap.
+type runCap struct {
+	at     *time.Time
+	source types.LimitSource
+}
+
+// endBound is the furthest a finite end may sit past the moment it is set.
+type endBound struct {
+	ahead   time.Duration
+	source  types.LimitSource // the limit that binds; empty when only the run-limit ceiling does
+	bounded bool
+}
+
+// latestEndAhead is the one rule for how far a finite end may be set, shared by
+// create and PATCH so the same ask is cut to the same bound at both: the earlier
+// of the governance lease (leaseSec past now; 0 none) and the pool's and
+// deployment's cap (capAhead; nil none). A tie names governance over the
+// deployment, the way runnerpool.Effective does. With neither, only the
+// run-limit ceiling bounds it.
+func latestEndAhead(leaseSec int, capAhead *time.Duration, capSource types.LimitSource) endBound {
+	b := endBound{ahead: maxRunLimitSec * time.Second}
+	if capAhead != nil {
+		b = endBound{ahead: *capAhead, source: capSource, bounded: true}
+	}
+	if lease := time.Duration(leaseSec) * time.Second; leaseSec > 0 &&
+		(!b.bounded || lease < b.ahead || (lease == b.ahead && capSource == types.LimitSourceDeployment)) {
+		b = endBound{ahead: lease, source: types.LimitSourceGovernance, bounded: true}
+	}
+	return b
+}
+
+// noEndBlock is why governance does not let a run have No end, or "" when it
+// does: the same two answers at create and in a PATCH.
+func noEndBlock(l types.RunLimits) (reason, msg string) {
+	switch {
+	case !l.AllowNoEnd:
+		return reasonRunEndNoEndNotAllowed, "No end is not allowed for this run"
+	case !l.UserChangesLimits:
+		return reasonRunLimitsGateDenied, gateRefusal("Setting No end")
+	}
+	return "", ""
+}
+
+func (p *endWaitPlan) planEnd(cur, asked *time.Time, l types.RunLimits, lifetime runCap, now time.Time) {
+	var capAhead *time.Duration
+	if lifetime.at != nil {
+		d := lifetime.at.Sub(now)
+		capAhead = &d
+	}
+	bound := latestEndAhead(l.MaxEndAheadSec, capAhead, lifetime.source)
+	latest := now.Add(bound.ahead).Truncate(time.Second)
+	if bound.bounded {
+		p.resp.LatestEnd, p.resp.LatestEndSource = &latest, bound.source
 	}
 	if asked == nil {
-		switch {
+		switch reason, msg := noEndBlock(l); {
 		case cur == nil:
-		case !l.AllowNoEnd:
-			p.refuse(http.StatusForbidden, "run.end.set", reasonRunEndNoEndNotAllowed, "No end is not allowed for this run")
-		case !l.UserChangesLimits:
-			p.refuse(http.StatusForbidden, "run.end.set", reasonRunLimitsGateDenied, gateRefusal("Setting No end"))
+		case lifetime.at != nil:
+			p.refuse(http.StatusForbidden, "run.end.set", reasonRunEndNoEndNotAllowed,
+				"No end is not allowed: "+endSourceLabel(lifetime.source, "")+" limits how long a run may live")
+		case reason != "":
+			p.refuse(http.StatusForbidden, "run.end.set", reason, msg)
 		default:
 			p.resp.EndsAt, p.endChanged = nil, true
 		}

@@ -1,8 +1,8 @@
 // Copyright 2025 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// Postgres-backed tests for registered runners, their pending actions and the credential delivery
-// policy (migration 0139). Guarded by WARDYN_TEST_PG; skipped cleanly when unset.
+// Postgres-backed tests for registered runners and the credential delivery policy (migration
+// 0139); pending actions are in store_runner_actions_pg_test.go. Guarded by WARDYN_TEST_PG; skipped cleanly when unset.
 package store_test
 
 import (
@@ -20,9 +20,12 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
+// newRunner is a runner of owner that may hold as many runs at once as any runner may, so a fixture's
+// runs are never refused for its max_runs; a test of max_runs sets its own.
 func newRunner(owner string) types.Runner {
 	id := uuid.New()
-	return types.Runner{ID: id, Owner: owner, Name: "laptop", PublicKey: make([]byte, 32), KeyFingerprint: "fp-" + id.String(), Version: "0.9.0"}
+	return types.Runner{ID: id, Owner: owner, Name: "laptop", PublicKey: make([]byte, 32), KeyFingerprint: "fp-" + id.String(), Version: "0.9.0",
+		MaxRuns: types.RunnerMaxRunsCeiling}
 }
 
 func TestPG_Runners_CreateStartsUnclaimedAndFingerprintIsUnique(t *testing.T) {
@@ -156,39 +159,6 @@ func claimed(t *testing.T, st store.PG, ctx context.Context, owner string) types
 	return r
 }
 
-func TestPG_Runners_RevokeDropsOpenActionsAndIsIdempotent(t *testing.T) {
-	pool := runsPGPool(t)
-	ctx := context.Background()
-	st := store.NewPG(pool)
-	r := claimed(t, st, ctx, "alice@example.com")
-	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM runners WHERE id=$1`, r.ID) })
-	run := persistRun(t, ctx, pool, newRun(types.RunRunning))
-	if _, _, err := st.QueueRunnerAction(ctx, types.RunnerPendingAction{ID: uuid.New(), RunnerID: r.ID, RunID: run.ID, Kind: types.RunnerActionKill, Ref: "runner:x/y"}); err != nil {
-		t.Fatal(err)
-	}
-	now := time.Now().UTC()
-	got, err := st.RevokeRunner(ctx, r.ID, now)
-	if err != nil || got.State != types.RunnerRevoked || got.RevokedAt == nil {
-		t.Fatalf("revoke = %+v, %v", got, err)
-	}
-	if acts, err := st.ListPendingRunnerActions(ctx, r.ID); err != nil || len(acts) != 0 {
-		t.Fatalf("a revoked runner kept %d pending actions (%v)", len(acts), err)
-	}
-	if _, err := st.RevokeRunner(ctx, r.ID, now); !errors.Is(err, store.ErrNotFound) {
-		t.Fatalf("a second revoke = %v, want ErrNotFound", err)
-	}
-	// F7: a queue that races the revoke inserts nothing, so it cannot fence the run forever.
-	if _, _, err := st.QueueRunnerAction(ctx, types.RunnerPendingAction{ID: uuid.New(), RunnerID: r.ID, RunID: run.ID, Kind: types.RunnerActionEnd, Ref: "runner:x/y"}); !errors.Is(err, store.ErrNotFound) {
-		t.Fatalf("queueing for a revoked runner = %v, want ErrNotFound", err)
-	}
-	if has, _ := st.RunHasPendingRunnerAction(ctx, run.ID); has {
-		t.Fatal("a revoked runner's late action fences the run")
-	}
-	if _, err := st.ClaimRunner(ctx, r.ID, r.Owner, r.KeyFingerprint, now); !errors.Is(err, store.ErrConflict) {
-		t.Fatalf("claiming a revoked runner = %v, want ErrConflict", err)
-	}
-}
-
 func TestPG_Runners_ListAndExpireUnclaimed(t *testing.T) {
 	pool := runsPGPool(t)
 	ctx := context.Background()
@@ -220,93 +190,6 @@ func TestPG_Runners_ListAndExpireUnclaimed(t *testing.T) {
 	}
 	if _, err := st.GetRunner(ctx, b.ID); err != nil {
 		t.Fatalf("the claimed runner was expired: %v", err)
-	}
-}
-
-func TestPG_RunnerActions_QueueIsIdempotentOrderedAndFences(t *testing.T) {
-	pool := runsPGPool(t)
-	ctx := context.Background()
-	st := store.NewPG(pool)
-	r := claimed(t, st, ctx, "alice@example.com")
-	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM runners WHERE id=$1`, r.ID) })
-	run1 := persistRun(t, ctx, pool, newRun(types.RunRunning))
-	run2 := persistRun(t, ctx, pool, newRun(types.RunRunning))
-
-	if has, err := st.RunHasPendingRunnerAction(ctx, run1.ID); err != nil || has {
-		t.Fatalf("fence before any action = %v, %v", has, err)
-	}
-	mk := func(run uuid.UUID, kind types.RunnerActionKind) types.RunnerPendingAction {
-		return types.RunnerPendingAction{ID: uuid.New(), RunnerID: r.ID, RunID: run, Kind: kind, Ref: "runner:r/" + run.String()}
-	}
-	first, queued, err := st.QueueRunnerAction(ctx, mk(run1.ID, types.RunnerActionKill))
-	if err != nil || !queued {
-		t.Fatalf("first queue: queued=%v err=%v", queued, err)
-	}
-	again, queued, err := st.QueueRunnerAction(ctx, mk(run1.ID, types.RunnerActionKill))
-	if err != nil || queued || again.ID != first.ID {
-		t.Fatalf("the same (run, kind) queued twice: queued=%v id=%s want %s err=%v", queued, again.ID, first.ID, err)
-	}
-	if _, queued, err = st.QueueRunnerAction(ctx, mk(run1.ID, types.RunnerActionEnd)); err != nil || !queued {
-		t.Fatalf("another kind for the run: queued=%v err=%v", queued, err)
-	}
-	if _, queued, err = st.QueueRunnerAction(ctx, mk(run2.ID, types.RunnerActionStopProxy)); err != nil || !queued {
-		t.Fatalf("another run: queued=%v err=%v", queued, err)
-	}
-	if has, _ := st.RunHasPendingRunnerAction(ctx, run1.ID); !has {
-		t.Fatal("a run with an unapplied action is not fenced")
-	}
-	acts, err := st.ListPendingRunnerActions(ctx, r.ID)
-	if err != nil || len(acts) != 3 || acts[0].ID != first.ID {
-		t.Fatalf("pending = %d actions (first %v), %v; want 3, oldest first", len(acts), acts, err)
-	}
-	for i := 1; i < len(acts); i++ {
-		if acts[i].QueuedAt.Before(acts[i-1].QueuedAt) {
-			t.Fatal("pending actions are not oldest first")
-		}
-	}
-
-	now := time.Now().UTC()
-	done, err := st.ApplyRunnerAction(ctx, first.ID, "applied", now.Add(-time.Second), now)
-	if err != nil || done.AppliedAt == nil || done.Outcome != "applied" || done.ObservedAt == nil {
-		t.Fatalf("apply = %+v, %v", done, err)
-	}
-	if _, err := st.ApplyRunnerAction(ctx, first.ID, "applied", now, now); !errors.Is(err, store.ErrNotFound) {
-		t.Fatalf("a replayed action_result = %v, want ErrNotFound", err)
-	}
-	// Applying the kill lifts only that kind's fence; the end is still open.
-	if has, _ := st.RunHasPendingRunnerAction(ctx, run1.ID); !has {
-		t.Fatal("the fence lifted while an action was still open")
-	}
-	// An applied (run, kind) may be queued again.
-	if _, queued, err = st.QueueRunnerAction(ctx, mk(run1.ID, types.RunnerActionKill)); err != nil || !queued {
-		t.Fatalf("re-queue after apply: queued=%v err=%v", queued, err)
-	}
-}
-
-func TestPG_RunnerActions_RejectUnknownKindAndCascadeWithRun(t *testing.T) {
-	pool := runsPGPool(t)
-	ctx := context.Background()
-	st := store.NewPG(pool)
-	r := claimed(t, st, ctx, "alice@example.com")
-	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM runners WHERE id=$1`, r.ID) })
-	run := persistRun(t, ctx, pool, newRun(types.RunRunning))
-	// An unclaimed runner takes no action either.
-	un, _ := st.CreateRunner(ctx, newRunner("bob@example.com"))
-	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM runners WHERE id=$1`, un.ID) })
-	if _, _, err := st.QueueRunnerAction(ctx, types.RunnerPendingAction{ID: uuid.New(), RunnerID: un.ID, RunID: run.ID, Kind: types.RunnerActionKill, Ref: "x"}); !errors.Is(err, store.ErrNotFound) {
-		t.Fatalf("queueing for an unclaimed runner = %v, want ErrNotFound", err)
-	}
-	if _, _, err := st.QueueRunnerAction(ctx, types.RunnerPendingAction{ID: uuid.New(), RunnerID: r.ID, RunID: run.ID, Kind: "freeze", Ref: "x"}); err == nil {
-		t.Fatal("an action kind outside kill/end/stop_proxy was stored")
-	}
-	if _, _, err := st.QueueRunnerAction(ctx, types.RunnerPendingAction{ID: uuid.New(), RunnerID: r.ID, RunID: run.ID, Kind: types.RunnerActionEnd, Ref: "x"}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := pool.Exec(ctx, `DELETE FROM agent_runs WHERE id=$1`, run.ID); err != nil {
-		t.Fatal(err)
-	}
-	if acts, _ := st.ListPendingRunnerActions(ctx, r.ID); len(acts) != 0 {
-		t.Fatalf("%d actions outlived their run", len(acts))
 	}
 }
 
@@ -386,47 +269,5 @@ func TestPG_CredentialGrants_DeliveryRoundTripAndCheck(t *testing.T) {
 	var d string
 	if err := pool.QueryRow(ctx, `SELECT delivery FROM credential_grants WHERE id=$1`, id).Scan(&d); err != nil || d != "" {
 		t.Fatalf("legacy grant delivery = %q, %v", d, err)
-	}
-}
-
-// N3: a queue that meets a revoke in flight waits for it (FOR SHARE on the runner row) and then
-// refuses, instead of inserting a row the revoke's DELETE had already passed.
-func TestPG_RunnerActions_QueueWaitsForAnInFlightRevoke(t *testing.T) {
-	pool := runsPGPool(t)
-	ctx := context.Background()
-	st := store.NewPG(pool)
-	r := claimed(t, st, ctx, "alice@example.com")
-	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM runners WHERE id=$1`, r.ID) })
-	run := persistRun(t, ctx, pool, newRun(types.RunRunning))
-
-	tx, err := pool.Begin(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer tx.Rollback(context.Background()) //nolint:errcheck // a no-op after Commit
-	if _, err := tx.Exec(ctx, `UPDATE runners SET state='revoked', revoked_at=now() WHERE id=$1`, r.ID); err != nil {
-		t.Fatal(err)
-	}
-	errc := make(chan error, 1)
-	go func() {
-		_, _, err := st.QueueRunnerAction(ctx, types.RunnerPendingAction{ID: uuid.New(), RunnerID: r.ID, RunID: run.ID, Kind: types.RunnerActionKill, Ref: "x"})
-		errc <- err
-	}()
-	select {
-	case err := <-errc:
-		t.Fatalf("the queue did not wait for the revoke in flight (returned %v)", err)
-	case <-time.After(300 * time.Millisecond):
-	}
-	if _, err := tx.Exec(ctx, `DELETE FROM runner_pending_actions WHERE runner_id=$1 AND applied_at IS NULL`, r.ID); err != nil {
-		t.Fatal(err)
-	}
-	if err := tx.Commit(ctx); err != nil {
-		t.Fatal(err)
-	}
-	if err := <-errc; !errors.Is(err, store.ErrNotFound) {
-		t.Fatalf("queue after the revoke committed = %v, want ErrNotFound", err)
-	}
-	if has, _ := st.RunHasPendingRunnerAction(ctx, run.ID); has {
-		t.Fatal("a row survived the revoke")
 	}
 }

@@ -27,6 +27,7 @@ func sampleFrames() []Frame {
 		{Type: TypeReset, Stream: 3, Payload: EncodeReset(ResetReconnect)},
 		{Type: TypeAck, Payload: EncodeAck(9)},
 		{Type: TypePing, Payload: EncodePing(testTime)},
+		{Type: TypeCurrentActivity, Payload: []byte(`{"run_id":"cc73dbab-d84a-483c-8f02-348e7b46b272"}`)},
 		{Type: TypeCall, Seq: 5, Stream: 4, Payload: bytes.Repeat([]byte{1}, MaxControlFrame)},
 	}
 }
@@ -140,7 +141,7 @@ func TestFrameRejectsMalformed(t *testing.T) {
 
 func TestTypeDirections(t *testing.T) {
 	orgOnly := []Type{TypeHello, TypeAuthOK, TypeRevoked, TypeGoaway, TypePending, TypeLease}
-	runnerOnly := []Type{TypeAuth, TypeState, TypeReady, TypeEvent}
+	runnerOnly := []Type{TypeAuth, TypeState, TypeReady, TypeEvent, TypeCurrentActivity}
 	for _, ty := range orgOnly {
 		if !ty.AllowedFrom(true) || ty.AllowedFrom(false) {
 			t.Errorf("%s must be org -> runner only", ty)

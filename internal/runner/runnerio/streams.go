@@ -58,6 +58,9 @@ func (s *Server) attach(ctx context.Context, peer *runnerwire.Peer, id uint32, r
 	if err != nil {
 		return nil, err
 	}
+	if err := s.held(ref); err != nil {
+		return nil, err
+	}
 	life, cancel := context.WithCancel(s.life(peer))
 	stop := context.AfterFunc(ctx, cancel)
 	defer stop()
@@ -120,6 +123,9 @@ func (s *Server) execStream(ctx context.Context, peer *runnerwire.Peer, id uint3
 	}
 	ref, err := s.local(args.Ref)
 	if err != nil {
+		return nil, err
+	}
+	if err := s.held(ref); err != nil {
 		return nil, err
 	}
 	life, cancel := context.WithCancel(s.life(peer))

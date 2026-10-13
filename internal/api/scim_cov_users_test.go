@@ -342,6 +342,9 @@ func TestSCIMCovCreateAnswers500WhenAStoreStepFails(t *testing.T) {
 			s.addIdentity(store.PrincipalIdentity{Principal: personKey, Issuer: scimCovIssuer})
 		}, true, true},
 		{"the alias lookup", "IdentitiesByAlias", nil, false, true},
+		{"resolving a name a sign-in row is seen under", "PrincipalsNamed", func(s *scimCovStore) {
+			s.addIdentity(store.PrincipalIdentity{Principal: "sub-pat", Issuer: scimCovIssuer, EmailLower: "pat@corp.example"})
+		}, false, true},
 		{"the create", "CreateScimIdentity", nil, false, false},
 		{"the link", "ApplyIdentityUpdate", func(s *scimCovStore) { s.addIdentity(scimCovBound()) }, false, false},
 	} {
@@ -574,7 +577,7 @@ func TestSCIMCovPatchAnswers500WhenAStoreStepFails(t *testing.T) {
 	}{
 		{"the alias read", "IdentityAliasValues", scimCovPatch(scimCovReplace("userName", `"x"`)), false},
 		{"the update", "ApplyIdentityUpdate", scimCovPatch(scimCovReplace("userName", `"x"`)), false},
-		{"the forms a reactivation clears", "PrincipalsByEmail", scimCovPatch(scimCovReplace("active", "true")), true},
+		{"the forms a reactivation clears", "PrincipalsNamed", scimCovPatch(scimCovReplace("active", "true")), true},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			st := newSCIMCovStore()

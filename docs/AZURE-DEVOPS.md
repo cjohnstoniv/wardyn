@@ -348,9 +348,13 @@ That has two consequences worth knowing before you hit them:
 | `token_mode` | What the run gets on a laptop | Why |
 |---|---|---|
 | `own_pat` | The person's own PAT, only when the Azure DevOps row is theirs and the PAT is stored in their own namespace; otherwise refused ([`internal/api/run_placement_intents.go#Server.localADOOrigin`](../internal/api/run_placement_intents.go)) | It is their credential |
-| `minted_pat`, `bearer` | Refused today (`placement_credential`) | The organisation mints or holds the token |
+| `minted_pat`, `bearer` | Refused (`placement_credential`), unless this connection opted in to `runner_resident` | The organisation mints or holds the token |
 
-- `TestDeliveryClassesMatchDesign` in [`internal/placement/placement_test.go`](../internal/placement/placement_test.go) pins that `ado_minted_pat` has no `runner_resident` mode.
+- A super admin opts a connection in with `entra.runner_resident` on `PUT /workspace-providers`. It is off by default and audited on `workspace_provider.write`.
+- With the opt-in, and the `ado_minted_pat` class set to `runner_resident` with its posture requirement met, the token is held in the runner's OS keystore. The runner's own proxy injects it, so the REST gate and capability holds keep running there.
+- `entra.runner_resident_sandbox` also puts the token in the sandbox. The agent can then use it past the REST gate and holds. It requires `entra.runner_resident`.
+- A resident token is static for the run: its lifetime caps the run's Azure DevOps access.
+- `TestLocalEligibility_ADOResidentIsOffByDefault` in [`internal/placement/resident_test.go`](../internal/placement/resident_test.go) pins the opt-in.
 - The refusal is `classifyCredential` ([`internal/placement/eligibility.go`](../internal/placement/eligibility.go)).
 - Where each thing lives is in [Managed laptops: client-mode runners](operations/hybrid-laptops.md#where-each-thing-lives). The delivery rules are in [Credential delivery (OD-12)](design/0.9/PLAN.md#7-credential-delivery-od-12).
 

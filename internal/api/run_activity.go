@@ -59,9 +59,10 @@ func (a *activitySignal) noteAutoStop() {
 const autoStopSampleFraction = 2
 
 // autoStopCandidate reports whether run is close enough to its auto-stop to be
-// worth a CPU reading. A paused run is frozen and cannot be busy.
+// worth a CPU reading. A paused run is frozen and cannot be busy, and a background
+// task has no idle stop at all (it ends when its work exits).
 func autoStopCandidate(run types.AgentRun, now time.Time) bool {
-	return run.AutoStopAfterSec > 0 && run.PausedAt == nil &&
+	return run.AutoStopAfterSec > 0 && !run.BackgroundOnly() && run.PausedAt == nil &&
 		now.Sub(run.UpdatedAt) >= time.Duration(run.AutoStopAfterSec)*time.Second/autoStopSampleFraction
 }
 

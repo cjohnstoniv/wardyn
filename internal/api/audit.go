@@ -200,24 +200,30 @@ func (s *Server) unsealed(ctx context.Context, evs []types.AuditEvent, err error
 
 // parseAuditFilterFor is parseAuditFilter plus the one translation sealing
 // needs: under WARDYN_AUDIT_SEAL=full a human row stores "subject:<id>" as its
-// actor, so ?actor=<person> also matches the subject the person resolves to.
-// Rows written before it was turned on keep the name, so the name still matches.
+// actor, and a person-target row as its target, so ?actor=<person> and
+// ?target=<person> also match the subject the person resolves to. Rows written
+// before it was turned on keep the name, so the name still matches.
 func (s *Server) parseAuditFilterFor(w http.ResponseWriter, r *http.Request) (store.AuditFilter, bool) {
 	f, ok := parseAuditFilter(w, r)
-	if !ok || f.Actor == "" {
+	if !ok || (f.Actor == "" && f.Target == "") {
 		return f, ok
 	}
 	t, has := s.cfg.AuditUnsealer.(audit.ActorTranslator)
 	if !has {
 		return f, true
 	}
-	stored, found, err := t.StoredActor(r.Context(), f.Actor)
-	if err != nil {
-		writeServerError(w, r, "translate the audit actor filter", err)
-		return store.AuditFilter{}, false
-	}
-	if found {
-		f.ActorAlt = stored
+	for _, p := range []struct{ name, alt *string }{{&f.Actor, &f.ActorAlt}, {&f.Target, &f.TargetAlt}} {
+		if *p.name == "" {
+			continue
+		}
+		stored, found, err := t.StoredActor(r.Context(), *p.name)
+		if err != nil {
+			writeServerError(w, r, "translate the audit actor or target filter", err)
+			return store.AuditFilter{}, false
+		}
+		if found {
+			*p.alt = stored
+		}
 	}
 	return f, true
 }
@@ -406,9 +412,10 @@ func (s *Server) handleVerifyAuditChain(w http.ResponseWriter, r *http.Request) 
 }
 
 // parseAuditFilter reads the optional narrowing predicates off the query string
-// (?since=&until=&action=&action_prefix=&actor=&actor_type=&outcome=&origin=),
+// (?since=&until=&action=&action_prefix=&actor=&target=&actor_type=&outcome=&origin=),
 // writing a 400 and returning ok=false on a malformed value. ?actor= is the exact
-// principal ("everything developer X did"); ?origin= separates the rows enrolled
+// principal ("everything developer X did"); ?target= is the exact target column,
+// a person's principal for a person.* row; ?origin= separates the rows enrolled
 // devices forwarded (device) from the organisation's own (organisation). All are additive and optional; none
 // set is the zero filter, which changes nothing about the query taken.
 // Timestamps are RFC3339, the same encoding the audit rows are served in.
@@ -418,6 +425,7 @@ func parseAuditFilter(w http.ResponseWriter, r *http.Request) (store.AuditFilter
 		Action:       q.Get("action"),
 		ActionPrefix: q.Get("action_prefix"),
 		Actor:        q.Get("actor"),
+		Target:       q.Get("target"),
 		ActorType:    types.ActorType(q.Get("actor_type")),
 		Outcome:      q.Get("outcome"),
 		Origin:       q.Get("origin"),
@@ -438,9 +446,9 @@ func parseAuditFilter(w http.ResponseWriter, r *http.Request) (store.AuditFilter
 		*p.dst = t
 	}
 	switch f.ActorType {
-	case "", types.ActorHuman, types.ActorAgent, types.ActorSystem:
+	case "", types.ActorHuman, types.ActorAgent, types.ActorSystem, types.ActorService:
 	default:
-		writeErrorReason(w, http.StatusBadRequest, reasonAuditInvalidActorType, "invalid actor_type (want human, agent, or system)")
+		writeErrorReason(w, http.StatusBadRequest, reasonAuditInvalidActorType, "invalid actor_type (want human, agent, system, or service)")
 		return store.AuditFilter{}, false
 	}
 	switch f.Origin {
@@ -450,4 +458,19 @@ func parseAuditFilter(w http.ResponseWriter, r *http.Request) (store.AuditFilter
 		return store.AuditFilter{}, false
 	}
 	return f, true
+}
+
+// auditEvent is a small constructor used across handlers.
+func (s *Server) auditEvent(runID *uuid.UUID, actorType types.ActorType, actor, action, target, outcome string, data []byte) types.AuditEvent {
+	return types.AuditEvent{
+		ID:        uuid.New(),
+		Time:      s.cfg.Now().UTC(),
+		RunID:     runID,
+		ActorType: actorType,
+		Actor:     actor,
+		Action:    action,
+		Target:    target,
+		Outcome:   outcome,
+		Data:      data,
+	}
 }

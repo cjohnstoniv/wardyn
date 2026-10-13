@@ -51,9 +51,11 @@ const (
 )
 
 // scimPurgeScopes is the erasure a purge asks for (Q-SCIM5): the person's credentials, the masking
-// copies of them and the components they saved. The record scopes (audit fields, run tasks,
-// outputs, recordings) stay a deliberate POST /people/{principal}/erasure.
-var scimPurgeScopes = []erasure.Scope{erasure.Credentials, erasure.MaskCopies, erasure.Components}
+// copies of them, the components they saved, their run setups (templates and template grants) and
+// their own Self-Hosted runner pools.
+// The record scopes (audit fields, run tasks, outputs, recordings) stay a deliberate
+// POST /people/{principal}/erasure.
+var scimPurgeScopes = []erasure.Scope{erasure.Credentials, erasure.MaskCopies, erasure.Components, erasure.RunSetups, erasure.RunnerPools}
 
 func (s *Server) handleSCIMDeleteUser(w http.ResponseWriter, r *http.Request) {
 	st, ident, ok := s.scimIdentity(w, r)
@@ -91,7 +93,7 @@ func (s *Server) finishPurge(ctx context.Context, st scimStore, id uuid.UUID, sl
 	if err != nil {
 		return err
 	}
-	forms, err := s.leaverForms(ctx, st, ident)
+	forms, err := s.deprovisionForms(ctx, st, ident, store.JobKindPurge)
 	if err != nil {
 		return err
 	}
@@ -147,7 +149,7 @@ func (s *Server) purgeStep(ctx context.Context, st scimStore, id uuid.UUID, jobs
 	return st.FinishDeprovisionJob(ctx, id, store.JobKindPurge, key, detail)
 }
 
-// eraseForPurge erases one principal's credentials, masking copies and components. A scope whose backing is
+// eraseForPurge erases one principal's credentials, masking copies, components and run setups. A scope whose backing is
 // not configured on this server holds nothing of the person's, so it is skipped rather than failing
 // the purge; a configured scope that fails keeps the step pending.
 func (s *Server) eraseForPurge(ctx context.Context, principal string) (map[string]int, error) {
@@ -166,6 +168,12 @@ func (s *Server) eraseForPurge(ctx context.Context, principal string) (map[strin
 	}
 	if m, ok := rep.Details[erasure.Components].(map[string]any); ok {
 		detail["components_erased"], _ = m["components"].(int)
+	}
+	if m, ok := rep.Details[erasure.RunSetups].(store.RunSetupsErased); ok {
+		detail["templates_erased"] = m.Templates
+	}
+	if m, ok := rep.Details[erasure.RunnerPools].(map[string]any); ok {
+		detail["runner_pools_deleted"], _ = m["runner_pools"].(int)
 	}
 	return detail, err
 }
@@ -242,7 +250,7 @@ func (s *Server) auditPurge(ctx context.Context, st scimStore, id uuid.UUID, sub
 	key := store.JobKey{Step: store.JobStepAuditDeprovision}
 	data := map[string]any{
 		"kind": store.JobKindPurge, "credentials_erased": counts["credentials_erased"], "masks_fenced": counts["masks_fenced"], "components_erased": counts["components_erased"],
-		"workspaces_reassigned": counts["workspaces_reassigned"], "grants_deleted": counts["grants_deleted"],
+		"templates_erased": counts["templates_erased"], "workspaces_reassigned": counts["workspaces_reassigned"], "grants_deleted": counts["grants_deleted"],
 		"assignments_deleted": counts["assignments_deleted"], "email_rows_kept": counts["email_rows_kept"], "drives": drives,
 	}
 	ev := s.auditEvent(nil, types.ActorSystem, scimActor, "person.deprovision", id.String(), "success", mustJSON(data))

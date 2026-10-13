@@ -1138,6 +1138,42 @@ jobs:
       - name: Shell regression tests (scripts/test-*.sh)
         run: make test-scripts
 
+  # ── runner packaging: the per-user systemd unit really starts and stops ───
+  # deploy/runner/install.sh installs wardyn-runnerd for the invoking user; the
+  # test drives it through that user's systemd manager, which only a disposable
+  # host may do (WARDYN_TEST_SYSTEMD_USER=1). Linger starts the user manager
+  # without a login session.
+  runner-units:
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+      - name: Start the user's systemd manager
+        run: |
+          set -euo pipefail
+          sudo loginctl enable-linger "$USER"
+          echo "XDG_RUNTIME_DIR=/run/user/$(id -u)" >> "$GITHUB_ENV"
+          export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+          for _ in $(seq 1 30); do
+            [ -S "$XDG_RUNTIME_DIR/systemd/private" ] && systemctl --user is-system-running --wait >/dev/null 2>&1 && break
+            sleep 1
+          done
+          systemctl --user is-system-running || true
+          systemctl --user show-environment >/dev/null
+      - name: Install, start, stop and uninstall the user unit
+        env:
+          WARDYN_TEST_SYSTEMD_USER: "1"
+        # A skip or a -run that matches nothing exits 0, so require the PASS line.
+        run: |
+          set -euo pipefail
+          go test -tags docker -count=1 -v -run '^TestRunnerdUserUnitStartsAndStops$' ./cmd/wardyn-runnerd/ | tee runner-units.log
+          grep -q -- '^--- PASS: TestRunnerdUserUnitStartsAndStops ' runner-units.log
+
   # Docker conformance against the live daemon (WARDYN_TEST_DOCKER=1). The
   # driver-agnostic honesty stub (`make test-conformance-stub` → the untagged
   # test/conformance/none_test.go) is NOT a separate leg here: that file carries
@@ -1341,7 +1377,8 @@ jobs:
     needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.backend != 'false' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # 45: the shard's go test has a 40m -timeout (scripts/test-report.sh), so the job must outlast it plus the Postgres service start, checkout and report upload; internal/api alone runs about 10m, then test/apie2e.
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -1352,7 +1389,7 @@ jobs:
             superuser: "1"
           - shard: store
             suite: pg-store
-            run: make test-report-pg PG_REPORT=pg-store PG_PKGS='./internal/store/... ./internal/db/... ./internal/secretstore/... ./internal/broker/... ./internal/recording/... ./cmd/wardynd/...'
+            run: make test-report-pg PG_REPORT=pg-store PG_PKGS='./internal/store/... ./internal/db/... ./internal/secretstore/... ./internal/broker/... ./internal/recording/... ./cmd/wardynd/... ./internal/notify/... ./internal/livebus/...'
             superuser: "1"
           # The `race` job above strips the DSN (Makefile: `WARDYN_TEST_PG= go test
           # -race ./...`), so the WARDYN_TEST_PG-gated tests are SKIPPED there — and
@@ -1951,6 +1988,7 @@ jobs:
       - helm
       - helm-install-test
       - compose
+      - runner-units
       - conformance
       - conformance-k8s
       - envbuild-integration

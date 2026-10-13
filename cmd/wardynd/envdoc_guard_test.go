@@ -35,8 +35,9 @@ var envDocAllow = map[string]bool{
 	"WARDYN_TEST_BOOL": true, "WARDYN_TEST_DUR": true, "WARDYN_TEST_STR": true,
 	"WARDYN_TEST_PG": true, "WARDYN_REQUIRE_TMUX": true, "WARDYN_TEST_DOCKER": true, "WARDYN_TEST_CACHE_REPO": true,
 	"WARDYN_TEST_VAULT": true, "WARDYN_TEST_VAULT_TOKEN_FILE": true, "WARDYN_TEST_VAULT_K8S_JWT_FILE": true,
-	"WARDYN_TEST_AZURE_KV":   true,
-	"WARDYN_TEST_FIPS_CHILD": true, "WARDYN_TEST_TOOLS_DIR": true, "WARDYN_ENVBUILD_TEST_FLOAT": true,
+	"WARDYN_TEST_AZURE_KV":    true,
+	"WARDYN_TEST_AWS_KMS_KEY": true,
+	"WARDYN_TEST_FIPS_CHILD":  true, "WARDYN_TEST_TOOLS_DIR": true, "WARDYN_ENVBUILD_TEST_FLOAT": true,
 	// internal/db's nested-acquire guard, read by db.Connect only inside a test binary.
 	"WARDYN_TEST_POOL_GUARD":   true,
 	"WARDYN_ENVBUILD_TEST_INT": true, "WARDYN_FAKE_MARKER": true, "WARDYN_NEGCTL": true,
@@ -175,9 +176,10 @@ var envDocShellOnly = map[string]bool{
 	// directory, and the loopback port it publishes.
 	"WARDYN_VERSION": true, "WARDYN_HOME": true, "WARDYN_PORT": true,
 	// The desktop tier's MDM-managed directory: docker-compose.yaml bind-mounts
-	// it read-only at /etc/wardyn and wardyn-desktop.sh exports it. Go never
-	// reads the var — it reads the POLICY FILE at the path inside that mount
-	// (WARDYN_DEFAULT_POLICY), which is a separate, Go-read var.
+	// it read-only at /etc/wardyn and wardyn-desktop.sh exports it. Go reads it
+	// only to tell the deployment for -recovery-inventory (recovery_inventory.go);
+	// it reads the POLICY FILE at the path inside that mount (WARDYN_DEFAULT_POLICY)
+	// as a separate var.
 	"WARDYN_MANAGED_DIR": true,
 	// The desktop-tier installer's own image override — read only by
 	// deploy/desktop/install.sh (`-gen-age-key`), never by Go. Documented in

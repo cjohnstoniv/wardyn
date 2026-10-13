@@ -557,6 +557,67 @@ func TestWorker_SignedBodyCarriesNoSandboxText(t *testing.T) {
 	}
 }
 
+// TestWorker_SLADueAtIsTheNextTierStillAhead: sla_due_at is the earliest later-tier due time still ahead,
+// in any state, which is the rule the approval list reads. h.raise enqueues the tier-0 row (no routes
+// plan every channel at tier 0); the cases seed the later tiers.
+func TestWorker_SLADueAtIsTheNextTierStillAhead(t *testing.T) {
+	h := newHarness(t, chanJSON("https://hook.example.com/x", ""))
+	runID := h.run(t)
+	ctx := context.Background()
+	seed := func(t *testing.T, approvalID uuid.UUID, tier int, dueIn, state string) {
+		t.Helper()
+		if _, err := h.pool.Exec(ctx, `INSERT INTO approval_notifications (id, approval_id, tier, channel, due_at, next_attempt_at, state)
+			VALUES ($1, $2, $3, 'hook', now() + $4::interval, now() + $4::interval, $5)`, uuid.New(), approvalID, tier, dueIn, state); err != nil {
+			t.Fatal(err)
+		}
+	}
+	dueOf := func(t *testing.T, approvalID uuid.UUID, tier int) time.Time {
+		t.Helper()
+		var d time.Time
+		if err := h.pool.QueryRow(ctx, `SELECT due_at FROM approval_notifications WHERE approval_id = $1 AND tier = $2`, approvalID, tier).Scan(&d); err != nil {
+			t.Fatal(err)
+		}
+		return d
+	}
+	w := h.worker(nil, nil)
+
+	t.Run("a past pending tier is skipped for the next one ahead", func(t *testing.T) {
+		a := h.raise(t, runID, `{"host":"a.example"}`, "")
+		seed(t, a.ID, 1, "-1 minutes", "pending")
+		seed(t, a.ID, 2, "1 hour", "pending")
+		got, err := w.LoadNextTierDueAt(ctx, a.ID, 0)
+		if err != nil || got == nil {
+			t.Fatalf("NextTierDueAt = %v, %v; want tier 2's time", got, err)
+		}
+		if want := dueOf(t, a.ID, 2); !got.Truncate(time.Microsecond).Equal(want.Truncate(time.Microsecond)) {
+			t.Fatalf("NextTierDueAt = %v, want tier 2's %v", got, want)
+		}
+	})
+
+	t.Run("a sending tier still ahead counts", func(t *testing.T) {
+		a := h.raise(t, runID, `{"host":"b.example"}`, "")
+		seed(t, a.ID, 1, "10 minutes", "sending")
+		seed(t, a.ID, 2, "1 hour", "pending")
+		got, err := w.LoadNextTierDueAt(ctx, a.ID, 0)
+		if err != nil || got == nil {
+			t.Fatalf("NextTierDueAt = %v, %v; want tier 1's time", got, err)
+		}
+		if want := dueOf(t, a.ID, 1); !got.Truncate(time.Microsecond).Equal(want.Truncate(time.Microsecond)) {
+			t.Fatalf("NextTierDueAt = %v, want tier 1's %v", got, want)
+		}
+	})
+
+	t.Run("every later tier in the past reads as none", func(t *testing.T) {
+		a := h.raise(t, runID, `{"host":"c.example"}`, "")
+		seed(t, a.ID, 1, "-10 minutes", "pending")
+		seed(t, a.ID, 2, "-1 minutes", "sent")
+		got, err := w.LoadNextTierDueAt(ctx, a.ID, 0)
+		if err != nil || got != nil {
+			t.Fatalf("NextTierDueAt = %v, %v; want nil", got, err)
+		}
+	})
+}
+
 // TestNotifyUnsetMeansNoRows: with no config installed the planner returns nothing.
 func TestNotifyUnsetMeansNoRows(t *testing.T) {
 	notify.SetActive(nil, nil)

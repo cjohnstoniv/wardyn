@@ -7,9 +7,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
+	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 )
 
@@ -74,13 +76,54 @@ type identitySharer interface {
 	WithIdentityShared(ctx context.Context, g store.IdentityGuard, fn func() error) error
 }
 
+// beginCredentialWrite is the first step of every write of a person's stored credential: it fences
+// the writes made under the returned context to the owner's erase generation
+// (secretstore.BeginWrite), so an erase that lands after this call refuses them. Call it before
+// reading anything the write depends on; putOwned begins one itself for a write that did not. A store
+// with no generation, or the operator namespace, is returned unfenced.
+func (s *Server) beginCredentialWrite(ctx context.Context, owner string) (context.Context, error) {
+	if owner == "" || s.cfg.Secrets == nil {
+		return ctx, nil
+	}
+	if _, fenced := secretstore.IfGenerationFrom(ctx, owner); fenced {
+		return ctx, nil
+	}
+	ctx, _, err := secretstore.BeginWrite(ctx, owner, s.cfg.Secrets.For(owner))
+	return ctx, err
+}
+
+// beginRequestWrite is beginCredentialWrite for a handler: it answers the request itself when the
+// generation cannot be read, and returns the request carrying the fenced context.
+func (s *Server) beginRequestWrite(w http.ResponseWriter, r *http.Request, owner string) (*http.Request, bool) {
+	ctx, err := s.beginCredentialWrite(r.Context(), owner)
+	if err != nil {
+		writeServerError(w, r, "begin credential write", err)
+		return r, false
+	}
+	return r.WithContext(ctx), true
+}
+
 // putOwned runs put, a write of a credential into owner's secret namespace, while the owner's
 // identity rows are held and unchanged, so a suspension takes them before it or the write is
 // refused with store.ErrIdentityDeactivated. A store with no identity rows writes unguarded.
-func (s *Server) putOwned(ctx context.Context, owner string, put func() error) error {
+//
+// It is the one path every such write takes: put receives a context fenced to the owner's erase
+// generation, so a write that began before an erase is refused with secretstore.ErrGenerationChanged
+// (TestCredentialWritersRouteThroughPutOwned pins that no writer bypasses it).
+//
+// The begin here is the fence for a read-free capture (a sign-in's first store, a provider capture):
+// it reads nothing before it writes, so this is the only begin it has. A writer that reads the
+// credential and writes a changed copy back must begin BEFORE its read (beginCredentialWrite); a
+// begin made here, after the read, reads the advanced generation and lets the stale copy land
+// (TestCredentialWriteBeginsBeforeItsRead_* pin each such writer).
+func (s *Server) putOwned(ctx context.Context, owner string, put func(context.Context) error) error {
+	ctx, err := s.beginCredentialWrite(ctx, owner)
+	if err != nil {
+		return err
+	}
 	sh, ok := s.cfg.Store.(identitySharer)
 	if !ok || owner == "" {
-		return put()
+		return put(ctx)
 	}
-	return sh.WithIdentityShared(ctx, ownerGuard(ctx, owner), put)
+	return sh.WithIdentityShared(ctx, ownerGuard(ctx, owner), func() error { return put(ctx) })
 }

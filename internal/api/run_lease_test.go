@@ -44,6 +44,8 @@ type leaseStore struct {
 	restricted    map[string]map[string]bool
 	// beforeSetEnd, when set, runs at the top of SetRunEndAndWait.
 	beforeSetEnd func()
+	// agentStopped is what MarkRunAgentStopped recorded (agent_stopped_at).
+	agentStopped bool
 }
 
 func (s *leaseStore) ListCapabilityRestrictions(context.Context) (map[string]map[string]bool, error) {
@@ -183,6 +185,16 @@ func (s *leaseStore) SetRunContainmentError(_ context.Context, _ uuid.UUID, msg 
 	s.run.ContainmentError = msg
 	if s.run.ContainmentErrorAt == nil {
 		s.run.ContainmentErrorAt = &now
+	}
+	return nil
+}
+
+// MarkRunAgentStopped mirrors the PG condition: a RUNNING run still carrying that outage mark.
+func (s *leaseStore) MarkRunAgentStopped(_ context.Context, _ uuid.UUID, lostAt time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.state == types.RunRunning && s.run.LostAt != nil && s.run.LostAt.Equal(lostAt) && s.run.LostReason == types.LostOutage {
+		s.agentStopped = true
 	}
 	return nil
 }

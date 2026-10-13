@@ -48,11 +48,17 @@ type awsSSOScope struct {
 	// provider is the UID of the model provider whose credential this is (always
 	// perUser): its session lives under wardyn-provider-<uid>-sso.
 	provider string
+	// cli is the id of the AWS CLI org row whose session this is instead (always
+	// perUser): it lives under wardyn-cli-<id>-sso.
+	cli string
 }
 
 // ssoSecret is the name the captured AWS SSO session is stored under in this
 // scope's namespace.
 func (sc awsSSOScope) ssoSecret() string {
+	if sc.cli != "" {
+		return cliSecretName(sc.cli, providerSSOPart)
+	}
 	if sc.provider != "" {
 		return providerSecretName(sc.provider, providerSSOPart)
 	}

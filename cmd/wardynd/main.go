@@ -398,12 +398,16 @@ func run() error {
 		// sweeper (runApprovalSweeper) enforces the same value, and dispatch
 		// mirrors it onto a hold-mode run's sandbox (RL-1).
 		ApprovalExpiryAfter: *f.approvalExpiryAfter,
-		RunLeaseConfig:      api.RunLeaseConfig{EndedRunGrace: *f.endedRunGrace},
+		RunLeaseConfig:      api.RunLeaseConfig{EndedRunGrace: *f.endedRunGrace, RunMaxAge: cliutil.EnvDuration("WARDYN_RUN_MAX_AGE", 0)},
 		// Same minter, second use: the setup checklist asks it whether GitHub
 		// confines the App to the run branch namespace. nil when no App is
 		// configured, which omits the row.
 		GitHubRulesets: gh,
+		GitHubBranches: gh,
 		Audit:          maskedRec,
+		RunnerAuditPrepare: func(ctx context.Context, ev types.AuditEvent) (types.AuditEvent, error) {
+			return prepareRunnerAudit(ctx, ev, maskingRecorder{reg: maskReg, scope: maskScopes}, sealSrc)
+		},
 		// hand the raw spool + raw store recorder to the server so it starts
 		// the background drain that replays spooled events back into the store once
 		// PG recovers (both nil when no spool is configured => drain is a no-op).
@@ -424,6 +428,7 @@ func run() error {
 		TrustedCAPEM:        trustedCAPEM,
 		DemoVideoBaseURL:    knobs.demoVideoBaseURL,
 		RunnerTarget:        runnerTarget,
+		RunnerOrgURL:        *f.runnerOrgURL,
 		UIDir:               *f.uiDir,
 		ControlPlaneURL:     *f.controlURL,
 		ControlPlaneCAPEM:   feats.hop.caCertPEM(),
@@ -545,6 +550,11 @@ func run() error {
 	// The network settings a rebuilt database lost, from WARDYN_SITE_CONFIG_SEED_FILE,
 	// before anything is served. A no-op when the file is unset.
 	if err := srv.SeedSiteConfig(bootCtx, knobs.siteConfigSeed); err != nil {
+		return err
+	}
+
+	// The remote-provided runner pool an upgraded deployment starts with, once. Before anything is served.
+	if err := srv.BootstrapRunnerPools(bootCtx); err != nil {
 		return err
 	}
 

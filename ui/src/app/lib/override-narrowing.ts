@@ -20,16 +20,23 @@ export type OverrideKind =
   | "ado_capability"
   | "git_pat_scope"
   | "push_rule_deny"
-  | "push_rule_review";
+  | "push_rule_review"
+  | "run_host_allow"
+  | "run_host_wildcard"
+  | "run_host_deny"
+  | "first_use_approval"
+  | "allow_all_egress";
 
-export type OverrideOp = "add" | "remove" | "narrow";
+export type OverrideOp = "add" | "remove" | "narrow" | "set";
 export type OverrideDirection = "tighten" | "widen";
 
 /**
  * allowed: always, it only takes reach away. ceiling_clamped: allowed to ask,
- * the ceiling may still drop it. refused: never, from a run request.
+ * the ceiling may still drop it. within_policy: allowed when no looser than the
+ * policy for that entry (the server checks it against the resolved policy).
+ * refused: never, from a run request.
  */
-export type OverrideRule = "allowed" | "ceiling_clamped" | "refused";
+export type OverrideRule = "allowed" | "ceiling_clamped" | "within_policy" | "refused";
 
 export interface OverrideNarrowing {
   kind: OverrideKind;

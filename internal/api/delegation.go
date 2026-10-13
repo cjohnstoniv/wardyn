@@ -145,13 +145,14 @@ func createdVia(ctx context.Context) *uuid.UUID {
 }
 
 // neverOperator reports a caller neither admin tier may answer true for,
-// whatever its context holds: a device, or a portal acting for a person (a
+// whatever its context holds: a device, a service identity, or a portal acting for a person (a
 // delegated person is published at the user role anyway; this holds even if
 // a later edit publishes one without a human). isOperator and
 // isSecurityOperator ask it before their no-human arm.
 func neverOperator(ctx context.Context) bool {
 	_, isDevice := deviceFromContext(ctx)
 	_, delegated := audit.DelegationFrom(ctx)
-	_, isSCIM := scimCallerSlot(ctx) // the identity provider's connector removes access, and never acts as the admin token
-	return isDevice || delegated || isSCIM
+	_, isSCIM := scimCallerSlot(ctx)                   // the identity provider's connector removes access, and never acts as the admin token
+	_, _, isService := serviceIdentityFromContext(ctx) // automation: member reach, whatever role its context was published with
+	return isDevice || delegated || isSCIM || isService
 }

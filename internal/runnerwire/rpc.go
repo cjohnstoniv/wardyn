@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // CALL method names. The list mirrors substrate.Substrate and the optional
@@ -17,6 +18,7 @@ import (
 const (
 	MethodCreateSandbox   = "create_sandbox"
 	MethodExec            = "exec"
+	MethodExecutionResult = "execution_result"
 	MethodWait            = "wait"
 	MethodAttach          = "attach"
 	MethodResize          = "resize"
@@ -56,12 +58,14 @@ type CreateSandboxResult struct {
 }
 
 type RefArgs struct {
-	Ref string `json:"ref"`
+	ExecutionGeneration uuid.UUID `json:"execution_generation,omitempty"`
+	Ref                 string    `json:"ref"`
 }
 
 type ExecArgs struct {
-	Ref  string   `json:"ref"`
-	Argv []string `json:"argv"`
+	ExecutionGeneration uuid.UUID `json:"execution_generation"`
+	Ref                 string    `json:"ref"`
+	Argv                []string  `json:"argv"`
 }
 
 type ExecResult struct {
@@ -142,15 +146,46 @@ type DeliverResidentArgs struct {
 	Kind     string    `json:"kind"`
 	Value    string    `json:"value"`
 	NotAfter time.Time `json:"not_after"`
+	// Sandbox lets the runner place the value in SecretEnv or ManagedFiles;
+	// false keeps it in the runner's own proxy configuration only.
+	Sandbox bool `json:"sandbox,omitempty"`
 }
 
 type EraseResidentArgs struct {
 	RunID uuid.UUID `json:"run_id"`
 }
 
+// ResidentErase is the `resident_erase` event's data: one grant's erase at run end.
+type ResidentErase struct {
+	GrantID uuid.UUID `json:"grant_id"`
+	Outcome string    `json:"outcome"`
+}
+
+// ResidentErase outcomes.
+const (
+	ResidentErased      = "erased"
+	ResidentEraseFailed = "failed"
+)
+
 // OutputAckArgs acknowledges bytes accepted by the org's output writer, never
 // merely bytes received in the transport's buffer. Offset is the next byte.
 type OutputAckArgs struct {
 	RunID  uuid.UUID `json:"run_id"`
 	Offset int64     `json:"offset"`
+}
+
+// ExecutionResultArgs requests reconciliation of one exact org-issued intent.
+type ExecutionResultArgs struct {
+	Ref        string    `json:"ref"`
+	Generation uuid.UUID `json:"generation"`
+}
+
+// ExecutionResult reports durable local state; it never starts or retries work.
+type ExecutionResult struct {
+	Containment     *types.RunnerMutationFailure `json:"containment,omitempty"`
+	MutationFailure *types.RunnerMutationFailure `json:"mutation_failure,omitempty"`
+	Generation      uuid.UUID                    `json:"generation"`
+	Operation       string                       `json:"operation"`
+	ExecID          string                       `json:"exec_id"`
+	Attempted       bool                         `json:"attempted"`
 }

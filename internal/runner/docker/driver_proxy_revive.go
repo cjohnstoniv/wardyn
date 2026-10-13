@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/netip"
+	"net/url"
 	"strings"
 	"time"
 
@@ -117,6 +118,18 @@ func (d *Driver) startProxy(ctx context.Context, runID uuid.UUID, labels map[str
 	}
 	if d.cfg.ProxyBinaryHostPath != "" {
 		host.Binds = []string{d.cfg.ProxyBinaryHostPath + ":/usr/local/bin/wardyn-proxy:ro"}
+	}
+	if d.cfg.ControlPlaneRelay != nil {
+		entry, err := d.relayHostsEntry(cfgJSON)
+		if err != nil {
+			return "", err
+		}
+		host.ExtraHosts = append(host.ExtraHosts, entry)
+	}
+	var err error
+	cfgJSON, err = d.runnerSpoolConfig(ctx, runID, cfgJSON, cfg, host)
+	if err != nil {
+		return "", err
 	}
 	var netCfg *network.NetworkingConfig
 	if ip.IsValid() {
@@ -369,4 +382,29 @@ func pinnedProxyIP(host *container.HostConfig) netip.Addr {
 		}
 	}
 	return netip.Addr{}
+}
+
+// relayHostsEntry is the proxy's hosts entry for a runner's relay (design 0.9
+// §4.2): the run's control-plane hostname at host-gateway, where the runner's
+// local relay listens and forwards the proxy's TLS, unread, to the org. The
+// proxy keeps its URL and CA exactly as dispatched; only the name resolves
+// differently, and only in the proxy, never the agent.
+func (d *Driver) relayHostsEntry(cfgJSON []byte) (string, error) {
+	var cp struct {
+		ControlPlaneURL string `json:"control_plane_url"`
+	}
+	if err := json.Unmarshal(cfgJSON, &cp); err != nil {
+		return "", fmt.Errorf("docker: relay: config: %w", err)
+	}
+	u, err := url.Parse(cp.ControlPlaneURL)
+	if err != nil || !strings.EqualFold(u.Scheme, "https") || u.Hostname() == "" {
+		return "", fmt.Errorf("docker: relay: the control-plane URL %q is not an https URL with a hostname", cp.ControlPlaneURL)
+	}
+	if _, err := netip.ParseAddr(u.Hostname()); err == nil {
+		return "", fmt.Errorf("docker: relay: the control-plane URL %q names an IP address, which the runner cannot route to its relay; use a hostname", cp.ControlPlaneURL)
+	}
+	if err := d.cfg.ControlPlaneRelay(u); err != nil {
+		return "", fmt.Errorf("docker: relay: %w", err)
+	}
+	return u.Hostname() + ":host-gateway", nil
 }

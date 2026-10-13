@@ -6,11 +6,19 @@ package awskms
 import (
 	"bytes"
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
 	"crypto/sha256"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/hex"
+	"encoding/pem"
 	"errors"
+	"math/big"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -384,6 +392,47 @@ func TestNewKEK_TrustsOnlyTheGivenCA(t *testing.T) {
 	}
 	if _, err := NewKEK(t.Context(), Config{KeyARN: f.arn, Endpoint: f.srv.URL, CACertFile: empty}); err == nil || !strings.Contains(err.Error(), "holds no PEM certificate") {
 		t.Fatalf("NewKEK with a CA bundle that holds no certificate = %v; want a refusal", err)
+	}
+}
+
+// unrelatedCAFile writes a fresh self-signed certificate, which vouches for no
+// test server, as a PEM bundle and returns its path.
+func unrelatedCAFile(t *testing.T) string {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpl := &x509.Certificate{SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "unrelated"}, NotAfter: time.Now().Add(time.Hour), IsCA: true, BasicConstraintsValid: true}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := filepath.Join(t.TempDir(), "unrelated.pem")
+	if err := os.WriteFile(p, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+// The SDK adds AWS_CA_BUNDLE to its own buildable client and refuses to load
+// any other client type, so a corporate-CA install that sets it must still boot,
+// and the bundle must still be trusted next to the daemon's CA file.
+func TestNewKEK_BootsWithAWSCABundleSet(t *testing.T) {
+	f := newFakeKMSTLS(t)
+	unrelated := unrelatedCAFile(t)
+	useCreds(t, sessionKeyID, "token")
+
+	t.Setenv("AWS_CA_BUNDLE", f.caFile())
+	if k, err := NewKEK(t.Context(), Config{KeyARN: f.arn, Endpoint: f.srv.URL}); err != nil || k == nil {
+		t.Fatalf("NewKEK with AWS_CA_BUNDLE naming the KMS CA = (%v, %v); want it reachable", k, err)
+	}
+	t.Setenv("AWS_CA_BUNDLE", unrelated)
+	if k, err := NewKEK(t.Context(), Config{KeyARN: f.arn, Endpoint: f.srv.URL, CACertFile: f.caFile()}); err != nil || k == nil {
+		t.Fatalf("NewKEK with AWS_CA_BUNDLE and a CA file = (%v, %v); want the CA file still trusted", k, err)
+	}
+	if _, err := NewKEK(t.Context(), Config{KeyARN: f.arn, Endpoint: f.srv.URL}); err == nil || !strings.Contains(err.Error(), "certificate") {
+		t.Fatalf("NewKEK trusting only an unrelated CA = %v; want an x509 refusal", err)
 	}
 }
 

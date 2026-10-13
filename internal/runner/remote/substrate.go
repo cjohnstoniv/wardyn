@@ -13,7 +13,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -46,9 +48,21 @@ type Options struct {
 	// it set, a teardown issued while offline returns runner.ErrPendingOnRunner
 	// (queued, not failed); without it, runner.ErrRunnerOffline.
 	Queue func(ctx context.Context, kind types.RunnerActionKind, ref string) error
+	// ExecutionGeneration verifies the immutable generation bound to this exact
+	// dispatch context against its persisted operation. It must never select
+	// the latest lease/row or allocate a new generation on an ambiguous retry.
+	// Authenticated Hub admission requires this hook for Exec/Start dispatch.
+	ExecutionGeneration func(ctx context.Context, method, ref string) (uuid.UUID, error)
+	// Dispatch, when set, is read before every CreateSandbox CALL; an error
+	// refuses the create before anything reaches the runner.
+	Dispatch func(context.Context) error
 	// OnEvent receives every runner event except `caps` (kept here) and
 	// `waiting` (delivered to the create that owns it).
 	OnEvent func(runnerwire.Event)
+	// Relay takes a runner-opened relay stream as a net.Conn, tagged with the
+	// session's authenticated runner id. It runs on the peer read loop, so it
+	// must not block; an error refuses the stream. Nil refuses every relay.
+	Relay func(runnerID string, conn net.Conn) error
 }
 
 // callTimeout bounds the calls an io-shaped method (Resize, ExecSession.Wait)
@@ -61,10 +75,11 @@ type Substrate struct {
 	t    Transport
 	opts Options
 
-	mu       sync.Mutex
-	caps     *runnerwire.Caps
-	outputs  map[uuid.UUID]*outputSink
-	resident map[uuid.UUID]leafHashes // SHA-256 of what DeliverResident delivered; never the value
+	mu                         sync.Mutex
+	caps                       *runnerwire.Caps
+	outputs                    map[uuid.UUID]*outputSink
+	resident                   map[uuid.UUID]leafHashes // SHA-256 of what DeliverResident delivered; never the value
+	requireExecutionGeneration bool
 }
 
 // New builds the substrate of runnerID over t.
@@ -99,6 +114,20 @@ func (s *Substrate) Caps() (runnerwire.Caps, bool) {
 		return runnerwire.Caps{}, false
 	}
 	return *s.caps, true
+}
+
+// Advertised is the runner's last advertised classes and per-run capacity, false while it is offline
+// or has advertised nothing, so a caller never reads the unknown as zero.
+func (s *Substrate) Advertised() (runner.TargetFacts, bool) {
+	c, ok := s.Caps()
+	if !ok || !s.t.Online() {
+		return runner.TargetFacts{}, false
+	}
+	// A capacity the runner did not report (either size zero or absent) is unknown, never zero: placement
+	// then holds no candidate to it.
+	advertised := c.CPUMillisMax > 0 && c.MemoryMiBMax > 0
+	return runner.TargetFacts{Classes: slices.Clone(c.Support.Classes), CapacityAdvertised: advertised, CPUMillisMax: c.CPUMillisMax, MemoryMiBMax: c.MemoryMiBMax,
+		EphemeralDiskEnforcement: c.Support.EphemeralDiskEnforcement, KeepsEnded: true, UserDrives: c.Support.UserDrives}, true
 }
 
 // HandleEvent keeps the `caps` event and passes the rest to Options.OnEvent.
@@ -150,6 +179,11 @@ func (s *Substrate) refCall(ctx context.Context, method, ref string, result any)
 // CreateSandbox sends the spec minus OnWaiting and ExecOutput. `waiting` events
 // call spec.NotifyWaiting on this goroutine, in order, before it returns.
 func (s *Substrate) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (runner.Sandbox, error) {
+	if s.opts.Dispatch != nil {
+		if err := s.opts.Dispatch(ctx); err != nil {
+			return runner.Sandbox{}, err
+		}
+	}
 	if err := s.checkClass(ctx, spec.ConfinementClass); err != nil {
 		return runner.Sandbox{}, err
 	}
@@ -219,8 +253,12 @@ func (s *Substrate) Exec(ctx context.Context, ref string, argv []string) (string
 	if err := s.own(ref); err != nil {
 		return "", err
 	}
+	generation, err := s.executionGeneration(ctx, runnerwire.MethodExec, ref)
+	if err != nil {
+		return "", err
+	}
 	var res runnerwire.ExecResult
-	if err := s.call(ctx, runnerwire.MethodExec, runnerwire.ExecArgs{Ref: ref, Argv: argv}, &res); err != nil {
+	if err := s.call(ctx, runnerwire.MethodExec, runnerwire.ExecArgs{Ref: ref, Argv: argv, ExecutionGeneration: generation}, &res); err != nil {
 		return "", err
 	}
 	return res.ExecID, nil
@@ -281,7 +319,14 @@ func (s *Substrate) StopProxy(ctx context.Context, ref string) error {
 }
 
 func (s *Substrate) StartSandbox(ctx context.Context, ref string) error {
-	return s.refCall(ctx, runnerwire.MethodStart, ref, nil)
+	if err := s.own(ref); err != nil {
+		return err
+	}
+	generation, err := s.executionGeneration(ctx, runnerwire.MethodStart, ref)
+	if err != nil {
+		return err
+	}
+	return s.call(ctx, runnerwire.MethodStart, runnerwire.RefArgs{Ref: ref, ExecutionGeneration: generation}, nil)
 }
 
 func (s *Substrate) CanReplaceProxy(ctx context.Context, ref string) error {
@@ -327,6 +372,18 @@ func (s *Substrate) RecoverOutput(ctx context.Context, ref string, w io.Writer) 
 	st, err := s.t.TakeStream(res.Stream)
 	if err != nil {
 		return err
+	}
+	if id, ok := runner.OutputRun(ctx); ok {
+		s.mu.Lock()
+		if s.outputs[id] == nil {
+			// A live run adopted after a restart: ACK what w accepts, as
+			// receiveOutput does, and let the runner's next OPEN resume into w.
+			sink := &outputSink{writer: w}
+			s.outputs[id] = sink
+			s.mu.Unlock()
+			return s.receiveOutput(id, sink, st, 0)
+		}
+		s.mu.Unlock()
 	}
 	defer st.Close()
 	_ = st.CloseWrite()

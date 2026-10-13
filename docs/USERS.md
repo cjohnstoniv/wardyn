@@ -228,13 +228,14 @@ resolves your drive the same way, in a dry run too:
 
 - If your deployment sets `WARDYN_GOVERNANCE_SECOND_HUMAN`, an administrator's change to who may do what:
   - a governance profile or assignment, a capability grant, the enforcement map,
-  - a value's availability, a user type's priority, a role mapping or a key-domain assignment,
+  - a value's availability, a user type's priority, a role mapping, a key-domain assignment,
+  - the egress baseline, a service identity's create or sponsor change, or the local credential delivery policy,
 - It is held as a pending change until a second administrator approves it.
 - Members propose and approve nothing here; these tiers do:
 
 | Role | May approve |
 |---|---|
-| Security admin | profile, assignment, grant, enforcement, availability, user-type priority and key-domain assignment changes, including a super admin's |
+| Security admin | profile, assignment, grant, enforcement, availability, user-type priority, key-domain assignment, egress baseline, service identity and local credential delivery changes, including a super admin's |
 | Super admin (`admin`) | everything a security admin may, and role-mapping changes |
 | Member | nothing |
 
@@ -269,6 +270,15 @@ resolves your drive the same way, in a dry run too:
 - Your admin may turn off `env` and `file` delivery, or limit a run that carries a component you defined to a lower autonomy level.
 - A component that names an IP address, a host that serves a model, or a host that already carries a credential on the run is refused.
 - Details for admins: [custom-components.md](operations/custom-components.md).
+
+## Run templates
+
+- A template is a run setup you save to reuse (`POST /api/v1/templates`). Yours are only yours; your organisation's
+  are offered to everyone; a group's are offered to its members.
+- You can publish to a group when you are in it and an admin made you one of its template managers.
+- A shared template shows the names of what it uses (a secret's name, a workspace), never a value.
+- Readers of a shared template are not told who published it.
+- Your own templates are erased with the `run_setups` scope of an erasure.
 
 ## Where your runs' audit lives
 
@@ -356,9 +366,17 @@ resolves your drive the same way, in a dry run too:
 - Such a grant reads your
   row and nothing else: with no row of your own the launch is refused and says
   which secret to store.
-- Store it under the same name via `PUT /secrets/<name>`,
-  signed in as yourself, and launch again (an admin's own writes land in the
-  operator namespace, so an admin stores theirs from the user view).
+- Store it under the same name via `PUT /me/secrets/<name>`
+  (`wardyn secret set <name> --personal`), signed in as yourself, and launch again.
+  - That route writes your own row whatever your role or view; it never writes the operator's.
+  - `GET /me/secrets` lists your own names, and `DELETE /me/secrets/<name>` removes one.
+  - The admin token and local mode are no person, so they get `403` `secret_personal_needs_person`.
+- A shared service credential is stored the same explicit way, by the operator tier only:
+  `PUT /shared-secrets/<name>` (`wardyn secret set <name> --shared`).
+  - Its audit row says `scope` `shared`; your own writes say `personal`.
+- The older `PUT /secrets/<name>` keeps working unchanged and still follows your role
+  (an admin's write lands in the operator namespace); new automation should name the route it means.
+- Nothing is moved between namespaces for you: an existing secret stays where it was written.
 - A stored policy an admin writes may name a secret nobody has
   stored yet — each person's run checks their own.
 - Ask your admin to mark

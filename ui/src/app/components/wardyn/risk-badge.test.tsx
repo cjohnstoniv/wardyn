@@ -27,7 +27,7 @@ describe("RiskBadge", () => {
     // A stable data hook carrying the raw level.
     expect(container.querySelector(`[data-risk="${level}"]`)).not.toBeNull();
     // The per-level tone (success/warning/danger) is applied to the chip.
-    expect(container.querySelector(`.${toneClass.replace(/\//g, "\\/")}`)).not.toBeNull();
+    expect(container.querySelector(`.${toneClass}`)).not.toBeNull();
   });
 
   it("escalates tone with risk (low=success, medium=warning, high=danger) and they differ", () => {

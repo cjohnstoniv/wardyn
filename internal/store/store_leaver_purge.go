@@ -101,7 +101,8 @@ func (s PG) PendingLeavers(ctx context.Context, idleFor time.Duration, limit int
 }
 
 // DeleteUserSubjectRows deletes the user-subject capability grants and governance assignments of the
-// purged identity id, matched case-insensitively, and says how many of each. A direct delete, never the
+// purged identity id, matched case-insensitively, and says how many of each; the same user subjects are
+// stripped from every runner pool use policy. A direct delete, never the
 // GOV4 apply path. Rows keyed by one of principals go: the subject is a purged identity that can never
 // authenticate again. Rows keyed by one of emails go only while no other principal holds that address,
 // because an address can be recycled and the new holder's deny rows are theirs: another identity that is
@@ -132,6 +133,12 @@ func (s PG) DeleteUserSubjectRows(ctx context.Context, id uuid.UUID, principals,
 		return 0, 0, 0, fmt.Errorf("store: delete user assignments: %w", err)
 	}
 	assignments = tag.RowsAffected()
+	if err = stripRunnerPoolUseSubjects(ctx, tx, subjects); err != nil {
+		return 0, 0, 0, err
+	}
+	if err = stripRemoteRunnerPeopleSubjects(ctx, tx, subjects); err != nil {
+		return 0, 0, 0, err
+	}
 	if len(held) > 0 {
 		err = tx.QueryRow(ctx, `SELECT
 			(SELECT count(*) FROM capability_grants WHERE subject_type = 'user' AND lower(subject) = ANY($1::text[])) +
@@ -144,6 +151,48 @@ func (s PG) DeleteUserSubjectRows(ctx context.Context, id uuid.UUID, principals,
 		return 0, 0, 0, fmt.Errorf("store: commit user subject delete: %w", err)
 	}
 	return grants, assignments, kept, nil
+}
+
+// stripRunnerPoolUseSubjects removes the user subjects (lower-cased forms) from every pool use policy
+// and raises each changed pool's revision. The policy row is never deleted: a policy narrows a pool, so
+// deleting it would open the pool to everyone, while a list emptied by the purge permits nobody until
+// an administrator replaces or clears it.
+func stripRunnerPoolUseSubjects(ctx context.Context, q Querier, subjects []string) error {
+	const stmt = `
+		WITH hit AS (
+			SELECT pool_id FROM runner_pool_use_policies u WHERE EXISTS (
+				SELECT 1 FROM jsonb_array_elements(u.subjects) e
+				WHERE e->>'subject_type' = 'user' AND lower(e->>'subject') = ANY($1::text[]))),
+		bumped AS (
+			UPDATE runner_pools p SET revision = p.revision + 1, updated_at = now()
+			FROM hit WHERE p.id = hit.pool_id RETURNING p.id, p.revision)
+		UPDATE runner_pool_use_policies u
+		SET subjects = COALESCE((SELECT jsonb_agg(e) FROM jsonb_array_elements(u.subjects) e
+		                         WHERE NOT (e->>'subject_type' = 'user' AND lower(e->>'subject') = ANY($1::text[]))), '[]'::jsonb),
+		    revision = bumped.revision, updated_by = 'leaver purge', updated_at = now()
+		FROM bumped WHERE u.pool_id = bumped.id`
+	if _, err := q.Exec(ctx, stmt, subjects); err != nil {
+		return fmt.Errorf("store: strip runner pool use policy subjects: %w", err)
+	}
+	return nil
+}
+
+// stripRemoteRunnerPeopleSubjects removes the user subjects (lower-cased forms) from every remote-hosted
+// runner's people policy and raises each changed runner's revision. A listed policy stays listed: an
+// emptied list admits nobody, never everyone.
+func stripRemoteRunnerPeopleSubjects(ctx context.Context, q Querier, subjects []string) error {
+	const stmt = `
+		UPDATE remote_runners rr
+		SET people_subjects = COALESCE((SELECT jsonb_agg(e) FROM jsonb_array_elements(rr.people_subjects) e
+		                                WHERE NOT (e->>'subject_type' = 'user' AND lower(e->>'subject') = ANY($1::text[]))), '[]'::jsonb),
+		    revision = rr.revision + 1, updated_by = 'leaver purge', updated_at = now()
+		WHERE rr.people_pools = 'listed' AND EXISTS (
+			SELECT 1 FROM jsonb_array_elements(rr.people_subjects) e
+			WHERE e->>'subject_type' = 'user' AND lower(e->>'subject') = ANY($1::text[]))`
+	if _, err := q.Exec(ctx, stmt, subjects); err != nil {
+		return fmt.Errorf("store: strip remote runner people subjects: %w", err)
+	}
+	return nil
 }
 
 // DeprovisionFailure is a ledger row of a suspension or purge that is still pending and has failed at

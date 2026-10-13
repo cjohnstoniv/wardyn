@@ -65,7 +65,7 @@ func (s *Server) mintInjectionGrant(w http.ResponseWriter, r *http.Request) (*id
 		return nil, uuid.Nil, broker.Minted{}, false
 	}
 	grantID, ok := parseIDParam(w, r, "grantID", "grant")
-	if !ok {
+	if !ok || s.refuseRelayedDelivery(w, r, claims, grantID) {
 		return nil, uuid.Nil, broker.Minted{}, false
 	}
 

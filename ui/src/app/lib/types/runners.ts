@@ -8,8 +8,16 @@
 // mirrors one Go struct and runners.wire.test.ts pins its json tags to that struct's source. Every
 // posture fact is what the runner said about itself; none of it is verified.
 
+import type { ConfinementClass } from "./runs";
+
 /** Go: types.RunnerState. */
 export type RunnerState = "unclaimed" | "claimed" | "revoked";
+
+/** Go: types.RunnerCapacity: the per-run ceiling a runner advertised. */
+export interface RunnerCapacity {
+  cpu_millis_max: number;
+  memory_mib_max: number;
+}
 
 /** Go: types.RunnerPosture. */
 export interface RunnerPosture {
@@ -17,6 +25,8 @@ export interface RunnerPosture {
   disk_encrypted: boolean;
   os: string;
   os_version: string;
+  /** "mdm_file" or "os_probe"; empty on a posture stored before it was recorded. */
+  evidence: string;
 }
 
 /**
@@ -40,10 +50,36 @@ export interface RunnerView {
   claimed_at?: string;
   last_seen_at?: string;
   revoked_at?: string;
+  revoked_by?: string;
+  /** `"not_mine"` when the owner revoked it as not theirs. */
+  revoke_reason?: string;
+  /** Set on a person's own list: the revoker's email where Wardyn holds one. */
+  revoked_by_email?: string;
   posture?: RunnerPosture;
   posture_reported_at?: string;
   posture_source?: string;
+  /**
+   * The claimed runner's last caps event, all runner_asserted. Read from the replica that answers, so
+   * like `online` it is absent until the runner has connected there ("Not reported yet"), never zero.
+   */
+  capacity?: RunnerCapacity;
+  classes?: ConfinementClass[];
+  allowed_roots?: string[];
   runs_active: number;
+  /** The runner's "Runs at once" (1 to 64); only its owner changes it (PUT /me/runners/{id}). */
+  max_runs: number;
+  /** Runs holding a sandbox on the runner now: the count max_runs bounds. */
+  running: number;
+  /** The host name the runner last reported (registration, then each connect): runner-reported, never an identity. */
+  machine_name?: string;
+  /** The owner's live self-hosted pools this runner is a member of; [] for none. */
+  pools: RunnerPoolRef[];
+}
+
+/** Go: types.RunnerPoolRef: one pool a runner is a member of. */
+export interface RunnerPoolRef {
+  id: string;
+  name: string;
 }
 
 /** Go: types.RunnerRegistrationToken. The raw `token` is returned once, at mint; a list never carries it. */
@@ -55,6 +91,39 @@ export interface RunnerRegistrationToken {
   created_at: string;
   expires_at: string;
   consumed_at?: string;
+  /** On the two mint answers only: the URL `wardyn-runnerd register --org` must match. */
+  org_url?: string;
+}
+
+/** Go: types.RunnerTokenRequest. Names the person an administrator is minting for. */
+export interface RunnerTokenRequest {
+  owner: string;
+}
+
+/** Go: types.RunnerRegistration: the claim's answer (and the register answer a runner reads). */
+export interface RunnerRegistration {
+  runner_id: string;
+  fingerprint: string;
+  state: RunnerState;
+  org_url_sha256: string;
+  max_runs: number;
+}
+
+/** The revoke answers' body (an inline map in internal/api/runner_revoke.go). */
+export interface RunnerRevokeAnswer {
+  id: string;
+  state: RunnerState;
+  runs_killed: number;
+}
+
+/** Go: types.RunnerClaimRequest. The fingerprint is the one the person read on their own computer. */
+export interface RunnerClaimRequest {
+  fingerprint: string;
+}
+
+/** Go: types.RunnerUpdateRequest: an owner's change to their own runner. `max_runs` is required. */
+export interface RunnerUpdateRequest {
+  max_runs: number;
 }
 
 /** Go: types.RunnerSettingsRequest. `enabled` is required; the answer is site.ts's RunnerSettings. */
@@ -72,4 +141,5 @@ export type RunnerManagementReason =
   | "runner_filter_invalid"
   | "runner_session_required"
   | "runners_org_url_invalid"
-  | "runners_enabled_required";
+  | "runners_enabled_required"
+  | "runner_max_runs_invalid";

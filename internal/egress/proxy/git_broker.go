@@ -169,9 +169,10 @@ func (p *Proxy) handleGitBroker(w http.ResponseWriter, r *http.Request) {
 	if isPush {
 		forge := &forgeRepo{p: p, repo: orgRepo,
 			token: func(ctx context.Context) (string, error) { return p.gitToken(ctx, grantID) }}
+		rules, entryErr := p.rulesForRemote(githubHost, orgRepo)
 		body, release, ok := p.applyPushRules(w, r, reqBody, slog.String("repo", orgRepo),
 			func(ruleSource string) { p.emitGitDecision(r, egress.Deny, ruleSource) }, forge,
-			appPushTarget(orgRepo, grantID))
+			appPushTarget(orgRepo, grantID), rules, entryErr)
 		defer release()
 		if !ok {
 			return
@@ -259,7 +260,7 @@ func (p *Proxy) handleGitBroker(w http.ResponseWriter, r *http.Request) {
 // it preserves today's error behavior for legitimate callers without opening a
 // hole. Fail-closed here would only convert a control-plane 400 into a proxy 403.
 func (p *Proxy) isBrokeredGitGrant(body []byte) bool {
-	if len(p.gitGrants) == 0 {
+	if len(p.gitGrants) == 0 && p.ghAPI == nil {
 		return false
 	}
 	var req struct {
@@ -273,7 +274,8 @@ func (p *Proxy) isBrokeredGitGrant(body []byte) bool {
 			return true
 		}
 	}
-	return false
+	// The GitHub CLI's grants mint the same App's tokens, with wider permissions.
+	return p.ghAPI.holds(req.GrantID)
 }
 
 // isBrokeredPATGrant reports whether a sandbox-supplied mint body names one of
@@ -352,7 +354,7 @@ func (p *Proxy) brokeredToken(ctx context.Context, grantID uuid.UUID, wireUser f
 	// usernames, and masking the wrong rendering (the mint's, rather than what
 	// actually goes on the wire) would leave the real one in cleartext.
 	// Residual: only verbatim bytes of those renderings are caught.
-	registerBasicAuthCredential(wireUser(user), tok)
+	registerBasicAuthCredential(p.maskKey, wireUser(user), tok)
 	e.token, e.username, e.expiresAt = tok, user, expMs
 	return tok, user, nil
 }
@@ -730,7 +732,7 @@ func readReceivePackCommands(body io.Reader, prefix string) ([]byte, error) {
 			return nil, fmt.Errorf("unreadable pkt-line length: %w", err)
 		}
 		buf.Write(hdr)
-		n, err := strconv.ParseUint(string(hdr), 16, 32)
+		n, err := strconv.ParseUint(string(hdr), 16, 16)
 		if err != nil {
 			return nil, fmt.Errorf("malformed pkt-line length %q", hdr)
 		}

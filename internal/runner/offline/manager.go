@@ -1,0 +1,460 @@
+// Copyright 2026 The Wardyn Authors
+// SPDX-License-Identifier: Apache-2.0
+
+package offline
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"os"
+	"path/filepath"
+	"sync"
+	"time"
+
+	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/runner/substrate"
+	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
+	"github.com/google/uuid"
+	"golang.org/x/sys/unix"
+)
+
+// Manager contains only local containment and evidence state. It cannot mint
+// credentials or grant authority, and never chooses a run's terminal state.
+type Manager struct {
+	actionMu      sync.Mutex
+	lock          *os.File
+	closed        bool
+	replayMu      sync.Mutex
+	mu            sync.Mutex
+	runnerID      uuid.UUID
+	dir           string
+	root          *os.Root
+	sub           substrate.Substrate
+	expectedRef   func(uuid.UUID) string
+	outputSettled func(context.Context, uuid.UUID, string) (int64, bool, error)
+	eraseOutput   func(uuid.UUID) error
+	releaseOutput func(uuid.UUID, string) error
+	stopper       runner.ProxyStopper
+	clock         *Clock
+	now           func() time.Time
+	since         func(time.Time) time.Duration
+	online        bool
+	replayReady   bool
+	activityEpoch uuid.UUID
+	activitySeen  map[uuid.UUID]uuid.UUID
+	peer          *runnerwire.Peer
+	state         localState
+	dirty         bool
+	inflight      map[mutationKey]int
+	deadlines     map[uuid.UUID]deadline
+	pending       map[uuid.UUID]runnerwire.Lease
+}
+
+type deadline struct {
+	tokenAt, endsAt     time.Time
+	receipt             time.Time
+	tokenLeft, endsLeft time.Duration
+}
+
+// New recovers local state. Run must start before connecting: a restart cannot
+// reconstruct a monotonic deadline, so existing proxies are contained until
+// an authenticated fresh lease establishes one.
+// eraseOutput deletes one run's retained output; the manager calls it only for
+// an org-erased (asserted) run's quarantined evidence at its retention ceiling.
+func New(stateDir string, runnerID uuid.UUID, sub substrate.Substrate, expectedRef func(uuid.UUID) string, outputSettled func(context.Context, uuid.UUID, string) (int64, bool, error), eraseOutput func(uuid.UUID) error) (*Manager, error) {
+	if runnerID == uuid.Nil || sub == nil || substrate.IsRemote(sub) || expectedRef == nil || outputSettled == nil || eraseOutput == nil {
+		return nil, errors.New("offline manager requires a registered runner and local substrate")
+	}
+	stopper, ok := sub.(runner.ProxyStopper)
+	if !ok {
+		return nil, runner.ErrEndUnsupported
+	}
+	dir := filepath.Join(stateDir, "offline")
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return nil, err
+	}
+	st, err := os.Lstat(dir)
+	if err != nil {
+		return nil, err
+	}
+	if !st.IsDir() || st.Mode()&os.ModeSymlink != 0 || st.Mode().Perm()&0077 != 0 {
+		return nil, errors.New("offline state directory is not private")
+	}
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return nil, err
+	}
+	lock, err := root.OpenFile("daemon.lock", os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		root.Close()
+		return nil, err
+	}
+	st, err = lock.Stat()
+	link, linkErr := root.Lstat("daemon.lock")
+	if err != nil || linkErr != nil || !st.Mode().IsRegular() || st.Mode().Perm() != 0600 || link.Mode()&os.ModeSymlink != 0 || !os.SameFile(st, link) {
+		lock.Close()
+		root.Close()
+		return nil, errors.New("unsafe runner lifecycle lock")
+	}
+	if err := unix.Flock(int(lock.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != nil {
+		lock.Close()
+		root.Close()
+		return nil, errors.New("runner lifecycle directory is already active")
+	}
+	m := &Manager{lock: lock, runnerID: runnerID, dir: stateDir, root: root, sub: sub, expectedRef: expectedRef, outputSettled: outputSettled, eraseOutput: eraseOutput, stopper: stopper, clock: NewClock(nil), now: time.Now, since: time.Since, deadlines: map[uuid.UUID]deadline{}, pending: map[uuid.UUID]runnerwire.Lease{}}
+	if err := m.load(); err != nil {
+		lock.Close()
+		root.Close()
+		return nil, err
+	}
+	return m, nil
+}
+
+// Close releases local state handles after Run and the connection loop stop.
+func (m *Manager) Close() error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.closed {
+		return nil
+	}
+	m.closed = true
+	return errors.Join(m.root.Close(), m.lock.Close())
+}
+
+// Clock anchors a newly authenticated connection without extending deadlines
+// already running on the local monotonic clock.
+func (m *Manager) Clock(h runnerwire.Hello, received time.Time) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.online = false
+	m.replayReady = false
+	m.activityEpoch = uuid.Nil
+	m.publishActivity()
+	m.peer = nil
+	m.clearPending()
+	return m.clock.Hello(h, received)
+}
+
+// BeforeReady enables admission only after pending actions and fresh replay.
+// It does not write to peer; resumed peers have not started their read loop.
+func (m *Manager) BeforeReady(ctx context.Context, peer *runnerwire.Peer, _ bool) error {
+	m.mu.Lock()
+	revoked := m.state.Revoked
+	m.mu.Unlock()
+	if revoked {
+		return runnerwire.ErrRevoked
+	}
+	if err := m.CheckLapses(ctx); err != nil {
+		return err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if m.state.Revoked {
+		return runnerwire.ErrRevoked
+	}
+	if err := m.ensureDurable(); err != nil {
+		return err
+	}
+	if peer == nil {
+		return errors.New("offline admission requires an authenticated peer")
+	}
+	m.online = true
+	m.replayReady = false
+	m.activityEpoch = uuid.Nil
+	m.publishActivity()
+	m.peer = peer
+	return nil
+}
+
+// Online permits new audit frames only after transport resume has replayed its
+// old frames and started the peer. BeforeReady independently admits incoming RPCs.
+func (m *Manager) Online(peer *runnerwire.Peer) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.online && m.peer == peer && peer != nil && !m.state.Revoked {
+		m.replayReady = true
+		m.activityEpoch = uuid.New()
+		m.activitySeen = map[uuid.UUID]uuid.UUID{}
+		m.publishActivity()
+	}
+}
+
+// Offline preserves agents and files. Run independently owns the safety timer;
+// the connection's already-cancelled context cannot cancel containment.
+func (m *Manager) Offline(context.Context) {
+	m.mu.Lock()
+	m.online = false
+	m.replayReady = false
+	m.activityEpoch = uuid.Nil
+	m.publishActivity()
+	m.peer = nil
+	m.clearPending()
+	m.mu.Unlock()
+}
+
+// Lease is checked synchronously before a subsequent CreateSandbox CALL. The
+// org must send the initial lease first; no token is parsed without verification.
+func (m *Manager) Lease(ctx context.Context, l runnerwire.Lease) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if !m.online || m.state.Revoked {
+		return runner.ErrRunnerOffline
+	}
+	if l.RunID == uuid.Nil {
+		return errors.New("runner lease lacks run identity")
+	}
+	if r := m.state.Runs[l.RunID]; r.ContainmentOnly || r.Quarantine != nil || r.Containment != nil || (!r.LeaseAfter.IsZero() && !l.TokenRenewedAt.After(r.LeaseAfter)) {
+		return errors.New("containment-only identity cannot receive a lease")
+	}
+	tokenLeft, err := m.clock.TokenRemaining(l.TokenRenewedAt)
+	if err != nil {
+		return err
+	}
+	var endsLeft time.Duration
+	if !l.EndsAt.IsZero() {
+		endsLeft, err = m.clock.Remaining(l.EndsAt)
+		if err != nil {
+			return err
+		}
+	}
+	if _, known := m.state.Runs[l.RunID]; !known {
+		if _, exists := m.pending[l.RunID]; !exists && len(m.pending) >= 1024 {
+			return errors.New("runner initial lease capacity reached")
+		}
+		if tokenLeft <= 0 || (!l.EndsAt.IsZero() && endsLeft <= 0) {
+			return errors.New("runner initial lease is expired")
+		}
+		m.pending[l.RunID] = l
+	}
+	old, exists := m.deadlines[l.RunID]
+	d := deadline{tokenAt: l.TokenRenewedAt, endsAt: l.EndsAt, receipt: m.now(), tokenLeft: tokenLeft, endsLeft: endsLeft}
+	if exists && !l.TokenRenewedAt.After(old.tokenAt) {
+		d.tokenAt = old.tokenAt
+		d.tokenLeft = old.tokenLeft - m.since(old.receipt)
+	}
+	if exists && !l.EndsAt.IsZero() && l.EndsAt.Equal(old.endsAt) {
+		d.endsLeft = old.endsLeft - m.since(old.receipt)
+	}
+	m.deadlines[l.RunID] = d
+	if r, ok := m.state.Runs[l.RunID]; ok {
+		r.Lease = l
+		m.state.Runs[l.RunID] = r
+		return m.save()
+	}
+	return nil
+}
+
+// BeforeCreate commits a creation intent before any substrate side effect.
+func (m *Manager) BeforeCreate(ctx context.Context, spec runner.SandboxSpec) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if !m.online || m.state.Revoked {
+		return runner.ErrRunnerOffline
+	}
+	if err := m.ensureDurable(); err != nil {
+		return err
+	}
+	if spec.RunID == uuid.Nil {
+		return errors.New("runner create has no run id")
+	}
+	if _, exists := m.state.Runs[spec.RunID]; exists {
+		return errors.New("runner run already has a creation intent")
+	}
+	if n := m.liveRuns(); spec.RunnerMaxRuns > 0 && n >= spec.RunnerMaxRuns {
+		return runnerwire.Refuse("this runner already holds %d runs, its limit of runs at once (%d)", n, spec.RunnerMaxRuns)
+	}
+	l, ok := m.pending[spec.RunID]
+	if !ok || m.expired(spec.RunID) {
+		return errors.New("runner create requires a live initial lease")
+	}
+	ref := m.expectedRef(spec.RunID)
+	if ref == "" {
+		return errors.New("runner create requires a recoverable substrate reference")
+	}
+	m.state.Runs[spec.RunID] = localRun{RunID: spec.RunID, Ref: ref, Lease: l}
+	if err := m.save(); err != nil {
+		// A failed directory sync may follow a successful rename. Retain the
+		// intent even on error so an ambiguous durable write cannot allow retry.
+		return err
+	}
+	delete(m.pending, spec.RunID)
+	m.beginMutation(runnerwire.MethodCreateSandbox, ref, uuid.Nil)
+	return nil
+}
+
+// liveRuns counts the runs whose sandbox this runner still holds: created or being created, not failed,
+// retired, quarantined, exited or stopped. It errs low, so the backstop to the control plane's count
+// never refuses a run the control plane rightly placed. m.mu must be held.
+func (m *Manager) liveRuns() int {
+	n := 0
+	for _, r := range m.state.Runs {
+		if !r.Retired && !r.FailedCreation && !r.ContainmentOnly && r.Quarantine == nil && r.Exit == nil && r.ProxyStoppedAt == nil {
+			n++
+		}
+	}
+	return n
+}
+
+// Created durably binds the substrate ref before the dispatcher acknowledges
+// creation. Wire cancellation cannot discard a successfully provisioned ref.
+func (m *Manager) Created(ctx context.Context, spec runner.SandboxSpec, localRef string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	r, ok := m.state.Runs[spec.RunID]
+	if !ok || localRef == "" || r.FailedCreation || r.ContainmentOnly || r.Quarantine != nil || r.Containment != nil || (r.Ref != "" && r.Ref != localRef) {
+		return errors.New("runner creation has no matching durable intent")
+	}
+	r.Ref = localRef
+	m.state.Runs[spec.RunID] = r
+	m.publishActivity()
+	return m.save()
+}
+
+func (m *Manager) expired(id uuid.UUID) bool {
+	d, ok := m.deadlines[id]
+	if !ok {
+		return true
+	}
+	elapsed := m.since(d.receipt)
+	return elapsed < 0 || elapsed >= d.tokenLeft || (!d.endsAt.IsZero() && elapsed >= d.endsLeft)
+}
+
+// CheckLapses stops only proxies, never the agent or its files. It is also a
+// deterministic fake-clock test seam; failed containment is retried on every tick.
+func (m *Manager) CheckLapses(ctx context.Context) error {
+	m.mu.Lock()
+	ids := m.runIDs()
+	m.mu.Unlock()
+	var errs []error
+	for _, id := range ids {
+		m.mu.Lock()
+		r := m.state.Runs[id]
+		expired := m.state.Revoked || r.FailedCreation || (r.Containment != nil && !r.Containment.Contained) || (r.Quarantine != nil && r.ProxyStoppedAt == nil) || (r.MutationFailure != nil && !r.MutationFailure.Contained) || m.expired(id)
+		m.mu.Unlock()
+		if r.Retired || r.Ref == "" || !expired {
+			continue
+		}
+		if err := m.stopper.StopProxy(ctx, r.Ref); err != nil {
+			errs = append(errs, fmt.Errorf("contain run %s: %w", id, err))
+			continue
+		}
+		m.mu.Lock()
+		current := m.state.Runs[id]
+		if !sameContainmentTarget(r, current) {
+			m.mu.Unlock()
+			errs = append(errs, fmt.Errorf("contain run %s: mutation changed during containment", id))
+			continue
+		}
+		r = current
+		if r.ProxyStoppedAt == nil || (r.MutationFailure != nil && !r.MutationFailure.Contained) {
+			before := r
+			at := m.now().UTC()
+			r.ProxyStoppedAt = &at
+			if r.MutationFailure != nil {
+				confirmed := *r.MutationFailure
+				confirmed.Contained = true
+				r.MutationFailure = &confirmed
+			}
+			m.state.Runs[id] = r
+			if err := m.save(); err != nil {
+				// Confirmation is not durable; retain the obligation independently of lease.
+				m.state.Runs[id] = before
+				errs = append(errs, err)
+			}
+		}
+		m.mu.Unlock()
+	}
+	return errors.Join(errs...)
+}
+
+// Run owns containment independently of connection cancellation and replay IO.
+// The caller supplies daemon lifetime, retaining it across reconnect attempts.
+func (m *Manager) Run(ctx context.Context) error {
+	replayCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	activityStopped := make(chan struct{})
+	go func() { defer close(activityStopped); m.activityLoop(replayCtx) }()
+	defer func() { cancel(); <-activityStopped }()
+	stopped := make(chan struct{})
+	go func() { defer close(stopped); m.replayLoop(replayCtx) }()
+	defer func() { cancel(); <-stopped }()
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	for {
+		safety, done := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+		err := errors.Join(m.CheckLapses(safety), m.eraseAssertedEvidence())
+		done()
+		if err != nil {
+			slog.ErrorContext(ctx, "runner containment will retry", "error", err)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
+	}
+}
+func (m *Manager) replayLoop(ctx context.Context) {
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	for {
+		observe, cancel := context.WithTimeout(ctx, 30*time.Second)
+		if err := m.observeExits(observe); err != nil {
+			slog.WarnContext(ctx, "runner lifecycle observation will retry", "error", err)
+		}
+		m.mu.Lock()
+		peer, ready := m.peer, m.online && m.replayReady
+		m.mu.Unlock()
+		if ready && peer != nil {
+			if err := m.Replay(observe, peer); err != nil {
+				slog.WarnContext(ctx, "runner audit replay will retry", "error", err)
+			}
+		}
+		cancel()
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
+// Revoked latches the durable refusal before stopping every governed proxy.
+// The organisation owns the pending terminal-state decision and cascade.
+func (m *Manager) Revoked(ctx context.Context) error {
+	m.mu.Lock()
+	m.online = false
+	m.replayReady = false
+	m.activityEpoch = uuid.Nil
+	m.publishActivity()
+	m.peer = nil
+	m.state.Revoked = true
+	err := m.save()
+	m.mu.Unlock()
+	safety, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	defer cancel()
+	return errors.Join(err, m.CheckLapses(safety), m.eraseAssertedEvidence())
+}
+
+func (m *Manager) clearPending() {
+	for id := range m.pending {
+		if _, known := m.state.Runs[id]; !known {
+			delete(m.deadlines, id)
+		}
+	}
+	m.pending = map[uuid.UUID]runnerwire.Lease{}
+}

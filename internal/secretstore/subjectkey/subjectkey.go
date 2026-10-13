@@ -31,7 +31,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
-	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
@@ -73,10 +72,17 @@ type Resolver struct {
 	Domain func(ctx context.Context, owner string) (string, error)
 }
 
+// DB is what a Manager needs of its database: a pool, or one connection (the recovery rehearsal reads
+// through the single backend it holds).
+type DB interface {
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+	BeginTx(ctx context.Context, txOptions pgx.TxOptions) (pgx.Tx, error)
+}
+
 // Manager reads, creates and destroys subject keys over one pool. Safe for
 // concurrent use; its cache is per process.
 type Manager struct {
-	pool  *pgxpool.Pool
+	pool  DB
 	keks  Resolver
 	cache *cache
 	siem  audit.Sink // receives principal_key.destroyed after it commits; nil sends it nowhere
@@ -91,7 +97,7 @@ func (m *Manager) WithSIEM(sink audit.Sink) *Manager {
 }
 
 // New returns a Manager over pool whose keys are wrapped as keks resolves.
-func New(pool *pgxpool.Pool, keks Resolver) *Manager {
+func New(pool DB, keks Resolver) *Manager {
 	return &Manager{pool: pool, keks: keks, cache: newCache(cacheMax, cacheTTL)}
 }
 

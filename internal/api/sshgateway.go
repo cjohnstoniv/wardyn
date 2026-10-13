@@ -304,10 +304,22 @@ func (s *Server) sshAuth(conn ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permiss
 			// A fresh admin key still opens no shell in a person's run (#1476).
 			reason = runOwnerOnlyReason
 		}
+		// A service identity's run takes no SSH entry at all, its sponsor's key included, whatever
+		// service_attach grant the sponsor holds (F7: sponsor attach is the terminal and UI app only).
+		if _, isService := serviceOfRun(run); isService {
+			reason = runOwnerOnlyReason
+		}
 		if reason != "" {
 			s.sshAuditAuthFailure(ctx, conn, &runID, rec.Principal, fp, reason)
 			return nil, errors.New("ssh: not authorized for this run")
 		}
+	}
+	// A background task has no SSH access for anyone, a super admin included:
+	// it is the run's shape, not a permission, so it sits after the ownership
+	// checks (a foreign caller learns nothing) and outside adminDoorExempt.
+	if backgroundOnlyRefusal(run, "SSH access") != nil {
+		s.sshAuditAuthFailure(ctx, conn, &runID, rec.Principal, fp, reasonRunBackgroundOnly)
+		return nil, errors.New("ssh: this run is a background task; it has no SSH access")
 	}
 	// deny_interactive on the profile the run was created under closes SSH
 	// for all but a super admin (a fresh, uncapped admin key), as the terminal
@@ -718,6 +730,12 @@ func (s *Server) sshFreshRun(ctx context.Context, runID uuid.UUID, principal str
 	// A kept run is RUNNING with its agent stopped: nothing to attach to.
 	if runIsKept(run) {
 		return types.AgentRun{}, "run has ended; ssh unavailable"
+	}
+	// sshAuth refuses a background task at the door; this is the fresh read
+	// every channel makes, so a connection opened before the run's shape was
+	// read, or a bridge called on its own, still refuses.
+	if rf := backgroundOnlyRefusal(run, "SSH access"); rf != nil {
+		return types.AgentRun{}, rf.body.Error
 	}
 	// Every ssh channel execs into the sandbox, which the daemon refuses while
 	// it is paused: a person connecting is presence, so thaw it (run_pause.go).

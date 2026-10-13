@@ -8,7 +8,6 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"strings"
 	"sync/atomic"
 	"time"
 )
@@ -81,7 +80,7 @@ func reportActivity(ctx context.Context, ts *tokenSource, base string, client *h
 	ctx, cancel := context.WithTimeout(ctx, renewTimeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		strings.TrimRight(base, "/")+"/api/v1/internal/activity", nil)
+		controlPlaneEndpoint(base, "/api/v1/internal/activity"), nil)
 	if err != nil {
 		return
 	}

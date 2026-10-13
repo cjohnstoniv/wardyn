@@ -21,19 +21,25 @@
 //   - policies (/api/v1/policies):       CreatePolicy, GetPolicy, GetDefaultPolicy, ListPolicies,
 //     ListPoliciesPage, UpdatePolicy, DeletePolicy
 //   - workspaces (/api/v1/workspaces):   CreateWorkspace, GetWorkspace, ListWorkspaces,
-//     ListWorkspacesPage, UpdateWorkspace, DeleteWorkspace, ScanWorkspace, RecordWorkspaceTask
+//     ListWorkspacesPage, UpdateWorkspace, DeleteWorkspace, ScanWorkspace, RecordWorkspaceTask,
+//     GetWorkspaceBuild, BuildWorkspace
 //   - sources (/api/v1/sources):         ListSources, CreateSource, GetSource, ScanSource, DeleteSource
 //   - audit (/api/v1/audit):             AuditEvents, AuditEventsPage, RecentAuditEvents,
 //     ExportAuditPartition, AuditRetention, DropAuditPartition
 //   - secrets (/api/v1/secrets):         ListSecrets, ListSecretsPage, ListSecretsScoped,
-//     ListSecretsScopedPage, SetSecret, DeleteSecret
+//     ListSecretsScopedPage, SetSecret, DeleteSecret, ListMySecrets, ListMySecretsPage,
+//     SetMySecret, DeleteMySecret
+//   - shared-secrets (/api/v1/shared-secrets): ListSharedSecrets, ListSharedSecretsPage,
+//     SetSharedSecret, DeleteSharedSecret
 //   - site-config (/api/v1/site-config): GetSiteConfig, PutSiteConfig, PutSiteConfigResult
-//   - drives (/api/v1/drives):           GetDrives, ApplyDrives
+//   - model-providers (/api/v1/model-providers): GetModelProviders — the read only (admin); the PUT and the per-provider
+//     sign-in and credential doors are NOT wrapped
+//   - drives (/api/v1/drives):           GetDrives, ApplyDrives, ApplyDrivesResult
 //   - presets (/api/v1/presets):         ListPresets, GetPreset, PutPreset, DeletePreset, ApplyPresets
 //   - templates (/api/v1/templates):     ListTemplates, GetTemplate, SaveTemplate, DeleteTemplate, CopyTemplate,
 //     ImportTemplate — and, on /api/v1/admin/template-group-admins, ListTemplateGroupAdmins, GrantTemplateGroupAdmin,
 //     RevokeTemplateGroupAdmin. The server answers 501 templates_unavailable until the template store lands
-//   - governance (/api/v1/governance):   GetGovernance, ApplyGovernance, ApplyGovernanceResult
+//   - governance (/api/v1/governance):   GetGovernance, PlanGovernance, ApplyGovernance, ApplyGovernanceResult
 //   - governance changes (/api/v1/governance/changes): ListGovernanceChanges, GetGovernanceChange,
 //     ApproveGovernanceChange, RejectGovernanceChange
 //   - setup (/api/v1/setup):             SetupStatus, ConnectManagedSubscription, DisconnectManagedSubscription
@@ -43,14 +49,23 @@
 //   - health (/healthz):                 Healthz
 //   - sessions (/api/v1/sessions):       RevokeSessions
 //   - runners (/api/v1/runners, /api/v1/me/runners): MintRunnerToken, RegisterRunner, ClaimRunner,
-//     ListRunners, ListRunnersPage, GetRunner, ListMyRunners, GetMyRunner, ListRunnerTokens,
+//     ListRunners, ListRunnersPage, GetRunner, ListMyRunners, GetMyRunner, SetMyRunnerMaxRuns, ListRunnerTokens,
 //     ListRunnerTokensPage, RevokeRunnerToken, GetRunnerSettings, SetRunnersEnabled
 //   - runner pools (/api/v1/runner-pools, /api/v1/runner-pool-defaults; /api/v1/me/runner-pools, /api/v1/me/runner-pool-defaults):
-//     ListRunnerPools, GetRunnerPool, CreateRunnerPool, UpdateRunnerPool, DeleteRunnerPool, AddMyRunnerToPool,
+//     ListRunnerPools, ListRunnerPoolsFor, GetRunnerPool, CreateRunnerPool, UpdateRunnerPool, DeleteRunnerPool, CreateMyRunnerPool, UpdateMyRunnerPool, DeleteMyRunnerPool, AddMyRunnerToPool,
 //     RemoveMyRunnerFromPool, GetOrgRunnerPoolDefaults, SetOrgRunnerPoolDefaults, GetMyRunnerPoolDefaults,
-//     SetMyRunnerPoolDefaults, ClearMyRunnerPoolDefaults. The executor-membership and use-policy sub-routes are NOT wrapped (the console authors them)
+//     SetMyRunnerPoolDefaults, ClearMyRunnerPoolDefaults, AddRunnerPoolRemoteRunner, RemoveRunnerPoolRemoteRunner,
+//     AddMyPoolRemoteRunner, RemoveMyPoolRemoteRunner, ListRunnerPoolMembers. The use-policy sub-routes are NOT wrapped (the console authors them)
+//   - remote-hosted runners (/api/v1/remote-runners, /api/v1/me/remote-runners): ListRemoteRunners, GetRemoteRunner,
+//     UpdateRemoteRunner, SetRemoteRunnerPeoplePolicy, ClearRemoteRunnerPeoplePolicy, ListMyRemoteRunners
 //   - devices (/api/v1/admin/devices):   MintDeviceEnrolmentToken, ListDeviceEnrolmentTokens, RevokeDeviceEnrolmentToken, ListDevices, RevokeDevice
 //   - people (/api/v1/people):           ListPeople, and ErasePerson (a person's retained records, by scope, 0.8.6); the other writes below stay unwrapped
+//   - invitations (/api/v1/invitations, /api/v1/people/{principal}/invitations, /api/v1/me/invitations): CreateInvitation, ListInvitations,
+//     ListPersonInvitations, ListPersonInvitationsPage, ListMyInvitations, RevokeInvitation, ClaimInvitation (a signed-in session only)
+//   - service identities (/api/v1/service-identities, /api/v1/me/service-identities): CreateServiceIdentity, ListServiceIdentities,
+//     ListServiceIdentitiesPage, GetServiceIdentity, UpdateServiceIdentity, RetireServiceIdentity, ListMyServiceIdentities, and the
+//     sponsor's token routes MintServiceToken (a signed-in session only), ListServiceTokens, ListServiceTokensPage, RevokeServiceToken;
+//     with MoveToken (POST /api/v1/tokens/{id}/move)
 //   - components (/api/v1/components):   ListComponents, PutComponent, DeleteComponent (the organisation's, admin) — and, on
 //     /api/v1/me/components, the caller's own: MyComponents, SaveMyComponent, UpdateMyComponent, DeleteMyComponent
 //
@@ -66,9 +81,9 @@
 //     Security tier, and read by the console's Settings card rather than by tooling
 //   - /api/v1/permissions    — capability grants and per-kind enforcement (0.7)
 //   - /api/v1/access         — directory search and group->role mappings (0.7)
-//   - /api/v1/tokens         — admin-tier API tokens (0.7); /api/v1/me/tokens is the
+//   - /api/v1/tokens         — admin-tier API tokens (0.7), but for MoveToken (0.9); /api/v1/me/tokens is the
 //     self-service half, also unwrapped
-//   - /api/v1/people         — the writes: creating a person, erasing their stored credentials (0.8, offboarding)
+//   - /api/v1/people         — the writes: creating a person, erasing their stored credentials (0.8, offboarding); its invitations are wrapped above
 //   - /api/v1/scim           — the Settings SCIM card's read-only status (0.8.6); the SCIM server itself is /scim/v2
 //   - /api/v1/workspace-providers — the org's git-provider policy (allowed base
 //     URLs, credential lanes) and storage ceilings (0.7.2). Admin-only, and
@@ -76,7 +91,6 @@
 //   - /api/v1/agent-providers — the org's agent roster: which coding agents this
 //     deployment offers, each one's model-access lane, and whether that
 //     credential is shared or per-person (0.7.2). Admin-only, same page
-//   - /api/v1/model-providers — the org's model-provider records (0.8). Admin-only
 //   - /api/v1/integrations   — integration definitions (0.7)
 //   - /api/v1/base-images    — the base-image library (0.7)
 //   - /api/v1/admin          — operator maintenance (the sandbox sweep; devices is wrapped)
@@ -456,6 +470,67 @@ func (c *Client) SetSecret(ctx context.Context, name, value string) error {
 func (c *Client) DeleteSecret(ctx context.Context, name string) error {
 	path := "/api/v1/secrets/" + url.PathEscape(name)
 	return c.do(ctx, http.MethodDelete, path, nil, nil)
+}
+
+// ListMySecretsPage lists the names in the caller's OWN namespace, whatever their role (never
+// values; reserved platform keys excluded): GET /api/v1/me/secrets, which responds {"names":[...]}.
+// truncated=true means a further page exists. It needs a signed-in person (403
+// secret_personal_needs_person for the admin token).
+func (c *Client) ListMySecretsPage(ctx context.Context, opts ...ListOpts) (names []string, truncated bool, err error) {
+	return c.listNamespacePage(ctx, "/api/v1/me/secrets", opts)
+}
+
+// ListMySecrets is ListMySecretsPage without the truncation signal.
+func (c *Client) ListMySecrets(ctx context.Context, opts ...ListOpts) ([]string, error) {
+	names, _, err := c.ListMySecretsPage(ctx, opts...)
+	return names, err
+}
+
+// ListSharedSecretsPage lists the names of the shared service secrets (never values; reserved
+// platform keys excluded): GET /api/v1/shared-secrets, which responds {"names":[...]}. Operator tier
+// only (403 otherwise). truncated=true means a further page exists.
+func (c *Client) ListSharedSecretsPage(ctx context.Context, opts ...ListOpts) (names []string, truncated bool, err error) {
+	return c.listNamespacePage(ctx, "/api/v1/shared-secrets", opts)
+}
+
+// ListSharedSecrets is ListSharedSecretsPage without the truncation signal.
+func (c *Client) ListSharedSecrets(ctx context.Context, opts ...ListOpts) ([]string, error) {
+	names, _, err := c.ListSharedSecretsPage(ctx, opts...)
+	return names, err
+}
+
+func (c *Client) listNamespacePage(ctx context.Context, path string, opts []ListOpts) (names []string, truncated bool, err error) {
+	var out struct {
+		Names []string `json:"names"`
+	}
+	var hdr http.Header
+	if err = c.do(ctx, http.MethodGet, appendListOpts(path, opts), nil, &out, &hdr); err != nil {
+		return nil, false, err
+	}
+	return out.Names, hdr.Get("X-Wardyn-Truncated") == "true", nil
+}
+
+// SetMySecret stores the caller's OWN secret, whatever their role: PUT /api/v1/me/secrets/{name}.
+// Unlike SetSecret, where an admin's write lands in the shared namespace, this never does. It needs a
+// signed-in person (403 secret_personal_needs_person for the admin token).
+func (c *Client) SetMySecret(ctx context.Context, name, value string) error {
+	return c.do(ctx, http.MethodPut, "/api/v1/me/secrets/"+url.PathEscape(name), map[string]string{"value": value}, nil)
+}
+
+// DeleteMySecret removes the caller's own secret. DELETE /api/v1/me/secrets/{name}.
+func (c *Client) DeleteMySecret(ctx context.Context, name string) error {
+	return c.do(ctx, http.MethodDelete, "/api/v1/me/secrets/"+url.PathEscape(name), nil, nil)
+}
+
+// SetSharedSecret stores a shared service secret in the operator namespace every person's run may
+// fall back to: PUT /api/v1/shared-secrets/{name}. Operator tier only (403 otherwise).
+func (c *Client) SetSharedSecret(ctx context.Context, name, value string) error {
+	return c.do(ctx, http.MethodPut, "/api/v1/shared-secrets/"+url.PathEscape(name), map[string]string{"value": value}, nil)
+}
+
+// DeleteSharedSecret removes a shared service secret. DELETE /api/v1/shared-secrets/{name}.
+func (c *Client) DeleteSharedSecret(ctx context.Context, name string) error {
+	return c.do(ctx, http.MethodDelete, "/api/v1/shared-secrets/"+url.PathEscape(name), nil, nil)
 }
 
 // maxErrBody caps an ERROR response body for diagnostic display so a hostile or

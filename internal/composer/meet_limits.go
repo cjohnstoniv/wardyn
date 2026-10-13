@@ -5,6 +5,7 @@ package composer
 
 import (
 	"cmp"
+	"slices"
 
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -32,6 +33,9 @@ func (m *meeter) meetLimits(o types.LimitsOverlay) {
 		if f.ov != nil {
 			*f.base = *f.base || *f.ov
 		}
+	}
+	if o.DenyPlacements != nil {
+		l.DenyPlacements = unionPlacements(l.DenyPlacements, *o.DenyPlacements)
 	}
 	for _, f := range []struct {
 		name string
@@ -87,6 +91,18 @@ func (m *meeter) meetRunLimits(o types.LimitsOverlay) {
 	got.DefaultEndSec = m.meetDefault("default_end_sec", base.DefaultEndSec, base.MaxEndAheadSec, o.DefaultEndSec, got.MaxEndAheadSec)
 	got.DefaultWaitSec = m.meetDefault("default_wait_sec", base.DefaultWaitSec, base.MaxWaitSec, o.DefaultWaitSec, got.MaxWaitSec)
 	l.RunLimits = got
+}
+
+// unionPlacements is a denial list only ever added to: the overlay's denials join the base's, in a
+// stable order (remote before local) so the same composition spells the same.
+func unionPlacements(base, ov []types.Placement) []types.Placement {
+	var out []types.Placement
+	for _, p := range []types.Placement{types.PlacementRemote, types.PlacementLocal} {
+		if slices.Contains(base, p) || slices.Contains(ov, p) {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 func (m *meeter) widenIf(field string, widens bool) {

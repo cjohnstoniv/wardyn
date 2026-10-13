@@ -265,11 +265,17 @@ func TestLostRun_KeptUntilItsEndAndGrace(t *testing.T) {
 	if f.lr.proxyStopCount() != 1 || f.rn.endCount() != 0 {
 		t.Fatalf("inside the lease: StopProxy %d, EndSandbox %d; want 1, 0", f.lr.proxyStopCount(), f.rn.endCount())
 	}
+	if f.st.agentStopped {
+		t.Fatal("inside the lease the agent still runs, yet its stop was recorded")
+	}
 
 	f.now = end.Add(time.Minute)
 	f.sweep(t)
 	if f.rn.endCount() != 1 || f.st.State() != types.RunRunning {
 		t.Fatalf("past the end: EndSandbox %d, state %s; want the agent stopped and the run kept", f.rn.endCount(), f.st.State())
+	}
+	if !f.st.agentStopped {
+		t.Error("the stopped agent of an outage run past its end was not recorded, so extending it would read as a held slot")
 	}
 
 	f.now = end.Add(7 * 24 * time.Hour)
@@ -288,6 +294,34 @@ func TestLostRun_KeptUntilItsEndAndGrace(t *testing.T) {
 	if noEnd.st.State() != types.RunRunning || noEnd.rn.stopCount() != 0 {
 		t.Errorf("a lost run with no end: state %s, StopSandbox %d; want kept until someone kills it",
 			noEnd.st.State(), noEnd.rn.stopCount())
+	}
+}
+
+// TestLostRun_AFailedEndRecordsNoStoppedAgent: an outage run past its end has
+// its stop recorded only once the agent really stopped. A transient end error
+// leaves the run counted (its agent may still be running); the pass that lands
+// the end records it.
+func TestLostRun_AFailedEndRecordsNoStoppedAgent(t *testing.T) {
+	f := newLostFixture(t)
+	end := f.now.Add(time.Hour)
+	f.st.run.EndsAt = &end
+	f.ls.lapsed = true
+	f.sweepTokens(t)
+
+	f.now = end.Add(time.Minute)
+	f.rn.endErr = errors.New("docker: stop agent: context deadline exceeded")
+	f.sweep(t)
+	if f.rn.endCount() != 1 {
+		t.Fatalf("EndSandbox %d; want the end attempted once", f.rn.endCount())
+	}
+	if f.st.agentStopped {
+		t.Fatal("the end failed, yet the agent's stop was recorded: extending the run would uncount a live agent")
+	}
+
+	f.rn.endErr = nil
+	f.sweep(t)
+	if !f.st.agentStopped {
+		t.Error("the end landed on the retry, yet the agent's stop was not recorded")
 	}
 }
 

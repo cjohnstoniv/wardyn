@@ -75,6 +75,7 @@ type LimitsOverlay struct {
 	DenyUIApps                 *bool           `json:"deny_ui_apps,omitempty"`
 	MaxConcurrentRuns          *int            `json:"max_concurrent_runs,omitempty"`
 	DenyUserDrive              *bool           `json:"deny_user_drive,omitempty"`
+	DenyPlacements             *[]Placement    `json:"deny_placements,omitempty"`
 	MaxCPUMillis               *int            `json:"max_cpu_millis,omitempty"`
 	MaxMemoryMiB               *int            `json:"max_memory_mib,omitempty"`
 	MaxEphemeralDiskMiB        *int            `json:"max_ephemeral_disk_mib,omitempty"`

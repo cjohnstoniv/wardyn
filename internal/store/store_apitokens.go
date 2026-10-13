@@ -38,39 +38,9 @@ import (
 // false. A plain bool or DEFAULT FALSE would assert "complete" for every
 // legacy row — fail OPEN, the exact thing the marker exists to prevent.
 func (s PG) CreateAPIToken(ctx context.Context, t types.APIToken, raw string) (types.APIToken, error) {
-	groups, err := marshalGroups(t.Groups)
-	if err != nil {
-		return types.APIToken{}, err
-	}
-	// Freeze the admission timestamp on the DB clock inside the guard. Later
-	// pool/row waits cannot move a mint admitted before a revoke past its cutoff.
-	const q = `
-		INSERT INTO api_tokens (id, principal, email, role, user_type, groups, groups_truncated, name, token_sha256, created_at, expires_at, minted_by, identity_stamped_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,
-		        CASE WHEN $11::bigint IS NULL THEN NULL ELSE $10::timestamptz + $11::bigint * interval '1 microsecond' END,
-		        NULLIF($12, ''), now())
-		RETURNING ` + apiTokenCols
 	var out types.APIToken
-	err = s.guarded(ctx, func(qr queryRower) (e error) {
-		anchor, e := db.CaptureAppClock(ctx, qr, s.now)
-		if e != nil {
-			return e
-		}
-		createdAt := anchor.DatabaseAt
-		if !t.CreatedAt.IsZero() {
-			createdAt = anchor.Translate(t.CreatedAt)
-		}
-		var lifetime *int64
-		if t.ExpiresAt != nil {
-			from := t.CreatedAt
-			if from.IsZero() {
-				from = anchor.AppAt
-			}
-			us := t.ExpiresAt.Sub(from).Microseconds()
-			lifetime = &us
-		}
-		out, e = scanAPIToken(qr.QueryRow(ctx, q,
-			t.ID, t.Principal, t.Email, t.Role, t.UserType, groups, t.GroupsTruncated, t.Name, hashToken(raw), createdAt, lifetime, t.MintedBy))
+	err := s.guarded(ctx, func(qr queryRower) (e error) {
+		out, e = s.insertAPIToken(ctx, qr, t, raw)
 		return e
 	})
 	if err != nil {
@@ -81,6 +51,40 @@ func (s PG) CreateAPIToken(ctx context.Context, t types.APIToken, raw string) (t
 		return types.APIToken{}, err
 	}
 	return out, nil
+}
+
+// insertAPIToken is the row insert CreateAPIToken and ClaimInvitation share, on qr (the pool, or the
+// caller's transaction). It freezes the admission timestamp on the database clock.
+func (s PG) insertAPIToken(ctx context.Context, qr queryRower, t types.APIToken, raw string) (types.APIToken, error) {
+	groups, err := marshalGroups(t.Groups)
+	if err != nil {
+		return types.APIToken{}, err
+	}
+	const q = `
+		INSERT INTO api_tokens (id, principal, email, role, user_type, groups, groups_truncated, name, token_sha256, created_at, expires_at, minted_by, identity_stamped_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,
+		        CASE WHEN $11::bigint IS NULL THEN NULL ELSE $10::timestamptz + $11::bigint * interval '1 microsecond' END,
+		        NULLIF($12, ''), now())
+		RETURNING ` + apiTokenCols
+	anchor, err := db.CaptureAppClock(ctx, qr, s.now)
+	if err != nil {
+		return types.APIToken{}, err
+	}
+	createdAt := anchor.DatabaseAt
+	if !t.CreatedAt.IsZero() {
+		createdAt = anchor.Translate(t.CreatedAt)
+	}
+	var lifetime *int64
+	if t.ExpiresAt != nil {
+		from := t.CreatedAt
+		if from.IsZero() {
+			from = anchor.AppAt
+		}
+		us := t.ExpiresAt.Sub(from).Microseconds()
+		lifetime = &us
+	}
+	return scanAPIToken(qr.QueryRow(ctx, q,
+		t.ID, t.Principal, t.Email, t.Role, t.UserType, groups, t.GroupsTruncated, t.Name, hashToken(raw), createdAt, lifetime, t.MintedBy))
 }
 
 // GetAPITokenByRaw is the auth-time lookup: given a bearer string, resolve

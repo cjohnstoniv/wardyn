@@ -31,7 +31,11 @@ import (
 var procRegistry = secretmask.NewRegistry()
 
 // procMask registers v with procRegistry for the process's life (filed under uuid.Nil, never evicted).
-func procMask(v []byte) { _ = procRegistry.Add(uuid.Nil, v) } // process-local: no Backend, so it cannot fail
+func procMask(v []byte) { procMaskFor(uuid.Nil, v) }
+
+// procMaskFor registers v under key: uuid.Nil for a sidecar (the process is the run), or a
+// ViaOrgEngine's own key, evicted with the engine so no other run's engine scans or keeps it.
+func procMaskFor(key uuid.UUID, v []byte) { _ = procRegistry.Add(key, v) } // process-local: no Backend, so it cannot fail
 
 // InjectionConfig pairs an egress.InjectionRule with the credential grant the proxy mints from at
 // startup. SECURITY: the minted secret lives only in proxy memory, never exposed to the sandbox.
@@ -65,6 +69,8 @@ type injector struct {
 	// nil means "no hold" so a resolve that would have held fails closed instead.
 	reauth    *reauthCoordinator
 	approvals approvalReader
+	// maskKey files this injector's credentials in procRegistry (procMaskFor).
+	maskKey uuid.UUID
 }
 
 type injectedHeader struct {
@@ -135,8 +141,14 @@ func transientResolveFailure(err error) bool {
 // secret to a wildcard/approved host — and so is a second rule for a host that already has one.
 // Any mint failure fails the whole startup closed.
 func buildInjector(ctx context.Context, base string, token *tokenSource, pol *Policy, rules []InjectionConfig, client *http.Client) (*injector, error) {
+	return buildInjectorFor(ctx, uuid.Nil, base, token, pol, rules, client)
+}
+
+// buildInjectorFor is buildInjector filing its credentials under maskKey.
+func buildInjectorFor(ctx context.Context, maskKey uuid.UUID, base string, token *tokenSource, pol *Policy, rules []InjectionConfig, client *http.Client) (*injector, error) {
 	inj := &injector{
-		byHost: make(map[string]*injEntry), base: base, token: token, client: client,
+		maskKey: maskKey,
+		byHost:  make(map[string]*injEntry), base: base, token: token, client: client,
 		reauth:    newReauthCoordinator(),
 		approvals: httpApprovalReader{base: base, token: token, client: client},
 	}
@@ -173,7 +185,7 @@ func buildInjector(ctx context.Context, base string, token *tokenSource, pol *Po
 
 		// SECURITY: register in the process-global Registry so every rendering is masked from
 		// decision-log output and sandbox-facing errors.
-		registerHeaderCredential(resolved.Value)
+		registerHeaderCredentialFor(inj.maskKey, resolved.Value)
 	}
 	return inj, nil
 }
@@ -239,7 +251,7 @@ func (i *injector) resolveCtx(ctx context.Context, host string) (injectedHeader,
 			e.install(resolved, time.Now())
 			h := e.header
 			e.reMu.Unlock()
-			registerHeaderCredential(resolved.Value)
+			registerHeaderCredentialFor(i.maskKey, resolved.Value)
 			return h, true, nil
 		}
 		if e.lastGood(err, time.Now()) {
@@ -345,7 +357,7 @@ func (i *injector) installHeader(e *injEntry, wf *reauthWorkflow, resolved types
 	}
 	h := e.header
 	e.reMu.Unlock()
-	registerHeaderCredential(resolved.Value)
+	registerHeaderCredentialFor(i.maskKey, resolved.Value)
 	return h
 }
 
@@ -365,32 +377,33 @@ func (i *injector) requiresTLS(host string) bool {
 
 // Credential mask renderings
 
-// registerHeaderCredential registers every rendering of ONE header credential with the
-// process-global mask registry (mirrors upstreamProxy.maskValues).
+// registerHeaderCredentialFor registers every rendering of ONE header credential with the
+// mask registry (mirrors upstreamProxy.maskValues).
 //
 // TRUST BOUNDARY (per-rendering, not per-credential): mask is exact bytes, so registering only
 // "Bearer sk-…" would leave a bare "sk-…" unmasked in sandbox-facing errors/logs. Registers, in
 // order: the formatted value, the credential alone, the base64-decoded "user:pass" if Basic, and the
 // password alone. Residual: only these exact-byte forms are caught, not one glued to a suffix,
-// hex-encoded, or model-narrated.
-func registerHeaderCredential(formatted string) {
+// hex-encoded, or model-narrated. Each is filed under key (procMaskFor): uuid.Nil in a sidecar, a
+// ViaOrgEngine's own key at the organisation.
+func registerHeaderCredentialFor(key uuid.UUID, formatted string) {
 	if formatted == "" {
 		return
 	}
-	procMask([]byte(formatted))
+	procMaskFor(key, []byte(formatted))
 	i := strings.LastIndexByte(formatted, ' ')
 	if i < 0 || i+1 >= len(formatted) {
 		return // no scheme prefix: the formatted value IS the credential
 	}
 	tail := formatted[i+1:]
-	procMask([]byte(tail))
+	procMaskFor(key, []byte(tail))
 	dec, err := base64.StdEncoding.DecodeString(tail)
 	if err != nil {
 		return
 	}
 	if c := bytes.IndexByte(dec, ':'); c >= 0 && c+1 < len(dec) {
-		procMask(dec)
-		procMask(dec[c+1:])
+		procMaskFor(key, dec)
+		procMaskFor(key, dec[c+1:])
 	}
 }
 
@@ -398,13 +411,13 @@ func registerHeaderCredential(formatted string) {
 // the git-broker installation token and the PAT lane's minted token.
 //
 // TRUST BOUNDARY: SetBasicAuth sends base64(user+":"+tok), not tok — registering only the raw token
-// would leave the actual wire form unmasked in a transport error. Both go in via registerHeaderCredential.
-func registerBasicAuthCredential(user, tok string) {
+// would leave the actual wire form unmasked in a transport error. Both go in via registerHeaderCredentialFor.
+func registerBasicAuthCredential(key uuid.UUID, user, tok string) {
 	if tok == "" {
 		return
 	}
-	procMask([]byte(tok))
-	registerHeaderCredential("Basic " + base64.StdEncoding.EncodeToString([]byte(user+":"+tok)))
+	procMaskFor(key, []byte(tok))
+	registerHeaderCredentialFor(key, "Basic "+base64.StdEncoding.EncodeToString([]byte(user+":"+tok)))
 }
 
 // stripSandboxCredentials removes every credential header the sandbox may have put on a request
@@ -523,7 +536,7 @@ var bootResolveQuery = url.Values{"phase": {"boot"}}
 // the boot phase, the Azure DevOps capability hold's per-(host, capability) ask (ado_hold.go) or a
 // stale_jti; nil is the plain resolve.
 func resolveInjectionQuery(ctx context.Context, base, token string, grantID uuid.UUID, query url.Values, client *http.Client) (types.ResolvedInjection, error) {
-	target := base + "/api/v1/internal/injection/" + grantID.String()
+	target := controlPlaneEndpoint(base, "/api/v1/internal/injection/"+grantID.String())
 	if len(query) > 0 {
 		target += "?" + query.Encode()
 	}

@@ -3,6 +3,8 @@
 
 package types
 
+import "slices"
+
 // The run placement vocabulary (0.9, OD-8). These two scalar types live here, not
 // in internal/placement, because a run row carries them: internal/placement
 // already imports internal/types, so the canonical declaration has to be the
@@ -17,6 +19,14 @@ const (
 	PlacementRemote Placement = "remote" // the organisation's own executor
 	PlacementLocal  Placement = "local"  // a registered runner on the person's laptop
 )
+
+// Valid reports whether p names one of the two placements.
+func (p Placement) Valid() bool { return p == PlacementRemote || p == PlacementLocal }
+
+// DeniesEveryPlacement reports whether denied rules out both placements, so the people it binds could run nothing.
+func DeniesEveryPlacement(denied []Placement) bool {
+	return slices.Contains(denied, PlacementRemote) && slices.Contains(denied, PlacementLocal)
+}
 
 // RunEvidenceSource records who vouches for the evidence a run produces: its
 // confinement, decisions, recordings, exit codes and capabilities. It is not the

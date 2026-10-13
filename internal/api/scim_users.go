@@ -169,7 +169,9 @@ func emailValues(in []scim.Email) []string {
 
 // scimMatch finds the identity a SCIM user stands for: the row holding its object id, then the row
 // of the person set up as entra:<tenant>:<oid>, then, as a removal-only link, the one row with no
-// object id seen under one of its names. More than one such row links nothing.
+// object id seen under one of its names. More than one such row links nothing, and neither does a
+// row when any of the user's names is, by store.PrincipalsNamed, a principal other than the row's own
+// (a person an admin created under the address, say): the user then stays unbound.
 func (s *Server) scimMatch(ctx context.Context, st scimStore, oid string, names []string) (store.PrincipalIdentity, bool, error) {
 	cfg := s.cfg.SCIM
 	ident, err := st.GetIdentityByObject(ctx, cfg.Issuer, cfg.Tenant, oid)
@@ -208,10 +210,21 @@ func (s *Server) scimMatch(ctx context.Context, st scimStore, oid string, names 
 			}
 		}
 	}
-	if len(linked) == 1 {
-		return linked[0], true, nil
+	if len(linked) != 1 {
+		return store.PrincipalIdentity{}, false, nil
 	}
-	return store.PrincipalIdentity{}, false, nil
+	// Every name is resolved, not only the one the row was seen under: a name that is another principal
+	// says the user is that principal, whichever name led to the row.
+	for _, name := range names {
+		named, err := st.PrincipalsNamed(ctx, name)
+		if err != nil {
+			return store.PrincipalIdentity{}, false, err
+		}
+		if slices.ContainsFunc(named, func(p string) bool { return p != linked[0].Principal }) {
+			return store.PrincipalIdentity{}, false, nil
+		}
+	}
+	return linked[0], true, nil
 }
 
 // scimAudit records one scim.user.write, written by the SCIM caller and naming its token slot.
@@ -270,7 +283,11 @@ func (s *Server) handleSCIMCreateUser(w http.ResponseWriter, r *http.Request) {
 			s.scimServerError(w, r, "suspend the user", err)
 			return
 		}
-		ident, _ = st.GetIdentity(ctx, ident.ID)
+		var rerr error
+		if ident, rerr = st.GetIdentity(ctx, ident.ID); rerr != nil {
+			s.scimServerError(w, r, "read the suspended user", rerr)
+			return
+		}
 	}
 	writeSCIM(w, http.StatusCreated, scimResource(ident))
 }
@@ -332,9 +349,11 @@ func (s *Server) handleSCIMPutUser(w http.ResponseWriter, r *http.Request) {
 		writeSCIMError(w, perr)
 		return
 	}
-	s.applySCIMChange(w, r, st, ident, scimChange{
-		active: &u.Active, userName: u.UserName, emails: emailValues(u.Emails), externalID: u.ExternalID,
-	})
+	ch := scimChange{userName: u.UserName, emails: emailValues(u.Emails), externalID: u.ExternalID}
+	if u.ActiveSet {
+		ch.active = &u.Active
+	}
+	s.applySCIMChange(w, r, st, ident, ch)
 }
 
 // scimChange is what a PATCH or a PUT asks of one identity: the attributes Wardyn acts on.
@@ -417,7 +436,10 @@ func (s *Server) applySCIMChange(w http.ResponseWriter, r *http.Request, st scim
 			s.scimServerError(w, r, "suspend the user", err)
 			return
 		}
-		updated, _ = st.GetIdentity(ctx, ident.ID)
+		if updated, err = st.GetIdentity(ctx, ident.ID); err != nil {
+			s.scimServerError(w, r, "read the suspended user", err)
+			return
+		}
 	}
 	writeSCIM(w, http.StatusOK, scimResource(updated))
 }

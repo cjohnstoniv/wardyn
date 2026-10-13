@@ -787,7 +787,7 @@ func TestAuditActionsDocNamesTheErrorScanAction(t *testing.T) {
 }
 
 // llmScanAuditKey pulls one quoted map[string]any key out of
-// recordLLMScanAudit's body — deliberately narrow to that literal's shape
+// ScanAudit's body — deliberately narrow to that literal's shape
 // (lowercase, underscored) so it does not also match the doc strings or the
 // audit action literal sitting in the same function.
 var llmScanAuditKey = regexp.MustCompile(`"([a-z][a-z_]*)":`)
@@ -798,7 +798,7 @@ var maxAuditFindingsConst = regexp.MustCompile(`(?m)^const maxAuditFindings = (\
 
 // TestAuditActionsDocLLMScanDataFieldsMatchTheEmitSite (B1-AUDITACTIONS-LLMSCAN-ROW-STALE)
 // pins AUDIT-ACTIONS.md's llm.scan.* row's Data column to every key
-// recordLLMScanAudit actually marshals onto the wire.
+// ScanAudit actually marshals onto the wire.
 //
 // The fix added findings_capped, findings_past_cap and findings_reported to the
 // emit site's map[string]any{...} literal, and repointed finding_count away
@@ -807,20 +807,28 @@ var maxAuditFindingsConst = regexp.MustCompile(`(?m)^const maxAuditFindings = (\
 // hits when a scan was truncated. No prior guard read the emit site's key set
 // at all, which is why every other gate stayed green with the row wrong.
 func TestAuditActionsDocLLMScanDataFieldsMatchTheEmitSite(t *testing.T) {
-	body := methodBody(t, readSrc(t, "internal", "api", "internal.go"), "recordLLMScanAudit")
+	body := funcBody(t, readSrc(t, "internal", "egress", "scan_audit.go"), "ScanAudit")
+	for _, caller := range []string{
+		methodBody(t, readSrc(t, "internal", "api", "internal.go"), "recordLLMScanAudit"),
+		funcBody(t, readSrc(t, "internal", "store", "store_runner_spool.go"), "runnerDecisionEvents"),
+	} {
+		if !strings.Contains(caller, "egress.ScanAudit(") {
+			t.Fatal("direct and replay scan audit paths must use the shared builder")
+		}
+	}
 	mapStart := strings.Index(body, "json.Marshal(map[string]any{")
 	if mapStart < 0 {
-		t.Fatalf("recordLLMScanAudit's map[string]any literal not found — the guard's anchor moved")
+		t.Fatalf("ScanAudit's map[string]any literal not found — the guard's anchor moved")
 	}
 	mapEnd := strings.Index(body[mapStart:], "})")
 	if mapEnd < 0 {
-		t.Fatalf("recordLLMScanAudit's map[string]any literal has no closing '})' — the guard's anchor moved")
+		t.Fatalf("ScanAudit's map[string]any literal has no closing '})' — the guard's anchor moved")
 	}
 	mapLiteral := body[mapStart : mapStart+mapEnd]
 
 	matches := llmScanAuditKey.FindAllStringSubmatch(mapLiteral, -1)
 	if len(matches) == 0 {
-		t.Fatalf("recordLLMScanAudit's map[string]any literal has no quoted keys — the guard's anchor moved")
+		t.Fatalf("ScanAudit's map[string]any literal has no quoted keys — the guard's anchor moved")
 	}
 	seen := map[string]bool{}
 	var keys []string
@@ -853,7 +861,7 @@ func TestAuditActionsDocLLMScanDataFieldsMatchTheEmitSite(t *testing.T) {
 	}
 	for _, k := range keys {
 		if !strings.Contains(dataCell, "`"+k+"`") {
-			t.Errorf("docs/AUDIT-ACTIONS.md's llm.scan.* row Data column is missing %q, which recordLLMScanAudit marshals onto the wire: %q", k, strings.TrimSpace(dataCell))
+			t.Errorf("docs/AUDIT-ACTIONS.md's llm.scan.* row Data column is missing %q, which ScanAudit marshals onto the wire: %q", k, strings.TrimSpace(dataCell))
 		}
 	}
 
@@ -865,17 +873,17 @@ func TestAuditActionsDocLLMScanDataFieldsMatchTheEmitSite(t *testing.T) {
 	// exceeding `findings_reported` is a one-way implication of
 	// `findings_capped`, not an iff — block mode's severity keep-backs can
 	// leave a capped scan's two counts equal.
-	internalSrc := readSrc(t, "internal", "api", "internal.go")
+	internalSrc := readSrc(t, "internal", "egress", "scan_audit.go")
 	constMatch := maxAuditFindingsConst.FindStringSubmatch(internalSrc)
 	if constMatch == nil {
-		t.Fatalf("const maxAuditFindings = <N> not found in internal/api/internal.go — the guard's anchor moved")
+		t.Fatalf("const maxAuditFindings = <N> not found in internal/egress/scan_audit.go — the guard's anchor moved")
 	}
 	maxFindings, err := strconv.Atoi(constMatch[1])
 	if err != nil {
 		t.Fatalf("parse maxAuditFindings value %q: %v", constMatch[1], err)
 	}
 	if !strings.Contains(proseCell, strconv.Itoa(maxFindings)) {
-		t.Errorf("docs/AUDIT-ACTIONS.md's llm.scan.* row prose does not name the maxAuditFindings bound (%d) that recordLLMScanAudit truncates the embedded `findings` array to: %q", maxFindings, strings.TrimSpace(proseCell))
+		t.Errorf("docs/AUDIT-ACTIONS.md's llm.scan.* row prose does not name the maxAuditFindings bound (%d) that ScanAudit truncates the embedded `findings` array to: %q", maxFindings, strings.TrimSpace(proseCell))
 	}
 	if !strings.Contains(proseCell, "ONLY when `findings_capped`") {
 		t.Errorf("docs/AUDIT-ACTIONS.md's llm.scan.* row prose must state the finding_count-exceeds-findings_reported relation as a ONE-WAY implication of findings_capped (block mode's keep-backs make the converse false), not an \"exactly when\" iff: %q", strings.TrimSpace(proseCell))

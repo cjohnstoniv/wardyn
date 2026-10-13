@@ -29,6 +29,9 @@ import (
 // (-migrate-only, -rotate-age-key, -rewrap, -rewrap-principal-keys, -audit-split-legacy, -migrate-secrets, -reconcile), and reports whether
 // one ran.
 func maintenanceMode(f *bootFlags) (bool, error) {
+	if ran, err := recoveryMode(f); ran {
+		return true, err
+	}
 	if *f.rewrapRetirePlatformKey && !*f.rewrap {
 		return true, fmt.Errorf("refusing to run: -rewrap-retire-platform-key is a mode of -rewrap; run `wardynd -rewrap -rewrap-retire-platform-key`")
 	}
@@ -205,10 +208,23 @@ func reconcileMode(ctx context.Context, ps *secretstorepg.Store, rec audit.Recor
 const migrateActor = "wardyn/migrate-secrets"
 
 // emitMaintenanceAudit writes one audit row from a maintenance mode. Data
-// carries names, owners and counts, never a value.
+// carries names, owners and counts, never a value. A failed write is logged,
+// not returned; recordMaintenanceAudit is for the mode that must know.
 func emitMaintenanceAudit(ctx context.Context, rec audit.Recorder, actor, action, target, outcome string, data map[string]any) {
+	ev := maintenanceEvent(actor, action, target, outcome, data)
+	if err := rec.Record(ctx, ev); err != nil {
+		audit.LogWriteFailure(ctx, ev, err)
+	}
+}
+
+// recordMaintenanceAudit is emitMaintenanceAudit returning the recorder's error.
+func recordMaintenanceAudit(ctx context.Context, rec audit.Recorder, actor, action, target, outcome string, data map[string]any) error {
+	return rec.Record(ctx, maintenanceEvent(actor, action, target, outcome, data))
+}
+
+func maintenanceEvent(actor, action, target, outcome string, data map[string]any) types.AuditEvent {
 	raw, _ := json.Marshal(data)
-	ev := types.AuditEvent{
+	return types.AuditEvent{
 		ID:        uuid.New(),
 		Time:      time.Now().UTC(),
 		ActorType: types.ActorSystem,
@@ -217,8 +233,5 @@ func emitMaintenanceAudit(ctx context.Context, rec audit.Recorder, actor, action
 		Target:    target,
 		Outcome:   outcome,
 		Data:      json.RawMessage(raw),
-	}
-	if err := rec.Record(ctx, ev); err != nil {
-		audit.LogWriteFailure(ctx, ev, err)
 	}
 }

@@ -374,6 +374,7 @@ func TestHasRunsListFilterParams(t *testing.T) {
 		{"status=active", true},
 		{"ended_within=24h", true},
 		{"include_killed=1", true},
+		{"no_end=1", true},
 		{"workspace=org/repo", true},
 		{"q=refund", true},
 	}

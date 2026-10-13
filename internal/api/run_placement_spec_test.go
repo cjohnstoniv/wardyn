@@ -76,12 +76,12 @@ func TestLocalReviveRefusesBeforeOperatorSecretReadsAndStripsCopy(t *testing.T) 
 		f.st.siteConfig.UpstreamProxySecretRef = secretRef
 		cfg := proxy.Config{RunID: run.ID, UpstreamProxyURL: "https://user:password@parent", TrustedCAPEM: "corporate", InternalHosts: []types.InternalHost{{HostSuffix: "corp"}}, LLMUpstreams: map[string]string{"vendor": "corp"}}
 		ref := f.srv.reviveOwnerRecheck(context.Background(), run, &cfg, types.ActorSystem, "wardynd")
-		want := placement.ReasonPlacementUnavailable
-		if secretRef != "" {
-			want = placement.ReasonPlacementCredential
+		// An own plan revives; the organisation's upstream proxy secret is never sent to a runner.
+		if secretRef != "" && (ref == nil || ref.reason != string(placement.ReasonPlacementCredential)) {
+			t.Fatalf("revive=%v wanted %s", ref, placement.ReasonPlacementCredential)
 		}
-		if ref == nil || ref.reason != string(want) {
-			t.Fatalf("revive=%v wanted %s", ref, want)
+		if secretRef == "" && ref != nil {
+			t.Fatalf("revive of an own plan = %v, want it admitted", ref)
 		}
 		if secretRef == "" && (cfg.UpstreamProxyURL != "" || cfg.TrustedCAPEM != "" || len(cfg.InternalHosts)+len(cfg.LLMUpstreams) != 0) {
 			t.Fatal("revive retained organisation network configuration")
@@ -143,5 +143,40 @@ func TestLocalDispatchP3RidesTheCeilingAndNamesNoPersonalComponent(t *testing.T)
 	}
 	if st.failureHint == "" || strings.Contains(st.failureHint, personal) {
 		t.Fatalf("failure hint %q", st.failureHint)
+	}
+}
+
+// The org never chooses a path on the laptop: a stored proxy config's
+// DecisionSpoolDir does not reach the laptop-bound spec; the runner sets its own.
+func TestLocalStoredSpecNeverCarriesTheDecisionSpoolDir(t *testing.T) {
+	b, err := json.Marshal(localStoredSpec(proxy.Config{RunID: uuid.New(), DecisionSpoolDir: "/org/chosen/spool"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(b), "/org/chosen/spool") {
+		t.Fatalf("the laptop-bound spec carries the org's spool path: %s", b)
+	}
+}
+
+// fix-r1 Opus F2: a stored scope matches the policy copy only when a typed decode reads both alike. jsonb
+// reorders keys, so two keys that differ only in case decode by order and must not match; integers past
+// 2^53 compare exactly. Spacing and key order alone do not matter.
+func TestSameScopeComparesTheTypedDecode(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		copy, row   string
+		wantSimilar bool
+	}{
+		{"reordered and respaced", `{"name":"FOO","secret_name":"mine"}`, `{"secret_name": "mine", "name": "FOO"}`, true},
+		{"case-variant duplicate key, reordered by jsonb", `{"name":"FOO","secret_name":"mine","Secret_Name":"orgsec"}`,
+			`{"name": "FOO", "Secret_Name": "orgsec", "secret_name": "mine"}`, false},
+		{"Unicode-folded duplicate key (U+017F), reordered by jsonb", `{"name":"FOO","ſecret_name":"orgsec","secret_name":"mine"}`,
+			`{"name": "FOO", "secret_name": "mine", "ſecret_name": "orgsec"}`, false},
+		{"integers past 2^53", `{"ttl":9007199254740993}`, `{"ttl": 9007199254740992}`, false},
+		{"a different value", `{"name":"FOO"}`, `{"name":"BAR"}`, false},
+	} {
+		if got := sameScope(json.RawMessage(tc.copy), json.RawMessage(tc.row)); got != tc.wantSimilar {
+			t.Errorf("%s: sameScope = %v, want %v", tc.name, got, tc.wantSimilar)
+		}
 	}
 }

@@ -28,6 +28,7 @@ import (
 
 	"filippo.io/age"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
@@ -329,10 +330,20 @@ func (s *Store) Put(ctx context.Context, name string, value []byte) error {
 	if err != nil {
 		return fmt.Errorf("pg secretstore: seal %s: %w", rowRef(s.owner, name), err)
 	}
-	if rev, guarded := secretstore.IfRevisionFrom(ctx); guarded {
-		return s.putIfRevision(ctx, name, rev, r)
+	if gen, fenced := s.generationFence(ctx); fenced {
+		return s.putFenced(ctx, name, gen, r)
 	}
-	_, err = s.pool.Exec(ctx, `
+	return s.putRow(ctx, s.pool, name, r)
+}
+
+// putRow writes the sealed row through q (the pool, or the fenced Put's
+// transaction): a plain upsert, or the compare-and-set on the row's revision
+// when the context carries one.
+func (s *Store) putRow(ctx context.Context, q execer, name string, r sealedRow) error {
+	if rev, guarded := secretstore.IfRevisionFrom(ctx); guarded {
+		return s.putIfRevision(ctx, q, name, rev, r)
+	}
+	_, err := q.Exec(ctx, `
 		INSERT INTO secrets (owned_by, name, enc_version, kek_id, wrapped_dek, ciphertext, expires_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7)
 		ON CONFLICT (owned_by, name) DO UPDATE
@@ -343,6 +354,11 @@ func (s *Store) Put(ctx context.Context, name string, value []byte) error {
 		return fmt.Errorf("pg secretstore: put %s: %w", rowRef(s.owner, name), err)
 	}
 	return nil
+}
+
+// execer is what pgxpool.Pool and pgx.Tx share for a write.
+type execer interface {
+	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
 }
 
 // expiresAt is the row's expires_at for a Put under ctx: the time
@@ -452,6 +468,7 @@ func (s *Store) open(ctx context.Context, e envelope) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("pg secretstore: %s refused — its data key does not unwrap for this row (moved, forged, corrupted, or its key version retired): %w", ref, err)
 	}
+	defer clear(dek)
 	plain, err := kek.Open(dek, e.ct, secretAAD(e.ownedBy, e.name))
 	if err != nil {
 		return nil, fmt.Errorf("pg secretstore: %s refused — its value fails the integrity check for this row (moved, forged or corrupted): %w", ref, err)

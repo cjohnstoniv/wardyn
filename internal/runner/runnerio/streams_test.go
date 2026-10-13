@@ -51,9 +51,39 @@ func streamRig(t *testing.T) (*Server, *remote.Substrate, *runnertest.Fake, *run
 		return server.Call(ctx, rp, id, method, args)
 	}})
 	go rp.Run(t.Context())
+	server.HoldSandboxes(func(ref string) bool { return ref == local.Ref })
 	server.Online(rp)
 	t.Cleanup(func() { rp.Close(); op.Close(); server.Offline(rp) })
 	return server, sub, fake, rp, placement.RunnerRefPrefix("laptop") + local.Ref
+}
+
+// Only a sandbox this runner holds is reachable by attach or exec, even when
+// the substrate can see another container under that name.
+func TestStreamsRefuseSandboxesTheRunnerDoesNotHold(t *testing.T) {
+	_, sub, fake, _, held := streamRig(t)
+	other, err := fake.CreateSandbox(t.Context(), runner.SandboxSpec{RunID: uuid.New()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	foreign := placement.RunnerRefPrefix("laptop") + other.Ref
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	if e, err := sub.ExecStream(ctx, foreign, runner.ExecSpec{Argv: []string{"cat"}}); err == nil {
+		_ = e.Close()
+		t.Fatal("exec reached a sandbox the runner does not hold")
+	}
+	if a, err := sub.Attach(ctx, foreign, runner.AttachOptions{}); err == nil {
+		_ = a.Close()
+		t.Fatal("attach reached a sandbox the runner does not hold")
+	}
+	if fake.Called("exec_stream", other.Ref) || fake.Called("attach", other.Ref) {
+		t.Fatal("a refused stream reached the substrate")
+	}
+	a, err := sub.Attach(ctx, held, runner.AttachOptions{})
+	if err != nil {
+		t.Fatalf("held sandbox attach: %v", err)
+	}
+	_ = a.Close()
 }
 
 func TestExecReplyKeepsStreamsAliveAndHalfCloseDrains(t *testing.T) {

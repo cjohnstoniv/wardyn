@@ -118,12 +118,12 @@ helm install wardyn oci://ghcr.io/cjohnstoniv/charts/wardyn --version "${WARDYN_
 
 ## 5. Verify the release assets
 
-- Each release carries the per-image SBOMs, `THIRD-PARTY-NOTICES.md`, `LICENSE`, `NOTICE`, `install.sh`, the four `wardyn-<os>-<arch>` CLI binaries, and a signed `SHA256SUMS` — `release.yml`'s `release-assets` job fails the release unless every one of them landed.
+- Each release carries the per-image SBOMs, `THIRD-PARTY-NOTICES.md`, `LICENSE`, `NOTICE`, `install.sh`, the four `wardyn-<os>-<arch>` CLI binaries, the four `wardyn-runnerd-<os>-<arch>` runner binaries, `wardyn-runner-units.tar.gz`, and a signed `SHA256SUMS` — `release.yml`'s `release-assets` job fails the release unless every one of them landed.
 - `gh release download` is a GitHub CLI command too, so it needs the same sign-in; the assets are also plain downloads at `https://github.com/cjohnstoniv/wardyn/releases/download/v${WARDYN_VERSION}/<asset>`.
 
 ```sh
 gh release download "v${WARDYN_VERSION}" --repo cjohnstoniv/wardyn
-sha256sum -c SHA256SUMS
+sha256sum -c SHA256SUMS   # macOS: shasum -a 256 -c SHA256SUMS
 cosign verify-blob \
   --certificate SHA256SUMS.pem --signature SHA256SUMS.sig \
   --certificate-identity "https://github.com/cjohnstoniv/wardyn/.github/workflows/release.yml@refs/tags/v${WARDYN_VERSION}" \

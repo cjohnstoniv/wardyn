@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cjohnstoniv/wardyn/internal/composer"
 	"github.com/cjohnstoniv/wardyn/internal/placement"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/google/uuid"
@@ -87,7 +88,7 @@ func TestLocalStoredGrantPersistenceForcesOwnerOnlyAndRefusesFallback(t *testing
 	f := newComponentFixture(t)
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/runs", nil).WithContext(utCtx("user", "", nil))
 	spec := types.RunPolicySpec{EligibleGrants: scopes}
-	if _, ok := f.srv.persistRunGrants(context.Background(), httptest.NewRecorder(), r, uuid.New(), time.Now().UTC(), spec, types.PlacementLocal); !ok {
+	if _, ok := f.srv.persistRunGrants(context.Background(), httptest.NewRecorder(), r, uuid.New(), time.Now().UTC(), spec, types.PlacementLocal, storedPolicy(t, f.srv)); !ok {
 		t.Fatal("own local grants refused")
 	}
 	if len(f.st.grants) != len(scopes) {
@@ -105,8 +106,25 @@ func TestLocalStoredGrantPersistenceForcesOwnerOnlyAndRefusesFallback(t *testing
 	}
 	before := len(f.st.grants)
 	spec.EligibleGrants = append(spec.EligibleGrants, types.GrantSpec{Kind: types.GrantAPIKey, Scope: json.RawMessage(`{"host":"corp.example","secret_name":"operator-only-secret"}`)})
-	if _, ok := f.srv.persistRunGrants(context.Background(), httptest.NewRecorder(), r, uuid.New(), time.Now().UTC(), spec, types.PlacementLocal); ok || len(f.st.grants) != before {
+	if _, ok := f.srv.persistRunGrants(context.Background(), httptest.NewRecorder(), r, uuid.New(), time.Now().UTC(), spec, types.PlacementLocal, storedPolicy(t, f.srv)); ok || len(f.st.grants) != before {
 		t.Fatal("missing own namespace wrote a partial grant set")
+	}
+}
+
+// Grant persistence judges an org-held grant by the delivery policy the run's plan was judged on, never a
+// second read of the store: the store here holds no policy (every class refused), and the plan's via_org
+// policy alone admits the grant, recorded via_org.
+func TestLocalGrantPersistenceUsesThePlansDeliveryPolicy(t *testing.T) {
+	f := newComponentFixture(t)
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/runs", nil).WithContext(utCtx("user", "", nil))
+	spec := types.RunPolicySpec{EligibleGrants: []types.GrantSpec{{Kind: types.GrantAPIKey, Scope: json.RawMessage(`{"host":"corp.example","secret_name":"operator-only-secret"}`)}}}
+	viaOrg := placement.DeliveryPolicy{Classes: map[string]placement.ClassPolicy{placement.ClassAPIKey: {Mode: placement.ModeViaOrg}}}
+	gw, ok := f.srv.persistRunGrants(context.Background(), httptest.NewRecorder(), r, uuid.New(), time.Now().UTC(), spec, types.PlacementLocal, viaOrg)
+	if !ok || len(gw.delivery) != 1 || gw.delivery[0].Mode != placement.ModeViaOrg {
+		t.Fatalf("ok=%v delivery=%+v: the plan's via_org policy did not admit the org grant", ok, gw.delivery)
+	}
+	if _, ok := f.srv.persistRunGrants(context.Background(), httptest.NewRecorder(), r, uuid.New(), time.Now().UTC(), spec, types.PlacementLocal, storedPolicy(t, f.srv)); ok {
+		t.Error("the org grant persisted under a policy that refuses its class")
 	}
 }
 
@@ -155,9 +173,49 @@ func TestLocalP3ProfileLimitLiftsOnlyItsOwnRefusal(t *testing.T) {
 		{"org component never needs the limit", false, org, placement.ReasonPlacementUnavailable},
 	} {
 		ceiling := governanceCeiling{Limits: types.GovernanceLimits{LocalSelfDefinedComponents: tc.allowed}}
-		ref := f.srv.localPlacementRefusal(r, req, types.RunPolicySpec{}, ceiling, tc.comps, nil, nil)
+		_, ref := f.srv.localPlacementRefusal(r, req, false, types.RunPolicySpec{}, ceiling, tc.comps, nil, nil, composer.Baseline{})
 		if ref == nil || ref.body.Reason != string(tc.reason) {
 			t.Fatalf("%s: %+v", tc.name, ref)
 		}
+		if tc.reason == placement.ReasonPlacementUnavailable && ref.body.Error != localUnpooledMsg {
+			t.Fatalf("%s: an unpooled local run must name its remedy, said %q", tc.name, ref.body.Error)
+		}
 	}
+}
+
+// LE-8: an organisation drive never goes to a person's own runner. A run a self-hosted pool places is refused
+// at create for every drive backend: a managed volume or claim lives on the organisation's substrate, and a
+// host_path share waits for a runner binding (placement_local_path). The same run without a drive is admitted.
+func TestLocalPlacement_OrgDriveRefusedOnSelfHosted(t *testing.T) {
+	f := newComponentFixture(t)
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/runs", nil).WithContext(utCtx("user", "", nil))
+	req := createRunRequest{Placement: placement.Local}
+	for _, tc := range []struct {
+		backend types.DriveBackend
+		reason  placement.Reason
+	}{
+		{types.DriveBackendDockerVolume, placement.ReasonPlacementCapability},
+		{types.DriveBackendK8sPVC, placement.ReasonPlacementCapability},
+		{types.DriveBackendK8sPVCStatic, placement.ReasonPlacementCapability},
+		{types.DriveBackendHostPath, placement.ReasonPlacementLocalPath},
+	} {
+		drive := []types.DriveMount{{Backend: tc.backend, ObjectName: "wardyn-drive-team-home"}}
+		_, ref := f.srv.localPlacementRefusal(r, req, true, types.RunPolicySpec{}, governanceCeiling{}, runComponents{}, drive, nil, composer.Baseline{})
+		if ref == nil || ref.body.Reason != string(tc.reason) {
+			t.Errorf("%s drive on a self-hosted run = %+v, want %s", tc.backend, ref, tc.reason)
+		}
+	}
+	if _, ref := f.srv.localPlacementRefusal(r, req, true, types.RunPolicySpec{}, governanceCeiling{}, runComponents{}, nil, nil, composer.Baseline{}); ref != nil {
+		t.Errorf("the same pooled run without a drive = %+v, want it admitted", ref)
+	}
+}
+
+// storedPolicy is the delivery policy the store holds now: what a create's local plan would be judged on.
+func storedPolicy(t *testing.T, s *Server) placement.DeliveryPolicy {
+	t.Helper()
+	p, err := s.storedDeliveryPolicy(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return p
 }

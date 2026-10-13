@@ -488,9 +488,13 @@ commands are the ones in "Back them up" and "Restore them", and in
 
 | Deployment | Database | Age identity and keys | Recordings (file store only) | Drives | Audit spool, `.consumed`, `.quarantine` |
 |---|---|---|---|---|---|
-| **Compose** | The `postgres_data` volume; the dump comes from the `${WARDYN_NS:-wardyn}-postgres` container. | `WARDYN_AGE_KEY` in `deploy/compose/.env`, plus the file `WARDYN_PLATFORM_KEY_FILE` names if you set it. With `WARDYN_KEK=transit` or `azurekv`, the key lives in the external key service (Vault or Azure Key Vault), which you back up separately. | The `${WARDYN_NS:-wardyn}-recordings` volume, only under `WARDYN_RECORDING_STORE=fs`. The default `pg` store is already in the dump. | One Docker volume per person, labelled `wardyn.managed=true`. A `host_path` drive is a share you already back up. | The `audit` volume, `<project>_audit`, mounted at `/data/audit`: `audit-spool.jsonl`, `.consumed` and `.quarantine` (`WARDYN_AUDIT_SPOOL` on the `wardynd` service in [`deploy/compose/docker-compose.yaml`](../deploy/compose/docker-compose.yaml)). |
+| **Compose** | The `postgres_data` volume; the dump comes from the `${WARDYN_NS:-wardyn}-postgres` container. | `WARDYN_AGE_KEY` in `deploy/compose/.env`, plus the file `WARDYN_PLATFORM_KEY_FILE` names if you set it. With `WARDYN_KEK=transit`, `azurekv` or `awskms`, the key lives in the external key service (Vault, Azure Key Vault or AWS KMS), which you back up separately. | The `${WARDYN_NS:-wardyn}-recordings` volume, only under `WARDYN_RECORDING_STORE=fs`. The default `pg` store is already in the dump. | One Docker volume per person, labelled `wardyn.managed=true`. A `host_path` drive is a share you already back up. | The `audit` volume, `<project>_audit`, mounted at `/data/audit`: `audit-spool.jsonl`, `.consumed` and `.quarantine` (`WARDYN_AUDIT_SPOOL` on the `wardynd` service in [`deploy/compose/docker-compose.yaml`](../deploy/compose/docker-compose.yaml)). |
 | **Managed desktop** | The `postgres_data` volume of the Compose project `wardyn-desktop` (the `compose` helper in [`deploy/desktop/wardyn-desktop.sh`](../deploy/desktop/wardyn-desktop.sh)). Stop the converge job first (`wardyn.timer` on Linux, the launchd job on macOS), or it restarts the stack under you. | **Not in the set, deliberately.** `age.key` stays on the device ([DESKTOP.md](DESKTOP.md#why-agekey-never-rides-in-an-mdm-payload)), so a desktop restore recovers runs, audit and drives, but not stored secrets. If you set `WARDYN_PLATFORM_KEY_FILE`, keep that file. | The `${WARDYN_NS:-wardyn}-recordings` volume, only under `WARDYN_RECORDING_STORE=fs`. | One Docker volume per person, as on Compose (a drive volume per person). | `/data/audit/audit-spool.jsonl`, `.consumed` and `.quarantine`, on the project's `audit` volume. |
-| **Helm** | The Postgres you operate (`postgres.dsn`); the chart renders none. Use that Postgres's own backup. | The Secret holding the `age-key` entry (`secrets.ageKeyFromSecret=true`), `secrets.ageKey`, or an operator-owned Secret named by `secrets.ageKeySecretRef`, or the key wired through `env`/`extraEnv`; the `WARDYN_PLATFORM_KEY_FILE` file if set; or the external key service for Vault Transit or Azure Key Vault. `secrets.allowEphemeralAgeKey=true` makes a backup unrecoverable. | The PVC, with `persistence.enabled=true` (store `fs`). With `persistence.enabled=false` the store is `off`; `env.WARDYN_RECORDING_STORE=pg` puts them in the dump. | One PVC per drive: a snapshot per claim ("User drives on Kubernetes"). | `<persistence.mountPath>/audit-spool.jsonl`, `.consumed` and `.quarantine` on the PVC. With the default `persistence.enabled=false` they sit on a `/tmp` emptyDir, so the precondition is: enable persistence, or drain and copy them before scaling to zero. |
+| **Helm** | The Postgres you operate (`postgres.dsn`); the chart renders none. Use that Postgres's own backup. | The Secret holding the `age-key` entry (`secrets.ageKeyFromSecret=true`), `secrets.ageKey`, or an operator-owned Secret named by `secrets.ageKeySecretRef`, or the key wired through `env`/`extraEnv`; the `WARDYN_PLATFORM_KEY_FILE` file if set; or the external key service for Vault Transit, Azure Key Vault or AWS KMS. `secrets.allowEphemeralAgeKey=true` makes a backup unrecoverable. | The PVC, with `persistence.enabled=true` (store `fs`). With `persistence.enabled=false` the store is `off`; `env.WARDYN_RECORDING_STORE=pg` puts them in the dump. | One PVC per drive: a snapshot per claim ("User drives on Kubernetes"). | `<persistence.mountPath>/audit-spool.jsonl`, `.consumed` and `.quarantine` on the PVC. With the default `persistence.enabled=false` they sit on a `/tmp` emptyDir, so the precondition is: enable persistence, or drain and copy them before scaling to zero. |
+
+**Inventory.** `wardynd -recovery-inventory`, run with the daemon's environment, prints each item above as JSON with its location for the deployment it sees (Compose, the managed desktop or Helm, from the runner and `WARDYN_MANAGED_DIR`). It opens no database connection and reads no key; only setting names appear, never values ([design](design/0.9/recovery-set.md#12-slices)).
+
+**Manifest and rehearsal.** `-recovery-manifest` ties the dump to the spool, recordings and drive bytes, `-recovery-verify` refuses a mismatched pair, and `-recovery-rehearse` proves the set on a scratch database: [Recovery set and restore rehearsal](operations/recovery-rehearsal.md).
 
 **Rules for every row.**
 
@@ -515,7 +519,7 @@ commands are the ones in "Back them up" and "Restore them", and in
 > **What is not proven.**
 
 - The commands in the day-2 section were exercised once against a throwaway kind cluster.
-- No shipped tool rehearses a restore (that is issue #1514), so none of the above has been validated end to end.
+- Only `wardynd -recovery-rehearse` rehearses a restore, and only for the set you run it on, so none of the above is validated end to end until you do ([Recovery set and restore rehearsal](operations/recovery-rehearsal.md)).
 - Loading a dump into a scratch database proves the SQL loads, and nothing more: a row count does not show that the
   key works, and it does not show that the drive bytes are intact.
 
@@ -1194,8 +1198,10 @@ erases one person's retained records by explicit scope, in one audited act
 | `mask_copies` | the masking manifests of the runs the person created, after their live attaches, SSH shells and relays are fenced |
 | `run_outputs` | the stored output of those runs (404 `run_output_erased` afterwards, on every replica and after a restart) |
 | `recordings` | their session recordings and `source: "recording"` output rows, with durable per-run fences against later writes; direct stdout and pane snapshots retain their independent `run_outputs` scope |
-| `run_tasks` | the task text of the runs the person created |
-| `components` | the components the person saved, and what each run's snapshot of one they defined says about it; the run keeps a content-free row, which is what a revived run is checked against. A finished run's resolved policy and grants keep the hosts and secret names the run used, as for any other policy, and so do its `run.env_secret.resolve`, `run.file_secret.resolve`, `secret.read` and `run.policy.resolve` rows |
+| `run_tasks` | the task text of the runs the person created, and the launch intents of those runs |
+| `components` | the components the person saved, the launch intents of their runs, and what each run's snapshot of one they defined says about it; the run keeps a content-free row, which is what a revived run is checked against. A finished run's resolved policy and grants keep the hosts and secret names the run used, as for any other policy, and so do its `run.env_secret.resolve`, `run.file_secret.resolve`, `secret.read` and `run.policy.resolve` rows |
+| `run_setups` | the person's own run templates and every revision of them, the launch intents of their runs, their group template-manager grants, and their name as the author of shared templates, revisions and grants, which stay without it |
+| `runner_pools` | the person's own Self-Hosted runner pools, deleted as their own delete would, and their name on every pool row of theirs; their runners stay |
 | `audit_personal_fields` | the person's audit-seal key, every generation: each sealed audit field of theirs reads `[erased]` everywhere it was copied, and the chain still verifies |
 | `credentials` | the person's stored credentials, their encryption key and provider connection-change records (also erased by `DELETE /people/{principal}/credentials`) |
 
@@ -1206,6 +1212,26 @@ erases one person's retained records by explicit scope, in one audited act
   `person.erasure` row records a `failure` naming each scope's outcome, and a retry with the same scopes finishes the
   rest.
 - Erasure is reported complete (`200`, `outcome` success) only when every scope asked for finished.
+
+- **A launch intent (a run's setup, kept for Run again) is erased with every launch whose run insert began before the erase.**
+  - A run's insert takes a per-person Postgres lock first, shared and without waiting, and writes the intent in the same transaction.
+  - An erase takes it exclusively and waits, so it deletes what earlier launches wrote.
+  - A launch that meets a running erase starts with no intent (`run.create` `launch_intent_reason` `erasure_in_progress`).
+  - A request decoded before the erase whose insert begins after it commits keeps its intent, as its run row keeps its task.
+  - Migration `0171_run_launch_intents` adds the table; a split-role install grants the app role `SELECT, INSERT, DELETE` on it.
+
+- **A credential write that began before the erase never lands behind it.**
+  - The `credentials` scope advances the person's erase generation before it lists anything and again after the deletes, so a write that began between the two is refused as well.
+  - Every write of a stored credential reads that generation when it begins and is refused if it has moved: `409` `credential_erased_during_write`, nothing saved.
+  - A write that begins after the erase lands, so reconnecting works at once.
+  - The check is in Postgres, so it holds across wardynd replicas and in store mode (the value is not sent to Vault or Key Vault first).
+  - The `credential.erase` row's `write_fence` is `generation`, or `locks_only` for a store that keeps no generation: then only the in-process locks hold back a writer.
+  - Migration `0156_secret_owner_generations` adds one counter per person; an owner with no row is generation 0, so every existing credential keeps working.
+  - The counter holds a number and a time, never a credential, and refuses nothing later.
+  - After a person is erased, `secret_owner_generations` still holds their subject id, the counter and the time of its last change; Wardyn never deletes that row.
+  - It stays on purpose: deleting it would reset the counter to 0, and a write that began before the erase could land again.
+  - Provider connection-change records are removed by the same erase, and a provider purge that was writing them when the erase began finishes first, so none comes back.
+  - An older wardynd running beside this one does not check it: finish the upgrade before an erase.
 
 - The `recordings` scope fences each run present in the person's run list, including its bare cast, attach sessions
   and upload parts.
@@ -1328,6 +1354,8 @@ erases one person's retained records by explicit scope, in one audited act
 4. Map Entra's `objectId` to SCIM `externalId`.
    - Wardyn matches a leaver by that object id first, then by the `entra:<tenant id>:<object id>` person, and uses an
      email only to widen a removal; without `externalId` a suspension can miss the person.
+   - If any of its names is another principal (a person created under that address, say), nothing links, and when
+     its emails name two different people, the suspension refuses until an admin resolves it.
    - `userName` and `emails` may change (renames are accepted as a projection update and the old values are kept as
      removal aliases); `externalId` may not change on a bound identity.
 5. Check a test user: suspend them from the provisioning job, then confirm a `scim.user.deactivate` row and a
@@ -1409,8 +1437,14 @@ lose access now, do not wait for it:
     - only where the owning principal is one of the leaver's own forms,
     - never another principal's that merely carries the same address.
   - Deactivation never follows an email.
-  - A person no sign-in has bound is known only by their emails, so for them every alias is cut and every principal an
-    alias resolves to is swept as theirs.
+  - Each alias is resolved the way an erasure resolves a name, so a recorded principal wins over any email claim.
+    - For a bound person, an alias that names only other principals (a person created under that address, say) is
+      never one of their forms: nothing is cut, swept, killed or deleted under it.
+    - A person no sign-in has bound is known only by their emails, so for them every alias is cut and the one principal
+      each alias names is swept as theirs. A cutoff under such an alias also ends a session or token whose email claim
+      spells it.
+    - An alias that names more than one principal, or a directory that cannot be read, stops a suspension or purge
+      before it touches anything: the request answers 5xx and a `person.deprovision` row says why.
 - **Role changes that are not SCIM group removals** at the identity provider still lag until the person signs in
   again.
 - **Long-lived connections.** A suspension kills every live run, which ends its attach and SSH sessions. Other
@@ -1727,9 +1761,9 @@ enforces, not a re-derivation:
   row:
   - the saved policy (id, and its name and content as they read at launch), an inline policy, the default, or the governance profile the run's creator was bound to.
   - It is recorded already redacted, because the run's creator can read that row through `GET /audit`.
-- **What changed at launch** is each difference between the two, given a cause:
+- **What changed at launch** is each difference, given a cause:
   `workspace`, `source_control`, `mirror`, `model_access`, `git_broker`,
-  `profile`, `org_disk`, `restart`, `limits` or `launch`.
+  `profile`, `org_disk`, `pool_disk`, `restart`, `limits` or `launch`.
   - The launch audit rows (`run.egress.add`, `run.requirement.*`, `run.artifact.redirect`, `run.bedrock.configure`, `run.egress.confine`, `run.ceiling.reassert`, `run.revive`) name the cause first; the rest are derived; anything nothing names is `launch`. `limits` is only ever claimed for a member the governance bound applied to.
 - **Whether the saved policy has moved** (`stored_policy_now`) compares the
   saved policy today with its recorded launch content. A run from before the
@@ -1870,6 +1904,37 @@ Moved to [member-mode.md](operations/member-mode.md#exercising-member-mode-as-an
 ## Launch presets
 
 Moved to [launch-presets.md](operations/launch-presets.md#launch-presets).
+
+## Run templates
+
+A run template is a saved run setup that a person keeps for themselves, an organisation administrator publishes to
+everyone, or a group's template managers publish to that group (`/api/v1/templates`, [sdk.md](sdk.md#run-templates)).
+Migration `0165_run_templates` adds `run_templates`, the immutable `run_template_revisions`, `template_group_admins`
+and `template_group_labels`.
+
+- A template is content, never admission: it grants nothing.
+  It holds references (secret names, workspace and drive ids), never values, and the people it is shared with see those
+  names.
+- Each audience holds at most 200 templates per person, 200 per group and 500 for the organisation, counted under a
+  lock per audience. A name is unique within its audience, compared case-insensitively.
+- Organisation templates are written by an administrator in the Admin view. In the User view an administrator is a
+  member, so publishing to the organisation is a copy made from the Admin view.
+- A group's template managers hold a grant an admin writes with `PUT /api/v1/admin/template-group-admins`
+  (`{group_id, person, label}`); there is no console screen for it in this release. The grant is stored in canonical
+  form and reaches nothing but that group's templates. A group write re-reads it inside its own transaction, so a
+  revoke and a write never both succeed.
+  - `label` is the group's display name beside its templates. It is display only: authority follows the group
+    identifier the sign-in provider sends.
+  - That identifier is what access follows. A group deleted and re-created under the same identifier (a name-based
+    provider) reads and manages the old group's templates; delete those templates first, or use a provider whose group
+    identifiers are never reused.
+  - The person resolves as `?owner=` does on the secrets routes: a known name or email is stored as that principal,
+    so the revoke and erasure that name the person find it. An email that matches no one, or more than one person,
+    is refused (`422` `owner_unresolved` or `owner_ambiguous`); grant by subject, or after the person first signs in.
+- A `kind: policy` template holds only run-wide network, credential and access-rule keys. Saving one never writes a
+  stored policy.
+- Erasure's `run_setups` scope removes a person's templates and grants ([Erasing a person](#erasing-a-person)); the
+  SCIM purge asks for it.
 
 ## Console branding
 
@@ -3697,6 +3762,25 @@ image digests in `wardyn.env`, not a re-run of anything
 - `0139` (`0139_runner_delivery`) adds `credential_grants.delivery` (`0001`'s table), beside its new `runners` table.
 - `0141` (`0141_run_placement`) adds the placement columns on `agent_runs` (`placement`, `placement_filled`, `runner_id`,
   `evidence_source`).
+- `0143` (`0143_provider_connection_changes`) adds a trigger on `secrets` (`0001`'s table), beside its new
+  `provider_connection_changes` table.
+- `0150` (`0150_runner_action_binding`) adds binding columns to `runner_pending_actions` (`0139`'s table) and is a later
+  `CREATE OR REPLACE` of its immutability trigger function.
+- `0151` (`0151_runner_revoked_by`) adds `runners.revoked_by` and `runners.revoke_reason` (`0139`'s table).
+- `0153` (`0153_run_experience`) adds `agent_runs.experience` (`0141`'s table), the run mode a new client chose at launch.
+- `0154` (`0154_run_agent_stopped_at`) adds `agent_runs.agent_stopped_at` (`0001`'s table), the time an outage-kept run's agent was stopped.
+- `0155` (`0155_runner_asserted_subjects`) adds asserted-run columns to `runner_pending_actions` (`0139`'s table) and replaces its
+  immutability trigger function.
+- `0157` (`0157_invitations_service_identities`) replaces the `actor_type` check on `audit_events` (`0001`'s table) so it
+  admits `service`, beside its new `person_invitations`, `service_identities` and `api_token_moves` tables.
+- `0158` (`0158_runner_pool_limits`) adds `runner_pools.limits` (`0152`'s table), the pool's own limits.
+- `0159` (`0159_run_lifetime_cap`) adds `agent_runs.lifetime_cap_at` and `lifetime_cap_source` (`0001`'s table), the latest end the run's pool and `WARDYN_RUN_MAX_AGE` allow, counted from launch, and which of the two bound it; existing runs keep both empty.
+- `0160` (`0160_run_pool_binding`) adds the pool binding to `agent_runs`.
+- `0161` (`0161_run_human_author`) adds `agent_runs.human_author` (`0001`'s table), the principal accountable for the run at create (not proof that a person was present); existing runs keep it empty.
+- `0162` (`0162_run_queue`) widens `agent_runs`' state check with `QUEUED`, adds `agent_runs.admitted_at` and rebuilds its watcher sweep index (`0001`'s table) beside its new `run_queue` table, and re-creates `audit_retention_partitions` (as `0123` does).
+- `0163` (`0163_workspace_image_build`) adds `workspaces.image_build` (`0008`'s table), the image build record.
+- `0168` (`0168_runner_pool_owner`) adds `runner_pools.owner` and checks on `runner_pools` and `runner_pool_org_defaults` (`0152`'s tables), removes the ownerless Self-Hosted pools made before it, and clears an organisation preference for Self-Hosted.
+- `0173` (`0173_runner_pool_scope`) replaces `runner_pools.hosting_type` with `scope`, renames `runner_pool_members.executor_id` to `remote_runner_id` with a foreign key to its new `remote_runners` table and adds a generated `kind`, keeps one pool and the barrier on `runner_pool_org_defaults` (`0152`'s tables), rewrites each person's `runner_pool_defaults.v1` preference to `runner_pool_default.v2`, and rewrites a held remote-hosted runner add on `governance_changes` (`0126`'s table).
 - `0085` is named for its `CREATE OR REPLACE FUNCTION push_content_paths_immutable()`,
   but it is not an instance of the hazard: it creates that function and the
   `push_content_paths` table in the same file, so the migrator owns both from the start.
@@ -4886,6 +4970,8 @@ What the switch needs, and refuses to render or boot without:
 - **A PodDisruptionBudget** (`minAvailable: 1`) and a preferred **pod anti-affinity**
   across nodes (soft, so a one-node cluster still schedules every replica; an
   `affinity.podAntiAffinity` of your own replaces it).
+- **Per-replica limits add up.** The `via_org` byte total of a local run is 8 GiB per
+  run per replica and resets on restart.
 
 > [!WARNING]
 > `allowMultiReplica` and the `-allow-multi-instance` flag are **removed**, a

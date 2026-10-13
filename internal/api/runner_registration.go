@@ -102,6 +102,6 @@ func (s *Server) mintRunnerToken(w http.ResponseWriter, r *http.Request, owner s
 	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
 		placement.ActionRunnerTokenCreate, token.ID.String(), "success", mustJSON(map[string]any{"owner": owner, "expires_at": token.ExpiresAt})))
-	token.Token = raw
+	token.Token, token.OrgURL = raw, s.cfg.RunnerOrgURL
 	writeJSON(w, http.StatusCreated, token)
 }

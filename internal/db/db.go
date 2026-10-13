@@ -719,6 +719,21 @@ func triggerMigrationFiles(trigger string) ([]string, error) {
 	return names, nil
 }
 
+// NewestMigration is the filename of the newest migration this binary ships.
+func NewestMigration() (string, error) {
+	entries, err := migrationFS.ReadDir("migrations")
+	if err != nil {
+		return "", fmt.Errorf("db: read migrations dir: %w", err)
+	}
+	var newest string
+	for _, e := range entries {
+		if !e.IsDir() && strings.HasSuffix(e.Name(), ".sql") && e.Name() > newest {
+			newest = e.Name()
+		}
+	}
+	return newest, nil
+}
+
 // unknownAppliedMigrations returns, oldest first, the filenames schema_migrations records that are
 // not in shipped — the migrations a NEWER wardynd applied. This is the binary-side downgrade
 // refusal: without it an older wardynd boots over a schema whose one-way conversions it cannot read

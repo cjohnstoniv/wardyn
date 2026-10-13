@@ -74,6 +74,9 @@ export const TAB_OF_FIELD: Record<Exclude<keyof WizardState, "contract">, NewRun
 export const TAB_OF_CONTRACT: Record<keyof RunContractDraft, NewRunTab> = {
   runner: "runner",
   access: "access",
+  // Provisional: the mode draft spans Runner (experience), Tools & Image (workload, tools, startup) and
+  // Repositories & Drives (starting folder); A-L8 splits it per tab when the five-tab model lands.
+  mode: "runner",
 };
 
 /** The WizardState keys one tab owns. */

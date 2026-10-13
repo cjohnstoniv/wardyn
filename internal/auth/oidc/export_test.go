@@ -147,3 +147,11 @@ func SetLoginGrantTimeoutForTest(a *Authenticator, d time.Duration) {
 // SetEntraForTest marks a test IdP's Authenticator as Entra ID, so the
 // person-keying step (resolvePerson) runs against a plain httptest issuer.
 func SetEntraForTest(a *Authenticator) { a.entra = true }
+
+// SetIDPHTTPTimeoutForTest shortens the token-exchange/JWKS request timeout
+// for Authenticators built after the call; the returned func restores it.
+func SetIDPHTTPTimeoutForTest(d time.Duration) (restore func()) {
+	prev := idpHTTPTimeout
+	idpHTTPTimeout = d
+	return func() { idpHTTPTimeout = prev }
+}

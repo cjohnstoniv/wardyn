@@ -43,8 +43,12 @@ func TestPG_AppClockRunPreservesAdmissionAcrossCapacityLock(t *testing.T) {
 	result := make(chan response, 1)
 	go func() { got, err := st.CreateRunUnderCap(ctx, run, 10); result <- response{got, err} }()
 	for {
+		// pg_stat_activity is snapshotted per transaction; drop the snapshot so each probe reads fresh.
+		if _, err := locker.Exec(ctx, `SELECT pg_stat_clear_snapshot()`); err != nil {
+			t.Fatal(err)
+		}
 		var waiting bool
-		if err := pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE $1=ANY(pg_blocking_pids(pid)))`, lockerPID).Scan(&waiting); err != nil {
+		if err := locker.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE $1=ANY(pg_blocking_pids(pid)))`, lockerPID).Scan(&waiting); err != nil {
 			t.Fatal(err)
 		}
 		if waiting {
@@ -57,7 +61,7 @@ func TestPG_AppClockRunPreservesAdmissionAcrossCapacityLock(t *testing.T) {
 		}
 	}
 	var cutoff time.Time
-	if err := pool.QueryRow(ctx, `SELECT clock_timestamp()`).Scan(&cutoff); err != nil {
+	if err := locker.QueryRow(ctx, `SELECT clock_timestamp()`).Scan(&cutoff); err != nil {
 		t.Fatal(err)
 	}
 	if err := locker.Commit(ctx); err != nil {

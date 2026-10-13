@@ -176,6 +176,11 @@ func siteConfigSetCmd(client clientFn) *cobra.Command {
 			}
 			// #1215: a valid branding.logo_path with no branding record to hold it
 			// succeeded but attached nothing; say what makes it land.
+			// The egress baseline is a governance write: the SDK sends the document without it and the
+			// server keeps its own, so a baseline in this file that differs from the stored one did not land.
+			if res.EgressBaselineIgnored {
+				fmt.Fprintf(cmd.ErrOrStderr(), "warning: the egress baseline in this file was not applied — it is a governance write; set it with PUT /api/v1/governance/egress-baseline, and the stored one is left as it is\n")
+			}
 			if res.BrandingLogoPending {
 				fmt.Fprintf(cmd.ErrOrStderr(), "warning: branding.logo_path was not attached — the console has no branding yet; save the Branding card (Admin view, Settings), then apply this file again\n")
 			}

@@ -115,7 +115,7 @@ func TestGapCovPutOwnedHoldsTheOwnersIdentityRows(t *testing.T) {
 	sharer := &gapCovSharer{}
 	s := &Server{cfg: Config{Store: sharer}}
 	puts := 0
-	put := func() error { puts++; return nil }
+	put := func(context.Context) error { puts++; return nil }
 
 	ctx := oidc.WithAuthorityEpoch(t.Context(), 5)
 	if err := s.putOwned(ctx, "alice", put); err != nil || puts != 1 {
@@ -146,7 +146,7 @@ func TestGapCovPutOwnedWritesUnguardedWithoutIdentityRowsOrOwner(t *testing.T) {
 	for _, c := range cases {
 		puts := 0
 		boom := errors.New("gapcov: put failed")
-		err := c.s.putOwned(t.Context(), c.owner, func() error { puts++; return boom })
+		err := c.s.putOwned(t.Context(), c.owner, func(context.Context) error { puts++; return boom })
 		if !errors.Is(err, boom) || puts != 1 {
 			t.Errorf("%s: putOwned = %v after %d put(s), want the put's error after 1", c.name, err, puts)
 		}

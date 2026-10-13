@@ -7,7 +7,7 @@
 // text to read; the e2e UI build (`--mode e2e`) registers each terminal on
 // window.__wardynTerm and this reads its buffer. Against a production bundle
 // (no registry) it falls back to the DOM, which only the compatible renderer fills.
-import type { Locator } from "@playwright/test";
+import { expect, type Locator, type Page } from "@playwright/test";
 
 type Term = {
   element?: HTMLElement;
@@ -50,4 +50,24 @@ export async function termRows(screen: Locator, timeout = 1_000): Promise<string
 /** The visible terminal text, one row per line (what `innerText` gave under the DOM renderer). */
 export async function termText(screen: Locator, timeout = 1_000): Promise<string> {
   return (await termRows(screen, timeout)).join("\n");
+}
+
+/** Type a readiness line until the shell echoes its output. A fresh attach can be admitted read-only
+ *  for a moment while the previous socket is released, and keys typed then are dropped. */
+export async function waitForShell(page: Page, screen: Locator): Promise<void> {
+  const read = async () => (await termText(screen).catch(() => "")) as string;
+  await expect
+    .poll(
+      async () => {
+        if (!(await read()).includes("ready-sentinel")) {
+          await screen.click();
+          await page.keyboard.type("printf 'ready-%s\\n' sentinel");
+          await page.keyboard.press("Enter");
+        }
+        await page.waitForTimeout(500);
+        return (await read()).includes("ready-sentinel");
+      },
+      { timeout: 30_000 },
+    )
+    .toBe(true);
 }

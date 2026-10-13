@@ -6,4 +6,24 @@
 # docs/ENV.md=35673 adds 280 (0.9 F-1513): the Acknowledged delivery subsection (acknowledged SIEM delivery, #1513), including the redirect halt, the re-enable backlog and the no-manual-grant sentences.
 # docs/ENV.md 35899 measured after F-1513 merge.
 # docs/ENV.md 35973 adds 74 (0.9 G-sec-rest): WARDYN_KEK_REQUIRED covers new writes only and names the kek_local_rows row (#1977), and only the pinned codex is supported (#1979).
-docs/ENV.md=35973 share=5
+# docs/ENV.md 35435 adds 42 over 35393 (0.9 F-1514): the WARDYN_REHEARSE_PG_DSN row, which the env-doc guard requires for the rehearsal's scratch database.
+# docs/ENV.md 36015 measured after F-1514 merge.
+# 0.9 G-seal-target (#1828): docs/ENV.md 36057 adds 42 over 36015 for the target sentence in the WARDYN_AUDIT_SEAL table cell and its details bullet.
+# docs/ENV.md 36046 adds 31 (0.9 F-588 M1): awskms in the store-mode and key-service lines, the AWS KMS link, and the AWS_CA_BUNDLE bullet.
+# docs/ENV.md 36090 measured after F-588 M1 merge.
+# WARDYN_RUN_MAX_AGE is every new run's lifetime cap (#1319): +85 measured words.
+# docs/ENV.md 36185 measured after D-1319 S1 merge.
+# docs/ENV.md 36115 adds 25 (0.9 F-588 M2): chart kek.awskms.key on the WARDYN_AWS_KMS_KEY row and section, and the WARDYN_TEST_AWS_KMS_KEY list entry.
+# docs/ENV.md 36287 measured after D-1319 S2 (lifetime kill).
+# docs/ENV.md 36210 measured after F-588 M2 merge.
+# docs/ENV.md 36241 adds 31 (0.9 A-L3): the WARDYN_TOOLGATE_CREDENTIAL row.
+# docs/ENV.md 36318 measured after merge.
+# docs/ENV.md 36360 measured after the F-1508-author merge (human_author; four-eyes on service-identity create and sponsor change).
+# docs/ENV.md 36330 adds 12 over 36318 (0.9 DS1-S2a r1): the WARDYN_TOOLGATE_CREDENTIAL row names the credential file and its mode on each substrate.
+# docs/ENV.md 36372 measured after train 12 DS1-S2a merge.
+# docs/ENV.md 36340 adds 22 (0.9 A-L4): the WARDYN_START_FOLDER row.
+# docs/ENV.md 36396 measured after A-L4 merge (train 19).
+# docs/ENV.md 36444 adds 48 over 36396 (0.9 DS1-S2, train 19): the WARDYN_HARNESSES and WARDYN_START_HARNESS rows.
+# docs/ENV.md 36605 adds 139 over 36466 (0.9 train 26): TA-4 WARDYN_MCP_SERVERS_JSON and the MCP broker variables.
+# docs/ENV.md 36642 adds 37 over 36605 (G-090-cleanup slice F, docs rows that contradict the code): measured; the lead re-measures at merge.
+docs/ENV.md=36642 share=5

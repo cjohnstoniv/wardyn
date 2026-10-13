@@ -172,6 +172,36 @@ func TestPresetWriteRefusals(t *testing.T) {
 	}
 }
 
+// TestPresetsRefuseTheRunModeFields: a preset carries the older run fields, so a
+// new-style field is refused at write and at launch with request_field_unavailable,
+// never stored to fail at every launch nor silently dropped.
+func TestPresetsRefuseTheRunModeFields(t *testing.T) {
+	f := newMemPresetFixture(t)
+	for name, req := range map[string]client.CreateRunRequest{
+		"experience":    {Experience: client.ExperienceBackground},
+		"tools":         {Tools: []client.IncludedTool{{ID: "claude-code", Kind: client.IncludedToolHarness}}},
+		"mode_contract": {ModeContract: client.RunModeContractV09, Agent: "claude-code"},
+		"start_folder":  {Agent: "claude-code", StartFolder: &client.StartFolder{Kind: client.StartFolderImageDefault}},
+	} {
+		w := f.put(t, "p", client.PresetRequest{Request: req})
+		if w.Code != http.StatusUnprocessableEntity || reasonOf(t, w) != reasonRequestFieldUnavailable || !strings.Contains(w.Body.String(), "request."+name) {
+			t.Errorf("%s: write = %d %s, want 422 %s naming request.%s", name, w.Code, w.Body.String(), reasonRequestFieldUnavailable, name)
+		}
+	}
+	if list, _ := f.store.ListLaunchPresets(context.Background()); len(list) != 0 {
+		t.Errorf("refused writes stored %d preset(s)", len(list))
+	}
+	f.store.mu.Lock()
+	f.store.rows = map[string]types.LaunchPreset{}
+	f.store.rows["old"] = types.LaunchPreset{Name: "old", Version: 1, Request: json.RawMessage(`{"agent":"claude-code","experience":"background"}`)}
+	f.store.mu.Unlock()
+	req := createRunRequest{Preset: "old"}
+	w := httptest.NewRecorder()
+	if f.srv.expandRunPreset(w, httptest.NewRequest(http.MethodPost, "/api/v1/runs", nil), &req) || w.Code != http.StatusUnprocessableEntity || reasonOf(t, w) != reasonRequestFieldUnavailable {
+		t.Errorf("launch of a stored run-mode preset = %d %s, want 422 %s", w.Code, w.Body.String(), reasonRequestFieldUnavailable)
+	}
+}
+
 func TestPresetCRUDVersioningAndAudit(t *testing.T) {
 	f := newMemPresetFixture(t)
 	req := client.PresetRequest{

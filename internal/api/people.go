@@ -158,7 +158,11 @@ func (s *Server) handleCreatePerson(w http.ResponseWriter, r *http.Request) {
 		writeServerError(w, r, "list people", err)
 		return
 	}
-	directory := s.knownPrincipals(ctx)
+	directory, err := s.knownPrincipals(ctx)
+	if err != nil {
+		writeServerError(w, r, "read known principals", err)
+		return
+	}
 	for _, p := range people {
 		directory = append(directory, principalIdentity{principal: p.Principal, email: p.Email})
 	}

@@ -20,7 +20,7 @@ import {
   type RunnerDraft,
 } from "./run-contract-draft";
 
-const everything: ActiveSections = { agent: true, azureDevOps: true, gitPATHosts: ["git.example.com"], pushKeys: ["github/acme", "azure_devops/globex"] };
+const everything: ActiveSections = { agent: true, azureDevOps: true, gitPATHosts: ["git.example.com"], pushKeys: ["github.com/acme", "dev.azure.com/globex"] };
 
 const draft: OverrideDraft = {
   agent: { add_hosts: ["api.example.com"], tool_rules: [{ tool: "Bash", effect: "hold" }] },
@@ -41,7 +41,7 @@ describe("run contract draft", () => {
       git_pat: [draft.gitPAT[0]],
       push_rules: [draft.pushRules[0]],
     });
-    const some: ActiveSections = { ...NO_ACTIVE_SECTIONS, pushKeys: ["github/other"] };
+    const some: ActiveSections = { ...NO_ACTIVE_SECTIONS, pushKeys: ["github.com/other"] };
     expect(buildOverrides(draft, some)).toEqual({ push_rules: [draft.pushRules[1]] });
     // The unsent edits are still there, so re-adding the section brings them back.
     const kept = inactiveOverrides(draft, some);
@@ -53,10 +53,10 @@ describe("run contract draft", () => {
   });
 
   it("files push-rule overrides by provider and organisation", () => {
-    expect(pushRuleKey({ provider: "github", org: "acme" })).toBe("github/acme");
+    expect(pushRuleKey({ provider: "github", org: "acme" })).toBe("github.com/acme");
     expect(pushRuleKey({ provider: "azure_devops", org: "acme" })).not.toBe(pushRuleKey({ provider: "github", org: "acme" }));
     // One section's rules never ride with another's.
-    expect(buildOverrides(draft, { ...NO_ACTIVE_SECTIONS, pushKeys: ["azure_devops/acme"] })).toBeUndefined();
+    expect(buildOverrides(draft, { ...NO_ACTIVE_SECTIONS, pushKeys: ["dev.azure.com/acme"] })).toBeUndefined();
   });
 
   it("sends nothing for an empty edit", () => {

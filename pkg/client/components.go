@@ -8,6 +8,8 @@ import (
 	"net/http"
 
 	"github.com/google/uuid"
+
+	"github.com/cjohnstoniv/wardyn/internal/ghscope"
 )
 
 // ComponentRequest is the body for POST /api/v1/me/components, PUT
@@ -52,7 +54,47 @@ type OrgComponentView struct {
 	Hosts      []string              `json:"hosts"`
 	Secrets    []ComponentSecretView `json:"secrets"`
 	ConfigKeys []string              `json:"config_keys"`
+	// Category is what kind of card the row is: cli, mcp or api (neither block).
+	Category string   `json:"category"`
+	CLI      *CLIView `json:"cli,omitempty"`
+	MCP      *MCPView `json:"mcp,omitempty"`
 }
+
+// CLIView is the non-secret face of a CLI row: its kind and what it pins.
+type CLIView struct {
+	Kind string `json:"kind"`
+	// Azure: how many subscriptions, and read or write.
+	Subscriptions int    `json:"subscriptions,omitempty"`
+	Access        string `json:"access,omitempty"`
+	// AWS: the pinned account, permission set and default region.
+	AccountID string `json:"account_id,omitempty"`
+	RoleName  string `json:"role_name,omitempty"`
+	Region    string `json:"region,omitempty"`
+	// GitHub: what the CLI may do.
+	Capabilities []ghscope.Capability `json:"capabilities,omitempty"`
+}
+
+// MCPView is the non-secret face of an MCP server row.
+type MCPView struct {
+	URL       string `json:"url"`
+	Transport string `json:"transport"`
+}
+
+// CatalogueCLI is one of the five CLI cards of the catalogue.
+type CatalogueCLI struct {
+	Kind string `json:"kind"` // azure | github | aws | gcloud | kubectl
+	// State is available (a granted row exists), not_granted, or coming_soon.
+	State string `json:"state"`
+	// Rows are the granted org rows of this kind, in the order Org lists them.
+	Rows []uuid.UUID `json:"rows"`
+}
+
+// CLI card states.
+const (
+	CLIStateAvailable  = "available"
+	CLIStateNotGranted = "not_granted"
+	CLIStateComingSoon = "coming_soon"
+)
 
 // MyComponents answers GET /api/v1/me/components: what the caller may do with
 // components, the ones they saved, and the organisation's they are granted.
@@ -69,6 +111,9 @@ type MyComponents struct {
 	Mine []Component `json:"mine"`
 	// Org are the organisation components the caller is granted, by name.
 	Org []OrgComponentView `json:"org"`
+	// CLIs is always five cards in a fixed order. Its sentence for a card with no
+	// granted row never depends on whether an ungranted row exists.
+	CLIs []CatalogueCLI `json:"clis"`
 }
 
 // MyComponents lists the caller's component surface. GET /api/v1/me/components.

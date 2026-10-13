@@ -12,4 +12,10 @@
 # component literals (45); section 4.3 the custom_component value (40) and its default (38); section 4.1
 # the proxy's own registry (28); residual 2 (22); residual 20 (37); the section 4 table cell (5) and
 # capability-kind count (3); section 8 the registry wording (2).
-threatmodel/THREAT-MODEL.md=52032
+# threatmodel/THREAT-MODEL.md 52270 after F-1511-1510 (erase fence + who a name is).
+# 52063 adds 31 (residual 65: the runner endpoint's shared pre-auth bucket behind an ingress).
+# threatmodel/THREAT-MODEL.md 52303 measured after R2-runner-2 merge.
+# threatmodel/THREAT-MODEL.md 52431 after the via_org B6 bullet (H12, train 10).
+# threatmodel/THREAT-MODEL.md 52492 measured after train 10 F-1508-author merge.
+# threatmodel/THREAT-MODEL.md 52620 adds 128 (0.9 DS1-S2a, train 12): the per-harness credential same-uid residual.
+threatmodel/THREAT-MODEL.md=52620

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -121,7 +122,7 @@ func TestJudgeFit_Sentences(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			v := judgeFit(tc.fit)
+			v := judgeFit(tc.fit, false)
 			if v.refusal != tc.wantRefusal {
 				t.Errorf("refusal = %q, want %q", v.refusal, tc.wantRefusal)
 			}
@@ -134,18 +135,18 @@ func TestJudgeFit_Sentences(t *testing.T) {
 
 func TestRunFit_RunnerWithoutAFitToCheckSaysNothing(t *testing.T) {
 	spec := types.RunPolicySpec{}
-	if v := (&Server{}).runFit(context.Background(), spec); v.refusal != "" || v.warnings != nil {
+	if v := (&Server{}).runFit(context.Background(), spec, 0, false); v.refusal != "" || v.warnings != nil {
 		t.Fatalf("nil runner: %+v", v)
 	}
-	if v := (&Server{cfg: Config{Runner: &fakeRunner{}}}).runFit(context.Background(), spec); v.refusal != "" || v.warnings != nil {
+	if v := (&Server{cfg: Config{Runner: &fakeRunner{}}}).runFit(context.Background(), spec, 0, false); v.refusal != "" || v.warnings != nil {
 		t.Fatalf("runner without a FitChecker: %+v", v)
 	}
 	unsupported := &fitRunner{fakeRunner: &fakeRunner{}, err: runner.ErrFitUnsupported}
-	if v := (&Server{cfg: Config{Runner: unsupported}}).runFit(context.Background(), spec); v.refusal != "" || v.warnings != nil {
+	if v := (&Server{cfg: Config{Runner: unsupported}}).runFit(context.Background(), spec, 0, false); v.refusal != "" || v.warnings != nil {
 		t.Fatalf("ErrFitUnsupported: %+v", v)
 	}
 	broken := &fitRunner{fakeRunner: &fakeRunner{}, err: context.DeadlineExceeded}
-	v := (&Server{cfg: Config{Runner: broken}}).runFit(context.Background(), spec)
+	v := (&Server{cfg: Config{Runner: broken}}).runFit(context.Background(), spec, 0, false)
 	if v.refusal != "" || len(v.warnings) != 1 || !strings.Contains(v.warnings[0], "(unavailable)") {
 		t.Fatalf("a failed check must be an advisory, never a refusal: %+v", v)
 	}
@@ -250,5 +251,21 @@ func TestCreateRun_QuotaBreachRefusesBeforeDispatch(t *testing.T) {
 	}
 	if !strings.Contains(w.Body.String(), "this run would fill quota runs-quota") {
 		t.Fatalf("create's 201 omits the advisory: %s", w.Body)
+	}
+}
+
+// TestRunFit_AsksAboutTheRunsLifetimeCap: the substrate is told the run's own lifetime cap
+// (zero for none), because a run with a cap carries a pod deadline and lands in a different
+// quota scope.
+func TestRunFit_AsksAboutTheRunsLifetimeCap(t *testing.T) {
+	fr := &fitRunner{fakeRunner: &fakeRunner{}, fit: runner.Fit{Quotas: runner.ReadOK, Nodes: runner.ReadSkipped}}
+	s := &Server{cfg: Config{Runner: fr}}
+	s.runFit(context.Background(), types.RunPolicySpec{}, 3*time.Hour, false)
+	if fr.asked.LifetimeCap != 3*time.Hour {
+		t.Errorf("fit asked about a cap of %v, want 3h", fr.asked.LifetimeCap)
+	}
+	s.runFit(context.Background(), types.RunPolicySpec{}, 0, false)
+	if fr.asked.LifetimeCap != 0 {
+		t.Errorf("fit asked about a cap of %v for a run with none, want 0", fr.asked.LifetimeCap)
 	}
 }

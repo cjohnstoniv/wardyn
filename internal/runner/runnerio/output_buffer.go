@@ -14,12 +14,19 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 )
 
 const outputLimit = 8 << 20
 const outputChunk = 64 << 10
+
+// outputAckWait bounds how long a full buffer waits for an ACK before it drops
+// its oldest part. It outlasts a link the session layer can still resume (its
+// resume window plus one maximal reconnect backoff), so such a blip loses nothing.
+const outputAckWait = runnerwire.ResumeWindow + runnerwire.BackoffMax
 
 var errOutputOffset = errors.New("runner output: offset exceeds accepted output")
 
@@ -44,6 +51,14 @@ type outputBuffer struct {
 	changed     chan struct{}
 	stopped     error
 	interrupted bool
+	// lossy is set while nothing acknowledges this output: the org refused its
+	// OPEN, or no ACK came within outputAckWait. A full buffer then drops its
+	// oldest part instead of parking the agent. The next ACK clears it.
+	lossy bool
+	// drains counts copies begun and not ended; output completes when the
+	// last one ends, with the first error any of them ended with.
+	drains   int
+	drainErr error
 }
 
 func newOutputBuffer(dir string) (*outputBuffer, error) {
@@ -219,13 +234,18 @@ func (b *outputBuffer) start() int64 {
 	return b.state.End
 }
 
-func (b *outputBuffer) evict() error {
+func (b *outputBuffer) evict(force bool) error {
 	if len(b.state.Parts) == 0 {
 		return nil
 	}
 	p := b.state.Parts[0]
-	if p.Offset+int64(p.Size) > b.state.Ack {
-		return nil
+	if end := p.Offset + int64(p.Size); end > b.state.Ack {
+		if !force {
+			return nil
+		}
+		// The dropped bytes can never be delivered, so ACK covers them: the next
+		// OPEN starts at the retained range and a read below it is unrecoverable.
+		b.state.Ack = end
 	}
 	b.state.Parts = b.state.Parts[1:]
 	// Commit the retained range before unlinking: a crash may leave an orphan, never a referenced hole.
@@ -249,7 +269,7 @@ func (b *outputBuffer) Write(data []byte) (int, error) {
 		room := outputLimit - int(b.state.End-b.start())
 		if room == 0 {
 			before := b.start()
-			if err := b.evict(); err != nil {
+			if err := b.evict(b.lossy); err != nil {
 				b.stopped = err
 				b.notify()
 				return n, err
@@ -259,8 +279,15 @@ func (b *outputBuffer) Write(data []byte) (int, error) {
 			}
 			changed := b.changed
 			b.mu.Unlock()
-			<-changed
-			b.mu.Lock()
+			timer := time.NewTimer(outputAckWait)
+			select {
+			case <-changed:
+				timer.Stop()
+				b.mu.Lock()
+			case <-timer.C:
+				b.mu.Lock()
+				b.lossy = true
+			}
 			continue
 		}
 		take := min(len(data), room, outputChunk)
@@ -328,6 +355,7 @@ func (b *outputBuffer) ack(offset int64) error {
 	if offset < 0 || offset > b.state.End {
 		return errOutputOffset
 	}
+	b.lossy = false
 	if offset <= b.state.Ack {
 		return nil
 	}
@@ -389,16 +417,38 @@ func (b *outputBuffer) read(ctx context.Context, offset int64, data []byte) (int
 	}
 }
 
-func (b *outputBuffer) BeginDrain() {}
+// unacknowledged marks the output as having no acker, waking a parked Write.
+func (b *outputBuffer) unacknowledged() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.lossy = true
+	b.notify()
+}
+
+func (b *outputBuffer) BeginDrain() {
+	b.mu.Lock()
+	b.drains++
+	b.mu.Unlock()
+}
+
 func (b *outputBuffer) EndDrain(err error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.state.Complete {
 		return
 	}
+	if b.drainErr == nil {
+		b.drainErr = err
+	}
+	if b.drains > 0 {
+		b.drains--
+	}
+	if b.drains > 0 {
+		return
+	}
 	b.state.Complete = true
-	if err != nil {
-		b.state.Failure = err.Error()
+	if b.drainErr != nil {
+		b.state.Failure = b.drainErr.Error()
 	}
 	if err := b.save(); err != nil {
 		b.stopped = err

@@ -159,8 +159,12 @@ func TestPG_IdentityGuard_RefusesAWriteQueuedBehindAnUnbind(t *testing.T) {
 	// Wait until the guarded insert is blocked on the row lock, so its transaction began before the cutoff.
 	deadline := time.Now().Add(10 * time.Second)
 	for {
+		// pg_stat_activity is snapshotted per transaction; drop the snapshot so each probe reads fresh.
+		if _, err := tx.Exec(ctx, `SELECT pg_stat_clear_snapshot()`); err != nil {
+			t.Fatal(err)
+		}
 		var waiting bool
-		if err := pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM pg_stat_activity
+		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM pg_stat_activity
 			WHERE wait_event_type = 'Lock' AND $1 = ANY(pg_blocking_pids(pid))
 			AND query ILIKE '%principal_identities%FOR SHARE%')`, blockerPID).Scan(&waiting); err != nil {
 			t.Fatal(err)

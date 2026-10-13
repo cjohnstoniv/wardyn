@@ -32,6 +32,7 @@ type field struct {
 var fields = []field{
 	{"cpu_millis", func(s *SourceLimits) *Bound { return &s.CPUMillis }, func(e types.EffectiveRunLimits) types.EffectiveLimit { return e.CPUMillis }},
 	{"memory_mib", func(s *SourceLimits) *Bound { return &s.MemoryMiB }, func(e types.EffectiveRunLimits) types.EffectiveLimit { return e.MemoryMiB }},
+	{"disk_mib", func(s *SourceLimits) *Bound { return &s.DiskMiB }, func(e types.EffectiveRunLimits) types.EffectiveLimit { return e.DiskMiB }},
 	{"lifetime_sec", func(s *SourceLimits) *Bound { return &s.LifetimeSec }, func(e types.EffectiveRunLimits) types.EffectiveLimit { return e.Lifetime }},
 	{"idle_sec", func(s *SourceLimits) *Bound { return &s.IdleSec }, func(e types.EffectiveRunLimits) types.EffectiveLimit { return *e.Idle }},
 }
@@ -224,14 +225,14 @@ func TestEffectiveNeedsExactlyOneDeploymentSource(t *testing.T) {
 }
 
 func TestDeploymentSource(t *testing.T) {
-	d, err := DeploymentSource(types.ResourceLimits{CPUMillis: 2000, MemoryMiB: 4096}, 604800, 50)
+	d, err := DeploymentSource(types.ResourceLimits{CPUMillis: 2000, MemoryMiB: 4096}, types.EphemeralProvider{}, 604800, 50)
 	if err != nil || d.Source != types.LimitSourceDeployment ||
 		*d.CPUMillis.Max != types.RunnerPoolCPUMillisMax || *d.CPUMillis.Default != 2000 ||
 		*d.MemoryMiB.Max != types.RunnerPoolMemoryMiBMax || *d.MemoryMiB.Default != 4096 ||
 		*d.LifetimeSec.Max != 604800 || *d.ConcurrentRuns != 50 {
 		t.Fatalf("source = %+v, %v", d, err)
 	}
-	d, err = DeploymentSource(types.ResourceLimits{CPUMillis: 1, MemoryMiB: 1}, 0, 0)
+	d, err = DeploymentSource(types.ResourceLimits{CPUMillis: 1, MemoryMiB: 1}, types.EphemeralProvider{}, 0, 0)
 	if err != nil || d.LifetimeSec.Max != nil || d.ConcurrentRuns != nil {
 		t.Fatalf("no max age and no run cap leave them unset: %+v, %v", d, err)
 	}
@@ -244,7 +245,7 @@ func TestDeploymentSource(t *testing.T) {
 		"negative age":      {depDefault, -1, 0},
 		"negative runs":     {depDefault, 0, -1},
 	} {
-		if _, err := DeploymentSource(args.d, args.age, args.runs); err == nil {
+		if _, err := DeploymentSource(args.d, types.EphemeralProvider{}, args.age, args.runs); err == nil {
 			t.Errorf("%s was accepted", name)
 		}
 	}
@@ -271,7 +272,7 @@ func TestEffectiveConcurrencyIsListedNeverFolded(t *testing.T) {
 }
 
 func testPool(l *types.RunnerPoolLimits) types.RunnerPool {
-	return types.RunnerPool{ID: uuid.New(), Name: "App servers", HostingType: types.RunnerPoolRemoteProvided, State: types.RunnerPoolActive, Revision: 1, Limits: l}
+	return types.RunnerPool{ID: uuid.New(), Name: "App servers", Scope: types.RunnerPoolOrganization, State: types.RunnerPoolActive, Revision: 1, Limits: l}
 }
 
 func appServerPool() types.RunnerPoolLimits {
@@ -379,7 +380,7 @@ func TestAtCapacity(t *testing.T) {
 		if (w != nil) != waits {
 			t.Errorf("%d running against a cap of 3: %+v", running, w)
 		}
-		if w != nil && (w.Reason() != WaitAtCapacity || w.Sentence() != "App servers is running its limit of 3. This run starts when one finishes.") {
+		if w != nil && (w.Reason() != WaitAtCapacity || w.Sentence() != "App servers is running its limit of 3. This run starts when there's room.") {
 			t.Errorf("wait = %+v", w)
 		}
 	}
@@ -645,7 +646,7 @@ func TestEffectiveLifetimeSpanAndLeaseAreSeparate(t *testing.T) {
 // bound, per field. With nothing set it is the deployment's default, never the
 // request contract's bound the deployment source carries.
 func TestMemberCapIsNeverUnbounded(t *testing.T) {
-	dep, err := DeploymentSource(depDefault, 0, 0)
+	dep, err := DeploymentSource(depDefault, types.EphemeralProvider{}, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -685,5 +686,57 @@ func TestPoolSourceTakesTheStoredRunType(t *testing.T) {
 	}
 	if got := RunTypeNotAllowedMsg("P", ""); strings.Contains(got, "take .") {
 		t.Errorf("an empty run type reads %q", got)
+	}
+}
+
+// TestEffectiveDeploymentDefaultIsTheFallback: the deployment's default sandbox
+// size is what an untouched run gets when nothing more specific names a
+// default. It does not lower a pool's own default, so a "big builds" pool whose
+// default is above the deployment's size keeps it.
+func TestEffectiveDeploymentDefaultIsTheFallback(t *testing.T) {
+	dep, err := DeploymentSource(types.ResourceLimits{CPUMillis: 2000, MemoryMiB: 4096}, types.EphemeralProvider{}, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	big := types.RunnerPoolLimits{Background: &types.RunnerPoolBackgroundLimits{
+		CPUMillis: types.RunnerPoolAmount{Default: 8000, Cap: 16000},
+		MemoryMiB: types.RunnerPoolAmount{Default: 16384, Cap: 32768},
+		Lifetime:  types.RunnerPoolDuration{Unlimited: true},
+	}}
+	pool, refusal := PoolSource(testPool(&big), types.RunnerPoolRunBackground)
+	if refusal != nil {
+		t.Fatal(refusal)
+	}
+	e, err := Effective(types.RunnerPoolRunBackground, pool, dep)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e.CPUMillis.Default.Value != 8000 || e.CPUMillis.DefaultSource != types.LimitSourcePool ||
+		e.MemoryMiB.Default.Value != 16384 || e.MemoryMiB.DefaultSource != types.LimitSourcePool {
+		t.Errorf("a pool default above the deployment's size = cpu %+v from %q, memory %+v from %q; want the pool's 8000/16384",
+			e.CPUMillis.Default, e.CPUMillis.DefaultSource, e.MemoryMiB.Default, e.MemoryMiB.DefaultSource)
+	}
+
+	// Unchanged: a pool default below the deployment's size stands.
+	small := appServerPool()
+	small.Background.CPUMillis.Default, small.Background.MemoryMiB.Default = 500, 1024
+	pool, refusal = PoolSource(testPool(&small), types.RunnerPoolRunBackground)
+	if refusal != nil {
+		t.Fatal(refusal)
+	}
+	if e, err = Effective(types.RunnerPoolRunBackground, pool, dep); err != nil || e.CPUMillis.Default.Value != 500 || e.MemoryMiB.Default.Value != 1024 || e.CPUMillis.DefaultSource != types.LimitSourcePool {
+		t.Errorf("a pool default below the deployment's size = %+v / %+v, %v; want 500/1024 from the pool", e.CPUMillis, e.MemoryMiB, err)
+	}
+
+	// Unchanged: with no other source naming one, the deployment's size is the default.
+	if e, err = Effective(types.RunnerPoolRunBackground, dep); err != nil || e.CPUMillis.Default.Value != 2000 || e.CPUMillis.DefaultSource != types.LimitSourceDeployment || e.MemoryMiB.Default.Value != 4096 {
+		t.Errorf("deployment alone = %+v / %+v, %v; want its 2000/4096", e.CPUMillis, e.MemoryMiB, err)
+	}
+
+	// Unchanged: a pool default above a stricter cap is cut to that cap.
+	gov := SourceLimits{Source: types.LimitSourceGovernance, CPUMillis: Bound{Max: Int(6000)}}
+	pool, _ = PoolSource(testPool(&big), types.RunnerPoolRunBackground)
+	if e, err = Effective(types.RunnerPoolRunBackground, pool, gov, dep); err != nil || e.CPUMillis.Default.Value != 6000 || e.CPUMillis.DefaultSource != types.LimitSourceGovernance {
+		t.Errorf("a pool default past governance's cap = %+v from %q, %v; want 6000 from governance", e.CPUMillis.Default, e.CPUMillis.DefaultSource, err)
 	}
 }

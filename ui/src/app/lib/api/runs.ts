@@ -27,7 +27,18 @@ import type {
   RunResources,
 } from "../types";
 import type { ComponentRef } from "../types/components";
-import type { PlacementValue, RequestedResources, RunOverrides } from "../types/new-run-contract";
+import type { PolicyPreviewResult } from "../types/policy-preview";
+import type {
+  Experience,
+  IncludedTool,
+  PlacementValue,
+  RepoSelection,
+  RequestedResources,
+  RunOverrides,
+  RunStartup,
+  RunWorkload,
+  StartFolder,
+} from "../types/new-run-contract";
 import {
   asJson,
   ccRank,
@@ -81,7 +92,7 @@ export type RunWireInput = (Partial<AgentRun> | CreateRunInput) & {
   inline_policy?: RunPolicySpec;
   // Per-run half of the requirements contract: which optional requirements
   // this run enables, plus any read-only narrowing, per attached workspace.
-  workspaces?: { workspace_id: string; enabled_optional?: string[]; read_only?: boolean; target?: string }[];
+  workspaces?: { workspace_id: string; enabled_optional?: string[]; read_only?: boolean; target?: string; repos?: RepoSelection[] }[];
   // Primary-workspace id for a selection that resolves to no mount/repo (a
   // pure-ephemeral / migrated-0029 workspace) — routes its base_image through
   // the server's seedRequestWorkspace, which the mount-less spec can't.
@@ -114,6 +125,20 @@ export type RunWireInput = (Partial<AgentRun> | CreateRunInput) & {
   allowed_image?: string;
   resources?: RequestedResources;
   overrides?: RunOverrides;
+  // The run-mode contract (pkg/client/runs_mode.go). A request with the marker or
+  // an experience is a new client's: runWireBody then omits the older agent, task, interactive,
+  // task_mode, interactive_start, seed_auto_tools, tool_approvals and
+  // model_provider, which the carriers replace and the server refuses beside them.
+  // The contract marker (pkg/client.RunModeContractV09): the New Run wizard always
+  // sends it, so a request whose mode is unset is refused by the server and never
+  // read as an older client's.
+  mode_contract?: "0.9";
+  experience?: Experience;
+  workload?: RunWorkload;
+  tools?: IncludedTool[];
+  startup?: RunStartup;
+  start_folder?: StartFolder;
+  no_repositories_or_drives?: boolean;
 };
 
 // The ONE projection from wizard input to the POST /runs wire body. createRun
@@ -121,11 +146,13 @@ export type RunWireInput = (Partial<AgentRun> | CreateRunInput) & {
 // (They used to be two hand-built whitelists; preflight's lagged by five fields.)
 /** The shared request projection for create, preflight and policy preview. */
 export function runWireBody(input: RunWireInput): Record<string, unknown> {
-  const body: Record<string, unknown> = {
-    agent: input.agent,
-    repo: input.repo,
-    task: input.task,
-  };
+  // The run-mode carriers replace the older mode fields; a request never mixes the two.
+  const newClient = Boolean(input.mode_contract || input.experience);
+  const body: Record<string, unknown> = { repo: input.repo };
+  if (!newClient) {
+    body.agent = input.agent;
+    body.task = input.task;
+  }
   if (input.policy_id) body.policy_id = input.policy_id;
   // A run may request an equal-or-STRONGER tier than its policy floor, never a
   // weaker one (the server 422s "confinement_class X is weaker than the policy
@@ -136,25 +163,25 @@ export function runWireBody(input: RunWireInput): Record<string, unknown> {
   const floor = input.inline_policy?.min_confinement_class;
   if (cc && floor && ccRank(cc) < ccRank(floor)) cc = floor;
   if (cc) body.confinement_class = cc;
-  if (input.interactive) body.interactive = true;
+  if (input.interactive && !newClient) body.interactive = true;
   if (input.inline_policy) body.inline_policy = input.inline_policy;
   // BYOI + governed-command pass-through — previously dropped on the floor here.
   if (input.image) body.image = input.image;
-  if ("task_mode" in input && input.task_mode) body.task_mode = input.task_mode;
+  if ("task_mode" in input && input.task_mode && !newClient) body.task_mode = input.task_mode;
   // The run's name/note and the interactive start choice — same lesson as the
   // two above: this whitelist is hand-built, so an unlisted field is discarded
   // between the form and the wire with no error anywhere. The title the
   // operator typed would simply never exist.
   if ("title" in input && input.title) body.title = input.title;
   if ("description" in input && input.description) body.description = input.description;
-  if ("interactive_start" in input && input.interactive_start) {
+  if ("interactive_start" in input && input.interactive_start && !newClient) {
     body.interactive_start = input.interactive_start;
   }
   // The boot-seed opt-in and the autonomous tool-approval posture — same
   // hand-built-whitelist trap as everything else on this list: an unlisted
   // field is silently discarded between the form and the wire.
-  if ("seed_auto_tools" in input && input.seed_auto_tools) body.seed_auto_tools = true;
-  if ("tool_approvals" in input && input.tool_approvals) body.tool_approvals = input.tool_approvals;
+  if ("seed_auto_tools" in input && input.seed_auto_tools && !newClient) body.seed_auto_tools = true;
+  if ("tool_approvals" in input && input.tool_approvals && !newClient) body.tool_approvals = input.tool_approvals;
   // Composition-model pass-through. This whitelist has dropped a wizard field
   // on the floor once before (image/task_mode, above) — a selection the
   // operator made, silently discarded between the form and the wire. These
@@ -171,14 +198,21 @@ export function runWireBody(input: RunWireInput): Record<string, unknown> {
   // whether the member asked for it. A whitelist that re-decided would be the
   // second answer to that question.
   if (input.drive) body.drive = input.drive;
-  if (input.model_provider) body.model_provider = input.model_provider;
+  if (input.model_provider && !newClient) body.model_provider = input.model_provider;
   if (input.components?.length) body.components = input.components;
   if (input.placement) body.placement = input.placement;
   if (input.runner_id) body.runner_id = input.runner_id;
   if (input.runner_pool_id) body.runner_pool_id = input.runner_pool_id;
   if (input.allowed_image) body.allowed_image = input.allowed_image;
-  if (input.resources && (input.resources.cpu_millis || input.resources.memory_mib)) body.resources = input.resources;
+  if (input.resources && (input.resources.cpu_millis || input.resources.memory_mib || input.resources.disk_mib)) body.resources = input.resources;
   if (input.overrides) body.overrides = input.overrides;
+  if (input.mode_contract) body.mode_contract = input.mode_contract;
+  if (input.experience) body.experience = input.experience;
+  if (input.workload) body.workload = input.workload;
+  if (input.tools?.length) body.tools = input.tools;
+  if (input.startup) body.startup = input.startup;
+  if (input.start_folder) body.start_folder = input.start_folder;
+  if (input.no_repositories_or_drives) body.no_repositories_or_drives = true;
   return body;
 }
 
@@ -371,6 +405,26 @@ export const runs = {
       LAUNCH_DEADLINE_MS,
     );
     return asJson<PreflightResult>(res);
+  },
+
+  // The new New Run's three requests. Each sends the body its serializer built,
+  // byte for byte, so preflight, policy preview and create judge the same request.
+  async createRunWire(body: object): Promise<CreateRunResult> {
+    const res = await wfetch("/runs", { method: "POST", body: JSON.stringify(body) });
+    return asJson<CreateRunResult>(res);
+  },
+  async preflightRunWire(body: object, signal?: AbortSignal): Promise<PreflightResult> {
+    const res = await wfetch("/runs/preflight", { method: "POST", body: JSON.stringify(body), signal }, LAUNCH_DEADLINE_MS);
+    return asJson<PreflightResult>(res);
+  },
+  async previewRunPolicyWire(body: object, signal?: AbortSignal): Promise<PolicyPreviewResult> {
+    const res = await wfetch("/runs/policy-preview", { method: "POST", body: JSON.stringify(body), signal });
+    try {
+      return await asJson<PolicyPreviewResult>(res);
+    } catch (e) {
+      if (e instanceof HttpError) e.retryAfter = res.headers.get("Retry-After") ?? undefined;
+      throw e;
+    }
   },
 
   // POST /api/v1/policies/grade — composer.Grade of a bare spec, no run

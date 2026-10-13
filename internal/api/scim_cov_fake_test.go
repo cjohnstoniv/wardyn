@@ -36,7 +36,7 @@ type scimCovStore struct {
 	idents  map[uuid.UUID]*store.PrincipalIdentity
 	order   []uuid.UUID
 	aliases map[uuid.UUID][]scimCovAlias
-	// emailSubs is what PrincipalsByEmail answers per lower-cased email.
+	// emailSubs is what PrincipalsNamed answers per lower-cased name.
 	emailSubs map[string][]string
 
 	jobs    []*store.DeprovisionJob
@@ -495,21 +495,13 @@ func (s *scimCovStore) SuspendIdentity(_ context.Context, p store.SuspendPlan) (
 	return res, nil
 }
 
-func (s *scimCovStore) PrincipalsByEmail(_ context.Context, emails []string) ([]string, error) {
+func (s *scimCovStore) PrincipalsNamed(_ context.Context, name string) ([]string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if err := s.enter("PrincipalsByEmail"); err != nil {
+	if err := s.enter("PrincipalsNamed"); err != nil {
 		return nil, err
 	}
-	var out []string
-	for _, e := range emails {
-		for _, sub := range s.emailSubs[strings.ToLower(e)] {
-			if !slices.Contains(out, sub) {
-				out = append(out, sub)
-			}
-		}
-	}
-	return out, nil
+	return slices.Clone(s.emailSubs[strings.ToLower(name)]), nil
 }
 
 func (s *scimCovStore) ListNonTerminalRunsBy(_ context.Context, createdBy string) ([]types.AgentRun, error) {

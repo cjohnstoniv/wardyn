@@ -125,6 +125,10 @@ func TestConformanceK8s(t *testing.T) {
 		// replacement.
 	})
 
+	t.Run("PlacementRouting", func(t *testing.T) {
+		conformance.RunPlacementRouting(t, sub, conformance.RoutingOptions{Image: agentImage, Timeout: 3 * time.Minute})
+	})
+
 	t.Run("AgentCannotReachAPIServer", func(t *testing.T) {
 		testAgentCannotReachAPIServer(t, r, agentImage)
 	})

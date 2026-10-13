@@ -98,7 +98,6 @@ type LeaverStore interface {
 	CreateScimIdentity(ctx context.Context, issuer, tenantID, objectID string, u IdentityUpdate, now time.Time) (PrincipalIdentity, bool, error)
 	ApplyIdentityUpdate(ctx context.Context, id uuid.UUID, u IdentityUpdate, now time.Time) (PrincipalIdentity, error)
 	SuspendIdentity(ctx context.Context, p SuspendPlan) (SuspendResult, error)
-	PrincipalsByEmail(ctx context.Context, emails []string) ([]string, error)
 	ListNonTerminalRunsBy(ctx context.Context, createdBy string) ([]types.AgentRun, error)
 	EnsureDeprovisionJobs(ctx context.Context, identityID uuid.UUID, kind string, keys []JobKey) error
 	ListDeprovisionJobs(ctx context.Context, identityID uuid.UUID, kind string) ([]DeprovisionJob, error)
@@ -384,25 +383,6 @@ func (s PG) SuspendIdentity(ctx context.Context, p SuspendPlan) (SuspendResult, 
 		return SuspendResult{}, fmt.Errorf("store: commit suspension: %w", err)
 	}
 	return res, nil
-}
-
-// PrincipalsByEmail is the distinct subs the emails resolve to through api_tokens(principal, email)
-// and people, matched case-insensitively: how a suspension reaches someone no identity row binds.
-func (s PG) PrincipalsByEmail(ctx context.Context, emails []string) ([]string, error) {
-	lowered := make([]string, 0, len(emails))
-	for _, e := range emails {
-		if e = strings.ToLower(strings.TrimSpace(e)); e != "" {
-			lowered = append(lowered, e)
-		}
-	}
-	return collect(ctx, s.Pool, "list", "principals by email", `
-		SELECT principal FROM (
-			SELECT principal FROM api_tokens WHERE lower(email) = ANY($1::text[])
-			UNION SELECT principal FROM people WHERE lower(email) = ANY($1::text[])
-		) p WHERE principal <> '' ORDER BY principal`, []any{lowered}, func(r pgx.Row) (string, error) {
-		var v string
-		return v, r.Scan(&v)
-	})
 }
 
 // ListNonTerminalRunsBy is createdBy's runs that have not ended.

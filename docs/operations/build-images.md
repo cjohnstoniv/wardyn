@@ -72,11 +72,10 @@ the box on the compose stack. Four things ship pre-wired:
   native-download contract, and its npm lane would need a Node runtime the
   bake stage doesn't carry. The image is built without it, never with a
   guessed URL.
-- **The recipe is deterministic; what it installs is not locked.** The base
-  image tag (`mcr.microsoft.com/devcontainers/base:ubuntu`), the `:1` feature
-  tags and the claude-code `/stable` channel all resolve at build time. The
-  installer checks the binary against that release's own manifest, from the same
-  origin as the binary: integrity, not a pin.
+- **The recipe is deterministic; what it installs is pinned where it can be.**
+  - The base image and each `:1` feature are recorded by digest, and claude-code by version and checksum. A rebuild after the image is pruned reuses them.
+  - An input that cannot be resolved is recorded unpinned and floats; the build is labelled not reproducible ([The build record](../ENVBUILD.md#the-build-record)).
+  - The installer checks the binary against that release's own manifest, from the same origin as the binary: integrity, not a pin.
 - **What the cache key identifies.** `CacheKey = SHA256(ProfileHash|v2)`
   identifies the recipe, not the resolved tools.
   - Reuse needs all three conditions, checked just before a generated image is
@@ -84,10 +83,11 @@ the box on the compose stack. Four things ship pre-wired:
     `BuiltProfileHash`, and `cachedImageStillPresent`. That presence check fails
     open: a runner that cannot answer counts the image as present.
   - A rebuild happens on a profile change, a `cacheKeySalt` bump or a missing
-    image. A rebuild **may** resolve newer versions; envbuilder's layer cache can
-    replay layers, so it is not a security refresh.
-  - A kept image gets no upstream security fixes until it is rebuilt, and there is
-    no refresh operation until #1516.
+    image. A first build or a rescan resolves newer versions. A rebuild of a missing
+    image reuses the recorded pins instead.
+  - A kept image gets no upstream security fixes until it is rebuilt. Rebuild on
+    purpose with `wardyn workspace build <workspace-id> --refresh`
+    ([Refresh](../ENVBUILD.md#refresh)).
 - A devcontainer's own `onCreateCommand`/`postCreateCommand` can't be used
   either way — envbuilder runs lifecycle commands AFTER the image is
   pushed, so they never reach the delivered image.
@@ -142,3 +142,17 @@ the box on the compose stack. Four things ship pre-wired:
 
 - `GET /api/v1/setup/status` carries this as its own row, `claude_signin_image` — `info` once it resolves, `warn` with the fix above when it doesn't.
 - It's never `blocking`: the kind is optional, so an install offering only API-key or Bedrock providers is never funneled back into setup over it.
+
+## The image a run's harnesses start from
+
+- A New Run request's image comes from its harnesses: the agent base image for none, and a harness's own image for one. Otherwise it is the smallest image declared for the set, under a `WARDYN_AGENT_IMAGES` key that joins sorted harness ids with `+`.
+- A harness no image here carries is refused (`harness_not_installed`). On a published install Claude Code maps to the agent base image, so it is not installed.
+- Migration `0164_run_harnesses` records each run's harnesses. A split-role install grants the app role `SELECT, INSERT` on `run_harnesses`.
+
+### Offering two harnesses in one run
+
+- A published install declares no image for two harnesses, so New Run refuses Claude Code with Codex there (`harness_set_no_image`) until an operator builds and declares one.
+- Build it with `make agent-image-harnesses`: Claude Code with Codex, a local build only ([deploy/images/README.md](../../deploy/images/README.md#harness-set-image-harnesses)).
+- Declare it under the `+` key and restart wardynd: `WARDYN_AGENT_IMAGES='{"claude-code+codex-cli":"wardyn/agent-harnesses:local"}'`. On Kubernetes, push it to a registry the cluster pulls from and declare that reference.
+- `GET /api/v1/setup/status` lists each declared set in `harness_sets`. Dispatch names the run's set for the image's launcher in `WARDYN_HARNESSES` and `WARDYN_START_HARNESS` ([ENV.md](../ENV.md)).
+- An AWS sign-in provider (`bedrock_sso`) serves only a run's primary harness, the one it starts or else lists first; on any other harness the run is refused.

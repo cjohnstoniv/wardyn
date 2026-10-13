@@ -7,24 +7,32 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"maps"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
 
-// TestAPITokenMintSites_OnlyTheSelfServiceMint is #1477's structural pin: no
-// route can create a token that acts as another person, because the one door
-// that writes an api_tokens row is the self-service mint. insertAPIToken has
-// exactly one caller, handleCreateAPIToken; CreateAPIToken has exactly one,
-// insertAPIToken; and no non-test code in this package sets MintedBy on a
-// types.APIToken (the minted_by column is read here, never written).
+// TestAPITokenMintSites_OnlyTheSelfServiceMint is #1477's structural pin, widened for
+// #1508: no route can create a token that acts as another person, because the doors
+// that write an api_tokens row are the self-service mint and an invitation's claim,
+// and both run the one mint core (mintGuards, prepareMint), so the caller's own
+// session decides who the token belongs to. Each core function has exactly those two
+// callers; insertAPIToken has exactly one, handleCreateAPIToken; ClaimInvitation
+// exactly one, handleClaimInvitation; CreateAPIToken exactly one, insertAPIToken;
+// and no non-test code in this package sets MintedBy on a types.APIToken (the
+// minted_by column is read here, never written).
 func TestAPITokenMintSites_OnlyTheSelfServiceMint(t *testing.T) {
 	files, err := filepath.Glob("*.go")
 	if err != nil {
 		t.Fatal(err)
 	}
 	fset := token.NewFileSet()
-	insert, create := map[string]int{}, map[string]int{}
+	calls := map[string]map[string]int{}
+	for _, name := range []string{"insertAPIToken", "CreateAPIToken", "ClaimInvitation", "CreateServiceToken", "mintGuards", "prepareMint"} {
+		calls[name] = map[string]int{}
+	}
 	for _, f := range files {
 		if strings.HasSuffix(f, "_test.go") {
 			continue
@@ -42,11 +50,8 @@ func TestAPITokenMintSites_OnlyTheSelfServiceMint(t *testing.T) {
 				switch x := n.(type) {
 				case *ast.CallExpr:
 					if sel, ok := x.Fun.(*ast.SelectorExpr); ok {
-						switch sel.Sel.Name {
-						case "insertAPIToken":
-							insert[fn.Name.Name]++
-						case "CreateAPIToken":
-							create[fn.Name.Name]++
+						if m, ok := calls[sel.Sel.Name]; ok {
+							m[fn.Name.Name]++
 						}
 					}
 				case *ast.CompositeLit:
@@ -66,10 +71,22 @@ func TestAPITokenMintSites_OnlyTheSelfServiceMint(t *testing.T) {
 			})
 		}
 	}
-	if len(insert) != 1 || insert["handleCreateAPIToken"] != 1 {
-		t.Errorf("insertAPIToken callers = %v, want exactly handleCreateAPIToken once", insert)
-	}
-	if len(create) != 1 || create["insertAPIToken"] != 1 {
-		t.Errorf("Store.CreateAPIToken callers = %v, want exactly insertAPIToken once", create)
+	for name, want := range map[string][]string{
+		"insertAPIToken":     {"handleCreateAPIToken"},
+		"CreateAPIToken":     {"insertAPIToken"},
+		"ClaimInvitation":    {"handleClaimInvitation"},
+		"mintGuards":         {"handleClaimInvitation", "handleCreateAPIToken", "handleMintServiceToken"},
+		"CreateServiceToken": {"handleMintServiceToken"}, // the sponsor's mint of a service identity's token (#1508)
+		"prepareMint":        {"handleClaimInvitation", "handleCreateAPIToken"},
+	} {
+		got := slices.Sorted(maps.Keys(calls[name]))
+		if !slices.Equal(got, want) {
+			t.Errorf("%s callers = %v, want exactly %v", name, got, want)
+		}
+		for caller, n := range calls[name] {
+			if n != 1 {
+				t.Errorf("%s calls %s %d times, want once", caller, name, n)
+			}
+		}
 	}
 }

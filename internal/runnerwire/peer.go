@@ -8,8 +8,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 )
@@ -23,6 +25,11 @@ const (
 // MaxStreams bounds the byte streams a connection holds open, parked ones
 // included: an OPEN past it is refused. A constant, not a knob.
 const MaxStreams = 256
+
+// maxStreamReplies bounds the RESET and OPEN_OK answers to OPENs that wait
+// for the writer. A peer that opens faster than this side can answer fills it,
+// and the session ends.
+const maxStreamReplies = 2 * MaxStreams
 
 // CallHandler serves one incoming CALL. A ctx cancelled by the caller's RESET
 // means the caller stopped waiting. The result is marshalled into the REPLY; an
@@ -40,14 +47,22 @@ type PeerConfig struct {
 	// refuses it. It must not block.
 	OnOpen func(s *Stream, o Open) error
 	// OnControl receives the session-level frames the peer does not act on
-	// itself: PENDING, STATE, READY, LEASE, GOAWAY and REVOKED.
+	// itself: PENDING, STATE, READY, LEASE, GOAWAY, REVOKED and CURRENT_ACTIVITY.
 	OnControl func(Frame)
+	// Checked handlers replace their unchecked counterpart when set. A failed
+	// durable ingest must not advance the received/ACK cursor.
+	OnEventChecked   func(Event) error
+	OnControlChecked func(Frame) error
 	// Replay and LastReceived carry a session's sequencing across a reconnect:
 	// the buffer the previous connection used (frames still un-ACKed) and the
 	// last sequenced frame received from the peer. Zero values start a fresh
 	// session at sequence 1.
 	Replay       *ReplayBuffer
 	LastReceived uint64
+	// NextID and AbandonedCalls retain the call-id space after a link drop.
+	// Callers fail offline; their late, replayed replies are still legitimate.
+	NextID         uint32
+	AbandonedCalls []uint32
 }
 
 // Peer multiplexes calls, events and byte streams over one established Conn
@@ -79,6 +94,17 @@ type Peer struct {
 	held      atomic.Int64 // received bytes not yet read by a stream's reader
 	err       error
 	done      chan struct{}
+	stopped   chan struct{}
+	lastPong  atomic.Pointer[time.Time]
+	ackWake   chan struct{}
+	// writing is when the write in progress began, nil between writes.
+	writing atomic.Pointer[time.Time]
+	// pongDue (the latest PING payload) and owed (dropped connection credit)
+	// wait under mu for the one worker that answers them.
+	pongDue   []byte
+	owed      int64
+	answers   []Frame // under mu: RESET and OPEN_OK for OPENs, in order
+	replyWake chan struct{}
 }
 
 // NewPeer builds a peer; Run drives it.
@@ -88,13 +114,21 @@ func NewPeer(conn Conn, cfg PeerConfig) *Peer {
 	if replay == nil {
 		replay = NewReplayBuffer()
 	}
-	return &Peer{
+	p := &Peer{
 		conn: conn, cfg: cfg, ctx: ctx, cancel: cancel, recvSeq: cfg.LastReceived,
 		replay: replay, connSend: NewConnCredit(), ids: NewIDAllocator(cfg.Org),
 		calls: map[uint32]*pendingCall{}, inCalls: map[uint32]context.CancelFunc{},
 		streams: map[uint32]*Stream{}, parked: map[uint32]*Stream{}, byCall: map[uint32][]uint32{},
-		done: make(chan struct{}),
+		done: make(chan struct{}), stopped: make(chan struct{}),
+		ackWake: make(chan struct{}, 1), replyWake: make(chan struct{}, 1),
 	}
+	if cfg.NextID != 0 {
+		p.ids.next = cfg.NextID
+	}
+	for _, id := range cfg.AbandonedCalls {
+		p.calls[id] = &pendingCall{abandoned: true, reply: make(chan Reply, 1)}
+	}
+	return p
 }
 
 // StreamCount is the byte streams the connection holds, parked ones included.
@@ -172,30 +206,56 @@ func (p *Peer) fail(err error) {
 // send writes one frame; a sequenced one is numbered and buffered under the
 // write lock, so sequence order is wire order.
 func (p *Peer) send(ctx context.Context, f Frame) error {
+	_, err := p.sendFrame(ctx, f)
+	return err
+}
+
+func (p *Peer) sendFrame(ctx context.Context, f Frame) (uint64, error) {
+	ctx, cancel := context.WithCancel(ctx)
+	stop := context.AfterFunc(p.ctx, cancel)
+	defer func() { stop(); cancel() }()
 	if f.Type.Sequenced() {
 		if err := p.replay.Reserve(ctx, len(f.Payload)); err != nil {
-			return err
+			return 0, err
 		}
 	}
 	p.wmu.Lock()
 	defer p.wmu.Unlock()
 	if !p.Online() {
-		return p.offline()
+		if f.Type.Sequenced() {
+			p.replay.unreserve(len(f.Payload))
+		}
+		return 0, p.offline()
 	}
 	if f.Type.Sequenced() {
 		f = p.replay.Assign(f)
 	}
-	if err := p.conn.WriteFrame(ctx, f); err != nil {
-		if ctx.Err() == nil {
-			p.fail(err)
-		}
-		return fmt.Errorf("%w: %w", runner.ErrRunnerOffline, err)
+	// The caller's ctx bounds only the wait for replay room. The frame is
+	// written under the link's ctx: a write whose ctx ends closes the shared
+	// connection, so a caller giving up would take every stream and call down.
+	if err := p.write(p.ctx, f); err != nil {
+		// A cancelled write can have sent any prefix of the frame. Resume is
+		// required before another sequence is safe to send on this link.
+		p.fail(err)
+		return f.Seq, fmt.Errorf("%w: %w", runner.ErrRunnerOffline, err)
 	}
-	return nil
+	return f.Seq, nil
+}
+
+// write puts one frame on the socket; the caller holds the write lock. The
+// start time lets keepalive fail a link whose write has stopped moving.
+func (p *Peer) write(ctx context.Context, f Frame) error {
+	start := time.Now()
+	p.writing.Store(&start)
+	defer p.writing.Store(nil)
+	return p.conn.WriteFrame(ctx, f)
 }
 
 // Run reads frames until the link ends and returns the reason.
 func (p *Peer) Run(ctx context.Context) error {
+	defer close(p.stopped)
+	go p.sendAcks()
+	go p.sendReplies()
 	go func() {
 		select {
 		case <-ctx.Done():
@@ -225,9 +285,8 @@ func (p *Peer) handle(f Frame) error {
 		if f.Seq <= p.recvSeq {
 			// A replay after a lost ACK: the frame already ran. Drop it and say
 			// where we are, so the sender trims its buffer.
-			last := p.recvSeq
 			p.mu.Unlock()
-			go p.send(p.ctx, Frame{Type: TypeAck, Payload: EncodeAck(last)}) //nolint:errcheck // a lost ACK is re-sent on the next replay
+			p.wakeAck()
 			return nil
 		}
 		if f.Seq != p.recvSeq+1 {
@@ -235,18 +294,33 @@ func (p *Peer) handle(f Frame) error {
 			p.mu.Unlock()
 			return fmt.Errorf("%w: %s seq %d after %d", ErrBadFrame, f.Type, f.Seq, last)
 		}
-		p.recvSeq = f.Seq
-		p.recvAcks++
-		p.recvBytes += len(f.Payload)
-		ack := p.recvAcks%ackEvery == 0 || p.recvBytes >= ackBytes
-		if ack {
-			p.recvBytes = 0
-		}
 		p.mu.Unlock()
-		if ack {
-			go p.send(p.ctx, Frame{Type: TypeAck, Payload: EncodeAck(f.Seq)}) //nolint:errcheck // a lost ACK only delays buffer trimming
-		}
 	}
+	if err := p.handleFrame(f); err != nil {
+		return err
+	}
+	if f.Type.Sequenced() {
+		p.acceptSequence(f)
+	}
+	return nil
+}
+
+func (p *Peer) acceptSequence(f Frame) {
+	p.mu.Lock()
+	p.recvSeq = f.Seq
+	p.recvAcks++
+	p.recvBytes += len(f.Payload)
+	ack := p.recvAcks%ackEvery == 0 || p.recvBytes >= ackBytes || (f.Type == TypeEvent && p.cfg.OnEventChecked != nil)
+	if ack {
+		p.recvBytes = 0
+	}
+	p.mu.Unlock()
+	if ack {
+		p.wakeAck()
+	}
+}
+
+func (p *Peer) handleFrame(f Frame) error {
 	switch f.Type {
 	case TypeCall:
 		return p.onCall(f)
@@ -267,9 +341,23 @@ func (p *Peer) handle(f Frame) error {
 			return fmt.Errorf("%w: %v", ErrBadFrame, err)
 		}
 	case TypePing:
-		go p.send(p.ctx, Frame{Type: TypePong, Payload: f.Payload}) //nolint:errcheck // keepalive; a failed pong is the link going down
+		if _, err := DecodePing(f.Payload); err != nil {
+			return err
+		}
+		p.mu.Lock()
+		p.pongDue = f.Payload
+		p.mu.Unlock()
+		p.wakeReplies()
 	case TypePong:
+		if _, err := DecodePing(f.Payload); err != nil {
+			return err
+		}
+		now := time.Now()
+		p.lastPong.Store(&now)
 	default:
+		if p.cfg.OnControlChecked != nil {
+			return p.cfg.OnControlChecked(f)
+		}
 		if p.cfg.OnControl != nil {
 			p.cfg.OnControl(f)
 		}
@@ -285,8 +373,7 @@ func (p *Peer) onEvent(f Frame) error {
 	if err := ev.Validate(); err != nil {
 		return err
 	}
-	p.dispatchEvent(ev)
-	return nil
+	return p.dispatchEvent(ev)
 }
 
 // handleStream serves the frames that act on one byte stream.
@@ -301,12 +388,18 @@ func (p *Peer) handleStream(f Frame) error {
 			}
 		}
 	case TypeData:
-		if s := p.stream(f.Stream); s != nil {
-			if err := s.deliver(f.Payload); errors.Is(err, ErrBadFrame) {
-				return err
-			} else if err != nil {
-				_ = s.Reset(ResetInternal)
-			}
+		s := p.stream(f.Stream)
+		if s == nil {
+			// Sent before the peer saw this stream end: dropped, so the
+			// bytes are the sender's again.
+			p.returnCredit(int64(len(f.Payload)))
+			return nil
+		}
+		if err := s.deliver(f.Payload); errors.Is(err, ErrBadFrame) {
+			return err
+		} else if err != nil {
+			p.returnCredit(int64(len(f.Payload))) // refused, not held
+			_ = s.Reset(ResetInternal)
 		}
 	case TypeWindow:
 		n, err := DecodeWindow(f.Payload)
@@ -348,18 +441,27 @@ func (p *Peer) forget(id uint32) {
 	p.mu.Unlock()
 }
 
-func (p *Peer) dispatchEvent(ev Event) {
+func (p *Peer) dispatchEvent(ev Event) error {
+	if p.cfg.OnEventChecked != nil {
+		if err := p.cfg.OnEventChecked(ev); err != nil {
+			return err
+		}
+	}
 	if ev.Call != 0 {
 		p.mu.Lock()
 		pc := p.calls[ev.Call]
 		p.mu.Unlock()
-		if pc != nil && pc.queue(ev) {
-			return
+		if pc != nil {
+			queued, err := pc.queue(ev)
+			if err != nil || queued {
+				return err
+			}
 		}
 	}
-	if p.cfg.OnEvent != nil {
+	if p.cfg.OnEventChecked == nil && p.cfg.OnEvent != nil {
 		p.cfg.OnEvent(ev)
 	}
+	return nil
 }
 
 func (p *Peer) onReset(id, code uint32) {
@@ -380,9 +482,50 @@ func (p *Peer) onReset(id, code uint32) {
 	}
 }
 
-// grant returns consumed bytes to the sender as WINDOW frames: the stream's and the connection's.
+func (p *Peer) wakeReplies() {
+	select {
+	case p.replyWake <- struct{}{}:
+	default:
+	}
+}
+
+// One worker answers OPENs (queued, bounded), PINGs and dropped credit (each
+// coalesced: the latest PING, the sum of credit), so a peer that sends faster
+// than this side can write cannot create a goroutine per frame.
+func (p *Peer) sendReplies() {
+	for {
+		select {
+		case <-p.replyWake:
+		case <-p.done:
+			return
+		}
+		p.mu.Lock()
+		answers, pong, owed := p.answers, p.pongDue, p.owed
+		p.answers, p.pongDue, p.owed = nil, nil, 0
+		p.mu.Unlock()
+		for _, f := range answers {
+			if p.send(p.ctx, f) != nil {
+				return
+			}
+		}
+		if pong != nil && p.send(p.ctx, Frame{Type: TypePong, Payload: pong}) != nil {
+			return
+		}
+		if owed > 0 && p.send(p.ctx, Frame{Type: TypeWindow, Payload: EncodeWindow(uint32(min(owed, math.MaxUint32)))}) != nil {
+			return
+		}
+	}
+}
+
+// grant returns consumed bytes to the sender's stream window.
 func (p *Peer) grant(s *Stream, n int64) {
 	_ = p.send(p.ctx, Frame{Type: TypeWindow, Stream: s.id, Payload: EncodeWindow(uint32(n))})
+}
+
+// consumed returns bytes a stream's reader took to the sender's connection
+// window in ConnWindow/4 batches. It counts every read on every stream, so
+// however many streams are live, at most ConnWindow/4-1 read bytes are withheld.
+func (p *Peer) consumed(n int64) {
 	p.mu.Lock()
 	p.connPend += n
 	c := int64(0)
@@ -477,13 +620,11 @@ func (p *Peer) onOpen(f Frame) error {
 	// authenticated connection remains live, so output may retry it.
 	if o.Call != 0 && p.calls[o.Call] == nil {
 		p.mu.Unlock()
-		go p.send(p.ctx, Frame{Type: TypeReset, Stream: f.Stream, Payload: EncodeReset(ResetRefused)}) //nolint:errcheck // a failed RESET is the link going down
-		return nil
+		return p.answer(Frame{Type: TypeReset, Stream: f.Stream, Payload: EncodeReset(ResetRefused)})
 	}
 	if len(p.streams)+len(p.parked) >= MaxStreams {
 		p.mu.Unlock()
-		go p.send(p.ctx, Frame{Type: TypeReset, Stream: f.Stream, Payload: EncodeReset(ResetCapacity)}) //nolint:errcheck // a failed RESET is the link going down
-		return nil
+		return p.answer(Frame{Type: TypeReset, Stream: f.Stream, Payload: EncodeReset(ResetCapacity)})
 	}
 	s := p.newStream(f.Stream, o.Kind)
 	if o.Call != 0 {
@@ -503,6 +644,19 @@ func (p *Peer) onOpen(f Frame) error {
 			return nil
 		}
 	}
-	go p.send(p.ctx, Frame{Type: TypeOpenOK, Stream: f.Stream}) //nolint:errcheck // a failed OPEN_OK is the link going down
+	return p.answer(Frame{Type: TypeOpenOK, Stream: f.Stream})
+}
+
+// answer queues a reply to an OPEN for the reply worker. The read loop must
+// not wait on a write: two peers that both did could stop each other reading.
+func (p *Peer) answer(f Frame) error {
+	p.mu.Lock()
+	if len(p.answers) >= maxStreamReplies {
+		p.mu.Unlock()
+		return fmt.Errorf("%w: %d OPENs await an answer", ErrBadFrame, maxStreamReplies)
+	}
+	p.answers = append(p.answers, f)
+	p.mu.Unlock()
+	p.wakeReplies()
 	return nil
 }

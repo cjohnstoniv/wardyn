@@ -90,3 +90,26 @@ func TestNonTerminalRunStatesPartitionTheEnum(t *testing.T) {
 		t.Errorf("NonTerminalRunStates lists %q, which is not a RunState constant", s)
 	}
 }
+
+// TestSlotHoldingRunStatesAreTheNonTerminalOnesButQueued pins the one difference between the two
+// lists: a QUEUED run is live (the person count, the suspension sweep and the retention check see it)
+// but holds no pool, deployment or host slot, so the slot counts and the reapers must not.
+func TestSlotHoldingRunStatesAreTheNonTerminalOnesButQueued(t *testing.T) {
+	var want []RunState
+	for _, s := range NonTerminalRunStates {
+		if s != RunQueued {
+			want = append(want, s)
+		}
+	}
+	if len(want) != len(NonTerminalRunStates)-1 || len(SlotHoldingRunStates) != len(want) {
+		t.Fatalf("SlotHoldingRunStates = %v, want NonTerminalRunStates %v minus QUEUED", SlotHoldingRunStates, NonTerminalRunStates)
+	}
+	for i, s := range want {
+		if SlotHoldingRunStates[i] != s {
+			t.Errorf("SlotHoldingRunStates[%d] = %s, want %s", i, SlotHoldingRunStates[i], s)
+		}
+	}
+	if RunQueued.IsTerminal() {
+		t.Error("QUEUED is not terminal")
+	}
+}

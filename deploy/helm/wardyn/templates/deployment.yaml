@@ -382,6 +382,7 @@ spec:
             {{- end }}
             {{- end }}
             {{- $azkek := ($.Values.kek | default dict).azurekv | default dict }}
+            {{- $awskek := ($.Values.kek | default dict).awskms | default dict }}
             {{- if ($.Values.kek | default dict).required }}
             - name: WARDYN_KEK_REQUIRED
               value: "true"
@@ -433,6 +434,16 @@ spec:
               value: {{ $azkek.keyPlatform | quote }}
             - name: WARDYN_AZURE_KEK_SIGNING_KEY_PLATFORM
               value: {{ $azkek.signingKeyPlatform | quote }}
+            {{- end }}
+            {{- if eq .provider "awskms" }}
+            # Data keys wrapped by AWS KMS (docs/operations/secrets-and-keys.md "Key
+            # service: AWS KMS").
+            - name: WARDYN_KEK
+              value: "awskms"
+            {{- end }}
+            {{- if $awskek.key }}
+            - name: WARDYN_AWS_KMS_KEY
+              value: {{ $awskek.key | quote }}
             {{- end }}
             {{- end }}
             {{- if and .azure .azure.vaultUrl }}

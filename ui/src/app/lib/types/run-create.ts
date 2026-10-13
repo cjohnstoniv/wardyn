@@ -51,6 +51,12 @@ export interface CreateRunInput {
   // unsupervised. Omitted (wire default "auto") is today's behavior. Rejected
   // by the server for codex-cli and structurally inert for an interactive run.
   tool_approvals?: "auto" | "hold";
+  // When the run ends: this many seconds after launch (1 to 2147483647), or no
+  // end. At most one of the two. A duration past a limit is cut to it and the 201
+  // warns; no_end is refused unless the pool, the deployment and the admin allow
+  // it. Neither takes the default end (#1319).
+  ends_after_sec?: number;
+  no_end?: boolean;
 }
 
 // POST /api/v1/runs response: the created run's fields PLUS an optional advisory

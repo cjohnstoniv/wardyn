@@ -138,6 +138,8 @@ serviceAccount:
   # handing pods/exec + secrets/networkpolicies create-delete to every other
   # pod in the namespace that also uses it.
   name: ""
+  # e.g. IRSA for kek.provider=awskms:
+  #   eks.amazonaws.com/role-arn: arn:aws:iam::<account>:role/<role>
   annotations: {}
   # wardynd does not call the API server in v0.x, so the projected token is
   # unnecessary attack surface — do not auto-mount it by default. Applied on the
@@ -376,6 +378,7 @@ kek:
   #         key: https://beta.vault.azure.net/keys/wrap
   #         signingKey: https://beta.vault.azure.net/keys/sign
   #         clientId: 00000000-0000-0000-0000-000000000000
+  # Not with provider awskms: AWS KMS key domains are not supported yet.
   domains: {}
   transit:
     mount: transit
@@ -404,6 +407,16 @@ kek:
     # as keyPlatform, that signs every wrap keyPlatform makes. Set together with
     # keyPlatform; a key other than signingKey.
     signingKeyPlatform: ""
+  awskms:
+    # Full ARN, arn:<partition>:kms:<region>:<account>:key/<id>, of the symmetric
+    # AWS KMS key that wraps data keys; an alias or a bare key id refuses boot.
+    # Required with provider awskms; set with provider local it only reads the
+    # rows sealed under it (the way back with `wardynd -rewrap`). Reached with the
+    # AWS SDK's default credential chain: on EKS, IRSA (the
+    # eks.amazonaws.com/role-arn annotation under serviceAccount.annotations) or
+    # an EKS Pod Identity association, allowed kms:Encrypt and kms:Decrypt on
+    # this key only. No platform key and no key domains with it yet.
+    key: ""
 
 # Extra environment variables for wardynd (name: value). Use this to wire OIDC
 # (WARDYN_OIDC_*), TLS (WARDYN_TLS_*), audit sinks (WARDYN_AUDIT_SINKS), the default

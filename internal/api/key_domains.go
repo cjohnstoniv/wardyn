@@ -130,7 +130,7 @@ type keyDomainRequest struct {
 const (
 	keyDomainOwnerUnresolvedMsg = "That email address doesn't match anyone this deployment knows, so nothing was changed. " +
 		"Use the person's subject, as the Audit log shows it."
-	keyDomainOwnerAmbiguousMsg = "That matches more than one person, so nothing was changed. Use the person's subject exactly."
+	keyDomainOwnerAmbiguousMsg = "That matches more than one person, so nothing was changed. Use the person's subject exactly, as the Audit log shows it."
 	maxKeyDomainSubjectLen     = 512
 )
 
@@ -173,7 +173,11 @@ func (s *Server) decodeKeyDomainChange(w http.ResponseWriter, r *http.Request, d
 		if raw == "" || len(raw) > maxKeyDomainSubjectLen || !controlCharFree(raw) {
 			return bad("Name the person, by subject or email.")
 		}
-		owner, _, refusal := s.resolveSecretOwner(r.Context(), raw)
+		owner, _, refusal, err := s.resolveSecretOwner(r.Context(), raw)
+		if err != nil {
+			writeServerError(w, r, "resolve the key domain's person", err)
+			return c, false
+		}
 		switch refusal {
 		case "":
 			c.Subject = owner

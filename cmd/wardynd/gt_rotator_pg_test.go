@@ -141,12 +141,12 @@ func TestGroundtruthRotatorLock_StandbyDoesNotDialASessionEveryTick(t *testing.T
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 
+	standby := pgPool(t)
 	holder, err := db.Connect(ctx, os.Getenv("WARDYN_TEST_PG"))
 	if err != nil {
 		t.Fatalf("connect holder: %v", err)
 	}
 	defer holder.Close()
-	standby := pgPool(t)
 
 	// The leader holds the rotator lock for the duration.
 	_, release, ok, err := db.TryAdvisoryLockDedicated(ctx, holder, db.GroundTruthRotatorLockKey)

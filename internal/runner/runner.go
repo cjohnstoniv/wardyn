@@ -10,6 +10,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -55,7 +56,10 @@ type SandboxSpec struct {
 	// RunnerID, when set, routes the create to the substrate of that registered
 	// runner (named "runner:<id>"); empty means the cluster. It is a routing
 	// carrier for the orchestrator, not something a substrate reads.
-	RunnerID         string
+	RunnerID string
+	// RunnerMaxRuns is that runner's max_runs when the create was sent: the runner refuses a create past
+	// it, a backstop to the control plane's own count. 0 sets no bound.
+	RunnerMaxRuns    int
 	Image            string // resolved agent/workspace OCI image
 	ConfinementClass types.ConfinementClass
 	// Env is non-secret environment. Credential material NEVER passes through
@@ -80,10 +84,11 @@ type SandboxSpec struct {
 	// and carries the roots those mounts must resolve inside, re-checked at
 	// BIND time. Nil elsewhere — never narrows an operator mount.
 	UserMountRoots []string
-	// Drive is the acting principal's USER DRIVE, already resolved by the
-	// control plane — nil if none was asked for. NOT a Mount: the request
-	// carried a flag rather than a path.
-	Drive *types.DriveMount
+	// Drives are the acting principal's drives, already resolved by the
+	// control plane, each at its own server-derived Target (DriveTargetFor) —
+	// empty if none was asked for. NOT Mounts: the request carried drive ids
+	// rather than paths. A driver mounts every one or refuses the sandbox.
+	Drives []types.DriveMount
 	// ManagedFiles are operator-authored files the AGENT CANNOT MODIFY —
 	// root-owned, unwritable, present BEFORE the main process runs — and,
 	// marked ManagedFile.AgentOwned, secret files only the agent may read.
@@ -123,8 +128,8 @@ type Mount struct {
 	// MemberAuthored marks a bind whose SOURCE a MEMBER chose. ONLY these are
 	// re-checked against SandboxSpec.UserMountRoots at bind time.
 	MemberAuthored bool `json:"member_authored,omitempty"`
-	// DriveAuthored marks the ONE bind a driver synthesizes from
-	// SandboxSpec.Drive. A LABEL, NEVER A GATE: WARDYN_USER_DRIVE_HOST_ROOTS
+	// DriveAuthored marks a bind a driver synthesizes from an entry of
+	// SandboxSpec.Drives. A LABEL, NEVER A GATE: WARDYN_USER_DRIVE_HOST_ROOTS
 	// runs on EVERY host_path drive regardless of this flag.
 	DriveAuthored bool `json:"drive_authored,omitempty"`
 }
@@ -151,6 +156,8 @@ type ProxyConfig struct {
 	// AzureGates are the run's azure_foundry route gates. A non-empty set also sizes the sidecar's
 	// memory envelope up (ProxyLimitsFor): the in-flight body budget does not fit the default.
 	AzureGates []proxy.AzureGateConfig
+	// GitHubAPI is the run's GitHub CLI grant for the proxy's api.github.com door; nil == off.
+	GitHubAPI *proxy.GitHubAPIGrant
 	// BrokeredPATGrantIDs is every git_pat grant id of the run while the PAT broker is on; the proxy refuses a raw mint of one.
 	BrokeredPATGrantIDs []uuid.UUID
 	// UpstreamProxyURL is the OPTIONAL corporate parent proxy the sidecar
@@ -163,11 +170,18 @@ type ProxyConfig struct {
 	// UpstreamProxyNoProxy: hosts/CIDRs whose dials skip the corporate
 	// upstream proxy — still faces the private-IP guard and the run's policy.
 	UpstreamProxyNoProxy []string
-	LLMUpstreams         map[string]string // public vendor host -> operator model gateway base URL
-	LLMChannelHosts      map[string]string // model host -> vendor schema it is inspected as; never a gateway (proxy.Config.LLMChannelHosts)
-	LLMUnavailableDetail string            // reason for the brokered-LLM 404 when no credential backs it
-	Unattended           bool              // a run nobody is driving: a held push is refused instead
-	Attribution          *policyref.Ref    // the policy named in a policy-decided refusal; nil when none
+	LLMUpstreams         map[string]string         // public vendor host -> operator model gateway base URL
+	LLMChannelHosts      map[string]string         // model host -> vendor schema it is inspected as; never a gateway (proxy.Config.LLMChannelHosts)
+	LLMUnavailableDetail string                    // reason for the brokered-LLM 404 when no credential backs it
+	Unattended           bool                      // a run nobody is driving: a held push is refused instead
+	Attribution          *policyref.Ref            // the policy named in a policy-decided refusal; nil when none
+	PushRuleSets         []types.PushRuleSet       // push content rules per SCM entry (provider+org); proxy.Config.PushRuleSets
+	PushRuleBase         *types.PushRulesSpec      // the run's push rules after the ceiling, for an entry with no set; proxy.Config.PushRuleBase
+	HarnessToolRules     []types.HarnessToolRules  // tool rules per included harness; proxy.Config.HarnessToolRules
+	HarnessCredentials   []types.HarnessCredential // SHA-256 of each harness's approval credential; proxy.Config.HarnessCredentials (never the plaintext)
+	ViaOrgRoutes         []proxy.ViaOrgRoute       // a runner's via_org destinations; set only by placement's local copy
+	MCPServers           []proxy.MCPServerConfig   // the run's MCP servers on the broker route; proxy.Config.MCPServers
+	MCPBindings          []proxy.MCPBinding        // SHA-256 of each harness's MCP token; proxy.Config.MCPBindings (never the token)
 }
 
 // InjectionGrant pairs an api_key grant with its proxy-side injection rule (never the secret value).
@@ -191,10 +205,16 @@ type Resources struct {
 	// Capabilities.EphemeralDiskEnforcement): docker quotas only when
 	// supported, else uncapped; k8s enforces via kubelet EVICTION.
 	DiskMiB int64
-	// DiskMiBFilled says DiskMiB was FILLED IN from the org default rather
-	// than policy-authored: the desktop tier fails closed only for a
-	// POLICY-AUTHORED value; a FILLED default degrades to uncapped instead.
-	DiskMiBFilled bool
+	// DiskMiBSoft says no policy wrote DiskMiB: a runner that cannot cap disk
+	// fails closed only for a size a policy wrote, and runs a soft one uncapped.
+	// The JSON member keeps its old name, DiskMiBFilled, so a runner and a
+	// control plane of different versions still agree on the bit.
+	DiskMiBSoft bool `json:"DiskMiBFilled"`
+	// LifetimeCap is how much longer the run may live, counted from the sandbox
+	// create: the run's own lifetime cap (lifetime_cap_at) less now. Zero means the
+	// run has no cap. Only the k8s substrate reads it, as the run pods'
+	// activeDeadlineSeconds and the quota scope that deadline selects.
+	LifetimeCap time.Duration
 }
 
 // AttachOptions configures an interactive attach; zero Cols/Rows let the driver pick a sane default (e.g. 80x24).

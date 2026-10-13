@@ -21,6 +21,7 @@ import type {
   ResourceLimits,
   RunPolicySpec,
 } from "../types";
+import type { PlacementValue } from "../types/new-run-contract";
 import { asJson, errEnvelope, errText, HttpError, throwIfPending, unwrapList, wfetch } from "./core";
 
 // types.GovernanceLimits. ALL are `omitempty` on the wire, so an unrestricted
@@ -39,6 +40,10 @@ export interface GovernanceLimits extends RunLimits {
   // user drive even when one is allocated to the person; denyUserDrive's 403
   // is what enforces it, and this is only what the editor authors.
   deny_user_drive?: boolean;
+  // types.GovernanceLimits.DenyPlacements (0.9, #114) — the placements a run
+  // under this profile may not take. A deny list: absent means every placement
+  // is permitted. The server refuses a profile denying both.
+  deny_placements?: PlacementValue[];
   // 0/absent is unlimited (R4/F032). The editor's LimitNumberRow writes this.
   max_concurrent_runs?: number;
   // types.GovernanceLimits.MaxCPUMillis / MaxMemoryMiB — the sandbox CPU and

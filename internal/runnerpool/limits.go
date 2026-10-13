@@ -23,9 +23,9 @@ type Bound struct{ Max, Default *int }
 // Effective the same way: the lowest maximum wins, per field.
 type SourceLimits struct {
 	Source types.LimitSource
-	// CPUMillis, MemoryMiB, LifetimeSec and IdleSec are the fields. IdleSec is read
-	// for an Interactive run only.
-	CPUMillis, MemoryMiB, LifetimeSec, IdleSec Bound
+	// CPUMillis, MemoryMiB, DiskMiB, LifetimeSec and IdleSec are the fields. IdleSec
+	// is read for an Interactive run only.
+	CPUMillis, MemoryMiB, DiskMiB, LifetimeSec, IdleSec Bound
 	// ConcurrentRuns caps running runs; see types.ConcurrencyBound for what it counts.
 	ConcurrentRuns *int
 	// NoEnd says whether the source lets a run have no end. Nil means it does
@@ -46,8 +46,8 @@ var sourceRank = map[types.LimitSource]int{
 	types.LimitSourceDeployment:     3,
 }
 
-// Effective is the one function that decides a run's CPU, memory, lifetime and
-// idle stop: for each field, the strictest of every source it is given. The
+// Effective is the one function that decides a run's CPU, memory, main-drive
+// size, lifetime and idle stop: for each field, the strictest of every source it is given. The
 // caller passes the sources that apply to this run:
 //
 //   - the pool: PoolSource (a pool with no limits passes an empty one, or none);
@@ -61,8 +61,10 @@ var sourceRank = map[types.LimitSource]int{
 // is always there to bound it: Effective refuses to compute without exactly one,
 // and without more than one pool source, because a dropped source would silently
 // widen every field. An untouched run gets the
-// lowest default any source names, never above the cap; with none it gets the
-// cap, which is today's rule for a run's end. Each answer names the source that
+// lowest default any source names, never above the cap. The deployment's
+// default is its fallback sandbox size: it counts only when no other source
+// names a default, so it never lowers a pool's own. With no default at all a
+// run gets the cap, which is today's rule for a run's end. Each answer names the source that
 // bound it, for the preview and for explaining a reduction. A source with a
 // non-positive bound, an unknown source or an unknown run type is an error:
 // the caller refuses, it never guesses.
@@ -97,6 +99,7 @@ func Effective(runType types.RunnerPoolRunType, sources ...SourceLimits) (types.
 	}
 	fold(&out.CPUMillis, func(s SourceLimits) Bound { return s.CPUMillis })
 	fold(&out.MemoryMiB, func(s SourceLimits) Bound { return s.MemoryMiB })
+	fold(&out.DiskMiB, func(s SourceLimits) Bound { return s.DiskMiB })
 	fold(&out.Lifetime, func(s SourceLimits) Bound { return s.LifetimeSec })
 	fold(&out.LifetimeSpan, func(s SourceLimits) Bound { return lifetimeOf(s, false) })
 	fold(&out.LifetimeLease, func(s SourceLimits) Bound { return lifetimeOf(s, true) })
@@ -156,7 +159,9 @@ func foldField(ordered []SourceLimits, pick func(SourceLimits) Bound) (types.Eff
 		if b.Max != nil && (capV == nil || *b.Max < *capV) {
 			capV, out.CapSource = b.Max, s.Source
 		}
-		if b.Default != nil && (defV == nil || *b.Default < *defV) {
+		// The deployment sorts last, so its fallback default is read only
+		// when nothing more specific named one.
+		if b.Default != nil && (defV == nil || (s.Source != types.LimitSourceDeployment && *b.Default < *defV)) {
 			defV, defSource = b.Default, s.Source
 		}
 	}
@@ -179,16 +184,18 @@ func foldField(ordered []SourceLimits, pick func(SourceLimits) Bound) (types.Eff
 
 // DeploymentSource is the deployment's side of Effective, the one every call
 // carries: defaults is its default sandbox size (sizing.EffectiveLimits), CPU and
-// memory are bounded by the request contract's own bounds, maxAgeSec is
+// memory are bounded by the request contract's own bounds, eph is the
+// organisation's ephemeral-disk default and maximum (0 = unset), maxAgeSec is
 // WARDYN_RUN_MAX_AGE (0 = none) and concurrentRuns the deployment's cap on
 // running runs (0 = none).
-func DeploymentSource(defaults types.ResourceLimits, maxAgeSec, concurrentRuns int) (SourceLimits, error) {
-	if defaults.CPUMillis < 1 || defaults.MemoryMiB < 1 || maxAgeSec < 0 || concurrentRuns < 0 {
-		return SourceLimits{}, fmt.Errorf("the deployment's default size is 1 or more and its age and run caps 0 or more, got %+v, %d, %d", defaults, maxAgeSec, concurrentRuns)
+func DeploymentSource(defaults types.ResourceLimits, eph types.EphemeralProvider, maxAgeSec, concurrentRuns int) (SourceLimits, error) {
+	if defaults.CPUMillis < 1 || defaults.MemoryMiB < 1 || eph.DefaultDiskMiB < 0 || eph.MaxDiskMiB < 0 || maxAgeSec < 0 || concurrentRuns < 0 {
+		return SourceLimits{}, fmt.Errorf("the deployment's default size is 1 or more and its disk, age and run caps 0 or more, got %+v, %+v, %d, %d", defaults, eph, maxAgeSec, concurrentRuns)
 	}
 	out := SourceLimits{Source: types.LimitSourceDeployment,
 		CPUMillis: Bound{Max: Int(types.RunnerPoolCPUMillisMax), Default: Int(defaults.CPUMillis)},
 		MemoryMiB: Bound{Max: Int(types.RunnerPoolMemoryMiBMax), Default: Int(defaults.MemoryMiB)},
+		DiskMiB:   Bound{Max: positive(eph.MaxDiskMiB), Default: positive(eph.DefaultDiskMiB)},
 	}
 	if maxAgeSec > 0 {
 		out.LifetimeSec.Max = Int(maxAgeSec)
@@ -197,6 +204,33 @@ func DeploymentSource(defaults types.ResourceLimits, maxAgeSec, concurrentRuns i
 		out.ConcurrentRuns = Int(concurrentRuns)
 	}
 	return out, nil
+}
+
+// positive is a pointer to n, or nil when n is not positive: a source that means
+// "nothing" leaves a Bound nil.
+func positive(n int) *int {
+	if n > 0 {
+		return Int(n)
+	}
+	return nil
+}
+
+// InteractiveDefaultLifetimeSec is the end an untouched Interactive run gets when
+// no source (pool, governance, deployment) names a lifetime default: 24 hours
+// (owner ruling, #1319). An Interactive run never defaults to No end; that is an
+// explicit choice. Idle stop still ends an abandoned run sooner.
+const InteractiveDefaultLifetimeSec = 24 * 60 * 60
+
+// WithInteractiveLifetimeDefault adds the Interactive fallback to the deployment
+// source for runType. It rides the deployment's default slot, which Effective
+// reads only when nothing more specific names a default and never above a cap,
+// so a pool's or a profile's own default and every maximum win over it, and it
+// changes no source's No end permission. Any other run type is returned as given.
+func WithInteractiveLifetimeDefault(deployment SourceLimits, runType types.RunnerPoolRunType) SourceLimits {
+	if runType == types.RunnerPoolRunInteractive && deployment.LifetimeSec.Default == nil {
+		deployment.LifetimeSec.Default = Int(InteractiveDefaultLifetimeSec)
+	}
+	return deployment
 }
 
 // PoolSource is the pool's side of Effective for one run type. A pool with no
@@ -230,9 +264,15 @@ func PoolSource(p types.RunnerPool, runType types.RunnerPoolRunType) (SourceLimi
 	case types.RunnerPoolRunBackground:
 		b := l.Background
 		out.CPUMillis, out.MemoryMiB, out.LifetimeSec = amount(b.CPUMillis), amount(b.MemoryMiB), duration(b.Lifetime)
+		if b.DiskMiB != nil {
+			out.DiskMiB = amount(*b.DiskMiB)
+		}
 	case types.RunnerPoolRunInteractive:
 		i := l.Interactive
 		out.CPUMillis, out.MemoryMiB, out.LifetimeSec = amount(i.CPUMillis), amount(i.MemoryMiB), duration(i.Lifetime)
+		if i.DiskMiB != nil {
+			out.DiskMiB = amount(*i.DiskMiB)
+		}
 		out.IdleSec = duration(i.Idle)
 	}
 	out.ConcurrentRuns = l.MaxConcurrentRuns
@@ -263,7 +303,8 @@ func AtCapacity(p types.RunnerPool, running int) *Wait {
 }
 
 // GovernanceSource is the person's governance ceiling's side of Effective:
-// CPU, memory, how long a run may live and how many a person may run at once.
+// CPU, memory, the main drive's size, how long a run may live and how many a
+// person may run at once.
 //
 // CPU and memory are the member cap (#1949): the most a governed request may
 // ask for is max(untouched, size), where untouched is what the run already gets
@@ -289,17 +330,14 @@ func AtCapacity(p types.RunnerPool, running int) *Wait {
 // pauses, it does not stop), so IdleSec is never set.
 func GovernanceSource(l types.GovernanceLimits, ceiling, untouched, deploymentDefault types.ResourceLimits) (SourceLimits, error) {
 	out := SourceLimits{Source: types.LimitSourceGovernance}
-	positive := func(n int) *int {
-		if n > 0 {
-			return Int(n)
-		}
-		return nil
-	}
 	if deploymentDefault.CPUMillis < 1 || deploymentDefault.MemoryMiB < 1 {
 		return out, errors.New("governance needs the deployment's default size to bound a member")
 	}
-	out.CPUMillis.Max = Int(memberCap(ceiling.CPUMillis, l.MaxCPUMillis, cmp.Or(untouched.CPUMillis, deploymentDefault.CPUMillis)))
-	out.MemoryMiB.Max = Int(memberCap(ceiling.MemoryMiB, l.MaxMemoryMiB, cmp.Or(untouched.MemoryMiB, deploymentDefault.MemoryMiB)))
+	out.CPUMillis.Max = Int(MemberCap(ceiling.CPUMillis, l.MaxCPUMillis, cmp.Or(untouched.CPUMillis, deploymentDefault.CPUMillis)))
+	out.MemoryMiB.Max = Int(MemberCap(ceiling.MemoryMiB, l.MaxMemoryMiB, cmp.Or(untouched.MemoryMiB, deploymentDefault.MemoryMiB)))
+	// The main drive: the lower of the profile's and the ceiling's size is a maximum
+	// only. Governance sizes nothing, so it never names a default.
+	out.DiskMiB.Max = lowerPositive(l.MaxEphemeralDiskMiB, ceiling.DiskMiB)
 	noEnd := l.AllowNoEnd && l.UserChangesLimits
 	out.NoEnd = &noEnd
 	switch {
@@ -315,10 +353,23 @@ func GovernanceSource(l types.GovernanceLimits, ceiling, untouched, deploymentDe
 	return out, nil
 }
 
-// memberCap is one field of the member cap: max(untouched, size), where the
-// profile's maximum is the size when the ceiling sets none and lowers it when it
-// does. untouched is at least 1, so the cap always is.
-func memberCap(ceiling, profileMax, untouched int) int {
+// lowerPositive is the lower of the positive values of a and b, nil when neither is.
+func lowerPositive(a, b int) *int {
+	switch {
+	case a > 0 && b > 0:
+		return Int(min(a, b))
+	case a > 0:
+		return Int(a)
+	}
+	return positive(b)
+}
+
+// MemberCap is one field of the member cap (#1949), the one rule every bound on a
+// governed member's CPU and memory uses: max(untouched, size), where the profile's
+// maximum is the size when the ceiling sets none and lowers it when it does. A
+// caller with no baseline passes the deployment's default as untouched, so the
+// cap is at least 1 whenever untouched is.
+func MemberCap(ceiling, profileMax, untouched int) int {
 	size := ceiling
 	switch {
 	case size < 1:

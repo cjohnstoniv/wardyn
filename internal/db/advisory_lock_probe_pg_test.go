@@ -163,3 +163,30 @@ func TestAdvisoryLockHeld_ReportsHeldAndSurfacesErrors(t *testing.T) {
 		t.Fatal("probing a closed pool returned no error; an unreachable database must not read as an unheld lock")
 	}
 }
+
+// Advisory locks are per database, but pg_locks lists every database on the
+// server. Two installs sharing one PostgreSQL server (separate databases, an
+// external or managed DSN) must not see each other's lifetime locks: another
+// database's leader is not this install's leader.
+func TestAdvisoryLockHeld_IgnoresAnotherDatabasesLock(t *testing.T) {
+	ours, theirs := poolOfOne(t), pgPoolIsolated(t)
+	ctx := context.Background()
+
+	_, release, ok, err := TryAdvisoryLockDedicated(ctx, theirs, SweeperLeaderLockKey)
+	if err != nil || !ok {
+		t.Fatalf("the other database's leader took the key = %v, %v", ok, err)
+	}
+	defer release()
+
+	if held, err := AdvisoryLockHeld(ctx, ours, SweeperLeaderLockKey); err != nil || held {
+		t.Fatalf("probe from our database = held %v, err %v; want free: the lock belongs to another database", held, err)
+	}
+
+	leader := NewSweeperLeader(ours, "replica-a")
+	leader.monitor, leader.poll = 10*time.Millisecond, time.Millisecond
+	lctx, cancel := context.WithTimeout(ctx, 200*time.Millisecond)
+	defer cancel()
+	if got := leader.lead(lctx); got != "led" {
+		t.Fatalf("our only replica's attempt = %q, want it to lead while another database holds the same key", got)
+	}
+}

@@ -165,6 +165,13 @@ func (m *meeter) validatePresence(ov Overlay) {
 		}
 	}
 	m.validateNonNegative(ov)
+	if d := ov.Limits.DenyPlacements; d != nil {
+		for _, p := range *d {
+			if !p.Valid() {
+				m.fail(ReasonOverlayInvalid, "deny_placements", "%q is not a placement (remote or local)", p)
+			}
+		}
+	}
 	if r := ov.Limits.AutonomyRubric; r != nil {
 		if err := r.Validate(); err != nil {
 			m.fail(ReasonOverlayInvalid, "autonomy_rubric", "%v", err)
@@ -222,6 +229,9 @@ func (m *meeter) checkResult() {
 	}
 	if l.MaxWaitSec > 0 && l.DefaultWaitSec > l.MaxWaitSec {
 		m.fail(ReasonOverlayUnsatisfiable, "limits.default_wait_sec", "the composed default is past the composed maximum")
+	}
+	if types.DeniesEveryPlacement(l.DenyPlacements) {
+		m.fail(ReasonOverlayUnsatisfiable, "limits.deny_placements", "the composed profile denies every placement")
 	}
 	if l.AutonomyRubric != nil {
 		if err := l.AutonomyRubric.Validate(); err != nil {

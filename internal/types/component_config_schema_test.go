@@ -192,12 +192,12 @@ func TestComponentConfigVisibilityGatesRequiredNotValidation(t *testing.T) {
 }
 
 func TestConfigKeyLooksSecret(t *testing.T) {
-	for _, key := range []string{"GITHUB_TOKEN", "apiKey", "db-password", "OPENAI_API_KEY", "accessToken", "PASSWD", "SECRET_VALUE", "client_secret_key", "COOKIE"} {
+	for _, key := range []string{"GITHUB_TOKEN", "apiKey", "db-password", "OPENAI_API_KEY", "accessToken", "PASSWD", "SECRET_VALUE", "client_secret_key", "COOKIE", "CLIENT_SECRET", "clientSecret", "JWT_SECRET", "WEBHOOK_SECRET", "AWS_SECRET_" + "ACCESS_KEY", "DB_PASSPHRASE"} {
 		if !ConfigKeyLooksSecret(key) {
 			t.Errorf("%s was not read as secret-named", key)
 		}
 	}
-	for _, key := range []string{"MAX_TOKENS", "BYPASS_CACHE", "SERVICE_REGION", "TOKENIZER", "COMPASS_MODE", "SECRET_NAME"} {
+	for _, key := range []string{"MAX_TOKENS", "BYPASS_CACHE", "SERVICE_REGION", "TOKENIZER", "COMPASS_MODE", "SECRET_NAME", "SECRET_REF", "secretId", "SECRETARY_NAME", "detect_secrets", "detect_secret_patterns"} {
 		if ConfigKeyLooksSecret(key) {
 			t.Errorf("%s is a plain setting but was refused", key)
 		}

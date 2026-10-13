@@ -41,6 +41,24 @@ type (
 	PersonSummary = types.PersonSummary
 	PersonList    = types.PersonList
 
+	// Invitation lets one named person mint their own API token (ListInvitations, ClaimInvitation);
+	// InvitationState is its derived state.
+	Invitation      = types.Invitation
+	InvitationState = types.InvitationState
+
+	// ServiceIdentity is a named, sponsored non-human principal; ServiceIdentityState is its derived state.
+	ServiceIdentity      = types.ServiceIdentity
+	ServiceIdentityState = types.ServiceIdentityState
+
+	// APIToken is one API token row. Token carries the plaintext on a create or claim answer only;
+	// Disposition says where an admin-minted token stands.
+	APIToken         = types.APIToken
+	TokenDisposition = types.TokenDisposition
+
+	// TokenMoved is MoveToken's answer: the link written and the token's new disposition.
+	TokenMoved = types.TokenMoved
+	TokenMove  = types.TokenMove
+
 	// Device is one enrolled laptop in the organisation's inventory (no
 	// credential material). Returned by ListDevices.
 	Device = types.Device
@@ -116,6 +134,10 @@ type (
 	// ListWorkspaces, GetWorkspace, CreateWorkspace, and UpdateWorkspace.
 	Workspace = types.Workspace
 
+	// ImageBuild is a workspace's image-build record: the inputs and the image it produced.
+	// Carried by WorkspaceBuild.Record.
+	ImageBuild = types.ImageBuild
+
 	// WorkspaceLLMCred is the operator-owned model binding carried in
 	// WorkspaceRequest.LLMCred: ProviderRef pins the workspace's runs to one
 	// model provider. "" (or a nil WorkspaceLLMCred) means no pin. On a read,
@@ -183,12 +205,15 @@ type (
 	// SiteConfig.ModelProviders; the types below are its parts. Aliased so a
 	// caller can author the block through PutSiteConfig. Configuration only:
 	// no credential lives on a record.
-	ModelProviders    = types.ModelProviders
-	ModelProvider     = types.ModelProvider
-	ModelProviderKind = types.ModelProviderKind
-	ProviderAuth      = types.ProviderAuth
-	BedrockSettings   = types.BedrockSettings
-	ProviderHarness   = types.ProviderHarness
+	ModelProviders = types.ModelProviders
+	// ModelProvidersRead is GetModelProviders' answer: the block plus how many people
+	// hold a credential of their own per provider. Counts only, never a credential.
+	ModelProvidersRead = types.ModelProvidersRead
+	ModelProvider      = types.ModelProvider
+	ModelProviderKind  = types.ModelProviderKind
+	ProviderAuth       = types.ProviderAuth
+	BedrockSettings    = types.BedrockSettings
+	ProviderHarness    = types.ProviderHarness
 
 	// UserDrive is one admin-registered drive (migration 0054's user_drives
 	// row), embedded in UserDriveListItem. Written via DriveRequest.
@@ -334,6 +359,7 @@ const (
 
 // RunState values.
 const (
+	RunQueued    = types.RunQueued
 	RunPending   = types.RunPending
 	RunStarting  = types.RunStarting
 	RunRunning   = types.RunRunning
@@ -436,4 +462,25 @@ const (
 	AutonomyL1 = types.AutonomyL1
 	AutonomyL2 = types.AutonomyL2
 	AutonomyL3 = types.AutonomyL3
+)
+
+// Invitation, service-identity and admin-minted-token states, the values of the *State and
+// TokenDisposition fields above.
+const (
+	InvitationPending = types.InvitationPending
+	InvitationClaimed = types.InvitationClaimed
+	InvitationExpired = types.InvitationExpired
+	InvitationRevoked = types.InvitationRevoked
+
+	ServiceIdentityActive          = types.ServiceIdentityActive
+	ServiceIdentitySuspended       = types.ServiceIdentitySuspended
+	ServiceIdentityRetired         = types.ServiceIdentityRetired
+	ServiceIdentitySponsorInactive = types.ServiceIdentitySponsorInactive
+
+	TokenNeedsDecision   = types.TokenNeedsDecision
+	TokenAwaitingOwner   = types.TokenAwaitingOwner
+	TokenReplacedByOwner = types.TokenReplacedByOwner
+	TokenLinkedToService = types.TokenLinkedToService
+	TokenMovedToService  = types.TokenMovedToService
+	TokenRevoked         = types.TokenRevoked
 )

@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -28,6 +29,25 @@ import (
 func (s *Sealer) sealsActor(ev types.AuditEvent) bool {
 	return s.SealActor && s.Subjects != nil && ev.ActorType == types.ActorHuman && ev.Actor != "" &&
 		!strings.HasPrefix(ev.Actor, SubjectActorPrefix) && !slices.Contains(UnsealedActions, ev.Action)
+}
+
+// ForgedSubject reports whether ev carries a subject string no Seal wrote: a
+// human actor, the target of a person-target action, or a sponsor field (seal_sponsor.go), that already begins with
+// SubjectActorPrefix. Unseal renders such a string as the person it names, so a
+// caller who typed one (a path segment, a request body) could read an erased
+// person's rows back; Seal refuses the row instead.
+func ForgedSubject(ev types.AuditEvent) bool {
+	return (ev.ActorType == types.ActorHuman && strings.HasPrefix(ev.Actor, SubjectActorPrefix)) ||
+		(SealsTarget(ev.Action) && strings.HasPrefix(ev.Target, SubjectActorPrefix)) || forgedSponsor(ev)
+}
+
+// sealsTarget reports whether ev's target is stored as a subject: an action
+// whose target is a person's principal (personTargetActions), named, not
+// already a subject, and not an action whose row must stay readable after the
+// erasure it records.
+func (s *Sealer) sealsTarget(ev types.AuditEvent) bool {
+	return s.SealActor && s.Subjects != nil && SealsTarget(ev.Action) && ev.Target != "" &&
+		!strings.HasPrefix(ev.Target, SubjectActorPrefix)
 }
 
 // principalOf resolves a name an event carries (an email form, an entra:
@@ -81,36 +101,62 @@ func (s *Sealer) ActorSubject(ctx context.Context, principal string) (string, er
 // the pending key, as a sealed field does: the row is returned pending, and the
 // placeholder PendingActor stands in the actor column.
 func (s *Sealer) sealActor(ctx context.Context, ev types.AuditEvent) (types.AuditEvent, bool, error) {
-	name := ev.Actor
-	id, ok, err := s.actorSubject(ctx, name)
+	id, ok, err := s.actorSubject(ctx, ev.Actor)
 	if err == nil {
 		if ok {
 			ev.Actor = SubjectActorPrefix + id
 		}
 		return ev, false, nil
 	}
+	parked, perr := s.park(ev, PendingActorKey, actorPath, ev.Actor, err)
+	if perr != nil {
+		return ev, false, perr
+	}
+	parked.Actor = PendingActor
+	return parked, true, nil
+}
+
+// sealTarget is sealActor for the target column of a person-target action.
+func (s *Sealer) sealTarget(ctx context.Context, ev types.AuditEvent) (types.AuditEvent, bool, error) {
+	id, ok, err := s.actorSubject(ctx, ev.Target)
+	if err == nil {
+		if ok {
+			ev.Target = SubjectActorPrefix + id
+		}
+		return ev, false, nil
+	}
+	parked, perr := s.park(ev, PendingTargetKey, targetPath, ev.Target, err)
+	if perr != nil {
+		return ev, false, perr
+	}
+	parked.Target = PendingTarget
+	return parked, true, nil
+}
+
+// park holds name, a column's person, in ev's data under dataKey sealed with the
+// pending key, and marks the row pending; the caller swaps the column for its
+// placeholder. cause is why no subject could be had.
+func (s *Sealer) park(ev types.AuditEvent, dataKey, path, name string, cause error) (types.AuditEvent, error) {
 	pk := s.pendingKey()
 	if pk == nil {
-		return ev, false, fmt.Errorf("audit seal: no subject for the actor and no pending key to hold the row: %w", err)
+		return ev, fmt.Errorf("audit seal: no subject for the %s and no pending key to hold the row: %w", path, cause)
 	}
-	sealed, serr := sealPending(pk, ev, actorPath, name, nil)
-	if serr != nil {
-		return ev, false, serr
+	sealed, err := sealPending(pk, ev, path, name, nil)
+	if err != nil {
+		return ev, err
 	}
 	m := map[string]json.RawMessage{}
 	if len(ev.Data) > 0 {
 		if jerr := json.Unmarshal(ev.Data, &m); jerr != nil || m == nil {
-			return ev, false, fmt.Errorf("audit seal: the row's data is not an object, so the actor cannot wait in it: %v", jerr)
+			return ev, fmt.Errorf("audit seal: the row's data is not an object, so the %s cannot wait in it: %v", path, jerr)
 		}
 	}
-	m[PendingActorKey] = sealed
+	m[dataKey] = sealed
 	m[PendingMarker] = json.RawMessage("true")
-	data, merr := json.Marshal(m)
-	if merr != nil {
-		return ev, false, merr
+	if ev.Data, err = json.Marshal(m); err != nil {
+		return ev, err
 	}
-	ev.Data, ev.Actor = data, PendingActor
-	return ev, true, nil
+	return ev, nil
 }
 
 // resealActor is Reseal's step for the actor a pending row carries: it is
@@ -118,70 +164,95 @@ func (s *Sealer) sealActor(ctx context.Context, ev types.AuditEvent) (types.Audi
 // row waited is stored as its subject without a fresh key, so it reads erased,
 // or as ErasedValue when there is no subject to store.
 func (s *Sealer) resealActor(ctx context.Context, ev types.AuditEvent, pk []byte) (types.AuditEvent, error) {
+	data, stored, has, err := s.resealName(ctx, ev, pk, PendingActorKey, actorPath)
+	if err != nil || !has {
+		return ev, err
+	}
+	ev.Data, ev.Actor = data, stored
+	return ev, nil
+}
+
+// resealTarget is resealActor for the target column.
+func (s *Sealer) resealTarget(ctx context.Context, ev types.AuditEvent, pk []byte) (types.AuditEvent, error) {
+	data, stored, has, err := s.resealName(ctx, ev, pk, PendingTargetKey, targetPath)
+	if err != nil || !has {
+		return ev, err
+	}
+	ev.Data, ev.Target = data, stored
+	return ev, nil
+}
+
+// resealName opens the person waiting in ev's data under dataKey and returns the
+// data without it and the column value to store; has is false when the row
+// carries none.
+func (s *Sealer) resealName(ctx context.Context, ev types.AuditEvent, pk []byte, dataKey, path string) (data json.RawMessage, stored string, has bool, err error) {
 	var m map[string]json.RawMessage
 	if json.Unmarshal(ev.Data, &m) != nil {
-		return ev, nil
+		return nil, "", false, nil
 	}
-	raw, has := m[PendingActorKey]
+	raw, has := m[dataKey]
 	if !has {
-		return ev, nil
+		return nil, "", false, nil
 	}
 	if s.Subjects == nil {
-		return ev, errors.New("audit reseal: a pending actor is spooled and the subject directory is not available")
+		return nil, "", false, fmt.Errorf("audit reseal: a pending %s is spooled and the subject directory is not available", path)
 	}
 	str, _ := stringValue(raw)
 	// Neither failure heals by waiting, so neither defers: the drain counts the
 	// line toward quarantine, as it does a pending field, instead of holding
 	// every line behind it.
-	pv, ok, err := openPending(pk, ev, actorPath, str)
+	pv, ok, err := openPending(pk, ev, path, str)
 	if !ok {
-		return ev, fmt.Errorf("%w: the pending actor is malformed", ErrPendingUnopenable)
+		return nil, "", false, fmt.Errorf("%w: the pending %s is malformed", ErrPendingUnopenable, path)
 	}
 	if err != nil {
-		return ev, fmt.Errorf("%w: the pending actor does not open under the pending key: %w", ErrPendingUnopenable, err)
+		return nil, "", false, fmt.Errorf("%w: the pending %s does not open under the pending key: %w", ErrPendingUnopenable, path, err)
 	}
-	actor := pv.Subject
-	principal, err := s.principalOf(ctx, actor)
+	name, err := s.resealedSubject(ctx, ev, pv.Subject)
 	if err != nil {
-		return ev, err
+		return nil, "", false, err
+	}
+	delete(m, dataKey)
+	if data, err = json.Marshal(m); err != nil {
+		return nil, "", false, err
+	}
+	return data, name, true, nil
+}
+
+// resealedSubject is the value stored for the person name a pending field waited for: their subject, or
+// the subject without a fresh key (ErasedValue when there is none) for a person erased while it waited.
+func (s *Sealer) resealedSubject(ctx context.Context, ev types.AuditEvent, name string) (string, error) {
+	principal, err := s.principalOf(ctx, name)
+	if err != nil {
+		return "", err
 	}
 	gone := false
 	if s.GoneSince != nil {
 		if gone, err = s.GoneSince(ctx, principal, ev.Time); err != nil {
-			return ev, err
+			return "", err
 		}
 	}
 	var id string
+	var ok bool
 	if gone {
 		if id, ok, err = s.Subjects.AuditSubjectFor(ctx, principal); err != nil {
-			return ev, err
+			return "", err
 		}
-		actor = ErasedValue
-		if ok {
-			actor = SubjectActorPrefix + id
-		}
-	} else {
-		if id, ok, err = s.actorSubject(ctx, actor); err != nil {
-			return ev, err
-		}
-		if ok {
-			actor = SubjectActorPrefix + id
-		}
+		name = ErasedValue
+	} else if id, ok, err = s.actorSubject(ctx, name); err != nil {
+		return "", err
 	}
-	delete(m, PendingActorKey)
-	data, err := json.Marshal(m)
-	if err != nil {
-		return ev, err
+	if ok {
+		name = SubjectActorPrefix + id
 	}
-	ev.Data, ev.Actor = data, actor
-	return ev, nil
+	return name, nil
 }
 
-// renderActor is the actor a reader sees for a stored subject actor: the
-// person, ErasedValue once a key of theirs was destroyed after the row was
-// written, and the stored string for an id no identity row carries.
-func (s *Sealer) renderActor(ctx context.Context, memo *keyMemo, ev types.AuditEvent) (string, error) {
-	id := strings.TrimPrefix(ev.Actor, SubjectActorPrefix)
+// renderSubject is what a reader sees for a stored subject string (an actor or
+// a target): the person, ErasedValue once a key of theirs was destroyed after
+// the row was written, and the stored string for an id no identity row carries.
+func (s *Sealer) renderSubject(ctx context.Context, memo *keyMemo, stored string, at time.Time) (string, error) {
+	id := strings.TrimPrefix(stored, SubjectActorPrefix)
 	m, seen := memo.actors[id]
 	if !seen {
 		principal, found, err := s.Subjects.AuditPrincipalOf(ctx, id)
@@ -198,8 +269,8 @@ func (s *Sealer) renderActor(ctx context.Context, memo *keyMemo, ev types.AuditE
 	}
 	switch {
 	case m.principal == "":
-		return ev.Actor, nil
-	case m.hasKey && m.destroyed.After(ev.Time):
+		return stored, nil
+	case m.hasKey && m.destroyed.After(at):
 		return ErasedValue, nil
 	}
 	return m.principal, nil

@@ -513,12 +513,15 @@ func (a *Authenticator) deriveLogin(r *http.Request, sub string, cc callbackClai
 	}
 	d := deriveRole(cc.roles, cc.groups, cc.email, roleMap, a.cfg.LegacyAdminEmails, a.cfg.DefaultRole, userTypes)
 	if !d.OK() {
-		if d.Denial != DenialNoRole {
+		if d.Denial == DenialNoRole {
+			slog.Warn("oidc: login denied: no role-map value matched and no default role is set",
+				"sub", sub, "reason", d.Denial)
+		} else {
 			slog.Warn("oidc: login denied over the user type the role map names",
 				"sub", sub, "reason", d.Denial, "tied_user_types", d.Tied, "unknown_user_types", d.Unknown)
-			if onUserTypeDenied != nil {
-				onUserTypeDenied(r, d.Denial)
-			}
+		}
+		if onUserTypeDenied != nil {
+			onUserTypeDenied(r, d.Denial)
 		}
 		return d, d.Denial
 	}

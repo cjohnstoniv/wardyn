@@ -87,6 +87,11 @@ an operator follows to turn one on and run the queue.
       - the proposer's own facts are not consulted (they may have been demoted since, and the second human is the safeguard against them).
     - The `admin-token` is exempt from the guard as it is on a direct write.
     - The tokens a demotion strands are revoked after the approval commits, as after a direct write.
+  - *Service identity* (`POST /service-identities`, and a `PATCH /service-identities/{name}` that changes the sponsor): the target is the identity's name.
+    - A sponsor-changing PATCH is held whole: its description and suspend parts apply only with the approval.
+    - A description or suspend PATCH, a PATCH naming the current sponsor, unsuspend and retire apply directly; the user type never changes on a PATCH.
+    - A create applies only while the name is free, the sponsor is bound and active and the type exists; a sponsor change only while the identity is not retired or recreated and its sponsor is the one reviewed.
+    - On approval the identity's tokens are revoked as after a direct sponsor change, and `service_identity.create` or `.update` is written.
 - **Break-glass and local mode.**
   - The `admin-token` principal applies a covered write directly and approves a change, each writing `governance.change.bypass` beside the target's own row.
   - A deployment that wants this gate to bind holds the token out of band.
@@ -145,6 +150,7 @@ Then set `WARDYN_GOVERNANCE_SECOND_HUMAN` (and, if `72h` is wrong for your appro
 | User-type priority update | the priority changes | security admin or super admin |
 | Role mapping upsert, delete | always | **super admin only** |
 | Key-domain assignment set, delete | always | security admin or super admin |
+| Service identity create, and a PATCH that changes the sponsor | always (the PATCH whole) | security admin or super admin |
 
 Exempt, so applied directly:
 
@@ -170,6 +176,12 @@ wardyn governance changes reject <change-id> --reason "widens egress past the re
 ```
 
 - `governance set` exits 0 on a pending result and skips `--prune` until every write is decided, so run it again afterwards.
+- `wardyn governance plan` previews the same apply without writing anything. Its `deletes:` list names every item a prune would remove, so read it before you run `set --prune`:
+
+```
+wardyn governance plan governance.json --prune   # plan: N create, N update, N delete; then the deletes
+wardyn governance set governance.json --prune    # the same apply, once the plan is what you expect
+```
 - Running the SAME document again before then is safe: a target whose held change is that very write is reported as pending, with the held change named, and the rest of the file is applied.
 - A document edited since is refused at that target (`409` `governance_change_pending`, naming the held change) until the held change is decided; nothing of the edit is stored.
 - The console does the same on the Governance screen's Changes tab, with the diff in a drawer; Approve is disabled on your own proposal.

@@ -257,6 +257,20 @@ func (c *lockConn) close() {
 	c.conn.Close(bg)                                   //nolint:errcheck // best-effort
 }
 
+// lockUntil takes mu, giving up when ctx ends; it reports whether mu is held.
+func (c *lockConn) lockUntil(ctx context.Context) bool {
+	t := time.NewTicker(10 * time.Millisecond)
+	defer t.Stop()
+	for !c.mu.TryLock() {
+		select {
+		case <-ctx.Done():
+			return false
+		case <-t.C:
+		}
+	}
+	return true
+}
+
 func (c *lockConn) isClosed() bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -330,13 +344,19 @@ func LockHeld(ctx context.Context) error {
 		return nil
 	}
 	c := h.conn
-	c.mu.Lock()
+	// The wait for the connection shares the verify query's deadline, taken
+	// from a context that ignores cancellation: a nested lock waiting on this
+	// connection holds mu for its whole budget, and a caller must not wait that
+	// long to hear the answer. A busy connection reads as lost (fail closed).
+	qctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*LockWatchInterval+time.Second)
+	defer cancel()
+	if !c.lockUntil(qctx) {
+		return fmt.Errorf("%w: the lock's connection is busy", ErrLockLost)
+	}
 	defer c.mu.Unlock()
 	if c.closed {
 		return fmt.Errorf("%w: the hold was released", ErrLockLost)
 	}
-	qctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*LockWatchInterval+time.Second)
-	defer cancel()
 	if err := c.verify(qctx, h.keys); err != nil {
 		return fmt.Errorf("%w: %w", ErrLockLost, err)
 	}

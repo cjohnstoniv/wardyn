@@ -31,6 +31,8 @@ import (
 //     tool_rules ceiling sees.
 //   - DenyUserDrive: a drive OUTLIVES the run, so no tool_rules ceiling
 //     describes the escape — the storage itself is the escape.
+//   - DenyPlacements: a placement the people under this profile may not run on;
+//     a deny list, so absent means permitted.
 //   - MaxConcurrentRuns is a QUOTA, not a door: 422 with no authz.denied,
 //     not 403.
 //   - MaxCPUMillis/MaxMemoryMiB/MaxEphemeralDiskMiB/MaxDriveSizeMiB are neither: they CLAMP — capped
@@ -67,6 +69,11 @@ type GovernanceLimits struct {
 	// "may this principal persist anything at all" is the question (403 +
 	// authz.denied), not "how big".
 	DenyUserDrive bool `json:"deny_user_drive,omitempty"`
+	// DenyPlacements refuses a run whose resolved placement is listed (403 placement_denied +
+	// authz.denied). A DENY LIST: absent means every placement is permitted, including for a
+	// member with no assigned profile. Values are `remote` and `local`; a profile denying both is
+	// refused at write, since the people it binds could run nothing.
+	DenyPlacements []Placement `json:"deny_placements,omitempty"`
 	// MaxCPUMillis and MaxMemoryMiB cap the sandbox's CPU (millicores) and memory a run under this
 	// profile may be given, whatever its ceiling's own resources or a member's request say. 0 is
 	// unlimited. A CLAMP, NOT A DOOR, like MaxEphemeralDiskMiB. Folded into composer.Clamp at

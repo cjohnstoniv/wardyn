@@ -54,6 +54,8 @@ var nestedAcquireAllowlist = []allowedHold{
 		"HA boot holds the boot-key create lock across the secret store's read/create to prevent replicas minting different signing keys; this bounded boot-only hold requires pool_max_conns >= 2"},
 	{[]string{"internal/db.TryAdvisoryLockConn", "internal/db.TryAdvisoryLock", "cmd/wardynd.rotateAgeKeyMode"},
 		"the offline age-key rotation command holds SecretRekeyLockKey for its lifetime to exclude other rotations while the store rewrites through the pool; the command requires pool_max_conns >= 2"},
+	{[]string{"internal/db.TryAdvisoryLockConn", "cmd/wardynd.acquireQuiet", "cmd/wardynd.createRecoveryManifest"},
+		"the offline manifest command holds the single-instance lock's connection (acquireQuiet) for its lifetime while stageFiles lists drives through store.PG on the command's pool; the command requires pool_max_conns >= 2"},
 }
 
 // onNestedAcquire reports a finding. Exiting, not panicking: chi's Recoverer and the launch and

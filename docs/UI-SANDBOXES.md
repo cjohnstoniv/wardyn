@@ -186,6 +186,7 @@ export WARDYN_AGENT_IMAGES='{"vscode":"wardyn/agent-vscode:local"}'
 
 ## 3. Open an app
 
+- A background task's UI apps cannot be opened (`409 run_background_only`).
 - Three calls:
   1. Mint a single-use attach ticket (the **same** ticket the browser terminal uses — there is no second ticket type),
   2. **bind** it to the browser that will use it,

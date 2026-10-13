@@ -4,8 +4,11 @@
 package api
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/cjohnstoniv/wardyn/internal/agentpolicy"
@@ -35,6 +38,43 @@ type runAgentPolicy struct {
 	hold bool
 	// locked: the document ForAgent chose is the locked L2 one (agentpolicy.IsLocked).
 	locked bool
+	// toolRules counts the distinct tool names the interactive run's rules
+	// wrote into the document (agentpolicy.WithToolRules); 0 when none.
+	toolRules int
+}
+
+// agentPolicyRefusal is an agentPolicyFor error that is the run's failure hint
+// as it stands: it names the run's own tool rules or its runner's missing
+// capability, never a driver's error text.
+type agentPolicyRefusal string
+
+func (e agentPolicyRefusal) Error() string { return string(e) }
+
+// agentPolicyFailureHint is what a run agentPolicyFor refused is told.
+func agentPolicyFailureHint(err error, level types.AutonomyLevel, hold, locked bool) string {
+	var refusal agentPolicyRefusal
+	if errors.As(err, &refusal) {
+		return string(refusal)
+	}
+	return fmt.Sprintf("This run was not launched: its runner's capabilities could not be confirmed, "+
+		"so whether it can deliver this run's managed settings (%s) is unknown", agentPolicyBasis(level, hold, locked))
+}
+
+// attendedToolRules are the tool rules Claude Code enforces itself in an
+// interactive run, through its managed settings: its own set when the run
+// carries one per harness, else the run's. Nil off the interactive lane, where
+// the gated lane's proxy enforces them, or nothing does.
+func (p dispatchParams) attendedToolRules() []types.ToolRule {
+	if !p.Interactive {
+		return nil
+	}
+	if i := slices.IndexFunc(p.HarnessToolRules, func(h types.HarnessToolRules) bool { return h.Harness == claudeCodeHarness }); i >= 0 {
+		return p.HarnessToolRules[i].Rules
+	}
+	if len(p.HarnessToolRules) > 0 {
+		return nil
+	}
+	return p.Policy.ToolRules
 }
 
 // holdLane is whether a run launches agent-run's hold lane: the one predicate
@@ -53,6 +93,17 @@ func holdLane(interactive bool, toolApprovals, taskMode string) bool {
 	return !interactive && toolApprovals == "hold" && taskMode != "exec"
 }
 
+// holdLaneHarnessCredentials is stampHarnessCredential for a run on the hold
+// lane alone: only that lane launches a harness through wardyn-toolgate, so no
+// other run is minted any. Its proxy then carries no digest, and any tool-gate
+// call from it is decided as a call from no harness is.
+func (s *Server) holdLaneHarnessCredentials(ctx context.Context, run types.AgentRun, p dispatchParams) ([]types.HarnessCredential, []runner.ManagedFile, error) {
+	if !p.holdLane() {
+		return nil, nil, nil
+	}
+	return s.stampHarnessCredential(ctx, run, p.HarnessToolRules, p.Drives)
+}
+
 // holdLane is holdLane for this dispatch.
 func (p dispatchParams) holdLane() bool {
 	return holdLane(p.Interactive, p.ToolApprovals, p.TaskMode)
@@ -62,8 +113,11 @@ func (p dispatchParams) holdLane() bool {
 // for a failure hint or a 201 warning: the hold lane when it, not the level,
 // chose the document.
 func agentPolicyBasis(level types.AutonomyLevel, hold, locked bool) string {
-	if hold && agentpolicy.HoldTakesOver(level, locked) {
+	switch {
+	case hold && agentpolicy.HoldTakesOver(level, locked):
 		return "tool approvals on hold"
+	case level == "" || level == types.AutonomyL3:
+		return "tool rules" // the level brings no document, so only an interactive run's rules do
 	}
 	return "autonomy level " + string(level)
 }
@@ -94,23 +148,54 @@ func agentPolicyBasis(level types.AutonomyLevel, hold, locked bool) string {
 //
 // locked is the governance rubric's agent_guardrail_locks term, frozen on the
 // dispatch ceiling.
-func (s *Server) agentPolicyFor(ctx context.Context, run types.AgentRun, hold, locked bool) (runAgentPolicy, error) {
+//
+// The document follows the harness set, not only the started agent: a harness
+// the set carries but Wardyn does not start (one a person starts by hand, or a
+// command starts) runs under the same file as one Wardyn starts.
+//
+// attended is attendedToolRules: in an interactive run Claude Code's managed
+// settings are what enforce them, so they are written into the document (into
+// the attended base where the level brings none). A run whose rules cannot be
+// written exactly, or whose runner cannot deliver the document, is refused
+// (agentPolicyRefusal) rather than launched with its rules unenforced.
+func (s *Server) agentPolicyFor(ctx context.Context, run types.AgentRun, harnesses []types.RunHarness, hold, locked bool, attended []types.ToolRule) (runAgentPolicy, error) {
 	path, content, ok := agentpolicy.ForAgent(run.Agent, run.AutonomyLevel, hold, locked)
+	for _, h := range harnesses {
+		if !ok {
+			path, content, ok = agentpolicy.ForAgent(h.Harness, run.AutonomyLevel, hold, locked)
+		}
+	}
+	p := runAgentPolicy{path: path, hold: hold, locked: agentpolicy.IsLocked(content)}
+	if run.Agent == claudeCodeHarness || slices.ContainsFunc(harnesses, func(h types.RunHarness) bool { return h.Harness == claudeCodeHarness }) {
+		withRules, err := agentpolicy.WithToolRules(content, attended)
+		if err != nil {
+			return runAgentPolicy{}, agentPolicyRefusal("This run was not launched: its tool rules could not be written into Claude Code's managed settings: " + err.Error())
+		}
+		if !bytes.Equal(withRules, content) {
+			p.path, content, ok = agentpolicy.ClaudeCodeManagedSettingsPath, withRules, true
+			p.toolRules = distinctToolNames(attended)
+		}
+	}
 	if !ok {
 		return runAgentPolicy{}, nil
 	}
-	caps, err := s.cfg.Runner.Capabilities(ctx)
+	p.bytes = len(content)
+	caps, err := s.runCapabilities(ctx, run)
 	if err != nil {
 		return runAgentPolicy{}, fmt.Errorf("the runner's capabilities could not be read, so whether it can deliver this run's managed settings (%s) is unknown: %w",
 			agentPolicyBasis(run.AutonomyLevel, hold, locked), err)
 	}
-	p := runAgentPolicy{path: path, bytes: len(content), hold: hold, locked: agentpolicy.IsLocked(content)}
 	var deliverable bool
 	p.withheld, deliverable = managedFilesGap(caps, run.ConfinementClass)
+	if p.toolRules > 0 && (!deliverable || p.withheld != "") {
+		// Withheld covers krun too: the file is placed there, but a guest that
+		// runs as root could rewrite the rules it carries.
+		return runAgentPolicy{}, agentPolicyRefusal("This run was not launched: Claude Code's managed settings enforce its tool rules in an interactive run, and this runner cannot vouch for them: " + p.withheld)
+	}
 	if !deliverable {
 		return p, nil
 	}
-	p.files = []runner.ManagedFile{{Path: path, Content: content}}
+	p.files = []runner.ManagedFile{{Path: p.path, Content: content}}
 	p.execLess = isExecLess(caps, run.ConfinementClass)
 	return p, nil
 }
@@ -207,6 +292,11 @@ func (s *Server) auditAgentPolicy(ctx context.Context, run types.AgentRun, p run
 	if p.locked {
 		data["variant"] = "l2_locked"
 	}
+	if p.toolRules > 0 {
+		// On every interactive run whose tool rules the document carries: what
+		// says why a run with no level, or L3, has one.
+		data["tool_rules"] = p.toolRules
+	}
 	if p.hold {
 		// On every hold-lane run: what says why a run with no level, or an
 		// L2/L3 one, got the gated document.
@@ -221,4 +311,16 @@ func (s *Server) auditAgentPolicy(ctx context.Context, run types.AgentRun, p run
 	}
 	s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.agent_policy.write",
 		run.ID.String(), "success", mustJSON(data)))
+}
+
+// distinctToolNames counts the tools rules name, "*" aside.
+func distinctToolNames(rules []types.ToolRule) int {
+	var names []string
+	for _, r := range rules {
+		if r.Tool != "*" {
+			names = append(names, r.Tool)
+		}
+	}
+	slices.Sort(names)
+	return len(slices.Compact(names))
 }

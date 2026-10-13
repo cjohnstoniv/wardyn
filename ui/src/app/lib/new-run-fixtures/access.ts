@@ -15,8 +15,7 @@ import {
   noContract,
   preflight,
   preview,
-  RESOURCES_ORG,
-  resourcesFor,
+  APPLIED_ORG,
   RUNNER_ONLINE,
   sources,
   type FixtureProvenance,
@@ -24,9 +23,9 @@ import {
   type NewRunFixture,
 } from "./base";
 
-const preferred = { preview: preview({ components: [agentComponent()], resources: [RESOURCES_ORG] }) };
+const preferred = { preview: preview({ components: [agentComponent()], resources_applied: APPLIED_ORG }) };
 const withComponents = (components: ComponentFact[], over: Partial<NewRunFixture["preview"]> = {}) =>
-  preview({ components: [agentComponent(), ...components], resources: [RESOURCES_ORG], ...over });
+  preview({ components: [agentComponent(), ...components], resources_applied: APPLIED_ORG, ...over });
 const active = (over: Partial<ActiveSections> = {}): ActiveSections => ({ agent: true, azureDevOps: false, gitPATHosts: [], pushKeys: [], ...over });
 const contract = (overrides: RunContractDraft["access"]["overrides"]): RunContractDraft => ({ ...noContract(), access: { overrides } });
 const none = { gitPAT: [], pushRules: [] };
@@ -83,7 +82,7 @@ export const ACCESS_FIXTURES: FixtureBody[] = [
     route: "access/git-ado-minted",
     note: "Azure DevOps, per-person sign-in with a minted token; capabilities in the section.",
     preview: withComponents([adoComponent({ push_rules: { deny_paths: [".github/workflows/**"] } })]),
-    active: active({ azureDevOps: true, pushKeys: ["azure_devops/globex"] }),
+    active: active({ azureDevOps: true, pushKeys: ["dev.azure.com/globex"] }),
   },
   {
     route: "access/git-ado-own-pat",
@@ -104,14 +103,14 @@ export const ACCESS_FIXTURES: FixtureBody[] = [
     note: "Push rules per provider and organisation: the source's read-only, the person's added.",
     preview: withComponents([githubComponent({ push_rules: { deny_paths: [".github/workflows/**"], require_review_paths: ["infra/"] } })]),
     contract: contract({ ...none, pushRules: [{ provider: "github", org: "acme", deny_paths: ["secrets/"] }] }),
-    active: active({ pushKeys: ["github/acme"] }),
+    active: active({ pushKeys: ["github.com/acme"] }),
   },
   { route: "access/custom-needs-input", note: "A custom component that needs a secret: blocks Launch.", preview: withComponents([customComponent("Internal API", { status: "needs_input", requirements: [{ id: "secret:internal-key", kind: "secret", label: "internal-key", required_by: "Internal API", status: "missing" }] })]) },
   { route: "access/custom-refused", note: "A refused component keeps its section with the server's sentence and Remove.", preview: withComponents([customComponent("Internal API", { status: "unavailable" })]) },
   { route: "access/source-policy", note: "A source policy that grants something no component explains.", preview: withComponents([], { spec: { allowed_domains: ["api.anthropic.com", "registry.example.com"], first_use_approval: "deny_with_review", min_confinement_class: "CC2" } }), provenance: sources(["registry.example.com", "policy", "Team default"]) },
-  { route: "access/empty", note: "A shell run with nothing to show: 'Nothing needs access yet'.", preview: preview({ resources: [RESOURCES_ORG] }) },
+  { route: "access/empty", note: "A shell run with nothing to show: 'Nothing needs access yet'.", preview: preview({ resources_applied: APPLIED_ORG }) },
   { route: "access/add", note: "The Add access catalog.", ...preferred },
-  { route: "access/add-local", note: "Catalog items with the 'Not available on your runner' chip (P4/P5/P7 only).", runners: [RUNNER_ONLINE], preview: withComponents([], { resources: [RESOURCES_ORG, resourcesFor(RUNNER_ONLINE)], local_placement: [{ kind: "component", key: "org-component", local_placeable: false, reason: "placement_credential" }] }) },
+  { route: "access/add-local", note: "Catalog items with the 'Not available on your runner' chip (P4/P5/P7 only).", runners: [RUNNER_ONLINE], preview: withComponents([], { resources_applied: APPLIED_ORG, local_placement: [{ kind: "component", key: "org-component", local_placeable: false, reason: "placement_credential" }] }) },
   { route: "access/add-empty", note: "An empty catalog.", ...preferred },
   { route: "access/add-builtin-swap", note: "A built-in item swaps the catalog for the manual Git form in the same dialog.", ...preferred },
   {
@@ -127,11 +126,11 @@ export const ACCESS_FIXTURES: FixtureBody[] = [
     note: "On My runner: host placeability and each org-held secret's OD-12 delivery word.",
     runners: [RUNNER_ONLINE],
     preview: withComponents([customComponent("Org API", { reason: "org", secrets: [{ delivery: "header", shared: true, local_delivery: "via_org" }, { delivery: "env", shared: true, local_delivery: "refuse" }] })], {
-      resources: [RESOURCES_ORG, resourcesFor(RUNNER_ONLINE)],
+      resources_applied: APPLIED_ORG,
       local_placement: [{ kind: "host", key: "api.example.com", local_placeable: false, reason: "placement_local_path" }],
     }),
   },
-  { route: "access/git-two-sections", note: "Two Git sections (GitHub and a git_pat forge), each with its own push rules.", preview: withComponents([githubComponent(), patFact()]), active: active({ gitPATHosts: ["git.example.com"], pushKeys: ["github/acme"] }) },
+  { route: "access/git-two-sections", note: "Two Git sections (GitHub and a git_pat forge), each with its own push rules.", preview: withComponents([githubComponent(), patFact()]), active: active({ gitPATHosts: ["git.example.com"], pushKeys: ["github.com/acme"] }) },
   {
     route: "access/git-inactive",
     note: "A section whose workspace was removed stays inactive: its edits are kept in the draft and not sent.",
@@ -144,7 +143,7 @@ export const ACCESS_FIXTURES: FixtureBody[] = [
     note: "Push rules are keyed by provider and organisation, so removing one organisation's section leaves only its own overrides inactive.",
     preview: withComponents([githubComponent({ org: "other", id: "git_provider:github:app:other" })]),
     contract: contract({ ...none, pushRules: [{ provider: "github", org: "acme", deny_paths: ["infra/"] }, { provider: "github", org: "other", deny_paths: ["ci/"] }] }),
-    active: active({ pushKeys: ["github/other"] }),
+    active: active({ pushKeys: ["github.com/other"] }),
   },
   {
     route: "access/git-ado-two-orgs",

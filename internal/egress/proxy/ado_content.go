@@ -40,8 +40,8 @@ const restChangeMode = "rest"
 // request the capability gate has not already refused outright. It reports
 // whether the request may continue; on false it has answered.
 func (p *Proxy) governADOContent(w http.ResponseWriter, r *http.Request, host string, port int, grant ADOGrant) bool {
-	rules := p.policy.contentRules()
-	if rules == nil {
+	rules, entryErr := p.rulesForADOGrant(host, grant.Organization)
+	if rules == nil && entryErr == "" {
 		return true
 	}
 	deny := func(src string) {
@@ -56,6 +56,13 @@ func (p *Proxy) governADOContent(w http.ResponseWriter, r *http.Request, host st
 			slog.String("rule_source", src), slog.String("reason", msg))
 		writeADORefusal(w, http.StatusForbidden, "GitPushRulesException", msg)
 		return false
+	}
+	if entryErr != "" {
+		// Rules that cannot be looked up are not "no rules": every write is refused; reads pass.
+		if r.Method == http.MethodGet || r.Method == http.MethodHead || r.Method == http.MethodOptions {
+			return true
+		}
+		return refuse(ruleSourceGitPushEntry, entryErr)
 	}
 	if rules.unreadable != "" {
 		return refuse(ruleSourceGitPackBlind, fmt.Sprintf("Wardyn refused this Azure DevOps request: this run's "+

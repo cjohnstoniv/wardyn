@@ -18,20 +18,28 @@ import (
 
 const userTypeCols = `id, name, description, priority, built_in, created_at, updated_at, created_by`
 
-// userTypeRowRefs counts the subject rows naming user type $1 (capability
-// grants, governance assignments, drive grants); shared by UserTypeReferences
-// and DeleteUserType so the 409 count and the delete predicate cannot disagree.
+// userTypeRowRefs counts the rows naming user type $1 (capability grants,
+// governance assignments, drive grants, service identities not retired); shared
+// by UserTypeReferences and DeleteUserType so the 409 count and the delete
+// predicate cannot disagree.
 const userTypeRowRefs = `(
 	(SELECT count(*) FROM capability_grants      WHERE subject_type = 'user_type' AND subject = $1) +
 	(SELECT count(*) FROM governance_assignments WHERE subject_type = 'user_type' AND subject = $1) +
-	(SELECT count(*) FROM user_drive_grants      WHERE subject_type = 'user_type' AND subject = $1))`
+	(SELECT count(*) FROM user_drive_grants      WHERE subject_type = 'user_type' AND subject = $1) +
+	(SELECT count(*) FROM service_identities     WHERE user_type = $1 AND retired_at IS NULL))`
 
 // userTypeRowRefsExist is userTypeRowRefs' boolean twin: CreateUserType uses
 // it to refuse recreating an id that an orphaned subject row still names.
 const userTypeRowRefsExist = `(
 	EXISTS (SELECT 1 FROM capability_grants      WHERE subject_type = 'user_type' AND subject = $1) OR
 	EXISTS (SELECT 1 FROM governance_assignments WHERE subject_type = 'user_type' AND subject = $1) OR
-	EXISTS (SELECT 1 FROM user_drive_grants      WHERE subject_type = 'user_type' AND subject = $1))`
+	EXISTS (SELECT 1 FROM user_drive_grants      WHERE subject_type = 'user_type' AND subject = $1) OR
+	EXISTS (SELECT 1 FROM service_identities     WHERE user_type = $1 AND retired_at IS NULL))`
+
+// userTypeWriteLock serialises the writes that name or remove user type $1 without a foreign key:
+// CreateServiceIdentity takes it before reading the type, DeleteUserType before its DELETE, so each
+// statement after it sees the other's committed row.
+const userTypeWriteLock = `SELECT pg_advisory_xact_lock(hashtextextended('user_types:' || $1, 0))`
 
 // userTypeTokenStamps counts the live (unrevoked, unexpired) API tokens stamped with user type
 // $1. A snapshot column with no foreign key, so this count is what holds the type.
@@ -108,8 +116,8 @@ func (s PG) UpdateUserTypeMetadata(ctx context.Context, t types.UserType) (types
 	return out, uniqueConflict(err)
 }
 
-// UserTypeReferences counts the capability-grant, governance-assignment and
-// drive-grant rows that name the type as their subject.
+// UserTypeReferences counts the capability-grant, governance-assignment,
+// drive-grant and unretired service-identity rows that name the type.
 func (s PG) UserTypeReferences(ctx context.Context, id string) (int, error) {
 	var n int
 	if err := s.Pool.QueryRow(ctx, `SELECT `+userTypeRowRefs, id).Scan(&n); err != nil {
@@ -131,9 +139,18 @@ func (s PG) UserTypeTokenStamps(ctx context.Context, id string) (int, error) {
 // no row has the id; ErrConflict when it is built in, still referenced, or
 // held by a foreign key (role_mappings.user_type is ON DELETE RESTRICT). The
 // reference check rides the DELETE itself, so a row written between the
-// caller's check and this statement still refuses.
+// caller's check and this statement still refuses; a service identity created
+// concurrently is ordered by userTypeWriteLock.
 func (s PG) DeleteUserType(ctx context.Context, id string) error {
-	tag, err := s.Pool.Exec(ctx,
+	tx, err := s.Pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
+	if err != nil {
+		return fmt.Errorf("store: delete user type: %w", err)
+	}
+	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	if _, err := tx.Exec(ctx, userTypeWriteLock, id); err != nil {
+		return fmt.Errorf("store: delete user type: %w", err)
+	}
+	tag, err := tx.Exec(ctx,
 		`DELETE FROM user_types WHERE id = $1 AND NOT built_in AND `+userTypeRowRefs+` = 0 AND `+userTypeTokenStamps+` = 0`, id)
 	if err != nil {
 		var pgErr *pgconn.PgError
@@ -143,10 +160,13 @@ func (s PG) DeleteUserType(ctx context.Context, id string) error {
 		return fmt.Errorf("store: delete user type: %w", err)
 	}
 	if tag.RowsAffected() == 1 {
+		if err := tx.Commit(ctx); err != nil {
+			return fmt.Errorf("store: delete user type: %w", err)
+		}
 		return nil
 	}
 	var exists bool
-	if err := s.Pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM user_types WHERE id = $1)`, id).Scan(&exists); err != nil {
+	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM user_types WHERE id = $1)`, id).Scan(&exists); err != nil {
 		return fmt.Errorf("store: delete user type: %w", err)
 	}
 	if exists {

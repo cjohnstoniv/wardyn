@@ -4,7 +4,6 @@
 package runnerpool
 
 import (
-	"cmp"
 	"slices"
 
 	"github.com/google/uuid"
@@ -12,11 +11,11 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// Choice is what a request itself says: an explicit pool, and an explicit
-// hosting type when the person picked one.
+// Choice is what a request itself says: an explicit pool, and the placement
+// when the person asked for one, which narrows the pool's runners to one kind.
 type Choice struct {
-	PoolID  *uuid.UUID
-	Hosting types.RunnerPoolHosting
+	PoolID    *uuid.UUID
+	Placement types.Placement
 }
 
 // Refusal is a pool selection that cannot proceed, and the sentence to show.
@@ -26,8 +25,8 @@ type Refusal struct {
 	Source types.RunnerPoolSelection
 	// Name is the pool the sentence is about; empty when there is none to name.
 	Name string
-	// Hosting is the hosting type the sentence is about.
-	Hosting types.RunnerPoolHosting
+	// Scope is the scope of the pool the sentence is about.
+	Scope types.RunnerPoolScope
 	// Runner names the runner a ReasonMemberMismatch is about: the caller's own
 	// runner's name, or the id as the caller sent it. A runner that is not the
 	// caller's is never named, it is answered like an unknown one.
@@ -37,6 +36,9 @@ type Refusal struct {
 	RunType types.RunnerPoolRunType
 	Barrier types.ConfinementClass
 	Allowed []types.ConfinementClass
+	// Count is the number the queue reasons name: the waiting runs a person holds (ReasonQueueFull) or
+	// the pool's concurrent-run cap (ReasonFull).
+	Count int
 }
 
 func (r *Refusal) Error() string { return r.Message() }
@@ -45,7 +47,7 @@ func (r *Refusal) Error() string { return r.Message() }
 func (r *Refusal) Message() string {
 	switch r.Reason {
 	case ReasonRequired:
-		return RequiredMsg(HostingLabel(r.Hosting))
+		return RequiredMsg()
 	case ReasonNotFound:
 		return NotFoundMsg()
 	case ReasonUnavailable:
@@ -61,9 +63,9 @@ func (r *Refusal) Message() string {
 		if r.Runner != "" {
 			return MemberMismatchMsg(r.Runner, r.Name)
 		}
-		return HostingMismatchMsg(r.Name, HostingLabel(r.Hosting))
+		return KindMismatchMsg(r.Name)
 	case ReasonNoEligibleMember:
-		if r.Hosting == types.RunnerPoolSelfHosted {
+		if r.Scope == types.RunnerPoolUser {
 			return NoOwnRunnerMsg(r.Name)
 		}
 		return NoEligibleMemberMsg(r.Name)
@@ -73,6 +75,10 @@ func (r *Refusal) Message() string {
 		return RunTypeNotAllowedMsg(r.Name, r.RunType)
 	case ReasonBarrierNotAllowed:
 		return BarrierNotAllowedMsg(r.Name, r.Barrier, r.Allowed)
+	case ReasonQueueFull:
+		return QueueFullMsg(r.Name, r.Count)
+	case ReasonFull:
+		return FullMsg(r.Name, r.Count)
 	}
 	return InvalidMsg()
 }
@@ -82,33 +88,31 @@ func (r *Refusal) Message() string {
 // already dropped every pool the person may not use, so a pool absent from it
 // is indistinguishable from one that does not exist.
 //
-// An explicit pool wins. Otherwise the hosting type is the request's, then the
-// person's preferred one, then the organisation's; within that type the
-// person's own default pool wins over the organisation's. A default that is
-// gone, switched off or of the wrong hosting type is refused, never replaced by
-// another default, another pool or the other hosting type: the person must
-// choose.
+// An explicit pool wins, then the person's own default pool, then the
+// organisation's. A default that is gone or switched off is refused, never
+// replaced by another default or another pool: the person must choose. A
+// placement the request asks for narrows the pool to that kind of runner, and a
+// pool with no runner of that kind is refused.
 func Resolve(permitted []types.RunnerPool, c Choice, personal, org types.RunnerPoolDefaults) (types.ResolvedRunnerPool, *Refusal) {
-	if c.Hosting != "" && !c.Hosting.Valid() {
+	if c.Placement != "" && !c.Placement.Valid() {
 		return types.ResolvedRunnerPool{}, &Refusal{Reason: ReasonInvalid}
 	}
 	if c.PoolID != nil {
 		return resolveExplicit(permitted, c)
 	}
-	hosting := cmp.Or(c.Hosting, personal.PreferredHosting, org.PreferredHosting)
-	if hosting == "" {
+	source, id := types.RunnerPoolSelectedPersonal, personal.PoolID
+	if id == nil {
+		source, id = types.RunnerPoolSelectedOrg, org.PoolID
+	}
+	if id == nil {
 		return types.ResolvedRunnerPool{}, &Refusal{Reason: ReasonRequired}
 	}
-	source, id := types.RunnerPoolSelectedPersonal, personal.PoolFor(hosting)
-	if id == nil {
-		source, id = types.RunnerPoolSelectedOrg, org.PoolFor(hosting)
-	}
-	if id == nil {
-		return types.ResolvedRunnerPool{}, &Refusal{Reason: ReasonRequired, Hosting: hosting}
-	}
 	pool, ok := find(permitted, *id)
-	if !ok || pool.State != types.RunnerPoolActive || pool.HostingType != hosting {
-		return types.ResolvedRunnerPool{}, &Refusal{Reason: ReasonDefaultUnavailable, Source: source, Hosting: hosting}
+	if !ok || pool.State != types.RunnerPoolActive {
+		return types.ResolvedRunnerPool{}, &Refusal{Reason: ReasonDefaultUnavailable, Source: source}
+	}
+	if c.Placement != "" && c.Placement != pool.Scope.Placement() {
+		return types.ResolvedRunnerPool{}, &Refusal{Reason: ReasonMemberMismatch, Name: pool.Name, Scope: pool.Scope}
 	}
 	return resolved(pool, source), nil
 }
@@ -119,8 +123,8 @@ func resolveExplicit(permitted []types.RunnerPool, c Choice) (types.ResolvedRunn
 		return types.ResolvedRunnerPool{}, &Refusal{Reason: ReasonNotFound}
 	}
 	switch {
-	case c.Hosting != "" && c.Hosting != pool.HostingType:
-		return types.ResolvedRunnerPool{}, &Refusal{Reason: ReasonMemberMismatch, Name: pool.Name, Hosting: pool.HostingType}
+	case c.Placement != "" && c.Placement != pool.Scope.Placement():
+		return types.ResolvedRunnerPool{}, &Refusal{Reason: ReasonMemberMismatch, Name: pool.Name, Scope: pool.Scope}
 	case pool.State != types.RunnerPoolActive:
 		return types.ResolvedRunnerPool{}, &Refusal{Reason: ReasonUnavailable, Name: pool.Name}
 	}
@@ -137,5 +141,5 @@ func find(permitted []types.RunnerPool, id uuid.UUID) (types.RunnerPool, bool) {
 }
 
 func resolved(p types.RunnerPool, sel types.RunnerPoolSelection) types.ResolvedRunnerPool {
-	return types.ResolvedRunnerPool{ID: p.ID, Name: p.Name, HostingType: p.HostingType, Revision: p.Revision, Selection: sel}
+	return types.ResolvedRunnerPool{ID: p.ID, Name: p.Name, Scope: p.Scope, Revision: p.Revision, Selection: sel}
 }

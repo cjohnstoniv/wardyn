@@ -40,6 +40,10 @@ const (
 // run UUID alone.
 func agentContainerName(runID uuid.UUID) string { return agentNamePrefix + runID.String() }
 
+// SandboxRef identifies a run before provisioning, allowing containment of a
+// partially created proxy after a failed create or daemon restart.
+func SandboxRef(runID uuid.UUID) string { return agentContainerName(runID) }
+
 // runIDFromAgentName recovers the run UUID from a deterministic agent
 // container name (the daemon may report it with a leading slash; both forms
 // accepted) — teardown's fallback when the wardyn.run-id label is unreadable.

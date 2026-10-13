@@ -35,6 +35,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/maskmanifest"
 	"github.com/cjohnstoniv/wardyn/internal/recording"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/runner/remote"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore/keydomain"
@@ -92,11 +93,18 @@ type Config struct {
 	// is also what happens when no GitHub App is configured, so the vast majority
 	// of deployments never make the call.
 	GitHubRulesets RefRulesetVerifier
+	// GitHubBranches lists a github.com repository's branches through the
+	// organisation's GitHub App (workspace_branches.go). Nil: GitHub
+	// repositories answer the branch list with no_credential.
+	GitHubBranches BranchLister
 	// Audit records control-plane-originated audit events. The recorder handed in
 	// is the shared masking → spooling → store/fanout chain (see cmd/wardynd), so a
 	// failed durable write is masked, logged loudly, and spooled to the local
 	// append-only fallback for EVERY writer — the API layer no longer spools itself.
 	Audit audit.Recorder
+	// RunnerAuditPrepare applies the serving audit mask/seal policy before the
+	// spool receipt and audit row commit in one database transaction.
+	RunnerAuditPrepare func(context.Context, types.AuditEvent) (types.AuditEvent, error)
 	// AuditSpool is the SAME durable fallback spool the recorder chain appends to on
 	// a failed store write (see cmd/wardynd buildAuditChain). When set together with
 	// AuditDrainRecorder, New starts a background loop that replays spooled events
@@ -135,16 +143,18 @@ type Config struct {
 	// RunnerOrgURL is the public organisation URL bound into runner identities.
 	// Empty disables runner registration and streams; never infer it from Host.
 	RunnerOrgURL string
+	// RunnerHub supplies durable runner admission and lifecycle callbacks.
+	// The server always supplies OrgURL and Lookup from its own configuration.
+	RunnerHub remote.HubConfig
 	// RunnerOnline reports whether a claimed runner holds a live authenticated session with this
-	// process. Nil reads every runner as offline: online is never shown without that evidence.
+	// process. Nil defaults to Server.RunnerOnline, the runner hub's own view.
 	//
 	// ponytail: process-local. Under WARDYN_HA a replica that does not hold a runner's session
 	// answers offline for a runner attached to another; the upgrade is a shared presence read.
 	RunnerOnline func(id uuid.UUID) bool
 	// RunnersDisabled runs after runners are switched off (a true→false change), once the write and
-	// its audit row are done and the site-config lock is released. The runner hub ends every runner
-	// session here; nil does nothing, so until it is wired, off stops new registrations, claims and
-	// connections and live sessions end when their runner reconnects.
+	// its audit row are done and the site-config lock is released. Nil defaults to
+	// Server.RunnersDisabled, which ends every runner session this process holds.
 	RunnersDisabled func(ctx context.Context)
 	// AdminToken gates the public API (constant-time bearer compare). Empty
 	// disables the public API entirely (fail closed) except /healthz.
@@ -678,11 +688,14 @@ type Config struct {
 
 // Server is the control-plane HTTP server. It is safe for concurrent use.
 type Server struct {
-	cfg    Config
-	router chi.Router
+	runnerStreams runnerStreamState
+	cfg           Config
+	router        chi.Router
 	// metrics holds the /metrics scrape counters (see metrics.go). Zero value is
 	// ready to use.
 	metrics metrics
+	// viaOrg is the organisation's via_org egress state (via_org_streams.go).
+	viaOrg viaOrgState
 	// fleet is the 15-second capacity snapshot behind the /metrics capacity gauges (metrics_fleet.go).
 	fleet fleetSnapshot
 	// capRowsScanned counts capability-grant rows compared inside capBatch (see
@@ -768,6 +781,8 @@ type Server struct {
 	attachHolders attachHolderRegistry
 	// creates lets a kill cancel a STARTING run's CreateSandbox (runs_create_cancel.go).
 	creates inflightCreates
+	// queue is the pool queue's in-process state: kick coalescing and the gauge snapshot (metrics_queue.go).
+	queue runQueueState
 	// replica is this server's identity when no LiveBus names one (replicaName).
 	replica         string
 	replicaOnce     sync.Once
@@ -815,6 +830,9 @@ type Server struct {
 	// hit once per keystroke, and each miss is an upstream Graph call
 	// (directory_search.go). Zero value is ready to use.
 	dirLimiter principalLimiter
+	// branchLimiter rate-bounds GET /workspaces/{id}/branches per person
+	// (workspace_branches.go): each call can use a forge credential.
+	branchLimiter principalLimiter
 	// preflightLimiter rate-bounds POST /runs/preflight per person
 	// (preflight.go); nil when Config.PreflightRatePerMin is 0 (off).
 	preflightLimiter     *principalLimiter
@@ -904,12 +922,14 @@ func New(cfg Config) *Server {
 		cfg.BaseCtx = context.Background()
 	}
 	s := &Server{cfg: cfg, signInCaptureKillGrace: signInCaptureKillGrace,
+		branchLimiter: principalLimiter{rate: branchListRatePerSec, burst: branchListBurst, max: branchListMaxPeople},
 		deviceRouteState: deviceRouteState{
 			enrolLimiter:         principalLimiter{rate: enrolRatePerSec, burst: enrolBurst, max: enrolLimiterMaxPeers},
 			ingestFailureLimiter: principalLimiter{rate: ingestFailureRatePerSec, burst: ingestFailureBurst, max: ingestFailureMaxDevices},
 		},
 	}
 	s.scimState = newSCIMState()
+	s.defaultRunnerHooks()
 	if cfg.PreflightRatePerMin > 0 {
 		s.preflightLimiter = &principalLimiter{rate: float64(cfg.PreflightRatePerMin) / 60, burst: preflightBurst, max: preflightLimiterMaxPeople}
 	}
@@ -970,25 +990,11 @@ func (s *Server) recordAudit(ctx context.Context, ev types.AuditEvent) {
 	}
 	ev.Data = audit.StampRelay(ctx, ev.Data)
 	ev.Data = audit.StampDelegation(ctx, ev.Data) // delegation is recorded as delegation (#1142)
+	ev.Data = audit.StampSponsor(ctx, ev.Data)    // a service identity's row names its sponsor (#1508)
 	// Invariant 6, C1: the audit log is the system of record. A failed durable
 	// write is handled by the shared recorder chain (spoolingRecorder below
 	// maskingRecorder in cmd/wardynd), which masks, logs loudly, and spools the
 	// event to the durable local fallback so it is never silently lost — for every
 	// audit writer, not just this one. So there is no API-layer-only spool here.
 	_ = s.cfg.Audit.Record(ctx, ev)
-}
-
-// auditEvent is a small constructor used across handlers.
-func (s *Server) auditEvent(runID *uuid.UUID, actorType types.ActorType, actor, action, target, outcome string, data []byte) types.AuditEvent {
-	return types.AuditEvent{
-		ID:        uuid.New(),
-		Time:      s.cfg.Now().UTC(),
-		RunID:     runID,
-		ActorType: actorType,
-		Actor:     actor,
-		Action:    action,
-		Target:    target,
-		Outcome:   outcome,
-		Data:      data,
-	}
 }

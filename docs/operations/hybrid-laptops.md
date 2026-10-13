@@ -3,6 +3,7 @@
 # Managed laptops: client-mode runners
 
 - In 0.9 a laptop joins an org as a **client-mode runner**: it runs `wardyn-runnerd`, not a control plane, and the person who owns it claims it.
+- Install it as a per-user service with [`deploy/runner/install.sh`](../../deploy/runner/install.sh): see [Run as a service](../runner-registration.md#run-as-a-service).
 - Design: [docs/design/0.9/PLAN.md](../design/0.9/PLAN.md). Org enrolment of a full daemon (`WARDYN_ORG_URL`) still works in 0.9, logs a deprecation warning at boot, and is removed in 1.0; see [Legacy org enrolment](#legacy-org-enrolment-deprecated).
 
 > [!NOTE]
@@ -13,13 +14,22 @@
 | Concern | Org | Laptop |
 | --- | --- | --- |
 | Scheduling, placement, the ceiling | Yes, the only scheduler | Nothing decides locally |
-| Credentials | Held in the org; the laptop can use a `via_org` credential for a run's life | Only what the person's own keystore already holds |
+| Credentials | Held in the org; the laptop can use a `via_org` credential for a run's life | The person's own; and a `runner_resident` value, held in the OS keystore for one run |
+| A `via_org` credential's requests | The org re-checks each one and injects the credential on a TLS leg it dials itself | The proxy forwards them through the relay; it never holds the value, but sees the request in plaintext |
 | Audit | The org is the only writer; every local run is an org run record | The runner carries bytes and spools rows while offline |
 | Control plane, Postgres, OIDC client, `age.key` | Yes | None of them |
 | Sandbox, proxy sidecar, local Docker | No | Yes, driven through `wardyn-runnerd` |
 | The runner's private key | Never seen | `runner.key`, `0600`, never leaves the host |
 
 - Azure DevOps: connected at the org; on a local run only the person's own PAT is used directly, see [Azure DevOps on a laptop runner](../AZURE-DEVOPS.md#on-a-laptop-runner-local-placement).
+
+## Resident credentials and posture
+
+- An admin can set a credential class to `runner_resident` with a `require_posture` (`mdm_managed`, `disk_encrypted`, `os_min`).
+- The runner reports its posture when it connects and again when it changes. A root-owned `/etc/wardyn/posture.json` from your MDM wins over the runner's own probe.
+- The value sits in the OS keystore for the run (Secret Service; on macOS the Keychain, written over stdin) and is erased at run end. A runner with no keystore refuses (`runner_keystore_unavailable`).
+- On Linux the Secret Service needs a login session bus (`DBUS_SESSION_BUS_ADDRESS`, or the user bus socket under `/run/user/<uid>`), so a system service with no login session has no keystore.
+- Posture is self-reported, and a run with a CC3 floor never takes a resident credential.
 
 ## Claiming a runner
 
@@ -42,6 +52,9 @@
 | Revoked by the owner or a security operator | The org marks that runner's runs lost and runs the kill cascade; the runner stops every governed proxy |
 
 "Offline" and "ungoverned" are never the same thing: an offline runner is still governed and runs nothing new.
+
+> [!NOTE]
+> Behind a shared ingress, unauthenticated runner connections from one address share one pre-auth rate-limit bucket, so put per-client rate limits on the ingress in front of `/api/v1/runners/{id}/stream`.
 
 ## Legacy org enrolment (deprecated)
 

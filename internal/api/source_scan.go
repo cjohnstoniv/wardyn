@@ -86,7 +86,7 @@ func (s *Server) handleScanSource(w http.ResponseWriter, r *http.Request) {
 		// Provider admission refused the clone: the policy answer, not a daemon
 		// fault — 422/403 with the same sentence every request door writes, never
 		// the 500 below.
-		if s.writeAdmissionLaunchRefusal(w, r, lerr) {
+		if s.writeScanLaunchRefusal(w, r, lerr) {
 			s.recordAudit(r.Context(), s.auditEvent(nil, actorType, actor,
 				"source.scan", id.String(), "failure", mustJSON(map[string]any{"detail": lerr.Error()})))
 			return
@@ -107,6 +107,16 @@ func (s *Server) handleScanSource(w http.ResponseWriter, r *http.Request) {
 	default:
 		writeErrorReason(w, http.StatusUnprocessableEntity, reasonSourceScanUnsupportedKind, "source kind has nothing to scan")
 	}
+}
+
+// writeScanLaunchRefusal answers the two policy refusals a scan launch can end
+// in, the provider admission and the placement denial, and reports whether it did.
+func (s *Server) writeScanLaunchRefusal(w http.ResponseWriter, r *http.Request, err error) bool {
+	var denied *placementDeniedError
+	if errors.As(err, &denied) {
+		return denied.refusal.write(s, w, r)
+	}
+	return s.writeAdmissionLaunchRefusal(w, r, err)
 }
 
 // seedSourceRequirements derives the requirement rows a scan DISCOVERS for
@@ -227,6 +237,11 @@ func (s *Server) launchSourceScanRun(ctx context.Context, actor string, src type
 	dc, ceiling, cerr := s.resolveDispatchCeiling(ctx)
 	if cerr != nil {
 		return types.AgentRun{}, release(cerr)
+	}
+	// A scan run is a remote sandbox created FOR the acting member over their
+	// source, so a profile denying remote placement closes this door too.
+	if ref := s.placementDeniedRefusal(ctx, types.PlacementRemote, ceiling); ref != nil {
+		return types.AgentRun{}, release(&placementDeniedError{ref})
 	}
 	// Strongest advertised at or above the floor, not the bare floor: dispatching
 	// at the bare floor unconditionally would have a gVisor/Kata host running
@@ -412,7 +427,7 @@ func (s *Server) scanAttachedSources(w http.ResponseWriter, r *http.Request, ws 
 			// answering, so the fan-out stops with the admission status rather than
 			// a 500 (the workspace door above refuses first; this covers a source
 			// narrowed between that check and this launch).
-			if s.writeAdmissionLaunchRefusal(w, r, lerr) {
+			if s.writeScanLaunchRefusal(w, r, lerr) {
 				partialAudit(id, lerr.Error())
 				return
 			}

@@ -58,7 +58,8 @@ type bootFlags struct {
 	// WHICH org. Unset (the default) means no hybrid posture at all, and
 	// validateHybridPosture (boot_posture.go) is a no-op. orgEnrolToken is
 	// meaningless without it.
-	orgURL *string
+	orgURL       *string
+	runnerOrgURL *string
 	// orgEnrolToken is WARDYN_ORG_ENROLMENT_TOKEN — a secret, so never logged
 	// and never echoed in a boot refusal.
 	orgEnrolToken *string
@@ -312,6 +313,11 @@ type bootFlags struct {
 	// rewrapPrincipalKeys is `wardynd -rewrap-principal-keys` (rewrap_principal_keys.go):
 	// no env pair, like -rewrap.
 	rewrapPrincipalKeys *bool
+	// recoveryInventory, recoveryManifest, recoveryVerify and recoveryRehearse are the recovery-set verbs
+	// (recovery_inventory.go, recovery_manifest.go), and recoverySet is the set directory they
+	// work on. No env pair, like the modes above.
+	recoveryInventory, recoveryManifest, recoveryVerify, recoveryRehearse *bool
+	recoverySet                                                           *string
 	// vault configures the Vault KV v2 external store, azure the Azure Key
 	// Vault one (secret_store.go).
 	vault vaultFlags
@@ -411,6 +417,7 @@ func parseBootFlags() *bootFlags {
 		memberWritableRoots:    flagEnv("member-writable-roots", "WARDYN_USER_WRITABLE_ROOTS", "", "comma-separated absolute host directories where a member may mark their own mount writable. Empty (default) means member mounts are read-only"),
 		memberWritableDeny:     flagEnv("member-writable-deny", "WARDYN_USER_WRITABLE_DENY", "", "comma-separated absolute host directories carved out of -member-writable-roots; deny wins over allow"),
 		orgURL:                 flagEnv("org-url", "WARDYN_ORG_URL", "", "org control plane this managed laptop belongs to (https://, or a plain http:// loopback URL for local testing). Empty (default) means no hybrid posture; requires -member-mode when set"),
+		runnerOrgURL:           flagEnv("runner-org-url", "WARDYN_RUNNER_ORG_URL", "", "public organisation URL bound into registered runner identities; HTTPS required except loopback HTTP for development, without userinfo, query or fragment. Unset disables runner registration and streams"),
 		orgEnrolToken:          flagEnv("org-enrolment-token", "WARDYN_ORG_ENROLMENT_TOKEN", "", "secret enrolment token this device presents to -org-url; requires -org-url to also be set"),
 		scimToken:              flagEnv("scim-token", "WARDYN_SCIM_TOKEN", "", "secret bearer the SCIM 2.0 Users routes (/scim/v2/Users) accept, at least 32 bytes; unset (default) mounts no SCIM route. Requires OIDC on a single-tenant Entra issuer and TLS"),
 		scimTokenNext:          flagEnv("scim-token-next", "WARDYN_SCIM_TOKEN_NEXT", "", "secret second bearer the SCIM routes accept while the identity provider is switched to a new one; requires -scim-token and must differ from it"),
@@ -587,6 +594,11 @@ func parseBootFlags() *bootFlags {
 		rewrapPrincipalKeys: flag.Bool("rewrap-principal-keys", false, "maintenance mode, safe while a daemon serves: move every person's stored credential from the credential key into an envelope under that person's own principal key (enc_version 3), "+
 			"one row at a time, then exit; idempotent and resumable, and values are never decrypted. Boot keys, the operator namespace and external-store pointers are untouched. "+
 			"Separate from -rewrap, which rotates the root key. See docs/operations/secrets-and-keys.md (default false)"),
+		recoveryInventory:       flag.Bool("recovery-inventory", false, "maintenance mode: print the recovery set's items as JSON, each with where it lives for this deployment, then exit. Opens no connection and reads no key (docs/design/0.9/recovery-set.md; default false)"),
+		recoveryManifest:        flag.Bool("recovery-manifest", false, "maintenance mode, every other wardynd must be stopped: write manifest.json into -recovery-set, tying the database snapshot to the staged spool, then exit (default false)"),
+		recoveryVerify:          flag.Bool("recovery-verify", false, "maintenance mode, every other wardynd must be stopped: check that the database at WARDYN_PG_DSN and the staged spool in -recovery-set are the pair the manifest recorded, then exit (default false)"),
+		recoveryRehearse:        flag.Bool("recovery-rehearse", false, "maintenance mode: check a restored database (WARDYN_REHEARSE_PG_DSN) against the recovery set in -recovery-set, with the deployment's keys in the environment, then exit: 0 pass, 3 refused, 4 fail, 5 incomplete (default false)"),
+		recoverySet:             flag.String("recovery-set", "", "directory of the recovery set that -recovery-manifest writes and -recovery-verify reads"),
 		vault:                   registerVaultFlags(),
 		hostCapacity:            registerHostCapacityFlags(),
 		preflightRatePerMin:     flagIntEnv("preflight-rate-per-min", "WARDYN_PREFLIGHT_RATE_PER_MIN", 20, "POST /runs/preflight calls one person may make per minute (burst 5); 0 turns the limit off. The admin token is exempt"),

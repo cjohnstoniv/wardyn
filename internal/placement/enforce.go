@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strconv"
 
+	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/hostrules"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -57,16 +58,20 @@ var strippers = map[string]stripper{
 			delete(s.Env, key)
 		}
 	},
-	// Every interception entry needs an own admitted injection; an org-only
-	// interception entry must not silently retain authority after credentials strip.
+	// Every interception entry needs an own admitted injection or a via_org
+	// destination; an org-only interception entry must not silently retain
+	// authority after credentials strip.
 	"ProxyConfig.MITMHosts": func(_ LocalPlan, s *runner.SandboxSpec) {
 		s.ProxyConfig.MITMHosts = slices.DeleteFunc(slices.Clone(s.ProxyConfig.MITMHosts), func(host string) bool {
-			return !slices.ContainsFunc(s.ProxyConfig.Injection, func(in runner.InjectionGrant) bool { return hostrules.HostOf(host) == in.Rule.Host })
+			h := hostrules.HostOf(host)
+			return !slices.ContainsFunc(s.ProxyConfig.Injection, func(in runner.InjectionGrant) bool { return h == in.Rule.Host }) &&
+				!slices.ContainsFunc(s.ProxyConfig.ViaOrgRoutes, func(r proxy.ViaOrgRoute) bool { return h == r.Host })
 		})
 	},
-	// Every grant left in the policy was proven own and OwnerOnly by the
-	// credential classification that ran first; nothing remains to drop.
-	"ProxyConfig.Policy.EligibleGrants": func(LocalPlan, *runner.SandboxSpec) {},
+	// Every grant left in the policy was proven own and OwnerOnly, or via_org,
+	// by the credential classification that ran first. A via_org grant leaves
+	// the policy and keeps only its grant id and host (stripViaOrg).
+	"ProxyConfig.Policy.EligibleGrants": stripViaOrg,
 	"ProxyConfig.Policy.LLMInspection.WorkspaceSecretValues": func(_ LocalPlan, s *runner.SandboxSpec) {
 		if li := s.ProxyConfig.Policy.LLMInspection; li != nil {
 			li.WorkspaceSecretValues = nil
@@ -78,6 +83,64 @@ var strippers = map[string]stripper{
 		}
 	},
 }
+
+// stripViaOrg reduces every via_org grant of the laptop copy (design §7.3): the
+// policy drops the grant, an injection becomes a ViaOrgRoutes entry naming its
+// grant and host (the rule and its secret name stay at the organisation) and
+// its host joins MITMHosts, since the runner's proxy must terminate that TLS to
+// forward the plaintext. A GitHub grant keeps its repository allowlist (no
+// credential) and gains a github.com route for /wardyn/gh/. It runs on the
+// Policy field, ahead of MITMHosts, so that stripper sees the routes.
+func stripViaOrg(p LocalPlan, s *runner.SandboxSpec) {
+	pc := &s.ProxyConfig
+	pc.Policy.EligibleGrants = deleteIndexed(pc.Policy.EligibleGrants, func(i int) bool {
+		return viaOrgPath(p, indexed("ProxyConfig.Policy.EligibleGrants", i))
+	})
+	var routes []proxy.ViaOrgRoute
+	for i, in := range pc.Injection {
+		if viaOrgPath(p, indexed("ProxyConfig.Injection", i)) {
+			routes = append(routes, proxy.ViaOrgRoute{GrantID: in.GrantID, Host: in.Rule.Host})
+			if !slices.Contains(pc.MITMHosts, in.Rule.Host) {
+				pc.MITMHosts = append(slices.Clip(pc.MITMHosts), in.Rule.Host)
+			}
+		}
+	}
+	pc.Injection = deleteIndexed(pc.Injection, func(i int) bool { return viaOrgPath(p, indexed("ProxyConfig.Injection", i)) })
+	for repo, id := range pc.GitGrants {
+		if viaOrgPath(p, "ProxyConfig.GitGrants["+repo+"]") {
+			routes = append(routes, proxy.ViaOrgRoute{GrantID: id, Host: viaOrgGitHubHost})
+		}
+	}
+	if len(routes) == 0 {
+		return
+	}
+	routes = append(routes, pc.ViaOrgRoutes...)
+	slices.SortFunc(routes, func(a, b proxy.ViaOrgRoute) int {
+		return cmpString(a.GrantID.String()+" "+a.Host, b.GrantID.String()+" "+b.Host)
+	})
+	pc.ViaOrgRoutes = slices.Compact(routes)
+}
+
+// deleteIndexed is a copy of in without the elements drop names by index; in
+// itself when none is dropped.
+func deleteIndexed[T any](in []T, drop func(int) bool) []T {
+	var out []T
+	dropped := false
+	for i, v := range in {
+		if drop(i) {
+			dropped = true
+			continue
+		}
+		out = append(out, v)
+	}
+	if !dropped {
+		return in
+	}
+	return out
+}
+
+// viaOrgGitHubHost is the destination of a brokered GitHub grant's /wardyn/gh/ route.
+const viaOrgGitHubHost = "github.com"
 
 // gates check a RuleRefuse or RuleBound field against the runner, keyed
 // "Struct.Field". A gated field with no gate refuses.
@@ -94,14 +157,22 @@ var gates = map[string]func(LocalPlan) *Refusal{
 		}
 		return nil
 	},
-	"SandboxSpec.Drive": func(p LocalPlan) *Refusal {
-		if d := p.Spec.Drive; d != nil {
+	"SandboxSpec.Drives": func(p LocalPlan) *Refusal {
+		for i, d := range p.Spec.Drives {
+			path := indexed("SandboxSpec.Drives", i)
 			if d.Backend != types.DriveBackendHostPath {
-				return refuse(ReasonPlacementCapability, "SandboxSpec.Drive", "organisation storage cannot be sent to a local runner")
+				return refuse(ReasonPlacementCapability, path, "organisation storage cannot be sent to a local runner")
 			}
-			if !p.VerifiedLocalPaths["SandboxSpec.Drive"] {
-				return refuse(ReasonPlacementLocalPath, "SandboxSpec.Drive", "drive path is not bound to this runner's allowed roots")
+			if !p.VerifiedLocalPaths[path] {
+				return refuse(ReasonPlacementLocalPath, path, "drive path is not bound to this runner's allowed roots")
 			}
+		}
+		return nil
+	},
+	// The organisation's App token never leaves the organisation's proxy.
+	"ProxyConfig.GitHubAPI": func(p LocalPlan) *Refusal {
+		if p.Spec.ProxyConfig.GitHubAPI != nil {
+			return refuse(ReasonPlacementCredential, "ProxyConfig.GitHubAPI", "the GitHub CLI's App token cannot be sent to a local runner")
 		}
 		return nil
 	},

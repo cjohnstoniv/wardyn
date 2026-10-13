@@ -23,6 +23,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // attachPrepareTimeout bounds one Runner.Attach (the exec create and hijack):
@@ -43,6 +44,8 @@ var (
 	// errAttachCancelled: the holder was evicted, released, or its connection
 	// ended while its exec was being opened.
 	errAttachCancelled = errors.New("attach cancelled")
+	// errAttachBackgroundOnly: the run is a background task; it has no interactive exec.
+	errAttachBackgroundOnly = errors.New(runBackgroundOnlyMsg("interactive exec"))
 	// errAttachTimedOut: Runner.Attach did not return within attachPrepareTimeout.
 	errAttachTimedOut = errors.New("attach timed out")
 	// errAttachUncovered: a promotion's new exec was refused because the run's
@@ -261,7 +264,11 @@ func (s *Server) attachOptionsFor(runID uuid.UUID, h *attachHolder, writer bool)
 // to the other role is closed here by its own identity (the object Attach
 // returned), and the loop opens again only if the role changed. A replacement
 // exec also re-proves the run's masking corpus whole.
-func (s *Server) establishExec(ctx context.Context, runID uuid.UUID, h *attachHolder, sandboxRef string) error {
+func (s *Server) establishExec(ctx context.Context, run types.AgentRun, h *attachHolder) error {
+	if backgroundOnlyRefusal(run, "interactive exec") != nil {
+		return errAttachBackgroundOnly
+	}
+	runID, sandboxRef := run.ID, run.SandboxRef
 	h.openMu.Lock()
 	defer h.openMu.Unlock()
 	for {

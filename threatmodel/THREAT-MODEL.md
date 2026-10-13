@@ -295,6 +295,16 @@ that ceiling down; each run receives only the minimal subset its task needs.
     replacement for it, and does not change this boundary's bypass class.
   - A run correctly resolved to an unattended level still depends on the same in-sandbox,
     cooperative `tool_rules`/`wardyn-toolgate` decision plane once it launches.
+- **Per-harness rules (0.9), same-uid residual:** with two or more harnesses, only the harness Wardyn
+  starts holds the tool-approval credential that selects its own rules. It is a file at
+  `/run/wardyn/secrets/wardyn-toolgate-<harness>` read into that harness's process environment only.
+  - Docker: mode 0400, owned by the agent uid. Kubernetes: a projected Secret item, root-owned 0440
+    through the pod's fsGroup 1000, and the plaintext also sits in the run's Secret object. On krun
+    the guest runs as root, so the mode bounds nothing.
+  - Readers: any process running as uid 1000 in the sandbox, attach and exec shells included (the
+    file or `/proc/<pid>/environ`), and every process the harness starts. Such a process can send
+    the credential and be decided by the started harness's rules. Accepted for 0.9.0; uid isolation
+    is a later follow-up.
 
 ### B6 — Runner data plane vs. control plane
 
@@ -332,6 +342,16 @@ that ceiling down; each run receives only the minimal subset its task needs.
     the signing key.
   - A compromised runner is assumed; the control plane never trusts runner-asserted identity
     claims.
+- **Organisation credentials used by a self-hosted run (`via_org`) [0.9].**
+  - A `via_org` credential is used by the developer's run but never read: the value stays at the
+    organisation, which re-runs the run's egress checks as authoritative and dials the destination over
+    its own TLS.
+  - The organisation serves this only through the run's own runner relay with the run token, for this
+    run's `via_org` grants, to each grant's host on 443, within 16 streams, 8 GiB a run per server
+    replica (reset on restart) and 10 minutes idle.
+  - **Residual:** the laptop proxy terminates the sandbox's TLS to forward these requests, so the
+    developer (root on the laptop) sees each request and response in plaintext and can make any request
+    the rule's pins and the policy allow while the run lives.
 
 ### B8 — Untrusted build container vs. host daemon + registry
 
@@ -2047,6 +2067,15 @@ hiding them would repeat the failure mode we are designed to avoid.
       - **Metadata stays in the clear:** who held a credential, and when, is still in the table (c).
       - **A live run keeps what it already holds,** and whatever was sealed for it under the destroyed key (its masking copies) is undecryptable after a restart.
         - The run is uncovered, which fails closed and is disclosed.
+      - **An erase and a concurrent write (0.9):** each person has an erase generation in Postgres.
+        - A fenced write shares a transaction with a `FOR SHARE` read of that counter, and an erase advances it under the row lock. Either the write commits first and the erase deletes it, or the erase commits first and the write is refused (`409` `credential_erased_during_write`).
+        - The counter holds a number and a time, never a credential.
+        - Residual: a store with no generation falls back to in-process locks (`write_fence` `locks_only`), and a pre-upgrade daemon in a mixed fleet is unfenced.
+      - **Who a name is (0.9):** every route that erases, deletes or assigns by name resolves the name once, through `PrincipalsNamed`.
+        - The order is: an exact principal (sign-in, admin-created person, API-token owner, workspace owner); then `entra:<tenant>:<object>` from recorded ids; then the principal case-folded; then, only for a name with an `@`, every recorded email together.
+        - Two principals in a tier, or an unreadable directory, refuses; nothing falls through to a guess.
+        - Audit-seal aliases and a governance row's email column count only when the directory names them as this person alone.
+        - Residual: a namespace no directory records can be shadowed, for an `@` name, by another person's email claim; the self-erase check matches claim-text aliases, so a person who claims a security admin's email cannot be erased by that admin (another security admin or the admin token can); SCIM deprovisioning still builds its own forms from claim-text emails.
     - (f) **Key domains (`WARDYN_KEY_DOMAINS_FILE`, 0.8.6)** narrow what a leaked domain key exposes.
       - A person assigned to a domain has their principal keys wrapped under that domain's key, so a database dump plus one domain's key opens that domain's keys and no other's.
       - **A database writer who rewrites the `key_domain_assignments` rows moves a subject's FUTURE writes into a domain whose key the attacker holds.**
@@ -2385,6 +2414,8 @@ hiding them would repeat the failure mode we are designed to avoid.
       - The request classifier that puts every GitHub REST write to a repository's content or refs in a refused class (`CapRepoContentWriteREST` in [`internal/ghscope/capability.go`](../internal/ghscope/capability.go)) is called by no gate in this release.
       - There is no per-person GitHub lane. The App lane's bounds are those of the `github_token` grant (§5.1a).
       - Branch confinement and push content rules see `git push` through the broker; they do not inspect a REST call to the forge.
+
+65. **Behind a shared ingress, unauthenticated runner connections from one address share one pre-auth rate-limit bucket (`handleRunnerStream` in [`internal/api/runner_stream.go`](../internal/api/runner_stream.go)), so put per-client rate limits on the ingress in front of the runner endpoint (0.9).**
 
 ### The injected call is pinned on the wire (security INFO-1 / W6-S F3) — SHIPPED, not deferred
 
@@ -2796,6 +2827,9 @@ has four-eyes.**
 
 - `WARDYN_GOVERNANCE_SECOND_HUMAN` (off by default) holds an authority-changing write as a pending change until a second, distinct human with the authority to make that write approves it.
 - The covered set, the exemptions and the approver table are in [`docs/OPERATIONS.md`](../docs/OPERATIONS.md#four-eyes-on-governance-writes-a-walkthrough) "Four-eyes on governance writes: a walkthrough".
+- A service identity carries any existing user type directly, so its create and any change of its sponsor
+  are covered (governance change kind `service_identity`), held for a second security-tier human and
+  applied only against the reviewed state.
 - It is published here because of what it leaves open.
 
 **What it guarantees**, with SSO configured and the admin token held out of band:
@@ -2834,8 +2868,10 @@ has four-eyes.**
    - `PUT /workspaces/{id}/approved-egress` and `/denied-egress`, and record-egress promotion;
    - `/policies`, `/site-config` and `/integrations`;
    - the approval `always` scope;
-   - user-type create and delete (a new type takes effect only through a covered role-mapping write,
-     and a type a mapping references cannot be deleted);
+   - user-type create and delete (a new type reaches a person through a covered role-mapping write
+     and a service identity through its covered create; a type that a mapping, or a service identity
+     that is not retired, references cannot be deleted);
+   - a service identity's description, suspend, unsuspend and retire;
    - the SCIM purge, which deletes the departed person's user-subject governance assignments and
      capability grants directly, without a pending change: the identity provider is the single
      authority for that write.

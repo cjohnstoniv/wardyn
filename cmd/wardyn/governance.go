@@ -59,11 +59,12 @@ func governanceCmd(client clientFn) *cobra.Command {
 			"created; one present server-side but absent from the file is left alone unless\n" +
 			"--prune is passed, which also deletes any server-side assignment the file omits.\n" +
 			"`wardyn governance get > f && wardyn governance set f` is a no-op.\n\n" +
+			"`wardyn governance plan f` previews what `set` would change, without writing.\n\n" +
 			"Where governance writes need a second approver, `set` holds them as pending\n" +
 			"changes (it exits 0 and lists them); a second human then runs\n" +
 			"`wardyn governance changes approve <id>`.",
 	}
-	cmd.AddCommand(governanceGetCmd(client), governanceSetCmd(client), governanceChangesCmd(client))
+	cmd.AddCommand(governanceGetCmd(client), governancePlanCmd(client), governanceSetCmd(client), governanceChangesCmd(client))
 	return subcommandGroup(cmd)
 }
 
@@ -82,6 +83,88 @@ func governanceGetCmd(client clientFn) *cobra.Command {
 	}
 }
 
+// readGovernanceDocument reads the document args names (stdin for "-" or no
+// argument) and strict-decodes it.
+func readGovernanceDocument(cmd *cobra.Command, args []string) (sdk.GovernanceDocument, error) {
+	src := "-"
+	if len(args) == 1 {
+		src = args[0]
+	}
+	var raw []byte
+	var err error
+	if src == "-" {
+		raw, err = io.ReadAll(cmd.InOrStdin())
+	} else {
+		raw, err = os.ReadFile(src)
+	}
+	if err != nil {
+		return sdk.GovernanceDocument{}, fmt.Errorf("read governance document: %w", err)
+	}
+	// Strict decode, the same shape drive set and site-config set
+	// both take: a key this file mistypes must surface as a parse
+	// error, not silently vanish from what ApplyGovernance then sends.
+	var doc sdk.GovernanceDocument
+	if err := decodeOneJSONStrict(bytes.NewReader(raw), &doc); err != nil {
+		return sdk.GovernanceDocument{}, fmt.Errorf("parse governance document JSON: %w", err)
+	}
+	return doc, nil
+}
+
+func governancePlanCmd(client clientFn) *cobra.Command {
+	var prune bool
+	cmd := &cobra.Command{
+		Use:   "plan [file]",
+		Short: "Print the creates, updates and deletes a set would make, without writing",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			doc, err := readGovernanceDocument(cmd, args)
+			if err != nil {
+				return err
+			}
+			plan, err := client().PlanGovernance(cmd.Context(), doc, prune)
+			if err != nil {
+				return err
+			}
+			printGovernancePlanSummary(cmd.ErrOrStderr(), plan)
+			return emitJSON(cmd.OutOrStdout(), plan)
+		},
+	}
+	cmd.Flags().BoolVar(&prune, "prune", false,
+		"also delete every server-side profile and assignment the file omits (default: leave them alone)")
+	return cmd
+}
+
+// printGovernancePlanSummary writes the plan's counts to w. A plan with deletes
+// also names each one, so a prune is never a surprise.
+func printGovernancePlanSummary(w io.Writer, plan sdk.GovernancePlan) {
+	var creates, updates, deletes int
+	for _, s := range plan.Steps {
+		switch s.Op {
+		case "create":
+			creates++
+		case "update":
+			updates++
+		case "delete":
+			deletes++
+		}
+	}
+	fmt.Fprintf(w, "plan: %d create, %d update, %d delete, %d unchanged\n", creates, updates, deletes, plan.Unchanged)
+	if !plan.Destructive {
+		return
+	}
+	fmt.Fprintln(w, "deletes:")
+	for _, s := range plan.Steps {
+		if s.Op != "delete" {
+			continue
+		}
+		if s.Kind == "profile" {
+			fmt.Fprintf(w, "  profile %q\n", s.Name)
+		} else {
+			fmt.Fprintf(w, "  assignment %s %q\n", s.SubjectType, s.Subject)
+		}
+	}
+}
+
 func governanceSetCmd(client clientFn) *cobra.Command {
 	var prune bool
 	cmd := &cobra.Command{
@@ -89,29 +172,15 @@ func governanceSetCmd(client clientFn) *cobra.Command {
 		Short: "Upsert the governance profiles and assignments in a JSON file (or stdin with '-')",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			src := "-"
-			if len(args) == 1 {
-				src = args[0]
-			}
-			var raw []byte
-			var err error
-			if src == "-" {
-				raw, err = io.ReadAll(cmd.InOrStdin())
-			} else {
-				raw, err = os.ReadFile(src)
-			}
+			doc, err := readGovernanceDocument(cmd, args)
 			if err != nil {
-				return fmt.Errorf("read governance document: %w", err)
-			}
-			// Strict decode, the same shape drive set and site-config set
-			// both take: a key this file mistypes must surface as a parse
-			// error, not silently vanish from what ApplyGovernance then sends.
-			var doc sdk.GovernanceDocument
-			if err := decodeOneJSONStrict(bytes.NewReader(raw), &doc); err != nil {
-				return fmt.Errorf("parse governance document JSON: %w", err)
+				return err
 			}
 			res, err := client().ApplyGovernanceResult(cmd.Context(), doc, prune)
 			if err != nil {
+				if len(res.Steps) > 0 {
+					printApplySteps(cmd.ErrOrStderr(), res.Steps)
+				}
 				return err
 			}
 			printGovernancePending(cmd.ErrOrStderr(), res)

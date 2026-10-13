@@ -19,7 +19,7 @@ import (
 
 // auditNarrowingParams are the query parameters that narrow an audit export (parseAuditFilter's and
 // auditScope's). A partition export takes none of them: its footer digest covers the whole partition.
-var auditNarrowingParams = []string{"run_id", "since", "until", "action", "action_prefix", "actor", "actor_type", "outcome", "origin"}
+var auditNarrowingParams = []string{"run_id", "since", "until", "action", "action_prefix", "actor", "target", "actor_type", "outcome", "origin"}
 
 // Export forms of one partition. Both carry the same rows and the same manifest header and footer.
 const (

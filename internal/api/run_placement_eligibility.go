@@ -7,35 +7,142 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"path/filepath"
+	"slices"
 	"strconv"
+	"strings"
+
+	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/authz"
+	"github.com/cjohnstoniv/wardyn/internal/composer"
 	"github.com/cjohnstoniv/wardyn/internal/placement"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// localPlacementRefusal is the create-time answer for a local request: the
-// admitted plan's own refusal, else the final unsupported-local refusal. That
-// final refusal is deliberate even when the admitted inputs classify as own:
-// late dispatch can add provider/capture/redirect credentials and files that
-// the actual-spec classifier must inspect before H3/D117 enable execution.
-func (s *Server) localPlacementRefusal(r *http.Request, req createRunRequest,
-	spec types.RunPolicySpec, ceiling governanceCeiling, comps runComponents,
-	drive *types.DriveMount, workspaces []types.Workspace,
-) *runRefusal {
-	if req.Placement != placement.Local {
+// requestPlacement is the placement a request names; an empty one is the
+// organisation's own executor today (remotePlacement), until D-117's resolver
+// fills it from the eligible set.
+func requestPlacement(req createRunRequest) types.Placement {
+	if remotePlacement(req.Placement) {
+		return types.PlacementRemote
+	}
+	return req.Placement
+}
+
+// requestRunnerID is the runner a request names, or the zero UUID when it names
+// none or names one that is not a UUID (which no registered runner can match).
+func requestRunnerID(req createRunRequest) uuid.UUID {
+	id, _ := uuid.Parse(req.RunnerID)
+	return id
+}
+
+// deniedPlacements is the placement list the caller's governance profile
+// denies: absent (nil) for a member with no assigned profile, and for a caller
+// whose runs stand outside governance. A deny list, so absent means permitted.
+func (s *Server) deniedPlacements(ctx context.Context, ceiling governanceCeiling) []types.Placement {
+	if ceiling.Profile == nil || s.runUngoverned(ctx) {
 		return nil
 	}
-	p, refusal := s.localAdmittedPlan(r, req, spec, ceiling, comps, drive, workspaces)
+	return ceiling.Limits.DenyPlacements
+}
+
+// placementDeniedRefusal is the deny_placements door: 403 placement_denied
+// naming the profile, with the authz.denied row a governance door writes. The
+// ONE check: the fold step and every launcher that creates a run for the acting
+// member (source scan) ask it with the placement they put the run on.
+func (s *Server) placementDeniedRefusal(ctx context.Context, p types.Placement, ceiling governanceCeiling) *runRefusal {
+	if !slices.Contains(s.deniedPlacements(ctx, ceiling), p) {
+		return nil
+	}
+	d := authz.Deny(authz.ReasonGovernanceProfile, "runs.placement", placementDeniedMsg(p, ceiling.Profile.Name)).WithPolicy(s.ceilingPolicy(ctx, ceiling))
+	f := runError(placement.ReasonPlacementDenied.Status(), string(placement.ReasonPlacementDenied), d.Sentence)
+	f.decision = &d
+	return f
+}
+
+// placementDeniedError carries the refusal out of a launcher that has no
+// request to answer, so its handler writes the same 403 and audit row the doors do.
+type placementDeniedError struct{ refusal *runRefusal }
+
+func (e *placementDeniedError) Error() string { return e.refusal.body.Error }
+
+// placementDeniedMsg is the door's member sentence (MEMBER.DENIED_PLACEMENT_*), composed
+// once so the 403 body and the audit row carry the same bytes.
+func placementDeniedMsg(p types.Placement, profile string) string {
+	if p == types.PlacementLocal {
+		return fmt.Sprintf("placement local is not allowed by your governance profile %q — launch with placement remote, or leave placement empty", profile)
+	}
+	return fmt.Sprintf("placement remote is not allowed by your governance profile %q — launch on your own runner with placement local", profile)
+}
+
+// localPlacementRefusal is the create-time answer for a local request: the
+// admitted plan's own refusal, else nil for a pooled run, which create binds to
+// one of the person's own runners (runPlacement.apply), with the delivery policy
+// the plan was judged on. Dispatch classifies the actual spec again
+// (classifyLocalDispatch) for what late authoring adds. An unpooled local
+// request has no runner to go to and is refused.
+func (s *Server) localPlacementRefusal(r *http.Request, req createRunRequest, pooled bool,
+	spec types.RunPolicySpec, ceiling governanceCeiling, comps runComponents,
+	drives []types.DriveMount, workspaces []types.Workspace, baseline composer.Baseline,
+) (placement.DeliveryPolicy, *runRefusal) {
+	if req.Placement != placement.Local {
+		return placement.DeliveryPolicy{}, nil
+	}
+	p, refusal := s.localAdmittedPlan(r, req, spec, ceiling, comps, drives, workspaces)
 	if refusal != nil {
-		return refusal
+		return placement.DeliveryPolicy{}, refusal
+	}
+	if err := s.localPlanFacts(r.Context(), &p, baseline, nil); err != nil {
+		return placement.DeliveryPolicy{}, runServerError("read the local placement facts", err)
 	}
 	if _, ref := placement.LocalEligibility(p); ref != nil {
-		return s.localEligibilityRefusal(r, ceiling, ref)
+		return placement.DeliveryPolicy{}, s.localEligibilityRefusal(r, ceiling, ref)
 	}
-	return runError(placement.ReasonPlacementUnavailable.Status(), string(placement.ReasonPlacementUnavailable),
-		"Your own runner is not available: this server cannot place a run on a runner yet.")
+	if pooled {
+		return p.Delivery, nil
+	}
+	return placement.DeliveryPolicy{}, runError(placement.ReasonPlacementUnavailable.Status(), string(placement.ReasonPlacementUnavailable), localUnpooledMsg)
+}
+
+// remoteInsteadMsg follows a local refusal of a run its pool put on the person's own runner while a
+// remote-hosted runner in the pool could also take it: the pool never moves the run there by itself.
+func remoteInsteadMsg(pool string) string {
+	return "To run it on a remote-hosted runner in " + pool + " instead, launch it with placement remote."
+}
+
+// localUnpooledMsg is the refusal of a local run that no pool of the person's own places: a run reaches a
+// person's own runner only through one of their own pools.
+const localUnpooledMsg = "Your own runner is not available to this run: a local run goes to a pool of your own runners. Choose one, or create one in My pools and add your runner to it."
+
+// localPlanFacts fills what every LocalEligibility door (create, dispatch and
+// revive) judges a runner_resident credential on: the stored delivery policy,
+// the bound runner's reported posture, and the run's blast-radius floor (Q7).
+// Before a runner is bound (create) Posture stays nil; a store that keeps no
+// policy leaves every class refused.
+func (s *Server) localPlanFacts(ctx context.Context, p *placement.LocalPlan, baseline composer.Baseline, runnerID *uuid.UUID) error {
+	p.ConfinementFloor = composer.RequiredConfinementFloor(p.Spec.ProxyConfig.Policy, baseline)
+	policy, err := s.storedDeliveryPolicy(ctx)
+	if err != nil {
+		return err
+	}
+	p.Delivery = policy
+	st, ok := s.cfg.Store.(interface {
+		GetRunner(context.Context, uuid.UUID) (types.Runner, error)
+	})
+	if !ok || runnerID == nil {
+		return nil
+	}
+	rn, err := st.GetRunner(ctx, *runnerID)
+	if err != nil {
+		return err
+	}
+	if rn.PostureReportedAt != nil {
+		posture := rn.Posture
+		p.Posture = &posture
+	}
+	return nil
 }
 
 // localAdmittedPlan builds the plan a local candidate is judged on from the
@@ -45,7 +152,7 @@ func (s *Server) localPlacementRefusal(r *http.Request, req createRunRequest,
 // routing; D-117 adds per-candidate verified paths and capabilities to it.
 func (s *Server) localAdmittedPlan(r *http.Request, req createRunRequest,
 	spec types.RunPolicySpec, ceiling governanceCeiling, comps runComponents,
-	drive *types.DriveMount, workspaces []types.Workspace,
+	drives []types.DriveMount, workspaces []types.Workspace,
 ) (placement.LocalPlan, *runRefusal) {
 	if fields := localDispatchUnclassified(); len(fields) != 0 {
 		return placement.LocalPlan{}, runError(placement.ReasonPlacementCredential.Status(), string(placement.ReasonPlacementCredential), fields[0]+": unclassified dispatch metadata")
@@ -59,7 +166,7 @@ func (s *Server) localAdmittedPlan(r *http.Request, req createRunRequest,
 		}
 	}
 	p := placement.LocalPlan{
-		Spec:    runner.SandboxSpec{Image: req.Image, Drive: drive, Mounts: buildRunMounts(spec, s.userMountPosture(workspaces)), ProxyConfig: runner.ProxyConfig{Policy: spec.Clone()}},
+		Spec:    runner.SandboxSpec{Image: req.Image, Drives: drives, Mounts: buildRunMounts(spec, s.userMountPosture(workspaces)), ProxyConfig: runner.ProxyConfig{Policy: spec.Clone()}},
 		Origins: map[string]placement.CredentialOrigin{}, UpstreamProxySecretRef: sc.UpstreamProxySecretRef,
 		LocalSelfDefinedComponents: ceiling.Limits.LocalSelfDefinedComponents,
 		TrustedOutput:              localTrustedOutputRequest(req),
@@ -89,6 +196,39 @@ func (s *Server) localAdmittedPlan(r *http.Request, req createRunRequest,
 	}
 	p.CredentialIntents = intents
 	return p, nil
+}
+
+// boundLocalPath is a local path and the runner it was registered for.
+type boundLocalPath struct {
+	Runner uuid.UUID
+	Path   string
+}
+
+// verifiedLocalPaths is the plan's VerifiedLocalPaths: a path is verified only
+// when its stored runner binding is the candidate runner and the path lies
+// inside one of that runner's allowed roots. bound is keyed by the plan path
+// ("SandboxSpec.Mounts[0]", "SandboxSpec.Drives[0]"). Nothing produces a binding on
+// batch yet (local_dir sources and host_path drives carry no runner column), so
+// every local mount still refuses placement_local_path until one does.
+func verifiedLocalPaths(candidate uuid.UUID, roots []string, bound map[string]boundLocalPath) map[string]bool {
+	out := map[string]bool{}
+	for key, b := range bound {
+		if candidate != uuid.Nil && b.Runner == candidate && withinAnyRoot(b.Path, roots) {
+			out[key] = true
+		}
+	}
+	return out
+}
+
+// withinAnyRoot reports whether path, cleaned, is a root or below one. Both must
+// be absolute: a relative path is never inside anything. Symlinks are the
+// runner's own device-side check at bind.
+func withinAnyRoot(path string, roots []string) bool {
+	path = filepath.Clean(path)
+	return filepath.IsAbs(path) && slices.ContainsFunc(roots, func(root string) bool {
+		root = filepath.Clean(root)
+		return filepath.IsAbs(root) && (path == root || strings.HasPrefix(path, strings.TrimSuffix(root, "/")+"/"))
+	})
 }
 
 func localTrustedOutputRequest(req createRunRequest) bool {
@@ -161,21 +301,37 @@ func (s *Server) localEligibilityRefusal(r *http.Request, ceiling governanceCeil
 	return runError(ref.Reason.Status(), string(ref.Reason), ref.Error())
 }
 
+// localGrantDelivery is how one grant of a local run is delivered: its OD-12
+// class key and mode (own or via_org).
+type localGrantDelivery struct {
+	class string
+	mode  placement.Mode
+}
+
 // ownLocalGrantSpecs verifies the entire set before the first write. Local own
 // grant persistence never depends on a caller remembering to stamp OwnerOnly.
-func (s *Server) ownLocalGrantSpecs(r *http.Request, spec types.RunPolicySpec) (types.RunPolicySpec, *runRefusal) {
+// An org-held grant is admitted only when policy, the delivery policy the run's
+// plan was judged on, delivers its class via_org and its kind has the via_org
+// shape; it stays as authored (never OwnerOnly) and is recorded via_org.
+func (s *Server) ownLocalGrantSpecs(r *http.Request, spec types.RunPolicySpec, policy placement.DeliveryPolicy) (types.RunPolicySpec, []localGrantDelivery, *runRefusal) {
 	spec = spec.Clone()
+	out := make([]localGrantDelivery, len(spec.EligibleGrants))
 	for i, g := range spec.EligibleGrants {
 		origin, ref := s.localGrantOrigin(r.Context(), localRequestOwner(r), g)
 		if ref != nil {
-			return types.RunPolicySpec{}, ref
+			return types.RunPolicySpec{}, nil, ref
+		}
+		if placement.ViaOrgGrant(origin, policy) {
+			out[i] = localGrantDelivery{class: origin.Delivery, mode: placement.ModeViaOrg}
+			continue
 		}
 		if origin.Class != placement.ClassOwn || !origin.Stored || !origin.OwnNamespace {
-			return types.RunPolicySpec{}, runError(placement.ReasonPlacementCredential.Status(), string(placement.ReasonPlacementCredential), fmt.Sprintf("eligible_grants[%d]: credential is not available in its owner's namespace", i))
+			return types.RunPolicySpec{}, nil, runError(placement.ReasonPlacementCredential.Status(), string(placement.ReasonPlacementCredential), fmt.Sprintf("eligible_grants[%d]: credential is not available in its owner's namespace", i))
 		}
 		spec.EligibleGrants[i].OwnerOnly = true
+		out[i] = localGrantDelivery{class: origin.Delivery, mode: placement.ModeOwn}
 	}
-	return spec, nil
+	return spec, out, nil
 }
 
 func localRequestOwner(r *http.Request) string {

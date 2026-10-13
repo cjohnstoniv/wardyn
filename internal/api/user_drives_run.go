@@ -131,31 +131,6 @@ func (s *Server) refuseDrive(w http.ResponseWriter, status int, reason, member s
 	writeErrorReason(w, status, reason, driveRefusal(member))
 }
 
-// seedRequestDrive resolves the run request's drive flag into the mount the
-// runner will execute, writing its own HTTP error and returning ok=false once
-// it has responded.
-//
-// Called after validateWorkspaceSources, in handleCreateRun and again in
-// handlePreflightRun, and the placement is deliberate on both counts. AFTER,
-// because the onboarding gate is the un-bypassable chokepoint on the resolved
-// spec and a drive must not be able to answer before it; in PREFLIGHT too,
-// because a dry run that previewed a green Review for a launch that will 422 is
-// the one thing the preflight handler exists not to do.
-//
-// It returns nil, true for "no drive was asked for" — the overwhelmingly common
-// case, and a provable no-op: no store read, no ceiling read, nothing.
-func (s *Server) seedRequestDrive(w http.ResponseWriter, r *http.Request,
-	req createRunRequest, ceiling governanceCeiling) (*types.DriveMount, bool) {
-	resolved, refusal := s.authorizeRequestDrive(r, req, ceiling)
-	if refusal.write(s, w, r) {
-		return nil, false
-	}
-	if resolved == nil {
-		return nil, true
-	}
-	return s.driveMountFor(r.Context(), w, req, *resolved)
-}
-
 // driveDoorProfile names the governance profile whose DenyUserDrive DOOR is
 // shut for this caller, or "" when the door is open. ONE predicate, read by
 // the enforcement path (userDriveDoorRefusal's 403) and the display path
@@ -359,16 +334,15 @@ func (s *Server) driveBindFailureHere(ctx context.Context, resolved types.Resolv
 //	would find out when their work failed to persist. The narrow direction
 //	(read_only:true on a writable allocation) is always honoured — that is what
 //	NARROW-ONLY means, and it matches WorkspaceSelection.ReadOnly exactly.
-func (s *Server) driveMountFor(ctx context.Context, w http.ResponseWriter, req createRunRequest,
-	resolved types.ResolvedDrive) (*types.DriveMount, bool) {
+func (s *Server) driveMountFor(ctx context.Context, w http.ResponseWriter, d runDrive) (*types.DriveMount, bool) {
+	resolved := d.resolved
 	if !s.driveIsMountableHere(ctx, w, resolved) {
 		return nil, false
 	}
-	if refusal := driveReadOnlyRefusal(req, resolved); refusal != nil {
+	if refusal := driveReadOnlyRefusal(d.narrow, resolved); refusal != nil {
 		refusal.drive.write(s, w)
 		return nil, false
 	}
-	readOnly := !resolved.Writable || (req.Drive.ReadOnly != nil && *req.Drive.ReadOnly)
 
 	return &types.DriveMount{
 		// The row's id, carried so a driver's labels and an offboarding sweep
@@ -399,11 +373,11 @@ func (s *Server) driveMountFor(ctx context.Context, w http.ResponseWriter, req c
 		// from a differently-picked claim is precisely the drift the label the
 		// driver stamps from it exists to catch.
 		SubjectHash: resolved.SubjectHash,
-		// The reserved constant, carried rather than assumed, so the path the
-		// runner binds at and the path validateWorkspaceSources/validatePolicySpec
-		// refuse to let anyone else name are the SAME symbol.
-		Target:      runner.DriveTarget,
-		ReadOnly:    readOnly,
+		// The derived path (runner.DriveTargetFor), carried rather than assumed,
+		// so the path the runner binds at and the paths validateWorkspaceSources/
+		// validatePolicySpec refuse to let anyone else name are the SAME symbols.
+		Target:      d.target,
+		ReadOnly:    d.readOnly(),
 		SizeMiB:     resolved.SizeMiB,
 		Enforcement: resolved.Enforcement,
 	}, true

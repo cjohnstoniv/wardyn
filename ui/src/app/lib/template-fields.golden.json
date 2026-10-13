@@ -10,10 +10,32 @@
       "remove_secrets",
       "tool_rules"
     ],
+    "CLIAWS": [
+      "start_url",
+      "sso_region",
+      "account_id",
+      "role_name",
+      "region"
+    ],
+    "CLIAzure": [
+      "subscriptions",
+      "access"
+    ],
+    "CLIGitHub": [
+      "capabilities"
+    ],
+    "ComponentCLI": [
+      "kind",
+      "azure",
+      "aws",
+      "github"
+    ],
     "ComponentDefinition": [
       "hosts",
       "secrets",
-      "config"
+      "config",
+      "cli",
+      "mcp"
     ],
     "ComponentDelivery": [
       "mode",
@@ -24,6 +46,10 @@
       "var",
       "file"
     ],
+    "ComponentMCP": [
+      "url",
+      "transport"
+    ],
     "ComponentRef": [
       "id",
       "inline",
@@ -31,12 +57,17 @@
       "builtin",
       "org",
       "repos",
-      "access"
+      "access",
+      "mcp_harnesses"
     ],
     "ComponentSecret": [
       "secret_name",
       "shared",
       "delivery"
+    ],
+    "DriveAttachment": [
+      "drive_id",
+      "read_only"
     ],
     "DriveSelection": [
       "enabled",
@@ -54,6 +85,14 @@
       "ttl_seconds",
       "requires_approval",
       "owner_only"
+    ],
+    "IncludedTool": [
+      "id",
+      "kind",
+      "model_provider",
+      "component",
+      "tool_rules",
+      "default_effect"
     ],
     "LLMInspectionSpec": [
       "mode",
@@ -74,6 +113,7 @@
     ],
     "PushRuleOverride": [
       "provider",
+      "host",
       "org",
       "deny_paths",
       "require_review_paths"
@@ -86,27 +126,63 @@
       "deny_new_executables",
       "max_file_size_mib"
     ],
+    "RepoSelection": [
+      "repo",
+      "ref"
+    ],
     "ResourceLimits": [
       "cpu_millis",
       "memory_mib",
       "pids_limit",
       "disk_mib"
     ],
+    "RunEgressOverrides": [
+      "first_use_approval",
+      "allow_all_egress"
+    ],
+    "RunHostOverrides": [
+      "add_allowed",
+      "add_denied",
+      "remove_allowed",
+      "remove_denied"
+    ],
     "RunOverrides": [
       "agent",
       "azure_devops",
       "git_pat",
-      "push_rules"
+      "push_rules",
+      "hosts",
+      "egress"
     ],
     "RunResources": [
       "cpu_millis",
-      "memory_mib"
+      "memory_mib",
+      "disk_mib"
+    ],
+    "RunStartup": [
+      "kind",
+      "tool",
+      "command",
+      "prompt"
+    ],
+    "RunWorkload": [
+      "kind",
+      "agent",
+      "task",
+      "command"
     ],
     "SecretOverride": [
       "secret_name",
       "host",
       "header",
       "format"
+    ],
+    "StartFolder": [
+      "kind",
+      "attachment",
+      "repo",
+      "drive_id",
+      "subpath"
     ],
     "ToolRule": [
       "tool",
@@ -131,7 +207,8 @@
       "workspace_id",
       "enabled_optional",
       "read_only",
-      "target"
+      "target",
+      "repos"
     ]
   },
   "nested_excluded": [
@@ -303,10 +380,9 @@
       "part": "access_rules",
       "omitted": "unset_optional",
       "empty": "same_as_omitted",
-      "meaning": "Push rules exist only inside an SCM entry, one set per provider and organisation. This run-wide block is not accepted until the keyed carrier lands.",
+      "meaning": "Push rules exist only inside an SCM entry, one set per provider and organisation (overrides.push_rules).",
       "section": "scm_entry",
-      "keyed_by": "provider+org",
-      "pending": "A-L3/A-L10"
+      "keyed_by": "provider+org"
     },
     {
       "name": "azure_devops_capabilities",
@@ -414,6 +490,11 @@
       "section": "run_wide"
     },
     {
+      "name": "policy_overlay",
+      "excluded": "origin",
+      "why": "In a document the overlay is written under inline_policy; policy_overlay is how a client sends it."
+    },
+    {
       "name": "devcontainer_repo",
       "tab": "tools_image",
       "part": "tools_image",
@@ -512,6 +593,15 @@
       "section": "run_wide"
     },
     {
+      "name": "drives",
+      "tab": "repositories_drives",
+      "part": "drives",
+      "omitted": "unset_optional",
+      "empty": "value",
+      "meaning": "No drive from the drive list is attached. Each drive is checked against the launching person's own grants.",
+      "section": "run_wide"
+    },
+    {
       "name": "components",
       "tab": "access",
       "part": "components",
@@ -574,6 +664,11 @@
       "why": "A preset is a launch shortcut. A template records its own origin, and the setup it holds is carried field by field."
     },
     {
+      "name": "mode_contract",
+      "excluded": "origin",
+      "why": "The contract marker belongs to the request a client sends, not to the setup a template holds."
+    },
+    {
       "name": "preset_version",
       "excluded": "origin",
       "why": "A preset's version only means something beside its preset."
@@ -585,8 +680,30 @@
       "omitted": "baseline",
       "empty": "same_as_omitted",
       "meaning": "The pool resolves from the person's own default, then the organisation's, when the template is used. A default that is unavailable or refused never falls through to another pool: the person chooses. A named pool narrows where the run may go and grants nothing, and the launcher's pool-use policy is checked at use.",
-      "section": "run_wide",
-      "pending": "C-pools"
+      "section": "run_wide"
+    },
+    {
+      "name": "ends_after_sec",
+      "tab": "runner",
+      "part": "runner",
+      "omitted": "baseline",
+      "empty": "same_as_omitted",
+      "meaning": "The run takes the default end when the template is used, and that default can change. An end is a length of time from launch, checked again then, never a permission.",
+      "section": "run_wide"
+    },
+    {
+      "name": "max_wait_sec",
+      "excluded": "launch",
+      "why": "How long a run may wait for a slot in a full pool is chosen at each launch; the default wait suits a template's runs."
+    },
+    {
+      "name": "no_end",
+      "tab": "runner",
+      "part": "runner",
+      "omitted": "baseline",
+      "empty": "same_as_omitted",
+      "meaning": "The run takes the default end when the template is used. Asking for no end is checked again at launch against the pool, the deployment and the person's own limits, and is never a permission.",
+      "section": "run_wide"
     },
     {
       "name": "experience",
@@ -594,20 +711,37 @@
       "part": "runner",
       "omitted": "unset_required",
       "empty": "same_as_omitted",
-      "meaning": "No mode is assumed: Background task or Interactive environment is chosen.",
-      "section": "run_wide",
-      "pending": "A-L6/A-L8"
+      "meaning": "No mode is assumed: Background task or Interactive environment is chosen, and never inferred.",
+      "section": "run_wide"
     },
     {
-      "name": "included_tools",
+      "name": "shape",
+      "tab": "runner",
+      "part": "runner",
+      "omitted": "unset_optional",
+      "empty": "same_as_omitted",
+      "meaning": "No shape is recorded. The experience, workload and tools already say what the run is; a shape only names the choice it was set up from.",
+      "section": "run_wide"
+    },
+    {
+      "name": "workload",
+      "tab": "tools_image",
+      "part": "tools_image",
+      "omitted": "unset_required",
+      "empty": "same_as_omitted",
+      "meaning": "A background task needs an agent task or a command, and none is chosen. An interactive environment has no workload.",
+      "sensitive": true,
+      "section": "run_wide"
+    },
+    {
+      "name": "tools",
       "tab": "tools_image",
       "part": "tools_image",
       "omitted": "unset_optional",
       "empty": "value",
-      "meaning": "No harness is included. An interactive environment may include several, and including none is valid.",
+      "meaning": "No tool is included, which is valid: the sandbox starts from the agent base image. An interactive environment or a command may include several harnesses, and at most one starts. Each harness has its own model provider, tool rules and default effect, and nothing is shared between tools.",
       "section": "harness",
-      "keyed_by": "harness",
-      "pending": "A-L9"
+      "keyed_by": "harness"
     },
     {
       "name": "startup",
@@ -615,19 +749,18 @@
       "part": "tools_image",
       "omitted": "unset_optional",
       "empty": "same_as_omitted",
-      "meaning": "Nothing starts automatically unless chosen: one included harness, one command, or none.",
-      "section": "run_wide",
-      "pending": "A-L9"
+      "meaning": "Nothing starts automatically unless chosen: one included harness, which may open with a starting prompt, one command, or none. A removed startup tool is never replaced by another.",
+      "sensitive": true,
+      "section": "run_wide"
     },
     {
-      "name": "starting_folder",
+      "name": "start_folder",
       "tab": "repositories_drives",
       "part": "repositories",
       "omitted": "baseline",
       "empty": "same_as_omitted",
-      "meaning": "The first attached repository, or the sandbox's default working directory when none is attached.",
-      "section": "run_wide",
-      "pending": "A-L7/D112113"
+      "meaning": "The first attached repository, or the sandbox's default working directory when none is attached. A run has exactly one starting folder.",
+      "section": "run_wide"
     },
     {
       "name": "no_repositories_or_drives",
@@ -636,8 +769,7 @@
       "omitted": "unset_required",
       "empty": "same_as_omitted",
       "meaning": "The tab stays incomplete until something is attached or the person explicitly chooses no repositories or drives. Choosing none warns that nothing in the sandbox is kept unless it is pushed or copied out.",
-      "section": "run_wide",
-      "pending": "D112113"
+      "section": "run_wide"
     }
   ]
 }

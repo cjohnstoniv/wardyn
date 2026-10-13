@@ -5,7 +5,10 @@ package types
 
 import (
 	"encoding/json"
+	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 )
@@ -33,7 +36,17 @@ type RunnerPosture struct {
 	DiskEncrypted bool   `json:"disk_encrypted"`
 	OS            string `json:"os"`
 	OSVersion     string `json:"os_version"`
+	// Evidence is where the runner read mdm_managed and disk_encrypted from: a
+	// root-owned file the device's MDM wrote, else its own probe of the OS.
+	// Either way the org records the posture as runner_asserted.
+	Evidence string `json:"evidence"`
 }
+
+// RunnerPosture.Evidence values.
+const (
+	PostureEvidenceMDMFile = "mdm_file"
+	PostureEvidenceOSProbe = "os_probe"
+)
 
 // Runner is one registered wardyn-runnerd. Owner is a person's principal, so the
 // row is personal data.
@@ -58,30 +71,108 @@ type Runner struct {
 	// PostureReportedAt is nil until the runner reports; PostureSource is then runner_asserted.
 	PostureReportedAt *time.Time `json:"posture_reported_at,omitempty"`
 	PostureSource     string     `json:"posture_source,omitempty"`
+	// RevokedBy is the principal that revoked the runner; RevokeReason is "" or
+	// RunnerRevokeNotMine. Both are empty until it is revoked.
+	RevokedBy    string `json:"-"`
+	RevokeReason string `json:"-"`
+	// MaxRuns is how many sandbox-holding runs placement may put on the runner at once: the runner's
+	// "Runs at once". Its owner sets it; the stored value is the one placement holds.
+	MaxRuns int `json:"max_runs"`
+	// MachineName is the host name the runner last reported (at registration and on each connect):
+	// runner-reported, never an identity, "" until it reports one.
+	MachineName string `json:"machine_name"`
 }
+
+// MachineNameMax bounds a reported machine name: the longest DNS host name.
+const MachineNameMax = 253
+
+// ValidMachineName reports whether s may be stored as a runner's machine name: at most MachineNameMax
+// bytes of printable characters. "" (none reported) is valid.
+func ValidMachineName(s string) bool {
+	return len(s) <= MachineNameMax && utf8.ValidString(s) && !strings.ContainsFunc(s, func(r rune) bool { return !unicode.IsPrint(r) })
+}
+
+// RunnerRevokeNotMine marks an owner's revoke of a runner they did not register.
+const RunnerRevokeNotMine = "not_mine"
 
 // RunnerActionKind is a pending action's verb.
 type RunnerActionKind string
 
 const (
-	RunnerActionKill      RunnerActionKind = "kill"
-	RunnerActionEnd       RunnerActionKind = "end"
-	RunnerActionStopProxy RunnerActionKind = "stop_proxy"
+	RunnerActionRetire             RunnerActionKind = "retire_run"
+	RunnerActionKill               RunnerActionKind = "kill"
+	RunnerActionEnd                RunnerActionKind = "end"
+	RunnerActionStopProxy          RunnerActionKind = "stop_proxy"
+	RunnerActionRecoverMutation    RunnerActionKind = "recover_mutation"
+	RunnerActionQuarantine         RunnerActionKind = "quarantine_run"
+	RunnerActionRecoverContainment RunnerActionKind = "recover_containment"
 )
 
-// RunnerPendingAction is an action queued for a runner that is offline, applied
-// first when it reconnects.
-type RunnerPendingAction struct {
-	ID         uuid.UUID        `json:"id"`
-	RunnerID   uuid.UUID        `json:"runner_id"`
-	RunID      uuid.UUID        `json:"run_id"`
-	Kind       RunnerActionKind `json:"kind"`
-	Ref        string           `json:"ref"`
-	QueuedAt   time.Time        `json:"queued_at"`
-	AppliedAt  *time.Time       `json:"applied_at,omitempty"`
-	Outcome    string           `json:"outcome,omitempty"`
-	ObservedAt *time.Time       `json:"observed_at,omitempty"`
+// RunnerQuarantine identifies an org-authorized isolation disposition, not an
+// evidence acknowledgement or permission to reconstruct missing run authority.
+// Asserted marks a quarantine of a run the org has no row for: Generation is
+// then the runner's own assertion, never compared to org executions, and the
+// runner deletes that run's local evidence after RunnerAssertedEvidenceTTL or
+// at revocation.
+type RunnerQuarantine struct {
+	ID         uuid.UUID `json:"id"`
+	Generation uuid.UUID `json:"generation"`
+	Asserted   bool      `json:"asserted,omitempty"`
 }
+
+// RunnerAssertedEvidenceTTL is how long quarantined evidence of an asserted
+// (org-erased) run is kept, on the runner and in the org's action rows, after
+// its quarantine succeeded.
+const RunnerAssertedEvidenceTTL = 90 * 24 * time.Hour
+
+// RunnerAssertedSubjectCap bounds the asserted subjects one runner can have,
+// settled or not. Past it the runner is held not-ready.
+const RunnerAssertedSubjectCap = 100
+
+// RunnerMutationFailure is an immutable failure identity. Contained becomes true
+// only after proxy containment and lifecycle persistence both succeed.
+type RunnerMutationFailure struct {
+	ID         uuid.UUID `json:"id"`
+	Generation uuid.UUID `json:"generation"`
+	Operation  string    `json:"operation"`
+	Contained  bool      `json:"contained"`
+}
+
+// RunnerPendingAction is applied before readiness when a runner reconnects.
+type RunnerPendingAction struct {
+	Retirement *RunnerRetirement      `json:"retirement,omitempty"`
+	Quarantine *RunnerQuarantine      `json:"quarantine,omitempty"`
+	Recovery   *RunnerMutationFailure `json:"recovery,omitempty"`
+	ID         uuid.UUID              `json:"id"`
+	RunnerID   uuid.UUID              `json:"runner_id"`
+	RunID      uuid.UUID              `json:"run_id"`
+	Kind       RunnerActionKind       `json:"kind"`
+	Ref        string                 `json:"ref"`
+	QueuedAt   time.Time              `json:"queued_at"`
+	AppliedAt  *time.Time             `json:"applied_at,omitempty"`
+	Outcome    string                 `json:"outcome,omitempty"`
+	ObservedAt *time.Time             `json:"observed_at,omitempty"`
+	// Bound, Owner, Generation and LostAt are the org identity persisted when
+	// the action was queued. A row that is not Bound predates that binding and
+	// grants nothing. On a Bound row a nil Generation means no execution had
+	// been issued; LostAt is set for stop_proxy only.
+	Bound      bool       `json:"-"`
+	Owner      string     `json:"-"`
+	Generation uuid.UUID  `json:"-"`
+	LostAt     *time.Time `json:"-"`
+	// Asserted marks a subject with no org run row: RunID is then the
+	// runner's assertion, Owner is empty and Generation is nil.
+	Asserted bool `json:"-"`
+	// ObligationID is the chain a deferred action's successors continue.
+	ObligationID uuid.UUID `json:"-"`
+}
+
+// Runner action outcomes an action_result may carry. A deferred receipt is
+// final for its action ID but does not settle the obligation it carried.
+const (
+	RunnerActionSuccess  = "success"
+	RunnerActionDeferred = "deferred"
+)
 
 // CredentialDeliveryPolicyDoc is the stored local_credential_delivery document.
 // Policy is the JSON of placement.DeliveryPolicy, validated by the writer; the

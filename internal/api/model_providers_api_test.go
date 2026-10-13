@@ -21,12 +21,14 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// TestModelProvidersGet: a never-configured install reads {} with an ETag.
+// TestModelProvidersGet: a never-configured install reads an empty block with an ETag, plus the two
+// server facts (no Entra login, every kind but azure_foundry while its gate is closed).
 func TestModelProvidersGet(t *testing.T) {
 	srv, _ := newSiteConfigHarness(t, &fakeSiteConfigStore{})
 	w := do(t, srv, http.MethodGet, "/api/v1/model-providers", adminToken, "")
-	if w.Code != http.StatusOK || strings.TrimSpace(w.Body.String()) != "{}" || w.Header().Get("ETag") == "" {
-		t.Fatalf("GET = %d %q etag=%q, want 200 {} with an ETag", w.Code, w.Body.String(), w.Header().Get("ETag"))
+	want := `{"entra_login_configured":false,"kinds_available":["anthropic_api_key","anthropic_subscription","bedrock_bearer","bedrock_sso","custom_endpoint","openai_api_key"]}`
+	if w.Code != http.StatusOK || strings.TrimSpace(w.Body.String()) != want || w.Header().Get("ETag") == "" {
+		t.Fatalf("GET = %d %q etag=%q, want 200 %s with an ETag", w.Code, w.Body.String(), w.Header().Get("ETag"), want)
 	}
 }
 
@@ -49,7 +51,7 @@ func TestModelProvidersGetConnectedPeople(t *testing.T) {
 	read := func(want map[string]int) string {
 		t.Helper()
 		w := do(t, srv, http.MethodGet, "/api/v1/model-providers", adminToken, "")
-		var body modelProvidersRead
+		var body types.ModelProvidersRead
 		if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &body) != nil || len(body.Providers) != 3 {
 			t.Fatalf("GET = %d; body=%s", w.Code, w.Body.String())
 		}
@@ -586,7 +588,7 @@ func TestSetupStatusNilBlockIsToday(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []string{
-		"age_key", "auth", "checks", "checks_redacted", "credential_storage", "harnesses",
+		"age_key", "auth", "checks", "checks_redacted", "credential_storage", "harness_sets", "harnesses",
 		"has_runs", "host_proxy", "llm_ready", "onboarding_complete", "platform", "providers", "ready", "runner", "scm",
 		"secrets", "tier",
 	}

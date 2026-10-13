@@ -1,0 +1,255 @@
+// Copyright 2026 The Wardyn Authors
+// SPDX-License-Identifier: Apache-2.0
+
+package proxy
+
+import (
+	"context"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/cjohnstoniv/wardyn/internal/egress"
+	"github.com/cjohnstoniv/wardyn/internal/runnerspool"
+	"github.com/cjohnstoniv/wardyn/internal/types"
+	"github.com/google/uuid"
+)
+
+// eachRow checks a replayed batch row by row.
+func eachRow(fn func(runnerspool.Record) error) func(context.Context, []runnerspool.Record) error {
+	return func(_ context.Context, rows []runnerspool.Record) error {
+		for _, r := range rows {
+			if err := fn(r); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+}
+
+func TestLocalSpoolReservationsBoundConcurrentForwarding(t *testing.T) {
+	ctx := context.Background()
+	id := uuid.New()
+	dir := filepath.Join(t.TempDir(), "spool")
+	s, err := newLocalDecisionSink(dir, id, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.close(ctx)
+	p := &Proxy{sink: s}
+	var mu sync.Mutex
+	var accepted []*httptest.ResponseRecorder
+	var tickets []uuid.UUID
+	var releases []func()
+	var wg sync.WaitGroup
+	for range 64 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			w := httptest.NewRecorder()
+			r := httptest.NewRequest("GET", "http://allowed.test/x", nil)
+			admitted, release := p.admitSpoolHTTP(w, r)
+			mu.Lock()
+			defer mu.Unlock()
+			if admitted != nil {
+				tickets = append(tickets, spoolTicket(admitted.Context()))
+				releases = append(releases, release)
+				accepted = append(accepted, w)
+			} else if w.Code != 503 {
+				t.Errorf("refusal status%d", w.Code)
+			}
+		}()
+	}
+	wg.Wait()
+	if len(tickets) == 0 || len(tickets) > runnerspool.MaxBytes/runnerspool.MaxRecordBytes {
+		t.Fatalf("capacity over-admitted %d", len(tickets))
+	}
+	for i, ticket := range tickets {
+		s.emit(egress.DecisionLog{Request: egress.Request{RunID: id, Host: "allowed.test", Method: "GET", Time: time.Now(), AuditReservation: ticket}, Decision: egress.Allow, RuleSource: "policy:allowed"})
+		releases[i]()
+	}
+	depth, _, drops, err := s.local.Stats(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if depth != len(tickets) || drops != uint64(64-len(tickets)) {
+		t.Fatalf("lost admitted tail or refusal count: depth%d admitted%d drops%d", depth, len(tickets), drops)
+	}
+	first := true
+	rows := 0
+	if err := s.local.Replay(ctx, eachRow(func(row runnerspool.Record) error {
+		if first {
+			if row.Decision.RuleSource != "builtin:spool-full" || row.Count != drops {
+				t.Fatalf("overflow not first: %+v", row)
+			}
+			first = false
+		} else {
+			rows++
+		}
+		return nil
+	})); err != nil {
+		t.Fatal(err)
+	}
+	if rows != len(tickets) {
+		t.Fatalf("history rows%d admitted%d", rows, len(tickets))
+	}
+	w := httptest.NewRecorder()
+	r, release := p.admitSpoolHTTP(w, httptest.NewRequest("GET", "http://allowed.test/again", nil))
+	if r == nil {
+		t.Fatal("drain did not reopen admission")
+	}
+	release()
+}
+func TestLocalSpoolSingleWriterAndSecretMask(t *testing.T) {
+	ctx := context.Background()
+	id := uuid.New()
+	dir := filepath.Join(t.TempDir(), "spool")
+	s, err := newLocalDecisionSink(dir, id, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.close(ctx)
+	if other, err := newLocalDecisionSink(dir, id, nil); err == nil {
+		other.close(ctx)
+		t.Fatal("two proxy writers can overcommit reservations")
+	}
+	secret := "spool-secret-" + uuid.NewString()
+	procMask([]byte(secret))
+	s.emit(egress.DecisionLog{Request: egress.Request{RunID: id, Host: "example.test", Path: "/" + secret, Time: time.Now()}, Decision: egress.Deny, RuleSource: "policy:denied"})
+	rows, err := s.local.After(ctx, 0, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].Decision.Request.Path == "/"+secret {
+		t.Fatalf("secret retained: %+v", rows)
+	}
+}
+
+func TestLocalSpoolOverflowStopsActualUpstreamAndDrains(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
+	defer cancel()
+	id := uuid.New()
+	dir := filepath.Join(t.TempDir(), "spool")
+	sink, err := newLocalDecisionSink(dir, id, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sink.close(context.Background())
+	arrived := make(chan bool, 64)
+	release := make(chan struct{})
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		arrived <- true
+		select {
+		case <-release:
+		case <-r.Context().Done():
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer upstream.Close()
+	p := newProxy(Options{RunID: id, Policy: CompilePolicy(types.RunPolicySpec{AllowedDomains: []string{"allowed.test"}}), Sink: sink, Resolver: publicResolver{}, Dial: redirectDial(upstreamAddr(upstream))})
+	var wg sync.WaitGroup
+	for range 64 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			w := httptest.NewRecorder()
+			p.ServeHTTP(w, httptest.NewRequest("GET", "http://allowed.test/path", nil).WithContext(ctx))
+			if w.Code == 503 {
+				arrived <- false
+			} else if w.Code != 200 {
+				t.Errorf("unexpected status %d: %s", w.Code, w.Body.String())
+				arrived <- false
+			}
+		}()
+	}
+	forwards := 0
+	for range 64 {
+		select {
+		case allowed := <-arrived:
+			if allowed {
+				forwards++
+			}
+		case <-ctx.Done():
+			close(release)
+			wg.Wait()
+			t.Fatal("requests did not reach upstream or fail closed")
+		}
+	}
+	close(release)
+	wg.Wait()
+	if forwards == 0 || forwards > runnerspool.MaxBytes/runnerspool.MaxRecordBytes {
+		t.Fatalf("forwarded beyond reserved capacity: %d", forwards)
+	}
+	depth, _, drops, err := sink.local.Stats(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if depth != forwards || drops != uint64(64-forwards) {
+		t.Fatalf("network/audit mismatch: forward%d records%d drops%d", forwards, depth, drops)
+	}
+	records := 0
+	if err := sink.local.Replay(ctx, eachRow(func(r runnerspool.Record) error {
+		if records == 0 && r.Decision.RuleSource != "builtin:spool-full" {
+			t.Fatal("overflow was not first")
+		}
+		records++
+		return nil
+	})); err != nil {
+		t.Fatal(err)
+	}
+	w := httptest.NewRecorder()
+	p.ServeHTTP(w, httptest.NewRequest("GET", "http://allowed.test/drained", nil).WithContext(ctx))
+	if w.Code != 200 {
+		t.Fatalf("drained status%d", w.Code)
+	}
+	// A corrupt durable manifest must refuse before any upstream request.
+	if err := os.WriteFile(filepath.Join(dir, "state.json"), []byte("corrupt"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	w = httptest.NewRecorder()
+	p.ServeHTTP(w, httptest.NewRequest("GET", "http://allowed.test/corrupt", nil).WithContext(ctx))
+	if w.Code != 503 {
+		t.Fatalf("corrupt storage forwarded: %d", w.Code)
+	}
+	if len(arrived) != 1 {
+		t.Fatalf("corrupt storage reached upstream: arrivals%d", len(arrived))
+	}
+}
+
+// On a runner the proxy-only spool replaces the run-token decisions POST: a
+// configured spool directory must never select the control-plane sink.
+func TestConfiguredSpoolNeverPostsDecisionsWithTheRunToken(t *testing.T) {
+	ctx := context.Background()
+	var posts sync.Map
+	cp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		posts.Store(r.URL.Path, r.Header.Get("Authorization"))
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer cp.Close()
+	id := uuid.New()
+	cfg := &Config{RunID: id, ControlPlaneURL: cp.URL, DecisionSpoolDir: filepath.Join(t.TempDir(), "spool"), DecisionBufferSize: 4}
+	s, err := configuredDecisionSink(cfg, newTokenSource("run-tok"), cp.Client(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.local == nil {
+		s.close(ctx)
+		t.Fatal("a configured runner spool selected the run-token decisions sink")
+	}
+	s.emit(egress.DecisionLog{Request: egress.Request{RunID: id, Host: "example.test", Time: time.Now()}, Decision: egress.Allow, RuleSource: "policy:allowed"})
+	rows, err := s.local.After(ctx, 0, 2)
+	if cerr := s.close(ctx); cerr != nil {
+		t.Fatal(cerr)
+	}
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("decision not spooled: %d rows %v", len(rows), err)
+	}
+	posts.Range(func(path, auth any) bool {
+		t.Fatalf("decision posted to %v with %v", path, auth)
+		return false
+	})
+}

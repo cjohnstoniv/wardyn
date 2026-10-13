@@ -35,6 +35,8 @@ describe("New Run tabs", () => {
   it("place every fixture in its tab", () => {
     const tabOfPrefix: Record<string, string> = { info: "info", workspaces: "workspaces", run: "runner", runner: "runner", access: "access", policy: "policy" };
     for (const f of NEW_RUN_FIXTURES) {
+      // The run-mode frames (v16/…) are placed by the tab of their control; new-run-fixtures.test.ts pins each.
+      if (/^v\d+\//.test(f.route)) continue;
       const tab = f.refusal?.reason === NEW_RUN_REASON.IMAGE_CONFLICT ? "runner" : tabOfPrefix[f.route.split("/")[0]];
       expect(f.tab, f.route).toBe(tab);
     }

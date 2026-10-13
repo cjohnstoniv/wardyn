@@ -270,3 +270,55 @@ func TestComponentFacts_CapturedProviderAndRenewableLanes(t *testing.T) {
 		})
 	}
 }
+
+// A non-interactive run under a profile whose tool rules hold or deny is
+// derived to tool_approvals=hold at create, and dispatch writes the document
+// for that value. The managed-settings fact must report the same document.
+func TestComponentFacts_GovernanceHoldMatchesDispatch(t *testing.T) {
+	const body = `{"agent":"claude-code","task":"facts","confinement_class":"CC2"}`
+	for _, tc := range []struct {
+		name  string
+		level types.AutonomyLevel // "" = no autonomy rubric
+		rules []types.ToolRule
+		hold  bool // create derives tool_approvals=hold
+	}{
+		{"no rubric, deny rule", "", []types.ToolRule{{Tool: "Bash", Effect: types.ToolDeny}}, true},
+		{"no rubric, hold rule", "", []types.ToolRule{{Tool: "Bash", Effect: types.ToolHold}}, true},
+		{"rubric L2, deny rule", types.AutonomyL2, []types.ToolRule{{Tool: "Bash", Effect: types.ToolDeny}}, true},
+		{"no rubric, no rules (characterization)", "", nil, false},
+		{"rubric L2, no rules (characterization)", types.AutonomyL2, nil, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			profile := govProfile("hold-facts")
+			profile.Limits = types.GovernanceLimits{}
+			if tc.level != "" {
+				profile.Limits = autonomyProfile(tc.level).Limits
+			}
+			profile.Ceiling.ToolRules = tc.rules
+			srv, _, _ := govEscapeFixture(t, autonomyCapStore(profile))
+			member := govSession(t, govMemberSub, []string{"eng"}, false)
+			ceiling := governanceCeiling{Profile: &ResolvedProfile{Name: profile.Name}, Limits: profile.Limits}
+			params := dispatchParams{}
+			if tc.hold {
+				params.ToolApprovals = "hold"
+			}
+			dispatched, _, _ := agentPolicyDispatchCeiling(t, &fakeRunner{}, "claude-code", tc.level, "facts", params, ceiling)
+			doors := []string{componentDoors[1]}
+			if tc.level == "" {
+				doors = append(doors, componentDoors[2]) // the preview resolves only an unbound run
+			}
+			for _, door := range doors {
+				fact := decodedAgentFact(t, doSSO(t, srv, http.MethodPost, door, member, body)).Agent.ManagedSettings
+				if len(dispatched.ManagedFiles) == 0 {
+					if fact != nil {
+						t.Fatalf("%s reports %+v; dispatch delivers no managed settings", door, fact)
+					}
+					continue
+				}
+				if len(dispatched.ManagedFiles) != 1 || fact == nil || fact.Path != dispatched.ManagedFiles[0].Path || fact.Document != string(dispatched.ManagedFiles[0].Content) {
+					t.Fatalf("%s reports %+v; dispatch delivers %d file(s), first: %s", door, fact, len(dispatched.ManagedFiles), dispatched.ManagedFiles[0].Content)
+				}
+			}
+		})
+	}
+}

@@ -133,7 +133,6 @@ func TestSealFullLeavesWhatIsNotAHumanWithAnIdentityAsItIs(t *testing.T) {
 		"system":                   system,
 		"a person with no subject": humanEvent("nobody", "run.kill"),
 		"an erasure record":        humanEvent("alice", "person.erasure"),
-		"already a subject":        humanEvent(SubjectActorPrefix+uuid.NewString(), "run.kill"),
 		"no actor":                 humanEvent("", "run.kill"),
 	} {
 		got, pending, err := s.Seal(t.Context(), ev)

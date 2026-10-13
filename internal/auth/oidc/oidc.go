@@ -231,7 +231,7 @@ type Authenticator struct {
 	oauth2     oauth2.Config
 	verifier   *gooidc.IDTokenVerifier
 	hmacKey    []byte
-	httpClient *http.Client // nil means http.DefaultClient; stored for test injection
+	httpClient *http.Client // the token-exchange client: any injected transport, bounded by idpHTTPTimeout
 
 	subjectVerifier *gooidc.IDTokenVerifier // any audience: VerifySubjectToken checks it
 
@@ -395,7 +395,16 @@ func New(ctx context.Context, cfg Config, hmacKey []byte) (*Authenticator, error
 	// The ID-token key set uses a JWKS-TOLERANT client so one unparseable entry skips instead of
 	// failing the whole document and locking every human out. VerifierContext (not Verifier) is only
 	// so the key set gets its own HTTP client, using background context since it outlives this call.
-	keySetCtx := gooidc.ClientContext(context.Background(), newTolerantJWKSClient(httpClient))
+	// The token exchange and the key set share one client bounded by idpHTTPTimeout (discovery above
+	// is bounded by the caller's ctx). A copy, so the caller's transport and settings survive.
+	idpClient := &http.Client{}
+	if httpClient != nil {
+		*idpClient = *httpClient
+	}
+	if idpClient.Timeout == 0 {
+		idpClient.Timeout = idpHTTPTimeout
+	}
+	keySetCtx := gooidc.ClientContext(context.Background(), newTolerantJWKSClient(idpClient))
 	verifier := provider.VerifierContext(keySetCtx, &gooidc.Config{ClientID: cfg.ClientID})
 
 	return &Authenticator{
@@ -404,7 +413,7 @@ func New(ctx context.Context, cfg Config, hmacKey []byte) (*Authenticator, error
 		verifier:               verifier,
 		subjectVerifier:        provider.VerifierContext(keySetCtx, &gooidc.Config{SkipClientIDCheck: true}),
 		hmacKey:                hmacKey,
-		httpClient:             httpClient,
+		httpClient:             idpClient,
 		groupsScopeUnrequested: groupsScopeUnrequested,
 		entra:                  isEntraIssuer(cfg.IssuerURL),
 	}, nil
@@ -615,6 +624,11 @@ const (
 	tokenExchangeBackoff = 250 * time.Millisecond
 )
 
+// idpHTTPTimeout bounds each token-exchange and JWKS request to the IdP, so an endpoint that accepts
+// the connection but never answers fails as a timeout (and the exchange retries) instead of holding
+// the callback, or the shared key refresh, open indefinitely. A var only so tests can shorten it.
+var idpHTTPTimeout = 10 * time.Second
+
 // retryExchange calls oauth2.Config.Exchange, retrying up to tokenExchangeRetries times only when
 // isTransientOIDCErr judges the failure retriable; invalid_grant and other non-transient errors
 // return on the first attempt since a retry can't fix a single-use code.
@@ -679,16 +693,18 @@ var ErrInvalidSession = errors.New("oidc: invalid session cookie")
 
 // ─── split-horizon issuer rewrite transport ──────────────────────────────────
 
-// rewriteTransport rewrites the authority of every outbound request from the public issuer to the
-// internal one, so wardynd reaches the IdP internally while the browser uses the public host.
+// rewriteTransport rewrites the scheme and authority of every outbound request from the public
+// issuer to the internal one, so wardynd reaches the IdP internally while the browser uses the
+// public host.
 type rewriteTransport struct {
 	fromHost string // public authority, e.g. "localhost:5556"
 	toHost   string // internal authority, e.g. "dex:5556"
+	toScheme string // internal scheme, e.g. "http" behind an https public issuer
 	base     http.RoundTripper
 }
 
-// newRewriteTransport builds a rewriteTransport from two base URLs. The schemes
-// are ignored (only the authority is matched/rewritten). base may be nil.
+// newRewriteTransport builds a rewriteTransport from two base URLs. Requests are matched on the
+// public authority only; a match takes the internal URL's scheme and authority. base may be nil.
 func newRewriteTransport(publicURL, internalURL string, baseClient *http.Client) (*rewriteTransport, error) {
 	pu, err := url.Parse(publicURL)
 	if err != nil || pu.Host == "" {
@@ -705,13 +721,14 @@ func newRewriteTransport(publicURL, internalURL string, baseClient *http.Client)
 	if base == nil {
 		base = http.DefaultTransport
 	}
-	return &rewriteTransport{fromHost: pu.Host, toHost: iu.Host, base: base}, nil
+	return &rewriteTransport{fromHost: pu.Host, toHost: iu.Host, toScheme: iu.Scheme, base: base}, nil
 }
 
 func (t *rewriteTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if req.URL.Host == t.fromHost {
 		// Clone so we never mutate the caller's request.
 		r2 := req.Clone(req.Context())
+		r2.URL.Scheme = t.toScheme
 		r2.URL.Host = t.toHost
 		r2.Host = t.toHost
 		return t.base.RoundTrip(r2)

@@ -21,7 +21,7 @@ func TestMigrate_AdoRunPATsTable(t *testing.T) {
 	ctx := context.Background()
 
 	rows, err := pool.Query(ctx, `SELECT column_name, is_nullable, data_type FROM information_schema.columns
-		WHERE table_name = 'ado_run_pats' ORDER BY ordinal_position`)
+		WHERE table_name = 'ado_run_pats' AND table_schema = current_schema() ORDER BY ordinal_position`)
 	if err != nil {
 		t.Fatalf("read columns: %v", err)
 	}

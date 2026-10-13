@@ -10,35 +10,47 @@ import (
 	"sync"
 )
 
+// MaxCalls bounds concurrent RPC handlers and retained reply tombstones. Byte
+// streams have their separate MaxStreams bound. An authenticated peer still
+// must not allocate an unbounded number of goroutines or callback events.
+const MaxCalls = 256
+
 type pendingCall struct {
 	abandoned bool // the caller stopped waiting; guarded by Peer.mu
 	reply     chan Reply
 	notify    chan struct{}
 	onEvent   func(Event)
 
-	mu     sync.Mutex
-	events []Event
+	mu         sync.Mutex
+	events     []Event
+	eventBytes int
 }
 
 // queue holds an event for the caller's goroutine; false when the call takes none.
-func (c *pendingCall) queue(ev Event) bool {
+func (c *pendingCall) queue(ev Event) (bool, error) {
 	if c.onEvent == nil {
-		return false
+		return false, nil
 	}
 	c.mu.Lock()
+	if c.eventBytes+len(ev.Data)+64 > MaxControlFrame {
+		c.mu.Unlock()
+		return false, fmt.Errorf("%w: call event queue exceeds its bound", ErrBadFrame)
+	}
 	c.events = append(c.events, ev)
+	c.eventBytes += len(ev.Data) + 64
 	c.mu.Unlock()
 	select {
 	case c.notify <- struct{}{}:
 	default:
 	}
-	return true
+	return true, nil
 }
 
 func (c *pendingCall) drain() {
 	c.mu.Lock()
 	evs := c.events
 	c.events = nil
+	c.eventBytes = 0
 	c.mu.Unlock()
 	for _, ev := range evs {
 		c.onEvent(ev)
@@ -75,6 +87,10 @@ func (p *Peer) Call(ctx context.Context, method string, args, result any, opts .
 		p.mu.Unlock()
 		return p.offline()
 	}
+	if len(p.calls) >= MaxCalls {
+		p.mu.Unlock()
+		return Refuse("runner connection has too many pending calls; reconnect to clear abandoned calls")
+	}
 	id := p.ids.Next()
 	p.calls[id] = pc
 	p.mu.Unlock()
@@ -95,7 +111,9 @@ func (p *Peer) Call(ctx context.Context, method string, args, result any, opts .
 	}()
 	if err := p.send(ctx, Frame{Type: TypeCall, Stream: id, Payload: body}); err != nil {
 		p.mu.Lock()
-		delete(p.calls, id)
+		// A failed write may already be in the replay buffer. Preserve the id
+		// so its eventual reply is discarded after resume, never misdelivered.
+		pc.abandoned = true
 		p.mu.Unlock()
 		return err
 	}
@@ -122,7 +140,7 @@ func (p *Peer) Call(ctx context.Context, method string, args, result any, opts .
 			// The tombstone: this entry stays in p.calls until the runner's REPLY
 			// removes it. Bound: one small entry per call this side cancelled and
 			// the runner never answers, so the org drives it, it is per session,
-			// and fail() frees every entry when the link ends.
+			// Resume carries only bounded tombstones, otherwise starts fresh.
 			pc.abandoned = true
 			p.mu.Unlock()
 			_ = p.send(p.ctx, Frame{Type: TypeReset, Stream: id, Payload: EncodeReset(ResetCancelled)})
@@ -187,6 +205,11 @@ func (p *Peer) onCall(f Frame) error {
 		p.mu.Unlock()
 		cancel()
 		return fmt.Errorf("%w: call %d already in flight", ErrBadFrame, f.Stream)
+	}
+	if len(p.inCalls) >= MaxCalls {
+		p.mu.Unlock()
+		cancel()
+		return fmt.Errorf("%w: too many incoming calls", ErrBadFrame)
 	}
 	p.inCalls[f.Stream] = cancel
 	p.mu.Unlock()

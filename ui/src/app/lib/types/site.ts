@@ -245,13 +245,15 @@ export interface ModelProviders {
   providers?: ModelProvider[];
 }
 
-// GET /model-providers' body — Go's modelProvidersRead
-// (internal/api/model_providers_api.go): the stored block plus, per provider
+// GET /model-providers' body — Go's types.ModelProvidersRead
+// (internal/types/model_provider.go): the stored block plus, per provider
 // id, how many people hold a credential of their own for it (0 included;
 // absent with no providers). Read-only: never send it back on a PUT, whose
 // strict decode refuses it.
 export interface ModelProvidersRead extends ModelProviders {
   connected_people?: Record<string, number>;
+  entra_login_configured: boolean;
+  kinds_available: ModelProviderKind[];
 }
 
 // Closed set, server-validated.
@@ -387,6 +389,11 @@ export interface ADOEntraConfig {
   // why it is optional rather than a plain boolean the console might write as
   // false by omission.
   rest_api?: boolean;
+  // Hand this connection's minted tokens to a self-hosted runner's keystore
+  // (runner_resident). Absent reads as off.
+  runner_resident?: boolean;
+  // Also put that token into the sandbox. Requires runner_resident.
+  runner_resident_sandbox?: boolean;
 }
 
 // The closed git-provider kinds. A self-hosted forge is not a third kind: it is

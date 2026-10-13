@@ -212,6 +212,17 @@ func (o *Orchestrator) Name() string {
 	return "orchestrator"
 }
 
+// Executors lists the names of the deployment's own substrates, sorted: the configured executors a
+// remote-provided runner pool may hold. A registered runner is never one.
+func (o *Orchestrator) Executors() []string {
+	var names []string
+	for _, s := range o.locals() {
+		names = append(names, s.Name())
+	}
+	slices.Sort(names)
+	return names
+}
+
 // ImagePresent implements runner.ImageChecker by
 // delegating to the first wired substrate that implements it — the docker
 // substrate does; a substrate with no local image cache (k8s) does not, and
@@ -374,6 +385,67 @@ func ephemeralRank(e types.StorageEnforcement) int {
 	}
 }
 
+// RunnerFacts is the registered runner's own advertised facts; false when it is not registered, is
+// offline or has advertised nothing.
+func (o *Orchestrator) RunnerFacts(runnerID string) (runner.TargetFacts, bool) {
+	sub, ok := o.runnerSubstrate(substrate.RemotePrefix + runnerID)
+	if !ok {
+		return runner.TargetFacts{}, false
+	}
+	adv, ok := sub.(substrate.Advertiser)
+	if !ok {
+		return runner.TargetFacts{}, false
+	}
+	return adv.Advertised()
+}
+
+// local is the deployment's own executor of that name.
+func (o *Orchestrator) local(executor string) (substrate.Substrate, bool) {
+	i := slices.IndexFunc(o.locals(), func(s substrate.Substrate) bool { return s.Name() == executor })
+	if i < 0 {
+		return nil, false
+	}
+	return o.locals()[i], true
+}
+
+// ExecutorFacts is the classes one configured executor can enforce now; false when it is not one of
+// this deployment's executors or cannot report.
+func (o *Orchestrator) ExecutorFacts(ctx context.Context, executor string) (runner.TargetFacts, bool) {
+	sub, ok := o.local(executor)
+	if !ok {
+		return runner.TargetFacts{}, false
+	}
+	cs, err := o.classesFor(ctx, sub)
+	if err != nil {
+		return runner.TargetFacts{}, false
+	}
+	_, keeps := sub.(runner.SandboxEnder)
+	return runner.TargetFacts{Classes: slices.Clone(cs.Classes), EphemeralDiskEnforcement: cs.EphemeralDiskEnforcement,
+		KeepsEnded: keeps, UserDrives: cs.UserDrives}, true
+}
+
+// CreateSandboxOn creates the sandbox on the named configured executor only. An executor this
+// deployment does not run, or one that cannot enforce the run's class, fails
+// runner.ErrExecutorUnavailable: the run was admitted against that executor, so no other serves it.
+func (o *Orchestrator) CreateSandboxOn(ctx context.Context, executor string, spec runner.SandboxSpec) (runner.Sandbox, error) {
+	sub, ok := o.local(executor)
+	if !ok {
+		return runner.Sandbox{}, fmt.Errorf("%w: %q is not an executor of this deployment", runner.ErrExecutorUnavailable, executor)
+	}
+	class := spec.ConfinementClass
+	if class == "" {
+		class = types.CC1
+	}
+	cs, err := o.classesFor(ctx, sub)
+	if err != nil {
+		return runner.Sandbox{}, fmt.Errorf("%w: %s: %v", runner.ErrExecutorUnavailable, executor, err)
+	}
+	if !slices.Contains(cs.Classes, class) {
+		return runner.Sandbox{}, fmt.Errorf("%w: %s cannot enforce class %s", runner.ErrExecutorUnavailable, executor, class)
+	}
+	return o.createOn(ctx, sub, spec)
+}
+
 // CreateSandbox routes to a substrate that can enforce the requested class, then
 // delegates and records ref->substrate for subsequent lifecycle ops. A spec
 // naming a RunnerID goes to that runner's substrate instead, or fails
@@ -394,6 +466,11 @@ func (o *Orchestrator) CreateSandbox(ctx context.Context, spec runner.SandboxSpe
 	if err != nil {
 		return runner.Sandbox{}, err
 	}
+	return o.createOn(ctx, sub, spec)
+}
+
+// createOn creates the sandbox on sub and records ref->substrate.
+func (o *Orchestrator) createOn(ctx context.Context, sub substrate.Substrate, spec runner.SandboxSpec) (runner.Sandbox, error) {
 	sb, err := sub.CreateSandbox(ctx, spec)
 	if err != nil {
 		return runner.Sandbox{}, err
