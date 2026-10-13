@@ -370,42 +370,6 @@ export async function launchRun(page: Page, title = "e2e run"): Promise<void> {
   await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{8,}/, { timeout: 15_000 });
 }
 
-// LEGACY: the old four-panel wizard's helpers. new-run.spec.ts (E10b) is their last caller; delete
-// this block with that spec at the cutover.
-/** New Run's four panels (#1922). */
-export type NewRunPanel = "run" | "workspace" | "access" | "policy";
-
-const NEW_RUN_PANEL: Record<NewRunPanel, string> = { run: "Run", workspace: "Workspace", access: "Access", policy: "Policy" };
-
-/**
- * Shows one of New Run's four panels through its panel nav, as a person does.
- * A control on a panel that is not on screen is hidden, so every spec that
- * drives New Run reaches its controls through here. Calling it for the panel
- * already on screen changes nothing.
- */
-export async function goToNewRunPanel(page: Page, panel: NewRunPanel): Promise<void> {
-  // The button's name may carry an issue count ("Run 1 issue").
-  const step = page
-    .getByRole("navigation", { name: "New run" })
-    .getByRole("button", { name: new RegExp(`^${NEW_RUN_PANEL[panel]}\\b`) });
-  if ((await step.getAttribute("aria-current")) !== "step") await step.click();
-  await expect(step).toHaveAttribute("aria-current", "step");
-}
-
-/**
- * Opens New Run's custom policy source for editing, as a person does: the
- * Policy panel, then "Edit policy". The panel opens on its read view, so the
- * source field is not on screen until then. Returns the field.
- */
-export async function editNewRunPolicy(page: Page): Promise<Locator> {
-  await goToNewRunPanel(page, "policy");
-  const source = page.getByLabel(/^Spec \((YAML|JSON)\)/);
-  if ((await source.count()) === 0) await page.getByRole("button", { name: "Edit policy" }).click();
-  await expect(source).toBeVisible();
-  return source;
-}
-
-
 // #1200 compact cards: every CollapsibleCard on Admin Settings/Your account
 // (collapsible-card.tsx) starts collapsed, so a spec that reads a card's
 // content directly must open it first — the e2e counterpart of the unit

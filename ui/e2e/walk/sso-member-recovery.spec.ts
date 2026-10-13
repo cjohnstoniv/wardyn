@@ -85,7 +85,7 @@ import { STARTING_UNSCHEDULABLE } from "../../src/app/components/screens/run-sta
 // rail), by constant name handed over from their own canon docs.
 import { MODEL_ACCESS_BANNER, RAIL_MODEL_ACCESS } from "../../src/app/components/wardyn/model-access-copy";
 import { CONNECTIONS } from "../../src/app/components/wardyn/copy/door";
-import { RAIL_RECORDING_ON, RECORDING_DISABLED_TITLE } from "../../src/app/components/wardyn/copy";
+import { RECORDING_DISABLED_TITLE } from "../../src/app/components/wardyn/copy";
 import { NR_FILES } from "../../src/app/components/wardyn/copy/new-run/files";
 import { NR_HARNESSES } from "../../src/app/components/wardyn/copy/new-run/harnesses";
 import { NR_REVIEW } from "../../src/app/components/wardyn/copy/new-run/review";
@@ -555,18 +555,13 @@ test("A(rail): New Run's Tools and access states THIS run's credential residency
   // persistence.enabled=false. The Recording row reads /healthz, so it arrives
   // on that answer rather than on mount — poll it rather than racing it.
   //
-  // OPEN: the guided flow has no Recording line (no NR_* string, no group on Review). These two
-  // assertions are kept on Review, where the effective policy would say it; the constants
-  // RECORDING_DISABLED_TITLE and RAIL_RECORDING_ON still come from the copy barrel, which
-  // loses RAIL_RECORDING_ON with copy/new-run-rail.ts. Where does the run's Recording state live now?
+  // Review's Where group carries the Recording line.
   await page.getByRole("button", { name: NR_TOOLS.REVIEW_RUN }).click();
   await expect(heading(page, NR_REVIEW.TITLE)).toBeVisible({ timeout: 60_000 });
   await expect(page.getByText(RECORDING_DISABLED_TITLE)).toBeVisible({ timeout: 60_000 });
-  // 0.7.4's unconditional Recording sentence — which survives as the ENABLED
-  // arm's own copy, so U-15 made it a constant (RAIL_RECORDING_ON) and this
-  // asserts through it: on this estate recording is off, and the promise must
+  // The ENABLED arm's sentence: on this estate recording is off, and the promise must
   // not be on screen beside the sentence that says so.
-  await expect(page.getByText(RAIL_RECORDING_ON)).toHaveCount(0);
+  await expect(page.getByText(NR_REVIEW.RECORDING_ON)).toHaveCount(0);
 
   // ── A(rail)+ — the PERSON's state, on the shell's strip ──────────────────
   //

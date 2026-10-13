@@ -171,4 +171,4 @@ export { TIER } from "./copy/tier";
 export { TERMINAL, TERMINAL_COPY, TERMINAL_LINK, TERMINAL_RENDERER } from "./copy/terminal";
 
 export { RECORDING_DISABLED_TITLE, RECORDING_DISABLED_DESC } from "./copy/recording-disabled";
-export { RAIL, RAIL_CREDENTIAL, RAIL_PROVIDER, RAIL_RECORDING_ON, RAIL_CHECK } from "./copy/new-run-rail";
+export { RAIL_PROVIDER, RAIL_CHECK } from "./copy/new-run-rail";
