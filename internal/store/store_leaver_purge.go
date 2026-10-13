@@ -136,6 +136,9 @@ func (s PG) DeleteUserSubjectRows(ctx context.Context, id uuid.UUID, principals,
 	if err = stripRunnerPoolUseSubjects(ctx, tx, subjects); err != nil {
 		return 0, 0, 0, err
 	}
+	if err = stripRemoteRunnerPeopleSubjects(ctx, tx, subjects); err != nil {
+		return 0, 0, 0, err
+	}
 	if len(held) > 0 {
 		err = tx.QueryRow(ctx, `SELECT
 			(SELECT count(*) FROM capability_grants WHERE subject_type = 'user' AND lower(subject) = ANY($1::text[])) +
@@ -170,6 +173,24 @@ func stripRunnerPoolUseSubjects(ctx context.Context, q Querier, subjects []strin
 		FROM bumped WHERE u.pool_id = bumped.id`
 	if _, err := q.Exec(ctx, stmt, subjects); err != nil {
 		return fmt.Errorf("store: strip runner pool use policy subjects: %w", err)
+	}
+	return nil
+}
+
+// stripRemoteRunnerPeopleSubjects removes the user subjects (lower-cased forms) from every remote-hosted
+// runner's people policy and raises each changed runner's revision. A listed policy stays listed: an
+// emptied list admits nobody, never everyone.
+func stripRemoteRunnerPeopleSubjects(ctx context.Context, q Querier, subjects []string) error {
+	const stmt = `
+		UPDATE remote_runners rr
+		SET people_subjects = COALESCE((SELECT jsonb_agg(e) FROM jsonb_array_elements(rr.people_subjects) e
+		                                WHERE NOT (e->>'subject_type' = 'user' AND lower(e->>'subject') = ANY($1::text[]))), '[]'::jsonb),
+		    revision = rr.revision + 1, updated_by = 'leaver purge', updated_at = now()
+		WHERE rr.people_pools = 'listed' AND EXISTS (
+			SELECT 1 FROM jsonb_array_elements(rr.people_subjects) e
+			WHERE e->>'subject_type' = 'user' AND lower(e->>'subject') = ANY($1::text[]))`
+	if _, err := q.Exec(ctx, stmt, subjects); err != nil {
+		return fmt.Errorf("store: strip remote runner people subjects: %w", err)
 	}
 	return nil
 }

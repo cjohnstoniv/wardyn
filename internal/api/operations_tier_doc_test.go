@@ -59,8 +59,9 @@ var docTierRows = []struct{ route, token string }{
 	{"POST /api/v1/runner-pools", "the `/runner-pools` writes"},
 	{"PUT /api/v1/runner-pools/{id}", "the `/runner-pools` writes"},
 	{"DELETE /api/v1/runner-pools/{id}", "the `/runner-pools` writes"},
-	{"PUT /api/v1/runner-pools/{id}/executors/{executor}", "the `/runner-pools` writes"},
-	{"DELETE /api/v1/runner-pools/{id}/executors/{executor}", "the `/runner-pools` writes"},
+	{"PUT /api/v1/runner-pools/{id}/remote-runners/{rid}", "the `/runner-pools` writes"},
+	{"DELETE /api/v1/runner-pools/{id}/remote-runners/{rid}", "the `/runner-pools` writes"},
+	{"PUT /api/v1/remote-runners/{rid}", "the `/runner-pools` writes"},
 	{"PUT /api/v1/runner-pool-defaults", "the `/runner-pools` writes"},
 	{"GET /api/v1/runner-pools/{id}/use-policy", "the `/runner-pools/{id}/use-policy` routes"},
 	{"PUT /api/v1/runner-pools/{id}/use-policy", "the `/runner-pools/{id}/use-policy` routes"},
@@ -235,6 +236,10 @@ var docTierRows = []struct{ route, token string }{
 	{"GET /api/v1/runners/tokens", "`GET /runners/tokens` and `DELETE /runners/tokens/{id}`"},
 	{"DELETE /api/v1/runners/tokens/{id}", "`GET /runners/tokens` and `DELETE /runners/tokens/{id}`"},
 	{"GET /api/v1/runners/settings", "`GET /runners/settings`"},
+	{"GET /api/v1/remote-runners", "the `/remote-runners` reads and people policy"},
+	{"GET /api/v1/remote-runners/{rid}", "the `/remote-runners` reads and people policy"},
+	{"PUT /api/v1/remote-runners/{rid}/people-policy", "the `/remote-runners` reads and people policy"},
+	{"DELETE /api/v1/remote-runners/{rid}/people-policy", "the `/remote-runners` reads and people policy"},
 	// #1142's portal registry.
 	{"POST /api/v1/admin/delegates", "`POST /admin/delegates`"},
 	{"GET /api/v1/admin/delegates", "`GET /admin/delegates` and `DELETE /admin/delegates/{id}`"},
@@ -243,6 +248,17 @@ var docTierRows = []struct{ route, token string }{
 	{"POST /api/v1/people/{principal}/erasure", "`POST /people/{principal}/erasure`"},
 	{"GET /api/v1/scim/status", "`GET /scim/status`"},
 	{"GET /api/v1/model-providers/credentials", "`GET /model-providers/credentials`"},
+	// 0.9 #1508: the invitation, service-identity and token-move routes, one row each.
+	{"POST /api/v1/people/{principal}/invitations", "`POST /people/{principal}/invitations`"},
+	{"GET /api/v1/people/{principal}/invitations", "`GET /people/{principal}/invitations`"},
+	{"GET /api/v1/invitations", "`GET /invitations`"},
+	{"DELETE /api/v1/invitations/{id}", "`DELETE /invitations/{id}`"},
+	{"POST /api/v1/service-identities", "`POST /service-identities`"},
+	{"GET /api/v1/service-identities", "`GET /service-identities`"},
+	{"GET /api/v1/service-identities/{name}", "`DELETE /service-identities/{name}`"},
+	{"PATCH /api/v1/service-identities/{name}", "`DELETE /service-identities/{name}`"},
+	{"DELETE /api/v1/service-identities/{name}", "`DELETE /service-identities/{name}`"},
+	{"POST /api/v1/tokens/{id}/move", "`POST /tokens/{id}/move`"},
 }
 
 // docTierUndocumented names the gated routes the tier table does not cover, each
@@ -257,17 +273,9 @@ var docTierRows = []struct{ route, token string }{
 var docTierUndocumented = map[string]string{
 	"GET /api/v1/governance/egress-baseline": "0.9 B-P1: the tier-table row and the Egress baseline section are the docs pass's (the OPERATIONS.md prose budget is its to move)",
 	"PUT /api/v1/governance/egress-baseline": "0.9 B-P1: as the GET above",
-	// 0.9 #1508: the invitation tier rows are the docs lane's (the OPERATIONS.md prose budget is its to move).
-	"POST /api/v1/people/{principal}/invitations": "0.9 F-1508: the tier-table row is the docs pass's",
-	"GET /api/v1/people/{principal}/invitations":  "0.9 F-1508: as the POST above",
-	"GET /api/v1/invitations":                     "0.9 F-1508: as the POST above",
-	"DELETE /api/v1/invitations/{id}":             "0.9 F-1508: as the POST above",
-	// 0.9 #1508 service identities: the same docs-pass ownership.
-	"POST /api/v1/service-identities":          "0.9 F-1508: the tier-table row is the docs pass's",
-	"GET /api/v1/service-identities":           "0.9 F-1508: as the POST above",
-	"GET /api/v1/service-identities/{name}":    "0.9 F-1508: as the POST above",
-	"PATCH /api/v1/service-identities/{name}":  "0.9 F-1508: as the POST above",
-	"DELETE /api/v1/service-identities/{name}": "0.9 F-1508: as the POST above",
+	// 0.9 H12 (#1964): the credential delivery policy's tier row is the docs pass's.
+	"GET /api/v1/governance/credential-delivery": "0.9 H12: the tier-table row is the docs pass's (the OPERATIONS.md prose budget is its to move)",
+	"PUT /api/v1/governance/credential-delivery": "0.9 H12: as the GET above",
 }
 
 // TestOperationsTierTableMatchesRouteMatrix pins the "What admin-only still

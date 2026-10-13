@@ -105,6 +105,13 @@ const ComponentsScreen = React.lazy(() =>
     default: m.ComponentsScreen,
   })),
 );
+// Saved starting points (0.9): /templates in the User view, /admin/templates in the Admin view. The copy
+// modules it reads are lazy-only, so the screen is never imported by the entry chunk.
+const TemplatesScreen = React.lazy(() =>
+  import("./components/screens/templates/templates-screen").then((m) => ({
+    default: m.TemplatesScreen,
+  })),
+);
 const PermissionsScreen = React.lazy(() =>
   import("./components/screens/permissions").then((m) => ({
     default: m.PermissionsScreen,
@@ -131,6 +138,13 @@ const CredentialsScreen = React.lazy(() =>
 const PeopleScreen = React.lazy(() =>
   import("./components/screens/people/people-screen").then((m) => ({
     default: m.PeopleScreen,
+  })),
+);
+// Runners (0.9, packet M-RN-1) — the computers people registered to run their own runs. securityOps
+// server-side, so both admin tiers reach it; no member route.
+const RunnersScreen = React.lazy(() =>
+  import("./components/screens/runners/runners-screen").then((m) => ({
+    default: m.RunnersScreen,
   })),
 );
 const SecretsScreen = React.lazy(() =>
@@ -715,9 +729,11 @@ export default function App() {
             <Route path="/admin/runs/:id" element={suspend(<RunDetailScreen />)} />
             <Route path="/admin/approvals" element={suspend(<ApprovalsScreen onChanged={refreshBadges} />)} />
             <Route path="/admin/people" element={suspend(<PeopleScreen />)} />
+            <Route path="/admin/runners" element={suspend(<RunnersScreen />)} />
             <Route path="/admin/workspaces" element={suspend(<WorkspacesScreen />)} />
             <Route path="/admin/workspaces/:id" element={suspend(<WorkspaceDetailScreen />)} />
             <Route path="/admin/policies" element={suspend(<PoliciesScreen />)} />
+            <Route path="/admin/templates" element={suspend(<TemplatesScreen />)} />
             <Route path="/admin/governance" element={suspend(<GovernanceScreen />)} />
             <Route path="/admin/permissions" element={suspend(<PermissionsScreen />)} />
             <Route path="/admin/user-types" element={suspend(<UserTypesScreen />)} />
@@ -749,6 +765,7 @@ export default function App() {
                 </React.Suspense>
               }
             />
+            <Route path="/templates" element={suspend(<TemplatesScreen />)} />
             <Route
               path="/approvals"
               element={

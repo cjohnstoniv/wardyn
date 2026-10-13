@@ -507,6 +507,7 @@ func TestMeUserViewTypes_SecurityAdminInsideTheView(t *testing.T) {
 //   - the cookie's HMAC signature, which makes this exact shape unforgeable
 //     without the server's key, pinned by
 //     TestMeUserViewTypes_ForgedCookieIs401 above.
+//
 // (A previous version of this test named a type that does not exist, so
 // userViewGate dropped the view before /me ever ran — it passed for a reason
 // that had nothing to do with meUserViewTypes, and its own comment wrongly

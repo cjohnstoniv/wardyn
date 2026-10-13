@@ -64,6 +64,8 @@ type agentPolicyDatum struct {
 	Variant   string `json:"variant"`
 	// ToolApprovals is "hold" on a hold-lane run.
 	ToolApprovals string `json:"tool_approvals"`
+	// ToolRules counts an interactive run's tool rules the document carries.
+	ToolRules int `json:"tool_rules"`
 }
 
 // agentPolicyDispatch dispatches one run at the given agent + level through

@@ -657,11 +657,11 @@ describe("SidebarNav — per view (M-2)", () => {
     return { sheet, labels };
   }
 
-  it("an admin's Admin view: the eyebrow, the eleven items, then Setup and Settings", async () => {
+  it("an admin's Admin view: the eyebrow, the fourteen items, then Setup and Settings", async () => {
     const { sheet, labels } = await open("admin");
     expect(within(sheet).getByText("Admin view", { selector: ".label-eyebrow" })).toBeInTheDocument();
     expect(labels).toEqual([
-      "Runs", "Approvals", "People", "Workspaces", "Policies", "Governance", "Permissions", "Credentials", "User types",
+      "Runs", "Approvals", "People", "Runners", "Workspaces", "Policies", "Templates", "Governance", "Permissions", "Credentials", "User types",
       "Secrets", "Audit", "Recordings", "Setup", "Settings",
     ]);
     expect(within(sheet).getByRole("link", { name: /^Runs/ })).toHaveAttribute("href", "/admin/runs");
@@ -669,7 +669,20 @@ describe("SidebarNav — per view (M-2)", () => {
 
   it("a security admin's Admin view: Credentials, User types and Drives join; Secrets, Recordings, Setup and Settings do not", async () => {
     const { labels } = await open("security_admin");
-    expect(labels).toEqual(["Runs", "Approvals", "People", "Workspaces", "Policies", "Governance", "Permissions", "Credentials", "User types", "Drives", "Audit"]);
+    expect(labels).toEqual(["Runs", "Approvals", "People", "Runners", "Workspaces", "Policies", "Templates", "Governance", "Permissions", "Credentials", "User types", "Drives", "Audit"]);
+  });
+
+  it("Templates (0.9): after Runs in the User view, after Policies in the Admin view, both admin tiers", async () => {
+    const member = await open("user");
+    expect(member.labels.slice(0, 2)).toEqual(["Runs", "Templates"]);
+    expect(within(member.sheet).getByRole("link", { name: /^Templates/ })).toHaveAttribute("href", "/templates");
+    cleanup();
+    for (const role of ["admin", "security_admin"] as const) {
+      const { sheet, labels } = await open(role);
+      expect(labels.indexOf("Templates")).toBe(labels.indexOf("Policies") + 1);
+      expect(within(sheet).getByRole("link", { name: /^Templates/ })).toHaveAttribute("href", "/admin/templates");
+      cleanup();
+    }
   });
 
   it("People (ppl-p2): right after Approvals for the super admin and a security admin; not for a member or an admin in the User view", async () => {
@@ -686,16 +699,30 @@ describe("SidebarNav — per view (M-2)", () => {
     expect(within(userView.sheet).queryByRole("link", { name: /^People/ })).toBeNull();
   });
 
-  it("a user: no eyebrow, three items, then Getting started and Your account", async () => {
+  it("Runners (0.9): right after People for both admin tiers; not for a member or an admin in the User view", async () => {
+    for (const role of ["admin", "security_admin"] as const) {
+      const { sheet, labels } = await open(role);
+      expect(labels.indexOf("Runners")).toBe(labels.indexOf("People") + 1);
+      expect(within(sheet).getByRole("link", { name: /^Runners/ })).toHaveAttribute("href", "/admin/runners");
+      cleanup();
+    }
+    const member = await open("user");
+    expect(within(member.sheet).queryByRole("link", { name: /^Runners/ })).toBeNull();
+    cleanup();
+    const userView = await open("admin", true);
+    expect(within(userView.sheet).queryByRole("link", { name: /^Runners/ })).toBeNull();
+  });
+
+  it("a user: no eyebrow, four items, then Getting started and Your account", async () => {
     const { sheet, labels } = await open("user");
     expect(within(sheet).queryByText("Admin view", { selector: ".label-eyebrow" })).toBeNull();
-    expect(labels).toEqual(["Runs", "Approvals", "Workspaces", "Getting started", "Your account"]);
+    expect(labels).toEqual(["Runs", "Templates", "Approvals", "Workspaces", "Getting started", "Your account"]);
     expect(within(sheet).queryByRole("group", { name: "Console view" })).toBeNull();
   });
 
   it("an admin in the User view gets the user's nav, and the switch tops the sheet", async () => {
     const { sheet, labels } = await open("user", true);
-    expect(labels).toEqual(["Runs", "Approvals", "Workspaces", "Getting started", "Your account"]);
+    expect(labels).toEqual(["Runs", "Templates", "Approvals", "Workspaces", "Getting started", "Your account"]);
     const group = within(sheet).getByRole("group", { name: "Console view" });
     expect(within(group).getByRole("button", { name: "User view" })).toHaveAttribute("aria-pressed", "true");
   });

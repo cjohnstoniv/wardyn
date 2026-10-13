@@ -184,7 +184,7 @@ func (h *runEventHub) moved(runID uuid.UUID, from, to types.RunState) {
 // substrate's error text, and this feed carries no log content.
 func failedPhase(from types.RunState) string {
 	switch from {
-	case types.RunPending:
+	case types.RunQueued, types.RunPending:
 		return client.RunFailedNotStarted
 	case types.RunStarting:
 		return client.RunFailedStartFailed
@@ -268,8 +268,8 @@ func (h *runEventHub) since(runID uuid.UUID, after uint64) ([]client.RunEvent, <
 	return append([]client.RunEvent(nil), evs...), r.wake, r.ended()
 }
 
-// handleRunEvents serves GET /api/v1/runs/{id}/events. Owner-or-admin
-// (getRunAuthorized): a caller who cannot read the run gets the same 404
+// handleRunEvents serves GET /api/v1/runs/{id}/events. Owner, admin or a service
+// identity's sponsor (ownsRunOrSponsorOrAdmin): a caller who cannot read the run gets the same 404
 // GET /runs/{id} answers. A portal's delegated token reads its person's runs
 // (delegationAllowed). One principal holds at most maxRunEventStreams at a
 // time; the next is refused 422 event_stream_cap. The stream ends after the
@@ -279,7 +279,7 @@ func (s *Server) handleRunEvents(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	run, ok := s.getRunAuthorized(w, r, id)
+	run, ok := s.getRunAuthorizedBy(w, r, id, s.ownsRunOrSponsorOrAdmin)
 	if !ok {
 		return
 	}

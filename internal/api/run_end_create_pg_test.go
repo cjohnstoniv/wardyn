@@ -20,6 +20,7 @@ import (
 // client's run keeps today's no end.
 func TestPG_CreateRunStoresTheEndAndTheLifetimeCap(t *testing.T) {
 	srv, pool := pgHarness(t)
+	srv.cfg.AgentImages = composeAgentImages
 	srv.cfg.RunMaxAge = 48 * time.Hour
 	create := func(t *testing.T, body string) types.AgentRun {
 		t.Helper()

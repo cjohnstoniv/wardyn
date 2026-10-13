@@ -159,8 +159,8 @@ func TestPG_CountPendingApprovalsByRunCreator(t *testing.T) {
 		}
 	}
 
-	mk(ownRun, types.ApprovalPending)  // counts
-	mk(ownRun, types.ApprovalApproved) // decided — does not count
+	mk(ownRun, types.ApprovalPending)     // counts
+	mk(ownRun, types.ApprovalApproved)    // decided — does not count
 	mk(foreignRun, types.ApprovalPending) // a foreign run's own PENDING row — must never count
 
 	got, err := pg.CountPendingApprovalsByRunCreator(ctx, owner)

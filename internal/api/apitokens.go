@@ -597,15 +597,22 @@ func (s *Server) handleListAllAPITokens(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	// ?minted_for_others=true is the inventory of tokens an admin created for
-	// someone else (#1477): live ones whose minter is not their owner. The
-	// route that created them is gone; they keep working until revoked.
+	// someone else (#1477): live ones whose minter is not their owner, or revoked
+	// ones too with &include_revoked=true, so a finished move or claim stays
+	// visible. The route that created them is gone; they keep working until
+	// revoked. Each admin-minted row carries its disposition (#1508).
 	if r.URL.Query().Get("minted_for_others") == "true" {
+		withRevoked := r.URL.Query().Get("include_revoked") == "true"
 		tokens = slices.DeleteFunc(tokens, func(t types.APIToken) bool {
-			return t.MintedBy == "" || t.MintedBy == t.Principal || t.RevokedAt != nil
+			return t.MintedBy == "" || t.MintedBy == t.Principal || (t.RevokedAt != nil && !withRevoked)
 		})
 		for i := range tokens {
 			tokens[i].Token = ""
 		}
+	}
+	if err := s.addTokenDispositions(r.Context(), tokens); err != nil {
+		writeServerError(w, r, "list api tokens", err)
+		return
 	}
 	writeJSON(w, http.StatusOK, tokens)
 }

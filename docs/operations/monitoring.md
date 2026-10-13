@@ -34,7 +34,7 @@ flowchart LR
 | `wardyn_audit_delivery_lag{destination}` | Gauge. Audit rows recorded but not yet acknowledged by the collector (head seq minus acknowledged seq, never below 0). Only present with `"delivery": "acknowledged"` on the webhook sink; read from Postgres, so any replica reports it | Rising lag with the collector healthy means the loop is stopped: check `wardyn_audit_delivery_halted` and the leader's log |
 | `wardyn_audit_delivery_oldest_undelivered_age_seconds{destination}` | Gauge. Age of the oldest audit row the collector has not acknowledged; 0 when caught up | |
 | `wardyn_audit_delivery_last_ack_timestamp_seconds{destination}` | Gauge, Unix seconds of the collector's last acceptance (HTTP 2xx); 0 if it never accepted | |
-| `wardyn_audit_delivery_halted{destination}` | Gauge. 1 when the collector answered a terminal 4xx (not 408 or 429) and delivery is halted until wardynd restarts | The checkpoint's `last_error` holds the status, never the token |
+| `wardyn_audit_delivery_halted{destination}` | Gauge. 1 when the collector answered a terminal 4xx (not 408 or 429) and delivery is halted until wardynd restarts or another replica takes over delivery | The checkpoint's `last_error` holds the status, never the token |
 | `wardyn_audit_delivery_resets_total{destination}` | Counter. Times retention or a table reset removed the row at the checkpoint and delivery resent from the oldest retained row. Each one is also an `audit.delivery.reset` audit row | Non-zero means the collector may have missed events; see [Acknowledged delivery](../ENV.md#acknowledged-delivery-delivery-acknowledged) |
 | `wardyn_approval_notify_failed_total{channel}` | Approval notifications that went dead on a channel: five failed sends, a non-retryable response, or still unsent an hour after they came due | Each also writes an `approval.notify.failed` audit row carrying an error class, never a URL. Only present while `WARDYN_APPROVAL_NOTIFY` is set, one series per configured channel; per replica |
 | `wardyn_approval_notify_suppressed_total{channel}` | Approval raises that created no notification because the run already had 25 tier-0 outbox rows in the last hour. The approval itself still exists and shows in the console. Only present while `WARDYN_APPROVAL_NOTIFY` is set; per replica. See [Approval notifications](../OPERATIONS.md#approval-notifications) | |
@@ -80,6 +80,7 @@ These are the sweeps, with the interval each ticks at:
 | `run_watcher` | 1m | A runner exists, on every replica |
 | `orphaned_build` | 30m | The image builder can sweep orphaned builds |
 | `run_output` | 1h | `WARDYN_RUN_OUTPUT_PERSIST` is on (the default): deletes run output past `WARDYN_RUN_OUTPUT_RETENTION_DAYS` and resolves abandoned pending rows. Runs on the sweeper leader; with persistence off the retention delete still runs but is not reported |
+| `run_queue` | 10s | Always: ends waiting runs past their wait, fails promoted runs whose start died, and promotes for every pool with waiting runs. Runs on the sweeper leader |
 
 - Every replica registers every sweep whose condition holds on the install, whichever replica holds the sweeper lock, so a follower notices a leader that stopped ticking.
 - A sweep whose condition does not hold has no series and can never be stale.

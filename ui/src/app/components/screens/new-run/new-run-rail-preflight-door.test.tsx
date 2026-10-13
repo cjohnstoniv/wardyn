@@ -109,7 +109,9 @@ function renderRail() {
 
 afterEach(() => window.history.pushState({}, "", "/"));
 
-const pane = () => screen.findByRole("button", { name: "fake pane" });
+// The pane is lazy-loaded: whichever test runs first pays the cold import, which on a loaded runner
+// outlasts findBy's 1 s default.
+const pane = () => screen.findByRole("button", { name: "fake pane" }, { timeout: 5000 });
 
 const launchButton = () => screen.getByRole("button", { name: "Launch run" });
 const settle = () => act(() => new Promise((r) => setTimeout(r, 30)));

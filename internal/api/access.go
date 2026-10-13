@@ -112,11 +112,11 @@ type accessMappingView struct {
 	// Role is the tier; UserType the row's type, set only when Role is the
 	// user tier (a chart value naming a type id arrives here split the same
 	// way sign-in splits it).
-	Role        string    `json:"role"`
-	UserType    string    `json:"user_type,omitempty"`
-	Source      string    `json:"source"` // "chart" | "console"
-	Shadowed    bool      `json:"shadowed"`
-	ShadowCause string    `json:"shadow_cause"` // "" | "chart" | "operator_allowlist"
+	Role        string `json:"role"`
+	UserType    string `json:"user_type,omitempty"`
+	Source      string `json:"source"` // "chart" | "console"
+	Shadowed    bool   `json:"shadowed"`
+	ShadowCause string `json:"shadow_cause"` // "" | "chart" | "operator_allowlist"
 	// MigratedFromMember (migration 0098) is set only on a console row 0074's
 	// rename rewrote from role='member' — never on a chart row, whose target
 	// arrives from ChartRoleMap already resolved to "user" by ParseRoleMap

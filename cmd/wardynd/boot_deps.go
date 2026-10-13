@@ -966,6 +966,9 @@ func parseAgentImages(raw string) (map[string]string, error) {
 	if err := json.Unmarshal([]byte(raw), &images); err != nil {
 		return nil, fmt.Errorf("parse WARDYN_AGENT_IMAGES: %w", err)
 	}
+	if err := api.ValidateHarnessSetImages(images); err != nil {
+		return nil, err
+	}
 	slog.Info("wardynd: agent image overrides", slog.Any("images", images))
 	return images, nil
 }

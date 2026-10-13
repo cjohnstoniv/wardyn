@@ -58,7 +58,8 @@ func (s *Server) refuse(w http.ResponseWriter, r *http.Request, d authz.Decision
 	if d.WireReason != "" || ref.Effect == authz.EffectHidden {
 		policy = nil
 	}
-	writeErrorReasonPolicy(w, ref.Effect.Status(), string(wireReason), cmp.Or(d.Sentence, ref.Sentence), policy)
+	// The tool rides as itself: it is the request's own tools[].id.
+	writeJSON(w, ref.Effect.Status(), errorBody{Error: cmp.Or(d.Sentence, ref.Sentence), Reason: string(wireReason), Policy: policy, Tool: d.Detail["tool"]})
 	if ref.Audit {
 		s.recordRefusal(r.Context(), r, d)
 	}

@@ -417,7 +417,7 @@ func TestContactlessLeafBorrowsSiteHelp(t *testing.T) {
 		return srv, r, map[string]*policyref.Ref{
 			"ceiling refusal": srv.ceilingPolicy(ctx, governanceCeiling{Profile: resolvedOf(p)}),
 			"run detail":      srv.runPolicyRef(ctx, r),
-			"dispatch":        srv.runAttribution(ctx, r, site),
+			"dispatch":        srv.runAttribution(ctx, r, site, false),
 		}
 	}
 

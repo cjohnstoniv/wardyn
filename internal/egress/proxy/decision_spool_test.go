@@ -19,6 +19,18 @@ import (
 	"github.com/google/uuid"
 )
 
+// eachRow checks a replayed batch row by row.
+func eachRow(fn func(runnerspool.Record) error) func(context.Context, []runnerspool.Record) error {
+	return func(_ context.Context, rows []runnerspool.Record) error {
+		for _, r := range rows {
+			if err := fn(r); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+}
+
 func TestLocalSpoolReservationsBoundConcurrentForwarding(t *testing.T) {
 	ctx := context.Background()
 	id := uuid.New()
@@ -69,7 +81,7 @@ func TestLocalSpoolReservationsBoundConcurrentForwarding(t *testing.T) {
 	}
 	first := true
 	rows := 0
-	if err := s.local.Replay(ctx, func(_ context.Context, row runnerspool.Record) error {
+	if err := s.local.Replay(ctx, eachRow(func(row runnerspool.Record) error {
 		if first {
 			if row.Decision.RuleSource != "builtin:spool-full" || row.Count != drops {
 				t.Fatalf("overflow not first: %+v", row)
@@ -79,7 +91,7 @@ func TestLocalSpoolReservationsBoundConcurrentForwarding(t *testing.T) {
 			rows++
 		}
 		return nil
-	}); err != nil {
+	})); err != nil {
 		t.Fatal(err)
 	}
 	if rows != len(tickets) {
@@ -180,13 +192,13 @@ func TestLocalSpoolOverflowStopsActualUpstreamAndDrains(t *testing.T) {
 		t.Fatalf("network/audit mismatch: forward%d records%d drops%d", forwards, depth, drops)
 	}
 	records := 0
-	if err := sink.local.Replay(ctx, func(_ context.Context, r runnerspool.Record) error {
+	if err := sink.local.Replay(ctx, eachRow(func(r runnerspool.Record) error {
 		if records == 0 && r.Decision.RuleSource != "builtin:spool-full" {
 			t.Fatal("overflow was not first")
 		}
 		records++
 		return nil
-	}); err != nil {
+	})); err != nil {
 		t.Fatal(err)
 	}
 	w := httptest.NewRecorder()

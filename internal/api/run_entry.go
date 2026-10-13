@@ -7,7 +7,9 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"maps"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -31,6 +33,78 @@ import (
 func mayEnterRun(run types.AgentRun, principal string, superAdmin bool) bool {
 	return (run.CreatedBy != "" && principal != "" && run.CreatedBy == principal) ||
 		(superAdmin && run.OperatorOwned)
+}
+
+// sponsorEntry is the "entry" value of the audit rows (session.attach, ui.open) of a service identity's
+// sponsor entering one of its runs.
+const sponsorEntry = "sponsor"
+
+// serviceOfRun is the name of the service identity that created run.
+func serviceOfRun(run types.AgentRun) (string, bool) {
+	return strings.CutPrefix(run.CreatedBy, types.ServicePrincipalPrefix)
+}
+
+// sponsoredService is the service identity a session that passed the entry gate on run entered as the sponsor of,
+// or "": a service identity's run is entered only through the sponsor arm (mayEnterRunOrSponsor).
+func sponsoredService(run types.AgentRun) string {
+	name, _ := serviceOfRun(run)
+	return name
+}
+
+// sponsorEntryData is the data a sponsor's entry rows add to their own: the service identity and
+// entry=sponsor. A service identity's run is entered only through the sponsor arm (its owner is a
+// principal no session or key holds), so the run alone says which entry this is; nil for any other run.
+func sponsorEntryData(run types.AgentRun) map[string]any {
+	name, ok := serviceOfRun(run)
+	if !ok {
+		return nil
+	}
+	return map[string]any{"service_identity": name, "entry": sponsorEntry}
+}
+
+// withSponsorEntry adds sponsorEntryData to data, in place, and returns it.
+func withSponsorEntry(run types.AgentRun, data map[string]any) map[string]any {
+	maps.Copy(data, sponsorEntryData(run))
+	return data
+}
+
+// sponsorStillEntitled is the structural part of the sponsor arm of entry: principal is still the current
+// sponsor of the service identity that created run, the identity is active, and it has not been
+// re-sponsored since `since` (the ticket's or the session's authority time). Asked at ticket mint, ticket
+// redemption and every UI re-check. The grant half (service_attach) is asked at the mint only: a withdrawn
+// grant refuses the next ticket and ends nothing already open. A lookup that cannot answer is an error.
+func (s *Server) sponsorStillEntitled(ctx context.Context, run types.AgentRun, principal string, since time.Time) (bool, error) {
+	name, ok := serviceOfRun(run)
+	if !ok || principal == "" || isServicePrincipal(principal) {
+		return false, nil
+	}
+	ss, ok := s.cfg.Store.(store.ServiceIdentityStore)
+	if !ok {
+		return false, nil
+	}
+	still, err := ss.ServiceStillSponsored(ctx, name, principal, since)
+	if errors.Is(err, store.ErrNotFound) {
+		return false, nil
+	}
+	return still, err
+}
+
+// mayEnterRunOrSponsor is mayEnterRun for a redeemed ticket or an open UI session, with the sponsor arm: a
+// member-role principal who is still the sponsor of the service identity that owns run. A super admin's
+// stamp never takes the arm (a sponsor's ticket is stamped member whatever the minter's role, so the run's
+// own doors always run). A store failure refuses and is logged.
+func (s *Server) mayEnterRunOrSponsor(ctx context.Context, run types.AgentRun, principal string, superAdmin bool, since time.Time) bool {
+	if mayEnterRun(run, principal, superAdmin) {
+		return true
+	}
+	if superAdmin {
+		return false
+	}
+	ok, err := s.sponsorStillEntitled(ctx, run, principal, since)
+	if err != nil {
+		slog.ErrorContext(ctx, "wardynd: sponsor entry check failed; refusing", "run_id", run.ID, "err", err)
+	}
+	return ok && err == nil
 }
 
 // runOwnerOnlyReason is the audit reason an entry refusal carries on the lanes

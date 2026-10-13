@@ -12,12 +12,16 @@ import (
 	"log/slog"
 	"net"
 	"net/netip"
+	"os"
 	"time"
 
 	"github.com/moby/moby/client"
 
+	"github.com/cjohnstoniv/wardyn/internal/placement"
 	"github.com/cjohnstoniv/wardyn/internal/runner/docker"
+	"github.com/cjohnstoniv/wardyn/internal/runner/keystore"
 	"github.com/cjohnstoniv/wardyn/internal/runner/offline"
+	"github.com/cjohnstoniv/wardyn/internal/runner/posture"
 	"github.com/cjohnstoniv/wardyn/internal/runner/runneragent"
 	"github.com/cjohnstoniv/wardyn/internal/runner/runnerio"
 	"github.com/cjohnstoniv/wardyn/internal/runner/substrate"
@@ -45,7 +49,33 @@ func productionRunnerHooks(ctx context.Context, identity runneridentity.Identity
 	if err != nil {
 		return runnerRuntime{}, err
 	}
-	return localRunnerRuntime(ctx, identity, stateDir, sub, docker.SandboxRef, relay)
+	return localRunnerRuntime(ctx, identity, stateDir, sub, docker.SandboxRef, relay, dockerCapacity)
+}
+
+// dockerCapacity is the Docker engine's CPUs and memory as the runner's advertised capacity, the size
+// placement holds one run on this runner to, read again on every connect. An engine that does not answer
+// within ten seconds leaves the capacity unreported (unknown, never zero) until the next connect.
+func dockerCapacity(ctx context.Context) placement.Capacity {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	c, err := readDockerCapacity(ctx)
+	if err != nil {
+		slog.WarnContext(ctx, "runner capacity unknown until the next connect: Docker did not report its size", "error", err)
+	}
+	return c
+}
+
+func readDockerCapacity(ctx context.Context) (placement.Capacity, error) {
+	cli, err := client.New(client.FromEnv)
+	if err != nil {
+		return placement.Capacity{}, err
+	}
+	defer cli.Close()
+	info, err := cli.Info(ctx, client.InfoOptions{})
+	if err != nil {
+		return placement.Capacity{}, err
+	}
+	return engineCapacity(info.Info.NCPU, info.Info.MemTotal), nil
 }
 
 // dockerHostGateway is the address a native engine resolves host-gateway to
@@ -96,7 +126,10 @@ func dockerHostGateway(ctx context.Context) (netip.Addr, []netip.Addr, error) {
 	return gateway, held, nil
 }
 
-func localRunnerRuntime(ctx context.Context, identity runneridentity.Identity, stateDir string, sub substrate.Substrate, ref func(uuid.UUID) string, relay *localRelay) (_ runnerRuntime, retErr error) {
+// postureInterval is how often a connected runner re-reads its posture.
+const postureInterval = 15 * time.Minute
+
+func localRunnerRuntime(ctx context.Context, identity runneridentity.Identity, stateDir string, sub substrate.Substrate, ref func(uuid.UUID) string, relay *localRelay, capacity func(context.Context) placement.Capacity) (_ runnerRuntime, retErr error) {
 	streams, err := runnerio.New(sub, identity.RunnerID.String(), stateDir)
 	if err != nil {
 		return runnerRuntime{}, err
@@ -112,6 +145,11 @@ func localRunnerRuntime(ctx context.Context, identity runneridentity.Identity, s
 			retErr = errors.Join(retErr, manager.Close())
 		}
 	}()
+	resident, err := runneragent.NewResident(runneragent.Keystore{Set: keystore.Set, Get: keystore.Get, Delete: keystore.Delete}, stateDir)
+	if err != nil {
+		return runnerRuntime{}, err
+	}
+	reporter := posture.NewReporter()
 	dispatcher, err := runneragent.New(runneragent.Config{
 		RunnerID: identity.RunnerID.String(), Substrate: sub,
 		BeforeCreate: manager.BeforeCreate, Created: manager.Created, CreateFailed: manager.CreateFailed,
@@ -119,6 +157,7 @@ func localRunnerRuntime(ctx context.Context, identity runneridentity.Identity, s
 		MutationFinished: manager.MutationFinished,
 		ExecutionResult:  manager.ExecutionResult,
 		Streams:          streams.Call, Output: streams.Output, BindOutput: streams.BindOutput, ForgetOutput: streams.ForgetOutput,
+		Resident: resident,
 	})
 	if err != nil {
 		return runnerRuntime{}, err
@@ -145,12 +184,19 @@ func localRunnerRuntime(ctx context.Context, identity runneridentity.Identity, s
 			if err != nil {
 				return err
 			}
-			data, err := runnerwire.Marshal(runnerwire.Caps{Support: support, Version: version.String()})
+			// A host that cannot say its name reports none, and keeps the machine name it had.
+			machine, _ := os.Hostname()
+			data, err := runnerwire.Marshal(runnerwire.Caps{Support: support, Version: version.String(), MachineName: machine, Capacity: capacity(ctx)})
 			if err != nil {
 				return err
 			}
 			if err := peer.EventAck(ctx, runnerwire.Event{Kind: runnerwire.EventCaps, Data: data}); err != nil {
 				return err
+			}
+			// Posture only gates runner_resident delivery; a refused report
+			// must not keep the runner from READY.
+			if err := reporter.Send(ctx, peer); err != nil {
+				slog.WarnContext(ctx, "runner posture report failed", "error", err)
 			}
 			return manager.Replay(ctx, peer)
 		},
@@ -158,11 +204,16 @@ func localRunnerRuntime(ctx context.Context, identity runneridentity.Identity, s
 			manager.Online(peer)
 			streams.Online(peer)
 			relay.Online(peer)
+			go reporter.Watch(peer, postureInterval)
 		},
 		StreamOffline: func(peer *runnerwire.Peer) {
 			streams.Offline(peer)
 			relay.Offline(peer)
 		},
 	}
-	return runnerRuntime{hooks: hooks, run: manager.Run, close: func() error { return errors.Join(manager.Close(), relay.Close()) }}, nil
+	run := func(ctx context.Context) error {
+		go resident.SweepExpired(ctx, time.Minute)
+		return manager.Run(ctx)
+	}
+	return runnerRuntime{hooks: hooks, run: run, close: func() error { return errors.Join(manager.Close(), relay.Close()) }}, nil
 }

@@ -176,11 +176,14 @@ var governanceChangeKinds = map[string]govKind{
 	govKindKeyDomain:           {approver: securityApprover, apply: applyKeyDomainAssignmentChange},
 	govKindEgressBaseline:      {approver: securityApprover, apply: applyEgressBaselineChange},
 	govKindRunnerPoolUsePolicy: {approver: securityApprover, apply: applyRunnerPoolUsePolicyChange},
+	govKindRemoteRunnerPeople:  {approver: securityApprover, apply: applyRemoteRunnerPeopleChange},
+	govKindCredentialDelivery:  {approver: securityApprover, apply: applyCredentialDeliveryChange},
+	govKindServiceIdentity:     {approver: securityApprover, apply: applyServiceIdentityChange},
 }
 
-// forChange is the kind as it decides one held change. A runner pool executor attach or detach is held
-// under the use-policy kind but written on the operatorOnly tier, so only a super admin decides it; a
-// payload that does not decode is given the stricter tier.
+// forChange is the kind as it decides one held change. A remote-hosted runner add to or removal from an
+// organization pool is held under the use-policy kind but written on the operatorOnly tier, so only a
+// super admin decides it; a payload that does not decode is given the stricter tier.
 func (k govKind) forChange(ch types.GovernanceChange) govKind {
 	if ch.TargetKind == govKindRunnerPoolUsePolicy {
 		var held runnerPoolHeldChange

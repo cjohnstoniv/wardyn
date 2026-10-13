@@ -39,6 +39,15 @@ type DelegateStore interface {
 
 var _ DelegateStore = PG{}
 
+// DelegateReader reads one portal by id whatever its state, so the pool queue's start can tell a
+// portal that was revoked while a run waited from one that still stands. Separate from DelegateStore
+// for the same reason that interface is optional: a test double that implements one need not the other.
+type DelegateReader interface {
+	GetDelegateByID(ctx context.Context, id uuid.UUID) (types.Delegate, error)
+}
+
+var _ DelegateReader = PG{}
+
 const delegateCols = `id, name, idp_client_id, scope_group, credential_sha256, registered_by, created_at, last_used_at, revoked_at`
 
 func scanDelegate(row pgx.Row) (types.Delegate, error) {
@@ -74,6 +83,12 @@ func (s PG) CreateDelegate(ctx context.Context, d types.Delegate, raw string) (t
 func (s PG) GetDelegateByRaw(ctx context.Context, raw string) (types.Delegate, error) {
 	const q = `SELECT ` + delegateCols + ` FROM delegates WHERE credential_sha256 = $1 AND revoked_at IS NULL`
 	return scanDelegate(s.Pool.QueryRow(ctx, q, hashToken(raw)))
+}
+
+// GetDelegateByID returns the portal with id, revoked or not (ErrNotFound only for an id that was
+// never registered). The authenticating reads above filter revoked rows; this one exists to see them.
+func (s PG) GetDelegateByID(ctx context.Context, id uuid.UUID) (types.Delegate, error) {
+	return scanDelegate(s.Pool.QueryRow(ctx, `SELECT `+delegateCols+` FROM delegates WHERE id = $1`, id))
 }
 
 // ListDelegates returns every portal, newest first, including revoked —

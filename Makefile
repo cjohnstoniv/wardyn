@@ -1,4 +1,4 @@
-.PHONY: doc-links test-gaps license-headers notices diagrams build build-docker build-k8s test test-docker lint ui compose-build compose-up compose-down demo clean test-conformance-docker test-conformance-k8s test-kek-conformance test-kek-conformance-kind test-daemon-proxy-secret-kind build-conformance-agent-image test-conformance-stub test-envbuild-integration govulncheck staticcheck agent-images test-drive help test-report test-report-pg test-report-docker test-report-k8s cover-check cover-union release-check release-patch ui-test ui-typecheck test-e2e test-e2e-concurrent test-e2e-live test-e2e-byoi test-e2e-ssh test-e2e-ssh-k8s test-e2e-ui-sandbox test-provider-seed test-e2e-ui screenshots record-demo setup stop-host reset reset-all doctor dev-pg agent-images-core test-race test-race-pg tidy-check agent-image-base agent-image-full agent-image-vscode agent-image-novnc gitleaks licenses test-scripts helm-lint helm-install-test kind-quickstart kind-down kind-sso kind-sso-down compose-config dco npm-license npm-audit npm-audit-dev ci
+.PHONY: doc-links test-gaps license-headers notices diagrams build build-docker build-k8s test test-docker lint ui compose-build compose-up compose-down demo clean test-conformance-docker test-conformance-k8s test-kek-conformance test-kek-conformance-kind test-daemon-proxy-secret-kind build-conformance-agent-image test-conformance-stub test-envbuild-integration govulncheck staticcheck agent-images test-drive help test-report test-report-pg test-report-docker test-report-k8s cover-check cover-union release-check release-patch ui-test ui-typecheck test-e2e test-e2e-concurrent test-e2e-live test-e2e-byoi test-e2e-ssh test-e2e-ssh-k8s test-e2e-ui-sandbox test-provider-seed test-e2e-ui screenshots record-demo setup stop-host reset reset-all doctor dev-pg agent-images-core test-race test-race-pg tidy-check agent-image-base agent-image-full agent-image-harnesses agent-image-vscode agent-image-novnc gitleaks licenses test-scripts helm-lint helm-install-test kind-quickstart kind-down kind-sso kind-sso-down compose-config dco npm-license npm-audit npm-audit-dev ci
 
 COMPOSE_FILE := deploy/compose/docker-compose.yaml
 
@@ -124,6 +124,18 @@ agent-image-full: agent-images-core ## Build the fat toolchain agent image (Go/P
 	@echo "Building the fat toolchain image (Go/Python/Rust/JDK/pnpm)..."
 	docker build $(DOCKER_BUILD_ARGS) -f deploy/images/full/Dockerfile -t wardyn/agent-full:local .
 	@echo "Full toolchain image built: wardyn/agent-full:local"
+
+# One sandbox image carrying Claude Code AND Codex, for a run that adds a second
+# harness (deploy/images/harnesses/Dockerfile). LOCAL BUILD ONLY: it layers on the
+# claude-code image, so it is never published and is in no release or nightly
+# matrix. Declare it with a "+" key, then restart wardynd:
+#   WARDYN_AGENT_IMAGES='{"claude-code+codex-cli":"wardyn/agent-harnesses:local"}'
+# On k8s push it to a registry the cluster pulls from and declare that ref.
+# Layer on another base with BASE_IMAGE=wardyn/agent-full:local.
+agent-image-harnesses: agent-images-core ## Build the Claude Code + Codex harness-set image (local only)
+	@echo "Building the harness-set image (claude-code + codex-cli)..."
+	docker build $(DOCKER_BUILD_ARGS) -f deploy/images/harnesses/Dockerfile -t wardyn/agent-harnesses:local .
+	@echo "Harness-set image built: wardyn/agent-harnesses:local"
 
 # agent-base plus a pinned code-server, for the UI-sandbox relay's "vscode"
 # app (Workstream D, deploy/images/vscode/Dockerfile). Not in

@@ -18,9 +18,13 @@
 // is stubbed to a clean 201 — the same route-stub boundary
 // model-providers.spec.ts and model-provider-editor.spec.ts already draw for
 // the admin config screens, moved to the rail's own wire contract.
-import type { Page } from "@playwright/test";
+import type { Page, Request } from "@playwright/test";
 import { test, expect, gotoConsole, navToRoute } from "./fixtures";
 import { RAIL_PROVIDER } from "../src/app/components/wardyn/copy";
+
+// The 0.9 run contract carries the provider on the harness entry of `tools`, not as a top-level field.
+const harnessProvider = (r: Request): string | undefined =>
+  (r.postDataJSON().tools as { kind: string; model_provider?: string }[]).find((t) => t.kind === "harness")?.model_provider;
 
 const BEDROCK = {
   id: "bedrock-prod",
@@ -87,7 +91,7 @@ test.describe("New Run rail — the provider picker (#542)", () => {
     await page.getByRole("button", { name: "Launch run" }).click();
 
     await expect(page).toHaveURL(/\/runs\/e2e-provider-run/);
-    expect((await sentReq).postDataJSON().model_provider).toBe(GATEWAY.id);
+    expect(harnessProvider(await sentReq)).toBe(GATEWAY.id);
   });
 
   // #1489: the picker word and the line say only that none is available.
@@ -132,6 +136,6 @@ test.describe("New Run rail — the provider picker (#542)", () => {
     const sentReq = page.waitForRequest((r) => r.url().endsWith("/api/v1/runs") && r.method() === "POST");
     await page.getByRole("button", { name: "Launch run" }).click();
     await expect(page).toHaveURL(/\/runs\/e2e-provider-run-solo/);
-    expect((await sentReq).postDataJSON().model_provider).toBe(BEDROCK.id);
+    expect(harnessProvider(await sentReq)).toBe(BEDROCK.id);
   });
 });

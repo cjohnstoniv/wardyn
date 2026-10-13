@@ -28,8 +28,7 @@ import (
 func TestSeedRequestWorkspace(t *testing.T) {
 	h := newHarness(t)
 	seed := func(ws types.Workspace, spec *types.RunPolicySpec, req *createRunRequest) ([]string, string, int, string, error) {
-		return New(baseTestConfig(h, &workspaceStoreFake{ws: ws})).
-			seedRequestWorkspace(context.Background(), spec, req)
+		return seedLegacy(New(baseTestConfig(h, &workspaceStoreFake{ws: ws})), context.Background(), spec, req)
 	}
 	localDirWS := func(id uuid.UUID, path string) types.Workspace {
 		return types.Workspace{ID: id, Sources: []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeLocalDir, Path: path}}}
@@ -83,7 +82,7 @@ func TestSeedRequestWorkspace(t *testing.T) {
 			Sources:   []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeEphemeral, Target: "/home/agent/work"}},
 			BaseImage: &types.WorkspaceBaseImage{Kind: "custom", Image: "ghcr.io/acme/base:1"},
 		}}))
-		if _, _, code, _, err := srv.seedRequestWorkspace(context.Background(), &spec, &req); err != nil {
+		if _, _, code, _, err := seedLegacy(srv, context.Background(), &spec, &req); err != nil {
 			t.Fatalf("seed: %d %v", code, err)
 		}
 		if req.Image != "ghcr.io/acme/base:1" {
@@ -118,7 +117,7 @@ func TestSeedRequestWorkspace(t *testing.T) {
 		// identical reason; New(...) is for tests that need its full wiring —
 		// e.g. a live runner/background reconciliation — which this does not.)
 		srv := &Server{}
-		dirs, _, code, _, err := srv.seedRequestWorkspace(context.Background(), &spec, &req)
+		dirs, _, code, _, err := seedLegacy(srv, context.Background(), &spec, &req)
 		if err != nil || code != 0 {
 			t.Fatalf("seed: %d %v, want a clean no-op", code, err)
 		}
@@ -175,8 +174,8 @@ func TestSeedRequestWorkspace(t *testing.T) {
 // dispatched verbatim.
 type wrapEchoImageBuilder struct{ fakeImageBuilder }
 
-func (wrapEchoImageBuilder) FinalizeBase(_ context.Context, baseRef, outputTag string, _ io.Writer) (string, error) {
-	return outputTag, nil
+func (wrapEchoImageBuilder) FinalizeBase(_ context.Context, baseRef, outputTag string, _ io.Writer, _ bool) (BuiltImage, error) {
+	return BuiltImage{Ref: outputTag}, nil
 }
 
 // TestResolveWorkspaceImage_ContainerShapedWorkspaceUsesBaseImage covers the
@@ -241,9 +240,9 @@ type resolveImageStoreFake struct {
 	builtHash string
 }
 
-func (s *resolveImageStoreFake) SetWorkspaceBuiltImage(_ context.Context, _ uuid.UUID, _, hash string) (types.Workspace, error) {
+func (s *resolveImageStoreFake) SetWorkspaceBuiltImage(_ context.Context, _ uuid.UUID, _, _, hash string, _ *types.ImageBuild) (bool, error) {
 	s.builtHash = hash
-	return types.Workspace{}, nil
+	return true, nil
 }
 
 // capturedBuild is one BuildFromDevcontainerFiles call capturingImageBuilder
@@ -263,9 +262,9 @@ type capturingImageBuilder struct {
 	repoBuilds []capturedRepoBuild
 }
 
-func (b *capturingImageBuilder) BuildFromDevcontainerFiles(_ context.Context, files map[string]string, tag string, _ io.Writer) (string, error) {
+func (b *capturingImageBuilder) BuildFromDevcontainerFiles(_ context.Context, files map[string]string, tag string, _ io.Writer) (BuiltImage, error) {
 	b.calls = append(b.calls, capturedBuild{files: files, tag: tag})
-	return "built/" + tag, nil
+	return BuiltImage{Ref: "built/" + tag}, nil
 }
 
 // capturedRepoBuild is one BuildDevcontainer call capturingImageBuilder
@@ -274,9 +273,9 @@ type capturedRepoBuild struct {
 	repoURL, ref, tag string
 }
 
-func (b *capturingImageBuilder) BuildDevcontainer(_ context.Context, repoURL, ref, tag string, _ io.Writer) (string, error) {
+func (b *capturingImageBuilder) BuildDevcontainer(_ context.Context, repoURL, ref, tag string, _ io.Writer) (BuiltImage, error) {
 	b.repoBuilds = append(b.repoBuilds, capturedRepoBuild{repoURL: repoURL, ref: ref, tag: tag})
-	return "built/" + tag, nil
+	return BuiltImage{Ref: "built/" + tag}, nil
 }
 
 // TestResolveWorkspaceImage_AlwaysBakesStandardAgentTool pins the semantic
@@ -706,9 +705,9 @@ type capturingByoiImageBuilder struct {
 	calls []string // base refs FinalizeBase was called with, in order
 }
 
-func (b *capturingByoiImageBuilder) FinalizeBase(_ context.Context, baseRef, _ string, _ io.Writer) (string, error) {
+func (b *capturingByoiImageBuilder) FinalizeBase(_ context.Context, baseRef, _ string, _ io.Writer, _ bool) (BuiltImage, error) {
 	b.calls = append(b.calls, baseRef)
-	return "wardyn-byoi/cached:" + baseRef, nil
+	return BuiltImage{Ref: "wardyn-byoi/cached:" + baseRef}, nil
 }
 
 // TestResolveWorkspaceImage_RepoDevcontainerCachesAcrossSessions is

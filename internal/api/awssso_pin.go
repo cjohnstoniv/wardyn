@@ -252,6 +252,9 @@ func (s *Server) refuseCapture(w http.ResponseWriter, r *http.Request, claims *i
 	s.recordAudit(r.Context(), s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
 		"harness.credential.refuse", harnessCredSecretName(awsSSOProvider), "failure",
 		mustJSON(data)))
+	if scope != nil && scope.cli != "" {
+		s.auditCLICapture(r, claims.RunID, claims.SPIFFEID, *scope, "failure", reason)
+	}
 	// reason reaches the wire now (#656 slice 3): the SAME class already
 	// recorded on the audit row above.
 	writeErrorReason(w, status, reason, msg)

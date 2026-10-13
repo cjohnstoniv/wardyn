@@ -5,7 +5,10 @@ package types
 
 import (
 	"encoding/json"
+	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 )
@@ -33,7 +36,17 @@ type RunnerPosture struct {
 	DiskEncrypted bool   `json:"disk_encrypted"`
 	OS            string `json:"os"`
 	OSVersion     string `json:"os_version"`
+	// Evidence is where the runner read mdm_managed and disk_encrypted from: a
+	// root-owned file the device's MDM wrote, else its own probe of the OS.
+	// Either way the org records the posture as runner_asserted.
+	Evidence string `json:"evidence"`
 }
+
+// RunnerPosture.Evidence values.
+const (
+	PostureEvidenceMDMFile = "mdm_file"
+	PostureEvidenceOSProbe = "os_probe"
+)
 
 // Runner is one registered wardyn-runnerd. Owner is a person's principal, so the
 // row is personal data.
@@ -62,6 +75,21 @@ type Runner struct {
 	// RunnerRevokeNotMine. Both are empty until it is revoked.
 	RevokedBy    string `json:"-"`
 	RevokeReason string `json:"-"`
+	// MaxRuns is how many sandbox-holding runs placement may put on the runner at once: the runner's
+	// "Runs at once". Its owner sets it; the stored value is the one placement holds.
+	MaxRuns int `json:"max_runs"`
+	// MachineName is the host name the runner last reported (at registration and on each connect):
+	// runner-reported, never an identity, "" until it reports one.
+	MachineName string `json:"machine_name"`
+}
+
+// MachineNameMax bounds a reported machine name: the longest DNS host name.
+const MachineNameMax = 253
+
+// ValidMachineName reports whether s may be stored as a runner's machine name: at most MachineNameMax
+// bytes of printable characters. "" (none reported) is valid.
+func ValidMachineName(s string) bool {
+	return len(s) <= MachineNameMax && utf8.ValidString(s) && !strings.ContainsFunc(s, func(r rune) bool { return !unicode.IsPrint(r) })
 }
 
 // RunnerRevokeNotMine marks an owner's revoke of a runner they did not register.

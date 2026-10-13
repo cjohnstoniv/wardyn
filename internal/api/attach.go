@@ -353,10 +353,10 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 	// outcome is a second row, never an update; this one exists before any
 	// take-over can be audited against it.
 	s.recordStreamAudit(finishCtx, run.SandboxRef, s.auditEvent(&id, principalType, principal, "session.attach",
-		id.String(), "success", mustJSON(map[string]any{
+		id.String(), "success", mustJSON(withSponsorEntry(run, map[string]any{
 			"sandbox_ref": run.SandboxRef, "cols": opts.Cols, "rows": opts.Rows,
 			"state": "attaching", "read_only": readOnly,
-		})))
+		}))))
 
 	// An observer KEEPS its holder object: holder.writable is the read-only
 	// marker now (attach_holder.go), and nulling it here is exactly what left a
@@ -500,7 +500,8 @@ func parseUint16(s string) uint16 {
 
 // refuseAttachEntry is handleAttachWS's entry authorization (#1476): true when
 // it has answered. The run's owner, or a super admin on a run with no personal
-// owner (mayEnterRun); neither lane may skip it.
+// owner (mayEnterRun), or on the ticket lane the sponsor of a service identity's
+// run (mayEnterRunOrSponsor); neither lane may skip it.
 //
 // Ticket lane: ticketOrHumanAuth's ?ticket= branch runs neither
 // humanOrAdminAuth nor requireOperator, so the ticket's OWN stamped
@@ -514,7 +515,9 @@ func (s *Server) refuseAttachEntry(w http.ResponseWriter, r *http.Request, run t
 	id := run.ID
 	if ta, tok := ticketActorFromContext(r.Context()); tok {
 		superAdmin := ta.role == oidc.RoleAdmin
-		if !mayEnterRun(run, ta.principal, superAdmin) {
+		// The sponsor arm: still the sponsor of the active identity since the ticket's authority time. A
+		// sponsor's ticket is member-stamped, so the door below always runs, a super admin sponsor included.
+		if !s.mayEnterRunOrSponsor(r.Context(), run, ta.principal, superAdmin, ta.authorizedAt) {
 			if superAdmin {
 				s.auditAttachRefused(r, id, ta.principal, "ticket", runOwnerOnlyReason, ta.via)
 				s.refuseRunOwnerOnly(w, r, run)

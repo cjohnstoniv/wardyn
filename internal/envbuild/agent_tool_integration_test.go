@@ -53,7 +53,7 @@ func TestBuildFromDevcontainerFiles_BakesAgentCLI(t *testing.T) {
 	profile := workspacescan.WorkspaceProfile{
 		Languages: []string{"Go"}, Confidence: workspacescan.ConfidenceHigh, Source: workspacescan.SourceDeterministic,
 	}
-	files, err := workspacescan.GenerateDevcontainer(profile)
+	files, err := workspacescan.GenerateDevcontainer(profile, workspacescan.Pins{})
 	if err != nil {
 		t.Fatalf("GenerateDevcontainer: %v", err)
 	}
@@ -81,7 +81,7 @@ func TestBuildFromDevcontainerFiles_BakesAgentCLI(t *testing.T) {
 		_ = exec.Command("docker", "image", "rm", "-f", tag).Run()
 	})
 
-	ref, err := b.BuildFromDevcontainerFiles(ctx, files, tag, &logs)
+	built, err := b.BuildFromDevcontainerFiles(ctx, files, tag, &logs)
 	if err != nil {
 		// Same two environmental preconditions TestBuild_SmokeDockerd documents:
 		// classify those as skip, fail on anything else so a real defect is red.
@@ -96,6 +96,7 @@ func TestBuildFromDevcontainerFiles_BakesAgentCLI(t *testing.T) {
 		}
 	}
 
+	ref := built.Ref
 	// THE assertion: exec the binary the image claims to carry. `docker run`
 	// rather than the client API so the failure output is the operator's own
 	// reproduction command.

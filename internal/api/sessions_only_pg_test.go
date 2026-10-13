@@ -22,6 +22,7 @@ func TestRevokeSessions_SessionsOnlyKeepsTokensAndKeysAuthenticating(t *testing.
 	ctx := context.Background()
 	const sub, email = "sub-alice", "alice@corp.example"
 	cookie, _, token := e.mintTokenAs(e.a, entrafake.Identity{Username: email, Subject: sub})
+	cookie = backdated(t, cookie, clockStepMargin) // issued clearly before the sign-out
 	key, err := e.st.AddSSHKey(ctx, types.SSHPublicKey{Fingerprint: "SHA256:alice-key", Principal: sub, Name: "laptop",
 		PublicKey: "ssh-ed25519 AAAA alice", Role: oidc.RoleUser, CreatedAt: time.Now().UTC()})
 	if err != nil {

@@ -6,6 +6,7 @@ package api
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net/http"
 	"slices"
 	"strings"
@@ -45,6 +46,7 @@ type endCreate struct {
 func createWithEnd(t *testing.T, profile *types.GovernanceProfile, maxAge time.Duration, body string) endCreate {
 	t.Helper()
 	srv, st := runLimitsFixture(t, assignedStore(profile))
+	srv.cfg.AgentImages = composeAgentImages
 	srv.cfg.RunMaxAge = maxAge
 	w := doSSO(t, srv, http.MethodPost, "/api/v1/runs", govSession(t, govMemberSub, []string{"eng"}, false), body)
 	out := endCreate{code: w.Code, reason: errorReason(w)}
@@ -226,5 +228,71 @@ func TestPatchEnd_SuperAdminBoundByTheCapturedCap(t *testing.T) {
 	rows := f.rows(t, "run.end.set")
 	if len(rows) != 2 || leaseAuditData(t, rows[0])["limits_exempt"] != true {
 		t.Errorf("run.end.set rows = %+v; want the change marked limits_exempt and the refusal", rows)
+	}
+}
+
+// TestPatchEnd_PastTheMaxLifetimeIsRefused (N3): once the run's lifetime cap has
+// passed, the lease sweep is ending it, and a PATCH of its end or wait is refused 409
+// run_end_wait_max_lifetime (not "already finished": the run is still RUNNING) and writes nothing; just before the cap it still works.
+func TestPatchEnd_PastTheMaxLifetimeIsRefused(t *testing.T) {
+	f := newEndWaitFixture(t, types.RunLimits{MaxEndAheadSec: 30 * secDay, UserChangesLimits: true})
+	capAt := f.now.Add(-time.Second)
+	f.st.run.LifetimeCapAt, f.st.run.LifetimeCapSource = &capAt, types.LimitSourceDeployment
+	before, _ := f.stored()
+	for _, body := range []string{endsAtBody(f.now.Add(time.Hour)), `{"wait_budget_sec":60}`} {
+		w := doSSO(t, f.srv, http.MethodPatch, "/api/v1/runs/"+f.st.run.ID.String(), ownerSession(t), body)
+		if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), reasonRunEndWaitMaxLifetime) {
+			t.Errorf("PATCH %s past the cap = %d %s; want 409 %s", body, w.Code, w.Body.String(), reasonRunEndWaitMaxLifetime)
+		}
+	}
+	if after, _ := f.stored(); !after.Equal(*before) {
+		t.Errorf("a refused PATCH moved the end %v -> %v", before, after)
+	}
+
+	open := f.now.Add(time.Hour)
+	f.st.run.LifetimeCapAt = &open
+	if code, _ := f.patch(t, ownerSession(t), endsAtBody(f.now.Add(30*time.Minute))); code != http.StatusOK {
+		t.Errorf("PATCH before the cap = %d, want 200", code)
+	}
+}
+
+// endAtEveryDoor posts body to create, preflight and the policy preview as a member under profile with
+// WARDYN_RUN_MAX_AGE at maxAge, and returns each door's status and the created run.
+func endAtEveryDoor(t *testing.T, profile *types.GovernanceProfile, maxAge time.Duration, body string) (map[string]int, types.AgentRun) {
+	t.Helper()
+	codes := map[string]int{}
+	for _, door := range []string{"/api/v1/runs/preflight", "/api/v1/runs/policy-preview"} {
+		srv, _ := runLimitsFixture(t, assignedStore(profile))
+		srv.cfg.AgentImages = composeAgentImages
+		srv.cfg.RunMaxAge = maxAge
+		codes[door] = doSSO(t, srv, http.MethodPost, door, govSession(t, govMemberSub, []string{"eng"}, false), body).Code
+	}
+	created := createWithEnd(t, profile, maxAge, body)
+	codes["/api/v1/runs"] = created.code
+	return codes, created.run
+}
+
+var endDoorsOK = map[string]int{"/api/v1/runs": http.StatusCreated, "/api/v1/runs/preflight": http.StatusOK, "/api/v1/runs/policy-preview": http.StatusOK}
+
+// WARDYN_RUN_MAX_AGE at 0 is off and a positive age caps the run, at every door.
+func TestCreateEnd_RunMaxAgeOffAndOn(t *testing.T) {
+	bare := limitsProfile("bare", types.GovernanceLimits{RunLimits: types.RunLimits{AllowNoEnd: true, UserChangesLimits: true}})
+	body := endBody("background", `"ends_after_sec":3600`)
+	codes, run := endAtEveryDoor(t, bare, 0, body)
+	if !maps.Equal(codes, endDoorsOK) || run.LifetimeCapAt != nil {
+		t.Errorf("age 0: doors %v, cap %v; want %v and no cap", codes, run.LifetimeCapAt, endDoorsOK)
+	}
+	codes, run = endAtEveryDoor(t, bare, 48*time.Hour, body)
+	if !maps.Equal(codes, endDoorsOK) || run.LifetimeCapAt == nil || !run.LifetimeCapAt.Equal(run.CreatedAt.Add(48*time.Hour)) {
+		t.Errorf("age 48h: doors %v, cap %v; want %v and a 48h cap", codes, run.LifetimeCapAt, endDoorsOK)
+	}
+}
+
+// R2-0140: a negative WARDYN_RUN_MAX_AGE, documented as off, is off at every door: no 500 and no cap.
+func TestCreateEnd_NegativeRunMaxAgeIsOff(t *testing.T) {
+	bare := limitsProfile("bare", types.GovernanceLimits{RunLimits: types.RunLimits{AllowNoEnd: true, UserChangesLimits: true}})
+	codes, run := endAtEveryDoor(t, bare, -time.Second, endBody("background", `"ends_after_sec":3600`))
+	if !maps.Equal(codes, endDoorsOK) || run.LifetimeCapAt != nil || run.EndsAt == nil || !run.EndsAt.Equal(run.CreatedAt.Add(time.Hour)) {
+		t.Errorf("age -1s: doors %v, ends %v, cap %v; want %v, the hour asked and no cap", codes, run.EndsAt, run.LifetimeCapAt, endDoorsOK)
 	}
 }

@@ -131,6 +131,9 @@ func TestWebhookSink_BearerRequiresHTTPS(t *testing.T) {
 		{"schemeless with bearer refused", "siem.internal/ingest", token, true},
 		{"https with bearer ok", "https://siem.internal/ingest", token, false},
 		{"http without bearer ok", "http://siem.internal/ingest", "", false},
+		{"schemeless without bearer refused", "collector.example/x", "", true},
+		{"ftp without bearer refused", "ftp://h/x", "", true},
+		{"hostless without bearer refused", "http:///x", "", true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

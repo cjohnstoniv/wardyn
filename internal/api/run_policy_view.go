@@ -20,6 +20,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
+	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
 
 // The runPolicySource.Kind values. unknown is a run whose launch path records
@@ -51,6 +52,16 @@ type policySourceRecord struct {
 	UpdatedAt *time.Time          `json:"updated_at,omitempty"`
 	Bounded   bool                `json:"bounded"` // the member bound applied; gates cause "limits"
 	Spec      types.RunPolicySpec `json:"spec"`
+	// OverridesDiff is what the person changed on the New Run cards, set only
+	// when they changed something (run_overrides_apply.go).
+	OverridesDiff *client.RunOverridesDiff `json:"overrides_diff,omitempty"`
+	// Overlay is the keys a policy_overlay laid onto Spec, the default it
+	// started from (run_policy_overlay.go); never its values.
+	Overlay []string `json:"overlay,omitempty"`
+	// edits stays in memory: the person's provenance rows for this request.
+	edits *overrideEdits
+	// overlaid stays in memory: Spec with the overlay laid on, before the clamp.
+	overlaid *types.RunPolicySpec
 }
 
 // newPolicySourceRecord is the one place a starting policy becomes an audit
@@ -92,6 +103,8 @@ type runPolicySource struct {
 	Deleted       bool       `json:"deleted,omitempty"`
 	Preset        string     `json:"preset,omitempty"`
 	PresetVersion int        `json:"preset_version,omitempty"`
+	// OverridesDiff is the recorded New Run edits (client.RunOverridesDiff).
+	OverridesDiff *client.RunOverridesDiff `json:"overrides_diff,omitempty"`
 }
 
 // runPolicyChange is one group of entries launch added or removed for one
@@ -161,10 +174,10 @@ func (s *Server) handleGetRunPolicy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ev := collectEvidence(events, revives)
-	ev.diskFilled = envelope.DiskMiBFilled
+	ev.diskFilled, ev.diskBasis, ev.diskDefaultSource = envelope.DiskMiBFilled, envelope.DiskMiBBasis, envelope.DiskMiBDefaultSource
 	ev.bounded = create.Source != nil && create.Source.Bounded
 	if create.Source != nil {
-		ev.clamp = create.ClampWarnings
+		ev.clamp, ev.overlay = create.ClampWarnings, create.Source.Overlay
 	} else {
 		ev.legacyGitBroker = s.holdsGitHubGrant(ctx, run.ID)
 	}
@@ -229,6 +242,7 @@ func (s *Server) runPolicySourceOf(ctx context.Context, run types.AgentRun, c cr
 	switch {
 	case c.Source != nil:
 		out.Kind, out.PolicyID, out.Name = c.Source.Kind, c.Source.PolicyID, c.Source.Name
+		out.OverridesDiff = c.Source.OverridesDiff
 	case c.PolicyID != nil:
 		out.Kind, out.PolicyID = policyKindStored, c.PolicyID
 		if p, err := s.cfg.Store.GetPolicy(ctx, *c.PolicyID); err == nil {

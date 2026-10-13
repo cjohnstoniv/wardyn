@@ -693,7 +693,7 @@ func TestCreateSandbox_DriveShapesTheAgentPod(t *testing.T) {
 	cs.ClearActions()
 
 	spec := testSandboxSpec()
-	spec.Drive = testDriveMount()
+	spec.Drives = []types.DriveMount{*testDriveMount()}
 	sb, err := d.CreateSandbox(context.Background(), spec)
 	if err != nil {
 		t.Fatalf("CreateSandbox: %v", err)
@@ -732,8 +732,8 @@ func TestCreateSandbox_DriveShapesTheAgentPod(t *testing.T) {
 	if vol.Name != driveVolumeName || vol.PersistentVolumeClaim == nil {
 		t.Fatalf("agent pod volume = %+v, want a %q persistentVolumeClaim volume", vol, driveVolumeName)
 	}
-	if vol.PersistentVolumeClaim.ClaimName != spec.Drive.ObjectName {
-		t.Errorf("claimName = %q, want %q", vol.PersistentVolumeClaim.ClaimName, spec.Drive.ObjectName)
+	if vol.PersistentVolumeClaim.ClaimName != spec.Drives[0].ObjectName {
+		t.Errorf("claimName = %q, want %q", vol.PersistentVolumeClaim.ClaimName, spec.Drives[0].ObjectName)
 	}
 	// PSS Restricted admits persistentVolumeClaim and forbids hostPath; no drive
 	// backend on this substrate offers one, and none may ever be added here.
@@ -836,7 +836,7 @@ func TestCreateSandbox_DriveAsksGvisorForDirectfsOff(t *testing.T) {
 
 			spec := testSandboxSpec()
 			spec.ConfinementClass = tc.class
-			spec.Drive = testDriveMount()
+			spec.Drives = []types.DriveMount{*testDriveMount()}
 			sb, err := d.CreateSandbox(context.Background(), spec)
 			if err != nil {
 				t.Fatalf("CreateSandbox: %v", err)
@@ -885,8 +885,8 @@ func TestCreateSandbox_DriveReadOnlyOnBothHalves(t *testing.T) {
 	installAgentRunningReactor(t, cs)
 
 	spec := testSandboxSpec()
-	spec.Drive = testDriveMount()
-	spec.Drive.ReadOnly = true
+	spec.Drives = []types.DriveMount{*testDriveMount()}
+	spec.Drives[0].ReadOnly = true
 	sb, err := d.CreateSandbox(context.Background(), spec)
 	if err != nil {
 		t.Fatalf("CreateSandbox: %v", err)
@@ -925,7 +925,7 @@ func TestCreateSandbox_DriveSurvivesTeardown(t *testing.T) {
 	installAgentRunningReactor(t, cs)
 
 	spec := testSandboxSpec()
-	spec.Drive = testDriveMount()
+	spec.Drives = []types.DriveMount{*testDriveMount()}
 	sb, err := d.CreateSandbox(context.Background(), spec)
 	if err != nil {
 		t.Fatalf("CreateSandbox: %v", err)
@@ -936,7 +936,7 @@ func TestCreateSandbox_DriveSurvivesTeardown(t *testing.T) {
 	}
 	assertRunObjectsGone(t, cs, spec.RunID)
 
-	pvc, err := cs.CoreV1().PersistentVolumeClaims(testNamespace).Get(context.Background(), spec.Drive.ObjectName, metav1.GetOptions{})
+	pvc, err := cs.CoreV1().PersistentVolumeClaims(testNamespace).Get(context.Background(), spec.Drives[0].ObjectName, metav1.GetOptions{})
 	if err != nil {
 		t.Fatalf("the drive's claim did not survive teardown: %v", err)
 	}
@@ -959,8 +959,8 @@ func TestCreateSandbox_DriveRefusalCreatesNothing(t *testing.T) {
 	cs.ClearActions()
 
 	spec := testSandboxSpec()
-	spec.Drive = testDriveMount()
-	spec.Drive.Backend = types.DriveBackendK8sPVCStatic
+	spec.Drives = []types.DriveMount{*testDriveMount()}
+	spec.Drives[0].Backend = types.DriveBackendK8sPVCStatic
 
 	if _, err := d.CreateSandbox(context.Background(), spec); !errors.Is(err, errDriveClaimNotProvisioned) {
 		t.Fatalf("err = %v, want errors.Is(err, errDriveClaimNotProvisioned)", err)
@@ -980,7 +980,7 @@ func TestCreateSandbox_MountsStayRefusedWithADrive(t *testing.T) {
 	cs.ClearActions()
 
 	spec := testSandboxSpec()
-	spec.Drive = testDriveMount()
+	spec.Drives = []types.DriveMount{*testDriveMount()}
 	spec.Mounts = []runner.Mount{{Source: "/home/op/work", Target: "/work"}}
 
 	if _, err := d.CreateSandbox(context.Background(), spec); !errors.Is(err, errMountsUnsupported) {
@@ -1365,8 +1365,8 @@ func TestCreateSandbox_ProxyPodCarriesTheOperatorKnobs(t *testing.T) {
 	}
 	for name, want := range map[string]string{
 		"WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS": "app:false,pat:on",
-		"WARDYN_LLM_SCAN":                      "off",
-		"WARDYN_CREDENTIAL_REAUTH_TIMEOUT":     "45s",
+		"WARDYN_LLM_SCAN":                     "off",
+		"WARDYN_CREDENTIAL_REAUTH_TIMEOUT":    "45s",
 	} {
 		if got[name] != want {
 			t.Errorf("proxy pod env %s = %q, want %q — the knob is set on wardynd and unreachable in the pod",

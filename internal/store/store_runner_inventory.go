@@ -31,6 +31,13 @@ type RunnerInventoryStore interface {
 	RevokeRunnerRegistrationToken(ctx context.Context, id uuid.UUID, now time.Time) (types.RunnerRegistrationToken, error)
 	// CountActiveRunsByRunner counts non-terminal runs on each of ids; a runner with none is absent.
 	CountActiveRunsByRunner(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]int, error)
+	// RunnerSlotHolders counts the runs holding a sandbox on each of ids, the count max_runs bounds.
+	RunnerSlotHolders(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]int, error)
+	// RunnerPoolsOf names, for each of ids, its owner's live Self-Hosted pools it is a member of, by
+	// name; a runner in none is absent.
+	RunnerPoolsOf(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID][]types.RunnerPoolRef, error)
+	// UpdateRunnerMaxRuns is the owner's change of their own live runner's max_runs.
+	UpdateRunnerMaxRuns(ctx context.Context, id uuid.UUID, owner string, maxRuns int) (before int, after types.Runner, err error)
 }
 
 var _ RunnerInventoryStore = PG{}

@@ -115,10 +115,26 @@ func deadlineDefault() time.Duration {
 // lane, and every tool call denied. The git helper has set Proxy: nil for this
 // reason since it was written; this client and internal/sidecar's had not.
 func directClient() *http.Client {
-	return &http.Client{
-		Transport: &http.Transport{Proxy: nil},
-		Timeout:   30 * time.Second,
+	var rt http.RoundTripper = &http.Transport{Proxy: nil}
+	// The credential dispatch gave THIS harness (secret env, its own process
+	// tree): the proxy names the harness of a call from it, never from the body.
+	// Absent, the call carries no harness and the proxy holds it for a human.
+	if cred := os.Getenv("WARDYN_TOOLGATE_CREDENTIAL"); cred != "" {
+		rt = bearerTransport{base: rt, token: cred}
 	}
+	return &http.Client{Transport: rt, Timeout: 30 * time.Second}
+}
+
+// bearerTransport adds the harness credential to every request to the proxy.
+type bearerTransport struct {
+	base  http.RoundTripper
+	token string
+}
+
+func (t bearerTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	r = r.Clone(r.Context())
+	r.Header.Set("Authorization", "Bearer "+t.token)
+	return t.base.RoundTrip(r)
 }
 
 type gate struct {

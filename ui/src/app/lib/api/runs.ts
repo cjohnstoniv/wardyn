@@ -27,10 +27,12 @@ import type {
   RunResources,
 } from "../types";
 import type { ComponentRef } from "../types/components";
+import type { PolicyPreviewResult } from "../types/policy-preview";
 import type {
   Experience,
   IncludedTool,
   PlacementValue,
+  RepoSelection,
   RequestedResources,
   RunOverrides,
   RunStartup,
@@ -90,7 +92,7 @@ export type RunWireInput = (Partial<AgentRun> | CreateRunInput) & {
   inline_policy?: RunPolicySpec;
   // Per-run half of the requirements contract: which optional requirements
   // this run enables, plus any read-only narrowing, per attached workspace.
-  workspaces?: { workspace_id: string; enabled_optional?: string[]; read_only?: boolean; target?: string }[];
+  workspaces?: { workspace_id: string; enabled_optional?: string[]; read_only?: boolean; target?: string; repos?: RepoSelection[] }[];
   // Primary-workspace id for a selection that resolves to no mount/repo (a
   // pure-ephemeral / migrated-0029 workspace) — routes its base_image through
   // the server's seedRequestWorkspace, which the mount-less spec can't.
@@ -202,7 +204,7 @@ export function runWireBody(input: RunWireInput): Record<string, unknown> {
   if (input.runner_id) body.runner_id = input.runner_id;
   if (input.runner_pool_id) body.runner_pool_id = input.runner_pool_id;
   if (input.allowed_image) body.allowed_image = input.allowed_image;
-  if (input.resources && (input.resources.cpu_millis || input.resources.memory_mib)) body.resources = input.resources;
+  if (input.resources && (input.resources.cpu_millis || input.resources.memory_mib || input.resources.disk_mib)) body.resources = input.resources;
   if (input.overrides) body.overrides = input.overrides;
   if (input.mode_contract) body.mode_contract = input.mode_contract;
   if (input.experience) body.experience = input.experience;
@@ -403,6 +405,26 @@ export const runs = {
       LAUNCH_DEADLINE_MS,
     );
     return asJson<PreflightResult>(res);
+  },
+
+  // The new New Run's three requests. Each sends the body its serializer built,
+  // byte for byte, so preflight, policy preview and create judge the same request.
+  async createRunWire(body: object): Promise<CreateRunResult> {
+    const res = await wfetch("/runs", { method: "POST", body: JSON.stringify(body) });
+    return asJson<CreateRunResult>(res);
+  },
+  async preflightRunWire(body: object, signal?: AbortSignal): Promise<PreflightResult> {
+    const res = await wfetch("/runs/preflight", { method: "POST", body: JSON.stringify(body), signal }, LAUNCH_DEADLINE_MS);
+    return asJson<PreflightResult>(res);
+  },
+  async previewRunPolicyWire(body: object, signal?: AbortSignal): Promise<PolicyPreviewResult> {
+    const res = await wfetch("/runs/policy-preview", { method: "POST", body: JSON.stringify(body), signal });
+    try {
+      return await asJson<PolicyPreviewResult>(res);
+    } catch (e) {
+      if (e instanceof HttpError) e.retryAfter = res.headers.get("Retry-After") ?? undefined;
+      throw e;
+    }
   },
 
   // POST /api/v1/policies/grade — composer.Grade of a bare spec, no run

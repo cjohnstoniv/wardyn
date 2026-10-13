@@ -20,7 +20,9 @@
 // run's age since creation. It is its own predicate: not ends_at (which a
 // person may extend), not the idle compare-and-set, and it applies to a run
 // whose policy never idle-reaps. It stops a run even with a request open,
-// because bounding a hung run is its whole purpose.
+// because bounding a hung run is its whole purpose. A run that carries a
+// lifetime cap (RunSummary.HasLifetimeCap) is not stopped here: the lease
+// sweep KILLS it at that cap, which already includes this age.
 //
 // AutoStopAfterSec (policy auto_stop_after_sec): >0 idle timeout in seconds;
 // 0 DISABLED/never reaped (default, matches docs/POLICIES.md); <0 also never
@@ -58,7 +60,10 @@ const TouchDebounce = 30 * time.Second
 type RunSummary struct {
 	ID        uuid.UUID
 	CreatedAt time.Time
-	UpdatedAt time.Time
+	// AdmittedAt is when the run left the pool queue; zero for a run that never waited. The max age
+	// counts from it, so a run that waited is not aged by its wait.
+	AdmittedAt time.Time
+	UpdatedAt  time.Time
 	// PolicyAutoStopAfterSec: 0 or negative means never reap, positive is the
 	// idle timeout in seconds. Store must JOIN to the policy table; zero is
 	// intentional, not a missing join.
@@ -66,6 +71,19 @@ type RunSummary struct {
 	// Kept is a run kept after a control-plane outage whose agent still runs: the
 	// max age still ends it, and idle reaping does not apply (its lost mark governs it).
 	Kept bool
+	// HasLifetimeCap is a run that carries agent_runs.lifetime_cap_at: the lease
+	// sweep ends it at its cap (and the deployment's maximum age is one of the
+	// limits that cap is measured from), so the max-age stop skips it. A run
+	// from before that column keeps this reaper's max-age stop.
+	HasLifetimeCap bool
+}
+
+// aged is the instant the max age counts from: admission when the run waited, else creation.
+func (s RunSummary) aged() time.Time {
+	if !s.AdmittedAt.IsZero() {
+		return s.AdmittedAt
+	}
+	return s.CreatedAt
 }
 
 // Store is the narrow persistence interface the Reaper requires; the real
@@ -240,7 +258,7 @@ func (r *Reaper) reap(ctx context.Context) error {
 
 	var stopErrs []error
 	for _, run := range runs {
-		if r.maxAge > 0 && now.Sub(run.CreatedAt) >= r.maxAge {
+		if r.maxAge > 0 && !run.HasLifetimeCap && now.Sub(run.aged()) >= r.maxAge {
 			if err := r.stopMaxAge(ctx, run, now); err != nil {
 				stopErrs = append(stopErrs, err)
 			}
@@ -315,7 +333,7 @@ func (r *Reaper) stopMaxAge(ctx context.Context, run RunSummary, now time.Time) 
 	if !out.Applied {
 		return nil
 	}
-	r.emitMaxAgeStop(ctx, run.ID, now.Sub(run.CreatedAt))
+	r.emitMaxAgeStop(ctx, run.ID, now.Sub(run.aged()))
 	if len(out.Errors) > 0 {
 		r.emitRevokeFailure(ctx, run.ID, out.Errors)
 	}
