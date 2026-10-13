@@ -412,25 +412,30 @@ jq -n --argjson human "$HUMAN_ID" '{
 
 **Verify it took on your own repo** — the same reads Wardyn makes, and the same reason for each.
 
-- Outside the namespace `creation`, `update` and `deletion` must all appear (each is a write: without `deletion` a leaked token still runs `git push --delete origin main`); inside it, `creation` and `update` must not (or the ruleset would refuse the run's own pushes).
-- Then each ruleset behind those rules must report that you cannot bypass it.
+- Two names outside the namespace are sampled, one plain and one nested.
+- At each, `creation`, `update` and `deletion` must all appear (each is a write: without `deletion` a leaked token still runs `git push --delete origin main`); inside it, `creation` and `update` must not (or the ruleset would refuse the run's own pushes).
+- Then each ruleset behind those rules, at either sample, must report that you cannot bypass it.
 - The branch does not have to exist — GitHub answers for the name — so these create nothing:
 
 ```sh
 gh api "/repos/$OWNER/$REPO/rules/branches/probe-wardyn-ref-confinement" --jq '[.[].type]'
-# → a list containing at least "creation", "update" and "deletion"
+gh api "/repos/$OWNER/$REPO/rules/branches/probe-wardyn-ref-confinement/nested/probe" --jq '[.[].type]'
+# → each a list containing at least "creation", "update" and "deletion"
 
 gh api "/repos/$OWNER/$REPO/rules/branches/wardyn/00000000-0000-0000-0000-000000000000/probe" --jq '[.[].type]'
 # → []   ← this is the line that catches a wrong exclude pattern
 
-# for each distinct ruleset_id in the first response:
-gh api "/repos/$OWNER/$REPO/rules/branches/probe-wardyn-ref-confinement" --jq '[.[].ruleset_id]|unique|.[]' |
+# for each distinct ruleset_id in the two outside responses:
+for b in probe-wardyn-ref-confinement probe-wardyn-ref-confinement/nested/probe; do
+  gh api "/repos/$OWNER/$REPO/rules/branches/$b" --jq '.[].ruleset_id'
+done | sort -u |
   while read -r id; do gh api "/repos/$OWNER/$REPO/rulesets/$id" --jq '.name + " " + (.current_user_can_bypass // "ABSENT")'; done
 # → "never" for each. Anything else means that ruleset does not bind you, and
 #   ABSENT means it could not be determined — Wardyn treats both as not-confined.
 ```
 
-- The second read is the one that catches `refs/heads/wardyn/**`: with the wrong pattern it returns the same rule list as the first, because nothing two segments deep was ever excluded.
+- The nested outside read is the one that catches an include of `refs/heads/*`, which binds the plain name and no name with a `/` in it.
+- The inside read is the one that catches `refs/heads/wardyn/**`: with the wrong pattern it returns the same rule list as the first, because nothing two segments deep was ever excluded.
 - GitHub's App-permissions reference lists **both** reads under **Metadata: read** — `GET /repos/{owner}/{repo}/rules/branches/{branch}` and `GET /repos/{owner}/{repo}/rulesets/{ruleset_id}` are both rows in "Repository permissions for Metadata"; the "Administration" rows for that second path are the `PUT`, `DELETE` and `/history` variants, not the plain `GET`.
 - Metadata: read is the one permission every GitHub App holds mandatorily, so reading a ruleset back should cost no new permission grant.
 - **Unverified against a live installation**: that is the docs' claim, not a measurement, which is why every read failure grades *unknown* instead of *unconfined*.
@@ -443,6 +448,7 @@ gh api "/repos/$OWNER/$REPO/rules/branches/probe-wardyn-ref-confinement" --jq '[
 
 What the check does and does not settle:
 
+- **Sampled, not proven.** It reads the two outside names above and one inside name. An include or exclude pattern that leaves some other branch name open still passes; "confined" means those names are bound, not every name.
 - **Bypass is checked**, not assumed away.
   - For every ruleset backing the creation/update/deletion rules, Wardyn reads `current_user_can_bypass` and requires `"never"`; `always`, `pull_requests_only` or `exempt` grade **unconfined**, because a bypassing App writes anywhere despite a perfect rule list.
   - Measured with a plain non-admin user token on 11 rulesets across 7 public repos.
