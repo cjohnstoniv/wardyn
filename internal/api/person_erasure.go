@@ -421,7 +421,7 @@ func (s *Server) handleErasePerson(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	rep, err := s.erasureOrchestrator(nil).Orchestrate(r.Context(), owner, scopes)
+	rep, err := s.erasureOrchestrator(nil).Orchestrate(withRequestActor(r), owner, scopes)
 	data := map[string]any{"scopes": scopeNames(sortedScopes(scopes))}
 	outcomes := map[string]string{}
 	for _, sc := range scopes {

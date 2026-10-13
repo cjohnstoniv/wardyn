@@ -203,9 +203,8 @@ func (s *Server) reassignWorkspaces(ctx context.Context, targets []string) (map[
 	return map[string]int{"workspaces_reassigned": n}, nil
 }
 
-// personDrives is the names of the drives allocated to any of subjects as a user, and of the drives any of
-// them created (member drives), sorted. They are listed in the purge's audit row and never reclaimed.
-func (s *Server) personDrives(ctx context.Context, subjects []string) ([]string, error) {
+// personGrantedDrives is the names of the drives allocated to any of subjects as a user, sorted.
+func (s *Server) personGrantedDrives(ctx context.Context, subjects []string) ([]string, error) {
 	grants, err := s.cfg.Store.ListUserDriveGrants(ctx)
 	if err != nil {
 		return nil, err
@@ -222,6 +221,21 @@ func (s *Server) personDrives(ctx context.Context, subjects []string) ([]string,
 		if i := slices.IndexFunc(drives, func(d types.UserDriveListItem) bool { return d.ID == g.DriveID }); i >= 0 && !slices.Contains(names, drives[i].Name) {
 			names = append(names, drives[i].Name)
 		}
+	}
+	slices.Sort(names)
+	return names, nil
+}
+
+// personDrives is the names of the drives allocated to any of subjects as a user and of the drives any
+// of them created (member drives), sorted. They are listed in the purge's audit row and never reclaimed.
+func (s *Server) personDrives(ctx context.Context, subjects []string) ([]string, error) {
+	names, err := s.personGrantedDrives(ctx, subjects)
+	if err != nil {
+		return nil, err
+	}
+	drives, err := s.cfg.Store.ListUserDrives(ctx)
+	if err != nil {
+		return nil, err
 	}
 	for _, d := range memberDrivesOf(drives, subjects) {
 		if !slices.Contains(names, d.Name) {
@@ -274,6 +288,10 @@ func (s *Server) auditPurge(ctx context.Context, st scimStore, id uuid.UUID, sub
 	if err != nil {
 		return err
 	}
+	granted, err := s.personGrantedDrives(ctx, subjects)
+	if err != nil {
+		return err
+	}
 	memberIDs, err := s.personMemberDriveIDs(ctx, subjects)
 	if err != nil {
 		return err
@@ -283,6 +301,7 @@ func (s *Server) auditPurge(ctx context.Context, st scimStore, id uuid.UUID, sub
 		"kind": store.JobKindPurge, "credentials_erased": counts["credentials_erased"], "masks_fenced": counts["masks_fenced"], "components_erased": counts["components_erased"],
 		"templates_erased": counts["templates_erased"], "workspaces_reassigned": counts["workspaces_reassigned"], "grants_deleted": counts["grants_deleted"],
 		"assignments_deleted": counts["assignments_deleted"], "email_rows_kept": counts["email_rows_kept"], "drives": drives,
+		"granted_drives": granted,
 	}
 	if len(memberIDs) > 0 {
 		data["member_drive_ids"] = memberIDs

@@ -4,6 +4,7 @@
 package api
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"slices"
@@ -47,6 +48,9 @@ func TestSCIMPurgeListsMemberDrives(t *testing.T) {
 	if got := fmt.Sprint(d["member_drive_ids"]); got != fmt.Sprint(want) {
 		t.Errorf("member_drive_ids = %s, want %v: theirs only", got, want)
 	}
+	if got := fmt.Sprint(d["granted_drives"]); got != "[alpha zeta]" {
+		t.Errorf("granted_drives = %s, want only the allocated names, so the status can tell them from the created ones", got)
+	}
 	if len(st.drives) != before {
 		t.Errorf("the purge deleted a drive (%d -> %d): it only lists", before, len(st.drives))
 	}
@@ -80,5 +84,57 @@ func TestSCIMStatusFollowsMemberDrivesById(t *testing.T) {
 	st.drives = []types.UserDriveListItem{theirs}
 	if _, body := e.status(); len(body.Drives) != 0 {
 		t.Errorf("drives = %+v, want none once the person's drive is deleted, whatever else holds the name", body.Drives)
+	}
+}
+
+func scimDeprovisionRow(person uuid.UUID, at time.Time, data string) types.AuditEvent {
+	return scimCovAudit("person.deprovision", person.String(), at, data)
+}
+
+// TestSCIMStatusDropsADeletedMemberDriveBesideAnAdminDriveOfItsName: an admin
+// drive the person had no grant on shares the name of the drive they created.
+// Once the created one is deleted, nothing of theirs is left to reclaim.
+func TestSCIMStatusDropsADeletedMemberDriveBesideAnAdminDriveOfItsName(t *testing.T) {
+	st := newSCIMCovStore()
+	pat := st.addIdentity(store.PrincipalIdentity{Principal: "sub-pat", EmailLower: "pat@corp.example", ScimUserName: "Pat"})
+	mine := scimMemberDrive("sub-pat", "Notes")
+	admin := types.UserDriveListItem{UserDrive: types.UserDrive{ID: uuid.New(), Name: "Notes"}}
+	st.drives = []types.UserDriveListItem{admin, mine}
+	at := time.Now().UTC().Truncate(time.Second)
+	row := scimDeprovisionRow(pat.ID, at, fmt.Sprintf(`{"kind":"purge","drives":["Notes"],"granted_drives":[],"member_drive_ids":[%q]}`, mine.ID))
+	e, _ := scimCovPagedEnv(t, st, []types.AuditEvent{row})
+
+	if _, body := e.status(); len(body.Drives) != 1 {
+		t.Fatalf("drives = %+v, want Pat's created Notes", body.Drives)
+	}
+	st.drives = []types.UserDriveListItem{admin} // the operator deletes Pat's drive
+	if _, body := e.status(); len(body.Drives) != 0 {
+		t.Errorf("drives = %+v, want none: the admin drive of that name was never Pat's", body.Drives)
+	}
+}
+
+// TestSCIMStatusKeepsALiveMemberDriveAfterTheAdminDriveIsReclaimed: the person
+// held a grant on an admin drive and created one of the same name. Reclaiming
+// the granted one takes it off the list; the created one, still live, stays.
+func TestSCIMStatusKeepsALiveMemberDriveAfterTheAdminDriveIsReclaimed(t *testing.T) {
+	st := newSCIMCovStore()
+	pat := st.addIdentity(store.PrincipalIdentity{Principal: "sub-pat", EmailLower: "pat@corp.example", ScimUserName: "Pat"})
+	mine := scimMemberDrive("sub-pat", "Notes")
+	admin := types.UserDriveListItem{UserDrive: types.UserDrive{ID: uuid.New(), Name: "Notes"}}
+	st.drives = []types.UserDriveListItem{admin, mine}
+	at := time.Now().UTC().Truncate(time.Second)
+	row := scimDeprovisionRow(pat.ID, at, fmt.Sprintf(`{"kind":"purge","drives":["Notes"],"granted_drives":["Notes"],"member_drive_ids":[%q]}`, mine.ID))
+	reclaim := types.AuditEvent{
+		ID: uuid.New(), Time: at.Add(time.Hour), ActorType: types.ActorHuman, Actor: "admin", Action: "drive.reclaim", Outcome: "success",
+		Data: json.RawMessage(`{"drive":"Notes","subject":"pat@corp.example","subject_type":"user"}`),
+	}
+	e, paged := scimCovPagedEnv(t, st, []types.AuditEvent{row})
+
+	if _, body := e.status(); len(body.Drives) != 1 {
+		t.Fatalf("drives = %+v, want one Notes entry before the reclaim", body.Drives)
+	}
+	paged.audit = []types.AuditEvent{row, reclaim}
+	if _, body := e.status(); len(body.Drives) != 1 || body.Drives[0].Drive != "Notes" {
+		t.Errorf("drives = %+v, want Pat's created Notes still listed once the granted one is reclaimed", body.Drives)
 	}
 }

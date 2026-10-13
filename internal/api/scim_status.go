@@ -214,13 +214,19 @@ func (s *Server) scimDrivesToReclaim(ctx context.Context, st scimStore, label fu
 	for _, ev := range rows {
 		var d struct {
 			Drives         []string `json:"drives"`
+			GrantedDrives  []string `json:"granted_drives"`
 			MemberDriveIDs []string `json:"member_drive_ids"`
 		}
 		id, perr := uuid.Parse(ev.Target)
 		if perr != nil || json.Unmarshal(ev.Data, &d) != nil {
 			continue
 		}
-		granted, created := scimLiveDrives(live, d.Drives, d.MemberDriveIDs)
+		// A row from before granted_drives was recorded lists granted names in drives alone.
+		grantedNames := d.GrantedDrives
+		if grantedNames == nil {
+			grantedNames = d.Drives
+		}
+		granted, created := scimLiveDrives(live, grantedNames, d.MemberDriveIDs)
 		if len(granted)+len(created) == 0 {
 			continue
 		}
@@ -232,13 +238,15 @@ func (s *Server) scimDrivesToReclaim(ctx context.Context, st scimStore, label fu
 		if err != nil {
 			return nil, err
 		}
+		var listed []string
 		for _, name := range granted {
 			if !scimReclaimedSince(reclaims, ev.Time, name, ident) {
+				listed = append(listed, name)
 				out = append(out, scimStatusDrive{Person: person, Drive: name, PurgedAt: ev.Time.UTC()})
 			}
 		}
 		for _, name := range created {
-			if !slices.Contains(granted, name) {
+			if !slices.Contains(listed, name) {
 				out = append(out, scimStatusDrive{Person: person, Drive: name, PurgedAt: ev.Time.UTC()})
 			}
 		}
@@ -246,11 +254,11 @@ func (s *Server) scimDrivesToReclaim(ctx context.Context, st scimStore, label fu
 	return out, nil
 }
 
-// scimLiveDrives is what one purge row lists that still exists: the names of admin drives it listed, and
-// the names of the member drives whose ids it recorded. A member drive is followed by id, since its name
-// is unique only among its owner's.
-func scimLiveDrives(live []types.UserDriveListItem, names, memberIDs []string) (granted, created []string) {
-	for _, name := range names {
+// scimLiveDrives is what one purge row lists that still exists: the admin drives among the granted names,
+// and the member drives whose ids it recorded. A member drive is followed by id, since its name is unique
+// only among its owner's.
+func scimLiveDrives(live []types.UserDriveListItem, grantedNames, memberIDs []string) (granted, created []string) {
+	for _, name := range grantedNames {
 		if slices.ContainsFunc(live, func(l types.UserDriveListItem) bool { return l.OwnerSubject == "" && l.Name == name }) {
 			granted = append(granted, name)
 		}
