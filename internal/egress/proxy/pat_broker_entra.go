@@ -381,7 +381,7 @@ func readADOGitPush(r *http.Request) (head []byte, push *adoGitPush, msg string)
 	head, err := readReceivePackCommands(io.TeeReader(r.Body, &seen), "")
 	push = &adoGitPush{}
 	for b := seen.Bytes(); len(b) >= 4; {
-		n, perr := strconv.ParseUint(string(b[:4]), 16, 32)
+		n, perr := strconv.ParseUint(string(b[:4]), 16, 16)
 		if perr != nil || n < 5 || int(n) > len(b) {
 			break
 		}
