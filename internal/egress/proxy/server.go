@@ -244,7 +244,6 @@ func newServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 	// leaves it nil (system roots, ServerName from URL).
 	// applyDefaultsAndValidate already fail-fast-checked this PEM at
 	// config-load time; this is the live proxy's own parse.
-
 	p := newProxy(Options{
 		RunID:                cfg.RunID,
 		Policy:               pol,
@@ -261,6 +260,7 @@ func newServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 		ADOGrants:            newADOGrantsByHost(cfg.ADOGrant),
 		AzureGates:           cfg.AzureGates,
 		GitHubAPI:            cfg.GitHubAPI,
+		AzureARM:             cfg.AzureARM,
 		ControlPlaneURL:      cfg.ControlPlaneURL,
 		RunToken:             ts,
 		Upstream:             up,
