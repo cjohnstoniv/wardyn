@@ -89,4 +89,11 @@ func TestRunnerInventoryMethodsHitTheirRoutes(t *testing.T) {
 	if err := json.Unmarshal([]byte(putBody), &body); err != nil || body["enabled"] != false {
 		t.Fatalf("turning off must send an explicit enabled:false, sent %q", putBody)
 	}
+	got = nil
+	if _, err := c.SetMyRunnerMaxRuns(ctx, id, 3); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0] != "PUT /api/v1/me/runners/"+id.String() || putBody != `{"max_runs":3}` {
+		t.Fatalf("SetMyRunnerMaxRuns sent %v %q", got, putBody)
+	}
 }

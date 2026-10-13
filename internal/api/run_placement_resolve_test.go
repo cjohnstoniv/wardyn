@@ -207,3 +207,42 @@ func TestPlacement_StoreWithoutPoolsKeepsUnpooledBehaviour(t *testing.T) {
 		}
 	}
 }
+
+// bind keeps the runner a run was already bound to (the one its promotion found room on) whenever that
+// runner can still take it, rather than re-picking by the run id.
+func TestBindKeepsThePreferredRunner(t *testing.T) {
+	a, b := uuid.New(), uuid.New()
+	p := runPlacement{pooled: true, eligible: []poolTarget{
+		{id: a.String(), runnerID: &a, facts: runner.TargetFacts{Classes: []types.ConfinementClass{types.CC1}}},
+		{id: b.String(), runnerID: &b, facts: runner.TargetFacts{Classes: []types.ConfinementClass{types.CC1}}},
+	}}
+	runID := uuid.New()
+	picked, refusal := p.bind(runID, types.CC1, nil)
+	if refusal != nil || picked.runnerID == nil {
+		t.Fatalf("bind = %+v %+v", picked, refusal)
+	}
+	other := a
+	if *picked.runnerID == a {
+		other = b
+	}
+	if got, _ := p.bind(runID, types.CC1, &other); got.runnerID == nil || *got.runnerID != other {
+		t.Fatalf("bind preferring %s = %v; want the preferred runner kept", other, got.runnerID)
+	}
+	gone := uuid.New()
+	if got, _ := p.bind(runID, types.CC1, &gone); got.runnerID == nil || *got.runnerID != *picked.runnerID {
+		t.Fatalf("bind preferring a runner no longer eligible = %v; want the run's own pick %s", got.runnerID, *picked.runnerID)
+	}
+}
+
+// A promoted start falls back only to the run's other runners that enforce its class, never to the one it
+// was bound to or to a runner that cannot hold its barrier.
+func TestOtherRunnersAreTheClassCapableOthers(t *testing.T) {
+	bound, able, weak := uuid.New(), uuid.New(), uuid.New()
+	target := func(id uuid.UUID, classes ...types.ConfinementClass) poolTarget {
+		return poolTarget{id: id.String(), runnerID: &id, facts: runner.TargetFacts{Classes: classes}}
+	}
+	p := runPlacement{pooled: true, eligible: []poolTarget{target(bound, types.CC1, types.CC2), target(able, types.CC1, types.CC2), target(weak, types.CC1)}}
+	if got := p.otherRunners(types.CC2, &bound); len(got) != 1 || got[0] != able {
+		t.Fatalf("fallbacks for a CC2 run bound to %s = %v, want only %s", bound, got, able)
+	}
+}

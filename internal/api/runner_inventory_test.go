@@ -124,6 +124,27 @@ func (f *runnerRegistrationFake) CountActiveRunsByRunner(_ context.Context, ids 
 	return out, nil
 }
 
+func (f *runnerRegistrationFake) RunnerSlotHolders(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]int, error) {
+	return f.CountActiveRunsByRunner(ctx, ids)
+}
+
+func (f *runnerRegistrationFake) RunnerPoolsOf(context.Context, []uuid.UUID) (map[uuid.UUID][]types.RunnerPoolRef, error) {
+	return map[uuid.UUID][]types.RunnerPoolRef{}, nil
+}
+
+func (f *runnerRegistrationFake) UpdateRunnerMaxRuns(_ context.Context, id uuid.UUID, owner string, maxRuns int) (int, types.Runner, error) {
+	f.lock.Lock()
+	defer f.lock.Unlock()
+	row, ok := f.rows[id]
+	if !ok || row.Owner != owner || row.State == types.RunnerRevoked {
+		return 0, types.Runner{}, store.ErrNotFound
+	}
+	before := row.MaxRuns
+	row.MaxRuns = maxRuns
+	f.rows[id] = row
+	return before, row, nil
+}
+
 // PutSiteConfig persists, unlike the matrix double it embeds, so a test reads back what a door wrote.
 func (f *runnerRegistrationFake) PutSiteConfig(_ context.Context, cfg types.SiteConfig) (types.SiteConfig, error) {
 	f.authzStore.mu.Lock()
@@ -617,7 +638,7 @@ func TestRunnerViewNamesWhoRevokedAndWhy(t *testing.T) {
 	srv, _, _ := newRunnerRegistrationServer(t)
 	row := types.Runner{ID: uuid.New(), State: types.RunnerRevoked, RevokedBy: "alice", RevokeReason: types.RunnerRevokeNotMine}
 	for _, admin := range []bool{true, false} {
-		b, err := json.Marshal(srv.runnerView(row, 0, admin))
+		b, err := json.Marshal(srv.runnerView(row, 0, 0, admin))
 		if err != nil {
 			t.Fatal(err)
 		}

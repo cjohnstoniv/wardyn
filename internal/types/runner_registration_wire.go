@@ -15,6 +15,10 @@ type RunnerRegisterRequest struct {
 	Token     string `json:"token"`
 	PublicKey []byte `json:"public_key"`
 	Name      string `json:"name"`
+	// MaxRuns is the runner's "Runs at once"; omitted (0), the server stores RunnerMaxRunsDefault.
+	MaxRuns int `json:"max_runs,omitempty"`
+	// MachineName is the host's own name (os.Hostname), runner-reported; omitted by an older runner.
+	MachineName string `json:"machine_name,omitempty"`
 }
 
 // RunnerRegistration is safe to return to the anonymous runner; it has no human identity.
@@ -23,6 +27,7 @@ type RunnerRegistration struct {
 	Fingerprint  string      `json:"fingerprint"`
 	State        RunnerState `json:"state"`
 	OrgURLSHA256 string      `json:"org_url_sha256"`
+	MaxRuns      int         `json:"max_runs"`
 }
 
 // RunnerClaimRequest confirms the fingerprint observed on the owner's host.

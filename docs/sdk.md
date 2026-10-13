@@ -587,6 +587,7 @@ start.
 | `runner_key_already_registered` | This key is already registered; generate a new identity. |
 | `runner_not_found` / `runner_token_not_found` | No such runner or unused token for this caller; another person's runner answers as an absent id. |
 | `runner_filter_invalid` | `state` is not `active`, `revoked` or `all`. |
+| `runner_max_runs_invalid` | `400`: `max_runs` is missing or not 1 to 64. |
 | `runner_session_required` | `/me/runners` needs the person's own session; administrative and delegated credentials own no runner. |
 | `runners_enabled_required` | `PUT /runners/settings` needs `enabled`: true or false. |
 | `runners_org_url_invalid` | Runners cannot be turned on until the organisation and control-plane URLs are HTTPS. |
@@ -644,6 +645,7 @@ start.
 | `placement_required` | `422`: no placement chosen. |
 | `placement_denied` | `403`: your governance profile's `deny_placements` refuses the run's placement, at create, preflight, policy preview and source scans; audited `authz.denied` (target `runs.placement`). At revive the same `403` is audited `run.revive` denied; at dispatch the run fails and is audited `run.dispatch` failure with this `reason`. A managed-harness sign-in is exempt at every door; a site-config probe at create and dispatch. |
 | `runner_offline` | `422`: a `placement: "local"` run whose runner is offline or has not reported its capabilities yet, or none of your runners is online. |
+| `runner_at_capacity` | `422`: each of your runners that could take the run already holds its `max_runs`, in a pool with no concurrent-run cap; also such a revive. A capped pool's run waits instead. |
 | `override_refused` | `422`: a widening, base-host removal or foreign secret the narrowing table never allows. |
 | `request_field_unavailable` / `main_drive_unenforceable` | `422`: a field this server cannot honour yet, refused and never dropped; or a disk size the run's policy sets that the pool's runners cannot cap. |
 | `harness_not_installed` / `harness_set_no_image` / `harness_set_custom_image` / `harness_providers_conflict` | `422`: no image here carries a harness, or the harnesses together; two or more harnesses name a custom image; or two harnesses' providers share a host. `tool` names the harness. |

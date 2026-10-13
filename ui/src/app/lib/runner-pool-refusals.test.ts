@@ -6,6 +6,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
+import { PLACEMENT_REASONS } from "./new-run-refusals";
 import golden from "./runner-pool-refusals.golden.json";
 import {
   BARRIER_LABEL,
@@ -15,6 +16,7 @@ import {
   RUN_WAIT,
   RUN_WAIT_REASON,
   RUN_TYPE_PLURAL,
+  RUNNER_CAPACITY,
   RUNNER_POOL_REASONS,
   RUNNER_POOL_REFUSAL,
   RUNNER_POOL_REFUSAL_BY_KEY,
@@ -34,7 +36,7 @@ const root = repoRoot();
 
 describe("runner pool refusal sentences", () => {
   it("are the golden bytes the server's twin is pinned to", () => {
-    const waits = ["WAIT_AT_CAPACITY", "WAIT_NO_RUNNER_FREE", "NO_ONLINE_RUNNER"];
+    const waits = ["WAIT_AT_CAPACITY", "WAIT_NO_RUNNER_FREE", "WAIT_RUNNERS_AT_CAPACITY", "NO_ONLINE_RUNNER", "RUNNER_AT_CAPACITY"];
     expect(golden.map((g) => g.key).sort()).toEqual([...Object.keys(RUNNER_POOL_REFUSAL), ...waits].sort());
     for (const g of golden.filter((x) => !waits.includes(x.key))) {
       expect(RUNNER_POOL_REFUSAL_BY_KEY[g.key as keyof typeof RUNNER_POOL_REFUSAL](...g.args), g.key).toBe(g.text);
@@ -60,6 +62,16 @@ describe("runner pool refusal sentences", () => {
     expect(RUN_WAIT.NO_RUNNER_FREE(g.args[0])).toBe(g.text);
     expect(RUNNER_POOL_REASONS as readonly string[]).not.toContain(RUN_WAIT_REASON.NO_RUNNER_FREE);
     expect(readFileSync(join(root, "internal/runnerpool/wait.go"), "utf8")).toContain(`WaitReason = "${RUN_WAIT_REASON.NO_RUNNER_FREE}"`);
+  });
+
+  it("says a run whose runners are all at their runs at once as a wait when queued, a refusal when not", () => {
+    const w = golden.find((x) => x.key === "WAIT_RUNNERS_AT_CAPACITY")!;
+    expect(RUN_WAIT.RUNNERS_AT_CAPACITY(w.args[0])).toBe(w.text);
+    expect(RUNNER_POOL_REASONS as readonly string[]).not.toContain(RUN_WAIT_REASON.RUNNERS_AT_CAPACITY);
+    expect(readFileSync(join(root, "internal/runnerpool/wait.go"), "utf8")).toContain(`WaitReason = "${RUN_WAIT_REASON.RUNNERS_AT_CAPACITY}"`);
+    const g = golden.find((x) => x.key === "RUNNER_AT_CAPACITY")!;
+    expect(RUNNER_CAPACITY.RUNNER_AT_CAPACITY(g.args[0])).toBe(g.text);
+    expect(PLACEMENT_REASONS).toContain("runner_at_capacity");
   });
 
   it("says a pool with no online runner of yours in the server's sentence", () => {
