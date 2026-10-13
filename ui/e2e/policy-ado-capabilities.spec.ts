@@ -110,13 +110,9 @@ test("the Azure DevOps access section locks what the ceiling does not grant, and
   }
 });
 
-// OPEN QUESTION FOR THE LEAD: the guided flow has no saved-policy picker and no Azure DevOps access summary
-// (the old Access panel drew `ado-access-summary`; Review's Access group names the policy but not its
-// Azure DevOps access). A saved policy now reaches New Run as `policy_id` in a run document, so this case
-// opens Review through the JSON door and asserts the summary where the approved Review would carry it.
-// It stays fixme until the app draws the summary on Review (or the lead retires the case; the Policies
-// list in the first case above keeps the summary line itself proven).
-test.fixme("New Run summarises the picked saved policy's Azure DevOps access", async ({ page, request }) => {
+// A saved policy reaches New Run as `policy_id` in a run document; Review's Effective policy card says in
+// one line what it grants on Azure DevOps.
+test("New Run summarises the picked saved policy's Azure DevOps access", async ({ page, request }) => {
   const stamp = Date.now().toString(36);
   const ids: string[] = [];
   // The per-area packet's four saved policies (Member · State 4), with the line each reads as.
@@ -140,7 +136,7 @@ test.fixme("New Run summarises the picked saved policy's Azure DevOps access", a
     for (const [i, [, , line]] of policies.entries()) {
       await gotoConsole(page);
       await openNewRun(page);
-      await reviewRunDocument(page, { shape: "environment", policy_id: ids[i] });
+      await reviewRunDocument(page, { shape: "environment", experience: "interactive", policy_id: ids[i] });
       await expect(page.getByTestId("ado-access-summary")).toHaveText(line);
     }
     await expect(page.getByTestId("ado-access-summary").getByText(ADO_ENTRA_EDITOR.HIGH_RISK_BADGE)).toBeVisible();

@@ -12,6 +12,7 @@ import { HttpError } from "../../../../lib/api/core";
 import { runs } from "../../../../lib/api/runs";
 import { SCENARIO_PREFLIGHT } from "../../../../lib/new-run-fixtures/scenarios/preflight";
 import { ADO } from "../../../../lib/ado-entra-copy";
+import { ADO_PAT } from "../../../../lib/ado-pat-copy";
 import { POLICY_REMEDY } from "../../../../lib/governance-copy";
 import type { PreflightResult } from "../../../../lib/types/preflight";
 import { NR_LAUNCH } from "../../../wardyn/copy/new-run/launch";
@@ -22,7 +23,27 @@ import { NewRunDraftProvider, useNewRunDispatch, useNewRunDraft } from "../new-r
 import { NameRunDialog, summaryLine } from "./name-run-dialog";
 
 const door = vi.hoisted(() => ({ openDoor: vi.fn(), refresh: vi.fn() }));
-vi.mock("../../../wardyn/model-access-context", () => ({ useModelAccessDoor: () => door }));
+const shell = vi.hoisted(() => ({ status: {} as Record<string, unknown> }));
+vi.mock("../../../wardyn/model-access-context", () => ({ useModelAccessDoor: () => door, useShellSetupStatus: () => ({ status: shell.status }) }));
+// The connect popup, as the dialog sees it: busy while it is out, then the answer.
+const adoConnect = vi.hoisted(() => ({ calls: 0, answer: true as boolean | null }));
+vi.mock("../../../../lib/hooks/use-ado-connect", async () => {
+  const R = await import("react");
+  return {
+    useAdoConnect: () => {
+      const [connecting, setConnecting] = R.useState(false);
+      const cancel = R.useCallback(() => {}, []);
+      const connect = async () => {
+        adoConnect.calls += 1;
+        setConnecting(true);
+        await Promise.resolve();
+        setConnecting(false);
+        return adoConnect.answer;
+      };
+      return { connecting, connect, connectFallback: connect, cancel, blockedUrl: null };
+    },
+  };
+});
 
 const INTENT: RunIntent = {
   shape: "environment", experience: "interactive", no_repositories_or_drives: true, ends_after_sec: 3600,
@@ -71,6 +92,9 @@ beforeEach(() => {
   onOpenChange.mockReset();
   door.openDoor.mockReset();
   door.refresh.mockReset();
+  shell.status = {};
+  adoConnect.calls = 0;
+  adoConnect.answer = true;
   vi.spyOn(runs, "preflightRunWire").mockImplementation(preflight);
   vi.spyOn(runs, "previewRunPolicyWire").mockResolvedValue({} as never);
   vi.spyOn(runs, "createRunWire").mockImplementation(create);
@@ -205,6 +229,7 @@ describe("Name this run: a create the check did not foresee", () => {
     await within(box).findByText(NR_LAUNCH.CHECKED_JUST_NOW);
     await userEvent.click(launchButton());
     expect(await within(box).findByRole("alert")).toHaveTextContent(BREACH);
+    expect(within(box).queryByTestId("ado-launch-note")).not.toBeInTheDocument();
     expect(within(box).getByLabelText(NR_LAUNCH.TITLE_LABEL)).toHaveValue("quota refusal");
     expect(within(box).getByLabelText(NR_LAUNCH.DESCRIPTION_LABEL)).toHaveValue("why");
     expect(screen.getByTestId("typed")).toHaveTextContent('"title":"quota refusal"');
@@ -257,6 +282,35 @@ describe("Name this run: a create the check did not foresee", () => {
     await userEvent.click(launchButton());
     expect(await within(box).findByRole("alert")).toHaveTextContent("this run's policy does not allow it");
     expect(door.openDoor).not.toHaveBeenCalled();
+  });
+
+  it("a launch the organisation's token policy refuses says so under the sentence, with no Connect", async () => {
+    create.mockRejectedValueOnce(refusal(403, BREACH, "ado_pat_policy_blocked"));
+    open();
+    const box = await dialog();
+    await userEvent.type(within(box).getByLabelText(NR_LAUNCH.TITLE_LABEL), "ado blocked");
+    await within(box).findByText(NR_LAUNCH.CHECKED_JUST_NOW);
+    expect(within(box).queryByTestId("ado-launch-note")).not.toBeInTheDocument();
+    await userEvent.click(launchButton());
+    expect(await within(box).findByTestId("ado-launch-note")).toHaveTextContent(ADO_PAT.LAUNCH_POLICY_REFUSED);
+    expect(within(box).queryByRole("button", { name: ADO_PAT.MEMBER_CONNECT })).not.toBeInTheDocument();
+  });
+
+  it("a launch refused for want of a usable sign-in asks to connect again, and connecting asks the server again", async () => {
+    create.mockRejectedValueOnce(refusal(403, BREACH, "ado_pat_consent_needed"));
+    open();
+    const box = await dialog();
+    await userEvent.type(within(box).getByLabelText(NR_LAUNCH.TITLE_LABEL), "ado consent");
+    await within(box).findByText(NR_LAUNCH.CHECKED_JUST_NOW);
+    await userEvent.click(launchButton());
+    const note = await within(box).findByTestId("ado-launch-note");
+    expect(within(note).getByText(ADO_PAT.LAUNCH_NOT_CONNECTED)).toBeInTheDocument();
+    const asked = preflight.mock.calls.length;
+    await userEvent.click(within(note).getByRole("button", { name: ADO_PAT.MEMBER_CONNECT }));
+    expect(adoConnect.calls).toBe(1);
+    await waitFor(() => expect(preflight.mock.calls.length).toBe(asked + 1));
+    // Connecting never launches for the person.
+    expect(create).toHaveBeenCalledTimes(1);
   });
 
   it("a git_credential refusal opens the Azure DevOps door over the dialog", async () => {
