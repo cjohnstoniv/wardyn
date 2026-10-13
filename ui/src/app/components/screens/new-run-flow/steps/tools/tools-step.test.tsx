@@ -100,6 +100,10 @@ describe("Tools and access step", () => {
     answer(SCENARIO_ACCESS.app, true);
     show();
     await screen.findByText(NR_TOOLS.STICKY_ONE);
+    // The prototype's sticky bar: Back, the count, then Review run.
+    const bar = screen.getByRole("contentinfo");
+    expect(bar).toHaveClass("sticky");
+    expect(bar.textContent).toMatch(new RegExp(`^${NR_SHARED.BACK}${NR_TOOLS.STICKY_ONE}${NR_TOOLS.REVIEW_RUN}`));
     expect(screen.getByRole("button", { name: NR_TOOLS.REVIEW_RUN })).toBeEnabled();
     await userEvent.click(screen.getByRole("button", { name: NR_TOOLS.REVIEW_RUN }));
     expect(go).toHaveBeenCalledWith({ screen: "review", view: "pretty" });

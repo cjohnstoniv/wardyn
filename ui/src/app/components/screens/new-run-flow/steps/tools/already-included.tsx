@@ -15,7 +15,7 @@ import { NR_TOOLS } from "../../../../wardyn/copy/new-run/tools";
 import type { AccessFacts, AccessRow } from "../../../../../lib/types/new-run-access";
 import type { RunIntent } from "../../draft/run-intent";
 import { rowLabel, startsWithRun, type HarnessNames } from "../../lenses/tools-lens";
-import { deliveryLabel } from "./totals";
+import { credentialLabel, deliveryLabel } from "./totals";
 
 const FROM: Record<string, string> = {
   harness: NR_TOOLS.FROM_HARNESS,
@@ -38,7 +38,7 @@ function Status({ status, answered }: { status: string; answered: boolean }) {
   return null;
 }
 
-function Detail({ row, access }: { row: AccessRow; access: AccessFacts }) {
+function Detail({ row, access, providers }: { row: AccessRow; access: AccessFacts; providers?: ReadonlyMap<string, string> }) {
   const credentials = access.credentials.filter((c) => row.credentials.includes(c.id));
   const bare = row.hosts.length === 0 && credentials.length === 0;
   return (
@@ -50,8 +50,14 @@ function Detail({ row, access }: { row: AccessRow; access: AccessFacts }) {
       <dt className="text-muted-foreground">{NR_TOOLS.DETAIL_CREDENTIAL}</dt>
       <dd className="flex flex-col gap-1">
         {credentials.length ? credentials.map((c) => {
+          const label = credentialLabel(c, row.name, providers);
           const delivery = deliveryLabel(c.delivery);
-          return delivery ? <Chip key={c.id} className="whitespace-normal">{delivery}</Chip> : null;
+          return label || delivery ? (
+            <span key={c.id} className="flex flex-wrap items-center gap-1.5">
+              {label}
+              {delivery && <Chip className="whitespace-normal">{delivery}</Chip>}
+            </span>
+          ) : null;
         }) : <span className="text-muted-foreground">{NR_TOOLS.DETAIL_NONE}</span>}
       </dd>
       {(row.from === "command" || bare) && (
@@ -64,13 +70,13 @@ function Detail({ row, access }: { row: AccessRow; access: AccessFacts }) {
   );
 }
 
-function IncludedRow({ row, access, answered, intent, names }: { row: AccessRow; access: AccessFacts; answered: boolean; intent: RunIntent; names?: HarnessNames }) {
+function IncludedRow({ row, access, answered, intent, names, providers }: { row: AccessRow; access: AccessFacts; answered: boolean; intent: RunIntent; names?: HarnessNames; providers?: ReadonlyMap<string, string> }) {
   const [open, setOpen] = React.useState(false);
   const detail = React.useId();
   const sub = subLine(row, access, intent);
   const name = rowLabel(row, names);
   return (
-    <li className="flex flex-col gap-3 rounded-md border border-border p-3">
+    <li className="flex flex-col gap-3 rounded-lg border border-border bg-surface-2 p-3">
       <div className="flex flex-wrap items-center gap-3">
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
@@ -85,23 +91,23 @@ function IncludedRow({ row, access, answered, intent, names }: { row: AccessRow;
           <span className="sr-only">{NR_TOOLS.DETAILS_FOR(name)}</span>
         </Button>
       </div>
-      {open && <div id={detail}><Detail row={row} access={access} /></div>}
+      {open && <div id={detail}><Detail row={row} access={access} providers={providers} /></div>}
     </li>
   );
 }
 
-export function AlreadyIncluded({ access, answered, intent, names }: { access: AccessFacts | undefined; answered: boolean; intent: RunIntent; names?: HarnessNames }) {
+export function AlreadyIncluded({ access, answered, intent, names, providers }: { access: AccessFacts | undefined; answered: boolean; intent: RunIntent; names?: HarnessNames; providers?: ReadonlyMap<string, string> }) {
   const headingId = React.useId();
   const rows = access?.rows.filter((r) => r.from in FROM) ?? [];
   return (
-    <section aria-labelledby={headingId} className="flex flex-col gap-3">
+    <section aria-labelledby={headingId} className="flex flex-col gap-3.5 rounded-xl border border-border bg-card p-[18px]">
       <div>
         <h2 id={headingId} className="font-semibold">{NR_TOOLS.INCLUDED_TITLE}</h2>
         <p className="text-sm text-muted-foreground">{NR_TOOLS.INCLUDED_BODY}</p>
       </div>
       {access && rows.length > 0 && (
         <ul className="flex flex-col gap-2">
-          {rows.map((row) => <IncludedRow key={row.id} row={row} access={access} answered={answered} intent={intent} names={names} />)}
+          {rows.map((row) => <IncludedRow key={row.id} row={row} access={access} answered={answered} intent={intent} names={names} providers={providers} />)}
         </ul>
       )}
     </section>

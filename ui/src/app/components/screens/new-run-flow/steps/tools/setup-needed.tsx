@@ -19,6 +19,7 @@ import { Button } from "../../../../ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../../../../ui/dialog";
 import { Input } from "../../../../ui/input";
 import { Label } from "../../../../ui/label";
+import { cn } from "../../../../ui/utils";
 import { useModelAccessDoor, useShellSetupStatus } from "../../../../wardyn/model-access-context";
 import { NR_SHARED } from "../../../../wardyn/copy/new-run/shared";
 import { NR_TOOLS } from "../../../../wardyn/copy/new-run/tools";
@@ -126,7 +127,7 @@ export function SetupNeeded({ items, pending, done, intent, names, onDone }: Set
   };
 
   return (
-    <section aria-labelledby={headingId} className="flex flex-col gap-3">
+    <section aria-labelledby={headingId} className="flex flex-col gap-3.5 rounded-xl border border-border bg-card p-[18px]">
       <div>
         <h2 id={headingId} className="font-semibold">{NR_TOOLS.SETUP_TITLE}</h2>
         <p className="text-sm text-muted-foreground">{NR_TOOLS.SETUP_BODY}</p>
@@ -140,7 +141,7 @@ export function SetupNeeded({ items, pending, done, intent, names, onDone }: Set
             const doorKind = setupDoor(item);
             const kind = pending.has(item.id) || (doorKind === "sign_in" && !signInProvider(intent, item)) ? undefined : doorKind;
             return (
-              <li key={item.id} id={setupRowId(item)} tabIndex={-1} className="flex flex-wrap items-center gap-3 rounded-md border border-border p-3 outline-none">
+              <li key={item.id} id={setupRowId(item)} tabIndex={-1} className={cn("flex flex-wrap items-center gap-3 rounded-lg border p-3 outline-none", finished ? "border-border bg-surface-2" : "border-warning bg-warning-subtle")}>
                 {finished ? <Check aria-hidden className="size-4 text-success" /> : <TriangleAlert aria-hidden className="size-4 text-warning" />}
                 <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">
                   <strong className="font-medium">{sentence(item)}</strong>{" "}
