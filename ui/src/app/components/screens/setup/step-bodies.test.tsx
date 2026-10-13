@@ -64,7 +64,7 @@ vi.mock("../../../lib/api/policies", () => ({
   policies: { listPolicies: () => Promise.resolve([]), createPolicy: vi.fn() },
 }));
 vi.mock("../../../lib/api/runs", () => ({
-  runs: { createRun: vi.fn() },
+  runs: { createRunWire: vi.fn() },
 }));
 
 import { ReviewStep, WorkspacesStep } from "./step-bodies";

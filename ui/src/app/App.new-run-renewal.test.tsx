@@ -19,10 +19,16 @@ import { SIGN_IN_AGAIN } from "./lib/session-renew-copy";
 import { baseStatus } from "./lib/test-fixtures";
 import { setField } from "../test/set-field";
 import { UNSAVED } from "./lib/unsaved-copy";
+import { NR_LAUNCH } from "./components/wardyn/copy/new-run/launch";
+import { NR_REVIEW } from "./components/wardyn/copy/new-run/review";
 
 // The next route does not participate in confirming the draft owner's identity.
 vi.mock("./components/screens/run-detail", () => ({ RunDetailScreen: () => <p>Created run</p> }));
 
+// A run to run again: it opens New Run at Review with a launchable draft.
+const AGAIN = "b2222222-2222-4222-8222-222222222222";
+const CREATED = "c3333333-3333-4333-8333-333333333333";
+const INTENT = { shape: "environment", experience: "interactive", no_repositories_or_drives: true, ends_after_sec: 3600 };
 const spec = { allowed_domains: [], first_use_approval: "deny_with_review", min_confinement_class: "CC1" };
 const setup = baseStatus({ ready: true, has_runs: true });
 const tick = (ms = 800) => act(() => vi.advanceTimersByTimeAsync(ms));
@@ -70,7 +76,8 @@ const fetchMock = vi.fn((url: RequestInfo | URL, init?: RequestInit): Promise<Re
   if (path === "/api/v1/policies/default") return Promise.resolve(json(200, spec));
   if (path === "/api/v1/runs/preflight") return Promise.resolve(json(200, { enforced_confinement_class: "CC1", setup_items: [] }));
   if (path === "/api/v1/runs/policy-preview") return Promise.resolve(json(200, { spec, source: { kind: "inline" }, warnings: [], pending: ["credential_liveness"], repository_access: [] }));
-  if (path === "/api/v1/runs" && method === "POST") return Promise.resolve(json(201, { id: "created" }));
+  if (path === `/api/v1/runs/${AGAIN}/launch-intent`) return Promise.resolve(json(200, { run_id: AGAIN, created_at: new Date().toISOString(), document: { intent: INTENT } }));
+  if (path === "/api/v1/runs" && method === "POST") return Promise.resolve(json(201, { id: CREATED, state: "PENDING" }));
   if (["/api/v1/runs", "/api/v1/policies", "/api/v1/workspaces", "/api/v1/approvals"].includes(path)) return Promise.resolve(json(200, []));
   if (path === "/api/v1/policies/grade") return Promise.resolve(json(200, { risk_assessment: [], overall_risk: "low" }));
   return Promise.resolve(json(404, { error: "not found" }));
@@ -120,13 +127,44 @@ function switchToAdmin() {
   fireEvent.click(screen.getByRole("button", { name: UNSAVED.DISCARD }));
 }
 
+const launchButton = () => screen.findByRole("button", { name: NR_REVIEW.LAUNCH_RUN });
+// The Name dialog's title is where the draft's one visible field lives; Review reopens it.
+async function openName() {
+  if (!screen.queryByLabelText(NR_LAUNCH.TITLE_LABEL)) fireEvent.click(await launchButton());
+  return screen.findByLabelText(NR_LAUNCH.TITLE_LABEL);
+}
+const nameBox = () => screen.findByRole("dialog", { name: NR_LAUNCH.TITLE });
+// Launch from the Name dialog; `answered` waits for the dialog's own check to let it through.
+async function launch(answered = true) {
+  await openName();
+  const go = within(await nameBox()).getByRole("button", { name: new RegExp(`^${NR_LAUNCH.LAUNCH}$`) });
+  if (answered) await waitFor(() => expect(go).toBeEnabled());
+  fireEvent.click(go);
+}
+// A held write: whatever Launch is on screen is pressed once, and nothing may be sent.
+async function pressLaunch() {
+  const review = screen.queryByLabelText(NR_LAUNCH.TITLE_LABEL) ? null : screen.queryByRole("button", { name: NR_REVIEW.LAUNCH_RUN });
+  if (review) fireEvent.click(review);
+  const box = screen.queryByRole("dialog", { name: NR_LAUNCH.TITLE });
+  if (box) fireEvent.click(within(box).getByRole("button", { name: new RegExp(`^${NR_LAUNCH.LAUNCH}$`) }));
+  await tick(0);
+}
+const noDraft = () => {
+  expect(screen.queryByLabelText(NR_LAUNCH.TITLE_LABEL)).toBeNull();
+  expect(screen.queryByRole("button", { name: NR_REVIEW.LAUNCH_RUN })).toBeNull();
+};
+
 async function draft() {
-  const view = render(<MemoryRouter initialEntries={["/runs/new"]}><App /></MemoryRouter>);
-  setField(await screen.findByLabelText("Title"), "Keep this draft");
+  const view = render(<MemoryRouter initialEntries={[`/runs/new?again=${AGAIN}`]}><App /></MemoryRouter>);
+  const launchRun = await launchButton();
+  await waitFor(() => expect(launchRun).toBeEnabled());
+  setField(await openName(), "Keep this draft");
   await tick();
   await waitFor(() => expect(count("/api/v1/runs/preflight")).toBeGreaterThan(0));
   expect(count("/api/v1/runs/policy-preview")).toBeGreaterThan(0);
-  expect(screen.getByRole("button", { name: /Launch run/ })).toBeEnabled();
+  fireEvent.click(within(await nameBox()).getByRole("button", { name: NR_LAUNCH.CANCEL }));
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  expect(await launchButton()).toBeEnabled();
   return view;
 }
 async function startRenew() {
@@ -151,14 +189,14 @@ it("the real renewal start/cancel confirms an unchanged owner and resumes the re
   expect(count("/api/v1/runs/policy-preview")).toBeGreaterThan(beforeCancel);
   expect(count("/api/v1/runs/preflight")).toBeGreaterThan(originalPreflights);
   // Under a loaded whole-suite run the resumed form can render a beat after the checks resume.
-  expect(await screen.findByLabelText("Title", {}, { timeout: 5000 })).toHaveValue("Keep this draft");
+  expect(await openName()).toHaveValue("Keep this draft");
   expect(popup.close).toHaveBeenCalled();
   expect(toast.success).not.toHaveBeenCalled();
   expect(assign).not.toHaveBeenCalled();
   expect(count("/api/v1/runs")).toBe(0);
 
-  fireEvent.click(screen.getByRole("button", { name: /Launch run/ }));
-  await screen.findByText("Created run");
+  await launch();
+  await screen.findByText(NR_LAUNCH.BADGE_STARTING);
   expect(count("/api/v1/runs")).toBe(1);
   expect(JSON.parse(String(calls.find((c) => c.path === "/api/v1/runs" && c.method === "POST")?.body))).toMatchObject({ title: "Keep this draft" });
 });
@@ -184,8 +222,8 @@ it.each(["open", "blocked"])("canceling the %s popup discards a late old identit
   await act(async () => current.resolve(json(200, me)));
   await tick(1000);
   expect(count("/api/v1/runs/policy-preview")).toBeGreaterThan(checked);
-  expect(screen.getByLabelText("Title")).toHaveValue("Keep this draft");
-  expect(screen.getByRole("button", { name: /Launch run/ })).toBeEnabled();
+  expect(await launchButton()).toBeEnabled();
+  expect(await openName()).toHaveValue("Keep this draft");
   expect(count("/api/v1/runs")).toBe(0);
   expect(toast.success).not.toHaveBeenCalled();
 });
@@ -199,7 +237,9 @@ it.each([401, 503])("a current /me rejected with %s does not release the cancele
   await tick(3000);
   expect(count("/api/v1/runs/policy-preview")).toBe(checked);
   expect(count("/api/v1/runs")).toBe(0);
-  expect(screen.getByLabelText("Title")).toHaveValue("Keep this draft");
+  // Held, not discarded: a refused sign-in shows nothing, an unreachable one a Review that cannot launch.
+  if (status === 401) noDraft();
+  else expect(await launchButton()).toBeDisabled();
   expect(assign).not.toHaveBeenCalled();
   if (status === 401) expect(isSignedOutHold()).toBe(true);
   expect(toast.success).not.toHaveBeenCalled();
@@ -213,7 +253,7 @@ it("a different current identity unloads the draft before reload without resumin
   cancelRenew();
   await tick(1000);
   expect(assign).toHaveBeenCalledWith("/runs/new");
-  expect(screen.queryByLabelText("Title")).toBeNull();
+  noDraft();
   expect(count("/api/v1/runs/policy-preview")).toBe(checked);
   expect(count("/api/v1/runs")).toBe(0);
   expect(toast.success).not.toHaveBeenCalled();
@@ -244,10 +284,10 @@ it("reviewer: failed view switch retains a launchable same-owner draft", async (
   await tick(1000);
   act(() => void window.dispatchEvent(new Event("focus")));
   await tick(1000);
-  expect(screen.getByLabelText("Title")).toHaveValue("Keep this draft");
+  expect(await openName()).toHaveValue("Keep this draft");
   expect(assign).not.toHaveBeenCalled();
   expect(count("/api/v1/runs")).toBe(0);
-  fireEvent.click(screen.getByRole("button", { name: /Launch run/ }));
+  await launch();
   await tick(0);
   expect(count("/api/v1/runs")).toBe(1);
 });
@@ -263,11 +303,11 @@ it.each([false, true])("a failed view switch (offline=%s) confirms automatically
   await tick(0);
   await tick(1000);
   expect(count("/api/v1/runs/policy-preview")).toBeGreaterThan(checked);
-  expect(screen.getByLabelText("Title")).toHaveValue("Keep this draft");
+  expect(await openName()).toHaveValue("Keep this draft");
   expect(count("/api/v1/me/view")).toBe(1);
   expect(count("/api/v1/runs")).toBe(0);
-  fireEvent.click(screen.getByRole("button", { name: /Launch run/ }));
-  await screen.findByText("Created run");
+  await launch();
+  await screen.findByText(NR_LAUNCH.BADGE_STARTING);
   expect(count("/api/v1/runs")).toBe(1);
 });
 
@@ -288,7 +328,7 @@ it.each(["quiet", "renewal", "watch"])("a delayed failed view body resumes %s co
   expect(count("/api/v1/me", "GET")).toBeGreaterThan(before);
   expect(screen.queryByText(CONSOLE_VIEW.SWITCH_FAILED)).toBeNull();
   expect(count("/api/v1/runs/policy-preview")).toBe(checked);
-  fireEvent.click(screen.getByRole("button", { name: /Launch run/ }));
+  await pressLaunch();
   expect(count("/api/v1/runs")).toBe(0);
   const reads = count("/api/v1/me", "GET");
   if (phase === "quiet") {
@@ -302,8 +342,8 @@ it.each(["quiet", "renewal", "watch"])("a delayed failed view body resumes %s co
   expect(count("/api/v1/runs/policy-preview")).toBeGreaterThan(checked);
   expect(assign).not.toHaveBeenCalled();
   expect(count("/api/v1/runs")).toBe(0);
-  fireEvent.click(screen.getByRole("button", { name: /Launch run/ }));
-  await screen.findByText("Created run");
+  await launch();
+  await screen.findByText(NR_LAUNCH.BADGE_STARTING);
   expect(count("/api/v1/runs")).toBe(1);
   expect(count("/api/v1/me/view")).toBe(1);
 });
@@ -333,8 +373,8 @@ it("an explicit token check waits for the pending view body without losing its c
   expect(count("/api/v1/me", "GET")).toBeGreaterThan(reads);
   expect(count("/api/v1/runs/policy-preview")).toBeGreaterThan(checked);
   expect(count("/api/v1/runs")).toBe(0);
-  fireEvent.click(screen.getByRole("button", { name: /Launch run/ }));
-  await screen.findByText("Created run");
+  await launch();
+  await screen.findByText(NR_LAUNCH.BADGE_STARTING);
   expect(count("/api/v1/runs")).toBe(1);
 });
 
@@ -363,7 +403,7 @@ it.each(["same", "other", "401", "unmount"])("view settlement discards an older 
   expect(count("/api/v1/runs")).toBe(0);
   if (outcome === "same") {
     expect(count("/api/v1/runs/policy-preview")).toBeGreaterThan(checked);
-    expect(screen.getByLabelText("Title")).toHaveValue("Keep this draft");
+    expect(await openName()).toHaveValue("Keep this draft");
     expect(assign).not.toHaveBeenCalled();
   } else {
     expect(count("/api/v1/runs/policy-preview")).toBe(checked);
@@ -374,7 +414,7 @@ it.each(["same", "other", "401", "unmount"])("view settlement discards an older 
       const reads = count("/api/v1/me", "GET");
       await tick(4500);
       expect(count("/api/v1/me", "GET")).toBe(reads);
-    } else expect(screen.queryByLabelText("Title")).toBeNull();
+    } else noDraft();
   }
 });
 
@@ -392,7 +432,7 @@ it("a delayed successful view switch keeps its reload guard and never adopts the
   expect(isSwitching()).toBe(true);
   act(() => void window.dispatchEvent(new Event("focus")));
   await tick(1000);
-  fireEvent.click(screen.getByRole("button", { name: /Launch run/ }));
+  await pressLaunch();
   expect(count("/api/v1/runs/policy-preview")).toBe(checked);
   expect(count("/api/v1/runs")).toBe(0);
   expect(assign).toHaveBeenCalledTimes(1);
@@ -439,14 +479,14 @@ it.each([
   await tick(4500);
   expect(count("/api/v1/me", "GET")).toBe(reads);
   expect(count("/api/v1/runs/policy-preview")).toBe(checked);
-  fireEvent.click(screen.getByRole("button", { name: /Launch run/ }));
+  await pressLaunch();
   expect(count("/api/v1/runs")).toBe(0);
   meStatus = 200;
   act(() => void retry());
   await tick(0);
   await tick(1000);
   expect(count("/api/v1/runs/policy-preview")).toBeGreaterThan(checked);
-  expect(screen.getByLabelText("Title")).toHaveValue("Keep this draft");
+  expect(await openName()).toHaveValue("Keep this draft");
   expect(count("/api/v1/runs")).toBe(0);
 });
 
@@ -475,10 +515,10 @@ it("a rejected current token holds New Run without a /me loop until explicit sig
   await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
   await tick(1000);
   expect(isSignedOutHold()).toBe(false);
-  expect(screen.getByLabelText("Title")).toHaveValue("Keep this draft");
+  expect(await openName()).toHaveValue("Keep this draft");
   expect(count("/api/v1/runs")).toBe(0);
-  fireEvent.click(screen.getByRole("button", { name: /Launch run/ }));
-  await screen.findByText("Created run");
+  await launch();
+  await screen.findByText(NR_LAUNCH.BADGE_STARTING);
   expect(count("/api/v1/runs")).toBe(1);
 });
 
@@ -510,16 +550,16 @@ it.each(["same", "other", "authority", "unmount"])("local token changes retire o
   if (outcome === "same") {
     expect(assign).not.toHaveBeenCalled();
     expect(count("/api/v1/runs/policy-preview")).toBeGreaterThan(checked);
-    expect(screen.getByLabelText("Title")).toHaveValue("Keep this draft");
+    expect(await openName()).toHaveValue("Keep this draft");
     const confirmedReads = count("/api/v1/me", "GET");
     act(() => void window.dispatchEvent(new Event("focus")));
     await tick(1000);
     expect(count("/api/v1/me", "GET")).toBe(confirmedReads);
   } else {
     expect(count("/api/v1/runs/policy-preview")).toBe(checked);
-    expect(screen.queryByLabelText("Title")).toBeNull();
+    noDraft();
     if (outcome === "unmount") expect(assign).not.toHaveBeenCalled();
-    else expect(assign).toHaveBeenCalledWith("/runs/new");
+    else expect(assign).toHaveBeenCalledWith(outcome === "authority" ? `/runs/new?again=${AGAIN}` : "/runs/new");
   }
 });
 
@@ -533,14 +573,14 @@ it.each([["quiet", 200], ["quiet", 401], ["quiet", 503], ["renewal", 200]] as co
   expect(current.signal).toBeDefined();
   let finishLogout!: (reply: Response) => void;
   logoutReply = new Promise<Response>((done) => { finishLogout = done; });
-  const buttons = within(screen.getByRole("banner")).getAllByRole("button");
+  const buttons = within(screen.getAllByRole("banner")[0]).getAllByRole("button");
   await user.click(buttons[buttons.length - 1]);
   await user.click(within(await screen.findByRole("menu")).getByText("Sign out"));
   expect(isSignedOutHold()).toBe(true);
   expect(count("/api/v1/auth/logout")).toBe(1);
   const checked = count("/api/v1/runs/policy-preview");
   await act(async () => current.resolve(json(200, { ...me, principal: "bob" })));
-  fireEvent.click(screen.getByRole("button", { name: /Launch run/ }));
+  await pressLaunch();
   expect(assign).not.toHaveBeenCalled();
   expect(screen.queryByRole("dialog")).toBeNull();
   expect(count("/api/v1/runs")).toBe(0);
@@ -550,7 +590,7 @@ it.each([["quiet", 200], ["quiet", 401], ["quiet", 503], ["renewal", 200]] as co
   act(() => void window.dispatchEvent(new Event("focus")));
   await tick(3000);
   expect(getToken()).toBeNull();
-  expect(screen.queryByLabelText("Title")).toBeNull();
+  noDraft();
   expect(assign).not.toHaveBeenCalled();
   expect(count("/api/v1/runs/policy-preview")).toBe(checked);
   expect(count("/api/v1/runs")).toBe(0);
@@ -565,7 +605,7 @@ it("a normal auth change cannot adopt an identity the shell never resolved", asy
   act(() => setToken("new-token"));
   await tick(0);
   expect(assign).toHaveBeenCalledWith("/runs/new");
-  expect(screen.queryByLabelText("Title")).toBeNull();
+  noDraft();
   expect(count("/api/v1/runs")).toBe(0);
 });
 
@@ -587,5 +627,5 @@ it("a cookie-only 401 keeps the normal confirmation held without advancing auth 
   expect(getAuthGeneration()).toBe(generation);
   expect(count("/api/v1/me", "GET")).toBe(reads);
   expect(count("/api/v1/runs")).toBe(0);
-  expect(screen.getByLabelText("Title")).toHaveValue("Keep this draft");
+  noDraft(); // held, not discarded: the route shows nothing until the owner is confirmed
 });

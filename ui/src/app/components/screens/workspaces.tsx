@@ -14,7 +14,7 @@ import {
   resolvedModelProviders,
   workspaceModelProviderUnavailable,
   workspaceUnavailableToCaller,
-} from "./new-run/wizard-types";
+} from "./new-run-flow/checks/workspace-availability";
 import { useMyCapabilities } from "../../lib/capabilities";
 import type { Workspace, WorkspaceKind, WorkspaceProfile } from "../../lib/types";
 import { PROVIDERS } from "../../lib/workspace-providers-copy";
