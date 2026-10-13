@@ -207,7 +207,7 @@ func (s *Server) stepRequirements(f *runFold, rec *foldRecorder) bool {
 	// One workspace at a time, so each one's additions are its own.
 	for _, ws := range f.wsRefs {
 		before := f.spec.Clone()
-		f.reqEvents = append(f.reqEvents, s.applyWorkspaceRequirementsFor(ctx, f.present, &f.spec, f.req.Agent, []types.Workspace{ws}, selections)...)
+		f.reqEvents = append(f.reqEvents, s.applyWorkspaceRequirementsFor(ctx, f.present, &f.spec, f.req.Agent, []types.Workspace{ws}, f.seed.attached, selections)...)
 		recordRequirementFold(rec, before, f.spec, ws, selections[ws.ID.String()])
 	}
 	return true
