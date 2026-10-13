@@ -389,7 +389,7 @@ func uploadLog(srcPath, uploadURL, runToken string) error {
 		return putBody(io.NewSectionReader(f, 0, size), size, uploadURL, runToken)
 	}
 	keep := int64(maxLogUploadBytes - logMarkerReserve)
-	marker := fmt.Sprintf("\n[wardyn-rec: log truncated, the first %d of %d bytes were uploaded; the full log stays on the sandbox]\n", keep, size)
+	marker := fmt.Sprintf("\n[wardyn-rec: log truncated: the first %d of %d bytes were uploaded; the rest was not]\n", keep, size)
 	return putBody(io.MultiReader(io.NewSectionReader(f, 0, keep), strings.NewReader(marker)),
 		keep+int64(len(marker)), uploadURL, runToken)
 }

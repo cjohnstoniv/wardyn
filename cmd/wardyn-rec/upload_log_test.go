@@ -155,7 +155,7 @@ func TestUploadLog_OverCapSendsMarkedPrefix(t *testing.T) {
 			t.Errorf("%d bytes: body does not start with the log's start: %q", size, p.head)
 		}
 		tail := string(p.tail)
-		if !strings.Contains(tail, "log truncated") || !strings.HasSuffix(tail, "stays on the sandbox]\n") {
+		if !strings.Contains(tail, "log truncated") || !strings.HasSuffix(tail, "the rest was not]\n") {
 			t.Errorf("%d bytes: body does not end in the truncation marker: %q", size, tail[max(0, len(tail)-200):])
 		}
 		if strings.Contains(tail, "LAST-LINE") {
