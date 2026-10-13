@@ -510,7 +510,10 @@ func addGitBrokerHosts(sandboxEnv map[string]string, entries ...string) {
 // branch here changes control flow. See buildRepoRecords for the validation
 // (repoFieldSafe, allowed-prefix targets, dedup) it relies on.
 func applyRepoCloneEnv(sandboxEnv map[string]string, run types.AgentRun, policy types.RunPolicySpec) {
-	if slug := strings.TrimSpace(run.Repo); slug != "" && repoFieldSafe(slug) {
+	// The legacy single-repo fallback is for a repo no structured record names:
+	// agent-run clones it at the default target and ref, so one whose record was
+	// dropped (a target or ref that cannot ride it) must not come back that way.
+	if slug := strings.TrimSpace(run.Repo); slug != "" && repoFieldSafe(slug) && !legacyRepoNamed(run.Repo, policy.WorkspaceRepos) {
 		sandboxEnv["WARDYN_REPO_SLUG"] = slug
 		if url := repoCloneURL(slug); url != "" {
 			sandboxEnv["WARDYN_REPO_URL"] = url
