@@ -120,11 +120,11 @@ export function poolRes(pool: RunnerPool, members: RunnerPoolMemberView[]): Pool
 
 const names = (keys: ("cpu" | "mem" | "disk")[]) => keys.map((k) => RES_NAME[k].toLowerCase()).join(", ");
 
-/** The pool row's line: "Pool limits: memory per run narrowed; 10 runs maximum", or "" when it sets nothing of its own. */
+/** The pool row's line: "Pool limits: memory per run narrowed; 10 runs maximum", or "" when the pool narrows nothing. It is the
+ * approved short form: an amount the pool sets without narrowing is in its details, not on the row. */
 export function narrowShort(pool: RunnerPool, r: PoolRes): string {
   const parts: string[] = [];
   if (r.narrowed.length) parts.push(POOLS.NARROWED(names(r.narrowed)));
-  if (r.set.length) parts.push(POOLS.SET(names(r.set)));
   if (pool.limits?.max_concurrent_runs) parts.push(POOLS.RUNS_MAX(pool.limits.max_concurrent_runs));
   return parts.length ? POOLS.POOL_LIMITS(parts.join("; ")) : "";
 }
