@@ -20,7 +20,7 @@ func TestRunnerHubWiringPG_InventoryReadsTheLiveHub(t *testing.T) {
 	if !f.waitReady(s) {
 		t.Fatalf("session never reached READY: %v", s.result())
 	}
-	if !f.srv.runnerView(f.rn, 0, 0, true).Online {
+	if !f.srv.runnerView(f.rn, types.RunnerTally{}, true).Online {
 		t.Fatal("a READY runner reads offline on the runners routes")
 	}
 }

@@ -49,13 +49,14 @@
 //   - health (/healthz):                 Healthz
 //   - sessions (/api/v1/sessions):       RevokeSessions
 //   - runners (/api/v1/runners, /api/v1/me/runners): MintRunnerToken, RegisterRunner, ClaimRunner,
-//     ListRunners, ListRunnersPage, GetRunner, ListMyRunners, GetMyRunner, SetMyRunnerMaxRuns, ListRunnerTokens,
+//     ListRunners, ListRunnersPage, GetRunner, ListMyRunners, GetMyRunner, SetMyRunnerLimits, ListRunnerTokens,
 //     ListRunnerTokensPage, RevokeRunnerToken, GetRunnerSettings, SetRunnersEnabled
 //   - runner pools (/api/v1/runner-pools, /api/v1/runner-pool-defaults; /api/v1/me/runner-pools, /api/v1/me/runner-pool-defaults):
 //     ListRunnerPools, ListRunnerPoolsFor, GetRunnerPool, CreateRunnerPool, UpdateRunnerPool, DeleteRunnerPool, CreateMyRunnerPool, UpdateMyRunnerPool, DeleteMyRunnerPool, AddMyRunnerToPool,
 //     RemoveMyRunnerFromPool, GetOrgRunnerPoolDefaults, SetOrgRunnerPoolDefaults, GetMyRunnerPoolDefaults,
 //     SetMyRunnerPoolDefaults, ClearMyRunnerPoolDefaults, AddRunnerPoolRemoteRunner, RemoveRunnerPoolRemoteRunner,
-//     AddMyPoolRemoteRunner, RemoveMyPoolRemoteRunner, ListRunnerPoolMembers. The use-policy sub-routes are NOT wrapped (the console authors them)
+//     AddMyPoolRemoteRunner, RemoveMyPoolRemoteRunner, ListRunnerPoolMembers, GetRunnerPoolUsePolicy, SetRunnerPoolUsePolicy,
+//     ClearRunnerPoolUsePolicy
 //   - remote-hosted runners (/api/v1/remote-runners, /api/v1/me/remote-runners): ListRemoteRunners, GetRemoteRunner,
 //     UpdateRemoteRunner, SetRemoteRunnerPeoplePolicy, ClearRemoteRunnerPeoplePolicy, ListMyRemoteRunners
 //   - devices (/api/v1/admin/devices):   MintDeviceEnrolmentToken, ListDeviceEnrolmentTokens, RevokeDeviceEnrolmentToken, ListDevices, RevokeDevice
