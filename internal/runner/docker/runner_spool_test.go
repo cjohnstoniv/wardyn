@@ -8,10 +8,13 @@ package docker
 import (
 	"context"
 	"encoding/json"
-	"github.com/google/uuid"
-	"github.com/moby/moby/api/types/container"
+	"fmt"
+	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/google/uuid"
+	"github.com/moby/moby/api/types/container"
 )
 
 func TestRunnerSpoolOnlyMountsProxyAndRecoversPartialCreate(t *testing.T) {
@@ -78,5 +81,52 @@ func TestRunnerSpoolConfigReplacesAReceivedSpoolDir(t *testing.T) {
 	}
 	if fields["decision_spool_dir"] != runnerSpoolTarget {
 		t.Fatalf("decision_spool_dir = %q, want the runner's own %q", fields["decision_spool_dir"], runnerSpoolTarget)
+	}
+}
+
+// A root runnerd on a rootful daemon never runs the proxy as root: the proxy keeps its image's non-root
+// user and the spool is handed to it; a non-root runnerd's proxy runs as runnerd.
+func TestRunnerSpoolProxyIsNeverRootOnARootfulDaemon(t *testing.T) {
+	var handed []string
+	uid := 0
+	processUID, chownSpool = func() int { return uid }, func(dir string, u, g int) error {
+		handed = append(handed, fmt.Sprintf("%s %d:%d", filepath.Base(dir), u, g))
+		return nil
+	}
+	t.Cleanup(func() { processUID, chownSpool = os.Getuid, chownSpoolTree })
+	d := newWithClient(newFakeDocker(), Config{RunnerStateDir: t.TempDir()})
+	id := uuid.New()
+	cfg := &container.Config{}
+	if _, err := d.runnerSpoolConfig(context.Background(), id, []byte(`{}`), cfg, &container.HostConfig{}); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.User != "65532:65532" || len(handed) != 1 || handed[0] != id.String()+" 65532:65532" {
+		t.Fatalf("root runnerd: proxy user %q, spool handed %v; want the image's non-root user and the spool handed to it", cfg.User, handed)
+	}
+	uid, handed, cfg = 1000, nil, &container.Config{}
+	if _, err := d.runnerSpoolConfig(context.Background(), uuid.New(), []byte(`{}`), cfg, &container.HostConfig{}); err != nil {
+		t.Fatal(err)
+	}
+	if want := fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid()); cfg.User != want || handed != nil {
+		t.Fatalf("non-root runnerd: proxy user %q, handed %v; want %q and no hand-over", cfg.User, handed, want)
+	}
+}
+
+// chownSpoolTree hands the directory and its files over without following a link out of it.
+func TestChownSpoolTreeStaysInTheSpool(t *testing.T) {
+	dir := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "outside")
+	if err := os.WriteFile(outside, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "lock"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(dir, "link")); err != nil {
+		t.Fatal(err)
+	}
+	// To this process's own uid, which needs no privilege: every entry is reached and none errors.
+	if err := chownSpoolTree(dir, os.Getuid(), os.Getgid()); err != nil {
+		t.Fatal(err)
 	}
 }

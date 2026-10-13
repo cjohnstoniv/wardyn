@@ -175,7 +175,7 @@ func TestWorkspaceBuild_TrackerIsSubordinateToTheRow(t *testing.T) {
 	srv := New(baseTestConfig(h, st))
 	// What the wizard's own Build step leaves behind: a finished tracker entry
 	// carrying the build's log tail.
-	srv.builds.begin(st.ws.ID, time.Now())
+	srv.builds.begin(st.ws.ID, time.Now(), false)
 	srv.builds.appendLog(st.ws.ID, "Step 1/3 : FROM golang:1.26")
 	srv.builds.finish(st.ws.ID, built, "")
 

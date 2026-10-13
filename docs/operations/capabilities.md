@@ -6,7 +6,7 @@ The ten capability kinds, the precedence that resolves them, and the group snaps
 ceiling. One sentence is the doctrine: a capability bounds what the MEMBER chose, never what
 the ADMIN pre-authorized.
 
-- The role split above is deployment-wide.
+- The [three-role split](three-roles.md) is deployment-wide.
 - A **capability grant** is per-human: a row naming a *subject*, a *kind*, a *value*, and an effect of `allow` or `deny` (`capability_grants`, migration 0042), with a per-kind **enforcement switch** beside it (`capability_enforcement`).
 - One sentence is the doctrine, and every rule below follows from it: **a capability bounds what the MEMBER chose, never what the ADMIN pre-authorized.**
 - So a stored policy, a workspace's own requirements, the hosts a workspace scan seeded, the model provider's own egress, and the grants `applyWorkspaceRequirements` re-adds at launch are all left untouched no matter what a member holds.

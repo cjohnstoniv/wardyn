@@ -25,7 +25,7 @@ func (*fakeSweepImageBuilder) BuildDevcontainer(context.Context, string, string,
 func (*fakeSweepImageBuilder) BuildFromDevcontainerFiles(context.Context, map[string]string, string, io.Writer) (api.BuiltImage, error) {
 	return api.BuiltImage{}, nil
 }
-func (*fakeSweepImageBuilder) FinalizeBase(context.Context, string, string, io.Writer) (api.BuiltImage, error) {
+func (*fakeSweepImageBuilder) FinalizeBase(context.Context, string, string, io.Writer, bool) (api.BuiltImage, error) {
 	return api.BuiltImage{}, nil
 }
 func (f *fakeSweepImageBuilder) SweepOrphanedBuilds(context.Context) error {

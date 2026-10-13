@@ -1626,6 +1626,12 @@ jobs:
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: '24' # the agent image's base is node:24
+      # The probe runs a third-party CLI on this host: pull the base image it starts while
+      # logged in (the Hub rate limit), then drop the token so the Docker config holds none.
+      - name: Pull the probe's base image, then log out of Docker Hub
+        run: |
+          docker pull "$(sed -nE 's/^FROM (node:[^ ]+)$/\1/p' deploy/images/claude-code/Dockerfile)"
+          docker logout
       - name: Probe the pinned Claude Code CLI for managed-settings drift
         run: ./scripts/check-managed-settings-drift.sh
 

@@ -1,5 +1,10 @@
 # Prose-word budgets (scripts/doc-form.sh): path=N share=S. N is the base prose words, so growth fails.
 # docs/CI.md: base 6759 + 66 (headings and row summaries of five cell expansions in the exit-code table; the 124 summary carries four more words) + 39 (--placement/--runner bullet in "Driving an existing control plane instead").
-docs/CI.md=6869 share=35 # +5: the runner-units job row (#1968).
-docs/ci-jobs-as-runs.md=2091 share=35
-.claude/skills/wardyn-ci/SKILL.md=684 share=35
+# docs/CI.md 7039 adds 170 over 6869 (0.9 F-1508-M3): CI runs as a service identity, not a person; its audit.json is an empty list.
+docs/CI.md=7039 share=35 # +5: the runner-units job row (#1968).
+# docs/ci-jobs-as-runs.md 2175 adds 84 over 2091 (G-090-cleanup slice F, docs rows that contradict the code): measured; the lead re-measures at merge.
+# docs/ci-jobs-as-runs.md 2360 adds 185 over 2175 (G-090-cleanup slice F r1 fix: the CI recipe as a service identity): measured; the lead re-measures at merge.
+docs/ci-jobs-as-runs.md=2360 share=35
+# .claude/skills/wardyn-ci/SKILL.md 704 adds 20 over 684 (G-090-cleanup slice F, docs rows that contradict the code): measured; the lead re-measures at merge.
+# .claude/skills/wardyn-ci/SKILL.md 712 adds 8 over 704 (G-090-cleanup slice F r1 fix: the CI recipe as a service identity): measured; the lead re-measures at merge.
+.claude/skills/wardyn-ci/SKILL.md=712 share=35

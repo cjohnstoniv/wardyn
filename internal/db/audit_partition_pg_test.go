@@ -338,7 +338,7 @@ func TestPG_AuditPartition_GuardsRefuseWhatAuditAppendDidNotAllocate(t *testing.
 	t.Run("a forged recorded_at is refused", func(t *testing.T) {
 		appendAudit(t, f.owner, "test.hw.seed") // the high-water mark is now a live row, above the cutover
 		for name, c := range map[string]struct{ at, want string }{
-			"control: the server clock is accepted": {`clock_timestamp()`, ""},
+			"control: the server clock is accepted": {`greatest(clock_timestamp(), (SELECT hw_recorded_at FROM audit_partition_meta))`, ""},
 			"ahead of the clock":                    {`now() + interval '1 day'`, "ahead of the server clock"},
 			"behind the high-water":                 {`(SELECT hw_recorded_at - interval '1 microsecond' FROM audit_partition_meta)`, "before the chain high-water mark"},
 			"before the cutover":                    {`'-infinity'::timestamptz + interval '1 day'`, "before the chain high-water mark"},

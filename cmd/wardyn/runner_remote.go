@@ -24,6 +24,9 @@ import (
 //	wardyn runner remote set <id> --name "Build host"
 //	wardyn runner remote people set <id> --everyone | --user <subject> --group <group> --role <user-type>
 //	wardyn runner remote people clear <id>
+//
+// `wardyn runner set <runner> --available-to-people on|off` is the everyone-or-nobody form of the same
+// policy; `people set` is the only way to list people, groups and roles.
 func runnerRemoteCmd(client clientFn) *cobra.Command {
 	cmd := &cobra.Command{Use: "remote", Short: "List and manage remote-hosted runners, the Docker host or Kubernetes cluster this server is set up with"}
 	var mine, asJSON bool
@@ -106,7 +109,7 @@ func runnerRemotePeopleCmd(client clientFn) *cobra.Command {
 				req.PeoplePools = sdk.PeoplePoolsListed
 			}
 			out, err := client().SetRemoteRunnerPeoplePolicy(cmd.Context(), args[0], req)
-			if err != nil {
+			if held, err := heldForApproval(cmd, err); held || err != nil {
 				return err
 			}
 			return emitJSON(cmd.OutOrStdout(), out)
@@ -117,7 +120,8 @@ func runnerRemotePeopleCmd(client clientFn) *cobra.Command {
 	set.Flags().StringArrayVar(&roles, "role", nil, "a user type whose people may add it (repeatable)")
 	clear := &cobra.Command{Use: "clear <id>", Short: "Make a remote-hosted runner available to nobody's pools", Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return client().ClearRemoteRunnerPeoplePolicy(cmd.Context(), args[0])
+			_, err := heldForApproval(cmd, client().ClearRemoteRunnerPeoplePolicy(cmd.Context(), args[0]))
+			return err
 		}}
 	cmd.AddCommand(set, clear)
 	return subcommandGroup(cmd)

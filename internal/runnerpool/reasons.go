@@ -133,9 +133,16 @@ func NoOnlineRunnerMsg(name string) string {
 }
 
 // RunnerAtCapacityMsg is the create and preflight refusal (runner_at_capacity) for a run that would
-// start at once while each of the person's runners in the pool holds its max_runs.
+// start at once while every runner in the pool that could take it is at one of its limits: its Runs at
+// once, or a total this run would pass.
 func RunnerAtCapacityMsg(name string) string {
-	return fmt.Sprintf("Your runners in %s are all running as many runs as they allow at once. Try again when one finishes, or raise Runs at once on your runner.", name)
+	return fmt.Sprintf("Every runner in %s is at its limit. Try again when a run there finishes, or raise the runner's limits.", name)
+}
+
+// RunnerLimitsUnsetMsg is the refusal (runner_limits_unset) when no runner in the pool has declared
+// its limits, so none may take a run.
+func RunnerLimitsUnsetMsg(name string) string {
+	return fmt.Sprintf("No runner in %s has its limits set. Every runner needs limits before it can run anything.", name)
 }
 
 // MemberMismatchMsg names the runner the caller asked for: their own runner's
@@ -195,5 +202,5 @@ func RemoteNotConfiguredMsg(id string) string {
 // RemoteNotAvailableMsg refuses a person's add of a remote-hosted runner to their own user pool when
 // its people policy does not admit them; an unknown id is answered the same, as they sent it.
 func RemoteNotAvailableMsg(id string) string {
-	return fmt.Sprintf("%s isn't available to people's pools. Ask your admin to make it available.", id)
+	return fmt.Sprintf("%s is not available to people's pools. Ask your admin to make it available.", id)
 }

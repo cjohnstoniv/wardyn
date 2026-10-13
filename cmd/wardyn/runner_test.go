@@ -55,8 +55,8 @@ func TestRunnerClaimUsesLocalFingerprintAndOrgBinding(t *testing.T) {
 func TestRunnerListAndTokensCommands(t *testing.T) {
 	id := uuid.New()
 	seen := time.Now().UTC().Add(-time.Hour).Truncate(time.Second)
-	views := []types.RunnerView{{ID: id, Owner: "alice@example.com", Name: "laptop-7", State: types.RunnerClaimed, Online: true, LastSeenAt: &seen, RunsActive: 2, KeyFingerprint: "abcd1234",
-		MachineName: "alice-mbp.corp", MaxRuns: 4, Running: 1}}
+	views := []types.RunnerView{{ID: id, Owner: "alice@example.com", Name: "laptop-7", State: types.RunnerClaimed, Online: true, LastSeenAt: &seen, KeyFingerprint: "abcd1234",
+		MachineName: "alice-mbp.corp", Limits: &types.RunnerLimits{RunsAtOnce: 4}, Usage: types.RunnerUsage{InUse: types.RunnerTally{Runs: 1}}}}
 	srv := newCmdServer(t, http.StatusOK, views)
 
 	out, err := execCmdCapture(t, "runner", "list", "--all", "--state", "revoked", "--url", srv.URL, "--token", "t")
@@ -95,9 +95,9 @@ func TestRunnerListAndTokensCommands(t *testing.T) {
 		t.Fatal("a malformed token id was sent")
 	}
 
-	ssrv := newCmdServer(t, http.StatusOK, types.RunnerView{ID: id, Name: "laptop-7", MaxRuns: 3, Running: 1})
+	ssrv := newCmdServer(t, http.StatusOK, types.RunnerView{ID: id, Name: "laptop-7", Limits: &types.RunnerLimits{RunsAtOnce: 3}, Usage: types.RunnerUsage{InUse: types.RunnerTally{Runs: 1}}})
 	out, err = execCmdCapture(t, "runner", "set", "--max-runs", "3", id.String(), "--url", ssrv.URL, "--token", "t")
-	if req := ssrv.last(); err != nil || req.method != http.MethodPut || req.path != "/api/v1/me/runners/"+id.String() || !strings.Contains(out, "at most 3 at once") {
+	if req := ssrv.last(); err != nil || req.method != http.MethodPut || req.path != "/api/v1/me/runners/"+id.String() || !strings.Contains(out, "limits for laptop-7 updated: runs at once 3") {
 		t.Fatalf("runner set: %v %+v\n%s", err, req, out)
 	}
 	if _, err := execCmdCapture(t, "runner", "set", id.String(), "--url", ssrv.URL, "--token", "t"); err == nil {

@@ -34,29 +34,42 @@ const (
 // RemoteRunnerView is a remote-hosted runner as the server reads it. Configured says this server runs
 // it; a runner that is not configured stays listed and never takes a run. Online is whether it answered
 // its last health read. Pools are the live pools it is in: every pool on the operators' reads, the
-// caller's own user pools on ListMyRemoteRunners (which also leaves out the people list).
+// caller's own user pools on ListMyRemoteRunners (which also leaves out the people list). Usage covers
+// every run on it, from every pool: it is shared infrastructure.
 type RemoteRunnerView struct {
 	RemoteRunner
 	Configured bool                  `json:"configured"`
 	Online     bool                  `json:"online"`
 	Pools      []RemoteRunnerPoolRef `json:"pools"`
+	Usage      types.RunnerUsage     `json:"usage"`
 }
 
-// UpdateRemoteRunnerRequest renames a remote-hosted runner at the revision the caller read.
+// UpdateRemoteRunnerRequest renames a remote-hosted runner, or declares its limits, at the revision
+// the caller read. Limits is the whole set (Runs at once 1 to 1024).
 type UpdateRemoteRunnerRequest struct {
-	Revision int64   `json:"revision"`
-	Name     *string `json:"name,omitempty"`
+	Revision int64               `json:"revision"`
+	Name     *string             `json:"name,omitempty"`
+	Limits   *types.RunnerLimits `json:"limits,omitempty"`
 }
 
-// Validate refuses a revision that was never read and a missing or bad name.
+// Validate refuses a revision that was never read, a request that changes nothing, a bad name and a
+// bad limit set.
 func (r UpdateRemoteRunnerRequest) Validate() error {
 	switch {
 	case r.Revision < 1:
 		return errors.New("revision is the revision you read")
-	case r.Name == nil:
-		return errors.New("change the name")
+	case r.Name == nil && r.Limits == nil:
+		return errors.New("change the name or the limits")
 	}
-	return types.ValidateRemoteRunnerName(*r.Name)
+	if r.Name != nil {
+		if err := types.ValidateRemoteRunnerName(*r.Name); err != nil {
+			return err
+		}
+	}
+	if r.Limits != nil {
+		return r.Limits.Validate(types.RemoteRunnerMaxRunsCeiling)
+	}
+	return nil
 }
 
 // RemoteRunnerPeoplePolicyRequest makes a remote-hosted runner available to people's pools: everyone
@@ -70,14 +83,17 @@ type RemoteRunnerPeoplePolicyRequest struct {
 
 // RunnerPoolMemberView is one runner of a pool, either kind. ID is the self-hosted runner's id or the
 // remote-hosted runner's. Runner is a self-hosted member's runner view, its owner named on an
-// operator's read; Configured is set for a remote-hosted member this server runs.
+// operator's read; Configured is set for a remote-hosted member this server runs. Limits and Usage
+// are the member's own, either kind.
 type RunnerPoolMemberView struct {
-	Kind       RunnerKind        `json:"kind"`
-	ID         string            `json:"id"`
-	Name       string            `json:"name"`
-	Online     bool              `json:"online"`
-	Configured bool              `json:"configured,omitempty"`
-	Runner     *types.RunnerView `json:"runner,omitempty"`
+	Kind       RunnerKind          `json:"kind"`
+	ID         string              `json:"id"`
+	Name       string              `json:"name"`
+	Online     bool                `json:"online"`
+	Configured bool                `json:"configured,omitempty"`
+	Runner     *types.RunnerView   `json:"runner,omitempty"`
+	Limits     *types.RunnerLimits `json:"limits"`
+	Usage      types.RunnerUsage   `json:"usage"`
 }
 
 // ListRemoteRunners lists every remote-hosted runner (admin or security admin).

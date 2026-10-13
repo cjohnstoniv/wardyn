@@ -107,7 +107,7 @@ read.
 - A 404 on a resource that genuinely doesn't exist stays silent by design.
 
 > [!NOTE]
-> One exception: the `always`-scope 403 above returns before `decide()` reaches any audit call, so it is a bare 403 with no audit trail at all.
+> One exception: the `always`-scope 403 (the `security_admin_surface` row in [the reasons table](#every-denial-that-isnt-a-404)) returns before `decide()` reaches any audit call, so it is a bare 403 with no audit trail at all.
 
 - **What's still not built.**
   - No custom roles: the tier set is the three fixed ones (admin, `security_admin`, member — see "[Three roles, and who sets the walls](three-roles.md#three-roles-and-who-sets-the-walls)").

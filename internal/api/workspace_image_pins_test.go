@@ -326,7 +326,7 @@ func TestWorkspaceBuild_FailedRebuildDetailNamesTheInput(t *testing.T) {
 	// An earlier failed attempt on this composition leaves the tracker failed, which is what lets Build run again on a row
 	// whose image is recorded: the row alone reads done.
 	key, _ := srv.workspaceBuiltImageKey(ws)
-	srv.builds.begin(ws.ID, time.Now())
+	srv.builds.begin(ws.ID, time.Now(), false)
 	srv.builds.bindKey(ws.ID, key)
 	srv.builds.finish(ws.ID, "", "an earlier failure")
 

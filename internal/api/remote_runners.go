@@ -72,16 +72,36 @@ func (c callerSubjects) admitsPeople(rr types.RemoteRunner) bool {
 	return false
 }
 
-// remoteRunnerView is a row as the operators' reads show it.
-func (s *Server) remoteRunnerView(r *http.Request, row store.RemoteRunnerRow) client.RemoteRunnerView {
-	v := client.RemoteRunnerView{RemoteRunner: row.Runner, Configured: s.remoteRunnerConfigured(row.Runner.ID), Pools: row.Pools}
-	if v.Pools == nil {
-		v.Pools = []types.RemoteRunnerPoolRef{}
+// remoteRunnerViews are rows as the reads show them, each with its usage: every run on it, from every
+// pool, since it is shared infrastructure. ok=false: the 500 is written.
+func (s *Server) remoteRunnerViews(w http.ResponseWriter, r *http.Request, rows []store.RemoteRunnerRow) ([]client.RemoteRunnerView, bool) {
+	ids := make([]string, len(rows))
+	for i, row := range rows {
+		ids[i] = row.Runner.ID
 	}
-	if v.Configured {
-		_, v.Online = s.executorFacts(r.Context(), row.Runner.ID)
+	used, err := s.runnersInUse(r.Context(), nil, ids)
+	if err != nil {
+		writeServerError(w, r, "read remote runner usage", err)
+		return nil, false
 	}
-	return v
+	out := make([]client.RemoteRunnerView, 0, len(rows))
+	for _, row := range rows {
+		v := client.RemoteRunnerView{RemoteRunner: row.Runner, Configured: s.remoteRunnerConfigured(row.Runner.ID), Pools: row.Pools,
+			Usage: s.remoteUsage(r.Context(), row.Runner, used[row.Runner.ID])}
+		if v.Pools == nil {
+			v.Pools = []types.RemoteRunnerPoolRef{}
+		}
+		v.Online = v.Usage.Online
+		out = append(out, v)
+	}
+	return out, true
+}
+
+// writeRemoteRunner answers one row as the operators' reads show it.
+func (s *Server) writeRemoteRunner(w http.ResponseWriter, r *http.Request, row store.RemoteRunnerRow) {
+	if views, ok := s.remoteRunnerViews(w, r, []store.RemoteRunnerRow{row}); ok {
+		writeJSON(w, http.StatusOK, views[0])
+	}
 }
 
 func (s *Server) handleListRemoteRunners(w http.ResponseWriter, r *http.Request) {
@@ -94,11 +114,9 @@ func (s *Server) handleListRemoteRunners(w http.ResponseWriter, r *http.Request)
 		writeServerError(w, r, "list remote runners", err)
 		return
 	}
-	out := make([]client.RemoteRunnerView, 0, len(rows))
-	for _, row := range rows {
-		out = append(out, s.remoteRunnerView(r, row))
+	if out, ok := s.remoteRunnerViews(w, r, rows); ok {
+		writeJSON(w, http.StatusOK, out)
 	}
-	writeJSON(w, http.StatusOK, out)
 }
 
 // remoteRunnerFromPath reads {rid}; ok=false: the 404 or 500 is written.
@@ -124,12 +142,13 @@ func (s *Server) handleGetRemoteRunner(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if row, ok := s.remoteRunnerFromPath(w, r, rs); ok {
-		writeJSON(w, http.StatusOK, s.remoteRunnerView(r, row))
+		s.writeRemoteRunner(w, r, row)
 	}
 }
 
-// handleUpdateRemoteRunner renames a remote-hosted runner (admin). Runs at once and limits are a later
-// field of the same request.
+// handleUpdateRemoteRunner renames a remote-hosted runner or declares its limits, or both (admin). Its
+// limits bound every run on it from every pool, so only an administrator sets them; lowering one ends
+// no run, and waiting runs are looked at again at once.
 func (s *Server) handleUpdateRemoteRunner(w http.ResponseWriter, r *http.Request) {
 	rs, ok := s.remoteRunnerStore(w)
 	if !ok {
@@ -147,7 +166,7 @@ func (s *Server) handleUpdateRemoteRunner(w http.ResponseWriter, r *http.Request
 	if !ok {
 		return
 	}
-	rr, err := rs.RenameRemoteRunner(r.Context(), cur.Runner.ID, req.Revision, *req.Name, principalFromRequest(r))
+	_, rr, err := rs.UpdateRemoteRunner(r.Context(), cur.Runner.ID, req.Revision, req.Name, req.Limits, principalFromRequest(r))
 	switch {
 	case errors.Is(err, store.ErrRunnerPoolStale):
 		writePoolRefusal(w, runnerpool.Refusal{Reason: runnerpool.ReasonStale, Name: cur.Runner.Name})
@@ -157,10 +176,12 @@ func (s *Server) handleUpdateRemoteRunner(w http.ResponseWriter, r *http.Request
 		return
 	}
 	if rr.Revision != cur.Runner.Revision {
-		s.auditPool(r, auditRemoteRunnerUpdate, rr.ID, map[string]any{"name_before": cur.Runner.Name, "name": rr.Name, "revision": rr.Revision})
+		s.auditPool(r, auditRemoteRunnerUpdate, rr.ID, map[string]any{"name_before": cur.Runner.Name, "name": rr.Name,
+			"limits_before": cur.Runner.Limits, "limits": rr.Limits, "revision": rr.Revision})
+		s.kickQueue()
 	}
 	cur.Runner = rr
-	writeJSON(w, http.StatusOK, s.remoteRunnerView(r, cur))
+	s.writeRemoteRunner(w, r, cur)
 }
 
 // remoteRunnerPeopleChange is a held people-policy write's payload.
@@ -346,12 +367,15 @@ func (s *Server) handleListMyRemoteRunners(w http.ResponseWriter, r *http.Reques
 		writeServerError(w, r, "list remote runners", err)
 		return
 	}
+	rows = slices.DeleteFunc(rows, func(row store.RemoteRunnerRow) bool {
+		return !s.remoteRunnerConfigured(row.Runner.ID) || !subj.admitsPeople(row.Runner)
+	})
+	views, ok := s.remoteRunnerViews(w, r, rows)
+	if !ok {
+		return
+	}
 	out := []client.RemoteRunnerView{}
-	for _, row := range rows {
-		if !s.remoteRunnerConfigured(row.Runner.ID) || !subj.admitsPeople(row.Runner) {
-			continue
-		}
-		v := s.remoteRunnerView(r, row)
+	for _, v := range views {
 		v.PeopleSubjects, v.UpdatedBy = nil, ""
 		v.Pools = slices.DeleteFunc(v.Pools, func(p types.RemoteRunnerPoolRef) bool { return p.Scope != types.RunnerPoolUser || p.Owner != owner })
 		for i := range v.Pools {
