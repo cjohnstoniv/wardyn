@@ -38,6 +38,9 @@ type RemoteRunner struct {
 	// listed. A listed policy whose people all left lists nobody and admits nobody.
 	PeoplePools    RemoteRunnerPeoplePools `json:"people_pools"`
 	PeopleSubjects []RunnerPoolSubject     `json:"people_subjects,omitempty"`
+	// Limits is what an administrator declared (proposed once at boot from what the server measured);
+	// nil while any of them is unset, and then the runner takes no run.
+	Limits *RunnerLimits `json:"limits"`
 	// Revision starts at 1 and rises on every change to the name or the people policy.
 	Revision  int64     `json:"revision"`
 	UpdatedBy string    `json:"updated_by,omitempty"`

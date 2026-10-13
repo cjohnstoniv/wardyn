@@ -27,9 +27,9 @@ describe("UsageMeter", () => {
   });
 
   it("with no max it is text only: no meter, no bar", () => {
-    const { container } = render(<UsageMeter label="Pool" used={3} valueText="No pool limit" />);
+    const { container } = render(<UsageMeter label="Pool" used={3} valueText="Set by its runners" />);
     expect(screen.queryByRole("meter")).toBeNull();
-    expect(screen.getByText("No pool limit")).toBeVisible();
+    expect(screen.getByText("Set by its runners")).toBeVisible();
     expect(container.querySelector(".bg-muted")).toBeNull();
   });
 

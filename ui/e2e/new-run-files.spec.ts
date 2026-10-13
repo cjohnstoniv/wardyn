@@ -22,7 +22,7 @@ import { NR_START } from "../src/app/components/wardyn/copy/new-run/start";
 import { DRIVE_MEMBER } from "../src/app/lib/user-drives-copy";
 
 const WS_ID = "f1111111-1111-4111-8111-111111111111";
-const POOL = { id: "f2222222-2222-4222-8222-222222222222", name: "General", hosting_type: "remote_provided" };
+const POOL = { id: "f2222222-2222-4222-8222-222222222222", name: "General", scope: "organization" };
 const REPOS = [
   { repo: "https://github.com/acme/web.git", name: "web", target: "/home/agent/work/web" },
   { repo: "https://github.com/acme/docs.git", name: "docs", target: "/home/agent/work/docs" },

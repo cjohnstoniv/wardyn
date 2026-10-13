@@ -16,7 +16,7 @@ import type { PoolSlots, RunnerPoolChoice } from "./runner-pools";
 /** `runner_pool_slots` on preflight and preview (client.PoolSlots). */
 export type PoolSlotsFact = PoolSlots;
 
-/** Seam: DS-5. One of the caller's own runners in a self-hosted pool. */
+/** Seam: DS-5. One of the caller's own runners in a user pool. */
 export interface PoolRunnerFact {
   id: string;
   name: string;

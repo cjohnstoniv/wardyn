@@ -8,6 +8,7 @@ import (
 	"errors"
 	"os"
 
+	"github.com/cjohnstoniv/wardyn/internal/spoolowner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"golang.org/x/sys/unix"
 )
@@ -43,6 +44,10 @@ func (s *Spool) Seal(ctx context.Context, expected types.RunnerSpoolReceipt) (se
 	link, linkErr := s.root.Lstat("writer.lock")
 	if err != nil || linkErr != nil || !st.Mode().IsRegular() || st.Mode().Perm() != 0600 || link.Mode()&os.ModeSymlink != 0 || !os.SameFile(st, link) {
 		return false, errors.New("unsafe spool writer lock")
+	}
+	// Only after the checks: a name that is not the spool's own regular 0600 file is never handed over.
+	if err = spoolowner.Keep(s.root, writer); err != nil {
+		return false, err
 	}
 	if err = unix.Flock(int(writer.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != nil {
 		if errors.Is(err, unix.EWOULDBLOCK) {

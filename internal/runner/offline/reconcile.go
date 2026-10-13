@@ -41,6 +41,7 @@ func (m *Manager) Pending(ctx context.Context, peer *runnerwire.Peer, actions []
 func (m *Manager) apply(ctx context.Context, a runnerwire.PendingAction) (runnerwire.ActionResult, error) {
 	m.actionMu.Lock()
 	defer m.actionMu.Unlock()
+	proof := m.lostProof(ctx, a)
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.state.Revoked {
@@ -57,7 +58,10 @@ func (m *Manager) apply(ctx context.Context, a runnerwire.PendingAction) (runner
 			return old.Result, m.save()
 		}
 	}
-	r, err := m.pendingRun(a)
+	r, err := m.pendingRun(a, proof)
+	if refused := (actionRefusal{}); errors.As(err, &refused) {
+		return m.refuseAction(ctx, a, err)
+	}
 	if err != nil {
 		return runnerwire.ActionResult{}, err
 	}

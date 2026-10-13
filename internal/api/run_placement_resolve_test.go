@@ -20,10 +20,21 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-func target(id string, offline bool, advertised bool, cpu, mem int64, classes ...types.ConfinementClass) poolTarget {
+// target is a candidate whose runner declares a per-run limit of cpu and mem when bounded, or the most a
+// runner may declare when not, with room for any number of runs (testFits).
+func target(id string, offline bool, bounded bool, cpu, mem int64, classes ...types.ConfinementClass) poolTarget {
+	most := types.RunnerAmounts{CPUMillis: types.RunnerPoolCPUMillisMax, MemoryMiB: types.RunnerPoolMemoryMiBMax, DiskMiB: types.RunnerPoolDiskMiBMax}
+	each := most
+	if bounded {
+		each.CPUMillis, each.MemoryMiB = cpu, mem
+	}
+	testFits[id] = runnerFit{limits: &types.RunnerLimits{RunsAtOnce: types.RemoteRunnerMaxRunsCeiling, Total: most, PerRun: each}}
 	return poolTarget{id: id, executor: id, offline: offline,
-		facts: runner.TargetFacts{Classes: classes, CapacityAdvertised: advertised, CPUMillisMax: cpu, MemoryMiBMax: mem}}
+		facts: runner.TargetFacts{Classes: classes, CapacityAdvertised: bounded, CPUMillisMax: cpu, MemoryMiBMax: mem}}
 }
+
+// testFits are the declared limits of every target() made.
+var testFits = map[string]runnerFit{}
 
 func ids(ts []poolTarget) []string {
 	out := []string{}
@@ -34,7 +45,7 @@ func ids(ts []poolTarget) []string {
 }
 
 func demand(floor, req types.ConfinementClass, cpu, mem int64) placementDemand {
-	return placementDemand{floor: types.RunPolicySpec{MinConfinementClass: floor}, reqCC: req, reqCCOK: true, baseline: composer.Baseline{}, cpu: cpu, mem: mem}
+	return placementDemand{floor: types.RunPolicySpec{MinConfinementClass: floor}, reqCC: req, reqCCOK: true, baseline: composer.Baseline{}, cpu: cpu, mem: mem, fits: testFits}
 }
 
 // DONE WHEN 3: a heterogeneous pool cannot widen the barrier or the size. Each candidate is held to the
@@ -299,7 +310,7 @@ func TestBindKeepsThePreferredRunner(t *testing.T) {
 		{id: b.String(), runnerID: &b, facts: runner.TargetFacts{Classes: []types.ConfinementClass{types.CC1}}},
 	}}
 	runID := uuid.New()
-	picked, refusal := p.bind(runID, types.CC1, nil)
+	picked, refusal := p.bind(runID, types.CC1, "")
 	if refusal != nil || picked.runnerID == nil {
 		t.Fatalf("bind = %+v %+v", picked, refusal)
 	}
@@ -307,12 +318,29 @@ func TestBindKeepsThePreferredRunner(t *testing.T) {
 	if *picked.runnerID == a {
 		other = b
 	}
-	if got, _ := p.bind(runID, types.CC1, &other); got.runnerID == nil || *got.runnerID != other {
+	if got, _ := p.bind(runID, types.CC1, other.String()); got.runnerID == nil || *got.runnerID != other {
 		t.Fatalf("bind preferring %s = %v; want the preferred runner kept", other, got.runnerID)
 	}
 	gone := uuid.New()
-	if got, _ := p.bind(runID, types.CC1, &gone); got.runnerID == nil || *got.runnerID != *picked.runnerID {
+	if got, _ := p.bind(runID, types.CC1, gone.String()); got.runnerID == nil || *got.runnerID != *picked.runnerID {
 		t.Fatalf("bind preferring a runner no longer eligible = %v; want the run's own pick %s", got.runnerID, *picked.runnerID)
+	}
+	// A remote-hosted runner is kept the same way.
+	remote := runPlacement{pooled: true, eligible: []poolTarget{
+		{id: "alpha", executor: "alpha", facts: runner.TargetFacts{Classes: []types.ConfinementClass{types.CC1}}},
+		{id: "beta", executor: "beta", facts: runner.TargetFacts{Classes: []types.ConfinementClass{types.CC1}}},
+	}}
+	own, _ := remote.bind(runID, types.CC1, "")
+	kept := "alpha"
+	if own.executor == "alpha" {
+		kept = "beta"
+	}
+	if got, _ := remote.bind(runID, types.CC1, kept); got.executor != kept {
+		t.Fatalf("bind preferring the remote-hosted runner %s = %q; want it kept", kept, got.executor)
+	}
+	run := types.AgentRun{ID: runID, RunnerPoolExecutor: kept}
+	if ref := remote.apply(&run, types.CC1); ref != nil || run.RunnerPoolExecutor != kept {
+		t.Fatalf("apply on a run already bound to %s = %q %v; want it kept", kept, run.RunnerPoolExecutor, ref)
 	}
 }
 

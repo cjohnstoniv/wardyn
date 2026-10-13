@@ -11,9 +11,11 @@ import (
 	"testing"
 )
 
-func amount(def, cap int) RunnerPoolAmount { return RunnerPoolAmount{Default: def, Cap: cap} }
+func amount(def, cap int) *RunnerPoolAmount { return &RunnerPoolAmount{Default: def, Cap: cap} }
 
-func finite(def, max int) RunnerPoolDuration { return RunnerPoolDuration{DefaultSec: def, MaxSec: max} }
+func finite(def, max int) *RunnerPoolDuration {
+	return &RunnerPoolDuration{DefaultSec: def, MaxSec: max}
+}
 
 func limitsFixture() RunnerPoolLimits {
 	return RunnerPoolLimits{
@@ -35,22 +37,20 @@ func TestRunnerPoolLimitsValidate(t *testing.T) {
 	}{
 		{"both run types", func(*RunnerPoolLimits) {}, ""},
 		{"an app server pool: unlimited lifetime, never idle, default no end", func(l *RunnerPoolLimits) {
-			l.Background.Lifetime = RunnerPoolDuration{Unlimited: true}
-			l.Interactive.Lifetime = RunnerPoolDuration{DefaultSec: 3600, Unlimited: true}
-			l.Interactive.Idle = RunnerPoolDuration{Unlimited: true}
+			l.Background.Lifetime = &RunnerPoolDuration{Unlimited: true}
+			l.Interactive.Lifetime = &RunnerPoolDuration{DefaultSec: 3600, Unlimited: true}
+			l.Interactive.Idle = &RunnerPoolDuration{Unlimited: true}
 		}, ""},
 		{"interactive unlimited lifetime needs a finite default", func(l *RunnerPoolLimits) {
-			l.Interactive.Lifetime = RunnerPoolDuration{Unlimited: true}
+			l.Interactive.Lifetime = &RunnerPoolDuration{Unlimited: true}
 		}, "interactive.lifetime: an unlimited lifetime still needs a finite default"},
 		{"background unlimited lifetime may default to no end", func(l *RunnerPoolLimits) {
-			l.Background.Lifetime = RunnerPoolDuration{Unlimited: true}
+			l.Background.Lifetime = &RunnerPoolDuration{Unlimited: true}
 		}, ""},
 		{"background only", func(l *RunnerPoolLimits) { l.Interactive = nil }, ""},
 		{"interactive only", func(l *RunnerPoolLimits) { l.Background = nil }, ""},
 		{"a concurrency cap", func(l *RunnerPoolLimits) { l.MaxConcurrentRuns = &one }, ""},
 		{"no run type", func(l *RunnerPoolLimits) { l.Background, l.Interactive = nil, nil }, "at least one run type"},
-		{"no barrier", func(l *RunnerPoolLimits) { l.Barriers = nil }, "at least one barrier"},
-		{"empty barrier list", func(l *RunnerPoolLimits) { l.Barriers = []ConfinementClass{} }, "at least one barrier"},
 		{"unknown barrier", func(l *RunnerPoolLimits) { l.Barriers = []ConfinementClass{"CC9"} }, "not CC1, CC2 or CC3"},
 		{"repeated barrier", func(l *RunnerPoolLimits) { l.Barriers = []ConfinementClass{CC2, CC2} }, "listed twice"},
 		{"cpu default past cap", func(l *RunnerPoolLimits) { l.Background.CPUMillis = amount(9000, 8000) }, "background.cpu_millis: the default (9000) is past the cap (8000)"},
@@ -60,16 +60,18 @@ func TestRunnerPoolLimitsValidate(t *testing.T) {
 		{"cpu over the request contract", func(l *RunnerPoolLimits) { l.Background.CPUMillis = amount(1, RunnerPoolCPUMillisMax+1) }, "at most"},
 		{"memory over the request contract", func(l *RunnerPoolLimits) { l.Background.MemoryMiB = amount(1, RunnerPoolMemoryMiBMax+1) }, "at most"},
 		{"lifetime default past max", func(l *RunnerPoolLimits) { l.Background.Lifetime = finite(90000, 86400) }, "background.lifetime: the default (90000) is past the maximum (86400)"},
-		{"lifetime with neither max nor unlimited", func(l *RunnerPoolLimits) { l.Background.Lifetime = RunnerPoolDuration{DefaultSec: 5} }, "max_sec to a number of seconds, or unlimited"},
+		{"lifetime with neither max nor unlimited", func(l *RunnerPoolLimits) { l.Background.Lifetime = &RunnerPoolDuration{DefaultSec: 5} }, "max_sec to a number of seconds, or unlimited"},
 		{"lifetime with both max and unlimited", func(l *RunnerPoolLimits) {
-			l.Background.Lifetime = RunnerPoolDuration{MaxSec: 60, DefaultSec: 5, Unlimited: true}
+			l.Background.Lifetime = &RunnerPoolDuration{MaxSec: 60, DefaultSec: 5, Unlimited: true}
 		}, "not both"},
 		{"lifetime finite with default 0", func(l *RunnerPoolLimits) { l.Background.Lifetime = finite(0, 60) }, "default of at least 1 second"},
-		{"lifetime negative default", func(l *RunnerPoolLimits) { l.Background.Lifetime = RunnerPoolDuration{DefaultSec: -1, Unlimited: true} }, "0 or more seconds"},
-		{"lifetime negative max", func(l *RunnerPoolLimits) { l.Background.Lifetime = RunnerPoolDuration{DefaultSec: 1, MaxSec: -5} }, "max_sec to a number"},
+		{"lifetime negative default", func(l *RunnerPoolLimits) {
+			l.Background.Lifetime = &RunnerPoolDuration{DefaultSec: -1, Unlimited: true}
+		}, "0 or more seconds"},
+		{"lifetime negative max", func(l *RunnerPoolLimits) { l.Background.Lifetime = &RunnerPoolDuration{DefaultSec: 1, MaxSec: -5} }, "max_sec to a number"},
 		{"lifetime past the seconds bound", func(l *RunnerPoolLimits) { l.Background.Lifetime = finite(1, math.MaxInt32+1) }, "seconds are at most"},
 		{"idle default past max", func(l *RunnerPoolLimits) { l.Interactive.Idle = finite(9000, 7200) }, "interactive.idle: the default (9000) is past the maximum (7200)"},
-		{"idle with neither max nor never", func(l *RunnerPoolLimits) { l.Interactive.Idle = RunnerPoolDuration{} }, "interactive.idle: set max_sec"},
+		{"idle with neither max nor never", func(l *RunnerPoolLimits) { l.Interactive.Idle = &RunnerPoolDuration{} }, "interactive.idle: set max_sec"},
 		{"concurrency cap zero", func(l *RunnerPoolLimits) { l.MaxConcurrentRuns = &zero }, "max_concurrent_runs"},
 	} {
 		l := limitsFixture()
@@ -171,7 +173,7 @@ func TestUnlimitedIsNeverAnOmittedNumber(t *testing.T) {
 		t.Fatal(err)
 	}
 	l := limitsFixture()
-	l.Background.Lifetime = d
+	l.Background.Lifetime = &d
 	if l.Validate() == nil {
 		t.Fatal("a lifetime with only a default validated as unlimited")
 	}
@@ -242,5 +244,17 @@ func TestRunnerPoolWithoutLimitsAddsNoBound(t *testing.T) {
 	raw, _ := json.Marshal(RunnerPool{Name: "legacy"})
 	if strings.Contains(string(raw), "limits") {
 		t.Fatalf("a pool with no limits sent %s", raw)
+	}
+}
+
+// A pool's limits are each optional: a run type with none of its own, and no barrier list, are its
+// runners' to set, so they validate, and a pool with no barrier list allows every barrier.
+func TestRunnerPoolLimitsLeftOutFollowTheRunners(t *testing.T) {
+	l := RunnerPoolLimits{Background: &RunnerPoolBackgroundLimits{}}
+	if err := l.Validate(); err != nil {
+		t.Fatalf("a run type with no limits of its own and no barrier list = %v", err)
+	}
+	if !l.AllowsBarrier(CC3) || !l.AllowsRunType(RunnerPoolRunBackground) || l.AllowsRunType(RunnerPoolRunInteractive) {
+		t.Fatal("no barrier list allows every barrier; the run types are the ones listed")
 	}
 }
