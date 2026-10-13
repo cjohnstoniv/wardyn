@@ -5,8 +5,10 @@
 
 import * as React from "react";
 import { Button } from "../../../ui/button";
+import { ADOAccessSummary } from "../../../wardyn/ado-access-summary";
 import { Switch } from "../../../wardyn/form-primitives";
 import { NR_REVIEW } from "../../../wardyn/copy/new-run/review";
+import { PUSH } from "../../../wardyn/copy/push";
 import type { PolicyPreviewResult } from "../../../../lib/types/policy-preview";
 import type { NewRunDraft } from "../draft/run-intent";
 import { BarrierChip } from "./barrier-chip";
@@ -18,6 +20,8 @@ export function EffectivePolicyCard({ draft, pre, preview }: { draft: NewRunDraf
   const changed = changedRows(draft.intent, draft.base);
   const all = policyRows(draft, pre, preview);
   const rows = onlyChanged ? all.filter((r) => changed.has(r.id)) : all;
+  // Only a review rule holds a push; a deny rule refuses it attended or not, so the note needs one.
+  const unattendedPush = draft.intent.experience === "background" && !!preview?.spec.push_rules?.require_review_paths?.length;
   return (
     <aside aria-label={NR_REVIEW.POLICY_TITLE} className="flex flex-col overflow-hidden rounded-xl border border-border bg-card">
       <div className="min-h-[78px] border-b border-border px-5 py-[18px]">
@@ -47,6 +51,9 @@ export function EffectivePolicyCard({ draft, pre, preview }: { draft: NewRunDraf
           ))}
         </dl>
       )}
+      {/* What the run's policy grants on Azure DevOps, in one line; nothing for a policy that names none. */}
+      <ADOAccessSummary caps={preview?.spec.azure_devops_capabilities} className="border-t border-border px-[18px] py-3.5" />
+      {unattendedPush && <p className="border-t border-border px-[18px] py-3.5 text-sm text-muted-foreground">{PUSH.RAIL_UNATTENDED}</p>}
     </aside>
   );
 }

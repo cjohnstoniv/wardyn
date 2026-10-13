@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -104,5 +106,62 @@ func TestPG_TokenEventStreamOutlivesABrowserSignOutAndEndsOnARevoke(t *testing.T
 				t.Fatalf("the token's event stream outlived the %s", tc.name)
 			}
 		})
+	}
+}
+
+// A service identity's token opens the stream, and a revoke of its sponsor ends it though the revoke's
+// time reads before the moment the stream opened (the wall clock stepped back between the two): the
+// stream is ordered against the sponsor's cuts by the token's revocation sequence.
+func TestPG_ServiceTokenEventStreamEndsOnItsSponsorsRevokeUnderABackwardClockStep(t *testing.T) {
+	e := newSvcEnv(t)
+	e.mustCreate(t, svcName, svcSponsor)
+	tok := e.mustMint(t, e.sponsor, svcName)
+	if seq := tokenRevSeq(t, e.pool, tok.ID); seq <= 0 {
+		t.Fatalf("service token rev_seq = %d, want the sequence at mint", seq)
+	}
+	id := uuid.New()
+	run, err := e.st.CreateRun(context.Background(), types.AgentRun{
+		ID: id, CreatedBy: types.ServicePrincipalPrefix + svcName, Agent: "claude-code", ConfinementClass: types.CC1, State: types.RunRunning,
+		RunnerTarget: "docker", Task: "t", SPIFFEID: "spiffe://wardyn.local/agent-run/" + id.String(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.State != types.RunRunning {
+		if ok, err := e.st.UpdateRunStateIf(context.Background(), id, run.State, types.RunRunning); err != nil || !ok {
+			t.Fatalf("move the run to RUNNING: %v %v", ok, err)
+		}
+	}
+	e.h.srv.runEvents.hold, e.h.srv.runEvents.beat = 0, 10*time.Millisecond
+	ts := httptest.NewServer(panicFails(t, e.h.srv.Handler()))
+	t.Cleanup(ts.Close)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	resp := openEventsAs(t, ctx, ts.URL, id, tok.Token)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("open the stream = %d", resp.StatusCode)
+	}
+	held, ended := make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(ended)
+		sc := bufio.NewScanner(resp.Body)
+		for seen := 0; sc.Scan(); {
+			if sc.Text() == ": keepalive" {
+				if seen++; seen == 3 {
+					close(held)
+				}
+			}
+		}
+	}()
+	select {
+	case <-held: // three keepalives, each one a re-check that found the sponsor live
+	case <-ended:
+		t.Fatal("the stream closed before its third keepalive")
+	}
+	backdatedRevoke(t, e.pool, svcSponsor)
+	select {
+	case <-ended:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the service token's event stream outlived its sponsor's revoke")
 	}
 }

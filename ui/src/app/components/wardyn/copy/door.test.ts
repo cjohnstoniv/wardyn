@@ -4,7 +4,7 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { providerStateWord } from "../../screens/new-run/model-provider-lane";
+import { providerStateWord } from "../../screens/new-run-flow/checks/model-provider-lane";
 import { BANNER, CONNECTIONS } from "./door";
 import { RAIL_PROVIDER } from "./new-run-rail";
 
