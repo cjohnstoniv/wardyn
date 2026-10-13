@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cjohnstoniv/wardyn/internal/contentscan"
 	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/runnerspool"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -80,6 +82,86 @@ func TestScannedRecordFitsItsReservation(t *testing.T) {
 	}
 	if got := p.spoolReservationBytes(r); int64(len(b)) > got {
 		t.Fatalf("a scanned record of %d bytes overruns its reservation of %d", len(b), got)
+	}
+}
+
+// queryScan is a bodyless GET through an API door whose JSON-shaped query the
+// forward scan reads as about 500 findings, each under its own long field path,
+// and the scan summary the door attaches to that request's allow.
+func queryScan(t *testing.T) (*Proxy, *http.Request, *egress.ScanSummary) {
+	t.Helper()
+	const secret = "s3cr3t-8" // secretmask.MinLen bytes, so the query stays small
+	eng, err := contentscan.NewEngine(types.LLMInspectionSpec{Mode: "alert", DetectSecrets: true, InspectForwardEgress: true}, [][]byte{[]byte(secret)})
+	if err != nil || eng == nil {
+		t.Fatalf("NewEngine: %v", err)
+	}
+	query := `{"` + strings.Repeat("k", 240) + `":[` + strings.TrimSuffix(strings.Repeat(`"`+secret+`",`, 500), ",") + `]}`
+	r := httptest.NewRequest(http.MethodGet, "https://api.github.com/repos/acme/app/issues?"+url.QueryEscape(query), nil)
+	res, _, serr := eng.ScanRequest(contentscan.ChannelGeneric, []byte(query))
+	if serr != nil || len(res.Findings) < 400 {
+		t.Fatalf("the query scan found %d findings (%v), want about 500", len(res.Findings), serr)
+	}
+	return &Proxy{scanner: eng}, r, scanSummaryFrom(res, serr, eng, "", contentscan.ChannelGeneric)
+}
+
+// A bodyless request is scanned on its query when forward egress is inspected,
+// so it reserves room for its findings too.
+func TestQueryScannedRecordFitsItsReservation(t *testing.T) {
+	p, r, scan := queryScan(t)
+	rec := runnerspool.Record{SpoolID: uuid.New(), Seq: 1, Hash: strings.Repeat("0", 64), Decision: egress.DecisionLog{
+		Request:  egress.Request{RunID: uuid.New(), Host: "api.github.com", Port: 443, Method: r.Method, Path: r.URL.Path, Time: time.Now()},
+		Decision: egress.Allow, RuleSource: "policy:allowed", Scan: scan,
+	}}
+	b, err := json.Marshal(rec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := p.spoolReservationBytes(r); int64(len(b)) > got {
+		t.Fatalf("a query-scanned record of %d bytes (%d findings) overruns its reservation of %d", len(b), len(scan.Findings), got)
+	}
+}
+
+// Near a full spool, query-scanned requests compete for what is left: every one
+// admitted keeps its decision, and one that cannot is refused before it is
+// forwarded and counted.
+func TestQueryScannedDecisionsPersistNearCapacity(t *testing.T) {
+	ctx := context.Background()
+	id := uuid.New()
+	p, r, scan := queryScan(t)
+	s, err := newLocalDecisionSink(filepath.Join(t.TempDir(), "spool"), id, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.close(ctx)
+	p.sink = s
+	const filled = 30
+	for range filled {
+		if err := s.local.Append(ctx, egress.DecisionLog{Request: egress.Request{RunID: id, Host: "allowed.test", Time: time.Now()},
+			Decision: egress.Allow, RuleSource: "policy:allowed", Cause: strings.Repeat("x", 1_000_000)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	const asked = 24
+	var tickets []uuid.UUID
+	for range asked {
+		if admitted, _ := p.admitSpoolHTTP(httptest.NewRecorder(), r.Clone(ctx)); admitted != nil {
+			tickets = append(tickets, spoolTicket(admitted.Context()))
+		}
+	}
+	if len(tickets) == 0 || len(tickets) == asked {
+		t.Fatalf("%d of %d admitted: the spool was not near capacity", len(tickets), asked)
+	}
+	for _, ticket := range tickets {
+		s.emit(egress.DecisionLog{Request: egress.Request{RunID: id, Host: "api.github.com", Port: 443, Method: r.Method, Path: r.URL.Path, Time: time.Now(), AuditReservation: ticket},
+			Decision: egress.Allow, RuleSource: "policy:allowed", Scan: scan})
+	}
+	depth, _, drops, err := s.local.Stats(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if depth != filled+len(tickets) || drops != uint64(asked-len(tickets)) {
+		t.Fatalf("admitted %d of %d: %d of their decisions persisted and %d drops were counted, want %d and %d",
+			len(tickets), asked, depth-filled, drops, len(tickets), asked-len(tickets))
 	}
 }
 

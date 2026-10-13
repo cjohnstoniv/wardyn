@@ -22,11 +22,9 @@ import (
 	"context"
 	"encoding/json"
 	"io"
-	"net"
 	"net/http"
 	"net/url"
 	"slices"
-	"strconv"
 	"strings"
 
 	"github.com/cjohnstoniv/wardyn/internal/contentscan"
@@ -251,10 +249,7 @@ func (p *Proxy) forwardAPIDoor(w http.ResponseWriter, r *http.Request, host stri
 		return
 	}
 	scheme, defaultPort := p.upstreamSchemeFor(host, port)
-	hostport := host
-	if port != defaultPort {
-		hostport = net.JoinHostPort(host, strconv.Itoa(port))
-	}
+	hostport := upstreamURLHost(host, port, defaultPort)
 	// The path forwarded is the path compared: the raw, still-encoded string the
 	// tables read (an encoded "/" in a GitLab project path must survive).
 	raw := adoRawPath(r)
