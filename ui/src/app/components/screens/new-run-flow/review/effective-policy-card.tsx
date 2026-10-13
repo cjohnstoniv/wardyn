@@ -5,11 +5,11 @@
 
 import * as React from "react";
 import { Button } from "../../../ui/button";
-import { BarrierMark } from "../../../wardyn/barrier-mark";
 import { Switch } from "../../../wardyn/form-primitives";
 import { NR_REVIEW } from "../../../wardyn/copy/new-run/review";
 import type { PolicyPreviewResult } from "../../../../lib/types/policy-preview";
 import type { NewRunDraft } from "../draft/run-intent";
+import { BarrierChip } from "./barrier-chip";
 import { changedRows, policyRows } from "./policy-rows";
 import type { ReviewPreflight } from "./review-seams";
 
@@ -39,7 +39,7 @@ export function EffectivePolicyCard({ draft, pre, preview }: { draft: NewRunDraf
             <div key={r.id} data-policy-row={r.id} className="flex flex-col gap-0.5 border-b border-border px-[18px] py-3.5 last:border-b-0">
               <dt className="label-eyebrow">{r.label}</dt>
               <dd className="flex flex-col gap-0.5">
-                {r.barrier && <BarrierMark cc={r.barrier} size="sm" strength />}
+                {r.barrier && <BarrierChip cc={r.barrier} caps />}
                 {r.value && <strong className="font-medium">{r.value}</strong>}
                 {r.detail && <small className="text-muted-foreground">{r.detail}</small>}
               </dd>
