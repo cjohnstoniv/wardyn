@@ -1019,6 +1019,12 @@ and does not yet follow semantic versioning (interfaces are not stable).
   followed as the same vault. Before, storing or checking a secret with more than 25 versions failed with "refusing
   to follow a link off this vault", and so did `-reconcile` past 25 secrets. Links to any other host, port or scheme
   are still refused.
+- Run again on an interactive agent run that has no stored launch details (every run from before this upgrade, and
+  runs with a whole inline policy) keeps the run's first prompt. Before, the new run started with an empty prompt.
+- Reviving an Azure CLI run whose owner's profile now denies `management.azure.com` is refused (409
+  `revive_ceiling_denies_azure_cli`) and the run's proxy is left as it was. Before, the revive replaced the proxy
+  with a configuration it could not load and the run lost all egress. A revive also loads the new proxy
+  configuration before it touches the old proxy (`revive_config_does_not_load`).
 
 
 ## [0.8.9] — 2026-10-09
