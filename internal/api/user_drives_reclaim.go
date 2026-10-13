@@ -63,9 +63,17 @@ import (
 // its registration belongs beside it. Not a second call in routes() either:
 // that function is at its own funlen ceiling, so the family gets one call site
 // and this is where the family's two halves are joined.
-func (s *Server) mountUserDriveFamily(operatorOnly, securityOps chi.Router) {
+//
+// It also mounts people's own drives (member_drives.go): the two routes a
+// person uses on r, and the super admin's list and delete beside reclaim.
+func (s *Server) mountUserDriveFamily(r, operatorOnly, securityOps chi.Router) {
 	s.mountUserDriveRoutes(operatorOnly, securityOps)
 	operatorOnly.Post("/drives/{id}/reclaim", s.handleReclaimUserDrive)
+	s.memberDriveLimiter.rate, s.memberDriveLimiter.burst = memberDriveRatePerSec, memberDriveBurst
+	r.Post("/me/drives", s.handleCreateMemberDrive)
+	r.Delete("/me/drives/{id}", s.handleDeleteMyDrive)
+	operatorOnly.Get("/drives/member", s.handleListMemberDrives)
+	operatorOnly.Delete("/drives/member/{id}", s.handleDeleteMemberDriveAdmin)
 }
 
 // userDriveReclaimRequest names the ALLOCATION whose object is to be
@@ -168,6 +176,9 @@ func (s *Server) handleReclaimUserDrive(w http.ResponseWriter, r *http.Request) 
 	}
 	if err != nil {
 		writeServerError(w, r, "get user drive", err)
+		return
+	}
+	if memberOwnedRefusal(w, d) {
 		return
 	}
 	if code, msg := driveReclaimableHere(d, s.cfg.RunnerTarget); msg != "" {

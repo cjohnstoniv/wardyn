@@ -830,9 +830,9 @@ type Server struct {
 	// hit once per keystroke, and each miss is an upstream Graph call
 	// (directory_search.go). Zero value is ready to use.
 	dirLimiter principalLimiter
-	// branchLimiter rate-bounds GET /workspaces/{id}/branches per person
-	// (workspace_branches.go): each call can use a forge credential.
-	branchLimiter principalLimiter
+	// branchLimiter rate-bounds GET /workspaces/{id}/branches per person (workspace_branches.go): each
+	// call can use a forge credential. memberDriveLimiter bounds member drive changes (member_drives.go).
+	branchLimiter, memberDriveLimiter principalLimiter
 	// preflightLimiter rate-bounds POST /runs/preflight per person
 	// (preflight.go); nil when Config.PreflightRatePerMin is 0 (off).
 	preflightLimiter     *principalLimiter

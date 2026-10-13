@@ -479,6 +479,26 @@ const (
 	reasonDriveShareBesideManaged = "drive_share_beside_managed"
 )
 
+// Member drives (member_drives.go, member_drives_admin.go): a person's own
+// drive. The sentences are member_drives.go's; the console's twin is
+// pinned to the same golden table. A foreign, admin or unknown id on the
+// member delete answers authz.ReasonDriveNotFound.
+const (
+	reasonMemberDriveRequiresPerson    = "member_drive_requires_person"    // not a person's session or own token
+	reasonMemberDrivesDisabled         = "member_drives_disabled"          // the organisation switch is off
+	reasonMemberDrivesDeniedByProfile  = "member_drives_denied_by_profile" // the caller's governance profile shuts creating
+	reasonMemberDriveLimitReached      = "member_drive_limit_reached"      // the person already holds the most drives allowed
+	reasonMemberDriveUnsupported       = "member_drive_unsupported"        // this deployment has no managed backend, or no drive size
+	reasonMemberDriveDeleteUnavailable = "member_drive_delete_unavailable" // the substrate could not delete what it would create
+	reasonMemberDriveNameInvalid       = "member_drive_name_invalid"       // the name fails the drive name rule
+	reasonMemberDriveNameTaken         = "member_drive_name_taken"         // a drive the caller can use already has the name
+	reasonMemberDriveInUse             = "member_drive_in_use"             // a live or kept run still holds the drive
+	reasonMemberDriveBusy              = "member_drive_busy"               // another delete of the drive is in flight
+	reasonMemberDriveDeleteFailed      = "member_drive_delete_failed"      // the substrate failed; nothing was removed
+	reasonMemberDriveRateLimited       = "member_drive_rate_limited"       // too many creates and deletes in a minute
+	reasonUserDriveMemberOwned         = "user_drive_member_owned"         // an admin drive route named a person's drive
+)
+
 // git_pat narrowing (runs_dispatch_pat_scope.go): a run is refused when a
 // narrowed git_pat grant's repos, access or api could not be enforced.
 const (

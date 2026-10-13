@@ -41,6 +41,21 @@ func TestDriveRefusalSentencesMatchGolden(t *testing.T) {
 		"NOT_IN_POOL":          func(a []string) string { return driveNotInPoolMsg(a[0]) },
 		"TARGET_CONFLICT":      func(a []string) string { return driveTargetConflictMsg(a[0], a[1], a[2]) },
 		"SHARE_BESIDE_MANAGED": func(a []string) string { return driveShareBesideManagedMsg(a[0], a[1]) },
+
+		"MEMBER_REQUIRES_PERSON":           func([]string) string { return memberDriveRequiresPersonMsg() },
+		"MEMBER_DISABLED":                  func([]string) string { return memberDrivesDisabledMsg() },
+		"MEMBER_DENIED_BY_PROFILE":         func(a []string) string { return memberDrivesDeniedByProfileMsg(a[0]) },
+		"MEMBER_LIMIT_REACHED":             func(a []string) string { return memberDriveLimitReachedMsg(atoi(a[0]), atoi(a[1])) },
+		"MEMBER_UNSUPPORTED":               func([]string) string { return memberDriveUnsupportedMsg() },
+		"MEMBER_UNSIZED":                   func([]string) string { return memberDriveUnsizedMsg() },
+		"MEMBER_DELETE_UNAVAILABLE_CREATE": func([]string) string { return memberDriveDeleteUnavailableCreateMsg() },
+		"MEMBER_DELETE_UNAVAILABLE":        func([]string) string { return memberDriveDeleteUnavailableMsg() },
+		"MEMBER_NAME_INVALID":              func([]string) string { return memberDriveNameInvalidMsg() },
+		"MEMBER_NAME_TAKEN":                func(a []string) string { return memberDriveNameTakenMsg(a[0]) },
+		"MEMBER_IN_USE":                    func([]string) string { return memberDriveInUseMsg() },
+		"MEMBER_BUSY":                      func([]string) string { return memberDriveBusyMsg() },
+		"MEMBER_DELETE_FAILED":             func([]string) string { return memberDriveDeleteFailedMsg() },
+		"MEMBER_RATE_LIMITED":              func([]string) string { return memberDriveRateLimitedMsg() },
 	}
 	if len(golden) != len(got) {
 		t.Fatalf("golden has %d sentences, the server has %d", len(golden), len(got))

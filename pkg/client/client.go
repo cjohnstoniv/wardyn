@@ -33,7 +33,9 @@
 //   - site-config (/api/v1/site-config): GetSiteConfig, PutSiteConfig, PutSiteConfigResult
 //   - model-providers (/api/v1/model-providers): GetModelProviders — the read only (admin); the PUT and the per-provider
 //     sign-in and credential doors are NOT wrapped
-//   - drives (/api/v1/drives):           GetDrives, ApplyDrives, ApplyDrivesResult
+//   - drives (/api/v1/drives):           GetDrives, ApplyDrives, ApplyDrivesResult, and people's own
+//     drives: ListMemberDrives, DeleteMemberDrive (/api/v1/drives/member, super admin) and the caller's
+//     CreateMyDrive, DeleteMyDrive (/api/v1/me/drives)
 //   - presets (/api/v1/presets):         ListPresets, GetPreset, PutPreset, DeletePreset, ApplyPresets
 //   - templates (/api/v1/templates):     ListTemplates, GetTemplate, SaveTemplate, DeleteTemplate, CopyTemplate,
 //     ImportTemplate — and, on /api/v1/admin/template-group-admins, ListTemplateGroupAdmins, GrantTemplateGroupAdmin,

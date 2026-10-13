@@ -7,7 +7,7 @@
 // pkg/client/me_drives.go (wire-parity.test.ts pins the keys). Nothing here
 // names a host path, a storage object or another person.
 import type { DriveBackend, StorageEnforcement } from "./drives";
-import { asJson, unwrapList, wfetch } from "./core";
+import { asJson, errText, HttpError, unwrapList, wfetch } from "./core";
 
 export type MeDriveSection = "user" | "shared";
 export type MeDriveSource = "personal" | "team" | "organisation";
@@ -28,6 +28,8 @@ export interface MeDrive {
   /** The drive `drive.enabled` mounts at /home/agent/drive. */
   legacy: boolean;
   unavailable_reason?: MeDriveUnavailableReason;
+  /** The caller created it; only an owned drive takes DELETE /me/drives/{id}. */
+  owned: boolean;
 }
 
 /** GET /me/drives (pkg/client.MeDriveCatalogue). */
@@ -43,4 +45,15 @@ export async function myDrives(runnerPoolId?: string): Promise<MeDriveCatalogue>
   const qs = runnerPoolId ? `?runner_pool_id=${encodeURIComponent(runnerPoolId)}` : "";
   const body = await asJson<MeDriveCatalogue>(await wfetch(`/me/drives${qs}`, { method: "GET" }));
   return { ...body, drives: unwrapList<MeDrive>(body.drives), pool_checked: !!body.pool_checked };
+}
+
+/** POST /me/drives (pkg/client.MemberDriveCreateRequest): the caller's own new drive. */
+export async function createMyDrive(name: string): Promise<MeDrive> {
+  return asJson<MeDrive>(await wfetch("/me/drives", { method: "POST", body: JSON.stringify({ name }) }));
+}
+
+/** DELETE /me/drives/{id}: deletes the caller's own drive and its files. */
+export async function deleteMyDrive(id: string): Promise<void> {
+  const res = await wfetch(`/me/drives/${encodeURIComponent(id)}`, { method: "DELETE" });
+  if (!res.ok) throw new HttpError(res.status, await errText(res));
 }

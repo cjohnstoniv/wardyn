@@ -3,7 +3,14 @@
 
 package client
 
-import "github.com/cjohnstoniv/wardyn/internal/types"
+import (
+	"context"
+	"net/http"
+
+	"github.com/google/uuid"
+
+	"github.com/cjohnstoniv/wardyn/internal/types"
+)
 
 // MeDriveCatalogue is GET /api/v1/me/drives: every drive the caller's own
 // grants reach, the ones a run may attach through CreateRunRequest.Drives.
@@ -49,18 +56,28 @@ type MeDrive struct {
 	// UnavailableReason is why a run cannot attach this drive now: paused,
 	// unmountable or not_in_pool. "" when it can.
 	UnavailableReason string `json:"unavailable_reason,omitempty"`
+	// Owned is true for a drive the caller created (POST /me/drives). Only an
+	// owned drive takes DELETE /me/drives/{id}.
+	Owned bool `json:"owned"`
 }
 
-// The closed sets of MeDrive.
-const (
-	MeDriveSectionUser   = "user"
-	MeDriveSectionShared = "shared"
+// MemberDriveCreateRequest is POST /api/v1/me/drives: a person creates their
+// own drive. The server picks the backend, the size and the mount path.
+type MemberDriveCreateRequest struct {
+	// Name is 1 to 128 characters with at least one letter or digit, unique
+	// among the drives the caller can use.
+	Name string `json:"name"`
+}
 
-	MeDriveSourcePersonal     = "personal"
-	MeDriveSourceTeam         = "team"
-	MeDriveSourceOrganisation = "organisation"
+// CreateMyDrive creates the caller's own drive (POST /api/v1/me/drives).
+func (c *Client) CreateMyDrive(ctx context.Context, name string) (MeDrive, error) {
+	var out MeDrive
+	err := c.do(ctx, http.MethodPost, "/api/v1/me/drives", MemberDriveCreateRequest{Name: name}, &out)
+	return out, err
+}
 
-	MeDriveUnavailablePaused      = "paused"
-	MeDriveUnavailableUnmountable = "unmountable"
-	MeDriveUnavailableNotInPool   = "not_in_pool"
-)
+// DeleteMyDrive deletes the caller's own drive and its files
+// (DELETE /api/v1/me/drives/{id}).
+func (c *Client) DeleteMyDrive(ctx context.Context, id uuid.UUID) error {
+	return c.do(ctx, http.MethodDelete, "/api/v1/me/drives/"+id.String(), nil, nil)
+}

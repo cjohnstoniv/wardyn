@@ -53,9 +53,10 @@ func driveCmd(client clientFn) *cobra.Command {
 			"other drives. Nothing the file\n" +
 			"omits is touched and nothing is deleted, so `wardyn drive get > f && wardyn\n" +
 			"drive set f` is a no-op.\n\n" +
-			"`reclaim` is the one verb that destroys data: see `wardyn drive reclaim --help`.",
+			"`reclaim` is the one verb that destroys data: see `wardyn drive reclaim --help`.\n" +
+			"`member` lists and deletes the drives people create for themselves.",
 	}
-	cmd.AddCommand(driveGetCmd(client), driveSetCmd(client), driveReclaimCmd(client))
+	cmd.AddCommand(driveGetCmd(client), driveSetCmd(client), driveReclaimCmd(client), driveMemberCmd(client))
 	return subcommandGroup(cmd)
 }
 
@@ -252,4 +253,91 @@ func postDriveReclaim(ctx context.Context, c *sdk.Client, driveID uuid.UUID, bod
 		return driveReclaimResult{}, fmt.Errorf("drive reclaim: decode response: %w", err)
 	}
 	return out, nil
+}
+
+// driveMemberCmd is `wardyn drive member`: the drives people create for
+// themselves, which `drive get` does not list. Super admin only.
+func driveMemberCmd(client clientFn) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "member",
+		Short: "List or delete the drives people create for themselves (super admin)",
+	}
+	cmd.AddCommand(driveMemberListCmd(client), driveMemberDeleteCmd(client))
+	return subcommandGroup(cmd)
+}
+
+func driveMemberListCmd(client clientFn) *cobra.Command {
+	var limit, offset int
+	var asJSON bool
+	cmd := &cobra.Command{
+		Use:   "list",
+		Short: "List people's drives with their owner and storage object",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			list, err := client().ListMemberDrives(cmd.Context(), sdk.ListOpts{Limit: limit, Offset: offset})
+			if err != nil {
+				return err
+			}
+			if asJSON {
+				return emitJSON(cmd.OutOrStdout(), list)
+			}
+			tw := newTab(cmd.OutOrStdout())
+			fmt.Fprintln(tw, "ID\tNAME\tOWNER\tBACKEND\tOBJECT\tSTATE")
+			for _, d := range list.Drives {
+				state := "ready"
+				if d.Deleting {
+					state = "deleting"
+				}
+				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", d.ID, d.Name, d.Owner, d.Backend, d.Object, state)
+			}
+			if err := tw.Flush(); err != nil {
+				return err
+			}
+			if shown := offset + len(list.Drives); shown < list.Total {
+				fmt.Fprintf(cmd.ErrOrStderr(), "%d of %d drives shown; pass --offset %d for more\n", shown, list.Total, shown)
+			}
+			return nil
+		},
+	}
+	cmd.Flags().IntVar(&limit, "limit", 0, "most drives to list (0 = the server's default)")
+	cmd.Flags().IntVar(&offset, "offset", 0, "drives to skip")
+	cmd.Flags().BoolVar(&asJSON, "json", false, "emit {drives, total} as JSON")
+	return cmd
+}
+
+func driveMemberDeleteCmd(client clientFn) *cobra.Command {
+	var yes, asJSON bool
+	cmd := &cobra.Command{
+		Use:   "delete <drive-id>",
+		Short: "DELETE one person's drive and its files",
+		Long: `Delete a drive a person created, and the Docker volume or claim holding its
+files. THIS DELETES DATA AND NOTHING UNDOES IT.
+
+Refused with a 409 while a run still holds the drive. Every attempt is audited
+as ` + "`drive.member.delete`" + `. On Kubernetes the daemon needs the chart's
+drives.reclaim.enabled to delete claims.
+`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			id, err := uuid.Parse(strings.TrimSpace(args[0]))
+			if err != nil {
+				return fmt.Errorf("drive member delete: %q is not a drive id (a uuid)", args[0])
+			}
+			if !yes {
+				return fmt.Errorf("drive member delete: refusing without --yes: this permanently deletes drive %s and its files", id)
+			}
+			res, err := client().DeleteMemberDrive(cmd.Context(), id)
+			if err != nil {
+				return err
+			}
+			if asJSON {
+				return emitJSON(cmd.OutOrStdout(), res)
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "%s: %s (%s) of drive %q owned by %s\n", res.Outcome, res.Object, res.Backend, res.Drive, res.Owner)
+			return nil
+		},
+	}
+	cmd.Flags().BoolVar(&yes, "yes", false, "confirm that this permanently deletes the person's drive and its files")
+	cmd.Flags().BoolVar(&asJSON, "json", false, "emit {drive, drive_id, owner, backend, object, outcome} as JSON")
+	return cmd
 }

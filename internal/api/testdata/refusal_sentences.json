@@ -211,6 +211,11 @@
   },
   {
     "reason": "drive_not_found",
+    "target": "\"drives.member.delete\"",
+    "sentence": "msg"
+  },
+  {
+    "reason": "drive_not_found",
     "target": "\"runs.drive\"",
     "sentence": "(audit only)"
   },
@@ -238,6 +243,11 @@
     "reason": "governance_overlay_unsatisfiable",
     "target": "target",
     "sentence": "u.Error()"
+  },
+  {
+    "reason": "governance_profile",
+    "target": "\"drives.member.create\"",
+    "sentence": "msg"
   },
   {
     "reason": "governance_profile",
