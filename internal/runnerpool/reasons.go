@@ -202,5 +202,5 @@ func RemoteNotConfiguredMsg(id string) string {
 // RemoteNotAvailableMsg refuses a person's add of a remote-hosted runner to their own user pool when
 // its people policy does not admit them; an unknown id is answered the same, as they sent it.
 func RemoteNotAvailableMsg(id string) string {
-	return fmt.Sprintf("%s isn't available to people's pools. Ask your admin to make it available.", id)
+	return fmt.Sprintf("%s is not available to people's pools. Ask your admin to make it available.", id)
 }

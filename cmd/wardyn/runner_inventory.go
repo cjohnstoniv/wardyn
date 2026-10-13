@@ -93,29 +93,6 @@ func printRunners(w io.Writer, rows []sdk.RunnerView, admin bool) error {
 	return tw.Flush()
 }
 
-// runnerSetCmd changes the caller's own runner. Only the owner may: an administrator's token is refused
-// by the server, since the runner is the person's machine.
-func runnerSetCmd(client clientFn) *cobra.Command {
-	var maxRuns int
-	cmd := &cobra.Command{Use: "set <runner-id>", Short: "Change your own runner's runs at once", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
-		id, err := uuid.Parse(args[0])
-		if err != nil {
-			return fmt.Errorf("runner id: %w", err)
-		}
-		if !cmd.Flags().Changed("max-runs") {
-			return fmt.Errorf("nothing to change: pass --max-runs")
-		}
-		v, err := client().SetMyRunnerLimits(cmd.Context(), id, sdk.RunnerLimits{RunsAtOnce: maxRuns})
-		if err != nil {
-			return err
-		}
-		fmt.Fprintf(cmd.OutOrStdout(), "runner %s now runs at most %d at once (%d running)\n", v.Name, maxRuns, v.Usage.InUse.Runs)
-		return nil
-	}}
-	cmd.Flags().IntVar(&maxRuns, "max-runs", 0, "how many runs the runner may hold at once, 1 to 64")
-	return cmd
-}
-
 func runnerTokensCmd(client clientFn) *cobra.Command {
 	cmd := &cobra.Command{Use: "tokens", Short: "List or revoke unused runner registration tokens (admin)"}
 	var asJSON bool
