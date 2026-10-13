@@ -202,7 +202,7 @@ the same test checks every row of those tables.
 
 | Action | When | Data fields | Where | Status | Consumers |
 |---|---|---|---|---|---|
-| `session.attach` | A human attaches to a run's tmux session (console or CLI). Two rows per attach, because the log is append-only: one at registration, with `state` `attaching`, once the holder is in the registry and before its exec exists (so a `session.takeover` row never precedes the attach it displaced), and one when the attach settles, with `state` `ready` on success or result `failure` and `error` when the exec could not be opened or the connection ended first (`promotion` marks the failure of a promoted observer's writer exec). `read_only` is the mode the client was admitted in (registration row) or holds when ready | `cols`, `error`, `lane`, `promotion`, `read_only`, `reason`, `rows`, `sandbox_ref`, `state`, `transport` | [`internal/api/attach.go`](../internal/api/attach.go) | internal | — |
+| `session.attach` | A human attaches to a run's tmux session (console or CLI). Two rows per attach, because the log is append-only: one at registration, with `state` `attaching`, once the holder is in the registry and before its exec exists (so a `session.takeover` row never precedes the attach it displaced), and one when the attach settles, with `state` `ready` on success or result `failure` and `error` when the exec could not be opened or the connection ended first (`promotion` marks the failure of a promoted observer's writer exec). `read_only` is the mode the client was admitted in (registration row) or holds when ready. When a service identity's sponsor enters one of its runs, both rows add `service_identity` and `entry` `sponsor` ([Service identities](#service-identities)) | `cols`, `entry`, `error`, `lane`, `promotion`, `read_only`, `reason`, `rows`, `sandbox_ref`, `service_identity`, `state`, `transport` | [`internal/api/attach.go`](../internal/api/attach.go) | internal | — |
 | `session.detach` | A session detaches | `read_only`, `reason`, `transport` | [`internal/api/attach.go`](../internal/api/attach.go) | internal | — |
 | `session.takeover` | The run's owner takes over a held session (the write-lane single-holder rule); a super admin who is not the owner is refused (`authz.denied`, reason `run_owner_only`) unless the run has no personal owner. Also written when a person's new tab is admitted read-only behind their own earlier tab and that writer stops answering pings (two missed 2s pings, or one with no PTY output for 5s): `reason` is `stale_writer`, the actor is the new tab's principal, and the new tab is promoted. A writer that is still attaching is never probed | `held_since`, `previous_holder`, `previous_source`, `reason` (only on `stale_writer`) | [`internal/api/attach_holder.go#Server.recordTakeover`](../internal/api/attach_holder.go) | internal | — |
 | `session.promote` | A read-only observer became the WRITER on the socket it already had: the writer released the PTY and the oldest queued observer inherited it, or a take-over promoted the taking principal's own observer. Write authority over a live sandbox changed hands without anyone asking for it, which is why it is recorded even though it grants no new capability — every observer passed the same owner-or-admin gate when it connected. The actor is the PROMOTED principal; a take-over's own `session.takeover` row names the taker | `previous_holder`, `principal`, `source` | [`internal/api/attach_holder.go#Server.announceAttachPromotion`](../internal/api/attach_holder.go) | internal | — |
@@ -216,10 +216,10 @@ the same test checks every row of those tables.
 | `ssh.forward` | An `ssh -L` port-forward session | `bytes`, `error`, `port` | [`internal/api/sshgateway_channels.go`](../internal/api/sshgateway_channels.go); documented [`docs/SSH.md#bounds`](SSH.md#bounds) | **stable** (documented) | — |
 | `ssh_key.add` | A human registers an SSH public key (`POST /me/ssh-keys`). `capped` is a marker, present (`true`) only on a key registered while the session was in the user view (member mode), which never gains the admin override (migration `0070_ssh_key_view_capped`, [`docs/SSH.md#bounds`](SSH.md#bounds)) | `capped`, `name` | [`internal/api/sshkeys.go#Server.handleAddSSHKey`](../internal/api/sshkeys.go) | internal | — |
 | `ssh_key.delete` | A human removes one registered SSH public key, or an admin/security admin removes a resolved principal's keys through `DELETE /people/{principal}/ssh-keys` or session revocation. A bulk operation targets the resolved principal, or `*` for all; outcome `failure` records lookup, resolution or deletion failure | bulk: `scope` (`sub` or `all`), `count`; `error` or `reason` on failure | [`internal/api/sshkeys.go#Server.handleDeleteSSHKey`](../internal/api/sshkeys.go), [`internal/api/sshkeys_admin.go#Server.deleteSSHKeysFor`](../internal/api/sshkeys_admin.go) | internal | — |
-| `ui.authorize` | A UI-sandbox relay session is authorized or denied, or a ticket bind is refused. A refused redemption or re-check carries `reason` `revoked`, `revocation_unavailable`, `delegation_ended` or `delegation_unavailable` (and `via` when the session came through a portal), `not_authorized` when the run is no longer the session's owner's | `app`, `host`, `port`, `reason`, `sec_fetch_site`, `origin` | [`internal/api/uigateway.go#Server.uiEnterCommon`](../internal/api/uigateway.go), [`internal/api/uigateway_session.go#Server.uiDenyReassert`](../internal/api/uigateway_session.go), [`internal/api/uigateway_bind.go#Server.handleUIBind`](../internal/api/uigateway_bind.go) | internal | — |
-| `ui.open` | A UI-sandbox relay session is opened | `app`, `port` | [`internal/api/uigateway.go#Server.uiDial`](../internal/api/uigateway.go) | internal | — |
-| `ui.close` | A UI-sandbox relay session closes | `app`, `duration_sec`, `port` | [`internal/api/uigateway.go#Server.uiDial`](../internal/api/uigateway.go) | internal | — |
-| `ui.start` | The relay starts (or fails to start) the sandbox-side app process | `app`, `launcher`, `port`, `reason` | [`internal/api/uigateway.go#Server.uiEnsureApp`](../internal/api/uigateway.go) | internal | — |
+| `ui.authorize` | A UI-sandbox relay session is authorized or denied, or a ticket bind is refused. A refused redemption or re-check carries `reason` `revoked`, `revocation_unavailable`, `delegation_ended` or `delegation_unavailable` (and `via` when the session came through a portal), `not_authorized` when the run is no longer the session's owner's. A sponsor's session names `service_identity` and `entry` `sponsor` ([Service identities](#service-identities)) | `app`, `host`, `port`, `reason`, `sec_fetch_site`, `origin` | [`internal/api/uigateway.go#Server.uiEnterCommon`](../internal/api/uigateway.go), [`internal/api/uigateway_session.go#Server.uiDenyReassert`](../internal/api/uigateway_session.go), [`internal/api/uigateway_bind.go#Server.handleUIBind`](../internal/api/uigateway_bind.go) | internal | — |
+| `ui.open` | A UI-sandbox relay session is opened; a sponsor's session adds `service_identity` and `entry` `sponsor` ([Service identities](#service-identities)) | `app`, `port` | [`internal/api/uigateway.go#Server.uiDial`](../internal/api/uigateway.go) | internal | — |
+| `ui.close` | A UI-sandbox relay session closes; a sponsor's session adds `service_identity` and `entry` `sponsor` | `app`, `duration_sec`, `port` | [`internal/api/uigateway.go#Server.uiDial`](../internal/api/uigateway.go) | internal | — |
+| `ui.start` | The relay starts (or fails to start) the sandbox-side app process; a sponsor's session adds `service_identity` and `entry` `sponsor` | `app`, `launcher`, `port`, `reason` | [`internal/api/uigateway.go#Server.uiEnsureApp`](../internal/api/uigateway.go) | internal | — |
 
 ## Secrets, credentials & identity
 
@@ -690,6 +690,24 @@ The organisation side of hybrid enrolment ([PLAN.md](design/0.8/PLAN.md), "Hybri
 | `device.local.revoke` | LAPTOP side: the organisation answered 401 with the device realm, or 410 — this device's credential is revoked. The forwarder stops, the revocation is recorded in the local `org_federation` row (so a restart, the organisation reachable or not, comes back still revoked; only a re-enrolment clears it), `/healthz`'s `org_federation.enrolled` turns false, and every run-creating path answers 503 naming re-enrolment. Runs already going continue, and a run created between the revocation and the forwarder's next call (at most one tick, 15 s, or one backoff interval, up to 5 min, while the organisation was unreachable) is legitimately local. Actor `system` / `wardyn/federation`, `target` the device id | `status` (401 or 410), `acked_seq` (the local cursor the organisation had acknowledged) | [`internal/federation/forwarder.go#Forwarder.revoke`](../internal/federation/forwarder.go) | internal | — |
 | `audit.delivery.reset` | FAILURE ONLY: acknowledged webhook delivery found the audit row at its checkpoint gone or changed — retention dropped it, or the table was reset. Delivery resends from the oldest retained row and counts the reset, so the collector learns of the gap from the stream itself. Retention is never blocked. Actor `system` / `wardynd`, `target` the destination (`webhook`) | `destination`, `acked_seq` (the checkpoint position that was lost) | [`internal/audit/sinks/acked.go#AckedWebhook.reset`](../internal/audit/sinks/acked.go) | internal | — |
 
+## Service identities
+
+A [service identity](operations/api-tokens.md#service-identities) is its own actor, and every row names its sponsor.
+
+- A row a service's own request writes has `actor_type` `service`, `actor` `service:<name>` and `data.sponsor`, the person accountable for it.
+  - `service` joins `human`, `agent` and `system`; `GET /audit?actor_type=service` filters on it.
+  - It is stamped in the same two places as `data.via` (`recordAudit`, and the head of the shared recorder chain), so every writer on the request carries it.
+  - `data.via` is never set: a service is not a portal acting for a person.
+- A service's token reaches no admin route, so the rows about an identity are the admin's: `service_identity.create`, `.update`, `.retire` and the sponsor's `service_identity.token.create`.
+- A refused route is an `authz.denied` row with reason `service_scope`.
+- A refused token is an `auth.fail` row with reason `service_identity_inactive` or `service_sponsor_inactive`.
+- **Sponsor entry.**
+  - The sponsor enters a service's run only with the `service_attach` grant ([Capabilities](operations/capabilities.md#service_attach)).
+  - Their `session.attach` rows and every UI-gateway row of the session (`ui.authorize` on success, `ui.start`, `ui.open`, `ui.close` and a re-check's `ui.authorize` denial) keep the sponsor as the `human` actor and add `service_identity` and `entry` `sponsor`.
+  - A `ui.authorize` denial of a refused redemption is written before the session exists, so it names the refused principal and the reason only.
+  - A refused ticket mint is the foreign-run `404` with an `authz.denied` row: reason `capability_feature` without the grant, or `attach_ticket_foreign_run` when the caller is no longer the sponsor.
+  - SSH never admits a sponsor: the failure row carries only `reason` `run_owner_only`.
+
 ## Delegation (portals)
 
 - A registered portal acts for the person signed in to it (#1142, [api-tokens.md](operations/api-tokens.md#delegated-run-management-portals)).
@@ -830,6 +848,16 @@ These are emitted by background sweepers, not request handlers — `ActorType` i
 - A row whose subject could not be had waits in the spool with the actor sealed under the pending key and `subject:pending` in the column, and the drain stores the subject.
 - The `audit.retention.partition_dropped` row and its anchor, which the database writes, carry the dropping operator's subject too; a drop is refused (`503` `audit_retention_drop_failed`) while the subject cannot be had.
 - `subject:` is a reserved principal prefix whatever the mode is: a session cookie, a `wdn_` token or a `/people/{principal}` path carrying it is refused with `reserved_principal`.
+
+**The sponsor and the invitation target, under `WARDYN_AUDIT_SEAL=full`.**
+
+- The service name is not personal data, so a service row's `actor` stays `service:<name>`.
+- `full` also stores `data.sponsor` as `subject:<uuid>`, by the same rule as the actor: on every row that carries it, and as `sponsor`, `sponsor_from` and `sponsor_to` on `service_identity.*` rows.
+- It stores `data.target` of `invitation.*` rows the same way.
+- A sponsor always has an identity row, so it always seals. An invitation target with no identity row keeps their name.
+- A row whose subject could not be had waits in the spool under the pending key, as an actor does.
+- After the sponsor's erasure their subject no longer opens, so the service's trail names nobody.
+- Under `fields` or `off` the sponsor stays clear.
 
 **The target, under `WARDYN_AUDIT_SEAL=full`.**
 
