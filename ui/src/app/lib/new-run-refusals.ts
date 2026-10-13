@@ -46,7 +46,6 @@ export type WorkspaceDoorReason = (typeof WORKSPACE_DOOR_REASONS)[number];
 
 /** The closed set of placement and runner-link refusal reasons (internal/placement/reasons.go). */
 export const PLACEMENT_REASONS = [
-  "placement_required",
   "placement_unavailable",
   "placement_denied",
   "placement_credential",

@@ -21,6 +21,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/runnerpool"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
+	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
 
 const everyonePeople = `{"people_pools":"everyone"}`
@@ -314,5 +315,91 @@ func TestPG_SelfHostedRunsAreAlwaysTheirOwners(t *testing.T) {
 	}
 	if n := e.selfHostedRunsAreTheirOwners(); n != 5 {
 		t.Errorf("%d runs on a self-hosted runner, want the 4 created and the 1 promoted", n)
+	}
+}
+
+// RP-2 r1 F1: a promoted run whose promotion took its owner's runner's last place starts on that runner.
+// The start finds the run itself holding the place; it is the run's own, so the runner still has room for
+// it and the run is not moved onto the pool's remote-hosted runner.
+func TestPG_PromotedRunKeepsItsOwnRunnersLastPlace(t *testing.T) {
+	e := newQueueEnv(t)
+	pool, laptop := e.mixedPool("Mixed")
+	e.maxRuns(laptop, e.personP, 1)
+	limits := types.RunnerPoolLimits{
+		Background: &types.RunnerPoolBackgroundLimits{CPUMillis: types.RunnerPoolAmount{Default: 500, Cap: 4000}, MemoryMiB: types.RunnerPoolAmount{Default: 512, Cap: 8192},
+			Lifetime: types.RunnerPoolDuration{DefaultSec: 3600, MaxSec: 7200}},
+		Barriers: []types.ConfinementClass{types.CC1, types.CC2, types.CC3}, MaxConcurrentRuns: intp(1),
+	}
+	if _, err := e.pg.UpdateRunnerPool(context.Background(), pool.ID, e.revision(pool.ID), nil, nil, &limits); err != nil {
+		t.Fatal(err)
+	}
+	occupant := e.occupy(pool)
+	queued := e.queuedLaunch(e.person, e.reread(pool), "")
+	e.free(occupant)
+	started := e.waitStarted(queued.ID)
+	if started.RunnerID == nil || *started.RunnerID != laptop || started.Placement != types.PlacementLocal || started.RunnerPoolExecutor != "" {
+		t.Errorf("the promoted run started on runner %v placement %q executor %q, want its owner's laptop %s (max_runs 1)",
+			started.RunnerID, started.Placement, started.RunnerPoolExecutor, laptop)
+	}
+}
+
+// RP-2 r1 F2: the pool list and the dry doors judge each kind of runner in a user pool as placement does,
+// so a pool reads available exactly when a launch into it is placed, and placement_denied exactly when the
+// launch is denied.
+func TestPG_PoolAvailabilityMatchesPlacementPerKind(t *testing.T) {
+	local, remote := types.PlacementLocal, types.PlacementRemote
+	for _, tc := range []struct {
+		name                  string
+		deny                  []types.Placement
+		own, ownOnline, alpha bool
+		available             bool
+		reason                runnerpool.Reason
+		launch                int
+	}{
+		{"remote-hosted only, admitted", nil, false, false, true, true, "", http.StatusCreated},
+		{"mixed, local denied", []types.Placement{local}, true, true, true, true, "", http.StatusCreated},
+		{"mixed, own runner offline", nil, true, false, true, true, "", http.StatusCreated},
+		{"own runner only, local denied", []types.Placement{local}, true, true, false, false, runnerpool.AvailabilityPlacementDenied, http.StatusForbidden},
+		{"remote-hosted only, remote denied", []types.Placement{remote}, false, false, true, false, runnerpool.AvailabilityPlacementDenied, http.StatusForbidden},
+		{"mixed, both denied", []types.Placement{local, remote}, true, true, true, false, runnerpool.AvailabilityPlacementDenied, http.StatusForbidden},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newPlacementEnv(t)
+			pool := e.createOwnPool(e.person, "Pool")
+			if tc.own {
+				laptop := e.laptop(e.personP, 4000, 8192, types.CC1, types.CC2, types.CC3)
+				e.maxRuns(laptop, e.personP, types.RunnerMaxRunsCeiling)
+				e.addToPool(e.person, pool.ID, laptop)
+				e.online[laptop] = tc.ownOnline
+			}
+			if tc.alpha {
+				e.setPeople("alpha", everyonePeople)
+				if w := e.call(e.person, http.MethodPut, myRemotePath(pool.ID, "alpha"), ""); w.Code != http.StatusCreated {
+					t.Fatalf("add alpha = %d %s", w.Code, w.Body)
+				}
+			}
+			if tc.deny != nil {
+				e.assignProfile("walled", types.GovernanceLimits{DenyPlacements: tc.deny})
+			}
+			wantAvailability := client.RunnerPoolUnavailable
+			if tc.available {
+				wantAvailability = client.RunnerPoolAvailable
+			}
+			if got := e.listed(e.person)[pool.ID]; got.Availability != wantAvailability || got.Reason != tc.reason {
+				t.Errorf("list = %s %s, want %s %s", got.Availability, got.Reason, wantAvailability, tc.reason)
+			}
+			body := runBody(`"runner_pool_id":"` + pool.ID.String() + `"`)
+			if w := e.call(e.person, http.MethodPost, "/api/v1/runs/preflight", body); tc.launch == http.StatusCreated {
+				choices := decodeJSON[struct {
+					RunnerPools []client.RunnerPoolChoice `json:"runner_pools"`
+				}](t, w).RunnerPools
+				if len(choices) != 1 || choices[0].Availability != wantAvailability || choices[0].Reason != tc.reason {
+					t.Errorf("preflight = %d, choices %+v, want %s %s", w.Code, choices, wantAvailability, tc.reason)
+				}
+			}
+			if w := e.call(e.person, http.MethodPost, "/api/v1/runs", body); w.Code != tc.launch {
+				t.Errorf("launch = %d %s, want %d", w.Code, w.Body, tc.launch)
+			}
+		})
 	}
 }
