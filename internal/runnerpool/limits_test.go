@@ -437,9 +437,11 @@ func TestGovernanceSource(t *testing.T) {
 }
 
 func TestRunnerCapacitySource(t *testing.T) {
-	s, err := RunnerCapacitySource(RunnerCapacity{8000, 16384, 2048}, RunnerCapacity{4000, 32768, 1024}, RunnerCapacity{6000, 8192, 4096})
-	if err != nil || s.Source != types.LimitSourceRunner || *s.CPUMillis.Max != 8000 || *s.MemoryMiB.Max != 32768 || *s.DiskMiB.Max != 4096 {
-		t.Fatalf("the largest candidate's per-run limit bounds each field, disk included: %+v, %v", s, err)
+	// One real runner's limit, never a size built field by field from several: the largest by CPU, then
+	// memory, then disk.
+	s, err := RunnerCapacitySource(RunnerCapacity{8000, 16384, 2048}, RunnerCapacity{4000, 32768, 1024}, RunnerCapacity{6000, 8192, 4096}, RunnerCapacity{8000, 16384, 1024})
+	if err != nil || s.Source != types.LimitSourceRunner || *s.CPUMillis.Max != 8000 || *s.MemoryMiB.Max != 16384 || *s.DiskMiB.Max != 2048 {
+		t.Fatalf("the source is one candidate's whole per-run limit, the largest by CPU, memory, then disk: %+v, %v", s, err)
 	}
 	if s.LifetimeSec != (Bound{}) || s.IdleSec != (Bound{}) {
 		t.Fatal("a runner's limits say nothing about time")
