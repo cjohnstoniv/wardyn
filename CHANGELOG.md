@@ -129,9 +129,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
   proposes half of it, and the server refuses a registration that declares no limits (`runner_limits_required`).
   Runs already going keep running and are counted.
 - The server's Docker host or Kubernetes cluster gets its limits measured at the first boot. When an amount cannot
-  be measured (often disk, when `wardynd` runs in a container) none is set, and runs there are refused
-  `runner_limits_unset` until an admin sets them all with `wardyn runner set <id> …`. Read them with `wardyn runner
-  remote show <id> --json`.
+  be measured (often disk: on Docker Desktop, or when `wardynd` runs in a container) none is set, and runs there are
+  refused `runner_limits_unset` until an admin sets them all with `wardyn runner set <id> …`. Read them with
+  `wardyn runner remote show <id> --json`.
 - A launch can now wait. One whose pool is running its Runs at once, or whose runners are all at their limits, is
   stored `QUEUED` (`201`, wait reason `runner_pool_at_capacity` or `runner_pool_runners_at_capacity`) in every
   pool. A create that loses a runner's last room to another launch as it is stored is refused
@@ -428,10 +428,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
   Interactive run now ends after 24 hours when no pool, profile or deployment names a lifetime. `GET /runs?no_end=1`
   lists live runs with no end.
 - A run's CPU and memory are bounded by the strictest of its pool, the person's governance profile, the deployment
-  and the per-run limits its pool's runners declare. A larger ask is reduced to that limit, never refused; a runner
-  smaller than the ask no longer refuses the run. `POST /runs/preflight` and the policy preview
-  return `limits` and `resources_applied` (requested, applied, capped, and the limit that bound it with its name); the
-  create response and the `run.create` audit row carry `resources_applied`.
+  and the per-run limit one of its pool's runners declares: a runner that takes the whole ask, else the largest. A
+  larger ask is reduced to a size that runner takes whole, never refused; a runner smaller than the ask no longer
+  refuses the run. `POST /runs/preflight` and the policy preview return `limits` and `resources_applied` (requested,
+  applied, capped, and the limit that bound it with its name); the create response and the `run.create` audit row
+  carry `resources_applied`.
 - A run can carry a built-in GitHub component, `components[]{builtin: "github", org, repos, access}`, without a
   workspace. It reaches only the listed repositories, through Wardyn's git broker. Each repository must pass workspace
   admission and the `workspace_provider` capability, and access must be within the caller's ceiling for a
@@ -574,7 +575,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
   whose runners are all at theirs waits with `runner_pool_runners_at_capacity`, then starts on whichever has room,
   and a revive onto a full runner is refused `runner_at_capacity`. Runner, remote-runner, pool-member and pool reads
   carry the limits and `usage` (in use, available, reported, `disk_capped`), and a pool row adds up its runners as
-  `capacity`. Runs the server launches itself (sign-ins, probes, scans) count on their remote-hosted runner.
+  `capacity`. Runs the server launches itself (sign-ins, probes, scans) count on the remote-hosted runner when the
+  deployment has exactly one, and are not held to its limits.
   Runners report their machine name, runner views list their pools, and `GET /runner-pools/{id}/members` lists a
   pool's runners. `wardyn runner pool create|update` take `--run-type`, `--barrier`, `--max-runs`,
   `--<run type>-cpu|-memory|-disk|-lifetime DEFAULT:MAX`, `--interactive-idle` and `--limits-file`. Migrations

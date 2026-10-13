@@ -1,2 +1,2 @@
 # Prose-word budgets (scripts/doc-form.sh): path=N share=S. N is the measured prose words of the page, so growth fails.
-docs/operations/runner-pools.md=1436 share=35
+docs/operations/runner-pools.md=1449 share=35
