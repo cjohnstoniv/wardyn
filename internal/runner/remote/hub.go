@@ -384,6 +384,9 @@ func configureAdmission(ctx context.Context, cfg *runnerwire.PeerConfig, resumed
 				return err
 			}
 			inventory, state = next, next.Complete
+			if state && a.Link != nil {
+				a.Link.stateAccepted(peer())
+			}
 		case runnerwire.TypeReady:
 			if !state || ready || len(f.Payload) != 0 {
 				return fmt.Errorf("%w: unexpected READY", runnerwire.ErrBadFrame)

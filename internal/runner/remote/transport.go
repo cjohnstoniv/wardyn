@@ -37,6 +37,9 @@ type Link struct {
 	peer  *runnerwire.Peer
 	h     Handler
 	ready bool
+	// stated: the attached session's final STATE page was accepted. After it the org checks the queue no
+	// more before READY (requireFresh).
+	stated bool
 }
 
 var _ Transport = (*Link)(nil)
