@@ -36,6 +36,7 @@ func TestServiceIdentity_PortalTokenGetsNoSponsorReach(t *testing.T) {
 		`{"name":"`+svcName+`","sponsor":"`+svcSponsor+`","description":"ci runner"}`); w.Code != http.StatusCreated {
 		t.Fatalf("create service identity: %d %s", w.Code, w.Body.String())
 	}
+	ageSponsorships(t, e.pool)
 	body := fmt.Sprintf(`{"subject_type":"user","subject":"sponsor@corp.example","capability":"feature","value":%q,"effect":"allow"}`, featureServiceAttach)
 	if w := doSSO(t, e.h.srv, http.MethodPost, "/api/v1/permissions/grants", e.admin, body); w.Code/100 != 2 {
 		t.Fatalf("grant: %d %s", w.Code, w.Body.String())

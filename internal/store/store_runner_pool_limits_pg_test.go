@@ -19,15 +19,15 @@ func poolLimitsFixture(t *testing.T, maxRuns int) *types.RunnerPoolLimits {
 	t.Helper()
 	l := &types.RunnerPoolLimits{
 		Background: &types.RunnerPoolBackgroundLimits{
-			CPUMillis: types.RunnerPoolAmount{Default: 500, Cap: 2000},
-			MemoryMiB: types.RunnerPoolAmount{Default: 512, Cap: 4096},
-			Lifetime:  types.RunnerPoolDuration{DefaultSec: 3600, Unlimited: true},
+			CPUMillis: &types.RunnerPoolAmount{Default: 500, Cap: 2000},
+			MemoryMiB: &types.RunnerPoolAmount{Default: 512, Cap: 4096},
+			Lifetime:  &types.RunnerPoolDuration{DefaultSec: 3600, Unlimited: true},
 		},
 		Interactive: &types.RunnerPoolInteractiveLimits{
-			CPUMillis: types.RunnerPoolAmount{Default: 1000, Cap: 4000},
-			MemoryMiB: types.RunnerPoolAmount{Default: 1024, Cap: 8192},
-			Lifetime:  types.RunnerPoolDuration{DefaultSec: 1800, MaxSec: 28800},
-			Idle:      types.RunnerPoolDuration{DefaultSec: 600, MaxSec: 3600},
+			CPUMillis: &types.RunnerPoolAmount{Default: 1000, Cap: 4000},
+			MemoryMiB: &types.RunnerPoolAmount{Default: 1024, Cap: 8192},
+			Lifetime:  &types.RunnerPoolDuration{DefaultSec: 1800, MaxSec: 28800},
+			Idle:      &types.RunnerPoolDuration{DefaultSec: 600, MaxSec: 3600},
 		},
 		Barriers:          []types.ConfinementClass{types.CC1, types.CC2},
 		MaxConcurrentRuns: &maxRuns,

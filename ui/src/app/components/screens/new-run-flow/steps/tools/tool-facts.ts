@@ -10,7 +10,7 @@
 
 import reasons from "../../../../../lib/access-reasons.golden.json";
 import { effectiveToolEffect, type ToolEffect } from "../../../../../lib/tool-effect";
-import type { EffectOption, ToolPolicyFact } from "../../../../../lib/types/new-run-access";
+import type { AccessFacts, EffectOption, ToolPolicyFact } from "../../../../../lib/types/new-run-access";
 
 const SENTENCES = new Map(reasons.map((r) => [r.key, r.text]));
 const RANK: Record<ToolEffect, number> = { allow: 0, hold: 1, deny: 2 };
@@ -74,4 +74,11 @@ export function ruleChoices(fact: ToolPolicyFact, harnessName: string, tool: str
     const code = builtinOnly ? "harness_no_block_builtin" : !o.available ? o.reason : RANK[effect] < RANK[policy] ? "policy_stricter_tool" : undefined;
     return { effect, available: !code, reason: reasonText(code, { harness: harnessName, tool, policy }) };
   });
+}
+
+/** A harness the run does not have names nothing: its row and its tool policy never reach the step. */
+export function withoutNamelessHarness(access: AccessFacts): AccessFacts {
+  const nameless = (row: AccessFacts["rows"][number]) => row.from === "harness" && !row.name;
+  if (!access.rows.some(nameless) && access.harnesses.every((f) => f.harness)) return access;
+  return { ...access, rows: access.rows.filter((r) => !nameless(r)), harnesses: access.harnesses.filter((f) => f.harness) };
 }

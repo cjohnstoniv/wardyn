@@ -179,7 +179,8 @@ func (s *Server) projectStatusDetailFor(r *http.Request, runs []types.AgentRun) 
 //     in.
 //   - STARTING: the reason as stored, plus the derived token. A leftover Building
 //     line is blanked: on a warm Docker start nothing ever overwrites it, and a
-//     finished build must not narrate the sandbox start.
+//     finished build must not narrate the sandbox start. So is the queue's wait
+//     reason of a run that has left the queue.
 //   - FAILED on a TERMINAL reason: kept — a run can fail between two browser
 //     polls, and a reader who never saw STARTING would lose the reason that names
 //     the fix. It comes from the detail or, when that never landed, from the
@@ -205,7 +206,7 @@ func projectStatusDetail(runs []types.AgentRun) {
 			r.StatusReason = queue
 		case r.State == types.RunPending && reason == statusReasonBuilding:
 			r.StatusReason = reason
-		case r.State == types.RunStarting && reason == statusReasonBuilding:
+		case r.State == types.RunStarting && (reason == statusReasonBuilding || queue != ""):
 			r.StatusDetail = ""
 		case r.State == types.RunStarting:
 			r.StatusReason = reason

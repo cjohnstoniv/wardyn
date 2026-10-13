@@ -44,7 +44,9 @@ func (e *placementEnv) setPeople(rid, body string) {
 // maxRuns sets a runner's Runs at once as its owner would.
 func (e *placementEnv) maxRuns(id uuid.UUID, owner string, n int) {
 	e.t.Helper()
-	if _, _, err := e.pg.UpdateRunnerMaxRuns(context.Background(), id, owner, n); err != nil {
+	l := roomyRunnerLimits()
+	l.RunsAtOnce = n
+	if _, _, err := e.pg.UpdateRunnerLimits(context.Background(), id, owner, *l); err != nil {
 		e.t.Fatal(err)
 	}
 }
@@ -233,14 +235,15 @@ func TestPlacement_DenyPlacementsFilterPerKind(t *testing.T) {
 			if tc.deny != types.PlacementRemote {
 				return
 			}
-			// Their own runner full: the run is not moved onto the remote-hosted runner the profile denies.
+			// Their own runner full: the run is not moved onto the remote-hosted runner the profile denies; it
+			// waits for its own runner in the pool's queue.
 			if _, err := e.pool.Exec(context.Background(), `UPDATE agent_runs SET state = 'COMPLETED'`); err != nil {
 				t.Fatal(err)
 			}
 			e.maxRuns(laptop, e.personP, 1)
 			e.occupyRunner(pool, laptop, e.personP)
-			if _, code, refused := e.launchStored(body); code != http.StatusUnprocessableEntity || !strings.Contains(refused, string(placement.ReasonRunnerAtCapacity)) {
-				t.Errorf("own runner full, remote denied = %d %s, want runner_at_capacity", code, refused)
+			if run, code, refused := e.launchStored(body); code != http.StatusCreated || run.State != types.RunQueued || run.RunnerPoolExecutor != "" {
+				t.Errorf("own runner full, remote denied = %d %s %+v, want it waiting, never on the remote-hosted runner", code, refused, run)
 			}
 		})
 	}
@@ -298,8 +301,8 @@ func TestPG_SelfHostedRunsAreAlwaysTheirOwners(t *testing.T) {
 	}
 	// The pool runs one run at once: a launch waits, and the promotion places it when the occupant ends.
 	limits := types.RunnerPoolLimits{
-		Background: &types.RunnerPoolBackgroundLimits{CPUMillis: types.RunnerPoolAmount{Default: 500, Cap: 4000}, MemoryMiB: types.RunnerPoolAmount{Default: 512, Cap: 8192},
-			Lifetime: types.RunnerPoolDuration{DefaultSec: 3600, MaxSec: 7200}},
+		Background: &types.RunnerPoolBackgroundLimits{CPUMillis: &types.RunnerPoolAmount{Default: 500, Cap: 4000}, MemoryMiB: &types.RunnerPoolAmount{Default: 512, Cap: 8192},
+			Lifetime: &types.RunnerPoolDuration{DefaultSec: 3600, MaxSec: 7200}},
 		Barriers: []types.ConfinementClass{types.CC1, types.CC2, types.CC3}, MaxConcurrentRuns: intp(1),
 	}
 	e.exec(`UPDATE agent_runs SET state = 'COMPLETED'`)
@@ -326,8 +329,8 @@ func TestPG_PromotedRunKeepsItsOwnRunnersLastPlace(t *testing.T) {
 	pool, laptop := e.mixedPool("Mixed")
 	e.maxRuns(laptop, e.personP, 1)
 	limits := types.RunnerPoolLimits{
-		Background: &types.RunnerPoolBackgroundLimits{CPUMillis: types.RunnerPoolAmount{Default: 500, Cap: 4000}, MemoryMiB: types.RunnerPoolAmount{Default: 512, Cap: 8192},
-			Lifetime: types.RunnerPoolDuration{DefaultSec: 3600, MaxSec: 7200}},
+		Background: &types.RunnerPoolBackgroundLimits{CPUMillis: &types.RunnerPoolAmount{Default: 500, Cap: 4000}, MemoryMiB: &types.RunnerPoolAmount{Default: 512, Cap: 8192},
+			Lifetime: &types.RunnerPoolDuration{DefaultSec: 3600, MaxSec: 7200}},
 		Barriers: []types.ConfinementClass{types.CC1, types.CC2, types.CC3}, MaxConcurrentRuns: intp(1),
 	}
 	if _, err := e.pg.UpdateRunnerPool(context.Background(), pool.ID, e.revision(pool.ID), nil, nil, &limits); err != nil {

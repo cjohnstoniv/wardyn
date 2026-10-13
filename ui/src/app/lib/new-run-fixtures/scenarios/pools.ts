@@ -45,7 +45,7 @@ export const SHARED: RunnerPoolCatalogueEntry = {
 };
 export const TEAM_LAPTOPS: RunnerPoolCatalogueEntry = {
   id: "c2222222-2222-4222-8222-222222222222", name: "Team laptops", scope: "user", availability: "available",
-  limits: [effectiveLimits("background", { cpu_millis: limit(2000, "runner_capacity") }), effectiveLimits("interactive")],
+  limits: [effectiveLimits("background", { cpu_millis: limit(2000, "runner") }), effectiveLimits("interactive")],
   run_types: ["interactive", "background"], run_types_source: "none",
   barrier_options: barrierOptions({ CC3: { available: false, reason_code: "not_offered", reason_detail: "kvm_missing" } }),
   my_runners: [{ id: "d1111111-1111-4111-8111-111111111111", name: "Laptop", online: true }],
