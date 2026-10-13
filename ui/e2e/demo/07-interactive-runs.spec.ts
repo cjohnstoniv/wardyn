@@ -40,8 +40,8 @@
  *
  * STAGING THE FLOW GETS RIGHT ON CAMERA (each one was a take-killer for the
  * retired spec's operators):
- *   - Agent task, Interactive, with Claude Code added on Harnesses and "Start
- *     the run in this harness" left OFF. Switched on, the run attaches INSIDE
+ *   - Agent task, Interactive, with Claude Code already added on Harnesses and
+ *     "Start the run in this harness" switched OFF (it opens ON). Left on, the run attaches INSIDE
  *     Claude Code's TUI and beats 2-4 would type shell commands into a prompt
  *     box. Off is the supported shape: a shell in the sandbox with the harness
  *     available, which is what lets a human inspect the box and launch the
@@ -87,7 +87,8 @@ import {
 } from "./overlay";
 import { decide } from "./funnel";
 import {
-  addHarnessButton,
+  addRepository,
+  chooseShape,
   harnessPicker,
   launchRunButton,
   modeCard,
@@ -96,12 +97,9 @@ import {
   newRunHeading,
   openNameDialog,
   providerPicker,
-  repoCheckbox,
   runTitleField,
-  shapeCard,
   startGuided,
   startInHarness,
-  startsHere,
   confirmLaunchButton,
   viewRunButton,
 } from "./new-run";
@@ -250,10 +248,9 @@ test("V07 beat 1 — an agent, and a hand on the wheel", async () => {
   await startGuided(page);
 
   // Agent task this time — and Interactive, which is the video.
-  await act(page, shapeCard(page, "agent_task"), "Agent task.");
+  await chooseShape(page, "agent_task", "Agent task.");
   await caption(page, "This is a Claude Code task — Claude Code is the coding agent we'll be driving.");
   await beat(page, BEAT_SHORT);
-  await nextStep(page, NEW_RUN_HEADING.runAgent);
   await act(page, modeCard(page, "interactive"), "Interactive.");
   await caption(page, "Interactive means the sandbox starts up and gives us a terminal.");
   await beat(page, PACE.read);
@@ -261,11 +258,13 @@ test("V07 beat 1 — an agent, and a hand on the wheel", async () => {
   await beat(page, BEAT_SHORT);
   await nextStep(page, NEW_RUN_HEADING.harnesses);
 
-  // Claude Code is added, and "Start the run in this harness" stays OFF: a
-  // shell, not the agent's own TUI (see the header). No owner line covers this
-  // choice, so it plays silent rather than inventing dialog.
-  await act(page, addHarnessButton(page));
+  // Claude Code is already added, and "Start the run in this harness" opens ON,
+  // so it is switched OFF: a shell, not the agent's own TUI (see the header).
+  // No owner line covers this choice, so it plays silent rather than inventing dialog.
+  await expect(harnessPicker(page)).toBeVisible();
   await harnessPicker(page).selectOption("claude-code");
+  await expect(startInHarness(page), "a new Interactive agent task opens with the harness starting the run").toBeChecked();
+  await act(page, startInHarness(page));
   await expect(startInHarness(page), "the harness would start with the run and attach inside its TUI").not.toBeChecked();
   await spotlight(page, startInHarness(page));
   await beat(page, BEAT_SHORT);
@@ -276,8 +275,7 @@ test("V07 beat 1 — an agent, and a hand on the wheel", async () => {
   // OPEN: the shared slugify workspace is a local directory, and Files lists
   // only repositories (a local directory is never offered). Lead: where does a
   // local-directory workspace attach in the guided flow?
-  await act(page, repoCheckbox(page, WORKSPACE_NAME), "Attach the workspace.");
-  await act(page, startsHere(page, WORKSPACE_NAME));
+  await addRepository(page, WORKSPACE_NAME, "Attach the workspace.");
   await caption(page, "Same workspace as before.");
   await beat(page, BEAT_SHORT);
   await caption(page, "And notice something important:");

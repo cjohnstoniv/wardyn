@@ -87,18 +87,18 @@ import { NR_REVIEW } from "../../src/app/components/wardyn/copy/new-run/review";
 import { NR_START } from "../../src/app/components/wardyn/copy/new-run/start";
 import {
   NEW_RUN_HEADING,
+  addRepository,
+  chooseShape,
   commandField,
   confirmLaunchButton,
   launchRunButton,
   newRunHeading,
   nextStep,
   openNameDialog,
-  repoCheckbox,
   runDescriptionField,
   runTitleField,
   shapeCard,
   startGuided,
-  startsHere,
   viewRunButton,
 } from "./new-run";
 
@@ -332,8 +332,7 @@ test("V06 beat 1 — name it, aim it", async () => {
   await spotlight(page, shapeCard(page, "application"));
   await caption(page, "And a shell command simply runs from beginning to end.");
   await beat(page, PACE.read);
-  await act(page, shapeCard(page, "application"), "Application sandbox.");
-  await nextStep(page, NEW_RUN_HEADING.runApplication);
+  await chooseShape(page, "application", "Application sandbox.");
 
   const cmd = commandField(page);
   await cmd.fill(COMMAND);
@@ -358,10 +357,9 @@ test("V06 beat 2 — the envelope, by reference", async () => {
   await nextStep(page, NEW_RUN_HEADING.files);
   // OPEN: Files lists a workspace's REPOSITORY sources only and never a
   // local-directory workspace, and slugify (video 04) is a local directory. The
-  // checkbox and "Starts here" radio below are where the approved flow puts an
-  // attached workspace, and the NOTES-INVENTORY.txt receipt in beat 4 depends on
+  // Add dialog below is where the approved flow puts an attached workspace, and the NOTES-INVENTORY.txt receipt in beat 4 depends on
   // it. How does this episode attach slugify?
-  await act(page, repoCheckbox(page, WORKSPACE_NAME), "Attach the workspace we just created.");
+  await addRepository(page, WORKSPACE_NAME, "Attach the workspace we just created.");
   // DIALOG-STALE: "This is the blast radius we established in the last episode."
   // — the workspace is episode 04's; the LAST episode (05) established the
   // POLICY, not the blast radius. Off-by-one under the restructure. Pulled, not
@@ -371,7 +369,6 @@ test("V06 beat 2 — the envelope, by reference", async () => {
   await beat(page, BEAT_SHORT);
   await caption(page, "Nothing else.");
   await beat(page, BEAT_SHORT);
-  await act(page, startsHere(page, WORKSPACE_NAME), "Choose the workspace.");
   // The main drive's size is required once it is shown and empty; a plain
   // default, filmed silently.
   const driveSize = page.locator("#nr-main-drive-size");

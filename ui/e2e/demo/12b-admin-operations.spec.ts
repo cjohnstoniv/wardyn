@@ -41,6 +41,7 @@ import { NR_REVIEW } from "../../src/app/components/wardyn/copy/new-run/review";
 import { NR_SHARED } from "../../src/app/components/wardyn/copy/new-run/shared";
 import { act, beat, caption, chapter, PACE, spotlight } from "./overlay";
 import {
+  chooseShape,
   confirmLaunchButton,
   NEW_RUN_HEADING,
   newRunHeading,
@@ -48,7 +49,6 @@ import {
   noExtraFiles,
   openNameDialog,
   runTitleField,
-  shapeCard,
   startGuided,
   viewRunButton,
 } from "./new-run";
@@ -151,8 +151,7 @@ test("V12b act 2 — a member's run asks for the outside world", async () => {
   await caption(page, "A member launches a run of their own: a terminal, nothing mounted, and a policy that holds unlisted hosts for review.");
   await beat(page, PACE.read);
   await startGuided(page);
-  await act(page, shapeCard(page, "environment"), "No agent needed — a shell is enough to meet the boundary.");
-  await nextStep(page, NEW_RUN_HEADING.runEnvironment);
+  await chooseShape(page, "environment", "No agent needed — a shell is enough to meet the boundary.");
   await caption(page, "And lowered to Fence — the one barrier this cluster has.");
   await beat(page, PACE.read);
   await act(page, page.getByRole("radio", { name: new RegExp(`^${NR_SHARED.BARRIER_FENCE}`) }), undefined);

@@ -147,11 +147,13 @@ async function walkNewRunTo(page: Page, stop: "harnesses" | "tools"): Promise<vo
   await expect(heading(page, NR_START.TITLE)).toBeVisible({ timeout: 60_000 });
   await page.getByRole("button", { name: NR_START.GUIDED_FOOT }).click();
   await expect(heading(page, NR_SHAPE.TITLE)).toBeVisible();
-  await page.getByRole("radio", { name: startsWith(NR_SHAPE.AGENT_TITLE) }).click();
-  await next(NR_RUN.TITLE_AGENT);
+  // A workload button writes the shape and opens Run.
+  await page.getByRole("button", { name: NR_SHAPE.AGENT_TITLE, exact: true }).click();
+  await expect(heading(page, NR_RUN.TITLE_AGENT)).toBeVisible({ timeout: 60_000 });
   await page.getByRole("radio", { name: startsWith(NR_RUN.MODE_AUTONOMOUS) }).click();
   await next(NR_HARNESSES.TITLE);
-  await page.getByRole("button", { name: NR_HARNESSES.ADD_HARNESS, exact: true }).click();
+  // A new agent task opens with its first harness added.
+  await expect(page.locator("#nr-harness-0")).toBeVisible({ timeout: 60_000 });
   if (stop === "harnesses") return;
   await page.locator("#nr-harness-0").selectOption("claude-code");
   await page.locator("#nr-task").fill("Reply with the single word: ready.");

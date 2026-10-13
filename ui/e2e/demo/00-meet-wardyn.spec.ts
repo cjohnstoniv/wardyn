@@ -79,16 +79,15 @@ import {
 import { apiHeaders, BEAT_SHORT, pollScreen, silentCard } from "./demos";
 import { APPROVAL_APPEARS, decide } from "./funnel";
 import {
+  addRepository,
+  chooseShape,
   confirmLaunchButton,
   launchRunButton,
   NEW_RUN_HEADING,
   nextStep,
   openNameDialog,
-  repoCheckbox,
   runTitleField,
-  shapeCard,
   startGuided,
-  startsHere,
 } from "./new-run";
 import { bootRun, REPLAY_OVER, RUN_BOOTS, RUN_OVER, waitUnlessGone } from "./runs";
 import { sweepStaleState } from "./sweep";
@@ -494,25 +493,21 @@ test("V00 act 2 — a run, and a knock at the door", async () => {
 
   // The Environment sandbox is the plain command window, not the agent: this
   // episode is keyless, and a shell is all a curl needs. Shape's cards are
-  // radios whose accessible name starts with the card's title, which is how
-  // shapeCard finds it. An environment starts no harness, so the run comes up
+  // buttons named by the card's title, which is how shapeCard finds it. An environment starts no harness, so the run comes up
   // idle with a shell, which is what act 2 and act 3 type into.
-  await act(page, shapeCard(page, "environment"), "A plain command window. No AI agent, and no key to any AI service."); // C20
+  await chooseShape(page, "environment", "A plain command window. No AI agent, and no key to any AI service."); // C20
   await caption(page, "The rules don't care who's typing — a person or an agent gets the same answer."); // C21
   await beat(page, PACE.read);
 
   // Run and Harnesses are walked on their shipped defaults: nothing to choose
   // for a keyless shell, and that is the beat.
-  await nextStep(page, NEW_RUN_HEADING.runEnvironment);
   await nextStep(page, NEW_RUN_HEADING.harnesses);
   await nextStep(page, NEW_RUN_HEADING.files);
 
   // OPEN: the workspace `meet-wardyn` is a local directory, and Files lists only
   // repository sources, never local-directory workspaces. This addresses it as
-  // the repository row the approved flow would give it: "Include <name>" and
-  // "Starts here".
-  await act(page, repoCheckbox(page, WORKSPACE), "Our workspace."); // C22
-  await act(page, startsHere(page, WORKSPACE));
+  // the repository the approved flow would give it, added through the Add dialog.
+  await addRepository(page, WORKSPACE, "Our workspace."); // C22
   await sizeMainDrive(page);
   await nextStep(page, NEW_RUN_HEADING.tools);
 

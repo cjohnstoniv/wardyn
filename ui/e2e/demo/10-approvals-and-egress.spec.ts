@@ -94,17 +94,16 @@ import {
 import { stage } from "./stage";
 import { APPROVAL_APPEARS, decide } from "./funnel";
 import {
+  addRepository,
+  chooseShape,
   confirmLaunchButton,
   launchRunButton,
   nextStep,
   NEW_RUN_HEADING,
   newRunHeading,
   openNameDialog,
-  repoCheckbox,
   runTitleField,
-  shapeCard,
   startGuided,
-  startsHere,
 } from "./new-run";
 import { bootRun } from "./runs";
 import { sweepStaleState } from "./sweep";
@@ -252,8 +251,7 @@ async function waitUnlessGone(
  */
 async function walkEnvironmentToReview(page: Page, atTools?: () => Promise<void>): Promise<void> {
   await startGuided(page);
-  await act(page, shapeCard(page, "environment"));
-  await nextStep(page, NEW_RUN_HEADING.runEnvironment);
+  await chooseShape(page, "environment");
   await nextStep(page, NEW_RUN_HEADING.harnesses);
   await nextStep(page, NEW_RUN_HEADING.files);
 
@@ -261,8 +259,7 @@ async function walkEnvironmentToReview(page: Page, atTools?: () => Promise<void>
   // repositories (a local directory is never offered). The whole video rests on
   // a run that resolves to THIS workspace, so Always has somewhere to land.
   // Lead: where does a local-directory workspace attach in the guided flow?
-  await act(page, repoCheckbox(page, WORKSPACE));
-  await act(page, startsHere(page, WORKSPACE));
+  await addRepository(page, WORKSPACE);
   // The main drive's size is prefilled only when the pool offers a default.
   const mainDriveSize = page.locator("#nr-main-drive-size");
   if ((await mainDriveSize.count()) > 0 && (await mainDriveSize.inputValue()) === "") await mainDriveSize.fill("10");
