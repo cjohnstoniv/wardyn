@@ -8,10 +8,11 @@
 // may not USE carries only its id, name, scope and owner), and the organization default.
 //
 // The per-pool reads are bounded, because the list grows with people: the first load and a Retry read every
-// pool, four at a time; the silent re-read (every 30 s while the tab is visible, and after a write) asks only
-// for the list, the default, any pool it has not read yet and the pool whose details are open. So a poll is
-// two or three requests however many pools there are, and another administrator's change to a pool that is
-// not open shows when the tab is next opened. A failed silent read keeps what the tab already shows. A 501
+// pool, four at a time; the silent re-read (every 30 s while the tab is visible, after a write, and when a
+// pool's details open) asks only for the list, the default, any pool it has not read yet and the pool whose
+// details are open. So a poll is two or three requests however many pools there are, the details open on
+// the pool as it is now, and another administrator's change to a pool that is not open shows when its
+// details or the tab are next opened. A failed silent read keeps what the tab already shows. A 501
 // is its own state: the server says it has no pool storage and the tab shows that sentence, never an empty
 // list.
 // ponytail: the list itself should carry state, revision and limits for oversight rows; then no per-pool read.
@@ -116,6 +117,14 @@ export function usePoolsData(openPoolId: string | null): PoolsData & { reload: (
       abandon();
     };
   }, [read, abandon]);
+
+  // Opening a pool's details reads that pool then, not at the next tick: its state and revision are what the
+  // sheet shows and what Switch off sends back. The first load has just read every pool.
+  const mounted = React.useRef(false);
+  React.useEffect(() => {
+    if (mounted.current && openPoolId) read(true);
+    mounted.current = true;
+  }, [openPoolId, read]);
 
   const reload = React.useCallback(() => read(true), [read]);
   const retry = React.useCallback(() => read(false), [read]);
