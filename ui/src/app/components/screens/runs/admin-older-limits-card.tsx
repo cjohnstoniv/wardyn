@@ -16,6 +16,7 @@
 // anything outside the window.
 import * as React from "react";
 import { toast } from "sonner";
+import { WFETCH_TIMEOUT_MS } from "../../../lib/api/core";
 import { runs as runsApi } from "../../../lib/api/runs";
 import type { AdminRestartResult } from "../../../lib/types";
 import { getErrorMessage } from "../../../lib/format";
@@ -26,10 +27,16 @@ import * as RL from "../../wardyn/copy/run-lifetime";
 
 // The server restarts a request's runs one after another (reviveBulkMax, run_revive.go, only caps
 // how many one request may name), so a request's time grows with its ids and the console's default
-// 60s deadline would abort a large one with the rest unrefused. Small batches, each with a deadline
-// sized to its own runs, keep every request inside its deadline.
+// 60s deadline would abort a large one. Ids go in small batches, each with its own deadline: the
+// server's bound on one runner revive (reviveRunnerTimeout, run_placement_lease.go) plus a settle
+// margin, times the batch size, and never below the default. That deadline is a budget and not a
+// guarantee: a request that exceeds it is still aborted, its runs' results are lost (the server
+// settles a restart it already claimed), and the listing is refreshed to show where they stand.
 const RESTART_BATCH_SIZE = 5;
-const RESTART_PER_RUN_TIMEOUT_MS = 30_000;
+const REVIVE_RUNNER_TIMEOUT_MS = 180_000; // reviveRunnerTimeout = 3 * time.Minute
+const RESTART_SETTLE_MARGIN_MS = 30_000;
+const restartBatchDeadlineMs = (runs: number) =>
+  Math.max(WFETCH_TIMEOUT_MS, runs * (REVIVE_RUNNER_TIMEOUT_MS + RESTART_SETTLE_MARGIN_MS));
 
 export function AdminOlderLimitsCard() {
   const operator = useOperator();
@@ -69,7 +76,7 @@ export function AdminOlderLimitsCard() {
     try {
       for (let i = 0; i < outsideIds.length; i += RESTART_BATCH_SIZE) {
         const batch = outsideIds.slice(i, i + RESTART_BATCH_SIZE);
-        const res = await runsApi.restartAdminRuns(batch, batch.length * RESTART_PER_RUN_TIMEOUT_MS);
+        const res = await runsApi.restartAdminRuns(batch, restartBatchDeadlineMs(batch.length));
         collected.push(...res.results);
       }
     } catch (err) {
