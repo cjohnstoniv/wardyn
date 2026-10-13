@@ -192,8 +192,10 @@ func (s *Server) toolRulesWithinPolicyRefusal(req createRunRequest, spec types.R
 // nothing would ask.
 func inheritedMCPHoldRefusal(req createRunRequest, spec types.RunPolicySpec, comps runComponents) *runRefusal {
 	var harnesses []string
+	sentence := accessSentences["harness_no_hold"]
 	switch {
 	case req.TaskMode == "exec":
+		sentence = accessSentences["command_no_hold"]
 		for _, t := range req.Tools {
 			harnesses = append(harnesses, t.ID)
 		}
@@ -202,7 +204,7 @@ func inheritedMCPHoldRefusal(req createRunRequest, spec types.RunPolicySpec, com
 	}
 	for _, h := range harnesses {
 		if slices.ContainsFunc(mcpServersFor(comps, h), func(key string) bool { return policyHoldsMCPServer(spec.ToolRules, key) }) {
-			return runError(http.StatusUnprocessableEntity, reasonRequestFieldUnavailable, accessSentences["harness_no_hold"])
+			return runError(http.StatusUnprocessableEntity, reasonRequestFieldUnavailable, sentence)
 		}
 	}
 	return nil
