@@ -10,7 +10,9 @@ import { absoluteTime, shortDate } from "../../../lib/format";
 import type { TemplateSummary } from "../../../lib/types/templates";
 import { Button } from "../../ui/button";
 import { cn } from "../../ui/utils";
+import { NR_RUN } from "../../wardyn/copy/new-run/run";
 import { NR_TEMPLATES as T } from "../../wardyn/copy/new-run/templates";
+import { InfoTip } from "../../wardyn/info-tip";
 import { Chip } from "../../wardyn/primitives";
 import { NEW_RUN_PATH } from "../new-run-flow/draft/new-run-url";
 import { includedGroups, needsSetupLabel, ownerLine, scopeLabel, whyReadOnly } from "./template-display";
@@ -45,12 +47,12 @@ export function TemplateRow({
   const needs = needsSetupLabel(t);
   const owner = ownerLine(t);
   const why = t.writable ? null : whyReadOnly(t);
-  // aria-disabled, not disabled: the control stays focusable and describes itself by the reason, which shows as
-  // a hover title as in the prototype (proto wardyn-templates.html:251-253).
+  // aria-disabled, not disabled: the control stays focusable and describes itself by the reason. Sighted readers
+  // open the same reason from the info tip beside the actions, on tap, click or keyboard (tooltips open on tap).
   const locked = !t.writable;
   const guard = (act: () => void) => (locked ? undefined : act);
   const lockedProps = locked
-    ? { "aria-disabled": true as const, "aria-describedby": why ? `${nameId} ${whyId}` : nameId, title: why ?? undefined }
+    ? { "aria-disabled": true as const, "aria-describedby": why ? `${nameId} ${whyId}` : nameId }
     : { "aria-describedby": nameId };
   const lockedClass = cn(locked && "aria-disabled:cursor-not-allowed aria-disabled:opacity-50 aria-disabled:hover:bg-transparent");
 
@@ -104,6 +106,7 @@ export function TemplateRow({
           <Button type="button" variant="ghost" size="sm" className={lockedClass} {...lockedProps} onClick={guard(onDelete)}>
             {T.DELETE}
           </Button>
+          {why && <InfoTip label={NR_RUN.ABOUT_ARIA(t.name)}>{why}</InfoTip>}
           {canPublish && (
             <Button type="button" variant="outline" size="sm" disabled={busy} aria-describedby={nameId} onClick={onPublish}>
               {T.PUBLISH}

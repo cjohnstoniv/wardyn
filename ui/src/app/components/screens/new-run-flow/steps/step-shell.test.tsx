@@ -90,4 +90,30 @@ describe("StepShell", () => {
     expect(e.defaultPrevented).toBe(false);
     expect(onBack).not.toHaveBeenCalled();
   });
+
+  it("keeps the same Launch node, and its focus, while Check again comes and goes", () => {
+    const shell = (checkAgain: boolean) => (
+      <StepShell
+        title="Review"
+        primary={{ label: "Launch run", onActivate: vi.fn(), arrow: false }}
+        footerExtras={{ start: <button type="button">Save</button>, end: checkAgain && <button type="button">Check again</button> }}
+      />
+    );
+    const { rerender } = render(shell(true));
+    const launch = screen.getByRole("button", { name: "Launch run" });
+    launch.focus();
+    rerender(shell(false));
+    expect(screen.queryByRole("button", { name: "Check again" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Launch run" })).toBe(launch);
+    expect(launch).toHaveFocus();
+    rerender(shell(true));
+    expect(screen.getByRole("button", { name: "Launch run" })).toBe(launch);
+    expect(launch).toHaveFocus();
+  });
+
+  it("gives a heading with an aside Make's 32 px and aligns the aside as asked", () => {
+    render(<StepShell title="Run document" headingAside={<span>Open</span>} headingAsideAlign="end" primary={{ label: "Go", onActivate: vi.fn() }} />);
+    expect(screen.getByRole("heading", { level: 1 })).toHaveClass("text-[32px]");
+    expect(screen.getByText("Open").parentElement?.parentElement).toHaveClass("items-end");
+  });
 });

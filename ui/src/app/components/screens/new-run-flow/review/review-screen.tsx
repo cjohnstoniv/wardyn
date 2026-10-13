@@ -134,7 +134,7 @@ export function ReviewScreen({ location, go, onLaunch, ownDriveIds }: ReviewScre
       primary={{ label: NR_REVIEW.LAUNCH_RUN, onActivate: () => onLaunch?.(), disabled: !open, describedBy: BLOCKERS_ID, arrow: false }}
       headingAside={
         <div role="group" aria-label={NR_REVIEW.VIEW_ARIA}>
-          <Segmented<"pretty" | "yaml" | "json"> value={view} options={[...VIEWS]} onChange={(v) => go({ screen: "review", view: v }, { replace: true })} />
+          <Segmented<"pretty" | "yaml" | "json"> size="compact" value={view} options={[...VIEWS]} onChange={(v) => go({ screen: "review", view: v }, { replace: true })} />
         </div>
       }
       footerExtras={{
