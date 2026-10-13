@@ -7,11 +7,11 @@ import {
   test,
   expect,
   ADMIN_TOKEN,
-  addHarness,
   chooseRunMode,
   chooseShape,
   continueNewRun,
   expandCard,
+  firstHarness,
   gotoConsole,
   launchRun,
   navToRoute,
@@ -20,7 +20,6 @@ import {
   walkGuidedToReview,
 } from "./fixtures";
 import { NR_HARNESSES } from "../src/app/components/wardyn/copy/new-run/harnesses";
-import { NR_RUN } from "../src/app/components/wardyn/copy/new-run/run";
 import {
   AGENTS,
   PROVIDERS,
@@ -58,19 +57,15 @@ async function gotoAgentsTab(page: Page): Promise<void> {
   await page.getByRole("button", { name: AGENTS.AGENTS_TITLE }).click();
 }
 
-// An Autonomous agent task's Harnesses step with one harness added: its picker is the roster as the
+// An Autonomous agent task's Harnesses step with the harness it opens with: its picker is the roster as the
 // server sends it. The options that cannot join say why in the list under the picker.
 async function openHarnessPicker(page: Page) {
   await openNewRun(page);
   await startGuided(page);
   await chooseShape(page, "agent_task");
-  await continueNewRun(page, NR_RUN.TITLE_AGENT);
   await chooseRunMode(page, "autonomous");
   await continueNewRun(page, NR_HARNESSES.TITLE);
-  await addHarness(page);
-  const picker = page.locator("#nr-harness-0");
-  await expect(picker).toBeVisible();
-  return picker;
+  return firstHarness(page);
 }
 
 async function getAgentProviders(page: Page): Promise<{ providers: { agents?: unknown[] }; etag: string | null }> {

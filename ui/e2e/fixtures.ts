@@ -23,6 +23,7 @@ import { NR_SHAPE } from "../src/app/components/wardyn/copy/new-run/shape";
 import { NR_SHARED } from "../src/app/components/wardyn/copy/new-run/shared";
 import { NR_START } from "../src/app/components/wardyn/copy/new-run/start";
 import { NR_TOOLS } from "../src/app/components/wardyn/copy/new-run/tools";
+import { SCENARIO_POOLS } from "../src/app/lib/new-run-fixtures/scenarios/pools";
 
 // Shared Playwright fixtures for the Wardyn UI e2e suite. Specs run against the
 // seeded test backend booted by scripts/e2e-backend.sh (real wardynd + Postgres +
@@ -117,6 +118,15 @@ export const test = base.extend({
         );
       });
     });
+
+    // The hermetic backend runs no runner, so its pool list is empty and New Run's Run step would hold
+    // Continue for a pool nobody can choose. New Run's own pool question (the list asked with run_type)
+    // is answered with one organisation default pool; the run then names no pool, as an untouched one
+    // does, and the server takes it. Registered first, so a spec's own route for the list wins.
+    await page.route(
+      (url) => url.pathname.endsWith("/api/v1/runner-pools") && url.searchParams.has("run_type"),
+      (route) => route.fulfill({ json: SCENARIO_POOLS.member }),
+    );
 
     await use(page);
 
@@ -252,8 +262,10 @@ export async function startGuided(page: Page): Promise<void> {
   await expect(newRunHeading(page, NR_SHAPE.TITLE)).toBeVisible();
 }
 
+/** Shape: a workload button writes the shape and opens the Run step. */
 export async function chooseShape(page: Page, shape: NewRunShape): Promise<void> {
-  await page.getByRole("radio", { name: startsWith(SHAPE_TITLE[shape]) }).click();
+  await page.getByRole("button", { name: SHAPE_TITLE[shape], exact: true }).click();
+  await expect(newRunHeading(page, RUN_TITLE[shape])).toBeVisible();
 }
 
 /** The footer's primary action, then the next screen's heading as the arrived signal. */
@@ -267,22 +279,48 @@ export async function chooseRunMode(page: Page, mode: NewRunMode): Promise<void>
   await page.getByRole("radio", { name: startsWith(label) }).click();
 }
 
-/** Harnesses step: one harness (the first the roster offers), and an Autonomous run's task. */
-export async function addHarness(page: Page, task?: string): Promise<void> {
-  await page.getByRole("button", { name: NR_HARNESSES.ADD_HARNESS, exact: true }).click();
+/**
+ * Harnesses step of a new agent task: the step itself adds the first harness the roster offers. Waits for
+ * it, and fills an Autonomous run's task.
+ */
+export async function firstHarness(page: Page, task?: string): Promise<Locator> {
+  const picker = page.locator("#nr-harness-0");
+  await expect(picker).toBeVisible();
   if (task !== undefined) await page.locator("#nr-task").fill(task);
+  return picker;
+}
+
+/** Files step's Add dialog, opened on the repositories this person can choose. */
+export async function openRepositoryPicker(page: Page): Promise<Locator> {
+  await page.getByRole("button", { name: NR_FILES.ADD_ARIA }).click();
+  const dialog = page.getByRole("dialog");
+  await dialog.getByRole("button", { name: startsWith(NR_FILES.REPOSITORY_BADGE) }).click();
+  await expect(dialog.getByRole("heading", { name: NR_FILES.ADD_REPO_TITLE })).toBeVisible();
+  return dialog;
+}
+
+/** One repository in the Add dialog's list. */
+export const repositoryOption = (dialog: Locator, repo: string): Locator =>
+  dialog.getByRole("radio", { name: new RegExp(`^${escapeRe(repo)}(\\s|$)`) });
+
+/** Adds one repository at the mount path the dialog offers. The first thing added is where the run starts. */
+export async function addRepository(page: Page, repo: string): Promise<void> {
+  const dialog = await openRepositoryPicker(page);
+  await repositoryOption(dialog, repo).check();
+  await dialog.getByRole("button", { name: NR_SHARED.CONTINUE, exact: true }).click();
+  await dialog.getByRole("button", { name: NR_FILES.ADD_CONFIRM, exact: true }).click();
+  await expect(dialog).toBeHidden();
 }
 
 /**
- * Files step: "No extra files" when `repos` is empty, otherwise each repository ticked and the first one
- * marked "Starts here". An untouched main drive size is filled, since a run with no size is not complete.
+ * Files step: "No extra files" when `repos` is empty, otherwise each repository added through the dialog;
+ * the run starts in the first. An untouched main drive size is filled, since a run with no size is not complete.
  */
 export async function chooseFiles(page: Page, repos: readonly string[] = []): Promise<void> {
   if (repos.length === 0) {
     await page.getByRole("radio", { name: startsWith(NR_FILES.NO_EXTRA) }).check();
   } else {
-    for (const repo of repos) await page.getByRole("checkbox", { name: NR_FILES.INCLUDE_ARIA(repo) }).check();
-    await page.getByRole("radio", { name: new RegExp(`${escapeRe(repos[0])}.*${escapeRe(NR_FILES.STARTS_HERE)}`) }).check();
+    for (const repo of repos) await addRepository(page, repo);
   }
   const size = page.locator("#nr-main-drive-size");
   if ((await size.count()) > 0 && (await size.inputValue()) === "") await size.fill("10");
@@ -310,11 +348,10 @@ export async function walkGuidedToFiles(page: Page, plan: GuidedPlan = {}): Prom
   const mode = plan.mode ?? "interactive";
   await startGuided(page);
   await chooseShape(page, shape);
-  await continueNewRun(page, RUN_TITLE[shape]);
   if (shape === "agent_task") await chooseRunMode(page, mode);
   if (shape === "application") await page.getByLabel(NR_RUN.COMMAND_LABEL).fill(plan.command ?? "echo e2e");
   await continueNewRun(page, NR_HARNESSES.TITLE);
-  if (shape === "agent_task") await addHarness(page, mode === "autonomous" ? (plan.task ?? "e2e task") : undefined);
+  if (shape === "agent_task") await firstHarness(page, mode === "autonomous" ? (plan.task ?? "e2e task") : undefined);
   await continueNewRun(page, NR_FILES.TITLE);
 }
 

@@ -36,6 +36,8 @@ import {
   TOKEN_KEY,
   chooseFiles,
   chooseShape,
+  openRepositoryPicker,
+  repositoryOption,
   continueNewRun,
   gotoConsole,
   navTo,
@@ -47,7 +49,6 @@ import { DENIED } from "../src/app/lib/permissions-copy";
 import { NR_FILES } from "../src/app/components/wardyn/copy/new-run/files";
 import { NR_HARNESSES } from "../src/app/components/wardyn/copy/new-run/harnesses";
 import { NR_REVIEW } from "../src/app/components/wardyn/copy/new-run/review";
-import { NR_RUN } from "../src/app/components/wardyn/copy/new-run/run";
 import { NR_TOOLS } from "../src/app/components/wardyn/copy/new-run/tools";
 import type { Page } from "@playwright/test";
 
@@ -75,14 +76,13 @@ async function openFilesAs(page: Page, token: string): Promise<void> {
   await navToRoute(page, "/runs/new");
   await startGuided(page);
   await chooseShape(page, "environment");
-  await continueNewRun(page, NR_RUN.TITLE_ENV);
   await continueNewRun(page, NR_HARNESSES.TITLE);
   // Registered before Continue: the Files step reads the workspace list when it mounts, and "not offered"
   // only means something once that answer is in.
   const listed = page.waitForResponse((r) => new URL(r.url()).pathname === "/api/v1/workspaces" && r.request().method() === "GET");
   await continueNewRun(page, NR_FILES.TITLE);
   await listed;
-  await expect(page.getByRole("heading", { name: NR_FILES.REPOS_TITLE })).toBeVisible();
+  await expect(page.getByRole("heading", { name: NR_FILES.ATTACH_TITLE })).toBeVisible();
 }
 
 // The listed type can include the repository and reach Review with Launch ready; the sentence never renders.
@@ -288,7 +288,7 @@ test.describe("Available to — New Run's Launch button (#922)", () => {
 
   test("a caller with no allow for the workspace: its repository is not offered, so it cannot be attached", async ({ page }) => {
     await openFilesAs(page, seedUserTokenRaw("standard"));
-    await expect(page.getByRole("checkbox", { name: NR_FILES.INCLUDE_ARIA("e2e-922-nr-workspace") })).toHaveCount(0);
+    await expect(repositoryOption(await openRepositoryPicker(page), "e2e-922-nr-workspace")).toHaveCount(0);
   });
 
   test("the listed type: the repository is offered, Launch stays enabled, the sentence never renders", async ({ page }) => {
@@ -352,7 +352,7 @@ test.describe("Available to — a workspace's own per-value restriction (#1267)"
 
   test("a member outside the restriction: the repository is not offered, so it cannot be attached", async ({ page }) => {
     await openFilesAs(page, seedUserTokenRaw("standard"));
-    await expect(page.getByRole("checkbox", { name: NR_FILES.INCLUDE_ARIA("e2e-1267-workspace") })).toHaveCount(0);
+    await expect(repositoryOption(await openRepositoryPicker(page), "e2e-1267-workspace")).toHaveCount(0);
   });
 
   test("the listed type: the repository is offered, Launch stays enabled, the sentence never renders", async ({ page }) => {

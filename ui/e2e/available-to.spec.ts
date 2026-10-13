@@ -14,10 +14,10 @@ import {
   expect,
   ADMIN_TOKEN,
   TOKEN_KEY,
-  addHarness,
   chooseShape,
   continueNewRun,
   expandCard,
+  firstHarness,
   gotoConsole,
   navTo,
   navToRoute,
@@ -25,7 +25,6 @@ import {
   startGuided,
 } from "./fixtures";
 import { NR_HARNESSES } from "../src/app/components/wardyn/copy/new-run/harnesses";
-import { NR_RUN } from "../src/app/components/wardyn/copy/new-run/run";
 import { PROVIDERS } from "../src/app/lib/workspace-providers-copy";
 import { AVAILABILITY, IMAGES } from "../src/app/lib/availability-copy";
 import { MODEL_PROVIDERS, PROVIDER_EDITOR } from "../src/app/lib/model-providers-copy";
@@ -353,11 +352,8 @@ test.describe("Available to — the person's New Run picker (G7)", () => {
     await navToRoute(page, "/runs/new");
     await startGuided(page);
     await chooseShape(page, "agent_task");
-    await continueNewRun(page, NR_RUN.TITLE_AGENT);
     await continueNewRun(page, NR_HARNESSES.TITLE);
-    await addHarness(page);
-    const picker = page.locator("#nr-harness-0");
-    await expect(picker).toBeVisible();
+    const picker = await firstHarness(page);
     await expect.poll(() => finished > 0 && inflight.size === 0).toBe(true);
     return picker.locator("option").allInnerTexts();
   }

@@ -4,10 +4,10 @@
  */
 
 // New Run, step 4 Files (public half): the main drive's size and the cap that
-// clamps it, the branch picker and its text fallback, Starts here, the mount
-// map and the live summary, "No extra files", and the person's own drive from
-// /me.user_drive. The plural drive rows and member create belong to the
-// private drives spec; nothing here reads the drives list route.
+// clamps it, the Add dialog with its branch picker and text fallback, the
+// starting folder, the mount map and the live summary, "No extra files", and
+// the person's own drive from the /me/drives catalogue. Member create belongs
+// to the private drives spec.
 //
 // The seeded backend runs no runner and holds no pool or repository, so the
 // workspace list, the branch list and the preflight (whose answer carries the
@@ -35,11 +35,14 @@ const WORKSPACE = {
   available_to_you: true,
   sources: REPOS.map((r) => ({ type: "repo", source: r.repo, ref: "main", clone_target: r.target })),
 };
-const DRIVE = { name: "Scratch", backend: "docker_volume", size_mib: 5120, writable: true, enforcement: "filesystem" };
+const DRIVE = {
+  id: "f3333333-3333-4333-8333-333333333333", name: "Scratch", section: "user", source: "personal", backend: "docker_volume",
+  target: "/home/agent/drive", writable: true, enforcement: "filesystem", legacy: true,
+};
 const CAP_MIB = 20480;
 const DEFAULT_MIB = 10240;
 
-type Body = { workspaces?: { workspace_id: string; repos?: { repo: string; ref?: string }[] }[]; drive?: { enabled: boolean; read_only?: boolean }; start_folder?: { attachment: string; repo?: string }; resources?: { disk_mib?: number }; no_repositories_or_drives?: boolean };
+type Body = { workspaces?: { workspace_id: string; repos?: { repo: string; ref?: string }[] }[]; drive?: object; drives?: { drive_id: string; read_only?: boolean }[]; start_folder?: { attachment?: string; repo?: string; drive_id?: string }; resources?: { disk_mib?: number }; no_repositories_or_drives?: boolean };
 
 const unlimited = { default: { value: 0, unlimited: true }, cap: { value: 0, unlimited: true } };
 const limitsFor = (run_type: string, capSource: string) => ({
@@ -66,8 +69,8 @@ function preflightFor(body: Body, capSource: string) {
       });
     }
   }
-  if (body.drive?.enabled) {
-    attachments.push({ kind: "drive", name: DRIVE.name, target: "/home/agent/drive", read_only: body.drive.read_only === true, starts_here: body.start_folder?.attachment === "drive" });
+  for (const d of body.drives ?? []) {
+    attachments.push({ kind: "drive", drive_id: d.drive_id, name: DRIVE.name, target: DRIVE.target, read_only: d.read_only === true, starts_here: body.start_folder?.drive_id === d.drive_id });
   }
   return {
     setup_items: [],
@@ -83,7 +86,8 @@ interface Opts {
   capSource?: string;
   /** A branch listing; absent makes the list unavailable, so the text field shows. */
   branches?: string[];
-  userDrive?: object | null;
+  /** The person's drive catalogue; none unless given. */
+  drives?: object[];
   deniedBy?: string;
 }
 
@@ -111,32 +115,47 @@ async function stub(page: Page, opts: Opts = {}): Promise<Body[]> {
     sent.push(body);
     return route.fulfill({ json: preflightFor(body, opts.capSource ?? "pool") });
   });
-  if (opts.userDrive !== undefined || opts.deniedBy) {
-    await page.route("**/api/v1/me", async (route) => {
-      const response = await route.fetch();
-      const json = await response.json();
-      json.user_drive = opts.userDrive ?? null;
-      json.user_drive_denied_by_profile = opts.deniedBy ?? "";
-      await route.fulfill({ response, json });
-    });
-  }
+  await page.route("**/api/v1/me/drives*", (route) =>
+    route.fulfill({ json: { drives: opts.drives ?? [], pool_checked: true, ...(opts.deniedBy ? { denied_by_profile: opts.deniedBy } : {}) } }),
+  );
   return sent;
 }
 
 const press = (page: Page, name: string) => page.getByRole("button", { name, exact: true }).click();
 const next = (page: Page, step: string) => press(page, NR_SHARED.CONTINUE_TO(step));
 const sizeInput = (page: Page) => page.locator("#nr-main-drive-size");
-const include = (page: Page, name: string) => page.getByRole("checkbox", { name: NR_FILES.INCLUDE_ARIA(name) });
-const startsHere = (page: Page, name: string) => page.getByRole("radio", { name: `${name} ${NR_FILES.STARTS_HERE}` });
+const dialog = (page: Page) => page.getByRole("dialog");
+const noExtra = (page: Page) => page.getByRole("radio", { name: NR_FILES.NO_EXTRA });
+const startFolder = (page: Page) => page.locator("#nr-starts-here");
+const cards = (page: Page) => page.getByTestId("nr-attach-card");
+
+/** Opens Add, picks the type and one of its sources: the dialog is left on Choose. */
+async function pick(page: Page, type: string, name: string) {
+  await press(page, NR_FILES.ADD_ARIA);
+  await dialog(page).getByRole("button", { name: new RegExp(`^${type}`) }).click();
+  await dialog(page).getByRole("radio", { name: new RegExp(`^${name}`) }).check();
+}
+
+/** Choose's Continue, then Add on Mount path. */
+async function confirm(page: Page) {
+  await dialog(page).getByRole("button", { name: NR_SHARED.CONTINUE, exact: true }).click();
+  await dialog(page).getByRole("button", { name: NR_FILES.ADD_CONFIRM, exact: true }).click();
+  await expect(dialog(page)).toBeHidden();
+}
+
+async function addRepo(page: Page, name: string) {
+  await pick(page, NR_FILES.REPOSITORY_BADGE, name);
+  await confirm(page);
+}
 const last = (sent: Body[]) => sent.at(-1)!;
 
 /** Guided to the Files step for a workload. An Application needs its command on the Run step. */
 async function toFiles(page: Page, workload: "environment" | "application" = "environment") {
   await gotoConsole(page);
   await navToRoute(page, "/runs/new");
-  await press(page, NR_START.GUIDED_FOOT);
-  await page.getByRole("radio", { name: workload === "environment" ? NR_SHAPE.ENV_TITLE : NR_SHAPE.APP_TITLE }).click();
-  await next(page, NR_SHARED.STEP_RUN);
+  await page.getByRole("button", { name: NR_START.GUIDED_FOOT }).click();
+  // A workload button writes the shape and opens Run.
+  await press(page, workload === "environment" ? NR_SHAPE.ENV_TITLE : NR_SHAPE.APP_TITLE);
   if (workload === "application") await page.locator("#nr-command").fill("npm test");
   await next(page, NR_SHARED.STEP_HARNESSES);
   await next(page, NR_SHARED.STEP_FILES);
@@ -186,59 +205,61 @@ test.describe("New Run, Files: repositories", () => {
   test("the branch picker lists the repository's branches and sends a choice", async ({ page }) => {
     const sent = await stub(page, { branches: ["main", "release", "dev"] });
     await toFiles(page);
-    await include(page, "web").check();
-    const branch = page.getByRole("combobox", { name: NR_FILES.BRANCH_ARIA("web") });
+    await pick(page, NR_FILES.REPOSITORY_BADGE, "web");
+    const branch = dialog(page).getByRole("combobox", { name: NR_FILES.BRANCH_ARIA("web") });
     await expect(branch.locator("option")).toHaveText(["main", "release", "dev"]);
     await branch.selectOption("release");
+    await confirm(page);
     await expect.poll(() => last(sent).workspaces?.[0].repos).toEqual([{ repo: REPOS[0].repo, ref: "release" }]);
   });
 
   test("a branch list that cannot be read falls back to a text field that says it is not checked", async ({ page }) => {
     const sent = await stub(page);
     await toFiles(page);
-    await include(page, "web").check();
-    const field = page.getByRole("textbox", { name: NR_FILES.BRANCH_ARIA("web") });
+    await pick(page, NR_FILES.REPOSITORY_BADGE, "web");
+    const field = dialog(page).getByRole("textbox", { name: NR_FILES.BRANCH_ARIA("web") });
     await expect(field).toHaveAttribute("placeholder", NR_FILES.BRANCH_PLACEHOLDER);
-    await expect(page.getByText(NR_FILES.BRANCH_FALLBACK)).toBeVisible();
-    await expect(page.getByText(NR_FILES.REF_NOT_CHECKED)).toHaveCount(0);
+    await expect(dialog(page).getByText(NR_FILES.BRANCH_FALLBACK)).toBeVisible();
+    await expect(dialog(page).getByText(NR_FILES.REF_NOT_CHECKED)).toHaveCount(0);
 
     await field.fill("feature/x");
-    await expect(page.getByText(NR_FILES.REF_NOT_CHECKED)).toBeVisible();
+    await expect(dialog(page).getByText(NR_FILES.REF_NOT_CHECKED)).toBeVisible();
+    await confirm(page);
     await expect.poll(() => last(sent).workspaces?.[0].repos).toEqual([{ repo: REPOS[0].repo, ref: "feature/x" }]);
   });
 
-  test("Starts here never attaches anything: an item that is out cannot be chosen, and a held Continue points at the choice", async ({ page }) => {
+  test("the run starts in the first thing added, the starting folder moves it, and a held Continue points at Add", async ({ page }) => {
     const sent = await stub(page, { branches: ["main"] });
     await toFiles(page);
-    // Nothing is included: every Starts here is off and nothing was attached by looking at it.
-    await expect(startsHere(page, "web")).toBeDisabled();
-    await expect(startsHere(page, "docs")).toBeDisabled();
-
-    await include(page, "web").check();
-    await expect(startsHere(page, "web")).toBeEnabled();
-    await expect(startsHere(page, "web")).not.toBeChecked();
-    await expect(startsHere(page, "docs")).toBeDisabled();
+    // Nothing is added: there is nowhere to start but the main drive, and Continue stays on Add.
+    await expect(startFolder(page)).toBeDisabled();
+    await next(page, NR_SHARED.STEP_TOOLS);
+    await expect(page.getByRole("button", { name: NR_FILES.ADD_ARIA })).toBeFocused();
+    await expect(page.getByText(NR_FILES.CHOOSE_FILES).first()).toBeVisible();
+    await expect(page).toHaveURL(/step=files/);
     await expect.poll(() => sent.length).toBeGreaterThan(0);
     expect(last(sent)).not.toHaveProperty("start_folder");
+
+    await addRepo(page, "web");
+    await expect(cards(page).filter({ hasText: "web" })).toContainText(NR_FILES.STARTS_HERE);
+    await expect.poll(() => last(sent).start_folder).toEqual({ kind: "attachment", attachment: WS_ID, repo: REPOS[0].repo });
     expect(last(sent).workspaces?.[0].repos).toEqual([{ repo: REPOS[0].repo }]);
 
-    // Included but no starting folder: Continue stays and focuses the radio.
-    await next(page, NR_SHARED.STEP_TOOLS);
-    await expect(startsHere(page, "web")).toBeFocused();
-    await expect(page).toHaveURL(/step=files/);
-
-    await startsHere(page, "web").check();
-    await expect.poll(() => last(sent).start_folder).toEqual({ kind: "attachment", attachment: WS_ID, repo: REPOS[0].repo });
+    // A second one is attached and nothing more: the start stays until the person moves it.
+    await addRepo(page, "docs");
+    await expect.poll(() => last(sent).workspaces?.[0].repos).toHaveLength(2);
+    expect(last(sent).start_folder).toEqual({ kind: "attachment", attachment: WS_ID, repo: REPOS[0].repo });
+    await startFolder(page).selectOption(`${WS_ID}/${REPOS[1].repo}`);
+    await expect.poll(() => last(sent).start_folder).toEqual({ kind: "attachment", attachment: WS_ID, repo: REPOS[1].repo });
     expect(last(sent).workspaces).toHaveLength(1);
   });
 
-  test("the mount map and the summary follow what is included and where it starts", async ({ page }) => {
+  test("the mount map and the summary follow what is added and where it starts", async ({ page }) => {
     await stub(page, { branches: ["main"] });
     await toFiles(page);
     await expect(page.getByRole("status").filter({ hasText: NR_FILES.CHOOSE_FILES })).toBeVisible();
 
-    await include(page, "web").check();
-    await startsHere(page, "web").check();
+    await addRepo(page, "web");
     const map = page.getByRole("region", { name: NR_FILES.MOUNT_TITLE });
     await expect(map).toContainText(NR_FILES.MOUNT_MAIN("10"));
     await expect(map).toContainText(`└ ${REPOS[0].target}`);
@@ -248,56 +269,59 @@ test.describe("New Run, Files: repositories", () => {
     await expect(page.getByRole("status").filter({ hasText: summary })).toBeVisible();
   });
 
-  test("No extra files is a choice: only the main drive, and a repository chosen later replaces it", async ({ page }) => {
+  test("No extra files is a choice: only the main drive, and a repository added later replaces it", async ({ page }) => {
     const sent = await stub(page, { branches: ["main"] });
     await toFiles(page);
-    await page.locator("#nr-files-choice").check();
+    await noExtra(page).check();
     await expect.poll(() => last(sent).no_repositories_or_drives).toBe(true);
     const nothing = NR_FILES.SUMMARY_NO_EXTRA("10", NR_FILES.SUMMARY_DELETED);
     await expect(page.getByRole("status").filter({ hasText: nothing })).toBeVisible();
     await expect(page.getByRole("region", { name: NR_FILES.MOUNT_TITLE }).getByText(/←/)).toHaveCount(0);
 
-    await include(page, "docs").check();
-    await expect(page.locator("#nr-files-choice")).not.toBeChecked();
+    await addRepo(page, "docs");
+    // The choice gives way to the list.
+    await expect(noExtra(page)).toHaveCount(0);
     await expect.poll(() => last(sent).no_repositories_or_drives).toBeUndefined();
     await expect.poll(() => last(sent).workspaces?.[0].repos).toEqual([{ repo: REPOS[1].repo }]);
   });
 });
 
 test.describe("New Run, Files: the person's drive (public)", () => {
-  test("a drive is off by default; mounting it, read-only and starting there reach the wire and the map", async ({ page }) => {
-    const sent = await stub(page, { userDrive: DRIVE });
+  test("a drive is attached by its catalogue id; read-only and starting there reach the wire and the map", async ({ page }) => {
+    const sent = await stub(page, { drives: [DRIVE] });
     await toFiles(page, "application");
-    await expect(page.getByRole("heading", { name: NR_FILES.USER_DRIVES_TITLE })).toBeVisible();
-    const mount = page.getByRole("checkbox", { name: DRIVE_MEMBER.NR_CHECKBOX });
-    await expect(mount).not.toBeChecked();
-    await expect(page.getByRole("checkbox", { name: DRIVE_MEMBER.NR_READONLY_TOGGLE })).toHaveCount(0);
+    await expect(noExtra(page)).not.toBeChecked();
+    await expect(cards(page)).toHaveCount(0);
 
-    await mount.check();
-    await expect(page.getByTestId("nr-drive")).toContainText(DRIVE_MEMBER.NR_RW_NOTE);
-    await page.getByRole("checkbox", { name: DRIVE_MEMBER.NR_READONLY_TOGGLE }).check();
-    await expect(page.getByTestId("nr-drive")).toContainText(DRIVE_MEMBER.NR_RO_NOTE);
-    await startsHere(page, DRIVE_MEMBER.NR_CHECKBOX).check();
-    await expect.poll(() => last(sent).drive).toMatchObject({ enabled: true, read_only: true });
-    expect(last(sent).start_folder).toEqual({ kind: "attachment", attachment: "drive" });
+    await pick(page, NR_FILES.KIND_USER_DRIVE, DRIVE.name);
+    await dialog(page).getByRole("button", { name: NR_SHARED.CONTINUE, exact: true }).click();
+    // Wardyn assigns a drive's path: it is shown, not typed.
+    await expect(dialog(page).getByRole("textbox")).toHaveCount(0);
+    await dialog(page).getByLabel(NR_FILES.ACCESS_LABEL).selectOption({ label: NR_FILES.ACCESS_READ });
+    await dialog(page).getByRole("button", { name: NR_FILES.ADD_CONFIRM, exact: true }).click();
+    await expect.poll(() => last(sent).drives).toEqual([{ drive_id: DRIVE.id, read_only: true }]);
+    expect(last(sent)).not.toHaveProperty("drive");
+    expect(last(sent).start_folder).toEqual({ kind: "attachment", drive_id: DRIVE.id });
 
     const map = page.getByRole("region", { name: NR_FILES.MOUNT_TITLE });
-    await expect(map).toContainText("/home/agent/drive");
+    await expect(map).toContainText(DRIVE.target);
     await expect(map).toContainText(`${NR_FILES.MOUNT_ITEM(DRIVE.name)} ${NR_FILES.MOUNT_STARTS} ${NR_FILES.MOUNT_READ_ONLY}`);
   });
 
   test("an Environment opens with the drive attached and starting there", async ({ page }) => {
-    const sent = await stub(page, { userDrive: DRIVE });
+    const sent = await stub(page, { drives: [DRIVE] });
     await toFiles(page, "environment");
-    await expect(page.getByRole("checkbox", { name: DRIVE_MEMBER.NR_CHECKBOX })).toBeChecked();
-    await expect(startsHere(page, DRIVE_MEMBER.NR_CHECKBOX)).toBeChecked();
-    await expect.poll(() => last(sent).drive).toMatchObject({ enabled: true });
+    await expect(cards(page).filter({ hasText: DRIVE.name })).toContainText(NR_FILES.STARTS_HERE);
+    await expect.poll(() => last(sent).drives).toEqual([{ drive_id: DRIVE.id }]);
+    expect(last(sent).start_folder).toEqual({ kind: "attachment", drive_id: DRIVE.id });
   });
 
-  test("a drive the profile refuses is one sentence where the checkbox would be", async ({ page }) => {
-    await stub(page, { userDrive: DRIVE, deniedBy: "Contractors" });
+  test("a drive the profile refuses is one sentence where the drives would be", async ({ page }) => {
+    await stub(page, { deniedBy: "Contractors" });
     await toFiles(page, "application");
-    await expect(page.getByTestId("nr-drive-reason")).toHaveText(DRIVE_MEMBER.NR_DENIED("Contractors"));
-    await expect(page.getByRole("checkbox", { name: DRIVE_MEMBER.NR_CHECKBOX })).toHaveCount(0);
+    await press(page, NR_FILES.ADD_ARIA);
+    await dialog(page).getByRole("button", { name: new RegExp(`^${NR_FILES.KIND_USER_DRIVE}`) }).click();
+    await expect(dialog(page).getByTestId("nr-drive-reason")).toHaveText(DRIVE_MEMBER.NR_DENIED("Contractors"));
+    await expect(dialog(page).getByRole("radio")).toHaveCount(0);
   });
 });

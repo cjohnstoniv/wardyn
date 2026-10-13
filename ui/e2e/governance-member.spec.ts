@@ -7,7 +7,6 @@ import {
   test,
   expect,
   chooseShape,
-  continueNewRun,
   gotoConsole,
   mockMemberRole,
   navToRoute,
@@ -19,6 +18,7 @@ import { NR_RUN } from "../src/app/components/wardyn/copy/new-run/run";
 import { NR_SHARED } from "../src/app/components/wardyn/copy/new-run/shared";
 import { NR_START } from "../src/app/components/wardyn/copy/new-run/start";
 import { VIEW_REFUSAL } from "../src/app/components/wardyn/copy/console-view";
+import { SCENARIO_POOLS } from "../src/app/lib/new-run-fixtures/scenarios/pools";
 import type { Page } from "@playwright/test";
 
 // Split out of governance.spec.ts (#209): the member's own view of a
@@ -30,14 +30,15 @@ import type { Page } from "@playwright/test";
 test.describe.configure({ mode: "serial" });
 
 const NAME = "walled";
+// The pool list every hermetic page gets (fixtures.ts): the backend runs no runner and has no pool of its own.
+const POOLS = SCENARIO_POOLS.member;
 
-// New Run's Run step, as a person reaches it: Start, guided setup, an Environment, Continue.
+// New Run's Run step, as a person reaches it: Start, guided setup, an Environment.
 async function openRunStep(page: Page): Promise<void> {
   await navToRoute(page, "/runs/new");
   await expect(page.getByRole("heading", { name: NR_START.TITLE })).toBeVisible();
   await startGuided(page);
   await chooseShape(page, "environment");
-  await continueNewRun(page, NR_RUN.TITLE_ENV);
 }
 
 test.describe("governance — a member sees none of it (mocked /me role)", () => {
@@ -75,13 +76,11 @@ async function mockAssignedCeiling(page: Page, name: string): Promise<void> {
     await route.fulfill({ response, json });
   });
   // The Run step reads the same profile off the pool list's allowance, so it is spliced there too.
-  await page.route("**/api/v1/runner-pools*", async (route) => {
-    if (route.request().method() !== "GET") return route.fallback();
-    const response = await route.fetch();
-    const json = await response.json();
-    json.allowance = { active: 0, ...json.allowance, profile_name: name };
-    await route.fulfill({ response, json });
-  });
+  await page.route("**/api/v1/runner-pools*", (route) =>
+    route.request().method() !== "GET"
+      ? route.fallback()
+      : route.fulfill({ json: { ...POOLS, allowance: { active: 0, ...POOLS.allowance, profile_name: name } } }),
+  );
 }
 
 test.describe("governance — the member is told which ceiling bounds them", () => {
@@ -146,13 +145,11 @@ interface BarrierSplice {
 }
 
 async function mockBarriers(page: Page, options: BarrierSplice[]): Promise<void> {
-  await page.route("**/api/v1/runner-pools*", async (route) => {
-    if (route.request().method() !== "GET") return route.fallback();
-    const response = await route.fetch();
-    const json = await response.json();
-    json.pools = (json.pools ?? []).map((pool: object) => ({ ...pool, barrier_options: options }));
-    await route.fulfill({ response, json });
-  });
+  await page.route("**/api/v1/runner-pools*", (route) =>
+    route.request().method() !== "GET"
+      ? route.fallback()
+      : route.fulfill({ json: { ...POOLS, pools: POOLS.pools.map((pool) => ({ ...pool, barrier_options: options })) } }),
+  );
 }
 
 const barrier = (page: Page, name: string) => page.getByRole("radio", { name: new RegExp(`^${name}`) });

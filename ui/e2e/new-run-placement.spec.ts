@@ -15,6 +15,7 @@ import { test, expect, gotoConsole, navToRoute } from "./fixtures";
 import { NR_DOCUMENT } from "../src/app/components/wardyn/copy/new-run/document";
 import { NR_LAUNCH } from "../src/app/components/wardyn/copy/new-run/launch";
 import { NR_REVIEW } from "../src/app/components/wardyn/copy/new-run/review";
+import { NR_FILES } from "../src/app/components/wardyn/copy/new-run/files";
 import { NR_RUN } from "../src/app/components/wardyn/copy/new-run/run";
 import { NR_SHAPE } from "../src/app/components/wardyn/copy/new-run/shape";
 import { NR_SHARED } from "../src/app/components/wardyn/copy/new-run/shared";
@@ -23,7 +24,7 @@ import { NR_TOOLS } from "../src/app/components/wardyn/copy/new-run/tools";
 import { SCENARIO_HARNESSES, SCENARIO_HARNESS_SETS } from "../src/app/lib/new-run-fixtures/scenarios/harnesses";
 import { SCENARIO_POOLS } from "../src/app/lib/new-run-fixtures/scenarios/pools";
 import { SCENARIO_PREFLIGHT } from "../src/app/lib/new-run-fixtures/scenarios/preflight";
-import { HOSTING_LABEL, POOL_OFFLINE, RUN_WAIT, RUN_WAIT_REASON } from "../src/app/lib/runner-pool-refusals";
+import { POOL_OFFLINE, RUN_WAIT, RUN_WAIT_REASON } from "../src/app/lib/runner-pool-refusals";
 
 const RUN_ID = "c3333333-3333-4333-8333-333333333333";
 const FULL = SCENARIO_PREFLIGHT.full;
@@ -113,7 +114,7 @@ test.describe("New Run, placement: a full pool and an offline pool", () => {
     // Review says it plainly, and still lets the run launch: waiting is not a refusal.
     await expect(page.getByText(RUN_WAIT.AT_CAPACITY("CI jobs", 40))).toBeVisible();
     await expect(page.getByText(NR_REVIEW.WHERE_VALUE("CI jobs"))).toBeVisible();
-    await expect(page.getByText(NR_REVIEW.WHERE_DETAIL(HOSTING_LABEL.remote_provided, 40, 40))).toBeVisible();
+    await expect(page.getByText(NR_REVIEW.WHERE_DETAIL("Remote Provided", 40, 40))).toBeVisible();
 
     await nameAndLaunch(page, "waiting run");
     await expect(page.getByText(NR_LAUNCH.BADGE_WAITING)).toBeVisible();
@@ -150,16 +151,15 @@ test.describe("New Run, placement: the pool a person picks", () => {
   async function guidedEnvironment(page: Page, pool?: string) {
     await gotoConsole(page);
     await navToRoute(page, "/runs/new");
-    await press(page, NR_START.GUIDED_FOOT);
-    await page.getByRole("radio", { name: NR_SHAPE.ENV_TITLE }).click();
-    await press(page, NR_SHARED.CONTINUE_TO(NR_SHARED.STEP_RUN));
+    await page.getByRole("button", { name: NR_START.GUIDED_FOOT }).click();
+    await press(page, NR_SHAPE.ENV_TITLE);
     if (pool) {
       await page.getByRole("combobox", { name: NR_RUN.POOL_LABEL }).click();
       await page.getByRole("option", { name: new RegExp(pool) }).click();
     }
     await press(page, NR_SHARED.CONTINUE_TO(NR_SHARED.STEP_HARNESSES));
     await press(page, NR_SHARED.CONTINUE_TO(NR_SHARED.STEP_FILES));
-    await page.locator("#nr-files-choice").check();
+    await page.getByRole("radio", { name: NR_FILES.NO_EXTRA }).check();
     await press(page, NR_SHARED.CONTINUE_TO(NR_SHARED.STEP_TOOLS));
     await press(page, NR_TOOLS.REVIEW_RUN);
     await expect(page.getByRole("heading", { name: NR_REVIEW.TITLE })).toBeVisible();

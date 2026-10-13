@@ -12,8 +12,10 @@
 import type { Page } from "@playwright/test";
 import { test, expect, gotoConsole, navToRoute } from "./fixtures";
 import { NR_DOCUMENT } from "../src/app/components/wardyn/copy/new-run/document";
+import { NR_HARNESSES } from "../src/app/components/wardyn/copy/new-run/harnesses";
 import { NR_REVIEW } from "../src/app/components/wardyn/copy/new-run/review";
 import { NR_SHAPE } from "../src/app/components/wardyn/copy/new-run/shape";
+import { NR_SHARED } from "../src/app/components/wardyn/copy/new-run/shared";
 import { NR_START } from "../src/app/components/wardyn/copy/new-run/start";
 import { SCENARIO_PREFLIGHT } from "../src/app/lib/new-run-fixtures/scenarios/preflight";
 
@@ -94,7 +96,10 @@ test.describe("New Run, the run document", () => {
     await press(page, NR_DOCUMENT.LOAD_EXAMPLE);
     await press(page, NR_DOCUMENT.OPEN_IN_GUIDED);
     await expect(page.getByRole("heading", { name: NR_SHAPE.TITLE })).toBeVisible();
-    await expect(page.getByRole("radio", { name: NR_SHAPE.AGENT_TITLE })).toBeChecked();
+    // A workload button shows no state, so the document's harness is read two steps on.
+    await press(page, NR_SHAPE.AGENT_TITLE);
+    await press(page, NR_SHARED.CONTINUE_TO(NR_SHARED.STEP_HARNESSES));
+    await expect(page.getByRole("region", { name: NR_HARNESSES.EYEBROW(1) })).toBeVisible();
   });
 
   test("Import file loads a document and takes its format from the file name", async ({ page }) => {
