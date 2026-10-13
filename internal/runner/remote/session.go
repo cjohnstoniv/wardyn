@@ -39,7 +39,7 @@ func (l *Link) AttachSession(conn runnerwire.Conn, cfg runnerwire.PeerConfig) *r
 	}
 	old := l.peer
 	l.peer = runnerwire.NewPeer(conn, cfg)
-	l.ready = false
+	l.ready, l.stated = false, false
 	if old != nil {
 		old.Close()
 	}
@@ -69,15 +69,27 @@ func (l *Link) Close() {
 	}
 }
 
-// requireFresh ends a session that is up but not yet READY. The runner learns of a queued action only
-// from a fresh session's PENDING, sent once at the session's start, so an action queued while the
-// session finishes its inventory and replay would otherwise wait for the next reconnect, however far
-// off. A link with no live peer has nothing to end: its next session reads the queue.
+// stateAccepted records that peer's final STATE page was accepted: the org's last look at the queue
+// before READY.
+func (l *Link) stateAccepted(peer *runnerwire.Peer) {
+	l.mu.Lock()
+	if l.peer == peer {
+		l.stated = true
+	}
+	l.mu.Unlock()
+}
+
+// requireFresh ends a session whose final STATE page was accepted but which is not yet READY. The
+// runner learns of a queued action only from a fresh session's PENDING, sent once at the session's
+// start, and the final STATE page is the last time the org refuses a session for an open action; an
+// action queued after it, while the runner replays and gets ready, would otherwise wait for the next
+// reconnect, however far off. Before that page, the page itself is refused; a link with no live peer has
+// nothing to end, as its next session reads the queue.
 func (l *Link) requireFresh(ctx context.Context) {
 	l.mu.Lock()
-	p, ready := l.peer, l.ready
+	p, ready, stated := l.peer, l.ready, l.stated
 	l.mu.Unlock()
-	if p == nil || ready || !p.Online() {
+	if p == nil || ready || !stated || !p.Online() {
 		return
 	}
 	ctx, cancel := context.WithTimeout(ctx, time.Second)

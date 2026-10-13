@@ -168,8 +168,20 @@ func TestHubQueuedBeforeReadyReachesTheRunnerOnAFreshSession(t *testing.T) {
 	queued := make(chan error, 1)
 	hooks := sessionHooks(online, resumed)
 	var once sync.Once
+	// The kill lands after the org accepted the final STATE page, the window no page refusal covers.
 	hooks.BeforeReady = func(ctx context.Context, _ *runnerwire.Peer, _ bool) error {
-		once.Do(func() { queued <- sub.KillSandbox(ctx, ref) })
+		once.Do(func() {
+			for {
+				link.mu.Lock()
+				stated := link.stated
+				link.mu.Unlock()
+				if stated || ctx.Err() != nil {
+					break
+				}
+				time.Sleep(time.Millisecond)
+			}
+			queued <- sub.KillSandbox(ctx, ref)
+		})
 		return nil
 	}
 	hooks.Pending = func(ctx context.Context, p *runnerwire.Peer, actions []runnerwire.PendingAction) error {
