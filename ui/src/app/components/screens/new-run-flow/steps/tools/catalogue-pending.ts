@@ -23,9 +23,11 @@ export const CLI_CARD: Record<CatalogueCLIKind, { name: string; body: string; ic
 /** The icon mark on the other cards (the prototype's catalogue and door cards). */
 export const CARD_ICON = { mcp: "MCP", api: "API", secret: "key", host: "net" } as const;
 
-/** The icon mark on a row of Already included (prototype rows "cc", "cx", "git", "dr", "$"). */
+const HARNESS_MARK: Record<string, string> = { "claude-code": "cc", "codex-cli": "cx" };
+
+/** The icon mark on a row of Already included (prototype rows "cc", "cx", "git", "dr", "$"). A harness the prototype has no mark for gets its first two letters. */
 export function includedMark(row: { from: string; name: string }): string {
-  if (row.from === "harness") return row.name === "codex-cli" ? "cx" : "cc";
+  if (row.from === "harness") return HARNESS_MARK[row.name] ?? row.name.slice(0, 2);
   return row.from === "repository" ? "git" : row.from === "drive" ? "dr" : "$";
 }
 

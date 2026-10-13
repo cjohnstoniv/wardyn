@@ -33,7 +33,8 @@ export function AttachCard({ item, open, onToggle, onEdit, onRemove }: {
   const bodyId = `nr-attach-body-${item.key.replace(/[^a-zA-Z0-9_-]/g, "-")}`;
   const access = item.kind === "repo"
     ? <span className="font-mono text-[13px]">{item.branch ?? NR_FILES.BRANCH_PLACEHOLDER}</span>
-    : item.locked ? <LockedAccess id={bodyId} />
+    // A drive an admin made read-only says so; a folder is read-only by its own source, with no one to name.
+    : item.locked && item.kind !== "folder" ? <LockedAccess id={bodyId} />
       : <span>{item.readOnly ? NR_FILES.ACCESS_READ : NR_FILES.ACCESS_EDIT}</span>;
   return (
     <div

@@ -305,7 +305,7 @@ With `WARDYN_KEK=transit`, each stored credential is still sealed in Postgres (A
 
 - The data key is wrapped by your Vault's Transit engine instead of a key derived from `WARDYN_AGE_KEY`.
 - The key-encryption key never leaves Vault, and every unwrap is one Transit `decrypt` in your Vault audit device.
-- The database alone decrypts nothing. The database plus the Vault token wardynd uses for Transit `decrypt` does. Kubernetes authentication logs in again with the pod's service-account token when a token is refused, so access lasts while the pod's identity does, not for one token's lifetime.
+- The database alone decrypts nothing; with the Vault token wardynd uses for Transit `decrypt` it does. Kubernetes authentication logs in again with the pod's service-account token when a token is refused, so access lasts while the pod's identity does. Token files are re-read too.
 - Once no row is sealed under the age key and `WARDYN_AGE_KEY` is unset, that token is the only other thing needed.
 - Wardyn's boot keys are wrapped by Vault too: under the same Transit key by default, or under their own key and role when `WARDYN_VAULT_TRANSIT_KEY_PLATFORM` is set (see the platform split below).
 - (If your organisation wants Vault to hold the values themselves, not a key, that is store mode, below.)

@@ -36,6 +36,17 @@ export function Segmented<T extends string>({
   /** New Run's view and format switches: a padded track with an inset pill per option (the Make design's compact control). */
   size?: "default" | "compact";
 }) {
+  const chip = (o: { value: T; dirty?: boolean }) =>
+    o.dirty && (
+      /* aria-hidden: the chip is a VISUAL echo of a fact already
+          announced elsewhere (the PageHeader chip, the beside-Save
+          marker) — folding its text into this button's accessible name
+          would silently break every exact-string `getByRole(...,
+          {name: o.label})` lookup the moment the tab it names is dirty. */
+      <span aria-hidden="true" data-testid={`tab-dirty-chip-${o.value}`}>
+        <Chip tone="warning">{UNSAVED.DIRTY_CHIP}</Chip>
+      </span>
+    );
   if (size === "compact") {
     return (
       <div className="inline-flex w-fit rounded-[9px] border border-border bg-surface-2 p-[3px]">
@@ -47,11 +58,12 @@ export function Segmented<T extends string>({
             disabled={disabled}
             onClick={() => onChange(o.value)}
             className={cn(
-              "min-w-[65px] rounded-md px-3 py-[7px] text-xs transition-colors disabled:cursor-not-allowed disabled:opacity-50",
-              value === o.value ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground",
+              "flex min-w-[65px] items-center justify-center gap-1.5 rounded-md px-3 py-[7px] text-xs transition-colors disabled:cursor-not-allowed disabled:opacity-50",
+              value === o.value ? (o.value === "deny" ? "bg-danger-subtle text-danger shadow-sm" : "bg-card text-foreground shadow-sm") : "text-muted-foreground hover:text-foreground",
             )}
           >
             {o.label}
+            {chip(o)}
           </button>
         ))}
       </div>
@@ -76,16 +88,7 @@ export function Segmented<T extends string>({
           )}
         >
           {o.label}
-          {/* aria-hidden: the chip is a VISUAL echo of a fact already
-              announced elsewhere (the PageHeader chip, the beside-Save
-              marker) — folding its text into this button's accessible name
-              would silently break every exact-string `getByRole(...,
-              {name: o.label})` lookup the moment the tab it names is dirty. */}
-          {o.dirty && (
-            <span aria-hidden="true" data-testid={`tab-dirty-chip-${o.value}`}>
-              <Chip tone="warning">{UNSAVED.DIRTY_CHIP}</Chip>
-            </span>
-          )}
+          {chip(o)}
         </button>
       ))}
     </div>
