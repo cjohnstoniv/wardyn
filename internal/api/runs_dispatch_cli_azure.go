@@ -18,6 +18,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/armscope"
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -171,7 +172,8 @@ func (s *Server) azureCLIEntra(componentID string) (ADOEntraConfig, bool) {
 // serve a run: stored, not known to have ended, and covering Resource Manager.
 // It spends no refresh token; a sign-in only a renewal would find dead
 // surfaces at the proxy's boot. An unreadable sign-in is an error, never "not
-// signed in".
+// signed in". The caller marks ctx with the read's purpose: a status read at
+// the run doors, a dispatch read at dispatch.
 func (s *Server) azureCLISignedIn(ctx context.Context, owner, componentID string) (bool, error) {
 	ec, err := azureARMCapture(componentID)
 	if err != nil {
@@ -271,13 +273,13 @@ func (s *Server) authorAzureCLI(ctx context.Context, run types.AgentRun, cli *az
 	case !s.credentialPerson(owner):
 		return refuse(azureCLINotPersonRefusal)
 	}
-	if signedIn, err := s.azureCLISignedIn(ctx, owner, cli.ComponentID); err != nil {
+	if signedIn, err := s.azureCLISignedIn(secretstore.WithPurpose(ctx, secretstore.PurposeDispatch), owner, cli.ComponentID); err != nil {
 		return refuse("Wardyn couldn't read your Azure sign-in for this run's Azure CLI just now — nothing was started. Try again in a moment.")
 	} else if !signedIn {
 		return refuse(azureCLINotSignedIn)
 	}
 	subs := azureCLISubscriptions(cli.Azure)
-	raw, err := json.Marshal(map[string]any{
+	scope := map[string]any{
 		"host": armscope.Host, "header": "Authorization", "format": "Bearer %s",
 		"secret_name": cliSecretName(cli.ComponentID, providerEntraPart),
 		// TLS only and unpinned: the door, not the rule, decides which requests carry the token.
@@ -286,7 +288,8 @@ func (s *Server) authorAzureCLI(ctx context.Context, run types.AgentRun, cli *az
 			Mechanism: azureCLIMechanism, ComponentID: cli.ComponentID, OwnerSubject: owner, TenantID: cfg.TenantID,
 			Audience: azureARMAudience, Subscriptions: subs, Access: cli.Azure.Access,
 		},
-	})
+	}
+	raw, err := json.Marshal(scope)
 	if err != nil {
 		return refuse("could not author the Azure CLI's credential injection")
 	}

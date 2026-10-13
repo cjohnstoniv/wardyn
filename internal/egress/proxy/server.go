@@ -244,7 +244,6 @@ func newServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 	// leaves it nil (system roots, ServerName from URL).
 	// applyDefaultsAndValidate already fail-fast-checked this PEM at
 	// config-load time; this is the live proxy's own parse.
-
 	p := newProxy(Options{
 		RunID:                cfg.RunID,
 		Policy:               pol,

@@ -538,6 +538,78 @@ func TestAzureCLI_DoorsAndPreviewFacts(t *testing.T) {
 
 // ── dispatch ────────────────────────────────────────────────────────────────
 
+// Through the create door, as a run really launches: the sandbox gets the
+// profile and the inert cache and never the sign-in; the run gets its per-run
+// CA; the proxy gets the door's grant, both hosts on its allowlist and one
+// TLS-only rule on Resource Manager; and the proxy's own loader accepts what
+// dispatch wrote.
+func TestAzureCLI_LaunchStagesProfileNotToken(t *testing.T) {
+	const id = "6f0c1d2e-0000-4000-8000-0000000c0a09"
+	f := newComponentFixture(t)
+	f.srv.cfg.AzureCLIEntra = func(row string) ADOEntraConfig {
+		return ADOEntraConfig{RowID: row, TenantID: "tenant-1", ClientID: "console-app", RedirectURL: adoCallbackURL,
+			LoginClientID: "console-app", LoginTenantID: "tenant-1"}
+	}
+	ref := f.org(id, azCLIRowDef(types.ComponentAccessWrite, strings.ToUpper(azCLISubB), azCLISubA))
+	const refresh = "the-persons-entra-refresh-token-71c0"
+	blob := adoEntraBlob{RefreshToken: refresh, Scopes: []string{azARMScope}, TenantID: "tenant-1", ClientID: "console-app",
+		Subject: capSub, CapturedAt: time.Now().UTC(), ExpiresAt: time.Now().Add(time.Hour).UTC()}
+	if err := f.srv.cfg.Secrets.For(capSub).Put(context.Background(), cliSecretName(id, providerEntraPart), mustJSON(blob)); err != nil {
+		t.Fatal(err)
+	}
+	fr := f.srv.cfg.Runner.(*fakeRunner)
+	if w := f.ask(t, componentDoors[0], componentBody(ref)); w.Code != http.StatusCreated {
+		t.Fatalf("create = %d %s, want 201", w.Code, w.Body.String())
+	}
+	fr.waitForSandbox(t)
+	fr.mu.Lock()
+	spec := fr.lastSpec
+	fr.mu.Unlock()
+
+	files := azCLIFiles(t, spec.Env)
+	if !strings.Contains(files[".azure/msal_token_cache.json"], azureCLITokenSentinel) || !strings.Contains(files[".azure/azureProfile.json"], azCLISubA) {
+		t.Errorf("staged files = %v, want the profile and the sentinel cache", files)
+	}
+	if spec.Env[envAzureTelemetry] != "0" {
+		t.Errorf("%s = %q, want 0", envAzureTelemetry, spec.Env[envAzureTelemetry])
+	}
+	for _, env := range []map[string]string{spec.Env, spec.SecretEnv} {
+		for k, v := range env {
+			if strings.Contains(v, refresh) {
+				t.Errorf("Env[%s] carries the person's sign-in", k)
+			}
+		}
+	}
+	pc := spec.ProxyConfig
+	subs := []string{azCLISubA, azCLISubB}
+	if pc.AzureARM == nil || pc.AzureARM.TenantID != "tenant-1" || !slices.Equal(pc.AzureARM.Subscriptions, subs) || !pc.AzureARM.Write {
+		t.Fatalf("door grant = %+v, want the tenant, both subscriptions and write", pc.AzureARM)
+	}
+	if pc.MITMCACertPEM == "" || pc.MITMCAKeyPEM == "" {
+		t.Error("the run has no per-run CA, so the door could terminate nothing")
+	}
+	for _, host := range []string{armscope.Host + ":443", proxy.AzureLoginHost + ":443"} {
+		if !slices.Contains(pc.Policy.AllowedDomains, host) {
+			t.Errorf("allowed domains %v lack %s", pc.Policy.AllowedDomains, host)
+		}
+	}
+	i := slices.IndexFunc(pc.Injection, func(g runner.InjectionGrant) bool { return g.Rule.Host == armscope.Host })
+	if i < 0 || !pc.Injection[i].Rule.RequireTLS || pc.Injection[i].Rule.SecretName != cliSecretName(id, providerEntraPart) {
+		t.Fatalf("injection = %+v, want one TLS-only rule on Resource Manager naming the row's sign-in", pc.Injection)
+	}
+	pc.ControlPlaneURL = "http://127.0.0.1:8080" // the fixture names a non-loopback http host, which the loader refuses for any run
+	raw, err := runner.BuildProxyConfig(spec.RunID, pc, 3128)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), refresh) {
+		t.Error("the proxy's config carries the person's sign-in")
+	}
+	if _, err := proxy.LoadConfigBytes(raw); err != nil {
+		t.Fatalf("the proxy refuses the config dispatch wrote: %v", err)
+	}
+}
+
 // Dispatch stages the profile and the inert cache, allows the door's two hosts
 // on 443, and authors one TLS-only grant whose snapshot pins the row, the
 // owner, the tenant, the audience, the subscriptions and the access.
