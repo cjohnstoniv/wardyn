@@ -245,7 +245,10 @@ func (s *Server) sshGatewayHealthz() map[string]any {
 //
 // Every REJECTION is audited under ssh.authenticate right here — including an
 // unknown key or an unparseable/unknown run id — so a scan against the
-// gateway leaves a trail. SUCCESS is deliberately NOT audited here:
+// gateway leaves a trail. Refusals with no attributable actor (unknown key,
+// bad username, unknown run) are rate-bound with auth.fail (burst 5, 1/s) and
+// a drop is counted in wardyn_auth_failed_suppressed_total; refusals that name a
+// registered key's principal are always recorded. SUCCESS is deliberately NOT audited here:
 // golang.org/x/crypto/ssh calls PublicKeyCallback on the UNSIGNED "query"
 // every pubkey auth attempt opens with (RFC 4252 §7), and even for a direct
 // signed attempt this callback still runs BEFORE the signature is verified —
@@ -381,8 +384,13 @@ func sshRoleFresh(checkedAt *time.Time, now time.Time, ttl time.Duration) bool {
 	return checkedAt != nil && now.Sub(*checkedAt) <= ttl
 }
 
+// sshAuditAuthFailure writes one refused attempt's ssh.authenticate row. A refusal whose actor is
+// "unknown" (no username that names a run, an unregistered or mismatched key, an unknown run) is
+// anything a stranger can send, so it is charged to the shared auth-failure limiter and a drop is
+// counted. A refusal carrying a registered key's principal is finite and attributable, bounded already by
+// maxSSHConnections and the handshake's MaxAuthTries, and is always recorded.
 func (s *Server) sshAuditAuthFailure(ctx context.Context, conn ssh.ConnMetadata, runID *uuid.UUID, actor, fingerprint, reason string) {
-	if !s.authFailedAllowed() {
+	if actor == "unknown" && !s.authFailedAllowed() {
 		return
 	}
 	ev := s.auditEvent(runID, types.ActorHuman, actor, "ssh.authenticate", fingerprint, "failure",

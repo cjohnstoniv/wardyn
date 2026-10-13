@@ -630,7 +630,9 @@ wardyn run ssh <id> --json                                   # -> {"host","port"
 - **Auth.** Registered public keys only — no password, no keyboard-interactive.
 - `MaxAuthTries` is bounded per connection; an unknown key or a malformed
   username (anything that isn't a run id) is rejected and audited (`ssh.authenticate`,
-  `outcome=failure`), so a scan against the gateway leaves a trail.
+  `outcome=failure`). These unknown-actor refusals share the `auth.fail` rate bound (burst 5,
+  1/s) and a drop is counted in `wardyn_auth_failed_suppressed_total`; a refusal that names a
+  registered key's person is always recorded.
 - **Owner-only, and the admin carve-out is a bounded-stale stamp — weaker than
   the web terminal's, but no longer unboundedly so.**
   - SSH authorization is
@@ -768,7 +770,7 @@ wardyn run ssh <id> --json                                   # -> {"host","port"
   `TERM`/`LANG`/`LC_*` from the client's environment into the exec — nothing
   else the client's shell happens to export reaches the sandbox.
 - **Audit actions**:
-  - `ssh.authenticate` (every attempt, including failures),
+  - `ssh.authenticate` (every attempt; unknown-actor refusals are rate-bound),
     `session.attach` with `transport:ssh` in its data (the shell path, same
     action name the browser terminal uses, so both show up together in a run's
     timeline), `ssh.exec` (`argv`, `exit`), `ssh.forward` (`port`, `bytes`).
