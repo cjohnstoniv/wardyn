@@ -150,6 +150,9 @@ export function AddDialog(props: AddDialogProps) {
 function DialogBody({ open, onClose, intent, src, items, folderReason, driveReason: catalogueReason, operator, onSave, createUserDrive, reloadDrives, foldersAdded }: AddDialogProps & { open: DialogOpen }) {
   const [s, setS] = React.useState<State>(() => initial(open, intent));
   const editing = open.mode === "edit" ? open.item : undefined;
+  // What an edit started from. It stays a choice even when no list carries it (a drive the catalogue does not
+  // name, or the older single-drive switch with no catalogue drive behind it).
+  const editedSource = editing ? (editing.driveId ?? editing.key) : undefined;
   const options = s.kind ? optionsFor(s.kind, src) : [];
   const source = options.find((o) => o.key === s.sourceKey);
   const choice: ItemChoice | null = s.kind && s.sourceKey
@@ -165,6 +168,45 @@ function DialogBody({ open, onClose, intent, src, items, folderReason, driveReas
   const go = (step: Step) => setS((c) => ({ ...c, step, attempted: false }));
   const choose = (o: PickOption) =>
     setS((c) => ({ ...c, sourceKey: o.key, branch: undefined, branchText: o.ref ?? "", path: o.defaultPath ?? "", readOnly: o.locked, attempted: false }));
+  // A source chosen by id from outside the list (the create form's new drive) is taken as the list's own pick
+  // once its option arrives; until then it carries nothing of the source chosen before it. "" clears the pick.
+  const awaited = React.useRef<string | null>(null);
+  const chooseById = (id: string) => {
+    awaited.current = id || null;
+    setS((c) => ({ ...c, sourceKey: id || null, branch: undefined, branchText: "", path: "", readOnly: false, attempted: false }));
+  };
+
+  // A chosen source that leaves the list (the list was read again without it) is no choice: the pick and what
+  // came with it go, and an edit of an item that no longer exists closes.
+  const optionKeys = options.map((o) => o.key).join("\n");
+  // Drives are listed from the person's drive catalogue: while it has not answered, or its last read failed, the
+  // list is unknown, not empty, and nothing is judged against it.
+  const listKnown = (s.kind !== "userDrive" && s.kind !== "sharedDrive") || src.catalogue !== null;
+  const listed = React.useRef<readonly string[]>([]);
+  const latest = React.useRef({ options, choose, editing, onClose });
+  latest.current = { options, choose, editing, onClose };
+  React.useEffect(() => {
+    if (!listKnown) return;
+    const keys = optionKeys ? optionKeys.split("\n") : [];
+    const before = listed.current;
+    listed.current = keys;
+    const key = s.sourceKey;
+    if (!key) return;
+    const { options: now, choose: take, editing: edited, onClose: close } = latest.current;
+    if (keys.includes(key)) {
+      if (awaited.current !== key) return;
+      awaited.current = null;
+      const arrived = now.find((o) => o.key === key);
+      if (arrived) take(arrived);
+      return;
+    }
+    if (!before.includes(key)) return;
+    if (edited) {
+      close();
+      return;
+    }
+    setS((c) => ({ ...c, sourceKey: null, branch: undefined, branchText: "", path: "", readOnly: false, attempted: false, step: c.step > 2 ? 2 : c.step, reached: c.reached > 2 ? 2 : c.reached }));
+  }, [optionKeys, s.sourceKey, listKnown]);
   const save = () => {
     if (!choice) return;
     if (error) {
@@ -188,7 +230,7 @@ function DialogBody({ open, onClose, intent, src, items, folderReason, driveReas
             <li key={n} className={cn("flex min-w-0 items-center gap-2", n > 1 && "flex-1 before:h-px before:flex-1 before:bg-border before:content-['']")}>
               <button
                 type="button"
-                disabled={n > s.reached || active}
+                disabled={n > s.reached || active || (n === 3 && !source && !editing)}
                 aria-current={active ? "step" : undefined}
                 aria-label={label}
                 onClick={() => go(n)}
@@ -309,7 +351,7 @@ function DialogBody({ open, onClose, intent, src, items, folderReason, driveReas
           )}
           <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2 text-sm">
             {s.kind === "repo" && <Link to="/workspaces" className={FILES_LINK}>{NR_FILES.ADD_REPOSITORY}</Link>}
-            {s.kind === "userDrive" && createUserDrive?.({ choose: (id) => setS((c) => ({ ...c, sourceKey: id })), reload: reloadDrives })}
+            {s.kind === "userDrive" && createUserDrive?.({ choose: chooseById, reload: reloadDrives })}
             {s.kind === "sharedDrive" && (
               <>
                 <span className="inline-flex items-center gap-2">
@@ -374,7 +416,7 @@ function DialogBody({ open, onClose, intent, src, items, folderReason, driveReas
         <div className="flex gap-2">
           <Button type="button" variant="outline" onClick={onClose}>{NR_SHARED.CANCEL}</Button>
           {s.step === 2 && (
-            <Button type="button" disabled={!s.sourceKey} onClick={() => setS((c) => ({ ...c, step: 3, reached: 3 }))}>
+            <Button type="button" disabled={!source && !(editing && s.sourceKey === editedSource)} onClick={() => setS((c) => ({ ...c, step: 3, reached: 3 }))}>
               {NR_SHARED.CONTINUE} <span aria-hidden="true">→</span>
             </Button>
           )}
