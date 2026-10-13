@@ -41,6 +41,7 @@ Every string the New Run flow shows lives once in this file and once in the lazy
 Some constants show only under a condition. A step lane applies the rule; `new-run-copy.test.ts` checks that each constant named here exists.
 
 - `NR_TOOLS.PROVIDER_PROXY` shows only when the provider credential's delivery is `proxy`: key, token and subscription kinds. A provider whose delivery is `sandbox_short_lived` (Bedrock SSO, whose role credentials sit in the sandbox) shows `NR_TOOLS.DELIVERY_SHORT_LIVED` and `NR_TOOLS.DELIVERY_AWS` instead.
+- `NR_SHARED.CONTINUE_TO` writes the step name in lower case ("Continue to harnesses", "Continue to files": Make `App.tsx`:1928, 2144). Every Guided step's primary button, `NR_SHARED.CONTINUE` and the document's `NR_DOCUMENT.CONTINUE_REVIEW` end in an arrow shown to sight only (Make `App.tsx`:1293, 1928, 2144, 2577, 2695); `NR_REVIEW.LAUNCH_RUN` has none.
 - `NR_TOOLS.EFFECT_ALLOW` is both the default option and a rule effect ("Run it" stays, per the tool-rule ruling): offered when the policy allows it, otherwise disabled with the server's reason.
 
 ## 4. Never shown
@@ -456,6 +457,7 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `MCP_CARD_TITLE` | mock | Add an MCP server |
 | `MCP_CARD_BODY` | mock | Connect a remote MCP server by URL. Its token stays with the proxy. |
 | `MCP_CARD_BUTTON` | mock | Add MCP server |
+| `CLI_GITHUB_BODY` | deviation (owner 2026-10-13, T9) | Actions and the REST API with gh; issue and pull request lists aren't supported yet. |
 | `CARD_ADDED(name)` | mock | {name} added. Its hosts and credential are included. |
 | `COMPONENT_ADDED` | mock | Added to this run. |
 | `COMPONENT_ADDED_NAMED(name)` | mock | {name} added to this run. |
@@ -595,7 +597,6 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `VIEW_PRETTY` | mock | Pretty |
 | `VIEW_YAML` | mock | YAML |
 | `VIEW_JSON` | mock | JSON |
-| `WARNINGS_TITLE` | pending (W-46) | Before you launch |
 | `NARROWED_BY(source)` | pending (W-04) | Your request was narrowed by {source}. |
 | `NARROWED_APPLIES(applied)` | mock | {applied} will apply. |
 | `NARROWED_TAIL_POOL(pool)` | pending (W-04) | Not allowed in {pool}. |
@@ -630,8 +631,6 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `WHERE_VALUE(pool)` | mock | {pool} pool |
 | `WHERE_DETAIL(hosting, used, max)` | mock | {hosting} · {used} of {max} running |
 | `WHERE_ONLINE(n)` | pending (W-03) | {n} of your runners online |
-| `RECORDING_LABEL` | pending (W-45) | Recording |
-| `RECORDING_ON` | pending (W-45) | Every keystroke and every outbound connection. |
 | `PROV_ADDED` | mock | Added by you |
 | `PROV_SELECTED` | mock | Selected by you |
 | `PROV_RUN_SETUP` | mock | Run setup |
@@ -684,6 +683,7 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `POLICY_BARRIER` | mock | Barrier |
 | `POLICY_NETWORK` | mock | Network |
 | `POLICY_HOSTS(n)` | mock | {n} hosts allowed |
+| `POLICY_HOST_ONE` | deviation (lead 2026-10-13, the singular of POLICY_HOSTS) | 1 host allowed |
 | `POLICY_CREDENTIALS` | mock | Credentials |
 | `POLICY_NO_CREDENTIALS` | mock | No credentials requested |
 | `POLICY_HIDDEN` | mock | Selected model provider · Hidden |
@@ -765,13 +765,6 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `JUST_NOW` | mock | Just now |
 | `GIVES_UP` | mock | Gives up |
 | `GIVES_UP_IN(wait)` | deviation (DS-5 §8) | In {wait} |
-| `SINCE_MINUTE_ONE` | pending (W-47) | 1 minute ago |
-| `SINCE_MINUTES(n)` | pending (W-47) | {n} minutes ago |
-| `SINCE_HOUR_ONE` | pending (W-47) | 1 hour ago |
-| `SINCE_HOURS(n)` | pending (W-47) | {n} hours ago |
-| `SINCE_DAYS(n)` | pending (W-47) | {n} days ago |
-| `MINUTE_ONE` | pending (W-47) | 1 minute |
-| `MINUTES(n)` | pending (W-47) | {n} minutes |
 | `CANCEL_RUN` | mock | Cancel run |
 | `START_ANOTHER` | mock | Start another run |
 | `VIEW_RUN` | mock | View run |
