@@ -5,7 +5,6 @@
 
 import { Button } from "../../../../ui/button";
 import { Label } from "../../../../ui/label";
-import { BarrierMark } from "../../../../wardyn/barrier-mark";
 import { NR_REVIEW } from "../../../../wardyn/copy/new-run/review";
 import { NR_RUN } from "../../../../wardyn/copy/new-run/run";
 import { NR_SHARED } from "../../../../wardyn/copy/new-run/shared";
@@ -13,6 +12,7 @@ import type { ConfinementClass } from "../../../../../lib/types/runs";
 import { chooseBarrier, choosePool } from "../../lenses/run-lens";
 import { barrierRows, poolChoices, selectedPoolId, usablePools } from "../../steps/run/pool-model";
 import { loadPools, usePools } from "../../steps/run/pool-source";
+import { BarrierChip } from "../barrier-chip";
 import { draftSource } from "../provenance";
 import { ReviewGroup } from "../review-group";
 import { onlineRunners } from "../review-seams";
@@ -85,7 +85,7 @@ export function WhereGroup({ draft, pre, docRows, dispatch }: GroupProps) {
       id="where"
       label={NR_REVIEW.GROUP_WHERE}
       value={pool && NR_REVIEW.WHERE_VALUE(pool.name)}
-      mark={cc && <BarrierMark cc={cc} size="sm" strength />}
+      mark={cc && <BarrierChip cc={cc} />}
       detail={detail}
       provenance={provenance}
       docRows={docRows}
