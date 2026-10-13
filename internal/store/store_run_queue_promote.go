@@ -50,9 +50,11 @@ type QueueVerdict struct {
 	// later runs are passed over this pass. A run held for a reason of its own holds only itself.
 	Owner bool
 	// Runners are the registered runners an admitted run may be placed on, each with room as judged;
-	// empty for a run placed on none. The promotion binds the run to the first that still has room
-	// under its row lock, and leaves the run waiting when none has.
+	// Remotes the remote-hosted runners. Both empty for a run placed on none. The promotion binds the
+	// run to the self-hosted runner with the most room left that still fits it under the runner rows'
+	// locks, else to such a remote-hosted runner, and leaves the run waiting when none has room.
 	Runners []uuid.UUID
+	Remotes []string
 }
 
 // QueueAdmit judges one waiting run before the pass takes any lock (pool-queue.md section 7 step 4), so it
@@ -179,7 +181,7 @@ func (s PG) judgeQueue(ctx context.Context, pass PromotePass, pool types.RunnerP
 			case v.Stop:
 				return admitted, held, nil
 			case v.Admit:
-				if admitted = append(admitted, admittedRun{entry: e, runners: v.Runners}); len(admitted) >= room {
+				if admitted = append(admitted, admittedRun{entry: e, runners: v.Runners, remotes: v.Remotes}); len(admitted) >= room {
 					return admitted, held, nil
 				}
 			default:
@@ -198,6 +200,16 @@ func (s PG) judgeQueue(ctx context.Context, pass PromotePass, pool types.RunnerP
 type admittedRun struct {
 	entry   RunQueueEntry
 	runners []uuid.UUID
+	remotes []string
+}
+
+// keys are its runners' keys, self-hosted first.
+func (a admittedRun) keys() []string {
+	out := make([]string, 0, len(a.runners)+len(a.remotes))
+	for _, id := range a.runners {
+		out = append(out, id.String())
+	}
+	return append(out, a.remotes...)
 }
 
 // queuePage is one page of the pool's queue rows, oldest first (queued_at, then run_id), after the given
@@ -216,9 +228,10 @@ func (s PG) queuePage(ctx context.Context, poolID uuid.UUID, after *RunQueueEntr
 }
 
 // promoteAdmitted is the pass's one transaction: the pool row, then the deployment cap's advisory lock,
-// then the admitted runs' runners, the slot-holders counted again, and each admitted run moved by the
-// promotion CAS while there is room, bound to a runner of its own that has room. A run none of whose
-// runners has room keeps its place. Nothing here waits on the substrate or judges a run.
+// then the admitted runs' runners, what their slot-holders reserve summed again, and each admitted run
+// moved by the promotion CAS while there is room, bound to a runner of its own that fits what it
+// reserves. A run none of whose runners has room keeps its place. Nothing here waits on the substrate
+// or judges a run.
 func (s PG) promoteAdmitted(ctx context.Context, pass PromotePass, admitted []admittedRun) ([]PromotedRun, error) {
 	var promoted []PromotedRun
 	err := s.inTx(ctx, func(q Querier) error {
@@ -243,11 +256,17 @@ func (s PG) promoteAdmitted(ctx context.Context, pass PromotePass, admitted []ad
 		if err != nil {
 			return err
 		}
-		var runnerIDs []uuid.UUID
+		var keys []string
+		var ids []uuid.UUID
 		for _, a := range admitted {
-			runnerIDs = append(runnerIDs, a.runners...)
+			keys = append(keys, a.keys()...)
+			ids = append(ids, a.entry.RunID)
 		}
-		rooms, err := lockRunnerRooms(ctx, q, runnerIDs, uuid.Nil)
+		rooms, err := lockRunnerRooms(ctx, q, keys, uuid.Nil)
+		if err != nil {
+			return err
+		}
+		needs, err := reservedOf(ctx, q, ids)
 		if err != nil {
 			return err
 		}
@@ -256,13 +275,20 @@ func (s PG) promoteAdmitted(ctx context.Context, pass PromotePass, admitted []ad
 			if runnerpool.AtCapacity(pool, running) != nil || (pass.DeploymentCap > 0 && deployment >= pass.DeploymentCap) {
 				break
 			}
+			need := needs[e.RunID]
 			var bind *uuid.UUID
-			if len(a.runners) > 0 {
-				if bind = roomiest(a.runners, rooms); bind == nil {
+			var remote, key string
+			if len(a.runners)+len(a.remotes) > 0 {
+				if key = roomiest(a.keys(), rooms, need); key == "" {
 					continue
 				}
+				if id, err := uuid.Parse(key); err == nil {
+					bind = &id
+				} else {
+					remote = key
+				}
 			}
-			run, ok, err := promoteQueuedRun(ctx, q, e.RunID, pass.WatcherOwner, bind)
+			run, ok, err := promoteQueuedRun(ctx, q, e.RunID, pass.WatcherOwner, bind, remote)
 			if err != nil {
 				return err
 			}
@@ -277,10 +303,10 @@ func (s PG) promoteAdmitted(ctx context.Context, pass PromotePass, admitted []ad
 			promoted = append(promoted, PromotedRun{Run: run, Entry: e})
 			running++
 			deployment++
-			if bind != nil {
-				room := rooms[*bind]
-				room.used++
-				rooms[*bind] = room
+			if key != "" {
+				room := rooms[key]
+				room.take(need)
+				rooms[key] = room
 			}
 		}
 		return nil
@@ -288,32 +314,63 @@ func (s PG) promoteAdmitted(ctx context.Context, pass PromotePass, admitted []ad
 	return promoted, err
 }
 
-// roomiest is the runner of ids with the most room left, the first of them on a tie, nil when none has
-// any: a pass spreads its runs over the runners rather than filling the first.
-func roomiest(ids []uuid.UUID, rooms map[uuid.UUID]runnerRoom) *uuid.UUID {
-	var best *uuid.UUID
-	for i, id := range ids {
-		room := rooms[id]
-		if room.free() && (best == nil || room.max-room.used > rooms[*best].max-rooms[*best].used) {
-			best = &ids[i]
+// roomiest is the runner of keys that fits a run reserving need with the most runs left, the first of
+// them on a tie, a self-hosted runner before any remote-hosted one, "" when none fits: a pass spreads
+// its runs over the runners rather than filling the first.
+func roomiest(keys []string, rooms map[string]runnerRoom, need types.RunnerAmounts) string {
+	best := ""
+	for _, remote := range []bool{false, true} {
+		for _, k := range keys {
+			if _, err := uuid.Parse(k); (err != nil) != remote {
+				continue
+			}
+			room := rooms[k]
+			if room.fits(need) && (best == "" || room.runsLeft() > rooms[best].runsLeft()) {
+				best = k
+			}
+		}
+		if best != "" {
+			return best
 		}
 	}
-	return best
+	return ""
+}
+
+// reservedOf is what each of ids reserves on the runner it will hold a sandbox on.
+func reservedOf(ctx context.Context, q Querier, ids []uuid.UUID) (map[uuid.UUID]types.RunnerAmounts, error) {
+	type row struct {
+		id   uuid.UUID
+		need types.RunnerAmounts
+	}
+	rows, err := collect(ctx, q, "read", "run reservations", `SELECT id, `+runReservedCols+` FROM agent_runs WHERE id = ANY($1)`,
+		[]any{ids}, func(r pgx.Row) (row, error) {
+			var x row
+			err := r.Scan(&x.id, &x.need.CPUMillis, &x.need.MemoryMiB, &x.need.DiskMiB)
+			return x, err
+		})
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[uuid.UUID]types.RunnerAmounts, len(rows))
+	for _, x := range rows {
+		out[x.id] = x.need
+	}
+	return out, nil
 }
 
 // promoteQueuedRun is the promotion CAS: QUEUED to PENDING, admitted_at and the watcher lease stamped,
-// the runner it now holds a place on written when runner is set, and the run_queue row deleted in the
+// the runner it now holds a place on written when runner or remote is set, and the run_queue row deleted in the
 // same statement, the run row before its queue row as every exit from the queue takes them. ok is false
 // when another exit won first.
-func promoteQueuedRun(ctx context.Context, q Querier, id uuid.UUID, owner string, runner *uuid.UUID) (types.AgentRun, bool, error) {
+func promoteQueuedRun(ctx context.Context, q Querier, id uuid.UUID, owner string, runner *uuid.UUID, remote string) (types.AgentRun, bool, error) {
 	run, err := scanRun(q.QueryRow(ctx, `
 		WITH moved AS (
 			UPDATE agent_runs SET state=$2, updated_at=now(), admitted_at=now(), watcher_owner=$3, watcher_heartbeat=now(),
-				runner_id=COALESCE($5, runner_id)
+				runner_id=COALESCE($5, runner_id), runner_pool_executor=COALESCE(NULLIF($6, ''), runner_pool_executor)
 			WHERE id=$1 AND state=$4 RETURNING `+runCols+`),
 		gone AS (DELETE FROM run_queue WHERE run_id IN (SELECT id FROM moved) RETURNING run_id)
 		SELECT `+runCols+` FROM moved`,
-		id, string(types.RunPending), owner, string(types.RunQueued), runner))
+		id, string(types.RunPending), owner, string(types.RunQueued), runner, remote))
 	if errors.Is(err, ErrNotFound) {
 		return types.AgentRun{}, false, nil
 	}
@@ -432,23 +489,37 @@ type QueueStart struct {
 
 // StartQueuedRun writes the start's columns on a run that was promoted (PENDING, admitted_at set) and
 // has not been dispatched, and returns the row. ok is false when the run is no longer in that state,
-// so a kill that won leaves nothing written. A run bound to a registered runner is held to that runner's
-// max_runs, the run itself not counted, under the runner rows' locks: RunnerID when it has room (the
-// promotion found it room there), else the first of RunnerFallbacks that has, else RunnerAtCapacityError.
+// so a kill that won leaves nothing written. A run bound to a runner of either kind is held to that
+// runner's limits, what the run reserves counted and the run itself not, under the runner rows' locks:
+// RunnerID when it has room (the promotion found it room there), else the first of RunnerFallbacks
+// that has, else RunnerAtCapacityError; a remote-hosted run, its RunnerPoolExecutor.
 func (s PG) StartQueuedRun(ctx context.Context, id uuid.UUID, st QueueStart) (run types.AgentRun, ok bool, err error) {
 	limits, err := json.Marshal(st.RunLimits)
 	if err != nil {
 		return types.AgentRun{}, false, fmt.Errorf("store: marshal run limits: %w", err)
 	}
 	err = s.inTx(ctx, func(q Querier) error {
-		if st.RunnerID != nil {
-			chosen, err := admitOnFirstRunner(ctx, q, append([]uuid.UUID{*st.RunnerID}, st.RunnerFallbacks...), id)
+		needs, err := reservedOf(ctx, q, []uuid.UUID{id})
+		if err != nil {
+			return err
+		}
+		switch {
+		case st.RunnerID != nil:
+			keys := []string{st.RunnerID.String()}
+			for _, f := range st.RunnerFallbacks {
+				keys = append(keys, f.String())
+			}
+			chosen, err := admitOnFirstRunner(ctx, q, keys, needs[id], id)
 			if err != nil {
 				return err
 			}
-			st.RunnerID = &chosen
+			bound := uuid.MustParse(chosen)
+			st.RunnerID = &bound
+		case st.RunnerPoolExecutor != "":
+			if err := admitOnRunner(ctx, q, st.RunnerPoolExecutor, needs[id], id); err != nil {
+				return err
+			}
 		}
-		var err error
 		run, ok, err = startQueuedRun(ctx, q, id, st, limits)
 		return err
 	})

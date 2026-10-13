@@ -953,6 +953,7 @@ const (
 	reasonRunnerRegistrationInvalid     = "runner_registration_invalid"
 	reasonRunnerOwnerInvalid            = "runner_owner_invalid"
 	reasonRunnerKeyAlreadyRegistered    = "runner_key_already_registered"
+	reasonRunnerLimitsRequired          = "runner_limits_required" // a registration that declares no limits, or limits that are not valid
 )
 
 // The runners management routes (runner_inventory.go).
@@ -963,7 +964,7 @@ const (
 	reasonRunnerSessionRequired  = "runner_session_required"
 	reasonRunnersOrgURLInvalid   = "runners_org_url_invalid"
 	reasonRunnersEnabledRequired = "runners_enabled_required"
-	reasonRunnerMaxRunsInvalid   = "runner_max_runs_invalid"
+	reasonRunnerLimitsInvalid    = "runner_limits_invalid"
 )
 
 // Runner route admission fails closed on absent or unreadable configuration.

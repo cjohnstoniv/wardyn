@@ -160,6 +160,9 @@ func TestPoolListNeverNamesAnotherPersonsRunner(t *testing.T) {
 	e.online[mine] = true
 	e.runner.runnerFacts[mine.String()] = runner.TargetFacts{Classes: []types.ConfinementClass{types.CC1, types.CC2},
 		CapacityAdvertised: true, CPUMillisMax: 1000, MemoryMiBMax: 2048}
+	if _, err := e.pool.Exec(context.Background(), `UPDATE runners SET run_cpu_millis = 1000, run_memory_mib = 2048 WHERE id = $1`, mine); err != nil {
+		t.Fatal(err)
+	}
 	list, _ = e.list(e.person, "")
 	got = entryOf(t, list, home.ID)
 	if got.Availability != client.RunnerPoolAvailable || len(got.MyRunners) != 1 || !got.MyRunners[0].Online {

@@ -93,11 +93,21 @@ func newPlacementEnv(t *testing.T) *placementEnv {
 }
 
 // laptop is a claimed runner of owner that is online and advertises the given classes and size.
+// laptop is an online runner of owner reporting classes, whose owner declared a per-run limit of cpu and
+// mem (roomy totals); 0 for either declares no limits at all.
 func (e *placementEnv) laptop(owner string, cpu, mem int64, classes ...types.ConfinementClass) uuid.UUID {
 	e.t.Helper()
 	id := e.claimedRunner(owner)
 	e.online[id] = true
 	e.runner.runnerFacts[id.String()] = runner.TargetFacts{Classes: classes, CapacityAdvertised: true, CPUMillisMax: cpu, MemoryMiBMax: mem}
+	q, args := `UPDATE runners SET run_cpu_millis = $2, run_memory_mib = $3 WHERE id = $1`, []any{id, cpu, mem}
+	if cpu == 0 || mem == 0 {
+		q, args = `UPDATE runners SET total_cpu_millis = NULL, total_memory_mib = NULL, total_disk_mib = NULL,
+			run_cpu_millis = NULL, run_memory_mib = NULL, run_disk_mib = NULL WHERE id = $1`, []any{id}
+	}
+	if _, err := e.pool.Exec(context.Background(), q, args...); err != nil {
+		e.t.Fatal(err)
+	}
 	return id
 }
 

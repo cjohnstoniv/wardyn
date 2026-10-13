@@ -437,20 +437,20 @@ func TestGovernanceSource(t *testing.T) {
 }
 
 func TestRunnerCapacitySource(t *testing.T) {
-	s, err := RunnerCapacitySource(RunnerCapacity{8000, 16384}, RunnerCapacity{4000, 32768}, RunnerCapacity{6000, 8192})
-	if err != nil || s.Source != types.LimitSourceRunner || *s.CPUMillis.Max != 4000 || *s.MemoryMiB.Max != 8192 {
-		t.Fatalf("the weakest candidate bounds each field: %+v, %v", s, err)
+	s, err := RunnerCapacitySource(RunnerCapacity{8000, 16384, 2048}, RunnerCapacity{4000, 32768, 1024}, RunnerCapacity{6000, 8192, 4096})
+	if err != nil || s.Source != types.LimitSourceRunner || *s.CPUMillis.Max != 8000 || *s.MemoryMiB.Max != 32768 || *s.DiskMiB.Max != 4096 {
+		t.Fatalf("the largest candidate's per-run limit bounds each field, disk included: %+v, %v", s, err)
 	}
 	if s.LifetimeSec != (Bound{}) || s.IdleSec != (Bound{}) {
-		t.Fatal("a runner's capacity says nothing about time")
+		t.Fatal("a runner's limits say nothing about time")
 	}
 	for name, c := range map[string][]RunnerCapacity{
 		"no candidate":           nil,
-		"zero cpu":               {{8000, 16384}, {0, 16384}},
-		"zero memory":            {{8000, 0}},
-		"a negative report":      {{-1, 100}},
-		"an unreported memory":   {{4000, 0}, {8000, 8192}},
-		"one unknown among many": {{8000, 8192}, {8000, 8192}, {0, 0}},
+		"zero cpu":               {{8000, 16384, 1024}, {0, 16384, 1024}},
+		"zero memory":            {{8000, 0, 1024}},
+		"zero disk":              {{8000, 8192, 0}},
+		"a negative limit":       {{-1, 100, 1024}},
+		"one unknown among many": {{8000, 8192, 1024}, {8000, 8192, 1024}, {0, 0, 0}},
 	} {
 		if _, err := RunnerCapacitySource(c...); err == nil {
 			t.Errorf("%s was read as a capacity", name)
@@ -506,8 +506,8 @@ func TestEffectiveOwnerScenarios(t *testing.T) {
 		t.Fatalf("the pool's default stands under governance's higher cap: %+v", e.CPUMillis)
 	}
 
-	// A self-hosted pool is additionally capped by its runner's reported capacity.
-	cap4, err := RunnerCapacitySource(RunnerCapacity{4000, 4096}, RunnerCapacity{16000, 65536})
+	// A pooled run is additionally capped by its runners' per-run limits.
+	cap4, err := RunnerCapacitySource(RunnerCapacity{4000, 4096, 1024}, RunnerCapacity{2000, 2048, 1024})
 	if err != nil {
 		t.Fatal(err)
 	}

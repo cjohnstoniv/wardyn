@@ -114,7 +114,7 @@ func (f *runnerRegistrationFake) RevokeRunnerRegistrationToken(_ context.Context
 	return types.RunnerRegistrationToken{}, store.ErrNotFound
 }
 
-func (f *runnerRegistrationFake) CountActiveRunsByRunner(_ context.Context, ids []uuid.UUID) (map[uuid.UUID]int, error) {
+func (f *runnerRegistrationFake) RunnerSlotHolders(_ context.Context, ids []uuid.UUID) (map[uuid.UUID]int, error) {
 	out := map[uuid.UUID]int{}
 	for _, id := range ids {
 		if n := f.runs[id]; n > 0 {
@@ -124,23 +124,30 @@ func (f *runnerRegistrationFake) CountActiveRunsByRunner(_ context.Context, ids 
 	return out, nil
 }
 
-func (f *runnerRegistrationFake) RunnerSlotHolders(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]int, error) {
-	return f.CountActiveRunsByRunner(ctx, ids)
+func (f *runnerRegistrationFake) RunnerUsage(ctx context.Context, ids []uuid.UUID, _ []string) (map[string]types.RunnerTally, error) {
+	held, _ := f.RunnerSlotHolders(ctx, ids)
+	out := map[string]types.RunnerTally{}
+	for id, n := range held {
+		out[id.String()] = types.RunnerTally{Runs: n}
+	}
+	return out, nil
 }
 
 func (f *runnerRegistrationFake) RunnerPoolsOf(context.Context, []uuid.UUID) (map[uuid.UUID][]types.RunnerPoolRef, error) {
 	return map[uuid.UUID][]types.RunnerPoolRef{}, nil
 }
 
-func (f *runnerRegistrationFake) UpdateRunnerMaxRuns(_ context.Context, id uuid.UUID, owner string, maxRuns int) (int, types.Runner, error) {
+// UpdateRunnerLimits writes any live runner's limits: unlike the store it does not check the owner, so
+// a test of the route pins the handler's own owner check (the store's is pinned by its PG test).
+func (f *runnerRegistrationFake) UpdateRunnerLimits(_ context.Context, id uuid.UUID, _ string, limits types.RunnerLimits) (*types.RunnerLimits, types.Runner, error) {
 	f.lock.Lock()
 	defer f.lock.Unlock()
 	row, ok := f.rows[id]
-	if !ok || row.Owner != owner || row.State == types.RunnerRevoked {
-		return 0, types.Runner{}, store.ErrNotFound
+	if !ok || row.State == types.RunnerRevoked {
+		return nil, types.Runner{}, store.ErrNotFound
 	}
-	before := row.MaxRuns
-	row.MaxRuns = maxRuns
+	before := row.Limits
+	row.Limits, row.MaxRuns = &limits, limits.RunsAtOnce
 	f.rows[id] = row
 	return before, row, nil
 }
@@ -638,7 +645,7 @@ func TestRunnerViewNamesWhoRevokedAndWhy(t *testing.T) {
 	srv, _, _ := newRunnerRegistrationServer(t)
 	row := types.Runner{ID: uuid.New(), State: types.RunnerRevoked, RevokedBy: "alice", RevokeReason: types.RunnerRevokeNotMine}
 	for _, admin := range []bool{true, false} {
-		b, err := json.Marshal(srv.runnerView(row, 0, 0, admin))
+		b, err := json.Marshal(srv.runnerView(row, types.RunnerTally{}, admin))
 		if err != nil {
 			t.Fatal(err)
 		}

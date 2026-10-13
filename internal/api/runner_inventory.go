@@ -57,14 +57,14 @@ func runnerLapsed(row types.Runner, now time.Time) bool {
 // runnerView is the row as a reader sees it. admin is the administrators' view: the owner is named
 // and the fingerprint is whole. On an owner's own route an unclaimed runner's fingerprint is
 // abbreviated, so the console cannot be the place it is copied from into the claim.
-func (s *Server) runnerView(row types.Runner, runs, running int, admin bool) types.RunnerView {
+func (s *Server) runnerView(row types.Runner, used types.RunnerTally, admin bool) types.RunnerView {
 	v := types.RunnerView{
 		ID: row.ID, Name: row.Name, State: row.State, MintedBy: row.MintedBy,
 		Online:         row.State == types.RunnerClaimed && s.runnerOnline(row.ID),
 		KeyFingerprint: row.KeyFingerprint, Version: row.Version, CreatedAt: row.CreatedAt,
 		ClaimedAt: row.ClaimedAt, LastSeenAt: row.LastSeenAt, RevokedAt: row.RevokedAt,
 		RevokedBy: row.RevokedBy, RevokeReason: row.RevokeReason,
-		PostureSource: row.PostureSource, Kind: types.RunnerKindSelfHosted, Usage: types.RunnerUsage{InUse: types.RunnerTally{Runs: running}},
+		PostureSource: row.PostureSource, Kind: types.RunnerKindSelfHosted, Limits: row.Limits, Usage: s.selfHostedUsage(row, used),
 		MachineName: row.MachineName,
 	}
 	if admin {
@@ -118,20 +118,15 @@ func abbreviateFingerprint(fp string) (string, bool) {
 	return fp[:fingerprintHead] + "…" + fp[len(fp)-fingerprintTail:], true
 }
 
-// runnerViews is rows as views, each with its counts of runs.
+// runnerViews is rows as views, each with its limits and usage.
 func (s *Server) runnerViews(w http.ResponseWriter, r *http.Request, rs store.RunnerInventoryStore, rows []types.Runner, admin bool) ([]types.RunnerView, bool) {
 	ids := make([]uuid.UUID, len(rows))
 	for i, row := range rows {
 		ids[i] = row.ID
 	}
-	runs, err := rs.CountActiveRunsByRunner(r.Context(), ids)
+	used, err := rs.RunnerUsage(r.Context(), ids, nil)
 	if err != nil {
-		writeServerError(w, r, "count runs by runner", err)
-		return nil, false
-	}
-	running, err := rs.RunnerSlotHolders(r.Context(), ids)
-	if err != nil {
-		writeServerError(w, r, "count sandbox-holding runs by runner", err)
+		writeServerError(w, r, "read runner usage", err)
 		return nil, false
 	}
 	pools, err := rs.RunnerPoolsOf(r.Context(), ids)
@@ -151,7 +146,7 @@ func (s *Server) runnerViews(w http.ResponseWriter, r *http.Request, rs store.Ru
 		return email
 	}
 	for i, row := range rows {
-		out[i] = s.runnerView(row, runs[row.ID], running[row.ID], admin)
+		out[i] = s.runnerView(row, used[row.ID.String()], admin)
 		out[i].Pools = append([]types.RunnerPoolRef{}, pools[row.ID]...)
 		if admin {
 			continue

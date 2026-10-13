@@ -5,6 +5,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
@@ -49,7 +50,7 @@ func TestPG_RunnerAtItsMaxRunsRefusesOrWaits(t *testing.T) {
 		t.Fatalf("the queue's verdict on a full runner = %+v, %v; want it held for runners_at_capacity", room, err)
 	}
 
-	if w := e.call(e.person, http.MethodPut, "/api/v1/me/runners/"+awake.String(), `{"max_runs":2}`); w.Code != http.StatusOK {
+	if w := e.call(e.person, http.MethodPut, "/api/v1/me/runners/"+awake.String(), roomyLimitsBody(2)); w.Code != http.StatusOK {
 		t.Fatalf("owner raise = %d %s", w.Code, w.Body)
 	}
 	if second := e.localCreate(runBody("")); second.RunnerID == nil || *second.RunnerID != awake {
@@ -158,4 +159,12 @@ func TestPG_QueuedRunStartsOnTheRunnerItsPromotionChose(t *testing.T) {
 	if !sawA {
 		t.Fatal("no launch's own pick was a, so the kept binding was not exercised")
 	}
+}
+
+// roomyLimitsBody is an owner's runner update declaring roomy limits with runs at once.
+func roomyLimitsBody(runs int) string {
+	l := roomyRunnerLimits()
+	l.RunsAtOnce = runs
+	b, _ := json.Marshal(types.RunnerUpdateRequest{Limits: l})
+	return string(b)
 }

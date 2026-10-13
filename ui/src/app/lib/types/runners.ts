@@ -186,4 +186,4 @@ export type RunnerManagementReason =
   | "runner_session_required"
   | "runners_org_url_invalid"
   | "runners_enabled_required"
-  | "runner_max_runs_invalid";
+  | "runner_limits_invalid";

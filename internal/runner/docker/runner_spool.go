@@ -23,6 +23,41 @@ import (
 
 const runnerSpoolTarget = "/var/lib/wardyn/decision-spool"
 
+// proxyImageUser is the proxy image's own user and group (distroless nonroot).
+const proxyImageUser = 65532
+
+// processUID and chownSpool are this process's uid and the spool hand-over, swapped in tests, which
+// cannot be root.
+var (
+	processUID = os.Getuid
+	chownSpool = chownSpoolTree
+)
+
+// chownSpoolTree gives the spool directory and every entry in it (the spool holds no subdirectory) to
+// uid:gid, never following a link.
+func chownSpoolTree(dir string, uid, gid int) error {
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+	f, err := root.Open(".")
+	if err != nil {
+		return err
+	}
+	names, err := f.Readdirnames(-1)
+	f.Close()
+	if err != nil {
+		return err
+	}
+	for _, name := range append(names, ".") {
+		if err := root.Lchown(name, uid, gid); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (d *Driver) runnerSpoolConfig(ctx context.Context, id uuid.UUID, b []byte, cfg *container.Config, host *container.HostConfig) ([]byte, error) {
 	if d.cfg.RunnerStateDir == "" {
 		return b, nil
@@ -57,11 +92,18 @@ func (d *Driver) runnerSpoolConfig(ctx context.Context, id uuid.UUID, b []byte, 
 	if err != nil {
 		return nil, err
 	}
-	// Rootless Docker maps its container root to the daemon owner; a rootful
-	// daemon needs the caller's uid/gid to create files runnerd can read at0600.
-	if slices.Contains(info.Info.SecurityOptions, "name=rootless") {
+	// Rootless Docker maps its container root to the daemon owner. A rootful daemon needs the caller's
+	// uid/gid to create files runnerd can read at 0600, unless runnerd is root: root reads them anyway,
+	// so the proxy keeps its image's non-root user and the spool is handed to that user.
+	switch {
+	case slices.Contains(info.Info.SecurityOptions, "name=rootless"):
 		cfg.User = "0:0"
-	} else {
+	case processUID() == 0:
+		if err := chownSpool(dir, proxyImageUser, proxyImageUser); err != nil {
+			return nil, fmt.Errorf("runner spool: hand to the proxy's user: %w", err)
+		}
+		cfg.User = fmt.Sprintf("%d:%d", proxyImageUser, proxyImageUser)
+	default:
 		cfg.User = fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid())
 	}
 	host.Mounts = append(host.Mounts, mount.Mount{Type: mount.TypeBind, Source: dir, Target: runnerSpoolTarget, BindOptions: &mount.BindOptions{NonRecursive: true}})
