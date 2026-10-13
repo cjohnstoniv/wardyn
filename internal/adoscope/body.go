@@ -184,6 +184,57 @@ func foldKey(name string) string {
 	}, name)
 }
 
+// packageBatch reports whether r is a feed's package batch route, positionally:
+// _apis/packaging/feeds/{feed}/{protocol}/packagesbatch, or the same batch
+// under the feed's recyclebin.
+func packageBatch(r route) bool {
+	if r.area != "packaging" || r.res != "feeds" || !slices.Contains(packageProtocols, r.at(4)) {
+		return false
+	}
+	if r.at(5) == "recyclebin" {
+		return r.at(6) == "packagesbatch" && r.at(7) == ""
+	}
+	return r.at(5) == "packagesbatch" && r.at(6) == ""
+}
+
+// packageBatchOps are the batch operations Azure DevOps documents across the
+// package protocols, by the capability each needs; not every protocol takes
+// every operation.
+var packageBatchOps = map[string]Capability{
+	"promote":         CapPackagingWrite,
+	"list":            CapPackagingWrite,
+	"deprecate":       CapPackagingWrite,
+	"delete":          CapPackagingManage,
+	"permanentdelete": CapPackagingManage,
+	"unpublish":       CapPackagingManage,
+	"restoretofeed":   CapPackagingManage,
+}
+
+// packageBatchWrite classifies a package batch by its operation: one batch
+// route promotes and deletes alike under vso.packaging_write, so the body is
+// the only place the difference exists. An operation it cannot read, or does
+// not know, is refused.
+func packageBatchWrite(req Request) (Verdict, error) {
+	body, err := peekBody(req)
+	if err != nil {
+		return Verdict{}, err
+	}
+	var batch struct {
+		Operation *string `json:"operation"`
+	}
+	if err := decodeUnique(body, &batch); err != nil {
+		return Verdict{}, err
+	}
+	if batch.Operation == nil {
+		return Verdict{}, fmt.Errorf("adoscope: package batch names no operation")
+	}
+	c, ok := packageBatchOps[strings.ToLower(*batch.Operation)]
+	if !ok {
+		return Verdict{}, fmt.Errorf("adoscope: package batch operation %q is not one this catalogue classifies", *batch.Operation)
+	}
+	return Verdict{Capability: c}, nil
+}
+
 // pullRequestWrite classifies a pull-request write, promoting it to
 // CapPolicyBypass when the body asks to complete the PR through the branch
 // policy — Azure DevOps takes the same vso.code_write scope either way, so
