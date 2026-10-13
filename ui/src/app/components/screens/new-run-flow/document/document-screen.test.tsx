@@ -111,8 +111,7 @@ describe("run document editor", () => {
     expect(await screen.findByText(RUN_DOCUMENT_CANON.JSON_INVALID)).toBeInTheDocument();
     expect(screen.getAllByText(RUN_DOCUMENT_CANON.JSON_INVALID)).toHaveLength(1);
     expect(importDocument).not.toHaveBeenCalled();
-    // the format switch states the parser's reason; the editor adds no second line of its own
-    expect(screen.getByTestId("document-switch-reason")).toBeInTheDocument();
+    // the editor adds no second line of its own
     expect(screen.queryByTestId("document-gutter")?.querySelector("[data-error]")).toBeNull();
   });
 
@@ -237,14 +236,25 @@ describe("run document editor", () => {
     expect(screen.getByTestId("validation-panel")).toHaveAttribute("data-status", "ready");
   });
 
-  it("converts through the editor's switch and keeps the URL on the format shown", async () => {
+  it("switches format at once, with no confirm, and keeps the URL on the format shown", async () => {
     open();
     await screen.findByRole("textbox");
     type("agent: claude-code\n");
-    fireEvent.click(screen.getByRole("button", { name: "JSON" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Switch to JSON" }));
+    fireEvent.click(within(screen.getByRole("group", { name: C.FORMAT_ARIA })).getByRole("button", { name: C.FORMAT_JSON }));
+    expect(screen.queryByRole("alertdialog")).toBeNull();
     await waitFor(() => expect(text("path")).toContain("format=json"));
     expect((screen.getByRole("textbox", { name: C.EDITOR_ARIA("JSON") }) as HTMLTextAreaElement).value).toBe('{\n  "agent": "claude-code"\n}');
+  });
+
+  it("leaves text that does not parse in its format and says why", async () => {
+    const { importDocument } = open();
+    await screen.findByRole("textbox");
+    type("a: [1,\n");
+    fireEvent.click(screen.getByRole("button", { name: C.FORMAT_JSON }));
+    expect(editor().value).toBe("a: [1,\n");
+    expect(text("path")).toContain("format=yaml");
+    expect(screen.getByTestId("validation-panel")).toHaveTextContent(C.YAML_INVALID);
+    expect(importDocument).not.toHaveBeenCalled();
   });
 
   it("Back returns to Start", async () => {

@@ -4,49 +4,23 @@
  */
 
 import * as React from "react";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import type { PolicySourceFormat } from "../../../lib/policy-document";
 import { DocumentEditor, type DocumentDiagnostic } from "./document-editor";
-import * as policySource from "./policy-source";
-
-vi.mock("./policy-source", async (importOriginal) => {
-  const real = await importOriginal<typeof import("./policy-source")>();
-  return { ...real, parseSpec: vi.fn(real.parseSpec) };
-});
 
 const YAML = "# who may reach what\nmin_confinement_class: CC2\nallowed_domains:\n  - api.example.com\n";
 
-const seen: { value: string; format: PolicySourceFormat }[] = [];
-function Editor({
-  initial = YAML,
-  initialFormat = "yaml",
-  diagnostics = [],
-  convertible = true,
-}: {
-  initial?: string;
-  initialFormat?: PolicySourceFormat;
-  diagnostics?: DocumentDiagnostic[];
-  convertible?: boolean;
-}) {
+const seen: { value: string }[] = [];
+function Editor({ initial = YAML, diagnostics = [] }: { initial?: string; diagnostics?: DocumentDiagnostic[] }) {
   const [value, setValue] = React.useState(initial);
-  const [format, setFormat] = React.useState<PolicySourceFormat>(initialFormat);
-  seen.push({ value, format });
+  seen.push({ value });
   return (
     <DocumentEditor
       id="doc"
       value={value}
-      format={format}
+      format="yaml"
       onChange={setValue}
-      onFormatChange={
-        convertible
-          ? (next, text) => {
-              setFormat(next);
-              setValue(text);
-            }
-          : undefined
-      }
       diagnostics={diagnostics}
       label="Run document"
       describedBy="doc-help"
@@ -105,58 +79,5 @@ describe("DocumentEditor — gutter and error marks", () => {
     await userEvent.type(box(), "{Enter}b: 2");
     expect(gutter().children).toHaveLength(2);
     expect(last().value).toBe("a: 1\nb: 2");
-  });
-});
-
-describe("DocumentEditor — format conversion", () => {
-  it("YAML to JSON asks first, then converts what parses; Keep YAML leaves the text alone", async () => {
-    seen.length = 0;
-    render(<Editor />);
-    await userEvent.click(screen.getByRole("button", { name: "JSON" }));
-    expect(screen.getByText("Switch to JSON?")).toBeInTheDocument();
-    expect(last()).toEqual({ value: YAML, format: "yaml" });
-
-    await userEvent.click(screen.getByRole("button", { name: "Keep YAML" }));
-    expect(last()).toEqual({ value: YAML, format: "yaml" });
-
-    await userEvent.click(screen.getByRole("button", { name: "JSON" }));
-    await userEvent.click(screen.getByRole("button", { name: "Switch to JSON" }));
-    expect(last().format).toBe("json");
-    expect(JSON.parse(last().value)).toEqual({ min_confinement_class: "CC2", allowed_domains: ["api.example.com"] });
-  });
-
-  it("JSON to YAML converts at once", async () => {
-    seen.length = 0;
-    render(<Editor initial={'{"min_confinement_class":"CC2"}'} initialFormat="json" />);
-    await userEvent.click(screen.getByRole("button", { name: "YAML" }));
-    expect(last()).toEqual({ value: "min_confinement_class: CC2\n", format: "yaml" });
-  });
-
-  it("holds the switch while the source does not parse", () => {
-    seen.length = 0;
-    render(<Editor initial={"a: [1,\n"} />);
-    expect(screen.getByRole("button", { name: "JSON" })).toBeDisabled();
-    expect(screen.getByTestId("document-switch-reason").textContent).toMatch(/^Invalid YAML — /);
-  });
-
-  it("says nothing about the switch while the source parses", () => {
-    seen.length = 0;
-    render(<Editor />);
-    expect(screen.queryByTestId("document-switch-reason")).toBeNull();
-  });
-
-  it("parses once per value change, not on every render", async () => {
-    seen.length = 0;
-    render(<Editor />);
-    vi.mocked(policySource.parseSpec).mockClear();
-    await userEvent.click(screen.getByRole("button", { name: "JSON" })); // re-renders: the dialog opens
-    expect(screen.getByText("Switch to JSON?")).toBeInTheDocument();
-    expect(policySource.parseSpec).not.toHaveBeenCalled();
-  });
-
-  it("shows no switch when the caller does not offer conversion", () => {
-    seen.length = 0;
-    render(<Editor convertible={false} />);
-    expect(screen.queryByRole("button", { name: "JSON" })).toBeNull();
   });
 });

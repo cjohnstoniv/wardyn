@@ -5,34 +5,12 @@
 
 // DocumentEditor — the run document's source box: a textarea with a line gutter
 // and the caller's diagnostics marked on their lines. It holds no text of its
-// own and never repairs what was typed. With `onFormatChange` it also offers the
-// YAML/JSON switch, which converts only source that parses and, going to JSON
-// (which has nowhere to keep a comment), asks first — as PolicyEditor does.
+// own and never repairs what was typed. The format switch is the caller's.
 import * as React from "react";
 import type { PolicySourceFormat } from "../../../lib/policy-document";
-import { POLICY_TAB } from "../../screens/run-detail/policy-tab-copy";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "../../ui/alert-dialog";
-import { buttonVariants } from "../../ui/button";
 import { Textarea } from "../../ui/textarea";
 import { cn } from "../../ui/utils";
-import { toYaml } from "../yaml-block";
 import { POLICY_DOCUMENT as D } from "../copy/policy-document";
-import { Segmented } from "../segmented";
-import { parseSpec } from "./policy-source";
-
-const FORMATS: { value: PolicySourceFormat; label: string }[] = [
-  { value: "yaml", label: POLICY_TAB.viewYaml },
-  { value: "json", label: D.JSON },
-];
 
 /** One problem in the source, at a 1-based line and column. */
 export interface DocumentDiagnostic {
@@ -48,8 +26,6 @@ export interface DocumentEditorProps {
   value: string;
   format: PolicySourceFormat;
   onChange: (value: string) => void;
-  /** An explicit conversion: the new format and the source rewritten in it. Omit to hide the switch. */
-  onFormatChange?: (format: PolicySourceFormat, source: string) => void;
   diagnostics: DocumentDiagnostic[];
   /** The textarea's accessible name. */
   label: string;
@@ -72,42 +48,20 @@ export function DocumentEditor({
   value,
   format,
   onChange,
-  onFormatChange,
   diagnostics,
   label,
   describedBy,
   rows = 12,
   className,
 }: DocumentEditorProps) {
-  const [confirmJson, setConfirmJson] = React.useState(false);
   const gutter = React.useRef<HTMLDivElement>(null);
   const diagnosticsId = `${id}-diagnostics`;
   const invalid = diagnostics.length > 0;
   const errorLines = new Set(diagnostics.map((d) => d.line));
   const lineCount = value.split("\n").length;
-  // The caller's diagnostics may come from the server; the switch needs only a local parse.
-  const parsed = React.useMemo(() => parseSpec(value, format), [value, format]);
-
-  const requestFormat = (next: PolicySourceFormat) => {
-    if (next === format || !parsed.ok) return;
-    if (next === "json") setConfirmJson(true);
-    else onFormatChange?.("yaml", `${toYaml(parsed.spec)}\n`);
-  };
 
   return (
     <div className={cn("flex min-w-0 flex-col gap-2", className)} data-testid="document-editor" data-format={format}>
-      {onFormatChange && (
-        <div className="flex flex-wrap items-center gap-2">
-          <Segmented value={format} options={FORMATS} onChange={requestFormat} disabled={!parsed.ok} />
-          {/* A held switch says why, in the words PolicyEditor uses; the parser's message can quote the source. */}
-          {!parsed.ok && (
-            <p data-testid="document-switch-reason" className="select-text whitespace-pre-wrap break-words text-xs text-danger">
-              {format === "json" ? D.INVALID_JSON(parsed.message) : D.INVALID_YAML(parsed.message)}
-            </p>
-          )}
-        </div>
-      )}
-
       <div className={cn("flex min-w-0 rounded-md border bg-input-background focus-within:ring-[3px] focus-within:ring-ring", invalid ? "border-destructive" : "border-input")}>
         <div
           ref={gutter}
@@ -157,28 +111,6 @@ export function DocumentEditor({
             </li>
           ))}
         </ul>
-      )}
-
-      {onFormatChange && (
-        <AlertDialog open={confirmJson} onOpenChange={setConfirmJson}>
-          <AlertDialogContent className="sm:max-w-md">
-            <AlertDialogHeader>
-              <AlertDialogTitle>{D.JSON_TITLE}</AlertDialogTitle>
-              <AlertDialogDescription>{D.JSON_BODY}</AlertDialogDescription>
-            </AlertDialogHeader>
-            <AlertDialogFooter>
-              <AlertDialogCancel className={buttonVariants({ variant: "ghost" })}>{D.KEEP_YAML}</AlertDialogCancel>
-              <AlertDialogAction
-                onClick={() => {
-                  // Converted from what parses now, never from an earlier valid text.
-                  if (parsed.ok) onFormatChange("json", JSON.stringify(parsed.spec, null, 2));
-                }}
-              >
-                {D.SWITCH_JSON}
-              </AlertDialogAction>
-            </AlertDialogFooter>
-          </AlertDialogContent>
-        </AlertDialog>
       )}
     </div>
   );
