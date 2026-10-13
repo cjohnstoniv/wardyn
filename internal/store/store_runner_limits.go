@@ -12,135 +12,262 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
+	"github.com/cjohnstoniv/wardyn/internal/runnerpool"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// A runner's "Runs at once" (migration 0172): placement never puts more than a runner's max_runs
-// sandbox-holding runs on it. Every writer that makes a run hold a sandbox on a runner (a create, a
-// promotion, the start of a promoted run, a revive that starts an agent) takes the runner's row
-// FOR NO KEY UPDATE, counts its slot-holders and writes in the same transaction. Every such writer takes
+// A runner's limits (migrations 0172, 0174), both kinds: placement never puts a run on a runner past
+// its Runs at once (max_runs) or past one of its totals, and never a run larger than its per-run limit.
+// Every writer that makes a run hold a sandbox on a runner (a create, a promotion, the start of a
+// promoted run, a revive that starts an agent) takes the runner's row FOR NO KEY UPDATE, sums what its
+// slot-holders reserve with runnerUsageSQL and writes in the same transaction. Every such writer takes
 // its locks in one order, skipping those it does not need: the run's pool row (CreateRunUnderCap,
 // lockPoolForRevive, promoteAdmitted), then the deployment cap's advisory lock (lockAndCountActiveRuns),
-// then runner rows in id order (lockRunnerRooms). A promoted run's start takes runner rows only.
+// then self-hosted runner rows in id order, then remote-hosted runner rows in id order
+// (lockRunnerRooms). A promoted run's start takes runner rows only.
+//
+// A runner is named by its key: a self-hosted runner's id as text, or a remote-hosted runner's id,
+// which never reads as a UUID (0173's check), so one key space holds both kinds.
 
-// ErrRunnerAtCapacity is the refusal when a runner already holds max_runs sandbox-holding runs.
+// ErrRunnerAtCapacity is the refusal when a runner has no room for the run: it already holds its Runs
+// at once, a total would be passed, the run is past its per-run limit, or it declares no limits.
 var ErrRunnerAtCapacity = errors.New("store: runner is running its limit of runs at once")
 
-// RunnerAtCapacityError names the runner and its limit for the sentence; it is ErrRunnerAtCapacity.
+// RunnerAtCapacityError names the runner and its Runs at once for the sentence; it is ErrRunnerAtCapacity.
+// NeverFits says the run could not go there however empty the runner is: it is past the per-run limit,
+// or the runner declares no limits.
 type RunnerAtCapacityError struct {
-	Runner string
-	Max    int
+	Runner    string
+	Max       int
+	NeverFits bool
 }
 
 func (e *RunnerAtCapacityError) Error() string { return ErrRunnerAtCapacity.Error() }
 func (e *RunnerAtCapacityError) Unwrap() error { return ErrRunnerAtCapacity }
 
-// runnerSlotHoldersSQL counts the runs holding a sandbox on each runner: a slot-holding state whose
-// agent still runs (HoldsSandboxSQL), never a QUEUED run. $1 is the states, $2 the runner ids, $3 a
-// run never counted (uuid.Nil for none).
-const runnerSlotHoldersSQL = `SELECT runner_id, count(*) FROM agent_runs
-	WHERE runner_id = ANY($2) AND state = ANY($1) AND id <> $3 AND ` + HoldsSandboxSQL + ` GROUP BY runner_id`
+// runnerLimitCols are a runner's six limit columns (0174), named alike on runners and remote_runners.
+const runnerLimitCols = `total_cpu_millis, total_memory_mib, total_disk_mib, run_cpu_millis, run_memory_mib, run_disk_mib`
 
-func countRunnerSlotHolders(ctx context.Context, q Querier, ids []uuid.UUID, except uuid.UUID) (map[uuid.UUID]int, error) {
-	out := map[uuid.UUID]int{}
-	if len(ids) == 0 {
+// limitCols scans runnerLimitCols, any of which may be NULL.
+type limitCols [6]*int64
+
+func (l *limitCols) targets() []any {
+	out := make([]any, len(l))
+	for i := range l {
+		out[i] = &l[i]
+	}
+	return out
+}
+
+// limits is the runner's limit set with Runs at once runs, nil when any of it is unset.
+func (l limitCols) limits(runs *int) *types.RunnerLimits {
+	if runs == nil || slices.Contains(l[:], nil) {
+		return nil
+	}
+	return &types.RunnerLimits{RunsAtOnce: *runs,
+		Total:  types.RunnerAmounts{CPUMillis: *l[0], MemoryMiB: *l[1], DiskMiB: *l[2]},
+		PerRun: types.RunnerAmounts{CPUMillis: *l[3], MemoryMiB: *l[4], DiskMiB: *l[5]}}
+}
+
+// limitArgs are the six column values of l, all NULL for nil.
+func limitArgs(l *types.RunnerLimits) []any {
+	if l == nil {
+		return []any{nil, nil, nil, nil, nil, nil}
+	}
+	return []any{l.Total.CPUMillis, l.Total.MemoryMiB, l.Total.DiskMiB, l.PerRun.CPUMillis, l.PerRun.MemoryMiB, l.PerRun.DiskMiB}
+}
+
+// runnerUsageSQL is a runner's In use, the one predicate both admission (under the runner row's lock)
+// and every read (without one) run: per runner key, the runs holding a sandbox there in a slot-holding
+// state whose agent still runs (HoldsSandboxSQL), never a QUEUED run, and the sum of what they reserve.
+// $1 is the states, $2 the self-hosted runner ids, $3 the remote-hosted runner ids, $4 a run never
+// counted (uuid.Nil for none).
+const runnerUsageSQL = `SELECT COALESCE(runner_id::text, runner_pool_executor), count(*)::int,
+	COALESCE(sum(reserved_cpu_millis), 0)::bigint, COALESCE(sum(reserved_memory_mib), 0)::bigint, COALESCE(sum(reserved_disk_mib), 0)::bigint
+	FROM agent_runs WHERE (runner_id = ANY($2) OR (runner_id IS NULL AND runner_pool_executor = ANY($3)))
+	AND state = ANY($1) AND id <> $4 AND ` + HoldsSandboxSQL + ` GROUP BY 1`
+
+// splitRunnerKeys sorts keys into self-hosted runner ids and remote-hosted runner ids.
+func splitRunnerKeys(keys []string) (runners []uuid.UUID, remotes []string) {
+	for _, k := range keys {
+		if id, err := uuid.Parse(k); err == nil {
+			runners = append(runners, id)
+		} else if k != "" {
+			remotes = append(remotes, k)
+		}
+	}
+	return runners, remotes
+}
+
+func runnerUsage(ctx context.Context, q Querier, runners []uuid.UUID, remotes []string, except uuid.UUID) (map[string]types.RunnerTally, error) {
+	out := map[string]types.RunnerTally{}
+	if len(runners) == 0 && len(remotes) == 0 {
 		return out, nil
 	}
-	rows, err := q.Query(ctx, runnerSlotHoldersSQL, slotHoldingStateNames(), ids, except)
+	rows, err := q.Query(ctx, runnerUsageSQL, slotHoldingStateNames(), runners, remotes, except)
 	if err != nil {
-		return nil, fmt.Errorf("store: count runner slot holders: %w", err)
+		return nil, fmt.Errorf("store: runner usage: %w", err)
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var id uuid.UUID
-		var n int
-		if err := rows.Scan(&id, &n); err != nil {
-			return nil, fmt.Errorf("store: count runner slot holders: %w", err)
+		var key string
+		var t types.RunnerTally
+		if err := rows.Scan(&key, &t.Runs, &t.CPUMillis, &t.MemoryMiB, &t.DiskMiB); err != nil {
+			return nil, fmt.Errorf("store: runner usage: %w", err)
 		}
-		out[id] = n
+		out[key] = t
 	}
 	return out, rows.Err()
 }
 
-// RunnerSlotHolders is the number of sandbox-holding runs on each of ids, without a lock: a read for
-// a display and for placement's choice, never the authority. A runner with none is absent.
+// RunnerUsage is the In use of each runner named, by key, without a lock: what every read shows and
+// placement chooses by, never the authority. except is a run never counted (uuid.Nil for none): a
+// promoted run's start does not count the run's own place. A runner with nothing on it is absent.
+func (s PG) RunnerUsage(ctx context.Context, runners []uuid.UUID, remotes []string, except uuid.UUID) (map[string]types.RunnerTally, error) {
+	return runnerUsage(ctx, s.Pool, runners, remotes, except)
+}
+
+// RunnerSlotHolders is the number of sandbox-holding runs on each of ids (RunnerUsage's runs). A runner
+// with none is absent.
 func (s PG) RunnerSlotHolders(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]int, error) {
-	return countRunnerSlotHolders(ctx, s.Pool, ids, uuid.Nil)
-}
-
-// runnerRoom is one locked runner's limit and its slot-holders.
-type runnerRoom struct {
-	name      string
-	max, used int
-}
-
-func (r runnerRoom) free() bool { return r.used < r.max }
-
-// lockRunnerRooms locks the runners of ids (FOR NO KEY UPDATE, in id order, so two writers locking
-// several never deadlock) and counts each one's slot-holders other than except. q must be a pgx.Tx.
-// A runner that no longer exists is absent.
-func lockRunnerRooms(ctx context.Context, q Querier, ids []uuid.UUID, except uuid.UUID) (map[uuid.UUID]runnerRoom, error) {
-	ids = slices.Clone(ids)
-	slices.SortFunc(ids, func(a, b uuid.UUID) int { return slices.Compare(a[:], b[:]) })
-	ids = slices.Compact(ids)
-	type locked struct {
-		id   uuid.UUID
-		name string
-		max  int
-	}
-	rows, err := collect(ctx, q, "lock", "runners", `SELECT id, name, max_runs FROM runners WHERE id = ANY($1) ORDER BY id FOR NO KEY UPDATE`,
-		[]any{ids}, func(row pgx.Row) (locked, error) {
-			var l locked
-			err := row.Scan(&l.id, &l.name, &l.max)
-			return l, err
-		})
+	used, err := s.RunnerUsage(ctx, ids, nil, uuid.Nil)
 	if err != nil {
 		return nil, err
 	}
-	used, err := countRunnerSlotHolders(ctx, q, ids, except)
-	if err != nil {
-		return nil, err
-	}
-	out := make(map[uuid.UUID]runnerRoom, len(rows))
-	for _, l := range rows {
-		out[l.id] = runnerRoom{name: l.name, max: l.max, used: used[l.id]}
+	out := make(map[uuid.UUID]int, len(used))
+	for k, t := range used {
+		out[uuid.MustParse(k)] = t.Runs
 	}
 	return out, nil
 }
 
-// admitOnFirstRunner locks the runners of candidates and returns the first, in candidates' order, whose
-// slot-holders other than except are under its max_runs; a RunnerAtCapacityError naming the first when
-// none is. q must be a pgx.Tx.
-func admitOnFirstRunner(ctx context.Context, q Querier, candidates []uuid.UUID, except uuid.UUID) (uuid.UUID, error) {
-	rooms, err := lockRunnerRooms(ctx, q, candidates, except)
-	if err != nil {
-		return uuid.Nil, err
-	}
-	for _, id := range candidates {
-		if room, ok := rooms[id]; ok && room.free() {
-			return id, nil
-		}
-	}
-	first := rooms[candidates[0]]
-	return uuid.Nil, &RunnerAtCapacityError{Runner: first.name, Max: first.max}
+// runnerRoom is one locked runner's limits and what its runs hold.
+type runnerRoom struct {
+	name   string
+	limits *types.RunnerLimits
+	used   types.RunnerTally
 }
 
-// admitOnRunner locks one runner and refuses with a RunnerAtCapacityError when its slot-holders other
-// than except already reach its max_runs. q must be a pgx.Tx.
-func admitOnRunner(ctx context.Context, q Querier, runnerID, except uuid.UUID) error {
-	rooms, err := lockRunnerRooms(ctx, q, []uuid.UUID{runnerID}, except)
+func (r runnerRoom) fits(need types.RunnerAmounts) bool {
+	return runnerpool.Fits(r.limits, r.used, need) == runnerpool.FitOK
+}
+
+// take counts one more run reserving need, so a pass that admits several sees each.
+func (r *runnerRoom) take(need types.RunnerAmounts) {
+	r.used.Runs++
+	r.used.CPUMillis += need.CPUMillis
+	r.used.MemoryMiB += need.MemoryMiB
+	r.used.DiskMiB += need.DiskMiB
+}
+
+// runsLeft is how many more runs it takes at once.
+func (r runnerRoom) runsLeft() int {
+	if r.limits == nil {
+		return 0
+	}
+	return r.limits.RunsAtOnce - r.used.Runs
+}
+
+func (r runnerRoom) refusal(need types.RunnerAmounts) error {
+	runs := 0
+	if r.limits != nil {
+		runs = r.limits.RunsAtOnce
+	}
+	return &RunnerAtCapacityError{Runner: r.name, Max: runs, NeverFits: runnerpool.Fits(r.limits, r.used, need) != runnerpool.FitNoRoom}
+}
+
+// lockRunnerRooms locks the runners keys name, self-hosted rows then remote-hosted rows, each FOR NO KEY
+// UPDATE in id order (so two writers locking several never deadlock), and sums what each one's
+// slot-holders other than except reserve. q must be a pgx.Tx. A runner that no longer exists is absent.
+func lockRunnerRooms(ctx context.Context, q Querier, keys []string, except uuid.UUID) (map[string]runnerRoom, error) {
+	runners, remotes := splitRunnerKeys(keys)
+	slices.SortFunc(runners, func(a, b uuid.UUID) int { return slices.Compare(a[:], b[:]) })
+	runners = slices.Compact(runners)
+	slices.Sort(remotes)
+	remotes = slices.Compact(remotes)
+	type locked struct {
+		key  string
+		room runnerRoom
+	}
+	scan := func(row pgx.Row) (locked, error) {
+		var l locked
+		var runs *int
+		var lim limitCols
+		err := row.Scan(append([]any{&l.key, &l.room.name, &runs}, lim.targets()...)...)
+		l.room.limits = lim.limits(runs)
+		return l, err
+	}
+	var rows []locked
+	if len(runners) > 0 {
+		got, err := collect(ctx, q, "lock", "runners", `SELECT id::text, name, max_runs, `+runnerLimitCols+`
+			FROM runners WHERE id = ANY($1) ORDER BY id FOR NO KEY UPDATE`, []any{runners}, scan)
+		if err != nil {
+			return nil, err
+		}
+		rows = append(rows, got...)
+	}
+	if len(remotes) > 0 {
+		got, err := collect(ctx, q, "lock", "remote runners", `SELECT id, name, max_runs, `+runnerLimitCols+`
+			FROM remote_runners WHERE id = ANY($1) ORDER BY id FOR NO KEY UPDATE`, []any{remotes}, scan)
+		if err != nil {
+			return nil, err
+		}
+		rows = append(rows, got...)
+	}
+	used, err := runnerUsage(ctx, q, runners, remotes, except)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]runnerRoom, len(rows))
+	for _, l := range rows {
+		l.room.used = used[l.key]
+		out[l.key] = l.room
+	}
+	return out, nil
+}
+
+// admitOnFirstRunner locks the runners keys name and returns the first, in keys' order, that has room
+// for a run reserving need beside its slot-holders other than except; a RunnerAtCapacityError naming
+// the first when none has. q must be a pgx.Tx.
+func admitOnFirstRunner(ctx context.Context, q Querier, keys []string, need types.RunnerAmounts, except uuid.UUID) (string, error) {
+	rooms, err := lockRunnerRooms(ctx, q, keys, except)
+	if err != nil {
+		return "", err
+	}
+	for _, k := range keys {
+		if room, ok := rooms[k]; ok && room.fits(need) {
+			return k, nil
+		}
+	}
+	return "", rooms[keys[0]].refusal(need)
+}
+
+// admitOnRunner locks one runner and refuses with a RunnerAtCapacityError when a run reserving need
+// does not fit beside its slot-holders other than except. q must be a pgx.Tx. A runner that no longer
+// exists is left to the caller's own checks, as before limits.
+func admitOnRunner(ctx context.Context, q Querier, key string, need types.RunnerAmounts, except uuid.UUID) error {
+	rooms, err := lockRunnerRooms(ctx, q, []string{key}, except)
 	if err != nil {
 		return err
 	}
-	if room, ok := rooms[runnerID]; ok && !room.free() {
-		return &RunnerAtCapacityError{Runner: room.name, Max: room.max}
+	if room, ok := rooms[key]; ok && !room.fits(need) {
+		return room.refusal(need)
 	}
 	return nil
 }
 
-// holdsRunnerSlot reports whether inserting r puts a sandbox-holding run on a registered runner.
+// runnerKeyOf is the key of the runner r holds a sandbox on: its self-hosted runner, else its
+// remote-hosted runner, else "".
+func runnerKeyOf(runner *uuid.UUID, remote string) string {
+	if runner != nil {
+		return runner.String()
+	}
+	return remote
+}
+
+// holdsRunnerSlot reports whether inserting r puts a sandbox-holding run on a runner of either kind.
 func holdsRunnerSlot(r types.AgentRun) bool {
-	return r.RunnerID != nil && slices.Contains(types.SlotHoldingRunStates, r.State)
+	return runnerKeyOf(r.RunnerID, r.RunnerPoolExecutor) != "" && slices.Contains(types.SlotHoldingRunStates, r.State)
 }
 
 // RunnerPoolsOf — see RunnerInventoryStore. Only a pool whose owner is the runner's owner is named, so a
@@ -189,21 +316,19 @@ func (s PG) SetRunnerMachineName(ctx context.Context, id uuid.UUID, name string)
 	return nil
 }
 
-// UpdateRunnerMaxRuns sets the max_runs of a runner its owner holds, unclaimed or claimed, and returns
-// the value it had and the row as it is now. Another person's runner, a revoked one and an absent id
-// are ErrNotFound alike. Lowering it ends no run: the runs over the new limit keep running, and no new
-// run is placed there until the runner is under it.
-func (s PG) UpdateRunnerMaxRuns(ctx context.Context, id uuid.UUID, owner string, maxRuns int) (before int, after types.Runner, err error) {
+// UpdateRunnerLimits declares the limits of a runner its owner holds, unclaimed or claimed, and returns
+// the set it had (nil for none) and the row as it is now. Another person's runner, a revoked one and an
+// absent id are ErrNotFound alike. Lowering a limit ends no run: the runs over it keep running, and no
+// new run is placed there until the runner is under it.
+func (s PG) UpdateRunnerLimits(ctx context.Context, id uuid.UUID, owner string, limits types.RunnerLimits) (before *types.RunnerLimits, after types.Runner, err error) {
 	err = s.inTx(ctx, func(q Querier) error {
-		if err := q.QueryRow(ctx, `SELECT max_runs FROM runners WHERE id = $1 AND owner = $2 AND state <> 'revoked' FOR NO KEY UPDATE`,
-			id, owner).Scan(&before); err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
-				return ErrNotFound
-			}
-			return fmt.Errorf("store: lock runner: %w", err)
+		row, err := scanRunner(q.QueryRow(ctx, `SELECT `+runnerCols+` FROM runners WHERE id = $1 AND owner = $2 AND state <> 'revoked' FOR NO KEY UPDATE`, id, owner))
+		if err != nil {
+			return err
 		}
-		var err error
-		after, err = scanRunner(q.QueryRow(ctx, `UPDATE runners SET max_runs = $2 WHERE id = $1 RETURNING `+runnerCols, id, maxRuns))
+		before = row.Limits
+		after, err = scanRunner(q.QueryRow(ctx, `UPDATE runners SET max_runs = $2, (`+runnerLimitCols+`) = ($3, $4, $5, $6, $7, $8)
+			WHERE id = $1 RETURNING `+runnerCols, append([]any{id, limits.RunsAtOnce}, limitArgs(&limits)...)...))
 		return err
 	})
 	return before, after, err

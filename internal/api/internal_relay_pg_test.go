@@ -190,7 +190,7 @@ func newBindingFixture(t *testing.T) *bindingFixture {
 	b.srv = New(cfg)
 	id2 := uuid.New()
 	r2, err := f.st.CreateRunner(f.ctx, types.Runner{ID: id2, Owner: "admission-owner", Name: "laptop-2", PublicKey: make([]byte, 32), KeyFingerprint: id2.String(),
-		Version: "0.9.0", OrgURLSHA256: federation.OrgURLSHA256(admissionOrgURL)})
+		Version: "0.9.0", OrgURLSHA256: federation.OrgURLSHA256(admissionOrgURL), Limits: roomyRunnerLimits()})
 	if err != nil {
 		t.Fatal(err)
 	}

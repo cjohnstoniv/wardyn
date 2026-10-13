@@ -3,7 +3,8 @@
 deploy/compose/README.md=2277 share=35
 # deploy/images/README.md 4625 adds 146: the multi-CLI harnesses image (local build only) and its set launcher.
 # deploy/images/README.md 4654 measured after DS1-S4.
-deploy/images/README.md=4654 share=35
+# deploy/images/README.md 4704 adds 50 over 4654 (the Azure CLI component): measured at merge.
+deploy/images/README.md=4704 share=35
 # docs/operations/build-images.md 1298 adds 93 over 1205 (0.9 DS1-S1b): the image a run's harnesses start from, and the run_harnesses grant.
 # docs/operations/build-images.md 1418 adds 120 over 1298 (0.9 DS1-S4): offering two harnesses in one run.
 # docs/operations/build-images.md 1451 adds 33 over 1418 (0.9 F-1516 B7): pinned inputs and a pointer to the refresh.

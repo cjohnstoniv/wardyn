@@ -18,6 +18,7 @@ package proxy
 // never registers the PAT as an injection rule, which would mint at proxy start.
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"io"
@@ -189,12 +190,15 @@ func (p *Proxy) servePATAPI(w http.ResponseWriter, r *http.Request, host string,
 type apiDoor struct {
 	allow, denied string
 	mintFailed    string
-	credential    func(ctx context.Context) (header, value string, err error)
+	// upstream is what the door's own errors call the far side; "" is "forge".
+	upstream   string
+	credential func(ctx context.Context) (header, value string, err error)
 }
 
 // forwardAPIDoor is the forward half the API doors share (servePATAPI,
 // serveGitHubAPI), for a request the door already admitted.
 func (p *Proxy) forwardAPIDoor(w http.ResponseWriter, r *http.Request, host string, port int, d apiDoor) {
+	far := cmp.Or(d.upstream, "forge")
 	// The door returns before the generic forward-body scan in serveMITMRequest, so it runs the
 	// same scan here: a registered secret in an MR/PR body or query (the forge reads create params
 	// from either) must not leave with the credential attached. Before the mint, so a refused request
@@ -243,7 +247,7 @@ func (p *Proxy) forwardAPIDoor(w http.ResponseWriter, r *http.Request, host stri
 	target, _, err := p.egressTarget(host, port)
 	if err != nil {
 		p.emitPATAPIDecision(r, host, port, egress.Deny, d.denied)
-		p.httpError(w, "vet forge host", err, http.StatusForbidden)
+		p.httpError(w, "vet "+far+" host", err, http.StatusForbidden)
 		return
 	}
 	scheme, defaultPort := p.upstreamSchemeFor(host, port)
@@ -263,7 +267,7 @@ func (p *Proxy) forwardAPIDoor(w http.ResponseWriter, r *http.Request, host stri
 	out, err := http.NewRequestWithContext(context.WithValue(r.Context(), vettedIPKey{}, target), r.Method, upstream, body)
 	if err != nil {
 		p.emitPATAPIDecision(r, host, port, egress.Deny, d.denied)
-		p.httpError(w, "build forge request", err, http.StatusBadGateway)
+		p.httpError(w, "build "+far+" request", err, http.StatusBadGateway)
 		return
 	}
 	out.ContentLength = r.ContentLength
@@ -276,7 +280,7 @@ func (p *Proxy) forwardAPIDoor(w http.ResponseWriter, r *http.Request, host stri
 
 	resp, err := p.roundTripUpstream(out)
 	if err != nil {
-		p.failUpstream(w, err, &egress.DecisionLog{Request: p.reqOf(r, host, port)}, host, "forge api upstream error")
+		p.failUpstream(w, err, &egress.DecisionLog{Request: p.reqOf(r, host, port)}, host, far+" api upstream error")
 		return
 	}
 	defer func() { _ = resp.Body.Close() }()

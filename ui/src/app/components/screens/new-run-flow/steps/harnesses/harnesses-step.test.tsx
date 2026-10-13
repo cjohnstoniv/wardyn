@@ -101,6 +101,13 @@ describe("Harnesses step: roster rows", () => {
     expect(screen.getByText(NR_HARNESSES.NO_COMBINATION("Claude Code, Codex CLI", "Your own tools"))).toBeInTheDocument();
   });
 
+  it("moves focus to the new harness's select when the Add button disables", async () => {
+    const user = userEvent.setup();
+    show({ ...INTERACTIVE, tools: [harness("claude-code")] });
+    await user.click(await screen.findByRole("button", { name: NR_HARNESSES.ADD_ANOTHER }));
+    await waitFor(() => expect(document.getElementById("nr-harness-1")).toHaveFocus());
+  });
+
   it("hints from the row's facts: approval hold, Codex, a roster agent without a hold, availability", async () => {
     show({ ...INTERACTIVE, tools: [harness("claude-code"), harness("codex-cli"), harness("none")] });
     expect(await screen.findByText(NR_HARNESSES.AVAILABLE("Claude Code"))).toBeInTheDocument();

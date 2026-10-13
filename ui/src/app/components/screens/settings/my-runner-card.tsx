@@ -3,8 +3,9 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// Your account -> My runner (0.9, packet M-RN-2): register a computer, claim it, see its status and
-// revoke it. User view only. The claim is the security step: a waiting runner shows only an abbreviated
+// Your account -> My runner (0.9, packet M-RN-2 and mock M-POOLS v6): register a computer, claim it, set
+// its limits, put it in pools of your own, see its status and revoke it; and My pools, the person's own
+// user pools. User view only. The claim is the security step: a waiting runner shows only an abbreviated
 // fingerprint and the claim takes the whole one from the person's own computer, so no fingerprint on this
 // card has a copy control and the claim field is never pre-filled. Everything a claimed runner says about
 // itself is labelled as reported. The card renders nothing while runners are off.
@@ -16,6 +17,7 @@ import { HttpError } from "../../../lib/api/core";
 import { RUNNERS_DISABLED, runners as runnersApi } from "../../../lib/api/runners";
 import { absoluteTime, getErrorMessage, relativeTime } from "../../../lib/format";
 import type { RunnerRegistrationToken, RunnerView } from "../../../lib/types/runners";
+import { MY_POOLS, RES, RUNNER_V6 } from "../../wardyn/copy/runner-pools";
 import { MY_RUNNER, RUNNER, RUNNERS } from "../../wardyn/copy/runners";
 import { CollapsibleCard } from "../../wardyn/collapsible-card";
 import { makeMono, Mono } from "../../wardyn/code-block";
@@ -24,10 +26,16 @@ import { usePrincipal } from "../../wardyn/operator-context";
 import { STATES } from "../../wardyn/states";
 import { Button } from "../../ui/button";
 import { ConfirmDialog } from "../runners/confirm-dialog";
+import { LimitsDialog } from "../runners/limits-dialog";
 import { registerCommand } from "../runners/mint-token-dialog";
+import { Hint, KindChip, OfflineNote, ResourceTable, RunsLine, Sec } from "../runners/resource-table";
+import { amountsText, proposeLimits, runnerRes } from "../runners/resources";
+import { MachineText } from "../runners/runner-card";
 import { RunnerChip } from "../runners/runner-chip";
-import { CHIP_WORD, capacityValue, postureLines, runnerChipKind, shortDate, sortRunners, timeLeft } from "../runners/runner-display";
+import { CHIP_WORD, postureLines, runnerChipKind, shortDate, sortRunners, timeLeft } from "../runners/runner-display";
 import { ClaimRunnerDialog } from "./claim-runner-dialog";
+import { MyPoolsSection, RunnerPoolsSection } from "./my-pools-section";
+import { useMyPools } from "./use-my-pools";
 
 const POLL_MS = 5000;
 // These two 403s mean the card has no use for this caller: runners are off, or the credential is not a person's own session.
@@ -49,17 +57,72 @@ function Fact({ label, reported, children }: { label: string; reported?: string;
   );
 }
 
-function ClaimedRow({ r, onRevoke }: { r: RunnerView; onRevoke: () => void }) {
-  const offline = runnerChipKind(r) === "offline";
-  const runs = RUNNER.RUNS_COUNT(r.runs_active);
+const ROW = "mb-3 space-y-2 rounded-xl border border-border bg-surface-2 px-3.5 py-3";
+type Pools = ReturnType<typeof useMyPools>;
+
+function MachineSec({ r }: { r: RunnerView }) {
   return (
-    <li className="space-y-2 border-t border-border py-3 first:border-t-0">
+    <Sec label={RUNNER_V6.MACHINE} meta={RUNNER.REPORTED} data-machine>
+      <MachineText machine={r.machine_name} />
+    </Sec>
+  );
+}
+
+/** A runner with no limits yet: what it needs, what the computer reports, what setup would suggest, and Set limits. */
+function LimitsSetup({ r, onEdit }: { r: RunnerView; onEdit: () => void }) {
+  const reported = r.usage.reported;
+  const proposal = reported && proposeLimits(reported);
+  return (
+    <Sec label={MY_POOLS.LIMITS_TO_SET_UP} meta={MY_POOLS.REQUIRED} data-limits-setup>
+      <p className="mb-1.5">{MY_POOLS.LIMITS_NEEDED}</p>
+      {reported && (
+        <p className="mb-1.5">
+          {RUNNER_V6.REPORTS(amountsText(reported))} <span className="text-muted-foreground">{RUNNER.REPORTED}</span>
+        </p>
+      )}
+      {proposal && <p className="mb-1.5 text-muted-foreground">{MY_POOLS.SUGGESTED(amountsText(proposal.total), proposal.runs_at_once, amountsText(proposal.per_run))}</p>}
+      <Button variant="outline" size="sm" aria-label={MY_POOLS.SET_LIMITS_FOR(r.name)} onClick={onEdit}>
+        {MY_POOLS.SET_LIMITS}
+      </Button>
+    </Sec>
+  );
+}
+
+function ClaimedRow({ r, pools, onRevoke, onEditLimits }: { r: RunnerView; pools: Pools; onRevoke: () => void; onEditLimits: () => void }) {
+  const offline = runnerChipKind(r) === "offline";
+  const res = runnerRes(r.limits, r.usage);
+  return (
+    <li className={ROW}>
       <div className="flex flex-wrap items-center gap-2">
         <h4 className="text-sm font-medium text-foreground">{r.name}</h4>
         <RunnerChip runner={r} />
+        <KindChip kind="self_hosted" />
         {offline && <span className="text-meta text-muted-foreground">{r.last_seen_at ? MY_RUNNER.LAST_SEEN(relativeTime(r.last_seen_at)) : RUNNER.NEVER_CONNECTED}</span>}
       </div>
-      <p className="text-meta text-muted-foreground">{r.version ? MY_RUNNER.META(r.version, runs) : `${RUNNER.RUNS_NOW}: ${runs}`}</p>
+      {r.version && <p className="text-meta text-muted-foreground">{`${RUNNER.VERSION} ${r.version}`}</p>}
+      <div>
+        <MachineSec r={r} />
+        {res && r.limits ? (
+          <Sec label={RES.RESOURCES} meta={MY_POOLS.LIMITS_YOU_SET} data-resources>
+            <RunsLine max={r.limits.runs_at_once} active={r.usage.in_use.runs} />
+            <ResourceTable view={res} />
+            {offline && <OfflineNote />}
+            {r.usage.reported && (
+              <Hint data-reported>
+                {RUNNER_V6.REPORTS_YOUR(amountsText(r.usage.reported))} <span>{RUNNER.REPORTED}</span>
+              </Hint>
+            )}
+            <div className="mt-3">
+              <Button variant="outline" size="sm" aria-label={RUNNER_V6.EDIT_LIMITS_FOR(r.name)} onClick={onEditLimits}>
+                {RUNNER_V6.EDIT_LIMITS}
+              </Button>
+            </div>
+          </Sec>
+        ) : (
+          <LimitsSetup r={r} onEdit={onEditLimits} />
+        )}
+        <RunnerPoolsSection runner={r} pools={pools} />
+      </div>
       <Fact label={RUNNER.ROOTS} reported={RUNNER.REPORTED}>
         {r.allowed_roots?.length ? (
           <>
@@ -78,9 +141,6 @@ function ClaimedRow({ r, onRevoke }: { r: RunnerView; onRevoke: () => void }) {
       <Fact label={RUNNER.POSTURE} reported={[RUNNER.REPORTED, r.posture_reported_at && RUNNER.REPORTED_AT(relativeTime(r.posture_reported_at))].filter(Boolean).join(" · ")}>
         {r.posture ? postureLines(r.posture).join(" · ") : RUNNER.NOT_REPORTED}
       </Fact>
-      <Fact label={RUNNER.CAPACITY} reported={RUNNER.REPORTED}>
-        {capacityValue(r.capacity)}
-      </Fact>
       <Fact label={RUNNER.FINGERPRINT}>
         <Mono className="break-all">{r.key_fingerprint}</Mono>
       </Fact>
@@ -91,18 +151,32 @@ function ClaimedRow({ r, onRevoke }: { r: RunnerView; onRevoke: () => void }) {
   );
 }
 
-function WaitingRow({ r, me, onClaim, onNotMine }: { r: RunnerView; me: string; onClaim: () => void; onNotMine: () => void }) {
+function WaitingRow({ r, me, pools, onClaim, onNotMine, onEditLimits }: { r: RunnerView; me: string; pools: Pools; onClaim: () => void; onNotMine: () => void; onEditLimits: () => void }) {
   const byAdmin = !!r.minted_by_email || (!!r.minted_by && me !== "" && r.minted_by !== me);
   return (
-    <li className="space-y-2 border-t border-border py-3 first:border-t-0">
+    <li className={ROW}>
       <div className="flex flex-wrap items-center gap-2">
         <h4 className="text-sm font-medium text-foreground">{r.name}</h4>
         <RunnerChip runner={r} />
+        <KindChip kind="self_hosted" />
       </div>
       <p className="text-meta text-muted-foreground">
         {MY_RUNNER.WAITING_LINE(relativeTime(r.created_at), r.claim_expires_at ? timeLeft(r.claim_expires_at) : "")}
       </p>
       <p className="text-meta text-muted-foreground">{byAdmin ? MY_RUNNER.SOURCE_ADMIN(r.minted_by_email || r.minted_by || "") : MY_RUNNER.SOURCE_SELF}</p>
+      <div>
+        <MachineSec r={r} />
+        {r.limits ? (
+          <Sec label={MY_POOLS.LIMITS} meta={MY_POOLS.SET} data-limits-setup>
+            <p className="mb-1.5">{MY_POOLS.LIMITS_SUMMARY(amountsText(r.limits.total), amountsText(r.limits.per_run), r.limits.runs_at_once)}</p>
+            <Button variant="outline" size="sm" aria-label={RUNNER_V6.EDIT_LIMITS_FOR(r.name)} onClick={onEditLimits}>
+              {RUNNER_V6.EDIT_LIMITS}
+            </Button>
+          </Sec>
+        ) : (
+          <LimitsSetup r={r} onEdit={onEditLimits} />
+        )}
+      </div>
       <Fact label={RUNNER.FINGERPRINT}>
         <Mono className="break-all">{r.key_fingerprint}</Mono>
       </Fact>
@@ -114,13 +188,14 @@ function WaitingRow({ r, me, onClaim, onNotMine }: { r: RunnerView; me: string; 
           {MY_RUNNER.NOT_MINE}
         </Button>
       </div>
+      <RunnerPoolsSection runner={r} pools={pools} />
     </li>
   );
 }
 
 function RevokedNotice({ r }: { r: RunnerView }) {
   return (
-    <li className="space-y-1 border-t border-border py-3 first:border-t-0">
+    <li className="mb-3 space-y-1 rounded-xl border border-border bg-surface-2 px-3.5 py-3">
       <div className="flex flex-wrap items-center gap-2">
         <h4 className="text-sm font-medium text-foreground">{r.name}</h4>
         <RunnerChip runner={r} />
@@ -160,6 +235,8 @@ function TokenBlock({ token, expired, onDone }: { token: RunnerRegistrationToken
           {RUNNER.COPY_COMMAND}
         </CopyButton>
       </div>
+      <p className="text-body text-foreground">{MY_POOLS.REGISTER_ONE_PER_COMPUTER}</p>
+      <p className="text-xs text-muted-foreground">{MY_POOLS.REGISTER_ASKS_LIMITS}</p>
       <p className="text-body text-muted-foreground">{withMono(MY_RUNNER.STEP_CLAIM)}</p>
       <div className="flex justify-end">
         <Button variant="ghost" size="sm" onClick={onDone}>
@@ -185,6 +262,7 @@ export function MyRunnerCard() {
   const [claiming, setClaiming] = React.useState<RunnerView | null>(null);
   const [revoking, setRevoking] = React.useState<{ runner: RunnerView; notMine: boolean } | null>(null);
   const [confirming, setConfirming] = React.useState(false);
+  const [limitsFor, setLimitsFor] = React.useState<RunnerView | null>(null);
   const idsAtMint = React.useRef(new Set<string>());
   const seq = React.useRef(0);
 
@@ -250,6 +328,7 @@ export function MyRunnerCard() {
   }, [rows, note]); // eslint-disable-line react-hooks/exhaustive-deps -- `waiting` derives from rows
 
   const available = status === "ready" || status === "error";
+  const pools = useMyPools(status === "ready");
   // The #my-runner deep link opens and focuses the card once per navigation, never on a data refresh.
   React.useEffect(() => {
     if (location.hash === "#my-runner" && available) {
@@ -289,6 +368,19 @@ export function MyRunnerCard() {
 
   const sorted = sortRunners(rows);
   const showToken = token !== null;
+  const registerBlock = (!showToken || expired) && (
+    <div className="space-y-1.5">
+      <Button variant="outline" data-register disabled={registering} onClick={() => void register()}>
+        {registering && <Loader2 className="size-3.5 animate-spin" />}
+        {MY_RUNNER.REGISTER}
+      </Button>
+      {registerError && (
+        <p role="alert" className="text-body text-danger">
+          {registerError}
+        </p>
+      )}
+    </div>
+  );
   return (
     <>
       <CollapsibleCard
@@ -312,13 +404,18 @@ export function MyRunnerCard() {
             </div>
           ) : (
             <>
+              {live.length === 0 && (
+                <>
+                  <p className="text-body text-foreground">{MY_RUNNER.NO_RUNNER}</p>
+                  <p className="text-body text-muted-foreground">{MY_POOLS.NO_RUNNER_NEXT}</p>
+                </>
+              )}
               {showToken && <TokenBlock token={token} expired={expired} onDone={done} />}
               {note && (
                 <p role="status" className="text-body text-foreground">
                   {note.text}
                 </p>
               )}
-              {live.length === 0 && !showToken && <p className="text-body text-muted-foreground">{MY_RUNNER.NO_RUNNER}</p>}
               {sorted.length > 0 && (
                 <ul>
                   {sorted.map((r) =>
@@ -329,6 +426,8 @@ export function MyRunnerCard() {
                         key={r.id}
                         r={r}
                         me={me}
+                        pools={pools}
+                        onEditLimits={() => setLimitsFor(r)}
                         onClaim={() => setClaiming(r)}
                         onNotMine={() => {
                           setRevoking({ runner: r, notMine: true });
@@ -339,6 +438,8 @@ export function MyRunnerCard() {
                       <ClaimedRow
                         key={r.id}
                         r={r}
+                        pools={pools}
+                        onEditLimits={() => setLimitsFor(r)}
                         onRevoke={() => {
                           setRevoking({ runner: r, notMine: false });
                           setConfirming(true);
@@ -348,19 +449,9 @@ export function MyRunnerCard() {
                   )}
                 </ul>
               )}
-              {(!showToken || expired) && (
-                <div className="space-y-1.5">
-                  <Button variant="outline" data-register disabled={registering} onClick={() => void register()}>
-                    {registering && <Loader2 className="size-3.5 animate-spin" />}
-                    {MY_RUNNER.REGISTER}
-                  </Button>
-                  {registerError && (
-                    <p role="alert" className="text-body text-danger">
-                      {registerError}
-                    </p>
-                  )}
-                </div>
-              )}
+              {live.length === 0 && registerBlock}
+              <MyPoolsSection pools={pools} runners={live} />
+              {live.length > 0 && registerBlock}
             </>
           )}
         </div>
@@ -373,6 +464,15 @@ export function MyRunnerCard() {
           requestAnimationFrame(() => sectionRef.current?.focus());
         }}
       />
+      <LimitsDialog
+        target={limitsFor ? { name: limitsFor.name, limits: limitsFor.limits, reported: limitsFor.usage.reported, running: limitsFor.usage.in_use.runs, self: true } : null}
+        onOpenChange={(o) => !o && setLimitsFor(null)}
+        onSave={(limits) => runnersApi.updateMine(limitsFor?.id ?? "", limits)}
+        onSaved={() => {
+          read(true);
+          pools.reload();
+        }}
+      />
       <ConfirmDialog
         open={confirming}
         onOpenChange={setConfirming}
@@ -380,7 +480,7 @@ export function MyRunnerCard() {
         body={
           revoking?.notMine
             ? [MY_RUNNER.NOT_MINE_BODY]
-            : [MY_RUNNER.REVOKE_OWN_BODY, ...((revoking?.runner.runs_active ?? 0) > 0 ? [RUNNER.REVOKE_RUNS(revoking?.runner.runs_active ?? 0)] : [])]
+            : [MY_RUNNER.REVOKE_OWN_BODY, ...((revoking?.runner.usage.in_use.runs ?? 0) > 0 ? [RUNNER.REVOKE_RUNS(revoking?.runner.usage.in_use.runs ?? 0)] : [])]
         }
         confirmLabel={RUNNER.REVOKE_CONFIRM}
         onConfirm={() => runnersApi.revokeMine(revoking?.runner.id ?? "", revoking?.notMine)}

@@ -308,6 +308,7 @@ Two details are load-bearing, and copying a shortened form silently drops them:
 
 - `claude-code/` and `codex-cli/` are the two user-facing agent harnesses; `make agent-images-core` builds them plus `base/`, which carries the setup connectivity probe.
 - `base/`, `claude-code/` and `codex-cli/` (so `full/` too) also carry AWS CLI v2 for the AWS CLI component, installed exactly as `aws-sso/` installs it; [scripts/test-image-recipes.py](../../scripts/test-image-recipes.py) fails when the copies drift.
+- `full/` and `harnesses/` alone carry the Azure CLI (`az`) for the Azure CLI component, for size: from Microsoft's apt repository, its signing key checked by fingerprint and named by `signed-by`, the version pinned by `AZURE_CLI_VERSION`. The same test fails when the two copies drift, or when another image gains it.
 - `make agent-images` additionally builds `oracle/`
   - NOT a real coding agent: it runs a task's scripted, known-good solution so the e2e suite can prove each task in `test/e2e/tasks/` is solvable and its grader scores correctly
   - and `aws-sso/`, also not a coding agent:

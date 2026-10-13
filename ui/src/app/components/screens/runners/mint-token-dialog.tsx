@@ -15,6 +15,7 @@ import { runners as runnersApi } from "../../../lib/api/runners";
 import { appURL } from "../../../lib/base-path";
 import { absoluteTime, getErrorMessage } from "../../../lib/format";
 import type { RunnerRegistrationToken } from "../../../lib/types/runners";
+import { RUNNER_V6 } from "../../wardyn/copy/runner-pools";
 import { RUNNER, RUNNERS } from "../../wardyn/copy/runners";
 import { CopyButton } from "../../wardyn/copy-button";
 import { DirectoryCombobox } from "../../wardyn/directory-combobox";
@@ -131,6 +132,8 @@ export function MintTokenDialog({
                     </CopyButton>
                   </div>
                 </section>
+                <p className="text-body text-foreground">{RUNNER_V6.MINT_ONE_PER_COMPUTER}</p>
+                <p className="text-xs text-muted-foreground">{RUNNER_V6.MINT_ASKS_LIMITS}</p>
                 <p className="text-body text-muted-foreground">{RUNNERS.MINT_NEXT(owner)}</p>
               </div>
               <DialogFooter>
