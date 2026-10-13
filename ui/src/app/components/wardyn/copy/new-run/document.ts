@@ -24,10 +24,12 @@ export const NR_DOCUMENT = {
   /** pending W-18: the recommended text until the owner answers. */
   VALID: "Valid document. Policy and availability are checked at review.",
   ISSUES: (n: string | number) => `${n} issues must be fixed`,
+  /** pending W-53: the recommended text until the owner answers; the singular of ISSUES. */
   ISSUES_ONE: "1 issue must be fixed",
   VALIDATE: "Validate",
   CONTINUE_REVIEW: "Continue to review",
   ANNOUNCE_ERRORS: (n: string | number) => `${n} errors found.`,
+  /** pending W-53: the recommended text until the owner answers; the singular of ANNOUNCE_ERRORS. */
   ANNOUNCE_ERRORS_ONE: "1 error found.",
   ANNOUNCE_VALID: "Document valid.",
   JSON_INVALID: "This JSON document isn't valid. Check the highlighted structure.",
