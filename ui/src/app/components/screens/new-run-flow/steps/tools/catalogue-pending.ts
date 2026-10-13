@@ -7,13 +7,14 @@
 // cards' decorative icon marks, taken from the approved Tools and access prototype. They are in no canon table yet, so the
 // lead moves them into copy/new-run/tools.ts and docs/design/new-run-canon.md
 // when the owner confirms the wording; nothing else in this lane carries a
-// string of its own.
+// string of its own. The GitHub CLI line is already canon (the owner's wording).
 
 import type { CatalogueCLIKind } from "../../../../../lib/types/components";
+import { NR_TOOLS } from "../../../../wardyn/copy/new-run/tools";
 
 export const CLI_CARD: Record<CatalogueCLIKind, { name: string; body: string; icon: string }> = {
   azure: { name: "Azure CLI", body: "Run az commands against your Azure subscriptions.", icon: "az" },
-  github: { name: "GitHub CLI", body: "Issues, pull requests and Actions with gh.", icon: "gh" },
+  github: { name: "GitHub CLI", body: NR_TOOLS.CLI_GITHUB_BODY, icon: "gh" },
   aws: { name: "AWS CLI", body: "aws commands with a role your organisation assigns.", icon: "aws" },
   gcloud: { name: "Google Cloud CLI", body: "gcloud with your Google Cloud identity.", icon: "gc" },
   kubectl: { name: "kubectl", body: "Reach a Kubernetes cluster your organisation registers.", icon: "k8" },
