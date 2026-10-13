@@ -30,7 +30,7 @@ export function ValidationPanel({ id, status, copy }: { id: string; status: Docu
         <>
           <p className="flex items-center gap-1.5 font-semibold text-danger">
             <TriangleAlert aria-hidden="true" className="size-[15px] shrink-0" />
-            {copy.ISSUES(status.count)}
+            {status.count === 1 ? copy.ISSUES_ONE : copy.ISSUES(status.count)}
           </p>
           {status.lines.map((line, i) => (
             <p key={i} className="select-text whitespace-pre-wrap break-words text-muted-foreground">{line}</p>
