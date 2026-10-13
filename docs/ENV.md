@@ -1369,7 +1369,8 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - A change nobody decides expires after `WARDYN_GOVERNANCE_CHANGE_TTL`.
 - Exempt, and applied directly: a profile update proven narrowing by its resolved effect, a rename, and a user type's name or description edit that leaves its priority alone.
 - No other target has a narrowing exemption.
-- The local credential delivery policy (`local_credential_delivery`, `PUT /governance/credential-delivery`) is held the same way.
+- The local credential delivery policy (`local_credential_delivery`, `PUT /governance/credential-delivery`), the egress baseline, a runner pool's use policy and a remote-hosted runner's people policy are held the same way.
+- So is adding a remote-hosted runner to an organization pool while another pool holds it under a use policy, or removing it from a pool with one; only a super admin approves those.
 - A service identity's create (`POST /service-identities`) and any `PATCH /service-identities/{name}` that changes its sponsor are held the same way; the PATCH is held whole, so its description or suspend part applies only with it. A description or suspend `PATCH`, unsuspend and retire apply directly.
 - A role-mapping change is approved by a super admin only (a security admin is refused `admin_surface`).
 - Distinct means a different principal AND a different mailbox (case-folded), so one person holding an SSO session and an API token is not two humans.

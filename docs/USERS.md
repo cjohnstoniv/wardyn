@@ -229,14 +229,15 @@ resolves your drive the same way, in a dry run too:
 - If your deployment sets `WARDYN_GOVERNANCE_SECOND_HUMAN`, an administrator's change to who may do what:
   - a governance profile or assignment, a capability grant, the enforcement map,
   - a value's availability, a user type's priority, a role mapping, a key-domain assignment,
-  - the egress baseline, a service identity's create or sponsor change, or the local credential delivery policy,
+  - the egress baseline, a service identity's create or sponsor change, the local credential delivery policy,
+  - a runner pool's use policy, a remote-hosted runner's people policy, or that runner's add to or removal from a pool a use policy covers,
 - It is held as a pending change until a second administrator approves it.
 - Members propose and approve nothing here; these tiers do:
 
 | Role | May approve |
 |---|---|
-| Security admin | profile, assignment, grant, enforcement, availability, user-type priority, key-domain assignment, egress baseline, service identity and local credential delivery changes, including a super admin's |
-| Super admin (`admin`) | everything a security admin may, and role-mapping changes |
+| Security admin | profile, assignment, grant, enforcement, availability, user-type priority, key-domain assignment, egress baseline, service identity, local credential delivery, pool use policy and runner people policy changes, including a super admin's |
+| Super admin (`admin`) | everything a security admin may, role-mapping changes, and a remote-hosted runner's add to or removal from a pool |
 | Member | nothing |
 
 - Nobody approves their own change, and a second sign-in of the same person (the same email) does not
