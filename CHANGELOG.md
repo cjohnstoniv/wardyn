@@ -1015,6 +1015,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - New Run, Files: the Subfolder field and the "Starts here" line no longer keep a subfolder typed for an earlier
   start after that start was replaced or removed; the next start begins at its own top, as the run is sent. A drive
   list that fails to load no longer closes an edit in progress.
+- Azure Key Vault: a next-page link that spells out the default port (`https://<vault>.vault.azure.net:443/...`) is
+  followed as the same vault. Before, storing or checking a secret with more than 25 versions failed with "refusing
+  to follow a link off this vault", and so did `-reconcile` past 25 secrets. Links to any other host, port or scheme
+  are still refused.
 
 
 ## [0.8.9] — 2026-10-09
