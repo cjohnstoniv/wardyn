@@ -13,6 +13,8 @@ import { Button } from "../../../../ui/button";
 import { useModelAccessDoor, useShellSetupStatus } from "../../../../wardyn/model-access-context";
 import { NR_SHARED } from "../../../../wardyn/copy/new-run/shared";
 import { NR_TOOLS } from "../../../../wardyn/copy/new-run/tools";
+import { useAdoConnect } from "../../../../../lib/hooks/use-ado-connect";
+import type { SCMAccessPAT } from "../../../../../lib/types/ado-pat";
 import type { AccessFacts } from "../../../../../lib/types/new-run-access";
 import type { HarnessSetFact } from "../../../../../lib/types/new-run-contract";
 import { intentToWire } from "../../draft/intent-to-wire";
@@ -47,13 +49,26 @@ function useAccess() {
   const last = React.useRef<{ access: AccessFacts; harnessSet?: HarnessSetFact } | undefined>(undefined);
   const current = checks.preview.result?.access;
   if (current) last.current = { access: current, harnessSet: checks.preview.result?.harness_set };
-  return { access: current ?? last.current?.access, harnessSet: last.current?.harnessSet, answered: checks.preview.current && !!current, recheck: checks.invalidateChecks };
+  return {
+    access: current ?? last.current?.access, harnessSet: last.current?.harnessSet, answered: checks.preview.current && !!current, recheck: checks.invalidateChecks,
+    // The run's own Azure DevOps capabilities, as its policy resolves them.
+    adoCaps: checks.preview.result?.spec?.azure_devops_capabilities,
+  };
 }
 
 export function ToolsStep({ go }: NewRunScreenProps) {
   const draft = useNewRunDraft();
-  const { access, harnessSet, answered, recheck } = useAccess();
+  const { access, harnessSet, answered, recheck, adoCaps } = useAccess();
   const { status } = useShellSetupStatus();
+  const door = useModelAccessDoor();
+  const ado = useAdoConnect();
+  // Connected: the shell reads the person's Azure DevOps answer again, and the server is asked about this run again.
+  const connectAdo = async (connect: () => Promise<boolean | null>) => {
+    if (await connect()) {
+      void door.refresh();
+      recheck();
+    }
+  };
   const names = React.useMemo(() => new Map((status?.harnesses ?? []).map((h) => [h.id, h.display])), [status?.harnesses]);
   const providers = new Map((access?.harnesses ?? []).flatMap((f) => {
     const name = providerNameFor(f.harness, draft.intent, harnessSet, status);
@@ -94,7 +109,20 @@ export function ToolsStep({ go }: NewRunScreenProps) {
       <AlreadyIncluded access={access} answered={answered} intent={draft.intent} names={names} providers={providers} />
       <HarnessSetup access={access} harnessSet={harnessSet} intent={draft.intent} answered={answered} names={names} onSignedIn={recheck} />
       <AddTools access={access} answered={answered} intent={draft.intent} />
-      <Totals access={access} answered={answered} names={names} providers={providers} />
+      <Totals
+        access={access}
+        answered={answered}
+        names={names}
+        providers={providers}
+        ado={{
+          access: status?.unreachable ? undefined : (status?.scm_access as SCMAccessPAT | undefined),
+          policyCaps: adoCaps,
+          connecting: ado.connecting,
+          onConnect: () => void connectAdo(ado.connect),
+          blockedUrl: ado.blockedUrl,
+          onFallbackClick: () => void connectAdo(ado.connectFallback),
+        }}
+      />
       <SetupNeeded items={items} pending={pending} done={settled} intent={draft.intent} names={names} onDone={finish} />
     </StepShell>
   );

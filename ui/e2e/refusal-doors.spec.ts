@@ -16,7 +16,9 @@
 
 import { randomUUID } from "node:crypto";
 import type { Page, Route } from "@playwright/test";
-import { test, expect, gotoConsole, navTo, navToRoute } from "./fixtures";
+import { test, expect, gotoConsole, mockPreflightClear, navTo, navToRoute, newRunHeading, submitLaunch, walkGuidedToReview } from "./fixtures";
+import { NR_LAUNCH } from "../src/app/components/wardyn/copy/new-run/launch";
+import { NR_START } from "../src/app/components/wardyn/copy/new-run/start";
 import { MODEL_ACCESS_BANNER, MODEL_ACCESS_RUN_DOOR, REAUTH_ROW, REAUTH_TITLE } from "../src/app/components/wardyn/model-access-copy";
 import { CLAUDE_DOOR, CONNECTIONS, KEY_DOOR, RUN_FACTS } from "../src/app/components/wardyn/copy/door";
 import { CONSOLE_VIEW } from "../src/app/components/wardyn/copy/console-view";
@@ -260,19 +262,18 @@ test.describe("a New Run refusal opens the door its provider names (state 4)", (
     // New Run preflights on its own, and the hermetic backend's real answer
     // (no model providers, no barrier) holds Launch. This case is about the
     // launch refusal, so the check is answered clear.
-    await page.route("**/api/v1/runs/preflight", (route) =>
-      route.fulfill({ json: { enforced_confinement_class: "CC1", setup_items: [] } }),
-    );
+    await mockPreflightClear(page);
     await gotoConsole(page);
     await navToRoute(page, "/runs/new");
-    await expect(page.getByRole("heading", { name: "New run" })).toBeVisible();
-    await page.getByLabel("Title").fill("e2e provider refusal");
-    await page.getByRole("button", { name: "Launch run" }).click();
+    await expect(newRunHeading(page, NR_START.TITLE)).toBeVisible();
+    await walkGuidedToReview(page);
+    const naming = await submitLaunch(page, "e2e provider refusal");
     await expect(page.getByRole("dialog", { name: KEY_DOOR.TITLE(true, P.gateway.name) })).toBeVisible();
     await expect(page.getByRole("dialog", { name: MODEL_ACCESS_BANNER.DIALOG_TITLE })).toHaveCount(0);
     await page.keyboard.press("Escape");
-    // The rail's launch-error line carries the server's sentence.
-    await expect(page.getByRole("alert")).toContainText(sentence);
+    // The Name dialog's error line carries the server's sentence, and the dialog is still open with its title.
+    await expect(page.getByRole("dialog", { name: NR_LAUNCH.TITLE })).toBeVisible();
+    await expect(naming.getByRole("alert")).toContainText(sentence);
   });
 });
 
@@ -346,14 +347,15 @@ test.describe("a refusal names the policy and how to request a change (M10 S4)",
       if (route.request().method() !== "POST") return route.fallback();
       await route.fulfill({ status: 422, json: { error: sentence, reason: "run_quota", policy: POLICY_REF } });
     });
+    await mockPreflightClear(page);
     await gotoConsole(page);
     await navToRoute(page, "/runs/new");
-    await expect(page.getByRole("heading", { name: "New run" })).toBeVisible();
-    await page.getByLabel("Title").fill("e2e policy refusal");
-    await page.getByRole("button", { name: "Launch run" }).click();
+    await expect(newRunHeading(page, NR_START.TITLE)).toBeVisible();
+    await walkGuidedToReview(page);
+    const naming = await submitLaunch(page, "e2e policy refusal");
 
-    await expect(page.getByRole("alert")).toContainText(sentence);
-    const remedy = page.getByTestId("policy-remedy");
+    await expect(naming.getByRole("alert")).toContainText(sentence);
+    const remedy = naming.getByTestId("policy-remedy");
     await expect(remedy).toHaveText("Owned by Platform Security · Request access ↗");
     await expect(remedy.getByRole("link", { name: "Request access" })).toHaveAttribute("href", "https://example.com/access");
   });

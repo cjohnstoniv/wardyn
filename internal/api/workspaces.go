@@ -124,6 +124,7 @@ func decodeWorkspaceRequest(w http.ResponseWriter, r *http.Request, ado adoHosts
 	}
 
 	seenTargets := make(map[string]int, len(req.Sources))
+	mountTargets := make(map[string]int, len(req.Sources))
 	for i, src := range req.Sources {
 		if msg := validateWorkspaceSource(src, adoServerHosts); msg != "" {
 			return workspaceRequest{}, fmt.Sprintf("sources[%d]: %s", i, storeNamedLocatorRefusal(msg, "source", src.Source, hostsErr))
@@ -133,17 +134,30 @@ func decodeWorkspaceRequest(w http.ResponseWriter, r *http.Request, ado adoHosts
 		// resolves to the same in-sandbox mount/clone path, which
 		// validatePolicyWorkspaces then 422s on every subsequent run — an
 		// onboarding-time 400 naming both sources catches it before it's
-		// even possible to run. An EMPTY target (no explicit choice — the
-		// caller relies on the per-attach default) is deliberately not
-		// checked here, same as validatePolicyWorkspaces: the default dest
+		// even possible to run. A repository's EMPTY target (no explicit
+		// choice — the caller relies on the per-attach default) is deliberately
+		// not checked here, same as validatePolicyWorkspaces: the default dest
 		// isn't derived until attach/clone time (buildRepoRecords).
-		if src.Target == "" {
+		if src.Target != "" {
+			if j, dup := seenTargets[src.Target]; dup {
+				return workspaceRequest{}, fmt.Sprintf("sources[%d]: target %q duplicates sources[%d]", i, src.Target, j)
+			}
+			seenTargets[src.Target] = i
+		}
+		// A folder's empty target is known now: it mounts at composerWorkspaceTarget,
+		// and a launch refuses it beside another folder or a repository there. A scratch
+		// directory at that path is not a mount, so it is left to the check above.
+		mounted := src.Target
+		if mounted == "" && src.Type == types.WorkspaceSourceTypeLocalDir {
+			mounted = composerWorkspaceTarget
+		}
+		if mounted == "" || src.Type == types.WorkspaceSourceTypeEphemeral {
 			continue
 		}
-		if j, dup := seenTargets[src.Target]; dup {
-			return workspaceRequest{}, fmt.Sprintf("sources[%d]: target %q duplicates sources[%d]", i, src.Target, j)
+		if j, dup := mountTargets[mounted]; dup {
+			return workspaceRequest{}, fmt.Sprintf("sources[%d]: target %q duplicates sources[%d]", i, mounted, j)
 		}
-		seenTargets[src.Target] = i
+		mountTargets[mounted] = i
 	}
 	if msg := validateWorkspaceBaseImage(req.BaseImage); msg != "" {
 		return workspaceRequest{}, msg
@@ -327,8 +341,9 @@ func (s *Server) handleListWorkspaces(w http.ResponseWriter, r *http.Request) {
 	// read for the whole page: the console renders "not an enabled git provider"
 	// from the server's answer rather than re-implementing the match rule (it
 	// mirrors only the host union, and a second spelling of admission is exactly
-	// how a UI comes to claim a repo is fine while every run refuses it). nil in
-	// legacy open mode, where the key is absent from every row.
+	// how a UI comes to claim a repo is fine while every run refuses it). In
+	// legacy open mode the stamp sets clone_target alone, and `admitted` is
+	// absent from every row.
 	stamp := s.admissionStamper(r.Context())
 	// #1267: one availability stamper for the whole page — the same shared
 	// capBatch every row's call asks through, installed by withCapBatch above.

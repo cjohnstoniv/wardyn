@@ -3,8 +3,12 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { adoCapName } from "../../../../../lib/ado-access-copy";
+import { ADO_PAT } from "../../../../../lib/ado-pat-copy";
+import type { SCMAccessPAT } from "../../../../../lib/types/ado-pat";
 import { NR_TOOLS } from "../../../../wardyn/copy/new-run/tools";
 import { BEDROCK_SSO_SWITCH_OFF, BEDROCK_SSO_SWITCH_ON, HARNESS_NAMES, SCENARIO_ACCESS } from "../../../../../lib/new-run-fixtures/scenarios/tools";
 import type { AccessFacts, AccessHost } from "../../../../../lib/types/new-run-access";
@@ -145,5 +149,46 @@ describe("Credentials total", () => {
     expect(credentials().getByText(NR_TOOLS.DELIVERY_SHORT_LIVED)).toBeInTheDocument();
     expect(credentials().getByText(NR_TOOLS.DELIVERY_FILE)).toBeInTheDocument();
     expect(credentials().queryByText(NR_TOOLS.CREDENTIALS_POLICY)).not.toBeInTheDocument();
+  });
+});
+
+describe("Credentials total: a run whose Azure DevOps token Wardyn creates", () => {
+  // A repository on the Azure DevOps sign-in lane, as the server lists it: its row and its credential.
+  const WITH_ADO: AccessFacts = {
+    ...MEMBER,
+    rows: [...MEMBER.rows, { id: "repo:ado", kind: "repository", from: "repository", name: "contoso", status: "ready", hosts: [], credentials: ["repo:ado:credential"], source: { kind: "workspace" } }],
+    credentials: [...MEMBER.credentials, { id: "repo:ado:credential", row: "repo:ado", kind: "ado_signin", owner: "own", delivery: "proxy", after_end: "gone" }],
+  };
+  const scm = (over: Partial<SCMAccessPAT>) => ({ token_mode: "minted_pat", state: "live", default_profile: ["code_read"], ...over }) as SCMAccessPAT;
+  const facts = (access: SCMAccessPAT | undefined, policyCaps?: unknown, onConnect = vi.fn()) => ({ access, policyCaps, connecting: false, onConnect });
+
+  it("says on the credential's own row what the run's token carries: the policy's access, else the row's default", () => {
+    const view = render(<Totals names={HARNESS_NAMES} access={WITH_ADO} answered ado={facts(scm({}), ["code_read", "code_write"])} />);
+    const line = credentials().getByTestId("ado-run-token-line");
+    expect(line).toHaveTextContent(`${ADO_PAT.NEWRUN_LINE_PREFIX}${["code_read", "code_write"].map(adoCapName).join(", ")}${ADO_PAT.NEWRUN_LINE_SUFFIX}`);
+    expect(line.closest("li")).toHaveTextContent(NR_TOOLS.FOR_ROW("contoso"));
+    view.rerender(<Totals names={HARNESS_NAMES} access={WITH_ADO} answered ado={facts(scm({}))} />);
+    expect(credentials().getByTestId("ado-run-token-line")).toHaveTextContent(`${ADO_PAT.NEWRUN_LINE_PREFIX}${adoCapName("code_read")}${ADO_PAT.NEWRUN_LINE_SUFFIX}`);
+    expect(credentials().queryByTestId("ado-launch-note")).not.toBeInTheDocument();
+  });
+
+  it("not connected: a row of the card says to connect first, and Connect starts it", async () => {
+    const onConnect = vi.fn();
+    render(<Totals names={HARNESS_NAMES} access={WITH_ADO} answered ado={facts(scm({ state: "not_configured" }), undefined, onConnect)} />);
+    const note = credentials().getByTestId("ado-launch-note");
+    expect(note.closest("li")).not.toBeNull();
+    expect(within(note).getByText(ADO_PAT.LAUNCH_NOT_CONNECTED)).toBeInTheDocument();
+    await userEvent.click(within(note).getByRole("button", { name: ADO_PAT.MEMBER_CONNECT }));
+    expect(onConnect).toHaveBeenCalledTimes(1);
+  });
+
+  it("says neither on the sign-in lane, nor for a run that carries no Azure DevOps credential", () => {
+    const view = render(<Totals names={HARNESS_NAMES} access={WITH_ADO} answered ado={facts(scm({ token_mode: "bearer", state: "not_configured" }))} />);
+    expect(screen.queryByTestId("ado-run-token-line")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("ado-launch-note")).not.toBeInTheDocument();
+    // No token is created for a run with no Azure DevOps repository, so nothing claims one.
+    view.rerender(<Totals names={HARNESS_NAMES} access={MEMBER} answered ado={facts(scm({ state: "not_configured" }))} />);
+    expect(screen.queryByTestId("ado-run-token-line")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("ado-launch-note")).not.toBeInTheDocument();
   });
 });

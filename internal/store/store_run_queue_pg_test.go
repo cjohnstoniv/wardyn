@@ -234,7 +234,14 @@ func TestPG_QueueOrderPositionAndSkipLocked(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer a.Rollback(ctx) //nolint:errcheck
-	b, err := pool.Begin(ctx)
+	// The second transaction is on a pool of its own: one goroutine holding two connections of one
+	// pool is what WARDYN_TEST_POOL_GUARD refuses.
+	other, err := pgxpool.New(ctx, pool.Config().ConnString())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer other.Close()
+	b, err := other.Begin(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
