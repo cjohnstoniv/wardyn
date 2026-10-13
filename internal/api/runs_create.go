@@ -257,6 +257,11 @@ func seedWorkspaceSources(ws types.Workspace, sel client.WorkspaceSelection) (
 				return nil, nil, nil, runError(http.StatusUnprocessableEntity, reasonWorkspaceSeedSourceTargetInvalid,
 					fmt.Sprintf("workspace_id: workspace %s source target: %v", ws.ID, verr))
 			}
+			// A repo's target also rides the clone record, which a space cannot.
+			if src.Type == types.WorkspaceSourceTypeRepo && !repoFieldSafe(target) {
+				return nil, nil, nil, runError(http.StatusUnprocessableEntity, reasonWorkspaceSeedSourceTargetInvalid,
+					fmt.Sprintf("workspace_id: workspace %s source target: "+repoField400Charset, ws.ID, "target"))
+			}
 		}
 		switch src.Type {
 		case types.WorkspaceSourceTypeRepo:
