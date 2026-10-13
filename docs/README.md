@@ -27,6 +27,7 @@
 | Run the blessed compose stack (no-login local mode, TLS) | [../deploy/compose/README.md](../deploy/compose/README.md) |
 | Deploy to a Kubernetes cluster (Helm chart, quickstart, k8s runner substrate) | [../deploy/helm/wardyn/README.md](../deploy/helm/wardyn/README.md) |
 | Run a local daemon on each developer's managed laptop (MDM envelope, and its ceiling) | [DESKTOP.md](DESKTOP.md) + [../deploy/desktop/](../deploy/desktop/) |
+| Register a self-hosted runner on a laptop, and what it does while offline | [runner-registration.md](runner-registration.md), [runner-offline.md](runner-offline.md), [operations/hybrid-laptops.md](operations/hybrid-laptops.md) |
 | Set up SSO (Entra ID / OIDC) and admin/member RBAC on a cluster install | [operations/who-gets-in.md](operations/who-gets-in.md) + the `wardyn-k8s-setup` Claude Code skill |
 | Give each person their own Azure DevOps access | [AZURE-DEVOPS.md](AZURE-DEVOPS.md) |
 | See which writes are admin-only and which sit on the security-admin tier | [operations/admin-only-writes.md](operations/admin-only-writes.md) |
