@@ -17,10 +17,21 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-func target(id string, offline bool, advertised bool, cpu, mem int64, classes ...types.ConfinementClass) poolTarget {
+// target is a candidate whose runner declares a per-run limit of cpu and mem when bounded, or the most a
+// runner may declare when not, with room for any number of runs (testFits).
+func target(id string, offline bool, bounded bool, cpu, mem int64, classes ...types.ConfinementClass) poolTarget {
+	most := types.RunnerAmounts{CPUMillis: types.RunnerPoolCPUMillisMax, MemoryMiB: types.RunnerPoolMemoryMiBMax, DiskMiB: types.RunnerPoolDiskMiBMax}
+	each := most
+	if bounded {
+		each.CPUMillis, each.MemoryMiB = cpu, mem
+	}
+	testFits[id] = runnerFit{limits: &types.RunnerLimits{RunsAtOnce: types.RemoteRunnerMaxRunsCeiling, Total: most, PerRun: each}}
 	return poolTarget{id: id, executor: id, offline: offline,
-		facts: runner.TargetFacts{Classes: classes, CapacityAdvertised: advertised, CPUMillisMax: cpu, MemoryMiBMax: mem}}
+		facts: runner.TargetFacts{Classes: classes, CapacityAdvertised: bounded, CPUMillisMax: cpu, MemoryMiBMax: mem}}
 }
+
+// testFits are the declared limits of every target() made.
+var testFits = map[string]runnerFit{}
 
 func ids(ts []poolTarget) []string {
 	out := []string{}
@@ -31,7 +42,7 @@ func ids(ts []poolTarget) []string {
 }
 
 func demand(floor, req types.ConfinementClass, cpu, mem int64) placementDemand {
-	return placementDemand{floor: types.RunPolicySpec{MinConfinementClass: floor}, reqCC: req, reqCCOK: true, baseline: composer.Baseline{}, cpu: cpu, mem: mem}
+	return placementDemand{floor: types.RunPolicySpec{MinConfinementClass: floor}, reqCC: req, reqCCOK: true, baseline: composer.Baseline{}, cpu: cpu, mem: mem, fits: testFits}
 }
 
 // DONE WHEN 3: a heterogeneous pool cannot widen the barrier or the size. Each candidate is held to the

@@ -20,6 +20,7 @@ const (
 	ReasonPlacementLocalPath           Reason = "placement_local_path"
 	ReasonRunnerOffline                Reason = "runner_offline"
 	ReasonRunnerAtCapacity             Reason = "runner_at_capacity"
+	ReasonRunnerLimitsUnset            Reason = "runner_limits_unset"
 	ReasonRunnerAmbiguous              Reason = "runner_ambiguous"
 	ReasonRunnerNotFound               Reason = "runner_not_found"
 	ReasonRunnerUnclaimed              Reason = "runner_unclaimed"
@@ -51,6 +52,7 @@ var reasonStatus = map[Reason]int{
 	ReasonPlacementLocalPath:           http.StatusUnprocessableEntity,
 	ReasonRunnerOffline:                http.StatusUnprocessableEntity,
 	ReasonRunnerAtCapacity:             http.StatusUnprocessableEntity,
+	ReasonRunnerLimitsUnset:            http.StatusUnprocessableEntity,
 	ReasonRunnerAmbiguous:              http.StatusUnprocessableEntity,
 	ReasonRunnerNotFound:               http.StatusNotFound,
 	ReasonRunnerUnclaimed:              http.StatusConflict,

@@ -52,7 +52,8 @@ var _ RunnerStore = PG{}
 var ErrRunnerClaimMismatch = errors.New("store: runner claim does not match the owner or key fingerprint")
 
 const runnerCols = `id, owner, name, public_key, key_fingerprint, state, version, created_at, claimed_at,
-	last_seen_at, revoked_at, posture, posture_reported_at, posture_source, org_url_sha256, minted_by, revoked_by, revoke_reason, max_runs, machine_name`
+	last_seen_at, revoked_at, posture, posture_reported_at, posture_source, org_url_sha256, minted_by, revoked_by, revoke_reason, max_runs, machine_name,
+	` + runnerLimitCols
 
 // prefixedRunnerCols is runnerCols on a query that names the runners table r.
 var prefixedRunnerCols = "r." + strings.ReplaceAll(strings.Join(strings.Fields(runnerCols), " "), ", ", ", r.")
@@ -61,9 +62,10 @@ func scanRunner(row pgx.Row) (types.Runner, error) {
 	var r types.Runner
 	var state string
 	var posture []byte
-	err := row.Scan(&r.ID, &r.Owner, &r.Name, &r.PublicKey, &r.KeyFingerprint, &state, &r.Version, &r.CreatedAt,
+	var lim limitCols
+	err := row.Scan(append([]any{&r.ID, &r.Owner, &r.Name, &r.PublicKey, &r.KeyFingerprint, &state, &r.Version, &r.CreatedAt,
 		&r.ClaimedAt, &r.LastSeenAt, &r.RevokedAt, &posture, &r.PostureReportedAt, &r.PostureSource, &r.OrgURLSHA256,
-		&r.MintedBy, &r.RevokedBy, &r.RevokeReason, &r.MaxRuns, &r.MachineName)
+		&r.MintedBy, &r.RevokedBy, &r.RevokeReason, &r.MaxRuns, &r.MachineName}, lim.targets()...)...)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return types.Runner{}, ErrNotFound
 	}
@@ -71,6 +73,7 @@ func scanRunner(row pgx.Row) (types.Runner, error) {
 		return types.Runner{}, fmt.Errorf("store: scan runner: %w", err)
 	}
 	r.State = types.RunnerState(state)
+	r.Limits = lim.limits(&r.MaxRuns)
 	if err := json.Unmarshal(posture, &r.Posture); err != nil {
 		return types.Runner{}, fmt.Errorf("store: unmarshal runner posture: %w", err)
 	}
@@ -78,15 +81,21 @@ func scanRunner(row pgx.Row) (types.Runner, error) {
 }
 
 // CreateRunner inserts an unclaimed runner: state, claim and posture on r are ignored, since every
-// registration starts unclaimed. ErrConflict on a key fingerprint already registered. r.MaxRuns 0 is
-// types.RunnerMaxRunsDefault.
+// registration starts unclaimed. ErrConflict on a key fingerprint already registered. r.Limits, when
+// set, is the runner's limit set and its Runs at once; without it the runner declares no limits and
+// r.MaxRuns 0 is types.RunnerMaxRunsDefault.
 func (s PG) CreateRunner(ctx context.Context, r types.Runner) (types.Runner, error) {
 	const q = `
-		INSERT INTO runners (id, owner, name, public_key, key_fingerprint, version, org_url_sha256, minted_by, max_runs, machine_name)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+		INSERT INTO runners (id, owner, name, public_key, key_fingerprint, version, org_url_sha256, minted_by, max_runs, machine_name,
+			` + runnerLimitCols + `)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
 		RETURNING ` + runnerCols
 	maxRuns := cmp.Or(r.MaxRuns, types.RunnerMaxRunsDefault)
-	out, err := scanRunner(s.Pool.QueryRow(ctx, q, r.ID, r.Owner, r.Name, r.PublicKey, r.KeyFingerprint, r.Version, r.OrgURLSHA256, r.MintedBy, maxRuns, r.MachineName))
+	if r.Limits != nil {
+		maxRuns = r.Limits.RunsAtOnce
+	}
+	out, err := scanRunner(s.Pool.QueryRow(ctx, q, append([]any{r.ID, r.Owner, r.Name, r.PublicKey, r.KeyFingerprint, r.Version, r.OrgURLSHA256,
+		r.MintedBy, maxRuns, r.MachineName}, limitArgs(r.Limits)...)...))
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
 		return types.Runner{}, ErrConflict
@@ -177,7 +186,7 @@ type RunnerKilledRun struct {
 
 // RevokeRunner revokes a runner in one transaction: the runner row with who
 // revoked it and why, every non-terminal run bound to it ended KILLED (the
-// runs CountActiveRunsByRunner counts), and every unsettled pending action of
+// non-terminal runs, queued ones included), and every unsettled pending action of
 // it settled 'revoked'. Rows are kept as evidence. The fence lifts only
 // because the run is terminal in the same commit, never before. Already
 // revoked or unknown is ErrNotFound, so a second call ends nothing. Lock order

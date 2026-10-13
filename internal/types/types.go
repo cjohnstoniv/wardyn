@@ -171,6 +171,9 @@ type AgentRun struct {
 	RunnerPoolRevision  int64               `json:"runner_pool_revision,omitempty"`
 	RunnerPoolSelection RunnerPoolSelection `json:"runner_pool_selection,omitempty"`
 	RunnerPoolExecutor  string              `json:"remote_runner_id,omitempty"`
+	// Reserved is what the run holds on its runner while it holds a sandbox there (0174): the CPU and
+	// memory it was given and its main drive, written once at insert and summed as the runner's In use.
+	Reserved RunnerAmounts `json:"-"`
 	SandboxRef          string              `json:"sandbox_ref,omitempty"`
 	Image               string              `json:"image,omitempty"` // resolved sandbox image, kept for provenance; empty for legacy rows
 	// Interactive marks a human-driven run: sandbox comes up RUNNING, no task exec'd, no completion watcher.

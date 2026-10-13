@@ -117,8 +117,8 @@ func TestDispatch_SelfHostedRunGoesToItsPersistedRunner(t *testing.T) {
 			t.Fatalf("created for runner %q, the run is bound to %q", got, bound)
 		}
 		// The create carries the runner's stored runs at once, the runner's own backstop.
-		if got := e.runner.fakeRunner.lastSpec.RunnerMaxRuns; got != types.RunnerMaxRunsDefault {
-			t.Fatalf("created with RunnerMaxRuns %d, want the runner's stored %d", got, types.RunnerMaxRunsDefault)
+		if got := e.runner.fakeRunner.lastSpec.RunnerMaxRuns; got != types.RunnerMaxRunsCeiling {
+			t.Fatalf("created with RunnerMaxRuns %d, want the runner's stored %d", got, types.RunnerMaxRunsCeiling)
 		}
 	}
 	// A spec that arrives naming another runner is overwritten by the persisted one.

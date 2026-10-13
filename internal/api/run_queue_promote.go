@@ -90,15 +90,17 @@ func (s *Server) queueAdmit(ctx context.Context, pool types.RunnerPool, e store.
 	if s.runFit(ctx, types.RunPolicySpec{Resources: launch.Resources}, time.Duration(launch.LifetimeCapSec)*time.Second, false).refusal != "" {
 		return store.QueueVerdict{}, nil
 	}
-	return store.QueueVerdict{Admit: true, Runners: room.runners}, nil
+	return store.QueueVerdict{Admit: true, Runners: room.runners, Remotes: room.remotes}, nil
 }
 
 // queueRoom is queueRunnerFree's answer: why the run cannot start now ("" when it can), whether it names
-// its runner, and the owner's runners it may be bound to, each online with room as last read.
+// its runner, and the runners it may be bound to, each online with room as last read: the owner's own
+// runners, and the pool's remote-hosted runners.
 type queueRoom struct {
 	wait    runnerpool.WaitReason
 	pinned  bool
 	runners []uuid.UUID
+	remotes []string
 }
 
 // queueRunnerFree reports whether one of the owner's candidate targets in the pool can take a run now:
@@ -131,27 +133,29 @@ func (s *Server) queueRunnerFree(ctx context.Context, pool types.RunnerPool, lau
 		out.wait = runnerpool.WaitNoRunnerFree
 		return out, nil
 	}
-	online, executor := false, false
+	// Room is read here without a lock, by each runner's declared limits and In use; the promotion
+	// holds the run's own size to it again under the runner rows' locks.
+	fits := s.runnerFits(ctx)
+	online := false
 	for _, t := range targets {
 		if t.offline || (out.pinned && pool.Scope == types.RunnerPoolUser && t.id != req.RunnerID) {
 			continue
 		}
 		online = true
-		switch {
-		case t.runnerID == nil:
-			executor = true
-		case !t.full:
+		f := fits[t.id]
+		if t.full || runnerpool.Fits(f.limits, f.used, types.RunnerAmounts{}) != runnerpool.FitOK {
+			continue
+		}
+		if t.runnerID == nil {
+			out.remotes = append(out.remotes, t.executor)
+		} else {
 			out.runners = append(out.runners, *t.runnerID)
 		}
 	}
 	switch {
-	case executor:
-		// An online executor can take the run whatever the registered runners hold, so the promotion
-		// binds no runner and the start picks the target (a mixed pool is the runner-pool redesign's).
-		out.runners = nil
 	case !online:
 		out.wait = runnerpool.WaitNoRunnerFree
-	case len(out.runners) == 0:
+	case len(out.runners)+len(out.remotes) == 0:
 		out.wait = runnerpool.WaitRunnersAtCapacity
 	}
 	return out, nil

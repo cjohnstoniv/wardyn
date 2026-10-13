@@ -481,6 +481,8 @@ func targetRefusal(reason placement.Reason, pool string, scope types.RunnerPoolS
 		return runError(http.StatusUnprocessableEntity, string(reason), "Your own runner is not available: runners are switched off on this server.")
 	case placement.ReasonRunnerAtCapacity:
 		return runError(reason.Status(), string(reason), runnerpool.RunnerAtCapacityMsg(pool))
+	case placement.ReasonRunnerLimitsUnset:
+		return runError(reason.Status(), string(reason), runnerpool.RunnerLimitsUnsetMsg(pool))
 	}
 	return runError(reason.Status(), string(reason), "This run cannot be placed in "+pool+".")
 }
@@ -491,9 +493,12 @@ type placementDemand struct {
 	reqCC    types.ConfinementClass
 	reqCCOK  bool // false: the request's class did not parse, and the confinement step answers it
 	baseline composer.Baseline
-	cpu, mem int64
-	// holdRunnerCapacity refuses a runner that already holds its max_runs (poolTarget.full).
+	// cpu, mem and disk are what the run reserves on its runner; 0 is not known yet.
+	cpu, mem, disk int64
+	// holdRunnerCapacity refuses a runner with no room for the run now (fitRefusal).
 	holdRunnerCapacity bool
+	// fits is each runner's declared limits and In use, by target id (runnerFits).
+	fits map[string]runnerFit
 }
 
 // eligibleTargets keeps the candidates that meet EVERY demand on their OWN facts and answers the first
@@ -508,7 +513,7 @@ func eligibleTargets(targets []poolTarget, d placementDemand) ([]poolTarget, pla
 	for _, t := range targets {
 		reason := d.refusal(t)
 		if reason == "" {
-			out = append(out, t)
+			out = append(out, d.withFit(t))
 			continue
 		}
 		if reason == placement.ReasonRunnerAtCapacity {
@@ -531,11 +536,5 @@ func (d placementDemand) refusal(t poolTarget) placement.Reason {
 			return placement.ReasonPlacementCapability
 		}
 	}
-	if t.facts.CapacityAdvertised && !(placement.Capacity{CPUMillisMax: t.facts.CPUMillisMax, MemoryMiBMax: t.facts.MemoryMiBMax}).Fits(d.cpu, d.mem) {
-		return placement.ReasonPlacementCapability
-	}
-	if d.holdRunnerCapacity && t.full {
-		return placement.ReasonRunnerAtCapacity
-	}
-	return ""
+	return d.fitRefusal(t)
 }

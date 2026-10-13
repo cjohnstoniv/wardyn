@@ -110,12 +110,16 @@ func (s PG) markRunRevivedUnderCap(ctx context.Context, id uuid.UUID, from types
 				return ErrRunCapReached
 			}
 		}
+		// The run keeps what it reserved, and is held to its runner's limits beside the OTHER runs there.
 		var runner *uuid.UUID
-		if err := q.QueryRow(ctx, `SELECT runner_id FROM agent_runs WHERE id = $1`, id).Scan(&runner); err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		var remote string
+		var need types.RunnerAmounts
+		if err := q.QueryRow(ctx, `SELECT runner_id, runner_pool_executor, `+runReservedCols+` FROM agent_runs WHERE id = $1`, id).
+			Scan(&runner, &remote, &need.CPUMillis, &need.MemoryMiB, &need.DiskMiB); err != nil && !errors.Is(err, pgx.ErrNoRows) {
 			return fmt.Errorf("store: read revive runner: %w", err)
 		}
-		if runner != nil {
-			if err := admitOnRunner(ctx, q, *runner, id); err != nil {
+		if key := runnerKeyOf(runner, remote); key != "" {
+			if err := admitOnRunner(ctx, q, key, need, id); err != nil {
 				return err
 			}
 		}
