@@ -533,6 +533,18 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `placement: local` or `placement: remote` (or a `runner_id`) fixes the kind, and a pool with no runner of that
   kind is refused `runner_pool_member_mismatch`. A run with drives goes to the pool's remote-hosted runners. A
   queued run that took your runner's last place keeps it when it starts.
+- Azure CLI signed in as you: an Azure CLI component names the subscriptions a run may reach and whether it may
+  change them. Each person signs in once with Microsoft Entra (`GET
+  /api/v1/components-entra/signin?component=<id>`); the sign-in stays with Wardyn. The sandbox holds an `~/.azure`
+  profile and a placeholder token cache; the proxy checks each `management.azure.com` request against the
+  component's subscriptions and access (`read` is GET and HEAD only) and adds a short-lived token. No Azure token is
+  placed in the sandbox. Resource Manager commands only: Storage, Key Vault and Microsoft Graph are not covered, and
+  a resource path with `;`, `?`, `#` or `%` in a name is refused (Azure Backup items and API Management revisions
+  among them). It needs the console to sign people in with Microsoft Entra, and that application to hold the
+  delegated permission "Azure Service Management · user_impersonation" with admin consent. Changing the component's
+  subscriptions, or deleting it, deletes everyone's sign-in for it.
+- The `full` and `harnesses` images include the Azure CLI (`az` 2.91.0), from Microsoft's apt repository with its
+  signing key checked by fingerprint and the version pinned.
 
 ### Changed
 
@@ -842,11 +854,15 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - A recording's review no longer files a host that only ends in a model provider's name (for example
   notanthropic.com) as provider traffic; it now shows on the list you approve, as the server already treated it.
 - Adding a workspace refuses a folder with no mount path beside another such folder, or beside a folder or
-  repository placed at /home/agent/work: both would mount there, and every launch with that workspace failed. New
+  repository placed at /home/agent/work: both would mount there, and a launch that attached both failed. New
   Run's Files step shows a folder that shares its workspace at the path the server mounts it, and shows a folder
   read-only unless its source is writable.
 - An Azure DevOps git push held for approval no longer records a denied decision when the client hangs up before the
   approval is decided; the hold just ends, as it already did for the Azure DevOps REST lane.
+- An Azure CLI component compares subscription ids without regard to case: an uppercase id is accepted, and one id
+  in two spellings is refused as listed twice.
+- The GitHub and Azure DevOps API path classifiers refuse a dot segment that carries a path parameter, such as `..;`
+  or `.;x`, in any percent-encoded spelling; a `;` elsewhere in a segment is still accepted.
 
 
 ## [0.8.9] — 2026-10-09

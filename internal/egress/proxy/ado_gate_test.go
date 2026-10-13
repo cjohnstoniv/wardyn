@@ -178,6 +178,8 @@ func TestADOGate_PathEvasionsAreRefused(t *testing.T) {
 		"/acme/%2e%2e/evil/_apis/projects",
 		"/acme/%2E%2E/evil/_apis/projects",
 		"/acme/./_apis/tokens/pats",
+		"/acme/_apis/git/..;/tokens/pats",
+		"/acme/_apis/git/%2e%2e%3b/tokens/pats",
 		"/acme/_apis/wit%2F..%2Fhooks/subscriptions",
 		"/acme/_apis/wit%5C..%5Chooks/subscriptions",
 	} {
