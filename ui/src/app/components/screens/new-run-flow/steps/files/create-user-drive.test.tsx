@@ -14,6 +14,8 @@ import { MemoryRouter } from "react-router-dom";
 import { CREATE_ALLOWED, CREATE_DOORS, DRIVE_LEGACY, DRIVE_LOCKED, DRIVE_OWNED } from "../../../../../lib/new-run-fixtures/scenarios/drives";
 import { filesPreflight, MAIN_DRIVE_FACTS, SCENARIO_FILES_WORKSPACES } from "../../../../../lib/new-run-fixtures/scenarios/files";
 import { DRIVE_REFUSAL } from "../../../../../lib/drive-refusals";
+import { MEMBER } from "../../../../../lib/governance-copy";
+import { DRIVE_MEMBER } from "../../../../../lib/user-drives-copy";
 import type { MeDrive, MeDriveCatalogue, MemberDriveCreate, MemberDriveCreateReason } from "../../../../../lib/api/me-drives";
 import { NR_FILES } from "../../../../wardyn/copy/new-run/files";
 import { NR_SHARED } from "../../../../wardyn/copy/new-run/shared";
@@ -104,7 +106,6 @@ async function openChoose(intent?: RunIntent) {
   await within(top()).findByRole("radio", { name: /^Team reference/ });
 }
 const createLink = () => within(top()).getByRole("button", { name: NR_FILES.CREATE_USER_DRIVE });
-const nameField = () => within(top()).getByLabelText(NR_FILES.DRIVE_NAME);
 const posts = () => wfetchMock.mock.calls.filter(([, init]) => init?.method === "POST");
 const deletes = () => wfetchMock.mock.calls.filter(([, init]) => init?.method === "DELETE");
 
@@ -115,29 +116,26 @@ describe("the create door", () => {
     expect(within(top()).queryByText(/can't create drives/)).toBeNull();
   });
 
-  it.each<[MemberDriveCreateReason, string | undefined]>([
+  it.each<[MemberDriveCreateReason, string]>([
     ["denied_by_profile", NR_FILES.CREATE_DENIED("Contractors")],
     ["limit_reached", NR_FILES.CREATE_LIMIT(3, 3)],
     ["unsupported", NR_FILES.CREATE_UNSUPPORTED],
     ["delete_unavailable", NR_FILES.CREATE_NO_DELETE],
-    // No canon string for these two: the control is closed and nothing is worded for it.
-    ["governance_unavailable", undefined],
-    ["groups_snapshot_stale", undefined],
+    // No CREATE_* string for these two: the step's own sentence for the same cause.
+    ["governance_unavailable", DRIVE_MEMBER.NR_GOVERNANCE_UNAVAILABLE],
+    ["groups_snapshot_stale", MEMBER.DENIED_STALE_GROUPS],
   ])("closes the control with its reason beside it: %s", async (reason, sentence) => {
     create = CREATE_DOORS[reason];
     await openChoose();
     const control = createLink();
     expect(control).toBeDisabled();
-    if (sentence) {
-      expect(within(top()).getByText(sentence)).toBeInTheDocument();
-      expect(control).toHaveAccessibleDescription(sentence);
-    } else {
-      expect(control).not.toHaveAttribute("aria-describedby");
-    }
+    expect(within(top()).getByText(sentence)).toBeInTheDocument();
+    expect(control).toHaveAccessibleDescription(sentence);
   });
 
-  it("shows nothing when person-created drives are off, or the caller is not a person", async () => {
+  it("shows no create control when person-created drives are off, or the caller is not a person", async () => {
     create = CREATE_DOORS.disabled;
+    drives = [DRIVE_LEGACY, DRIVE_LOCKED];
     await openChoose();
     expect(within(top()).queryByRole("button", { name: NR_FILES.CREATE_USER_DRIVE })).toBeNull();
     expect(within(top()).queryByTestId("nr-own-drives")).toBeNull();
@@ -146,45 +144,80 @@ describe("the create door", () => {
     await openChoose();
     expect(within(top()).queryByRole("button", { name: NR_FILES.CREATE_USER_DRIVE })).toBeNull();
   });
+
+  it("still lists the person's own drives for deleting when person-created drives are off", async () => {
+    create = CREATE_DOORS.disabled;
+    await openChoose();
+    expect(within(top()).queryByRole("button", { name: NR_FILES.CREATE_USER_DRIVE })).toBeNull();
+    expect(within(screen.getByTestId("nr-own-drives")).getByRole("button", { name: NR_FILES.DELETE_DRIVE })).toBeInTheDocument();
+  });
 });
 
 describe("create", () => {
+  const cardName = () => within(top()).getByLabelText(NR_FILES.DRIVE_NAME);
+  const createButton = () => within(top()).getByRole("button", { name: NR_FILES.CREATE_CONFIRM });
+
+  it("opens a card in the Choose step, not a second dialog, with the intro and the name field focused", async () => {
+    await openChoose();
+    await userEvent.click(createLink());
+    expect(dialogs()).toHaveLength(1);
+    expect(within(top()).getByText(NR_FILES.CREATE_INTRO)).toBeInTheDocument();
+    expect(within(top()).getByText(NR_SHARED.REQUIRED)).toBeInTheDocument();
+    expect(cardName()).toHaveFocus();
+    expect(cardName()).toHaveAttribute("placeholder", NR_FILES.DRIVE_NAME_PLACEHOLDER);
+    expect(within(top()).queryByRole("button", { name: NR_FILES.CREATE_USER_DRIVE })).toBeNull();
+  });
+
   it("creates the drive, chooses it, reads the catalogue again and announces it", async () => {
     await openChoose();
     await userEvent.click(createLink());
-    expect(dialogs()).toHaveLength(2);
-    expect(within(top()).getByRole("heading", { name: NR_FILES.CREATE_TITLE })).toBeInTheDocument();
-    expect(nameField()).toHaveFocus();
-    await userEvent.type(nameField(), "Case notes");
-    await userEvent.click(within(top()).getByRole("button", { name: NR_FILES.CREATE_CONFIRM }));
-    await waitFor(() => expect(dialogs()).toHaveLength(1));
-    expect(JSON.parse(posts()[0][1].body)).toEqual({ name: "Case notes" });
+    await userEvent.type(cardName(), "Case notes");
+    await userEvent.click(createButton());
     expect(await within(top()).findByRole("radio", { name: /^Case notes/ })).toBeChecked();
+    expect(JSON.parse(posts()[0][1].body)).toEqual({ name: "Case notes" });
+    expect(within(top()).queryByLabelText(NR_FILES.DRIVE_NAME)).toBeNull();
     expect(announce).toHaveBeenCalledWith(NR_FILES.DRIVE_CREATED("Case notes"));
     expect(createLink()).toHaveFocus();
   });
 
-  it("keeps the dialog open with the server's sentence under the field when the create is refused", async () => {
+  it("creates on Enter in the field", async () => {
+    await openChoose();
+    await userEvent.click(createLink());
+    await userEvent.type(cardName(), "Case notes{Enter}");
+    expect(await within(top()).findByRole("radio", { name: /^Case notes/ })).toBeChecked();
+    expect(posts()).toHaveLength(1);
+  });
+
+  it("keeps the card open with the server's sentence under the field when the create is refused", async () => {
     const sentence = DRIVE_REFUSAL.MEMBER_NAME_TAKEN("Case notes");
     post = () => json({ error: sentence, reason: "member_drive_name_taken" }, 422);
     await openChoose();
     await userEvent.click(createLink());
-    await userEvent.type(nameField(), "Case notes");
-    await userEvent.click(within(top()).getByRole("button", { name: NR_FILES.CREATE_CONFIRM }));
+    await userEvent.type(cardName(), "Case notes");
+    await userEvent.click(createButton());
     expect(await within(top()).findByRole("alert")).toHaveTextContent(sentence);
-    expect(dialogs()).toHaveLength(2);
-    expect(nameField()).toHaveAttribute("aria-invalid", "true");
+    expect(cardName()).toHaveAttribute("aria-invalid", "true");
     expect(announce).not.toHaveBeenCalledWith(NR_FILES.DRIVE_CREATED("Case notes"));
   });
 
-  it("closes only the create dialog on Escape and gives focus back to the control that opened it", async () => {
+  it("closes only the card on Escape and gives focus back to the link, leaving the Add dialog open", async () => {
     await openChoose();
     await userEvent.click(createLink());
     await userEvent.keyboard("{Escape}");
-    await waitFor(() => expect(dialogs()).toHaveLength(1));
+    expect(within(top()).queryByLabelText(NR_FILES.DRIVE_NAME)).toBeNull();
+    expect(dialogs()).toHaveLength(1);
     expect(within(top()).getByRole("radio", { name: /^Team reference/ })).toBeInTheDocument();
     expect(createLink()).toHaveFocus();
     expect(posts()).toHaveLength(0);
+  });
+
+  it("closes the card on its Cancel and gives focus back to the link", async () => {
+    await openChoose();
+    await userEvent.click(createLink());
+    const card = cardName().closest("form")!;
+    await userEvent.click(within(card).getByRole("button", { name: NR_SHARED.CANCEL }));
+    expect(within(top()).queryByLabelText(NR_FILES.DRIVE_NAME)).toBeNull();
+    expect(createLink()).toHaveFocus();
   });
 });
 
@@ -230,6 +263,17 @@ describe("delete", () => {
     expect(await within(top()).findByRole("alert")).toHaveTextContent(DRIVE_REFUSAL.MEMBER_IN_USE());
     expect(dialogs()).toHaveLength(2);
     expect(announce).not.toHaveBeenCalledWith(NR_FILES.DRIVE_DELETED(DRIVE_OWNED.name));
+  });
+
+  it("clears the dialog's selection so Continue is held after a delete", async () => {
+    await openChoose();
+    await userEvent.click(within(top()).getByRole("radio", { name: new RegExp(`^${DRIVE_OWNED.name}`) }));
+    const next = () => within(top()).getByRole("button", { name: new RegExp(`^${NR_SHARED.CONTINUE}`) });
+    expect(next()).toBeEnabled();
+    await userEvent.click(ownRow().getByRole("button", { name: NR_FILES.DELETE_DRIVE }));
+    await userEvent.click(within(top()).getByRole("button", { name: NR_FILES.DELETE_DRIVE }));
+    await waitFor(() => expect(dialogs()).toHaveLength(1));
+    expect(next()).toBeDisabled();
   });
 
   it("takes a drive already attached to this run, and a start on it, out of the draft", async () => {

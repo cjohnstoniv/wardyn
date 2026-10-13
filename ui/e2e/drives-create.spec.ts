@@ -111,20 +111,22 @@ async function stubDrives(page: Page, opts: { refuseFirstCreate?: boolean } = {}
 }
 
 test.describe("New Run, Files: create and delete a person's drive", () => {
-  test("a refused name keeps the dialog open; the retry creates the drive, chooses it and adds it", async ({ page }) => {
+  test("a refused name keeps the card open; the retry creates the drive, chooses it and adds it", async ({ page }) => {
     const seen = await stubDrives(page, { refuseFirstCreate: true });
     await toFiles(page);
     const dialog = await openUserDrives(page);
     const link = dialog.getByRole("button", { name: NR_FILES.CREATE_USER_DRIVE });
     await link.click();
-    const create = page.getByRole("dialog", { name: NR_FILES.CREATE_TITLE });
-    await expect(create.getByLabel(NR_FILES.DRIVE_NAME)).toBeFocused();
-    await create.getByLabel(NR_FILES.DRIVE_NAME).fill(NAME);
-    await create.getByRole("button", { name: NR_FILES.CREATE_CONFIRM }).click();
-    await expect(create.getByRole("alert")).toHaveText(DRIVE_REFUSAL.MEMBER_NAME_TAKEN(NAME));
+    // The card is part of the Choose step, not a second dialog.
+    await expect(page.getByRole("dialog")).toHaveCount(1);
+    const name = dialog.getByLabel(NR_FILES.DRIVE_NAME);
+    await expect(name).toBeFocused();
+    await name.fill(NAME);
+    await dialog.getByRole("button", { name: NR_FILES.CREATE_CONFIRM }).click();
+    await expect(dialog.getByRole("alert")).toHaveText(DRIVE_REFUSAL.MEMBER_NAME_TAKEN(NAME));
 
-    await create.getByRole("button", { name: NR_FILES.CREATE_CONFIRM }).click();
-    await expect(create).toHaveCount(0);
+    await name.press("Enter");
+    await expect(name).toHaveCount(0);
     expect(seen.posts).toEqual([{ name: NAME }, { name: NAME }]);
     await expect(link).toBeFocused();
     // Chosen, and nothing is launched: the person adds it like any other drive.
@@ -134,39 +136,59 @@ test.describe("New Run, Files: create and delete a person's drive", () => {
     await expect(page.getByTestId("nr-attach-card").filter({ hasText: NAME })).toHaveCount(1);
   });
 
-  test("Escape closes only the create dialog", async ({ page }) => {
+  test("Escape closes only the card, and the Add dialog stays", async ({ page }) => {
     await stubDrives(page);
     await toFiles(page);
     const dialog = await openUserDrives(page);
     await dialog.getByRole("button", { name: NR_FILES.CREATE_USER_DRIVE }).click();
-    await expect(page.getByRole("dialog", { includeHidden: true })).toHaveCount(2);
+    await expect(dialog.getByLabel(NR_FILES.DRIVE_NAME)).toBeFocused();
     await page.keyboard.press("Escape");
-    await expect(page.getByRole("dialog", { includeHidden: true })).toHaveCount(1);
+    await expect(dialog.getByLabel(NR_FILES.DRIVE_NAME)).toHaveCount(0);
+    await expect(page.getByRole("dialog")).toHaveCount(1);
     await expect(dialog.getByRole("button", { name: NR_FILES.CREATE_USER_DRIVE })).toBeFocused();
   });
 
-  test("deleting a drive asks first, then takes it out of the list and off the run", async ({ page }) => {
+  async function withOwnDrive(page: Page): Promise<{ seen: Awaited<ReturnType<typeof stubDrives>>; dialog: Locator }> {
     const seen = await stubDrives(page);
     await toFiles(page);
-    let dialog = await openUserDrives(page);
+    const dialog = await openUserDrives(page);
     await dialog.getByRole("button", { name: NR_FILES.CREATE_USER_DRIVE }).click();
-    await page.getByLabel(NR_FILES.DRIVE_NAME).fill(NAME);
-    await page.getByRole("button", { name: NR_FILES.CREATE_CONFIRM }).click();
+    await dialog.getByLabel(NR_FILES.DRIVE_NAME).fill(NAME);
+    await dialog.getByRole("button", { name: NR_FILES.CREATE_CONFIRM }).click();
+    await expect(dialog.getByRole("radio", { name: new RegExp(`^${NAME}`) })).toBeChecked();
+    return { seen, dialog };
+  }
+
+  test("Escape on the delete confirm closes only the confirm", async ({ page }) => {
+    const { seen, dialog } = await withOwnDrive(page);
+    const open = dialog.getByTestId("nr-own-drives").getByRole("button", { name: NR_FILES.DELETE_DRIVE });
+    await open.click();
+    const confirm = page.getByRole("dialog", { name: NR_FILES.DELETE_CONFIRM(NAME) });
+    await expect(confirm.getByRole("button", { name: NR_SHARED.CANCEL })).toBeFocused();
+    await page.keyboard.press("Escape");
+    await expect(confirm).toHaveCount(0);
+    await expect(page.getByRole("dialog", { includeHidden: true })).toHaveCount(1);
+    await expect(open).toBeFocused();
+    expect(seen.deletes).toEqual([]);
+  });
+
+  test("deleting a drive asks first, then takes it out of the list and off the run", async ({ page }) => {
+    const { seen, dialog } = await withOwnDrive(page);
     await dialog.getByRole("button", { name: NR_SHARED.CONTINUE, exact: true }).click();
     await dialog.getByRole("button", { name: NR_FILES.ADD_CONFIRM, exact: true }).click();
     const card = page.getByTestId("nr-attach-card").filter({ hasText: NAME });
     await expect(card).toHaveCount(1);
 
-    dialog = await openUserDrives(page);
-    await dialog.getByTestId("nr-own-drives").getByRole("button", { name: NR_FILES.DELETE_DRIVE }).click();
+    const again = await openUserDrives(page);
+    await again.getByTestId("nr-own-drives").getByRole("button", { name: NR_FILES.DELETE_DRIVE }).click();
     const confirm = page.getByRole("dialog", { name: NR_FILES.DELETE_CONFIRM(NAME) });
     await expect(confirm.getByRole("button", { name: NR_SHARED.CANCEL })).toBeFocused();
     await confirm.getByRole("button", { name: NR_FILES.DELETE_DRIVE }).click();
     await expect(confirm).toHaveCount(0);
     expect(seen.deletes).toEqual([DRIVE_ID]);
-    await expect(dialog.getByTestId("nr-own-drives")).toHaveCount(0);
-    await expect(dialog.getByRole("radio", { name: new RegExp(`^${NAME}`) })).toHaveCount(0);
-    await dialog.getByRole("button", { name: NR_SHARED.CANCEL, exact: true }).click();
+    await expect(again.getByTestId("nr-own-drives")).toHaveCount(0);
+    await expect(again.getByRole("radio", { name: new RegExp(`^${NAME}`) })).toHaveCount(0);
+    await again.getByRole("button", { name: NR_SHARED.CANCEL, exact: true }).click();
     await expect(card).toHaveCount(0);
   });
 });

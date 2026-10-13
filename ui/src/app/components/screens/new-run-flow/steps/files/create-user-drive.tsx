@@ -5,18 +5,21 @@
 
 // Person-created drives, under the user drives of the Add dialog's Choose step
 // (the `createUserDrive` seam). It reads the create door from the catalogue:
-// open, it offers "+ Create user drive" and a compact list of the person's own
-// drives with "Delete drive"; closed, the same control disabled with the reason
-// beside it; switched off (the default), nothing at all.
+// open, it offers "+ Create user drive"; closed, the same control disabled with
+// the reason beside it; switched off (the default), no create control at all.
+// The person's own drives list with "Delete drive" whatever the door says: the
+// server never gates a delete on it, and a person can always remove their own data.
 
 import * as React from "react";
 import { createMyDrive, deleteMyDrive, type MeDrive, type MemberDriveCreate, type MemberDriveCreateReason } from "../../../../../lib/api/me-drives";
+import { MEMBER } from "../../../../../lib/governance-copy";
+import { DRIVE_MEMBER } from "../../../../../lib/user-drives-copy";
 import { NR_FILES } from "../../../../wardyn/copy/new-run/files";
 import { detachDrive } from "../../lenses/files-lens";
 import { useNewRunDispatch, useNewRunDraft } from "../../new-run-route";
 import { useAnnounce } from "../step-shell";
 import { FILES_LINK, type AddDialogProps } from "./add-dialog";
-import { CreateDriveDialog } from "./create-drive-dialog";
+import { CreateDriveCard } from "./create-drive-card";
 import { DeleteDriveConfirm } from "./delete-drive-confirm";
 import { legacyIdOf } from "./file-items";
 import { useDriveCatalogue } from "./file-sources";
@@ -25,8 +28,8 @@ type ArmContext = Parameters<NonNullable<AddDialogProps["createUserDrive"]>>[0];
 
 /**
  * The sentence beside a closed door: the canon string for each reason of the server's closed set. `disabled` is the
- * switch being off, so the arm shows nothing for it; governance_unavailable and groups_snapshot_stale have no
- * canon string, so the control is closed with no sentence rather than one worded here.
+ * switch being off, so the arm shows no create control for it. The two reasons with no CREATE_* string show the
+ * step's existing sentence for the same cause.
  */
 const REASON_TEXT: Record<MemberDriveCreateReason, ((c: MemberDriveCreate) => string | undefined) | undefined> = {
   disabled: undefined,
@@ -34,8 +37,8 @@ const REASON_TEXT: Record<MemberDriveCreateReason, ((c: MemberDriveCreate) => st
   limit_reached: (c) => NR_FILES.CREATE_LIMIT(c.count, c.limit),
   unsupported: () => NR_FILES.CREATE_UNSUPPORTED,
   delete_unavailable: () => NR_FILES.CREATE_NO_DELETE,
-  governance_unavailable: () => undefined,
-  groups_snapshot_stale: () => undefined,
+  governance_unavailable: () => DRIVE_MEMBER.NR_GOVERNANCE_UNAVAILABLE,
+  groups_snapshot_stale: () => MEMBER.DENIED_STALE_GROUPS,
 };
 
 const CLOSED_LINK = "font-semibold text-muted-foreground opacity-70 disabled:cursor-not-allowed";
@@ -47,16 +50,28 @@ export function CreateUserDrive({ choose, reload }: ArmContext) {
   const [creating, setCreating] = React.useState(false);
   const [deleting, setDeleting] = React.useState<{ drive: MeDrive; opener: HTMLElement } | null>(null);
   const link = React.useRef<HTMLButtonElement>(null);
-  // The row that held the delete is gone once the drive is, so focus goes to the create control instead.
+  // Focus goes back to the create control when the card closes, and when a delete leaves no row to return to.
+  const refocus = React.useRef(false);
   const deleted = React.useRef(false);
   const reasonId = React.useId();
   const legacyId = legacyIdOf(catalogue);
+  React.useEffect(() => {
+    if (!creating && refocus.current) {
+      refocus.current = false;
+      link.current?.focus();
+    }
+  }, [creating]);
+  const closeCard = React.useCallback(() => {
+    refocus.current = true;
+    setCreating(false);
+  }, []);
 
   const door = catalogue?.create;
-  // Absent: not a person. Disabled: the switch is off, which is the default.
-  if (!door || door.reason === "disabled") return null;
-  const reasonText = door.allowed ? undefined : door.reason && REASON_TEXT[door.reason]?.(door);
+  // No door: not a person. Disabled: the switch is off, which is the default.
+  const offersCreate = !!door && door.reason !== "disabled";
   const own = (catalogue?.drives ?? []).filter((d) => d.owned);
+  if (!offersCreate && own.length === 0) return null;
+  const reasonText = door && !door.allowed && door.reason ? REASON_TEXT[door.reason]?.(door) : undefined;
   const refresh = () => {
     reload();
     reloadOwn();
@@ -64,22 +79,34 @@ export function CreateUserDrive({ choose, reload }: ArmContext) {
 
   return (
     <>
-      {door.allowed ? (
+      {offersCreate && !creating && (door.allowed ? (
         <button ref={link} type="button" className={FILES_LINK} onClick={() => setCreating(true)}>{NR_FILES.CREATE_USER_DRIVE}</button>
       ) : (
         <span className="inline-flex flex-wrap items-center gap-x-2 gap-y-1">
           <button type="button" disabled aria-describedby={reasonText ? reasonId : undefined} className={CLOSED_LINK}>{NR_FILES.CREATE_USER_DRIVE}</button>
           {reasonText && <span id={reasonId} className="text-sm text-muted-foreground">{reasonText}</span>}
         </span>
+      ))}
+      {creating && (
+        <CreateDriveCard
+          create={createMyDrive}
+          onClose={closeCard}
+          onCreated={(drive) => {
+            refresh();
+            choose(drive.id);
+            announce(NR_FILES.DRIVE_CREATED(drive.name));
+            closeCard();
+          }}
+        />
       )}
       {own.length > 0 && (
-        <ul className="m-0 flex basis-full list-none flex-col gap-1.5 p-0" data-testid="nr-own-drives">
+        <ul className="m-0 flex basis-full list-none flex-col gap-1 p-0" data-testid="nr-own-drives">
           {own.map((d) => (
-            <li key={d.id} className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-border px-3 py-1.5">
-              <strong id={`nr-own-drive-${d.id}`} className="text-sm font-semibold">{d.name}</strong>
+            <li key={d.id} className="flex items-center justify-between gap-2 text-[13px] text-muted-foreground">
+              <span id={`nr-own-drive-${d.id}`}>{d.name}</span>
               <button
                 type="button"
-                className={FILES_LINK}
+                className="font-semibold text-primary hover:underline"
                 aria-describedby={`nr-own-drive-${d.id}`}
                 onClick={(e) => {
                   deleted.current = false;
@@ -92,17 +119,6 @@ export function CreateUserDrive({ choose, reload }: ArmContext) {
           ))}
         </ul>
       )}
-      <CreateDriveDialog
-        open={creating}
-        onOpenChange={setCreating}
-        create={createMyDrive}
-        returnFocusTo={link}
-        onCreated={(drive) => {
-          refresh();
-          choose(drive.id);
-          announce(NR_FILES.DRIVE_CREATED(drive.name));
-        }}
-      />
       {deleting && (
         <DeleteDriveConfirm
           name={deleting.drive.name}
@@ -114,6 +130,9 @@ export function CreateUserDrive({ choose, reload }: ArmContext) {
             refresh();
             // A drive already attached to this run goes with it, and so does a start on it.
             dispatch({ type: "edit", apply: (i) => detachDrive(i, deleting.drive.id, legacyId) });
+            // The dialog keeps its selection by id and does not drop one that left the list; clearing it holds
+            // Continue until the person picks again.
+            choose("");
             announce(NR_FILES.DRIVE_DELETED(deleting.drive.name));
           }}
         />
