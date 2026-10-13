@@ -5,6 +5,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 
 	"github.com/google/uuid"
@@ -133,6 +134,22 @@ func runnerSource(fit []poolTarget, pin string, ask types.RunnerAmounts) []runne
 		return whole
 	}
 	return all
+}
+
+// insertRoomRefusal answers the insert's own refusal under the runner's row lock, nil for any other
+// error: another launch took the runner's last room after placement read it (runner_at_capacity), or
+// the runner's limits were lowered under the run's size since, so it could never take it
+// (placement_capability).
+func insertRoomRefusal(err error, pool types.ResolvedRunnerPool) *runRefusal {
+	var full *store.RunnerAtCapacityError
+	if !errors.As(err, &full) {
+		return nil
+	}
+	reason := placement.ReasonRunnerAtCapacity
+	if full.NeverFits {
+		reason = placement.ReasonPlacementCapability
+	}
+	return targetRefusal(reason, pool.Name, pool.Scope)
 }
 
 // reserved is what the run holds on its runner while it holds a sandbox there: the CPU and memory it

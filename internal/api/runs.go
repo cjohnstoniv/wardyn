@@ -242,15 +242,8 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 			writePoolRefusal(w, runnerpool.Refusal{Reason: runnerpool.ReasonStale, Name: f.place.pool.Name})
 			return
 		}
-		// Another launch took the runner's last place after placement read it, or the runner's limits
-		// were lowered under the run's size since.
-		var full *store.RunnerAtCapacityError
-		if errors.As(err, &full) {
-			reason := placement.ReasonRunnerAtCapacity
-			if full.NeverFits {
-				reason = placement.ReasonPlacementCapability
-			}
-			targetRefusal(reason, f.place.pool.Name, f.place.pool.Scope).write(s, w, r)
+		if refusal := insertRoomRefusal(err, f.place.pool); refusal != nil {
+			refusal.write(s, w, r)
 			return
 		}
 		writeServerError(w, r, "create run", err)
