@@ -7,7 +7,6 @@ import (
 	"cmp"
 	"context"
 
-	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/runnerpool"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/pkg/client"
@@ -92,17 +91,4 @@ func appliedAmount(l types.EffectiveLimit, asked int, names map[types.LimitSourc
 	}
 	out.SourceName = names[out.Source]
 	return out
-}
-
-// advertisesSize reports whether a candidate advertised a usable size. A runner that reports 0 for
-// either field is no runner-capacity source, so a missing fact never turns a launch into a server
-// error; it is still held to that bound of nothing per candidate (placementDemand.refusal).
-func advertisesSize(f runner.TargetFacts) bool {
-	return f.CapacityAdvertised && f.CPUMillisMax > 0 && f.MemoryMiBMax > 0
-}
-
-// selfHostedCapacity is the runner limit source's candidates for a pool of either scope (runnerSource):
-// every candidate that passed the demand, by its declared per-run limits.
-func selfHostedCapacity(_ types.RunnerPool, fit []poolTarget, pin string) []runnerpool.RunnerCapacity {
-	return runnerSource(fit, pin)
 }
