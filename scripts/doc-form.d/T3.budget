@@ -5,4 +5,5 @@
 # threatmodel/THREAT-MODEL.md 52431 after the via_org B6 bullet (H12, train 10).
 # threatmodel/THREAT-MODEL.md 52492 measured after train 10 F-1508-author merge.
 # threatmodel/THREAT-MODEL.md 52620 adds 128 (0.9 DS1-S2a, train 12): the per-harness credential same-uid residual.
-threatmodel/THREAT-MODEL.md=52620
+# threatmodel/THREAT-MODEL.md 52622 adds 2 over 52620 (0.9 RS-1): an updated branch counts only at the forge's tip.
+threatmodel/THREAT-MODEL.md=52622
