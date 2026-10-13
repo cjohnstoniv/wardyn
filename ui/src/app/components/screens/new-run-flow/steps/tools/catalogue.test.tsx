@@ -17,10 +17,11 @@ import { NR_SHARED } from "../../../../wardyn/copy/new-run/shared";
 import { NR_TOOLS } from "../../../../wardyn/copy/new-run/tools";
 import type { RunIntent } from "../../draft/run-intent";
 import { NewRunDraftProvider, useNewRunDispatch, useNewRunDraft } from "../../new-run-route";
+import { AnnounceContext } from "../step-shell";
 import { CLI_CARD } from "./catalogue-pending";
 import { AddTools } from "./catalogue";
 
-const h = vi.hoisted(() => ({ mine: vi.fn(), names: vi.fn(), saveMine: vi.fn(), answered: true }));
+const h = vi.hoisted(() => ({ mine: vi.fn(), names: vi.fn(), saveMine: vi.fn(), answered: true, announce: vi.fn() }));
 vi.mock("../../../../../lib/api/components", () => ({ components: { mine: h.mine, saveMine: h.saveMine } }));
 vi.mock("../../../../../lib/api/secrets", () => ({ secrets: { listSecrets: h.names } }));
 vi.mock("../../checks/custom-component-dialog", () => ({
@@ -42,13 +43,21 @@ function Live({ access }: { access: AccessFacts | undefined }) {
   const [answeredFor] = React.useState(intent.components);
   return <AddTools access={access} answered={h.answered} intent={intent} answeredFor={answeredFor} />;
 }
+// Edits the draft's second component in place, as a later edit would, without a new answer.
+function Replace() {
+  const dispatch = useNewRunDispatch();
+  const apply = (i: RunIntent): RunIntent => ({ ...i, components: i.components?.map((c, n) => (n === 1 ? { ...c, inline: { hosts: ["edited.example"] } } : c)) });
+  return <button type="button" onClick={() => dispatch({ type: "edit", apply })}>replace second</button>;
+}
 function Draft() {
   const { intent } = useNewRunDraft();
   return <pre data-testid="draft">{JSON.stringify({ components: intent.components, overrides: intent.overrides })}</pre>;
 }
 async function show(intent: RunIntent = {}, access: AccessFacts | undefined = BASE) {
   const view = render(
-    <NewRunDraftProvider owner="alice"><Seed intent={intent}><Live access={access} /><Draft /></Seed></NewRunDraftProvider>,
+    <AnnounceContext.Provider value={h.announce}>
+      <NewRunDraftProvider owner="alice"><Seed intent={intent}><Live access={access} /><Draft /><Replace /></Seed></NewRunDraftProvider>
+    </AnnounceContext.Provider>,
   );
   await screen.findByRole("heading", { name: NR_TOOLS.ADD_TITLE });
   await waitFor(() => expect(h.mine).toHaveBeenCalled());
@@ -439,6 +448,24 @@ describe("Added to this run", () => {
       await remove("Alpha");
       await remove("Alpha");
       expect(draft().components).toEqual([B, C]);
+    });
+
+    it("a repeated press announces nothing", async () => {
+      await show({ components: [A, B, C] }, { ...BASE, rows: [...BASE.rows, ...rows("Alpha", "Beta", "Gamma")] });
+      await screen.findByRole("button", { name: `${NR_TOOLS.ROW_REMOVE} Alpha` });
+      await remove("Alpha");
+      await remove("Alpha");
+      expect(h.announce.mock.calls.filter(([m]) => m === NR_TOOLS.COMPONENT_REMOVED)).toHaveLength(1);
+    });
+
+    it("a row whose component was edited since the answer removes nothing", async () => {
+      await show({ components: [A, B] }, { ...BASE, rows: [...BASE.rows, ...rows("Alpha", "Beta")] });
+      await screen.findByRole("button", { name: `${NR_TOOLS.ROW_REMOVE} Beta` });
+      await userEvent.click(screen.getByRole("button", { name: "replace second" }));
+      const edited = draft().components;
+      await remove("Beta");
+      expect(draft().components).toEqual(edited);
+      expect(edited).toEqual([A, { ...B, inline: { hosts: ["edited.example"] } }]);
     });
 
     it("stored and inline components side by side: each row removes its own", async () => {
