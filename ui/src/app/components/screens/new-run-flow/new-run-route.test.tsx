@@ -8,16 +8,19 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { MemoryRouter, Route, Routes, useLocation, useNavigationType, type InitialEntry } from "react-router-dom";
 import { OperatorProvider } from "../../wardyn/operator-context";
-import { NEW_RUN_SCREENS, NewRunRoute, useLocalIssues, useNewRunDraft, type NewRunScreenName, type NewRunScreenProps, type SeedLoaders } from "./new-run-route";
+import { unsavedStaysAt } from "../../../lib/unsaved-registry";
+import { NEW_RUN_SCREENS, NewRunRoute, useLocalIssues, useNewRunDispatch, useNewRunDraft, type NewRunScreenName, type NewRunScreenProps, type SeedLoaders } from "./new-run-route";
 
 const T = "d1111111-1111-4111-8111-111111111111";
 const R = "e1111111-1111-4111-8111-111111111111";
 
 function Probe({ name }: { name: NewRunScreenName }) {
   const draft = useNewRunDraft();
+  const dispatch = useNewRunDispatch();
   const issues = useLocalIssues();
   return (
     <>
+      <button type="button" onClick={() => dispatch({ type: "edit", apply: (i) => ({ ...i, shape: "environment" }) })}>change</button>
       <p data-testid="screen">{name}</p>
       <p data-testid="origin">{draft.origin.kind}</p>
       <p data-testid="intent">{JSON.stringify(draft.intent)}</p>
@@ -139,6 +142,15 @@ describe("New Run route (U9)", () => {
     expect(await screen.findByText("start")).toBeInTheDocument();
     expect(text("path")).toBe("/runs/new");
     expect(text("nav")).toBe("REPLACE");
+  });
+
+  it("a changed draft lives on across New Run's own screens, so only leaving New Run puts it at risk", async () => {
+    show("/runs/new?step=shape");
+    await screen.findByText("shape");
+    expect(unsavedStaysAt("/runs/new")).toBe(false);
+    fireEvent.click(screen.getByRole("button", { name: "change" }));
+    expect(unsavedStaysAt("/runs/new")).toBe(true);
+    expect(unsavedStaysAt("/runs")).toBe(false);
   });
 
   it("leaves on Escape when nothing is unsaved", async () => {

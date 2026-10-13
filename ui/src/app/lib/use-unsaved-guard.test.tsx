@@ -252,6 +252,20 @@ describe("UnsavedGuardProvider — browser Back/Forward (popstate)", () => {
     unregister();
   });
 
+  it("a dirty editor whose draft lives on where Back lands lets it through — no restore, no dialog", async () => {
+    const user = userEvent.setup();
+    await setUpAtNextEntry(user);
+    const goSpy = vi.spyOn(window.history, "go").mockImplementation(() => {});
+    const unregister = registerUnsaved("in-form-back", () => "unsaved text", (path) => path === "/next");
+
+    const poppedTo = (window.history.state as { idx: number }).idx - 1;
+    simulateBrowserPop(poppedTo);
+
+    expect(goSpy).not.toHaveBeenCalled();
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    unregister();
+  });
+
   it("a clean registry lets Back through untouched — no restore, no dialog", async () => {
     const user = userEvent.setup();
     await setUpAtNextEntry(user);
