@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
+	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -150,5 +151,57 @@ func TestPG_ServiceTokenMintRacingARevokeOfItsSponsorLeavesNoWorkingToken(t *tes
 				t.Errorf("the mint = %d %s; want the late re-check's 403", w.Code, w.Body)
 			}
 		})
+	}
+}
+
+// A revoke of the sponsor still in flight when a service token is minted (it holds the revocation order
+// lock and has written its cut, but not committed) holds the mint's sequence read until it commits; the
+// late re-check then sees the cut and refuses the mint, so no working token comes out of it.
+func TestPG_ServiceTokenMintBehindAnInFlightRevokeOfItsSponsorIsRefused(t *testing.T) {
+	e := newQueueEnv(t)
+	si, cookie := e.sponsoredService(e.revocations())
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	tx, err := e.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(context.Background()) //nolint:errcheck // committed below on the happy path
+	var pid int
+	if err := tx.QueryRow(ctx, `SELECT pg_backend_pid()`).Scan(&pid); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1, 0)`, db.RevocationOrderLockClass); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO oidc_session_revocations (sub, revoked_at) VALUES ($1, clock_timestamp())
+		ON CONFLICT (sub) DO UPDATE SET revoked_at = EXCLUDED.revoked_at`, e.personP); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan *httptest.ResponseRecorder, 1)
+	go func() { done <- e.mintServiceToken(cookie, si) }()
+	for waiting := false; !waiting; {
+		if err := e.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE $1 = ANY(pg_blocking_pids(pid)))`, pid).Scan(&waiting); err != nil {
+			t.Fatal(err)
+		}
+		select {
+		case w := <-done:
+			t.Fatalf("the mint finished (%d %s) without waiting behind the revoke in flight", w.Code, w.Body)
+		case <-ctx.Done():
+			t.Fatal("the mint never waited behind the revoke in flight")
+		case <-time.After(5 * time.Millisecond):
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	w := <-done
+	if w.Code == http.StatusCreated {
+		if tok := decodeToken(t, w); do(t, e.srv, http.MethodGet, "/api/v1/me", tok.Token, "").Code == http.StatusOK {
+			t.Fatalf("a service token minted behind a revoke of its sponsor in flight works (rev_seq %d)", tokenRevSeq(t, e.pool, tok.ID))
+		}
+	}
+	if w.Code != http.StatusForbidden {
+		t.Errorf("the mint = %d %s; want the late re-check's 403", w.Code, w.Body)
 	}
 }
