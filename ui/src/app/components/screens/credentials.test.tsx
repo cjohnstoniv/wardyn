@@ -145,8 +145,11 @@ describe("the inventory", () => {
     listInventoryMock.mockResolvedValue(inventory([aliceRow], { "corp-gw": 1 }));
     renderScreen();
     await screen.findByText("alice@corp.example");
-    expect(screen.queryByRole("columnheader", { name: INVENTORY.COL_DOMAIN })).toBeNull();
-    expect(screen.queryByText(KEY_DOMAINS.TITLE)).toBeNull();
+    // The key-domain card shows its title until its own read answers "no such service", a tick after the rows.
+    await waitFor(() => {
+      expect(screen.queryByRole("columnheader", { name: INVENTORY.COL_DOMAIN })).toBeNull();
+      expect(screen.queryByText(KEY_DOMAINS.TITLE)).toBeNull();
+    });
   });
 
   it("the Key domain column says where each person's next key is made, and why (M5 S3)", async () => {
