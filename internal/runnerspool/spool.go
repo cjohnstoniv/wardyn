@@ -22,6 +22,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/ackcursor"
 	"github.com/cjohnstoniv/wardyn/internal/egress"
+	"github.com/cjohnstoniv/wardyn/internal/spoolowner"
 )
 
 const (
@@ -112,7 +113,9 @@ func Open(dir string, runID uuid.UUID) (*Spool, error) {
 		return nil, errors.New("unsafe spool lock file")
 	}
 	s := &Spool{root: root, lock: lock, runID: runID}
-	if err := s.own(lock); err != nil {
+	// After the checks above: only a regular 0600 file that is the name's own (and, in Keep, has no
+	// other link) is ever handed to the spool's owner.
+	if err := spoolowner.Keep(root, lock); err != nil {
 		lock.Close()
 		root.Close()
 		return nil, err

@@ -44,10 +44,21 @@ type promotedStartCtxKey struct{}
 type promotedStart struct {
 	run    uuid.UUID
 	runner *uuid.UUID
+	remote string
 }
 
-func withPromotedStart(ctx context.Context, run uuid.UUID, runner *uuid.UUID) context.Context {
-	return context.WithValue(ctx, promotedStartCtxKey{}, promotedStart{run: run, runner: runner})
+func withPromotedStart(ctx context.Context, run uuid.UUID, runner *uuid.UUID, remote string) context.Context {
+	return context.WithValue(ctx, promotedStartCtxKey{}, promotedStart{run: run, runner: runner, remote: remote})
+}
+
+// promotedTarget is the target id of the runner, either kind, a promoted run's start finds the run bound
+// to; "" outside a promoted start or when the promotion bound none.
+func promotedTarget(ctx context.Context) string {
+	v, _ := ctx.Value(promotedStartCtxKey{}).(promotedStart)
+	if v.runner != nil {
+		return v.runner.String()
+	}
+	return v.remote
 }
 
 // promotedRun is the run a promoted start replays, uuid.Nil outside one: what it holds on its runner is
@@ -147,7 +158,7 @@ func newQueuedStart(base, prep context.Context, p store.PromotedRun) (*queuedSta
 func (st *queuedStart) bind(a queueAuthority) error {
 	st.auth = a
 	st.base = a.context(st.daemon)
-	st.ctx = withPromotedStart(withCeilingMemo(withCapBatch(a.context(st.prep))), st.run.ID, st.run.RunnerID)
+	st.ctx = withPromotedStart(withCeilingMemo(withCapBatch(a.context(st.prep))), st.run.ID, st.run.RunnerID, st.run.RunnerPoolExecutor)
 	r, err := http.NewRequestWithContext(st.ctx, http.MethodPost, "/api/v1/runs", nil)
 	if err != nil {
 		return err
