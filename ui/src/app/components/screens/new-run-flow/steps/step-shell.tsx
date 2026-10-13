@@ -57,6 +57,9 @@ interface StepShellBase {
 }
 
 /** The footer's left side is Back or the extras, never both: with extras Back is not drawn, so the type refuses the pair. */
+/** The step heading, which takes focus on arrival and is where a step puts focus when what it held is gone. */
+export const STEP_HEADING_ID = "nr-step-heading";
+
 export type StepShellProps = StepShellBase &
   (
     | { back?: { label: string; onBack: () => void }; footerExtras?: never }
@@ -99,7 +102,7 @@ export function StepShell({ title, lede, eyebrow, progress, back, primary, issue
   const header = (
     <header className="flex max-w-[680px] flex-col gap-2.5">
       {eyebrow && <p className="mb-1 text-meta font-semibold uppercase tracking-[0.12em] text-primary">{eyebrow}</p>}
-      <h1 ref={heading} tabIndex={-1} className={cn(headingAside ? "text-[32px]" : "text-[clamp(28px,4vw,42px)]", "leading-[1.08] font-normal tracking-[-0.04em] outline-none")}>{title}</h1>
+      <h1 id={STEP_HEADING_ID} ref={heading} tabIndex={-1} className={cn(headingAside ? "text-[32px]" : "text-[clamp(28px,4vw,42px)]", "leading-[1.08] font-normal tracking-[-0.04em] outline-none")}>{title}</h1>
       {lede && <p className="max-w-[620px] text-muted-foreground">{lede}</p>}
     </header>
   );
