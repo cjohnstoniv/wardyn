@@ -173,9 +173,9 @@ type AgentRun struct {
 	RunnerPoolExecutor  string              `json:"remote_runner_id,omitempty"`
 	// Reserved is what the run holds on its runner while it holds a sandbox there (0174): the CPU and
 	// memory it was given and its main drive, written once at insert and summed as the runner's In use.
-	Reserved RunnerAmounts `json:"-"`
-	SandboxRef          string              `json:"sandbox_ref,omitempty"`
-	Image               string              `json:"image,omitempty"` // resolved sandbox image, kept for provenance; empty for legacy rows
+	Reserved   RunnerAmounts `json:"-"`
+	SandboxRef string        `json:"sandbox_ref,omitempty"`
+	Image      string        `json:"image,omitempty"` // resolved sandbox image, kept for provenance; empty for legacy rows
 	// Interactive marks a human-driven run: sandbox comes up RUNNING, no task exec'd, no completion watcher.
 	Interactive bool `json:"interactive"`
 	// Experience is the canonical run mode chosen at launch (0.9 New Run), frozen at create and never re-derived. Empty for a run from an older client or before 0.9;

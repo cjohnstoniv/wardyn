@@ -299,7 +299,9 @@ func sizedLimits(runs, fit int) *types.RunnerLimits {
 }
 
 // oneRun is the size every run of the limits tests reserves.
-func oneRun() types.RunnerAmounts { return types.RunnerAmounts{CPUMillis: 1000, MemoryMiB: 2048, DiskMiB: 1024} }
+func oneRun() types.RunnerAmounts {
+	return types.RunnerAmounts{CPUMillis: 1000, MemoryMiB: 2048, DiskMiB: 1024}
+}
 
 // remoteRunner makes the remote-hosted runner id with limits.
 func remoteRunner(t *testing.T, pg store.PG, id string, limits *types.RunnerLimits) {
