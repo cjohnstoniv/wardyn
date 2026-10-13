@@ -835,6 +835,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- The governance and drive previews now send the standard user type, so a profile assigned to that type shows in the preview as it applies to a run. A preview for another user type is not offered yet.
 - A refused attach or UI-gateway ticket, a UI enter on the wrong host and a refused SSH key are audited at a bounded
   rate, sharing the authentication-failure limit; rows past the burst are counted in
   `wardyn_auth_failed_suppressed_total`.
