@@ -195,16 +195,29 @@ describe("Pools tab", () => {
       };
       await tick();
       expect(getMock).toHaveBeenCalledTimes(ALL.length);
-      // With a pool's details open, that pool alone is read again, so a change to it shows.
-      getMock.mockImplementation((id: string) => Promise.resolve({ ...(ALL.find((p) => p.id === id) as RunnerPool), state: "disabled" }));
+      // With a pool's details open, that pool alone is read again on each tick, so a change to it shows.
       await userEvent.click(screen.getByRole("button", { name: "Details of CI jobs" }));
+      await waitFor(() => expect(getMock).toHaveBeenCalledTimes(ALL.length + 1));
+      getMock.mockImplementation((id: string) => Promise.resolve({ ...(ALL.find((p) => p.id === id) as RunnerPool), state: "disabled" }));
       await tick();
-      expect(getMock).toHaveBeenCalledTimes(ALL.length + 1);
+      expect(getMock).toHaveBeenCalledTimes(ALL.length + 2);
       expect(getMock).toHaveBeenLastCalledWith("p-ci");
       expect(await within(screen.getByRole("dialog")).findByText("Switched off")).toBeInTheDocument();
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  // The sheet's state and revision are what Switch off sends back, so they are read when it opens.
+  it("reads a pool when its details open, without waiting for the next re-read", async () => {
+    renderTab();
+    await screen.findByRole("table", { name: "Organization pools" });
+    expect(getMock).toHaveBeenCalledTimes(ALL.length);
+    getMock.mockImplementation((id: string) => Promise.resolve({ ...(ALL.find((p) => p.id === id) as RunnerPool), state: "disabled" }));
+    await userEvent.click(screen.getByRole("button", { name: "Details of CI jobs" }));
+    expect(await within(await screen.findByRole("dialog")).findByText("Switched off")).toBeInTheDocument();
+    expect(getMock).toHaveBeenCalledTimes(ALL.length + 1);
+    expect(getMock).toHaveBeenLastCalledWith("p-ci");
   });
 
   it("reads a long list four pools at a time", async () => {
