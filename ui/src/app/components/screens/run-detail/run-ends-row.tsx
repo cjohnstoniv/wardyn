@@ -87,7 +87,9 @@ export function RunEndsRow({ run, onChanged }: { run: RunDetail; onChanged: () =
   // (kept, no network) and every terminal state get the lifetime banner's own
   // Ended/Lost treatment instead (run-lifetime-banner.tsx) — showing both
   // would tell two different stories about the same run.
-  if (isTerminalRunState(run.state) || run.lost_at) return null;
+  // A QUEUED run has no end yet because it has not started (its start writes one), so "No end" would be
+  // false and "Set an end" is refused; the row waits for the start.
+  if (isTerminalRunState(run.state) || run.lost_at || run.state === "QUEUED") return null;
 
   const canAct = operator || run.created_by === principal;
   const limits = run.run_limits;
