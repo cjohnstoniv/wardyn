@@ -447,4 +447,18 @@ func TestSpoolRefusesToHandOverAHardLinkedLock(t *testing.T) {
 	if slices.Contains(handed, "writer.lock") {
 		t.Fatalf("a hard-linked writer lock was chowned: %v", handed)
 	}
+
+	// A writer lock that fails the seal's own checks (here its mode) is refused before it is handed over.
+	if err := os.Remove(filepath.Join(clean, "writer.lock")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(clean, "writer.lock"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(filepath.Join(clean, "writer.lock"), 0o644); err != nil { // whatever the umask
+		t.Fatal(err)
+	}
+	if sealed, err := s.Seal(t.Context(), receipt); err == nil || sealed || len(handed) != 0 {
+		t.Fatalf("a seal over a writer lock that is not 0600 = %v, %v, handed %v; want it refused and nothing handed over", sealed, err, handed)
+	}
 }
