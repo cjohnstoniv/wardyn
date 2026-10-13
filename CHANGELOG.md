@@ -528,6 +528,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
   pool the run waits with `runner_pool_runners_at_capacity`, then starts on whichever of its runners has room.
   Runners report their machine name, runner views list their pools, and `GET /runner-pools/{id}/runners` lists a
   pool's runners. Migration `0172_runner_max_runs`.
+- A user pool can mix your own runners with remote-hosted runners your admin made available to people's pools. A run
+  that names no placement goes to one of your own runners when one has room, otherwise to a remote-hosted runner;
+  `placement: local` or `placement: remote` (or a `runner_id`) fixes the kind, and a pool with no runner of that
+  kind is refused `runner_pool_member_mismatch`. A run with drives goes to the pool's remote-hosted runners. A
+  queued run that took your runner's last place keeps it when it starts.
 
 ### Changed
 
@@ -647,6 +652,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
   record is current; the `run.build` audit row carries the record and its hash, and a workspace-image cache hit now
   writes a `run.build` row too. Workspace image builds do not share an envbuilder layer cache: each build pushes
   under its own tag and fetches every layer fresh.
+- `deny_placements` now holds each kind of runner in a pool, not the pool as a whole: a member denied local launches
+  can use a mixed pool's remote-hosted runners, and one denied remote launches only their own runners. Pool lists
+  and preflight judge availability the same way. A remote-hosted runner stops taking your runs as soon as its people
+  policy no longer admits you. `placement_required` is no longer returned.
 
 ### Removed
 
