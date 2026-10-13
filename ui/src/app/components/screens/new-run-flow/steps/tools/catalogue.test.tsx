@@ -36,9 +36,11 @@ function Seed({ intent, children }: { intent: RunIntent; children: React.ReactNo
   React.useEffect(() => { dispatch({ type: "seed", origin: { kind: "import" }, intent }); setSeeded(true); }, [dispatch, intent]);
   return seeded ? <>{children}</> : null;
 }
+// `access` is the answer for the seeded draft, and stays on screen across edits as a pending preview's rows do.
 function Live({ access }: { access: AccessFacts | undefined }) {
   const { intent } = useNewRunDraft();
-  return <AddTools access={access} answered={h.answered} intent={intent} />;
+  const [answeredFor] = React.useState(intent.components);
+  return <AddTools access={access} answered={h.answered} intent={intent} answeredFor={answeredFor} />;
 }
 function Draft() {
   const { intent } = useNewRunDraft();
@@ -414,5 +416,39 @@ describe("Added to this run", () => {
     const unnamed = (await screen.findAllByRole("button", { name: NR_TOOLS.ROW_REMOVE })).find((b) => b.getAttribute("aria-label")?.trim() === NR_TOOLS.ROW_REMOVE);
     await userEvent.click(unnamed!);
     expect(draft().components).toEqual([{ name: "Billing", inline: { hosts: ["b.example"] } }]);
+  });
+
+  describe("while the next preview is out, a row removes the component it was answered for", () => {
+    const A = { name: "Alpha", inline: { hosts: ["a.example"] } };
+    const B = { name: "Beta", inline: { hosts: ["b.example"] } };
+    const C = { name: "Gamma", inline: { hosts: ["c.example"] } };
+    const rows = (...names: string[]) => names.map((name, i) => row({ id: `inline:${i}`, kind: "custom", name }));
+    const remove = (name: string) => userEvent.click(screen.getByRole("button", { name: `${NR_TOOLS.ROW_REMOVE} ${name}` }));
+
+    it("removing the first and then the old second row removes the second, never the third", async () => {
+      await show({ components: [A, B, C] }, { ...BASE, rows: [...BASE.rows, ...rows("Alpha", "Beta", "Gamma")] });
+      await screen.findByRole("button", { name: `${NR_TOOLS.ROW_REMOVE} Alpha` });
+      await remove("Alpha");
+      await remove("Beta");
+      expect(draft().components).toEqual([C]);
+    });
+
+    it("a second press on the same row removes nothing more", async () => {
+      await show({ components: [A, B, C] }, { ...BASE, rows: [...BASE.rows, ...rows("Alpha", "Beta", "Gamma")] });
+      await screen.findByRole("button", { name: `${NR_TOOLS.ROW_REMOVE} Alpha` });
+      await remove("Alpha");
+      await remove("Alpha");
+      expect(draft().components).toEqual([B, C]);
+    });
+
+    it("stored and inline components side by side: each row removes its own", async () => {
+      const stored = { id: ORG_BILLING.id };
+      const access: AccessFacts = { ...BASE, rows: [...BASE.rows, row({ id: ORG_BILLING.id, name: "Stored" }), row({ id: "inline:1", kind: "custom", name: "Beta" }), row({ id: "inline:2", kind: "custom", name: "Gamma" })] };
+      await show({ components: [stored, B, C] }, access);
+      await screen.findByRole("button", { name: `${NR_TOOLS.ROW_REMOVE} Stored` });
+      await remove("Stored");
+      await remove("Gamma");
+      expect(draft().components).toEqual([B]);
+    });
   });
 });
