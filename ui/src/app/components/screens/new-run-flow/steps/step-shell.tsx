@@ -46,10 +46,14 @@ export interface StepShellProps {
   primary: StepShellPrimary;
   /** Local issues: the primary action then focuses the first one's control instead of running. */
   issues?: readonly StepIssue[];
+  /** Beside the heading, at its right (Review's view toggle). */
+  headingAside?: React.ReactNode;
+  /** More footer actions: `start` on the left in place of Back, `end` just before the primary (Review's Save and Check again). */
+  footerExtras?: { start?: React.ReactNode; end?: React.ReactNode };
   children?: React.ReactNode;
 }
 
-export function StepShell({ title, lede, eyebrow, progress, back, primary, issues, children }: StepShellProps) {
+export function StepShell({ title, lede, eyebrow, progress, back, primary, issues, headingAside, footerExtras, children }: StepShellProps) {
   const heading = React.useRef<HTMLHeadingElement>(null);
   const announce = useAnnounce();
   React.useEffect(() => {
@@ -78,21 +82,35 @@ export function StepShell({ title, lede, eyebrow, progress, back, primary, issue
     return () => document.removeEventListener("keydown", onKey);
   }, []);
 
+  const header = (
+    <header className="flex max-w-[680px] flex-col gap-2.5">
+      {eyebrow && <p className="mb-1 text-meta font-semibold uppercase tracking-[0.12em] text-primary">{eyebrow}</p>}
+      <h1 ref={heading} tabIndex={-1} className="text-[clamp(28px,4vw,42px)] leading-[1.08] font-normal tracking-[-0.04em] outline-none">{title}</h1>
+      {lede && <p className="max-w-[620px] text-muted-foreground">{lede}</p>}
+    </header>
+  );
+  const primaryButton = (
+    <Button type="button" disabled={primary.disabled} aria-describedby={primary.describedBy} onClick={() => activate.current()}>
+      {primary.label}
+      {primary.arrow !== false && <span aria-hidden="true">→</span>}
+    </Button>
+  );
+
   return (
     <section className="flex flex-col gap-6">
       {progress && <div className="mb-[26px] max-[520px]:mb-2"><FlowProgress steps={progress.steps} label={progress.label} /></div>}
-      <header className="flex max-w-[680px] flex-col gap-2.5">
-        {eyebrow && <p className="mb-1 text-meta font-semibold uppercase tracking-[0.12em] text-primary">{eyebrow}</p>}
-        <h1 ref={heading} tabIndex={-1} className="text-[clamp(28px,4vw,42px)] leading-[1.08] font-normal tracking-[-0.04em] outline-none">{title}</h1>
-        {lede && <p className="max-w-[620px] text-muted-foreground">{lede}</p>}
-      </header>
+      {headingAside ? (
+        <div className="flex flex-wrap items-center justify-between gap-6">
+          {header}
+          <div className="shrink-0">{headingAside}</div>
+        </div>
+      ) : header}
       {children}
       <footer className="mt-1 flex items-center justify-between gap-3 border-t border-border pt-[18px]">
-        {back ? <Button type="button" variant="ghost" onClick={back.onBack}>{back.label}</Button> : <span />}
-        <Button type="button" disabled={primary.disabled} aria-describedby={primary.describedBy} onClick={() => activate.current()}>
-          {primary.label}
-          {primary.arrow !== false && <span aria-hidden="true">→</span>}
-        </Button>
+        {/* With extras the footer keeps one shape, so the primary is never remounted as an extra comes and goes. */}
+        {footerExtras ? <div className="flex flex-wrap gap-2">{footerExtras.start}</div>
+          : back ? <Button type="button" variant="ghost" onClick={back.onBack}>{back.label}</Button> : <span />}
+        {footerExtras ? <div className="flex flex-wrap gap-2">{footerExtras.end}{primaryButton}</div> : primaryButton}
       </footer>
     </section>
   );

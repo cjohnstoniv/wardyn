@@ -132,10 +132,21 @@ export function ReviewScreen({ location, go, onLaunch, ownDriveIds }: ReviewScre
       title={NR_REVIEW.TITLE}
       lede={NR_REVIEW.LEDE}
       primary={{ label: NR_REVIEW.LAUNCH_RUN, onActivate: () => onLaunch?.(), disabled: !open, describedBy: BLOCKERS_ID, arrow: false }}
+      headingAside={
+        <div role="group" aria-label={NR_REVIEW.VIEW_ARIA}>
+          <Segmented<"pretty" | "yaml" | "json"> value={view} options={[...VIEWS]} onChange={(v) => go({ screen: "review", view: v }, { replace: true })} />
+        </div>
+      }
+      footerExtras={{
+        start: (
+          <>
+            <Button type="button" variant="outline" onClick={() => openSave("template")}>{NR_REVIEW.SAVE_TEMPLATE}</Button>
+            <Button type="button" variant="outline" onClick={() => openSave("policy")}>{NR_REVIEW.SAVE_POLICY}</Button>
+          </>
+        ),
+        end: !open && !issues.length && <Button type="button" variant="outline" onClick={checkAgain}>{NR_REVIEW.CHECK_AGAIN}</Button>,
+      }}
     >
-      <div role="group" aria-label={NR_REVIEW.VIEW_ARIA}>
-        <Segmented<"pretty" | "yaml" | "json"> value={view} options={[...VIEWS]} onChange={(v) => go({ screen: "review", view: v }, { replace: true })} />
-      </div>
       <Notices poolName={pool} slots={pre?.runner_pool_slots} applied={pre?.resources_applied} askedByYou={changedFromOrigin(draft, ["resources"])} warnings={pre?.warnings} />
       <BlockerList blockers={blockers} go={(loc: NewRunLocation) => go(loc)} />
       {view === "pretty" ? (
@@ -160,13 +171,6 @@ export function ReviewScreen({ location, go, onLaunch, ownDriveIds }: ReviewScre
       ) : (
         <RawView intent={draft.intent} format={view} go={go} />
       )}
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex gap-2">
-          <Button type="button" variant="outline" onClick={() => openSave("template")}>{NR_REVIEW.SAVE_TEMPLATE}</Button>
-          <Button type="button" variant="outline" onClick={() => openSave("policy")}>{NR_REVIEW.SAVE_POLICY}</Button>
-        </div>
-        {!open && !issues.length && <Button type="button" variant="outline" onClick={checkAgain}>{NR_REVIEW.CHECK_AGAIN}</Button>}
-      </div>
       {saveKind && publish && (
         <SaveAsDialog
           open

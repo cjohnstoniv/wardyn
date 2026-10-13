@@ -67,7 +67,10 @@ export function ToolsGroup({ draft, pre, preview, docRows, go, dispatch }: Group
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="review-command">{NR_REVIEW.COMMAND_LABEL}</Label>
             <Input id="review-command" className="font-mono" value={intent.workload?.command ?? ""}
-              onChange={(e) => dispatch({ type: "edit", apply: (i) => setCommand(i, e.target.value) })} />
+              onChange={(e) => {
+                const command = e.target.value;
+                dispatch({ type: "edit", apply: (i) => setCommand(i, command) });
+              }} />
           </div>
           <Button type="button" variant="outline" className="w-fit" onClick={close}>{NR_REVIEW.DONE}</Button>
         </>
