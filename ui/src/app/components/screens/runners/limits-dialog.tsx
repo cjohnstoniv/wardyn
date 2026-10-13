@@ -81,6 +81,36 @@ const toLimits = (v: Vals): RunnerLimits => ({
   per_run: toAmounts({ cpu: Number(v.pc), mem: Number(v.pm), disk: Number(v.pd) }),
 });
 
+/** The limits the dialog opened on, and the values it showed for them. */
+export interface LoadedLimits {
+  vals: Vals;
+  limits: RunnerLimits;
+}
+
+/**
+ * What a save sends: the fields shown as one-decimal CPUs and GB, except that a field still showing what it
+ * loaded goes back exactly as loaded, so an unrelated edit never turns 1250 milli-CPU into 1300.
+ */
+export function limitsToSave(v: Vals, loaded?: LoadedLimits | null): RunnerLimits {
+  const out = toLimits(v);
+  if (!loaded) return out;
+  const was = loaded.limits;
+  const keep = (id: FieldId, now: number, then: number) => (v[id] === loaded.vals[id] ? then : now);
+  return {
+    runs_at_once: keep("rn", out.runs_at_once, was.runs_at_once),
+    total: {
+      cpu_millis: keep("tc", out.total.cpu_millis, was.total.cpu_millis),
+      memory_mib: keep("tm", out.total.memory_mib, was.total.memory_mib),
+      disk_mib: keep("td", out.total.disk_mib, was.total.disk_mib),
+    },
+    per_run: {
+      cpu_millis: keep("pc", out.per_run.cpu_millis, was.per_run.cpu_millis),
+      memory_mib: keep("pm", out.per_run.memory_mib, was.per_run.memory_mib),
+      disk_mib: keep("pd", out.per_run.disk_mib, was.per_run.disk_mib),
+    },
+  };
+}
+
 function Num({ id, label, vals, errs, reported, onChange }: { id: FieldId; label: React.ReactNode; vals: Vals; errs: Errs; reported?: number; onChange: (id: FieldId, v: string) => void }) {
   const err = errs[id];
   return (
@@ -130,10 +160,13 @@ export function LimitsDialog({
   const [busy, setBusy] = React.useState(false);
   // Per run follows the totals until the person types a per-run value of their own.
   const [auto, setAuto] = React.useState(false);
+  const loaded = React.useRef<LoadedLimits | null>(null);
   const open = target !== null;
   React.useEffect(() => {
     if (!target) return;
-    setVals(initial(target));
+    const first = initial(target);
+    loaded.current = target.limits ? { vals: first, limits: target.limits } : null;
+    setVals(first);
     setErrs({});
     setTop("");
     setAuto(!target.limits);
@@ -171,7 +204,7 @@ export function LimitsDialog({
     setBusy(true);
     setTop("");
     try {
-      await onSave(toLimits(vals));
+      await onSave(limitsToSave(vals, loaded.current));
       toast.success(LIMITS_DIALOG.SAVED(t.name));
       onOpenChange(false);
       onSaved();
