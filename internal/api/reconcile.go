@@ -771,6 +771,20 @@ func (s *Server) reconcileWatch(ctx context.Context, runID uuid.UUID, ref, agent
 // revoke cascade, so 2× that with headroom.
 const reconcileFinalizeTimeout = 60 * time.Second
 
+// runnerReceived reports whether the run has a runner execution row: its runner was handed a task to
+// run. A run with no task has none, even while the runner holds its sandbox. A store that cannot say,
+// or a read that fails, answers yes, so the receipt worker keeps the run.
+func (s *Server) runnerReceived(ctx context.Context, runID uuid.UUID) bool {
+	ex, ok := s.cfg.Store.(interface {
+		RunnerExecutionOf(context.Context, uuid.UUID) (store.RunnerExecution, error)
+	})
+	if !ok {
+		return true
+	}
+	_, err := ex.RunnerExecutionOf(ctx, runID)
+	return !errors.Is(err, store.ErrNotFound)
+}
+
 // reconcileFinalize transitions a stranded run to a terminal state — conditional
 // on it still being non-terminal so a concurrent kill/complete is never clobbered
 // — then runs the revoke cascade and (best-effort) tears the sandbox down.
@@ -786,7 +800,11 @@ func (s *Server) reconcileFinalize(ctx context.Context, runID uuid.UUID, to type
 			slog.String("run_id", runID.String()), slog.Any("err", err))
 		return
 	}
-	if cur.Placement == types.PlacementLocal && cur.RunnerID != nil {
+	// A run its runner holds is ended by the runner, which this must not race: one with a sandbox there
+	// (an interactive run has no task, so no execution row) and one handed a task (its durable exit
+	// receipt). One with neither (a crash between create and dispatch) has nothing on the runner to
+	// report, so it is finalized here like any other run that was never dispatched.
+	if cur.Placement == types.PlacementLocal && cur.RunnerID != nil && (cur.SandboxRef != "" || s.runnerReceived(ctx, runID)) {
 		return
 	}
 	if isTerminalRunState(cur.State) {

@@ -220,6 +220,10 @@ func (h *Hub) serveClaimed(ctx context.Context, conn runnerwire.Conn, row types.
 	return peer.Err()
 }
 
+// errFreshSessionRequired ends a resumed session that an action was queued for after its PENDING read:
+// only a fresh session carries PENDING.
+var errFreshSessionRequired = errors.New("runner: an action was queued for this runner; a fresh session carries it")
+
 // storedRowRecheck bounds how long a session outlives a revocation, or its
 // owner's deactivation, committed through another replica.
 var storedRowRecheck = runnerwire.PingInterval
@@ -309,6 +313,10 @@ func (h *Hub) start(ctx context.Context, conn runnerwire.Conn, row types.Runner,
 	configureAdmission(ctx, &cfg, resumed, pending, a, s, s.id, func() *runnerwire.Peer { return peer })
 	h.configureActivity(ctx, &cfg, row, a, s, func() *runnerwire.Peer { return peer })
 	peer = a.Link.AttachSession(conn, cfg)
+	if resumed {
+		// A resumed session sends no STATE page: it is past the org's page check from its start.
+		a.Link.stateFinal(peer)
+	}
 	s.peer, s.link, s.ended = peer, a.Link, time.Time{}
 	last := uint64(0)
 	if resumed {
@@ -319,7 +327,15 @@ func (h *Hub) start(ctx context.Context, conn runnerwire.Conn, row types.Runner,
 		return peer, err
 	}
 	if resumed {
-		if err = a.Link.Ready(peer); err == nil && a.Ready != nil {
+		err = a.Link.Ready(peer)
+		// An action queued after the PENDING read above is not carried by a resumed session: end it, so
+		// the runner's next one is fresh and delivers it.
+		if err == nil {
+			if open, perr := a.Pending(ctx); perr != nil || len(open) != 0 {
+				err = errors.Join(errFreshSessionRequired, perr)
+			}
+		}
+		if err == nil && a.Ready != nil {
 			a.Ready()
 		}
 	} else {
@@ -398,6 +414,11 @@ func configureAdmission(ctx context.Context, cfg *runnerwire.PeerConfig, resumed
 			next, err := inventory.Next(page)
 			if err != nil {
 				return err
+			}
+			// Marked before the final page is judged, not after: a teardown queued while it is judged, past
+			// the page's own look at the queue, then ends this session itself (Link.requireFresh).
+			if next.Complete && a.Link != nil {
+				a.Link.stateFinal(peer())
 			}
 			if err := a.StatePage(ctx, sessionID, page); err != nil {
 				return err

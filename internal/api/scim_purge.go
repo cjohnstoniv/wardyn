@@ -213,7 +213,7 @@ func (s *Server) revokeLeaverRunners(ctx context.Context, owners []string) (map[
 			if rn.State == types.RunnerRevoked {
 				continue
 			}
-			rev, err := s.revokeRunner(ctx, rn.ID, types.ActorSystem, scimActor, "")
+			rev, _, err := s.revokeRunner(ctx, rn.ID, types.ActorSystem, scimActor, "")
 			if rev.Runner.ID != uuid.Nil {
 				detail["runners_revoked"]++
 			}

@@ -247,8 +247,8 @@ func (s *Server) stopSandboxOrAudit(ctx context.Context, runID uuid.UUID, ref, a
 // revokeRunCascade performs the identity + broker revocation half of the
 // kill-switch cascade for a run: it deny-lists the run token
 // (Identity.RevokeRun) and revokes any minted broker credentials
-// (Broker.RevokeRun). Both are nil-safe and best-effort; an error is audited as
-// run.revoke/failure and returned so durable receipt cleanup can retry.
+// (Broker.RevokeRun). Both are nil-safe and best-effort; an error is audited as run.revoke/failure and
+// returned so durable receipt cleanup can retry, but a pending run PAT revoke alone (the PAT sweep's) is not.
 // It is shared by handleKillRun and the completion watcher so EVERY terminal
 // transition revokes (matching the documented cascade-on-every-stop promise).
 func (s *Server) revokeRunCascade(ctx context.Context, runID uuid.UUID) error {
@@ -276,11 +276,12 @@ func (s *Server) revokeRunCascade(ctx context.Context, runID uuid.UUID) error {
 		}
 	}
 	if len(data) > 0 {
-		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.revoke",
-			runID.String(), "failure", mustJSON(data)))
-		return fmt.Errorf("run revoke incomplete: %v", data)
+		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.revoke", runID.String(), "failure", mustJSON(data)))
 	}
-	return ctx.Err()
+	if _, pending := data["pat_revoke_pending"]; len(data) == 0 || (pending && len(data) == 1) {
+		return ctx.Err()
+	}
+	return fmt.Errorf("run revoke incomplete: %v", data)
 }
 
 // cancelRunApprovals is the approval half of the terminal cascade: every
