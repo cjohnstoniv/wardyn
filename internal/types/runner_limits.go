@@ -95,12 +95,19 @@ func ProposeRunnerLimits(measured RunnerAmounts, runsAtOnce int) RunnerLimits {
 		MemoryMiB: half(measured.MemoryMiB, 1, 1),
 		DiskMiB:   half(measured.DiskMiB, RunnerDiskStepMiB, RunnerDiskStepMiB),
 	}
+	return RunnerLimits{RunsAtOnce: int(runs), Total: total, PerRun: PerRunShare(total, int(runs))}
+}
+
+// PerRunShare is each run's share of total when runsAtOnce run side by side: total divided by Runs at
+// once, at least one CPU and one GiB of memory and disk, never past the total.
+func PerRunShare(total RunnerAmounts, runsAtOnce int) RunnerAmounts {
+	runs := int64(max(1, runsAtOnce))
 	share := func(v, least, step int64) int64 { return min(v, max(least, v/runs/step*step)) }
-	return RunnerLimits{RunsAtOnce: int(runs), Total: total, PerRun: RunnerAmounts{
+	return RunnerAmounts{
 		CPUMillis: share(total.CPUMillis, RunnerCPUMillisMin, 1),
 		MemoryMiB: share(total.MemoryMiB, 1024, 1),
 		DiskMiB:   share(total.DiskMiB, RunnerDiskStepMiB, RunnerDiskStepMiB),
-	}}
+	}
 }
 
 // RunnerTally is a number of runs and the CPU, memory and disk they reserve.
