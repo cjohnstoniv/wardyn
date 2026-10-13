@@ -65,6 +65,10 @@ func serverJSONTags(t *testing.T, relPath, typeName string) []string {
 		}
 		found = true
 		for _, fld := range st.Fields.List {
+			// encoding/json never writes an unexported field, so it is not on the wire.
+			if len(fld.Names) > 0 && !fld.Names[0].IsExported() {
+				continue
+			}
 			if fld.Tag == nil {
 				tags = append(tags, "<no tag>")
 				continue
