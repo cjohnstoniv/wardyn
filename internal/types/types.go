@@ -531,7 +531,10 @@ type APIToken struct {
 	MintedBy        string     `json:"minted_by,omitempty"`  // admin who minted this for its owner; empty when the owner minted it
 	// Disposition is where an admin-minted token stands, derived at read (#1508); empty on any other token.
 	Disposition TokenDisposition `json:"disposition,omitempty"`
-	Token       string           `json:"token,omitempty"` // plaintext, create response ONLY
+	// ServiceIdentity names the service identity an admin linked this token to, set with Disposition on
+	// a token that has a move row (#1508); empty on any other token.
+	ServiceIdentity string `json:"service_identity,omitempty"`
+	Token           string `json:"token,omitempty"` // plaintext, create response ONLY
 	// IdentityStampedAt is when Role and Groups were last stamped: at mint, then at each sign-in of
 	// the owner. Nil reads as stale under WARDYN_ROLE_STAMP_TTL. Never on the wire.
 	IdentityStampedAt *time.Time `json:"-"`

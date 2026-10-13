@@ -84,11 +84,16 @@
 # docs/sdk.md 16466 adds 39 over 16427 (0.9 B-org-barrier): the pool-defaults PUT replaces the whole document, the default barrier included.
 # 0.9 DS2-S4: docs/sdk.md 16622 adds 195 over 16427: the Run again routes and fields, and the launch_intent_not_found row.
 # docs/sdk.md 16657 measured after train 29: B-org-barrier + DS2-S4 sdk.md combined.
+# docs/sdk.md 16781 adds 124 over 16657 (0.9 F-1508-M3): the sponsor-session and mint-guard variants of the #1508 reasons.
 # docs/sdk.md 16466 adds 39 (H15): the runner_at_capacity and runner_max_runs_invalid reasons.
 # docs/sdk.md 16699 measured after merging batch into H15: train 29 + H15 combined.
+# docs/sdk.md 16822 measured after H15: runner Runs at once (runner.update, max_runs, runner_at_capacity).
 # docs/sdk.md 16864 measured after merging H15 into RP-1: H15's runner reasons plus RP-1's pool wire.
-# docs/sdk.md 16931 adds 67 over 16864 (0.9 RP-3): runner_limits_invalid/required/unset and the generalised runner_at_capacity.
-docs/sdk.md=16931 share=21
+# docs/sdk.md 16987 measured after RP-1: organization and user pools, remote-hosted runners.
+# docs/sdk.md 16942 adds 120 over 16822 (G-090-cleanup slice F, docs rows that contradict the code): measured; the lead re-measures at merge.
+# docs/sdk.md 17107 measured after G-090-cleanup slice F: docs rows that contradicted the code.
+# docs/sdk.md 17169 adds 62 over 17107 (0.9 RP-3): runner_limits_invalid/required/unset and the generalised runner_at_capacity.
+docs/sdk.md=17169 share=21
 # Runner admission adds 10 measured words for the two default-off/config-read refusal reasons.
 # Registration adds 65 measured words for five request/setup reasons and two shared placement refusals.
 # Combined runner registration, baseline and identity changes: measured docs/sdk.md 12463 prose words.

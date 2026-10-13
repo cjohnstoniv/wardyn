@@ -56,8 +56,8 @@ func (e envBuilderAdapter) BuildFromDevcontainerFiles(ctx context.Context, files
 
 // FinalizeBase wraps a user-supplied base image (BYOI) with the runner tools +
 // a cleared ENTRYPOINT via the trusted finalize stage.
-func (e envBuilderAdapter) FinalizeBase(ctx context.Context, baseRef, outputTag string, logSink io.Writer) (api.BuiltImage, error) {
-	return builtImage(e.b.FinalizeBase(ctx, baseRef, outputTag, e.tee(logSink)))
+func (e envBuilderAdapter) FinalizeBase(ctx context.Context, baseRef, outputTag string, logSink io.Writer, forcePull bool) (api.BuiltImage, error) {
+	return builtImage(e.b.FinalizeBase(ctx, baseRef, outputTag, e.tee(logSink), forcePull))
 }
 
 // LocalImage satisfies api.ImageIdentifier.

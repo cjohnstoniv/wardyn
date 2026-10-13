@@ -33,7 +33,7 @@ type RunnerInventoryStore interface {
 	RunnerSlotHolders(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]int, error)
 	// RunnerUsage is each named runner's In use, by key (a self-hosted runner's id as text, or a
 	// remote-hosted runner's id): the figures admission counts, read without a lock.
-	RunnerUsage(ctx context.Context, runners []uuid.UUID, remotes []string) (map[string]types.RunnerTally, error)
+	RunnerUsage(ctx context.Context, runners []uuid.UUID, remotes []string, except uuid.UUID) (map[string]types.RunnerTally, error)
 	// RunnerPoolsOf names, for each of ids, its owner's live Self-Hosted pools it is a member of, by
 	// name; a runner in none is absent.
 	RunnerPoolsOf(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID][]types.RunnerPoolRef, error)

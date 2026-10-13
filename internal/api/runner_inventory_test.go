@@ -124,7 +124,7 @@ func (f *runnerRegistrationFake) RunnerSlotHolders(_ context.Context, ids []uuid
 	return out, nil
 }
 
-func (f *runnerRegistrationFake) RunnerUsage(ctx context.Context, ids []uuid.UUID, _ []string) (map[string]types.RunnerTally, error) {
+func (f *runnerRegistrationFake) RunnerUsage(ctx context.Context, ids []uuid.UUID, _ []string, _ uuid.UUID) (map[string]types.RunnerTally, error) {
 	held, _ := f.RunnerSlotHolders(ctx, ids)
 	out := map[string]types.RunnerTally{}
 	for id, n := range held {

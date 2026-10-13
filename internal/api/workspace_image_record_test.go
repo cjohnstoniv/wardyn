@@ -92,7 +92,7 @@ func (b *recordingBuilder) BuildFromDevcontainerFiles(_ context.Context, files m
 	return b.built(tag), nil
 }
 
-func (b *recordingBuilder) FinalizeBase(_ context.Context, _, tag string, _ io.Writer) (BuiltImage, error) {
+func (b *recordingBuilder) FinalizeBase(_ context.Context, _, tag string, _ io.Writer, _ bool) (BuiltImage, error) {
 	b.note(tag)
 	return b.built(tag), nil
 }

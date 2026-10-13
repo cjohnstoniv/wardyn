@@ -124,7 +124,7 @@ func (s *Server) runnerViews(w http.ResponseWriter, r *http.Request, rs store.Ru
 	for i, row := range rows {
 		ids[i] = row.ID
 	}
-	used, err := rs.RunnerUsage(r.Context(), ids, nil)
+	used, err := rs.RunnerUsage(r.Context(), ids, nil, uuid.Nil)
 	if err != nil {
 		writeServerError(w, r, "read runner usage", err)
 		return nil, false

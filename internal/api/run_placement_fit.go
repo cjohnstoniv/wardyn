@@ -64,7 +64,9 @@ func (s *Server) runnerFits(ctx context.Context) map[string]runnerFit {
 			out[row.Runner.ID] = runnerFit{limits: row.Runner.Limits}
 		}
 	}
-	used, err := rs.RunnerUsage(ctx, ids, remotes)
+	// A promoted run's start finds the run itself holding its place on its runner: that place, and what
+	// it reserves there, are this run's own, so they never count against it.
+	used, err := rs.RunnerUsage(ctx, ids, remotes, promotedRun(ctx))
 	if err != nil {
 		slog.WarnContext(ctx, "wardynd: read runner usage; no runner is a candidate", slog.Any("err", err))
 		return map[string]runnerFit{}

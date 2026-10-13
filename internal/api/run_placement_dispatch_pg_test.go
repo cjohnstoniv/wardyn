@@ -141,7 +141,7 @@ func TestServerRunsCountOnTheRemoteRunner(t *testing.T) {
 	srv, pool := pgHarnessWithRunner(t, fr)
 	ctx := context.Background()
 	usage := func() types.RunnerTally {
-		used, err := store.NewPG(pool).RunnerUsage(ctx, nil, []string{"fake"})
+		used, err := store.NewPG(pool).RunnerUsage(ctx, nil, []string{"fake"}, uuid.Nil)
 		if err != nil {
 			t.Fatal(err)
 		}

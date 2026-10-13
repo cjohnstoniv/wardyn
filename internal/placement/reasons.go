@@ -10,7 +10,6 @@ import "net/http"
 type Reason string
 
 const (
-	ReasonPlacementRequired            Reason = "placement_required"
 	ReasonPlacementUnavailable         Reason = "placement_unavailable"
 	ReasonPlacementDenied              Reason = "placement_denied"
 	ReasonPlacementCredential          Reason = "placement_credential"
@@ -42,7 +41,6 @@ const (
 
 // reasonStatus is the HTTP status each reason answers with.
 var reasonStatus = map[Reason]int{
-	ReasonPlacementRequired:            http.StatusUnprocessableEntity,
 	ReasonPlacementUnavailable:         http.StatusUnprocessableEntity,
 	ReasonPlacementDenied:              http.StatusForbidden,
 	ReasonPlacementCredential:          http.StatusUnprocessableEntity,

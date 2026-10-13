@@ -201,27 +201,58 @@ func (st poolState) choice(row store.RunnerPoolCatalogueRow) client.RunnerPoolCh
 
 // poolAvailability says whether a pool can take a run for the caller: the first of
 // runnerpool.AvailabilityReasons that applies, in that order, by the catalogue, the caller's
-// deny_placements, the runner switch and, for a user pool, whether any of the caller's OWN
-// runners in it is online. The pool list and the dry doors both ask it, so they agree. Whether a
-// candidate has room or passes the run's own checks is the admission fold's to decide.
+// deny_placements, the runner switch and the runners themselves. It judges each kind of runner in the
+// pool as placement does (poolTargets, kindTargets): deny holds each kind, a user pool's remote-hosted
+// runners count only while their people policy admits the caller, and the pool is available while one
+// kind that is not denied can take a run. The pool list and the dry doors both ask it, so they agree.
+// Whether a candidate has room or passes the run's own checks is the admission fold's to decide.
 func (s *Server) poolAvailability(ctx context.Context, ps store.RunnerPoolStore, row store.RunnerPoolCatalogueRow, denied []types.Placement) (poolState, *runRefusal) {
 	unavailable := func(r runnerpool.Reason) (poolState, *runRefusal) {
 		return poolState{availability: client.RunnerPoolUnavailable, reason: r}, nil
 	}
+	remoteDenied := slices.Contains(denied, types.PlacementRemote)
 	switch {
 	case row.Pool.State != types.RunnerPoolActive:
 		return unavailable(runnerpool.ReasonUnavailable)
-	case slices.Contains(denied, row.Pool.Scope.Placement()):
+	case row.Pool.Scope == types.RunnerPoolOrganization && remoteDenied:
 		return unavailable(runnerpool.AvailabilityPlacementDenied)
 	case row.Pool.Scope == types.RunnerPoolOrganization:
-		configured := s.configuredExecutors()
-		if !slices.ContainsFunc(row.ExecutorIDs, func(id string) bool { return slices.Contains(configured, id) }) {
+		if !s.anyConfigured(row) {
 			return unavailable(runnerpool.ReasonNoEligibleMember)
 		}
 		return poolState{availability: client.RunnerPoolAvailable}, nil
 	}
-	// A user pool places a run on one of the caller's own runners in it (ownRunnerTargets), so
-	// it is available while runners are switched on and one of those runners is online.
+	admitted, refusal := s.admittedRemoteMembers(ctx, row)
+	if refusal != nil {
+		return poolState{}, refusal
+	}
+	remote, own := s.anyConfigured(admitted), row.OwnRunners > 0
+	localDenied := slices.Contains(denied, types.PlacementLocal)
+	st, refusal := s.ownRunnerAvailability(ctx, ps, row)
+	switch {
+	case refusal != nil:
+		return poolState{}, refusal
+	case remote && !remoteDenied:
+		st.availability, st.reason = client.RunnerPoolAvailable, ""
+	case (own || remote) && (!own || localDenied) && (!remote || remoteDenied):
+		st.availability, st.reason = client.RunnerPoolUnavailable, runnerpool.AvailabilityPlacementDenied
+	}
+	return st, nil
+}
+
+// anyConfigured reports whether one of the row's remote-hosted members is a runner this deployment runs.
+func (s *Server) anyConfigured(row store.RunnerPoolCatalogueRow) bool {
+	configured := s.configuredExecutors()
+	return slices.ContainsFunc(row.ExecutorIDs, func(id string) bool { return slices.Contains(configured, id) })
+}
+
+// ownRunnerAvailability is a user pool's availability by the caller's OWN runners in it alone
+// (ownRunnerTargets): available while runners are switched on and one of them is online. It also
+// answers those runners, for the pool's main-drive facts.
+func (s *Server) ownRunnerAvailability(ctx context.Context, ps store.RunnerPoolStore, row store.RunnerPoolCatalogueRow) (poolState, *runRefusal) {
+	unavailable := func(r runnerpool.Reason) (poolState, *runRefusal) {
+		return poolState{availability: client.RunnerPoolUnavailable, reason: r}, nil
+	}
 	switch err := s.runnersEnabled(ctx); {
 	case errors.Is(err, errRunnersDisabled):
 		return unavailable(runnerpool.AvailabilityPlacementUnavailable)
