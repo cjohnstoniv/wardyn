@@ -78,7 +78,8 @@ class AzureCLICopies(unittest.TestCase):
         self.assertEqual(azure_cli_block("harnesses"), want)
         self.assertRegex(want, r"\nARG AZURE_CLI_VERSION=\d+\.\d+\.\d+\n")
         self.assertIn("signed-by=/etc/apt/keyrings/microsoft.gpg", want)
-        self.assertIn('"azure-cli=${AZURE_CLI_VERSION}-1~${VERSION_CODENAME}"', want)
+        self.assertIn("https://packages.microsoft.com/repos/azure-cli/ bookworm main", want)
+        self.assertIn('"azure-cli=${AZURE_CLI_VERSION}-1~bookworm"', want)
         self.assertIn('[ "$fpr" = "BC528686B50D79E339D3721CEB3E94ADBE1229CF" ]', want)
 
     def test_no_other_image_carries_az(self):
