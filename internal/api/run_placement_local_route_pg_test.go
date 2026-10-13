@@ -79,11 +79,11 @@ func (e *placementEnv) localCreate(body string) types.AgentRun {
 func TestPG_LocalRun_DispatchedToItsBoundRunner(t *testing.T) {
 	e := newPlacementEnv(t)
 	e.runner.fakeRunner.capsClasses = []types.ConfinementClass{types.CC1}
-	laptops := e.createPool("Laptops", types.RunnerPoolSelfHosted)
+	laptops := e.createPool("Laptops", types.RunnerPoolUser)
 	awake := e.laptop(e.personP, 4000, 8192, types.CC1, types.CC2, types.CC3)
 	e.addToPool(e.person, laptops.ID, awake)
 	e.stream(awake, types.CC1, types.CC2, types.CC3)
-	e.personDefaults(e.person, fmt.Sprintf(`{"preferred_hosting":"self_hosted","self_hosted":%q}`, laptops.ID))
+	e.personDefaults(e.person, fmt.Sprintf(`{"pool_id":%q}`, laptops.ID))
 
 	run := e.localCreate(runBody(`"confinement_class":"CC3"`))
 	if run.Placement != types.PlacementLocal || !run.PlacementFilled || run.RunnerID == nil || *run.RunnerID != awake ||
@@ -125,7 +125,7 @@ func TestPG_DenyRemote_LaunchesOnASelfHostedPool(t *testing.T) {
 		filled bool
 	}{
 		{"the person's default is the self-hosted pool", func(e *placementEnv, laptops, _ types.RunnerPool) string {
-			e.personDefaults(e.person, fmt.Sprintf(`{"preferred_hosting":"self_hosted","self_hosted":%q}`, laptops.ID))
+			e.personDefaults(e.person, fmt.Sprintf(`{"pool_id":%q}`, laptops.ID))
 			return runBody("")
 		}, false, true},
 		{"the request names the self-hosted pool", func(_ *placementEnv, laptops, _ types.RunnerPool) string {
@@ -140,10 +140,10 @@ func TestPG_DenyRemote_LaunchesOnASelfHostedPool(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			e := newPlacementEnv(t)
-			remotePool := e.createPool("Remote", types.RunnerPoolRemoteProvided)
+			remotePool := e.createPool("Remote", types.RunnerPoolOrganization)
 			e.addExecutors(remotePool.ID, "alpha", "beta")
-			e.orgDefaults(fmt.Sprintf(`{"preferred_hosting":"remote_provided","remote_provided":%q}`, remotePool.ID))
-			laptops := e.createPool("Laptops", types.RunnerPoolSelfHosted)
+			e.orgDefaults(fmt.Sprintf(`{"pool_id":%q}`, remotePool.ID))
+			laptops := e.createPool("Laptops", types.RunnerPoolUser)
 			awake := e.laptop(e.personP, 4000, 8192, types.CC1, types.CC2, types.CC3)
 			e.addToPool(e.person, laptops.ID, awake)
 			e.assignProfile(walled, types.GovernanceLimits{DenyPlacements: []types.Placement{types.PlacementRemote}})
@@ -203,7 +203,7 @@ func (e *placementEnv) dispatchedSpec(runID uuid.UUID) runner.SandboxSpec {
 // via_org route, never an installation token.
 func TestPG_LocalRun_RepositoryGoesThroughTheBroker(t *testing.T) {
 	e := newPlacementEnv(t)
-	laptops := e.createPool("Laptops", types.RunnerPoolSelfHosted)
+	laptops := e.createPool("Laptops", types.RunnerPoolUser)
 	awake := e.laptop(e.personP, 4000, 8192, types.CC1, types.CC2, types.CC3)
 	e.addToPool(e.person, laptops.ID, awake)
 	e.stream(awake, types.CC1, types.CC2, types.CC3)
@@ -239,7 +239,7 @@ func TestPG_LocalRun_RepositoryGoesThroughTheBroker(t *testing.T) {
 // runner at the reduced size.
 func TestPG_LocalRun_OverAskReducedToRunnerCapacity(t *testing.T) {
 	e := newPlacementEnv(t)
-	laptops := e.createPool("Laptops", types.RunnerPoolSelfHosted)
+	laptops := e.createPool("Laptops", types.RunnerPoolUser)
 	small := e.laptop(e.personP, 2000, 2048, types.CC1, types.CC2, types.CC3)
 	e.addToPool(e.person, laptops.ID, small)
 	e.stream(small, types.CC1, types.CC2, types.CC3)

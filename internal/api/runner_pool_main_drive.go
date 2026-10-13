@@ -17,13 +17,13 @@ import (
 // state it. The enforcement word is the WEAKEST across the targets and unknown whenever any target's is
 // (offline, never reported) or there is no target, so a chip never claims more than every runner keeps.
 // Only a remote pool's executors can mount drives, and only when every one can.
-func poolMainDrive(targets []poolTarget, hosting types.RunnerPoolHosting, grace time.Duration) *client.MainDriveFacts {
+func poolMainDrive(targets []poolTarget, hosting types.RunnerPoolScope, grace time.Duration) *client.MainDriveFacts {
 	f := &client.MainDriveFacts{Enforcement: client.MainDriveUnknown, Basis: types.RunEvidenceSubstrate}
-	if hosting == types.RunnerPoolSelfHosted {
+	if hosting == types.RunnerPoolUser {
 		f.Basis = types.RunEvidenceRunnerAsserted
 	}
 	known := len(targets) > 0
-	keeps, mounts := known, known && hosting == types.RunnerPoolRemoteProvided
+	keeps, mounts := known, known && hosting == types.RunnerPoolOrganization
 	weakest := types.StorageEnforcementFilesystem
 	for _, t := range targets {
 		known = known && !t.offline && t.facts.EphemeralDiskEnforcement != ""
@@ -60,10 +60,10 @@ func mainDriveWord(e types.StorageEnforcement) (client.MainDriveEnforcement, cli
 // the caller's own runners the availability check already resolved (own).
 func (s *Server) poolMainDriveFor(row store.RunnerPoolCatalogueRow, own []poolTarget, read func(executor string) (runner.TargetFacts, bool)) *client.MainDriveFacts {
 	targets := own
-	if row.Pool.HostingType == types.RunnerPoolRemoteProvided {
+	if row.Pool.Scope == types.RunnerPoolOrganization {
 		targets, _ = executorTargets(row, s.configuredExecutors(), read)
 	}
-	return poolMainDrive(targets, row.Pool.HostingType, s.cfg.EndedRunGrace)
+	return poolMainDrive(targets, row.Pool.Scope, s.cfg.EndedRunGrace)
 }
 
 // onceExecutorFacts reads each executor's facts at most once per call site, so a failing executor held

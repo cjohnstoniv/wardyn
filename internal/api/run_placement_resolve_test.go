@@ -74,7 +74,7 @@ func TestPlacement_PoolIntersectionNeverWidens(t *testing.T) {
 func TestPlacement_PoolBindingNeverWidensEvidenceOrBarrier(t *testing.T) {
 	runA, runB := uuid.New(), uuid.New()
 	pool := uuid.New()
-	local := runPlacement{pooled: true, pool: types.ResolvedRunnerPool{ID: pool, Name: "Laptops", HostingType: types.RunnerPoolSelfHosted, Revision: 3, Selection: types.RunnerPoolSelectedPersonal},
+	local := runPlacement{pooled: true, pool: types.ResolvedRunnerPool{ID: pool, Name: "Laptops", Scope: types.RunnerPoolUser, Revision: 3, Selection: types.RunnerPoolSelectedPersonal},
 		placement: types.PlacementLocal, filled: true,
 		eligible: []poolTarget{
 			{id: runA.String(), runnerID: &runA, facts: runner.TargetFacts{Classes: []types.ConfinementClass{types.CC1}}},
@@ -96,7 +96,7 @@ func TestPlacement_PoolBindingNeverWidensEvidenceOrBarrier(t *testing.T) {
 		t.Fatalf("no bound target enforces CC2, got %v", r)
 	}
 
-	remote := runPlacement{pooled: true, pool: types.ResolvedRunnerPool{ID: pool, Name: "Remote", HostingType: types.RunnerPoolRemoteProvided, Selection: types.RunnerPoolSelectedOrg},
+	remote := runPlacement{pooled: true, pool: types.ResolvedRunnerPool{ID: pool, Name: "Remote", Scope: types.RunnerPoolOrganization, Selection: types.RunnerPoolSelectedOrg},
 		placement: types.PlacementRemote, eligible: []poolTarget{target("docker", false, false, 0, 0, types.CC2)}}
 	run := types.AgentRun{ID: uuid.New()}
 	if r := remote.apply(&run, types.CC2); r != nil || run.RunnerID != nil || run.RunnerPoolExecutor != "docker" || run.EvidenceSource != types.RunEvidenceSubstrate || run.PlacementFilled {
@@ -128,10 +128,10 @@ func TestPlacement_OfflineCandidateRefuses(t *testing.T) {
 	if got, _ := eligibleTargets([]poolTarget{exec}, demand(types.CC1, "", 1000, 1000)); len(got) != 1 {
 		t.Fatalf("an executor with no advertised bound was refused")
 	}
-	if r := targetRefusal(placement.ReasonRunnerOffline, "Laptops", types.RunnerPoolSelfHosted); r.status != http.StatusUnprocessableEntity || r.body.Reason != "runner_offline" {
+	if r := targetRefusal(placement.ReasonRunnerOffline, "Laptops", types.RunnerPoolUser); r.status != http.StatusUnprocessableEntity || r.body.Reason != "runner_offline" {
 		t.Fatalf("offline refusal = %+v", r)
 	}
-	if r := targetRefusal(placement.ReasonRunnerOffline, "Remote", types.RunnerPoolRemoteProvided); r.body.Reason != string(runnerpool.ReasonNoEligibleMember) {
+	if r := targetRefusal(placement.ReasonRunnerOffline, "Remote", types.RunnerPoolOrganization); r.body.Reason != string(runnerpool.ReasonNoEligibleMember) {
 		t.Fatalf("remote offline is no eligible member, got %+v", r)
 	}
 }

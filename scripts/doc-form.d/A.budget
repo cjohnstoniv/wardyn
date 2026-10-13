@@ -78,6 +78,9 @@
 # docs/AUDIT-ACTIONS.md 43926 measured after local-enable merge.
 # docs/AUDIT-ACTIONS.md 43570 adds 85 (0.9 H14-api): person-owned Self-Hosted pools (owner on the pool rows, the runner_pools erasure scope).
 # docs/AUDIT-ACTIONS.md 44011 measured after H14-api merge into batch: person-owned Self-Hosted pools.
+# docs/AUDIT-ACTIONS.md 44034 adds 23 (H15): the runner.update row and runner.enrol's max_runs.
+# docs/AUDIT-ACTIONS.md 44100 adds 89 over 44011 (0.9 B-org-barrier): `confinement_default` on `run.create`, `confinement_class` and `confinement_default` on `run.queue.start`, and the default barrier in `runner_pool.default.set`.
+# docs/AUDIT-ACTIONS.md 44287 adds 187 over 44100 (0.9 RP-1): runner pool rows in scope and runner-kind words, the remote_runner.create/update/people_policy rows.
 # docs/AUDIT-ACTIONS.md 44100 adds 89 over 44011 (0.9 B-org-barrier): `confinement_default` on `run.create`, `confinement_class` and `confinement_default` on `run.queue.start`, and the default barrier in `runner_pool.default.set`.
 # docs/AUDIT-ACTIONS.md 44160 adds 60 over 44100 (0.9 F-1516 B5): the workspace.image.refresh row.
 # docs/AUDIT-ACTIONS.md 44124 adds 24 over 44100 (0.9 B-org-barrier-fu): `confinement_default_raised` on `run.queue.start`.
@@ -87,7 +90,8 @@
 # docs/AUDIT-ACTIONS.md 44034 adds 23 (H15): the runner.update row and runner.enrol's max_runs.
 # docs/AUDIT-ACTIONS.md 44119 measured after merging batch into H15: B-org-barrier + H15 combined.
 # docs/AUDIT-ACTIONS.md 44632 measured after H15: runner Runs at once (runner.update, max_runs, runner_at_capacity).
-docs/AUDIT-ACTIONS.md=44632 share=8
+# docs/AUDIT-ACTIONS.md 44798 measured after RP-1: organization and user pools, remote-hosted runners.
+docs/AUDIT-ACTIONS.md=44798 share=8
 # docs/AUDIT-ACTIONS.md 39938 adds 1 (0.9 H7): the `placement_component_self_defined` reason in the authz.denied vocabulary.
 # 0.9 H10 r1: docs/AUDIT-ACTIONS.md 40113 adds 65 over 40048 for the token-revoke join, the off semantics and the pending connect/disconnect rows.
 # 0.9 H10: docs/AUDIT-ACTIONS.md 40048 adds 111 over 39937 for runner.token.revoke, runners.enabled.set, runner.connect and runner.disconnect.

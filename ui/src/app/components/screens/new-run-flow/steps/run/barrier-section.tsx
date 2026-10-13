@@ -29,7 +29,7 @@ export function BarrierSection({ pool, chosen, onChoose }: {
         onChange={onChoose}
         defaultBadge={pick && { cc: pick.cc, text: pick.badge }}
         badges={{ CC3: NR_RUN.BADGE_EXPERIMENTAL }}
-        showWhere={!!pool && poolScope(pool.hosting_type) === "user"}
+        showWhere={!!pool && poolScope(pool.scope) === "user"}
       />
       <p className="text-xs leading-snug text-muted-foreground">{NR_RUN.POLICY_NOTE}</p>
     </div>

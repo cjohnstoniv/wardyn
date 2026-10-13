@@ -9,19 +9,21 @@ import { NR_RUN } from "../../../../wardyn/copy/new-run/run";
 import { NR_SHARED } from "../../../../wardyn/copy/new-run/shared";
 import { RECORDING_DISABLED_TITLE } from "../../../../wardyn/copy";
 import { useRecordingDisabled } from "../../../../../lib/hooks/use-recording-disabled";
-import { HOSTING_LABEL } from "../../../../../lib/runner-pool-refusals";
 import { draftSource } from "../provenance";
 import { ReviewGroup } from "../review-group";
 import { onlineRunners } from "../review-seams";
 import { stepLocation, type GroupProps } from "./group-props";
 import { JumpButton } from "./jump-button";
 
+// The pool line's current canon; RP-4 rewords it with the rest of the console copy.
+const POOL_KIND_LABEL = { organization: "Remote Provided", user: "Self-Hosted" } as const;
+
 export function WhereGroup({ draft, pre, docRows, go }: GroupProps) {
   const pool = pre?.runner_pool;
   const slots = pre?.runner_pool_slots;
   const online = onlineRunners(pre);
   const recordingOff = useRecordingDisabled();
-  const hosting = pool ? HOSTING_LABEL[pool.hosting_type] : undefined;
+  const hosting = pool ? POOL_KIND_LABEL[pool.scope] : undefined;
   const poolLine = !hosting ? undefined
     : !slots ? hosting
     : slots.max === undefined ? NR_SHARED.JOIN(hosting, NR_RUN.RUNNING_ONLY(slots.used))

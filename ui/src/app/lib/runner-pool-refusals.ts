@@ -48,7 +48,7 @@ export const BARRIER_REASON = ["below_floor", "policy_floor", "access_floor", "p
 export type BarrierReason = (typeof BARRIER_REASON)[number];
 
 /**
- * A self-hosted pool whose own runners are all offline (runnerpool.NoOnlineRunnerMsg): the pool's
+ * A user pool whose own runners are all offline (runnerpool.NoOnlineRunnerMsg): the pool's
  * runner_pool_no_online_runner and a launch's runner_offline say this sentence.
  */
 export const POOL_OFFLINE = {
@@ -63,9 +63,6 @@ export const RUNNER_CAPACITY = {
   RUNNER_AT_CAPACITY: (name: string) =>
     `Your runners in ${name} are all running as many runs as they allow at once. Try again when one finishes, or raise Runs at once on your runner.`,
 } as const;
-
-/** The console's name for a hosting type (runnerpool.HostingLabel). */
-export const HOSTING_LABEL = { remote_provided: "Remote Provided", self_hosted: "Self-Hosted" } as const;
 
 /** How a sentence names runs of a type (types.RunnerPoolRunType.Plural). */
 export const RUN_TYPE_PLURAL = { background: "background tasks", interactive: "interactive environments" } as const;
@@ -88,8 +85,7 @@ export const RUN_END_REASON_SENTENCE = {
 /** The sentences, byte for byte what internal/runnerpool/reasons.go says. */
 export const RUNNER_POOL_REFUSAL = {
   INVALID: () => "runner_pool_id must be the id of a pool from your pool list.",
-  REQUIRED: (label: string) => `Choose a ${label || "runner"} pool. No default pool applies to this run.`,
-  REQUIRED_ANY: () => "Choose a runner pool. No default pool applies to this run.",
+  REQUIRED: () => "Choose a runner pool. No default pool applies to this run.",
   NOT_FOUND: () => "That pool isn't available to you. Choose one from the list.",
   UNAVAILABLE: (name: string) => `${name} is switched off right now. Choose another pool.`,
   DEFAULT_UNAVAILABLE_PERSONAL: () => "Your default pool is no longer available. Choose a pool to continue.",
@@ -98,7 +94,10 @@ export const RUNNER_POOL_REFUSAL = {
   NO_ELIGIBLE_MEMBER: (name: string) => `No runner in ${name} can run this right now.`,
   NO_OWN_RUNNER: (name: string) => `None of your own runners in ${name} can run this right now.`,
   MEMBER_MISMATCH: (runner: string, name: string) => `${runner} is not one of your runners in ${name}.`,
-  HOSTING_MISMATCH: (name: string, label: string) => `${name} is a ${label} pool, so it can't be used with this runner choice.`,
+  KIND_MISMATCH: (name: string) => `${name} has no runner of the kind this run asks for. Choose another pool.`,
+  ORG_POOL_SELF_HOSTED: () => "Organization pools take remote-hosted runners only. A self-hosted runner can join its owner's user pools.",
+  REMOTE_NOT_CONFIGURED: (id: string) => `${id} isn't a remote-hosted runner this server is set up with.`,
+  REMOTE_NOT_AVAILABLE: (id: string) => `${id} is not available to people's pools. Ask your admin to make it available.`,
   UNAVAILABLE_SERVER: () => "This server does not manage runner pools yet.",
   RUN_TYPE_NOT_ALLOWED: (name: string, runType: keyof typeof RUN_TYPE_PLURAL) =>
     `${name} doesn't take ${RUN_TYPE_PLURAL[runType]}. Choose another pool or run type.`,
@@ -133,7 +132,6 @@ export const RUN_WAIT_REASON: Record<keyof typeof RUN_WAIT, string> = {
 export const RUNNER_POOL_REFUSAL_REASON: Record<keyof typeof RUNNER_POOL_REFUSAL, RunnerPoolReason> = {
   INVALID: "runner_pool_invalid",
   REQUIRED: "runner_pool_required",
-  REQUIRED_ANY: "runner_pool_required",
   NOT_FOUND: "runner_pool_not_found",
   UNAVAILABLE: "runner_pool_unavailable",
   DEFAULT_UNAVAILABLE_PERSONAL: "runner_pool_default_unavailable",
@@ -142,7 +140,10 @@ export const RUNNER_POOL_REFUSAL_REASON: Record<keyof typeof RUNNER_POOL_REFUSAL
   NO_ELIGIBLE_MEMBER: "runner_pool_no_eligible_member",
   NO_OWN_RUNNER: "runner_pool_no_eligible_member",
   MEMBER_MISMATCH: "runner_pool_member_mismatch",
-  HOSTING_MISMATCH: "runner_pool_member_mismatch",
+  KIND_MISMATCH: "runner_pool_member_mismatch",
+  ORG_POOL_SELF_HOSTED: "runner_pool_member_mismatch",
+  REMOTE_NOT_CONFIGURED: "runner_pool_member_mismatch",
+  REMOTE_NOT_AVAILABLE: "runner_pool_member_mismatch",
   UNAVAILABLE_SERVER: "runner_pools_unavailable",
   RUN_TYPE_NOT_ALLOWED: "runner_pool_run_type_not_allowed",
   BARRIER_NOT_ALLOWED: "runner_pool_barrier_not_allowed",
@@ -153,8 +154,7 @@ export const RUNNER_POOL_REFUSAL_REASON: Record<keyof typeof RUNNER_POOL_REFUSAL
 /** Every sentence function by key, for the parity test. */
 export const RUNNER_POOL_REFUSAL_BY_KEY: Record<keyof typeof RUNNER_POOL_REFUSAL, (...args: string[]) => string> = {
   INVALID: () => RUNNER_POOL_REFUSAL.INVALID(),
-  REQUIRED: (...a) => RUNNER_POOL_REFUSAL.REQUIRED(a[0]),
-  REQUIRED_ANY: () => RUNNER_POOL_REFUSAL.REQUIRED_ANY(),
+  REQUIRED: () => RUNNER_POOL_REFUSAL.REQUIRED(),
   NOT_FOUND: () => RUNNER_POOL_REFUSAL.NOT_FOUND(),
   UNAVAILABLE: (...a) => RUNNER_POOL_REFUSAL.UNAVAILABLE(a[0]),
   DEFAULT_UNAVAILABLE_PERSONAL: () => RUNNER_POOL_REFUSAL.DEFAULT_UNAVAILABLE_PERSONAL(),
@@ -163,7 +163,10 @@ export const RUNNER_POOL_REFUSAL_BY_KEY: Record<keyof typeof RUNNER_POOL_REFUSAL
   NO_ELIGIBLE_MEMBER: (...a) => RUNNER_POOL_REFUSAL.NO_ELIGIBLE_MEMBER(a[0]),
   NO_OWN_RUNNER: (...a) => RUNNER_POOL_REFUSAL.NO_OWN_RUNNER(a[0]),
   MEMBER_MISMATCH: (...a) => RUNNER_POOL_REFUSAL.MEMBER_MISMATCH(a[0], a[1]),
-  HOSTING_MISMATCH: (...a) => RUNNER_POOL_REFUSAL.HOSTING_MISMATCH(a[0], a[1]),
+  KIND_MISMATCH: (...a) => RUNNER_POOL_REFUSAL.KIND_MISMATCH(a[0]),
+  ORG_POOL_SELF_HOSTED: () => RUNNER_POOL_REFUSAL.ORG_POOL_SELF_HOSTED(),
+  REMOTE_NOT_CONFIGURED: (...a) => RUNNER_POOL_REFUSAL.REMOTE_NOT_CONFIGURED(a[0]),
+  REMOTE_NOT_AVAILABLE: (...a) => RUNNER_POOL_REFUSAL.REMOTE_NOT_AVAILABLE(a[0]),
   UNAVAILABLE_SERVER: () => RUNNER_POOL_REFUSAL.UNAVAILABLE_SERVER(),
   RUN_TYPE_NOT_ALLOWED: (...a) => RUNNER_POOL_REFUSAL.RUN_TYPE_NOT_ALLOWED(a[0], a[1] as keyof typeof RUN_TYPE_PLURAL),
   BARRIER_NOT_ALLOWED: (...a) =>

@@ -38,13 +38,13 @@ export const barrierOptions = (over: Partial<Record<ConfinementClass, Partial<Ba
   }));
 
 export const SHARED: RunnerPoolCatalogueEntry = {
-  id: "c1111111-1111-4111-8111-111111111111", name: "Shared pool", hosting_type: "remote_provided", availability: "available",
+  id: "c1111111-1111-4111-8111-111111111111", name: "Shared pool", scope: "organization", availability: "available",
   limits: [effectiveLimits("background"), effectiveLimits("interactive")],
   run_types: ["interactive", "background"], run_types_source: "pool",
   barrier_options: barrierOptions(), slots: { used: 2, waiting: 0, max: 10, verdict: "starts_now", max_wait_sec: 86400 },
 };
 export const TEAM_LAPTOPS: RunnerPoolCatalogueEntry = {
-  id: "c2222222-2222-4222-8222-222222222222", name: "Team laptops", hosting_type: "self_hosted", availability: "available",
+  id: "c2222222-2222-4222-8222-222222222222", name: "Team laptops", scope: "user", availability: "available",
   limits: [effectiveLimits("background", { cpu_millis: limit(2000, "runner_capacity") }), effectiveLimits("interactive")],
   run_types: ["interactive", "background"], run_types_source: "none",
   barrier_options: barrierOptions({ CC3: { available: false, reason_code: "not_offered", reason_detail: "kvm_missing" } }),

@@ -16,7 +16,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `runner_pool_use_policies`, `run_queue`, `run_templates` and `template_group_admins`, and `SELECT, INSERT, UPDATE` on `run_template_revisions`, `template_group_labels`, `credential_delivery_policy`,
   `runner_registration_tokens`, `audit_delivery_cursors`, `runner_spool_cursors`, `runner_executions`,
   `runner_execution_exits`, `runner_inventory_candidates`, `runner_inventory_observations`, `runner_pools`,
-  `runner_pool_org_defaults`, `secret_owner_generations`, `person_invitations`, `service_identities` and
+  `runner_pool_org_defaults`, `remote_runners` (migration `0173_runner_pool_scope`), `secret_owner_generations`, `person_invitations`, `service_identities` and
   `api_token_moves`, `SELECT, INSERT` on `run_harnesses` (migration `0164_run_harnesses`), and `SELECT, INSERT, DELETE` on
   `run_launch_intents` (migration `0171_run_launch_intents`). Without the `runner_pools` grants wardynd refuses to start at the runner pool bootstrap.
   Without the `provider_connection_changes` grant every secret write fails once migration 0143's trigger on

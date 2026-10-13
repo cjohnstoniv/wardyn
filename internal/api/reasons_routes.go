@@ -948,6 +948,7 @@ const (
 // retain the shared placement enum values.
 const (
 	reasonRunnerRegistrationUnavailable = "runner_registration_unavailable"
+	reasonRemoteRunnerNotFound          = "remote_runner_not_found" // no remote-hosted runner has that id (the operators' /remote-runners routes)
 	reasonRunnerRegistrationRateLimited = "runner_registration_rate_limited"
 	reasonRunnerRegistrationInvalid     = "runner_registration_invalid"
 	reasonRunnerOwnerInvalid            = "runner_owner_invalid"
