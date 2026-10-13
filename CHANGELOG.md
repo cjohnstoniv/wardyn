@@ -1078,9 +1078,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - A credential mint whose value cannot be recorded for output masking now fails without using up its single-use
   approval, and a GitHub token minted for it is revoked. Before, the approval was spent and nothing was delivered.
 - SSH: a refusal that names a registered key (not the run's owner, a revoked key, a profile that denies it) is now
-  always audited. Only refusals with no attributable actor share the authentication-failure rate bound (burst 5,
-  1/s), with drops counted in `wardyn_auth_failed_suppressed_total`; the threat model, SSH guide and audit tables
-  say so.
+  audited at a per-key bounded rate (burst 5, 1/s), so a flood of other failed requests cannot hide it. Refusals
+  with no attributable actor share the authentication-failure rate bound (burst 5, 1/s). Drops are counted in
+  `wardyn_auth_failed_suppressed_total`; the threat model, SSH guide and audit tables say so.
 - New Run: a run of two or more harnesses attached to a workspace that builds its own image (its repo's devcontainer
   or a generated profile) is refused with the existing custom-image message at create, preflight and preview,
   instead of being admitted on the set image and launched on an image that lacks the other CLIs.

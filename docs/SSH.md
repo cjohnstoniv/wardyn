@@ -632,7 +632,7 @@ wardyn run ssh <id> --json                                   # -> {"host","port"
   username (anything that isn't a run id) is rejected and audited (`ssh.authenticate`,
   `outcome=failure`). These unknown-actor refusals share the `auth.fail` rate bound (burst 5,
   1/s) and a drop is counted in `wardyn_auth_failed_suppressed_total`; a refusal that names a
-  registered key's person is always recorded.
+  registered key's person is recorded at a per-key bounded rate (burst 5, 1/s).
 - **Owner-only, and the admin carve-out is a bounded-stale stamp — weaker than
   the web terminal's, but no longer unboundedly so.**
   - SSH authorization is
