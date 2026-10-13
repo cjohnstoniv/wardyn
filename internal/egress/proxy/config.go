@@ -125,6 +125,10 @@ type Config struct {
 	// GitHubAPI is the run's GitHub CLI grant, which drives the api.github.com
 	// door (github_api.go). Nil == off. Omitempty for the reason AzureGates is.
 	GitHubAPI *GitHubAPIGrant `json:"github_api,omitempty"`
+	// AzureARM is the run's Azure CLI grant, which drives the
+	// management.azure.com door (azure_arm_door.go). Nil == off. Omitempty for the
+	// reason AzureGates is.
+	AzureARM *AzureARMGrant `json:"azure_arm,omitempty"`
 	// MITMLLM reports whether TLS-MITM of the BUILT-IN LLM hosts (Anthropic/OpenAI)
 	// is actually intended for this run — i.e. subscription credential injection OR
 	// intercept_tls content inspection. Dispatch also mints the per-run CA for
@@ -536,6 +540,9 @@ func (c *Config) validateTerminatedGates() error {
 	}
 	if c.GitHubAPI != nil && (c.MITMCACertPEM == "" || c.MITMCAKeyPEM == "") {
 		return fmt.Errorf("config: github_api requires mitm_ca_cert_pem and mitm_ca_key_pem — the GitHub CLI door runs only on a terminated connection")
+	}
+	if err := c.validateAzureARM(); err != nil {
+		return err
 	}
 	return c.validateAzureGates()
 }

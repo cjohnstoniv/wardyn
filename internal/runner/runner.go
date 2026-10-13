@@ -158,6 +158,8 @@ type ProxyConfig struct {
 	AzureGates []proxy.AzureGateConfig
 	// GitHubAPI is the run's GitHub CLI grant for the proxy's api.github.com door; nil == off.
 	GitHubAPI *proxy.GitHubAPIGrant
+	// AzureARM is the run's Azure CLI grant for the proxy's management.azure.com door; nil == off.
+	AzureARM *proxy.AzureARMGrant
 	// BrokeredPATGrantIDs is every git_pat grant id of the run while the PAT broker is on; the proxy refuses a raw mint of one.
 	BrokeredPATGrantIDs []uuid.UUID
 	// UpstreamProxyURL is the OPTIONAL corporate parent proxy the sidecar
