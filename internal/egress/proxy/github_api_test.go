@@ -167,6 +167,41 @@ func TestGitHubAPI_RepoOutsideRunRefused(t *testing.T) {
 	}
 }
 
+// With code_read granted over the run's own repository, a contents read passes
+// and a dot segment carrying a path parameter in its tail is refused before
+// the mint, in every spelling.
+func TestGitHubAPI_DotSegmentWithPathParameterRefused(t *testing.T) {
+	grant := func(t *testing.T) (*Proxy, *ghUpstream) {
+		up := newGHUpstream(t)
+		p, g := newGHProxy(t, up)
+		g.Capabilities = append(g.Capabilities, ghscope.CapCodeRead)
+		return p, up
+	}
+	t.Run("plain semicolon is admitted", func(t *testing.T) {
+		p, up := grant(t)
+		rec := httptest.NewRecorder()
+		p.serveMITMRequest(rec, ghTunnelRequest(t, http.MethodGet, "/repos/acme/app/contents/a;b"), ghscope.APIHost, 443)
+		if mints, seen := up.counts(); rec.Code != http.StatusOK || mints != 1 || len(seen) != 1 {
+			t.Fatalf("status %d mints %d seen %q, want 200 and one forwarded request", rec.Code, mints, seen)
+		}
+	})
+	for _, target := range []string{
+		"/repos/acme/app/contents/..;/..;/other",
+		"/repos/acme/app/contents/%2e%2e%3b/other",
+		"/repos/acme/app/contents/..%3B/other",
+	} {
+		t.Run(target, func(t *testing.T) {
+			p, up := grant(t)
+			rec := httptest.NewRecorder()
+			p.serveMITMRequest(rec, ghTunnelRequest(t, http.MethodGet, target), ghscope.APIHost, 443)
+			ghRefused(t, rec)
+			if mints, seen := up.counts(); mints != 0 || len(seen) != 0 {
+				t.Fatalf("refused request spent: mints %d seen %q", mints, seen)
+			}
+		})
+	}
+}
+
 // The sandbox cannot mint a CLI grant through the raw mint relay, and the
 // proxy hands its cached token back to GitHub when it stops.
 func TestGitHubAPI_MintRelayAndShutdownRevoke(t *testing.T) {
