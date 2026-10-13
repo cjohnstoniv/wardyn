@@ -56,8 +56,10 @@ func (m *Manager) lostProof(ctx context.Context, a runnerwire.PendingAction) err
 	}
 	prove, cancel := context.WithTimeout(ctx, m.proofTimeout)
 	defer cancel()
+	// Only a negative answer is final; an engine that could not answer, or
+	// did not in time, leaves the action for the next pass.
 	err := m.proveLost(prove, local)
-	if err != nil && prove.Err() == nil {
+	if errors.Is(err, runner.ErrNotRunnerSandbox) {
 		return refusal(err)
 	}
 	return err
@@ -69,7 +71,7 @@ func (m *Manager) lostProof(ctx context.Context, a runnerwire.PendingAction) err
 func (m *Manager) proveLost(ctx context.Context, local string) error {
 	prover, ok := m.sub.(runner.RunnerSandboxProver)
 	if !ok {
-		return errors.New("substrate cannot prove a sandbox is this runner's")
+		return fmt.Errorf("substrate cannot prove a sandbox is this runner's: %w", runner.ErrNotRunnerSandbox)
 	}
 	if err := prover.ProveRunnerSandbox(ctx, local, m.runnerID.String()); err != nil {
 		slog.WarnContext(ctx, "runner: left alone a container it cannot prove it created", slog.String("ref", local), slog.String("err", err.Error()))

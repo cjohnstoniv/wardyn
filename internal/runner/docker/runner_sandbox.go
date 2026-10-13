@@ -15,14 +15,15 @@ import (
 
 var _ runner.RunnerSandboxProver = (*Driver)(nil)
 
-// ProveRunnerSandbox is runner.RunnerSandboxProver. ref must be a
+// ProveRunnerSandbox is runner.RunnerSandboxProver; a negative answer wraps
+// runner.ErrNotRunnerSandbox, and an engine error is returned as it is. ref must be a
 // deterministic agent name, and each of the run's agent and proxy containers
 // that exists must carry wardyn.managed, the same run id and runnerID. When
 // neither exists, nothing on the engine answers to the run's names.
 func (d *Driver) ProveRunnerSandbox(ctx context.Context, ref, runnerID string) error {
 	id, err := runIDFromAgentName(ref)
 	if err != nil || ref != agentContainerName(id) {
-		return fmt.Errorf("docker: %q is not a Wardyn agent container name", ref)
+		return fmt.Errorf("docker: %q is not a Wardyn agent container name: %w", ref, runner.ErrNotRunnerSandbox)
 	}
 	for _, name := range []string{ref, proxyContainerName(id)} {
 		res, err := d.cli.ContainerInspect(ctx, name, client.ContainerInspectOptions{})
@@ -37,7 +38,7 @@ func (d *Driver) ProveRunnerSandbox(ctx context.Context, ref, runnerID string) e
 			labels = res.Container.Config.Labels
 		}
 		if labels[labelManaged] != "true" || labels[labelRun] != id.String() || labels[runner.LabelRunnerID] != runnerID {
-			return fmt.Errorf("docker: container %s was not created by this runner", name)
+			return fmt.Errorf("docker: container %s: %w", name, runner.ErrNotRunnerSandbox)
 		}
 	}
 	return nil
