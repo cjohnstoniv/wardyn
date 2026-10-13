@@ -370,7 +370,13 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	// Run end closes every open private-ip streak BEFORE the sink drains, so
 	// a repeat count that never hit the eviction path is still recorded.
 	s.proxy.flushPrivateIPMemo()
-	drainCtx, cancelDrain := context.WithTimeout(context.WithoutCancel(ctx), reserve)
+	// The drain keeps whatever the caller's deadline still allows (at least the reserve): a backlog that
+	// outlasts the reserve on an idle proxy must still reach the control plane.
+	drain := reserve
+	if dl, ok := ctx.Deadline(); ok {
+		drain = max(time.Until(dl), reserve)
+	}
+	drainCtx, cancelDrain := context.WithTimeout(context.WithoutCancel(ctx), drain)
 	defer cancelDrain()
 	sinkErr := s.sink.close(drainCtx)
 	// An engine's own secrets leave with it, after its last row is masked: a
