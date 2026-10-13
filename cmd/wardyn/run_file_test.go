@@ -93,17 +93,23 @@ func TestRunFileSendsTheDocumentAsTheRequest(t *testing.T) {
 	}
 }
 
-// TestRunFileNeverSendsInlinePolicy: a document's inline_policy is an overlay onto
-// the caller's default policy. Sent as inline_policy it would replace that policy,
-// so until the request can carry policy_overlay the command refuses and sends nothing.
-func TestRunFileNeverSendsInlinePolicy(t *testing.T) {
+// TestRunFileSendsInlinePolicyAsOverlay: a document's inline_policy is an overlay onto
+// the caller's default policy, so it goes as policy_overlay. Sent as inline_policy it
+// would replace that policy.
+func TestRunFileSendsInlinePolicyAsOverlay(t *testing.T) {
 	rig := runFileRig(t)
-	_, err := rig.run(t, "run", "--file", writeTemplateFile(t, "run.yaml", runDocPolicyYAML))
-	if err == nil || !strings.Contains(err.Error(), "policy_overlay") {
-		t.Fatalf("error = %v", err)
+	if _, err := rig.run(t, "run", "--file", writeTemplateFile(t, "run.yaml", runDocPolicyYAML)); err != nil {
+		t.Fatal(err)
 	}
-	if got := rig.sent(runsPath); len(got) != 0 {
-		t.Errorf("a create was sent: %s", got)
+	var body map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(rig.sent(runsPath)[0]), &body); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(body["policy_overlay"]), "api.example.test") {
+		t.Errorf("policy_overlay = %s", body["policy_overlay"])
+	}
+	if _, ok := body["inline_policy"]; ok {
+		t.Errorf("inline_policy was sent: %s", body["inline_policy"])
 	}
 }
 
