@@ -745,6 +745,11 @@ func (p *Proxy) evaluate(ctx context.Context, host string, port int, method stri
 		}
 	case egress.VerdictAllow:
 		// fall through.
+	default:
+		// A verdict the proxy does not recognise is as unevaluatable as an
+		// error: fail closed under the same rule source.
+		log := decisionLog(req, egress.Deny, "policy:evaluator-error")
+		return egress.Deny, "", &log
 	}
 
 	// 4. IP vetting (unconditional private/loopback/link-local/metadata deny).
