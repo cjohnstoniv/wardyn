@@ -228,7 +228,7 @@ func (s *Server) handleAttachTicket(w http.ResponseWriter, r *http.Request) {
 	// The ticket's sequence is read before the late re-check, so a cut that commits between the two draws
 	// a sequence above the one recorded and ends the ticket (the order handleCreateAPIToken and
 	// handleAddSSHKey keep).
-	issue, err := s.mintIssue(r.Context(), principal, authorizedAt)
+	issue, err := s.ticketIssue(r.Context(), principal, authorizedAt)
 	if err != nil {
 		writeServerError(w, r, "mint attach ticket", err)
 		return
@@ -237,7 +237,7 @@ func (s *Server) handleAttachTicket(w http.ResponseWriter, r *http.Request) {
 	// ticket behind: the same late re-check as handleCreateAPIToken, and the same
 	// fail-closed answer when it cannot be made.
 	if s.cfg.SessionRevocations != nil {
-		revoked, rerr := oidc.IsRevoked(r.Context(), s.cfg.SessionRevocations, principal, oidcEmailFromContext(r.Context()), admittedIssue(r.Context(), principal, authorizedAt))
+		revoked, rerr := s.admittedRevoked(r.Context(), principal, authorizedAt)
 		if rerr != nil {
 			writeServerError(w, r, "mint attach ticket", rerr)
 			return
