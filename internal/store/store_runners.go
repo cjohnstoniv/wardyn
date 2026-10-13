@@ -39,7 +39,7 @@ type RunnerStore interface {
 	QueueRunnerAction(ctx context.Context, a types.RunnerPendingAction) (action types.RunnerPendingAction, queued bool, err error)
 	ListPendingRunnerActions(ctx context.Context, runnerID uuid.UUID) (page []types.RunnerPendingAction, more bool, err error)
 	RunHasPendingRunnerAction(ctx context.Context, runID uuid.UUID) (bool, error)
-	RecordRunnerActionResult(ctx context.Context, runnerID, runID, actionID uuid.UUID, outcome string, observedAt time.Time, prepare func(context.Context, types.AuditEvent) (types.AuditEvent, error)) (action types.RunnerPendingAction, first bool, err error)
+	RecordRunnerActionResult(ctx context.Context, runnerID, runID, actionID uuid.UUID, outcome, reason string, observedAt time.Time, prepare func(context.Context, types.AuditEvent) (types.AuditEvent, error)) (action types.RunnerPendingAction, first bool, err error)
 
 	GetCredentialDeliveryPolicy(ctx context.Context) (types.CredentialDeliveryPolicyDoc, error)
 	PutCredentialDeliveryPolicy(ctx context.Context, policy json.RawMessage, by string, now time.Time) (types.CredentialDeliveryPolicyDoc, error)

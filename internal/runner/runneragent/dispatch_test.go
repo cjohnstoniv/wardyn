@@ -138,6 +138,9 @@ func newTestDispatcher(cfg Config) (*Dispatcher, error) {
 	if cfg.CreateFailed == nil {
 		cfg.CreateFailed = func(context.Context, runner.SandboxSpec) error { return nil }
 	}
+	if cfg.HoldsSandbox == nil {
+		cfg.HoldsSandbox = func(string) bool { return true }
+	}
 	cfg.BeforeRefCall = func(context.Context, string, string, uuid.UUID) error { return nil }
 	cfg.AfterRefCall = func(context.Context, string, string, string, uuid.UUID) error { return nil }
 	if cfg.ExecutionResult == nil {
