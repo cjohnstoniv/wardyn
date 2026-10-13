@@ -24,11 +24,16 @@ export function attachComponent(intent: RunIntent, ref: ComponentRef): RunIntent
 
 /**
  * Removes the component the access row stands for: a stored one by id, an inline one by the row's own
- * "inline:<n>", the position the server read it at in the request's components (a name is optional).
+ * "inline:<n>", the position the server read it at in the components of the draft it answered
+ * (`answeredFor`; a name is optional). The rows of that answer stay on screen while the next one is out,
+ * so the position is resolved to that draft's entry and removed wherever it is now; an entry no longer
+ * in the draft (already removed, or changed) removes nothing.
  */
-export function detachComponent(intent: RunIntent, id: string): RunIntent {
+export function detachComponent(intent: RunIntent, id: string, answeredFor?: readonly ComponentRef[]): RunIntent {
   const inline = /^inline:(\d+)$/.exec(id);
-  const left = (intent.components ?? []).filter((c, i) => (inline ? i !== Number(inline[1]) : c.id !== id));
+  const entry = inline ? answeredFor?.[Number(inline[1])] : undefined;
+  if (inline && (!entry || !intent.components?.includes(entry))) return intent;
+  const left = (intent.components ?? []).filter((c) => (inline ? c !== entry : c.id !== id));
   return withKeys(intent, { components: left.length ? left : undefined });
 }
 

@@ -159,9 +159,11 @@ export interface AddToolsProps {
   /** The server has answered exactly this body; until it has, rows are Requested, not Ready. */
   answered: boolean;
   intent: RunIntent;
+  /** The draft's components that `access` answered; its "inline:<n>" rows point into this list. */
+  answeredFor: RunIntent["components"];
 }
 
-export function AddTools({ access, answered, intent }: AddToolsProps) {
+export function AddTools({ access, answered, intent, answeredFor }: AddToolsProps) {
   const headingId = React.useId();
   const dispatch = useNewRunDispatch();
   const announce = useAnnounce();
@@ -239,7 +241,11 @@ export function AddTools({ access, answered, intent }: AddToolsProps) {
   const removeAdded = (row: AccessRow) => {
     if (row.id.startsWith("host:")) edit((i) => removeAllowedHost(i, row.name));
     else if (row.id.startsWith("secret:")) edit((i) => removeHeaderSecret(i, row.id.slice("secret:".length)));
-    else edit((i) => detachComponent(i, row.id));
+    else {
+      // A stale or repeated press removes nothing, so it says nothing either.
+      if (detachComponent(intent, row.id, answeredFor) === intent) return;
+      edit((i) => detachComponent(i, row.id, answeredFor));
+    }
     announce(NR_TOOLS.COMPONENT_REMOVED);
   };
   const addedRows = access?.rows.filter((r) => r.from === "added") ?? [];
