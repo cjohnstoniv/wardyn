@@ -869,6 +869,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
   in two spellings is refused as listed twice.
 - The GitHub and Azure DevOps API path classifiers refuse a dot segment that carries a path parameter, such as `..;`
   or `.;x`, in any percent-encoded spelling; a `;` elsewhere in a segment is still accepted.
+- When a governance profile denies Azure Resource Manager, a run with the Azure CLI no longer keeps the Entra
+  sign-in host open: the hosts the Azure CLI added for its door are removed with the door, and hosts the run's own
+  policy listed are untouched.
 
 
 ## [0.8.9] — 2026-10-09
