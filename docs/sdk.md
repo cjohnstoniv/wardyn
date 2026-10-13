@@ -189,7 +189,7 @@ The spec always strict-decodes as a policy. Whether it passes policy validation 
 
 #### `changes`
 
-Never `null`. Each item is a `cause` (`workspace`, `source_control`, `mirror`, `model_access`, `git_broker`, `overlay`, `profile`, `org_disk`, `pool_disk`, `restart`, `limits`, `launch`), a `field` (a policy JSON name), the `added` and `removed` entries, `profile` for `profile`, `at` for `restart`, and the narrowing sentences in `detail` for `limits`.
+Never `null`. Each item is a `cause` (`workspace`, `source_control`, `component`, `mirror`, `model_access`, `git_broker`, `overlay`, `profile`, `org_disk`, `pool_disk`, `restart`, `limits`, `launch`), a `field` (a policy JSON name), the `added` and `removed` entries, `profile` for `profile`, `at` for `restart`, and the narrowing sentences in `detail` for `limits`.
 Grants read `kind:host` or `kind:repo,repo`, mounts by target, repos `repo@ref`: never a hidden value.
 
 ## Following a run's lifecycle
@@ -310,7 +310,7 @@ From a shell, `wardyn run sign-in <run-id>` prints the same answer.
 
 | Request | Result |
 |---|---|
-| Neither | The effective default end. An untouched Interactive run with no default from the pool, the profile or the deployment ends after `24h`; a Background run in that case has no end |
+| Neither | The effective default end. An untouched run whose request says `experience: interactive`, with no default from the pool, the profile or the deployment, ends after `24h`. A Background run, or a request that carries no `experience`, has no end in that case |
 | `ends_after_sec` (1 to 2147483647) | That end. Past the lowest limit it is cut to it and the `201` carries a warning naming the limit |
 | `no_end` | No end, only where the pool and the deployment leave the lifetime unlimited and the profile has `allow_no_end` with `user_changes_limits`; otherwise `403`. When the default is already No end it is `201` without either |
 | Both | `400` `run_end_conflicting_fields` |
@@ -522,6 +522,9 @@ if errors.As(err, &apiErr) && apiErr.Reason == "scope_changed" {
     // that has since changed.
 }
 ```
+
+A `400` from `PUT /model-providers` for an Azure provider may also carry `field`, the dotted path of the request
+field it is about (for example `azure.endpoint`). It is absent on every other refusal; read it from `apiErr.Body`.
 
 **Coverage is uniform (#204, #656): every non-2xx body this API writes
 carries `reason`, or is one of a small, reviewed, named exception.**
@@ -742,7 +745,7 @@ sending `error` alone — completing the sweep this issue tracks:
 
 | Reason | Meaning |
 |---|---|
-| `local_mode_not_owner` / `revive_unsupported_deployment` / `revive_unsupported_runner` / `revive_bulk_cannot_start_agent` / `revive_already_in_progress` / `revive_mint_identity_failed` / `revive_encode_config_failed` / `revive_pull_image_failed` / `revive_claim_failed` / `revive_run_changed` / `revive_proxy_kept_current` / `revive_proxy_replace_failed_lost` / `revive_agent_start_failed_lost` / `revive_recovery_unresolved` / `revive_substrate_unreadable` / `revive_config_not_stored` / `revive_config_unreadable` / `revive_config_does_not_load` / `revive_not_running` / `revive_ended_files_gone` / `revive_past_end` / `revive_ended_task_run` / `revive_reboot_agent_stopped` / `revive_ended_agent_stopped` / `revive_unknown_lost_reason` / `revive_agent_status_unreadable` / `revive_config_run_mismatch` / `revive_ceiling_denies_git_broker` / `revive_owner_authority_unreadable` / `revive_admin_restart_count_invalid` / `revive_proxy_window_store_unavailable` | `POST /runs/{id}/revive` and the admin bulk restart (`run_revive.go`): one reason per distinct revive-refusal cause. `local_mode_not_owner` is the same literal the refusal's own audit row already carried; `revive_unsupported_runner` covers three arms that all answer the identical "this runner cannot replace a proxy" fact. `revive_recovery_unresolved` (`503`) is a revive that failed after its claim and then could not write the run's lost mark: the run is not recorded as lost (a bulk restart's `lost_again` is `false`), its proxy is stopped and its broker credentials revoked, and a later sweep recovers it. The `_lost` reasons above say the run was put back to lost: the lost mark was written, or the run was left alone because another writer had already moved it, or it was torn down because it cannot be kept; only when the write itself fails is the answer `revive_recovery_unresolved`. |
+| `local_mode_not_owner` / `revive_unsupported_deployment` / `revive_unsupported_runner` / `revive_bulk_cannot_start_agent` / `revive_already_in_progress` / `revive_mint_identity_failed` / `revive_encode_config_failed` / `revive_pull_image_failed` / `revive_claim_failed` / `revive_run_changed` / `revive_proxy_kept_current` / `revive_proxy_replace_failed_lost` / `revive_agent_start_failed_lost` / `revive_recovery_unresolved` / `revive_substrate_unreadable` / `revive_config_not_stored` / `revive_config_unreadable` / `revive_config_does_not_load` / `revive_not_running` / `revive_ended_files_gone` / `revive_past_end` / `revive_ended_task_run` / `revive_reboot_agent_stopped` / `revive_ended_agent_stopped` / `revive_unknown_lost_reason` / `revive_agent_status_unreadable` / `revive_config_run_mismatch` / `revive_ceiling_denies_git_broker` / `revive_ceiling_denies_azure_cli` / `revive_owner_authority_unreadable` / `revive_admin_restart_count_invalid` / `revive_proxy_window_store_unavailable` | `POST /runs/{id}/revive` and the admin bulk restart (`run_revive.go`): one reason per distinct revive-refusal cause. `local_mode_not_owner` is the same literal the refusal's own audit row already carried; `revive_unsupported_runner` covers three arms that all answer the identical "this runner cannot replace a proxy" fact. `revive_recovery_unresolved` (`503`) is a revive that failed after its claim and then could not write the run's lost mark: the run is not recorded as lost (a bulk restart's `lost_again` is `false`), its proxy is stopped and its broker credentials revoked, and a later sweep recovers it. The `_lost` reasons above say the run was put back to lost: the lost mark was written, or the run was left alone because another writer had already moved it, or it was torn down because it cannot be kept; only when the write itself fails is the answer `revive_recovery_unresolved`. |
 | `revive_live_too_soon` | `POST /runs/{id}/revive` and the admin bulk restart (`run_revive.go`), `429`: the run is live and this `wardynd` process started replacing its proxy less than a minute ago (a revive that left the proxy untouched, `revive_proxy_kept_current`, does not count). The bound is per process, so each replica allows one a minute. A revive of a lost run is never bounded. |
 | `run_capacity_store_unavailable` | `GET /admin/runs/capacity`, `501`: the configured store cannot report fleet capacity. The Postgres store always can; only a test double or an alternative store lacks it. |
 | `profile_unreadable` / `profile_gone` / `capability_agent` / `capability_workspace` / `capability_model_provider` / `capability_policy` / `capability_workspace_provider` / `capability_component` / `capability_unknown` / `model_credential_erased` / `model_provider_disabled` / `model_provider_gone` / `component_gone` / `owner_unverifiable` | `ownerRefusal`'s own reason values (`run_owner_authority.go`): the shared re-check a revive and a run-end-extension both run over the owner's launch-door capabilities, governance profile, model provider and model credential. `model_provider_disabled` covers both an integration that supplies the run's credential and the run's own model provider being turned off; `model_provider_gone` is that provider deleted (or re-created under the same id); `component_gone` is an organisation's component the run was launched with, deleted since (409, for the owner and for an admin). The `capability_*` values name the SAME six capability kinds `capabilities.go` enumerates; `capability_unknown` is a defensive fallback outside that closed set. `owner_unverifiable` is `extendRefusal`'s own bucket for three arms that all answer "the owner's authority could not be confirmed right now". |
@@ -906,7 +909,7 @@ console depends on for its own sign-in/connect doors ([`ui/src/app/lib/api/runs.
 | Reason | Meaning |
 |---|---|
 | `model_credential` | `POST /runs`' dispatch-time model-credential gate (`runs_dispatch_llm_mechanism.go`): the run was refused specifically over a model credential — the class the console's sign-in door opens on, deliberately not narrowed further (a renewal that merely did not complete grades live and offers no button). |
-| `git_credential` | The New Run rail's per-user Azure DevOps connect gate (`scmaccess.go`, the 0.7.7 relaunch path): admitted, but this person has not connected their own git credential yet. |
+| `git_credential` | New Run's per-user Azure DevOps connect gate (`scmaccess.go`, the 0.7.7 relaunch path): admitted, but this person has not connected their own git credential yet. |
 
 ## Pending approval (governance writes)
 

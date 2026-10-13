@@ -137,6 +137,23 @@ describe("edit", () => {
     expect(await screen.findByText("account page")).toBeInTheDocument();
   });
 
+  // The form shows durations in whole minutes and an unset default as 1 hour; a rename sends the pool's
+  // durations as they were read.
+  it("a rename sends 90 s and an idle stop that never stops by default exactly as read", async () => {
+    const limits = {
+      background: { lifetime: { default_sec: 90, max_sec: 150 } },
+      interactive: { idle: { default_sec: 0, unlimited: true } },
+      barriers: ["CC1" as const],
+    };
+    getMock.mockResolvedValue({ ...MINE, limits });
+    updateMineMock.mockResolvedValue({});
+    renderAt("/account/pools/p-lap/edit", "mine");
+    expect(await screen.findByRole("heading", { name: "Edit Laptop", level: 1 })).toBeInTheDocument();
+    setField(field("Name"), "Laptop 2");
+    await userEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    await waitFor(() => expect(updateMineMock).toHaveBeenCalledWith("p-lap", { revision: 9, name: "Laptop 2", limits }));
+  });
+
   it("an organization pool saves through the organization route and goes back to the pools", async () => {
     getMock.mockResolvedValue(pool());
     membersMock.mockResolvedValue([member(remoteRunner())]);

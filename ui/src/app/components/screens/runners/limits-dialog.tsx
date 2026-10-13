@@ -53,18 +53,34 @@ function initial(t: LimitsTarget): Vals {
 const share = (v: Vals) => perRunShare({ cpu: Number(v.tc), mem: Number(v.tm), disk: Number(v.td) }, Number(v.rn));
 
 const PAIRS: { total: FieldId; per: FieldId; reported: (a: RunnerAmounts) => number; unit: (n: number) => string }[] = [
-  { total: "tc", per: "pc", reported: (a) => cpus(a.cpu_millis), unit: (n) => RES.CPUS(n) },
-  { total: "tm", per: "pm", reported: (a) => gb(a.memory_mib), unit: (n) => `${n} GB memory` },
-  { total: "td", per: "pd", reported: (a) => gb(a.disk_mib), unit: (n) => `${n} GB disk` },
+  { total: "tc", per: "pc", reported: (a) => a.cpu_millis / 1000, unit: (n) => RES.CPUS(cpus(n * 1000)) },
+  { total: "tm", per: "pm", reported: (a) => a.memory_mib / 1024, unit: (n) => `${gb(n * 1024)} GB memory` },
+  { total: "td", per: "pd", reported: (a) => a.disk_mib / 1024, unit: (n) => `${gb(n * 1024)} GB disk` },
 ];
 
-/** The first thing wrong with each field, in the mock's words. */
-export function validateLimits(v: Vals, reported?: RunnerAmounts): Errs {
+/** The amount each field will send, in the dialog's units: a field still showing what it loaded is its exact loaded value, not the rounded display. */
+function effective(v: Vals, loaded?: LoadedLimits | null): Record<FieldId, number> {
+  const was = loaded?.limits;
+  const exact: Record<FieldId, number | undefined> = {
+    rn: was?.runs_at_once,
+    tc: was && was.total.cpu_millis / 1000,
+    tm: was && was.total.memory_mib / 1024,
+    td: was && was.total.disk_mib / 1024,
+    pc: was && was.per_run.cpu_millis / 1000,
+    pm: was && was.per_run.memory_mib / 1024,
+    pd: was && was.per_run.disk_mib / 1024,
+  };
+  return Object.fromEntries(FIELDS.map((f) => [f, loaded && v[f] === loaded.vals[f] ? exact[f] : Number(v[f])])) as Record<FieldId, number>;
+}
+
+/** The first thing wrong with each field, in the mock's words; what a save would send is what is checked. */
+export function validateLimits(v: Vals, reported?: RunnerAmounts, loaded?: LoadedLimits | null): Errs {
   const errs: Errs = {};
-  if (v.rn === "" || !Number.isInteger(Number(v.rn)) || Number(v.rn) < 1) errs.rn = LIMITS_DIALOG.ERR_RUNS;
+  const n = effective(v, loaded);
+  if (v.rn === "" || !Number.isInteger(n.rn) || n.rn < 1) errs.rn = LIMITS_DIALOG.ERR_RUNS;
   for (const p of PAIRS) {
-    const total = Number(v[p.total]);
-    const per = Number(v[p.per]);
+    const total = n[p.total];
+    const per = n[p.per];
     if (!(total > 0)) errs[p.total] = LIMITS_DIALOG.ERR_ABOVE_ZERO;
     else if (reported && p.reported(reported) > 0 && total > p.reported(reported)) errs[p.total] = LIMITS_DIALOG.ERR_REPORTED(p.unit(p.reported(reported)));
     else if (p.total === "td" && !Number.isInteger(total)) errs.td = LIMITS_DIALOG.ERR_DISK_WHOLE;
@@ -80,6 +96,36 @@ const toLimits = (v: Vals): RunnerLimits => ({
   total: toAmounts({ cpu: Number(v.tc), mem: Number(v.tm), disk: Number(v.td) }),
   per_run: toAmounts({ cpu: Number(v.pc), mem: Number(v.pm), disk: Number(v.pd) }),
 });
+
+/** The limits the dialog opened on, and the values it showed for them. */
+export interface LoadedLimits {
+  vals: Vals;
+  limits: RunnerLimits;
+}
+
+/**
+ * What a save sends: the fields shown as one-decimal CPUs and GB, except that a field still showing what it
+ * loaded goes back exactly as loaded, so an unrelated edit never turns 1250 milli-CPU into 1300.
+ */
+export function limitsToSave(v: Vals, loaded?: LoadedLimits | null): RunnerLimits {
+  const out = toLimits(v);
+  if (!loaded) return out;
+  const was = loaded.limits;
+  const keep = (id: FieldId, now: number, then: number) => (v[id] === loaded.vals[id] ? then : now);
+  return {
+    runs_at_once: keep("rn", out.runs_at_once, was.runs_at_once),
+    total: {
+      cpu_millis: keep("tc", out.total.cpu_millis, was.total.cpu_millis),
+      memory_mib: keep("tm", out.total.memory_mib, was.total.memory_mib),
+      disk_mib: keep("td", out.total.disk_mib, was.total.disk_mib),
+    },
+    per_run: {
+      cpu_millis: keep("pc", out.per_run.cpu_millis, was.per_run.cpu_millis),
+      memory_mib: keep("pm", out.per_run.memory_mib, was.per_run.memory_mib),
+      disk_mib: keep("pd", out.per_run.disk_mib, was.per_run.disk_mib),
+    },
+  };
+}
 
 function Num({ id, label, vals, errs, reported, onChange }: { id: FieldId; label: React.ReactNode; vals: Vals; errs: Errs; reported?: number; onChange: (id: FieldId, v: string) => void }) {
   const err = errs[id];
@@ -130,10 +176,13 @@ export function LimitsDialog({
   const [busy, setBusy] = React.useState(false);
   // Per run follows the totals until the person types a per-run value of their own.
   const [auto, setAuto] = React.useState(false);
+  const loaded = React.useRef<LoadedLimits | null>(null);
   const open = target !== null;
   React.useEffect(() => {
     if (!target) return;
-    setVals(initial(target));
+    const first = initial(target);
+    loaded.current = target.limits ? { vals: first, limits: target.limits } : null;
+    setVals(first);
     setErrs({});
     setTop("");
     setAuto(!target.limits);
@@ -160,7 +209,7 @@ export function LimitsDialog({
   };
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const found = validateLimits(vals, rep);
+    const found = validateLimits(vals, rep, loaded.current);
     setErrs(found);
     const first = FIELDS.find((f) => found[f]);
     if (first) {
@@ -171,7 +220,7 @@ export function LimitsDialog({
     setBusy(true);
     setTop("");
     try {
-      await onSave(toLimits(vals));
+      await onSave(limitsToSave(vals, loaded.current));
       toast.success(LIMITS_DIALOG.SAVED(t.name));
       onOpenChange(false);
       onSaved();
