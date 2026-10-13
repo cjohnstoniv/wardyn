@@ -79,8 +79,8 @@ const pushCollectionReserved = `\/:*?"<>|;#${},+=[]%`
 // spelling: Unicode NFKC, then lower case, as Azure DevOps Server compares
 // collection names without regard to case. Unlike a hosted organisation it may
 // hold a space and letters outside ASCII. It refuses what Azure DevOps Server
-// refuses in one (its reserved characters, a leading "_", a trailing dot, more
-// than 64 characters), a leading or trailing space, any other white space, a
+// refuses in one (its reserved characters, a leading "_" or dot, two dots in a
+// row, a trailing dot, more than 64 characters), a leading or trailing space, any other white space, a
 // control or zero-width character, and the two letters Go and JavaScript
 // lower-case differently (U+0130 and U+03A3), so both file one collection under
 // one key.
@@ -93,6 +93,8 @@ func CanonicalPushCollection(name string) (string, error) {
 		return "", fmt.Errorf("collection is longer than %d characters", maxPushCollectionLen)
 	case strings.HasPrefix(n, "_") || strings.HasPrefix(n, " ") || strings.HasSuffix(n, ".") || strings.HasSuffix(n, " "):
 		return "", errors.New("collection starts with '_' or a space, or ends with a dot or a space")
+	case strings.HasPrefix(n, ".") || strings.Contains(n, ".."):
+		return "", errors.New("collection starts with a dot or holds two dots in a row")
 	}
 	for _, r := range n {
 		if (r != ' ' && unicode.IsSpace(r)) || unicode.IsControl(r) || unicode.Is(unicode.Cf, r) ||
