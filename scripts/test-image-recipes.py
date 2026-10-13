@@ -64,6 +64,30 @@ class AWSCLICopies(unittest.TestCase):
                 self.assertEqual(aws_cli_block(name), want)
 
 
+def azure_cli_block(name):
+    text = (ROOT / f"deploy/images/{name}/Dockerfile").read_text()
+    start = text.index("# ── Azure CLI (az)")
+    return text[start:text.index("command -v az\n", start)]
+
+
+class AzureCLICopies(unittest.TestCase):
+    # full and harnesses install az one way: a version or key pin moved in one
+    # copy and not the other fails here, and so does az in any other image.
+    def test_the_two_images_carry_one_install(self):
+        want = azure_cli_block("full")
+        self.assertEqual(azure_cli_block("harnesses"), want)
+        self.assertRegex(want, r"\nARG AZURE_CLI_VERSION=\d+\.\d+\.\d+\n")
+        self.assertIn("signed-by=/etc/apt/keyrings/microsoft.gpg", want)
+        self.assertIn('"azure-cli=${AZURE_CLI_VERSION}-1~${VERSION_CODENAME}"', want)
+        self.assertIn('[ "$fpr" = "BC528686B50D79E339D3721CEB3E94ADBE1229CF" ]', want)
+
+    def test_no_other_image_carries_az(self):
+        for dockerfile in sorted((ROOT / "deploy/images").glob("*/Dockerfile")):
+            if dockerfile.parent.name not in ("full", "harnesses"):
+                with self.subTest(image=dockerfile.parent.name):
+                    self.assertNotIn("azure-cli", dockerfile.read_text())
+
+
 def sha(path):
     with path.open("rb") as stream:
         return hashlib.file_digest(stream, "sha256").hexdigest()
