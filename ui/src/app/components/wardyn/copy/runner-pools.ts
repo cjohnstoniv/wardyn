@@ -163,6 +163,8 @@ export const POOLS = {
   RUN_TYPES_BACKGROUND: "Background only",
   RUN_TYPES_INTERACTIVE: "Interactive only",
   NARROWED: (resources: string) => `${resources} per run narrowed`,
+  /** pending owner wording: a pool that sets an amount without narrowing its runners' maximum. */
+  SET: (resources: string) => `${resources} per run set`,
   RUNS_MAX: (n: number) => `${n} runs maximum`,
   POOL_LIMITS: (parts: string) => `Pool limits: ${parts}`,
   DEFAULT_MADE: (name: string) => `${name} is now the organization default`,
@@ -178,6 +180,8 @@ export const POOL_DRAWER = {
   RESOURCES: "Resources across its runners",
   OFF_NOTE: "Switched off: nothing can start here, so its capacity isn't counted as available.",
   NARROWED_BY_POOL: (resources: string) => `${resources} per run narrowed by this pool`,
+  /** pending owner wording: a pool that sets an amount without narrowing its runners' maximum. */
+  SET_BY_POOL: (resources: string) => `${resources} per run set by this pool`,
   RUNS_MAX_IN_POOL: (n: number) => `${n} runs maximum in this pool`,
   POOL_LIMITS: (parts: string) => `Pool limits: ${parts}. Otherwise from its runners.`,
   NO_OWN_LIMITS: "This pool adds no limits of its own: it follows its runners' limits.",
@@ -310,7 +314,11 @@ export const POOL_FORM = {
   DEFAULT: "Default",
   MAX_PER_RUN: "Maximum per run",
   RUNNERS_ALLOW: (amount: string) => `Its runners allow up to ${amount} per run. Leave empty to use that.`,
-  RUNNERS_NOT_CHOSEN: "Its runners aren't chosen yet. This is checked against them when you add runners. Leave empty to follow them.",
+  /**
+   * pending owner wording: the approved text also said "This is checked against them when you add
+   * runners.", which nothing does (a pool limit wider than its runners is accepted and never takes effect).
+   */
+  RUNNERS_NOT_CHOSEN: "Its runners aren't chosen yet. Leave empty to follow them.",
   LIFETIME: "Lifetime",
   IDLE: "Idle stop",
   MAXIMUM: "Maximum",

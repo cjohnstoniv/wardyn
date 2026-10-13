@@ -10,6 +10,7 @@
 // route. The sheet's own close control is the Close (see Sheet): a second text button would be two.
 import * as React from "react";
 import { toast } from "sonner";
+import { HttpError } from "../../../../lib/api/core";
 import { runnerPools } from "../../../../lib/api/runner-pools";
 import { absoluteTime, getErrorMessage, shortDate } from "../../../../lib/format";
 import type { RunnerKind, RunnerPool, RunnerPoolMemberView } from "../../../../lib/types/runner-pools";
@@ -27,6 +28,9 @@ import { amountsText, barriersText, cpus, gb, narrowText, poolRes, runTypesText 
 import { DeletePoolDialog } from "./pool-dialogs";
 import { PoolLimitsTable } from "./pool-limits-table";
 import { PoolPolicy } from "./pool-policy";
+
+/** The server's reason for a write that named a revision someone else has since changed. */
+const STALE = "runner_pool_stale";
 
 export const DEFAULT_CHIP = "border-info bg-info text-info-foreground";
 
@@ -179,6 +183,9 @@ export function PoolDrawer({
   const org = pool.scope === "organization";
   const active = pool.state === "active";
   const res = poolRes(pool, members);
+  // A switch that lost to someone else's change is said in the sheet, in the server's words, and the pool
+  // is read again so what the sheet shows is what is there now; nothing was written.
+  const stale = (e: unknown) => e instanceof HttpError && e.status === 409 && e.reason === STALE;
   const switchOn = async () => {
     setError("");
     try {
@@ -187,8 +194,14 @@ export function PoolDrawer({
       onChanged();
     } catch (e) {
       setError(getErrorMessage(e));
+      if (stale(e)) onChanged();
     }
   };
+  const switchOff = () =>
+    runnerPools.update(pool.id, { revision: pool.revision, state: "disabled" }).catch((e: unknown) => {
+      setError(stale(e) ? getErrorMessage(e) : "");
+      throw e;
+    });
 
   const actions = mine ? (
     <div className="mt-3 flex flex-wrap gap-2">
@@ -308,7 +321,7 @@ export function PoolDrawer({
         body={[POOL_DIALOG.OFF_BODY]}
         confirmLabel={POOL_DRAWER.SWITCH_OFF}
         destructive={false}
-        onConfirm={() => runnerPools.update(pool.id, { revision: pool.revision, state: "disabled" })}
+        onConfirm={switchOff}
         onDone={() => {
           toast.success(POOL_DIALOG.OFF_DONE(pool.name));
           onChanged();

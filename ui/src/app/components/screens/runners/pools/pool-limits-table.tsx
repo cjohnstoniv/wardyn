@@ -4,10 +4,11 @@
  */
 
 // The pool details' "Per-run limits" table (mock M-POOLS v6 limitsTable): one row per run type the pool takes.
-// A resource reads "default X (max Y)" only where the pool's cap is below its runners' biggest per-run; a cap
-// that is absent or no tighter than its runners' never takes effect, so it reads "Up to <what its runners
-// allow>, from its runners". Below 560px each row stacks with its own labels, so no column hides behind a
-// sideways scroll.
+// A resource the pool sets reads "default X (max Y)"; one it leaves to its runners reads "Up to <what its
+// runners allow>, from its runners". A maximum wider than its runners never takes effect, so that cell shows
+// both: what the pool set, and what bounds the run. Below 560px each row stacks with its own labels, so no
+// column hides behind a sideways scroll.
+import type * as React from "react";
 import type { RunnerPool, RunnerPoolAmount, RunnerPoolDuration, RunnerPoolLimits, RunnerPoolMemberView } from "../../../../lib/types/runner-pools";
 import { POOL_DRAWER, RES } from "../../../wardyn/copy/runner-pools";
 import { cpus, fmtAmount, fmtDur, gb, poolRunTypes, type ResKey } from "../resources";
@@ -30,9 +31,22 @@ export function durLimit(d: RunnerPoolDuration | undefined, never: boolean): str
   return POOL_DRAWER.DUR(fmtDur(d.default_sec), fmtDur(d.max_sec ?? 0));
 }
 
-function resCell(k: Res, a: RunnerPoolAmount | undefined, biggest: number): string {
-  if (a && a.cap < biggest) return POOL_DRAWER.DEFAULT_MAX(shown(k, a.default), shown(k, a.cap));
-  return POOL_DRAWER.UP_TO_FROM_RUNNERS(shown(k, biggest));
+/**
+ * One resource of one run type. An amount the pool sets is always shown as set, default and maximum: the
+ * default applies to a run that asks for nothing whatever the runners allow. Where the runners allow
+ * less than the pool's maximum, what they allow is shown too, because that is what bounds the run.
+ */
+function resCell(k: Res, a: RunnerPoolAmount | undefined, biggest: number, runners: number): React.ReactNode {
+  const fromRunners = runners > 0 ? POOL_DRAWER.UP_TO_FROM_RUNNERS(shown(k, biggest)) : "—";
+  if (!a) return fromRunners;
+  const own = POOL_DRAWER.DEFAULT_MAX(shown(k, a.default), shown(k, a.cap));
+  if (runners === 0 || a.cap <= biggest) return own;
+  return (
+    <>
+      <span className="block">{own}</span>
+      <span className="block text-muted-foreground">{fromRunners}</span>
+    </>
+  );
 }
 
 const TD =
@@ -64,7 +78,7 @@ export function PoolLimitsTable({ pool, members }: { pool: RunnerPool; members: 
                 </td>
                 {COLS.map((c) => (
                   <td key={c.key} data-l={`${c.label}: `} className={TD}>
-                    {biggest.count ? resCell(c.key, x?.[FIELD[c.key]], biggest[FIELD[c.key]]) : "—"}
+                    {resCell(c.key, x?.[FIELD[c.key]], biggest[FIELD[c.key]], biggest.count)}
                   </td>
                 ))}
                 <td data-l={`${POOL_DRAWER.COL_LIFETIME}: `} className={TD}>
