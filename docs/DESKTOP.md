@@ -237,7 +237,7 @@ Three more the tier inherits rather than introduces:
 ### Enrolling into an org control plane
 
 - This is the first phase of hybrid (issue #103): the laptop keeps its full `wardynd` in member mode and gains exactly two things — a device credential and an upward audit forwarder.
-- It does not change where runs execute; that is the per-run placement work planned for 0.9 ([docs/design/hybrid-0.8.md](design/hybrid-0.8.md)).
+- It does not change where runs execute. Each run's runner pool decides that: see [Runner pools](operations/runner-pools.md).
 - A member-mode laptop cannot set `WARDYN_SSO_ONLY`: member mode needs the admin token as a process credential (`validateSSOOnlyPosture`, [`cmd/wardynd/boot_posture.go`](../cmd/wardynd/boot_posture.go)). It can still enrol into an SSO-only org: `handleDeviceEnrol` ([`internal/api/devices_auth.go`](../internal/api/devices_auth.go)) redeems a single-use admin-minted token, and the `wdd_` bearer reaches only `/api/v1/devices/{id}/*`, never the console. A client-mode runner registers with a single-use `wdr_` token, not a console sign-in.
 
 **Enrolling.**

@@ -39,5 +39,6 @@ export function givesUp(deadlineAt: string, now: number): string {
 export function waitingBody(reason: string, pool: { name: string; max?: number } | undefined): string | undefined {
   if (!pool) return undefined;
   if (reason === RUN_WAIT_REASON.NO_RUNNER_FREE) return RUN_WAIT.NO_RUNNER_FREE(pool.name);
+  if (reason === RUN_WAIT_REASON.RUNNERS_AT_CAPACITY) return RUN_WAIT.RUNNERS_AT_CAPACITY(pool.name);
   return pool.max === undefined ? undefined : NR_LAUNCH.WAITING_BODY(pool.name, pool.max);
 }

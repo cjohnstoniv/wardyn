@@ -78,6 +78,9 @@ type Runner struct {
 	// MaxRuns is how many sandbox-holding runs placement may put on the runner at once: the runner's
 	// "Runs at once". Its owner sets it; the stored value is the one placement holds.
 	MaxRuns int `json:"max_runs"`
+	// Limits is the runner's declared limit set (its RunsAtOnce is MaxRuns), nil while its owner has not
+	// set them all (0174): such a runner takes no run.
+	Limits *RunnerLimits `json:"-"`
 	// MachineName is the host name the runner last reported (at registration and on each connect):
 	// runner-reported, never an identity, "" until it reports one.
 	MachineName string `json:"machine_name"`
@@ -172,6 +175,8 @@ type RunnerPendingAction struct {
 const (
 	RunnerActionSuccess  = "success"
 	RunnerActionDeferred = "deferred"
+	// RunnerActionRefused closes an action the runner can never apply.
+	RunnerActionRefused = "refused"
 )
 
 // CredentialDeliveryPolicyDoc is the stored local_credential_delivery document.

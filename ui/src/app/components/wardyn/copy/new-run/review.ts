@@ -52,8 +52,8 @@ export const NR_REVIEW = {
   TIMING_INTERACTIVE: "Interactive · Starts when launched",
   TIMING_NOW: "Autonomous · Run Now",
   WHERE_VALUE: (pool: string | number) => `${pool} pool`,
-  WHERE_DETAIL: (hosting: string | number, used: string | number, max: string | number) =>
-    `${hosting} · ${used} of ${max} running`,
+  WHERE_DETAIL: (kind: string | number, used: string | number, max: string | number) =>
+    `${kind} · ${used} of ${max} running`,
   /** pending W-03: the recommended text until the owner answers. */
   WHERE_ONLINE: (n: string | number) => `${n} of your runners online`,
   PROV_ADDED: "Added by you",

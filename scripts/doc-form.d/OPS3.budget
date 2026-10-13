@@ -37,7 +37,8 @@ docs/operations/who-gets-in.md=1454 share=35
 # docs/operations/admin-only-writes.md 3359 measured after RP-1: organization and user pools, remote-hosted runners.
 # docs/operations/three-roles.md 4024 adds 12 over 4012 (G-090-cleanup slice F, docs rows that contradict the code): measured; the lead re-measures at merge.
 # docs/operations/admin-only-writes.md 3359 measured after G-090-cleanup slice F: docs rows that contradicted the code.
-docs/operations/admin-only-writes.md=3359 share=35
+# docs/operations/admin-only-writes.md 3361 adds 2 over 3359 (0.9 RP-4): PUT /remote-runners/{id} also sets a remote-hosted runner's limits.
+docs/operations/admin-only-writes.md=3361 share=35
 # docs/operations/three-roles.md 4024 measured after G-090-cleanup slice F: docs rows that contradicted the code.
 docs/operations/three-roles.md=4024 share=35
 docs/operations/provider-policy.md=1278 share=35

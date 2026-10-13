@@ -30,8 +30,8 @@ func (e *placementEnv) diskPool(name string, defMiB, capMiB int, executors ...st
 		executors = []string{"alpha", "beta"}
 	}
 	e.addExecutors(p.ID, executors...)
-	bg := types.RunnerPoolBackgroundLimits{CPUMillis: types.RunnerPoolAmount{Default: 1000, Cap: 4000},
-		MemoryMiB: types.RunnerPoolAmount{Default: 1024, Cap: 8192}, Lifetime: types.RunnerPoolDuration{DefaultSec: 3600, MaxSec: 7200}}
+	bg := types.RunnerPoolBackgroundLimits{CPUMillis: &types.RunnerPoolAmount{Default: 1000, Cap: 4000},
+		MemoryMiB: &types.RunnerPoolAmount{Default: 1024, Cap: 8192}, Lifetime: &types.RunnerPoolDuration{DefaultSec: 3600, MaxSec: 7200}}
 	if capMiB > 0 {
 		bg.DiskMiB = &types.RunnerPoolAmount{Default: defMiB, Cap: capMiB}
 	}
