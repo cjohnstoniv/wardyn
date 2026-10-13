@@ -483,7 +483,7 @@ func (s *Server) stepADOStanding(f *runFold, rec *foldRecorder) bool {
 // doors, the same reasons and sentences, so a narrowing the run could not
 // enforce shows before the click. Create meets them at dispatch.
 func (s *Server) stepPATNarrowing(f *runFold, rec *foldRecorder) bool {
-	if reason, detail := s.patNarrowingAtDoor(f.r, f.spec, f.scmSite); reason != "" {
+	if reason, detail := s.patNarrowingAtDoor(f.r, *f.req, f.spec, f.scmSite); reason != "" {
 		writeErrorReason(f.w, http.StatusUnprocessableEntity, reason, detail)
 		return false
 	}
