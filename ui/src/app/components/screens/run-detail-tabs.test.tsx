@@ -258,7 +258,7 @@ describe("RunDetailScreen — onClone refuses on an unreadable audit row (review
 
     await user.click(await screen.findByRole("button", { name: "Start a run like this one" }));
 
-    expect(await screen.findByText(`/runs/new?again=${RUN.id}`)).toBeInTheDocument();
+    expect(await screen.findByText(`/runs/new?again=${RUN.id}&step=review`)).toBeInTheDocument();
     expect(toast.warning).not.toHaveBeenCalled();
   });
 });
