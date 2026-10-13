@@ -20,7 +20,7 @@ import { MY_COMPONENTS as T } from "../../wardyn/copy/components";
 import { DeleteConfirmDialog } from "../../wardyn/delete-confirm-dialog";
 
 const CustomComponentDialog = React.lazy(() =>
-  import("../new-run/custom-component-dialog").then((m) => ({ default: m.CustomComponentDialog })),
+  import("../new-run-flow/checks/custom-component-dialog").then((m) => ({ default: m.CustomComponentDialog })),
 );
 
 export function MyComponentsCard({ secretsPath = "/secrets" }: { secretsPath?: string }) {

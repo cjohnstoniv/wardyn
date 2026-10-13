@@ -12,9 +12,6 @@ vi.mock("../../lib/api/runs", () => ({
 
 import { POLICY_TEMPLATES, PolicyPanel, minimalSpec, policyTemplates } from "./policy-panel";
 import { POLICY_TEMPLATE_COPY as C } from "./copy/policy-templates";
-import { seedAllowedDomains } from "../screens/new-run/wizard-types";
-import { buildSpec, impliedEgressHosts } from "../screens/new-run/wizard-spec";
-import { initialWizardState } from "../screens/new-run/wizard-types";
 import type { SetupModelProvider } from "../../lib/types";
 
 const prov = (kind: string, host: string, extra: Partial<SetupModelProvider> = {}): SetupModelProvider => ({
@@ -81,14 +78,6 @@ describe("provider-aware policy templates", () => {
     for (const id of ["ci", "allow-all"]) {
       expect(byId([BEDROCK], id)).toEqual(byId(undefined, id));
     }
-  });
-
-  it("a Bedrock-only install no longer seeds the wizard with api.anthropic.com", () => {
-    expect(seedAllowedDomains()).toEqual(["api.anthropic.com"]);
-    expect(initialWizardState("CC1", undefined, [BEDROCK]).allowedDomains).toEqual([BEDROCK.host]);
-    const st = { ...initialWizardState("CC1", undefined, [BEDROCK]), llmSecretName: "k" };
-    expect(impliedEgressHosts(st, [BEDROCK]).map((h) => h.host)).toEqual([BEDROCK.host]);
-    expect(buildSpec(st, [], [BEDROCK]).inline_policy.allowed_domains).not.toContain("api.anthropic.com");
   });
 
   it("the panel shows the caption only when a provider counts", () => {
