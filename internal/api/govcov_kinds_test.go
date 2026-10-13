@@ -299,6 +299,35 @@ func TestGovCovProfileBaseState(t *testing.T) {
 	}
 }
 
+// TestGovCovProfileWriteExemptComparesTheResolvedComposition: the four-eyes exemption compares the
+// resolved profile before and after, so a composed profile whose overlay adds an inspection naming a
+// detector sidecar over a base with none is held, and the same overlay without the sidecar applies.
+func TestGovCovProfileWriteExemptComparesTheResolvedComposition(t *testing.T) {
+	s, _ := govCovServer(t, &govCovStore{})
+	base := govCovStandalone(govCovBase, "base", "pypi.org", "github.com")
+	all := []types.GovernanceProfile{base, govCovComposedOn(govCovPID, "p", govCovBase, "pypi.org", "github.com")}
+	body := func(inspection string) string {
+		return `{"name":"p","base_profile_id":"` + govCovBase.String() + `","overlay":{"allowed_domains":["pypi.org","github.com"],"llm_inspection":` + inspection + `}}`
+	}
+	for _, c := range []struct {
+		name, inspection string
+		want             bool
+	}{
+		{"an added sidecar is held", `{"mode":"block","detector_sidecar_url":"https://github.com/scan"}`, false},
+		{"an added local inspection applies", `{"mode":"block","detect_secrets":true}`, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			p, res := govCovBuilt(t, s, all, govCovPID, body(c.inspection))
+			if res.Ceiling.LLMInspection == nil {
+				t.Fatal("the resolved composition carries no inspection; the fixture is wrong")
+			}
+			if got := s.profileWriteExempt(all, p, res); got != c.want {
+				t.Errorf("profileWriteExempt = %v, want %v", got, c.want)
+			}
+		})
+	}
+}
+
 func TestGovCovProfileWriteExempt(t *testing.T) {
 	s, _ := govCovServer(t, &govCovStore{})
 	cur := govCovStandalone(govCovPID, "p", "pypi.org", "github.com")

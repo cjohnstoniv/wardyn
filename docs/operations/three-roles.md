@@ -136,7 +136,7 @@ derives its role.
 - *A base that moves under an overlay.*
   - A write is strict, but a base edit, or a redeploy that narrows the deployment default, is someone else's act arriving later.
   - At resolve the meet drops what the base no longer covers: the run's `201` lists the drop in `clamp_warnings` (naming only the member's own profile), and an administrator sees it in that profile's `effective.warnings` on `GET /governance`.
-  - If nothing satisfies the base and the overlay together (the deployment default narrowed until their `allowed_methods` are disjoint, say), the launch and every live door refuse with `403 governance_overlay_unsatisfiable`, audited, until an administrator fixes it.
+  - If nothing satisfies the base and the overlay together (the deployment default narrowed until their `allowed_methods` are disjoint, or an overlay's `ui_apps` that leave none of the base's, say), the launch and every live door refuse with `403 governance_overlay_unsatisfiable`, audited, until an administrator fixes it.
   - A chain that cannot be read, or one that loops or runs deeper than three, fails the same doors with a `500` or `503`.
   - Neither case is ever read as the deployment's policy.
   - An administrator sees which profile failed on `GET /governance` (`effective.error`).

@@ -334,7 +334,7 @@ func TestMeetUIAppsMatchLeq(t *testing.T) {
 			} else if err != nil {
 				t.Fatalf("ValidateOverlay: %v", err)
 			}
-			got, _, err := ApplyOverlay(base, ov)
+			got, warns, err := ApplyOverlay(base, ov)
 			if tc.wantWiden {
 				// Nothing of the base is left, so resolution refuses instead of handing a run no opinion.
 				wantOverlayErr(t, err, ReasonOverlayUnsatisfiable, "ui_apps")
@@ -342,6 +342,9 @@ func TestMeetUIAppsMatchLeq(t *testing.T) {
 			}
 			if err != nil {
 				t.Fatalf("ApplyOverlay: %v", err)
+			}
+			if len(warns) != 0 {
+				t.Errorf("warnings = %v, want none for a matching path", warns)
 			}
 			if !Leq(got.Ceiling, base.Ceiling, got.Limits, base.Limits) {
 				t.Errorf("Leq(ApplyOverlay(base, ov), base) is false: result ui_apps = %+v", got.Ceiling.UIApps)
@@ -358,6 +361,10 @@ func TestMeetUIAppsMatchLeq(t *testing.T) {
 		wantOverlayErr(t, ValidateOverlay(base, ov), ReasonOverlayUnsatisfiable, "ui_apps")
 		_, _, err := ApplyOverlay(base, ov)
 		wantOverlayErr(t, err, ReasonOverlayUnsatisfiable, "ui_apps")
+		var oe *OverlayError
+		if want := "none of the base's UI apps (docs:8000) is in the overlay (); an empty ui_apps does not remove them, set limits.deny_ui_apps"; !errors.As(err, &oe) || oe.Detail != want {
+			t.Errorf("detail = %q, want %q", oe.Detail, want)
+		}
 	})
 	t.Run("an empty overlay over a base without apps", func(t *testing.T) {
 		got := mustApply(t, Authority{Ceiling: types.RunPolicySpec{MinConfinementClass: types.CC2}}, overlayOf(types.CeilingOverlay{UIApps: &[]types.UIApp{}}))

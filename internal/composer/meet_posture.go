@@ -8,6 +8,7 @@ import (
 	"cmp"
 	"encoding/json"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/cjohnstoniv/wardyn/internal/adoscope"
@@ -186,9 +187,18 @@ func (m *meeter) meetUIApps(base, ov []types.UIApp) []types.UIApp {
 	// An empty list is no opinion to Clamp, so a base that names apps met to none has no representable
 	// result, as a disjoint allowed_methods pair has none: limits.deny_ui_apps is what removes them.
 	if len(base) > 0 && len(out) == 0 {
-		m.fail(ReasonOverlayUnsatisfiable, "ui_apps", "no UI app is in both the base (%d) and the overlay; an empty ui_apps does not remove them, set limits.deny_ui_apps", len(base))
+		m.fail(ReasonOverlayUnsatisfiable, "ui_apps", "none of the base's UI apps (%s) is in the overlay (%s); an empty ui_apps does not remove them, set limits.deny_ui_apps", uiAppList(base), uiAppList(ov))
 	}
 	return out
+}
+
+// uiAppList spells apps as name:port for a refusal.
+func uiAppList(apps []types.UIApp) string {
+	out := make([]string, 0, len(apps))
+	for _, a := range apps {
+		out = append(out, a.Name+":"+strconv.Itoa(a.Port))
+	}
+	return trimJoin(out)
 }
 
 // meetResources composes the sandbox size per field. A zero CPU, memory or pids
