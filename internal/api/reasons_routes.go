@@ -213,6 +213,7 @@ const (
 	reasonRunInspectTerminal              = "run_inspect_terminal"                // the run has finished; its sandbox is gone
 	reasonRunInspectNoSandbox             = "run_inspect_no_sandbox"              // the run never dispatched (or recorded no sandbox ref)
 	reasonRunInspectPaused                = "run_inspect_paused"                  // the run is paused
+	reasonRunInspectAgentStopped          = "run_inspect_agent_stopped"           // the run is kept with its agent stopped; there is no running sandbox to read
 	reasonRunInspectExecStreamUnsupported = "run_inspect_exec_stream_unsupported" // the runner does not support exec streaming
 	reasonRunResourcesReadFailed          = "run_resources_read_failed"           // the sandbox resource usage script failed
 	reasonRunFilesNoExecSession           = "run_files_no_exec_session"           // the runner returned no exec session
