@@ -682,6 +682,7 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `POLICY_BARRIER` | mock | Barrier |
 | `POLICY_NETWORK` | mock | Network |
 | `POLICY_HOSTS(n)` | mock | {n} hosts allowed |
+| `POLICY_HOST_ONE` | deviation (lead 2026-10-13, the singular of POLICY_HOSTS) | 1 host allowed |
 | `POLICY_CREDENTIALS` | mock | Credentials |
 | `POLICY_NO_CREDENTIALS` | mock | No credentials requested |
 | `POLICY_HIDDEN` | mock | Selected model provider · Hidden |

@@ -117,7 +117,7 @@ function Launched({ runId, startAnother }: { runId: string; startAnother: () => 
               </div>
             </dl>
           )}
-          <Button type="button" variant="destructive" className="col-span-full" onClick={() => void kill(run.id)}>
+          <Button type="button" variant="outline" className="col-span-full border-danger/30 bg-danger-subtle text-danger hover:bg-danger-subtle hover:text-danger dark:border-danger/30 dark:bg-danger-subtle dark:hover:bg-danger-subtle" onClick={() => void kill(run.id)}>
             {NR_LAUNCH.CANCEL_RUN}
           </Button>
         </div>

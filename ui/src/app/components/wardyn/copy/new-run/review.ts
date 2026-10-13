@@ -116,6 +116,7 @@ export const NR_REVIEW = {
   POLICY_BARRIER: "Barrier",
   POLICY_NETWORK: "Network",
   POLICY_HOSTS: (n: string | number) => `${n} hosts allowed`,
+  POLICY_HOST_ONE: "1 host allowed",
   POLICY_CREDENTIALS: "Credentials",
   POLICY_NO_CREDENTIALS: "No credentials requested",
   POLICY_HIDDEN: "Selected model provider · Hidden",

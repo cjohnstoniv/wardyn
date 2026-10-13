@@ -12,6 +12,7 @@ import { SCENARIO_PREFLIGHT } from "../../../../lib/new-run-fixtures/scenarios/p
 import { initialDraft, type NewRunDraft, type RunIntent } from "../draft/run-intent";
 import { EffectivePolicyCard } from "./effective-policy-card";
 import { changedRows } from "./policy-rows";
+import type { PolicyPreviewResult } from "../../../../lib/types/policy-preview";
 
 afterEach(cleanup);
 
@@ -70,4 +71,12 @@ describe("Effective policy card", () => {
     expect(screen.getByText(NR_REVIEW.POLICY_HOLD)).toBeInTheDocument();
     expect(screen.queryByText(NR_REVIEW.POLICY_AUTOMATIC)).toBeNull();
   });
+
+  it.each([[["pypi.org"], NR_REVIEW.POLICY_HOST_ONE], [["pypi.org", "registry.npmjs.org"], NR_REVIEW.POLICY_HOSTS(2)]])(
+    "counts the allowed hosts with a singular for one (%j)", (hosts, text) => {
+      const preview = { spec: { allowed_domains: hosts }, source: { name: "Source" } } as unknown as PolicyPreviewResult;
+      render(<EffectivePolicyCard draft={draftOf(BASE)} pre={null} preview={preview} />);
+      expect(screen.getByText(text)).toBeInTheDocument();
+    },
+  );
 });

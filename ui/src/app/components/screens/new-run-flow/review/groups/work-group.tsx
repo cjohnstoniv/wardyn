@@ -11,7 +11,7 @@ import type { RunAttachment } from "../../../../../lib/types/new-run-contract";
 import { mainDriveMiB, mibToGibText } from "../../lenses/files-lens";
 import { readMainDrive, type FilesPreflight } from "../../steps/files/files-seams";
 import { summaryText } from "../../steps/files/files-summary";
-import { lifecycleOf, type Lifecycle } from "../../steps/files/main-drive-section";
+import { lifecycleOf, lifecycleText } from "../../steps/files/main-drive-section";
 import { ReviewGroup } from "../review-group";
 import { sourceOf } from "../provenance";
 import type { MainDriveFacts } from "../review-seams";
@@ -21,13 +21,6 @@ import { JumpButton } from "./jump-button";
 const ENFORCEMENT: Record<MainDriveFacts["enforcement"], string | undefined> = {
   filesystem: NR_FILES.ENFORCED, eviction: NR_FILES.ENFORCED_BY_STOP, none: NR_FILES.NOT_ENFORCED, unknown: undefined,
 };
-
-// The Files step's main-drive lifecycle sentence; with no facts yet, nothing is claimed.
-const lifecycleText = (l: Lifecycle): string | undefined =>
-  l.kind === "deleted" ? NR_FILES.LIFE_DELETED
-    : l.kind === "noEnd" ? NR_FILES.LIFE_NO_END
-      : l.kind === "kept" ? (l.max ? NR_FILES.LIFE_KEPT(l.max, l.grace) : NR_FILES.LIFE_KEPT_UNLIMITED(l.grace))
-        : undefined;
 
 const FILE_PATHS = ["workspaces", "drive", "start_folder", "no_repositories_or_drives", "resources.disk_mib"];
 

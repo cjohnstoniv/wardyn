@@ -56,4 +56,20 @@ describe("StepShell", () => {
     render(<StepShell title="Review" primary={{ label: "Launch run", onActivate: vi.fn(), arrow: false }} />);
     expect(screen.getByRole("button", { name: "Launch run" })).toHaveTextContent(/^Launch run$/);
   });
+
+  it("puts the heading aside beside the heading and the footer extras around the primary, in place of Back", () => {
+    render(
+      <StepShell
+        title="Review"
+        back={{ label: "Back", onBack: vi.fn() }}
+        primary={{ label: "Launch run", onActivate: vi.fn(), arrow: false }}
+        headingAside={<span>Toggle</span>}
+        footerExtras={{ start: <button type="button">Save</button>, end: <button type="button">Check again</button> }}
+      />,
+    );
+    expect(screen.getByText("Toggle").closest("div")?.previousElementSibling?.tagName).toBe("HEADER");
+    const footer = screen.getByRole("contentinfo");
+    expect([...footer.querySelectorAll("button")].map((b) => b.textContent)).toEqual(["Save", "Check again", "Launch run"]);
+    expect(screen.queryByRole("button", { name: "Back" })).toBeNull();
+  });
 });
