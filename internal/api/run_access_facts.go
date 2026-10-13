@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/agentpolicy"
+	"github.com/cjohnstoniv/wardyn/internal/armscope"
+	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/ghscope"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/pkg/client"
@@ -96,8 +98,10 @@ const (
 	credKindSSHKey       = "ssh_key"
 	credKindSecret       = "secret"
 	credKindAWSRole      = "aws_role"
+	credKindAzureARM     = "azure_arm"
 	signInModelProvider  = "model_provider"
 	signInAWSCLI         = "aws_cli"
+	signInAzureCLI       = "azure_cli"
 	signInAzureDevOps    = "azure_devops"
 	fixSignIn            = "sign_in"
 	fixChooseProvider    = "choose_model_provider"
@@ -572,6 +576,15 @@ func (b *accessBuilder) componentRow(fact componentFact) {
 		b.addHost(ssoPortalHost(cli.AWS.SSORegion, ""), viaInjected, row.ID)
 		b.addCredential(client.AccessCredential{ID: row.ID + ":aws_role", Kind: credKindAWSRole, Owner: credOwnerOwn,
 			Delivery: deliveryShortLived, Renewed: true, AfterEnd: afterEndExpires})
+	}
+	if cli != nil && cli.Kind == types.CLIKindAzure {
+		// The two hosts the proxy opens for the CLI: Resource Manager, where it
+		// adds the person's token, and Entra, where it answers one public
+		// document and refuses the rest. The token never enters the sandbox.
+		b.addHost(armscope.Host, viaInjected, row.ID)
+		b.addHost(proxy.AzureLoginHost, viaInjected, row.ID)
+		b.addCredential(client.AccessCredential{ID: row.ID + ":azure_arm", Kind: credKindAzureARM, Owner: credOwnerOwn,
+			Delivery: deliveryProxy, Renewed: true, AfterEnd: afterEndGone})
 	}
 	for i, sec := range fact.Secrets {
 		c := client.AccessCredential{ID: row.ID + ":secret:" + strconv.Itoa(i), Kind: credKindSecret, Owner: credOwnerOwn,

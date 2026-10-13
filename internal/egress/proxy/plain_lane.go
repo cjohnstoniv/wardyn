@@ -42,7 +42,8 @@ func defaultPortForScheme(scheme string) int {
 // servePlain is the plain lane's entry; a host covered by the run's ADO grant is refused
 // here, before evaluation or injection, since this lane skips the REST gate (refuseADOPlain).
 func (p *Proxy) servePlain(w http.ResponseWriter, r *http.Request) {
-	if p.refuseADOPlain(w, r) || p.refuseAzurePlain(w, r) || p.refusePATAPIPlain(w, r) || p.refuseGitHubAPIPlain(w, r) {
+	if p.refuseADOPlain(w, r) || p.refuseAzurePlain(w, r) || p.refusePATAPIPlain(w, r) || p.refuseGitHubAPIPlain(w, r) ||
+		p.refuseAzureARMPlain(w, r) {
 		return
 	}
 	p.handlePlain(w, r)
