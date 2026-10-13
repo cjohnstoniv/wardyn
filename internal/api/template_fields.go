@@ -11,7 +11,7 @@ import (
 )
 
 // The template field registry: every request and policy field a template can
-// meet, either carried (with its owning wizard tab, its refinement part, the
+// meet, either carried (with its refinement part, the
 // section of the Access tab it lives in, and what leaving it out means) or
 // excluded with a reason. A template document
 // is read against it, field by field, so an unclassified field cannot be
@@ -27,16 +27,6 @@ import (
 //
 // The exported fields are the JSON of ui/src/app/lib/template-fields.golden.json,
 // which the console reads and TestTemplateFieldsGolden pins.
-
-// The wizard tabs that own a field: Runner, Repositories & Drives, Tools &
-// Image, Access, and Resolved Policy, which owns none because it is read-only.
-// There is no Info tab: a run is named in the dialog at launch.
-const (
-	templateTabRunner     = "runner"
-	templateTabRepoDrives = "repositories_drives"
-	templateTabToolsImage = "tools_image"
-	templateTabAccess     = "access"
-)
 
 // What leaving a field out means, and what a present empty value means.
 const (
@@ -73,8 +63,6 @@ const (
 // TemplateFieldRule is one top-level request or policy field.
 type TemplateFieldRule struct {
 	Name string `json:"name"`
-	// Tab is the wizard tab that owns the control.
-	Tab string `json:"tab,omitempty"`
 	// Part is the refinement group the field belongs to.
 	Part client.TemplatePart `json:"part,omitempty"`
 	// Omitted is what leaving the field out means: baseline (the launch default
@@ -110,8 +98,8 @@ type TemplateFieldRule struct {
 	Why string `json:"why,omitempty"`
 }
 
-func carriedField(name, tab string, part client.TemplatePart, omitted, empty, meaning string) TemplateFieldRule {
-	return TemplateFieldRule{Name: name, Tab: tab, Part: part, Omitted: omitted, Empty: empty, Meaning: meaning, Section: templateSectionRunWide}
+func carriedField(name string, part client.TemplatePart, omitted, empty, meaning string) TemplateFieldRule {
+	return TemplateFieldRule{Name: name, Part: part, Omitted: omitted, Empty: empty, Meaning: meaning, Section: templateSectionRunWide}
 }
 
 func (r TemplateFieldRule) in(section, keyedBy string) TemplateFieldRule {
@@ -136,68 +124,68 @@ const (
 // templateRequestRules classifies every CreateRunRequest field, plus the working
 // names of the carriers the run-mode and repositories lanes have yet to add.
 var templateRequestRules = []TemplateFieldRule{
-	carriedField("agent", templateTabToolsImage, partTools, templateOmitOptional, templateEmptySame,
+	carriedField("agent", partTools, templateOmitOptional, templateEmptySame,
 		"No agent is chosen. A background agent task needs one; a command or an interactive environment does not. A task is never turned into a shell command.").
 		in(templateSectionHarness, "harness"),
-	carriedField("repo", templateTabRepoDrives, partRepos, templateOmitOptional, templateEmptySame,
+	carriedField("repo", partRepos, templateOmitOptional, templateEmptySame,
 		"No repository is attached through this older single-repository field."),
-	carriedField("task", templateTabToolsImage, partTools, templateOmitOptional, templateEmptySame,
+	carriedField("task", partTools, templateOmitOptional, templateEmptySame,
 		"No task text is carried: the person who uses the template writes it.").sensitive(),
 	excludedField("title", templateExcludeLaunch,
 		"A run is named when it is launched: the Name this run dialog opens empty in this release, so a template carries no title."),
 	excludedField("description", templateExcludeLaunch,
 		"A run is described when it is launched: the Name this run dialog opens empty in this release, so a template carries no description."),
-	carriedField("policy_id", templateTabAccess, partPolicyRef, templateOmitBaseline, templateEmptySame,
+	carriedField("policy_id", partPolicyRef, templateOmitBaseline, templateEmptySame,
 		"The organisation's default policy applies when the template is used, and that default can change. It is a whole reference and never appears beside inline_policy."),
-	carriedField("confinement_class", templateTabRunner, partRunner, templateOmitBaseline, templateEmptySame,
+	carriedField("confinement_class", partRunner, templateOmitBaseline, templateEmptySame,
 		"The barrier follows the organisation's default and floor when the template is used."),
-	carriedField("interactive", templateTabRunner, partRunner, templateOmitRequired, templateEmptyValue,
+	carriedField("interactive", partRunner, templateOmitRequired, templateEmptyValue,
 		"No run mode is assumed: the person chooses Background task or Interactive environment. false is the choice of a background task."),
-	carriedField("workspace_id", templateTabRepoDrives, partRepos, templateOmitOptional, templateEmptySame,
+	carriedField("workspace_id", partRepos, templateOmitOptional, templateEmptySame,
 		"No workspace is attached through this older single-workspace field."),
-	carriedField("inline_policy", templateTabAccess, "", templateOmitBaseline, templateEmptyValue,
+	carriedField("inline_policy", "", templateOmitBaseline, templateEmptyValue,
 		"No policy field is set by the template. Only the policy keys it names are laid onto the source policy; a key it leaves out keeps the source's value."),
 	excludedField("policy_overlay", templateExcludeOrigin,
 		"In a document the overlay is written under inline_policy; policy_overlay is how a client sends it."),
-	carriedField("devcontainer_repo", templateTabToolsImage, partTools, templateOmitOptional, templateEmptySame,
+	carriedField("devcontainer_repo", partTools, templateOmitOptional, templateEmptySame,
 		"No image is built from a repository."),
-	carriedField("devcontainer_ref", templateTabToolsImage, partTools, templateOmitOptional, templateEmptySame,
+	carriedField("devcontainer_ref", partTools, templateOmitOptional, templateEmptySame,
 		"The build uses the repository's default branch."),
-	carriedField("image", templateTabToolsImage, partTools, templateOmitOptional, templateEmptySame,
+	carriedField("image", partTools, templateOmitOptional, templateEmptySame,
 		"No image of the person's own is named: the run uses the agent's or the organisation's image."),
-	carriedField("task_mode", templateTabToolsImage, partTools, templateOmitRequired, templateEmptySame,
+	carriedField("task_mode", partTools, templateOmitRequired, templateEmptySame,
 		"Under a background task the person chooses an agent task or a command. A harness is inferred only when an agent is present, and a task is never turned into a command."),
-	carriedField("interactive_start", templateTabToolsImage, partTools, templateOmitOptional, templateEmptySame,
+	carriedField("interactive_start", partTools, templateOmitOptional, templateEmptySame,
 		"Nothing starts automatically unless chosen. A removed startup tool is never replaced by another."),
-	carriedField("seed_auto_tools", templateTabAccess, partRules, templateOmitBaseline, templateEmptyValue,
+	carriedField("seed_auto_tools", partRules, templateOmitBaseline, templateEmptyValue,
 		"The starting prompt asks before using tools. False is a choice to keep asking.").
 		in(templateSectionHarness, "harness"),
-	carriedField("tool_approvals", templateTabAccess, partRules, templateOmitBaseline, templateEmptySame,
+	carriedField("tool_approvals", partRules, templateOmitBaseline, templateEmptySame,
 		"Tool use follows the default approval behaviour.").
 		in(templateSectionHarness, "harness"),
-	carriedField("workspaces", templateTabRepoDrives, partRepos, templateOmitOptional, templateEmptyValue,
+	carriedField("workspaces", partRepos, templateOmitOptional, templateEmptyValue,
 		"No workspace is attached. An empty list says no workspace; it is not the tab's explicit choice of no repositories or drives."),
 	excludedField("integration_id", templateExcludeRetired,
 		"The server refuses integration_id at launch. Choose a model provider instead."),
-	carriedField("model_provider", templateTabAccess, partCreds, templateOmitBaseline, templateEmptySame,
+	carriedField("model_provider", partCreds, templateOmitBaseline, templateEmptySame,
 		"The run uses the model provider the person's defaults give.").
 		in(templateSectionHarness, "harness"),
-	carriedField("drive", templateTabRepoDrives, partDrives, templateOmitOptional, templateEmptyValue,
+	carriedField("drive", partDrives, templateOmitOptional, templateEmptyValue,
 		"No drive is attached or declined. enabled false is a choice to leave the drive out."),
-	carriedField("drives", templateTabRepoDrives, partDrives, templateOmitOptional, templateEmptyValue,
+	carriedField("drives", partDrives, templateOmitOptional, templateEmptyValue,
 		"No drive from the drive list is attached. Each drive is checked against the launching person's own grants."),
-	carriedField("components", templateTabAccess, partComps, templateOmitOptional, templateEmptyValue,
+	carriedField("components", partComps, templateOmitOptional, templateEmptyValue,
 		"No component is attached.").
 		in(templateSectionComp, "component"),
-	carriedField("allowed_image", templateTabToolsImage, partTools, templateOmitOptional, templateEmptySame,
+	carriedField("allowed_image", partTools, templateOmitOptional, templateEmptySame,
 		"No image is chosen from the organisation's allowed list."),
-	carriedField("placement", templateTabRunner, partRunner, templateOmitBaseline, templateEmptySame,
+	carriedField("placement", partRunner, templateOmitBaseline, templateEmptySame,
 		"The run is placed by the pool defaults when the template is used."),
-	carriedField("runner_id", templateTabRunner, partRunner, templateOmitOptional, templateEmptySame,
+	carriedField("runner_id", partRunner, templateOmitOptional, templateEmptySame,
 		"No runner is pinned: any of the person's eligible runners may take the run.").personOnly(),
-	carriedField("resources", templateTabRunner, partResources, templateOmitBaseline, templateEmptySame,
+	carriedField("resources", partResources, templateOmitBaseline, templateEmptySame,
 		"CPU and memory follow the placement's defaults. A zero field asks for the default."),
-	carriedField("overrides", templateTabAccess, partComps, templateOmitOptional, templateEmptyValue,
+	carriedField("overrides", partComps, templateOmitOptional, templateEmptyValue,
 		"No per-run edits are applied to components.").
 		in(templateSectionComp, "component"),
 	excludedField("preset", templateExcludeOrigin,
@@ -206,82 +194,82 @@ var templateRequestRules = []TemplateFieldRule{
 		"The contract marker belongs to the request a client sends, not to the setup a template holds."),
 	excludedField("preset_version", templateExcludeOrigin,
 		"A preset's version only means something beside its preset."),
-	carriedField("runner_pool_id", templateTabRunner, partRunner, templateOmitBaseline, templateEmptySame,
+	carriedField("runner_pool_id", partRunner, templateOmitBaseline, templateEmptySame,
 		"The pool resolves from the person's own default, then the organisation's, when the template is used. A default that is unavailable or refused never falls through to another pool: the person chooses. A named pool narrows where the run may go and grants nothing, and the launcher's pool-use policy is checked at use."),
-	carriedField("ends_after_sec", templateTabRunner, partRunner, templateOmitBaseline, templateEmptySame,
+	carriedField("ends_after_sec", partRunner, templateOmitBaseline, templateEmptySame,
 		"The run takes the default end when the template is used, and that default can change. An end is a length of time from launch, checked again then, never a permission."),
 	excludedField("max_wait_sec", templateExcludeLaunch,
 		"How long a run may wait for a slot in a full pool is chosen at each launch; the default wait suits a template's runs."),
-	carriedField("no_end", templateTabRunner, partRunner, templateOmitBaseline, templateEmptySame,
+	carriedField("no_end", partRunner, templateOmitBaseline, templateEmptySame,
 		"The run takes the default end when the template is used. Asking for no end is checked again at launch against the pool, the deployment and the person's own limits, and is never a permission."),
 	// The run-mode carriers (run_mode.go): what a person is starting. A new client
 	// sends them in place of interactive, agent, task, task_mode and
 	// interactive_start, which stay only as the older-client mapping. What the run
 	// cannot honour yet (more than one tool, per-tool rules, a folder inside an
 	// attachment) is refused by runModeUnavailable at the run and in a template.
-	carriedField("experience", templateTabRunner, partRunner, templateOmitRequired, templateEmptySame,
+	carriedField("experience", partRunner, templateOmitRequired, templateEmptySame,
 		"No mode is assumed: Background task or Interactive environment is chosen, and never inferred."),
-	carriedField("shape", templateTabRunner, partRunner, templateOmitOptional, templateEmptySame,
+	carriedField("shape", partRunner, templateOmitOptional, templateEmptySame,
 		"No shape is recorded. The experience, workload and tools already say what the run is; a shape only names the choice it was set up from."),
-	carriedField("workload", templateTabToolsImage, partTools, templateOmitRequired, templateEmptySame,
+	carriedField("workload", partTools, templateOmitRequired, templateEmptySame,
 		"A background task needs an agent task or a command, and none is chosen. An interactive environment has no workload.").sensitive(),
-	carriedField("tools", templateTabToolsImage, partTools, templateOmitOptional, templateEmptyValue,
+	carriedField("tools", partTools, templateOmitOptional, templateEmptyValue,
 		"No tool is included, which is valid: the sandbox starts from the agent base image. An interactive environment or a command may include several harnesses, and at most one starts. Each harness has its own model provider, tool rules and default effect, and nothing is shared between tools.").
 		in(templateSectionHarness, "harness"),
-	carriedField("startup", templateTabToolsImage, partTools, templateOmitOptional, templateEmptySame,
+	carriedField("startup", partTools, templateOmitOptional, templateEmptySame,
 		"Nothing starts automatically unless chosen: one included harness, which may open with a starting prompt, one command, or none. A removed startup tool is never replaced by another.").sensitive(),
-	carriedField("start_folder", templateTabRepoDrives, partRepos, templateOmitBaseline, templateEmptySame,
+	carriedField("start_folder", partRepos, templateOmitBaseline, templateEmptySame,
 		"The first attached repository, or the sandbox's default working directory when none is attached. A run has exactly one starting folder."),
-	carriedField("no_repositories_or_drives", templateTabRepoDrives, partRepos, templateOmitRequired, templateEmptySame,
+	carriedField("no_repositories_or_drives", partRepos, templateOmitRequired, templateEmptySame,
 		"The tab stays incomplete until something is attached or the person explicitly chooses no repositories or drives. Choosing none warns that nothing in the sandbox is kept unless it is pushed or copied out."),
 }
 
 // templatePolicyRules classifies every RunPolicySpec field, spoken of as
 // inline_policy.<name> in a template.
 var templatePolicyRules = []TemplateFieldRule{
-	carriedField("allowed_domains", templateTabAccess, partEgress, templateOmitBaseline, templateEmptyValue,
+	carriedField("allowed_domains", partEgress, templateOmitBaseline, templateEmptyValue,
 		"The organisation's default allowlist applies. An empty list is a choice: nothing is reachable unless a component adds it."),
-	carriedField("denied_domains", templateTabAccess, partEgress, templateOmitBaseline, templateEmptyValue,
+	carriedField("denied_domains", partEgress, templateOmitBaseline, templateEmptyValue,
 		"Managed denials still apply. A template that drops its own denial can widen access."),
-	carriedField("allow_all_egress", templateTabAccess, partEgress, templateOmitBaseline, templateEmptyValue,
+	carriedField("allow_all_egress", partEgress, templateOmitBaseline, templateEmptyValue,
 		"Egress follows the baseline. False is a choice of default-deny."),
-	carriedField("first_use_approval", templateTabAccess, partEgress, templateOmitBaseline, templateEmptySame,
+	carriedField("first_use_approval", partEgress, templateOmitBaseline, templateEmptySame,
 		"Unknown destinations are handled as the baseline says."),
-	carriedField("first_use_hold_seconds", templateTabAccess, partEgress, templateOmitBaseline, templateEmptySame,
+	carriedField("first_use_hold_seconds", partEgress, templateOmitBaseline, templateEmptySame,
 		"A held connection waits the built-in time. Zero is the same."),
-	carriedField("max_holds", templateTabAccess, partEgress, templateOmitBaseline, templateEmptySame,
+	carriedField("max_holds", partEgress, templateOmitBaseline, templateEmptySame,
 		"The built-in cap on concurrent holds applies. Zero is the same."),
-	carriedField("allowed_methods", templateTabAccess, partEgress, templateOmitBaseline, templateEmptyAll,
+	carriedField("allowed_methods", partEgress, templateOmitBaseline, templateEmptyAll,
 		"Methods follow the baseline. An empty list allows every method."),
-	carriedField("min_confinement_class", templateTabRunner, partRunner, templateOmitBaseline, templateEmptySame,
+	carriedField("min_confinement_class", partRunner, templateOmitBaseline, templateEmptySame,
 		"The floor follows the organisation's. A template cannot lower a managed floor."),
-	carriedField("eligible_grants", templateTabAccess, partCreds, templateOmitOptional, templateEmptyValue,
+	carriedField("eligible_grants", partCreds, templateOmitOptional, templateEmptyValue,
 		"No credential eligibility comes from the template: the person's own ceiling decides."),
-	carriedField("auto_stop_after_sec", templateTabRunner, partResources, templateOmitBaseline, templateEmptyNever,
+	carriedField("auto_stop_after_sec", partResources, templateOmitBaseline, templateEmptyNever,
 		"Idle stop follows the baseline. Zero or a negative number is a choice to never stop for idleness."),
-	carriedField("workspace_mounts", templateTabRepoDrives, partRepos, templateOmitOptional, templateEmptyValue,
+	carriedField("workspace_mounts", partRepos, templateOmitOptional, templateEmptyValue,
 		"No host path is mounted."),
-	carriedField("workspace_repos", templateTabRepoDrives, partRepos, templateOmitOptional, templateEmptyValue,
+	carriedField("workspace_repos", partRepos, templateOmitOptional, templateEmptyValue,
 		"No extra repository is cloned."),
-	carriedField("llm_inspection", templateTabAccess, partRules, templateOmitBaseline, templateEmptyValue,
+	carriedField("llm_inspection", partRules, templateOmitBaseline, templateEmptyValue,
 		"Content inspection follows the organisation's policy, off unless it is turned on."),
-	carriedField("ui_apps", templateTabToolsImage, partTools, templateOmitOptional, templateEmptyValue,
+	carriedField("ui_apps", partTools, templateOmitOptional, templateEmptyValue,
 		"No application is declared for the browser."),
-	carriedField("resources", templateTabRunner, partResources, templateOmitBaseline, templateEmptySame,
+	carriedField("resources", partResources, templateOmitBaseline, templateEmptySame,
 		"Limits follow the platform defaults. A zero field means the default."),
-	carriedField("tool_rules", templateTabAccess, partRules, templateOmitOptional, templateEmptySame,
+	carriedField("tool_rules", partRules, templateOmitOptional, templateEmptySame,
 		"No tool rules are added.").
 		in(templateSectionHarness, "harness"),
-	carriedField("git_push_any_branch", templateTabAccess, partRules, templateOmitBaseline, templateEmptyValue,
+	carriedField("git_push_any_branch", partRules, templateOmitBaseline, templateEmptyValue,
 		"Pushes stay inside the run's own branch namespace. False is a choice to keep that.").
 		in(templateSectionSCMEntry, "provider+org"),
-	carriedField("push_rules", templateTabAccess, partRules, templateOmitOptional, templateEmptySame,
+	carriedField("push_rules", partRules, templateOmitOptional, templateEmptySame,
 		"Push rules exist only inside an SCM entry, one set per provider and organisation (overrides.push_rules).").
 		in(templateSectionSCMEntry, "provider+org"),
-	carriedField("azure_devops_capabilities", templateTabAccess, partCreds, templateOmitBaseline, templateEmptySame,
+	carriedField("azure_devops_capabilities", partCreds, templateOmitBaseline, templateEmptySame,
 		"The provider's default profile applies.").
 		in(templateSectionSCMEntry, "provider+org"),
-	carriedField("github_capabilities", templateTabAccess, partCreds, templateOmitBaseline, templateEmptySame,
+	carriedField("github_capabilities", partCreds, templateOmitBaseline, templateEmptySame,
 		"The provider's default profile applies.").
 		in(templateSectionSCMEntry, "provider+org"),
 }

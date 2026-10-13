@@ -45,13 +45,11 @@ describe("template field registry", () => {
     expect(TEMPLATE_POLICY_FIELDS).toHaveLength(20);
   });
 
-  it("every carried field names its owner, part and omission meaning; every excluded one its reason", () => {
+  it("every carried field names its part and omission meaning; every excluded one its reason", () => {
     for (const r of [...TEMPLATE_REQUEST_FIELDS, ...TEMPLATE_POLICY_FIELDS]) {
       if (r.excluded) {
         expect(r.why, r.name).toBeTruthy();
-        expect(r.tab, r.name).toBeUndefined();
       } else {
-        expect(r.tab, r.name).toBeTruthy();
         expect(r.omitted, r.name).toBeTruthy();
         expect(r.empty, r.name).toBeTruthy();
         expect(r.meaning, r.name).toBeTruthy();
@@ -61,14 +59,12 @@ describe("template field registry", () => {
   });
 
   it("uses the closed values Go declares", () => {
-    const tabs = goConsts(fields, ["templateTabRunner", "templateTabRepoDrives", "templateTabToolsImage", "templateTabAccess"]);
     const omissions = goConsts(fields, ["templateOmitBaseline", "templateOmitRequired", "templateOmitOptional"]);
     const empties = goConsts(fields, ["templateEmptySame", "templateEmptyValue", "templateEmptyAll", "templateEmptyNever"]);
     const exclusions = goConsts(fields, ["templateExcludeSecret", "templateExcludeOrigin", "templateExcludeRetired", "templateExcludeLaunch"]);
     const sections = goConsts(fields, ["templateSectionRunWide", "templateSectionSCMEntry", "templateSectionHarness", "templateSectionComp"]);
     const parts = new Set([...readFileSync(join(root, "pkg/client/templates.go"), "utf8").matchAll(/\bTemplatePart\w+\s+TemplatePart = "([a-z_]+)"/g)].map((m) => m[1]));
     for (const r of [...TEMPLATE_REQUEST_FIELDS, ...TEMPLATE_POLICY_FIELDS]) {
-      if (r.tab) expect(tabs, r.name).toContain(r.tab);
       if (r.omitted) expect(omissions, r.name).toContain(r.omitted);
       if (r.empty) expect(empties, r.name).toContain(r.empty);
       if (r.excluded) expect(exclusions, r.name).toContain(r.excluded);
@@ -112,13 +108,12 @@ describe("template field registry", () => {
     for (const name of ["included_tools", "starting_folder"]) expect(templateFieldRule(name), name).toBeUndefined();
     expect(templateFieldRule("pool_id")).toBeUndefined();
     for (const r of [...TEMPLATE_REQUEST_FIELDS, ...TEMPLATE_POLICY_FIELDS]) {
-      expect(r.tab as string, r.name).not.toBe("info");
       expect(r.part as string, r.name).not.toBe("info");
     }
   });
 
-  it("carries shape as an optional runner-tab field, with the three shapes Go declares", () => {
-    expect(templateFieldRule("shape")).toMatchObject({ tab: "runner", part: "runner", omitted: "unset_optional" });
+  it("carries shape as an optional field, with the three shapes Go declares", () => {
+    expect(templateFieldRule("shape")).toMatchObject({ part: "runner", omitted: "unset_optional" });
     expect(templateFieldRule("shape")?.pending).toBeFalsy();
     expect(templateCarriedFields()).toContain("shape");
     const goShapes = new Set([...readFileSync(join(root, "pkg/client/runs_mode.go"), "utf8").matchAll(/\bRunShape\w+\s+RunShape = "([a-z_]+)"/g)].map((m) => m[1]));
