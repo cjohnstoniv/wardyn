@@ -438,7 +438,8 @@ func (s *Server) stepToolPolicy(f *runFold, rec *foldRecorder) bool {
 	before := f.spec
 	s.applyToolPosture(f.req, &f.spec)
 	recordSpecAdds(rec, before, f.spec, provSource{Kind: provKindPosture})
-	if attendedDefaultRefusal(*f.req, f.autonomy.Level).write(s, f.w, f.r) || attendedToolNamesRefusal(*f.req, f.spec).write(s, f.w, f.r) {
+	if attendedDefaultRefusal(*f.req, f.autonomy.Level).write(s, f.w, f.r) || attendedToolNamesRefusal(*f.req, f.spec).write(s, f.w, f.r) ||
+		inheritedMCPHoldRefusal(*f.req, f.spec).write(s, f.w, f.r) {
 		return false
 	}
 	return !s.toolRulesWithinPolicyRefusal(*f.req, f.spec).write(s, f.w, f.r)

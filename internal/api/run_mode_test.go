@@ -150,6 +150,24 @@ func TestRunModeRefusals(t *testing.T) {
 	}
 }
 
+// A background Codex CLI run under a policy that holds an MCP tool is refused at
+// every door, as the person's own hold is: nothing would ask before the call.
+func TestCodexRefusedUnderAPolicyThatHoldsAnMCPTool(t *testing.T) {
+	for _, rule := range []types.ToolRule{{Tool: "mcp__github__create_issue", Effect: types.ToolHold}, {Tool: "*", Effect: types.ToolHold}} {
+		for _, door := range contractDoors {
+			t.Run(rule.Tool+"/"+door.name, func(t *testing.T) {
+				h := newHarness(t)
+				h.srv.cfg.AgentImages = composeAgentImages
+				h.srv.cfg.DefaultPolicy.ToolRules = []types.ToolRule{rule}
+				w := do(t, h.srv, http.MethodPost, door.path, adminToken, modeBody(`"experience":"background","workload":{"kind":"agent_task","agent":"codex-cli","task":"t"},"tools":[`+codexTool+`],`+noRepos))
+				if w.Code != http.StatusUnprocessableEntity || errorReason(w) != reasonRequestFieldUnavailable || !strings.Contains(w.Body.String(), accessSentences["harness_no_hold"]) {
+					t.Fatalf("got %d %s, want 422 %s", w.Code, w.Body.String(), reasonRequestFieldUnavailable)
+				}
+			})
+		}
+	}
+}
+
 // TestRunMode_TwoHarnessesStartFromTheSetImage (T0, inverted at DS1-S4): two
 // harnesses are honoured at every door, and create launches them from the
 // image declared for the set, with both recorded and the started one marked.
