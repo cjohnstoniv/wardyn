@@ -48,10 +48,10 @@ const MODE_DELIVERY: Record<ComponentDeliveryMode, string> = {
   header: NR_TOOLS.DELIVERY_PROXY, env: NR_TOOLS.DELIVERY_ENV, file: NR_TOOLS.DELIVERY_FILE,
 };
 // How a CLI row's own credential reaches the run, as the server's access facts
-// give it (internal/api/run_access_facts.go): the GitHub App token by the proxy,
-// AWS role credentials in the sandbox. Azure's is not built yet, so it shows none.
+// give it (internal/api/run_access_facts.go): the GitHub App token and the
+// person's Azure token by the proxy, AWS role credentials in the sandbox.
 const CLI_DELIVERY: Partial<Record<CatalogueCLIKind, string>> = {
-  github: NR_TOOLS.DELIVERY_PROXY, aws: NR_TOOLS.DELIVERY_SHORT_LIVED,
+  azure: NR_TOOLS.DELIVERY_PROXY, github: NR_TOOLS.DELIVERY_PROXY, aws: NR_TOOLS.DELIVERY_SHORT_LIVED,
 };
 
 /** The server's sentence for a closed reason code; a code this console does not know says nothing. */

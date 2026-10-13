@@ -262,20 +262,39 @@ install_artifact_config() {
 # is. No-op when the var is unset (every non-SSO run).
 materialize_aws_sso_config() {
     [[ -n "${WARDYN_AWS_SSO_CONFIG_B64:-}" ]] || return 0
-    local relpath b64 dst
+    materialize_home_records aws-sso "$WARDYN_AWS_SSO_CONFIG_B64"
+}
+
+# materialize_home_records <label> <records>: write each "<home-relative-path>\t<base64>"
+# record under $HOME, 0600. Shared by the two lanes whose control plane generates
+# a CLI's home directory: the AWS SSO session above and the Azure CLI profile below.
+materialize_home_records() {
+    local label="$1" relpath b64 dst
     while IFS=$'\t' read -r relpath b64; do
         [[ -n "$relpath" ]] || continue
         case "$relpath" in
-            /*|*..*) echo "agent-run: skipping unsafe aws-sso-config path: $relpath" >&2; continue ;;
+            /*|*..*) echo "agent-run: skipping unsafe ${label}-config path: $relpath" >&2; continue ;;
         esac
         dst="${HOME}/${relpath}"
         mkdir -p "$(dirname "$dst")"
         if printf '%s' "$b64" | base64 -d > "$dst" 2>/dev/null; then
             chmod 0600 "$dst"
         else
-            echo "agent-run: WARNING failed to write aws-sso config ${relpath}" >&2
+            echo "agent-run: WARNING failed to write ${label} config ${relpath}" >&2
         fi
-    done <<< "$WARDYN_AWS_SSO_CONFIG_B64"
+    done <<< "$2"
+}
+
+# ── Azure CLI profile (an Azure CLI component) ───────────────────────────────
+# Materialize the ~/.azure the control plane generated for a run that attached
+# an Azure CLI component: azureProfile.json listing the component's
+# subscriptions, and a token cache whose one access token is an inert
+# placeholder. No Azure credential is in either file: wardyn-proxy adds the
+# real token to each request it lets through to management.azure.com. No-op
+# when the var is unset (every other run), and harmless on an image without az.
+materialize_azure_cli_config() {
+    [[ -n "${WARDYN_AZURE_CLI_CONFIG_B64:-}" ]] || return 0
+    materialize_home_records azure-cli "$WARDYN_AZURE_CLI_CONFIG_B64"
 }
 
 # ── git credential helper caller-auth secret ─────────────────────────────────

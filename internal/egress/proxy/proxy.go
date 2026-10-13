@@ -125,6 +125,8 @@ type Proxy struct {
 	patAPI map[string]PATGrant
 	// ghAPI is the run's GitHub CLI door (github_api.go). Nil == no door.
 	ghAPI *GitHubAPIGrant
+	// arm is the run's Azure CLI door (azure_arm_door.go). Nil == no door.
+	arm *azureARMDoor
 	// gitTokens caches minted installation tokens per grant so a single clone
 	// (info/refs + git-upload-pack) does not re-mint — mandatory for single-use
 	// approval-gated grants. Guarded by gitTokMu; each entry single-flights its
@@ -299,6 +301,8 @@ type Options struct {
 	AzureGates []AzureGateConfig
 	// GitHubAPI backs the GitHub CLI door (github_api.go). Nil == off.
 	GitHubAPI *GitHubAPIGrant
+	// AzureARM backs the Azure CLI door (azure_arm_door.go). Nil == off.
+	AzureARM *AzureARMGrant
 	// ControlPlaneURL and RunToken back the local brokered routes. The run
 	// token is injected only toward the control plane and never reaches the
 	// sandbox or any LLM upstream.
@@ -453,6 +457,7 @@ func newProxy(opts Options) *Proxy {
 		azure:                newAzureGates(opts.AzureGates),
 		patAPI:               patAPI,
 		ghAPI:                newGitHubAPIDoor(opts.GitHubAPI, mitmHosts, mitmPorts),
+		arm:                  newAzureARMDoor(opts.AzureARM, mitmHosts, mitmPorts),
 		gitTokens:            make(map[uuid.UUID]*gitTokEntry),
 		controlPlaneURL:      controlPlaneEndpoint(opts.ControlPlaneURL, ""),
 		runToken:             opts.RunToken,
@@ -886,7 +891,7 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 	}
 	// Never a blind tunnel to an Azure DevOps grant host (refuseADOTunnel).
 	if p.refuseADOTunnel(w, r, host, port) || p.refuseAzureTunnel(w, r, host, port) || p.refusePATAPITunnel(w, r, host, port) ||
-		p.refuseGitHubAPITunnel(w, r, host, port) {
+		p.refuseGitHubAPITunnel(w, r, host, port) || p.refuseAzureARMTunnel(w, r, host, port) {
 		return
 	}
 
