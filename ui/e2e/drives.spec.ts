@@ -8,6 +8,9 @@ import {
   test,
   expect,
   ADMIN_TOKEN,
+  MEMBER_PRINCIPAL,
+  asRealMember,
+  ignoreMissingRunner,
   expandCard,
   gotoConsole,
   mockMemberRole,
@@ -224,7 +227,7 @@ async function mockDriveCatalogue(page: Page, catalogue: object): Promise<void> 
 // THROUGH (route.fallback, so a preflight answered elsewhere still is), and the
 // real server still answers the create — the launch refusal below is the
 // server's, not a stub's.
-type LaunchBody = { drive?: object; drives?: { drive_id: string; read_only?: boolean }[] };
+type LaunchBody = { drive?: object; drives?: { drive_id: string; read_only?: boolean }[]; start_folder?: object; workspaces?: object[] };
 
 async function watchLaunch(page: Page): Promise<{ body: LaunchBody | null }> {
   const seen: { body: LaunchBody | null } = { body: null };
@@ -1468,5 +1471,77 @@ test.describe("run-detail — the SSH/CLI/UI-apps card is owner-or-admin, and no
     await expect(page.getByRole("heading", { name: "e2e fixture 2", level: 1 })).toBeVisible();
 
     await expect(page.getByText("Attach from your terminal")).toBeVisible();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The whole flow against the real server: a person with a REAL allocation (a
+// person token, which the resolver can match, unlike the admin bearer above)
+// launches an Environment run with their drive and a workspace's folder
+// attached. Only the hermetic backend's missing runner is taken out of the
+// check; the catalogue, the workspace list, the check and the create are the
+// server's own. Last in the file: the backend is reseeded per spec, so the
+// drive, its grant and the workspace are left for that reset.
+// ---------------------------------------------------------------------------
+
+test.describe("drives — a whole launch with a real drive and a folder", () => {
+  test("an Environment run starts in the person's own drive, takes a folder too, and the server creates it", async ({ page }) => {
+    await skipUnlessMountable(page);
+    const suffix = randomUUID().slice(0, 8);
+    const driveName = `e2e-flow-drive-${suffix}`;
+    const folder = `e2e-flow-folder-${suffix}`;
+    const drive = await page.request.post("/api/v1/drives", {
+      headers: auth,
+      data: { name: driveName, backend: "docker_volume", home_template: "hash", reclaim: "retain" },
+    });
+    expect(drive.status(), await drive.text()).toBe(201);
+    const driveId = (await drive.json()).id as string;
+    const grant = await page.request.post("/api/v1/drives/grants", {
+      headers: auth,
+      data: { subject_type: "user", subject: MEMBER_PRINCIPAL, drive_id: driveId, enabled: true },
+    });
+    expect([200, 201]).toContain(grant.status());
+    const workspace = await page.request.post("/api/v1/workspaces", {
+      headers: auth,
+      data: { name: folder, sources: [{ type: "local_dir", path: `/tmp/${folder}` }] },
+    });
+    expect(workspace.status(), await workspace.text()).toBe(201);
+    const workspaceId = (await workspace.json()).id as string;
+
+    await ignoreMissingRunner(page);
+    const seen = await watchLaunch(page);
+    await asRealMember(page);
+    await gotoConsole(page);
+    await navToRoute(page, "/runs/new");
+    await expect(newRunHeading(page, NR_START.TITLE)).toBeVisible();
+    await walkGuidedToFiles(page, { shape: "environment" });
+
+    // An Environment opens with the person's own drive attached and starting there (A18).
+    await expect(page.getByTestId("nr-attach-card").filter({ hasText: driveName })).toContainText(NR_FILES.STARTS_HERE);
+    await page.getByRole("button", { name: NR_FILES.ADD_ARIA }).click();
+    const dialog = page.getByRole("dialog");
+    await dialog.getByRole("button", { name: new RegExp(`^${NR_FILES.FOLDER_TITLE}`) }).click();
+    await dialog.getByRole("radio", { name: new RegExp(`^${folder}`) }).check();
+    await dialog.getByRole("button", { name: NR_SHARED.CONTINUE, exact: true }).click();
+    await dialog.getByRole("button", { name: NR_FILES.ADD_CONFIRM, exact: true }).click();
+    await expect(dialog).toBeHidden();
+    await fillMainDriveSize(page);
+
+    await continueNewRun(page, NR_TOOLS.TITLE);
+    await continueNewRun(page, NR_REVIEW.TITLE);
+    const created = page.waitForResponse((r) => new URL(r.url()).pathname === "/api/v1/runs" && r.request().method() === "POST");
+    await submitLaunch(page, "e2e drive and folder");
+    const response = await created;
+    expect(response.status(), await response.text()).toBe(201);
+    const run = (await response.json()) as { id: string; workspace_ids?: string[] };
+    expect(run.workspace_ids).toEqual([workspaceId]);
+    await expect(page).toHaveURL(new RegExp(`launched=${run.id}`));
+
+    // The drive by its catalogue id, the folder as its workspace with no repository, the start in the drive.
+    expect(seen.body?.drives).toEqual([{ drive_id: driveId }]);
+    expect(seen.body).toMatchObject({
+      start_folder: { kind: "attachment", drive_id: driveId },
+      workspaces: [{ workspace_id: workspaceId, repos: [] }],
+    });
   });
 });
