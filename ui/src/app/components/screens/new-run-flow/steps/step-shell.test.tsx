@@ -57,6 +57,22 @@ describe("StepShell", () => {
     expect(screen.getByLabelText("Pool")).not.toHaveAttribute("aria-invalid");
   });
 
+  it("clears every earlier mark, not only the latest, once its issue is gone", () => {
+    const shell = (issues: ReturnType<typeof issue>[]) => (
+      <StepShell title="Run" primary={{ label: "Continue", onActivate: vi.fn() }} issues={issues}>
+        <select id="nr-pool" aria-label="Pool"><option>One</option></select>
+        <input id="nr-command" aria-label="Command" />
+      </StepShell>
+    );
+    const view = render(shell([issue("run", "pool_required"), issue("run", "command_required")]));
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    view.rerender(shell([issue("run", "command_required"), issue("run", "pool_required")]));
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    view.rerender(shell([issue("run", "command_required")]));
+    expect(screen.getByLabelText("Pool")).not.toHaveAttribute("aria-invalid");
+    expect(screen.getByLabelText("Command")).toHaveAttribute("aria-invalid", "true");
+  });
+
   it("Back goes back, and Ctrl+Enter continues a complete step", () => {
     const onBack = vi.fn();
     const onActivate = vi.fn();
