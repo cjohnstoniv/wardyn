@@ -69,7 +69,7 @@ const ADD_TITLE: Record<AttachKind, string> = {
 const STEPS: [Step, string][] = [[1, NR_FILES.STEP_TYPE], [2, NR_FILES.STEP_CHOOSE], [3, NR_FILES.STEP_MOUNT]];
 
 // Make's .files-link: the accent colour, weight 600, no underline.
-const FILES_LINK = "text-sm font-semibold text-primary hover:underline";
+export const FILES_LINK = "text-sm font-semibold text-primary hover:underline";
 const FIELD_LABEL = "text-xs font-semibold";
 
 const SELECT_CLASS =

@@ -64,7 +64,7 @@ export const NEW_RUN_SCREENS: Record<NewRunScreenName, Screen> = {
   shape: React.lazy(() => import("./steps/shape/shape-step").then((m) => ({ default: m.ShapeStep }))),
   run: React.lazy(() => import("./steps/run/run-step").then((m) => ({ default: m.RunStep }))),
   harnesses: React.lazy(() => import("./steps/harnesses/harnesses-step").then((m) => ({ default: m.HarnessesStep }))),
-  files: React.lazy(() => import("./steps/files/files-step").then((m) => ({ default: m.FilesStep }))),
+  files: React.lazy(() => import("./steps/files/files-route").then((m) => ({ default: m.FilesRoute }))),
   tools: React.lazy(() => import("./steps/tools/tools-step").then((m) => ({ default: m.ToolsStep }))),
   document: React.lazy(() => import("./document/document-screen").then((m) => ({ default: m.DocumentScreen }))),
   review: React.lazy(() => import("./launch/review-with-launch").then((m) => ({ default: m.ReviewWithLaunch }))),
