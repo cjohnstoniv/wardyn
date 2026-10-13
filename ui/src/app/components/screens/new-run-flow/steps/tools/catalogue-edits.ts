@@ -22,9 +22,13 @@ export function attachComponent(intent: RunIntent, ref: ComponentRef): RunIntent
   return withKeys(intent, { components: [...(intent.components ?? []), ref] });
 }
 
-/** Removes the component the access row stands for: a stored one by id, an inline one by the name it was added under. */
-export function detachComponent(intent: RunIntent, id: string, name?: string): RunIntent {
-  const left = (intent.components ?? []).filter((c) => c.id !== id && !(name && !c.id && c.name === name));
+/**
+ * Removes the component the access row stands for: a stored one by id, an inline one by the row's own
+ * "inline:<n>", the position the server read it at in the request's components (a name is optional).
+ */
+export function detachComponent(intent: RunIntent, id: string): RunIntent {
+  const inline = /^inline:(\d+)$/.exec(id);
+  const left = (intent.components ?? []).filter((c, i) => (inline ? i !== Number(inline[1]) : c.id !== id));
   return withKeys(intent, { components: left.length ? left : undefined });
 }
 

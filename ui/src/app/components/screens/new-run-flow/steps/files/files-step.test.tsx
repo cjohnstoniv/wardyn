@@ -212,6 +212,53 @@ describe("main drive", () => {
   });
 });
 
+describe("a filled size follows the pool", () => {
+  // A pool with a 40 GiB cap and `mib` as its default.
+  const withDefault = (mib: number) => ({
+    ...filesPreflight(MAIN_DRIVE_FACTS.filesystem),
+    runner_pools: [{
+      ...filesPreflight(MAIN_DRIVE_FACTS.filesystem).runner_pools![0],
+      limits: [{ ...limitsFor("interactive", 40960), disk_mib: { default: { value: mib }, cap: { value: 40960 }, cap_source: "pool" as const } }],
+    }],
+  });
+
+  it("another pool's default replaces a size the person never changed", async () => {
+    checks.result = withDefault(20480);
+    show();
+    await waitFor(() => expect(size()).toHaveValue(20));
+    // The run is moved to a pool whose default is 10 GiB.
+    checks.result = withDefault(10240);
+    act(() => external.edit((i) => ({ ...i, runner_pool_id: "pool-b" })));
+    await waitFor(() => expect(size()).toHaveValue(10));
+    expect(drawn().resources).toBeUndefined();
+  });
+
+  it("a pool with no size to offer clears a size the person never changed", async () => {
+    checks.result = withDefault(20480);
+    show();
+    await waitFor(() => expect(size()).toHaveValue(20));
+    // The run is moved to a pool with no default and no cap: an untouched run gets no size there.
+    const open = withDefault(0);
+    const none = { value: 0, unlimited: true };
+    open.runner_pools![0].limits![0].disk_mib = { default: none, cap: none, cap_source: "pool" };
+    checks.result = open;
+    act(() => external.edit((i) => ({ ...i, runner_pool_id: "pool-b" })));
+    await waitFor(() => expect(size()).toHaveValue(null));
+    expect(drawn().resources).toBeUndefined();
+  });
+
+  it("keeps a size the person typed when the pool changes", async () => {
+    checks.result = withDefault(20480);
+    show();
+    await waitFor(() => expect(size()).toHaveValue(20));
+    await userEvent.clear(size());
+    await userEvent.type(size(), "6");
+    checks.result = withDefault(10240);
+    act(() => external.edit((i) => ({ ...i, runner_pool_id: "pool-b" })));
+    expect(size()).toHaveValue(6);
+  });
+});
+
 describe("enforcement chip (W1)", () => {
   it.each([
     ["eviction", NR_FILES.ENFORCED_BY_STOP],
@@ -566,6 +613,20 @@ describe("folders", () => {
     await userEvent.click(screen.getByRole("button", { name: NR_FILES.REMOVE_NAMED("data") }));
     expect(drawn().workspaces).toEqual([{ workspace_id: "ws-data", repos: [], target: "/home/agent/folders/datasets" }]);
     expect(card("datasets")).toBeDefined();
+  });
+
+  it("a folder set Read-only stays read-only when the last repository of its workspace is removed", async () => {
+    show(BACKGROUND);
+    await openAdd();
+    await pickType(NR_FILES.FOLDER_TITLE);
+    await pickSource("datasets");
+    await userEvent.click(dialogButton(/^Continue/));
+    await userEvent.selectOptions(within(dialog()).getByLabelText(NR_FILES.ACCESS_LABEL), "read");
+    await userEvent.click(dialogButton(NR_FILES.ADD_CONFIRM));
+    await add(NR_FILES.REPOSITORY_BADGE, "data");
+    await userEvent.click(screen.getByRole("button", { name: NR_FILES.REMOVE_NAMED("data") }));
+    expect(drawn().workspaces).toEqual([{ workspace_id: "ws-data", repos: [], read_only: true, target: "/home/agent/folders/datasets" }]);
+    expect(within(card("datasets")).getByText(NR_FILES.ACCESS_READ)).toBeInTheDocument();
   });
 
   it("a folder that shares its workspace shows where the server mounts it: its source's target, else /home/agent/work", async () => {
