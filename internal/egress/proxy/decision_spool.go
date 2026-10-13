@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/cjohnstoniv/wardyn/internal/contentscan"
 	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/runneractivity"
 	"github.com/cjohnstoniv/wardyn/internal/runnerspool"
@@ -66,15 +67,22 @@ type spoolReservation struct {
 
 // spoolRecordEnvelope is what a decision record holds beyond its request's own
 // strings: identifiers, times, the rule source, a cause sentence and a scan
-// summary.
+// summary without findings (a skip or bypass).
 const spoolRecordEnvelope = 64 << 10
 
-// spoolReservationBytes is the most a request's final decision record may take:
-// its target escaped twice over (JSON can expand one byte into six, and a cause
-// sentence can name the target again) plus the record's envelope, never more
-// than the largest wire record. Reserving every request at the wire maximum
-// held a 32 MiB spool to 32 requests in flight.
-func spoolReservationBytes(r *http.Request) int64 {
+// spoolReservationBytes is the most a request's final decision record may take.
+// A body-bearing request while content inspection is on may be scanned, and a
+// scanned record carries its findings (up to the scanner's cap, each with a
+// field path), which no request-derived bound covers: it reserves the largest
+// wire record. Any other request reserves its target escaped twice over (JSON
+// can expand one byte into six, and a cause sentence can name the target again)
+// plus the record's envelope, never more than the largest wire record.
+// Reserving every request at the wire maximum held a 32 MiB spool to 32
+// requests in flight.
+func (p *Proxy) spoolReservationBytes(r *http.Request) int64 {
+	if p.scanner != nil && p.scanner.Mode() != contentscan.ModeOff && bodyBearingMethod(r.Method) {
+		return runnerspool.MaxRecordBytes
+	}
 	return min(int64(2*6*(len(r.URL.String())+len(r.Host)+len(r.Method))+spoolRecordEnvelope), runnerspool.MaxRecordBytes)
 }
 
@@ -126,7 +134,7 @@ func (p *Proxy) admitSpoolHTTP(w http.ResponseWriter, r *http.Request) (*http.Re
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
-	id, err := p.sink.reserve(ctx, spoolReservationBytes(r))
+	id, err := p.sink.reserve(ctx, p.spoolReservationBytes(r))
 	if err != nil {
 		http.Error(w, "egress audit spool unavailable", http.StatusServiceUnavailable)
 		return nil, nil
