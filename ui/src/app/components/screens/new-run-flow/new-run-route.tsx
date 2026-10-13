@@ -204,7 +204,8 @@ function NewRunFlow({ loaders, screens }: { loaders: SeedLoaders; screens: Recor
     (href: string) => {
       const url = new URL(href, window.location.origin);
       const to = parseNewRunSearch(url.searchParams);
-      return url.pathname.endsWith(NEW_RUN_PATH) && seedKey({ template: to.template, again: to.again }) === key;
+      // The launched screen starts a fresh draft, so landing there loses this one.
+      return url.pathname.endsWith(NEW_RUN_PATH) && to.location.screen !== "launched" && seedKey({ template: to.template, again: to.again }) === key;
     },
     [key],
   );

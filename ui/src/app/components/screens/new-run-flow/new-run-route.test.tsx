@@ -154,6 +154,8 @@ describe("New Run route (U9)", () => {
     expect(unsavedStaysAt("/runs/new?step=review")).toBe(true);
     // Another template would seed over the draft.
     expect(unsavedStaysAt("/runs/new?template=0b5f9c3e-8a1d-4c2b-9e7f-3a6d5c4b2e1f&rev=1")).toBe(false);
+    // The launched screen starts a fresh draft.
+    expect(unsavedStaysAt("/runs/new?launched=0b5f9c3e-8a1d-4c2b-9e7f-3a6d5c4b2e1f")).toBe(false);
   });
 
   it("leaves on Escape when nothing is unsaved", async () => {
