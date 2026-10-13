@@ -407,8 +407,8 @@ describe("Admin -> Runners drawer and revoke", () => {
       await user.click(await screen.findByRole("button", { name: "laptop-7" }));
       const drawer = await screen.findByRole("dialog");
       await user.click(within(drawer).getByRole("button", { name: "Revoke" }));
-      let landRead!: (r: RunnerView) => void;
-      getMock.mockImplementation(() => new Promise<RunnerView>((r) => { landRead = r; }));
+      let landRead!: (rows: RunnerView[]) => void;
+      listMock.mockImplementation(() => new Promise<RunnerView[]>((r) => { landRead = r; }));
       await user.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Revoke runner" }));
       await waitFor(() => expect(revokeMock).toHaveBeenCalledWith("r-laptop"));
       await act(async () => { await new Promise((r) => requestAnimationFrame(() => r(undefined))); });
@@ -416,7 +416,7 @@ describe("Admin -> Runners drawer and revoke", () => {
       await hold.finish();
       await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
       expect(document.activeElement).toHaveTextContent("laptop-7");
-      await act(async () => landRead({ ...LAPTOP, state: "revoked" }));
+      await act(async () => landRead([DESK, OLD, { ...LAPTOP, state: "revoked" }, WAITING]));
       expect(document.activeElement).toHaveTextContent("laptop-7");
     } finally {
       hold.release();
