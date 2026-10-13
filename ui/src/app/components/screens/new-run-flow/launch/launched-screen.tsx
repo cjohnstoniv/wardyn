@@ -92,7 +92,7 @@ function Launched({ runId, startAnother }: { runId: string; startAnother: () => 
         {waiting ? "…" : <Check className="size-[26px]" />}
       </span>}
       {badge ? <Chip tone={waiting ? "info" : "success"}>{badge}</Chip> : <RunStateBadge state={run.state} />}
-      <h1 ref={heading} tabIndex={-1} className="font-semibold tracking-tight outline-none">{runHeadline(run)}</h1>
+      <h1 ref={heading} tabIndex={-1} className="text-[30px] leading-[1.08] font-normal tracking-[-0.04em] outline-none">{runHeadline(run)}</h1>
       {body && <p className="text-muted-foreground">{body}</p>}
       {starting && (
         <div role="progressbar" aria-label={NR_LAUNCH.BADGE_STARTING} className="my-4 h-[3px] w-[260px] overflow-hidden bg-muted">

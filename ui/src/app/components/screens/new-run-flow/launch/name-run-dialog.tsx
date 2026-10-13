@@ -22,13 +22,13 @@ import { Textarea } from "../../../ui/textarea";
 import { NR_LAUNCH } from "../../../wardyn/copy/new-run/launch";
 import { NR_REVIEW } from "../../../wardyn/copy/new-run/review";
 import { NR_SHARED } from "../../../wardyn/copy/new-run/shared";
-import { BarrierMark } from "../../../wardyn/barrier-mark";
 import { useModelAccessDoor } from "../../../wardyn/model-access-context";
 import { useAdoLaunchDoor } from "../../new-run/use-ado-launch-door";
 import { intentToWire } from "../draft/intent-to-wire";
 import type { RunIntent } from "../draft/run-intent";
 import { useDraftIdentity, useIntentChecks } from "../draft/use-intent-checks";
 import { useNewRunDispatch, useNewRunDraft } from "../new-run-route";
+import { BarrierChip } from "../review/barrier-chip";
 import { cpuNumber, lifetimeText } from "../review/format";
 import type { ReviewPreflight } from "../review/review-seams";
 import { AdoLaunchDialog } from "./ado-launch-dialog";
@@ -181,7 +181,7 @@ function NameRunForm({ onOpenChange, onCreated }: Pick<NameRunDialogProps, "onOp
                   <strong>{NR_LAUNCH.CHECKED_JUST_NOW}</strong>
                   <span className="text-muted-foreground">{summaryLine(pre, draft.intent)}</span>
                 </p>
-                <BarrierMark cc={pre.enforced_confinement_class} size="sm" strength />
+                <BarrierChip cc={pre.enforced_confinement_class} />
               </div>
             </>
           )}

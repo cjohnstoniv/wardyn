@@ -165,6 +165,7 @@ export function DocumentScreen({ location, go, copy = NR_DOCUMENT, deps }: NewRu
       title={copy.TITLE}
       lede={copy.LEDE}
       headingAside={<Button type="button" variant="outline" disabled={busy} onClick={() => void proceed({ screen: "step", step: "shape" })}>{copy.OPEN_IN_GUIDED}</Button>}
+      headingAsideAlign="end"
       footerExtras={{
         // With extras StepShell's own Back is replaced, so Back comes here: Make's order is Back · Validate + Continue.
         start: <Button type="button" variant="ghost" onClick={() => go({ screen: "start" })}>{NR_SHARED.BACK}</Button>,
@@ -176,6 +177,7 @@ export function DocumentScreen({ location, go, copy = NR_DOCUMENT, deps }: NewRu
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div role="group" aria-label={copy.FORMAT_ARIA}>
             <Segmented
+              size="compact"
               value={format}
               options={[{ value: "yaml", label: copy.FORMAT_YAML }, { value: "json", label: copy.FORMAT_JSON }]}
               onChange={switchFormat}

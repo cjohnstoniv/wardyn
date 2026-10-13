@@ -22,3 +22,15 @@ export const CLI_CARD: Record<CatalogueCLIKind, { name: string; body: string; ic
 
 /** The icon mark on the other cards (the prototype's catalogue and door cards). */
 export const CARD_ICON = { mcp: "MCP", api: "API", secret: "key", host: "net" } as const;
+
+/** The icon mark on a row of Already included (prototype rows "cc", "cx", "git", "dr", "$"). */
+export function includedMark(row: { from: string; name: string }): string {
+  if (row.from === "harness") return row.name === "codex-cli" ? "cx" : "cc";
+  return row.from === "repository" ? "git" : row.from === "drive" ? "dr" : "$";
+}
+
+/** The icon mark on a row of Added to this run: the card it was added from. */
+export function addedMark(row: { kind: string; name: string }): string {
+  if (row.kind === "cli") return Object.values(CLI_CARD).find((c) => c.name === row.name)?.icon ?? CARD_ICON.api;
+  return row.kind === "mcp" ? CARD_ICON.mcp : row.kind === "secret" ? CARD_ICON.secret : row.kind === "host" ? CARD_ICON.host : CARD_ICON.api;
+}

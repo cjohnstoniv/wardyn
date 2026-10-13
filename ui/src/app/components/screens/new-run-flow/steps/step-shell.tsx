@@ -48,8 +48,10 @@ export interface StepShellProps {
   primary?: StepShellPrimary;
   /** Local issues: the primary action then focuses the first one's control instead of running. */
   issues?: readonly StepIssue[];
-  /** Beside the heading, at its right (Review's view toggle). */
+  /** Beside the heading, at its right (Review's view toggle). The heading is then Make's 32 px. */
   headingAside?: React.ReactNode;
+  /** Where the aside sits against the heading: Review centres it, the document editor sets it on the bottom line. */
+  headingAsideAlign?: "center" | "end";
   /** More footer actions: `start` on the left in place of Back, `end` just before the primary (Review's Save and Check again). */
   footerExtras?: { start?: React.ReactNode; end?: React.ReactNode };
   /** Pins the footer to the bottom of the view while the step scrolls (Tools and access's bar). */
@@ -57,7 +59,7 @@ export interface StepShellProps {
   children?: React.ReactNode;
 }
 
-export function StepShell({ title, lede, eyebrow, progress, back, primary, issues, headingAside, footerExtras, stickyFooter, children }: StepShellProps) {
+export function StepShell({ title, lede, eyebrow, progress, back, primary, issues, headingAside, headingAsideAlign = "center", footerExtras, stickyFooter, children }: StepShellProps) {
   const heading = React.useRef<HTMLHeadingElement>(null);
   const announce = useAnnounce();
   React.useEffect(() => {
@@ -77,7 +79,8 @@ export function StepShell({ title, lede, eyebrow, progress, back, primary, issue
     if (primary && !primary.disabled) primary.onActivate();
   };
   const hasPrimary = primary !== undefined;
-  React.useEffect(() => {
+  // A layout effect, so Ctrl/Cmd+Enter works from the first paint the primary is on screen.
+  React.useLayoutEffect(() => {
     if (!hasPrimary) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Enter" || !(e.ctrlKey || e.metaKey) || e.defaultPrevented || modalLayerOpen()) return;
@@ -91,7 +94,7 @@ export function StepShell({ title, lede, eyebrow, progress, back, primary, issue
   const header = (
     <header className="flex max-w-[680px] flex-col gap-2.5">
       {eyebrow && <p className="mb-1 text-meta font-semibold uppercase tracking-[0.12em] text-primary">{eyebrow}</p>}
-      <h1 ref={heading} tabIndex={-1} className="text-[clamp(28px,4vw,42px)] leading-[1.08] font-normal tracking-[-0.04em] outline-none">{title}</h1>
+      <h1 ref={heading} tabIndex={-1} className={cn(headingAside ? "text-[32px]" : "text-[clamp(28px,4vw,42px)]", "leading-[1.08] font-normal tracking-[-0.04em] outline-none")}>{title}</h1>
       {lede && <p className="max-w-[620px] text-muted-foreground">{lede}</p>}
     </header>
   );
@@ -106,7 +109,7 @@ export function StepShell({ title, lede, eyebrow, progress, back, primary, issue
     <section className="flex flex-col gap-6">
       {progress && <div className="mb-[26px] max-[520px]:mb-2"><FlowProgress steps={progress.steps} label={progress.label} /></div>}
       {headingAside ? (
-        <div className="flex flex-wrap items-center justify-between gap-6">
+        <div className={cn("flex justify-between gap-6 max-[760px]:flex-col max-[760px]:items-start", headingAsideAlign === "end" ? "items-end" : "items-center")}>
           {header}
           <div className="shrink-0">{headingAside}</div>
         </div>

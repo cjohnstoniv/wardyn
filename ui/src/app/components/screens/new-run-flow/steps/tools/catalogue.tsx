@@ -31,7 +31,8 @@ import { AddMcpDialog } from "./add-mcp-dialog";
 import { AddSecretDialog, type SecretAddition } from "./add-secret-dialog";
 import { AllowHostDialog } from "./allow-host-dialog";
 import { addHeaderSecret, attachComponent, detachComponent, removeAllowedHost, removeHeaderSecret } from "./catalogue-edits";
-import { CARD_ICON, CLI_CARD } from "./catalogue-pending";
+import { addedMark, CARD_ICON, CLI_CARD } from "./catalogue-pending";
+import { IconTile } from "./icon-tile";
 import { CustomComponentDialog } from "./custom-component-dialog";
 
 type Category = "all" | "cli" | "mcp" | "api" | "secret";
@@ -73,7 +74,7 @@ function Card({ icon, title, org, body, brings, look = "plain", children }: { ic
   return (
     <li className={cn("flex flex-col gap-2 rounded-lg border p-3", look === "added" ? "border-primary bg-primary/10" : "border-border bg-surface-2", look === "off" && "bg-muted/50 text-muted-foreground")}>
       <div className="flex items-center gap-2.5">
-        <span aria-hidden className="grid size-[34px] shrink-0 place-items-center rounded-lg border border-border bg-muted font-mono text-[11px] font-semibold text-muted-foreground">{icon}</span>
+        <IconTile mark={icon} />
         <div className="min-w-0">
           <h3 className="font-medium">{title}</h3>
           {org && <p className="text-xs text-muted-foreground">{NR_TOOLS.FROM_ORG}</p>}
@@ -312,6 +313,7 @@ export function AddTools({ access, answered, intent }: AddToolsProps) {
           <ul className="flex flex-col gap-2">
             {addedRows.map((row) => (
               <li key={row.id} className="flex flex-wrap items-center gap-2 rounded-lg border border-border bg-surface-2 p-3 text-sm">
+                <IconTile mark={addedMark(row)} />
                 <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">{row.name}</span>
                 <Chip>{FROM_KIND[row.kind] ?? NR_TOOLS.FROM_CUSTOM}</Chip>
                 <Status status={row.status} answered={answered} />

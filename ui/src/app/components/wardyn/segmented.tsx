@@ -20,6 +20,7 @@ export function Segmented<T extends string>({
   options,
   onChange,
   disabled,
+  size = "default",
 }: {
   value: T;
   options: {
@@ -32,7 +33,30 @@ export function Segmented<T extends string>({
   }[];
   onChange: (v: T) => void;
   disabled?: boolean;
+  /** New Run's view and format switches: a padded track with an inset pill per option (the Make design's compact control). */
+  size?: "default" | "compact";
 }) {
+  if (size === "compact") {
+    return (
+      <div className="inline-flex w-fit rounded-[9px] border border-border bg-surface-2 p-[3px]">
+        {options.map((o) => (
+          <button
+            key={o.value}
+            type="button"
+            aria-pressed={value === o.value}
+            disabled={disabled}
+            onClick={() => onChange(o.value)}
+            className={cn(
+              "min-w-[65px] rounded-md px-3 py-[7px] text-xs transition-colors disabled:cursor-not-allowed disabled:opacity-50",
+              value === o.value ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground",
+            )}
+          >
+            {o.label}
+          </button>
+        ))}
+      </div>
+    );
+  }
   return (
     <div className="inline-flex w-fit overflow-hidden rounded-lg border border-border-strong">
       {options.map((o) => (

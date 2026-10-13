@@ -15,6 +15,8 @@ import { NR_TOOLS } from "../../../../wardyn/copy/new-run/tools";
 import type { AccessFacts, AccessRow } from "../../../../../lib/types/new-run-access";
 import type { RunIntent } from "../../draft/run-intent";
 import { rowLabel, startsWithRun, type HarnessNames } from "../../lenses/tools-lens";
+import { includedMark } from "./catalogue-pending";
+import { IconTile } from "./icon-tile";
 import { credentialLabel, deliveryLabel } from "./totals";
 
 const FROM: Record<string, string> = {
@@ -78,6 +80,7 @@ function IncludedRow({ row, access, answered, intent, names, providers }: { row:
   return (
     <li className="flex flex-col gap-3 rounded-lg border border-border bg-surface-2 p-3">
       <div className="flex flex-wrap items-center gap-3">
+        <IconTile mark={includedMark(row)} />
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
             <strong className="font-medium">{name}</strong>
