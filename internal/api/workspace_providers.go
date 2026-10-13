@@ -400,8 +400,11 @@ func validateStorageProviders(st *types.StorageProviders) error {
 			return fmt.Errorf("%s", providers400DiskOrder)
 		}
 	}
-	if d := st.UserDrive; d != nil && d.MaxSizeMiB < 0 {
-		return fmt.Errorf(providers400Negative, "storage.user_drive.max_size_mib", d.MaxSizeMiB)
+	if d := st.UserDrive; d != nil {
+		if d.MaxSizeMiB < 0 {
+			return fmt.Errorf(providers400Negative, "storage.user_drive.max_size_mib", d.MaxSizeMiB)
+		}
+		return validateMemberDrivePolicy(d.MemberCreate, d.MaxSizeMiB)
 	}
 	return nil
 }
@@ -805,6 +808,10 @@ func (s *Server) handlePutWorkspaceProviders(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	if err := s.validateADOTokenModes(block); err != nil {
+		writeErrorReason(w, http.StatusBadRequest, reasonWorkspaceProvidersInvalid, "invalid workspace providers: "+err.Error())
+		return
+	}
+	if err := s.validateMemberDriveTarget(block); err != nil {
 		writeErrorReason(w, http.StatusBadRequest, reasonWorkspaceProvidersInvalid, "invalid workspace providers: "+err.Error())
 		return
 	}

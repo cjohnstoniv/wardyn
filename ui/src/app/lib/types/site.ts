@@ -432,6 +432,18 @@ export interface EphemeralProvider {
 export interface UserDriveProvider {
   disabled?: boolean;
   max_size_mib?: number;
+  // The switch for people creating their own drives. Absent = off.
+  member_create?: MemberDrivePolicy;
+}
+
+// types.MemberDrivePolicy. `max_per_person` is 1..20 when enabled. `size_mib` is
+// the k8s claim request, required there and refused on Docker, whose volumes have
+// no size limit. `storage_class` is k8s only; absent = the cluster default.
+export interface MemberDrivePolicy {
+  enabled?: boolean;
+  max_per_person?: number;
+  size_mib?: number;
+  storage_class?: string;
 }
 
 // One SiteConfig.internal_hosts entry — see that field's doc.

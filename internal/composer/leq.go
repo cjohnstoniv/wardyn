@@ -267,6 +267,7 @@ func leqLimits(a, b types.GovernanceLimits) bool {
 	for _, p := range [][2]bool{
 		{a.DenyTaskModeExec, b.DenyTaskModeExec}, {a.DenyInteractive, b.DenyInteractive},
 		{a.DenyUIApps, b.DenyUIApps}, {a.DenyUserDrive, b.DenyUserDrive},
+		{a.DenyMemberDrives, b.DenyMemberDrives},
 	} {
 		if p[1] && !p[0] { // a denial the base keeps must stay
 			return false

@@ -602,6 +602,9 @@ func (s *Server) validateSiteConfigBody(cfg types.SiteConfig) ([]string, error) 
 	if err := s.validateADOTokenModes(cfg.WorkspaceProviders); err != nil {
 		return nil, err
 	}
+	if err := s.validateMemberDriveTarget(cfg.WorkspaceProviders); err != nil {
+		return nil, err
+	}
 	return validateModelProviders(cfg.ModelProviders, s.providerWriteEnv(cfg.InternalHosts))
 }
 

@@ -40,6 +40,12 @@ export interface GovernanceLimits extends RunLimits {
   // user drive even when one is allocated to the person; denyUserDrive's 403
   // is what enforces it, and this is only what the editor authors.
   deny_user_drive?: boolean;
+  // types.GovernanceLimits.DenyMemberDrives — refuses creating a member drive
+  // under this profile, on top of the org's storage.user_drive.member_create.
+  // False/absent inherits the org switch. The limits editor has no row for it
+  // yet and saves the stored value back unchanged; composing a profile moves it
+  // into the overlay through LIMIT_FIELDS (profile-overlay.tsx).
+  deny_member_drives?: boolean;
   // types.GovernanceLimits.DenyPlacements (0.9, #114) — the placements a run
   // under this profile may not take. A deny list: absent means every placement
   // is permitted. The server refuses a profile denying both.

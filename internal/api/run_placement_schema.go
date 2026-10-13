@@ -59,6 +59,7 @@ var localDispatchFields = map[reflect.Type][]string{
 	reflect.TypeFor[types.Integration]():         strings.Fields("ID Name Kind Disabled Secrets Egress Config Docs DisabledCapabilities CreatedAt UpdatedAt legacyTopology"),
 	reflect.TypeFor[types.IntegrationDelivery](): strings.Fields("Mode Header Format Path Var"),
 	reflect.TypeFor[types.IntegrationSecret]():   strings.Fields("Role SecretName Delivery"),
+	reflect.TypeFor[types.MemberDrivePolicy]():   strings.Fields("Enabled MaxPerPerson SizeMiB StorageClass"),
 	reflect.TypeFor[types.ModelProvider]():       strings.Fields("ID UID Name Kind Disabled BaseURL Auth Bedrock Azure Harnesses"),
 	reflect.TypeFor[types.ModelProviders]():      strings.Fields("Providers"),
 	reflect.TypeFor[types.ProviderAuth]():        strings.Fields("Header Format"),
@@ -70,7 +71,7 @@ var localDispatchFields = map[reflect.Type][]string{
 		"WorkspaceProviders AgentProviders ModelProviders SignInHelpText SignInHelpURL PolicyHelp Branding Components EffectiveScmHosts WithheldScmHosts OnboardingCompletedAt"),
 	reflect.TypeFor[types.SiteEgress]():         strings.Fields("BaselineHosts"),
 	reflect.TypeFor[types.StorageProviders]():   strings.Fields("Ephemeral UserDrive"),
-	reflect.TypeFor[types.UserDriveProvider]():  strings.Fields("Disabled MaxSizeMiB"),
+	reflect.TypeFor[types.UserDriveProvider]():  strings.Fields("Disabled MaxSizeMiB MemberCreate"),
 	reflect.TypeFor[types.WithheldScmHost]():    strings.Fields("Host ProviderID ProviderKind"),
 	reflect.TypeFor[types.WorkspaceProviders](): strings.Fields("Git Storage GitPatBrokerEnabled"),
 }
