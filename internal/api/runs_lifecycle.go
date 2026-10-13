@@ -267,17 +267,24 @@ func (s *Server) revokeRunCascade(ctx context.Context, runID uuid.UUID) error {
 		data["proxy_config_error"] = perr.Error()
 	}
 	s.revokeRunPATs(ctx, runID, adoPATRevokeRunEnd)
+	// A run PAT Azure DevOps has not yet confirmed revoked is recorded here, but it is the run PAT sweep's
+	// to retry, on its own cadence: it does not leave the run's teardown incomplete, or the runner exit
+	// tail would run this whole cascade again on every sweep until Azure DevOps answers.
+	patPending := false
 	if st, ok := s.cfg.Store.(store.RunPATStore); ok {
 		rows, err := st.ListUnrevokedRunPATs(ctx, store.RunPATFilter{RunID: runID})
 		if err != nil {
 			data["pat_revoke_check_error"] = err.Error()
 		} else if len(rows) > 0 {
 			data["pat_revoke_pending"] = len(rows)
+			patPending = true
 		}
 	}
 	if len(data) > 0 {
 		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.revoke",
 			runID.String(), "failure", mustJSON(data)))
+	}
+	if len(data) > 0 && !(patPending && len(data) == 1) {
 		return fmt.Errorf("run revoke incomplete: %v", data)
 	}
 	return ctx.Err()
