@@ -298,6 +298,10 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// agent-side tool-approval lane), raised before the run id existed and
 	// carried here — this is the only channel that reaches the caller.
 	warnings = append(warnings, f.autonomyWarns...)
+	// …and the managed-settings one, read off the run's bound runner and the
+	// settled tool lane, which the gate above could not see.
+	warnings = append(warnings, s.managedSettingsUndeliveredWarning(ctx, managedSettingsRun{req: &req, spec: spec, harnesses: f.harnesses, level: autonomy.Level,
+		locked: ceilingForDispatch(ceiling, f.adoGrade, f.bedrockGrade).agentGuardrailLocks, class: enforced, place: f.place}, &run)...)
 	// The two things provider admission ADMITTED rather than refused; see
 	// repoSourceWarnings.
 	warnings = append(warnings, s.repoSourceWarnings(ctx, runID, spec, req)...)
