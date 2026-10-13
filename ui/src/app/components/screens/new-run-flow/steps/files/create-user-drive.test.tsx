@@ -413,34 +413,27 @@ describe("with the public step's fixes", () => {
     await waitFor(() => expect(drawn().drives).toContainEqual({ drive_id: NEW_DRIVE.id }));
   });
 
-  it("holds Continue while the create form is open and puts the pick back on Cancel", async () => {
+  it("keeps the pick, and Continue live, while the create form is open and after Cancel", async () => {
     await openChoose();
     await userEvent.click(radio(DRIVE_OWNED.name));
-    expect(next()).toBeEnabled();
     await userEvent.click(createLink());
-    expect(next()).toBeDisabled();
-    expect(radio(DRIVE_OWNED.name)).not.toBeChecked();
+    expect(radio(DRIVE_OWNED.name)).toBeChecked();
+    expect(next()).toBeEnabled();
     await userEvent.click(within(within(top()).getByLabelText(NR_FILES.DRIVE_NAME).closest("form")!).getByRole("button", { name: NR_SHARED.CANCEL }));
     expect(radio(DRIVE_OWNED.name)).toBeChecked();
     expect(next()).toBeEnabled();
   });
 
-  it("leaves a pick the person made while the form is open when they cancel", async () => {
-    await openChoose();
-    await userEvent.click(radio(DRIVE_OWNED.name));
-    await userEvent.click(createLink());
-    await userEvent.click(radio(DRIVE_LOCKED.name));
+  it("keeps a drive narrowed to read-only when the card is opened and cancelled during an edit", async () => {
+    show({ ...INTERACTIVE, drives: [{ drive_id: DRIVE_OWNED.id, read_only: true }] });
+    await userEvent.click(await within(await screen.findByTestId("nr-attach-card")).findByRole("button", { name: /^Edit/ }));
+    // Edit opens on Mount path; step back to Choose, where the card lives.
+    await userEvent.click(within(top()).getByRole("button", { name: NR_SHARED.BACK }));
+    await userEvent.click(await within(top()).findByRole("button", { name: NR_FILES.CREATE_USER_DRIVE }));
     await userEvent.click(within(within(top()).getByLabelText(NR_FILES.DRIVE_NAME).closest("form")!).getByRole("button", { name: NR_SHARED.CANCEL }));
-    expect(radio(DRIVE_LOCKED.name)).toBeChecked();
-  });
-
-  it("leaves Continue live when the picked drive cannot be told from another of the same name", async () => {
-    drives = [DRIVE_OWNED, { ...DRIVE_LOCKED, name: DRIVE_OWNED.name }];
-    show();
-    await userEvent.click(await screen.findByRole("button", { name: NR_FILES.ADD_ARIA }));
-    await userEvent.click(within(top()).getByRole("button", { name: new RegExp(`^${NR_FILES.KIND_USER_DRIVE}`) }));
-    await userEvent.click((await within(top()).findAllByRole("radio"))[0]);
-    await userEvent.click(createLink());
-    expect(next()).toBeEnabled();
+    await userEvent.click(next());
+    expect(within(top()).getByLabelText(NR_FILES.ACCESS_LABEL)).toHaveValue("read");
+    await userEvent.click(within(top()).getByRole("button", { name: NR_FILES.SAVE }));
+    await waitFor(() => expect(drawn().drives).toEqual([{ drive_id: DRIVE_OWNED.id, read_only: true }]));
   });
 });
