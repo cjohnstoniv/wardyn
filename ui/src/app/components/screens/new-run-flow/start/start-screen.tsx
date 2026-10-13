@@ -31,7 +31,7 @@ export function StartScreen({ go }: NewRunScreenProps) {
         <h1 ref={heading} tabIndex={-1} className="text-[clamp(28px,4vw,42px)] leading-[1.08] font-normal tracking-[-0.04em] outline-none">{NR_START.TITLE}</h1>
         <p className="max-w-[620px] text-muted-foreground">{NR_START.LEDE}</p>
       </header>
-      <div className="grid gap-4 md:grid-cols-3">
+      <div className="mt-[18px] grid gap-3.5 min-[761px]:grid-cols-3">
         <PathCard comingSoon icon={<Sparkles className="size-5" />} title={NR_START.AI_TITLE} description={NR_START.AI_BODY} foot={NR_START.AI_FOOT} />
         <PathCard
           icon={<ChevronRight className="size-5" />}

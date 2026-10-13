@@ -43,7 +43,8 @@ export interface StepShellProps {
   eyebrow?: string;
   progress?: { label: string; steps: FlowStep[] };
   back?: { label: string; onBack: () => void };
-  primary: StepShellPrimary;
+  /** None: no primary button and no Ctrl/Cmd+Enter (Shape from scratch, where a choice moves on). */
+  primary?: StepShellPrimary;
   /** Local issues: the primary action then focuses the first one's control instead of running. */
   issues?: readonly StepIssue[];
   children?: React.ReactNode;
@@ -66,9 +67,11 @@ export function StepShell({ title, lede, eyebrow, progress, back, primary, issue
       control?.focus();
       return;
     }
-    if (!primary.disabled) primary.onActivate();
+    if (primary && !primary.disabled) primary.onActivate();
   };
+  const hasPrimary = primary !== undefined;
   React.useEffect(() => {
+    if (!hasPrimary) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Enter" || !(e.ctrlKey || e.metaKey) || e.defaultPrevented || modalLayerOpen()) return;
       e.preventDefault();
@@ -76,7 +79,7 @@ export function StepShell({ title, lede, eyebrow, progress, back, primary, issue
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, []);
+  }, [hasPrimary]);
 
   return (
     <section className="flex flex-col gap-6">
@@ -89,10 +92,12 @@ export function StepShell({ title, lede, eyebrow, progress, back, primary, issue
       {children}
       <footer className="mt-1 flex items-center justify-between gap-3 border-t border-border pt-[18px]">
         {back ? <Button type="button" variant="ghost" onClick={back.onBack}>{back.label}</Button> : <span />}
-        <Button type="button" disabled={primary.disabled} aria-describedby={primary.describedBy} onClick={() => activate.current()}>
-          {primary.label}
-          {primary.arrow !== false && <span aria-hidden="true">→</span>}
-        </Button>
+        {primary && (
+          <Button type="button" disabled={primary.disabled} aria-describedby={primary.describedBy} onClick={() => activate.current()}>
+            {primary.label}
+            {primary.arrow !== false && <span aria-hidden="true">→</span>}
+          </Button>
+        )}
       </footer>
     </section>
   );

@@ -56,4 +56,14 @@ describe("StepShell", () => {
     render(<StepShell title="Review" primary={{ label: "Launch run", onActivate: vi.fn(), arrow: false }} />);
     expect(screen.getByRole("button", { name: "Launch run" })).toHaveTextContent(/^Launch run$/);
   });
+
+  it("with no primary shows only Back, and Ctrl+Enter does nothing", () => {
+    const onBack = vi.fn();
+    render(<StepShell title="Shape" back={{ label: "Back", onBack }} />);
+    expect(screen.getAllByRole("button").map((b) => b.textContent)).toEqual(["Back"]);
+    const e = new KeyboardEvent("keydown", { key: "Enter", ctrlKey: true, cancelable: true });
+    document.dispatchEvent(e);
+    expect(e.defaultPrevented).toBe(false);
+    expect(onBack).not.toHaveBeenCalled();
+  });
 });

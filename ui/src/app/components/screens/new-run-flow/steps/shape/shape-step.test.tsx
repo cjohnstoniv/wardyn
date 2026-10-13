@@ -104,13 +104,11 @@ describe("Shape step: workload", () => {
     expect(JSON.parse(drawn.textContent!.slice("run scratch ".length))).toEqual({ shape: "environment", experience: "interactive" });
   });
 
-  it("holds Continue on the workload group, marked invalid, until one is chosen", async () => {
+  it("has no Continue on From scratch: a workload button is how Shape moves on", async () => {
     show();
-    await userEvent.click(await screen.findByRole("button", { name: NR_SHARED.CONTINUE_TO(NR_SHARED.STEP_RUN) }));
-    const group = document.getElementById("nr-workload");
-    expect(group).toHaveFocus();
-    expect(group).toHaveAttribute("aria-invalid", "true");
-    expect(path()).toBe("/runs/new?step=shape");
+    expect(await screen.findByRole("button", { name: NR_SHARED.BACK })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: NR_SHARED.CONTINUE_TO(NR_SHARED.STEP_RUN) })).toBeNull();
+    expect(screen.queryByRole("button", { name: NR_SHARED.CONTINUE })).toBeNull();
   });
 
   it("Back returns to Start", async () => {
