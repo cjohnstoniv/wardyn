@@ -309,7 +309,7 @@ that ceiling down; each run receives only the minimal subset its task needs.
     is a later follow-up.
 - **A harness started by hand (0.9)** holds no credential. Its calls are decided as calls from no harness, by the strictest of the run's rule sets (`strictestToolEffect`), so it never borrows the started harness's looser rules.
 - **Posture routing (0.9):** a background Claude Code run whose resolved policy holds or denies a tool, or whose launcher set a tool rule or default, is routed through this gate.
-  - The routed lane is never looser than the ungated run it replaces: tools nobody names keep running, and a run already on the gated lane keeps its hold default.
+  - The routed lane is never looser than the ungated run it replaces: tools nobody names keep running unless the policy's own `*` rule holds or denies them, and a run already on the gated lane keeps its hold default.
   - A person's rule is combined with the policy's as the stricter of the two for each tool; it is never an exception to the policy.
 
 ### B6 — Runner data plane vs. control plane
