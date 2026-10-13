@@ -297,7 +297,9 @@ func (s *Store) applyRow(ctx context.Context, r row, keys map[keyID][]byte) erro
 		delete(s.sync.rows, r.id)
 		s.sync.mu.Unlock()
 		if r.retiredAt != nil && rf.current && rf.bucket == bucketGlobal {
-			s.reg.RetireGlobalValue(rf.owner, rf.name, rf.value, *r.retiredAt)
+			// The registry keeps its own copy through the grace; this one is done.
+			s.reg.RetireGlobalValue(rf.id, *r.retiredAt)
+			clear(rf.value)
 			return nil
 		}
 		s.drop(rf)
@@ -319,7 +321,7 @@ func (s *Store) applyRow(ctx context.Context, r row, keys map[keyID][]byte) erro
 		s.reg.AddLocal(rf.runID, rf.value)
 		return nil
 	}
-	s.reg.ApplyGlobal(rf.owner, rf.name, rf.value, rf.until, rf.retiredAt)
+	s.reg.ApplyGlobal(rf.id, rf.owner, rf.name, rf.value, rf.until, rf.retiredAt)
 	return nil
 }
 
@@ -446,7 +448,7 @@ func (s *Store) drop(rf *ref) {
 	if rf.bucket == bucketRun {
 		s.reg.DropRunValue(rf.runID, rf.value)
 	} else {
-		s.reg.DropGlobalValue(rf.owner, rf.name, rf.value)
+		s.reg.DropGlobalValue(rf.id)
 	}
 	clear(rf.value)
 }

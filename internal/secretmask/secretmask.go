@@ -52,7 +52,7 @@ type Registry struct {
 	mu     sync.RWMutex
 	perRun map[uuid.UUID][][]byte // run id -> set of secret values
 	// globals is every process-wide value masked right now, on every run: the
-	// union of current and retired, rebuilt by reflatten whenever either changes.
+	// union of current, retired and rows, rebuilt by reflatten whenever one changes.
 	globals [][]byte
 	// current holds each credential's live values by (owner, name), so a
 	// refreshed or deleted credential's old values can be let go instead of
@@ -62,6 +62,11 @@ type Registry struct {
 	// SweepGlobals drops them: masking fails open, and an event quoting the old
 	// value can still arrive after the credential moved on.
 	retired []retiredValue
+	// rows holds what a Backend committed, one entry per committed row. Two rows
+	// can carry the same bytes (a row's identity includes its key generation),
+	// so each ends on its own lifetime and the value stays masked until the last
+	// row holding it is swept or dropped.
+	rows map[uuid.UUID]globalRow
 
 	// gen bumps on every mutation that CHANGES the corpus (a de-duplicated Add
 	// is not a change). It is the cache key below: a Masker built at generation
@@ -93,6 +98,15 @@ type retiredValue struct {
 	at    time.Time
 }
 
+// globalRow is one committed row's hold on a credential value: current, with
+// until as a globalValue's, while retiredAt is zero; retired at retiredAt after.
+type globalRow struct {
+	key       globalKey
+	value     []byte
+	until     time.Time
+	retiredAt time.Time
+}
+
 // runMaskers is one run's derived masking state at a single registry generation.
 // variant (the JSONEscapedVariants expansion the audit recorder needs) is built
 // lazily: it triples the set and is documented O(n^2), and the PTY lane never
@@ -106,7 +120,7 @@ type runMaskers struct {
 
 // NewRegistry returns an empty, ready-to-use Registry.
 func NewRegistry() *Registry {
-	return &Registry{perRun: make(map[uuid.UUID][][]byte), cached: map[uuid.UUID]*runMaskers{}, current: map[globalKey][]globalValue{}}
+	return &Registry{perRun: make(map[uuid.UUID][][]byte), cached: map[uuid.UUID]*runMaskers{}, current: map[globalKey][]globalValue{}, rows: map[uuid.UUID]globalRow{}}
 }
 
 // Add registers value as a secret for runID. Values shorter than MinLen are
@@ -289,7 +303,9 @@ func (r *Registry) EvictGlobal(owner, name string, now time.Time) error {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.retireLocked(globalKey{owner, name}, nil, now)
+	k := globalKey{owner, name}
+	r.retireLocked(k, nil, now)
+	r.retireRowsLocked(func(g globalKey) bool { return g == k }, now)
 	r.reflattenLocked()
 	return nil
 }
@@ -317,6 +333,7 @@ func (r *Registry) RetireOwnerGlobals(ctx context.Context, owner string, now tim
 			r.retireLocked(k, nil, now)
 		}
 	}
+	r.retireRowsLocked(func(g globalKey) bool { return g.owner == owner }, now)
 	r.reflattenLocked()
 	return nil
 }
@@ -344,6 +361,16 @@ func (r *Registry) SweepGlobals(cutoff time.Time) int {
 			r.current[k] = vs
 		}
 	}
+	for id, row := range r.rows {
+		at := row.retiredAt
+		if at.IsZero() {
+			at = row.until
+		}
+		if !at.IsZero() && at.Before(cutoff) {
+			delete(r.rows, id)
+			dropped++
+		}
+	}
 	r.reflattenLocked()
 	return dropped
 }
@@ -365,7 +392,21 @@ func (r *Registry) retireLocked(k globalKey, keep []globalValue, now time.Time) 
 	delete(r.current, k)
 }
 
-// reflattenLocked rebuilds globals from current and retired, and bumps gen only
+// retireRowsLocked retires the current committed rows of the credentials match
+// selects, each as retireLocked retires a value. The caller holds r.mu.
+func (r *Registry) retireRowsLocked(match func(globalKey) bool, now time.Time) {
+	for id, row := range r.rows {
+		if match(row.key) && row.retiredAt.IsZero() {
+			row.retiredAt = now
+			if row.until.After(now) {
+				row.retiredAt = row.until
+			}
+			r.rows[id] = row
+		}
+	}
+}
+
+// reflattenLocked rebuilds globals from current, retired and rows, and bumps gen only
 // when the masked set changed: retiring a value masks exactly what it did
 // before, so it must not invalidate every run's cached Masker. The caller
 // holds r.mu.
@@ -385,6 +426,9 @@ func (r *Registry) reflattenLocked() {
 	}
 	for _, rv := range r.retired {
 		add(rv.value)
+	}
+	for _, row := range r.rows {
+		add(row.value)
 	}
 	if len(out) == len(r.globals) && !slices.ContainsFunc(r.globals, func(v []byte) bool { return !seen[string(v)] }) {
 		return

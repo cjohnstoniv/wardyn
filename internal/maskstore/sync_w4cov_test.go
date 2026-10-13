@@ -175,7 +175,7 @@ func TestW4CovApplyTombstoneOfAKnownRow(t *testing.T) {
 			if rf.bucket == bucketRun {
 				f.reg.AddLocal(w4CovRun, rf.value)
 			} else {
-				f.reg.ApplyGlobal(w4CovOwner, "cred", rf.value, time.Time{}, time.Time{})
+				f.reg.ApplyGlobal(w4CovRowC, w4CovOwner, "cred", rf.value, time.Time{}, time.Time{})
 			}
 			f.s.note(&rf)
 			if !w4CovContains(f.snapshot(), "tombstoned-secret-value") {
@@ -363,7 +363,7 @@ func TestW4CovFullApplyDropsWhatTheTableNoLongerHas(t *testing.T) {
 		t.Run(fmt.Sprintf("full=%v", full), func(t *testing.T) {
 			f := w4CovNewFixture(t)
 			stale := []byte("stale-secret-value")
-			f.reg.ApplyGlobal(w4CovOwner, "cred", stale, time.Time{}, time.Time{})
+			f.reg.ApplyGlobal(w4CovRowC, w4CovOwner, "cred", stale, time.Time{}, time.Time{})
 			f.s.note(&ref{id: w4CovRowC, gen: 1, bucket: bucketGlobal, owner: w4CovOwner, name: "cred", value: stale, current: true})
 			live := f.sealedRow(t, w4CovRowA, bucketGlobal, "cred", nil, "live-secret-value", 2)
 
