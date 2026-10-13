@@ -10,7 +10,6 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"runtime"
 	"strings"
 	"time"
 
@@ -27,16 +26,21 @@ import (
 
 func newRegisterCommand() *cobra.Command {
 	var org, tokenFile, stateDir, name string
-	var maxRuns int
-	cmd := &cobra.Command{Use: "register", Short: "Register this host; its owner must then verify and claim it", Args: cobra.NoArgs}
+	var flags registerLimits
+	cmd := &cobra.Command{Use: "register", Short: "Register this host with its limits; its owner must then verify and claim it", Args: cobra.NoArgs}
 	cmd.RunE = func(cmd *cobra.Command, _ []string) error {
 		if err := federation.CheckOrgURL(org); err != nil {
 			return err
 		}
-		if !cmd.Flags().Changed("max-runs") {
-			maxRuns = types.SuggestedRunnerMaxRuns(runtime.NumCPU())
-		} else if !types.ValidRunnerMaxRuns(maxRuns) {
-			return fmt.Errorf("--max-runs must be from 1 to %d", types.RunnerMaxRunsCeiling)
+		// The limits are measured and checked before anything is spent: a refused limit keeps the token.
+		measured, err := measureHost(cmd.Context())
+		if err != nil {
+			measured = types.RunnerAmounts{}
+		}
+		fmt.Fprintln(cmd.OutOrStdout(), reports(measured))
+		limits, err := flags.limits(cmd, measured)
+		if err != nil {
+			return err
 		}
 		if stateDir == "" {
 			var err error
@@ -66,7 +70,7 @@ func newRegisterCommand() *cobra.Command {
 		client.HTTPClient = &http.Client{Timeout: 30 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error {
 			return errors.New("runner registration does not follow redirects")
 		}}
-		registered, err := client.RegisterRunner(cmd.Context(), sdk.RunnerRegisterRequest{Token: token, PublicKey: key.Public().(ed25519.PublicKey), Name: name, Limits: &types.RunnerLimits{RunsAtOnce: maxRuns}, MachineName: machine})
+		registered, err := client.RegisterRunner(cmd.Context(), sdk.RunnerRegisterRequest{Token: token, PublicKey: key.Public().(ed25519.PublicKey), Name: name, Limits: &limits, MachineName: machine})
 		if err != nil {
 			return registrationFailure(err)
 		}
@@ -77,15 +81,15 @@ func newRegisterCommand() *cobra.Command {
 		if err := runneridentity.Save(stateDir, runneridentity.Identity{RunnerID: registered.RunnerID, PrivateKey: key, Fingerprint: fingerprint, OrgURLSHA256: registered.OrgURLSHA256}); err != nil {
 			return err
 		}
-		fmt.Fprintf(cmd.OutOrStdout(), "Runner %s is unclaimed.\nFingerprint: %s\nRuns at once: %d\nSign in as its owner and run wardyn runner claim with this state directory.\n",
-			registered.RunnerID, fingerprint, maxRuns)
+		fmt.Fprintf(cmd.OutOrStdout(), "Runner %s is unclaimed.\nFingerprint: %s\n%s\nSign in as its owner and run wardyn runner claim with this state directory.\n",
+			registered.RunnerID, fingerprint, limitsLine(limits))
 		return nil
 	}
 	cmd.Flags().StringVar(&org, "org", "", "organisation public HTTPS URL")
 	cmd.Flags().StringVar(&tokenFile, "token-file", "", "file containing the single-use registration token")
 	cmd.Flags().StringVar(&stateDir, "state-dir", "", "private runner state directory (defaults to the user configuration directory)")
 	cmd.Flags().StringVar(&name, "name", "", "runner name (defaults to the host name)")
-	cmd.Flags().IntVar(&maxRuns, "max-runs", 0, fmt.Sprintf("runs this host may hold at once, 1 to %d (defaults to half its CPU cores, at least 1)", types.RunnerMaxRunsCeiling))
+	flags.register(cmd)
 	_ = cmd.MarkFlagRequired("org")
 	_ = cmd.MarkFlagRequired("token-file")
 	return cmd
