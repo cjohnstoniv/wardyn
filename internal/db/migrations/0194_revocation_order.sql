@@ -47,11 +47,11 @@ UPDATE oidc_session_cuts r SET seq = o.n
 -- not. Cookies are not read against oidc_session_cuts for these, so only oidc_session_revocations
 -- counts. Rows already ordered are left alone.
 --
--- A service identity's token (principal service:<name>, no email) is read against its sponsor's cuts
--- and the global one, never its own principal's, so it is ordered against those; the human-token
--- update below then skips it.
+-- A service identity's token (principal service:<name>, no email) is read against its sponsor's cuts,
+-- its own principal's (a queued start) and the global one, so it is ordered against all three; the
+-- human-token update below then skips it.
 UPDATE api_tokens t SET rev_seq = COALESCE((SELECT max(r.seq) FROM oidc_session_revocations r
-        WHERE (r.sub = s.sponsor OR r.sub = '')
+        WHERE (r.sub = s.sponsor OR r.sub = t.principal OR r.sub = '')
           AND r.revoked_at < t.created_at), 1)
   FROM service_identities s
  WHERE t.rev_seq = 0 AND t.principal = 'service:' || s.name;

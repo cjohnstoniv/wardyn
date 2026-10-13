@@ -272,6 +272,48 @@ func TestMigrate_RevocationOrderOrdersServiceTokensBySponsor(t *testing.T) {
 	}
 }
 
+// TestMigrate_RevocationOrderOrdersServiceTokensByTheirOwnPrincipal (0194): a service token is also read
+// against the cuts of its own principal (the queued start's owner check), so a replacement token minted after
+// a revoke of service:<name> stays live after the backfill, and one minted before it stays refused.
+func TestMigrate_RevocationOrderOrdersServiceTokensByTheirOwnPrincipal(t *testing.T) {
+	pool := pgPoolIsolated(t)
+	ctx := context.Background()
+	exec := func(sql string, args ...any) {
+		t.Helper()
+		if _, err := pool.Exec(ctx, sql, args...); err != nil {
+			t.Fatalf("%s: %v", sql, err)
+		}
+	}
+	exec(`DROP TRIGGER oidc_session_revocations_stamp ON oidc_session_revocations`)
+	exec(`DROP TRIGGER oidc_session_cuts_stamp ON oidc_session_cuts`)
+	exec(`ALTER SEQUENCE oidc_revocation_seq RESTART WITH 1`)
+	exec(`INSERT INTO oidc_session_revocations (sub, revoked_at, seq) VALUES ('service:svc-own', now() - interval '2 hours', 0)`)
+	exec(`INSERT INTO service_identities (name, sponsor, sponsor_since, created_by) VALUES ('svc-own', 'spon-own', now() - interval '6 hours', 'admin')`)
+	for _, c := range []struct{ name, created string }{{"own-before-revoke", "3 hours"}, {"own-after-revoke", "1 hour"}} {
+		exec(`INSERT INTO api_tokens (id, principal, email, name, token_sha256, created_at)
+			VALUES (gen_random_uuid(), 'service:svc-own', '', $1, $1, now() - $2::interval)`, c.name, c.created)
+	}
+	sql, err := migrationFS.ReadFile("migrations/0194_revocation_order.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	exec(string(sql))
+	// refused is what the queued start's owner check and the sponsor check answer together: a cut of the
+	// token's own principal, its sponsor or the global one that drew a greater seq than the token holds.
+	for name, want := range map[string]bool{"own-before-revoke": true, "own-after-revoke": false} {
+		var rev, own, spon int64
+		if err := pool.QueryRow(ctx, `SELECT t.rev_seq,
+			COALESCE((SELECT max(r.seq) FROM oidc_session_revocations r WHERE r.sub = t.principal OR r.sub = ''), 0),
+			COALESCE((SELECT max(r.seq) FROM oidc_session_revocations r WHERE r.sub = 'spon-own' OR r.sub = ''), 0)
+			FROM api_tokens t WHERE t.name = $1`, name).Scan(&rev, &own, &spon); err != nil {
+			t.Fatal(err)
+		}
+		if got := own > rev || spon > rev; got != want {
+			t.Errorf("service token %s refused = %v (rev_seq %d, own-principal cut %d, sponsor cut %d), want %v", name, got, rev, own, spon, want)
+		}
+	}
+}
+
 // TestMigrate_RevocationOrderTokenBeforeTheOldestCut (0194): a token or key created before the oldest cut
 // has no earlier cut to take a seq from. It takes the value reserved below every cut, so the oldest cut,
 // which draws the first seq the migration hands out, still ends it.
