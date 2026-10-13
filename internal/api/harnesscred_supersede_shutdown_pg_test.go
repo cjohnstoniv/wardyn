@@ -7,7 +7,7 @@
 // a shutdown that hits WaitBackground's budget while the tail is still inside
 // KillSandbox abandons it. The run is already KILLED — claimKillTransition's
 // CAS wins synchronously, before the detach — but no run.kill row was ever
-// written, exactly the state recoverAbandonedKillTail (runs_lifecycle.go)
+// written, exactly the state recoverAbandonedKillTail (sandbox_sweep.go)
 // exists to find. A restarted process must recover it: SweepTerminalSandboxes
 // re-runs the teardown and writes run.kill once the row is old enough that its
 // own tail could not still be running (killTailRecoveryGrace).
