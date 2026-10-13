@@ -908,10 +908,10 @@ A deployment can require a second human to approve governance writes. A covered 
 stored as a pending change and answered `202` with a `{"pending_change": {...}}` body; nothing is
 applied until a different approver approves it. The SDK never reads that body as a saved object:
 
-- Any method that goes through the shared request path returns a `*client.PendingApprovalError`
+- Any method on the shared request path returns a `*client.PendingApprovalError`
   (check with `errors.As`) instead of a zero-value result. Only a `202` whose body has a
-  `pending_change` key is treated this way; `KillRun`, `RecordWorkspaceTask`, `ScanWorkspace` and
-  `ScanSource` also answer `202` and decode as before.
+  `pending_change` key is treated this way; `KillRun`, `RecordWorkspaceTask`, `ScanWorkspace`,
+  `BuildWorkspace` and `ScanSource` also answer `202` and decode as before.
 - `ApplyGovernance` keeps its signature. When any write is pending it returns the current document
   and a `*client.PendingApprovalError`, so a caller written before 0.8.6 fails loudly instead of
   carrying on.

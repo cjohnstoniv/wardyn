@@ -116,6 +116,38 @@ func (c *Client) ScanWorkspace(ctx context.Context, id uuid.UUID) (json.RawMessa
 	return out, err
 }
 
+// WorkspaceBuild is one workspace's image-build view (GET/POST /api/v1/workspaces/{id}/build). Record is
+// present only while the workspace's build record is current; Reproducible false reads "not reproducible".
+type WorkspaceBuild struct {
+	State        string      `json:"state"`
+	Image        string      `json:"image,omitempty"`
+	Detail       string      `json:"detail,omitempty"`
+	StartedAt    *time.Time  `json:"started_at,omitempty"`
+	Log          []string    `json:"log,omitempty"`
+	Record       *ImageBuild `json:"record,omitempty"`
+	RecordSHA256 string      `json:"record_sha256,omitempty"`
+	Reproducible *bool       `json:"reproducible,omitempty"`
+}
+
+// GetWorkspaceBuild reads a workspace's image-build state. GET /api/v1/workspaces/{id}/build.
+func (c *Client) GetWorkspaceBuild(ctx context.Context, id uuid.UUID) (WorkspaceBuild, error) {
+	var out WorkspaceBuild
+	err := c.do(ctx, http.MethodGet, "/api/v1/workspaces/"+id.String()+"/build", nil, &out)
+	return out, err
+}
+
+// BuildWorkspace starts the workspace's image build (202 while it runs, 200 when there is nothing to do);
+// refresh rebuilds from fresh inputs even when an image is kept. POST /api/v1/workspaces/{id}/build.
+func (c *Client) BuildWorkspace(ctx context.Context, id uuid.UUID, refresh bool) (WorkspaceBuild, error) {
+	var body any // nil sends no body; a typed nil would send "null"
+	if refresh {
+		body = map[string]bool{"refresh": true}
+	}
+	var out WorkspaceBuild
+	err := c.do(ctx, http.MethodPost, "/api/v1/workspaces/"+id.String()+"/build", body, &out)
+	return out, err
+}
+
 // ── Sources (tier 1: the shared library) ────────────────────────────────────
 
 // SourceRequest is the body for POST /api/v1/sources — one repo/dir configured
