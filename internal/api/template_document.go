@@ -379,13 +379,11 @@ func (d *templateDecoder) checkAvailable(req createRunRequest) {
 }
 
 // documentAvailabilityRefusal lists the request paths a document or a preset
-// cannot hold because this server cannot honour them yet. Both doors read it,
-// and the local-enable lane lifts the local case for both at once.
+// cannot hold because this server cannot honour them yet. Both doors read it.
+// placement: local is the run door's to judge at launch (stepLocalEligibility),
+// as it is for a request sent directly.
 func documentAvailabilityRefusal(req createRunRequest) []string {
 	var paths []string
-	if req.Placement == client.PlacementLocal {
-		paths = append(paths, "placement")
-	}
 	if path, what := runModeUnavailable(req); what != "" {
 		paths = append(paths, path)
 	}
