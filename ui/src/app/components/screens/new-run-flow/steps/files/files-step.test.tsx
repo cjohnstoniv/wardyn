@@ -181,7 +181,24 @@ describe("main drive", () => {
     expect(size()).toHaveFocus();
     expect(go).not.toHaveBeenCalled();
     await userEvent.tab();
-    expect(await screen.findByText(NR_FILES.SIZE_ERROR)).toBeInTheDocument();
+    // Under the field, and in the summary.
+    expect((await screen.findAllByText(NR_FILES.SIZE_ERROR)).length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("with no size the summary asks for one and never reads done, and the map names the drive with no number", async () => {
+    catalogue = NO_LEGACY;
+    checks.result = { ...filesPreflight(MAIN_DRIVE_FACTS.filesystem), runner_pools: [{ ...filesPreflight(MAIN_DRIVE_FACTS.filesystem).runner_pools![0], limits: [limitsFor("interactive")] }] };
+    show();
+    await screen.findByText(NR_FILES.ENFORCED);
+    await userEvent.click(screen.getByRole("radio", { name: NR_FILES.NO_EXTRA }));
+    const map = screen.getByRole("region", { name: NR_FILES.MOUNT_TITLE });
+    expect(within(map).getByText(NR_FILES.MAIN_TITLE)).toBeInTheDocument();
+    expect(within(map).queryByText(/GiB/)).toBeNull();
+    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent(NR_FILES.SIZE_ERROR), { timeout: 3000 });
+    expect(screen.getByTestId("nr-files-summary")).toHaveAttribute("data-tone", "prompt");
+    await userEvent.type(size(), "4");
+    await waitFor(() => expect(screen.getByTestId("nr-files-summary")).toHaveAttribute("data-tone", "done"), { timeout: 3000 });
+    expect(within(map).getByText(NR_FILES.MOUNT_MAIN(4))).toBeInTheDocument();
   });
 });
 
@@ -687,6 +704,8 @@ describe("mount map and summary", () => {
   it("the summary is a sticky status that names the start and the kept drives and folders as one list", async () => {
     show(BACKGROUND);
     expect(screen.getByTestId("nr-files-summary")).toHaveAttribute("data-tone", "prompt");
+    // This pool defaults no size for a Background run, and a summary with no size only asks for one.
+    await userEvent.type(await screen.findByLabelText(NR_FILES.SIZE_LABEL), "4");
     await add(NR_FILES.REPOSITORY_BADGE, "payments");
     await add(NR_FILES.KIND_USER_DRIVE, "Your drive");
     await add(NR_FILES.FOLDER_TITLE, "datasets");
