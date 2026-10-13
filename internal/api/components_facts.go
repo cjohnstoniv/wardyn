@@ -184,7 +184,10 @@ func (a attachedComponent) fact(ordinal int, comps runComponents, baseline compo
 		}
 	}
 	f.Requirements = append(f.Requirements, setupSecretItems(types.RunPolicySpec{EligibleGrants: missing}, nil)...)
-	if a.needsSignIn {
+	switch {
+	case a.needsSignIn && attachedAzureCLI(a) != nil:
+		f.Requirements = append(f.Requirements, azureCLISignInItem(f.ID, f.Name))
+	case a.needsSignIn:
 		f.Requirements = append(f.Requirements, cliSignInItem(f.ID, f.Name))
 	}
 	switch {

@@ -15,8 +15,8 @@ import type { ComponentRef } from "../../../../../lib/types/components";
 import { Button } from "../../../../ui/button";
 import { Input } from "../../../../ui/input";
 import { NR_TOOLS } from "../../../../wardyn/copy/new-run/tools";
-import { CustomComponentDialog as FullEditor } from "../../../new-run/custom-component-dialog";
-import { blankSecret, headerHostChoices, requestOf, validateDraft, type ComponentDraft } from "../../../new-run/custom-component-form-model";
+import { CustomComponentDialog as FullEditor } from "../../checks/custom-component-dialog";
+import { blankSecret, headerHostChoices, requestOf, validateDraft, type ComponentDraft } from "../../checks/custom-component-form-model";
 import { SELECT_CLASS, ToolDialog, ToolField } from "./tool-dialog";
 
 export interface CustomComponentProps {

@@ -21,6 +21,9 @@ func TestNonCanonicalLiteralDenialIsNeverLiftable(t *testing.T) {
 		if !strings.Contains(got, egressNeverLiftableRemedy) {
 			t.Errorf("%s: detail %q lacks the never-liftable sentence", host, got)
 		}
+		if !strings.HasPrefix(got, "literal IP "+host+" decodes to ") {
+			t.Errorf("%s: detail %q is not a sentence that names what the spelling decodes to", host, got)
+		}
 		if strings.Contains(got, egressInternalHostsRemedy) {
 			t.Errorf("%s: detail %q offers the internal_hosts remedy", host, got)
 		}

@@ -97,11 +97,11 @@ func TestPG_RunnerErasedRunIsContainedWithoutRefusingThePage(t *testing.T) {
 	}
 	// Results are recorded without any run row; then the quarantined run
 	// leaves the inventory and the unrelated run converges.
-	if _, _, err := st.RecordRunnerActionResult(ctx, rn.ID, healthy.ID, actions[0].ID, types.RunnerActionSuccess, time.Now(), prepareSpoolTest); err == nil {
+	if _, _, err := st.RecordRunnerActionResult(ctx, rn.ID, healthy.ID, actions[0].ID, types.RunnerActionSuccess, "", time.Now(), prepareSpoolTest); err == nil {
 		t.Fatal("asserted result accepted for another run")
 	}
 	for _, a := range actions {
-		if _, first, err := st.RecordRunnerActionResult(ctx, rn.ID, run.ID, a.ID, types.RunnerActionSuccess, time.Now(), prepareSpoolTest); err != nil || !first {
+		if _, first, err := st.RecordRunnerActionResult(ctx, rn.ID, run.ID, a.ID, types.RunnerActionSuccess, "", time.Now(), prepareSpoolTest); err != nil || !first {
 			t.Fatalf("asserted %s result: %v %v", a.Kind, first, err)
 		}
 	}
@@ -211,10 +211,10 @@ func TestPG_RunnerAssertedDeferredContinuesOncePerCompletedInventory(t *testing.
 		t.Fatalf("asserted actions = %+v", actions)
 	}
 	quarantine := actions[1]
-	if _, _, err := st.RecordRunnerActionResult(ctx, rn.ID, row.RunID, actions[0].ID, types.RunnerActionSuccess, time.Now(), prepareSpoolTest); err != nil {
+	if _, _, err := st.RecordRunnerActionResult(ctx, rn.ID, row.RunID, actions[0].ID, types.RunnerActionSuccess, "", time.Now(), prepareSpoolTest); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := st.RecordRunnerActionResult(ctx, rn.ID, row.RunID, quarantine.ID, types.RunnerActionDeferred, time.Now(), prepareSpoolTest); err != nil {
+	if _, _, err := st.RecordRunnerActionResult(ctx, rn.ID, row.RunID, quarantine.ID, types.RunnerActionDeferred, "", time.Now(), prepareSpoolTest); err != nil {
 		t.Fatal(err)
 	}
 	next := uuid.NewString()
@@ -234,7 +234,7 @@ func TestPG_RunnerAssertedDeferredContinuesOncePerCompletedInventory(t *testing.
 	if err := st.BeginRunnerInventory(ctx, rn.ID, next); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := st.RecordRunnerActionResult(ctx, rn.ID, row.RunID, successor[0].ID, types.RunnerActionDeferred, time.Now(), prepareSpoolTest); err != nil {
+	if _, _, err := st.RecordRunnerActionResult(ctx, rn.ID, row.RunID, successor[0].ID, types.RunnerActionDeferred, "", time.Now(), prepareSpoolTest); err != nil {
 		t.Fatal(err)
 	}
 	if n, err := st.ReissueDeferredAssertedRunnerActions(ctx, rn.ID, uuid.NewString()); err != nil || n != 0 {
@@ -248,7 +248,7 @@ func TestPG_RunnerAssertedDeferredContinuesOncePerCompletedInventory(t *testing.
 	if len(last) != 1 {
 		t.Fatalf("third link = %+v", last)
 	}
-	if _, _, err := st.RecordRunnerActionResult(ctx, rn.ID, row.RunID, last[0].ID, types.RunnerActionSuccess, time.Now(), prepareSpoolTest); err != nil {
+	if _, _, err := st.RecordRunnerActionResult(ctx, rn.ID, row.RunID, last[0].ID, types.RunnerActionSuccess, "", time.Now(), prepareSpoolTest); err != nil {
 		t.Fatal(err)
 	}
 	var settled int

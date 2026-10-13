@@ -15,8 +15,6 @@ export const NR_REVIEW = {
   VIEW_PRETTY: "Pretty",
   VIEW_YAML: "YAML",
   VIEW_JSON: "JSON",
-  /** pending W-46: the recommended text until the owner answers. */
-  WARNINGS_TITLE: "Before you launch",
   /** pending W-04: the recommended text until the owner answers. */
   NARROWED_BY: (source: string | number) => `Your request was narrowed by ${source}.`,
   NARROWED_APPLIES: (applied: string | number) => `${applied} will apply.`,
@@ -54,14 +52,10 @@ export const NR_REVIEW = {
   TIMING_INTERACTIVE: "Interactive · Starts when launched",
   TIMING_NOW: "Autonomous · Run Now",
   WHERE_VALUE: (pool: string | number) => `${pool} pool`,
-  WHERE_DETAIL: (hosting: string | number, used: string | number, max: string | number) =>
-    `${hosting} · ${used} of ${max} running`,
+  WHERE_DETAIL: (kind: string | number, used: string | number, max: string | number) =>
+    `${kind} · ${used} of ${max} running`,
   /** pending W-03: the recommended text until the owner answers. */
   WHERE_ONLINE: (n: string | number) => `${n} of your runners online`,
-  /** pending W-45: the recommended text until the owner answers. */
-  RECORDING_LABEL: "Recording",
-  /** pending W-45: the recommended text until the owner answers. */
-  RECORDING_ON: "Every keystroke and every outbound connection.",
   PROV_ADDED: "Added by you",
   PROV_SELECTED: "Selected by you",
   PROV_RUN_SETUP: "Run setup",
@@ -122,6 +116,7 @@ export const NR_REVIEW = {
   POLICY_BARRIER: "Barrier",
   POLICY_NETWORK: "Network",
   POLICY_HOSTS: (n: string | number) => `${n} hosts allowed`,
+  POLICY_HOST_ONE: "1 host allowed",
   POLICY_CREDENTIALS: "Credentials",
   POLICY_NO_CREDENTIALS: "No credentials requested",
   POLICY_HIDDEN: "Selected model provider · Hidden",

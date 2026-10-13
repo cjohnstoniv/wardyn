@@ -41,6 +41,7 @@ func TestMutationRecoveryExactProofAndLostAckRestart(t *testing.T) {
 			for _, field := range []string{"marker", "generation", "operation", "contained", "missing", "run", "ref"} {
 				t.Run(field, func(t *testing.T) {
 					bad := action
+					bad.ID = uuid.New() // a refused action ID is answered for good
 					copy := proof
 					bad.Recovery = &copy
 					switch field {
@@ -59,7 +60,7 @@ func TestMutationRecoveryExactProofAndLostAckRestart(t *testing.T) {
 					case "ref":
 						bad.Ref += "other"
 					}
-					if _, err := m.apply(ctx, bad); err == nil {
+					if result, err := m.apply(ctx, bad); err == nil && result.Outcome != types.RunnerActionRefused {
 						t.Fatal("mismatched recovery accepted")
 					}
 				})

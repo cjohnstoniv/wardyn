@@ -232,12 +232,11 @@ export interface PushRulesSpec {
   max_file_size_mib?: number;
 }
 
-// pushRulesIsSet moved to new-run-rail.tsx (bundle-split fix, #181): its only
-// caller is that lazy screen's own RunRail, and this module is eager (some
-// of policy.ts's other exports reach the runs board), so a runtime function
-// living here bundled into the entry chunk for a reader that never runs
-// there — same pattern push-content-card.tsx's isPushContentRequest and
-// audit-decision.tsx's ruleSourceLabel document.
+// pushRulesIsSet is gone with the New Run rail that was its only caller (it
+// mirrored Go's PushRulesSpec.IsSet()). This module is eager, so a runtime
+// reader that a lazy screen alone needs belongs in that screen's chunk —
+// push-content-card.tsx's isPushContentRequest and audit-decision.tsx's
+// ruleSourceLabel document the same pattern.
 
 export interface RunPolicySpec {
   // The key is always present (no `,omitempty` on

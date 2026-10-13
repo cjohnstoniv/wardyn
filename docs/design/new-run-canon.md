@@ -9,7 +9,7 @@ Every string the New Run flow shows lives once in this file and once in the lazy
 | Approved mock | The owner-approved New Run mock: Start, the Guided steps, the run document editor, Review, Save as, Name and Launched. |
 | Tools and access prototype | The approved step 5 prototype. |
 | Templates prototype | The approved Templates screen prototype. |
-| Deviation tables | The owner-approved changes to the mock's wording: the Files wording W1-W5, the placement wording package, the harness and scheduling copy, the run document format. |
+| Deviation tables | The owner-approved changes to the mock's wording: the Files wording W1-W5, the placement wording package, the harness and scheduling copy, the run document format, the pool words (organization and user pools; self-hosted and remote-hosted runners). |
 | Pending wording | The recommended text for each new wording row, behind one constant until the owner answers. |
 
 ## 2. Behaviour summary
@@ -41,6 +41,8 @@ Every string the New Run flow shows lives once in this file and once in the lazy
 Some constants show only under a condition. A step lane applies the rule; `new-run-copy.test.ts` checks that each constant named here exists.
 
 - `NR_TOOLS.PROVIDER_PROXY` shows only when the provider credential's delivery is `proxy`: key, token and subscription kinds. A provider whose delivery is `sandbox_short_lived` (Bedrock SSO, whose role credentials sit in the sandbox) shows `NR_TOOLS.DELIVERY_SHORT_LIVED` and `NR_TOOLS.DELIVERY_AWS` instead.
+- `NR_SHARED.CONTINUE_TO` writes the step name in lower case ("Continue to harnesses", "Continue to files": Make `App.tsx`:1928, 2144). Every Guided step's primary button, `NR_SHARED.CONTINUE` and the document's `NR_DOCUMENT.CONTINUE_REVIEW` end in an arrow shown to sight only (Make `App.tsx`:1293, 1928, 2144, 2577, 2695); `NR_REVIEW.LAUNCH_RUN` has none.
+- `NR_LAUNCH.CANCEL_RUN` opens the console's kill confirm before it cancels the waiting run; the confirm's own strings are the shared kill dialog's. Deviation (owner 2026-10-13: keep the Cancel-run confirm); Make cancels at once (`App.tsx`:3335-3343).
 - `NR_TOOLS.EFFECT_ALLOW` is both the default option and a rule effect ("Run it" stays, per the tool-rule ruling): offered when the policy allows it, otherwise disabled with the server's reason.
 
 ## 4. Never shown
@@ -143,13 +145,13 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `REASON_INTERACTIVE_ONLY` | pending (W-03) | Interactive only |
 | `REASON_NOT_ALLOWED_PROFILE` | pending (W-03) | Not allowed by your profile |
 | `REASON_RUNNERS_OFF` | pending (W-03) | Runners are switched off |
-| `PLACEMENT_DENIED(profile, hosting)` | pending (W-03) | {profile} doesn't allow runs on {hosting} pools. |
+| `PLACEMENT_DENIED(profile, kind)` | pending (W-03) | {profile} doesn't allow runs on {kind} pools. |
 | `CAPACITY_LABEL` | mock | Total pool capacity |
 | `CAPACITY_ARIA` | mock | Total pool capacity used |
 | `USED_OF_MAX(used, max)` | mock | {used} of {max} running |
 | `RUNNING_ONLY(used)` | deviation (DS-5 §8) | {used} running |
 | `MAX_RUNS(max)` | mock | {max} runs maximum in this pool |
-| `NO_POOL_LIMIT` | deviation (DS-5 §8) | No pool limit |
+| `POOL_LIMIT_FROM_RUNNERS` | pending (W-50) | Set by its runners |
 | `ALLOWANCE_LABEL` | mock | Your allowance |
 | `ALLOWANCE_ARIA` | deviation (DS-5 §8) | Your allowance used |
 | `ALLOWANCE_USED(active, max)` | deviation (DS-5 §8) | {active} of {max} running (all pools) |
@@ -342,7 +344,7 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `NO_EXTRA` | mock | No extra files — only the main drive |
 | `NO_EXTRA_DELETED` | mock | Only the main drive. Nothing from this run is kept. |
 | `NO_EXTRA_KEPT(grace)` | pending (W-12) | Only the main drive. It is deleted {grace} after the run's end time. |
-| `CHOOSE_FILES` | mock | Choose what it needs, or choose Nothing. |
+| `CHOOSE_FILES` | deviation (owner-approved Files prototype 2026-10-13) | Add what it needs, or choose No extra files. |
 | `MOUNT_TITLE` | mock | Mount map |
 | `MOUNT_BODY` | mock | Read-only view of where files appear in the sandbox. |
 | `MOUNT_MAIN(n)` | mock | Main drive · {n} GiB |
@@ -357,6 +359,53 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `SUMMARY_KEPT(grace)` | pending (W-12) | the main drive is kept {grace} after its end time |
 | `SUMMARY_NO_END` | pending (W-12) | the main drive is kept until you end the run |
 | `SUMMARY_NO_EXTRA(n, life)` | mock | Main drive {n} GiB · no extra files · {life}. |
+| `ATTACH_TITLE` | deviation (owner-approved Files prototype 2026-10-13) | Repositories, drives and folders |
+| `ATTACH_BODY` | deviation (owner-approved Files prototype 2026-10-13) | Each one appears in the sandbox at its mount path. |
+| `ADD` | deviation (owner-approved Files prototype 2026-10-13) | + Add |
+| `ADD_ARIA` | deviation (owner-approved Files prototype 2026-10-13) | Add a repository, drive or folder |
+| `KIND_USER_DRIVE` | deviation (owner-approved Files prototype 2026-10-13) | User drive |
+| `KIND_SHARED_DRIVE` | deviation (owner-approved Files prototype 2026-10-13) | Shared drive |
+| `KIND_FOLDER` | deviation (owner-approved Files prototype 2026-10-13) | Folder |
+| `FOLDER_TITLE` | deviation (owner-approved Files prototype 2026-10-13) | Folder on this machine |
+| `FOLDER_BODY` | deviation (owner-approved Files prototype 2026-10-13) | A folder on the computer running Wardyn. |
+| `SHARED_SUB` | deviation (owner-approved Files prototype 2026-10-13) | Provided by your admin. You get your own folder on it. |
+| `FOLDER_REMOTE` | deviation (owner-approved Files prototype 2026-10-13) | Wardyn runs on a remote server, so it can't open folders on this machine. |
+| `EDIT` | deviation (owner-approved Files prototype 2026-10-13) | Edit |
+| `EDIT_NAMED(name)` | deviation (owner-approved Files prototype 2026-10-13) | Edit {name} |
+| `REMOVE_NAMED(name)` | deviation (owner-approved Files prototype 2026-10-13) | Remove {name} |
+| `STORED_ON` | deviation (owner-approved Files prototype 2026-10-13) | Stored on |
+| `ADDED(name)` | deviation (owner-approved Files prototype 2026-10-13) | {name} added. |
+| `UPDATED(name)` | deviation (owner-approved Files prototype 2026-10-13) | {name} updated. |
+| `REMOVED(name)` | deviation (owner-approved Files prototype 2026-10-13) | {name} removed. |
+| `DIALOG_TITLE` | deviation (owner-approved Files prototype 2026-10-13) | Add to this run |
+| `ADD_REPO_TITLE` | deviation (owner-approved Files prototype 2026-10-13) | Add repository |
+| `ADD_USER_DRIVE_TITLE` | deviation (owner-approved Files prototype 2026-10-13) | Add user drive |
+| `ADD_SHARED_DRIVE_TITLE` | deviation (owner-approved Files prototype 2026-10-13) | Add shared drive |
+| `ADD_FOLDER_TITLE` | deviation (owner-approved Files prototype 2026-10-13) | Add folder |
+| `STEPS_ARIA` | deviation (owner-approved Files prototype 2026-10-13) | Steps |
+| `STEP_TYPE` | deviation (owner-approved Files prototype 2026-10-13) | Type |
+| `STEP_CHOOSE` | deviation (owner-approved Files prototype 2026-10-13) | Choose |
+| `STEP_MOUNT` | deviation (owner-approved Files prototype 2026-10-13) | Mount path |
+| `ALREADY_ADDED` | deviation (owner-approved Files prototype 2026-10-13) | Already added to this run. |
+| `BRANCH_LABEL` | deviation (owner-approved Files prototype 2026-10-13) | Branch |
+| `MOUNT_HINT` | deviation (owner-approved Files prototype 2026-10-13) | Where it appears in the sandbox. |
+| `PATH_INVALID` | deviation (lead 2026-10-13: the server accepts /home/agent only) | Use a path inside /home/agent. |
+| `PATH_TAKEN(name, path)` | deviation (owner-approved Files prototype 2026-10-13) | {name} is already mounted at {path}. |
+| `ACCESS_LABEL` | deviation (owner-approved Files prototype 2026-10-13) | Access |
+| `SAVE` | deviation (owner-approved Files prototype 2026-10-13) | Save |
+| `ADD_CONFIRM` | deviation (owner-approved Files prototype 2026-10-13) | Add |
+| `START_TITLE` | deviation (owner-approved Files prototype 2026-10-13) | Starting folder |
+| `START_BODY` | deviation (owner-approved Files prototype 2026-10-13) | Where it starts. Choose from what you added above. |
+| `START_FOLDER_LABEL` | deviation (owner-approved Files prototype 2026-10-13) | Folder |
+| `START_OPTION(name, path)` | deviation (owner-approved Files prototype 2026-10-13) | {name} · {path} |
+| `START_MAIN` | deviation (owner-approved Files prototype 2026-10-13) | Main drive · /home/agent |
+| `SUBFOLDER_LABEL` | deviation (owner-approved Files prototype 2026-10-13) | Subfolder |
+| `FOLDERS_NONE` | pending (W-48) | No folders onboarded yet. Add one in Workspaces. |
+| `FOLDER_WITH_REPOS(workspace)` | pending (W-49) | This folder comes with {workspace}'s repositories. Remove them to remove it. |
+| `SUBFOLDER_PLACEHOLDER` | deviation (owner-approved Files prototype 2026-10-13) | e.g. src |
+| `SUBFOLDER_ERROR(name)` | deviation (owner-approved Files prototype 2026-10-13) | Use a folder inside {name}. |
+| `LIST_COMMA(a, b)` | deviation (owner-approved Files prototype 2026-10-13) | {a}, {b} |
+| `LIST_AND(a, b)` | deviation (owner-approved Files prototype 2026-10-13) | {a} and {b} |
 
 ### 7.6 Tools and access
 
@@ -456,6 +505,7 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `MCP_CARD_TITLE` | mock | Add an MCP server |
 | `MCP_CARD_BODY` | mock | Connect a remote MCP server by URL. Its token stays with the proxy. |
 | `MCP_CARD_BUTTON` | mock | Add MCP server |
+| `CLI_GITHUB_BODY` | deviation (owner 2026-10-13, T9) | Actions and the REST API with gh; issue and pull request lists aren't supported yet. |
 | `CARD_ADDED(name)` | mock | {name} added. Its hosts and credential are included. |
 | `COMPONENT_ADDED` | mock | Added to this run. |
 | `COMPONENT_ADDED_NAMED(name)` | mock | {name} added to this run. |
@@ -595,7 +645,6 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `VIEW_PRETTY` | mock | Pretty |
 | `VIEW_YAML` | mock | YAML |
 | `VIEW_JSON` | mock | JSON |
-| `WARNINGS_TITLE` | pending (W-46) | Before you launch |
 | `NARROWED_BY(source)` | pending (W-04) | Your request was narrowed by {source}. |
 | `NARROWED_APPLIES(applied)` | mock | {applied} will apply. |
 | `NARROWED_TAIL_POOL(pool)` | pending (W-04) | Not allowed in {pool}. |
@@ -628,10 +677,8 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `TIMING_INTERACTIVE` | mock | Interactive · Starts when launched |
 | `TIMING_NOW` | mock | Autonomous · Run Now |
 | `WHERE_VALUE(pool)` | mock | {pool} pool |
-| `WHERE_DETAIL(hosting, used, max)` | mock | {hosting} · {used} of {max} running |
+| `WHERE_DETAIL(kind, used, max)` | deviation (pool words) | {kind} · {used} of {max} running |
 | `WHERE_ONLINE(n)` | pending (W-03) | {n} of your runners online |
-| `RECORDING_LABEL` | pending (W-45) | Recording |
-| `RECORDING_ON` | pending (W-45) | Every keystroke and every outbound connection. |
 | `PROV_ADDED` | mock | Added by you |
 | `PROV_SELECTED` | mock | Selected by you |
 | `PROV_RUN_SETUP` | mock | Run setup |
@@ -684,6 +731,7 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `POLICY_BARRIER` | mock | Barrier |
 | `POLICY_NETWORK` | mock | Network |
 | `POLICY_HOSTS(n)` | mock | {n} hosts allowed |
+| `POLICY_HOST_ONE` | deviation (lead 2026-10-13, the singular of POLICY_HOSTS) | 1 host allowed |
 | `POLICY_CREDENTIALS` | mock | Credentials |
 | `POLICY_NO_CREDENTIALS` | mock | No credentials requested |
 | `POLICY_HIDDEN` | mock | Selected model provider · Hidden |
@@ -765,13 +813,6 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `JUST_NOW` | mock | Just now |
 | `GIVES_UP` | mock | Gives up |
 | `GIVES_UP_IN(wait)` | deviation (DS-5 §8) | In {wait} |
-| `SINCE_MINUTE_ONE` | pending (W-47) | 1 minute ago |
-| `SINCE_MINUTES(n)` | pending (W-47) | {n} minutes ago |
-| `SINCE_HOUR_ONE` | pending (W-47) | 1 hour ago |
-| `SINCE_HOURS(n)` | pending (W-47) | {n} hours ago |
-| `SINCE_DAYS(n)` | pending (W-47) | {n} days ago |
-| `MINUTE_ONE` | pending (W-47) | 1 minute |
-| `MINUTES(n)` | pending (W-47) | {n} minutes |
 | `CANCEL_RUN` | mock | Cancel run |
 | `START_ANOTHER` | mock | Start another run |
 | `VIEW_RUN` | mock | View run |

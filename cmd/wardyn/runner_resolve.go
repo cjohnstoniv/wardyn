@@ -6,11 +6,13 @@ package main
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/google/uuid"
 	"github.com/spf13/cobra"
 
+	"github.com/cjohnstoniv/wardyn/internal/types"
 	sdk "github.com/cjohnstoniv/wardyn/pkg/client"
 )
 
@@ -20,6 +22,41 @@ type runnerRef struct {
 	self   *uuid.UUID
 	remote string
 	name   string
+	// unclaimed is set when the runner was read among your own and its owner has not claimed it yet.
+	unclaimed bool
+	// byID is set when the argument was a runner id, which is taken as given without a read.
+	byID bool
+}
+
+// readClaims reads your own runners once when a runner was named by id, so one not claimed yet is known
+// as that however it was named. A credential with no runners of its own is refused the list; the server
+// then says what it thinks of the id.
+func readClaims(cmd *cobra.Command, c *sdk.Client, refs []runnerRef) error {
+	if !slices.ContainsFunc(refs, func(r runnerRef) bool { return r.byID }) {
+		return nil
+	}
+	own, err := c.ListMyRunners(cmd.Context())
+	if err := unlessRefused(err); err != nil {
+		return err
+	}
+	for i, ref := range refs {
+		for _, r := range own {
+			if ref.byID && r.ID == *ref.self {
+				refs[i].unclaimed = r.State == types.RunnerUnclaimed
+			}
+		}
+	}
+	return nil
+}
+
+// in reports whether the pool's members include this runner.
+func (r runnerRef) in(members []sdk.RunnerPoolMemberView) bool {
+	for _, m := range members {
+		if (r.self != nil && m.ID == r.self.String()) || (r.self == nil && m.ID == r.remote) {
+			return true
+		}
+	}
+	return false
 }
 
 func (r runnerRef) kind() string {
@@ -35,7 +72,7 @@ func (r runnerRef) kind() string {
 // remote-hosted runner's id, and the server's sentence says why it cannot join.
 func resolveRunner(cmd *cobra.Command, c *sdk.Client, arg string, remotes func() ([]sdk.RemoteRunnerView, error)) (runnerRef, error) {
 	if id, err := uuid.Parse(arg); err == nil {
-		return runnerRef{self: &id, name: arg}, nil
+		return runnerRef{self: &id, name: arg, byID: true}, nil
 	}
 	var found []runnerRef
 	own, err := c.ListMyRunners(cmd.Context())
@@ -45,7 +82,7 @@ func resolveRunner(cmd *cobra.Command, c *sdk.Client, arg string, remotes func()
 	for _, r := range own {
 		if r.Name == arg {
 			id := r.ID
-			found = append(found, runnerRef{self: &id, name: arg})
+			found = append(found, runnerRef{self: &id, name: arg, unclaimed: r.State == types.RunnerUnclaimed})
 		}
 	}
 	rs, err := remotes()

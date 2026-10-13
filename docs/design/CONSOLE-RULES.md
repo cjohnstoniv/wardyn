@@ -35,6 +35,7 @@ Teal is the only loud color, and it means *"press this."* Everything else is gre
 | Active nav item | `--sidebar-accent` fill + `--sidebar-primary` rail | `navLinkClass` (`app-shell.tsx#navLinkClass`) and the active rail (`app-shell.tsx#SidebarNav`) | A third active treatment — use the shipped one |
 | Barrier tier | METALS: `--fence-*` bronze, `--wall-*` silver, `--vault-*` gold | `ConfinementChip` (`primitives.tsx#ConfinementChip`), `BarrierStrengthStrip`, `tier-illustration.tsx#WASH`, the tier matrix (`setup/environment-step.tsx#TIER_NAME_TINT`) | Card borders, run state, buttons, section headers |
 | Run / approval / health state | `--success` `--warning` `--danger` `--info` `--cyan` + their `-subtle` fills | `Chip` tones (`primitives.tsx#toneClass`), shell banners (`app-shell.tsx#AppShell`), `TruncatedNote` | Decoration. Always paired with a glyph or word — never color alone |
+| File kind (New Run, Files) | `--info` repository, `--primary` user drive, `--violet` / `--violet-subtle` shared drive, `--warning` folder, `--muted-foreground` for a kind not offered yet | The kind tile, kind badge and the card's left edge (`kind-visuals.tsx#KindTile`, `kind-visuals.tsx#KindBadge`) | Run state, buttons, anything that is not a file kind. Always beside the kind's word — never color alone |
 | Agent identity | `--agent-claude` and the per-agent badge colors | `AgentBadge` monogram (`primitives.tsx#AgentBadge`) | Anything but the WHO badge |
 | Destructive | `--destructive` (= `--danger`) | `destructive` Button, delete confirmations | Deny, Cancel, or any reversible action |
 | Everything else | `--muted`, `--muted-foreground`, `--accent`, `--border`, `--border-strong`, `--surface-2` | Surfaces, rows, hairlines, secondary text | — |
@@ -251,6 +252,12 @@ Bind `disabled` the instant the action fires; reveal the spinner later.
 - **Canonical strings are the app's strings.** `copy.ts` and `cc-meta.ts` own the shared
   vocabulary so a chip and the sentence beside it cannot disagree. A copy change is
   called out as one — tests and demo narration read them.
+- **Pool words.** A runner is a **self-hosted runner** (a person's computer) or a **remote-hosted
+  runner** (the server's Docker host or Kubernetes cluster); a pool is an **organization pool** or
+  a **user pool**; every runner has **Runs at once**, and a pool's limits come from its runners.
+  "Executor", "Remote Provided", "Self-Hosted pool" and "No pool limit" are retired, and the
+  New Run Review pool line reads "Organization pool · 6 of 10 running" where the approved mock
+  read "Remote Provided · 6 of 10 running" (`new-run-canon.md`, source `deviation (pool words)`).
 
 ## 11. Screen review rubric
 

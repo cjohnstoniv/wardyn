@@ -73,8 +73,8 @@ func TestRunnerListAndTokensCommands(t *testing.T) {
 	}
 
 	out, err = execCmdCapture(t, "runner", "list", "--url", srv.URL, "--token", "t")
-	if err != nil || srv.last().path != "/api/v1/me/runners" || strings.Contains(out, "OWNER") {
-		t.Fatalf("own list: %v path %s\n%s", err, srv.last().path, out)
+	if err != nil || srv.reqs[len(srv.reqs)-2].path != "/api/v1/me/runners" || strings.Contains(out, "OWNER") {
+		t.Fatalf("own list: %v path %s\n%s", err, srv.reqs[len(srv.reqs)-2].path, out)
 	}
 	if _, err := execCmdCapture(t, "runner", "list", "--state", "revoked", "--url", srv.URL, "--token", "t"); err == nil {
 		t.Fatal("--state without --all was accepted")

@@ -21,8 +21,8 @@ var cliConventionImages = map[string]cliImageFact{
 	"base":        {cliInImageNo, cliInImageYes, cliInImageYes},
 	"claude-code": {cliInImageNo, cliInImageYes, cliInImageYes},
 	"codex-cli":   {cliInImageNo, cliInImageYes, cliInImageYes},
-	"full":        {cliInImageNo, cliInImageYes, cliInImageYes},
-	"harnesses":   {cliInImageNo, cliInImageNo, cliInImageNo},
+	"full":        {cliInImageYes, cliInImageYes, cliInImageYes},
+	"harnesses":   {cliInImageYes, cliInImageNo, cliInImageNo},
 }
 
 // cliInImage is the install fact for an image key. Anything not in the table,

@@ -69,8 +69,9 @@ type attachedComponent struct {
 	// provides — never which: that name is the operator's.
 	needsOwnSecrets  []string
 	needsAdminSecret bool
-	// needsSignIn: the caller has not signed in for this AWS CLI row yet. Set on
-	// the preview alone, like needsOwnSecrets; the other doors refuse it.
+	// needsSignIn: the caller has not signed in for this AWS or Azure CLI row
+	// yet. Set on the preview alone, like needsOwnSecrets; the other doors
+	// refuse it.
 	needsSignIn bool
 	// builtin is set for a built-in Git provider component, which has no
 	// definition and is never written to the run's component snapshot.
@@ -97,6 +98,8 @@ type componentAdmission struct {
 	operatorSecrets map[string]bool
 	// awsCLI: an AWS CLI row was admitted already.
 	awsCLI bool
+	// azureCLI: an Azure CLI row was admitted already.
+	azureCLI bool
 	// harnesses are the request's included harness ids, which an MCP
 	// component's server may be turned on for.
 	harnesses []string
@@ -281,6 +284,9 @@ func (s *Server) admitComponent(r *http.Request, adm *componentAdmission, i int,
 		return attachedComponent{}, refused
 	}
 	if refused := s.componentCLIAdmitted(r, adm, &c, i); refused != nil {
+		return attachedComponent{}, refused
+	}
+	if refused := s.componentAzureCLIAdmitted(r, adm, &c, i); refused != nil {
 		return attachedComponent{}, refused
 	}
 	if si := componentResidentSecret(def); si >= 0 && adm.settings.DenyResidentDelivery {

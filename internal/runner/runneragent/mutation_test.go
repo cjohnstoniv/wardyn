@@ -32,6 +32,7 @@ func TestMutationFinishedRequiredAndRunsAfterSubstrateFailure(t *testing.T) {
 	defer cancel()
 	cause, cleanup := errors.New("reply lost"), errors.New("cleanup will retry")
 	cfg := Config{RunnerID: id, Substrate: failedMutation{runnertest.NewFake(), cause, cancel},
+		HoldsSandbox:  func(ref string) bool { return ref == "sandbox" },
 		BeforeCreate:  func(context.Context, runner.SandboxSpec) error { return nil },
 		Created:       func(context.Context, runner.SandboxSpec, string) error { return nil },
 		CreateFailed:  func(context.Context, runner.SandboxSpec) error { return nil },
