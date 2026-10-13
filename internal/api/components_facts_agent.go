@@ -6,7 +6,6 @@ package api
 import (
 	"slices"
 
-	"github.com/cjohnstoniv/wardyn/internal/agentpolicy"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
@@ -57,9 +56,14 @@ func agentComponentFact(f componentFactInputs) (componentFact, bool) {
 		(f.ceiling.Profile == nil || f.ceiling.Limits.AutonomyRubric == nil))
 	if resolved {
 		locked := f.ceiling.Profile != nil && f.ceiling.Limits.AutonomyRubric != nil && f.ceiling.Limits.AutonomyRubric.AgentGuardrailLocks
-		hold := holdLane(requestIsInteractive(req), req.ToolApprovals, req.TaskMode)
-		if path, document, ok := agentpolicy.ForAgent(req.Agent, f.autonomy.Level, hold, locked); ok {
-			a.ManagedSettings = &client.ManagedSettingsFact{Path: path, Document: string(document), Locked: agentpolicy.IsLocked(document)}
+		// The document dispatch writes, built as the 201's warning builds it: the
+		// harness-set fallback and an interactive run's attended tool rules included.
+		interactive := requestIsInteractive(req)
+		hold := holdLane(interactive, req.ToolApprovals, req.TaskMode)
+		spec, harnessRules := applyHarnessToolRules(f.spec, req.Tools, toolLaneDefault(req))
+		attended := dispatchParams{Interactive: interactive, Policy: spec, HarnessToolRules: harnessRules}.attendedToolRules()
+		if doc, err := agentPolicyDocument(req.Agent, f.autonomy.Level, f.harnesses, hold, locked, attended); err == nil && doc.ok {
+			a.ManagedSettings = &client.ManagedSettingsFact{Path: doc.path, Document: string(doc.content), Locked: doc.locked}
 			if a.ManagedSettings.Locked {
 				a.ManagedSettings.LockedBy, a.ManagedSettings.Profile = "profile", f.ceiling.Profile.Name
 			}
