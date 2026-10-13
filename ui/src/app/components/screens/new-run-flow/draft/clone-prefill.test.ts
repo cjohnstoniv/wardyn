@@ -6,6 +6,7 @@
 import { describe, it, expect } from "vitest";
 import type { AuditEvent } from "../../../../lib/types";
 import { cloneFromAudit, runPrefill } from "./clone-prefill";
+import { intentToWire } from "./intent-to-wire";
 import { prefillSeed } from "./prefill-seed";
 
 // A killed run as the two sources leave it behind.
@@ -73,5 +74,41 @@ describe("cloneFromAudit", () => {
 
   it("builds the prefill when the run.create row exists", () => {
     expect(cloneFromAudit(row, [event("run.create")])?.state).toMatchObject({ agent: "codex-cli", confinementClass: "CC3" });
+  });
+});
+
+// The fallback a run with no stored launch intent clones through, end to end: audit row to request body.
+describe("cloneFromAudit → prefillSeed → intentToWire", () => {
+  const agentRun = { agent: "claude-code", task: "fix the flaky test", confinement_class: "CC2" as const, interactive: true };
+  const wire = (run: typeof agentRun, data: Record<string, unknown> = {}) => {
+    const prefill = cloneFromAudit(run, [{ action: "run.create", data } as unknown as AuditEvent]);
+    return intentToWire(prefillSeed({ prefill })!.intent).body as Record<string, unknown>;
+  };
+
+  it("an interactive agent run's task arrives as the first prompt, with no automatic tools, title or description", () => {
+    const body = wire(agentRun);
+    expect(body.startup).toEqual({ kind: "harness", tool: "claude-code", prompt: "fix the flaky test" });
+    expect(body).not.toHaveProperty("seed_auto_tools");
+    expect(body).not.toHaveProperty("title");
+    expect(body).not.toHaveProperty("description");
+  });
+
+  it("a blank task sends no prompt", () => {
+    expect(wire({ ...agentRun, task: "  " }).startup).toEqual({ kind: "harness", tool: "claude-code" });
+    expect(wire({ ...agentRun, task: "" }).startup).toEqual({ kind: "harness", tool: "claude-code" });
+  });
+
+  it("a held run keeps its hold beside the prompt", () => {
+    const body = wire(agentRun, { tool_approvals: "hold" });
+    expect(body.tools).toEqual([{ id: "claude-code", kind: "harness", default_effect: "hold" }]);
+    expect(body.startup).toEqual({ kind: "harness", tool: "claude-code", prompt: "fix the flaky test" });
+  });
+
+  it("shell and background runs are as before: the text is their command or task, never a prompt", () => {
+    expect(wire(agentRun, { interactive_start: "shell" }).startup).toEqual({ kind: "command", command: "fix the flaky test" });
+    const background = wire({ ...agentRun, interactive: false });
+    expect(background.workload).toEqual({ kind: "agent_task", agent: "claude-code", task: "fix the flaky test" });
+    expect(background).not.toHaveProperty("startup");
+    expect(wire({ ...agentRun, interactive: false }, { task_mode: "exec" }).workload).toEqual({ kind: "command", command: "fix the flaky test" });
   });
 });
