@@ -834,6 +834,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
   boot transport.
 - remove_secrets now decides whether the caller is an operator by the operator check itself rather than by an empty
   owner name (defence in depth; no known caller reached the old gap).
+- A recording's review no longer files a host that only ends in a model provider's name (for example
+  notanthropic.com) as provider traffic; it now shows on the list you approve, as the server already treated it.
 
 
 ## [0.8.9] — 2026-10-09
