@@ -109,6 +109,7 @@ export function StorageTab({
             />
           </Field>
         </div>
+        <p className="mt-3 text-meta leading-snug text-muted-foreground">{PROVIDERS.CEILING}</p>
         <div className="mt-4 grid gap-4 sm:grid-cols-2">
           <Field label={MEMBER_DRIVES.FIELD_ENABLED}>
             <Switch
@@ -131,7 +132,6 @@ export function StorageTab({
             />
           </Field>
         </div>
-        <p className="mt-3 text-meta leading-snug text-muted-foreground">{PROVIDERS.CEILING}</p>
         <div className="mt-4">
           <UserDrivesCard />
         </div>
