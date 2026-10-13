@@ -5,7 +5,8 @@
 # DS2-S3: docs/USERS.md 4371 adds 93 over 4278: the Run templates section.
 # docs/USERS.md 4394 adds 23 over 4371 (G-090-cleanup slice F, docs rows that contradict the code): measured; the lead re-measures at merge.
 # docs/USERS.md 4432 adds 38 over 4394: 0.9 final docs pass 3, measured: the pool and runner policy changes in who approves a governance change.
-docs/USERS.md=4432 share=35
+# docs/USERS.md 4433 adds 1 over 4432: offboarding merge, measured: the runner, invitation and sponsor sentence beside the docs pass.
+docs/USERS.md=4433 share=35
 # docs/SSH.md 5396 adds 84 (0.9 SSH lane): the wardyn-sync subsystem and its env, the sync cap, the configurable channel cap and the sync audit action.
 # docs/SSH.md 5508 adds 112 over 5396 (0.9 E-S1): the `wardyn sync` section (command, safety rules, the rsync alternative).
 # docs/SSH.md 5586 adds 78 over 5508 (0.9 E-S1 round 1): the pull byte limits, the plain-http refusal, the invisible-name and normalisation rules, the one-second mtime limit and the rsync caveat.

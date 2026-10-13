@@ -801,6 +801,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - "Start a run like this one" opens Run again on Review when the run kept its setup. Otherwise it prefills Review
   from the run's row and audit trail, without the title. A template or Run again link that cannot be read shows
   the server's sentence and a way back to an empty draft.
+- A SCIM suspension refuses the person's self-hosted runners until they are reactivated. A SCIM purge revokes those
+  runners and their unused registration tokens, deletes invitations addressed to the person and clears their name
+  from the rest, and clears them as creator, suspender or retirer of service identities. A purge stays pending (`GET
+  /scim/status` names the identities) while the person still sponsors a service identity that is not retired: hand
+  it to another sponsor or retire it.
 
 ### Removed
 
