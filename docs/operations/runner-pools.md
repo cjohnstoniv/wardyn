@@ -59,7 +59,7 @@ A run's CPU, memory, main drive, lifetime and idle stop are each the strictest o
 | `pool` | The pool's own limits for the run type. The console says "Set by this pool". A limit the pool leaves out adds no bound. |
 | `governance` | The person's governance profile; an operator has none. |
 | `deployment` | The server's default sandbox size, `WARDYN_RUN_MAX_AGE` and the organization's storage maximum. Always applies. |
-| `runner` | The largest per-run limit among the pool's runners that could take the run. The runner the run is placed on always holds its size. |
+| `runner` | One runner's whole per-run limit: a runner that takes everything the run asks for, else the largest by CPU, then memory, then disk. The run is placed only on a runner that holds the size it gets. |
 
 - A larger ask is reduced to the limit, never refused; the answer's `resources_applied` says what was asked, what was applied and which source capped it.
 - A run that asks for no size gets the lowest default any source names, never above the maximum.
