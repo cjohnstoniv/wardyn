@@ -82,7 +82,7 @@ function Launched({ runId, startAnother }: { runId: string; startAnother: () => 
   };
 
   return (
-    <section className="mx-auto flex w-full max-w-[580px] flex-col items-center gap-4 text-center">
+    <section className="flex flex-col items-center gap-4 text-center">
       {badge && <span
         aria-hidden="true"
         className={waiting
