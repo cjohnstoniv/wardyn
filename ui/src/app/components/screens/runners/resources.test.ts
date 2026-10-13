@@ -73,10 +73,19 @@ describe("a pool's resources", () => {
     });
     const r = poolRes(narrow, members);
     expect(r.narrowed).toEqual(["mem"]);
+    // The CPU maximum is wider than any runner's: it is the pool's own all the same, and its default applies.
+    expect(r.set).toEqual(["cpu"]);
     expect(r.rows.mem.perRun).toBe(8);
     expect(r.rows.cpu.perRun).toBe(4);
-    expect(narrowShort(narrow, r)).toBe("Pool limits: memory per run narrowed; 10 runs maximum");
-    expect(narrowText(narrow, r)).toBe("Pool limits: memory per run narrowed by this pool; 10 runs maximum in this pool. Otherwise from its runners.");
+    expect(narrowShort(narrow, r)).toBe("Pool limits: memory per run narrowed; cpu per run set; 10 runs maximum");
+    expect(narrowText(narrow, r)).toBe("Pool limits: memory per run narrowed by this pool; cpu per run set by this pool; 10 runs maximum in this pool. Otherwise from its runners.");
+    // A maximum equal to its runners' narrows nothing and is still a limit of the pool's own.
+    const equal = pool({ limits: { barriers: ["CC1"], background: { memory_mib: { default: 2 * G, cap: 16 * G } } } });
+    const e = poolRes(equal, members);
+    expect(e).toMatchObject({ narrowed: [], set: ["mem"] });
+    expect(e.rows.mem.perRun).toBe(16);
+    expect(narrowText(equal, e)).toBe("Pool limits: memory per run set by this pool. Otherwise from its runners.");
+    expect(narrowShort(equal, e)).toBe("Pool limits: memory per run set");
   });
 
   it("counts nothing as available while switched off, and counts its offline runners", () => {

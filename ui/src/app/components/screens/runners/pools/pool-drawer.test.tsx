@@ -74,17 +74,40 @@ describe("organization default pool", () => {
     expect(onSetDefault).toHaveBeenCalledWith(null);
   });
 
-  it("reads a cap no tighter than its runners as what its runners allow, and a narrowing one as default and max", async () => {
-    // The pool caps memory at 4 GB (its runner takes 8) and CPU at 16 (its runner takes 4): only memory is narrowed.
-    const p = pool({ limits: { background: { memory_mib: { default: 2048, cap: 4096 }, cpu_millis: { default: 1000, cap: 16000 } }, barriers: ["CC2"], max_concurrent_runs: 40 } });
-    renderDrawer(p);
+  // Its runner takes 4 CPUs, 8 GB memory and 50 GB disk per run. The pool sets memory below that, disk equal
+  // to it and CPU wider than it; a run that asks for nothing gets the pool's default in all three.
+  const OWN = { background: { memory_mib: { default: 2048, cap: 4096 }, disk_mib: { default: 20480, cap: 51200 }, cpu_millis: { default: 1000, cap: 16000 } }, barriers: ["CC2" as const], max_concurrent_runs: 40 };
+
+  it("shows a default and maximum the pool sets whether it is below, equal to or wider than its runners", async () => {
+    renderDrawer(pool({ limits: OWN }));
     const sheet = await screen.findByRole("dialog");
     const row = within(sheet).getByText("Background tasks", { selector: "strong" }).closest("tr") as HTMLElement;
-    expect(within(row).getByText("default 2 GB (max 4 GB)")).toBeInTheDocument();
-    expect(within(row).getByText("Up to 4 CPUs, from its runners")).toBeInTheDocument();
-    expect(within(row).getByText("Up to 50 GB, from its runners")).toBeInTheDocument();
-    expect(within(sheet).getByText("Pool limits: memory per run narrowed by this pool; 40 runs maximum in this pool. Otherwise from its runners.")).toBeInTheDocument();
+    const cell = (label: string) => row.querySelector(`[data-l="${label}: "]`) as HTMLElement;
+    // Lower: the pool bounds the run.
+    expect(cell("Memory")).toHaveTextContent(/^default 2 GB \(max 4 GB\)$/);
+    // Equal: still the pool's own, and its default still applies.
+    expect(cell("Disk")).toHaveTextContent(/^default 20 GB \(max 50 GB\)$/);
+    // Wider: shown as set, with what its runners allow, which is what bounds the run.
+    expect(within(cell("CPU")).getByText("default 1 CPU (max 16 CPUs)")).toBeInTheDocument();
+    expect(within(cell("CPU")).getByText("Up to 4 CPUs, from its runners")).toBeInTheDocument();
+    expect(within(sheet).getByText("Pool limits: memory per run narrowed by this pool; cpu, disk per run set by this pool; 40 runs maximum in this pool. Otherwise from its runners.")).toBeInTheDocument();
+    expect(within(sheet).queryByText("This pool adds no limits of its own: it follows its runners' limits.")).toBeNull();
     expect(within(sheet).getByText("A run gets the strictest of your organization's policy, this pool's limits and its runner's per-run limits.")).toBeInTheDocument();
+  });
+
+  it("with no runners still shows what the pool sets, and a dash for what it leaves to them", async () => {
+    renderDrawer(pool({ limits: { background: { memory_mib: { default: 2048, cap: 4096 } }, barriers: ["CC2"] } }), { members: [] });
+    const sheet = await screen.findByRole("dialog");
+    const row = within(sheet).getByText("Background tasks", { selector: "strong" }).closest("tr") as HTMLElement;
+    expect(row.querySelector('[data-l="Memory: "]')).toHaveTextContent(/^default 2 GB \(max 4 GB\)$/);
+    expect(row.querySelector('[data-l="CPU: "]')).toHaveTextContent(/^—$/);
+  });
+
+  it("says it adds no limits of its own only when it sets none", async () => {
+    renderDrawer(pool({ limits: { background: {}, barriers: ["CC2"] } }));
+    const sheet = await screen.findByRole("dialog");
+    expect(within(sheet).getByText("This pool adds no limits of its own: it follows its runners' limits.")).toBeInTheDocument();
+    expect(within(sheet).getByText("Up to 8 GB, from its runners")).toBeInTheDocument();
   });
 
   it("with no runners says nothing can run there", async () => {
@@ -165,6 +188,18 @@ describe("switched-off pool", () => {
     const { onChanged } = renderDrawer(off);
     await userEvent.click(await screen.findByRole("button", { name: "Switch on" }));
     await waitFor(() => expect(updateMock).toHaveBeenCalledWith("p-ci", { revision: 9, state: "active" }));
+    expect(onChanged).toHaveBeenCalled();
+  });
+
+  it("says so in the sheet when a switch lost to someone else's change, and reads the pool again", async () => {
+    const sentence = "Staging changed while this run was being set up. Review it and try again.";
+    updateMock.mockRejectedValue(new HttpError(409, sentence, "runner_pool_stale"));
+    const { onChanged } = renderDrawer(pool({ id: "p-stg", name: "Staging", revision: 2 }));
+    const sheet = await screen.findByRole("dialog");
+    await userEvent.click(within(sheet).getByRole("button", { name: "Switch off" }));
+    await userEvent.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Switch off" }));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect(within(sheet).getByRole("alert")).toHaveTextContent(sentence);
     expect(onChanged).toHaveBeenCalled();
   });
 

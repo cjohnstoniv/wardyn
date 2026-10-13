@@ -60,6 +60,12 @@ export interface PoolRes extends ResView {
   offline: number;
   /** The resources whose per-run size this pool's own limits narrow below its runners'. */
   narrowed: ("cpu" | "mem" | "disk")[];
+  /**
+   * The resources the pool sets an amount for without narrowing its runners' maximum: one equal to it,
+   * wider than it (which never takes effect), or set while the pool has no runner. Its default still
+   * applies to a run that asks for nothing.
+   */
+  set: ("cpu" | "mem" | "disk")[];
 }
 
 const ZERO: RunnerTally = { runs: 0, cpu_millis: 0, memory_mib: 0, disk_mib: 0 };
@@ -93,12 +99,14 @@ export function poolRes(pool: RunnerPool, members: RunnerPoolMemberView[]): Pool
     for (const f of Object.values(CAP_FIELD)) largest[f] = Math.max(largest[f], m.limits.per_run[f]);
   }
   const narrowed: PoolRes["narrowed"] = [];
+  const set: PoolRes["set"] = [];
   for (const k of ["cpu", "mem", "disk"] as const) {
     const cap = poolCap(pool.limits, k);
-    if (cap !== undefined && cap < largest[CAP_FIELD[k]]) {
+    if (cap === undefined) continue;
+    if (cap < largest[CAP_FIELD[k]]) {
       largest[CAP_FIELD[k]] = cap;
       narrowed.push(k);
-    }
+    } else set.push(k);
   }
   return {
     rows: tallyRows(total, largest, inUse, available),
@@ -106,23 +114,26 @@ export function poolRes(pool: RunnerPool, members: RunnerPoolMemberView[]): Pool
     runners: members.length,
     offline: members.filter((m) => !m.online).length,
     narrowed,
+    set,
   };
 }
 
-const narrowedNames = (r: PoolRes) => r.narrowed.map((k) => RES_NAME[k].toLowerCase()).join(", ");
+const names = (keys: ("cpu" | "mem" | "disk")[]) => keys.map((k) => RES_NAME[k].toLowerCase()).join(", ");
 
-/** The pool row's line: "Pool limits: memory per run narrowed; 10 runs maximum", or "" when it narrows nothing. */
+/** The pool row's line: "Pool limits: memory per run narrowed; 10 runs maximum", or "" when it sets nothing of its own. */
 export function narrowShort(pool: RunnerPool, r: PoolRes): string {
   const parts: string[] = [];
-  if (r.narrowed.length) parts.push(POOLS.NARROWED(narrowedNames(r)));
+  if (r.narrowed.length) parts.push(POOLS.NARROWED(names(r.narrowed)));
+  if (r.set.length) parts.push(POOLS.SET(names(r.set)));
   if (pool.limits?.max_concurrent_runs) parts.push(POOLS.RUNS_MAX(pool.limits.max_concurrent_runs));
   return parts.length ? POOLS.POOL_LIMITS(parts.join("; ")) : "";
 }
 
-/** The pool details' sentence about its own limits. */
+/** The pool details' sentence about its own limits: it says the pool adds none only when it sets none. */
 export function narrowText(pool: RunnerPool, r: PoolRes): string {
   const parts: string[] = [];
-  if (r.narrowed.length) parts.push(POOL_DRAWER.NARROWED_BY_POOL(narrowedNames(r)));
+  if (r.narrowed.length) parts.push(POOL_DRAWER.NARROWED_BY_POOL(names(r.narrowed)));
+  if (r.set.length) parts.push(POOL_DRAWER.SET_BY_POOL(names(r.set)));
   if (pool.limits?.max_concurrent_runs) parts.push(POOL_DRAWER.RUNS_MAX_IN_POOL(pool.limits.max_concurrent_runs));
   return parts.length ? POOL_DRAWER.POOL_LIMITS(parts.join("; ")) : POOL_DRAWER.NO_OWN_LIMITS;
 }
