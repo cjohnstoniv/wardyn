@@ -29,22 +29,24 @@ const refNamespaceGlob = "refs/heads/wardyn/**/*"
 // is a pure read that creates nothing.
 //
 // The outside probes are deliberately synthetic: an unenumerable name returns
-// rules only when ref_name.include is genuinely broad. There are two because
-// "*" never crosses "/": an include of refs/heads/* covers the single-component
-// name and not the nested one. refProbeInside sits two segments deep inside the
+// rules only when ref_name.include is genuinely broad. There are three, at one,
+// two and three components, because "*" never crosses "/": an include of
+// refs/heads/* covers only the first, and an exclude of refs/heads/*/* opens
+// only the second. refProbeInside sits two segments deep inside the
 // run namespace, checking that ref_name.exclude actually took at the depth runs
 // push to.
 //
-// ponytail: two sampled names, not a glob evaluator; a ruleset whose patterns
-// leave some other name open can still pass.
+// ponytail: three sampled names, not a glob evaluator; a ruleset whose patterns
+// leave some other name open (a deeper exclude, say) can still pass.
 const (
 	refProbeOutside       = "probe-wardyn-ref-confinement"
+	refProbeOutsideTwo    = "probe-wardyn-ref-confinement/nested"
 	refProbeOutsideNested = "probe-wardyn-ref-confinement/nested/probe"
 	refProbeInside        = "wardyn/00000000-0000-0000-0000-000000000000/probe"
 )
 
 // refProbesOutside are the outside names every one of which must carry all three rules.
-var refProbesOutside = []string{refProbeOutside, refProbeOutsideNested}
+var refProbesOutside = []string{refProbeOutside, refProbeOutsideTwo, refProbeOutsideNested}
 
 // refRevokeTimeout bounds the best-effort hand-back of the probe token. Short:
 // nothing waits on it and its failure changes no verdict.
@@ -143,9 +145,9 @@ func (m *githubMinter) VerifyRefRuleset(ctx context.Context, repo string) (bool,
 			repo, refProbeInside, refNamespaceGlob), nil
 	}
 	return true, fmt.Sprintf(
-		"%s: at the sampled branches refs/heads/%s and refs/heads/%s outside %s, creation, update and deletion are restricted, nothing is in force at refs/heads/%s inside it, and every ruleset behind those rules reports current_user_can_bypass \"never\". "+
+		"%s: at the sampled branches refs/heads/%s, refs/heads/%s and refs/heads/%s outside %s, creation, update and deletion are restricted, nothing is in force at refs/heads/%s inside it, and every ruleset behind those rules reports current_user_can_bypass \"never\". "+
 			"This checks those named branches, not every name the ruleset's patterns could leave open. Branches only — a branch ruleset does not bound refs/tags/*, so a leaked token can still create, move or delete tags.",
-		repo, refProbeOutside, refProbeOutsideNested, refNamespaceGlob, refProbeInside), nil
+		repo, refProbeOutside, refProbeOutsideTwo, refProbeOutsideNested, refNamespaceGlob, refProbeInside), nil
 }
 
 // refRuleState is what one rules/branches read tells the verifier: which of
