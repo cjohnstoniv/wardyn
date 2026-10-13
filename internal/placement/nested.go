@@ -20,7 +20,7 @@ import (
 // exempts a newly added child: both the table and this closed schema must cover it.
 var nestedFields = map[reflect.Type][]string{
 	reflect.TypeFor[proxy.Config](): strings.Fields("RunID ControlPlaneURL ControlPlaneCAPEM RunToken Policy Injection Listen DecisionBufferSize MITMCACertPEM MITMCAKeyPEM MITMHosts GitGrants PATGrants " +
-		"BrokeredPATGrantIDs ADOGrant AzureGates GitHubAPI MITMLLM UpstreamProxyURL UpstreamProxyNoProxy TrustedCAPEM InternalHosts LLMUpstreams LLMChannelHosts LLMUnavailableDetail Unattended Attribution DecisionSpoolDir PushRuleSets PushRuleBase HarnessToolRules HarnessCredentials ViaOrgRoutes MCPServers MCPBindings"),
+		"BrokeredPATGrantIDs ADOGrant AzureGates GitHubAPI AzureARM MITMLLM UpstreamProxyURL UpstreamProxyNoProxy TrustedCAPEM InternalHosts LLMUpstreams LLMChannelHosts LLMUnavailableDetail Unattended Attribution DecisionSpoolDir PushRuleSets PushRuleBase HarnessToolRules HarnessCredentials ViaOrgRoutes MCPServers MCPBindings"),
 	reflect.TypeFor[proxy.InjectionConfig]():   strings.Fields("InjectionRule GrantID"),
 	reflect.TypeFor[proxy.ViaOrgRoute]():       strings.Fields("GrantID Host"),
 	reflect.TypeFor[proxy.MCPServerConfig]():   strings.Fields("Key URL GrantID Ordinal"),
@@ -38,6 +38,7 @@ var nestedFields = map[reflect.Type][]string{
 	reflect.TypeFor[proxy.ADOGrantConfig]():    strings.Fields("Organization Capabilities Hosts"),
 	reflect.TypeFor[proxy.AzureGateConfig]():   strings.Fields("Host Route Models BodyCap"),
 	reflect.TypeFor[proxy.GitHubAPIGrant]():    strings.Fields("Capabilities Repos Grants"),
+	reflect.TypeFor[proxy.AzureARMGrant]():     strings.Fields("TenantID Subscriptions Write"),
 	reflect.TypeFor[proxy.PATGrant]():          strings.Fields("GrantID Username Repos Access Forge API"),
 	reflect.TypeFor[runner.InjectionGrant]():   strings.Fields("GrantID Rule"),
 	reflect.TypeFor[runner.ManagedFile]():      strings.Fields("Path Mode AgentOwned Content"),
