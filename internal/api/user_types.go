@@ -264,6 +264,16 @@ func (s *Server) handleDeleteUserType(w http.ResponseWriter, r *http.Request) {
 		}
 		use.defaultRole = s.cfg.OIDC.DefaultRole() == id
 	}
+	mappings, err := s.cfg.Store.ListRoleMappings(r.Context())
+	if err != nil {
+		writeServerError(w, r, "list role mappings", err)
+		return
+	}
+	for _, m := range mappings {
+		if m.UserType == id {
+			use.mappings++
+		}
+	}
 	if use.rows, err = s.cfg.Store.UserTypeReferences(r.Context(), id); err != nil {
 		writeServerError(w, r, "count user type references", err)
 		return
@@ -295,13 +305,13 @@ func (s *Server) handleDeleteUserType(w http.ResponseWriter, r *http.Request) {
 }
 
 // userTypeInUse is everything that still names a user type a DELETE would
-// remove: a WARDYN_OIDC_ROLE_MAP value, WARDYN_OIDC_DEFAULT_ROLE, the
+// remove: a WARDYN_OIDC_ROLE_MAP value, WARDYN_OIDC_DEFAULT_ROLE, the People role mappings, the
 // capability-grant, governance-assignment and drive-grant rows written
-// against it, and the unrevoked API tokens stamped with it (a token whose type
+// against it, the service identities not retired that carry it, and the unrevoked API tokens stamped with it (a token whose type
 // is gone would carry a type nothing defines).
 type userTypeInUse struct {
-	chart, defaultRole bool
-	rows, tokens       int
+	chart, defaultRole     bool
+	mappings, rows, tokens int
 }
 
 // refusal is the 409 sentence naming what holds the type, or "" when nothing
@@ -322,12 +332,20 @@ func (u userTypeInUse) refusal() string {
 		clauses = append(clauses, strings.Join(mappers, " and ")+" still "+verb+" to it")
 		fixes = append(fixes, "remap it in your chart")
 	}
+	switch {
+	case u.mappings == 1:
+		clauses = append(clauses, "1 People mapping maps to it")
+		fixes = append(fixes, "remap it on People")
+	case u.mappings > 1:
+		clauses = append(clauses, fmt.Sprintf("%d People mappings map to it", u.mappings))
+		fixes = append(fixes, "remap them on People")
+	}
 	if u.rows > 0 {
 		noun := "rows name"
 		if u.rows == 1 {
 			noun = "row names"
 		}
-		clauses = append(clauses, fmt.Sprintf("%d permission, profile or drive %s it", u.rows, noun))
+		clauses = append(clauses, fmt.Sprintf("%d permission, profile, drive or service identity %s it", u.rows, noun))
 		fixes = append(fixes, "remove those rows")
 	}
 	switch {

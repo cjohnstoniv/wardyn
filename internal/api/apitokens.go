@@ -128,6 +128,11 @@ func (s *Server) apiTokenAuth(next, fallback http.Handler) http.Handler {
 			writeErrorReason(w, http.StatusServiceUnavailable, reasonTokenLookupUnavailable, "api token lookup failed")
 			return
 		}
+		// A service identity's token is checked against its live record and its sponsor, not a sign-in stamp.
+		if isServicePrincipal(t.Principal) {
+			s.serviceTokenAuth(w, r, t, next, fallback)
+			return
+		}
 		// A row minted for a reserved principal (before the sign-in callback
 		// refused one) would replay it as that identity (#1162). Audited and
 		// answered here: the fallback would only record invalid_admin_token.
@@ -160,7 +165,7 @@ func (s *Server) apiTokenAuth(next, fallback http.Handler) http.Handler {
 		if s.cfg.SessionRevocations != nil {
 			// The same read asks whether the owner's identity is deactivated (a token has no epoch of
 			// its own: a suspension revokes the tokens it can see, and the mint guard refuses the rest).
-			status, rerr := oidc.CheckSession(r.Context(), s.cfg.SessionRevocations, t.Principal, t.Email, t.CreatedAt, -1)
+			status, rerr := oidc.CheckSession(r.Context(), s.cfg.SessionRevocations, t.Principal, t.Email, oidc.Issue{At: t.CreatedAt, Seq: t.RevSeq}, -1)
 			if rerr != nil {
 				slog.ErrorContext(r.Context(), "api: session-revocation lookup failed; this api token could not be authenticated",
 					"error", rerr, "path", r.URL.Path)
@@ -204,7 +209,7 @@ func (s *Server) apiTokenAuth(next, fallback http.Handler) http.Handler {
 		}
 		ctx := withHumanIdentity(r.Context(), t.Principal, t.Email, t.Role, t.UserType, t.Groups,
 			t.GroupsTruncated == nil || *t.GroupsTruncated)
-		next.ServeHTTP(w, r.WithContext(withAPITokenID(ctx, t.ID)))
+		next.ServeHTTP(w, r.WithContext(withAPITokenID(oidc.WithRevocationSeq(ctx, t.Principal, t.RevSeq), t.ID)))
 	})
 }
 
@@ -299,16 +304,46 @@ func (s *Server) handleCreateAPIToken(w http.ResponseWriter, r *http.Request) {
 	if !decodeStrict(w, r, &req) {
 		return
 	}
+	sub, ok := s.mintGuards(w, r)
+	if !ok {
+		return
+	}
+	name, ok := apiTokenName(w, req.Name)
+	if !ok {
+		return
+	}
+	lifetime, clampedFrom, ok := s.apiTokenLifetime(w, req.TTLSeconds)
+	if !ok {
+		return
+	}
+	row, ok := s.prepareMint(w, r, sub, authorizedAt, name, lifetime)
+	if !ok {
+		return
+	}
+	created, ok := s.insertAPIToken(w, r, row)
+	if !ok {
+		return
+	}
+	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
+		"token.create", created.ID.String(), "success", mustJSON(mintAuditDetail(created, clampedFrom, nil))))
+	writeJSON(w, http.StatusCreated, created)
+}
+
+// mintGuards is the first half of the mint core that POST /me/tokens and an invitation's claim share:
+// the checks on WHO is asking, each refusal byte-identical across the two doors. It returns the
+// verified human the token would belong to. Every caller stamps authorizedAt before reading its body,
+// and asks for the lifetime, name and cap only after this passes.
+func (s *Server) mintGuards(w http.ResponseWriter, r *http.Request) (string, bool) {
 	ctx := r.Context()
 	sub := oidcHumanFromContext(ctx)
 	if sub == "" {
 		writeErrorReason(w, http.StatusForbidden, reasonAPITokenNoHuman, apiTokenNoHumanRefusal)
-		return
+		return "", false
 	}
 	if apiTokenIDFromContext(ctx) != uuid.Nil {
 		writeErrorReason(w, http.StatusForbidden, reasonAPITokenFromAPIToken,
 			"an API token cannot create another API token — sign in to the console to mint one")
-		return
+		return "", false
 	}
 	// The same refusal for a portal's delegated token (#1142): the allow-list
 	// already keeps it off this route, and this keeps a list edit from turning
@@ -316,7 +351,7 @@ func (s *Server) handleCreateAPIToken(w http.ResponseWriter, r *http.Request) {
 	if _, delegated := audit.DelegationFrom(ctx); delegated {
 		writeErrorReason(w, http.StatusForbidden, reasonAPITokenFromDelegatedToken,
 			"a delegated token cannot create an API token — sign in to the console to mint one")
-		return
+		return "", false
 	}
 	// Member mode refuses, it does not clamp. store.RefreshAPITokenIdentity
 	// (fired by OnLogin) re-stamps EVERY token of a principal with their freshly
@@ -325,19 +360,22 @@ func (s *Server) handleCreateAPIToken(w http.ResponseWriter, r *http.Request) {
 	// created it. See internal/api/membermode.go.
 	if oidc.MemberModeFromContext(ctx) {
 		writeErrorReason(w, http.StatusConflict, reasonAPITokenMemberModeMint, userViewMintRefusal)
-		return
+		return "", false
 	}
 	// May this person mint a token at all (capFeature).
 	if s.denyUserCapability(w, r, capFeature, featureAPIToken, "me.tokens", apiTokenFeatureRefusal) {
-		return
+		return "", false
 	}
-	name, ok := apiTokenName(w, req.Name)
-	if !ok {
-		return
-	}
-	lifetime, clampedFrom, ok := s.apiTokenLifetime(w, req.TTLSeconds)
-	if !ok || s.apiTokenCapReached(w, r, sub) {
-		return
+	return sub, true
+}
+
+// prepareMint is the second half of the mint core: the per-principal cap, the identity snapshot from
+// the caller's session, and the late session re-check, then the row to insert. MintedBy stays empty: the
+// owner minted it. The caller inserts the row, and nothing else may.
+func (s *Server) prepareMint(w http.ResponseWriter, r *http.Request, sub string, authorizedAt time.Time, name string, lifetime time.Duration) (types.APIToken, bool) {
+	ctx := r.Context()
+	if s.apiTokenCapReached(w, r, sub) {
+		return types.APIToken{}, false
 	}
 
 	// The identity SNAPSHOT. Role is the caller's REAL session role, copied
@@ -404,23 +442,16 @@ func (s *Server) handleCreateAPIToken(w http.ResponseWriter, r *http.Request) {
 	//
 	// An unanswerable check fails closed with the same 500 the store errors
 	// below give — never as "not revoked".
-	if s.cfg.SessionRevocations != nil {
-		revoked, rerr := s.cfg.SessionRevocations.IsSessionRevoked(ctx, sub, oidcEmailFromContext(ctx), authorizedAt)
-		if rerr != nil {
-			writeServerError(w, r, "create api token", rerr)
-			return
-		}
-		if revoked {
-			writeErrorReason(w, http.StatusForbidden, reasonAPITokenNoHuman, apiTokenNoHumanRefusal)
-			return
-		}
+	issue, ok := s.mintSessionLive(w, r, sub, authorizedAt)
+	if !ok {
+		return types.APIToken{}, false
 	}
 	var expiresAt *time.Time
 	if lifetime > 0 {
 		t := authorizedAt.Add(lifetime)
 		expiresAt = &t
 	}
-	created, ok := s.insertAPIToken(w, r, types.APIToken{
+	return types.APIToken{
 		Principal:       sub,
 		Email:           oidcEmailFromContext(ctx),
 		Role:            role,
@@ -430,10 +461,37 @@ func (s *Server) handleCreateAPIToken(w http.ResponseWriter, r *http.Request) {
 		Name:            name,
 		CreatedAt:       authorizedAt,
 		ExpiresAt:       expiresAt,
-	})
-	if !ok {
-		return
+		RevSeq:          issue.Seq,
+	}, true
+}
+
+// mintSessionLive is the late session re-check both mint doors end on: false after writing the refusal when
+// the minting person's session was cut off at or before authorizedAt (the same sentence as no signed-in
+// human) or the check could not be answered (500). It returns the Issue the new credential records,
+// read before the re-check so a cut that lands after it still orders above the credential.
+func (s *Server) mintSessionLive(w http.ResponseWriter, r *http.Request, sub string, authorizedAt time.Time) (oidc.Issue, bool) {
+	issue, ierr := s.mintIssue(r.Context(), sub, authorizedAt)
+	if ierr != nil {
+		writeServerError(w, r, "create api token", ierr)
+		return oidc.Issue{}, false
 	}
+	if s.cfg.SessionRevocations == nil {
+		return issue, true
+	}
+	revoked, rerr := oidc.IsRevoked(r.Context(), s.cfg.SessionRevocations, sub, oidcEmailFromContext(r.Context()), admittedIssue(r.Context(), sub, authorizedAt))
+	if rerr != nil {
+		writeServerError(w, r, "create api token", rerr)
+		return oidc.Issue{}, false
+	}
+	if revoked {
+		writeErrorReason(w, http.StatusForbidden, reasonAPITokenNoHuman, apiTokenNoHumanRefusal)
+		return oidc.Issue{}, false
+	}
+	return issue, true
+}
+
+// mintAuditDetail is the data of a token.create row; an invitation's claim adds the invitation id.
+func mintAuditDetail(created types.APIToken, clampedFrom time.Duration, invitation *uuid.UUID) map[string]any {
 	detail := map[string]any{"name": created.Name, "role": created.Role, "user_type": created.UserType}
 	if created.ExpiresAt != nil {
 		detail["expires_at"] = created.ExpiresAt
@@ -441,9 +499,10 @@ func (s *Server) handleCreateAPIToken(w http.ResponseWriter, r *http.Request) {
 	if clampedFrom > 0 {
 		detail["ttl_clamped_from_seconds"] = int64(clampedFrom / time.Second)
 	}
-	s.recordAudit(ctx, s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
-		"token.create", created.ID.String(), "success", mustJSON(detail)))
-	writeJSON(w, http.StatusCreated, created)
+	if invitation != nil {
+		detail["invitation"] = invitation.String()
+	}
+	return detail
 }
 
 // apiTokenName is the trimmed display name, or false after a 422.
@@ -538,15 +597,22 @@ func (s *Server) handleListAllAPITokens(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	// ?minted_for_others=true is the inventory of tokens an admin created for
-	// someone else (#1477): live ones whose minter is not their owner. The
-	// route that created them is gone; they keep working until revoked.
+	// someone else (#1477): live ones whose minter is not their owner, or revoked
+	// ones too with &include_revoked=true, so a finished move or claim stays
+	// visible. The route that created them is gone; they keep working until
+	// revoked. Each admin-minted row carries its disposition (#1508).
 	if r.URL.Query().Get("minted_for_others") == "true" {
+		withRevoked := r.URL.Query().Get("include_revoked") == "true"
 		tokens = slices.DeleteFunc(tokens, func(t types.APIToken) bool {
-			return t.MintedBy == "" || t.MintedBy == t.Principal || t.RevokedAt != nil
+			return t.MintedBy == "" || t.MintedBy == t.Principal || (t.RevokedAt != nil && !withRevoked)
 		})
 		for i := range tokens {
 			tokens[i].Token = ""
 		}
+	}
+	if err := s.addTokenDispositions(r.Context(), tokens); err != nil {
+		writeServerError(w, r, "list api tokens", err)
+		return
 	}
 	writeJSON(w, http.StatusOK, tokens)
 }
@@ -635,7 +701,7 @@ func (s *Server) revokeAPIToken(w http.ResponseWriter, r *http.Request, principa
 // the email and the login-time GROUP snapshot (migration 0045 + the groups
 // column), and a role-mapping value is a group/App-Role key or — where the org
 // opted in — an email. Both are canonicalized lowercase at their write
-// boundaries (canonicalRoleMapValue, oidc.CanonicalGroupSubject), so groups
+// boundaries (canonicalRoleMapValue, types.CanonicalGroupSubject), so groups
 // compare exactly and the email compares case-insensitively, exactly as
 // IsSessionRevoked's email arm does.
 //

@@ -42,14 +42,17 @@ func (s PG) ResolveReauthApproval(ctx context.Context, id uuid.UUID, decision ty
 	defer tx.Rollback(ctx) //nolint:errcheck // best-effort on the failure path
 
 	decidedAt := s.now()
-	age := db.AppClockAgeMicros(decidedAt, s.now())
-	q := `
+	anchor, err := db.CaptureAppClock(ctx, tx, s.now)
+	if err != nil {
+		return types.ApprovalRequest{}, err
+	}
+	const q = `
 		UPDATE approvals
-		SET state=$1, decided_at=` + db.AppClockAgeSQL("$2") + `, decided_by=$3, reason=$4
+		SET state=$1, decided_at=$2, decided_by=$3, reason=$4
 		WHERE id=$5 AND state='PENDING' AND kind='credential_reauth'
 		RETURNING ` + approvalCols
 	ap, err := scanApproval(tx.QueryRow(ctx, q,
-		string(decision.State), age, decision.DecidedBy, decision.Reason, id,
+		string(decision.State), anchor.Translate(decidedAt), decision.DecidedBy, decision.Reason, id,
 	))
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
@@ -64,6 +67,11 @@ func (s PG) ResolveReauthApproval(ctx context.Context, id uuid.UUID, decision ty
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return types.ApprovalRequest{}, fmt.Errorf("store: commit reauth resolve: %w", err)
+	}
+	// The row is written past every recorder chain, so the sinks get it here, with the hashes
+	// InsertAuditEventTx filled in.
+	if s.SIEM != nil {
+		_ = s.SIEM.Emit(context.WithoutCancel(ctx), ev)
 	}
 	return ap, nil
 }

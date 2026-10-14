@@ -31,6 +31,8 @@ import (
 //     tool_rules ceiling sees.
 //   - DenyUserDrive: a drive OUTLIVES the run, so no tool_rules ceiling
 //     describes the escape — the storage itself is the escape.
+//   - DenyPlacements: a placement the people under this profile may not run on;
+//     a deny list, so absent means permitted.
 //   - MaxConcurrentRuns is a QUOTA, not a door: 422 with no authz.denied,
 //     not 403.
 //   - MaxCPUMillis/MaxMemoryMiB/MaxEphemeralDiskMiB/MaxDriveSizeMiB are neither: they CLAMP — capped
@@ -39,9 +41,12 @@ import (
 //
 // A CLOSED struct with `omitempty` on every field, not a map: small,
 // complete, validated by the Go type itself, no DB CHECK needed. Every zero
-// value means "unrestricted", so an omitted limits object behaves exactly
+// value means "unrestricted" except LocalSelfDefinedComponents (default deny), so an omitted limits object behaves exactly
 // as before this struct existed.
 type GovernanceLimits struct {
+	// LocalSelfDefinedComponents permits a local run to carry a component its launcher defined.
+	// Omitted or false refuses it; runner-reported confinement is not platform attestation.
+	LocalSelfDefinedComponents bool `json:"local_self_defined_components,omitempty"`
 	// DenyTaskModeExec refuses task_mode=exec for a member under this profile.
 	DenyTaskModeExec bool `json:"deny_task_mode_exec,omitempty"`
 	// DenyInteractive refuses an interactive run under this profile.
@@ -64,6 +69,17 @@ type GovernanceLimits struct {
 	// "may this principal persist anything at all" is the question (403 +
 	// authz.denied), not "how big".
 	DenyUserDrive bool `json:"deny_user_drive,omitempty"`
+	// DenyMemberDrives refuses CREATING a member drive under this profile, on top of
+	// storage.user_drive.member_create (the org switch). A DOOR with no zero-value
+	// opinion: false inherits the switch, so an unset profile changes nothing. DenyUserDrive
+	// also blocks creation (a person who may mount no drive may not make one); this door
+	// narrows only the creating. Operators are exempt from both doors.
+	DenyMemberDrives bool `json:"deny_member_drives,omitempty"`
+	// DenyPlacements refuses a run whose resolved placement is listed (403 placement_denied +
+	// authz.denied). A DENY LIST: absent means every placement is permitted, including for a
+	// member with no assigned profile. Values are `remote` and `local`; a profile denying both is
+	// refused at write, since the people it binds could run nothing.
+	DenyPlacements []Placement `json:"deny_placements,omitempty"`
 	// MaxCPUMillis and MaxMemoryMiB cap the sandbox's CPU (millicores) and memory a run under this
 	// profile may be given, whatever its ceiling's own resources or a member's request say. 0 is
 	// unlimited. A CLAMP, NOT A DOOR, like MaxEphemeralDiskMiB. Folded into composer.Clamp at
@@ -181,6 +197,9 @@ func (l AutonomyLevel) Rank() int {
 // (internal/composer/autonomy.go, #97); an all-unset rubric caps nothing,
 // like a nil rubric.
 //
+// It also carries one boolean, AgentGuardrailLocks, that caps no level: it selects the locked L2
+// managed-settings document and is not part of the nine-field fold.
+//
 // A closed struct with `omitempty` on every field, not a map — same
 // doctrine as GovernanceLimits: small, complete, validated by the Go type
 // (Validate), no DB CHECK needed.
@@ -203,6 +222,10 @@ type AutonomyRubric struct {
 	ConfinementCC1 AutonomyLevel `json:"confinement_cc1,omitempty"`
 	ConfinementCC2 AutonomyLevel `json:"confinement_cc2,omitempty"`
 	ConfinementCC3 AutonomyLevel `json:"confinement_cc3,omitempty"`
+	// AgentGuardrailLocks selects the locked L2 managed-settings document for a run that resolves to L2:
+	// repository hooks and permission rules cannot override the agent-side guardrails. It caps no level
+	// and changes nothing at any other rung.
+	AgentGuardrailLocks bool `json:"agent_guardrail_locks,omitempty"`
 }
 
 // Validate reports the first field carrying an undefined AutonomyLevel,

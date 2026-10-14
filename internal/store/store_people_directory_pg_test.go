@@ -447,6 +447,53 @@ func TestPG_PeopleDirectory_LatestVerifiedEmailWins(t *testing.T) {
 	}
 }
 
+// A person suspended over SCIM before their first sign-in is deactivated in the directory: the
+// people row's deactivated_at counts, not only the identity row's, and the state filter sees it.
+func TestPG_PeopleDirectory_PreCreatedSuspendedBeforeFirstSignIn(t *testing.T) {
+	pool := runsPGPoolIsolated(t)
+	st := store.NewPG(pool)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	oid := uuid.NewString()
+	principal := "entra:" + idTenant + ":" + oid
+
+	if _, _, err := st.CreatePerson(ctx, types.Person{Principal: principal, Email: "held@corp.example", Issuer: idIssuer, TenantID: idTenant, ObjectID: oid, CreatedBy: "admin"}); err != nil {
+		t.Fatalf("create person: %v", err)
+	}
+	scim, _, err := st.CreateScimIdentity(ctx, idIssuer, idTenant, oid, store.IdentityUpdate{}, now)
+	if err != nil {
+		t.Fatalf("create scim identity: %v", err)
+	}
+	if _, err := st.SuspendIdentity(ctx, store.SuspendPlan{IdentityID: scim.ID, Principal: "", Principals: []string{principal}}); err != nil {
+		t.Fatalf("suspend: %v", err)
+	}
+
+	page, err := st.ListPeopleDirectory(ctx, store.PeopleDirectoryFilter{})
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	p := listingByPrincipal(t, page.People, principal)
+	if !p.PreCreated || p.DeactivatedAt == nil || p.FirstSignInAt != nil {
+		t.Errorf("person = %+v, want pre-created, deactivated, never signed in", p)
+	}
+
+	page, err = st.ListPeopleDirectory(ctx, store.PeopleDirectoryFilter{State: "deactivated"})
+	if err != nil {
+		t.Fatalf("list deactivated: %v", err)
+	}
+	if !slices.Contains(principals(page.People), principal) {
+		t.Errorf("state=deactivated = %v, want the suspended person", principals(page.People))
+	}
+
+	page, err = st.ListPeopleDirectory(ctx, store.PeopleDirectoryFilter{State: "active"})
+	if err != nil {
+		t.Fatalf("list active: %v", err)
+	}
+	if slices.Contains(principals(page.People), principal) {
+		t.Errorf("state=active = %v, want the suspended person excluded", principals(page.People))
+	}
+}
+
 // A listing carries the person's last verified login groups, and says so when there is no snapshot.
 func TestPG_PeopleDirectory_LoginGroups(t *testing.T) {
 	pool := runsPGPoolIsolated(t)

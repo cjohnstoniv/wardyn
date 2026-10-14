@@ -4,20 +4,26 @@
 package main
 
 import (
+	"context"
 	"strings"
 	"testing"
 
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
+	secretstorepg "github.com/cjohnstoniv/wardyn/internal/secretstore/pg"
 )
 
 // custodyStore reports the two descriptions refuseKEKRequired reads.
 type custodyStore struct {
 	secretstore.Store
 	external, keyService string
+	localRows            int
 }
 
 func (c custodyStore) StoresExternally() string { return c.external }
 func (c custodyStore) KeyService() string       { return c.keyService }
+
+// LocalRows is what a pg store would count; refuseKEKRequired must never ask.
+func (c custodyStore) LocalRows(context.Context) (int, error) { return c.localRows, nil }
 
 // The refusal depends on who holds the credentials, nothing else: a set,
 // ephemeral or absent WARDYN_AGE_KEY and an OIDC issuer never reach it.
@@ -31,6 +37,7 @@ func TestRefuseKEKRequired(t *testing.T) {
 		{"local key, flag set (a set or an ephemeral age key, with or without OIDC)", true, custodyStore{}, true},
 		{"local key, flag unset", false, custodyStore{}, false},
 		{"key service, flag set", true, custodyStore{keyService: "Vault Transit at vault.example:8200"}, false},
+		{"key service, flag set, rows still wrapped by the local key", true, custodyStore{keyService: "Vault Transit at vault.example:8200", localRows: 7}, false},
 		{"store mode, flag set", true, custodyStore{external: "Vault at vault.example:8200"}, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -39,13 +46,23 @@ func TestRefuseKEKRequired(t *testing.T) {
 				t.Fatalf("refuseKEKRequired = %v; want refusal %v", err, tc.refuse)
 			}
 			if err != nil {
-				for _, want := range []string{"refusing to start:", "WARDYN_KEK=transit|azurekv", "wardynd -rewrap"} {
+				for _, want := range []string{"refusing to start:", "WARDYN_KEK=transit|azurekv|awskms", "wardynd -rewrap", "new credential writes"} {
 					if !strings.Contains(err.Error(), want) {
 						t.Fatalf("refusal %q lacks %q", err, want)
 					}
 				}
 			}
 		})
+	}
+}
+
+// Only a Postgres store counts local-key rows; any other store gives /setup/status no counter.
+func TestLocalRowsCounter(t *testing.T) {
+	if localRowsCounter(custodyStore{}) != nil {
+		t.Error("a store that is not the pg store got a local-row counter")
+	}
+	if localRowsCounter(&secretstorepg.Store{}) == nil {
+		t.Error("the pg store got no local-row counter")
 	}
 }
 

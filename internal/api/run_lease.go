@@ -19,7 +19,9 @@ import (
 
 // The lease (long-holds design rev 4, §2.1, RL-3). A run with an end
 // (AgentRun.EndsAt) is warned at 24 h, 1 h and 10 min before it, and at the end
-// it stops and is KEPT: approvals cancelled, broker credentials revoked, the
+// it stops and is KEPT (a Background task is instead KILLED, reason end_reached,
+// and a run still live at its lifetime_cap_at is KILLED max_lifetime_reached:
+// lifetimeEndDue): approvals cancelled, broker credentials revoked, the
 // agent and the proxy stopped, so it has no network while its files
 // stay for Config.EndedRunGrace. The grace running out tears it down. The run
 // identity is deliberately not revoked, because a run-wide revoke would also
@@ -72,6 +74,10 @@ func (s *Server) leaseRun(ctx context.Context, leaser store.RunLeaser, run types
 	ctx, cancel := context.WithTimeout(ctx, reconcileFinalizeTimeout)
 	defer cancel()
 	now := s.cfg.Now()
+	if reason, due := lifetimeEndDue(run, now); due {
+		s.killRunAtLifetime(ctx, run, reason)
+		return
+	}
 	switch {
 	case run.LostAt != nil:
 		ended := run.LostReason == types.LostEnded
@@ -93,6 +99,8 @@ func (s *Server) leaseRun(ctx context.Context, leaser store.RunLeaser, run types
 		// that proxy nor revoke the revived run's broker. So the pass takes the
 		// run's lock, which a revive holds from its claim to its settle, and
 		// re-reads the row under it, holding it through the runner call below.
+		// The stop is decided from that re-read: an end moved before it (the
+		// end edit writes under this lock too) keeps the agent running.
 		// It never waits: a run whose lock is held is skipped and retried next
 		// pass. The expiry teardown above stays outside this, so a run cannot
 		// dodge it by being revived again and again. The busy mark covers the
@@ -105,9 +113,11 @@ func (s *Server) leaseRun(ctx context.Context, leaser store.RunLeaser, run types
 		if _, busy := s.reviving.Load(run.ID); busy {
 			return
 		}
-		if cur, err := s.cfg.Store.GetRun(ctx, run.ID); err != nil || cur.LostAt == nil {
+		cur, err := s.cfg.Store.GetRun(ctx, run.ID)
+		if err != nil || cur.LostAt == nil {
 			return
 		}
+		run, ended = cur, cur.LostReason == types.LostEnded
 		// Re-assert the stop every pass: a crash between the claim and the
 		// stop would otherwise leave a kept run with its proxy and broker
 		// credentials up. The broker revoke writes a row per credential, so it
@@ -115,7 +125,6 @@ func (s *Server) leaseRun(ctx context.Context, leaser store.RunLeaser, run types
 		if _, done := s.leaseEnded.LoadOrStore(run.ID, struct{}{}); !done {
 			s.revokeRunBroker(ctx, run.ID)
 		}
-		var err error
 		if ended {
 			err = s.endSandbox(ctx, run)
 		} else {
@@ -146,6 +155,86 @@ func (s *Server) leaseRun(ctx context.Context, leaser store.RunLeaser, run types
 	}
 }
 
+// lifetimeEndDue says whether a run is to be KILLED by the lease now, and why
+// (no-end runs design, O2-A and O3-A). A run at or past lifetime_cap_at is
+// KILLED max_lifetime_reached, Background or Interactive, unless its own end
+// already kept it: a run kept at an earlier end keeps its files grace. A
+// Background task whose end time comes before its cap is KILLED end_reached at
+// that end (strictly before the cap; an end at the cap is the maximum). An
+// Interactive run, and a run launched by an older client (no stored
+// experience), is kept at its end exactly as before. A Background run kept after
+// an outage (lost_reason 'outage') is killed end_reached at its end like any
+// Background run; only a run its OWN end kept is left to its grace. Reason follows the run's
+// own end and cap, never the sweep's lateness, so a late sweep still says which
+// came first.
+func lifetimeEndDue(run types.AgentRun, now time.Time) (types.RunEndReason, bool) {
+	if run.LostAt != nil && run.LostReason == types.LostEnded {
+		return "", false
+	}
+	endedFirst := run.BackgroundOnly() && run.EndsAt != nil &&
+		(run.LifetimeCapAt == nil || run.EndsAt.Before(*run.LifetimeCapAt))
+	switch {
+	case run.LifetimeCapAt != nil && !now.Before(*run.LifetimeCapAt):
+		if endedFirst {
+			return types.RunEndEndReached, true
+		}
+		return types.RunEndMaxLifetimeReached, true
+	case endedFirst && !now.Before(*run.EndsAt):
+		return types.RunEndEndReached, true
+	}
+	return "", false
+}
+
+// runStateDetailUpdater is the OPTIONAL store capability the lifetime kill
+// needs: the KILLED compare-and-set that writes status_detail in the same
+// statement. Kept off store.RunLeaser for the reason runStatusDetailSetter
+// states: the doubles that embed the store interfaces do not implement it. The
+// real PG store does; a store that does not never kills at a lifetime.
+type runStateDetailUpdater interface {
+	KillRunAtLifetimeIf(ctx context.Context, id uuid.UUID, reason types.RunEndReason, detail string, now time.Time) (bool, error)
+}
+
+// lifetimeStatusDetail is the status_detail a run KILLED at its end or its
+// maximum carries; projectStatusDetail reads the reason back out as status_reason.
+func lifetimeStatusDetail(reason types.RunEndReason) string { return "lifetime: " + string(reason) }
+
+// killRunAtLifetime KILLS a run at its end or its maximum lifetime. The state
+// and the reason are written by ONE compare-and-set, so a KILLED run never reads
+// without its reason; a lost CAS (a person's kill, a completion) changes
+// nothing and tears nothing down. The rest is the ordinary kill teardown,
+// attributed to system/wardynd: approvals cancelled, sandbox killed, identity
+// and broker credentials revoked. A sandbox on an offline self-hosted runner
+// is a pending kill, applied when the runner reconnects; the run is KILLED at
+// the org at once either way.
+func (s *Server) killRunAtLifetime(ctx context.Context, run types.AgentRun, reason types.RunEndReason) {
+	updater, ok := s.cfg.Store.(runStateDetailUpdater)
+	if !ok {
+		return
+	}
+	// Once claimed, the teardown must finish whatever the sweep's own bound says.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), killCascadeTimeout)
+	defer cancel()
+	applied, err := updater.KillRunAtLifetimeIf(ctx, run.ID, reason, lifetimeStatusDetail(reason), s.cfg.Now())
+	if err != nil {
+		slog.WarnContext(ctx, "wardynd: killing a run at its lifetime failed",
+			slog.String("run_id", run.ID.String()), slog.Any("err", err))
+		return
+	}
+	if !applied {
+		return
+	}
+	s.metrics.runTerminal(types.RunKilled)
+	s.runEvents.moved(run.ID, types.RunRunning, types.RunKilled)
+	s.cancelRunApprovals(ctx, run.ID)
+	extra := map[string]any{"reason": string(reason), "ends_at": run.EndsAt, "lifetime_cap_at": run.LifetimeCapAt}
+	if run.LifetimeCapSource != "" {
+		// The same labels run.create writes (design §7); the stored source is a
+		// token, so a pool reads "your pool" until the run carries its pool's name.
+		extra["source"] = endSourceLabel(run.LifetimeCapSource, "")
+	}
+	s.killTeardownTail(ctx, run, types.ActorSystem, "wardynd", extra, true)
+}
+
 // endRun ends a run at its end. The claim (MarkRunEnded) comes first so two
 // replicas never both end it, and so the run is already marked kept when its
 // agent stops — the completion watcher reads that and leaves the run alone
@@ -164,6 +253,8 @@ func (s *Server) endRun(ctx context.Context, leaser store.RunLeaser, run types.A
 	if !applied {
 		return
 	}
+	// A run kept after its end no longer holds its pool's slot: a waiting run may start.
+	s.kickQueue()
 	// The mark just landed in the store, at now — set it on our copy too (as
 	// run_lost.go's loseRun already does at its own claim), so a fall-through to
 	// stopKeptRun below compares StopKeptRunIf against the SAME mark the row now

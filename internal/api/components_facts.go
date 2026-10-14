@@ -9,7 +9,9 @@ import (
 	"strings"
 
 	"github.com/cjohnstoniv/wardyn/internal/composer"
+	"github.com/cjohnstoniv/wardyn/internal/placement"
 	"github.com/cjohnstoniv/wardyn/internal/types"
+	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
 
 // componentFact is one row of a dry run door's `components`: something the run
@@ -24,13 +26,16 @@ import (
 // domains do. A fact never carries the name of a secret the organisation
 // provides, the value of a setting, or a provider row's id: a secret is how it
 // is delivered and whose it is, a setting is its key, a provider is its kind.
+// The one approved document is agentpolicy's nonsecret managed policy; it is
+// never an arbitrary dispatch file or environment map.
 type componentFact struct {
 	Kind types.ComponentKind `json:"kind"`
 	// Provider is a git_provider's kind: github or azure_devops.
 	Provider string `json:"provider,omitempty"`
 	// ID keys the row within one response: a stored component's id in its
 	// canonical spelling, "inline:<position in the request>" for one defined on
-	// the request, "git_provider:<provider>:<lane>[:<org>]" for a Git provider.
+	// the request (a built-in Git provider's too), "git_provider:<provider>:<lane>[:<org>]"
+	// for a Git provider.
 	ID      string `json:"id"`
 	Name    string `json:"name,omitempty"`
 	Version int    `json:"version,omitempty"` // a stored component's, as attached
@@ -41,6 +46,9 @@ type componentFact struct {
 	// Requirements is what the person has still to supply, as the checklist
 	// rows Review shows for the same grants. Never nil.
 	Requirements []SetupItem `json:"requirements"`
+	// signIn: an Azure DevOps row whose person has no Entra sign-in stored, the
+	// one cause the connect door fixes (not on the wire; accessFacts reads it).
+	signIn bool
 
 	// A git_provider's lane, the address its row clones from, and the draft's
 	// repositories on it.
@@ -64,6 +72,18 @@ type componentFact struct {
 	TLSIntercept bool `json:"tls_intercept,omitempty"`
 	// HighRisk: Review grades one of its secrets high.
 	HighRisk bool `json:"high_risk,omitempty"`
+
+	// Agent is the agent component's own facts (kind agent) and the rest are a
+	// git_provider's additions (see client.ComponentFact). The New Run contract
+	// declares their member-safe wire shape.
+	Agent             *client.AgentFact       `json:"agent,omitempty"`
+	Capabilities      []string                `json:"capabilities,omitempty"`
+	CapabilityCeiling []string                `json:"capability_ceiling,omitempty"`
+	PushRules         *types.PushRulesSpec    `json:"push_rules,omitempty"`
+	TokenMode         types.ADOTokenMode      `json:"token_mode,omitempty"`
+	TokenScopes       []client.TokenScopeFact `json:"token_scopes,omitempty"`
+	RepoAccess        []client.RepoAccessFact `json:"repo_access,omitempty"`
+	InstallURL        string                  `json:"install_url,omitempty"`
 }
 
 // componentSecretFact is one secret of a component: how it reaches the run,
@@ -71,6 +91,10 @@ type componentFact struct {
 type componentSecretFact struct {
 	Delivery string `json:"delivery"` // header | env | file
 	Shared   bool   `json:"shared"`
+	// LocalDelivery is how an organisation-held secret would reach the person's
+	// runner (OD-12): via_org, runner_resident or refuse. Absent for the
+	// person's own secret and until the placement lane decides.
+	LocalDelivery placement.Mode `json:"local_delivery,omitempty"`
 }
 
 // What a fact's status says.
@@ -93,21 +117,46 @@ const (
 	gitLaneNone   = "none"
 )
 
+// Only admitted data crosses into the fact builders. Each door states which
+// resolutions it completed; builders cannot receive or branch on a fold mode.
+type componentFactInputs struct {
+	req               *createRunRequest
+	spec              types.RunPolicySpec
+	harnesses         []types.RunHarness // the run's harness set; agentPolicyDocument falls back to it
+	comps             runComponents
+	baseline          composer.Baseline
+	scmSite           types.SiteConfig
+	ceiling           governanceCeiling
+	mpChoice          runProviderChoice
+	pushSets          []types.PushRuleSet
+	autonomy          types.AutonomyResolution
+	credentialChecked bool
+	autonomyResolved  bool
+}
+
 // componentFacts is the `components` of Review and of the policy preview: the
-// Git providers the draft's repositories live on, then its components in
-// request order. Pure — everything it says was decided by the caller's gates.
-// scm is Review's git_credential fact; the preview reads no credential and
-// passes nil. Nil when the run has neither, so its body is the one it was.
-func componentFacts(req createRunRequest, spec types.RunPolicySpec, site types.SiteConfig, comps runComponents, scm *SCMAccess) []componentFact {
-	facts := gitProviderFacts(req, spec, site, scm)
-	for i, a := range comps.attached {
-		facts = append(facts, a.fact(i, comps))
+// Git providers the draft's repositories live on, its agent, then attached
+// components in request order. Everything was decided by the caller's gates.
+// scm is Review's git_credential fact; the preview passes a presence-only one
+// (adoSignInPresenceFact) or nil. Nil when an exec run has no Git provider or attached component.
+func componentFacts(f componentFactInputs, scm *SCMAccess) []componentFact {
+	facts := gitProviderFacts(*f.req, f.spec, f.scmSite, scm)
+	enrichGitFacts(f, facts)
+	if agent, ok := agentComponentFact(f); ok {
+		facts = append(facts, agent)
+	}
+	for i, a := range f.comps.attached {
+		if a.builtin != nil {
+			facts = append(facts, a.builtin.fact(i, a.snapshot.Name, f))
+			continue
+		}
+		facts = append(facts, a.fact(i, f.comps, f.baseline))
 	}
 	return facts
 }
 
 // fact describes one attached component, at position ordinal of the request.
-func (a attachedComponent) fact(ordinal int, comps runComponents) componentFact {
+func (a attachedComponent) fact(ordinal int, comps runComponents, baseline composer.Baseline) componentFact {
 	def := a.snapshot.Definition
 	f := componentFact{
 		Kind: types.ComponentCustom, ID: "inline:" + strconv.Itoa(ordinal), Name: a.snapshot.Name, Version: a.snapshot.Version,
@@ -128,7 +177,7 @@ func (a attachedComponent) fact(ordinal int, comps runComponents) componentFact 
 		f.Secrets = append(f.Secrets, componentSecretFact{Delivery: sec.Delivery.Mode, Shared: sec.Shared})
 		g := componentGrant(sec)
 		grants = append(grants, g)
-		if sec.Delivery.Mode == types.ComponentDeliveryHeader && !sec.Delivery.PlainHTTP {
+		if sec.Delivery.Mode == types.ComponentDeliveryHeader && !sec.Delivery.PlainHTTP && def.MCP == nil {
 			f.TLSIntercept = true
 		}
 		if !sec.Shared && slices.Contains(a.needsOwnSecrets, sec.SecretName) {
@@ -137,14 +186,20 @@ func (a attachedComponent) fact(ordinal int, comps runComponents) componentFact 
 	}
 	f.Requirements = append(f.Requirements, setupSecretItems(types.RunPolicySpec{EligibleGrants: missing}, nil)...)
 	switch {
+	case a.needsSignIn && attachedAzureCLI(a) != nil:
+		f.Requirements = append(f.Requirements, azureCLISignInItem(f.ID, f.Name))
+	case a.needsSignIn:
+		f.Requirements = append(f.Requirements, cliSignInItem(f.ID, f.Name))
+	}
+	switch {
 	case a.needsAdminSecret:
 		f.Status = componentUnavailable
 	case len(f.Requirements) > 0:
 		f.Status = componentNeedsInput
 	}
 	own := types.RunPolicySpec{EligibleGrants: grants}
-	f.VaultFloor = comps.settings.RequireVaultForCredentials && composer.RequiredConfinementFloor(own) == types.CC3
-	f.HighRisk = slices.ContainsFunc(composer.Grade(composer.RunInput{}, own), func(item composer.RiskItem) bool {
+	f.VaultFloor = comps.settings.RequireVaultForCredentials && composer.RequiredConfinementFloor(own, baseline) == types.CC3
+	f.HighRisk = slices.ContainsFunc(composer.Grade(composer.RunInput{Baseline: baseline}, own), func(item composer.RiskItem) bool {
 		return item.Level == composer.RiskHigh && strings.HasPrefix(item.Field, "eligible_grants[")
 	})
 	return f
@@ -161,6 +216,7 @@ func gitProviderFacts(req createRunRequest, spec types.RunPolicySpec, site types
 			continue
 		}
 		lane := gitProviderLane(repo, spec, site)
+		repo.org = gitFactOrg(repo)
 		id := string(types.ComponentGitProvider) + ":" + repo.kind + ":" + lane
 		if repo.org != "" {
 			id += ":" + repo.org
@@ -170,6 +226,7 @@ func gitProviderFacts(req createRunRequest, spec types.RunPolicySpec, site types
 			facts = append(facts, componentFact{
 				Kind: types.ComponentGitProvider, Provider: repo.kind, ID: id, Reason: "workspace",
 				Status: gitProviderStatus(repo, scm), Requirements: []SetupItem{}, Lane: lane, Org: repo.org,
+				signIn: adoSignInFixable(repo, scm),
 			})
 			i = len(facts) - 1
 		}
@@ -234,9 +291,10 @@ func gitGrantServes(g types.GrantSpec, repo previewRepo) bool {
 }
 
 // gitProviderStatus is the person's connection to the provider where the door
-// read it: Review's git_credential fact, for the Azure DevOps organisation it
-// graded. Every other row — the preview's, and a GitHub one, which no door
-// grades yet — is unknown rather than a guess. A caller that is no person (the
+// read it: Review's git_credential fact, or the preview's presence-only one
+// (needs_input when none is stored), for the Azure DevOps organisation it
+// graded. Every other row — a stored sign-in the preview did not grade, and a
+// GitHub one, which no door grades yet — is unknown rather than a guess. A caller that is no person (the
 // shared admin token) has no connection to make: unavailable, never a prompt
 // to sign in.
 func gitProviderStatus(repo previewRepo, scm *SCMAccess) string {
@@ -250,4 +308,12 @@ func gitProviderStatus(repo previewRepo, scm *SCMAccess) string {
 		return componentUnavailable
 	}
 	return componentNeedsInput
+}
+
+// adoSignInFixable is whether the person's missing Azure DevOps sign-in is the
+// Entra one the connect popup captures: not an own-token row (the fix is a pasted
+// token) and not an ended or short sign-in, which Launch's refusal names.
+func adoSignInFixable(repo previewRepo, scm *SCMAccess) bool {
+	return scm != nil && scm.Kind == repo.kind && scm.Org == repo.org && scm.State == modelAccessNotConfigured &&
+		scm.TokenMode != string(types.ADOTokenModeOwnPAT)
 }

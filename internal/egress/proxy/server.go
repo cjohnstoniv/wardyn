@@ -39,11 +39,44 @@ type Server struct {
 	// read in Shutdown. Nil when no renewer was started.
 	renewStop    context.CancelFunc
 	renewStopped chan struct{}
+	// maskKey is a ViaOrgEngine's own procRegistry key, evicted at Shutdown; uuid.Nil for a sidecar.
+	maskKey uuid.UUID
 }
 
 // NewServer wires a Proxy from a validated Config and dependencies. It mints
 // injection credentials once (fail-closed on error) before returning.
 func NewServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.Writer) (*Server, error) {
+	return newServer(ctx, cfg, client, stdout, serverHooks{})
+}
+
+// serverHooks are what a ViaOrgEngine changes about a Server: no token renewer
+// (engine), and for tests a dialer and resolver in place of the network.
+type serverHooks struct {
+	dial    func(ctx context.Context, network, addr string) (net.Conn, error)
+	res     resolver
+	engine  bool
+	maskKey uuid.UUID // where this server's secrets are filed (procMaskFor)
+}
+
+// start finishes a Server: a sidecar starts its token renewer; a ViaOrgEngine
+// starts none, and its brokered mints and approval polls ride the caller's
+// client too: it is the organisation, and never dials itself.
+func (h serverHooks) start(out *Server, p *Proxy, ts *tokenSource, cfg *Config, client *http.Client) {
+	if h.dial != nil {
+		p.dial = h.dial // every transport dials through p.dial at call time
+	}
+	if h.res != nil {
+		p.res = h.res
+	}
+	p.maskKey, out.maskKey = h.maskKey, h.maskKey
+	if h.engine {
+		p.localClient = client
+		return
+	}
+	startRunTokenRenewer(out, p, ts, cfg, client)
+}
+
+func newServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.Writer, hooks serverHooks) (*Server, error) {
 	pol := CompilePolicy(cfg.Policy)
 	// Beside the compile, not inside it: CompilePolicy is a pure function with
 	// several callers, and this is a once-per-boot report about the policy
@@ -123,9 +156,12 @@ func NewServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 		client = &c
 	}
 
-	sink := newDecisionSink(cfg.ControlPlaneURL, ts, cfg.DecisionBufferSize, client, stdout)
+	sink, err := configuredDecisionSink(cfg, ts, client, stdout)
+	if err != nil {
+		return nil, err
+	}
 
-	inj, err := buildInjector(ctx, cfg.ControlPlaneURL, ts, pol, cfg.Injection, client)
+	inj, err := buildInjectorFor(ctx, hooks.maskKey, cfg.ControlPlaneURL, ts, pol, cfg.Injection, client)
 	if err != nil {
 		_ = sink.close(context.Background())
 		return nil, fmt.Errorf("build injector: %w", err)
@@ -141,9 +177,9 @@ func NewServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 	var scanner *contentscan.Engine
 	if spec := cfg.Policy.LLMInspection; spec != nil {
 		for _, v := range spec.WorkspaceSecretValues {
-			procMask([]byte(v))
+			procMaskFor(hooks.maskKey, []byte(v))
 		}
-		eng, eerr := contentscan.NewEngine(*spec, procRegistry.Snapshot(uuid.Nil))
+		eng, eerr := contentscan.NewEngine(*spec, procRegistry.Snapshot(hooks.maskKey))
 		if eerr != nil {
 			_ = sink.close(context.Background())
 			return nil, fmt.Errorf("build content scanner: %w", eerr)
@@ -152,8 +188,7 @@ func NewServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 		if eng == nil && spec.Mode != "" && spec.Mode != "off" {
 			// Configured to inspect but the effective secret corpus is empty —
 			// scanning is a no-op. Surface it so the operator is not misled.
-			slog.WarnContext(ctx, "wardyn-proxy: llm_inspection configured but no effective secret corpus — scanning disabled",
-				slog.String("mode", spec.Mode))
+			slog.WarnContext(ctx, "wardyn-proxy: llm_inspection configured but no effective secret corpus — scanning disabled", slog.String("mode", spec.Mode))
 		}
 	}
 
@@ -183,7 +218,7 @@ func NewServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 	}
 	if up != nil {
 		for _, v := range up.maskValues() {
-			procMask(v)
+			procMaskFor(hooks.maskKey, v)
 		}
 		slog.InfoContext(ctx, "wardyn-proxy: chaining egress through upstream proxy (private-IP guard relaxed for this hop; control-plane bypasses it)",
 			slog.String("upstream_addr", up.addr))
@@ -201,8 +236,7 @@ func NewServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 
 	ap := newApprovalClient(cfg.ControlPlaneURL, ts, cfg.RunID, client)
 	// 0/absent for either knob keeps configureHold's built-in defaults (30s / 16).
-	ap.configureHold(cfg.Policy.FirstUseApproval.Normalize(),
-		time.Duration(cfg.Policy.FirstUseHoldSeconds)*time.Second, cfg.Policy.MaxHolds)
+	ap.configureHold(cfg.Policy.FirstUseApproval.Normalize(), time.Duration(cfg.Policy.FirstUseHoldSeconds)*time.Second, cfg.Policy.MaxHolds)
 
 	// Corporate CA trust (WARDYN_TRUSTED_CA_FILE): additive to the system
 	// roots for THIS sidecar's egress TLS. Each transport that may EDIT it
@@ -210,7 +244,6 @@ func NewServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 	// leaves it nil (system roots, ServerName from URL).
 	// applyDefaultsAndValidate already fail-fast-checked this PEM at
 	// config-load time; this is the live proxy's own parse.
-
 	p := newProxy(Options{
 		RunID:                cfg.RunID,
 		Policy:               pol,
@@ -226,6 +259,8 @@ func NewServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 		BrokeredPATGrantIDs:  cfg.BrokeredPATGrantIDs,
 		ADOGrants:            newADOGrantsByHost(cfg.ADOGrant),
 		AzureGates:           cfg.AzureGates,
+		GitHubAPI:            cfg.GitHubAPI,
+		AzureARM:             cfg.AzureARM,
 		ControlPlaneURL:      cfg.ControlPlaneURL,
 		RunToken:             ts,
 		Upstream:             up,
@@ -241,7 +276,9 @@ func NewServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 		LocalSubnets:         localSubnets,
 		ControlPlaneIPs:      cpIPs,
 		ExclusionUnknown:     exclusionUnknown,
+		ViaOrgRoutes:         cfg.ViaOrgRoutes,
 	})
+	p.pushSets, p.pushBase, p.harnessRules, p.harnessCreds, p.mcp = cfg.PushRuleSets, compilePushRules(cfg.PushRuleBase), cfg.HarnessToolRules, cfg.HarnessCredentials, newMCPBroker(cfg.MCPServers, cfg.MCPBindings)
 	if ca != nil && len(cfg.MITMHosts) > 0 {
 		slog.InfoContext(ctx, "wardyn-proxy: TLS-MITM also enabled for operator-configured corp artifact host(s) (token injection)",
 			slog.Int("host_count", len(cfg.MITMHosts)))
@@ -266,7 +303,7 @@ func NewServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 	// Start the run-token renewer, which keeps this sidecar's short-TTL token
 	// fresh for the life of the run and, alongside it, the activity reporter
 	// for the pause presence clock.
-	startRunTokenRenewer(out, p, ts, cfg, client)
+	hooks.start(out, p, ts, cfg, client)
 	return out, nil
 }
 
@@ -299,6 +336,9 @@ func (s *Server) ListenAndServe() error {
 	return nil
 }
 
+// shutdownDrainReserve is the most of Shutdown's deadline held back for the sink drain.
+const shutdownDrainReserve = 2 * time.Second
+
 // Shutdown gracefully stops the HTTP server, stops the token renewer, and drains
 // the decision sink.
 func (s *Server) Shutdown(ctx context.Context) error {
@@ -306,7 +346,22 @@ func (s *Server) Shutdown(ctx context.Context) error {
 		s.renewStop()
 		<-s.renewStopped
 	}
-	httpErr := s.http.Shutdown(ctx)
+	// Before http.Shutdown, which waits on open sandbox connections: the
+	// runtime's stop timeout may kill the process before anything after it.
+	s.proxy.revokeGitHubAPITokens(ctx)
+	// http.Shutdown waits on open sandbox connections for as long as it is allowed, so it gets only
+	// part of a deadline: the rest is the drain reserve, which the final rows (the memo flush
+	// below among them) need to reach the control plane. The drain context also outlives a
+	// cancelled ctx, so a signal that cancels the caller does not discard the audit tail.
+	reserve := shutdownDrainReserve
+	httpCtx := ctx
+	if dl, ok := ctx.Deadline(); ok {
+		reserve = min(max(time.Until(dl), 0)/4, shutdownDrainReserve)
+		var cancel context.CancelFunc
+		httpCtx, cancel = context.WithDeadline(ctx, dl.Add(-reserve))
+		defer cancel()
+	}
+	httpErr := s.http.Shutdown(httpCtx)
 	// End any open credential re-auth hold: its poll loop is detached from the
 	// request that opened it (so a hung-up SDK can't end a hold its owner is
 	// still signing in for), which also means nothing else would stop it
@@ -315,11 +370,26 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	// Run end closes every open private-ip streak BEFORE the sink drains, so
 	// a repeat count that never hit the eviction path is still recorded.
 	s.proxy.flushPrivateIPMemo()
-	sinkErr := s.sink.close(ctx)
-	if httpErr != nil {
-		return httpErr
+	// The drain keeps whatever the caller's deadline still allows (at least the reserve): a backlog that
+	// outlasts the reserve on an idle proxy must still reach the control plane.
+	drain := reserve
+	if dl, ok := ctx.Deadline(); ok {
+		drain = max(time.Until(dl), reserve)
 	}
-	return sinkErr
+	drainCtx, cancelDrain := context.WithTimeout(context.WithoutCancel(ctx), drain)
+	defer cancelDrain()
+	sinkErr := s.sink.close(drainCtx)
+	// An engine's own secrets leave with it, after its last row is masked: a
+	// close that gave up waiting leaves the sink's worker posting its queue, so
+	// the key is evicted only once that worker has finished. A sidecar's
+	// (uuid.Nil) are the process's and are never evicted.
+	if key := s.maskKey; key != uuid.Nil {
+		go func() {
+			s.sink.wait()
+			procRegistry.Evict(key)
+		}()
+	}
+	return errors.Join(httpErr, sinkErr)
 }
 
 // Addr returns the configured listen address.

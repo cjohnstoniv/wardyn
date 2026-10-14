@@ -81,11 +81,19 @@ func patForwardSafe(rest, rawQuery string) bool {
 		}
 	}
 	for _, seg := range strings.Split(rest, "/") {
-		if seg == "." || seg == ".." {
+		if isDotSegment(seg) {
 			return false
 		}
 	}
 	return true
+}
+
+// isDotSegment reports whether a decoded path segment is "." or "..", reading
+// it up to its first ";": some servers drop ";" path parameters before they
+// resolve dot-segments.
+func isDotSegment(seg string) bool {
+	s, _, _ := strings.Cut(seg, ";")
+	return s == "." || s == ".."
 }
 
 // handlePATBroker serves /wardyn/git/<host>/<rest> for a git_pat-granted host.
@@ -159,9 +167,10 @@ func (p *Proxy) handlePATBroker(w http.ResponseWriter, r *http.Request) {
 	// operator may never have enabled would make the policy enforce nothing.
 	// A refused push is never forwarded.
 	if verb == "git-receive-pack" {
+		rules, entryErr := p.rulesForRemote(host, rest)
 		body, release, ok := p.applyPushRules(w, r, reqBody, slog.String("host", host),
 			func(ruleSource string) { p.emitPATDecision(r, host, egress.Deny, ruleSource) },
-			p.patForge(host, rest, grant), patPushTarget(host, rest, grant))
+			p.patForge(host, rest, grant), patPushTarget(host, rest, grant), rules, entryErr)
 		defer release()
 		if !ok {
 			return
@@ -272,6 +281,6 @@ func (p *Proxy) patToken(ctx context.Context, g PATGrant) (token, username strin
 	// raw token AND the base64(username+":"+tok) SetBasicAuth puts on the
 	// wire) before it can reach any output stream. registerBasicAuthCredential
 	// (inject.go) is the one definition.
-	registerBasicAuthCredential(username, tok)
+	registerBasicAuthCredential(p.maskKey, username, tok)
 	return tok, username, nil
 }

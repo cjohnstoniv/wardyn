@@ -19,10 +19,19 @@
  * own canon docs rather than editing these files.
  */
 
-import { expect, type Page, type APIRequestContext } from "@playwright/test";
+import { expect, type Locator, type Page, type APIRequestContext } from "@playwright/test";
 // From the CSS-free copy module, NEVER from harness-login-pane: that module
 // reaches xterm.css, which Playwright's Node loader cannot load ("No tests found").
 import { SELFRUN_MARKER, SIGNIN_PROGRESS } from "../../src/app/components/screens/settings/login-pane-copy";
+import { NR_FILES } from "../../src/app/components/wardyn/copy/new-run/files";
+import { NR_HARNESSES } from "../../src/app/components/wardyn/copy/new-run/harnesses";
+import { NR_LAUNCH } from "../../src/app/components/wardyn/copy/new-run/launch";
+import { NR_REVIEW } from "../../src/app/components/wardyn/copy/new-run/review";
+import { NR_RUN } from "../../src/app/components/wardyn/copy/new-run/run";
+import { NR_SHAPE } from "../../src/app/components/wardyn/copy/new-run/shape";
+import { NR_SHARED } from "../../src/app/components/wardyn/copy/new-run/shared";
+import { NR_START } from "../../src/app/components/wardyn/copy/new-run/start";
+import { NR_TOOLS } from "../../src/app/components/wardyn/copy/new-run/tools";
 import { termText } from "../terminal-text";
 
 // ── the walk's inputs (scripts/kind-sso-walk.sh exports every one) ──────────
@@ -227,11 +236,11 @@ export async function seen(): Promise<{
  * (0.7.5: lane `agent-boot-egress` seeds `hasCompletedOnboarding` into the
  * sandbox, which is what makes sso-member-recovery.spec.ts's case H — an
  * INTERACTIVE run that reaches the model — writable at all. This helper stays
- * autonomous; H drives the wizard itself, because the shape it must exercise is
+ * autonomous; H drives the guided flow itself, because the shape it must exercise is
  * the default no-seed one.)
  *
- * LAUNCH NAVIGATES straight to the run page (#125), carrying the 201's
- * advisory `warnings[]` with it (use-launch.ts). The warnings this run legitimately carries are
+ * LAUNCH lands on the Launched screen; "View run" goes to the run page, carrying the 201's
+ * advisory `warnings[]` with it. The warnings this run legitimately carries are
  * governance working, not failure — `api.anthropic.com` is dropped from egress
  * because this deployment is Bedrock, and the member's resources are capped to
  * the operator maximum.
@@ -248,11 +257,9 @@ export async function seen(): Promise<{
  */
 export async function launchAgentRun(page: Page, title: string): Promise<string> {
   await page.goto("/runs/new");
-  await page.getByRole("combobox", { name: "Title" }).fill(title);
-  await page.getByRole("radio", { name: /^Autonomous/ }).click();
-  await page.locator("#nr-task").fill("Reply with the single word: ready.");
-  await page.getByRole("button", { name: /^Launch/ }).click();
-  await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{36}$/, { timeout: SANDBOX_UP });
+  await walkNewRunToReview(page, { task: "Reply with the single word: ready." });
+  await launchFromReview(page, title);
+  await viewLaunchedRun(page);
   const id = runIDFromURL(page);
   await expect
     .poll(
@@ -265,6 +272,88 @@ export async function launchAgentRun(page: Page, title: string): Promise<string>
     )
     .not.toMatch(/^(|PENDING|STARTING)$/);
   return id;
+}
+
+// ── New Run, the guided flow ────────────────────────────────────────────────
+// Start, Shape, Run, Harnesses, Files, Tools and access, Review, the Name dialog and the
+// Launched screen. Every string is the copy module's; a wording change breaks nothing here.
+
+const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const startsWith = (s: string) => new RegExp(`^${escapeRe(s)}`);
+const CONTINUE = new RegExp(`^(${escapeRe(NR_SHARED.CONTINUE_TO(""))}.+|${escapeRe(NR_SHARED.REVIEW_RUN)})$`);
+const heading = (page: Page, title: string): Locator => page.getByRole("heading", { name: title, level: 1 });
+
+export interface GuidedPlan {
+  /** Default "agent_task". An "environment" is the interactive terminal with no agent. */
+  shape?: "agent_task" | "environment";
+  /** An agent task's mode; default "autonomous". */
+  mode?: "autonomous" | "interactive";
+  /** An autonomous run's task; an interactive run's starting prompt. */
+  task?: string;
+  /** An interactive agent task: the harness starts with the run (the agent's own TUI). Default: when `task` is given. */
+  startsWithRun?: boolean;
+  /** The model provider chosen for the harness on step 5; default the walk's provider. Empty leaves it unchosen. */
+  provider?: string;
+}
+
+async function continueTo(page: Page, next: string): Promise<void> {
+  await page.getByRole("button", { name: CONTINUE }).click();
+  await expect(heading(page, next)).toBeVisible({ timeout: 60_000 });
+}
+
+/**
+ * From the Start screen (already loaded) to Review with the fewest choices a complete run needs: no extra
+ * files, one harness (claude-code) on its provider, the task or starting prompt. Stops on Review.
+ */
+export async function walkNewRunToReview(page: Page, plan: GuidedPlan = {}): Promise<void> {
+  const shape = plan.shape ?? "agent_task";
+  const mode = plan.mode ?? "autonomous";
+  await expect(heading(page, NR_START.TITLE)).toBeVisible({ timeout: 60_000 });
+  await page.getByRole("button", { name: NR_START.GUIDED_FOOT }).click();
+  await expect(heading(page, NR_SHAPE.TITLE)).toBeVisible();
+  // A workload button writes the shape and opens Run.
+  await page.getByRole("button", { name: shape === "agent_task" ? NR_SHAPE.AGENT_TITLE : NR_SHAPE.ENV_TITLE, exact: true }).click();
+  await expect(heading(page, shape === "agent_task" ? NR_RUN.TITLE_AGENT : NR_RUN.TITLE_ENV)).toBeVisible({ timeout: 60_000 });
+  if (shape === "agent_task") {
+    await page.getByRole("radio", { name: startsWith(mode === "autonomous" ? NR_RUN.MODE_AUTONOMOUS : NR_RUN.MODE_INTERACTIVE) }).click();
+  }
+  await continueTo(page, NR_HARNESSES.TITLE);
+  if (shape === "agent_task") {
+    // A new agent task opens with the roster's first harness added; an Interactive one starts the run in it.
+    await expect(page.locator("#nr-harness-0")).toBeVisible({ timeout: 60_000 });
+    await page.locator("#nr-harness-0").selectOption("claude-code");
+    if (mode === "autonomous") await page.locator("#nr-task").fill(plan.task ?? "Reply with the single word: ready.");
+    else if (!(plan.startsWithRun ?? plan.task !== undefined)) await page.getByRole("switch", { name: NR_HARNESSES.START_IN_HARNESS }).click();
+    else if (plan.task !== undefined) await page.locator("#nr-text-0").fill(plan.task);
+  }
+  await continueTo(page, NR_FILES.TITLE);
+  await page.getByRole("radio", { name: startsWith(NR_FILES.NO_EXTRA) }).check();
+  const size = page.locator("#nr-main-drive-size");
+  if ((await size.count()) > 0 && (await size.inputValue()) === "") await size.fill("10");
+  await continueTo(page, NR_TOOLS.TITLE);
+  const provider = plan.provider ?? WALK_PROVIDER;
+  if (shape === "agent_task" && provider) await page.locator("#nr-provider-claude-code").selectOption(provider, { timeout: 60_000 });
+  await continueTo(page, NR_REVIEW.TITLE);
+}
+
+/**
+ * Review's Launch run, the Name dialog's title and its Launch. Returns the dialog: on a refusal it stays open
+ * and carries the server's sentence, and a credential refusal opens the sign-in door over it.
+ */
+export async function launchFromReview(page: Page, title: string): Promise<Locator> {
+  await expect(page.getByRole("button", { name: NR_REVIEW.LAUNCH_RUN })).toBeEnabled({ timeout: 60_000 });
+  await page.getByRole("button", { name: NR_REVIEW.LAUNCH_RUN }).click();
+  const dialog = page.getByRole("dialog", { name: NR_LAUNCH.TITLE });
+  await expect(dialog).toBeVisible();
+  await dialog.getByLabel(NR_LAUNCH.TITLE_LABEL).fill(title);
+  await dialog.getByRole("button", { name: NR_LAUNCH.LAUNCH, exact: true }).click();
+  return dialog;
+}
+
+/** The Launched screen's "View run": the run page, once the create has answered. */
+export async function viewLaunchedRun(page: Page, timeout: number = SANDBOX_UP): Promise<void> {
+  await page.getByRole("button", { name: NR_LAUNCH.VIEW_RUN }).or(page.getByRole("link", { name: NR_LAUNCH.VIEW_RUN })).click({ timeout });
+  await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{36}$/, { timeout });
 }
 
 /** /runs/:id is addressable; the id is the last path segment. */
@@ -391,11 +480,24 @@ export async function openModelConnections(page: Page): Promise<void> {
 }
 
 /**
+ * The connections card's own "Sign in to AWS" button. Scoped to the card: the
+ * shell banner and strip can offer the same door while the card settles, and
+ * the card claims it once expanded (openModelConnections).
+ */
+export function cardSignInAws(page: Page): Locator {
+  return page.getByTestId("model-connections-card").getByRole("button", { name: "Sign in to AWS", exact: true });
+}
+
+/** The Cancel of the sign-in pane that is open, never another dialog's. */
+export function paneCancel(page: Page): Locator {
+  return page.getByTestId("harness-login-pane").getByRole("button", { name: "Cancel", exact: true });
+}
+
+/**
  * Open the member's sign-in pane from Your account and wait for its terminal.
  *
- * The walk's provider is the member's one model connection, so Getting
- * Started renders one "Sign in to AWS" button for it; `.first()` keeps the
- * locator strict-mode safe should the shell strip offer the same door.
+ * The walk's provider is the member's one model connection, so the expanded
+ * connections card renders one "Sign in to AWS" button for it.
  *
  * The pane launches the login sandbox the moment it opens — the provider
  * carries the start URL, so there is nothing to ask first.
@@ -408,7 +510,7 @@ export async function openModelConnections(page: Page): Promise<void> {
  */
 export async function openLoginPane(page: Page): Promise<void> {
   await openModelConnections(page);
-  const cta = page.getByRole("button", { name: "Sign in to AWS" }).first();
+  const cta = cardSignInAws(page);
   await expect(cta).toBeVisible({ timeout: 60_000 });
   await cta.click();
   const opened: Page[] = [];

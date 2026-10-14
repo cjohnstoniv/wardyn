@@ -12,7 +12,17 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
+// authorizeRunModelProvider judges req.Agent's model provider: the request's,
+// else the pin of wsRefs' primary workspace, else the harness default. For a
+// run-mode request every refusal names the harness (forTool), and so does a
+// later liveness refusal of the choice (writeProviderChoiceRefusal).
 func (s *Server) authorizeRunModelProvider(r *http.Request, req createRunRequest, wsRefs []types.Workspace, incomplete bool) (runProviderChoice, *runRefusal) {
+	choice, refusal := s.chooseRunModelProvider(r, req, wsRefs, incomplete)
+	choice.tool = harnessRefusalTool(req)
+	return choice, refusal.forTool(choice.tool)
+}
+
+func (s *Server) chooseRunModelProvider(r *http.Request, req createRunRequest, wsRefs []types.Workspace, incomplete bool) (runProviderChoice, *runRefusal) {
 	ctx := r.Context()
 	if req.ModelProvider != "" && !modelProviderIDPattern.MatchString(req.ModelProvider) {
 		return runProviderChoice{}, runError(http.StatusBadRequest, reasonModelProviderIDInvalid, fmt.Sprintf(mpRunBadID, req.ModelProvider))
@@ -46,13 +56,12 @@ func (s *Server) authorizeRunModelProvider(r *http.Request, req createRunRequest
 	if sc.ModelProviders == nil && req.ModelProvider != "" {
 		return runProviderChoice{}, runError(http.StatusUnprocessableEntity, reasonModelProviderNoBlockConfigured, fmt.Sprintf(mpRunNoBlock, req.ModelProvider))
 	}
-	var pin string
-	if len(wsRefs) > 0 && wsRefs[0].LLMCred != nil {
-		pin = wsRefs[0].LLMCred.ProviderRef
+	granted := func(id string) (bool, error) { return s.capSeamAllowed(ctx, capModelProvider, id) }
+	pin, refusal := workspacesProviderPin(sc, req, wsRefs, granted)
+	if refusal != nil {
+		return runProviderChoice{}, refusal
 	}
-	choice, err := chooseModelProvider(sc, req.Agent, req.ModelProvider, pin, func(id string) (bool, error) {
-		return s.capSeamAllowed(ctx, capModelProvider, id)
-	})
+	choice, err := chooseModelProvider(sc, req.Agent, req.ModelProvider, pin, granted)
 	if err != nil {
 		return runProviderChoice{}, runServerError("resolve capability", err)
 	}
@@ -85,4 +94,47 @@ func providerChoiceRunRefusal(choice runProviderChoice) *runRefusal {
 	}
 	return &runRefusal{status: http.StatusUnprocessableEntity, decision: &d,
 		body: errorBody{Error: choice.refusal, Reason: string(authz.ReasonModelProviderUnavailable), Provider: choice.providerID, Kind: string(choice.kind)}}
+}
+
+// workspacesProviderPin is the one model-provider pin the run's workspaces
+// agree on, "" for none. A request that names its provider decides it and no
+// pin is read. Two different pins are 422 workspace_pin_conflict, naming each
+// provider by name; a pin the caller could not use answers with the refusal it
+// would get alone, so the conflict sentence never names a provider the caller
+// may not learn (#1018).
+func workspacesProviderPin(sc types.SiteConfig, req createRunRequest, wsRefs []types.Workspace, granted func(string) (bool, error)) (string, *runRefusal) {
+	if req.ModelProvider != "" {
+		return "", nil
+	}
+	var pin string
+	var from types.Workspace
+	for _, ws := range wsRefs {
+		switch p := workspacePin(ws); {
+		case p == "" || p == pin:
+		case pin == "":
+			pin, from = p, ws
+		default:
+			names := make([]string, 2)
+			for i, id := range []string{pin, p} {
+				choice, err := chooseModelProvider(sc, req.Agent, "", id, granted)
+				if err != nil {
+					return "", runServerError("resolve capability", err)
+				}
+				if choice.asMissing || choice.notGranted || choice.refusal != "" {
+					return "", providerChoiceRunRefusal(choice)
+				}
+				names[i] = choice.provider.Name
+			}
+			return "", runError(http.StatusUnprocessableEntity, reasonWorkspacePinConflict,
+				workspacePinConflictMsg(from.Name, names[0], ws.Name, names[1]))
+		}
+	}
+	return pin, nil
+}
+
+func workspacePin(ws types.Workspace) string {
+	if ws.LLMCred == nil {
+		return ""
+	}
+	return ws.LLMCred.ProviderRef
 }

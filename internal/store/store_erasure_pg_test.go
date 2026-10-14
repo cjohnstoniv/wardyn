@@ -64,7 +64,8 @@ func TestPG_PersonErasure_BlanksOnlyThatPersonsRunTasks(t *testing.T) {
 }
 
 // The names an audit row carries resolve to the one principal every erasure
-// destroys by; a name that resolves to none, or to two, is kept as it is.
+// destroys by; a name that resolves to none, or to two, is kept as it is. A
+// person an admin created is that name's owner, whoever signs in claiming it.
 func TestPG_PersonErasure_PrincipalForName(t *testing.T) {
 	pool := runsPGPoolIsolated(t)
 	st := store.NewPG(pool)
@@ -75,12 +76,17 @@ func TestPG_PersonErasure_PrincipalForName(t *testing.T) {
 		{Principal: "entra:" + idTenant + ":" + oid, Issuer: idIssuer, TenantID: idTenant, ObjectID: oid, Email: "Pat@Corp.Example"},
 		{Principal: "sub-a", Issuer: "https://dex.example", Email: "shared@corp.example"},
 		{Principal: "sub-b", Issuer: "https://dex2.example", Email: "shared@corp.example"},
+		{Principal: "sub-c", Issuer: "https://dex.example", Email: "early@corp.example"},
 	} {
 		if _, err := st.UpsertLoginIdentity(ctx, in, now); err != nil {
 			t.Fatal(err)
 		}
 	}
+	if _, _, err := st.CreatePerson(ctx, types.Person{Principal: "early@corp.example", CreatedBy: "admin"}); err != nil {
+		t.Fatal(err)
+	}
 	for name, want := range map[string]string{
+		"early@corp.example":            "early@corp.example",            // a created person, not whoever claims the email
 		"entra:" + idTenant + ":" + oid: "entra:" + idTenant + ":" + oid, // already the principal
 		"PAT@corp.example":              "entra:" + idTenant + ":" + oid, // an email alias, any case
 		"sub-a":                         "sub-a",
@@ -91,6 +97,255 @@ func TestPG_PersonErasure_PrincipalForName(t *testing.T) {
 	} {
 		if got, err := st.PrincipalForName(ctx, name); err != nil || got != want {
 			t.Errorf("PrincipalForName(%q) = %q, %v, want %q", name, got, err, want)
+		}
+	}
+}
+
+// The identity directory names who a typed value is, for a person with no token
+// or workspace: an exact principal, the entra form, an email in any case (from a
+// sign-in alias or a pre-created person); two people sharing an email are both
+// returned, and a stranger is none.
+func TestPG_PersonErasure_PrincipalsNamed(t *testing.T) {
+	pool := runsPGPoolIsolated(t)
+	st := store.NewPG(pool)
+	ctx := context.Background()
+	oid := uuid.NewString()
+	for _, in := range []store.LoginIdentity{
+		{Principal: "pairwise-sub", Issuer: idIssuer, TenantID: idTenant, ObjectID: oid, Email: "Pat@Corp.Example"},
+		{Principal: "a@b.example", Issuer: "https://dex.example"},
+		{Principal: "sub-a", Issuer: "https://dex.example", Email: "shared@corp.example"},
+		{Principal: "sub-b", Issuer: "https://dex2.example", Email: "shared@corp.example"},
+	} {
+		if _, err := st.UpsertLoginIdentity(ctx, in, time.Now().UTC()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, _, err := st.CreatePerson(ctx, types.Person{Principal: "precreated", Email: "Kit@Corp.Example", CreatedBy: "admin"}); err != nil {
+		t.Fatal(err)
+	}
+	for name, want := range map[string][]string{
+		"pairwise-sub":                       {"pairwise-sub"},
+		"a@b.example":                        {"a@b.example"}, // an email-shaped subject is its own principal
+		"entra:" + idTenant + ":" + oid:      {"pairwise-sub"},
+		"PAT@corp.example":                   {"pairwise-sub"},
+		"kit@corp.example":                   {"precreated"},
+		"precreated":                         {"precreated"},
+		"shared@corp.example":                {"sub-a", "sub-b"},
+		"nobody@corp.example":                nil,
+		"entra:" + idTenant + ":no-such-oid": nil,
+		"":                                   nil,
+	} {
+		got, err := st.PrincipalsNamed(ctx, name)
+		if err != nil || !slices.Equal(got, want) {
+			t.Errorf("PrincipalsNamed(%q) = %v, %v, want %v", name, got, err, want)
+		}
+	}
+}
+
+// Every place a principal is recorded answers, and a principal always wins over an email claim that
+// spells it: a person an admin created, an API token's or a workspace owner's principal, exact or
+// case-folded, beats a sign-in alias, a token's email or a SCIM email naming someone else; an email is
+// matched only for a name with an @; an email two people carry is both.
+func TestPG_PersonErasure_PrincipalsNamedPrefersAPrincipalToAnyEmailClaim(t *testing.T) {
+	pool := runsPGPoolIsolated(t)
+	st := store.NewPG(pool)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	if _, _, err := st.CreatePerson(ctx, types.Person{Principal: "early@corp.example", CreatedBy: "admin"}); err != nil {
+		t.Fatal(err)
+	}
+	oid := uuid.NewString()
+	for _, claim := range []string{"early@corp.example", "tok-only", "ws-only", "shared@corp.example"} {
+		if _, err := st.UpsertLoginIdentity(ctx, store.LoginIdentity{Principal: "claimant", Issuer: idIssuer, TenantID: idTenant, ObjectID: oid, Email: claim}, now); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := st.CreateAPIToken(ctx, types.APIToken{ID: uuid.New(), Principal: "claimant", Email: claim, Role: "user", UserType: types.UserTypeStandard, Name: "t"}, uuid.NewString()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, _, err := st.CreateScimIdentity(ctx, idIssuer, idTenant, oid, store.IdentityUpdate{Emails: []string{"scim@corp.example"}}, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.UpsertLoginIdentity(ctx, store.LoginIdentity{Principal: "holder", Issuer: "https://dex.example", Email: "shared@corp.example"}, now); err != nil {
+		t.Fatal(err)
+	}
+	// Two subjects that differ only by case are legal: the exact one wins wherever it is recorded.
+	for _, p := range []string{"casetok", "casews"} {
+		if _, err := st.UpsertLoginIdentity(ctx, store.LoginIdentity{Principal: p, Issuer: "https://dex.example"}, now); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for p, email := range map[string]string{"tok-only": "tok@corp.example", "CaseTok": ""} {
+		if _, err := st.CreateAPIToken(ctx, types.APIToken{ID: uuid.New(), Principal: p, Email: email, Role: "user", UserType: types.UserTypeStandard, Name: "t"}, uuid.NewString()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, owner := range []string{"ws-only", "CaseWs"} {
+		ws, err := st.CreateWorkspace(ctx, types.Workspace{ID: uuid.New(), Name: "ws-" + uuid.NewString(), OwnedBy: owner,
+			Sources: []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeEphemeral, Target: "/workspace"}}, Status: types.WorkspaceScanned, CreatedAt: now, UpdatedAt: now})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = st.DeleteWorkspace(context.Background(), ws.ID) })
+	}
+	for name, want := range map[string][]string{
+		"early@corp.example":  {"early@corp.example"}, // a created person, not the claimant
+		"EARLY@Corp.Example":  {"early@corp.example"}, // in any case
+		"tok-only":            {"tok-only"},           // a token's principal, which the claimant's email spells
+		"TOK-ONLY":            {"tok-only"},
+		"ws-only":             {"ws-only"},            // a workspace owner's principal
+		"tok@corp.example":    {"tok-only"},           // a token's email names its holder
+		"scim@corp.example":   {"claimant"},           // a SCIM email names its identity
+		"shared@corp.example": {"claimant", "holder"}, // two people carry it
+		"claimant":            {"claimant"},
+		"CaseTok":             {"CaseTok"}, // exact, from a token, over the case-folded "casetok"
+		"CaseWs":              {"CaseWs"},  // exact, from a workspace owner
+		"CASETOK":             {"CaseTok", "casetok"},
+	} {
+		got, err := st.PrincipalsNamed(ctx, name)
+		slices.Sort(got) // the database's collation orders case variants its own way
+		if err != nil || !slices.Equal(got, want) {
+			t.Errorf("PrincipalsNamed(%q) = %v, %v, want %v", name, got, err, want)
+		}
+	}
+}
+
+// A person an admin created by object id (people row entra:<tenant>:<object>) who signed in under a
+// pairwise subject is that subject, whether the admin types the entra form, the email or the subject:
+// the people row's own namespace is empty, so resolving to it would erase nothing and report success.
+func TestPG_PersonErasure_PrincipalsNamedFollowsTheSignIn(t *testing.T) {
+	pool := runsPGPoolIsolated(t)
+	st := store.NewPG(pool)
+	ctx := context.Background()
+	oid, other := uuid.NewString(), uuid.NewString()
+	entra := "entra:" + idTenant + ":" + oid
+	for _, p := range []types.Person{
+		{Principal: entra, Email: "Kit@Corp.Example", Issuer: idIssuer, TenantID: idTenant, ObjectID: oid, CreatedBy: "admin"},
+		{Principal: "entra:" + idTenant + ":" + other, Email: "never@corp.example", Issuer: idIssuer, TenantID: idTenant, ObjectID: other, CreatedBy: "admin"},
+	} {
+		if _, _, err := st.CreatePerson(ctx, p); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := st.UpsertLoginIdentity(ctx, store.LoginIdentity{Principal: "pairwise-kit", Issuer: idIssuer, TenantID: idTenant, ObjectID: oid, Email: "kit@corp.example"}, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	for name, want := range map[string][]string{
+		entra:                             {"pairwise-kit"},
+		"kit@corp.example":                {"pairwise-kit"},
+		"pairwise-kit":                    {"pairwise-kit"},
+		"entra:" + idTenant + ":" + other: {"entra:" + idTenant + ":" + other}, // never signed in: still the people row
+		"never@corp.example":              {"entra:" + idTenant + ":" + other},
+	} {
+		got, err := st.PrincipalsNamed(ctx, name)
+		if err != nil || !slices.Equal(got, want) {
+			t.Errorf("PrincipalsNamed(%q) = %v, %v, want %v", name, got, err, want)
+		}
+	}
+}
+
+// An admin-created person under one issuer and a sign-in under another with the same tenant and object id
+// are not linked (the sign-in's own link needs the same issuer), so the typed entra form must not resolve
+// to the empty people namespace alone: it names both, which an erase refuses as ambiguous.
+func TestPG_PersonErasure_PrincipalsNamedEntraFormIsAmbiguousAcrossIssuers(t *testing.T) {
+	pool := runsPGPoolIsolated(t)
+	st := store.NewPG(pool)
+	ctx := context.Background()
+	oid := uuid.NewString()
+	entra := "entra:" + idTenant + ":" + oid
+	if _, _, err := st.CreatePerson(ctx, types.Person{Principal: entra, Email: "kit@corp.example", Issuer: idIssuer, TenantID: idTenant, ObjectID: oid, CreatedBy: "admin"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.UpsertLoginIdentity(ctx, store.LoginIdentity{Principal: "pairwise-kit", Issuer: "https://other-issuer.example", TenantID: idTenant, ObjectID: oid}, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{entra, "pairwise-kit"}
+	if got, err := st.PrincipalsNamed(ctx, entra); err != nil || !slices.Equal(got, want) {
+		t.Errorf("PrincipalsNamed(%q) = %v, %v, want both %v", entra, got, err, want)
+	}
+	if got, err := st.PrincipalForName(ctx, entra); err != nil || got != entra {
+		t.Errorf("PrincipalForName(%q) = %q, %v, want the name kept as it is", entra, got, err)
+	}
+	if got, err := st.PrincipalsNamed(ctx, "pairwise-kit"); err != nil || !slices.Equal(got, []string{"pairwise-kit"}) {
+		t.Errorf("PrincipalsNamed(pairwise-kit) = %v, %v, want itself", got, err)
+	}
+}
+
+// An identity bound to entra:<tenant>:<object> is a principal, so the typed name is it alone: a later
+// sign-in of the same tenant and object id under another issuer does not make the canonical name
+// ambiguous. A people row that a sign-in of its own issuer followed is the sign-in alone as well. Only an
+// unlinked people row with an empty namespace (the case above) reads the other issuer's sign-ins.
+func TestPG_PersonErasure_PrincipalsNamedBoundEntraFormStaysAlone(t *testing.T) {
+	pool := runsPGPoolIsolated(t)
+	st := store.NewPG(pool)
+	ctx := context.Background()
+	otherIssuer := "https://other-issuer.example"
+	boundOID, linkedOID, unlinkedOID := uuid.NewString(), uuid.NewString(), uuid.NewString()
+	bound, linked, unlinked := "entra:"+idTenant+":"+boundOID, "entra:"+idTenant+":"+linkedOID, "entra:"+idTenant+":"+unlinkedOID
+	for _, p := range []types.Person{
+		{Principal: linked, Email: "linked@corp.example", Issuer: idIssuer, TenantID: idTenant, ObjectID: linkedOID, CreatedBy: "admin"},
+		{Principal: unlinked, Email: "unlinked@corp.example", Issuer: idIssuer, TenantID: idTenant, ObjectID: unlinkedOID, CreatedBy: "admin"},
+	} {
+		if _, _, err := st.CreatePerson(ctx, p); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, in := range []store.LoginIdentity{
+		{Principal: bound, Issuer: idIssuer, TenantID: idTenant, ObjectID: boundOID},
+		{Principal: "pairwise-bound-y", Issuer: otherIssuer, TenantID: idTenant, ObjectID: boundOID},
+		{Principal: "pairwise-linked", Issuer: idIssuer, TenantID: idTenant, ObjectID: linkedOID},
+		{Principal: "pairwise-linked-y", Issuer: otherIssuer, TenantID: idTenant, ObjectID: linkedOID},
+		{Principal: "pairwise-unlinked-y", Issuer: otherIssuer, TenantID: idTenant, ObjectID: unlinkedOID},
+	} {
+		if _, err := st.UpsertLoginIdentity(ctx, in, time.Now().UTC()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for name, want := range map[string][]string{
+		bound:               {bound},
+		linked:              {"pairwise-linked"},
+		unlinked:            {unlinked, "pairwise-unlinked-y"}, // unchanged: still refused as ambiguous
+		"pairwise-bound-y":  {"pairwise-bound-y"},
+		"pairwise-linked-y": {"pairwise-linked-y"},
+	} {
+		if got, err := st.PrincipalsNamed(ctx, name); err != nil || !slices.Equal(got, want) {
+			t.Errorf("PrincipalsNamed(%q) = %v, %v, want %v", name, got, err, want)
+		}
+	}
+	// The audit sealer keys a row by the same answer: the bound name is its own principal.
+	if got, err := st.PrincipalForName(ctx, bound); err != nil || got != bound {
+		t.Errorf("PrincipalForName(%q) = %q, %v, want itself", bound, got, err)
+	}
+	if got, err := st.PrincipalForName(ctx, linked); err != nil || got != "pairwise-linked" {
+		t.Errorf("PrincipalForName(%q) = %q, %v, want the sign-in its issuer linked", linked, got, err)
+	}
+	if got, err := st.PrincipalForName(ctx, unlinked); err != nil || got != unlinked {
+		t.Errorf("PrincipalForName(%q) = %q, %v, want the ambiguous name kept as it is", unlinked, got, err)
+	}
+}
+
+// A people row keyed by subject (no issuer, tenant or object id) is not the sign-in of whoever else has
+// none of those either: only an object-id row follows a sign-in.
+func TestPG_PersonErasure_PrincipalsNamedKeepsASubjectKeyedPerson(t *testing.T) {
+	pool := runsPGPoolIsolated(t)
+	st := store.NewPG(pool)
+	ctx := context.Background()
+	if _, _, err := st.CreatePerson(ctx, types.Person{Principal: "sub-keyed-person", Email: "subkeyed@corp.example", CreatedBy: "admin"}); err != nil {
+		t.Fatal(err)
+	}
+	// An identity row with no issuer, tenant or object id is not one a sign-in writes; it is what a
+	// join on those three columns alone would take for the subject-keyed person's own.
+	if _, err := pool.Exec(ctx, `INSERT INTO principal_identities (principal, issuer, email_lower) VALUES ('someone-else', '', 'else@corp.example')`); err != nil {
+		t.Fatal(err)
+	}
+	for name, want := range map[string][]string{
+		"sub-keyed-person":      {"sub-keyed-person"},
+		"subkeyed@corp.example": {"sub-keyed-person"},
+		"someone-else":          {"someone-else"},
+	} {
+		got, err := st.PrincipalsNamed(ctx, name)
+		if err != nil || !slices.Equal(got, want) {
+			t.Errorf("PrincipalsNamed(%q) = %v, %v, want %v", name, got, err, want)
 		}
 	}
 }
@@ -122,6 +377,30 @@ func TestPG_PersonErasure_PrincipalAliases(t *testing.T) {
 	}
 }
 
+// The entra names come from the person's own tenant and object ids, never from an email claim that
+// spells another person's entra:<tenant>:<object> form.
+func TestPG_PersonErasure_PrincipalEntraNamesIgnoreAliasValues(t *testing.T) {
+	pool := runsPGPoolIsolated(t)
+	st := store.NewPG(pool)
+	ctx := context.Background()
+	oid := uuid.NewString()
+	principal := "pairwise-" + oid
+	crafted := "entra:" + idTenant + ":" + uuid.NewString()
+	if _, err := st.UpsertLoginIdentity(ctx, store.LoginIdentity{Principal: principal, Issuer: idIssuer, TenantID: idTenant, ObjectID: oid, Email: crafted}, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	if aliases, err := st.PrincipalAliases(ctx, principal); err != nil || !slices.Contains(aliases, crafted) {
+		t.Fatalf("PrincipalAliases = %v, %v, want the crafted email among them", aliases, err)
+	}
+	got, err := st.PrincipalEntraNames(ctx, principal)
+	if want := []string{"entra:" + idTenant + ":" + oid}; err != nil || !slices.Equal(got, want) {
+		t.Errorf("PrincipalEntraNames = %v, %v, want %v", got, err, want)
+	}
+	if got, err := st.PrincipalEntraNames(ctx, "nobody"); err != nil || len(got) != 0 {
+		t.Errorf("PrincipalEntraNames(nobody) = %v, %v, want none", got, err)
+	}
+}
+
 func TestPG_PersonErasure_SubjectKeyDestroyedSince(t *testing.T) {
 	pool := runsPGPoolIsolated(t)
 	st := store.NewPG(pool)
@@ -148,5 +427,43 @@ func TestPG_PersonErasure_SubjectKeyDestroyedSince(t *testing.T) {
 		if got, err := st.SubjectKeyDestroyedSince(ctx, tc.owner, tc.purpose, tc.since); err != nil || got != tc.want {
 			t.Errorf("SubjectKeyDestroyedSince(%s, %s, %v) = %v, %v, want %v", tc.owner, tc.purpose, tc.since, got, err, tc.want)
 		}
+	}
+}
+
+// A stored sign-in address is found by any casing of it through the alias
+// tier alone: the identity's current email is another address, so neither the
+// principal tier nor the email column can answer.
+func TestPG_PersonErasure_PrincipalsNamedAliasTierFoldsCase(t *testing.T) {
+	pool := runsPGPoolIsolated(t)
+	st := store.NewPG(pool)
+	ctx := context.Background()
+	for _, email := range []string{"Alias@Example.ORG", "current@corp.example"} {
+		if _, err := st.UpsertLoginIdentity(ctx, store.LoginIdentity{Principal: "sub-alias", Issuer: "https://dex.example", Email: email}, time.Now().UTC()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, name := range []string{"alias@example.org", "ALIAS@Example.Org", "Alias@Example.ORG"} {
+		if got, err := st.PrincipalsNamed(ctx, name); err != nil || !slices.Equal(got, []string{"sub-alias"}) {
+			t.Errorf("PrincipalsNamed(%q) = %v, %v, want [sub-alias]", name, got, err)
+		}
+	}
+}
+
+// A people row follows only a sign-in of its own tenant: the same issuer and
+// object id under another tenant is a different person's identity.
+func TestPG_PersonErasure_PrincipalsNamedIgnoresASignInOfAnotherTenant(t *testing.T) {
+	pool := runsPGPoolIsolated(t)
+	st := store.NewPG(pool)
+	ctx := context.Background()
+	oid := uuid.NewString()
+	entra := "entra:" + idTenant + ":" + oid
+	if _, _, err := st.CreatePerson(ctx, types.Person{Principal: entra, Email: "kit@corp.example", Issuer: idIssuer, TenantID: idTenant, ObjectID: oid, CreatedBy: "admin"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.UpsertLoginIdentity(ctx, store.LoginIdentity{Principal: "pairwise-elsewhere", Issuer: idIssuer, TenantID: uuid.NewString(), ObjectID: oid}, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := st.PrincipalsNamed(ctx, entra); err != nil || !slices.Equal(got, []string{entra}) {
+		t.Errorf("PrincipalsNamed(%q) = %v, %v, want the people row alone", entra, got, err)
 	}
 }

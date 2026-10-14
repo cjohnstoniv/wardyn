@@ -8,6 +8,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/google/uuid"
@@ -77,16 +78,18 @@ func (s PG) MarkRunRevived(ctx context.Context, id uuid.UUID, from types.LostRea
 	default:
 		return false, nil
 	}
-	if limit > 0 && startsAgent {
+	if startsAgent {
 		return s.markRunRevivedUnderCap(ctx, id, from, ended, limit)
 	}
 	return markRunRevived(ctx, s.Pool, id, from, ended)
 }
 
-// markRunRevivedUnderCap is the claim of a revive that starts an agent, under the
-// deployment cap: the count and the claim share CreateRunUnderCap's transaction-scoped
-// advisory lock and its counting predicate, so a revive and a create racing at the cap
-// admit exactly the cap. It counts the OTHER runs in one statement: the run's own
+// markRunRevivedUnderCap is the claim of a revive that starts an agent, under the run's pool cap, the
+// deployment cap and its runner's max_runs. A pooled run takes its pool row first (FOR NO KEY UPDATE, the
+// lock an enqueue and a promotion take), the deployment advisory lock second and its runner's row last,
+// the one order everything uses. The count
+// and the claim share CreateRunUnderCap's transaction-scoped advisory lock and its counting predicate,
+// so a revive and a create racing at the cap admit exactly the cap. It counts the OTHER runs in one statement: the run's own
 // row is never read for admission, so an extension of it landing mid-claim (which
 // takes neither lock) cannot make it look counted to one read and not to another.
 //
@@ -95,23 +98,48 @@ func (s PG) MarkRunRevived(ctx context.Context, id uuid.UUID, from types.LostRea
 // should fail the revive.
 func (s PG) markRunRevivedUnderCap(ctx context.Context, id uuid.UUID, from types.LostReason, ended *EndedKept, limit int) (claimed bool, err error) {
 	err = s.inTx(ctx, func(q Querier) error {
-		others, err := lockAndCountActiveRuns(ctx, q, id)
-		if err != nil {
+		if err := lockPoolForRevive(ctx, q, id); err != nil {
 			return err
 		}
-		if others >= limit {
-			return ErrRunCapReached
+		if limit > 0 {
+			others, err := lockAndCountActiveRuns(ctx, q, id)
+			if err != nil {
+				return err
+			}
+			if others >= limit {
+				return ErrRunCapReached
+			}
 		}
+		// The run keeps what it reserved, and is held to its runner's limits beside the OTHER runs there.
+		// A run no pool placed (one the server launched itself, stamped on its runner at dispatch) is
+		// counted there and exempt from its limits, at a revive as at its start.
+		var runner *uuid.UUID
+		var remote string
+		var pooled bool
+		var need types.RunnerAmounts
+		if err := q.QueryRow(ctx, `SELECT runner_id, runner_pool_executor, runner_pool_id IS NOT NULL, `+runReservedCols+` FROM agent_runs WHERE id = $1`, id).
+			Scan(&runner, &remote, &pooled, &need.CPUMillis, &need.MemoryMiB, &need.DiskMiB); err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			return fmt.Errorf("store: read revive runner: %w", err)
+		}
+		if key := runnerKeyOf(runner, remote); key != "" && (runner != nil || pooled) {
+			if err := admitOnRunner(ctx, q, key, need, id); err != nil {
+				return err
+			}
+		}
+		var err error
 		claimed, err = markRunRevived(ctx, q, id, from, ended)
 		return err
 	})
 	return claimed && err == nil, err
 }
 
+// markRunRevived clears agent_stopped_at with the lost mark whatever the revive
+// starts: a live run holds its slot by lost_at alone, and a stale stop mark must
+// not make a later outage-kept run look agentless.
 func markRunRevived(ctx context.Context, q Querier, id uuid.UUID, from types.LostReason, ended *EndedKept) (bool, error) {
 	lostAt, keptAfter, now := endedArgs(ended)
 	tag, err := q.Exec(ctx, `
-		UPDATE agent_runs SET lost_at=NULL, lost_reason='', containment_error=NULL, containment_error_at=NULL,
+		UPDATE agent_runs SET lost_at=NULL, lost_reason='', containment_error=NULL, containment_error_at=NULL, agent_stopped_at=NULL,
 			paused_at=CASE WHEN $3=$8 THEN NULL ELSE paused_at END,
 			paused_reason=CASE WHEN $3=$8 THEN '' ELSE paused_reason END,
 			token_renewed_at=now(), watcher_heartbeat=now(), updated_at=now()
@@ -149,4 +177,53 @@ func (s PG) ListRunProxyReleases(ctx context.Context) ([]RunProxyRelease, error)
 			r.State, r.LostReason = types.RunState(state), types.LostReason(reason)
 			return r, err
 		})
+}
+
+// ErrRunnerPoolFull is a revive's refusal when its pool is at its concurrent-run cap or has runs
+// waiting: a waiting run is first in line, so a revive never jumps it (pool-queue.md section 10).
+var ErrRunnerPoolFull = errors.New("store: runner pool is full")
+
+// RunnerPoolFullError names the pool and its cap for the sentence; it is ErrRunnerPoolFull.
+type RunnerPoolFullError struct {
+	Pool string
+	Max  int
+}
+
+func (e *RunnerPoolFullError) Error() string { return ErrRunnerPoolFull.Error() }
+func (e *RunnerPoolFullError) Unwrap() error { return ErrRunnerPoolFull }
+
+// lockPoolForRevive locks the run's pool row FOR NO KEY UPDATE and refuses when the pool has a
+// concurrent-run cap that its other slot-holders have reached or that has runs waiting. A run with no
+// pool, or a pool with no cap, passes without a lock.
+func lockPoolForRevive(ctx context.Context, q Querier, runID uuid.UUID) error {
+	var poolID uuid.UUID
+	var name string
+	var limitsRaw []byte
+	err := q.QueryRow(ctx, `
+		SELECT p.id, p.name, p.limits FROM agent_runs r JOIN runner_pools p ON p.id = r.runner_pool_id
+		WHERE r.id = $1 FOR NO KEY UPDATE OF p`, runID).Scan(&poolID, &name, &limitsRaw)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("store: lock revive pool: %w", err)
+	}
+	limits, err := unmarshalPoolLimits(limitsRaw)
+	if err != nil {
+		return err
+	}
+	if limits == nil || limits.MaxConcurrentRuns == nil {
+		return nil
+	}
+	var others, waiting int
+	if err := q.QueryRow(ctx, `
+		SELECT (SELECT count(*) FROM agent_runs WHERE runner_pool_id = $1 AND id <> $2 AND state = ANY($3) AND `+HoldsSandboxSQL+`),
+		       (SELECT count(*) FROM run_queue WHERE pool_id = $1)`,
+		poolID, runID, slotHoldingStateNames()).Scan(&others, &waiting); err != nil {
+		return fmt.Errorf("store: count revive pool: %w", err)
+	}
+	if others >= *limits.MaxConcurrentRuns || waiting > 0 {
+		return &RunnerPoolFullError{Pool: name, Max: *limits.MaxConcurrentRuns}
+	}
+	return nil
 }

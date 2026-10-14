@@ -47,7 +47,9 @@ func liveCheckDef(t *testing.T, table, column string) string {
 		JOIN pg_namespace n ON n.oid = rel.relnamespace
 		JOIN pg_attribute a ON a.attrelid = rel.oid AND a.attnum = ANY (con.conkey)
 		WHERE con.contype = 'c' AND rel.relname = $1 AND a.attname = $2
-		  AND n.nspname = ANY (current_schemas(false))`, table, column)
+		  AND n.nspname = ANY (current_schemas(false))
+		  -- A cross-column CHECK is not the column's enum.
+		  AND con.conname <> 'user_drives_member_managed'`, table, column)
 	if err != nil {
 		t.Fatalf("read the live CHECK for %s.%s: %v", table, column, err)
 	}

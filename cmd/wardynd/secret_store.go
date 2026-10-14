@@ -18,6 +18,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/cliutil"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
+	"github.com/cjohnstoniv/wardyn/internal/secretstore/awskms"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore/azurekv"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore/kek"
 	secretstorepg "github.com/cjohnstoniv/wardyn/internal/secretstore/pg"
@@ -122,7 +123,7 @@ func principalKeysOn(v string) bool {
 // platformKeySeparate reports whether the boot keys have a key of their own. In local mode that is the
 // platform key file. Under a key service the file separates nothing (boot-key rows go to the credential
 // key service until a platform key service is set), so only the service's second key counts: Transit or
-// Key Vault, each of which buildPlatformKEK refuses to accept without its identity.
+// Key Vault, each of which buildPlatformKEK refuses to accept without its identity. AWS KMS has none yet.
 func platformKeySeparate(f *bootFlags, keyService bool) bool {
 	if keyService {
 		return strings.TrimSpace(*f.vault.transitKeyPlatform) != "" || azurePlatformNamed(f.azure)
@@ -134,9 +135,9 @@ func platformKeySeparate(f *bootFlags, keyService bool) bool {
 type storeClients struct {
 	// ext is the external store client, or nil.
 	ext secretstore.External
-	// kek is the key service (Vault Transit, Key Vault), or nil; kekWrites
-	// says whether it wraps new rows (WARDYN_KEK=transit or azurekv) or only
-	// reads its own.
+	// kek is the key service (Vault Transit, Key Vault, AWS KMS), or nil;
+	// kekWrites says whether it wraps new rows (WARDYN_KEK=transit, azurekv or
+	// awskms) or only reads its own.
 	kek       kek.KEK
 	kekWrites bool
 	// platformKEK is the second key service that wraps the boot keys alone
@@ -215,6 +216,22 @@ func buildSecretStore(ctx context.Context, pool *pgxpool.Pool, ageKey string, pl
 // for the pg store's Migrate and Reconcile, which never Get
 // (secretStoreMaintenance).
 func newSecretStore(ctx context.Context, pool *pgxpool.Pool, ageKey string, platform *age.X25519Identity, storeName string, c storeClients, rec audit.Recorder) (secretstore.Store, error) {
+	s, id, err := unconvertedSecretStore(pool, ageKey, platform, storeName, c)
+	if err != nil {
+		return nil, err
+	}
+	storeMode := storeName != "" && storeName != "pg"
+	keyService := c.kek != nil && c.kekWrites
+	if err := convertSecretStore(ctx, s, id, ageKey == "" && !storeMode && !keyService, rec); err != nil {
+		return nil, err
+	}
+	return s, nil
+}
+
+// unconvertedSecretStore builds the store from the key configuration without touching a row: no conversion,
+// no write. It returns the age identity it parsed (nil with none). A nil pool is allowed for a caller
+// that reads through a connection of its own (secretstorepg.Store.CheckRows).
+func unconvertedSecretStore(pool *pgxpool.Pool, ageKey string, platform *age.X25519Identity, storeName string, c storeClients) (secretstore.Store, *age.X25519Identity, error) {
 	storeMode := storeName != "" && storeName != "pg"
 	keyService := c.kek != nil && c.kekWrites
 	var id *age.X25519Identity
@@ -226,7 +243,7 @@ func newSecretStore(ctx context.Context, pool *pgxpool.Pool, ageKey string, plat
 	case ageKey == "":
 		id, err = age.GenerateX25519Identity()
 		if err != nil {
-			return nil, fmt.Errorf("generate age identity: %w", err)
+			return nil, nil, fmt.Errorf("generate age identity: %w", err)
 		}
 		// F10: log the PUBLIC recipient as a fingerprint, never the secret identity.
 		// The old message printed the full AGE-SECRET-KEY- to a log file created at
@@ -238,11 +255,11 @@ func newSecretStore(ctx context.Context, pool *pgxpool.Pool, ageKey string, plat
 		)
 	default:
 		if isKnownPublicAgeKey(ageKey) {
-			return nil, fmt.Errorf("refusing to start: WARDYN_AGE_KEY is a publicly-known key (published in this repo's git history) — secrets encrypted under it are not protected; unset WARDYN_AGE_KEY to generate an ephemeral key, or mint your own with `wardynd -gen-age-key`")
+			return nil, nil, fmt.Errorf("refusing to start: WARDYN_AGE_KEY is a publicly-known key (published in this repo's git history) — secrets encrypted under it are not protected; unset WARDYN_AGE_KEY to generate an ephemeral key, or mint your own with `wardynd -gen-age-key`")
 		}
 		id, err = age.ParseX25519Identity(ageKey)
 		if err != nil {
-			return nil, fmt.Errorf("parse age identity: %w", err)
+			return nil, nil, fmt.Errorf("parse age identity: %w", err)
 		}
 	}
 	deps := secretstore.Deps{Pool: pool, External: c.ext, ExternalTimeout: c.timeout, KEK: c.kek, KEKWrites: c.kekWrites, PrincipalKeys: c.principalKeys, KeyDomains: c.keyDomains}
@@ -259,12 +276,9 @@ func newSecretStore(ctx context.Context, pool *pgxpool.Pool, ageKey string, plat
 	}
 	s, err := secretstore.New(storeName, deps)
 	if err != nil {
-		return nil, fmt.Errorf("secret store: %w", err)
+		return nil, nil, fmt.Errorf("secret store: %w", err)
 	}
-	if err := convertSecretStore(ctx, s, id, ageKey == "" && !storeMode && !keyService, rec); err != nil {
-		return nil, err
-	}
-	return s, nil
+	return s, id, nil
 }
 
 // ephemeralKeyRecoverySQL deletes every row sealed under a local key: the way
@@ -334,18 +348,38 @@ func convertSecretStore(ctx context.Context, s secretstore.Store, id *age.X25519
 }
 
 // refuseKEKRequired refuses a serving boot when WARDYN_KEK_REQUIRED is set and
-// neither a key service wraps the credentials nor an external store holds them,
-// so the local key (set or ephemeral) would. It sits in the serving path, not in
-// newSecretStore, so `wardynd -rewrap`, the remedy, still runs.
+// neither a key service wraps new credential writes nor an external store holds
+// them, so the local key (set or ephemeral) would. It checks configuration
+// only: rows already wrapped by the local key do not refuse a boot (an operator
+// mid-migration must be able to start wardynd and run `-rewrap`; /setup/status
+// warns with their count). It sits in the serving path, not in newSecretStore,
+// so `wardynd -rewrap`, the remedy, still runs.
 func refuseKEKRequired(required bool, s secretstore.Store) error {
 	if !required || keyService(s) != "" || storesExternally(s) != "" {
 		return nil
 	}
-	return fmt.Errorf("refusing to start: WARDYN_KEK_REQUIRED is set but credentials are wrapped by the local key — set WARDYN_KEK=transit|azurekv and run `wardynd -rewrap` to move them onto it")
+	return fmt.Errorf("refusing to start: WARDYN_KEK_REQUIRED is set but no key service wraps new credential writes — set WARDYN_KEK=transit|azurekv|awskms, then run `wardynd -rewrap` to move the rows the local key still wraps")
+}
+
+// localRowsCounter is the store's count of rows still wrapped by the local key,
+// or nil for a store that keeps none. It looks through the audit wrapper main
+// hands it, or the kek_local_rows setup row never appears.
+func localRowsCounter(s secretstore.Store) func(context.Context) (int, error) {
+	for s != nil {
+		if ps, ok := s.(*secretstorepg.Store); ok {
+			return ps.LocalRows
+		}
+		u, ok := s.(interface{ Unwrap() secretstore.Store })
+		if !ok {
+			return nil
+		}
+		s = u.Unwrap()
+	}
+	return nil
 }
 
 // refuseIdleAgeKey refuses boot when a key service wraps every write
-// (WARDYN_KEK=transit or azurekv) and WARDYN_AGE_KEY is set with no stored row left under
+// (WARDYN_KEK=transit, azurekv or awskms) and WARDYN_AGE_KEY is set with no stored row left under
 // it: the key then only lets whoever also holds the database forge a row the
 // store still reads under it — Wardyn's boot keys among them.
 func refuseIdleAgeKey(ctx context.Context, ps *secretstorepg.Store) error {
@@ -372,8 +406,9 @@ type vaultFlags struct {
 	maxVersions                                                                               *int
 	timeout                                                                                   *time.Duration
 	// kek is WARDYN_KEK; transitMount and transitKey name the Transit key it
-	// selects (or, with kek=local, reads).
-	kek, transitMount, transitKey *string
+	// selects (or, with kek=local, reads). awsKMSKey is the AWS KMS key ARN
+	// kek=awskms selects (or, with kek=local, reads).
+	kek, transitMount, transitKey, awsKMSKey *string
 	// kekRequired is WARDYN_KEK_REQUIRED: refuse a serving boot on the local key.
 	kekRequired *bool
 	// principalKeys is WARDYN_PRINCIPAL_KEYS, "off" or "on": whether a person's
@@ -403,12 +438,13 @@ func registerVaultFlags() vaultFlags {
 		kvPrefix:           flagEnv("vault-kv-prefix", "WARDYN_VAULT_KV_PREFIX", "wardyn", "path prefix under the mount for this install (the chart sets the release namespace)"),
 		maxVersions:        flagIntEnv("vault-kv-max-versions", "WARDYN_VAULT_KV_MAX_VERSIONS", 1, "max_versions set on each secret the vaultkv store creates (1: a replaced value does not linger)"),
 		timeout:            flagDuration("secret-store-timeout", "WARDYN_SECRET_STORE_TIMEOUT", 5*time.Second, "timeout of each call to an external secret store"),
-		kek:                flagEnv("kek", "WARDYN_KEK", kekLocal, `key that wraps each stored secret's data key: "local" (derived from WARDYN_AGE_KEY), "transit" (the Vault Transit key WARDYN_VAULT_TRANSIT_KEY names, over the WARDYN_VAULT_* client) or "azurekv" (the Key Vault keys WARDYN_AZURE_KEK_KEY and WARDYN_AZURE_KEK_SIGNING_KEY name, as the WARDYN_AZURE_* identity)`),
-		kekRequired:        flagBool("kek-required", "WARDYN_KEK_REQUIRED", false, "refuse to start while credentials are wrapped by the local key: a key service (WARDYN_KEK=transit|azurekv) or an external store must hold them. `wardynd -rewrap` still runs"),
+		kek:                flagEnv("kek", "WARDYN_KEK", kekLocal, `key that wraps each stored secret's data key: "local" (derived from WARDYN_AGE_KEY), "transit" (the Vault Transit key WARDYN_VAULT_TRANSIT_KEY names, over the WARDYN_VAULT_* client) or "azurekv" (the Key Vault keys WARDYN_AZURE_KEK_KEY and WARDYN_AZURE_KEK_SIGNING_KEY name, as the WARDYN_AZURE_* identity) or "awskms" (the AWS KMS key WARDYN_AWS_KMS_KEY names, as the AWS SDK's default credential chain)`),
+		kekRequired:        flagBool("kek-required", "WARDYN_KEK_REQUIRED", false, "require a key service (WARDYN_KEK=transit|azurekv|awskms) or an external store for new credential writes, and refuse to start without one. Rows already wrapped by the local key do not refuse a boot; `wardynd -rewrap` moves them"),
 		principalKeys:      flagEnv("principal-keys", "WARDYN_PRINCIPAL_KEYS", "off", `"on" seals each person's stored credentials under a key of that person's own (envelope enc_version 3), which an erase destroys; "off" (default) keeps writing them under the credential key. Boot keys and the operator namespace never move, and store mode is unaffected. Turning it off still reads every row, but enabling it is one-way across a downgrade below 0.8.6; wardynd -rewrap-principal-keys moves existing rows. See docs/operations/secrets-and-keys.md`),
 		keyDomainsFile:     flagEnv("key-domains-file", "WARDYN_KEY_DOMAINS_FILE", "", `path of a JSON file declaring key domains: an object from domain name ("a-z0-9-", never "default") to {"transit": {"key", "role"}} or {"azurekv": {"key", "signingKey", "clientId"}}. A domain's Transit key or Key Vault pair wraps the principal keys of the people assigned to it (PUT /api/v1/key-domains/assignments/{subject_type}/{subject}); each is proven at boot. Empty (default) declares none, and every principal key is under the credential key. See docs/operations/secrets-and-keys.md`),
 		transitMount:       flagEnv("vault-transit-mount", "WARDYN_VAULT_TRANSIT_MOUNT", "transit", "mount path of Vault's Transit engine"),
 		transitKey:         flagEnv("vault-transit-key", "WARDYN_VAULT_TRANSIT_KEY", "", "Transit key (type aes256-gcm96) that wraps data keys with WARDYN_KEK=transit; set with WARDYN_KEK=local it only reads the rows sealed under it, for `wardynd -rewrap` back to the local key"),
+		awsKMSKey:          flagEnv("aws-kms-key", "WARDYN_AWS_KMS_KEY", "", "full ARN (arn:<partition>:kms:<region>:<account>:key/<id>) of the symmetric AWS KMS key that wraps data keys with WARDYN_KEK=awskms; an alias or a bare key id is refused. The identity needs kms:Encrypt and kms:Decrypt on this key only. Reached with the AWS SDK's default credential chain (IRSA, EKS Pod Identity, ...); set with WARDYN_KEK=local it only reads the rows sealed under it, for `wardynd -rewrap` back to the local key"),
 		transitKeyPlatform: flagEnv("vault-transit-key-platform", "WARDYN_VAULT_TRANSIT_KEY_PLATFORM", "", "second Transit key (type aes256-gcm96, same mount) that wraps wardynd's own signing, session and SSH host keys, reached as WARDYN_VAULT_ROLE_PLATFORM; WARDYN_VAULT_TRANSIT_KEY then wraps only the credentials. Needs WARDYN_KEK=transit and WARDYN_VAULT_ROLE_PLATFORM; `wardynd -rewrap -rewrap-adopt-boot-keys` moves the boot keys onto it, once; `-rewrap -rewrap-retire-platform-key` moves them back off. Empty = one key for both. See docs/operations/secrets-and-keys.md"),
 	}
 }
@@ -451,33 +487,34 @@ const (
 	kekLocal   = "local"
 	kekTransit = "transit"
 	kekAzure   = "azurekv"
+	kekAWS     = "awskms"
 )
 
 // buildKEK returns the configured key service, or nil, and whether it wraps
-// new rows. WARDYN_KEK=transit writes under the Vault Transit key and
-// WARDYN_KEK=azurekv under the Key Vault keys; with WARDYN_KEK=local a named
-// key service is built read-only, so the rows sealed under it stay readable
-// while `wardynd -rewrap` moves them back. One key service at a time: a move
-// between the two goes through the local key. The key is proven at boot
-// (vaultkv.NewTransit, azurekv.NewKEK): a key service that cannot be reached,
-// or that does not bind a wrap to its row, fails boot (design K6).
+// new rows. WARDYN_KEK=transit writes under the Vault Transit key,
+// WARDYN_KEK=azurekv under the Key Vault keys and WARDYN_KEK=awskms under the
+// AWS KMS key; with WARDYN_KEK=local a named key service is built read-only, so
+// the rows sealed under it stay readable while `wardynd -rewrap` moves them
+// back. One key service at a time: a move between two goes through the local
+// key. The key is proven at boot (vaultkv.NewTransit, azurekv.NewKEK,
+// awskms.NewKEK): a key service that cannot be reached, or that does not bind a
+// wrap to its row, fails boot (design K6).
 func buildKEK(ctx context.Context, v vaultFlags, az azureFlags, trustedCAFile string) (kek.KEK, bool, error) {
 	sel := strings.TrimSpace(*v.kek)
 	key := strings.TrimSpace(*v.transitKey)
 	azKey, azSig := strings.TrimSpace(*az.kekKey), strings.TrimSpace(*az.kekSigningKey)
 	azureNamed := azKey != "" || azSig != ""
-	switch {
-	case azureNamed && (key != "" || strings.TrimSpace(*v.transitKeyPlatform) != ""):
-		return nil, false, fmt.Errorf("refusing to start: WARDYN_AZURE_KEK_KEY and WARDYN_VAULT_TRANSIT_KEY (or WARDYN_VAULT_TRANSIT_KEY_PLATFORM) both name a key service; configure one — a move between Transit and Key Vault goes through the local key (docs/operations/secrets-and-keys.md)")
-	case sel == kekAzure && (azKey == "" || azSig == ""):
-		return nil, false, fmt.Errorf("refusing to start: WARDYN_KEK=azurekv needs WARDYN_AZURE_KEK_KEY and WARDYN_AZURE_KEK_SIGNING_KEY")
-	case azureNamed && (azKey == "" || azSig == ""):
-		return nil, false, fmt.Errorf("refusing to start: WARDYN_AZURE_KEK_KEY and WARDYN_AZURE_KEK_SIGNING_KEY are set together or not at all")
+	awsKey := strings.TrimSpace(*v.awsKMSKey)
+	if err := checkKEKServices(sel, key, awsKey, azKey, azSig, v, az); err != nil {
+		return nil, false, err
 	}
 	switch sel {
 	case "", kekLocal:
 		if azureNamed {
 			return buildAzureKEK(ctx, v, az, trustedCAFile, false)
+		}
+		if awsKey != "" {
+			return buildAWSKEK(ctx, v, awsKey, trustedCAFile, false)
 		}
 		if key == "" {
 			return nil, false, nil
@@ -488,8 +525,10 @@ func buildKEK(ctx context.Context, v vaultFlags, az azureFlags, trustedCAFile st
 		}
 	case kekAzure:
 		return buildAzureKEK(ctx, v, az, trustedCAFile, true)
+	case kekAWS:
+		return buildAWSKEK(ctx, v, awsKey, trustedCAFile, true)
 	default:
-		return nil, false, fmt.Errorf("refusing to start: WARDYN_KEK is %q; want %q, %q or %q", sel, kekLocal, kekTransit, kekAzure)
+		return nil, false, fmt.Errorf("refusing to start: WARDYN_KEK is %q; want %q, %q, %q or %q", sel, kekLocal, kekTransit, kekAzure, kekAWS)
 	}
 	if strings.TrimSpace(*v.addr) == "" {
 		return nil, false, fmt.Errorf("refusing to start: WARDYN_VAULT_TRANSIT_KEY is set but WARDYN_VAULT_ADDR is not")
@@ -499,6 +538,40 @@ func buildKEK(ctx context.Context, v vaultFlags, az azureFlags, trustedCAFile st
 		return nil, false, fmt.Errorf("refusing to start: %w", err)
 	}
 	return t, sel == kekTransit, nil
+}
+
+// checkKEKServices refuses the settings that name more than one key service, or
+// a key service with a part it lacks: both Key Vault keys or neither, the key
+// WARDYN_KEK selects, and no Transit or Key Vault key (or platform key) beside
+// an AWS KMS key. AWS KMS has no platform key yet.
+func checkKEKServices(sel, transitKey, awsKey, azKey, azSig string, v vaultFlags, az azureFlags) error {
+	azureNamed := azKey != "" || azSig != ""
+	transitPlatform := strings.TrimSpace(*v.transitKeyPlatform) != ""
+	switch {
+	case azureNamed && (transitKey != "" || transitPlatform):
+		return fmt.Errorf("refusing to start: WARDYN_AZURE_KEK_KEY and WARDYN_VAULT_TRANSIT_KEY (or WARDYN_VAULT_TRANSIT_KEY_PLATFORM) both name a key service; configure one — a move between Transit and Key Vault goes through the local key (docs/operations/secrets-and-keys.md)")
+	case sel == kekAzure && (azKey == "" || azSig == ""):
+		return fmt.Errorf("refusing to start: WARDYN_KEK=azurekv needs WARDYN_AZURE_KEK_KEY and WARDYN_AZURE_KEK_SIGNING_KEY")
+	case azureNamed && (azKey == "" || azSig == ""):
+		return fmt.Errorf("refusing to start: WARDYN_AZURE_KEK_KEY and WARDYN_AZURE_KEK_SIGNING_KEY are set together or not at all")
+	case sel == kekAWS && awsKey == "":
+		return fmt.Errorf("refusing to start: WARDYN_KEK=awskms needs WARDYN_AWS_KMS_KEY")
+	case awsKey != "" && (transitPlatform || azurePlatformNamed(az)):
+		return fmt.Errorf("refusing to start: WARDYN_AWS_KMS_KEY with a platform key (WARDYN_VAULT_TRANSIT_KEY_PLATFORM or WARDYN_AZURE_KEK_KEY_PLATFORM): an AWS KMS platform key is not supported yet, so the boot keys stay under the one AWS KMS key; unset the platform key (docs/operations/secrets-and-keys.md)")
+	case awsKey != "" && (transitKey != "" || azureNamed):
+		return fmt.Errorf("refusing to start: WARDYN_AWS_KMS_KEY and a Vault Transit or Key Vault key (WARDYN_VAULT_TRANSIT_KEY, WARDYN_AZURE_KEK_KEY) both name a key service; configure one — a move between key services goes through the local key (docs/operations/secrets-and-keys.md)")
+	}
+	return nil
+}
+
+// buildAWSKEK builds the AWS KMS KEK. It needs no other setting: the region is
+// the key ARN's, and the identity comes from the AWS SDK's default chain.
+func buildAWSKEK(ctx context.Context, v vaultFlags, key, trustedCAFile string, writes bool) (kek.KEK, bool, error) {
+	k, err := awskms.NewKEK(ctx, awskms.Config{KeyARN: key, Timeout: *v.timeout, CACertFile: strings.TrimSpace(trustedCAFile)})
+	if err != nil {
+		return nil, false, fmt.Errorf("refusing to start: %w", err)
+	}
+	return k, writes, nil
 }
 
 // buildAzureKEK builds the Key Vault KEK over the store's identity settings.
@@ -689,6 +762,15 @@ func keyService(s secretstore.Store) string {
 		return d.KeyService()
 	}
 	return ""
+}
+
+// keyServiceStaticKey reports whether the key service wrapping every write is
+// reached with a long-lived credential (the kek_service_static_key setup row).
+func keyServiceStaticKey(s secretstore.Store) bool {
+	if d, ok := s.(interface{ KeyServiceStaticKey() bool }); ok {
+		return d.KeyServiceStaticKey()
+	}
+	return false
 }
 
 // secretsDurable reports whether stored secrets survive a restart: a supplied

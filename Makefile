@@ -1,4 +1,4 @@
-.PHONY: doc-links test-gaps license-headers notices diagrams build build-docker build-k8s test test-docker lint ui compose-build compose-up compose-down demo clean test-conformance-docker test-conformance-k8s test-kek-conformance test-kek-conformance-kind test-daemon-proxy-secret-kind build-conformance-agent-image test-conformance-stub test-envbuild-integration govulncheck staticcheck agent-images test-drive help test-report test-report-pg test-report-docker test-report-k8s cover-check cover-union release-check release-patch ui-test ui-typecheck test-e2e test-e2e-concurrent test-e2e-live test-e2e-byoi test-e2e-ssh test-e2e-ssh-k8s test-e2e-ui-sandbox test-provider-seed test-e2e-ui screenshots record-demo setup stop-host reset reset-all doctor dev-pg agent-images-core test-race test-race-pg tidy-check agent-image-base agent-image-full agent-image-vscode agent-image-novnc gitleaks licenses test-scripts helm-lint helm-install-test kind-quickstart kind-down kind-sso kind-sso-down compose-config dco npm-license npm-audit npm-audit-dev ci
+.PHONY: doc-links test-gaps license-headers notices diagrams build build-docker build-k8s test test-docker lint ui compose-build compose-up compose-down demo clean test-conformance-docker test-conformance-k8s test-kek-conformance test-kek-conformance-kind test-daemon-proxy-secret-kind build-conformance-agent-image test-conformance-stub test-envbuild-integration govulncheck staticcheck agent-images test-drive help test-report test-report-pg test-report-docker test-report-k8s cover-check cover-union release-check release-patch ui-test ui-typecheck test-e2e test-e2e-concurrent test-e2e-live test-e2e-byoi test-e2e-ssh test-e2e-ssh-k8s test-e2e-ui-sandbox test-provider-seed test-e2e-ui screenshots record-demo setup stop-host reset reset-all doctor dev-pg agent-images-core test-race test-race-pg tidy-check agent-image-base agent-image-full agent-image-harnesses agent-image-vscode agent-image-novnc gitleaks licenses test-scripts helm-lint helm-install-test kind-quickstart kind-down kind-sso kind-sso-down compose-config dco npm-license npm-audit npm-audit-dev ci
 
 COMPOSE_FILE := deploy/compose/docker-compose.yaml
 
@@ -125,6 +125,18 @@ agent-image-full: agent-images-core ## Build the fat toolchain agent image (Go/P
 	docker build $(DOCKER_BUILD_ARGS) -f deploy/images/full/Dockerfile -t wardyn/agent-full:local .
 	@echo "Full toolchain image built: wardyn/agent-full:local"
 
+# One sandbox image carrying Claude Code AND Codex, for a run that adds a second
+# harness (deploy/images/harnesses/Dockerfile). LOCAL BUILD ONLY: it layers on the
+# claude-code image, so it is never published and is in no release or nightly
+# matrix. Declare it with a "+" key, then restart wardynd:
+#   WARDYN_AGENT_IMAGES='{"claude-code+codex-cli":"wardyn/agent-harnesses:local"}'
+# On k8s push it to a registry the cluster pulls from and declare that ref.
+# Layer on another base with BASE_IMAGE=wardyn/agent-full:local.
+agent-image-harnesses: agent-images-core ## Build the Claude Code + Codex harness-set image (local only)
+	@echo "Building the harness-set image (claude-code + codex-cli)..."
+	docker build $(DOCKER_BUILD_ARGS) -f deploy/images/harnesses/Dockerfile -t wardyn/agent-harnesses:local .
+	@echo "Harness-set image built: wardyn/agent-harnesses:local"
+
 # agent-base plus a pinned code-server, for the UI-sandbox relay's "vscode"
 # app (Workstream D, deploy/images/vscode/Dockerfile). Not in
 # agent-images-core/agent-images: it is +~228 MiB and only a run whose policy
@@ -195,9 +207,10 @@ test-race: cover-check ## Alias: race coverage now rides along inside the test-r
 # convert_pg_test.go's TestPG_ConvertV0_IsSingleWriter converts in a goroutine.
 test-race-pg: ## Race-detector pass over the Postgres-gated concurrency proofs (needs WARDYN_TEST_PG)
 	@echo "Running the Postgres-gated concurrency proofs under the race detector (requires WARDYN_TEST_PG)..."
-	go test -race -p 1 -count=1 -run 'TestPG_' ./internal/maskstore/... ./internal/secretmask/... ./internal/broker/... ./internal/store/... ./internal/secretstore/pg/...
-	go test -race -p 1 -count=1 -run 'TestPG_.*(Concurrent|Supersede)|TestPG_CreateWait_|TestPG_MaskErasure|TestRecordingOutputPG_' ./internal/api/...
+	go test -race -p 1 -count=1 -run 'TestPG_|TestGeneration_' ./internal/maskstore/... ./internal/secretmask/... ./internal/broker/... ./internal/store/... ./internal/secretstore/pg/...
+	go test -race -p 1 -count=1 -run 'TestPG_.*(Concurrent|Supersede)|TestPG_WriteBegunBeforeAnErase|TestPG_CreateWait_|TestPG_MaskErasure|TestRecordingOutputPG_|TestPG_TokenEventStreamOutlivesABrowserSignOutAndEndsOnARevoke|TestPG_ServiceTokenEventStreamEndsOnItsSponsorsRevokeUnderABackwardClockStep|TestPG_ServiceTokenMintBehindAnInFlightRevokeOfItsSponsorIsRefused' ./internal/api/...
 	go test -race -p 1 -count=1 -run 'TestPG_AuditPartition_.*Contiguous' ./internal/db/...
+	go test -race -p 1 -count=1 -run 'TestPG_RevocationBeforeCookiePoolWaitDoesNotLoseCutoff|TestPG_Issue(Waits|Racing)' ./cmd/wardynd/...
 
 test-docker: ## Run all Go tests with -tags docker
 	@echo "Running Go tests (-tags docker)..."
@@ -230,7 +243,8 @@ test-report: ## Go unit suite with per-suite JSON + coverage artifacts, under th
 # test-pg-shard matrix runs this target once per shard with a package subset.
 PG_REPORT ?= pg
 PG_PKGS ?= ./internal/store/... ./internal/db/... ./internal/secretstore/... ./internal/broker/... \
-	./internal/api/... ./test/apie2e/... ./internal/recording/... ./cmd/wardynd/...
+	./internal/api/... ./test/apie2e/... ./internal/recording/... ./cmd/wardynd/... ./internal/notify/... \
+	./internal/livebus/...
 test-report-pg: ## Postgres-gated suite with reports (needs WARDYN_TEST_PG)
 # -p 1: every package in this suite shares ONE database (the WARDYN_TEST_PG
 # DSN), and singleton state — site_config above all — is mutated by tests in
@@ -287,8 +301,12 @@ test-report-k8s: ## -tags k8s suite with reports (fake clientset; no cluster nee
 # at tree 532ca5d4 — 3.3 points above the old 75 floor. #174 re-measured the
 # union freshly after merging main (post-merge `make cover-check`: 80.4% —
 # unit 80.7%, docker 80.3%, k8s 80.8%) and re-set the floor to 79 per the rule
-# above.
-COVER_MIN ?= 79
+# above. 0.9.0 (final tip fc3b9d995, hosted union 75.7%: unit 75.5, docker 75.5,
+# k8s 75.8) re-set it to 74 by the same rule. 0.9 added about 24,000 statements,
+# mostly store SQL and Postgres-backed handlers that only the Postgres suites
+# exercise, and this union does not count those suites; everything else stays
+# at about 79%. Counting the Postgres suites in the union is the follow-up.
+COVER_MIN ?= 74
 cover-check: test-report test-report-docker test-report-k8s ## Enforce the COVER_MIN floor over ALL THREE shipped builds, unioned
 	@$(MAKE) --no-print-directory cover-union
 
@@ -621,6 +639,8 @@ test-scripts: ## Daemon-free shell regression tests (scripts/test-*.sh)
 	./scripts/test-compose-ns-registry-port.sh
 	./scripts/test-dco.sh
 	./scripts/test-desktop-profile.sh
+	./scripts/test-runner-units.sh
+	./scripts/test-runner-limits.sh
 	./scripts/test-doc-form.sh
 	./scripts/test-doc-links.sh
 	./scripts/test-e2e-harness.sh
@@ -632,10 +652,12 @@ test-scripts: ## Daemon-free shell regression tests (scripts/test-*.sh)
 	./scripts/test-gpl-source-offer.sh
 	./scripts/test-green-by-tree.sh
 	./scripts/test-helm-schema.sh
+	./scripts/test-helm-templates.sh
 	./scripts/test-image-pins.sh
 	./scripts/test-install-sh-trust.sh
 	./scripts/test-install-sh.sh
 	./scripts/test-kind-sso-walk-log.sh
+	./scripts/test-lane-preflight.sh
 	./scripts/test-migration-numbers.sh
 	./scripts/test-narrate-speakable.sh
 	./scripts/test-nightly-migration-merge-check.sh
@@ -680,7 +702,7 @@ gitleaks: ## Scan this branch's own git history for committed secrets
 # gate that would have caught it out of the box. `reciprocal` (MPL/EPL/CDDL) was
 # allowed under either. The two flags are mutually exclusive (see
 # `go-licenses check --help`), so closing all three holes means swapping, not
-# adding. Verified zero-cost: all 84 shipped modules classify as type `notice`.
+# adding. Verified zero-cost: shipped modules classify as type `notice`.
 #
 # go-licenses has no -tags flag, so the docker-tagged deps (moby/moby/*,
 # containerd/errdefs) and the k8s-tagged deps (k8s.io/client-go et al) are
@@ -758,6 +780,14 @@ helm-lint: ## Lint + template-render the Helm chart (default + all-on values + t
 	echo "$$out" | grep -A20 "startupProbe:" | grep -q 'failureThreshold: 90$$' || { echo "default startupProbe window is not 90 periods (30s connect + 5m WARDYN_MIGRATE_TIMEOUT + 120s slack, 5s each)"; exit 1; }; \
 	out=$$(helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set env.WARDYN_MIGRATE_TIMEOUT=30m); \
 	echo "$$out" | grep -A20 "startupProbe:" | grep -q 'failureThreshold: 390$$' || { echo "startupProbe window does not follow WARDYN_MIGRATE_TIMEOUT — a raised migrate budget would be killed mid-migration"; exit 1; }
+	@# goMemLimit: the default render gives wardynd GOMEMLIMIT below its memory limit, and an empty value renders none.
+	@out=$$(helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true); \
+	echo "$$out" | grep -A1 'name: GOMEMLIMIT' | grep -q 'value: "400MiB"' || { echo "default render does not set GOMEMLIMIT=400MiB for wardynd"; exit 1; }; \
+	out=$$(helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set goMemLimit=); \
+	echo "$$out" | grep -q 'GOMEMLIMIT' && { echo "empty goMemLimit still rendered GOMEMLIMIT"; exit 1; } || true
+	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set goMemLimit=419430400 2>&1 | grep -q "goMemLimit must be a quoted string with a unit" || { echo "a bare-number goMemLimit did not refuse to render"; exit 1; }
+	@out=$$(helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set 'extraEnv[0].name=GOMEMLIMIT' --set 'extraEnv[0].value=300MiB'); \
+	[ "$$(echo "$$out" | grep -c 'name: GOMEMLIMIT')" = "1" ] || { echo "an extraEnv GOMEMLIMIT rendered beside the goMemLimit default"; exit 1; }
 	@out=$$(helm template wardyn ./deploy/helm/wardyn -f deploy/helm/wardyn/ci/all-on-values.yaml); \
 	echo "$$out" | grep -q "kind: PersistentVolumeClaim" || { echo "persistence.enabled rendered no PVC"; exit 1; }; \
 	echo "$$out" | grep -q "terminationGracePeriodSeconds: 90" || { echo "terminationGracePeriodSeconds is not carried into the pod spec"; exit 1; }; \
@@ -1014,6 +1044,15 @@ helm-lint: ## Lint + template-render the Helm chart (default + all-on values + t
 	echo "$$out" | grep -q "name: WARDYN_AZURE_KV_URL" && { echo "the Key Vault KEK rendered the store's WARDYN_AZURE_KV_URL"; exit 1; } || true
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set kek.provider=azurekv --set secretStore.azure.tenantId=t --set secretStore.azure.clientId=c 2>&1 | grep -q "kek.provider=azurekv needs kek.azurekv.key and kek.azurekv.signingKey" || { echo "chart no longer refuses kek.provider=azurekv with no keys"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set kek.azurekv.key=https://kv1.vault.azure.net/keys/k --set kek.azurekv.signingKey=https://kv1.vault.azure.net/keys/s --set secretStore.azure.tenantId=t --set secretStore.azure.clientId=c --set kek.transit.key=wardyn --set secretStore.vault.addr=https://vault.example:8200 --set secretStore.vault.role=r --set secrets.allowEphemeralAgeKey=true 2>&1 | grep -q "both name a key service; configure one" || { echo "chart no longer refuses a Key Vault KEK beside a Transit key"; exit 1; }
+	@# AWS KMS KEK (#588): WARDYN_KEK=awskms and the key render with no age key, also beside vaultkv store mode; a missing key, a second key service or key domains is a render refusal.
+	@out=$$(helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set kek.provider=awskms --set kek.awskms.key=arn:aws:kms:us-east-1:111122223333:key/00000000-0000-0000-0000-000000000000) || { echo "kek.provider=awskms with an external DSN and no age key no longer renders"; exit 1; }; \
+	echo "$$out" | grep -A1 "name: WARDYN_KEK$$" | grep -q 'value: "awskms"' || { echo "kek.provider=awskms did not render WARDYN_KEK"; exit 1; }; \
+	echo "$$out" | grep -A1 "name: WARDYN_AWS_KMS_KEY" | grep -q 'key/00000000-0000-0000-0000-000000000000' || { echo "kek.awskms.key did not render WARDYN_AWS_KMS_KEY"; exit 1; }; \
+	echo "$$out" | grep -q "name: WARDYN_AGE_KEY" && { echo "kek.provider=awskms rendered WARDYN_AGE_KEY although none was wired"; exit 1; } || true
+	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secretStore.backend=vaultkv --set secretStore.vault.addr=https://vault.example:8200 --set secretStore.vault.role=wardyn --set kek.provider=awskms --set kek.awskms.key=arn:aws:kms:us-east-1:111122223333:key/00000000-0000-0000-0000-000000000000 >/dev/null || { echo "vaultkv store mode with an AWS KMS key service and no age key no longer renders"; exit 1; }
+	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set kek.provider=awskms 2>&1 | grep -q "kek.provider=awskms needs kek.awskms.key" || { echo "chart no longer refuses kek.provider=awskms with no key"; exit 1; }
+	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set kek.awskms.key=arn:aws:kms:us-east-1:111122223333:key/00000000-0000-0000-0000-000000000000 --set kek.transit.key=wardyn --set secretStore.vault.addr=https://vault.example:8200 --set secretStore.vault.role=r --set secrets.allowEphemeralAgeKey=true 2>&1 | grep -q "kek.awskms.key and kek.transit.key or kek.azurekv.key both name a key service" || { echo "chart no longer refuses an AWS KMS key beside a Transit key"; exit 1; }
+	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set kek.provider=awskms --set kek.awskms.key=arn:aws:kms:us-east-1:111122223333:key/00000000-0000-0000-0000-000000000000 --set kek.domains.acme.transit.key=acme-keys --set kek.domains.acme.transit.role=wardyn-acme 2>&1 | grep -q "AWS KMS key domains are not supported yet" || { echo "chart no longer refuses key domains beside AWS KMS"; exit 1; }
 	@# Key Vault platform split (#1559): the second key pair and identity render, and an equal pair, a half-set pair or a missing client id is a render refusal.
 	@out=$$(helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set kek.provider=azurekv --set kek.azurekv.key=https://kv1.vault.azure.net/keys/wardyn-kek --set kek.azurekv.signingKey=https://kv1.vault.azure.net/keys/wardyn-kek-sig --set secretStore.azure.tenantId=t --set secretStore.azure.clientId=client-1 --set kek.azurekv.keyPlatform=https://kv1.vault.azure.net/keys/wardyn-boot --set kek.azurekv.signingKeyPlatform=https://kv1.vault.azure.net/keys/wardyn-boot-sig --set secretStore.azure.clientIdPlatform=client-2) || { echo "the Key Vault platform split no longer renders"; exit 1; }; \
 	echo "$$out" | grep -A1 "name: WARDYN_AZURE_KEK_KEY_PLATFORM" | grep -q 'wardyn-boot' || { echo "kek.azurekv.keyPlatform did not render WARDYN_AZURE_KEK_KEY_PLATFORM"; exit 1; }; \
@@ -1040,7 +1079,7 @@ helm-lint: ## Lint + template-render the Helm chart (default + all-on values + t
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.allowEphemeralAgeKey=true >/dev/null 2>&1 || { echo "secrets.allowEphemeralAgeKey no longer renders — the refusal has become a wall with no documented way past"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set env.WARDYN_AGE_KEY=AGE-SECRET-KEY-EXAMPLE >/dev/null 2>&1 || { echo "an age identity wired through .Values.env no longer satisfies the refusal — the chart refuses a render that is actually fine"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set readinessProbe.path=/healthz | grep -q 'path: "/healthz"' || { echo "readinessProbe.path no longer pins the probe back to /healthz — an image <= 0.5.0 serves no /readyz, so the pod would never become Ready and the rollout would hang"; exit 1; }
-	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set uiSandbox=null --set readinessProbe=null --set secrets.ageKeySecretRef=null --set ingress=null | grep -q 'path: "/readyz"' || { echo "chart no longer renders a values map whose 0.6 blocks are PRESENT-but-null — what `--set uiSandbox=null` reproduces, and what an operator clearing a block by hand (or a values file carrying it as null) supplies; an unguarded .Values.uiSandbox.enabled, .Values.secrets.ageKeySecretRef, or .Values.ingress kills that render on a nil pointer. NOT a --reuse-values case: docs/OPERATIONS.md's upgrade section explains that a merely-ADDED block arrives with the new chart's defaults"; exit 1; }
+	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set uiSandbox=null --set readinessProbe=null --set secrets.ageKeySecretRef=null --set ingress=null | grep -q 'path: "/readyz"' || { echo "chart no longer renders a values map whose 0.6 blocks are PRESENT-but-null — what `--set uiSandbox=null` reproduces, and what an operator clearing a block by hand (or a values file carrying it as null) supplies; an unguarded .Values.uiSandbox.enabled, .Values.secrets.ageKeySecretRef, or .Values.ingress kills that render on a nil pointer. NOT a --reuse-values case: docs/OPERATIONS.md's upgrade section explains that a merely-ADDED block is ABSENT under --reuse-values (that is what the | default dict guards are for)"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set uiSandbox.enabled=true --set uiSandbox.advertiseURL=https://u.example --set uiSandbox.port=8080 2>&1 | grep -q "uiSandbox.port and service.port are both" || { echo "chart no longer refuses uiSandbox.port == service.port — wardynd refuses to boot on it (validateUISandboxConfig), so the render would apply cleanly and then crash-loop"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set ssh.enabled=true --set ssh.advertiseHost=h.example --set ssh.port=8080 2>&1 | grep -q "ssh.port and service.port are both" || { echo "chart no longer refuses ssh.port == service.port — the Service would carry one port number twice and the API server rejects it"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set replicas=5 2>&1 | grep -q "replicas > 1 is refused" || { echo "chart no longer refuses replicas > 1 without ha.enabled — a second replica without HA mode would run without the shared masking registry and the cross-replica locks"; exit 1; }
@@ -1192,11 +1231,7 @@ helm-lint: ## Lint + template-render the Helm chart (default + all-on values + t
 	echo "$$out" | grep -q "name: WARDYN_ADMIN_TOKEN" && { echo "auth.ssoOnly=true rendered a WARDYN_ADMIN_TOKEN — sso-only asserts SSO is the only way in, and a rendered admin bearer is a second one"; exit 1; } || true
 	@helm template wardyn ./deploy/helm/wardyn --set auth.ssoOnly=true --set secrets.ageKeyFromSecret=true 2>&1 | grep -q "no OIDC issuer is configured" || { echo "chart no longer refuses auth.ssoOnly=true with no OIDC issuer — sso-only with no SSO at all would leave the console with no usable sign-in"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn --set auth.ssoOnly=true --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set env.WARDYN_OIDC_ISSUER=https://issuer.example --set env.WARDYN_OIDC_OPERATOR_EMAILS=a@example.com 2>&1 | grep -q "auth.ssoOnly is set together with an admin token" || { echo "chart no longer refuses auth.ssoOnly=true alongside an admin token"; exit 1; }
-	@# One line per spelling: the template's refusal checks the new name and the
-	@# deprecated alias as two separate hasKey terms, each needing its own proof.
-	@for k in WARDYN_USER_DESKTOP WARDYN_MEMBER_MODE; do \
-		helm template wardyn ./deploy/helm/wardyn --set auth.ssoOnly=true --set secrets.ageKeyFromSecret=true --set env.WARDYN_OIDC_ISSUER=https://issuer.example --set env.WARDYN_OIDC_OPERATOR_EMAILS=a@example.com --set env.$$k=true 2>&1 | grep -q "auth.ssoOnly is set together with WARDYN_USER_DESKTOP (or its deprecated alias WARDYN_MEMBER_MODE" || { echo "chart no longer refuses auth.ssoOnly=true alongside env.$$k — member mode relies on the admin token as a process credential, which sso-only forbids outright"; exit 1; }; \
-	done
+	@helm template wardyn ./deploy/helm/wardyn --set auth.ssoOnly=true --set secrets.ageKeyFromSecret=true --set env.WARDYN_OIDC_ISSUER=https://issuer.example --set env.WARDYN_OIDC_OPERATOR_EMAILS=a@example.com --set env.WARDYN_USER_DESKTOP=true 2>&1 | grep -q "auth.ssoOnly is set together with WARDYN_USER_DESKTOP" || { echo "chart no longer refuses auth.ssoOnly=true alongside env.WARDYN_USER_DESKTOP — member mode relies on the admin token as a process credential, which sso-only forbids outright"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn --set auth.ssoOnly=true --set secrets.ageKeyFromSecret=true --set env.WARDYN_OIDC_ISSUER=https://issuer.example --set env.WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST=true 2>&1 | grep -q "auth.ssoOnly is set together with WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST" || { echo "chart no longer refuses auth.ssoOnly=true alongside WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST — that override is exactly the ambiguity sso-only exists to close off"; exit 1; }
 	@# A WARDYN_SSO_ONLY=true set straight in env (not auth.ssoOnly) declares the same posture to the
 	@# daemon, so it must hit the same refusals — otherwise it renders clean and crash-loops at boot.
@@ -1448,17 +1483,15 @@ compose-config: ## Validate the compose files parse (no daemon needed)
 	@# that collides with the imported stack only fails when Compose RESOLVES it —
 	@# which no daemon-free gate did before, so it broke in CI first (0.6.1).
 	docker compose --env-file deploy/desktop/wardyn.env.example -f deploy/desktop/docker-compose.yaml config >/dev/null
-	@# #616: an m' envelope still using only the deprecated WARDYN_MEMBER_* names
-	@# must reach wardynd with every new name EMPTY, or the new name wins over the
-	@# old one in cmd/wardynd's alias (empty = unset) and member mode boots off.
+	@# A removed WARDYN_MEMBER_* name left in an m' envelope must still reach wardynd, whose boot
+	@# refusal (refuseRemovedEnv) is the only thing that stops a dropped deny list from widening
+	@# the writable set; compose forwards only the names its environment: list spells out.
 	@envf=$$(mktemp); \
 	sed -E -e 's/^WARDYN_USER_DESKTOP=/WARDYN_MEMBER_MODE=/' -e 's/^WARDYN_USER_(WORKSPACE_ROOTS|WORKSPACE_ROOTS_MAP|WRITABLE_ROOTS|WRITABLE_DENY)=/WARDYN_MEMBER_\1=/' deploy/desktop/wardyn.env.m-prime.example > "$$envf"; \
-	grep -q '^WARDYN_MEMBER_MODE=true$$' "$$envf" || { rm -f "$$envf"; echo "compose: the m-prime envelope no longer sets WARDYN_USER_DESKTOP=true, so the deprecated-name check below proves nothing"; exit 1; }; \
+	grep -q '^WARDYN_MEMBER_WRITABLE_DENY=/' "$$envf" || { rm -f "$$envf"; echo "compose: the m-prime envelope no longer sets WARDYN_USER_WRITABLE_DENY, so the leftover-name check below proves nothing"; exit 1; }; \
 	out=$$(env -u WARDYN_USER_DESKTOP -u WARDYN_USER_WORKSPACE_ROOTS -u WARDYN_USER_WORKSPACE_ROOTS_MAP -u WARDYN_USER_WRITABLE_ROOTS -u WARDYN_USER_WRITABLE_DENY docker compose --env-file "$$envf" -f deploy/desktop/docker-compose.yaml config 2>&1); rm -f "$$envf"; \
-	echo "$$out" | grep -q 'WARDYN_MEMBER_MODE: "true"' || { echo "compose: an envelope setting the deprecated WARDYN_MEMBER_MODE=true does not forward it to wardynd: $$out"; exit 1; }; \
-	echo "$$out" | grep -q 'WARDYN_MEMBER_WRITABLE_DENY: /' || { echo "compose: an envelope setting the deprecated WARDYN_MEMBER_WRITABLE_DENY does not forward it to wardynd"; exit 1; }; \
-	for k in WARDYN_USER_DESKTOP WARDYN_USER_WORKSPACE_ROOTS WARDYN_USER_WORKSPACE_ROOTS_MAP WARDYN_USER_WRITABLE_ROOTS WARDYN_USER_WRITABLE_DENY; do \
-		echo "$$out" | grep -q "^ *$$k: \"\"$$" || { echo "compose: $$k does not render empty for an envelope using only the deprecated names — a non-empty compose default outranks the deprecated value and wardynd never sees it"; exit 1; }; \
+	for k in WARDYN_MEMBER_MODE WARDYN_MEMBER_WORKSPACE_ROOTS WARDYN_MEMBER_WRITABLE_ROOTS WARDYN_MEMBER_WRITABLE_DENY; do \
+		echo "$$out" | grep -E "^ *$$k: " | grep -qv ': ""$$' || { echo "compose: a leftover $$k in an envelope does not reach wardynd, so its boot refusal never sees it"; exit 1; }; \
 	done
 	@# R5 F022: the SSO callback must FOLLOW the published port and honour an
 	@# explicit override, or `WARDYN_UP_PORT=8090 --profile sso` sends the browser
@@ -1618,6 +1651,7 @@ ui-test: ## Web UI vitest unit/component tests + coverage
 test-e2e-ui: ## Playwright UI e2e vs a seeded backend (needs Docker + chromium)
 	@echo "Running Playwright UI e2e (fresh seed per spec)..."
 	cd ui && pnpm install --frozen-lockfile
+	rm -f test/reports/e2e/flaky.tsv
 	WARDYN_E2E_ALLOW_ALL_SKIPPED="$${WARDYN_E2E_ALLOW_ALL_SKIPPED:-} governance-changes" ./scripts/run-ui-e2e.sh
 
 # regenerates docs/img UI screenshots; run after visible UI changes and commit the diff.

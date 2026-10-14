@@ -38,10 +38,10 @@ func (s *Store) Revision(ctx context.Context, name string) (string, error) {
 
 // putIfRevision is the local-mode guarded upsert: one statement, so the check
 // and the write are atomic. rev "" requires an absent row.
-func (s *Store) putIfRevision(ctx context.Context, name, rev string, r sealedRow) error {
+func (s *Store) putIfRevision(ctx context.Context, q execer, name, rev string, r sealedRow) error {
 	var n int64
 	if rev == "" {
-		tag, err := s.pool.Exec(ctx, `
+		tag, err := q.Exec(ctx, `
 			INSERT INTO secrets (owned_by, name, enc_version, kek_id, wrapped_dek, ciphertext, expires_at)
 			VALUES ($1, $2, $3, $4, $5, $6, $7)
 			ON CONFLICT (owned_by, name) DO NOTHING`,
@@ -51,7 +51,7 @@ func (s *Store) putIfRevision(ctx context.Context, name, rev string, r sealedRow
 		}
 		n = tag.RowsAffected()
 	} else {
-		tag, err := s.pool.Exec(ctx, `
+		tag, err := q.Exec(ctx, `
 			UPDATE secrets SET enc_version=$3, kek_id=$4, wrapped_dek=$5, ciphertext=$6, expires_at=$7, updated_at=now()
 			WHERE owned_by=$1 AND name=$2 AND `+revisionExpr+` = $8`,
 			s.owner, name, r.version, r.kekID, r.wrapped, r.ct, expiresAt(ctx), rev)
@@ -81,4 +81,27 @@ func (s *Store) checkRevision(ctx context.Context, tx pgx.Tx, name, rev string) 
 		return fmt.Errorf("pg secretstore: put %s: %w", rowRef(s.owner, name), secretstore.ErrRevisionChanged)
 	}
 	return nil
+}
+
+// lockRevision is the guarded Delete's check: checkRevision with the row itself
+// locked (FOR UPDATE) for the rest of tx. A local-mode Put takes no advisory
+// lock, so only the row's lock stands between this read and the delete: a
+// replace open when it runs commits first, and the revision read here is then
+// that replace's own, or it waits for tx. found is false when the holder
+// expected no row and there is none: nothing is locked then, so the caller
+// returns rather than delete a row that lands next.
+func (s *Store) lockRevision(ctx context.Context, tx pgx.Tx, name, rev string) (found bool, err error) {
+	var cur string
+	err = tx.QueryRow(ctx, `SELECT `+revisionExpr+` FROM secrets WHERE owned_by=$1 AND name=$2 FOR UPDATE`, s.owner, name).Scan(&cur)
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+	case err != nil:
+		return false, fmt.Errorf("pg secretstore: delete %s: read revision: %w", rowRef(s.owner, name), err)
+	default:
+		found = true
+	}
+	if cur != rev {
+		return false, fmt.Errorf("pg secretstore: delete %s: %w", rowRef(s.owner, name), secretstore.ErrRevisionChanged)
+	}
+	return found, nil
 }

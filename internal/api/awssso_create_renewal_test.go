@@ -308,7 +308,7 @@ func TestCreateRenewal_EraseDuringPutRetryWinsAndBootstrapFailsClosed(t *testing
 				go func() {
 					defer close(erased)
 					var rep secretstore.EraseReport
-					_ = f.srv.eraseLocked(context.Background(), "alice@example.com", "", &rep)
+					_ = f.srv.eraseLocked(context.Background(), "alice@example.com", "", nil, &rep)
 				}()
 				time.Sleep(50 * time.Millisecond) // let the erase reach the lock
 				return errors.New("transient")
@@ -441,7 +441,7 @@ func TestStoreAWSSSOBlobCallersHoldTheOwnerLock(t *testing.T) {
 				switch name := sel.Sel.Name; name {
 				case "lockAWSSSOOwner", "tryLockAWSSSOOwner", "lockAWSSSORenewal":
 					locks[fn.Name.Name] = append(locks[fn.Name.Name], c.Pos())
-				case "storeAWSSSOBlob", "persistRenewedAWSSSOBlob", "storeProviderSignIn":
+				case "storeAWSSSOBlob", "persistRenewedAWSSSOBlob", "storeProviderSignIn", "storeCLISignIn":
 					calls = append(calls, call{fn.Name.Name, name, c.Pos()})
 				}
 				return true
@@ -449,9 +449,10 @@ func TestStoreAWSSSOBlobCallersHoldTheOwnerLock(t *testing.T) {
 		}
 	}
 	for callee, want := range map[string][]string{
-		"storeAWSSSOBlob":          {"persistRenewedAWSSSOBlob", "storeProviderSignIn"},
+		"storeAWSSSOBlob":          {"persistRenewedAWSSSOBlob", "storeProviderSignIn", "storeCLISignIn"},
 		"persistRenewedAWSSSOBlob": {"refreshAWSSSOBlob"},
 		"storeProviderSignIn":      {"handleUploadSSOToken"},
+		"storeCLISignIn":           {"handleUploadSSOToken"},
 	} {
 		var got []string
 		for _, c := range calls {

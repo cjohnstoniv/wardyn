@@ -157,6 +157,56 @@ func TestReviveRun_OutageRunWithStoppedAgentAtTheDeploymentCapIsRefused(t *testi
 	}
 }
 
+// TestReviveRun_AtTheCapRefusesBeforeMintOrPull: a revive that would start a kept agent at the cap is
+// refused before a run identity is minted or the proxy image prepared; a revive that starts no agent
+// is not refused at the cap.
+func TestReviveRun_AtTheCapRefusesBeforeMintOrPull(t *testing.T) {
+	f, sr := newRebootFixture(t)
+	ids := &mintCountingIdentity{Provider: f.srv.cfg.Identity}
+	f.srv.cfg.Identity = ids
+	ensures := 0
+	f.rr.onEnsure = func() { ensures++ }
+	f.srv.cfg.MaxConcurrentRuns = 1
+	f.rs.capFull = true
+
+	code, body := f.reviveAs(t, false)
+	if code != http.StatusUnprocessableEntity || !strings.Contains(body, string(authz.ReasonRunQuota)) {
+		t.Fatalf("reboot revive at the cap = %d %s, want 422 run_quota", code, body)
+	}
+	if ids.mints != 0 || ensures != 0 {
+		t.Fatalf("mints %d, proxy image preparations %d; want none before the refusal", ids.mints, ensures)
+	}
+	if len(f.rr.replaced) != 0 || len(sr.starts()) != 0 {
+		t.Fatalf("refused revive replaced %d proxies and started agents %v; want neither", len(f.rr.replaced), sr.starts())
+	}
+
+	live := newReviveFixture(t)
+	live.srv.cfg.MaxConcurrentRuns = 1
+	live.rs.capFull = true
+	if code, body := live.reviveAs(t, false); code != http.StatusOK {
+		t.Fatalf("live revive at the cap = %d %s, want 200: it starts no agent", code, body)
+	}
+}
+
+// TestReviveRun_PrecheckDoesNotCountTheRunItself: an outage-kept run whose agent stopped can still
+// read as holding a slot, and the cap precheck must not count it against its own revive: with the
+// cap otherwise free the revive starts the agent instead of refusing 422.
+func TestReviveRun_PrecheckDoesNotCountTheRunItself(t *testing.T) {
+	f := newReviveFixture(t)
+	sr := &startingRunner{reviveRunner: f.rr}
+	f.srv.cfg.Runner = sr
+	f.rr.status = types.RunStopped
+	f.srv.cfg.MaxConcurrentRuns = 1
+	f.rs.selfCounted = true
+
+	if code, body := f.reviveAs(t, false); code != http.StatusOK {
+		t.Fatalf("revive with only the run itself counted = %d %s, want 200", code, body)
+	}
+	if len(sr.starts()) != 1 {
+		t.Fatalf("agent starts = %v, want the stopped agent started once", sr.starts())
+	}
+}
+
 // runCapAPIStore adds the deployment-cap store methods to runWarnStore: active is
 // what the lock-free count reports, and an insert at the cap answers
 // ErrRunCapReached the way store.PG does when a racing create took the last slot.
@@ -166,7 +216,9 @@ type runCapAPIStore struct {
 	raced  bool
 }
 
-func (s *runCapAPIStore) CountNonTerminalRuns(context.Context) (int, error) { return s.active, nil }
+func (s *runCapAPIStore) CountNonTerminalRuns(context.Context, uuid.UUID) (int, error) {
+	return s.active, nil
+}
 
 func (s *runCapAPIStore) CreateRunUnderCap(ctx context.Context, r types.AgentRun, _ int) (types.AgentRun, error) {
 	if s.raced {

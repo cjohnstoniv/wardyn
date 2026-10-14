@@ -185,9 +185,27 @@ func Capture(events []types.AuditEvent, confined bool, kernel KernelWindow) Obse
 // captureEgress folds one egress.* decision into the per-host aggregate and, for an OPEN recording
 // only, records an anomaly for a deny — a deny during a CONFINED replay is the containment proof
 // working as intended, not an anomaly.
+//
+// A network-fault row (builtin:dial-failed, builtin:tunnel-failed) is skipped entirely: the host's
+// policy ALLOWED it and the network lost the connection, so counting it as a deny would both fail
+// a CleanReplay that caught nothing and raise an open-recording anomaly for a blip — and the
+// synthesized allowlist would then name a host the run never actually reached. Same predicate the
+// deny counter and observed-egress promotion read (egress.IsNetworkFault), so one source cannot be
+// a denial to one consumer and not another.
 func captureEgress(ev types.AuditEvent, domains map[string]*domainAgg, anomalies map[string]bool, confined bool) {
 	var d egressData
 	_ = json.Unmarshal(ev.Data, &d) // best-effort: a malformed body still has Target
+
+	// Before the host is even resolved: a network-fault row says the policy
+	// allowed this destination and the network lost it, so it must leave no
+	// trace. Counting it would fail a CleanReplay that caught nothing and raise
+	// an anomaly for a blip, and a CONNECT whose dial never completed leaves no
+	// allow row to carry the host — an aggregate built from the fault alone
+	// would then be synthesized as "observed but never allowed", naming a host
+	// the run never reached.
+	if ev.Action == actionEgressDeny && egress.IsNetworkFault(strings.TrimSpace(d.RuleSource)) {
+		return
+	}
 
 	host := strings.ToLower(strings.TrimSpace(d.Host))
 	if host == "" {

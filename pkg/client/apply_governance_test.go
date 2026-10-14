@@ -195,3 +195,26 @@ func TestApplyGovernance_PruneDeletesAssignmentsBeforeProfilesAndOnlyWhatTheDocO
 		t.Fatalf("writes = %v, want exactly %v (assignments first, nothing the doc names)", g.writes, want)
 	}
 }
+
+func TestApplyGovernanceResult_PartialFailureReportsStepsSoFar(t *testing.T) {
+	g, c := newGovServer(t, client.GovernanceDocument{})
+	g.failOn = "POST /api/v1/governance/assignments"
+	doc := client.GovernanceDocument{
+		Profiles:    []client.GovernanceProfile{{Name: "fresh"}},
+		Assignments: []client.GovernanceAssignment{{SubjectType: "user", Subject: "alice@example.com", ProfileID: uuid.New()}},
+	}
+	res, err := c.ApplyGovernanceResult(context.Background(), doc, false)
+	if err == nil {
+		t.Fatal("want the assignment failure")
+	}
+	if len(res.Steps) != 2 {
+		t.Fatalf("steps = %+v, want the profile create then the failed assignment", res.Steps)
+	}
+	create, asg := res.Steps[0], res.Steps[1]
+	if create.Kind != "profile" || create.Op != "create" || create.Name != "fresh" || create.Outcome != "applied" {
+		t.Fatalf("profile step = %+v, want an applied create of fresh", create)
+	}
+	if asg.Kind != "assignment" || asg.Op != "upsert" || asg.Outcome != "failed" || asg.Error == "" {
+		t.Fatalf("assignment step = %+v, want a failed upsert with its error", asg)
+	}
+}

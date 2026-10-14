@@ -151,6 +151,9 @@ type adoEntraRun struct {
 	// serverHost is set on an Azure DevOps Server run (ado_own_pat_server.go):
 	// the one host its credential rides to, git only.
 	serverHost string
+	// residentOptIn is this row's ADOEntraConfig.RunnerResident: the opt-in
+	// belongs to the connection that admits the run, never to the deployment.
+	residentOptIn bool
 }
 
 // snapshot renders the run's resolution as the immutable grant scope.
@@ -335,7 +338,7 @@ func adoEntraRunForRepo(sc types.SiteConfig, repo, owner string) (adoEntraRun, b
 		tenantID: row.Entra.TenantID, clientID: row.Entra.ClientID,
 		tokenMode: cmpTokenMode(row.Entra.TokenMode), credentialSource: row.CredentialSource,
 		caps: row.Entra.Profile(), ceiling: slices.Clone(row.Entra.CapabilityCeiling),
-		patHours: row.Entra.PATHours(),
+		patHours: row.Entra.PATHours(), residentOptIn: row.Entra.RunnerResident,
 	}, true
 }
 
@@ -740,10 +743,10 @@ func (s *Server) createADOEntraGrants(ctx context.Context, run types.AgentRun,
 			return nil, s.refuseADOEntraGrant(ctx, run, "grant_scope", "could not author the Azure DevOps credential injection", merr)
 		}
 		grantID := uuid.New()
-		if _, gerr := s.cfg.Store.CreateGrant(ctx, types.CredentialGrant{
+		if _, gerr := s.createDispatchGrant(ctx, run, types.CredentialGrant{
 			ID: grantID, RunID: run.ID, CreatedAt: time.Now(),
 			Spec: types.GrantSpec{Kind: types.GrantAPIKey, Scope: scope, TTLSeconds: adoEntraGrantTTLSeconds},
-		}); gerr != nil {
+		}, false); gerr != nil {
 			return nil, s.refuseADOEntraGrant(ctx, run, "grant_write", "could not record the Azure DevOps credential grant", gerr)
 		}
 		rule, derr := injectionRuleFromScope(scope)

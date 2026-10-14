@@ -78,13 +78,14 @@ type recordStore struct {
 	// of applying `add` — the seam for a store error on the widening after
 	// the promotion marker CAS already committed.
 	mergeErr error
+	site     types.SiteConfig
 }
 
 // GetSiteConfig backs the agent roster's launch-path read (agent_providers.go).
 // The zero value is legacy open mode — no roster, nothing refused — which is the
 // state every case in this file means.
 func (s *recordStore) GetSiteConfig(context.Context) (types.SiteConfig, error) {
-	return types.SiteConfig{}, nil
+	return s.site, nil
 }
 
 // LatestAuditEventByAction backs ebpfGroundtruthCaveat's heartbeat lookup.
@@ -194,10 +195,8 @@ func (s *recordStore) ClearWorkspaceActiveRun(_ context.Context, _ uuid.UUID, _ 
 	s.clearedActive = true
 	return true, nil
 }
-func (s *recordStore) SetWorkspaceBuiltImage(_ context.Context, _ uuid.UUID, imageRef, hash string) (types.Workspace, error) {
-	ws := s.ws
-	ws.ImageRef, ws.BuiltProfileHash = imageRef, hash
-	return ws, nil
+func (s *recordStore) SetWorkspaceBuiltImage(context.Context, uuid.UUID, string, string, string, *types.ImageBuild) (bool, error) {
+	return true, nil
 }
 func (s *recordStore) SetWorkspaceApprovedEgress(_ context.Context, _ uuid.UUID, domains []string) (types.Workspace, error) {
 	s.ws.ApprovedEgress = domains
@@ -560,7 +559,7 @@ func TestRecordCrossSession_ApprovalWidensNextConfinedLaunch(t *testing.T) {
 
 	// Before the operator approves anything, a confined session B's egress
 	// union does not carry the observed-only host.
-	if slices.Contains(srv.confinedEgressDomains(fake.ws), "registry.npmjs.org") {
+	if slices.Contains(srv.confinedEgressDomains(fake.ws, nil), "registry.npmjs.org") {
 		t.Fatal("host must not be in the egress union before it's approved")
 	}
 
@@ -580,8 +579,8 @@ func TestRecordCrossSession_ApprovalWidensNextConfinedLaunch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetWorkspace: %v", err)
 	}
-	if !slices.Contains(srv.confinedEgressDomains(got), "registry.npmjs.org") {
-		t.Errorf("session B's confined egress union %v missing session A's approved+observed host", srv.confinedEgressDomains(got))
+	if !slices.Contains(srv.confinedEgressDomains(got, nil), "registry.npmjs.org") {
+		t.Errorf("session B's confined egress union %v missing session A's approved+observed host", srv.confinedEgressDomains(got, nil))
 	}
 }
 

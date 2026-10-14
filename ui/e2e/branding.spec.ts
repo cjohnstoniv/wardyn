@@ -168,6 +168,8 @@ test.describe("branding removal controls", () => {
     await expect(page.getByText(BRANDING.REMOVE_LOGO_TOAST)).toBeVisible();
     expect(put).toMatchObject({ org_name: "Example Corp", remove_logo: true });
     await expect(page.getByRole("button", { name: BRANDING.REMOVE_LOGO })).toHaveCount(0);
+    // The first dialog is still animating out; the same locator would match it.
+    await expect(dialog).toHaveCount(0);
 
     await page.getByRole("button", { name: BRANDING.REMOVE_BRANDING }).click();
     await expect(dialog.getByText(BRANDING.REMOVE_BRANDING_TITLE)).toBeVisible();

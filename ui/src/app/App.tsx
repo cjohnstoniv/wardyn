@@ -57,9 +57,9 @@ export const HEALTH_POLL_MS = 5000;
 // setup (the demo steps' own lazy chunk), asciinema-player on
 // run-detail/recordings. Rollup hoists
 // what several lazy routes share into its own chunk automatically.
-const NewRunScreen = React.lazy(() =>
-  import("./components/screens/new-run/new-run-screen").then((m) => ({
-    default: m.NewRunScreen,
+const NewRunRoute = React.lazy(() =>
+  import("./components/screens/new-run-flow/new-run-route").then((m) => ({
+    default: m.NewRunRoute,
   })),
 );
 const RunDetailScreen = React.lazy(() =>
@@ -105,6 +105,13 @@ const ComponentsScreen = React.lazy(() =>
     default: m.ComponentsScreen,
   })),
 );
+// Saved starting points (0.9): /templates in the User view, /admin/templates in the Admin view. The copy
+// modules it reads are lazy-only, so the screen is never imported by the entry chunk.
+const TemplatesScreen = React.lazy(() =>
+  import("./components/screens/templates/templates-screen").then((m) => ({
+    default: m.TemplatesScreen,
+  })),
+);
 const PermissionsScreen = React.lazy(() =>
   import("./components/screens/permissions").then((m) => ({
     default: m.PermissionsScreen,
@@ -131,6 +138,19 @@ const CredentialsScreen = React.lazy(() =>
 const PeopleScreen = React.lazy(() =>
   import("./components/screens/people/people-screen").then((m) => ({
     default: m.PeopleScreen,
+  })),
+);
+// Runners (0.9, packet M-RN-1) — the computers people registered to run their own runs. securityOps
+// server-side, so both admin tiers reach it; no member route.
+const RunnersScreen = React.lazy(() =>
+  import("./components/screens/runners/runners-screen").then((m) => ({
+    default: m.RunnersScreen,
+  })),
+);
+// A pool's form: an organization pool's edit (super admin) and a person's own user pool, new or edited.
+const PoolFormScreen = React.lazy(() =>
+  import("./components/screens/runners/pools/pool-form").then((m) => ({
+    default: m.PoolFormScreen,
   })),
 );
 const SecretsScreen = React.lazy(() =>
@@ -631,6 +651,7 @@ export default function App() {
               // (undefined -> false) while setupStatus hasn't landed yet,
               // never a guess painted off no data.
               noBarrier={setupStatus ? !deriveReadiness(setupStatus).barrierReady : false}
+              tier={setupStatus?.tier}
               onSignOut={async () => {
                 // HIGH fix (sign-out): tell the server to clear the OIDC session
                 // BEFORE dropping local state. Clearing only the local admin token
@@ -714,9 +735,12 @@ export default function App() {
             <Route path="/admin/runs/:id" element={suspend(<RunDetailScreen />)} />
             <Route path="/admin/approvals" element={suspend(<ApprovalsScreen onChanged={refreshBadges} />)} />
             <Route path="/admin/people" element={suspend(<PeopleScreen />)} />
+            <Route path="/admin/runners" element={suspend(<RunnersScreen />)} />
+            <Route path="/admin/runners/pools/:id/edit" element={suspend(<PoolFormScreen scope="admin" />)} />
             <Route path="/admin/workspaces" element={suspend(<WorkspacesScreen />)} />
             <Route path="/admin/workspaces/:id" element={suspend(<WorkspaceDetailScreen />)} />
             <Route path="/admin/policies" element={suspend(<PoliciesScreen />)} />
+            <Route path="/admin/templates" element={suspend(<TemplatesScreen />)} />
             <Route path="/admin/governance" element={suspend(<GovernanceScreen />)} />
             <Route path="/admin/permissions" element={suspend(<PermissionsScreen />)} />
             <Route path="/admin/user-types" element={suspend(<UserTypesScreen />)} />
@@ -730,13 +754,15 @@ export default function App() {
             <Route path="/admin/components" element={suspend(<ComponentsScreen />)} />
             <Route path="/admin/*" element={<Navigate to="/admin/runs" replace />} />
             <Route path="/account" element={suspend(<YourAccountScreen />)} />
+            <Route path="/account/pools/new" element={suspend(<PoolFormScreen scope="mine" />)} />
+            <Route path="/account/pools/:id/edit" element={suspend(<PoolFormScreen scope="mine" />)} />
             <Route path="/runs" element={<RunsScreen />} />
             {/* Ahead of /runs/:id so "new" is never read as a run id. */}
             <Route
               path="/runs/new"
               element={
                 <React.Suspense fallback={<RouteFallback />}>
-                  <NewRunScreen />
+                  <NewRunRoute />
                 </React.Suspense>
               }
             />
@@ -748,6 +774,7 @@ export default function App() {
                 </React.Suspense>
               }
             />
+            <Route path="/templates" element={suspend(<TemplatesScreen />)} />
             <Route
               path="/approvals"
               element={

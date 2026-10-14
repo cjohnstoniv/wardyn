@@ -89,7 +89,7 @@ const (
 	// concurrent socat execs — per run. Browsers open ~6 connections per
 	// origin, so this is that plus headroom; it is a resource-exhaustion bound
 	// (each connection is a live exec in the sandbox), the sibling of
-	// maxSSHSessionsPerRun.
+	// the SSH per-run channel cap.
 	maxUIConnsPerRun = 8
 	// uiIdleConnTimeout closes a pooled relay connection after this long idle,
 	// so a closed browser tab stops holding relay capacity. It closes the exec's
@@ -287,8 +287,7 @@ func (s *Server) uiEnterCommon(w http.ResponseWriter, r *http.Request, runRaw, a
 	// the run's own origin never sees — and would put one run's cookie on
 	// another run's origin. Refuse instead.
 	if want := s.uiRunOrigin(runID); want != "" && !strings.EqualFold(r.Host, want) {
-		s.auditUI(&runID, types.ActorHuman, "unknown", "ui.authorize", app, "denied",
-			map[string]any{"reason": "wrong host for run", "host": r.Host})
+		s.auditUIRefusedBounded(runID, app, map[string]any{"reason": "wrong host for run", "host": r.Host})
 		writeErrorReason(w, http.StatusForbidden, reasonUIGatewayWrongHost, "This run's UI apps are served on a different host")
 		return
 	}
@@ -297,8 +296,7 @@ func (s *Server) uiEnterCommon(w http.ResponseWriter, r *http.Request, runRaw, a
 	// reaches the store or spends a ticket. The refusal is the bad-ticket one,
 	// byte for byte; only the audit reason says which it was.
 	if !s.uiTicketBound(w, r, ticket) {
-		s.auditUI(&runID, types.ActorHuman, "unknown", "ui.authorize", app, "denied",
-			map[string]any{"reason": "ticket not bound to this browser"})
+		s.auditUIRefusedBounded(runID, app, map[string]any{"reason": "ticket not bound to this browser"})
 		writeErrorReason(w, http.StatusForbidden, reasonUIGatewayTicketInvalid, "invalid, expired, or already-used attach ticket")
 		return
 	}
@@ -329,7 +327,7 @@ func (s *Server) uiEnterCommon(w http.ResponseWriter, r *http.Request, runRaw, a
 	// runs humanOrAdminAuth, so the ticket's stamped role/principal is the only
 	// authorization signal, exactly as in handleAttachWS.
 	superAdmin := ta.role == oidc.RoleAdmin
-	if !mayEnterRun(run, ta.principal, superAdmin) {
+	if !s.mayEnterRunOrSponsor(r.Context(), run, ta.principal, superAdmin, ta.authorizedAt) {
 		if superAdmin {
 			s.refuseRunOwnerOnly(w, r.WithContext(withTicketActor(r.Context(), ta)), run)
 			return
@@ -337,6 +335,11 @@ func (s *Server) uiEnterCommon(w http.ResponseWriter, r *http.Request, runRaw, a
 		s.auditUI(&runID, types.ActorHuman, ta.principal, "ui.authorize", app, "denied",
 			ta.withVia(map[string]any{"reason": "not the run owner"}))
 		writeErrorReason(w, http.StatusForbidden, reasonUIGatewayTicketRunMismatch, "attach ticket does not authorize this run")
+		return
+	}
+	// After the ownership check (a foreign caller learns nothing), before any cookie.
+	if rf := backgroundOnlyRefusal(run, "web application gateway"); rf != nil {
+		s.uiRefuseBackground(w, r, rf, runID, app, ta)
 		return
 	}
 	// superAdmin is true past this point only on the admin's own run or an
@@ -382,7 +385,7 @@ func (s *Server) uiEnterCommon(w http.ResponseWriter, r *http.Request, runRaw, a
 	sess := uiSession{
 		Run: runID, App: declared.Name, Port: declared.Port,
 		Principal: ta.principal, Role: ta.role, Email: ta.email,
-		Expires: expires.Unix(), IssuedAt: now.Unix(), AuthorizedAt: ta.authorizedAt.Unix(), Via: ta.via,
+		Expires: expires.Unix(), IssuedAt: now.Unix(), AuthorizedAt: ta.authorizedAt.Unix(), RevSeq: ta.revSeq, Via: ta.via, Service: sponsoredService(run),
 	}
 	http.SetCookie(w, &http.Cookie{
 		Name:     uiCookieName,
@@ -394,7 +397,7 @@ func (s *Server) uiEnterCommon(w http.ResponseWriter, r *http.Request, runRaw, a
 		Expires:  expires,
 	})
 	s.auditUI(&runID, types.ActorHuman, ta.principal, "ui.authorize", declared.Name, "success",
-		ta.withVia(map[string]any{"app": declared.Name, "port": declared.Port}))
+		ta.withVia(withSponsorEntry(run, map[string]any{"app": declared.Name, "port": declared.Port})))
 	http.Redirect(w, r, s.uiBasePath()+uiRelayPrefix(runID, declared.Name)+declared.PathOrRoot(), redirectStatus)
 }
 
@@ -764,6 +767,7 @@ func (s *Server) uiDial(ctx context.Context, _, addr string) (net.Conn, error) {
 	if de := s.uiSessionStillAuthorized(ctx, sess, run); de != nil {
 		return nil, uiFail(ctx, de.status, de.reason, de.msg)
 	}
+	sess.SandboxRef = run.SandboxRef
 	s.markUIReasserted(sess, s.cfg.Now())
 	// A paused run is thawed before the execs below (run_pause.go).
 	if err := s.thawForExec(ctx, run, types.ActorHuman, sess.Principal, "presence"); err != nil {

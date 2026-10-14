@@ -373,7 +373,7 @@ type httpApprovalReader struct {
 
 func (a httpApprovalReader) readApproval(ctx context.Context, id uuid.UUID) (types.ApprovalState, int, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
-		a.base+"/api/v1/internal/approvals/"+id.String(), nil)
+		controlPlaneEndpoint(a.base, "/api/v1/internal/approvals/"+id.String()), nil)
 	if err != nil {
 		return "", 0, err
 	}

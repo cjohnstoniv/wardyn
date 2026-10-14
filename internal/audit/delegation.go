@@ -58,12 +58,12 @@ func StampDelegation(ctx context.Context, data json.RawMessage) json.RawMessage 
 }
 
 // DelegationRecorder stamps data.via on every event recorded under a
-// delegated context, whoever wrote it. cmd/wardynd puts it at the head of the
+// delegated context, and data.sponsor under a service identity's, whoever wrote it. cmd/wardynd puts it at the head of the
 // shared chain.
 type DelegationRecorder struct{ Inner Recorder }
 
 // Record stamps ev when ctx is delegated and hands it on.
 func (r DelegationRecorder) Record(ctx context.Context, ev types.AuditEvent) error {
-	ev.Data = StampDelegation(ctx, ev.Data)
+	ev.Data = StampSponsor(ctx, StampDelegation(ctx, ev.Data))
 	return r.Inner.Record(ctx, ev)
 }

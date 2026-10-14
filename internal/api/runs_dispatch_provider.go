@@ -42,6 +42,9 @@ const (
 	// mpNoProviderDetail is the brokered-LLM 404's detail for a model run no
 	// provider serves: under a provider block nothing else credentials it.
 	mpNoProviderDetail = "no model provider serves this agent on this deployment — an admin adds one under Settings → Model providers"
+	// mpNoProviderHarnessDetail is mpNoProviderDetail for a run whose other
+	// harnesses each reach their own provider: it names the one that has none.
+	mpNoProviderHarnessDetail = "no model provider serves %s on this deployment, though this run's other harnesses have their own — an admin adds one under Settings → Model providers"
 )
 
 // providerDenial is a model-provider refusal: the sentence, and whether the
@@ -243,31 +246,38 @@ func (l providerLane) hosts(s *Server) []string {
 
 // resolveProviderLane is the LLM phase of every dispatch, for every kind. In
 // order: a model run whose site config could not be read is refused; the
-// operator's ~/.claude mounts go; a run that chose a provider has it re-read and
-// its owner's credential checked live, refused naming it on any miss; then the
-// STRIP — every injection that would credential the run's model
-// (dropLegacyModelInjections) — and only after it the kind's arm: its env, and
-// the key arm's one grant. The subscription and Bedrock arms author their
-// grants later in resolveLLMInjections, also after the strip, so nothing an arm
-// authors is ever stripped. A run no provider serves, or one that makes no
-// model call, is stripped and credentialed by nothing; a login box also gets
-// the public vendor host its sign-in dials.
+// operator's ~/.claude mounts go; each provider the run chose — its own
+// agent's, and each other harness's of its set (providerLanePairs) — is
+// re-read and its owner's credential checked live, refused naming it on any
+// miss; then ONE STRIP over every lane's hosts — every injection that would
+// credential the run's model (dropLegacyModelInjections) — and only after it
+// each lane's arm: its env, and the key arm's one grant. The subscription and
+// Bedrock arms author their grants later in resolveLLMInjections, also after
+// the strip, so nothing an arm authors is ever stripped. A run no provider
+// serves, or one that makes no model call, is stripped and credentialed by
+// nothing; a login box also gets the public vendor host its sign-in dials.
 //
+// llms holds one transport per lane, pairs[i] naming lane i's harness and
+// provider; the run's own agent's lane is first, also when it chose none.
 // ok=false means the run was refused and is already marked FAILED.
 func (s *Server) resolveProviderLane(ctx context.Context, run types.AgentRun, p dispatchParams, policy *types.RunPolicySpec,
 	sandboxEnv map[string]string, injections []runner.InjectionGrant, proxyURL string,
 	siteCfg types.SiteConfig, siteCfgOK bool,
-) (llmTransport, []runner.InjectionGrant, providerDispatch, bool) {
-	modelRun := isModelRun(p.TaskMode, run.WorkspaceID, run.SourceID, p.Interactive) && run.Task != harnessLoginTask
-	_, needsModel := agentLLMProvider(run.Agent)
+) (llms []llmTransport, pairs []types.RunHarness, _ []runner.InjectionGrant, _ providerDispatch, ok bool) {
+	// A command that carries harnesses runs them, so it is a model run too.
+	modelRun := (isModelRun(p.TaskMode, run.WorkspaceID, run.SourceID, p.Interactive) || (p.TaskMode == "exec" && len(p.Harnesses) > 0)) &&
+		run.Task != harnessLoginTask
+	pairs = providerLanePairs(run, p.Harnesses)
+	needsModel := slices.ContainsFunc(pairs, func(h types.RunHarness) bool { _, ok := agentLLMProvider(h.Harness); return ok })
+	chose := slices.ContainsFunc(pairs, func(h types.RunHarness) bool { return h.ModelProviderID != "" })
 	// Nothing records that a run was created under a block serving no provider
 	// for it, so a model run of an agent Wardyn credentials cannot tell "no
 	// provider" from "a provider I could not read" — it is refused, as the
 	// create door refuses the same read. A run that makes no model call is
 	// stripped with what could be read.
-	if !siteCfgOK && (run.ModelProviderID != "" || (modelRun && needsModel)) {
+	if !siteCfgOK && (chose || (modelRun && needsModel)) {
 		s.refuseProviderDispatch(ctx, run, "", providerDenial{msg: mpRunUnreadable}, nil)
-		return llmTransport{}, injections, providerDispatch{}, false
+		return nil, nil, injections, providerDispatch{}, false
 	}
 	// The create door's env_secret refusal again, for a policy that reached
 	// dispatch another way (a record session, a stored policy edited since):
@@ -277,54 +287,173 @@ func (s *Server) resolveProviderLane(ctx context.Context, run types.AgentRun, p 
 		p, _ := modelProviderByID(siteCfg.ModelProviders, run.ModelProviderID)
 		s.refuseProviderDispatch(ctx, run, p.Kind, providerDenial{msg: fmt.Sprintf(mpRunModelEnvSecret, secretName, name)},
 			map[string]any{"variable": name, "grant": secretName})
-		return llmTransport{}, injections, providerDispatch{}, false
+		return nil, nil, injections, providerDispatch{}, false
 	}
 	// The host-mount subscription path: a policy blessed with the operator's
 	// resident ~/.claude must not hand it to any run.
 	policy.WorkspaceMounts = slices.DeleteFunc(slices.Clone(policy.WorkspaceMounts), func(wm types.WorkspaceMount) bool {
 		return wm.Target == claudeCredTarget || wm.Target == claudeCredJSONTarget
 	})
-	var lane providerLane
-	if run.ModelProviderID != "" && modelRun {
-		var kind types.ModelProviderKind
-		var d providerDenial
-		if lane, kind, d = s.providerLaneForRun(ctx, run, siteCfg); d.msg != "" {
-			s.refuseProviderDispatch(ctx, run, kind, d, nil)
-			return llmTransport{}, injections, providerDispatch{}, false
-		}
+	lanes, laneHosts, ok := s.harnessLanes(ctx, run, pairs, siteCfg, modelRun)
+	if !ok {
+		return nil, nil, injections, providerDispatch{}, false
 	}
-	injections = s.dropLegacyModelInjections(ctx, run, injections, lane.hosts(s), s.modelServingHosts(siteCfg))
+	injections = s.dropLegacyModelInjections(ctx, run, injections, laneHosts, s.modelServingHosts(siteCfg))
 	if run.Task == harnessLoginTask {
 		// A Claude sign-in (`claude setup-token`) mints its OAuth token against
 		// the public host and must never be redirected to the brokered route.
 		sandboxEnv[envAnthropicBaseURL] = "https://api.anthropic.com"
 	}
 	if !modelRun {
-		return llmTransport{}, injections, providerDispatch{}, true
+		return nil, nil, injections, providerDispatch{}, true
 	}
-	llm := s.applyProviderEnv(ctx, run, lane, policy, sandboxEnv, proxyURL)
-	if err := llm.bedrock.maskErr; err != nil {
-		slog.WarnContext(ctx, "wardynd: the AWS SSO credential could not be recorded for masking", slog.String("run", run.ID.String()), slog.Any("err", err))
-		s.refuseProviderDispatch(ctx, run, lane.chosen.provider.Kind, providerDenial{msg: fmt.Sprintf(mpBRMaskFailed, lane.chosen.provider.ID)}, nil)
-		return llmTransport{}, injections, providerDispatch{}, false
+	var prov providerDispatch
+	var lanePairs []types.RunHarness
+	if lanes[0].chosen == nil {
+		prov.detail = mpNoProviderDetail
+		if slices.ContainsFunc(lanes, func(l providerLane) bool { return l.chosen != nil }) {
+			prov.detail = fmt.Sprintf(mpNoProviderHarnessDetail, harnessName(run.Agent))
+		}
 	}
-	if lane.chosen == nil {
-		return llm, injections, providerDispatch{detail: mpNoProviderDetail}, true
+	for i, lane := range lanes {
+		if i > 0 && lane.chosen == nil {
+			continue
+		}
+		lr := laneRun(run, pairs[i])
+		llm := s.applyProviderEnv(ctx, lr, lane, policy, sandboxEnv, proxyURL)
+		if err := llm.bedrock.maskErr; err != nil {
+			slog.WarnContext(ctx, "wardynd: the AWS SSO credential could not be recorded for masking", slog.String("run", run.ID.String()), slog.Any("err", err))
+			s.refuseProviderDispatch(ctx, lr, lane.chosen.provider.Kind, providerDenial{msg: fmt.Sprintf(mpBRMaskFailed, lane.chosen.provider.ID)}, nil)
+			return nil, nil, injections, providerDispatch{}, false
+		}
+		llms, lanePairs = append(llms, llm), append(lanePairs, pairs[i])
+		if lane.chosen == nil || !providerKeyKind(lane.chosen.provider.Kind) {
+			continue
+		}
+		// Two harnesses sharing one key provider share its one grant.
+		if !sharesKeyGrant(pairs, lanes, i) {
+			grant, ok := s.authorProviderKeyInjection(ctx, lr, lane.key)
+			if !ok {
+				return nil, nil, injections, providerDispatch{}, false
+			}
+			injections = append(injections, grant)
+			unionAllowedDomains(policy, []string{lane.key.host})
+		}
+		if lane.key.upstream != "" {
+			if prov.upstreams == nil {
+				prov.upstreams = map[string]string{}
+			}
+			prov.upstreams[lane.key.vendorHost] = lane.key.upstream
+		}
 	}
-	if !providerKeyKind(lane.chosen.provider.Kind) {
-		return llm, injections, providerDispatch{}, true
+	return llms, lanePairs, injections, prov, true
+}
+
+// harnessLanes is resolveProviderLane's lane per pair: each provider re-read
+// and its owner's credential checked live, an AWS sign-in on any harness but
+// the primary refused first (harnessProviderNeedsPrimary), then the set held
+// to create's one-lane test (laneConflict). hosts is every lane's hosts, for
+// the one strip. ok=false means the run was refused and is already FAILED.
+func (s *Server) harnessLanes(ctx context.Context, run types.AgentRun, pairs []types.RunHarness, siteCfg types.SiteConfig, modelRun bool,
+) (lanes []providerLane, hosts []string, ok bool) {
+	lanes = make([]providerLane, len(pairs))
+	for i, h := range pairs {
+		if h.ModelProviderID == "" || !modelRun {
+			continue
+		}
+		lr := laneRun(run, h)
+		if p, found := modelProviderByID(siteCfg.ModelProviders, h.ModelProviderID); i > 0 && found && harnessProviderNeedsPrimary(p) {
+			s.refuseProviderDispatch(ctx, lr, p.Kind, providerDenial{msg: fmt.Sprintf(mpRunSignInNotPrimary, p.ID, harnessName(h.Harness))}, nil)
+			return nil, nil, false
+		}
+		lane, kind, d := s.providerLaneForRun(ctx, lr, siteCfg)
+		if d.msg != "" {
+			s.refuseProviderDispatch(ctx, lr, kind, d, nil)
+			return nil, nil, false
+		}
+		lanes[i] = lane
+		hosts = append(hosts, lane.hosts(s)...)
 	}
-	grant, ok := s.authorProviderKeyInjection(ctx, run, lane.key)
-	if !ok {
-		return llm, injections, providerDispatch{}, false
+	if i, host := laneConflict(pairs, lanes); i > 0 {
+		c := lanes[i].chosen.provider
+		s.refuseProviderDispatch(ctx, laneRun(run, pairs[i]), c.Kind, providerDenial{msg: fmt.Sprintf(mpRunLaneConflict, c.ID, host)}, nil)
+		return nil, nil, false
 	}
-	injections = append(injections, grant)
-	unionAllowedDomains(policy, []string{lane.key.host})
-	var upstreams map[string]string
-	if lane.key.upstream != "" {
-		upstreams = map[string]string{lane.key.vendorHost: lane.key.upstream}
+	return lanes, hosts, true
+}
+
+// mpRunSignInNotPrimary is create's harnessSignInNotPrimaryMsg at dispatch, for
+// a provider that became an AWS sign-in after the run was created.
+const mpRunSignInNotPrimary = "Model provider %s uses an AWS sign-in, which only the harness a run starts, or else lists first, can use, " +
+	"so nothing was started. Launch the run again with %s first, or with another provider for it."
+
+// DRAFT (M2 canon pending).
+const mpRunLaneConflict = "Model provider %s would put a second credential on %s, which another harness of this run " +
+	"already uses, so nothing was started. An admin gives each harness's provider its own address."
+
+// laneConflict is the first lane, by index into pairs and lanes, whose
+// provider cannot be credentialed beside an earlier lane's in one sandbox, and
+// the host they would share; 0 when there is none. The test is the create
+// door's own (harnessProviderPairsConflict), so dispatch refuses exactly the
+// pairs create refuses: a run admitted before a provider changed is caught
+// here, before anything is authored.
+func laneConflict(pairs []types.RunHarness, lanes []providerLane) (int, string) {
+	for j := 1; j < len(lanes); j++ {
+		b := lanes[j]
+		if b.chosen == nil {
+			continue
+		}
+		for i, a := range lanes[:j] {
+			if a.chosen == nil || !harnessProviderPairsConflict(pairs[i].Harness, a.chosen.provider, pairs[j].Harness, b.chosen.provider) {
+				continue
+			}
+			host := b.azure.host
+			for _, h := range providerInjectionHosts(b.chosen.provider, pairs[j].Harness) {
+				if slices.ContainsFunc(providerInjectionHosts(a.chosen.provider, pairs[i].Harness), func(x string) bool { return hostEqual(x, h) }) {
+					host = h
+					break
+				}
+			}
+			return j, host
+		}
 	}
-	return llm, injections, providerDispatch{upstreams: upstreams}, true
+	return 0, ""
+}
+
+// sharesKeyGrant is whether key lane i shares an earlier key lane's grant: the
+// same host, which laneConflict has already let through only when the two
+// would author the same grant (harnessProviderPairsConflict).
+func sharesKeyGrant(pairs []types.RunHarness, lanes []providerLane, i int) bool {
+	b := lanes[i]
+	for k, a := range lanes[:i] {
+		if a.chosen != nil && providerKeyKind(a.chosen.provider.Kind) && hostEqual(a.key.host, b.key.host) &&
+			!harnessProviderPairsConflict(pairs[k].Harness, a.chosen.provider, pairs[i].Harness, b.chosen.provider) {
+			return true
+		}
+	}
+	return false
+}
+
+// providerLanePairs is the (harness, model provider) pairs dispatch gives a
+// lane: the run's own agent and provider first, exactly as a run launched
+// without the harness set, then each other harness of the set that was granted
+// a provider.
+func providerLanePairs(run types.AgentRun, harnesses []types.RunHarness) []types.RunHarness {
+	pairs := []types.RunHarness{{Harness: run.Agent, ModelProviderID: run.ModelProviderID}}
+	for _, h := range harnesses {
+		if h.Harness != run.Agent && h.ModelProviderID != "" {
+			pairs = append(pairs, h)
+		}
+	}
+	return pairs
+}
+
+// laneRun is run as the lane of harness h sees it: h's harness as its agent and
+// h's provider as its choice. Every per-provider check, env arm, grant and audit
+// row of that lane reads it, so each names its own harness and provider.
+func laneRun(run types.AgentRun, h types.RunHarness) types.AgentRun {
+	run.Agent, run.ModelProviderID = h.Harness, h.ModelProviderID
+	return run
 }
 
 // providerLaneForRun re-reads the provider the run chose at create and checks
@@ -477,7 +606,8 @@ func (s *Server) applyProviderEnv(ctx context.Context, run types.AgentRun, lane 
 		// codex 0.149.1 reads neither OPENAI_* variable: its base URL comes
 		// from config.toml and its key from CODEX_API_KEY (task mode) or
 		// auth.json (interactive), both of which the image's prep writes
-		// from these two. The OPENAI_* pair stays for an older codex.
+		// from these two. The OPENAI_* pair is unused by codex and deprecated: only the
+		// pinned codex is supported.
 		sandboxEnv[envCodexBaseURL] = codexBaseURL(proxyURL, lane.key.upstream)
 		sandboxEnv[envCodexAPIKey] = "wardyn-proxy-injected"
 		sandboxEnv[envOpenAIBaseURL] = proxyURL + "/wardyn/llm/openai"
@@ -509,13 +639,13 @@ func (s *Server) authorProviderKeyInjection(ctx context.Context, run types.Agent
 	scope, _ := json.Marshal(map[string]any{
 		"host": lane.host, "header": lane.header, "format": lane.format,
 		"secret_name": providerSecretName(lane.provider.UID, providerKeyPart),
-		"snapshot":    providerGrantSnapshot{OwnerSubject: lane.owner, ProviderUID: lane.provider.UID},
+		"snapshot":    providerGrantSnapshot{OwnerSubject: lane.owner, ProviderUID: lane.provider.UID, Harness: run.Agent},
 	})
 	grantID := uuid.New()
-	if _, err := s.cfg.Store.CreateGrant(ctx, types.CredentialGrant{
+	if _, err := s.createDispatchGrant(ctx, run, types.CredentialGrant{
 		ID: grantID, RunID: run.ID, CreatedAt: time.Now(),
 		Spec: types.GrantSpec{Kind: types.GrantAPIKey, Scope: scope, TTLSeconds: 3600},
-	}); err != nil {
+	}, false); err != nil {
 		s.refuseProviderDispatch(ctx, run, lane.provider.Kind, providerDenial{msg: "could not author the model provider credential injection: " + err.Error()}, nil)
 		return runner.InjectionGrant{}, false
 	}

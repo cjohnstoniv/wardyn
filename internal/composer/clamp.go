@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner/sizing"
+	"github.com/cjohnstoniv/wardyn/internal/runnerpool"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -55,6 +56,24 @@ func EffectiveConfinementFloor(policyMin, floor, cap types.ConfinementClass) typ
 // dispatch's own ephemeral-disk clamp so preview and the actual run agree, and only clamps a non-zero
 // request since 0 means unbounded scratch. CPU and memory fold into the resource ceiling below.
 func Clamp(proposed, ceiling types.RunPolicySpec, limits types.GovernanceLimits) (types.RunPolicySpec, []string) {
+	var size types.ResourceLimits
+	if r := ceiling.Resources; r != nil {
+		size = types.ResourceLimits{CPUMillis: r.CPUMillis, MemoryMiB: r.MemoryMiB}
+	}
+	return clamp(proposed, ceiling, limits, size, MemberDefault(types.ResourceLimits{}, ceiling.Resources), true)
+}
+
+// ClampMember is Clamp for a governed member's own run policy. CPU and memory are bounded by the
+// member cap from size, the profile's AUTHORED size (a resolved ceiling carries the deployment's size
+// where its profile sets none, #1949), and memberDefault, the member's size before any ask (from the
+// deployment's own default, which Clamp alone cannot see). A cut of either is not warned here: the
+// run's placement step applies the ask within every limit and says exactly when it was cut, so the
+// warning and the run's resources_applied agree.
+func ClampMember(proposed, ceiling types.RunPolicySpec, limits types.GovernanceLimits, size, memberDefault types.ResourceLimits) (types.RunPolicySpec, []string) {
+	return clamp(proposed, ceiling, limits, size, memberDefault, false)
+}
+
+func clamp(proposed, ceiling types.RunPolicySpec, limits types.GovernanceLimits, size, untouched types.ResourceLimits, warnSize bool) (types.RunPolicySpec, []string) {
 	out := cloneProposal(proposed)
 	var warns []string
 
@@ -71,6 +90,10 @@ func Clamp(proposed, ceiling types.RunPolicySpec, limits types.GovernanceLimits)
 
 	// Allowed domains: intersect to the ceiling's allowlist unless it allows all. An empty ceiling
 	// allowlist means default-deny — don't skip this block when empty, or the strictest posture leaks.
+	// Under an allow-all ceiling the proposal's entries are kept as authored. An exact entry still
+	// carries what allow-all never gives (the proxy's trust of a private-range literal address), and
+	// that is bounded by the member path before it calls here (internal/api's
+	// dropUncoveredPrivateLiterals), not by this function.
 	if !ceiling.AllowAllEgress {
 		allowed := toSet(ceiling.AllowedDomains)
 		kept, dropped := partition(out.AllowedDomains, func(d string) bool { return allowed[strings.ToLower(strings.TrimSpace(d))] })
@@ -118,27 +141,13 @@ func Clamp(proposed, ceiling types.RunPolicySpec, limits types.GovernanceLimits)
 		out.LLMInspection = nil
 	}
 
-	// Allowed methods: empty means "all" here (unlike AllowedDomains' default-deny), so an empty
-	// proposal must adopt the ceiling's restriction rather than silently allowing any method.
-	if len(ceiling.AllowedMethods) > 0 {
-		if len(out.AllowedMethods) == 0 {
-			warns = append(warns, fmt.Sprintf("allowed_methods restricted to operator's: %s", strings.Join(ceiling.AllowedMethods, ",")))
-			out.AllowedMethods = append([]string(nil), ceiling.AllowedMethods...)
-		} else {
-			allowed := toSet(ceiling.AllowedMethods)
-			kept, dropped := partition(out.AllowedMethods, func(m string) bool { return allowed[strings.ToLower(strings.TrimSpace(m))] })
-			if len(dropped) > 0 {
-				warns = append(warns, fmt.Sprintf("dropped %d method(s) not in operator allowlist: %s", len(dropped), strings.Join(dropped, ",")))
-				out.AllowedMethods = kept
-			}
-		}
-	}
+	warns = clampMethods(&out, ceiling, warns)
 
 	out.UIApps = clampUIApps(out.UIApps, ceiling.UIApps, &warns)
 
 	out.EligibleGrants = clampGrants(out.EligibleGrants, ceiling, &warns)
 
-	warns = clampResources(&out, ceiling, limits, warns)
+	warns = clampResources(&out, ceiling, limits, size, untouched, warnSize, warns)
 
 	// Auto-stop: cap at the ceiling's positive maximum. 0 (platform default) and negative (never reap —
 	// most permissive) both rank more permissive than an explicit cap and are capped the same way. When
@@ -161,29 +170,30 @@ func Clamp(proposed, ceiling types.RunPolicySpec, limits types.GovernanceLimits)
 }
 
 // clampResources is Clamp's resource step, split out to keep Clamp readable.
-func clampResources(out *types.RunPolicySpec, ceiling types.RunPolicySpec, limits types.GovernanceLimits, warns []string) []string {
-	// Resources: cap each set field at the ceiling's; an unset ceiling is not "no opinion" (Clamp is the
-	// operator-ceiling authority for every caller), so fall back to
-	// (sizing.EffectiveLimits(): the deployment's configured default, else
-	// sizing.Default{CPUMillis,MemoryMiB,PidsLimit}) rather than leave it unbounded. DiskMiB has no
-	// such default and stays skip-when-both-unset.
-	effCeilingResources := ceiling.Resources
-	if effCeilingResources == nil {
-		eff := sizing.EffectiveLimits()
-		effCeilingResources = &types.ResourceLimits{
-			CPUMillis: int(eff.CPUMillis),
-			MemoryMiB: int(eff.MemoryMiB),
-			PidsLimit: int(eff.PidsLimit),
-		}
+// size is the ceiling's own CPU and memory the member cap reads and untouched the member default it
+// starts from; warnSize says whether a cut of either joins the warning.
+func clampResources(out *types.RunPolicySpec, ceiling types.RunPolicySpec, limits types.GovernanceLimits, size, untouched types.ResourceLimits, warnSize bool, warns []string) []string {
+	// Resources: an unset ceiling is not "no opinion" (Clamp is the operator-ceiling authority for every
+	// caller), so it stands at sizing.EffectiveLimits() (the deployment's configured default, else
+	// sizing.Default{CPUMillis,MemoryMiB,PidsLimit}) rather than leave a field unbounded. CPU and
+	// memory are bounded by the member cap (runnerpool.MemberCap, #1949) from the member's default
+	// size, the rule preflight and dispatch also apply; an unset field is filled from the ceiling's
+	// size, never above that cap. DiskMiB has no such default and stays skip-when-both-unset.
+	eff := sizing.EffectiveLimits()
+	var own types.ResourceLimits
+	pids := int(eff.PidsLimit)
+	if ceiling.Resources != nil {
+		own, pids = *ceiling.Resources, ceiling.Resources.PidsLimit
 	}
-	// The profile's own CPU/memory maximum is one more ceiling on the same fields, so a fill
-	// from the ceiling and a cut of a request both stop at it.
-	if limits.MaxCPUMillis > 0 || limits.MaxMemoryMiB > 0 {
-		eff := sizing.EffectiveLimits()
-		capped := *effCeilingResources
-		capped.CPUMillis = capToLimit(capped.CPUMillis, limits.MaxCPUMillis, int(eff.CPUMillis))
-		capped.MemoryMiB = capToLimit(capped.MemoryMiB, limits.MaxMemoryMiB, int(eff.MemoryMiB))
-		effCeilingResources = &capped
+	effCeilingResources := &types.ResourceLimits{
+		CPUMillis: runnerpool.MemberCap(size.CPUMillis, limits.MaxCPUMillis, untouched.CPUMillis),
+		MemoryMiB: runnerpool.MemberCap(size.MemoryMiB, limits.MaxMemoryMiB, untouched.MemoryMiB),
+		PidsLimit: pids,
+		DiskMiB:   own.DiskMiB,
+	}
+	fill := types.ResourceLimits{
+		CPUMillis: min(cmp.Or(own.CPUMillis, int(eff.CPUMillis)), effCeilingResources.CPUMillis),
+		MemoryMiB: min(cmp.Or(own.MemoryMiB, int(eff.MemoryMiB)), effCeilingResources.MemoryMiB),
 	}
 	{
 		before := out.Resources
@@ -193,23 +203,24 @@ func clampResources(out *types.RunPolicySpec, ceiling types.RunPolicySpec, limit
 		}
 		// An unset (<=0) field is FILLED from the ceiling silently: the policy
 		// asked for no particular size, so nothing it asked for was cut. Only a
-		// positive request above the ceiling is a cap, and only a cap warns.
-		exceeded := false
-		capField := func(proposed *int, ceil int) {
+		// positive request above the cap is cut, and only a cut warns.
+		capField := func(proposed *int, ceil, fill int) (cut bool) {
 			if ceil <= 0 {
-				return
+				return false
 			}
-			if *proposed > ceil {
-				exceeded = true
+			switch {
+			case *proposed > ceil:
+				*proposed, cut = ceil, true
+			case *proposed <= 0:
+				*proposed = fill
 			}
-			if *proposed <= 0 || *proposed > ceil {
-				*proposed = ceil
-			}
+			return cut
 		}
-		capField(&cr.CPUMillis, effCeilingResources.CPUMillis)
-		capField(&cr.MemoryMiB, effCeilingResources.MemoryMiB)
-		capField(&cr.PidsLimit, effCeilingResources.PidsLimit)
-		capField(&cr.DiskMiB, effCeilingResources.DiskMiB)
+		cpu := capField(&cr.CPUMillis, effCeilingResources.CPUMillis, fill.CPUMillis)
+		mem := capField(&cr.MemoryMiB, effCeilingResources.MemoryMiB, fill.MemoryMiB)
+		exceeded := warnSize && (cpu || mem)
+		exceeded = capField(&cr.PidsLimit, effCeilingResources.PidsLimit, effCeilingResources.PidsLimit) || exceeded
+		exceeded = capField(&cr.DiskMiB, effCeilingResources.DiskMiB, effCeilingResources.DiskMiB) || exceeded
 		// Governance limit folded into the same warning; bounds a non-zero request only (see CapDiskMiB).
 		if capped := CapDiskMiB(cr.DiskMiB, limits.MaxEphemeralDiskMiB); capped != cr.DiskMiB {
 			cr.DiskMiB, exceeded = capped, true
@@ -391,26 +402,36 @@ func CapDiskMiB(disk, ceil int) int {
 	return disk
 }
 
-// capToLimit folds a profile's CPU or memory maximum into a ceiling value: the lower of the two,
-// where an unset ceiling stands at def (the deployment's size) rather than at "no bound". max <= 0
-// leaves the ceiling alone.
-func capToLimit(ceil, max, def int) int {
-	if max <= 0 {
-		return ceil
+// MemberDefault is a governed member's size before anything asks for one: the deployment's own
+// default size (its default policy's, else the platform's; a zero field of deployment is
+// sizing.EffectiveLimits'), lowered per field to the ceiling's own size where it sets one. It is the
+// untouched size runnerpool.MemberCap starts from when no admin-authored policy names one, so the
+// member cap is never raised past a ceiling below the default (a resolved ceiling carries the
+// deployment's own size where its profile sets none).
+func MemberDefault(deployment types.ResourceLimits, ceiling *types.ResourceLimits) types.ResourceLimits {
+	eff := sizing.EffectiveLimits()
+	out := types.ResourceLimits{CPUMillis: cmp.Or(deployment.CPUMillis, int(eff.CPUMillis)), MemoryMiB: cmp.Or(deployment.MemoryMiB, int(eff.MemoryMiB))}
+	if ceiling != nil {
+		if ceiling.CPUMillis > 0 {
+			out.CPUMillis = min(out.CPUMillis, ceiling.CPUMillis)
+		}
+		if ceiling.MemoryMiB > 0 {
+			out.MemoryMiB = min(out.MemoryMiB, ceiling.MemoryMiB)
+		}
 	}
-	if ceil <= 0 {
-		ceil = def
-	}
-	return min(ceil, max)
+	return out
 }
 
 // CapResources bounds a run's CPU and memory by the profile's maximums and reports whether it
 // changed anything. It is the resource-only half of Clamp, for the member launch that carries no
-// policy: its spec is the profile's own ceiling, which Clamp must not process because it drops
-// workspace mounts. A zero field means "the deployment's default size" (sizing.EffectiveLimits),
-// so it is cut only when that default is itself above the maximum. Returns a FRESH block, never an
-// in-place write, so one shared spec cannot re-size every later run that reads it.
-func CapResources(r *types.ResourceLimits, limits types.GovernanceLimits) (*types.ResourceLimits, bool) {
+// policy (its spec is the profile's own ceiling, which Clamp must not process because it drops
+// workspace mounts), and dispatch's re-assertion of the same bound. Each maximum is the member cap
+// with no ceiling size (runnerpool.MemberCap): the maximum, never below floor, the member default
+// (MemberDefault), so it never cuts what preflight said a run gets (#1949); a zero floor field leaves
+// the maximum as it is. A zero field of r is the platform default (sizing.EffectiveLimits), the size
+// the runner gives it. Returns a FRESH block, never an in-place write, so one shared spec cannot
+// re-size every later run that reads it.
+func CapResources(r *types.ResourceLimits, limits types.GovernanceLimits, floor types.ResourceLimits) (*types.ResourceLimits, bool) {
 	if limits.MaxCPUMillis <= 0 && limits.MaxMemoryMiB <= 0 {
 		return r, false
 	}
@@ -419,18 +440,14 @@ func CapResources(r *types.ResourceLimits, limits types.GovernanceLimits) (*type
 		out = *r
 	}
 	eff := sizing.EffectiveLimits()
-	cpu, mem := out.CPUMillis, out.MemoryMiB
-	if limits.MaxCPUMillis > 0 {
-		if cur := cmp.Or(cpu, int(eff.CPUMillis)); cur > limits.MaxCPUMillis {
-			out.CPUMillis = limits.MaxCPUMillis
+	bound := func(field *int, profileMax, floor, def int) {
+		if c := runnerpool.MemberCap(0, profileMax, floor); profileMax > 0 && cmp.Or(*field, def) > c {
+			*field = c
 		}
 	}
-	if limits.MaxMemoryMiB > 0 {
-		if cur := cmp.Or(mem, int(eff.MemoryMiB)); cur > limits.MaxMemoryMiB {
-			out.MemoryMiB = limits.MaxMemoryMiB
-		}
-	}
-	if out.CPUMillis == cpu && out.MemoryMiB == mem {
+	bound(&out.CPUMillis, limits.MaxCPUMillis, floor.CPUMillis, int(eff.CPUMillis))
+	bound(&out.MemoryMiB, limits.MaxMemoryMiB, floor.MemoryMiB, int(eff.MemoryMiB))
+	if r == nil || (out.CPUMillis == r.CPUMillis && out.MemoryMiB == r.MemoryMiB) {
 		return r, false
 	}
 	return &out, true
@@ -727,6 +744,27 @@ func union(a, b []string) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// clampMethods bounds allowed_methods by a ceiling that names some. Empty means "all" here (unlike
+// AllowedDomains' default-deny), and the proxy drops a blank entry, so whenever nothing it would read
+// is left (no proposal, a proposal sharing no method with the ceiling, or only blank entries) the
+// result is the ceiling's own list, never one that allows any method.
+func clampMethods(out *types.RunPolicySpec, ceiling types.RunPolicySpec, warns []string) []string {
+	if len(ceiling.AllowedMethods) == 0 {
+		return warns
+	}
+	allowed := toSet(ceiling.AllowedMethods)
+	kept, dropped := partition(out.AllowedMethods, func(m string) bool { return allowed[strings.ToLower(strings.TrimSpace(m))] })
+	if len(dropped) > 0 {
+		warns = append(warns, fmt.Sprintf("dropped %d method(s) not in operator allowlist: %s", len(dropped), strings.Join(dropped, ",")))
+		out.AllowedMethods = kept
+	}
+	if len(normMethods(out.AllowedMethods)) == 0 {
+		warns = append(warns, fmt.Sprintf("allowed_methods restricted to operator's: %s", strings.Join(ceiling.AllowedMethods, ",")))
+		out.AllowedMethods = append([]string(nil), ceiling.AllowedMethods...)
+	}
+	return warns
 }
 
 // clampOperatorSwitches forces off boolean controls only an operator may widen: allow-all egress and

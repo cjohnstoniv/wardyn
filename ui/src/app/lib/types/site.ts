@@ -35,7 +35,13 @@ export interface EgressRedirect {
   ecosystem?: string;
 }
 
+export interface RunnerSettings {
+  enabled: boolean;
+}
+
 export interface SiteConfig {
+  // Dedicated runner administration owns changes; generic PUT retains this block.
+  readonly runners?: RunnerSettings;
   upstream_proxy_secret_ref?: string;
   // The corporate upstream proxy URL written IN THE CLEAR — topology, not a
   // credential. Must not embed a userinfo (user:pass@); the server 400s that
@@ -77,6 +83,12 @@ export interface SiteConfig {
   // reader exists yet (the Network step's rendering ships later); the field
   // mirrors the server shape so a GET/PUT round-trip never drops it.
   internal_hosts?: InternalHost[];
+  // types.SiteConfig.Egress — the operator's egress-grading policy. A GOVERNANCE
+  // write: changed only through PUT /governance/egress-baseline (security tier,
+  // four-eyes covered), never by PUT /site-config, which refuses a changed block.
+  // Stripped from every GET-spread body (SERVER_OWNED_SITE_CONFIG_KEYS) so a save
+  // that never meant to touch it cannot trip that refusal.
+  egress?: SiteEgress;
   // The org's workspace-provider policy — which git hosts a run may clone from
   // and with which credential lanes, plus the storage ceilings. Absent (the
   // default) is legacy open mode. Written through its own
@@ -192,12 +204,14 @@ export interface PolicyContact {
 // does, through PUT /workspace-providers with an If-Match — and a stale spread
 // would silently revert an admin's providers to whatever this tab last read.
 export const SERVER_OWNED_SITE_CONFIG_KEYS = [
+  "runners",
   "integrations",
   "onboarding_completed_at",
   "workspace_providers",
   "agent_providers",
   "model_providers",
   "branding",
+  "egress",
   "effective_scm_hosts",
   "withheld_scm_hosts",
 ] as const satisfies readonly (keyof SiteConfig)[];
@@ -231,13 +245,15 @@ export interface ModelProviders {
   providers?: ModelProvider[];
 }
 
-// GET /model-providers' body — Go's modelProvidersRead
-// (internal/api/model_providers_api.go): the stored block plus, per provider
+// GET /model-providers' body — Go's types.ModelProvidersRead
+// (internal/types/model_provider.go): the stored block plus, per provider
 // id, how many people hold a credential of their own for it (0 included;
 // absent with no providers). Read-only: never send it back on a PUT, whose
 // strict decode refuses it.
 export interface ModelProvidersRead extends ModelProviders {
   connected_people?: Record<string, number>;
+  entra_login_configured: boolean;
+  kinds_available: ModelProviderKind[];
 }
 
 // Closed set, server-validated.
@@ -331,6 +347,8 @@ export interface GitProvider {
   // (LegacyGitLane) — the field narrows, it never widens, and a lane added
   // after that list was frozen must be NAMED here to be usable.
   lanes?: GitLane[];
+  // Nonsecret operator-configured metadata; run facts expose it only to operators.
+  github_app_install_url?: string;
   // Whose credential this row's lanes use. Absent reads as "shared". The
   // "entra" lane REQUIRES "per_user" — the server refuses anything else,
   // because there is no such thing as a shared Entra sign-in.
@@ -371,6 +389,11 @@ export interface ADOEntraConfig {
   // why it is optional rather than a plain boolean the console might write as
   // false by omission.
   rest_api?: boolean;
+  // Hand this connection's minted tokens to a self-hosted runner's keystore
+  // (runner_resident). Absent reads as off.
+  runner_resident?: boolean;
+  // Also put that token into the sandbox. Requires runner_resident.
+  runner_resident_sandbox?: boolean;
 }
 
 // The closed git-provider kinds. A self-hosted forge is not a third kind: it is
@@ -409,6 +432,18 @@ export interface EphemeralProvider {
 export interface UserDriveProvider {
   disabled?: boolean;
   max_size_mib?: number;
+  // The switch for people creating their own drives. Absent = off.
+  member_create?: MemberDrivePolicy;
+}
+
+// types.MemberDrivePolicy. `max_per_person` is 1..20 when enabled. `size_mib` is
+// the k8s claim request, required there and refused on Docker, whose volumes have
+// no size limit. `storage_class` is k8s only; absent = the cluster default.
+export interface MemberDrivePolicy {
+  enabled?: boolean;
+  max_per_person?: number;
+  size_mib?: number;
+  storage_class?: string;
 }
 
 // One SiteConfig.internal_hosts entry — see that field's doc.
@@ -420,4 +455,24 @@ export interface InternalHost {
   // fc00::/7, or 100.64.0.0/10 — validated server-side). Empty means the full
   // liftable set for a matching host.
   cidrs?: string[];
+  // Grades this host (and its subdomains) as baseline egress, like
+  // SiteEgress.baseline_hosts. Absent is false: declaring an internal host
+  // never changes a grade on its own. Changed only through
+  // PUT /governance/egress-baseline; PUT /site-config refuses a changed set.
+  baseline?: boolean;
+}
+
+// types.SiteEgress. baseline_hosts are exact lowercase hostnames the composer
+// grades as baseline egress beside its built-in public set: grading only, never
+// an allow.
+export interface SiteEgress {
+  baseline_hosts?: string[];
+}
+
+// The body of GET/PUT /governance/egress-baseline: the whole declaration, the
+// only writer of both lists. internal_host_suffixes are the host_suffix values of
+// the internal_hosts entries marked baseline; each must name a stored entry.
+export interface EgressBaseline {
+  baseline_hosts: string[];
+  internal_host_suffixes: string[];
 }

@@ -33,6 +33,7 @@ import { toast } from "sonner";
 
 import { relativeTime, absoluteTime } from "../../lib/format";
 import { harnessDisplayNames, providerAttention, type ProviderAttention } from "../../lib/model-access";
+import { modelConnectionCause } from "../../lib/model-connection-cause";
 import { AGENTS } from "../../lib/workspace-providers-copy";
 import { MODEL_ACCESS_BANNER } from "./model-access-copy";
 import { useModelAccessDoor, useShellSetupStatus } from "./model-access-context";
@@ -61,6 +62,11 @@ export function providerStripLine(
   harnesses: string,
 ): { sentence: string; action?: string; button: string; title: string; tone: "warning" | "info"; dismissible: boolean } | null {
   const name = a.provider.name || a.provider.id;
+  // Only a cause with its own button (a removed or unreadable connection) speaks on the strip. never_connected is
+  // the first-run state, which B1/B4/B5 already say with the harness that needs it; its destination line belongs to
+  // the connection row and the door.
+  const cause = modelConnectionCause(a.provider, { ...a, provider: a.provider.id });
+  if (cause?.button) return { sentence: cause.line, button: cause.button, title: "", tone: "warning", dismissible: false };
   switch (a.provider.kind) {
     case "bedrock_sso":
       if (a.state === "expired_signin")
@@ -214,6 +220,10 @@ export function ModelAccessBanner() {
             <button
               type="button"
               onClick={() => {
+                if (one.a.state === "not_configured" && one.a.cause === "store_unreadable") {
+                  void door.refresh();
+                  return;
+                }
                 openedHere.current = true;
                 door.openDoor({ for: { provider: one.a.provider.id } });
               }}
@@ -234,6 +244,8 @@ export function ModelAccessBanner() {
         // /setup/status's credential_storage (design F-3) — the key door's
         // store-mode notice line and remove-confirm retention line key off it.
         credentialStorage={status?.credential_storage}
+        access={status?.provider_access}
+        onRecheck={door.refresh}
         focusSeq={door.focusSeq}
         onCancel={door.closeDoor}
         onDone={(message) => {

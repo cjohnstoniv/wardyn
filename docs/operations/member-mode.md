@@ -27,10 +27,10 @@ on your EXISTING session cookie; your role is never rewritten, only the
 - Every audit row the session writes still names **your own sub**: no
   impersonation. Delegation is recorded as delegation, and there is no way
   to become anybody else.
-- The transition itself is audited as `auth.user_view.set`
-  (`auth.member_mode` dual-emitted alongside it through 0.8.x, [Renamed in
-  0.8](../OPERATIONS.md#renamed-in-08)) with `enabled`, `real_role`, and
-  `no_credential` on the preview below.
+- The transition itself is audited as `auth.user_view.set` (the pre-0.8
+  `auth.member_mode` name was dual-emitted through 0.8.x and is gone in 0.9,
+  [Renamed in 0.8](../OPERATIONS.md#renamed-in-08)) with `enabled`,
+  `real_role`, and `no_credential` on the preview below.
 - Each `403` an **admin-tier gate** raises while the mode is on carries
   `user_view: true` on its `authz.denied` row — the two middleware
   chokepoints and every in-handler refusal that raises the same two
@@ -100,8 +100,7 @@ absent for the rest of the session.
   to sign in — the capture would land on your own identity."*
 - Nothing is deleted: your session sits untouched in the store and comes
   back the moment you exit.
-- The transition is audited as `auth.user_view.set` (`auth.member_mode`
-  dual-emitted alongside it through 0.8.x) with `no_credential: true`
+- The transition is audited as `auth.user_view.set` with `no_credential: true`
   beside `enabled` and `real_role`.
 
 Inside the preview, **signing in is refused** — `POST /model-providers/{id}/sign-in`

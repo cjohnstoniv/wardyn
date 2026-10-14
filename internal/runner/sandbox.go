@@ -191,6 +191,8 @@ func BuildProxyConfig(runID uuid.UUID, pc ProxyConfig, port int) ([]byte, error)
 		BrokeredPATGrantIDs:  pc.BrokeredPATGrantIDs,
 		ADOGrant:             pc.ADOGrant,
 		AzureGates:           pc.AzureGates,
+		GitHubAPI:            pc.GitHubAPI,
+		AzureARM:             pc.AzureARM,
 		UpstreamProxyURL:     pc.UpstreamProxyURL,
 		TrustedCAPEM:         pc.TrustedCAPEM,
 		InternalHosts:        pc.InternalHosts,
@@ -200,6 +202,13 @@ func BuildProxyConfig(runID uuid.UUID, pc ProxyConfig, port int) ([]byte, error)
 		LLMUnavailableDetail: pc.LLMUnavailableDetail,
 		Unattended:           pc.Unattended,
 		Attribution:          pc.Attribution,
+		PushRuleSets:         pc.PushRuleSets,
+		PushRuleBase:         pc.PushRuleBase,
+		HarnessToolRules:     pc.HarnessToolRules,
+		ViaOrgRoutes:         pc.ViaOrgRoutes,
+		HarnessCredentials:   pc.HarnessCredentials,
+		MCPServers:           pc.MCPServers,
+		MCPBindings:          pc.MCPBindings,
 	}
 	return json.Marshal(cfg)
 }

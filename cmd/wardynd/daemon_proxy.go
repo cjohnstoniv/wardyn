@@ -235,6 +235,11 @@ func installBootTransport(rt http.RoundTripper, trustedCAPool *x509.CertPool, f 
 	return bootDaemonProxy(tr, f)
 }
 
+// linkLocalCredentialHosts are the metadata endpoints the AWS SDK's default
+// credential chain calls over the daemon transport: IMDS, the ECS task role
+// endpoint and the EKS Pod Identity agent (IPv4 and IPv6).
+var linkLocalCredentialHosts = []string{"169.254.169.254", "169.254.170.2", "169.254.170.23", "fd00:ec2::23", "fd00:ec2::254"}
+
 // bootDaemonProxy is installBootTransport's call-site glue for
 // installDaemonProxy/installDaemonProxySecret: resolves the auto-bypass
 // hosts from the RAW boot flags (validated Configs don't exist yet at this
@@ -250,6 +255,9 @@ func bootDaemonProxy(tr *http.Transport, f *bootFlags) error {
 		daemonProxyBypassHost(*f.awsSSOEndpointOverride),
 		daemonProxyBypassHost(*f.oidcInternalIss),
 	}
+	// Link-local credential endpoints (EC2 IMDS, ECS task role, EKS Pod Identity
+	// agent) are reached only from the host itself, never through a proxy.
+	autoBypass = append(autoBypass, linkLocalCredentialHosts...)
 
 	plainURL := strings.TrimSpace(*f.daemonProxyURL)
 	secretFile := strings.TrimSpace(*f.daemonProxySecretFile)

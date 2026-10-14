@@ -30,14 +30,8 @@ const maxUserDriveFieldLen = 512
 // cannot read the environment.
 func ValidateUserDrive(d *UserDrive, runnerTarget string) error {
 	d.Name = strings.TrimSpace(d.Name)
-	if d.Name == "" {
-		return fmt.Errorf("name: required")
-	}
-	if len(d.Name) > maxUserDriveNameLen || !driveTextIsClean(d.Name) {
-		return fmt.Errorf("name: invalid")
-	}
-	if DriveSlug(d.Name) == "" {
-		return fmt.Errorf("name: must contain at least one letter or digit (it names the drive's storage objects)")
+	if err := ValidateDriveName(d.Name); err != nil {
+		return err
 	}
 	if !d.Backend.Valid() {
 		return fmt.Errorf("backend: invalid %q", d.Backend)
@@ -106,6 +100,22 @@ func ValidateUserDrive(d *UserDrive, runnerTarget string) error {
 	}
 	if !d.Reclaim.Valid() {
 		return fmt.Errorf("reclaim: invalid %q", d.Reclaim)
+	}
+	return nil
+}
+
+// ValidateDriveName is the one name rule for admin and member drives. It checks
+// strings.TrimSpace(name), which is the form the caller stores.
+func ValidateDriveName(name string) error {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return fmt.Errorf("name: required")
+	}
+	if len(name) > maxUserDriveNameLen || !driveTextIsClean(name) {
+		return fmt.Errorf("name: invalid")
+	}
+	if DriveSlug(name) == "" {
+		return fmt.Errorf("name: must contain at least one letter or digit (it names the drive's storage objects)")
 	}
 	return nil
 }

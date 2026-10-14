@@ -95,12 +95,14 @@ const defaultUISessionTTL = 8 * time.Hour
 // Principal/Role/AuthorizedAt are what make it re-checkable rather than final:
 // see uiSessionStillAuthorized.
 type uiSession struct {
-	Run       uuid.UUID `json:"r"`
-	App       string    `json:"a"`
-	Port      int       `json:"p"`
-	Principal string    `json:"s"`
-	Role      string    `json:"o"`
-	Expires   int64     `json:"e"`
+	// Set only from the authorized run at dial time; never read from the cookie.
+	SandboxRef string    `json:"-"`
+	Run        uuid.UUID `json:"r"`
+	App        string    `json:"a"`
+	Port       int       `json:"p"`
+	Principal  string    `json:"s"`
+	Role       string    `json:"o"`
+	Expires    int64     `json:"e"`
 	// IssuedAt is when the ticket was redeemed, in Unix seconds. It is the
 	// staleness bound the TTL knob re-applies to an already-minted cookie, and
 	// keys the re-assert debounce. Absent (a pre-0.7.4 cookie) is refused, not
@@ -114,10 +116,16 @@ type uiSession struct {
 	// the verified identity's, for a revoke that names it.
 	AuthorizedAt int64  `json:"t"`
 	Email        string `json:"m,omitempty"`
+	// RevSeq is the revocation sequence the entry ticket recorded: a cut with a greater one ends this
+	// session whatever the clock says. Absent, the session is ordered on AuthorizedAt.
+	RevSeq int64 `json:"q,omitempty"`
 	// Via is the portal the entry ticket was minted through (#1142), nil
 	// otherwise. The relay audits on the daemon's context, so the session
 	// carries it onto every row it writes after the entry (#1234).
 	Via *types.DelegationVia `json:"v,omitempty"`
+	// Service is the service identity whose run the session entered as its sponsor (#1508), empty
+	// otherwise; every row the session writes names it with entry=sponsor.
+	Service string `json:"c,omitempty"`
 }
 
 // auditUISession writes one ui.* row for sess: its run, its principal, and the
@@ -126,7 +134,10 @@ func (s *Server) auditUISession(sess uiSession, action, target, outcome string, 
 	if sess.Via != nil {
 		data["via"] = sess.Via
 	}
-	s.auditUI(&sess.Run, types.ActorHuman, sess.Principal, action, target, outcome, data)
+	if sess.Service != "" {
+		data["service_identity"], data["entry"] = sess.Service, sponsorEntry
+	}
+	s.recordStreamAudit(s.cfg.BaseCtx, sess.SandboxRef, s.auditEvent(&sess.Run, types.ActorHuman, sess.Principal, action, target, outcome, mustJSON(data)))
 }
 
 type uiSessionCtxKey struct{}
@@ -250,7 +261,7 @@ func (s *Server) decodeUISession(r *http.Request, now time.Time) (uiSession, boo
 // The cookie is valid for up to the session TTL, which is long enough for a
 // human to lose the run or be revoked outright inside one session. The console
 // session stops on its very next request when an admin revokes it, attach
-// re-checks per connect behind a 30s ticket, and SSH bounds a stale admin
+// re-checks while the terminal is open (attach_authority.go), and SSH bounds a stale admin
 // stamp with WARDYN_SSH_ROLE_TTL — the relay was the one lane where
 // "authorized at enter" meant "authorized until the cookie expires", while
 // holding an editor with an in-sandbox terminal.
@@ -260,7 +271,8 @@ func (s *Server) decodeUISession(r *http.Request, now time.Time) (uiSession, boo
 // is what catches that one, and a session opened through a portal is also
 // bound to the portal's grant (#1475). The ownership rule is mayEnterRun's, so
 // an admin cookie minted before the entry rule narrowed dies on a person's run
-// at its next re-assert.
+// at its next re-assert. A sponsor's session rides the same call: it ends at the next
+// re-assert once the sponsor changed or the identity was suspended or retired.
 //
 // NOT covered, deliberately: a ROLE demotion. sess.Role is the cookie's
 // login-time snapshot and is never re-derived, exactly as the console session's
@@ -284,9 +296,13 @@ func (s *Server) uiSessionStillAuthorized(ctx context.Context, sess uiSession, r
 				http.StatusServiceUnavailable, uiSessionUnverifiableMsg)
 		}
 	}
-	if !mayEnterRun(run, sess.Principal, sess.Role == oidc.RoleAdmin) {
+	if !s.mayEnterRunOrSponsor(ctx, run, sess.Principal, sess.Role == oidc.RoleAdmin, time.Unix(sess.AuthorizedAt, 0).UTC()) {
 		return s.uiDenyReassert(sess, uiDeniedReasonNotAuthorized,
 			http.StatusForbidden, uiSessionNoLongerAuthorizedMsg)
+	}
+	if backgroundOnlyRefusal(run, "web application gateway") != nil {
+		return s.uiDenyReassert(sess, reasonRunBackgroundOnly,
+			http.StatusConflict, runBackgroundOnlyMsg("web application gateway"))
 	}
 	if s.cfg.SessionRevocations == nil {
 		return nil
@@ -294,8 +310,8 @@ func (s *Server) uiSessionStillAuthorized(ctx context.Context, sess uiSession, r
 	// The cutoff is compared against the ticket's authority time, never the
 	// redemption time, and both identities ride the cookie, so a revoke that
 	// names the email reaches an open relay session as it does the console's.
-	revoked, err := s.cfg.SessionRevocations.IsSessionRevoked(ctx, sess.Principal, sess.Email,
-		time.Unix(sess.AuthorizedAt, 0).UTC())
+	revoked, err := oidc.IsRevoked(ctx, s.cfg.SessionRevocations, sess.Principal, sess.Email,
+		oidc.Issue{At: time.Unix(sess.AuthorizedAt, 0).UTC(), Seq: sess.RevSeq})
 	if err != nil {
 		// Fail CLOSED. A revocation lookup that cannot answer is the one case
 		// where continuing would serve the credential the admin just cancelled,
@@ -309,6 +325,14 @@ func (s *Server) uiSessionStillAuthorized(ctx context.Context, sess uiSession, r
 			http.StatusForbidden, uiSessionNoLongerAuthorizedMsg)
 	}
 	return nil
+}
+
+// uiRefuseBackground answers uiEnterCommon's refusal of a background task, for
+// any caller (a super admin included): audited, no cookie, no redirect.
+func (s *Server) uiRefuseBackground(w http.ResponseWriter, r *http.Request, rf *runRefusal, runID uuid.UUID, app string, ta ticketActor) {
+	s.auditUI(&runID, types.ActorHuman, ta.principal, "ui.authorize", app, "denied",
+		ta.withVia(map[string]any{"reason": reasonRunBackgroundOnly}))
+	rf.write(s, w, r)
 }
 
 // uiDenyReassert audits the refusal and returns it. One place, so an arm cannot

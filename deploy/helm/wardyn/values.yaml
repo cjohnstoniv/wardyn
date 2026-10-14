@@ -61,7 +61,7 @@ ha:
 # of the Service's endpoints; liveness and startup stay on /healthz either way.
 #
 # ONLY OVERRIDE THIS FOR AN OLD IMAGE. /readyz was added in 0.6, and the empty
-# image.tag above resolves to .Chart.AppVersion, which is 0.8.9 — so the default
+# image.tag above resolves to .Chart.AppVersion, which is 0.9.0 — so the default
 # install serves it. An image.tag PINNED at or below 0.5.0 does not: the probe
 # 404s forever, the pod never becomes Ready, and the rollout hangs with no other
 # symptom. Pin it back with `--set readinessProbe.path=/healthz` and accept
@@ -138,6 +138,8 @@ serviceAccount:
   # handing pods/exec + secrets/networkpolicies create-delete to every other
   # pod in the namespace that also uses it.
   name: ""
+  # e.g. IRSA for kek.provider=awskms:
+  #   eks.amazonaws.com/role-arn: arn:aws:iam::<account>:role/<role>
   annotations: {}
   # wardynd does not call the API server in v0.x, so the projected token is
   # unnecessary attack surface — do not auto-mount it by default. Applied on the
@@ -186,8 +188,7 @@ auth:
   # (plus WARDYN_OIDC_OPERATOR_EMAILS or WARDYN_OIDC_ROLE_MAP) and refuses to
   # render — same as wardynd itself refuses to boot (validateSSOOnlyPosture,
   # cmd/wardynd/boot_posture.go) — alongside adminToken above, or
-  # env.WARDYN_LOCAL_MODE / WARDYN_USER_DESKTOP (deprecated alias WARDYN_MEMBER_MODE,
-  # removed in 0.9) / WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST.
+  # env.WARDYN_LOCAL_MODE / WARDYN_USER_DESKTOP / WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST.
   ssoOnly: false
 
 # Leaver deprovisioning over SCIM 2.0 (docs/OPERATIONS.md "Leavers and SCIM"). An identity provider
@@ -343,9 +344,10 @@ secretStore:
 # can be removed. One key service at a time.
 kek:
   provider: local
-  # true makes wardynd refuse to start while the local key wraps credentials
-  # (provider local, with no external store): a deployment that mandates key
-  # custody. The way out is provider transit or azurekv, then `wardynd -rewrap`.
+  # true requires a key service for new credential writes: wardynd refuses to
+  # start with provider local and no external store, a deployment that
+  # mandates key custody. Rows the local key already wraps do not refuse a
+  # boot; set provider transit, azurekv or awskms, then `wardynd -rewrap` moves them.
   required: false
   # on seals each person's stored credentials under a key of that person's own
   # (enc_version 3), which erasing the person destroys. Boot keys and the
@@ -376,6 +378,7 @@ kek:
   #         key: https://beta.vault.azure.net/keys/wrap
   #         signingKey: https://beta.vault.azure.net/keys/sign
   #         clientId: 00000000-0000-0000-0000-000000000000
+  # Not with provider awskms: AWS KMS key domains are not supported yet.
   domains: {}
   transit:
     mount: transit
@@ -404,6 +407,16 @@ kek:
     # as keyPlatform, that signs every wrap keyPlatform makes. Set together with
     # keyPlatform; a key other than signingKey.
     signingKeyPlatform: ""
+  awskms:
+    # Full ARN, arn:<partition>:kms:<region>:<account>:key/<id>, of the symmetric
+    # AWS KMS key that wraps data keys; an alias or a bare key id refuses boot.
+    # Required with provider awskms; set with provider local it only reads the
+    # rows sealed under it (the way back with `wardynd -rewrap`). Reached with the
+    # AWS SDK's default credential chain: on EKS, IRSA (the
+    # eks.amazonaws.com/role-arn annotation under serviceAccount.annotations) or
+    # an EKS Pod Identity association, allowed kms:Encrypt and kms:Decrypt on
+    # this key only. No platform key and no key domains with it yet.
+    key: ""
 
 # Extra environment variables for wardynd (name: value). Use this to wire OIDC
 # (WARDYN_OIDC_*), TLS (WARDYN_TLS_*), audit sinks (WARDYN_AUDIT_SINKS), the default
@@ -653,7 +666,9 @@ k8s:
   # Off by default: nodes are cluster-scoped, and a tenant of a shared cluster may not be granted them. The
   # warning compares a run's requests to node SIZE, never to free capacity (other namespaces' pods are
   # invisible here), and the scheduler stays the authority. The ResourceQuota read needs no flag: it is a
-  # namespaced `list` on `resourcequotas` in the runner Role.
+  # namespaced `list` on `resourcequotas` in the runner Role. With no quota in the runs namespace it also lets
+  # wardynd measure the cluster at boot (the nodes' allocatable CPU, memory and ephemeral storage) and propose
+  # the cluster runner's limits; without either it sets none (deploy/kind/quickstart.sh turns it on for that).
   readNodes: false
   # Confinement-Class -> RuntimeClass NAME pins (WARDYN_CONFINEMENT_MAP's k8s
   # form, e.g. CC2=gvisor;CC3=kata-qemu). A k8s RuntimeClass object name
@@ -860,6 +875,14 @@ resources:
     cpu: 100m
     memory: 128Mi
 
+# Go runtime soft memory limit for wardynd (GOMEMLIMIT). Must be a quoted
+# string with a unit (B, KiB, MiB, GiB or TiB), e.g. "400MiB"; the chart
+# refuses anything else at render. Keep at about 80% of
+# resources.limits.memory, so the collector runs before the container limit is
+# reached; empty leaves Go's default (no limit). An env.GOMEMLIMIT or extraEnv
+# GOMEMLIMIT entry replaces it.
+goMemLimit: "400MiB"
+
 # Persistent recording volume. Off by default (Postgres is the source of truth;
 # recordings are optional). This switch decides the recording store: enabled =>
 # WARDYN_RECORDING_STORE=fs with WARDYN_RECORDING_DIR="<mountPath>/recordings";
@@ -941,6 +964,8 @@ drives:
   # runbook calls `POST /drives/{id}/reclaim` (super-admin only, refused while a
   # run still holds the claim, audited on every attempt that reaches the cluster) instead of running
   # `kubectl delete pvc` by hand. Reclaiming by hand stays supported either way.
+  #
+  # Member drives (storage.user_drive.member_create) need this on Kubernetes: without it creating one is refused.
   #
   # It does not weaken anything else: no run path, no teardown and no sweep can
   # reach a claim on either setting — a drive object carries no wardyn.run-id

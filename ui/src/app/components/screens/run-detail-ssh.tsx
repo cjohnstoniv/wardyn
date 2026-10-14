@@ -38,6 +38,7 @@ import { proxyCommandIsSafe } from "../../lib/ssh-proxy-command";
 import { entryErrorMessage, mayEnterRunOrUnknown } from "../../lib/run-entry";
 import { CodeBlock, Mono } from "../wardyn/code-block";
 import { RUN_SSH, UI_APPS_LANE, UI_APPS_LAUNCHER_MISSING_PREFIX } from "../wardyn/copy";
+import { RUN_SYNC } from "../wardyn/copy/runners";
 import { useOperator, useOperatorResolved, usePrincipal } from "../wardyn/operator-context";
 import { WidgetCard } from "../wardyn/primitives";
 import { cn } from "../ui/utils";
@@ -215,6 +216,7 @@ export function ConnectSSHCard({ run }: { run: RunDetail }) {
   const wardynURL = typeof window !== "undefined" ? window.location.origin + basePath() : "";
   const cliEnv = wardynURL && wardynURL !== "http://localhost:8080" ? `WARDYN_URL=${wardynURL} ` : "";
   const cliCommand = `${cliEnv}wardyn run attach ${run.id}`;
+  const syncLane = sshOn && run.placement !== "local" && !!run.agent_exec_id;
 
   return (
     // The body scrolls, not the tile: the canvas tile clips (overflow-hidden), so
@@ -348,6 +350,18 @@ export function ConnectSSHCard({ run }: { run: RunDetail }) {
         <Link to="/account" className="mt-3 inline-block text-xs font-medium text-primary hover:underline">
           Manage SSH keys
         </Link>
+      )}
+
+      {/* RS2 (M-RN-3): the Sync lane rides the SSH gateway's sftp channel, so it needs SSH on and a
+          sandbox with exec; a local run's disk link is the bind through its runner. */}
+      {syncLane && (
+        <div className="mt-4 border-t border-border pt-3">
+          <p className="text-xs font-medium text-foreground">{RUN_SYNC.LANE_TITLE}</p>
+          <p className="mt-0.5 mb-1.5 text-meta leading-relaxed text-muted-foreground">
+            {monoTokens(RUN_SYNC.LANE_BODY, "--pull", "wardyn sync")}
+          </p>
+          <CodeBlock text={`${cliEnv}${RUN_SYNC.LANE_COMMAND(run.id)}`} copyLabel={RUN_SYNC.COPY} />
+        </div>
       )}
 
       {/* UI apps lane LAST: the mock's S3 (docs/design/ui-sandboxes-mock/index.html)

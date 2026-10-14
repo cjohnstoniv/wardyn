@@ -48,7 +48,9 @@ var kernelDoors = map[string][]string{
 	"narrowUserInlinePolicy":    {"capEgressHost", "capSecret", "capWorkspace"},
 	"seededImageRefusal":        {"capImage"},
 	"workspaceProvidersRefusal": {"capWorkspaceProvider"},
-	"authorizeRunModelProvider": {"capModelProvider"},
+	"chooseRunModelProvider":    {"capModelProvider"},
+	// Every harness a run-mode request includes, beside the projected agent.
+	"harnessSetRefusalFor": {"capAgent"},
 	// A record session's model provider, chosen as a run's would be.
 	"recordProviderChoice": {"capModelProvider"},
 	// A revive or an extension, re-checked as the run's owner.
@@ -65,8 +67,10 @@ var kernelDoors = map[string][]string{
 	// inline policy's hosts.
 	"componentHostsBounded": {"capEgressHost"},
 	// Minting a personal credential.
-	"handleAddSSHKey":      {"capFeature"},
-	"handleCreateAPIToken": {"capFeature"},
+	"handleAddSSHKey": {"capFeature"},
+	"mintGuards":      {"capFeature"}, // both mint doors: POST /me/tokens and an invitation claim
+	// A sponsor entering a service identity's run: service_attach, asked with the operator step off (F6).
+	"sponsorMayEnter": {"capFeature"},
 	// The key and sign-in doors, answered as an unknown provider (D-6).
 	"denyProviderAsMissing": {"capModelProvider"},
 	// A workspace read hides a pin to a provider the reader may not use.

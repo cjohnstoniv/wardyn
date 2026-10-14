@@ -23,6 +23,10 @@ type RunInput struct {
 	ConfinementClass string `json:"confinement_class,omitempty"`
 	Interactive      bool   `json:"interactive,omitempty"`
 	DevcontainerRepo string `json:"devcontainer_repo,omitempty"`
+	// Baseline is the deployment's operator-declared extension of the egress
+	// baseline. Deployment data, not a run field: the API layer fills it from
+	// the site config so Grade stays pure.
+	Baseline Baseline `json:"-"`
 }
 
 // RiskLevel is Wardyn's deterministic grade for a single config choice.
@@ -93,6 +97,32 @@ var safeBaselineDomains = map[string]bool{
 	"pub.dev":               true,
 }
 
+// Baseline is the operator's extension of safeBaselineDomains: exact hosts, and
+// suffixes (an internal_hosts entry marked baseline matches itself and any
+// subdomain, by label). The zero value is the built-in set alone, so a
+// deployment that declares nothing grades exactly as before. Pure data: the API
+// layer reads the site config and hands it in.
+type Baseline struct {
+	Hosts    []string
+	Suffixes []string
+}
+
+// Has reports whether host is a baseline host: built-in, declared, or under a
+// declared suffix. Wildcard allowlist entries never match: a pattern is wider
+// than any single host the operator vouched for.
+func (b Baseline) Has(host string) bool {
+	host = strings.ToLower(strings.TrimSpace(host))
+	if strings.Contains(host, "*") {
+		return false
+	}
+	if safeBaselineDomains[host] || slices.Contains(b.Hosts, host) {
+		return true
+	}
+	return slices.ContainsFunc(b.Suffixes, func(sfx string) bool {
+		return host == sfx || strings.HasSuffix(host, "."+sfx)
+	})
+}
+
 // Grade computes the deterministic risk assessment of a proposed run setup
 // purely from its fields. SECURITY: it never consults any LLM self-assessment
 // — a prompt-injected attachment cannot lower the grade, since the grade is a
@@ -126,7 +156,7 @@ func Grade(run RunInput, spec types.RunPolicySpec) []RiskItem {
 		add("allow_all_egress", "true", RiskHigh,
 			"Allow-all egress lets the agent reach ANY public host (deny-list only). Exfiltration surface is maximal; private/metadata IPs are still blocked structurally.", "3")
 	default:
-		extra := beyondBaseline(spec.AllowedDomains)
+		extra := run.Baseline.beyond(spec.AllowedDomains)
 		if len(extra) > 0 {
 			add("allowed_domains", strings.Join(extra, ","), RiskMedium,
 				fmt.Sprintf("Custom egress to %d host(s) beyond the safe baseline.", len(extra)), "3")
@@ -355,9 +385,9 @@ func grantIsWriteCapable(g types.GrantSpec) bool {
 // non-baseline host is a high-value target and must run in CC3 so an escape
 // is contained. "" means no floor. Enforced both at composer proposal and
 // (defense-in-depth) at run.create.
-func RequiredConfinementFloor(spec types.RunPolicySpec) types.ConfinementClass {
+func RequiredConfinementFloor(spec types.RunPolicySpec, b Baseline) types.ConfinementClass {
 	for _, g := range spec.EligibleGrants {
-		if grantIsWriteCapable(g) || apiKeyToNonBaselineHost(g) {
+		if grantIsWriteCapable(g) || apiKeyToNonBaselineHost(g, b) {
 			return types.CC3
 		}
 	}
@@ -367,7 +397,7 @@ func RequiredConfinementFloor(spec types.RunPolicySpec) types.ConfinementClass {
 // apiKeyToNonBaselineHost reports whether an api_key grant targets a host
 // outside the safe coding-agent baseline. An unparseable/empty host is
 // treated as baseline (no floor) — the floor keys off a positive signal.
-func apiKeyToNonBaselineHost(g types.GrantSpec) bool {
+func apiKeyToNonBaselineHost(g types.GrantSpec, b Baseline) bool {
 	if g.Kind != types.GrantAPIKey || len(g.Scope) == 0 {
 		return false
 	}
@@ -378,14 +408,14 @@ func apiKeyToNonBaselineHost(g types.GrantSpec) bool {
 		return false
 	}
 	host := strings.ToLower(strings.TrimSpace(s.Host))
-	return host != "" && !safeBaselineDomains[host]
+	return host != "" && !b.Has(host)
 }
 
-// beyondBaseline returns allowlisted domains not in the safe baseline.
-func beyondBaseline(domains []string) []string {
+// beyond returns allowlisted domains not in the baseline.
+func (b Baseline) beyond(domains []string) []string {
 	var extra []string
 	for _, d := range domains {
-		if !safeBaselineDomains[strings.ToLower(strings.TrimSpace(d))] {
+		if !b.Has(d) {
 			extra = append(extra, d)
 		}
 	}

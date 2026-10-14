@@ -344,7 +344,7 @@ func (s *Server) storeEntraBlob(ctx context.Context, owner string, ec entraCaptu
 	if err != nil {
 		return fmt.Errorf("marshal %s sign-in blob: %w", ec.label(), err)
 	}
-	err = s.putOwned(ctx, owner, func() error { return s.cfg.Secrets.For(owner).Put(ctx, ec.secretName, raw) })
+	err = s.putOwned(ctx, owner, func(ctx context.Context) error { return s.cfg.Secrets.For(owner).Put(ctx, ec.secretName, raw) })
 	s.auditRowNotWritten(ctx, err, types.ActorSystem, "wardynd", owner, ec.secretName)
 	return err
 }
@@ -459,7 +459,12 @@ func (s *Server) redeemEntraAccessLocked(ctx context.Context, cfg ADOEntraConfig
 	}
 	// The row's revision comes BEFORE the read, so a write landing between the
 	// two can only make the rotation's Put refuse, never overwrite.
-	rev, guarded, rerr := s.entraRevision(ctx, owner, ec)
+	ctx, rerr := s.beginCredentialWrite(ctx, owner)
+	var rev string
+	var guarded bool
+	if rerr == nil {
+		rev, guarded, rerr = s.entraRevision(ctx, owner, ec)
+	}
 	var blob adoEntraBlob
 	var found bool
 	err := rerr
@@ -549,8 +554,8 @@ func (s *Server) redeemEntraAccessLocked(ctx context.Context, cfg ADOEntraConfig
 		if guarded {
 			pctx = secretstore.WithIfRevision(pctx, rev)
 		}
-		if perr := s.storeEntraBlob(pctx, owner, ec, next); errors.Is(perr, secretstore.ErrRevisionChanged) {
-			slog.WarnContext(ctx, "wardynd: the stored azure sign-in changed while it was being renewed; keeping the newer row, serving this caller from memory",
+		if perr := s.storeEntraBlob(pctx, owner, ec, next); secretstore.Superseded(perr) {
+			slog.WarnContext(ctx, "wardynd: the stored azure sign-in changed or was erased while it was being renewed; keeping the newer row, serving this caller from memory",
 				slog.String("row", ec.logRow()))
 		} else if perr != nil {
 			slog.ErrorContext(ctx, "wardynd: persisting the rotated azure devops refresh token failed; serving this caller from memory",

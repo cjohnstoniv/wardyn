@@ -10,10 +10,12 @@ import {
   AUTONOMY_BOUND,
   AUTONOMY_RAIL,
   autonomyBoundSentence,
+  DELIVERY,
   DIRECTORY,
   foldAutonomyRubric,
   GOVERNANCE,
   LIMITS_CHIP,
+  MEMBER_DRIVE_DOOR,
   MEMBER,
   POSITIONING,
   RUBRIC,
@@ -529,5 +531,53 @@ describe("AUTONOMY_BOUND / autonomyBoundSentence — ruling 1 (#96 review)", () 
       "Bound by this run's network reach and custom components: it can reach hosts beyond the baseline; " +
         "your organisation limits runs that use components you defined.",
     );
+  });
+});
+
+// §7.14 — DELIVERY, the Runner credentials tab. Parsed back out of the doc like the blocks above, with a
+// dotted path into the namespace for each key; the pending strings are the only keys the doc does not carry.
+describe("DELIVERY — §7.14", () => {
+  const delivery = parseFrozenTables(DOC, /^### 7\.14\b/);
+  const PENDING = ["ADO_RESIDENT_HINT", "OS_MIN_HINT", "OS_MIN_INVALID"];
+
+  const render = (docKey: string): string => {
+    const m = /^DELIVERY\.([A-Za-z_.]+?)(?:\((.*)\))?$/.exec(docKey);
+    if (!m) throw new Error(`${docKey}: not a DELIVERY key`);
+    const v = m[1].split(".").reduce<unknown>((o, k) => (o as Record<string, unknown>)[k], DELIVERY);
+    return typeof v === "function" ? (v as (...a: string[]) => string)(...(m[2] ?? "").split(",").map((a) => `{${a.trim()}}`)) : String(v);
+  };
+
+  const leaves = (o: Record<string, unknown>, prefix = ""): string[] =>
+    Object.entries(o).flatMap(([k, v]) =>
+      typeof v === "object" && v !== null ? leaves(v as Record<string, unknown>, `${prefix}${k}.`) : [`${prefix}${k}`],
+    );
+
+  it("every doc row renders byte for byte", () => {
+    expect(delivery.size).toBeGreaterThan(50);
+    for (const [key, text] of delivery) expect([key, render(key)]).toEqual([key, text]);
+  });
+
+  it("every approved key is in the doc, and only the pending ones are not", () => {
+    const docKeys = new Set([...delivery.keys()].map((k) => k.replace(/^DELIVERY\./, "").replace(/\(.*\)$/, "")));
+    const missing = leaves(DELIVERY as unknown as Record<string, unknown>).filter((k) => !docKeys.has(k));
+    expect(missing.sort()).toEqual([...PENDING].sort());
+  });
+
+  it("the pending strings carry their owner-question marker in the source", () => {
+    const src = readFileSync(resolve0("lib/governance-copy.ts"), "utf8");
+    for (const [key, id] of [["ADO_RESIDENT_HINT", "F1649-P1"], ["OS_MIN_HINT", "F1649-P2"], ["OS_MIN_INVALID", "F1649-P4"]]) {
+      expect(src).toMatch(new RegExp(`/\\*\\* pending ${id}: [^\\n]*\\*/\\n\\s+${key}:`));
+    }
+  });
+});
+
+function resolve0(rel: string): string {
+  return resolve(process.cwd(), "src/app", rel);
+}
+
+// The member-drive door sits outside the doc tables, so its label is pinned here.
+describe("MEMBER_DRIVE_DOOR", () => {
+  it("is the design's label", () => {
+    expect(MEMBER_DRIVE_DOOR.LABEL).toBe("Can't create drives");
   });
 });

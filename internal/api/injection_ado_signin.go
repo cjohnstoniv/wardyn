@@ -276,22 +276,26 @@ func (s *Server) noteADOBootFailure(ctx context.Context, runID uuid.UUID, hint s
 // this lane. Called by both capture doors AFTER their own capture audit row
 // (the captured -> resolved -> retry order). Best-effort: a resolution that
 // does not land here is written by reconcileADOReauthOnRead on the proxy's
-// next poll, through the same checks.
-func (s *Server) resolvePendingADOReauth(ctx context.Context, owner, rowID string) {
+// next poll, through the same checks. It runs under the sign-in lock, so it returns the runs whose
+// requests it resolved for the caller to resume (approvalsClosed) once the lock is released.
+func (s *Server) resolvePendingADOReauth(ctx context.Context, owner, rowID string) (closed []uuid.UUID) {
 	if s.cfg.Approvals == nil {
-		return
+		return nil
 	}
 	rows, err := s.cfg.Approvals.List(ctx, types.ApprovalPending)
 	if err != nil {
 		slog.WarnContext(ctx, "wardynd: could not list pending Azure DevOps sign-in requests after a capture; the next poll will resolve them",
 			slog.Any("err", err))
-		return
+		return nil
 	}
 	for _, ap := range rows {
 		if sc, ok := adoReauthScope(ap); ok && sc.Owner == owner && sc.ProviderID == rowID {
-			s.reconcileADOReauthOnRead(ctx, ap)
+			if _, ok := s.reconcileADOReauth(ctx, ap); ok {
+				closed = append(closed, ap.RunID)
+			}
 		}
 	}
+	return closed
 }
 
 // adoReauthRow is what the two Azure DevOps credential_reauth shapes have in

@@ -75,7 +75,7 @@ type approvalFacts struct {
 	State       types.ApprovalState
 	Kind        types.ApprovalKind
 	RequestedAt time.Time
-	// NextTierDueAt is the earliest due time of a later tier still pending for this approval; nil when none.
+	// NextTierDueAt is the earliest later-tier due time still ahead, in any state (the approval list's rule); nil when none.
 	NextTierDueAt *time.Time
 	RunID         uuid.UUID
 	Principal     string

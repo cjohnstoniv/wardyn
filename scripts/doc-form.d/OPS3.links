@@ -1,0 +1,14 @@
+# The must-link rule in scripts/check-doc-links.sh applies to these docs (the #1519 split pages: the
+# text moved verbatim from a must-link page, so it stays in the form).
+docs/operations/who-gets-in.md
+docs/operations/admin-only-writes.md
+docs/operations/three-roles.md
+docs/operations/provider-policy.md
+docs/operations/ownership-and-offboarding.md
+docs/operations/governance-writes.md
+docs/operations/member-runs.md
+docs/operations/user-drives.md
+docs/operations/capabilities.md
+docs/operations/custom-components.md
+docs/operations/api-tokens.md
+docs/operations/denials.md

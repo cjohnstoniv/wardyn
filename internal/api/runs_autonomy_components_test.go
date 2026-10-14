@@ -13,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/composer"
 	"github.com/cjohnstoniv/wardyn/internal/policyref"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -81,7 +82,7 @@ func callComponentCap(t *testing.T, ceiling governanceCeiling, comps runComponen
 	w := httptest.NewRecorder()
 	out := componentCapResult{}
 	out.res, out.warnings, _, out.ado, out.bedrock, out.ok = srv.resolveRunAutonomy(w, r, &req,
-		types.RunPolicySpec{}, nil, types.CC2, ceiling, modelCredentialFacts{}, comps)
+		types.RunPolicySpec{}, nil, types.CC2, ceiling, modelCredentialFacts{}, comps, composer.Baseline{})
 	out.req, out.code, out.written = req, w.Code, w.Body.Len() > 0
 	if out.written {
 		if err := json.Unmarshal(w.Body.Bytes(), &out.body); err != nil {

@@ -16,6 +16,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 	"github.com/cjohnstoniv/wardyn/internal/store"
@@ -195,18 +196,14 @@ func (s *Server) openExecOutput(run types.AgentRun, interactive bool) io.Writer 
 	// masking corpus this server cannot prove whole, and its writer drops a
 	// chunk the moment that stops being true.
 	if !s.maskCovered(context.Background(), runID) {
+		s.refuseExecRelay(runID)
 		return nil
 	}
 	// The pending row is the durable record that a capture is owed. A failed
 	// insert is logged and does not fail the run: the final UPSERT still writes
 	// the row. A tombstone means the run's output was erased: keep nothing.
-	if st := s.runOutputStore(); st != nil {
-		if err := st.InsertPendingRunOutput(context.Background(), runID); errors.Is(err, store.ErrRunOutputErased) {
-			s.fenceRunOutput(runID)
-			return nil
-		} else if err != nil {
-			slog.Warn("wardynd: could not record that a run's output capture is owed", slog.String("run_id", runID.String()), slog.Any("err", err))
-		}
+	if s.owePendingOutput(runID) {
+		return nil
 	}
 	e := newExecOutputTail(s.cfg.RunOutputTailBytes, s.cfg.Now)
 	e.sink = s.newTailSink(runID, &e.ring)
@@ -221,6 +218,34 @@ func (s *Server) openExecOutput(run types.AgentRun, interactive bool) io.Writer 
 	}
 	t.m[runID] = e
 	return &tailWriter{t: e}
+}
+
+// owePendingOutput records that runID's capture is owed and reports whether the
+// run's output was erased, in which case nothing is kept.
+func (s *Server) owePendingOutput(runID uuid.UUID) (erased bool) {
+	st := s.runOutputStore()
+	if st == nil {
+		return false
+	}
+	err := st.InsertPendingRunOutput(context.Background(), runID)
+	if errors.Is(err, store.ErrRunOutputErased) {
+		s.fenceRunOutput(runID)
+		return true
+	}
+	if err != nil {
+		slog.Warn("wardynd: could not record that a run's output capture is owed", slog.String("run_id", runID.String()), slog.Any("err", err))
+	}
+	return false
+}
+
+// refuseExecRelay is door 3's refusal made visible: the relay keeps nothing,
+// the denial is audited, and the pending row still goes in, so a process that
+// dies before the run's finalisation leaves the sweeper a capture gap to write
+// with its reason, not a run that owes nothing.
+func (s *Server) refuseExecRelay(runID uuid.UUID) {
+	slog.Warn("wardynd: the exec output relay is refused: the run's masking corpus is not provably whole", slog.String("run_id", runID.String()))
+	s.auditUncovered(context.Background(), runID, types.ActorSystem, "wardynd", "exec.relay")
+	s.owePendingOutput(runID)
 }
 
 // releasedHoldback is what a masker's withheld bytes become once no more output
@@ -327,7 +352,7 @@ func (s *Server) handleRunOutput(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	run, ok := s.getRunAuthorized(w, r, id)
+	run, ok := s.getRunAuthorizedBy(w, r, id, s.ownsRunOrSponsorOrAdmin)
 	if !ok {
 		return
 	}
@@ -357,7 +382,9 @@ func (s *Server) handleRunOutput(w http.ResponseWriter, r *http.Request) {
 	}
 	// The recording gate covers stored bytes, recovery facts and source reads,
 	// including when the configured recording backend has since been disabled.
-	reader := s.recordingReader(r, run)
+	_, delegated := audit.DelegationFrom(r.Context())
+	// A portal reads command output only: the recording, and what is derived from it, stay the person's own (#1423).
+	reader := s.recordingReader(r, run) && !delegated
 	if reader {
 		row, found, err = s.repairRecordingOutput(r.Context(), run, row, found)
 		if errors.Is(err, store.ErrRunOutputErased) {
@@ -371,7 +398,11 @@ func (s *Server) handleRunOutput(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if found && (row.Source == paneSnapshotSource || row.Source == recordingOutputSource) && !reader {
-		s.recordRefusal(r.Context(), r, authz.Deny(authz.ReasonNotOwner, id.String(), "").OnRun(id))
+		denial := authz.Deny(authz.ReasonNotOwner, id.String(), "")
+		if delegated {
+			denial = authz.Deny(authz.ReasonDelegationScope, id.String(), "")
+		}
+		s.recordRefusal(r.Context(), r, denial.OnRun(id))
 		found = false
 	}
 	// A final row was masked before it was stored, so it needs no manifest here:
@@ -421,7 +452,8 @@ func (s *Server) handleRunOutput(w http.ResponseWriter, r *http.Request) {
 
 // refuseNoRunOutput is handleRunOutput's last answer: nothing was served, and
 // the cases say why, in the order its doc comment lists. reader is
-// recordingReader's verdict, the only caller told of a recording erasure.
+// recordingReader's verdict for a caller that is not a portal's delegated token,
+// the only caller told of a recording erasure.
 func (s *Server) refuseNoRunOutput(w http.ResponseWriter, r *http.Request, run types.AgentRun, row store.RunOutput, found, reader bool) {
 	uncaptured, captureKnown := s.execOutputCapture(r.Context())
 	switch {
@@ -433,7 +465,7 @@ func (s *Server) refuseNoRunOutput(w http.ResponseWriter, r *http.Request, run t
 		// stdout this process or another replica still holds was served above.
 		writeErrorReason(w, http.StatusGone, reasonRecordingErased, "recordings for this run have been erased")
 	case run.Interactive:
-		writeErrorReason(w, http.StatusConflict, reasonRunOutputInteractive, s.interactiveNothingKept(r, run))
+		writeErrorReason(w, http.StatusConflict, reasonRunOutputInteractive, s.interactiveNothingKept(run, reader))
 	case uncaptured:
 		writeErrorReason(w, http.StatusConflict, reasonRunOutputNotCaptured,
 			"Output isn't captured for Kubernetes runs yet. The run's recording has it.")
@@ -450,16 +482,16 @@ func (s *Server) refuseNoRunOutput(w http.ResponseWriter, r *http.Request, run t
 
 // interactiveNothingKept is the 409 sentence for an interactive run with no
 // output to serve. Only a reader who may see a pane snapshot (the owner or an
-// operator) reaches it with no row, so only they are told nothing was kept.
-// Anyone else gets the recording sentence whether or not a snapshot exists, so
-// the row's existence is not revealed. With recording off (Config.RecordingStore
-// nil, which /healthz reports as components.recording) no sentence points at a
-// recording, and only a run that ended other than STOPPED (a kill, a failure or
-// a reconcile) is said not to have ended through a Wardyn stop: a STOPPED run
-// whose snapshot was not taken, or a run still open, is told only that nothing
-// is kept.
-func (s *Server) interactiveNothingKept(r *http.Request, run types.AgentRun) string {
-	if s.cfg.RecordingStore != nil || !s.recordingReader(r, run) {
+// operator, never a portal's delegated token) reaches it with no row, so only
+// they are told nothing was kept. Anyone else gets the recording sentence
+// whether or not a snapshot exists, so the row's existence is not revealed.
+// With recording off (Config.RecordingStore nil, which /healthz reports as
+// components.recording) no sentence points at a recording, and only a run that
+// ended other than STOPPED (a kill, a failure or a reconcile) is said not to
+// have ended through a Wardyn stop: a STOPPED run whose snapshot was not
+// taken, or a run still open, is told only that nothing is kept.
+func (s *Server) interactiveNothingKept(run types.AgentRun, reader bool) string {
+	if s.cfg.RecordingStore != nil || !reader {
 		return "an interactive run keeps no output here: its terminal is the recording's to keep"
 	}
 	switch run.State {

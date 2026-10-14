@@ -16,6 +16,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/recording"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -195,10 +196,13 @@ func lastModelAccessLine(cast []byte) string {
 // projectModelAccessQuote keeps the recording's quoted line in a failure hint
 // only for a reader who could open that recording (recordingReader). A
 // security admin reads every run but not its recording (a privacy surface),
-// so they are served the hint without the quote.
+// so they are served the hint without the quote. A portal's delegated token
+// never reads what is recovered from a recording (#1423), so it is served the
+// unquoted hint too, on every route that projects status detail.
 func (s *Server) projectModelAccessQuote(r *http.Request, runs []types.AgentRun) {
+	_, delegated := audit.DelegationFrom(r.Context())
 	for i := range runs {
-		if strings.HasPrefix(runs[i].FailureHint, modelAccessHintLead+": ") && !s.recordingReader(r, runs[i]) {
+		if strings.HasPrefix(runs[i].FailureHint, modelAccessHintLead+": ") && (delegated || !s.recordingReader(r, runs[i])) {
 			runs[i].FailureHint = modelAccessHintUnquoted
 		}
 	}

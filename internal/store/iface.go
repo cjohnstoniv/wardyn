@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -80,7 +81,9 @@ type Store interface {
 	SetWorkspaceRecordResult(ctx context.Context, id uuid.UUID, taskKey string, result json.RawMessage, onlyIfStatus string) (types.Workspace, bool, error)
 	ClaimWorkspaceActiveRun(ctx context.Context, id, runID uuid.UUID, expected *uuid.UUID) (types.Workspace, bool, error)
 	ClearWorkspaceActiveRun(ctx context.Context, id, runID uuid.UUID) (bool, error)
-	SetWorkspaceBuiltImage(ctx context.Context, id uuid.UUID, imageRef, builtHash string) (types.Workspace, error)
+	// SetWorkspaceBuiltImage writes image_ref, built_profile_hash and the build record by one compare-and-swap
+	// on observedRef; applied=false means another build moved image_ref first.
+	SetWorkspaceBuiltImage(ctx context.Context, id uuid.UUID, observedRef, imageRef, builtHash string, rec *types.ImageBuild) (applied bool, err error)
 	// SetWorkspaceImportState advances the scan pipeline. FENCED: applies only while the import-step
 	// slot still holds expectedActive; applied=false means the caller must re-read, not retry blindly.
 	SetWorkspaceImportState(ctx context.Context, id uuid.UUID, status types.WorkspaceStatus, activeRunID *uuid.UUID, expectedActive *uuid.UUID) (types.Workspace, bool, error)
@@ -312,14 +315,15 @@ type Store interface {
 	// ListUserDrives returns every drive by name WITH its grant count — what makes the console's
 	// delete affordance honest, since a drive with grants answers 409.
 	ListUserDrives(ctx context.Context) ([]types.UserDriveListItem, error)
-	// UpsertUserDriveGrant keys on the natural UNIQUE (subject_type, subject): re-allocating a
-	// subject REPOINTS its one row, returning the EXISTING row's id on a conflict. ErrNotFound when
+	// UpsertUserDriveGrant keys on the natural UNIQUE (subject_type, subject, drive_id): writing a
+	// subject's grant on a drive again updates that row, returning the EXISTING row's id on a
+	// conflict; another drive is another row. ErrNotFound when
 	// drive_id names no drive (FK). ErrConflict when ANOTHER subject already holds this drive with
 	// the same home_override — a directory name is one person's, and on a managed drive an override
 	// is the last way left to point two people at one object Wardyn creates.
 	//
 	// homeOverrideStated is the REQUEST's tri-state, not the row's: false means the caller never
-	// mentioned home_override, and a repoint that never mentioned it must not CLEAR one (see the
+	// mentioned home_override, and an update that never mentioned it must not CLEAR one (see the
 	// guard in PG's statement) — that same ErrConflict, distinguished from the uniqueness one purely
 	// by this argument (a stated override disables the re-home guard; an unstated one is empty).
 	UpsertUserDriveGrant(ctx context.Context, g types.UserDriveGrant, homeOverrideStated bool) (types.UserDriveGrant, error)
@@ -356,9 +360,13 @@ type PG struct {
 	// Now is THE APP CLOCK, letting a test run one that disagrees with the
 	// database's. Nil means time.Now. Every stamp this store writes belongs on
 	// the DATABASE's clock; the app clock only measures an ELAPSED TIME (a
-	// difference of two readings, carrying no skew) that a statement then
-	// subtracts from the database's own now(). See db.AppClockAgeSQL.
+	// difference of two readings, carrying no skew) measured after a successful DB-clock read. See db.CaptureAppClock.
 	Now func() time.Time
+
+	// SIEM, when set, receives the audit rows this store writes in its own transaction (the retention
+	// policy change, the partition drop, the reauth resolve), which no recorder chain sees. Nil sends them
+	// nowhere.
+	SIEM audit.Sink
 }
 
 // now reads the app clock. BOTH readings that make an age must come from here.
@@ -429,3 +437,98 @@ type ComponentStore interface {
 
 // Compile-time assertion: PG satisfies ComponentStore.
 var _ ComponentStore = PG{}
+
+// RunHarnessStore persists the harnesses a run was launched with and the model
+// provider each was granted (migration run_harnesses). The rows are the run's
+// authorisation tombstone; they hold configuration ids only, so erasure never
+// clears them.
+type RunHarnessStore interface {
+	// PutRunHarnesses writes run runID's rows, once, in one transaction; each row's position in
+	// hs is its ordinal. ErrNotFound when the run does not exist; ErrConflict when the run
+	// already has rows, a harness repeats, or more than one row starts. An empty hs is refused: a
+	// run launched without harnesses writes nothing, so the caller does not call this.
+	PutRunHarnesses(ctx context.Context, runID uuid.UUID, hs []types.RunHarness) error
+	// ListRunHarnesses returns a run's rows in request order; empty for a run launched without
+	// any.
+	ListRunHarnesses(ctx context.Context, runID uuid.UUID) ([]types.RunHarness, error)
+}
+
+// Compile-time assertion: PG satisfies RunHarnessStore.
+var _ RunHarnessStore = PG{}
+
+// MemberDriveStore persists member drives: a person's own user_drives row,
+// owned by its owner_subject, with no grant rows. Bodies in member_drives.go.
+// Optional like RunnerStore: callers type-assert.
+type MemberDriveStore interface {
+	// CreateMemberDrive inserts d for d.OwnerSubject (non-empty) unless the owner
+	// already holds limit rows: ErrMemberDriveLimit, or ErrMemberDriveNameTaken
+	// when the owner has a drive whose name folds to the same slug.
+	CreateMemberDrive(ctx context.Context, d types.UserDrive, limit int) (types.UserDrive, error)
+	// ListMemberDrivesOf returns owner's drives, tombstoned ones included.
+	ListMemberDrivesOf(ctx context.Context, owner string) ([]types.UserDrive, error)
+	// GetMemberDriveOf returns drive id only if owner owns it, else ErrNotFound.
+	GetMemberDriveOf(ctx context.Context, owner string, id uuid.UUID) (types.UserDrive, error)
+	// BeginMemberDriveDelete tombstones owner's drive and returns the tombstone:
+	// ErrNotFound when not owned, ErrMemberDriveBusy while another delete holds it.
+	BeginMemberDriveDelete(ctx context.Context, owner string, id uuid.UUID) (types.UserDrive, time.Time, error)
+	// BeginMemberDriveDeleteAdmin is BeginMemberDriveDelete for any owner's drive.
+	BeginMemberDriveDeleteAdmin(ctx context.Context, id uuid.UUID) (types.UserDrive, time.Time, error)
+	// AbortMemberDriveDelete clears only the tombstone started names.
+	AbortMemberDriveDelete(ctx context.Context, id uuid.UUID, started time.Time) error
+	// FinishMemberDriveDelete removes the row only while it carries started.
+	FinishMemberDriveDelete(ctx context.Context, id uuid.UUID, started time.Time) error
+	// ListMemberDrives returns one page of every person's drives and the total.
+	ListMemberDrives(ctx context.Context, p Page) ([]types.UserDrive, int, error)
+}
+
+// Compile-time assertion: PG satisfies MemberDriveStore.
+var _ MemberDriveStore = PG{}
+
+// TemplateStore persists run templates (migration 0165_run_templates); bodies in
+// store_run_templates.go. Optional like ComponentStore: callers type-assert, and a
+// caller that finds it absent answers 501 templates_unavailable rather than
+// pretending to store anything.
+//
+// The store does not authorise: the API checks types.TemplateAuthorize first. What
+// the store holds for it is what must sit in the write's own transaction: a group
+// write's grant re-read (TemplateGrantCheck, FOR SHARE), the audience limit counted
+// under a named lock, and the revision compare-and-set.
+type TemplateStore interface {
+	// ListTemplatesVisible returns the current revision of every organisation
+	// template, of person's own, and of the groups' templates, by name.
+	ListTemplatesVisible(ctx context.Context, person string, groups []string) ([]types.RunTemplate, error)
+	// GetTemplate returns the current revision; ErrNotFound when absent.
+	GetTemplate(ctx context.Context, id uuid.UUID) (types.RunTemplate, error)
+	// GetTemplateRevision returns one saved revision, with that revision's own
+	// saver and time as UpdatedBy and UpdatedAt; ErrNotFound when the template or
+	// that revision is absent.
+	GetTemplateRevision(ctx context.Context, id uuid.UUID, revision int) (types.RunTemplate, error)
+	// CreateTemplate inserts t at revision 1 under the id the caller chose.
+	// *TemplateLimitError when the audience is full, ErrTemplateNameTaken on a
+	// name the audience already uses, ErrTemplateGrantGone when grant finds no row.
+	CreateTemplate(ctx context.Context, t types.RunTemplate, grant *TemplateGrantCheck) (types.RunTemplate, error)
+	// UpdateTemplate saves t's name, description and document as the next
+	// revision when the row is at expected; *TemplateRevisionConflictError (and
+	// nothing written) otherwise. ErrNotFound, ErrTemplateNameTaken and
+	// ErrTemplateGrantGone as for create.
+	UpdateTemplate(ctx context.Context, t types.RunTemplate, expected int, grant *TemplateGrantCheck) (types.RunTemplate, error)
+	// DeleteTemplate removes the template and every revision, and returns the
+	// row it removed (without a document).
+	DeleteTemplate(ctx context.Context, id uuid.UUID, grant *TemplateGrantCheck) (types.RunTemplate, error)
+	// The group-management grants. Put stores the grant as given, which the
+	// caller has made canonical, and a non-empty Label as the group's label.
+	ListTemplateGroupAdmins(ctx context.Context) ([]types.TemplateGroupAdmin, error)
+	PutTemplateGroupAdmin(ctx context.Context, g types.TemplateGroupAdmin) (types.TemplateGroupAdmin, error)
+	DeleteTemplateGroupAdmin(ctx context.Context, group, person string) (bool, error)
+	// TemplateGroupAdminGroups lists the groups any of persons holds a grant on.
+	TemplateGroupAdminGroups(ctx context.Context, persons []string) ([]string, error)
+	// TemplateGroupLabels returns the labels of those of groups that have one.
+	TemplateGroupLabels(ctx context.Context, groups []string) (map[string]string, error)
+	// EraseRunSetupsOf is the run_setups erasure scope: person's own templates
+	// (with their revisions) and grants go, and their name is blanked wherever
+	// it is the author of a shared template, a revision or a grant.
+	EraseRunSetupsOf(ctx context.Context, person string) (RunSetupsErased, error)
+}
+
+// Compile-time assertion: PG satisfies TemplateStore.
+var _ TemplateStore = PG{}

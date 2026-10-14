@@ -7,7 +7,7 @@
 // time, and B9 (#540) — the strip's line for a relaunch refused after its
 // screen was gone.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { toast } from "sonner";
 
@@ -45,7 +45,7 @@ vi.mock("../../lib/api/model-provider-credentials", () => ({
 
 import { useModelAccessDoor, type OpenDoorOptions } from "./model-access-context";
 import { MODEL_ACCESS_BANNER } from "./model-access-copy";
-import { CLAUDE_DOOR, KEY_DOOR, REMOVE_CONFIRM } from "./copy/door";
+import { CLAUDE_DOOR, CONNECTIONS, KEY_DOOR, REMOVE_CONFIRM } from "./copy/door";
 import { HttpError } from "../../lib/api/core";
 import { MODEL_PROVIDERS, baseStatus, providerStatus } from "../../lib/test-fixtures";
 import type { SetupStatus } from "../../lib/types";
@@ -327,5 +327,107 @@ describe("B9 — a relaunch refused after its screen was gone", () => {
     expect(await screen.findByText(sentence)).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: MODEL_ACCESS_BANNER.REFUSAL_DISMISS }));
     expect(screen.queryByText(sentence)).toBeNull();
+  });
+});
+
+it("launch recovery explains a read failure and re-checks without a credential input", async () => {
+  const s = providerStatus([{ provider: gateway, state: "not_configured" }]);
+  s.provider_access![0].cause = "store_unreadable";
+  render(
+    <WithDoor status={s}>
+      <Entrance label="Open" options={{ for: { provider: gateway.id } }} />
+    </WithDoor>,
+  );
+  await userEvent.click(screen.getByRole("button", { name: "Open" }));
+  const dialog = await screen.findByRole("dialog");
+  expect(within(dialog).getByText(CONNECTIONS.STORE_UNREADABLE)).toBeInTheDocument();
+  expect(within(dialog).getByRole("button", { name: CONNECTIONS.RECHECK })).toBeInTheDocument();
+  expect(within(dialog).queryByRole("textbox")).toBeNull();
+});
+
+it("a successful re-check closes recovery without offering to replace the recovered credential", async () => {
+  const s = providerStatus([{ provider: gateway, state: "not_configured" }]);
+  s.provider_access![0].cause = "store_unreadable";
+  const view = render(<WithDoor status={s}><Entrance label="Open" options={{ for: { provider: gateway.id } }} /></WithDoor>);
+  await userEvent.click(screen.getByRole("button", { name: "Open" }));
+  expect(await screen.findByRole("dialog")).toBeInTheDocument();
+  const recovered = providerStatus([{ provider: gateway, state: "live" }]);
+  view.rerender(<WithDoor status={recovered}><Entrance label="Open" options={{ for: { provider: gateway.id } }} /></WithDoor>);
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  expect(putCredential).not.toHaveBeenCalled();
+});
+
+it("closing unreadable recovery does not close a later replacement dialog", async () => {
+  const s = providerStatus([{ provider: gateway, state: "not_configured" }, { provider: anthropicKey, state: "live" }]);
+  s.provider_access![0].cause = "store_unreadable";
+  render(<WithDoor status={s}>
+    <Entrance label="Check gateway" options={{ for: { provider: gateway.id } }} />
+    <Entrance label="Replace key" options={{ for: { provider: anthropicKey.id } }} />
+  </WithDoor>);
+  await userEvent.click(screen.getByRole("button", { name: "Check gateway" }));
+  expect(await screen.findByRole("dialog")).toBeInTheDocument();
+  await userEvent.keyboard("{Escape}");
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  await userEvent.click(screen.getByRole("button", { name: "Replace key" }));
+  expect(await screen.findByRole("dialog")).toBeInTheDocument();
+});
+
+describe("a status refresh while the door is open", () => {
+  const unreadableStatus = () => {
+    const s = providerStatus([{ provider: claude, state: "not_configured" }]);
+    s.provider_access![0].cause = "store_unreadable";
+    return s;
+  };
+  const tree = (status: SetupStatus) => (
+    <WithDoor status={status}>
+      <Entrance label="Open" options={{ for: { provider: claude.id } }} />
+    </WithDoor>
+  );
+
+  it("a sign-in door opened on an unreadable row still shows 'Could not check'", async () => {
+    render(tree(unreadableStatus()));
+    await userEvent.click(screen.getByRole("button", { name: "Open" }));
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByText(CONNECTIONS.COULD_NOT_CHECK)).toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: CONNECTIONS.RECHECK })).toBeInTheDocument();
+    expect(screen.queryByTestId("fake-pane")).toBeNull();
+  });
+
+  it("an unreadable row opened first still hands over to the sign-in pane when the store recovers to not connected", async () => {
+    const view = render(tree(unreadableStatus()));
+    await userEvent.click(screen.getByRole("button", { name: "Open" }));
+    await screen.findByText(CONNECTIONS.COULD_NOT_CHECK);
+    view.rerender(tree(providerStatus([{ provider: claude, state: "not_configured" }])));
+    expect(await screen.findByTestId("fake-pane")).toBeInTheDocument();
+    expect(screen.queryByText(CONNECTIONS.COULD_NOT_CHECK)).toBeNull();
+  });
+
+  it("a store_unreadable refresh leaves a mounted sign-in pane in place", async () => {
+    const view = render(tree(providerStatus([{ provider: claude, state: "not_configured" }])));
+    await userEvent.click(screen.getByRole("button", { name: "Open" }));
+    const pane = await screen.findByTestId("fake-pane");
+    view.rerender(tree(unreadableStatus()));
+    expect(screen.getByTestId("fake-pane")).toBe(pane);
+    expect(screen.queryByText(CONNECTIONS.COULD_NOT_CHECK)).toBeNull();
+    expect(screen.queryByText(CONNECTIONS.STORE_UNREADABLE)).toBeNull();
+    // The store recovering afterwards does not remount a second pane.
+    view.rerender(tree(providerStatus([{ provider: claude, state: "not_configured" }])));
+    expect(screen.getByTestId("fake-pane")).toBe(pane);
+  });
+
+  it("a store_unreadable refresh leaves a mounted key door in place", async () => {
+    const tree2 = (status: SetupStatus) => (
+      <WithDoor status={status}>
+        <Entrance label="Open" options={{ for: { provider: gateway.id } }} />
+      </WithDoor>
+    );
+    const view = render(tree2(providerStatus([{ provider: gateway, state: "not_configured" }])));
+    await userEvent.click(screen.getByRole("button", { name: "Open" }));
+    const box = await screen.findByLabelText("Token");
+    const s = providerStatus([{ provider: gateway, state: "not_configured" }]);
+    s.provider_access![0].cause = "store_unreadable";
+    view.rerender(tree2(s));
+    expect(screen.getByLabelText("Token")).toBe(box);
+    expect(screen.queryByText(CONNECTIONS.COULD_NOT_CHECK)).toBeNull();
   });
 });

@@ -7,9 +7,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -17,6 +19,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/egress"
+	"github.com/cjohnstoniv/wardyn/internal/runnerspool"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 )
 
@@ -26,10 +29,16 @@ import (
 // is incremented rather than blocking the request path. Every record is also
 // mirrored to stdout as a JSON line for local observability.
 type decisionSink struct {
-	endpoint string
-	token    *tokenSource
-	client   *http.Client
-	out      io.Writer
+	writerLock   *os.File
+	local        *runnerspool.Spool
+	reservations map[uuid.UUID]spoolReservation
+	heldBytes    int64 // the sum of the reservations' bytes
+	activityDir  string
+	localErr     error
+	endpoint     string
+	token        *tokenSource
+	client       *http.Client
+	out          io.Writer
 
 	ch      chan egress.DecisionLog
 	dropped atomic.Uint64
@@ -46,7 +55,7 @@ type decisionSink struct {
 
 func newDecisionSink(controlPlaneURL string, token *tokenSource, bufferSize int, client *http.Client, out io.Writer) *decisionSink {
 	s := &decisionSink{
-		endpoint: controlPlaneURL + "/api/v1/internal/decisions",
+		endpoint: controlPlaneEndpoint(controlPlaneURL, "/api/v1/internal/decisions"),
 		token:    token,
 		client:   client,
 		out:      out,
@@ -62,6 +71,10 @@ func newDecisionSink(controlPlaneURL string, token *tokenSource, bufferSize int,
 // always mirrored to stdout synchronously (cheap, non-blocking enough).
 func (s *decisionSink) emit(log egress.DecisionLog) {
 	s.mirror(log)
+	if s.local != nil {
+		s.emitLocal(log)
+		return
+	}
 	// Runs UNDER s.mu, mutually exclusive with close() (which also holds s.mu
 	// while closing the channel) — otherwise a send past the closed-check
 	// could race close() and panic on a closed channel. Never blocks (buffered
@@ -197,9 +210,13 @@ func (s *decisionSink) post(log egress.DecisionLog) error {
 // after startup are visible immediately. Package-level, not a method, so
 // tests can exercise it standalone.
 func maskDecisionBytes(b []byte) []byte {
-	// uuid.Nil yields only global secrets: no per-run entries exist in the
-	// proxy process, all proxy-side secrets are global.
-	snap := procRegistry.Snapshot(uuid.Nil)
+	// Every key: uuid.Nil is a sidecar's (the whole process), and each
+	// ViaOrgEngine embedded in wardynd files its own until it closes. Masking
+	// with all of them only ever masks more.
+	var snap [][]byte
+	for _, key := range procRegistry.RunIDs() {
+		snap = append(snap, procRegistry.Snapshot(key)...)
+	}
 	if len(snap) == 0 {
 		return b
 	}
@@ -216,6 +233,9 @@ func (s *decisionSink) droppedCount() uint64 { return s.dropped.Load() }
 
 // close drains and stops the sink. It blocks until the worker exits or ctx
 // is done.
+// wait returns once the sink's worker has posted or dropped every queued row; only after close.
+func (s *decisionSink) wait() { s.wg.Wait() }
+
 func (s *decisionSink) close(ctx context.Context) error {
 	s.mu.Lock()
 	if s.closed {
@@ -223,6 +243,11 @@ func (s *decisionSink) close(ctx context.Context) error {
 		return nil
 	}
 	s.closed = true
+	if s.local != nil {
+		err := errors.Join(s.local.Close(), s.writerLock.Close())
+		s.mu.Unlock()
+		return err
+	}
 	close(s.ch)
 	s.mu.Unlock()
 

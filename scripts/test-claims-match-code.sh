@@ -21,6 +21,8 @@
 #          job).
 #     C8c  docs/OPERATIONS.md's migrator/app-role rationale names every
 #          migration that needs pre-existing-object ownership (F034).
+#     C8h  the newest CHANGELOG split-role upgrade bullet names every table a
+#          migration since the last release creates (R2-0008/R2-0079).
 #     C9   every fenced "helm install wardyn" recipe across the front-door
 #          docs carries an age-key source and, with k8s.enabled=true, a
 #          runs-namespace choice (X1a-F1/X1c-F1).
@@ -95,11 +97,11 @@ trivy_cells="$(grep -oE '^[[:space:]]+name: trivy \([a-z0-9-]+\)$' "${CI_YML}" \
                | sed -E 's/.*\(([a-z0-9-]+)\)$/\1/' | sort -u || true)"
 [ -n "${trivy_cells}" ] || fail "could not derive ci.yml's trivy jobs — this guard would compare against an empty list"
 for want in notices; do
-  printf '%s' "${contexts}" | grep -qF "\"${want}\"" \
+  grep -qF "\"${want}\"" <<<"${contexts}" \
     || fail "RELEASING.md's required contexts omit '${want}' — the copyleft / unreviewed-dependency gate merges red (F121)"
 done
 for cell in ${trivy_cells}; do
-  printf '%s' "${contexts}" | grep -qF "\"trivy (${cell})\"" \
+  grep -qF "\"trivy (${cell})\"" <<<"${contexts}" \
     || fail "RELEASING.md's required contexts omit 'trivy (${cell})' — ci.yml scans that image and branch protection would let it merge red. Each trivy job reports its own context (F121)"
 done
 pass "C6 RELEASING.md's required contexts cover notices + every ci.yml trivy job"
@@ -124,9 +126,9 @@ pg_pw="$(awk '/^  postgres:/{f=1} f&&/^  [a-z]/&&!/^  postgres:/{f=0} f&&/POSTGR
 [ -n "${pg_pw}" ] || fail "could not read POSTGRES_PASSWORD out of ${COMPOSE_YAML}"
 second_user="$(awk '/^## Second user, same host/{f=1;next} f&&/^## /{f=0} f' "${ROOT}/docs/OPERATIONS.md")"
 [ -n "${second_user}" ] || fail "docs/OPERATIONS.md has no 'Second user, same host' section — C7's F155 half is pointing at nothing"
-printf '%s' "${second_user}" | grep -qF "${pg_pw}" \
+grep -qF "${pg_pw}" <<<"${second_user}" \
   || fail "docs/OPERATIONS.md's 'Second user, same host' recipe never mentions that Postgres publishes on loopback with the PUBLISHED literal password '${pg_pw}' — the second person psql's straight past every admin/member control the section is about (F155)"
-printf '%s' "${second_user}" | grep -qi 'registry' \
+grep -qi 'registry' <<<"${second_user}" \
   || fail "docs/OPERATIONS.md's 'Second user, same host' recipe never mentions the unauthenticated loopback registry — any local user can push a layer a later envbuild run executes (F155)"
 pass "C7 ENV.md/VERIFY.md/THREAT-MODEL/OPERATIONS.md match the code they describe"
 
@@ -182,10 +184,84 @@ for f in "${MIGDIR}"/00[5-9]*.sql "${MIGDIR}"/0[1-9]*.sql; do
   # replaces a function an earlier release created — no ownership needed.
   grep -i 'CREATE OR REPLACE FUNCTION' "${f}" | grep -viq 'FUNCTION pg_temp\.' && hazard=yes
   [ "${hazard}" = yes ] || continue
-  printf '%s' "${ops_para}" | grep -qF "\`${num}\`" \
+  grep -qF "\`${num}\`" <<<"${ops_para}" \
     || fail "migration ${num} ALTERs a table an earlier release created (or replaces a function it created), so it needs the migrator to OWN that object — and docs/OPERATIONS.md's migrator/app-role rationale never names it. That enumeration is the whole justification for the one-way role split (F034)"
 done
 pass "C8c the migrator rationale names every ownership-requiring migration on the upgrade path"
+
+# ── C8h: the split-role upgrade note grants every table this release creates ─
+#
+# R2-0008 / R2-0079: an app role that does not get new tables through ALTER
+# DEFAULT PRIVILEGES needs each table a release's migrations create granted by
+# hand, and the CHANGELOG's split-role bullet is that list. Twice it missed
+# tables, and wardynd then failed at boot or on the first write. Derived: every
+# table a migration numbered UNRELEASED_FROM or later creates is named in the
+# newest CHANGELOG section that carries a "Split-role installs" bullet. When a
+# release is cut, set UNRELEASED_FROM to the first migration after it; the next
+# release's tables then go in a new bullet under its own heading.
+UNRELEASED_FROM=0178 # v0.9.0 ships migrations up to 0177
+split_note="$(awk '
+  /^## \[/ { if (found) exit }
+  /^- Split-role installs/ { found = 1; on = 1; print; next }
+  on && (/^- / || /^#/ || /^$/) { on = 0 }
+  on { print }
+' "${ROOT}/CHANGELOG.md")"
+[ -n "${split_note}" ] || fail "CHANGELOG.md carries no \"Split-role installs\" bullet — re-anchor this guard (C8h)"
+checked=0
+for f in "${MIGDIR}"/[0-9][0-9][0-9][0-9]_*.sql; do
+  num="$(basename "${f}" | cut -c1-4)"
+  [ "$((10#${num}))" -ge "$((10#${UNRELEASED_FROM}))" ] || continue
+  while read -r tbl; do
+    [ -n "${tbl}" ] || continue
+    checked=$((checked + 1))
+    grep -qF "\`${tbl}\`" <<<"${split_note}" \
+      || fail "migration ${num} creates table ${tbl}, and the newest CHANGELOG \"Split-role installs\" bullet does not grant it: a split-role install that follows the note cannot use the table (C8h). Name it there with its grant; after a release cut, start a new bullet and move UNRELEASED_FROM"
+  done <<< "$(grep -ioE 'CREATE TABLE (IF NOT EXISTS )?[a-z_]+' "${f}" | awk '{print tolower($NF)}' | sort -u || true)"
+done
+pass "C8h the split-role upgrade note grants all ${checked} tables created since migration ${UNRELEASED_FROM}"
+
+# ── C8h (verbs): the note grants every VERB the code uses on a table it names ─
+#
+# FR-0158, the third miss of this class: the note named person_invitations (so
+# the table-name check above passed) under SELECT, INSERT, UPDATE, while the
+# SCIM purge DELETEs from it, and a split-role install that followed the note
+# could never finish a leaver purge. Derived: for each table the note grants,
+# the verbs it grants it (the "SELECT, ... on" group the name sits in) must
+# cover every verb that non-test Go SQL uses on it. A verb is read off one SQL
+# string literal: DELETE FROM t; UPDATE t SET; INSERT INTO t ... DO UPDATE; a
+# FROM t with FOR [NO KEY] UPDATE. A statement assembled from several literals
+# is judged per literal, so this is a floor, not a proof.
+verb_report="$(cd "${ROOT}" && printf '%s\n' "${split_note}" | tr '\n' ' ' | perl -e '
+  my $note = <STDIN>; $note =~ s/\.\s+Without\b.*//s;       # the grant sentence only
+  my (%has, $verbs);
+  while ($note =~ /`?(SELECT(?:, [A-Z]+)*)`?\s+on\b|`([a-z][a-z_]*)`/g) {
+    if (defined $1) { $verbs = $1; next }
+    $has{$2} = $verbs if defined $verbs;
+  }
+  my @files = grep { !/_test\.go$/ } split /\n/, `find internal cmd -name "*.go" -not -path "*/testdata/*"`;
+  my %need;
+  for my $f (@files) {
+    open my $h, "<", $f or next; local $/; my $src = <$h>; close $h;
+    while ($src =~ /`([^`]*)`|"((?:[^"\\\n]|\\.)*)"/g) {
+      my $l = defined $1 ? $1 : $2;
+      for my $t (keys %has) {
+        $need{$t}{DELETE} ||= $f if $l =~ /\bDELETE\s+FROM\s+$t\b/i;
+        $need{$t}{UPDATE} ||= $f if $l =~ /\bUPDATE\s+$t\s+SET\b/i
+          || ($l =~ /\bINSERT\s+INTO\s+$t\b/i && $l =~ /\bDO\s+UPDATE\b/i)
+          || ($l =~ /\bFROM\s+$t\b/i && $l =~ /\bFOR\s+(NO\s+KEY\s+)?UPDATE\b/i);
+        $need{$t}{INSERT} ||= $f if $l =~ /\bINSERT\s+INTO\s+$t\b/i;
+      }
+    }
+  }
+  for my $t (sort keys %need) { for my $v (sort keys %{$need{$t}}) {
+    print "$t needs $v ($need{$t}{$v}) but the note grants it only: $has{$t}\n" unless $has{$t} =~ /\b$v\b/;
+  } }
+')"
+[ -z "${verb_report}" ] || {
+  printf '%s\n' "${verb_report}" >&2
+  fail "the newest CHANGELOG \"Split-role installs\" bullet grants a table fewer verbs than non-test SQL uses on it: a split-role install that follows the note fails at that statement (C8h verbs). Move the table to a group that carries the verb"
+}
+pass "C8h the split-role upgrade note grants every verb the code uses on the tables it names"
 
 # ── C9: every "helm install wardyn" recipe carries its render-time refusals ─
 #

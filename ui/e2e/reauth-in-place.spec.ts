@@ -4,7 +4,8 @@
  */
 
 import type { Page, Request } from "@playwright/test";
-import { ADMIN_TOKEN, expect, gotoConsole, navToRoute, test } from "./fixtures";
+import { ADMIN_TOKEN, expect, gotoConsole, navToRoute, newRunHeading, test } from "./fixtures";
+import { NR_START } from "../src/app/components/wardyn/copy/new-run/start";
 import { REAUTH_BAR, REAUTH_DIALOG, REAUTH_RENEW } from "../src/app/lib/reauth-copy";
 import { PROVIDERS } from "../src/app/lib/workspace-providers-copy";
 
@@ -87,7 +88,17 @@ test.describe("signed out mid-page: sign in again in place (#483)", () => {
     await signInInDialog(page);
     // A fresh document: the marker set on the old one is gone.
     await expect
-      .poll(() => page.evaluate(() => (window as unknown as { beforeReauth?: boolean }).beforeReauth ?? false))
+      .poll(() =>
+        page
+          .evaluate(() => (window as unknown as { beforeReauth?: boolean }).beforeReauth ?? false)
+          // The reload destroys the old context mid-evaluate: that IS the answer,
+          // and this poll expects false, so a blanket catch would satisfy it with
+          // any error at all. Swallow only that one and let the rest out.
+          .catch((e: unknown) => {
+            if (e instanceof Error && /Execution context was destroyed/.test(e.message)) return false;
+            throw e;
+          }),
+      )
       .toBe(false);
     await expect(page).toHaveURL(/\/providers$/);
     await expect(page.getByRole("heading", { name: PROVIDERS.TITLE, level: 1 })).toBeVisible();
@@ -216,17 +227,21 @@ test.describe("the renewal strip over New run", () => {
     // One fixed expiry: a moving one would read as a renewal on the next /me.
     const expiresAt = inMinutes(2);
     await page.route("**/api/v1/me", async (route) => {
-      const response = await route.fetch();
-      await route.fulfill({ response, json: { ...(await response.json()), session_expires_at: expiresAt } });
+      try {
+        const response = await route.fetch();
+        await route.fulfill({ response, json: { ...(await response.json()), session_expires_at: expiresAt } });
+      } catch {
+        // The page went away while the real answer was in flight.
+      }
     });
     await gotoConsole(page);
     await page.getByRole("button", { name: "New run" }).click();
     await expect(page).toHaveURL(/\/runs\/new$/);
-    // New Run is its own lazy chunk and focuses Title when it mounts. Wait for
+    // New Run is its own lazy chunk and focuses its heading when it mounts. Wait for
     // that: mounting after the strip took focus moves focus off Cancel, and
     // New Run's own Escape handler must already be there for staying put to
     // prove the strip consumed the key.
-    await expect(page.getByLabel("Title")).toBeFocused();
+    await expect(newRunHeading(page, NR_START.TITLE)).toBeFocused();
     await expect(page.getByText(EXPIRING_SOON)).toBeVisible();
 
     await page.getByRole("button", { name: REAUTH_RENEW.CTA }).click();
@@ -238,6 +253,6 @@ test.describe("the renewal strip over New run", () => {
     await expect(page.getByText(EXPIRING_SOON)).toBeVisible();
     await expect(page.getByRole("button", { name: REAUTH_RENEW.CTA })).toBeFocused();
     await expect(page).toHaveURL(/\/runs\/new$/);
-    await expect(page.getByRole("heading", { name: "New run" })).toBeVisible();
+    await expect(newRunHeading(page, NR_START.TITLE)).toBeVisible();
   });
 });

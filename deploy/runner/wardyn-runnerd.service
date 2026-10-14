@@ -1,0 +1,37 @@
+# Copyright 2026 The Wardyn Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# wardyn-runnerd.service — a systemd USER unit that keeps `wardyn-runnerd serve`
+# running as the person who owns the runner.
+#
+# Per-user, not a root system unit like deploy/desktop/wardyn.service: the runner
+# identity lives in the person's own configuration directory, where the owner's
+# `wardyn runner claim` looks for it, and the runner is bound to that one
+# person. A unit running as root would keep its identity under root's home.
+#
+# __WARDYN_RUNNERD__ is a placeholder — deploy/runner/install.sh renders this
+# file into the user's systemd directory with the installed binary's absolute
+# path. Committed with the placeholder it is still a valid unit file;
+# scripts/test-runner-units.sh checks that the placeholder is still there for
+# install.sh's sed to find.
+
+[Unit]
+Description=Wardyn runner (client mode)
+Documentation=https://github.com/cjohnstoniv/wardyn/blob/main/docs/runner-registration.md
+After=network-online.target
+
+[Service]
+Type=simple
+# WARDYN_RUNNER_ORG_URL, WARDYN_RUNNER_STATE_DIR, WARDYN_PROXY_IMAGE,
+# WARDYN_INTERNAL_NETWORK and, optionally, DOCKER_HOST. `--org` and `--state-dir`
+# are flag-only, hence the variables below.
+EnvironmentFile=%h/.config/wardyn/runnerd.env
+ExecStart=__WARDYN_RUNNERD__ serve --org ${WARDYN_RUNNER_ORG_URL} --state-dir ${WARDYN_RUNNER_STATE_DIR}
+# serve retries an unreachable organisation itself; this restarts a crash.
+Restart=on-failure
+RestartSec=10s
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target

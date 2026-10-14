@@ -217,3 +217,46 @@ func TestPGLocker_ReleaseFreesTheLockAtOnce(t *testing.T) {
 	}
 	rel()
 }
+
+// A nested lock waiting for a lock another session holds keeps the hold's
+// connection busy for its whole budget; LockHeld must not wait that long.
+func TestPGLocker_LockHeldIsBoundedWhileANestedLockWaits(t *testing.T) {
+	a, b, _ := twoReplicas(t)
+	ctx := context.Background()
+	outer, nested := testKey(t, RunOpLockClass), testKey(t, SiteConfigLockClass)
+
+	_, relB, ok, err := b.TryLock(ctx, nested)
+	if err != nil || !ok {
+		t.Fatalf("the other session could not take the nested key: ok %v, err %v", ok, err)
+	}
+	defer relB()
+	hctx, release, err := a.Lock(ctx, outer, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+
+	nestedDone := make(chan error, 1)
+	go func() {
+		_, nrel, err := a.Lock(hctx, nested, 10*time.Second)
+		if err == nil {
+			nrel()
+		}
+		nestedDone <- err
+	}()
+	time.Sleep(300 * time.Millisecond)
+
+	start := time.Now()
+	err = LockHeld(hctx)
+	elapsed := time.Since(start)
+	if !errors.Is(err, ErrLockLost) {
+		t.Errorf("LockHeld while a nested lock waits = %v, want ErrLockLost", err)
+	}
+	if bound := 2*LockWatchInterval + 2*time.Second; elapsed > bound {
+		t.Errorf("LockHeld took %v, want at most %v", elapsed, bound)
+	}
+	relB()
+	if err := <-nestedDone; err != nil {
+		t.Errorf("the nested lock, once the key was freed: %v", err)
+	}
+}

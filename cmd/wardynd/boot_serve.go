@@ -136,7 +136,7 @@ func resolveTLSPosture(dsn, tlsCert, tlsKey, listen string, tlsTerminated, allow
 //     non-terminal by a previous process (crash/restart) so it is not stranded
 //     RUNNING forever with a live sandbox and un-revoked credentials.
 //     Best-effort; a reconciliation error never blocks startup.
-func startBackgroundWorkers(rootCtx context.Context, f *bootFlags, srv *api.Server, run runner.Runner, pool *pgxpool.Pool, idp identity.Provider, brk *broker.Broker, maskedRec audit.Recorder, recStore recording.Store, leader *db.SweeperLeader, ticks *sweephealth.Tracker) {
+func startBackgroundWorkers(rootCtx context.Context, f *bootFlags, srv *api.Server, run runner.Runner, pool *pgxpool.Pool, st store.PG, idp identity.Provider, brk *broker.Broker, maskedRec audit.Recorder, recStore recording.Store, leader *db.SweeperLeader, ticks *sweephealth.Tracker) {
 	if leader != nil {
 		go goSafe("sweeper.leader", func() { leader.Run(rootCtx) })
 	}
@@ -151,7 +151,7 @@ func startBackgroundWorkers(rootCtx context.Context, f *bootFlags, srv *api.Serv
 	})
 	// The audit retention policy and the daily partition sweep (a nil pool is a unit test).
 	if pool != nil {
-		startAuditRetention(rootCtx, f, pool, leader)
+		startAuditRetention(rootCtx, f, st, leader)
 		warnSmallPool(pool.Config().MaxConns)
 	}
 
@@ -205,6 +205,8 @@ func startBackgroundWorkers(rootCtx context.Context, f *bootFlags, srv *api.Serv
 	// no-op without a mask registry, and there is nothing to configure.
 	go goSafe("secret.sweeper", func() { runSecretSweeper(rootCtx, srv, runSecretSweepInterval, ticks) })
 	startRunOutputSweeper(rootCtx, leader, srv, runOutputSweepInterval, ticks)
+	startRunQueueSweeper(rootCtx, leader, srv, runQueueSweepInterval, ticks)
+	go goSafe("runner.exit.sweeper", func() { srv.RunRunnerExitSweeper(rootCtx) })
 	startSCIMPurgeSweeper(rootCtx, f, leader, srv, scimPurgeSweepInterval)
 	leaderGo(rootCtx, leader, "credential.sweeper", func(ctx context.Context) { runCredentialSweeper(ctx, srv, credentialSweepInterval, ticks) })
 
@@ -213,6 +215,9 @@ func startBackgroundWorkers(rootCtx context.Context, f *bootFlags, srv *api.Serv
 	// — the envbuild orphan-build sweep needs only an ImageBuilder, which a
 	// `-runner none -envbuild` headless-API deployment still configures. Gating
 	// this call on run left that deployment's build containers never swept.
+	if rerr := srv.RegisterRunnerSubstrates(rootCtx); rerr != nil {
+		slog.WarnContext(rootCtx, "wardynd: runner substrate registration", slog.Any("err", rerr))
+	}
 	if rerr := srv.ReconcileOnBoot(rootCtx); rerr != nil {
 		slog.WarnContext(rootCtx, "wardynd: boot reconciliation", slog.Any("err", rerr))
 	}
@@ -229,8 +234,8 @@ func startBackgroundWorkers(rootCtx context.Context, f *bootFlags, srv *api.Serv
 
 	// D28: re-apply decided `always`-scoped egress decisions onto their
 	// workspaces, healing any allow/deny the non-atomic post-Decide write-back
-	// dropped on a PG blip. In a goroutine — it reads all decided egress
-	// approvals, which need not gate serving.
+	// dropped on a PG blip. In a goroutine — it walks the decided always-egress
+	// verdicts in bounded pages, which need not gate serving.
 	leaderGo(rootCtx, leader, "egress.reconcile", func(ctx context.Context) {
 		if n, rerr := srv.ReconcileWorkspaceEgressDecisions(ctx); rerr != nil {
 			slog.WarnContext(ctx, "wardynd: always-egress reconcile deferred", slog.Any("err", rerr))
@@ -238,6 +243,12 @@ func startBackgroundWorkers(rootCtx context.Context, f *bootFlags, srv *api.Serv
 			slog.InfoContext(ctx, "wardynd: reconciled always-egress decisions onto workspaces", slog.Int("decisions", n))
 		}
 	})
+
+	// #1513: acknowledged SIEM delivery, off unless the webhook sink asks for it.
+	// f.auditSinks is nil only in the boot tests that build a bare bootFlags.
+	if f.auditSinks != nil {
+		startAuditDelivery(rootCtx, *f.auditSinks, st, maskedRec, leader)
+	}
 }
 
 // smallPoolWarnBelow is the pool the two tick locks need: the lifecycle reaper's
@@ -356,6 +367,7 @@ func serveAndShutdown(rootCtx context.Context, f *bootFlags, posture tlsPosture,
 
 	errCh := make(chan error, 2)
 	internalSrv := startInternalListener(hop, f, srv.InternalHandler(), errCh)
+	relaySrv := startRelayListener(hop, srv)
 	go func() {
 		switch {
 		case posture.tlsEnabled:
@@ -415,6 +427,9 @@ func serveAndShutdown(rootCtx context.Context, f *bootFlags, posture tlsPosture,
 
 	shutCtx, shutCancel := context.WithTimeout(context.Background(), api.HTTPShutdownTimeout)
 	defer shutCancel()
+	if relaySrv != nil {
+		_ = relaySrv.Shutdown(shutCtx)
+	}
 	// fan.Close() is the deferred drain above — reached from here and from the
 	// serve-error return alike.
 	return runShutdownSequence(shutCtx, internalSrv, httpSrv, srv, orgFederation)

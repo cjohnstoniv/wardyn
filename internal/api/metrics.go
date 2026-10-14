@@ -11,10 +11,12 @@ import (
 	"maps"
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/notify"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -160,6 +162,9 @@ type metrics struct {
 	// lands on "other", which is itself the signal that the vocabulary needs a row.
 	startWaitSum   map[string]float64
 	startWaitCount map[string]int64
+
+	// queueHist is how long runs waited in a runner pool's queue, by how they left it (metrics_queue.go).
+	queueHist queueWaitHist
 }
 
 // startWaited records one stretch a starting sandbox spent on one reason.
@@ -327,7 +332,12 @@ func (m *metrics) egressDenied() {
 }
 
 // Non-policy DENY rule_sources. An egress.Deny decision log carries one of these
-// when nothing was denied by policy at all:
+// when nothing was denied by policy at all. The two network faults
+// (builtin:dial-failed, builtin:tunnel-failed) are classified by
+// egress.IsNetworkFault — the ONE predicate, shared with observed-egress
+// promotion and Record Mode, so a source cannot be excluded from one consumer
+// and counted by another. The rest are named here because this list is
+// exclusive to the SERIES:
 //
 //   - builtin:dial-failed — emitted from exactly three sites in
 //     internal/egress/proxy (handleConnect in proxy.go, failUpstream in
@@ -339,6 +349,12 @@ func (m *metrics) egressDenied() {
 //     config problem the operator's own gateway can never satisfy, not a
 //     failure the network caused. That source is DELIBERATELY absent from the
 //     exclusion list below — a guard refusal counts as a denial like any other.
+//   - builtin:tunnel-failed — a connection policy ALLOWED and the proxy opened
+//     that died after it opened (the tunnel broke mid-stream). Like
+//     builtin:dial-failed it is a network fault, not a denial of anything, so it
+//     keeps its egress.deny audit row and does not move the series.
+//     builtin:resolve-failed, a name that did not resolve, is DELIBERATELY absent
+//     from the exclusion list below and counts as a denial like any other.
 //   - builtin:upstream-protocol-mismatch — a round trip that GOT AN ANSWER: an
 //     HTTP/2 frame on a connection that negotiated no ALPN, which the proxy
 //     could not complete over HTTP/2 either (internal/egress/proxy's
@@ -348,12 +364,6 @@ func (m *metrics) egressDenied() {
 //     opposite direction: an identical retry does not fix it, so it is
 //     also DELIBERATELY absent from the exclusion list below and counts as a
 //     denial like any other.
-//   - builtin:tunnel-failed — a connection policy ALLOWED and the proxy opened
-//     that died after it opened (the tunnel broke mid-stream). Like
-//     builtin:dial-failed it is a network fault, not a denial of anything, so it
-//     keeps its egress.deny audit row and does not move the series.
-//     builtin:resolve-failed, a name that did not resolve, is DELIBERATELY absent
-//     from the exclusion list below and counts as a denial like any other.
 //   - egress:dropped-decisions-<n> — decisions.go's synthetic summary for
 //     decision records the buffer had to drop. An audit-FIDELITY alert about a
 //     wedged control plane, not a denial of anything; the count rides in the
@@ -367,8 +377,6 @@ func (m *metrics) egressDenied() {
 //     own wardyn_credential_reauth_total{outcome="timeout"}, which is the
 //     series an operator actually wants for it.
 const (
-	ruleSourceDialFailed       = "builtin:dial-failed"
-	ruleSourceTunnelFailed     = "builtin:tunnel-failed"
 	ruleSourceDroppedDecisions = "egress:dropped-decisions-"
 	// Mirrors internal/egress/proxy's ruleSourceCredentialReauthTimeout; the
 	// two packages do not import each other, and the decision arrives here as
@@ -387,8 +395,7 @@ const (
 // counter failing quiet — while this list fails toward counting: a source nobody
 // classified still moves the series, and only the four known non-denials do not.
 func isPolicyDeny(ruleSource string) bool {
-	return ruleSource != ruleSourceDialFailed &&
-		ruleSource != ruleSourceTunnelFailed &&
+	return !egress.IsNetworkFault(ruleSource) &&
 		ruleSource != ruleSourceCredentialReauthTimeout &&
 		!strings.HasPrefix(ruleSource, ruleSourceDroppedDecisions)
 }
@@ -450,7 +457,7 @@ func (m *metrics) write(w io.Writer) {
 		"# TYPE wardyn_egress_denies_total counter\nwardyn_egress_denies_total %d\n", m.egressDenies)
 	fmt.Fprintf(w, "# HELP wardyn_credential_mints_total Credentials minted by the broker.\n"+
 		"# TYPE wardyn_credential_mints_total counter\nwardyn_credential_mints_total %d\n", m.mints)
-	fmt.Fprintf(w, "# HELP wardyn_auth_failed_suppressed_total Authentication failures whose auth.fail audit row was dropped by the rate limiter. Audit volume is capped at ~1/sec, so this series — not the audit trail — is what grows during a burst.\n"+
+	fmt.Fprintf(w, "# HELP wardyn_auth_failed_suppressed_total Authentication failures and unauthenticated ticket or key refusals whose audit row (auth.fail, ssh.authenticate, session.attach or ui.authorize) was dropped by the rate limiter. Audit volume is capped at ~1/sec, so this series — not the audit trail — is what grows during a burst.\n"+
 		"# TYPE wardyn_auth_failed_suppressed_total counter\nwardyn_auth_failed_suppressed_total %d\n", m.authFailedSuppressed)
 	fmt.Fprintf(w, "# HELP wardyn_device_ingest_failures_suppressed_total Refused device audit pushes whose device.audit.ingest row was folded into a streak or dropped by the per-device rate limit.\n"+
 		"# TYPE wardyn_device_ingest_failures_suppressed_total counter\nwardyn_device_ingest_failures_suppressed_total %d\n", m.deviceIngestSuppressed)
@@ -469,6 +476,7 @@ func (m *metrics) write(w io.Writer) {
 		"# TYPE wardyn_sandbox_launch_seconds summary\n"+
 		"wardyn_sandbox_launch_seconds_sum %g\nwardyn_sandbox_launch_seconds_count %d\n",
 		m.launchSum, m.launchCount)
+	m.queueHist.write(w)
 }
 
 // handleMetrics serves the scrape surface. It is admin-only (mounted INSIDE the
@@ -495,6 +503,7 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	s.metrics.write(&body)
 	s.writeHealthGauges(r, &body)
 	s.writeFleetGauges(r, &body)
+	s.writeQueueGauges(r, &body)
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
 	_, _ = w.Write(body.Bytes())
 }
@@ -540,6 +549,7 @@ func (s *Server) writeHealthGauges(r *http.Request, w io.Writer) {
 	}
 	s.writePartitionsAhead(ctx, w)
 	s.writeSinkDrops(w)
+	s.writeAuditDelivery(ctx, w)
 	writeApprovalNotify(w)
 	s.writeSubstrateGauges(ctx, w)
 	// The eBPF sensor's cumulative counts, moved off the anonymous
@@ -582,6 +592,55 @@ func (s *Server) writeSinkDrops(w io.Writer) {
 		"# TYPE wardyn_audit_sink_drops_total counter\n")
 	for _, name := range names {
 		fmt.Fprintf(w, "wardyn_audit_sink_drops_total{sink=%q} %d\n", name, drops[name])
+	}
+}
+
+// writeAuditDelivery emits the acknowledged-delivery series (#1513) per
+// destination, from the checkpoint table, so any replica reports them. Omitted
+// when acknowledged delivery is not configured (AuditDelivery nil) or the
+// read fails (wardyn_store_up beside it already says the store is down).
+func (s *Server) writeAuditDelivery(ctx context.Context, w io.Writer) {
+	if s.cfg.AuditDelivery == nil {
+		return
+	}
+	sts, err := s.cfg.AuditDelivery(ctx)
+	if err != nil || len(sts) == 0 {
+		return
+	}
+	for _, m := range []struct {
+		name, typ, help string
+		val             func(store.AuditDeliveryStatus) float64
+	}{
+		{"wardyn_audit_delivery_lag", "gauge", "Audit rows recorded but not yet acknowledged by the collector (head seq minus acknowledged seq), by destination.",
+			func(d store.AuditDeliveryStatus) float64 { return float64(max(d.HeadSeq-d.AckedSeq, 0)) }},
+		{"wardyn_audit_delivery_oldest_undelivered_age_seconds", "gauge", "Age of the oldest audit row the collector has not acknowledged, 0 when caught up, by destination.",
+			func(d store.AuditDeliveryStatus) float64 {
+				if d.OldestUndelivered == nil {
+					return 0
+				}
+				return time.Since(*d.OldestUndelivered).Seconds()
+			}},
+		{"wardyn_audit_delivery_last_ack_timestamp_seconds", "gauge", "Unix time of the collector's last acceptance, 0 if it never accepted, by destination.",
+			func(d store.AuditDeliveryStatus) float64 {
+				if d.AckedAt == nil {
+					return 0
+				}
+				return float64(d.AckedAt.Unix())
+			}},
+		{"wardyn_audit_delivery_halted", "gauge", "1 when the collector refused a batch definitively and delivery is halted until wardynd restarts or another replica takes over delivery, by destination.",
+			func(d store.AuditDeliveryStatus) float64 {
+				if d.Halted {
+					return 1
+				}
+				return 0
+			}},
+		{"wardyn_audit_delivery_resets_total", "counter", "Times retention or a table reset removed the row at the checkpoint and delivery resent from the oldest retained row, by destination.",
+			func(d store.AuditDeliveryStatus) float64 { return float64(d.Resets) }},
+	} {
+		fmt.Fprintf(w, "# HELP %s %s\n# TYPE %s %s\n", m.name, m.help, m.name, m.typ)
+		for _, d := range sts {
+			fmt.Fprintf(w, "%s{destination=%q} %s\n", m.name, d.Destination, strconv.FormatFloat(m.val(d), 'f', -1, 64))
+		}
 	}
 }
 

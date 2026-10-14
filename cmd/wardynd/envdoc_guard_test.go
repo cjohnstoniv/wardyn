@@ -35,8 +35,9 @@ var envDocAllow = map[string]bool{
 	"WARDYN_TEST_BOOL": true, "WARDYN_TEST_DUR": true, "WARDYN_TEST_STR": true,
 	"WARDYN_TEST_PG": true, "WARDYN_REQUIRE_TMUX": true, "WARDYN_TEST_DOCKER": true, "WARDYN_TEST_CACHE_REPO": true,
 	"WARDYN_TEST_VAULT": true, "WARDYN_TEST_VAULT_TOKEN_FILE": true, "WARDYN_TEST_VAULT_K8S_JWT_FILE": true,
-	"WARDYN_TEST_AZURE_KV":   true,
-	"WARDYN_TEST_FIPS_CHILD": true, "WARDYN_TEST_TOOLS_DIR": true, "WARDYN_ENVBUILD_TEST_FLOAT": true,
+	"WARDYN_TEST_AZURE_KV":    true,
+	"WARDYN_TEST_AWS_KMS_KEY": true,
+	"WARDYN_TEST_FIPS_CHILD":  true, "WARDYN_TEST_TOOLS_DIR": true, "WARDYN_ENVBUILD_TEST_FLOAT": true,
 	// internal/db's nested-acquire guard, read by db.Connect only inside a test binary.
 	"WARDYN_TEST_POOL_GUARD":   true,
 	"WARDYN_ENVBUILD_TEST_INT": true, "WARDYN_FAKE_MARKER": true, "WARDYN_NEGCTL": true,
@@ -169,15 +170,17 @@ var envDocShellOnly = map[string]bool{
 	// Real configuration, documented in ENV.md's "Setup / operator scripts
 	// (shell-only)" table, with no Go reader by design.
 	"WARDYN_FORCE_STOP_HOST": true, "WARDYN_UP_NO_BROWSER": true,
+	"WARDYN_SETUP_RUNNER_DISK_GB": true, "WARDYN_SETUP_RUNNER_LIMITS": true,
 	"WARDYN_UP_SKIP_RUN_IMAGES": true, "WARDYN_SCM_SSH_HOSTS": true,
 	"WARDYN_GEN_DEPLOY_KEY": true, "WARDYN_DEPLOY_KEY_HOST": true,
 	// install.sh's own three: the one-line installer's version pin, its target
 	// directory, and the loopback port it publishes.
 	"WARDYN_VERSION": true, "WARDYN_HOME": true, "WARDYN_PORT": true,
 	// The desktop tier's MDM-managed directory: docker-compose.yaml bind-mounts
-	// it read-only at /etc/wardyn and wardyn-desktop.sh exports it. Go never
-	// reads the var — it reads the POLICY FILE at the path inside that mount
-	// (WARDYN_DEFAULT_POLICY), which is a separate, Go-read var.
+	// it read-only at /etc/wardyn and wardyn-desktop.sh exports it. Go reads it
+	// only to tell the deployment for -recovery-inventory (recovery_inventory.go);
+	// it reads the POLICY FILE at the path inside that mount (WARDYN_DEFAULT_POLICY)
+	// as a separate var.
 	"WARDYN_MANAGED_DIR": true,
 	// The desktop-tier installer's own image override — read only by
 	// deploy/desktop/install.sh (`-gen-age-key`), never by Go. Documented in
@@ -429,7 +432,7 @@ func TestEnvDoc_RowsNameTheirFlag(t *testing.T) {
 // the OLD name for cross-reference (so an operator who remembers it can find
 // where it went) — unlike envDocAllow, these are not test-only and have no
 // reader anywhere, in test Go or otherwise. Keep in sync with docs/ENV.md's
-// "Renamed in 0.8" table.
+// "Renamed in 0.8" table and its "Removed in 0.9" list.
 var envDocRetired = map[string]bool{
 	// #203: folded into WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS's {app,pat} scope.
 	"WARDYN_GIT_PAT_BROKER_ENFORCE_BRANCH_NS": true,
@@ -444,6 +447,10 @@ var envDocRetired = map[string]bool{
 	"WARDYN_OPENAI_BASE_URL": true, "WARDYN_OPENAI_GATEWAY_HEADER": true, "WARDYN_OPENAI_GATEWAY_FORMAT": true,
 	"WARDYN_BEDROCK_REGION": true, "WARDYN_BEDROCK_MODEL": true, "WARDYN_BEDROCK_BASE_URL": true,
 	"WARDYN_BEDROCK_AWS_PROFILE": true, "WARDYN_BEDROCK_AWS_SSO_REGION": true, "WARDYN_BEDROCK_AWS_DIR": true,
+	// 0.9: the WARDYN_MEMBER_* aliases of the WARDYN_USER_* names, removed. docs/ENV.md's
+	// "Removed in 0.9" list names them so an operator can find where each went.
+	"WARDYN_MEMBER_MODE": true, "WARDYN_MEMBER_WORKSPACE_ROOTS": true, "WARDYN_MEMBER_WORKSPACE_ROOTS_MAP": true,
+	"WARDYN_MEMBER_WRITABLE_ROOTS": true, "WARDYN_MEMBER_WRITABLE_DENY": true, "WARDYN_ALLOW_MEMBER_ENV_SECRET": true,
 }
 
 // TestEnvDoc_ReverseEveryRowHasReader ratchets the other direction: every

@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/api"
-	"github.com/cjohnstoniv/wardyn/internal/cliutil"
 	"github.com/cjohnstoniv/wardyn/internal/identity/embedded"
 )
 
@@ -59,7 +58,8 @@ type bootFlags struct {
 	// WHICH org. Unset (the default) means no hybrid posture at all, and
 	// validateHybridPosture (boot_posture.go) is a no-op. orgEnrolToken is
 	// meaningless without it.
-	orgURL *string
+	orgURL       *string
+	runnerOrgURL *string
 	// orgEnrolToken is WARDYN_ORG_ENROLMENT_TOKEN — a secret, so never logged
 	// and never echoed in a boot refusal.
 	orgEnrolToken *string
@@ -181,12 +181,14 @@ type bootFlags struct {
 	auditRetentionDays     *int
 	auditRetentionAutodrop *bool
 
-	oidcIssuer       *string
-	oidcInternalIss  *string
-	oidcClientID     *string
-	oidcClientSecret *string
-	oidcRedirectURL  *string
-	oidcEmailDomains *string
+	oidcIssuer      *string
+	oidcInternalIss *string
+	// oidcInternalIssPlain is the one opt-out of the plaintext internal issuer refusal: "mesh".
+	oidcInternalIssPlain *string
+	oidcClientID         *string
+	oidcClientSecret     *string
+	oidcRedirectURL      *string
+	oidcEmailDomains     *string
 	// oidcRequireEmailVerified feeds oidc.Config.RequireEmailVerified
 	// (WARDYN_OIDC_REQUIRE_EMAIL_VERIFIED, default false): the email_verified
 	// gate without a domain allowlist.
@@ -311,6 +313,11 @@ type bootFlags struct {
 	// rewrapPrincipalKeys is `wardynd -rewrap-principal-keys` (rewrap_principal_keys.go):
 	// no env pair, like -rewrap.
 	rewrapPrincipalKeys *bool
+	// recoveryInventory, recoveryManifest, recoveryVerify and recoveryRehearse are the recovery-set verbs
+	// (recovery_inventory.go, recovery_manifest.go), and recoverySet is the set directory they
+	// work on. No env pair, like the modes above.
+	recoveryInventory, recoveryManifest, recoveryVerify, recoveryRehearse *bool
+	recoverySet                                                           *string
 	// vault configures the Vault KV v2 external store, azure the Azure Key
 	// Vault one (secret_store.go).
 	vault vaultFlags
@@ -342,6 +349,9 @@ type bootFlags struct {
 	sshAdvertise    *string
 	sshProxyCommand *string
 	sshRoleTTL      *time.Duration
+	// sshMaxSessionsPerRun is api.Config.SSHMaxSessionsPerRun, validated by
+	// validateSSHMaxSessionsPerRun.
+	sshMaxSessionsPerRun *int
 	// apiTokenMaxTTL caps a newly minted API token's lifetime — see
 	// api.Config.APITokenMaxTTL.
 	apiTokenMaxTTL *time.Duration
@@ -377,50 +387,12 @@ type bootFlags struct {
 	allowUnknownMigrations *bool
 }
 
-// deprecatedEnvAliases is UT-5's six WARDYN_MEMBER_* → WARDYN_USER_* renames
-// (user-types-design.md rev 4 §6, §4's D5 ruling): {new, old} pairs, resolved
-// before any flag is parsed so every FlagBool/FlagEnv/os.Getenv(new) read below
-// sees the operator's value whichever name they used. No M-surface-2 generic
-// alias mechanism exists yet (issue UT-5 allows "or self-contained"), so this
-// is wardynd's own list rather than a shared registry; a later M-surface-2 PR
-// can fold it into a bigger one using the same cliutil.EnvAlias primitive.
-// Accepted through 0.8.x, removed in 0.9 — same shape as the boot WARN for a
-// chart WARDYN_OIDC_ROLE_MAP entry still saying `=member` (UT-2a).
-var deprecatedEnvAliases = [][2]string{
-	{"WARDYN_USER_DESKTOP", "WARDYN_MEMBER_MODE"},
-	{"WARDYN_USER_WORKSPACE_ROOTS", "WARDYN_MEMBER_WORKSPACE_ROOTS"},
-	{"WARDYN_USER_WORKSPACE_ROOTS_MAP", "WARDYN_MEMBER_WORKSPACE_ROOTS_MAP"},
-	{"WARDYN_USER_WRITABLE_ROOTS", "WARDYN_MEMBER_WRITABLE_ROOTS"},
-	{"WARDYN_USER_WRITABLE_DENY", "WARDYN_MEMBER_WRITABLE_DENY"},
-	{"WARDYN_ALLOW_USER_ENV_SECRET", "WARDYN_ALLOW_MEMBER_ENV_SECRET"},
-}
-
-// resolveDeprecatedEnvAliases applies deprecatedEnvAliases. It WARNs once per
-// deprecated name actually carrying a value, naming 0.9 as the removal release,
-// and WARNs when both spellings are set to different values, naming the one it
-// ignored — for WARDYN_USER_WRITABLE_DENY a silently dropped old list would
-// widen the writable set.
-func resolveDeprecatedEnvAliases() {
-	for _, pair := range deprecatedEnvAliases {
-		newEnv, oldEnv := pair[0], pair[1]
-		aliased, ignored := cliutil.EnvAlias(newEnv, oldEnv)
-		attrs := []any{slog.String("old_env", oldEnv), slog.String("new_env", newEnv)}
-		switch {
-		case aliased:
-			slog.Warn(fmt.Sprintf("wardynd: %s is no longer a variable name; use %s instead. Accepted through 0.8.x, removed in 0.9.", oldEnv, newEnv), attrs...)
-		case ignored:
-			slog.Warn(fmt.Sprintf("wardynd: %s and %s are both set, to different values; using %s and ignoring %s. Unset %s, which is removed in 0.9.", newEnv, oldEnv, newEnv, oldEnv, oldEnv), attrs...)
-		}
-	}
-}
-
 // parseBootFlags declares every wardynd flag (with its WARDYN_* env fallback)
 // and parses the command line. Moved verbatim out of run(); the usage strings
 // carry the operator-facing documentation for each knob.
 //
 //nolint:funlen // A flat table, one line per knob: its length is the knob count, not complexity.
 func parseBootFlags() *bootFlags {
-	resolveDeprecatedEnvAliases()
 	f := &bootFlags{
 		dsn:            flagEnv("dsn", "WARDYN_PG_DSN", "", "Postgres connection string (required)"),
 		migrateDSN:     flagEnv("migrate-dsn", "WARDYN_PG_MIGRATE_DSN", "", "Postgres DSN for a migrator role, used only to run migrations; when set, the main DSN is used only for the least-privilege runtime pool. Empty (default) runs migrations on the main DSN directly"),
@@ -445,6 +417,7 @@ func parseBootFlags() *bootFlags {
 		memberWritableRoots:    flagEnv("member-writable-roots", "WARDYN_USER_WRITABLE_ROOTS", "", "comma-separated absolute host directories where a member may mark their own mount writable. Empty (default) means member mounts are read-only"),
 		memberWritableDeny:     flagEnv("member-writable-deny", "WARDYN_USER_WRITABLE_DENY", "", "comma-separated absolute host directories carved out of -member-writable-roots; deny wins over allow"),
 		orgURL:                 flagEnv("org-url", "WARDYN_ORG_URL", "", "org control plane this managed laptop belongs to (https://, or a plain http:// loopback URL for local testing). Empty (default) means no hybrid posture; requires -member-mode when set"),
+		runnerOrgURL:           flagEnv("runner-org-url", "WARDYN_RUNNER_ORG_URL", "", "public organisation URL bound into registered runner identities; HTTPS required except loopback HTTP for development, without userinfo, query or fragment. Unset disables runner registration and streams"),
 		orgEnrolToken:          flagEnv("org-enrolment-token", "WARDYN_ORG_ENROLMENT_TOKEN", "", "secret enrolment token this device presents to -org-url; requires -org-url to also be set"),
 		scimToken:              flagEnv("scim-token", "WARDYN_SCIM_TOKEN", "", "secret bearer the SCIM 2.0 Users routes (/scim/v2/Users) accept, at least 32 bytes; unset (default) mounts no SCIM route. Requires OIDC on a single-tenant Entra issuer and TLS"),
 		scimTokenNext:          flagEnv("scim-token-next", "WARDYN_SCIM_TOKEN_NEXT", "", "secret second bearer the SCIM routes accept while the identity provider is switched to a new one; requires -scim-token and must differ from it"),
@@ -498,20 +471,21 @@ func parseBootFlags() *bootFlags {
 		auditRetentionDays:     flagIntEnv("audit-retention-days", "WARDYN_AUDIT_RETENTION_DAYS", 0, "audit retention window in days (default 0, keep forever); the oldest closed monthly partition older than it can then be dropped, attested and digest-checked. A decrease takes effect 30 days after the boot that first saw it; an increase at once"),
 		auditRetentionAutodrop: flagBool("audit-retention-autodrop", "WARDYN_AUDIT_RETENTION_AUTODROP", false, "let the leader sweeper drop eligible oldest audit partitions itself, as the system actor (default false). UNATTESTED: no operator checked an export first"),
 
-		oidcIssuer:       flagEnv("oidc-issuer", "WARDYN_OIDC_ISSUER", "", "OIDC public issuer URL, browser-facing, matches the id_token iss; enables human SSO when set"),
-		oidcInternalIss:  flagEnv("oidc-internal-issuer", "WARDYN_OIDC_INTERNAL_ISSUER", "", "OIDC issuer URL reachable from wardynd for server-side calls, e.g. http://dex:5556; defaults to the public issuer"),
-		oidcClientID:     flagEnv("oidc-client-id", "WARDYN_OIDC_CLIENT_ID", "", "OIDC client id"),
-		oidcClientSecret: flagEnv("oidc-client-secret", "WARDYN_OIDC_CLIENT_SECRET", "", "OIDC client secret"),
-		oidcRedirectURL:  flagEnv("oidc-redirect-url", "WARDYN_OIDC_REDIRECT_URL", "", "OIDC redirect URL (<base>/auth/callback)"),
-		oidcEmailDomains: flagEnv("oidc-email-domains", "WARDYN_OIDC_EMAIL_DOMAINS", "", "comma-separated allowed email domains; requires email_verified=true when set. Empty (default) applies no domain or email_verified check unless -oidc-require-email-verified is set"), oidcExtraScopes: flagEnv("oidc-extra-scopes", "WARDYN_OIDC_EXTRA_SCOPES", "", `comma-separated scopes appended to the fixed "openid profile email" authorization request, e.g. "groups". Validated at boot against the provider's discovery scopes_supported; an unadvertised scope refuses boot by name. Empty (default) leaves the request unchanged`),
+		oidcIssuer:           flagEnv("oidc-issuer", "WARDYN_OIDC_ISSUER", "", "OIDC public issuer URL, browser-facing, matches the id_token iss; enables human SSO when set"),
+		oidcInternalIss:      flagEnv("oidc-internal-issuer", "WARDYN_OIDC_INTERNAL_ISSUER", "", "OIDC issuer URL reachable from wardynd for server-side calls, e.g. http://dex:5556; defaults to the public issuer"),
+		oidcInternalIssPlain: flagEnv("oidc-internal-issuer-plaintext", "WARDYN_OIDC_INTERNAL_ISSUER_PLAINTEXT", "", `set to "mesh" to allow a plain http:// internal issuer on a non-loopback host while the console has a TLS posture, when a service mesh encrypts that traffic; boot warns. The public issuer has no opt-out`),
+		oidcClientID:         flagEnv("oidc-client-id", "WARDYN_OIDC_CLIENT_ID", "", "OIDC client id"),
+		oidcClientSecret:     flagEnv("oidc-client-secret", "WARDYN_OIDC_CLIENT_SECRET", "", "OIDC client secret"),
+		oidcRedirectURL:      flagEnv("oidc-redirect-url", "WARDYN_OIDC_REDIRECT_URL", "", "OIDC redirect URL (<base>/auth/callback)"),
+		oidcEmailDomains:     flagEnv("oidc-email-domains", "WARDYN_OIDC_EMAIL_DOMAINS", "", "comma-separated allowed email domains; requires email_verified=true when set. Empty (default) applies no domain or email_verified check unless -oidc-require-email-verified is set"), oidcExtraScopes: flagEnv("oidc-extra-scopes", "WARDYN_OIDC_EXTRA_SCOPES", "", `comma-separated scopes appended to the fixed "openid profile email" authorization request, e.g. "groups". Validated at boot against the provider's discovery scopes_supported; an unadvertised scope refuses boot by name. Empty (default) leaves the request unchanged`),
 		oidcRequireEmailVerified: flagBool("oidc-require-email-verified", "WARDYN_OIDC_REQUIRE_EMAIL_VERIFIED", false, "refuse a sign-in whose id_token has no email_verified claim or has email_verified=false, without needing -oidc-email-domains; an absent claim counts as unverified, so an IdP that never sends it (Entra) locks every human out (default false)"),
 		oidcOperatorEmails:       flagEnv("oidc-operator-emails", "WARDYN_OIDC_OPERATOR_EMAILS", "", "comma-separated operator (admin) emails; a signed-in human not listed is a standard user. Empty with OIDC configured is refused at boot unless -allow-oidc-no-operator-list is set"),
 		// Refused by default (validateOperatorPosture) when OIDC SSO is configured
 		// and the operator allowlist is empty — the same refuse-with-an-escape-hatch
 		// shape as -allow-plaintext-listen above.
 		allowOIDCNoOperatorList: flagBool("allow-oidc-no-operator-list", "WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST", false, "allow boot with OIDC SSO configured but -oidc-operator-emails empty, making every signed-in human admin-equivalent absent a role map; normally refused (default false)"),
-		oidcRoleMap:             flagEnv("oidc-role-map", "WARDYN_OIDC_ROLE_MAP", "", `comma-separated "value=role" pairs mapping an App Role, group or email to "admin", "security_admin" or "user"; highest tier wins (user < security_admin < admin); this map is the only way to grant "security_admin". "member" means "user" until 0.9, with a boot warning. Empty (default) disables role derivation; every signed-in human is "admin"`),
-		oidcDefaultRole:         flagEnv("oidc-default-role", "WARDYN_OIDC_DEFAULT_ROLE", "", `role ("admin" or "user"; "member" means "user" until 0.9, with a boot warning) assigned when -oidc-role-map is set but nothing matched; "security_admin" is refused here. Empty (default) denies that login instead. Ignored when -oidc-role-map is empty`),
+		oidcRoleMap:             flagEnv("oidc-role-map", "WARDYN_OIDC_ROLE_MAP", "", `comma-separated "value=role" pairs mapping an App Role, group or email to "admin", "security_admin" or "user"; highest tier wins (user < security_admin < admin); this map is the only way to grant "security_admin". The pre-0.8 "member" is refused since 0.9. Empty (default) disables role derivation; every signed-in human is "admin"`),
+		oidcDefaultRole:         flagEnv("oidc-default-role", "WARDYN_OIDC_DEFAULT_ROLE", "", `role ("admin", "user" or a user type id; the pre-0.8 "member" is refused since 0.9) assigned when -oidc-role-map is set but nothing matched; "security_admin" is refused here. Empty (default) denies that login instead. Ignored when -oidc-role-map is empty`),
 		oidcAllowEmailMappings:  flagBool("oidc-allow-email-mappings", "WARDYN_OIDC_ALLOW_EMAIL_MAPPINGS", false, "allow an email-shaped value on a console People-step role mapping (POST /access/mappings); refused by default in favor of an App Role or group key (default false)"),
 
 		dirProvider: flagEnv("directory-provider", "WARDYN_DIRECTORY_PROVIDER", "", `identity-directory connector for the console's "who" autocomplete: "entra" (Microsoft Graph) or empty. Empty (default) is the feature off; enabling it grants wardynd read of the whole directory`),
@@ -607,7 +581,8 @@ func parseBootFlags() *bootFlags {
 		auditSplitLegacy: flag.Bool("audit-split-legacy", false, "maintenance mode, every other wardynd must be stopped: split the one legacy audit partition that holds all pre-0.8.6 history into seq-contiguous monthly ranges that retention can drop one at a time, without changing a row hash, then exit without serving. "+
 			"Dump the database first. Refuses (exit 3) while the single-instance lock is held, any other client is connected, or the connected role is not the migrator; "+
 			"exit 1 when the split fails, and then nothing was changed. Connects with WARDYN_PG_MIGRATE_DSN when set, bounded by WARDYN_MIGRATE_TIMEOUT. See docs/OPERATIONS.md, \"Split the pre-0.8.6 audit history\" (default false)"),
-		rewrap: flag.Bool("rewrap", false, "maintenance mode: in one transaction, rewrap every stored secret's data key onto the key a write uses today (its purpose's local key, or the WARDYN_KEK=transit or azurekv key at its latest version), then exit; values are never decrypted. See docs/operations/secrets-and-keys.md (default false)"),
+		rewrap: flag.Bool("rewrap", false, "maintenance mode: in one transaction, rewrap every stored secret's data key onto the key a write uses today (its purpose's local key, or the WARDYN_KEK=transit, azurekv or awskms key, "+
+			"at its latest version where the key service has versions), then exit; values are never decrypted. See docs/operations/secrets-and-keys.md (default false)"),
 		rewrapRetirePlatformKey: flag.Bool("rewrap-retire-platform-key", false, "with -rewrap only: move the signing, session and SSH host keys off the "+
 			"WARDYN_VAULT_TRANSIT_KEY_PLATFORM or WARDYN_AZURE_KEK_KEY_PLATFORM key (it must be named, and is read only) onto the key a write uses today, the "+
 			"WARDYN_KEK key service's key or the local key, then exit. Afterwards unset that platform setting. "+
@@ -619,6 +594,11 @@ func parseBootFlags() *bootFlags {
 		rewrapPrincipalKeys: flag.Bool("rewrap-principal-keys", false, "maintenance mode, safe while a daemon serves: move every person's stored credential from the credential key into an envelope under that person's own principal key (enc_version 3), "+
 			"one row at a time, then exit; idempotent and resumable, and values are never decrypted. Boot keys, the operator namespace and external-store pointers are untouched. "+
 			"Separate from -rewrap, which rotates the root key. See docs/operations/secrets-and-keys.md (default false)"),
+		recoveryInventory:       flag.Bool("recovery-inventory", false, "maintenance mode: print the recovery set's items as JSON, each with where it lives for this deployment, then exit. Opens no connection and reads no key (docs/design/0.9/recovery-set.md; default false)"),
+		recoveryManifest:        flag.Bool("recovery-manifest", false, "maintenance mode, every other wardynd must be stopped: write manifest.json into -recovery-set, tying the database snapshot to the staged spool, then exit (default false)"),
+		recoveryVerify:          flag.Bool("recovery-verify", false, "maintenance mode, every other wardynd must be stopped: check that the database at WARDYN_PG_DSN and the staged spool in -recovery-set are the pair the manifest recorded, then exit (default false)"),
+		recoveryRehearse:        flag.Bool("recovery-rehearse", false, "maintenance mode: check a restored database (WARDYN_REHEARSE_PG_DSN) against the recovery set in -recovery-set, with the deployment's keys in the environment, then exit: 0 pass, 3 refused, 4 fail, 5 incomplete (default false)"),
+		recoverySet:             flag.String("recovery-set", "", "directory of the recovery set that -recovery-manifest writes and -recovery-verify reads"),
 		vault:                   registerVaultFlags(),
 		hostCapacity:            registerHostCapacityFlags(),
 		preflightRatePerMin:     flagIntEnv("preflight-rate-per-min", "WARDYN_PREFLIGHT_RATE_PER_MIN", 20, "POST /runs/preflight calls one person may make per minute (burst 5); 0 turns the limit off. The admin token is exempt"),
@@ -638,6 +618,7 @@ func parseBootFlags() *bootFlags {
 		sshProxyCommand:        flagEnv("ssh-proxy-command", "WARDYN_SSH_PROXY_COMMAND", "", `ssh ProxyCommand published on /healthz for people to reach the SSH gateway through a TLS-terminating listener on 443; the console and "wardyn run ssh" show it, the daemon never runs it. No control characters, newlines or single quotes; at most 512 bytes. Empty (default) publishes none`),
 		roleStampTTL:           flagDuration("role-stamp-ttl", "WARDYN_ROLE_STAMP_TTL", 0, "how old an API token's or console session's role stamp may be before its owner must sign in again (duration; 0 = off)"),
 		governanceChangeTTL:    flagDuration("governance-change-ttl", "WARDYN_GOVERNANCE_CHANGE_TTL", 72*time.Hour, "how long a governance change held for a second human (WARDYN_GOVERNANCE_SECOND_HUMAN) waits for approval before it expires (duration; must be positive)"),
+		sshMaxSessionsPerRun:   flagIntEnv("ssh-max-sessions-per-run", "WARDYN_SSH_MAX_SESSIONS_PER_RUN", 4, "most concurrent SSH channels (shell, exec, sftp, -L forward) one run may hold across every connection, integer 1 to 64; wardyn-sync channels have their own cap of 2"),
 		sshRoleTTL:             flagDuration("ssh-role-ttl", "WARDYN_SSH_ROLE_TTL", 24*time.Hour, "how stale a registered SSH key's admin-override stamp may be before the gateway refuses it (duration)"),
 		apiTokenMaxTTL:         flagDuration("api-token-max-ttl", "WARDYN_API_TOKEN_MAX_TTL", 0, "longest lifetime a newly minted API token may have; a mint that asks for none gets this, one that asks for more is clamped to it (duration; 0 = no cap)"),
 		allowUnknownMigrations: flagBool("allow-unknown-migrations", "WARDYN_ALLOW_UNKNOWN_MIGRATIONS", false, "BREAK-GLASS: boot even though the database records migrations this wardynd does not ship (a newer wardynd migrated it). Normally refused — a downgrade is unsupported; restore the pre-upgrade dump instead"),

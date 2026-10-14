@@ -174,7 +174,7 @@ func TestPG_PartitionExportDigestEqualsTheDatabaseDigest(t *testing.T) {
 // before either callback runs.
 func TestPG_PartitionExportRefusesBeforeReadingAnything(t *testing.T) {
 	c := newPartChain(t)
-	live := scalar[string](t, c.pool, `SELECT m->>'name' FROM audit_partition_meta, jsonb_array_elements(manifest) m ORDER BY m->>'lo' LIMIT 1`)
+	live := scalar[string](t, c.pool, `SELECT m->>'name' FROM audit_partition_meta, jsonb_array_elements(manifest) m WHERE m->>'name' <> 'audit_events_legacy' ORDER BY m->>'lo' LIMIT 1`)
 	for name, tc := range map[string]struct {
 		partition string
 		want      error

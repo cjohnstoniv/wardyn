@@ -211,7 +211,10 @@ func (s *Server) resolveAWSSSOInjection(w http.ResponseWriter, r *http.Request,
 	// model-provider conversion, and no session serves it any more.
 	drift := "model_provider"
 	var scope awsSSOScope
-	if run.ModelProviderID != "" && snapshot.ProviderUID != "" {
+	switch {
+	case snapshot.ComponentID != "":
+		scope, drift = s.cliSSOScopeAt(ctx, run, snapshot, claims.Sub)
+	case run.ModelProviderID != "" && snapshot.ProviderUID != "":
 		scope, drift = providerSSOScopeAt(siteCfg, run, snapshot, claims.Sub)
 	}
 	if drift != "" {
@@ -231,6 +234,12 @@ func (s *Server) resolveAWSSSOInjection(w http.ResponseWriter, r *http.Request,
 		return fail(http.StatusForbidden, reasonStoreError, credentialReauthStoreErrorBody, nil)
 	}
 	reason := awsSSOReauthReasonNotFound
+	if found && scope.cli != "" && !blob.bindsSnapshot(snapshot) {
+		// A CLI session is stored for the row it was captured for, and the
+		// row's pin is what the sandbox's profile names.
+		return fail(http.StatusForbidden, reasonScopeChanged, credentialReauthScopeChangedRefusal,
+			map[string]any{"drift": "sso_pin", "owner": snapshot.OwnerSubject})
+	}
 	if found {
 		var refreshFailure string
 		blob, refreshFailure = s.refreshAWSSSOBlob(ctx, scope, blob)
@@ -256,7 +265,11 @@ func (s *Server) resolveAWSSSOInjection(w http.ResponseWriter, r *http.Request,
 	if reason != "" {
 		// A provider run is held like any other: its owner's sign-in through
 		// that provider's own door (provider_signin.go) answers the hold.
-		return s.holdOrRefuseCredentialReauth(w, r, claims, snapshot, run.ModelProviderID, reason)
+		modelProvider := run.ModelProviderID
+		if snapshot.ComponentID != "" {
+			modelProvider = "" // a CLI row's hold names the row, never the run's model provider
+		}
+		return s.holdOrRefuseCredentialReauth(w, r, claims, snapshot, modelProvider, reason)
 	}
 
 	// (6) LIVE. Per-run masking is ADDITIVE to the global registration
@@ -313,6 +326,7 @@ type awsSSOReauthScopeBody struct {
 	Owner            string `json:"owner"`
 	Provider         string `json:"provider,omitempty"`
 	ProviderUID      string `json:"provider_uid,omitempty"`
+	ComponentID      string `json:"component_id,omitempty"`
 }
 
 // holdOrRefuseCredentialReauth answers the DEAD-credential path: 423 while a
@@ -386,6 +400,7 @@ func (s *Server) holdOrRefuseCredentialReauth(w http.ResponseWriter, r *http.Req
 	if snapshot.ProviderUID != "" {
 		scope.Provider, scope.ProviderUID = modelProvider, snapshot.ProviderUID
 	}
+	scope.ComponentID = snapshot.ComponentID
 	reqScope, _ := json.Marshal(scope)
 	// The id is minted HERE so this caller can tell whether it RAISED the request
 	// or merely found one. RequestApproval's dedup — the pre-insert
@@ -416,13 +431,16 @@ func (s *Server) holdOrRefuseCredentialReauth(w http.ResponseWriter, r *http.Req
 	// RequestApproval itself emits nothing (its dedup is silent by design), so
 	// without this row "whose credential, held how long, resolved by whom" is
 	// unanswerable from the trail.
+	data := withModelProvider(map[string]any{
+		"approval_id": created.ID, "owner": snapshot.OwnerSubject,
+		"credential_source": snapshot.CredentialSource, "provider": awsSSOProvider,
+		"reason": reason, "detail": credentialReauthRaisedSentence,
+	}, modelProvider)
+	if snapshot.ComponentID != "" {
+		data["component_id"], data["detail"] = snapshot.ComponentID, cliAWSReauthRaisedSentence
+	}
 	s.recordAudit(ctx, s.auditEvent(&claims.RunID, types.ActorSystem, "wardynd",
-		"credential.reauth.request", created.ID.String(), "success",
-		mustJSON(withModelProvider(map[string]any{
-			"approval_id": created.ID, "owner": snapshot.OwnerSubject,
-			"credential_source": snapshot.CredentialSource, "provider": awsSSOProvider,
-			"reason": reason, "detail": credentialReauthRaisedSentence,
-		}, modelProvider))))
+		"credential.reauth.request", created.ID.String(), "success", mustJSON(data)))
 	s.metrics.credentialReauthRecorded(credentialReauthOutcomeRequested)
 	writeJSON(w, http.StatusLocked, reauthPendingResponse{State: reauthPendingState, ApprovalID: created.ID})
 	return true
@@ -477,7 +495,8 @@ func (sn awsSSOScopeSnapshot) authored() bool {
 // satisfies to APPROVED. Best-effort and never fatal to the capture: the
 // credential is already stored, and a resolution that does not land is repaired
 // by the reconcile-on-read below rather than by asking the person to sign in
-// twice.
+// twice. It returns the runs whose requests it resolved, for the caller to resume once it has released
+// the AWS owner lock.
 //
 // I6 (generation): a capture resolves a request only if its LOGIN RUN was
 // CREATED AFTER the request was raised. An older sign-in cannot answer a newer
@@ -490,29 +509,32 @@ func (sn awsSSOScopeSnapshot) authored() bool {
 // emit, never before. The chain is captured -> resolved -> retry, and a resolve
 // that preceded its own capture row would be a credential-bearing retry with no
 // auditable predecessor.
-func (s *Server) resolvePendingReauth(ctx context.Context, scope awsSSOScope, capturedBy string, loginRun types.AgentRun) {
+func (s *Server) resolvePendingReauth(ctx context.Context, scope awsSSOScope, capturedBy string, loginRun types.AgentRun) (closed []uuid.UUID) {
 	// A deployment with no approval FSM wired (and every test double that does
 	// not need one) has nothing to resolve. Nil-safe for the same reason the
 	// mask-registry calls around it are: this is a best-effort courtesy on a
 	// path whose real work is already done.
 	if s.cfg.Approvals == nil {
-		return
+		return nil
 	}
 	rows, err := s.cfg.Approvals.List(ctx, types.ApprovalPending)
 	if err != nil {
 		slog.WarnContext(ctx, "wardynd: could not list pending AWS sign-in requests after a capture; the next poll will resolve them",
 			slog.Any("err", err))
-		return
+		return nil
 	}
 	for _, ap := range rows {
 		if !reauthResolvableBy(ap, scope, loginRun) {
 			continue
 		}
-		if err := s.resolveReauth(ctx, ap, capturedBy, loginRun.ID); err != nil {
+		if err := s.settleReauth(ctx, ap, capturedBy, loginRun.ID); err != nil {
 			slog.WarnContext(ctx, "wardynd: could not resolve an AWS sign-in request after a capture; the next poll will",
 				slog.String("approval_id", ap.ID.String()), slog.Any("err", err))
+			continue
 		}
+		closed = append(closed, ap.RunID)
 	}
+	return closed
 }
 
 // reauthResolvableBy is the WHOLE admission test, in one predicate, so the
@@ -525,6 +547,7 @@ func reauthResolvableBy(ap types.ApprovalRequest, scope awsSSOScope, loginRun ty
 		Owner            string `json:"owner"`
 		CredentialSource string `json:"credential_source"`
 		ProviderUID      string `json:"provider_uid"`
+		ComponentID      string `json:"component_id"`
 	}
 	if json.Unmarshal(ap.RequestedScope, &sc) != nil {
 		return false
@@ -533,7 +556,8 @@ func reauthResolvableBy(ap types.ApprovalRequest, scope awsSSOScope, loginRun ty
 	// LAUNCH (loginRunScope), never from the live roster. And which provider's:
 	// a capture answers only its own provider's holds, a roster capture only
 	// roster holds (both "").
-	if sc.Owner != scope.owner || sc.CredentialSource != awsSSOCredentialSourceLabel(scope) || sc.ProviderUID != scope.provider {
+	if sc.Owner != scope.owner || sc.CredentialSource != awsSSOCredentialSourceLabel(scope) || sc.ProviderUID != scope.provider ||
+		sc.ComponentID != scope.cli {
 		return false
 	}
 	// I6 — generation. Strictly after: a login run created in the same instant
@@ -557,13 +581,24 @@ type reauthResolver interface {
 // repairs it — so it is logged, never surfaced.
 var errReauthResolverUnavailable = errors.New("this store cannot resolve a re-auth approval transactionally")
 
-// resolveReauth moves ONE row to APPROVED together with its audit row.
+// resolveReauth settles ONE row and resumes the run it held. The capture's caller holds the AWS owner lock,
+// which the run's lock must precede (db.LockOrder), so it settles with settleReauth and resumes with
+// approvalsClosed once it has released the lock.
+func (s *Server) resolveReauth(ctx context.Context, ap types.ApprovalRequest, resolvedBy string, captureRunID uuid.UUID) error {
+	if err := s.settleReauth(ctx, ap, resolvedBy, captureRunID); err != nil {
+		return err
+	}
+	s.approvalClosed(ctx, ap.RunID)
+	return nil
+}
+
+// settleReauth moves ONE row to APPROVED together with its audit row.
 //
 // NOT approval.Decide (O-6, third-party review): nobody clicked anything.
 // Writing approval.decide here would put a decision in the trail that no human
 // made, on a kind Server.decide refuses to decide at all. The row still moves to
 // APPROVED so every existing list, count and sweeper reads it unchanged.
-func (s *Server) resolveReauth(ctx context.Context, ap types.ApprovalRequest, resolvedBy string, captureRunID uuid.UUID) error {
+func (s *Server) settleReauth(ctx context.Context, ap types.ApprovalRequest, resolvedBy string, captureRunID uuid.UUID) error {
 	resolver, ok := s.cfg.Store.(reauthResolver)
 	if !ok {
 		return errReauthResolverUnavailable
@@ -584,7 +619,6 @@ func (s *Server) resolveReauth(ctx context.Context, ap types.ApprovalRequest, re
 	}, ev); err != nil {
 		return err
 	}
-	s.approvalClosed(ctx, ap.RunID)
 	s.metrics.credentialReauthResolved(s.cfg.Now().Sub(ap.RequestedAt))
 	return nil
 }

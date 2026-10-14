@@ -53,6 +53,9 @@ const (
 func (p *Proxy) handleLLMAnthropic(w http.ResponseWriter, r *http.Request) {
 	rest := strings.TrimPrefix(r.URL.Path, llmAnthropicPrefix)
 	host, port, prefix := p.llmUpstream(anthropicHost)
+	if p.llmRequestRefused(w, r, host, port, rest) {
+		return
+	}
 	p.proxyLLMRequest(w, r, host, port, joinLLMPath(prefix, rest), contentscan.ChannelAnthropicMessages)
 }
 
@@ -62,7 +65,34 @@ func (p *Proxy) handleLLMAnthropic(w http.ResponseWriter, r *http.Request) {
 func (p *Proxy) handleLLMOpenAI(w http.ResponseWriter, r *http.Request) {
 	rest := strings.TrimPrefix(r.URL.Path, llmOpenAIPrefix)
 	host, port, prefix := p.llmUpstream(openaiHost)
+	if p.llmRequestRefused(w, r, host, port, rest) {
+		return
+	}
 	p.proxyLLMRequest(w, r, host, port, joinLLMPath(prefix, rest), contentscan.ChannelOpenAIChat)
+}
+
+// llmRequestRefused answers a brokered LLM request that may not be forwarded
+// and reports whether it did. allowed_methods applies here as on the forward
+// and MITM lanes, with the same 403 and policy:method decision. rest is sent
+// as-is after the gateway's path prefix, so a "." or ".." segment (see
+// isDotSegment), a backslash or a control character in it is refused with a
+// 400, never normalised and forwarded.
+func (p *Proxy) llmRequestRefused(w http.ResponseWriter, r *http.Request, host string, port int, rest string) bool {
+	if !p.evaluator.MethodAllowed(r.Method) {
+		log := decisionLog(p.reqOf(r, host, port), egress.Deny, "policy:method")
+		if p.sink != nil {
+			p.sink.emit(log)
+		}
+		p.writeEgressDeny(w, host, port, &log, false)
+		return true
+	}
+	if strings.ContainsFunc(rest, func(c rune) bool { return c == '\\' || c < 0x20 || c == 0x7f }) ||
+		slices.ContainsFunc(strings.Split(rest, "/"), isDotSegment) {
+		p.emitLLMDecision(r, host, port, egress.Deny, ruleSourceLLM, nil)
+		http.Error(w, "unsupported llm request path", http.StatusBadRequest)
+		return true
+	}
+	return false
 }
 
 // joinLLMPath prepends an internal gateway's path prefix (from its base URL)
@@ -107,7 +137,7 @@ func llm404Detail(configured string) string {
 // over the vetted IP. Shared by the /wardyn/llm/* local routes and the
 // TLS-MITM CONNECT interception (serveMITM).
 func (p *Proxy) proxyLLMRequest(w http.ResponseWriter, r *http.Request, host string, port int, rest string, channel contentscan.Channel) {
-	hdr, ok := p.inject.headerFor(host)
+	hdr, ok, ierr := p.inject.resolveCtx(r.Context(), host)
 	if !ok {
 		p.emitLLMDecision(r, host, port, egress.Deny, ruleSourceLLM, nil)
 		w.Header().Set("Content-Type", "application/json")
@@ -116,6 +146,20 @@ func (p *Proxy) proxyLLMRequest(w http.ResponseWriter, r *http.Request, host str
 			"wardyn": "no_llm_credential", "detail": llm404Detail(p.llmUnavailableDetail),
 		})
 		_, _ = w.Write(body)
+		return
+	}
+	// A rule exists but its credential could not be refreshed: the control plane's answer, not the
+	// below-policy 404 above, so the row carries the reason and the sandbox gets the MITM lane's error.
+	if ierr != nil {
+		if r.Context().Err() != nil {
+			return // the caller hung up mid re-resolve and was never refused
+		}
+		if p.sink != nil {
+			log := decisionLog(p.reqOf(r, host, port), egress.Deny, ruleSourceLLM)
+			log.Cause = "credential refresh failed: " + p.dialFailureCause(ierr)
+			p.sink.emit(log)
+		}
+		p.httpErrorAWSAware(w, host, "llm credential refresh failed", ierr, false, http.StatusUnauthorized, "UnauthorizedException")
 		return
 	}
 
@@ -169,6 +213,19 @@ func (p *Proxy) llmRouteTarget(host string, port int) (string, error) {
 	return target, err
 }
 
+// upstreamURLHost is the host of an upstream URL: the port is left off when it
+// is the scheme's default, and an IPv6 literal is bracketed either way, since a
+// bare one's colons read as a port.
+func upstreamURLHost(host string, port, defaultPort int) string {
+	switch {
+	case port != defaultPort:
+		return net.JoinHostPort(host, strconv.Itoa(port))
+	case strings.Contains(host, ":"):
+		return "[" + host + "]"
+	}
+	return host
+}
+
 // forwardInspectedLLM is the shared credential-strip + forward-and-respond
 // tail for a brokered/MITM'd LLM upstream, used by proxyLLMRequest and
 // serveMITMRequest. Builds the upstream request over the pinned target,
@@ -178,10 +235,7 @@ func (p *Proxy) llmRouteTarget(host string, port int) (string, error) {
 // decision, and streams the response back.
 func (p *Proxy) forwardInspectedLLM(w http.ResponseWriter, r *http.Request, host string, port int, rest, target string, hdr *injectedHeader, ownedHeader string, ruleSource string, nsOff bool, bodyReader io.Reader, scanSummary *egress.ScanSummary) {
 	scheme, defaultPort := p.upstreamSchemeFor(host, port)
-	hostport := host
-	if port != defaultPort {
-		hostport = net.JoinHostPort(host, strconv.Itoa(port))
-	}
+	hostport := upstreamURLHost(host, port, defaultPort)
 	// TRUST BOUNDARY: `rest` is the PERCENT-DECODED path classifyLLM keys the
 	// inspection decision on. Setting URL.Path (not concatenating into a
 	// string re-parsed later) makes the request re-encode those bytes, so a

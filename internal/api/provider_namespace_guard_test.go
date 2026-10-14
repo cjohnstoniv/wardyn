@@ -28,6 +28,8 @@ var strictProviderReaders = map[string]string{
 	"readADOOwnPAT":         "List-then-Get under a per-user scope, the own-token twin of readEntraBlob",
 	"awsSSORevision":        "hands the view to secretstore.RevisionOf, which reads the view's OWN row's revision and never falls back; no value is read",
 	"entraRevision":         "hands the view to secretstore.RevisionOf, which reads the view's OWN row's revision and never falls back; no value is read",
+	"beginCredentialWrite":  "hands the view to secretstore.BeginWrite, which reads the view's erase generation, a number, never a row",
+	"listNamespace":         "hands the view to reservedFilteredSecretNames, a List of the owner's own rows (or the shared ones)",
 	"handleListSecrets":     "hands the view to reservedFilteredSecretNames, a List of the owner's own rows",
 	"presentSecretNamesFor": "hands the view to reservedFilteredSecretNames, a List of the owner's own rows",
 }

@@ -38,55 +38,9 @@ import (
 // false. A plain bool or DEFAULT FALSE would assert "complete" for every
 // legacy row — fail OPEN, the exact thing the marker exists to prevent.
 func (s PG) CreateAPIToken(ctx context.Context, t types.APIToken, raw string) (types.APIToken, error) {
-	groups, err := marshalGroups(t.Groups)
-	if err != nil {
-		return types.APIToken{}, err
-	}
-	// created_at is written on the database's clock, back-dated by the request's
-	// own age, rather than binding t.CreatedAt straight through: the row's
-	// timestamp must not come from wardynd's clock while what it's compared
-	// against (oidc_session_revocations.revoked_at) comes from Postgres.
-	// SECURITY: with wardynd ahead of the database, a token minted BEFORE a
-	// revoke could carry a created_at AFTER the cutoff and survive it —
-	// "revoke every session for this human" would silently not.
-	//
-	// The age, not now(): the API stamps t.CreatedAt at request ADMISSION,
-	// before reading the body, so a caller holding a mint open across
-	// POST /sessions/revoke can't land a created_at after the cutoff; now()-age
-	// keeps that while measuring skew-free on the app's own clock.
-	//
-	// A ZERO CreatedAt means no admission time to preserve, so it becomes the
-	// database's now(). Fail closed is NOT the answer here — an age of two
-	// millennia would mint a token already revoked by any cutoff on record.
-	age := int64(0)
-	if !t.CreatedAt.IsZero() {
-		age = db.AppClockAgeMicros(t.CreatedAt, time.Now())
-	}
-	// expires_at rides the same clock: the lifetime (ExpiresAt - CreatedAt, two
-	// readings of the app clock) is added to the created_at the database stamps,
-	// so wardynd's skew against Postgres never shortens or lengthens a token.
-	// NULL (no ExpiresAt) is a token that never expires.
-	var lifetime *int64
-	if t.ExpiresAt != nil {
-		from := t.CreatedAt
-		if from.IsZero() {
-			from = time.Now()
-		}
-		us := t.ExpiresAt.Sub(from).Microseconds()
-		lifetime = &us
-	}
-	// q is built, not const: the created_at expression (db.AppClockAgeSQL) is
-	// shared with the session-revocation read and a const can't call it.
-	q := `
-		INSERT INTO api_tokens (id, principal, email, role, user_type, groups, groups_truncated, name, token_sha256, created_at, expires_at, minted_by, identity_stamped_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,` + db.AppClockAgeSQL("$10") + `,
-		        CASE WHEN $11::bigint IS NULL THEN NULL ELSE ` + db.AppClockAgeSQL("$10") + ` + $11::bigint * interval '1 microsecond' END,
-		        NULLIF($12, ''), now())
-		RETURNING ` + apiTokenCols
 	var out types.APIToken
-	err = s.guarded(ctx, func(qr queryRower) (e error) {
-		out, e = scanAPIToken(qr.QueryRow(ctx, q,
-			t.ID, t.Principal, t.Email, t.Role, t.UserType, groups, t.GroupsTruncated, t.Name, hashToken(raw), age, lifetime, t.MintedBy))
+	err := s.guarded(ctx, func(qr queryRower) (e error) {
+		out, e = s.insertAPIToken(ctx, qr, t, raw)
 		return e
 	})
 	if err != nil {
@@ -97,6 +51,40 @@ func (s PG) CreateAPIToken(ctx context.Context, t types.APIToken, raw string) (t
 		return types.APIToken{}, err
 	}
 	return out, nil
+}
+
+// insertAPIToken is the row insert CreateAPIToken and ClaimInvitation share, on qr (the pool, or the
+// caller's transaction). It freezes the admission timestamp on the database clock.
+func (s PG) insertAPIToken(ctx context.Context, qr queryRower, t types.APIToken, raw string) (types.APIToken, error) {
+	groups, err := marshalGroups(t.Groups)
+	if err != nil {
+		return types.APIToken{}, err
+	}
+	const q = `
+		INSERT INTO api_tokens (id, principal, email, role, user_type, groups, groups_truncated, name, token_sha256, created_at, expires_at, minted_by, identity_stamped_at, rev_seq)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,
+		        CASE WHEN $11::bigint IS NULL THEN NULL ELSE $10::timestamptz + $11::bigint * interval '1 microsecond' END,
+		        NULLIF($12, ''), now(), $13)
+		RETURNING ` + apiTokenCols
+	anchor, err := db.CaptureAppClock(ctx, qr, s.now)
+	if err != nil {
+		return types.APIToken{}, err
+	}
+	createdAt := anchor.DatabaseAt
+	if !t.CreatedAt.IsZero() {
+		createdAt = anchor.Translate(t.CreatedAt)
+	}
+	var lifetime *int64
+	if t.ExpiresAt != nil {
+		from := t.CreatedAt
+		if from.IsZero() {
+			from = anchor.AppAt
+		}
+		us := t.ExpiresAt.Sub(from).Microseconds()
+		lifetime = &us
+	}
+	return scanAPIToken(qr.QueryRow(ctx, q,
+		t.ID, t.Principal, t.Email, t.Role, t.UserType, groups, t.GroupsTruncated, t.Name, hashToken(raw), createdAt, lifetime, t.MintedBy, t.RevSeq))
 }
 
 // GetAPITokenByRaw is the auth-time lookup: given a bearer string, resolve
@@ -145,6 +133,30 @@ func (s PG) ListAPITokensByPrincipal(ctx context.Context, principal string) ([]t
 		SELECT ` + apiTokenCols + `
 		FROM api_tokens WHERE principal = $1 ORDER BY created_at DESC, id`
 	return queryAPITokens(ctx, s, q, principal)
+}
+
+// APITokensByIdentityLister is the indexed read behind a per-person revocation: the tokens one name
+// owns under either form. An absent implementation falls back to ListAPITokensByPrincipal plus a scan of
+// ListAPITokens (see ListAPITokensByIdentity for the one place the two differ).
+type APITokensByIdentityLister interface {
+	ListAPITokensByIdentity(ctx context.Context, name string) ([]types.APIToken, error)
+}
+
+var _ APITokensByIdentityLister = PG{}
+
+// ListAPITokensByIdentity returns the tokens whose principal is name or whose email equals it ignoring
+// case (the match IsSessionRevoked's email arm makes), revoked rows included. The principal matches come
+// first, newest first, then the rows only the email names. It reads api_tokens_principal_idx and
+// api_tokens_lower_email_idx (migration 0176), not the whole table. The email arm follows the session-cut
+// rule (lower(sub) = lower($2)), so for non-ASCII case pairs PG lower() can differ from the scan fallback's
+// strings.EqualFold. name must not be empty: "" is
+// the revoke-all arm, which lists everything.
+func (s PG) ListAPITokensByIdentity(ctx context.Context, name string) ([]types.APIToken, error) {
+	const q = `
+		SELECT ` + apiTokenCols + `
+		FROM api_tokens WHERE principal = $1 OR lower(email) = lower($1)
+		ORDER BY (principal = $1) DESC, created_at DESC, id`
+	return queryAPITokens(ctx, s, q, name)
 }
 
 // ListAPITokens returns every token in the deployment, newest first (admin
@@ -253,13 +265,13 @@ const apiTokenLive = `revoked_at IS NULL AND (expires_at IS NULL OR expires_at >
 // The INSERT list stays spelled out separately: it names token_sha256 (never
 // read back) and omits last_used_at/revoked_at (never inserted) — deriving
 // one list from the other would hide that difference.
-const apiTokenCols = `id, principal, email, role, user_type, groups, groups_truncated, name, created_at, last_used_at, revoked_at, expires_at, COALESCE(minted_by, ''), identity_stamped_at`
+const apiTokenCols = `id, principal, email, role, user_type, groups, groups_truncated, name, created_at, last_used_at, revoked_at, expires_at, COALESCE(minted_by, ''), identity_stamped_at, rev_seq`
 
 func scanAPIToken(row pgx.Row) (types.APIToken, error) {
 	var t types.APIToken
 	var groups []byte
 	err := row.Scan(&t.ID, &t.Principal, &t.Email, &t.Role, &t.UserType, &groups, &t.GroupsTruncated, &t.Name,
-		&t.CreatedAt, &t.LastUsedAt, &t.RevokedAt, &t.ExpiresAt, &t.MintedBy, &t.IdentityStampedAt)
+		&t.CreatedAt, &t.LastUsedAt, &t.RevokedAt, &t.ExpiresAt, &t.MintedBy, &t.IdentityStampedAt, &t.RevSeq)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return types.APIToken{}, ErrNotFound
 	}

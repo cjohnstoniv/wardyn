@@ -16,6 +16,7 @@ import (
 	"log/slog"
 	"maps"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -36,7 +37,7 @@ import (
 const (
 	eraseUnresolvedMsg = "That email address doesn't match anyone this deployment knows, so nothing was erased. " +
 		"Use the person's subject, as the Audit log shows it."
-	eraseAmbiguousMsg = "That matches more than one person, so nothing was erased. Use the person's subject exactly."
+	eraseAmbiguousMsg = "That matches more than one person, so nothing was erased. Use the person's subject exactly, as the Audit log shows it."
 )
 
 // eraseRefusalMsg reworks one of resolveSecretOwner's ?owner= refusals into
@@ -51,7 +52,8 @@ func eraseRefusalMsg(refusal string) string {
 // handleErasePersonCredentials deletes every credential in one person's
 // namespace: DELETE /people/{principal}/credentials, on the security tier.
 // Removing reach is the tier's job, and it returns no credential material.
-// The principal resolves as ?owner= does on the secrets routes. It never
+// The principal resolves once, through resolveSecretOwner as ?owner= does on
+// the secrets routes, and the erase acts on that one principal. It never
 // answers success with a credential left behind, and it never erases the
 // operator namespace, which holds the platform keys.
 func (s *Server) handleErasePersonCredentials(w http.ResponseWriter, r *http.Request) {
@@ -61,11 +63,23 @@ func (s *Server) handleErasePersonCredentials(w http.ResponseWriter, r *http.Req
 		writeErrorReason(w, http.StatusBadRequest, reasonCredentialErasePrincipalRequired, "name the person whose credentials to erase")
 		return
 	}
-	owner, known, refusal := s.resolveSecretOwner(r.Context(), raw)
+	if s.refuseReservedErasure(w, r, "credential.erase", raw) {
+		return
+	}
+	owner, known, refusal, err := s.resolveSecretOwner(r.Context(), raw)
+	if err != nil {
+		s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
+			"credential.erase", raw, "failure", mustJSON(map[string]any{"reason": reasonIdentityDirectoryUnreadable})))
+		writeServerError(w, r, "resolve whose credentials to erase", err)
+		return
+	}
 	if refusal != "" {
 		reason := ownerRefusalReason(refusal)
 		s.auditOwnerRefusal(r, "credential.erase", raw, reason)
 		writeErrorReason(w, http.StatusUnprocessableEntity, reason, eraseRefusalMsg(refusal))
+		return
+	}
+	if s.refuseReservedErasure(w, r, "credential.erase", owner) {
 		return
 	}
 	// One code path erases credentials: the orchestrator's credentials scope
@@ -73,7 +87,11 @@ func (s *Server) handleErasePersonCredentials(w http.ResponseWriter, r *http.Req
 	// route keeps credentials only; it never reaches audit, run history or
 	// outputs.
 	var rep secretstore.EraseReport
-	orep, err := s.erasureOrchestrator(&rep).Orchestrate(r.Context(), owner, []erasure.Scope{erasure.Credentials})
+	var orep erasure.Report
+	names, err := s.erasureNamesOf(r.Context(), owner)
+	if err == nil {
+		orep, err = s.erasureOrchestrator(&rep, &names).Orchestrate(r.Context(), owner, []erasure.Scope{erasure.Credentials})
+	}
 	if errors.Is(err, errSignInConfigUnreadable) {
 		s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
 			"credential.erase", owner, "failure", withSecretOwner(map[string]any{"count": 0, "reason": reasonCredentialEraseSignInConfigUnreadable}, owner, known)))
@@ -84,6 +102,12 @@ func (s *Server) handleErasePersonCredentials(w http.ResponseWriter, r *http.Req
 	data := credentialEraseData(rep)
 	if done, ok := orep.Details[erasure.Credentials].(map[string]any); ok {
 		data = done // with runs_fenced
+	}
+	if ne, ok := notErasedDetail(names.notErased); ok {
+		data["not_erased"] = ne
+	}
+	if errors.Is(err, errErasureNameUnproved) || errors.Is(err, errErasureNamesChanged) {
+		data["error"] = err.Error()
 	}
 	resp := maps.Clone(data)
 	if err != nil {
@@ -132,7 +156,14 @@ func (s *Server) handleErasePersonCredentials(w http.ResponseWriter, r *http.Req
 // (ado_own_pat.go, which takes only adoOwnPATWriteMu), and the AWS capture
 // (ssotoken.go), which a held AWS lock serialises. A run that already holds a
 // credential in memory keeps it; the erase does not reach into a running run.
-func (s *Server) eraseLocked(ctx context.Context, owner, rowID string, rep *secretstore.EraseReport) error {
+//
+// The locks are in-process. What holds back a writer in another process is the
+// owner's erase generation, which EraseOwner advances before it lists anything:
+// every writer routes through putOwned, which fences its Put to the generation
+// read when the write began (beginCredentialWrite), so one that began before
+// the erase is refused with secretstore.ErrGenerationChanged and one that
+// begins after it lands. The audit row's write_fence says which held.
+func (s *Server) eraseLocked(ctx context.Context, owner, rowID string, want *erasureNames, rep *secretstore.EraseReport) error {
 	ctx, unlock, err := s.lockAWSSSOOwner(ctx, owner)
 	if err != nil {
 		return err
@@ -147,12 +178,59 @@ func (s *Server) eraseLocked(ctx context.Context, owner, rowID string, rep *secr
 		// generation when a replica first reads it. A renewal in flight writes its copy under
 		// the AWS lock, so retiring before the locks would let it land after the retire.
 		// Replicas that cached them keep masking them through grace.
-		if err := s.cfg.MaskRegistry.RetireOwnerGlobals(ctx, owner, s.cfg.Now()); err != nil {
+		namespaces, err := s.personNamespaces(ctx, owner, want)
+		if err != nil {
 			return err
 		}
-		*rep, err = secretstore.EraseOwner(ctx, s.cfg.Secrets, owner)
-		return err
+		for _, ns := range namespaces {
+			if err := s.cfg.MaskRegistry.RetireOwnerGlobals(ctx, ns, s.cfg.Now()); err != nil {
+				return err
+			}
+			one, err := secretstore.EraseOwner(ctx, s.cfg.Secrets, ns)
+			*rep = mergeEraseReports(*rep, one, ns == namespaces[0])
+			if err != nil {
+				return err
+			}
+		}
+		return nil
 	})
+}
+
+// personNamespaces are the credential namespaces one person can hold: owner, and the
+// entra:<tenant>:<object> forms proved theirs (erasureNamesOf, re-proved here under the locks against
+// want). A person an admin created by object id and who then signed in under a pairwise subject has their
+// credentials under the subject now, but an install upgraded from 0.8.9 can still hold some under the
+// object-id form, which the subject alone does not reach. Both are erased, each through the fenced
+// EraseOwner. A form that another issuer's sign-in or another person holds is never erased.
+func (s *Server) personNamespaces(ctx context.Context, owner string, want *erasureNames) ([]string, error) {
+	proved, err := s.provedNames(ctx, owner, want)
+	if err != nil {
+		return nil, err
+	}
+	namespaces := []string{owner}
+	for _, a := range proved.entra {
+		if !slices.Contains(namespaces, a) && !s.isReservedPrincipal(a) {
+			namespaces = append(namespaces, a)
+		}
+	}
+	return namespaces, nil
+}
+
+// mergeEraseReports adds one namespace's report to the total so far. Fenced holds only if every
+// namespace was fenced.
+func mergeEraseReports(total, one secretstore.EraseReport, first bool) secretstore.EraseReport {
+	if first {
+		return one
+	}
+	total.Count += one.Count
+	total.CryptoErased += one.CryptoErased
+	total.Fenced = total.Fenced && one.Fenced
+	if one.Store != "" {
+		total.Store = one.Store
+		total.Purged = total.Purged && one.Purged
+		total.RecoverableDays = max(total.RecoverableDays, one.RecoverableDays)
+	}
+	return total
 }
 
 // expiredSweeper is the store that can delete the rows whose expiry has

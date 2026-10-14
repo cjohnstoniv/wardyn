@@ -741,12 +741,13 @@ func TestGovernanceLimitsWireRoundTrip(t *testing.T) {
 	full := GovernanceLimits{
 		DenyTaskModeExec: true, DenyInteractive: true, DenyUIApps: true, DenyUserDrive: true,
 		MaxConcurrentRuns: 3, MaxEphemeralDiskMiB: 2048, MaxDriveSizeMiB: 10240,
+		DenyPlacements: []Placement{PlacementLocal}, DenyMemberDrives: true,
 	}
 	b, err := json.Marshal(full)
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
-	for _, key := range []string{`"max_ephemeral_disk_mib":2048`, `"max_drive_size_mib":10240`} {
+	for _, key := range []string{`"max_ephemeral_disk_mib":2048`, `"max_drive_size_mib":10240`, `"deny_placements":["local"]`, `"deny_member_drives":true`} {
 		if !bytes.Contains(b, []byte(key)) {
 			t.Errorf("wire = %s, want %s — the console mirrors these json tags by hand "+
 				"(ui/src/app/lib/api/governance.ts), so a renamed tag is a runtime-only break", b, key)
@@ -756,7 +757,7 @@ func TestGovernanceLimitsWireRoundTrip(t *testing.T) {
 	if err := json.Unmarshal(b, &back); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if back != full {
+	if !reflect.DeepEqual(back, full) {
 		t.Errorf("round trip = %+v, want %+v", back, full)
 	}
 }

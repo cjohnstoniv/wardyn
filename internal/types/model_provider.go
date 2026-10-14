@@ -16,6 +16,22 @@ type ModelProviders struct {
 	Providers []ModelProvider `json:"providers,omitempty"`
 }
 
+// ModelProvidersRead is GET /api/v1/model-providers' body: the stored block, and ConnectedPeople —
+// per provider ID, how many people hold a credential of their own for it (#970). Read-only: PUT's
+// strict decode refuses the field, and the ETag covers the stored block alone, so a person
+// connecting never stales an admin's edit. Admins only, as the route is: a member never reads this
+// list. It carries counts and configuration, never a credential value.
+//
+// EntraLoginConfigured says whether this install has the console Entra login an azure_foundry
+// provider signs people in through; KindsAvailable lists the kinds a write accepts now (azure_foundry
+// only while the release has it switched on). Both are server facts, not stored and not in the ETag.
+type ModelProvidersRead struct {
+	ModelProviders
+	ConnectedPeople      map[string]int      `json:"connected_people,omitempty"`
+	EntraLoginConfigured bool                `json:"entra_login_configured"`
+	KindsAvailable       []ModelProviderKind `json:"kinds_available"`
+}
+
 // Empty reports whether p carries no provider — the shape a PUT uses to CLEAR the block, normalized back
 // to nil so a later GET doesn't render "model_providers":{} forever.
 func (p *ModelProviders) Empty() bool {

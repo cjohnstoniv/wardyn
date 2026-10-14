@@ -166,22 +166,40 @@ type govApplied struct {
 // mapping is written on the operatorOnly tier, so only a super admin approves it; every other kind is
 // written on securityOps.
 var governanceChangeKinds = map[string]govKind{
-	govKindProfile:      {approver: securityApprover, apply: applyProfileChange},
-	govKindAssignment:   {approver: securityApprover, apply: applyAssignmentChange},
-	govKindGrant:        {approver: securityApprover, apply: applyGrantChange},
-	govKindEnforcement:  {approver: securityApprover, apply: applyEnforcementChange},
-	govKindAvailability: {approver: securityApprover, apply: applyAvailabilityChange},
-	govKindUserType:     {approver: securityApprover, apply: applyUserTypeChange},
-	govKindRoleMapping:  {approver: operatorApprover, apply: applyRoleMappingChange},
-	govKindKeyDomain:    {approver: securityApprover, apply: applyKeyDomainAssignmentChange},
+	govKindProfile:             {approver: securityApprover, apply: applyProfileChange},
+	govKindAssignment:          {approver: securityApprover, apply: applyAssignmentChange},
+	govKindGrant:               {approver: securityApprover, apply: applyGrantChange},
+	govKindEnforcement:         {approver: securityApprover, apply: applyEnforcementChange},
+	govKindAvailability:        {approver: securityApprover, apply: applyAvailabilityChange},
+	govKindUserType:            {approver: securityApprover, apply: applyUserTypeChange},
+	govKindRoleMapping:         {approver: operatorApprover, apply: applyRoleMappingChange},
+	govKindKeyDomain:           {approver: securityApprover, apply: applyKeyDomainAssignmentChange},
+	govKindEgressBaseline:      {approver: securityApprover, apply: applyEgressBaselineChange},
+	govKindRunnerPoolUsePolicy: {approver: securityApprover, apply: applyRunnerPoolUsePolicyChange},
+	govKindRemoteRunnerPeople:  {approver: securityApprover, apply: applyRemoteRunnerPeopleChange},
+	govKindCredentialDelivery:  {approver: securityApprover, apply: applyCredentialDeliveryChange},
+	govKindServiceIdentity:     {approver: securityApprover, apply: applyServiceIdentityChange},
 }
 
-// canSeeGovernanceKind reports whether the caller may list or read changes of kind: the approver
-// predicate, so a kind that only a super admin may write is never shown to a security admin. A kind
-// this binary does not know (a row from a newer one) is shown to nobody: it cannot be decided here.
-func (s *Server) canSeeGovernanceKind(r *http.Request, kind string) bool {
-	k, ok := governanceChangeKinds[kind]
-	return ok && k.approver.allowed(s, r)
+// forChange is the kind as it decides one held change. A remote-hosted runner add to or removal from an
+// organization pool is held under the use-policy kind but written on the operatorOnly tier, so only a
+// super admin decides it; a payload that does not decode is given the stricter tier.
+func (k govKind) forChange(ch types.GovernanceChange) govKind {
+	if ch.TargetKind == govKindRunnerPoolUsePolicy {
+		var held runnerPoolHeldChange
+		if decodeHeldPayload(ch.Payload, &held) != nil || held.Executor != "" {
+			k.approver = operatorApprover
+		}
+	}
+	return k
+}
+
+// canSeeGovernanceChange reports whether the caller may list or read a change: the approver predicate,
+// so a change that only a super admin may decide is never shown to a security admin. A kind this
+// binary does not know (a row from a newer one) is shown to nobody: it cannot be decided here.
+func (s *Server) canSeeGovernanceChange(r *http.Request, ch types.GovernanceChange) bool {
+	k, ok := governanceChangeKinds[ch.TargetKind]
+	return ok && k.forChange(ch).approver.allowed(s, r)
 }
 
 // govProposal is a covered write to hold.

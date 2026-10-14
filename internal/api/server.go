@@ -16,7 +16,6 @@ import (
 	"context"
 	"crypto/ed25519"
 	"net"
-	"net/http"
 	"net/http/httputil"
 	"sync"
 	"sync/atomic"
@@ -35,6 +34,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/maskmanifest"
 	"github.com/cjohnstoniv/wardyn/internal/recording"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/runner/remote"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore/keydomain"
@@ -92,11 +92,18 @@ type Config struct {
 	// is also what happens when no GitHub App is configured, so the vast majority
 	// of deployments never make the call.
 	GitHubRulesets RefRulesetVerifier
+	// GitHubBranches lists a github.com repository's branches through the
+	// organisation's GitHub App (workspace_branches.go). Nil: GitHub
+	// repositories answer the branch list with no_credential.
+	GitHubBranches BranchLister
 	// Audit records control-plane-originated audit events. The recorder handed in
 	// is the shared masking → spooling → store/fanout chain (see cmd/wardynd), so a
 	// failed durable write is masked, logged loudly, and spooled to the local
 	// append-only fallback for EVERY writer — the API layer no longer spools itself.
 	Audit audit.Recorder
+	// RunnerAuditPrepare applies the serving audit mask/seal policy before the
+	// spool receipt and audit row commit in one database transaction.
+	RunnerAuditPrepare func(context.Context, types.AuditEvent) (types.AuditEvent, error)
 	// AuditSpool is the SAME durable fallback spool the recorder chain appends to on
 	// a failed store write (see cmd/wardynd buildAuditChain). When set together with
 	// AuditDrainRecorder, New starts a background loop that replays spooled events
@@ -125,8 +132,29 @@ type Config struct {
 	// Fanout's DropsByName). Nil omits the metric — a deployment with no SIEM
 	// sinks configured has nothing to report.
 	AuditSinkDrops func() map[string]int64
+	// AuditDelivery, when set, reports each acknowledged-delivery destination's
+	// checkpoint and the head it lags behind for the wardyn_audit_delivery_*
+	// metrics (cmd/wardynd wires it to the store only when the webhook sink is
+	// configured with delivery "acknowledged"). Nil omits the series.
+	AuditDelivery func(ctx context.Context) ([]store.AuditDeliveryStatus, error)
 	// Runner launches sandboxes. Nil => headless API-only mode.
 	Runner runner.Runner
+	// RunnerOrgURL is the public organisation URL bound into runner identities.
+	// Empty disables runner registration and streams; never infer it from Host.
+	RunnerOrgURL string
+	// RunnerHub supplies durable runner admission and lifecycle callbacks.
+	// The server always supplies OrgURL and Lookup from its own configuration.
+	RunnerHub remote.HubConfig
+	// RunnerOnline reports whether a claimed runner holds a live authenticated session with this
+	// process. Nil defaults to Server.RunnerOnline, the runner hub's own view.
+	//
+	// ponytail: process-local. Under WARDYN_HA a replica that does not hold a runner's session
+	// answers offline for a runner attached to another; the upgrade is a shared presence read.
+	RunnerOnline func(id uuid.UUID) bool
+	// RunnersDisabled runs after runners are switched off (a true→false change), once the write and
+	// its audit row are done and the site-config lock is released. Nil defaults to
+	// Server.RunnersDisabled, which ends every runner session this process holds.
+	RunnersDisabled func(ctx context.Context)
 	// AdminToken gates the public API (constant-time bearer compare). Empty
 	// disables the public API entirely (fail closed) except /healthz.
 	AdminToken string
@@ -392,13 +420,13 @@ type Config struct {
 	// first, so a token created through a row an admin has since disabled can
 	// still be revoked (ado_run_pat_sweep.go). Nil: the revoke uses ADOEntra.
 	ADOEntraByRow func(ctx context.Context, rowID string) (ADOEntraConfig, bool, error)
-	// AzureFoundryEntra resolves the Entra application an azure_foundry provider
-	// row signs people in against, by the row's uid (azure_foundry_entra.go). It
-	// answers found=false for a uid that is not an azure_foundry row. The
-	// application is always the console's own sign-in application, so a
-	// deployment without Entra console login answers an unusable configuration
-	// and both legs refuse. Nil: no Azure sign-in is offered.
+	// AzureFoundryEntra resolves the Entra application an azure_foundry provider row signs people in against,
+	// by the row's uid (azure_foundry_entra.go). It answers found=false for a uid that is not an azure_foundry
+	// row. The application is always the console's own sign-in application, so a deployment without Entra
+	// console login answers an unusable configuration and both legs refuse. Nil: no Azure sign-in is offered.
 	AzureFoundryEntra func(ctx context.Context, rowUID string) (ADOEntraConfig, bool, error)
+	// AzureCLIEntra is that same console application, keyed to an Azure CLI component's id (Server.azureCLIEntra).
+	AzureCLIEntra func(componentID string) ADOEntraConfig
 	// ADOLoginFacts is the console's own OIDC client, tenant and whether it holds a secret (S1; nil: none).
 	ADOLoginFacts func() (clientID, tenantID string, hasSecret bool)
 	// HostResolver is how the model-provider write boundary resolves an azure_foundry endpoint host for its
@@ -457,8 +485,12 @@ type Config struct {
 	SecretStoreExternal string
 	// SecretKeyService: the key service wrapping every stored data key ("Vault Transit at host"), or "" for the local key; set, /setup/status shows kek_service.
 	SecretKeyService string
+	// SecretKeyServiceStaticKey: the key service is reached with a long-lived credential (an AWS IAM user's access key); /setup/status shows kek_service_static_key.
+	SecretKeyServiceStaticKey bool
 	// KEKRequired: WARDYN_KEK_REQUIRED; /setup/status shows kek_required_unmet while neither a key service nor an external store holds the credentials.
 	KEKRequired bool
+	// SecretLocalRows counts the stored credential rows and principal keys still wrapped by the local key (nil: the store keeps no such count); with KEKRequired and a key service, /setup/status shows kek_local_rows while it is above zero.
+	SecretLocalRows func(context.Context) (int, error)
 	// PlatformKeySeparate: the boot keys have a key of their own: WARDYN_PLATFORM_KEY_FILE in local mode only
 	// (under a key service the file counts for nothing), the platform key (and identity) of the key service
 	// otherwise. False shows platform_split as a warning (§2.13 c).
@@ -580,6 +612,11 @@ type Config struct {
 	// same posture production does rather than an accidental zero-tolerance
 	// TTL that fails every override.
 	SSHRoleTTL time.Duration
+	// SSHMaxSessionsPerRun is WARDYN_SSH_MAX_SESSIONS_PER_RUN: the per-run cap
+	// on concurrent shared SSH channels (session and direct-tcpip). Zero
+	// defaults to defaultSSHSessionsPerRun in New; cmd/wardynd validates the
+	// operator's value at boot.
+	SSHMaxSessionsPerRun int
 	// APITokenMaxTTL is WARDYN_API_TOKEN_MAX_TTL: the longest lifetime a newly
 	// minted API token may have. Zero (the default) means no cap. A mint that
 	// asks for no TTL gets this one; a mint that asks for more is clamped to it.
@@ -650,11 +687,14 @@ type Config struct {
 
 // Server is the control-plane HTTP server. It is safe for concurrent use.
 type Server struct {
-	cfg    Config
-	router chi.Router
+	runnerStreams runnerStreamState
+	cfg           Config
+	router        chi.Router
 	// metrics holds the /metrics scrape counters (see metrics.go). Zero value is
 	// ready to use.
 	metrics metrics
+	// viaOrg is the organisation's via_org egress state (via_org_streams.go).
+	viaOrg viaOrgState
 	// fleet is the 15-second capacity snapshot behind the /metrics capacity gauges (metrics_fleet.go).
 	fleet fleetSnapshot
 	// capRowsScanned counts capability-grant rows compared inside capBatch (see
@@ -687,7 +727,8 @@ type Server struct {
 	// probe on an otherwise-idle attach socket) — same reason and same
 	// per-server shape as keepaliveEvery above: a test drives a dead-peer holder
 	// on a millisecond clock instead of the real 30s budget.
-	pingEvery time.Duration
+	pingEvery     time.Duration
+	authorityTest attachAuthorityTimings // per-server test overrides, the same shape as pingEvery
 	// pauseLimit overrides attachWriteTimeout as the bound on an unresumed
 	// output pause for THIS server only (tests).
 	pauseLimit time.Duration
@@ -718,12 +759,17 @@ type Server struct {
 	refRulesetRow  SetupCheck
 	refRulesetShow bool
 	// sshSessions counts concurrent SSH "session" channels (shell/exec/
-	// subsystem) per run, enforcing maxSSHSessionsPerRun (sshgateway.go). Zero
+	// subsystem) per run, enforcing Config.SSHMaxSessionsPerRun (sshgateway.go);
+	// sshSyncSessions is the separate wardyn-sync count. Zero
 	// value is ready to use. Process-local like lastTouch above — the same
 	// single-replica topology every in-memory bound in this codebase already
 	// assumes (see secretmask.Registry's residual in THREAT-MODEL.md).
-	sshSessionsMu sync.Mutex
-	sshSessions   map[uuid.UUID]int
+	sshSessionsMu   sync.Mutex
+	sshSessions     map[uuid.UUID]int
+	sshSyncSessions map[uuid.UUID]int
+	// sshSyncOpen is the directory and open time of each live wardyn-sync
+	// channel, for GET /runs/{id}'s sync.open. Guarded by sshSessionsMu.
+	sshSyncOpen map[uuid.UUID][]*runSyncOpen
 	// builds tracks per-workspace image builds (the wizard's Build step).
 	// Zero value is ready to use.
 	builds buildTracker
@@ -733,8 +779,10 @@ type Server struct {
 	// and lastTouch above, and correct for the same reason: replicas>1 is
 	// refused by construction (deployment.yaml). Zero value is ready to use.
 	attachHolders attachHolderRegistry
-	// creates lets a kill cancel a STARTING run's CreateSandbox (runs_create_cancel.go).
-	creates inflightCreates
+	// creates lets a kill cancel a STARTING run's CreateSandbox, and runBuilds its image build (runs_create_cancel.go).
+	creates, runBuilds inflightCreates
+	// queue is the pool queue's in-process state: kick coalescing and the gauge snapshot (metrics_queue.go).
+	queue runQueueState
 	// replica is this server's identity when no LiveBus names one (replicaName).
 	replica         string
 	replicaOnce     sync.Once
@@ -763,6 +811,8 @@ type Server struct {
 	// adminAuth/auditAuthFailed in http.go) so a scanner cannot flood the
 	// append-only log. Zero value is ready to use.
 	authFailedLimiter authFailedLimiter
+	// sshKeyLimiters rate-bounds the ssh.authenticate refusal rows that name a registered key, per key.
+	sshKeyLimiters sshKeyLimiters
 	// authFailedStreak is the open run of identical consecutive auth.fail rows
 	// the coalescer is folding (see coalesceAuthFailed, http.go). Process-local
 	// like the bounds above. Zero value is ready to use.
@@ -782,6 +832,9 @@ type Server struct {
 	// hit once per keystroke, and each miss is an upstream Graph call
 	// (directory_search.go). Zero value is ready to use.
 	dirLimiter principalLimiter
+	// branchLimiter rate-bounds GET /workspaces/{id}/branches per person (workspace_branches.go): each
+	// call can use a forge credential. memberDriveLimiter bounds member drive changes (member_drives.go).
+	branchLimiter, memberDriveLimiter principalLimiter
 	// preflightLimiter rate-bounds POST /runs/preflight per person
 	// (preflight.go); nil when Config.PreflightRatePerMin is 0 (off).
 	preflightLimiter     *principalLimiter
@@ -855,6 +908,9 @@ func New(cfg Config) *Server {
 	if cfg.SSHRoleTTL <= 0 {
 		cfg.SSHRoleTTL = defaultSSHRoleTTL
 	}
+	if cfg.SSHMaxSessionsPerRun <= 0 {
+		cfg.SSHMaxSessionsPerRun = defaultSSHSessionsPerRun
+	}
 	if cfg.UISessionTTL <= 0 {
 		cfg.UISessionTTL = defaultUISessionTTL
 	}
@@ -868,12 +924,11 @@ func New(cfg Config) *Server {
 		cfg.BaseCtx = context.Background()
 	}
 	s := &Server{cfg: cfg, signInCaptureKillGrace: signInCaptureKillGrace,
-		deviceRouteState: deviceRouteState{
-			enrolLimiter:         principalLimiter{rate: enrolRatePerSec, burst: enrolBurst, max: enrolLimiterMaxPeers},
-			ingestFailureLimiter: principalLimiter{rate: ingestFailureRatePerSec, burst: ingestFailureBurst, max: ingestFailureMaxDevices},
-		},
+		branchLimiter:    principalLimiter{rate: branchListRatePerSec, burst: branchListBurst, max: branchListMaxPeople},
+		deviceRouteState: newDeviceRouteState(),
 	}
 	s.scimState = newSCIMState()
+	s.defaultRunnerHooks()
 	if cfg.PreflightRatePerMin > 0 {
 		s.preflightLimiter = &principalLimiter{rate: float64(cfg.PreflightRatePerMin) / 60, burst: preflightBurst, max: preflightLimiterMaxPeople}
 	}
@@ -900,25 +955,6 @@ const (
 	auditSpoolDrainBatch    = 200
 )
 
-// handleLogout terminates the human session. FIX #6: it is mounted as
-// POST /api/v1/auth/logout inside the humanOrAdminAuth group so the UI's existing
-// POST actually kills the session (the old code only had a root GET /auth/logout,
-// which the POST never reached — 404 — leaving the HttpOnly OIDC cookie valid).
-//
-//   - OIDC session mode: delegate to the OIDC LogoutHandler, which clears the
-//     HttpOnly wardyn_session cookie (and redirects to "/").
-//   - Admin-token / local mode (OIDC not configured): there is NO server-side
-//     session to kill — the client just drops its local bearer token. Return 204
-//     (no content). The nil-OIDC guard is REQUIRED so this never panics in
-//     local/token mode.
-func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
-	if s.cfg.OIDC != nil {
-		s.cfg.OIDC.LogoutHandler(w, r) // clears the HttpOnly session cookie
-		return
-	}
-	w.WriteHeader(http.StatusNoContent)
-}
-
 // recordAudit is a best-effort audit emit for control-plane-originated events.
 // Audit failures must never block the primary operation (the Recorder owns
 // durability/retry); we swallow the error after the event is constructed.
@@ -932,26 +968,13 @@ func (s *Server) recordAudit(ctx context.Context, ev types.AuditEvent) {
 	if ev.Time.IsZero() {
 		ev.Time = s.cfg.Now().UTC()
 	}
+	ev.Data = audit.StampRelay(ctx, ev.Data)
 	ev.Data = audit.StampDelegation(ctx, ev.Data) // delegation is recorded as delegation (#1142)
+	ev.Data = audit.StampSponsor(ctx, ev.Data)    // a service identity's row names its sponsor (#1508)
 	// Invariant 6, C1: the audit log is the system of record. A failed durable
 	// write is handled by the shared recorder chain (spoolingRecorder below
 	// maskingRecorder in cmd/wardynd), which masks, logs loudly, and spools the
 	// event to the durable local fallback so it is never silently lost — for every
 	// audit writer, not just this one. So there is no API-layer-only spool here.
 	_ = s.cfg.Audit.Record(ctx, ev)
-}
-
-// auditEvent is a small constructor used across handlers.
-func (s *Server) auditEvent(runID *uuid.UUID, actorType types.ActorType, actor, action, target, outcome string, data []byte) types.AuditEvent {
-	return types.AuditEvent{
-		ID:        uuid.New(),
-		Time:      s.cfg.Now().UTC(),
-		RunID:     runID,
-		ActorType: actorType,
-		Actor:     actor,
-		Action:    action,
-		Target:    target,
-		Outcome:   outcome,
-		Data:      data,
-	}
 }

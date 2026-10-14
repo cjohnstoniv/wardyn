@@ -42,19 +42,21 @@ import (
 func driveCmd(client clientFn) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "drive",
-		Short: "Get or replace the admin-registered drives and their allocations; reclaim one person's storage",
+		Short: "Get or upsert the admin-registered drives and their allocations; reclaim one person's storage",
 		Long: "Read or upsert the admin-registered drives (storage an admin allocates to a\n" +
 			"user, a group, or everyone) and their allocations:\n\n" +
 			"    wardyn drive get > drives.json\n" +
 			"    wardyn drive set drives.json\n\n" +
 			"`set` upserts every drive and grant the file names — a drive whose id `get`\n" +
 			"already issued is REPLACED in place, one with none is CREATED, and a grant is\n" +
-			"always upserted by its (subject_type, subject) natural key. Nothing the file\n" +
+			"upserted by its (subject_type, subject, drive_id) key, beside the subject's\n" +
+			"other drives. Nothing the file\n" +
 			"omits is touched and nothing is deleted, so `wardyn drive get > f && wardyn\n" +
 			"drive set f` is a no-op.\n\n" +
-			"`reclaim` is the one verb that destroys data: see `wardyn drive reclaim --help`.",
+			"`reclaim` is the one verb that destroys data: see `wardyn drive reclaim --help`.\n" +
+			"`member` lists and deletes the drives people create for themselves.",
 	}
-	cmd.AddCommand(driveGetCmd(client), driveSetCmd(client), driveReclaimCmd(client))
+	cmd.AddCommand(driveGetCmd(client), driveSetCmd(client), driveReclaimCmd(client), driveMemberCmd(client))
 	return subcommandGroup(cmd)
 }
 
@@ -100,11 +102,14 @@ func driveSetCmd(client clientFn) *cobra.Command {
 			if err := decodeOneJSONStrict(bytes.NewReader(raw), &doc); err != nil {
 				return fmt.Errorf("parse drives document JSON: %w", err)
 			}
-			out, err := client().ApplyDrives(cmd.Context(), doc)
+			res, err := client().ApplyDrivesResult(cmd.Context(), doc)
 			if err != nil {
+				if len(res.Steps) > 0 {
+					printApplySteps(cmd.ErrOrStderr(), res.Steps)
+				}
 				return err
 			}
-			return emitJSON(cmd.OutOrStdout(), out)
+			return emitJSON(cmd.OutOrStdout(), res.Document)
 		},
 	}
 }
@@ -138,7 +143,7 @@ type driveReclaimResult struct {
 }
 
 func driveReclaimCmd(client clientFn) *cobra.Command {
-	var subject, subjectType string
+	var subject, subjectType, homeSubject string
 	var yes, asJSON bool
 	cmd := &cobra.Command{
 		Use:   "reclaim <drive-id>",
@@ -151,6 +156,11 @@ drive preview prints, and run it BEFORE deleting the allocation: with the
 allocation gone, a home directory an admin pinned (home_override) can no longer
 be recovered from the database and the name this command derives is the drive
 template's.
+
+--subject is the key the allocation is stored under. When that is an email or
+another alias, also pass --home-subject with the person's sign-in subject: a run
+derives the storage name from the sign-in subject, so the alias alone names a
+different object, and an allocation keyed by an alias is refused without it.
 
 Super-admin only. Refused with a 409 while a run still holds the object, or
 while the object answering to that name is not this drive's. Every attempt —
@@ -165,10 +175,11 @@ The outcome is 'deleted' (this call destroyed the storage) or 'already_absent'
 `,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runDriveReclaim(cmd, client(), args[0], subjectType, subject, yes, asJSON)
+			return runDriveReclaim(cmd, client(), args[0], subjectType, subject, homeSubject, yes, asJSON)
 		},
 	}
-	cmd.Flags().StringVar(&subject, "subject", "", "the person's sign-in subject (required)")
+	cmd.Flags().StringVar(&subject, "subject", "", "the subject the allocation is keyed on: the person's sign-in subject, or their email (required)")
+	cmd.Flags().StringVar(&homeSubject, "home-subject", "", "the person's sign-in subject, when --subject is another of their claims (an email)")
 	cmd.Flags().StringVar(&subjectType, "subject-type", "user", "subject type; only `user` names one object to destroy")
 	cmd.Flags().BoolVar(&yes, "yes", false, "confirm that this permanently destroys the person's stored data")
 	cmd.Flags().BoolVar(&asJSON, "json", false, "emit {drive, drive_id, subject_type, subject, backend, object, outcome} as JSON")
@@ -181,7 +192,7 @@ The outcome is 'deleted' (this call destroyed the storage) or 'already_absent'
 // often as at a keyboard, and a prompt that only appears on a terminal is a
 // guard the automated path silently loses. Asking for the flag makes the
 // deliberate half explicit in the command that gets reviewed.
-func runDriveReclaim(cmd *cobra.Command, c *sdk.Client, id, subjectType, subject string, yes, asJSON bool) error {
+func runDriveReclaim(cmd *cobra.Command, c *sdk.Client, id, subjectType, subject, homeSubject string, yes, asJSON bool) error {
 	driveID, err := uuid.Parse(strings.TrimSpace(id))
 	if err != nil {
 		return fmt.Errorf("drive reclaim: %q is not a drive id (a uuid); `wardyn drive reclaim <drive-id>`", id)
@@ -193,7 +204,11 @@ func runDriveReclaim(cmd *cobra.Command, c *sdk.Client, id, subjectType, subject
 		return fmt.Errorf("drive reclaim: refusing without --yes: this permanently destroys the storage "+
 			"allocated to %s on drive %s, and nothing undoes it", subject, driveID)
 	}
-	body, err := json.Marshal(map[string]string{"subject_type": subjectType, "subject": subject})
+	req := map[string]string{"subject_type": subjectType, "subject": subject}
+	if strings.TrimSpace(homeSubject) != "" {
+		req["home_subject"] = homeSubject
+	}
+	body, err := json.Marshal(req)
 	if err != nil {
 		return fmt.Errorf("drive reclaim: encode request: %w", err)
 	}
@@ -248,4 +263,91 @@ func postDriveReclaim(ctx context.Context, c *sdk.Client, driveID uuid.UUID, bod
 		return driveReclaimResult{}, fmt.Errorf("drive reclaim: decode response: %w", err)
 	}
 	return out, nil
+}
+
+// driveMemberCmd is `wardyn drive member`: the drives people create for
+// themselves, which `drive get` does not list. Super admin only.
+func driveMemberCmd(client clientFn) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "member",
+		Short: "List or delete the drives people create for themselves (super admin)",
+	}
+	cmd.AddCommand(driveMemberListCmd(client), driveMemberDeleteCmd(client))
+	return subcommandGroup(cmd)
+}
+
+func driveMemberListCmd(client clientFn) *cobra.Command {
+	var limit, offset int
+	var asJSON bool
+	cmd := &cobra.Command{
+		Use:   "list",
+		Short: "List people's drives with their owner and storage object",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			list, err := client().ListMemberDrives(cmd.Context(), sdk.ListOpts{Limit: limit, Offset: offset})
+			if err != nil {
+				return err
+			}
+			if asJSON {
+				return emitJSON(cmd.OutOrStdout(), list)
+			}
+			tw := newTab(cmd.OutOrStdout())
+			fmt.Fprintln(tw, "ID\tNAME\tOWNER\tBACKEND\tOBJECT\tSTATE")
+			for _, d := range list.Drives {
+				state := "ready"
+				if d.Deleting {
+					state = "deleting"
+				}
+				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", d.ID, d.Name, d.Owner, d.Backend, d.Object, state)
+			}
+			if err := tw.Flush(); err != nil {
+				return err
+			}
+			if shown := offset + len(list.Drives); shown < list.Total {
+				fmt.Fprintf(cmd.ErrOrStderr(), "%d of %d drives shown; pass --offset %d for more\n", shown, list.Total, shown)
+			}
+			return nil
+		},
+	}
+	cmd.Flags().IntVar(&limit, "limit", 0, "most drives to list (0 = the server's default)")
+	cmd.Flags().IntVar(&offset, "offset", 0, "drives to skip")
+	cmd.Flags().BoolVar(&asJSON, "json", false, "emit {drives, total} as JSON")
+	return cmd
+}
+
+func driveMemberDeleteCmd(client clientFn) *cobra.Command {
+	var yes, asJSON bool
+	cmd := &cobra.Command{
+		Use:   "delete <drive-id>",
+		Short: "DELETE one person's drive and its files",
+		Long: `Delete a drive a person created, and the Docker volume or claim holding its
+files. THIS DELETES DATA AND NOTHING UNDOES IT.
+
+Refused with a 409 while a run still holds the drive. Every attempt is audited
+as ` + "`drive.member.delete`" + `. On Kubernetes the daemon needs the chart's
+drives.reclaim.enabled to delete claims.
+`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			id, err := uuid.Parse(strings.TrimSpace(args[0]))
+			if err != nil {
+				return fmt.Errorf("drive member delete: %q is not a drive id (a uuid)", args[0])
+			}
+			if !yes {
+				return fmt.Errorf("drive member delete: refusing without --yes: this permanently deletes drive %s and its files", id)
+			}
+			res, err := client().DeleteMemberDrive(cmd.Context(), id)
+			if err != nil {
+				return err
+			}
+			if asJSON {
+				return emitJSON(cmd.OutOrStdout(), res)
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "%s: %s (%s) of drive %q owned by %s\n", res.Outcome, res.Object, res.Backend, res.Drive, res.Owner)
+			return nil
+		},
+	}
+	cmd.Flags().BoolVar(&yes, "yes", false, "confirm that this permanently deletes the person's drive and its files")
+	cmd.Flags().BoolVar(&asJSON, "json", false, "emit {drive, drive_id, owner, backend, object, outcome} as JSON")
+	return cmd
 }

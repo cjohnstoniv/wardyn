@@ -361,9 +361,9 @@ func TestFinishRunOutput_DrainBarrier(t *testing.T) {
 			t.Fatal("the row was incomplete before any late byte")
 		}
 		writeExecOutput(t, w, "one more\n", "and another\n")
-		waitFor(t, "the row to turn incomplete", func() bool {
+		waitFor(t, "the row to turn incomplete and the late write to be audited", func() bool {
 			r, _ := f.mem.row(f.run.ID)
-			return r.Incomplete
+			return r.Incomplete && len(f.audit.eventsFor(f.run.ID, "run.output.finalize")) >= 1
 		})
 		evs := f.audit.eventsFor(f.run.ID, "run.output.finalize")
 		if len(evs) != 1 || !strings.Contains(string(evs[0].Data), "late_write") {
@@ -793,5 +793,35 @@ func TestEraseRunOutputs_FinaliserTouchFencesTheTail(t *testing.T) {
 	}
 	if n, _ := tw.Write([]byte("late\n")); n != 5 {
 		t.Fatal("a fenced writer must still accept writes")
+	}
+}
+
+// An erasure fence drops the tail's queued chunk bytes too, not only the ring: the queue retries
+// them while the database is unreachable, so they would outlive the erasure in memory.
+func TestFenceRunOutput_DropsTheQueuedChunks(t *testing.T) {
+	f := newOutputFixture(t)
+	f.open(t)
+	f.srv.execOutputs.mu.Lock()
+	tail := f.srv.execOutputs.m[f.run.ID]
+	f.srv.execOutputs.mu.Unlock()
+	q := &chunkQueue{s: f.srv, run: f.run.ID}
+	tail.mw.mu.Lock()
+	tail.sink.q = q
+	tail.mw.mu.Unlock()
+	q.add([]byte("masked bytes the database has not taken"))
+	q.mu.Lock()
+	held := q.pend
+	q.mu.Unlock()
+
+	f.srv.fenceRunOutput(f.run.ID)
+
+	if strings.Trim(string(held), "\x00") != "" {
+		t.Errorf("the queued bytes were dropped but not zeroed: %q", held)
+	}
+
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if len(q.pend) != 0 || !q.stopped {
+		t.Fatalf("after the fence the chunk queue holds %d byte(s), stopped=%v; want it emptied and stopped", len(q.pend), q.stopped)
 	}
 }

@@ -32,6 +32,7 @@ const (
 	ReasonCapabilityModelProvider        Reason = "capability_model_provider"
 	ReasonCapabilityComponent            Reason = "capability_component"
 	ReasonGovernanceProfile              Reason = "governance_profile"
+	ReasonPlacementComponentSelfDefined  Reason = "placement_component_self_defined"
 	ReasonGovernanceOverlayUnsatisfiable Reason = "governance_overlay_unsatisfiable"
 	ReasonGrantPairingNotEligible        Reason = "grant_pairing_not_eligible"
 	ReasonGroupsSnapshotStale            Reason = "groups_snapshot_stale"
@@ -58,6 +59,9 @@ const (
 	// ReasonDelegationScope: a portal's delegated token asked for a route
 	// outside the delegation allow-list (#1142).
 	ReasonDelegationScope Reason = "delegation_scope"
+	// ReasonServiceScope: a service identity's token asked for a route outside
+	// its fixed allow-list (#1508).
+	ReasonServiceScope Reason = "service_scope"
 	// ReasonEventStreamCap: the caller already holds the most concurrent run
 	// event streams one principal may (#1407). A limit, not a denial: not
 	// audited, like ReasonRunQuota.
@@ -71,6 +75,13 @@ const (
 	// cannot prove this run's masking corpus complete here, so it refuses with
 	// 503 instead of passing bytes through unmasked (ha-l2.0).
 	ReasonMaskStateUnavailable Reason = "mask_state_unavailable"
+	// ReasonDriveNotFound, ReasonDriveTargetConflict and ReasonDriveNotInPool:
+	// a run's drives[] names a drive the caller's own grants do not reach, two
+	// drives that derive one path, or a drive the run's pool cannot mount. 422,
+	// audited; the drive_not_found row never says whether the id exists.
+	ReasonDriveNotFound       Reason = "drive_not_found"
+	ReasonDriveTargetConflict Reason = "drive_target_conflict"
+	ReasonDriveNotInPool      Reason = "drive_not_in_pool"
 	// ReasonRoleStampStale: an API token's role and group stamp is older than
 	// WARDYN_ROLE_STAMP_TTL. Its owner signs in again to re-stamp it.
 	ReasonRoleStampStale Reason = "role_stamp_stale"
@@ -87,7 +98,8 @@ const (
 	// ReasonKeyDomainAmbiguous: a group assignment would leave people whose
 	// groups are assigned to different domains, with no user assignment of
 	// their own, or while someone whose last sign-in lost groups has none, so
-	// their next principal key would be refused.
+	// their next principal key would be refused; or the delete of a user
+	// assignment would leave that person so.
 	ReasonKeyDomainAmbiguous Reason = "key_domain_ambiguous_membership"
 	// The five refusals of POST /audit/retention/drop, one per rule audit_retention_drop (migration
 	// 0123) enforces. State conflicts of an authorized security operator, audited so an attempt that
@@ -97,6 +109,9 @@ const (
 	ReasonAuditRetentionInsideWindow   Reason = "audit_retention_inside_window"
 	ReasonAuditRetentionLiveRun        Reason = "audit_retention_live_run"
 	ReasonAuditRetentionDigestMismatch Reason = "audit_retention_digest_mismatch"
+	// ReasonAuditRetentionActorReserved: the drop's caller is named "wardynd", the name the database
+	// reads as the sweeper (a system, unattested drop), so no request may carry it.
+	ReasonAuditRetentionActorReserved Reason = "audit_retention_actor_reserved"
 	// ReasonComponentAutonomy: the organisation's autonomy cap on runs that
 	// carry a self-defined component (site config components.autonomy_cap)
 	// alone bound the run's level, and the request asks for more than it
@@ -136,6 +151,7 @@ var refusals = map[Reason]Refusal{
 	ReasonCapabilityWorkspaceProvider:    {Effect: EffectDeny, Audit: true},
 	ReasonCapabilityModelProvider:        {Effect: EffectDeny, Audit: true},
 	ReasonCapabilityComponent:            {Effect: EffectDeny, Audit: true},
+	ReasonPlacementComponentSelfDefined:  {Effect: EffectDeny, Audit: true},
 	ReasonGovernanceProfile:              {Effect: EffectDeny, Audit: true},
 	ReasonGovernanceOverlayUnsatisfiable: {Effect: EffectDeny, Audit: true},
 	ReasonGrantPairingNotEligible:        {Effect: EffectDeny, Audit: true},
@@ -153,8 +169,12 @@ var refusals = map[Reason]Refusal{
 	ReasonAdminView:                      {Effect: EffectConflict},
 	ReasonUserViewPreview:                {Effect: EffectConflict, Audit: true},
 	ReasonDelegationScope:                {Effect: EffectDeny, Audit: true},
+	ReasonServiceScope:                   {Effect: EffectDeny, Audit: true},
 	ReasonEventStreamCap:                 {Effect: EffectUnprocessable},
 	ReasonMaskStateUnavailable:           {Effect: EffectUnavailable, Audit: true},
+	ReasonDriveNotFound:                  {Effect: EffectUnprocessable, Audit: true},
+	ReasonDriveTargetConflict:            {Effect: EffectUnprocessable, Audit: true},
+	ReasonDriveNotInPool:                 {Effect: EffectUnprocessable, Audit: true},
 	ReasonRoleStampStale:                 {Effect: EffectUnauthenticated, Audit: true, Sentence: "this token's role is out of date: its owner must sign in again to refresh it"},
 	ReasonAuditExportPartitionFilter:     {Effect: EffectBadRequest},
 	ReasonKeyDomainUnknown:               {Effect: EffectUnprocessable, Audit: true},
@@ -164,6 +184,7 @@ var refusals = map[Reason]Refusal{
 	ReasonAuditRetentionInsideWindow:     {Effect: EffectConflict, Audit: true},
 	ReasonAuditRetentionLiveRun:          {Effect: EffectConflict, Audit: true},
 	ReasonAuditRetentionDigestMismatch:   {Effect: EffectConflict, Audit: true},
+	ReasonAuditRetentionActorReserved:    {Effect: EffectDeny, Audit: true},
 	ReasonComponentAutonomy:              {Effect: EffectDeny, Audit: true},
 }
 

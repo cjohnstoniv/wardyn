@@ -13,7 +13,7 @@
  */
 import { test, expect, gotoConsole, navToRoute, ADMIN_TOKEN } from "./fixtures";
 import { findRunningFixture, stubInteractiveRun } from "./attach-stub";
-import { termText } from "./terminal-text";
+import { termText, waitForShell } from "./terminal-text";
 
 test("the wheel scrolls tmux history and does not recall bash history", async ({ page }) => {
   const { id: runId } = await findRunningFixture(page);
@@ -26,23 +26,7 @@ test("the wheel scrolls tmux history and does not recall bash history", async ({
   const read = async () => (await termText(screen).catch(() => "")) as string;
 
   await screen.click();
-  // A fresh attach can be admitted read-only for a moment, and keys typed then
-  // are dropped: retry a readiness line until the shell echoes it (as the copy
-  // spec does), and only then type the lines the test depends on.
-  await expect
-    .poll(
-      async () => {
-        if (!(await read()).includes("ready-sentinel")) {
-          await screen.click();
-          await page.keyboard.type("printf 'ready-%s\\n' sentinel");
-          await page.keyboard.press("Enter");
-        }
-        await page.waitForTimeout(500);
-        return (await read()).includes("ready-sentinel");
-      },
-      { timeout: 30_000 },
-    )
-    .toBe(true);
+  await waitForShell(page, screen);
   // A history entry for the wheel to wrongly recall, then more output than one
   // screen so there is scrollback to reach.
   await page.keyboard.type("echo recall-sentinel");
@@ -61,8 +45,14 @@ test("the wheel scrolls tmux history and does not recall bash history", async ({
   // Leave copy-mode: the prompt line is empty, so nothing was recalled.
   await page.keyboard.press("q");
   await expect.poll(read).toContain("400");
-  const lines = (await read()).split("\n").map((l) => l.trimEnd()).filter(Boolean);
-  expect(lines[lines.length - 1]).toMatch(/\$$/);
+  // The prompt returns after the last number is drawn; wait for it, not for a
+  // single read that can land between the two.
+  await expect
+    .poll(async () => {
+      const lines = (await read()).split("\n").map((l) => l.trimEnd()).filter(Boolean);
+      return lines[lines.length - 1] ?? "";
+    })
+    .toMatch(/\$$/);
 });
 
 test("an attach from a foreign Origin is refused before the upgrade", async ({ page }) => {

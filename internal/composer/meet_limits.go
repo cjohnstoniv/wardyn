@@ -5,6 +5,7 @@ package composer
 
 import (
 	"cmp"
+	"slices"
 
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -15,6 +16,10 @@ import (
 // field.
 func (m *meeter) meetLimits(o types.LimitsOverlay) {
 	l := &m.out.Limits
+	if o.LocalSelfDefinedComponents != nil {
+		m.widenIf("local_self_defined_components", *o.LocalSelfDefinedComponents && !l.LocalSelfDefinedComponents)
+		l.LocalSelfDefinedComponents = l.LocalSelfDefinedComponents && *o.LocalSelfDefinedComponents
+	}
 	// A denial is only ever added: one the overlay leaves off stays the base's.
 	for _, f := range []struct {
 		base *bool
@@ -24,10 +29,14 @@ func (m *meeter) meetLimits(o types.LimitsOverlay) {
 		{&l.DenyInteractive, o.DenyInteractive},
 		{&l.DenyUIApps, o.DenyUIApps},
 		{&l.DenyUserDrive, o.DenyUserDrive},
+		{&l.DenyMemberDrives, o.DenyMemberDrives},
 	} {
 		if f.ov != nil {
 			*f.base = *f.base || *f.ov
 		}
+	}
+	if o.DenyPlacements != nil {
+		l.DenyPlacements = unionPlacements(l.DenyPlacements, *o.DenyPlacements)
 	}
 	for _, f := range []struct {
 		name string
@@ -85,6 +94,18 @@ func (m *meeter) meetRunLimits(o types.LimitsOverlay) {
 	l.RunLimits = got
 }
 
+// unionPlacements is a denial list only ever added to: the overlay's denials join the base's, in a
+// stable order (remote before local) so the same composition spells the same.
+func unionPlacements(base, ov []types.Placement) []types.Placement {
+	var out []types.Placement
+	for _, p := range []types.Placement{types.PlacementRemote, types.PlacementLocal} {
+		if slices.Contains(base, p) || slices.Contains(ov, p) {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
 func (m *meeter) widenIf(field string, widens bool) {
 	if widens {
 		m.widen(field, "is a weaker bound than the base's")
@@ -123,8 +144,8 @@ func clampDefault(def, resMax int) int {
 	return def
 }
 
-// meetRubric takes the lower autonomy level per field; a field set on one side
-// only takes that side, and a rubric that caps nothing stays nil.
+// meetRubric takes the lower autonomy level per field and ORs the guardrail lock; a field set on one
+// side only takes that side, and a rubric that caps nothing stays nil.
 func (m *meeter) meetRubric(o *types.AutonomyRubric) {
 	l := &m.out.Limits
 	var b types.AutonomyRubric
@@ -154,6 +175,7 @@ func (m *meeter) meetRubric(o *types.AutonomyRubric) {
 			m.widen("autonomy_rubric."+f.name, "%s allows a higher level than the base's %s", f.ov, *f.base)
 		}
 	}
+	b.AgentGuardrailLocks = b.AgentGuardrailLocks || o.AgentGuardrailLocks
 	if b == (types.AutonomyRubric{}) {
 		l.AutonomyRubric = nil
 		return

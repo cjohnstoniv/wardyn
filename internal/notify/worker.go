@@ -148,7 +148,7 @@ const factsSQL = `
 SELECT a.state, a.kind, a.requested_at, a.run_id, r.created_by, COALESCE(p.email, ''),
        r.governance_profile_id, COALESCE(gp.name, ''), gp.contact,
        (SELECT min(n.due_at) FROM approval_notifications n
-         WHERE n.approval_id = a.id AND n.tier > $2 AND n.state = 'pending')
+         WHERE n.approval_id = a.id AND n.tier > $2 AND n.due_at > now())
   FROM approvals a
   JOIN agent_runs r ON r.id = a.run_id
   LEFT JOIN people p ON p.principal = r.created_by

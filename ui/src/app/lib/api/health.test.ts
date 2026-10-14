@@ -104,6 +104,7 @@ describe("health — site-config integrations round-trip", () => {
   // SERVER_OWNED_SITE_CONFIG_KEYS so a THIRD one cannot ship unstripped.
   it("strips EVERY server-owned key a GET echoes, not just integrations", async () => {
     const echoed: Record<string, unknown> = {
+      runners: { enabled: true },
       scm_hosts: ["github.com"],
       integrations: [{ id: "anthropic_api_key" }],
       onboarding_completed_at: aheadByHours(-1),
@@ -119,6 +120,8 @@ describe("health — site-config integrations round-trip", () => {
       model_providers: { providers: [{ id: "corp-gateway", kind: "custom_endpoint", base_url: "https://gw.corp.example" }] },
       // #1215: a stale spread would re-read (and could fail on) a logo file the save never meant to touch.
       branding: { logo_path: "/etc/wardyn/branding/logo.svg" },
+      // A governance write with its own route: the server refuses a changed block on PUT /site-config.
+      egress: { baseline_hosts: ["llm.corp.example"] },
       effective_scm_hosts: ["github.com"],
       withheld_scm_hosts: [{ host: "dev.azure.com", provider_id: "ado", provider_kind: "azure_devops" }],
     };

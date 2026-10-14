@@ -52,7 +52,7 @@ type Registry struct {
 	mu     sync.RWMutex
 	perRun map[uuid.UUID][][]byte // run id -> set of secret values
 	// globals is every process-wide value masked right now, on every run: the
-	// union of current and retired, rebuilt by reflatten whenever either changes.
+	// union of current, retired and rows, rebuilt by reflatten whenever one changes.
 	globals [][]byte
 	// current holds each credential's live values by (owner, name), so a
 	// refreshed or deleted credential's old values can be let go instead of
@@ -62,6 +62,11 @@ type Registry struct {
 	// SweepGlobals drops them: masking fails open, and an event quoting the old
 	// value can still arrive after the credential moved on.
 	retired []retiredValue
+	// rows holds what a Backend committed, one entry per committed row. Two rows
+	// can carry the same bytes (a row's identity includes its key generation),
+	// so each ends on its own lifetime and the value stays masked until the last
+	// row holding it is swept or dropped.
+	rows map[uuid.UUID]globalRow
 
 	// gen bumps on every mutation that CHANGES the corpus (a de-duplicated Add
 	// is not a change). It is the cache key below: a Masker built at generation
@@ -93,6 +98,15 @@ type retiredValue struct {
 	at    time.Time
 }
 
+// globalRow is one committed row's hold on a credential value: current, with
+// until as a globalValue's, while retiredAt is zero; retired at retiredAt after.
+type globalRow struct {
+	key       globalKey
+	value     []byte
+	until     time.Time
+	retiredAt time.Time
+}
+
 // runMaskers is one run's derived masking state at a single registry generation.
 // variant (the JSONEscapedVariants expansion the audit recorder needs) is built
 // lazily: it triples the set and is documented O(n^2), and the PTY lane never
@@ -106,7 +120,7 @@ type runMaskers struct {
 
 // NewRegistry returns an empty, ready-to-use Registry.
 func NewRegistry() *Registry {
-	return &Registry{perRun: make(map[uuid.UUID][][]byte), cached: map[uuid.UUID]*runMaskers{}, current: map[globalKey][]globalValue{}}
+	return &Registry{perRun: make(map[uuid.UUID][][]byte), cached: map[uuid.UUID]*runMaskers{}, current: map[globalKey][]globalValue{}, rows: map[uuid.UUID]globalRow{}}
 }
 
 // Add registers value as a secret for runID. Values shorter than MinLen are
@@ -119,13 +133,15 @@ func (r *Registry) Add(runID uuid.UUID, value []byte) error {
 	if r == nil || len(value) < MinLen {
 		return nil
 	}
-	// Re-registering an already-known value (per-run or global) is a no-op:
-	// masking is exact-match over a set, so a duplicate could never mask
-	// anything new. There is deliberately no CAP here: dropping a registered
-	// secret past a ceiling would fail OPEN and emit it unmasked, the one
-	// thing this package exists to prevent.
+	// Re-registering a value the run already has is a no-op: masking is
+	// exact-match over a set, so a duplicate could never mask anything new. A
+	// value that is only in the global set is NOT known: a global is let go
+	// when its credential is replaced or deleted, and a run that was handed
+	// the value before then still holds it. There is deliberately no CAP
+	// here: dropping a registered secret past a ceiling would fail OPEN and
+	// emit it unmasked, the one thing this package exists to prevent.
 	r.mu.RLock()
-	known := containsSlice(r.perRun[runID], value) || containsSlice(r.globals, value)
+	known := containsSlice(r.perRun[runID], value)
 	b := r.backend
 	r.mu.RUnlock()
 	if known {
@@ -151,7 +167,7 @@ func (r *Registry) AddLocal(runID uuid.UUID, value []byte) {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if containsSlice(r.perRun[runID], value) || containsSlice(r.globals, value) {
+	if containsSlice(r.perRun[runID], value) {
 		return
 	}
 	r.perRun[runID] = append(r.perRun[runID], bytes.Clone(value))
@@ -289,7 +305,9 @@ func (r *Registry) EvictGlobal(owner, name string, now time.Time) error {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.retireLocked(globalKey{owner, name}, nil, now)
+	k := globalKey{owner, name}
+	r.retireLocked(k, nil, now)
+	r.retireRowsLocked(func(g globalKey) bool { return g == k }, now)
 	r.reflattenLocked()
 	return nil
 }
@@ -317,6 +335,7 @@ func (r *Registry) RetireOwnerGlobals(ctx context.Context, owner string, now tim
 			r.retireLocked(k, nil, now)
 		}
 	}
+	r.retireRowsLocked(func(g globalKey) bool { return g.owner == owner }, now)
 	r.reflattenLocked()
 	return nil
 }
@@ -344,6 +363,16 @@ func (r *Registry) SweepGlobals(cutoff time.Time) int {
 			r.current[k] = vs
 		}
 	}
+	for id, row := range r.rows {
+		at := row.retiredAt
+		if at.IsZero() {
+			at = row.until
+		}
+		if !at.IsZero() && at.Before(cutoff) {
+			delete(r.rows, id)
+			dropped++
+		}
+	}
 	r.reflattenLocked()
 	return dropped
 }
@@ -365,7 +394,21 @@ func (r *Registry) retireLocked(k globalKey, keep []globalValue, now time.Time) 
 	delete(r.current, k)
 }
 
-// reflattenLocked rebuilds globals from current and retired, and bumps gen only
+// retireRowsLocked retires the current committed rows of the credentials match
+// selects, each as retireLocked retires a value. The caller holds r.mu.
+func (r *Registry) retireRowsLocked(match func(globalKey) bool, now time.Time) {
+	for id, row := range r.rows {
+		if match(row.key) && row.retiredAt.IsZero() {
+			row.retiredAt = now
+			if row.until.After(now) {
+				row.retiredAt = row.until
+			}
+			r.rows[id] = row
+		}
+	}
+}
+
+// reflattenLocked rebuilds globals from current, retired and rows, and bumps gen only
 // when the masked set changed: retiring a value masks exactly what it did
 // before, so it must not invalidate every run's cached Masker. The caller
 // holds r.mu.
@@ -385,6 +428,9 @@ func (r *Registry) reflattenLocked() {
 	}
 	for _, rv := range r.retired {
 		add(rv.value)
+	}
+	for _, row := range r.rows {
+		add(row.value)
 	}
 	if len(out) == len(r.globals) && !slices.ContainsFunc(r.globals, func(v []byte) bool { return !seen[string(v)] }) {
 		return
@@ -409,7 +455,9 @@ func (r *Registry) Snapshot(runID uuid.UUID) [][]byte {
 		out = append(out, bytes.Clone(v))
 	}
 	for _, v := range globals {
-		out = append(out, bytes.Clone(v))
+		if !containsSlice(perRun, v) { // a value the run also holds is in the set once
+			out = append(out, bytes.Clone(v))
+		}
 	}
 	return out
 }
@@ -439,7 +487,7 @@ func (r *Registry) Masker(runID uuid.UUID) Masker {
 // JSONEscapedVariants, the set the audit recorder needs since ev.Data is JSON
 // and a secret bearing a newline or quote lands there escaped. Cached on the
 // same generation as Masker, built lazily since the expansion triples the
-// set and is O(n^2), so the PTY lane never pays for it.
+// set, so the PTY lane never pays for it.
 func (r *Registry) JSONVariantMasker(runID uuid.UUID) Masker {
 	if r == nil {
 		return Masker{}
@@ -483,7 +531,9 @@ func (r *Registry) snapshotLocked(runID uuid.UUID) [][]byte {
 		out = append(out, bytes.Clone(v))
 	}
 	for _, v := range globals {
-		out = append(out, bytes.Clone(v))
+		if !containsSlice(perRun, v) { // a value the run also holds is in the set once
+			out = append(out, bytes.Clone(v))
+		}
 	}
 	return out
 }
@@ -548,16 +598,27 @@ func (r *Registry) RunIDs() []uuid.UUID {
 // (asciinema). No variant for a secret with no JSON-special bytes;
 // duplicates dropped.
 //
-// ponytail: O(n²) de-dup over the snapshot (a handful of secrets per run);
-// switch to a set only if a run ever registers thousands.
+// The de-dup is a set seeded from the originals, not a scan of the output: a
+// run's corpus carries every person's global values, so it grows with the
+// organisation, not the run.
 func JSONEscapedVariants(snap [][]byte) [][]byte {
 	out := make([][]byte, len(snap), len(snap)*3)
 	copy(out, snap)
+	seen := make(map[string]struct{}, len(snap)*3)
+	for _, s := range snap {
+		seen[string(s)] = struct{}{}
+	}
 	for _, s := range snap {
 		for _, escapeHTML := range [...]bool{false, true} {
-			if esc, ok := jsonStringEscape(s, escapeHTML); ok && !containsSlice(out, esc) {
-				out = append(out, esc)
+			esc, ok := jsonStringEscape(s, escapeHTML)
+			if !ok {
+				continue
 			}
+			if _, dup := seen[string(esc)]; dup {
+				continue
+			}
+			seen[string(esc)] = struct{}{}
+			out = append(out, esc)
 		}
 	}
 	return out
@@ -581,7 +642,15 @@ func jsonStringEscape(s []byte, escapeHTML bool) ([]byte, bool) {
 	return bytes.Clone(b[1 : len(b)-1]), true // strip surrounding quotes
 }
 
+// scanned, when a test points it somewhere, adds up the sizes of the sets
+// containsSlice is asked to search: how a test shows a caller does not scan a
+// set once per element. Nil outside tests.
+var scanned *int
+
 func containsSlice(set [][]byte, v []byte) bool {
+	if scanned != nil {
+		*scanned += len(set)
+	}
 	for _, s := range set {
 		if bytes.Equal(s, v) {
 			return true

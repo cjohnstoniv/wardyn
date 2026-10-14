@@ -23,10 +23,14 @@ import {
 
 async function patchJSON(page: Page, glob: string, patch: (json: Record<string, unknown>) => void): Promise<void> {
   await page.route(glob, async (route) => {
-    const response = await route.fetch();
-    const json = await response.json();
-    patch(json);
-    await route.fulfill({ response, json });
+    try {
+      const response = await route.fetch();
+      const json = await response.json();
+      patch(json);
+      await route.fulfill({ response, json });
+    } catch {
+      // The test ended while the real answer was in flight.
+    }
   });
 }
 

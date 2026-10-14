@@ -67,7 +67,7 @@ Platform requirements, in one breath: **Kubernetes 1.20+, Helm 3, a NetworkPolic
 - A wardynd image:
   - the chart's default pulls the CI-published one for a released version (see the callout at the top), or **build and push your own** (see below) for a fork, a private registry, or an unreleased change.
   - Each release also publishes `ghcr.io/cjohnstoniv/wardynd-fips`, the same daemon built against a pinned Go cryptographic module snapshot:
-      - set `image.repository` to it, give it non-age key custody (`kek.provider` `transit` or `azurekv`, or store mode), and see [Secrets and keys](../../../docs/operations/secrets-and-keys.md) for what it does and does not claim.
+      - set `image.repository` to it, give it non-age key custody: a key service (`kek.provider` `transit`, `azurekv` or `awskms`), alone or with store mode, and see [Secrets and keys](../../../docs/operations/secrets-and-keys.md) for what it does and does not claim.
 - Optional: **RuntimeClasses** delivering gVisor/Kata isolation, pinned via `k8s.runtimeClasses.CC2`/`.CC3`, to advertise the stronger confinement tiers — CC1 works out of the box.
 - An **OIDC issuer** for SSO and admin/member RBAC (see [Multi-user](#multi-user-adminmember-rbac)).
 
@@ -399,6 +399,7 @@ helm install wardyn oci://ghcr.io/cjohnstoniv/charts/wardyn --version "$WARDYN_V
 - `k8s.readNodes` (`WARDYN_K8S_READ_NODES`, default `false`): adds `list` on `nodes` to the ClusterRole so preflight and create can warn that no node a run may be placed on is large enough.
   - It compares a run's requests to node size, honouring `k8s.sandbox.*`, never to free capacity: pods of other namespaces are invisible to wardynd, and the scheduler stays the authority.
   - Without it the warning is absent.
+  - With no ResourceQuota in the runs namespace, it is also how wardynd measures the cluster at boot to propose the cluster runner's limits. With neither, the runner gets none and takes no run until an admin sets them. The kind quickstart turns it on for that.
   - Separately and always on, the runner Role has `list` on `resourcequotas`: a run that cannot fit the runs namespace's quota is refused before it is created (`namespace_quota_exceeded`),
     - and one that would fill a quota to 90% or more is warned; a quota wardynd may not read is reported as unreadable, never as empty.
 - `runner.sandbox.defaultResources.cpuMillis` / `.memoryMiB`: the size of a run whose policy sets no resources (`WARDYN_SANDBOX_DEFAULT_CPU_MILLIS` / `WARDYN_SANDBOX_DEFAULT_MEMORY_MIB`).
@@ -1059,7 +1060,7 @@ spec:
   - It also refuses a hand-set `WARDYN_HA` in `env` or `extraEnv`.
   - wardynd itself refuses `WARDYN_HA` unless the runner is Kubernetes (`k8s.enabled`) and the store is `pg` or `off`, which is the half that still holds after a `kubectl scale`.
   - The strategy stays `Recreate`: this is node-failure tolerance, not zero-downtime upgrades.
-  - Per-replica limits (connection caps, rate limiters) add up across replicas.
+  - Per-replica limits (connection caps, rate limiters, the `via_org` byte total of a local run) add up across replicas.
   - See [docs/OPERATIONS.md#high-availability](../../../docs/OPERATIONS.md#high-availability).
 
 Where this chart is headed: [ROADMAP.md](../../../ROADMAP.md).

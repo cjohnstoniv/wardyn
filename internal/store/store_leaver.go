@@ -62,6 +62,9 @@ type SuspendPlan struct {
 	// PurgeAfter schedules the automatic purge that long after the deactivation. Zero schedules
 	// none; an earlier schedule is kept.
 	PurgeAfter time.Duration
+	// PurgePrincipals are the principals whose identity rows the purge is scheduled for with IdentityID's:
+	// the person's own. A row of Principals not among them is deactivated and never scheduled.
+	PurgePrincipals []string
 	// PendingJobs are added as pending ledger rows in the same transaction, so a crash after the
 	// commit still leaves the rest of the suspension for the sweeper. Existing rows are kept.
 	PendingJobs []JobKey
@@ -98,7 +101,6 @@ type LeaverStore interface {
 	CreateScimIdentity(ctx context.Context, issuer, tenantID, objectID string, u IdentityUpdate, now time.Time) (PrincipalIdentity, bool, error)
 	ApplyIdentityUpdate(ctx context.Context, id uuid.UUID, u IdentityUpdate, now time.Time) (PrincipalIdentity, error)
 	SuspendIdentity(ctx context.Context, p SuspendPlan) (SuspendResult, error)
-	PrincipalsByEmail(ctx context.Context, emails []string) ([]string, error)
 	ListNonTerminalRunsBy(ctx context.Context, createdBy string) ([]types.AgentRun, error)
 	EnsureDeprovisionJobs(ctx context.Context, identityID uuid.UUID, kind string, keys []JobKey) error
 	ListDeprovisionJobs(ctx context.Context, identityID uuid.UUID, kind string) ([]DeprovisionJob, error)
@@ -106,7 +108,7 @@ type LeaverStore interface {
 	FailDeprovisionJob(ctx context.Context, identityID uuid.UUID, kind string, k JobKey, cause error) error
 	ReopenDeprovisionJob(ctx context.Context, identityID uuid.UUID, kind string, k JobKey) error
 	MarkIdentityPurged(ctx context.Context, id uuid.UUID, requireDue bool) (bool, error)
-	PurgeDueIdentities(ctx context.Context, limit int) ([]uuid.UUID, error)
+	PurgeDueIdentities(ctx context.Context, limit int) ([]DueIdentity, error)
 	PendingLeavers(ctx context.Context, idleFor time.Duration, limit int) ([]PendingLeaver, error)
 	DeleteUserSubjectRows(ctx context.Context, id uuid.UUID, principals, emails []string) (grants, assignments, kept int64, err error)
 	HeldEmails(ctx context.Context, id uuid.UUID, principals, emails []string) ([]string, error)
@@ -336,16 +338,23 @@ func (s PG) SuspendIdentity(ctx context.Context, p SuspendPlan) (SuspendResult, 
 	if !found {
 		return SuspendResult{}, ErrNotFound
 	}
-	// Stamped by the database at the statement, after the locks: a sign-in that held a row finished
-	// before this reads the clock, so its cookie's issued-at is at or before the cutoff.
+	// A sign-in that held a row finished before this, so the cut below draws a greater revocation
+	// sequence than the one its cookie recorded.
 	if _, err = tx.Exec(ctx, `
 		UPDATE principal_identities
 		   SET deactivated_at = COALESCE(deactivated_at, clock_timestamp()), authority_epoch = authority_epoch + 1,
-		       purge_after = COALESCE(purge_after, CASE WHEN $3::bigint > 0 THEN clock_timestamp() + $3::bigint * interval '1 microsecond' END)
-		 WHERE id = $1 OR principal = ANY($2::text[])`, p.IdentityID, principals, p.PurgeAfter.Microseconds()); err != nil {
+		       purge_after = COALESCE(purge_after, CASE WHEN $3::bigint > 0 AND (id = $1 OR principal = ANY($4::text[]))
+		                                           THEN clock_timestamp() + $3::bigint * interval '1 microsecond' END)
+		 WHERE id = $1 OR principal = ANY($2::text[])`, p.IdentityID, principals, p.PurgeAfter.Microseconds(), nonEmptyStrings(p.PurgePrincipals)); err != nil {
 		return SuspendResult{}, fmt.Errorf("store: deactivate identities: %w", err)
 	}
-	for _, sub := range nonEmptyStrings(p.CutoffSubs) {
+	cutoffSubs := nonEmptyStrings(p.CutoffSubs)
+	if len(cutoffSubs) > 0 {
+		if err = LockRevocationOrder(ctx, tx); err != nil {
+			return SuspendResult{}, err
+		}
+	}
+	for _, sub := range cutoffSubs {
 		if _, err = tx.Exec(ctx, `
 			INSERT INTO oidc_session_revocations (sub, revoked_at) VALUES ($1, clock_timestamp())
 			ON CONFLICT (sub) DO UPDATE SET revoked_at = EXCLUDED.revoked_at`, sub); err != nil {
@@ -361,10 +370,13 @@ func (s PG) SuspendIdentity(ctx context.Context, p SuspendPlan) (SuspendResult, 
 			return SuspendResult{}, fmt.Errorf("store: reset deprovision jobs: %w", err)
 		}
 	}
-	detail, _ := json.Marshal(map[string]int{"sessions_cut": len(nonEmptyStrings(p.CutoffSubs))})
+	// The cutoff step also records the deactivated_at this suspension leaves on the identity: the purge's
+	// proof that the identity's current deactivation is its own (ownSuspension).
+	detail, _ := json.Marshal(map[string]int{"sessions_cut": len(cutoffSubs)})
 	if _, err = tx.Exec(ctx, `
 		INSERT INTO deprovision_jobs (identity_id, kind, step, target, state, attempts, detail)
-		VALUES ($1, $2, $3, '', 'done', 1, $4)
+		VALUES ($1, $2, $3, '', 'done', 1, $4::jsonb || jsonb_build_object('deactivated_at_us',
+		        (SELECT (extract(epoch FROM i.deactivated_at) * 1000000)::bigint FROM principal_identities i WHERE i.id = $1)))
 		ON CONFLICT (identity_id, kind, step, target) DO UPDATE
 		   SET state = 'done', attempts = deprovision_jobs.attempts + 1, detail = EXCLUDED.detail, updated_at = now()`,
 		p.IdentityID, JobKindSuspend, JobStepCutoff, detail); err != nil {
@@ -384,25 +396,6 @@ func (s PG) SuspendIdentity(ctx context.Context, p SuspendPlan) (SuspendResult, 
 		return SuspendResult{}, fmt.Errorf("store: commit suspension: %w", err)
 	}
 	return res, nil
-}
-
-// PrincipalsByEmail is the distinct subs the emails resolve to through api_tokens(principal, email)
-// and people, matched case-insensitively: how a suspension reaches someone no identity row binds.
-func (s PG) PrincipalsByEmail(ctx context.Context, emails []string) ([]string, error) {
-	lowered := make([]string, 0, len(emails))
-	for _, e := range emails {
-		if e = strings.ToLower(strings.TrimSpace(e)); e != "" {
-			lowered = append(lowered, e)
-		}
-	}
-	return collect(ctx, s.Pool, "list", "principals by email", `
-		SELECT principal FROM (
-			SELECT principal FROM api_tokens WHERE lower(email) = ANY($1::text[])
-			UNION SELECT principal FROM people WHERE lower(email) = ANY($1::text[])
-		) p WHERE principal <> '' ORDER BY principal`, []any{lowered}, func(r pgx.Row) (string, error) {
-		var v string
-		return v, r.Scan(&v)
-	})
 }
 
 // ListNonTerminalRunsBy is createdBy's runs that have not ended.

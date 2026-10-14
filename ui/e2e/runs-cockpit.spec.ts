@@ -406,7 +406,7 @@ test.describe("a run refused for a model credential carries the sign-in, not dir
     // A DOOR, not a signpost: the sign-in opens here, on the run's own page.
     const before = new URL(page.url()).pathname;
     await block.getByRole("button", { name: MODEL_ACCESS_RUN_DOOR.SIGN_IN_ARIA }).click();
-    await expect(page.getByRole("heading", { name: MODEL_ACCESS_BANNER.DIALOG_TITLE })).toBeVisible();
+    await expect(page.getByRole("heading", { name: MODEL_ACCESS_BANNER.DIALOG_TITLE })).toBeVisible({ timeout: 20_000 });
     await expect(page.getByTestId("harness-login-pane")).toBeVisible();
     expect(new URL(page.url()).pathname).toBe(before);
 

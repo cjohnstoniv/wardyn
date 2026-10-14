@@ -208,6 +208,15 @@ type ADOEntraConfig struct {
 	// RESTAPI: brokered REST calls, or only git traffic. Default true; read
 	// via RESTAPIEnabled, never directly.
 	RESTAPI *bool `json:"rest_api,omitempty"`
+	// RunnerResident opts this connection's minted tokens in to runner_resident
+	// delivery: held in a self-hosted runner's OS keystore for the run and
+	// injected by the runner's own proxy, where the class's delivery policy and
+	// posture requirement allow it. Off by default.
+	RunnerResident bool `json:"runner_resident,omitempty"`
+	// RunnerResidentSandbox also hands that token into the sandbox, where the
+	// agent can use it past the REST gate and capability holds. Requires
+	// RunnerResident.
+	RunnerResidentSandbox bool `json:"runner_resident_sandbox,omitempty"`
 }
 
 // RESTAPIEnabled: the rest_api default (unset or nil receiver) is enabled.
@@ -255,9 +264,13 @@ type GitProvider struct {
 	BaseURLs []string `json:"base_urls"`
 	// Lanes are the credential lanes usable for this provider; empty means
 	// every legacy lane (LegacyGitLanes) — the field narrows, never widens.
-	Lanes            []GitLane        `json:"lanes,omitempty"`
-	CredentialSource CredentialSource `json:"credential_source,omitempty"` // whose credential the lanes use; empty = CredentialSourceShared, CredentialSourcePerUser requires GitLaneEntra, or GitLanePAT on an Azure DevOps row (a Server row, which has no Entra sign-in)
-	Entra            *ADOEntraConfig  `json:"entra,omitempty"`             // present only on, and required by, a row whose Lanes name GitLaneEntra
+	Lanes []GitLane `json:"lanes,omitempty"`
+	// GitHubAppInstallURL is operator-configured, nonsecret installation
+	// metadata for this row's App lane. It grants no access and is disclosed
+	// by run facts only to operators, never ordinary members.
+	GitHubAppInstallURL string           `json:"github_app_install_url,omitempty"`
+	CredentialSource    CredentialSource `json:"credential_source,omitempty"` // whose credential the lanes use; empty = CredentialSourceShared, CredentialSourcePerUser requires GitLaneEntra, or GitLanePAT on an Azure DevOps row (a Server row, which has no Entra sign-in)
+	Entra               *ADOEntraConfig  `json:"entra,omitempty"`             // present only on, and required by, a row whose Lanes name GitLaneEntra
 }
 
 // StorageProviders is the file-system half of WorkspaceProviders; each nil sub-block is legacy behaviour for that half.
@@ -282,4 +295,20 @@ type EphemeralProvider struct {
 type UserDriveProvider struct {
 	Disabled   bool `json:"disabled,omitempty"`     // turns drives off deployment-wide, negative-sense like GitProvider.Disabled, so zero value is today
 	MaxSizeMiB int  `json:"max_size_mib,omitempty"` // largest drive allowed, refused at admin write boundary and clamped at resolve; 0 = no ceiling
+	// MemberCreate is the switch for people creating their own drives. nil = off.
+	MemberCreate *MemberDrivePolicy `json:"member_create,omitempty"`
 }
+
+// MemberDrivePolicy turns member drive creation on for the organisation (off by
+// default) and bounds it. A profile can still deny it (GovernanceLimits.DenyMemberDrives).
+type MemberDrivePolicy struct {
+	Enabled      bool `json:"enabled,omitempty"`
+	MaxPerPerson int  `json:"max_per_person,omitempty"` // 1..MaxMemberDrivesPerPerson when Enabled
+	// SizeMiB is the k8s claim request, required when Enabled and bounded by
+	// UserDriveProvider.MaxSizeMiB. A Docker volume has no size limit, so it must be 0 there.
+	SizeMiB      int    `json:"size_mib,omitempty"`
+	StorageClass string `json:"storage_class,omitempty"` // k8s only; "" = the cluster default
+}
+
+// MaxMemberDrivesPerPerson is the ceiling on MemberDrivePolicy.MaxPerPerson.
+const MaxMemberDrivesPerPerson = 20

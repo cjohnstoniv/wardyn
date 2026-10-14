@@ -7,17 +7,20 @@
 // Every interface mirrors one Go struct and wire-parity.test.ts pins its json
 // tags to that struct's source, so a Go rename fails a TS test.
 //
-//   Component, ComponentDefinition, ComponentSecret, ComponentDelivery, ComponentRef
+//   Component, ComponentDefinition, ComponentSecret, ComponentDelivery, ComponentRef,
+//   ComponentCLI, CLIGitHub, CLIAWS, CLIAzure
 //                        internal/types/component.go (aliased by pkg/client/types.go)
 //   ComponentRequest, ComponentRequirement, ComponentSaved, ComponentSecretView,
-//   OrgComponentView, MyComponents
+//   OrgComponentView, CLIView, MCPView, CatalogueCLI, MyComponents
 //                        pkg/client/components.go
 //   ComponentFact, ComponentSecretFact
 //                        internal/api/components_facts.go (the `components` of
 //                        POST /runs/preflight and POST /runs/policy-preview)
 
 import type { AutonomyLevel } from "../api/governance";
-import type { SetupItem } from "./runs";
+import type { AgentFact, LocalDeliveryMode, RepoAccessFact, TokenScopeFact } from "./new-run-contract";
+import type { PushRulesSpec } from "./policy";
+import type { SetupItem } from "./preflight";
 
 /** How one component secret reaches the run. */
 export type ComponentDeliveryMode = "header" | "env" | "file";
@@ -50,6 +53,45 @@ export interface ComponentDefinition {
   secrets?: ComponentSecret[];
   // Plain, non-secret environment.
   config?: Record<string, string>;
+  // Org rows only: marks the row as a CLI credential card.
+  cli?: ComponentCLI;
+  // Makes the component a remote MCP server, reached only through the proxy's broker route.
+  mcp?: ComponentMCP;
+}
+
+/** A remote MCP server: its streamable HTTP URL, whose host is one of the component's hosts. */
+export interface ComponentMCP {
+  url: string;
+  transport: "http";
+}
+
+export type CLIKind = "azure" | "aws" | "github";
+
+/** The credential an org row gives a run's CLI; `kind` names the one arm that is set. */
+export interface ComponentCLI {
+  kind: CLIKind;
+  azure?: CLIAzure;
+  aws?: CLIAWS;
+  github?: CLIGitHub;
+}
+
+export interface CLIGitHub {
+  capabilities: string[];
+}
+
+export interface CLIAWS {
+  start_url: string;
+  sso_region: string;
+  // 12 digits.
+  account_id: string;
+  role_name: string;
+  region: string;
+}
+
+export interface CLIAzure {
+  // 1 to 16 subscription GUIDs.
+  subscriptions: string[];
+  access: "read" | "write";
 }
 
 /** One stored component: an org row (no `owner`) or a person's saved row. */
@@ -64,13 +106,25 @@ export interface Component {
   updated_at: string;
 }
 
-/** Attaches one component to a run (`components[]` of create, preflight and preview): a stored one by `id`, or a run-only `inline` definition. */
+/** Attaches one component to a run (`components[]` of create, preflight and preview): a stored one by `id`, a run-only `inline` definition, or a built-in Git provider (`builtin`, OD-4). */
 export interface ComponentRef {
   id?: string;
   inline?: ComponentDefinition;
   // Labels an inline one.
   name?: string;
+  // A built-in Git provider: API and git-over-HTTPS to the listed repositories without a workspace.
+  builtin?: ComponentBuiltin;
+  // The GitHub owner or the Azure DevOps organisation. Required with `builtin`.
+  org?: string;
+  // owner/name (GitHub, at least one) or project/repository (Azure DevOps; none reaches every repository the person can reach in `org`).
+  repos?: string[];
+  // Empty reads as read.
+  access?: "read" | "write";
+  // The included harnesses (tools[].id) an MCP component's server is turned on for; absent means every harness that can take it.
+  mcp_harnesses?: string[];
 }
+
+export type ComponentBuiltin = "github" | "azure_devops";
 
 /** Body of POST /me/components, PUT /me/components/{id} and PUT /components/{id}. */
 export interface ComponentRequest {
@@ -104,6 +158,38 @@ export interface OrgComponentView {
   hosts: string[];
   secrets: ComponentSecretView[];
   config_keys: string[];
+  category: "cli" | "mcp" | "api";
+  cli?: CLIView;
+  mcp?: MCPView;
+}
+
+/** The non-secret face of a CLI row: which kind and what it pins. */
+export interface CLIView {
+  kind: CLIKind;
+  // Azure.
+  subscriptions?: number;
+  access?: string;
+  // AWS.
+  account_id?: string;
+  role_name?: string;
+  region?: string;
+  // GitHub.
+  capabilities?: string[];
+}
+
+/** The non-secret face of an MCP server row. */
+export interface MCPView {
+  url: string;
+  transport: string;
+}
+
+export type CatalogueCLIKind = CLIKind | "gcloud" | "kubectl";
+
+/** One of the five CLI cards. `rows` are the granted org rows of that kind. */
+export interface CatalogueCLI {
+  kind: CatalogueCLIKind;
+  state: "available" | "not_granted" | "coming_soon";
+  rows: string[];
 }
 
 /** GET /me/components. */
@@ -115,16 +201,20 @@ export interface MyComponents {
   autonomy_cap: AutonomyLevel | "";
   mine: Component[];
   org: OrgComponentView[];
+  // Always five cards, in the order azure, github, aws, gcloud, kubectl.
+  clis: CatalogueCLI[];
 }
 
 /** One secret of a component fact: how it is delivered and whose it is. Never its name. */
 export interface ComponentSecretFact {
   delivery: ComponentDeliveryMode;
   shared: boolean;
+  // How an organisation-held secret would reach the person's runner (OD-12). Absent for the person's own and until the placement lane decides.
+  local_delivery?: LocalDeliveryMode;
 }
 
-export type ComponentFactKind = "custom" | "git_provider";
-export type ComponentFactReason = "org" | "self" | "inline" | "workspace";
+export type ComponentFactKind = "custom" | "git_provider" | "agent" | "git_pat";
+export type ComponentFactReason = "org" | "self" | "inline" | "workspace" | "agent";
 export type ComponentFactStatus = "ready" | "needs_input" | "unavailable" | "unknown";
 // types.GitLane's four, then the two a clone can take with no run credential.
 export type ComponentFactLane = "app" | "pat" | "ssh" | "entra" | "direct" | "none";
@@ -154,4 +244,18 @@ export interface ComponentFact {
   vault_floor?: boolean;
   tls_intercept?: boolean;
   high_risk?: boolean;
+  // The agent component's own facts (kind "agent").
+  agent?: AgentFact;
+  // A git_provider's additions: the run's resolved capability set on the lane
+  // and the most the person's row allows, the push rules in force for this
+  // provider and organisation, the Azure DevOps token mode and its scopes with
+  // what each covers (#1880), per-repository access, and the GitHub App
+  // install link (sent to operators only).
+  capabilities?: string[];
+  capability_ceiling?: string[];
+  push_rules?: PushRulesSpec;
+  token_mode?: "bearer" | "minted_pat" | "own_pat";
+  token_scopes?: TokenScopeFact[];
+  repo_access?: RepoAccessFact[];
+  install_url?: string;
 }

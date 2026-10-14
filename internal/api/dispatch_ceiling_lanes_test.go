@@ -81,7 +81,7 @@ func TestSourceScanLaneResolvesTheActingPrincipalsCeiling(t *testing.T) {
 		// fail this lane for the wrong reason.
 		ctx := govMemberCtx([]string{"eng"}, false)
 		src := types.Source{ID: uuid.New(), Kind: types.SourceRepo, Locator: govWorkspaceRepo}
-		run, err := srv.launchSourceScanRun(ctx, "bob@corp.example", src)
+		run, err := srv.launchSourceScanRun(ctx, "bob@corp.example", src, nil)
 		if err != nil {
 			t.Fatalf("launchSourceScanRun: %v", err)
 		}

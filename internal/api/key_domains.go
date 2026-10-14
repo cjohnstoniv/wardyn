@@ -24,7 +24,6 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore/keydomain"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -131,7 +130,7 @@ type keyDomainRequest struct {
 const (
 	keyDomainOwnerUnresolvedMsg = "That email address doesn't match anyone this deployment knows, so nothing was changed. " +
 		"Use the person's subject, as the Audit log shows it."
-	keyDomainOwnerAmbiguousMsg = "That matches more than one person, so nothing was changed. Use the person's subject exactly."
+	keyDomainOwnerAmbiguousMsg = "That matches more than one person, so nothing was changed. Use the person's subject exactly, as the Audit log shows it."
 	maxKeyDomainSubjectLen     = 512
 )
 
@@ -165,7 +164,7 @@ func (s *Server) decodeKeyDomainChange(w http.ResponseWriter, r *http.Request, d
 			return bad(`For subject_type "all" the subject in the path is "all".`)
 		}
 	case keydomain.SubjectGroup:
-		g, ok := oidc.CanonicalGroupSubject(raw)
+		g, ok := types.CanonicalGroupSubject(raw)
 		if !ok || len(g) > maxKeyDomainSubjectLen || !controlCharFree(g) {
 			return bad("A group subject must be printable ASCII: it is matched against the group list of a person's last sign-in.")
 		}
@@ -174,7 +173,11 @@ func (s *Server) decodeKeyDomainChange(w http.ResponseWriter, r *http.Request, d
 		if raw == "" || len(raw) > maxKeyDomainSubjectLen || !controlCharFree(raw) {
 			return bad("Name the person, by subject or email.")
 		}
-		owner, _, refusal := s.resolveSecretOwner(r.Context(), raw)
+		owner, _, refusal, err := s.resolveSecretOwner(r.Context(), raw)
+		if err != nil {
+			writeServerError(w, r, "resolve the key domain's person", err)
+			return c, false
+		}
 		switch refusal {
 		case "":
 			c.Subject = owner
@@ -211,8 +214,9 @@ func (e *keyDomainRefused) Error() string {
 // its write, as an approval does, so a set re-checks the membership against every assignment written
 // before it: a set that would now leave someone in two domains is *keyDomainRefused, a set to a domain
 // the file does not declare likewise, and a delete of the user assignment of a person whose sign-in lost
-// groups, while a group is assigned, is refused the same way, with nothing written. A delete of a
-// missing assignment is Found false, with nothing written or audited.
+// groups, while a group is assigned, or carried groups assigned to different domains, is refused the same
+// way, with nothing written. A delete of a missing assignment is Found false, with nothing written or
+// audited.
 func (s *Server) applyKeyDomainChange(ctx context.Context, by keyDomainActor, c keyDomainChange) (keyDomainApplied, error) {
 	svc := s.cfg.KeyDomains
 	var out keyDomainApplied
@@ -222,7 +226,9 @@ func (s *Server) applyKeyDomainChange(ctx context.Context, by keyDomainActor, c 
 			if err != nil || !found {
 				return err
 			}
-			if d, err := keyDomainDeleteRefusal(ctx, func(ctx context.Context, p string) (bool, error) { return svc.TruncatedWithGroupsQ(ctx, q, p) }, c); err != nil {
+			if d, err := keyDomainDeleteRefusal(ctx,
+				func(ctx context.Context, p string) (bool, error) { return svc.TruncatedWithGroupsQ(ctx, q, p) },
+				func(ctx context.Context, p string) (bool, error) { return svc.InTwoGroupDomainsQ(ctx, q, p) }, c); err != nil {
 				return err
 			} else if d != nil {
 				return &keyDomainRefused{*d} // the transaction rolls the delete back
@@ -360,20 +366,32 @@ func keyDomainSetRefusal(ctx context.Context, svc *keydomain.Service, ambiguous 
 }
 
 // keyDomainDeleteRefusal is why the delete c may not be made, or nil: removing the user assignment of a
-// person whose last sign-in lost groups, while any group is assigned, would leave their next key refused
-// by name, the lockout keyDomainSetRefusal keeps a group write from creating. truncatedWithGroups says
-// whether that holds for a principal, on the pool or on the decision transaction.
-func keyDomainDeleteRefusal(ctx context.Context, truncatedWithGroups func(ctx context.Context, principal string) (bool, error), c keyDomainChange) (*authz.Decision, error) {
+// person whose last sign-in lost groups, while any group is assigned, or carried groups assigned to
+// different domains, would leave their next key refused by name, the lockout keyDomainSetRefusal keeps
+// a group write from creating. truncatedWithGroups and inTwoGroupDomains say whether each holds for a
+// principal, on the pool or on the decision transaction; neither reads the user assignment, so the
+// answer is the same before the delete and after it.
+func keyDomainDeleteRefusal(ctx context.Context, truncatedWithGroups, inTwoGroupDomains func(ctx context.Context, principal string) (bool, error), c keyDomainChange) (*authz.Decision, error) {
 	if !c.Delete || c.SubjectType != keydomain.SubjectUser {
 		return nil, nil
 	}
 	locked, err := truncatedWithGroups(ctx, c.Subject)
-	if err != nil || !locked {
+	if err != nil {
+		return nil, err
+	}
+	if locked {
+		d := authz.Deny(authz.ReasonKeyDomainAmbiguous, keyDomainTarget(c), fmt.Sprintf(
+			"%s last signed in with a group list that was cut short, as a Microsoft Entra group overage does, and a group is assigned, so without their own assignment their next key would be refused. "+
+				"Assign them to another domain instead of deleting it. Nothing was changed.", c.Subject))
+		return &d, nil
+	}
+	split, err := inTwoGroupDomains(ctx, c.Subject)
+	if err != nil || !split {
 		return nil, err
 	}
 	d := authz.Deny(authz.ReasonKeyDomainAmbiguous, keyDomainTarget(c), fmt.Sprintf(
-		"%s last signed in with a group list that was cut short, as a Microsoft Entra group overage does, and a group is assigned, so without their own assignment their next key would be refused. "+
-			"Assign them to another domain instead of deleting it. Nothing was changed.", c.Subject))
+		"%s last signed in with groups assigned to different domains, so without their own assignment their next key would be refused. "+
+			"Assign them to another domain instead of deleting it, or give the groups the same domain. Nothing was changed.", c.Subject))
 	return &d, nil
 }
 

@@ -103,7 +103,7 @@ func TestIntegrationFold_GrantedFoldsHostsAndOneGrantPerHost(t *testing.T) {
 	srv := runIntegrationSrv(t, []types.Integration{feedIntegration()},
 		map[string][]byte{"artifactory-token": []byte("tok")})
 	spec := &types.RunPolicySpec{}
-	events := srv.applyWorkspaceRequirements(context.Background(), spec, "claude-code",
+	events, _ := srv.applyWorkspaceRequirements(context.Background(), spec, "claude-code",
 		wsRequiring(uuid.New(), "integration:corp-artifactory", "required"), nil)
 
 	for _, h := range feedIntegration().Egress {
@@ -184,7 +184,7 @@ func TestIntegrationFold_DegradesNeverBricks(t *testing.T) {
 	t.Run("unknown id opens nothing", func(t *testing.T) {
 		srv := runIntegrationSrv(t, nil, nil)
 		spec := &types.RunPolicySpec{}
-		events := srv.applyWorkspaceRequirements(context.Background(), spec, "claude-code",
+		events, _ := srv.applyWorkspaceRequirements(context.Background(), spec, "claude-code",
 			wsRequiring(uuid.New(), "integration:not-configured-yet", "required"), nil)
 		if len(spec.AllowedDomains) != 0 || len(spec.EligibleGrants) != 0 || len(events) != 0 {
 			t.Errorf("an unconfigured integration must be a no-op: %+v / %+v", spec, events)
@@ -239,7 +239,7 @@ func TestIntegrationFold_DegradesNeverBricks(t *testing.T) {
 		integ.Egress = nil
 		srv := runIntegrationSrv(t, []types.Integration{integ}, map[string][]byte{"artifactory-token": []byte("tok")})
 		spec := &types.RunPolicySpec{}
-		events := srv.applyWorkspaceRequirements(context.Background(), spec, "claude-code",
+		events, _ := srv.applyWorkspaceRequirements(context.Background(), spec, "claude-code",
 			wsRequiring(uuid.New(), "integration:corp-artifactory", "required"), nil)
 		if len(spec.EligibleGrants) != 0 || len(events) != 0 {
 			t.Errorf("an integration with no hosts opens nothing: %+v / %+v", spec, events)
@@ -266,7 +266,7 @@ func TestIntegrationFold_NeverDoubleGrantsAHost(t *testing.T) {
 		}},
 	}
 	spec := &types.RunPolicySpec{}
-	events := srv.applyWorkspaceRequirements(context.Background(), spec, "claude-code", wsRefs, nil)
+	events, _ := srv.applyWorkspaceRequirements(context.Background(), spec, "claude-code", wsRefs, nil)
 
 	if n := len(apiKeyScopes(t, spec)); n != 1 {
 		t.Errorf("api_key grants = %d, want exactly 1 for one host across two requiring workspaces", n)
@@ -293,7 +293,7 @@ func TestIntegrationFold_MemberOwnKeySatisfiesRequirement(t *testing.T) {
 
 	spec := &types.RunPolicySpec{}
 	present := srv.presentSecretNamesFor(context.Background(), "bob")
-	srv.applyWorkspaceRequirementsFor(context.Background(), present, spec, "claude-code", ws, nil)
+	srv.applyWorkspaceRequirementsFor(context.Background(), present, spec, "claude-code", ws, ws, nil)
 	if n, want := len(apiKeyScopes(t, spec)), len(feedIntegration().Egress); n != want {
 		t.Fatalf("member-owned secret must author one credential grant per requirement host; got %d, want %d", n, want)
 	}

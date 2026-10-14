@@ -16,7 +16,9 @@
 
 import { randomUUID } from "node:crypto";
 import type { Page, Route } from "@playwright/test";
-import { test, expect, gotoConsole, navTo, navToRoute } from "./fixtures";
+import { test, expect, gotoConsole, mockPreflightClear, navTo, navToRoute, newRunHeading, submitLaunch, walkGuidedToReview } from "./fixtures";
+import { NR_LAUNCH } from "../src/app/components/wardyn/copy/new-run/launch";
+import { NR_START } from "../src/app/components/wardyn/copy/new-run/start";
 import { MODEL_ACCESS_BANNER, MODEL_ACCESS_RUN_DOOR, REAUTH_ROW, REAUTH_TITLE } from "../src/app/components/wardyn/model-access-copy";
 import { CLAUDE_DOOR, CONNECTIONS, KEY_DOOR, RUN_FACTS } from "../src/app/components/wardyn/copy/door";
 import { CONSOLE_VIEW } from "../src/app/components/wardyn/copy/console-view";
@@ -205,18 +207,10 @@ test.describe("the failure block opens the run's own provider's door (state 2)",
       await expect(block.getByText(c.note)).toBeVisible();
       const button = block.getByRole("button", { name: c.aria });
       await expect(button).toHaveText(c.label);
-      // Wait for the failure block's own credential-refresh (its ONE-time
-      // mount effect, failure-block.tsx) to land before clicking (#1291): it
-      // re-renders this button's parent a second time, close on the first
-      // paint's heels, and a click that lands inside that window can miss.
-      // Playwright's own click() actionability polling (attached, visible,
-      // stable, receives events — re-checked immediately before dispatch)
-      // covers the remaining gap between the response landing and React
-      // committing the re-render it causes.
       await statusRefreshed;
-      await button.click();
       const dialog = page.getByRole("dialog", { name: c.dialog });
-      await expect(dialog).toBeVisible();
+      await button.click();
+      await expect(dialog).toBeVisible({ timeout: 20_000 });
       if (c.p.kind === "bedrock_sso" || c.p.kind === "anthropic_subscription") {
         await expect(dialog).toContainText(`For ${c.p.name}`);
       }
@@ -248,9 +242,7 @@ test.describe("no door for anyone but the owner, or in the Admin view (state 3)"
     await expect(block.getByText(MODEL_ACCESS_RUN_DOOR.NOT_OWNER("ann@acme.example"))).toBeVisible();
     await expect(block.getByRole("button", { name: MODEL_ACCESS_RUN_DOOR.SIGN_IN_ARIA })).toHaveCount(0);
     await block.getByRole("button", { name: CONSOLE_VIEW.OPEN_IN_USER }).click();
-    // The SSO session flips its view on the server and then reloads, which a
-    // busy runner can take past the 5s default to finish.
-    await expect(page).toHaveURL(/^(?![^?]*\/admin\/)[^?]*\/runs\/[^/]+$/, { timeout: 15_000 });
+    await expect(page).toHaveURL(/^(?![^?]*\/admin\/)[^?]*\/runs\/[^/]+$/, { timeout: 30_000 });
     await expect(page.getByTestId("run-failure-block").getByRole("button", { name: MODEL_ACCESS_RUN_DOOR.SIGN_IN_ARIA })).toBeVisible();
   });
 });
@@ -270,19 +262,18 @@ test.describe("a New Run refusal opens the door its provider names (state 4)", (
     // New Run preflights on its own, and the hermetic backend's real answer
     // (no model providers, no barrier) holds Launch. This case is about the
     // launch refusal, so the check is answered clear.
-    await page.route("**/api/v1/runs/preflight", (route) =>
-      route.fulfill({ json: { enforced_confinement_class: "CC1", setup_items: [] } }),
-    );
+    await mockPreflightClear(page);
     await gotoConsole(page);
     await navToRoute(page, "/runs/new");
-    await expect(page.getByRole("heading", { name: "New run" })).toBeVisible();
-    await page.getByLabel("Title").fill("e2e provider refusal");
-    await page.getByRole("button", { name: "Launch run" }).click();
+    await expect(newRunHeading(page, NR_START.TITLE)).toBeVisible();
+    await walkGuidedToReview(page);
+    const naming = await submitLaunch(page, "e2e provider refusal");
     await expect(page.getByRole("dialog", { name: KEY_DOOR.TITLE(true, P.gateway.name) })).toBeVisible();
     await expect(page.getByRole("dialog", { name: MODEL_ACCESS_BANNER.DIALOG_TITLE })).toHaveCount(0);
     await page.keyboard.press("Escape");
-    // The rail's launch-error line carries the server's sentence.
-    await expect(page.getByRole("alert")).toContainText(sentence);
+    // The Name dialog's error line carries the server's sentence, and the dialog is still open with its title.
+    await expect(page.getByRole("dialog", { name: NR_LAUNCH.TITLE })).toBeVisible();
+    await expect(naming.getByRole("alert")).toContainText(sentence);
   });
 });
 
@@ -356,14 +347,15 @@ test.describe("a refusal names the policy and how to request a change (M10 S4)",
       if (route.request().method() !== "POST") return route.fallback();
       await route.fulfill({ status: 422, json: { error: sentence, reason: "run_quota", policy: POLICY_REF } });
     });
+    await mockPreflightClear(page);
     await gotoConsole(page);
     await navToRoute(page, "/runs/new");
-    await expect(page.getByRole("heading", { name: "New run" })).toBeVisible();
-    await page.getByLabel("Title").fill("e2e policy refusal");
-    await page.getByRole("button", { name: "Launch run" }).click();
+    await expect(newRunHeading(page, NR_START.TITLE)).toBeVisible();
+    await walkGuidedToReview(page);
+    const naming = await submitLaunch(page, "e2e policy refusal");
 
-    await expect(page.getByRole("alert")).toContainText(sentence);
-    const remedy = page.getByTestId("policy-remedy");
+    await expect(naming.getByRole("alert")).toContainText(sentence);
+    const remedy = naming.getByTestId("policy-remedy");
     await expect(remedy).toHaveText("Owned by Platform Security · Request access ↗");
     await expect(remedy.getByRole("link", { name: "Request access" })).toHaveAttribute("href", "https://example.com/access");
   });

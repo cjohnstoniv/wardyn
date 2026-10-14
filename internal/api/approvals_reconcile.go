@@ -5,6 +5,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"strings"
 	"time"
@@ -12,6 +13,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/hostrules"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -26,7 +28,8 @@ import (
 // DecidedAt is kept, and a decision older than Workspace.EgressEditedAt (stamped
 // by the egress-list PUTs) is skipped — an undone `always` still reads APPROVED,
 // so a per-approval "applied" marker could not tell. Decided rows are never
-// deleted: cap this with an incremental scan if the table grows large.
+// deleted, so the decision set is read in bounded pages of a narrow projection
+// (egressDecisionsToReconcile).
 func (s *Server) ReconcileWorkspaceEgressDecisions(ctx context.Context) (int, error) {
 	if s.cfg.Store == nil || s.cfg.Approvals == nil {
 		return 0, nil
@@ -78,12 +81,30 @@ type egressDecision struct {
 	decidedAt time.Time
 }
 
+// egressReplayPage bounds one read of the heal's decision set. The set is
+// operator-made `always` verdicts only, so pages are few; the bound keeps any
+// single read, and the rows held while it is folded, independent of how many
+// verdicts the table has accumulated.
+const egressReplayPage = 200
+
 // egressDecisionsToReconcile is the boot heal's decision set: for each
 // (workspace, host) the single NEWEST decided `always` egress verdict, minus any
 // verdict the operator has since overruled by editing that workspace's egress
 // lists directly. Ordered oldest-first so a boot log reads chronologically; the
 // entries are independent, so the order is for humans, not correctness.
+//
+// It reads the store's narrow projection (store.DecidedAlwaysEgressPager), in
+// keyset pages: the kind and scope filter runs in SQL, and no reason or other
+// decided column is read, so a decided approval the heal cannot replay costs
+// nothing however large its reason. alwaysEgressDecision still applies the same
+// kind and scope test, so which verdict wins is decided exactly as before. A
+// backend without the projection is an error, never a fall back to reading every
+// decided row.
 func (s *Server) egressDecisionsToReconcile(ctx context.Context) ([]egressDecision, error) {
+	pager, ok := s.cfg.Approvals.(store.DecidedAlwaysEgressPager)
+	if !ok {
+		return nil, errors.New("approval backend has no decided always-egress projection")
+	}
 	type listKey struct {
 		workspace uuid.UUID
 		host      string
@@ -97,22 +118,32 @@ func (s *Server) egressDecisionsToReconcile(ctx context.Context) ([]egressDecisi
 	// nothing to replay into a workspace's egress lists and a cancelled approval
 	// must never widen one. Pinned by a test, since the omission is the behaviour.
 	for _, state := range []types.ApprovalState{types.ApprovalApproved, types.ApprovalDenied} {
-		aps, err := s.cfg.Approvals.List(ctx, state)
-		if err != nil {
-			return nil, err
-		}
-		for _, ap := range aps {
-			d, ok := s.alwaysEgressDecision(ctx, ap, state == types.ApprovalApproved)
-			if !ok {
-				continue
+		// Walked until an EMPTY page, not a short one: a backend that returns
+		// fewer rows than asked is still read to the end.
+		var afterAt time.Time
+		afterID := uuid.Nil
+		for {
+			aps, err := pager.ListDecidedAlwaysEgressPage(ctx, state, afterAt, afterID, egressReplayPage)
+			if err != nil {
+				return nil, err
 			}
-			if edited := s.lastEgressEdit(ctx, edits, d.workspace); !edited.IsZero() && d.decidedAt.Before(edited) {
-				continue // the operator's own list edit is newer than this verdict
+			if len(aps) == 0 {
+				break
 			}
-			if prev, seen := newest[listKey{d.workspace, d.host}]; seen && !prev.decidedAt.Before(d.decidedAt) {
-				continue
+			afterAt, afterID = aps[len(aps)-1].RequestedAt, aps[len(aps)-1].ID
+			for _, ap := range aps {
+				d, ok := s.alwaysEgressDecision(ctx, ap, state == types.ApprovalApproved)
+				if !ok {
+					continue
+				}
+				if edited := s.lastEgressEdit(ctx, edits, d.workspace); !edited.IsZero() && d.decidedAt.Before(edited) {
+					continue // the operator's own list edit is newer than this verdict
+				}
+				if prev, seen := newest[listKey{d.workspace, d.host}]; seen && !prev.decidedAt.Before(d.decidedAt) {
+					continue
+				}
+				newest[listKey{d.workspace, d.host}] = d
 			}
-			newest[listKey{d.workspace, d.host}] = d
 		}
 	}
 	out := make([]egressDecision, 0, len(newest))

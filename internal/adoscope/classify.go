@@ -385,6 +385,9 @@ func classifyWrite(method string, r route, req Request) (Verdict, error) {
 	case "wiki":
 		return Verdict{Capability: CapWikiWrite}, nil
 	case "packaging", "packages":
+		if method != http.MethodDelete && packageBatch(r) {
+			return packageBatchWrite(req)
+		}
 		return Verdict{Capability: packagingWrite(method, r)}, nil
 	case "projects", "projectcollections":
 		return Verdict{Capability: CapProjectAdmin}, nil
@@ -436,11 +439,13 @@ func witWriteCapability(method, res, sub string) Capability {
 	return CapWorkWrite
 }
 
-// packagingWrite splits the packaging area on Azure DevOps' own scope line:
-// deleting a package or touching a feed object (create, update, delete,
-// permissions, views, retention, the feed recycle bin) needs
-// vso.packaging_manage; publishing and editing a package version needs
-// vso.packaging_write.
+// packagingWrite is Wardyn's split of the packaging area: deleting a package
+// or touching a feed object (create, update, delete, permissions, views,
+// retention, the feed recycle bin) is CapPackagingManage; publishing and
+// editing a package version is CapPackagingWrite. Azure DevOps' scopes do not
+// draw this line everywhere (a package batch deletes under
+// vso.packaging_write), so the classifier holds it, by the body where one
+// route carries both (packageBatchWrite).
 func packagingWrite(method string, r route) Capability {
 	if method == http.MethodDelete {
 		return CapPackagingManage

@@ -11,7 +11,7 @@
 - You are the maintainer (see [MAINTAINERS.md](MAINTAINERS.md)); releases push tags to `origin`, so only someone with push rights cuts them.
 - The full CI gate is green on the commit you intend to tag.
   - The gate is the [`.github/workflows/ci.yml` job list:](.github/workflows/ci.yml) `changes`, `go` (a matrix job: `lint`, `unit`, `docker`, `k8s`), `build`, `diagrams`, `ui`, `ui-e2e` (a matrix job: `1/2`, `2/2`),
-  - `helm`, `helm-install-test`, `compose`, `conformance`, `conformance-k8s`, `envbuild-integration`, `test-pg-shard` (a matrix job: `api`, `store`, `race`), `test-pg`, `gates` (a matrix job: `govulncheck`, `staticcheck`, `licenses`, `license-headers`, `gitleaks`), `dco`, `main-red`, `notify-flaky`,
+  - `helm`, `helm-install-test`, `compose`, `runner-units`, `conformance`, `conformance-k8s`, `envbuild-integration`, `test-pg-shard` (a matrix job: `api`, `store`, `race`), `test-pg`, `gates` (a matrix job: `govulncheck`, `staticcheck`, `licenses`, `license-headers`, `gitleaks`), `dco`, `main-red`, `notify-flaky`,
   - the eight image scans (`trivy-wardynd`, `trivy-wardynd-fips`, `trivy-wardyn-proxy`, `trivy-agent-base`, `trivy-agent-codex-cli`, `trivy-agent-aws-sso`, `trivy-agent-vscode`, `trivy-agent-novnc`, each reporting as `trivy (<image>)`),
   - and **`notices`** — the copyleft / unreviewed-dependency gate, which was missing from this list entirely.
   - `sbom-stub` used to be named here and is **gone**: it was deleted along with `make sbom` (CHANGELOG, *Removed*),
@@ -37,7 +37,7 @@
     - with every required status check green in it;
     - plus the newest dispatched `nightly.yml` run on that tree (cancelled runs skipped) with every watched job green.
   - A newer red nightly is not rescued by an older green one: re-dispatching the nightly is the deliberate recovery.
-  - `ci.yml` no longer runs on pushes to `release/**`: a release branch fast-forwards to a tree its own pull request tested, and that run is the evidence.
+  - On `release/**` pushes, `release-branch-checks.yml` (DCO, gitleaks) replaces `ci.yml`; a branch fast-forwards to a tree its own pull request tested, and that run is the evidence.
   - If no run qualifies, `preflight-green` fails loudly naming what is missing.
   - When the only CI run on the tree is a release PR whose merge tree differs from its head,
     - rebase the PR head onto the base tip so the merge adds nothing,
@@ -444,6 +444,8 @@ crash or a usage limit resumes with the same command:
 
 ## Repo settings (GitHub-side)
 
+- `DOCKERHUB_USERNAME` — Actions secret: the account the image-pulling jobs' optional Docker Hub login uses.
+- `DOCKERHUB_TOKEN` — Actions secret: that account's token; with neither set a job skips the login and pulls anonymously.
 - **Branch protection on `main` is enabled.**
   - A push is gated on the CI merge-gate status checks and normally requires a pull request.
   - `enforce_admins` is **off**, so the maintainer cutting a release pushes the tag commit to `main` directly (step 5) while contributors go through PRs —
@@ -536,7 +538,8 @@ JSON
   - It also attests a per-digest CycloneDX SBOM and build
     provenance, publishes the Helm chart to `oci://ghcr.io/cjohnstoniv/charts`,
     - and uploads the SBOMs, notices, `install.sh`, the four `wardyn-<os>-<arch>`
-      CLI binaries and a cosign-signed `SHA256SUMS` to the Release —
+      CLI binaries, the four `wardyn-runnerd-<os>-<arch>` runner binaries,
+      `wardyn-runner-units.tar.gz` and a cosign-signed `SHA256SUMS` to the Release —
     - failing if any asset did not land (the required set is the `for want in …`
       list in `release.yml`'s "Assert every required asset actually landed").
   - The supply-chain artifacts are no longer yours to remember; the demo videos

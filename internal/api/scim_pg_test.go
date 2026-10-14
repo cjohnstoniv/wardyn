@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/url"
 	"os"
@@ -468,101 +469,140 @@ func mustTokenID(t *testing.T, e *scimEnv, principal string) uuid.UUID {
 	return toks[0].ID
 }
 
-// A suspension reaches the person under every form they are known by, and only them.
+// A suspension reaches the person under every form they are known by, and only them. It is the leaver's
+// cutoff, so it cuts the entra:<tenant>:<object> form SCIM names for them whoever else the directory says
+// holds it, and names those others in its row (also_named).
 func TestSCIMSuspendReachesEveryForm(t *testing.T) {
-	e := newSCIMEnv(t)
-	const email = "leaver@corp.example"
-	entraForm := entraPrincipalPrefix + e.tenant + ":" + oidLeaver
-	e.seedEntra("sub-leaver", email, oidLeaver)
-	id := e.postUserID(e.a, oidLeaver, email, email)
+	for _, shape := range []struct {
+		name      string
+		seed      func(e *scimEnv, entraForm string)
+		alsoNamed string
+	}{
+		{name: "a form only tokens, keys and runs carry", seed: func(*scimEnv, string) {}},
+		{name: "a form proved by a people row of the leaver's issuer", alsoNamed: "<nil>", seed: func(e *scimEnv, entraForm string) {
+			if _, _, err := e.st.CreatePerson(context.Background(), types.Person{Principal: entraForm, Issuer: e.issuer, TenantID: e.tenant,
+				ObjectID: oidLeaver, CreatedBy: "admin"}); err != nil {
+				e.t.Fatal(err)
+			}
+		}},
+		{name: "a form another issuer's sign-in is bound to", seed: func(e *scimEnv, entraForm string) {
+			if _, err := e.st.UpsertLoginIdentity(context.Background(), store.LoginIdentity{Principal: entraForm, Issuer: "https://other-issuer.example/v2.0",
+				TenantID: e.tenant, ObjectID: oidLeaver}, time.Now().UTC()); err != nil {
+				e.t.Fatal(err)
+			}
+		}},
+	} {
+		t.Run(shape.name, func(t *testing.T) {
+			e := newSCIMEnv(t, func(c *Config) { c.SCIM.PurgeAfter = time.Hour })
+			const email = "leaver@corp.example"
+			entraForm := entraPrincipalPrefix + e.tenant + ":" + oidLeaver
+			if shape.alsoNamed == "" {
+				shape.alsoNamed = "[" + entraForm + "]"
+			}
+			e.seedEntra("sub-leaver", email, oidLeaver)
+			shape.seed(e, entraForm)
+			id := e.postUserID(e.a, oidLeaver, email, email)
 
-	tokSub, rawSub := e.seedToken("sub-leaver", email)
-	tokEmail, rawEmail := e.seedToken(email, email)
-	tokEntra, rawEntra := e.seedToken(entraForm, "other@corp.example")
-	keys := map[string]string{"sub": "sub-leaver", "email": email, "entra": entraForm}
-	for _, p := range keys {
-		e.seedKey(p)
-	}
-	runSub, runEntra := e.seedRun("sub-leaver", types.RunRunning), e.seedRun(entraForm, types.RunPending)
-	cookies := map[string]*http.Cookie{
-		"sub":   scimCookie(t, "sub-leaver", email, 0),
-		"entra": scimCookie(t, entraForm, "x@corp.example", 0),
-		"email": scimCookie(t, "idp-other-sub", "LEAVER@Corp.Example", 0),
-	}
+			// No token is minted under the email itself: a principal recorded under the address would be another
+			// person's, never a form of the leaver (TestPG_SCIMLeaver_ABoundLeaversAddressNeverReachesThePersonItNames).
+			tokSub, rawSub := e.seedToken("sub-leaver", email)
+			tokEntra, rawEntra := e.seedToken(entraForm, "other@corp.example")
+			keys := map[string]string{"sub": "sub-leaver", "email": email, "entra": entraForm}
+			for _, p := range keys {
+				e.seedKey(p)
+			}
+			runSub, runEntra := e.seedRun("sub-leaver", types.RunRunning), e.seedRun(entraForm, types.RunPending)
+			cookies := map[string]*http.Cookie{
+				"sub":   scimCookieAt(t, "sub-leaver", email, 0, time.Now().UTC().Add(-clockStepMargin)),
+				"entra": scimCookieAt(t, entraForm, "x@corp.example", 0, time.Now().UTC().Add(-clockStepMargin)),
+				"email": scimCookieAt(t, "idp-other-sub", "LEAVER@Corp.Example", 0, time.Now().UTC().Add(-clockStepMargin)),
+			}
 
-	_, rawBy := e.seedToken("sub-bystander", "bystander@corp.example")
-	e.seedSignIn("sub-bystander", "bystander@corp.example")
-	e.seedKey("sub-bystander")
-	runBy := e.seedRun("sub-bystander", types.RunRunning)
-	cookieBy := scimCookie(t, "sub-bystander", "bystander@corp.example", 0)
+			_, rawBy := e.seedToken("sub-bystander", "bystander@corp.example")
+			e.seedSignIn("sub-bystander", "bystander@corp.example")
+			e.seedKey("sub-bystander")
+			runBy := e.seedRun("sub-bystander", types.RunRunning)
+			cookieBy := scimCookie(t, "sub-bystander", "bystander@corp.example", 0)
 
-	for name, c := range cookies {
-		if !e.cookieWorks(e.a, c) {
-			t.Fatalf("control: the %s cookie does not work before the suspension", name)
-		}
-	}
-	for _, raw := range []string{rawSub, rawEmail, rawEntra, rawBy} {
-		if !e.tokenWorks(e.a, raw) {
-			t.Fatal("control: a token does not work before the suspension")
-		}
-	}
+			for name, c := range cookies {
+				if !e.cookieWorks(e.a, c) {
+					t.Fatalf("control: the %s cookie does not work before the suspension", name)
+				}
+			}
+			for _, raw := range []string{rawSub, rawEntra, rawBy} {
+				if !e.tokenWorks(e.a, raw) {
+					t.Fatal("control: a token does not work before the suspension")
+				}
+			}
 
-	// The suspension lands on the OTHER instance than the one the credentials are checked on.
-	if w := e.patch(e.b, id, patchOf(`"False"`)); w.Code != http.StatusOK || decodeSCIMUser(t, w).Active {
-		t.Fatalf("suspend = %d %s", w.Code, w.Body.String())
-	}
+			// The suspension lands on the OTHER instance than the one the credentials are checked on.
+			if w := e.patch(e.b, id, patchOf(`"False"`)); w.Code != http.StatusOK || decodeSCIMUser(t, w).Active {
+				t.Fatalf("suspend = %d %s", w.Code, w.Body.String())
+			}
 
-	for name, c := range cookies {
-		if e.cookieWorks(e.a, c) || e.cookieWorks(e.b, c) {
-			t.Errorf("the %s-form session still works", name)
-		}
-	}
-	for name, raw := range map[string]string{"sub": rawSub, "email": rawEmail, "entra": rawEntra} {
-		if e.tokenWorks(e.a, raw) || e.tokenWorks(e.b, raw) {
-			t.Errorf("the %s-form token still works", name)
-		}
-	}
-	for _, tok := range []uuid.UUID{tokSub, tokEmail, tokEntra} {
-		if !e.tokenRevoked(tok) {
-			t.Errorf("token %s was not revoked", tok)
-		}
-	}
-	for name, p := range keys {
-		if e.keyCount(p) != 0 {
-			t.Errorf("the %s-form SSH key survived", name)
-		}
-	}
-	for _, r := range []uuid.UUID{runSub, runEntra} {
-		if e.runState(r) != types.RunKilled {
-			t.Errorf("run %s is %s, want KILLED", r, e.runState(r))
-		}
-	}
-	if e.runner(e.b).killCount() != 2 {
-		t.Errorf("the runner was told to kill %d sandboxes, want 2", e.runner(e.b).killCount())
-	}
-	// Nobody else is touched.
-	if !e.tokenWorks(e.a, rawBy) || !e.cookieWorks(e.a, cookieBy) || e.keyCount("sub-bystander") != 1 || e.runState(runBy) != types.RunRunning {
-		t.Error("a bystander's token, session, key or run was touched")
-	}
+			for name, c := range cookies {
+				if e.cookieWorks(e.a, c) || e.cookieWorks(e.b, c) {
+					t.Errorf("the %s-form session still works", name)
+				}
+			}
+			for name, raw := range map[string]string{"sub": rawSub, "entra": rawEntra} {
+				if e.tokenWorks(e.a, raw) || e.tokenWorks(e.b, raw) {
+					t.Errorf("the %s-form token still works", name)
+				}
+			}
+			for _, tok := range []uuid.UUID{tokSub, tokEntra} {
+				if !e.tokenRevoked(tok) {
+					t.Errorf("token %s was not revoked", tok)
+				}
+			}
+			for name, p := range keys {
+				if e.keyCount(p) != 0 {
+					t.Errorf("the %s-form SSH key survived", name)
+				}
+			}
+			for _, r := range []uuid.UUID{runSub, runEntra} {
+				if e.runState(r) != types.RunKilled {
+					t.Errorf("run %s is %s, want KILLED", r, e.runState(r))
+				}
+			}
+			if e.runner(e.b).killCount() != 2 {
+				t.Errorf("the runner was told to kill %d sandboxes, want 2", e.runner(e.b).killCount())
+			}
+			// Nobody else is touched.
+			if !e.tokenWorks(e.a, rawBy) || !e.cookieWorks(e.a, cookieBy) || e.keyCount("sub-bystander") != 1 || e.runState(runBy) != types.RunRunning {
+				t.Error("a bystander's token, session, key or run was touched")
+			}
 
-	if !e.allJobsDone(id) {
-		t.Error("the ledger has pending steps")
-	}
-	dea, dep := e.rows(e.b, "scim.user.deactivate"), e.rows(e.b, "person.deprovision")
-	if len(dea) != 1 || len(dep) != 1 || dea[0].Target != id {
-		t.Fatalf("audit rows: %d deactivate, %d deprovision", len(dea), len(dep))
-	}
-	d := dataOf(t, dep[0])
-	if d["tokens_revoked"] != float64(3) || d["keys_deleted"] != float64(3) || d["runs_killed"] != float64(2) || d["sessions_cut"] != float64(3) || d["kind"] != "suspend" {
-		t.Errorf("person.deprovision counts = %v", d)
-	}
+			if !e.allJobsDone(id) {
+				t.Error("the ledger has pending steps")
+			}
+			dea, dep := e.rows(e.b, "scim.user.deactivate"), e.rows(e.b, "person.deprovision")
+			if len(dea) != 1 || len(dep) != 1 || dea[0].Target != id {
+				t.Fatalf("audit rows: %d deactivate, %d deprovision", len(dea), len(dep))
+			}
+			d := dataOf(t, dep[0])
+			if d["tokens_revoked"] != float64(2) || d["keys_deleted"] != float64(3) || d["runs_killed"] != float64(2) || d["sessions_cut"] != float64(3) || d["kind"] != "suspend" {
+				t.Errorf("person.deprovision counts = %v", d)
+			}
+			if got := fmt.Sprint(d["also_named"]); got != shape.alsoNamed {
+				t.Errorf("person.deprovision also_named = %s, want %s", got, shape.alsoNamed)
+			}
+			// The purge is scheduled for the leaver's own rows only: a row the form names that is not proved theirs
+			// is cut, never scheduled.
+			var scheduled int
+			if err := e.pool.QueryRow(t.Context(), `SELECT count(*) FROM principal_identities WHERE principal = $1 AND purge_after IS NOT NULL`,
+				entraForm).Scan(&scheduled); err != nil || scheduled != 0 {
+				t.Errorf("%d rows bound to %s are scheduled for purge (%v), want none", scheduled, entraForm, err)
+			}
 
-	// An identity provider that repeats the request costs nothing and writes nothing.
-	if w := e.patch(e.b, id, patchOf("false")); w.Code != http.StatusOK {
-		t.Fatalf("repeat = %d", w.Code)
-	}
-	if len(e.rows(e.b, "scim.user.deactivate")) != 1 || len(e.rows(e.b, "person.deprovision")) != 1 {
-		t.Error("a repeated suspension wrote its audit rows again")
+			// An identity provider that repeats the request costs nothing and writes nothing.
+			if w := e.patch(e.b, id, patchOf("false")); w.Code != http.StatusOK {
+				t.Fatalf("repeat = %d", w.Code)
+			}
+			if len(e.rows(e.b, "scim.user.deactivate")) != 1 || len(e.rows(e.b, "person.deprovision")) != 1 {
+				t.Error("a repeated suspension wrote its audit rows again")
+			}
+		})
 	}
 }
 
@@ -634,8 +674,8 @@ func TestSCIMSuspendLeavesAnotherPrincipalSharingTheEmail(t *testing.T) {
 }
 
 // With no identity row binding a principal, the suspension resolves the SCIM user's emails to subs through
-// the tokens stamped with them: that person's runs are killed, keys deleted, token revoked. An ambiguous
-// owner leaves the step pending and answers 5xx, never done.
+// the tokens stamped with them: that person's runs are killed, keys deleted, token revoked. An email that
+// names more than one principal names nobody: the suspension touches nothing, answers 5xx and records why.
 func TestSCIMSuspendResolvesEmailsToSubs(t *testing.T) {
 	t.Run("a person known only by a token stamped with their email", func(t *testing.T) {
 		e := newSCIMEnv(t)
@@ -661,31 +701,30 @@ func TestSCIMSuspendResolvesEmailsToSubs(t *testing.T) {
 		}
 	})
 
-	t.Run("an ambiguous owner leaves the step pending", func(t *testing.T) {
+	t.Run("an ambiguous owner refuses the suspension", func(t *testing.T) {
 		e := newSCIMEnv(t)
-		e.seedToken("sub-t1", "twin@corp.example")
-		e.seedToken("sub-t2", "twin@corp.example")
+		tok1, _ := e.seedToken("sub-t1", "twin@corp.example")
+		tok2, _ := e.seedToken("sub-t2", "twin@corp.example")
 		for attempt := 0; attempt < 2; attempt++ {
 			if _, code := e.postUser(e.a, oidGhost, "twin@corp.example", "twin@corp.example", false); code < 500 {
 				t.Fatalf("attempt %d answered %d, want 5xx while an owner is ambiguous", attempt+1, code)
 			}
 		}
 		id := e.listIDs(e.a, "externalId", oidGhost)[0]
-		if e.identity(id).DeactivatedAt == nil {
-			t.Error("step 1 did not commit")
+		if e.identity(id).DeactivatedAt != nil {
+			t.Error("step 1 committed")
 		}
-		jobs, _ := e.st.ListDeprovisionJobs(context.Background(), uuid.MustParse(id), store.JobKindSuspend)
-		pending := ""
-		for _, j := range jobs {
-			if !j.Done && j.Step == jobStepSweep {
-				pending = j.Target
-			}
+		if jobs, err := e.st.ListDeprovisionJobs(context.Background(), uuid.MustParse(id), store.JobKindSuspend); err != nil || len(jobs) != 0 {
+			t.Errorf("ledger rows = %+v (%v), want none", jobs, err)
 		}
-		if pending != "twin@corp.example" || e.allJobsDone(id) {
-			t.Errorf("the ambiguous email's sweep must stay pending, pending target %q", pending)
+		if e.tokenRevoked(tok1) || e.tokenRevoked(tok2) {
+			t.Error("a twin's token was revoked")
 		}
 		if len(e.rows(e.a, "scim.user.deactivate")) != 0 {
 			t.Error("a suspension that is not done was recorded as done")
+		}
+		if rows := e.rows(e.a, "person.deprovision"); len(rows) != 2 || dataOf(t, rows[1])["reason"] != reasonOwnerAmbiguous {
+			t.Errorf("person.deprovision rows = %+v, want one %s refusal per attempt", rows, reasonOwnerAmbiguous)
 		}
 	})
 }

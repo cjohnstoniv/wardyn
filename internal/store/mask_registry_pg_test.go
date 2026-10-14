@@ -13,6 +13,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -421,6 +422,53 @@ func TestPG_MaskRegistry_EvictionsAreTombstonesWithNoCiphertext(t *testing.T) {
 	}
 	if !regMasks(c, run, "rotating-new-value-2") {
 		t.Error("C's reload lost the live value")
+	}
+}
+
+// A value a run is handed is committed as the run's own even while a credential
+// holds the same bytes process-wide. Once that credential is replaced and its
+// old value swept, every replica still masks the value for the run, which still
+// holds it.
+func TestPG_MaskRegistry_ARunValueIsCommittedWhileACredentialHoldsTheSameBytes(t *testing.T) {
+	pool := runsPGPoolIsolated(t)
+	k := localKEK(t)
+	ctx := t.Context()
+	a, b := newRegReplica(t, pool, k), newRegReplica(t, pool, k)
+	run := dispatchedRun(t, pool, a, regAlice)
+	now := time.Now()
+	const handed = `credential-"value"-a-run-was-handed`
+
+	if err := a.reg.AddGlobal(0, regAlice, "rotating-credential", now, []byte(handed)); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.reg.Add(run, []byte(handed)); err != nil {
+		t.Fatal(err)
+	}
+	if n := liveRows(t, pool, "bucket = 'per_run' AND run_id = $1", run); n != 1 {
+		t.Fatalf("the run has %d committed values, want its own copy of the one it was handed", n)
+	}
+	b.read(t)
+
+	if err := a.reg.AddGlobal(0, regAlice, "rotating-credential", now, []byte("the-replacement-value")); err != nil {
+		t.Fatal(err)
+	}
+	cutoff := now.Add(time.Second)
+	if swept, err := a.reg.SweepPersisted(ctx, cutoff); err != nil || swept != 1 {
+		t.Fatalf("SweepPersisted = %d, %v; want the one replaced value", swept, err)
+	}
+	quoted := strings.ReplaceAll(handed, `"`, `\"`)
+	for name, r := range map[string]regReplica{"the replica that registered": a, "the other replica": b} {
+		r.reg.SweepGlobals(cutoff)
+		r.read(t)
+		if !regMasks(r, run, handed) {
+			t.Errorf("%s no longer masks the value in the run's output", name)
+		}
+		if got := string(r.reg.JSONVariantMasker(run).Mask([]byte(`{"v":"` + quoted + `"}`))); strings.Contains(got, quoted) {
+			t.Errorf("%s no longer masks the value in the run's JSON data: %s", name, got)
+		}
+		if regMasks(r, uuid.New(), handed) {
+			t.Errorf("%s still masks the swept value on a run that was never handed it", name)
+		}
 	}
 }
 

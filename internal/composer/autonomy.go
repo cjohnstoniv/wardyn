@@ -16,10 +16,10 @@ import (
 // inputs as Grade and RequiredConfinementFloor, so posture and risk grade never
 // disagree about what "powerful" or "beyond baseline" means on the same Review
 // screen. Purely a function of the spec, never of anything a model claimed.
-func AutonomyPostureOf(spec types.RunPolicySpec, enforced types.ConfinementClass) types.AutonomyPosture {
+func AutonomyPostureOf(spec types.RunPolicySpec, enforced types.ConfinementClass, b Baseline) types.AutonomyPosture {
 	return types.AutonomyPosture{
-		Egress:      autonomyEgress(spec),
-		Secrets:     autonomySecrets(spec),
+		Egress:      autonomyEgress(spec, b),
+		Secrets:     autonomySecrets(spec, b),
 		Confinement: autonomyConfinement(enforced),
 	}
 }
@@ -29,8 +29,8 @@ func AutonomyPostureOf(spec types.RunPolicySpec, enforced types.ConfinementClass
 // host to a human, SEALED otherwise. Open beats reviewed: first_use_approval
 // only governs hosts NOT on the allowlist, so an already-allowlisted custom
 // host has that reach regardless of the unknown-host posture.
-func autonomyEgress(spec types.RunPolicySpec) types.AutonomyEgressPosture {
-	if spec.AllowAllEgress || len(beyondBaseline(spec.AllowedDomains)) > 0 {
+func autonomyEgress(spec types.RunPolicySpec, b Baseline) types.AutonomyEgressPosture {
+	if spec.AllowAllEgress || len(b.beyond(spec.AllowedDomains)) > 0 {
 		return types.AutonomyEgressOpen
 	}
 	if spec.FirstUseApproval.RaisesApproval() {
@@ -45,12 +45,12 @@ func autonomyEgress(spec types.RunPolicySpec) types.AutonomyEgressPosture {
 // deliberately treats as not write-capable (to avoid flooring confinement and
 // blocking SCM clones), but each is still a credential this run could spend
 // unattended, which is the only question this axis asks.
-func autonomySecrets(spec types.RunPolicySpec) types.AutonomySecretsPosture {
+func autonomySecrets(spec types.RunPolicySpec, b Baseline) types.AutonomySecretsPosture {
 	if len(spec.EligibleGrants) == 0 {
 		return types.AutonomySecretsNone
 	}
 	for _, g := range spec.EligibleGrants {
-		if grantIsWriteCapable(g) || apiKeyToNonBaselineHost(g) {
+		if grantIsWriteCapable(g) || apiKeyToNonBaselineHost(g, b) {
 			return types.AutonomySecretsPowerful
 		}
 		switch g.Kind {

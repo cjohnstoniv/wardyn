@@ -85,8 +85,8 @@ type ExpiredGovernanceChange struct {
 // ProposeGovernanceChange stores ch as pending, expiring ttl from now on the database's clock. In the
 // same transaction it first moves any lapsed pending change for the same target to expired (returned,
 // for the audit rows), so a live one is the only thing the one-pending-per-target index
-// can refuse: that is *ErrGovernanceChangePending naming it. A create also holds the name it creates
-// (claimCreateName).
+// can refuse: that is *ErrGovernanceChangePending naming it. A create, and an update that renames a
+// profile, also hold the name they take (claimCreateName).
 func (s PG) ProposeGovernanceChange(ctx context.Context, ch types.GovernanceChange, ttl time.Duration) (types.GovernanceChange, []ExpiredGovernanceChange, error) {
 	tx, err := s.Pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
@@ -134,43 +134,72 @@ func (s PG) ProposeGovernanceChange(ctx context.Context, ch types.GovernanceChan
 	return out, expired, nil
 }
 
-// claimCreateName holds a create's name: a create's target key is the id it mints, so a second create
-// of the same name would otherwise be a second target, and the two could never both apply. Under the
-// target lock for the kind's creates of that name, a lapsed pending create of it is moved to expired
-// (returned) and a live one is *ErrGovernanceChangePending naming it. The name is the payload's
-// "name"; a change that is not a create, or names nothing, holds nothing.
+// pendingNameHolders matches the changes that hold a profile name: a create of it, and an update that
+// renames a profile to it (its payload name differs from the stored profile's, so a same-name update
+// and an update of a profile that is gone hold nothing). $1 is the target kind, $2 the name.
+const pendingNameHolders = `target_kind = $1 AND state = 'pending' AND payload->>'name' = $2 AND (
+	op = 'create' OR (op = 'update' AND payload->>'name' <> (SELECT p.name FROM governance_profiles p WHERE p.id::text = target_key)))`
+
+// claimCreateName holds the name a create or a rename takes: a create's target key is the id it mints,
+// so a second create of the same name would otherwise be a second target, and a rename of another
+// profile to a pending create's name is a second claim on it; none of them could all apply. Under the
+// target lock for the kind's creates of that name, a lapsed pending holder of it is moved to expired
+// (returned) and a live one is *ErrGovernanceChangePending naming it. The name is the payload's "name";
+// whether an update renames is read on this transaction, after the lock. A change that is neither a
+// create nor a rename, or names nothing, holds nothing.
 func claimCreateName(ctx context.Context, tx pgx.Tx, ch types.GovernanceChange) ([]ExpiredGovernanceChange, error) {
 	var p struct {
 		Name string `json:"name"`
 	}
-	if ch.Op != "create" || json.Unmarshal(ch.Payload, &p) != nil || p.Name == "" {
+	if (ch.Op != "create" && ch.Op != "update") || json.Unmarshal(ch.Payload, &p) != nil || p.Name == "" {
 		return nil, nil
 	}
 	if err := LockGovernanceTarget(ctx, tx, ch.TargetKind, "create", p.Name); err != nil {
 		return nil, err
 	}
+	if ch.Op == "update" {
+		renames, err := renamesProfile(ctx, tx, ch, p.Name)
+		if err != nil || !renames {
+			return nil, err
+		}
+	}
 	rows, err := tx.Query(ctx, `
 		UPDATE governance_changes SET state = 'expired', decided_at = now()
-		WHERE target_kind = $1 AND op = 'create' AND payload->>'name' = $2 AND state = 'pending' AND expires_at <= now()
+		WHERE `+pendingNameHolders+` AND expires_at <= now()
 		RETURNING id, target_key`, ch.TargetKind, p.Name)
 	if err != nil {
-		return nil, fmt.Errorf("store: expire lapsed governance creates: %w", err)
+		return nil, fmt.Errorf("store: expire lapsed governance name holders: %w", err)
 	}
 	lapsed, err := pgx.CollectRows(rows, pgx.RowToStructByPos[ExpiredGovernanceChange])
 	if err != nil {
-		return nil, fmt.Errorf("store: expire lapsed governance creates: %w", err)
+		return nil, fmt.Errorf("store: expire lapsed governance name holders: %w", err)
 	}
 	var live uuid.UUID
-	err = tx.QueryRow(ctx, `SELECT id FROM governance_changes
-		WHERE target_kind = $1 AND op = 'create' AND payload->>'name' = $2 AND state = 'pending' LIMIT 1`,
+	err = tx.QueryRow(ctx, `SELECT id FROM governance_changes WHERE `+pendingNameHolders+` LIMIT 1`,
 		ch.TargetKind, p.Name).Scan(&live)
 	switch {
 	case errors.Is(err, pgx.ErrNoRows):
 		return lapsed, nil
 	case err != nil:
-		return nil, fmt.Errorf("store: read a pending create of the same name: %w", err)
+		return nil, fmt.Errorf("store: read a pending holder of the same name: %w", err)
 	}
 	return nil, &ErrGovernanceChangePending{ID: live}
+}
+
+// renamesProfile reports whether an update of a profile carries a name other than the stored one.
+func renamesProfile(ctx context.Context, tx pgx.Tx, ch types.GovernanceChange, name string) (bool, error) {
+	if ch.TargetKind != types.GovernanceTargetProfile {
+		return false, nil
+	}
+	var cur string
+	err := tx.QueryRow(ctx, `SELECT name FROM governance_profiles WHERE id::text = $1`, ch.TargetKey).Scan(&cur)
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		return false, nil
+	case err != nil:
+		return false, fmt.Errorf("store: read the profile a change renames: %w", err)
+	}
+	return cur != name, nil
 }
 
 // pendingRefusal names the live change that holds ch's target; the failed transaction is gone, so it
@@ -286,12 +315,14 @@ func (s PG) DryRunGovernance(ctx context.Context, fn func(q Querier) error) erro
 }
 
 // EraseGovernanceChangePersonalFields clears the proposer and decider (their emails too, and the
-// reason a decider typed) of every change whose recorded principal is one of names or whose recorded
-// email matches one of them (case folded), and returns how many rows it touched. A pending change whose proposer is erased leaves
+// reason a decider typed) of every change whose recorded principal is one of principals or whose
+// recorded email is one of emails (case folded), and returns how many rows it touched. A principal is
+// never matched against the email column: that column holds the claim the proposer signed in with,
+// which can spell another person's principal. A pending change whose proposer is erased leaves
 // pending in the same statement (to expired), so a change with no recorded proposer can never be
 // approved. Idempotent: a row already cleared matches nothing.
-func (s PG) EraseGovernanceChangePersonalFields(ctx context.Context, names []string) (int, error) {
-	if len(names) == 0 {
+func (s PG) EraseGovernanceChangePersonalFields(ctx context.Context, principals, emails []string) (int, error) {
+	if len(principals)+len(emails) == 0 {
 		return 0, nil
 	}
 	tag, err := s.Pool.Exec(ctx, `
@@ -307,7 +338,7 @@ func (s PG) EraseGovernanceChangePersonalFields(ctx context.Context, names []str
 			reason            = CASE WHEN decided_by = ANY($1) OR lower(decided_by_email) = ANY($2) THEN '' ELSE reason END
 		WHERE proposed_by = ANY($1) OR lower(proposed_by_email) = ANY($2)
 		   OR decided_by = ANY($1) OR lower(decided_by_email) = ANY($2)`,
-		names, lowerAll(names))
+		principals, lowerAll(emails))
 	if err != nil {
 		return 0, fmt.Errorf("store: erase governance change personal fields: %w", err)
 	}

@@ -5,6 +5,7 @@
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -45,6 +46,47 @@ elif name == 'gpg':
 def recipe(name):
     text = (ROOT / f"deploy/images/{name}/Dockerfile").read_text()
     return next(body for _, kind, body in instructions(text) if kind == "RUN" and "curl -fsSL" in body)
+
+
+def aws_cli_block(name):
+    text = (ROOT / f"deploy/images/{name}/Dockerfile").read_text()
+    start = text.index("# AWS's published PGP public key")
+    return text[start:text.index('ENV AWS_PAGER=""', start)]
+
+
+class AWSCLICopies(unittest.TestCase):
+    # The agent images install the AWS CLI the aws-sso image's way; a pin or a
+    # version bumped in one copy and not the others fails here.
+    def test_agent_images_carry_the_aws_sso_install(self):
+        want = aws_cli_block("aws-sso")
+        for name in ["base", "claude-code", "codex-cli"]:
+            with self.subTest(image=name):
+                self.assertEqual(aws_cli_block(name), want)
+
+
+def azure_cli_block(name):
+    text = (ROOT / f"deploy/images/{name}/Dockerfile").read_text()
+    start = text.index("# ── Azure CLI (az)")
+    return text[start:text.index("command -v az\n", start)]
+
+
+class AzureCLICopies(unittest.TestCase):
+    # full and harnesses install az one way: a version or key pin moved in one
+    # copy and not the other fails here, and so does az in any other image.
+    def test_the_two_images_carry_one_install(self):
+        want = azure_cli_block("full")
+        self.assertEqual(azure_cli_block("harnesses"), want)
+        self.assertRegex(want, r"\nARG AZURE_CLI_VERSION=\d+\.\d+\.\d+\n")
+        self.assertIn("signed-by=/etc/apt/keyrings/microsoft.gpg", want)
+        self.assertIn("https://packages.microsoft.com/repos/azure-cli/ bookworm main", want)
+        self.assertIn('"azure-cli=${AZURE_CLI_VERSION}-1~bookworm"', want)
+        self.assertIn('[ "$fpr" = "BC528686B50D79E339D3721CEB3E94ADBE1229CF" ]', want)
+
+    def test_no_other_image_carries_az(self):
+        for dockerfile in sorted((ROOT / "deploy/images").glob("*/Dockerfile")):
+            if dockerfile.parent.name not in ("full", "harnesses"):
+                with self.subTest(image=dockerfile.parent.name):
+                    self.assertNotIn("azure-cli", dockerfile.read_text())
 
 
 def sha(path):
@@ -218,6 +260,32 @@ class ImageRecipes(unittest.TestCase):
             with self.subTest(recipe=name):
                 result = self.run_recipe(name, **{key: self.env[key].upper() for key in variables})
                 self.assertEqual(result.returncode, 0, result.stderr)
+
+
+class TestHarnessesRecipe(unittest.TestCase):
+    """The multi-CLI harnesses image: same Codex pin as codex-cli, local build only."""
+
+    @staticmethod
+    def codex_pin(name):
+        pins = re.findall(r"^ARG CODEX_VERSION=(\S+)$", (ROOT / f"deploy/images/{name}/Dockerfile").read_text(), re.M)
+        return pins
+
+    def test_codex_pin_matches_codex_cli(self):
+        harnesses, codex_cli = self.codex_pin("harnesses"), self.codex_pin("codex-cli")
+        self.assertEqual(len(codex_cli), 1)
+        self.assertEqual(harnesses, codex_cli)
+
+    def test_in_no_release_or_nightly_matrix(self):
+        for workflow in sorted((ROOT / ".github/workflows").glob("*.yml")):
+            with self.subTest(workflow=workflow.name):
+                self.assertNotRegex(workflow.read_text(), r"images/harnesses|agent-harnesses|- name: harnesses\b")
+
+    def test_recipe_is_wired(self):
+        dockerfile = (ROOT / "deploy/images/harnesses/Dockerfile").read_text()
+        self.assertIn("LicenseRef-Anthropic-Terms", dockerfile)
+        self.assertIn("deploy/images/common/agent-run-set /usr/local/bin/agent-run", dockerfile)
+        for harness in ["claude-code", "codex-cli"]:
+            self.assertIn(f"deploy/images/{harness}/agent-run /usr/local/lib/wardyn/harness/{harness}/agent-run", dockerfile)
 
 
 if __name__ == "__main__":

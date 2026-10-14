@@ -78,7 +78,9 @@ func Classify(d string) (exact, wild string, port int) {
 	// degrade to a bare any-port match, which would widen egress.
 	if h, ps, err := net.SplitHostPort(d); err == nil {
 		if n, perr := strconv.Atoi(ps); perr == nil && n >= 1 && n <= 65535 {
-			d = h
+			// The trim above stops at the port digits, so the host half of
+			// "*.example.com.:443" still carries its root dots: trim them here too.
+			d = strings.TrimRight(h, ".")
 			port = n
 		}
 	}

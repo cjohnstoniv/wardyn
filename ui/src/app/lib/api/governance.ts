@@ -21,12 +21,16 @@ import type {
   ResourceLimits,
   RunPolicySpec,
 } from "../types";
+import type { PlacementValue } from "../types/new-run-contract";
+import { USER_TYPE_STANDARD } from "../types/user-types";
 import { asJson, errEnvelope, errText, HttpError, throwIfPending, unwrapList, wfetch } from "./core";
 
 // types.GovernanceLimits. ALL are `omitempty` on the wire, so an unrestricted
 // profile arrives with the keys absent — optional here for the same reason,
 // and `!!limits.deny_x` is how every read is written.
 export interface GovernanceLimits extends RunLimits {
+  // Default deny; runner-reported confinement does not grant platform attestation.
+  local_self_defined_components?: boolean;
   deny_task_mode_exec?: boolean;
   deny_interactive?: boolean;
   // types.GovernanceLimits.DenyUIApps (#1391). The editor has no row for it
@@ -37,6 +41,16 @@ export interface GovernanceLimits extends RunLimits {
   // user drive even when one is allocated to the person; denyUserDrive's 403
   // is what enforces it, and this is only what the editor authors.
   deny_user_drive?: boolean;
+  // types.GovernanceLimits.DenyMemberDrives — refuses creating a member drive
+  // under this profile, on top of the org's storage.user_drive.member_create.
+  // False/absent inherits the org switch. The limits editor has no row for it
+  // yet and saves the stored value back unchanged; composing a profile moves it
+  // into the overlay through LIMIT_FIELDS (profile-overlay.tsx).
+  deny_member_drives?: boolean;
+  // types.GovernanceLimits.DenyPlacements (0.9, #114) — the placements a run
+  // under this profile may not take. A deny list: absent means every placement
+  // is permitted. The server refuses a profile denying both.
+  deny_placements?: PlacementValue[];
   // 0/absent is unlimited (R4/F032). The editor's LimitNumberRow writes this.
   max_concurrent_runs?: number;
   // types.GovernanceLimits.MaxCPUMillis / MaxMemoryMiB — the sandbox CPU and
@@ -77,9 +91,10 @@ export interface RunLimits {
 // stay internal; the console renders plain labels (#93), not spelled here yet.
 export type AutonomyLevel = "L0" | "L1" | "L2" | "L3";
 
-// types.AutonomyRubric — nine closed fields, three egress postures, three
-// secret postures, three confinement classes, each absent (caps nothing) or
-// one of the four levels. See internal/types/governance.go for what each
+// types.AutonomyRubric — nine closed level fields (three egress postures, three
+// secret postures, three confinement classes), each absent (caps nothing) or
+// one of the four levels, and one boolean, agent_guardrail_locks, that caps no
+// level. See internal/types/governance.go for what each
 // posture means.
 export interface AutonomyRubric {
   egress_open?: AutonomyLevel;
@@ -91,13 +106,15 @@ export interface AutonomyRubric {
   confinement_cc1?: AutonomyLevel;
   confinement_cc2?: AutonomyLevel;
   confinement_cc3?: AutonomyLevel;
+  // Selects the locked L2 managed-settings document for an L2 run; caps no level and is not a row.
+  agent_guardrail_locks?: boolean;
 }
 
-// One of AutonomyRubric's nine own field names — what internal/composer/
+// One of AutonomyRubric's nine level-capping field names — what internal/composer/
 // autonomy.go's applicableAutonomyCaps names a cap by, and what
 // AutonomyResolution.BoundBy (below) carries. keyof, not a hand-typed union,
 // so the two can never drift apart.
-export type AutonomyRubricRowKey = keyof AutonomyRubric;
+export type AutonomyRubricRowKey = Exclude<keyof AutonomyRubric, "agent_guardrail_locks">;
 
 // applicableAutonomyCaps' own fixed field order (internal/composer/
 // autonomy.go) — egress, then secrets, then confinement — the order
@@ -264,6 +281,9 @@ export interface GovernanceAssignmentInput {
 export interface GovernancePreviewInput {
   user_subjects: string[];
   groups: string[];
+  // The ordinary human type id both previews send. An empty value means "no type tier" to the
+  // server, which is not what a signed-in person's run is given.
+  user_type: string;
 }
 
 // One kind-LESS claims textarea onto the two typed wire lists both previews
@@ -286,6 +306,7 @@ export function previewClaims(claims: string): GovernancePreviewInput {
   return {
     user_subjects: [...lines].sort((a, b) => Number(a.includes("@")) - Number(b.includes("@"))),
     groups: lines,
+    user_type: USER_TYPE_STANDARD,
   };
 }
 

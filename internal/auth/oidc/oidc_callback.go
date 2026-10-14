@@ -275,6 +275,10 @@ func (a *Authenticator) callback(w http.ResponseWriter, r *http.Request, reserve
 	sess, denied := a.admit(r, idToken.Subject, cc, reserved, onDenied)
 	var epoch int64
 	if denied == "" {
+		// Before the identity is issued: a cut made from here on, an unbind included, ends this session.
+		sess.RevocationSeq, denied = a.issueRevocationSeq(r)
+	}
+	if denied == "" {
 		epoch, denied = a.issueIdentity(r, a.loginFacts(sess, cc), onDenied)
 	}
 	if denied != "" {
@@ -513,14 +517,24 @@ func (a *Authenticator) deriveLogin(r *http.Request, sub string, cc callbackClai
 	}
 	d := deriveRole(cc.roles, cc.groups, cc.email, roleMap, a.cfg.LegacyAdminEmails, a.cfg.DefaultRole, userTypes)
 	if !d.OK() {
-		if d.Denial != DenialNoRole {
+		if d.Denial == DenialNoRole {
+			slog.Warn("oidc: login denied: no role-map value matched and no default role is set",
+				"sub", sub, "reason", d.Denial)
+		} else {
 			slog.Warn("oidc: login denied over the user type the role map names",
 				"sub", sub, "reason", d.Denial, "tied_user_types", d.Tied, "unknown_user_types", d.Unknown)
-			if onUserTypeDenied != nil {
-				onUserTypeDenied(r, d.Denial)
-			}
+		}
+		if onUserTypeDenied != nil {
+			onUserTypeDenied(r, d.Denial)
 		}
 		return d, d.Denial
+	}
+	// A type is settled by matches, so like the role it cannot rest on a claim the token did not
+	// answer: refused with the overage code when such a claim could change it.
+	if unanswerableChangesUserType(claimsOverage(cc.claimNames) || len(cc.unreadable) > 0, d, cc.email, roleMap, userTypes) {
+		slog.Warn("oidc: login denied — the IdP omitted a claim, or sent it in a shape this build cannot decode, that a role-map row naming a user type is keyed on, so the user type cannot be settled",
+			"sub", sub, "user_type", d.UserType, "claim_names", claimNamesKeys(cc.claimNames), "unreadable_claims", cc.unreadable)
+		return Derivation{}, authErrorClaimsOverage
 	}
 	if len(d.Tied) > 0 || len(d.Unknown) > 0 {
 		slog.Warn("oidc: admin sign-in put on the standard user type; the types the role map names for it tie or don't exist",

@@ -9,13 +9,15 @@
 // token list. Nothing here is a new server path.
 import * as React from "react";
 import { Link } from "react-router-dom";
-import { Loader2 } from "lucide-react";
+import { Loader2, RotateCw } from "lucide-react";
 import { toast } from "sonner";
 import { credentials as credentialsApi } from "../../../lib/api/credentials";
 import { people as peopleApi } from "../../../lib/api/people";
 import { getErrorMessage, relativeTime } from "../../../lib/format";
 import type { PersonSummary, PersonToken } from "../../../lib/types";
+import { useDeferredBusy } from "../../../lib/use-deferred-busy";
 import { PEOPLE_PAGE as P } from "../../wardyn/copy/people";
+import { STATES } from "../../wardyn/states";
 import { roleLabel } from "./people-format";
 import { Button } from "../../ui/button";
 import {
@@ -58,21 +60,33 @@ export function PersonDrawer({
   const [confirm, setConfirm] = React.useState<Action | null>(null);
   const [busy, setBusy] = React.useState(false);
   const [tokens, setTokens] = React.useState<PersonToken[]>([]);
+  // A swallowed rejection left the section showing the server's count with no names under it, which
+  // reads as "no tokens" — so the read carries its own state and Retry refetches.
+  const [tokenState, setTokenState] = React.useState<"loading" | "error" | "ready">("loading");
+  // Retry bumps this rather than calling the API again: the effect below owns the fetch (and its
+  // live guard), so there is one read path for the drawer.
+  const [attempt, setAttempt] = React.useState(0);
   const principal = person?.principal;
+  const { showSpinner } = useDeferredBusy(tokenState === "loading");
 
   React.useEffect(() => {
     setConfirm(null);
     setTokens([]);
     if (!principal) return;
     let live = true;
+    setTokenState("loading");
     peopleApi
       .tokens(principal)
-      .then((t) => live && setTokens(t.filter(isActiveToken)))
-      .catch(() => {});
+      .then((t) => {
+        if (!live) return;
+        setTokens(t.filter(isActiveToken));
+        setTokenState("ready");
+      })
+      .catch(() => live && setTokenState("error"));
     return () => {
       live = false;
     };
-  }, [principal]);
+  }, [principal, attempt]);
 
   if (!person) return null;
   const label = person.email || person.principal;
@@ -113,7 +127,22 @@ export function PersonDrawer({
               </Button>
             </Section>
             <Section label={P.TOKENS} value={person.api_tokens}>
-              {tokens.length > 0 && (
+              {tokenState === "loading" && showSpinner && (
+                <Loader2 className="size-3.5 animate-spin text-muted-foreground" aria-hidden />
+              )}
+              {/* The shared inline error + Retry, as the default-policy preview and the run
+                  sign-in strip render it: a section of a screen, not a pane, so not ErrorState.
+                  Same sentence that screen's own failed read already shows. */}
+              {tokenState === "error" && (
+                <div role="status" className="flex flex-wrap items-center gap-2">
+                  <p className="text-meta text-muted-foreground">{STATES.ERROR_DEFAULT}</p>
+                  <Button size="sm" variant="outline" onClick={() => setAttempt((n) => n + 1)}>
+                    <RotateCw className="size-3.5" />
+                    {STATES.RETRY}
+                  </Button>
+                </div>
+              )}
+              {tokenState === "ready" && tokens.length > 0 && (
                 <ul className="text-meta text-muted-foreground">
                   {tokens.map((t) => (
                     <li key={t.id}>

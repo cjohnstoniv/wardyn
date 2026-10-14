@@ -349,6 +349,32 @@ func (p *Policy) AllowsLiteralIP(host string, port int) bool {
 	return ok
 }
 
+// ExceedsLiteralTrust reports whether entry, an allowed_domains entry, would have a compiled policy
+// trust a private-range literal past the address guard (trustsExactLiteralIP) where p does not. That
+// is: entry is EXACT, its host is a literal in the one range that trust reaches, and p holds no exact
+// entry for the same canonical address on every port entry names (a bare entry names them all). Only
+// p's own exact entries are authority: never its allow_all_egress, a wildcard, or a name that
+// resolves there. The parsing and the range are the guard's own (domainmatch.Classify, isBlockedIP),
+// so a policy bounded with this before it is compiled is judged the way the guard will judge it.
+func (p *Policy) ExceedsLiteralTrust(entry string) bool {
+	addr, _, port := domainmatch.Classify(entry)
+	ip := net.ParseIP(addr)
+	if ip == nil {
+		return false
+	}
+	if kind, _ := isBlockedIP(ip); kind != blockPrivate {
+		return false
+	}
+	if _, ok := p.allowedExact[addr]; ok {
+		return false
+	}
+	if port == 0 {
+		return true
+	}
+	_, ok := p.allowedExactPort[hostPortKey(addr, port)]
+	return !ok
+}
+
 // AuthoredPortFor reports whether the operator authored a PORT-QUALIFIED
 // allowlist entry covering host:port — "vendor.example:8443", or the wildcard
 // form "*.example.com:8443".
@@ -492,6 +518,12 @@ func literalIPDenialDetail(host string, port int, pol *Policy, kind blockKind) s
 	}
 	ip := net.ParseIP(h)
 	if ip == nil {
+		// A non-canonical spelling (inet_aton form, zoned IPv6) is refused by the
+		// step-0 guard unconditionally, so the internal_hosts remedy is never true
+		// for it even when the decoded address is in a liftable range.
+		if dec := nonCanonicalLiteralIP(h); dec != nil {
+			return "literal IP " + h + " decodes to " + dec.String() + ", " + egressNeverLiftableRemedy
+		}
 		if never := neverLiftableDetail("this host's address", kind); never != "" {
 			return never
 		}

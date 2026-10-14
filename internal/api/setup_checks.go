@@ -366,7 +366,7 @@ func ageKeyCheck(durable bool) SetupCheck {
 }
 
 // secretStoreChecks are the credential-storage rows (design §3, canon SETUP_CHECK.*): store_external in store
-// mode; kek_service (KEK_SERVICE; keyService is "Vault Transit at {host}" or "Key Vault {vault}") when a key
+// mode; kek_service (KEK_SERVICE; keyService is "Vault Transit at {host}", "Key Vault {vault}" or "AWS KMS in {region}") when a key
 // service wraps every data key; else the age-key row, kek_local on a multi-user install (whoever holds the database and the local key
 // reads every credential), and platform_shared while no WARDYN_PLATFORM_KEY_FILE is set (§2.13 c: one leak of
 // the age key then also forges run identities and sessions).
@@ -377,8 +377,11 @@ func secretStoreChecks(external, keyService string, durable, multiUser, platform
 	}
 	if keyService != "" {
 		unlock := "a Transit decrypt in Vault's audit log"
-		if strings.HasPrefix(keyService, "Key Vault") {
+		switch {
+		case strings.HasPrefix(keyService, "Key Vault"):
 			unlock = "an unwrap in Key Vault's logs"
+		case strings.HasPrefix(keyService, "AWS KMS"):
+			unlock = "a Decrypt in AWS CloudTrail"
 		}
 		return []SetupCheck{{ID: "kek_service", Label: "Credential storage", Status: "ok",
 			Detail: "Credentials stay sealed in Wardyn's database; the key that unlocks them is held in " + keyService +
@@ -389,8 +392,8 @@ func secretStoreChecks(external, keyService string, durable, multiUser, platform
 	if kekRequired {
 		checks = append(checks, SetupCheck{
 			ID: "kek_required_unmet", Label: "Credential key custody", Status: "fail",
-			Detail: "This deployment requires a key service, but credentials are wrapped by the local key. This reports the posture; wardynd refuses to start in it.",
-			Fix:    "Set WARDYN_KEK=transit or azurekv, then run `wardynd -rewrap`.",
+			Detail: "This deployment requires a key service, but new credential writes are wrapped by the local key. This reports the posture; wardynd refuses to start in it.",
+			Fix:    "Set WARDYN_KEK=transit, azurekv or awskms, then run `wardynd -rewrap`.",
 		})
 	}
 	if durable && multiUser {
@@ -422,6 +425,8 @@ func platformSplitCheck(keyService string, separate bool) SetupCheck {
 		c.Status, c.Fix = "ok", ""
 		c.Detail = "Wardyn's own signing and session keys use a separate key and identity in " + keyService +
 			"; the credential identity can't reach them."
+	case strings.HasPrefix(keyService, "AWS KMS"):
+		c.Fix = "AWS KMS has no separate platform key yet: the boot keys stay under the one KMS key, so grant kms:Decrypt on it to wardynd's role alone."
 	case strings.HasPrefix(keyService, "Key Vault"):
 		c.Fix = "Set WARDYN_AZURE_KEK_KEY_PLATFORM, WARDYN_AZURE_KEK_SIGNING_KEY_PLATFORM and WARDYN_AZURE_CLIENT_ID_PLATFORM to a second key pair and identity, run `wardynd -rewrap -rewrap-adopt-boot-keys` once, then restart."
 	default:

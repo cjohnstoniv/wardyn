@@ -2,14 +2,19 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Package conformance is the driver-agnostic parity gate for runner.Runner
-// implementations. Call Run(t, r) from driver-specific test files.
+// implementations. Call Run(t, r) from driver-specific test files, and
+// RunPlacementRouting(t, substrate, opts) beside it: a placement is honoured or
+// refused, never substituted.
 //
 // Contract assertions enforced here:
 //  1. Capabilities sanity: if ConfinementClasses is non-empty, CreateSandbox
 //     must honour the strongest class and must never silently downgrade it.
 //  2. Create → Status → Stop idempotency: a second StopSandbox on a stopped
 //     sandbox must return nil.
-//  3. KillSandbox on a missing/unknown ref must return nil.
+//  3. KillSandbox on a missing/unknown ref must return nil. A self-hosted
+//     runner answers only for a sandbox it holds or can prove it created and
+//     refuses any other ref, so there the missing ref is one it could have
+//     created.
 //  4. L0 assertion hook: if StructuralEgress is declared, an injectable probe
 //     (DefaultRouteProbe) asserts that no default route is reachable from the
 //     sandbox.

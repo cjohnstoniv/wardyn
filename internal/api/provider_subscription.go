@@ -20,7 +20,9 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net/http"
+	"net/netip"
 	"slices"
 	"strings"
 	"time"
@@ -141,12 +143,16 @@ func (s *Server) providerSubscriptionTransport(run types.AgentRun,
 
 // providerGrantSnapshot is what dispatch records on a provider grant it
 // authors (a Claude sign-in sentinel, a Bedrock key): which provider's
-// credential it is and whose. It grants nothing: the sink still requires the
-// owner to be the run token's own subject and the provider to be the run's,
-// live.
+// credential it is, whose, and for which harness of the run. It grants
+// nothing: the sink still requires the owner to be the run token's own subject
+// and the provider to be the one the run was launched with for that harness,
+// live (sinkHarnessProvider).
 type providerGrantSnapshot struct {
 	ProviderUID  string `json:"provider_uid"`
 	OwnerSubject string `json:"owner_subject"`
+	// Harness is the harness the grant serves; "" on a grant authored before
+	// the harness set, which served the run's own agent.
+	Harness string `json:"harness,omitempty"`
 }
 
 // authorProviderSubscriptionInjection authors the per-person subscription
@@ -171,9 +177,44 @@ func (s *Server) authorProviderSubscriptionInjection(ctx context.Context, run ty
 		source:   "provider",
 		detail:   "the run owner's own Claude sign-in injected proxy-side; sandbox holds only an inert sentinel delivered via env",
 		provider: c.provider.ID,
-		snapshot: providerGrantSnapshot{ProviderUID: c.provider.UID, OwnerSubject: c.owner},
+		snapshot: providerGrantSnapshot{ProviderUID: c.provider.UID, OwnerSubject: c.owner, Harness: run.Agent},
 	})
 	return injections, mitmHosts, ok
+}
+
+// providerSubscriptionChannelHosts is channels (the azure_foundry lane's
+// entries, never mutated) plus every Claude subscription lane's route-through
+// host, each under the Anthropic request schema: ProxyConfig.LLMChannelHosts.
+// The gateway relays the Messages API the vendor host serves, and the MITM
+// entry authorProviderSubscriptionInjection returns only terminates the host
+// for the credential; without the entry here the proxy reads its bodies as no
+// schema at all and content inspection scans none of them. A lane that dials
+// the vendor host adds nothing, since the proxy knows that host already.
+//
+// No entry can collide with another lane's: two providers that share a host
+// are refused before anything is authored (laneConflict).
+//
+// The key is the base URL's own host as written, brackets off: the text the
+// MITM entry beside it carries (gatewayHostPort) and the text the proxy looks
+// a request's host up by, so an IPv6 literal is keyed by its bare address. A
+// literal with a zone is left out: the proxy refuses that key
+// (validateChannelHosts), and the entry would fail the whole run.
+func providerSubscriptionChannelHosts(llms []llmTransport, channels map[string]string) map[string]string {
+	for _, l := range llms {
+		if !l.providerSubscription() || l.provider.provider.BaseURL == "" {
+			continue
+		}
+		host := gatewayHost(providerSubscriptionBase(l.provider.provider))
+		if addr, err := netip.ParseAddr(host); host == "" || (strings.Contains(host, ":") && (err != nil || addr.Zone() != "")) {
+			continue
+		}
+		channels = maps.Clone(channels)
+		if channels == nil {
+			channels = map[string]string{}
+		}
+		channels[host] = subscriptionInjectionHost
+	}
+	return channels
 }
 
 // providerOAuthUID returns the provider UID a wardyn-provider-<uid>-oauth
@@ -228,8 +269,12 @@ func (s *Server) resolveProviderSubscriptionInjection(w http.ResponseWriter, r *
 	if err != nil {
 		return fail(http.StatusServiceUnavailable, "providers_unreadable", mpRunUnreadable)
 	}
-	p, found := modelProviderByID(sc.ModelProviders, run.ModelProviderID)
-	if !found || p.UID != uid || p.Kind != types.ModelProviderAnthropicSubscription || p.Disabled || !p.Serves(run.Agent) {
+	harness, providerID, launched, err := s.sinkHarnessProvider(ctx, run, rec.Harness)
+	if err != nil {
+		return fail(http.StatusServiceUnavailable, "run_unreadable", credentialReauthRunUnreadableBody)
+	}
+	p, found := modelProviderByID(sc.ModelProviders, providerID)
+	if !launched || !found || p.UID != uid || p.Kind != types.ModelProviderAnthropicSubscription || p.Disabled || !p.Serves(harness) {
 		return fail(http.StatusForbidden, "provider_changed", mpSubSinkChanged)
 	}
 	if !hostEqual(minted.Injection.Host, gatewayHost(providerSubscriptionBase(p))) {
@@ -288,10 +333,10 @@ func (s *Server) authorOAuthSentinelGrant(ctx context.Context, run types.AgentRu
 	}
 	raw, _ := json.Marshal(scope)
 	grantID := uuid.New()
-	if _, err := s.cfg.Store.CreateGrant(ctx, types.CredentialGrant{
+	if _, err := s.createDispatchGrant(ctx, run, types.CredentialGrant{
 		ID: grantID, RunID: run.ID, CreatedAt: time.Now(),
 		Spec: types.GrantSpec{Kind: types.GrantAPIKey, Scope: raw, TTLSeconds: 3600},
-	}); err != nil {
+	}, false); err != nil {
 		// CAS from STARTING (claimed at dispatch entry) so a concurrent kill's
 		// KILLED state is preserved rather than clobbered back to FAILED.
 		// The hint is member-visible: a fixed sentence, never the store's text.

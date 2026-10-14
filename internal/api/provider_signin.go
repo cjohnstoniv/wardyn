@@ -58,11 +58,17 @@ type loginTarget struct {
 	scope    awsSSOScope
 	provider *types.ModelProvider
 	model    string // signInModel's, on the provider door
+	// cliComponent is the AWS CLI org row a sign-in through its own door is
+	// for (cli_aws_signin.go); the capture lands under that row's id.
+	cliComponent string
 }
 
-// stampProvider adds the provider half of harness.login.start (the stamp an
-// upload binds to): nothing on the legacy door.
+// stampProvider adds the provider or CLI row half of harness.login.start (the
+// stamp an upload binds to).
 func (t loginTarget) stampProvider(stamp map[string]any) {
+	if t.cliComponent != "" {
+		stamp["cli_component_id"], stamp["sso_region"] = t.cliComponent, t.region
+	}
 	if t.provider == nil {
 		return
 	}
@@ -279,6 +285,10 @@ func (s *Server) handleProviderSignInCapture(w http.ResponseWriter, r *http.Requ
 	if owner == "" {
 		return
 	}
+	r, ok := s.beginRequestWrite(w, r, owner)
+	if !ok {
+		return
+	}
 	var body providerSignInCapture
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<10)).Decode(&body); err != nil {
 		writeErrorReason(w, http.StatusBadRequest, reasonProviderSignInCaptureBodyInvalid, mpsCaptureBody)
@@ -332,7 +342,7 @@ func (s *Server) handleProviderSignInCapture(w http.ResponseWriter, r *http.Requ
 		writeErrorReason(w, authz.EffectUnavailable.Status(), string(authz.ReasonMaskStateUnavailable), maskStateSentence)
 		return
 	}
-	if err := s.putOwned(r.Context(), owner, func() error { return s.cfg.Secrets.For(owner).Put(r.Context(), name, raw) }); err != nil {
+	if err := s.putOwned(r.Context(), owner, func(ctx context.Context) error { return s.cfg.Secrets.For(owner).Put(ctx, name, raw) }); err != nil {
 		writeServerError(w, r, "store model provider sign-in", err)
 		return
 	}

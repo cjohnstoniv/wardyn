@@ -1,0 +1,102 @@
+// Copyright 2026 The Wardyn Authors
+// SPDX-License-Identifier: Apache-2.0
+
+package types
+
+import (
+	"time"
+
+	"github.com/google/uuid"
+)
+
+// RunnerFilter is the state filter of the administrators' runner list; an empty one is active.
+type RunnerFilter string
+
+const (
+	RunnerFilterActive  RunnerFilter = "active"
+	RunnerFilterRevoked RunnerFilter = "revoked"
+	RunnerFilterAll     RunnerFilter = "all"
+)
+
+// RunnerUnclaimedTTL is how long an unclaimed runner waits for its owner.
+const RunnerUnclaimedTTL = 24 * time.Hour
+
+// RunnerCapacity is the per-run ceiling a runner advertised: the wire shape of its caps event.
+type RunnerCapacity struct {
+	CPUMillisMax int64 `json:"cpu_millis_max"`
+	MemoryMiBMax int64 `json:"memory_mib_max"`
+}
+
+// RunnerView is a runner as the management routes show it to a person or an administrator. It is
+// never sent to a runner. Every posture fact is what the runner said about itself.
+type RunnerView struct {
+	ID    uuid.UUID   `json:"id"`
+	Name  string      `json:"name"`
+	State RunnerState `json:"state"`
+	// Owner is set on the administrators' routes only; the caller's own list omits it.
+	Owner string `json:"owner,omitempty"`
+	// MintedBy names who minted the registration token this runner redeemed. MintedByEmail is that
+	// person's email where Wardyn holds one, set on a person's own routes when someone else minted it,
+	// so the console can say who without printing an opaque sign-in subject.
+	MintedBy      string `json:"minted_by,omitempty"`
+	MintedByEmail string `json:"minted_by_email,omitempty"`
+	// Online is the hub's live view of a claimed runner and false for any other.
+	Online bool `json:"online"`
+	// KeyFingerprint is abbreviated for an unclaimed runner on its owner's own routes, so it cannot
+	// be copied from there into the claim; KeyFingerprintAbbreviated says so.
+	KeyFingerprint            string    `json:"key_fingerprint"`
+	KeyFingerprintAbbreviated bool      `json:"key_fingerprint_abbreviated"`
+	Version                   string    `json:"version,omitempty"`
+	CreatedAt                 time.Time `json:"created_at"`
+	// ClaimExpiresAt is when an unclaimed runner lapses; absent for any other state.
+	ClaimExpiresAt *time.Time `json:"claim_expires_at,omitempty"`
+	ClaimedAt      *time.Time `json:"claimed_at,omitempty"`
+	LastSeenAt     *time.Time `json:"last_seen_at,omitempty"`
+	RevokedAt      *time.Time `json:"revoked_at,omitempty"`
+	// RevokedBy names who revoked the runner; RevokeReason is "" or RunnerRevokeNotMine. Both are
+	// absent until it is revoked.
+	RevokedBy    string `json:"revoked_by,omitempty"`
+	RevokeReason string `json:"revoke_reason,omitempty"`
+	// RevokedByEmail is that person's email where Wardyn holds one, set on a person's own list only.
+	RevokedByEmail string `json:"revoked_by_email,omitempty"`
+	// Posture is absent until the runner has reported; PostureSource is then runner_asserted.
+	Posture           *RunnerPosture `json:"posture,omitempty"`
+	PostureReportedAt *time.Time     `json:"posture_reported_at,omitempty"`
+	PostureSource     string         `json:"posture_source,omitempty"`
+	// Capacity, Classes and AllowedRoots are the claimed runner's last caps event, all runner_asserted.
+	// They are read from this process's live endpoint, so like Online they are absent when the runner
+	// has not connected to this replica, never a stored or guessed value.
+	Capacity     *RunnerCapacity    `json:"capacity,omitempty"`
+	Classes      []ConfinementClass `json:"classes,omitempty"`
+	AllowedRoots []string           `json:"allowed_roots,omitempty"`
+	// Kind is always RunnerKindSelfHosted: the one shape both kinds' reads share.
+	Kind RunnerKind `json:"kind"`
+	// Limits is what the runner's owner declared, which only they change; nil when not all of them are
+	// set, and then the runner takes no run. Usage is what its runs hold now, the figures placement
+	// counts, shown to its owner and to operators only.
+	Limits *RunnerLimits `json:"limits"`
+	Usage  RunnerUsage   `json:"usage"`
+	// MachineName is the host name the runner last reported at registration or on connect. It is what
+	// the runner says, never verified and never an identity; absent until it reports one.
+	MachineName string `json:"machine_name,omitempty"`
+	// Pools are the owner's live Self-Hosted pools the runner is a member of, by name; [] for none.
+	Pools []RunnerPoolRef `json:"pools"`
+}
+
+// RunnerPoolRef names one pool a runner is a member of.
+type RunnerPoolRef struct {
+	ID   uuid.UUID `json:"id"`
+	Name string    `json:"name"`
+}
+
+// RunnerSettingsRequest turns runners on or off. Enabled is required, so an empty body never
+// switches anything.
+type RunnerSettingsRequest struct {
+	Enabled *bool `json:"enabled"`
+}
+
+// RunnerUpdateRequest is an owner's change to their own runner (PUT /me/runners/{id}): the whole limit
+// set, required, so an empty body changes nothing.
+type RunnerUpdateRequest struct {
+	Limits *RunnerLimits `json:"limits"`
+}

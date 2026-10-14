@@ -205,7 +205,9 @@ func (s *Server) probeSecretWrite(ctx context.Context, scope awsSSOScope) error 
 		}
 		st = st.For(scope.owner)
 	}
-	if err := st.Put(ctx, writeProbeSecretName, []byte("probe")); err != nil {
+	if err := s.putOwned(ctx, scope.rowOwner(), func(ctx context.Context) error {
+		return st.Put(ctx, writeProbeSecretName, []byte("probe"))
+	}); err != nil {
 		return err
 	}
 	if err := st.Delete(ctx, writeProbeSecretName); err != nil {
@@ -228,7 +230,8 @@ const awsSSOPersistBudget = 30 * time.Second
 // the secret store keeps row revisions, the Put lands only while the row is
 // still the one rev names (read, under the lock, before the refresh token in it
 // was redeemed), and a row that changed since is left as it is
-// (secretstore.ErrRevisionChanged, never retried).
+// (secretstore.ErrRevisionChanged, never retried). The same holds for an erase
+// of the owner since that read (secretstore.ErrGenerationChanged).
 func (s *Server) persistRenewedAWSSSOBlob(ctx context.Context, scope awsSSOScope, next awsSSOBlob, rev string, guarded bool) (attempts int, err error) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), awsSSOPersistBudget)
 	defer cancel()
@@ -237,7 +240,7 @@ func (s *Server) persistRenewedAWSSSOBlob(ctx context.Context, scope awsSSOScope
 	}
 	for attempts = 1; ; attempts++ {
 		err = s.storeAWSSSOBlob(ctx, scope, next)
-		if err == nil || errors.Is(err, secretstore.ErrRevisionChanged) || attempts == awsSSOPersistAttempts {
+		if err == nil || secretstore.Superseded(err) || attempts == awsSSOPersistAttempts {
 			return attempts, err
 		}
 		select {
@@ -515,6 +518,17 @@ func (s *Server) markAWSSSOTokenSpent(ctx context.Context, fingerprint, owner st
 	}
 }
 
+// beginAWSSSORenewal fences the renewal's write to the owner's erase generation and reads the row's
+// revision under that fence, in that order, so an erase after either read refuses the Put.
+func (s *Server) beginAWSSSORenewal(ctx context.Context, scope awsSSOScope) (_ context.Context, rev string, guarded bool, err error) {
+	ctx, err = s.beginCredentialWrite(ctx, scope.rowOwner())
+	if err != nil {
+		return ctx, "", false, err
+	}
+	rev, guarded, err = s.awsSSORevision(ctx, scope)
+	return ctx, rev, guarded, err
+}
+
 // refreshAWSSSOBlob renews `blob` when it needs renewing and returns the blob
 // the caller should USE plus, on failure, the sentence the caller should refuse
 // with ("" means "use the returned blob").
@@ -588,11 +602,11 @@ func (s *Server) refreshAWSSSOBlob(parent context.Context, scope awsSSOScope, bl
 	// from it would write a credential back that an admin erased (#1478). So it
 	// renews nothing, spends nothing at AWS, and writes nothing. A token with at
 	// least the serve floor left is served from memory; otherwise the run is refused.
-	rev, guarded, rerr := s.awsSSORevision(ctx, scope)
+	wctx, rev, guarded, rerr := s.beginAWSSSORenewal(ctx, scope)
 	var cur awsSSOBlob
 	var found bool
 	if rerr == nil {
-		cur, found, rerr = s.readAWSSSOBlob(ctx, scope)
+		cur, found, rerr = s.readAWSSSOBlob(wctx, scope)
 	}
 	if rerr != nil {
 		slog.WarnContext(ctx, "wardynd: could not re-read the captured AWS SSO credential under its lock; not renewing it", slog.Any("err", rerr))
@@ -711,8 +725,8 @@ func (s *Server) refreshAWSSSOBlob(parent context.Context, scope awsSSOScope, bl
 		data["registration_expires_at"] = next.RegistrationExpiresAt.UTC().Format(time.RFC3339)
 	}
 	outcome := "success"
-	persistAttempts, perr := s.persistRenewedAWSSSOBlob(ctx, scope, next, rev, guarded)
-	superseded := errors.Is(perr, secretstore.ErrRevisionChanged)
+	persistAttempts, perr := s.persistRenewedAWSSSOBlob(wctx, scope, next, rev, guarded)
+	superseded := secretstore.Superseded(perr)
 	if superseded {
 		// The row is no longer the one this renewal read: a newer pair (or an
 		// erase) landed while the lock was lost. It is left as it is. The pair

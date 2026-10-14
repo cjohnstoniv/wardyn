@@ -187,6 +187,26 @@ func TryAdvisoryLockConn(ctx context.Context, pool *pgxpool.Pool, key int64) (co
 	}, true, nil
 }
 
+// AdvisoryLockHeld reports whether any session holds key, without acquiring it.
+// A pooled read lets lifetime-lock followers avoid dialing a dedicated session
+// on every retry. This snapshot is not a fence: the dedicated try still decides
+// the holder, and callers fall through to that try when the read fails.
+func AdvisoryLockHeld(ctx context.Context, pool *pgxpool.Pool, key int64) (bool, error) {
+	var held bool
+	// PostgreSQL stores bigint keys as two unsigned OIDs; objsubid separates
+	// them from the two-int advisory-lock namespace. Advisory locks are per
+	// database while pg_locks lists the whole server, so another database's
+	// holder of the same key must not count.
+	err := pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM pg_locks
+		WHERE locktype = 'advisory' AND granted AND classid = $1 AND objid = $2 AND objsubid = 1
+		AND database = (SELECT oid FROM pg_database WHERE datname = current_database()))`,
+		uint32(uint64(key)>>32), uint32(key)).Scan(&held)
+	if err != nil {
+		return false, fmt.Errorf("db: probe advisory lock: %w", err)
+	}
+	return held, nil
+}
+
 // dedicatedLockReleaseWait bounds a dedicated lock's release: the unlock and
 // the close together.
 const dedicatedLockReleaseWait = 2 * time.Second

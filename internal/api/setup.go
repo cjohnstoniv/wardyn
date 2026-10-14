@@ -62,6 +62,9 @@ type SetupStatus struct {
 	// Unlike Checks (the same fact as admin-only detail), this is KEPT through
 	// redactSetupStatusForUser — every person reads it, not just an admin.
 	CredentialStorage string `json:"credential_storage,omitempty"`
+	// Tier is who governs this install: local-only, runner or org (setupTier).
+	// Kept through redactSetupStatusForUser — the account menu names it for everyone.
+	Tier string `json:"tier"`
 	// HasRuns drives the wizard's "launch your first run" done state.
 	HasRuns bool `json:"has_runs"`
 	// OnboardingComplete reports whether an operator has finished (or
@@ -92,6 +95,10 @@ type SetupStatus struct {
 	// wire each one a managed model credential or a container-login
 	// subscription. ADDITIVE field; omitted when empty.
 	Harnesses []SetupHarnessTool `json:"harnesses,omitempty"`
+	// HarnessSets is each combination of two or more harnesses one declared
+	// sandbox image carries, as sorted ids: only combinations whose every
+	// harness is in Harnesses (this caller may use it). Never null.
+	HarnessSets [][]string `json:"harness_sets"`
 	// LLMReady is the server-computed "does SOME run's LLM access path exist"
 	// verdict (HIGH-4 review fix): at least one enabled model provider serves an
 	// agent (llmPathExists). A DEPLOYMENT fact — whether THIS person can use one
@@ -332,6 +339,10 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	checks = append(checks, secretStoreChecks(s.cfg.SecretStoreExternal, s.cfg.SecretKeyService, s.cfg.AgeKeyDurable, s.cfg.OIDC != nil, s.cfg.PlatformKeySeparate, s.cfg.KEKRequired)...)
+	if chk, ok := staticKeyServiceCheck(s.cfg.SecretKeyService, s.cfg.SecretKeyServiceStaticKey); ok {
+		checks = append(checks, chk)
+	}
+	checks = append(checks, s.kekLocalRows(ctx)...)
 	checks = append(checks, s.keyCustodyRows(ctx)...)
 	checks = append(checks, hostProxyCheck(hostProxy, plat.Containerized && !setup.HostProxySeeded()))
 
@@ -398,6 +409,7 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 		Secrets:            sec,
 		AgeKey:             SetupAgeKey{Durable: s.cfg.AgeKeyDurable},
 		CredentialStorage:  credentialStorageMode(s.cfg.SecretStoreExternal, s.cfg.SecretKeyService),
+		Tier:               s.setupTier(),
 		HasRuns:            hasRuns,
 		OnboardingComplete: onboardingComplete,
 		Platform:           SetupPlatform{OS: plat.OS, WSL: plat.WSL, KVM: plat.KVM},
@@ -414,6 +426,7 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 		// describes — no second boot-time field to keep in sync. 0 when unset.
 		TrustedCACerts: strings.Count(s.cfg.TrustedCAPEM, "-----BEGIN CERTIFICATE-----"),
 	}
+	resp.HarnessSets = visibleHarnessSets(s.cfg.AgentImages, resp.Harnesses)
 	// DELIBERATELY isOperator (three-tier doctrine, internal/auth/oidc's
 	// RoleSecurityAdmin): what this redaction drops is the DEPLOYER's funnel —
 	// the environment/credential checklist, resident-CLI login detection,

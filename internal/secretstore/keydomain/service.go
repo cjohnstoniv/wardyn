@@ -194,7 +194,9 @@ func (s *Service) Place(ctx context.Context, owner string) (Placement, error) {
 }
 
 // RecordLoginGroups stamps the groups of a verified login, which a group
-// assignment reads. truncated is the login's own bit.
+// assignment reads. truncated is the login's own bit. It takes the assignment
+// lock, so an assignment write's count of the people it would make ambiguous
+// never races a login changing those people's groups.
 func (s *Service) RecordLoginGroups(ctx context.Context, principal string, groups []string, truncated bool) error {
 	if principal == "" {
 		return nil
@@ -206,13 +208,15 @@ func (s *Service) RecordLoginGroups(ctx context.Context, principal string, group
 	if err != nil {
 		return err
 	}
-	if _, err := s.pool.Exec(ctx, `
-		INSERT INTO key_domain_login_groups (principal, groups, truncated) VALUES ($1, $2, $3)
-		ON CONFLICT (principal) DO UPDATE SET groups=EXCLUDED.groups, truncated=EXCLUDED.truncated, verified_at=now()`,
-		principal, b, truncated); err != nil {
-		return unavailable("record the login's groups", err)
-	}
-	return nil
+	return s.WriteAssignments(ctx, func(q Querier) error {
+		if _, err := q.Exec(ctx, `
+			INSERT INTO key_domain_login_groups (principal, groups, truncated) VALUES ($1, $2, $3)
+			ON CONFLICT (principal) DO UPDATE SET groups=EXCLUDED.groups, truncated=EXCLUDED.truncated, verified_at=now()`,
+			principal, b, truncated); err != nil {
+			return unavailable("record the login's groups", err)
+		}
+		return nil
+	})
 }
 
 // List returns every assignment, by type, subject.
@@ -436,6 +440,27 @@ func (s *Service) TruncatedWithGroupsQ(ctx context.Context, q Querier, principal
 		   AND EXISTS (SELECT 1 FROM key_domain_assignments g WHERE g.subject_type='group')`, principal).Scan(&yes)
 	if err != nil {
 		return false, unavailable("read the person's group snapshot", err)
+	}
+	return yes, nil
+}
+
+// InTwoGroupDomains says whether principal can still sign in and their last login carries groups
+// assigned to more than one domain: without a user assignment of their own, Domain refuses them by
+// name. It never reads the user assignment, so it answers for the assignments as they stand once
+// that one is deleted, whether the delete has run yet or not.
+func (s *Service) InTwoGroupDomains(ctx context.Context, principal string) (bool, error) {
+	return s.InTwoGroupDomainsQ(ctx, s.pool, principal)
+}
+
+// InTwoGroupDomainsQ is InTwoGroupDomains on q.
+func (s *Service) InTwoGroupDomainsQ(ctx context.Context, q Querier, principal string) (bool, error) {
+	var yes bool
+	err := q.QueryRow(ctx, `
+		SELECT count(DISTINCT g.domain) > 1 FROM key_domain_login_groups l
+		JOIN key_domain_assignments g ON g.subject_type='group' AND l.groups @> jsonb_build_array(g.subject)
+		WHERE l.principal = $1 AND `+liveLogin, principal).Scan(&yes)
+	if err != nil {
+		return false, unavailable("read the domains of the person's groups", err)
 	}
 	return yes, nil
 }

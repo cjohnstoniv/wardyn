@@ -1004,7 +1004,12 @@ func TestMigrate_ToLocalSkipsARemovalTheRowWasRepointedAt(t *testing.T) {
 		go func() { putDone <- view.Put(ctx, "k", []byte("second")) }()
 		waitOnRowLock(t, pool)
 	}}
-	cfg.ConnConfig.Tracer = multitracer.New(cfg.ConnConfig.Tracer, tracer)
+	// multitracer.New keeps a nil tracer and calls it; the base is nil unless WARDYN_TEST_POOL_GUARD=1.
+	if base := cfg.ConnConfig.Tracer; base != nil {
+		cfg.ConnConfig.Tracer = multitracer.New(base, tracer)
+	} else {
+		cfg.ConnConfig.Tracer = tracer
+	}
 	migratingPool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
 		t.Fatal(err)

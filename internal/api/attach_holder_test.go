@@ -108,6 +108,19 @@ func (s *countingShellSession) writtenBytes() int {
 	return n
 }
 
+// resizedOtherThan lists every Resize whose size is not want.
+func (s *countingShellSession) resizedOtherThan(want [2]uint16) [][2]uint16 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var other [][2]uint16
+	for _, sz := range s.sizes {
+		if sz != want {
+			other = append(other, sz)
+		}
+	}
+	return other
+}
+
 func (s *countingShellSession) resizeCount() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -327,7 +340,7 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 // single-use ?ticket= minted for principal (the lane that must keep working).
 func dialAttach(t *testing.T, ts *httptest.Server, srv *Server, runID uuid.UUID, principal, query string) *websocket.Conn {
 	t.Helper()
-	tok, err := mintAttachTicket(context.Background(), srv.cfg.Store, runID, types.ActorHuman, principal, oidc.RoleAdmin, time.Now())
+	tok, err := mintAttachTicket(context.Background(), srv.cfg.Store, runID, types.ActorHuman, principal, oidc.RoleAdmin, oidc.Issue{At: time.Now()})
 	if err != nil {
 		t.Fatalf("mint ticket: %v", err)
 	}

@@ -32,7 +32,7 @@ func previewResult(t *testing.T, w *httptest.ResponseRecorder) policyPreviewResp
 	if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil {
 		t.Fatal(err)
 	}
-	if !result.Provisional || result.Pending == nil || result.Warnings == nil || result.RepositoryAccess == nil {
+	if !result.Provisional || result.Pending == nil || result.Warnings == nil || result.RepositoryAccess == nil || result.Provenance == nil {
 		t.Fatalf("missing provisional/array contract: %s", w.Body.String())
 	}
 	return result
@@ -110,17 +110,19 @@ func TestPolicyPreviewWorkspaceIsolation(t *testing.T) {
 	if strings.Contains(got.Body.String(), project) || strings.Contains(got.Body.String(), `"spec"`) || fr.createCalls != 0 {
 		t.Fatal("foreign resource leaked or dispatched")
 	}
-	// An inert override neither attaches nor resolves a workspace ID.
-	srv.cfg.Store = previewWorkspaceLookupSpy{ownerStore: st, t: t}
-	base := doSSO(t, srv, http.MethodPost, policyPreviewPath, member, `{"agent":"claude-code"}`)
+	// A workspaces[] entry attaches its workspace, so a foreign or a missing one
+	// answers the same 404 as workspace_id does, at every door.
 	for _, id := range []uuid.UUID{foreign, uuid.New()} {
-		w := doSSO(t, srv, http.MethodPost, policyPreviewPath, member, `{"agent":"claude-code","workspaces":[{"workspace_id":"`+id.String()+`"}]}`)
-		previewResult(t, w)
-		if w.Body.String() != base.Body.String() {
-			t.Errorf("inert override changed facts: %s", w.Body.String())
+		for _, path := range []string{policyPreviewPath, "/api/v1/runs/preflight", "/api/v1/runs"} {
+			w := doSSO(t, srv, http.MethodPost, path, member, `{"agent":"claude-code","task":"t","workspaces":[{"workspace_id":"`+id.String()+`"}]}`)
+			if w.Code != got.Code || w.Body.String() != got.Body.String() {
+				t.Errorf("workspaces[] %s at %s: %d %s, want %d %s", id, path, w.Code, w.Body.String(), got.Code, got.Body.String())
+			}
 		}
 	}
-	srv.cfg.Store = st
+	if fr.createCalls != 0 {
+		t.Fatal("a refused attachment dispatched")
+	}
 	// The owner sees only the redacted effective mount.
 	owner := ssoSession(t, ownerMemberSub, "owner@corp.example", oidc.RoleUser)
 	w := doSSO(t, srv, http.MethodPost, policyPreviewPath, owner, body(foreign))
@@ -198,7 +200,7 @@ func (s previewQuotaSpy) CountActiveRunsBy(context.Context, string) (int, error)
 	s.t.Fatal("preview counted member runs")
 	return 0, nil
 }
-func (s previewQuotaSpy) CountNonTerminalRuns(context.Context) (int, error) {
+func (s previewQuotaSpy) CountNonTerminalRuns(context.Context, uuid.UUID) (int, error) {
 	s.t.Fatal("preview counted deployment runs")
 	return 0, nil
 }

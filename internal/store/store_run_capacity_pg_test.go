@@ -199,8 +199,9 @@ func TestPG_RunCapacityAggregate_Caps(t *testing.T) {
 
 // TestPG_RunCapacityAggregate_KeptAgents pins which kept rows hold capacity: only one whose
 // agent still runs (kept after an outage, before its end) holds its agent's reservation, and
-// not its stopped proxy's. A run kept after a reboot or its end, or an outage-kept run past
-// its end, has its agent stopped and holds nothing. The deployment cap counts the same rows.
+// not its stopped proxy's. A run kept after a reboot or its end, or an outage-kept run whose
+// agent was stopped past its end (the stop recorded), holds nothing. The deployment cap counts
+// the same rows.
 func TestPG_RunCapacityAggregate_KeptAgents(t *testing.T) {
 	pool := runsPGPoolIsolated(t)
 	ctx := context.Background()
@@ -214,7 +215,8 @@ func TestPG_RunCapacityAggregate_KeptAgents(t *testing.T) {
 			AgentCPULimitMillis: 2000, AgentMemoryRequestMiB: 4096, AgentMemoryLimitMiB: 4096, ProxyMemoryMiB: 256}); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := pool.Exec(ctx, `UPDATE agent_runs SET lost_at=now(), lost_reason=$2 WHERE id=$1`, id, string(reason)); err != nil {
+		// Past its end the lease sweep has stopped the agent and recorded it.
+		if _, err := pool.Exec(ctx, `UPDATE agent_runs SET lost_at=now(), lost_reason=$2, agent_stopped_at = CASE WHEN ends_at < now() THEN now() END WHERE id=$1`, id, string(reason)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -242,7 +244,74 @@ func TestPG_RunCapacityAggregate_KeptAgents(t *testing.T) {
 	if got.AgeBuckets[0].Count != 1 {
 		t.Errorf("age buckets = %+v, want the one live agent under 1h", got.AgeBuckets)
 	}
-	if n, err := pg.CountNonTerminalRuns(ctx); err != nil || n != 1 {
+	if n, err := pg.CountNonTerminalRuns(ctx, uuid.Nil); err != nil || n != 1 {
 		t.Errorf("CountNonTerminalRuns = %d, %v; want 1, the same live agent", n, err)
+	}
+}
+
+// TestPG_RunCapacityAggregate_BoundPlacement pins that a run bound to a placement outside the deployment
+// (a registered runner, whether or not its sizing was stamped, one whose runner was since erased, or an
+// executor the deployment does not run) is counted in States, Kept and Paused only, while the deployment's own rows,
+// including a legacy unknown and an executor of a multi-executor deployment, keep counting.
+func TestPG_RunCapacityAggregate_BoundPlacement(t *testing.T) {
+	pool := runsPGPoolIsolated(t)
+	ctx := context.Background()
+	pg := store.NewPG(pool)
+	runnerID := uuid.New()
+	if _, err := pg.CreateRunner(ctx, types.Runner{ID: runnerID, Owner: "alice", Name: "laptop", PublicKey: make([]byte, 32),
+		KeyFingerprint: "fp-" + runnerID.String(), Version: "0.9.0", Limits: roomyLimits(types.RunnerMaxRunsCeiling)}); err != nil {
+		t.Fatal(err)
+	}
+	sized := func(kind string) store.RunSizing {
+		return store.RunSizing{RunnerKind: kind, AgentCPURequestMillis: 1000, AgentCPULimitMillis: 1000,
+			AgentMemoryRequestMiB: 2048, AgentMemoryLimitMiB: 2048, ProxyMemoryMiB: 256}
+	}
+	run := func(set string, args ...any) uuid.UUID {
+		t.Helper()
+		id := persistRun(t, ctx, pool, newRun(types.RunRunning)).ID
+		if set != "" {
+			if _, err := pool.Exec(ctx, `UPDATE agent_runs SET `+set+` WHERE id=$1`, append([]any{id}, args...)...); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return id
+	}
+	stamp := func(id uuid.UUID, kind string) {
+		t.Helper()
+		if err := pg.SetRunSizing(ctx, id, sized(kind)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	stamp(run(""), "docker")                                                     // the deployment's own run
+	run("")                                                                      // a legacy local run, sizing never recorded
+	stamp(run("runner_pool_executor='k8s', placement='remote'"), "k8s")          // an executor of the deployment
+	stamp(run("runner_id=$2, placement='local'", runnerID), "docker")            // a registered runner, wrongly stamped
+	run("runner_id=$2, placement='local'", runnerID)                             // a registered runner, unstamped: runner_target still says docker
+	run("runner_id=$2, placement='local', paused_at=now()", runnerID)            // a paused registered-runner run: States, Kept and Paused stay global
+	run("placement='local'")                                                     // a registered runner since erased
+	stamp(run("runner_pool_executor='elsewhere', placement='remote'"), "docker") // an executor this deployment does not run
+
+	local := func(executor string) bool { return executor == "docker" || executor == "k8s" }
+	got, err := pg.RunCapacity(ctx, store.RunCapacityOpts{Now: time.Now().UTC(), CurrentKind: "docker", LocalExecutor: local})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.States[string(types.RunRunning)] != 8 {
+		t.Errorf("running = %d, want all 8 in the state counts", got.States[string(types.RunRunning)])
+	}
+	if got.Paused != 1 {
+		t.Errorf("paused = %d, want the registered runner's paused run, counted with States and Kept", got.Paused)
+	}
+	if d := got.Totals; d.Holding != 2 || d.Unknown != 1 || d.AgentCPULimitMillis != 1000 {
+		t.Errorf("docker totals = %+v, want its own sized run and the legacy unknown only", d)
+	}
+	if k := got.ByRunner["k8s"]; k.Holding != 1 || k.Unknown != 0 {
+		t.Errorf("k8s by runner = %+v, want the one executor run", k)
+	}
+	if len(got.ByRunner) != 2 {
+		t.Errorf("by runner = %+v, want docker and k8s only", got.ByRunner)
+	}
+	if len(got.ByOwner) != 1 || got.ByOwner[0].Holding != 3 {
+		t.Errorf("by owner = %+v, want 3 holding", got.ByOwner)
 	}
 }

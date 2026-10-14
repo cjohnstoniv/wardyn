@@ -2,16 +2,18 @@
 # Copyright 2025 The Wardyn Authors
 # SPDX-License-Identifier: Apache-2.0
 
-# Run-output walk on kind, with recording off (checked on /healthz): a headless
-# exec run prints a registered secret and a marker, completes, wardynd restarts,
-# and `wardyn run output` returns the same bytes it did before the restart. The
+# Run-output walk on kind with two modes selected by WARDYN_KIND_WALK_RECORDING:
+#   off (default) — recording off, stdout capture; cluster wardyn-out-o4, ports 8291/2291
+#   pg            — recording on with pg store (#1831 acceptance); cluster wardyn-out-rec, ports 8292/2292
+# A headless exec run prints a registered secret and a marker, completes, wardynd
+# restarts, and `wardyn run output` returns the same bytes before/after. The
 # registered secret is absent from run_outputs.output read with psql, and the
-# marker is present (so the row is not simply empty).
+# marker is present. In pg mode the row's source is "recording" and the JSON
+# output carries source=recording, incomplete=true, capture_gap=false, complete=true.
 #
-# It creates its OWN cluster (default name wardyn-out-o4, ports 8291/2291) with
-# deploy/kind/quickstart.sh and deletes it on exit; it refuses a cluster that
-# already exists, because it would otherwise have to delete one it did not
-# create. WARDYN_KIND_WALK_KEEP=1 leaves its own cluster up.
+# It creates its OWN cluster with deploy/kind/quickstart.sh and deletes it on
+# exit; it refuses a cluster that already exists. WARDYN_KIND_WALK_KEEP=1 leaves
+# its own cluster up.
 #
 # GUARD: self-skips (exit 77) unless WARDYN_TEST_K8S=1.
 set -uo pipefail
@@ -30,13 +32,19 @@ wardyn_pick_docker_host
 die() { echo "ERROR: $*" >&2; exit 1; }
 step() { printf '\n\033[1;34m==>\033[0m %s\n' "$*"; }
 
+RECORDING="${WARDYN_KIND_WALK_RECORDING:-off}"   # off: stdout capture; pg: recovered from the recording (#1831)
+case "${RECORDING}" in
+  off) cluster_default=wardyn-out-o4;  http_default=8291; ssh_default=2291; want_rec=none ;;
+  pg)  cluster_default=wardyn-out-rec; http_default=8292; ssh_default=2292; want_rec=pg ;;
+  *) die "WARDYN_KIND_WALK_RECORDING must be off or pg, got '${RECORDING}'" ;;
+esac
+export WARDYN_QUICKSTART_CLUSTER="${WARDYN_QUICKSTART_CLUSTER:-${cluster_default}}"
+export WARDYN_QUICKSTART_HTTP_PORT="${WARDYN_QUICKSTART_HTTP_PORT:-${http_default}}"
+export WARDYN_QUICKSTART_SSH_PORT="${WARDYN_QUICKSTART_SSH_PORT:-${ssh_default}}"
+
 for bin in docker kind kubectl helm curl jq go cmp; do
   command -v "${bin}" >/dev/null 2>&1 || die "${bin} not found on PATH"
 done
-
-export WARDYN_QUICKSTART_CLUSTER="${WARDYN_QUICKSTART_CLUSTER:-wardyn-out-o4}"
-export WARDYN_QUICKSTART_HTTP_PORT="${WARDYN_QUICKSTART_HTTP_PORT:-8291}"
-export WARDYN_QUICKSTART_SSH_PORT="${WARDYN_QUICKSTART_SSH_PORT:-2291}"
 CLUSTER="${WARDYN_QUICKSTART_CLUSTER}"
 CONTEXT="kind-${CLUSTER}"
 NAMESPACE="wardyn"
@@ -66,9 +74,16 @@ deploy/kind/quickstart.sh >"${TMPDIR}/quickstart.log" 2>&1 || { tail -30 "${TMPD
 TOKEN="$(kubectl --context "${CONTEXT}" -n "${NAMESPACE}" get secret wardyn-auth -o jsonpath='{.data.admin-token}' | base64 -d)"
 [[ -n "${TOKEN}" ]] || die "could not read the admin token"
 
-step "checking recording is off (the printed line must reach the output without it)"
+if [[ "${RECORDING}" == "pg" ]]; then
+  step "enabling recording store pg (helm upgrade --reuse-values)"
+  helm upgrade wardyn ./deploy/helm/wardyn --kube-context "${CONTEXT}" --namespace "${NAMESPACE}" --reuse-values --set env.WARDYN_RECORDING_STORE=pg >"${TMPDIR}/helm-upgrade.log" 2>&1 || { tail -30 "${TMPDIR}/helm-upgrade.log" >&2; die "helm upgrade failed"; }
+  kubectl --context "${CONTEXT}" -n "${NAMESPACE}" rollout status deployment/wardyn --timeout=240s || die "wardynd did not come back after recording upgrade"
+  for _ in $(seq 1 60); do curl -sf "${BASE_URL}/healthz" >/dev/null 2>&1 && break; sleep 2; done
+fi
+
+step "checking the recording store is ${want_rec}"
 rec="$(curl -sf -H "Authorization: Bearer ${TOKEN}" "${BASE_URL}/healthz" | jq -r '.components.recording.selected // empty')"
-[[ "${rec}" == "none" ]] || die "components.recording.selected is '${rec}', want none"
+[[ "${rec}" == "${want_rec}" ]] || die "components.recording.selected is '${rec}', want ${want_rec}"
 
 step "building the wardyn CLI"
 go build -o "${TMPDIR}/wardyn" ./cmd/wardyn || die "go build failed"
@@ -98,8 +113,9 @@ RUN_ID="$(jq -r '.id // empty' "${TMPDIR}/run.json" 2>/dev/null)"
 echo "run ${RUN_ID} completed"
 
 read_output() { # FILE: a final capture, retried while the row is still being written
-  local i
-  for i in $(seq 1 30); do
+  local i max_iter=30
+  [[ "${RECORDING}" == "pg" ]] && max_iter=90
+  for i in $(seq 1 "${max_iter}"); do
     w run output "${RUN_ID}" >"$1" 2>"$1.err" && [[ "$(w run output "${RUN_ID}" --json | jq -r .complete)" == "true" ]] && return 0
     sleep 2
   done
@@ -109,6 +125,16 @@ read_output() { # FILE: a final capture, retried while the row is still being wr
 read_output "${TMPDIR}/before.txt" || die "no final output before the restart"
 grep -q "${MARKER}" "${TMPDIR}/before.txt" || die "the marker is not in the output"
 echo "before restart: $(wc -c <"${TMPDIR}/before.txt") bytes"
+
+if [[ "${RECORDING}" == "pg" ]]; then
+  step "asserting JSON output fields (pg mode: source=recording)"
+  w run output "${RUN_ID}" --json >"${TMPDIR}/before.json" 2>"${TMPDIR}/before.json.err" || { cat "${TMPDIR}/before.json.err" >&2; die "wardyn run output --json failed"; }
+  jq -e '.source == "recording" and .incomplete == true and .capture_gap == false and .complete == true' "${TMPDIR}/before.json" >/dev/null || { cat "${TMPDIR}/before.json" >&2; die "pg mode JSON assertions failed (see above)"; }
+else
+  step "asserting JSON output fields (off mode: source=stdout)"
+  w run output "${RUN_ID}" --json >"${TMPDIR}/before.json" 2>"${TMPDIR}/before.json.err" || { cat "${TMPDIR}/before.json.err" >&2; die "wardyn run output --json failed"; }
+  jq -e '.source == "stdout"' "${TMPDIR}/before.json" >/dev/null || { cat "${TMPDIR}/before.json" >&2; die "off mode JSON assertion failed (see above)"; }
+fi
 
 step "restarting wardynd"
 kubectl --context "${CONTEXT}" -n "${NAMESPACE}" rollout restart deployment/wardyn >/dev/null || die "rollout restart failed"
@@ -126,6 +152,11 @@ PG_POD="$(kubectl --context "${CONTEXT}" -n "${NAMESPACE}" get pod -l app=postgr
 psql_q() { kubectl --context "${CONTEXT}" -n "${NAMESPACE}" exec "${PG_POD}" -- psql -U wardyn -d wardyn -tA -c "$1"; }
 psql_q "select run_id, source, incomplete, capture_gap, mask_scope, length(output) as bytes, captured_at is not null as final from run_outputs where run_id = '${RUN_ID}'" | tee "${TMPDIR}/row.txt"
 [[ -s "${TMPDIR}/row.txt" ]] || die "no run_outputs row for the run"
+if [[ "${RECORDING}" == "pg" ]]; then
+  src="$(psql_q "select source from run_outputs where run_id = '${RUN_ID}'")"
+  [[ "${src}" == "recording" ]] || die "pg mode: run_outputs.source is '${src}', want recording"
+  echo "run_outputs.source: ${src}"
+fi
 leaked="$(psql_q "select count(*) from run_outputs where run_id = '${RUN_ID}' and position(convert_to('${SECRET_VALUE}', 'UTF8') in output) > 0")"
 marked="$(psql_q "select count(*) from run_outputs where run_id = '${RUN_ID}' and position(convert_to('${MARKER}', 'UTF8') in output) > 0")"
 echo "rows holding the secret: ${leaked}; rows holding the marker: ${marked}"

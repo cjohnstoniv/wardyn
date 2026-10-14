@@ -7,11 +7,14 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"maps"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -30,6 +33,78 @@ import (
 func mayEnterRun(run types.AgentRun, principal string, superAdmin bool) bool {
 	return (run.CreatedBy != "" && principal != "" && run.CreatedBy == principal) ||
 		(superAdmin && run.OperatorOwned)
+}
+
+// sponsorEntry is the "entry" value of the audit rows (session.attach, ui.open) of a service identity's
+// sponsor entering one of its runs.
+const sponsorEntry = "sponsor"
+
+// serviceOfRun is the name of the service identity that created run.
+func serviceOfRun(run types.AgentRun) (string, bool) {
+	return strings.CutPrefix(run.CreatedBy, types.ServicePrincipalPrefix)
+}
+
+// sponsoredService is the service identity a session that passed the entry gate on run entered as the sponsor of,
+// or "": a service identity's run is entered only through the sponsor arm (mayEnterRunOrSponsor).
+func sponsoredService(run types.AgentRun) string {
+	name, _ := serviceOfRun(run)
+	return name
+}
+
+// sponsorEntryData is the data a sponsor's entry rows add to their own: the service identity and
+// entry=sponsor. A service identity's run is entered only through the sponsor arm (its owner is a
+// principal no session or key holds), so the run alone says which entry this is; nil for any other run.
+func sponsorEntryData(run types.AgentRun) map[string]any {
+	name, ok := serviceOfRun(run)
+	if !ok {
+		return nil
+	}
+	return map[string]any{"service_identity": name, "entry": sponsorEntry}
+}
+
+// withSponsorEntry adds sponsorEntryData to data, in place, and returns it.
+func withSponsorEntry(run types.AgentRun, data map[string]any) map[string]any {
+	maps.Copy(data, sponsorEntryData(run))
+	return data
+}
+
+// sponsorStillEntitled is the structural part of the sponsor arm of entry: principal is still the current
+// sponsor of the service identity that created run, the identity is active, and it has not been
+// re-sponsored since `since` (the ticket's or the session's authority time). Asked at ticket mint, ticket
+// redemption and every UI re-check. The grant half (service_attach) is asked at the mint only: a withdrawn
+// grant refuses the next ticket and ends nothing already open. A lookup that cannot answer is an error.
+func (s *Server) sponsorStillEntitled(ctx context.Context, run types.AgentRun, principal string, since time.Time) (bool, error) {
+	name, ok := serviceOfRun(run)
+	if !ok || principal == "" || isServicePrincipal(principal) {
+		return false, nil
+	}
+	ss, ok := s.cfg.Store.(store.ServiceIdentityStore)
+	if !ok {
+		return false, nil
+	}
+	still, err := ss.ServiceStillSponsored(ctx, name, principal, since)
+	if errors.Is(err, store.ErrNotFound) {
+		return false, nil
+	}
+	return still, err
+}
+
+// mayEnterRunOrSponsor is mayEnterRun for a redeemed ticket or an open UI session, with the sponsor arm: a
+// member-role principal who is still the sponsor of the service identity that owns run. A super admin's
+// stamp never takes the arm (a sponsor's ticket is stamped member whatever the minter's role, so the run's
+// own doors always run). A store failure refuses and is logged.
+func (s *Server) mayEnterRunOrSponsor(ctx context.Context, run types.AgentRun, principal string, superAdmin bool, since time.Time) bool {
+	if mayEnterRun(run, principal, superAdmin) {
+		return true
+	}
+	if superAdmin {
+		return false
+	}
+	ok, err := s.sponsorStillEntitled(ctx, run, principal, since)
+	if err != nil {
+		slog.ErrorContext(ctx, "wardynd: sponsor entry check failed; refusing", "run_id", run.ID, "err", err)
+	}
+	return ok && err == nil
 }
 
 // runOwnerOnlyReason is the audit reason an entry refusal carries on the lanes
@@ -99,24 +174,31 @@ func (s *Server) redeemAttachTicket(ctx context.Context, tok string, runID uuid.
 	if !ok || ta.authorizedAt.IsZero() {
 		return ticketActor{}, verdictInvalid, nil
 	}
+	expires, v := s.ticketAuthority(ctx, ta, runID)
+	ta.grantExpires = expires
+	return ta, v, nil
+}
+
+// ticketAuthority asks whether the authority a redeemed ticket carries still holds: the revocation cuts
+// (session-only ones included) against the ticket's own issue time and sequence, never the redemption's,
+// and the portal grant it was minted through. Redemption asks it once; an open terminal socket asks it
+// again on every authority check (attach_authority.go). It returns the grant's expiry for a ticket
+// minted through a portal.
+func (s *Server) ticketAuthority(ctx context.Context, ta ticketActor, runID uuid.UUID) (time.Time, entryVerdict) {
 	if s.cfg.SessionRevocations != nil {
-		revoked, err := s.cfg.SessionRevocations.IsSessionRevoked(ctx, ta.principal, ta.email, ta.authorizedAt)
+		revoked, err := oidc.IsRevoked(ctx, s.cfg.SessionRevocations, ta.principal, ta.email, oidc.Issue{At: ta.authorizedAt, Seq: ta.revSeq})
 		if err != nil {
 			slog.ErrorContext(ctx, "wardynd: attach ticket revocation lookup failed", "run_id", runID, "err", err)
-			return ta, verdictRevocationUnavailable, nil
+			return time.Time{}, verdictRevocationUnavailable
 		}
 		if revoked {
-			return ta, verdictRevoked, nil
+			return time.Time{}, verdictRevoked
 		}
 	}
 	if ta.via != nil {
-		expires, v := s.delegationLive(ctx, *ta.via)
-		if v != verdictOK {
-			return ta, v, nil
-		}
-		ta.grantExpires = expires
+		return s.delegationLive(ctx, *ta.via)
 	}
-	return ta, verdictOK, nil
+	return time.Time{}, verdictOK
 }
 
 // delegationLive asks whether the portal grant a session came through still
@@ -172,7 +254,9 @@ func refuseTicketResponse(w http.ResponseWriter, v entryVerdict) {
 // audit row, then the response.
 func (s *Server) refuseAttachTicket(w http.ResponseWriter, r *http.Request, runID uuid.UUID, ta ticketActor, v entryVerdict) {
 	if v == verdictInvalid {
-		s.auditAttachDenied(r, runID, "unknown", "invalid, expired, or already-used attach ticket")
+		if s.authFailedAllowed() {
+			s.auditAttachDenied(r, runID, "unknown", "invalid, expired, or already-used attach ticket")
+		}
 	} else if s.authFailedLimiter.allow(s.cfg.Now()) {
 		s.auditAttachRefused(r, runID, ta.principal, "ticket", string(v), ta.via)
 	}
@@ -183,8 +267,7 @@ func (s *Server) refuseAttachTicket(w http.ResponseWriter, r *http.Request, runI
 func (s *Server) refuseUITicket(w http.ResponseWriter, runID uuid.UUID, app string, ta ticketActor, v entryVerdict) {
 	switch {
 	case v == verdictInvalid:
-		s.auditUI(&runID, types.ActorHuman, "unknown", "ui.authorize", app, "denied",
-			map[string]any{"reason": "invalid, expired, or already-used ticket"})
+		s.auditUIRefusedBounded(runID, app, map[string]any{"reason": "invalid, expired, or already-used ticket"})
 	case s.authFailedLimiter.allow(s.cfg.Now()):
 		s.auditUI(&runID, types.ActorHuman, ta.principal, "ui.authorize", app, "denied",
 			ta.withVia(map[string]any{"reason": string(v)}))

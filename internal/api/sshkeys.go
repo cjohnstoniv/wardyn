@@ -154,8 +154,13 @@ func (s *Server) handleAddSSHKey(w http.ResponseWriter, r *http.Request) {
 	}
 	// The admission stamp also closes an INSERT that races this last check:
 	// SSH auth and new channels compare it against the same session cutoff.
+	issue, err := s.mintIssue(r.Context(), principal, authorizedAt)
+	if err != nil {
+		writeServerError(w, r, "add ssh key", err)
+		return
+	}
 	if s.cfg.SessionRevocations != nil {
-		revoked, err := s.cfg.SessionRevocations.IsSessionRevoked(r.Context(), principal, oidcEmailFromContext(r.Context()), authorizedAt)
+		revoked, err := s.admittedRevoked(r.Context(), principal, authorizedAt)
 		if err != nil {
 			writeServerError(w, r, "add ssh key", err)
 			return
@@ -178,6 +183,7 @@ func (s *Server) handleAddSSHKey(w http.ResponseWriter, r *http.Request) {
 		RoleCheckedAt: &authorizedAt,
 		Capped:        capped,
 		CreatedAt:     authorizedAt,
+		RevSeq:        issue.Seq,
 	}
 	added, err := s.cfg.Store.AddSSHKey(guardOwner(r.Context(), principal), k)
 	if errors.Is(err, store.ErrConflict) {

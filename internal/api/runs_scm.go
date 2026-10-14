@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/url"
+	"slices"
 	"strings"
 	"unicode"
 
@@ -234,6 +235,63 @@ func repoCloneURL(slug string) string {
 	return ""
 }
 
+// caseInsensitiveForge reports whether cloneURL is on a forge known to match
+// repository paths without regard to case: GitHub and Azure DevOps Services.
+func caseInsensitiveForge(cloneURL string) bool {
+	t, ok := parseCloneTarget(cloneURL, nil)
+	if !ok {
+		return false
+	}
+	host := canonicalProviderHost(t.host)
+	return host == "github.com" || host == "dev.azure.com" || strings.HasSuffix(host, ".visualstudio.com")
+}
+
+// repoCloneTarget is where r clones inside the sandbox: its own target, else
+// /home/agent/work/<its directory name>. ok is false for a repo with no clone
+// URL. buildRepoRecords, a workspace read's clone_target and the run's
+// attachments all derive the path here, so the one Review shows is the one the
+// clone takes.
+func repoCloneTarget(r types.WorkspaceRepo) (string, bool) {
+	_, _, dest, ok := repoCloneSpec(r.Repo, r.Target)
+	// A target or ref that cannot ride the clone record is a clone buildRepoRecords drops.
+	return dest, ok && repoFieldSafe(dest) && repoFieldSafe(strings.TrimSpace(r.Ref))
+}
+
+// repoCloneSpec is the clone slug, URL and destination of one repo locator.
+// A FULL github URL — any spelling the control plane accepts: http://,
+// trailing slash, .git suffix, :port, mixed case — collapses to the one shape
+// agent-run's url.<broker>.insteadOf rewrite prefix-matches
+// ("https://github.com/<org>/<repo>"); any other spelling would dial github.com
+// directly, a route a brokered run does not have. A BARE slug is already this
+// shape and is left untouched, casing included. Deliberate side effect: the key
+// is lowercased, so a full URL's default dest is lowercased too
+// (~/work/hello-world). That is what lets buildRepoRecords' dest dedup SEE two
+// spellings of one repo as one; resolve_workdir finds the repo by scanning for
+// .git, never by name.
+func repoCloneSpec(slug, dest string) (key, url, target string, ok bool) {
+	const workRoot = "/home/agent/work"
+	slug = strings.TrimSpace(slug)
+	if slug == "" || !repoFieldSafe(slug) {
+		return "", "", "", false
+	}
+	if url = repoCloneURL(slug); url == "" {
+		return "", "", "", false
+	}
+	if strings.Contains(slug, "://") {
+		if key := gitBrokerKeyFromSlug(slug); key != "" {
+			slug, url = key, "https://github.com/"+key+".git"
+		}
+	}
+	if dest == "" {
+		name := repoDirName(strings.TrimSuffix(url[strings.LastIndex(url, "/")+1:], ".git"))
+		if name == "" {
+			name = "repo"
+		}
+		dest = workRoot + "/" + name
+	}
+	return slug, url, dest, true
+}
+
 // buildRepoRecords assembles the WARDYN_REPOS env value: newline-delimited,
 // tab-separated <url>\t<dest>\t<slug>\t<ref> records the agent-run entrypoint
 // iterates to clone each repo: the legacy run.Repo first (default dest, no
@@ -247,49 +305,30 @@ func repoCloneURL(slug string) string {
 // taken directory. Run create appends them to the 201's warnings[]; dispatch
 // discards them (the run already exists; the slog.Warn is the record there).
 func buildRepoRecords(legacyRepo string, repos []types.WorkspaceRepo) (string, []string) {
-	const workRoot = "/home/agent/work"
 	seenDest := map[string]string{} // dest -> the slug that took it
 	var warnings []string
 	var b strings.Builder
 	add := func(slug, dest, ref string) {
-		slug = strings.TrimSpace(slug)
-		if slug == "" || !repoFieldSafe(slug) {
-			return
-		}
 		ref = strings.TrimSpace(ref)
 		if ref != "" && !repoFieldSafe(ref) {
+			slog.Warn("wardynd: repo ref is not a safe clone field; dropping the repo",
+				slog.String("slug", slug), slog.String("err", fmt.Sprintf(repoField400Charset, "ref")))
 			return
 		}
-		url := repoCloneURL(slug)
-		if url == "" {
+		if t := strings.TrimSpace(slug); t != "" && !repoFieldSafe(t) {
+			slog.Warn("wardynd: repo locator is not a safe clone field; dropping the repo",
+				slog.String("err", fmt.Sprintf(repoField400Charset, "repo")))
 			return
 		}
-		// A FULL github URL — any spelling the control plane accepts: http://,
-		// trailing slash, .git suffix, :port, mixed case — collapses to the one
-		// shape agent-run's url.<broker>.insteadOf rewrite prefix-matches
-		// ("https://github.com/<org>/<repo>"); any other spelling would dial
-		// github.com directly, a route a brokered run does not have. A BARE slug is
-		// already this shape and is left untouched, casing included.
-		// Deliberate side effect: the key is lowercased, so a full URL's default
-		// dest is lowercased too (~/work/hello-world). That is what lets the dest
-		// dedup below SEE two spellings of one repo as one; resolve_workdir finds
-		// the repo by scanning for .git, never by name.
-		if strings.Contains(slug, "://") {
-			if key := gitBrokerKeyFromSlug(slug); key != "" {
-				slug, url = key, "https://github.com/"+key+".git"
-			}
+		slug, url, dest, ok := repoCloneSpec(slug, dest)
+		if !ok {
+			return
 		}
-		if dest == "" {
-			name := repoDirName(strings.TrimSuffix(url[strings.LastIndex(url, "/")+1:], ".git"))
-			if name == "" {
-				name = "repo"
-			}
-			dest = workRoot + "/" + name
-		}
+		terr := runner.ValidateAuthoredTarget(dest)
 		if !repoFieldSafe(dest) {
-			return
+			terr = fmt.Errorf(repoField400Charset, "target")
 		}
-		if terr := runner.ValidateAuthoredTarget(dest); terr != nil {
+		if terr != nil {
 			// Loud, for the same reason the dest-collision skip below is, and one
 			// the write door cannot cover: the reserved-target rule sits on POST
 			// /policies only (validatePolicySpec → 400), and resolvePolicy hands
@@ -339,11 +378,30 @@ func buildRepoRecords(legacyRepo string, repos []types.WorkspaceRepo) (string, [
 		b.WriteByte('\t')
 		b.WriteString(ref)
 	}
-	add(legacyRepo, "", "") // legacy single repo → default dest, no ref
+	// The legacy single repo → default dest, no ref; skipped when it names one
+	// of the workspace repos (a workspace launch labels the run with its first
+	// repo), so that repo clones once, at its own target and ref. On a forge
+	// whose paths are case-insensitive a label differing only in case is that
+	// repo too; elsewhere case makes a different repository.
+	if _, _, _, ok := repoCloneSpec(legacyRepo, ""); ok && !legacyRepoNamed(legacyRepo, repos) {
+		add(legacyRepo, "", "")
+	}
 	for _, wr := range repos {
 		add(wr.Repo, wr.Target, wr.Ref)
 	}
 	return b.String(), warnings
+}
+
+// legacyRepoNamed reports whether a structured workspace repo names the run's
+// own repo, so that record's target and ref govern its clone. On a forge whose
+// paths are case-insensitive a label differing only in case is that repo too;
+// elsewhere case makes a different repository.
+func legacyRepoNamed(legacyRepo string, repos []types.WorkspaceRepo) bool {
+	key, url, _, ok := repoCloneSpec(legacyRepo, "")
+	return ok && slices.ContainsFunc(repos, func(wr types.WorkspaceRepo) bool {
+		k, _, _, _ := repoCloneSpec(wr.Repo, "")
+		return k == key || caseInsensitiveForge(url) && strings.EqualFold(k, key)
+	})
 }
 
 // injectionRuleFromScope decodes an api_key grant scope into its proxy-side

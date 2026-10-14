@@ -97,6 +97,13 @@ func (l *SweeperLeader) Run(ctx context.Context) {
 // lead makes one attempt. It returns "led" after a term that ended, or why the
 // attempt did not lead.
 func (l *SweeperLeader) lead(ctx context.Context) string {
+	// Probe on the pool first: a follower must not dial a dedicated session
+	// every retry just to be told the leader has it. A probe that errors falls
+	// through to the dedicated try, which reports the real fault — the probe
+	// can only ever save the dial, never turn a working election into silence.
+	if held, err := AdvisoryLockHeld(ctx, l.pool, SweeperLeaderLockKey); err == nil && held {
+		return "another replica holds the lock"
+	}
 	conn, release, ok, err := TryAdvisoryLockDedicated(ctx, l.pool, SweeperLeaderLockKey)
 	if err != nil {
 		return "lock unavailable: " + err.Error()

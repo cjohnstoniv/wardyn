@@ -167,11 +167,13 @@ func leqWorkspaceRepos(a, b []types.WorkspaceRepo) bool {
 
 // leqLLMInspection holds when a inspects wherever b does and does so in the
 // same way: dropping an inspection b names is a loosening, and two differing
-// inspections are not comparable.
+// inspections are not comparable. Adding one where b has none narrows only
+// while it names no detector sidecar: a sidecar is a host the proxy posts
+// spans of model traffic to, so adding one is never proven narrower.
 func leqLLMInspection(a, b *types.LLMInspectionSpec) bool {
 	switch {
 	case b == nil:
-		return true
+		return a == nil || strings.TrimSpace(a.DetectorSidecarURL) == ""
 	case a == nil:
 		return false
 	}
@@ -179,8 +181,13 @@ func leqLLMInspection(a, b *types.LLMInspectionSpec) bool {
 }
 
 // leqUIApps holds when every app of a is a (name, port) app of b serving the
-// same path.
+// same path. An empty a is not within a b that names apps: an empty ceiling
+// list is no opinion to Clamp (a run may declare any app), and deny_ui_apps is
+// the limit that removes them.
 func leqUIApps(a, b []types.UIApp) bool {
+	if len(a) == 0 && len(b) > 0 {
+		return false
+	}
 	for _, app := range a {
 		if !slices.ContainsFunc(b, func(x types.UIApp) bool {
 			return x.Name == app.Name && x.Port == app.Port && x.PathOrRoot() == app.PathOrRoot()
@@ -261,13 +268,20 @@ func leqPush(a, b *types.PushRulesSpec) bool {
 }
 
 func leqLimits(a, b types.GovernanceLimits) bool {
+	if a.LocalSelfDefinedComponents && !b.LocalSelfDefinedComponents {
+		return false
+	}
 	for _, p := range [][2]bool{
 		{a.DenyTaskModeExec, b.DenyTaskModeExec}, {a.DenyInteractive, b.DenyInteractive},
 		{a.DenyUIApps, b.DenyUIApps}, {a.DenyUserDrive, b.DenyUserDrive},
+		{a.DenyMemberDrives, b.DenyMemberDrives},
 	} {
 		if p[1] && !p[0] { // a denial the base keeps must stay
 			return false
 		}
+	}
+	if slices.ContainsFunc(b.DenyPlacements, func(p types.Placement) bool { return !slices.Contains(a.DenyPlacements, p) }) {
+		return false // a placement denial the base keeps must stay
 	}
 	for _, p := range [][2]int{
 		{a.MaxConcurrentRuns, b.MaxConcurrentRuns}, {a.MaxCPUMillis, b.MaxCPUMillis},
@@ -281,7 +295,7 @@ func leqLimits(a, b types.GovernanceLimits) bool {
 	return leqRubric(a.AutonomyRubric, b.AutonomyRubric)
 }
 
-// leqRubric holds when a caps every posture b caps, at the same level or lower.
+// leqRubric holds when a caps every posture b caps, at the same level or lower, and keeps b's guardrail lock.
 func leqRubric(a, b *types.AutonomyRubric) bool {
 	levels := func(r *types.AutonomyRubric) []types.AutonomyLevel {
 		if r == nil {
@@ -292,6 +306,9 @@ func leqRubric(a, b *types.AutonomyRubric) bool {
 			r.SecretsPowerful, r.SecretsBaseline, r.SecretsNone,
 			r.ConfinementCC1, r.ConfinementCC2, r.ConfinementCC3,
 		}
+	}
+	if b != nil && b.AgentGuardrailLocks && (a == nil || !a.AgentGuardrailLocks) {
+		return false
 	}
 	la, lb := levels(a), levels(b)
 	for i := range la {

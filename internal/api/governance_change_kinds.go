@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 
 	"github.com/google/uuid"
@@ -91,17 +92,23 @@ type heldProfileWrite struct {
 //   - metadata only: every stored field other than the name is equal to the current row, including the
 //     base, the overlay and the overlay limits;
 //   - narrowing: the new effective profile is Leq the current effective one (composer.Leq, which
-//     carries the full git_pat dominance contract).
+//     carries the full git_pat dominance contract), and its member CPU and memory cap is no higher
+//     (memberCapOf).
 //
 // A write that changes the contact is held even when Leq holds: a contact is who a refused person is
-// told to ask, and nothing proves a new one is not a redirect. Nothing else is exempt.
-func (s *Server) profileWriteExempt(all []types.GovernanceProfile, p types.GovernanceProfile, res *ResolvedProfile) bool {
+// told to ask, and nothing proves a new one is not a redirect. So is a rename that can change which
+// profile a person is given (renameMaySelect), whichever proof would otherwise admit it. Nothing else
+// is exempt.
+func (s *Server) profileWriteExempt(ctx context.Context, all []types.GovernanceProfile, p types.GovernanceProfile, res *ResolvedProfile) bool {
 	byID := profilesByID(all)
 	cur, exists := byID[p.ID]
 	if !exists || res == nil {
 		return false
 	}
 	if !sameJSON(nonZeroContact(cur.Contact), nonZeroContact(profileContactAfter(cur, p))) {
+		return false
+	}
+	if cur.Name != p.Name && s.renameMaySelect(ctx, p.ID) {
 		return false
 	}
 	if sameJSON(cur.Ceiling, p.Ceiling) && sameJSON(cur.Limits, p.Limits) && sameJSON(cur.BaseProfileID, p.BaseProfileID) &&
@@ -116,7 +123,35 @@ func (s *Server) profileWriteExempt(all []types.GovernanceProfile, p types.Gover
 	if err != nil {
 		return false
 	}
-	return composer.Leq(res.Ceiling, curRes.Ceiling, res.Limits, curRes.Limits)
+	// Leq reads a maximum set where none was as tighter; the member cap reads it as the size, so the
+	// cap is compared too.
+	return composer.Leq(res.Ceiling, curRes.Ceiling, res.Limits, curRes.Limits) &&
+		len(memberCapRaises(s.resolvedMemberCap(res), s.resolvedMemberCap(curRes))) == 0
+}
+
+// renameMaySelect reports whether renaming profile id could change which profile a person resolves
+// to. The resolver breaks a tie between two GROUP assignments of equal priority by profile name
+// (store's subjectPrecedence), and a person may be in any two groups, so a rename can move the tie
+// whenever a group assignment of id shares its priority with a group assignment of another profile.
+// The other tiers hold at most one matching row per person. It does not try to tell whether this
+// rename actually reorders the pair: the database's collation decides that order, not Go's. A list
+// that cannot be read answers true, so the write is held.
+func (s *Server) renameMaySelect(ctx context.Context, id uuid.UUID) bool {
+	all, err := governanceAssignmentsFor(ctx, s)
+	if err != nil {
+		return true
+	}
+	for _, a := range all {
+		if a.SubjectType != types.CapabilitySubjectGroup || a.ProfileID != id {
+			continue
+		}
+		if slices.ContainsFunc(all, func(b types.GovernanceAssignment) bool {
+			return b.SubjectType == types.CapabilitySubjectGroup && b.ProfileID != id && b.Priority == a.Priority
+		}) {
+			return true
+		}
+	}
+	return false
 }
 
 // profileContactAfter is the contact the row holds once p is written over cur.
@@ -603,4 +638,29 @@ func (s *Server) checkUserTypeSubject(ctx context.Context, q store.Querier, subj
 		return writeRefusal(http.StatusBadRequest, reasonAccessUnknownUserType, "%s", accessUnknownUserType(subject))
 	}
 	return err
+}
+
+// assignmentsSnapshotKey carries the governance assignments a profile write read before its
+// transaction opened. The write runs its exemption proof inside that transaction, so reading the
+// assignments there would take a second pool connection while the write holds one.
+type assignmentsSnapshotKey struct{}
+
+type assignmentsSnapshot struct {
+	all []types.GovernanceAssignment
+	err error
+}
+
+// withGovernanceAssignments reads the assignments once, outside any transaction, for a later
+// renameMaySelect on the returned context. A read error is carried too, so the rename is held.
+func (s *Server) withGovernanceAssignments(ctx context.Context) context.Context {
+	all, err := s.cfg.Store.ListGovernanceAssignments(ctx)
+	return context.WithValue(ctx, assignmentsSnapshotKey{}, assignmentsSnapshot{all: all, err: err})
+}
+
+// governanceAssignmentsFor is the snapshot withGovernanceAssignments took, or a fresh read.
+func governanceAssignmentsFor(ctx context.Context, s *Server) ([]types.GovernanceAssignment, error) {
+	if snap, ok := ctx.Value(assignmentsSnapshotKey{}).(assignmentsSnapshot); ok {
+		return snap.all, snap.err
+	}
+	return s.cfg.Store.ListGovernanceAssignments(ctx)
 }

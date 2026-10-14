@@ -65,8 +65,11 @@ func TestRecoverySetByDeploymentDocumented(t *testing.T) {
 		}
 	}
 
-	// Honest limits: not rehearsed, and the desktop's age.key stays out.
-	for _, want := range []string{"No shipped tool rehearses a restore", "not in the set, deliberately", "wardyn.drive=<id>", "fresh enrolment token"} {
+	// Honest limits. The old pin, "No shipped tool rehearses a restore", kept the section from implying a
+	// restore had been validated end to end. The tool now exists, so the pin is the sentence that keeps
+	// the claim honest: only a rehearsal of the operator's own set validates it. The desktop's age.key
+	// stays out of the set.
+	for _, want := range []string{"Only `wardynd -recovery-rehearse` rehearses a restore, and only for the set you run it on", "not in the set, deliberately", "wardyn.drive=<id>", "fresh enrolment token"} {
 		if !strings.Contains(strings.ToLower(sec), strings.ToLower(want)) {
 			t.Errorf("recovery-set section never says %q", want)
 		}

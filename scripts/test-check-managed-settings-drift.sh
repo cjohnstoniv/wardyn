@@ -33,19 +33,38 @@ fake_cli() {
         printf '{\n  "name": "@anthropic-ai/claude-code-linux-%s",\n  "version": "%s"\n}\n' "$arch" "$v" > "$d/package.json"
     done
 }
-# A docker that reports the permissionMode a CLI honouring the mounted managed-settings.json would:
-# its defaultMode, or $FAKE_MODE when set (a CLI that ignores the file).
+# A docker that reports what a CLI honouring the mounted managed-settings.json would. Mode runs report the
+# document's defaultMode, or $FAKE_MODE (a CLI that ignores the file); a --permission-mode bypassPermissions run
+# reports the bypass mode when $FAKE_BYPASS is set (a CLI ignoring disableBypassPermissionsMode); a
+# --permission-mode manual run reports $FAKE_MANUAL_MODE (default: "default"). A hook run touches the marker
+# unless the file sets allowManagedHooksOnly, or always when $FAKE_HOOK_FIRES is set; it never touches the
+# marker when $FAKE_NO_HOOK is set (a CLI that runs no repository hook at all, control run included). Every
+# init event lists the tools Bash, Read and WebFetch, less those the file's permissions.deny names, unless
+# $FAKE_DENY_IGNORED is set (a CLI that ignores the deny list).
 mkdir -p "$TMP/bin"
 cat > "$TMP/bin/docker" <<'FAKE'
 #!/bin/sh
-for a in "$@"; do case "$a" in *:/etc/claude-code:ro) d="${a%%:*}" ;; esac; done
-mode="$(sed -nE 's/^[[:space:]]*"defaultMode":[[:space:]]*"([^"]*)".*/\1/p' "$d/managed-settings.json" | head -1)"
-echo "{\"type\":\"system\",\"subtype\":\"init\",\"permissionMode\":\"${FAKE_BYPASS_MODE:-${FAKE_MODE:-$mode}}\"}"
+for a in "$@"; do case "$a" in *:/etc/claude-code:ro) d="${a%%:*}" ;; *:/marker) m="${a%%:*}" ;; bypassPermissions) by=1 ;; manual) man=1 ;; esac; done
+if [ -n "${m:-}" ]; then
+    [ -z "${FAKE_NO_HOOK:-}" ] || exit 1
+    if [ -z "${d:-}" ] || [ -n "${FAKE_HOOK_FIRES:-}" ] || ! grep -q '"allowManagedHooksOnly": true' "$d/managed-settings.json"; then touch "$m/fired"; fi
+    exit 1
+fi
+mode=""; tools=""
+for t in Bash Read WebFetch; do
+    if [ -n "${d:-}" ] && [ -z "${FAKE_DENY_IGNORED:-}" ] && sed -n '/"deny": \[/,/\]/p' "$d/managed-settings.json" | grep -q "\"$t\""; then continue; fi
+    tools="$tools${tools:+,}\"$t\""
+done
+[ -z "${d:-}" ] || mode="$(sed -nE 's/^[[:space:]]*"defaultMode":[[:space:]]*"([^"]*)".*/\1/p' "$d/managed-settings.json" | head -1)"
+mode="${FAKE_MODE:-$mode}"
+[ -z "${by:-}" ] || [ -z "${FAKE_BYPASS:-}" ] || mode=bypassPermissions
+[ -z "${man:-}" ] || mode="${FAKE_MANUAL_MODE:-default}"
+echo "{\"type\":\"system\",\"subtype\":\"init\",\"permissionMode\":\"$mode\",\"tools\":[$tools]}"
 exit 1
 FAKE
 chmod +x "$TMP/bin/docker"
 probe() { PATH="$TMP/bin:$PATH" CLAUDE_CODE_DIR="$TMP/cli-x64" CLAUDE_CODE_DIR_ARM64="$TMP/cli-arm64" "$TMP/scripts/check-managed-settings-drift.sh" 2>&1; }
-all=(permissions defaultMode disableBypassPermissionsMode disableAutoMode allowManagedHooksOnly allowManagedPermissionRulesOnly /etc/claude-code managed-settings.json)
+all=(permissions defaultMode disableBypassPermissionsMode disableAutoMode allowManagedHooksOnly allowManagedPermissionRulesOnly /etc/claude-code managed-settings.json allow ask deny)
 
 # 1. Nothing drifted => pass.
 fake_cli "$pin" "${all[@]}"
@@ -57,6 +76,12 @@ fake_cli "$pin" permissions defaultMode disableBypassPermissionsMode disableAuto
 if out="$(probe)"; then fail "a CLI missing allowManagedPermissionRulesOnly must FAIL"; fi
 grep -q "DRIFT: managed-settings key 'allowManagedPermissionRulesOnly'" <<<"$out" || fail "drift must name the missing key; got: $out"
 echo "ok  a missing key fails and is named"
+
+# 2b. A permission list the attended-rules documents write gone => fail naming it.
+fake_cli "$pin" "${all[@]:0:8}" allow deny
+if out="$(probe)"; then fail "a CLI missing the ask list must FAIL"; fi
+grep -q "DRIFT: managed-settings key 'ask'" <<<"$out" || fail "drift must name the missing ask list; got: $out"
+echo "ok  a missing permission list fails and is named"
 
 # 3. The file name gone => fail naming it.
 fake_cli "$pin" "${all[@]:0:7}"
@@ -93,17 +118,43 @@ echo "ok  a reported mode that differs from the file fails"
 
 # 8. Bypass not locked under --permission-mode bypassPermissions => fail. The fake answers the plain
 # run correctly and the bypass run with the bypass mode, as a CLI ignoring disableBypassPermissionsMode would.
-cat > "$TMP/bin/docker" <<'FAKE'
-#!/bin/sh
-for a in "$@"; do case "$a" in *:/etc/claude-code:ro) d="${a%%:*}" ;; bypassPermissions) by=1 ;; esac; done
-mode="$(sed -nE 's/^[[:space:]]*"defaultMode":[[:space:]]*"([^"]*)".*/\1/p' "$d/managed-settings.json" | head -1)"
-[ -z "${by:-}" ] || mode=bypassPermissions
-echo "{\"type\":\"system\",\"subtype\":\"init\",\"permissionMode\":\"$mode\"}"
-exit 1
-FAKE
-if out="$(probe)"; then fail "a CLI that lets --permission-mode bypassPermissions through must FAIL"; fi
+fake_cli "$pin" "${all[@]}"
+if out="$(FAKE_BYPASS=1 probe)"; then fail "a CLI that lets --permission-mode bypassPermissions through must FAIL"; fi
 grep -q "bypass lock is not honoured" <<<"$out" || fail "an unlocked bypass must be named; got: $out"
 echo "ok  an unlocked bypass fails"
+
+# 8b. A launch flag that does not beat the managed defaultMode => fail naming the document. The hold lane's
+# --permission-mode manual would otherwise run under acceptEdits.
+if out="$(FAKE_MANUAL_MODE=acceptEdits probe)"; then fail "a CLI where the managed defaultMode beats --permission-mode manual must FAIL"; fi
+grep -q "managed-settings.json: --permission-mode manual yields 'acceptEdits'" <<<"$out" || fail "a manual-mode override must be named; got: $out"
+echo "ok  a managed mode that beats --permission-mode manual fails"
+
+# 8c. A CLI whose repository hook never fires => the control run cannot fire either, and the probe must say
+# so. Without this the two rows below pass whatever the harness does: an allowManagedHooksOnly assertion
+# proven by a hook that never runs proves nothing.
+if out="$(FAKE_NO_HOOK=1 probe)"; then fail "a CLI whose repository hook never fires must FAIL the control run"; fi
+grep -q "the hook check would pass vacuously" <<<"$out" || fail "a control run that cannot fire must be named; got: $out"
+echo "ok  a control run that never fires the hook fails"
+
+# 8d. A hook that still fires under allowManagedHooksOnly => fail naming the document.
+if out="$(FAKE_HOOK_FIRES=1 probe)"; then fail "a CLI that runs a repository hook despite allowManagedHooksOnly must FAIL"; fi
+grep -q "the hook check would pass vacuously" <<<"$out" && fail "the control run (no managed file) must fire the hook; got: $out"
+grep -q "L2-locked-managed-settings.json: a repository hook still fired" <<<"$out" || fail "a fired hook must be named; got: $out"
+echo "ok  a repository hook that fires under allowManagedHooksOnly fails"
+
+# 8e. No bypass-launchable document sets allowManagedHooksOnly => fail: the hook check would prove nothing.
+cp -r "$TMP/internal/agentpolicy" "$TMP/internal/agentpolicy.bak"
+rm "$TMP/internal/agentpolicy/testdata/L2-locked-managed-settings.json"
+if out="$(probe)"; then fail "no bypass-launchable document with allowManagedHooksOnly must FAIL"; fi
+grep -q "the hook check has nothing to prove" <<<"$out" || fail "an empty hook check must be named; got: $out"
+rm -r "$TMP/internal/agentpolicy" && mv "$TMP/internal/agentpolicy.bak" "$TMP/internal/agentpolicy"
+echo "ok  a hook check with no document to prove fails"
+
+# 8f. A CLI that ignores an attended-rules document's deny list => fail naming the document.
+fake_cli "$pin" "${all[@]}"
+if out="$(FAKE_DENY_IGNORED=1 probe)"; then fail "a CLI that still lists a denied tool must FAIL"; fi
+grep -q "attended-rules/L0.json: Claude Code $pin still lists 'Bash'" <<<"$out" || fail "an ignored deny list must be named; got: $out"
+echo "ok  an ignored deny list fails"
 
 # 9. An unpinned Dockerfile (a channel) => fail before anything is installed. Last: it leaves the copy unpinned.
 fake_cli "$pin" "${all[@]}"

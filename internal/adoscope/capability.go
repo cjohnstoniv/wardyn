@@ -94,8 +94,10 @@ const (
 	// package version.
 	CapPackagingWrite Capability = "packaging_write"
 	// CapPackagingManage is deleting or unpublishing a package version and
-	// creating, changing or deleting a feed — Azure DevOps serves these only
-	// under vso.packaging_manage.
+	// creating, changing or deleting a feed. Wardyn requests
+	// vso.packaging_manage for it, but that scope does not fence every delete
+	// (a package batch deletes under vso.packaging_write): the classifier
+	// holds the line.
 	CapPackagingManage Capability = "packaging_manage"
 	// CapTestRead is a read of test plans, runs and results.
 	CapTestRead Capability = "test_read"

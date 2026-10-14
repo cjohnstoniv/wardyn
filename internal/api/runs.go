@@ -5,13 +5,18 @@ package api
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/placement"
+	"github.com/cjohnstoniv/wardyn/internal/runnerpool"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/pkg/client"
@@ -34,6 +39,8 @@ const (
 	createRunGrantAbortHint = "the run's credential grants could not be recorded, so it was never started"
 	// createRunComponentsAbortHint is the same for the run's component snapshot.
 	createRunComponentsAbortHint = "the run's components could not be recorded, so it was never started"
+	// createRunHarnessesAbortHint is the same for the run's harness set.
+	createRunHarnessesAbortHint = "the run's harnesses could not be recorded, so it was never started"
 	// devcontainerNoBuilderWarning is the 201 warning for a devcontainer_repo run
 	// on a deployment with no image builder wired: the build silently fell
 	// through to the convention image, which is a different sandbox from the one
@@ -152,9 +159,9 @@ func (s *Server) warnWorkspaceCollision(r *http.Request, runID uuid.UUID, worksp
 // mints the run identity, and (if a runner is wired) dispatches the sandbox.
 // Without a runner the run stays PENDING with a clear status message (headless
 // API-only operation is allowed for v0).
-//
-//nolint:funlen // Deliberate: one linear gate sequence whose ORDER is the contract (TestPreflightMirrorsLaunchGates reads it and its registered wrappers), so extracted gates remain visible to that guard. Each gate already lives in its own function; low branching, passes gocyclo/gocognit, just long.
 func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
+	var asked []byte // the request as asked, for the launch intent (launch_intent.go)
+	r = withAskedRequest(r, &asked)
 	ctx := r.Context()
 	if s.refuseAdminViewLaunch(w, r) {
 		return
@@ -163,62 +170,26 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	// The request as the fold first sees it, kept for a launch that waits: the start folds it afresh.
+	// Marshalled now because the fold may rewrite parts of what the request points at.
+	original, _ := json.Marshal(req) //nolint:errcheck // a request that just decoded marshals
 
-	// Resolve the policy: inline_policy (validated here), explicit policy_id, or
-	// the configured default. resolveRunPolicy writes its own HTTP error and
-	// returns ok=false when it has already responded (XOR violation, invalid
-	// inline spec, missing/reserved inline secret ref, …) so we just stop.
-	// Its clamp/capability warnings ride the 201 (see policyWarns below): a
-	// member whose egress host, secret grant or workspace repo was narrowed
-	// away has to hear about it from the thing they actually called.
-	spec, policyID, policyWarns, policySource, ok := s.resolveRunPolicy(ctx, w, r, &req, false)
+	// Every gate between the decoded request and the mint is the shared fold's
+	// (runFoldSteps), the same sequence Review and the policy preview run. It
+	// writes its own refusal and stops on false, before any identity or row.
+	f, ok := s.foldRunRequest(w, r, foldCreate, &req, ceiling, reqCC)
 	if !ok {
 		return
 	}
-	// Fold the named workspace onto the resolved spec, then re-run every check
-	// that seeding can invalidate. Writes its own error and stops on false.
-	ephemeralDirs, ok := s.seedAndAdmitWorkspace(ctx, w, r, &spec, &req, true) // true: launch, #386's gate applies
-	if !ok {
-		return
-	}
-
-	// Resolve the run's USER DRIVE, AFTER the onboarding gate above: the drive
-	// is per-principal and never appears in the spec, so it deliberately does
-	// not pass through validateWorkspaceSources — but it must not be able to
-	// answer BEFORE the un-bypassable gate either. Writes its own 403/422 and
-	// stops on false. nil for the overwhelming majority of runs (no `drive`
-	// flag), which is a provable no-op: no store read at all.
-	driveMount, ok := s.seedRequestDrive(w, r, req, ceiling)
-	if !ok {
-		return
-	}
-
-	// Fold each referenced workspace's requirements contract into the spec
-	// BEFORE the confinement floor + risk grade read it. The deterministic CC3
-	// blast-radius floor is computed from spec.EligibleGrants, so a workspace's
-	// integration:<id> requirement — a third-party/production api_key grant —
-	// must be present when the floor is computed, or invariant 5's "powerful
-	// credentials run in the strongest sandbox" is silently bypassed. wsRefs is
-	// derived from the seeded spec's mounts/repos, which nothing below mutates, so
-	// it is equally valid here and is reused for the egress union + image
-	// resolution. The fold is the AUDIT-FREE half (applyWorkspaceRequirements
-	// returns its events) — the audit is recorded once the run id is minted, below.
-	wsRefs := s.referencedWorkspaces(ctx, spec)
-	// Caller-scoped secret namespace, resolved once: the presence map and the
-	// requirement fold read the SAME one. Shared with the warning below.
-	present := s.presentSecretNamesFor(ctx, s.secretOwnerFromRequest(r))
-	reqEvents := s.applyWorkspaceRequirementsFor(ctx, present, &spec, req.Agent, wsRefs, resolveWorkspaceSelections(req))
-	directGitHubAdded, refusal := s.unionDirectGitHubEgress(r, req, &spec, ceiling)
-	if refusal.write(s, w, r) {
-		return
-	}
-	// The run's components, bounded and expanded onto the spec here: after the
-	// folds above, so a host an admin already credentialed is seen; before the
-	// floor, the model-provider choice and the autonomy grade below, which read
-	// what a component adds. See applyRunComponents.
-	comps, refusal := s.applyRunComponents(r, req, &spec, ceiling, wsRefs, true)
-	if refusal.write(s, w, r) {
-		return
+	// mpChoice is this run's only source for ModelProviderID and the run.create
+	// snapshot (#527), with a zero provider when none serves this agent.
+	spec, wsRefs, comps, enforced, mpChoice, autonomy := f.spec, f.wsRefs, f.comps, f.enforced, f.mpChoice, f.autonomy
+	// resolveRunPolicy's clamp and capability notes ride the 201 and the
+	// run.create row; a member's bounded Azure DevOps list joins them (#1384).
+	policyWarns := f.policyWarns
+	// Appended per door, not in the step: each door's warning order differs.
+	if f.adoNarrowed != "" {
+		policyWarns = append(policyWarns, f.adoNarrowed)
 	}
 
 	// The primary host workspace directory this run will operate in (if any), used
@@ -226,132 +197,55 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// active run.
 	workspacePath := primaryWorkspacePath(spec)
 
-	// Resolve + gate the confinement class (request vs policy floor, the CC3
-	// blast-radius floor now computed on the FOLDED spec, runner capability
-	// membership, cloud_sts grant gating) — invariant 5, fail closed.
-	enforced, ok := s.resolveEnforcedConfinement(ctx, w, confinementFloorSpec(spec, comps), reqCC)
-	if !ok {
-		return
-	}
-
-	// The model-provider choice: the run's provider decides its lane, and one
-	// whose credential its owner does not hold is refused here rather than at
-	// dispatch. mpChoice is this run's ONLY source for ModelProviderID below and
-	// for the run.create audit snapshot (#527) — mpChoice.chosen is false, with
-	// a zero mpChoice.provider, when no provider serves this agent, so
-	// ModelProviderID freezes "" there.
-	//
-	// Ahead of the autonomy gate because that gate grades THIS resolution: the
-	// Bedrock model credential is handed to the run at dispatch, and a secrets
-	// axis graded without it froze the level a rung too high (#504).
-	mpChoice, ok := s.enforceRunModelProvider(w, r, req, spec, wsRefs, true)
-	if !ok {
-		return
-	}
-	// The chosen provider's arm, or nothing, credentials the run; a Bedrock
-	// provider's run is graded with its owner's Bedrock credential.
-	modelCred := mpChoice.modelCredential()
-
-	// Posture-gated autonomy, resolved ONCE and enforced at both doors
-	// (handlePreflightRun calls the SAME gate). Sited after the enforced class
-	// because that class is the posture's third axis, after the model-credential
-	// gate because its resolution is graded on the secrets axis — and before the
-	// mint, so a refusal leaves no run row, and before
-	// createRunAuditData and the dispatchParams literal below, which both read
-	// the req.ToolApprovals this gate may derive to `hold`. Writes its own 403
-	// and stops on false; its warnings join the 201 list further down.
-	// scmSite is the one site-config snapshot the gate graded the SCM-host lane
-	// from; unionRunEgress below dispatches from the same value.
-	// adoGrade is what the gate RESOLVED about the per-person Azure DevOps lane;
-	// it rides to dispatch on the ceiling so the credential dispatch authors can
-	// only be the one this level was graded against (adoEntraGrade).
-	// bedrockGrade is the same freeze for the Amazon Bedrock model credential
-	// the gate graded from modelCred (bedrockCredGrade).
-	autonomy, autonomyWarns, scmSite, adoGrade, bedrockGrade, ok := s.resolveRunAutonomy(w, r, &req, spec, wsRefs, enforced, ceiling, modelCred, comps)
-	if !ok {
-		return
-	}
-	// A member's bounded Azure DevOps list is said out loud on the 201 and the
-	// run.create row (#1384); the none-permitted refusal is dispatch's, which
-	// preflight mirrors (adoStandingAtDoor).
-	if narrowed, _ := s.adoStandingAtDoor(r, spec, scmSite, ceiling); narrowed != "" {
-		policyWarns = append(policyWarns, narrowed)
-	}
-
-	// Host capacity, the last refusal and before the mint, the same siting as
-	// the autonomy gate: a refusal leaves no identity and no run row.
-	if writeHostCapacityRefusal(w, r, s.admitHostCapacity(r.Context(), principalFromRequest(r), "runs", true)) {
-		return
-	}
-
-	// The deployment run cap, refused before the mint for the same reason: no
-	// identity.mint row and no live token for a run that gets no row.
-	// CreateRunUnderCap (createRun) still decides a race at the cap.
-	if s.refuseRunCapFull(w, r) {
-		return
-	}
-
-	// The runs namespace's ResourceQuota, refused before the mint for the same reason: a run
-	// the quota cannot hold leaves no identity, no run row and no sandbox. The advisories
-	// join the 201's warnings. The quota's own admission stays the authority on a race.
-	fitWarnings, refused := s.refuseRunFit(w, r, s.runFitSpec(ctx, spec, ceiling))
-	if refused {
-		return
-	}
-
 	createdByType, createdBy := actorFromRequest(r)
 	runID := uuid.New()
+	// The run's one target is chosen from its own id, before an identity exists to leak on a refusal.
+	placed := types.AgentRun{ID: runID}
+	if f.place.apply(&placed, enforced).write(s, w, r) {
+		return
+	}
+	intent := launchIntentFor(asked)
+	// A run bound for a capped pool waits for a slot instead of starting: nothing is minted, renewed or
+	// delivered for it, and the start does all of that when the pool has room.
+	if f.queued {
+		now := s.cfg.Now().UTC()
+		row := newRunRow(ctx, runRowInput{runID: runID, now: now, createdBy: createdBy, req: req, f: f, placed: placed,
+			enforced: enforced, workspacePath: workspacePath, runnerTarget: s.cfg.RunnerTarget})
+		row.LaunchIntent = intent.doc
+		queuedCreate{run: row, req: req, original: original, f: f, reqCC: reqCC, createdByType: createdByType,
+			taskWarning: taskWarning, workspacePath: workspacePath, intent: intent}.answer(s, w, r)
+		return
+	}
 	// Subject vs attribution: createdBy is the ATTRIBUTION — the run row's
 	// CreatedBy, the sponsor claim, every audit actor — and in LocalMode it may be
 	// the DEV-ONLY X-Wardyn-Principal header. The SUBJECT is what selects the
 	// secret namespace at mint/inject time, so it comes from runIdentitySubject,
 	// which no request header can move.
 	operatorOwned := operatorOwnedRequest(ctx)
-	id, err := s.cfg.Identity.MintRunIdentity(ctx, runID, runIdentitySubject(ctx, createdBy), createdBy, internalAudience, operatorOwned)
+	// The sponsor claim is the accountable person: createdBy for a person, the sponsor for a service identity.
+	id, err := s.cfg.Identity.MintRunIdentity(ctx, runID, runIdentitySubject(ctx, createdBy), requestSponsor(ctx, createdBy), internalAudience, operatorOwned)
 	if err != nil {
 		writeServerError(w, r, "mint run identity", err)
 		return
 	}
 
 	now := s.cfg.Now().UTC()
-	run := types.AgentRun{
-		ID:               runID,
-		CreatedAt:        now,
-		UpdatedAt:        now,
-		CreatedBy:        createdBy,
-		Agent:            req.Agent,
-		Repo:             req.Repo,
-		Task:             req.Task,
-		Title:            strings.TrimSpace(req.Title),
-		Description:      strings.TrimSpace(req.Description),
-		PolicyID:         policyID,
-		ConfinementClass: enforced,
-		State:            types.RunPending,
-		SPIFFEID:         id.SPIFFEID,
-		RunnerTarget:     s.cfg.RunnerTarget,
-		Interactive:      req.Interactive,
-		WorkspacePath:    workspacePath,
-		WorkspaceIDs:     workspaceIDsOf(wsRefs), // referencedWorkspaces above, same spec as WorkspacePath
-		AutoStopAfterSec: spec.AutoStopAfterSec,
-		// The LEVEL only. The posture and the bound field are provenance and
-		// live on the create audit row (AgentRun.AutonomyLevel's own doc);
-		// freezing them on the row would mirror a computation into a column
-		// nothing reads back.
-		AutonomyLevel: autonomy.Level,
-		// The id alone — mpChoice.provider.Kind rides on the audit snapshot
-		// below instead (AgentRun.ModelProviderID's own doc explains why).
-		// mpChoice.provider.ID is "" when mpChoice.chosen is false.
-		ModelProviderID: mpChoice.provider.ID,
-		UserType:        runCreatorUserType(ctx),
-		Preset:          req.Preset,
-		PresetVersion:   req.PresetVersion,
-		OperatorOwned:   operatorOwned,
-		CreatedVia:      createdVia(ctx),
-	}
-	s.captureRunLimits(&run, ceiling)
+	run := newRunRow(ctx, runRowInput{runID: runID, now: now, createdBy: createdBy, req: req, f: f, placed: placed,
+		enforced: enforced, workspacePath: workspacePath, runnerTarget: s.cfg.RunnerTarget})
+	run.State, run.SPIFFEID = types.RunPending, id.SPIFFEID
+	s.captureRunLimits(&run, ceiling, &f.end)
+	run.LaunchIntent = intent.doc
 	created, err := s.createRun(ctx, run)
 	if err != nil {
 		s.cfg.Identity.RevokeRun(context.WithoutCancel(ctx), runID) //nolint:errcheck // best-effort cleanup of the minted-but-unused token
+		if errors.Is(err, store.ErrRunnerPoolStale) {
+			writePoolRefusal(w, runnerpool.Refusal{Reason: runnerpool.ReasonStale, Name: f.place.pool.Name})
+			return
+		}
+		if refusal := insertRoomRefusal(err, f.place.pool); refusal != nil {
+			refusal.write(s, w, r)
+			return
+		}
 		writeServerError(w, r, "create run", err)
 		return
 	}
@@ -382,6 +276,13 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		writeServerError(w, r, "record run components", err)
 		return
 	}
+	// The same for the harness set: it is the run's authorisation record of
+	// every harness and the provider each was granted.
+	if err := s.persistRunHarnesses(ctx, runID, f.harnesses); err != nil {
+		abort(createRunHarnessesAbortHint)
+		writeServerError(w, r, "record run harnesses", err)
+		return
+	}
 
 	// resolveRunPolicy's own notes come FIRST: they are the ones that say the
 	// run is narrower than what the caller asked for, and launch is the ONLY
@@ -396,49 +297,50 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// The autonomy gate's own sentences (a derived hold; an agent with no
 	// agent-side tool-approval lane), raised before the run id existed and
 	// carried here — this is the only channel that reaches the caller.
-	warnings = append(warnings, autonomyWarns...)
+	warnings = append(warnings, f.autonomyWarns...)
+	// …and the managed-settings one, read off the run's bound runner and the
+	// settled tool lane, which the gate above could not see.
+	warnings = append(warnings, s.managedSettingsUndeliveredWarning(ctx, managedSettingsRun{req: &req, spec: spec, harnesses: f.harnesses, level: autonomy.Level,
+		locked: ceilingForDispatch(ceiling, f.adoGrade, f.bedrockGrade).agentGuardrailLocks, class: enforced, place: f.place}, &run)...)
 	// The two things provider admission ADMITTED rather than refused; see
 	// repoSourceWarnings.
 	warnings = append(warnings, s.repoSourceWarnings(ctx, runID, spec, req)...)
-	warnings = append(warnings, fitWarnings...)
+	warnings = append(warnings, f.fitWarnings...)
+	warnings = append(warnings, f.end.warnings(run)...)
 
 	// The requirements fold that ran ABOVE the confinement floor, audited now
 	// that the run id exists. See recordCreateFolds.
-	s.recordCreateFolds(ctx, runID, reqEvents)
+	s.recordCreateFolds(ctx, runID, f.reqEvents)
 
 	// Persist the eligibility records + derive the non-secret sandbox wiring
 	// (github/git_pat/ssh grant ids, api_key proxy injections, SCM egress) —
 	// see persistRunGrants. A grant write failure has already answered 500.
-	gw, ok := s.persistRunGrants(ctx, w, r, runID, now, spec)
+	gw, grantWarnings, ok := s.wireRunGrants(ctx, w, r, run, now, spec, req, comps, f.localDelivery)
 	if !ok {
 		abort(createRunGrantAbortHint)
 		return
 	}
-	// Provider-lane honesty, the same shape one line earlier in the pipeline: a
-	// credential lane the deployment's provider row does not permit was not wired,
-	// and the 201 says so (persistRunGrants collected the sentences as it declined
-	// each one).
-	warnings = append(warnings, gw.warnings...)
-	// SSH-lane honesty: drop the wiring for agents with no SSH clone lane
-	// (codex-cli) and advise BYOI images about the required tools.
-	warnings = append(warnings, s.applySSHLaneWarnings(ctx, req, runID, &gw)...)
-
-	// Git-broker: map the run's declared GitHub clone set to its github grant so the
-	// proxy's /wardyn/gh/ route serves exactly these repos (github.com is dropped
-	// from egress; an un-granted github repo is denied).
-	gw.augmentGitBrokerGrants(req.Repo, spec.WorkspaceRepos)
+	warnings = append(warnings, grantWarnings...)
 
 	// credentialConfinementAdvisory (#150): a run whose model credential just
-	// graded as the captured-AWS-SSO lane (modelCred.Kind, above) but
+	// graded as the captured-AWS-SSO lane (f.modelCred.Kind, stepModelProvider) but
 	// whose enforced confinement is weaker than CC3 gets that said on every
 	// surface a person or an incident review reads — the 201, and (below) the
 	// audit row's closed-vocabulary credential_confinement field. WARN, never
 	// refuse: RequiredConfinementFloor above is untouched, on purpose.
-	warnings, belowFloor := appendCredentialConfinementAdvisory(warnings, spec, enforced, modelCred.Kind)
+	warnings, belowFloor := appendCredentialConfinementAdvisory(warnings, spec, enforced, f.modelCred.Kind)
 
-	createData := createRunAuditData(req, policyID, enforced, reqCC, id.JTI, policyWarns, autonomy, belowFloor, mpChoice)
-	createData["policy_source"] = policySource
+	createData := createRunAuditData(req, f.policyID, enforced, reqCC, id.JTI, policyWarns, autonomy, belowFloor, mpChoice)
+	createData["policy_source"], createData["end"] = f.source, f.end.audit(run)
+	stampConfinementDefault(createData, reqCC, f.confinementDefault)
+	if len(gw.delivery) > 0 {
+		createData["delivery"] = gw.delivery
+	}
+	stampDriveAudit(createData, f.drives)
+	intent.stamp(createData, created.LaunchIntent != nil)
+	stampHarnessSet(createData, f.harnesses, f.image)
 	comps.stampRunCreate(createData)
+	maps.Copy(createData, f.place.auditFields(created))
 	s.markGovernanceExempt(ctx, createData)
 	s.recordAudit(ctx, s.auditEvent(&runID, createdByType, createdBy, "run.create",
 		runID.String(), "success", mustJSON(withRunUserType(ctx, run.UserType, createData))))
@@ -450,7 +352,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// Widen the RESOLVED spec's egress from the deterministic operator-trusted
 	// sources (onboarded-workspace registries, site-config SCM hosts, the SSH and
 	// ADO SCM lanes) — never the LLM; see unionRunEgress.
-	s.unionRunEgress(ctx, runID, &spec, gw, wsRefs, req.Repo, scmSite, directGitHubAdded, comps)
+	s.unionRunEgress(ctx, runID, &spec, gw, wsRefs, req.Repo, f.scmSite, f.directGitHubAdded, comps, f.ceiling.Spec.AllowedDomains)
 
 	// …and say so when one of those operator-approved workspace hosts is walled
 	// off by the caller's own governance profile. The union above still happened
@@ -479,14 +381,93 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// Nothing below can become a 4xx, so the caller gets its run now and the
 	// image build + dispatch continue server-side (runs_create_launch.go).
 	w.Header().Set("Location", s.cfg.BasePath+"/api/v1/runs/"+runID.String())
-	writeJSON(w, http.StatusCreated, createRunResponse{AgentRun: created, Warnings: warnings})
-	launch := createRunLaunch{
-		req: req, spec: spec, ceiling: ceilingForDispatch(ceiling, adoGrade, bedrockGrade), gw: gw,
-		wsRefs: wsRefs, driveMount: driveMount, ephemeralDirs: ephemeralDirs,
-		runToken: id.Token, created: created, comps: comps,
-	}
+	writeJSON(w, http.StatusCreated, createRunResponse{AgentRun: created, Warnings: warnings, ResourcesApplied: &f.place.applied})
+	launch := f.launch(req, spec, ceiling, gw, id.Token, created)
 	launchCtx := context.WithoutCancel(ctx)
 	s.goBackground(func() { s.finishCreateRunLaunch(launchCtx, launch) })
+}
+
+// wireRunGrants persists the run's eligibility records and derives the non-secret sandbox wiring
+// (persistRunGrants), then applies the lanes' honesty rules: a credential lane the deployment's
+// provider row does not permit was not wired, and the sentences say so; the SSH lane is dropped for
+// agents with no SSH clone lane (codex-cli) and BYOI images are advised about the required tools; and
+// the run's declared GitHub clone set is mapped to its github grant so the proxy's /wardyn/gh/ route
+// serves exactly these repos (github.com is dropped from egress; an un-granted github repo is denied).
+// Create and the pool queue's start wire a run the same way. A grant write failure has already
+// answered 500 (ok is false).
+func (s *Server) wireRunGrants(ctx context.Context, w http.ResponseWriter, r *http.Request, run types.AgentRun, now time.Time, spec types.RunPolicySpec,
+	req createRunRequest, comps runComponents, delivery placement.DeliveryPolicy,
+) (grantWiring, []string, bool) {
+	gw, ok := s.persistRunGrants(ctx, w, r, run.ID, now, spec, run.Placement, delivery)
+	// The git broker's repositories, then the GitHub CLI's grants over them.
+	if !ok || !s.persistGitHubCLIGrants(ctx, w, r, run.ID, now, req.Repo, spec.WorkspaceRepos, comps, &gw) {
+		return grantWiring{}, nil, false
+	}
+	warnings := append([]string(nil), gw.warnings...)
+	warnings = append(warnings, s.applySSHLaneWarnings(ctx, req, run.ID, &gw)...)
+	return gw, warnings, true
+}
+
+// runRowInput is what newRunRow reads: the fold's outputs and the door's own facts.
+type runRowInput struct {
+	runID         uuid.UUID
+	now           time.Time
+	createdBy     string
+	req           createRunRequest
+	f             runFold
+	placed        types.AgentRun
+	enforced      types.ConfinementClass
+	workspacePath string
+	runnerTarget  string
+}
+
+// newRunRow is the run row a launch inserts, without its state, its identity and the limits it
+// captures: create sets them (PENDING, the minted SPIFFE ID, captureRunLimits) and the pool queue
+// leaves them to the start (QUEUED, no identity, nothing captured). One literal for both doors, so a
+// waiting run carries exactly the facts a running one does.
+func newRunRow(ctx context.Context, in runRowInput) types.AgentRun {
+	req, f, placed := in.req, in.f, in.placed
+	operatorOwned := operatorOwnedRequest(ctx)
+	return types.AgentRun{
+		ID:               in.runID,
+		CreatedAt:        in.now,
+		UpdatedAt:        in.now,
+		CreatedBy:        in.createdBy,
+		HumanAuthor:      requestSponsor(ctx, in.createdBy),
+		Agent:            req.Agent,
+		Repo:             req.Repo,
+		Task:             req.Task,
+		Title:            strings.TrimSpace(req.Title),
+		Description:      strings.TrimSpace(req.Description),
+		PolicyID:         f.policyID,
+		ConfinementClass: in.enforced,
+		RunnerTarget:     in.runnerTarget,
+		Interactive:      req.Interactive,
+		Experience:       req.Experience,
+		WorkspacePath:    in.workspacePath,
+		WorkspaceIDs:     workspaceIDsOf(f.wsRefs), // referencedWorkspaces above, same spec as WorkspacePath
+		AutoStopAfterSec: f.spec.AutoStopAfterSec,
+		// The LEVEL only. The posture and the bound field are provenance and
+		// live on the create audit row (AgentRun.AutonomyLevel's own doc);
+		// freezing them on the row would mirror a computation into a column
+		// nothing reads back.
+		AutonomyLevel: f.autonomy.Level,
+		// The id alone — mpChoice.provider.Kind rides on the audit snapshot
+		// instead (AgentRun.ModelProviderID's own doc explains why).
+		// provider.ID is "" when mpChoice.chosen is false.
+		ModelProviderID: f.mpChoice.provider.ID,
+		UserType:        runCreatorUserType(ctx),
+		Preset:          req.Preset,
+		PresetVersion:   req.PresetVersion,
+		OperatorOwned:   operatorOwned,
+		CreatedVia:      createdVia(ctx),
+		// The pool binding is the run's own admission record: dispatch routes to exactly this target.
+		Placement: placed.Placement, PlacementFilled: placed.PlacementFilled, RunnerID: placed.RunnerID, EvidenceSource: placed.EvidenceSource,
+		RunnerPoolID: placed.RunnerPoolID, RunnerPoolRevision: placed.RunnerPoolRevision,
+		RunnerPoolSelection: placed.RunnerPoolSelection, RunnerPoolExecutor: placed.RunnerPoolExecutor,
+		// What it holds on that runner: the CPU and memory it gets and its main drive (runner limits).
+		Reserved: f.place.reserved(f.mainDrive),
+	}
 }
 
 // seedAndAdmitWorkspace folds a named workspace onto the resolved spec and then
@@ -502,22 +483,22 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 // LAST because it is the single chokepoint on the RESOLVED spec, which is what
 // makes it un-bypassable by a hand-authored stored policy.
 //
-// gate is #386's launch door (review finding F5): LAUNCH (runs.go's own
-// caller) passes true, so gitCredentialRefusal runs here TOO — over
+// gate is #386's launch door (review finding F5): LAUNCH (stepSeedWorkspace
+// for foldCreate) passes true, so gitCredentialRefusal runs here TOO — over
 // spec.WorkspaceRepos, the resolved set a workspace_id, a SECOND workspace,
 // a non-first repo, a stored policy or a hand-authored inline policy all
 // fold into, which requestRepoProviderRefusals' two free-text fields alone
-// never see. Review (preflight.go) passes false: see that gate's own doc
+// never see. Review (foldPreflight) passes false: see that gate's own doc
 // comment.
-func (s *Server) seedAndAdmitWorkspace(ctx context.Context, w http.ResponseWriter, r *http.Request, spec *types.RunPolicySpec, req *createRunRequest, gate bool) ([]string, bool) {
-	dirs, refusal := s.seedAuthorizedWorkspace(ctx, r, spec, req)
+func (s *Server) seedAndAdmitWorkspace(ctx context.Context, w http.ResponseWriter, r *http.Request, spec *types.RunPolicySpec, req *createRunRequest, gate bool) (workspaceSeed, bool) {
+	seed, refusal := s.seedAuthorizedWorkspace(ctx, r, spec, req)
 	if refusal.write(s, w, r) {
-		return nil, false
+		return workspaceSeed{}, false
 	}
 	if gate && s.gitCredentialRefusal(w, r, repoLocatorsOf(spec.WorkspaceRepos)...) {
-		return nil, false
+		return workspaceSeed{}, false
 	}
-	return dirs, true
+	return seed, true
 }
 
 // repoSourceWarnings is the pair of 201 sentences provider admission cannot
@@ -598,6 +579,11 @@ func createRunAuditData(req createRunRequest, policyID *uuid.UUID, enforced type
 		"agent": req.Agent, "repo": req.Repo, "policy_id": policyID,
 		"confinement_class": enforced, "confinement_source": confinementSource, "jti": jti,
 		"inline_policy": req.InlinePolicy != nil,
+	}
+	if keys := policyOverlayKeys(req.PolicyOverlay); len(keys) > 0 {
+		// The keys the run's policy_overlay laid onto its default, never their
+		// values: binds policy.overlay.apply, which has no run id, to this run.
+		data["policy_overlay"] = keys
 	}
 	if req.Preset != "" {
 		// The preset stamp is also on the run row, but the chained audit row
@@ -683,6 +669,8 @@ type grantChecker interface {
 type createRunResponse struct {
 	types.AgentRun
 	Warnings []string `json:"warnings,omitempty"`
+	// ResourcesApplied is the CPU and memory the run asked for and got (stepResources).
+	ResourcesApplied *client.AppliedResources `json:"resources_applied,omitempty"`
 }
 
 // runLLMAccess is the deterministic model-access verdict for a run request —

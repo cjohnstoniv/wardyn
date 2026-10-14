@@ -65,7 +65,7 @@ func (s *Server) mintInjectionGrant(w http.ResponseWriter, r *http.Request) (*id
 		return nil, uuid.Nil, broker.Minted{}, false
 	}
 	grantID, ok := parseIDParam(w, r, "grantID", "grant")
-	if !ok {
+	if !ok || s.refuseRelayedDelivery(w, r, claims, grantID) {
 		return nil, uuid.Nil, broker.Minted{}, false
 	}
 
@@ -130,6 +130,13 @@ func (s *Server) handleInternalInjection(w http.ResponseWriter, r *http.Request)
 	// resolveAzureFoundryInjection. Before the provider-key arm below, which would read a
 	// wardyn-provider-<uid>-* name as a key.
 	if s.resolveAzureFoundryInjection(w, r, claims, minted, grantID) {
+		return
+	}
+	// THE AZURE CLI: the run owner's own captured Entra sign-in for the Azure CLI row the run carries,
+	// redeemed for Azure Resource Manager and pinned to the dispatch-time snapshot — see
+	// resolveAzureARMInjection. Before the reserved-name check below, which refuses a
+	// wardyn-cli-<id>-entra name to every other grant.
+	if s.resolveAzureARMInjection(w, r, claims, minted, grantID) {
 		return
 	}
 

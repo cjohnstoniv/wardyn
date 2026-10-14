@@ -2,5 +2,5 @@
 WARNING: credentials are wrapped by a key this deployment holds (kek.provider is local).
 Anyone with both the database and that key can read them. Set kek.provider to transit
 or azurekv and run `wardynd -rewrap` to keep the two apart; set kek.required=true to
-refuse to start without one.
+refuse to start without one (existing rows still need `wardynd -rewrap`).
 {{- end }}

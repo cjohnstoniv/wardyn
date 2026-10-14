@@ -6,6 +6,16 @@
 - Sibling shapes, for contrast: [the compose stack](../deploy/compose/README.md) (one host, demo/single-tenant) and [the Helm chart](../deploy/helm/wardyn/README.md) (a cluster, multi-user, SSO + RBAC, no shared docker socket).
 - This tier sits below both.
 
+## Tiers
+
+| Tier | What runs on the laptop | Governed by | Named in the console and `wardyn setup status` as |
+| --- | --- | --- | --- |
+| Local only | A full `wardynd` with no org | The person at the keyboard | Local only — not governed by an organisation |
+| Client-mode runner | `wardyn-runnerd`, no control plane; the owner claims it ([guide](operations/hybrid-laptops.md)) | The org | Runner for an organisation |
+| Org | The control plane itself, on a cluster or compose host | The org | Organisation |
+
+- Org enrolment of a full daemon (`WARDYN_ORG_URL`) is deprecated in 0.9 and removed in 1.0; use a client-mode runner. Design: [docs/design/0.9/PLAN.md](design/0.9/PLAN.md).
+
 ## Topology
 
 ![On an enrolled laptop, everyday work takes the normal path while each sandbox leaves only through its egress proxy, nothing connects in, and the proxy adds keys to outbound requests.](img/wardyn-laptop.webp)
@@ -193,7 +203,7 @@ Three more the tier inherits rather than introduces:
 - A run resolves its own owner's row and falls back to the operator's, never to another member's.
 - The model-credential names — `anthropic-api-key`, `openai-api-key`, `bedrock-api-key` and the three AWS SigV4 names (`aws-access-key-id`, `aws-secret-access-key`, `aws-session-token`) — are refused for everyone, the operator included, with a `403 secret_name_reserved` that names Settings → Model providers.
 - A member's model credential lives on a model provider, connected by that person for themselves (`PUT /api/v1/model-providers/{id}/credential`), never in a secret they name.
-- See [OPERATIONS.md § Multi-user](OPERATIONS.md#multi-user-who-can-change-what).
+- See [who-gets-in.md § Multi-user](operations/who-gets-in.md#multi-user-who-can-change-what).
 
 **Mounting their own project directory.**
 
@@ -220,13 +230,15 @@ Three more the tier inherits rather than introduces:
 ### `WARDYN_ORG_URL`
 
 - **optional.**
+- **Deprecated in 0.9 (removed in 1.0): boot logs a warning. Use a client-mode runner ([guide](operations/hybrid-laptops.md)).**
 - Set it to enrol this laptop into a remote org control plane — see [Enrolling into an org control plane](#enrolling-into-an-org-control-plane) below.
 - Unset (the default) is m′ with no hybrid posture at all: the laptop still keeps its own runs and its own audit table, forwarding nothing upward.
 
 ### Enrolling into an org control plane
 
 - This is the first phase of hybrid (issue #103): the laptop keeps its full `wardynd` in member mode and gains exactly two things — a device credential and an upward audit forwarder.
-- It does not change where runs execute; that is the per-run placement work planned for 0.9 ([docs/design/hybrid-0.8.md](design/hybrid-0.8.md)).
+- It does not change where runs execute. Each run's runner pool decides that: see [Runner pools](operations/runner-pools.md).
+- A member-mode laptop cannot set `WARDYN_SSO_ONLY`: member mode needs the admin token as a process credential (`validateSSOOnlyPosture`, [`cmd/wardynd/boot_posture.go`](../cmd/wardynd/boot_posture.go)). It can still enrol into an SSO-only org: `handleDeviceEnrol` ([`internal/api/devices_auth.go`](../internal/api/devices_auth.go)) redeems a single-use admin-minted token, and the `wdd_` bearer reaches only `/api/v1/devices/{id}/*`, never the console. A client-mode runner registers with a single-use `wdr_` token, not a console sign-in.
 
 **Enrolling.**
 
@@ -298,11 +310,11 @@ Three more the tier inherits rather than introduces:
 ### An org `default_disk_mib` runs UNCAPPED here, with a warning
 
 - The `storage.ephemeral` ceilings in `site-config.json` are the one part of the provider policy that lands differently on this tier, and it is deliberate.
-- A `default_disk_mib` is a size Wardyn **fills in** for a run that requested none; `disk_mib` on a policy is a size an admin **wrote**.
+- A `default_disk_mib` is a size Wardyn **fills in** for a run that requested none; `disk_mib` on a policy is a size the policy **wrote**.
 - On Docker, a writable-layer cap needs `overlay2` on an `xfs` filesystem mounted with `pquota` — and the desktop default everywhere that matters (Docker Desktop, WSL2, stock Ubuntu/Debian) is overlay2 over ext4, which cannot take one.
-- There, a policy-authored `disk_mib` is **refused at container create**, because a promised cap must not silently evaporate.
-- An org-default-FILLED size instead **runs uncapped with a warning** — a `slog.Warn` carrying `enforcement: none`, the same word the admin setup status reports for this host's disk cap.
-- The bit that tells the two cases apart is on the run's own record: `run.policy.resolve` carries `disk_mib_filled`, so a reader can see whether the number came from the request or from the org.
+- There, a policy-authored `disk_mib` is **refused** (`main_drive_unenforceable`), because a promised cap must not silently evaporate.
+- A requested or default size instead **runs uncapped with a warning** — a `slog.Warn` carrying `enforcement: none`, the same word the admin setup status reports for this host's disk cap.
+- The bit that tells the two cases apart is on the run's own record: `run.policy.resolve` carries `disk_mib_filled` and `disk_mib_basis`, so a reader can see whether the number came from the request, a default or the policy.
 - It never fails closed, and that is the whole reason for the split:
   - an org default reaches laptops through this file,
   - so failing closed on it would stop every request-less run on every desktop in the estate the day an admin typed a number into the Storage tab.
@@ -660,8 +672,8 @@ sudo cp deploy/desktop/wardyn.env.example /etc/wardyn/wardyn.env
 # has. Substitute the current release's digests, or a published tag while you
 # are only smoke-testing.
 sudo sed -i '' -e 's/\$UPN/you@example.com/' \
-               -e 's|^WARDYN_WARDYND_IMAGE=.*|WARDYN_WARDYND_IMAGE=ghcr.io/cjohnstoniv/wardynd:0.8.9|' \
-               -e 's|^WARDYN_PROXY_IMAGE=.*|WARDYN_PROXY_IMAGE=ghcr.io/cjohnstoniv/wardyn-proxy:0.8.9|' \
+               -e 's|^WARDYN_WARDYND_IMAGE=.*|WARDYN_WARDYND_IMAGE=ghcr.io/cjohnstoniv/wardynd:0.9.0|' \
+               -e 's|^WARDYN_PROXY_IMAGE=.*|WARDYN_PROXY_IMAGE=ghcr.io/cjohnstoniv/wardyn-proxy:0.9.0|' \
                /etc/wardyn/wardyn.env
 sudo cp examples/policies/demo.json /etc/wardyn/policy.json
 

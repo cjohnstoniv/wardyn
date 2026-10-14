@@ -12,6 +12,7 @@ import { BrowserRouter, MemoryRouter, NavLink, Route, Routes, useNavigate } from
 import { UnsavedGuardProvider, useGuardedNavClick, useUnsavedGuard } from "./use-unsaved-guard";
 import { UNSAVED } from "./unsaved-copy";
 import { registerUnsaved, unsavedSnapshot } from "./unsaved-registry";
+import { holdExitAnimation } from "../../test/exit-animation";
 
 // Mirrors the real call site (app-shell.tsx#SidebarNav): a guarded click sits
 // on an actual <NavLink>, since a clean click lets the LINK's own navigation
@@ -74,6 +75,52 @@ describe("useUnsavedGuard + useGuardedNavClick", () => {
     await userEvent.click(screen.getByRole("button", { name: UNSAVED.DISCARD }));
     expect(screen.getByText("next page")).toBeInTheDocument();
     expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+  });
+});
+
+// Leave runs the held navigation at once and the confirm leaves 200 ms later. A destination that focuses its
+// heading on mount (every New Run screen does) must keep it: the guard's restore of the sidebar link is for when
+// focus would otherwise be lost.
+describe("UnsavedGuardProvider — focus after Leave", () => {
+  function Heading() {
+    const ref = React.useRef<HTMLHeadingElement>(null);
+    React.useEffect(() => ref.current?.focus(), []);
+    return <h1 ref={ref} tabIndex={-1}>destination heading</h1>;
+  }
+  function Sidebar() {
+    const navigate = useNavigate();
+    const guarded = useGuardedNavClick(navigate);
+    return <NavLink to="/next" onClick={guarded("/next")}>go</NavLink>;
+  }
+  function Dirty() {
+    useUnsavedGuard("focus-editor", true, () => "draft text");
+    return <p>editor</p>;
+  }
+
+  it("Discard changes leaves the destination's heading focused", async () => {
+    const hold = holdExitAnimation();
+    try {
+      render(
+        <MemoryRouter initialEntries={["/"]}>
+          <UnsavedGuardProvider>
+            <Sidebar />
+            <Routes>
+              <Route path="/" element={<Dirty />} />
+              <Route path="/next" element={<Heading />} />
+            </Routes>
+          </UnsavedGuardProvider>
+        </MemoryRouter>,
+      );
+      const user = userEvent.setup();
+      await user.click(screen.getByRole("link", { name: "go" }));
+      await user.click(await screen.findByRole("button", { name: UNSAVED.DISCARD }));
+      expect(await screen.findByRole("heading", { name: "destination heading", hidden: true })).toHaveFocus();
+      await hold.finish();
+      await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+      expect(screen.getByRole("heading", { name: "destination heading" })).toHaveFocus();
+    } finally {
+      hold.release();
+    }
   });
 });
 
@@ -140,8 +187,8 @@ async function setUpAtNextEntry(user: ReturnType<typeof userEvent.setup>) {
 // "old" value, masking the delta it's supposed to compute. The native
 // History.prototype method sidesteps that patch, the same way the browser's
 // C++ implementation does.
-function simulateBrowserPop(idx: number): void {
-  History.prototype.replaceState.call(window.history, { idx }, "", window.location.pathname);
+function simulateBrowserPop(idx: number, url: string = window.location.pathname): void {
+  History.prototype.replaceState.call(window.history, { idx }, "", url);
   act(() => {
     window.dispatchEvent(new PopStateEvent("popstate"));
   });
@@ -202,6 +249,34 @@ describe("UnsavedGuardProvider — browser Back/Forward (popstate)", () => {
     expect(goSpy).toHaveBeenNthCalledWith(1, 1); // restore
     expect(goSpy).toHaveBeenNthCalledWith(2, -1); // redo the original Back
 
+    unregister();
+  });
+
+  it("a dirty editor whose draft lives on where Back lands lets it through — no restore, no dialog", async () => {
+    const user = userEvent.setup();
+    await setUpAtNextEntry(user);
+    const goSpy = vi.spyOn(window.history, "go").mockImplementation(() => {});
+    const unregister = registerUnsaved("in-form-back", () => "unsaved text", (path) => path === "/next");
+
+    const poppedTo = (window.history.state as { idx: number }).idx - 1;
+    simulateBrowserPop(poppedTo);
+
+    expect(goSpy).not.toHaveBeenCalled();
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    unregister();
+  });
+
+  it("asks a dirty editor about where Back lands by path and query, so a query its draft lives on lets it through", async () => {
+    const user = userEvent.setup();
+    await setUpAtNextEntry(user);
+    const goSpy = vi.spyOn(window.history, "go").mockImplementation(() => {});
+    const unregister = registerUnsaved("query-back", () => "unsaved text", (path) => path === "/next?seed=a");
+
+    const poppedTo = (window.history.state as { idx: number }).idx - 1;
+    simulateBrowserPop(poppedTo, "/next?seed=a");
+
+    expect(goSpy).not.toHaveBeenCalled();
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
     unregister();
   });
 

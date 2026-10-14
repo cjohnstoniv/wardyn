@@ -30,6 +30,7 @@ const (
 	PurposeDispatch     Purpose = "dispatch"
 	PurposeManagedToken Purpose = "managed-token"
 	PurposeMigrate      Purpose = "migrate"
+	PurposeRehearse     Purpose = "rehearse"
 	PurposeSSORefresh   Purpose = "sso-refresh"
 	PurposeADORefresh   Purpose = "ado-refresh"
 	PurposeStatus       Purpose = "status"
@@ -210,6 +211,24 @@ func (a *audited) Revision(ctx context.Context, name string) (string, error) {
 	return r.Revision(ctx, name)
 }
 
+// Generation and AdvanceGeneration forward the wrapped store's erase generation
+// (Generational), or answer ErrNoGeneration. Not audited: neither reads a value.
+func (a *audited) Generation(ctx context.Context) (int64, error) {
+	g, ok := a.inner.(Generational)
+	if !ok {
+		return 0, ErrNoGeneration
+	}
+	return g.Generation(ctx)
+}
+
+func (a *audited) AdvanceGeneration(ctx context.Context) (int64, error) {
+	g, ok := a.inner.(Generational)
+	if !ok {
+		return 0, ErrNoGeneration
+	}
+	return g.AdvanceGeneration(ctx)
+}
+
 // Holders is not audited: it reads which namespaces hold a row, never a value.
 func (a *audited) Holders(ctx context.Context, names []string) (map[string][]string, error) {
 	return a.inner.Holders(ctx, names)
@@ -288,6 +307,15 @@ func (a *audited) KeyService() string {
 	return ""
 }
 
+// KeyServiceStaticKey forwards whether the key service is reached with a
+// long-lived credential; false when the wrapped store does not say.
+func (a *audited) KeyServiceStaticKey() bool {
+	if d, ok := a.inner.(interface{ KeyServiceStaticKey() bool }); ok {
+		return d.KeyServiceStaticKey()
+	}
+	return false
+}
+
 func (a *audited) For(owner string) Store {
 	return &audited{inner: a.inner.For(owner), rec: a.rec, owner: owner}
 }
@@ -331,4 +359,21 @@ func RecordRead(ctx context.Context, rec audit.Recorder, p Purpose, owner string
 	if rerr := rec.Record(ctx, ev); rerr != nil {
 		audit.LogWriteFailure(ctx, ev, rerr)
 	}
+}
+
+// ProviderChange forwards owner-scoped history without reading a secret.
+func (a *audited) ProviderChange(ctx context.Context, uid string) (ProviderChange, bool, error) {
+	m, ok := a.inner.(ProviderChangeStore)
+	if !ok {
+		return ProviderChange{}, false, ErrNoMetadata
+	}
+	return m.ProviderChange(ctx, uid)
+}
+
+// DeleteProviderChanges erases this owner's history when the store retains it.
+func (a *audited) DeleteProviderChanges(ctx context.Context) error {
+	if history, ok := a.inner.(ProviderChangeStore); ok {
+		return history.DeleteProviderChanges(ctx)
+	}
+	return nil
 }

@@ -28,6 +28,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/authz"
+	"github.com/cjohnstoniv/wardyn/internal/composer"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -102,6 +103,10 @@ func (s *Server) handleGetGovernance(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, governanceResponse{Profiles: profiles, Assignments: assignments})
 }
 
+// governanceRefusedAllPlacements is the frozen sentence (GOVERNANCE.REFUSED_ALL_PLACEMENTS) the
+// profile writer answers 400 with when deny_placements lists both placements.
+const governanceRefusedAllPlacements = "deny_placements: a profile can't deny every placement — the people it binds could run nothing"
+
 // governanceLimitsRefusal is the negative-value boundary on GovernanceLimits, or
 // "" when every number is writable. It is the profile's half of
 // validateStorageProviders and borrows that function's sentence
@@ -133,6 +138,14 @@ func governanceLimitsRefusal(l types.GovernanceLimits) string {
 	if l.MaxDriveSizeMiB < 0 {
 		return fmt.Sprintf(providers400Negative, "limits.max_drive_size_mib", l.MaxDriveSizeMiB)
 	}
+	for _, p := range l.DenyPlacements {
+		if !p.Valid() {
+			return fmt.Sprintf("limits.deny_placements: %q is not a placement — use remote or local", p)
+		}
+	}
+	if types.DeniesEveryPlacement(l.DenyPlacements) {
+		return governanceRefusedAllPlacements
+	}
 	if l.AutonomyRubric != nil {
 		if err := l.AutonomyRubric.Validate(); err != nil {
 			return "limits.autonomy_rubric." + err.Error()
@@ -156,7 +169,7 @@ type governanceAssignmentRequest struct {
 // validateGovernanceAssignment normalizes a in place and validates it, applying
 // the SAME field hygiene validateCapabilityGrant applies to a capability grant
 // subject — trim, length, no control characters, and for a GROUP subject the
-// shared oidc.CanonicalGroupSubject the login-time snapshot itself uses —
+// shared types.CanonicalGroupSubject the login-time snapshot itself uses —
 // because these two tables are written against the identical subject vocabulary
 // and are resolved through the identical capabilitySubjects call. A subject
 // normalized one way here and another way there is a row that silently never
@@ -181,14 +194,14 @@ func validateGovernanceAssignment(a *types.GovernanceAssignment) error {
 		return fmt.Errorf("subject: required for subject_type %q", a.SubjectType)
 	}
 	if a.SubjectType == types.CapabilitySubjectGroup {
-		// The group half of that hygiene is oidc.CanonicalGroupSubject, not a
+		// The group half of that hygiene is types.CanonicalGroupSubject, not a
 		// lowercase — see validateCapabilityGrant. A group-tier assignment is
 		// the sharper case of the two: HasGroupTierAssignments counts the dead
 		// row as "a group tier exists", so a subject no snapshot can carry both
 		// fails to wall the member it names AND refuses every caller with an
 		// unanswerable snapshot on account of an assignment that could never
 		// have applied to them.
-		subject, ok := oidc.CanonicalGroupSubject(a.Subject)
+		subject, ok := types.CanonicalGroupSubject(a.Subject)
 		if !ok {
 			return fmt.Errorf("subject: must be printable ASCII — a group subject is matched against the login-time group snapshot, which carries printable ASCII only, so this value can never match anyone")
 		}
@@ -200,12 +213,12 @@ func validateGovernanceAssignment(a *types.GovernanceAssignment) error {
 			return fmt.Errorf("subject: %q is not a user type id", a.Subject)
 		}
 	} else {
-		// The USER half is canonicalUserSubject for the same guard-before-fold
+		// The USER half is types.CanonicalUserSubject for the same guard-before-fold
 		// reason (capabilities.go): a bare ToLower folds U+212A onto ASCII 'k'
 		// and U+0130 onto 'i', so a crafted spelling of a real human's address
 		// was stored as THAT human's subject — an assignment binding someone
 		// else's ceiling to them.
-		a.Subject = canonicalUserSubject(a.Subject)
+		a.Subject = types.CanonicalUserSubject(a.Subject)
 	}
 	if len(a.Subject) > maxCapabilityGrantFieldLen || !controlCharFree(a.Subject) {
 		return fmt.Errorf("subject: invalid")
@@ -428,16 +441,16 @@ func (s *Server) handlePreviewGovernanceProfile(w http.ResponseWriter, r *http.R
 // a UNICODE fold, so U+212A becomes ASCII 'k' and U+0130 becomes 'i', and a
 // preview claim typed in either spelling would answer for a DIFFERENT human's
 // row than the run resolves. Both halves therefore ask the match surface's own
-// canonicalizer — users through canonicalUserSubject (capabilities.go, the same
-// function capabilitySubjects and the two write boundaries use), groups through
-// normalizeGovernancePreviewGroups below (oidc.CanonicalGroupSubject).
+// canonicalizer — users through types.CanonicalUserSubject (the same function
+// capabilitySubjects and the two write boundaries use), groups through
+// normalizeGovernancePreviewGroups below (types.CanonicalGroupSubject).
 func normalizeGovernancePreviewClaims(in []string, field string) ([]string, string) {
 	if len(in) > maxGovernancePreviewClaims {
 		return nil, fmt.Sprintf("%s: at most %d claims", field, maxGovernancePreviewClaims)
 	}
 	out := make([]string, 0, len(in))
 	for _, v := range in {
-		if c := canonicalUserSubject(v); c != "" && !slices.Contains(out, c) {
+		if c := types.CanonicalUserSubject(v); c != "" && !slices.Contains(out, c) {
 			out = append(out, c)
 		}
 	}
@@ -474,7 +487,7 @@ func normalizeGovernancePreviewGroups(in []string) ([]string, string) {
 	}
 	out := make([]string, 0, len(in))
 	for _, v := range in {
-		c, ok := oidc.CanonicalGroupSubject(v)
+		c, ok := types.CanonicalGroupSubject(v)
 		if !ok {
 			continue // no login snapshot can carry it; enforcement drops it too
 		}
@@ -499,6 +512,10 @@ type governanceCeiling struct {
 	Limits   types.GovernanceLimits
 	Profile  *ResolvedProfile
 	Warnings []string
+	// MemberDefault is a governed member's size before any ask (composer.MemberDefault from the
+	// deployment's own size, lowered by this ceiling), set when the ceiling is resolved. Read it
+	// through memberSize.
+	MemberDefault types.ResourceLimits
 	// Operator is true when this principal is not clamped (isOperator: the
 	// admin view, the admin token, local mode). The zero value is the clamped
 	// member, so a ceiling built without asking stays bounded. Dispatch reads it
@@ -668,7 +685,7 @@ func (s *Server) effectiveCeiling(ctx context.Context) (governanceCeiling, error
 // order its doc comment describes. Split out so the memo above wraps it exactly
 // once and no call site can reach the raw resolve by accident.
 func (s *Server) resolveEffectiveCeiling(ctx context.Context) (governanceCeiling, error) {
-	deployment := governanceCeiling{Spec: s.cfg.DefaultPolicy.Clone()}
+	deployment := governanceCeiling{Spec: s.cfg.DefaultPolicy.Clone(), MemberDefault: s.memberDefaultFor(s.cfg.DefaultPolicy.Resources)}
 	if s.runUngoverned(ctx) {
 		deployment.Operator = true
 		return deployment, nil
@@ -745,7 +762,38 @@ func (s *Server) ceilingFromProfile(ctx context.Context, p *ResolvedProfile, err
 	if p == nil {
 		return deployment, nil
 	}
-	return governanceCeiling{Spec: p.Ceiling.Clone(), Limits: p.Limits, Profile: p, Warnings: p.Warnings}, nil
+	return governanceCeiling{Spec: p.Ceiling.Clone(), Limits: p.Limits, Profile: p, Warnings: p.Warnings,
+		MemberDefault: s.memberDefaultFor(p.Ceiling.Resources)}, nil
+}
+
+// authoredSize is the ceiling policy's own CPU and memory as the member cap reads it (#1949): a
+// profile's AUTHORED size, zero where it inherited the deployment's, so a maximum with no size of its
+// own is the size; any other ceiling (the deployment's, an operator's) inherits nothing, so its spec
+// is its own.
+func (c governanceCeiling) authoredSize() types.ResourceLimits {
+	if c.Profile != nil {
+		return c.Profile.AuthoredResources
+	}
+	if r := c.Spec.Resources; r != nil {
+		return types.ResourceLimits{CPUMillis: r.CPUMillis, MemoryMiB: r.MemoryMiB}
+	}
+	return types.ResourceLimits{}
+}
+
+// memberDefaultFor is the member default under a ceiling of this size: the deployment's own size
+// (inheritDeploymentResources), lowered by the ceiling.
+func (s *Server) memberDefaultFor(ceiling *types.ResourceLimits) types.ResourceLimits {
+	d := s.inheritDeploymentResources(nil)
+	return composer.MemberDefault(types.ResourceLimits{CPUMillis: d.CPUMillis, MemoryMiB: d.MemoryMiB}, ceiling)
+}
+
+// memberSize is the member default the member cap starts from. A ceiling that was not resolved (a
+// hand-built one) carries none and falls back to the platform default lowered by its own size.
+func (c governanceCeiling) memberSize() types.ResourceLimits {
+	if c.MemberDefault.CPUMillis > 0 && c.MemberDefault.MemoryMiB > 0 {
+		return c.MemberDefault
+	}
+	return composer.MemberDefault(types.ResourceLimits{}, c.Spec.Resources)
 }
 
 // inheritDeploymentResources fills what a profile's ceiling leaves unset (no resources block, or a

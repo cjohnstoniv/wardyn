@@ -184,6 +184,8 @@ describe("ProfileEditor — authoring an overlay", { timeout: 20_000 }, () => {
       limits: {
         deny_interactive: true,
         deny_ui_apps: false,
+        deny_placements: ["local"],
+        deny_member_drives: true,
         max_cpu_millis: 2000,
         max_memory_mib: 0,
         max_wait_sec: 3600,
@@ -201,10 +203,13 @@ describe("ProfileEditor — authoring an overlay", { timeout: 20_000 }, () => {
         limits: {},
         overlay_limits: {
           deny_interactive: true,
+          deny_placements: ["local"],
+          deny_member_drives: true,
           max_cpu_millis: 2000,
           max_wait_sec: 3600,
           allow_no_end: false,
           user_changes_limits: false,
+          local_self_defined_components: false,
           autonomy_rubric: { egress_open: "L1" },
         },
       }),

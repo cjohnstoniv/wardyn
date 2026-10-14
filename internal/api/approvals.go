@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 
@@ -532,7 +533,7 @@ func (s *Server) decide(w http.ResponseWriter, r *http.Request, approve bool) {
 // (helpers.go), even though its own comment calls itself the package's single
 // JSON-body decode primitive. decodeStrict 400s EVERY decode error including
 // io.EOF, and three shipped shell clients POST approve with no body at all and
-// assert 200|202 (scripts/test-drive.sh:465 and :579, test/e2e/e2e.sh:420) —
+// assert 200|202 (two in scripts/test-drive.sh, one in test/e2e/e2e.sh) —
 // all three would break. It also sets DisallowUnknownFields, which would reject
 // an older or newer client sending a field this build does not know.
 //
@@ -543,17 +544,38 @@ func (s *Server) decide(w http.ResponseWriter, r *http.Request, approve bool) {
 // client that meant `once` would get a run-wide grant and a 200.
 // io.ErrUnexpectedEOF still catches the truncation; only the genuinely empty
 // body (io.EOF) stays tolerated.
+//
+// The reason is bounded here, before any row is read or written, and refused
+// rather than truncated: it is the audit explanation, and a decided row keeps it
+// forever. The bound is maxGovernanceRejectReasonLen, the rule a governance
+// rejection's reason already follows, so the two human decision reasons read
+// alike; that rule's control-character check is not copied, since nothing here
+// needs it.
 func decodeDecisionRequest(w http.ResponseWriter, r *http.Request) (decisionRequest, bool) {
 	var body decisionRequest
 	if r.Body == nil {
 		return body, true
 	}
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxJSONBody)).Decode(&body); err != nil && !errors.Is(err, io.EOF) {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxDecisionBody)).Decode(&body); err != nil && !errors.Is(err, io.EOF) {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			writeErrorReason(w, http.StatusRequestEntityTooLarge, reasonRequestBodyTooLarge, "request body exceeds size limit")
+			return body, false
+		}
 		writeErrorReason(w, http.StatusBadRequest, reasonInvalidRequestBody, "invalid request body")
+		return body, false
+	}
+	if utf8.RuneCountInString(body.Reason) > maxGovernanceRejectReasonLen {
+		writeErrorReason(w, http.StatusBadRequest, reasonInvalidRequestBody, "reason: at most 512 characters")
 		return body, false
 	}
 	return body, true
 }
+
+// maxDecisionBody caps an approve/deny body: readRejectReason's ceiling, room
+// for a 512-character reason even fully \u-escaped plus the scope fields and
+// any field a newer client adds.
+const maxDecisionBody = 16 << 10
 
 // authorizeUserDecision is decide's step 2, the MEMBER GATE — the whole of
 // it, so that "everything after this point has proven ownership" is a single

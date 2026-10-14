@@ -8,12 +8,15 @@ import (
 	"go/parser"
 	"go/token"
 	"os"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
 	"testing"
 
 	"github.com/cjohnstoniv/wardyn/internal/authz"
+	"github.com/cjohnstoniv/wardyn/internal/placement"
+	"github.com/cjohnstoniv/wardyn/internal/runnerpool"
 )
 
 // adoEntraFailureEnumValues is ADOEntraFailure's own closed enum
@@ -24,6 +27,107 @@ import (
 // cannot hide behind that exception.
 var adoEntraFailureEnumValues = []string{
 	"not_captured", "dead_credential", "consent_required", "interaction_required", "unavailable",
+}
+
+// placementAuditOnlyReasons are placement reasons internal/api names only in
+// audit rows, never in an HTTP body.
+var placementAuditOnlyReasons = map[placement.Reason]bool{placement.ReasonRunnerRevoked: true}
+
+// placementWireReasons derives the placement reasons HTTP handlers publish: every
+// placement.Reason* internal/api's non-test files name, plus every reason
+// placement.LocalEligibility and its enforcement table refuse with (they reach
+// the wire through localEligibilityRefusal), less placementAuditOnlyReasons.
+// A reason a handler starts using needs a docs/sdk.md row with no edit here.
+func placementWireReasons(t *testing.T) []placement.Reason {
+	t.Helper()
+	fset := token.NewFileSet()
+	parse := func(pattern string) []*ast.File {
+		names, err := filepath.Glob(pattern)
+		if err != nil || len(names) == 0 {
+			t.Fatalf("no files match %s (%v)", pattern, err)
+		}
+		var files []*ast.File
+		for _, name := range names {
+			if strings.HasSuffix(name, "_test.go") {
+				continue
+			}
+			f, err := parser.ParseFile(fset, name, nil, parser.SkipObjectResolution)
+			if err != nil {
+				t.Fatalf("parse %s: %v", name, err)
+			}
+			files = append(files, f)
+		}
+		return files
+	}
+	// The registry's own const names, so an identifier resolves to its value.
+	valueOf := map[string]placement.Reason{}
+	for _, f := range parse("../placement/reasons.go") {
+		for _, d := range f.Decls {
+			gd, ok := d.(*ast.GenDecl)
+			if !ok || gd.Tok != token.CONST {
+				continue
+			}
+			for _, spec := range gd.Specs {
+				vs := spec.(*ast.ValueSpec)
+				if lit, ok := vs.Values[0].(*ast.BasicLit); ok && strings.HasPrefix(vs.Names[0].Name, "Reason") {
+					valueOf[vs.Names[0].Name] = placement.Reason(strings.Trim(lit.Value, `"`))
+				}
+			}
+		}
+	}
+	used := map[placement.Reason]bool{}
+	note := func(name string) {
+		if reason, ok := valueOf[name]; ok {
+			used[reason] = true
+		}
+	}
+	for _, f := range parse("*.go") {
+		ast.Inspect(f, func(n ast.Node) bool {
+			if sel, ok := n.(*ast.SelectorExpr); ok {
+				if pkg, ok := sel.X.(*ast.Ident); ok && pkg.Name == "placement" {
+					note(sel.Sel.Name)
+				}
+			}
+			return true
+		})
+	}
+	for _, file := range []string{"eligibility.go", "enforce.go"} {
+		for _, f := range parse("../placement/" + file) {
+			ast.Inspect(f, func(n ast.Node) bool {
+				if call, ok := n.(*ast.CallExpr); ok && len(call.Args) > 0 {
+					if fn, ok := call.Fun.(*ast.Ident); ok && fn.Name == "refuse" {
+						if arg, ok := call.Args[0].(*ast.Ident); ok {
+							note(arg.Name)
+						}
+					}
+				}
+				return true
+			})
+		}
+	}
+	var out []placement.Reason
+	for reason := range used {
+		if !placementAuditOnlyReasons[reason] {
+			out = append(out, reason)
+		}
+	}
+	if len(out) < 8 {
+		t.Fatalf("derived only %d placement wire reason(s) %v — the scan broke, not the handlers", len(out), out)
+	}
+	return out
+}
+
+// runnerPoolWireReasons lists the runner pool reasons published by HTTP handlers
+// today. Keep their values in runnerpool; the two left out (required, default
+// unavailable) join this list when the run-create fold sends them, and must be documented in the same change.
+var runnerPoolWireReasons = []runnerpool.Reason{
+	runnerpool.ReasonInvalid,
+	runnerpool.ReasonNotFound,
+	runnerpool.ReasonUnavailable,
+	runnerpool.ReasonStale,
+	runnerpool.ReasonNoEligibleMember,
+	runnerpool.ReasonMemberMismatch,
+	runnerpool.ReasonPoolsUnavailable,
 }
 
 // documentedDuplicateReasonValues lists wire values TWO OR MORE reasons.go
@@ -141,13 +245,25 @@ func TestReasonDocsMatchReasonsGo(t *testing.T) {
 	authzReasons := authzWireReasons(t)
 
 	// docReasons must equal goReasons ∪ authzReasons ∪ the ADO enum exception,
-	// exactly — three sources of wire-visible reasons, one required doc table.
+	// exactly, plus published placement enum members — one required doc table.
 	want := map[string]bool{}
 	for k := range goReasons {
 		want[k] = true
 	}
 	for k := range authzReasons {
 		want[k] = true
+	}
+	for _, reason := range placementWireReasons(t) {
+		if !reason.Valid() {
+			t.Fatalf("published placement reason %q is outside its registry", reason)
+		}
+		want[string(reason)] = true
+	}
+	for _, reason := range runnerPoolWireReasons {
+		if !reason.Valid() {
+			t.Fatalf("published runner pool reason %q is outside its registry", reason)
+		}
+		want[string(reason)] = true
 	}
 	for _, v := range adoEntraFailureEnumValues {
 		want[v] = true
@@ -167,10 +283,10 @@ func TestReasonDocsMatchReasonsGo(t *testing.T) {
 	sort.Strings(missingFromDocs)
 	sort.Strings(missingFromGo)
 	if len(missingFromDocs) > 0 {
-		t.Errorf("wire reason(s) (reasons.go/reasons_routes.go or authz's registry) with no docs/sdk.md row: %v", missingFromDocs)
+		t.Errorf("wire reason(s) (API, authz, or published placement registry) with no docs/sdk.md row: %v", missingFromDocs)
 	}
 	if len(missingFromGo) > 0 {
-		t.Errorf("docs/sdk.md values with no source (not reasons.go, not authz.Reasons(), and not the ADOEntraFailure exception): %v", missingFromGo)
+		t.Errorf("docs/sdk.md values with no source (not reasons.go, not authz.Reasons(), published placement reasons, or the ADOEntraFailure exception): %v", missingFromGo)
 	}
 }
 

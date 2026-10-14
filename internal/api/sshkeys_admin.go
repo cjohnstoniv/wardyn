@@ -72,10 +72,11 @@ func (s *Server) deleteSSHKeysFor(ctx context.Context, principal string, resolve
 
 // Two distinct causes (#656 slice 2 review round: they used to share
 // ssh_key_owner_unresolved) — no principal matches, or more than one does.
-// The same resolver shape as secretOwnerParam's (secrets.go), which already
-// splits these into reasonOwnerUnresolved/reasonOwnerAmbiguous via
-// ownerRefusalReason; reused here rather than inventing a second vocabulary
-// for the same two causes.
+// A name that owns keys exactly is that owner; any other resolves through
+// resolveSecretOwner, the one answer every route that removes a person's records
+// by name uses, and its two refusals keep their reasons (ownerRefusalReason)
+// rather than a second vocabulary for the same two causes. A directory that
+// cannot be read is an error: removal must not guess after a failed read.
 func (s *Server) resolveSSHKeyOwner(ctx context.Context, raw string) (principal, refusal, reason string, err error) {
 	keys, err := s.cfg.Store.ListSSHKeysByPrincipal(ctx, raw)
 	if err != nil {
@@ -84,36 +85,18 @@ func (s *Server) resolveSSHKeyOwner(ctx context.Context, raw string) (principal,
 	if len(keys) > 0 {
 		return raw, "", "", nil
 	}
-	// A partial directory could make an ambiguous name look unique, or mistake
-	// an email for an unrelated subject. Removal must not guess after a failed read.
-	tokens, err := s.cfg.Store.ListAPITokens(ctx)
+	principal, _, refusal, err = s.resolveSecretOwner(ctx, raw)
 	if err != nil {
-		return "", "", "", fmt.Errorf("resolve SSH principal tokens: %w", err)
+		return "", "", "", fmt.Errorf("resolve SSH principal: %w", err)
 	}
-	workspaces, err := s.cfg.Store.ListWorkspaces(ctx)
-	if err != nil {
-		return "", "", "", fmt.Errorf("resolve SSH principal workspaces: %w", err)
-	}
-	var directory []principalIdentity
-	for _, token := range tokens {
-		if token.Principal != "" {
-			directory = append(directory, principalIdentity{principal: token.Principal, email: token.Email})
-		}
-	}
-	for _, ws := range workspaces {
-		if ws.OwnedBy != "" {
-			directory = append(directory, principalIdentity{principal: ws.OwnedBy})
-		}
-	}
-	principal, _, refusal = resolvePrincipal(directory, raw)
 	if refusal != "" {
 		reason = ownerRefusalReason(refusal)
 	}
 	switch refusal {
 	case secretOwnerUnresolvedMsg:
-		refusal = "no known principal matches that email address; name the subject exactly"
+		refusal = "no known principal matches that email address; name the subject exactly, as the Audit log shows it"
 	case secretOwnerAmbiguousMsg:
-		refusal = "more than one known principal matches; name the subject exactly"
+		refusal = "more than one known principal matches; name the subject exactly, as the Audit log shows it"
 	}
 	return principal, refusal, reason, nil
 }

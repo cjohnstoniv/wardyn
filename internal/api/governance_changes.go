@@ -22,7 +22,6 @@ import (
 	"net/http"
 	"slices"
 	"strings"
-	"time"
 	"unicode/utf8"
 
 	"github.com/go-chi/chi/v5"
@@ -69,7 +68,7 @@ func (s *Server) handleListGovernanceChanges(w http.ResponseWriter, r *http.Requ
 	}
 	out := make([]types.GovernanceChange, 0, len(all))
 	for _, ch := range all {
-		if s.canSeeGovernanceKind(r, ch.TargetKind) {
+		if s.canSeeGovernanceChange(r, ch) {
 			out = append(out, ch)
 		}
 	}
@@ -84,7 +83,7 @@ func (s *Server) handleGetGovernanceChange(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	ch, err := s.cfg.Store.GetGovernanceChange(r.Context(), id)
-	if err == nil && !s.canSeeGovernanceKind(r, ch.TargetKind) {
+	if err == nil && !s.canSeeGovernanceChange(r, ch) {
 		err = store.ErrNotFound
 	}
 	if notFoundIf(w, err, "governance change", reasonGovernanceChangeNotFound) {
@@ -207,11 +206,11 @@ func (s *Server) recheckApprover(ctx context.Context, r *http.Request, q store.Q
 // A database-backed revocation check must share the decision's connection.
 func (s *Server) approverSessionStatus(ctx context.Context, q store.Querier, t types.APIToken) (oidc.SessionStatus, error) {
 	if rev, ok := s.cfg.SessionRevocations.(interface {
-		SessionStatusQ(context.Context, store.Querier, string, string, time.Time, int64) (oidc.SessionStatus, error)
+		SessionStatusQ(context.Context, store.Querier, string, string, oidc.Issue, int64) (oidc.SessionStatus, error)
 	}); ok {
-		return rev.SessionStatusQ(ctx, q, t.Principal, t.Email, t.CreatedAt, -1)
+		return rev.SessionStatusQ(ctx, q, t.Principal, t.Email, oidc.Issue{At: t.CreatedAt, Seq: t.RevSeq}, -1)
 	}
-	return oidc.CheckSession(ctx, s.cfg.SessionRevocations, t.Principal, t.Email, t.CreatedAt, -1)
+	return oidc.CheckSession(ctx, s.cfg.SessionRevocations, t.Principal, t.Email, oidc.Issue{At: t.CreatedAt, Seq: t.RevSeq}, -1)
 }
 
 // denyApprover is the refusal a caller whose tier does not pass the kind's approver predicate gets.
@@ -254,6 +253,7 @@ func (s *Server) decideGovernanceChange(w http.ResponseWriter, r *http.Request, 
 		writeServerError(w, r, "decide governance change", errors.New("unknown target kind "+head.TargetKind))
 		return
 	}
+	kind = kind.forChange(head)
 	if !bypass && !kind.approver.allowed(s, r) {
 		s.denyApprover(kind).write(w, r)
 		return

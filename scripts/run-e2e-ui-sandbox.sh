@@ -39,6 +39,8 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${ROOT}"
 source "${ROOT}/scripts/lib/common.sh"
+# shellcheck source=scripts/lib/runner-limits.sh
+source "${ROOT}/scripts/lib/runner-limits.sh"
 
 if [[ "${WARDYN_TEST_DOCKER:-}" != "1" ]]; then
   skip_lane "run-e2e-ui-sandbox: set WARDYN_TEST_DOCKER=1 to run the Docker-dependent UI-sandbox e2e (skipping)."
@@ -146,6 +148,12 @@ if [[ "${UI_ENABLED}" != "true" ]]; then
   die "ui-sandbox gateway not enabled per /healthz (WARDYN_UI_SANDBOX_LISTEN wiring broken, or ${WARDYND_IMAGE} was built from a tree without it) -- last /healthz body: ${HEALTHZ_RAW}"
 fi
 pass "stack up, healthy, /healthz reports ui_sandbox.enabled=true"
+# The stack's Docker runner takes no run until it has limits (scripts/lib/runner-limits.sh); this
+# walk declares its own, sized for its few runs.
+# shellcheck disable=SC2317 # called by wardyn_ensure_runner_limits
+wardyn() { compose exec -T -e WARDYN_URL=http://localhost:8080 wardynd /usr/local/bin/wardyn "$@"; }
+WARDYN_SETUP_RUNNER_LIMITS="${WARDYN_SETUP_RUNNER_LIMITS:---max-runs 4 --total-cpu 8 --total-memory 16 --total-disk 80 --per-run-cpu 2 --per-run-memory 4 --per-run-disk 20}" \
+  wardyn_ensure_runner_limits </dev/null || die "could not give the ui-sandbox walk's runner its limits"
 
 # ── api helper (console origin, admin bearer) ────────────────────────────────
 api() {

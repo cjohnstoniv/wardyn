@@ -10,6 +10,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -18,6 +19,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/policyref"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/runnerpool"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/internal/version"
@@ -135,8 +137,8 @@ func servePage[T any](w http.ResponseWriter, r *http.Request, page store.Page, p
 }
 
 // handleListRuns returns runs in reverse creation order, paginated by
-// ?limit=&offset= (see parseListPage). A member sees only runs they created
-// (store.RunsByCreatorPager); an admin — and a security admin — sees every run.
+// ?limit=&offset= (see parseListPage). A member sees only runs they created, and
+// those of the service identities they sponsor (store.RunsByCreatorPager); an admin — and a security admin — sees every run.
 //
 // isSecurityOperator, not isOperator: an approval or an audit line names a run
 // id, and a tier that can decide the one but cannot see the other is doing
@@ -168,13 +170,21 @@ func (s *Server) handleListRuns(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		principal := principalFromRequest(r)
+		// A sponsor also reads the runs of the service identities they sponsor (F3), on the filtered path
+		// too (runs_list_filter.go). A store that cannot widen the list, and a portal's delegated token,
+		// list the caller's own runs only: never more.
+		listByCreator := creatorPager.ListRunsPageByCreator
+		if sp, ok := s.cfg.Store.(store.RunsByCreatorOrSponsorPager); ok && !delegatedRequest(r.Context()) {
+			listByCreator = sp.ListRunsPageByCreatorOrSponsor
+		}
 		servePage(w, r, page, func(p store.Page) ([]types.AgentRun, error) {
-			runs, err := creatorPager.ListRunsPageByCreator(r.Context(), principal, p)
+			runs, err := listByCreator(r.Context(), principal, p)
 			if err != nil {
 				return nil, err
 			}
 			s.projectRecordingMeta(r, runs)
 			s.projectStatusDetailFor(r, runs)
+			s.projectRunnerFacts(r, runs)
 			return runs, nil
 		}, nil)
 		return
@@ -188,6 +198,7 @@ func (s *Server) handleListRuns(w http.ResponseWriter, r *http.Request) {
 			}
 			s.projectRecordingMeta(r, runs)
 			s.projectStatusDetailFor(r, runs)
+			s.projectRunnerFacts(r, runs)
 			return runs, nil
 		}
 	}
@@ -198,19 +209,20 @@ func (s *Server) handleListRuns(w http.ResponseWriter, r *http.Request) {
 		}
 		s.projectRecordingMeta(r, runs)
 		s.projectStatusDetailFor(r, runs)
+		s.projectRunnerFacts(r, runs)
 		return runs, nil
 	})
 }
 
-// handleGetRun returns one run by id. Owner-or-admin (getRunAuthorized): a
-// member reading a run they did not create gets the same 404 a missing run
-// would.
+// handleGetRun returns one run by id. Owner, admin or the sponsor of the service
+// identity that created it (ownsRunOrSponsorOrAdmin): a member reading a run they
+// did not create gets the same 404 a missing run would.
 func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 	id, ok := parseIDParam(w, r, "id", "run")
 	if !ok {
 		return
 	}
-	run, ok := s.getRunAuthorized(w, r, id)
+	run, ok := s.getRunAuthorizedBy(w, r, id, s.ownsRunOrSponsorOrAdmin)
 	if !ok {
 		return
 	}
@@ -219,6 +231,7 @@ func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 	runs := []types.AgentRun{run}
 	s.projectRecordingMeta(r, runs)
 	s.projectStatusDetailFor(r, runs)
+	s.projectRunnerFacts(r, runs)
 	run = runs[0]
 	// ui_apps is a READ-ONLY denormalization of the run's EFFECTIVE policy onto
 	// the run payload — the console's UI-apps lane needs it, and the run row
@@ -249,12 +262,16 @@ func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 		// policy_help, else absent. Read after getRunAuthorized, so a hidden run
 		// never reaches it.
 		Policy *policyref.Ref `json:"policy,omitempty"`
+		// Sync lists the wardyn-sync sessions open now (sync.open), from the
+		// gateway's live per-run sync budget; always present, empty when none.
+		Sync runSyncView `json:"sync"`
 	}{
 		AgentRun: run, UIApps: apps, UserTypeName: s.runUserTypeName(r, run.UserType),
 		ModelProviderName: providerName, ModelProviderDeleted: providerDeleted,
 		CreatedViaName: s.runCreatedViaName(r.Context(), run),
 		KeptUntil:      s.endedRunKeptUntil(run),
 		Policy:         s.runPolicyRef(r.Context(), run),
+		Sync:           s.runSyncOpenView(run.ID),
 	})
 }
 
@@ -497,6 +514,16 @@ func strongestAdvertisedAtOrAbove(classes []types.ConfinementClass, floor types.
 	return floor
 }
 
+// defaultBarrier is the class an untouched launch gets: the organisation's default when it is at or
+// above the floor and offered, else today's rule (strongestAdvertisedAtOrAbove). offered is the set
+// the run's placement can enforce, so a default the placement cannot honour never wins.
+func defaultBarrier(offered []types.ConfinementClass, floor, org types.ConfinementClass) (types.ConfinementClass, runnerpool.BarrierDefaultSource) {
+	if org != "" && confinementGE(org, floor) && slices.Contains(offered, org) {
+		return org, runnerpool.BarrierDefaultOrganisation
+	}
+	return strongestAdvertisedAtOrAbove(offered, floor), runnerpool.BarrierDefaultServer
+}
+
 // classesOrNone renders an advertised confinement set for error messages, or
 // "none" when the runner advertises no class.
 func classesOrNone(classes []types.ConfinementClass) string {
@@ -668,6 +695,11 @@ func runIdentitySubject(ctx context.Context, actor string) string {
 // IdP sub spelled like the admin token is still a person. Run creation records
 // it (AgentRun.OperatorOwned, identity.Claims.OperatorOwned).
 func operatorOwnedRequest(ctx context.Context) bool {
+	// Keyed on the service marker, never on the actor type: under D8's fallback form a service reads as
+	// the system actor, and every service run would otherwise be operator-owned.
+	if _, _, isService := serviceIdentityFromContext(ctx); isService {
+		return false
+	}
 	if localPrincipalFromContext(ctx) != "" {
 		return true
 	}
@@ -766,6 +798,10 @@ func actorFromContext(ctx context.Context, localOverride string) (types.ActorTyp
 	// attribution for a WS handshake that cannot carry a credential itself.
 	if ta, ok := ticketActorFromContext(ctx); ok {
 		return ta.actorType, ta.principal
+	}
+	// A service identity is its own actor, ahead of the human arm its published identity would match.
+	if name, _, ok := serviceIdentityFromContext(ctx); ok {
+		return serviceActorType, types.ServicePrincipalPrefix + name
 	}
 	if op := localPrincipalFromContext(ctx); op != "" {
 		if localOverride != "" {

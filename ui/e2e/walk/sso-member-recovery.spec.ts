@@ -85,8 +85,14 @@ import { STARTING_UNSCHEDULABLE } from "../../src/app/components/screens/run-sta
 // rail), by constant name handed over from their own canon docs.
 import { MODEL_ACCESS_BANNER, RAIL_MODEL_ACCESS } from "../../src/app/components/wardyn/model-access-copy";
 import { CONNECTIONS } from "../../src/app/components/wardyn/copy/door";
-import { RAIL_CREDENTIAL, RAIL_RECORDING_ON, RECORDING_DISABLED_TITLE } from "../../src/app/components/wardyn/copy";
-import { RAIL_PROVIDER } from "../../src/app/components/wardyn/copy/new-run-rail";
+import { NR_FILES } from "../../src/app/components/wardyn/copy/new-run/files";
+import { NR_HARNESSES } from "../../src/app/components/wardyn/copy/new-run/harnesses";
+import { NR_LAUNCH } from "../../src/app/components/wardyn/copy/new-run/launch";
+import { NR_RUN } from "../../src/app/components/wardyn/copy/new-run/run";
+import { NR_SHAPE } from "../../src/app/components/wardyn/copy/new-run/shape";
+import { NR_SHARED } from "../../src/app/components/wardyn/copy/new-run/shared";
+import { NR_START } from "../../src/app/components/wardyn/copy/new-run/start";
+import { NR_TOOLS } from "../../src/app/components/wardyn/copy/new-run/tools";
 import { AGENTS, PROVIDERS } from "../../src/app/lib/workspace-providers-copy";
 import { expandCard } from "../fixtures";
 import {
@@ -102,17 +108,60 @@ import {
   dexSignIn,
   dexSignOut,
   launchAgentRun,
+  launchFromReview,
   makeMemberActionable,
   me,
   modelAccess,
+  cardSignInAws,
   openLoginPane,
   openModelConnections,
+  paneCancel,
   ownAWSRow,
   runIDFromURL,
   seen,
   signInThroughPane,
+  viewLaunchedRun,
+  walkNewRunToReview,
 } from "./helpers";
 import { termText } from "../terminal-text";
+
+const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const startsWith = (s: string) => new RegExp(`^${escapeRe(s)}`);
+const heading = (page: Page, title: string) => page.getByRole("heading", { name: title, level: 1 });
+
+// The model provider picker of the one harness these cases add (Tools and access), and its help line.
+const PROVIDER_PICKER = "#nr-provider-claude-code";
+
+/**
+ * From New Run's Start screen to a step on the way to Tools and access, as an autonomous agent task with one
+ * harness (claude-code) added: "harnesses" stops after the harness is added, "tools" arrives on Tools and
+ * access with the provider NOT yet chosen (helpers.ts's walkNewRunToReview chooses it, and these cases assert
+ * on the choice itself).
+ */
+async function walkNewRunTo(page: Page, stop: "harnesses" | "tools"): Promise<void> {
+  const next = async (title: string) => {
+    await page.getByRole("button", { name: startsWith(NR_SHARED.CONTINUE_TO("")) }).click();
+    await expect(heading(page, title)).toBeVisible({ timeout: 60_000 });
+  };
+  await expect(heading(page, NR_START.TITLE)).toBeVisible({ timeout: 60_000 });
+  await page.getByRole("button", { name: NR_START.GUIDED_FOOT }).click();
+  await expect(heading(page, NR_SHAPE.TITLE)).toBeVisible();
+  // A workload button writes the shape and opens Run.
+  await page.getByRole("button", { name: NR_SHAPE.AGENT_TITLE, exact: true }).click();
+  await expect(heading(page, NR_RUN.TITLE_AGENT)).toBeVisible({ timeout: 60_000 });
+  await page.getByRole("radio", { name: startsWith(NR_RUN.MODE_AUTONOMOUS) }).click();
+  await next(NR_HARNESSES.TITLE);
+  // A new agent task opens with its first harness added.
+  await expect(page.locator("#nr-harness-0")).toBeVisible({ timeout: 60_000 });
+  if (stop === "harnesses") return;
+  await page.locator("#nr-harness-0").selectOption("claude-code");
+  await page.locator("#nr-task").fill("Reply with the single word: ready.");
+  await next(NR_FILES.TITLE);
+  await page.getByRole("radio", { name: startsWith(NR_FILES.NO_EXTRA) }).check();
+  const size = page.locator("#nr-main-drive-size");
+  if ((await size.count()) > 0 && (await size.inputValue()) === "") await size.fill("10");
+  await next(NR_TOOLS.TITLE);
+}
 
 test.skip(process.env.WARDYN_TEST_K8S !== "1", "live cluster walk: set WARDYN_TEST_K8S=1 (scripts/kind-sso-walk.sh)");
 test.describe.configure({ mode: "serial" });
@@ -307,6 +356,16 @@ async function gotoAgentsTab(page: Page): Promise<void> {
   await page.getByRole("button", { name: AGENTS.AGENTS_TITLE }).click();
 }
 
+/** Puts this SSO admin's session in the named view with the console's own switch; the session cookie holds the
+ *  view. A full load first, so no dialog left open above the banner swallows the click. */
+async function inView(page: Page, view: string): Promise<void> {
+  await page.goto("/account");
+  const segment = page.getByRole("group", { name: CONSOLE_VIEW.GROUP }).getByRole("button", { name: view });
+  await expect(segment).toBeVisible({ timeout: 60_000 });
+  if ((await segment.getAttribute("aria-pressed")) !== "true") await segment.click();
+  await expect(segment).toHaveAttribute("aria-pressed", "true", { timeout: 60_000 });
+}
+
 /** An ADMIN's own AWS sign-in, which is NOT on /setup.
  *
  *  /setup renders the operator Getting Started for an operator. A person's
@@ -314,8 +373,9 @@ async function gotoAgentsTab(page: Page): Promise<void> {
  *  the admin's own sign-in is the provider's row on /account's connections
  *  card, which opens the same door and the same HarnessLoginPane. */
 async function openAdminLoginPane(page: Page): Promise<void> {
-  await page.goto("/account");
-  await page.getByRole("button", { name: AGENTS.SIGN_IN_AWS }).first().click();
+  await inView(page, CONSOLE_VIEW.USER);
+  await openModelConnections(page);
+  await cardSignInAws(page).click();
   await expect(page.getByTestId("harness-login-pane")).toBeVisible({ timeout: 60_000 });
 }
 
@@ -443,68 +503,70 @@ test("A: an admin sets the org's agent standard in the console and a member is b
   await dexSignIn(page, MEMBER_EMAIL);
 
   // (i) the standard reached them: New Run offers the one enabled agent, and
-  // names the reason for the other rather than hiding it.
+  // names the reason for the other rather than hiding it (the Harnesses step: the
+  // harness select disables a harness that is not enabled, and the list under the
+  // cards gives the reason).
   await page.goto("/runs/new");
-  await page.getByRole("radio", { name: /^Autonomous/ }).click();
-  await page.getByRole("combobox", { name: "Agent" }).click();
-  await expect(page.getByRole("option", { name: "Claude Code" })).toBeEnabled();
-  const codex = page.getByRole("option", { name: new RegExp(`Codex CLI.*${AGENTS.UNAVAILABLE}`) });
-  await expect(codex).toBeVisible();
-  await expect(codex).toHaveAttribute("aria-disabled", "true");
-  await page.keyboard.press("Escape");
+  await walkNewRunTo(page, "harnesses");
+  const harness = page.locator("#nr-harness-0");
+  await expect(harness.getByRole("option", { name: "Claude Code" })).toBeEnabled();
+  const codex = harness.getByRole("option", { name: "Codex CLI" });
+  await expect(codex).toBeDisabled();
+  await expect(
+    page.locator("#nr-harness-unavailable").getByRole("listitem").filter({ hasText: "Codex CLI" }).filter({ hasText: NR_HARNESSES.NOT_ENABLED }),
+  ).toBeVisible();
 
   // (iii) an ORG SETTING is ENFORCED on the member, not merely saved: the pin
   // flip has made them actionable, and the server says which pair to pick.
   await expect.poll(async () => (await modelAccess(page)).state, { timeout: 120_000 }).toBe("expired_signin");
   expect((await modelAccess(page)).action ?? "", "the lapse names the pinned pair").toContain(pin.account);
   await openModelConnections(page);
-  await expect(page.getByRole("button", { name: AGENTS.SIGN_IN_AWS }).first()).toBeVisible({ timeout: 60_000 });
+  await expect(cardSignInAws(page)).toBeVisible({ timeout: 60_000 });
   // Not opened: the pane launches its login sandbox the moment it opens, and
   // case C opens its own — a second live device code would be the one thing
   // this walk must not mint.
 });
 
-test("A(rail): the New Run rail states THIS run's credential residency, with no click", async ({ page }) => {
-  // The field report's finding 1, live: on a bedrock_sso provider estate the
-  // rail must say the AWS credential is RESIDENT — the opposite of 0.7.4's
+test("A(rail): New Run's Tools and access states THIS run's credential residency, with no click", async ({ page }) => {
+  // The field report's finding 1, live: on a bedrock_sso provider estate New Run
+  // must say the AWS credential is RESIDENT — the opposite of 0.7.4's
   // unconditional "Never written into the sandbox" — and it must say so on the
   // DEFAULT path, before any Preflight click, because that is the state a
   // member is in while deciding whether to sign in at all.
   //
-  // The rail reads it off the one provider this run would use: a bedrock_sso
-  // provider's AWS credentials sign inside the sandbox, signed in or not.
+  // It reads off the one provider this run would use: a bedrock_sso provider's
+  // AWS credentials sign inside the sandbox, signed in or not. (Was the rail's
+  // "What this run can do"; the harness's Model provider picker and the
+  // Credentials total on Tools and access say it now.)
   await dexSignIn(page, MEMBER_EMAIL);
   await page.goto("/runs/new");
-  await page.getByRole("radio", { name: /^Autonomous/ }).click();
+  await walkNewRunTo(page, "tools");
 
-  // The rail's Credentials summary; the Run panel's picker states the same two
-  // facts beside the provider control (#1922).
-  const rail = page.getByRole("complementary", { name: "What this run can do" });
-  await expect(rail.getByText(RAIL_PROVIDER.STATIC(WALK_PROVIDER_NAME))).toBeVisible({ timeout: 60_000 });
-  await expect(rail.getByText(RAIL_CREDENTIAL.SANDBOX_BEDROCK)).toBeVisible({ timeout: 60_000 });
+  const picker = page.locator(PROVIDER_PICKER);
+  // OPEN: the old rail named the sole provider with no click (RAIL_PROVIDER.STATIC); the picker
+  // lists it and the person must choose it (a provider is required before launch). Should the
+  // sole provider be preselected? If so, assert toHaveValue(WALK_PROVIDER) before the pick.
+  await expect(picker.getByRole("option", { name: WALK_PROVIDER_NAME })).toHaveCount(1, { timeout: 60_000 });
+  await picker.selectOption(WALK_PROVIDER);
+  // Short-lived and in the sandbox: NOT the proxy-only sentence finding 1 retired, and not blank
+  // (the old honest-absence arm, RESOLVED_AT_LAUNCH, was the quiet failure here).
+  await expect(page.locator(`${PROVIDER_PICKER}-help`)).toHaveText(NR_TOOLS.DELIVERY_SHORT_LIVED, { timeout: 60_000 });
+  const credentials = page.getByRole("region", { name: NR_TOOLS.TOTALS_ARIA });
+  await expect(credentials.getByRole("heading", { name: NR_TOOLS.CREDENTIALS_TITLE })).toBeVisible();
+  // The Credentials total shows the delivery line the console renders for a short-lived credential.
+  await expect(credentials.getByText(NR_TOOLS.DELIVERY_SHORT_LIVED)).toBeVisible({ timeout: 60_000 });
+  // The lapsed member's sign-in door is on the provider itself (never clicked: opening it starts a capture).
+  await expect(page.getByRole("button", { name: NR_TOOLS.SETUP_SIGN_IN_TO(WALK_PROVIDER_NAME) })).toBeVisible();
   // The per-person chip that followed the sentence is removed.
   await expect(page.getByText("Per-person AWS sign-in")).toHaveCount(0);
-  // …and Recording states the truth about a stock Helm install rather than
-  // promising a capture that cannot happen: the kind quickstart leaves
-  // persistence.enabled=false. The Recording row reads /healthz, so it arrives
-  // on that answer rather than on mount — poll it rather than racing it.
-  await expect(page.getByText(RECORDING_DISABLED_TITLE)).toBeVisible({ timeout: 60_000 });
-  // 0.7.4's unconditional Recording sentence — which survives as the ENABLED
-  // arm's own copy, so U-15 made it a constant (RAIL_RECORDING_ON) and this
-  // asserts through it: on this estate recording is off, and the promise must
-  // not be on screen beside the sentence that says so.
-  await expect(page.getByText(RAIL_RECORDING_ON)).toHaveCount(0);
-  // …and the honest-absence arm is NOT what rendered: this estate's provider
-  // settles residency without a dry run, so RESOLVED_AT_LAUNCH belongs to every
-  // OTHER estate and would be the quiet failure here.
-  await expect(page.getByText(RAIL_CREDENTIAL.RESOLVED_AT_LAUNCH)).toHaveCount(0);
 
   // ── A(rail)+ — the PERSON's state, on the shell's strip ──────────────────
   //
-  // Case A left this member `expired_signin` (the pin flip). The rail names
-  // the provider and where its credential lives; the lapse itself is the
-  // strip's, so its button stays. The rail's own sole-provider line offers the
-  // same door, so the strip's button is read inside the strip.
+  // Case A left this member `expired_signin` (the pin flip). Tools and access
+  // names the provider and where its credential lives; the lapse itself is the
+  // strip's, so its button stays. The provider's own "Sign in to" button on
+  // Tools and access opens the same door, so the strip's button is read inside
+  // the strip.
   await expect(page.getByText(STRIP_EXPIRED)).toBeVisible({ timeout: 60_000 });
   // THE FINDING-1 NEGATIVE: this deployment IS connected (the provider
   // exists), so the deployment-level sentence would be a falsehood here.
@@ -604,7 +666,7 @@ test("D (login-pane): a cancelled sign-in retries cleanly, and a new one superse
   // and closes the pane (harness-login-pane.tsx) — so it leaves NO blob and no
   // half-state for the retry to trip over.
   await openLoginPane(page);
-  await page.getByRole("button", { name: "Cancel" }).first().click();
+  await paneCancel(page).click();
   await expect(page.getByTestId("harness-login-pane")).toHaveCount(0, { timeout: 60_000 });
 
   // The retry, completed. signInThroughPane() rather than a terminal
@@ -791,20 +853,20 @@ test("H (agent-boot-egress): an interactive run answers ONE trust prompt and rea
   //     already "Yes, I trust this folder", so ONE bare Enter accepts it;
   //   - there is NO login-method picker at all under CLAUDE_CODE_USE_BEDROCK=1.
   //
-  // THE NO-SEED SHAPE, deliberately. Ticking "Let it use tools before I attach"
-  // would add the CLI's Bypass Permissions dialog, whose default selection is
-  // "No, exit" — a bare Enter there QUITS the CLI, and answering it would be
-  // the platform answering a security prompt on the operator's behalf. The
-  // default path is also the owner's literal one.
+  // THE NO-SEED SHAPE, deliberately. Seeding tool approval before the person
+  // attaches would add the CLI's Bypass Permissions dialog, whose default
+  // selection is "No, exit" — a bare Enter there QUITS the CLI, and answering it
+  // would be the platform answering a security prompt on the operator's behalf.
+  // The default path is also the owner's literal one.
   await dexSignIn(page, MEMBER_EMAIL);
 
   await page.goto("/runs/new");
-  await page.getByRole("combobox", { name: "Title" }).fill("interactive, my own AWS session");
-  await page.getByRole("radio", { name: /^Interactive/ }).click();
-  // "Start with" stays on its default (`<agent> — launch it in the workspace`)
-  // and the Initial prompt stays EMPTY — that is what keeps seed_auto_tools off
-  // the wire and the run on the spike's shape (a).
-  await page.getByRole("button", { name: /^Launch/ }).click();
+  // Agent task, Interactive, the harness started with the run (its switch on), and the
+  // starting prompt left EMPTY — that is what keeps seed_auto_tools off the wire and the
+  // run on the spike's shape (a).
+  await walkNewRunToReview(page, { mode: "interactive", startsWithRun: true });
+  await launchFromReview(page, "interactive, my own AWS session");
+  await viewLaunchedRun(page);
 
   const screen = page.locator(".xterm-screen").first();
   await expect(screen).toBeVisible({ timeout: SANDBOX_UP });
@@ -1000,7 +1062,7 @@ test("E2 (starting-detail): a sign-in on an unpullable image fails in seconds wi
     // The approved packet offers Retry here (it starts a fresh sandbox), and
     // Cancel beside it.
     await expect(page.getByRole("button", { name: SIGNIN_PROGRESS.RETRY })).toBeVisible();
-    await expect(page.getByRole("button", { name: SIGNIN_PROGRESS.CANCEL }).first()).toBeVisible();
+    await expect(paneCancel(page)).toBeVisible();
 
     // The same evidence on the wire, which is what makes the sentence above
     // more than a console string: a run that went STARTING → FAILED between two
@@ -1019,7 +1081,7 @@ test("E2 (starting-detail): a sign-in on an unpullable image fails in seconds wi
 
     // Leave nothing running: Cancel kills the run by the id the POST handed
     // back, which is the whole reason that control is on screen during a wait.
-    await page.getByRole("button", { name: "Cancel" }).first().click();
+    await paneCancel(page).click();
   } finally {
     // ALWAYS, and waited for: every case after this one launches a sandbox.
     setAgentImagesEnv(original);
@@ -1049,6 +1111,8 @@ test("L0 (setup gate): an admin with a lapsed AWS sign-in of their own opens New
   await dexSignIn(page, ADMIN_EMAIL);
   await signInThroughPane(page, openAdminLoginPane);
   await expect.poll(async () => (await modelAccess(page)).state, { timeout: 120_000 }).toBe("live");
+  // The sign-in was the User view's; the setup-gate question below starts from the Admin view.
+  await inView(page, CONSOLE_VIEW.ADMIN);
   await ensureActionable(page, request);
   await expect.poll(async () => (await modelAccess(page)).state, { timeout: 120_000 }).toBe("expired_signin");
 
@@ -1080,15 +1144,16 @@ test("L0 (setup gate): an admin with a lapsed AWS sign-in of their own opens New
   ).toHaveAttribute("aria-pressed", "true", { timeout: 60_000 });
 
   // A full LOAD of a gated route: the once-per-load gate evaluates the landing
-  // /setup/status read. The rail's provider line renders off that same read,
-  // so once it is on screen the answer that used to bounce us has landed — and
-  // the page is still New Run.
+  // /setup/status read. The provider picker on Tools and access renders off that
+  // same read, so once it lists the provider the answer that used to bounce us
+  // has landed — and the page is still New Run.
   await page.goto("/runs/new");
-  await expect(page.getByRole("heading", { name: "New run" })).toBeVisible({ timeout: 60_000 });
-  await expect(
-    page.getByRole("complementary", { name: "What this run can do" }).getByText(RAIL_PROVIDER.STATIC(WALK_PROVIDER_NAME)),
-  ).toBeVisible({ timeout: 60_000 });
-  await expect(page).toHaveURL(/\/runs\/new$/);
+  await expect(heading(page, NR_START.TITLE)).toBeVisible({ timeout: 60_000 });
+  await walkNewRunTo(page, "tools");
+  await expect(page.locator(PROVIDER_PICKER).getByRole("option", { name: WALK_PROVIDER_NAME })).toHaveCount(1, {
+    timeout: 60_000,
+  });
+  await expect(page).toHaveURL(/\/runs\/new(\?|$)/);
 });
 
 test("F (member-preview): an admin previews the state a member is in before they sign in", async ({ page }) => {
@@ -1111,6 +1176,7 @@ test("F (member-preview): an admin previews the state a member is in before they
   // sign-in is /account's (openAdminLoginPane).
   await signInThroughPane(page, openAdminLoginPane);
   await expect.poll(async () => (await modelAccess(page)).state, { timeout: 120_000 }).toBe("live");
+  await inView(page, CONSOLE_VIEW.ADMIN);
 
   // Into the preview, from the Permissions header (M-2).
   await page.goto("/admin/permissions");
@@ -1134,7 +1200,7 @@ test("F (member-preview): an admin previews the state a member is in before they
   // The pane sends the provider's POST /sign-in the moment it opens. The
   // sentence is Go-side (mpsPreview) and reaches the console as the pane's
   // error, which renders in its role="alert" region.
-  await page.getByRole("button", { name: AGENTS.SIGN_IN_AWS }).first().click();
+  await cardSignInAws(page).click();
   await expect(page.getByRole("alert").getByText(MEMBER_PREVIEW_SIGNIN_REFUSAL)).toBeVisible({ timeout: 60_000 });
   // The refused sign-in's dialog is modal and stays open on its error, which
   // hides the page behind it (and the banner's Exit button) from the
@@ -1152,23 +1218,25 @@ test("F (member-preview): an admin previews the state a member is in before they
 
 // ── L — 0.7.7: Launch with a lapsed sign-in is one dialog, then the run ─────
 
-test("L (launch door): Launch with a lapsed AWS sign-in opens the sign-in itself, and the same run launches after it", async ({
+test("L (launch door): Launch with a lapsed AWS sign-in opens the sign-in itself, and the run launches from the same dialog after it", async ({
   page,
   request,
 }) => {
   // The 0.7.6 field report, driven end to end: the member's session is lapsed
   // (a pin flip — helpers.ts's makeMemberActionable, the same lapse every
-  // sign-in case here drives), they fill in New Run and click Launch. The
+  // sign-in case here drives), they fill in New Run and press Launch. The
   // server refuses the run before any row exists (422, reason
-  // model_credential); the rail opens the AWS sign-in dialog ITSELF; the
-  // device flow completes on the fake; the SAME click's run launches. No trip
-  // to Getting started, no second click.
+  // model_credential); the Name dialog opens the AWS sign-in dialog ITSELF over
+  // it; the device flow completes on the fake; the sign-in re-checks and launches
+  // nothing on its own, and Launch in the SAME dialog, with what was typed still
+  // there, starts the run. No trip to Getting started.
   //
   // 0.8.6: New Run checks the body on its own, and a lapsed sign-in found by
   // that check opens the door before any click (a door whose sign-in only
   // re-checks). So the lapse lands AFTER the automatic check has passed: the
   // member is live while New Run checks, and lapses between that check and
-  // Launch, the window the create-time refusal exists for.
+  // Launch, the window the create-time refusal exists for. The guided flow keeps
+  // that window: a model_credential finding never holds Review's Launch run.
   await dexSignIn(page, MEMBER_EMAIL);
   // Live first, without a sign-in: the pin is handed back and forth by every
   // case before this one, so the member is either live or lapsed by a pin that
@@ -1182,9 +1250,7 @@ test("L (launch door): Launch with a lapsed AWS sign-in opens the sign-in itself
     { timeout: 60_000 },
   );
   await page.goto("/runs/new");
-  await page.getByRole("combobox", { name: "Title" }).fill("L launch door");
-  await page.getByRole("radio", { name: /^Autonomous/ }).click();
-  await page.locator("#nr-task").fill(TASK);
+  await walkNewRunToReview(page, { task: TASK });
   expect((await checked).status(), "New Run's automatic check of this body passes while the member is live").toBe(200);
   await expect(page.getByRole("heading", { name: MODEL_ACCESS_BANNER.DIALOG_TITLE })).toHaveCount(0);
 
@@ -1195,23 +1261,40 @@ test("L (launch door): Launch with a lapsed AWS sign-in opens the sign-in itself
   const urlBefore = page.url();
   const clickedAt = new Date().toISOString();
 
-  // THE CLICK IS THE CHECK. The body's last check passed, so the server's
-  // refusal of this click is what opens the door. Driven through
+  // THE LAUNCH IS THE CHECK. The body's last check passed, so the server's
+  // refusal of the Name dialog's Launch is what opens the door. Driven through
   // signInThroughPane so the witness is the server's MOVED capture, not the
   // terminal node (helpers.ts explains why the DOM cannot be the witness).
+  const creates: string[] = [];
+  page.on("request", (r) => {
+    if (r.method() === "POST" && new URL(r.url()).pathname === "/api/v1/runs") creates.push(r.postData() ?? "");
+  });
   await signInThroughPane(page, async (p: Page) => {
-    await p.getByRole("button", { name: /^Launch/ }).click();
+    await launchFromReview(p, "L launch door");
     await expect(p.getByRole("heading", { name: MODEL_ACCESS_BANNER.DIALOG_TITLE })).toBeVisible({ timeout: 60_000 });
     await expect(p.getByTestId("harness-login-pane")).toBeVisible({ timeout: 60_000 });
   });
 
-  // The relaunch fired from the door's completion navigates straight to the
-  // run page, advisories and all (#125), exactly as a hand launch does
-  // (helpers.ts's launchAgentRun). NOT "Running" (walk-3): the fake answers inference in
-  // seconds and the agent exits, so the run can be FINISHED before this spec
-  // — which reaches the page only after signInThroughPane's capture poll — ever
-  // looks; the witness is the run ROW and its trail below, never a state chip.
-  await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{36}$/, { timeout: SANDBOX_UP });
+  // The completed sign-in closes its door and re-checks; it launches nothing.
+  // The Name dialog is still there with its title, its fresh check passes, and
+  // the one create so far is the refused one.
+  const dialog = page.getByRole("dialog", { name: NR_LAUNCH.TITLE });
+  await expect(page.getByRole("heading", { name: MODEL_ACCESS_BANNER.DIALOG_TITLE })).toHaveCount(0, { timeout: 60_000 });
+  await expect(dialog.getByLabel(NR_LAUNCH.TITLE_LABEL)).toHaveValue("L launch door");
+  await expect(dialog.getByText(NR_LAUNCH.CHECKED_JUST_NOW)).toBeVisible({ timeout: 60_000 });
+  expect(creates, "the sign-in launched nothing on its own").toHaveLength(1);
+  await dialog.getByRole("button", { name: NR_LAUNCH.LAUNCH, exact: true }).click();
+
+  // The second Launch lands on the Launched screen,
+  // and its "View run" goes to the run page, advisories and all (#125), exactly
+  // as a hand launch does (helpers.ts's launchAgentRun). NOT "Running" (walk-3):
+  // the fake answers inference in seconds and the agent exits, so the run can be
+  // FINISHED before this spec — which reaches the page only after
+  // signInThroughPane's capture poll — ever looks; the witness is the run ROW
+  // and its trail below, never a state chip.
+  await viewLaunchedRun(page);
+  expect(creates, "the second Launch is the only other create").toHaveLength(2);
+  expect(creates[1], "the second Launch sends the same draft").toContain(TASK);
   const runID = runIDFromURL(page);
   expect(page.url(), "the run page, not New Run or Getting started").not.toBe(urlBefore);
   expect(new URL(page.url()).pathname, "never the setup funnel").not.toMatch(/^\/setup/);
@@ -1241,8 +1324,8 @@ test("L (launch door): Launch with a lapsed AWS sign-in opens the sign-in itself
   expect(actions.filter((a) => a.startsWith("run.create:failure")), "never refused for its credential").toEqual([]);
 
   // The server agrees on both halves: the member is live again, and the run
-  // that launched is the ONE this click created (a second create would mean the
-  // door relaunched twice).
+  // that launched is the ONE the second Launch created (a second run would mean a
+  // Launch created twice).
   await expect.poll(async () => (await modelAccess(page)).state, { timeout: 120_000 }).toBe("live");
   const mine = (await page.evaluate(async () => {
     const r = await fetch("/api/v1/runs?limit=1000", { credentials: "include" });

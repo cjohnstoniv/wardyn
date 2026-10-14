@@ -198,7 +198,12 @@ type tokenBucket struct {
 	tokens float64
 }
 
-func (l *principalLimiter) allow(key string, now time.Time) bool {
+func (l *principalLimiter) allow(key string, now time.Time) bool { return l.take(key, now, 1) }
+
+// refund returns one token that allow spent, capped at burst.
+func (l *principalLimiter) refund(key string, now time.Time) { l.take(key, now, -1) }
+
+func (l *principalLimiter) take(key string, now time.Time, cost float64) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	rate, burst := cmp.Or(l.rate, dirRatePerSec), cmp.Or(l.burst, dirBurst)
@@ -216,10 +221,10 @@ func (l *principalLimiter) allow(key string, now time.Time) bool {
 		b.tokens = min(b.tokens+elapsed*rate, burst)
 	}
 	b.last = now
-	if b.tokens < 1 {
+	if cost > 0 && b.tokens < 1 {
 		return false
 	}
-	b.tokens--
+	b.tokens = min(b.tokens-cost, burst)
 	return true
 }
 

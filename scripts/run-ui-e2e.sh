@@ -53,7 +53,9 @@
 # in which case it passes with a warning (::warning under $CI). The quarantine
 # file is validated before any backend starts: a malformed or expired entry
 # exits 1 here. Every flake, quarantined or not, is written to
-# test/reports/e2e/flaky.tsv (always written, empty when nothing flaked).
+# test/reports/e2e/flaky.tsv, which is created empty when nothing flaked and
+# appended to by every later call in the same checkout (#1880), so a second call
+# cannot hide the first one's flakes from the notify-flaky job.
 set -uo pipefail
 
 command -v jq >/dev/null 2>&1 || { echo "run-ui-e2e.sh: jq is required (used to read Playwright's JSON report)" >&2; exit 1; }
@@ -482,10 +484,15 @@ wait
 trap - INT TERM
 
 pass=0; fail=0; failed_specs=(); skipped_total=0; zero_executed_specs=(); flaky_total=0; quarantined_total=0
-# Every flake of the run, quarantined or not — always written, empty when none.
+# Every flake of the run, quarantined or not — created empty when none flaked,
+# and APPENDED to, never truncated: one checkout runs this script more than once
+# (ci.yml's ui-e2e runs a shard, then the governance four-eyes step as a second
+# call in the same workspace), and truncating on the second call left the
+# shard's own flakes out of the file notify-flaky reads, so a flake the shard saw
+# was never filed (#1880).
 flaky_report="${REPO_ROOT}/test/reports/e2e/flaky.tsv"
 mkdir -p "$(dirname "${flaky_report}")"
-: > "${flaky_report}"
+[[ -e "${flaky_report}" ]] || : > "${flaky_report}"
 for spec in "${specs[@]}"; do
   base="$(basename "${spec}")"
   verdict=none; stats_skipped=0; stats_flaky=0; stats_quarantined=0

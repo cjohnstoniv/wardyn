@@ -11,6 +11,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/composer"
 	"github.com/cjohnstoniv/wardyn/internal/types"
+	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
 
 // preflightResponse is the POST /api/v1/runs/preflight body: the deterministic
@@ -76,6 +77,44 @@ type preflightResponse struct {
 	// credential verdicts only this door reads. Absent for a run with no
 	// repository on a Git provider and no component.
 	Components []componentFact `json:"components,omitempty"`
+	// Provenance says why each entry of the resolved spec is there; the policy
+	// preview returns the same rows for the same request. Never null.
+	Provenance []provenanceRow `json:"provenance"`
+	// Limits is what this run may get (the resolved pool, the caller's
+	// governance and the deployment, for the run's type) and ResourcesApplied
+	// the CPU and memory it asked for and gets; the policy preview's, with the
+	// same meaning. LocalPlacement is the preview's too: always an array, empty
+	// until the lane that fills it lands.
+	Limits           *types.EffectiveRunLimits   `json:"limits,omitempty"`
+	ResourcesApplied *client.AppliedResources    `json:"resources_applied,omitempty"`
+	LocalPlacement   []client.LocalPlacementFact `json:"local_placement"`
+	// MainDrive is the main-drive size the run asked for and gets, the number dispatch creates
+	// the sandbox with; the policy preview's too.
+	MainDrive *client.MainDriveApplied `json:"main_drive,omitempty"`
+	// Image is the image the run would start from and its source, absent until
+	// the image lane resolves it; AllowedImages are the organisation's allowed
+	// choices, an array that is empty until that lane fills it.
+	Image         *client.ImageFact     `json:"image,omitempty"`
+	AllowedImages []client.AllowedImage `json:"allowed_images"`
+	// HarnessSet is the run's included harnesses as this door resolved them
+	// (harnessSetFact); absent for an older client's request and a run with no
+	// harness. ModelCredential above is graded from the most resident of them.
+	HarnessSet *client.HarnessSetFact `json:"harness_set,omitempty"`
+	// RunnerPool is the pool the request resolves to, absent until the pool lane
+	// resolves one; RunnerPools are the permitted choices, an array that is
+	// empty until that lane fills it.
+	RunnerPool  *client.ResolvedRunnerPool `json:"runner_pool,omitempty"`
+	RunnerPools []client.RunnerPoolChoice  `json:"runner_pools"`
+	// BarrierOptions are the resolved pool's three barriers under this draft's floors; empty when unpooled.
+	BarrierOptions []client.BarrierOption `json:"barrier_options"`
+	// RunnerPoolSlots is the resolved pool's slot counts and this run's max_wait_sec; absent when unpooled. Advisory: the launch decides.
+	RunnerPoolSlots *client.PoolSlots `json:"runner_pool_slots,omitempty"`
+	// Access is what the run brings in (accessFacts), the same projection the
+	// policy preview answers for the same request.
+	Access *accessBlock `json:"access,omitempty"`
+	// Attachments is the run's mount map: each repository, folder and drive at
+	// the path the run uses it at. Never null.
+	Attachments []client.RunAttachment `json:"attachments"`
 }
 
 // preflightBurst and preflightLimiterMaxPeople size the per-person preflight
@@ -87,32 +126,29 @@ const (
 )
 
 // refusePreflightRate answers 429 when this person is over the preflight rate, true when it has
-// answered. A person only; the admin token is one shared actor name, so limiting it would pool
-// every CI job into one bucket.
+// answered. A person or a service identity; the admin token is one shared actor name, so limiting it would
+// pool every CI job into one bucket.
 func (s *Server) refusePreflightRate(w http.ResponseWriter, r *http.Request) bool {
 	if s.preflightLimiter == nil {
 		return false
 	}
-	if t, who := actorFromRequest(r); t != types.ActorHuman || s.preflightLimiter.allow(who, s.cfg.Now()) {
+	if who, limited := rateLimitedActor(r); !limited || s.preflightLimiter.allow(who, s.cfg.Now()) {
 		return false
 	}
 	writeErrorReason(w, http.StatusTooManyRequests, reasonPreflightRateLimited, "too many preflight checks; slow down")
 	return true
 }
 
-// advertisedConfinement is the classes the runner advertises, for Review's
-// default-class math, best-effort: no runner, or one that cannot answer, is
-// nil — the default then stays at the policy minimum and Review never refuses
-// on it (handlePreflightRun).
-func (s *Server) advertisedConfinement(ctx context.Context) []types.ConfinementClass {
-	if s.cfg.Runner == nil {
-		return nil
-	}
-	caps, err := s.cfg.Runner.Capabilities(ctx)
+// advertisedConfinement is the classes the request's placement advertises, for
+// Review's default-class math, best-effort: no executor, or one that cannot
+// answer (a runner that is offline included), is nil — the default then stays
+// at the policy minimum and Review never refuses on it (handlePreflightRun).
+func (s *Server) advertisedConfinement(ctx context.Context, req createRunRequest) []types.ConfinementClass {
+	pc, err := s.requestCapabilities(ctx, req)
 	if err != nil {
 		return nil
 	}
-	return caps.ConfinementClasses
+	return pc.ConfinementClasses
 }
 
 // handlePreflightRun is a DRY-RUN of handleCreateRun's resolution + gating: it
@@ -196,7 +232,7 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 		writeServerError(w, r, "get site config", rerr)
 		return
 	} else if msg != "" {
-		writeErrorReason(w, http.StatusUnprocessableEntity, reasonAgentNotEnabled, msg)
+		runError(http.StatusUnprocessableEntity, reasonAgentNotEnabled, msg).forTool(harnessRefusalTool(req)).write(s, w, r)
 		return
 	}
 	// Same member request-field denial launch runs (runs_create.go's
@@ -239,162 +275,29 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 		writeErrorReason(w, http.StatusUnprocessableEntity, reasonIntegrationIDRetired, mpRunNoIntegration)
 		return
 	}
+	// Last, as in decodeAndValidateCreateRun: the same derivation create applies,
+	// so the facts below describe the tool_approvals value launch dispatches with.
+	req.ToolApprovals = effectiveToolApprovals(req, ceiling)
 
-	// Resolve the policy through the SAME chokepoint launch uses. resolveRunPolicy
-	// writes its own 4xx (XOR violation, invalid inline spec, missing/reserved
-	// secret 422) and returns ok=false when it has already responded, so Review
-	// sees the real launch error, never a rosier one.
-	spec, _, clampWarnings, _, ok := s.resolveRunPolicy(ctx, w, r, &req, true)
+	// Every launch gate from policy resolution to the quota fit, through the
+	// SAME fold launch runs (runFoldSteps) — called, not re-implemented, so a
+	// gate added to launch reaches Review in the same commit and the same place
+	// in the order. Its refusals are real ones with real authz.denied rows; what
+	// it resolves for launch alone (the mount, ephemeral dirs, the frozen grades)
+	// is discarded with this request. No reqCC: stepConfinement parses it in
+	// launch's order.
+	f, ok := s.foldRunRequest(w, r, foldPreflight, &req, ceiling, "")
 	if !ok {
 		return
 	}
-
-	// The SAME seed-and-admit block launch runs — called, not re-implemented.
-	// seedAndAdmitWorkspace (runs.go) is the one place that owns the four gates
-	// seeding can invalidate, in order: the workspace_id seed's 400/422s, the G3
-	// post-seed capability re-check, the base_image XOR + builder-wired
-	// re-check, and the un-bypassable onboarded-source gate. Inlining all four
-	// verbatim would let a fifth gate added to launch's block reach Review only
-	// if someone remembered to copy it — the exact drift
-	// TestPreflightMirrorsLaunchGates now refuses. ephemeralDirs is launch-only
-	// (WARDYN_EPHEMERAL_DIRS at dispatch) — preflight dispatches nothing, so it
-	// is discarded here.
-	if _, ok := s.seedAndAdmitWorkspace(ctx, w, r, &spec, &req, false); !ok { // false: F2, ditto
-		return
-	}
-
-	// Same USER DRIVE resolution launch runs, in the same place in the order
-	// (runs.go). The mount itself is launch-only — preflight dispatches nothing
-	// — but the REFUSALS are the point: a member who ticked "mount my drive" and
-	// has no allocation, or whose profile shuts the door, must read that on
-	// Review rather than discover it at launch. Discarding the mount and keeping
-	// the gate is exactly what this handler does with ephemeralDirs above.
-	if _, ok := s.seedRequestDrive(w, r, req, ceiling); !ok {
-		return
-	}
-
-	// Fold each referenced workspace's requirements contract into the spec
-	// BEFORE computing the enforced confinement class and grading — the SAME
-	// order launch now uses (SPINE-2/SPINE-6), so a workspace's integration:<id>
-	// requirement floors the run to CC3 here exactly as it will at launch, and
-	// the risk grade below sees the fold's write narrowing + grants rather than
-	// a pre-fold snapshot. No audit event — preflight persists nothing.
-	wsRefs := s.referencedWorkspaces(ctx, spec)
-	// Widen the spec's egress from onboarded-workspace registries +
-	// clone hosts the SAME way launch-time unionRunEgress does (runs.go),
-	// side-effect-free (no audit — mirrors the fold's own "preflight persists
-	// nothing" note above) — otherwise this preview graded/checklisted a
-	// NARROWER envelope than the run will actually be launched with (launch
-	// widens AFTER preflight would have graded), so Review understated what
-	// the run gets. unionRunEgress's SSH/site-config/ADO SCM lanes are
-	// deliberately NOT repeated here: those need grantWiring, which does not
-	// exist yet at preflight time (no grants have been minted) — the
-	// workspace + clone-host union below is the lane that can silently
-	// diverge without any grant ever being involved.
-	unionPreviewWorkspaceEgress(&spec, wsRefs)
-	// Which secrets actually exist (names only) — the SAME map compose builds,
-	// read where launch reads it (TestPreflightMirrorsLaunchGates pins the order).
-	presentSecrets := s.presentSecretNamesFor(ctx, s.secretOwnerFromRequest(r))
-	_ = s.applyWorkspaceRequirementsFor(ctx, presentSecrets, &spec, req.Agent, wsRefs, resolveWorkspaceSelections(req))
-	if _, refusal := s.unionDirectGitHubEgress(r, req, &spec, ceiling); refusal.write(s, w, r) {
-		return
-	}
-	// The SAME component gate launch runs, in the same place in the order: a
-	// component launch would refuse is refused here, and the floor and the
-	// autonomy grade below read the spec it expanded.
-	comps, refusal := s.applyRunComponents(r, req, &spec, ceiling, wsRefs, true)
-	if refusal.write(s, w, r) {
-		return
-	}
-
-	// Enforced confinement class — the SAME math launch runs, now on the FOLDED
-	// spec (enforcedConfinement, called by resolveEnforcedConfinement in
-	// runs_create.go), so preflight cannot drift from the launch gate. The tail
-	// gates resolveEnforcedConfinement adds — the runner-capability check and the
-	// cloud_sts grantChecker — are deliberately NOT repeated (see the doc comment);
-	// the backend checklist row covers the first.
-	reqCC, ccOK := parseConfinementClass(req.ConfinementClass)
-	if !ccOK {
-		writeErrorReason(w, http.StatusBadRequest, reasonConfinementClassUnknown, fmt.Sprintf("unknown confinement_class %q", req.ConfinementClass))
-		return
-	}
-	// Best-effort capabilities read for the same reason enforcedConfinement now
-	// needs them: an unspecified request's default is the strongest advertised
-	// class, not the bare policy minimum. Never refused on here — a nil
-	// Runner or a Capabilities error just leaves the default at the policy
-	// minimum, matching this handler's "advisory only, never blocks Review"
-	// contract; the runner-capability REFUSAL stays un-reproduced (doc comment
-	// above), reported by the checklist's backend row instead.
-	enforced, err := enforcedConfinement(confinementFloorSpec(spec, comps), reqCC, s.advertisedConfinement(ctx))
-	if err != nil {
-		writeErrorReason(w, http.StatusUnprocessableEntity, reasonConfinementClassConflict, err.Error())
-		return
-	}
-
-	// The model-provider choice, where launch makes it (runs.go), answering the
-	// SAME refusal launch would. Review has no run row to freeze the choice
-	// onto; it keeps it only for the model-access row below and for the model
-	// credential the autonomy gate grades with.
-	mpChoice, ok := s.enforceRunModelProvider(w, r, req, spec, wsRefs, false)
-	if !ok {
-		return
-	}
-	modelCred := mpChoice.modelCredential()
+	spec, enforced, mpChoice, modelCred, autonomy := f.spec, f.enforced, f.mpChoice, f.modelCred, f.autonomy
+	clampWarnings := f.policyWarns
 	if mpChoice.renewAtLaunch {
 		clampWarnings = append(clampWarnings, fmt.Sprintf(mpBRRenewAtLaunch, mpChoice.provider.ID))
 	}
-
-	// The SAME autonomy gate launch runs, in the same place in the order
-	// (runs.go) and on the same folded spec + enforced class — called, not
-	// re-implemented, because a Review that previewed a level launch then
-	// refused is the one lie this feature cannot afford. Its 403s are real
-	// refusals with real authz.denied rows, the same way the drive door's are.
-	// The derived tool_approvals write lands on this handler's own request
-	// copy and is discarded with it (preflight dispatches nothing); the 201
-	// warnings belong to the launch channel, and the site-config snapshot to
-	// launch's egress union, so both are dropped here too.
-	// The frozen Azure DevOps and Bedrock grades are dropped with the rest:
-	// preflight dispatches nothing, so there is no dispatch for them to bind.
-	autonomy, _, scmSite, _, _, ok := s.resolveRunAutonomy(w, r, &req, spec, wsRefs, enforced, ceiling, modelCred, comps)
-	if !ok {
-		return
-	}
-	// Launch's Azure DevOps standing bound, asked where launch asks it: the
-	// narrowing rides Review's warnings, and a list that leaves nothing standing
-	// is the refusal dispatch would give (ado_capabilities_none_permitted).
-	narrowed, none := s.adoStandingAtDoor(r, spec, scmSite, ceiling)
-	if none {
-		writeErrorReason(w, http.StatusUnprocessableEntity, reasonADOCapabilitiesNonePermitted,
-			adoNonePermitted(spec.AzureDevOpsCapabilities))
-		return
-	}
-	if narrowed != "" {
-		clampWarnings = append(clampWarnings, narrowed)
-	}
-	// Dispatch's git_pat narrowing refusals (runs_dispatch_pat_scope.go), the
-	// same reasons and sentences, so a narrowing the run could not enforce shows
-	// before the click.
-	if reason, detail := s.patNarrowingAtDoor(r, spec, scmSite); reason != "" {
-		writeErrorReason(w, http.StatusUnprocessableEntity, reason, detail)
-		return
-	}
-	// Host capacity, launch's last refusal and in the same place: the same 503,
-	// reason and Retry-After, so a busy host shows before the click. false:
-	// Review writes no audit row.
-	if writeHostCapacityRefusal(w, r, s.admitHostCapacity(r.Context(), principalFromRequest(r), "runs", false)) {
-		return
-	}
-	// The deployment run cap, launch's pre-mint refusal: the same 422 run_quota,
-	// so a full deployment shows before the click. Review writes no audit row.
-	if s.refuseRunCapFull(w, r) {
-		return
-	}
-	// The runs namespace's ResourceQuota, launch's refusal after the cap and in the same place:
-	// the same 422, so a run that cannot fit shows before the click. Its advisories join the
-	// warnings below.
-	fitWarnings, refused := s.refuseRunFit(w, r, s.runFitSpec(r.Context(), spec, ceiling))
-	if refused {
-		return
+	// After renewAtLaunch: Review's warning order, so it stays at the door.
+	if f.adoNarrowed != "" {
+		clampWarnings = append(clampWarnings, f.adoNarrowed)
 	}
 
 	// The RunInput deriveSetupItems keys off — the scalar create-run fields, with
@@ -407,6 +310,7 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 		ConfinementClass: string(enforced),
 		Interactive:      req.Interactive,
 		DevcontainerRepo: req.DevcontainerRepo,
+		Baseline:         f.baseline,
 	}
 
 	// Deterministic risk grade: the SAME composer.Grade/OverallLevel
@@ -441,7 +345,7 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 		llmAccess = runLLMAccess(req, mpChoice)
 	}
 
-	items := s.deriveSetupItems(ctx, s.secretOwnerFromRequest(r), runInput, spec, presentSecrets, llmAccess)
+	items := s.deriveRunSetupItems(ctx, s.secretOwnerFromRequest(r), runInput, spec, f.present, llmAccess, f.wsRefs)
 
 	// credentialConfinementAdvisory (#150): the SAME shared helper the create
 	// path calls (appendCredentialConfinementAdvisory, runs_create.go), off the
@@ -449,7 +353,7 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	// show a rosier picture than the launch it previews. WARN, never refuse:
 	// nothing above this line changed.
 	warnings, _ := appendCredentialConfinementAdvisory(clampWarnings, spec, enforced, modelCred.Kind)
-	warnings = append(warnings, fitWarnings...)
+	warnings = append(warnings, f.fitWarnings...)
 
 	// A zero residency means no provider was chosen (none serves the agent, or a
 	// non-model run) — omitted rather than published as a guess.
@@ -459,7 +363,18 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 		RiskAssessment:           riskItems,
 		OverallRisk:              overallRisk,
 		Warnings:                 warnings,
+		Provenance:               f.prov,
+		LocalPlacement:           []client.LocalPlacementFact{},
+		AllowedImages:            []client.AllowedImage{},
+		RunnerPools:              []client.RunnerPoolChoice{},
+		Attachments:              f.attachments,
 	}
+	resp.RunnerPool, resp.RunnerPools = f.place.facts()
+	resp.BarrierOptions = f.barrierOptions
+	resp.Image, resp.HarnessSet = f.image, harnessSetFact(f.harnesses, f.harnessChoices)
+	resp.Limits, resp.ResourcesApplied = f.place.sizeFacts()
+	resp.RunnerPoolSlots = s.runnerPoolSlots(ctx, f.place, *f.req)
+	resp.MainDrive = f.mainDrive.applied()
 	if modelCred.Residency != "" {
 		resp.ModelCredential = &modelCred
 	}
@@ -475,6 +390,17 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	// and seedAndAdmitWorkspace each gate at launch.
 	runRepos := append([]string{req.Repo, req.DevcontainerRepo}, repoLocatorsOf(spec.WorkspaceRepos)...)
 	resp.GitCredential = s.gitCredentialFactForRepos(ctx, oidcHumanFromContext(ctx), runRepos)
-	resp.Components = componentFacts(req, spec, scmSite, comps, resp.GitCredential)
+	resp.Components = componentFacts(componentFactInputs{
+		req: f.req, spec: f.spec, harnesses: f.harnesses, comps: f.comps, baseline: f.baseline, scmSite: f.scmSite,
+		ceiling: f.ceiling, mpChoice: f.mpChoice, pushSets: f.pushSets, autonomy: f.autonomy,
+		credentialChecked: true, autonomyResolved: true,
+	}, resp.GitCredential)
+	access, err := s.accessFor(r, accessInputs{req: f.req, spec: f.spec, prov: f.prov, source: f.source,
+		scmSite: f.scmSite, mpChoice: f.mpChoice, comps: f.comps, facts: resp.Components, level: f.autonomy.Level})
+	if err != nil {
+		writeServerError(w, r, "resolve capability", err)
+		return
+	}
+	resp.Access = access
 	writeJSON(w, http.StatusOK, resp)
 }

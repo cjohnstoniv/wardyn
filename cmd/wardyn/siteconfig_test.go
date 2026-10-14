@@ -360,3 +360,72 @@ func TestSiteConfigSet_RefusesNull(t *testing.T) {
 		})
 	}
 }
+
+// TestSiteConfigSet_RunnersAreNeverSentAndWarnOnce: runners.enabled has its own audited super-admin
+// route and the server refuses a document naming a different value, so a captured baseline (or a
+// managed file) that names it is stripped by the SDK, not sent, and the operator is told once.
+func TestSiteConfigSet_RunnersAreNeverSentAndWarnOnce(t *testing.T) {
+	var got types.SiteConfig
+	srv := applyServer(t, &got)
+
+	_, stderr, err := runSiteConfigSet(t, srv.URL, `{"runners":{"enabled":true},"upstream_proxy_url":"http://proxy.corp:3128"}`)
+	if err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	if got.Runners != nil {
+		t.Errorf("runners reached the server (%+v); PutSiteConfig must strip them", got.Runners)
+	}
+	if got.UpstreamProxyURL == "" {
+		t.Error("the rest of the document was not applied")
+	}
+	if n := strings.Count(stderr, "runners.enabled"); n != 1 || !strings.Contains(stderr, "/runners/settings") {
+		t.Errorf("stderr = %q, want exactly one warning naming PUT /runners/settings", stderr)
+	}
+	if _, stderr, err = runSiteConfigSet(t, srv.URL, `{"upstream_proxy_url":"http://proxy.corp:3128"}`); err != nil || strings.Contains(stderr, "runners.enabled") {
+		t.Errorf("a file that does not name runners must not warn: %v %q", err, stderr)
+	}
+}
+
+// TestSiteConfigSet_WarnsTheEgressBaselineWasNotApplied: the SDK sends the document without the
+// egress baseline (PUT /site-config refuses a body that changes it), so a captured baseline the
+// server does not already hold does not land. `set` says so, and stays quiet when the server's own
+// baseline is the file's.
+func TestSiteConfigSet_WarnsTheEgressBaselineWasNotApplied(t *testing.T) {
+	const captured = `{"egress":{"baseline_hosts":["llm.corp.example"]},` +
+		`"internal_hosts":[{"host_suffix":"corp.example","baseline":true}]}`
+
+	var got types.SiteConfig
+	_, stderr, err := runSiteConfigSet(t, applyServer(t, &got).URL, captured)
+	if err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	if got.Egress != nil || got.InternalHosts[0].Baseline {
+		t.Errorf("wire body = %+v, want it without the egress baseline", got)
+	}
+	if !strings.Contains(stderr, "egress baseline in this file was not applied") {
+		t.Errorf("stderr = %q, want a warning that the file's egress baseline was not applied", stderr)
+	}
+
+	// A file silent about the baseline (a pre-0.9 MDM file) asserts nothing, so it is never reported.
+	var plain types.SiteConfig
+	_, quietPlain, err := runSiteConfigSet(t, applyServer(t, &plain).URL, `{"scm_hosts":["gitlab.corp"],"internal_hosts":[{"host_suffix":"corp.example"}]}`)
+	if err != nil {
+		t.Fatalf("apply of a file with no baseline: %v", err)
+	}
+	if strings.Contains(quietPlain, "egress baseline") {
+		t.Errorf("stderr = %q, want silence for a file that names no egress baseline", quietPlain)
+	}
+
+	holds := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(captured))
+	}))
+	t.Cleanup(holds.Close)
+	_, quiet, err := runSiteConfigSet(t, holds.URL, captured)
+	if err != nil {
+		t.Fatalf("apply against a server that holds the baseline: %v", err)
+	}
+	if strings.Contains(quiet, "egress baseline") {
+		t.Errorf("stderr = %q, want silence when the stored baseline is the file's", quiet)
+	}
+}

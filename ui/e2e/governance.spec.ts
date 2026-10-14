@@ -65,7 +65,7 @@ import { SPEC_LABEL } from "./policy-source";
 //      the decoded run.policy.resolve envelope, and
 //      governance_ceiling_test.go's governance_profile_name pin.
 //
-//   2. THE MEMBER'S TWO DISPLAY MOMENTS. Same cause: the field the rail and
+//   2. THE MEMBER'S TWO DISPLAY MOMENTS. Same cause: the field New Run's Run step and
 //      the Getting Started card read is the one the operator short-circuit
 //      omits — see governance-member.spec.ts for that splice.
 //
@@ -74,8 +74,10 @@ import { SPEC_LABEL } from "./policy-source";
 //
 // Serial: one backend, one profiles table. The walk builds state the later
 // blocks read, and a mutating test must never run beside an assertion about
-// the same rows.
-test.describe.configure({ mode: "serial" });
+// the same rows. A retry re-runs the walk from its first test against the rows
+// the earlier attempt wrote, so a retry can only fail or misreport the first
+// test as flaky; a failure here must be read on the test that failed.
+test.describe.configure({ mode: "serial", retries: 0 });
 
 const NAME = "walled";
 const GROUP = "eng-contractors";

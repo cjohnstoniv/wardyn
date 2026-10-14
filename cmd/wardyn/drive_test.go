@@ -24,13 +24,14 @@ import (
 // (internal/api/user_drives.go) to make a round trip through it MEAN
 // something: POST /drives refuses a name another drive already holds (409,
 // the real UNIQUE(name) behavior) rather than silently accepting a second
-// row, and POST /drives/grants upserts by the natural key (subject_type,
-// subject) rather than accumulating a row per call. A test that only echoed
+// row, and POST /drives/grants keys on (subject_type, subject, drive_id):
+// with `additional` it upserts that one row, without it it REPLACES the
+// subject's allocations with this one, as the real server does. A test that only echoed
 // back whatever it received would pass even if ApplyDrives sent POST twice
 // for an already-created drive; this one would 409.
 type fakeDriveServer struct {
 	drives map[uuid.UUID]sdk.UserDrive
-	grants map[string]sdk.UserDriveGrant // key: subject_type+"\x00"+subject
+	grants map[string]sdk.UserDriveGrant // key: subject_type+"\x00"+subject+"\x00"+drive_id
 }
 
 func newFakeDriveServer() *fakeDriveServer {
@@ -40,8 +41,8 @@ func newFakeDriveServer() *fakeDriveServer {
 	}
 }
 
-func (f *fakeDriveServer) grantKey(subjectType sdk.CapabilitySubjectType, subject string) string {
-	return string(subjectType) + "\x00" + subject
+func (f *fakeDriveServer) grantKey(subjectType sdk.CapabilitySubjectType, subject string, driveID uuid.UUID) string {
+	return string(subjectType) + "\x00" + subject + "\x00" + driveID.String()
 }
 
 func (f *fakeDriveServer) document() sdk.DrivesDocument {
@@ -76,7 +77,7 @@ func sortDrives(d []sdk.UserDriveListItem) {
 
 func sortGrants(g []sdk.UserDriveGrant) {
 	for i := 1; i < len(g); i++ {
-		for j := i; j > 0 && g[j].Subject < g[j-1].Subject; j-- {
+		for j := i; j > 0 && (g[j].Subject < g[j-1].Subject || g[j].Subject == g[j-1].Subject && g[j].DriveID.String() < g[j-1].DriveID.String()); j-- {
 			g[j], g[j-1] = g[j-1], g[j]
 		}
 	}
@@ -135,8 +136,19 @@ func (f *fakeDriveServer) handler() http.HandlerFunc {
 		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/drives/grants":
 			var req sdk.DriveGrantRequest
 			_ = json.NewDecoder(r.Body).Decode(&req)
-			key := f.grantKey(req.SubjectType, req.Subject)
+			key := f.grantKey(req.SubjectType, req.Subject, req.DriveID)
 			existing, had := f.grants[key]
+			if !req.Additional {
+				// Replace: the subject ends with exactly this drive.
+				for k, other := range f.grants {
+					if other.SubjectType == req.SubjectType && other.Subject == req.Subject && k != key {
+						if !had {
+							existing, had = other, true
+						}
+						delete(f.grants, k)
+					}
+				}
+			}
 			g := sdk.UserDriveGrant{
 				SubjectType: req.SubjectType, Subject: req.Subject, DriveID: req.DriveID,
 				Priority: req.Priority, SizeMiBOverride: req.SizeMiBOverride,
@@ -311,6 +323,46 @@ func TestDriveApply_GetApplyRoundTripIsANoOp(t *testing.T) {
 	}
 }
 
+// TestDriveApply_RoundTripKeepsASubjectsSeveralDrives: a subject granted two
+// drives still holds both after `set` and after get followed by set. A grant
+// POSTed without `additional` would replace the subject's other drive.
+func TestDriveApply_RoundTripKeepsASubjectsSeveralDrives(t *testing.T) {
+	fake := newFakeDriveServer()
+	srv := httptest.NewServer(fake.handler())
+	t.Cleanup(srv.Close)
+	if _, err := runDriveApply(t, srv.URL, sdk.DrivesDocument{Drives: seedDrives()}); err != nil {
+		t.Fatalf("bootstrap drives: %v", err)
+	}
+	var ids []uuid.UUID
+	for id := range fake.drives {
+		ids = append(ids, id)
+	}
+	grants := []sdk.UserDriveGrant{
+		{SubjectType: sdk.CapabilitySubjectUser, Subject: "alice", DriveID: ids[0], Enabled: true},
+		{SubjectType: sdk.CapabilitySubjectUser, Subject: "alice", DriveID: ids[1], Enabled: true},
+	}
+	if _, err := runDriveApply(t, srv.URL, sdk.DrivesDocument{Grants: grants}); err != nil {
+		t.Fatalf("bootstrap grants: %v", err)
+	}
+	if len(fake.grants) != 2 {
+		t.Fatalf("set left alice %d allocations, want both", len(fake.grants))
+	}
+	getOut, err := runDriveGet(t, srv.URL)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	var doc sdk.DrivesDocument
+	if err := json.Unmarshal([]byte(getOut), &doc); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runDriveApply(t, srv.URL, doc); err != nil {
+		t.Fatalf("round-trip apply: %v", err)
+	}
+	if len(fake.grants) != 2 {
+		t.Fatalf("get then set left alice %d allocations, want both", len(fake.grants))
+	}
+}
+
 // TestDriveApply_RejectsUnknownField pins the same strict-decode contract
 // site-config's set has: `set` upserts exactly what the file states, so a
 // typo'd key must be a parse error, not a silently dropped field.
@@ -420,6 +472,34 @@ func TestDriveReclaim_PostsTheSubjectAndPrintsWhatWent(t *testing.T) {
 	}
 }
 
+// TestDriveReclaim_SendsTheHomeSubject: --home-subject rides the body as
+// home_subject, and without the flag the body carries no such key.
+func TestDriveReclaim_SendsTheHomeSubject(t *testing.T) {
+	driveID := uuid.New()
+	cs := newCmdServer(t, http.StatusOK, reclaimOK(driveID, "wardyn-drive-corp-nas-d-9f3a1c", "deleted"))
+	if err := execCmd(t, "--url", cs.URL, "drive", "reclaim", driveID.String(),
+		"--subject", "alice@corp.example", "--home-subject", "sub-alice", "--yes"); err != nil {
+		t.Fatalf("drive reclaim: %v", err)
+	}
+	var sent map[string]string
+	if err := json.Unmarshal(cs.last().body, &sent); err != nil {
+		t.Fatalf("decode sent body: %v", err)
+	}
+	if sent["subject"] != "alice@corp.example" || sent["home_subject"] != "sub-alice" {
+		t.Errorf("body = %v, want subject and home_subject", sent)
+	}
+	if err := execCmd(t, "--url", cs.URL, "drive", "reclaim", driveID.String(), "--subject", "sub-bob", "--yes"); err != nil {
+		t.Fatalf("drive reclaim: %v", err)
+	}
+	sent = nil
+	if err := json.Unmarshal(cs.last().body, &sent); err != nil {
+		t.Fatalf("decode sent body: %v", err)
+	}
+	if _, ok := sent["home_subject"]; ok {
+		t.Errorf("body = %v, want no home_subject without the flag", sent)
+	}
+}
+
 // TestDriveReclaim_RefusesWithoutYes is the CLI's own rail. A verb that
 // destroys a person's data must not run off a mistyped drive id, and the flag
 // is required rather than prompted so the automated offboarding path keeps the
@@ -509,5 +589,56 @@ func TestOperatorOtherSetCommandsIgnoreTrailingDocument(t *testing.T) {
 				t.Errorf("requests were made before the input was refused: %q", got)
 			}
 		})
+	}
+}
+
+// TestDriveMemberDelete_RefusesWithoutYes: deleting a person's drive destroys
+// their files, so the flag is required and nothing reaches the daemon without it.
+func TestDriveMemberDelete_RefusesWithoutYes(t *testing.T) {
+	cs := newCmdServer(t, http.StatusOK, map[string]any{})
+	err := execCmd(t, "--url", cs.URL, "drive", "member", "delete", uuid.NewString())
+	if err == nil || !strings.Contains(err.Error(), "--yes") {
+		t.Fatalf("err = %v, want a refusal naming --yes", err)
+	}
+	if len(cs.reqs) != 0 {
+		t.Errorf("the unconfirmed command reached the daemon: %v", cs.reqs)
+	}
+}
+
+// TestDriveMemberDelete_DeletesAndPrintsWhatWent sends DELETE
+// /api/v1/drives/member/{id} and prints the outcome and the object.
+func TestDriveMemberDelete_DeletesAndPrintsWhatWent(t *testing.T) {
+	id := uuid.New()
+	cs := newCmdServer(t, http.StatusOK, map[string]any{
+		"drive": "Notes", "drive_id": id.String(), "owner": "sub-alice", "backend": "docker_volume",
+		"object": "wardyn-drive-abc-d-123", "outcome": "deleted",
+	})
+	out, err := execCmdCapture(t, "--url", cs.URL, "drive", "member", "delete", id.String(), "--yes")
+	if err != nil {
+		t.Fatalf("drive member delete: %v", err)
+	}
+	if got := cs.last(); got.method != http.MethodDelete || got.path != "/api/v1/drives/member/"+id.String() {
+		t.Fatalf("request = %s %s", got.method, got.path)
+	}
+	if !strings.Contains(out, "deleted: wardyn-drive-abc-d-123") || !strings.Contains(out, "sub-alice") {
+		t.Errorf("output = %q", out)
+	}
+}
+
+// TestDriveMemberList_PrintsOwnersAndObjects reads GET /api/v1/drives/member.
+func TestDriveMemberList_PrintsOwnersAndObjects(t *testing.T) {
+	cs := newCmdServer(t, http.StatusOK, map[string]any{"total": 1, "drives": []map[string]any{{
+		"id": uuid.NewString(), "name": "Notes", "owner": "sub-alice", "backend": "docker_volume",
+		"object": "wardyn-drive-abc-d-123", "created_at": "2026-10-12T00:00:00Z", "deleting": false,
+	}}})
+	out, err := execCmdCapture(t, "--url", cs.URL, "drive", "member", "list")
+	if err != nil {
+		t.Fatalf("drive member list: %v", err)
+	}
+	if got := cs.last(); got.method != http.MethodGet || got.path != "/api/v1/drives/member" {
+		t.Fatalf("request = %s %s", got.method, got.path)
+	}
+	if !strings.Contains(out, "sub-alice") || !strings.Contains(out, "wardyn-drive-abc-d-123") {
+		t.Errorf("output = %q", out)
 	}
 }

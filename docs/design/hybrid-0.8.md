@@ -1,3 +1,5 @@
+> **Superseded** by [0.9/PLAN.md](0.9/PLAN.md) — the laptop is a client-mode runner, not an enrolled full daemon.
+
 # Hybrid local + remote — one org, two substrates, one person (0.8 design brief)
 
 Status: **Phase 0 decided, 2026-09-19** — O1 `m′`-at-org, O2 offline runs continue with

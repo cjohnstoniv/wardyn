@@ -45,7 +45,6 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
-	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/pkg/client"
@@ -181,6 +180,7 @@ func (s *Server) handleGetUserDrives(w http.ResponseWriter, r *http.Request) {
 		writeServerError(w, r, "list user drives", err)
 		return
 	}
+	drives = adminDrivesOnly(drives)
 	total := 0
 	for _, d := range drives {
 		total += d.GrantCount
@@ -466,7 +466,7 @@ func (s *Server) handleCreateUserDrive(w http.ResponseWriter, r *http.Request) {
 // request says it means it — see driveRehomeGuard, which holds the argument.
 func (s *Server) handleUpdateUserDrive(w http.ResponseWriter, r *http.Request) {
 	id, ok := parseIDParam(w, r, "id", "user drive")
-	if !ok {
+	if !ok || s.refuseMemberOwned(w, r, id) {
 		return
 	}
 	s.writeUserDrive(w, r, id, http.StatusOK)
@@ -719,7 +719,7 @@ func pluralDriveSubjects(n int) string {
 // read the refusal does not need. operatorOnly (routes.go).
 func (s *Server) handleDeleteUserDrive(w http.ResponseWriter, r *http.Request) {
 	id, ok := parseIDParam(w, r, "id", "user drive")
-	if !ok {
+	if !ok || s.refuseMemberOwned(w, r, id) {
 		return
 	}
 	err := s.cfg.Store.DeleteUserDrive(r.Context(), id)
@@ -751,10 +751,11 @@ func (s *Server) handleDeleteUserDrive(w http.ResponseWriter, r *http.Request) {
 // all TRI-STATE pointers, lives there.
 type userDriveGrantRequest = client.DriveGrantRequest
 
-// handleUpsertUserDriveGrant allocates one drive to one subject, keyed on the
-// natural (subject_type, subject): re-allocating a subject REPOINTS its single
-// row rather than accumulating a second — which is also what makes "one drive
-// per principal" true in the schema and not only in the resolver's LIMIT 1.
+// handleUpsertUserDriveGrant allocates one drive to one subject and REPLACES
+// the subject's allocation: re-allocating repoints the subject's row rather than
+// accumulating a second, so the admin's last write decides which drive they
+// get. With `additional` the drive is allocated beside the subject's others
+// instead (writeUserDriveGrant; migration 0169 keys on subject and drive).
 //
 // 201 for a genuinely new allocation, 200 when an existing one was repointed —
 // the same created/updated signal handleUpsertGovernanceAssignment gives,
@@ -784,6 +785,9 @@ func (s *Server) handleUpsertUserDriveGrant(w http.ResponseWriter, r *http.Reque
 		writeErrorReason(w, http.StatusBadRequest, reasonUserDriveGrantInvalid, "invalid allocation: "+err.Error())
 		return
 	}
+	if s.refuseMemberOwned(w, r, g.DriveID) {
+		return
+	}
 	// The org switch and the deployment ceiling, the same pair the drive write
 	// meets, against the OVERRIDE — which is the only size this row carries. The
 	// drive's own size was held to the ceiling when it was authored; a grant that
@@ -810,7 +814,7 @@ func (s *Server) handleUpsertUserDriveGrant(w http.ResponseWriter, r *http.Reque
 	// widening, not an inert row, and it is why the guard has to precede the
 	// fold rather than follow it (which is what CanonicalGroupSubject does).
 	if g.SubjectType == types.CapabilitySubjectGroup {
-		subject, ok := oidc.CanonicalGroupSubject(req.Subject)
+		subject, ok := types.CanonicalGroupSubject(req.Subject)
 		if !ok {
 			writeErrorReason(w, http.StatusBadRequest, reasonUserDriveGrantInvalid, "invalid allocation: subject: must be printable ASCII — a group subject is matched against the login-time group snapshot, which carries printable ASCII only, so this value can never match anyone")
 			return
@@ -860,7 +864,10 @@ func (s *Server) handleUpsertUserDriveGrant(w http.ResponseWriter, r *http.Reque
 	}
 	g.ID = uuid.New()
 	g.CreatedBy = principalFromRequest(r)
-	saved, err := s.cfg.Store.UpsertUserDriveGrant(r.Context(), g, homeOverrideStated)
+	saved, removed, done, err := s.upsertUserDriveGrantAs(w, r, g, homeOverrideStated, req.Additional)
+	if done {
+		return
+	}
 	// ErrNotFound here is the FK refusing an unknown drive_id — a 404 naming the
 	// drive, not a 500, and not a silent no-op.
 	if notFoundIf(w, err, "user drive", reasonUserDriveNotFound) {
@@ -892,17 +899,22 @@ func (s *Server) handleUpsertUserDriveGrant(w http.ResponseWriter, r *http.Reque
 	// directory NAME on a corporate share, which is their username as often as
 	// not. Whether an admin pinned one is the governance fact; what they pinned
 	// it to is in the row, readable by anyone who may read the row.
+	data := map[string]any{
+		"subject_type":      saved.SubjectType,
+		"subject":           saved.Subject,
+		"drive_id":          saved.DriveID,
+		"priority":          saved.Priority,
+		"size_mib_override": saved.SizeMiBOverride,
+		"writable_override": saved.WritableOverride,
+		"home_override_set": saved.HomeOverride != "",
+		"enabled":           saved.Enabled,
+	}
+	// A replacing write that took drives away from the subject says which.
+	if len(removed) > 0 {
+		data["removed_drive_ids"] = removed
+	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
-		"drive.grant.write", saved.ID.String(), "success", mustJSON(map[string]any{
-			"subject_type":      saved.SubjectType,
-			"subject":           saved.Subject,
-			"drive_id":          saved.DriveID,
-			"priority":          saved.Priority,
-			"size_mib_override": saved.SizeMiBOverride,
-			"writable_override": saved.WritableOverride,
-			"home_override_set": saved.HomeOverride != "",
-			"enabled":           saved.Enabled,
-		})))
+		"drive.grant.write", saved.ID.String(), "success", mustJSON(data)))
 	writeJSON(w, status, saved)
 }
 

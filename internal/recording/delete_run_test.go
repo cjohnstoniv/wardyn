@@ -66,17 +66,18 @@ func TestFSStoreDeleteRun(t *testing.T) {
 }
 
 func TestHandler_ErasedRecordingRemainsHidden(t *testing.T) {
+	const run = "0a000000-0000-4000-8000-000000000010"
 	s, err := recording.NewFSStore(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.DeleteRun(t.Context(), "run"); err != nil {
+	if _, err := s.DeleteRun(t.Context(), run); err != nil {
 		t.Fatal(err)
 	}
 	for _, authorized := range []bool{false, true} {
-		for _, key := range []string{"run", "run~attach", "run~part-2"} {
+		for _, key := range []string{run, run + "~attach", run + "~part-2"} {
 			w := httptest.NewRecorder()
-			req := httptest.NewRequest(http.MethodGet, "/api/v1/runs/run/recording/"+key, nil)
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/runs/"+run+"/recording/"+key, nil)
 			newTestRouterWithAuth(s, func(*http.Request, string) bool { return authorized }).ServeHTTP(w, req)
 			if w.Code != http.StatusNotFound || w.Body.String() != "recording not found\n" {
 				t.Fatalf("erased replay response = %d %s", w.Code, w.Body)

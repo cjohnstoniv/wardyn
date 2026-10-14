@@ -20,6 +20,11 @@ export async function readGrid(page: Page): Promise<Grid> {
   return { cols, rows };
 }
 
+/** The header's grid text and the screen's box: what a cell's point is computed from. */
+async function layout(page: Page, screen: Locator): Promise<string> {
+  return `${await page.getByTestId("run-terminal-pane").getByText(/^\d+×\d+$/).first().innerText()} ${JSON.stringify(await screen.boundingBox())}`;
+}
+
 // The web font swaps in after first paint and refits the grid (the header
 // re-wraps too), so a cell read before that lands is a different cell by the
 // time a drag arrives. Hold until the grid and the screen's box have not moved
@@ -30,7 +35,7 @@ export async function settledGrid(page: Page, screen: Locator): Promise<Grid> {
   await expect
     .poll(
       async () => {
-        const now = `${await page.getByTestId("run-terminal-pane").getByText(/^\d+×\d+$/).first().innerText()} ${JSON.stringify(await screen.boundingBox())}`;
+        const now = await layout(page, screen);
         steady = now === last ? steady + 1 : 0;
         last = now;
         return steady;
@@ -57,17 +62,26 @@ export async function rowOf(screen: Locator, re: RegExp): Promise<number> {
   return i;
 }
 
-export async function dragCells(page: Page, screen: Locator, grid: Grid, from: [number, number], to: [number, number]) {
+export async function dragCells(page: Page, screen: Locator, from: [number, number], to: [number, number]) {
+  const grid = await settledGrid(page, screen);
+  const before = await layout(page, screen);
   const a = await cellPoint(screen, grid, from[0], from[1]);
   const b = await cellPoint(screen, grid, to[0], to[1]);
   await page.mouse.move(a.x, a.y);
   await page.mouse.down();
   await page.mouse.move((a.x + b.x) / 2, (a.y + b.y) / 2, { steps: 3 });
   await page.mouse.move(b.x, b.y, { steps: 3 });
+  const after = await layout(page, screen);
+  if (after !== before) {
+    await page.mouse.up();
+    throw new Error(`the terminal layout moved during the drag: ${before} -> ${after}`);
+  }
+  // Not re-checked after the release: the copy offer or notice renders then and may resize the panel.
   await page.mouse.up();
 }
 
-export async function clickCell(page: Page, screen: Locator, grid: Grid, at: [number, number], clickCount: 2 | 3) {
+export async function clickCell(page: Page, screen: Locator, at: [number, number], clickCount: 2 | 3) {
+  const grid = await settledGrid(page, screen);
   const p = await cellPoint(screen, grid, at[0], at[1]);
   await page.mouse.click(p.x, p.y, { clickCount });
 }

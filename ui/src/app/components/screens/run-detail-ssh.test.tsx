@@ -48,6 +48,7 @@ const baseRun: RunDetail = {
   state: "RUNNING",
   spiffe_id: "spiffe://wardyn.local/agent-run/11111111-1111-1111-1111-111111111111",
   runner_target: "docker",
+  placement: "",
   interactive: false,
 };
 
@@ -595,6 +596,50 @@ describe("ConnectSSHCard — UI apps lane", () => {
     // The lane must follow the ssh command itself, not just the SSH heading
     // that introduces it.
     expect(sshCommand.compareDocumentPosition(uiHeading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+});
+
+// 0.9 (M-RN-3 RS2): the third lane copies `wardyn sync`. It rides the SSH gateway's sftp channel, so it
+// needs SSH on and a sandbox with exec; a local run's disk link is the bind through its runner.
+describe("ConnectSSHCard — Sync a folder lane", () => {
+  const SSH_ON = { status: "ok", ssh: { enabled: true, advertise_addr: "wardyn.corp.example:2222" } };
+  const live = { agent_exec_id: "exec-1", placement: "remote" as const };
+  beforeEach(() => {
+    listKeysMock.mockResolvedValue([{ fingerprint: "SHA256:x", principal: OWNER, name: "k", public_key: "", created_at: "" }]);
+  });
+
+  it("is the third lane, after the CLI and SSH lanes, with the run's sync command", async () => {
+    healthMock.mockResolvedValue(SSH_ON);
+    renderCard(live);
+    const title = await screen.findByText("Sync a folder");
+    // The same WARDYN_URL prefix rule as the CLI lane (cliEnv): whatever precedes `wardyn run attach` precedes `wardyn sync`.
+    const code = (end: string) => screen.getByText((_, el) => el?.tagName === "CODE" && !!el.textContent?.endsWith(end));
+    const prefix = code(`wardyn run attach ${baseRun.id}`).textContent?.replace(`wardyn run attach ${baseRun.id}`, "");
+    expect(code(`wardyn sync ${baseRun.id} ./my-folder`).textContent).toBe(`${prefix}wardyn sync ${baseRun.id} ./my-folder`);
+    expect(screen.getByText(/Copies a folder from your computer into the sandbox/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Copy sync command" })).toBeInTheDocument();
+    const cli = screen.getByText("Wardyn CLI");
+    const ssh = screen.getByText(`ssh ${baseRun.id}@wardyn.corp.example -p 2222`);
+    expect(cli.compareDocumentPosition(title) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(ssh.compareDocumentPosition(title) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("is absent with SSH off", async () => {
+    healthMock.mockResolvedValue({ status: "ok", ssh: { enabled: false } });
+    renderCard(live);
+    await screen.findByText(/Off on this deployment\. It gives you/);
+    expect(screen.queryByText("Sync a folder")).toBeNull();
+  });
+
+  it("is absent for a local run and for a sandbox with no exec", async () => {
+    healthMock.mockResolvedValue(SSH_ON);
+    const local = renderCard({ ...live, placement: "local" });
+    await screen.findByText(`ssh ${baseRun.id}@wardyn.corp.example -p 2222`);
+    expect(screen.queryByText("Sync a folder")).toBeNull();
+    local.unmount();
+    renderCard({ placement: "remote", agent_exec_id: "" });
+    await screen.findByText(`ssh ${baseRun.id}@wardyn.corp.example -p 2222`);
+    expect(screen.queryByText("Sync a folder")).toBeNull();
   });
 });
 

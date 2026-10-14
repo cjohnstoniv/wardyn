@@ -178,24 +178,30 @@ func TestGovCovRecordGovernanceBypass(t *testing.T) {
 	}
 }
 
-func TestGovCovCanSeeGovernanceKind(t *testing.T) {
+func TestGovCovCanSeeGovernanceChange(t *testing.T) {
 	s := &Server{}
 	for _, c := range []struct {
-		name string
-		req  *http.Request
-		kind string
-		want bool
+		name    string
+		req     *http.Request
+		kind    string
+		payload string
+		want    bool
 	}{
-		{"security admin sees a profile change", govCovHumanReq("GET", "/x", "s", "s@x", oidc.RoleSecurityAdmin), govKindProfile, true},
-		{"security admin does not see a role mapping", govCovHumanReq("GET", "/x", "s", "s@x", oidc.RoleSecurityAdmin), govKindRoleMapping, false},
-		{"super admin sees a role mapping", govCovHumanReq("GET", "/x", "s", "s@x", oidc.RoleAdmin), govKindRoleMapping, true},
-		{"a member sees nothing", govCovHumanReq("GET", "/x", "s", "s@x", oidc.RoleUser), govKindGrant, false},
-		{"the admin token sees every kind", httptest.NewRequest("GET", "/x", nil), govKindRoleMapping, true},
-		{"a kind this binary does not know is shown to nobody", httptest.NewRequest("GET", "/x", nil), "from_a_newer_binary", false},
+		{"security admin sees a profile change", govCovHumanReq("GET", "/x", "s", "s@x", oidc.RoleSecurityAdmin), govKindProfile, "", true},
+		{"security admin does not see a role mapping", govCovHumanReq("GET", "/x", "s", "s@x", oidc.RoleSecurityAdmin), govKindRoleMapping, "", false},
+		{"super admin sees a role mapping", govCovHumanReq("GET", "/x", "s", "s@x", oidc.RoleAdmin), govKindRoleMapping, "", true},
+		{"security admin sees a pool use policy change", govCovHumanReq("GET", "/x", "s", "s@x", oidc.RoleSecurityAdmin), govKindRunnerPoolUsePolicy, `{"subjects":[{"subject_type":"user","subject":"a"}]}`, true},
+		{"security admin does not see a pool executor change", govCovHumanReq("GET", "/x", "s", "s@x", oidc.RoleSecurityAdmin), govKindRunnerPoolUsePolicy, `{"executor":"fake"}`, false},
+		{"super admin sees a pool executor change", govCovHumanReq("GET", "/x", "s", "s@x", oidc.RoleAdmin), govKindRunnerPoolUsePolicy, `{"executor":"fake","detach":true}`, true},
+		{"an unreadable pool payload is shown only to a super admin", govCovHumanReq("GET", "/x", "s", "s@x", oidc.RoleSecurityAdmin), govKindRunnerPoolUsePolicy, `{`, false},
+		{"a member sees nothing", govCovHumanReq("GET", "/x", "s", "s@x", oidc.RoleUser), govKindGrant, "", false},
+		{"the admin token sees every kind", httptest.NewRequest("GET", "/x", nil), govKindRoleMapping, "", true},
+		{"a kind this binary does not know is shown to nobody", httptest.NewRequest("GET", "/x", nil), "from_a_newer_binary", "", false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			if got := s.canSeeGovernanceKind(c.req, c.kind); got != c.want {
-				t.Errorf("canSeeGovernanceKind(%q) = %v, want %v", c.kind, got, c.want)
+			ch := types.GovernanceChange{TargetKind: c.kind, Payload: json.RawMessage(c.payload)}
+			if got := s.canSeeGovernanceChange(c.req, ch); got != c.want {
+				t.Errorf("canSeeGovernanceChange(%q, %s) = %v, want %v", c.kind, c.payload, got, c.want)
 			}
 		})
 	}

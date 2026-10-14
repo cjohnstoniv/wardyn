@@ -181,7 +181,7 @@ func (s *Server) decidableKindAndOwner(r *http.Request, ap types.ApprovalRequest
 // admin-token break-glass always passes, LocalMode can never satisfy it (both operands
 // of "a second human decided" are client-supplied there — see
 // requireSecondHuman's own doc), and otherwise it refuses only when the
-// asking principal IS the run's own creator.
+// asking principal IS the run's own creator, or sponsors the service identity that created it.
 func (s *Server) secondHumanAllows(r *http.Request, ap types.ApprovalRequest, run types.AgentRun) bool {
 	if _, on := secondHumanGate(ap); !on {
 		return true
@@ -193,5 +193,6 @@ func (s *Server) secondHumanAllows(r *http.Request, ap types.ApprovalRequest, ru
 	if s.cfg.LocalMode {
 		return false // requireSecondHuman's unconditional 503: unenforceable here
 	}
-	return run.CreatedBy == "" || run.CreatedBy != principal
+	authored, err := s.runAuthoredBy(r.Context(), run, principal)
+	return err == nil && !authored
 }

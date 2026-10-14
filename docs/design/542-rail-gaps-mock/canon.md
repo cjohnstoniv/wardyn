@@ -11,9 +11,10 @@ used to draw that string in `rail.html`.
 
 ## R3 — selected, not connected (the three missing kinds)
 
-`ProviderNotConnectedLine` (`new-run-rail.tsx`) already has a branch for `bedrock_sso`
-(`RAIL_PROVIDER.NOT_SIGNED_IN`) and `custom_endpoint` (`RAIL_PROVIDER.NO_TOKEN`). These two
-cover the rest of `providerWhatWord`'s vocabulary — "key" (`anthropic_api_key`,
+The retired New Run rail's `ProviderNotConnectedLine` had a branch for `bedrock_sso`
+(`RAIL_PROVIDER.NOT_SIGNED_IN`) and `custom_endpoint` (`RAIL_PROVIDER.NO_TOKEN`). The strings stay
+canon, pinned by `copy/new-run-rail.test.ts`, for the provider lane
+(`new-run-flow/checks/model-provider-lane.ts`) and the Providers screen. These two cover the rest of `providerWhatWord`'s vocabulary — "key" (`anthropic_api_key`,
 `openai_api_key`) and the sign-in kind that isn't Bedrock (`anthropic_subscription`).
 
 | Id | String | Example | Why |

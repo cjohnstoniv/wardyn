@@ -24,6 +24,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
+	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/scim"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 	secretspg "github.com/cjohnstoniv/wardyn/internal/secretstore/pg"
@@ -43,34 +44,60 @@ const scimEnvToken = "scim-env-token-0123456789abcdef0123456789abcd"
 type pgTestRevocations struct {
 	pool *pgxpool.Pool
 	st   store.PG
+	now  func() time.Time // consistently injected app clock in the clock regressions
 
 	mu          sync.Mutex
 	failRevoke  bool
 	onLateCheck func()
 }
 
-// cutoffRevoked is the cutoff check. cuts says the browser-session cuts count too, as in the production
-// adapter: for IsSessionRevoked and for a credential that carries an epoch, not for a token or a key.
-func (r *pgTestRevocations) cutoffRevoked(ctx context.Context, sub, email string, issuedAt time.Time, cuts bool) (bool, error) {
-	return r.cutoffRevokedQ(ctx, r.pool, sub, email, issuedAt, cuts)
+var _ oidc.RevocationOrder = (*pgTestRevocations)(nil)
+
+// RevocationSeq is the ordering value a credential issued now records, as in the production adapter.
+func (r *pgTestRevocations) RevocationSeq(ctx context.Context) (int64, error) {
+	return store.ReadRevocationSeq(ctx, r.pool)
 }
 
-func (r *pgTestRevocations) cutoffRevokedQ(ctx context.Context, q store.Querier, sub, email string, issuedAt time.Time, cuts bool) (bool, error) {
+// cutoffRevoked is the cutoff check. cuts says the browser-session cuts count too, as in the production
+// adapter: for IsSessionRevoked and for a credential that carries an epoch, not for a token or a key.
+func (r *pgTestRevocations) cutoffRevoked(ctx context.Context, sub, email string, issue oidc.Issue, cuts bool) (bool, error) {
+	return r.cutoffRevokedQ(ctx, r.pool, sub, email, issue, cuts)
+}
+
+func (r *pgTestRevocations) cutoffRevokedQ(ctx context.Context, q store.Querier, sub, email string, issue oidc.Issue, cuts bool) (bool, error) {
 	var cutoff sql.NullTime
-	err := q.QueryRow(ctx, `SELECT MAX(revoked_at) FROM (
-			SELECT sub, revoked_at FROM oidc_session_revocations
-			UNION ALL SELECT sub, cut_at FROM oidc_session_cuts WHERE $3::boolean) r
-		WHERE sub = $1 OR lower(sub) = lower($2) OR sub = ''`, sub, email, cuts).Scan(&cutoff)
+	var cutSeq sql.NullInt64
+	var databaseAt time.Time
+	err := q.QueryRow(ctx, `SELECT MAX(revoked_at), MAX(seq), clock_timestamp() FROM (
+			SELECT sub, revoked_at, seq FROM oidc_session_revocations
+			UNION ALL SELECT sub, cut_at, seq FROM oidc_session_cuts WHERE $3::boolean) r
+		WHERE sub = $1 OR lower(sub) = lower($2) OR sub = ''`, sub, email, cuts).Scan(&cutoff, &cutSeq, &databaseAt)
 	if err != nil || !cutoff.Valid {
 		return false, err
 	}
-	return issuedAt.IsZero() || !issuedAt.After(cutoff.Time), nil
+	if issue.Seq > 0 {
+		return cutSeq.Int64 > issue.Seq, nil
+	}
+	appNow := time.Now()
+	if r.now != nil {
+		appNow = r.now()
+	}
+	anchor := db.AppClockAnchor{DatabaseAt: databaseAt, AppAt: appNow}
+	return issue.At.IsZero() || !issue.At.After(cutoff.Time) || !anchor.Translate(issue.At).After(cutoff.Time), nil
 }
 
 // IsSessionRevoked is the cutoff check. After it has computed its answer, a pending onLateCheck hook runs
 // once: a request that read "not revoked" and then lost a race with a suspension is exactly this.
 func (r *pgTestRevocations) IsSessionRevoked(ctx context.Context, sub, email string, issuedAt time.Time) (bool, error) {
-	revoked, err := r.cutoffRevoked(ctx, sub, email, issuedAt, true)
+	return r.isRevoked(ctx, sub, email, oidc.Issue{At: issuedAt})
+}
+
+func (r *pgTestRevocations) IsSessionRevokedSeq(ctx context.Context, sub, email string, seq int64) (bool, error) {
+	return r.isRevoked(ctx, sub, email, oidc.Issue{Seq: seq})
+}
+
+func (r *pgTestRevocations) isRevoked(ctx context.Context, sub, email string, issue oidc.Issue) (bool, error) {
+	revoked, err := r.cutoffRevoked(ctx, sub, email, issue, true)
 	r.mu.Lock()
 	hook := r.onLateCheck
 	r.onLateCheck = nil
@@ -81,11 +108,11 @@ func (r *pgTestRevocations) IsSessionRevoked(ctx context.Context, sub, email str
 	return revoked, err
 }
 
-func (r *pgTestRevocations) SessionStatus(ctx context.Context, sub, email string, issuedAt time.Time, epoch int64) (oidc.SessionStatus, error) {
-	return r.SessionStatusQ(ctx, r.pool, sub, email, issuedAt, epoch)
+func (r *pgTestRevocations) SessionStatus(ctx context.Context, sub, email string, issue oidc.Issue, epoch int64) (oidc.SessionStatus, error) {
+	return r.SessionStatusQ(ctx, r.pool, sub, email, issue, epoch)
 }
 
-func (r *pgTestRevocations) SessionStatusQ(ctx context.Context, q store.Querier, sub, email string, issuedAt time.Time, epoch int64) (oidc.SessionStatus, error) {
+func (r *pgTestRevocations) SessionStatusQ(ctx context.Context, q store.Querier, sub, email string, issue oidc.Issue, epoch int64) (oidc.SessionStatus, error) {
 	blocked, err := store.IdentityBlockedQ(ctx, q, sub, epoch)
 	if err != nil {
 		return oidc.SessionLive, err
@@ -93,7 +120,7 @@ func (r *pgTestRevocations) SessionStatusQ(ctx context.Context, q store.Querier,
 	if blocked {
 		return oidc.SessionDeactivated, nil
 	}
-	revoked, err := r.cutoffRevokedQ(ctx, q, sub, email, issuedAt, epoch >= 0)
+	revoked, err := r.cutoffRevokedQ(ctx, q, sub, email, issue, epoch >= 0)
 	if revoked {
 		return oidc.SessionRevoked, err
 	}
@@ -107,9 +134,8 @@ func (r *pgTestRevocations) RevokeSub(ctx context.Context, sub string) error {
 	if fail {
 		return errors.New("revocation store unavailable")
 	}
-	_, err := r.pool.Exec(ctx, `INSERT INTO oidc_session_revocations (sub, revoked_at) VALUES ($1, clock_timestamp())
+	return store.ExecRevocationCut(ctx, r.pool, `INSERT INTO oidc_session_revocations (sub, revoked_at) VALUES ($1, clock_timestamp())
 		ON CONFLICT (sub) DO UPDATE SET revoked_at = EXCLUDED.revoked_at`, sub)
-	return err
 }
 
 func (r *pgTestRevocations) CutSessions(ctx context.Context, sub string) error {
@@ -119,9 +145,8 @@ func (r *pgTestRevocations) CutSessions(ctx context.Context, sub string) error {
 	if fail {
 		return errors.New("revocation store unavailable")
 	}
-	_, err := r.pool.Exec(ctx, `INSERT INTO oidc_session_cuts (sub, cut_at) VALUES ($1, clock_timestamp())
+	return store.ExecRevocationCut(ctx, r.pool, `INSERT INTO oidc_session_cuts (sub, cut_at) VALUES ($1, clock_timestamp())
 		ON CONFLICT (sub) DO UPDATE SET cut_at = EXCLUDED.cut_at`, sub)
-	return err
 }
 
 func (r *pgTestRevocations) RevokeAll(ctx context.Context) error { return r.RevokeSub(ctx, "") }
@@ -235,7 +260,12 @@ type scimEnv struct {
 // before it is built.
 func newSCIMEnv(t *testing.T, shape ...func(*Config)) *scimEnv {
 	t.Helper()
-	pool := throwawayPGPool(t)
+	return newSCIMEnvOn(t, throwawayPGPool(t), shape...)
+}
+
+// newSCIMEnvOn is newSCIMEnv over pool, a migrated database the instances serve from.
+func newSCIMEnvOn(t *testing.T, pool *pgxpool.Pool, shape ...func(*Config)) *scimEnv {
+	t.Helper()
 	id, err := age.GenerateX25519Identity()
 	if err != nil {
 		t.Fatal(err)
@@ -454,19 +484,72 @@ func (e *scimEnv) runState(id uuid.UUID) types.RunState {
 // cookie is a session cookie for sub as the callback would have issued it: issued now, at epoch.
 func scimCookie(t *testing.T, sub, email string, epoch int64) *http.Cookie {
 	t.Helper()
-	payload, err := json.Marshal(oidc.Session{
+	return scimCookieAt(t, sub, email, epoch, time.Now().UTC())
+}
+
+func scimCookieAt(t *testing.T, sub, email string, epoch int64, issuedAt time.Time) *http.Cookie {
+	t.Helper()
+	return sealScimSession(t, "wardyn_session", oidc.Session{
 		V: oidc.SessionCodecVersion, Sub: sub, Email: email, Role: oidc.RoleUser, UserType: types.UserTypeStandard,
-		Expiry: time.Now().UTC().Add(time.Hour), IssuedAt: time.Now().UTC(), AuthorityEpoch: epoch, Groups: []string{},
+		Expiry: time.Now().UTC().Add(time.Hour), IssuedAt: issuedAt, AuthorityEpoch: epoch, Groups: []string{},
 	})
+}
+
+// orderedCookieAt is scimCookieAt carrying the revocation sequence the callback records at sign-in, read
+// now: a session issued at this point of the revocation order, whatever issuedAt says.
+func (e *scimEnv) orderedCookieAt(sub, email string, epoch int64, issuedAt time.Time) *http.Cookie {
+	e.t.Helper()
+	seq, err := e.rev.RevocationSeq(context.Background())
+	if err != nil || seq < 1 {
+		e.t.Fatalf("read the revocation sequence: %d, %v", seq, err)
+	}
+	return reissued(e.t, scimCookieAt(e.t, sub, email, epoch, issuedAt), func(s *oidc.Session) { s.RevocationSeq = seq })
+}
+
+// sealScimSession signs s as the session cookie name.
+func sealScimSession(t *testing.T, name string, s oidc.Session) *http.Cookie {
+	t.Helper()
+	payload, err := json.Marshal(s)
 	if err != nil {
 		t.Fatal(err)
 	}
 	mac := hmac.New(sha256.New, accessTestHMACKey)
 	mac.Write(payload)
 	return &http.Cookie{
-		Name:  "wardyn_session",
+		Name:  name,
 		Value: base64.RawURLEncoding.EncodeToString(payload) + "." + base64.RawURLEncoding.EncodeToString(mac.Sum(nil)),
 	}
+}
+
+// reissued returns c re-signed after edit has changed its session.
+func reissued(t *testing.T, c *http.Cookie, edit func(*oidc.Session)) *http.Cookie {
+	t.Helper()
+	enc, _, ok := strings.Cut(c.Value, ".")
+	if !ok {
+		t.Fatalf("cookie %q has no signature", c.Name)
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(enc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var s oidc.Session
+	if err := json.Unmarshal(raw, &s); err != nil {
+		t.Fatal(err)
+	}
+	edit(&s)
+	return sealScimSession(t, c.Name, s)
+}
+
+// clockStepMargin is how far before a revoke the sessions it must reach are issued: more than any step
+// the host clock takes between two instants of one test.
+const clockStepMargin = 5 * time.Second
+
+// backdated returns c re-signed with its issue time moved d earlier. A session that must be revoked is
+// issued clearly before the revoke, so the ordering the test asserts does not depend on the wall clock
+// holding still across the two instants.
+func backdated(t *testing.T, c *http.Cookie, d time.Duration) *http.Cookie {
+	t.Helper()
+	return reissued(t, c, func(s *oidc.Session) { s.IssuedAt = s.IssuedAt.Add(-d) })
 }
 
 // cookieWorks reports whether the cookie authenticates a request on n.

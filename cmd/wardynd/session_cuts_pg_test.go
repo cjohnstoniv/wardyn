@@ -35,23 +35,23 @@ func TestPGSessionRevocations_CutSessionsLeavesTokensAndKeys(t *testing.T) {
 	if err := rev.CutSessions(ctx, sub); err != nil {
 		t.Fatalf("CutSessions: %v", err)
 	}
-	if st, err := rev.SessionStatus(ctx, sub, "", issued, 0); err != nil || st == oidc.SessionLive {
+	if st, err := rev.SessionStatus(ctx, sub, "", oidc.Issue{At: issued}, 0); err != nil || st == oidc.SessionLive {
 		t.Errorf("a session cookie issued before the cut = (%v, %v), want it cut", st, err)
 	}
 	if revoked, err := rev.IsSessionRevoked(ctx, sub, "", issued); err != nil || !revoked {
 		t.Errorf("IsSessionRevoked for a grant issued before the cut = (%v, %v), want true", revoked, err)
 	}
-	if st, err := rev.SessionStatus(ctx, sub, "", issued, -1); err != nil || st != oidc.SessionLive {
+	if st, err := rev.SessionStatus(ctx, sub, "", oidc.Issue{At: issued}, -1); err != nil || st != oidc.SessionLive {
 		t.Errorf("an API token or SSH key created before the cut = (%v, %v), want it live", st, err)
 	}
-	if st, err := rev.SessionStatus(ctx, sub, "", time.Now().UTC().Add(time.Hour), 0); err != nil || st != oidc.SessionLive {
+	if st, err := rev.SessionStatus(ctx, sub, "", oidc.Issue{At: time.Now().UTC().Add(time.Hour)}, 0); err != nil || st != oidc.SessionLive {
 		t.Errorf("a session issued after the cut = (%v, %v), want it live", st, err)
 	}
 	// A revocation still ends the token too.
 	if err := rev.RevokeSub(ctx, sub); err != nil {
 		t.Fatalf("RevokeSub: %v", err)
 	}
-	if st, err := rev.SessionStatus(ctx, sub, "", issued, -1); err != nil || st != oidc.SessionRevoked {
+	if st, err := rev.SessionStatus(ctx, sub, "", oidc.Issue{At: issued}, -1); err != nil || st != oidc.SessionRevoked {
 		t.Errorf("a token created before a RevokeSub = (%v, %v), want revoked", st, err)
 	}
 }

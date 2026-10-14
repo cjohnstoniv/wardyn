@@ -144,6 +144,12 @@ const ACTION_VERB: Record<string, string> = {
   "run.revoke": "revoked the run's identity",
   "run.autostop": "auto-stopped the idle run",
   "run.reconcile": "reconciled run state",
+  // The EFFECTIVE policy the sandbox was actually given, recorded after every
+  // widening phase, so this is what the proxy enforces, not what was asked for.
+  "run.policy.resolve": "resolved the policy this run was given",
+  // The operator's corporate upstream proxy, resolved per dispatch. A failure
+  // row means the run went out with direct egress, not that the run was refused.
+  "run.upstream_proxy.resolve": "checked the corporate proxy setting for the run's egress",
   "run.workspace.collide": "detected a workspace directory collision",
   "run.requirement.allow": "applied a workspace's required egress to the run",
   "run.requirement.grant": "granted a workspace's required secret to the run",
@@ -175,6 +181,8 @@ const ACTION_VERB: Record<string, string> = {
   "ssh.authenticate": "an ssh authentication attempt against a run's terminal",
   "ssh.exec": "ran a command over the run's ssh channel",
   "ssh.sftp.transfer": "an sftp session against the run's sandbox",
+  // pending H11-P2: recommended text until the owner answers; the packet names no label for wardyn sync's own row.
+  "ssh.sync.transfer": "a wardyn sync session against the run's sandbox",
   "ssh.forward": "an ssh port forward into the run's sandbox",
   "kernel.process.exec": "observed a process exec",
   "kernel.network.connect": "observed a network connect",

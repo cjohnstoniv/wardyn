@@ -198,7 +198,7 @@ func (s *Store) read(ctx context.Context) error {
 		}
 		full = true
 	}
-	if err := s.apply(ctx, rows, full); err != nil {
+	if err := s.apply(ctx, rows, top, full); err != nil {
 		return err
 	}
 	sy.mu.Lock()
@@ -242,8 +242,11 @@ func (s *Store) fetch(ctx context.Context, cursor int64) (top, pruned int64, row
 // and a key that is destroyed or does not unwrap, or a blob that does not open,
 // is skipped (nothing can ever mask it) once the runs it masks are fenced
 // (unopenable). A transient failure (the store is unavailable, the context
-// ends) aborts the read, so the cursor stays and the caller fails closed. A full read also drops what the table no longer has.
-func (s *Store) apply(ctx context.Context, rows []row, full bool) error {
+// ends) aborts the read, so the cursor stays and the caller fails closed. A full
+// read also drops what the table no longer has, but only refs at or below top,
+// the generation its snapshot covers: a ref above it was committed here after
+// the snapshot, the next read applies it, and dropping it would unmask its value.
+func (s *Store) apply(ctx context.Context, rows []row, top int64, full bool) error {
 	keys := map[keyID][]byte{}
 	defer func() {
 		for _, k := range keys {
@@ -265,7 +268,7 @@ func (s *Store) apply(ctx context.Context, rows []row, full bool) error {
 	s.sync.mu.Lock()
 	var gone []*ref
 	for id, rf := range s.sync.rows {
-		if !seen[id] {
+		if !seen[id] && rf.gen <= top {
 			gone = append(gone, rf)
 			delete(s.sync.rows, id)
 		}
@@ -293,8 +296,11 @@ func (s *Store) applyRow(ctx context.Context, r row, keys map[keyID][]byte) erro
 		s.sync.mu.Lock()
 		delete(s.sync.rows, r.id)
 		s.sync.mu.Unlock()
-		if r.retiredAt != nil && rf.current && rf.bucket == bucketGlobal {
-			s.reg.RetireGlobalValue(rf.owner, rf.name, rf.value, *r.retiredAt)
+		if r.retiredAt != nil && rf.bucket == bucketGlobal {
+			// The registry keeps its own copy through the grace; this one is done.
+			// A row already retired there keeps the retirement it has.
+			s.reg.RetireGlobalValue(rf.id, *r.retiredAt)
+			clear(rf.value)
 			return nil
 		}
 		s.drop(rf)
@@ -316,7 +322,7 @@ func (s *Store) applyRow(ctx context.Context, r row, keys map[keyID][]byte) erro
 		s.reg.AddLocal(rf.runID, rf.value)
 		return nil
 	}
-	s.reg.ApplyGlobal(rf.owner, rf.name, rf.value, rf.until, rf.retiredAt)
+	s.reg.ApplyGlobal(rf.id, rf.owner, rf.name, rf.value, rf.until, rf.retiredAt)
 	return nil
 }
 
@@ -443,7 +449,7 @@ func (s *Store) drop(rf *ref) {
 	if rf.bucket == bucketRun {
 		s.reg.DropRunValue(rf.runID, rf.value)
 	} else {
-		s.reg.DropGlobalValue(rf.owner, rf.name, rf.value)
+		s.reg.DropGlobalValue(rf.id)
 	}
 	clear(rf.value)
 }

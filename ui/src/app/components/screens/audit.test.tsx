@@ -167,6 +167,7 @@ describe("AuditScreen", { timeout: 15_000 }, () => {
       state: "RUNNING",
       spiffe_id: "spiffe://x",
       runner_target: "docker",
+      placement: "",
     };
     getRunMock.mockRejectedValueOnce(new Error("500")).mockResolvedValueOnce(runRecord);
 
@@ -387,12 +388,15 @@ describe("AuditScreen", { timeout: 15_000 }, () => {
       ev({ id: "e7", action: "run.requirement.inject", target: "corp-anthropic" }),
       ev({ id: "e8", action: "run.bedrock.configure", target: "run-1" }),
       ev({ id: "e9", action: "run.subscription.inject", target: "run-1" }),
+      ev({ id: "e10", action: "ssh.sync.transfer", target: "run-1" }),
     ]);
     renderScreen();
 
     expect(await screen.findByText(/An ssh authentication attempt against a run's terminal/)).toBeInTheDocument();
     expect(screen.getByText(/Ran a command over the run's ssh channel/)).toBeInTheDocument();
     expect(screen.getByText(/An sftp session against the run's sandbox/)).toBeInTheDocument();
+    expect(screen.getByText(/A wardyn sync session against the run's sandbox/)).toBeInTheDocument();
+    expect(screen.queryByText("ssh.sync.transfer")).not.toBeInTheDocument();
     expect(screen.getByText(/An ssh port forward into the run's sandbox/)).toBeInTheDocument();
     expect(screen.getByText(/Applied a workspace's required egress to the run — ws-1/)).toBeInTheDocument();
     expect(
@@ -406,6 +410,27 @@ describe("AuditScreen", { timeout: 15_000 }, () => {
     expect(screen.queryByText("ssh.authenticate")).not.toBeInTheDocument();
     expect(screen.queryByText("run.requirement.allow")).not.toBeInTheDocument();
     expect(screen.queryByText("run.subscription.inject")).not.toBeInTheDocument();
+  });
+
+  // The two dispatch-time resolve rows every run writes — the effective policy
+  // and the corporate upstream proxy — rendered as raw dotted names, which is
+  // the exact sentence an operator reads when asking "what did this run
+  // actually run under".
+  it("renders prose for the dispatch-time policy and upstream-proxy resolve rows", async () => {
+    listAuditMock.mockResolvedValue([
+      ev({ id: "e1", action: "run.policy.resolve", target: "run-1", data: { allowed_domains: ["example.test"] } }),
+      ev({ id: "e2", action: "run.upstream_proxy.resolve", target: "run-1", data: { in_effect: true } }),
+      ev({ id: "e3", action: "run.upstream_proxy.resolve", target: "run-2", outcome: "failure", data: { in_effect: false, reason: "unresolvable" } }),
+    ]);
+    renderScreen();
+
+    expect(await screen.findByText(/Resolved the policy this run was given/)).toBeInTheDocument();
+    // A failure row reads the same sentence as a success one: the outcome
+    // chip carries the difference, and a proxy that did not resolve left the
+    // run on direct egress rather than refusing it.
+    expect(screen.getAllByText(/Checked the corporate proxy setting for the run's egress/)).toHaveLength(2);
+    expect(screen.queryByText("run.policy.resolve")).not.toBeInTheDocument();
+    expect(screen.queryByText("run.upstream_proxy.resolve")).not.toBeInTheDocument();
   });
 
   // run.subscription.inject is a credential event (the subscription

@@ -38,6 +38,15 @@ func TestAdmissionCredentialHosts(t *testing.T) {
 		{name: "two grants, one host on another port", spec: types.RunPolicySpec{EligibleGrants: []types.GrantSpec{apiKeyOn("a.example"), apiKeyOn("a.example:8443")}}, hosts: 2, collide: true},
 		{name: "an approval-gated grant is never injected", spec: types.RunPolicySpec{EligibleGrants: []types.GrantSpec{gated, apiKeyOn("gated.example")}}, hosts: 1},
 		{name: "a forge API door on a credential's host", spec: types.RunPolicySpec{EligibleGrants: []types.GrantSpec{apiKeyOn("gitlab.corp"), pat("gitlab.corp", true)}}, hosts: 2, collide: true},
+		// #1823: a GitLab/Gitea whose package registry is the run's artifact mirror on the same host. The
+		// forge API door judges every request on the host and would refuse the registry's, so the two are
+		// refused together as two credentials for one host.
+		{name: "a forge API door on a token redirect's host", spec: types.RunPolicySpec{EligibleGrants: []types.GrantSpec{pat("gitlab.corp", true)}},
+			site: types.SiteConfig{EgressRedirects: []types.EgressRedirect{mirror("https://gitlab.corp/api/v4/projects/7/packages/npm/", "tok")}}, hosts: 2, collide: true},
+		{name: "a forge API door beside a token-less redirect to its host", spec: types.RunPolicySpec{EligibleGrants: []types.GrantSpec{pat("gitlab.corp", true)}},
+			site: types.SiteConfig{EgressRedirects: []types.EgressRedirect{mirror("https://gitlab.corp/api/v4/projects/7/packages/npm/", "")}}, hosts: 1},
+		{name: "a PAT that stays on the git route beside a token redirect to its host", spec: types.RunPolicySpec{EligibleGrants: []types.GrantSpec{pat("gitlab.corp", false)}},
+			site: types.SiteConfig{EgressRedirects: []types.EgressRedirect{mirror("https://gitlab.corp/api/v4/projects/7/packages/npm/", "tok")}}, hosts: 1},
 		{name: "a PAT that stays on the git route", spec: types.RunPolicySpec{EligibleGrants: []types.GrantSpec{apiKeyOn("gitlab.corp"), pat("gitlab.corp", false)}}, hosts: 1},
 		{name: "a token redirect on a credential's host", spec: types.RunPolicySpec{EligibleGrants: []types.GrantSpec{apiKeyOn("mirror.corp")}},
 			site: types.SiteConfig{EgressRedirects: []types.EgressRedirect{mirror("https://mirror.corp/npm", "tok")}}, hosts: 2, collide: true},

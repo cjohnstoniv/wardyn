@@ -46,6 +46,7 @@ func newRetChain(t *testing.T) *retChain {
 	c := &retChain{partChain: newPartChain(t), run: uuid.New()}
 	requireTriggerBypass(t, c.pool)
 	execMigrationFile(t, c.pool, "0123_audit_retention.sql")
+	execMigrationFile(t, c.pool, "0146_audit_retention_drop_actor_type.sql")
 	ctx := context.Background()
 	c.exec(t, `INSERT INTO agent_runs (id, created_by, agent, repo, confinement_class, state, spiffe_id, runner_target)
 		VALUES ($1, 'ret@example.com', 'claude-code', 'o/r', 'CC1', 'RUNNING', 'spiffe://t/r', 'docker')`, c.run)
@@ -104,7 +105,7 @@ func (c *retChain) digest(t *testing.T, name string) string {
 }
 
 func (c *retChain) drop(name, digest, actor string) (store.AuditRetentionDrop, error) {
-	return store.NewPG(c.pool).DropAuditPartition(context.Background(), name, digest, actor)
+	return store.NewPG(c.pool).DropAuditPartition(context.Background(), name, digest, actor, types.ActorHuman)
 }
 
 func (c *retChain) hasPartition(t *testing.T, name string) bool {
@@ -505,13 +506,13 @@ func TestPG_RetentionPolicyCooldown(t *testing.T) {
 
 // The SQL spells the live-run states out; they must be the ones types.NonTerminalRunStates names.
 func TestRetentionSQLLiveRunStatesAreTheNonTerminalOnes(t *testing.T) {
-	b, err := os.ReadFile("../db/migrations/0123_audit_retention.sql")
+	b, err := os.ReadFile("../db/migrations/0162_run_queue.sql") // the newest audit_retention_partitions (0123 made it)
 	if err != nil {
 		t.Fatalf("read the migration: %v", err)
 	}
 	m := regexp.MustCompile(`ar\.state IN \(([^)]*)\)`).FindSubmatch(b)
 	if m == nil {
-		t.Fatal("0123 has no live-run state list")
+		t.Fatal("0162 has no live-run state list")
 	}
 	var got []string
 	for _, s := range strings.Split(string(m[1]), ",") {
@@ -522,6 +523,6 @@ func TestRetentionSQLLiveRunStatesAreTheNonTerminalOnes(t *testing.T) {
 		want = append(want, string(s))
 	}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
-		t.Errorf("0123 treats %v as live, types.NonTerminalRunStates is %v", got, want)
+		t.Errorf("0162 treats %v as live, types.NonTerminalRunStates is %v", got, want)
 	}
 }

@@ -20,7 +20,8 @@
 #   J. the wait loop stops on a red run and PRINTS the rerun command, never runs it
 #   K-T. gh auth, release-commit refusal, numeric tag order, a missing draft,
 #      verify failure, an oversized BODY, bad ISSUES / PHASE, the script text
-#   X-Z. duplicate headings after merge/release commit or on resume; repair retains history
+#   X-Z. duplicate headings after merge/release commit or on resume; repair retains history;
+#      X2: a stray heading the merge leaves under another heading is repaired by prepare
 # and, over every push any case made: no --force, no `+` refspec.
 # Daemon-free, network-free.
 set -u
@@ -154,6 +155,8 @@ STUB
   printf 'dco:\n\t@echo "$(DCO_RANGE)" >>"$(FIX)/dco.log"\n' >Makefile
   printf 'name: release\n# a\n          watched="w1 w2 w3"\n' >.github/workflows/release.yml
   printf '# Changelog\n\n## [Unreleased]\n\n## [0.8.3] — 2030-01-01\n\n- old\n' >CHANGELOG.md
+  # release-sized (over 128 KiB, the one-argument limit of exec) so no script may pass the CHANGELOG by argv
+  { printf '\n## [0.1.0] — 2020-01-01\n\n'; yes -- '- filler line for a release-sized changelog' | head -4000; } >>CHANGELOG.md
 }
 
 mkfix() {  # mkfix <name>: sets FIX WK OR; origin has main, release/0.8 (+tags v0.8.2, v0.8.3)
@@ -545,6 +548,29 @@ check "X: repair commit is still an ancestor" g -C "$WK" merge-base --is-ancesto
 check "X: repair preserved release notes" grep -qx -- '- merged notes to preserve' "$WK/CHANGELOG.md"
 check "X: no second merge or release commit" test "$(g -C "$WK" rev-list --count --merges HEAD) $(lines "$FIX/rc.log")" = '1 1'
 check "X: repaired candidate pushed" test "$(g -C "$OR" rev-parse refs/heads/chore/release-0.8.4)" = "$(g -C "$WK" rev-parse HEAD)"
+keep_pushes
+
+mkfix X2
+check "X2: the release-line CHANGELOG is over 128 KiB" test "$(wc -c <"$WK/CHANGELOG.md")" -gt 131072
+sed -i '/^## \[Unreleased\]$/a\
+\
+## [0.8.3] — 2030-01-01\
+\
+- main unreleased notes' "$WK/CHANGELOG.md"
+g -C "$WK" add CHANGELOG.md && g -C "$WK" commit -q -s -m "main leaves a stray heading" && g -C "$WK" push -q origin main
+MAIN_PUSHED=$(g -C "$WK" rev-parse HEAD)
+rp V=0.8.4 PHASE=prepare MERGE=origin/main DRY_RUN=1
+check "X2: DRY_RUN checks the repair and prepare exits zero" test "$RC" = 0
+check "X2: DRY_RUN says it would repair" out_has 'DRY_RUN: a duplicate CHANGELOG heading would be repaired'
+check "X2: DRY_RUN commits no repair" bash -c "! '$REAL_GIT' -C '$WK' log --format=%B | grep -q 'drop the duplicate version heading'"
+check "X2: DRY_RUN leaves the worktree clean" test -z "$(g -C "$WK" status --porcelain)"
+check "X2: DRY_RUN leaves the stray heading in the file" test "$(grep -c '^## \[0\.8\.3\]' "$WK/CHANGELOG.md")" = 2
+rp V=0.8.4 PHASE=prepare MERGE=origin/main
+check "X2: the stray heading is repaired and prepare exits zero" test "$RC" = 0
+check "X2: the repair is its own commit with a Signed-off-by" bash -c "'$REAL_GIT' -C '$WK' log --format=%B --grep='drop the duplicate version heading' | grep -q '^Signed-off-by: '"
+check "X2: the real 0.8.3 section keeps its notes" bash -c "grep -c '^## \\[0\\.8\\.3\\]' '$WK/CHANGELOG.md' | grep -qx 1 && grep -qx -- '- old' '$WK/CHANGELOG.md'"
+check "X2: the stray section's notes are kept, under Unreleased" bash -c "awk '/^## \\[/ {s=\$0} /main unreleased notes/ {print s}' '$WK/CHANGELOG.md' | grep -q Unreleased"
+check "X2: the filler survives" bash -c "[ \"\$(grep -c 'filler line' '$WK/CHANGELOG.md')\" = 4000 ]"
 keep_pushes
 
 mkfix Y

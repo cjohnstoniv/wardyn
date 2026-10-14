@@ -16,7 +16,7 @@ import (
 )
 
 const (
-	retentionDropFn      = "audit_retention_drop(text, text, text)"
+	retentionDropFn      = "audit_retention_drop(text, text, text, text)"
 	retentionSetPolicyFn = "audit_retention_set_policy(integer)"
 )
 

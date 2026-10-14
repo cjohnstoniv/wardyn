@@ -1,6 +1,6 @@
 # M-R — New Run panels and shared policy document
 
-Status: **parser-diagnostic and field-semantics amendment awaiting written review; design prototype and owner approval pending**. Tracker #1916. This independently approvable packet gates the rendering of the New Run panels, the shared policy viewer and editor, and the visual portions of the draft work. Nonvisual parser, preview, request-controller and mechanical split work can proceed meanwhile. No product rendering code was changed to prepare this packet.
+Status: **owner-approved 2026-10-08 at prototype Version 7 (`1791427781-730a`), the version shipped in 0.8.9**. Tracker #1916. This independently approvable packet gates the rendering of the New Run panels, the shared policy viewer and editor, and the visual portions of the draft work. Nonvisual parser, preview, request-controller and mechanical split work can proceed meanwhile. No product rendering code was changed to prepare this packet.
 
 Baseline: `7b08fd722ca4dcfd9d2d59e6f1cb8ecab54d8dcf`. Read together with `regression-inventory.md` and `canon-inventory.md`. Superseded plan wording is not canon. The prototype must use the console design-system project (see `docs/design/SYNC.md`). The component bundle and prototype are not yet verified, so these frames remain authoring instructions, not screenshots or proof of a remote prototype.
 
@@ -407,4 +407,4 @@ Binary acceptance evidence: default/saved/custom launches and refusal paths; inv
 - **R-D14:** Approval identifies this concrete design prototype URL/revision and these decisions, including narrow layout/focus and copy amendments. M-F and M-O remain independent. This textual packet alone does not satisfy the blocked remote-prototype gate.
 - **R-D15 — new proposal:** Approve the strict-parser diagnostic inventory and variable-data treatment, `SOURCE_POSITION` copy, invalid-source frames and local announcement/focus/Copy/Summary/rail/preview rules above. This amendment needs independent written review and then the real design-prototype state walkthrough and owner decision before any diagnostic rendering is wired.
 
-Owner approval record: **pending**. Design prototype URL/revision: **not created or verified yet**.
+Owner approval record: **approved 2026-10-08, M-R Version 7**. Design prototype revision: `1791427781-730a`. Access rows are approved as direction only; their rules are superseded by the owner's 2026-10-07 component decisions, and no backend component design is approved.

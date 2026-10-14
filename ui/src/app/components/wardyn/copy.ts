@@ -163,19 +163,12 @@ export { PEOPLE_STEP, SETUP, SITE } from "./copy/setup-steps";
 export { SHELL, UNSAVED_GUARD } from "./copy/shell";
 export { RUN, NO_BARRIER } from "./copy/run-clone";
 export { GIT_PAT_SCOPE } from "./copy/git-pat";
+export { TIER } from "./copy/tier";
 
 // Moved to copy/terminal.ts (the target path for the later barrel split of
 // this file) — re-exported here so every existing `from "./copy"` import
 // keeps working unchanged.
 export { TERMINAL, TERMINAL_COPY, TERMINAL_LINK, TERMINAL_RENDERER } from "./copy/terminal";
 
-export {
-  RECORDING_DISABLED_TITLE,
-  RECORDING_DISABLED_DESC,
-  RAIL,
-  RAIL_CREDENTIAL,
-  RAIL_PROVIDER,
-  RAIL_RECORDING_ON,
-  RAIL_CHECK,
-  RAIL_SETUP,
-} from "./copy/new-run-rail";
+export { RECORDING_DISABLED_TITLE, RECORDING_DISABLED_DESC } from "./copy/recording-disabled";
+export { RAIL_PROVIDER, RAIL_CHECK } from "./copy/new-run-rail";

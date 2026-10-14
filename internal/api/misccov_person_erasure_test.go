@@ -37,23 +37,23 @@ type miscCovPersonStore struct {
 	mu    sync.Mutex
 	calls []string
 
-	runs       map[string][]uuid.UUID
-	runsErr    error
-	blanked    map[string]int
-	blankErr   error
-	principals map[string]string
-	principErr error
-	aliases    map[string][]string
-	aliasErr   error
-	govN       int
-	govErr     error
-	eraseErr   error
-	beginErr   error
+	runs     map[string][]uuid.UUID
+	runsErr  error
+	blanked  map[string]int
+	blankErr error
+	aliases  map[string][]string
+	aliasErr error
+	govN     int
+	govErr   error
+	eraseErr error
+	beginErr error
 }
+
+var _ store.PersonErasureStore = (*miscCovPersonStore)(nil)
 
 func newMiscCovPersonStore() *miscCovPersonStore {
 	return &miscCovPersonStore{memRunOutputs: newMemRunOutputs(nil), runs: map[string][]uuid.UUID{}, blanked: map[string]int{},
-		principals: map[string]string{}, aliases: map[string][]string{}}
+		aliases: map[string][]string{}}
 }
 
 func (s *miscCovPersonStore) note(c string) {
@@ -89,24 +89,21 @@ func (s *miscCovPersonStore) BlankRunTasks(_ context.Context, by string) (int, e
 	return len(s.runs[by]), nil
 }
 
-func (s *miscCovPersonStore) PrincipalForName(_ context.Context, name string) (string, error) {
-	s.note("principal:" + name)
-	if s.principErr != nil {
-		return "", s.principErr
-	}
-	if p, ok := s.principals[name]; ok {
-		return p, nil
-	}
-	return name, nil
-}
-
 func (s *miscCovPersonStore) PrincipalAliases(_ context.Context, principal string) ([]string, error) {
 	s.note("aliases:" + principal)
 	return s.aliases[principal], s.aliasErr
 }
 
-func (s *miscCovPersonStore) EraseGovernanceChangePersonalFields(_ context.Context, names []string) (int, error) {
-	s.note("governance:" + strings.Join(names, ","))
+func (s *miscCovPersonStore) PrincipalEntraNames(context.Context, string) ([]string, error) {
+	return nil, nil
+}
+
+func (s *miscCovPersonStore) PrincipalsSharingObject(context.Context, string) ([]string, error) {
+	return nil, nil
+}
+
+func (s *miscCovPersonStore) EraseGovernanceChangePersonalFields(_ context.Context, principals, emails []string) (int, error) {
+	s.note("governance:" + strings.Join(principals, ",") + "|" + strings.Join(emails, ","))
 	return s.govN, s.govErr
 }
 
@@ -277,7 +274,7 @@ func TestMiscCovErasureOrchestratorRegistersABackedScopeOnly(t *testing.T) {
 	pool, closedErr := miscCovClosedPool(t)
 	srv := newHarness(t).srv
 	run := func(sc erasure.Scope) error {
-		_, err := srv.erasureOrchestrator(nil).Orchestrate(t.Context(), "bob", []erasure.Scope{sc})
+		_, err := srv.erasureOrchestrator(nil, nil).Orchestrate(t.Context(), "bob", []erasure.Scope{sc})
 		return err
 	}
 	for _, sc := range []erasure.Scope{erasure.MaskCopies, erasure.AuditPersonalFields, erasure.Credentials} {
@@ -466,8 +463,8 @@ func TestMiscCovEraseRunTasksNeedsAStoreThatListsRuns(t *testing.T) {
 	}
 }
 
-// The audit_personal_fields scope resolves the person to their principal and aliases before it destroys
-// a key, and destroys no key and touches no governance change when a resolve fails.
+// The audit_personal_fields scope reads the resolved principal's aliases before it destroys a key, and
+// destroys no key and touches no governance change when that read fails.
 func TestMiscCovEraseAuditSealKeys(t *testing.T) {
 	pool, closedErr := miscCovClosedPool(t)
 	setup := func(t *testing.T) (*Server, *miscCovPersonStore) {
@@ -476,33 +473,21 @@ func TestMiscCovEraseAuditSealKeys(t *testing.T) {
 		return srv, st
 	}
 
-	t.Run("a failed principal lookup stops before the aliases", func(t *testing.T) {
-		srv, st := setup(t)
-		st.principErr = errors.New("directory down")
-		if _, err := srv.eraseAuditSealKeys(t.Context(), "bob@corp.example"); !errors.Is(err, st.principErr) {
-			t.Fatalf("err = %v, want the lookup's error", err)
-		}
-		if !slices.Equal(st.callLog(), []string{"principal:bob@corp.example"}) {
-			t.Errorf("store calls = %v, want the lookup alone", st.callLog())
-		}
-	})
 	t.Run("a failed alias lookup stops before any key is destroyed", func(t *testing.T) {
 		srv, st := setup(t)
-		st.principals["bob@corp.example"] = "bob"
 		st.aliasErr = errors.New("aliases down")
-		_, err := srv.eraseAuditSealKeys(t.Context(), "bob@corp.example")
+		_, err := srv.eraseAuditSealKeys(t.Context(), "bob", nil)
 		if !errors.Is(err, st.aliasErr) || errors.Is(err, closedErr) {
 			t.Fatalf("err = %v, want the alias lookup's error and no destroy attempt", err)
 		}
-		if !slices.Equal(st.callLog(), []string{"principal:bob@corp.example", "aliases:bob"}) {
-			t.Errorf("store calls = %v, want the principal then the aliases of bob", st.callLog())
+		if !slices.Equal(st.callLog(), []string{"aliases:bob"}) {
+			t.Errorf("store calls = %v, want the aliases of bob alone: the step never resolves the name again", st.callLog())
 		}
 	})
 	t.Run("a key that cannot be destroyed leaves the governance changes alone", func(t *testing.T) {
 		srv, st := setup(t)
-		st.principals["bob@corp.example"] = "bob"
 		st.aliases["bob"] = []string{"bob@corp.example", "entra:tenant:object"}
-		_, err := srv.eraseAuditSealKeys(t.Context(), "bob@corp.example")
+		_, err := srv.eraseAuditSealKeys(t.Context(), "bob", nil)
 		if !errors.Is(err, closedErr) {
 			t.Fatalf("err = %v, want the destroy's error", err)
 		}
@@ -515,7 +500,7 @@ func TestMiscCovEraseAuditSealKeys(t *testing.T) {
 	t.Run("with a store that cannot resolve people the destroy is still attempted and its error returned", func(t *testing.T) {
 		srv := newHarness(t).srv
 		srv.cfg.SubjectKeys = subjectkey.New(pool, subjectkey.Resolver{})
-		if _, err := srv.eraseAuditSealKeys(t.Context(), "bob"); !errors.Is(err, closedErr) {
+		if _, err := srv.eraseAuditSealKeys(t.Context(), "bob", nil); !errors.Is(err, closedErr) {
 			t.Errorf("err = %v, want the destroy's error", err)
 		}
 	})

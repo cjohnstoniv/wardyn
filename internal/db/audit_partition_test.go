@@ -13,6 +13,7 @@ const (
 	auditConversionFile = "0111_audit_partitioned.sql"
 	auditReplayableFile = "0112_audit_chain_partitioned.sql"
 	auditRetentionFile  = "0123_audit_retention.sql"
+	auditDropActorFile  = "0146_audit_retention_drop_actor_type.sql"
 	auditChainHeadFile  = "0130_audit_chain_head_from_meta.sql"
 )
 
@@ -82,6 +83,7 @@ func TestAuditLockKeyLiteralsMatchTheGoConstants(t *testing.T) {
 		auditConversionFile: {AuditChainLockKey, AuditPartitionLockKey},
 		auditReplayableFile: {AuditChainLockKey},
 		auditRetentionFile:  {AuditChainLockKey, AuditPartitionLockKey},
+		auditDropActorFile:  {AuditChainLockKey, AuditPartitionLockKey},
 	} {
 		body := readMigration(t, file)
 		for _, key := range keys {

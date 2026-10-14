@@ -83,7 +83,10 @@ func leqOf(a, b composer.Authority) bool {
 	return composer.Leq(a.Ceiling, b.Ceiling, a.Limits, b.Limits)
 }
 
-// A composed ceiling is at most as permissive as its base.
+// A composed ceiling is at most as permissive as its base. One composition is outside
+// this on purpose and the generator never makes it: an overlay that adds an
+// llm_inspection naming a detector sidecar over a base with none, which Leq refuses
+// so the change waits for a second approver (TestLeqRefusesAnAddedSidecarComposition).
 func TestLeqHoldsForEveryComposition(t *testing.T) {
 	err := quick.Check(func(c leqCase) bool {
 		got, _, err := composer.ApplyOverlay(c.base, c.o1)
@@ -99,6 +102,21 @@ func TestLeqHoldsForEveryComposition(t *testing.T) {
 	}, quickCfg)
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestLeqRefusesAnAddedSidecarComposition pins the one composition
+// TestLeqHoldsForEveryComposition leaves out: the meet takes an added inspection,
+// and Leq does not prove it within the base when it names a detector sidecar.
+func TestLeqRefusesAnAddedSidecarComposition(t *testing.T) {
+	base := composer.Authority{Ceiling: types.RunPolicySpec{MinConfinementClass: types.CC2}}
+	ov := composer.Overlay{Ceiling: types.CeilingOverlay{LLMInspection: &types.LLMInspectionSpec{Mode: "block", DetectorSidecarURL: "https://detector.corp.example/scan"}}}
+	got, _, err := composer.ApplyOverlay(base, ov)
+	if err != nil {
+		t.Fatalf("ApplyOverlay: %v", err)
+	}
+	if leqOf(got, base) {
+		t.Error("Leq holds for an added inspection that names a detector sidecar")
 	}
 }
 
@@ -258,8 +276,14 @@ func TestLeqIsFalseForEveryWidening(t *testing.T) {
 		}, wide: func(c *types.RunPolicySpec, _ *types.GovernanceLimits) {
 			c.LLMInspection = &types.LLMInspectionSpec{Mode: "warn"}
 		}},
+		{name: "an added inspection naming a detector sidecar", wide: func(c *types.RunPolicySpec, _ *types.GovernanceLimits) {
+			c.LLMInspection = &types.LLMInspectionSpec{Mode: "block", DetectorSidecarURL: " https://detector.corp.example/scan "}
+		}},
 		{name: "an added ui app", wide: func(c *types.RunPolicySpec, _ *types.GovernanceLimits) {
 			c.UIApps = append(slices.Clone(c.UIApps), types.UIApp{Name: "jupyter", Port: 8888})
+		}},
+		{name: "emptied ui apps, which a run reads as no opinion", wide: func(c *types.RunPolicySpec, _ *types.GovernanceLimits) {
+			c.UIApps = nil
 		}},
 		{name: "a ui app moved to another path", wide: func(c *types.RunPolicySpec, _ *types.GovernanceLimits) {
 			c.UIApps = []types.UIApp{{Name: "docs", Port: 8000, Path: "/admin"}}
@@ -357,7 +381,11 @@ func TestLeqIsFalseForEveryWidening(t *testing.T) {
 		// Limits.
 		{name: "a lifted interactive denial", wide: func(_ *types.RunPolicySpec, l *types.GovernanceLimits) { l.DenyInteractive = false }},
 		{name: "a lifted exec denial", base: func(_ *types.RunPolicySpec, l *types.GovernanceLimits) { l.DenyTaskModeExec = true }, wide: func(_ *types.RunPolicySpec, l *types.GovernanceLimits) { l.DenyTaskModeExec = false }},
+		{name: "a lifted member-drive denial", base: func(_ *types.RunPolicySpec, l *types.GovernanceLimits) { l.DenyMemberDrives = true }, wide: func(_ *types.RunPolicySpec, l *types.GovernanceLimits) { l.DenyMemberDrives = false }},
 		{name: "a lifted drive denial", base: func(_ *types.RunPolicySpec, l *types.GovernanceLimits) { l.DenyUserDrive = true }, wide: func(_ *types.RunPolicySpec, l *types.GovernanceLimits) { l.DenyUserDrive = false }},
+		{name: "a lifted placement denial", base: func(_ *types.RunPolicySpec, l *types.GovernanceLimits) {
+			l.DenyPlacements = []types.Placement{types.PlacementLocal}
+		}, wide: func(_ *types.RunPolicySpec, l *types.GovernanceLimits) { l.DenyPlacements = nil }},
 		{name: "a lifted ui-app denial", base: func(_ *types.RunPolicySpec, l *types.GovernanceLimits) { l.DenyUIApps = true }, wide: func(_ *types.RunPolicySpec, l *types.GovernanceLimits) { l.DenyUIApps = false }},
 		{name: "a raised concurrent-run cap", wide: func(_ *types.RunPolicySpec, l *types.GovernanceLimits) { l.MaxConcurrentRuns = 40 }},
 		{name: "an unbounded concurrent-run cap", wide: func(_ *types.RunPolicySpec, l *types.GovernanceLimits) { l.MaxConcurrentRuns = 0 }},
@@ -367,6 +395,11 @@ func TestLeqIsFalseForEveryWidening(t *testing.T) {
 		{name: "a raised drive cap", base: func(_ *types.RunPolicySpec, l *types.GovernanceLimits) { l.MaxDriveSizeMiB = 512 }, wide: func(_ *types.RunPolicySpec, l *types.GovernanceLimits) { l.MaxDriveSizeMiB = 8192 }},
 		{name: "a raised rubric cap", wide: func(_ *types.RunPolicySpec, l *types.GovernanceLimits) {
 			l.AutonomyRubric = &types.AutonomyRubric{EgressOpen: types.AutonomyL3}
+		}},
+		{name: "a lifted guardrail lock", base: func(_ *types.RunPolicySpec, l *types.GovernanceLimits) {
+			l.AutonomyRubric = &types.AutonomyRubric{AgentGuardrailLocks: true}
+		}, wide: func(_ *types.RunPolicySpec, l *types.GovernanceLimits) {
+			l.AutonomyRubric = &types.AutonomyRubric{EgressOpen: types.AutonomyL1}
 		}},
 		{name: "a removed rubric cap", wide: func(_ *types.RunPolicySpec, l *types.GovernanceLimits) { l.AutonomyRubric = nil }},
 		{name: "a longer run lifetime", wide: func(_ *types.RunPolicySpec, l *types.GovernanceLimits) { l.MaxEndAheadSec = 86400 }},
@@ -436,6 +469,9 @@ func TestLeqIsTrueForNarrowings(t *testing.T) {
 		{"an added llm inspection", func(c *types.RunPolicySpec, _ *types.GovernanceLimits) {
 			c.LLMInspection = &types.LLMInspectionSpec{Mode: "block"}
 		}},
+		{"an added llm inspection with a blank sidecar", func(c *types.RunPolicySpec, _ *types.GovernanceLimits) {
+			c.LLMInspection = &types.LLMInspectionSpec{Mode: "alert", DetectSecrets: true, DetectorSidecarURL: "  "}
+		}},
 		{"a shorter grant ttl", func(c *types.RunPolicySpec, _ *types.GovernanceLimits) {
 			c.EligibleGrants = slices.Clone(c.EligibleGrants)
 			c.EligibleGrants[1].TTLSeconds = 300
@@ -454,6 +490,10 @@ func TestLeqIsTrueForNarrowings(t *testing.T) {
 		}},
 		{"a smaller run cap", func(_ *types.RunPolicySpec, l *types.GovernanceLimits) { l.MaxConcurrentRuns = 1 }},
 		{"a new denial", func(_ *types.RunPolicySpec, l *types.GovernanceLimits) { l.DenyUserDrive = true }},
+		{"a new member-drive denial", func(_ *types.RunPolicySpec, l *types.GovernanceLimits) { l.DenyMemberDrives = true }},
+		{"a new placement denial", func(_ *types.RunPolicySpec, l *types.GovernanceLimits) {
+			l.DenyPlacements = []types.Placement{types.PlacementLocal}
+		}},
 	}
 	for _, r := range rows {
 		t.Run(r.name, func(t *testing.T) {

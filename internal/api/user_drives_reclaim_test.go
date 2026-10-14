@@ -17,6 +17,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -444,5 +445,148 @@ func TestReclaimUserDriveHasNoConsoleButton(t *testing.T) {
 		t.Errorf("the console calls the drive destroy verb in %v — POST /drives/{id}/reclaim is API and CLI "+
 			"only in 0.8: a destructive confirmation is a screen, and this one has no approved mock "+
 			"(docs/design/CONSOLE-RULES.md's mock-first rule). Get the mock approved first", offenders)
+	}
+}
+
+// TestReclaimUserDriveKeysOnTheSubjectItIsGiven pins today's derivation for an
+// allocation keyed by the sign-in subject: with no home_subject, the hash home
+// and the object's subject label both come from `subject`.
+func TestReclaimUserDriveKeysOnTheSubjectItIsGiven(t *testing.T) {
+	for _, withGrant := range []bool{true, false} {
+		d := reclaimDrive(nil)
+		var g *types.UserDriveGrant
+		if withGrant {
+			g = grantFixture(d.ID, func(g *types.UserDriveGrant) { g.Subject = reclaimSubject })
+		}
+		rn := &reclaimRunner{outcome: runner.DriveReclaimDeleted}
+		srv, _, _ := reclaimServer(t, d, g, rn)
+		if w := reclaimCall(t, srv, d.ID, `{"subject_type":"user","subject":"`+reclaimSubject+`"}`); w.Code != http.StatusOK {
+			t.Fatalf("allocation present=%v: reclaim = %d, want 200: %s", withGrant, w.Code, w.Body.String())
+		}
+		home, err := types.DriveHomeName(d, reclaimSubject, "")
+		if err != nil {
+			t.Fatalf("derive home: %v", err)
+		}
+		if len(rn.calls) != 1 || rn.calls[0].ObjectName != types.DriveObjectName(d, home) ||
+			rn.calls[0].SubjectHash != types.DriveSubjectHash(reclaimSubject) {
+			t.Errorf("allocation present=%v: substrate asked for %+v, want the object and label of %q", withGrant, rn.calls, reclaimSubject)
+		}
+	}
+}
+
+// TestReclaimUserDriveDerivesFromTheHomeSubject: an allocation keyed by an
+// email resolves at run time to the hash of the person's SIGN-IN subject, with
+// that subject's label. home_subject carries it, so the reclaim names the same
+// object the run mounted; `subject` still finds the allocation and any pinned
+// directory name on it.
+func TestReclaimUserDriveDerivesFromTheHomeSubject(t *testing.T) {
+	const email, sub = "alice@corp.example", "sub-alice"
+	for _, pinned := range []string{"", "alice-pinned"} {
+		d := reclaimDrive(nil)
+		g := grantFixture(d.ID, func(g *types.UserDriveGrant) { g.Subject, g.HomeOverride = email, pinned })
+		rn := &reclaimRunner{outcome: runner.DriveReclaimDeleted}
+		srv, _, _ := reclaimServer(t, d, g, rn)
+		w := reclaimCall(t, srv, d.ID, `{"subject_type":"user","subject":"Alice@Corp.Example","home_subject":"Sub-Alice"}`)
+		if w.Code != http.StatusOK {
+			t.Fatalf("pinned=%q: reclaim = %d, want 200: %s", pinned, w.Code, w.Body.String())
+		}
+		home, err := types.DriveHomeName(d, sub, pinned)
+		if err != nil {
+			t.Fatalf("derive home: %v", err)
+		}
+		if emailHome, _ := types.DriveHomeName(d, email, pinned); pinned == "" && emailHome == home {
+			t.Fatal("the email and sign-in homes are identical, so this case proves nothing")
+		}
+		if len(rn.calls) != 1 || rn.calls[0].ObjectName != types.DriveObjectName(d, home) ||
+			rn.calls[0].SubjectHash != types.DriveSubjectHash(sub) {
+			t.Errorf("pinned=%q: substrate asked for %+v, want object %q labelled for the sign-in subject",
+				pinned, rn.calls, types.DriveObjectName(d, home))
+		}
+	}
+	// A home_subject the allocation key rules refuse is a 400, before any storage call.
+	d := reclaimDrive(nil)
+	rn := &reclaimRunner{outcome: runner.DriveReclaimDeleted}
+	srv, _, _ := reclaimServer(t, d, nil, rn)
+	if w := reclaimCall(t, srv, d.ID, `{"subject_type":"user","subject":"`+email+`","home_subject":"bad\u0007sub"}`); w.Code != http.StatusBadRequest || len(rn.calls) != 0 {
+		t.Errorf("unusable home_subject = %d with %d storage calls, want 400 and none: %s", w.Code, len(rn.calls), w.Body.String())
+	}
+}
+
+// TestReclaimUserDriveChecksAFoundKeyAgainstTheDirectory: with no home_subject,
+// an allocation found under key A derives the home from A only when the principal
+// directory names exactly one principal for A and that principal folds to A.
+// Otherwise the operator must pass home_subject. A key nobody is recorded under,
+// or no allocation at all, keeps the derivation from the key, and an unreadable or
+// absent directory refuses.
+func TestReclaimUserDriveChecksAFoundKeyAgainstTheDirectory(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		key        string // the allocation's stored subject; "" means no allocation
+		subject    string // the request's subject
+		principals []string
+		lookupErr  error
+		want       int
+		wantLookup bool
+	}{
+		{"a sign-in subject with an @ that is its own principal", "alice@idp.example", "alice@idp.example", []string{"alice@idp.example"}, nil, http.StatusOK, true},
+		{"a principal that differs only in ASCII case", "sub-alice", "sub-alice", []string{"Sub-Alice"}, nil, http.StatusOK, true},
+		{"an alias of another principal", "alice@corp.example", "alice@corp.example", []string{"sub-alice"}, nil, http.StatusBadRequest, true},
+		{"a key that names several principals", "alice@corp.example", "alice@corp.example", []string{"sub-a", "sub-b"}, nil, http.StatusBadRequest, true},
+		{"a key nobody is recorded under", "sub-ghost", "sub-ghost", nil, nil, http.StatusOK, true},
+		{"no allocation: the key is not looked up", "", "alice@corp.example", []string{"sub-alice"}, nil, http.StatusOK, false},
+		{"an unreadable directory", "sub-alice", "sub-alice", nil, errors.New("directory down"), http.StatusInternalServerError, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := reclaimDrive(nil)
+			var g *types.UserDriveGrant
+			if tc.key != "" {
+				g = grantFixture(d.ID, func(g *types.UserDriveGrant) { g.Subject = tc.key })
+			}
+			rn := &reclaimRunner{outcome: runner.DriveReclaimDeleted}
+			srv, st, _ := reclaimServer(t, d, g, rn)
+			st.principals = map[string][]string{tc.subject: tc.principals}
+			st.principalsErr = tc.lookupErr
+			w := reclaimCall(t, srv, d.ID, `{"subject_type":"user","subject":"`+tc.subject+`"}`)
+			if w.Code != tc.want {
+				t.Fatalf("reclaim = %d, want %d: %s", w.Code, tc.want, w.Body.String())
+			}
+			if looked := len(st.lookups) > 0; looked != tc.wantLookup {
+				t.Errorf("directory consulted = %v, want %v", looked, tc.wantLookup)
+			}
+			if tc.want != http.StatusOK {
+				if len(rn.calls) != 0 {
+					t.Errorf("storage was called on a refusal: %+v", rn.calls)
+				}
+				if tc.want == http.StatusBadRequest && !strings.Contains(w.Body.String(), "home_subject") {
+					t.Errorf("400 body = %s, want it to name home_subject", w.Body.String())
+				}
+				return
+			}
+			home, err := types.DriveHomeName(d, tc.subject, "")
+			if err != nil {
+				t.Fatalf("derive home: %v", err)
+			}
+			if len(rn.calls) != 1 || rn.calls[0].ObjectName != types.DriveObjectName(d, home) ||
+				rn.calls[0].SubjectHash != types.DriveSubjectHash(tc.subject) {
+				t.Errorf("substrate asked for %+v, want the object and label of %q", rn.calls, tc.subject)
+			}
+		})
+	}
+
+	// An explicit home_subject is the operator's assertion: no lookup.
+	d := reclaimDrive(nil)
+	g := grantFixture(d.ID, func(g *types.UserDriveGrant) { g.Subject = "alice@corp.example" })
+	rn := &reclaimRunner{outcome: runner.DriveReclaimDeleted}
+	srv, st, _ := reclaimServer(t, d, g, rn)
+	st.principals = map[string][]string{"alice@corp.example": {"sub-a", "sub-b"}}
+	if w := reclaimCall(t, srv, d.ID, `{"subject_type":"user","subject":"alice@corp.example","home_subject":"sub-alice"}`); w.Code != http.StatusOK || len(st.lookups) != 0 {
+		t.Errorf("explicit home_subject = %d with lookups %v, want 200 and none: %s", w.Code, st.lookups, w.Body.String())
+	}
+
+	// A store with no principal directory refuses a found key rather than guess.
+	srv.cfg.Store = struct{ store.Store }{st}
+	rn.calls = nil
+	if w := reclaimCall(t, srv, d.ID, `{"subject_type":"user","subject":"alice@corp.example"}`); w.Code != http.StatusInternalServerError || len(rn.calls) != 0 {
+		t.Errorf("no directory = %d with %d storage calls, want 500 and none: %s", w.Code, len(rn.calls), w.Body.String())
 	}
 }

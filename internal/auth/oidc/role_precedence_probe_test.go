@@ -113,7 +113,7 @@ func TestRoleMapPrecedence_ChartOverConsoleOverClaims(t *testing.T) {
 		},
 		{
 			name:     "non-ASCII claim never folds onto an ASCII admin key (KELVIN SIGN for k)",
-			roles:    []string{"\u212aernel-team"}, // strings.ToLower folds U+212A to 'k'; ASCIIOnly must refuse first
+			roles:    []string{"\u212aernel-team"}, // strings.ToLower folds U+212A to 'k'; ASCIIOnlySubject must refuse first
 			email:    bob,
 			wantRole: "", wantOK: false,
 		},

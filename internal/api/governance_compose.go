@@ -52,6 +52,10 @@ type ResolvedProfile struct {
 	Chain   []profileLink
 	Ceiling types.RunPolicySpec
 	Limits  types.GovernanceLimits
+	// AuthoredResources is the CPU and memory the chain's own rows set, before Ceiling inherits the
+	// deployment's size: a zero field is one no row set. The member cap reads it (#1949), so a
+	// maximum with no size of its own is the size.
+	AuthoredResources types.ResourceLimits
 	// Warnings name the LEAF only and never a base's name, id, overlay or contact: they reach a
 	// member's 201 clamp_warnings.
 	Warnings []string
@@ -266,6 +270,9 @@ func (s *Server) composeChain(chain []types.GovernanceProfile) (*ResolvedProfile
 	} else {
 		var warns []string
 		base, warns = s.standaloneAuthority(chain[root])
+		if r := chain[root].Ceiling.Resources; r != nil {
+			out.AuthoredResources = types.ResourceLimits{CPUMillis: r.CPUMillis, MemoryMiB: r.MemoryMiB}
+		}
 		out.AdminWarnings = append(out.AdminWarnings, warns...)
 		if root == 0 {
 			out.Warnings = warns
@@ -337,6 +344,29 @@ func (s *Server) applyStep(out *ResolvedProfile, base composer.Authority, row ty
 			field, _, _ := strings.Cut(w, ": ")
 			out.Warnings = append(out.Warnings, fmt.Sprintf(
 				"governance profile %q: its overlay names %s beyond what the profile it builds on allows, so it was narrowed", row.Name, field))
+		}
+	}
+	baseAuthored := out.AuthoredResources
+	out.AuthoredResources = authoredAfter(baseAuthored, row, res)
+	// The member cap never rises above the base's, whatever the base became after this overlay was
+	// written: a maximum the base no longer bounds is lowered to the base's own cap, and said so.
+	baseCap := s.memberCapOf(baseAuthored, base.Limits, base.Ceiling.Resources)
+	resCap := s.memberCapOf(out.AuthoredResources, res.Limits, res.Ceiling.Resources)
+	if raises := memberCapRaises(resCap, baseCap); len(raises) > 0 {
+		// The result's member default is within the base's (its size is the meet's), so a maximum of
+		// the base's cap brings the cap down to it.
+		if resCap.CPUMillis > baseCap.CPUMillis {
+			res.Limits.MaxCPUMillis = baseCap.CPUMillis
+		}
+		if resCap.MemoryMiB > baseCap.MemoryMiB {
+			res.Limits.MaxMemoryMiB = baseCap.MemoryMiB
+		}
+		for _, field := range raises {
+			out.AdminWarnings = append(out.AdminWarnings, fmt.Sprintf("governance profile %q: overlay limits.%s: above the member cap of the profile it builds on, lowered to it", row.Name, field))
+		}
+		if leaf {
+			out.Warnings = append(out.Warnings, fmt.Sprintf(
+				"governance profile %q: its overlay names a member size beyond what the profile it builds on allows, so it was narrowed", row.Name))
 		}
 	}
 	// The meet passes the overlay's own grants through unchanged: bound them by the resolved base.

@@ -32,11 +32,20 @@ type PendingLeaver struct {
 	Purged bool
 }
 
+// ownSuspension is true when identity row i's current deactivation is its own suspension's: the cutoff
+// step a suspension of i records holds the deactivated_at it left on i (SuspendIdentity), and a
+// reactivation followed by any later deactivation changes deactivated_at. A suspend row from an earlier
+// suspension, or one written before the record existed, is no proof, however recently it was updated.
+const ownSuspension = `EXISTS (SELECT 1 FROM deprovision_jobs j WHERE j.identity_id = i.id AND j.kind = 'suspend'
+	AND j.step = 'cutoff' AND j.target = '' AND j.state = 'done'
+	AND j.detail->'deactivated_at_us' = to_jsonb((extract(epoch FROM i.deactivated_at) * 1000000)::bigint))`
+
 // MarkIdentityPurged turns the identity into a permanent tombstone (purged_at set) and records the
 // purge's last step as pending, in one transaction that holds the row FOR UPDATE. It reports whether
 // this call marked it: false when the row was already purged and, with requireDue, when it is not
-// (still) deactivated with a purge_after that has passed. The re-check under the lock is what lets a
-// reactivation that committed first win; once the mark commits a reactivation is ErrIdentityPurged.
+// (still) deactivated by its own suspension (ownSuspension) with a purge_after that has passed. The
+// re-check under the lock is what lets a reactivation that committed first win; once the mark commits a
+// reactivation is ErrIdentityPurged.
 func (s PG) MarkIdentityPurged(ctx context.Context, id uuid.UUID, requireDue bool) (bool, error) {
 	tx, err := s.Pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
@@ -45,8 +54,9 @@ func (s PG) MarkIdentityPurged(ctx context.Context, id uuid.UUID, requireDue boo
 	defer func() { _ = tx.Rollback(ctx) }()
 	var purged, due bool
 	err = tx.QueryRow(ctx, `
-		SELECT purged_at IS NOT NULL, deactivated_at IS NOT NULL AND purge_after IS NOT NULL AND purge_after <= now()
-		  FROM principal_identities WHERE id = $1 FOR UPDATE`, id).Scan(&purged, &due)
+		SELECT i.purged_at IS NOT NULL, i.deactivated_at IS NOT NULL AND i.purge_after IS NOT NULL AND i.purge_after <= now()
+		       AND `+ownSuspension+`
+		  FROM principal_identities i WHERE i.id = $1 FOR UPDATE`, id).Scan(&purged, &due)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return false, ErrNotFound
 	}
@@ -70,15 +80,25 @@ func (s PG) MarkIdentityPurged(ctx context.Context, id uuid.UUID, requireDue boo
 	return true, nil
 }
 
-// PurgeDueIdentities is the identities deactivated and not yet purged whose purge_after has passed,
-// oldest first, at most limit. It is only a candidate read: MarkIdentityPurged re-checks under the lock.
-func (s PG) PurgeDueIdentities(ctx context.Context, limit int) ([]uuid.UUID, error) {
+// DueIdentity is one identity PurgeDueIdentities lists. Suspended says the identity's current
+// deactivation is its own suspension's (ownSuspension). One without that proof was deactivated alongside
+// another identity's suspension, or by a version that did not record it, and the sweeper does not purge it.
+type DueIdentity struct {
+	ID        uuid.UUID
+	Suspended bool
+}
+
+// PurgeDueIdentities is the identities deactivated and not yet purged whose purge_after has passed, those
+// deactivated by their own suspension first, then oldest first, at most limit. It is only a candidate
+// read: MarkIdentityPurged re-checks under the lock.
+func (s PG) PurgeDueIdentities(ctx context.Context, limit int) ([]DueIdentity, error) {
 	return collect(ctx, s.Pool, "list", "identities due for purge", `
-		SELECT id FROM principal_identities
-		 WHERE purged_at IS NULL AND deactivated_at IS NOT NULL AND purge_after IS NOT NULL AND purge_after <= now()
-		 ORDER BY purge_after, id LIMIT $1`, []any{limit}, func(r pgx.Row) (uuid.UUID, error) {
-		var id uuid.UUID
-		return id, r.Scan(&id)
+		SELECT i.id, `+ownSuspension+` AS suspended
+		  FROM principal_identities i
+		 WHERE i.purged_at IS NULL AND i.deactivated_at IS NOT NULL AND i.purge_after IS NOT NULL AND i.purge_after <= now()
+		 ORDER BY suspended DESC, i.purge_after, i.id LIMIT $1`, []any{limit}, func(r pgx.Row) (DueIdentity, error) {
+		var d DueIdentity
+		return d, r.Scan(&d.ID, &d.Suspended)
 	})
 }
 
@@ -101,7 +121,8 @@ func (s PG) PendingLeavers(ctx context.Context, idleFor time.Duration, limit int
 }
 
 // DeleteUserSubjectRows deletes the user-subject capability grants and governance assignments of the
-// purged identity id, matched case-insensitively, and says how many of each. A direct delete, never the
+// purged identity id, matched case-insensitively, and says how many of each; the same user subjects are
+// stripped from every runner pool use policy. A direct delete, never the
 // GOV4 apply path. Rows keyed by one of principals go: the subject is a purged identity that can never
 // authenticate again. Rows keyed by one of emails go only while no other principal holds that address,
 // because an address can be recycled and the new holder's deny rows are theirs: another identity that is
@@ -132,6 +153,12 @@ func (s PG) DeleteUserSubjectRows(ctx context.Context, id uuid.UUID, principals,
 		return 0, 0, 0, fmt.Errorf("store: delete user assignments: %w", err)
 	}
 	assignments = tag.RowsAffected()
+	if err = stripRunnerPoolUseSubjects(ctx, tx, subjects); err != nil {
+		return 0, 0, 0, err
+	}
+	if err = stripRemoteRunnerPeopleSubjects(ctx, tx, subjects); err != nil {
+		return 0, 0, 0, err
+	}
 	if len(held) > 0 {
 		err = tx.QueryRow(ctx, `SELECT
 			(SELECT count(*) FROM capability_grants WHERE subject_type = 'user' AND lower(subject) = ANY($1::text[])) +
@@ -144,6 +171,48 @@ func (s PG) DeleteUserSubjectRows(ctx context.Context, id uuid.UUID, principals,
 		return 0, 0, 0, fmt.Errorf("store: commit user subject delete: %w", err)
 	}
 	return grants, assignments, kept, nil
+}
+
+// stripRunnerPoolUseSubjects removes the user subjects (lower-cased forms) from every pool use policy
+// and raises each changed pool's revision. The policy row is never deleted: a policy narrows a pool, so
+// deleting it would open the pool to everyone, while a list emptied by the purge permits nobody until
+// an administrator replaces or clears it.
+func stripRunnerPoolUseSubjects(ctx context.Context, q Querier, subjects []string) error {
+	const stmt = `
+		WITH hit AS (
+			SELECT pool_id FROM runner_pool_use_policies u WHERE EXISTS (
+				SELECT 1 FROM jsonb_array_elements(u.subjects) e
+				WHERE e->>'subject_type' = 'user' AND lower(e->>'subject') = ANY($1::text[]))),
+		bumped AS (
+			UPDATE runner_pools p SET revision = p.revision + 1, updated_at = now()
+			FROM hit WHERE p.id = hit.pool_id RETURNING p.id, p.revision)
+		UPDATE runner_pool_use_policies u
+		SET subjects = COALESCE((SELECT jsonb_agg(e) FROM jsonb_array_elements(u.subjects) e
+		                         WHERE NOT (e->>'subject_type' = 'user' AND lower(e->>'subject') = ANY($1::text[]))), '[]'::jsonb),
+		    revision = bumped.revision, updated_by = 'leaver purge', updated_at = now()
+		FROM bumped WHERE u.pool_id = bumped.id`
+	if _, err := q.Exec(ctx, stmt, subjects); err != nil {
+		return fmt.Errorf("store: strip runner pool use policy subjects: %w", err)
+	}
+	return nil
+}
+
+// stripRemoteRunnerPeopleSubjects removes the user subjects (lower-cased forms) from every remote-hosted
+// runner's people policy and raises each changed runner's revision. A listed policy stays listed: an
+// emptied list admits nobody, never everyone.
+func stripRemoteRunnerPeopleSubjects(ctx context.Context, q Querier, subjects []string) error {
+	const stmt = `
+		UPDATE remote_runners rr
+		SET people_subjects = COALESCE((SELECT jsonb_agg(e) FROM jsonb_array_elements(rr.people_subjects) e
+		                                WHERE NOT (e->>'subject_type' = 'user' AND lower(e->>'subject') = ANY($1::text[]))), '[]'::jsonb),
+		    revision = rr.revision + 1, updated_by = 'leaver purge', updated_at = now()
+		WHERE rr.people_pools = 'listed' AND EXISTS (
+			SELECT 1 FROM jsonb_array_elements(rr.people_subjects) e
+			WHERE e->>'subject_type' = 'user' AND lower(e->>'subject') = ANY($1::text[]))`
+	if _, err := q.Exec(ctx, stmt, subjects); err != nil {
+		return fmt.Errorf("store: strip remote runner people subjects: %w", err)
+	}
+	return nil
 }
 
 // DeprovisionFailure is a ledger row of a suspension or purge that is still pending and has failed at

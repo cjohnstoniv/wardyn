@@ -3,15 +3,15 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// Core run identity/state types + the run-create input/result shapes.
+// Core run identity/state types (run-create shapes live in ./run-create).
 // All wire fields are snake_case (see lib/types.ts's barrel comment for the
 // one documented exception, in a different domain module).
 
-import type { AutonomyLevel, AutonomyResolution, RunLimits } from "../api/governance";
+import type { AutonomyLevel, RunLimits } from "../api/governance";
 import type { PolicyRef } from "../api/health";
-import type { ComponentFact } from "./components";
+import type { Experience, RunOverrides } from "./new-run-contract";
 import type { RunPolicySpec } from "./policy";
-import type { SCMAccess } from "./setup";
+import type { RunnerPoolSelection } from "./runner-pools";
 
 // The backend emits dotted agent ids like "claude-code" / "codex-cli".
 // Older mock data used "claude_code" / "codex". Keep the union open
@@ -46,7 +46,24 @@ export interface UIApp {
 // not import from components/, so a home under components/ forced a second copy.
 export const CC_ORDER: ConfinementClass[] = ["CC1", "CC2", "CC3"];
 
+// The New Run choice a request was set up from (Go: client.RunShape, request field
+// `shape`). The server checks it against experience, workload and tools
+// (run_shape_conflict) and otherwise does not use it.
+export type RunShape = "agent_task" | "environment" | "application";
+export const RUN_SHAPES: readonly RunShape[] = ["agent_task", "environment", "application"];
+
+// Where a run's sandbox lives (Go internal/types.Placement). "" is a run from
+// before 0.9 and any run whose placement nothing recorded, and it is on the wire
+// in both cases — so this is the full value set, not an optional field.
+export type RunPlacement = "" | "local" | "remote";
+
+// Who can attest a run's evidence (Go internal/types.RunEvidenceSource); "" is a
+// legacy or unresolved record.
+export type RunEvidenceSource = "" | "substrate" | "runner_asserted";
+
 export type RunState =
+  // QUEUED: waiting for a slot in a capped runner pool; it holds no slot, identity or sandbox.
+  | "QUEUED"
   | "PENDING"
   | "STARTING"
   | "RUNNING"
@@ -59,6 +76,16 @@ export type RunState =
   // Keep the union open so an unrecognized backend state degrades to a
   // neutral badge instead of crashing the console (see primitives.tsx).
   | (string & {});
+
+/** Go: types.RunQueue. `position` is how many runs wait ahead in the pool, never whose. */
+export interface RunQueue {
+  pool_id: string;
+  queued_at: string;
+  deadline_at: string;
+  position: number;
+  /** runner_pool_at_capacity, runner_pool_no_runner_free or runner_pool_runners_at_capacity (RUN_WAIT_REASON). */
+  reason: string;
+}
 
 export interface AgentRun {
   id: string;
@@ -78,14 +105,55 @@ export interface AgentRun {
   policy_id?: string;
   confinement_class: ConfinementClass;
   state: RunState;
+  // Empty while the run is QUEUED; written when it starts.
   spiffe_id: string;
   runner_target: string;
+  // Where the sandbox lives (0.9 client mode): "remote", a remote-hosted
+  // runner, or "local", a runner the person registered. ALWAYS on the wire —
+  // "" is a run from before 0.9 or one whose placement nothing recorded yet, so
+  // this is a plain string union and not an optional field. Not
+  // `confinement_source`, which says who CHOSE the class.
+  placement: RunPlacement;
+  // True when that placement was RESOLVED by the resolver rather than asked for
+  // by name. Absent (false) for a legacy row and for a run whose placement was
+  // the caller's own choice.
+  placement_filled?: boolean;
+  // The runner a local run landed on. Absent for a remote run and for a
+  // pre-0.9 row; the Go side omits the key on NULL, never sends "".
+  runner_id?: string;
+  // Read-side facts about that runner, on a local run only (Go: AgentRun.RunnerName and the next two):
+  // its name, whether this process has it connected, and when it last was. Never stored. The name is
+  // the one the run was created under (a runner is never renamed), so a revoked runner's run keeps it.
+  // All three are absent when the runner could not be read, which is not the same as offline:
+  // runner_online false is a fact, absent is "unknown".
+  runner_name?: string;
+  runner_online?: boolean;
+  runner_last_seen_at?: string;
+  // Who can attest this run's evidence: "substrate" (the organisation's own) or
+  // "runner_asserted" (a runner said so, nobody can verify). Empty only for a
+  // legacy or unresolved record, hence optional here.
+  evidence_source?: RunEvidenceSource;
+  // The runner pool the run was admitted into, and how it was chosen (Go:
+  // AgentRun.RunnerPool*), written once at create. A pool is a label, never
+  // admission: the run goes to the exact runner in runner_id (self-hosted) or
+  // remote_runner_id (remote-hosted). All absent for a run from before
+  // pools and for a server-originated run that names none.
+  runner_pool_id?: string;
+  runner_pool_revision?: number;
+  runner_pool_selection?: RunnerPoolSelection;
+  remote_runner_id?: string;
   sandbox_ref?: string;
   // interactive runs come up idle (no agent task) so a human attaches and drives
   // them via the WS PTY; the runs board badges these as "awaiting attach".
   // Optional so an older backend payload (or a test fixture) without the field
   // still type-checks and degrades to autonomous.
   interactive?: boolean;
+  // The canonical run mode chosen at launch (Go: AgentRun.Experience), the one
+  // value every interactive door reads: a "background" run has no terminal, SSH,
+  // interactive exec, web gateway or desktop. Absent for a run from an older
+  // client or before 0.9, which keeps every door's behaviour. Not `interactive`,
+  // which is the legacy execution flag.
+  experience?: Experience;
   // The host working-directory the run's workspace is bind-mounted from. Surfaced
   // on the runs board so a workspace-directory collision is visible at a glance.
   workspace_path?: string;
@@ -192,6 +260,14 @@ export interface AgentRun {
   // wait_budget_sec does not bound a run's start; see Start deadlines in
   // docs/OPERATIONS.md (#the-start-deadlines).
   ends_at?: string | null;
+  // The latest end the run's pool and the deployment allow, measured from launch
+  // (migration 0159, #1319). Absent when neither bounds the lifetime and for a
+  // run from before it; an extension never goes past it.
+  lifetime_cap_at?: string;
+  // When the run left the pool queue (migration 0162); absent for a run that never waited.
+  admitted_at?: string;
+  // A waiting run's place in its pool's queue; present only while the run is QUEUED.
+  queue?: RunQueue;
   wait_budget_sec?: number;
   run_limits?: RunLimits;
   governance_profile_id?: string;
@@ -278,6 +354,8 @@ export interface RunEndWaitResult {
   wait_budget_sec: number;
   capped: string[];
   latest_end?: string;
+  // Whose limit latest_end is, so the console can name it.
+  latest_end_source?: "pool" | "governance" | "deployment";
   max_wait_sec?: number;
   // True only when the end was capped by the limit the run captured at launch
   // while the launch profile's own limit has since been loosened (#1322).
@@ -339,6 +417,19 @@ export interface AdminRestartResponse {
   results: AdminRestartResult[];
 }
 
+// sync (GET /runs/{id} only) lists the wardyn-sync sessions open now on the
+// replica that answers, from the gateway's live per-run sync budget; another
+// replica's sessions are not listed. dir is the directory the client requested,
+// not proof the sandbox started there. Ended sessions are the ssh.sync.transfer
+// rows.
+export interface RunSyncOpen {
+  dir: string;
+  opened_at: string;
+}
+export interface RunSync {
+  open: RunSyncOpen[];
+}
+
 // GET /runs/{id}'s response shape: AgentRun plus ui_apps, a field ONLY that
 // endpoint sends (handleGetRun's anonymous wrapper struct, runs_policy.go) —
 // the READ-ONLY denormalization of the run's EFFECTIVE policy ui_apps. The run
@@ -381,6 +472,8 @@ export interface RunDetail extends AgentRun {
   // The policy the run was launched under and how to ask for a change to it
   // (GET /runs/{id}, internal/policyref.Ref). Absent when none applies.
   policy?: PolicyRef;
+  // Wardyn-sync sessions open now (GET /runs/{id} only); see RunSync.
+  sync?: RunSync;
 }
 
 // GET /api/v1/runs/{id}/policy — the policy a run actually got (the run page's
@@ -397,17 +490,25 @@ export interface RunPolicySource {
   deleted?: boolean;
   preset?: string;
   preset_version?: number;
+  /** What the person changed on the New Run cards (the edits that stood, never a secret value); absent when nothing was edited. */
+  overrides_diff?: RunOverridesDiff;
 }
+
+/** The recorded New Run edits; `clamped` lists, as "field value", the ones the ceiling then dropped. */
+export type RunOverridesDiff = RunOverrides & { clamped?: string[] };
 
 // The closed set of reasons launch changed a policy; an unknown one reads as "launch".
 export type RunPolicyCause =
   | "workspace"
   | "source_control"
+  | "component"
   | "mirror"
   | "model_access"
   | "git_broker"
+  | "overlay"
   | "profile"
   | "org_disk"
+  | "pool_disk"
   | "restart"
   | "limits"
   | "launch";
@@ -574,59 +675,6 @@ export function runHasWorkspace(run: Pick<AgentRun, "workspace_ids" | "workspace
   return (run.workspace_ids?.length ?? 0) > 0 || !!run.workspace_id;
 }
 
-// The fields the New Run wizard composes into a POST /api/v1/runs body. policy_id
-// and inline_policy are MUTUALLY EXCLUSIVE (XOR); neither set => default policy.
-export interface CreateRunInput {
-  // Omitted for a governed command (task_mode=exec) whose target already
-  // carries a real base image — an explicit `image`, or a selected workspace
-  // with one: task_mode=exec runs no agent harness, so naming one there was a
-  // formality (see agentRequirementError, server-side). Every other run still
-  // requires it.
-  agent?: Agent;
-  repo: string;
-  task: string;
-  // The run's name (grouping key) and an optional note on why it exists.
-  // Optional on the wire — the server accepts a titleless run so the CLI and
-  // the server's own system runs keep working — but REQUIRED by the New Run
-  // screen, which is where a human is present to name the thing.
-  title?: string;
-  description?: string;
-  policy_id?: string;
-  confinement_class?: ConfinementClass;
-  interactive?: boolean;
-  // Bring Your Own Image: a user-supplied base image the backend WRAPS with the
-  // runner tools (FROM <image> + COPY tools + cleared ENTRYPOINT) before use.
-  // Mutually exclusive with a devcontainer build. Omitted → the convention image.
-  image?: string;
-  // task_mode selects how a non-interactive run executes `task`: "" / "harness"
-  // (default) runs the agent harness; "exec" runs `task` as a plain shell
-  // command in the same governed sandbox — no agent, no LLM credentials.
-  // Ignored for an interactive run. Omitted → "harness" (backward-compatible).
-  task_mode?: "harness" | "exec";
-  // task_mode's INTERACTIVE counterpart: what the attach shell opens with.
-  // "agent" launches the image's agent CLI in the prepared workspace once, on
-  // first attach; "shell" / omitted is a bare terminal there. Ignored for a
-  // non-interactive run (the server drops it structurally).
-  interactive_start?: "shell" | "agent";
-  // Opt-in for an interactive run's agent-started boot seed (`task`,
-  // interpreted per interactive_start above): true lets the seed use tools
-  // before a human attaches, instead of parking at its first tool-approval
-  // prompt until someone joins. Omitted/false = supervised (default).
-  seed_auto_tools?: boolean;
-  // Tool-approval posture for an AUTONOMOUS (non-interactive) Claude Code run:
-  // "hold" routes every tool call through a Wardyn approval instead of running
-  // unsupervised. Omitted (wire default "auto") is today's behavior. Rejected
-  // by the server for codex-cli and structurally inert for an interactive run.
-  tool_approvals?: "auto" | "hold";
-}
-
-// POST /api/v1/runs response: the created run's fields PLUS an optional advisory
-// `warnings` list (e.g. a workspace-directory collision with another active run).
-// The run still launched — warnings are surfaced (toast / inline notice) but they
-// never block. Structurally assignable to AgentRun, so onCreated callbacks that
-// expect an AgentRun keep working.
-export type CreateRunResult = AgentRun & { warnings?: string[] };
-
 // Deterministic risk grade + setup-readiness checklist — mirror
 // internal/composer's RiskItem/SetupItem and internal/api's PreflightResult.
 // Moved here from the (now-deleted) AI Run Composer's own types/compose.ts:
@@ -669,153 +717,6 @@ export interface ComposeRunProposal {
   confinement_class?: ConfinementClass;
   interactive?: boolean;
   devcontainer_repo?: string;
-}
-
-// Setup readiness checklist — mirrors internal/api/compose_setup.go's
-// SetupItem/SetupFix EXACTLY (snake_case; FROZEN CONTRACT, same PR). Computed
-// DETERMINISTICALLY from the FINAL post-clamp spec — never the model's
-// self-assessment (same trust rule as risk_assessment above). v1 verification
-// depth is declared-present only: "satisfied" means the referenced secret/
-// workspace/grant IS THERE, not that Wardyn live-probed it actually works — so
-// UI copy for it must say "configured", never "verified".
-export type SetupItemKind =
-  | "llm_access"
-  | "secret"
-  | "workspace"
-  | "repo_credential"
-  | "egress"
-  // "backend": can THIS host enforce the proposal's confinement class right now
-  // (setupBackendItem). "config_pair": a reconciled multi-field setting PAIR
-  // (e.g. resolved subscription access <-> the credential-mount bless —
-  // setupSubscriptionMountItem). Both are host/config state, not a credential
-  // absence, so a "missing" row renders amber/neutral, never destructive
-  // (unlike llm_access/secret).
-  | "backend"
-  | "config_pair"
-  // A secret a mounted workspace's own files declare a need for. "missing" rows
-  // carry a fix:{action:"add_secret", secret_name}. Deliberately NOT gated into
-  // the destructive treatment the retired composer Review gave llm_access /
-  // secret (step-review.tsx, deleted): the run still launches —
-  // the workspace just may lack a credential it wants, an amber gap, not a red one.
-  | "workspace_secret"
-  // An integration a mounted workspace's requirements contract names as
-  // Required. Config state like `backend`, not a credential absence, so a
-  // "missing" row stays amber: the run still launches, it just cannot reach the
-  // system it was promised. The runtime fold degrades silently by design (a
-  // workspace may name an integration before it exists), which is exactly why
-  // preflight has to say so.
-  | "workspace_integration"
-  | (string & {});
-export type SetupItemStatus = "satisfied" | "missing" | "unverified" | (string & {});
-export type SetupFixAction = "add_secret" | "scan_workspace" | "none" | (string & {});
-
-// WHERE the credential this item concerns actually lives at run time, derived
-// from the FINAL spec's own delivery mechanism (compose_setup.go's Residency
-// doc comment): "proxy_injected" (an api_key grant — the value never leaves the
-// wardyn-proxy sidecar), "resident_mount" (a host credential bind-mounted into
-// the sandbox), "brokered_mint" (a github_token/git_pat grant minted/resolved
-// at task time), "resident_env" (an env_secret grant: the value is in the
-// sandbox environment for the whole run) or "resident_file" (a file_secret
-// grant: the value is a file in the sandbox for the whole run). "none" is a
-// workspace-integration row that delivers no credential on purpose (the system
-// authenticates outside HTTP). Absent when not applicable (workspace/egress/backend
-// rows carry no single credential).
-export type SetupItemResidency =
-  | "proxy_injected"
-  | "resident_mount"
-  | "brokered_mint"
-  | "resident_env"
-  | "resident_file"
-  | "none"
-  | (string & {});
-
-export interface SetupFix {
-  action: SetupFixAction;
-  secret_name?: string;
-  // A Workspace.id, NOT a source path — api.scanWorkspace takes an id.
-  workspace_id?: string;
-}
-
-export interface SetupItem {
-  // Stable "<kind>:<key>", e.g. "secret:anthropic-api-key".
-  id: string;
-  kind: SetupItemKind;
-  label: string;
-  required_by: string;
-  status: SetupItemStatus;
-  detail?: string;
-  fix?: SetupFix;
-  residency?: SetupItemResidency;
-}
-
-// POST /api/v1/runs/preflight response — a DRY-RUN of run-create's resolution +
-// gating (mints/persists/dispatches nothing). setup_items is the SAME
-// deterministic checklist derivation the (retired) composer Review used to
-// show (deriveSetupItems); enforced_confinement_class is the class the run
-// will ACTUALLY run at after the policy floor + blast-radius CC3 raise (may
-// exceed the operator's pick when the run holds a write-capable / third-party
-// production credential). risk_assessment/overall_risk are the SAME
-// composer.Grade/OverallLevel output — optional for older-server tolerance:
-// an absent value renders no risk panel and no acknowledgment gate rather
-// than crashing.
-//
-// Where these are read: the new-run rail's preflight block
-// (new-run-rail.tsx's RunRail) renders overall_risk, enforced_confinement_class,
-// warnings and the `missing`/`unverified` setup_items rows; a `missing` backend
-// row, like a fresh 4xx or a `missing` llm_access row, holds Launch for that
-// exact body for up to 60s (use-launch.ts preflightBlock); every other row is
-// advisory. The field is a live server
-// contract (compose_setup.go) read by the CLI and CI scripts too, and the
-// mirror rule forbids dropping a wire field the daemon still sends.
-export interface PreflightResult {
-  setup_items: SetupItem[];
-  enforced_confinement_class: ConfinementClass;
-  risk_assessment?: RiskItem[];
-  overall_risk?: RiskLevel;
-  // Clamp notices — non-empty only for a MEMBER whose inline_policy the server
-  // bounded (composer.Clamp) or whose grant it dropped (filterUserGrants). The
-  // same benign "Tightened by policy:" class the compose Review shows; here it
-  // tells the member WHY the enforced policy differs from what they typed, since
-  // launch itself stays silent. Absent on an older server that predates it.
-  warnings?: string[];
-  // WHERE this run's model credential will land (internal/api's
-  // modelCredentialFacts): the provider this body chose, its kind and its
-  // residency. preflightIsCurrent compares the whole request body, so a verdict
-  // for a different agent can never render.
-  //
-  // ABSENT for an exec / non-model run, for a run no provider serves, and on a
-  // refusal (a refusal has no verdict to publish).
-  model_credential?: ModelCredential;
-  // Autonomy is what resolveRunAutonomy decided for THIS body (0.8 #97/#93) —
-  // internal/api/preflight.go's preflightResponse.Autonomy. ABSENT (never a
-  // zero value) when nothing bound the run: no assigned profile, no rubric on
-  // it, or a rubric that leaves this posture's three fields unset — the same
-  // condition under which the create audit row omits its own field.
-  autonomy?: AutonomyResolution;
-  // THIS caller's Azure DevOps access state (internal/api.SCMAccess, #386) —
-  // deployment-wide, informational (the rail's "before you press Launch"
-  // line), never the gate itself: a run that actually needs it and has none
-  // 422s with reason "git_credential" instead. Absent when no Azure DevOps
-  // row is configured at all.
-  git_credential?: SCMAccess;
-  // What the run is given access to (internal/api's componentFacts): the Git
-  // providers its repositories live on, then its components in request order.
-  // The preview's rows plus the credential verdicts only this door reads.
-  // Absent for a run with no repository on a Git provider and no component.
-  components?: ComponentFact[];
-}
-
-// Where a run's MODEL credential lands (internal/api.modelCredentialResidency).
-// A vocabulary of PLACE, not mechanism: this rail's reader is deciding whether a
-// credential may sit inside the sandbox they are about to grant.
-export type ModelCredentialResidency = "proxy" | "sandbox";
-
-// internal/api.modelCredentialFacts. Member-safe: the chosen provider's id and
-// kind, and a place — no host, no secret name, no access-portal URL.
-export interface ModelCredential {
-  provider?: string;
-  kind?: string;
-  residency: ModelCredentialResidency;
 }
 
 // internal/store.RunCapacitySums — one set of configured-reservation sums

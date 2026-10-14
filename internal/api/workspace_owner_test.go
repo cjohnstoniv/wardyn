@@ -445,12 +445,15 @@ func TestWorkspaceOwnership_MemberLocalDirGate(t *testing.T) {
 
 // TestWorkspaceOwnership_MemberWritableAllowlist pins O3's two halves at the
 // route: writable inside WARDYN_USER_WRITABLE_ROOTS is accepted, and the
-// deny carve-out wins over it.
+// deny carve-out wins over it, for the carve-out and for a directory that
+// contains it.
 func TestWorkspaceOwnership_MemberWritableAllowlist(t *testing.T) {
 	root, project := memberProjectRoot(t)
-	vendored := filepath.Join(project, "vendor")
-	if err := os.MkdirAll(vendored, 0o755); err != nil {
-		t.Fatalf("mkdir: %v", err)
+	vendored, src := filepath.Join(project, "vendor"), filepath.Join(project, "src")
+	for _, d := range []string{vendored, src} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
 	}
 	srv, _, _ := ownerHarness(t, runner.UserMountPolicy{
 		Roots: []string{root}, WritableRoots: []string{root}, WritableDeny: []string{vendored},
@@ -462,8 +465,12 @@ func TestWorkspaceOwnership_MemberWritableAllowlist(t *testing.T) {
 		b, _ := json.Marshal(map[string]any{"name": "w", "sources": []types.WorkspaceSource{src}})
 		return string(b)
 	}
-	if w := doSSO(t, srv, http.MethodPost, "/api/v1/workspaces", member, body(project)); w.Code != http.StatusCreated {
+	if w := doSSO(t, srv, http.MethodPost, "/api/v1/workspaces", member, body(src)); w.Code != http.StatusCreated {
 		t.Errorf("writable inside the writable root: code = %d, want 201; body=%s", w.Code, w.Body.String())
+	}
+	if w := doSSO(t, srv, http.MethodPost, "/api/v1/workspaces", member, body(project)); w.Code != http.StatusBadRequest ||
+		!strings.Contains(w.Body.String(), "contains the member writable-deny path") {
+		t.Errorf("writable on the carve-out's parent: code = %d, want 400 naming the carve-out; body=%s", w.Code, w.Body.String())
 	}
 	if w := doSSO(t, srv, http.MethodPost, "/api/v1/workspaces", member, body(vendored)); w.Code != http.StatusBadRequest {
 		t.Errorf("writable inside the DENY carve-out: code = %d, want 400 (deny wins); body=%s", w.Code, w.Body.String())

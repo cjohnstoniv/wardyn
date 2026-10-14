@@ -14,6 +14,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -87,7 +88,7 @@ func newSealRigMode(t *testing.T, mode audit.SealMode) *sealRig {
 	dir := t.TempDir()
 	rg := &sealRig{t: t, pool: pool, pg: store.NewPG(pool), spoolPath: filepath.Join(dir, "spool.jsonl"), sinkPath: filepath.Join(dir, "sink.jsonl")}
 
-	keysA := newKeys()
+	keysA, keysB := newKeys(), newKeys()
 	rg.flaky = &flakyKeys{SealKeys: subjectSealKeys{keysA}}
 	sealer := newAuditSealer(rg.flaky, pool, pending, mode == audit.SealFull)
 	src := newAuditSealSource(mode)
@@ -101,6 +102,10 @@ func newSealRigMode(t *testing.T, mode audit.SealMode) *sealRig {
 		t.Cleanup(func() { _ = f.Close() })
 	}
 	rg.rec, rg.spool, rg.drain = rec, spool, drain
+	// As run() wires them: the rows the database writes itself reach the same sinks.
+	rg.pg.SIEM = siemSink(f)
+	keysA.WithSIEM(siemSink(f))
+	keysB.WithSIEM(siemSink(f))
 
 	serve := func(keys *subjectkey.Manager, unseal *audit.Sealer) http.Handler {
 		return api.New(api.Config{
@@ -108,7 +113,6 @@ func newSealRigMode(t *testing.T, mode audit.SealMode) *sealRig {
 			AuditUnsealer: unseal, SubjectKeys: keys, BaseCtx: t.Context(),
 		}).Handler()
 	}
-	keysB := newKeys()
 	rg.a = serve(keysA, sealer)
 	rg.b = serve(keysB, newAuditSealer(subjectSealKeys{keysB}, pool, pending, mode == audit.SealFull))
 	return rg
@@ -171,6 +175,47 @@ func (rg *sealRig) stored() string {
 func readFileOrEmpty(path string) string {
 	b, _ := os.ReadFile(path)
 	return string(b)
+}
+
+// sinkHashProblems lists the stored rows of action whose row hash is not in the sink exactly once, and
+// says so when the sink holds a different number of rows of action than the store.
+func (rg *sealRig) sinkHashProblems(action string) []string {
+	rg.t.Helper()
+	rows, err := rg.pool.Query(rg.t.Context(), `SELECT row_hash FROM audit_events WHERE action=$1`, action)
+	if err != nil {
+		rg.t.Fatal(err)
+	}
+	defer rows.Close()
+	// A row's hash also names the row after it (its prev_hash), so count the rows the sink holds by their
+	// own row_hash.
+	sunkBy := map[string]int{}
+	sunk := 0
+	for _, line := range strings.Split(readFileOrEmpty(rg.sinkPath), "\n") {
+		var ev types.AuditEvent
+		if json.Unmarshal([]byte(line), &ev) == nil && ev.Action == action {
+			sunkBy[ev.RowHash]++
+			sunk++
+		}
+	}
+	var problems []string
+	stored := 0
+	for rows.Next() {
+		var h string
+		if err := rows.Scan(&h); err != nil {
+			rg.t.Fatal(err)
+		}
+		stored++
+		if n := sunkBy[h]; n != 1 {
+			problems = append(problems, fmt.Sprintf("row_hash %s is in the sink %d times", h, n))
+		}
+	}
+	if err := rows.Err(); err != nil {
+		rg.t.Fatal(err)
+	}
+	if sunk != stored {
+		problems = append(problems, fmt.Sprintf("the sink holds %d %s rows, the store %d", sunk, action, stored))
+	}
+	return problems
 }
 
 func (rg *sealRig) noPlaintext(where string, words ...string) {
@@ -240,6 +285,10 @@ func TestPG_AuditSeal_FieldsAreCiphertextEverywhereAndErasureShredsThem(t *testi
 		t.Errorf("principal_key.destroyed target = %q, %v, want alice", target, err)
 	}
 	rg.noPlaintext("", "alice typed", "bob typed")
+	// The destroy row is written by the database past the chain: the sinks still get it, hash and all.
+	if problems := rg.sinkHashProblems("principal_key.destroyed"); len(problems) != 0 || !strings.Contains(readFileOrEmpty(rg.sinkPath), `"principal_key.destroyed"`) {
+		t.Errorf("the sink did not receive principal_key.destroyed exactly once: %v", problems)
+	}
 }
 
 func TestPG_AuditSeal_AColdKeyWaitsInTheSpoolThenTheDrainReseals(t *testing.T) {
@@ -290,6 +339,12 @@ func TestPG_AuditSeal_AColdKeyWaitsInTheSpoolThenTheDrainReseals(t *testing.T) {
 	if got := rg.stored(); strings.Contains(got, "pending_subject") || strings.Contains(got, "seal2p.") || strings.Contains(got, "typed") {
 		t.Fatalf("the store holds a pending or plaintext field: %s", got)
 	}
+	// The rows that waited under the pending key never touched the sinks; the drain sends them once the
+	// store has them, so the sink holds every stored hash and the chain it sees has no gap.
+	if problems := rg.sinkHashProblems("approval.decide"); len(problems) != 0 {
+		t.Errorf("the sink does not hold every stored approval.decide row exactly once: %v", problems)
+	}
+	rg.noPlaintext("the sink", "typed")
 	got := rg.reasons(rg.a)
 	if got["carol"] != "carol typed while down" {
 		t.Errorf("carol's re-sealed row reads %q, want it opened", got["carol"])

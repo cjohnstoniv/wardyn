@@ -41,6 +41,9 @@ func reprojectAttribution(a *policyref.Ref) *policyref.Ref {
 	ref := policyref.Project(a.Source, a.Name, &policyref.Contact{
 		Owner: a.Owner, Email: a.Email, RequestURL: a.RequestURL, RequestText: a.RequestText,
 	})
+	if ref != nil {
+		ref.Overridden = a.Overridden
+	}
 	if ref == nil || *ref != *a {
 		slog.Warn("wardyn-proxy: config attribution dropped or trimmed by validation", slog.Bool("dropped", ref == nil))
 	}
@@ -68,6 +71,9 @@ func (p *Proxy) attributeRefusal(w http.ResponseWriter) string {
 		if ref.Name != "" {
 			who = fmt.Sprintf("the profile %q", ref.Name)
 		}
+	}
+	if ref.Overridden {
+		who += ", as changed for this run"
 	}
 	// The owner's name and email stay out of the body (they are a person's).
 	route := request

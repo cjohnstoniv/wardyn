@@ -160,8 +160,8 @@ func TestGovCovHoldRoleMappingDelete(t *testing.T) {
 		if ch.TargetKind != govKindRoleMapping || ch.Op != "delete" || ch.TargetKey != "eng" {
 			t.Errorf("stored change = %+v", ch)
 		}
-		if string(ch.Payload) != `{"id":"`+govCovMapEng.String()+`","acknowledge_access_change":true}` {
-			t.Errorf("payload = %s, want the id and the acknowledgement it was proposed with", ch.Payload)
+		if string(ch.Payload) != `{"id":"`+govCovMapEng.String()+`","acknowledge_access_change":true,"acknowledged_effect":{"before":"denied","after":"denied"}}` {
+			t.Errorf("payload = %s, want the id, the acknowledgement and the effect it was proposed with", ch.Payload)
 		}
 		d := govCovDiff(t, ch)
 		if string(d.Before) != `{"value":"eng","role":"user","user_type":"standard"}` || d.After != nil {
@@ -258,7 +258,8 @@ func TestGovCovApplyRoleMappingDelete(t *testing.T) {
 		s := govCovAccessServer(t, &govCovStore{}, nil)
 		q := &govCovQuerier{}
 		ch := govCovDeleteChange(true)
-		payload, _ := json.Marshal(roleMappingDeletePayload{ID: govCovMapOps, AcknowledgeAccessChange: true})
+		effect := s.roleMappingEffect(rows, accessCandidateRows(rows, govCovMapOps.String(), oidc.RoleMapping{}), userTypes)
+		payload, _ := json.Marshal(roleMappingDeletePayload{ID: govCovMapOps, AcknowledgeAccessChange: true, AcknowledgedEffect: &effect})
 		ch.Payload = payload
 		_, err := s.applyRoleMappingDelete(approver("ops-group"), q, ch, rows, userTypes)
 		var ref *govRefusal
@@ -281,6 +282,17 @@ func TestGovCovApplyRoleMappingDelete(t *testing.T) {
 		_, err := s.applyRoleMappingDelete(approver("ops-group"), q, govCovDeleteChange(false), rows, userTypes)
 		if ref := govCovAsRefusal(t, err); ref.status != http.StatusNotFound || ref.reason != reasonRoleMappingNotFound {
 			t.Errorf("refusal = %+v", ref)
+		}
+	})
+
+	// A change held before the acknowledged effect was stored carries none: its acknowledgement covers
+	// no known effect, so the approval is stale and nothing is written.
+	t.Run("an acknowledged change with no stored effect is stale", func(t *testing.T) {
+		s := govCovAccessServer(t, &govCovStore{}, nil)
+		q := &govCovQuerier{}
+		_, err := s.applyRoleMappingDelete(approver("ops-group"), q, govCovDeleteChange(true), rows, userTypes)
+		if !errors.Is(err, store.ErrGovernanceChangeStale) || len(q.seen) != 0 {
+			t.Errorf("error = %v after %v, want ErrGovernanceChangeStale and no statement", err, q.seen)
 		}
 	})
 

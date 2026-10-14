@@ -4,7 +4,10 @@
  */
 
 import type { ComponentFact } from "./components";
+import type { AccessFacts } from "./new-run-access";
+import type { AllowedImage, AppliedResources, HarnessSetFact, ImageFact, LocalPlacementFact, MainDriveApplied, RunAttachment } from "./new-run-contract";
 import type { RunPolicySpec } from "./policy";
+import type { EffectiveRunLimits, PoolSlots, ResolvedRunnerPool, RunnerPoolChoice } from "./runner-pools";
 
 export type PolicyPreviewPending =
   | "task"
@@ -30,6 +33,28 @@ export interface PolicyPreviewRepository {
   capability_ceiling: string[];
 }
 
+/** Who is responsible for a provenance row; an id or name only where the kind has one. */
+export interface ProvenanceSource {
+  // An unknown kind renders no chip, never a guess.
+  kind: "policy" | "ceiling" | "workspace" | "component" | "model_provider" | "person" | (string & {});
+  id?: string;
+  name?: string;
+}
+
+/**
+ * Why one entry of the resolved spec is there (internal/api's provenanceRow).
+ * field is a RunPolicySpec json name; value a redaction-safe entry key: a host,
+ * a grant as "kind:host", a mount's target, a repository as "repo@ref", a capability.
+ */
+export interface ProvenanceEntry {
+  field: string;
+  value: string;
+  source: ProvenanceSource;
+  // clamped: the source asked and the ceiling removed it. narrowed: it stands, reduced, or a
+  // capability was taken away. removed: the person's override dropped it.
+  effect: "added" | "clamped" | "narrowed" | "removed" | (string & {});
+}
+
 /** Authorized, provisional read output. Never use it as the authored draft. */
 export interface PolicyPreviewResult {
   spec: RunPolicySpec;
@@ -41,4 +66,32 @@ export interface PolicyPreviewResult {
   repository_access: PolicyPreviewRepository[];
   // Absent for a draft with no component and no GitHub or Azure DevOps repository.
   components?: ComponentFact[];
+  // Why each entry is in `spec`, from the same fold as the launch. The server always
+  // sends the array; optional here so an older server's body still types.
+  provenance?: ProvenanceEntry[];
+  // The preflight's limits and applied size, with the same meaning.
+  limits?: EffectiveRunLimits;
+  resources_applied?: AppliedResources;
+  // The main-drive size it asked for and gets, the preflight's.
+  main_drive?: MainDriveApplied;
+  // Whether each entry can run on the person's runner; the server always sends
+  // the array, empty until its lane fills it (optional here so an older server still types).
+  local_placement?: LocalPlacementFact[];
+  // The image the run would start from and its source (absent until the image
+  // lane resolves it), and the images the organisation lets the person choose.
+  image?: ImageFact;
+  allowed_images?: AllowedImage[];
+  // The preflight's harness_set fact, with the same meaning.
+  harness_set?: HarnessSetFact;
+  // The preflight's pool facts, with the same meaning.
+  runner_pool?: ResolvedRunnerPool;
+  runner_pools?: RunnerPoolChoice[];
+  // The preflight's runner_pool_slots, with the same meaning.
+  runner_pool_slots?: PoolSlots;
+  // What the draft brings in, Review's same block (optional so an older server still types).
+  access?: AccessFacts;
+  // The run's mount map: each repository, folder and drive at the path the run
+  // uses it at, the one holding the starting folder marked. The server always
+  // sends the array; optional here so an older server still types.
+  attachments?: RunAttachment[];
 }

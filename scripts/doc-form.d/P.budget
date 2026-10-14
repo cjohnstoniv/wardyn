@@ -1,4 +1,18 @@
 # Prose must not grow beyond the base count plus cell-expansion headings and summaries (itemised in lane-reports/docs/P-worker.md Round 2).
 # docs/POLICIES.md 17827 adds 692 for the 0.8.9 component docs: 56 (three bullets: a run with a shared component secret exports a record, not a reusable policy), 17 (pointer to docs/CREDENTIALS.md), 6+1+27+3 (`file_secret` in the pairing list, the kind row, a table row and `owner_only`), 34 (the `api_key` echo caveat and the `shared` mark), 5 (the switch is `WARDYN_ALLOW_USER_ENV_SECRET` and governs `file_secret`), 547 (the `file_secret` section and the Custom components section); the diff tool counts 696, the gate 692 (link text).
-docs/POLICIES.md=17827 share=12
+# docs/POLICIES.md 17856 adds 29 over 17827: 0.9 final docs pass, measured: tool rules route a background Claude Code run through the tool gate.
+# docs/POLICIES.md 17872 adds 16 over 17856: 0.9 final docs pass 2, measured: where the risk grade shows, and the GitHub CLI door beside the App lane.
+# docs/POLICIES.md 17895 adds 23 over 17872: docs fix: run --file overlay; a policy's own * rule stays in force on a routed run, measured.
+# docs/POLICIES.md 17827 adds 692 for the 0.8.9 component docs: 56 (three bullets: a run with a shared component secret exports a record, not a reusable policy), 17 (pointer to docs/CREDENTIALS.md), 6+1+27+3 (`file_secret` in the pairing list, the kind row, a table row and `owner_only`), 34 (the `api_key` echo caveat and the `shared` mark), 5 (the switch is `WARDYN_ALLOW_USER_ENV_SECRET` and governs `file_secret`), 547 (the `file_secret` section and the Custom components section); the diff tool counts 696, the gate 692 (link text). Ratcheted to the measured 17794 in 0.9.0 with the exact-host GitHub deny note.
+# docs/POLICIES.md 17972 adds 59 over 17913: the push refusal for a ref whose commit the request does not carry.
+# docs/POLICIES.md 17979 adds 7 over 17972 (0.9 RS-10, after merging lane/090-RS-9); measured at merge.
+# docs/POLICIES.md 17913 measured at merge: credentials merge: the exact-host deny note beside the routed-run wildcard sentences.
+# docs/POLICIES.md 17973 adds 60 over 17913, measured: a member's own private-address entry under an allow-all ceiling.
+# docs/POLICIES.md 18041 adds 28 over 18013, measured: an IPv6 clone host is listed only in the ceiling; a library scan is bounded by it.
+# docs/POLICIES.md 18107 adds 66 over 18041 (0.9 RS-12, after merging lane/090-RS-11); measured at merge.
+# docs/POLICIES.md 17990 adds 77 over 17913 (the ref-ruleset check samples a nested outside name): the nested read, its reason and the sampled-check limit; measured.
+# docs/POLICIES.md 17996 adds 6 over 17990 (a third, two-component outside sample): measured.
+# docs/POLICIES.md 18190 adds 83 over 18107 (0.9 RS-15, after merging lane/090-RS-12); measured at merge.
+docs/POLICIES.md=18190 share=12
 examples/policies/README.md=1349 share=5
+# docs/POLICIES.md 18013 adds 40 over 17973, measured: a member's private-range workspace clone host.

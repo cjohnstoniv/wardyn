@@ -9,7 +9,9 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -114,6 +116,38 @@ func (c *Client) ScanWorkspace(ctx context.Context, id uuid.UUID) (json.RawMessa
 	return out, err
 }
 
+// WorkspaceBuild is one workspace's image-build view (GET/POST /api/v1/workspaces/{id}/build). Record is
+// present only while the workspace's build record is current; Reproducible false reads "not reproducible".
+type WorkspaceBuild struct {
+	State        string      `json:"state"`
+	Image        string      `json:"image,omitempty"`
+	Detail       string      `json:"detail,omitempty"`
+	StartedAt    *time.Time  `json:"started_at,omitempty"`
+	Log          []string    `json:"log,omitempty"`
+	Record       *ImageBuild `json:"record,omitempty"`
+	RecordSHA256 string      `json:"record_sha256,omitempty"`
+	Reproducible *bool       `json:"reproducible,omitempty"`
+}
+
+// GetWorkspaceBuild reads a workspace's image-build state. GET /api/v1/workspaces/{id}/build.
+func (c *Client) GetWorkspaceBuild(ctx context.Context, id uuid.UUID) (WorkspaceBuild, error) {
+	var out WorkspaceBuild
+	err := c.do(ctx, http.MethodGet, "/api/v1/workspaces/"+id.String()+"/build", nil, &out)
+	return out, err
+}
+
+// BuildWorkspace starts the workspace's image build (202 while it runs, 200 when there is nothing to do);
+// refresh rebuilds from fresh inputs even when an image is kept. POST /api/v1/workspaces/{id}/build.
+func (c *Client) BuildWorkspace(ctx context.Context, id uuid.UUID, refresh bool) (WorkspaceBuild, error) {
+	var body any // nil sends no body; a typed nil would send "null"
+	if refresh {
+		body = map[string]bool{"refresh": true}
+	}
+	var out WorkspaceBuild
+	err := c.do(ctx, http.MethodPost, "/api/v1/workspaces/"+id.String()+"/build", body, &out)
+	return out, err
+}
+
 // ── Sources (tier 1: the shared library) ────────────────────────────────────
 
 // SourceRequest is the body for POST /api/v1/sources — one repo/dir configured
@@ -213,10 +247,22 @@ func (c *Client) GetSiteConfig(ctx context.Context) (types.SiteConfig, error) {
 // ever stored (PLATFORM-API-5). Stripped here, once, so no caller has to
 // remember to (mirrors ui/src/app/lib/api/health.ts's identical fix on the
 // TS side).
+//
+// Runners is stripped the same way: runners.enabled has its own audited super-admin
+// route (SetRunnersEnabled), and the server refuses a document that names a value
+// other than the stored one, which a captured baseline applied after a reset, or a
+// managed file re-applied on every boot, would otherwise be.
+//
+// The egress baseline is NOT stripped: a body that changes it is refused 400
+// site_config_egress_via_own_route, because only PUT /governance/egress-baseline may change it.
+// PutSiteConfigResult is the one that drops the baseline, for restoring a captured document.
 func (c *Client) PutSiteConfig(ctx context.Context, cfg types.SiteConfig) (
 	out types.SiteConfig, danglingSecretRefs []string, onboardingMarkIgnored bool, err error,
 ) {
-	res, err := c.PutSiteConfigResult(ctx, cfg)
+	cfg.Integrations = nil
+	cfg.Runners = nil
+	var res SiteConfigPutResult
+	err = c.do(ctx, http.MethodPut, "/api/v1/site-config", cfg, &res)
 	return res.SiteConfig, res.DanglingSecretRefs, res.OnboardingCompletedAtIgnored, err
 }
 
@@ -231,6 +277,11 @@ type SiteConfigPutResult struct {
 	// because the console has no branding record yet. Apply again after saving
 	// the Branding card.
 	BrandingLogoPending bool `json:"branding_logo_pending,omitempty"`
+	// EgressBaselineIgnored is set by the SDK, not the server: the document named an egress baseline
+	// (egress.baseline_hosts, or a baseline mark on an internal host) that differs from the stored
+	// one, and PutSiteConfigResult did not send it. A document that names no egress block is never
+	// reported (an older file is silent about the baseline). Only PUT /governance/egress-baseline writes it.
+	EgressBaselineIgnored bool `json:"-"`
 	// ModelProviderWarnings are advisories on the model_providers block, such as an azure_foundry
 	// endpoint that resolves to a private address no internal_hosts entry covers.
 	ModelProviderWarnings []string `json:"model_provider_warnings,omitempty"`
@@ -238,11 +289,80 @@ type SiteConfigPutResult struct {
 
 // PutSiteConfigResult is PutSiteConfig with every advisory signal, including
 // the ones added after its signature was fixed. PUT /api/v1/site-config.
+//
+// The egress baseline is stripped the way Integrations is: egress and the baseline mark on each
+// internal_hosts entry are sent as nothing, and the server carries the stored ones forward. It
+// refuses a body that changes the baseline (only PUT /governance/egress-baseline may), so a
+// document captured before a reset, or before the security tier moved the baseline, would
+// otherwise be refused whole. The server's refusal stays for PutSiteConfig and every other caller;
+// EgressBaselineIgnored reports a baseline in cfg that the stored one does not match.
 func (c *Client) PutSiteConfigResult(ctx context.Context, cfg types.SiteConfig) (SiteConfigPutResult, error) {
+	sent := cfg
 	cfg.Integrations = nil
+	cfg.Runners = nil
+	cfg.Egress = nil
+	cfg.InternalHosts = slices.Clone(cfg.InternalHosts)
+	for i := range cfg.InternalHosts {
+		cfg.InternalHosts[i].Baseline = false
+	}
 	var resp SiteConfigPutResult
 	err := c.do(ctx, http.MethodPut, "/api/v1/site-config", cfg, &resp)
+	if err == nil {
+		resp.EgressBaselineIgnored = baselineAsserted(sent, resp.SiteConfig)
+	}
 	return resp, err
+}
+
+// baselineAsserted reports whether sent asserts an egress baseline that stored does not hold: an egress
+// block whose hosts differ, or a baseline mark on a suffix stored has not marked. A document silent
+// about the baseline (no egress block, no marks), as a pre-0.9 file is, asserts nothing.
+func baselineAsserted(sent, stored types.SiteConfig) bool {
+	hosts := func(sc types.SiteConfig) []string {
+		if sc.Egress == nil {
+			return nil
+		}
+		return normalizedHosts(sc.Egress.BaselineHosts)
+	}
+	if sent.Egress != nil && !slices.Equal(hosts(sent), hosts(stored)) {
+		return true
+	}
+	marked := map[string]bool{}
+	for _, h := range stored.InternalHosts {
+		if h.Baseline {
+			marked[normalizedHost(h.HostSuffix)] = true
+		}
+	}
+	for _, h := range sent.InternalHosts {
+		if h.Baseline && !marked[normalizedHost(h.HostSuffix)] {
+			return true
+		}
+	}
+	return false
+}
+
+// normalizedHost lowercases a host name and drops a trailing dot, as the server does before comparing.
+func normalizedHost(h string) string {
+	return strings.TrimSuffix(strings.ToLower(strings.TrimSpace(h)), ".")
+}
+
+// normalizedHosts is the sorted, de-duplicated set of normalizedHost over list.
+func normalizedHosts(list []string) []string {
+	out := make([]string, len(list))
+	for i, h := range list {
+		out[i] = normalizedHost(h)
+	}
+	slices.Sort(out)
+	return slices.Compact(out)
+}
+
+// GetModelProviders returns the org's model-provider records with, per provider id, how many people
+// hold a credential of their own for it. Admin only. Counts and configuration, never a credential
+// value; the writes and the per-provider sign-in and credential doors stay unwrapped (the console
+// owns them). GET /api/v1/model-providers.
+func (c *Client) GetModelProviders(ctx context.Context) (ModelProvidersRead, error) {
+	var out ModelProvidersRead
+	err := c.do(ctx, http.MethodGet, "/api/v1/model-providers", nil, &out)
+	return out, err
 }
 
 // SetupStatus returns the first-run setup checklist as raw JSON (the response is
@@ -540,13 +660,18 @@ type DriveRequest struct {
 }
 
 // DriveGrantRequest is the POST /drives/grants body — one allocation of a
-// drive to a subject, upserted by the natural key (subject_type, subject): a
-// second POST for the same subject repoints its single row rather than
-// accumulating another one.
+// drive to a subject. It REPLACES the subject's allocation: the subject ends
+// with exactly this drive, and an existing allocation is repointed (200), so a
+// second POST for the same subject moves them to the new drive. With
+// Additional the drive is allocated BESIDE the subject's others, keyed on
+// (subject_type, subject, drive_id).
 type DriveGrantRequest struct {
 	SubjectType CapabilitySubjectType `json:"subject_type"`
 	Subject     string                `json:"subject"`
 	DriveID     uuid.UUID             `json:"drive_id"`
+	// Additional allocates this drive beside the subject's other drives
+	// instead of replacing them (0.9: a run may attach several drives).
+	Additional bool `json:"additional,omitempty"`
 	// Priority breaks ties within a tier (higher wins) when a subject's
 	// membership qualifies it for more than one group-tier grant. It does not
 	// cross tiers (user beats group beats all).
@@ -618,16 +743,33 @@ func (c *Client) GetDrives(ctx context.Context) (DrivesDocument, error) {
 	}
 }
 
-// ApplyDrives upserts every drive and grant doc names, over the existing
+// DrivesApplyResult is ApplyDrivesResult's answer.
+type DrivesApplyResult struct {
+	Document DrivesDocument `json:"document"`
+	// Steps are the writes issued, in order, with their outcome.
+	Steps []ApplyStep `json:"steps,omitempty"`
+}
+
+// ApplyDrives is ApplyDrivesResult's document, with the same error on a failed
+// write (and no document).
+func (c *Client) ApplyDrives(ctx context.Context, doc DrivesDocument) (DrivesDocument, error) {
+	res, err := c.ApplyDrivesResult(ctx, doc)
+	if err != nil {
+		return DrivesDocument{}, err
+	}
+	return res.Document, nil
+}
+
+// ApplyDrivesResult upserts every drive and grant doc names, over the existing
 // POST /drives, PUT /drives/{id} and POST /drives/grants routes — there is no
 // bulk-write route, and none is added. A drive is routed by the id doc
 // carries: one already issued by GetDrives (non-nil) is REPLACED in place
 // (PUT), a zero id is CREATED (POST) — which is what makes `wardyn drive get
 // > f && wardyn drive set f` a no-op: the ids `get` wrote back are exactly
 // what route the re-`set` to an update of the same rows, not a second copy
-// under a fresh name. A grant carries no id of its own; every one is POSTed,
-// and the server's own (subject_type, subject) upsert repoints an existing
-// allocation rather than duplicating it.
+// under a fresh name. A grant carries no id of its own; every one is POSTed
+// with Additional, so it upserts the one (subject_type, subject, drive_id)
+// allocation it names and never replaces a subject's other drives.
 //
 // Nothing doc omits is touched and nothing is deleted — neither POST nor PUT
 // can express that, and this function does not attempt it by other means.
@@ -636,7 +778,10 @@ func (c *Client) GetDrives(ctx context.Context) (DrivesDocument, error) {
 // what was actually persisted. On success, the returned document is a fresh
 // GetDrives — the authoritative post-write state, including the derived
 // fields (grant counts, deployment facts) a write response cannot carry.
-func (c *Client) ApplyDrives(ctx context.Context, doc DrivesDocument) (DrivesDocument, error) {
+// On a failed write the result holds the steps so far, the failed one included,
+// alongside the error; ApplyDrives is this without the steps.
+func (c *Client) ApplyDrivesResult(ctx context.Context, doc DrivesDocument) (DrivesApplyResult, error) {
+	var res DrivesApplyResult
 	for i, d := range doc.Drives {
 		req := DriveRequest{
 			Name: d.Name, Backend: d.Backend, HostRoot: d.HostRoot,
@@ -645,13 +790,20 @@ func (c *Client) ApplyDrives(ctx context.Context, doc DrivesDocument) (DrivesDoc
 		}
 		var saved UserDrive
 		var err error
+		step := ApplyStep{Kind: "drive", Op: "create", Name: d.Name}
 		if d.ID == uuid.Nil {
 			err = c.do(ctx, http.MethodPost, "/api/v1/drives", req, &saved)
 		} else {
 			err = c.do(ctx, http.MethodPut, "/api/v1/drives/"+d.ID.String(), req, &saved)
+			id := d.ID
+			step.Op, step.ID = "update", &id
 		}
 		if err != nil {
-			return DrivesDocument{}, fmt.Errorf("apply drive %q: %w", d.Name, err)
+			err = fmt.Errorf("apply drive %q: %w", d.Name, err)
+		}
+		res.Steps = append(res.Steps, step.withOutcome(false, err))
+		if err != nil {
+			return res, err
 		}
 		doc.Drives[i].UserDrive = saved
 	}
@@ -669,12 +821,24 @@ func (c *Client) ApplyDrives(ctx context.Context, doc DrivesDocument) (DrivesDoc
 			// different from what GetDrives just reported.
 			HomeOverride: &g.HomeOverride,
 			Enabled:      &g.Enabled,
+			// Additional: the document's grants are added beside one another;
+			// replacing would leave a subject only the last of its drives.
+			Additional: true,
 		}
 		var saved UserDriveGrant
-		if err := c.do(ctx, http.MethodPost, "/api/v1/drives/grants", req, &saved); err != nil {
-			return DrivesDocument{}, fmt.Errorf("apply drive grant (%s %q on drive %s): %w", g.SubjectType, g.Subject, g.DriveID, err)
+		err := c.do(ctx, http.MethodPost, "/api/v1/drives/grants", req, &saved)
+		if err != nil {
+			err = fmt.Errorf("apply drive grant (%s %q on drive %s): %w", g.SubjectType, g.Subject, g.DriveID, err)
+		}
+		driveID := g.DriveID
+		step := ApplyStep{Kind: "drive_grant", Op: "upsert", SubjectType: g.SubjectType, Subject: g.Subject, ID: &driveID}
+		res.Steps = append(res.Steps, step.withOutcome(false, err))
+		if err != nil {
+			return res, err
 		}
 		doc.Grants[i] = saved
 	}
-	return c.GetDrives(ctx)
+	var err error
+	res.Document, err = c.GetDrives(ctx)
+	return res, err
 }

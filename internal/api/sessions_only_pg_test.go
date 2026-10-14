@@ -22,6 +22,7 @@ func TestRevokeSessions_SessionsOnlyKeepsTokensAndKeysAuthenticating(t *testing.
 	ctx := context.Background()
 	const sub, email = "sub-alice", "alice@corp.example"
 	cookie, _, token := e.mintTokenAs(e.a, entrafake.Identity{Username: email, Subject: sub})
+	cookie = backdated(t, cookie, clockStepMargin) // issued clearly before the sign-out
 	key, err := e.st.AddSSHKey(ctx, types.SSHPublicKey{Fingerprint: "SHA256:alice-key", Principal: sub, Name: "laptop",
 		PublicKey: "ssh-ed25519 AAAA alice", Role: oidc.RoleUser, CreatedAt: time.Now().UTC()})
 	if err != nil {
@@ -72,7 +73,7 @@ func TestRevokeSessions_SessionsOnlyKeepsTokensAndKeysAuthenticating(t *testing.
 			t.Errorf("instance %s: the SSH key is refused: %s", name, why)
 		}
 	}
-	if st, err := oidc.CheckSession(ctx, e.rev, sub, email, time.Now().Add(-time.Minute), -1); err != nil || st != oidc.SessionLive {
+	if st, err := oidc.CheckSession(ctx, e.rev, sub, email, oidc.Issue{At: time.Now().Add(-time.Minute)}, -1); err != nil || st != oidc.SessionLive {
 		t.Errorf("token/key owner check = %v, %v; want live", st, err)
 	}
 	toks, err := e.st.ListAPITokensByPrincipal(ctx, sub)

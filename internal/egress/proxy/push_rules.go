@@ -338,7 +338,7 @@ func matchSegment(pat []string, i int, seg string, budget *int) (bool, error) {
 // bodies, but an encoded body must never be waved through unparsed — that
 // would silently bypass every rule that reads the body.
 func nonIdentityEncoding(h http.Header) (string, bool) {
-	encs := h.Values("Content-Encoding")
+	encs := h["Content-Encoding"] // Values' result for a canonical key, indexed so code scanning sees a non-secret header
 	if len(encs) > 1 {
 		return strings.Join(encs, ","), true
 	}
@@ -348,6 +348,10 @@ func nonIdentityEncoding(h http.Header) (string, bool) {
 	return "", false
 }
 
+// rules and entryErr come from rulesForRemote: rules is the content rules of the
+// entry that owns the remote (nil: none), and entryErr, when set, says the entry
+// could not be derived and refuses the push.
+//
 // applyPushRules is the push CONTENT-rules step, shared by both brokered git
 // lanes exactly as confinePush is: buffers the request to the run's
 // inspection ceiling, reads what the push would change, refuses a push that
@@ -370,9 +374,12 @@ func nonIdentityEncoding(h http.Header) (string, bool) {
 // forwarded request is done with it. Always non-nil, safe to call more than
 // once.
 func (p *Proxy) applyPushRules(w http.ResponseWriter, r *http.Request, body io.Reader,
-	subject slog.Attr, deny func(ruleSource string), forge *forgeRepo, target pushTarget) (io.Reader, func(), bool) {
+	subject slog.Attr, deny func(ruleSource string), forge *forgeRepo, target pushTarget, rules *pushRuleSet, entryErr string) (io.Reader, func(), bool) {
 	noRelease := func() {}
-	rules := p.policy.contentRules()
+	if entryErr != "" {
+		p.refusePush(w, r, subject, deny, ruleSourceGitPushEntry, http.StatusForbidden, entryErr)
+		return nil, noRelease, false
+	}
 	if rules == nil {
 		return body, noRelease, true
 	}
@@ -444,6 +451,12 @@ func (p *Proxy) inspectPush(w http.ResponseWriter, r *http.Request, rules *pushR
 		p.refusePush(w, r, subject, deny, ruleSourceGitPackBig, http.StatusRequestEntityTooLarge,
 			"wardyn: cannot enforce push content rules on this push: "+err.Error()+
 				"\npush fewer commits at a time")
+		return nil, pushReview{}, noRelease, false
+	}
+	var absent *gitpack.MissingObjectError
+	if errors.As(err, &absent) {
+		p.refusePush(w, r, subject, deny, ruleSourceGitPackBlind, http.StatusUnsupportedMediaType,
+			missingTargetsBody(absent.Refs))
 		return nil, pushReview{}, noRelease, false
 	}
 	if err != nil {
@@ -671,4 +684,92 @@ func pathsBody(headline string, paths []string, noun, why, remedy string) string
 	}
 	b.WriteString(remedy)
 	return b.String()
+}
+
+// ruleSourceGitPushEntry marks a push refused because the entry that owns its
+// remote could not be derived: the push rules cannot be looked up, which is a
+// refusal and never "no rules".
+const ruleSourceGitPushEntry = "brokered:git:push-entry-underivable"
+
+// rulesForRemote is the content rules of the SCM entry that owns the remote at
+// host and path. With no PushRuleSets the run is on the older run-wide regime
+// and the policy's block applies to every remote. Otherwise the set of the
+// entry applies, found by the remote's own address and the base path recorded
+// for its host, never from the request body. An entry the run reaches but has no
+// set for gets the run's base rules (pushBase: the policy's block as the ceiling
+// left it), never "no rules": a set only ever adds to that base. A remote whose
+// entry cannot be derived returns the refusal sentence.
+func (p *Proxy) rulesForRemote(host, path string) (*pushRuleSet, string) {
+	if len(p.pushSets) == 0 {
+		return p.policy.contentRules(), ""
+	}
+	set, ok := p.pushSetsForHost(host)
+	if !ok {
+		return p.pushBase, ""
+	}
+	spec, found, err := types.PushRulesForServerRemote(p.pushSets, set.Provider, "https://"+host+"/"+strings.TrimPrefix(path, "/"), set.BasePath)
+	if err != nil {
+		return nil, "wardyn: cannot tell which source-control entry this push belongs to, so its push rules cannot be applied: " + err.Error()
+	}
+	if !found {
+		return p.pushBase, ""
+	}
+	return compilePushRules(&spec), ""
+}
+
+// rulesForADOGrant is rulesForRemote for the Azure DevOps REST gate, whose path
+// is not a git remote: the entry is the grant's host and organisation (on a
+// Server, the collection, the last segment of the grant's organisation).
+func (p *Proxy) rulesForADOGrant(host, org string) (*pushRuleSet, string) {
+	if len(p.pushSets) == 0 {
+		return p.policy.contentRules(), ""
+	}
+	if !adoHostedHost(host) {
+		org = org[strings.LastIndex(strings.TrimRight(org, "/"), "/")+1:]
+	}
+	key, err := types.PushRuleKey(string(types.GitProviderAzureDevOps), host, org)
+	if err != nil {
+		return nil, "wardyn: cannot tell which source-control entry this request belongs to, so its push rules cannot be applied: " + err.Error()
+	}
+	for _, s := range p.pushSets {
+		if s.Key() == key {
+			spec := s.Rules
+			return compilePushRules(&spec), ""
+		}
+	}
+	return p.pushBase, ""
+}
+
+// pushSetsForHost finds the set whose entry is on host, for its provider and
+// base path.
+func (p *Proxy) pushSetsForHost(host string) (types.PushRuleSet, bool) {
+	for _, s := range p.pushSets {
+		want, werr := types.CanonicalPushHost(s.Provider, s.Host)
+		if h, err := types.CanonicalPushHost(s.Provider, host); err == nil && werr == nil && h == want {
+			return s, true
+		}
+	}
+	return types.PushRuleSet{}, false
+}
+
+// anyPushRules reports whether this run has content rules anywhere, which is
+// what decides whether a receive-pack advertisement is rewritten.
+func (p *Proxy) anyPushRules() bool {
+	return p.policy.PushRulesSet() || len(p.pushSets) > 0 || p.pushBase != nil
+}
+
+// missingTargetsBody is the refusal for refs set to a commit the request does
+// not carry (for example a branch created at a commit the forge already has):
+// the pack holds nothing about their content, so it cannot be checked. A
+// complete clone does not change that, so no clone advice is given; naming
+// the refs is what lets the person leave them out of the push.
+func missingTargetsBody(refs []string) string {
+	const shown = 10
+	list := strings.Join(refs[:min(len(refs), shown)], ", ")
+	if len(refs) > shown {
+		list += fmt.Sprintf(", and %d more", len(refs)-shown)
+	}
+	return "wardyn: cannot enforce push content rules on this push: the request does not carry" +
+		" the commit these refs point to, so their content cannot be checked: " + list +
+		"\nleave these refs out of the push, or point them at commits the push carries"
 }

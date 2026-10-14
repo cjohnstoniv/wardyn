@@ -40,6 +40,7 @@
 | **v0.8.7** | Tunnel-failure diagnostics for egress (a row and a first-answer guard when an acknowledged connection dies), dedicated connections for the lifetime database locks, a conditional governance note, and pull-request CI scoped to the change | **Shipped (pre-alpha)** — `v0.8.7`, 2026-10-06 (see [CHANGELOG.md](CHANGELOG.md)) |
 | **v0.8.8** | Patch: an adopter's 0.8.7 field report; see [below](#v088-highlights). | **Shipped (pre-alpha)** — `v0.8.8`, 2026-10-07 (see [CHANGELOG.md](CHANGELOG.md)) |
 | **v0.8.9** | Run-level custom components (granted, saved and inline), their secrets added at the proxy or, where allowed, delivered as a variable or file. Also a four-panel New Run, person erasure, restructured docs and Go 1.26.9 | **Shipped (pre-alpha)** — `v0.8.9`, 2026-10-09 (see [CHANGELOG.md](CHANGELOG.md)) |
+| **v0.9.0** | Hybrid local and remote runs: client-mode runners, Self-Hosted and Remote Provided pools and a run queue. Also a redesigned New Run with run documents, templates and several drives, an AWS KMS key provider and React 19 | **Shipped (pre-alpha)** — `v0.9.0`, 2026-10-13 (see [CHANGELOG.md](CHANGELOG.md)) |
 
 ## Shipped detail
 
@@ -213,7 +214,8 @@
   - enforced both at the Wardyn boundary and, for agents that support managed settings, by generating that agent's enterprise policy file.
 - Researched during 0.7 and deliberately not built in it; the groundwork is that the posture inputs and the approval FSM it would ride already exist.
 
-- **Planned for 0.9: hybrid local + remote.**
+- **Planned for 0.9: hybrid local + remote, as client-mode runners ([design](docs/design/0.9/PLAN.md)).**
+- Where this section still says laptops "enrol" into the org, 0.9 supersedes it: the laptop runs `wardyn-runnerd`, its owner claims it, and the org is the only scheduler and audit writer. 0.8's enrolment (`WARDYN_ORG_URL`) is deprecated in 0.9 and removed in 1.0.
 - Today Wardyn has two tiers that do not know about each other —
   - an org control plane on Kubernetes ([docs/OPERATIONS.md](docs/OPERATIONS.md)) and a local daemon per laptop, MDM-managed, one machine per developer ([docs/DESKTOP.md](docs/DESKTOP.md): "A local daemon per laptop. No shared control plane, no cluster").
 - Hybrid is the deployment where they are one product:
@@ -221,7 +223,7 @@
   - and the **same person under the same org-managed policy flexes a sandbox between local and remote hardware** —
   - a quick edit on the laptop's own CPU, a long build on the cluster's —
   - with one identity, one ceiling, one audit stream.
-- The disk half follows: a local directory linked into a remote sandbox, and a remote drive readable locally.
+- The disk half follows: a local directory synced into a remote sandbox (`wardyn sync`), with drive-as-source as the shortcut when storage is shared.
 - The groundwork exists —
   - member mode (`m′`) already makes the developer a non-operator against an org IdP,
   - 0.7.2's `SiteConfig.WorkspaceProviders` is already an org-authored provider policy MDM delivers as `/etc/wardyn/site-config.json`,
@@ -230,17 +232,17 @@
 - Researched in 0.7.2 and written up in [docs/design/hybrid-0.8.md](docs/design/hybrid-0.8.md).
 - **0.8 ships the seams, not the rollout:**
   - device enrolment into an org control plane and the one audit stream (the laptop's audit rows federated to the org) have landed,
-  - and 0.8's authorization kernel is built to become the control plane's decision API
-  - (decisions that serialize, stable refusal codes, a versioned list of resource kinds, a principal that carries its device and origin).
+  - and 0.8's authorization decisions serialize, with stable refusal codes, a versioned list of resource kinds, and a principal that carries its device and origin.
 - **The rollout is 0.9:**
-  - the org control plane deciding for enrolled laptops (signed policy snapshots for offline use, the org deciding anything that touches org resources),
+  - client-mode runners, with the org as the only decider and a runner offline starting nothing new,
   - per-run placement between the laptop and the org's cluster and mixing the two, and the disk link.
-- Tracked on the `0.9.0` milestone.
+- Tracked on milestone `0.9.0`.
 
 | Milestone | Scope |
 |---|---|
 | **v0.8** | **Alpha RC.** The follow-through on 0.6/0.7 — the remaining enterprise-deployment enhancements, tools, and pieces — and the **last planned release candidate before the alpha go-live** |
-| **v0.9** | **Hybrid local + remote.** See [below](#v09-scope). |
+| **v0.9** | **Hybrid local + remote.** See [below](#v09-scope); [design](docs/design/0.9/PLAN.md). |
+| **v0.10** | The New Run items marked Coming soon; see [below](#v010-scope). |
 | **v1.0** | SPIRE identity provider, OpenBao secret store, L3 MCP/tool gateway and the rest of the 1.0 list; see [below](#v10-scope). |
 | **v1.0 (git-token ref confinement)** | **Token-side** branch-namespace confinement for minted git tokens; see [below](#v10-git-token-ref-confinement-scope). |
 
@@ -248,10 +250,29 @@
 
 - **Hybrid local + remote.**
 - MDM-managed laptops enrolled into a remote org control plane on Kubernetes:
-- the org's authorization kernel decides for every enrolled daemon (signed policy snapshots so a laptop keeps working offline under its last policy; the org decides anything that touches org resources),
+- client-mode runners: the org schedules, enforces and audits, and a laptop runs no control plane (an offline runner starts no new governed run),
 - per-run placement between the laptop and the org's cluster, and mixing the two under one identity, one ceiling and one audit stream ·
-- the disk link (a local directory in a remote sandbox, a remote drive read locally) ·
+- the disk link (`wardyn sync` into a remote sandbox; drive-as-source) ·
+- the New Run redesign: guided setup, the YAML/JSON run document, the Tools and access step, Templates, and saving a draft as a template or policy ·
 - the `member` role alias removed (0.8 warns)
+
+### v0.10 scope
+
+New Run shows these as Coming soon in 0.9.
+
+| Item | Issue |
+|---|---|
+| Scheduled runs, one-time and repeating | #1986 |
+| Several autonomous agents in one run | #1987 |
+| Team-shared drives | #1988 |
+| In-sandbox MCP servers per harness | #1989 |
+| Google Cloud CLI and kubectl access | #1990 |
+| Reusing a run's main drive across runs | #1991 |
+| Folders on your computer as run files | #1992 |
+| The AI composer | #1993 |
+| Application and server sandboxes | #1994 |
+
+- Session continuity across tabs and sign-ins (#1995) and session lifetime (#1996) target a 0.9.x release.
 
 ### v1.0 scope
 

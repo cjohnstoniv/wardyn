@@ -127,6 +127,18 @@ func (d *Driver) recordCmd(runID uuid.UUID, castDir string, argv []string) []str
 // When recording, the argv is wrapped by wardyn-rec (which execs asciinema or
 // falls back to a .log). Returns once the process is started, not finished.
 func (d *Driver) Exec(ctx context.Context, ref string, argv []string) (string, error) {
+	return d.exec(ctx, ref, argv, nil)
+}
+
+// ExecTo is Exec with this one exec's output copied into out instead of the
+// sandbox's ExecOutput. out is closed when the copy ends, if it is an
+// io.Closer. An exec-less sandbox has no exec of its own, so its output stays
+// the main process's.
+func (d *Driver) ExecTo(ctx context.Context, ref string, argv []string, out io.Writer) (string, error) {
+	return d.exec(ctx, ref, argv, out)
+}
+
+func (d *Driver) exec(ctx context.Context, ref string, argv []string, out io.Writer) (string, error) {
 	if len(argv) == 0 {
 		return "", errors.New("docker: exec: empty argv")
 	}
@@ -184,7 +196,10 @@ func (d *Driver) Exec(ctx context.Context, ref string, argv []string) (string, e
 	resp := attachRes.HijackedResponse
 	// We do not block on the process; drain in the background so the PTY does
 	// not stall, teeing it into the run's output tail when it keeps one.
-	w := d.execOutput(ref)
+	w := out
+	if w == nil {
+		w = d.execOutput(ref)
+	}
 	endDrain := runner.BeginOutputDrain(w)
 	go func() {
 		defer resp.Close()
@@ -416,6 +431,12 @@ type engineClient struct {
 func newEngineClient(cli *client.Client) engineClient {
 	return engineClient{Client: cli, raw: &http.Client{Transport: &http.Transport{
 		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) { return cli.Dialer()(ctx) },
+		// The SDK's own default transport sets this for the reason IT names
+		// (moby/moby#45539): a long-lived process holds a socket per idle
+		// connection without it. wardynd is long-lived and polls execs on
+		// every tick. That transport is unexported, so the value is carried
+		// over by hand.
+		IdleConnTimeout: 30 * time.Second,
 	}}}
 }
 
@@ -438,12 +459,27 @@ func (c engineClient) ExecInspectRaw(ctx context.Context, execID string) (execIn
 	if v := c.ClientVersion(); v != "" {
 		p = "/v" + strings.TrimPrefix(v, "v") + p
 	}
-	if u, perr := client.ParseHostURL(c.DaemonHost()); perr == nil {
-		p = path.Join(u.Path, p)
+	// The daemon's OWN address and base path, parsed the way the SDK parses
+	// them when it builds a request. A host that does not parse is refused
+	// rather than quietly losing its base path — client.New refuses the same
+	// host, so this is the belt to that braces.
+	u, perr := client.ParseHostURL(c.DaemonHost())
+	if perr != nil {
+		return execInspect{}, fmt.Errorf("docker: exec inspect: daemon host %q: %w", c.DaemonHost(), perr)
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://docker"+p, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, path.Join(u.Path, p), nil)
 	if err != nil {
 		return execInspect{}, fmt.Errorf("docker: exec inspect: %w", err)
+	}
+	// buildRequest's tail, minus the scheme. addr and the socket-transport
+	// Host override are reachable from the host string; the scheme is not:
+	// the raw transport's only dialer is the client's, which returns an
+	// ALREADY-TLS conn for a TLS daemon, so an https scheme here would make
+	// http.Transport wrap that conn in a second TLS layer.
+	req.URL.Scheme = "http"
+	req.URL.Host = u.Host
+	if u.Scheme == "unix" || u.Scheme == "npipe" {
+		req.Host = client.DummyHost
 	}
 	resp, err := c.raw.Do(req)
 	if err != nil {
@@ -511,13 +547,7 @@ func (d *Driver) Status(ctx context.Context, ref string) (runner.Status, error) 
 	return statusFromInspect(res.Container), nil
 }
 
-// mainProcessExecID is the sentinel internal/api/runs_dispatch.go persists
-// for an EXEC-LESS launch (krun runtime: Exec returns "" with a nil error
-// since the workload runs as the container's own main process, not a
-// separate exec — see runAsMainProcess). Duplicated here rather than
-// imported: internal/api sits above this concrete substrate and must stay
-// target-agnostic. MUST match the literal in runs_dispatch.go.
-const mainProcessExecID = "main-process"
+const mainProcessExecID = runner.MainProcessExecID
 
 // AgentStatus reports the agent's liveness in a restart-safe way. For an
 // exec-based ref (agentExecID != "" and not the mainProcessExecID sentinel)

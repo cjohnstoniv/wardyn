@@ -18,7 +18,7 @@ import (
 // and a Transit key over plain http:// to a remote host never boots.
 func TestBuildKEK_FailsClosed(t *testing.T) {
 	for _, tc := range []struct{ name, addr, sel, key, want string }{
-		{"unknown provider", "https://vault.example", "awskms", "wardyn", `WARDYN_KEK is "awskms"; want "local", "transit" or "azurekv"`},
+		{"unknown provider", "https://vault.example", "gcpkms", "wardyn", `WARDYN_KEK is "gcpkms"; want "local", "transit", "azurekv" or "awskms"`},
 		{"transit without a key", "https://vault.example", "transit", "", "needs WARDYN_VAULT_TRANSIT_KEY"},
 		{"key without an address", "", "transit", "wardyn", "WARDYN_VAULT_ADDR is not"},
 		{"plain http", "http://vault.example", "transit", "wardyn", "plain http://"},
@@ -276,5 +276,104 @@ func TestBuildPlatformKEK_AzureRetireNeedsNoAzureKEK(t *testing.T) {
 	*az.clientIDPlatform = "client-1"
 	if _, err := buildPlatformKEK(t.Context(), v, az, "", true); err == nil || !strings.Contains(err.Error(), "is the same identity as WARDYN_AZURE_CLIENT_ID") {
 		t.Fatalf("retiring with one client id for both = %v; want the refusal", err)
+	}
+}
+
+const testAWSKey = "arn:aws:kms:us-east-1:111122223333:key/00000000-0000-0000-0000-000000000000"
+
+// noAWSIdentity leaves the AWS SDK's default chain with nothing to find, so a
+// test never reads the machine's AWS setup or waits on the metadata service.
+func noAWSIdentity(t *testing.T) {
+	t.Helper()
+	t.Setenv("AWS_SHARED_CREDENTIALS_FILE", "/dev/null")
+	t.Setenv("AWS_CONFIG_FILE", "/dev/null")
+	t.Setenv("AWS_EC2_METADATA_DISABLED", "true")
+	for _, v := range []string{"AWS_ACCESS_KEY_ID", "AWS_PROFILE", "AWS_WEB_IDENTITY_TOKEN_FILE", "AWS_ROLE_ARN", "AWS_CONTAINER_CREDENTIALS_FULL_URI", "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI", "AWS_ENDPOINT_URL", "AWS_ENDPOINT_URL_KMS"} {
+		t.Setenv(v, "")
+	}
+	t.Setenv("AWS_MAX_ATTEMPTS", "1")
+}
+
+// WARDYN_KEK=awskms needs the key ARN, takes only a full key ARN, is the one
+// key service in play, and has no platform key yet; each refusal names its
+// setting.
+func TestBuildKEK_AWSFailsClosed(t *testing.T) {
+	noAWSIdentity(t)
+	for _, tc := range []struct{ name, sel, key, transit, transitPlatform, azKey, azSig, azPlatform, want string }{
+		{"without a key", "awskms", "", "", "", "", "", "", "WARDYN_KEK=awskms needs WARDYN_AWS_KMS_KEY"},
+		{"with a Transit key", "awskms", testAWSKey, "wardyn", "", "", "", "", "both name a key service; configure one"},
+		{"with a Transit key, read-only", "local", testAWSKey, "wardyn", "", "", "", "", "both name a key service; configure one"},
+		{"with Key Vault keys", "awskms", testAWSKey, "", "", testAzureKEK, testAzureSig, "", "both name a key service; configure one"},
+		{"with a Transit platform key", "awskms", testAWSKey, "", "wardyn-platform", "", "", "", "an AWS KMS platform key is not supported yet"},
+		{"with a Key Vault platform key", "awskms", testAWSKey, "", "", "", "", "https://kv.vault.azure.net/keys/wardyn-boot", "an AWS KMS platform key is not supported yet"},
+		{"with an alias", "awskms", "alias/wardyn", "", "", "", "", "", "is not a key ARN"},
+		{"with an alias ARN", "awskms", "arn:aws:kms:us-east-1:111122223333:alias/wardyn", "", "", "", "", "", "is an alias"},
+		{"with a bare key id", "local", "00000000-0000-0000-0000-000000000000", "", "", "", "", "", "is not a key ARN"},
+		{"without any identity", "awskms", testAWSKey, "", "", "", "", "", "no AWS credentials"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			v, az := testExternalFlags("", "")
+			v.kek, v.transitMount, v.transitKey, v.transitKeyPlatform, v.awsKMSKey = strp(tc.sel), strp("transit"), strp(tc.transit), strp(tc.transitPlatform), strp(tc.key)
+			az.kekKey, az.kekSigningKey = strp(tc.azKey), strp(tc.azSig)
+			if tc.azPlatform != "" {
+				az.kekKeyPlatform = strp(tc.azPlatform)
+			}
+			k, writes, err := buildKEK(t.Context(), v, az, "")
+			if err == nil || k != nil || writes || !strings.Contains(err.Error(), "refusing to start: ") || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("buildKEK = (%v, %v, %v); want a refusal containing %q", k, writes, err, tc.want)
+			}
+		})
+	}
+}
+
+// With WARDYN_KEK=local, a named AWS KMS key is still built, read-only (the way
+// back via -rewrap), so the boot reaches KMS and fails closed on its answer;
+// with WARDYN_KEK=awskms it is built the same way, for writes.
+func TestBuildKEK_AWSBuiltWithLocalAndWithAWSKMS(t *testing.T) {
+	noAWSIdentity(t)
+	var targets []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		targets = append(targets, r.Header.Get("X-Amz-Target"))
+		w.Header().Set("Content-Type", "application/x-amz-json-1.1")
+		w.Header().Set("X-Amzn-Errortype", "AccessDeniedException")
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = io.WriteString(w, `{"__type":"AccessDeniedException","message":"denied"}`)
+	}))
+	defer srv.Close()
+	creds := filepath.Join(t.TempDir(), "credentials")
+	// The field names are built: they are fixtures, and a literal one is what secret scanners look for.
+	body := "[default]\naws_access_key_id = " + "AS" + "IA" + strings.Repeat("T", 16) + "\n" + "aws_secret_" + "access_key = " + strings.Repeat("s", 40) + "\n"
+	if err := os.WriteFile(creds, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("AWS_SHARED_CREDENTIALS_FILE", creds)
+	t.Setenv("AWS_ENDPOINT_URL_KMS", srv.URL)
+	for _, sel := range []string{"local", "awskms"} {
+		v, az := testExternalFlags("", "")
+		v.kek, v.transitMount, v.transitKey, v.transitKeyPlatform, v.awsKMSKey = strp(sel), strp("transit"), strp(""), strp(""), strp(testAWSKey)
+		targets = nil
+		k, writes, err := buildKEK(t.Context(), v, az, "")
+		if err == nil || k != nil || writes || !strings.Contains(err.Error(), "refusing to start: AWS KMS KEK awskms:"+testAWSKey) || !strings.Contains(err.Error(), "AccessDeniedException") {
+			t.Fatalf("WARDYN_KEK=%s with an AWS KMS key = (%v, %v, %v); want the KEK built and refused by KMS", sel, k, writes, err)
+		}
+		if !slices.Contains(targets, "TrentService.Encrypt") {
+			t.Fatalf("WARDYN_KEK=%s: KMS saw %v; want the boot probe's Encrypt", sel, targets)
+		}
+	}
+}
+
+// -rewrap with WARDYN_KEK=awskms needs no age key, and refuses the same one-key-service
+// combinations as boot, in retire mode too: buildKEK runs before the platform key.
+func TestRewrapMode_AWSKMS(t *testing.T) {
+	noAWSIdentity(t)
+	f := rekeyFlags("postgres://nobody@127.0.0.1:1/nope?connect_timeout=1", "", "")
+	*f.vault.kek = kekAWS
+	if err := rewrapMode(f); err == nil || !strings.Contains(err.Error(), "WARDYN_KEK=awskms needs WARDYN_AWS_KMS_KEY") {
+		t.Fatalf("-rewrap with WARDYN_KEK=awskms and no key = %v; want the key service's refusal", err)
+	}
+	*f.vault.awsKMSKey, *f.vault.transitKeyPlatform = testAWSKey, "wardyn-platform"
+	*f.rewrapRetirePlatformKey = true
+	if err := rewrapMode(f); err == nil || !strings.Contains(err.Error(), "an AWS KMS platform key is not supported yet") {
+		t.Fatalf("-rewrap -rewrap-retire-platform-key with WARDYN_KEK=awskms and a platform Transit key = %v; want the not-supported-yet refusal", err)
 	}
 }

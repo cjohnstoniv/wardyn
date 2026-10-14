@@ -46,11 +46,11 @@ const attachTicketTTL = 30 * time.Second
 // this stamped role is the only signal available to re-check the owner rule
 // when the ticket is consumed (see attach.go's handleAttachWS).
 //
-// now is the time the minting request was ADMITTED, and it is stamped on the
-// ticket as the authority time (#1474): redemption asks whether a revoke landed
-// since. The email is the verified identity's, from ctx — "" on the admin-token
+// issue.At is the time the minting request was ADMITTED, and it is stamped on the
+// ticket as the authority time (#1474), with issue.Seq, the revocation sequence
+// the ticket records: redemption asks whether a revoke landed since. The email is the verified identity's, from ctx — "" on the admin-token
 // and local lanes — because a revoke may name the email instead of the subject.
-func mintAttachTicket(ctx context.Context, st store.Store, runID uuid.UUID, actorType types.ActorType, principal, role string, now time.Time) (string, error) {
+func mintAttachTicket(ctx context.Context, st store.Store, runID uuid.UUID, actorType types.ActorType, principal, role string, issue oidc.Issue) (string, error) {
 	var via *types.DelegationVia
 	if v, ok := audit.DelegationFrom(ctx); ok {
 		via = &v
@@ -61,8 +61,8 @@ func mintAttachTicket(ctx context.Context, st store.Store, runID uuid.UUID, acto
 	}
 	tok := hex.EncodeToString(raw)
 	t := store.AttachTicket{RunID: runID, ActorType: actorType, Principal: principal, Role: role, Via: via,
-		AuthorizedAt: now.UTC(), Email: oidcEmailFromContext(ctx)}
-	if err := st.MintAttachTicket(ctx, tok, t, now, now.Add(attachTicketTTL)); err != nil {
+		AuthorizedAt: issue.At.UTC(), RevSeq: issue.Seq, Email: oidcEmailFromContext(ctx)}
+	if err := st.MintAttachTicket(ctx, tok, t, issue.At, issue.At.Add(attachTicketTTL)); err != nil {
 		return "", err
 	}
 	return tok, nil
@@ -84,7 +84,7 @@ func consumeAttachTicket(ctx context.Context, st store.Store, tok string, runID 
 		return ticketActor{}, false, nil
 	}
 	return ticketActor{actorType: t.ActorType, principal: t.Principal, role: t.Role, via: t.Via,
-		authorizedAt: t.AuthorizedAt, email: t.Email}, true, nil
+		authorizedAt: t.AuthorizedAt, revSeq: t.RevSeq, email: t.Email}, true, nil
 }
 
 // ticketActorCtxKey carries the ticket's minting principal through to
@@ -111,6 +111,7 @@ type ticketActor struct {
 	// (#1475, set by redeemAttachTicket). authorizedAt is zero on a row written
 	// before the column existed, which redemption refuses.
 	authorizedAt time.Time
+	revSeq       int64
 	email        string
 	grantExpires time.Time
 }
@@ -156,7 +157,11 @@ func (s *Server) handleAttachTicket(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	run, ok := s.getRunAuthorized(w, r, id)
+	// The sponsor of a service identity's run passes this load too (sponsorsRun), so the entry check below
+	// can refuse them by capability instead of answering the foreign-run 404 for every refusal.
+	run, ok := s.getRunAuthorizedBy(w, r, id, func(r *http.Request, run types.AgentRun) bool {
+		return s.ownsRunOrAdmin(r, run) || s.sponsorsRun(r, run)
+	})
 	if !ok {
 		return
 	}
@@ -175,12 +180,26 @@ func (s *Server) handleAttachTicket(w http.ResponseWriter, r *http.Request) {
 	// can see a security admin refused a foreign PTY without inferring it from
 	// the path. A delegated token is never a super admin here (isOperator is
 	// false under one), so a portal cannot mint for a run its person may not enter.
+	//
+	// The sponsor of a service identity's run enters through the sponsor arm instead (sponsorMayEnter). A
+	// super admin sponsor takes it too, needs the service_attach grant, and gets a member-stamped ticket below.
+	asSponsor := false
 	if !mayEnterRun(run, principalFromRequest(r), s.isOperator(r.Context())) {
-		if s.isOperator(r.Context()) {
+		ok, refused := s.sponsorMayEnter(w, r, run, authorizedAt)
+		switch {
+		case refused:
+			return
+		case ok:
+			asSponsor = true
+		case s.isOperator(r.Context()):
 			s.refuseRunOwnerOnly(w, r, run)
 			return
+		default:
+			s.refuse(w, r, authz.Deny(authz.ReasonAttachTicketForeignRun, run.ID.String(), "run not found").OnRun(run.ID).AsIf(authz.Reason(reasonRunNotFound)))
+			return
 		}
-		s.refuse(w, r, authz.Deny(authz.ReasonAttachTicketForeignRun, run.ID.String(), "run not found").OnRun(run.ID).AsIf(authz.Reason(reasonRunNotFound)))
+	}
+	if s.refuseBackgroundOnly(w, r, run, "terminal") {
 		return
 	}
 	// Same fail-closed gate as the WS itself: a ticket for a non-attachable run
@@ -200,15 +219,25 @@ func (s *Server) handleAttachTicket(w http.ResponseWriter, r *http.Request) {
 	// See the three-tier doctrine on internal/auth/oidc's RoleSecurityAdmin;
 	// the API-token stamp (apitokens.go) is the ONE snapshot site that moved,
 	// because a token carries a whole session identity rather than run reach.
+	// A sponsor's ticket is stamped member whatever the minter's role, so refuseAttachEntry never takes
+	// adminDoorExempt and the run's deny_interactive door always runs (F6).
 	role := oidc.RoleUser
-	if s.isOperator(r.Context()) {
+	if s.isOperator(r.Context()) && !asSponsor {
 		role = oidc.RoleAdmin
+	}
+	// The ticket's sequence is read before the late re-check, so a cut that commits between the two draws
+	// a sequence above the one recorded and ends the ticket (the order handleCreateAPIToken and
+	// handleAddSSHKey keep).
+	issue, err := s.ticketIssue(r.Context(), principal, authorizedAt)
+	if err != nil {
+		writeServerError(w, r, "mint attach ticket", err)
+		return
 	}
 	// A revoke that landed while this request was in flight must not leave a
 	// ticket behind: the same late re-check as handleCreateAPIToken, and the same
 	// fail-closed answer when it cannot be made.
 	if s.cfg.SessionRevocations != nil {
-		revoked, rerr := s.cfg.SessionRevocations.IsSessionRevoked(r.Context(), principal, oidcEmailFromContext(r.Context()), authorizedAt)
+		revoked, rerr := s.admittedRevoked(r.Context(), principal, authorizedAt)
 		if rerr != nil {
 			writeServerError(w, r, "mint attach ticket", rerr)
 			return
@@ -218,7 +247,7 @@ func (s *Server) handleAttachTicket(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	tok, err := mintAttachTicket(r.Context(), s.cfg.Store, id, at, principal, role, authorizedAt)
+	tok, err := mintAttachTicket(r.Context(), s.cfg.Store, id, at, principal, role, issue)
 	if err != nil {
 		slog.ErrorContext(r.Context(), "wardynd: mint attach ticket failed", "run_id", id, "err", err)
 		writeErrorReason(w, http.StatusInternalServerError, reasonAttachTicketMintFailed, "mint attach ticket failed")
@@ -228,6 +257,38 @@ func (s *Server) handleAttachTicket(w http.ResponseWriter, r *http.Request) {
 		"ticket":             tok,
 		"expires_in_seconds": int(attachTicketTTL / time.Second),
 	})
+}
+
+// sponsorMayEnter is the ticket mint's sponsor arm: ok when the caller is the current sponsor of the active
+// service identity that created run AND holds service_attach, asked with the operator step off so a super
+// admin needs the grant too (F6). refused is true when it answered: a store failure is a 500; a sponsor
+// without the grant, or no longer entitled, gets the foreign-run 404 with an authz.denied row of reason
+// capability_feature. A caller who is not the sponsor gets neither (ok and refused false).
+func (s *Server) sponsorMayEnter(w http.ResponseWriter, r *http.Request, run types.AgentRun, authorizedAt time.Time) (ok, refused bool) {
+	if !s.sponsorsRun(r, run) {
+		return false, false
+	}
+	still, err := s.sponsorStillEntitled(r.Context(), run, principalFromRequest(r), authorizedAt)
+	if err != nil {
+		writeServerError(w, r, "mint attach ticket", err)
+		return false, true
+	}
+	d := authz.Deny(authz.ReasonAttachTicketForeignRun, run.ID.String(), "run not found").OnRun(run.ID)
+	if still {
+		allowed, err := s.capAllowedAsMember(r.Context(), capFeature, featureServiceAttach)
+		if err != nil {
+			writeServerError(w, r, "mint attach ticket", err)
+			return false, true
+		}
+		if allowed {
+			return true, false
+		}
+		d = authz.Deny(authz.ReasonCapabilityFeature, run.ID.String(), "run not found").OnRun(run.ID)
+	}
+	// The wire is the foreign-run 404 a missing run answers; the audit row keeps the true cause.
+	writeErrorReason(w, http.StatusNotFound, reasonRunNotFound, "run not found")
+	s.recordRefusal(r.Context(), r, d)
+	return false, true
 }
 
 // ticketOrHumanAuth guards the attach WS route: a valid ?ticket= (single-use,

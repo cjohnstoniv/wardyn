@@ -9,6 +9,8 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // Host bind-mount guardrails (SECURITY-CRITICAL).
@@ -50,6 +52,50 @@ var allowedTargetPrefixes = []string{"/home/agent", "/work", "/workspace"}
 // collision would surface as silent disappearance rather than a refusal.
 const DriveTarget = "/home/agent/drive"
 
+// DrivesRoot and SharedRoot hold the managed and share drives a run attaches
+// beside the legacy one, each at its own server-derived path below them. They
+// are reserved for the same reason DriveTarget is.
+const (
+	DrivesRoot = "/home/agent/drives"
+	SharedRoot = "/home/agent/shared"
+)
+
+// DriveTargetFor is the one in-sandbox path a drive mounts at, derived by the
+// server and never authored: DriveTarget for the legacy drive (the person's one
+// resolved drive), else DrivesRoot/<slug> for a managed drive and
+// SharedRoot/<slug> for a share. "" when the drive's name has no slug; the
+// caller refuses it rather than mounting it somewhere else.
+func DriveTargetFor(d types.ResolvedDrive, legacy bool) string {
+	if legacy {
+		return DriveTarget
+	}
+	slug := types.DriveSlug(d.Drive.Name)
+	if slug == "" {
+		return ""
+	}
+	if d.Drive.Backend.Kind() == types.DriveKindManaged {
+		return DrivesRoot + "/" + slug
+	}
+	return SharedRoot + "/" + slug
+}
+
+// ValidateDriveTarget is a substrate's own check on a drive's target: one of
+// the paths DriveTargetFor derives for that backend, and nothing else. A target
+// anywhere else would put a person's storage over another mount.
+func ValidateDriveTarget(target string, backend types.DriveBackend) error {
+	root := SharedRoot
+	if backend.Kind() == types.DriveKindManaged {
+		root = DrivesRoot
+	}
+	if target == DriveTarget {
+		return nil
+	}
+	if slug, ok := strings.CutPrefix(target, root+"/"); ok && slug != "" && types.DriveSlug(slug) == slug {
+		return nil
+	}
+	return fmt.Errorf("%q is not a drive path (%s, or one folder under %s)", target, DriveTarget, root)
+}
+
 // ScratchTmpPath, ScratchWorkPath and ScratchCachePath are where the
 // Kubernetes substrate mounts its three disk_mib-sized emptyDirs, the bytes
 // that substrate's `eviction` enforcement counts against a run's disk cap.
@@ -81,13 +127,19 @@ func ValidateAuthoredTarget(tgt string) error {
 		// the string — with backticks the wire bytes and the canon couldn't match.
 		return fmt.Errorf("target %s is reserved for the user drive", DriveTarget)
 	}
+	for _, root := range []string{DrivesRoot, SharedRoot} {
+		if tgt == root || strings.HasPrefix(tgt, root+"/") {
+			return fmt.Errorf("target %s is reserved for drives", root)
+		}
+	}
 	return nil
 }
 
 // targetReservedForDrive reports whether tgt IS the reserved drive target or
 // nests under it. UNDER it counts: a mount at /home/agent/drive/shared would
 // be bound inside a tree the drive owns, shadowing or shadowed by it
-// depending on mount order — an ambiguity a refusal is cheaper than.
+// depending on mount order — an ambiguity a refusal is cheaper than. The
+// drive roots above are reserved by the same rule.
 func targetReservedForDrive(tgt string) bool {
 	return tgt == DriveTarget || strings.HasPrefix(tgt, DriveTarget+"/")
 }

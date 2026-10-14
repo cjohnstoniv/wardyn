@@ -21,16 +21,27 @@
 //   - policies (/api/v1/policies):       CreatePolicy, GetPolicy, GetDefaultPolicy, ListPolicies,
 //     ListPoliciesPage, UpdatePolicy, DeletePolicy
 //   - workspaces (/api/v1/workspaces):   CreateWorkspace, GetWorkspace, ListWorkspaces,
-//     ListWorkspacesPage, UpdateWorkspace, DeleteWorkspace, ScanWorkspace, RecordWorkspaceTask
+//     ListWorkspacesPage, UpdateWorkspace, DeleteWorkspace, ScanWorkspace, RecordWorkspaceTask,
+//     GetWorkspaceBuild, BuildWorkspace
 //   - sources (/api/v1/sources):         ListSources, CreateSource, GetSource, ScanSource, DeleteSource
 //   - audit (/api/v1/audit):             AuditEvents, AuditEventsPage, RecentAuditEvents,
 //     ExportAuditPartition, AuditRetention, DropAuditPartition
 //   - secrets (/api/v1/secrets):         ListSecrets, ListSecretsPage, ListSecretsScoped,
-//     ListSecretsScopedPage, SetSecret, DeleteSecret
+//     ListSecretsScopedPage, SetSecret, DeleteSecret, ListMySecrets, ListMySecretsPage,
+//     SetMySecret, DeleteMySecret
+//   - shared-secrets (/api/v1/shared-secrets): ListSharedSecrets, ListSharedSecretsPage,
+//     SetSharedSecret, DeleteSharedSecret
 //   - site-config (/api/v1/site-config): GetSiteConfig, PutSiteConfig, PutSiteConfigResult
-//   - drives (/api/v1/drives):           GetDrives, ApplyDrives
+//   - model-providers (/api/v1/model-providers): GetModelProviders — the read only (admin); the PUT and the per-provider
+//     sign-in and credential doors are NOT wrapped
+//   - drives (/api/v1/drives):           GetDrives, ApplyDrives, ApplyDrivesResult, and people's own
+//     drives: ListMemberDrives, DeleteMemberDrive (/api/v1/drives/member, super admin) and the caller's
+//     CreateMyDrive, DeleteMyDrive (/api/v1/me/drives)
 //   - presets (/api/v1/presets):         ListPresets, GetPreset, PutPreset, DeletePreset, ApplyPresets
-//   - governance (/api/v1/governance):   GetGovernance, ApplyGovernance, ApplyGovernanceResult
+//   - templates (/api/v1/templates):     ListTemplates, GetTemplate, SaveTemplate, DeleteTemplate, CopyTemplate,
+//     ImportTemplate — and, on /api/v1/admin/template-group-admins, ListTemplateGroupAdmins, GrantTemplateGroupAdmin,
+//     RevokeTemplateGroupAdmin. The server answers 501 templates_unavailable until the template store lands
+//   - governance (/api/v1/governance):   GetGovernance, PlanGovernance, ApplyGovernance, ApplyGovernanceResult
 //   - governance changes (/api/v1/governance/changes): ListGovernanceChanges, GetGovernanceChange,
 //     ApproveGovernanceChange, RejectGovernanceChange
 //   - setup (/api/v1/setup):             SetupStatus, ConnectManagedSubscription, DisconnectManagedSubscription
@@ -39,8 +50,25 @@
 //     /api/v1/me is NOT wrapped: see below.
 //   - health (/healthz):                 Healthz
 //   - sessions (/api/v1/sessions):       RevokeSessions
+//   - runners (/api/v1/runners, /api/v1/me/runners): MintRunnerToken, RegisterRunner, ClaimRunner,
+//     ListRunners, ListRunnersPage, GetRunner, ListMyRunners, GetMyRunner, SetMyRunnerLimits, ListRunnerTokens,
+//     ListRunnerTokensPage, RevokeRunnerToken, GetRunnerSettings, SetRunnersEnabled
+//   - runner pools (/api/v1/runner-pools, /api/v1/runner-pool-defaults; /api/v1/me/runner-pools, /api/v1/me/runner-pool-defaults):
+//     ListRunnerPools, ListRunnerPoolsFor, GetRunnerPool, CreateRunnerPool, UpdateRunnerPool, DeleteRunnerPool, CreateMyRunnerPool, UpdateMyRunnerPool, DeleteMyRunnerPool, AddMyRunnerToPool,
+//     RemoveMyRunnerFromPool, GetOrgRunnerPoolDefaults, SetOrgRunnerPoolDefaults, GetMyRunnerPoolDefaults,
+//     SetMyRunnerPoolDefaults, ClearMyRunnerPoolDefaults, AddRunnerPoolRemoteRunner, RemoveRunnerPoolRemoteRunner,
+//     AddMyPoolRemoteRunner, RemoveMyPoolRemoteRunner, ListRunnerPoolMembers, GetRunnerPoolUsePolicy, SetRunnerPoolUsePolicy,
+//     ClearRunnerPoolUsePolicy
+//   - remote-hosted runners (/api/v1/remote-runners, /api/v1/me/remote-runners): ListRemoteRunners, GetRemoteRunner,
+//     UpdateRemoteRunner, SetRemoteRunnerPeoplePolicy, ClearRemoteRunnerPeoplePolicy, ListMyRemoteRunners
 //   - devices (/api/v1/admin/devices):   MintDeviceEnrolmentToken, ListDeviceEnrolmentTokens, RevokeDeviceEnrolmentToken, ListDevices, RevokeDevice
 //   - people (/api/v1/people):           ListPeople, and ErasePerson (a person's retained records, by scope, 0.8.6); the other writes below stay unwrapped
+//   - invitations (/api/v1/invitations, /api/v1/people/{principal}/invitations, /api/v1/me/invitations): CreateInvitation, ListInvitations,
+//     ListPersonInvitations, ListPersonInvitationsPage, ListMyInvitations, RevokeInvitation, ClaimInvitation (a signed-in session only)
+//   - service identities (/api/v1/service-identities, /api/v1/me/service-identities): CreateServiceIdentity, ListServiceIdentities,
+//     ListServiceIdentitiesPage, GetServiceIdentity, UpdateServiceIdentity, RetireServiceIdentity, ListMyServiceIdentities, and the
+//     sponsor's token routes MintServiceToken (a signed-in session only), ListServiceTokens, ListServiceTokensPage, RevokeServiceToken;
+//     with MoveToken (POST /api/v1/tokens/{id}/move)
 //   - components (/api/v1/components):   ListComponents, PutComponent, DeleteComponent (the organisation's, admin) — and, on
 //     /api/v1/me/components, the caller's own: MyComponents, SaveMyComponent, UpdateMyComponent, DeleteMyComponent
 //
@@ -56,9 +84,9 @@
 //     Security tier, and read by the console's Settings card rather than by tooling
 //   - /api/v1/permissions    — capability grants and per-kind enforcement (0.7)
 //   - /api/v1/access         — directory search and group->role mappings (0.7)
-//   - /api/v1/tokens         — admin-tier API tokens (0.7); /api/v1/me/tokens is the
+//   - /api/v1/tokens         — admin-tier API tokens (0.7), but for MoveToken (0.9); /api/v1/me/tokens is the
 //     self-service half, also unwrapped
-//   - /api/v1/people         — the writes: creating a person, erasing their stored credentials (0.8, offboarding)
+//   - /api/v1/people         — the writes: creating a person, erasing their stored credentials (0.8, offboarding); its invitations are wrapped above
 //   - /api/v1/scim           — the Settings SCIM card's read-only status (0.8.6); the SCIM server itself is /scim/v2
 //   - /api/v1/workspace-providers — the org's git-provider policy (allowed base
 //     URLs, credential lanes) and storage ceilings (0.7.2). Admin-only, and
@@ -66,7 +94,6 @@
 //   - /api/v1/agent-providers — the org's agent roster: which coding agents this
 //     deployment offers, each one's model-access lane, and whether that
 //     credential is shared or per-person (0.7.2). Admin-only, same page
-//   - /api/v1/model-providers — the org's model-provider records (0.8). Admin-only
 //   - /api/v1/integrations   — integration definitions (0.7)
 //   - /api/v1/base-images    — the base-image library (0.7)
 //   - /api/v1/admin          — operator maintenance (the sandbox sweep; devices is wrapped)
@@ -85,6 +112,8 @@
 //   - /api/v1/model-providers-entra — the per-row Azure Foundry sign-in door (0.8.6):
 //     a browser redirect dance whose callback is the /api/v1/scm one above.
 //     Unwrapped for the same reason.
+//   - /api/v1/components-entra — the Azure CLI component's sign-in door: the
+//     same redirect dance and the same callback. Unwrapped for the same reason.
 //   - the attach lane under /api/v1/runs/{id} — attach, attach/ticket,
 //     attach/holder, attach/takeover, resources. A WebSocket and its ticket.
 //   - /scim/v2/Users, /scim/v2/Users/{id}, /scim/v2/Groups, /scim/v2/Groups/{id} — the
@@ -217,69 +246,6 @@ type Client struct {
 // New returns a Client configured with baseURL and token.
 func New(baseURL, token string) *Client {
 	return &Client{BaseURL: baseURL, Token: token}
-}
-
-// GetRun fetches a single AgentRun by its UUID.
-// Returns 404/APIError when the run does not exist.
-func (c *Client) GetRun(ctx context.Context, id uuid.UUID) (types.AgentRun, error) {
-	var out types.AgentRun
-	err := c.do(ctx, http.MethodGet, "/api/v1/runs/"+id.String(), nil, &out)
-	return out, err
-}
-
-// ListRunsPage is ListRuns plus the server's X-Wardyn-Truncated signal:
-// truncated=true means a further page exists and this one is not the whole
-// list. See the package doc's "# Pagination" for why every list family answers
-// this and not just the audit trail.
-func (c *Client) ListRunsPage(ctx context.Context, opts ...ListOpts) (runs []types.AgentRun, truncated bool, err error) {
-	var hdr http.Header
-	err = c.do(ctx, http.MethodGet, appendListOpts("/api/v1/runs", opts), nil, &runs, &hdr)
-	return runs, hdr.Get("X-Wardyn-Truncated") == "true", err
-}
-
-// ListRuns returns runs in reverse creation order. Pass a ListOpts to page.
-// Prefer ListRunsPage, which also returns the server's truncation signal — this
-// form cannot tell "this is everything" from "this is page 1 of more".
-func (c *Client) ListRuns(ctx context.Context, opts ...ListOpts) ([]types.AgentRun, error) {
-	runs, _, err := c.ListRunsPage(ctx, opts...)
-	return runs, err
-}
-
-// ListGrantsPage is ListGrants plus the server's X-Wardyn-Truncated signal:
-// truncated=true means a further page exists and this one is not the whole
-// list. See the package doc's "# Pagination".
-// Returns 404/APIError when the run does not exist.
-func (c *Client) ListGrantsPage(ctx context.Context, runID uuid.UUID, opts ...ListOpts) (grants []types.CredentialGrant, truncated bool, err error) {
-	var hdr http.Header
-	err = c.do(ctx, http.MethodGet, appendListOpts("/api/v1/runs/"+runID.String()+"/grants", opts), nil, &grants, &hdr)
-	return grants, hdr.Get("X-Wardyn-Truncated") == "true", err
-}
-
-// ListGrants returns the credential-grant eligibility records for a run.
-// These are eligibility records (what the run MAY request), not issued
-// credentials — some may never be minted. Pass a ListOpts to page; prefer
-// ListGrantsPage, which also returns the server's truncation signal.
-// Returns 404/APIError when the run does not exist.
-func (c *Client) ListGrants(ctx context.Context, runID uuid.UUID, opts ...ListOpts) ([]types.CredentialGrant, error) {
-	grants, _, err := c.ListGrantsPage(ctx, runID, opts...)
-	return grants, err
-}
-
-// KillRunResponse is the body returned by POST /api/v1/runs/{id}/kill.
-type KillRunResponse struct {
-	ID    uuid.UUID      `json:"id"`
-	State types.RunState `json:"state"`
-}
-
-// KillRun initiates the kill sequence for a run: durable state transition
-// (compare-and-swap to KILLED) first, then sandbox teardown, identity
-// revocation, and credential revocation.
-// Returns 202/Accepted with the final state on success.
-// Returns 404/APIError when the run does not exist.
-func (c *Client) KillRun(ctx context.Context, id uuid.UUID) (KillRunResponse, error) {
-	var out KillRunResponse
-	err := c.do(ctx, http.MethodPost, "/api/v1/runs/"+id.String()+"/kill", nil, &out)
-	return out, err
 }
 
 // ListApprovals returns approval requests filtered by state and (optionally)
@@ -511,60 +477,65 @@ func (c *Client) DeleteSecret(ctx context.Context, name string) error {
 	return c.do(ctx, http.MethodDelete, path, nil, nil)
 }
 
-// ProfileResult is the decoded POST /api/v1/runs/{id}/profile/synthesize reply (Recording
-// Mode): the synthesized least-privilege sandbox profile plus the observations
-// it was built from. Only the fields callers render/save are modeled — the full
-// server response (profileResponse) additionally carries a per-item risk
-// breakdown the SDK does not surface.
-type ProfileResult struct {
-	Proposed struct {
-		InlinePolicy RunPolicySpec `json:"inline_policy"`
-	} `json:"proposed"`
-	OverallRisk  string `json:"overall_risk"`
-	Observations struct {
-		Domains []struct {
-			Host    string   `json:"host"`
-			Methods []string `json:"methods"`
-		} `json:"domains"`
-		Anomalies []string `json:"anomalies"`
-	} `json:"observations"`
-	Warnings []string `json:"warnings"`
+// ListMySecretsPage lists the names in the caller's OWN namespace, whatever their role (never
+// values; reserved platform keys excluded): GET /api/v1/me/secrets, which responds {"names":[...]}.
+// truncated=true means a further page exists. It needs a signed-in person (403
+// secret_personal_needs_person for the admin token).
+func (c *Client) ListMySecretsPage(ctx context.Context, opts ...ListOpts) (names []string, truncated bool, err error) {
+	return c.listNamespacePage(ctx, "/api/v1/me/secrets", opts)
 }
 
-// SynthesizeProfile runs Recording Mode synthesis for a run: from its already-
-// captured audit / egress / ground-truth events the server proposes a tightened,
-// reusable RunPolicy ("sandbox profile"). ADVISORY and READ-ONLY — it mints
-// nothing and persists no policy (save the proposal via CreatePolicy).
-// POST /api/v1/runs/{id}/profile/synthesize (renamed from /profile in 0.8 —
-// docs/sdk.md "Renamed in 0.8" — the old path still answers, as a chi alias,
-// for one minor). Returns 404 when the run does not exist.
-func (c *Client) SynthesizeProfile(ctx context.Context, runID uuid.UUID) (ProfileResult, error) {
-	var out ProfileResult
-	err := c.do(ctx, http.MethodPost, "/api/v1/runs/"+runID.String()+"/profile/synthesize", nil, &out)
-	return out, err
+// ListMySecrets is ListMySecretsPage without the truncation signal.
+func (c *Client) ListMySecrets(ctx context.Context, opts ...ListOpts) ([]string, error) {
+	names, _, err := c.ListMySecretsPage(ctx, opts...)
+	return names, err
 }
 
-// RecordTaskResult is the decoded POST /api/v1/workspaces/{id}/record reply: the
-// launched open-egress recording run plus the resolved session key/mode.
-type RecordTaskResult struct {
-	RecordRunID string   `json:"record_run_id"`
-	TaskKey     string   `json:"task_key"`
-	Mode        string   `json:"mode"`
-	Detail      string   `json:"detail"`
-	Warnings    []string `json:"warnings"`
+// ListSharedSecretsPage lists the names of the shared service secrets (never values; reserved
+// platform keys excluded): GET /api/v1/shared-secrets, which responds {"names":[...]}. Operator tier
+// only (403 otherwise). truncated=true means a further page exists.
+func (c *Client) ListSharedSecretsPage(ctx context.Context, opts ...ListOpts) (names []string, truncated bool, err error) {
+	return c.listNamespacePage(ctx, "/api/v1/shared-secrets", opts)
 }
 
-// RecordWorkspaceTask launches a named open (allow-all egress) recording session
-// for a workspace via the import pipeline — the operator attaches, does the real
-// activity, and stops the run to capture what it actually used.
-// POST /api/v1/workspaces/{id}/record with body {"task_key": name}. Returns 202
-// with the launched run; 503 when no runner is wired; 409 while another import
-// step is live.
-func (c *Client) RecordWorkspaceTask(ctx context.Context, wsID uuid.UUID, taskKey string) (RecordTaskResult, error) {
-	var out RecordTaskResult
-	err := c.do(ctx, http.MethodPost, "/api/v1/workspaces/"+wsID.String()+"/record",
-		map[string]string{"task_key": taskKey}, &out)
-	return out, err
+// ListSharedSecrets is ListSharedSecretsPage without the truncation signal.
+func (c *Client) ListSharedSecrets(ctx context.Context, opts ...ListOpts) ([]string, error) {
+	names, _, err := c.ListSharedSecretsPage(ctx, opts...)
+	return names, err
+}
+
+func (c *Client) listNamespacePage(ctx context.Context, path string, opts []ListOpts) (names []string, truncated bool, err error) {
+	var out struct {
+		Names []string `json:"names"`
+	}
+	var hdr http.Header
+	if err = c.do(ctx, http.MethodGet, appendListOpts(path, opts), nil, &out, &hdr); err != nil {
+		return nil, false, err
+	}
+	return out.Names, hdr.Get("X-Wardyn-Truncated") == "true", nil
+}
+
+// SetMySecret stores the caller's OWN secret, whatever their role: PUT /api/v1/me/secrets/{name}.
+// Unlike SetSecret, where an admin's write lands in the shared namespace, this never does. It needs a
+// signed-in person (403 secret_personal_needs_person for the admin token).
+func (c *Client) SetMySecret(ctx context.Context, name, value string) error {
+	return c.do(ctx, http.MethodPut, "/api/v1/me/secrets/"+url.PathEscape(name), map[string]string{"value": value}, nil)
+}
+
+// DeleteMySecret removes the caller's own secret. DELETE /api/v1/me/secrets/{name}.
+func (c *Client) DeleteMySecret(ctx context.Context, name string) error {
+	return c.do(ctx, http.MethodDelete, "/api/v1/me/secrets/"+url.PathEscape(name), nil, nil)
+}
+
+// SetSharedSecret stores a shared service secret in the operator namespace every person's run may
+// fall back to: PUT /api/v1/shared-secrets/{name}. Operator tier only (403 otherwise).
+func (c *Client) SetSharedSecret(ctx context.Context, name, value string) error {
+	return c.do(ctx, http.MethodPut, "/api/v1/shared-secrets/"+url.PathEscape(name), map[string]string{"value": value}, nil)
+}
+
+// DeleteSharedSecret removes a shared service secret. DELETE /api/v1/shared-secrets/{name}.
+func (c *Client) DeleteSharedSecret(ctx context.Context, name string) error {
+	return c.do(ctx, http.MethodDelete, "/api/v1/shared-secrets/"+url.PathEscape(name), nil, nil)
 }
 
 // maxErrBody caps an ERROR response body for diagnostic display so a hostile or
@@ -654,58 +625,6 @@ func (c *Client) streamClient() *http.Client {
 		cp.Transport = streamTransport
 	}
 	return &cp
-}
-
-// castKeySep separates the run id from a session suffix in a composite cast
-// key — a deliberate copy of internal/recording's unexported castSep, not an
-// import of it: pkg/client is docs/sdk.md's "one non-stdlib dependency"
-// (uuid), and internal/recording (chi, pgx) is a whole-module-graph import
-// for two lines of string-joining logic no external consumer should pay for.
-const castKeySep = "~"
-
-// castKey mirrors internal/recording.CastKey (see its own doc comment) — same
-// rule, kept in sync by hand, not imported (see castKeySep above).
-func castKey(runID, suffix string) string {
-	if suffix == "" {
-		return runID
-	}
-	return runID + castKeySep + suffix
-}
-
-// GetRecording streams a run's terminal recording as raw asciicast bytes (the
-// .cast a player consumes). The caller MUST Close the returned reader.
-// GET /api/v1/runs/{id}/recording/{key} — the id really does appear twice: the
-// route is mounted per-run and its handler takes the recording's own CAST KEY,
-// which defaults to the bare run id (a batch run's single recording) when
-// session is omitted — existing zero-arg callers are unaffected. An
-// INTERACTIVE run can carry multiple recordings, one per attach session, each
-// keyed "<runID>~<session>" (castKey above, mirroring internal/recording's own
-// doc comment); pass that session id as the optional session argument to fetch
-// one of those instead of the run's own bare-id cast. At most one value is
-// meaningful; variadic only to keep it optional without a second method name.
-// Returns 404/APIError when the run/session has no recording.
-func (c *Client) GetRecording(ctx context.Context, runID uuid.UUID, session ...string) (io.ReadCloser, error) {
-	suffix := ""
-	if len(session) > 0 {
-		suffix = session[0]
-	}
-	key := castKey(runID.String(), suffix)
-	path := "/api/v1/runs/" + runID.String() + "/recording/" + url.PathEscape(key)
-	req, err := c.newRequest(ctx, http.MethodGet, path, nil, false)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Accept", "application/x-asciicast")
-	resp, err := c.streamClient().Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("http: %w", err)
-	}
-	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		defer resp.Body.Close()
-		raw, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrBody))
-		return nil, NewAPIError(resp.StatusCode, raw)
-	}
-	return resp.Body, nil
 }
 
 // do executes one HTTP request against the control plane.

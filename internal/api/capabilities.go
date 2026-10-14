@@ -10,7 +10,6 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -101,12 +100,13 @@ const (
 	// (enforceRunModelProvider).
 	capModelProvider = "model_provider"
 	// capFeature NARROWS: it bounds whether a person may MINT a personal
-	// credential at all, or define a component of their own. Three values, a
-	// closed set (featureValues), plus `*`: featureSSHKey gates POST
+	// credential at all, or define a component of their own, or enter the runs of
+	// a service identity they sponsor. Four values, a closed set
+	// (featureValues), plus `*`: featureSSHKey gates POST
 	// /me/ssh-keys and featureAPIToken gates POST /me/tokens, one check at each
 	// mint door (the token door also keeps member mode's 409; the SSH door
 	// stores a capped key instead, #564); featureCustomComponent is
-	// componentAttachRefusal's.
+	// componentAttachRefusal's; featureServiceAttach is sponsorMayEnter's.
 	//
 	// Narrowing, on capAgent's rule: every signed-in person could already add a
 	// key and mint a token, so the unenforced default stays ALLOWED and an
@@ -167,9 +167,13 @@ const (
 	featureSSHKey          = "ssh_key"
 	featureAPIToken        = "api_token"
 	featureCustomComponent = "custom_component"
+	// featureServiceAttach: "may enter the runs of service identities I sponsor". The value is
+	// restricted by migration 0167, so it is off for everyone until a grant names it, a `*` allow
+	// included. Asked only by sponsorMayEnter, with the operator step off.
+	featureServiceAttach = "service_attach"
 )
 
-var featureValues = []string{featureSSHKey, featureAPIToken, featureCustomComponent}
+var featureValues = []string{featureSSHKey, featureAPIToken, featureCustomComponent, featureServiceAttach}
 
 // capabilityKinds is the closed set, in the order the admin surface shows them.
 var capabilityKinds = []string{capEgressHost, capSecret, capWorkspace, capImage, capAgent, capWorkspaceProvider, capModelProvider, capFeature, capPolicy, capComponent}
@@ -191,56 +195,17 @@ const capWildcard = "*"
 
 // resolution
 
-// canonicalUserSubject canonicalizes ONE human identity — an IdP `sub` or an
-// email claim — into the exact string a `user` subject row is matched by. It is
-// the user half of oidc.CanonicalGroupSubject, and it is used by BOTH sides of
-// the match: the caller's own subject list (capabilitySubjects, just below) and
-// every surface that writes a `user` subject (validateCapabilityGrant,
-// validateGovernanceAssignment, the governance preview's claim normalizer).
-// One function, so what a caller can BE is exactly what an admin can WRITE.
-//
-// The ASCII guard runs on the raw value, before the fold, and the order is the
-// security property — the same ordering CanonicalGroupSubject, ParseRoleMap and
-// deriveRole already use, for the same reason. strings.ToLower does UNICODE
-// case mapping: KELVIN SIGN U+212A folds to ASCII 'k' and U+0130 folds to ASCII
-// 'i'. Folding first therefore let a crafted email claim "Kim@Korp.com"
-// resolve to "kim@korp.com" — the exact string another human's capability
-// grants, governance assignment and drive allocation are written against, since
-// every one of those columns is matched by `subject = ANY($1::text[])` exact
-// equality. A plain ToLower is the whole rule only for an ASCII subject — not
-// for one that isn't.
-//
-// A NON-ASCII identity is kept VERBATIM rather than dropped, and that is where
-// this differs from the group rule — deliberately. A group subject is matched
-// against a STORED login-time snapshot that can only carry printable ASCII, so
-// a non-ASCII group name is a row nobody can ever match and the write boundary
-// refuses it. A user subject is the caller's OWN identity, recomputed per
-// request from claims the IdP chooses: dropping it would silently discard a
-// DENY written against a human whose directory hands out non-ASCII subjects,
-// and refusing it at the write boundary would make that human ungovernable.
-// Verbatim is safe in the only direction that matters — a string that is never
-// folded can only ever equal itself, so it inherits nobody's grants — and
-// because both sides call this function, a subject that can be written is
-// exactly a subject that can be matched.
-//
-// Trimmed on both arms: an untrimmed sub arm would let a claim with a trailing
-// space resolve to a subject no write boundary (which trims) could ever produce.
-func canonicalUserSubject(s string) string {
-	s = strings.TrimSpace(s)
-	if !oidc.ASCIIOnly(s) {
-		return s
-	}
-	return strings.ToLower(s)
-}
-
 // capabilitySubjects returns the grant subjects that describe the caller on
 // ctx: their user identities and their group snapshot.
 //
-// users carries BOTH the lowercased OIDC sub and the email, because an admin
-// writing a grant knows one or the other and should not have to guess which one
-// this IdP made authoritative. Matching either is a deliberate widening of who
-// a `user` row hits — and it is safe in the direction that matters, since a
-// DENY written against either identity also hits.
+// users carries BOTH the OIDC sub and the email, each through
+// types.CanonicalUserSubject — the same rule every `user`-subject write
+// boundary applies, so what a caller can BE is exactly what an admin can WRITE.
+// Both are offered because an admin writing a grant knows one or the other and
+// should not have to guess which one this IdP made authoritative. Matching
+// either is a deliberate widening of who a `user` row hits — and it is safe in
+// the direction that matters, since a DENY written against either identity also
+// hits.
 //
 // groups is nil for a pre-0.6 cookie (the snapshot predates the field) and
 // empty when the IdP sent nothing usable. stale reports that the group half is
@@ -258,10 +223,10 @@ func canonicalUserSubject(s string) string {
 // more is strictly safer. It is the rows that are MISSING that stale is for
 // (capScan's unresolvable-deny check).
 func capabilitySubjects(ctx context.Context) (users, groups []string, stale bool) {
-	if sub := canonicalUserSubject(oidcHumanFromContext(ctx)); sub != "" {
+	if sub := types.CanonicalUserSubject(oidcHumanFromContext(ctx)); sub != "" {
 		users = append(users, sub)
 	}
-	if email := canonicalUserSubject(oidcEmailFromContext(ctx)); email != "" && !slices.Contains(users, email) {
+	if email := types.CanonicalUserSubject(oidcEmailFromContext(ctx)); email != "" && !slices.Contains(users, email) {
 		users = append(users, email)
 	}
 	groups = oidcGroupsFromContext(ctx)
@@ -364,6 +329,18 @@ func (s *Server) capAllowed(ctx context.Context, kind, value string) (bool, erro
 		return false, fmt.Errorf("api: capability %q cannot be resolved: no store configured", kind)
 	}
 	return s.capSeamAllowed(ctx, kind, value)
+}
+
+// capAllowedAsMember is capAllowed with decide's operator step off: a super admin, the admin token and
+// local mode are bounded by the grants like a member. It exists for service_attach alone (F6: a super
+// admin sponsor needs the grant too), and answers a deployment with no Store as an error, never as allowed.
+func (s *Server) capAllowedAsMember(ctx context.Context, kind, value string) (bool, error) {
+	if s.cfg.Store == nil {
+		return false, fmt.Errorf("api: capability %q cannot be resolved: no store configured", kind)
+	}
+	b := s.newCapBatch(ctx)
+	b.operator = false
+	return b.allowed(ctx, kind, value)
 }
 
 // capGranted asks the WIDENING question of `kind`, whatever its row says: does

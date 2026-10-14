@@ -21,8 +21,9 @@ type runSizingSetter interface {
 }
 
 // runSizing maps the one runner.EffectiveResources result onto the stored record. Docker
-// has no reservation concept (a hard cap only), so its request is the limit it applied.
-func runSizing(kind string, res runner.Resources) store.RunSizing {
+// has no reservation concept (a hard cap only), so its request is the limit it applied. The proxy
+// envelope is the one the drivers apply, so an Azure-gated run records runner.AzureProxyMemoryMiB.
+func runSizing(kind string, res runner.Resources, azure bool) store.RunSizing {
 	sz := runner.EffectiveResources(res)
 	z := store.RunSizing{
 		RunnerKind:            kind,
@@ -30,10 +31,11 @@ func runSizing(kind string, res runner.Resources) store.RunSizing {
 		AgentCPULimitMillis:   sz.AgentCPULimitMillis,
 		AgentMemoryRequestMiB: sz.AgentMemoryRequestMiB,
 		AgentMemoryLimitMiB:   sz.AgentMemoryLimitMiB,
-		ProxyMemoryMiB:        sz.ProxyMemoryMiB,
 	}
-	if sz.ProxyCPUMillis > 0 {
-		z.ProxyCPUMillis = &sz.ProxyCPUMillis
+	proxyCPU, proxyMem := runner.ProxyLimitsFor(azure)
+	z.ProxyMemoryMiB = proxyMem
+	if proxyCPU > 0 {
+		z.ProxyCPUMillis = &proxyCPU
 	}
 	if kind != "k8s" {
 		z.AgentCPURequestMillis, z.AgentMemoryRequestMiB = z.AgentCPULimitMillis, z.AgentMemoryLimitMiB
@@ -41,16 +43,26 @@ func runSizing(kind string, res runner.Resources) store.RunSizing {
 	return z
 }
 
-// recordRunSizing writes the dispatch-time sizing record. A failure is logged and leaves the
+// runOnDeployment reports whether run's bound placement is one of this deployment's own substrates, the
+// only runs whose dispatch-time sizing is the deployment's to record. A run bound to a registered runner,
+// or to an executor this deployment does not run, is not, and a run no pool placed is.
+func (s *Server) runOnDeployment(run types.AgentRun) bool {
+	if run.RunnerID != nil || run.Placement == types.PlacementLocal {
+		return false
+	}
+	return run.RunnerPoolExecutor == "" || s.remoteRunnerConfigured(run.RunnerPoolExecutor)
+}
+
+// recordRunSizing writes the dispatch-time sizing record of a run on this deployment (runOnDeployment). A failure is logged and leaves the
 // row NULL; it never blocks dispatch.
-func (s *Server) recordRunSizing(ctx context.Context, runID uuid.UUID, res runner.Resources) {
+func (s *Server) recordRunSizing(ctx context.Context, run types.AgentRun, res runner.Resources, azure bool) {
 	setter, ok := s.cfg.Store.(runSizingSetter)
-	if !ok {
+	if !ok || !s.runOnDeployment(run) {
 		return
 	}
-	if err := setter.SetRunSizing(ctx, runID, runSizing(s.cfg.RunnerTarget, res)); err != nil {
+	if err := setter.SetRunSizing(ctx, run.ID, runSizing(s.cfg.RunnerTarget, res, azure)); err != nil {
 		slog.WarnContext(ctx, "wardynd: persist run sizing failed",
-			slog.String("run_id", runID.String()), slog.Any("err", err))
+			slog.String("run_id", run.ID.String()), slog.Any("err", err))
 	}
 }
 

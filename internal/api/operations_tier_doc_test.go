@@ -5,20 +5,33 @@ package api
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 )
 
-// operationsDoc is the operator manual's text, normalized for prose assertions:
-// markdown hard-wraps sentences, so a claim that reads as one line to a human is
-// two or three lines to strings.Contains.
+// operationsDoc is the operator manual's admin-only tier table, normalized for
+// prose assertions: markdown hard-wraps sentences, so a claim that reads as one
+// line to a human is two or three lines to strings.Contains. Since #1519 that
+// table lives on docs/operations/admin-only-writes.md.
 func operationsDoc(t *testing.T) string {
 	t.Helper()
-	b, err := os.ReadFile("../../docs/OPERATIONS.md")
+	b, err := os.ReadFile("../../docs/operations/admin-only-writes.md")
 	if err != nil {
-		t.Fatalf("read docs/OPERATIONS.md: %v", err)
+		t.Fatalf("read docs/operations/admin-only-writes.md: %v", err)
+	}
+	return string(b)
+}
+
+// roleDerivationDoc reads the page that carries how a session derives its role,
+// which since the multi-user split is the access page rather than the tier table.
+func roleDerivationDoc(t *testing.T) string {
+	t.Helper()
+	b, err := os.ReadFile("../../docs/operations/who-gets-in.md")
+	if err != nil {
+		t.Fatalf("read docs/operations/who-gets-in.md: %v", err)
 	}
 	return string(b)
 }
@@ -32,13 +45,34 @@ var docTierGate = map[routeClass]string{
 	classSecurity: "⛔ admin or `security_admin`",
 }
 
-// docTierRow pairs a route the OPERATIONS.md tier table names with the exact
+// docTierRow pairs a route the tier table names with the exact
 // text it is named by. The route key is looked up in routeMatrix — the
 // authoritative classification the chi.Walk test enforces against the live
 // router — so a route that MOVES between operatorOnly and securityOps fails
 // here until the table moves with it.
 var docTierRows = []struct{ route, token string }{
 	// operatorOnly (SUPER)
+	{"POST /api/v1/runners/tokens", "`POST /runners/tokens`"},
+	// Runners management (0.9): the switch write is SUPER, the reads and the token revoke the security tier's.
+	{"PUT /api/v1/runners/settings", "`PUT /runners/settings`"},
+	// Runner pools (0.9): the writes are SUPER, the use policy is the security tier's.
+	{"POST /api/v1/runner-pools", "the `/runner-pools` writes"},
+	{"PUT /api/v1/runner-pools/{id}", "the `/runner-pools` writes"},
+	{"DELETE /api/v1/runner-pools/{id}", "the `/runner-pools` writes"},
+	{"PUT /api/v1/runner-pools/{id}/remote-runners/{rid}", "the `/runner-pools` writes"},
+	{"DELETE /api/v1/runner-pools/{id}/remote-runners/{rid}", "the `/runner-pools` writes"},
+	{"PUT /api/v1/remote-runners/{rid}", "the `/runner-pools` writes"},
+	{"PUT /api/v1/runner-pool-defaults", "the `/runner-pools` writes"},
+	{"GET /api/v1/runner-pools/{id}/use-policy", "the `/runner-pools/{id}/use-policy` routes"},
+	{"PUT /api/v1/runner-pools/{id}/use-policy", "the `/runner-pools/{id}/use-policy` routes"},
+	{"DELETE /api/v1/runner-pools/{id}/use-policy", "the `/runner-pools/{id}/use-policy` routes"},
+	// Run templates (0.9): the group-admin grant is SUPER; the /templates routes are member routes.
+	{"GET /api/v1/admin/template-group-admins", "the `/admin/template-group-admins` routes"},
+	{"PUT /api/v1/admin/template-group-admins", "the `/admin/template-group-admins` routes"},
+	{"DELETE /api/v1/admin/template-group-admins", "the `/admin/template-group-admins` routes"},
+	{"GET /api/v1/shared-secrets", "the `/shared-secrets` routes"},
+	{"PUT /api/v1/shared-secrets/{name}", "the `/shared-secrets` routes"},
+	{"DELETE /api/v1/shared-secrets/{name}", "the `/shared-secrets` routes"},
 	{"PUT /api/v1/site-config", "`PUT /site-config`"},
 	// R1's four operator-topology reads: re-tiered to admin this wave and
 	// filed as docTierUndocumented until the docs pass landed the row naming
@@ -186,6 +220,7 @@ var docTierRows = []struct{ route, token string }{
 	{"POST /api/v1/admin/sandboxes/sweep", "`POST /admin/sandboxes/sweep`"},
 	{"GET /api/v1/admin/runs/proxy-window", "`GET /admin/runs/proxy-window` and `POST /admin/runs/restart`"},
 	{"POST /api/v1/admin/runs/restart", "`GET /admin/runs/proxy-window` and `POST /admin/runs/restart`"},
+	{"POST /api/v1/admin/identities/{id}/unbind", "`POST /admin/identities/{id}/unbind`"},
 	{"POST /api/v1/setup/onboarding-complete", "`POST /setup/onboarding-complete`"},
 	{"GET /api/v1/runs/{id}/attach", "`GET /runs/{id}/attach`"},
 	// Hybrid enrolment (0.8): the mint is SUPER, the inventory and revoke are
@@ -195,6 +230,16 @@ var docTierRows = []struct{ route, token string }{
 	{"DELETE /api/v1/admin/devices/{id}", "`GET /admin/devices` and `DELETE /admin/devices/{id}`"},
 	{"GET /api/v1/admin/devices/enrolment-tokens", "`GET /admin/devices/enrolment-tokens` and `DELETE /admin/devices/enrolment-tokens/{id}`"},
 	{"DELETE /api/v1/admin/devices/enrolment-tokens/{id}", "`GET /admin/devices/enrolment-tokens` and `DELETE /admin/devices/enrolment-tokens/{id}`"},
+	{"DELETE /api/v1/runners/{id}", "`DELETE /runners/{id}`"},
+	{"GET /api/v1/runners", "`GET /runners` and `GET /runners/{id}`"},
+	{"GET /api/v1/runners/{id}", "`GET /runners` and `GET /runners/{id}`"},
+	{"GET /api/v1/runners/tokens", "`GET /runners/tokens` and `DELETE /runners/tokens/{id}`"},
+	{"DELETE /api/v1/runners/tokens/{id}", "`GET /runners/tokens` and `DELETE /runners/tokens/{id}`"},
+	{"GET /api/v1/runners/settings", "`GET /runners/settings`"},
+	{"GET /api/v1/remote-runners", "the `/remote-runners` reads and people policy"},
+	{"GET /api/v1/remote-runners/{rid}", "the `/remote-runners` reads and people policy"},
+	{"PUT /api/v1/remote-runners/{rid}/people-policy", "the `/remote-runners` reads and people policy"},
+	{"DELETE /api/v1/remote-runners/{rid}/people-policy", "the `/remote-runners` reads and people policy"},
 	// #1142's portal registry.
 	{"POST /api/v1/admin/delegates", "`POST /admin/delegates`"},
 	{"GET /api/v1/admin/delegates", "`GET /admin/delegates` and `DELETE /admin/delegates/{id}`"},
@@ -203,6 +248,20 @@ var docTierRows = []struct{ route, token string }{
 	{"POST /api/v1/people/{principal}/erasure", "`POST /people/{principal}/erasure`"},
 	{"GET /api/v1/scim/status", "`GET /scim/status`"},
 	{"GET /api/v1/model-providers/credentials", "`GET /model-providers/credentials`"},
+	// 0.9 #1508: the invitation, service-identity and token-move routes, one row each.
+	{"POST /api/v1/people/{principal}/invitations", "`POST /people/{principal}/invitations`"},
+	{"GET /api/v1/people/{principal}/invitations", "`GET /people/{principal}/invitations`"},
+	{"GET /api/v1/invitations", "`GET /invitations`"},
+	{"DELETE /api/v1/invitations/{id}", "`DELETE /invitations/{id}`"},
+	{"POST /api/v1/service-identities", "`POST /service-identities`"},
+	{"GET /api/v1/service-identities", "`GET /service-identities`"},
+	{"GET /api/v1/service-identities/{name}", "`DELETE /service-identities/{name}`"},
+	{"PATCH /api/v1/service-identities/{name}", "`DELETE /service-identities/{name}`"},
+	{"DELETE /api/v1/service-identities/{name}", "`DELETE /service-identities/{name}`"},
+	{"POST /api/v1/tokens/{id}/move", "`POST /tokens/{id}/move`"},
+	// Member drives (0.9): the admin list and delete of the drives people create are SUPER.
+	{"GET /api/v1/drives/member", "the `/drives/member` routes"},
+	{"DELETE /api/v1/drives/member/{id}", "the `/drives/member` routes"},
 }
 
 // docTierUndocumented names the gated routes the tier table does not cover, each
@@ -210,14 +269,20 @@ var docTierRows = []struct{ route, token string }{
 // a route here is admitted debt, and a NEW gated route that lands in neither
 // list fails the completeness check below rather than going unnoticed.
 //
-// The map is empty: every gated route the completeness check has surfaced is
-// rowed in docs/OPERATIONS.md and listed in docTierRows above. It stays
-// declared, empty, as the ratchet's landing spot for the next gap a
-// completeness failure surfaces.
-var docTierUndocumented = map[string]string{}
+// Every other gated route the completeness check has surfaced is rowed in
+// docs/OPERATIONS.md and listed in docTierRows above. What stays here is
+// admitted debt: today the two egress-baseline routes, pending their
+// OPERATIONS.md row.
+var docTierUndocumented = map[string]string{
+	"GET /api/v1/governance/egress-baseline": "0.9 B-P1: the tier-table row and the Egress baseline section are the docs pass's (the OPERATIONS.md prose budget is its to move)",
+	"PUT /api/v1/governance/egress-baseline": "0.9 B-P1: as the GET above",
+	// 0.9 H12 (#1964): the credential delivery policy's tier row is the docs pass's.
+	"GET /api/v1/governance/credential-delivery": "0.9 H12: the tier-table row is the docs pass's (the OPERATIONS.md prose budget is its to move)",
+	"PUT /api/v1/governance/credential-delivery": "0.9 H12: as the GET above",
+}
 
-// TestOperationsTierTableMatchesRouteMatrix pins docs/OPERATIONS.md's "What
-// admin-only still means" table — the section the doc's own intro sends a
+// TestOperationsTierTableMatchesRouteMatrix pins the "What admin-only still
+// means" table — the section the doc's own intro sends a
 // reader to for "who can change what" — to the router's real classification.
 //
 // Through 0.6 every gated route was operatorOnly and the table could say "admin
@@ -233,7 +298,7 @@ func TestOperationsTierTableMatchesRouteMatrix(t *testing.T) {
 	for _, dr := range docTierRows {
 		rc, ok := routeMatrix[dr.route]
 		if !ok {
-			t.Errorf("OPERATIONS.md's tier table names %q, which the route matrix does not classify", dr.route)
+			t.Errorf("the tier table names %q, which the route matrix does not classify", dr.route)
 			continue
 		}
 		want, ok := docTierGate[rc.class]
@@ -256,7 +321,7 @@ func TestOperationsTierTableMatchesRouteMatrix(t *testing.T) {
 		// are not prefixes of each other, so this still fails on a wrong tier —
 		// it only tolerates the document's habit of explaining itself in place.
 		if !strings.HasPrefix(got[0], want) {
-			t.Errorf("%s is %s in the router, but OPERATIONS.md's tier table gates %s as %q, want it to lead with %q",
+			t.Errorf("%s is %s in the router, but the tier table gates %s as %q, want it to lead with %q",
 				dr.route, rc.class, dr.token, got[0], want)
 		}
 	}
@@ -278,7 +343,7 @@ func TestOperationsTierTableMatchesRouteMatrix(t *testing.T) {
 		if covered[route] || docTierUndocumented[route] != "" {
 			continue
 		}
-		t.Errorf("%s is gated (%s) and the OPERATIONS.md tier table does not cover it. An operator reads that "+
+		t.Errorf("%s is gated (%s) and the tier table does not cover it. An operator reads that "+
 			"table to decide what to delegate, so a gated surface missing from it is a delegation boundary "+
 			"nobody can see. Name it in docTierRows with the token that covers it, or add it to "+
 			"docTierUndocumented with the reason and file the row for the docs pass", route, rc.class)
@@ -301,12 +366,12 @@ func TestOperationsTierTableMatchesRouteMatrix(t *testing.T) {
 type tierRow struct{ surface, gate string }
 
 // tierTableRows returns the body rows of the "What admin-only still means"
-// markdown table.
+// markdown table on docs/operations/admin-only-writes.md.
 func tierTableRows(t *testing.T, doc string) []tierRow {
 	t.Helper()
 	i := strings.Index(doc, "**What admin-only still means**")
 	if i < 0 {
-		t.Fatal(`docs/OPERATIONS.md has no "What admin-only still means" section`)
+		t.Fatal(`docs/operations/admin-only-writes.md has no "What admin-only still means" section`)
 	}
 	var rows []tierRow
 	started := false
@@ -342,7 +407,7 @@ func tierTableRows(t *testing.T, doc string) []tierRow {
 // stayed literally true-sounding after the third role landed, which is why no
 // test caught them.
 func TestOperationsDocDescribesThreeRoleAuthz(t *testing.T) {
-	doc := unwrapped(operationsDoc(t))
+	doc := unwrapped(roleDerivationDoc(t))
 
 	// deriveRole can return three roles, so the manual cannot describe two.
 	for _, role := range []string{oidc.RoleAdmin, oidc.RoleSecurityAdmin, oidc.RoleUser} {
@@ -350,26 +415,36 @@ func TestOperationsDocDescribesThreeRoleAuthz(t *testing.T) {
 			t.Fatalf("%q is no longer a role — revisit this guard, not the doc", role)
 		}
 		if !strings.Contains(doc, role) {
-			t.Errorf("OPERATIONS.md never names the derivable role %q", role)
+			t.Errorf("docs/operations/who-gets-in.md never names the derivable role %q", role)
 		}
 	}
-	for _, stale := range []struct{ claim, why string }{
-		{"a real two-role model",
-			"deriveRole derives three roles (oidc.ValidRole)"},
-		{"**Any match resolving to `admin` wins** over one resolving to `member`",
-			"the fold is roleRank's three ranks: user < security_admin < admin"},
-		{"both already `operatorOnly`",
-			"approved-egress and denied-egress are registered on securityOps (routes.go)"},
-		{"(all `operatorOnly` except the last)",
-			"the four /permissions routes are mounted on securityOps (mountPermissionRoutes)"},
-	} {
-		if strings.Contains(doc, unwrapped(stale.claim)) {
-			t.Errorf("OPERATIONS.md still claims %q — %s", stale.claim, stale.why)
+	pages, err := filepath.Glob("../../docs/operations/*.md")
+	if err != nil || len(pages) == 0 {
+		t.Fatalf("find operations task pages: %v", err)
+	}
+	for _, page := range append(pages, "../../docs/OPERATIONS.md") {
+		body, err := os.ReadFile(page)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, stale := range []struct{ claim, why string }{
+			{"a real two-role model",
+				"deriveRole derives three roles (oidc.ValidRole)"},
+			{"**Any match resolving to `admin` wins** over one resolving to `member`",
+				"the fold is roleRank's three ranks: user < security_admin < admin"},
+			{"both already `operatorOnly`",
+				"approved-egress and denied-egress are registered on securityOps (routes.go)"},
+			{"(all `operatorOnly` except the last)",
+				"the four /permissions routes are mounted on securityOps (mountPermissionRoutes)"},
+		} {
+			if strings.Contains(unwrapped(string(body)), unwrapped(stale.claim)) {
+				t.Errorf("%s still claims %q — %s", page, stale.claim, stale.why)
+			}
 		}
 	}
 	// And it must say what the fold actually is, not merely stop being wrong.
 	if !strings.Contains(doc, "`user` < `security_admin` < `admin`") {
-		t.Error(`OPERATIONS.md's "Deriving the role" never states roleRank's order (user < security_admin < admin)`)
+		t.Error(`docs/operations/who-gets-in.md's "Deriving the role" never states roleRank's order (user < security_admin < admin)`)
 	}
 }
 

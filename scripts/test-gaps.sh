@@ -294,13 +294,15 @@ n_pt="$(printf '%s\n' "$ROWS"   | grep -c '^PASSTHROUGH' || true)"
 n_ut="$(printf '%s\n' "$ROWS"   | grep -c '^UNTESTED' || true)"
 n_gap=$((n_pg + n_dk + n_k8 + n_pt + n_ut))
 
-# Render one "- **pkg** (N): a, b, c" line per package for a category.
+# Render one "- **pkg**: `a`, `b`, `c`" line per package for a category. Each func is
+# a code span: these are Go identifiers, not prose, and the docs word guards skip
+# code spans (internal/runnerpool/words_guard_repo_test.go).
 render_cat() {
   local cat="$1"
   printf '%s\n' "$ROWS" | awk -F'\t' -v c="$cat" '$1==c {print $2"\t"$3}' \
     | LC_ALL=C sort | awk -F'\t' '
-      { if ($1!=p) { if(p!="") printf "\n"; printf "- **%s**: %s", $1, $2; p=$1; next }
-        printf ", %s", $2 }
+      { if ($1!=p) { if(p!="") printf "\n"; printf "- **%s**: `%s`", $1, $2; p=$1; next }
+        printf ", `%s`", $2 }
       END { if(p!="") printf "\n" }'
 }
 

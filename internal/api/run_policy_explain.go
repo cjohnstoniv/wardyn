@@ -14,6 +14,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/hostrules"
 	"github.com/cjohnstoniv/wardyn/internal/types"
+	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
 
 // The closed set of runPolicyChange.Cause values, in the order the changes are
@@ -22,19 +23,22 @@ import (
 const (
 	causeWorkspace     = "workspace"
 	causeSourceControl = "source_control"
+	causeComponent     = "component"
 	causeMirror        = "mirror"
 	causeModelAccess   = "model_access"
 	causeGitBroker     = "git_broker"
+	causeOverlay       = "overlay"
 	causeProfile       = "profile"
 	causeOrgDisk       = "org_disk"
+	causePoolDisk      = "pool_disk" // DRAFT (M2 canon pending): the console heading is policy-tab-copy.ts pool_disk
 	causeRestart       = "restart"
 	causeLimits        = "limits"
 	causeLaunch        = "launch"
 )
 
 var causeOrder = []string{
-	causeWorkspace, causeSourceControl, causeMirror, causeModelAccess, causeGitBroker,
-	causeProfile, causeOrgDisk, causeRestart, causeLimits, causeLaunch,
+	causeWorkspace, causeSourceControl, causeComponent, causeMirror, causeModelAccess, causeGitBroker,
+	causeOverlay, causeProfile, causeOrgDisk, causePoolDisk, causeRestart, causeLimits, causeLaunch,
 }
 
 // The RunPolicySpec fields a change can name, as their JSON names. The list
@@ -81,16 +85,19 @@ var (
 // its policy. Every set holds entries exactly as they were written into the
 // spec, so membership is an exact match.
 type auditEvidence struct {
-	workspace, sourceControl, mirror, model, confine, profileDenied map[string]bool
-	mirrorHosts                                                     map[string]bool // bare hosts of successful mirror rows
-	profile                                                         string
-	profileMaxDisk                                                  int
-	restart                                                         map[string]time.Time
-	restartHosts                                                    []string // restart denies in the order they were added
-	clamp                                                           []string
-	bounded                                                         bool // the member bound applied (policy_source.bounded)
-	diskFilled                                                      bool // disk_mib_filled: the size came from the org default
-	legacyGitBroker                                                 bool // no confine row exists and the run holds a github grant
+	workspace, sourceControl, component, mirror, model, confine, profileDenied map[string]bool
+	mirrorHosts                                                                map[string]bool // bare hosts of successful mirror rows
+	profile                                                                    string
+	profileMaxDisk                                                             int
+	restart                                                                    map[string]time.Time
+	restartHosts                                                               []string // restart denies in the order they were added
+	clamp                                                                      []string
+	bounded                                                                    bool                  // the member bound applied (policy_source.bounded)
+	overlay                                                                    []string              // the keys a policy_overlay laid onto the default (policy_source.overlay)
+	diskFilled                                                                 bool                  // disk_mib_filled: no policy wrote the size (soft)
+	diskBasis                                                                  client.MainDriveBasis // disk_mib_basis; empty on a run that predates it
+	diskDefaultSource                                                          types.LimitSource     // disk_mib_default_source, with basis default
+	legacyGitBroker                                                            bool                  // no confine row exists and the run holds a github grant
 }
 
 // explainRunPolicy attributes each difference between the policy a run started
@@ -160,6 +167,11 @@ func explainRunPolicy(base *types.RunPolicySpec, resolved types.RunPolicySpec, e
 			break
 		}
 	}
+	for i := range out {
+		if out[i].Field == fieldDisk {
+			out[i].Detail = append(out[i].Detail, diskBasisSentence(ev.diskBasis, ev.diskDefaultSource)...)
+		}
+	}
 	return out
 }
 
@@ -186,7 +198,7 @@ func (x *explainer) evidenceBase(resolved types.RunPolicySpec) types.RunPolicySp
 		switch field {
 		case fieldAllowed:
 			ev := x.ev
-			return ev.workspace[entry] || ev.sourceControl[entry] || ev.mirror[entry] || x.mirrorTo[entry] || ev.model[entry]
+			return ev.workspace[entry] || ev.sourceControl[entry] || ev.component[entry] || ev.mirror[entry] || x.mirrorTo[entry] || ev.model[entry]
 		default:
 			_, restart := x.ev.restart[entry]
 			return x.ev.confine[entry] || x.ev.profileDenied[entry] || restart || x.legacyGit(entry)
@@ -194,7 +206,7 @@ func (x *explainer) evidenceBase(resolved types.RunPolicySpec) types.RunPolicySp
 	}
 	b.AllowedDomains = slices.DeleteFunc(b.AllowedDomains, func(e string) bool { return claimed(fieldAllowed, e) })
 	b.DeniedDomains = slices.DeleteFunc(b.DeniedDomains, func(e string) bool { return claimed(fieldDenied, e) })
-	if b.Resources != nil && (x.ev.diskFilled || x.profileClampedDisk()) {
+	if b.Resources != nil && (x.diskOutsidePolicy() || x.profileClampedDisk()) {
 		r := *b.Resources
 		r.DiskMiB = 0
 		b.Resources = &r
@@ -206,6 +218,18 @@ func (x *explainer) evidenceBase(resolved types.RunPolicySpec) types.RunPolicySp
 // github grant (confineGitBrokerEgress is a no-op without one).
 func (x *explainer) legacyGit(entry string) bool {
 	return x.ev.legacyGitBroker && (gitBrokerManaged(entry) || slices.Contains(gitBrokerSSHHosts(), egressEntryHost(entry)))
+}
+
+// diskOutsidePolicy: the size is not one the run's policy wrote. A run recorded with a basis says
+// so; an older one has only the bit that its size was filled in from the org default.
+func (x *explainer) diskOutsidePolicy() bool {
+	switch x.ev.diskBasis {
+	case client.MainDriveBasisRequest, client.MainDriveBasisDefault:
+		return true
+	case "":
+		return x.ev.diskFilled
+	}
+	return false
 }
 
 func (x *explainer) profileClampedDisk() bool {
@@ -256,6 +280,8 @@ func (x *explainer) evidenceCause(field, entry string, added bool) (cause, profi
 		return causeWorkspace, "", nil, true
 	case allowAdded && ev.sourceControl[entry]:
 		return causeSourceControl, "", nil, true
+	case allowAdded && ev.component[entry]:
+		return causeComponent, "", nil, true
 	case x.mirrored(field, entry, added):
 		return causeMirror, "", nil, true
 	case allowAdded && ev.model[entry]:
@@ -264,7 +290,10 @@ func (x *explainer) evidenceCause(field, entry string, added bool) (cause, profi
 		return causeGitBroker, "", nil, true
 	case denyAdded && ev.profileDenied[entry], field == fieldDisk && x.profileClampedDisk():
 		return causeProfile, ev.profile, nil, true
-	case field == fieldDisk && ev.diskFilled:
+	case field == fieldDisk && x.diskOutsidePolicy() && ev.diskBasis != client.MainDriveBasisRequest:
+		if ev.diskDefaultSource == types.LimitSourcePool {
+			return causePoolDisk, "", nil, true
+		}
 		return causeOrgDisk, "", nil, true
 	case denyAdded && !ev.restart[entry].IsZero():
 		t := ev.restart[entry]
@@ -280,12 +309,22 @@ func (x *explainer) derivedCause(field, entry string, added bool) string {
 		return causeModelAccess
 	case allowAdded && x.adoEntries[entry]:
 		return causeSourceControl
+	case x.overlaid(field):
+		return causeOverlay
 	case x.ev.bounded && limitsFields[field] && (scalarFields[field] || !added || field == fieldDenied):
 		return causeLimits
 	case (denyAdded || field == fieldAllowed && !added) && x.legacyGit(entry):
 		return causeGitBroker
 	}
 	return causeLaunch
+}
+
+// overlaid reports whether the run's policy_overlay named the key field belongs
+// to: the overlay replaced the default's value there, so a difference in it is
+// the person's, its clamp included (the clamp only takes back what they named).
+func (x *explainer) overlaid(field string) bool {
+	key, _, _ := strings.Cut(field, ".")
+	return slices.Contains(x.ev.overlay, key)
 }
 
 // redirectEntry is the allowlist entry substituteArtifactEgress writes for a
@@ -418,4 +457,22 @@ func setDiff(a, b []string) []string {
 		}
 	}
 	return out
+}
+
+// diskBasisSentence says where a recorded main-drive size came from, for the sources whose group
+// heading does not already say it. It names "the run's policy", never an admin: an inline or
+// overlay policy can be written by the person who launched the run.
+func diskBasisSentence(b client.MainDriveBasis, src types.LimitSource) []string {
+	switch b {
+	case client.MainDriveBasisRequest:
+		return []string{"The disk size is from your request."}
+	case client.MainDriveBasisPolicy:
+		return []string{"The disk size is set by the run's policy."}
+	case client.MainDriveBasisDefault:
+		if src == types.LimitSourcePool {
+			return []string{"The disk size is the default of the pool this run started in."}
+		}
+		return []string{"The disk size is this server's default."}
+	}
+	return nil
 }

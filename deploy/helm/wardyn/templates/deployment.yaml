@@ -382,6 +382,7 @@ spec:
             {{- end }}
             {{- end }}
             {{- $azkek := ($.Values.kek | default dict).azurekv | default dict }}
+            {{- $awskek := ($.Values.kek | default dict).awskms | default dict }}
             {{- if ($.Values.kek | default dict).required }}
             - name: WARDYN_KEK_REQUIRED
               value: "true"
@@ -433,6 +434,16 @@ spec:
               value: {{ $azkek.keyPlatform | quote }}
             - name: WARDYN_AZURE_KEK_SIGNING_KEY_PLATFORM
               value: {{ $azkek.signingKeyPlatform | quote }}
+            {{- end }}
+            {{- if eq .provider "awskms" }}
+            # Data keys wrapped by AWS KMS (docs/operations/secrets-and-keys.md "Key
+            # service: AWS KMS").
+            - name: WARDYN_KEK
+              value: "awskms"
+            {{- end }}
+            {{- if $awskek.key }}
+            - name: WARDYN_AWS_KMS_KEY
+              value: {{ $awskek.key | quote }}
             {{- end }}
             {{- end }}
             {{- if and .azure .azure.vaultUrl }}
@@ -591,6 +602,15 @@ spec:
             {{- if and (gt (int .Values.maxConcurrentRuns) 0) (not (hasKey .Values.env "WARDYN_MAX_CONCURRENT_RUNS")) }}
             - name: WARDYN_MAX_CONCURRENT_RUNS
               value: {{ .Values.maxConcurrentRuns | int | quote }}
+            {{- end }}
+            {{- /* $eff holds env and extraEnv names alike, so either one naming
+            GOMEMLIMIT replaces this default instead of sitting beside it. */ -}}
+            {{- if and .Values.goMemLimit (not (hasKey $eff "GOMEMLIMIT")) }}
+            {{- if not (regexMatch "^[0-9]+(B|KiB|MiB|GiB|TiB)$" (toString .Values.goMemLimit)) }}
+            {{- fail (printf "wardyn: goMemLimit must be a quoted string with a unit, e.g. \"400MiB\" (got %q). A bare number renders in a form the Go runtime refuses at start." (toString .Values.goMemLimit)) }}
+            {{- end }}
+            - name: GOMEMLIMIT
+              value: {{ .Values.goMemLimit | quote }}
             {{- end }}
             {{- with .Values.extraEnv }}
             # Raw EnvVar entries, so secret-bearing WARDYN_* (OIDC client secret,

@@ -218,3 +218,26 @@ func TestSweepExpiredCredentials_AuditsEachDeletion(t *testing.T) {
 		t.Fatalf("a store without a sweep swept %d", n)
 	}
 }
+
+// A store that keeps no erase generation degrades to the in-process locks, and
+// the erase says so.
+func TestErasePersonCredentials_SaysWhenNoGenerationFencedIt(t *testing.T) {
+	sec := &memSecrets{m: map[string][]byte{}}
+	h, srv := eraseFixture(t, sec)
+	sa := ssoSession(t, "sec-1", "sec@corp.example", oidc.RoleSecurityAdmin)
+	if w := doSSO(t, srv, http.MethodDelete, "/api/v1/people/bob/credentials", sa, ""); w.Code != http.StatusOK {
+		t.Fatalf("erase = %d %s", w.Code, w.Body)
+	}
+	ev := lastAuditEvent(t, h.audit.events, "credential.erase")
+	if got, _ := auditDataField(t, ev, "write_fence"); got != writeFenceLocksOnly {
+		t.Fatalf("credential.erase write_fence = %q, want %q", got, writeFenceLocksOnly)
+	}
+}
+
+// A person's erase is fenced only when every namespace's was.
+func TestMergeEraseReports_FencedOnlyWhenEveryNamespaceWas(t *testing.T) {
+	first := mergeEraseReports(secretstore.EraseReport{}, secretstore.EraseReport{Count: 1, Fenced: true}, true)
+	if got := mergeEraseReports(first, secretstore.EraseReport{Count: 1}, false); got.Fenced || got.Count != 2 {
+		t.Errorf("merged = %+v, want count 2 and not fenced", got)
+	}
+}

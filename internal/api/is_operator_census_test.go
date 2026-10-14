@@ -36,12 +36,18 @@ var isOperatorCensus = map[string]int{
 	"attach.go:refuseAttachEntry":         1,
 	"run_entry.go:getRunForEntry":         1,
 	"sshkeys.go:handleAddSSHKey":          1,
+	// Reach: organisation templates are written with the effective role, so the
+	// User view publishes to the organisation as the member it is.
+	"template_list.go:templateCallerOf": 1,
 	// Credential namespace.
 	"runs_policy.go:secretOwnerFromRequest":         1,
 	"inline_policy_bounds.go:boundEnvSecretPosture": 1,
 	"secrets.go:handlePutSecret":                    1,
 	"secrets.go:secretOwnerParam":                   1,
 	"secrets.go:handleListSecrets":                  1,
+	// An operator reads every secret name, so removing one from a run is not an
+	// ownership question for it.
+	"run_overrides_apply.go:applySecretOverrides": 1,
 	// Reading a recording is a privacy surface, not a launch.
 	"recording.go:recordingAuthorizer": 1,
 	"recording.go:recordingReader":     1,
@@ -54,6 +60,11 @@ var isOperatorCensus = map[string]int{
 	"apitokens.go:roleSnapshotDrops": 2,
 	// List and read only; the launch check is presetLaunchOpenTo.
 	"presets.go:presetOpenTo": 1,
+	// Drive storage layout on the security-tier drive routes: the directory
+	// name, writability past the drive's posture, and the host path stay the
+	// super admin's.
+	"user_drives_preview.go:handlePreviewUserDrive": 1,
+	"user_drives_tier.go:upsertUserDriveGrantAs":    1,
 	// The predicate itself.
 	"govern_admin.go:runUngoverned": 1,
 }

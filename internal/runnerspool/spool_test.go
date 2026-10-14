@@ -1,0 +1,484 @@
+// Copyright 2026 The Wardyn Authors
+// SPDX-License-Identifier: Apache-2.0
+
+package runnerspool
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"slices"
+	"strings"
+	"sync"
+	"syscall"
+	"testing"
+	"time"
+
+	"github.com/cjohnstoniv/wardyn/internal/egress"
+	"github.com/cjohnstoniv/wardyn/internal/spoolowner"
+	"github.com/google/uuid"
+)
+
+// each checks a replayed batch row by row, failing the batch at the first error.
+func each(fn func(Record) error) func(context.Context, []Record) error {
+	return func(_ context.Context, rows []Record) error {
+		for _, r := range rows {
+			if err := fn(r); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+}
+
+func testSpool(t *testing.T) (*Spool, string, uuid.UUID) {
+	t.Helper()
+	dir := filepath.Join(t.TempDir(), "spool")
+	id := uuid.New()
+	s, err := Open(dir, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	return s, dir, id
+}
+func decision(id uuid.UUID) egress.DecisionLog {
+	return egress.DecisionLog{Request: egress.Request{RunID: id, Host: "example.test", Time: time.Now().UTC()}, Decision: egress.Allow, RuleSource: "policy:allowed"}
+}
+
+func TestReplayCrashRetainsUnacknowledgedBatch(t *testing.T) {
+	ctx := context.Background()
+	s, dir, id := testSpool(t)
+	for range 3 {
+		if err := s.Append(ctx, decision(id)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	received := map[string]int{}
+	lostACK := errors.New("crashed before durable ACK")
+	if err := s.Replay(ctx, each(func(r Record) error {
+		received[r.Hash]++
+		if r.Seq == 2 {
+			return lostACK
+		}
+		return nil
+	})); !errors.Is(err, lostACK) {
+		t.Fatal(err)
+	}
+	pos, err := s.Get(ctx)
+	if err != nil || pos.Seq != 0 {
+		t.Fatalf("cursor advanced without ACK: %+v %v", pos, err)
+	}
+	reopened, err := Open(dir, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	var seqs []int64
+	if err := reopened.Replay(ctx, each(func(r Record) error { received[r.Hash]++; seqs = append(seqs, r.Seq); return nil })); err != nil {
+		t.Fatal(err)
+	}
+	if len(seqs) != 3 || seqs[0] != 1 || seqs[2] != 3 || len(received) != 3 {
+		t.Fatalf("replay changed stable ordered identities: %v %v", seqs, received)
+	}
+	if depth, b, _, err := reopened.Stats(ctx); err != nil || depth != 0 || b != 0 {
+		t.Fatalf("retained acknowledged payload: %d %d %v", depth, b, err)
+	}
+	if err := reopened.Replay(ctx, func(context.Context, []Record) error { t.Fatal("replayed acknowledged row"); return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if err := reopened.Append(ctx, decision(id)); err != nil {
+		t.Fatal(err)
+	}
+	if err := reopened.Replay(ctx, each(func(r Record) error {
+		if r.Seq != 4 {
+			t.Fatal(r.Seq)
+		}
+		return nil
+	})); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestConcurrentProcessHandlesPreserveEveryRow(t *testing.T) {
+	ctx := context.Background()
+	a, dir, id := testSpool(t)
+	b, err := Open(dir, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b.Close()
+	var wg sync.WaitGroup
+	for _, s := range []*Spool{a, b} {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for range 30 {
+				if err := s.Append(ctx, decision(id)); err != nil {
+					t.Error(err)
+					return
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	var seq int64
+	if err := a.Replay(ctx, each(func(r Record) error {
+		seq++
+		if r.Seq != seq {
+			t.Fatalf("sequence %d after %d", r.Seq, seq-1)
+		}
+		return nil
+	})); err != nil {
+		t.Fatal(err)
+	}
+	if seq != 60 {
+		t.Fatal(seq)
+	}
+}
+
+func TestByteBoundOverflowFirstStableAndCounted(t *testing.T) {
+	ctx := context.Background()
+	s, dir, id := testSpool(t)
+	log := decision(id)
+	log.Request.Path = strings.Repeat("x", MaxRecordBytes-1024)
+	count := 0
+	for {
+		err := s.Append(ctx, log)
+		if errors.Is(err, ErrFull) {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		count++
+	}
+	if count < 30 || count > 40 {
+		t.Fatalf("unexpected byte limit count %d", count)
+	}
+	if err := s.Append(ctx, decision(id)); !errors.Is(err, ErrFull) {
+		t.Fatalf("overflow did not latch: %v", err)
+	}
+	first, err := s.Overflow(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first == nil || first.Count != 2 || first.DropEnd != 2 || first.Decision.RuleSource != "builtin:spool-full" {
+		t.Fatalf("summary %+v", first)
+	}
+	reopened, err := Open(dir, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	again, err := reopened.Overflow(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again.Hash != first.Hash {
+		t.Fatal("overflow identity changed on restart")
+	}
+	sent := 0
+	if err := reopened.Replay(ctx, each(func(r Record) error {
+		if sent == 0 && r.Hash != first.Hash {
+			t.Fatal("overflow was not first")
+		}
+		sent++
+		return nil
+	})); err != nil {
+		t.Fatal(err)
+	}
+	if sent != count+1 {
+		t.Fatal(sent, count)
+	}
+	if err := reopened.Append(ctx, decision(id)); err != nil {
+		t.Fatalf("ACK did not reopen admission: %v", err)
+	}
+}
+
+func TestRowBoundIsIndependentOfBytes(t *testing.T) {
+	ctx := context.Background()
+	s, _, id := testSpool(t)
+	// Materialize the real row ceiling without 100,000 fsync calls; each fixture
+	// row has the same stable wire identity and manifest accounting as Append.
+	if err := s.locked(ctx, func() error {
+		m, err := s.readManifest()
+		if err != nil {
+			return err
+		}
+		for n := int64(1); n <= MaxRecords; n++ {
+			r := Record{SpoolID: m.SpoolID, Seq: n, Decision: decision(id)}
+			r.Hash = r.digest()
+			b, err := r.Marshal()
+			if err != nil {
+				return err
+			}
+			if err := os.WriteFile(filepath.Join(s.root.Name(), recordName(n)), b, 0600); err != nil {
+				return err
+			}
+			m.Bytes += int64(len(b))
+		}
+		m.Last = MaxRecords
+		return s.writeManifest(m)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	depth, b, _, err := s.Stats(ctx)
+	if err != nil || depth != MaxRecords || b >= MaxBytes {
+		t.Fatalf("fixture %d %d %v", depth, b, err)
+	}
+	if err := s.Append(ctx, decision(id)); !errors.Is(err, ErrFull) {
+		t.Fatalf("row ceiling bypass: %v", err)
+	}
+	if _, err := s.root.Stat(recordName(MaxRecords + 1)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("overflow row created: %v", err)
+	}
+}
+
+func TestRecoveryReclaimsOnlyDurablyAcknowledgedRows(t *testing.T) {
+	ctx := context.Background()
+	s, dir, id := testSpool(t)
+	if err := s.Append(ctx, decision(id)); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := s.After(ctx, 0, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.locked(ctx, func() error {
+		m, e := s.readManifest()
+		if e != nil {
+			return e
+		}
+		m.Ack = rows[0].Position()
+		m.Bytes = 0
+		return s.writeManifest(m)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// Simulates process death after the cursor fsync and before file deletion.
+	reopened, err := Open(dir, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	if _, err := reopened.root.Stat(recordName(1)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("acknowledged file leaked: %v", err)
+	}
+	if err := reopened.Append(ctx, decision(id)); err != nil {
+		t.Fatal(err)
+	}
+	if err := reopened.Replay(ctx, each(func(r Record) error {
+		if r.Seq != 2 {
+			t.Fatal(r.Seq)
+		}
+		return nil
+	})); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSpoolRefusesCorruptionAndUnsafeState(t *testing.T) {
+	for _, kind := range []string{"hash", "manifest", "cross-run", "symlink"} {
+		t.Run(kind, func(t *testing.T) {
+			s, dir, id := testSpool(t)
+			ctx := context.Background()
+			if err := s.Append(ctx, decision(id)); err != nil {
+				t.Fatal(err)
+			}
+			switch kind {
+			case "hash":
+				if err := os.WriteFile(filepath.Join(dir, recordName(1)), []byte(`{"seq":1}`), 0600); err != nil {
+					t.Fatal(err)
+				}
+				if err := s.Replay(ctx, func(context.Context, []Record) error { t.Fatal("corrupt row sent"); return nil }); err == nil {
+					t.Fatal("corrupt row accepted")
+				}
+			case "manifest":
+				if err := os.Remove(filepath.Join(dir, "state.json")); err != nil {
+					t.Fatal(err)
+				}
+				if got, err := Open(dir, id); err == nil {
+					got.Close()
+					t.Fatal("reset missing metadata")
+				}
+			case "cross-run":
+				if got, err := Open(dir, uuid.New()); err == nil {
+					got.Close()
+					t.Fatal("cross-run accepted")
+				}
+			case "symlink":
+				if err := os.Remove(filepath.Join(dir, "lock")); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink("state.json", filepath.Join(dir, "lock")); err != nil {
+					t.Fatal(err)
+				}
+				if got, err := Open(dir, id); err == nil {
+					got.Close()
+					t.Fatal("symlink lock accepted")
+				}
+			}
+		})
+	}
+}
+
+// A crash inside a new spool's first manifest write leaves write.tmp and no
+// state.json: the next Open discards it and writes the manifest.
+func TestOpenRecoversACrashedFirstManifestWrite(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "spool")
+	if err := os.Mkdir(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "write.tmp"), []byte(`{"run_id":`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Open(dir, uuid.New())
+	if err != nil {
+		t.Fatalf("open after a crashed first write: %v", err)
+	}
+	s.Close()
+	if _, err := os.Stat(filepath.Join(dir, "state.json")); err != nil {
+		t.Fatalf("no manifest written: %v", err)
+	}
+}
+
+// The spool has two writers that may be different users: wardyn-runnerd, and the proxy as the user the
+// directory was handed to. Every file one of them creates (each rewrite of state.json is a new file
+// renamed into place) is given to the directory's owner before it replaces anything and stays 0600, so
+// the other writer can still open it: append, acknowledge, append again all succeed.
+func TestRewriteKeepsTheSpoolOwner(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "spool")
+	id := uuid.New()
+	ctx := context.Background()
+	owner := os.Geteuid()
+	var handed []string
+	spoolowner.Chown = func(f *os.File, uid, gid int) error {
+		handed = append(handed, fmt.Sprintf("%s %d", filepath.Base(f.Name()), uid))
+		return f.Chown(uid, gid)
+	}
+	t.Cleanup(func() {
+		spoolowner.ProcessUID, spoolowner.Chown = os.Geteuid, func(f *os.File, uid, gid int) error { return f.Chown(uid, gid) }
+	})
+
+	proxy, err := Open(dir, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer proxy.Close()
+	if err := proxy.Append(ctx, decision(id)); err != nil {
+		t.Fatal(err)
+	}
+	if len(handed) != 0 {
+		t.Fatalf("the spool's own owner handed files over: %v", handed)
+	}
+
+	// wardyn-runnerd, as another user than the spool's owner, replays and acknowledges.
+	spoolowner.ProcessUID = func() int { return owner + 1 }
+	runnerd, err := Open(dir, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runnerd.Close()
+	if err := runnerd.Replay(ctx, func(context.Context, []Record) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(handed, fmt.Sprintf("write.tmp %d", owner)) {
+		t.Fatalf("the acknowledgement's rewrite was handed to %v, want its new file given to the spool's owner %d before the rename", handed, owner)
+	}
+	st, err := os.Stat(filepath.Join(dir, "state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := int(st.Sys().(*syscall.Stat_t).Uid); got != owner || st.Mode().Perm() != 0o600 {
+		t.Fatalf("state.json after the acknowledgement: owner %d mode %v, want the spool's owner %d and 0600", got, st.Mode().Perm(), owner)
+	}
+
+	// The proxy, the spool's owner again, records the next decision.
+	spoolowner.ProcessUID = os.Geteuid
+	if err := proxy.CanRecord(ctx); err != nil {
+		t.Fatalf("the proxy after an acknowledgement: %v", err)
+	}
+	if err := proxy.Append(ctx, decision(id)); err != nil {
+		t.Fatalf("the proxy's next append after an acknowledgement: %v", err)
+	}
+}
+
+// A name that already exists in the spool is handed to the spool's owner only when it has no other link:
+// a hard link planted under the lock name, or the writer lock's, is refused and never chowned, so a file
+// outside the spool cannot be handed over through it.
+func TestSpoolRefusesToHandOverAHardLinkedLock(t *testing.T) {
+	owner := os.Geteuid()
+	var handed []string
+	spoolowner.Chown = func(f *os.File, uid, gid int) error {
+		handed = append(handed, filepath.Base(f.Name()))
+		return f.Chown(uid, gid)
+	}
+	t.Cleanup(func() {
+		spoolowner.ProcessUID, spoolowner.Chown = os.Geteuid, func(f *os.File, uid, gid int) error { return f.Chown(uid, gid) }
+	})
+	plant := func(dir, name string) {
+		t.Helper()
+		outside := filepath.Join(t.TempDir(), "outside")
+		if err := os.WriteFile(outside, nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Link(outside, filepath.Join(dir, name)); err != nil {
+			t.Skipf("hard links are not available here: %v", err)
+		}
+	}
+	id := uuid.New()
+
+	// The lock: another user (wardyn-runnerd as root) opens a spool whose lock name is a planted link.
+	dir := filepath.Join(t.TempDir(), "spool")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	plant(dir, "lock")
+	spoolowner.ProcessUID = func() int { return owner + 1 }
+	if s, err := Open(dir, id); err == nil {
+		s.Close()
+		t.Fatal("a spool whose lock is a hard link was opened and handed over")
+	}
+	if len(handed) != 0 {
+		t.Fatalf("a hard-linked lock was chowned: %v", handed)
+	}
+
+	// The writer lock: a clean spool, then a planted link under the writer lock's name at the seal.
+	spoolowner.ProcessUID = os.Geteuid
+	clean := filepath.Join(t.TempDir(), "spool")
+	s, err := Open(clean, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	receipt, err := s.Receipt(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	plant(clean, "writer.lock")
+	spoolowner.ProcessUID = func() int { return owner + 1 }
+	handed = nil
+	if sealed, err := s.Seal(t.Context(), receipt); err == nil || sealed {
+		t.Fatalf("a seal over a hard-linked writer lock = %v, %v; want it refused", sealed, err)
+	}
+	if slices.Contains(handed, "writer.lock") {
+		t.Fatalf("a hard-linked writer lock was chowned: %v", handed)
+	}
+
+	// A writer lock that fails the seal's own checks (here its mode) is refused before it is handed over.
+	if err := os.Remove(filepath.Join(clean, "writer.lock")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(clean, "writer.lock"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(filepath.Join(clean, "writer.lock"), 0o644); err != nil { // whatever the umask
+		t.Fatal(err)
+	}
+	if sealed, err := s.Seal(t.Context(), receipt); err == nil || sealed || len(handed) != 0 {
+		t.Fatalf("a seal over a writer lock that is not 0600 = %v, %v, handed %v; want it refused and nothing handed over", sealed, err, handed)
+	}
+}

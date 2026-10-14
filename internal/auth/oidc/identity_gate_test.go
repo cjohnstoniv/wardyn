@@ -19,18 +19,29 @@ import (
 )
 
 // fakeGate is an IdentityGate that records what it is asked and answers what the case says.
+// refused refuses every identity; deactivated refuses only the principals it holds.
 type fakeGate struct {
-	refused   bool
-	refuseErr error
-	issueErr  error
-	epoch     int64
-	refs      []writoidc.IdentityRef
-	issued    []writoidc.LoginFacts
+	refused     bool
+	deactivated map[string]bool
+	refuseErr   error
+	issueErr    error
+	epoch       int64
+	refs        []writoidc.IdentityRef
+	issued      []writoidc.LoginFacts
+	// bound maps an object id to the principal its identity row is bound to; boundErr fails that read.
+	bound     map[string]string
+	boundErr  error
+	boundRefs []writoidc.IdentityRef
+}
+
+func (g *fakeGate) Bound(_ context.Context, ref writoidc.IdentityRef) (string, error) {
+	g.boundRefs = append(g.boundRefs, ref)
+	return g.bound[ref.ObjectID], g.boundErr
 }
 
 func (g *fakeGate) Refused(_ context.Context, ref writoidc.IdentityRef) (bool, error) {
 	g.refs = append(g.refs, ref)
-	return g.refused, g.refuseErr
+	return g.refused || g.deactivated[ref.Principal], g.refuseErr
 }
 
 func (g *fakeGate) Issue(_ context.Context, f writoidc.LoginFacts) (int64, error) {
@@ -232,7 +243,7 @@ func (r *identityRevocations) IsSessionRevoked(context.Context, string, string, 
 }
 func (r *identityRevocations) RevokeSub(context.Context, string) error { return nil }
 func (r *identityRevocations) RevokeAll(context.Context) error         { return nil }
-func (r *identityRevocations) SessionStatus(_ context.Context, _, _ string, _ time.Time, epoch int64) (writoidc.SessionStatus, error) {
+func (r *identityRevocations) SessionStatus(_ context.Context, _, _ string, _ writoidc.Issue, epoch int64) (writoidc.SessionStatus, error) {
 	r.epochs = append(r.epochs, epoch)
 	return r.status, r.err
 }
@@ -292,11 +303,11 @@ func TestMiddlewareChecksTheCookieEpoch(t *testing.T) {
 // CheckSession on a store that cannot read identity rows is the cutoff check alone.
 func TestCheckSessionFallsBackToTheCutoff(t *testing.T) {
 	plain := &plainRevocations{revoked: true}
-	if st, err := writoidc.CheckSession(context.Background(), plain, "sub", "", time.Now(), 3); err != nil || st != writoidc.SessionRevoked {
+	if st, err := writoidc.CheckSession(context.Background(), plain, "sub", "", writoidc.Issue{At: time.Now()}, 3); err != nil || st != writoidc.SessionRevoked {
 		t.Errorf("a cutoff = %v, %v; want SessionRevoked", st, err)
 	}
 	plain.revoked = false
-	if st, err := writoidc.CheckSession(context.Background(), plain, "sub", "", time.Now(), 3); err != nil || st != writoidc.SessionLive {
+	if st, err := writoidc.CheckSession(context.Background(), plain, "sub", "", writoidc.Issue{At: time.Now()}, 3); err != nil || st != writoidc.SessionLive {
 		t.Errorf("no cutoff = %v, %v; want SessionLive", st, err)
 	}
 }

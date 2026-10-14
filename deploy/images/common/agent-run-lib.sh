@@ -65,9 +65,11 @@ export CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL="${CLAUDE_CODE_DISAB
 # rewrite over a correct file is harmless. Best-effort system-trust install
 # covers remaining clients. The CA PRIVATE key never enters the sandbox; only
 # the proxy holds it. No-op when WARDYN_MITM_CA_PEM is unset.
+# WARDYN_MITM_CA_DIR overrides the directory for tests that run the script on a
+# shared host; no run sets it.
 install_mitm_ca() {
     [[ -n "${WARDYN_MITM_CA_PEM:-}" ]] || return 0
-    local dir="/tmp/wardyn" sys="" c
+    local dir="${WARDYN_MITM_CA_DIR:-/tmp/wardyn}" sys="" c
     mkdir -p "$dir" 2>/dev/null || true
     chmod 1777 "$dir" 2>/dev/null || true
     { printf '%s\n' "$WARDYN_MITM_CA_PEM" > "$dir/mitm-ca.pem" \
@@ -260,20 +262,39 @@ install_artifact_config() {
 # is. No-op when the var is unset (every non-SSO run).
 materialize_aws_sso_config() {
     [[ -n "${WARDYN_AWS_SSO_CONFIG_B64:-}" ]] || return 0
-    local relpath b64 dst
+    materialize_home_records aws-sso "$WARDYN_AWS_SSO_CONFIG_B64"
+}
+
+# materialize_home_records <label> <records>: write each "<home-relative-path>\t<base64>"
+# record under $HOME, 0600. Shared by the two lanes whose control plane generates
+# a CLI's home directory: the AWS SSO session above and the Azure CLI profile below.
+materialize_home_records() {
+    local label="$1" relpath b64 dst
     while IFS=$'\t' read -r relpath b64; do
         [[ -n "$relpath" ]] || continue
         case "$relpath" in
-            /*|*..*) echo "agent-run: skipping unsafe aws-sso-config path: $relpath" >&2; continue ;;
+            /*|*..*) echo "agent-run: skipping unsafe ${label}-config path: $relpath" >&2; continue ;;
         esac
         dst="${HOME}/${relpath}"
         mkdir -p "$(dirname "$dst")"
         if printf '%s' "$b64" | base64 -d > "$dst" 2>/dev/null; then
             chmod 0600 "$dst"
         else
-            echo "agent-run: WARNING failed to write aws-sso config ${relpath}" >&2
+            echo "agent-run: WARNING failed to write ${label} config ${relpath}" >&2
         fi
-    done <<< "$WARDYN_AWS_SSO_CONFIG_B64"
+    done <<< "$2"
+}
+
+# ── Azure CLI profile (an Azure CLI component) ───────────────────────────────
+# Materialize the ~/.azure the control plane generated for a run that attached
+# an Azure CLI component: azureProfile.json listing the component's
+# subscriptions, and a token cache whose one access token is an inert
+# placeholder. No Azure credential is in either file: wardyn-proxy adds the
+# real token to each request it lets through to management.azure.com. No-op
+# when the var is unset (every other run), and harmless on an image without az.
+materialize_azure_cli_config() {
+    [[ -n "${WARDYN_AZURE_CLI_CONFIG_B64:-}" ]] || return 0
+    materialize_home_records azure-cli "$WARDYN_AZURE_CLI_CONFIG_B64"
 }
 
 # ── git credential helper caller-auth secret ─────────────────────────────────
@@ -501,13 +522,38 @@ dispatch_repo_clones() {
     fi
 }
 
-# resolve_workdir — prefer a cloned/discovered repo workspace if one exists
-# below the caller's `workdir` global, else leave it as-is. Matches both a repo
-# cloned into workdir/<reponame> (its .git is one level down) and a
-# pre-populated workdir that is itself a repo (.git directly under it).
+# resolve_workdir — the ONE place a start path's working directory is chosen.
+# WARDYN_START_FOLDER is the run's starting folder, resolved by the server:
+#   - "image_default": keep the caller's `workdir`, the image's own directory,
+#     even after a clone;
+#   - an absolute path: that folder inside one attachment. It must exist and be
+#     reached through no symlink (its real path is itself), so a link inside a
+#     repo cannot move the start out of its mount; otherwise the start fails
+#     rather than landing somewhere else;
+#   - unset: prefer a cloned/discovered repo workspace if one exists below
+#     `workdir`, else leave it as-is. Matches both a repo cloned into
+#     workdir/<reponame> (its .git is one level down) and a pre-populated
+#     workdir that is itself a repo (.git directly under it).
 # MUST be called directly (not in a subshell) so the `workdir` reassignment
 # survives for the caller.
 resolve_workdir() {
+    case "${WARDYN_START_FOLDER:-}" in
+        "") ;;
+        image_default) return 0 ;;
+        /*)
+            local real
+            real="$(cd -P -- "$WARDYN_START_FOLDER" 2>/dev/null && pwd -P || true)"
+            if [[ "$real" != "$WARDYN_START_FOLDER" ]]; then
+                echo "agent-run: the starting folder $WARDYN_START_FOLDER is missing or not a plain folder; not starting elsewhere" >&2
+                return 1
+            fi
+            workdir="$real"
+            git config --global --add safe.directory "$real" 2>/dev/null || true
+            return 0 ;;
+        *)
+            echo "agent-run: WARDYN_START_FOLDER must be image_default or an absolute path" >&2
+            return 1 ;;
+    esac
     if [[ -d "$workdir" ]]; then
         local repo
         repo="$(find "$workdir" -maxdepth 2 -mindepth 1 -type d -name ".git" \
@@ -790,16 +836,19 @@ selftest_check_bins() {
 selftest_report_mitm_ca() {
     echo "--- TLS-MITM CA trust (selftest: report only) ---"
     if [[ -n "${WARDYN_MITM_CA_PEM:-}" ]]; then
-        [[ -f /tmp/wardyn/mitm-ca.pem ]] \
-            && echo "  proxy CA: INSTALLED (/tmp/wardyn/mitm-ca.pem)" \
+        # The same dir install_mitm_ca writes, so the report names where THIS
+        # run's CA really is rather than where the default would put it.
+        local dir="${WARDYN_MITM_CA_DIR:-/tmp/wardyn}"
+        [[ -f "$dir/mitm-ca.pem" ]] \
+            && echo "  proxy CA: INSTALLED ($dir/mitm-ca.pem)" \
             || echo "  proxy CA: DELIVERED but not yet installed (installed at idle/task start)"
-        if [[ -f /tmp/wardyn/ca-bundle.pem ]]; then
+        if [[ -f "$dir/ca-bundle.pem" ]]; then
             local sys_found=0
             for c in /etc/ssl/certs/ca-certificates.crt /etc/ssl/cert.pem /etc/pki/tls/certs/ca-bundle.crt; do
                 [[ -f "$c" ]] && sys_found=1 && break
             done
             if [[ $sys_found -eq 1 ]]; then
-                echo "  combined bundle: PRESENT (/tmp/wardyn/ca-bundle.pem = system roots + proxy CA)"
+                echo "  combined bundle: PRESENT ($dir/ca-bundle.pem = system roots + proxy CA)"
             else
                 echo "  combined bundle: PROXY-CA-ONLY (no system CA bundle in image; non-MITM TLS hosts will not verify)"
             fi

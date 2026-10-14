@@ -19,6 +19,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/types"
+	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
 
 // pvStore is govEscapeStore with the reads GET /runs/{id}/policy makes: the
@@ -630,6 +631,9 @@ func TestExplainRunPolicy_OneCasePerCause(t *testing.T) {
 		{"source_control: egress.add", ptr(pvSpec(nil, nil)), pvSpec([]string{"github.example"}, nil),
 			evidenceOf(func(e *auditEvidence) { e.sourceControl["github.example"] = true }), types.SiteConfig{}, types.AgentRun{},
 			causeSourceControl, fieldAllowed, []string{"github.example"}, nil},
+		{"component: egress.add", ptr(pvSpec(nil, nil)), pvSpec([]string{"org-api.example"}, nil),
+			evidenceOf(func(e *auditEvidence) { e.component["org-api.example"] = true }), types.SiteConfig{}, types.AgentRun{},
+			causeComponent, fieldAllowed, []string{"org-api.example"}, nil},
 		{"mirror: the To host", ptr(pvSpec(nil, nil)), pvSpec([]string{"artifactory.corp:443"}, nil),
 			evidenceOf(func(e *auditEvidence) {
 				e.mirror["artifactory.corp:443"] = true
@@ -819,5 +823,48 @@ func TestLatestPolicyResolve_LastWinsAndSkipsUndecodable(t *testing.T) {
 	}
 	if _, _, ok := latestPolicyResolve(nil); ok {
 		t.Error("no envelope reported as found")
+	}
+}
+
+// TestExplainRunPolicy_DiskBasis: the recorded basis of the main drive decides how the run policy
+// view explains its size. A size the run's policy wrote is the policy's own and explains nothing
+// (and is not called an admin's, since an inline policy is written by the person who launched);
+// a requested or defaulted one is a launch addition, with its source said.
+func TestExplainRunPolicy_DiskBasis(t *testing.T) {
+	disk := func(mib int) types.RunPolicySpec {
+		return pvSpec(nil, func(s *types.RunPolicySpec) { s.Resources = &types.ResourceLimits{DiskMiB: mib} })
+	}
+	for _, tc := range []struct {
+		name       string
+		basis      client.MainDriveBasis
+		filled     bool
+		source     types.LimitSource
+		wantCause  string
+		wantDetail string
+	}{
+		{"policy: the policy's own size", client.MainDriveBasisPolicy, false, "", "", ""},
+		{"request: from the request", client.MainDriveBasisRequest, true, "", causeLaunch, "The disk size is from your request."},
+		{"server default", client.MainDriveBasisDefault, true, types.LimitSourceDeployment, causeOrgDisk, "is this server's default."},
+		{"pool default", client.MainDriveBasisDefault, true, types.LimitSourcePool, causePoolDisk, "default of the pool this run started in"},
+		{"older run: the filled bit alone", "", true, "", causeOrgDisk, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := explainRunPolicy(nil, disk(8192), evidenceOf(func(e *auditEvidence) {
+				e.diskBasis, e.diskFilled, e.diskDefaultSource = tc.basis, tc.filled, tc.source
+			}), types.SiteConfig{}, types.AgentRun{})
+			c := pvChange(got, tc.wantCause, fieldDisk)
+			if tc.wantCause == "" {
+				if pvChange(got, causeOrgDisk, fieldDisk) != nil || pvChange(got, causePoolDisk, fieldDisk) != nil || pvChange(got, causeLaunch, fieldDisk) != nil {
+					t.Fatalf("a size the policy wrote was explained: %+v", got)
+				}
+				return
+			}
+			if c == nil || !slices.Equal(c.Added, []string{"8192"}) {
+				t.Fatalf("changes = %+v, want %s/disk added 8192", got, tc.wantCause)
+			}
+			if tc.wantDetail != "" && !strings.Contains(strings.Join(c.Detail, " "), tc.wantDetail) {
+				t.Errorf("detail = %v, want %q", c.Detail, tc.wantDetail)
+			}
+		})
 	}
 }

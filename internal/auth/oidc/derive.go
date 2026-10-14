@@ -10,11 +10,8 @@ package oidc
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"slices"
-	"strconv"
 	"strings"
-	"unicode"
 
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -35,20 +32,18 @@ const (
 	RoleUser          = "user"
 )
 
-// LegacyRoleMember is the pre-0.8 name of RoleUser, still accepted (with a boot WARN) as the user
-// tier on the built-in "standard" type. Never stored, never a session role.
-// ponytail: removed in 0.9.
-const LegacyRoleMember = "member"
+// RemovedRoleMember is the pre-0.8 name of RoleUser. 0.8 accepted it as the user tier on the built-in
+// "standard" type; 0.9 treats it as any other unknown role value. It stays a reserved word so it can
+// never parse as a user type id, and it is the one value RemovedRoleHint explains.
+const RemovedRoleMember = "member"
 
-// LegacyRoleMemberWarning is the boot WARN for one aliased "member" value. variable names the
-// setting; entry is the role-map pair as written, or "" for WARDYN_OIDC_DEFAULT_ROLE.
-func LegacyRoleMemberWarning(variable, entry string) string {
-	subject, fix := variable+"=member", "change it in your chart"
-	if entry != "" {
-		subject, fix = "Entry "+strconv.Quote(entry), "remap it in Getting started -> People, or in your chart"
+// RemovedRoleHint is the sentence appended to a bad-role error when v is RemovedRoleMember, "" for any
+// other value.
+func RemovedRoleHint(v string) string {
+	if v != RemovedRoleMember {
+		return ""
 	}
-	return variable + `: "member" is no longer a role. ` + subject +
-		` maps to the built-in user type "standard" (Standard user) until you ` + fix + `. The alias is removed in 0.9.`
+	return ` ("` + RemovedRoleMember + `" was removed in 0.9: use "` + RoleUser + `", or the id of a user type, in its place)`
 }
 
 // Roles is the closed set of recognized role values, in rank order, pinned against the DDL parity
@@ -102,16 +97,12 @@ func ParseRoleMap(csv string) (map[string]string, error) {
 		if !cut || k == "" {
 			return nil, fmt.Errorf("malformed entry %q: want value=role", pair)
 		}
-		if v == LegacyRoleMember {
-			slog.Warn(LegacyRoleMemberWarning("WARDYN_OIDC_ROLE_MAP", k+"="+v))
-			v = RoleUser
-		}
 		if !ValidMappingTarget(v) {
-			return nil, fmt.Errorf("entry %q: invalid role %q (want %q, %q, %q or a user type id)", pair, v, RoleAdmin, RoleSecurityAdmin, RoleUser)
+			return nil, fmt.Errorf("entry %q: invalid role %q (want %q, %q, %q or a user type id)%s", pair, v, RoleAdmin, RoleSecurityAdmin, RoleUser, RemovedRoleHint(v))
 		}
 		// A non-ASCII key can never match; under DEFAULT_ROLE=admin that would silently grant the
 		// default instead of the lesser role the operator meant to name.
-		if !ASCIIOnly(k) {
+		if !types.ASCIIOnlySubject(k) {
 			return nil, fmt.Errorf("entry %q: non-ASCII value can never match (matching is ASCII-only)", pair)
 		}
 		key := strings.ToLower(k)
@@ -195,7 +186,7 @@ func mergeRoleMaps(chart map[string]string, legacyAdminEmails []string, rows []R
 		// Enforce the canonical contract rather than trusting it: an empty/whitespace Value would
 		// match ANY such claim in deriveRole's loop, an admin escalation if Role is admin.
 		target, validTarget := row.target()
-		if row.Value == "" || row.Value != strings.ToLower(strings.TrimSpace(row.Value)) || !ASCIIOnly(row.Value) || !validTarget {
+		if row.Value == "" || row.Value != strings.ToLower(strings.TrimSpace(row.Value)) || !types.ASCIIOnlySubject(row.Value) || !validTarget {
 			shadowed = append(shadowed, row.Value)
 			continue
 		}
@@ -368,8 +359,8 @@ func deriveRole(rolesClaim, groupsClaim []string, email string, roleMap map[stri
 	// — an email on both is distinct provenance.
 	seenMapRow := make(map[string]bool, len(values))
 	for _, v := range values {
-		if !ASCIIOnly(v) {
-			continue // fail closed: see ASCIIOnly
+		if !types.ASCIIOnlySubject(v) {
+			continue // fail closed: see types.ASCIIOnlySubject
 		}
 		key := strings.ToLower(strings.TrimSpace(v))
 		// SplitMappingTarget, not "mapped != \"\"": an absent key and an unrecognized value must
@@ -427,10 +418,11 @@ const maxSessionGroupsBytes = 2048
 // printable-ASCII only, deduped, sorted, and truncated to maxSessionGroupsBytes.
 //
 // NEVER returns nil — an empty result is the empty non-nil slice; nil is reserved for "this cookie
-// predates 0.6". Printable-ASCII only (CanonicalGroupSubject): a grant subject is operator-authored
-// ASCII, and Unicode case folding could fold a crafted claim onto one, so the guard runs on the RAW
-// value before the fold. SORTED, then truncated FROM THE END, so the drop is deterministic — the
-// same human loses the same groups every login.
+// predates 0.6". Printable-ASCII only (types.CanonicalGroupSubject, which this snapshot calls
+// directly): a grant subject is operator-authored ASCII, and Unicode case folding could fold a
+// crafted claim onto one, so the guard runs on the RAW value before the fold. SORTED, then
+// truncated FROM THE END, so the drop is deterministic — the same human loses the same groups
+// every login.
 //
 // SECURITY: the second return says whether the snapshot is PARTIAL, and it is an AUTHORIZATION
 // INPUT, not a diagnostic — a group-subject grant can fall off this cap and the ceiling resolver
@@ -438,7 +430,7 @@ const maxSessionGroupsBytes = 2048
 // snapshot exactly as a missing one. Three ways it goes partial: the byte cap above; claimNames, the
 // ID token's `_claim_names` (Entra stops emitting `groups`/`roles` past the token limit and sends a
 // Graph pointer instead, decoding to nil identical to "asked, none" — Wardyn fails closed rather
-// than dereference the pointer); and a value CanonicalGroupSubject refuses, invisible to the
+// than dereference the pointer); and a value types.CanonicalGroupSubject refuses, invisible to the
 // byte-cap check since the drop happens before uniq is built — see unrepresentable below.
 func sessionGroups(rolesClaim, groupsClaim []string, claimNames map[string]any) (groups []string, truncated bool) {
 	seen := make(map[string]bool, len(rolesClaim)+len(groupsClaim))
@@ -451,7 +443,7 @@ func sessionGroups(rolesClaim, groupsClaim []string, claimNames map[string]any) 
 		if strings.TrimSpace(v) == "" {
 			continue // names no group; nothing was lost
 		}
-		g, ok := CanonicalGroupSubject(v)
+		g, ok := types.CanonicalGroupSubject(v)
 		if !ok {
 			unrepresentable++
 			continue
@@ -467,8 +459,10 @@ func sessionGroups(rolesClaim, groupsClaim []string, claimNames map[string]any) 
 	out := make([]string, 0, len(uniq))
 	used := 0
 	for _, g := range uniq {
-		// Exact JSON cost: two quotes, a comma, and one extra byte per escaped character.
-		cost := len(g) + 3 + strings.Count(g, `"`) + strings.Count(g, `\`)
+		// Exact JSON cost: two quotes, a comma, one extra byte per escaped quote or backslash, and five
+		// per & < > which json.Marshal writes as \u00XX.
+		cost := len(g) + 3 + strings.Count(g, `"`) + strings.Count(g, `\`) +
+			5*(strings.Count(g, "&")+strings.Count(g, "<")+strings.Count(g, ">"))
 		if used+cost > maxSessionGroupsBytes {
 			break
 		}
@@ -482,29 +476,14 @@ func sessionGroups(rolesClaim, groupsClaim []string, claimNames map[string]any) 
 	return out, len(out) < len(uniq) || unrepresentable > 0
 }
 
-// CanonicalGroupSubject canonicalizes an operator-authored group name into the EXACT string a
-// session snapshot carries, or reports ok=false when NO snapshot can ever carry it. Exported
-// because sessionGroups is the MATCH surface and internal/api's group-subject WRITE surfaces must
-// refuse exactly what this drops — one implementation, so write and match can never disagree.
-//
-// SECURITY: the ASCII guard runs on the RAW value, BEFORE the fold — see ASCIIOnly's doc for why
-// (case folding can turn a non-ASCII claim into a real operator-authored ASCII name).
-func CanonicalGroupSubject(s string) (string, bool) {
-	s = strings.TrimSpace(s)
-	if s == "" || !printableASCII(s) {
-		return "", false
-	}
-	return strings.ToLower(s), true
-}
-
 // claimsOverage reports whether the ID token's `_claim_names` says the IdP OMITTED a claim this
 // package derives identity from, rather than sending an empty one. Entra stops emitting
 // `groups`/`roles` past the token limit and sends a distributed-claim pointer instead, decoding to
 // nil identical to "asked, none" — this marker is the only thing that tells the two apart, and
 // Wardyn fails closed rather than dereference the pointer.
 //
-// BOTH claims are checked since both feed both derivations, in one function with two callers
-// (sessionGroups' truncation bit and overageWidensRole) — they diverged once, and on
+// BOTH claims are checked since both feed both derivations, in one function shared by
+// sessionGroups' truncation bit and the role and user-type refusals — they diverged once, and on
 // WARDYN_OIDC_DEFAULT_ROLE=admin that silently promoted a group-mapped member to super admin.
 func claimsOverage(claimNames map[string]any) bool {
 	for _, claim := range []string{"groups", "roles"} {
@@ -539,10 +518,37 @@ func unanswerableWidensRole(unanswerable bool, role string, matches []Match) boo
 	return roleRank(role) > roleRank(RoleUser)
 }
 
-// printableASCII reports whether every rune of s is a printable ASCII
-// character (U+0020..U+007E). Stricter than ASCIIOnly — see sessionGroups.
-func printableASCII(s string) bool {
-	return strings.IndexFunc(s, func(r rune) bool { return r < ' ' || r > '~' }) < 0
+// unanswerableChangesUserType is the user-type twin of unanswerableWidensRole: when a roles/groups
+// claim went unanswered, it reports whether a role-map row names a user type that, added to the
+// types d's real matches named, would make pickUserType choose differently from d.UserType or
+// refuse. Any row may be the hidden one, an "@" key included: deriveRole matches every key against
+// roles, groups and email alike, and a group value can be an email address. Only the row keyed on
+// the caller's own email is answered for certain. A row naming a lower-priority type than the one
+// the answered claims settle cannot change the pick, so that sign-in is served. The admin tier is
+// exempt, as in deriveRole: no type decides anything for it.
+func unanswerableChangesUserType(unanswerable bool, d Derivation, email string, roleMap map[string]string, userTypes map[string]types.UserType) bool {
+	if !unanswerable || d.Role == RoleAdmin {
+		return false
+	}
+	// The types the answered claims named; the default's type stands in only when they named none,
+	// and any hidden type-naming match would displace it.
+	var named []string
+	for _, m := range d.Matches {
+		if m.Source == MatchSourceMapRow && m.UserType != "" && !slices.Contains(named, m.UserType) {
+			named = append(named, m.UserType)
+		}
+	}
+	self := strings.ToLower(strings.TrimSpace(email))
+	for k, v := range roleMap {
+		_, userType, ok := SplitMappingTarget(v)
+		if !ok || userType == "" || k == self || slices.Contains(named, userType) {
+			continue
+		}
+		if id, denial, _, _ := pickUserType(append(slices.Clip(named), userType), userTypes); denial != "" || id != d.UserType {
+			return true
+		}
+	}
+	return false
 }
 
 // emailInList reports whether email case-insensitively matches an entry in list. email is trimmed
@@ -550,7 +556,7 @@ func printableASCII(s string) bool {
 // the role map.
 func emailInList(email string, list []string) bool {
 	email = strings.TrimSpace(email)
-	if email == "" || !ASCIIOnly(email) {
+	if email == "" || !types.ASCIIOnlySubject(email) {
 		return false
 	}
 	for _, e := range list {
@@ -559,18 +565,6 @@ func emailInList(email string, list []string) bool {
 		}
 	}
 	return false
-}
-
-// ASCIIOnly reports whether s contains no rune above ASCII. Exported so internal/api's
-// console-managed role-map writes refuse exactly what this package refuses at login.
-//
-// SECURITY: case-insensitive matching (ToLower/EqualFold) does Unicode case folding, under which a
-// KELVIN SIGN "k" (U+212A) MATCHES ASCII "k" — so guarding the LOWERED value would let a crafted
-// non-ASCII claim fold onto a real operator-authored ASCII entry (RoleMap, LegacyAdminEmails, a
-// group name) and inherit everything bound to it. The guard must run on the RAW value, before the
-// fold, everywhere this package or internal/api compares an ASCII allowlist case-insensitively.
-func ASCIIOnly(s string) bool {
-	return strings.IndexFunc(s, func(r rune) bool { return r > unicode.MaxASCII }) < 0
 }
 
 // claimNamesKeys returns the distributed-claim names in a token's `_claim_names`, sorted, for the

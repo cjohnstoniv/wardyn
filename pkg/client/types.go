@@ -21,6 +21,7 @@ package client
 // internal/types remains the single source of truth; these add no new types.
 
 import (
+	"github.com/cjohnstoniv/wardyn/internal/placement"
 	"github.com/cjohnstoniv/wardyn/internal/policyref"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -39,6 +40,24 @@ type (
 	// PersonSummary is one row of ListPeople; PersonList is one page of it.
 	PersonSummary = types.PersonSummary
 	PersonList    = types.PersonList
+
+	// Invitation lets one named person mint their own API token (ListInvitations, ClaimInvitation);
+	// InvitationState is its derived state.
+	Invitation      = types.Invitation
+	InvitationState = types.InvitationState
+
+	// ServiceIdentity is a named, sponsored non-human principal; ServiceIdentityState is its derived state.
+	ServiceIdentity      = types.ServiceIdentity
+	ServiceIdentityState = types.ServiceIdentityState
+
+	// APIToken is one API token row. Token carries the plaintext on a create or claim answer only;
+	// Disposition says where an admin-minted token stands.
+	APIToken         = types.APIToken
+	TokenDisposition = types.TokenDisposition
+
+	// TokenMoved is MoveToken's answer: the link written and the token's new disposition.
+	TokenMoved = types.TokenMoved
+	TokenMove  = types.TokenMove
 
 	// Device is one enrolled laptop in the organisation's inventory (no
 	// credential material). Returned by ListDevices.
@@ -77,6 +96,29 @@ type (
 	// hold_seconds.
 	PushRulesSpec = types.PushRulesSpec
 
+	// ToolRule is one tool name and what to do with it, carried in
+	// RunPolicySpec.ToolRules and AgentOverrides.ToolRules; ToolEffect is its
+	// allow, hold or deny.
+	ToolRule   = types.ToolRule
+	ToolEffect = types.ToolEffect
+
+	// ADOTokenMode is how a run presents itself to Azure DevOps, carried in
+	// ComponentFact.TokenMode.
+	ADOTokenMode = types.ADOTokenMode
+
+	// ComponentKind names what a ComponentFact describes. The override
+	// narrowing table's OverrideKind, OverrideOp and OverrideRule are the
+	// vocabulary RunOverrides.Items answers in.
+	ComponentKind = types.ComponentKind
+	OverrideKind  = types.OverrideKind
+	OverrideOp    = types.OverrideOp
+
+	// PlacementMode is how an organisation-held credential reaches a local
+	// run (own, via_org, runner_resident or refuse); PlacementReason is the
+	// machine-readable reason a placement is refused.
+	PlacementMode   = placement.Mode
+	PlacementReason = placement.Reason
+
 	// PushContentScope is a push_content approval's requested_scope: the
 	// held push's repository, refs, credential, matched paths and commits.
 	PushContentScope = types.PushContentScope
@@ -91,6 +133,10 @@ type (
 	// Workspace is an onboarded local dir / repo / container. Returned by
 	// ListWorkspaces, GetWorkspace, CreateWorkspace, and UpdateWorkspace.
 	Workspace = types.Workspace
+
+	// ImageBuild is a workspace's image-build record: the inputs and the image it produced.
+	// Carried by WorkspaceBuild.Record.
+	ImageBuild = types.ImageBuild
 
 	// WorkspaceLLMCred is the operator-owned model binding carried in
 	// WorkspaceRequest.LLMCred: ProviderRef pins the workspace's runs to one
@@ -159,12 +205,15 @@ type (
 	// SiteConfig.ModelProviders; the types below are its parts. Aliased so a
 	// caller can author the block through PutSiteConfig. Configuration only:
 	// no credential lives on a record.
-	ModelProviders    = types.ModelProviders
-	ModelProvider     = types.ModelProvider
-	ModelProviderKind = types.ModelProviderKind
-	ProviderAuth      = types.ProviderAuth
-	BedrockSettings   = types.BedrockSettings
-	ProviderHarness   = types.ProviderHarness
+	ModelProviders = types.ModelProviders
+	// ModelProvidersRead is GetModelProviders' answer: the block plus how many people
+	// hold a credential of their own per provider. Counts only, never a credential.
+	ModelProvidersRead = types.ModelProvidersRead
+	ModelProvider      = types.ModelProvider
+	ModelProviderKind  = types.ModelProviderKind
+	ProviderAuth       = types.ProviderAuth
+	BedrockSettings    = types.BedrockSettings
+	ProviderHarness    = types.ProviderHarness
 
 	// UserDrive is one admin-registered drive (migration 0054's user_drives
 	// row), embedded in UserDriveListItem. Written via DriveRequest.
@@ -310,6 +359,7 @@ const (
 
 // RunState values.
 const (
+	RunQueued    = types.RunQueued
 	RunPending   = types.RunPending
 	RunStarting  = types.RunStarting
 	RunRunning   = types.RunRunning
@@ -412,4 +462,25 @@ const (
 	AutonomyL1 = types.AutonomyL1
 	AutonomyL2 = types.AutonomyL2
 	AutonomyL3 = types.AutonomyL3
+)
+
+// Invitation, service-identity and admin-minted-token states, the values of the *State and
+// TokenDisposition fields above.
+const (
+	InvitationPending = types.InvitationPending
+	InvitationClaimed = types.InvitationClaimed
+	InvitationExpired = types.InvitationExpired
+	InvitationRevoked = types.InvitationRevoked
+
+	ServiceIdentityActive          = types.ServiceIdentityActive
+	ServiceIdentitySuspended       = types.ServiceIdentitySuspended
+	ServiceIdentityRetired         = types.ServiceIdentityRetired
+	ServiceIdentitySponsorInactive = types.ServiceIdentitySponsorInactive
+
+	TokenNeedsDecision   = types.TokenNeedsDecision
+	TokenAwaitingOwner   = types.TokenAwaitingOwner
+	TokenReplacedByOwner = types.TokenReplacedByOwner
+	TokenLinkedToService = types.TokenLinkedToService
+	TokenMovedToService  = types.TokenMovedToService
+	TokenRevoked         = types.TokenRevoked
 )

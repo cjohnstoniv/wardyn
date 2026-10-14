@@ -22,6 +22,8 @@ import {
   FolderOpen,
   HardDrive,
   KeyRound,
+  Laptop,
+  LayoutTemplate,
   Lock,
   Menu,
   Play,
@@ -45,7 +47,7 @@ import { SidebarLowerLinks } from "./sidebar-settings-link";
 // from nav-copy.ts rather than the screen's own copy module so the eager
 // sidebar doesn't drag a whole screen-only canon table into the entry chunk
 // (#498) for one string.
-import { CREDENTIALS_NAV_TITLE, GOVERNANCE_NAV_TITLE, USER_TYPES_NAV_TITLE } from "../../lib/nav-copy";
+import { CREDENTIALS_NAV_TITLE, GOVERNANCE_NAV_TITLE, RUNNERS_NAV_TITLE, USER_TYPES_NAV_TITLE } from "../../lib/nav-copy";
 import { cn } from "../ui/utils";
 import { Button } from "../ui/button";
 import { Sheet, SheetContent, SheetTitle, SheetTrigger } from "../ui/sheet";
@@ -60,6 +62,7 @@ import { useMeta, type ShellMeta } from "./use-shell-meta";
 export type { ShellMeta } from "./use-shell-meta";
 import { useReauth } from "../../lib/reauth";
 import { TopBar } from "./top-bar";
+import type { SetupStatus } from "../../lib/types";
 import { SessionRenewButton, SessionRenewSlot } from "../wardyn/session-renew-button";
 import { ViewAccessProvider, type ConsoleView } from "../wardyn/console-view";
 import {
@@ -140,8 +143,14 @@ const ADMIN_NAV: NavItem[] = [
   // 0.8.6 (ppl-p2, M12 D1): right after Approvals, because leaver work is frequent and urgent. securityOps
   // server-side, so both admin tiers see it.
   { to: "/admin/people", label: PEOPLE_PAGE.NAV, icon: Contact },
+  // 0.9: people's own computers that run their runs. securityOps server-side, so both admin tiers see it;
+  // the page explains the off state, so the item is always there (RN-Q4).
+  { to: "/admin/runners", label: RUNNERS_NAV_TITLE, icon: Laptop },
   { to: "/admin/workspaces", label: "Workspaces", icon: FolderOpen },
   { to: "/admin/policies", label: "Policies", icon: UserCog },
+  // 0.9: saved starting points; org admins rename, delete and publish here. A member route server-side, so
+  // both admin tiers see it. The label is literal like its neighbours: the screen's copy module is lazy-only.
+  { to: "/admin/templates", label: "Templates", icon: LayoutTemplate },
   // GOVERNANCE_NAV_TITLE is one string for the nav and the screen's heading.
   { to: "/admin/governance", label: GOVERNANCE_NAV_TITLE, icon: Scale },
   { to: "/admin/permissions", label: "Permissions", icon: Users },
@@ -160,6 +169,7 @@ const ADMIN_NAV: NavItem[] = [
 ];
 const USER_NAV: NavItem[] = [
   { to: "/runs", label: "Runs", icon: Activity, badge: "attention" },
+  { to: "/templates", label: "Templates", icon: LayoutTemplate },
   { to: "/approvals", label: "Approvals", icon: ShieldCheck, badge: "approvals" },
   { to: "/workspaces", label: "Workspaces", icon: FolderOpen },
 ];
@@ -417,6 +427,7 @@ export function AppShell({
   unreachable,
   lastOkAt,
   noBarrier,
+  tier,
 }: {
   pendingApprovals: number;
   attentionCount: number;
@@ -435,6 +446,8 @@ export function AppShell({
   // than guess, where this is a deployment-wide fact that is always resolved
   // once setupStatus has landed. False/undefined renders nothing.
   noBarrier?: boolean;
+  // SetupStatus.tier, for the top bar's account menu and local-only chip.
+  tier?: SetupStatus["tier"];
 }) {
   const [meta, retryIdentity, adoptIdentity] = useMeta();
   const reauth = useReauth();
@@ -534,6 +547,7 @@ export function AppShell({
                 attentionCount={attentionCount}
                 onNewRun={() => navigate("/runs/new")}
                 noBarrier={!unreachable && !!noBarrier}
+                tier={tier}
               />
             )}
             {/* The no-credential preview's band, and its way out. FIRST of the

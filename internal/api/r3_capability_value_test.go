@@ -17,7 +17,7 @@ import (
 )
 
 // The SUBJECT half of a capability grant is canonicalized at the write boundary
-// (group subjects through oidc.CanonicalGroupSubject, user subjects lowercased)
+// (group subjects through types.CanonicalGroupSubject, user subjects lowercased)
 // and the egress_host VALUE gets the proxy's own shape check. The workspace
 // VALUE got neither, while the resolver compares it by exact string equality
 // against uuid.UUID.String() — always canonical lowercase-hyphenated.

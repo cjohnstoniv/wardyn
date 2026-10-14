@@ -128,7 +128,8 @@ func (s *Store) LocalRows(ctx context.Context) (int, error) {
 	return n, nil
 }
 
-// ageDecrypt opens a legacy v0 payload. Its only caller is convertRow.
+// ageDecrypt opens a legacy v0 payload for convertRow and for CheckRows, which reads it without
+// convertRow's write.
 func ageDecrypt(identity age.Identity, ciphertext []byte) ([]byte, error) {
 	r, err := age.Decrypt(bytes.NewReader(ciphertext), identity)
 	if err != nil {

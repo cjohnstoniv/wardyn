@@ -1,6 +1,6 @@
 # M-O — recording-recovered Kubernetes output (#1831)
 
-Status: **packet ready for review; design prototype and owner approval pending**. This independently approvable packet covers the Output-tab rendering. Durable recording and mask erasure work and nonvisual output capture proceed separately; this packet grants no visual approval.
+Status: **owner-approved 2026-10-08 at prototype version `1791419190-5f01`; the refused-viewer server answer remains open**. This independently approvable packet covers the Output-tab rendering. Durable recording and mask erasure work and nonvisual output capture proceed separately; this packet grants no visual approval.
 
 Baseline: `7b08fd722ca4dcfd9d2d59e6f1cb8ecab54d8dcf`. Authority: `docs/design/CONSOLE-RULES.md`, `docs/design/SYNC.md`, `.design-sync/NOTES.md`, approved 088 C4 and existing M8 Output canon. No product rendering code changed to prepare this artifact.
 
@@ -161,4 +161,4 @@ Preserve test IDs `run-output-text` and `run-output-refusal`; add the fixtures a
 - **O-D6:** Approval identifies M-O's concrete design prototype URL/revision and these decisions. It does not approve M-F/M-R. The packet and local source inventory alone do not satisfy the remote prototype gate.
 - **O-D7:** Amend `RUN_OUTPUT.captureGap` to exactly “Some or all of this run's output could not be recovered.” for all sources. No restart or recording-exists claim is inferred from the gap flag. This copy amendment is proposed, unimplemented and pending owner approval.
 
-Owner approval record: **pending**. Design prototype URL/revision: **not created or verified yet**.
+Owner approval record: **approved 2026-10-08**. Design prototype revision: `1791419190-5f01`.

@@ -88,7 +88,8 @@ func (o ownRuns) ListRunningWithPolicy(ctx context.Context) ([]lifecycle.RunSumm
 // TestPG_MaxAgeStopsAnOutageKeptLiveAgent: a run kept after a control-plane outage before its
 // end still runs its agent, so WARDYN_RUN_MAX_AGE ends it like a live run: STOPPED, torn down
 // and audited run.max_age.expire. A run kept with its agent already stopped (after a reboot, or
-// an outage past its end) is left to its files grace, by the scan and by the transition alike.
+// an outage past its end with the stop recorded) is left to its files grace, by the scan and by
+// the transition alike.
 func TestPG_MaxAgeStopsAnOutageKeptLiveAgent(t *testing.T) {
 	pool := revocationPool(t)
 	ctx := context.Background()
@@ -106,7 +107,8 @@ func TestPG_MaxAgeStopsAnOutageKeptLiveAgent(t *testing.T) {
 			t.Fatalf("create run: %v", err)
 		}
 		t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM agent_runs WHERE id=$1`, id) })
-		if _, err := pool.Exec(ctx, `UPDATE agent_runs SET lost_at = now(), lost_reason = $2 WHERE id=$1`, id, string(reason)); err != nil {
+		// Past its end the lease sweep has stopped the agent and recorded it.
+		if _, err := pool.Exec(ctx, `UPDATE agent_runs SET lost_at = now(), lost_reason = $2, agent_stopped_at = CASE WHEN ends_at < now() THEN now() END WHERE id=$1`, id, string(reason)); err != nil {
 			t.Fatalf("keep the run: %v", err)
 		}
 		return id
@@ -137,6 +139,48 @@ func TestPG_MaxAgeStopsAnOutageKeptLiveAgent(t *testing.T) {
 	for _, id := range []uuid.UUID{pastEnd, rebooted} {
 		if out, err := stopper.StopRunMaxAge(ctx, id, time.Now()); err != nil || out.Applied {
 			t.Errorf("StopRunMaxAge(%s) = %+v, %v; want not applied", id, out, err)
+		}
+	}
+}
+
+// TestPG_MaxAgeSkipsARunCarryingALifetimeCapThroughTheRealAdapter: the adapter reads
+// lifetime_cap_at into the reaper's summary, so the lease sweep, not the reaper,
+// ends a run that carries a cap; an old run with none is still stopped. Guarded by
+// WARDYN_TEST_PG.
+func TestPG_MaxAgeSkipsARunCarryingALifetimeCapThroughTheRealAdapter(t *testing.T) {
+	pool := revocationPool(t)
+	ctx := context.Background()
+	pg := store.PG{Pool: pool}
+	mk := func(capped bool) uuid.UUID {
+		id := uuid.New()
+		now := time.Now().UTC()
+		r := types.AgentRun{
+			ID: id, CreatedAt: now.Add(-3 * time.Hour), UpdatedAt: now,
+			CreatedBy: "op@example.com", Agent: "claude-code", Task: "max-age cap probe",
+			ConfinementClass: types.CC2, State: types.RunRunning,
+			SPIFFEID: "spiffe://wardyn.test/agent-run/" + id.String(), RunnerTarget: "docker",
+			SandboxRef: "wardyn-agent-" + id.String(),
+		}
+		if capped {
+			at := now.Add(time.Hour)
+			r.LifetimeCapAt, r.LifetimeCapSource = &at, types.LimitSourceDeployment
+		}
+		if _, err := pg.CreateRun(ctx, r); err != nil {
+			t.Fatalf("create run: %v", err)
+		}
+		t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM agent_runs WHERE id=$1`, id) })
+		return id
+	}
+	capped, older := mk(true), mk(false)
+
+	own := ownRuns{Store: lifecycleStore{pool: pool}, ids: map[uuid.UUID]bool{capped: true, older: true}}
+	reaper := lifecycle.New(own, lifecycleStopper{pool: pool, runner: &countingRunner{}}, &fakeAuditRecorder{},
+		lifecycle.Config{MaxAge: time.Hour})
+	reaper.Tick(ctx)
+
+	for id, want := range map[uuid.UUID]types.RunState{capped: types.RunRunning, older: types.RunStopped} {
+		if got, err := pg.GetRun(ctx, id); err != nil || got.State != want {
+			t.Errorf("run %s state = %v (err %v), want %s", id, got.State, err, want)
 		}
 	}
 }

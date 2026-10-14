@@ -131,7 +131,7 @@ For incident response or offboarding:
      forward continues until it closes or the run is torn down.
 5. Erase the person's stored credentials with
    `DELETE /api/v1/people/{principal}/credentials` and follow the
-   [workspace and drive offboarding procedure](OPERATIONS.md#multi-user-who-can-change-what).
+   [workspace and drive offboarding procedure](operations/ownership-and-offboarding.md).
    - Disabling sign-in and deleting SSH keys do not erase stored model or forge
      credentials or reclaim workspace data.
 
@@ -151,6 +151,8 @@ For incident response or offboarding:
   refused access; see [Audit actions](AUDIT-ACTIONS.md).
 
 ## 2. Connect
+
+- A background task has no SSH access. The SSH client sees only `Permission denied (publickey)`; the background-task reason (`run_background_only`) is in the failed `ssh.authenticate` audit row (the gateway writes no server-log line for it). A channel opened on an already-open connection answers with the background-task refusal text.
 
 - The run detail page's "Attach from your terminal" card shows the exact
   command for a run you own while it is RUNNING:
@@ -382,6 +384,36 @@ scp ./local-file <run-id>@<advertise-host>:/home/agent/  -P <port>
   the subsystem's backing process — no SFTP protocol reimplementation on
   Wardyn's side.
 - See [Image contract](#image-contract-byoi) if this 404s.
+- **`wardyn-sync`** runs the same `sftp-server` with `-d <dir>`, after `env` requests `WARDYN_SYNC_DIR` (absolute, under `/home/agent/`, no `..`; default `/home/agent/work`) and `WARDYN_SYNC_DIRECTION` (`push` or `pull`), read on this subsystem only.
+  - A refused directory launches nothing; a missing one launches at the sandbox's working directory, so check `RealPath(".")` and use absolute paths.
+
+### Sync a directory (`wardyn sync`)
+
+```sh
+wardyn ssh-key ensure                      # once
+wardyn sync <run-id> ./project [--remote-dir /home/agent/work] [--watch] [--pull] [--max-pull-bytes N] [--json]
+```
+
+Rules, enforced by the CLI (the gateway only relays bytes) and not overridable:
+
+- Laptop to sandbox; `--pull` is per run and is the audit row's `direction`.
+- Never deletes; refuses symlinks both ways; a pulled file never gets an exec bit.
+- Never syncs `.git/`, `.envrc`, `.direnv/`, `.vscode/tasks.json`, `.vscode/launch.json`, `.idea/runConfigurations/`, `.idea/workspace.xml`.
+- A file changed on both sides since the last sync is not pulled: the laptop's copy wins and the path is listed.
+- Paths equal under case or Unicode normalisation, and names with invisible characters, are refused. State lives in `~/.local/state/wardyn/sync/<run-id>.json`.
+- A pass pulls at most `--max-pull-bytes` (1 GiB), and never a file over 256 MiB; a refused path is listed and the pass goes on.
+- It refuses a plain-http, non-loopback server: the gateway address and host key come from `/healthz`.
+- The directory is a start point, not a boundary; the CLI aborts unless `RealPath(".")` is the directory it asked for.
+- The sandbox's mtime has one-second resolution, so a same-size edit inside that second is not seen.
+
+`rsync` works too, over `wardyn run ssh --config`'s `Host` block; add `--chmod=F644,D755` to pull. It applies none of the conflict, collision or size rules, so prefer `wardyn sync --pull`:
+
+```sh
+rsync -rt --no-perms --no-links --exclude='.git/' --exclude='.envrc' --exclude='.direnv/' \
+  --exclude='.vscode/tasks.json' --exclude='.vscode/launch.json' \
+  --exclude='.idea/runConfigurations/' --exclude='.idea/workspace.xml' \
+  ./project/ wardyn-<short-id>:/home/agent/work/
+```
 
 ## 4. `-L` port forwarding
 
@@ -507,11 +539,12 @@ wardyn run ssh <id> --json                                   # -> {"host","port"
   - the git-broker's default confinement refuses that push with no way to tell the external tool why.
 - `git_push_any_branch: true` is the per-run opt-out (see [docs/POLICIES.md](POLICIES.md)'s `git_push_any_branch` row).
 - **Channel budget.** `session` (shell/exec/sftp) and `direct-tcpip` (`-L`
-  forwards) draw from the **same** per-run cap —
-  [`maxSSHSessionsPerRun`](../internal/api/sshgateway.go) (`4`, today) — so an
-  editor holding open a shell, an sftp session and two `-L` forwards has used
-  the whole budget.
+  forwards) draw from the **same** per-run cap,
+  [`WARDYN_SSH_MAX_SESSIONS_PER_RUN`](ENV.md#wardyn_ssh_max_sessions_per_run)
+  (default `4`), so an editor holding open a shell, an sftp session and two
+  `-L` forwards has used the whole budget.
 - A fifth channel of any kind is refused, not queued.
+- `wardyn-sync` has its own cap of `2`; a `session` channel over the shared cap may only become one.
 - **Under SSO, register the key as yourself.** Authorization is owner-only
   (above): the run has to be created by the **same principal** that registered
   the key.
@@ -547,7 +580,7 @@ wardyn run ssh <id> --json                                   # -> {"host","port"
 ## Recording
 
 > [!WARNING]
-> **Recording ceiling, and 0.7 makes it fleet-wide.** The desktop envelope now ships `WARDYN_SSH_LISTEN` ON, so every managed laptop runs this gateway. Two halves, in opposite directions: `ssh` **exec** output and **sftp** payloads are **not recorded** (and sftp uploads are not byte-counted).
+> **Recording ceiling, and 0.7 makes it fleet-wide.** The desktop envelope now ships `WARDYN_SSH_LISTEN` ON, so every managed laptop runs this gateway. Two halves, in opposite directions: `ssh` **exec** output and **sftp** payloads are **not recorded** (sftp and sync bytes are counted, not content).
 >
 > So work done over those paths leaves no session evidence — do not present Remote-SSH as the recommended developer path without saying so.
 >
@@ -597,7 +630,9 @@ wardyn run ssh <id> --json                                   # -> {"host","port"
 - **Auth.** Registered public keys only — no password, no keyboard-interactive.
 - `MaxAuthTries` is bounded per connection; an unknown key or a malformed
   username (anything that isn't a run id) is rejected and audited (`ssh.authenticate`,
-  `outcome=failure`), so a scan against the gateway leaves a trail.
+  `outcome=failure`). These unknown-actor refusals share the `auth.fail` rate bound (burst 5,
+  1/s) and a drop is counted in `wardyn_auth_failed_suppressed_total`; a refusal that names a
+  registered key's person is recorded at a per-key bounded rate (burst 5, 1/s).
 - **Owner-only, and the admin carve-out is a bounded-stale stamp — weaker than
   the web terminal's, but no longer unboundedly so.**
   - SSH authorization is
@@ -709,7 +744,10 @@ wardyn run ssh <id> --json                                   # -> {"host","port"
   - a small, documented cap on concurrent SSH channels — `session` (shell/
     exec/sftp) AND `direct-tcpip` (`-L` forwards) draw from the SAME per-run
     counter. So one run cannot exhaust the daemon's own resources by opening
-    unbounded parallel shells OR unbounded forwards.
+    unbounded parallel shells OR unbounded forwards;
+  - a separate bound on live terminal sessions: eight per run on each replica,
+    web terminals and SSH shells together. A ninth is refused and audited as a
+    `session.attach` failure.
 - **Idle auto-stop.** A shell, a running `exec`, an open sftp subsystem, and a
   held `-L` forward ALL reset the run's idle clock when they open and every 30
   seconds while they are open.
@@ -735,12 +773,12 @@ wardyn run ssh <id> --json                                   # -> {"host","port"
   `TERM`/`LANG`/`LC_*` from the client's environment into the exec — nothing
   else the client's shell happens to export reaches the sandbox.
 - **Audit actions**:
-  - `ssh.authenticate` (every attempt, including failures),
+  - `ssh.authenticate` (every attempt; unknown-actor refusals are rate-bound),
     `session.attach` with `transport:ssh` in its data (the shell path, same
     action name the browser terminal uses, so both show up together in a run's
-    timeline), `ssh.exec` (`argv`, `exit`), `ssh.sftp.transfer` (`bytes` transferred),
-    `ssh.forward` (`port`, `bytes`).
-  - This is the source of record for these four;
+    timeline), `ssh.exec` (`argv`, `exit`), `ssh.forward` (`port`, `bytes`).
+  - `ssh.sftp.transfer` (`bytes`, `bytes_in`, `bytes_out`), `ssh.sync.transfer` (`dir`, `direction` client-declared, `bytes_in`, `bytes_out`).
+  - This is the source of record for these five;
     [`docs/AUDIT-ACTIONS.md`](AUDIT-ACTIONS.md) is the vocabulary reference for
     every other audit action in the system and points back here for these.
 

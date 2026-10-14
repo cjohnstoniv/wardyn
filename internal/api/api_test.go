@@ -316,8 +316,14 @@ func newHarness(t *testing.T) *harness {
 	approvals := newFakeApprovals()
 	brk := &fakeBroker{}
 	baseCtx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
-	srv := New(Config{
+	var srv *Server
+	// Cancel, then join the detached launch/teardown work (goBackground), so it
+	// cannot log into a slog default a later test installs (#1315).
+	t.Cleanup(func() {
+		cancel()
+		srv.WaitBackground()
+	})
+	srv = New(Config{
 		BaseCtx:     baseCtx,
 		Identity:    idp,
 		Approvals:   approvals,
@@ -467,7 +473,7 @@ func doVia(t *testing.T, wrap func(testing.TB, http.Handler) http.Handler, srv *
 	// loopback peer. Model that so local-mode tests exercise the allowed path.
 	r.RemoteAddr = "127.0.0.1:54321"
 	w := httptest.NewRecorder()
-	wrap(t, srv.Handler()).ServeHTTP(w, r)
+	wrap(t, srv.Handler()).ServeHTTP(deadlineRecorder{w}, r)
 	return w
 }
 

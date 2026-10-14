@@ -121,6 +121,7 @@ func (q *chunkQueue) putBack(b []byte) {
 // stop ends the queue: nothing more is written, and what is queued is dropped. The ring has it.
 func (q *chunkQueue) stop() {
 	q.mu.Lock()
+	clear(q.pend) // the fence calls this to erase what it holds, so zero it before dropping it
 	q.stopped, q.pend = true, nil
 	q.mu.Unlock()
 }

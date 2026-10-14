@@ -23,6 +23,7 @@ import { Chip } from "../../wardyn/primitives";
 import { useOperator, useOperatorResolved, usePrincipal } from "../../wardyn/operator-context";
 import { mayEnterRunOrUnknown, runEntryRefusalLine } from "../../../lib/run-entry";
 import { RUN_COCKPIT, RUN_MODE } from "../../wardyn/copy";
+import { LOCAL_RUN, runnerLabel } from "../../wardyn/copy/runners";
 import type { StartupLastStep } from "../run-status-detail";
 import { StartupProgress } from "./startup-progress";
 
@@ -53,6 +54,26 @@ export function TerminalPane({
   // (#1476: the run's person, or an admin on a run no person owns).
   const canAttach = mayEnterRunOrUnknown(run, principal, operator, resolved);
   const attachable = !!run.interactive && run.state === "RUNNING" && canAttach;
+
+  // 0.9 (M-RN-3 RS6): a live run on a computer that is offline cannot be reached, so the terminal and the
+  // attach controls give way to a sentence naming it. The captured replay is still offered; it is a file the
+  // org already holds.
+  if (attachable && run.placement === "local" && run.runner_online === false) {
+    return (
+      <PaneFrame title="Terminal">
+        <PaneNotice
+          text={LOCAL_RUN.TERMINAL_OFFLINE(runnerLabel(run))}
+          action={
+            recordingDisabled ? undefined : (
+              <button onClick={onGoRecording} className="text-xs font-medium text-info hover:underline">
+                Watch the captured session →
+              </button>
+            )
+          }
+        />
+      </PaneFrame>
+    );
+  }
 
   if (attachable) {
     // fill: the pane owns the height. h-[70vh] was a guess that predates this

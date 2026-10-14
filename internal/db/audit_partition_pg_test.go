@@ -338,7 +338,7 @@ func TestPG_AuditPartition_GuardsRefuseWhatAuditAppendDidNotAllocate(t *testing.
 	t.Run("a forged recorded_at is refused", func(t *testing.T) {
 		appendAudit(t, f.owner, "test.hw.seed") // the high-water mark is now a live row, above the cutover
 		for name, c := range map[string]struct{ at, want string }{
-			"control: the server clock is accepted": {`clock_timestamp()`, ""},
+			"control: the server clock is accepted": {`greatest(clock_timestamp(), (SELECT hw_recorded_at FROM audit_partition_meta))`, ""},
 			"ahead of the clock":                    {`now() + interval '1 day'`, "ahead of the server clock"},
 			"behind the high-water":                 {`(SELECT hw_recorded_at - interval '1 microsecond' FROM audit_partition_meta)`, "before the chain high-water mark"},
 			"before the cutover":                    {`'-infinity'::timestamptz + interval '1 day'`, "before the chain high-water mark"},
@@ -370,7 +370,7 @@ func TestPG_AuditPartition_GuardsRefuseWhatAuditAppendDidNotAllocate(t *testing.
 	})
 
 	t.Run("a partition TRUNCATE is refused, and so is the parent's and the legacy one", func(t *testing.T) {
-		live := pgScalar[string](t, f.owner, `SELECT m->>'name' FROM audit_partition_meta, jsonb_array_elements(manifest) m ORDER BY m->>'lo' LIMIT 1`)
+		live := pgScalar[string](t, f.owner, `SELECT m->>'name' FROM audit_partition_meta, jsonb_array_elements(manifest) m WHERE m->>'name' <> 'audit_events_legacy' ORDER BY m->>'lo' LIMIT 1`)
 		for _, target := range []string{"audit_events", live, "audit_events_legacy"} {
 			if _, err := f.owner.Exec(ctx, `TRUNCATE `+target); err == nil {
 				t.Errorf("TRUNCATE %s succeeded; the append-only guard is not armed on it", target)
@@ -511,7 +511,7 @@ DECLARE
     nm text;
 BEGIN
     SELECT m->>'name', (m->>'lo')::timestamptz, (m->>'hi')::timestamptz INTO nm, c, e
-      FROM audit_partition_meta, jsonb_array_elements(manifest) m ORDER BY m->>'lo' LIMIT 1;
+      FROM audit_partition_meta, jsonb_array_elements(manifest) m WHERE m->>'name' <> 'audit_events_legacy' ORDER BY m->>'lo' LIMIT 1;
     IF b >= e THEN RAISE EXCEPTION 'too close to a month end to place a boundary'; END IF;
     EXECUTE format('ALTER TABLE audit_events DETACH PARTITION %I', nm);
     EXECUTE format('DROP TABLE %I', nm);

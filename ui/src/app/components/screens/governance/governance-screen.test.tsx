@@ -545,7 +545,7 @@ describe("GovernanceScreen — assignments and the resolved preview", () => {
   // server offers each to both tiers and its answer names the one that
   // matched), and user_subjects arrives sign-in-subject-first so the resolver's
   // array_position tie-break agrees with capabilitySubjects.
-  it("offers every claim to both tiers, sign-in subject before email", async () => {
+  it("offers every claim to both tiers, sign-in subject before email, with the standard user type", async () => {
     renderScreen();
     await screen.findByText(GOV.PREVIEW_TITLE);
     await userEvent.type(
@@ -557,6 +557,7 @@ describe("GovernanceScreen — assignments and the resolved preview", () => {
     expect(previewGovernanceMock).toHaveBeenCalledWith({
       user_subjects: ["8f2c-sub-id", "eng", "alice@corp.example"],
       groups: ["alice@corp.example", "8f2c-sub-id", "eng"],
+      user_type: "standard",
     });
   });
 
@@ -601,6 +602,7 @@ describe("Governance components render no copy of their own", () => {
     "profile-overlay.tsx",
     "assignments.tsx",
     "display.tsx",
+    "runner-credentials.tsx",
   ]);
 });
 
@@ -726,8 +728,8 @@ describe("GovernanceScreen — the third limit is the user-drive door", () => {
     await userEvent.click(screen.getByRole("button", { name: `${GOV.EDIT} ${GREENFIELD.name}` }));
 
     const editor = await screen.findByTestId("governance-profile-editor");
-    // 3 doors + RL-14's two run-limit gates (allow_no_end, user_changes_limits).
-    expect(within(editor).getAllByRole("switch")).toHaveLength(5);
+    // 4 doors (the member-drive door among them) + RL-14's two run-limit gates (allow_no_end, user_changes_limits).
+    expect(within(editor).getAllByRole("switch")).toHaveLength(6);
     const door = within(editor).getByRole("switch", { name: GOV.LIMIT_DRIVE_LABEL });
     expect(door).toHaveAttribute("aria-checked", "false");
     expect(within(editor).getByText(GOV.LIMIT_DRIVE_HINT)).toBeInTheDocument();

@@ -56,6 +56,7 @@ import (
 
 	gooidc "github.com/coreos/go-oidc/v3/oidc"
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 	"golang.org/x/oauth2"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
@@ -398,6 +399,7 @@ func (s *Server) mountAzureDevOpsSignInRoutes(r chi.Router) {
 	r.Get(adoSignInCallbackRoute, s.handleADOCallback)
 	r.Delete("/scm/azure-devops/connection", s.handleADODisconnect) // ado_pat_console.go
 	s.mountAzureFoundrySignInRoutes(r)                              // azure_foundry_entra.go; its callback is the one above
+	s.mountAzureCLISignInRoutes(r)                                  // cli_azure_signin.go; likewise
 }
 
 // resolveADOEntra resolves this deployment's Azure DevOps configuration and
@@ -612,11 +614,15 @@ func (s *Server) handleADOCallback(w http.ResponseWriter, r *http.Request) {
 		writeErrorReason(w, http.StatusForbidden, reasonADOSignInNoSession, adoSignInNoSessionRefusal)
 		return
 	}
-	// One registered redirect URI serves both flows: an Azure Foundry capture
-	// announces itself by its own state cookie, matched against the returned
-	// state, and everything else is this handler's.
+	// One registered redirect URI serves every flow: an Azure Foundry or an
+	// Azure CLI capture announces itself by its own state cookie, matched
+	// against the returned state, and everything else is this handler's.
 	if stamp, ok := s.azureFoundryFlow(r); ok {
 		s.handleAzureFoundryCallback(w, r, subject, stamp)
+		return
+	}
+	if stamp, ok := s.azureCLIFlow(r); ok {
+		s.handleAzureCLICallback(w, r, subject, stamp)
 		return
 	}
 	cfg, ok := s.resolveADOEntra(w, r)
@@ -721,6 +727,11 @@ func (s *Server) handleADOCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	// Under the per-owner lock a renewal holds from its read to its write, so
 	// the renewal cannot write its copy of the old sign-in over this one.
+	// The resume of a run a resolved request held takes the run's lock, which must precede this sign-in
+	// lock (db.LockOrder): it runs after the lock is released, the deferred calls running last-in first.
+	var resolved []uuid.UUID
+	parent := ctx
+	defer func() { s.approvalsClosed(parent, resolved) }()
 	ctx, unlock, err := s.lockADOSignIn(ctx, subject, cfg.RowID)
 	if err == nil {
 		defer unlock()
@@ -752,7 +763,7 @@ func (s *Server) handleADOCallback(w http.ResponseWriter, r *http.Request) {
 	})
 	s.auditADOPATConnect(ctx, subject, cfg, granted, adoEntraSourceSignIn)
 	// After the capture row, never before: captured -> resolved -> retry.
-	s.resolvePendingADOReauth(ctx, subject, cfg.RowID)
+	resolved = s.resolvePendingADOReauth(ctx, subject, cfg.RowID)
 	http.Redirect(w, r, s.cfg.BasePath+adoSignInDonePath, http.StatusFound)
 }
 

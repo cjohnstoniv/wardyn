@@ -110,6 +110,8 @@ jobs:
     if: needs.gate.outputs.green == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    env:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
     steps:
       # The commit CI passed on, not the branch tip: under workflow_run,
       # github.sha is main's tip at the time this run started.
@@ -122,6 +124,12 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Log in to Docker Hub (skipped when the secret is absent, e.g. a fork)
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        if: env.DOCKERHUB_USERNAME != ''
+        with:
+          username: ${{ env.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
       # Tags: always a short-sha; "latest" added on main; the bare semver
       # (v-prefix stripped, matching Chart.yaml's appVersion) added on a
       # vX.Y.Z tag. Hand-rolled in a few lines rather than pulling in

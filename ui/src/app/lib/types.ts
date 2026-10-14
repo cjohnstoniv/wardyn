@@ -11,6 +11,8 @@
 // Import directly from a domain module for new code if you prefer, but the
 // barrel is the stable public surface.
 export * from "./types/runs";
+export * from "./types/preflight";
+export * from "./types/run-create";
 export * from "./types/policy";
 export * from "./types/workspaces";
 export * from "./types/profile";
@@ -30,3 +32,5 @@ export * from "./types/scim";
 export * from "./types/people";
 export * from "./types/policy-preview";
 export * from "./types/components";
+export * from "./types/new-run-contract";
+export * from "./types/templates";

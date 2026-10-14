@@ -310,6 +310,10 @@ func run() error {
 	if fan != nil {
 		brk = brk.WithSIEM(fan)
 	}
+	// The rows the database writes itself (a key destroy here, the retention rows below) go to the
+	// same sinks after their commit.
+	siem := siemSink(fan)
+	armKeyDestroySIEM(secrets, siem)
 
 	// Approval FSM service (adapter over internal/approval + internal/store).
 	// FIX #5: wired with maskedRec (masked + SIEM fanout), matching idp/broker —
@@ -375,6 +379,7 @@ func run() error {
 	// and before the server that serves its status; orgFederation is nil when
 	// WARDYN_ORG_URL is unset.
 	st := store.NewPG(pool)
+	st.SIEM = siem
 	orgFederation, err := checkPostureAndBootHybrid(bootCtx, rootCtx, f, lm.enabled, feats.authn != nil, bootKeys, st, maskedRec)
 	if err != nil {
 		return err
@@ -393,18 +398,23 @@ func run() error {
 		// sweeper (runApprovalSweeper) enforces the same value, and dispatch
 		// mirrors it onto a hold-mode run's sandbox (RL-1).
 		ApprovalExpiryAfter: *f.approvalExpiryAfter,
-		RunLeaseConfig:      api.RunLeaseConfig{EndedRunGrace: *f.endedRunGrace},
+		RunLeaseConfig:      api.RunLeaseConfig{EndedRunGrace: *f.endedRunGrace, RunMaxAge: cliutil.EnvDuration("WARDYN_RUN_MAX_AGE", 0)},
 		// Same minter, second use: the setup checklist asks it whether GitHub
 		// confines the App to the run branch namespace. nil when no App is
 		// configured, which omits the row.
 		GitHubRulesets: gh,
+		GitHubBranches: gh,
 		Audit:          maskedRec,
+		RunnerAuditPrepare: func(ctx context.Context, ev types.AuditEvent) (types.AuditEvent, error) {
+			return prepareRunnerAudit(ctx, ev, maskingRecorder{reg: maskReg, scope: maskScopes}, sealSrc)
+		},
 		// hand the raw spool + raw store recorder to the server so it starts
 		// the background drain that replays spooled events back into the store once
 		// PG recovers (both nil when no spool is configured => drain is a no-op).
 		AuditSpool:          auditSpool,
 		AuditDrainRecorder:  auditDrainRec,
 		AuditSinkDrops:      sinkDropsReporter(fan),
+		AuditDelivery:       auditDeliveryReporter(*f.auditSinks, st),
 		AuditCoalesceWindow: *f.auditCoalesceWindow,
 		Runner:              run,
 		AdminToken:          *f.adminToken,
@@ -418,6 +428,7 @@ func run() error {
 		TrustedCAPEM:        trustedCAPEM,
 		DemoVideoBaseURL:    knobs.demoVideoBaseURL,
 		RunnerTarget:        runnerTarget,
+		RunnerOrgURL:        *f.runnerOrgURL,
 		UIDir:               *f.uiDir,
 		ControlPlaneURL:     *f.controlURL,
 		ControlPlaneCAPEM:   feats.hop.caCertPEM(),
@@ -472,6 +483,7 @@ func run() error {
 		ADOEntra:                 adoEntraSourceFromFlags(st, f), // ado_entra_source.go
 		ADOEntraByRow:            adoEntraByRow(st, adoEntraLoginFromFlags(f)),
 		AzureFoundryEntra:        azureFoundryEntraByRow(st, adoEntraLoginFromFlags(f)), // ado_entra_source.go
+		AzureCLIEntra:            azureCLIEntraByRow(adoEntraLoginFromFlags(f)),
 		ADOLoginFacts:            adoLoginFactsFromFlags(f),
 		Components:               componentsInfo(f, runnerTarget, feats.recStore),
 		ScanAIAdvisor:            feats.scanAdvisor,
@@ -481,28 +493,31 @@ func run() error {
 		// "no", or a misspelling) leaves the broker ON.
 		DisableGitPATBroker: strings.EqualFold(strings.TrimSpace(*f.gitPATBroker), "off"),
 		// First-run setup readiness inputs (GET /api/v1/setup/status).
-		AgeKeyDurable:         secretsDurable(*f.ageKey, secrets),
-		SecretStoreExternal:   storesExternally(secrets),
-		SecretKeyService:      keyService(secrets),
-		KEKRequired:           *f.vault.kekRequired,
-		PlatformKeySeparate:   platformKeySeparate(f, keyService(secrets) != ""),
-		LocalLoopback:         lm.loopback,
-		LocalTrustForwarder:   *f.localTrustFwd,
-		OIDCRoleMapConfigured: strings.TrimSpace(*f.oidcRoleMap) != "",
-		OIDCRedirectURL:       *f.oidcRedirectURL,
-		OIDCSecureCookies:     posture.secureCookies,
-		BasePath:              *f.basePath,
+		AgeKeyDurable:             secretsDurable(*f.ageKey, secrets),
+		SecretStoreExternal:       storesExternally(secrets),
+		SecretKeyService:          keyService(secrets),
+		SecretKeyServiceStaticKey: keyServiceStaticKey(secrets),
+		KEKRequired:               *f.vault.kekRequired,
+		SecretLocalRows:           localRowsCounter(secrets),
+		PlatformKeySeparate:       platformKeySeparate(f, keyService(secrets) != ""),
+		LocalLoopback:             lm.loopback,
+		LocalTrustForwarder:       *f.localTrustFwd,
+		OIDCRoleMapConfigured:     strings.TrimSpace(*f.oidcRoleMap) != "",
+		OIDCRedirectURL:           *f.oidcRedirectURL,
+		OIDCSecureCookies:         posture.secureCookies,
+		BasePath:                  *f.basePath,
 		// SSH gateway (C2/C3): SSHHostKey is nil unless -ssh-listen is set
 		// (buildOptionalFeatures), which is also the sole gate ServeSSHGateway
 		// itself checks below — belt and suspenders, "empty = off" holds either
 		// way this Config is constructed.
-		SSHListenAddr:    *f.sshListen,
-		SSHAdvertiseAddr: *f.sshAdvertise,
-		SSHProxyCommand:  *f.sshProxyCommand,
-		SSHHostKey:       feats.sshHostKey,
-		SSHRoleTTL:       *f.sshRoleTTL,
-		APITokenMaxTTL:   *f.apiTokenMaxTTL,
-		RoleStampTTL:     *f.roleStampTTL,
+		SSHListenAddr:        *f.sshListen,
+		SSHAdvertiseAddr:     *f.sshAdvertise,
+		SSHProxyCommand:      *f.sshProxyCommand,
+		SSHHostKey:           feats.sshHostKey,
+		SSHRoleTTL:           *f.sshRoleTTL,
+		SSHMaxSessionsPerRun: *f.sshMaxSessionsPerRun,
+		APITokenMaxTTL:       *f.apiTokenMaxTTL,
+		RoleStampTTL:         *f.roleStampTTL,
 		// How long a governance change held for a second human waits (the switch itself is read
 		// per request by internal/api).
 		GovernanceChangeTTL: *f.governanceChangeTTL,
@@ -539,6 +554,11 @@ func run() error {
 		return err
 	}
 
+	// The remote-provided runner pool an upgraded deployment starts with, once. Before anything is served.
+	if err := srv.BootstrapRunnerPools(bootCtx); err != nil {
+		return err
+	}
+
 	// Refuse a metrics bind failure before workers or optional gateways start.
 	if err := startMetricsListener(rootCtx, *f.metricsListen, srv.MetricsListenerHandler()); err != nil {
 		return err
@@ -546,7 +566,7 @@ func run() error {
 
 	// Periodic goroutines (lifecycle reaper, groundtruth token rotator, approval
 	// expiry sweeper) + the boot-time reconciliation pass (C3).
-	startBackgroundWorkers(rootCtx, f, srv, run, pool, idp, brk, maskedRec, feats.recStore, leader, ticks)
+	startBackgroundWorkers(rootCtx, f, srv, run, pool, st, idp, brk, maskedRec, feats.recStore, leader, ticks)
 
 	// SSH gateway accept loop (own goroutine, like the periodic workers above,
 	// and extracted the same way — see startSSHGateway's own doc comment).

@@ -1,0 +1,23 @@
+[
+  { "key": "SELECTION_CONFLICT", "args": [], "text": "Send drive or drives, not both." },
+  { "key": "INVALID", "args": ["0"], "text": "drives[0].drive_id: give a drive id from your drive list, once." },
+  { "key": "TOO_MANY", "args": ["16"], "text": "drives: attach at most 16 drives." },
+  { "key": "NOT_FOUND", "args": ["8b1f6a52-3c1e-4c55-9d0e-2f4b7c9a1e10"], "text": "No drive 8b1f6a52-3c1e-4c55-9d0e-2f4b7c9a1e10 is available to you." },
+  { "key": "NOT_IN_POOL", "args": ["team-data"], "text": "team-data: not available in this pool's runners." },
+  { "key": "TARGET_CONFLICT", "args": ["Team data", "team data", "/home/agent/shared/team-data"], "text": "Team data and team data both mount at /home/agent/shared/team-data. Attach one of them." },
+  { "key": "SHARE_BESIDE_MANAGED", "args": ["Team share", "Personal"], "text": "Team share is a shared drive and Personal a managed one; a Kubernetes run mounts one kind or the other. Attach one of them." },
+  { "key": "MEMBER_REQUIRES_PERSON", "args": [], "text": "Sign in under your own account to create or delete a drive." },
+  { "key": "MEMBER_DISABLED", "args": [], "text": "Your organisation doesn't let people create drives. Ask an admin." },
+  { "key": "MEMBER_DENIED_BY_PROFILE", "args": ["contractors"], "text": "Your governance profile \"contractors\" doesn't let you create drives." },
+  { "key": "MEMBER_LIMIT_REACHED", "args": ["3", "3"], "text": "You have 3 of 3 drives. Delete one to create another." },
+  { "key": "MEMBER_UNSUPPORTED", "args": [], "text": "This server can't create drives." },
+  { "key": "MEMBER_UNSIZED", "args": [], "text": "This server can't create drives until an admin sets their size." },
+  { "key": "MEMBER_DELETE_UNAVAILABLE_CREATE", "args": [], "text": "This server can't delete drives, so it can't create them. Ask your admin." },
+  { "key": "MEMBER_DELETE_UNAVAILABLE", "args": [], "text": "This server can't delete drives right now. Ask your admin." },
+  { "key": "MEMBER_NAME_INVALID", "args": [], "text": "Give the drive a name with at least one letter or digit, up to 128 characters." },
+  { "key": "MEMBER_NAME_TAKEN", "args": ["Team data"], "text": "\"Team data\" is already the name of a drive you can use. Pick another name." },
+  { "key": "MEMBER_IN_USE", "args": [], "text": "A run is still using this drive. End that run, or delete a run kept after its end, then try again." },
+  { "key": "MEMBER_BUSY", "args": [], "text": "This drive is already being deleted." },
+  { "key": "MEMBER_DELETE_FAILED", "args": [], "text": "The drive's files couldn't be deleted. Nothing was removed; try again." },
+  { "key": "MEMBER_RATE_LIMITED", "args": [], "text": "Too many drive changes; wait a minute and try again." }
+]

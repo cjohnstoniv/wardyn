@@ -1,3 +1,11 @@
-deploy/helm/wardyn/README.md=11083 share=35
+# deploy/helm/wardyn/README.md 11085 adds 2 over 11083 (G-090-cleanup slice F, docs rows that contradict the code): measured; the lead re-measures at merge.
+# deploy/helm/wardyn/README.md 11131 adds 46 over 11085 (setup-limits round 1): k8s.readNodes also lets boot measure the cluster and propose its runner's limits; measured.
+deploy/helm/wardyn/README.md=11131 share=35
 deploy/kind/sso/README.md=557 share=35
-deploy/azure-entra-sso/README.md=3084 share=30
+# deploy/azure-entra-sso/README.md 3138 adds 54 over 3084, itemised by the diff:
+# 31 (the Postgres PVC 05-kind-deploy.sh now adopts, and that its FIRST run costs
+# the database's contents because the mount restarts the pod empty), 13 (05 sets no
+# Bedrock region or model — the false claim this replaces — and that the Bedrock model
+# provider is a console row the walk adds), 10 (05 keeps no state file: what is deployed
+# is read back off the cluster's image tag). The gate counts 54.
+deploy/azure-entra-sso/README.md=3138 share=30

@@ -285,3 +285,106 @@ func TestPG_CreateApproval_RoutedTiersAreAllEnqueuedWithTheirDueAt(t *testing.T)
 		t.Fatalf("an unrouted kind got %d outbox rows, want 0", n)
 	}
 }
+
+// budgetAudit records what the notify package audits, for the suppression row.
+type budgetAudit struct {
+	mu  sync.Mutex
+	evs []types.AuditEvent
+}
+
+func (a *budgetAudit) Record(_ context.Context, ev types.AuditEvent) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.evs = append(a.evs, ev)
+	return nil
+}
+
+func (a *budgetAudit) count(action string) int {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	n := 0
+	for _, ev := range a.evs {
+		if ev.Action == action {
+			n++
+		}
+	}
+	return n
+}
+
+// holdBudgetSnapshot makes every outbox insert for channel sleep inside its INSERT, after the statement
+// took its snapshot and counted the run's rows and before it commits: the instant two concurrent raises
+// would both read the same count if nothing serialised them.
+func holdBudgetSnapshot(t *testing.T, pool *pgxpool.Pool, channel string) {
+	t.Helper()
+	ctx := context.Background()
+	for _, q := range []string{
+		`CREATE OR REPLACE FUNCTION notify_budget_barrier() RETURNS trigger LANGUAGE plpgsql AS $$
+			BEGIN IF NEW.channel = '` + channel + `' THEN PERFORM pg_sleep(0.6); END IF; RETURN NEW; END $$`,
+		`CREATE TRIGGER notify_budget_barrier BEFORE INSERT ON approval_notifications FOR EACH ROW EXECUTE FUNCTION notify_budget_barrier()`,
+	} {
+		if _, err := pool.Exec(ctx, q); err != nil {
+			t.Fatalf("%s: %v", q, err)
+		}
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DROP TRIGGER IF EXISTS notify_budget_barrier ON approval_notifications`)
+	})
+}
+
+// TestPG_CreateApproval_ConcurrentDistinctRaisesStayWithinTheRunBudget: a run with RunBudget-1 tier-0 rows
+// and two distinct raises at once. Both read RunBudget-1 under Read Committed, so unserialised both would
+// enqueue and the run would carry RunBudget+1 rows. The per-run lock makes the second wait for the first's
+// commit and count again: it ends at RunBudget rows, the loser's approval exists, and the suppression is
+// audited once.
+func TestPG_CreateApproval_ConcurrentDistinctRaisesStayWithinTheRunBudget(t *testing.T) {
+	pool := runsPGPool(t)
+	ctx := context.Background()
+	cfg, err := notify.Parse(`{"channels":[{"id":"budget-race","type":"webhook","url":"http://127.0.0.1:9/a"}]}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := &budgetAudit{}
+	notify.SetActive(cfg, rec)
+	t.Cleanup(func() { notify.SetActive(nil, nil) })
+	run := persistRun(t, ctx, pool, newRun(types.RunRunning))
+	st := store.NewPG(pool)
+	raise := func() (types.ApprovalRequest, error) {
+		return st.CreateApproval(ctx, pendingApproval(run.ID, types.ApprovalEgressDomain, `{"host":"h`+uuid.NewString()+`"}`))
+	}
+	for i := range notify.RunBudget - 1 {
+		if _, err := raise(); err != nil {
+			t.Fatalf("seed raise %d: %v", i, err)
+		}
+	}
+	holdBudgetSnapshot(t, pool, "budget-race")
+
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	ids := make([]uuid.UUID, 2)
+	for i := range ids {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			a, err := raise()
+			if err != nil {
+				t.Errorf("concurrent raise: %v", err)
+			}
+			ids[i] = a.ID
+		}()
+	}
+	close(start)
+	wg.Wait()
+
+	if n := countRows(t, pool, outboxForRun, run.ID); n != notify.RunBudget {
+		t.Fatalf("outbox rows = %d after two concurrent raises on %d, want %d", n, notify.RunBudget-1, notify.RunBudget)
+	}
+	for _, id := range ids {
+		if n := countRows(t, pool, `SELECT count(*) FROM approvals WHERE id = $1`, id); n != 1 {
+			t.Errorf("approval %s: %d rows, want 1: an approval is never lost to the budget", id, n)
+		}
+	}
+	if got := rec.count("approval.notify.suppressed"); got != 1 {
+		t.Errorf("approval.notify.suppressed audited %d times, want 1", got)
+	}
+}

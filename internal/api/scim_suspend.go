@@ -44,12 +44,17 @@ const (
 // every pending step is on the ledger, but the caller must retry.
 var errDeprovisionIncomplete = errors.New("deprovisioning is incomplete; retry the request")
 
+// errDeprovisionHeld is a purge that stops before its destructive steps until an admin acts: a retry does
+// not finish it. The request still answers 5xx.
+var errDeprovisionHeld = errors.New("deprovisioning is held until an admin acts; a retry does not finish it")
+
 // scimStore is what the SCIM routes need of the store: the identity rows, the leaver operations
 // and the groups.
 type scimStore interface {
 	store.LeaverStore
 	store.PrincipalIdentityStore
 	store.ScimGroupStore
+	store.PrincipalDirectoryStore
 }
 
 // leaverForms are every form a person is known by.
@@ -57,13 +62,36 @@ type leaverForms struct {
 	// bound are the principals whose identity rows the suspension deactivates: what a sign-in
 	// bound, and the object-id people principal. Deactivation never follows an email.
 	bound []string
-	// targets are bound plus every sub the emails resolve to (when no row binds a principal) plus
-	// every email alias: the forms the cutoff, the credential sweep and the kill sweep run under.
+	// targets are bound plus every email alias that is the person's plus, when no row binds a principal,
+	// the one principal each email names: the forms the cutoff, the credential sweep and the kill sweep run under.
 	targets []string
 	// shared are the email forms of a bound person that another principal holds (store.HeldEmails). A
 	// cutoff or session cut keyed by one would reach that principal's credentials too, so none is written;
 	// the person's own are reached through bound and the identity deactivation.
 	shared []string
+	// notOwned is the leaver's entra:<tenant>:<object> form when deriveOwner does not prove it theirs, or when
+	// another issuer's sign-in is bound to it and no row binds the leaver. A suspension is the leaver's cutoff
+	// and still cuts it (it stays one of bound), but schedules no purge of it; a purge's destructive steps
+	// leave it alone (destructive).
+	notOwned string
+	// notErased are the principals the form names besides the leaver (another issuer's sign-in with the same
+	// ids, or a person of their own), with the form itself: a purge lists them as not erased
+	// (notErasedDetail), and a suspension, which cut the form, lists them as also_named.
+	notErased []string
+	// unproved is the form when the directory names no one by it, or when it is notOwned and no row binds the
+	// leaver: a purge refuses rather than leave what may be under it unnamed.
+	unproved string
+	// refusal is set when the emails cannot be resolved (reasonIdentityDirectoryUnreadable, with the error)
+	// or when the emails of a person no row binds name more than one principal (reasonOwnerAmbiguous): the
+	// forms then name nobody safely, targets are bound alone, and a suspension or a purge refuses.
+	refusal string
+}
+
+// destructive are the forms a purge's destructive steps act on: these less notOwned.
+func (f leaverForms) destructive() leaverForms {
+	drop := func(v string) bool { return f.notOwned != "" && v == f.notOwned }
+	f.bound, f.targets = slices.DeleteFunc(slices.Clone(f.bound), drop), slices.DeleteFunc(slices.Clone(f.targets), drop)
+	return f
 }
 
 // cutTargets are the forms a cutoff or a session cut is written under: targets less shared.
@@ -77,6 +105,30 @@ func (f leaverForms) owns(t types.APIToken) bool {
 	return slices.ContainsFunc(f.targets, func(form string) bool { return strings.EqualFold(form, t.Principal) })
 }
 
+// proveForm sets notOwned, notErased and unproved for c, the entra form of ident.
+func (f *leaverForms) proveForm(ctx context.Context, st scimStore, ident store.PrincipalIdentity, c string) error {
+	if ident.Principal == "" {
+		rows, err := st.IdentitiesByPrincipal(ctx, c)
+		if slices.ContainsFunc(rows, func(r store.PrincipalIdentity) bool { return r.Issuer != ident.Issuer }) {
+			f.notOwned, f.unproved = c, c
+		}
+		return err
+	}
+	if c == ident.Principal {
+		return nil
+	}
+	v, others, err := deriveOwner(ctx, st, ident.Principal, c)
+	switch {
+	case err != nil:
+		return err
+	case v == derivedOthers:
+		f.notOwned, f.notErased = c, nonEmptyForms(others...)
+	case v == derivedUnknown:
+		f.notOwned, f.unproved = c, c
+	}
+	return nil
+}
+
 func (s *Server) leaverForms(ctx context.Context, st scimStore, ident store.PrincipalIdentity) (leaverForms, error) {
 	var f leaverForms
 	f.bound = nonEmptyForms(ident.Principal)
@@ -85,7 +137,17 @@ func (s *Server) leaverForms(ctx context.Context, st scimStore, ident store.Prin
 		if tenant == "" && s.cfg.SCIM != nil {
 			tenant = s.cfg.SCIM.Tenant
 		}
-		f.bound = nonEmptyForms(append(f.bound, entraPrincipalPrefix+tenant+":"+ident.ObjectID)...)
+		// The form SCIM names is always cut: a suspension fails toward cutting. A row bound to a principal
+		// proves the form as an erasure does (deriveOwner), since another issuer's sign-in can share the tenant
+		// and object id, and only a proved form is erased by a purge. A row no sign-in bound yet is known by its
+		// form alone, unless another issuer's sign-in is bound to the form: nothing then tells the leaver's
+		// form from that principal, and a purge refuses.
+		c := entraPrincipalPrefix + tenant + ":" + ident.ObjectID
+		f.bound = nonEmptyForms(append(f.bound, c)...)
+		if err := f.proveForm(ctx, st, ident, c); err != nil {
+			f.refusal = reasonIdentityDirectoryUnreadable
+			return f, err
+		}
 	}
 	aliases, err := st.IdentityAliasValues(ctx, ident.ID)
 	if err != nil {
@@ -93,20 +155,60 @@ func (s *Server) leaverForms(ctx context.Context, st scimStore, ident store.Prin
 	}
 	emails := slices.DeleteFunc(append(aliases, strings.ToLower(ident.EmailLower), strings.ToLower(ident.ScimUserName)),
 		func(v string) bool { return !strings.Contains(v, "@") })
-	f.targets = slices.Concat(f.bound, nonEmptyForms(emails...))
-	if ident.Principal != "" {
-		if f.shared, err = st.HeldEmails(ctx, ident.ID, f.bound, emails); err != nil {
-			return f, err
-		}
-	} else {
-		subs, err := st.PrincipalsByEmail(ctx, emails)
+	// Each email is resolved as erasure resolves a name (store.PrincipalsNamed), so a principal always wins
+	// over an email claim. A bound person's email that names only other principals (a person an admin
+	// created under that address, say) is never one of their forms. A person no row binds is known by their
+	// emails, so the one principal they name joins the forms; when the person's emails name more than one
+	// principal, together or one email alone, they name nobody.
+	var own, subs []string
+	for _, e := range nonEmptyForms(emails...) {
+		named, err := st.PrincipalsNamed(ctx, e)
 		if err != nil {
+			f.refusal = reasonIdentityDirectoryUnreadable
 			return f, err
 		}
-		f.targets = append(f.targets, subs...)
+		switch {
+		case ident.Principal != "":
+			if len(named) == 0 || slices.ContainsFunc(named, func(p string) bool { return slices.Contains(f.bound, p) }) {
+				own = append(own, e)
+			}
+		case len(named) > 1:
+			f.refusal = reasonOwnerAmbiguous
+		default:
+			own, subs = append(own, e), append(subs, named...)
+		}
 	}
-	f.targets = nonEmptyForms(f.targets...)
+	if ident.Principal == "" && len(slices.DeleteFunc(nonEmptyForms(subs...), func(p string) bool { return slices.Contains(f.bound, p) })) > 1 {
+		f.refusal = reasonOwnerAmbiguous
+	}
+	if f.refusal != "" {
+		f.targets = f.bound
+		return f, nil
+	}
+	f.targets = nonEmptyForms(slices.Concat(f.bound, own, subs)...)
+	if ident.Principal != "" {
+		if f.shared, err = st.HeldEmails(ctx, ident.ID, f.bound, own); err != nil {
+			return f, err
+		}
+	}
 	return f, nil
+}
+
+// deprovisionForms is leaverForms for a suspension or a purge of kind. Forms with a refusal reach no one:
+// the step stops before it touches anything and leaves a person.deprovision row saying why, and the
+// request answers 5xx so the identity provider retries.
+func (s *Server) deprovisionForms(ctx context.Context, st scimStore, ident store.PrincipalIdentity, kind string) (leaverForms, error) {
+	forms, err := s.leaverForms(ctx, st, ident)
+	if forms.refusal == "" {
+		return forms, err
+	}
+	outcome := "failure"
+	if err == nil {
+		outcome, err = "denied", fmt.Errorf("%w: the person's emails name more than one principal", errDeprovisionIncomplete)
+	}
+	s.recordAudit(ctx, s.auditEvent(nil, types.ActorSystem, scimActor, "person.deprovision", ident.ID.String(), outcome,
+		mustJSON(map[string]any{"kind": kind, "reason": forms.refusal})))
+	return forms, err
 }
 
 func nonEmptyForms(in ...string) []string {
@@ -153,7 +255,7 @@ func (s *Server) suspendIdentity(ctx context.Context, st scimStore, id uuid.UUID
 		slog.WarnContext(ctx, "api: a suspension step failed and stays pending", slog.String("identity", id.String()), slog.Any("err", stepErr))
 		return fmt.Errorf("%w: %w", errDeprovisionIncomplete, stepErr)
 	}
-	if err := s.auditSuspension(ctx, st, id, slot); err != nil {
+	if err := s.auditSuspension(ctx, st, id, slot, forms.notErased); err != nil {
 		slog.WarnContext(ctx, "api: a suspension's audit rows were not written and stay pending", slog.String("identity", id.String()), slog.Any("err", err))
 		return fmt.Errorf("%w: %w", errDeprovisionIncomplete, err)
 	}
@@ -167,7 +269,7 @@ func (s *Server) suspendStepOne(ctx context.Context, st scimStore, id uuid.UUID)
 	if err != nil {
 		return ident, leaverForms{}, nil, err
 	}
-	forms, err := s.leaverForms(ctx, st, ident)
+	forms, err := s.deprovisionForms(ctx, st, ident, store.JobKindSuspend)
 	if err != nil {
 		return ident, forms, nil, err
 	}
@@ -181,7 +283,8 @@ func (s *Server) suspendStepOne(ctx context.Context, st scimStore, id uuid.UUID)
 	}
 	if cutoff, ok := jobByKey(jobs, store.JobStepCutoff, ""); ident.DeactivatedAt == nil || !ok || !cutoff.Done {
 		// The pending steps commit with the deactivation, so a crash right after it leaves them for the sweeper.
-		plan := store.SuspendPlan{IdentityID: id, Principal: ident.Principal, Principals: forms.bound, CutoffSubs: forms.cutTargets(), PendingJobs: keys}
+		plan := store.SuspendPlan{IdentityID: id, Principal: ident.Principal, Principals: forms.bound, PurgePrincipals: forms.destructive().bound,
+			CutoffSubs: forms.cutTargets(), PendingJobs: keys}
 		if s.cfg.SCIM != nil {
 			plan.PurgeAfter = s.cfg.SCIM.PurgeAfter
 		}
@@ -317,7 +420,7 @@ func (s *Server) teardownRun(ctx context.Context, st scimStore, runID uuid.UUID)
 
 // auditSuspension writes scim.user.deactivate and person.deprovision, each once, after every other
 // step is done. A failed write leaves its row pending, so the retry writes it.
-func (s *Server) auditSuspension(ctx context.Context, st scimStore, id uuid.UUID, slot string) error {
+func (s *Server) auditSuspension(ctx context.Context, st scimStore, id uuid.UUID, slot string, alsoNamed []string) error {
 	jobs, err := st.ListDeprovisionJobs(ctx, id, store.JobKindSuspend)
 	if err != nil {
 		return err
@@ -337,6 +440,9 @@ func (s *Server) auditSuspension(ctx context.Context, st scimStore, id uuid.UUID
 			"kind": store.JobKindSuspend, "sessions_cut": counts["sessions_cut"], "tokens_revoked": counts["tokens_revoked"],
 			"keys_deleted": counts["keys_deleted"], "runs_killed": counts["runs_killed"],
 		}},
+	}
+	if len(alsoNamed) > 0 {
+		rows[1].data["also_named"] = alsoNamed
 	}
 	var errs []error
 	for _, row := range rows {

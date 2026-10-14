@@ -124,7 +124,7 @@ func fakeTmuxBin(t *testing.T) (home, binDir, tmuxLog string) {
   for a in "$@"; do printf ' %s' "$a"; done
   printf '\n'
   printf 'login-command: %s\n' "${WARDYN_AWS_SSO_LOGIN_COMMAND:-<unset>}"
-  if grep -qs "$MITM_NONCE" /tmp/wardyn/mitm-ca.pem; then printf 'mitm-ca: this-run\n'; else printf 'mitm-ca: not-yet\n'; fi
+  if grep -qs "$MITM_NONCE" "$WARDYN_MITM_CA_DIR/mitm-ca.pem"; then printf 'mitm-ca: this-run\n'; else printf 'mitm-ca: not-yet\n'; fi
   if [ -e "$HOME/.aws/config" ]; then printf 'aws-config: present\n'; else printf 'aws-config: absent\n'; fi
   if [ -e "$HOME/.wardyn/prep-done" ]; then printf 'prep-done: present\n'; else printf 'prep-done: absent\n'; fi
 } >> "$TMUX_LOG"
@@ -150,14 +150,16 @@ func runIdle(t *testing.T, home, binDir, tmuxLog string, extraEnv ...string) (co
 // control needs a PATH that does not reach the host's own tmux.
 func runIdleOnPath(t *testing.T, home, pathValue, tmuxLog string, extraEnv ...string) (code int, out string) {
 	t.Helper()
+	caDir := caDirFor(home)
 	cmd := exec.Command("timeout", "3s", "bash", runnableAgentRun(t), "--idle")
 	cmd.Env = append(os.Environ(), append([]string{
 		"HOME=" + home,
 		"PATH=" + pathValue,
 		"TMUX_LOG=" + tmuxLog,
-		// install_mitm_ca is the FIRST prep call and writes /tmp/wardyn/mitm-ca.pem
-		// — a path it hard-codes and every lane on the box shares, so the fake tmux
-		// keys on THIS run's nonce being in it rather than on the file existing.
+		// install_mitm_ca is the FIRST prep call and writes mitm-ca.pem under
+		// WARDYN_MITM_CA_DIR; a per-run directory keeps concurrent runs of this
+		// package on one host from seeing each other's file.
+		"WARDYN_MITM_CA_DIR=" + caDir,
 		"MITM_NONCE=" + mitmNonce(t),
 		"WARDYN_MITM_CA_PEM=-----BEGIN CERTIFICATE-----\n" + mitmNonce(t) + "\n-----END CERTIFICATE-----",
 		// The one prep step that writes a file this test can see, so "before the
@@ -176,6 +178,10 @@ func runIdleOnPath(t *testing.T, home, pathValue, tmuxLog string, extraEnv ...st
 	}
 	return 0, string(b)
 }
+
+// caDirFor is the per-test directory install_mitm_ca writes under, beside the
+// test's $HOME so it is cleaned up with fakeTmuxBin's TempDir.
+func caDirFor(home string) string { return filepath.Join(filepath.Dir(home), "ca") }
 
 // mitmNonce is stable per test, so the value the fake tmux greps for is the value
 // this run's install_mitm_ca wrote.
@@ -248,7 +254,7 @@ func TestAWSSSOAgentRun_SessionIsCreatedBeforePrep(t *testing.T) {
 		t.Errorf("the sign-in session was created AFTER the shared prep had already written ~/.aws/config\ntmux log:\n%s", log)
 	}
 	// Both assertions are only worth anything if the prep they name actually ran.
-	if b, err := os.ReadFile("/tmp/wardyn/mitm-ca.pem"); err != nil || !strings.Contains(string(b), mitmNonce(t)) {
+	if b, err := os.ReadFile(filepath.Join(caDirFor(home), "mitm-ca.pem")); err != nil || !strings.Contains(string(b), mitmNonce(t)) {
 		t.Fatalf("install_mitm_ca never wrote this run's CA (%v), so the ordering assertion above proved nothing", err)
 	}
 	if _, err := os.Stat(filepath.Join(home, ".aws", "config")); err != nil {

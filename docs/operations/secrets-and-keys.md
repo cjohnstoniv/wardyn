@@ -2,13 +2,13 @@
 
 # Secrets from files, age-key rotation and external key stores
 
-How to deliver `wardynd`'s boot secrets from files, rotate or split the local age key, and move stored credentials onto Vault Transit, Vault KV or Azure Key Vault.
+How to deliver `wardynd`'s boot secrets from files, rotate or split the local age key, and move stored credentials onto Vault Transit, Vault KV, Azure Key Vault or AWS KMS.
 
 ```mermaid
 flowchart LR
     write["credential write"] --> kek{{"WARDYN_KEK /<br/>WARDYN_SECRET_STORE"}}
     kek -->|local, default| local["Postgres row<br/>sealed under age key"]
-    kek -->|KEK=transit| transit["Postgres row<br/>wrapped by Vault Transit"]
+    kek -->|"KEK=transit, azurekv or awskms"| transit["Postgres row<br/>wrapped by a key service"]
     kek -->|STORE=vaultkv| vault["value in Vault KV<br/>pointer row only"]
     kek -->|STORE=azurekv| azure["value in Azure Key Vault<br/>pointer row only"]
 ```
@@ -166,7 +166,7 @@ Two statements about FIPS 140-3, kept apart:
 - The `-fips` build turns Go's FIPS mode on by default (`GODEBUG=fips140=on`); set `GODEBUG=fips140=only` (the chart's `env.GODEBUG`) to make a non-approved algorithm fail instead of run.
 - Under `only` the age key cannot be used: the `local` key's id is taken over the age key's public recipient, which is X25519, and `only` forbids X25519.
 - wardynd then refuses to start with a `WARDYN_AGE_KEY` (or an ephemeral one) and names a key service.
-- Run the image with non-age custody instead: Vault Transit (`WARDYN_KEK=transit`) or Azure Key Vault, alone or under store mode (`WARDYN_SECRET_STORE=vaultkv`, below).
+- Run the image with non-age custody instead: Vault Transit (`WARDYN_KEK=transit`), Azure Key Vault or AWS KMS, alone or under store mode (`WARDYN_SECRET_STORE=vaultkv`, below).
 - None of them needs an age key; store mode without a key service does, and is refused.
 - Age is used once, to convert pre-envelope rows, and is outside the module.
 
@@ -177,7 +177,7 @@ Exercised under `GODEBUG=fips140=only` on a kind cluster, with Transit custody a
 - the SSH gateway's handshake: it negotiates `ecdh-sha2-nistp256`, an `ssh-ed25519` host key, `aes128-ctr` and `hmac-sha2-256-etm@openssh.com`, and an unauthenticated client then gets the normal `Permission denied (publickey)`.
 
 > [!NOTE]
-> That is not a coverage claim. These were not run under `only`, so nothing is claimed for them: SSO and OIDC sign-in, the built-in TLS listener, Azure Key Vault, store mode and session recording. The one path found to need an unapproved primitive is age's X25519, above.
+> That is not a coverage claim. These were not run under `only`, so nothing is claimed for them: SSO and OIDC sign-in, the built-in TLS listener, Azure Key Vault, AWS KMS, store mode and session recording. The one path found to need an unapproved primitive is age's X25519, above.
 
 `wardynd -rotate-age-key <key-file>` is the supported rotation: a **maintenance mode, not a server start**.
 
@@ -305,7 +305,8 @@ With `WARDYN_KEK=transit`, each stored credential is still sealed in Postgres (A
 
 - The data key is wrapped by your Vault's Transit engine instead of a key derived from `WARDYN_AGE_KEY`.
 - The key-encryption key never leaves Vault, and every unwrap is one Transit `decrypt` in your Vault audit device.
-- The database alone decrypts nothing; neither does the database plus anything on the Wardyn host, once no row is sealed under the age key and `WARDYN_AGE_KEY` is unset.
+- The database alone decrypts nothing; with the Vault token wardynd uses for Transit `decrypt` it does. Kubernetes authentication logs in again with the pod's service-account token when a token is refused, so access lasts while the pod's identity does. Token files are re-read too.
+- Once no row is sealed under the age key and `WARDYN_AGE_KEY` is unset, that token is the only other thing needed.
 - Wardyn's boot keys are wrapped by Vault too: under the same Transit key by default, or under their own key and role when `WARDYN_VAULT_TRANSIT_KEY_PLATFORM` is set (see the platform split below).
 - (If your organisation wants Vault to hold the values themselves, not a key, that is store mode, below.)
 
@@ -351,7 +352,7 @@ path "transit/decrypt/wardyn" { capabilities = ["update"] }
    transit:transit/wardyn version 1; …`
 4. Unset `WARDYN_AGE_KEY` and restart. wardynd refuses to start until you do (and, the other way, refuses without it, naming `-rewrap`, while any row is still sealed under it).
 
-**Requiring it.** A deployment that mandates key custody sets `WARDYN_KEK_REQUIRED` (chart `kek.required`). wardynd then refuses to start while the local key wraps credentials, with or without `WARDYN_AGE_KEY`, and `wardynd -rewrap` still runs.
+**Requiring it.** A deployment that mandates key custody sets `WARDYN_KEK_REQUIRED` (chart `kek.required`). wardynd then refuses to start unless a key service (or an external store) is configured, with or without `WARDYN_AGE_KEY`, so new writes always use it. It does not move rows the local key already wraps and does not refuse to start while they remain: `/setup/status` shows `kek_local_rows` with their count until `wardynd -rewrap` has moved them. `wardynd -rewrap` still runs with the flag set.
 
 **Back:** set `WARDYN_KEK=local` and `WARDYN_AGE_KEY`, keep `WARDYN_VAULT_TRANSIT_KEY` so Transit still reads its rows, restart, and run `wardynd -rewrap` again.
 
@@ -388,7 +389,8 @@ With `WARDYN_KEK=azurekv`, each stored credential is still sealed in Postgres (A
 - **Why two keys.** Anyone with the RSA public key (Key Vault Reader is enough) can wrap a data key of their own locally. The signature needs the private EC key, so a database writer cannot plant a row.
 - **A moved or forged wrap costs no Key Vault call.** wardynd checks the signature for the row before any `unwrapkey`, so every unwrap in the vault's `AuditEvent` log is one Key Vault itself signed for that row.
 - **Only these calls:** `GET` on the two keys, `wrapkey`, `sign` and `unwrapkey`, with the algorithm fixed. No Azure SDK; plain HTTPS.
-- The database alone decrypts nothing; neither does the database plus anything on the Wardyn host, once no row is sealed under the age key and `WARDYN_AGE_KEY` is unset.
+- The database alone decrypts nothing. The database plus the Entra identity wardynd uses for `unwrapkey` does, while its token or secret is valid.
+- Once no row is sealed under the age key and `WARDYN_AGE_KEY` is unset, that identity is the only other thing needed.
 - Wardyn's boot keys are wrapped the same way, under the same keys unless you set a platform pair (see "A second key pair and a second identity" below).
 - Public-cloud Key Vault only: a Managed HSM or sovereign-cloud vault is refused at boot, by name.
 
@@ -486,6 +488,104 @@ A row still wrapped under a disabled wrapping version is refused, naming the row
 
 **When Key Vault is unavailable.** Throttling (429), a 5xx or an unreachable vault is *transient* (the sink answers 503). A 401, a 403, a deleted key or version, or a wrap that does not verify for its row is *definitive*.
 
+## Key service: AWS KMS
+
+With `WARDYN_KEK=awskms`, each stored credential is still sealed in Postgres (AES-256-GCM under its own data key). One AWS KMS key protects the data key, and it never leaves AWS.
+
+- **What KMS does.** `Encrypt` wraps the 32-byte data key. `Decrypt`, with `KeyId` pinned to the configured ARN, unwraps it. Wardyn never calls `GenerateDataKey`.
+- The database alone decrypts nothing. The database plus the wardynd role's AWS credentials does: while the pod's identity holds the role (IRSA and EKS Pod Identity mint fresh temporary credentials from it), or until a long-lived access key is revoked.
+- Once no row is sealed under the age key and `WARDYN_AGE_KEY` is unset, those credentials are the only other thing needed.
+- Wardyn's boot keys are wrapped the same way, under the same key.
+
+> [!WARNING]
+> Deleting or disabling the key makes every stored credential unreadable. Do not let the wardynd role schedule its deletion.
+
+**The key.** One key per Wardyn deployment: symmetric (`SYMMETRIC_DEFAULT`), usage `ENCRYPT_DECRYPT`.
+
+```sh
+aws kms create-key --key-spec SYMMETRIC_DEFAULT --key-usage ENCRYPT_DECRYPT --description "Wardyn credential key"
+# Add --multi-region for a multi-Region key. Copy the Arn from the output.
+```
+
+Set `WARDYN_AWS_KMS_KEY` to the key's full ARN, `arn:<partition>:kms:<region>:<account>:key/<id>`.
+
+- The id is a UUID, or `mrk-` and 32 hex digits for a multi-Region key. The region is the ARN's.
+- An alias, a bare key id or a non-KMS ARN refuses boot. An alias can be re-pointed, and a row's `kek_id` (`awskms:<ARN>`) must name one key for good.
+
+**Key policy.** Add one statement to the key's policy for the wardynd role, with these two actions and no others:
+
+```json
+{"Sid": "WardynWrap", "Effect": "Allow",
+ "Principal": {"AWS": "arn:aws:iam::<account>:role/<wardynd-role>"},
+ "Action": ["kms:Encrypt", "kms:Decrypt"], "Resource": "*"}
+```
+
+- No `kms:*` and no `kms:GenerateDataKey`. Grant nothing that schedules deletion or disables the key.
+- **`kms:Decrypt` plus a database read opens every credential.** No other principal gets `kms:Decrypt` on this key.
+
+**Identity.** The AWS SDK's default credential chain. On EKS use IRSA (an IAM role on wardynd's service account) or EKS Pod Identity.
+
+- A long-lived access key (`AKIA…`) boots, and raises the amber `kek_service_static_key` setup row.
+- Anyone who copies that key unlocks every credential from anywhere until it is revoked.
+- On Helm set `kek.provider=awskms` and `kek.awskms.key`, and give wardynd's service account its IAM role (`serviceAccount.annotations`, `eks.amazonaws.com/role-arn`) or an EKS Pod Identity association; no age key is needed.
+
+**Binding.** Each wrap's encryption context is `{"wardyn:aad-sha256": <hex>}`, a SHA-256 over the row's binding.
+
+- KMS refuses a `Decrypt` whose context differs, so a wrap moved to another row does not open.
+- CloudTrail logs the context in clear. It shows that hash and never an owner or a credential name.
+- **Residual:** the hash is unsalted. Someone with CloudTrail access who can guess an (owner, credential name) pair can confirm it.
+
+**Boot.** wardynd wraps a probe data key, unwraps it, and tries it under another row. It refuses to start if the probe does not round-trip, if it opens under the other row (an endpoint that ignores the context), or if KMS cannot be reached.
+
+**Network.** KMS and the credential endpoints are reached through `WARDYN_DAEMON_PROXY_URL`, in the `-rewrap` modes too.
+
+- The link-local credential endpoints (IMDS `169.254.169.254`, the ECS task role `169.254.170.2`, the EKS Pod Identity agent `169.254.170.23` and `fd00:ec2::23`) bypass the proxy.
+- The wardynd NetworkPolicy (`networkPolicy.egress.extra`) must allow the regional KMS endpoint, STS for IRSA, and `169.254.170.23` for EKS Pod Identity.
+- **A private CA.** `WARDYN_TRUSTED_CA_FILE` is trusted beside the system roots for the KMS and credential endpoints.
+- `AWS_CA_BUNDLE`, or a profile's `ca_bundle`, is honoured too. With `WARDYN_TRUSTED_CA_FILE` unset it replaces the system roots, as in the AWS CLI, so the bundle must hold every CA the endpoints chain to.
+- With both set, the bundle is added to the system roots and the CA file.
+
+**Endpoints.**
+
+- `AWS_USE_FIPS_ENDPOINT=true` selects the FIPS endpoint where the region has one.
+- `AWS_ENDPOINT_URL` and `AWS_ENDPOINT_URL_KMS` re-point the client. They are operator-controlled; an endpoint that does not bind the encryption context fails the boot probe.
+
+**Moving an install to AWS KMS, and back.** As for Key Vault, above:
+
+1. Boot this version once with your `WARDYN_AGE_KEY`, and take the Postgres dump (see Backup).
+2. Set `WARDYN_KEK=awskms` and `WARDYN_AWS_KMS_KEY`, keep `WARDYN_AGE_KEY`, and restart. New rows are wrapped by KMS and old ones still read.
+3. Run `wardynd -rewrap` with the same settings.
+4. Unset `WARDYN_AGE_KEY` and restart.
+
+- AWS KMS has no key versions Wardyn tracks, so `-rewrap` prints no "wrapped under … version" line and no retirement step.
+- It logs `wardynd: stored secrets rewrapped onto this configuration's keys…` with `key_service=awskms:<ARN>` and the `secrets` and `principal_keys` it moved. A second run must log `secrets=0`.
+- **Back:** set `WARDYN_KEK=local` and `WARDYN_AGE_KEY`, keep `WARDYN_AWS_KMS_KEY` so its rows stay readable, restart, and run `wardynd -rewrap`. Then unset `WARDYN_AWS_KMS_KEY`.
+- While it is set, boot runs the probe, so the role keeps `kms:Encrypt` until you unset it.
+- A move between Transit, Key Vault and AWS KMS goes through the local key: wardynd refuses to start with two named.
+
+**Rotation.** AWS automatic key rotation is transparent: a ciphertext names its backing key version, so it needs no `-rewrap`.
+
+- A multi-Region replica in another region has a different ARN, so a different `kek_id`.
+- A replica gives Wardyn no regional failover: rows stay bound to the primary's ARN, so they stay unreadable while the primary's region is down.
+- Moving to it goes through the local key like any other key change: a wardynd pointed at the replica refuses a row sealed under the primary's ARN.
+
+**When AWS KMS is unavailable.**
+
+- Throttling, a 5xx, a network error or a deadline is *transient* (the store answers 503).
+- An access denial, a missing key, a disabled key, a key pending deletion, or a wrap KMS will not open for its row is *definitive*.
+
+**Not supported yet.** Boot refuses each beside `awskms`:
+
+- an AWS KMS platform key: a Transit or Key Vault platform key beside an AWS KMS key is refused, and the boot keys stay under the one key;
+- AWS KMS key domains: `WARDYN_KEY_DOMAINS_FILE` domains are refused;
+- AWS KMS store mode: there is no AWS store, only the key service.
+
+**Not verified live yet.** The code is tested against a fake KMS; the live case has not run.
+
+- IRSA and EKS Pod Identity with `serviceAccount.automount: false`.
+- The real KMS error codes, and FIPS endpoints.
+- `TestLive_AWSKMS` runs the key-service contract against a real key when `WARDYN_TEST_AWS_KMS_KEY` is set.
+
 ## Moving data keys: `wardynd -rewrap`
 
 `wardynd -rewrap` is the one command that moves stored secrets' data keys from one key-encryption key to another. It is a **maintenance mode**: it rewraps, writes one `secret.rewrap` audit row, and exits.
@@ -493,11 +593,13 @@ A row still wrapped under a disabled wrapping version is refused, naming the row
 Each row's data key moves onto the key a write uses under the settings it runs with:
 
 - **The local key of the row's purpose** (`local/cred:` or `local/platform:`): rows a pre-0.8 wardynd wrote (`local:`), and, once `WARDYN_PLATFORM_KEY_FILE` is set, the boot keys still under the age key ("Separating the platform keys" above).
-- **The key service**, with `WARDYN_KEK=transit` or `azurekv`, at its latest version: every local row, and every key-service row wrapped under any other version ("Key service: Vault Transit" and "Key service: Azure Key Vault" above). It then prints what retires the other versions: Transit's `min_decryption_version`, or disabling Key Vault versions.
-- **Back to the local key**, with `WARDYN_KEK=local` and `WARDYN_VAULT_TRANSIT_KEY` or `WARDYN_AZURE_KEK_KEY` still set: every row under that key service.
+- **The key service**, with `WARDYN_KEK=transit`, `azurekv` or `awskms`, at its latest version: every local row, and every key-service row wrapped under any other version ("Key service" above).
+  - It then prints what retires the other versions: Transit's `min_decryption_version`, or disabling Key Vault versions.
+  - AWS KMS has no versions to retire, so it prints nothing.
+- **Back to the local key**, with `WARDYN_KEK=local` and `WARDYN_VAULT_TRANSIT_KEY`, `WARDYN_AZURE_KEK_KEY` or `WARDYN_AWS_KMS_KEY` still set: every row under that key service.
 - **A key domain's key at its latest version**, for the principal keys of that domain alone, when `WARDYN_KEY_DOMAINS_FILE` declares it ("Key domains" below). A principal key never moves between domains.
 
-Run it with the same `WARDYN_AGE_KEY`, `WARDYN_PLATFORM_KEY_FILE`, `WARDYN_KEK`, `WARDYN_VAULT_*` and `WARDYN_AZURE_*` settings the daemon uses (`WARDYN_AGE_KEY` may be unset only with `WARDYN_KEK=transit` or `azurekv`, once no row is under it).
+Run it with the same `WARDYN_AGE_KEY`, `WARDYN_PLATFORM_KEY_FILE`, `WARDYN_KEK`, `WARDYN_VAULT_*`, `WARDYN_AZURE_*` and `WARDYN_AWS_KMS_KEY` settings the daemon uses (`WARDYN_AGE_KEY` may be unset only with `WARDYN_KEK=transit`, `azurekv` or `awskms`, once no row is under it).
 
 Properties:
 
@@ -537,7 +639,7 @@ Restart every replica with the settings it ran with afterwards. After a move ont
 
 - The row is `enc_version=3` and its `kek_id` is `pk:v<n>`, naming the generation of the person's `cred` key in `principal_keys`.
 - The value is sealed under a fresh data key exactly as in v1, bound to `(owned_by, name)`; the data key is wrapped with AES-256-GCM under the person's principal key, bound to `("wardyn/pk/v1", owned_by, name, n)`.
-- The principal key itself is wrapped under the credential key service (local key, Vault Transit or Key Vault) as before, so a key service still guards every person's key.
+- The principal key itself is wrapped under the credential key service (local key, Vault Transit, Key Vault or AWS KMS) as before, so a key service still guards every person's key.
 - Version 2 stays the external-store pointer.
 
 **What it covers.**
@@ -656,11 +758,21 @@ A principal key never leaves its domain in a rewrap, and a live key naming an un
 
 ### Offboarding a key domain
 
-Removing a domain from the file while a live key still names it is refused at boot, with the count of live keys per domain. Do it in this order:
+Removing a domain from the file while a live key still names it is refused at boot, with the count of live keys per domain. To start wardynd again, re-declare the domain: that erases nothing, and it is the way back whatever you decide next.
+
+A person can hold two keys in a domain, and a different act destroys each:
+
+| Key | Destroyed by | Effect |
+|---|---|---|
+| Credential key | `DELETE /api/v1/people/{principal}/credentials` | The person's stored credentials are erased. Their audit-seal key stays live. |
+| Audit-seal key | The `audit_personal_fields` scope of `POST /api/v1/people/{principal}/erasure` | Irreversible: every sealed audit field of theirs reads `[erased]` everywhere it was copied. |
+
+Do it in this order:
 
 1. **Re-declare the domain** (or restore the key it names) so wardynd can start.
-2. **Erase or destroy those subjects through the API**: `DELETE /api/v1/people/{principal}/credentials` destroys the person's keys in every domain. Look at `GET /api/v1/key-domains` for how many live keys the domain still holds. Remove the assignments that name the domain (`DELETE /api/v1/key-domains/assignments/...`).
-3. **Remove the domain** from the file and restart. Boot checks that no live key names it.
+2. **Destroy the keys the domain still holds, only where your retention decisions allow it.** `GET /api/v1/key-domains` shows how many live keys it holds. Erasing credentials is not enough while an audit-seal key remains. If a person's audit fields must be kept, keep the domain declared and stop here.
+3. **Remove the assignments** that name the domain (`DELETE /api/v1/key-domains/assignments/...`).
+4. **Remove the domain** from the file and restart. Boot checks that no live key names it.
 
 > [!CAUTION]
 > **Never delete the `principal_keys` rows.** A deleted row is a lost key, and what it sealed is lost with it, silently, instead of being erased on the record. A destroyed generation is a tombstone that holds no key and does not count against the domain.
@@ -676,7 +788,7 @@ With `WARDYN_SECRET_STORE=vaultkv`, every stored credential's value lives in you
 
 - Wardyn keeps only a pointer row in Postgres: owner, name, when, and where in Vault (`enc_version` 2, `kek_id` `vaultkv:<mount>/<path>`, no ciphertext).
 - Wardyn does no at-rest cryptography for such a row.
-- The per-person keys that seal run masking copies still need a key to wrap under: `WARDYN_AGE_KEY`, or a key service (`WARDYN_KEK=transit` or `azurekv`).
+- The per-person keys that seal run masking copies still need a key to wrap under: `WARDYN_AGE_KEY`, or a key service (`WARDYN_KEK=transit`, `azurekv` or `awskms`).
 - A serving wardynd refuses to start with neither, and the chart refuses the render; the maintenance modes (`-migrate-secrets`, `-rewrap`) still run. With a key service, `WARDYN_AGE_KEY` is unset once every row is in Vault.
 - Every read is one Vault read, so it appears in your Vault audit device (with the path and the token's entity; values HMAC'd) and in Wardyn's audit log.
 - Wardyn's own boot keys (signing, session, UI-session, SSH host, internal CA) live there too.
@@ -789,7 +901,7 @@ Set `WARDYN_VAULT_ROLE=wardyn-credentials` and `WARDYN_VAULT_ROLE_PLATFORM=wardy
    ```
    Expected output: `INFO wardynd: stored secrets migrated to=vaultkv
    moved=7 soft_deleted=0`
-4. If a key service wraps the per-person keys (`WARDYN_KEK=transit` or `azurekv`), unset `WARDYN_AGE_KEY` and restart. Boot refuses, naming the command above, while any local row remains. Without a key service, keep `WARDYN_AGE_KEY` set: it wraps the per-person keys that seal run masking copies, and wardynd refuses to start without it.
+4. If a key service wraps the per-person keys (`WARDYN_KEK=transit`, `azurekv` or `awskms`), unset `WARDYN_AGE_KEY` and restart. Boot refuses, naming the command above, while any local row remains. Without a key service, keep `WARDYN_AGE_KEY` set: it wraps the per-person keys that seal run masking copies, and wardynd refuses to start without it.
 
 - `-to=local` moves every row back (it needs `WARDYN_AGE_KEY`); each value is removed from Vault once its row holds it locally and has committed.
 - The removal runs under the row's lock and skips a value a concurrent save has just put back at the same path.

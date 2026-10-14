@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"slices"
 	"sync/atomic"
 	"time"
 
@@ -354,9 +355,10 @@ func (s *Server) orphanedBuildSweeper(ctx context.Context, every time.Duration) 
 // being early FAILS a healthy run mid-dispatch and tears its sandbox down.
 const undispatchedGrace = 2 * imageBuildTimeout
 
-// finalizeUndispatchedRuns finalizes every non-terminal run that never got a
-// sandbox ref: the dispatch goroutine that would have provisioned it died with
-// the previous process, so nothing will ever start it — FAILED + revoke.
+// finalizeUndispatchedRuns finalizes every slot-holding run (types.SlotHoldingRunStates) that never got
+// a sandbox ref: the dispatch goroutine that would have provisioned it died with
+// the previous process, so nothing will ever start it — FAILED + revoke. A QUEUED run is never
+// here: it has no sandbox and waits past the grace by design.
 //
 // The age gate is what makes this safe to run PERIODICALLY as well as at boot,
 // and it has to be run periodically: this is the ONLY reaper of a sandbox-less
@@ -381,10 +383,15 @@ func (s *Server) finalizeUndispatchedRuns(ctx context.Context) error {
 	leaser, hasLease := s.cfg.Store.(store.RunWatcherLeaser)
 	var finalized int
 	for _, run := range runs {
-		if isTerminalRunState(run.State) || run.SandboxRef != "" {
+		if !slices.Contains(types.SlotHoldingRunStates, run.State) || run.SandboxRef != "" {
 			continue
 		}
-		if now.Sub(run.CreatedAt) < undispatchedGrace {
+		// A promoted run's dispatch window starts when it left the queue, not when it was requested.
+		started := run.CreatedAt
+		if run.AdmittedAt != nil {
+			started = *run.AdmittedAt
+		}
+		if now.Sub(started) < undispatchedGrace {
 			continue // still inside its own dispatch window; not abandoned
 		}
 		// A FRESH watcher lease means a LIVE process is responsible for this run:
@@ -573,6 +580,7 @@ func (s *Server) runWatcherTick(ctx context.Context, lastUndispatched *time.Time
 		// one ContainerList per grace period, free next to what it reclaims.
 		pass("orphaned sandbox sweep", s.sweepOrphanedSandboxes(ctx))
 		pass("terminal run proxy config purge", s.purgeTerminalRunProxyConfigs(ctx))
+		pass("asserted runner subject purge", s.purgeAssertedRunnerSubjects(ctx))
 	}
 	pass("run watcher sweep", s.sweepRunWatchers(ctx))
 	// A tightened profile reaches its live runs on this cadence,
@@ -589,6 +597,8 @@ func (s *Server) runWatcherTick(ctx context.Context, lastUndispatched *time.Time
 	pass("lapsed run token sweep", s.sweepLapsedRunTokens(ctx))
 	// Azure DevOps personal access tokens, on their own slower clock.
 	pass("run personal access token sweep", s.sweepRunPATs(ctx))
+	// Unclaimed runners that outlived their 24h wait.
+	pass("lapsed unclaimed runner sweep", s.sweepLapsedRunners(ctx))
 	return first
 }
 
@@ -761,6 +771,20 @@ func (s *Server) reconcileWatch(ctx context.Context, runID uuid.UUID, ref, agent
 // revoke cascade, so 2× that with headroom.
 const reconcileFinalizeTimeout = 60 * time.Second
 
+// runnerReceived reports whether the run has a runner execution row: its runner was handed a task to
+// run. A run with no task has none, even while the runner holds its sandbox. A store that cannot say,
+// or a read that fails, answers yes, so the receipt worker keeps the run.
+func (s *Server) runnerReceived(ctx context.Context, runID uuid.UUID) bool {
+	ex, ok := s.cfg.Store.(interface {
+		RunnerExecutionOf(context.Context, uuid.UUID) (store.RunnerExecution, error)
+	})
+	if !ok {
+		return true
+	}
+	_, err := ex.RunnerExecutionOf(ctx, runID)
+	return !errors.Is(err, store.ErrNotFound)
+}
+
 // reconcileFinalize transitions a stranded run to a terminal state — conditional
 // on it still being non-terminal so a concurrent kill/complete is never clobbered
 // — then runs the revoke cascade and (best-effort) tears the sandbox down.
@@ -774,6 +798,13 @@ func (s *Server) reconcileFinalize(ctx context.Context, runID uuid.UUID, to type
 	if err != nil {
 		slog.ErrorContext(ctx, "wardynd: reconcile get run failed",
 			slog.String("run_id", runID.String()), slog.Any("err", err))
+		return
+	}
+	// A run its runner holds is ended by the runner, which this must not race: one with a sandbox there
+	// (an interactive run has no task, so no execution row) and one handed a task (its durable exit
+	// receipt). One with neither (a crash between create and dispatch) has nothing on the runner to
+	// report, so it is finalized here like any other run that was never dispatched.
+	if cur.Placement == types.PlacementLocal && cur.RunnerID != nil && (cur.SandboxRef != "" || s.runnerReceived(ctx, runID)) {
 		return
 	}
 	if isTerminalRunState(cur.State) {

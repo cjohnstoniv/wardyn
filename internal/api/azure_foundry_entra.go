@@ -45,6 +45,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 	"golang.org/x/oauth2"
 
 	"github.com/cjohnstoniv/wardyn/internal/db"
@@ -213,10 +214,15 @@ func (s *Server) handleAzureFoundrySignIn(w http.ResponseWriter, r *http.Request
 	if !ok {
 		return
 	}
+	prompt, err := adoRequestedPrompt(r.URL.Query())
+	if err != nil {
+		writeErrorReason(w, http.StatusBadRequest, reasonADOSignInPromptInvalid, err.Error())
+		return
+	}
 	verifier := oauth2.GenerateVerifier()
 	state, nonce := adoRandomToken(), adoRandomToken()
 	authURL, err := cfg.authorizeURL(state, nonce, oauth2.S256ChallengeFromVerifier(verifier),
-		[]string{facts.audience, entraOfflineAccessScope, entraOpenIDScope}, "")
+		[]string{facts.audience, entraOfflineAccessScope, entraOpenIDScope}, prompt)
 	if err != nil {
 		writeServerError(w, r, "composing the Azure authorization request failed", err)
 		return
@@ -264,10 +270,17 @@ func (s *Server) consumeAzureFoundryCookies(w http.ResponseWriter, r *http.Reque
 	return nonceCookie.Value, pkceCookie.Value, true
 }
 
+// azureProviderParam names the row the sign-in was started for, so the console
+// can say which provider connected or failed. The uid is the cookie's claim,
+// escaped, and the console resolves it against the providers it can read.
+func azureProviderParam(uid string) string {
+	return "&azure_provider=" + url.QueryEscape(uid)
+}
+
 // azureFoundryRedirect sends the browser to the console's error page with a
-// fixed reason code.
-func (s *Server) azureFoundryRedirect(w http.ResponseWriter, r *http.Request, reason string) {
-	http.Redirect(w, r, s.cfg.BasePath+azureFoundrySignInErrorPath+reason, http.StatusFound)
+// fixed reason code and the row the sign-in was for.
+func (s *Server) azureFoundryRedirect(w http.ResponseWriter, r *http.Request, reason, uid string) {
+	http.Redirect(w, r, s.cfg.BasePath+azureFoundrySignInErrorPath+reason+azureProviderParam(uid), http.StatusFound)
 }
 
 // handleAzureFoundryCallback finishes a capture started by
@@ -292,7 +305,7 @@ func (s *Server) handleAzureFoundryCallback(w http.ResponseWriter, r *http.Reque
 	}
 	fail := func(reason string) {
 		s.auditAzureCapture(ctx, subject, ec, "failure", map[string]any{"reason": reason})
-		s.azureFoundryRedirect(w, r, reason)
+		s.azureFoundryRedirect(w, r, reason, stamp.RowUID)
 	}
 	// Before the code is spent: the row must still be what the sign-in started
 	// for. The authoritative check is the one under the site-config lock at the write.
@@ -329,54 +342,17 @@ func (s *Server) handleAzureFoundryCallback(w http.ResponseWriter, r *http.Reque
 		writeErrorReason(w, http.StatusBadRequest, reasonAzureCallbackMissingCode, "missing code parameter")
 		return
 	}
-	generation, err := s.cfg.MaskRegistry.GlobalGeneration(ctx)
-	if err != nil {
-		fail(reasonStoreError)
-		return
-	}
-	resp, err := s.postADOEntraToken(ctx, cfg, url.Values{
-		"grant_type":    {"authorization_code"},
-		"code":          {code},
-		"code_verifier": {verifier},
-		"redirect_uri":  {cfg.RedirectURL},
-	})
-	if err != nil {
-		reason := adoCaptureErrorCode(err)
-		slog.WarnContext(ctx, "wardynd: the azure sign-in code exchange failed",
-			slog.String("row", ec.rowUID), slog.String("reason", reason), slog.Any("err", err))
+	grant, reason := s.redeemEntraCode(ctx, cfg, ec, subject, code, verifier, nonce)
+	if reason != "" {
 		fail(reason)
 		return
 	}
-	now := s.cfg.Now()
-	accessExpiry := now.Add(time.Duration(resp.ExpiresIn) * time.Second).UTC()
-	if err := s.cfg.MaskRegistry.MergeGlobalUntil(generation, subject, ec.secretName, accessExpiry, []byte(resp.AccessToken), []byte(resp.RefreshToken)); err != nil {
-		slog.ErrorContext(ctx, "wardynd: the Azure sign-in tokens could not be recorded for masking",
-			slog.String("row", ec.rowUID), slog.Any("err", err))
-		fail(reasonStoreError)
-		return
-	}
-
-	if reason, ok := s.bindADOEntraIdentity(ctx, cfg, resp.IDToken, nonce, subject); !ok {
-		slog.WarnContext(ctx, "wardynd: azure sign-in identity binding failed",
-			slog.String("row", ec.rowUID), slog.String("reason", reason))
-		fail(reasonADOCallbackIdentityBinding)
-		return
-	}
-	granted := ec.capturedScopes(resp.Scope)
-	if resp.RefreshToken == "" || len(granted) == 0 {
-		fail(reasonADOCallbackUnusableGrant)
-		return
-	}
-	blob := adoEntraBlob{
-		RefreshToken: resp.RefreshToken,
-		Scopes:       granted,
-		ExpiresAt:    accessExpiry,
-		TenantID:     cfg.TenantID,
-		ClientID:     cfg.ClientID,
-		Subject:      subject,
-		CapturedAt:   now.UTC(),
-		Source:       adoEntraSourceSignIn,
-	}
+	blob := grant.blob
+	// The resume of a run a resolved request held takes the run's lock, which must precede this sign-in
+	// lock (db.LockOrder): it runs after the lock is released, the deferred calls running last-in first.
+	var resolved []uuid.UUID
+	parent := ctx
+	defer func() { s.approvalsClosed(parent, resolved) }()
 	ctx, unlock, err := s.lockADOSignIn(ctx, subject, ec.rowUID)
 	if err != nil {
 		slog.ErrorContext(ctx, "wardynd: could not take the Azure sign-in lock", slog.String("row", ec.rowUID), slog.Any("err", err))
@@ -384,7 +360,7 @@ func (s *Server) handleAzureFoundryCallback(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	defer unlock()
-	reason, err := s.storeAzureFoundryCapture(ctx, subject, stamp, ec, blob)
+	reason, err = s.storeAzureFoundryCapture(ctx, subject, stamp, ec, blob)
 	if err != nil {
 		slog.ErrorContext(ctx, "wardynd: storing the captured Azure sign-in failed", slog.String("row", ec.rowUID), slog.Any("err", err))
 		fail(reasonStoreError)
@@ -394,17 +370,13 @@ func (s *Server) handleAzureFoundryCallback(w http.ResponseWriter, r *http.Reque
 		fail(reason)
 		return
 	}
-	// The Merge above already put both tokens on record; this retires what the
-	// sign-in replaced, and a failure leaves the old values masked longer.
-	if err := s.cfg.MaskRegistry.AddGlobalUntil(generation, subject, ec.secretName, s.cfg.Now(), blob.ExpiresAt, []byte(resp.AccessToken), []byte(resp.RefreshToken)); err != nil {
-		slog.WarnContext(ctx, "wardynd: the replaced Azure sign-in tokens could not be retired", slog.String("row", ec.rowUID), slog.Any("err", err))
-	}
+	s.retireReplacedEntraTokens(ctx, subject, ec, grant)
 	s.auditAzureCapture(ctx, subject, ec, "success", map[string]any{
-		"audience": stamp.Audience, "scopes": granted,
+		"audience": stamp.Audience, "scopes": blob.Scopes,
 		"expires_at": blob.ExpiresAt.Format(time.RFC3339),
 	})
-	s.resolvePendingAzureReauth(ctx, subject, ec.rowUID)
-	http.Redirect(w, r, s.cfg.BasePath+ec.donePath, http.StatusFound)
+	resolved = s.resolvePendingAzureReauth(ctx, azureApprovalLane, subject, ec.rowUID)
+	http.Redirect(w, r, s.cfg.BasePath+ec.donePath+azureProviderParam(stamp.RowUID), http.StatusFound)
 }
 
 // storeAzureFoundryCapture stores blob only while the row is still the one the

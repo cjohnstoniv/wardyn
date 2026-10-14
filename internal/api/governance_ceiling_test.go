@@ -9,6 +9,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -178,7 +179,7 @@ func TestEffectiveCeilingPrecedence(t *testing.T) {
 			if len(got.Spec.AllowedDomains) != 3 {
 				t.Errorf("ceiling = %v, want the deployment's", got.Spec.AllowedDomains)
 			}
-			if got.Limits != (types.GovernanceLimits{}) {
+			if !reflect.DeepEqual(got.Limits, types.GovernanceLimits{}) {
 				t.Errorf("limits = %+v for an unassigned member, want the zero (unrestricted) value", got.Limits)
 			}
 		}

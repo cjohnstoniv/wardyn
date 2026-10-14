@@ -150,6 +150,9 @@ export class HttpError extends Error {
   provider: string;
   /** The refused provider's kind (#532, #535), "" when the body names none. */
   kind: string;
+  /** The included tool (tools[].id) a run refusal is about, "" when the body
+   *  names none: New Run attaches the blocker to that harness. */
+  tool: string;
   /** The policy a governance refusal came from and how to ask for a change
    *  (the envelope's `policy`, internal/policyref.Ref). Absent when the body
    *  carries none, which is every refusal that is not a policy decision. */
@@ -164,6 +167,7 @@ export class HttpError extends Error {
     provider = "",
     kind = "",
     policy?: PolicyRef,
+    tool = "",
   ) {
     super(message);
     this.status = status;
@@ -171,6 +175,7 @@ export class HttpError extends Error {
     this.org = org;
     this.provider = provider;
     this.kind = kind;
+    this.tool = tool;
     if (policy) this.policy = policy;
     this.name = "HttpError";
   }
@@ -359,14 +364,20 @@ export class PendingChangeError extends Error {
 
 export async function asJson<T>(res: Response): Promise<T> {
   if (!res.ok) {
-    const { message, reason, org, provider, kind, policy } = await errEnvelope(res);
-    throw new HttpError(res.status, message, reason, org, provider, kind, policy);
+    const { message, reason, org, provider, kind, policy, tool } = await errEnvelope(res);
+    throw new HttpError(res.status, message, reason, org, provider, kind, policy, tool);
   }
   const body = await res.json();
   if (res.status === 202 && body && typeof body === "object" && (body as { pending_change?: unknown }).pending_change) {
     throw new PendingChangeError((body as { pending_change: GovernanceChange }).pending_change);
   }
   return body as T;
+}
+
+// A route that answers 2xx with no body (a DELETE's 204): a refusal throws the same HttpError asJson
+// does, reason included, so the console can match on it instead of on the text.
+export async function asNoContent(res: Response): Promise<void> {
+  if (!res.ok) await asJson<never>(res);
 }
 
 // The delete routes answer 204 and read no body, so a held delete's 202 would pass for success. This is
@@ -404,6 +415,7 @@ type ErrEnvelope = {
   provider: string;
   kind: string;
   policy?: PolicyRef;
+  tool: string;
 };
 
 // The envelope's `policy` object, kept only when it is an object naming its
@@ -421,7 +433,7 @@ function policyField(v: unknown): PolicyRef | undefined {
 }
 
 export async function errEnvelope(res: Response): Promise<ErrEnvelope> {
-  const bare = (message: string): ErrEnvelope => ({ message, reason: "", org: "", provider: "", kind: "" });
+  const bare = (message: string): ErrEnvelope => ({ message, reason: "", org: "", provider: "", kind: "", tool: "" });
   const field = (v: unknown) => (typeof v === "string" ? v : "");
   try {
     const body = await res.text();
@@ -434,6 +446,7 @@ export async function errEnvelope(res: Response): Promise<ErrEnvelope> {
         provider?: unknown;
         kind?: unknown;
         policy?: unknown;
+        tool?: unknown;
       };
       if (typeof j.error === "string" && j.error) {
         return {
@@ -443,6 +456,7 @@ export async function errEnvelope(res: Response): Promise<ErrEnvelope> {
           provider: field(j.provider),
           kind: field(j.kind),
           policy: policyField(j.policy),
+          tool: field(j.tool),
         };
       }
     } catch {

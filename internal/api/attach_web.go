@@ -57,14 +57,14 @@ func (wa *webAttach) fail(err error, promotion bool) {
 
 func (wa *webAttach) audit(outcome string, data map[string]any) {
 	id := wa.run.ID
-	wa.s.recordAudit(wa.finishCtx, wa.s.auditEvent(&id, wa.principalType, wa.principal, "session.attach",
-		id.String(), outcome, mustJSON(data)))
+	wa.s.recordStreamAudit(wa.finishCtx, wa.run.SandboxRef, wa.s.auditEvent(&id, wa.principalType, wa.principal, "session.attach",
+		id.String(), outcome, mustJSON(withSponsorEntry(wa.run, data))))
 }
 
 // open opens the exec and writes the second session.attach row, the outcome,
 // when the attach settles.
 func (wa *webAttach) open() error {
-	err := wa.s.establishExec(wa.pumpCtx, wa.run.ID, wa.holder, wa.run.SandboxRef)
+	err := wa.s.establishExec(wa.pumpCtx, wa.run, wa.holder)
 	if errors.Is(err, errAttachCancelled) {
 		// The connection ended some other way (a client close, a take-over)
 		// while the exec was opening; the outcome is still recorded.
@@ -98,7 +98,7 @@ func (wa *webAttach) notify(readOnly bool, h *attachHolder) {
 		}
 		return
 	}
-	if err := wa.s.establishExec(wa.pumpCtx, wa.run.ID, wa.holder, wa.run.SandboxRef); err != nil {
+	if err := wa.s.establishExec(wa.pumpCtx, wa.run, wa.holder); err != nil {
 		if errors.Is(err, errAttachCancelled) {
 			return // evicted or gone meanwhile: its socket is closing by other means
 		}

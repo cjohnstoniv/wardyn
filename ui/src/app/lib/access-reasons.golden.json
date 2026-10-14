@@ -1,0 +1,122 @@
+[
+  {
+    "key": "attended_no_skip",
+    "text": "In an interactive run Claude Code asks you before it acts, and this run's settings don't let it skip asking."
+  },
+  {
+    "key": "attended_rules_unavailable",
+    "text": "Wardyn can't set tool rules for an interactive run yet."
+  },
+  {
+    "key": "cli_no_github_repo",
+    "text": "GitHub CLI works only with this run's GitHub repositories. Add one on the Files step."
+  },
+  {
+    "key": "cli_not_granted",
+    "text": "Not turned on for you. Ask your admin."
+  },
+  {
+    "key": "command_no_hold",
+    "text": "A command can't pause a tool call for approval."
+  },
+  {
+    "key": "component_unavailable",
+    "text": "This component isn't available to you. Ask your admin."
+  },
+  {
+    "key": "custom_harness_rules",
+    "text": "Wardyn can't set tool rules for {harness}."
+  },
+  {
+    "key": "delivery.git_broker",
+    "text": "Via Wardyn's git broker"
+  },
+  {
+    "key": "delivery.git_helper",
+    "text": "Given to git when it asks"
+  },
+  {
+    "key": "delivery.proxy",
+    "text": "Proxy only"
+  },
+  {
+    "key": "delivery.sandbox_env",
+    "text": "In the sandbox as an environment variable"
+  },
+  {
+    "key": "delivery.sandbox_file",
+    "text": "In the sandbox as a file"
+  },
+  {
+    "key": "delivery.sandbox_short_lived",
+    "text": "In the sandbox, short-lived"
+  },
+  {
+    "key": "harness_no_block_builtin",
+    "text": "Wardyn can't block Codex CLI's own tools. Rules for its MCP tools still apply."
+  },
+  {
+    "key": "harness_no_hold",
+    "text": "Codex CLI can't pause a tool call for approval."
+  },
+  {
+    "key": "mcp_harness_unsupported",
+    "text": "Wardyn can't configure MCP servers for {harness}."
+  },
+  {
+    "key": "policy_stricter_default",
+    "text": "Your policy {asks first for|blocks} tools with no rule. A run can only be stricter."
+  },
+  {
+    "key": "policy_stricter_tool",
+    "text": "Your policy {asks first for|blocks} {tool}. A run can only be stricter."
+  },
+  {
+    "key": "resident_off",
+    "text": "Your organisation has turned off environment-variable and file delivery. Use a request header."
+  },
+  {
+    "key": "unlisted.allow_all",
+    "text": "Any other public host is allowed, except ones your organisation blocks."
+  },
+  {
+    "key": "unlisted.always_deny",
+    "text": "Anything else is refused and logged."
+  },
+  {
+    "key": "unlisted.checked",
+    "text": "Checked against your organisation's limits just now."
+  },
+  {
+    "key": "unlisted.deny_with_review.admin",
+    "text": "Anything else is refused the first time the run asks for it and raises a request. Once an admin approves it, the run can try again."
+  },
+  {
+    "key": "unlisted.deny_with_review.you",
+    "text": "Anything else is refused the first time the run asks for it and raises a request. Once you approve it, the run can try again."
+  },
+  {
+    "key": "unlisted.deny_with_review.you_or_admin",
+    "text": "Anything else is refused the first time the run asks for it and raises a request. Once you or an admin approves it, the run can try again."
+  },
+  {
+    "key": "unlisted.hold_timeout",
+    "text": "If nobody decides within {n} seconds, it's refused."
+  },
+  {
+    "key": "unlisted.requested",
+    "text": "Your organisation's ceiling still narrows this list at review."
+  },
+  {
+    "key": "unlisted.wait_for_review.admin",
+    "text": "Anything else is held for an admin's review the first time the run asks for it."
+  },
+  {
+    "key": "unlisted.wait_for_review.you",
+    "text": "Anything else is held for your review the first time the run asks for it."
+  },
+  {
+    "key": "unlisted.wait_for_review.you_or_admin",
+    "text": "Anything else is held for your or an admin's review the first time the run asks for it."
+  }
+]

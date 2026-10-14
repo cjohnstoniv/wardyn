@@ -27,9 +27,20 @@ import type {
   RunResources,
 } from "../types";
 import type { ComponentRef } from "../types/components";
+import type { PolicyPreviewResult } from "../types/policy-preview";
+import type {
+  Experience,
+  IncludedTool,
+  PlacementValue,
+  RepoSelection,
+  RequestedResources,
+  RunOverrides,
+  RunStartup,
+  RunWorkload,
+  StartFolder,
+} from "../types/new-run-contract";
 import {
   asJson,
-  ccRank,
   errText,
   HttpError,
   LAUNCH_DEADLINE_MS,
@@ -80,7 +91,7 @@ export type RunWireInput = (Partial<AgentRun> | CreateRunInput) & {
   inline_policy?: RunPolicySpec;
   // Per-run half of the requirements contract: which optional requirements
   // this run enables, plus any read-only narrowing, per attached workspace.
-  workspaces?: { workspace_id: string; enabled_optional?: string[]; read_only?: boolean }[];
+  workspaces?: { workspace_id: string; enabled_optional?: string[]; read_only?: boolean; target?: string; repos?: RepoSelection[] }[];
   // Primary-workspace id for a selection that resolves to no mount/repo (a
   // pure-ephemeral / migrated-0029 workspace) — routes its base_image through
   // the server's seedRequestWorkspace, which the mount-less spec can't.
@@ -99,67 +110,35 @@ export type RunWireInput = (Partial<AgentRun> | CreateRunInput) & {
   // The components this run carries (CreateRunRequest.Components, #1914): a
   // stored one by id or a run-only inline definition. Absent is none.
   components?: ComponentRef[];
+  // The 0.9 New Run contract (pkg/client.CreateRunRequest): where the run lives
+  // ("Runs on" in the console), its size, and the person's per-component edits.
+  // Each is absent unless the person chose it; the console never sends a value
+  // for a field whose section is inactive (see lib/run-overrides.ts).
+  placement?: PlacementValue;
+  runner_id?: string;
+  // The pool the run starts on (pkg/client.CreateRunRequest.RunnerPoolID); absent
+  // keeps today's placement, and once pools are managed applies the person's
+  // own default, then the organisation's.
+  runner_pool_id?: string;
+  // One of the preview's allowed_images, by ref (pkg/client.CreateRunRequest.AllowedImage).
+  allowed_image?: string;
+  resources?: RequestedResources;
+  overrides?: RunOverrides;
+  // The run-mode contract (pkg/client/runs_mode.go). A request with the marker or
+  // an experience is a new client's: the older agent, task, interactive,
+  // task_mode, interactive_start, seed_auto_tools, tool_approvals and
+  // model_provider are then omitted: the carriers replace them and the server refuses both.
+  // The contract marker (pkg/client.RunModeContractV09): New Run always
+  // sends it, so a request whose mode is unset is refused by the server and never
+  // read as an older client's.
+  mode_contract?: "0.9";
+  experience?: Experience;
+  workload?: RunWorkload;
+  tools?: IncludedTool[];
+  startup?: RunStartup;
+  start_folder?: StartFolder;
+  no_repositories_or_drives?: boolean;
 };
-
-// The ONE projection from wizard input to the POST /runs wire body. createRun
-// preflightRun and policy preview all send this projection.
-// (They used to be two hand-built whitelists; preflight's lagged by five fields.)
-/** The shared request projection for create, preflight and policy preview. */
-export function runWireBody(input: RunWireInput): Record<string, unknown> {
-  const body: Record<string, unknown> = {
-    agent: input.agent,
-    repo: input.repo,
-    task: input.task,
-  };
-  if (input.policy_id) body.policy_id = input.policy_id;
-  // A run may request an equal-or-STRONGER tier than its policy floor, never a
-  // weaker one (the server 422s "confinement_class X is weaker than the policy
-  // minimum Y"). Defensively raise a requested class UP to the inline policy's
-  // floor so a stale/edited selection can never produce that rejection — clamping
-  // up only ever strengthens confinement, so it is always safe.
-  let cc = input.confinement_class;
-  const floor = input.inline_policy?.min_confinement_class;
-  if (cc && floor && ccRank(cc) < ccRank(floor)) cc = floor;
-  if (cc) body.confinement_class = cc;
-  if (input.interactive) body.interactive = true;
-  if (input.inline_policy) body.inline_policy = input.inline_policy;
-  // BYOI + governed-command pass-through — previously dropped on the floor here.
-  if (input.image) body.image = input.image;
-  if ("task_mode" in input && input.task_mode) body.task_mode = input.task_mode;
-  // The run's name/note and the interactive start choice — same lesson as the
-  // two above: this whitelist is hand-built, so an unlisted field is discarded
-  // between the form and the wire with no error anywhere. The title the
-  // operator typed would simply never exist.
-  if ("title" in input && input.title) body.title = input.title;
-  if ("description" in input && input.description) body.description = input.description;
-  if ("interactive_start" in input && input.interactive_start) {
-    body.interactive_start = input.interactive_start;
-  }
-  // The boot-seed opt-in and the autonomous tool-approval posture — same
-  // hand-built-whitelist trap as everything else on this list: an unlisted
-  // field is silently discarded between the form and the wire.
-  if ("seed_auto_tools" in input && input.seed_auto_tools) body.seed_auto_tools = true;
-  if ("tool_approvals" in input && input.tool_approvals) body.tool_approvals = input.tool_approvals;
-  // Composition-model pass-through. This whitelist has dropped a wizard field
-  // on the floor once before (image/task_mode, above) — a selection the
-  // operator made, silently discarded between the form and the wire. These
-  // two carry the per-run half of the requirements contract (which optional
-  // requirements this run enables, and any read-only narrowing) and the
-  // explicit model-access override, so dropping them would launch a run the
-  // Review screen did not describe.
-  if (input.workspaces?.length) body.workspaces = input.workspaces;
-  if (input.workspace_id) body.workspace_id = input.workspace_id;
-  if (input.integration_id) body.integration_id = input.integration_id;
-  // The member's drive request. Forwarded VERBATIM rather than re-derived: an
-  // absent `drive` is "mount nothing", byte for byte what every run sent
-  // before the field existed, and buildSpec is the one place that decides
-  // whether the member asked for it. A whitelist that re-decided would be the
-  // second answer to that question.
-  if (input.drive) body.drive = input.drive;
-  if (input.model_provider) body.model_provider = input.model_provider;
-  if (input.components?.length) body.components = input.components;
-  return body;
-}
 
 // The create-time model-credential refusal — writeProviderRefusal's 422
 // carrying reason `model_credential`, the failure audit row's own word. It is
@@ -305,51 +284,32 @@ export const runs = {
     return body.ticket;
   },
 
-  // POST /api/v1/runs  { agent, repo, task, policy_id?, confinement_class?,
-  //   interactive?, inline_policy? }
-  // interactive=true brings the sandbox up idle (no agent task) so a human can
-  // attach to it; pair with a never-reap policy (auto_stop_after_sec < 0).
-  // inline_policy carries a RunPolicySpec inline; it is MUTUALLY EXCLUSIVE with
-  // policy_id (XOR) — the wizard sends exactly one, never both. Neither set =>
-  // the configured default policy (unchanged behavior).
-  // The response is the created run's fields PLUS an optional advisory
-  // `warnings: string[]` (e.g. a workspace-directory collision with another
-  // active run) — the run still launched; callers surface warnings without
-  // blocking. CreateRunResult is structurally an AgentRun, so existing onCreated
-  // callbacks keep working.
+  // New Run's three requests. Each sends the body intentToWire built, byte for byte, so
+  // preflight, policy preview and create judge the same request.
   //
-  // #125/#121: the default deadline, not LAUNCH_DEADLINE_MS — POST /runs is
-  // async now (dispatch happens after this call answers), so this no longer
-  // blocks through CreateSandbox server-side the way the constant's own note
-  // describes. preflightRun below still runs that resolution synchronously and
-  // keeps the longer deadline.
-  async createRun(input: RunWireInput): Promise<CreateRunResult> {
-    const res = await wfetch("/runs", { method: "POST", body: JSON.stringify(runWireBody(input)) });
+  // POST /api/v1/runs. The response is the created run's fields PLUS an optional advisory
+  // `warnings: string[]` (e.g. a workspace-directory collision with another active run): the run
+  // still launched, and callers surface warnings without blocking. CreateRunResult is
+  // structurally an AgentRun. #125/#121: the default deadline, not LAUNCH_DEADLINE_MS, because
+  // POST /runs dispatches asynchronously and no longer blocks through CreateSandbox.
+  async createRunWire(body: object): Promise<CreateRunResult> {
+    const res = await wfetch("/runs", { method: "POST", body: JSON.stringify(body) });
     return asJson<CreateRunResult>(res);
   },
-
-  // POST /api/v1/runs/preflight — a DRY-RUN of createRun's resolution + gating:
-  // mints/persists/dispatches NOTHING, just returns the deterministic setup
-  // checklist and the enforced confinement class (post floor + blast-radius
-  // raise). New Run fires this as the body settles, sending the
-  // SAME body createRun would, so the checklist and any 4xx (unknown-secret 422,
-  // XOR, invalid spec) are the real launch verdicts. Callers show an error as
-  // a danger alert beside Launch (the server's own sentence). A fresh 4xx, or a
-  // `missing` backend or llm_access row, holds Launch (use-launch.ts's
-  // preflightBlock); every other row is advisory.
-  async preflightRun(input: RunWireInput, signal?: AbortSignal): Promise<PreflightResult> {
-    // LAUNCH_DEADLINE_MS, not the default: this runs the SAME resolution
-    // (mounts, grants, the blast-radius raise) against the same store that
-    // createRun's own dispatch does — createRun itself dropped this deadline
-    // once POST /runs became async (#125/#121), but preflight's own work here
-    // is still synchronous, so a deployment slow enough to need the longer
-    // bound on a real launch needs it on the dry run too.
-    const res = await wfetch(
-      "/runs/preflight",
-      { method: "POST", body: JSON.stringify(runWireBody(input)), signal },
-      LAUNCH_DEADLINE_MS,
-    );
+  // Preflight (POST /runs/preflight) is a dry run of create's resolution and gating. It keeps
+  // LAUNCH_DEADLINE_MS because that resolution (mounts, grants, the blast-radius raise) is synchronous.
+  async preflightRunWire(body: object, signal?: AbortSignal): Promise<PreflightResult> {
+    const res = await wfetch("/runs/preflight", { method: "POST", body: JSON.stringify(body), signal }, LAUNCH_DEADLINE_MS);
     return asJson<PreflightResult>(res);
+  },
+  async previewRunPolicyWire(body: object, signal?: AbortSignal): Promise<PolicyPreviewResult> {
+    const res = await wfetch("/runs/policy-preview", { method: "POST", body: JSON.stringify(body), signal });
+    try {
+      return await asJson<PolicyPreviewResult>(res);
+    } catch (e) {
+      if (e instanceof HttpError) e.retryAfter = res.headers.get("Retry-After") ?? undefined;
+      throw e;
+    }
   },
 
   // POST /api/v1/policies/grade — composer.Grade of a bare spec, no run
@@ -526,8 +486,10 @@ export const runs = {
   // each named run's proxy under its OWNER's current limits, one at a time;
   // a per-run failure (including a rebooted run's own "revive it from the
   // run's page" 409) never aborts the rest — see AdminRestartResult.
-  async restartAdminRuns(runIds: string[]): Promise<AdminRestartResponse> {
-    const res = await wfetch("/admin/runs/restart", { method: "POST", body: JSON.stringify({ run_ids: runIds }) });
+  // timeoutMs is the caller's deadline for the whole batch: the default 60s bounds a hang, not a
+  // restart of several runs one after another.
+  async restartAdminRuns(runIds: string[], timeoutMs?: number): Promise<AdminRestartResponse> {
+    const res = await wfetch("/admin/runs/restart", { method: "POST", body: JSON.stringify({ run_ids: runIds }) }, timeoutMs);
     if (!res.ok) throw new HttpError(res.status, await errText(res));
     return asJson<AdminRestartResponse>(res);
   },

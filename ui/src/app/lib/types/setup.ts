@@ -187,6 +187,12 @@ export interface SetupHarnessTool {
   // cannot tell those two apart without this fact (setupModelProviderState's
   // capVisible already narrows model_providers to granted ones before the wire).
   providers_ungranted?: boolean;
+  // A sandbox image this server launches carries this harness's CLI (Go:
+  // harnessInstalled). False when the only image is Wardyn's agent base. The
+  // server always sends both; optional here because an older daemon omits them.
+  installed?: boolean;
+  // Wardyn can hold this harness's tool calls for approval on an autonomous run.
+  approval_hold?: boolean;
 }
 
 // THIS PRINCIPAL's Azure DevOps access state (internal/api.SCMAccess) —
@@ -258,6 +264,9 @@ export interface SetupModelProvider {
 // is already composed by the server and rendered verbatim — never reworded
 // client-side.
 export interface SetupProviderAccess {
+  cause?: "never_connected" | "destination_changed" | "kind_changed" | "store_unreadable" | (string & {});
+  changed_at?: string;
+  new_destination?: string;
   provider: string;
   state: "live" | "expiring" | "expired_signin" | "not_configured" | "not_applicable" | (string & {});
   action?: string;
@@ -367,6 +376,10 @@ export interface SetupStatus {
   // unlike `checks`: every signed-in person reads it, not just an admin.
   // Optional: absent on an older daemon that predates the field.
   credential_storage?: "local" | "key_service" | "key_service_key_vault" | "vault" | "key_vault";
+  /** Who governs this install (PLAN §10.3): local-only, runner or org. Optional for
+   *  the same fixture-compat reason as `llm_ready`; absent reads as unknown, never
+   *  as local-only. */
+  tier?: "local-only" | "runner" | "org";
   has_runs: boolean;
   platform: { os: string; wsl: boolean; kvm?: boolean };
   // Masked host-proxy detection (see HostProxyDetection). Optional for the same
@@ -389,6 +402,10 @@ export interface SetupStatus {
   // pending consolidation onto this field. Optional for the same
   // fixture-compat reason as `llm_ready`.
   harnesses?: SetupHarnessTool[];
+  // Each combination of two or more harnesses one declared sandbox image
+  // carries, as sorted ids; only combinations of harnesses in `harnesses`.
+  // Optional for the fixture-compat reason above.
+  harness_sets?: string[][];
   // UI-ONLY, never on the wire: set by api.getSetupStatus()'s fallback when the
   // daemon couldn't answer (network error / non-ok). The Go contract does not
   // emit it. Consumers must treat the rest of the payload as UNTRUSTWORTHY —

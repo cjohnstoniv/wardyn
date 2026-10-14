@@ -38,12 +38,14 @@ const (
 
 // Request is one normalized outbound attempt observed at the proxy.
 type Request struct {
-	RunID  uuid.UUID
-	Host   string // lowercased hostname, no port
-	Port   int
-	Method string // HTTP method, or "CONNECT" for tunneled TLS
-	Path   string // empty for CONNECT (hostname-only visibility)
-	Time   time.Time
+	// AuditReservation is proxy-local admission state, never a wire authority.
+	AuditReservation uuid.UUID `json:"-"`
+	RunID            uuid.UUID
+	Host             string // lowercased hostname, no port
+	Port             int
+	Method           string // HTTP method, or "CONNECT" for tunneled TLS
+	Path             string // empty for CONNECT (hostname-only visibility)
+	Time             time.Time
 }
 
 // DecisionLog is the structured record streamed to the control plane for
@@ -62,8 +64,11 @@ type DecisionLog struct {
 	// COMPLETED, so it names the protocol answered), builtin:tunnel-failed
 	// (what ended a CONNECT tunnel after its 200) and a
 	// builtin:resolve-failed written with an upstream proxy configured (the
-	// name is bypassed and did not resolve at the proxy). Empty on every
-	// other decision.
+	// name is bypassed and did not resolve at the proxy). A
+	// policy:tool-allow/policy:tool-deny row carries the quoted tool name the
+	// run's tool_rules answered. A brokered:llm deny whose credential could
+	// not be refreshed carries that masked refusal. Empty on every other
+	// decision.
 	Cause string `json:"cause,omitempty"`
 	// Via names the CLASS of hop that carried the request, or that a refusal
 	// attempted ("upstream-proxy" or "direct"), never an address — Cause's
@@ -253,6 +258,35 @@ func ValidHeaderName(name string) bool {
 		}
 	}
 	return true
+}
+
+// Non-policy DENY rule_sources: rows where policy ALLOWED the destination and
+// the NETWORK then lost it. The host was never refused, so every consumer that
+// asks "did policy refuse this?" must exclude them — the deny counter
+// (isPolicyDeny), observed-egress promotion candidates
+// (handleObservedEgress) and Record Mode's deny/anomaly accounting all read
+// this one predicate rather than each keeping its own copy of the list.
+//
+// Deliberately ABSENT, because each is a refusal of something rather than a
+// network fault, and each exclusion has to be re-derived if it is added here:
+// builtin:resolve-failed (a name that did not resolve), the gateway-vet guard
+// refusal, builtin:upstream-protocol-mismatch (a round trip that GOT an
+// answer), credential:reauth-timeout and the dropped-decisions summary.
+const (
+	// RuleSourceDialFailed marks a request policy ALLOWED and the dial that
+	// followed losing the connection.
+	RuleSourceDialFailed = "builtin:dial-failed"
+	// RuleSourceTunnelFailed marks a CONNECT tunnel acknowledged and then
+	// broken before it carried an answer; the dial succeeded, so the allow row
+	// stands and this deny follows it.
+	RuleSourceTunnelFailed = "builtin:tunnel-failed"
+)
+
+// IsNetworkFault reports whether rule_source marks a network fault — a
+// destination policy ALLOWED and the network lost the connection — rather than
+// a refusal. Callers that count or report policy denials exclude these.
+func IsNetworkFault(ruleSource string) bool {
+	return ruleSource == RuleSourceDialFailed || ruleSource == RuleSourceTunnelFailed
 }
 
 // maxHeaderNameLen bounds an authored header name. No real field name comes

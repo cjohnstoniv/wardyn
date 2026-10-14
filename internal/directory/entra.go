@@ -4,6 +4,7 @@
 package directory
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -58,10 +59,13 @@ type EntraConfig struct {
 	TenantID     string
 	ClientID     string
 	ClientSecret string
+	// AppRolesAppID is the sign-in (OIDC) app registration, whose App Roles a sign-in's roles
+	// claim carries: App Role suggestions read its service principal. Empty reads ClientID's.
+	AppRolesAppID string
 }
 
 type entraDirectory struct {
-	clientID  string
+	roleAppID string
 	graphBase string
 	hc        *http.Client
 	tokens    oauth2.TokenSource
@@ -109,7 +113,7 @@ func newEntra(cfg EntraConfig, tokenURL, graphBase string) (Directory, error) {
 	tokens := oauth2.ReuseTokenSourceWithExpiry(nil, ccfg.TokenSource(tokenCtx), tokenRefreshMargin)
 
 	return &entraDirectory{
-		clientID:  strings.TrimSpace(cfg.ClientID),
+		roleAppID: cmp.Or(strings.TrimSpace(cfg.AppRolesAppID), strings.TrimSpace(cfg.ClientID)),
 		graphBase: strings.TrimRight(graphBase, "/"),
 		hc:        hc,
 		tokens:    tokens,
@@ -253,7 +257,7 @@ type graphAppRole struct {
 	IsEnabled   bool   `json:"isEnabled"`
 }
 
-// searchAppRoles reads this registration's own service principal and filters
+// searchAppRoles reads the sign-in app's service principal and filters
 // appRoles client-side (a handful of entries; no server-side query needed).
 // Best-effort: without Application.Read.All the read is refused and App Role
 // results are simply absent, not an error.
@@ -262,7 +266,7 @@ func (d *entraDirectory) searchAppRoles(ctx context.Context, q string) ([]Entry,
 		return nil, nil
 	}
 	v := url.Values{}
-	v.Set("$filter", fmt.Sprintf("appId eq '%s'", odataQuote(d.clientID)))
+	v.Set("$filter", fmt.Sprintf("appId eq '%s'", odataQuote(d.roleAppID)))
 	v.Set("$select", "appRoles")
 	v.Set("$top", "1")
 
@@ -274,7 +278,9 @@ func (d *entraDirectory) searchAppRoles(ctx context.Context, q string) ([]Entry,
 	// A plain $filter query — no $search, so no ConsistencyLevel/$count pair needed.
 	if err := d.graphGet(ctx, "approles", "/servicePrincipals", v, false, &body); err != nil {
 		var pe *ProviderError
-		if errors.As(err, &pe) && (pe.Status == http.StatusForbidden || pe.Status == http.StatusUnauthorized) {
+		// Only the servicePrincipals call itself says the registration lacks the permission; a token-phase
+		// 401 is a credential problem for every kind and must not latch App Roles off.
+		if errors.As(err, &pe) && pe.Op == "approles" && (pe.Status == http.StatusForbidden || pe.Status == http.StatusUnauthorized) {
 			d.markAppRolesDenied(pe)
 			return nil, nil
 		}

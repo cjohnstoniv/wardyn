@@ -25,6 +25,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -184,7 +186,7 @@ type runResourcesResponse struct {
 	// §8) is this field's only consumer: absent it, the UI shows DiskUsedBytes
 	// with no bar.
 	DiskCapBytes *int64 `json:"disk_cap_bytes,omitempty"`
-	ProcessCount *int   `json:"process_count,omitempty"`
+	ProcessCount *int64 `json:"process_count,omitempty"`
 }
 
 // runResourcesUnsupportedMsg is the honest 501 reason, shared by BOTH the
@@ -240,6 +242,9 @@ func (s *Server) handleRunResources(w http.ResponseWriter, r *http.Request) {
 		writeErrorReason(w, http.StatusConflict, reasonRunInspectPaused, runPausedReadMsg)
 		return
 	}
+	if s.refuseKeptAgentStopped(w, r, run) {
+		return
+	}
 
 	ctx, cancel := context.WithTimeout(r.Context(), runResourcesExecTimeout)
 	defer cancel()
@@ -278,7 +283,7 @@ func (s *Server) handleRunResources(w http.ResponseWriter, r *http.Request) {
 		// row per tick (the success path) would flood the trail. A failure is
 		// the rare, interesting case an operator would want in the log.
 		at, principal := actorFromRequest(r)
-		s.recordAudit(r.Context(), s.auditEvent(&id, at, principal, "run.resources.fail", id.String(), "failure",
+		s.recordStreamAudit(r.Context(), run.SandboxRef, s.auditEvent(&id, at, principal, "run.resources.fail", id.String(), "failure",
 			mustJSON(map[string]any{"error": err.Error()})))
 		if errors.Is(err, runner.ErrExecStreamUnsupported) {
 			// The human sentence AND the sentinel: the UI shows the first, an
@@ -311,6 +316,46 @@ func (s *Server) handleRunResources(w http.ResponseWriter, r *http.Request) {
 	resp := parseRunResourcesKV(kv)
 	resp.DiskUsedBytes, resp.DiskCapBytes = diskReading(kv, enforced, run.DiskMiB)
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// runAgentStoppedReader is the OPTIONAL store capability that reads a kept run's persisted stop
+// (agent_stopped_at), kept off store.Store for the reason runStatusDetailSetter states.
+type runAgentStoppedReader interface {
+	RunAgentStopped(ctx context.Context, id uuid.UUID) (bool, error)
+}
+
+// keptAgentStopped reports whether run is kept with its agent stopped, so an exec into it cannot
+// work: lost to its own end or a reboot, or lost to an outage whose agent was stopped (persisted, so
+// an extension since does not undo it) or whose lease has run out and so requires the stop. An outage
+// run inside its lease keeps its agent running and is still inspectable. A store that cannot read the
+// persisted stop, or a failed read, leaves such a run inspectable as before.
+func (s *Server) keptAgentStopped(ctx context.Context, run types.AgentRun) bool {
+	if run.LostAt == nil {
+		return false
+	}
+	switch run.LostReason {
+	case types.LostEnded, types.LostReboot:
+		return true
+	case types.LostOutage:
+		if run.EndsAt != nil && !s.cfg.Now().Before(*run.EndsAt) {
+			return true
+		}
+		if rd, ok := s.cfg.Store.(runAgentStoppedReader); ok {
+			stopped, err := rd.RunAgentStopped(ctx, run.ID)
+			return err == nil && stopped
+		}
+	}
+	return false
+}
+
+// refuseKeptAgentStopped writes the 409 for a read of a kept run whose agent is stopped, an expected
+// state and not a failure: callers write no failure audit. It reports whether it refused.
+func (s *Server) refuseKeptAgentStopped(w http.ResponseWriter, r *http.Request, run types.AgentRun) bool {
+	if !s.keptAgentStopped(r.Context(), run) {
+		return false
+	}
+	writeErrorReason(w, http.StatusConflict, reasonRunInspectAgentStopped, "the run's agent is stopped and its files are kept; there is no running sandbox to read (state="+string(run.State)+")")
+	return true
 }
 
 // writeRunInspectGone is the run page widgets' 409 for a run whose sandbox no
@@ -550,8 +595,7 @@ func parseRunResourcesKV(kv map[string]string) runResourcesResponse {
 	}
 
 	if v, ok := kvInt64(kv, "proc_count"); ok {
-		procCount := int(v)
-		resp.ProcessCount = &procCount
+		resp.ProcessCount = &v
 	}
 
 	return resp

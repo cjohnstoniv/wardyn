@@ -420,22 +420,33 @@ func (s *Server) raiseADOConsent(w http.ResponseWriter, r *http.Request, claims 
 // the capture itself (resolvePendingADOReauth). The capture is the resolution;
 // this writes it down, through the same one-transaction seam the AWS lane uses.
 func (s *Server) reconcileADOReauthOnRead(ctx context.Context, ap types.ApprovalRequest) types.ApprovalRequest {
+	fresh, closed := s.reconcileADOReauth(ctx, ap)
+	if closed {
+		s.approvalClosed(ctx, ap.RunID)
+	}
+	return fresh
+}
+
+// reconcileADOReauth is reconcileADOReauthOnRead without the resume of the run the request held: closed
+// reports that this call resolved the request, so a caller holding the sign-in lock can resume once it has
+// released it.
+func (s *Server) reconcileADOReauth(ctx context.Context, ap types.ApprovalRequest) (_ types.ApprovalRequest, closed bool) {
 	sc, ok := adoReauthScope(ap)
 	if !ok || ap.State != types.ApprovalPending || s.cfg.Approvals == nil {
-		return ap
+		return ap, false
 	}
 	resolver, ok := s.cfg.Store.(reauthResolver)
 	if !ok {
-		return ap
+		return ap, false
 	}
 	// Generation: only a sign-in captured AFTER the raise answers it, and only
 	// one no renewal has since found ended.
 	blob, found, err := s.readADOEntraBlob(secretstore.WithPurpose(ctx, secretstore.PurposeStatus), sc.Owner, sc.ProviderID)
 	if err != nil || !found || !blob.CapturedAt.After(ap.RequestedAt) || blob.signInEnded() {
-		return ap
+		return ap, false
 	}
 	if !subsetOf(sc.Scopes, blob.Scopes) {
-		return ap
+		return ap, false
 	}
 	ev := s.auditEvent(&ap.RunID, types.ActorHuman, sc.Owner, "credential.reauth.resolve", ap.ID.String(), "success",
 		mustJSON(map[string]any{
@@ -444,17 +455,16 @@ func (s *Server) reconcileADOReauthOnRead(ctx context.Context, ap types.Approval
 	if _, err := resolver.ResolveReauthApproval(ctx, ap.ID, types.ApprovalDecision{
 		State: types.ApprovalApproved, DecidedBy: sc.Owner, Reason: "signed in again",
 	}, ev); err != nil {
-		return ap
+		return ap, false
 	}
-	s.approvalClosed(ctx, ap.RunID)
 	// No metrics.credentialReauthResolved here (#971): wardyn_credential_reauth_total
 	// and its wait-seconds summary are the AWS SSO re-auth population alone, and
 	// an Azure DevOps sign-in or consent request is credential_reauth too but not
 	// that. The audit row above is the trail for this lane.
 	if fresh, gerr := s.cfg.Approvals.Get(ctx, ap.ID); gerr == nil {
-		return fresh
+		return fresh, true
 	}
-	return ap
+	return ap, true
 }
 
 // approvalOnceSpender is the store seam that spends a `once` approval exactly

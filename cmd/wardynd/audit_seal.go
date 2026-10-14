@@ -82,13 +82,16 @@ func (a *auditSealSource) arm(s *audit.Sealer) {
 }
 
 // seals reports whether ev needs the Sealer: it has a personal field to seal,
-// or, under full, a human actor to store as a subject.
+// or, under full, a human actor, a person target or a sponsor to store as a subject.
 func (a *auditSealSource) seals(ev types.AuditEvent) bool {
+	if audit.ForgedSubject(ev) {
+		return true // in every mode: Seal refuses it, and a reader would render it as a person
+	}
 	switch a.mode {
 	case audit.SealFields:
 		return audit.SealsAction(ev.Action)
 	case audit.SealFull:
-		return audit.SealsAction(ev.Action) || (ev.ActorType == types.ActorHuman && ev.Actor != "")
+		return audit.SealsAction(ev.Action) || audit.SealsTarget(ev.Action) || audit.SealsSponsor(ev) || (ev.ActorType == types.ActorHuman && ev.Actor != "")
 	}
 	return false
 }
@@ -130,6 +133,9 @@ type sealingRecorder struct {
 	src    *auditSealSource
 	spool  *api.AuditSpool // where a pending row waits; live mode only
 	replay bool
+	// resealed takes a pending row once it is re-sealed, replay mode only: the row skipped the sinks
+	// while it waited, so this is where they get it. Nil sends it to inner.
+	resealed audit.Recorder
 }
 
 var _ audit.Recorder = sealingRecorder{}
@@ -143,10 +149,12 @@ func (r sealingRecorder) Record(ctx context.Context, ev types.AuditEvent) error 
 	}
 	sealer := r.src.sealer.Load()
 	if sealer == nil {
+		slog.WarnContext(ctx, "audit row not recorded", "action", ev.Action, "why", "keys_not_ready")
 		return fmt.Errorf("audit seal: %s not recorded: the sealing keys are not available yet and the row has personal fields; it is never written in the clear", ev.Action)
 	}
 	sealed, pending, err := sealer.Seal(ctx, ev)
 	if err != nil {
+		slog.WarnContext(ctx, "audit row not recorded", "action", ev.Action, "why", "seal_refused")
 		return fmt.Errorf("audit seal: %s not recorded: %w", ev.Action, err)
 	}
 	if !pending {
@@ -177,6 +185,9 @@ func (r sealingRecorder) record(ctx context.Context, ev types.AuditEvent) error 
 				return err
 			}
 			return fmt.Errorf("%w: %w", audit.ErrReplayDeferred, err)
+		}
+		if r.resealed != nil {
+			return r.resealed.Record(ctx, ev)
 		}
 	}
 	return r.inner.Record(ctx, ev)

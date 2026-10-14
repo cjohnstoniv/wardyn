@@ -50,6 +50,13 @@ reason audit_retention_not_closed
 reason audit_retention_inside_window
 reason audit_retention_live_run
 reason audit_retention_digest_mismatch
+reason audit_retention_actor_reserved
 reason governance_overlay_unsatisfiable
 reason capability_component
 reason component_autonomy
+
+reason placement_component_self_defined
+reason service_scope
+reason drive_not_found
+reason drive_target_conflict
+reason drive_not_in_pool

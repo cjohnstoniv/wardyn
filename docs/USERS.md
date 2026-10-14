@@ -10,13 +10,13 @@ sandboxes inside the ceiling your admin set. There is nothing to install.
 - There is no admin token; that credential belongs to your operator, not to you.
 - Your role is derived at login and stamped into your session.
 - If you land on "no Wardyn role assigned," your admin has not mapped you yet — see
-  [OPERATIONS.md § Multi-user: who can change what](OPERATIONS.md#multi-user-who-can-change-what).
+  [who-gets-in.md § Multi-user: who can change what](operations/who-gets-in.md#multi-user-who-can-change-what).
 - `GET /me` is the ground truth for your own role and your workspace root.
 
 ## What you can and cannot do
 
 - The full matrix lives in
-  [OPERATIONS.md § Multi-user: who can change what](OPERATIONS.md#multi-user-who-can-change-what);
+  [who-gets-in.md § Multi-user: who can change what](operations/who-gets-in.md#multi-user-who-can-change-what);
   this page does not restate it.
 - `GET /me/capabilities` tells you which capability grants you personally hold.
 - Your admin can see this page's world for themselves without a second login —
@@ -45,7 +45,7 @@ sandboxes inside the ceiling your admin set. There is nothing to install.
 - A run whose shape exceeds what your resolved level permits is refused
   `governance_profile`, the same refusal a denied `task_mode` or interactive flag
   already gives you — see
-  [OPERATIONS.md § Every denial that isn't a 404](OPERATIONS.md#every-denial-that-isnt-a-404).
+  [denials.md § Every denial that isn't a 404](operations/denials.md#every-denial-that-isnt-a-404).
 - A non-interactive claude-code run at `L1` is not refused for lacking
   supervision; it launches with its tool approvals derived to `hold` and the
   create response carries a warning saying so.
@@ -86,7 +86,7 @@ Three things worth naming here, because they read as bugs otherwise:
 - Members have owned their own workspaces since 0.6 — look for the Workspaces
   entry in the console nav.
 - A `local_dir` source must sit under a root your admin configured
-  (`WARDYN_MEMBER_WORKSPACE_ROOTS`, or a per-member map that **replaces** the
+  (`WARDYN_USER_WORKSPACE_ROOTS`, or a per-member map that **replaces** the
   shared list for you) — see [ENV.md](ENV.md).
 - Unset means you may mount no host directory; that is fail-closed by design, not
   a bug.
@@ -95,7 +95,7 @@ Three things worth naming here, because they read as bugs otherwise:
 - Writability is a second, separate gate.
 - Offboarding — handing a workspace back to your admin — is an admin action
   (`POST /workspaces/{id}/reassign`); see
-  [OPERATIONS.md § Multi-user: who can change what](OPERATIONS.md#multi-user-who-can-change-what).
+  [who-gets-in.md § Multi-user: who can change what](operations/who-gets-in.md#multi-user-who-can-change-what).
 
 ## Your drive
 
@@ -228,14 +228,16 @@ resolves your drive the same way, in a dry run too:
 
 - If your deployment sets `WARDYN_GOVERNANCE_SECOND_HUMAN`, an administrator's change to who may do what:
   - a governance profile or assignment, a capability grant, the enforcement map,
-  - a value's availability, a user type's priority, a role mapping or a key-domain assignment,
+  - a value's availability, a user type's priority, a role mapping, a key-domain assignment,
+  - the egress baseline, a service identity's create or sponsor change, the local credential delivery policy,
+  - a runner pool's use policy, a remote-hosted runner's people policy, or that runner's add to or removal from a pool a use policy covers,
 - It is held as a pending change until a second administrator approves it.
 - Members propose and approve nothing here; these tiers do:
 
 | Role | May approve |
 |---|---|
-| Security admin | profile, assignment, grant, enforcement, availability, user-type priority and key-domain assignment changes, including a super admin's |
-| Super admin (`admin`) | everything a security admin may, and role-mapping changes |
+| Security admin | profile, assignment, grant, enforcement, availability, user-type priority, key-domain assignment, egress baseline, service identity, local credential delivery, pool use policy and runner people policy changes, including a super admin's |
+| Super admin (`admin`) | everything a security admin may, role-mapping changes, and a remote-hosted runner's add to or removal from a pool |
 | Member | nothing |
 
 - Nobody approves their own change, and a second sign-in of the same person (the same email) does not
@@ -268,7 +270,16 @@ resolves your drive the same way, in a dry run too:
 - A `header` secret is added by the egress proxy and never placed in the sandbox. An `env` or `file` secret is readable by any code that runs there ([CREDENTIALS.md](CREDENTIALS.md)).
 - Your admin may turn off `env` and `file` delivery, or limit a run that carries a component you defined to a lower autonomy level.
 - A component that names an IP address, a host that serves a model, or a host that already carries a credential on the run is refused.
-- Details for admins: [OPERATIONS.md](OPERATIONS.md#custom-components).
+- Details for admins: [custom-components.md](operations/custom-components.md).
+
+## Run templates
+
+- A template is a run setup you save to reuse (`POST /api/v1/templates`). Yours are only yours; your organisation's
+  are offered to everyone; a group's are offered to its members.
+- You can publish to a group when you are in it and an admin made you one of its template managers.
+- A shared template shows the names of what it uses (a secret's name, a workspace), never a value.
+- Readers of a shared template are not told who published it.
+- Your own templates are erased with the `run_setups` scope of an erasure.
 
 ## Where your runs' audit lives
 
@@ -356,9 +367,17 @@ resolves your drive the same way, in a dry run too:
 - Such a grant reads your
   row and nothing else: with no row of your own the launch is refused and says
   which secret to store.
-- Store it under the same name via `PUT /secrets/<name>`,
-  signed in as yourself, and launch again (an admin's own writes land in the
-  operator namespace, so an admin stores theirs from the user view).
+- Store it under the same name via `PUT /me/secrets/<name>`
+  (`wardyn secret set <name> --personal`), signed in as yourself, and launch again.
+  - That route writes your own row whatever your role or view; it never writes the operator's.
+  - `GET /me/secrets` lists your own names, and `DELETE /me/secrets/<name>` removes one.
+  - The admin token and local mode are no person, so they get `403` `secret_personal_needs_person`.
+- A shared service credential is stored the same explicit way, by the operator tier only:
+  `PUT /shared-secrets/<name>` (`wardyn secret set <name> --shared`).
+  - Its audit row says `scope` `shared`; your own writes say `personal`.
+- The older `PUT /secrets/<name>` keeps working unchanged and still follows your role
+  (an admin's write lands in the operator namespace); new automation should name the route it means.
+- Nothing is moved between namespaces for you: an existing secret stays where it was written.
 - A stored policy an admin writes may name a secret nobody has
   stored yet — each person's run checks their own.
 - Ask your admin to mark
@@ -397,6 +416,9 @@ resolves your drive the same way, in a dry run too:
 - Once that runs you keep nothing recoverable through Wardyn, though a database backup
   your organisation took beforehand is a separate question its own retention
   answers, not something erasing your namespace reaches into.
+- A registered runner keeps your sign-in name, and its registration token's maker's, while it exists;
+  a retired service identity keeps you as sponsor. Erasing your records removes neither; a SCIM purge
+  revokes your runners and deletes your invitations.
 - Wardyn never
   revokes anything upstream on your behalf: your own AWS, Anthropic or Azure
   DevOps sign-in stays valid at the provider until you — or your admin, there,

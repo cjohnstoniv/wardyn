@@ -81,7 +81,7 @@ func newSplitFixture(t *testing.T) *splitFixture {
 		f.seqs = append(f.seqs, seq)
 	}
 	toggle(`ALTER TABLE audit_events ENABLE TRIGGER audit_events_chain`)
-	for _, name := range []string{"0111_audit_partitioned.sql", "0112_audit_chain_partitioned.sql", "0119_audit_partition_digest.sql", "0123_audit_retention.sql"} {
+	for _, name := range []string{"0111_audit_partitioned.sql", "0112_audit_chain_partitioned.sql", "0119_audit_partition_digest.sql", "0123_audit_retention.sql", "0140_audit_legacy_manifest.sql", "0146_audit_retention_drop_actor_type.sql"} {
 		execMigrationFile(t, pool, name)
 	}
 	for i := 0; i < 3; i++ {
@@ -306,12 +306,12 @@ func TestPG_SplitLegacyAudit_TheOldestRangeDropsThroughRetentionAndVerifyPassesF
 	pg := store.NewPG(f.pool)
 	oldest, second := res.Ranges[0], res.Ranges[1]
 
-	_, err = pg.DropAuditPartition(ctx, second.Name, second.Digest, "operator@example.com")
+	_, err = pg.DropAuditPartition(ctx, second.Name, second.Digest, "operator@example.com", types.ActorHuman)
 	var refused *store.AuditRetentionRefused
 	if !errors.As(err, &refused) || refused.Reason != store.RetentionNotOldest {
 		t.Fatalf("dropping the second range first: %v, want a %s refusal", err, store.RetentionNotOldest)
 	}
-	dropped, err := pg.DropAuditPartition(ctx, oldest.Name, oldest.Digest, "operator@example.com")
+	dropped, err := pg.DropAuditPartition(ctx, oldest.Name, oldest.Digest, "operator@example.com", types.ActorHuman)
 	if err != nil {
 		t.Fatalf("drop the oldest range: %v", err)
 	}
@@ -327,7 +327,7 @@ func TestPG_SplitLegacyAudit_TheOldestRangeDropsThroughRetentionAndVerifyPassesF
 		t.Errorf("verify after the drop checked %d rows (legacy %d), the log holds %d", st.Checked, st.Legacy, left)
 	}
 	// The next range is now the oldest, and drops too.
-	if _, err := pg.DropAuditPartition(ctx, second.Name, second.Digest, "operator@example.com"); err != nil {
+	if _, err := pg.DropAuditPartition(ctx, second.Name, second.Digest, "operator@example.com", types.ActorHuman); err != nil {
 		t.Fatalf("drop the second range: %v", err)
 	}
 	if st := sweep(t, f.pool); !st.OK || st.AnchorSeq != second.SeqHi {

@@ -131,6 +131,11 @@ type awsSSOScopeSnapshot struct {
 	// roster's lanes): the sink then re-derives the scope from that provider
 	// record rather than the roster (providerSSOScopeAt).
 	ProviderUID string `json:"provider_uid,omitempty"`
+	// ComponentID is the AWS CLI org row whose session this is ("" on a model
+	// provider's): the sink then re-derives the scope from that row
+	// (cliSSOScopeAt), whose start URL must still be SSOStartURL.
+	ComponentID string `json:"component_id,omitempty"`
+	SSOStartURL string `json:"sso_start_url,omitempty"`
 }
 
 // ssoPortalMITMEntry is the ONE spelling of a Phase-B TLS-MITM entry, and the
@@ -175,29 +180,39 @@ func ssoPortalMITMEntry(ssoRegion, endpointOverride string) string {
 func (s *Server) authorBedrockSSOInjection(ctx context.Context, run types.AgentRun, t llmTransport,
 	sso awsSSOScope, injections []runner.InjectionGrant,
 ) ([]runner.InjectionGrant, []string, bool) {
-	portalHost := ssoPortalHost(t.bedrock.ssoRegion, s.cfg.AWSSSOEndpointOverride)
+	// I3, authored at dispatch. Every field resolveAWSSSOInjection compares.
+	return s.authorAWSSSOGrant(ctx, run, awsSSOScopeSnapshot{
+		OwnerSubject:     sso.owner,
+		CredentialSource: awsSSOCredentialSourceLabel(sso),
+		Mechanism:        string(types.ModelProviderBedrockSSO),
+		SSOAccountID:     t.bedrock.ssoAccountID,
+		SSORoleName:      t.bedrock.ssoRoleName,
+		Region:           t.bedrock.ssoRegion,
+		ProviderUID:      sso.provider,
+	}, injections)
+}
+
+// authorAWSSSOGrant is the grant and the MITM entry both AWS sign-in lanes
+// share, a Bedrock provider's and an AWS CLI row's: sn is the dispatch-time
+// snapshot the sink re-derives and compares on every resolve, and its region,
+// account and role pin the portal host and the one request the session rides.
+func (s *Server) authorAWSSSOGrant(ctx context.Context, run types.AgentRun, sn awsSSOScopeSnapshot,
+	injections []runner.InjectionGrant,
+) ([]runner.InjectionGrant, []string, bool) {
+	portalHost := ssoPortalHost(sn.Region, s.cfg.AWSSSOEndpointOverride)
 	// The port the run actually reaches, not a hard-coded 443.
 	// ssoEgressHosts already honours the override's port, so an override on any
 	// other port was allowlisted and MITM-eligible at 443 only: the CONNECT was
 	// never terminated, the header was never injected, and require_tls was off
 	// there too — a blind tunnel carrying a placeholder to a 401. That is the
 	// shape the plan's TLS-fake test needs.
-	mitmHosts := []string{ssoPortalMITMEntry(t.bedrock.ssoRegion, s.cfg.AWSSSOEndpointOverride)}
+	mitmHosts := []string{ssoPortalMITMEntry(sn.Region, s.cfg.AWSSSOEndpointOverride)}
 	scope, _ := json.Marshal(map[string]any{
 		"host":        portalHost,
 		"header":      awsSSOInjectHeader,
 		"format":      "%s",
 		"secret_name": types.AWSSSOAccessTokenSecret,
-		// I3, authored at dispatch. Every field resolveAWSSSOInjection compares.
-		"snapshot": awsSSOScopeSnapshot{
-			OwnerSubject:     sso.owner,
-			CredentialSource: awsSSOCredentialSourceLabel(sso),
-			Mechanism:        string(types.ModelProviderBedrockSSO),
-			SSOAccountID:     t.bedrock.ssoAccountID,
-			SSORoleName:      t.bedrock.ssoRoleName,
-			Region:           t.bedrock.ssoRegion,
-			ProviderUID:      sso.provider,
-		},
+		"snapshot":    sn,
 		// Production is TLS-only. The single exception is the deployment that
 		// already refused to boot without WARDYN_ALLOW_TEST_ENDPOINTS: the
 		// plain-http SSO fake, which serves no TLS at all. Leaving require_tls on
@@ -238,13 +253,13 @@ func (s *Server) authorBedrockSSOInjection(ctx context.Context, run types.AgentR
 		// apart), so it is byte-for-byte what the SDK will ask for — on a roster
 		// row that pins account/role AND on one that does not.
 		"pin_path":  awsSSORoleCredentialsPath,
-		"pin_query": awsSSOPinQuery(t.bedrock.ssoAccountID, t.bedrock.ssoRoleName),
+		"pin_query": awsSSOPinQuery(sn.SSOAccountID, sn.SSORoleName),
 	})
 	grantID := uuid.New()
-	if _, gerr := s.cfg.Store.CreateGrant(ctx, types.CredentialGrant{
+	if _, gerr := s.createDispatchGrant(ctx, run, types.CredentialGrant{
 		ID: grantID, RunID: run.ID, CreatedAt: time.Now(),
 		Spec: types.GrantSpec{Kind: types.GrantAPIKey, Scope: scope, TTLSeconds: awsSSOGrantTTLSeconds},
-	}); gerr != nil {
+	}, false); gerr != nil {
 		// CAS from STARTING (claimed at dispatch entry) so a concurrent kill's
 		// KILLED state is preserved rather than clobbered back to FAILED.
 		// The hint is member-visible: a fixed sentence, never the store's text.

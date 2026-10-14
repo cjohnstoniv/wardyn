@@ -22,6 +22,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/lifecycle"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
+	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -229,6 +230,16 @@ func (s *approvalService) CountPendingApprovalsByRunCreator(ctx context.Context,
 
 var _ store.ApprovalsForRunsPager = (*approvalService)(nil)
 
+// ListDecidedAlwaysEgressPage is the leader-term heal's narrow, keyset-paged
+// read of decided `always` egress verdicts; the api heal type-asserts for it on
+// s.cfg.Approvals and errors without it. Pure delegation, promoted from the
+// embedded store.PG.
+func (s *approvalService) ListDecidedAlwaysEgressPage(ctx context.Context, state types.ApprovalState, afterRequestedAt time.Time, afterID uuid.UUID, limit int) ([]types.ApprovalRequest, error) {
+	return s.st.ListDecidedAlwaysEgressPage(ctx, state, afterRequestedAt, afterID, limit)
+}
+
+var _ store.DecidedAlwaysEgressPager = (*approvalService)(nil)
+
 // ApprovalEscalations / ApprovalNotifyChannelStats back the approvals list's escalation chips and
 // GET /approval-notify/status. Pure delegation, promoted from the embedded store.PG.
 func (s *approvalService) ApprovalEscalations(ctx context.Context, ids []uuid.UUID, now time.Time) (map[uuid.UUID]types.ApprovalEscalation, error) {
@@ -277,6 +288,22 @@ func buildAuditFanout(ctx context.Context, cfgJSON string) (*sinks.Fanout, error
 	return sinks.NewFanout(children...), nil
 }
 
+// siemSink is fan as an audit.Sink, nil when no sink is configured (a nil *Fanout in the interface would
+// panic on Emit).
+func siemSink(fan *sinks.Fanout) audit.Sink {
+	if fan == nil {
+		return nil
+	}
+	return fan
+}
+
+// armKeyDestroySIEM has the secret store's subject keys send principal_key.destroyed to siem.
+func armKeyDestroySIEM(secrets secretstore.Store, siem audit.Sink) {
+	if m := subjectKeysOf(secrets); m != nil && siem != nil {
+		m.WithSIEM(siem)
+	}
+}
+
 // sinkDropsReporter adapts a Fanout to the api.Config.AuditSinkDrops callback
 // (D2). Returns nil when no fanout is configured so the metric is omitted rather
 // than reporting an empty map on every scrape.
@@ -321,6 +348,30 @@ func (f fanoutRecorder) Record(ctx context.Context, ev types.AuditEvent) error {
 	return err
 }
 
+// landedRecorder writes an event to the store and emits it to the sink fanout only once the store took it,
+// with the chain hashes the database computed. The spool drain uses it for a row that never reached the
+// sinks while it waited under the pending key; a failed write emits nothing, so the drain's retry cannot
+// send it twice.
+type landedRecorder struct {
+	primary store.Recorder
+	fanout  *sinks.Fanout
+}
+
+var _ audit.Recorder = landedRecorder{}
+
+func (l landedRecorder) Record(ctx context.Context, ev types.AuditEvent) error {
+	if err := store.InsertAuditEvent(ctx, l.primary.Pool, &ev); err != nil {
+		return err
+	}
+	if ferr := l.fanout.Emit(context.WithoutCancel(ctx), ev); ferr != nil {
+		slog.ErrorContext(ctx, "wardynd: audit fanout emit failed",
+			slog.String("action", ev.Action),
+			slog.Any("err", ferr),
+		)
+	}
+	return nil
+}
+
 // Masking recorder
 
 // maskingRecorder wraps an audit.Recorder and masks verbatim secret values from
@@ -342,6 +393,10 @@ type maskingRecorder struct {
 var _ audit.Recorder = maskingRecorder{}
 
 func (m maskingRecorder) Record(ctx context.Context, ev types.AuditEvent) error {
+	return m.inner.Record(ctx, m.prepare(ev))
+}
+
+func (m maskingRecorder) prepare(ev types.AuditEvent) types.AuditEvent {
 	// Capped at the top of the chain as well as at the INSERT (B6-F1): this
 	// recorder is outermost, so capping here is what bounds the SPOOL and the
 	// SIEM SINKS too — store.InsertAuditEvent's own cap only protects the
@@ -378,8 +433,8 @@ func (m maskingRecorder) Record(ctx context.Context, ev types.AuditEvent) error 
 		// bodies.
 		//
 		// JSONVariantMasker, not NewMasker(JSONEscapedVariants(Snapshot(...))):
-		// that chain clones the corpus, triples it through a documented O(n^2)
-		// de-dup, and sorts the result — on EVERY audit event (F076). The registry
+		// that chain clones the corpus, triples it through a de-dup, and sorts
+		// the result — on EVERY audit event (F076). The registry
 		// now derives it once per generation and hands back the same immutable
 		// masker until something is registered or evicted.
 		masker := m.reg.JSONVariantMasker(runID)
@@ -393,7 +448,7 @@ func (m maskingRecorder) Record(ctx context.Context, ev types.AuditEvent) error 
 			}
 		}
 	}
-	return m.inner.Record(ctx, ev)
+	return ev
 }
 
 // Spooling recorder
@@ -458,6 +513,9 @@ func (l lifecycleStore) ListRunningWithPolicy(ctx context.Context) ([]lifecycle.
 	// the reaper's subtraction is finally two readings of ONE clock — wardynd's
 	// own was the skew that stopped actively-attached runs (B8-F2).
 	//
+	// A background task has no idle stop: its auto_stop_after_sec reads as 0 here
+	// whatever the row carries, so the reaper only ever ends it for its max age.
+	//
 	// A KEPT run (lost_at set: its lease ended it) is not idle, it is stopped;
 	// the ended-run grace decides when its files go, not auto_stop_after_sec.
 	// The one exception is a run kept after an outage whose agent still runs
@@ -467,7 +525,9 @@ func (l lifecycleStore) ListRunningWithPolicy(ctx context.Context) ([]lifecycle.
 	// there are no rows to measure, so there is nothing for it to be wrong about,
 	// and a second round trip to fetch a clock nobody would use is not worth it.
 	const q = `
-		SELECT id, created_at, updated_at, auto_stop_after_sec, lost_at IS NOT NULL, now()
+		SELECT id, created_at, admitted_at, updated_at,
+		       CASE WHEN experience = 'background' THEN 0 ELSE auto_stop_after_sec END,
+		       lost_at IS NOT NULL, lifetime_cap_at IS NOT NULL, now()
 		FROM agent_runs
 		WHERE state = $1 AND ` + store.HoldsSandboxSQL
 	rows, err := l.pool.Query(ctx, q, string(types.RunRunning))
@@ -480,8 +540,12 @@ func (l lifecycleStore) ListRunningWithPolicy(ctx context.Context) ([]lifecycle.
 	var dbNow time.Time
 	for rows.Next() {
 		var s lifecycle.RunSummary
-		if err := rows.Scan(&s.ID, &s.CreatedAt, &s.UpdatedAt, &s.PolicyAutoStopAfterSec, &s.Kept, &dbNow); err != nil {
+		var admitted *time.Time
+		if err := rows.Scan(&s.ID, &s.CreatedAt, &admitted, &s.UpdatedAt, &s.PolicyAutoStopAfterSec, &s.Kept, &s.HasLifetimeCap, &dbNow); err != nil {
 			return nil, time.Time{}, fmt.Errorf("wardynd: scan run summary: %w", err)
+		}
+		if admitted != nil {
+			s.AdmittedAt = *admitted
 		}
 		out = append(out, s)
 	}
@@ -555,14 +619,20 @@ func terminalSandboxSweepTickLock(pool *pgxpool.Pool) func(context.Context) (fun
 // (S2): a Postgres try-advisory-lock acquired ONCE (not per-tick, unlike
 // reapTickLock above) so at most one replica runs the mint/write loop in the
 // steady state while every other replica parks on a backoff. Held for the
-// process lifetime, so on a connection of its own rather than a pooled one. NOT a fencing
-// primitive — a lost session can transiently leave two leaders; see
-// runGroundtruthTokenRotatorLeader (gt_rotator.go). Unlike reapTickLock this
-// surfaces err separately from a plain not-acquired so the caller can log
-// standby state (lock genuinely held elsewhere) distinctly from an
-// unreachable database.
+// process lifetime, so on a connection of its own rather than a pooled one —
+// and only probed from the pool first (db.AdvisoryLockHeld), so a standby
+// retrying every groundtruthRotatorLockBackoff does not dial a session it is
+// about to close again. NOT a fencing primitive — a lost session can transiently
+// leave two leaders; see runGroundtruthTokenRotatorLeader (gt_rotator.go).
+// Unlike reapTickLock this surfaces err separately from a plain not-acquired so
+// the caller can log standby state (lock genuinely held elsewhere) distinctly
+// from an unreachable database; a probe that fails falls through to the
+// dedicated try, which reports the real fault.
 func groundtruthRotatorLock(pool *pgxpool.Pool) func(context.Context) (func(), bool, error) {
 	return func(ctx context.Context) (func(), bool, error) {
+		if held, err := db.AdvisoryLockHeld(ctx, pool, db.GroundTruthRotatorLockKey); err == nil && held {
+			return nil, false, nil // held elsewhere, and no session was dialled to find out
+		}
 		_, release, ok, err := db.TryAdvisoryLockDedicated(ctx, pool, db.GroundTruthRotatorLockKey)
 		return release, ok, err
 	}

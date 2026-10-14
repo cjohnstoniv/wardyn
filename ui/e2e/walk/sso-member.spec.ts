@@ -45,14 +45,21 @@
  * depends on both facts and says so in its header.
  */
 
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 import { CONSOLE_VIEW } from "../../src/app/components/wardyn/copy/console-view";
 import { BANNER, CONNECTIONS } from "../../src/app/components/wardyn/copy/door";
 // Plain constant tables with no CSS import — the rule ui/e2e/walk/helpers.ts
 // states for SELFRUN_MARKER, and what keeps `playwright test --project=walk
 // --list` green.
 import { MODEL_ACCESS_BANNER, RAIL_MODEL_ACCESS } from "../../src/app/components/wardyn/model-access-copy";
-import { RAIL_CREDENTIAL, RAIL_PROVIDER } from "../../src/app/components/wardyn/copy/new-run-rail";
+import { NR_HARNESSES } from "../../src/app/components/wardyn/copy/new-run/harnesses";
+import { NR_FILES } from "../../src/app/components/wardyn/copy/new-run/files";
+import { NR_REVIEW } from "../../src/app/components/wardyn/copy/new-run/review";
+import { NR_RUN } from "../../src/app/components/wardyn/copy/new-run/run";
+import { NR_SHAPE } from "../../src/app/components/wardyn/copy/new-run/shape";
+import { NR_SHARED } from "../../src/app/components/wardyn/copy/new-run/shared";
+import { NR_START } from "../../src/app/components/wardyn/copy/new-run/start";
+import { NR_TOOLS } from "../../src/app/components/wardyn/copy/new-run/tools";
 import { AGENTS } from "../../src/app/lib/workspace-providers-copy";
 import {
   ADMIN_EMAIL,
@@ -63,20 +70,59 @@ import {
   dexSignIn,
   dexSignOut,
   launchAgentRun,
+  launchFromReview,
   me,
   modelAccess,
   openLoginPane,
+  cardSignInAws,
   openModelConnections,
   openLoginPaneAssertingColdPull,
   putProvider,
   seen,
   signInThroughPane,
+  WALK_PROVIDER,
   WALK_PROVIDER_NAME,
 } from "./helpers";
 
 // The shell strip's sentence for a member who has never signed in: claude-code
 // runs use the walk's provider, whose default it is.
 const STRIP_NOT_SIGNED_IN = BANNER.B1("Claude Code", WALK_PROVIDER_NAME);
+
+const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const startsWith = (s: string) => new RegExp(`^${escapeRe(s)}`);
+const heading = (page: Page, title: string) => page.getByRole("heading", { name: title, level: 1 });
+
+// The model provider picker of the one harness these cases add (Tools and access), and its help line.
+const PROVIDER_PICKER = "#nr-provider-claude-code";
+
+/**
+ * From New Run's Start screen to Tools and access with one harness (claude-code) added and the provider NOT yet
+ * chosen: helpers.ts's walkNewRunToReview chooses it, and these cases assert on the choice itself.
+ */
+async function walkNewRunToTools(page: Page, shape: "agent_task" | "environment"): Promise<void> {
+  const next = async (title: string) => {
+    await page.getByRole("button", { name: startsWith(NR_SHARED.CONTINUE_TO("")) }).click();
+    await expect(heading(page, title)).toBeVisible({ timeout: 60_000 });
+  };
+  await expect(heading(page, NR_START.TITLE)).toBeVisible({ timeout: 60_000 });
+  await page.getByRole("button", { name: NR_START.GUIDED_FOOT }).click();
+  await expect(heading(page, NR_SHAPE.TITLE)).toBeVisible();
+  // A workload button writes the shape and opens Run.
+  await page.getByRole("button", { name: shape === "agent_task" ? NR_SHAPE.AGENT_TITLE : NR_SHAPE.ENV_TITLE, exact: true }).click();
+  await expect(heading(page, shape === "agent_task" ? NR_RUN.TITLE_AGENT : NR_RUN.TITLE_ENV)).toBeVisible({ timeout: 60_000 });
+  if (shape === "agent_task") await page.getByRole("radio", { name: startsWith(NR_RUN.MODE_AUTONOMOUS) }).click();
+  await next(NR_HARNESSES.TITLE);
+  // A new agent task opens with its first harness; an environment adds one.
+  if (shape === "agent_task") await expect(page.locator("#nr-harness-0")).toBeVisible({ timeout: 60_000 });
+  else await page.getByRole("button", { name: NR_HARNESSES.ADD_HARNESS, exact: true }).click();
+  await page.locator("#nr-harness-0").selectOption("claude-code");
+  if (shape === "agent_task") await page.locator("#nr-task").fill("Reply with the single word: ready.");
+  await next(NR_FILES.TITLE);
+  await page.getByRole("radio", { name: startsWith(NR_FILES.NO_EXTRA) }).check();
+  const size = page.locator("#nr-main-drive-size");
+  if ((await size.count()) > 0 && (await size.inputValue()) === "") await size.fill("10");
+  await next(NR_TOOLS.TITLE);
+}
 
 test.skip(process.env.WARDYN_TEST_K8S !== "1", "live cluster walk: set WARDYN_TEST_K8S=1 (scripts/kind-sso-walk.sh)");
 test.describe.configure({ mode: "serial" });
@@ -149,16 +195,26 @@ test("I (model-access-banner): a never-signed-in member is told on every screen,
   await expect(page.getByText(STRIP_NOT_SIGNED_IN)).toBeVisible({ timeout: 60_000 });
   await expect(page.getByRole("button", { name: AGENTS.SIGN_IN_AWS, exact: true })).toBeVisible();
 
-  // (3) NEW RUN — the rail names the one provider this run would use and
-  // where its credential lives, with no click; the deployment-wide "No model
-  // provider is connected" is false here (the provider exists) and must not
-  // speak over it. The strip, which the rail does not claim, keeps its button.
+  // (3) NEW RUN — Tools and access names the one provider this run would use
+  // and where its credential lives; the deployment-wide "No model provider is
+  // connected" is false here (the provider exists) and must not speak over it.
+  // The strip, which Tools and access does not claim, keeps its button.
   await page.goto("/runs/new");
-  await page.getByRole("radio", { name: /^Autonomous/ }).click();
-  // Scoped: the Run panel's picker states the same two facts (#1922).
-  const rail = page.getByRole("complementary", { name: "What this run can do" });
-  await expect(rail.getByText(RAIL_PROVIDER.STATIC(WALK_PROVIDER_NAME))).toBeVisible({ timeout: 60_000 });
-  await expect(rail.getByText(RAIL_CREDENTIAL.SANDBOX_BEDROCK)).toBeVisible();
+  await walkNewRunToTools(page, "agent_task");
+  const picker = page.locator(PROVIDER_PICKER);
+  // OPEN: the old rail named the sole provider with no click (RAIL_PROVIDER.STATIC); the picker
+  // lists it and the person must choose it (a provider is required before launch). Should the
+  // sole provider be preselected? If so, assert toHaveValue(WALK_PROVIDER) before the pick.
+  await expect(picker.getByRole("option", { name: WALK_PROVIDER_NAME })).toHaveCount(1, { timeout: 60_000 });
+  await picker.selectOption(WALK_PROVIDER);
+  // Where its credential lives: AWS credentials sign inside the sandbox, short-lived, never the proxy's alone.
+  await expect(page.locator(`${PROVIDER_PICKER}-help`)).toHaveText(NR_TOOLS.DELIVERY_SHORT_LIVED);
+  const credentials = page.getByRole("region", { name: NR_TOOLS.TOTALS_ARIA });
+  await expect(credentials.getByRole("heading", { name: NR_TOOLS.CREDENTIALS_TITLE })).toBeVisible();
+  // The Credentials total shows the delivery line the console renders for a short-lived credential.
+  await expect(credentials.getByText(NR_TOOLS.DELIVERY_SHORT_LIVED)).toBeVisible();
+  // Signed out: the provider carries its own sign-in button (never clicked: opening it starts a capture).
+  await expect(page.getByRole("button", { name: NR_TOOLS.SETUP_SIGN_IN_TO(WALK_PROVIDER_NAME) })).toBeVisible();
   await expect(page.getByText(RAIL_MODEL_ACCESS.NO_PROVIDER)).toHaveCount(0);
   await expect(page.getByText(STRIP_NOT_SIGNED_IN)).toBeVisible();
 
@@ -293,15 +349,19 @@ test("sso-pin-dispatch: a pin changed after capture warns, refuses the run, and 
   await dexSignIn(page, MEMBER_EMAIL);
   await openModelConnections(page);
   await expect.poll(async () => (await modelAccess(page)).state, { timeout: 120_000 }).toBe("expired_signin");
-  await expect(page.getByRole("button", { name: "Sign in to AWS" }).first()).toBeVisible({ timeout: 60_000 });
+  await expect(cardSignInAws(page)).toBeVisible({ timeout: 60_000 });
 
   // The refusal is the provider's own (providerBedrockRefusal, mpBRPinned):
   // the run does not spend the wrong identity, and the sentence names both
   // pairs so the member knows which to pick.
+  // The Terminal is the Environment sandbox; claude-code is added to it (not started) so the run
+  // has a model credential for the contradicted pin to refuse.
   await page.goto("/runs/new");
-  await page.getByRole("combobox", { name: "Title" }).fill("a run under a contradicted pin");
-  await page.getByRole("radio", { name: /^Terminal/ }).click();
-  await page.getByRole("button", { name: /^Launch/ }).click();
+  await walkNewRunToTools(page, "environment");
+  await page.locator(PROVIDER_PICKER).selectOption(WALK_PROVIDER, { timeout: 60_000 });
+  await page.getByRole("button", { name: NR_TOOLS.REVIEW_RUN }).click();
+  await expect(heading(page, NR_REVIEW.TITLE)).toBeVisible({ timeout: 60_000 });
+  await launchFromReview(page, "a run under a contradicted pin");
   await expect(page.getByText(new RegExp(`and it pins account ${CONTRA_ACCOUNT}`)).first()).toBeVisible({ timeout: 180_000 });
 
   // ── the heal ──────────────────────────────────────────────────────────────

@@ -4,12 +4,24 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
 	"strings"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+// captureSlog routes the default logger into a buffer for the test.
+func captureSlog(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	return &buf
+}
 
 // lazyPool builds a pool that never dials (pgxpool connects on first use), so
 // the boot refusal is testable without a database.

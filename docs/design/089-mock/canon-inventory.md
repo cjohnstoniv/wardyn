@@ -1,6 +1,6 @@
 # Canon source inventory
 
-Baseline source inventory for the 089 mock round. These hashes identify the existing canonical bytes read while preparing the packets; they do not establish remote synchronization or prototype approval. Existing strings are imported from these homes, not copied into a second rulebook. New/changed strings are explicitly listed in M-F, M-R and M-O.
+Baseline source inventory for the 089 mock round. These hashes identify the existing canonical bytes read while preparing the packets; they do not establish remote synchronization; prototype approvals are recorded in the README. Existing strings are imported from these homes, not copied into a second rulebook. New/changed strings are explicitly listed in M-F, M-R and M-O.
 
 | Repository path | Owns | SHA-256 at baseline |
 |---|---|---|
@@ -37,7 +37,7 @@ Baseline source inventory for the 089 mock round. These hashes identify the exis
 
 This is a separate inventory, not a replacement for the original baseline hashes above. `ui/src/app/lib/policy-document/index.ts` has SHA-256 `dfa5aa6ecbbe52f87f8d8a3f8671dd1943458b3589b9a4f3106ea268553003b2`; `ui/package.json` pins `yaml` exactly to `2.9.1`.
 
-M-R's strict-parser table is the single proposed surfaced inventory for `caught`, `documentValue`, `readSource` and `editPolicySource`. Fixed diagnostics retain that lazy parser home; library/thrown messages remain potentially sensitive variable data rendered only as text. M-R explicitly adds `POLICY_DOCUMENT.SOURCE_POSITION(line,column)` in the proposed lazy `copy/policy-document.ts` home and keeps the existing outer validity/gate proposals. Nothing is added to the eager copy barrel. The new inventory and states await written review, the real design prototype and owner approval.
+M-R's strict-parser table is the single proposed surfaced inventory for `caught`, `documentValue`, `readSource` and `editPolicySource`. Fixed diagnostics retain that lazy parser home; library/thrown messages remain potentially sensitive variable data rendered only as text. M-R explicitly adds `POLICY_DOCUMENT.SOURCE_POSITION(line,column)` in the proposed lazy `copy/policy-document.ts` home and keeps the existing outer validity/gate proposals. Nothing is added to the eager copy barrel. The inventory and states were approved with M-R Version 7 (`1791427781-730a`).
 
 ## Existing server contract for the M-R Access correction
 
@@ -86,4 +86,4 @@ Drive summary remains with the existing workspace/files facts; retaining the nin
 
 ## Reuse provenance and validation limit
 
-`regression-inventory.md` records Segmented/Policy-tab introducing commits before the proposed future duplicate removal. These packets change documentation only and delete no product code. Source and literal checks can verify the packet against this baseline. Component synchronization, actual prototype assets and keyboard walkthroughs remain outstanding.
+`regression-inventory.md` records Segmented/Policy-tab introducing commits before the proposed future duplicate removal. These packets change documentation only and delete no product code. Source and literal checks can verify the packet against this baseline. The three prototypes were approved 2026-10-08 (M-F `1791421176-82e4`, M-O `1791419190-5f01`, M-R `1791427781-730a`); keyboard walkthroughs of the shipped console remain part of the visual gate.

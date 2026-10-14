@@ -187,6 +187,8 @@ func runPolicyChangeLabel(ch sdk.RunPolicyChange, person string) string {
 		return "Narrowed to fit the limits set for " + person
 	case "workspace":
 		return "Added for the workspace"
+	case "component":
+		return "Added for an attached component"
 	case "source_control":
 		return "Added so the run can reach its code"
 	case "git_broker":

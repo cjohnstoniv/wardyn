@@ -126,3 +126,22 @@ b75f982ca32cbea3a887acf57fa213d5535c2527:internal/db/db.go:generic-api-key:57
 # environment, which passes the env var NAMES WARDYN_RECORDING_TEST_KEY= and
 # WARDYN_RECORDING_TEST_UMASK= with a per-test generated value. Commit-scoped.
 58a4d53e617da3c545584b287e5042f005cb3711:internal/recording/fs_permissions_test.go:generic-api-key:103
+# 0.9.0 batch: github-pat false positives on deliberately fake canary tokens in
+# tests. Each is a synthetic ghp_-shaped keyboard pattern ("0123456789…" or
+# "A1b2C3d4…") that the test feeds to the secret scan or the launch-intent
+# store to assert it is rejected or never persisted; none is a real credential.
+# Commit-scoped to the commit that introduced each one.
+168a59618e8bc8d8c0c026d6d1b9b75239c162c0:internal/api/launch_intent_test.go:github-pat:74
+ad13bba76e71e8d91c492b586994d61a92c9b755:internal/api/template_write_test.go:github-pat:376
+8c630045a31d8908009844e8c0d61b8b33a53b5d:internal/api/template_pg_test.go:github-pat:26
+8c630045a31d8908009844e8c0d61b8b33a53b5d:internal/api/template_write_test.go:github-pat:173
+# 0.9.0 batch: generic-api-key false positive on internal/workspacescan/golden_test.go's
+# goldenGoCacheKey, the 64-hex sha256 CacheKey() of the go golden profile — a
+# content hash, not a secret. Commit-scoped to the commit that introduced it.
+f97122834de2de0a730e7286b38bd4bd65520227:internal/workspacescan/golden_test.go:generic-api-key:75
+# The findings accepted above, on the re-signed copies of the same commits (v0.9.0).
+1623361014bcdb5daa4d15712665c04b0744fc4b:internal/api/template_write_test.go:github-pat:376
+2a286657c5b630914191deb906a57237ee2f716d:internal/api/template_pg_test.go:github-pat:26
+2a286657c5b630914191deb906a57237ee2f716d:internal/api/template_write_test.go:github-pat:173
+56f6ae02637b1ea212fc5bdc9958f04dbe87a81f:internal/workspacescan/golden_test.go:generic-api-key:75
+b822c57c208258f042ff991ef2e973947d66ce2f:internal/api/launch_intent_test.go:github-pat:74

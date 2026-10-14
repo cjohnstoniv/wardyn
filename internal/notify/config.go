@@ -156,7 +156,20 @@ func (c *Config) validate() error {
 			return err
 		}
 	}
+	for i := range c.Channels {
+		if ch := &c.Channels[i]; ch.Type == TypeSMTP && len(ch.To) == 0 && !c.notifiesTargetVia(ch.ID) {
+			return fmt.Errorf("approval notify config: channel %q: smtp to is empty and no route tier notifies a target through it", ch.ID)
+		}
+	}
 	return nil
+}
+
+// notifiesTargetVia reports whether some route tier that lists channel id names a notify target, so the
+// channel has recipients even with no fixed `to`.
+func (c *Config) notifiesTargetVia(id string) bool {
+	return slices.ContainsFunc(c.Routes, func(r Route) bool {
+		return slices.ContainsFunc(r.Tiers, func(t Tier) bool { return len(t.Notify) > 0 && slices.Contains(t.Channels, id) })
+	})
 }
 
 func (c *Config) channel(id string) *Channel {
@@ -287,13 +300,14 @@ var hostRe = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$`)
 // (a header-injection vector), or a setting that belongs to another type. Errors name the channel id
 // and the field, never its value.
 func (ch *Channel) validateSMTP() error {
-	fields := [][2]string{{"host", ch.Host}, {"from", ch.From}, {"username", ch.Username}, {"password", ch.Password}}
+	type field struct{ name, value string }
+	fields := []field{{"host", ch.Host}, {"from", ch.From}, {"username", ch.Username}, {"password", ch.Password}}
 	for i, to := range ch.To {
-		fields = append(fields, [2]string{"to #" + strconv.Itoa(i+1), to})
+		fields = append(fields, field{"to #" + strconv.Itoa(i+1), to})
 	}
 	for _, f := range fields {
-		if strings.ContainsAny(f[1], "\r\n") {
-			return fmt.Errorf("approval notify config: channel %q: smtp %s contains a CR or LF", ch.ID, f[0])
+		if strings.ContainsAny(f.value, "\r\n") {
+			return fmt.Errorf("approval notify config: channel %q: smtp %s contains a CR or LF", ch.ID, f.name)
 		}
 	}
 	if ch.URL != "" || ch.HMACSecret != "" || ch.BearerToken != "" {

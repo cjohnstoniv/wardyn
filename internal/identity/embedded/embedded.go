@@ -43,7 +43,7 @@ const (
 	// DefaultTrustDomain is used when New is given an empty trust domain.
 	DefaultTrustDomain = "wardyn.local"
 	// tokenTTL is the fixed lifetime of a minted JWT-SVID (1h ceiling).
-	tokenTTL = time.Hour
+	tokenTTL = identity.RunTokenTTL
 	// agentRunPathPrefix builds spiffe://<td>/agent-run/<run-id>.
 	agentRunPathPrefix = "/agent-run/"
 )

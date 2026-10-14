@@ -16,7 +16,7 @@
 // are the field names themselves (wire keys, rendered mono) and On/Off.
 import * as React from "react";
 import type { CeilingOverlay, GovernanceLimits, GovernanceProfile } from "../../../lib/api/governance";
-import { GOVERNANCE as GOV } from "../../../lib/governance-copy";
+import { GOVERNANCE as GOV, MEMBER_DRIVE_DOOR } from "../../../lib/governance-copy";
 import type { ConfinementClass } from "../../../lib/types";
 import { CC_ORDER } from "../../../lib/types";
 import { Input } from "../../ui/input";
@@ -153,6 +153,7 @@ export const LIMIT_FIELDS: Field[] = [
   { key: "deny_task_mode_exec", kind: "true", label: GOV.LIMIT_EXEC_LABEL, mono: false },
   { key: "deny_interactive", kind: "true", label: GOV.LIMIT_INTERACTIVE_LABEL, mono: false },
   { key: "deny_user_drive", kind: "true", label: GOV.LIMIT_DRIVE_LABEL, mono: false },
+  { key: "deny_member_drives", kind: "true", label: MEMBER_DRIVE_DOOR.LABEL, mono: false },
   { key: "max_concurrent_runs", kind: "number", label: GOV.LIMIT_CONCURRENT_LABEL, mono: false },
   { key: "max_ephemeral_disk_mib", kind: "number", label: GOV.LIMIT_EPHEMERAL_LABEL, mono: false },
   { key: "max_drive_size_mib", kind: "number", label: GOV.LIMIT_DRIVE_SIZE_LABEL, mono: false },
@@ -160,6 +161,8 @@ export const LIMIT_FIELDS: Field[] = [
   // durations are seconds on the wire), so the wire key names the row, mono,
   // as the ceiling rows do. The autonomy rubric has its own section.
   ceilingField("deny_ui_apps", "true"),
+  ceilingField("deny_placements", "list"),
+  ceilingField("local_self_defined_components", "false"),
   ceilingField("max_cpu_millis", "number"),
   ceilingField("max_memory_mib", "number"),
   ceilingField("max_end_ahead_sec", "number"),
@@ -175,7 +178,7 @@ type Bag = Record<string, unknown>;
 
 // What a standalone profile's stored limits become when it is first composed: every limit that
 // binds anything, in the overlay's narrowing form. An off deny door, a 0 (unlimited) and an empty
-// rubric narrow nothing and are left out. The two permissive-when-true flags (kind "false") bind
+// rubric narrow nothing and are left out, as is an empty list. The permissive-when-true flags (kind "false") bind
 // when they are off, and an off flag is omitted on the wire, so an absent or false value seeds
 // false; a true value narrows nothing and is left out.
 export function seedOverlayLimits(limits: GovernanceLimits): Bag {
@@ -185,7 +188,7 @@ export function seedOverlayLimits(limits: GovernanceLimits): Bag {
   if (Object.keys(rubric).length > 0) out.autonomy_rubric = rubric;
   for (const { key, kind } of LIMIT_FIELDS) {
     const v = stored[key];
-    if (kind === "true" ? v === true : kind === "false" ? v !== true : typeof v === "number" && v > 0) {
+    if (kind === "list" ? Array.isArray(v) && v.length > 0 : kind === "true" ? v === true : kind === "false" ? v !== true : typeof v === "number" && v > 0) {
       out[key] = kind === "false" ? false : v;
     }
   }

@@ -59,6 +59,7 @@ var delegationAllowed = map[string]bool{
 	"GET /api/v1/runs":                     true,
 	"GET /api/v1/runs/{id}":                true,
 	"GET /api/v1/runs/{id}/events":         true,
+	"GET /api/v1/runs/{id}/output":         true,
 	"PATCH /api/v1/runs/{id}":              true,
 	"POST /api/v1/runs/{id}/kill":          true,
 	"POST /api/v1/runs/{id}/attach-ticket": true,
@@ -103,7 +104,7 @@ func (s *Server) delegatedTokenAuth(next, fallback http.Handler) http.Handler {
 		// created_at — apiTokenAuth's owner check, epoch -1, so a session-only cut
 		// (sessions_only) leaves it working, and its fail-closed 503.
 		if s.cfg.SessionRevocations != nil {
-			status, rerr := oidc.CheckSession(r.Context(), s.cfg.SessionRevocations, t.Principal, t.Email, t.CreatedAt, -1)
+			status, rerr := oidc.CheckSession(r.Context(), s.cfg.SessionRevocations, t.Principal, t.Email, oidc.Issue{At: t.CreatedAt, Seq: t.RevSeq}, -1)
 			if rerr != nil {
 				slog.ErrorContext(r.Context(), "api: session-revocation lookup failed; this delegated token could not be authenticated",
 					"error", rerr, "path", r.URL.Path)
@@ -120,7 +121,7 @@ func (s *Server) delegatedTokenAuth(next, fallback http.Handler) http.Handler {
 			fallback.ServeHTTP(w, r)
 			return
 		}
-		ctx := withHumanIdentity(r.Context(), t.Principal, t.Email, oidc.RoleUser, t.UserType, t.Groups, t.GroupsTruncated)
+		ctx := withHumanIdentity(oidc.WithRevocationSeq(r.Context(), t.Principal, t.RevSeq), t.Principal, t.Email, oidc.RoleUser, t.UserType, t.Groups, t.GroupsTruncated)
 		r = r.WithContext(audit.WithDelegation(ctx, types.DelegationVia{Delegate: t.DelegateID, Grant: t.ID}))
 		if rctx := chi.RouteContext(r.Context()); rctx == nil || !delegationAllowed[r.Method+" "+rctx.RoutePattern()] {
 			// refuse's row with the reason on the wire too: a portal branches
@@ -144,13 +145,14 @@ func createdVia(ctx context.Context) *uuid.UUID {
 }
 
 // neverOperator reports a caller neither admin tier may answer true for,
-// whatever its context holds: a device, or a portal acting for a person (a
+// whatever its context holds: a device, a service identity, or a portal acting for a person (a
 // delegated person is published at the user role anyway; this holds even if
 // a later edit publishes one without a human). isOperator and
 // isSecurityOperator ask it before their no-human arm.
 func neverOperator(ctx context.Context) bool {
 	_, isDevice := deviceFromContext(ctx)
 	_, delegated := audit.DelegationFrom(ctx)
-	_, isSCIM := scimCallerSlot(ctx) // the identity provider's connector removes access, and never acts as the admin token
-	return isDevice || delegated || isSCIM
+	_, isSCIM := scimCallerSlot(ctx)                   // the identity provider's connector removes access, and never acts as the admin token
+	_, _, isService := serviceIdentityFromContext(ctx) // automation: member reach, whatever role its context was published with
+	return isDevice || delegated || isSCIM || isService
 }
