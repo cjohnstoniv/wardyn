@@ -20,7 +20,7 @@ func TestViaOrg_EngineKeepsTheDeclaredInspectionCorpus(t *testing.T) {
 	spec.ProxyConfig.ControlPlaneURL = "http://127.0.0.1:9"
 	spec.ProxyConfig.Policy.LLMInspection = &types.LLMInspectionSpec{Mode: "block", DetectSecrets: true,
 		WorkspaceSecretNames: []string{"ws-deploy-key"}, WorkspaceSecretValues: []string{"WS-DECLARED-VALUE-31c7"}}
-	if !srv.classifyLocalDispatch(ctx, run, ceilingForDispatch(governanceCeiling{}, adoEntraUngraded(), bedrockCredUngraded()), types.SiteConfig{}, &spec, nil, llmTransport{}, adoEntraRun{}, false) {
+	if !srv.classifyLocalDispatch(ctx, run, ceilingForDispatch(governanceCeiling{}, adoEntraUngraded(), bedrockCredUngraded()), types.SiteConfig{}, &spec, nil, llmTransport{}, false) {
 		t.Fatal("an all-own plan was refused")
 	}
 	if li := spec.ProxyConfig.Policy.LLMInspection; li == nil || len(li.WorkspaceSecretNames)+len(li.WorkspaceSecretValues) != 0 {

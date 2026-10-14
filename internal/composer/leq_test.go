@@ -83,7 +83,10 @@ func leqOf(a, b composer.Authority) bool {
 	return composer.Leq(a.Ceiling, b.Ceiling, a.Limits, b.Limits)
 }
 
-// A composed ceiling is at most as permissive as its base.
+// A composed ceiling is at most as permissive as its base. One composition is outside
+// this on purpose and the generator never makes it: an overlay that adds an
+// llm_inspection naming a detector sidecar over a base with none, which Leq refuses
+// so the change waits for a second approver (TestLeqRefusesAnAddedSidecarComposition).
 func TestLeqHoldsForEveryComposition(t *testing.T) {
 	err := quick.Check(func(c leqCase) bool {
 		got, _, err := composer.ApplyOverlay(c.base, c.o1)
@@ -99,6 +102,21 @@ func TestLeqHoldsForEveryComposition(t *testing.T) {
 	}, quickCfg)
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestLeqRefusesAnAddedSidecarComposition pins the one composition
+// TestLeqHoldsForEveryComposition leaves out: the meet takes an added inspection,
+// and Leq does not prove it within the base when it names a detector sidecar.
+func TestLeqRefusesAnAddedSidecarComposition(t *testing.T) {
+	base := composer.Authority{Ceiling: types.RunPolicySpec{MinConfinementClass: types.CC2}}
+	ov := composer.Overlay{Ceiling: types.CeilingOverlay{LLMInspection: &types.LLMInspectionSpec{Mode: "block", DetectorSidecarURL: "https://detector.corp.example/scan"}}}
+	got, _, err := composer.ApplyOverlay(base, ov)
+	if err != nil {
+		t.Fatalf("ApplyOverlay: %v", err)
+	}
+	if leqOf(got, base) {
+		t.Error("Leq holds for an added inspection that names a detector sidecar")
 	}
 }
 
@@ -258,8 +276,14 @@ func TestLeqIsFalseForEveryWidening(t *testing.T) {
 		}, wide: func(c *types.RunPolicySpec, _ *types.GovernanceLimits) {
 			c.LLMInspection = &types.LLMInspectionSpec{Mode: "warn"}
 		}},
+		{name: "an added inspection naming a detector sidecar", wide: func(c *types.RunPolicySpec, _ *types.GovernanceLimits) {
+			c.LLMInspection = &types.LLMInspectionSpec{Mode: "block", DetectorSidecarURL: " https://detector.corp.example/scan "}
+		}},
 		{name: "an added ui app", wide: func(c *types.RunPolicySpec, _ *types.GovernanceLimits) {
 			c.UIApps = append(slices.Clone(c.UIApps), types.UIApp{Name: "jupyter", Port: 8888})
+		}},
+		{name: "emptied ui apps, which a run reads as no opinion", wide: func(c *types.RunPolicySpec, _ *types.GovernanceLimits) {
+			c.UIApps = nil
 		}},
 		{name: "a ui app moved to another path", wide: func(c *types.RunPolicySpec, _ *types.GovernanceLimits) {
 			c.UIApps = []types.UIApp{{Name: "docs", Port: 8000, Path: "/admin"}}
@@ -444,6 +468,9 @@ func TestLeqIsTrueForNarrowings(t *testing.T) {
 		}},
 		{"an added llm inspection", func(c *types.RunPolicySpec, _ *types.GovernanceLimits) {
 			c.LLMInspection = &types.LLMInspectionSpec{Mode: "block"}
+		}},
+		{"an added llm inspection with a blank sidecar", func(c *types.RunPolicySpec, _ *types.GovernanceLimits) {
+			c.LLMInspection = &types.LLMInspectionSpec{Mode: "alert", DetectSecrets: true, DetectorSidecarURL: "  "}
 		}},
 		{"a shorter grant ttl", func(c *types.RunPolicySpec, _ *types.GovernanceLimits) {
 			c.EligibleGrants = slices.Clone(c.EligibleGrants)

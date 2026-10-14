@@ -5,8 +5,10 @@ package api
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -115,6 +117,102 @@ func userMountAllowed(policy runner.UserMountPolicy, owner string, wm types.Work
 		return fmt.Errorf("member workspace mount: %w", err)
 	}
 	return nil
+}
+
+// sourceRefusal is validateWorkspaceSources' (status, reason, error) answer as
+// one error, for the requirements fold: its record-session caller holds no
+// ResponseWriter and hands the refusal back to its handler as an error.
+type sourceRefusal struct {
+	status int
+	reason string
+	err    error
+}
+
+// Error carries the "workspace: " prefix the create door answers with.
+func (e *sourceRefusal) Error() string { return "workspace: " + e.err.Error() }
+
+// requirementWriteRefusal holds every mount a requirements fold made writable
+// to the member mount gate. The door ran that gate while the mount was still
+// read-only (validateWorkspaceSources), and a write:<path> row turns any mount
+// at its path writable, whichever workspace the row came from. So the owner is
+// read here from the workspaces that hold the directory, not from the one
+// being folded.
+//
+// The holders that count are the run's own: attached is every workspace the
+// request names (the record door's one workspace), and each member-owned one
+// that holds the directory must be allowed to write it, while an operator-owned
+// one passes as it always has. A workspace that merely stores the same
+// directory is not part of the run and decides nothing about it. Only a
+// directory no attached workspace holds (a mount a policy authored) is held to
+// every stored holder, and there a directory no workspace holds, or a list
+// that cannot be read, refuses, since no owner can be named.
+//
+// The workspace whose row made the mount writable is held as well, whether or
+// not it is attached: a workspace pulled into the run because it holds the same
+// directory (referencedWorkspacesIn's index keeps one holder per directory) can
+// carry a required write row its member owner set, and the attached holders
+// alone would not answer for that member.
+// wasReadOnly is each mount's state before the fold, and suppliers the
+// workspaces whose write rows granted it, both by index.
+func (s *Server) requirementWriteRefusal(ctx context.Context, attached []types.Workspace, mounts []types.WorkspaceMount, wasReadOnly []bool, suppliers map[int][]types.Workspace) *sourceRefusal {
+	var widened []types.WorkspaceMount
+	var supplied [][]types.Workspace
+	for i, wm := range mounts {
+		if i < len(wasReadOnly) && wasReadOnly[i] && !wm.ReadOnlyOrDefault() {
+			widened = append(widened, wm)
+			supplied = append(supplied, suppliers[i])
+		}
+	}
+	if len(widened) == 0 {
+		return nil
+	}
+	refuse := func(reason string, err error) *sourceRefusal {
+		return &sourceRefusal{status: http.StatusUnprocessableEntity, reason: reason, err: err}
+	}
+	var stored []types.Workspace // read once, and only for a mount no attached workspace holds
+	for k, wm := range widened {
+		for _, ws := range supplied[k] {
+			if err := userMountAllowed(s.cfg.UserMounts, ws.OwnedBy, wm); err != nil {
+				return refuse(reasonWorkspaceSourceMountNotAllowed, err)
+			}
+		}
+		holders := localDirHolders(attached, wm.Source)
+		if len(holders) == 0 {
+			if stored == nil {
+				if s.cfg.Store == nil {
+					return refuse(reasonWorkspaceSourcesStoreUnavailable, errors.New("workspace onboarding requires a store, but none is configured"))
+				}
+				var err error
+				if stored, err = s.cfg.Store.ListWorkspaces(ctx); err != nil {
+					return refuse(reasonWorkspaceSourcesListUnavailable, fmt.Errorf("list workspaces: %w", err))
+				}
+			}
+			holders = localDirHolders(stored, wm.Source)
+		}
+		if len(holders) == 0 {
+			return refuse(reasonWorkspaceSourceNotOnboarded, fmt.Errorf(
+				"mount source %q is not an onboarded local directory (onboard it first via the workspaces API)", wm.Source))
+		}
+		for _, ws := range holders {
+			if err := userMountAllowed(s.cfg.UserMounts, ws.OwnedBy, wm); err != nil {
+				return refuse(reasonWorkspaceSourceMountNotAllowed, err)
+			}
+		}
+	}
+	return nil
+}
+
+// localDirHolders is the workspaces of list that carry path as a local_dir source.
+func localDirHolders(list []types.Workspace, path string) []types.Workspace {
+	var out []types.Workspace
+	for _, ws := range list {
+		if slices.ContainsFunc(ws.Sources, func(src types.WorkspaceSource) bool {
+			return src.Type == types.WorkspaceSourceTypeLocalDir && src.Path == path
+		}) {
+			out = append(out, ws)
+		}
+	}
+	return out
 }
 
 // userMountPosture is ONE run's member-mount posture, resolved once at

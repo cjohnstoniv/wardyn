@@ -398,7 +398,7 @@ func TestAdmissionAtTheScanLauncher(t *testing.T) {
 		h := newHarness(t)
 		srv := New(baseTestConfig(h, &admitSourcesStore{siteConfig: sc}))
 		_, err := srv.launchSourceScanRun(context.Background(), "admin",
-			types.Source{ID: uuid.New(), Kind: types.SourceRepo, Locator: locator})
+			types.Source{ID: uuid.New(), Kind: types.SourceRepo, Locator: locator}, nil)
 		return err
 	}
 
@@ -940,7 +940,7 @@ func TestLegacyHostAdmissionIsAuditedAtEveryDoor(t *testing.T) {
 		st := &admitSourcesStore{siteConfig: admitLegacySite()}
 		srv := New(baseTestConfig(h, st))
 		_, err := srv.launchSourceScanRun(context.Background(), "admin",
-			types.Source{ID: uuid.New(), Kind: types.SourceRepo, Locator: admitUnclaimed})
+			types.Source{ID: uuid.New(), Kind: types.SourceRepo, Locator: admitUnclaimed}, nil)
 		if !errors.Is(err, errAdmitFixtureReached) {
 			t.Fatalf("err = %v, want the launch to reach the fence claim", err)
 		}

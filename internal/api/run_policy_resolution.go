@@ -27,7 +27,10 @@ func (s *Server) boundRunUserSpec(ctx context.Context, r *http.Request, spec typ
 // boundRunUserSpecDrops is the member pipeline without its audit: the bounded
 // spec, the warnings and the structured drops the audit is made from.
 func (s *Server) boundRunUserSpecDrops(ctx context.Context, r *http.Request, spec types.RunPolicySpec, ceiling governanceCeiling, errPrefix string) (types.RunPolicySpec, []string, []capDrop, *runRefusal) {
+	domains, literalWarns := dropUncoveredPrivateLiterals(spec.AllowedDomains, ceiling.Spec)
+	spec.AllowedDomains = domains
 	spec, warns := composer.ClampMember(spec, ceiling.Spec, ceiling.Limits, ceiling.authoredSize(), ceiling.memberSize())
+	warns = append(literalWarns, warns...)
 	kept, grantWarns, code, gerr := s.filterUserGrants(ctx, s.secretOwnerFromRequest(r), spec.AllowedDomains, spec.EligibleGrants)
 	if gerr != nil {
 		return types.RunPolicySpec{}, nil, nil, runError(code, reasonInlinePolicyInvalid, errPrefix+gerr.Error())

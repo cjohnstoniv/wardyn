@@ -298,6 +298,10 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// agent-side tool-approval lane), raised before the run id existed and
 	// carried here — this is the only channel that reaches the caller.
 	warnings = append(warnings, f.autonomyWarns...)
+	// …and the managed-settings one, read off the run's bound runner and the
+	// settled tool lane, which the gate above could not see.
+	warnings = append(warnings, s.managedSettingsUndeliveredWarning(ctx, managedSettingsRun{req: &req, spec: spec, harnesses: f.harnesses, level: autonomy.Level,
+		locked: ceilingForDispatch(ceiling, f.adoGrade, f.bedrockGrade).agentGuardrailLocks, class: enforced, place: f.place}, &run)...)
 	// The two things provider admission ADMITTED rather than refused; see
 	// repoSourceWarnings.
 	warnings = append(warnings, s.repoSourceWarnings(ctx, runID, spec, req)...)
@@ -348,7 +352,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// Widen the RESOLVED spec's egress from the deterministic operator-trusted
 	// sources (onboarded-workspace registries, site-config SCM hosts, the SSH and
 	// ADO SCM lanes) — never the LLM; see unionRunEgress.
-	s.unionRunEgress(ctx, runID, &spec, gw, wsRefs, req.Repo, f.scmSite, f.directGitHubAdded, comps)
+	s.unionRunEgress(ctx, runID, &spec, gw, wsRefs, req.Repo, f.scmSite, f.directGitHubAdded, comps, f.ceiling.Spec.AllowedDomains)
 
 	// …and say so when one of those operator-approved workspace hosts is walled
 	// off by the caller's own governance profile. The union above still happened
@@ -378,13 +382,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// image build + dispatch continue server-side (runs_create_launch.go).
 	w.Header().Set("Location", s.cfg.BasePath+"/api/v1/runs/"+runID.String())
 	writeJSON(w, http.StatusCreated, createRunResponse{AgentRun: created, Warnings: warnings, ResourcesApplied: &f.place.applied})
-	spec, harnessRules := applyHarnessToolRules(spec, req.Tools, toolLaneDefault(req))
-	launch := createRunLaunch{
-		req: req, spec: spec, ceiling: ceilingForDispatch(ceiling, f.adoGrade, f.bedrockGrade), gw: gw,
-		wsRefs: wsRefs, driveMounts: f.driveMounts, memberDrives: memberDriveOwners(f.drives), ephemeralDirs: f.ephemeralDirs, startFolder: f.startFolder,
-		runToken: id.Token, created: created, comps: comps, overridden: f.source.overridden(), pushSets: f.pushSets, harnessRules: harnessRules,
-		harnesses: f.harnesses, mainDrive: f.mainDrive.decision(),
-	}
+	launch := f.launch(req, spec, ceiling, gw, id.Token, created)
 	launchCtx := context.WithoutCancel(ctx)
 	s.goBackground(func() { s.finishCreateRunLaunch(launchCtx, launch) })
 }

@@ -387,6 +387,82 @@ func TestMaskRegistry_TheLeaderDeletesATerminalRunsRowsPastTheGrace(t *testing.T
 	}
 }
 
+// A person's key generation moves and their lasting credential is registered
+// again unchanged, so the value has a row under each generation. Once the old
+// generation's row is swept, every replica still masks the value in live output,
+// in an uploaded recording and in audit data, and registering it again succeeds.
+func TestMaskRegistry_AKeyGenerationMoveKeepsAnUnchangedValueMasked(t *testing.T) {
+	l := newMaskLab(t)
+	a, b := l.replica(), l.replica()
+	a.srv.cfg.SweeperLease, b.srv.cfg.SweeperLease = staticLease{leader: true}, staticLease{leader: false}
+	ctx := t.Context()
+	run := l.run()
+	a.dispatch(t, run, "dispatch-time-value-1")
+	const lasting = `lasting-"refresh"-token-2`
+	register := func() error { return a.reg.AddGlobal(0, maskOwner, "aws-sso", time.Now(), []byte(lasting)) }
+	rows := func() int {
+		return l.count(`SELECT count(*) FROM mask_values WHERE owner=$1 AND name='aws-sso' AND NOT tombstone`, maskOwner)
+	}
+
+	if err := register(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := l.pool.Exec(ctx,
+		`UPDATE principal_keys SET superseded_at = now() WHERE owner=$1 AND purpose=$2 AND destroyed_at IS NULL AND superseded_at IS NULL`,
+		maskOwner, subjectkey.PurposeCred); err != nil {
+		t.Fatal(err)
+	}
+	if err := register(); err != nil {
+		t.Fatal(err)
+	}
+	if n := rows(); n != 2 {
+		t.Fatalf("the generation move left %d rows for the value, want one per generation", n)
+	}
+	if err := b.st.Fresh(ctx, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+
+	// Past the grace: each replica's own sweep, the leader's of the committed
+	// rows, and a read of what that tombstoned.
+	late := func() time.Time { return time.Now().Add(2 * RunSecretGrace) }
+	for _, rp := range []replica{a, b} {
+		now := rp.srv.cfg.Now
+		rp.srv.cfg.Now = late
+		if _, err := rp.srv.SweepRunSecrets(ctx); err != nil {
+			t.Fatal(err)
+		}
+		rp.srv.cfg.Now = now
+	}
+	if n := rows(); n != 1 {
+		t.Fatalf("the sweep left %d rows for the value, want the new generation's alone", n)
+	}
+	quoted := strings.ReplaceAll(lasting, `"`, `\"`)
+	for name, rp := range map[string]replica{"the replica that registered": a, "the other replica": b} {
+		if err := rp.st.Fresh(ctx, time.Now()); err != nil {
+			t.Fatal(err)
+		}
+		var live bytes.Buffer
+		mw := &liveMaskWriter{reg: rp.reg, runID: run.ID, dst: &live}
+		if _, err := mw.Write([]byte("out " + lasting + "\n")); err != nil {
+			t.Fatal(err)
+		}
+		if got := live.String(); strings.Contains(got, lasting) || !strings.Contains(got, "<secret-hidden>") {
+			t.Errorf("%s: live output = %q, want the value masked", name, got)
+		}
+		if w := l.upload(rp, run, "rec "+lasting+"\n"); w.Code != http.StatusNoContent {
+			t.Errorf("%s: upload = %d: %s", name, w.Code, w.Body.String())
+		} else if strings.Contains(string(rp.rec.saved), lasting) {
+			t.Errorf("%s: persisted the value unmasked in a recording: %q", name, rp.rec.saved)
+		}
+		if got := string(rp.reg.JSONVariantMasker(run.ID).Mask([]byte(`{"token":"` + quoted + `"}`))); strings.Contains(got, quoted) {
+			t.Errorf("%s: audit data = %q, want the value masked", name, got)
+		}
+	}
+	if err := register(); err != nil {
+		t.Errorf("registering the unchanged value again: %v", err)
+	}
+}
+
 // newLabPool is a second pool on the lab's database that a test can close to take
 // Postgres away from whatever is built over it.
 func newLabPool(t *testing.T, l *maskLab) *pgxpool.Pool {

@@ -125,7 +125,9 @@ func baseWhere(f RunFilter, nonTerminal string, args *[]any) string {
 		}
 	}
 	if f.NoEnd {
-		clauses = append(clauses, "(ends_at IS NULL AND "+fmt.Sprintf(runLiveSQL, nonTerminal)+")")
+		// A QUEUED run's ends_at is empty because it has not started, not because nothing will end it:
+		// its start writes the end. So "No end" holds only the runs that hold a slot.
+		clauses = append(clauses, "(ends_at IS NULL AND state = ANY("+bindArg(args, slotHoldingStateNames())+"))")
 	}
 	if f.Workspace != "" {
 		clauses = append(clauses, "COALESCE(NULLIF(repo,''), workspace_path) = "+bindArg(args, f.Workspace))

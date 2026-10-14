@@ -12,7 +12,7 @@ import { NR_FILES } from "../../../../wardyn/copy/new-run/files";
 import { DENIED } from "../../../../../lib/permissions-copy";
 import { PROVIDERS } from "../../../../../lib/workspace-providers-copy";
 import { NR_SHARED } from "../../../../wardyn/copy/new-run/shared";
-import { filesPreflight, limitsFor, MAIN_DRIVE_FACTS, REPO_ATTACHMENT, SCENARIO_FILES_WORKSPACES } from "../../../../../lib/new-run-fixtures/scenarios/files";
+import { filesPreflight, MAIN_DRIVE_FACTS, REPO_ATTACHMENT, SCENARIO_FILES_WORKSPACES } from "../../../../../lib/new-run-fixtures/scenarios/files";
 import type { RepoBranches } from "../../../../../lib/api/repo-branches";
 import type { MeDrive, MeDriveCatalogue } from "../../../../../lib/api/me-drives";
 import type { Workspace } from "../../../../../lib/types/workspaces";
@@ -127,143 +127,6 @@ async function add(type: string, name: string) {
   await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
 }
 const card = (name: string) => screen.getAllByTestId("nr-attach-card").find((c) => within(c).queryByText(name, { selector: "strong" }))!;
-
-describe("main drive", () => {
-  it("shows the section, a Required chip and the pool's default, with the cap and its enforcement word", async () => {
-    show();
-    expect(screen.getByRole("heading", { level: 2, name: NR_FILES.MAIN_TITLE })).toBeInTheDocument();
-    expect(screen.getByText(NR_FILES.MAIN_BODY)).toBeInTheDocument();
-    expect(screen.getByText(NR_SHARED.REQUIRED)).toBeInTheDocument();
-    expect(await screen.findByText(NR_FILES.UP_TO(8))).toBeInTheDocument();
-    expect(size()).toHaveValue(4);
-    expect(size()).toHaveAttribute("step", "0.1");
-    expect(screen.getByText(NR_FILES.ENFORCED)).toBeInTheDocument();
-    expect(screen.getByText(NR_FILES.REUSE_LABEL)).toBeInTheDocument();
-    expect(screen.getByLabelText(NR_FILES.REUSE_LABEL)).toBeDisabled();
-    expect(screen.getAllByText(NR_SHARED.COMING_SOON).length).toBeGreaterThanOrEqual(1);
-  });
-
-  it("clamps a size over the cap to the cap on blur and names the pool", async () => {
-    show();
-    await screen.findByText(NR_FILES.UP_TO(8));
-    await userEvent.clear(size());
-    await userEvent.type(size(), "16");
-    await userEvent.tab();
-    expect(size()).toHaveValue(8);
-    expect(screen.getByText(NR_FILES.CLAMP_POOL(8, "Shared pool"))).toBeInTheDocument();
-    expect(drawn().resources).toEqual({ disk_mib: 8192 });
-  });
-
-  it("names the server or the organisation when they, not the pool, set the cap", async () => {
-    checks.result = { ...filesPreflight(MAIN_DRIVE_FACTS.filesystem), runner_pools: [{ ...filesPreflight(MAIN_DRIVE_FACTS.filesystem).runner_pools![0], limits: [limitsFor("interactive", 4096, "deployment")] }] };
-    show();
-    await screen.findByText(NR_FILES.UP_TO(4));
-    await userEvent.clear(size());
-    await userEvent.type(size(), "9");
-    await userEvent.tab();
-    expect(screen.getByText(NR_FILES.CLAMP_SERVER(4))).toBeInTheDocument();
-  });
-
-  it("keeps a size under the cap in whole MiB and sends it as resources.disk_mib", async () => {
-    show();
-    await screen.findByText(NR_FILES.UP_TO(8));
-    await userEvent.clear(size());
-    await userEvent.type(size(), "2.5");
-    await userEvent.tab();
-    expect(drawn().resources).toEqual({ disk_mib: 2560 });
-    expect(screen.queryByText(/^Clamped/)).toBeNull();
-  });
-
-  it("reads a cap under 1 GiB with one decimal (A8)", async () => {
-    checks.result = filesPreflight(MAIN_DRIVE_FACTS.filesystem, 512);
-    show();
-    expect(await screen.findByText(NR_FILES.UP_TO("0.5"))).toBeInTheDocument();
-    expect(size()).toHaveValue(0.5);
-  });
-
-  it("omits the cap line when nothing caps the size, and asks for a size when nothing defaults it", async () => {
-    checks.result = { ...filesPreflight(MAIN_DRIVE_FACTS.filesystem), runner_pools: [{ ...filesPreflight(MAIN_DRIVE_FACTS.filesystem).runner_pools![0], limits: [limitsFor("interactive")] }] };
-    show();
-    await screen.findByText(NR_FILES.ENFORCED);
-    expect(screen.queryByText(/^Up to/)).toBeNull();
-    expect(size()).toHaveValue(null);
-    await userEvent.click(screen.getByRole("button", { name: NR_SHARED.CONTINUE_TO(NR_SHARED.STEP_TOOLS) }));
-    expect(size()).toHaveFocus();
-    expect(go).not.toHaveBeenCalled();
-    await userEvent.tab();
-    // Under the field, and in the summary.
-    expect((await screen.findAllByText(NR_FILES.SIZE_ERROR)).length).toBeGreaterThanOrEqual(1);
-  });
-
-  it("with no size the summary asks for one and never reads done, and the map names the drive with no number", async () => {
-    catalogue = NO_LEGACY;
-    checks.result = { ...filesPreflight(MAIN_DRIVE_FACTS.filesystem), runner_pools: [{ ...filesPreflight(MAIN_DRIVE_FACTS.filesystem).runner_pools![0], limits: [limitsFor("interactive")] }] };
-    show();
-    await screen.findByText(NR_FILES.ENFORCED);
-    await userEvent.click(screen.getByRole("radio", { name: NR_FILES.NO_EXTRA }));
-    const map = screen.getByRole("region", { name: NR_FILES.MOUNT_TITLE });
-    expect(within(map).getByText(NR_FILES.MAIN_TITLE)).toBeInTheDocument();
-    expect(within(map).queryByText(/GiB/)).toBeNull();
-    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent(NR_FILES.SIZE_ERROR), { timeout: 3000 });
-    expect(screen.getByTestId("nr-files-summary")).toHaveAttribute("data-tone", "prompt");
-    await userEvent.type(size(), "4");
-    await waitFor(() => expect(screen.getByTestId("nr-files-summary")).toHaveAttribute("data-tone", "done"), { timeout: 3000 });
-    expect(within(map).getByText(NR_FILES.MOUNT_MAIN(4))).toBeInTheDocument();
-  });
-});
-
-describe("enforcement chip (W1)", () => {
-  it.each([
-    ["eviction", NR_FILES.ENFORCED_BY_STOP],
-    ["none", NR_FILES.NOT_ENFORCED],
-    ["runner", `${NR_FILES.ENFORCED} ${NR_FILES.REPORTED_BY_RUNNER}`],
-  ] as const)("%s says its own words", async (word, text) => {
-    checks.result = filesPreflight(MAIN_DRIVE_FACTS[word]);
-    show();
-    expect(await screen.findByText(text)).toBeInTheDocument();
-  });
-
-  it("an unknown word shows no chip", async () => {
-    checks.result = filesPreflight(MAIN_DRIVE_FACTS.unknown);
-    show();
-    await screen.findByText(NR_FILES.UP_TO(8));
-    expect(screen.queryByText(NR_FILES.ENFORCED)).toBeNull();
-    expect(screen.queryByText(NR_FILES.NOT_ENFORCED)).toBeNull();
-  });
-
-  it("its tooltip opens on press and carries the server's sentence", async () => {
-    checks.result = filesPreflight(MAIN_DRIVE_FACTS.none);
-    show();
-    await userEvent.click(await screen.findByRole("button", { name: NR_FILES.NOT_ENFORCED_ARIA }));
-    expect(await screen.findByText(NR_FILES.NOT_ENFORCED_TIP)).toBeInTheDocument();
-  });
-});
-
-describe("what happens to it (W2)", () => {
-  it("an Interactive run on a pool that keeps stopped sandboxes says how long, with its maximum", async () => {
-    show();
-    expect(await screen.findByText(NR_FILES.LIFE_KEPT("8 hours", "24 hours"))).toBeInTheDocument();
-  });
-
-  it("deletes it when the pool keeps nothing, and for a Background run", async () => {
-    checks.result = filesPreflight(MAIN_DRIVE_FACTS.eviction);
-    show();
-    expect(await screen.findByText(NR_FILES.LIFE_DELETED)).toBeInTheDocument();
-    cleanup();
-    checks.result = filesPreflight(MAIN_DRIVE_FACTS.filesystem, 8192, "background");
-    show(BACKGROUND);
-    expect(await screen.findByText(NR_FILES.LIFE_DELETED)).toBeInTheDocument();
-  });
-
-  it("a run with no end is kept until you end it; before the facts arrive nothing is claimed", async () => {
-    show({ ...INTERACTIVE, no_end: true });
-    expect(await screen.findByText(NR_FILES.LIFE_NO_END)).toBeInTheDocument();
-    cleanup();
-    checks.result = null;
-    show();
-    expect(screen.queryByText(NR_FILES.LIFE_LABEL)).toBeNull();
-  });
-});
 
 describe("the list and the Add dialog", () => {
   it("starts empty with No extra files, and Add opens on Type with five types, Your computer Coming soon", async () => {
@@ -566,6 +429,20 @@ describe("folders", () => {
     await userEvent.click(screen.getByRole("button", { name: NR_FILES.REMOVE_NAMED("data") }));
     expect(drawn().workspaces).toEqual([{ workspace_id: "ws-data", repos: [], target: "/home/agent/folders/datasets" }]);
     expect(card("datasets")).toBeDefined();
+  });
+
+  it("a folder set Read-only stays read-only when the last repository of its workspace is removed", async () => {
+    show(BACKGROUND);
+    await openAdd();
+    await pickType(NR_FILES.FOLDER_TITLE);
+    await pickSource("datasets");
+    await userEvent.click(dialogButton(/^Continue/));
+    await userEvent.selectOptions(within(dialog()).getByLabelText(NR_FILES.ACCESS_LABEL), "read");
+    await userEvent.click(dialogButton(NR_FILES.ADD_CONFIRM));
+    await add(NR_FILES.REPOSITORY_BADGE, "data");
+    await userEvent.click(screen.getByRole("button", { name: NR_FILES.REMOVE_NAMED("data") }));
+    expect(drawn().workspaces).toEqual([{ workspace_id: "ws-data", repos: [], read_only: true, target: "/home/agent/folders/datasets" }]);
+    expect(within(card("datasets")).getByText(NR_FILES.ACCESS_READ)).toBeInTheDocument();
   });
 
   it("a folder that shares its workspace shows where the server mounts it: its source's target, else /home/agent/work", async () => {

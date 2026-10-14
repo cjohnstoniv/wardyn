@@ -19,7 +19,7 @@ func gapCovPostureFlags() *bootFlags {
 	var sessionTTL time.Duration
 	return &bootFlags{
 		ha: &off, allowMultiInstance: &off, runnerSel: &runner, recordingSel: &rec,
-		auditSeal: &seal, runOutputTailBytes: &tail, runOutputRetention: &retention, preflightRatePerMin: &rate,
+		auditSeal: &seal, runOutputTailBytes: &tail, runOutputRetention: &retention, recordingRetention: new(int), preflightRatePerMin: &rate,
 		basePath: &empty, oidcIssuer: &empty, oidcInternalIss: &empty, uiAdvertise: &empty, oidcRedirectURL: &empty,
 		controlURL: &controlURL, listen: &listen, uiListen: &empty, sshListen: &empty, sshProxyCommand: &empty, uiOriginTemplate: &empty,
 		uiStripCookies: &empty, allowPlaintextListen: &off, orgURL: &empty, orgEnrolToken: &empty, memberMode: &off,

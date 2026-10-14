@@ -71,6 +71,7 @@ func TestProjectStatusDetail_QueueReasons(t *testing.T) {
 		{"queued shows its wait", types.RunQueued, "queue: runner_pool_at_capacity", "queue: runner_pool_at_capacity", "runner_pool_at_capacity"},
 		{"promoted run drops the wait", types.RunPending, "queue: runner_pool_at_capacity", "", ""},
 		{"running run drops it", types.RunRunning, "queue: queue_timeout", "", ""},
+		{"failed after a queue wait", types.RunFailed, "queue: runner_pool_at_capacity", "", ""},
 		{"failed with an ordinary wait", types.RunFailed, "agent: ContainerCreating", "", ""},
 		{"failed with a malformed token", types.RunFailed, "queue: Not A Token", "", ""},
 	} {

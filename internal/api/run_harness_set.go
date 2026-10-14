@@ -244,6 +244,18 @@ func customImageRequested(req createRunRequest, wsRefs []types.Workspace) bool {
 	})
 }
 
+// workspaceBuildsImage reports whether the primary of wsRefs would build the run's image at launch
+// (resolveCreateRunImage): a scanned workspace, with an image builder wired, that chose no base image
+// (a chosen one is customImageRequested's). A workspace with no profile, or no builder, leaves the
+// run on its set image.
+func (s *Server) workspaceBuildsImage(wsRefs []types.Workspace) bool {
+	if len(wsRefs) == 0 || s.cfg.ImageBuilder == nil {
+		return false
+	}
+	_, scanned := workspaceProfile(wsRefs[0])
+	return scanned
+}
+
 // harnessSetRefusalFor holds every included harness to the doors the primary
 // meets before the fold (the agent capability and the org roster), refuses a
 // harness no image here carries (a run-mode request only; an older client is
@@ -272,6 +284,12 @@ func (s *Server) harnessSetRefusalFor(r *http.Request, req createRunRequest, wsR
 		if !custom && !harnessInstalled(h.Harness, s.cfg.AgentImages) {
 			return nil, nil, runError(http.StatusUnprocessableEntity, reasonHarnessNotInstalled, harnessNotInstalledMsg(harnessName(h.Harness))).forTool(h.Harness)
 		}
+	}
+	// Two or more harnesses never run on a custom image, and a scanned workspace that builds one
+	// (its repo's devcontainer or a generated profile) replaces the set image at launch with an
+	// image that carries at most one CLI.
+	if !custom && len(harnessCLIs(set)) > 1 && s.workspaceBuildsImage(wsRefs) {
+		custom = true
 	}
 	image, refusal := harnessSetImage(set, s.cfg.AgentImages, custom)
 	if refusal != nil {

@@ -30,22 +30,10 @@ export interface MainDriveFacts {
   drive_mounts: boolean;
 }
 
-/** Seam: DS3-S2 (pkg/client.MainDriveApplied): preflight's `main_drive`. */
-export interface MainDriveApplied {
-  requested_mib?: number;
-  applied_mib: number;
-  basis: "request" | "policy" | "default" | "none";
-  default_source?: LimitSource;
-  clamped_by?: "pool" | "governance" | "deployment" | "policy";
-  soft: boolean;
-  facts?: MainDriveFacts;
-}
-
 export type FilesPoolChoice = RunnerPoolChoice & { main_drive?: MainDriveFacts };
 
 export type FilesPreflight = Omit<PreflightResult, "runner_pools"> & {
   runner_pools?: FilesPoolChoice[];
-  main_drive?: MainDriveApplied;
 };
 
 /** One repository source of an onboarded workspace: a row of the Repositories list. */
@@ -97,7 +85,9 @@ export interface MainDriveView {
 
 export function readMainDrive(pre: FilesPreflight | null, runType: RunnerPoolRunType | undefined): MainDriveView {
   const pool = pre?.runner_pools?.find((p) => p.id === pre.runner_pool?.id);
-  const limits = pool?.limits?.find((l) => l.run_type === runType);
+  // The run's effective limits (pool, governance and deployment) are preflight's own `limits`; the pool
+  // choices carry none. An answer for another run type says nothing about this one.
+  const limits = pre?.limits?.run_type === runType ? pre?.limits : undefined;
   const disk = limits?.disk_mib;
   const cap = disk && !disk.cap.unlimited ? disk.cap.value : undefined;
   const fallback = disk && !disk.default.unlimited && disk.default.value > 0 ? disk.default.value : undefined;
@@ -107,7 +97,7 @@ export function readMainDrive(pre: FilesPreflight | null, runType: RunnerPoolRun
     capMib: cap,
     capSource: cap === undefined ? undefined : disk?.cap_source,
     defaultMib: fallback ?? cap,
-    facts: pre?.main_drive?.facts ?? pool?.main_drive,
+    facts: pool?.main_drive,
     maxLifetimeSec: span && !span.unlimited ? span.value : undefined,
   };
 }

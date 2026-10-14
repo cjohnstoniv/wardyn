@@ -486,12 +486,14 @@ describe("Review provenance", () => {
 });
 
 describe("Review Files and Limits detail", () => {
-  it("reads the main drive's enforcement from facts and its size from the applied amount", async () => {
-    checks.current = answered({ ...SCENARIO_PREFLIGHT.member, main_drive: { applied_mib: 20480, facts: { enforcement: "filesystem" } } } as unknown as PreflightResult);
+  it("reads the main drive's enforcement from the run's pool and its size from the applied amount", async () => {
+    const pre = SCENARIO_PREFLIGHT.member;
+    const pool = { id: pre.runner_pool!.id, name: pre.runner_pool!.name, scope: "organization", availability: "available", main_drive: { enforcement: "none", basis: "substrate", keep: { supported: false }, drive_mounts: true } };
+    checks.current = answered({ ...pre, main_drive: { applied_mib: 20480, basis: "default", soft: true }, runner_pools: [pool] } as unknown as PreflightResult);
     open(AGENT);
     await ready();
     expect(group("work").getByText(NR_REVIEW.MAIN_DRIVE(20))).toBeInTheDocument();
-    expect(group("work").getByText(NR_FILES.ENFORCED)).toBeInTheDocument();
+    expect(group("work").getByText(NR_FILES.NOT_ENFORCED)).toBeInTheDocument();
   });
 
   it("opens the limits editor on what was asked for, not the narrowed amount", async () => {

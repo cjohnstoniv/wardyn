@@ -559,7 +559,7 @@ func TestRecordCrossSession_ApprovalWidensNextConfinedLaunch(t *testing.T) {
 
 	// Before the operator approves anything, a confined session B's egress
 	// union does not carry the observed-only host.
-	if slices.Contains(srv.confinedEgressDomains(fake.ws), "registry.npmjs.org") {
+	if slices.Contains(srv.confinedEgressDomains(fake.ws, nil), "registry.npmjs.org") {
 		t.Fatal("host must not be in the egress union before it's approved")
 	}
 
@@ -579,8 +579,8 @@ func TestRecordCrossSession_ApprovalWidensNextConfinedLaunch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetWorkspace: %v", err)
 	}
-	if !slices.Contains(srv.confinedEgressDomains(got), "registry.npmjs.org") {
-		t.Errorf("session B's confined egress union %v missing session A's approved+observed host", srv.confinedEgressDomains(got))
+	if !slices.Contains(srv.confinedEgressDomains(got, nil), "registry.npmjs.org") {
+		t.Errorf("session B's confined egress union %v missing session A's approved+observed host", srv.confinedEgressDomains(got, nil))
 	}
 }
 

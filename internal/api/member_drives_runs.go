@@ -120,8 +120,8 @@ func memberDriveOwners(drives []runDrive) map[uuid.UUID]string {
 // sandboxCreateAdmitted is dispatch's last doors before CreateSandbox: the
 // local placement classification, then the member drives' re-read.
 func (s *Server) sandboxCreateAdmitted(ctx context.Context, run types.AgentRun, ceiling dispatchCeiling, sc types.SiteConfig,
-	spec *runner.SandboxSpec, orgConfigKeys []string, llm llmTransport, ado adoEntraRun, p dispatchParams) bool {
-	return s.classifyLocalDispatch(ctx, run, ceiling, sc, spec, orgConfigKeys, llm, ado, p.TrustedOutput) &&
+	spec *runner.SandboxSpec, orgConfigKeys []string, llm llmTransport, p dispatchParams) bool {
+	return s.classifyLocalDispatch(ctx, run, ceiling, sc, spec, orgConfigKeys, llm, p.TrustedOutput) &&
 		s.memberDrivesStillThere(ctx, run, p.MemberDrives)
 }
 
