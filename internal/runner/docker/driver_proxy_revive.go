@@ -7,6 +7,7 @@ package docker
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -429,8 +430,9 @@ func pinnedProxyIP(host *container.HostConfig) netip.Addr {
 }
 
 // relayHostsEntry is the proxy's hosts entry for a runner's relay (design 0.9
-// §4.2): the run's control-plane hostname at host-gateway, where the runner's
-// local relay listens and forwards the proxy's TLS, unread, to the org. The
+// §4.2): the run's control-plane hostname at the host target (host-gateway unless
+// Config.ControlPlaneHostTarget says otherwise), where the runner's local relay
+// listens and forwards the proxy's TLS, unread, to the org. The
 // proxy keeps its URL and CA exactly as dispatched; only the name resolves
 // differently, and only in the proxy, never the agent.
 func (d *Driver) relayHostsEntry(cfgJSON []byte) (string, error) {
@@ -450,5 +452,5 @@ func (d *Driver) relayHostsEntry(cfgJSON []byte) (string, error) {
 	if err := d.cfg.ControlPlaneRelay(u); err != nil {
 		return "", fmt.Errorf("docker: relay: %w", err)
 	}
-	return u.Hostname() + ":host-gateway", nil
+	return u.Hostname() + ":" + cmp.Or(d.cfg.ControlPlaneHostTarget, "host-gateway"), nil
 }
