@@ -109,7 +109,7 @@ export interface RunnerTally {
  * Go: types.RunnerUsage. `in_use` is every run holding a sandbox on the runner, from every pool;
  * `available` is the total less that, all zero while offline or with no limits. `disk_capped` false:
  * the runner cannot cap a run's disk, so its disk is counted, not capped. `reported` is what the
- * runner says it has, never a limit.
+ * runner says it has, never a limit; `reported_why` is why some of it could not be measured.
  */
 export interface RunnerUsage {
   online: boolean;
@@ -117,6 +117,7 @@ export interface RunnerUsage {
   available: RunnerTally;
   disk_capped: boolean;
   reported?: RunnerAmounts;
+  reported_why?: string;
 }
 
 /** Go: types.RunnerPoolRef: one pool a runner is a member of. */

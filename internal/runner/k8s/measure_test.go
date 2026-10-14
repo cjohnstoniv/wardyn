@@ -6,10 +6,19 @@
 package k8s
 
 import (
+	"context"
+	"errors"
+	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/kubernetes/fake"
+	clienttesting "k8s.io/client-go/testing"
 
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -31,5 +40,47 @@ func TestMeasureCluster(t *testing.T) {
 	}
 	if got := measureCluster(nil, nil); got != (types.RunnerAmounts{}) {
 		t.Fatalf("nothing readable = %+v, want all unknown", got)
+	}
+}
+
+// Measure says which read it could not make whenever an amount is left unknown, and says nothing when
+// every amount is known.
+func TestMeasureSaysWhyAnAmountIsUnknown(t *testing.T) {
+	ctx := context.Background()
+	quota := &corev1.ResourceQuota{ObjectMeta: metav1.ObjectMeta{Name: "q", Namespace: testNamespace}, Spec: corev1.ResourceQuotaSpec{Hard: corev1.ResourceList{
+		corev1.ResourceRequestsCPU: resource.MustParse("8"), corev1.ResourceRequestsMemory: resource.MustParse("16Gi"),
+		corev1.ResourceRequestsEphemeralStorage: resource.MustParse("100Gi")}}}
+	forbid := func(resource string) func(clienttesting.Action) (bool, runtime.Object, error) {
+		return func(clienttesting.Action) (bool, runtime.Object, error) {
+			return true, nil, apierrors.NewForbidden(schema.GroupResource{Resource: resource}, "", errors.New("no list"))
+		}
+	}
+	for name, tc := range map[string]struct {
+		cfg    Config
+		setup  func(*fake.Clientset)
+		want   string // a part of the reason; empty: no error
+		wantMi int64  // MemoryMiB measured with it
+	}{
+		"quota list forbidden, nodes off": {cfg: Config{}, setup: func(cs *fake.Clientset) { cs.PrependReactor("list", "resourcequotas", forbid("resourcequotas")) },
+			want: "ResourceQuota list in " + testNamespace + ": "},
+		"no quota, nodes off": {cfg: Config{}, setup: func(*fake.Clientset) {},
+			want: "no ResourceQuota in " + testNamespace + " and k8s.readNodes is off"},
+		"no quota, node list forbidden": {cfg: Config{ReadNodes: true}, setup: func(cs *fake.Clientset) { cs.PrependReactor("list", "nodes", forbid("nodes")) },
+			want: "node list: forbidden"},
+		"a quota that sets everything": {cfg: Config{}, setup: func(cs *fake.Clientset) { seed(t, cs, quota) }, wantMi: 16 * 1024},
+	} {
+		t.Run(name, func(t *testing.T) {
+			d, cs := newTestDriver(t, tc.cfg)
+			tc.setup(cs)
+			m, err := d.Measure(ctx)
+			switch {
+			case tc.want == "" && err != nil:
+				t.Fatalf("Measure = %+v, %v; want no error", m, err)
+			case tc.want != "" && (err == nil || !strings.Contains(err.Error(), tc.want)):
+				t.Fatalf("Measure = %+v, %v; want an error containing %q", m, err, tc.want)
+			case m.MemoryMiB != tc.wantMi:
+				t.Fatalf("MemoryMiB = %d, want %d", m.MemoryMiB, tc.wantMi)
+			}
+		})
 	}
 }

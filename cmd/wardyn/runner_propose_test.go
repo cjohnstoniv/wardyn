@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/uuid"
+
 	sdk "github.com/cjohnstoniv/wardyn/pkg/client"
 )
 
@@ -21,6 +23,7 @@ func TestRunnerRemotePropose(t *testing.T) {
 	}
 	for name, tc := range map[string]struct {
 		reported *sdk.RunnerAmounts
+		why      string
 		freeDisk string
 		want     string // the flags, or a part of the refusal
 		refused  bool
@@ -37,12 +40,13 @@ func TestRunnerRemotePropose(t *testing.T) {
 		"a host past 128 CPUs: Runs at once is the remote-hosted ceiling's, not a self-hosted runner's 64": {
 			reported: amounts(300000, 1048576, 2097152),
 			want:     "--max-runs 150 --total-cpu 150 --total-memory 512 --total-disk 1024 --per-run-cpu 1 --per-run-memory 3 --per-run-disk 6"},
-		"no free disk reported and none given": {reported: amounts(32000, 36075, 0), want: "--free-disk", refused: true},
-		"nothing reported at all":              {want: "no CPU or memory", refused: true},
-		"no memory reported":                   {reported: amounts(4000, 0, 0), freeDisk: "100", want: "no CPU or memory", refused: true},
+		"no free disk reported and none given":       {reported: amounts(32000, 36075, 0), want: "--free-disk", refused: true},
+		"nothing reported at all":                    {want: "no CPU or memory", refused: true},
+		"nothing reported, with the server's reason": {why: "no ResourceQuota in runs and k8s.readNodes is off", want: "(no ResourceQuota in runs and k8s.readNodes is off)", refused: true},
+		"no memory reported":                         {reported: amounts(4000, 0, 0), freeDisk: "100", want: "no CPU or memory", refused: true},
 	} {
 		t.Run(name, func(t *testing.T) {
-			view := sdk.RemoteRunnerView{RemoteRunner: sdk.RemoteRunner{ID: "docker", Name: "Docker host", Revision: 1}, Usage: sdk.RunnerUsage{Reported: tc.reported}}
+			view := sdk.RemoteRunnerView{RemoteRunner: sdk.RemoteRunner{ID: "docker", Name: "Docker host", Revision: 1}, Usage: sdk.RunnerUsage{Reported: tc.reported, ReportedWhy: tc.why}}
 			srv := newCmdServer(t, http.StatusOK, view)
 			args := []string{"runner", "remote", "propose", "docker", "--url", srv.URL, "--token", "t"}
 			if tc.freeDisk != "" {
@@ -65,7 +69,7 @@ func TestRunnerRemotePropose(t *testing.T) {
 // What propose prints is what `wardyn runner set` takes: the flags are accepted for a runner with no
 // limits yet, and send the proposed set.
 func TestRunnerSetTakesTheProposedFlags(t *testing.T) {
-	flags, err := proposedLimitFlags(&sdk.RunnerAmounts{CPUMillis: 32000, MemoryMiB: 36075}, 100)
+	flags, err := proposedLimitFlags(&sdk.RunnerAmounts{CPUMillis: 32000, MemoryMiB: 36075}, "", 100)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -89,5 +93,19 @@ func TestRunnerRemoteListNoLimits(t *testing.T) {
 	out, err := execCmdCapture(t, "runner", "remote", "list", "--no-limits", "--url", srv.URL, "--token", "t")
 	if err != nil || !strings.Contains(out, "docker") || strings.Contains(out, "k8s") {
 		t.Fatalf("list --no-limits = %v\n%s\nwant the Docker host alone", err, out)
+	}
+}
+
+// `wardyn runner list --no-limits` keeps only the self-hosted runners that take no run until limits are
+// set, and skips the remote-hosted section (`wardyn runner remote list --no-limits` is that list).
+func TestRunnerListNoLimits(t *testing.T) {
+	set := sdk.RunnerView{ID: uuid.New(), Name: "has-limits", State: "claimed", Limits: &sdk.RunnerLimits{RunsAtOnce: 4}}
+	unset := sdk.RunnerView{ID: uuid.New(), Name: "no-limits-yet", State: "claimed"}
+	srv := newCmdServer(t, http.StatusOK, []sdk.RunnerView{set, unset})
+	for _, args := range [][]string{{"runner", "list", "--no-limits"}, {"runner", "list", "--all", "--no-limits"}} {
+		out, err := execCmdCapture(t, append(args, "--url", srv.URL, "--token", "t")...)
+		if err != nil || !strings.Contains(out, "no-limits-yet") || strings.Contains(out, "has-limits") {
+			t.Fatalf("%v = %v\n%s\nwant the runner with no limits alone", args, err, out)
+		}
 	}
 }

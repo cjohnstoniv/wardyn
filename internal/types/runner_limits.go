@@ -122,11 +122,12 @@ type RunnerTally struct {
 // every pool and person: what placement counts. Available is the limits' total less InUse, and all
 // zero while the runner is offline or declares no limits. DiskCapped is false where the runner cannot
 // cap a run's disk, so its disk limits are counted, never enforced. Reported is what the runner last
-// said it has, never a limit.
+// said it has, never a limit. ReportedWhy, when set, is why some of it could not be measured.
 type RunnerUsage struct {
-	Online     bool           `json:"online"`
-	InUse      RunnerTally    `json:"in_use"`
-	Available  RunnerTally    `json:"available"`
-	DiskCapped bool           `json:"disk_capped"`
-	Reported   *RunnerAmounts `json:"reported,omitempty"`
+	Online      bool           `json:"online"`
+	InUse       RunnerTally    `json:"in_use"`
+	Available   RunnerTally    `json:"available"`
+	DiskCapped  bool           `json:"disk_capped"`
+	Reported    *RunnerAmounts `json:"reported,omitempty"`
+	ReportedWhy string         `json:"reported_why,omitempty"`
 }

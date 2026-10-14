@@ -237,8 +237,9 @@ func setPeoplePools(cmd *cobra.Command, c *sdk.Client, ref runnerRef, arg string
 // `wardyn runner set` takes: what the server proposes for a remote-hosted runner at boot
 // (types.ProposeRunnerLimits, Runs at once half its CPUs up to types.RemoteRunnerMaxRunsCeiling), in
 // whole GB. freeDiskGB, when given, is the runner's free disk in place
-// of its report. An amount nobody measured is an error, never a guess.
-func proposedLimitFlags(reported *sdk.RunnerAmounts, freeDiskGB int64) (string, error) {
+// of its report. An amount nobody measured is an error, never a guess; why, when the server gave one,
+// is the read it could not make.
+func proposedLimitFlags(reported *sdk.RunnerAmounts, why string, freeDiskGB int64) (string, error) {
 	var m sdk.RunnerAmounts
 	if reported != nil {
 		m = *reported
@@ -248,7 +249,10 @@ func proposedLimitFlags(reported *sdk.RunnerAmounts, freeDiskGB int64) (string, 
 	}
 	switch {
 	case m.CPUMillis <= 0 || m.MemoryMiB <= 0:
-		return "", errors.New("the runner reports no CPU or memory to propose from: set its limits with `wardyn runner set`")
+		if why != "" {
+			why = " (" + why + ")"
+		}
+		return "", fmt.Errorf("the runner reports no CPU or memory to propose from%s: set its limits with `wardyn runner set`", why)
 	case m.DiskMiB <= 0:
 		return "", errors.New("the runner does not report its free disk: pass --free-disk with the GB free for runs on its host")
 	}
