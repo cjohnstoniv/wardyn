@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -240,6 +241,20 @@ func TestPG_QueueAFullPoolWaitsHoldingNothing(t *testing.T) {
 	startRows := e.audits(started.ID, "run.queue.start")
 	if len(startRows) != 1 || startRows[0].Outcome != "success" || queueAuditData(t, startRows[0])["jti"] == "" {
 		t.Errorf("run.queue.start rows = %+v; want one success carrying the jti", startRows)
+	}
+}
+
+// A waiting run is told, on its 201, that the runners it could land on cannot deliver its managed
+// settings, as a run that starts at once is.
+func TestPG_QueuedLaunchSaysItsManagedSettingsAreUndelivered(t *testing.T) {
+	e := newQueueEnv(t)
+	pool := e.cappedPool("Plain", 1)
+	e.occupy(pool)
+	e.runner.noManagedFiles = true
+	out := e.queuedLaunch(nil, pool, `,"tools":[{"id":"claude-code","kind":"harness","default_effect":"hold"}]`)
+	const want = "managed settings for tool approvals on hold are not delivered"
+	if all := strings.Join(out.Warnings, "\n"); !strings.Contains(all, want) {
+		t.Errorf("the queued 201 does not say %q; warnings were:\n%s", want, all)
 	}
 }
 

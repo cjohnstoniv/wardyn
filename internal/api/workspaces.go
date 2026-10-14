@@ -232,6 +232,10 @@ func validateWorkspaceSource(src types.WorkspaceSource, adoServerHosts []string)
 		if src.Ref != "" && !repoFieldSafe(src.Ref) {
 			return fmt.Sprintf(repoField400Charset, "ref")
 		}
+		// The clone's target rides the same record; a local or scratch path may carry a space.
+		if !repoFieldSafe(src.Target) {
+			return fmt.Sprintf(repoField400Charset, "target")
+		}
 		// Write-door half of the traversal guard — see validateSourceWrite.
 		if !repoLocatorPathSafe(src.Source, adoServerHosts) {
 			return fmt.Sprintf(repo400LocatorShape, "source")

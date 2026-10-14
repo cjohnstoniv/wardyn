@@ -864,3 +864,25 @@ func TestMintedPAT_SweepKeepsAnExpiredRowsLastError(t *testing.T) {
 		t.Fatalf("closed with %+v, want reason %q keeping error %q", last, adoPATRevokeExpired, live[0].LastError)
 	}
 }
+
+// A run PAT Azure DevOps cannot revoke yet is the run PAT sweep's to retry: the run's revoke cascade
+// records it and still finishes, so the runner exit tail is not run again on every sweep for it.
+func TestMintedPAT_APendingRevokeLeavesTheCascadeDone(t *testing.T) {
+	fx := newADOPATFixture(t)
+	fx.ok(t, "dev.azure.com", nil)
+	fx.pats.revokeErr = &adoPATError{Status: http.StatusServiceUnavailable}
+	if err := fx.srv.revokeRunCascade(context.Background(), fx.run.ID); err != nil {
+		t.Fatalf("the cascade with only a run PAT revoke pending = %v, want it done", err)
+	}
+	if len(fx.st.unrevoked(t)) == 0 {
+		t.Fatal("the run PAT was marked revoked though Azure DevOps refused; the case is not exercised")
+	}
+	found := false
+	for _, ev := range fx.audit.find("run.revoke") {
+		var d map[string]any
+		found = found || (json.Unmarshal(ev.Data, &d) == nil && d["pat_revoke_pending"] != nil)
+	}
+	if !found {
+		t.Error("no run.revoke row records the pending run PAT revoke")
+	}
+}

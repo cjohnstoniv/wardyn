@@ -187,8 +187,8 @@ async function setUpAtNextEntry(user: ReturnType<typeof userEvent.setup>) {
 // "old" value, masking the delta it's supposed to compute. The native
 // History.prototype method sidesteps that patch, the same way the browser's
 // C++ implementation does.
-function simulateBrowserPop(idx: number): void {
-  History.prototype.replaceState.call(window.history, { idx }, "", window.location.pathname);
+function simulateBrowserPop(idx: number, url: string = window.location.pathname): void {
+  History.prototype.replaceState.call(window.history, { idx }, "", url);
   act(() => {
     window.dispatchEvent(new PopStateEvent("popstate"));
   });
@@ -249,6 +249,34 @@ describe("UnsavedGuardProvider — browser Back/Forward (popstate)", () => {
     expect(goSpy).toHaveBeenNthCalledWith(1, 1); // restore
     expect(goSpy).toHaveBeenNthCalledWith(2, -1); // redo the original Back
 
+    unregister();
+  });
+
+  it("a dirty editor whose draft lives on where Back lands lets it through — no restore, no dialog", async () => {
+    const user = userEvent.setup();
+    await setUpAtNextEntry(user);
+    const goSpy = vi.spyOn(window.history, "go").mockImplementation(() => {});
+    const unregister = registerUnsaved("in-form-back", () => "unsaved text", (path) => path === "/next");
+
+    const poppedTo = (window.history.state as { idx: number }).idx - 1;
+    simulateBrowserPop(poppedTo);
+
+    expect(goSpy).not.toHaveBeenCalled();
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    unregister();
+  });
+
+  it("asks a dirty editor about where Back lands by path and query, so a query its draft lives on lets it through", async () => {
+    const user = userEvent.setup();
+    await setUpAtNextEntry(user);
+    const goSpy = vi.spyOn(window.history, "go").mockImplementation(() => {});
+    const unregister = registerUnsaved("query-back", () => "unsaved text", (path) => path === "/next?seed=a");
+
+    const poppedTo = (window.history.state as { idx: number }).idx - 1;
+    simulateBrowserPop(poppedTo, "/next?seed=a");
+
+    expect(goSpy).not.toHaveBeenCalled();
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
     unregister();
   });
 

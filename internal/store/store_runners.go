@@ -185,9 +185,9 @@ type RunnerKilledRun struct {
 }
 
 // RevokeRunner revokes a runner in one transaction: the runner row with who
-// revoked it and why, every non-terminal run bound to it ended KILLED (the
-// non-terminal runs, queued ones included), and every unsettled pending action of
-// it settled 'revoked'. Rows are kept as evidence. The fence lifts only
+// revoked it and why, every run holding a slot on it ended KILLED, and every
+// unsettled pending action of it settled 'revoked'. A QUEUED run holds no slot
+// and is not ended here: the caller ends the ones waiting for this runner alone. Rows are kept as evidence. The fence lifts only
 // because the run is terminal in the same commit, never before. Already
 // revoked or unknown is ErrNotFound, so a second call ends nothing. Lock order
 // is runner, then runs by id, then actions, as everywhere else.

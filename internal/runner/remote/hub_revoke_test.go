@@ -8,6 +8,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"errors"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -183,4 +184,68 @@ func TestHubRevokeEndsASessionWithAStalledWrite(t *testing.T) {
 		t.Fatal("Revoke waited behind a stalled write past its one-second bound")
 	}
 	awaitValue(t, ctx, hubDone)
+}
+
+// A runner whose owner is deactivated is not revoked: the stored-row recheck
+// ends its live session with GOAWAY, a new connection is refused before
+// admission, and the first connection after reactivation is admitted again.
+func TestHubInactiveOwnerEndsTheSessionUntilReactivated(t *testing.T) {
+	recheck := storedRowRecheck
+	storedRowRecheck = 20 * time.Millisecond
+	t.Cleanup(func() { storedRowRecheck = recheck })
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	pub, key, _ := ed25519.GenerateKey(rand.Reader)
+	row := types.Runner{ID: uuid.New(), PublicKey: pub, State: types.RunnerClaimed, OrgURLSHA256: federation.OrgURLSHA256("https://org.example")}
+	link := &Link{}
+	sub := New(row.ID.String(), link, Options{})
+	var inactive atomic.Bool
+	var admitted atomic.Int32
+	hub := NewHub(ctx, HubConfig{OrgURL: "https://org.example", Lookup: func(context.Context, uuid.UUID) (types.Runner, error) { return row, nil },
+		Inactive: func(context.Context, types.Runner) (bool, error) { return inactive.Load(), nil },
+		Admit: func(context.Context, types.Runner) (Admission, error) {
+			admitted.Add(1)
+			return Admission{Substrate: sub, Link: link,
+				Pending:        func(context.Context) ([]runnerwire.PendingAction, error) { return nil, nil },
+				BeginInventory: func(context.Context, string) error { return nil },
+				StatePage:      func(context.Context, string, runnerwire.StatePage) error { return nil },
+				Event:          func(context.Context, runnerwire.Event) error { return nil },
+			}, nil
+		},
+	})
+	defer hub.Close()
+	// connect runs one fresh connection to its end and reports how it ended.
+	connect := func(online chan *runnerwire.Peer) <-chan error {
+		client, err := runnerwire.NewClient(runnerwire.ClientConfig{OrgURL: "https://org.example", RunnerID: row.ID.String(), PrivateKey: key,
+			Hooks: sessionHooks(online, make(chan bool, 1)),
+			Dial: func(context.Context) (runnerwire.Conn, error) {
+				org, run := runnerwire.Loopback()
+				go func() { _ = hub.Serve(ctx, org, row.ID) }()
+				return run, nil
+			},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		done := make(chan error, 1)
+		go func() { done <- client.Connect(ctx) }()
+		return done
+	}
+
+	online := make(chan *runnerwire.Peer, 1)
+	live := connect(online)
+	awaitValue(t, ctx, online)
+	waitOnline(t, ctx, link)
+	inactive.Store(true)
+	if err := awaitValue(t, ctx, live); !errors.Is(err, runnerwire.ErrGoaway) || link.Online() {
+		t.Fatalf("live session after the owner's deactivation: %v, online=%v", err, link.Online())
+	}
+	if err := awaitValue(t, ctx, connect(make(chan *runnerwire.Peer, 1))); !errors.Is(err, runnerwire.ErrGoaway) || !strings.Contains(err.Error(), reasonOwnerInactive) || admitted.Load() != 1 {
+		t.Fatalf("connection while the owner is deactivated: %v, admissions=%d", err, admitted.Load())
+	}
+	inactive.Store(false)
+	again := make(chan *runnerwire.Peer, 1)
+	connect(again)
+	awaitValue(t, ctx, again)
+	waitOnline(t, ctx, link)
 }

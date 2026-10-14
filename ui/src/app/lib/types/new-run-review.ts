@@ -23,15 +23,6 @@ export interface PoolRunnerFact {
   online: boolean;
 }
 
-/** Seam: DS-3 §3.3. What the resolved pool's runners do with the main drive's size. */
-export interface MainDriveFacts {
-  enforcement: "filesystem" | "eviction" | "none" | "unknown";
-}
-
-/** The twin landed (new-run-contract.ts); only the pool's facts (DS-3 §3.3) are still a seam. */
-export interface MainDriveApplied extends RealMainDriveApplied {
-  facts?: MainDriveFacts;
-}
 
 /** Seam: DS-5. The resolved pool's barrier options; the default says whether the organisation or the server picked it. */
 export interface BarrierOptionFact {
@@ -46,5 +37,6 @@ export type ReviewPoolChoice = RunnerPoolChoice & { my_runners?: PoolRunnerFact[
 export type ReviewPreflight = Omit<PreflightResult, "runner_pools" > & {
   runner_pools?: ReviewPoolChoice[];
   barrier_options?: BarrierOptionFact[];
-  main_drive?: MainDriveApplied;
+  /** What the run gets. What the pool's runners do with that size is on the pool: `runner_pools[].main_drive`. */
+  main_drive?: RealMainDriveApplied;
 };

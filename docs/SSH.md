@@ -630,7 +630,9 @@ wardyn run ssh <id> --json                                   # -> {"host","port"
 - **Auth.** Registered public keys only — no password, no keyboard-interactive.
 - `MaxAuthTries` is bounded per connection; an unknown key or a malformed
   username (anything that isn't a run id) is rejected and audited (`ssh.authenticate`,
-  `outcome=failure`), so a scan against the gateway leaves a trail.
+  `outcome=failure`). These unknown-actor refusals share the `auth.fail` rate bound (burst 5,
+  1/s) and a drop is counted in `wardyn_auth_failed_suppressed_total`; a refusal that names a
+  registered key's person is recorded at a per-key bounded rate (burst 5, 1/s).
 - **Owner-only, and the admin carve-out is a bounded-stale stamp — weaker than
   the web terminal's, but no longer unboundedly so.**
   - SSH authorization is
@@ -742,7 +744,10 @@ wardyn run ssh <id> --json                                   # -> {"host","port"
   - a small, documented cap on concurrent SSH channels — `session` (shell/
     exec/sftp) AND `direct-tcpip` (`-L` forwards) draw from the SAME per-run
     counter. So one run cannot exhaust the daemon's own resources by opening
-    unbounded parallel shells OR unbounded forwards.
+    unbounded parallel shells OR unbounded forwards;
+  - a separate bound on live terminal sessions: eight per run on each replica,
+    web terminals and SSH shells together. A ninth is refused and audited as a
+    `session.attach` failure.
 - **Idle auto-stop.** A shell, a running `exec`, an open sftp subsystem, and a
   held `-L` forward ALL reset the run's idle clock when they open and every 30
   seconds while they are open.
@@ -768,7 +773,7 @@ wardyn run ssh <id> --json                                   # -> {"host","port"
   `TERM`/`LANG`/`LC_*` from the client's environment into the exec — nothing
   else the client's shell happens to export reaches the sandbox.
 - **Audit actions**:
-  - `ssh.authenticate` (every attempt, including failures),
+  - `ssh.authenticate` (every attempt; unknown-actor refusals are rate-bound),
     `session.attach` with `transport:ssh` in its data (the shell path, same
     action name the browser terminal uses, so both show up together in a run's
     timeline), `ssh.exec` (`argv`, `exit`), `ssh.forward` (`port`, `bytes`).

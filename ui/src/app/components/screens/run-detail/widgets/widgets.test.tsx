@@ -20,6 +20,13 @@ vi.mock("../../../../lib/api/runs", () => ({
 const healthMock = vi.fn();
 vi.mock("../../../../lib/api/health", () => ({ health: { health: (...a: unknown[]) => healthMock(...a) } }));
 
+// The Sync rows read their audit rows by action too; every other suite here has none.
+const listAuditMock = vi.fn();
+vi.mock("../../../../lib/api/audit", async (importOriginal) => {
+  const m = await importOriginal<Record<string, unknown>>();
+  return { ...m, audit: { ...(m.audit as object), listAudit: (...a: unknown[]) => listAuditMock(...a) } };
+});
+
 import { HttpError } from "../../../../lib/api/core";
 import { fmtBytes } from "../../../../lib/format";
 import { RUN_COCKPIT } from "../../../wardyn/copy";
@@ -36,6 +43,7 @@ beforeEach(() => {
   getFilesMock.mockReset();
   getResourcesMock.mockReset();
   healthMock.mockReset().mockResolvedValue({ status: "ok" });
+  listAuditMock.mockReset().mockResolvedValue([]);
 });
 
 describe("SandboxWidget", () => {
@@ -397,6 +405,18 @@ describe("IdentityWidget: Sync rows", () => {
     expect(screen.getAllByText("/w")).toHaveLength(1);
     expect(screen.getByText(/^Open since /)).toBeInTheDocument();
     expect(screen.getByText(`${fmtBytes(10)} to the sandbox · ${fmtBytes(20)} from the sandbox`)).toBeInTheDocument();
+  });
+
+  it("reads the sync rows by action, so syncs past the page trail's row cap still show and never 'nothing synced'", async () => {
+    healthMock.mockResolvedValue({ status: "ok", ssh: { enabled: true } });
+    listAuditMock.mockImplementation((_id: string, f?: { action?: string }) =>
+      Promise.resolve(f?.action === "ssh.sync.transfer" ? [transfer("/workspace/app", 4_000_000, 1000)] : []),
+    );
+    // The page's trail is full of other rows; the sync row sits past its cap.
+    renderRows({}, [{ ...transfer("/x", 0, 0), id: "egress", action: "egress.allow" }]);
+    expect(await screen.findByText(`${fmtBytes(4_000_000)} to the sandbox · ${fmtBytes(1000)} from the sandbox`)).toBeInTheDocument();
+    expect(listAuditMock).toHaveBeenCalledWith("run-1", { action: "ssh.sync.transfer" });
+    expect(screen.queryByText("Nothing synced yet.")).not.toBeInTheDocument();
   });
 
   it("an ended session's error is shown verbatim under its directory", () => {

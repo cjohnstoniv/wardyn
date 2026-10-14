@@ -160,39 +160,58 @@ func headersOf(data []byte) string {
 	return head
 }
 
+// peelResult says how peel ended.
+type peelResult int
+
+const (
+	peeled     peelResult = iota // a commit in the pack
+	peelAbsent                   // an object on the way is not in the pack
+	peelOther                    // present, but not readable as a commit
+)
+
 // peel follows tag objects down to the commit they name, and reports whether
-// that commit is in the pack.
-func (i *index) peel(oid string) (string, bool) {
+// that commit is in the pack. Only an object the pack lacks is peelAbsent; a
+// wrong type, a malformed tag or too long a chain is peelOther.
+func (i *index) peel(oid string) (string, peelResult) {
 	for range maxPeel {
 		o, ok := i.byOID[oid]
 		if !ok {
-			return "", false
+			return "", peelAbsent
 		}
 		if o.typ == objCommit {
-			return oid, true
+			return oid, peeled
 		}
 		if o.typ != objTag {
-			return "", false
+			return "", peelOther
 		}
 		if oid, ok = tagTarget(o.data, i.format.size); !ok {
-			return "", false
+			return "", peelOther
 		}
 	}
-	return "", false
+	return "", peelOther
 }
 
 // coverCommands refuses a request whose ref updates the pack does not
 // account for (a push creating a ref at an object the receiving side already
 // holds sends an empty pack, so nothing was read about what it now points at).
+// A target the pack lacks is gathered across every command into one
+// MissingObjectError; a target that is there but not a commit is refused at once.
 func (i *index) coverCommands(cmds []Command) error {
+	var missing []string
 	for _, c := range cmds {
 		if isZeroOID(c.New) {
 			continue
 		}
-		if _, ok := i.peel(c.New); !ok {
+		switch _, r := i.peel(c.New); r {
+		case peelAbsent:
+			missing = append(missing, c.Ref)
+		case peelOther:
 			return fmt.Errorf("%w: %s is set to %s, which the pack does not carry as a commit",
 				ErrUninspectable, c.Ref, c.New)
 		}
+	}
+	if len(missing) > 0 {
+		return &MissingObjectError{Refs: missing}
 	}
 	return nil
 }

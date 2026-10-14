@@ -9,6 +9,7 @@
 // sandbox); sessions open now are `RunDetail.sync.open`, read on the replica that answers. Plain sftp
 // transfers are their own row. A local run has no Sync rows: its disk link is the bind through its runner.
 import * as React from "react";
+import { audit as auditApi } from "../../../../lib/api/audit";
 import { health as healthApi } from "../../../../lib/api/health";
 import { absoluteTime, fmtBytes, shortTime } from "../../../../lib/format";
 import type { AuditEvent, RunDetail } from "../../../../lib/types";
@@ -82,17 +83,44 @@ function useSshOn(enabled: boolean): boolean {
   return on;
 }
 
+/**
+ * The run's sync rows read by action, as the page reads its endings: the page's trail stops at its row cap,
+ * so a long run's syncs fall past it. Read again when a session ends (it leaves `sync.open` as its row is
+ * written). Null until read, and after a failed read, so the empty row never speaks off a partial trail.
+ */
+function useSyncAudit(run: RunDetail, enabled: boolean): AuditEvent[] | null {
+  const [rows, setRows] = React.useState<AuditEvent[] | null>(null);
+  const openKey = (run.sync?.open ?? []).map((o) => `${o.dir}@${o.opened_at}`).join("|");
+  React.useEffect(() => {
+    if (!enabled) return;
+    let alive = true;
+    Promise.all([
+      auditApi.listAudit(run.id, { action: "ssh.sync.transfer" }),
+      auditApi.listAudit(run.id, { action: "ssh.sftp.transfer" }),
+    ])
+      .then(([sync, sftp]) => alive && setRows([...sync, ...sftp]))
+      .catch(() => alive && setRows(null));
+    return () => {
+      alive = false;
+    };
+  }, [enabled, run.id, run.state, openKey]);
+  return rows;
+}
+
 export function SyncRows({ run, audit, onGoAudit }: { run: RunDetail; audit: AuditEvent[]; onGoAudit: () => void }) {
   const local = run.placement === "local";
   const live = run.state === "RUNNING";
   const sshOn = useSshOn(!local && live);
+  const scoped = useSyncAudit(run, !local);
   if (local) return null;
 
-  const dirs = syncDirs(audit, run.sync?.open);
-  const sftp = sftpTotals(audit);
+  const seen = new Set(audit.map((e) => e.id));
+  const rows = [...audit, ...(scoped ?? []).filter((e) => !seen.has(e.id))];
+  const dirs = syncDirs(rows, run.sync?.open);
+  const sftp = sftpTotals(rows);
   const shown = dirs.slice(0, MAX_DIRS);
   const hidden = dirs.length - shown.length;
-  const nothing = dirs.length === 0 && live && sshOn;
+  const nothing = dirs.length === 0 && live && sshOn && scoped !== null;
   if (dirs.length === 0 && !sftp && !nothing) return null;
 
   return (
