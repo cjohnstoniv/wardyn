@@ -139,3 +139,9 @@ ad13bba76e71e8d91c492b586994d61a92c9b755:internal/api/template_write_test.go:git
 # goldenGoCacheKey, the 64-hex sha256 CacheKey() of the go golden profile — a
 # content hash, not a secret. Commit-scoped to the commit that introduced it.
 f97122834de2de0a730e7286b38bd4bd65520227:internal/workspacescan/golden_test.go:generic-api-key:75
+# The findings accepted above, on the re-signed copies of the same commits (v0.9.0).
+1623361014bcdb5daa4d15712665c04b0744fc4b:internal/api/template_write_test.go:github-pat:376
+2a286657c5b630914191deb906a57237ee2f716d:internal/api/template_pg_test.go:github-pat:26
+2a286657c5b630914191deb906a57237ee2f716d:internal/api/template_write_test.go:github-pat:173
+56f6ae02637b1ea212fc5bdc9958f04dbe87a81f:internal/workspacescan/golden_test.go:generic-api-key:75
+b822c57c208258f042ff991ef2e973947d66ce2f:internal/api/launch_intent_test.go:github-pat:74
