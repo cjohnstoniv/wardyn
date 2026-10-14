@@ -57,3 +57,63 @@ func TestProxyExtraHostsMapOnlyTheProxy(t *testing.T) {
 		t.Fatal("an agent was left behind by a refused create")
 	}
 }
+
+// TestRelayHostsEntryTarget: the hosts entry maps the control-plane name to host-gateway
+// by default and to the configured literal IP when ControlPlaneHostTarget is set.
+func TestRelayHostsEntryTarget(t *testing.T) {
+	cfg := []byte(`{"control_plane_url":"https://wardynd.internal:8443"}`)
+	for _, tc := range []struct{ target, want string }{
+		{"", "wardynd.internal:host-gateway"},
+		{"host-gateway", "wardynd.internal:host-gateway"},
+		{"192.168.5.2", "wardynd.internal:192.168.5.2"},
+	} {
+		d := newTestDriver(newFakeDocker())
+		d.cfg.ControlPlaneRelay = func(*url.URL) error { return nil }
+		d.cfg.ControlPlaneHostTarget = tc.target
+		got, err := d.relayHostsEntry(cfg)
+		if err != nil || got != tc.want {
+			t.Fatalf("target %q: entry %q, %v; want %q", tc.target, got, err, tc.want)
+		}
+	}
+}
+
+// TestProxyExtraHostsCarryTheConfiguredTarget: a created proxy gets the configured target,
+// the host-mode host.docker.internal alias is untouched, and the agent still gets neither.
+func TestProxyExtraHostsCarryTheConfiguredTarget(t *testing.T) {
+	f := newFakeDocker()
+	f.images["busybox:latest"] = true
+	d := newTestDriver(f)
+	d.cfg.ControlPlaneRelay = func(*url.URL) error { return nil }
+	d.cfg.ControlPlaneHostTarget = "192.168.5.2"
+	spec := testSpec()
+	spec.ProxyConfig.ControlPlaneURL = "https://wardynd.internal:8443"
+	if _, err := d.CreateSandbox(context.Background(), spec); err != nil {
+		t.Fatal(err)
+	}
+	proxy, agent := f.containers[proxyContainerName(spec.RunID)], f.containers[agentContainerName(spec.RunID)]
+	if !slices.Contains(proxy.host.ExtraHosts, "wardynd.internal:192.168.5.2") ||
+		!slices.Contains(proxy.host.ExtraHosts, "host.docker.internal:host-gateway") {
+		t.Fatalf("proxy hosts %v", proxy.host.ExtraHosts)
+	}
+	for _, h := range agent.host.ExtraHosts {
+		if strings.HasPrefix(h, "wardynd.internal:") || strings.Contains(h, "192.168.5.2") {
+			t.Fatalf("the agent's hosts map %q", h)
+		}
+	}
+}
+
+func TestConfigValidatesControlPlaneHostTarget(t *testing.T) {
+	for _, ok := range []string{"", "host-gateway", "192.168.5.2", "10.0.2.2", "172.16.0.1"} {
+		if err := (&Config{ControlPlaneHostTarget: ok}).validate(); err != nil {
+			t.Errorf("%q refused: %v", ok, err)
+		}
+	}
+	for _, bad := range []string{"127.0.0.1", "::1", "0.0.0.0", "::", "224.0.0.1", "ff02::1", "localhost", "host.docker.internal", "192.168.5", "1.2.3.4:80", " "} {
+		if err := (&Config{ControlPlaneHostTarget: bad}).validate(); err == nil {
+			t.Errorf("%q accepted", bad)
+		}
+	}
+	if _, err := New(Config{ControlPlaneHostTarget: "127.0.0.1"}); err == nil {
+		t.Error("New accepted a loopback target")
+	}
+}

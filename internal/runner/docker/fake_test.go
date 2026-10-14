@@ -240,6 +240,12 @@ type fakeDocker struct {
 	// Zero (readable) unless a test overrides it.
 	probeExitCode int64
 
+	// waitHangs makes ContainerWait answer nothing until the caller's ctx ends, and
+	// pullKeepsNothing makes ImagePull succeed without storing the image (the daemon
+	// dropping an in-stream pull error); both script ProbeRelay's failure shapes.
+	waitHangs        bool
+	pullKeepsNothing bool
+
 	// exitAfterInspects, keyed by container name, makes ContainerInspect report
 	// Running for that many calls and then flip the container to exited(1) on
 	// every call after — the shape of a real wardyn-proxy that Docker already
@@ -370,7 +376,9 @@ func (f *fakeDocker) ImagePull(ctx context.Context, ref string, _ client.ImagePu
 	if f.failImagePull {
 		return nil, fmt.Errorf("registry: denied")
 	}
-	f.images[ref] = true
+	if !f.pullKeepsNothing {
+		f.images[ref] = true
+	}
 	return fakePullResponse{io.NopCloser(strings.NewReader(`{"status":"pulled"}`))}, nil
 }
 
@@ -637,7 +645,7 @@ func (f *fakeDocker) ContainerStart(ctx context.Context, id string, _ client.Con
 	if c == nil {
 		return client.ContainerStartResult{}, fakeNotFound{msg: "no such container: " + id}
 	}
-	if strings.HasPrefix(c.name, "wardyn-drive-probe-") {
+	if strings.HasPrefix(c.name, "wardyn-drive-probe-") || strings.HasPrefix(c.name, "wardyn-relay-probe-") {
 		// No real command interpreter here to run the probe's `test -r/-x`
 		// against a bind mount — model it as already exited with the
 		// scripted code, the same "immediate" shape a real one-shot process
@@ -841,6 +849,10 @@ func (f *fakeDocker) ContainerWait(ctx context.Context, id string, _ client.Cont
 	statusCh := make(chan container.WaitResponse, 1)
 	errCh := make(chan error, 1)
 	f.mu.Lock()
+	if f.waitHangs {
+		f.mu.Unlock()
+		return client.ContainerWaitResult{Result: statusCh, Error: errCh}
+	}
 	if f.waitErrs > 0 {
 		f.waitErrs--
 		f.mu.Unlock()
