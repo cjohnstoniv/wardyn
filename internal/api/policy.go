@@ -779,6 +779,14 @@ func validatePolicyWorkspaces(spec types.RunPolicySpec) error {
 		seenTargets[wm.Target] = true
 	}
 	for i, wr := range spec.WorkspaceRepos {
+		// The locator, ref and an explicit target flow into the clone record and git's
+		// argv (repoFieldSafe), checked here whether or not a target is named; a
+		// mount path is not one of them and may carry a space.
+		for _, f := range []struct{ name, value string }{{"repo", wr.Repo}, {"ref", wr.Ref}, {"target", wr.Target}} {
+			if !repoFieldSafe(f.value) {
+				return fmt.Errorf("workspace_repos[%d]: "+repoField400Charset, i, f.name)
+			}
+		}
 		if wr.Target == "" {
 			// No explicit dest: the default (~/work/<name> convention) is derived
 			// by a LATER wave (WARDYN_REPOS); nothing to collide-check here yet.

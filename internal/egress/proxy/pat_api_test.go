@@ -645,3 +645,20 @@ func TestPATAPIDoorSaysWhenTheBodyIsNotInspected(t *testing.T) {
 		t.Fatalf("allow row must carry the uninspected_channel skip, got %+v", d)
 	}
 }
+
+// A forge reached by an IPv6 literal on its default port is forwarded to: the
+// door's upstream URL brackets the literal, where a bare one's colons read as a
+// port and the request could not be built.
+func TestPATAPIDoorForwardsToAnIPv6LiteralHost(t *testing.T) {
+	const host = "2606:4700:4700::1111"
+	up := newPATBrokerUpstream(t, apiToken, "oauth2")
+	g := apiGrants[types.PATForgeGitLab]
+	g.GrantID, g.API, g.Forge = uuid.New(), true, types.PATForgeGitLab
+	p, _ := newPATBrokerProxy(t, map[string]PATGrant{host: g}, upstreamAddr(up.srv))
+	rec := httptest.NewRecorder()
+	p.serveMITMRequest(rec, rawAPIRequest(t, "GET", glBase+"/merge_requests", "", "", nil), host, 443)
+	if up.mu.Lock(); rec.Code != http.StatusOK || up.gitHits != 1 {
+		t.Errorf("= %d %s with %d forge hits, want 200 and 1", rec.Code, rec.Body.String(), up.gitHits)
+	}
+	up.mu.Unlock()
+}

@@ -443,7 +443,7 @@ func TestHA_RevokedRunnerOnAnotherReplicaIsToldRevoked(t *testing.T) {
 	cfg.RunnerOrgURL = admissionOrgURL
 	cfg.RunnerAuditPrepare = f.srv.cfg.RunnerAuditPrepare
 	replicaB := New(cfg)
-	if _, err := replicaB.revokeRunner(f.ctx, f.rn.ID, types.ActorHuman, "security-admin", ""); err != nil {
+	if _, _, err := replicaB.revokeRunner(f.ctx, f.rn.ID, types.ActorHuman, "security-admin", ""); err != nil {
 		t.Fatalf("revoke on B: %v", err)
 	}
 	select {

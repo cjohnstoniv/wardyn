@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"net"
 	"net/url"
 	"os"
@@ -450,6 +451,9 @@ func validateBootPosture(f *bootFlags, posture tlsPosture) error {
 	if err := validateRunOutputRetentionDays(*f.runOutputRetention); err != nil {
 		return err
 	}
+	if err := validateRecordingRetentionDays(*f.recordingRetention); err != nil {
+		return err
+	}
 	if err := validateOIDCSessionTTL(*f.oidcSessionTTL); err != nil {
 		return err
 	}
@@ -538,6 +542,19 @@ func validateRunOutputTailBytes(n int) error {
 func validateRunOutputRetentionDays(n int) error {
 	if n < 0 {
 		return fmt.Errorf("WARDYN_RUN_OUTPUT_RETENTION_DAYS is %d; it must be 0 (keep forever) or a positive number of days", n)
+	}
+	return nil
+}
+
+// maxRecordingRetentionDays is the most days whose duration fits a time.Duration (106751).
+const maxRecordingRetentionDays = int(math.MaxInt64 / int64(24*time.Hour))
+
+// validateRecordingRetentionDays refuses a WARDYN_RECORDING_RETENTION_DAYS above maxRecordingRetentionDays,
+// before the days are multiplied into a duration: a larger value wraps, to a negative window or to a short
+// one, and the retention sweep would then delete recent recordings. 0 keeps them forever.
+func validateRecordingRetentionDays(n int) error {
+	if n > maxRecordingRetentionDays {
+		return fmt.Errorf("WARDYN_RECORDING_RETENTION_DAYS is %d; it must be at most %d days (use 0 to keep recordings forever)", n, maxRecordingRetentionDays)
 	}
 	return nil
 }

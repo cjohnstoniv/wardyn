@@ -541,6 +541,37 @@ describe("Admin -> Runners remote-hosted runner", () => {
     ]);
   });
 
+  // The dialog keeps its draft from when it opened, so it saves with that revision: another admin's save in
+  // between is refused as stale, not overwritten by the 30 s re-read's revision.
+  it("a limits save names the revision the dialog opened on, sends untouched amounts exactly, and shows a stale refusal", async () => {
+    const ODD: RemoteRunnerView = { ...SHARED, limits: { ...SHARED.limits!, per_run: { cpu_millis: 1250, memory_mib: 1700, disk_mib: 102400 } } };
+    remoteListMock.mockResolvedValue([ODD]);
+    const stale = "shared-docker changed while this run was being set up. Review it and try again.";
+    remoteUpdateMock.mockRejectedValue(new HttpError(409, stale, "runner_pool_stale"));
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      const user = userEvent.setup();
+      renderScreen();
+      await user.click(await screen.findByRole("button", { name: "shared-docker" }));
+      await user.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Edit limits" }));
+      const dialog = await screen.findByRole("dialog", { name: "Limits for shared-docker" });
+      const lists = remoteListMock.mock.calls.length;
+      remoteListMock.mockResolvedValue([{ ...ODD, revision: 4 }]);
+      await act(async () => {
+        vi.advanceTimersByTime(30_000);
+      });
+      await waitFor(() => expect(remoteListMock.mock.calls.length).toBe(lists + 1));
+      setField(dialog.querySelector("#lm-rn") as HTMLInputElement, "4");
+      await user.click(within(dialog).getByRole("button", { name: "Save" }));
+      await waitFor(() => expect(remoteUpdateMock).toHaveBeenCalledTimes(1));
+      expect(remoteUpdateMock.mock.calls[0]).toEqual(["shared-docker", { revision: 3, limits: { ...ODD.limits, runs_at_once: 4 } }]);
+      expect(await within(dialog).findByText(stale)).toBeInTheDocument();
+      expect(screen.getByRole("dialog", { name: "Limits for shared-docker" })).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("a super admin makes it available to people's pools; a held change says so; a security admin reads only", async () => {
     setPeopleMock.mockResolvedValueOnce(SHARED).mockRejectedValueOnce(new PendingChangeError({ id: "chg-1" } as never));
     const user = userEvent.setup();

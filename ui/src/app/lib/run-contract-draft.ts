@@ -121,10 +121,18 @@ export const NO_ACTIVE_SECTIONS: ActiveSections = { agent: false, azureDevOps: f
  * types.PushRuleKey; push-rule-key.golden.json holds both to one table of cases).
  * The organisation is NFKC-normalised and ASCII-lowercased, and anything with
  * white space, a control or zero-width character, a trailing dot or a non-ASCII
- * character after normalisation names no entry.
+ * character after normalisation names no entry. An Azure DevOps Server
+ * collection (any Azure DevOps host but dev.azure.com) is pushRuleCollection's.
  */
 export function pushRuleKey(p: Pick<PushRuleOverride, "provider" | "org"> & { host?: string }): string {
   if (p.provider !== "github" && p.provider !== "azure_devops") return "";
+  if (p.provider === "azure_devops" && p.host) {
+    const host = canonicalPushHost(p.provider, p.host);
+    if (host !== null && host.host !== "dev.azure.com") {
+      const collection = pushRuleCollection(p.org);
+      return collection === "" ? "" : `${host.host}/${collection}`;
+    }
+  }
   const org = p.org.normalize("NFKC");
   if (org === "" || org.length > 100 || org.endsWith(".") || /[^\x21-\x7e]/.test(org)) return "";
   const lower = org.toLowerCase();
@@ -134,6 +142,23 @@ export function pushRuleKey(p: Pick<PushRuleOverride, "provider" | "org"> & { ho
   // An {org}.visualstudio.com host names its own organisation; a different one contradicts it.
   if (host.org !== "" && host.org !== lower) return "";
   return `${host.host}/${lower}`;
+}
+
+/**
+ * An Azure DevOps Server collection's canonical spelling (Go:
+ * CanonicalPushCollection): NFKC, then lower case, or "" when it names no
+ * collection. A space and letters outside ASCII are allowed; Azure DevOps
+ * Server's reserved characters, "%", a leading "_", dot or space, two dots in a
+ * row, a trailing dot or space, other white space, control, zero-width and lone
+ * surrogate characters, more than 64
+ * characters, and the two letters Go and JavaScript lower-case differently
+ * (U+0130 and U+03A3) are not.
+ */
+function pushRuleCollection(name: string): string {
+  const n = name.normalize("NFKC");
+  if (n === "" || [...n].length > 64 || /^[_ .]/.test(n) || /[. ]$/.test(n) || n.includes("..")) return "";
+  if (/[\\/:*?"<>|;#$*{},+=[\]%\u0130\u03a3\ufffd]|[\p{Cc}\p{Cf}\p{Cs}]|(?! )\p{White_Space}/u.test(n)) return "";
+  return n.toLowerCase();
 }
 
 /**
