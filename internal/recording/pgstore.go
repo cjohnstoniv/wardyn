@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"sync"
 	"time"
 
@@ -83,7 +84,9 @@ func castBufferStart(r io.Reader) int {
 //     Before it queues for the slot a save queues in its admission group
 //     (groupSaves): the run's owner on the upload route, else the run. A
 //     group so holds one place, in the slot or waiting for it, and a waiter
-//     from another group is behind one holder at most.
+//     from another group is behind one holder at most. The slot goes to its
+//     waiters in arrival order, so a save arriving as it is released never
+//     passes one already waiting.
 //   - inMemorySaveSlot: saves whose reader reports Len, so its bytes are
 //     already in memory and its read cannot stall: an attach or SSH session
 //     snapshot, buffered at its own length. A stream save never takes it, so
@@ -105,8 +108,8 @@ func castBufferStart(r io.Reader) int {
 const castStreamSlots = 1
 
 var (
-	streamSaveSlots  = make(chan struct{}, castStreamSlots)
-	inMemorySaveSlot = make(chan struct{}, 1)
+	streamSaveSlots  = &slotQueue{size: castStreamSlots}
+	inMemorySaveSlot = &slotQueue{size: 1}
 	groupSavesMu     sync.Mutex
 	groupSaves       = map[string]chan struct{}{} // closed when the group's save lets go
 )
@@ -135,7 +138,8 @@ func AdmissionGroup(ctx context.Context, key string) string {
 // 130 s upload timeout.
 var castSaveAdmitWait = 65 * time.Second
 
-// castSaveWait runs each time a save finds what it needs held and is about to wait.
+// castSaveWait runs each time a save finds what it needs held and is about to
+// wait. A save waiting for a slot is already queued when it runs.
 var castSaveWait = func() {}
 
 // admitCastSave admits a save of key read from r, waiting until it may run or
@@ -144,13 +148,13 @@ func admitCastSave(ctx context.Context, key string, r io.Reader) (release func()
 	ctx, cancel := context.WithTimeout(ctx, castSaveAdmitWait)
 	defer cancel()
 	if _, ok := r.(interface{ Len() int }); ok {
-		return takeSlot(ctx, inMemorySaveSlot)
+		return inMemorySaveSlot.take(ctx)
 	}
 	releaseGroup, err := holdGroup(ctx, AdmissionGroup(ctx, key))
 	if err != nil {
 		return nil, err
 	}
-	releaseSlot, err := takeSlot(ctx, streamSaveSlots)
+	releaseSlot, err := streamSaveSlots.take(ctx)
 	if err != nil {
 		releaseGroup()
 		return nil, err
@@ -158,20 +162,58 @@ func admitCastSave(ctx context.Context, key string, r io.Reader) (release func()
 	return func() { releaseSlot(); releaseGroup() }, nil
 }
 
-func takeSlot(ctx context.Context, slots chan struct{}) (func(), error) {
-	release := func() { <-slots }
-	select {
-	case slots <- struct{}{}:
-		return release, nil
-	default:
+// slotQueue admits up to size holders at once and hands each released slot
+// to its oldest waiter. A slot is free only while nobody waits.
+type slotQueue struct {
+	mu      sync.Mutex
+	size    int
+	held    int
+	waiters []chan struct{} // arrival order; closed when handed a slot
+}
+
+// take waits until q hands the caller a slot or ctx ends; a waiter that
+// leaves holds nothing.
+func (q *slotQueue) take(ctx context.Context) (func(), error) {
+	q.mu.Lock()
+	if q.held < q.size {
+		q.held++
+		q.mu.Unlock()
+		return q.release, nil
 	}
+	ready := make(chan struct{})
+	q.waiters = append(q.waiters, ready)
+	q.mu.Unlock()
 	castSaveWait()
 	select {
-	case slots <- struct{}{}:
-		return release, nil
+	case <-ready:
+		return q.release, nil
 	case <-ctx.Done():
-		return nil, ctx.Err()
 	}
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	select {
+	case <-ready: // handed a slot as ctx ended: pass it on
+		q.handOff()
+	default:
+		q.waiters = slices.DeleteFunc(q.waiters, func(w chan struct{}) bool { return w == ready })
+	}
+	return nil, ctx.Err()
+}
+
+func (q *slotQueue) release() {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.handOff()
+}
+
+// handOff passes a held slot to the oldest waiter, or frees it. q.mu is held.
+func (q *slotQueue) handOff() {
+	if len(q.waiters) == 0 {
+		q.held--
+		return
+	}
+	close(q.waiters[0])
+	q.waiters = q.waiters[1:]
 }
 
 // holdGroup waits until no other stream save of group is admitted or waiting for a slot.

@@ -433,9 +433,128 @@ func TestPGStore_OneOwnersUploadsDoNotCrowdOutAnother(t *testing.T) {
 		if got := <-g.entered; got != next {
 			t.Fatalf("cycle %d: save %d entered, want the busy owner's next %d", cycle, got, next)
 		}
+		// next may also have waited for the slot once its group was free.
+		// It reads now, so that wait is over and every other save has
+		// returned: drop it, or it stands in for a wait of the next cycle.
+		for len(g.waits) > 0 {
+			<-g.waits
+		}
 		holder = next
 	}
 	if err := g.finish(holder); !errors.Is(err, errGate) {
 		t.Fatalf("last holder = %v", err)
+	}
+}
+
+// pausedWaits makes each save that is about to wait pause until the test lets
+// it go, and hands the test that save's go-ahead.
+func pausedWaits(t *testing.T) chan chan struct{} {
+	paused := make(chan chan struct{}, 8)
+	recording.OnCastSaveWait(t, func() {
+		goAhead := make(chan struct{})
+		paused <- goAhead
+		<-goAhead
+	})
+	return paused
+}
+
+type taken struct {
+	name    string
+	release func()
+	err     error
+}
+
+// A released slot goes to the oldest waiter, never to a save arriving at that
+// instant, and a waiter that gives up leaves the queue to the next.
+func TestSlotQueue_FirstComeFirstServed(t *testing.T) {
+	paused := pausedWaits(t)
+	q := recording.NewSlotQueue(1)
+	got := make(chan taken, 8)
+	take := func(ctx context.Context, name string) {
+		go func() { r, err := q.Take(ctx); got <- taken{name, r, err} }()
+	}
+	release, err := q.Take(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctxB, cancelB := context.WithCancel(t.Context())
+	var goAheads []chan struct{}
+	for _, w := range []struct {
+		name string
+		ctx  context.Context
+	}{{"a", t.Context()}, {"b", ctxB}, {"c", t.Context()}} {
+		take(w.ctx, w.name)
+		goAheads = append(goAheads, <-paused) // w is about to wait
+	}
+
+	// Release while every waiter is paused between finding the slot held and
+	// blocking: a newcomer must queue behind them, not take the slot.
+	release()
+	take(t.Context(), "newcomer")
+	select {
+	case goAhead := <-paused:
+		goAheads = append(goAheads, goAhead)
+	case w := <-got:
+		t.Fatalf("%s took the released slot ahead of three waiters", w.name)
+	}
+	for _, g := range goAheads {
+		close(g)
+	}
+	first := <-got
+	if first.name != "a" || first.err != nil {
+		t.Fatalf("released slot went to %s (%v), want the oldest waiter a", first.name, first.err)
+	}
+
+	cancelB()
+	if w := <-got; w.name != "b" || !errors.Is(w.err, context.Canceled) {
+		t.Fatalf("after b's cancel: %s returned %v", w.name, w.err)
+	}
+	holder := first
+	for _, want := range []string{"c", "newcomer"} {
+		holder.release()
+		if holder = <-got; holder.name != want || holder.err != nil {
+			t.Fatalf("slot went to %s (%v), want %s", holder.name, holder.err, want)
+		}
+	}
+	holder.release()
+	if n := q.Held(); n != 0 {
+		t.Fatalf("slots held after every holder released = %d", n)
+	}
+}
+
+// A waiter handed the slot just as its context ends either keeps it or passes
+// it to the next waiter; the slot is never lost.
+func TestSlotQueue_HandOffAtCancelIsNotLost(t *testing.T) {
+	paused := pausedWaits(t)
+	q := recording.NewSlotQueue(1)
+	got := make(chan taken, 2)
+	release, err := q.Take(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctxA, cancelA := context.WithCancel(t.Context())
+	go func() { r, err := q.Take(ctxA); got <- taken{"a", r, err} }()
+	goA := <-paused
+	go func() { r, err := q.Take(t.Context()); got <- taken{"b", r, err} }()
+	goB := <-paused
+
+	release() // handed to a, which is still paused
+	cancelA()
+	close(goA)
+	a := <-got
+	switch {
+	case a.err == nil:
+		a.release()
+	case !errors.Is(a.err, context.Canceled):
+		t.Fatalf("a = %v", a.err)
+	}
+	close(goB)
+	b := <-got
+	if b.name != "b" || b.err != nil {
+		t.Fatalf("%s = %v, want b admitted", b.name, b.err)
+	}
+	b.release()
+	if n := q.Held(); n != 0 {
+		t.Fatalf("slots held after every holder released = %d", n)
 	}
 }
