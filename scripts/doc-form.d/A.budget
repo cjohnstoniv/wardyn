@@ -114,6 +114,7 @@
 # docs/AUDIT-ACTIONS.md 45375 measured after merging the batch into S-revseq (31 over 45344: the same sign-out sentence and citation).
 # docs/AUDIT-ACTIONS.md 45576 adds 31 over 45545 (0.9 S-revseq, after merging batch-090-local); measured at merge.
 # docs/AUDIT-ACTIONS.md 45871 adds 31 over 45840 (0.9 S-revseq, after merging batch-090-local); measured at merge.
+# docs/AUDIT-ACTIONS.md 44127 measured after merging S-revseq into S-clockstep.
 docs/AUDIT-ACTIONS.md=45871 share=8
 # docs/AUDIT-ACTIONS.md 39938 adds 1 (0.9 H7): the `placement_component_self_defined` reason in the authz.denied vocabulary.
 # 0.9 H10 r1: docs/AUDIT-ACTIONS.md 40113 adds 65 over 40048 for the token-revoke join, the off semantics and the pending connect/disconnect rows.

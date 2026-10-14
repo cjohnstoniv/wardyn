@@ -260,7 +260,12 @@ type scimEnv struct {
 // before it is built.
 func newSCIMEnv(t *testing.T, shape ...func(*Config)) *scimEnv {
 	t.Helper()
-	pool := throwawayPGPool(t)
+	return newSCIMEnvOn(t, throwawayPGPool(t), shape...)
+}
+
+// newSCIMEnvOn is newSCIMEnv over pool, a migrated database the instances serve from.
+func newSCIMEnvOn(t *testing.T, pool *pgxpool.Pool, shape ...func(*Config)) *scimEnv {
+	t.Helper()
 	id, err := age.GenerateX25519Identity()
 	if err != nil {
 		t.Fatal(err)
@@ -484,29 +489,40 @@ func scimCookie(t *testing.T, sub, email string, epoch int64) *http.Cookie {
 
 func scimCookieAt(t *testing.T, sub, email string, epoch int64, issuedAt time.Time) *http.Cookie {
 	t.Helper()
-	payload, err := json.Marshal(oidc.Session{
+	return sealScimSession(t, "wardyn_session", oidc.Session{
 		V: oidc.SessionCodecVersion, Sub: sub, Email: email, Role: oidc.RoleUser, UserType: types.UserTypeStandard,
 		Expiry: time.Now().UTC().Add(time.Hour), IssuedAt: issuedAt, AuthorityEpoch: epoch, Groups: []string{},
 	})
+}
+
+// orderedCookieAt is scimCookieAt carrying the revocation sequence the callback records at sign-in, read
+// now: a session issued at this point of the revocation order, whatever issuedAt says.
+func (e *scimEnv) orderedCookieAt(sub, email string, epoch int64, issuedAt time.Time) *http.Cookie {
+	e.t.Helper()
+	seq, err := e.rev.RevocationSeq(context.Background())
+	if err != nil || seq < 1 {
+		e.t.Fatalf("read the revocation sequence: %d, %v", seq, err)
+	}
+	return reissued(e.t, scimCookieAt(e.t, sub, email, epoch, issuedAt), func(s *oidc.Session) { s.RevocationSeq = seq })
+}
+
+// sealScimSession signs s as the session cookie name.
+func sealScimSession(t *testing.T, name string, s oidc.Session) *http.Cookie {
+	t.Helper()
+	payload, err := json.Marshal(s)
 	if err != nil {
 		t.Fatal(err)
 	}
 	mac := hmac.New(sha256.New, accessTestHMACKey)
 	mac.Write(payload)
 	return &http.Cookie{
-		Name:  "wardyn_session",
+		Name:  name,
 		Value: base64.RawURLEncoding.EncodeToString(payload) + "." + base64.RawURLEncoding.EncodeToString(mac.Sum(nil)),
 	}
 }
 
-// clockStepMargin is how far before a revoke the sessions it must reach are issued: more than any step
-// the host clock takes between two instants of one test.
-const clockStepMargin = 5 * time.Second
-
-// backdated returns c re-signed with its issue time moved d earlier. A session that must be revoked is
-// issued clearly before the revoke, so the ordering the test asserts does not depend on the wall clock
-// holding still across the two instants.
-func backdated(t *testing.T, c *http.Cookie, d time.Duration) *http.Cookie {
+// reissued returns c re-signed after edit has changed its session.
+func reissued(t *testing.T, c *http.Cookie, edit func(*oidc.Session)) *http.Cookie {
 	t.Helper()
 	enc, _, ok := strings.Cut(c.Value, ".")
 	if !ok {
@@ -520,17 +536,20 @@ func backdated(t *testing.T, c *http.Cookie, d time.Duration) *http.Cookie {
 	if err := json.Unmarshal(raw, &s); err != nil {
 		t.Fatal(err)
 	}
-	s.IssuedAt = s.IssuedAt.Add(-d)
-	payload, err := json.Marshal(s)
-	if err != nil {
-		t.Fatal(err)
-	}
-	mac := hmac.New(sha256.New, accessTestHMACKey)
-	mac.Write(payload)
-	return &http.Cookie{
-		Name:  c.Name,
-		Value: base64.RawURLEncoding.EncodeToString(payload) + "." + base64.RawURLEncoding.EncodeToString(mac.Sum(nil)),
-	}
+	edit(&s)
+	return sealScimSession(t, c.Name, s)
+}
+
+// clockStepMargin is how far before a revoke the sessions it must reach are issued: more than any step
+// the host clock takes between two instants of one test.
+const clockStepMargin = 5 * time.Second
+
+// backdated returns c re-signed with its issue time moved d earlier. A session that must be revoked is
+// issued clearly before the revoke, so the ordering the test asserts does not depend on the wall clock
+// holding still across the two instants.
+func backdated(t *testing.T, c *http.Cookie, d time.Duration) *http.Cookie {
+	t.Helper()
+	return reissued(t, c, func(s *oidc.Session) { s.IssuedAt = s.IssuedAt.Add(-d) })
 }
 
 // cookieWorks reports whether the cookie authenticates a request on n.

@@ -42,6 +42,9 @@ type queueAuthority struct {
 	GroupsTruncated bool     `json:"groups_truncated,omitempty"`
 	// Epoch is the session's authority epoch; absent for an API token or the admin token.
 	Epoch *int64 `json:"epoch,omitempty"`
+	// Seq is the revocation sequence the credential that admitted the launch recorded at issue
+	// (oidc.RevocationSeqFor); absent when it recorded none, and the owner check compares on time.
+	Seq int64 `json:"rseq,omitempty"`
 	// Service and Sponsor are set when a service identity made the launch.
 	Service string `json:"service,omitempty"`
 	Sponsor string `json:"sponsor,omitempty"`
@@ -61,6 +64,7 @@ func captureQueueAuthority(ctx context.Context) queueAuthority {
 	if e, ok := oidc.AuthorityEpochFromContext(ctx); ok {
 		a.Epoch = &e
 	}
+	a.Seq = oidc.RevocationSeqFor(ctx, a.Sub)
 	if name, sponsor, ok := serviceIdentityFromContext(ctx); ok {
 		a.Service, a.Sponsor = name, sponsor
 	}
@@ -105,7 +109,8 @@ type identityBlocker interface {
 // queueOwnerLive reports whether a's owner may still act as they did at queuedAt, the moment the queue
 // row was written, which is the issue time of the authority it holds: their identity is not deactivated
 // or past the epoch the launch carried, no session revocation since cuts them off (oidc.CheckSession,
-// the check every stored credential makes against its issue time), and a service identity is not retired,
+// the check every stored credential makes against its issue: by the revocation sequence the launching
+// credential recorded, else by queuedAt), and a service identity is not retired,
 // still has the sponsor it launched under, and that sponsor's session is live. The admin token and local
 // mode have no one to revoke.
 func (s *Server) queueOwnerLive(ctx context.Context, a queueAuthority, queuedAt time.Time) (bool, error) {
@@ -122,7 +127,7 @@ func (s *Server) queueOwnerLive(ctx context.Context, a queueAuthority, queuedAt 
 		}
 	}
 	if s.cfg.SessionRevocations != nil {
-		if status, err := oidc.CheckSession(ctx, s.cfg.SessionRevocations, a.Sub, a.Email, oidc.Issue{At: queuedAt}, epoch); err != nil || status != oidc.SessionLive {
+		if status, err := oidc.CheckSession(ctx, s.cfg.SessionRevocations, a.Sub, a.Email, oidc.Issue{At: queuedAt, Seq: a.Seq}, epoch); err != nil || status != oidc.SessionLive {
 			return false, err
 		}
 	}
@@ -139,7 +144,8 @@ func (s *Server) queueOwnerLive(ctx context.Context, a queueAuthority, queuedAt 
 	case err != nil || !still:
 		return false, err
 	}
-	status, err := oidc.CheckSession(ctx, s.cfg.SessionRevocations, a.Sponsor, "", oidc.Issue{At: queuedAt}, -1)
+	// a.Seq is the service token's sequence, drawn against the sponsor's cuts when the token was minted.
+	status, err := oidc.CheckSession(ctx, s.cfg.SessionRevocations, a.Sponsor, "", oidc.Issue{At: queuedAt, Seq: a.Seq}, -1)
 	return err == nil && status == oidc.SessionLive, err
 }
 
