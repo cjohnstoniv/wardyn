@@ -11,7 +11,10 @@
 //     must honour the strongest class and must never silently downgrade it.
 //  2. Create → Status → Stop idempotency: a second StopSandbox on a stopped
 //     sandbox must return nil.
-//  3. KillSandbox on a missing/unknown ref must return nil.
+//  3. KillSandbox on a missing/unknown ref must return nil. A self-hosted
+//     runner answers only for a sandbox it holds or can prove it created and
+//     refuses any other ref, so there the missing ref is one it could have
+//     created.
 //  4. L0 assertion hook: if StructuralEgress is declared, an injectable probe
 //     (DefaultRouteProbe) asserts that no default route is reachable from the
 //     sandbox.

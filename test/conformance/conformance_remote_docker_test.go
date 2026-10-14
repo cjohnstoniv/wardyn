@@ -118,10 +118,12 @@ func (r *boundRemoteRunner) CreateSandbox(ctx context.Context, spec runner.Sandb
 }
 
 func (r *boundRemoteRunner) KillSandbox(ctx context.Context, ref string) error {
-	// The suite's missing-ref probe is intentionally unscoped. Qualify it in
-	// this bound view; production continues to refuse foreign references.
+	// The suite's missing-ref probe is an arbitrary name. A runner answers only
+	// for a sandbox it holds or can prove it created, so this bound view asks
+	// for one this runner could have created and never did; production
+	// continues to refuse every other reference.
 	if !strings.HasPrefix(ref, substrate.RemotePrefix) {
-		ref = placement.RunnerRefPrefix(r.id) + ref
+		ref = placement.RunnerRefPrefix(r.id) + docker.SandboxRef(uuid.New())
 	}
 	return r.Orchestrator.KillSandbox(ctx, ref)
 }
