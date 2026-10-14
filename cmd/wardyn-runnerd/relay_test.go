@@ -48,7 +48,8 @@ func TestRunnerRelayExplicitListen(t *testing.T) {
 		ok      bool
 	}{
 		{"loopback on Docker Desktop", "127.0.0.1", true, true},
-		{"IPv6 loopback on Docker Desktop", "::1", true, true},
+		{"IPv6 loopback on Docker Desktop", "::1", true, false},
+		{"another loopback address on Docker Desktop", "127.0.0.2", true, false},
 		{"loopback on a native engine", "127.0.0.1", false, false},
 		{"the native host-gateway", "172.17.0.1", false, true},
 		{"another address on a native engine", "192.168.1.20", false, false},

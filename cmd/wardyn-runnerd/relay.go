@@ -57,16 +57,16 @@ func relayBind(gateway netip.Addr, bridge []netip.Addr) error {
 }
 
 // explicitRelayBind admits a --relay-listen address: never unspecified or
-// multicast. Docker Desktop's host-gateway reaches this host's loopback, so
-// there only a loopback address is reachable from a proxy. On any other engine
-// the address must be the engine's own host-gateway, held by its bridge;
-// loopback there would show the runner online and refuse every run.
+// multicast. Docker Desktop's host-gateway reaches only 127.0.0.1 on this host
+// (not ::1 or another 127/8 address), so that is the one address it admits. On
+// any other engine the address must be the engine's own host-gateway, held by
+// its bridge; loopback there would show the runner online and refuse every run.
 func explicitRelayBind(addr netip.Addr, desktop bool, gateway netip.Addr, bridge []netip.Addr) error {
 	switch {
 	case addr.IsUnspecified() || addr.IsMulticast():
 		return fmt.Errorf("relay: refusing --relay-listen %s: it must be one address of this host", addr)
-	case desktop && !addr.IsLoopback():
-		return fmt.Errorf("relay: refusing --relay-listen %s: Docker Desktop's host-gateway reaches only this host's loopback, so use 127.0.0.1", addr)
+	case desktop && addr.Unmap() != netip.AddrFrom4([4]byte{127, 0, 0, 1}):
+		return fmt.Errorf("relay: refusing --relay-listen %s: Docker Desktop's host-gateway reaches only 127.0.0.1 on this host, so use 127.0.0.1", addr)
 	case desktop:
 		return nil
 	case addr != gateway:
