@@ -875,9 +875,12 @@ resources:
     cpu: 100m
     memory: 128Mi
 
-# Go runtime soft memory limit for wardynd (GOMEMLIMIT). Keep at about 80% of
+# Go runtime soft memory limit for wardynd (GOMEMLIMIT). Must be a quoted
+# string with a unit (B, KiB, MiB, GiB or TiB), e.g. "400MiB"; the chart
+# refuses anything else at render. Keep at about 80% of
 # resources.limits.memory, so the collector runs before the container limit is
-# reached; empty leaves Go's default (no limit). An env.GOMEMLIMIT entry wins.
+# reached; empty leaves Go's default (no limit). An env.GOMEMLIMIT or extraEnv
+# GOMEMLIMIT entry replaces it.
 goMemLimit: "400MiB"
 
 # Persistent recording volume. Off by default (Postgres is the source of truth;
