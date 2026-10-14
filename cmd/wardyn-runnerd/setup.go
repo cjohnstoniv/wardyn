@@ -58,6 +58,14 @@ func newSetupCommand() *cobra.Command {
 	return cmd
 }
 
+// setupEngine is what setup learns from the engine: whether it is Docker Desktop and, when the relay
+// address was asked for, what serve's explicitRelayBind needs to judge it.
+type setupEngine struct {
+	desktop bool
+	gateway netip.Addr
+	bridge  []netip.Addr
+}
+
 // setupPlan is everything setup settles before its first side effect.
 type setupPlan struct {
 	setupOptions
@@ -154,11 +162,17 @@ func (h setupHost) preflight(cmd *cobra.Command, o setupOptions) (setupPlan, err
 	if err := h.checkServiceManager(cmd.Context(), plan.paths); err != nil {
 		return setupPlan{}, err
 	}
-	desktop, err := h.docker(cmd.Context(), o.network)
+	eng, err := h.docker(cmd.Context(), o.network, o.relayListen != "")
 	if err != nil {
 		return setupPlan{}, err
 	}
-	if desktop && plan.relayListen == "" {
+	if o.relayListen != "" {
+		// Parsed above. serve refuses the same addresses at startup, after the token is spent.
+		if err := explicitRelayBind(netip.MustParseAddr(o.relayListen), eng.desktop, eng.gateway, eng.bridge); err != nil {
+			return setupPlan{}, err
+		}
+	}
+	if eng.desktop && plan.relayListen == "" {
 		plan.relayListen = "127.0.0.1"
 		fmt.Fprintln(cmd.OutOrStdout(), "Docker Desktop detected: the run relay will listen on 127.0.0.1 (expected on macOS, not yet verified).")
 	}

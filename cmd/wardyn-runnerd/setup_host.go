@@ -37,7 +37,7 @@ type setupHost struct {
 	run                func(ctx context.Context, name string, args ...string) ([]byte, error)
 	// docker checks that the engine answers as this user and the proxy bridge exists, creating it when
 	// missing, and says whether the engine is Docker Desktop.
-	docker func(ctx context.Context, network string) (desktop bool, err error)
+	docker func(ctx context.Context, network string, relay bool) (setupEngine, error)
 }
 
 func osSetupHost() (setupHost, error) {
