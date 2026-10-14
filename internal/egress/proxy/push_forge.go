@@ -21,8 +21,10 @@ package proxy
 // repository itself. Comparing against whatever parent the pack names would
 // let a fork's commit vouch for its own content at a denied path. So a base
 // counts only when the forge reports it inside the CURRENT history of a
-// branch this push updates or of the default branch (contains) — the forge
-// resolves those names, so nothing the pack asserts is taken on trust. A
+// branch this push updates or of the default branch (contains). An updated
+// branch counts only at the tip the forge reports, and only when that tip
+// is the old value the push states (updatedTip): neither the branch name
+// nor the old value the push asserts is taken on trust. A
 // merge passes an entry matching ANY counted parent: demanding all would
 // refuse merging the default branch in after it changed a denied path, and
 // closes nothing a single-parent commit on the same base couldn't already.
@@ -58,6 +60,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cjohnstoniv/wardyn/internal/adoscope"
 	"github.com/cjohnstoniv/wardyn/internal/gitpack"
 )
 
@@ -108,6 +111,9 @@ type forgeRepo struct {
 	// rules ask again after the deny rules: one push, one set of answers.
 	vouched map[string]string
 	settled *gitpack.Result
+	// tips caches the forge's current tip of each branch a command names, read
+	// once per push ("" when the forge holds no such branch).
+	tips map[string]string
 }
 
 // ghTreeEntry is one entry of GitHub's git/trees listing.
@@ -191,8 +197,9 @@ func (f *forgeRepo) settle(ctx context.Context, res gitpack.Result) (gitpack.Res
 	return settled, ""
 }
 
-// vouch returns base's root tree when a branch this push updates, or the
-// default branch, contains base; "" when none does.
+// vouch returns base's root tree when a branch this push updates (at the tip
+// the forge confirms for it, updatedTip), or the default branch, contains
+// base; "" when none does.
 func (f *forgeRepo) vouch(ctx context.Context, base string, cmds []gitpack.Command) (string, error) {
 	if root, ok := f.vouched[base]; ok {
 		return root, nil
@@ -209,11 +216,14 @@ func (f *forgeRepo) vouch(ctx context.Context, base string, cmds []gitpack.Comma
 
 func (f *forgeRepo) vouchOnce(ctx context.Context, base string, cmds []gitpack.Command) (string, error) {
 	for _, c := range cmds {
-		branch, ok := strings.CutPrefix(c.Ref, "refs/heads/")
-		if !ok || strings.Trim(c.Old, "0") == "" { // a create names no branch the forge has yet
+		tip, err := f.updatedTip(ctx, c)
+		if err != nil {
+			return "", err
+		}
+		if tip == "" {
 			continue
 		}
-		if root, err := f.contains(ctx, branch, base); err != nil || root != "" {
+		if root, err := f.contains(ctx, tip, base); err != nil || root != "" {
 			return root, err
 		}
 	}
@@ -231,6 +241,53 @@ func (f *forgeRepo) vouchOnce(ctx context.Context, base string, cmds []gitpack.C
 		f.defaultBranch = repo.DefaultBranch
 	}
 	return f.contains(ctx, f.defaultBranch, base)
+}
+
+// updatedTip returns the commit a command's branch stands at when the forge
+// confirms it: the branch exists, its name is well formed, and its current tip
+// is exactly the old value the command states. Only then is that branch's
+// history one the forge holds for this repository; the ref name and old value
+// are the push's own words, so nothing else about them is taken on trust. ""
+// for a create, a command that moves nothing, a malformed name, or a tip the
+// forge does not confirm. The history is read at the confirmed commit, not by
+// name, so a branch that moves meanwhile changes nothing.
+func (f *forgeRepo) updatedTip(ctx context.Context, c gitpack.Command) (string, error) {
+	branch, ok := strings.CutPrefix(c.Ref, "refs/heads/")
+	if !ok || !isHex(c.Old) || strings.Trim(c.Old, "0") == "" || c.New == c.Old || adoscope.CheckRefName(c.Ref) != nil {
+		return "", nil
+	}
+	tip, seen := f.tips[c.Ref]
+	if !seen {
+		var ref struct {
+			Object struct {
+				SHA string `json:"sha"`
+			} `json:"object"`
+		}
+		segs := strings.Split(branch, "/")
+		for i, s := range segs {
+			segs[i] = url.PathEscape(s)
+		}
+		status, err := f.get(ctx, "/repos/"+f.repo+"/git/ref/heads/"+strings.Join(segs, "/"), &ref)
+		switch {
+		case status == http.StatusNotFound:
+		case err != nil:
+			return "", err
+		case status != http.StatusOK:
+			return "", fmt.Errorf("reading branch %s answered %d", branch, status)
+		case !isHex(ref.Object.SHA):
+			return "", fmt.Errorf("reading branch %s named no commit", branch)
+		default:
+			tip = ref.Object.SHA
+		}
+		if f.tips == nil {
+			f.tips = map[string]string{}
+		}
+		f.tips[c.Ref] = tip
+	}
+	if tip != c.Old {
+		return "", nil
+	}
+	return tip, nil
 }
 
 // contains asks the forge whether branch's current history includes base, and
