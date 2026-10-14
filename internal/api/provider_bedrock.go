@@ -207,7 +207,7 @@ func (s *Server) providerBedrockTransport(ctx context.Context, run types.AgentRu
 		env[envBedrockBearer] = "wardyn-proxy-injected"
 		auth = bedrockAuth{env: env, egressHosts: hosts, bearer: true}
 	} else {
-		auth = s.bedrockSSOAuth(blob, c.awsScope(), env, hosts)
+		auth = s.bedrockSSOAuth(ctx, run.ID, blob, c.awsScope(), env, hosts)
 	}
 	auth.ready, auth.region, auth.model = true, b.Region, model
 	auth.runtimeHost, auth.runtimePort = providerBedrockRuntimeHost(mp), redirectPort(b.BaseURL)

@@ -366,6 +366,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 
 - Vault address for the `vaultkv` store (flag `-vault-addr`).
 - `https://`; `http://` is refused except to a loopback host.
+- A redirect is followed only to this address's own scheme, host and port. With Vault HA, name the active node or an endpoint that forwards requests, not a standby that redirects to another node.
 - Set, wardynd logs in at boot and refuses to start if it cannot; unset, there is no Vault client and a pointer row refuses by name.
 
 ### `WARDYN_VAULT_ROLE_PLATFORM`

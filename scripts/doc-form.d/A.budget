@@ -121,6 +121,8 @@
 # docs/AUDIT-ACTIONS.md 45432 measured after merging S-clockstep into RS-7 (57 over its 45375: the same three rows).
 # docs/AUDIT-ACTIONS.md 45633 adds 57 over 45576 (0.9 RS-7, after merging lane/090-S-clockstep); measured at merge.
 # docs/AUDIT-ACTIONS.md 45928 adds 57 over 45871 (0.9 RS-7, after merging lane/090-S-clockstep); measured at merge.
+# docs/AUDIT-ACTIONS.md 45648 measured at merge: the final docs pass over the runner limits, pool words and Azure CLI lanes.
+# docs/AUDIT-ACTIONS.md 45736 measured after merging the batch into the lane (88 over its 45648: the lane's sign-out, purge and erasure rows).
 docs/AUDIT-ACTIONS.md=45928 share=8
 # docs/AUDIT-ACTIONS.md 39938 adds 1 (0.9 H7): the `placement_component_self_defined` reason in the authz.denied vocabulary.
 # 0.9 H10 r1: docs/AUDIT-ACTIONS.md 40113 adds 65 over 40048 for the token-revoke join, the off semantics and the pending connect/disconnect rows.
