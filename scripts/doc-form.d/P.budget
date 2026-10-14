@@ -10,6 +10,9 @@
 # docs/POLICIES.md 17973 adds 60 over 17913, measured: a member's own private-address entry under an allow-all ceiling.
 # docs/POLICIES.md 18041 adds 28 over 18013, measured: an IPv6 clone host is listed only in the ceiling; a library scan is bounded by it.
 # docs/POLICIES.md 18107 adds 66 over 18041 (0.9 RS-12, after merging lane/090-RS-11); measured at merge.
-docs/POLICIES.md=18107 share=12
+# docs/POLICIES.md 17990 adds 77 over 17913 (the ref-ruleset check samples a nested outside name): the nested read, its reason and the sampled-check limit; measured.
+# docs/POLICIES.md 17996 adds 6 over 17990 (a third, two-component outside sample): measured.
+# docs/POLICIES.md 18190 adds 83 over 18107 (0.9 RS-15, after merging lane/090-RS-12); measured at merge.
+docs/POLICIES.md=18190 share=12
 examples/policies/README.md=1349 share=5
 # docs/POLICIES.md 18013 adds 40 over 17973, measured: a member's private-range workspace clone host.

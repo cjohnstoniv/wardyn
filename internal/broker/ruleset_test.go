@@ -4,6 +4,7 @@
 package broker
 
 import (
+	"cmp"
 	"context"
 	"crypto/rand"
 	"crypto/rsa"
@@ -197,7 +198,7 @@ func TestVerifyRefRuleset_Grading(t *testing.T) {
 			name:    "restricted outside, namespace excluded, no bypass => confined",
 			outside: rulesConfining, inside: rulesNone, rulesets: neverBypass(),
 			wantConfined: true,
-			wantDetail:   []string{"creation, update and deletion are restricted", "refs/tags/*"},
+			wantDetail:   []string{"creation, update and deletion are restricted", "refs/tags/*", "sampled branches", "not every name"},
 		},
 		{
 			name:    "nothing in force outside => unconfined",
@@ -243,7 +244,7 @@ func TestVerifyRefRuleset_Grading(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			m := newRulesetMinter(t, &rulesetFake{
-				rules:    map[string]string{refProbeOutside: tc.outside, refProbeInside: tc.inside},
+				rules:    map[string]string{refProbeOutside: tc.outside, refProbeOutsideTwo: tc.outside, refProbeOutsideNested: tc.outside, refProbeInside: tc.inside},
 				rulesets: tc.rulesets,
 			})
 			confined, detail, err := m.VerifyRefRuleset(context.Background(), "acme/widgets")
@@ -271,11 +272,11 @@ func TestVerifyRefRuleset_ReadFailureIsAnError(t *testing.T) {
 	cases := map[string]*rulesetFake{
 		"rules read 404s": {},
 		"ruleset read 404s": {
-			rules:    map[string]string{refProbeOutside: rulesConfining, refProbeInside: rulesNone},
+			rules:    map[string]string{refProbeOutside: rulesConfining, refProbeOutsideTwo: rulesConfining, refProbeOutsideNested: rulesConfining, refProbeInside: rulesNone},
 			rulesets: nil,
 		},
 		"ruleset omits current_user_can_bypass": {
-			rules:    map[string]string{refProbeOutside: rulesConfining, refProbeInside: rulesNone},
+			rules:    map[string]string{refProbeOutside: rulesConfining, refProbeOutsideTwo: rulesConfining, refProbeOutsideNested: rulesConfining, refProbeInside: rulesNone},
 			rulesets: map[int64]string{1: rulesetNoBypassInfo},
 		},
 	}
@@ -288,6 +289,90 @@ func TestVerifyRefRuleset_ReadFailureIsAnError(t *testing.T) {
 			}
 			if confined {
 				t.Fatal("confined must be false on error")
+			}
+		})
+	}
+}
+
+// GitHub's "*" never crosses "/", so a ruleset that includes refs/heads/* binds
+// a single-component name and leaves every nested one open. The check samples a
+// nested outside name too, requires all three rules at each sample on its own,
+// and checks the bypass of every ruleset behind either sample.
+func TestVerifyRefRuleset_NestedOutsideNamesAreSampled(t *testing.T) {
+	const (
+		nestedFromTwo     = `[{"type":"creation","ruleset_id":2},{"type":"update","ruleset_id":2},{"type":"deletion","ruleset_id":2}]`
+		rulesetTwoNever   = `{"id":2,"name":"wardyn-nested","enforcement":"active","current_user_can_bypass":"never"}`
+		rulesetTwoAlways  = `{"id":2,"name":"wardyn-nested","enforcement":"active","current_user_can_bypass":"always"}`
+		rulesetTwoUnknown = `{"id":2,"name":"wardyn-nested","enforcement":"active"}`
+		creationFromOne   = `[{"type":"creation","ruleset_id":1}]`
+		updateDeleteTwo   = `[{"type":"update","ruleset_id":2},{"type":"deletion","ruleset_id":2}]`
+	)
+	split := `[{"type":"creation","ruleset_id":1},{"type":"update","ruleset_id":2},{"type":"deletion","ruleset_id":2}]`
+	cases := []struct {
+		name         string
+		single       string
+		two          string // the two-component sample; empty reads as single
+		nested       string
+		rulesets     map[int64]string
+		wantConfined bool
+		wantErr      bool
+		wantDetail   string
+	}{
+		{name: "rules bind the single-component name only => unconfined",
+			single: rulesConfining, nested: rulesNone, rulesets: neverBypass(),
+			wantDetail: "no creation/update/deletion rule in force at refs/heads/" + refProbeOutsideNested},
+		{name: "a fully recursive ruleset => confined",
+			single: rulesConfining, nested: rulesConfining, rulesets: neverBypass(), wantConfined: true},
+		{name: "one restriction missing at the nested name only => unconfined",
+			single: rulesConfining, nested: rulesNoDeletion, rulesets: neverBypass(),
+			wantDetail: "no deletion rule in force at refs/heads/" + refProbeOutsideNested},
+		{name: "each sample's rules spread over two rulesets => the union decides, confined",
+			single: split, nested: split,
+			rulesets: map[int64]string{1: rulesetNeverBypass, 2: rulesetTwoNever}, wantConfined: true},
+		{name: "two rulesets that together cover a sample still need all three at each sample",
+			single: rulesConfining, nested: updateDeleteTwo,
+			rulesets:   map[int64]string{1: rulesetNeverBypass, 2: rulesetTwoNever},
+			wantDetail: "no creation rule in force at refs/heads/" + refProbeOutsideNested},
+		{name: "a bypassable ruleset seen only at the nested name => unconfined",
+			single: rulesConfining, nested: nestedFromTwo,
+			rulesets: map[int64]string{1: rulesetNeverBypass, 2: rulesetTwoAlways}, wantDetail: "ruleset 2 (always)"},
+		{name: "a ruleset seen only at the nested name with no bypass field => unknown",
+			single: rulesConfining, nested: nestedFromTwo,
+			rulesets: map[int64]string{1: rulesetNeverBypass, 2: rulesetTwoUnknown}, wantErr: true},
+		{name: "the nested read fails => unknown",
+			single: rulesConfining, two: rulesConfining, rulesets: neverBypass(), wantErr: true},
+		// include refs/heads/**/* with exclude refs/heads/*/*: one and three
+		// components are bound, every two-component name (release/1.0) is open.
+		{name: "an exclude that opens two-component names only => unconfined",
+			single: rulesConfining, two: rulesNone, nested: rulesConfining, rulesets: neverBypass(),
+			wantDetail: "no creation/update/deletion rule in force at refs/heads/" + refProbeOutsideTwo + ","},
+		{name: "rules split by rule type across samples is not all three at each",
+			single: creationFromOne, nested: rulesConfining, rulesets: neverBypass(),
+			wantDetail: "no update/deletion rule in force at refs/heads/" + refProbeOutside + ","},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rules := map[string]string{refProbeOutside: tc.single, refProbeInside: rulesNone}
+			if tc.nested != "" {
+				rules[refProbeOutsideNested] = tc.nested
+			}
+			rules[refProbeOutsideTwo] = cmp.Or(tc.two, tc.single)
+			f := &rulesetFake{rules: rules, rulesets: tc.rulesets}
+			confined, detail, err := newRulesetMinter(t, f).VerifyRefRuleset(context.Background(), "acme/widgets")
+			if tc.wantErr {
+				if err == nil || confined {
+					t.Fatalf("confined=%v err=%v; want an error (unknown)", confined, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("VerifyRefRuleset: %v", err)
+			}
+			if confined != tc.wantConfined || !strings.Contains(detail, tc.wantDetail) {
+				t.Fatalf("confined=%v detail=%q; want confined=%v and a detail containing %q", confined, detail, tc.wantConfined, tc.wantDetail)
+			}
+			if tc.wantConfined && !f.tokenRevoked() {
+				t.Error("the probe token was not revoked")
 			}
 		})
 	}
