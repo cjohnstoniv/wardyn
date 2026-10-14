@@ -154,31 +154,40 @@ Since 0.8.2 a model run is credentialed by the model provider it chose (`enforce
   - The refusal names the class Entra reported: multi-factor authentication, device compliance, an approved client, or a blocked sign-in.
   - No policy class is promised to work, and continuous access evaluation is not supported.
 
-## What the New Run rail states
+## What New Run states
 
-- The right-hand "What this run can do" panel is read, not asserted.
-- Two of its rows consult the server, and both are silent rather than wrong when the server hasn't answered.
+- New Run reads these facts from the server and does not assert them. The steps are in [NEW-RUN.md](../NEW-RUN.md).
 
-**Credentials** names the model provider THIS run would use and where its credential lands, with no click. The picker itself is on the Run panel, beside the agent; the rail only states the choice:
+**Model provider.** On Tools and access, each harness has a **Model provider** field, and the line under it says where that provider's credential lives:
 
-| Answer | Meaning |
+| Line | Meaning |
 | --- | --- |
-| `proxy` | A key or token, injected by the proxy at launch and never written into the sandbox |
-| `sandbox` | A Bedrock AWS sign-in, which signs inside the run for its lifetime |
+| "The proxy adds the provider's credential; the sandbox never holds it." | A key or token the proxy adds on the wire |
+| "In the sandbox, short-lived" | A Bedrock AWS sign-in, whose role credentials sign inside the run |
 
-- Where several providers serve the agent and none is the default, the Run panel asks which, and Launch waits for the answer.
-- Where no provider serves the agent it reads "Resolved at launch." and an invitation to press **Check again**. Preflight runs on its own as the run is edited; the button dry-runs the exact body Launch would send, and Launch is blocked by a refusal for the current body graded under 60s ago.
-- With no model provider connected at all the rail shows the no-provider warning instead.
-- A run that makes no model call (a shell command) shows no Credentials row at all.
+- The server's default or only provider stands in until you choose. Where several serve the harness and none is the default, the field reads "Required before launch." and Review holds Launch.
+- Review dry-runs the exact body Launch would send. **Check again** refreshes it, and Launch needs an answer for the current draft that is under 60 seconds old.
+- A run with no harness makes no model call and shows no model provider.
 
-**Recording** reads `/healthz`.
+**Recording.** New Run does not state whether a run is recorded.
 
 - A stock Helm install leaves `persistence.enabled=false`, which renders `WARDYN_RECORDING_STORE=off` — the actual switch.
-- So no run on that server ever produces a cast; the rail then states that instead of promising "every keystroke and every outbound connection."
-- While that read is still in flight, or if it failed, the rail states neither.
+- No run on that server produces a cast, and the Recordings screen then reads "Session recording is disabled on this deployment".
 - Recording is off only where `WARDYN_RECORDING_STORE=off`.
 - Turn it on with `persistence.enabled=true` (the `fs` store on the PVC) or `env.WARDYN_RECORDING_STORE=pg` (no PVC needed).
 - `WARDYN_RECORDING_DIR` only moves the `fs` store's path — it doesn't turn recording on or off.
+
+## Signing in for a CLI component
+
+The console has no door for an AWS or Azure CLI component's sign-in yet. Tools and access lists it under **Setup still needed** with no button; send each person to the route below.
+
+| Component | How a person signs in | Where it lands |
+| --- | --- | --- |
+| AWS CLI | `POST /api/v1/components/{id}/sign-in`, which starts a sign-in sandbox seeded with the component's portal, region, account and role | Their own namespace, as `wardyn-cli-<component id>-sso`, audited `cli.signin.capture` |
+| Azure CLI | Open `GET /api/v1/components-entra/signin?component=<id>` in the signed-in browser. It returns to `/?azure_cli_signin=connected&component=<id>`, or `/?azure_cli_signin_error=<code>&component=<id>` | Their own namespace, as `wardyn-cli-<component id>-entra`, audited `cli.signin.capture` |
+
+- The Azure sign-in needs the console's Entra application to hold the delegated permission "Azure Service Management · user_impersonation" with admin consent.
+- Changing a component's pins, or deleting it, deletes everyone's sign-in for it. There is no per-person disconnect.
 
 ## What an admin can put a fence around
 

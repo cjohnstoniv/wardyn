@@ -93,6 +93,7 @@
 # docs/AUDIT-ACTIONS.md 44798 measured after RP-1: organization and user pools, remote-hosted runners.
 # docs/AUDIT-ACTIONS.md 44823 adds 191 over 44632 (G-090-cleanup slice F, docs rows that contradict the code): measured; the lead re-measures at merge.
 # docs/AUDIT-ACTIONS.md 44989 measured after G-090-cleanup slice F: docs rows that contradicted the code.
+# docs/AUDIT-ACTIONS.md 45092 adds 103 over 44989: 0.9 final docs pass, measured: the launch-intent fields on run.create and person.erasure, and the queued kill on run.kill.
 # docs/AUDIT-ACTIONS.md 45344 adds 355 over 44989 (the Azure CLI component): measured at merge.
 # docs/AUDIT-ACTIONS.md 45069 adds 80 over 44989 (0.9 RP-3): runner limits in runner.enrol/update, remote_runner.create/update and run.create `reserved`.
 # docs/AUDIT-ACTIONS.md 45424 measured at merge: the Azure CLI component and runner limits together.
@@ -101,11 +102,19 @@
 # docs/AUDIT-ACTIONS.md 45083 adds 14 over 45069 (0.9 RP-4): run.queue.start says when a launch waits (the pool's Runs at once, or its runners' limits) and who offers a raised barrier.
 # docs/AUDIT-ACTIONS.md 45438 measured after merging the runner limits and pool words lanes (80 and 14, above) over the Azure CLI component's 45344.
 # docs/AUDIT-ACTIONS.md 45545 measured at merge: the runner and pool words pass over runner limits and the pool console.
+# docs/AUDIT-ACTIONS.md 45648 measured at merge: the final docs pass over the runner limits, pool words and Azure CLI lanes.
+# docs/AUDIT-ACTIONS.md 45687 adds 39 over 45648: run.kill says what a sweep recovery records for a run on a self-hosted runner (`sandbox_stop` queued or runner_revoked).
+# docs/AUDIT-ACTIONS.md 45702 measured at merge: the run.create row names the failed-stop fields.
+# docs/AUDIT-ACTIONS.md 45800 adds 98 (FR-0150: the rate bound on unattributed SSH and ticket refusal rows).
+# docs/AUDIT-ACTIONS.md 45807 adds 7 (the per-key bound on SSH refusal rows that name a registered key).
+# docs/AUDIT-ACTIONS.md 45838 adds 31 (the refused session.attach row at the per-run session cap).
+# docs/AUDIT-ACTIONS.md 45840 measured at merge: the terminal session cap's own bullet and the session.attach max field.
 # docs/AUDIT-ACTIONS.md 41847 measured after merging batch/090 into S-revseq (its sign-out sentence and citation in the `session.revoke` row).
 # docs/AUDIT-ACTIONS.md 45020 measured after merging the batch into S-revseq (31 over 44989: the same sign-out sentence and citation).
 # docs/AUDIT-ACTIONS.md 45375 measured after merging the batch into S-revseq (31 over 45344: the same sign-out sentence and citation).
 # docs/AUDIT-ACTIONS.md 45576 adds 31 over 45545 (0.9 S-revseq, after merging batch-090-local); measured at merge.
-docs/AUDIT-ACTIONS.md=45576 share=8
+# docs/AUDIT-ACTIONS.md 45871 adds 31 over 45840 (0.9 S-revseq, after merging batch-090-local); measured at merge.
+docs/AUDIT-ACTIONS.md=45871 share=8
 # docs/AUDIT-ACTIONS.md 39938 adds 1 (0.9 H7): the `placement_component_self_defined` reason in the authz.denied vocabulary.
 # 0.9 H10 r1: docs/AUDIT-ACTIONS.md 40113 adds 65 over 40048 for the token-revoke join, the off semantics and the pending connect/disconnect rows.
 # 0.9 H10: docs/AUDIT-ACTIONS.md 40048 adds 111 over 39937 for runner.token.revoke, runners.enabled.set, runner.connect and runner.disconnect.

@@ -241,6 +241,7 @@
 |---|---|
 | **v0.8** | **Alpha RC.** The follow-through on 0.6/0.7 — the remaining enterprise-deployment enhancements, tools, and pieces — and the **last planned release candidate before the alpha go-live** |
 | **v0.9** | **Hybrid local + remote.** See [below](#v09-scope); [design](docs/design/0.9/PLAN.md). |
+| **v0.10** | The New Run items marked Coming soon; see [below](#v010-scope). |
 | **v1.0** | SPIRE identity provider, OpenBao secret store, L3 MCP/tool gateway and the rest of the 1.0 list; see [below](#v10-scope). |
 | **v1.0 (git-token ref confinement)** | **Token-side** branch-namespace confinement for minted git tokens; see [below](#v10-git-token-ref-confinement-scope). |
 
@@ -251,7 +252,26 @@
 - client-mode runners: the org schedules, enforces and audits, and a laptop runs no control plane (an offline runner starts no new governed run),
 - per-run placement between the laptop and the org's cluster, and mixing the two under one identity, one ceiling and one audit stream ·
 - the disk link (`wardyn sync` into a remote sandbox; drive-as-source) ·
+- the New Run redesign: guided setup, the YAML/JSON run document, the Tools and access step, Templates, and saving a draft as a template or policy ·
 - the `member` role alias removed (0.8 warns)
+
+### v0.10 scope
+
+New Run shows these as Coming soon in 0.9.
+
+| Item | Issue |
+|---|---|
+| Scheduled runs, one-time and repeating | #1986 |
+| Several autonomous agents in one run | #1987 |
+| Team-shared drives | #1988 |
+| In-sandbox MCP servers per harness | #1989 |
+| Google Cloud CLI and kubectl access | #1990 |
+| Reusing a run's main drive across runs | #1991 |
+| Folders on your computer as run files | #1992 |
+| The AI composer | #1993 |
+| Application and server sandboxes | #1994 |
+
+- Session continuity across tabs and sign-ins (#1995) and session lifetime (#1996) target a 0.9.x release.
 
 ### v1.0 scope
 

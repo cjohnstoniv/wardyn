@@ -318,3 +318,48 @@ func TestGovernancePreview_IsSecurityTierOnly(t *testing.T) {
 		t.Errorf("security_admin on the preview: code = %d, want 200; body=%s", w.Code, w.Body.String())
 	}
 }
+
+// A profile assigned to the standard user type is selected when the preview carries the type, as
+// it is for a signed-in person who has no other type, and is not selected when user_type is empty,
+// which previews no type tier. The console sends the type; an API caller that omits it keeps the old meaning.
+func TestGovernancePreview_StandardTypeAssignmentNeedsTheType(t *testing.T) {
+	srv, pool := pgHarness(t)
+	st := store.NewPG(pool)
+	ctx := context.Background()
+	p, err := st.UpsertGovernanceProfile(ctx, types.GovernanceProfile{
+		Name:      "std-type-" + uuid.NewString()[:8],
+		Ceiling:   types.RunPolicySpec{AllowedDomains: []string{"pypi.org"}, MinConfinementClass: types.CC2},
+		CreatedBy: "preview-test",
+	})
+	if err != nil {
+		t.Fatalf("seed profile: %v", err)
+	}
+	t.Cleanup(func() { _ = st.DeleteGovernanceProfile(ctx, p.ID) })
+	a, err := st.UpsertGovernanceAssignment(ctx, types.GovernanceAssignment{
+		SubjectType: types.CapabilitySubjectUserType, Subject: types.UserTypeStandard, ProfileID: p.ID, CreatedBy: "preview-test",
+	})
+	if err != nil {
+		t.Fatalf("seed assignment: %v", err)
+	}
+	t.Cleanup(func() { _ = st.DeleteGovernanceAssignment(ctx, a.ID) })
+
+	preview := func(userType string) governancePreviewResponse {
+		t.Helper()
+		body, _ := json.Marshal(governancePreviewRequest{UserSubjects: []string{"nobody-" + p.Name}, Groups: []string{"nobody-" + p.Name}, UserType: userType})
+		w := do(t, srv, http.MethodPost, "/api/v1/governance/preview", adminToken, string(body))
+		if w.Code != http.StatusOK {
+			t.Fatalf("preview type %q: code = %d; body=%s", userType, w.Code, w.Body.String())
+		}
+		var got governancePreviewResponse
+		if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+			t.Fatalf("decode preview: %v", err)
+		}
+		return got
+	}
+	if got := preview(types.UserTypeStandard); got.ProfileID != p.ID || got.MatchedTier != types.CapabilitySubjectUserType {
+		t.Errorf("preview with the standard type = %+v, want the profile assigned to it via the user_type tier", got)
+	}
+	if got := preview(""); got.ProfileID == p.ID {
+		t.Errorf("preview with no type = %+v, want the type tier not consulted", got)
+	}
+}

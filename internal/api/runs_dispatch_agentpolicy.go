@@ -159,27 +159,14 @@ func agentPolicyBasis(level types.AutonomyLevel, hold, locked bool) string {
 // written exactly, or whose runner cannot deliver the document, is refused
 // (agentPolicyRefusal) rather than launched with its rules unenforced.
 func (s *Server) agentPolicyFor(ctx context.Context, run types.AgentRun, harnesses []types.RunHarness, hold, locked bool, attended []types.ToolRule) (runAgentPolicy, error) {
-	path, content, ok := agentpolicy.ForAgent(run.Agent, run.AutonomyLevel, hold, locked)
-	for _, h := range harnesses {
-		if !ok {
-			path, content, ok = agentpolicy.ForAgent(h.Harness, run.AutonomyLevel, hold, locked)
-		}
+	doc, err := agentPolicyDocument(run.Agent, run.AutonomyLevel, harnesses, hold, locked, attended)
+	if err != nil {
+		return runAgentPolicy{}, err
 	}
-	p := runAgentPolicy{path: path, hold: hold, locked: agentpolicy.IsLocked(content)}
-	if run.Agent == claudeCodeHarness || slices.ContainsFunc(harnesses, func(h types.RunHarness) bool { return h.Harness == claudeCodeHarness }) {
-		withRules, err := agentpolicy.WithToolRules(content, attended)
-		if err != nil {
-			return runAgentPolicy{}, agentPolicyRefusal("This run was not launched: its tool rules could not be written into Claude Code's managed settings: " + err.Error())
-		}
-		if !bytes.Equal(withRules, content) {
-			p.path, content, ok = agentpolicy.ClaudeCodeManagedSettingsPath, withRules, true
-			p.toolRules = distinctToolNames(attended)
-		}
-	}
-	if !ok {
+	if !doc.ok {
 		return runAgentPolicy{}, nil
 	}
-	p.bytes = len(content)
+	p := runAgentPolicy{path: doc.path, hold: hold, locked: doc.locked, toolRules: doc.toolRules, bytes: len(doc.content)}
 	caps, err := s.runCapabilities(ctx, run)
 	if err != nil {
 		return runAgentPolicy{}, fmt.Errorf("the runner's capabilities could not be read, so whether it can deliver this run's managed settings (%s) is unknown: %w",
@@ -195,9 +182,49 @@ func (s *Server) agentPolicyFor(ctx context.Context, run types.AgentRun, harness
 	if !deliverable {
 		return p, nil
 	}
-	p.files = []runner.ManagedFile{{Path: p.path, Content: content}}
+	p.files = []runner.ManagedFile{{Path: p.path, Content: doc.content}}
 	p.execLess = isExecLess(caps, run.ConfinementClass)
 	return p, nil
+}
+
+// agentPolicyDoc is the managed-settings document a run's harness set brings.
+type agentPolicyDoc struct {
+	path    string
+	content []byte
+	// harness is the one the document belongs to: the label a warning names.
+	harness string
+	// toolRules counts the distinct tool names the attended rules wrote into it.
+	toolRules int
+	// locked is the generated document before the attended rules, the locked L2 one.
+	locked bool
+	ok     bool
+}
+
+// agentPolicyDocument is the one choice of document dispatch and the 201's
+// warning both make: the started agent's, else the first harness of the set
+// that brings one, with an interactive run's attended tool rules written in.
+// An error is agentPolicyRefusal: rules that cannot be written exactly.
+func agentPolicyDocument(agent string, level types.AutonomyLevel, harnesses []types.RunHarness, hold, locked bool, attended []types.ToolRule) (agentPolicyDoc, error) {
+	d := agentPolicyDoc{harness: agent}
+	d.path, d.content, d.ok = agentpolicy.ForAgent(agent, level, hold, locked)
+	for _, h := range harnesses {
+		if !d.ok {
+			d.path, d.content, d.ok = agentpolicy.ForAgent(h.Harness, level, hold, locked)
+			d.harness = h.Harness
+		}
+	}
+	d.locked = agentpolicy.IsLocked(d.content)
+	if agent == claudeCodeHarness || slices.ContainsFunc(harnesses, func(h types.RunHarness) bool { return h.Harness == claudeCodeHarness }) {
+		withRules, err := agentpolicy.WithToolRules(d.content, attended)
+		if err != nil {
+			return agentPolicyDoc{}, agentPolicyRefusal("This run was not launched: its tool rules could not be written into Claude Code's managed settings: " + err.Error())
+		}
+		if !bytes.Equal(withRules, d.content) {
+			d.path, d.content, d.ok, d.harness = agentpolicy.ClaudeCodeManagedSettingsPath, withRules, true, claudeCodeHarness
+			d.toolRules = distinctToolNames(attended)
+		}
+	}
+	return d, nil
 }
 
 // isExecLess reports an exec-less (krun) substrate for class: the same label
@@ -228,32 +255,96 @@ func managedFilesGap(caps runner.Capabilities, class types.ConfinementClass) (re
 	}
 }
 
+// managedSettingsRun is what the 201's warning reads of a run: the create
+// fold's outputs, plus the dispatch ceiling's guardrail-locks term.
+type managedSettingsRun struct {
+	req       *createRunRequest
+	spec      types.RunPolicySpec
+	harnesses []types.RunHarness
+	level     types.AutonomyLevel
+	locked    bool
+	class     types.ConfinementClass
+	place     runPlacement
+}
+
 // managedSettingsUndeliveredWarning is the 201's half of delivered:false: the
 // same fact the run.agent_policy.write row records, said where the person launching
 // the run reads it. None when the run generates no file or the row will say
-// delivered, and none for an exec run, which has no agent process to say it
-// about. A Capabilities error says nothing here: dispatch fails that run with
-// the reason.
+// delivered, none for an exec run, which has no agent process to say it about,
+// and none for a run dispatch refuses (agentPolicyFor: its attended tool rules
+// need a runner that vouches for them), which fails with its own hint. A
+// Capabilities error says nothing here: dispatch fails that run with the reason.
 //
-// req is read once the gate may have derived its hold, and through
-// requestIsInteractive: preflight never runs the no-task coercion, so the raw
-// field would disagree with the launch about which lane a task-less run takes.
-func (s *Server) managedSettingsUndeliveredWarning(ctx context.Context, req *createRunRequest, level types.AutonomyLevel, locked bool, class types.ConfinementClass) []string {
-	hold := holdLane(requestIsInteractive(*req), req.ToolApprovals, req.TaskMode)
-	if _, _, ok := agentpolicy.ForAgent(req.Agent, level, hold, locked); !ok || s.cfg.Runner == nil || req.TaskMode == "exec" {
+// It reads what dispatch reads: the document agentPolicyDocument picks for the
+// harness set and the attended tool rules, and the capabilities of the runner
+// the run is bound to. bound is the run's row; nil is a run that waits for a
+// slot, whose runner is not chosen yet, so the warning stands only when every
+// runner it could be bound to has the same gap.
+//
+// The run is read once the gate may have derived its hold and the tool lane has
+// settled, and through requestIsInteractive: preflight never runs the no-task
+// coercion, so the raw field would disagree with the launch about which lane a
+// task-less run takes.
+func (s *Server) managedSettingsUndeliveredWarning(ctx context.Context, f managedSettingsRun, bound *types.AgentRun) []string {
+	req := f.req
+	if req.TaskMode == "exec" {
 		return nil
 	}
-	caps, err := s.cfg.Runner.Capabilities(ctx)
-	if err != nil {
+	interactive := requestIsInteractive(*req)
+	hold := holdLane(interactive, req.ToolApprovals, req.TaskMode)
+	locked := f.locked
+	spec, harnessRules := applyHarnessToolRules(f.spec, req.Tools, toolLaneDefault(*req))
+	attended := dispatchParams{Interactive: interactive, Policy: spec, HarnessToolRules: harnessRules}.attendedToolRules()
+	doc, err := agentPolicyDocument(req.Agent, f.level, f.harnesses, hold, locked, attended)
+	if err != nil || !doc.ok {
 		return nil
 	}
-	reason, _ := managedFilesGap(caps, class)
-	if reason == "" {
+	reason, ok := s.placementManagedFilesGap(ctx, f, bound)
+	if !ok || reason == "" || doc.toolRules > 0 {
 		return nil
 	}
 	return []string{fmt.Sprintf(
 		"%s's managed settings for %s are not delivered: %s, so this run's agent runs under its launch flags alone and a repository's own settings can let it run tools without asking",
-		autonomyAgentLabel(req.Agent), agentPolicyBasis(level, hold, locked), reason)}
+		autonomyAgentLabel(doc.harness), agentPolicyBasis(f.level, hold, locked), reason)}
+}
+
+// placementManagedFilesGap is managedFilesGap for the runner a run lands on:
+// its bound runner's, or the deployment's executor, as agentPolicyFor reads
+// them. A run with no bound row answers for each runner it could be bound to
+// and says nothing unless they agree. ok is false when nothing could be read.
+func (s *Server) placementManagedFilesGap(ctx context.Context, f managedSettingsRun, bound *types.AgentRun) (reason string, ok bool) {
+	if bound != nil {
+		if bound.RunnerID == nil && s.cfg.Runner == nil {
+			return "", false
+		}
+		caps, err := s.runCapabilities(ctx, *bound)
+		if err != nil {
+			return "", false
+		}
+		reason, _ = managedFilesGap(caps, f.class)
+		return reason, true
+	}
+	targets := f.place.able(f.class)
+	var deliverable bool
+	for i, t := range targets {
+		if t.runnerID == nil && s.cfg.Runner == nil {
+			return "", false
+		}
+		caps, err := s.runCapabilities(ctx, types.AgentRun{RunnerID: t.runnerID})
+		if err != nil {
+			return "", false
+		}
+		r, d := managedFilesGap(caps, f.class)
+		// The sentence names a driver, which differs per runner, so the runners
+		// agree when they share the kind of gap; the first one's words stand.
+		if i > 0 && (d != deliverable || (r == "") != (reason == "")) {
+			return "", false
+		}
+		if i == 0 {
+			reason, deliverable = r, d
+		}
+	}
+	return reason, len(targets) > 0
 }
 
 // auditAgentPolicy records run.agent_policy.write once the agent's container exists,

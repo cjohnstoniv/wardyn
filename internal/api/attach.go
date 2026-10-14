@@ -254,6 +254,12 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 
 	principalType, principal := actorFromRequest(r)
 
+	releaseSlot := s.webAttachSlot(ctx, w, run, principalType, principal) // the per-run session cap
+	if releaseSlot == nil {
+		return
+	}
+	defer releaseSlot()
+
 	// A paused run is thawed before the exec: the daemon refuses one into a
 	// paused container (run_pause.go).
 	if err := s.thawForExec(ctx, run, principalType, principal, "presence"); err != nil {

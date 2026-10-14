@@ -287,8 +287,7 @@ func (s *Server) uiEnterCommon(w http.ResponseWriter, r *http.Request, runRaw, a
 	// the run's own origin never sees — and would put one run's cookie on
 	// another run's origin. Refuse instead.
 	if want := s.uiRunOrigin(runID); want != "" && !strings.EqualFold(r.Host, want) {
-		s.auditUI(&runID, types.ActorHuman, "unknown", "ui.authorize", app, "denied",
-			map[string]any{"reason": "wrong host for run", "host": r.Host})
+		s.auditUIRefusedBounded(runID, app, map[string]any{"reason": "wrong host for run", "host": r.Host})
 		writeErrorReason(w, http.StatusForbidden, reasonUIGatewayWrongHost, "This run's UI apps are served on a different host")
 		return
 	}
@@ -297,8 +296,7 @@ func (s *Server) uiEnterCommon(w http.ResponseWriter, r *http.Request, runRaw, a
 	// reaches the store or spends a ticket. The refusal is the bad-ticket one,
 	// byte for byte; only the audit reason says which it was.
 	if !s.uiTicketBound(w, r, ticket) {
-		s.auditUI(&runID, types.ActorHuman, "unknown", "ui.authorize", app, "denied",
-			map[string]any{"reason": "ticket not bound to this browser"})
+		s.auditUIRefusedBounded(runID, app, map[string]any{"reason": "ticket not bound to this browser"})
 		writeErrorReason(w, http.StatusForbidden, reasonUIGatewayTicketInvalid, "invalid, expired, or already-used attach ticket")
 		return
 	}
