@@ -64,8 +64,11 @@ type DecisionLog struct {
 	// COMPLETED, so it names the protocol answered), builtin:tunnel-failed
 	// (what ended a CONNECT tunnel after its 200) and a
 	// builtin:resolve-failed written with an upstream proxy configured (the
-	// name is bypassed and did not resolve at the proxy). Empty on every
-	// other decision.
+	// name is bypassed and did not resolve at the proxy). A
+	// policy:tool-allow/policy:tool-deny row carries the quoted tool name the
+	// run's tool_rules answered. A brokered:llm deny whose credential could
+	// not be refreshed carries that masked refusal. Empty on every other
+	// decision.
 	Cause string `json:"cause,omitempty"`
 	// Via names the CLASS of hop that carried the request, or that a refusal
 	// attempted ("upstream-proxy" or "direct"), never an address — Cause's

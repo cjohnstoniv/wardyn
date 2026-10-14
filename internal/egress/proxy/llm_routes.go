@@ -137,7 +137,7 @@ func llm404Detail(configured string) string {
 // over the vetted IP. Shared by the /wardyn/llm/* local routes and the
 // TLS-MITM CONNECT interception (serveMITM).
 func (p *Proxy) proxyLLMRequest(w http.ResponseWriter, r *http.Request, host string, port int, rest string, channel contentscan.Channel) {
-	hdr, ok := p.inject.headerFor(host)
+	hdr, ok, ierr := p.inject.resolveCtx(r.Context(), host)
 	if !ok {
 		p.emitLLMDecision(r, host, port, egress.Deny, ruleSourceLLM, nil)
 		w.Header().Set("Content-Type", "application/json")
@@ -146,6 +146,20 @@ func (p *Proxy) proxyLLMRequest(w http.ResponseWriter, r *http.Request, host str
 			"wardyn": "no_llm_credential", "detail": llm404Detail(p.llmUnavailableDetail),
 		})
 		_, _ = w.Write(body)
+		return
+	}
+	// A rule exists but its credential could not be refreshed: the control plane's answer, not the
+	// below-policy 404 above, so the row carries the reason and the sandbox gets the MITM lane's error.
+	if ierr != nil {
+		if r.Context().Err() != nil {
+			return // the caller hung up mid re-resolve and was never refused
+		}
+		if p.sink != nil {
+			log := decisionLog(p.reqOf(r, host, port), egress.Deny, ruleSourceLLM)
+			log.Cause = "credential refresh failed: " + p.dialFailureCause(ierr)
+			p.sink.emit(log)
+		}
+		p.httpErrorAWSAware(w, host, "llm credential refresh failed", ierr, false, http.StatusUnauthorized, "UnauthorizedException")
 		return
 	}
 

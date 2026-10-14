@@ -892,7 +892,7 @@ What the check does and does not settle:
 **Where it is evaluated: outside the sandbox.**
 
 - Rules are compiled into the run's policy and applied by `wardyn-proxy` on the brokered approval route, so a compromised agent cannot rewrite the rules that govern it.
-- An `allow` or a `deny` is answered immediately and **creates no approval card**; both still appear in the decision log (`policy:tool-allow` / `policy:tool-deny`), so "policy waved this through" is exactly as visible as "a human approved it".
+- An `allow` or a `deny` is answered immediately and **creates no approval card**; both still appear in the decision log (`policy:tool-allow` / `policy:tool-deny`), whose `cause` names the tool, though not the command.
 
 **It narrows; it never widens.**
 

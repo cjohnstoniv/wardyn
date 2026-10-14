@@ -254,6 +254,12 @@ func (i *injector) resolveCtx(ctx context.Context, host string) (injectedHeader,
 			registerHeaderCredentialFor(i.maskKey, resolved.Value)
 			return h, true, nil
 		}
+		if ctx.Err() != nil && transientResolveFailure(err) {
+			// The caller went away mid-ask, which says nothing about the control plane: arm neither
+			// last-good nor its pacing, and leave the entry for the next caller to re-resolve.
+			e.reMu.Unlock()
+			return injectedHeader{}, true, fmt.Errorf("re-resolve injection for %q: %w", key, err)
+		}
 		if e.lastGood(err, time.Now()) {
 			h := e.header
 			e.reMu.Unlock()
@@ -516,16 +522,6 @@ func (i *injector) apply(req *http.Request, host string, port int) {
 		return
 	}
 	req.Header.Set(h.name, h.value)
-}
-
-// headerFor returns host's current injection header, if a rule exists — used by the LLM local route
-// to apply the same credential the forward-proxy path would; unresolvable yields (_, false).
-func (i *injector) headerFor(host string) (injectedHeader, bool) {
-	h, ok, err := i.resolve(host)
-	if err != nil {
-		return injectedHeader{}, false
-	}
-	return h, ok
 }
 
 // bootResolveQuery marks the sidecar's boot-time resolves (mirrors adoResolvePhase/adoResolvePhaseBoot).
