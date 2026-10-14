@@ -310,7 +310,7 @@ func (s *Server) localResidentOrigins(ctx context.Context, owner string, rows []
 	own := s.ownsSecretMemoized(ctx, owner, providerSecretName(llm.provider.provider.UID, providerSSOPart))
 	for _, key := range llm.secretEnvKeys {
 		if _, exists := p.Spec.SecretEnv[key]; exists {
-			p.Origins["SandboxSpec.SecretEnv["+key+"]"] = placement.CredentialOrigin{Class: placement.ClassOwn, Delivery: placement.ClassBedrockRoleCreds, Stored: true, OwnNamespace: own, OwnerOnly: own}
+			p.Origins["SandboxSpec.SecretEnv["+key+"]"] = bedrockSSOSecretEnvOrigin(own)
 		}
 	}
 }

@@ -93,7 +93,7 @@ var Table = []Entry{
 	{Struct: StructSandboxSpec, Field: "Drives", Variant: "host_path", Class: ClassOwn, Rule: RuleBound, Reason: ReasonPlacementLocalPath},
 	{Struct: StructSandboxSpec, Field: "Drives", Variant: "k8s_pvc, k8s_pvc_static, the org's docker_volume", Class: ClassOperator, Rule: RuleRefuse, Reason: ReasonPlacementCapability},
 	{Struct: StructSandboxSpec, Field: "Image", Variant: "any, including a workspace image in the org registry; pulled with the runner's own registry credentials, never the org's pull secrets", Class: ClassOwn, Rule: RuleAllow, Reason: ReasonPlacementCapability},
-	{Struct: StructSandboxSpec, Field: "Env", Variant: "platform variables and the person's own or self-defined component config", Class: ClassExempt, Rule: RuleExempt},
+	{Struct: StructSandboxSpec, Field: "Env", Variant: "platform variables (the placeholder ~/.aws of a proxy-injected AWS SSO session among them) and the person's own or self-defined component config", Class: ClassExempt, Rule: RuleExempt},
 	{Struct: StructSandboxSpec, Field: "Env", Variant: "an org component's config: operator-authored, so a value there may be a secret the org never meant to send", Class: ClassOperator, Rule: RuleStrip},
 	{Struct: StructSandboxSpec, Field: "Labels", Class: ClassExempt, Rule: RuleExempt},
 	{Struct: StructSandboxSpec, Field: "UserMountRoots", Class: ClassExempt, Rule: RuleExempt, Variant: "re-checked against allowed_roots"},

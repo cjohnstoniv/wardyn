@@ -61,6 +61,7 @@ func TestLocalPlacementDoorsP3AndUpstreamRefuseBeforeIdentityOrStore(t *testing.
 
 func TestLocalPlacementRefusalCannotRenewExpiredAWSOrWritePair(t *testing.T) {
 	srv := createRenewalFixture(t)
+	srv.cfg.AWSSSOProxyInject = true // the default; off is refused earlier, as placement_credential
 	calls := renewedOIDC(t)
 	for _, door := range contractDoors {
 		body := strings.TrimSuffix(createRenewalBody, "}") + `,"placement":"local"}`
