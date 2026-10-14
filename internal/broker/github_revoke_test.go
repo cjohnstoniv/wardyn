@@ -336,3 +336,54 @@ func TestGitHubMinter_Revoke_SurvivesCancelledCallerCtx(t *testing.T) {
 		t.Fatalf("revoke requests = %d after an empty token, want still 1 (no-op)", got)
 	}
 }
+
+// cancelOnMint hangs the caller up once its token is issued, and refuses a
+// revoke on a done context as a network call would.
+type cancelOnMint struct {
+	*FakeGitHubMinter
+	cancel context.CancelFunc
+}
+
+func (m cancelOnMint) MintInstallationToken(ctx context.Context, repos []string, permissions map[string]string, ttl time.Duration) (string, time.Time, error) {
+	tok, exp, err := m.FakeGitHubMinter.MintInstallationToken(ctx, repos, permissions, ttl)
+	m.cancel()
+	return tok, exp, err
+}
+
+func (m cancelOnMint) Revoke(ctx context.Context, token string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return m.FakeGitHubMinter.Revoke(ctx, token)
+}
+
+// A caller that hangs up mid-mint must not keep its undelivered token alive:
+// the hand-back runs detached from the request.
+func TestMint_CallerHangsUp_UndeliveredTokenStillRevoked(t *testing.T) {
+	for _, arm := range []string{"mask failure", "commit failure"} {
+		t.Run(arm, func(t *testing.T) {
+			db := newFakeDB()
+			reg, fb := faultMaskRegistry()
+			if arm == "mask failure" {
+				fb.set(func([]byte) error { return errMaskDown })
+			} else {
+				db.commitErr = errors.New("pgx: connection reset by peer")
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			gh := &FakeGitHubMinter{Token: "ghs_hung_up_caller"}
+			b := New(db, nil, &fakeAudit{}, nil, cancelOnMint{gh, cancel}).WithMaskRegistry(reg)
+			runID := uuid.New()
+			spec := githubGrantSpec(t, true)
+			gid := seedGrant(db, runID, spec)
+			seedApproval(db, runID, gid, spec.Scope, types.ApprovalApproved)
+
+			if got, err := b.MintForGrant(ctx, callerFor(runID), gid); err == nil || got.Token != "" {
+				t.Fatalf("mint = %+v, %v; want an error and no token", got, err)
+			}
+			if gh.Calls != 1 || gh.Revoked != 1 {
+				t.Fatalf("calls=%d revoked=%d: the hung-up caller's token was not handed back", gh.Calls, gh.Revoked)
+			}
+		})
+	}
+}

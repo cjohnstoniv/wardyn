@@ -444,7 +444,8 @@ func (s *Server) stepToolPolicy(f *runFold, rec *foldRecorder) bool {
 	before := f.spec
 	s.applyToolPosture(f.req, &f.spec)
 	recordSpecAdds(rec, before, f.spec, provSource{Kind: provKindPosture})
-	if attendedDefaultRefusal(*f.req, f.autonomy.Level).write(s, f.w, f.r) || attendedToolNamesRefusal(*f.req, f.spec).write(s, f.w, f.r) {
+	if attendedDefaultRefusal(*f.req, f.autonomy.Level).write(s, f.w, f.r) || attendedToolNamesRefusal(*f.req, f.spec).write(s, f.w, f.r) ||
+		inheritedMCPHoldRefusal(*f.req, f.spec, f.comps).write(s, f.w, f.r) {
 		return false
 	}
 	return !s.toolRulesWithinPolicyRefusal(*f.req, f.spec).write(s, f.w, f.r)
@@ -489,7 +490,7 @@ func (s *Server) stepADOStanding(f *runFold, rec *foldRecorder) bool {
 // doors, the same reasons and sentences, so a narrowing the run could not
 // enforce shows before the click. Create meets them at dispatch.
 func (s *Server) stepPATNarrowing(f *runFold, rec *foldRecorder) bool {
-	if reason, detail := s.patNarrowingAtDoor(f.r, f.spec, f.scmSite); reason != "" {
+	if reason, detail := s.patNarrowingAtDoor(f.r, *f.req, f.spec, f.scmSite); reason != "" {
 		writeErrorReason(f.w, http.StatusUnprocessableEntity, reason, detail)
 		return false
 	}

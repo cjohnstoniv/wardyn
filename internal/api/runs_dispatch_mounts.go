@@ -510,16 +510,24 @@ func addGitBrokerHosts(sandboxEnv map[string]string, entries ...string) {
 // branch here changes control flow. See buildRepoRecords for the validation
 // (repoFieldSafe, allowed-prefix targets, dedup) it relies on.
 func applyRepoCloneEnv(sandboxEnv map[string]string, run types.AgentRun, policy types.RunPolicySpec) {
+	// The drop sentences are create's to surface (they ride the 201); here the
+	// slog.Warn inside buildRepoRecords is the whole record.
+	repos, _ := buildRepoRecords(run.Repo, policy.WorkspaceRepos)
+	if repos != "" {
+		sandboxEnv["WARDYN_REPOS"] = repos
+	}
+	// The legacy single-repo pair stays for every run that clones something. When
+	// every record was dropped while one names the run's repo, agent-run's legacy
+	// fallback would clone it at the default target and ref in the dropped
+	// record's place, so the pair is withheld.
+	if repos == "" && legacyRepoNamed(run.Repo, policy.WorkspaceRepos) {
+		return
+	}
 	if slug := strings.TrimSpace(run.Repo); slug != "" && repoFieldSafe(slug) {
 		sandboxEnv["WARDYN_REPO_SLUG"] = slug
 		if url := repoCloneURL(slug); url != "" {
 			sandboxEnv["WARDYN_REPO_URL"] = url
 		}
-	}
-	// The drop sentences are create's to surface (they ride the 201); here the
-	// slog.Warn inside buildRepoRecords is the whole record.
-	if repos, _ := buildRepoRecords(run.Repo, policy.WorkspaceRepos); repos != "" {
-		sandboxEnv["WARDYN_REPOS"] = repos
 	}
 }
 
@@ -715,16 +723,47 @@ func driveAuditMode(readOnly bool) string {
 	return "rw"
 }
 
-// recordSandboxRef publishes the run's sandbox ref. A lost ref is not fatal to this dispatch (the run
-// proceeds), but on a daemon restart ReconcileOnBoot finds no ref and finalizes the run FAILED while the
-// container keeps running untracked, so the loss is logged and audited to keep the orphan discoverable.
-func (s *Server) recordSandboxRef(ctx context.Context, runID uuid.UUID, ref string) {
-	if err := s.cfg.Store.SetSandboxRef(ctx, runID, ref); err != nil {
-		slog.ErrorContext(ctx, "wardynd: SetSandboxRef failed; sandbox may be orphaned/untracked across a daemon restart",
-			slog.String("run_id", runID.String()), slog.String("sandbox_ref", ref), slog.Any("err", err))
-		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.create",
-			runID.String(), "failure", mustJSON(map[string]any{"sandbox_ref": ref, "set_sandbox_ref_error": err.Error()})))
+// recordSandboxRef publishes the run's sandbox ref, with one retry: the write is idempotent and the
+// failure it usually sees is a transient connection blip. The ref on the run's row is the only handle a
+// kill, a sweep or another replica has to the sandbox, so a caller never starts a run whose ref was lost.
+func (s *Server) recordSandboxRef(ctx context.Context, runID uuid.UUID, ref string) error {
+	err := s.cfg.Store.SetSandboxRef(ctx, runID, ref)
+	if err != nil {
+		err = s.cfg.Store.SetSandboxRef(ctx, runID, ref)
 	}
+	return err
+}
+
+// abortUnrecordedSandbox ends a dispatch whose sandbox ref could not be recorded, while this dispatch
+// still knows the ref: it stops the sandbox, then fails the run from STARTING, which leaves a kill that
+// won in the meantime as it stands. Its own row states the lost write and nothing about containment: a
+// stop that failed (stopSandboxOrAudit), a state write that failed (failAndRevoke) and a revocation that
+// failed (revokeRunCascade) are each their own row. Bounded as the kill cascade is.
+func (s *Server) abortUnrecordedSandbox(ctx context.Context, runID uuid.UUID, ref string, cause error) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), killCascadeTimeout)
+	defer cancel()
+	slog.ErrorContext(ctx, "wardynd: SetSandboxRef failed; stopping the sandbox and failing the run",
+		slog.String("run_id", runID.String()), slog.String("sandbox_ref", ref), slog.Any("err", cause))
+	s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.create",
+		runID.String(), "failure", mustJSON(map[string]any{"sandbox_ref": ref, "set_sandbox_ref_error": cause.Error()})))
+	s.stopSandboxOrAudit(ctx, runID, ref, "run.create")
+	s.failAndRevoke(ctx, runID, types.RunStarting,
+		"the sandbox was created but its reference could not be persisted, so the run could not be tracked")
+}
+
+// auditLostStart records a dispatch whose STARTING->RUNNING write did not apply: the run was killed or
+// stopped mid-dispatch, or the store failed (cause). The note states only what was observed: whether
+// the teardown actually happened is stopSandboxOrAudit's to report, never this event's to assert.
+func (s *Server) auditLostStart(ctx context.Context, runID uuid.UUID, ref string, cause error) {
+	data := map[string]any{
+		"sandbox_ref": ref,
+		"note":        "run left STARTING by a concurrent kill/stop during CreateSandbox; dispatch aborted",
+	}
+	if cause != nil {
+		data["error"] = cause.Error()
+	}
+	s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.dispatch",
+		runID.String(), "failure", mustJSON(data)))
 }
 
 // applyHarnessSetEnv names the run's harness set for the image's launcher:

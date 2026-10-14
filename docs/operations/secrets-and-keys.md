@@ -758,11 +758,21 @@ A principal key never leaves its domain in a rewrap, and a live key naming an un
 
 ### Offboarding a key domain
 
-Removing a domain from the file while a live key still names it is refused at boot, with the count of live keys per domain. Do it in this order:
+Removing a domain from the file while a live key still names it is refused at boot, with the count of live keys per domain. To start wardynd again, re-declare the domain: that erases nothing, and it is the way back whatever you decide next.
+
+A person can hold two keys in a domain, and a different act destroys each:
+
+| Key | Destroyed by | Effect |
+|---|---|---|
+| Credential key | `DELETE /api/v1/people/{principal}/credentials` | The person's stored credentials are erased. Their audit-seal key stays live. |
+| Audit-seal key | The `audit_personal_fields` scope of `POST /api/v1/people/{principal}/erasure` | Irreversible: every sealed audit field of theirs reads `[erased]` everywhere it was copied. |
+
+Do it in this order:
 
 1. **Re-declare the domain** (or restore the key it names) so wardynd can start.
-2. **Erase or destroy those subjects through the API**: `DELETE /api/v1/people/{principal}/credentials` destroys the person's keys in every domain. Look at `GET /api/v1/key-domains` for how many live keys the domain still holds. Remove the assignments that name the domain (`DELETE /api/v1/key-domains/assignments/...`).
-3. **Remove the domain** from the file and restart. Boot checks that no live key names it.
+2. **Destroy the keys the domain still holds, only where your retention decisions allow it.** `GET /api/v1/key-domains` shows how many live keys it holds. Erasing credentials is not enough while an audit-seal key remains. If a person's audit fields must be kept, keep the domain declared and stop here.
+3. **Remove the assignments** that name the domain (`DELETE /api/v1/key-domains/assignments/...`).
+4. **Remove the domain** from the file and restart. Boot checks that no live key names it.
 
 > [!CAUTION]
 > **Never delete the `principal_keys` rows.** A deleted row is a lost key, and what it sealed is lost with it, silently, instead of being erased on the record. A destroyed generation is a tombstone that holds no key and does not count against the domain.

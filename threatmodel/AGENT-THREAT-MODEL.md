@@ -153,6 +153,7 @@ control. Four owners; the assignments that surprise people are the point.
 | Cloud IAM scoping behind a federated credential | **Operator** — the platform neither enforces nor verifies it |
 | Source-forge rulesets (branch protection and equivalents) | **Operator** — creating one needs repo-admin the platform deliberately does not hold |
 | A credential supplied whole (an unbrokered PAT or SSH key) | **Operator** — bounded by what they issued, not by the platform |
+| The host a run executes on, when it is the developer's own runner | **The developer** — the platform's controls there bind the agent only, and what the host reports is self-reported |
 | Off-box retention of audit head hashes | **Security team / SIEM** — a hash chain detects tampering only against a copy kept somewhere the platform cannot reach |
 | The task, the tools, the sources | **Agent author** — who owns nothing on the enforcement side, by construction |
 | Resistance to prompt injection | **Agent author and model vendor** — explicitly **not** the platform |

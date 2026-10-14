@@ -4,7 +4,6 @@
 package main
 
 import (
-	"errors"
 	"fmt"
 	"strings"
 
@@ -59,11 +58,7 @@ func runFileRequest(cmd *cobra.Command, c *sdk.Client, file, title, description 
 	if req, err = intent.Request(); err != nil {
 		return req, fmt.Errorf("read the run document: %w", err)
 	}
-	if len(overlay) > 0 {
-		// The request has no policy_overlay carrier yet, and inline_policy would
-		// replace the caller's default policy instead of laying onto it.
-		return req, errors.New("this document sets inline_policy, which run --file sends as policy_overlay, and this build cannot send one yet: remove inline_policy, or launch it from the console")
-	}
+	req.PolicyOverlay = overlay
 	if req.Experience != "" {
 		req.ModeContract = sdk.RunModeContractV09
 	}

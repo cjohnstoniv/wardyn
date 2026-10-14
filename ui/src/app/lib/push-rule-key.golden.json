@@ -31,5 +31,16 @@
   { "name": "the visualstudio.com host is case-insensitive", "provider": "azure_devops", "host": "Contoso.VisualStudio.com", "org": "CONTOSO", "key": "dev.azure.com/contoso" },
   { "name": "a visualstudio.com subdomain contradicting the organisation", "provider": "azure_devops", "host": "contoso.visualstudio.com", "org": "fabrikam", "error": true },
   { "name": "the legacy SSH host folds into dev.azure.com", "provider": "azure_devops", "host": "vs-ssh.visualstudio.com", "org": "contoso", "key": "dev.azure.com/contoso" },
-  { "name": "visualstudio.com is only folded for Azure DevOps", "provider": "github", "host": "contoso.visualstudio.com", "org": "contoso", "key": "contoso.visualstudio.com/contoso" }
+  { "name": "visualstudio.com is only folded for Azure DevOps", "provider": "github", "host": "contoso.visualstudio.com", "org": "contoso", "key": "contoso.visualstudio.com/contoso" },
+  { "name": "an Azure DevOps Server collection with a space", "provider": "azure_devops", "host": "tfs.corp.example", "org": "Fabrikam Collection", "key": "tfs.corp.example/fabrikam collection" },
+  { "name": "an Azure DevOps Server collection with a letter outside ASCII", "provider": "azure_devops", "host": "tfs.corp.example", "org": "Équipe", "key": "tfs.corp.example/équipe" },
+  { "name": "a hosted organisation still takes no space", "provider": "azure_devops", "host": "", "org": "Fabrikam Collection", "error": true },
+  { "name": "a collection holds no separator", "provider": "azure_devops", "host": "tfs.corp.example", "org": "Fabrikam/Collection", "error": true },
+  { "name": "a collection holds no escape", "provider": "azure_devops", "host": "tfs.corp.example", "org": "Fabrikam%20Collection", "error": true },
+  { "name": "a collection holds no trailing space", "provider": "azure_devops", "host": "tfs.corp.example", "org": "Fabrikam ", "error": true },
+  { "name": "a collection holds no zero-width character", "provider": "azure_devops", "host": "tfs.corp.example", "org": "Fab\u200brikam", "error": true },
+  { "name": "a collection holds no letter Go and JavaScript lower-case differently", "provider": "azure_devops", "host": "tfs.corp.example", "org": "\u0130stanbul", "error": true },
+  { "name": "a collection does not start with a dot", "provider": "azure_devops", "host": "tfs.corp.example", "org": ".Fabrikam", "error": true },
+  { "name": "a collection holds no two dots in a row", "provider": "azure_devops", "host": "tfs.corp.example", "org": "Fab..rikam", "error": true },
+  { "name": "a collection holds no lone surrogate", "provider": "azure_devops", "host": "tfs.corp.example", "org": "Fab\ud800rikam", "error": true }
 ]

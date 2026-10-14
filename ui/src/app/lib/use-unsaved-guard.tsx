@@ -51,7 +51,7 @@ import {
 } from "../components/ui/alert-dialog";
 import { buttonVariants } from "../components/ui/button";
 import { UNSAVED } from "./unsaved-copy";
-import { unsavedSnapshot, useRegisterUnsaved } from "./unsaved-registry";
+import { unsavedSnapshot, unsavedStaysAt, useRegisterUnsaved } from "./unsaved-registry";
 
 interface GuardContextValue {
   /** Runs `proceed` immediately when nothing is dirty; otherwise opens the
@@ -131,7 +131,8 @@ function installUnsavedGuard(): void {
       // against the correct, still-valid baseline instead of a corrupted one.
       return;
     }
-    if (historyIndex === null || newIndex === historyIndex || unsavedSnapshot() === null || !activeRequestLeave) {
+    // A move between places where every unsaved draft still lives (one form's own steps) loses nothing.
+    if (historyIndex === null || newIndex === historyIndex || unsavedSnapshot() === null || !activeRequestLeave || unsavedStaysAt(window.location.pathname + window.location.search)) {
       // No established baseline yet, no actual move, nothing dirty, or no
       // mounted provider to ask through — accept it as the new baseline and
       // let react-router see it normally.
@@ -226,8 +227,8 @@ export function releaseUnloadGuard(released: boolean): void {
  *  `getText` in unsaved-registry.ts while `dirty`, and arms `beforeunload`
  *  over that same window — the console's first use of either. `id` must be
  *  stable and unique per mounted editor. */
-export function useUnsavedGuard(id: string, dirty: boolean, getText: () => string): () => void {
-  const releaseRegistration = useRegisterUnsaved(id, dirty, getText);
+export function useUnsavedGuard(id: string, dirty: boolean, getText: () => string, within?: (path: string) => boolean): () => void {
+  const releaseRegistration = useRegisterUnsaved(id, dirty, getText, within);
   const unload = React.useMemo(() => ({ id, release: () => {} }), [id]);
 
   React.useEffect(() => {

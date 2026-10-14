@@ -218,7 +218,7 @@ func (s *Server) applyWorkspaceRequirementsFor(ctx context.Context, present map[
 					pinned := true
 					narrow = &pinned
 				}
-				for _, i := range applyWriteNarrowing(spec, name, enabled, narrow) {
+				for _, i := range applyWriteNarrowing(spec, name, enabled, narrow, enabled || slices.ContainsFunc(attached, func(a types.Workspace) bool { return a.ID == ws.ID })) {
 					suppliers[i] = append(suppliers[i], ws)
 				}
 			}
@@ -304,14 +304,20 @@ func readOnlyPinned(attached []types.Workspace, selections map[string]client.Wor
 // add an Optional write it never enabled by putting the key in
 // EnabledOptional — only Level/EnabledOptional can grant write, never this
 // field alone). It returns the index of every mount it left writable.
-func applyWriteNarrowing(spec *types.RunPolicySpec, path string, grantedDefault bool, narrow *bool) []int {
+//
+// mayNarrow says whether a row that grants nothing may still make the mount
+// read-only: true for a workspace the run attaches, or one whose row is
+// required or enabled. A workspace that is only in the run because it stores
+// the same directory (referencedWorkspacesIn) and whose row is not enabled
+// neither grants a write nor removes one another workspace granted.
+func applyWriteNarrowing(spec *types.RunPolicySpec, path string, grantedDefault bool, narrow *bool, mayNarrow bool) []int {
 	granted := grantedDefault
 	if narrow != nil && *narrow {
 		granted = false
 	}
 	var writable []int
 	for i := range spec.WorkspaceMounts {
-		if spec.WorkspaceMounts[i].Source != path {
+		if spec.WorkspaceMounts[i].Source != path || (!granted && !mayNarrow) {
 			continue
 		}
 		ro := !granted

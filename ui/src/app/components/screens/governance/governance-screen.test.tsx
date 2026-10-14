@@ -545,7 +545,7 @@ describe("GovernanceScreen — assignments and the resolved preview", () => {
   // server offers each to both tiers and its answer names the one that
   // matched), and user_subjects arrives sign-in-subject-first so the resolver's
   // array_position tie-break agrees with capabilitySubjects.
-  it("offers every claim to both tiers, sign-in subject before email", async () => {
+  it("offers every claim to both tiers, sign-in subject before email, with the standard user type", async () => {
     renderScreen();
     await screen.findByText(GOV.PREVIEW_TITLE);
     await userEvent.type(
@@ -557,6 +557,7 @@ describe("GovernanceScreen — assignments and the resolved preview", () => {
     expect(previewGovernanceMock).toHaveBeenCalledWith({
       user_subjects: ["8f2c-sub-id", "eng", "alice@corp.example"],
       groups: ["alice@corp.example", "8f2c-sub-id", "eng"],
+      user_type: "standard",
     });
   });
 

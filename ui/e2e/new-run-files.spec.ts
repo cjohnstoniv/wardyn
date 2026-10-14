@@ -42,7 +42,7 @@ const DRIVE = {
 const CAP_MIB = 20480;
 const DEFAULT_MIB = 10240;
 
-type Body = { workspaces?: { workspace_id: string; repos?: { repo: string; ref?: string }[] }[]; drive?: object; drives?: { drive_id: string; read_only?: boolean }[]; start_folder?: { attachment?: string; repo?: string; drive_id?: string }; resources?: { disk_mib?: number }; no_repositories_or_drives?: boolean };
+type Body = { workspaces?: { workspace_id: string; repos?: { repo: string; ref?: string }[] }[]; drive?: object; drives?: { drive_id: string; read_only?: boolean }[]; start_folder?: { attachment?: string; repo?: string; drive_id?: string }; resources?: { disk_mib?: number }; no_repositories_or_drives?: boolean; experience?: string };
 
 const unlimited = { default: { value: 0, unlimited: true }, cap: { value: 0, unlimited: true } };
 const limitsFor = (run_type: string, capSource: string) => ({
@@ -76,8 +76,10 @@ function preflightFor(body: Body, capSource: string) {
     setup_items: [],
     enforced_confinement_class: "CC2",
     runner_pool: { ...POOL, revision: 1, selection: "organisation_default" },
-    runner_pools: [{ ...POOL, availability: "available", limits: [limitsFor("interactive", capSource), limitsFor("background", capSource)] }],
-    main_drive: { applied_mib: body.resources?.disk_mib ?? DEFAULT_MIB, basis: "default", soft: false, facts: { enforcement: "filesystem", basis: "substrate", keep: { supported: false }, drive_mounts: true } },
+    // As the dry door draws it: the run's limits at the top level, the pool choices without limits.
+    runner_pools: [{ ...POOL, availability: "available", main_drive: { enforcement: "filesystem", basis: "substrate", keep: { supported: false }, drive_mounts: true } }],
+    limits: limitsFor(body.experience ?? "interactive", capSource),
+    main_drive: body.resources?.disk_mib ? { requested_mib: body.resources.disk_mib, applied_mib: body.resources.disk_mib, basis: "request", soft: false } : { applied_mib: DEFAULT_MIB, basis: "default", default_source: "pool", soft: false },
     attachments,
   };
 }

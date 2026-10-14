@@ -486,8 +486,10 @@ export const runs = {
   // each named run's proxy under its OWNER's current limits, one at a time;
   // a per-run failure (including a rebooted run's own "revive it from the
   // run's page" 409) never aborts the rest — see AdminRestartResult.
-  async restartAdminRuns(runIds: string[]): Promise<AdminRestartResponse> {
-    const res = await wfetch("/admin/runs/restart", { method: "POST", body: JSON.stringify({ run_ids: runIds }) });
+  // timeoutMs is the caller's deadline for the whole batch: the default 60s bounds a hang, not a
+  // restart of several runs one after another.
+  async restartAdminRuns(runIds: string[], timeoutMs?: number): Promise<AdminRestartResponse> {
+    const res = await wfetch("/admin/runs/restart", { method: "POST", body: JSON.stringify({ run_ids: runIds }) }, timeoutMs);
     if (!res.ok) throw new HttpError(res.status, await errText(res));
     return asJson<AdminRestartResponse>(res);
   },
