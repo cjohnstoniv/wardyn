@@ -823,6 +823,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
   preview (`request_field_unavailable`). An explicit `*: hold` rule counts, whatever single tools the policy allows;
   a policy with no rule for the tool does not. Before, such a run started and the held tool ran without anyone being
   asked. Tool rules set on a harness inside a background command are refused the same way.
+- The union Go coverage floor (`COVER_MIN`) is re-set from 79 to 74, one point under the 0.9.0 measurement as the
+  Makefile's rule says. 0.9 added code that only the Postgres suites exercise, and the union does not count those
+  suites yet; everything else stays at about 79%.
 
 ### Removed
 
