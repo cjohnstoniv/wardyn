@@ -96,7 +96,7 @@ func (s *Server) handleRunnerTokenAdmin(w http.ResponseWriter, r *http.Request) 
 		writeServerError(w, r, "resolve the runner token's owner", err)
 		return
 	}
-	if refusal != "" || !known || s.isReservedPrincipal(resolved) {
+	if refusal != "" || !known {
 		writeErrorReason(w, http.StatusUnprocessableEntity, reasonRunnerOwnerInvalid, runnerOwnerRefusal(refusal))
 		return
 	}
