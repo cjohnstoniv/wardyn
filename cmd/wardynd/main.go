@@ -429,6 +429,7 @@ func run() error {
 		DemoVideoBaseURL:    knobs.demoVideoBaseURL,
 		RunnerTarget:        runnerTarget,
 		RunnerOrgURL:        *f.runnerOrgURL,
+		ProxyImage:          *f.proxyImage,
 		UIDir:               *f.uiDir,
 		ControlPlaneURL:     *f.controlURL,
 		ControlPlaneCAPEM:   feats.hop.caCertPEM(),

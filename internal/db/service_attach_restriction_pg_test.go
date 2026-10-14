@@ -24,7 +24,7 @@ func TestMigration0167_RestrictsServiceAttach(t *testing.T) {
 	if n := pgScalar[int](t, pool, `SELECT count(*)::int FROM capability_restrictions WHERE capability = 'feature' AND value = 'service_attach'`); n != 1 {
 		t.Errorf("capability_restrictions holds %d feature/service_attach rows after the migration, want 1", n)
 	}
-	if n := pgScalar[int](t, pool, `SELECT count(*)::int FROM capability_restrictions`); n != 1 {
+	if n := pgScalar[int](t, pool, `SELECT count(*)::int FROM capability_restrictions WHERE created_by = 'migration:0167'`); n != 1 {
 		t.Errorf("the migration wrote %d restriction rows, want only service_attach", n)
 	}
 }

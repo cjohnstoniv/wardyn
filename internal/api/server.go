@@ -142,6 +142,9 @@ type Config struct {
 	// RunnerOrgURL is the public organisation URL bound into runner identities.
 	// Empty disables runner registration and streams; never infer it from Host.
 	RunnerOrgURL string
+	// ProxyImage is the egress-proxy image the daemon runs sandboxes with (WARDYN_PROXY_IMAGE). The runner
+	// token mint answers carry it; empty omits it.
+	ProxyImage string
 	// RunnerHub supplies durable runner admission and lifecycle callbacks.
 	// The server always supplies OrgURL and Lookup from its own configuration.
 	RunnerHub remote.HubConfig

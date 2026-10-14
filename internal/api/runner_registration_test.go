@@ -34,11 +34,16 @@ type runnerRegistrationFake struct {
 	rows      map[uuid.UUID]types.Runner
 	runs      map[uuid.UUID]int
 	emails    map[string]string
+	// selfHost is the self_host_runner grant state migration 0178 sets up: restricted, and allowed to
+	// the subjects in selfHostAllow (empty: nobody).
+	selfHostRestricted bool
+	people             map[string][]string // PrincipalsNamed's directory: a name to the principals it resolves to
+	selfHostAllow      []types.CapabilityGrant
 }
 
 func newRunnerRegistrationServer(t *testing.T) (*Server, *runnerRegistrationFake, *harness) {
 	t.Helper()
-	f := &runnerRegistrationFake{authzStore: newAuthzStore(), tokens: map[string]types.RunnerRegistrationToken{}, rows: map[uuid.UUID]types.Runner{}}
+	f := &runnerRegistrationFake{authzStore: newAuthzStore(), tokens: map[string]types.RunnerRegistrationToken{}, people: map[string][]string{"alice": {"alice"}, "bob": {"bob"}}, rows: map[uuid.UUID]types.Runner{}}
 	f.siteCfg.Runners = &types.RunnerSettings{Enabled: true}
 	h := newHarness(t)
 	cfg := baseTestConfig(h, f)
@@ -53,6 +58,21 @@ func (f *runnerRegistrationFake) GetSiteConfig(ctx context.Context) (types.SiteC
 		return types.SiteConfig{}, f.configErr
 	}
 	return f.authzStore.GetSiteConfig(ctx)
+}
+
+func (f *runnerRegistrationFake) PrincipalsNamed(_ context.Context, name string) ([]string, error) {
+	return f.people[name], nil
+}
+
+func (f *runnerRegistrationFake) ListCapabilityRestrictions(ctx context.Context) (map[string]map[string]bool, error) {
+	if f.selfHostRestricted {
+		return map[string]map[string]bool{capFeature: {featureSelfHostRunner: true}}, nil
+	}
+	return f.authzStore.ListCapabilityRestrictions(ctx)
+}
+
+func (f *runnerRegistrationFake) ListCapabilityGrantsFor(context.Context, []string, []string, string) ([]types.CapabilityGrant, error) {
+	return f.selfHostAllow, nil
 }
 
 func (f *runnerRegistrationFake) MintRunnerRegistrationToken(_ context.Context, raw string, token types.RunnerRegistrationToken) (types.RunnerRegistrationToken, error) {
@@ -149,6 +169,46 @@ func TestRunnerRegistrationTokenTTLAndAdminBoundary(t *testing.T) {
 	srv, _, _ := newRunnerRegistrationServer(t)
 	if w := do(t, srv, http.MethodPost, "/api/v1/me/runners/tokens", adminToken, "{}"); w.Code != 403 {
 		t.Fatalf("admin bearer minted self token: %d", w.Code)
+	}
+}
+
+// POST /me/runners/tokens is the self-host door: with the feature value restricted (migration 0178) a
+// member is refused until an allow names it, `all` included; an operator is exempt; the admin mint
+// (POST /runners/tokens) is never asked.
+func TestRunnerSelfMintNeedsTheSelfHostGrant(t *testing.T) {
+	allow := func(subject string) []types.CapabilityGrant {
+		return []types.CapabilityGrant{{SubjectType: types.CapabilitySubjectAll, Subject: subject, Capability: capFeature, Value: featureSelfHostRunner, Effect: types.CapabilityAllow}}
+	}
+	wildcard := allow("")
+	wildcard[0].Value = capWildcard
+	for _, tc := range []struct {
+		name, role string
+		allow      []types.CapabilityGrant
+		want       int
+	}{
+		{"member without a grant", oidc.RoleUser, nil, 403},
+		{"member with a wildcard allow only", oidc.RoleUser, wildcard, 403},
+		{"member with an all allow", oidc.RoleUser, allow(""), 201},
+		{"operator is exempt", oidc.RoleAdmin, nil, 201},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, f, _ := newRunnerRegistrationServer(t)
+			f.selfHostRestricted, f.selfHostAllow = true, tc.allow
+			cookie := memberModeSSOSession(t, "alice", "alice@example.com", tc.role, false)
+			w := doSSO(t, srv, http.MethodPost, "/api/v1/me/runners/tokens", cookie, "{}")
+			if w.Code != tc.want {
+				t.Fatalf("status %d: %s", w.Code, w.Body.String())
+			}
+			if tc.want == 403 && (!strings.Contains(w.Body.String(), "capability_feature") || !strings.Contains(w.Body.String(), "self_host_runner") || len(f.tokens) != 0) {
+				t.Fatalf("refusal lacks its reason, or a token was minted: %s", w.Body.String())
+			}
+		})
+	}
+	srv, f, _ := newRunnerRegistrationServer(t)
+	f.selfHostRestricted = true
+	admin := memberModeSSOSession(t, "carol", "carol@example.com", oidc.RoleAdmin, false)
+	if w := doSSO(t, srv, http.MethodPost, "/api/v1/runners/tokens", admin, `{"owner":"alice"}`); w.Code != 201 {
+		t.Fatalf("admin mint for a person was gated: %d %s", w.Code, w.Body.String())
 	}
 }
 
@@ -316,6 +376,7 @@ func TestRunnerTokenCannotNameReservedMechanismAsOwner(t *testing.T) {
 
 func TestRunnerTokenMintAnswersCarryTheOrgURLAndAListNever(t *testing.T) {
 	srv, _, _ := newRunnerRegistrationServer(t)
+	srv.cfg.ProxyImage = "registry.example/wardyn-proxy:1"
 	admin := memberModeSSOSession(t, "carol", "carol@example.com", oidc.RoleAdmin, false)
 	alice := memberModeSSOSession(t, "alice", "alice@example.com", oidc.RoleUser, false)
 	for name, mint := range map[string]func() *httptest.ResponseRecorder{
@@ -328,12 +389,12 @@ func TestRunnerTokenMintAnswersCarryTheOrgURLAndAListNever(t *testing.T) {
 	} {
 		w := mint()
 		var token types.RunnerRegistrationToken
-		if w.Code != http.StatusCreated || json.Unmarshal(w.Body.Bytes(), &token) != nil || token.OrgURL != srv.cfg.RunnerOrgURL {
-			t.Fatalf("%s mint = %d %s: want org_url %q", name, w.Code, w.Body.String(), srv.cfg.RunnerOrgURL)
+		if w.Code != http.StatusCreated || json.Unmarshal(w.Body.Bytes(), &token) != nil || token.OrgURL != srv.cfg.RunnerOrgURL || token.ProxyImage != srv.cfg.ProxyImage {
+			t.Fatalf("%s mint = %d %s: want org_url %q and proxy_image %q", name, w.Code, w.Body.String(), srv.cfg.RunnerOrgURL, srv.cfg.ProxyImage)
 		}
 	}
 	w := doSSO(t, srv, http.MethodGet, "/api/v1/runners/tokens", admin, "")
-	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"owner"`) || strings.Contains(w.Body.String(), "org_url") {
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"owner"`) || strings.Contains(w.Body.String(), "org_url") || strings.Contains(w.Body.String(), "proxy_image") {
 		t.Fatalf("a token list must name its tokens and never carry org_url: %d %s", w.Code, w.Body.String())
 	}
 }
@@ -379,5 +440,51 @@ func TestRunnerRegistrationRateBucketIsItsOwnAndChargesFailuresOnly(t *testing.T
 	}
 	if refused == 0 {
 		t.Error("failed registrations from one address were never rate limited")
+	}
+}
+
+// The admin mint resolves `owner` through the directory every admin-names-a-person route uses: an email
+// reaches the principal the person signs in as, and what cannot be resolved is refused, never stored.
+func TestRunnerTokenAdminResolvesTheOwner(t *testing.T) {
+	for _, tc := range []struct {
+		name, owner string
+		people      map[string][]string
+		want        int
+		wantOwner   string
+	}{
+		{"exact principal", "sub-alice", map[string][]string{"sub-alice": {"sub-alice"}}, 201, "sub-alice"},
+		{"email of a known person", "Alice@Corp.example", map[string][]string{"Alice@Corp.example": {"sub-alice"}}, 201, "sub-alice"},
+		{"ambiguous", "alice", map[string][]string{"alice": {"sub-a", "sub-A"}}, 422, ""},
+		{"email nobody is known by", "ghost@corp.example", nil, 422, ""},
+		{"name nobody is known by", "ghost", nil, 422, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, f, _ := newRunnerRegistrationServer(t)
+			f.people = tc.people
+			w := do(t, srv, http.MethodPost, "/api/v1/runners/tokens", adminToken, `{"owner":"`+tc.owner+`"}`)
+			if w.Code != tc.want {
+				t.Fatalf("status %d: %s", w.Code, w.Body.String())
+			}
+			if tc.want == 422 {
+				if !strings.Contains(w.Body.String(), reasonRunnerOwnerInvalid) || len(f.tokens) != 0 {
+					t.Fatalf("refusal lacks its reason, or a token was stored: %s", w.Body.String())
+				}
+				return
+			}
+			var token types.RunnerRegistrationToken
+			if err := json.Unmarshal(w.Body.Bytes(), &token); err != nil || token.Owner != tc.wantOwner || f.tokens[token.Token].Owner != tc.wantOwner {
+				t.Fatalf("owner = %q (%v), want the resolved principal %q", token.Owner, err, tc.wantOwner)
+			}
+		})
+	}
+}
+
+// With no proxy image configured the mint answer omits proxy_image rather than carrying an empty string.
+func TestRunnerTokenMintOmitsAnUnsetProxyImage(t *testing.T) {
+	srv, _, _ := newRunnerRegistrationServer(t)
+	alice := memberModeSSOSession(t, "alice", "alice@example.com", oidc.RoleUser, false)
+	w := doSSO(t, srv, http.MethodPost, "/api/v1/me/runners/tokens", alice, "{}")
+	if w.Code != http.StatusCreated || strings.Contains(w.Body.String(), "proxy_image") {
+		t.Fatalf("mint = %d %s: want 201 without proxy_image", w.Code, w.Body.String())
 	}
 }
