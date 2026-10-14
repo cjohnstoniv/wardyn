@@ -47,7 +47,9 @@ async function mockModelAccess(
     if (!cached) {
       const body = (await (await route.fetch()).json()) as Record<string, unknown>;
       body.model_providers = [BEDROCK];
-      body.provider_access = [{ provider: BEDROCK.id, ...access }];
+      // As the server sends it: every not_configured row with no other cause is marked never_connected.
+      const cause = access.state === "not_configured" ? { cause: "never_connected" } : {};
+      body.provider_access = [{ provider: BEDROCK.id, ...cause, ...access }];
       cached = body;
     }
     await route.fulfill({ json: cached! });

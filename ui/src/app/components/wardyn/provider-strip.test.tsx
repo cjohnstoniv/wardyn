@@ -157,13 +157,27 @@ describe("provider strip connection causes", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 
-  it.each(["never_connected", "destination_changed", "kind_changed"])("%s carries the cause through the attention row", (cause) => {
+  it.each(["destination_changed", "kind_changed"])("%s carries the cause through the attention row", (cause) => {
     const status = providerStatus([{ provider: gateway, defaultFor: ["claude-code"] }]);
     Object.assign(status.provider_access![0], { cause, new_destination: "new.example" });
     strip(status);
-    const line = cause === "never_connected" ? CONNECTIONS.NEVER_CONNECTED("new.example", gateway.name || gateway.id)
-      : cause === "destination_changed" ? CONNECTIONS.DESTINATION_CHANGED("new.example") : CONNECTIONS.KIND_CHANGED("new.example");
+    const line = cause === "destination_changed" ? CONNECTIONS.DESTINATION_CHANGED("new.example") : CONNECTIONS.KIND_CHANGED("new.example");
     expect(screen.getByText(line)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: cause === "never_connected" ? CONNECTIONS.ADD_TOKEN : CONNECTIONS.REVIEW_RECONNECT })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: CONNECTIONS.REVIEW_RECONNECT })).toBeInTheDocument();
+  });
+
+  // The server marks every first-run row never_connected; the strip must still say which harness needs the person.
+  it.each([
+    { provider: bedrock, sentence: BANNER.B1("Claude Code", bedrock.name), button: AGENTS.SIGN_IN_AWS },
+    { provider: claude, sentence: BANNER.B5("Claude Code"), button: CONNECTIONS.SIGN_IN_CLAUDE },
+    { provider: gateway, sentence: BANNER.B4("Claude Code", gateway.name, true), button: CONNECTIONS.ADD_TOKEN },
+    { provider: anthropicKey, sentence: BANNER.B4("Claude Code", anthropicKey.name, false), button: CONNECTIONS.ADD_KEY },
+  ])("never_connected keeps the first-run line for $provider.kind", ({ provider, sentence, button }) => {
+    const status = providerStatus([{ provider, defaultFor: ["claude-code"] }]);
+    status.provider_access![0].cause = "never_connected";
+    strip(status);
+    expect(screen.getByText(sentence)).toBeInTheDocument();
+    expect(screen.queryByText(CONNECTIONS.NEVER_CONNECTED(provider.host, provider.name))).toBeNull();
+    expect(screen.getByRole("button", { name: button })).toBeInTheDocument();
   });
 });
