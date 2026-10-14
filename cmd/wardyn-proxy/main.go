@@ -42,15 +42,18 @@ func main() {
 	}
 	configPath := flag.String("config", "", "path to wardyn-proxy JSON config (overrides "+configStdinEnv+" and WARDYN_PROXY_CONFIG_JSON)")
 	// egressCanary is the k8s substrate's boot-time NetworkPolicy-enforcement
-	// probe (see internal/runner/k8s): launched as a throwaway pod with this
+	// probe (see internal/runner/k8s), and also the Docker runner's relay
+	// reachability probe (see internal/runner/docker): launched as a throwaway pod with this
 	// flag instead of the normal proxy entrypoint, it TCP-dials host:port (the
 	// apiserver, taken from the substrate's own rest.Config — never DNS, never
 	// external egress) and exits 0 on connect, 1 on refuse/timeout. A Running
 	// pod's exit code is what lets the substrate tell "NetworkPolicy enforced"
 	// (deny-all blocks the dial) apart from "not enforced" (dial succeeds
 	// anyway) — see substrate.ClassSupport.NetworkPolicy's doc. Not a normal
-	// proxy invocation: no config is loaded, nothing else in main runs.
-	egressCanary := flag.String("egress-canary", "", "internal: TCP-dial host:port, exit 0 on connect / 1 on refuse-or-timeout (k8s substrate canary only)")
+	// proxy invocation: no config is loaded, nothing else in main runs. The Docker
+	// runner's probe passes a name its --add-host maps to the relay's address, so the
+	// target may be resolved through /etc/hosts.
+	egressCanary := flag.String("egress-canary", "", "internal: TCP-dial host:port, exit 0 on connect / 1 on refuse-or-timeout (k8s substrate and Docker runner relay probes only)")
 	// stageConfigSrc/stageConfigDst are the k8s substrate's init-container
 	// mode (T-28, issue #688): this binary, run once as an init container
 	// with the SAME image the sidecar itself uses, stages the proxy config
