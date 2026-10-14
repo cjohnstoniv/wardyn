@@ -41,17 +41,18 @@ export function IdentityWidget({
   // type since deleted — never the raw id.
   const ranAs = run.user_type_name;
   const principal = usePrincipal();
-  // Where the run runs (0.9, M-RN-3 RS3). A local run always says; a remote one only when the resolver chose it
-  // (placement_filled), because this widget cannot tell a runners-on deployment from one that never offered a
-  // choice, and a deployment without runners keeps today's rows.
+  // Where the run runs, for every run: local names the computer, remote says so, and a run from before 0.9
+  // (nothing recorded) says that. The runner and pool rows name where it went, by id when no name is known.
   const local = run.placement === "local";
   const runsOn = local
     ? principal && run.created_by === principal
       ? RUN_PLACEMENT.MINE(runnerLabel(run))
       : RUN_PLACEMENT.OTHERS(runnerLabel(run), run.created_by)
-    : run.placement_filled
+    : run.placement === "remote"
       ? RUN_PLACEMENT.REMOTE
-      : null;
+      : RUN_PLACEMENT.NOT_RECORDED;
+  const runner = run.runner_name || run.runner_id || run.remote_runner_id || run.runner_target;
+  const pool = run.runner_pool_name || run.runner_pool_id;
 
   return (
     <WidgetCard title="Identity" Icon={Fingerprint} grow>
@@ -122,18 +123,25 @@ export function IdentityWidget({
           </button>
         </dd>
 
-        {runsOn && (
+        <dt className="text-muted-foreground">{RUN_PLACEMENT.LABEL}</dt>
+        <dd className="min-w-0 text-right text-foreground">
+          <div className="truncate">{runsOn}</div>
+          {run.placement_filled && <div className="text-muted-foreground">{RUN_PLACEMENT.FILLED}</div>}
+        </dd>
+
+        <dt className="text-muted-foreground">{RUN_PLACEMENT.RUNNER}</dt>
+        <dd className="min-w-0 truncate text-right font-mono text-foreground" title={run.runner_id ?? run.remote_runner_id}>
+          {runner}
+        </dd>
+
+        {pool && (
           <>
-            <dt className="text-muted-foreground">{RUN_PLACEMENT.LABEL}</dt>
-            <dd className="min-w-0 text-right text-foreground">
-              <div className="truncate">{runsOn}</div>
-              {run.placement_filled && <div className="text-muted-foreground">{RUN_PLACEMENT.FILLED}</div>}
+            <dt className="text-muted-foreground">{RUN_PLACEMENT.POOL}</dt>
+            <dd className="min-w-0 truncate text-right text-foreground" title={run.runner_pool_id}>
+              {pool}
             </dd>
           </>
         )}
-
-        <dt className="text-muted-foreground">Runner</dt>
-        <dd className="min-w-0 truncate text-right font-mono text-foreground">{run.runner_target}</dd>
 
         {local && run.evidence_source === "runner_asserted" && (
           <>

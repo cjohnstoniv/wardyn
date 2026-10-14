@@ -613,23 +613,28 @@ func (p runPlacement) sizeFacts() (*types.EffectiveRunLimits, *client.AppliedRes
 	return &limits, &applied
 }
 
-// auditFields are the applied size and, for a pooled run, the binding, as run.create records them.
-func (p runPlacement) auditFields(run types.AgentRun) map[string]any {
-	data := map[string]any{"resources_applied": p.applied}
-	if !p.pooled {
-		return data
+// auditFields are the applied size and where the run goes, as run.create records them: the placement
+// always (empty for a run nothing placed), and for a pooled run the pool and the binding. runnerName is
+// the bound runner's display name, "" when there is none or it could not be read.
+func (p runPlacement) auditFields(run types.AgentRun, runnerName string) map[string]any {
+	data := map[string]any{
+		"resources_applied": p.applied, "placement": run.Placement, "placement_filled": run.PlacementFilled, "evidence_source": run.EvidenceSource,
 	}
-	maps.Copy(data, map[string]any{
-		"placement": run.Placement, "placement_filled": run.PlacementFilled, "evidence_source": run.EvidenceSource,
-		"runner_pool_id": p.pool.ID, "runner_pool_revision": run.RunnerPoolRevision, "runner_pool_selection": run.RunnerPoolSelection,
-	})
+	if p.pooled {
+		maps.Copy(data, map[string]any{
+			"runner_pool_id": p.pool.ID, "runner_pool_name": p.pool.Name, "runner_pool_revision": run.RunnerPoolRevision,
+			"runner_pool_selection": run.RunnerPoolSelection, "reserved": run.Reserved,
+		})
+	}
 	if run.RunnerID != nil {
 		data["runner_id"] = run.RunnerID
 	}
 	if run.RunnerPoolExecutor != "" {
 		data["remote_runner_id"] = run.RunnerPoolExecutor
 	}
-	data["reserved"] = run.Reserved
+	if runnerName != "" {
+		data["runner_name"] = runnerName
+	}
 	return data
 }
 

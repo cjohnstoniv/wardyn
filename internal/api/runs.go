@@ -340,7 +340,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	intent.stamp(createData, created.LaunchIntent != nil)
 	stampHarnessSet(createData, f.harnesses, f.image)
 	comps.stampRunCreate(createData)
-	maps.Copy(createData, f.place.auditFields(created))
+	maps.Copy(createData, f.place.auditFields(created, s.runnerNameOf(ctx, created)))
 	s.markGovernanceExempt(ctx, createData)
 	s.recordAudit(ctx, s.auditEvent(&runID, createdByType, createdBy, "run.create",
 		runID.String(), "success", mustJSON(withRunUserType(ctx, run.UserType, createData))))

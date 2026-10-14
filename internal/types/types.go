@@ -149,8 +149,8 @@ type AgentRun struct {
 	// for every run from before 0.9; omitted on the wire when NULL, never "".
 	RunnerID *uuid.UUID `json:"runner_id,omitempty"`
 	// RunnerName, RunnerOnline and RunnerLastSeenAt are read-side facts about that runner, projected on
-	// the run routes and never stored. They are absent for a remote run and when the runner could not be
-	// read. The name is the runner's current one, which equals the name at create: a runner is never
+	// the run routes and never stored. A remote-hosted runner's name is projected on the run read alone;
+	// all three are absent when the runner could not be read. The name is the runner's current one, which equals the name at create: a runner is never
 	// renamed and a claimed row is never deleted, so a revoked runner's run keeps it. RunnerOnline is
 	// this process's live view, so a pointer: absent is unknown. false is a fact on a single replica (also
 	// when the hub cannot be asked); under WARDYN_HA it is never sent, because a replica that does not hold
