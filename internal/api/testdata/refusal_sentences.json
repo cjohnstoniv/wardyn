@@ -330,6 +330,11 @@
     "sentence": "fmt.Sprintf(\"%s last signed in with a group list that was cut short, as a Microsoft Entra group overage does, and a group is assigned, so without their own assignment their next key would be refused. \" + \"Assign them to another domain instead of deleting it. Nothing was changed.\", c.Subject)"
   },
   {
+    "reason": "key_domain_ambiguous_membership",
+    "target": "keyDomainTarget(c)",
+    "sentence": "fmt.Sprintf(\"%s last signed in with groups assigned to different domains, so without their own assignment their next key would be refused. \" + \"Assign them to another domain instead of deleting it, or give the groups the same domain. Nothing was changed.\", c.Subject)"
+  },
+  {
     "reason": "key_domain_unknown",
     "target": "keyDomainTarget(c)",
     "sentence": "fmt.Sprintf(\"The key domain %q is not declared in the deployment's key domains file, so nothing was changed. Declared: %s.\", c.Domain, declaredKeyDomains(svc))"

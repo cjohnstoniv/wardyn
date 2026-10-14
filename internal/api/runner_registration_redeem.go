@@ -23,7 +23,7 @@ func (s *Server) handleRunnerRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	now := s.cfg.Now().UTC()
-	if !s.enrolLimiter.allow(peerKey(r.RemoteAddr), now) {
+	if !s.registerLimiter.allow(peerKey(r.RemoteAddr), now) {
 		w.Header().Set("Retry-After", "10")
 		writeErrorReason(w, http.StatusTooManyRequests, reasonRunnerRegistrationRateLimited, "too many registration attempts; retry later")
 		return
@@ -69,6 +69,9 @@ func (s *Server) handleRunnerRegister(w http.ResponseWriter, r *http.Request) {
 		writeErrorReason(w, http.StatusUnauthorized, string(placement.ReasonRunnerTokenInvalid), "registration token is invalid, expired or already used")
 		return
 	}
+	// A valid token is the caller's proof: only failed attempts are charged to the address, which many
+	// callers share behind an ingress.
+	s.registerLimiter.refund(peerKey(r.RemoteAddr), now)
 	registered, err := rs.CreateRunner(r.Context(), types.Runner{ID: uuid.New(), Owner: token.Owner,
 		Name: req.Name, PublicKey: req.PublicKey, KeyFingerprint: runnerwire.Fingerprint(req.PublicKey), OrgURLSHA256: orgHash, MintedBy: token.MintedBy,
 		Limits: req.Limits, MachineName: req.MachineName})

@@ -4,6 +4,7 @@
 package api
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -28,7 +29,7 @@ func TestGovCovProfileWriteExemptIsRefusedOnAGraphItCannotRead(t *testing.T) {
 		cur := govCovComposedOn(govCovPID, "p", govCovBase, "pypi.org")
 		next := cur
 		next.Overlay = &types.CeilingOverlay{AllowedDomains: &other}
-		if s.profileWriteExempt([]types.GovernanceProfile{cur}, next, res) {
+		if s.profileWriteExempt(context.Background(), []types.GovernanceProfile{cur}, next, res) {
 			t.Error("a write over a chain with a missing base was exempted")
 		}
 	})
@@ -39,7 +40,7 @@ func TestGovCovProfileWriteExemptIsRefusedOnAGraphItCannotRead(t *testing.T) {
 		cur.BaseProfileID = &base.ID
 		next := cur
 		next.Ceiling.AllowedDomains = domains[:0]
-		if s.profileWriteExempt([]types.GovernanceProfile{base, cur}, next, res) {
+		if s.profileWriteExempt(context.Background(), []types.GovernanceProfile{base, cur}, next, res) {
 			t.Error("a write over a chain that does not compose was exempted")
 		}
 		if got := s.resolveForDiff([]types.GovernanceProfile{base, cur}, govCovPID); got != nil {

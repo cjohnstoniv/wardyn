@@ -10,6 +10,7 @@
 // the server says the same thing whether or not it exists.
 
 import * as React from "react";
+import { getErrorMessage } from "../../../../../lib/format";
 import { Lock, Plus } from "lucide-react";
 import { components as api } from "../../../../../lib/api/components";
 import { secrets } from "../../../../../lib/api/secrets";
@@ -57,14 +58,18 @@ const CLI_DELIVERY: Partial<Record<CatalogueCLIKind, string>> = {
 /** The server's sentence for a closed reason code; a code this console does not know says nothing. */
 const sentence = (code: string | undefined): string | undefined => (code ? SENTENCES.get(code) : undefined);
 
-function useMyComponents(): MyComponents | null {
-  const [mine, setMine] = React.useState<MyComponents | null>(null);
+/** The person's catalogue, or why it could not be read (the read's own sentence, as the other steps show it). */
+function useMyComponents(): { mine: MyComponents | null; failed?: string } {
+  const [state, setState] = React.useState<{ mine: MyComponents | null; failed?: string }>({ mine: null });
   React.useEffect(() => {
     let live = true;
-    api.mine().then((m) => live && setMine(m), () => {});
+    api.mine().then(
+      (m) => live && setState({ mine: m }),
+      (e: unknown) => live && setState({ mine: null, failed: getErrorMessage(e) }),
+    );
     return () => { live = false; };
   }, []);
-  return mine;
+  return state;
 }
 
 type CardLook = "plain" | "added" | "off";
@@ -154,13 +159,15 @@ export interface AddToolsProps {
   /** The server has answered exactly this body; until it has, rows are Requested, not Ready. */
   answered: boolean;
   intent: RunIntent;
+  /** The draft's components that `access` answered; its "inline:<n>" rows point into this list. */
+  answeredFor: RunIntent["components"];
 }
 
-export function AddTools({ access, answered, intent }: AddToolsProps) {
+export function AddTools({ access, answered, intent, answeredFor }: AddToolsProps) {
   const headingId = React.useId();
   const dispatch = useNewRunDispatch();
   const announce = useAnnounce();
-  const mine = useMyComponents();
+  const { mine, failed } = useMyComponents();
   const [category, setCategory] = React.useState<Category>("all");
   const [door, setDoor] = React.useState<Door | null>(null);
   const [names, setNames] = React.useState<string[] | null>(null);
@@ -197,6 +204,7 @@ export function AddTools({ access, answered, intent }: AddToolsProps) {
   // Until the server has said, neither door claims a reason; once it says no, both say why.
   const noDefine = mine && !mayDefine ? ADD_ACCESS.NOT_ALLOWED : undefined;
   const noDefineId = React.useId();
+  const failedId = React.useId();
 
   const cliCards = (mine?.clis ?? []).flatMap((cli: CatalogueCLI) => {
     const generic = CLI_CARD[cli.kind];
@@ -233,7 +241,11 @@ export function AddTools({ access, answered, intent }: AddToolsProps) {
   const removeAdded = (row: AccessRow) => {
     if (row.id.startsWith("host:")) edit((i) => removeAllowedHost(i, row.name));
     else if (row.id.startsWith("secret:")) edit((i) => removeHeaderSecret(i, row.id.slice("secret:".length)));
-    else edit((i) => detachComponent(i, row.id, row.name));
+    else {
+      // A stale or repeated press removes nothing, so it says nothing either.
+      if (detachComponent(intent, row.id, answeredFor) === intent) return;
+      edit((i) => detachComponent(i, row.id, answeredFor));
+    }
     announce(NR_TOOLS.COMPONENT_REMOVED);
   };
   const addedRows = access?.rows.filter((r) => r.from === "added") ?? [];
@@ -246,13 +258,14 @@ export function AddTools({ access, answered, intent }: AddToolsProps) {
           <p className="text-sm text-muted-foreground">{NR_TOOLS.ADD_BODY}</p>
         </div>
         <div className="flex max-w-[16rem] flex-col items-end gap-1">
-          <Button type="button" variant="outline" disabled={!mayDefine} aria-describedby={noDefine ? noDefineId : undefined} onClick={() => setDoor("custom")}>
+          <Button type="button" variant="outline" disabled={!mayDefine} aria-describedby={noDefine ? noDefineId : failed ? failedId : undefined} onClick={() => setDoor("custom")}>
             <Plus aria-hidden />
             {NR_TOOLS.CUSTOM_COMPONENT}
           </Button>
           {noDefine && <Reason text={noDefine} id={noDefineId} />}
         </div>
       </div>
+      {failed && <p id={failedId} role="alert" className="text-sm text-danger">{failed}</p>}
       <div role="group" aria-label={NR_TOOLS.CATEGORY_ARIA}>
         <Segmented<Category>
           value={category}

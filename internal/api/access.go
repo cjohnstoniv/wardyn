@@ -730,7 +730,7 @@ func (s *Server) handleDeleteRoleMapping(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	if mode == govQueue {
-		s.holdRoleMappingDelete(w, r, id, acknowledge, existing, matched)
+		s.holdRoleMappingDelete(w, r, id, acknowledge, s.roleMappingEffect(existing, candidate, userTypes), existing, matched)
 		return
 	}
 

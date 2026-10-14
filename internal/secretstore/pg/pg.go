@@ -491,13 +491,13 @@ func (s *Store) Delete(ctx context.Context, name string) error {
 	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
 	// A guarded delete (WithIfRevision) is the Put's compare-and-set: a holder
 	// that lost its lock must not delete a newer row. The check runs under the
-	// row's lock, before deleteLocked touches an external store.
+	// row's locks, before deleteLocked touches an external store.
 	if rev, guarded := secretstore.IfRevisionFrom(ctx); guarded {
 		if err := lockRow(ctx, tx, s.owner, name); err != nil {
 			return fmt.Errorf("pg secretstore: delete %s: %w", ref, err)
 		}
-		if err := s.checkRevision(ctx, tx, name, rev); err != nil {
-			return err
+		if found, err := s.lockRevision(ctx, tx, name, rev); err != nil || !found {
+			return err // nil when the holder expected no row and there is none
 		}
 	}
 	if _, err := s.deleteLocked(ctx, tx, s.owner, name); err != nil {

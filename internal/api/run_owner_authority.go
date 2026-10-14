@@ -633,6 +633,22 @@ func (s *Server) reviveOwnerRecheck(ctx context.Context, run types.AgentRun, cfg
 	return nil
 }
 
+// encodeRevivedConfig is the bytes a revive hands the new proxy, loaded here as
+// that proxy will load them. A config it would refuse is refused now, before
+// the claim and before the old proxy is touched: replacing a proxy with one
+// that exits at config load leaves the run no proxy at all.
+func encodeRevivedConfig(cfg *proxy.Config) ([]byte, *reviveError) {
+	b, err := json.Marshal(cfg)
+	if err != nil {
+		return nil, reviveRefused(http.StatusInternalServerError, reasonReviveEncodeConfigFailed, "encode proxy config: "+err.Error())
+	}
+	if _, err := proxy.LoadConfigBytes(b); err != nil {
+		return nil, reviveRefused(http.StatusConflict, reasonReviveConfigDoesNotLoad,
+			"the run's revived proxy config does not load, so its proxy was not replaced: "+err.Error())
+	}
+	return b, nil
+}
+
 // runRepos is the run's repos: its legacy repo field and, when its rendered
 // proxy config can be read, the repos of its resolved policy.
 func runRepos(run types.AgentRun, cfg *proxy.Config) []string {

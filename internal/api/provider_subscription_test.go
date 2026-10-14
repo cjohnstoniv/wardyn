@@ -7,15 +7,19 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/broker"
 	"github.com/cjohnstoniv/wardyn/internal/egress"
+	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/subscription"
@@ -162,6 +166,9 @@ func TestProviderSubscriptionDispatch(t *testing.T) {
 		if !strings.Contains(strings.Join(auditReasons(t, h.srv, "run.injection.drop"), ","), "model_credential_not_provider_authored") {
 			t.Error("the unauthored sign-in injection was not dropped with an audit row")
 		}
+		if len(plan.channelHosts) != 0 {
+			t.Errorf("channel hosts = %v, want none: the proxy already inspects the vendor host", plan.channelHosts)
+		}
 	})
 
 	t.Run("a route-through gateway is the injected host and a per-run MITM host", func(t *testing.T) {
@@ -176,8 +183,33 @@ func TestProviderSubscriptionDispatch(t *testing.T) {
 		if len(plan.bedrockMITMHosts) != 1 || plan.bedrockMITMHosts[0] != "llm.corp.example:8443" {
 			t.Errorf("MITM hosts = %v, want [llm.corp.example:8443]", plan.bedrockMITMHosts)
 		}
+		// Terminating the host is not inspecting it: the proxy scans a host's
+		// bodies only under a schema, and this is where the gateway gets one.
+		if len(plan.channelHosts) != 1 || plan.channelHosts["llm.corp.example"] != "api.anthropic.com" {
+			t.Errorf("channel hosts = %v, want llm.corp.example inspected as api.anthropic.com", plan.channelHosts)
+		}
 		if env["ANTHROPIC_BASE_URL"] != p.BaseURL {
 			t.Errorf("ANTHROPIC_BASE_URL = %q, want %q", env["ANTHROPIC_BASE_URL"], p.BaseURL)
+		}
+	})
+
+	t.Run("a route-through host joins another lane's channel hosts", func(t *testing.T) {
+		gw, direct, v6, zoned := subProvider("gw"), subProvider("direct"), subProvider("v6"), subProvider("zoned")
+		gw.BaseURL, v6.BaseURL = "https://llm.corp.example:8443/anthropic", "https://[FD00::10]:8443/anthropic"
+		zoned.BaseURL = "https://[fe80::1%25eth0]/anthropic" // a key the proxy refuses, so none is sent
+		lane := func(p types.ModelProvider) llmTransport { return llmTransport{provider: &chosenProvider{provider: p}} }
+		azure := map[string]string{"foundry.test": "api.openai.com"}
+		// An API-key lane routed to its own base URL is no subscription lane: it adds nothing here.
+		key := subProvider("key")
+		key.Kind, key.BaseURL = types.ModelProviderAnthropicAPIKey, "https://key-gw.corp.example/anthropic"
+		got := providerSubscriptionChannelHosts([]llmTransport{lane(direct), lane(v6), {}, lane(zoned), lane(key), lane(gw)}, azure)
+		// The literal keeps the base URL's own spelling, brackets off, as its MITM entry does; the proxy lower-cases both.
+		want := map[string]string{"foundry.test": "api.openai.com", "llm.corp.example": "api.anthropic.com", "FD00::10": "api.anthropic.com"}
+		if !maps.Equal(got, want) {
+			t.Errorf("channel hosts = %v, want %v", got, want)
+		}
+		if len(azure) != 1 {
+			t.Errorf("the other lane's own map was written to: %v", azure)
 		}
 	})
 
@@ -464,5 +496,60 @@ func TestOwnerSubscriptionTokenIsStrict(t *testing.T) {
 	}
 	if tok, err := s.ownerSubscriptionToken("", uid).Current(context.Background()); err == nil {
 		t.Fatalf("no owner read %q", tok.Value)
+	}
+}
+
+// TestDispatch_SubscriptionRouteThroughIsInspectedAsAnthropic is the wire from
+// the POST /runs door to the proxy's own config: a run that must have an
+// inspectable model transport, on a Claude subscription provider that routes
+// through a gateway, dispatches with the gateway named to the proxy as an
+// Anthropic-schema host beside its MITM entry, and that config loads on the
+// proxy. What the proxy does with the pair is
+// TestMITM_SubscriptionRouteThroughHostIsScannedAsAnthropic (internal/egress/proxy).
+func TestDispatch_SubscriptionRouteThroughIsInspectedAsAnthropic(t *testing.T) {
+	t.Run("a hostname", func(t *testing.T) { dispatchSubscriptionRouteThrough(t, "llm.corp.example", "llm.corp.example:8443") })
+	// An IPv6 literal is keyed by its bare address, which the proxy's loader accepts.
+	t.Run("an IPv6 literal", func(t *testing.T) { dispatchSubscriptionRouteThrough(t, "fd00::10", "[fd00::10]:8443") })
+}
+
+// dispatchSubscriptionRouteThrough launches the run for a provider whose base
+// URL is on mitmEntry and checks the config the proxy loads names host.
+func dispatchSubscriptionRouteThrough(t *testing.T, host, mitmEntry string) {
+	t.Helper()
+	p := subProvider("claude")
+	p.BaseURL = "https://" + mitmEntry + "/anthropic"
+	srv, st, fr := userDispatchHarness(t, runner.UserMountPolicy{})
+	st.siteConfig = types.SiteConfig{ModelProviders: providerBlock(p)}
+	sec := &memSecrets{m: map[string][]byte{}}
+	if err := sec.For(ownerMemberSub).Put(context.Background(), providerSecretName(p.UID, providerOAuthPart), subBlob(subOwnerToken)); err != nil {
+		t.Fatal(err)
+	}
+	srv.cfg.Secrets = sec
+	srv.cfg.AgentImages = map[string]string{"claude-code": "wardyn/agent-claude-code:local"}
+
+	// A person's own token: the admin token has no Claude sign-in of its own.
+	w := do(t, srv, http.MethodPost, "/api/v1/runs", st.humanToken(ownerMemberSub, oidc.RoleUser), `{"agent":"claude-code","task":"do the thing","model_provider":"claude",`+
+		`"inline_policy":{"allowed_domains":["example.com"],"min_confinement_class":"CC2",`+
+		`"llm_inspection":{"mode":"block","detect_secret_patterns":true,"intercept_tls":true,"require_inspectable_llm":true}}}`)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("create run: code = %d, want 201; body=%s", w.Code, w.Body.String())
+	}
+	fr.waitForSandbox(t)
+	pc := fr.lastSpec.ProxyConfig
+	pc.ControlPlaneURL = "http://127.0.0.1:8080" // the harness's own is plain http to a name, which the proxy refuses
+	raw, err := runner.BuildProxyConfig(fr.lastSpec.RunID, pc, runner.ProxyListenPort)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := proxy.LoadConfigBytes(raw)
+	if err != nil {
+		t.Fatalf("the proxy refuses the dispatched config: %v", err)
+	}
+	if !slices.Contains(cfg.MITMHosts, mitmEntry) {
+		t.Fatalf("MITMHosts = %v, want %s: the run did not dispatch on the route-through lane", cfg.MITMHosts, mitmEntry)
+	}
+	if len(cfg.LLMChannelHosts) != 1 || cfg.LLMChannelHosts[host] != "api.anthropic.com" {
+		t.Errorf("LLMChannelHosts = %v, want %s inspected as api.anthropic.com: the proxy terminates the "+
+			"gateway and scans none of its bodies, on a run that requires an inspectable model transport", cfg.LLMChannelHosts, host)
 	}
 }

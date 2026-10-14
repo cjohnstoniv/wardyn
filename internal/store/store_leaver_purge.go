@@ -32,11 +32,20 @@ type PendingLeaver struct {
 	Purged bool
 }
 
+// ownSuspension is true when identity row i's current deactivation is its own suspension's: the cutoff
+// step a suspension of i records holds the deactivated_at it left on i (SuspendIdentity), and a
+// reactivation followed by any later deactivation changes deactivated_at. A suspend row from an earlier
+// suspension, or one written before the record existed, is no proof, however recently it was updated.
+const ownSuspension = `EXISTS (SELECT 1 FROM deprovision_jobs j WHERE j.identity_id = i.id AND j.kind = 'suspend'
+	AND j.step = 'cutoff' AND j.target = '' AND j.state = 'done'
+	AND j.detail->'deactivated_at_us' = to_jsonb((extract(epoch FROM i.deactivated_at) * 1000000)::bigint))`
+
 // MarkIdentityPurged turns the identity into a permanent tombstone (purged_at set) and records the
 // purge's last step as pending, in one transaction that holds the row FOR UPDATE. It reports whether
 // this call marked it: false when the row was already purged and, with requireDue, when it is not
-// (still) deactivated with a purge_after that has passed. The re-check under the lock is what lets a
-// reactivation that committed first win; once the mark commits a reactivation is ErrIdentityPurged.
+// (still) deactivated by its own suspension (ownSuspension) with a purge_after that has passed. The
+// re-check under the lock is what lets a reactivation that committed first win; once the mark commits a
+// reactivation is ErrIdentityPurged.
 func (s PG) MarkIdentityPurged(ctx context.Context, id uuid.UUID, requireDue bool) (bool, error) {
 	tx, err := s.Pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
@@ -45,8 +54,9 @@ func (s PG) MarkIdentityPurged(ctx context.Context, id uuid.UUID, requireDue boo
 	defer func() { _ = tx.Rollback(ctx) }()
 	var purged, due bool
 	err = tx.QueryRow(ctx, `
-		SELECT purged_at IS NOT NULL, deactivated_at IS NOT NULL AND purge_after IS NOT NULL AND purge_after <= now()
-		  FROM principal_identities WHERE id = $1 FOR UPDATE`, id).Scan(&purged, &due)
+		SELECT i.purged_at IS NOT NULL, i.deactivated_at IS NOT NULL AND i.purge_after IS NOT NULL AND i.purge_after <= now()
+		       AND `+ownSuspension+`
+		  FROM principal_identities i WHERE i.id = $1 FOR UPDATE`, id).Scan(&purged, &due)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return false, ErrNotFound
 	}
@@ -70,20 +80,20 @@ func (s PG) MarkIdentityPurged(ctx context.Context, id uuid.UUID, requireDue boo
 	return true, nil
 }
 
-// DueIdentity is one identity PurgeDueIdentities lists. Suspended says the identity has suspension
-// ledger rows of its own, as every identity a SCIM suspension was asked for does; one without was
-// deactivated alongside another identity's suspension, and the sweeper does not purge it.
+// DueIdentity is one identity PurgeDueIdentities lists. Suspended says the identity's current
+// deactivation is its own suspension's (ownSuspension). One without that proof was deactivated alongside
+// another identity's suspension, or by a version that did not record it, and the sweeper does not purge it.
 type DueIdentity struct {
 	ID        uuid.UUID
 	Suspended bool
 }
 
 // PurgeDueIdentities is the identities deactivated and not yet purged whose purge_after has passed, those
-// with suspension ledger rows of their own first, then oldest first, at most limit. It is only a candidate
+// deactivated by their own suspension first, then oldest first, at most limit. It is only a candidate
 // read: MarkIdentityPurged re-checks under the lock.
 func (s PG) PurgeDueIdentities(ctx context.Context, limit int) ([]DueIdentity, error) {
 	return collect(ctx, s.Pool, "list", "identities due for purge", `
-		SELECT i.id, EXISTS (SELECT 1 FROM deprovision_jobs j WHERE j.identity_id = i.id AND j.kind = 'suspend') AS suspended
+		SELECT i.id, `+ownSuspension+` AS suspended
 		  FROM principal_identities i
 		 WHERE i.purged_at IS NULL AND i.deactivated_at IS NOT NULL AND i.purge_after IS NOT NULL AND i.purge_after <= now()
 		 ORDER BY suspended DESC, i.purge_after, i.id LIMIT $1`, []any{limit}, func(r pgx.Row) (DueIdentity, error) {

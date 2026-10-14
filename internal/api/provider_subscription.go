@@ -20,7 +20,9 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net/http"
+	"net/netip"
 	"slices"
 	"strings"
 	"time"
@@ -178,6 +180,41 @@ func (s *Server) authorProviderSubscriptionInjection(ctx context.Context, run ty
 		snapshot: providerGrantSnapshot{ProviderUID: c.provider.UID, OwnerSubject: c.owner, Harness: run.Agent},
 	})
 	return injections, mitmHosts, ok
+}
+
+// providerSubscriptionChannelHosts is channels (the azure_foundry lane's
+// entries, never mutated) plus every Claude subscription lane's route-through
+// host, each under the Anthropic request schema: ProxyConfig.LLMChannelHosts.
+// The gateway relays the Messages API the vendor host serves, and the MITM
+// entry authorProviderSubscriptionInjection returns only terminates the host
+// for the credential; without the entry here the proxy reads its bodies as no
+// schema at all and content inspection scans none of them. A lane that dials
+// the vendor host adds nothing, since the proxy knows that host already.
+//
+// No entry can collide with another lane's: two providers that share a host
+// are refused before anything is authored (laneConflict).
+//
+// The key is the base URL's own host as written, brackets off: the text the
+// MITM entry beside it carries (gatewayHostPort) and the text the proxy looks
+// a request's host up by, so an IPv6 literal is keyed by its bare address. A
+// literal with a zone is left out: the proxy refuses that key
+// (validateChannelHosts), and the entry would fail the whole run.
+func providerSubscriptionChannelHosts(llms []llmTransport, channels map[string]string) map[string]string {
+	for _, l := range llms {
+		if !l.providerSubscription() || l.provider.provider.BaseURL == "" {
+			continue
+		}
+		host := gatewayHost(providerSubscriptionBase(l.provider.provider))
+		if addr, err := netip.ParseAddr(host); host == "" || (strings.Contains(host, ":") && (err != nil || addr.Zone() != "")) {
+			continue
+		}
+		channels = maps.Clone(channels)
+		if channels == nil {
+			channels = map[string]string{}
+		}
+		channels[host] = subscriptionInjectionHost
+	}
+	return channels
 }
 
 // providerOAuthUID returns the provider UID a wardyn-provider-<uid>-oauth

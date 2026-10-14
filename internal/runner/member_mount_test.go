@@ -273,8 +273,8 @@ func TestMemberMount_WritableAllowlist(t *testing.T) {
 	carved := UserMountPolicy{
 		Roots: []string{root}, WritableRoots: []string{root}, WritableDeny: []string{vendored},
 	}
-	if err := carved.ValidateUserMount("alice", project, true); err != nil {
-		t.Errorf("writable on the parent = %v, want allowed (the deny covers only the carve-out)", err)
+	if err := carved.ValidateUserMount("alice", project, true); err == nil || !strings.Contains(err.Error(), "contains the member writable-deny path") {
+		t.Errorf("writable on the parent = %v, want refused: a writable bind of the parent covers the carve-out", err)
 	}
 	derr := carved.ValidateUserMount("alice", vendored, true)
 	if derr == nil {
@@ -285,6 +285,56 @@ func TestMemberMount_WritableAllowlist(t *testing.T) {
 	}
 	if err := carved.ValidateUserMount("alice", vendored, false); err != nil {
 		t.Errorf("READ-ONLY inside the writable-deny carve-out = %v, want allowed — the deny bounds writability, not readability", err)
+	}
+}
+
+// TestMemberMount_WritableDenyBothDirections: a writable mount may neither sit
+// under a WARDYN_USER_WRITABLE_DENY path nor contain one. A writable bind of a
+// directory covers everything below it, so the parent of a denied subtree is
+// as refused as the subtree; each direction answers its own sentence, and the
+// second names the path. Read-only mounts are untouched.
+func TestMemberMount_WritableDenyBothDirections(t *testing.T) {
+	root, project := memberRoot(t)
+	pkg := filepath.Join(project, "pkg")
+	denied := filepath.Join(pkg, "vendor")
+	child, sibling := filepath.Join(denied, "lib"), filepath.Join(pkg, "src")
+	for _, d := range []string{child, sibling} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+	}
+	link := filepath.Join(root, "link") // resolves to pkg, the deny path's parent
+	if err := os.Symlink(pkg, link); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+	p := UserMountPolicy{Roots: []string{root}, WritableRoots: []string{root}, WritableDeny: []string{denied}}
+	const contains, under = "contains the member writable-deny path", "under a member writable-deny path"
+	for _, tc := range []struct {
+		name, src string
+		writable  bool
+		want      string // "" = allowed
+	}{
+		{"the writable root itself", root, true, contains},
+		{"a middle ancestor", project, true, contains},
+		{"the deny path's parent", pkg, true, contains},
+		{"a symlinked ancestor", link, true, contains},
+		{"the deny path", denied, true, under},
+		{"a child of the deny path", child, true, under},
+		{"a sibling of the deny path", sibling, true, ""},
+		{"an ancestor, read-only", project, false, ""},
+		{"the writable root itself, read-only", root, false, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := p.ValidateUserMount("alice", tc.src, tc.writable)
+			switch {
+			case tc.want == "" && err != nil:
+				t.Fatalf("%s (writable=%v) = %v, want allowed", tc.src, tc.writable, err)
+			case tc.want != "" && (err == nil || !strings.Contains(err.Error(), tc.want)):
+				t.Fatalf("%s (writable=%v) = %v, want the %q refusal", tc.src, tc.writable, err, tc.want)
+			case tc.want == contains && !strings.Contains(err.Error(), denied):
+				t.Errorf("error = %v, want it to name the deny path %s", err, denied)
+			}
+		})
 	}
 }
 

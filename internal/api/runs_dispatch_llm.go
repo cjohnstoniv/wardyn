@@ -360,7 +360,9 @@ const inspectableLLMRefusal = "require_inspectable_llm: the resolved LLM transpo
 // closed until a Bedrock extractor + channel exist; when they do, re-exempt the
 // bearer arm HERE (one predicate) and say so in THREAT-MODEL 5.1a. Every other
 // provider kind is inspectable: the key and endpoint kinds ride the brokered
-// route, and a Claude subscription is always injected under MITM. The default
+// route, and a Claude subscription is always injected under MITM, on the
+// vendor host or on its route-through host, which dispatch names to the proxy
+// as an Anthropic-schema host (providerSubscriptionChannelHosts). The default
 // (require_inspectable_llm=false) instead degrades visibly rather than
 // failing. Returns false when the run was marked FAILED (CAS from STARTING so
 // a concurrent kill's KILLED is not clobbered) and dispatch must stop.
@@ -401,6 +403,9 @@ type dispatchLLMPlan struct {
 	// azure is the azure_foundry lane's share of the proxy config: its MITM entry (a fourth producer
 	// beside the artifact, Bedrock and Azure DevOps ones), its route gate and its channel host.
 	azure azurePlan
+	// channelHosts is ProxyConfig.LLMChannelHosts: azure's channel host and each
+	// Claude subscription lane's route-through host (providerSubscriptionChannelHosts).
+	channelHosts map[string]string
 	// azureCLI is the Azure CLI row's share of the proxy config: its door's grant.
 	azureCLI azureCLIPlan
 	// llmUnavailableDetail is the self-explaining detail the proxy's brokered-LLM
@@ -538,6 +543,7 @@ func (s *Server) resolveLLMInjections(ctx context.Context, run types.AgentRun, p
 		mitmCACertPEM: mitmCACertPEM, mitmCAKeyPEM: mitmCAKeyPEM,
 		bedrockMITMHosts:     bedrockMITMHosts,
 		azure:                azure,
+		channelHosts:         providerSubscriptionChannelHosts(llms, azure.channelHosts),
 		azureCLI:             azureCLI,
 		mitmLLM:              subscription || mitmForInspect,
 		llmUnavailableDetail: prov.detail, llmUpstreams: prov.upstreams,

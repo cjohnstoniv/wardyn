@@ -325,6 +325,26 @@ func TestSpoolRefusesCorruptionAndUnsafeState(t *testing.T) {
 	}
 }
 
+// A crash inside a new spool's first manifest write leaves write.tmp and no
+// state.json: the next Open discards it and writes the manifest.
+func TestOpenRecoversACrashedFirstManifestWrite(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "spool")
+	if err := os.Mkdir(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "write.tmp"), []byte(`{"run_id":`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Open(dir, uuid.New())
+	if err != nil {
+		t.Fatalf("open after a crashed first write: %v", err)
+	}
+	s.Close()
+	if _, err := os.Stat(filepath.Join(dir, "state.json")); err != nil {
+		t.Fatalf("no manifest written: %v", err)
+	}
+}
+
 // The spool has two writers that may be different users: wardyn-runnerd, and the proxy as the user the
 // directory was handed to. Every file one of them creates (each rewrite of state.json is a new file
 // renamed into place) is given to the directory's owner before it replaces anything and stays 0600, so

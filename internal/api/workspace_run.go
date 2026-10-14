@@ -78,6 +78,9 @@ func wireWorkspaceSource(run *types.AgentRun, policy *types.RunPolicySpec, ws ty
 				return nil, nil, fmt.Errorf("%w: workspace %s source target: %v", errWorkspaceSourceTarget, ws.ID, verr)
 			}
 		}
+		if src.Type == types.WorkspaceSourceTypeRepo && !repoFieldSafe(src.Target) {
+			return nil, nil, fmt.Errorf("%w: workspace %s source target: "+repoField400Charset, errWorkspaceSourceTarget, ws.ID, "target")
+		}
 		switch src.Type {
 		case types.WorkspaceSourceTypeRepo:
 			if run.Repo == "" {

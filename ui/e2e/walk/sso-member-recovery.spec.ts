@@ -130,8 +130,6 @@ const heading = (page: Page, title: string) => page.getByRole("heading", { name:
 
 // The model provider picker of the one harness these cases add (Tools and access), and its help line.
 const PROVIDER_PICKER = "#nr-provider-claude-code";
-// NR_TOOLS.DELIVERY_AWS takes the session length; the sentence before it is the fixed part.
-const AWS_DELIVERY = new RegExp(escapeRe(NR_TOOLS.DELIVERY_AWS("\u0000").split("\u0000")[0]));
 
 /**
  * From New Run's Start screen to a step on the way to Tools and access, as an autonomous agent task with one
@@ -543,9 +541,8 @@ test("A(rail): New Run's Tools and access states THIS run's credential residency
   await expect(page.locator(`${PROVIDER_PICKER}-help`)).toHaveText(NR_TOOLS.DELIVERY_SHORT_LIVED, { timeout: 60_000 });
   const credentials = page.getByRole("region", { name: NR_TOOLS.TOTALS_ARIA });
   await expect(credentials.getByRole("heading", { name: NR_TOOLS.CREDENTIALS_TITLE })).toBeVisible();
-  // OPEN: NR_TOOLS.DELIVERY_AWS(session) is canon (W-33) but no Tools and access code renders it yet;
-  // the Credentials total shows DELIVERY_SHORT_LIVED. Which one is the AWS credential's line?
-  await expect(credentials.getByText(AWS_DELIVERY)).toBeVisible({ timeout: 60_000 });
+  // The Credentials total shows the delivery line the console renders for a short-lived credential.
+  await expect(credentials.getByText(NR_TOOLS.DELIVERY_SHORT_LIVED)).toBeVisible({ timeout: 60_000 });
   // The lapsed member's sign-in door is on the provider itself (never clicked: opening it starts a capture).
   await expect(page.getByRole("button", { name: NR_TOOLS.SETUP_SIGN_IN_TO(WALK_PROVIDER_NAME) })).toBeVisible();
   // The per-person chip that followed the sentence is removed.

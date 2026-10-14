@@ -276,7 +276,7 @@ func TestVerify(t *testing.T) {
 
 	err := subjectkey.Verify(t.Context(), pool, []string{"b"}, reach)
 	if err == nil || !strings.Contains(err.Error(), `2 live principal keys name key domain "a"`) ||
-		!strings.Contains(err.Error(), "erase or destroy") || !strings.Contains(err.Error(), "Never delete the rows") {
+		!strings.Contains(err.Error(), "Keep the domain declared") || !strings.Contains(err.Error(), "Never delete the rows") {
 		t.Fatalf("undeclared domain a = %v; want its live-row count and the remedy", err)
 	}
 	if err := subjectkey.Verify(t.Context(), pool, nil, nil); err == nil || !strings.Contains(err.Error(), `"a"`) || !strings.Contains(err.Error(), `"b"`) {
@@ -305,6 +305,52 @@ func TestVerify(t *testing.T) {
 	}
 	if err := subjectkey.Verify(t.Context(), pool, []string{"b"}, reach); err != nil {
 		t.Fatalf("after destroying domain a's subjects, with a removed: %v", err)
+	}
+}
+
+// Erasing a person's credentials destroys their credential key only. Their
+// audit-seal key stays live, so the domain is still refused, and the remedy
+// names the act that destroys each key instead of offering credential erasure
+// for both: it leads with keeping the domain, and says the audit erasure is
+// irreversible and a retention decision.
+func TestVerify_AuditSealKeyOutlivesCredentialErasure(t *testing.T) {
+	pool := subjectkeytest.ThrowawayDB(t)
+	def, a, b := newFakeTransit("default"), newFakeTransit("a"), newFakeTransit("b")
+	m, svc := domains(t, pool, def, a, b)
+	if _, err := svc.Set(t.Context(), keydomain.Assignment{SubjectType: "user", Subject: "p1", Domain: "a", SetBy: "admin"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, purpose := range []string{subjectkey.PurposeCred, subjectkey.PurposeAuditSeal} {
+		if _, _, err := m.Current(t.Context(), "p1", purpose); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// What DELETE /people/{principal}/credentials destroys.
+	if _, err := m.Destroy(t.Context(), "p1", subjectkey.PurposeCred); err != nil {
+		t.Fatal(err)
+	}
+	err := subjectkey.Verify(t.Context(), pool, []string{"b"}, nil)
+	if err == nil || !strings.Contains(err.Error(), `1 live principal keys name key domain "a"`) {
+		t.Fatalf("after credential erasure, with a removed = %v; want the audit-seal key still counted", err)
+	}
+	remedy := err.Error()[strings.Index(err.Error(), "does not declare. ")+len("does not declare. "):]
+	if !strings.HasPrefix(remedy, "Keep the domain declared") {
+		t.Errorf("the remedy does not lead with keeping the domain: %q", remedy)
+	}
+	for _, want := range []string{"leaves their audit-seal key live", "audit_personal_fields", "irreversible", "retention", "Never delete the rows"} {
+		if !strings.Contains(remedy, want) {
+			t.Errorf("the remedy does not say %q: %q", want, remedy)
+		}
+	}
+	if strings.Contains(remedy, "erase or destroy those subjects") {
+		t.Errorf("the remedy still offers credential erasure for every key: %q", remedy)
+	}
+	// Only the audit-seal key's own destruction clears the refusal.
+	if _, err := m.Destroy(t.Context(), "p1", subjectkey.PurposeAuditSeal); err != nil {
+		t.Fatal(err)
+	}
+	if err := subjectkey.Verify(t.Context(), pool, []string{"b"}, nil); err != nil {
+		t.Fatalf("after both keys are destroyed, with a removed: %v", err)
 	}
 }
 

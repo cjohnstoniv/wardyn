@@ -201,7 +201,7 @@ type runFilesResponse struct {
 //	      {"path":"docs/logo.png","status":"A","binary":true},
 //	      {"path":"scratch.txt","status":"??"}]}
 //	200 {"vcs":"none","files":[],"truncated":false}   — not a git work tree
-//	409  the run never got a sandbox, or its sandbox is already gone (nothing to read)
+//	409  the run never got a sandbox, its sandbox is already gone, or it is kept with its agent stopped (nothing to read)
 //	501  the runner has no ExecStream primitive
 //	500  the exec launched but the read failed
 //
@@ -240,6 +240,9 @@ func (s *Server) handleRunFiles(w http.ResponseWriter, r *http.Request) {
 	}
 	if run.PausedAt != nil {
 		writeErrorReason(w, http.StatusConflict, reasonRunInspectPaused, runPausedReadMsg)
+		return
+	}
+	if s.refuseKeptAgentStopped(w, r, run) {
 		return
 	}
 
