@@ -17,7 +17,6 @@ import type { AccessFacts, ToolPolicyFact } from "../../../../../lib/types/new-r
 import type { HarnessSetFact } from "../../../../../lib/types/new-run-contract";
 import type { SetupItem } from "../../../../../lib/types/preflight";
 import { NR_TOOLS } from "../../../../wardyn/copy/new-run/tools";
-import { CONNECTIONS } from "../../../../wardyn/copy/door";
 import { NewRunDraftProvider, useNewRunDispatch, useNewRunDraft } from "../../new-run-route";
 import type { RunIntent } from "../../draft/run-intent";
 import { HarnessSetup } from "./harness-setup";
@@ -110,10 +109,10 @@ describe("HarnessSetup", () => {
     it("offers Sign in again on a stored sign-in, never on a stored key", async () => {
       h.providers = MODEL_PROVIDERS;
       show([CLAUDE_UNGATED], { tools: [{ id: "claude-code", kind: "harness", model_provider: "anthropic-key" }] });
-      expect(screen.queryByRole("button", { name: CONNECTIONS.SIGN_IN_AGAIN })).toBeNull();
+      expect(screen.queryByRole("button", { name: NR_TOOLS.SETUP_SIGN_IN_AGAIN })).toBeNull();
       h.access = [{ provider: "bedrock-sso", state: "live" }];
       await userEvent.selectOptions(screen.getByLabelText(NR_TOOLS.PROVIDER_LABEL), "bedrock-sso");
-      await userEvent.click(screen.getByRole("button", { name: CONNECTIONS.SIGN_IN_AGAIN }));
+      await userEvent.click(screen.getByRole("button", { name: NR_TOOLS.SETUP_SIGN_IN_AGAIN }));
       expect(h.openDoor).toHaveBeenCalledWith(expect.objectContaining({ for: { provider: "bedrock-sso" } }));
     });
 

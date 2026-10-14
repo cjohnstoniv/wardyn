@@ -238,8 +238,9 @@ type awsSSOBlob struct {
 func (b awsSSOBlob) valid() bool { return len(b.missingFields()) == 0 }
 
 // expired reports whether the SSO access token has lapsed. A blob with a refresh
-// token can still be renewed (sso-session profiles); one without must be
-// re-captured by re-running the login.
+// token and its client registration pair can still be renewed (sso-session
+// profiles, awsSSOBlob.renewable); one without must be re-captured by re-running
+// the login.
 func (b awsSSOBlob) expired(now time.Time) bool { return !now.Before(b.ExpiresAt) }
 
 // harnessTokenAging: setup-token tokens live ~1 year and their exact expiry is
@@ -360,11 +361,11 @@ func (s *Server) storeAWSSSOBlob(ctx context.Context, scope awsSSOScope, blob aw
 }
 
 // lastUsable is the latest time this sign-in can still be used or renewed,
-// the row's expires_at: the access token's expiry without a refresh token, the
-// registration's with one. Zero when that is unknown (a refresh token and no
+// the row's expires_at: the access token's expiry without a refresh token and
+// its client registration pair, the registration's with them. Zero when that is unknown (a refresh token and no
 // registration expiry), so the row is never swept on a guess.
 func (b awsSSOBlob) lastUsable() time.Time {
-	if b.RefreshToken == "" {
+	if b.RefreshToken == "" || b.ClientID == "" || b.ClientSecret == "" {
 		return b.ExpiresAt
 	}
 	if b.RegistrationExpiresAt.IsZero() {

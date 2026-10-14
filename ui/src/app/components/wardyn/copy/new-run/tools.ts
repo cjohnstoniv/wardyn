@@ -248,6 +248,8 @@ export const NR_TOOLS = {
   SETUP_CHOOSE_PROVIDER: (name: string | number) => `Choose a model provider for ${name}`,
   /** pending W-38: the recommended text until the owner answers. */
   SETUP_SIGN_IN_TO: (provider: string | number) => `Sign in to ${provider}`,
+  /** pending W-54: a stored sign-in's door, the recommended text until the owner answers. */
+  SETUP_SIGN_IN_AGAIN: "Sign in again",
   SIGN_IN_INTRO:
     "You'll sign in with your own account in a new window. Wardyn keeps a refresh grant and issues the run a short-lived credential when it starts. The sandbox never sees your sign-in.",
   SIGN_IN_CONFIRM: "Continue to sign in",

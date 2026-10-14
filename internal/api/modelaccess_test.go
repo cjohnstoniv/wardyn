@@ -53,7 +53,7 @@ func TestAWSSSOCredentialState_TheStates(t *testing.T) {
 		{"nothing captured", awsSSOBlob{}, false, false, modelAccessNotConfigured},
 	}
 	for _, c := range cases {
-		if got := awsSSOCredentialState(c.blob, c.found, c.spent, now); got != c.want {
+		if got := awsSSOCredentialState(c.blob, c.found, c.spent, false, now); got != c.want {
 			t.Errorf("%s: state = %q, want %q", c.name, got, c.want)
 		}
 	}
@@ -74,7 +74,7 @@ func TestAWSSSOCredentialState_TheStates(t *testing.T) {
 	// The deadline the expiring line names is the REGISTRATION's while the blob
 	// can be renewed: the access token's own expiry is not what runs out.
 	reg := live(func(b *awsSSOBlob) { b.RegistrationExpiresAt = now.Add(6 * time.Hour) })
-	if got := modelAccessDeadline(reg, true, false, now); got != reg.RegistrationExpiresAt.UTC().Format(time.RFC3339) {
+	if got := modelAccessDeadline(reg, true, false, false, now); got != reg.RegistrationExpiresAt.UTC().Format(time.RFC3339) {
 		t.Errorf("deadline = %q, want the registration's lapse", got)
 	}
 }
@@ -93,7 +93,7 @@ func TestAWSSSOCredentialState_FixtureBlobReadsLive(t *testing.T) {
 	if err := json.Unmarshal([]byte(ssoBlobFor("123456789012", "WardynBedrockRole")), &b); err != nil {
 		t.Fatalf("unmarshal fixture blob: %v", err)
 	}
-	if got := awsSSOCredentialState(b, true, false, time.Now()); got != modelAccessLive {
+	if got := awsSSOCredentialState(b, true, false, false, time.Now()); got != modelAccessLive {
 		t.Errorf("state = %q, want %q — the fixture must clear modelAccessExpiringWindow", got, modelAccessLive)
 	}
 }
@@ -137,7 +137,7 @@ func TestAWSSSOCredentialState_SpentBoundary(t *testing.T) {
 			base(func(b *awsSSOBlob) { b.ExpiresAt = now.Add(-time.Minute) }), modelAccessExpiredSignin},
 	}
 	for _, c := range cases {
-		if got := awsSSOCredentialState(c.blob, true, true, now); got != c.want {
+		if got := awsSSOCredentialState(c.blob, true, true, false, now); got != c.want {
 			t.Errorf("%s: state = %q, want %q", c.name, got, c.want)
 		}
 	}
@@ -152,10 +152,10 @@ func TestAWSSSOCredentialState_SpentBoundary(t *testing.T) {
 		b.ExpiresAt = now.Add(48 * time.Hour)
 		b.RegistrationExpiresAt = now.Add(-time.Hour)
 	})
-	if got := awsSSOCredentialState(lapsedRegBlob, true, true, now); got != modelAccessExpiring {
+	if got := awsSSOCredentialState(lapsedRegBlob, true, true, false, now); got != modelAccessExpiring {
 		t.Errorf("spent + lapsed registration + 48h access-token headroom = %q, want expiring (needsRefresh alone decides)", got)
 	}
-	if got := awsSSOCredentialState(lapsedRegBlob, true, false, now); got != modelAccessLive {
+	if got := awsSSOCredentialState(lapsedRegBlob, true, false, false, now); got != modelAccessLive {
 		t.Errorf("sanity: the SAME blob !spent should read live (unchanged behaviour), got %q", got)
 	}
 
@@ -166,7 +166,7 @@ func TestAWSSSOCredentialState_SpentBoundary(t *testing.T) {
 	// spent boundary cases above grade `expiring`/`dead`, which is the whole
 	// point of the boundary: `spent` is what turns "renewable" off.
 	transient := base(func(b *awsSSOBlob) { b.ExpiresAt = now.Add(time.Minute) })
-	if got := awsSSOCredentialState(transient, true, false, now); got != modelAccessLive {
+	if got := awsSSOCredentialState(transient, true, false, false, now); got != modelAccessLive {
 		t.Errorf("transient (!spent) near-expiry state = %q, want live (renewable, registration far out — unchanged)", got)
 	}
 
@@ -174,10 +174,10 @@ func TestAWSSSOCredentialState_SpentBoundary(t *testing.T) {
 	// never the registration's lapse a spent credential can no longer redeem.
 	spentBlob := base(func(b *awsSSOBlob) { b.ExpiresAt = now.Add(20 * time.Minute) })
 	wantDeadline := spentBlob.ExpiresAt.Add(-awsSSORefreshSkew).UTC().Format(time.RFC3339)
-	if got := modelAccessDeadline(spentBlob, true, true, now); got != wantDeadline {
+	if got := modelAccessDeadline(spentBlob, true, true, false, now); got != wantDeadline {
 		t.Errorf("spent deadline = %q, want ExpiresAt-skew %q", got, wantDeadline)
 	}
-	if got := modelAccessDeadline(spentBlob, true, false, now); got != spentBlob.RegistrationExpiresAt.UTC().Format(time.RFC3339) {
+	if got := modelAccessDeadline(spentBlob, true, false, false, now); got != spentBlob.RegistrationExpiresAt.UTC().Format(time.RFC3339) {
 		t.Errorf("non-spent deadline changed: got %q, want the registration's own lapse (unaffected by this lane)", got)
 	}
 }

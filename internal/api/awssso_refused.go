@@ -4,6 +4,7 @@
 package api
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"unicode"
@@ -72,7 +73,48 @@ func awsSSOErrorDescription(desc string, blob awsSSOBlob) string {
 		return ' '
 	}, desc))
 	if len(desc) > awsSSODescriptionMax {
-		desc = strings.ToValidUTF8(desc[:awsSSODescriptionMax], "") + "…"
+		desc = strings.ToValidUTF8(desc[:awsSSODescriptionMax-len("…")], "") + "…"
 	}
 	return desc
+}
+
+// auditAWSSSORenewalFailure writes a failed redemption's refresh row. A re-auth
+// refusal also says whether the client registration pair was sent
+// (`registration`), and marks the refresh token refused so the readiness grade,
+// Review and the banner agree with dispatch until a sign-in replaces it.
+func (s *Server) auditAWSSSORenewalFailure(ctx context.Context, scope awsSSOScope, blob awsSSOBlob, spent bool, err error, attempts int, afterLostReply bool) {
+	data := awsSSORefreshFailureData(spent, err, attempts, afterLostReply)
+	if refused, ok := awsSSORefusal(err); ok {
+		data["registration"] = "absent"
+		if blob.ClientID != "" && blob.ClientSecret != "" {
+			data["registration"] = "present"
+		}
+		s.ssoRefreshMu.Lock()
+		if s.ssoRefreshRefused == nil {
+			s.ssoRefreshRefused = map[string]string{}
+		}
+		s.ssoRefreshRefused[awsSSOTokenFingerprint(blob.RefreshToken)] = refused.detail()
+		s.ssoRefreshMu.Unlock()
+	}
+	s.auditAWSSSORefresh(ctx, scope, "failure", data)
+}
+
+// clearAWSSSORefused drops a refused mark once its refresh token renews.
+func (s *Server) clearAWSSSORefused(fingerprint string) {
+	s.ssoRefreshMu.Lock()
+	delete(s.ssoRefreshRefused, fingerprint)
+	s.ssoRefreshMu.Unlock()
+}
+
+// awsSSORefusedFor reports the refusal AWS last answered this blob's refresh
+// token with. Keyed by that token's fingerprint, so a fresh sign-in, which
+// carries a new refresh token, is never pre-marked.
+func (s *Server) awsSSORefusedFor(blob awsSSOBlob) (string, bool) {
+	if blob.RefreshToken == "" {
+		return "", false
+	}
+	s.ssoRefreshMu.Lock()
+	defer s.ssoRefreshMu.Unlock()
+	detail, ok := s.ssoRefreshRefused[awsSSOTokenFingerprint(blob.RefreshToken)]
+	return detail, ok
 }

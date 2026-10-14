@@ -296,7 +296,7 @@ type awsSSOTokenResponse struct {
 // refresh token will help: the lane is dead until the person signs in again.
 // The re-auth class (awsSSOErrorIsReauth) keeps the token but sends the person
 // to sign in; everything else — `slow_down`, `internal_failure`, an
-// unparseable body, a transport error, any 5xx — is transient.
+// unparseable body, a transport error, any other 5xx — is transient.
 func awsSSOErrorIsSpent(code string) bool {
 	switch code {
 	case "invalid_grant", "expired_token", "invalid_client", "unauthorized_client":
@@ -338,9 +338,10 @@ func (b awsSSOBlob) servableFor(now time.Time, floor time.Duration) bool {
 // renewable blob is not a dead credential — dispatch renews it — which is why
 // readiness is (renewable || !expired), never !expired.
 //
-// The pair is required, not merely the refresh token: without it CreateToken
-// answers invalid_request on every attempt, so a pair-less blob serves its access
-// token until expiry and then opens the sign-in door without calling AWS.
+// The pair is required, not merely the refresh token: CreateToken requires
+// clientId and clientSecret, and botocore refuses to refresh without them. A
+// pair-less blob serves its access token until expiry and then opens the
+// sign-in door without calling AWS.
 func (b awsSSOBlob) renewable(now time.Time) bool {
 	return b.RefreshToken != "" && b.ClientID != "" && b.ClientSecret != "" && !b.registrationLapsed(now)
 }
@@ -548,7 +549,7 @@ func (s *Server) beginAWSSSORenewal(ctx context.Context, scope awsSSOScope) (_ c
 // with ("" means "use the returned blob").
 //
 // It returns (blob, "") untouched — no call, no lock — whenever there is nothing
-// to do: no refresh token, a lapsed registration (the caller's own
+// to do: no refresh token, no client registration pair, a lapsed registration (the caller's own
 // renewable/expired predicate then decides), or an access token still comfortably
 // inside the skew window.
 //
@@ -678,7 +679,7 @@ func (s *Server) refreshAWSSSOBlob(parent context.Context, scope awsSSOScope, bl
 		}
 		slog.ErrorContext(ctx, "wardynd: renewing the captured AWS SSO credential failed",
 			slog.Bool("credential_spent", spent), slog.Bool("after_lost_reply", afterLostReply), slog.Any("err", err))
-		s.auditAWSSSORefresh(ctx, scope, "failure", awsSSORefreshFailureData(spent, err, attempts, afterLostReply))
+		s.auditAWSSSORenewalFailure(ctx, scope, blob, spent, err, attempts, afterLostReply)
 		if spent {
 			s.metrics.ssoRefreshRecorded(ssoRefreshOutcomeSpent)
 			return blob, awsSSORefreshSpentSentence
@@ -699,6 +700,7 @@ func (s *Server) refreshAWSSSOBlob(parent context.Context, scope awsSSOScope, bl
 		return blob, awsSSOExpiredFailure(err)
 	}
 	s.metrics.ssoRefreshRecorded(ssoRefreshOutcomeSuccess)
+	s.clearAWSSSORefused(fingerprint)
 
 	next := blob
 	next.AccessToken = resp.AccessToken
