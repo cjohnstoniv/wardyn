@@ -253,6 +253,8 @@ the ADMIN pre-authorized.
 
 - Off for everyone: migration `0178_self_host_runner_restriction` restricts the value, so a `*` allow grants nobody.
   - An allow that names it admits its subject; one for subject `all` admits everyone, and is the way to keep the 0.9.0 behaviour.
+  - An estate where someone registered and claimed a runner for themselves keeps self-hosting open: the migration adds that `all` allow. A deny still wins, a `*` feature deny included.
+  - An estate with none starts closed.
 - Asked at `POST /me/runners/tokens` only (reason `capability_feature`, target `me.runners.tokens`). Existing runners, claims and the admin mint are never asked.
 - Admins are never asked, even with `WARDYN_GOVERN_ADMIN_RUNS` on: the admin mint lets them name themself.
 
