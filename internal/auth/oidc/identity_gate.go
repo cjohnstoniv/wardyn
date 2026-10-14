@@ -81,6 +81,20 @@ func (a *Authenticator) admitIdentity(r *http.Request, f IdentityRef, onDenied f
 	return ""
 }
 
+// issueRevocationSeq reads the revocation sequence the session cookie will carry. denied is the auth_error
+// code of a refusal: a session that cannot be ordered against the cuts is not issued, not issued unordered.
+func (a *Authenticator) issueRevocationSeq(r *http.Request) (seq int64, denied string) {
+	if a.cfg.Revocations == nil {
+		return 0, ""
+	}
+	seq, err := IssueSeq(r.Context(), a.cfg.Revocations)
+	if err != nil {
+		slog.Error("oidc: revocation order unavailable, denying login (fail closed)", "error", err)
+		return 0, authErrorRoleCheckUnavailable
+	}
+	return seq, ""
+}
+
 // issueIdentity is the callback's issuance step. denied is the auth_error code of a refusal; the
 // epoch is stamped on the cookie and rides the context to the login-grant sink.
 func (a *Authenticator) issueIdentity(r *http.Request, f LoginFacts, onDenied func(*http.Request, string)) (epoch int64, denied string) {
@@ -121,7 +135,45 @@ const (
 // statement, so the identity check adds no round trip. epoch < 0 asks only whether the identity
 // is deactivated or purged; otherwise a row whose authority epoch is past epoch refuses too.
 type IdentityRevocations interface {
-	SessionStatus(ctx context.Context, sub, email string, issuedAt time.Time, epoch int64) (SessionStatus, error)
+	SessionStatus(ctx context.Context, sub, email string, issue Issue, epoch int64) (SessionStatus, error)
+}
+
+// Issue is where a credential sits against the revocation cuts: the wall-clock time it was issued and, when
+// the issuer recorded one, its revocation sequence (RevocationOrder). A zero Seq is a credential issued
+// before the sequence existed, or by a replica that predates it, and is compared on At alone. Migration
+// 0194 ordered the API tokens and SSH keys that existed, so in practice these are session cookies, which
+// expire with the session.
+type Issue struct {
+	At  time.Time
+	Seq int64
+}
+
+// RevocationOrder is a SessionRevocations that orders cuts by a logical sequence, which a step of the host
+// clock cannot reorder. RevocationSeq is the value a credential issued now records: a cut made after it
+// returns draws a greater one, and a cut whose value it does not cover has committed before it was read.
+type RevocationOrder interface {
+	RevocationSeq(ctx context.Context) (int64, error)
+	// IsSessionRevokedSeq is IsSessionRevoked for a credential that recorded seq (> 0): revoked when a
+	// matching cut drew a greater sequence, with no comparison of clocks.
+	IsSessionRevokedSeq(ctx context.Context, sub, email string, seq int64) (bool, error)
+}
+
+// IssueSeq is the revocation sequence a credential issued now records, or 0 (compare on time) when rev does
+// not order cuts. A failure is returned: an issuer must not mint a credential it cannot order.
+func IssueSeq(ctx context.Context, rev SessionRevocations) (int64, error) {
+	if o, ok := rev.(RevocationOrder); ok {
+		return o.RevocationSeq(ctx)
+	}
+	return 0, nil
+}
+
+// IsRevoked is rev.IsSessionRevoked for a credential issued at issue: ordered by sequence when it recorded one
+// and rev orders cuts, otherwise by time as before.
+func IsRevoked(ctx context.Context, rev SessionRevocations, sub, email string, issue Issue) (bool, error) {
+	if o, ok := rev.(RevocationOrder); ok && issue.Seq > 0 {
+		return o.IsSessionRevokedSeq(ctx, sub, email, issue.Seq)
+	}
+	return rev.IsSessionRevoked(ctx, sub, email, issue.At)
 }
 
 // SessionCutter is SessionRevocations that can also end a person's browser sessions without ending their
@@ -145,11 +197,11 @@ func CutSessions(ctx context.Context, rev SessionRevocations, sub string) error 
 
 // CheckSession is the one owner check every credential lane asks: the revocation cutoff and, when
 // rev can answer it, the owner's identity. A rev that cannot (a test double) checks the cutoff only.
-func CheckSession(ctx context.Context, rev SessionRevocations, sub, email string, issuedAt time.Time, epoch int64) (SessionStatus, error) {
+func CheckSession(ctx context.Context, rev SessionRevocations, sub, email string, issue Issue, epoch int64) (SessionStatus, error) {
 	if ir, ok := rev.(IdentityRevocations); ok {
-		return ir.SessionStatus(ctx, sub, email, issuedAt, epoch)
+		return ir.SessionStatus(ctx, sub, email, issue, epoch)
 	}
-	revoked, err := rev.IsSessionRevoked(ctx, sub, email, issuedAt)
+	revoked, err := rev.IsSessionRevoked(ctx, sub, email, issue.At)
 	if err != nil || !revoked {
 		return SessionLive, err
 	}

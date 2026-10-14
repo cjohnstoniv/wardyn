@@ -131,7 +131,7 @@ func ssoDispatch(s *Server) (bedrockAuth, string) {
 	}
 	b := providerBedrockSettings(p)
 	env := bedrockBaseEnv(b.Region, providerModel(p, "claude-code"), b.BaseURL)
-	ba := s.bedrockSSOAuth(blob, awsSSOTestScope(), env, []string{providerBedrockRuntimeHost(p)})
+	ba := s.bedrockSSOAuth(context.Background(), uuid.New(), blob, awsSSOTestScope(), env, []string{providerBedrockRuntimeHost(p)})
 	ba.ready = true
 	return ba, ""
 }

@@ -997,6 +997,52 @@ func TestPG_GovernanceChanges_ExemptionsApplyDirectly(t *testing.T) {
 	}
 }
 
+// TestPG_GovernanceChanges_RenameInAGroupTieIsHeld: a person in two groups whose assignments share a
+// priority gets the profile whose name sorts first, so a rename there decides which ceiling they get.
+// It is held, alone and with an otherwise narrowing edit, and applying it shows the selection moves.
+func TestPG_GovernanceChanges_RenameInAGroupTieIsHeld(t *testing.T) {
+	e := newGovEnv(t)
+	ctx := context.Background()
+	wide := e.seedProfile("aaa-wide", "pypi.org", "github.com")
+	narrow := e.seedProfile("mmm-narrow", "pypi.org")
+	for subject, p := range map[string]types.GovernanceProfile{"eng": wide, "ops": narrow} {
+		if _, err := e.pg.UpsertGovernanceAssignment(ctx, types.GovernanceAssignment{
+			SubjectType: types.CapabilitySubjectGroup, Subject: subject, ProfileID: p.ID, Priority: 5, CreatedBy: "seed",
+		}); err != nil {
+			t.Fatalf("seed group assignment: %v", err)
+		}
+	}
+	selected := func() string {
+		t.Helper()
+		p, _, err := e.pg.ResolveGovernanceProfile(ctx, []string{"someone@corp.example"}, []string{"eng", "ops"}, "")
+		if err != nil {
+			t.Fatalf("resolve: %v", err)
+		}
+		return p.Name
+	}
+	if got := selected(); got != "aaa-wide" {
+		t.Fatalf("a person in both groups resolves to %q, want aaa-wide", got)
+	}
+
+	held := e.pending(e.call(e.alice, http.MethodPut, "/api/v1/governance/profiles/"+wide.ID.String(), profileBody("zzz-wide", "pypi.org", "github.com")))
+	if w := e.call(e.bob, http.MethodPost, rejectPath(held.ID), ""); w.Code != http.StatusOK {
+		t.Fatalf("reject = %d %s", w.Code, w.Body)
+	}
+	// A rename plus an otherwise narrowing edit is held too.
+	e.pending(e.call(e.alice, http.MethodPut, "/api/v1/governance/profiles/"+wide.ID.String(), profileBody("zzz-wide", "pypi.org")))
+	if got := selected(); got != "aaa-wide" {
+		t.Fatalf("a held rename moved the selection to %q", got)
+	}
+
+	// The same rename through the break-glass shows what the hold protects.
+	if w := e.admin(http.MethodPut, "/api/v1/governance/profiles/"+wide.ID.String(), profileBody("zzz-wide", "pypi.org", "github.com")); w.Code != http.StatusOK {
+		t.Fatalf("break-glass rename = %d %s", w.Code, w.Body)
+	}
+	if got := selected(); got != "mmm-narrow" {
+		t.Errorf("after the rename a person in both groups resolves to %q, want mmm-narrow", got)
+	}
+}
+
 // TestPG_GovernanceChanges_DiffIsRedactedAndPayloadHoldsNoSecret: a stored ceiling that carries a raw
 // llm_inspection secret value (a direct database edit) never reaches the diff, the 202, a read of the
 // change or the payload.

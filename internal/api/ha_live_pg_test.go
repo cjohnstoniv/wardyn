@@ -164,7 +164,7 @@ func TestHALivePG_ErasureDeletesTheChunksAndNoLateWriteRecreatesThem(t *testing.
 	}
 }
 
-// A kill served by server B cancels A's in-flight CreateSandbox within 2s.
+// A kill served by server B cancels A's in-flight CreateSandbox, and its image build, within 2s.
 func TestHALivePG_AKillOnBCancelsAsInFlightCreate(t *testing.T) {
 	l := newMaskLab(t)
 	a, b := l.liveReplica("replica-a"), l.liveReplica("replica-b")
@@ -186,9 +186,18 @@ func TestHALivePG_AKillOnBCancelsAsInFlightCreate(t *testing.T) {
 	t.Logf("the create was cancelled %s after the first notice", time.Since(start))
 
 	// And through the real kill route: the run is KILLED by B, and A's create (a second one) ends.
+	// So does an image build A has running for that run.
 	run2 := l.run()
 	createCtx2, end2 := a.srv.creates.track(t.Context(), run2.ID)
 	defer end2()
+	builder := newStoppableBuilder()
+	a.srv.cfg.ImageBuilder = builder
+	built := make(chan struct{})
+	go func() {
+		defer close(built)
+		a.srv.resolveCreateRunImage(t.Context(), createRunRequest{Agent: "claude-code", Image: "ubuntu:24.04"}, run2.ID, nil)
+	}()
+	waitBuild(t, builder.entered, "A's build to start")
 	if w := do(t, b.srv, http.MethodPost, "/api/v1/runs/"+run2.ID.String()+"/kill", adminToken, ""); w.Code >= 300 {
 		t.Fatalf("kill on B = %d %s", w.Code, w.Body)
 	}
@@ -197,6 +206,7 @@ func TestHALivePG_AKillOnBCancelsAsInFlightCreate(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("a kill served by B did not cancel A's in-flight CreateSandbox within 2s")
 	}
+	waitBuild(t, built, "A's image build to end with the kill B served")
 	if st := l.runState(run2.ID); st != types.RunKilled {
 		t.Fatalf("run state = %s, want KILLED", st)
 	}

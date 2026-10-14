@@ -334,3 +334,61 @@ func TestComponentFacts_GovernanceHoldMatchesDispatch(t *testing.T) {
 		})
 	}
 }
+
+// managedSettingsFactOf is the managed-settings fact one dry door publishes.
+func managedSettingsFactOf(t *testing.T, w *httptest.ResponseRecorder) *client.ManagedSettingsFact {
+	t.Helper()
+	return decodedAgentFact(t, w).Agent.ManagedSettings
+}
+
+// DR-0196 (a): an interactive Claude Code run's policy tool rules are written
+// into its managed settings by dispatch (attendedToolRules), so Review's fact
+// must carry them, not the bare level document.
+func TestComponentFacts_InteractiveAttendedRulesMatchDispatch(t *testing.T) {
+	profile := autonomyProfile(types.AutonomyL2)
+	profile.Ceiling.ToolRules = []types.ToolRule{{Tool: "Bash", Effect: types.ToolDeny}}
+	srv, _, _ := govEscapeFixture(t, autonomyCapStore(profile))
+	member := govSession(t, govMemberSub, []string{"eng"}, false)
+	const body = `{"agent":"claude-code","interactive":true,"confinement_class":"CC2"}`
+	req := createRunRequest{Agent: "claude-code", Interactive: true}
+	want, err := agentPolicyDocument("claude-code", types.AutonomyL2, nil, holdLane(true, "", ""), false, profile.Ceiling.ToolRules)
+	if err != nil || !want.ok || want.toolRules == 0 {
+		t.Fatalf("dispatch's document for these inputs = %+v, %v; want one carrying the attended rules", want, err)
+	}
+	if _, bare, _ := agentpolicy.ForAgent(req.Agent, types.AutonomyL2, holdLane(true, "", ""), false); string(bare) == string(want.content) {
+		t.Fatal("the attended rules changed nothing; the test proves nothing")
+	}
+	got := managedSettingsFactOf(t, doSSO(t, srv, http.MethodPost, componentDoors[1], member, body))
+	if got == nil || got.Path != want.path || got.Document != string(want.content) {
+		t.Fatalf("preflight reports %+v; dispatch writes %s at %s", got, want.content, want.path)
+	}
+}
+
+// DR-0196 (b): the started agent has no managed-settings document but a
+// harness in the run's set does; dispatch writes that harness's document, so
+// Review's fact is present and is that document.
+func TestComponentFacts_HarnessSetFallbackMatchesDispatch(t *testing.T) {
+	srv, _, _ := harnessSetFixture(t, autonomyCapStore(autonomyProfile(types.AutonomyL2)), map[string]string{"claude-code+codex-cli": setImage}, nil)
+	body := `"experience":"interactive","tools":[` + claudeTool + `,` + codexTool + `],` +
+		`"startup":{"kind":"harness","tool":"codex-cli","prompt":"fix the build"},` + noRepos
+	set := []types.RunHarness{{Harness: "claude-code"}, {Harness: "codex-cli", Starts: true}}
+	want, err := agentPolicyDocument("codex-cli", types.AutonomyL2, set, holdLane(true, "", ""), false, nil)
+	if err != nil || !want.ok || want.harness != "claude-code" {
+		t.Fatalf("dispatch's document for these inputs = %+v, %v; want claude-code's", want, err)
+	}
+	got := managedSettingsFactOf(t, harnessSetCall{govMemberSub, body}.ask(t, srv, harnessDoors[1]))
+	if got == nil || got.Path != want.path || got.Document != string(want.content) {
+		t.Fatalf("preflight reports %+v; dispatch writes %s at %s", got, want.content, want.path)
+	}
+}
+
+// Control: an exec run has no agent process, so no agent fact, as before.
+func TestComponentFacts_ExecRunUnchanged(t *testing.T) {
+	f := newComponentFixture(t)
+	for _, door := range dryDoors {
+		w := f.ask(t, door, map[string]any{"agent": "claude-code", "task": "make", "task_mode": "exec"})
+		if w.Code != http.StatusOK || strings.Contains(w.Body.String(), `"managed_settings"`) || strings.Contains(w.Body.String(), `"kind":"agent"`) {
+			t.Fatalf("%s exec = %d %s", door, w.Code, w.Body.String())
+		}
+	}
+}

@@ -453,6 +453,12 @@ func (p *Proxy) inspectPush(w http.ResponseWriter, r *http.Request, rules *pushR
 				"\npush fewer commits at a time")
 		return nil, pushReview{}, noRelease, false
 	}
+	var absent *gitpack.MissingObjectError
+	if errors.As(err, &absent) {
+		p.refusePush(w, r, subject, deny, ruleSourceGitPackBlind, http.StatusUnsupportedMediaType,
+			missingTargetsBody(absent.Refs))
+		return nil, pushReview{}, noRelease, false
+	}
 	if err != nil {
 		p.refusePush(w, r, subject, deny, ruleSourceGitPackBlind, http.StatusUnsupportedMediaType,
 			"wardyn: cannot enforce push content rules on this push: "+err.Error()+
@@ -750,4 +756,20 @@ func (p *Proxy) pushSetsForHost(host string) (types.PushRuleSet, bool) {
 // what decides whether a receive-pack advertisement is rewritten.
 func (p *Proxy) anyPushRules() bool {
 	return p.policy.PushRulesSet() || len(p.pushSets) > 0 || p.pushBase != nil
+}
+
+// missingTargetsBody is the refusal for refs set to a commit the request does
+// not carry (for example a branch created at a commit the forge already has):
+// the pack holds nothing about their content, so it cannot be checked. A
+// complete clone does not change that, so no clone advice is given; naming
+// the refs is what lets the person leave them out of the push.
+func missingTargetsBody(refs []string) string {
+	const shown = 10
+	list := strings.Join(refs[:min(len(refs), shown)], ", ")
+	if len(refs) > shown {
+		list += fmt.Sprintf(", and %d more", len(refs)-shown)
+	}
+	return "wardyn: cannot enforce push content rules on this push: the request does not carry" +
+		" the commit these refs point to, so their content cannot be checked: " + list +
+		"\nleave these refs out of the push, or point them at commits the push carries"
 }

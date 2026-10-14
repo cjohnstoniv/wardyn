@@ -273,7 +273,7 @@ func TestEraseRunSetupsScope(t *testing.T) {
 		Kind: types.TemplateKindTemplate, Name: "shared", Document: json.RawMessage(templateDocBody(templateIntentEgress)), CreatedBy: "alice"}, nil)
 	e.grant("eng", "alice")
 	e.grant("eng", "bob")
-	rep, err := e.srv.erasureOrchestrator(nil).Orchestrate(context.Background(), " Alice", []erasure.Scope{erasure.RunSetups})
+	rep, err := e.srv.erasureOrchestrator(nil, nil).Orchestrate(context.Background(), " Alice", []erasure.Scope{erasure.RunSetups})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -32,6 +32,33 @@ type roleMappingUpsertGate struct {
 	write     oidc.RoleMapping
 	existing  []types.RoleMapping
 	candidate []oidc.RoleMapping
+	effect    unmatchedEffect
+}
+
+// unmatchedEffect is what a role-mapping write does to a person no mapping matches: their outcome
+// before the write and after it. A held change stores the effect its proposer acknowledged.
+type unmatchedEffect struct {
+	Before string `json:"before"`
+	After  string `json:"after"`
+}
+
+func (s *Server) roleMappingEffect(existing []types.RoleMapping, candidate []oidc.RoleMapping, userTypes []types.UserType) unmatchedEffect {
+	return unmatchedEffect{Before: s.accessUnmatchedOutcome(toOIDCRoleMappings(existing), userTypes), After: s.accessUnmatchedOutcome(candidate, userTypes)}
+}
+
+// acknowledgedEffectStale reports whether a held change's acknowledgement no longer covers what it
+// would do: its proposer acknowledged one effect on unmatched people and applying it now has another
+// (or the change predates the stored effect). The acknowledged effect becomes stale, and the change
+// is not applied on it.
+func acknowledgedEffectStale(acknowledged bool, stored *unmatchedEffect, now unmatchedEffect) bool {
+	return acknowledged && (stored == nil || *stored != now)
+}
+
+// heldRoleMappingUpsert is a held role-mapping upsert: the request as decoded, and the effect on
+// unmatched people its proposer acknowledged, when they did.
+type heldRoleMappingUpsert struct {
+	roleMappingWriteRequest
+	AcknowledgedEffect *unmatchedEffect `json:"acknowledged_effect,omitempty"`
 }
 
 // gateRoleMappingUpsert runs the gates a role-mapping upsert passes before the store, in the order a
@@ -64,6 +91,7 @@ func (s *Server) gateRoleMappingUpsert(r *http.Request, req roleMappingWriteRequ
 		return g, nil, err
 	}
 	g.candidate = accessCandidateRows(g.existing, "", write)
+	g.effect = s.roleMappingEffect(g.existing, g.candidate, userTypes)
 	return g, s.gateRoleMappingEffect(r, req.AcknowledgeAccessChange, g.existing, g.candidate, userTypes, checkLockout), nil
 }
 
@@ -116,11 +144,21 @@ func roleMappingViewOf(rows []types.RoleMapping, value string) *roleMappingDiffV
 	return nil
 }
 
-// roleMappingDeletePayload is a held role-mapping delete: the id it resolved from, and whether the
-// caller acknowledged the posture flip it may cause (re-evaluated when it applies).
+// roleMappingDeletePayload is a held role-mapping delete: the id it resolved from, whether the
+// caller acknowledged the posture flip it may cause, and the effect they acknowledged (re-evaluated
+// when it applies).
 type roleMappingDeletePayload struct {
-	ID                      uuid.UUID `json:"id"`
-	AcknowledgeAccessChange bool      `json:"acknowledge_access_change,omitempty"`
+	ID                      uuid.UUID        `json:"id"`
+	AcknowledgeAccessChange bool             `json:"acknowledge_access_change,omitempty"`
+	AcknowledgedEffect      *unmatchedEffect `json:"acknowledged_effect,omitempty"`
+}
+
+// acknowledgedOf is the effect a proposal stores: the one its proposer saw, when they acknowledged it.
+func acknowledgedOf(acknowledged bool, effect unmatchedEffect) *unmatchedEffect {
+	if !acknowledged {
+		return nil
+	}
+	return &effect
 }
 
 // holdRoleMappingUpsert stores a role-mapping upsert that passed the proposal gates (all but the
@@ -131,14 +169,15 @@ func (s *Server) holdRoleMappingUpsert(w http.ResponseWriter, r *http.Request, r
 	after := &roleMappingDiffView{Value: value, Role: g.write.Role, UserType: g.write.UserType}
 	before := roleMappingViewOf(g.existing, value)
 	s.proposeGovernanceChange(w, r, govProposal{
-		kind: govKindRoleMapping, op: "upsert", key: value, payload: req,
-		before: before, after: after, changed: changedPaths(before, after), baseState: roleMappingState(g.existing, value),
+		kind: govKindRoleMapping, op: "upsert", key: value,
+		payload: heldRoleMappingUpsert{roleMappingWriteRequest: req, AcknowledgedEffect: acknowledgedOf(req.AcknowledgeAccessChange, g.effect)},
+		before:  before, after: after, changed: changedPaths(before, after), baseState: roleMappingState(g.existing, value),
 	})
 }
 
 // holdRoleMappingDelete stores a role-mapping delete as a pending change. A delete by id is resolved
 // to the value here, so a pending delete and a pending upsert of one value collide.
-func (s *Server) holdRoleMappingDelete(w http.ResponseWriter, r *http.Request, id uuid.UUID, acknowledged bool, existing []types.RoleMapping, matched types.RoleMapping) {
+func (s *Server) holdRoleMappingDelete(w http.ResponseWriter, r *http.Request, id uuid.UUID, acknowledged bool, effect unmatchedEffect, existing []types.RoleMapping, matched types.RoleMapping) {
 	if matched.ID == uuid.Nil {
 		writeErrorReason(w, http.StatusNotFound, reasonRoleMappingNotFound, "role mapping not found")
 		return
@@ -146,7 +185,7 @@ func (s *Server) holdRoleMappingDelete(w http.ResponseWriter, r *http.Request, i
 	before := roleMappingViewOf(existing, matched.Value)
 	s.proposeGovernanceChange(w, r, govProposal{
 		kind: govKindRoleMapping, op: "delete", key: matched.Value,
-		payload: roleMappingDeletePayload{ID: id, AcknowledgeAccessChange: acknowledged},
+		payload: roleMappingDeletePayload{ID: id, AcknowledgeAccessChange: acknowledged, AcknowledgedEffect: acknowledgedOf(acknowledged, effect)},
 		before:  before, changed: changedPaths(before, nil), baseState: roleMappingState(existing, matched.Value),
 	})
 }
@@ -184,10 +223,11 @@ func applyRoleMappingChange(s *Server, r *http.Request, q store.Querier, ch type
 	if ch.Op == "delete" {
 		return s.applyRoleMappingDelete(r, q, ch, existing, userTypes)
 	}
-	var req roleMappingWriteRequest
-	if err := decodeHeldPayload(ch.Payload, &req); err != nil {
+	var held heldRoleMappingUpsert
+	if err := decodeHeldPayload(ch.Payload, &held); err != nil {
 		return govApplied{}, writeRefusal(http.StatusBadRequest, reasonAccessMappingTargetInvalid, "invalid role mapping: %v", err)
 	}
+	req := held.roleMappingWriteRequest
 	value, err := canonicalRoleMapValue(req.Value)
 	if err != nil {
 		return govApplied{}, writeRefusal(http.StatusBadRequest, reasonAccessRoleMapValueInvalid, "%s", err.Error())
@@ -196,6 +236,9 @@ func applyRoleMappingChange(s *Server, r *http.Request, q store.Querier, ch type
 		func() ([]types.RoleMapping, error) { return existing, nil }, true)
 	if err != nil {
 		return govApplied{}, err
+	}
+	if acknowledgedEffectStale(req.AcknowledgeAccessChange, held.AcknowledgedEffect, g.effect) {
+		return govApplied{}, store.ErrGovernanceChangeStale
 	}
 	if refuse != nil {
 		return govApplied{}, refusalOf("role mapping gate", refuse)
@@ -229,6 +272,9 @@ func (s *Server) applyRoleMappingDelete(r *http.Request, q store.Querier, ch typ
 		}
 	}
 	candidate := accessCandidateRows(existing, p.ID.String(), oidc.RoleMapping{})
+	if acknowledgedEffectStale(p.AcknowledgeAccessChange, p.AcknowledgedEffect, s.roleMappingEffect(existing, candidate, userTypes)) {
+		return govApplied{}, store.ErrGovernanceChangeStale
+	}
 	if refuse := s.gateRoleMappingEffect(r, p.AcknowledgeAccessChange, existing, candidate, userTypes, true); refuse != nil {
 		return govApplied{}, refusalOf("role mapping gate", refuse)
 	}

@@ -98,6 +98,10 @@ func (s *miscCovPersonStore) PrincipalEntraNames(context.Context, string) ([]str
 	return nil, nil
 }
 
+func (s *miscCovPersonStore) PrincipalsSharingObject(context.Context, string) ([]string, error) {
+	return nil, nil
+}
+
 func (s *miscCovPersonStore) EraseGovernanceChangePersonalFields(_ context.Context, principals, emails []string) (int, error) {
 	s.note("governance:" + strings.Join(principals, ",") + "|" + strings.Join(emails, ","))
 	return s.govN, s.govErr
@@ -270,7 +274,7 @@ func TestMiscCovErasureOrchestratorRegistersABackedScopeOnly(t *testing.T) {
 	pool, closedErr := miscCovClosedPool(t)
 	srv := newHarness(t).srv
 	run := func(sc erasure.Scope) error {
-		_, err := srv.erasureOrchestrator(nil).Orchestrate(t.Context(), "bob", []erasure.Scope{sc})
+		_, err := srv.erasureOrchestrator(nil, nil).Orchestrate(t.Context(), "bob", []erasure.Scope{sc})
 		return err
 	}
 	for _, sc := range []erasure.Scope{erasure.MaskCopies, erasure.AuditPersonalFields, erasure.Credentials} {
@@ -472,7 +476,7 @@ func TestMiscCovEraseAuditSealKeys(t *testing.T) {
 	t.Run("a failed alias lookup stops before any key is destroyed", func(t *testing.T) {
 		srv, st := setup(t)
 		st.aliasErr = errors.New("aliases down")
-		_, err := srv.eraseAuditSealKeys(t.Context(), "bob")
+		_, err := srv.eraseAuditSealKeys(t.Context(), "bob", nil)
 		if !errors.Is(err, st.aliasErr) || errors.Is(err, closedErr) {
 			t.Fatalf("err = %v, want the alias lookup's error and no destroy attempt", err)
 		}
@@ -483,7 +487,7 @@ func TestMiscCovEraseAuditSealKeys(t *testing.T) {
 	t.Run("a key that cannot be destroyed leaves the governance changes alone", func(t *testing.T) {
 		srv, st := setup(t)
 		st.aliases["bob"] = []string{"bob@corp.example", "entra:tenant:object"}
-		_, err := srv.eraseAuditSealKeys(t.Context(), "bob")
+		_, err := srv.eraseAuditSealKeys(t.Context(), "bob", nil)
 		if !errors.Is(err, closedErr) {
 			t.Fatalf("err = %v, want the destroy's error", err)
 		}
@@ -496,7 +500,7 @@ func TestMiscCovEraseAuditSealKeys(t *testing.T) {
 	t.Run("with a store that cannot resolve people the destroy is still attempted and its error returned", func(t *testing.T) {
 		srv := newHarness(t).srv
 		srv.cfg.SubjectKeys = subjectkey.New(pool, subjectkey.Resolver{})
-		if _, err := srv.eraseAuditSealKeys(t.Context(), "bob"); !errors.Is(err, closedErr) {
+		if _, err := srv.eraseAuditSealKeys(t.Context(), "bob", nil); !errors.Is(err, closedErr) {
 			t.Errorf("err = %v, want the destroy's error", err)
 		}
 	})

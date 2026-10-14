@@ -254,6 +254,12 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 
 	principalType, principal := actorFromRequest(r)
 
+	releaseSlot := s.webAttachSlot(ctx, w, run, principalType, principal) // the per-run session cap
+	if releaseSlot == nil {
+		return
+	}
+	defer releaseSlot()
+
 	// A paused run is thawed before the exec: the daemon refuses one into a
 	// paused container (run_pause.go).
 	if err := s.thawForExec(ctx, run, principalType, principal, "presence"); err != nil {
@@ -400,6 +406,8 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 	go s.attachKeepalive(pumpCtx, id)
 	// Started before the exec is opened, so a fence ends an attach in flight too.
 	maskFenced := s.endAttachOnMaskFence(pumpCtx, id, c, cancel)
+	// The credential that opened this socket is checked again while it is open (attach_authority.go).
+	authEnded := s.holdAttachAuthority(pumpCtx, s.attachAuthority(r, id), func() { endAttachAuthority(c, holder, cancel) })
 
 	// Bidirectional pump. closeReason is filled by whichever side ends first.
 	// castTee (may be nil when no RecordingStore is wired) receives a copy of the
@@ -408,6 +416,9 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 	cancel()
 	if maskFenced() {
 		closeReason = maskFencedReason
+	}
+	if authEnded() {
+		closeReason = attachAuthEndedReason
 	}
 	if wa.failed.Load() {
 		closeReason = "attach failed"

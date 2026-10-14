@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
@@ -238,6 +239,41 @@ func TestPG_GovernanceChanges_RoleMappingPostureFlipIsReEvaluatedOnApproval(t *t
 	}
 	if e.changeState(ch.ID) != types.GovernanceChangePending || len(e.mappings()) != 0 {
 		t.Fatal("a refused approval applied or left pending")
+	}
+
+	// An ACKNOWLEDGED change is applied on what its proposer acknowledged, not on whatever it does by
+	// the time it is approved. With an operator allowlist and no chart, an empty table lets every
+	// unmatched person in as a user, and the allowlisted approver stays an admin throughout. The
+	// delete of "dev" moves nothing for unmatched people when it is proposed; once the other row goes,
+	// applying it would let them all in. The acknowledged effect becomes stale, and it is not applied.
+	pool := throwawayPGPool(t)
+	pg := store.NewPG(pool)
+	auth := newAccessAuth(t, nil, "", []string{"approver@corp.example"}, nil, func(c *oidc.Config) {
+		c.RoleMappings, c.UserTypes = pgOIDCRoleMappings{pg}, pg
+	})
+	l := &roleMapEnv{govEnv: newGovEnvOn(t, pool, func(c *Config) { c.OIDC = auth })}
+	approver = accessSession(t, "sub-approver", "approver@corp.example", oidc.RoleAdmin, nil)
+	r0 = l.seedMapping("ops-admins", oidc.RoleAdmin)
+	dev := l.seedMapping("dev", oidc.RoleUser)
+	del := l.pending(l.call(proposer, http.MethodDelete, "/api/v1/access/mappings/"+dev.ID.String()+"?acknowledge_access_change=true", ""))
+	if w := l.admin(http.MethodDelete, "/api/v1/access/mappings/"+r0.ID.String()+"?acknowledge_access_change=true", ""); w.Code != http.StatusNoContent {
+		t.Fatalf("admin-token delete = %d %s", w.Code, w.Body)
+	}
+	if w := l.call(approver, http.MethodPost, approvePath(del.ID), ""); w.Code != http.StatusConflict || wireReason(t, w) != "governance_change_stale" {
+		t.Fatalf("approving an acknowledged delete whose effect changed = %d %s, want 409 governance_change_stale", w.Code, w.Body)
+	}
+	if l.changeState(del.ID) != types.GovernanceChangeStale || len(l.mappings()) != 1 {
+		t.Fatal("a stale acknowledged delete applied or did not go stale")
+	}
+
+	// The same acknowledgement still applies while the effect it named is unchanged.
+	l.seedMapping("ops-admins", oidc.RoleAdmin)
+	up := l.pending(l.call(proposer, http.MethodPost, "/api/v1/access/mappings", `{"value":"qa","role":"user","acknowledge_access_change":true}`))
+	if w := l.call(approver, http.MethodPost, approvePath(up.ID), ""); w.Code != http.StatusOK {
+		t.Fatalf("approving an acknowledged upsert whose effect is unchanged = %d %s, want 200", w.Code, w.Body)
+	}
+	if !slices.ContainsFunc(l.mappings(), func(m types.RoleMapping) bool { return m.Value == "qa" }) {
+		t.Fatal("the acknowledged upsert did not apply")
 	}
 }
 

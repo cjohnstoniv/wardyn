@@ -4,6 +4,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -299,6 +300,135 @@ func TestGovCovProfileBaseState(t *testing.T) {
 	}
 }
 
+// TestGovCovProfileWriteExemptComparesTheResolvedComposition: the four-eyes exemption compares the
+// resolved profile before and after, so a composed profile whose overlay adds an inspection naming a
+// detector sidecar over a base with none is held, and the same overlay without the sidecar applies.
+func TestGovCovProfileWriteExemptComparesTheResolvedComposition(t *testing.T) {
+	s, _ := govCovServer(t, &govCovStore{})
+	base := govCovStandalone(govCovBase, "base", "pypi.org", "github.com")
+	all := []types.GovernanceProfile{base, govCovComposedOn(govCovPID, "p", govCovBase, "pypi.org", "github.com")}
+	body := func(inspection string) string {
+		return `{"name":"p","base_profile_id":"` + govCovBase.String() + `","overlay":{"allowed_domains":["pypi.org","github.com"],"llm_inspection":` + inspection + `}}`
+	}
+	for _, c := range []struct {
+		name, inspection string
+		want             bool
+	}{
+		{"an added sidecar is held", `{"mode":"block","detector_sidecar_url":"https://github.com/scan"}`, false},
+		{"an added local inspection applies", `{"mode":"block","detect_secrets":true}`, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			p, res := govCovBuilt(t, s, all, govCovPID, body(c.inspection))
+			if res.Ceiling.LLMInspection == nil {
+				t.Fatal("the resolved composition carries no inspection; the fixture is wrong")
+			}
+			if got := s.profileWriteExempt(context.Background(), all, p, res); got != c.want {
+				t.Errorf("profileWriteExempt = %v, want %v", got, c.want)
+			}
+		})
+	}
+}
+
+// TestGovCovProfileWriteExemptHoldsARenameThatMaySelect: the resolver breaks an equal-priority tie
+// between two group assignments by profile name, so a rename of a profile in such a tie is held by
+// both proofs, the metadata-only one and the narrowing one. A rename with no such tie still applies,
+// a narrowing that keeps the name still applies, and an unreadable assignment list holds the rename.
+func TestGovCovProfileWriteExemptHoldsARenameThatMaySelect(t *testing.T) {
+	other := uuid.MustParse("dddddddd-0000-0000-0000-0000000000aa")
+	group := func(subject string, profile uuid.UUID, priority int) types.GovernanceAssignment {
+		return types.GovernanceAssignment{SubjectType: types.CapabilitySubjectGroup, Subject: subject, ProfileID: profile, Priority: priority}
+	}
+	tie := []types.GovernanceAssignment{group("eng", govCovPID, 5), group("ops", other, 5)}
+	rename := `{"name":"renamed","ceiling":{"allowed_domains":["pypi.org","github.com"],"min_confinement_class":"CC2"}}`
+	renameNarrow := `{"name":"renamed","ceiling":{"allowed_domains":["pypi.org"],"min_confinement_class":"CC2"}}`
+	for _, c := range []struct {
+		name        string
+		assignments []types.GovernanceAssignment
+		err         error
+		body        string
+		want        bool
+	}{
+		{"a rename in an equal-priority group tie is held", tie, nil, rename, false},
+		{"a rename plus a narrowing in the tie is held", tie, nil, renameNarrow, false},
+		{"a narrowing that keeps the name still applies", tie, nil, govCovProfileBody("p", "pypi.org"), true},
+		{"a rename with the groups at different priorities applies", []types.GovernanceAssignment{group("eng", govCovPID, 5), group("ops", other, 4)}, nil, rename, true},
+		{"a rename whose tie is with a user row applies", []types.GovernanceAssignment{group("eng", govCovPID, 5),
+			{SubjectType: types.CapabilitySubjectUser, Subject: "u@corp.example", ProfileID: other, Priority: 5}}, nil, rename, true},
+		{"a rename when two groups share the profile itself applies", []types.GovernanceAssignment{group("eng", govCovPID, 5), group("ops", govCovPID, 5)}, nil, rename, true},
+		{"a rename when the assignments cannot be read is held", nil, errors.New("boom"), rename, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s, _ := govCovServer(t, &govCovStore{assignments: c.assignments, assignErr: c.err})
+			all := []types.GovernanceProfile{govCovStandalone(govCovPID, "p", "pypi.org", "github.com"),
+				govCovStandalone(other, "q", "pypi.org")}
+			p, res := govCovBuilt(t, s, all, govCovPID, c.body)
+			if got := s.profileWriteExempt(context.Background(), all, p, res); got != c.want {
+				t.Errorf("profileWriteExempt = %v, want %v", got, c.want)
+			}
+		})
+	}
+}
+
+// TestGovCovProfileWriteExemptEmptiedUIApps pins both ways ui_apps can be emptied. A profile's OWN
+// ceiling list emptied is held: Clamp reads an empty ceiling list as no opinion, so members could then
+// run any UI app. An OVERLAY list emptied applies: the composition keeps the base's apps and denies
+// them (deny_ui_apps), a real narrowing of the resolved profile.
+func TestGovCovProfileWriteExemptEmptiedUIApps(t *testing.T) {
+	s, _ := govCovServer(t, &govCovStore{})
+	docs := []types.UIApp{{Name: "docs", Port: 8000}}
+	own := govCovStandalone(govCovPID, "p", "pypi.org")
+	own.Ceiling.UIApps = docs
+	p, res := govCovBuilt(t, s, []types.GovernanceProfile{own}, govCovPID,
+		`{"name":"p","ceiling":{"allowed_domains":["pypi.org"],"min_confinement_class":"CC2","ui_apps":[]}}`)
+	if s.profileWriteExempt(context.Background(), []types.GovernanceProfile{own}, p, res) {
+		t.Error("emptying a profile's own ui_apps applied without a second approver")
+	}
+
+	base := govCovStandalone(govCovBase, "base", "pypi.org")
+	base.Ceiling.UIApps = docs
+	all := []types.GovernanceProfile{base, govCovComposedOn(govCovPID, "p", govCovBase, "pypi.org")}
+	p, res = govCovBuilt(t, s, all, govCovPID,
+		`{"name":"p","base_profile_id":"`+govCovBase.String()+`","overlay":{"allowed_domains":["pypi.org"],"ui_apps":[]}}`)
+	if !res.Limits.DenyUIApps || len(res.Ceiling.UIApps) != 1 {
+		t.Fatalf("resolved ui_apps = %+v, deny_ui_apps = %v; want the base's app and the denial", res.Ceiling.UIApps, res.Limits.DenyUIApps)
+	}
+	if !s.profileWriteExempt(context.Background(), all, p, res) {
+		t.Error("an overlay that empties ui_apps, which resolves to a denial, was held")
+	}
+}
+
+// TestGovCovBaseWriteStrandsOnlyADisjointUIAppsOverlay: a base edit that leaves a descendant's
+// non-empty ui_apps sharing nothing with it is refused with 409, while a descendant whose overlay
+// sets ui_apps empty (a denial) composes over any base list.
+func TestGovCovBaseWriteStrandsOnlyADisjointUIAppsOverlay(t *testing.T) {
+	s, _ := govCovServer(t, &govCovStore{})
+	base := govCovStandalone(govCovBase, "base", "pypi.org")
+	base.Ceiling.UIApps = []types.UIApp{{Name: "docs", Port: 8000}}
+	edited := base
+	edited.Ceiling.UIApps = []types.UIApp{{Name: "jupyter", Port: 8888}}
+	for _, c := range []struct {
+		name     string
+		overlay  []types.UIApp
+		wantCode int
+	}{
+		{"an overlay naming the app the base drops", []types.UIApp{{Name: "docs", Port: 8000}}, http.StatusConflict},
+		{"an overlay that empties ui_apps", []types.UIApp{}, 0},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			child := govCovComposedOn(govCovPID, "child", govCovBase, "pypi.org")
+			child.Overlay.UIApps = &c.overlay
+			_, _, err := s.checkGraphWrite(edited, []types.GovernanceProfile{base, child})
+			var refusal *profileWriteError
+			switch {
+			case c.wantCode == 0 && err != nil:
+				t.Fatalf("checkGraphWrite = %v, want no refusal", err)
+			case c.wantCode != 0 && (!errors.As(err, &refusal) || refusal.status != c.wantCode || refusal.reason != reasonGovernanceOverlayUnsatisfiable):
+				t.Fatalf("checkGraphWrite = %v, want %d governance_overlay_unsatisfiable", err, c.wantCode)
+			}
+		})
+	}
+}
+
 func TestGovCovProfileWriteExempt(t *testing.T) {
 	s, _ := govCovServer(t, &govCovStore{})
 	cur := govCovStandalone(govCovPID, "p", "pypi.org", "github.com")
@@ -312,6 +442,8 @@ func TestGovCovProfileWriteExempt(t *testing.T) {
 	}{
 		{"a metadata-only rename applies", `{"name":"renamed","ceiling":{"allowed_domains":["pypi.org","github.com"],"min_confinement_class":"CC2"}}`, all, true},
 		{"a narrowing write applies", govCovProfileBody("p", "pypi.org"), all, true},
+		{"an added inspection naming a detector sidecar is held", `{"name":"p","ceiling":{"allowed_domains":["pypi.org","github.com"],"min_confinement_class":"CC2","llm_inspection":{"mode":"block","detect_secrets":true,"detector_sidecar_url":"https://github.com/scan"}}}`, all, false},
+		{"an added local inspection applies", `{"name":"p","ceiling":{"allowed_domains":["pypi.org","github.com"],"min_confinement_class":"CC2","llm_inspection":{"mode":"block","detect_secrets":true}}}`, all, true},
 		{"a widening write is held", govCovProfileBody("p", "pypi.org", "github.com", "api.anthropic.com"), all, false},
 		{"a contact change is held even when the ceiling narrows", `{"name":"p","contact":{"owner":"elsewhere"},"ceiling":{"allowed_domains":["pypi.org"],"min_confinement_class":"CC2"}}`, all, false},
 		{"clearing the contact is held", `{"name":"p","contact":null,"ceiling":{"allowed_domains":["pypi.org"],"min_confinement_class":"CC2"}}`, all, false},
@@ -319,13 +451,13 @@ func TestGovCovProfileWriteExempt(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			p, res := govCovBuilt(t, s, c.all, govCovPID, c.body)
-			if got := s.profileWriteExempt(c.all, p, res); got != c.want {
+			if got := s.profileWriteExempt(context.Background(), c.all, p, res); got != c.want {
 				t.Errorf("profileWriteExempt = %v, want %v", got, c.want)
 			}
 		})
 	}
 	p, _ := govCovBuilt(t, s, all, govCovPID, govCovProfileBody("p", "pypi.org"))
-	if s.profileWriteExempt(all, p, nil) {
+	if s.profileWriteExempt(context.Background(), all, p, nil) {
 		t.Error("a write that did not resolve can never be exempt")
 	}
 }

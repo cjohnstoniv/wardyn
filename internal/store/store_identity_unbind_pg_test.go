@@ -122,7 +122,8 @@ func TestPG_UnbindIdentity_RefusesARowWithNoObjectID(t *testing.T) {
 // TestPG_IdentityGuard_RefusesAWriteQueuedBehindAnUnbind: a guarded token insert whose guard starts after an
 // unbind has locked the row waits for it, then re-reads the rows by principal, finds none (the row is unbound
 // now) and used to pass, leaving a token under the released sub that no leaver step reaches. The cutoff the
-// unbind wrote refuses it instead, and a guarded insert after the cutoff's own moment is unaffected.
+// unbind wrote refuses it instead, and a guarded insert after the cutoff's own moment is unaffected. The
+// cutoff is stamped an hour in the past, as a clock that stepped back would: it is ordered by sequence.
 func TestPG_IdentityGuard_RefusesAWriteQueuedBehindAnUnbind(t *testing.T) {
 	pool := runsPGPoolIsolated(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -180,7 +181,7 @@ func TestPG_IdentityGuard_RefusesAWriteQueuedBehindAnUnbind(t *testing.T) {
 	if _, err := tx.Exec(ctx, `UPDATE principal_identities SET principal = NULL WHERE id = $1`, row.ID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := tx.Exec(ctx, `INSERT INTO oidc_session_revocations (sub, revoked_at) VALUES ('sub-old', clock_timestamp())
+	if _, err := tx.Exec(ctx, `INSERT INTO oidc_session_revocations (sub, revoked_at) VALUES ('sub-old', clock_timestamp() - interval '1 hour')
 		ON CONFLICT (sub) DO UPDATE SET revoked_at = EXCLUDED.revoked_at`); err != nil {
 		t.Fatal(err)
 	}

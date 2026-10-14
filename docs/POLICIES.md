@@ -184,6 +184,10 @@
 - But under `allow_all_egress` a literal public IP is allowed (private, loopback, link-local and metadata ranges are denied regardless of policy).
 - There is one operator-authored exception: a private-range literal named EXACTLY in `allowed_domains`, which is what an `egress_redirects` `to` on a private endpoint adds for the runs it covers, is reachable and audited as `rule_source: site-config:egress-redirect`.
 - A wildcard never qualifies and a deny still wins.
+- A member's own entry does not create that exception under an `allow_all_egress` ceiling: run create drops it, with a `clamp_warnings` line, unless the ceiling lists the same address for every port the entry names.
+- The ceiling's `allow_all_egress`, a wildcard, a name that resolves there and an `egress_host` grant do not count as listing it; a member's public literal is kept.
+- A member's own workspace whose repository URL names a private-range address adds that clone host only where the ceiling or the workspace's `approved_egress` lists it with no port. That holds for a run, a record session and a scan run.
+- An IPv6 address can be listed only in the ceiling, since `approved_egress` takes dotted hosts, and a scan of a library source is bounded by the ceiling alone.
 - Under `deny_with_review` / `wait_for_review` it becomes an approvable unknown.
 - If you run a brokered policy with `allow_all_egress`, the broker route is the only *convenient* route, not the only one.
 - It is what git itself uses, since a clone/push URL carries a name, never a bare IP.
@@ -929,6 +933,7 @@ The match is exact, so it would never fire and would silently read as enforcemen
 | The buffered pack is under the inspection ceiling but still costs more objects, inflated bytes, tree entries or changed paths than `internal/gitpack`'s own compiled-in ceilings allow | `413` | `brokered:git:push-too-large` | Push fewer commits. Raising `max_inspect_pack_mib` does not help — these ceilings are unrelated to that setting. |
 | The push cannot be read from its own bytes | `415` | `brokered:git:push-uninspectable` | Push from a complete clone (`git fetch --unshallow`) so the pack carries every object it deltifies against. |
 | | | | A body in a non-identity `Content-Encoding`, a malformed pack, a `deny_paths` list too long to evaluate, and a `deny_paths` entry the broker cannot read (one that bypassed write-time validation) land here too. |
+| A ref is set to a commit the request does not carry (for example a branch created at a commit the forge already has) | `415` | `brokered:git:push-uninspectable` | Leave the named refs out of the push, or point them at commits it carries. A complete clone (`git fetch --unshallow`) does not help, and one new commit need not fix every ref. |
 | The sidecar was busy inspecting other requests for longer than it waits | `503` | `brokered:git:push-uninspectable` | Retry the push. Inspection takes the sidecar's one inspection slot, shared with LLM request scanning, because a small compressed push can inflate to over a hundred MiB inside a sidecar capped at 256 MiB. |
 | A path matched `require_review_paths`, and an admin denied the push, nobody decided within `hold_seconds`, the request closed undecided, or it could not be asked | `403` | `brokered:git:push-held` | Wait for the decision and push the same commits again, or take those paths out of the push. |
 | A path matched `require_review_paths` on an **unattended** run | `403` | `brokered:git:push-held-unattended` | Take those paths out of the push, or run the task interactively. No approval is raised. |
@@ -1167,7 +1172,7 @@ So an entry a pattern matches is judged one of two ways:
 | `inspect_forward_egress` | `bool` | `false` | Extend inspection from the LLM routes to the generic plaintext-HTTP forward path. HTTPS connectors tunnel via opaque CONNECT and stay uninspected unless MITM'd. |
 | `max_scan_bytes` | `int` | `1048576` (1 MiB) | Cap on a single scanned span. A larger span is skipped fail-open and recorded. Negative is rejected. |
 | `on_scanner_error` | `string` | `pass` | `pass` (fail-open, the request still flows) or `block` (fail-closed in block mode). |
-| `require_inspectable_llm` | `bool` | `false` | Refuse to schedule a run whose resolved LLM transport is opaque (subscription-OAuth / Bedrock CONNECT) and therefore uninspectable. Requires `intercept_tls` — only TLS-MITM gives a runtime guarantee. Default only warns. |
+| `require_inspectable_llm` | `bool` | `false` | Refuse to schedule a run whose resolved LLM transport is opaque: Bedrock, SigV4 or bearer. A Claude subscription is inspectable, on a route-through host too. Requires `intercept_tls` — only TLS-MITM gives a runtime guarantee. Default only warns. |
 | `intercept_tls` | `bool` | `false` | Opt the run into TLS-MITM of opaque CONNECT tunnels to known LLM hosts, making the subscription-OAuth path inspectable. |
 | | | | The control plane provisions a per-run CA: the private key goes only to the proxy sidecar, the sandbox trusts only the public cert. Adds a CA trust dependency inside the sandbox (threatmodel §5.1a). |
 | `block_min_severity` | `string` | `low` | Minimum finding severity that blocks in `block` mode: `low`, `medium`, `high`, `critical`. |

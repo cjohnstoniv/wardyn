@@ -21,6 +21,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/cjohnstoniv/wardyn/internal/db"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -340,4 +341,46 @@ func TestPG_PauseRun_CompensationFailsClosedAndTheSweepSettles(t *testing.T) {
 			t.Error("after the sweep: want the unmarked run running again (freezes == thaws) and nothing left to settle")
 		}
 	})
+}
+
+// TestPG_RunPause_AResumeRestartsTheQuietClock: a run paused long after anyone
+// was last at it is resumed when its last request closes, and the next sweep,
+// reading low CPU, leaves it running. The resume itself is the newest thing
+// that happened to the run, so the quiet period is counted from it and not from
+// the presence stamp the pause was judged on.
+func TestPG_RunPause_AResumeRestartsTheQuietClock(t *testing.T) {
+	pool := throwawayPGPool(t)
+	st := store.NewPG(pool)
+	h := newHarness(t)
+	rn := &pauseRunner{fakeRunner: &fakeRunner{}, freeze: map[types.ConfinementClass]bool{types.CC1: true}, cpu: pct(0)}
+	cfg := baseTestConfig(h, st)
+	cfg.Runner = rn
+	srv := New(cfg)
+	ctx := t.Context()
+
+	run := newFinalizeRun()
+	run.SandboxRef, run.RunLimits.PauseIdleAfterSec = "ref-pause", 900
+	if _, err := st.CreateRun(ctx, run); err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE agent_runs SET active_at = now() - interval '2 hours',
+		paused_at = now() - interval '1 hour', paused_reason = $2 WHERE id = $1`, run.ID, string(types.PauseWaiting)); err != nil {
+		t.Fatalf("pause the run: %v", err)
+	}
+
+	srv.approvalClosed(ctx, run.ID)
+	if got, err := st.GetRun(ctx, run.ID); err != nil || got.PausedAt != nil {
+		t.Fatalf("after its last request closed: paused_at = %v, err %v; want the run resumed", got.PausedAt, err)
+	}
+	if err := srv.sweepRunPauses(ctx); err != nil {
+		t.Fatalf("sweepRunPauses: %v", err)
+	}
+	got, err := st.GetRun(ctx, run.ID)
+	if err != nil {
+		t.Fatalf("get run: %v", err)
+	}
+	if freezes, thaws := rn.counts(); freezes != 0 || thaws != 1 || got.PausedAt != nil {
+		t.Errorf("freezes = %d, thaws = %d, paused_at = %v; want the sweep after a resume to leave the run running",
+			freezes, thaws, got.PausedAt)
+	}
 }

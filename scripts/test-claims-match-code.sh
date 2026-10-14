@@ -220,6 +220,49 @@ for f in "${MIGDIR}"/[0-9][0-9][0-9][0-9]_*.sql; do
 done
 pass "C8h the split-role upgrade note grants all ${checked} tables created since migration ${UNRELEASED_FROM}"
 
+# ── C8h (verbs): the note grants every VERB the code uses on a table it names ─
+#
+# FR-0158, the third miss of this class: the note named person_invitations (so
+# the table-name check above passed) under SELECT, INSERT, UPDATE, while the
+# SCIM purge DELETEs from it, and a split-role install that followed the note
+# could never finish a leaver purge. Derived: for each table the note grants,
+# the verbs it grants it (the "SELECT, ... on" group the name sits in) must
+# cover every verb that non-test Go SQL uses on it. A verb is read off one SQL
+# string literal: DELETE FROM t; UPDATE t SET; INSERT INTO t ... DO UPDATE; a
+# FROM t with FOR [NO KEY] UPDATE. A statement assembled from several literals
+# is judged per literal, so this is a floor, not a proof.
+verb_report="$(cd "${ROOT}" && printf '%s\n' "${split_note}" | tr '\n' ' ' | perl -e '
+  my $note = <STDIN>; $note =~ s/\.\s+Without\b.*//s;       # the grant sentence only
+  my (%has, $verbs);
+  while ($note =~ /`?(SELECT(?:, [A-Z]+)*)`?\s+on\b|`([a-z][a-z_]*)`/g) {
+    if (defined $1) { $verbs = $1; next }
+    $has{$2} = $verbs if defined $verbs;
+  }
+  my @files = grep { !/_test\.go$/ } split /\n/, `find internal cmd -name "*.go" -not -path "*/testdata/*"`;
+  my %need;
+  for my $f (@files) {
+    open my $h, "<", $f or next; local $/; my $src = <$h>; close $h;
+    while ($src =~ /`([^`]*)`|"((?:[^"\\\n]|\\.)*)"/g) {
+      my $l = defined $1 ? $1 : $2;
+      for my $t (keys %has) {
+        $need{$t}{DELETE} ||= $f if $l =~ /\bDELETE\s+FROM\s+$t\b/i;
+        $need{$t}{UPDATE} ||= $f if $l =~ /\bUPDATE\s+$t\s+SET\b/i
+          || ($l =~ /\bINSERT\s+INTO\s+$t\b/i && $l =~ /\bDO\s+UPDATE\b/i)
+          || ($l =~ /\bFROM\s+$t\b/i && $l =~ /\bFOR\s+(NO\s+KEY\s+)?UPDATE\b/i);
+        $need{$t}{INSERT} ||= $f if $l =~ /\bINSERT\s+INTO\s+$t\b/i;
+      }
+    }
+  }
+  for my $t (sort keys %need) { for my $v (sort keys %{$need{$t}}) {
+    print "$t needs $v ($need{$t}{$v}) but the note grants it only: $has{$t}\n" unless $has{$t} =~ /\b$v\b/;
+  } }
+')"
+[ -z "${verb_report}" ] || {
+  printf '%s\n' "${verb_report}" >&2
+  fail "the newest CHANGELOG \"Split-role installs\" bullet grants a table fewer verbs than non-test SQL uses on it: a split-role install that follows the note fails at that statement (C8h verbs). Move the table to a group that carries the verb"
+}
+pass "C8h the split-role upgrade note grants every verb the code uses on the tables it names"
+
 # ── C9: every "helm install wardyn" recipe carries its render-time refusals ─
 #
 # X1a-F1 / X1c-F1 (v0.7.4) — three front-door "helm install wardyn" recipes

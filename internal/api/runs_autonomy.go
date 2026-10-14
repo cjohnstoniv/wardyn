@@ -100,7 +100,7 @@ func (s *Server) resolveRunAutonomy(w http.ResponseWriter, r *http.Request, req 
 		runIdentitySubject(r.Context(), principalFromRequest(r)))
 	grade := adoEntraGradedAs(adoRun, adoOn)
 	bedrock := bedrockCredGradedAs(modelCred)
-	posture := composer.AutonomyPostureOf(autonomyPostureSpec(spec, wsRefs, req.Repo, scmSite, grade, bedrock), enforced, baseline)
+	posture := composer.AutonomyPostureOf(autonomyPostureSpec(spec, wsRefs, req.Repo, scmSite, grade, bedrock, ceiling.Spec.AllowedDomains), enforced, baseline)
 	var level types.AutonomyLevel
 	var boundBy []string
 	if rubric {
@@ -364,14 +364,15 @@ func autonomyAgentLabel(agent string) string {
 // Works on a copy with both domain slices cloned: spec is the one the caller
 // goes on to persist and dispatch, and unionDomains appends in place.
 func autonomyPostureSpec(spec types.RunPolicySpec, wsRefs []types.Workspace, legacyRepo string,
-	scmSite types.SiteConfig, ado adoEntraGrade, bedrock bedrockCredGrade,
+	scmSite types.SiteConfig, ado adoEntraGrade, bedrock bedrockCredGrade, trusted []string,
 ) types.RunPolicySpec {
 	out := spec
 	out.AllowedDomains = slices.Clone(spec.AllowedDomains)
 	out.DeniedDomains = slices.Clone(spec.DeniedDomains)
 	unionWorkspaceEgress(&out, wsRefs)
 	for _, ws := range wsRefs {
-		unionAllowedDomains(&out, workspaceCloneEgress(ws))
+		kept, _ := runCloneEgress(ws, trusted)
+		unionAllowedDomains(&out, kept)
 	}
 	// A run that declares no repo at all inherits no SCM lane at launch and
 	// must inherit none here either, or a sealed local-dir run would grade
