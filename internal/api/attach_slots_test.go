@@ -129,7 +129,7 @@ func attachSlotsTestServer(t *testing.T) (*Server, *holderTestRunner, *sshTestRe
 // dialAttachRefused dials one attach more and returns the HTTP status it was refused with.
 func dialAttachRefused(t *testing.T, ts *httptest.Server, srv *Server, runID uuid.UUID) int {
 	t.Helper()
-	tok, err := mintAttachTicket(context.Background(), srv.cfg.Store, runID, types.ActorHuman, holderSecond, oidc.RoleAdmin, time.Now())
+	tok, err := mintAttachTicket(context.Background(), srv.cfg.Store, runID, types.ActorHuman, holderSecond, oidc.RoleAdmin, oidc.Issue{At: time.Now()})
 	if err != nil {
 		t.Fatalf("mint ticket: %v", err)
 	}
