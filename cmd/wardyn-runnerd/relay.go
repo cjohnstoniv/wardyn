@@ -21,11 +21,11 @@ import (
 
 // localRelay is the runner's end of the internal hop (design 0.9 §4.2). A
 // local run's proxy dials its org's internal hostname, which the proxy's hosts
-// entry maps to Docker's host-gateway; this listener there copies each
+// entry maps to the relay target relayPlan chose; this listener there copies each
 // connection, unread, over one relay stream on the runner's own session. TLS
 // ends at the org, so only ciphertext passes through, and nothing is forwarded
-// anywhere but that stream. serve admits addr (relayBind, explicitRelayBind)
-// before the runner goes online.
+// anywhere but that stream. serve admits addr (relayPlan) before the runner
+// goes online.
 type localRelay struct {
 	ctx  context.Context
 	addr netip.Addr
@@ -55,20 +55,21 @@ func relayBind(gateway netip.Addr, bridge []netip.Addr) error {
 // explicitRelayBind admits a --relay-listen address: never unspecified or
 // multicast. Docker Desktop's host-gateway reaches only 127.0.0.1 on this host
 // (not ::1 or another 127/8 address), so that is the one address it admits. On
-// any other engine the address must be the engine's own host-gateway, held by
+// a native engine the address must be the engine's own host-gateway, held by
 // its bridge; loopback there would show the runner online and refuse every run.
-func explicitRelayBind(addr netip.Addr, desktop bool, gateway netip.Addr, bridge []netip.Addr) error {
+// relayPlan calls it only once the engine's facts are gathered.
+func explicitRelayBind(addr netip.Addr, f engineFacts) error {
 	switch {
 	case addr.IsUnspecified() || addr.IsMulticast():
 		return fmt.Errorf("relay: refusing --relay-listen %s: it must be one address of this host", addr)
-	case desktop && addr.Unmap() != netip.AddrFrom4([4]byte{127, 0, 0, 1}):
+	case f.desktop && addr.Unmap() != relayLoopback:
 		return fmt.Errorf("relay: refusing --relay-listen %s: Docker Desktop's host-gateway reaches only 127.0.0.1 on this host, so use 127.0.0.1", addr)
-	case desktop:
+	case f.desktop:
 		return nil
-	case addr != gateway:
-		return fmt.Errorf("relay: refusing --relay-listen %s: a proxy on this engine reaches only its host-gateway %s (loopback works only with Docker Desktop)", addr, gateway)
+	case addr != f.gateway:
+		return fmt.Errorf("relay: refusing --relay-listen %s: a proxy on this engine reaches only its host-gateway %s (loopback works only with Docker Desktop)", addr, f.gateway)
 	}
-	return relayBind(gateway, bridge)
+	return relayBind(f.gateway, f.bridge)
 }
 
 // Ensure is the Docker driver's ControlPlaneRelay: the relay listens on its

@@ -6,6 +6,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -35,6 +36,7 @@ type setupFixture struct {
 	commands    []string // "name args" run on the host
 	networks    []string
 	desktop     bool
+	vm          bool // a VM-backed engine other than Docker Desktop
 	state       types.RunnerState
 	pools       []sdk.RunnerPool
 	defaultID   *uuid.UUID
@@ -66,7 +68,7 @@ func newSetupFixture(t *testing.T, goos string) *setupFixture {
 			}
 			return nil, nil
 		},
-		docker: func(_ context.Context, network string, _ bool) (setupEngine, error) {
+		docker: func(_ context.Context, network string) (engineFacts, error) {
 			f.networks = append(f.networks, network)
 			return f.engine(), nil
 		}}
@@ -76,10 +78,17 @@ func newSetupFixture(t *testing.T, goos string) *setupFixture {
 	return f
 }
 
-// engine answers as a native engine whose bridge holds its host-gateway, or as Docker Desktop.
-func (f *setupFixture) engine() setupEngine {
+// engine answers as a native engine whose bridge holds its host-gateway, as Docker Desktop, or as a
+// VM-backed engine whose bridge is not on this host.
+func (f *setupFixture) engine() engineFacts {
 	gw := netip.MustParseAddr("172.17.0.1")
-	return setupEngine{desktop: f.desktop, gateway: gw, bridge: []netip.Addr{gw}}
+	switch {
+	case f.desktop:
+		return engineFacts{os: "Docker Desktop", name: "docker-desktop", desktop: true}
+	case f.vm:
+		return engineFacts{os: "Alpine Linux v3.21", name: "lima-rancher-desktop", gateway: gw}
+	}
+	return engineFacts{os: "Ubuntu 24.04 LTS", name: "laptop", gateway: gw, hostBridge: true, bridge: []netip.Addr{gw}}
 }
 
 func (f *setupFixture) serve(w http.ResponseWriter, r *http.Request) {
@@ -256,9 +265,17 @@ func TestSetupRefusesBeforeSpendingTheToken(t *testing.T) {
 		"pool without claim":   {setupOptions{pool: "Laptop"}, nil, "--pool needs --claim"},
 		"unsafe setting":       {setupOptions{network: "net work"}, nil, "unsupported characters"},
 		"docker unusable": {setupOptions{}, func(f *setupFixture) {
-			f.host.docker = func(context.Context, string, bool) (setupEngine, error) { return setupEngine{}, os.ErrPermission }
+			f.host.docker = func(context.Context, string) (engineFacts, error) { return engineFacts{}, os.ErrPermission }
 		}, "permission denied"},
-		"relay address the engine refuses": {setupOptions{relayListen: "127.0.0.1"}, nil, "reaches only its host-gateway 172.17.0.1"},
+		"relay address the engine refuses":    {setupOptions{relayListen: "127.0.0.1"}, nil, "reaches only its host-gateway 172.17.0.1"},
+		"VM-backed engine":                    {setupOptions{}, func(f *setupFixture) { f.vm = true }, `Name "lima-rancher-desktop"`},
+		"VM-backed engine and explicit relay": {setupOptions{relayListen: "127.0.0.1"}, func(f *setupFixture) { f.vm = true }, `Name "lima-rancher-desktop"`},
+		"bad relay host target":               {setupOptions{relayHostTarget: "127.0.0.1"}, nil, "--relay-host-target"},
+		"relay unreachable": {setupOptions{}, func(f *setupFixture) {
+			old := probeRelay
+			probeRelay = func(context.Context, netip.Addr, string) error { return errors.New("relay probe: unreachable") }
+			f.t.Cleanup(func() { probeRelay = old })
+		}, "relay probe: unreachable"},
 		"user manager cannot find the unit": {setupOptions{}, func(f *setupFixture) {
 			f.host.run = func(context.Context, string, ...string) ([]byte, error) { return []byte("/etc/systemd/user"), nil }
 		}, "no token was spent"},
@@ -322,6 +339,32 @@ func TestSetupDockerDesktopGetsLoopbackRelay(t *testing.T) {
 	p, _ := f.host.paths()
 	if env := f.read(p.envFile); !strings.Contains(env, "WARDYN_RELAY_LISTEN=127.0.0.1\n") {
 		t.Errorf("Docker Desktop did not get a loopback relay:\n%s", env)
+	}
+}
+
+// The relay host target reaches the env file and the LaunchAgent; the default, host-gateway, reaches neither.
+func TestSetupWritesTheRelayHostTarget(t *testing.T) {
+	for _, goos := range []string{"linux", "darwin"} {
+		f := newSetupFixture(t, goos)
+		if _, err := f.run(setupOptions{tokenFile: f.tokenFile, relayHostTarget: "10.0.0.9"}); err != nil {
+			t.Fatal(err)
+		}
+		p, _ := f.host.paths()
+		file, want := p.envFile, "WARDYN_RELAY_HOST_TARGET=10.0.0.9\n"
+		if goos == "darwin" {
+			file, want = p.plistFile, "<key>WARDYN_RELAY_HOST_TARGET</key>\n    <string>10.0.0.9</string>"
+		}
+		if got := f.read(file); !strings.Contains(got, want) || strings.Contains(got, "WARDYN_RELAY_LISTEN") {
+			t.Errorf("%s: %s lacks %q or pins a native relay address:\n%s", goos, file, want, got)
+		}
+		g := newSetupFixture(t, goos)
+		if _, err := g.run(setupOptions{tokenFile: g.tokenFile, relayHostTarget: "host-gateway"}); err != nil {
+			t.Fatal(err)
+		}
+		gp, _ := g.host.paths()
+		if got := g.read(map[string]string{"linux": gp.envFile, "darwin": gp.plistFile}[goos]); strings.Contains(got, "RELAY_HOST_TARGET") {
+			t.Errorf("%s: the default target was written:\n%s", goos, got)
+		}
 	}
 }
 

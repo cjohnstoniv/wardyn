@@ -12,10 +12,10 @@
   person's own configuration directory, where the owner's `wardyn runner claim`
   looks for it, and the runner is bound to that one person.
 
-  The __WARDYN_*__, __DOCKER_HOST__ and __RELAY_LISTEN__ tokens are placeholders —
-  `wardyn-runnerd setup` (embedded from this file) renders it to ~/Library/LaunchAgents
-  with them replaced, and drops the DOCKER_HOST and WARDYN_RELAY_LISTEN keys when they
-  are empty. Committed as-is it is still valid, parseable plist XML — see
+  The __WARDYN_*__, __DOCKER_HOST__, __RELAY_LISTEN__ and __RELAY_HOST_TARGET__ tokens
+  are placeholders — `wardyn-runnerd setup` (embedded from this file) renders it to
+  ~/Library/LaunchAgents with them replaced, and drops the DOCKER_HOST,
+  WARDYN_RELAY_LISTEN and WARDYN_RELAY_HOST_TARGET keys when they are empty. Committed as-is it is still valid, parseable plist XML — see
   scripts/test-runner-units.sh.
 -->
 <plist version="1.0">
@@ -39,6 +39,8 @@
     <string>__DOCKER_HOST__</string>
     <key>WARDYN_RELAY_LISTEN</key>
     <string>__RELAY_LISTEN__</string>
+    <key>WARDYN_RELAY_HOST_TARGET</key>
+    <string>__RELAY_HOST_TARGET__</string>
   </dict>
   <key>RunAtLoad</key>
   <true/>

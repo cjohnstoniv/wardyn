@@ -27,7 +27,7 @@ Usage: install.sh --org <url> [--binary <path>] [--token-file <file>] [setup fla
   --uninstall       stop and remove the service and the installed binary; keeps the runner identity
 
 Everything else is passed to `wardyn-runnerd setup` (--org, --token-file, --proxy-image, --internal-network,
---relay-listen, --claim, --pool, --default and the limit flags); run `wardyn-runnerd setup --help` for them.
+--relay-listen, --relay-host-target, --claim, --pool, --default and the limit flags); run `wardyn-runnerd setup --help`.
 Docker Desktop needs --relay-listen 127.0.0.1 (setup supplies it when it detects Docker Desktop).
 USAGE
 }

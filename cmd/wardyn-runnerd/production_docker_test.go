@@ -17,12 +17,15 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"reflect"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/moby/moby/client"
 
 	"github.com/cjohnstoniv/wardyn/internal/federation"
 	"github.com/cjohnstoniv/wardyn/internal/placement"
@@ -174,9 +177,11 @@ func TestRelay_RunnerNeverOpensTowardTheOrg(t *testing.T) {
 func unsized(context.Context) placement.Capacity { return placement.Capacity{} }
 
 // fakeEngine answers the Docker API serve reads at startup: the engine's
-// operating system and whether the named network exists.
+// operating system and name, its default bridge (whose interface, iface, may
+// or may not be on this host) and whether the named network exists.
 type fakeEngine struct {
-	os         string
+	os, name   string
+	iface      string // the default bridge's interface; "" is one no host has
 	network    bool
 	createCode int
 	created    []string // bodies of each network create
@@ -191,7 +196,11 @@ func (f *fakeEngine) start(t *testing.T) {
 		case path == "/_ping":
 			w.Header().Set("Api-Version", "1.44")
 		case path == "/info":
-			_ = json.NewEncoder(w).Encode(map[string]any{"OperatingSystem": f.os})
+			_ = json.NewEncoder(w).Encode(map[string]any{"OperatingSystem": f.os, "Name": f.name})
+		case path == "/networks/bridge":
+			_ = json.NewEncoder(w).Encode(map[string]any{"Name": "bridge", "Id": "b", "Driver": "bridge",
+				"IPAM":    map[string]any{"Config": []map[string]string{{"Subnet": "172.17.0.0/16", "Gateway": "172.17.0.1"}}},
+				"Options": map[string]string{"com.docker.network.bridge.name": cmp.Or(f.iface, "wdn-noiface0")}})
 		case path == "/networks/create" && r.Method == http.MethodPost:
 			body, _ := io.ReadAll(r.Body)
 			f.created = append(f.created, string(body))
@@ -212,14 +221,18 @@ func (f *fakeEngine) start(t *testing.T) {
 // so it never shows online and then refuses every run at create.
 func TestServeFailsFastWhenRunsCannotStart(t *testing.T) {
 	for _, tc := range []struct {
-		name, relayListen, want string
-		engine                  *fakeEngine // nil: nothing answers at DOCKER_HOST
+		name, relayListen, hostTarget, want string
+		engine                              *fakeEngine // nil: nothing answers at DOCKER_HOST
 	}{
-		{"engine down", "", "docker engine not reachable", nil},
-		{"Docker Desktop without --relay-listen", "", "--relay-listen 127.0.0.1", &fakeEngine{os: "Docker Desktop"}},
-		{"Docker Desktop on every interface", "0.0.0.0", "refusing --relay-listen", &fakeEngine{os: "Docker Desktop"}},
-		{"not an address", "localhost", "--relay-listen", &fakeEngine{os: "Docker Desktop"}},
-		{"network create refused", "127.0.0.1", "create docker network wardyn-internal", &fakeEngine{os: "Docker Desktop", createCode: http.StatusForbidden}},
+		{"engine down", "", "", "docker engine not reachable", nil},
+		{"VM-backed engine", "", "", `Name "lima-rancher-desktop"`, rancherLima()},
+		// The reported bug: the bridge lookup failed before --relay-listen was read.
+		{"VM-backed engine with --relay-listen", "127.0.0.1", "", `Name "lima-rancher-desktop"`, rancherLima()},
+		{"Docker Desktop on every interface", "0.0.0.0", "", "refusing --relay-listen", &fakeEngine{os: "Docker Desktop"}},
+		{"not an address", "localhost", "", "--relay-listen", &fakeEngine{os: "Docker Desktop"}},
+		{"network create refused", "127.0.0.1", "", "create docker network wardyn-internal", &fakeEngine{os: "Docker Desktop", createCode: http.StatusForbidden}},
+		{"bad host target", "", "localhost", "--relay-host-target", nil},
+		{"host target the driver cannot take yet", "", "192.168.5.2", "only to host-gateway, not 192.168.5.2", &fakeEngine{os: "Docker Desktop", network: true}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if tc.engine == nil {
@@ -232,13 +245,57 @@ func TestServeFailsFastWhenRunsCannotStart(t *testing.T) {
 			} else {
 				tc.engine.start(t)
 			}
-			opts := serveOptions{proxyImage: "wardyn-proxy:test", relayListen: tc.relayListen, network: "wardyn-internal", recording: "off"}
+			opts := serveOptions{proxyImage: "wardyn-proxy:test", relayListen: tc.relayListen, relayHostTarget: tc.hostTarget, network: "wardyn-internal", recording: "off"}
 			runtime, err := productionRunnerHooks(context.Background(), runneridentity.Identity{RunnerID: uuid.New()}, t.TempDir(), opts)
 			if runtime.close != nil {
 				_ = runtime.close()
 			}
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("productionRunnerHooks = %v, want an error naming %q", err, tc.want)
+			}
+		})
+	}
+}
+
+// rancherLima answers as Rancher Desktop's macOS VM did in a reported docker info (RD 1.19.3): its
+// bridge lives in the VM, not on this host.
+func rancherLima() *fakeEngine {
+	return &fakeEngine{os: "Alpine Linux v3.21", name: "lima-rancher-desktop"}
+}
+
+// The engine's facts are gathered whole before any relay address is judged: a
+// bridge that is not on this host is a fact (VM-backed), never an error, and
+// Docker Desktop is told by its OperatingSystem without the bridge test.
+func TestDockerEngineFacts(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		engine *fakeEngine
+		want   engineFacts
+	}{
+		{"native", &fakeEngine{os: "Ubuntu 24.04 LTS", name: "laptop", iface: "lo"},
+			engineFacts{os: "Ubuntu 24.04 LTS", name: "laptop", gateway: netip.MustParseAddr("172.17.0.1"), hostBridge: true}},
+		{"Docker Desktop", &fakeEngine{os: "Docker Desktop", name: "docker-desktop", iface: "lo"},
+			engineFacts{os: "Docker Desktop", name: "docker-desktop", desktop: true}},
+		{"VM-backed", rancherLima(),
+			engineFacts{os: "Alpine Linux v3.21", name: "lima-rancher-desktop", gateway: netip.MustParseAddr("172.17.0.1")}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tc.engine.start(t)
+			cli, err := client.New(client.FromEnv)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer cli.Close()
+			f, err := dockerEngineFacts(context.Background(), cli, "unreachable")
+			if err != nil {
+				t.Fatalf("dockerEngineFacts: %v", err)
+			}
+			if f.hostBridge != slices.Contains(f.bridge, netip.MustParseAddr("127.0.0.1")) {
+				t.Errorf("bridge addresses %v do not match hostBridge %v", f.bridge, f.hostBridge)
+			}
+			f.bridge = nil
+			if !reflect.DeepEqual(f, tc.want) {
+				t.Fatalf("facts = %+v, want %+v", f, tc.want)
 			}
 		})
 	}
@@ -251,7 +308,7 @@ func TestPrepareDockerCreatesTheMissingNetwork(t *testing.T) {
 	loopback := netip.MustParseAddr("127.0.0.1")
 	missing := &fakeEngine{os: "Docker Desktop"}
 	missing.start(t)
-	addr, err := prepareDocker(ctx, "wardyn-internal", loopback)
+	addr, _, err := prepareDocker(ctx, "wardyn-internal", loopback, "")
 	if err != nil || addr != loopback {
 		t.Fatalf("prepareDocker = %s, %v", addr, err)
 	}
@@ -260,12 +317,12 @@ func TestPrepareDockerCreatesTheMissingNetwork(t *testing.T) {
 	}
 	present := &fakeEngine{os: "Docker Desktop", network: true}
 	present.start(t)
-	if _, err := prepareDocker(ctx, "wardyn-internal", loopback); err != nil || len(present.created) != 0 {
+	if _, _, err := prepareDocker(ctx, "wardyn-internal", loopback, ""); err != nil || len(present.created) != 0 {
 		t.Fatalf("existing network: err=%v creates=%q", err, present.created)
 	}
-	desktop := &fakeEngine{os: "Docker Desktop"}
-	desktop.start(t)
-	if _, err := prepareDocker(ctx, "wardyn-internal", netip.Addr{}); err == nil || len(desktop.created) != 0 {
-		t.Fatalf("an unusable relay still touched the engine's networks: err=%v creates=%q", err, desktop.created)
+	vm := rancherLima()
+	vm.start(t)
+	if _, _, err := prepareDocker(ctx, "wardyn-internal", netip.Addr{}, ""); err == nil || len(vm.created) != 0 {
+		t.Fatalf("an unusable relay still touched the engine's networks: err=%v creates=%q", err, vm.created)
 	}
 }

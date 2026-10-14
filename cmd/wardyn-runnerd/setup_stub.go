@@ -11,6 +11,6 @@ import (
 )
 
 // prepareSetupDocker needs Docker, which this build has not: setup cannot tell the engine is usable.
-func prepareSetupDocker(context.Context, string, bool) (setupEngine, error) {
-	return setupEngine{}, errors.New("setup requires a build with the docker tag")
+func prepareSetupDocker(context.Context, string) (engineFacts, error) {
+	return engineFacts{}, errors.New("setup requires a build with the docker tag")
 }

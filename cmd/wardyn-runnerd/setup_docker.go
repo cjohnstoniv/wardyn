@@ -7,30 +7,22 @@ package main
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/moby/moby/client"
 )
 
 // prepareSetupDocker is setup's look at the engine, before the token is spent: it answers as this user,
-// and the proxy sidecars' bridge exists (serve would create it, but creating it here surfaces a refusal
-// at install time). With relay set it also reads what serve's relayAddress reads, the host-gateway and
-// its bridge's addresses, which Docker Desktop does not need.
-func prepareSetupDocker(ctx context.Context, network string, relay bool) (setupEngine, error) {
+// with the facts serve's relayPlan judges (dockerEngineFacts), and the proxy sidecars' bridge exists
+// (serve would create it, but creating it here surfaces a refusal at install time).
+func prepareSetupDocker(ctx context.Context, network string) (engineFacts, error) {
 	cli, err := client.New(client.FromEnv)
 	if err != nil {
-		return setupEngine{}, err
+		return engineFacts{}, err
 	}
 	defer cli.Close()
-	info, err := cli.Info(ctx, client.InfoOptions{})
+	f, err := dockerEngineFacts(ctx, cli, "docker is not usable as this user: on Linux add yourself to the docker group; on macOS or Windows (WSL2) start Docker Desktop")
 	if err != nil {
-		return setupEngine{}, fmt.Errorf("docker is not usable as this user: on Linux add yourself to the docker group; on macOS or Windows (WSL2) start Docker Desktop: %w", err)
+		return engineFacts{}, err
 	}
-	eng := setupEngine{desktop: info.Info.OperatingSystem == "Docker Desktop"}
-	if relay && !eng.desktop {
-		if eng.gateway, eng.bridge, err = dockerHostGateway(ctx, cli); err != nil {
-			return setupEngine{}, err
-		}
-	}
-	return eng, ensureInternalNetwork(ctx, cli, network)
+	return f, ensureInternalNetwork(ctx, cli, network)
 }

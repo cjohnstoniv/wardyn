@@ -36,8 +36,8 @@ type setupHost struct {
 	exe                string
 	run                func(ctx context.Context, name string, args ...string) ([]byte, error)
 	// docker checks that the engine answers as this user and the proxy bridge exists, creating it when
-	// missing, and says whether the engine is Docker Desktop.
-	docker func(ctx context.Context, network string, relay bool) (setupEngine, error)
+	// missing, and reports the engine's facts for relayPlan.
+	docker func(ctx context.Context, network string) (engineFacts, error)
 }
 
 func osSetupHost() (setupHost, error) {
@@ -163,6 +163,9 @@ func (h setupHost) startService(ctx context.Context, plan setupPlan, out io.Writ
 	if plan.relayListen != "" {
 		env += "WARDYN_RELAY_LISTEN=" + plan.relayListen + "\n"
 	}
+	if plan.relayHostTarget != "" {
+		env += "WARDYN_RELAY_HOST_TARGET=" + plan.relayHostTarget + "\n"
+	}
 	if plan.dockerHost != "" {
 		env += "DOCKER_HOST=" + plan.dockerHost + "\n"
 	}
@@ -194,11 +197,11 @@ func (h setupHost) startService(ctx context.Context, plan setupPlan, out io.Writ
 // plistComment is the template's documentation, which is not written into the user's LaunchAgents.
 var plistComment = regexp.MustCompile(`(?s)<!--.*?-->\n`)
 
-// renderLaunchAgent fills the embedded plist, dropping the DOCKER_HOST and WARDYN_RELAY_LISTEN keys
-// when there is no value rather than setting them empty.
+// renderLaunchAgent fills the embedded plist, dropping the DOCKER_HOST, WARDYN_RELAY_LISTEN and
+// WARDYN_RELAY_HOST_TARGET keys when there is no value rather than setting them empty.
 func renderLaunchAgent(plan setupPlan) string {
 	tpl := plistComment.ReplaceAllString(runnerunits.LaunchAgent, "")
-	for key, val := range map[string]string{"DOCKER_HOST": plan.dockerHost, "WARDYN_RELAY_LISTEN": plan.relayListen} {
+	for key, val := range map[string]string{"DOCKER_HOST": plan.dockerHost, "WARDYN_RELAY_LISTEN": plan.relayListen, "WARDYN_RELAY_HOST_TARGET": plan.relayHostTarget} {
 		if val == "" {
 			tpl = regexp.MustCompile(`[ \t]*<key>`+key+`</key>\n[ \t]*<string>[^<]*</string>\n`).ReplaceAllString(tpl, "")
 		}
@@ -210,6 +213,7 @@ func renderLaunchAgent(plan setupPlan) string {
 		"__WARDYN_INTERNAL_NETWORK__", html.EscapeString(plan.network),
 		"__DOCKER_HOST__", html.EscapeString(plan.dockerHost),
 		"__RELAY_LISTEN__", html.EscapeString(plan.relayListen),
+		"__RELAY_HOST_TARGET__", html.EscapeString(plan.relayHostTarget),
 		"__WARDYN_LOG__", html.EscapeString(plan.paths.logFile),
 	).Replace(tpl)
 }

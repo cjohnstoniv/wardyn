@@ -59,11 +59,12 @@ func TestRunnerRelayExplicitListen(t *testing.T) {
 		{"multicast on Docker Desktop", "224.0.0.1", true, false},
 		{"multicast on a native engine", "ff02::1", false, false},
 	} {
-		if err := explicitRelayBind(netip.MustParseAddr(tc.addr), tc.desktop, gw, bridge); (err == nil) != tc.ok {
+		f := engineFacts{desktop: tc.desktop, gateway: gw, hostBridge: !tc.desktop, bridge: bridge}
+		if err := explicitRelayBind(netip.MustParseAddr(tc.addr), f); (err == nil) != tc.ok {
 			t.Errorf("%s: explicitRelayBind(%s) = %v, want ok=%v", tc.name, tc.addr, err, tc.ok)
 		}
 	}
-	if err := explicitRelayBind(gw, false, gw, nil); err == nil {
+	if err := explicitRelayBind(gw, engineFacts{gateway: gw, hostBridge: true}); err == nil {
 		t.Error("the host-gateway was admitted though the Docker bridge does not hold it")
 	}
 }

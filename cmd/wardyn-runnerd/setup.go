@@ -25,6 +25,7 @@ var safeSetting = regexp.MustCompile(`^[A-Za-z0-9._:/@%+=-]+$`)
 type setupOptions struct {
 	org, tokenFile, name             string
 	proxyImage, relayListen, network string
+	relayHostTarget                  string
 	claim, makeDefault               bool
 	pool                             string
 	limits                           registerLimits
@@ -49,6 +50,7 @@ func newSetupCommand() *cobra.Command {
 	fl.StringVar(&o.name, "name", "", "runner name (defaults to the host name)")
 	fl.StringVar(&o.proxyImage, "proxy-image", "", "Wardyn proxy image (defaults to the release image matching this binary; a development build needs it)")
 	fl.StringVar(&o.relayListen, "relay-listen", "", "address the run relay listens on (Docker Desktop is given 127.0.0.1 when this is left out)")
+	fl.StringVar(&o.relayHostTarget, "relay-host-target", "", "what a proxy's hosts entry maps the control-plane name to: host-gateway (the default) or this host's IP address as the engine's containers reach it")
 	fl.StringVar(&o.network, "internal-network", "wardyn-internal", "Docker bridge for proxy sidecars (created when missing)")
 	fl.BoolVar(&o.claim, "claim", false, "claim the runner for yourself now; needs WARDYN_TOKEN, your own personal API token")
 	fl.StringVar(&o.pool, "pool", "", "with --claim, also put the runner in your user pool of this name (made if you have none by it)")
@@ -56,14 +58,6 @@ func newSetupCommand() *cobra.Command {
 	o.limits.register(cmd)
 	_ = cmd.MarkFlagRequired("org")
 	return cmd
-}
-
-// setupEngine is what setup learns from the engine: whether it is Docker Desktop and, when the relay
-// address was asked for, what serve's explicitRelayBind needs to judge it.
-type setupEngine struct {
-	desktop bool
-	gateway netip.Addr
-	bridge  []netip.Addr
 }
 
 // setupPlan is everything setup settles before its first side effect.
@@ -121,10 +115,15 @@ func (h setupHost) preflight(cmd *cobra.Command, o setupOptions) (setupPlan, err
 			return setupPlan{}, err
 		}
 	}
+	var explicit netip.Addr
 	if o.relayListen != "" {
-		if _, err := netip.ParseAddr(o.relayListen); err != nil {
+		var err error
+		if explicit, err = netip.ParseAddr(o.relayListen); err != nil {
 			return setupPlan{}, fmt.Errorf("--relay-listen: %w", err)
 		}
+	}
+	if err := checkRelayHostTarget(o.relayHostTarget); err != nil {
+		return setupPlan{}, err
 	}
 	if o.proxyImage == "" {
 		if o.proxyImage = releaseProxyImage(); o.proxyImage == "" {
@@ -136,7 +135,7 @@ func (h setupHost) preflight(cmd *cobra.Command, o setupOptions) (setupPlan, err
 	if plan.paths, err = h.paths(); err != nil {
 		return setupPlan{}, err
 	}
-	settings := []string{o.org, o.proxyImage, o.network, h.dockerHost, o.relayListen}
+	settings := []string{o.org, o.proxyImage, o.network, h.dockerHost, o.relayListen, o.relayHostTarget}
 	if h.goos == "linux" {
 		// The unit and the env file carry these paths unquoted; a LaunchAgent plist escapes its own.
 		settings = append(settings, plan.paths.installed, plan.paths.stateDir)
@@ -162,18 +161,26 @@ func (h setupHost) preflight(cmd *cobra.Command, o setupOptions) (setupPlan, err
 	if err := h.checkServiceManager(cmd.Context(), plan.paths); err != nil {
 		return setupPlan{}, err
 	}
-	eng, err := h.docker(cmd.Context(), o.network, o.relayListen != "")
+	// Always, flag or not: serve judges the same facts at startup, after the token is spent.
+	f, err := h.docker(cmd.Context(), o.network)
 	if err != nil {
 		return setupPlan{}, err
 	}
-	if o.relayListen != "" {
-		// Parsed above. serve refuses the same addresses at startup, after the token is spent.
-		if err := explicitRelayBind(netip.MustParseAddr(o.relayListen), eng.desktop, eng.gateway, eng.bridge); err != nil {
-			return setupPlan{}, err
-		}
+	bind, target, err := relayPlan(f, explicit, o.relayHostTarget)
+	if err != nil {
+		return setupPlan{}, err
 	}
-	if eng.desktop && plan.relayListen == "" {
-		plan.relayListen = "127.0.0.1"
+	if err := probeRelay(cmd.Context(), bind, target); err != nil {
+		return setupPlan{}, err
+	}
+	// A native engine's relay follows its host-gateway, so serve derives it; any other bind is written.
+	if !f.hostBridge || f.desktop {
+		plan.relayListen = bind.String()
+	}
+	if target == hostGateway {
+		plan.relayHostTarget = "" // the default, never written
+	}
+	if f.desktop {
 		fmt.Fprintln(cmd.OutOrStdout(), "Docker Desktop detected: the run relay will listen on 127.0.0.1 (expected on macOS, not yet verified).")
 	}
 	return plan, nil
