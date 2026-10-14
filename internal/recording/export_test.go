@@ -4,6 +4,8 @@
 package recording
 
 import (
+	"context"
+	"io"
 	"testing"
 	"time"
 )
@@ -30,3 +32,11 @@ func ShortenCastSaveAdmitWait(t testing.TB, d time.Duration) {
 	castSaveAdmitWait = d
 	t.Cleanup(func() { castSaveAdmitWait = old })
 }
+
+// ReadCast reads r the way SaveCast buffers a cast.
+func ReadCast(r io.Reader) ([]byte, error) {
+	return readCapped(r, maxCastBytes, castBufferStart(r))
+}
+
+// HoldRun is holdRun.
+func HoldRun(ctx context.Context, run string) (func(), error) { return holdRun(ctx, run) }

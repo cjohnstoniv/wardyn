@@ -875,6 +875,11 @@ resources:
     cpu: 100m
     memory: 128Mi
 
+# Go runtime soft memory limit for wardynd (GOMEMLIMIT). Keep at about 80% of
+# resources.limits.memory, so the collector runs before the container limit is
+# reached; empty leaves Go's default (no limit). An env.GOMEMLIMIT entry wins.
+goMemLimit: "400MiB"
+
 # Persistent recording volume. Off by default (Postgres is the source of truth;
 # recordings are optional). This switch decides the recording store: enabled =>
 # WARDYN_RECORDING_STORE=fs with WARDYN_RECORDING_DIR="<mountPath>/recordings";

@@ -603,6 +603,10 @@ spec:
             - name: WARDYN_MAX_CONCURRENT_RUNS
               value: {{ .Values.maxConcurrentRuns | int | quote }}
             {{- end }}
+            {{- if and .Values.goMemLimit (not (hasKey .Values.env "GOMEMLIMIT")) }}
+            - name: GOMEMLIMIT
+              value: {{ .Values.goMemLimit | quote }}
+            {{- end }}
             {{- with .Values.extraEnv }}
             # Raw EnvVar entries, so secret-bearing WARDYN_* (OIDC client secret,
             # composer API key, audit-sink JSON) ride a secretKeyRef instead of

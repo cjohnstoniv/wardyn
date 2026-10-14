@@ -776,6 +776,11 @@ helm-lint: ## Lint + template-render the Helm chart (default + all-on values + t
 	echo "$$out" | grep -A20 "startupProbe:" | grep -q 'failureThreshold: 90$$' || { echo "default startupProbe window is not 90 periods (30s connect + 5m WARDYN_MIGRATE_TIMEOUT + 120s slack, 5s each)"; exit 1; }; \
 	out=$$(helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set env.WARDYN_MIGRATE_TIMEOUT=30m); \
 	echo "$$out" | grep -A20 "startupProbe:" | grep -q 'failureThreshold: 390$$' || { echo "startupProbe window does not follow WARDYN_MIGRATE_TIMEOUT — a raised migrate budget would be killed mid-migration"; exit 1; }
+	@# goMemLimit: the default render gives wardynd GOMEMLIMIT below its memory limit, and an empty value renders none.
+	@out=$$(helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true); \
+	echo "$$out" | grep -A1 'name: GOMEMLIMIT' | grep -q 'value: "400MiB"' || { echo "default render does not set GOMEMLIMIT=400MiB for wardynd"; exit 1; }; \
+	out=$$(helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set goMemLimit=); \
+	echo "$$out" | grep -q 'GOMEMLIMIT' && { echo "empty goMemLimit still rendered GOMEMLIMIT"; exit 1; } || true
 	@out=$$(helm template wardyn ./deploy/helm/wardyn -f deploy/helm/wardyn/ci/all-on-values.yaml); \
 	echo "$$out" | grep -q "kind: PersistentVolumeClaim" || { echo "persistence.enabled rendered no PVC"; exit 1; }; \
 	echo "$$out" | grep -q "terminationGracePeriodSeconds: 90" || { echo "terminationGracePeriodSeconds is not carried into the pod spec"; exit 1; }; \

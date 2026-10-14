@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"slices"
 	"testing"
 	"time"
 
@@ -125,27 +126,52 @@ func TestPGStore_SaveAdmissionQueuesOverBudget(t *testing.T) {
 	}
 
 	// Each finished save admits exactly one waiter.
-	if err := g.finish(held[0]); !errors.Is(err, errGate) {
-		t.Fatalf("finished save = %v", err)
+	holding := held
+	var admitted []int
+	for len(admitted) < 2 {
+		if err := g.finish(holding[0]); !errors.Is(err, errGate) {
+			t.Fatalf("finished save = %v", err)
+		}
+		id := <-g.entered
+		if (id != attach && id != part) || slices.Contains(admitted, id) {
+			t.Fatalf("save %d entered, want a queued one not yet admitted (%v)", id, admitted)
+		}
+		if n := recording.CastSaveSlotsHeld(); n != recording.CastSaveSlots {
+			t.Fatalf("slots held = %d, want %d", n, recording.CastSaveSlots)
+		}
+		admitted, holding = append(admitted, id), append(holding[1:], id)
 	}
-	first := <-g.entered
-	if first != attach && first != part {
-		t.Fatalf("save %d entered, want a queued one", first)
-	}
-	if err := g.finish(held[1]); !errors.Is(err, errGate) {
-		t.Fatalf("finished save = %v", err)
-	}
-	second := <-g.entered
-	if second == first || (second != attach && second != part) {
-		t.Fatalf("save %d entered after %d", second, first)
-	}
-	for _, id := range []int{first, second} {
+	for _, id := range holding {
 		if err := g.finish(id); !errors.Is(err, errGate) {
 			t.Fatalf("queued save = %v", err)
 		}
 	}
 	if n := recording.CastSaveSlotsHeld(); n != 0 {
 		t.Fatalf("slots held after every save returned = %d", n)
+	}
+}
+
+// Uploads are written one at a time: while one run's stream save holds the
+// slot, another run's waits, and is admitted when the first returns.
+func TestPGStore_UploadsAreWrittenOneAtATime(t *testing.T) {
+	g := newGatedSaves(t)
+	first := g.start(func(r io.Reader) error { return g.s.SaveCast(t.Context(), uuid.NewString(), r) })
+	if got := <-g.entered; got != first {
+		t.Fatalf("save %d entered, want %d", got, first)
+	}
+	second := g.start(func(r io.Reader) error { return g.s.SaveCast(t.Context(), uuid.NewString(), r) })
+	g.expectWait("a second run's upload")
+	if recording.InMemorySaveSlotHeld() {
+		t.Fatal("an upload took the in-memory slot")
+	}
+	if err := g.finish(first); !errors.Is(err, errGate) {
+		t.Fatalf("first upload = %v", err)
+	}
+	if got := <-g.entered; got != second {
+		t.Fatalf("save %d entered, want the waiting upload %d", got, second)
+	}
+	if err := g.finish(second); !errors.Is(err, errGate) {
+		t.Fatalf("second upload = %v", err)
 	}
 }
 
@@ -231,42 +257,48 @@ func TestPGStore_SaveAdmissionSmallAndMaxStreams(t *testing.T) {
 	}
 }
 
-// One run holds at most one stream slot: its second save waits for its first,
-// while another run's save is admitted.
-func TestPGStore_SaveAdmissionOneSlotPerRun(t *testing.T) {
-	g := newGatedSaves(t)
+// One run's stream saves go one at a time whatever the slot count: a second
+// hold of the same run waits for the first, another run's does not, and a
+// waiter that gives up leaves the run free.
+func TestHoldRun_OnePerRun(t *testing.T) {
+	waits := make(chan struct{}, 4)
+	recording.OnCastSaveWait(t, func() { waits <- struct{}{} })
 	run := uuid.NewString()
-	first := g.start(func(r io.Reader) error { return g.s.SaveCast(t.Context(), run, r) })
-	if got := <-g.entered; got != first {
-		t.Fatalf("save %d entered, want %d", got, first)
+	release, err := recording.HoldRun(t.Context(), run)
+	if err != nil {
+		t.Fatal(err)
 	}
-	second := g.start(func(r io.Reader) error {
-		return g.s.SaveCastNamed(t.Context(), run, recording.PartSuffix(2), r)
-	})
-	g.expectWait("second save of one run")
-	other := g.start(func(r io.Reader) error { return g.s.SaveCast(t.Context(), uuid.NewString(), r) })
-	select {
-	case got := <-g.entered:
-		if got != other {
-			t.Fatalf("save %d entered, want the other run's %d", got, other)
+	releaseOther, err := recording.HoldRun(t.Context(), uuid.NewString())
+	if err != nil || len(waits) != 0 {
+		t.Fatalf("another run's hold = %v after %d waits; want it at once", err, len(waits))
+	}
+	releaseOther()
+
+	ctx, cancel := context.WithCancel(t.Context())
+	gaveUp := make(chan error, 1)
+	go func() { _, err := recording.HoldRun(ctx, run); gaveUp <- err }()
+	<-waits
+	cancel()
+	if err := <-gaveUp; !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled second hold = %v", err)
+	}
+
+	next := make(chan func(), 1)
+	go func() {
+		r, err := recording.HoldRun(t.Context(), run)
+		if err != nil {
+			t.Error(err)
 		}
-	case <-g.waits:
-		t.Fatal("another run's save waited behind this run")
+		next <- r
+	}()
+	<-waits
+	release()
+	(<-next)()
+	again, err := recording.HoldRun(t.Context(), run)
+	if err != nil || len(waits) != 0 {
+		t.Fatalf("hold after every release = %v after %d waits", err, len(waits))
 	}
-	if err := g.finish(first); !errors.Is(err, errGate) {
-		t.Fatalf("first save = %v", err)
-	}
-	if got := <-g.entered; got != second {
-		t.Fatalf("save %d entered, want the run's second save %d", got, second)
-	}
-	for _, id := range []int{second, other} {
-		if err := g.finish(id); !errors.Is(err, errGate) {
-			t.Fatalf("save %d = %v", id, err)
-		}
-	}
-	if n := recording.CastSaveSlotsHeld(); n != 0 {
-		t.Fatalf("slots held after every save returned = %d", n)
-	}
+	again()
 }
 
 // An in-memory save (an attach or SSH session snapshot) completes while
@@ -322,5 +354,29 @@ func TestPGStore_SaveAdmissionWaitIsBounded(t *testing.T) {
 		if err := g.finish(id); !errors.Is(err, errGate) {
 			t.Fatalf("finished save = %v", err)
 		}
+	}
+}
+
+// A reader that reports its length is buffered at that length plus one; a
+// stream keeps the 64 KiB start and the single regrow to the cap.
+func TestReadCast_BufferFollowsAKnownLength(t *testing.T) {
+	const maxCast = 64 << 20
+	for _, n := range []int{0, 100, 8 << 20} {
+		buf, err := recording.ReadCast(bytes.NewReader(make([]byte, n)))
+		if err != nil || len(buf) != n || cap(buf) != n+1 {
+			t.Errorf("%d-byte in-memory reader: len %d, cap %d, %v; want cap %d", n, len(buf), cap(buf), err, n+1)
+		}
+	}
+	if buf, err := recording.ReadCast(bytes.NewReader(make([]byte, maxCast+10))); err != nil || len(buf) != maxCast+1 {
+		t.Errorf("over-cap in-memory reader: len %d, %v; want the cap plus one", len(buf), err)
+	}
+	stream := func(n int) io.Reader {
+		return io.LimitReader(&heldReader{r: bytes.NewReader(make([]byte, n))}, int64(n))
+	}
+	if buf, err := recording.ReadCast(stream(100)); err != nil || len(buf) != 100 || cap(buf) != 64<<10 {
+		t.Errorf("small stream: len %d, cap %d, %v; want cap %d", len(buf), cap(buf), err, 64<<10)
+	}
+	if buf, err := recording.ReadCast(stream(64<<10 + 1)); err != nil || len(buf) != 64<<10+1 || cap(buf) != maxCast+1 {
+		t.Errorf("stream past 64 KiB: len %d, cap %d, %v; want one regrow to %d", len(buf), cap(buf), err, maxCast+1)
 	}
 }

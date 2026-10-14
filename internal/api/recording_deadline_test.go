@@ -160,9 +160,10 @@ func (s readingStore) SaveCastNamed(ctx context.Context, run, suffix string, r i
 	return s.SaveCast(ctx, recording.CastKey(run, suffix), r)
 }
 
-// Two uploads whose raw TCP bodies stall take both upload save slots; another
-// run's upload and an attach-style save still finish once their deadline ends
-// the stalled reads.
+// Two uploads whose raw TCP bodies stall take the upload save slot in turn,
+// each ended by its read deadline. With one of them holding the slot, an
+// attach-style save still completes on its own slot, and another run's upload
+// gets its turn once the stalled read is ended.
 func TestPGUploadRecording_StalledUploadsReleaseTheBudget(t *testing.T) {
 	shortenUploadWindow(t)
 	pg := recording.NewPGStore(throwawayPGPool(t))
@@ -182,7 +183,7 @@ func TestPGUploadRecording_StalledUploadsReleaseTheBudget(t *testing.T) {
 		defer c.Close()
 		_, _ = fmt.Fprintf(c, "PUT /api/v1/internal/recordings/%s HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer %s\r\nContent-Length: 1000\r\n\r\n", run, h.mintRunToken(t, run))
 		stalled = append(stalled, c)
-		<-store.reading // admitted, and its Read is blocked on the socket
+		<-store.reading // admitted (the second after the first's deadline); its Read is blocked on the socket
 	}
 
 	attach := make(chan error, 1)

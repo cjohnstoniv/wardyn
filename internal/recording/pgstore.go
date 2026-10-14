@@ -39,8 +39,11 @@ const maxCastBytes = 64 << 20 // 64 MiB
 // reaching final size in one regrow. Do not simplify this back to one of
 // the others after a Go upgrade — those depend on runtime growth heuristics
 // that change between releases; this doesn't.
-func readCapped(r io.Reader, limit int) ([]byte, error) {
-	buf := make([]byte, 0, min(64<<10, limit+1)) // min: the start must never exceed the cap
+//
+// start is the first capacity (see castBufferStart): a reader that reports its
+// length starts at that length plus one and so never regrows to the cap.
+func readCapped(r io.Reader, limit, start int) ([]byte, error) {
+	buf := make([]byte, 0, min(start, limit+1)) // min: the start must never exceed the cap
 
 	for {
 		if len(buf) == cap(buf) {
@@ -60,31 +63,47 @@ func readCapped(r io.Reader, limit int) ([]byte, error) {
 	}
 }
 
+// castBufferStart is readCapped's first capacity for r: 64 KiB for a stream,
+// and Len+1 for a reader that reports Len, whose bytes are already in memory
+// (an 8 MiB session snapshot then buffers 8 MiB, not the 64 MiB cap).
+func castBufferStart(r io.Reader) int {
+	if l, ok := r.(interface{ Len() int }); ok {
+		return l.Len() + 1
+	}
+	return 64 << 10
+}
+
 // PGStore saves are admitted against a process-wide payload-buffer budget,
 // shared by every PGStore. A save holds one slot from before it buffers a byte
-// until its row is sent, and may regrow its buffer once to the 64 MiB cap.
+// until its row is sent.
 //
 //   - streamSaveSlots: saves read from a source that sets its own pace, such
-//     as an upload body. A run holds at most one (runSaves), so one sandbox
-//     never holds the whole budget.
+//     as an upload body. There is one, so uploads are written one at a time
+//     per process; an upload may regrow its buffer once to the 64 MiB cap. A
+//     run holds at most one (runSaves), which matters only if the count is
+//     raised.
 //   - inMemorySaveSlot: saves whose reader reports Len, so its bytes are
 //     already in memory and its read cannot stall: an attach or SSH session
-//     snapshot. A stream save never takes it, so these never wait behind an
-//     upload.
+//     snapshot, buffered at its own length. A stream save never takes it, so
+//     these never wait behind an upload.
 //
-// Three slots spend 3 x 64 MiB = 192 MiB of read buffers. pgx copies the bytea
-// twice more while sending it (parameter buffer, wire buffer; an estimate read
-// from the driver, not measured), so two maximum uploads peak near 2 x 192 MiB
-// and an attach save (snapshot at most 8 MiB) near 64 + 2 x 8 + 8 MiB: about
-// 472 MiB, sized to fit within the chart's 512 MiB limit.
+// The count follows a measurement, not an estimate: pgx copies the bytea twice
+// more while sending it, and the collector lets freed buffers stay resident
+// between saves. Repeating one 64 MiB upload together with one 8 MiB session
+// save peaked at about 370 MiB resident (VmHWM of a test process, 10 rounds,
+// with GOMEMLIMIT=400MiB and without it). Two upload slots peaked between 439
+// and 503 MiB under that limit and about 630 MiB without. The chart sets
+// GOMEMLIMIT=400MiB under its 512 MiB memory limit.
 //
 // A save waits at most castSaveAdmitWait to be admitted, and the upload route
 // bounds how long an admitted upload's body may take to arrive.
 //
-// ponytail: a slot is held while an upload streams in; a byte-weighted
-// admission at the regrow would let small casts pass large ones.
+// ponytail: one upload at a time; writing the payload as a stream instead of
+// three whole copies would allow concurrent uploads again.
+const castStreamSlots = 1
+
 var (
-	streamSaveSlots  = make(chan struct{}, 2)
+	streamSaveSlots  = make(chan struct{}, castStreamSlots)
 	inMemorySaveSlot = make(chan struct{}, 1)
 	runSavesMu       sync.Mutex
 	runSaves         = map[string]chan struct{}{} // closed when the run's save lets go
@@ -197,7 +216,7 @@ func (s *PGStore) SaveCast(ctx context.Context, runID string, r io.Reader) error
 	defer release()
 	// Read fully (bounded), not streamed: pgx sends a bytea parameter as a
 	// single []byte, so a too-large cast is rejected before any INSERT.
-	data, err := readCapped(contextReader{ctx, r}, maxCastBytes)
+	data, err := readCapped(contextReader{ctx, r}, maxCastBytes, castBufferStart(r))
 	if err != nil {
 		return fmt.Errorf("recording: read cast %q: %w", runID, err)
 	}
