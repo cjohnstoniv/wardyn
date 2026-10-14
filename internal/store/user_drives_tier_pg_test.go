@@ -15,6 +15,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/cjohnstoniv/wardyn/internal/store"
+	"github.com/cjohnstoniv/wardyn/internal/testutil"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -132,9 +133,10 @@ func whileOperatorEditIsOpen(ctx context.Context, t *testing.T, pool *pgxpool.Po
 	}
 	result := make(chan error, 1)
 	go func() { result <- write() }()
+	watch := testutil.PGConn(t, pool) // a separate session: polling through the pool would nest under tx
 	for {
 		var waiting bool
-		if err := pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE $1 = ANY(pg_blocking_pids(pid)))`, pid).Scan(&waiting); err != nil {
+		if err := watch.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE $1 = ANY(pg_blocking_pids(pid)))`, pid).Scan(&waiting); err != nil {
 			t.Fatalf("lock graph: %v", err)
 		}
 		if waiting {

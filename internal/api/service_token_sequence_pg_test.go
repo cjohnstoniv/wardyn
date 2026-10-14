@@ -16,6 +16,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/store"
+	"github.com/cjohnstoniv/wardyn/internal/testutil"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -180,8 +181,9 @@ func TestPG_ServiceTokenMintBehindAnInFlightRevokeOfItsSponsorIsRefused(t *testi
 	}
 	done := make(chan *httptest.ResponseRecorder, 1)
 	go func() { done <- e.mintServiceToken(cookie, si) }()
+	watch := testutil.PGConn(t, e.pool) // a separate session: polling through the pool would nest under tx
 	for waiting := false; !waiting; {
-		if err := e.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE $1 = ANY(pg_blocking_pids(pid)))`, pid).Scan(&waiting); err != nil {
+		if err := watch.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE $1 = ANY(pg_blocking_pids(pid)))`, pid).Scan(&waiting); err != nil {
 			t.Fatal(err)
 		}
 		select {

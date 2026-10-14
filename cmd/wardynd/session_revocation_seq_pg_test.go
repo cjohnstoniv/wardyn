@@ -16,6 +16,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/store"
+	"github.com/cjohnstoniv/wardyn/internal/testutil"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -165,9 +166,10 @@ func cutWaitsForAnIssuerReading(t *testing.T, pool *pgxpool.Pool, cut func() err
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock_shared($1, 0)`, db.RevocationOrderLockClass); err != nil {
 		t.Fatal(err)
 	}
+	watch := testutil.PGConn(t, pool) // a separate session: reading through the pool would nest under tx
 	lastValue := func() int64 {
 		var n int64
-		if err := pool.QueryRow(ctx, `SELECT last_value FROM oidc_revocation_seq`).Scan(&n); err != nil {
+		if err := watch.QueryRow(ctx, `SELECT last_value FROM oidc_revocation_seq`).Scan(&n); err != nil {
 			t.Fatal(err)
 		}
 		return n
