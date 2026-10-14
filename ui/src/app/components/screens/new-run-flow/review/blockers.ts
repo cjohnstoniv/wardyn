@@ -15,7 +15,7 @@ import { NR_SHARED } from "../../../wardyn/copy/new-run/shared";
 import { NR_TEMPLATES } from "../../../wardyn/copy/new-run/templates";
 import type { SetupItem } from "../../../../lib/types/preflight";
 import type { TemplateSetupNeed } from "../../../../lib/types/templates";
-import { homeOfPath, homeOfReason, type FieldHome } from "../draft/field-homes";
+import { FIELD_HOME, homeOfPath, homeOfReason, REVIEW_GROUP_OF_FIELD, type FieldHome, type ReviewGroupId } from "../draft/field-homes";
 import type { NewRunLocation } from "../draft/new-run-url";
 import type { RunIntent } from "../draft/run-intent";
 import type { StepIssue, StepIssueCode } from "../lenses/step-issues";
@@ -102,6 +102,12 @@ export function buildBlockers(input: BlockerInput): Blocker[] {
   // A stale result only matters when nothing else already holds Launch.
   if (input.stale && out.length === 0) out.push({ id: "stale", kind: "stale", text: NR_REVIEW.BLOCKER_STALE });
   return out;
+}
+
+/** The Review groups showing a field the steps the blockers link to edit: where each fix lives. */
+export function groupsBlockedBy(blockers: readonly Blocker[]): Set<ReviewGroupId> {
+  const steps = new Set<FieldHome>(blockers.flatMap((b) => (b.to?.screen === "step" ? [b.to.step] : [])));
+  return new Set(Object.entries(REVIEW_GROUP_OF_FIELD).filter(([field]) => steps.has(FIELD_HOME[field])).map(([, group]) => group));
 }
 
 /** The Azure DevOps sign-in item: its Tools-step door lives in the policy preview, not in the preflight alone. */

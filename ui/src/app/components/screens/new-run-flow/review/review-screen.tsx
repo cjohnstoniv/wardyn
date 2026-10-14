@@ -24,7 +24,7 @@ import { useLocalIssues, useNewRunDispatch, useNewRunDraft, type NewRunScreenPro
 import { templateSource } from "../steps/shape/shape-sources";
 import { StepShell, useAnnounce } from "../steps/step-shell";
 import { BLOCKERS_ID, BlockerList } from "./blocker-list";
-import { buildBlockers, missingSetup } from "./blockers";
+import { buildBlockers, groupsBlockedBy, missingSetup } from "./blockers";
 import { EffectivePolicyCard } from "./effective-policy-card";
 import { AccessGroup } from "./groups/access-group";
 import { LimitsGroup } from "./groups/limits-group";
@@ -35,6 +35,7 @@ import { WorkGroup } from "./groups/work-group";
 import { Notices } from "./notices";
 import { changedFromOrigin } from "./provenance";
 import { RawView } from "./raw-view";
+import { BlockedGroups } from "./review-group";
 import { docOnlyRows } from "./review-model";
 import type { ReviewPreflight } from "./review-seams";
 import { SaveAsDialog } from "./save-as-dialog";
@@ -160,12 +161,14 @@ export function ReviewScreen({ location, go, onLaunch, ownDriveIds }: ReviewScre
               </div>
               <Chip tone={blockers.length ? "danger" : "success"}>{blockers.length ? NR_REVIEW.BADGE_ATTENTION : NR_REVIEW.BADGE_COMPLETE}</Chip>
             </header>
-            <RunGroup {...group} docRows={docRows.run} />
-            <WhereGroup {...group} docRows={docRows.where} />
-            <WorkGroup {...group} docRows={docRows.work} />
-            <ToolsGroup {...group} docRows={docRows.tools} />
-            <AccessGroup {...group} docRows={docRows.access} />
-            <LimitsGroup {...group} docRows={docRows.limits} />
+            <BlockedGroups.Provider value={groupsBlockedBy(hard)}>
+              <RunGroup {...group} docRows={docRows.run} />
+              <WhereGroup {...group} docRows={docRows.where} />
+              <WorkGroup {...group} docRows={docRows.work} />
+              <ToolsGroup {...group} docRows={docRows.tools} />
+              <AccessGroup {...group} docRows={docRows.access} />
+              <LimitsGroup {...group} docRows={docRows.limits} />
+            </BlockedGroups.Provider>
           </section>
           <EffectivePolicyCard draft={draft} pre={pre} preview={checks.preview.result} />
         </div>

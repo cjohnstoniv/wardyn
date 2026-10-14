@@ -48,6 +48,7 @@ describe("field homes (U7)", () => {
     ];
     expect(sortedKeys(HOME_OF_REASON)).toEqual([...new Set(known)].sort());
     expect(homeOfReason("runner_pool_stale")).toBe("run");
+    expect(homeOfReason("placement_credential")).toBe("run"); // fixed by choosing another runner or pool, not a tool
     expect(homeOfReason("run_shape_conflict")).toBe("shape");
     expect(homeOfReason("something_new")).toBe("review");
   });

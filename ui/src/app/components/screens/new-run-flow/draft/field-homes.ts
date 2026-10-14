@@ -82,7 +82,7 @@ export const HOME_OF_REASON: Record<KnownLaunchReason, FieldHome> = {
   runner_offline: "run", runner_at_capacity: "run", runner_limits_unset: "run", runner_ambiguous: "run", runner_not_found: "run", runner_unclaimed: "run", runner_revoked: "run",
   runner_token_invalid: "run", runner_claim_mismatch: "run", runner_posture_unmet: "run", runner_keystore_unavailable: "run",
   runner_action_pending: "run", relay_runner_mismatch: "run", relay_required: "run", relay_route_refused: "run",
-  placement_credential: "tools", placement_component_self_defined: "tools", placement_capability: "tools",
+  placement_credential: "run", placement_component_self_defined: "tools", placement_capability: "tools",
   delivery_via_org: "tools", delivery_runner_resident: "tools", delivery_not_via_org: "tools",
   via_org_destination_refused: "tools", via_org_cap_exceeded: "tools",
   placement_local_path: "files",
