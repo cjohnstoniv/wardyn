@@ -143,7 +143,7 @@ func TestLocalSecretEnvKeysHaveCreateTimeIntents(t *testing.T) {
 			dispatchMCP([]componentMCP{{Key: "docs", URL: "https://mcp.example/", Host: "mcp.example", Harnesses: []string{codexHarness}}}, &injections, "http://proxy.invalid", false, env)
 		}
 		spec := runner.SandboxSpec{RunID: run.ID, ProxyConfig: runner.ProxyConfig{Policy: policy}}
-		spec.SecretEnv = splitSecretEnv(env, slices.Concat(envKeys, llm.secretEnvKeys, []string{codexMCPEnv}))
+		spec.SecretEnv = splitSecretEnv(env, dispatchSecretEnvKeys(envKeys, llm))
 		spec.Env = env
 		plan, err := f.srv.localResolvedPlan(ctx, run, false, f.st.siteConfig, spec, nil, llm)
 		if err != nil {
@@ -174,7 +174,9 @@ func TestLocalSecretEnvKeysHaveCreateTimeIntents(t *testing.T) {
 			}
 		}
 	}
-	for _, key := range []string{awsSSOConfigEnvVar, codexMCPEnv, "MY_TOKEN"} {
+	// Every fixed key dispatch can move (dispatchSecretEnvKeys with no grants and no transport keys) must
+	// have been placed by some scenario, so a key added to that list without a scenario fails here.
+	for _, key := range slices.Concat([]string{awsSSOConfigEnvVar, "MY_TOKEN"}, dispatchSecretEnvKeys(nil, llmTransport{})) {
 		if !checked[key] {
 			t.Errorf("no scenario placed %s on SecretEnv: the parity check did not check it", key)
 		}

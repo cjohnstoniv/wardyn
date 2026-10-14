@@ -468,7 +468,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 		s.failAndRevoke(ctx, run.ID, types.RunStarting, "the run's tool-approval credential could not be made")
 		return
 	}
-	secretEnv := splitSecretEnv(sandboxEnv, slices.Concat(secretEnvKeys, llm.secretEnvKeys, []string{codexMCPEnv}))
+	secretEnv := splitSecretEnv(sandboxEnv, dispatchSecretEnvKeys(secretEnvKeys, llm))
 
 	resources := resourceLimitsToRunner(policy.Resources)
 	resources.DiskMiBSoft = diskSoft
@@ -976,4 +976,11 @@ func (s *Server) dispatchAdmitted(ctx context.Context, run types.AgentRun, ceili
 	s.failAndRevoke(context.WithoutCancel(ctx), run.ID, types.RunPending,
 		"This run was not launched: its dispatch lane did not resolve the acting principal's governance ceiling")
 	return false
+}
+
+// dispatchSecretEnvKeys is every sandbox env key dispatch moves onto SandboxSpec.SecretEnv: the
+// run's env_secret grants, the model transport's real credential keys and the Codex MCP broker URLs.
+// The local placement parity test reads the same list, so a key added here needs a placement origin.
+func dispatchSecretEnvKeys(envSecretKeys []string, llm llmTransport) []string {
+	return slices.Concat(envSecretKeys, llm.secretEnvKeys, []string{codexMCPEnv})
 }
