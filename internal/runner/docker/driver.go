@@ -85,10 +85,13 @@ type Config struct {
 	// readability check in. Empty uses defaultDriveProbeImage (busybox-class).
 	DriveProbeImage string
 	// ControlPlaneRelay, set only by wardyn-runnerd, makes sure the runner's
-	// local relay listens for a run's control-plane URL. When set, the PROXY's
-	// hosts map that URL's hostname to host-gateway, where the relay listens,
-	// and an IP-literal URL (which no hosts entry can remap) refuses the create.
-	ControlPlaneRelay func(controlPlaneURL *url.URL) error
+	// local relay listens for a run's control-plane URL and returns the address
+	// the relay is reachable at from a container: "host-gateway" or a unicast,
+	// non-loopback IP (a VM engine whose host-gateway does not reach this host).
+	// The PROXY's hosts map both that URL's hostname and host.docker.internal to
+	// the target, so the proxy's control-plane clamp covers one address, and an
+	// IP-literal URL (which no hosts entry can remap) refuses the create.
+	ControlPlaneRelay func(controlPlaneURL *url.URL) (target string, err error)
 }
 
 // RecordingMountTarget is where RecordingMount appears inside the agent

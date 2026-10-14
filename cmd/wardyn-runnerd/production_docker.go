@@ -42,23 +42,37 @@ func productionRunnerHooks(ctx context.Context, identity runneridentity.Identity
 	if err != nil {
 		return runnerRuntime{}, err
 	}
-	var explicit netip.Addr
-	if opts.relayListen != "" {
-		if explicit, err = netip.ParseAddr(opts.relayListen); err != nil {
-			return runnerRuntime{}, fmt.Errorf("--relay-listen: %w", err)
-		}
-	}
-	addr, err := prepareDocker(ctx, opts.network, explicit)
+	want, err := parseRelayWant(opts.relayListen, opts.relayHostTarget)
 	if err != nil {
 		return runnerRuntime{}, err
 	}
-	relay := newLocalRelay(ctx, addr)
+	cli, err := client.New(client.FromEnv)
+	if err != nil {
+		return runnerRuntime{}, err
+	}
+	defer cli.Close()
+	eng, err := readyEngine(ctx, cli, "docker engine not reachable (set DOCKER_HOST to the engine's socket if it is not the default)", opts.network, want)
+	if err != nil {
+		return runnerRuntime{}, err
+	}
+	relay := newLocalRelay(ctx)
 	sub, err := docker.New(docker.Config{RunnerID: identity.RunnerID.String(), ProxyImage: opts.proxyImage, InternalNetwork: opts.network, Record: record, RunnerStateDir: stateDir,
 		ControlPlaneRelay: relay.Ensure})
 	if err != nil {
 		return runnerRuntime{}, err
 	}
-	return localRunnerRuntime(ctx, identity, stateDir, sub, docker.SandboxRef, relay, dockerCapacity)
+	// The runtime first: its startup containment pass stops lapsed runs even when the check below fails.
+	rt, err := localRunnerRuntime(ctx, identity, stateDir, sub, docker.SandboxRef, relay, dockerCapacity)
+	if err != nil {
+		return runnerRuntime{}, err
+	}
+	pair, err := chooseRelay(ctx, sub, opts.proxyImage, eng, want)
+	if err != nil {
+		return runnerRuntime{}, errors.Join(err, rt.close())
+	}
+	relay.use(pair)
+	slog.InfoContext(ctx, "run relay reachable", "engine", eng.desc, "listen", pair.bind, "target", pair.target)
+	return rt, nil
 }
 
 // dockerCapacity is the Docker engine's CPUs and memory as the runner's advertised capacity, the size
@@ -105,51 +119,80 @@ func readDockerCapacity(ctx context.Context) (placement.Capacity, error) {
 	return engineCapacity(info.Info.NCPU, info.Info.MemTotal), nil
 }
 
-// prepareDocker is serve's one look at the engine before the runner dials its
-// organisation, so a runner that cannot accept runs never shows online: the
-// engine answers, the proxy sidecars' bridge exists, and the relay has an
-// address a proxy reaches. Any failure exits serve; the service manager's
-// restart policy is the retry.
-func prepareDocker(ctx context.Context, network string, explicit netip.Addr) (netip.Addr, error) {
-	cli, err := client.New(client.FromEnv)
+// readyEngine is serve's and setup's look at the engine before the relay
+// search: it answers (unreachable is the refusal when it does not), an
+// explicit --relay-listen passes admitRelayBind before anything on the engine
+// changes, and the proxy sidecars' bridge exists. Any failure exits serve;
+// the service manager's restart policy is the retry.
+func readyEngine(ctx context.Context, cli *client.Client, unreachable, network string, want relayPair) (dockerEngine, error) {
+	eng, err := inspectEngine(ctx, cli, unreachable)
 	if err != nil {
-		return netip.Addr{}, err
+		return dockerEngine{}, err
 	}
-	defer cli.Close()
+	if want.bind.IsValid() {
+		if err := admitRelayBind(want.bind, eng); err != nil {
+			return dockerEngine{}, err
+		}
+	}
+	return eng, ensureInternalNetwork(ctx, cli, network)
+}
+
+// inspectEngine tells native from VM-backed. Docker Desktop is VM-backed by
+// its OperatingSystem: a WSL2 distribution may hold a docker0 of its own
+// beside it. Any other engine is native when its bridge interface is on this
+// host (dockerHostGateway), and VM-backed when not, which is never an error.
+// It also records Rancher Desktop's veth-rd-wsl addresses when this host has
+// that interface.
+func inspectEngine(ctx context.Context, cli *client.Client, unreachable string) (dockerEngine, error) {
 	info, err := cli.Info(ctx, client.InfoOptions{})
 	if err != nil {
-		return netip.Addr{}, fmt.Errorf("docker engine not reachable (set DOCKER_HOST to the engine's socket if it is not the default): %w", err)
+		return dockerEngine{}, fmt.Errorf("%s; Rancher Desktop must use the dockerd (moby) engine; runnerd reads DOCKER_HOST, never a docker context: %w", unreachable, err)
 	}
-	addr, err := relayAddress(ctx, cli, info.Info.OperatingSystem == "Docker Desktop", explicit)
-	if err != nil {
-		return netip.Addr{}, err
-	}
-	return addr, ensureInternalNetwork(ctx, cli, network)
-}
-
-// relayAddress is where the relay listens: --relay-listen when set, otherwise
-// the native engine's host-gateway. Docker Desktop's host-gateway is its VM's
-// address for this host's loopback, not an interface here, so it needs the flag.
-// newLocalRelay is the relay for a Docker runtime; only the docker build has one.
-func newLocalRelay(ctx context.Context, addr netip.Addr) *localRelay {
-	return &localRelay{ctx: ctx, addr: addr, listeners: map[uint16]net.Listener{}, conns: map[net.Conn]*runnerwire.Peer{}}
-}
-
-func relayAddress(ctx context.Context, cli *client.Client, desktop bool, explicit netip.Addr) (netip.Addr, error) {
-	if desktop {
-		if !explicit.IsValid() {
-			return netip.Addr{}, errors.New("relay: Docker Desktop's host-gateway is not an interface of this host; serve with --relay-listen 127.0.0.1")
+	eng := dockerEngine{desc: fmt.Sprintf("%q (%s)", info.Info.OperatingSystem, info.Info.Name)}
+	if iface, err := net.InterfaceByName(rancherWSLVeth); err == nil {
+		held, _ := ifaceAddrs(iface) // unreadable: no veth candidate, as if absent
+		for _, a := range held {
+			if a.Is4() {
+				eng.veth = append(eng.veth, a)
+			}
 		}
-		return explicit, explicitRelayBind(explicit, true, netip.Addr{}, nil)
 	}
-	gateway, bridge, err := dockerHostGateway(ctx, cli)
+	if info.Info.OperatingSystem == "Docker Desktop" {
+		eng.why = "Docker Desktop"
+		return eng, nil
+	}
+	if eng.gateway, eng.bridge, err = dockerHostGateway(ctx, cli); err != nil {
+		eng.gateway, eng.bridge, eng.why = netip.Addr{}, nil, err.Error()
+		return eng, nil
+	}
+	eng.native = true
+	return eng, nil
+}
+
+// relayCheckBound bounds pulling the proxy image and the relay search together.
+const relayCheckBound = 2 * time.Minute
+
+// chooseRelay pulls the proxy image when it is missing, so the probe runs the
+// image runs will, then finds the relay pair (findRelay) with the driver's
+// probe container. Both share one bound; the probe is never skipped.
+func chooseRelay(ctx context.Context, d *docker.Driver, image string, eng dockerEngine, want relayPair) (relayPair, error) {
+	ctx, cancel := context.WithTimeout(ctx, relayCheckBound)
+	defer cancel()
+	present, err := d.ImagePresent(ctx, image)
+	if err == nil && !present {
+		slog.InfoContext(ctx, "pulling proxy image "+image)
+		err = d.EnsureProxyImage(ctx)
+	}
 	if err != nil {
-		return netip.Addr{}, err
+		return relayPair{}, fmt.Errorf("relay: the proxy image %s is not on this engine and could not be pulled (a registry that needs a login: docker pull it as this user first): %w", image, err)
 	}
-	if explicit.IsValid() {
-		return explicit, explicitRelayBind(explicit, false, gateway, bridge)
-	}
-	return gateway, relayBind(gateway, bridge)
+	return findRelay(ctx, d.ProbeRelay, eng, want)
+}
+
+// newLocalRelay is the relay for a Docker runtime; only the docker build has
+// one. It listens nowhere until use and a run's Ensure.
+func newLocalRelay(ctx context.Context) *localRelay {
+	return &localRelay{ctx: ctx, listeners: map[uint16]net.Listener{}, conns: map[net.Conn]*runnerwire.Peer{}}
 }
 
 // ensureInternalNetwork creates the proxy sidecars' bridge when it is missing,
@@ -172,7 +215,7 @@ func ensureInternalNetwork(ctx context.Context, cli *client.Client, name string)
 // dockerHostGateway is the address a native engine resolves host-gateway to
 // (the default bridge's gateway, unless the daemon sets host-gateway-ip, when
 // the relay is simply unreachable) and the addresses that bridge's interface
-// holds on this host.
+// holds on this host. An error means the engine is not native (inspectEngine).
 func dockerHostGateway(ctx context.Context, cli *client.Client) (netip.Addr, []netip.Addr, error) {
 	insp, err := cli.NetworkInspect(ctx, "bridge", client.NetworkInspectOptions{})
 	if err != nil {
@@ -187,11 +230,20 @@ func dockerHostGateway(ctx context.Context, cli *client.Client) (netip.Addr, []n
 	}
 	iface, err := net.InterfaceByName(insp.Network.Options["com.docker.network.bridge.name"])
 	if err != nil {
-		return netip.Addr{}, nil, fmt.Errorf("relay: the Docker bridge interface: %w (this engine has no host-side bridge and is not Docker Desktop; such VM engines are not supported)", err)
+		return netip.Addr{}, nil, fmt.Errorf("its bridge interface is not on this host: %w", err)
 	}
-	addrs, err := iface.Addrs()
+	held, err := ifaceAddrs(iface)
 	if err != nil {
 		return netip.Addr{}, nil, err
+	}
+	return gateway, held, nil
+}
+
+// ifaceAddrs is the IP addresses an interface holds.
+func ifaceAddrs(iface *net.Interface) ([]netip.Addr, error) {
+	addrs, err := iface.Addrs()
+	if err != nil {
+		return nil, err
 	}
 	var held []netip.Addr
 	for _, a := range addrs {
@@ -201,7 +253,7 @@ func dockerHostGateway(ctx context.Context, cli *client.Client) (netip.Addr, []n
 			}
 		}
 	}
-	return gateway, held, nil
+	return held, nil
 }
 
 // postureInterval is how often a connected runner re-reads its posture.

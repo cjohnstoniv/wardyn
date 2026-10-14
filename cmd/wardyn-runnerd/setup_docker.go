@@ -7,30 +7,30 @@ package main
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/moby/moby/client"
+
+	"github.com/cjohnstoniv/wardyn/internal/runner/docker"
 )
 
-// prepareSetupDocker is setup's look at the engine, before the token is spent: it answers as this user,
-// and the proxy sidecars' bridge exists (serve would create it, but creating it here surfaces a refusal
-// at install time). With relay set it also reads what serve's relayAddress reads, the host-gateway and
-// its bridge's addresses, which Docker Desktop does not need.
-func prepareSetupDocker(ctx context.Context, network string, relay bool) (setupEngine, error) {
+// prepareSetupDocker is setup's look at the engine, before the token is spent: serve's own readyEngine
+// and chooseRelay (pull the proxy image, then find the relay pair a probe container reaches), run as this
+// user with the image and network setup writes for serve.
+func prepareSetupDocker(ctx context.Context, image, network string, want relayPair) (dockerEngine, relayPair, error) {
 	cli, err := client.New(client.FromEnv)
 	if err != nil {
-		return setupEngine{}, err
+		return dockerEngine{}, relayPair{}, err
 	}
 	defer cli.Close()
-	info, err := cli.Info(ctx, client.InfoOptions{})
+	eng, err := readyEngine(ctx, cli, "docker is not usable as this user: on Linux add yourself to the docker group; on macOS or Windows (WSL2) start "+
+		"Docker Desktop, Rancher Desktop or Colima, and set DOCKER_HOST to its socket if it is not the default", network, want)
 	if err != nil {
-		return setupEngine{}, fmt.Errorf("docker is not usable as this user: on Linux add yourself to the docker group; on macOS or Windows (WSL2) start Docker Desktop: %w", err)
+		return dockerEngine{}, relayPair{}, err
 	}
-	eng := setupEngine{desktop: info.Info.OperatingSystem == "Docker Desktop"}
-	if relay && !eng.desktop {
-		if eng.gateway, eng.bridge, err = dockerHostGateway(ctx, cli); err != nil {
-			return setupEngine{}, err
-		}
+	d, err := docker.New(docker.Config{ProxyImage: image, InternalNetwork: network})
+	if err != nil {
+		return dockerEngine{}, relayPair{}, err
 	}
-	return eng, ensureInternalNetwork(ctx, cli, network)
+	pair, err := chooseRelay(ctx, d, image, eng, want)
+	return eng, pair, err
 }
