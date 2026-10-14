@@ -68,6 +68,20 @@ type createRunLaunch struct {
 	mainDrive *mainDriveDecision
 }
 
+// launch is what both doors hand finishCreateRunLaunch for a run the fold admitted: create, and the pool
+// queue's start replaying the fold. Built in one place from the fold, so the two cannot launch different
+// runs. spec is the fold's spec with the run's egress unioned in; created is the run row as started.
+func (f *runFold) launch(req createRunRequest, spec types.RunPolicySpec, ceiling governanceCeiling, gw grantWiring,
+	runToken string, created types.AgentRun) createRunLaunch {
+	spec, harnessRules := applyHarnessToolRules(spec, req.Tools, toolLaneDefault(req))
+	return createRunLaunch{
+		req: req, spec: spec, ceiling: ceilingForDispatch(ceiling, f.adoGrade, f.bedrockGrade), gw: gw,
+		wsRefs: f.wsRefs, driveMounts: f.driveMounts, memberDrives: memberDriveOwners(f.drives), ephemeralDirs: f.ephemeralDirs, startFolder: f.startFolder,
+		runToken: runToken, created: created, comps: f.comps, overridden: f.source.overridden(), pushSets: f.pushSets,
+		harnessRules: harnessRules, harnesses: f.harnesses, mainDrive: f.mainDrive.decision(),
+	}
+}
+
 // DRAFT (M2 canon pending) — the run's failure_hint when the detached launch
 // PANICS. The caller already holds a 201, so the run itself has to carry the
 // reason. Names the class and where the detail is, since a panic's own text is

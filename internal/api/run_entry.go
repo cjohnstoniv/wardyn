@@ -254,7 +254,9 @@ func refuseTicketResponse(w http.ResponseWriter, v entryVerdict) {
 // audit row, then the response.
 func (s *Server) refuseAttachTicket(w http.ResponseWriter, r *http.Request, runID uuid.UUID, ta ticketActor, v entryVerdict) {
 	if v == verdictInvalid {
-		s.auditAttachDenied(r, runID, "unknown", "invalid, expired, or already-used attach ticket")
+		if s.authFailedAllowed() {
+			s.auditAttachDenied(r, runID, "unknown", "invalid, expired, or already-used attach ticket")
+		}
 	} else if s.authFailedLimiter.allow(s.cfg.Now()) {
 		s.auditAttachRefused(r, runID, ta.principal, "ticket", string(v), ta.via)
 	}
@@ -265,8 +267,7 @@ func (s *Server) refuseAttachTicket(w http.ResponseWriter, r *http.Request, runI
 func (s *Server) refuseUITicket(w http.ResponseWriter, runID uuid.UUID, app string, ta ticketActor, v entryVerdict) {
 	switch {
 	case v == verdictInvalid:
-		s.auditUI(&runID, types.ActorHuman, "unknown", "ui.authorize", app, "denied",
-			map[string]any{"reason": "invalid, expired, or already-used ticket"})
+		s.auditUIRefusedBounded(runID, app, map[string]any{"reason": "invalid, expired, or already-used ticket"})
 	case s.authFailedLimiter.allow(s.cfg.Now()):
 		s.auditUI(&runID, types.ActorHuman, ta.principal, "ui.authorize", app, "denied",
 			ta.withVia(map[string]any{"reason": string(v)}))

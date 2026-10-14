@@ -82,8 +82,7 @@ func (s *Server) resolveRunAutonomy(w http.ResponseWriter, r *http.Request, req 
 	if !rubric && capLevel == "" {
 		// adoEntraUngraded: nothing capped this run, so dispatch has no grade to
 		// be held to and resolves the lane exactly as it always did.
-		return types.AutonomyResolution{}, s.managedSettingsUndeliveredWarning(r.Context(), req, "", false, enforced),
-			scmSite, adoEntraUngraded(), bedrockCredUngraded(), true
+		return types.AutonomyResolution{}, nil, scmSite, adoEntraUngraded(), bedrockCredUngraded(), true
 	}
 	// THE PER-PERSON AZURE DEVOPS LANE, resolved ONCE here and used twice: the
 	// posture is graded on it, and the frozen answer travels to dispatch on the
@@ -101,7 +100,7 @@ func (s *Server) resolveRunAutonomy(w http.ResponseWriter, r *http.Request, req 
 		runIdentitySubject(r.Context(), principalFromRequest(r)))
 	grade := adoEntraGradedAs(adoRun, adoOn)
 	bedrock := bedrockCredGradedAs(modelCred)
-	posture := composer.AutonomyPostureOf(autonomyPostureSpec(spec, wsRefs, req.Repo, scmSite, grade, bedrock), enforced, baseline)
+	posture := composer.AutonomyPostureOf(autonomyPostureSpec(spec, wsRefs, req.Repo, scmSite, grade, bedrock, ceiling.Spec.AllowedDomains), enforced, baseline)
 	var level types.AutonomyLevel
 	var boundBy []string
 	if rubric {
@@ -120,15 +119,9 @@ func (s *Server) resolveRunAutonomy(w http.ResponseWriter, r *http.Request, req 
 	// doc). The posture still travels, so the audit row and Review record what
 	// was graded even when nothing bound it.
 	if level == "" {
-		return res, s.managedSettingsUndeliveredWarning(r.Context(), req, "", false, enforced), scmSite, grade, bedrock, true
+		return res, nil, scmSite, grade, bedrock, true
 	}
 	warnings, ok := s.autonomyLadder(w, r, req, level, autonomyBoundList(boundBy, grade, bedrock), src)
-	// Here rather than in the ladder: whether the managed settings land depends
-	// on the ENFORCED class's substrate, which only this function holds. After
-	// it, because the ladder may derive the hold that brings the file.
-	if ok {
-		warnings = append(warnings, s.managedSettingsUndeliveredWarning(r.Context(), req, level, rubric && ceiling.Limits.AutonomyRubric.AgentGuardrailLocks, enforced)...)
-	}
 	return res, warnings, scmSite, grade, bedrock, ok
 }
 
@@ -371,14 +364,15 @@ func autonomyAgentLabel(agent string) string {
 // Works on a copy with both domain slices cloned: spec is the one the caller
 // goes on to persist and dispatch, and unionDomains appends in place.
 func autonomyPostureSpec(spec types.RunPolicySpec, wsRefs []types.Workspace, legacyRepo string,
-	scmSite types.SiteConfig, ado adoEntraGrade, bedrock bedrockCredGrade,
+	scmSite types.SiteConfig, ado adoEntraGrade, bedrock bedrockCredGrade, trusted []string,
 ) types.RunPolicySpec {
 	out := spec
 	out.AllowedDomains = slices.Clone(spec.AllowedDomains)
 	out.DeniedDomains = slices.Clone(spec.DeniedDomains)
 	unionWorkspaceEgress(&out, wsRefs)
 	for _, ws := range wsRefs {
-		unionAllowedDomains(&out, workspaceCloneEgress(ws))
+		kept, _ := runCloneEgress(ws, trusted)
+		unionAllowedDomains(&out, kept)
 	}
 	// A run that declares no repo at all inherits no SCM lane at launch and
 	// must inherit none here either, or a sealed local-dir run would grade

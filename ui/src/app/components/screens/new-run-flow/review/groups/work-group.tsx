@@ -14,11 +14,11 @@ import { summaryText } from "../../steps/files/files-summary";
 import { lifecycleOf, lifecycleText } from "../../steps/files/main-drive-section";
 import { ReviewGroup } from "../review-group";
 import { sourceOf } from "../provenance";
-import type { MainDriveFacts } from "../review-seams";
+import type { MainDriveEnforcement } from "../../../../../lib/types/runner-pools";
 import { stepLocation, type GroupProps } from "./group-props";
 import { JumpButton } from "./jump-button";
 
-const ENFORCEMENT: Record<MainDriveFacts["enforcement"], string | undefined> = {
+const ENFORCEMENT: Record<MainDriveEnforcement, string | undefined> = {
   filesystem: NR_FILES.ENFORCED, eviction: NR_FILES.ENFORCED_BY_STOP, none: NR_FILES.NOT_ENFORCED, unknown: undefined,
 };
 
@@ -45,10 +45,10 @@ export function WorkGroup({ draft, pre, preview, docRows, go }: GroupProps) {
   // The server's applied size when it sized one (0 means none); the request until it answers.
   const mib = pre?.main_drive?.applied_mib || mainDriveMiB(intent);
   const size = mib === undefined ? undefined : mibToGibText(mib);
-  const facts = pre?.main_drive?.facts;
-  const enforcement = facts && ENFORCEMENT[facts.enforcement];
-  // The same preflight answer the Files step reads; its seam declares the drive facts Review's omits.
-  const life = lifecycleOf(intent, readMainDrive(pre as FilesPreflight | null, intent.experience));
+  // The same preflight answer the Files step reads: the run's pool says what its runners do with the size.
+  const drive = readMainDrive(pre as FilesPreflight | null, intent.experience);
+  const enforcement = drive.facts && ENFORCEMENT[drive.facts.enforcement];
+  const life = lifecycleOf(intent, drive);
   // The Files step's summary sentence; until a size is known, the names of what is attached (none: the detail says so).
   const value = size !== undefined
     ? summaryText({

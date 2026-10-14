@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/runnerpool"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -186,7 +187,8 @@ func (s *Server) projectStatusDetailFor(r *http.Request, runs []types.AgentRun) 
 //     the fix. It comes from the detail or, when that never landed, from the
 //     canary's "container stuck waiting (<Reason>)" sentence in failure_hint.
 //   - QUEUED: the "queue: <token>" wait reason, as stored, plus its token (the queue's own line).
-//   - FAILED with a "queue: <token>" end reason, or KILLED with "queue: runner_pool_removed": kept,
+//   - FAILED with a "queue: <token>" end reason (never one of the queue's wait reasons: a run
+//     that waited and later failed for another cause must not be served the stale wait), or KILLED with "queue: runner_pool_removed": kept,
 //     plus its token. The queue writes these; the substrate-wait rules below do not apply to them.
 //   - KILLED with a lifetime end reason ("lifetime: end_reached" or
 //     "lifetime: max_lifetime_reached", types.RunEndReason): kept, plus its token.
@@ -201,7 +203,8 @@ func projectStatusDetail(runs []types.AgentRun) {
 		reason := statusDetailReason(r.StatusDetail)
 		queue := queueToken(r.StatusDetail)
 		switch {
-		case queue != "" && (r.State == types.RunQueued || r.State == types.RunFailed ||
+		case queue != "" && (r.State == types.RunQueued ||
+			(r.State == types.RunFailed && !runnerpool.WaitReason(queue).Valid()) ||
 			(r.State == types.RunKilled && types.RunEndReason(queue) == types.RunEndRunnerPoolRemoved)):
 			r.StatusReason = queue
 		case r.State == types.RunPending && reason == statusReasonBuilding:

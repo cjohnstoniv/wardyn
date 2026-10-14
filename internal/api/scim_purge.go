@@ -16,6 +16,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/erasure"
+	"github.com/cjohnstoniv/wardyn/internal/placement"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -30,7 +31,10 @@ import (
 //  2. the suspension, completed if it is not already (suspendIdentity);
 //  3. every step below, each idempotent and recorded in deprovision_jobs under kind purge: stored
 //     credentials and masking copies erased through erasure.Orchestrate, workspaces handed to the
-//     operator, user-subject grants and assignments deleted, then one person.deprovision row.
+//     operator, user-subject grants and assignments deleted, runners and their unused registration
+//     tokens revoked, the person's invitations deleted and their name cleared from others' invitations
+//     and from service identities, then one person.deprovision row. A service identity they still
+//     sponsor keeps its step pending, naming it, until it is handed to another sponsor or retired.
 //
 // The grants and assignments are deleted by a direct store call, not the GOV4 apply path. That is the one
 // ungoverned delete of deny rows, and it is safe because the tombstone's subject can never authenticate
@@ -40,6 +44,9 @@ const (
 	jobStepErase      = "erase"
 	jobStepWorkspaces = "workspaces"
 	jobStepGrants     = "grants"
+	jobStepRunners    = "runners"
+	jobStepInvites    = "invitations"
+	jobStepSponsor    = "service_identities"
 
 	// scimSweepBatch caps how many identities one sweep tick handles of each kind; the rest wait a tick.
 	scimSweepBatch = 50
@@ -104,7 +111,7 @@ func (s *Server) finishPurge(ctx context.Context, st scimStore, id uuid.UUID, sl
 	isEmail := func(t string) bool { return strings.Contains(t, "@") && !slices.Contains(forms.bound, t) }
 	principals := slices.DeleteFunc(slices.Clone(forms.targets), isEmail)
 	emails := slices.DeleteFunc(slices.Clone(forms.targets), func(t string) bool { return !isEmail(t) })
-	keys := []store.JobKey{{Step: jobStepWorkspaces}, {Step: jobStepGrants}}
+	keys := []store.JobKey{{Step: jobStepWorkspaces}, {Step: jobStepGrants}, {Step: jobStepRunners}, {Step: jobStepInvites}, {Step: jobStepSponsor}}
 	for _, p := range principals {
 		keys = append(keys, store.JobKey{Step: jobStepErase, Target: p})
 	}
@@ -123,6 +130,15 @@ func (s *Server) finishPurge(ctx context.Context, st scimStore, id uuid.UUID, sl
 			// An address another principal holds keeps its rows: it can be a recycled one, and those are the new holder's.
 			grants, assignments, kept, err := st.DeleteUserSubjectRows(ctx, id, principals, emails)
 			return map[string]int{"grants_deleted": int(grants), "assignments_deleted": int(assignments), "email_rows_kept": int(kept)}, err
+		}),
+		s.purgeStep(ctx, st, id, jobs, store.JobKey{Step: jobStepRunners}, func() (map[string]int, error) {
+			return s.revokeLeaverRunners(ctx, principals)
+		}),
+		s.purgeStep(ctx, st, id, jobs, store.JobKey{Step: jobStepInvites}, func() (map[string]int, error) {
+			return eraseLeaverInvitations(ctx, s.cfg.Store, principals)
+		}),
+		s.purgeStep(ctx, st, id, jobs, store.JobKey{Step: jobStepSponsor}, func() (map[string]int, error) {
+			return eraseLeaverSponsorships(ctx, s.cfg.Store, principals)
 		}),
 	}
 	for _, p := range principals {
@@ -202,6 +218,100 @@ func (s *Server) eraseForPurge(ctx context.Context, principal string) (map[strin
 		detail["runner_pools_deleted"], _ = m["runner_pools"].(int)
 	}
 	return detail, err
+}
+
+// revokeLeaverRunners revokes every runner the owners hold through the runner revoke path, as DELETE
+// /runners/{id} does, and every registration token still redeemable for them, as DELETE
+// /runners/tokens/{id} does. A store without runners holds none.
+func (s *Server) revokeLeaverRunners(ctx context.Context, owners []string) (map[string]int, error) {
+	detail := map[string]int{"runners_revoked": 0, "runner_tokens_revoked": 0}
+	st, ok := s.cfg.Store.(store.PG)
+	if !ok {
+		return detail, nil
+	}
+	now := s.cfg.Now().UTC()
+	for _, owner := range owners {
+		runners, err := st.ListRunnersByOwner(ctx, owner)
+		if err != nil {
+			return nil, err
+		}
+		for _, rn := range runners {
+			if rn.State == types.RunnerRevoked {
+				continue
+			}
+			rev, _, err := s.revokeRunner(ctx, rn.ID, types.ActorSystem, scimActor, "")
+			if rev.Runner.ID != uuid.Nil {
+				detail["runners_revoked"]++
+			}
+			if err != nil && !errors.Is(err, store.ErrNotFound) {
+				return nil, err
+			}
+		}
+		tokens, err := st.ListUnusedRunnerRegistrationTokensPage(ctx, now, owner, store.Page{})
+		if err != nil {
+			return nil, err
+		}
+		for _, t := range tokens {
+			t, err := st.RevokeRunnerRegistrationToken(ctx, t.ID, now)
+			if errors.Is(err, store.ErrNotFound) {
+				continue
+			}
+			if err != nil {
+				return nil, err
+			}
+			s.recordAudit(ctx, s.auditEvent(nil, types.ActorSystem, scimActor, placement.ActionRunnerTokenRevoke, t.ID.String(), "success",
+				mustJSON(map[string]any{"owner": t.Owner, "minted_by": t.MintedBy, "expires_at": t.ExpiresAt})))
+			detail["runner_tokens_revoked"]++
+		}
+	}
+	return detail, nil
+}
+
+// eraseLeaverInvitations deletes the invitations that target the principals and clears them from the
+// ones they created or revoked. A store without invitations holds none.
+func eraseLeaverInvitations(ctx context.Context, st store.Store, principals []string) (map[string]int, error) {
+	detail := map[string]int{"invitations_deleted": 0, "invitations_cleared": 0}
+	pg, ok := st.(store.PG)
+	if !ok {
+		return detail, nil
+	}
+	for _, p := range principals {
+		deleted, cleared, err := pg.EraseInvitationsOf(ctx, p)
+		if err != nil {
+			return nil, err
+		}
+		detail["invitations_deleted"] += deleted
+		detail["invitations_cleared"] += cleared
+	}
+	return detail, nil
+}
+
+// errStillSponsoring keeps a purge's service-identity step pending: a sponsor is what the identity's
+// tokens and runs are checked against, so it is handed over or the identity retired, never cleared.
+var errStillSponsoring = errors.New("the person still sponsors service identities")
+
+// eraseLeaverSponsorships clears the principals as the creator, suspender or retirer of a service
+// identity, and fails, naming them, while one still sponsors an identity that is not retired.
+func eraseLeaverSponsorships(ctx context.Context, st store.Store, principals []string) (map[string]int, error) {
+	detail := map[string]int{"service_identities_cleared": 0}
+	pg, ok := st.(store.PG)
+	if !ok {
+		return detail, nil
+	}
+	var sponsored []string
+	for _, p := range principals {
+		cleared, names, err := pg.EraseServiceIdentityAttributionOf(ctx, p)
+		if err != nil {
+			return nil, err
+		}
+		detail["service_identities_cleared"] += cleared
+		sponsored = append(sponsored, names...)
+	}
+	if len(sponsored) > 0 {
+		return nil, fmt.Errorf("%w: %s; hand each to another sponsor (PATCH /service-identities/{name}) or retire it (DELETE)",
+			errStillSponsoring, strings.Join(sponsored, ", "))
+	}
+	return detail, nil
 }
 
 // reassignWorkspaces hands every workspace a target owns to the operator, as POST
@@ -304,10 +414,11 @@ func (s *Server) SweepSCIMPurge(ctx context.Context) error {
 		due, err := st.PurgeDueIdentities(ctx, scimSweepBatch)
 		errs = append(errs, err)
 		for _, d := range due {
-			// A schedule on an identity no suspension of its own was recorded for came with another identity's
-			// suspension; it is left for an admin, and /scim/status keeps it listed as deactivated.
+			// A schedule with no proof that the identity's current deactivation is its own suspension's came
+			// with another identity's suspension, or from a version that did not record the proof; it is left
+			// for an admin, and /scim/status keeps it listed as deactivated.
 			if !d.Suspended {
-				slog.WarnContext(ctx, "api: scim: not purging a deactivated identity with no suspension of its own on the ledger",
+				slog.WarnContext(ctx, "api: scim: not purging a deactivated identity whose current deactivation is not proved its own suspension's",
 					slog.String("identity", d.ID.String()))
 				continue
 			}

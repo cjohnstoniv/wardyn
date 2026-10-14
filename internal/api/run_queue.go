@@ -52,6 +52,7 @@ type queueStore interface {
 	ExpiredQueueEntries(ctx context.Context, now time.Time, limit int) ([]store.RunQueueEntry, error)
 	QueuePoolIDs(ctx context.Context) ([]uuid.UUID, error)
 	QueueOwnerEntries(ctx context.Context, owner string) ([]store.RunQueueEntry, error)
+	QueueEntriesOfRevokedRunners(ctx context.Context, limit int) ([]store.RunQueueEntry, error)
 	GetRunQueueEntry(ctx context.Context, id uuid.UUID) (store.RunQueueEntry, error)
 	RunQueuePosition(ctx context.Context, id uuid.UUID) (int, error)
 	QueueDepth(ctx context.Context) (map[uuid.UUID]int, error)
@@ -216,6 +217,12 @@ func (q queuedCreate) answer(s *Server, w http.ResponseWriter, r *http.Request) 
 		writeServerError(w, r, "record run components", err)
 		return
 	}
+	// The harness set too, as create records it: revive, extend and the run.create row read this record.
+	if err := s.persistRunHarnesses(ctx, created.ID, q.f.harnesses); err != nil {
+		abort(createRunHarnessesAbortHint)
+		writeServerError(w, r, "record run harnesses", err)
+		return
+	}
 	s.recordCreateFolds(ctx, created.ID, q.f.reqEvents)
 	position, err := qs.RunQueuePosition(ctx, created.ID)
 	if err != nil {
@@ -325,6 +332,8 @@ func (q queuedCreate) warnings(s *Server, r *http.Request, created types.AgentRu
 		}
 	}
 	warnings = append(warnings, q.f.autonomyWarns...)
+	warnings = append(warnings, s.managedSettingsUndeliveredWarning(ctx, managedSettingsRun{req: &q.req, spec: q.f.spec, harnesses: q.f.harnesses, level: q.f.autonomy.Level,
+		locked: ceilingForDispatch(q.f.ceiling, q.f.adoGrade, q.f.bedrockGrade).agentGuardrailLocks, class: q.f.enforced, place: q.f.place}, nil)...)
 	warnings = append(warnings, s.repoSourceWarnings(ctx, created.ID, q.f.spec, q.req)...)
 	warnings = append(warnings, q.f.fitWarnings...)
 	warnings = append(warnings, q.f.end.warnings(created)...)
@@ -396,6 +405,8 @@ func (s *Server) auditPoolRemovalCancels(ctx context.Context, ids []uuid.UUID) {
 const (
 	queueCancelSessionRevoked = "session_revoked"
 	queueCancelServiceRetired = "service_identity_retired"
+	// queueCancelRunnerRevoked is a run waiting for the one runner its launch named, revoked since.
+	queueCancelRunnerRevoked = "runner_revoked"
 	// queueCancelCreateAborted is a run a promoter took before its create had recorded it in full.
 	queueCancelCreateAborted = "create_aborted"
 )

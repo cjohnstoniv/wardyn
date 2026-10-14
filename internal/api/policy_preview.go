@@ -62,7 +62,7 @@ func (s *Server) handlePolicyPreview(w http.ResponseWriter, r *http.Request) {
 	response.MainDrive = f.mainDrive.applied()
 	runRepos := append([]string{f.req.Repo, f.req.DevcontainerRepo}, repoLocatorsOf(f.spec.WorkspaceRepos)...)
 	response.Components = componentFacts(componentFactInputs{
-		req: f.req, spec: f.spec, comps: f.comps, baseline: f.baseline, scmSite: f.scmSite,
+		req: f.req, spec: f.spec, harnesses: f.harnesses, comps: f.comps, baseline: f.baseline, scmSite: f.scmSite,
 		ceiling: f.ceiling, mpChoice: f.mpChoice, pushSets: f.pushSets,
 	}, s.adoSignInPresenceFact(r.Context(), f.scmSite, oidcHumanFromContext(r.Context()), runRepos))
 	// After the facts' own warnings, which previewSafeWarnings has already filtered.
@@ -131,10 +131,11 @@ func (s *Server) authorizePreviewRequest(r *http.Request, req createRunRequest) 
 // before the requirements fold so Review grades it; stepDerivedEgress adds the
 // grant lanes after every gate. The site-config, ADO and model-provider host
 // unions remain pending.
-func unionPreviewWorkspaceEgress(spec *types.RunPolicySpec, workspaces []types.Workspace) {
+func unionPreviewWorkspaceEgress(spec *types.RunPolicySpec, workspaces []types.Workspace, trusted []string) {
 	unionWorkspaceEgress(spec, workspaces)
 	for _, ws := range workspaces {
-		unionAllowedDomains(spec, workspaceCloneEgress(ws))
+		kept, _ := runCloneEgress(ws, trusted)
+		unionAllowedDomains(spec, kept)
 	}
 }
 

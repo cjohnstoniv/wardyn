@@ -232,6 +232,15 @@ func (s PG) MarkRunAgentStopped(ctx context.Context, id uuid.UUID, lostAt time.T
 	return nil
 }
 
+// RunAgentStopped reports whether MarkRunAgentStopped persisted a stop for id: its agent_stopped_at is set.
+func (s PG) RunAgentStopped(ctx context.Context, id uuid.UUID) (bool, error) {
+	var stopped bool
+	if err := s.Pool.QueryRow(ctx, `SELECT agent_stopped_at IS NOT NULL FROM agent_runs WHERE id=$1`, id).Scan(&stopped); err != nil {
+		return false, fmt.Errorf("store: read run agent stop: %w", err)
+	}
+	return stopped, nil
+}
+
 // ClearRunContainmentError — see RunLeaser.
 func (s PG) ClearRunContainmentError(ctx context.Context, id uuid.UUID) (bool, error) {
 	tag, err := s.Pool.Exec(ctx, `

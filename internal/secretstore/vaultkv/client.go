@@ -126,13 +126,64 @@ func newClient(cfg Config) (*client, error) {
 	tr := http.DefaultTransport.(*http.Transport).Clone()
 	tr.TLSClientConfig = tlsCfg
 	c := &client{
-		base: u, ns: cfg.Namespace, http: &http.Client{Transport: tr}, timeout: cfg.Timeout, backoff: 200 * time.Millisecond,
+		base: u, ns: cfg.Namespace, http: &http.Client{Transport: tr, CheckRedirect: sameOrigin(u)}, timeout: cfg.Timeout, backoff: 200 * time.Millisecond,
 		authMode: cfg.Auth, authMount: cfg.AuthMount, role: cfg.Role, jwtFile: cfg.K8sTokenFile, tokenFile: cfg.TokenFile,
 	}
 	if c.timeout <= 0 {
 		c.timeout = 5 * time.Second
 	}
 	return c, nil
+}
+
+// sameOrigin is the client's redirect policy. A redirected request carries the
+// token, the namespace and, on a 307 or 308, the body again, so one is followed
+// only to base's own scheme, host and port and never with userinfo. Anything
+// else stops at the 3xx, which the caller reports as Vault's answer: a standby
+// that redirects to another node is not an address this client can use.
+func sameOrigin(base *url.URL) func(*http.Request, []*http.Request) error {
+	return func(req *http.Request, via []*http.Request) error {
+		to := req.URL
+		if to.User != nil || to.Scheme != base.Scheme || !sameHost(to.Hostname(), base.Hostname()) || port(to) != port(base) {
+			return http.ErrUseLastResponse
+		}
+		// Setting CheckRedirect replaces net/http's own bound, so it is kept here.
+		if len(via) >= 10 {
+			return errors.New("stopped after 10 redirects")
+		}
+		return nil
+	}
+}
+
+// sameHost compares two host names as DNS does: ASCII letters fold and nothing
+// else does. strings.EqualFold would also take a Kelvin sign for a k.
+func sameHost(a, b string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range len(a) {
+		x, y := a[i], b[i]
+		if 'A' <= x && x <= 'Z' {
+			x += 'a' - 'A'
+		}
+		if 'A' <= y && y <= 'Z' {
+			y += 'a' - 'A'
+		}
+		if x != y {
+			return false
+		}
+	}
+	return true
+}
+
+// port is the port u is dialled on: its own, else its scheme's.
+func port(u *url.URL) string {
+	if p := u.Port(); p != "" {
+		return p
+	}
+	if u.Scheme == "http" {
+		return "80"
+	}
+	return "443"
 }
 
 func loopback(host string) bool {

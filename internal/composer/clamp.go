@@ -90,6 +90,10 @@ func clamp(proposed, ceiling types.RunPolicySpec, limits types.GovernanceLimits,
 
 	// Allowed domains: intersect to the ceiling's allowlist unless it allows all. An empty ceiling
 	// allowlist means default-deny — don't skip this block when empty, or the strictest posture leaks.
+	// Under an allow-all ceiling the proposal's entries are kept as authored. An exact entry still
+	// carries what allow-all never gives (the proxy's trust of a private-range literal address), and
+	// that is bounded by the member path before it calls here (internal/api's
+	// dropUncoveredPrivateLiterals), not by this function.
 	if !ceiling.AllowAllEgress {
 		allowed := toSet(ceiling.AllowedDomains)
 		kept, dropped := partition(out.AllowedDomains, func(d string) bool { return allowed[strings.ToLower(strings.TrimSpace(d))] })
@@ -137,21 +141,7 @@ func clamp(proposed, ceiling types.RunPolicySpec, limits types.GovernanceLimits,
 		out.LLMInspection = nil
 	}
 
-	// Allowed methods: empty means "all" here (unlike AllowedDomains' default-deny), so an empty
-	// proposal must adopt the ceiling's restriction rather than silently allowing any method.
-	if len(ceiling.AllowedMethods) > 0 {
-		if len(out.AllowedMethods) == 0 {
-			warns = append(warns, fmt.Sprintf("allowed_methods restricted to operator's: %s", strings.Join(ceiling.AllowedMethods, ",")))
-			out.AllowedMethods = append([]string(nil), ceiling.AllowedMethods...)
-		} else {
-			allowed := toSet(ceiling.AllowedMethods)
-			kept, dropped := partition(out.AllowedMethods, func(m string) bool { return allowed[strings.ToLower(strings.TrimSpace(m))] })
-			if len(dropped) > 0 {
-				warns = append(warns, fmt.Sprintf("dropped %d method(s) not in operator allowlist: %s", len(dropped), strings.Join(dropped, ",")))
-				out.AllowedMethods = kept
-			}
-		}
-	}
+	warns = clampMethods(&out, ceiling, warns)
 
 	out.UIApps = clampUIApps(out.UIApps, ceiling.UIApps, &warns)
 
@@ -754,6 +744,27 @@ func union(a, b []string) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// clampMethods bounds allowed_methods by a ceiling that names some. Empty means "all" here (unlike
+// AllowedDomains' default-deny), and the proxy drops a blank entry, so whenever nothing it would read
+// is left (no proposal, a proposal sharing no method with the ceiling, or only blank entries) the
+// result is the ceiling's own list, never one that allows any method.
+func clampMethods(out *types.RunPolicySpec, ceiling types.RunPolicySpec, warns []string) []string {
+	if len(ceiling.AllowedMethods) == 0 {
+		return warns
+	}
+	allowed := toSet(ceiling.AllowedMethods)
+	kept, dropped := partition(out.AllowedMethods, func(m string) bool { return allowed[strings.ToLower(strings.TrimSpace(m))] })
+	if len(dropped) > 0 {
+		warns = append(warns, fmt.Sprintf("dropped %d method(s) not in operator allowlist: %s", len(dropped), strings.Join(dropped, ",")))
+		out.AllowedMethods = kept
+	}
+	if len(normMethods(out.AllowedMethods)) == 0 {
+		warns = append(warns, fmt.Sprintf("allowed_methods restricted to operator's: %s", strings.Join(ceiling.AllowedMethods, ",")))
+		out.AllowedMethods = append([]string(nil), ceiling.AllowedMethods...)
+	}
+	return warns
 }
 
 // clampOperatorSwitches forces off boolean controls only an operator may widen: allow-all egress and

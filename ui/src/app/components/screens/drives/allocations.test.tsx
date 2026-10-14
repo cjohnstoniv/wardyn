@@ -652,12 +652,13 @@ describe("DrivesScreen — the preview's three answers and its refusals", () => 
   // The drive resolver reads user_subjects POSITIONALLY to pick which claim an
   // `email_local` home is named from, so the order is load-bearing here in a way
   // it is not for a governance ceiling: an "@" line must arrive last.
-  it("offers every claim to both tiers, sign-in subject before email", async () => {
+  it("offers every claim to both tiers, sign-in subject before email, with the standard user type", async () => {
     renderScreen();
     await ask("alice@corp.example{enter}8f2c-sub-id{enter}eng");
     expect(previewDriveMock).toHaveBeenCalledWith({
       user_subjects: ["8f2c-sub-id", "eng", "alice@corp.example"],
       groups: ["alice@corp.example", "8f2c-sub-id", "eng"],
+      user_type: "standard",
     });
   });
 });

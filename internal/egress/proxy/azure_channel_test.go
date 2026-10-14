@@ -75,8 +75,18 @@ func TestConfig_LLMChannelHostsAreValidated(t *testing.T) {
 		"none":           {nil, true},
 		"another vendor": {map[string]string{azHost: "api.example.com"}, false},
 		"host with port": {map[string]string{azHost + ":443": anthropicHost}, false},
-		"host with path": {map[string]string{azHost + "/x": anthropicHost}, false},
-		"empty host":     {map[string]string{" ": anthropicHost}, false},
+		// An IPv6 literal is keyed by its bare address, the host a request to it carries.
+		"ipv6 literal":          {map[string]string{"fd00::10": anthropicHost}, true},
+		"ipv6 in brackets":      {map[string]string{"[fd00::10]": anthropicHost}, false},
+		"ipv6 with port":        {map[string]string{"[fd00::10]:443": anthropicHost}, false},
+		"ipv6 with zone":        {map[string]string{"fe80::1%eth0": anthropicHost}, false},
+		"ipv4 with port":        {map[string]string{"10.1.2.3:443": anthropicHost}, false},
+		"ipv6 with a userinfo":  {map[string]string{"u@fd00::10": anthropicHost}, false},
+		"ipv6 with a path":      {map[string]string{"fd00::10/x": anthropicHost}, false},
+		"ipv6 with a space":     {map[string]string{" fd00::10": anthropicHost}, false},
+		"ipv6 with empty label": {map[string]string{"fd00:::10": anthropicHost}, false},
+		"host with path":        {map[string]string{azHost + "/x": anthropicHost}, false},
+		"empty host":            {map[string]string{" ": anthropicHost}, false},
 	} {
 		c := &Config{LLMChannelHosts: tc.hosts}
 		if err := c.validateChannelHosts(); (err == nil) != tc.ok {
@@ -90,6 +100,13 @@ func TestConfig_LLMChannelHostsAreValidated(t *testing.T) {
 	}
 	if _, err := LoadConfigBytes(baseConfigJSON(t, map[string]any{"llm_channel_hosts": map[string]string{azHost: "x.test"}})); err == nil {
 		t.Error("a channel host whose vendor is not a scanner dialect loaded")
+	}
+	cfg, err = LoadConfigBytes(baseConfigJSON(t, map[string]any{"llm_channel_hosts": map[string]string{"fd00::10": anthropicHost}}))
+	if err != nil || cfg.LLMChannelHosts["fd00::10"] != anthropicHost {
+		t.Fatalf("LoadConfigBytes with an IPv6 channel host: %+v, %v", cfg, err)
+	}
+	if _, err := LoadConfigBytes(baseConfigJSON(t, map[string]any{"llm_channel_hosts": map[string]string{"[fd00::10]:443": anthropicHost}})); err == nil {
+		t.Error("an IPv6 channel host carrying a port loaded")
 	}
 }
 

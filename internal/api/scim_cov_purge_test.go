@@ -387,7 +387,8 @@ func scimCovDeactivated(st *scimCovStore, principal string, due bool) store.Prin
 	}
 	ident := st.addIdentity(store.PrincipalIdentity{Principal: principal, Issuer: scimCovIssuer, DeactivatedAt: &gone, PurgeAfter: &after})
 	st.mu.Lock()
-	st.jobs = append(st.jobs, &store.DeprovisionJob{IdentityID: ident.ID, Kind: store.JobKindSuspend, Step: store.JobStepCutoff, Done: true})
+	st.jobs = append(st.jobs, &store.DeprovisionJob{IdentityID: ident.ID, Kind: store.JobKindSuspend, Step: store.JobStepCutoff, Done: true,
+		Detail: map[string]int{"deactivated_at_us": int(gone.UnixMicro())}})
 	st.mu.Unlock()
 	return ident
 }

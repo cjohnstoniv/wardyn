@@ -50,6 +50,8 @@ export interface GuidedFacts {
   startFrom: "scratch" | "template" | "again";
   /** The main drive size as typed; committed to the intent on blur or Continue. */
   mainDriveText: string;
+  /** The pool's default the field was filled with, while the person has not changed it. */
+  mainDriveFill?: string;
   mainDriveClampNote?: string;
   /** Free-text ref per `${workspaceId}/${repo}` while the branch list is unavailable. */
   refText: Record<string, string>;

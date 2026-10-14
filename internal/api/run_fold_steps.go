@@ -119,6 +119,10 @@ func (s *Server) stepWorkspaces(f *runFold, rec *foldRecorder) bool {
 	f.wsRefs = attachedWorkspaceRefs(f.seed.attached, referencedWorkspacesIn(all, f.spec))
 	for _, ws := range f.wsRefs {
 		recordWorkspaceSources(rec, f.spec, ws)
+		_, dropped := runCloneEgress(ws, f.ceiling.Spec.AllowedDomains)
+		for _, h := range dropped {
+			f.policyWarns = append(f.policyWarns, cloneHostDropWarning(h, "workspace", ws.Name))
+		}
 	}
 	var refusal *runRefusal
 	f.attachments, f.startFolder, refusal = s.runAttachments(*f.req, f.spec, f.wsRefs, indexWorkspacesBySource(all), f.seed,
@@ -167,10 +171,10 @@ func (s *Server) stepPushRuleSets(f *runFold, rec *foldRecorder) bool {
 func (s *Server) stepPreviewEgress(f *runFold, rec *foldRecorder) bool {
 	for _, ws := range f.wsRefs {
 		var contributed types.RunPolicySpec
-		unionPreviewWorkspaceEgress(&contributed, []types.Workspace{ws})
+		unionPreviewWorkspaceEgress(&contributed, []types.Workspace{ws}, f.ceiling.Spec.AllowedDomains)
 		recordSpecAdds(rec, types.RunPolicySpec{}, contributed, workspaceProvSource(ws))
 	}
-	unionPreviewWorkspaceEgress(&f.spec, f.wsRefs)
+	unionPreviewWorkspaceEgress(&f.spec, f.wsRefs, f.ceiling.Spec.AllowedDomains)
 	return true
 }
 
@@ -185,7 +189,7 @@ func (s *Server) stepPreviewEgress(f *runFold, rec *foldRecorder) bool {
 func (s *Server) stepDerivedEgress(f *runFold, rec *foldRecorder) bool {
 	policy := policyProvSource(f.source)
 	wired := lanesWiredFor(f.scmSite, f.req.Agent, repoLocatorsOf(f.spec.WorkspaceRepos), f.spec.EligibleGrants)
-	for _, d := range deriveRunEgress(&f.spec, f.wsRefs, f.req.Repo, types.SiteConfig{}, wired) {
+	for _, d := range deriveRunEgress(&f.spec, f.wsRefs, f.req.Repo, types.SiteConfig{}, wired, f.ceiling.Spec.AllowedDomains) {
 		for _, host := range d.added {
 			rec.add(fieldAllowed, host, derivedEgressSource(rec, f.spec.EligibleGrants, d.kind, host, policy), provEffectAdded)
 		}
@@ -197,7 +201,9 @@ func (s *Server) stepDerivedEgress(f *runFold, rec *foldRecorder) bool {
 // into the spec before the confinement floor and the grade read it: a
 // workspace's integration:<id> requirement is a credential grant the CC3
 // blast-radius floor must see, or invariant 5 is silently bypassed. This is
-// the audit-free half; create records reqEvents once its run id exists.
+// the audit-free half; create records reqEvents once its run id exists. The
+// fold's own refusal (a write: row past the member writable roots) answers at
+// every door.
 func (s *Server) stepRequirements(f *runFold, rec *foldRecorder) bool {
 	ctx := f.r.Context()
 	// Caller-scoped secret names, resolved once: the requirement fold and
@@ -207,7 +213,11 @@ func (s *Server) stepRequirements(f *runFold, rec *foldRecorder) bool {
 	// One workspace at a time, so each one's additions are its own.
 	for _, ws := range f.wsRefs {
 		before := f.spec.Clone()
-		f.reqEvents = append(f.reqEvents, s.applyWorkspaceRequirementsFor(ctx, f.present, &f.spec, f.req.Agent, []types.Workspace{ws}, selections)...)
+		events, refusal := s.applyWorkspaceRequirementsFor(ctx, f.present, &f.spec, f.req.Agent, []types.Workspace{ws}, f.seed.attached, selections)
+		if refusal != nil {
+			return !runError(refusal.status, refusal.reason, refusal.Error()).write(s, f.w, f.r)
+		}
+		f.reqEvents = append(f.reqEvents, events...)
 		recordRequirementFold(rec, before, f.spec, ws, selections[ws.ID.String()])
 	}
 	return true
@@ -438,7 +448,8 @@ func (s *Server) stepToolPolicy(f *runFold, rec *foldRecorder) bool {
 	before := f.spec
 	s.applyToolPosture(f.req, &f.spec)
 	recordSpecAdds(rec, before, f.spec, provSource{Kind: provKindPosture})
-	if attendedDefaultRefusal(*f.req, f.autonomy.Level).write(s, f.w, f.r) || attendedToolNamesRefusal(*f.req, f.spec).write(s, f.w, f.r) {
+	if attendedDefaultRefusal(*f.req, f.autonomy.Level).write(s, f.w, f.r) || attendedToolNamesRefusal(*f.req, f.spec).write(s, f.w, f.r) ||
+		inheritedMCPHoldRefusal(*f.req, f.spec, f.comps).write(s, f.w, f.r) {
 		return false
 	}
 	return !s.toolRulesWithinPolicyRefusal(*f.req, f.spec).write(s, f.w, f.r)
@@ -483,7 +494,7 @@ func (s *Server) stepADOStanding(f *runFold, rec *foldRecorder) bool {
 // doors, the same reasons and sentences, so a narrowing the run could not
 // enforce shows before the click. Create meets them at dispatch.
 func (s *Server) stepPATNarrowing(f *runFold, rec *foldRecorder) bool {
-	if reason, detail := s.patNarrowingAtDoor(f.r, f.spec, f.scmSite); reason != "" {
+	if reason, detail := s.patNarrowingAtDoor(f.r, *f.req, f.spec, f.scmSite); reason != "" {
 		writeErrorReason(f.w, http.StatusUnprocessableEntity, reason, detail)
 		return false
 	}

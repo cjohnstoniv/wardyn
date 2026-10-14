@@ -225,11 +225,13 @@ func (s *Server) refusePATDispatch(ctx context.Context, run types.AgentRun, reas
 // patNarrowingAtDoor is dispatch's refusal asked at Review (POST /runs/preflight),
 // from the spec's grants and the site snapshot the autonomy gate read, so a
 // person hears it before the run rather than as a FAILED badge. "" when none.
-// Whether the run is brokered is read off its github_token grant, which is
-// how a brokered run comes to have a broker map at all.
-func (s *Server) patNarrowingAtDoor(r *http.Request, spec types.RunPolicySpec, site types.SiteConfig) (reason, detail string) {
+// Whether the run is brokered is whether create would key the git broker for
+// any repository, as dispatch reads it (len(GitGrants) > 0): a wired
+// github_token grant's own repositories, or the declared github.com clones
+// beside one (githubCLIRepos derives exactly those keys).
+func (s *Server) patNarrowingAtDoor(r *http.Request, req createRunRequest, spec types.RunPolicySpec, site types.SiteConfig) (reason, detail string) {
 	env := patNarrowingEnv{brokerOn: !s.cfg.DisableGitPATBroker, site: site, bbsAPI: patAPIBitbucketOn()}
-	env.brokered = slices.ContainsFunc(spec.EligibleGrants, func(g types.GrantSpec) bool { return g.Kind == types.GrantGitHubToken })
+	env.brokered = len(githubCLIRepos(req, spec, site)) > 0
 	if lane, on := resolveADOEntraRun(site, repoLocatorsOf(spec.WorkspaceRepos),
 		runIdentitySubject(r.Context(), principalFromRequest(r))); on {
 		env.adoHosts = lane.laneHosts()

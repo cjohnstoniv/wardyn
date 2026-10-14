@@ -77,7 +77,7 @@ describe("AdminOlderLimitsCard", () => {
     renderCard();
     await screen.findByText("Older limits · 1");
     await user.click(screen.getByRole("button", { name: "Restart with current limits" }));
-    await waitFor(() => expect(restartAdminRunsMock).toHaveBeenCalledWith(["r1"]));
+    await waitFor(() => expect(restartAdminRunsMock).toHaveBeenCalledWith(["r1"], 210_000));
     expect(await screen.findByText(/Restarted/)).toBeInTheDocument();
     // Re-lists after a restart (best-effort refresh).
     await waitFor(() => expect(getAdminProxyWindowMock).toHaveBeenCalledTimes(2));
@@ -108,9 +108,9 @@ describe("AdminOlderLimitsCard", () => {
     expect(await screen.findByText(/Restarted/)).toBeInTheDocument();
   });
 
-  // R2-4, also: reviveBulkMax (run_revive.go) 400s a single request over 100
-  // ids — a fleet with more out-of-window runs than that must go in batches.
-  it("R2-4: batches a restart above the server's 100-id limit", async () => {
+  // The server restarts a request's runs one after another, so a long request outlives the
+  // console's 60s deadline: ids go in small batches, each with a deadline sized to its runs.
+  it("batches a restart in fives, each with a deadline sized to its batch", async () => {
     const user = userEvent.setup({ pointerEventsCheck: 0 });
     const ids = Array.from({ length: 150 }, (_, i) => `r${i}`);
     getAdminProxyWindowMock.mockResolvedValue({
@@ -124,9 +124,28 @@ describe("AdminOlderLimitsCard", () => {
     renderCard();
     await screen.findByText("Older limits · 150");
     await user.click(screen.getByRole("button", { name: "Restart with current limits" }));
-    await waitFor(() => expect(restartAdminRunsMock).toHaveBeenCalledTimes(2));
-    expect(restartAdminRunsMock.mock.calls[0][0]).toHaveLength(100);
-    expect(restartAdminRunsMock.mock.calls[1][0]).toHaveLength(50);
+    await waitFor(() => expect(restartAdminRunsMock).toHaveBeenCalledTimes(30));
+    expect(restartAdminRunsMock.mock.calls.every(([batch]) => batch.length === 5)).toBe(true);
+    expect(restartAdminRunsMock.mock.calls.every(([batch, timeoutMs]) => timeoutMs === batch.length * 210_000)).toBe(true);
+  });
+
+  it("keeps the first batch's results when a later batch fails, and refreshes the listing", async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    const ids = Array.from({ length: 8 }, (_, i) => `r${i}`);
+    getAdminProxyWindowMock.mockResolvedValue({
+      release: "0.8.0",
+      window: ["0.8"],
+      outside: ids.map((id) => ({ run_id: id, created_by: "u1", state: "RUNNING", proxy_release: "0.6" })),
+    });
+    restartAdminRunsMock
+      .mockResolvedValueOnce({ results: ids.slice(0, 5).map((run_id) => ({ run_id, ok: true })) })
+      .mockRejectedValueOnce(new Error("Could not reach the control plane."));
+    renderCard();
+    await screen.findByText("Older limits · 8");
+    await user.click(screen.getByRole("button", { name: "Restart with current limits" }));
+    await waitFor(() => expect(toastErrorMock).toHaveBeenCalled());
+    expect(await screen.findAllByText(/Restarted/)).toHaveLength(5);
+    await waitFor(() => expect(getAdminProxyWindowMock).toHaveBeenCalledTimes(2));
   });
 
   it("a failed result shows the server's OWN refusal text, with no invented 'still lost' gloss on it", async () => {
