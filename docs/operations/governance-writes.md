@@ -130,7 +130,7 @@ an operator follows to turn one on and run the queue.
 
 - **SSO is configured.** Local mode authenticates nobody, so with the switch on every covered write and every approve or reject answers `503` `governance_second_human_local_mode`.
 - **The admin token is held out of band.** It applies a covered write directly and approves a change, each audited as `governance.change.bypass`. It is the break-glass and the one way past this gate.
-- **Two humans can approve.** Every covered target except role mappings needs a second security admin or super admin; role mappings need a second super admin (see step 6).
+- **Two humans can approve.** Every covered target needs a second security admin or super admin, except role mappings and an organization pool's remote-hosted runner add or removal, which need a second super admin (see step 6).
 - **Every CLI and SDK caller is upgraded.** A client built before 0.8.6 decodes the `202` as an empty object ([sdk.md](../sdk.md) "Old clients"). Nothing applies without approval, but the error it reports is confusing.
 
 Then set `WARDYN_GOVERNANCE_SECOND_HUMAN` (and, if `72h` is wrong for your approvers, `WARDYN_GOVERNANCE_CHANGE_TTL`) in the daemon's environment; on Kubernetes that is the chart's existing `env` map.
@@ -151,6 +151,12 @@ Then set `WARDYN_GOVERNANCE_SECOND_HUMAN` (and, if `72h` is wrong for your appro
 | Role mapping upsert, delete | always | **super admin only** |
 | Key-domain assignment set, delete | always | security admin or super admin |
 | Service identity create, and a PATCH that changes the sponsor | always (the PATCH whole) | security admin or super admin |
+| Egress baseline (`PUT /governance/egress-baseline`) | always | security admin or super admin |
+| Credential delivery policy (`PUT /governance/credential-delivery`) | always | security admin or super admin |
+| Runner pool use policy set, delete | always | security admin or super admin |
+| Remote-hosted runner people policy set, delete | always | security admin or super admin |
+| Remote-hosted runner added to an organization pool | the runner is in another pool that carries a use policy | **super admin only** |
+| Remote-hosted runner removed from an organization pool | the pool carries a use policy | **super admin only** |
 
 Exempt, so applied directly:
 

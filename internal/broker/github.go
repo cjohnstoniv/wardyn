@@ -51,9 +51,8 @@ type githubMinter struct {
 }
 
 // githubClientTimeout bounds the WHOLE mint, not each hop: MintInstallationToken
-// runs inside mint()'s transaction, holding the grant row lock and a pooled
-// Postgres connection, so a blackholed api.github.com would otherwise pin
-// both. Applied twice — as the http.Client Timeout (per round trip) and as
+// runs while mint() prepares the credential, so a blackholed api.github.com
+// would otherwise hold the mint unbounded. Applied twice — as the http.Client Timeout (per round trip) and as
 // the derived ctx (per mint) — so a tighter caller deadline still wins.
 const githubClientTimeout = 15 * time.Second
 

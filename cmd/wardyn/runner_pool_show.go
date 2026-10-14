@@ -4,6 +4,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -96,6 +97,29 @@ func sumMembers(p sdk.RunnerPool, members []sdk.RunnerPoolMemberView) poolSums {
 	return s
 }
 
+// biggestRun is the biggest run one of the pool's runners can take, narrowed by the pool's caps: a run is
+// sized by the one runner it starts on, so the amounts all come from the same runner. When no runner
+// allows the most of everything, it is the one with the most CPU, then memory, then disk.
+func biggestRun(members []sdk.RunnerPoolMemberView, caps sdk.RunnerAmounts) (out sdk.RunnerAmounts) {
+	low := func(v, cap int64) int64 {
+		if cap > 0 {
+			return min(v, cap)
+		}
+		return v
+	}
+	for _, m := range members {
+		if m.Limits == nil {
+			continue
+		}
+		r := m.Limits.PerRun
+		a := sdk.RunnerAmounts{CPUMillis: low(r.CPUMillis, caps.CPUMillis), MemoryMiB: low(r.MemoryMiB, caps.MemoryMiB), DiskMiB: low(r.DiskMiB, caps.DiskMiB)}
+		if cmp.Or(cmp.Compare(a.CPUMillis, out.CPUMillis), cmp.Compare(a.MemoryMiB, out.MemoryMiB), cmp.Compare(a.DiskMiB, out.DiskMiB)) > 0 {
+			out = a
+		}
+	}
+	return out
+}
+
 // poolCaps is the pool's smallest cap on each resource across its run types; 0 is none.
 func poolCaps(l *sdk.RunnerPoolLimits) (caps sdk.RunnerAmounts) {
 	if l == nil {
@@ -143,10 +167,60 @@ func poolLimitsText(p sdk.RunnerPool, runners sdk.RunnerAmounts) string {
 	if p.Limits != nil && p.Limits.MaxConcurrentRuns != nil {
 		parts = append(parts, fmt.Sprintf("%d runs maximum in this pool", *p.Limits.MaxConcurrentRuns))
 	}
+	parts = append(parts, poolDurationsText(p.Limits)...)
 	if len(parts) == 0 {
 		return "none of its own: it follows its runners"
 	}
 	return strings.Join(parts, "; ")
+}
+
+// poolDurationsText is each lifetime and idle stop the pool sets, in the console's words: "background
+// lifetime default 1 hour, up to 1 day". Its runners set none, so these are always the pool's own.
+func poolDurationsText(l *sdk.RunnerPoolLimits) []string {
+	if l == nil {
+		return nil
+	}
+	var out []string
+	say := func(what string, d *types.RunnerPoolDuration, open string) {
+		if d == nil {
+			return
+		}
+		switch {
+		case !d.Unlimited:
+			out = append(out, fmt.Sprintf("%s default %s, up to %s", what, durText(d.DefaultSec), durText(d.MaxSec)))
+		case d.DefaultSec > 0:
+			out = append(out, fmt.Sprintf("%s default %s, %s", what, durText(d.DefaultSec), open))
+		default:
+			out = append(out, what+" "+open)
+		}
+	}
+	if b := l.Background; b != nil {
+		say("background lifetime", b.Lifetime, "no maximum")
+	}
+	if i := l.Interactive; i != nil {
+		say("interactive lifetime", i.Lifetime, "no maximum")
+		say("interactive idle stop", i.Idle, "never")
+	}
+	return out
+}
+
+// durText is seconds as the console says them: "1 day", "2 hours", "30 minutes", "45 seconds".
+func durText(sec int) string {
+	unit := func(n int, one string) string {
+		if n == 1 {
+			return "1 " + one
+		}
+		return fmt.Sprintf("%d %ss", n, one)
+	}
+	switch {
+	case sec >= 86400 && sec%86400 == 0:
+		return unit(sec/86400, "day")
+	case sec >= 3600 && sec%3600 == 0:
+		return unit(sec/3600, "hour")
+	case sec%60 == 0:
+		return unit(sec/60, "minute")
+	}
+	return unit(sec, "second")
 }
 
 func poolRunTypes(l *sdk.RunnerPoolLimits) string {
@@ -213,15 +287,7 @@ func tallyText(t sdk.RunnerTally) string {
 // "" when the caller may not read its use policy.
 func printPool(w io.Writer, p sdk.RunnerPool, members []sdk.RunnerPoolMemberView, me, orgWho string) error {
 	s := sumMembers(p, members)
-	biggest := s.biggest
-	caps := poolCaps(p.Limits)
-	low := func(v, cap int64) int64 {
-		if cap > 0 {
-			return min(v, cap)
-		}
-		return v
-	}
-	biggest = sdk.RunnerAmounts{CPUMillis: low(biggest.CPUMillis, caps.CPUMillis), MemoryMiB: low(biggest.MemoryMiB, caps.MemoryMiB), DiskMiB: low(biggest.DiskMiB, caps.DiskMiB)}
+	biggest := biggestRun(members, poolCaps(p.Limits))
 	user := p.Scope == sdk.RunnerPoolUser
 	rows := [][2]string{{"ID", p.ID.String()}, {"NAME", p.Name}, {"TYPE", map[bool]string{true: "user pool", false: "organization pool"}[user]}}
 	who := "only " + p.Owner

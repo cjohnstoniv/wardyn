@@ -43,7 +43,9 @@ export function RemoteRunnerDrawer({
 }) {
   const superAdmin = useOperator();
   const titleRef = React.useRef<HTMLSpanElement | null>(null);
-  const [editing, setEditing] = React.useState(false);
+  // The runner as the limits dialog opened on it: the save names that revision, not the one a later re-read
+  // brought, so a change another admin made meanwhile is refused as stale instead of overwritten.
+  const [editing, setEditing] = React.useState<RemoteRunnerView | null>(null);
   const [busy, setBusy] = React.useState(false);
   const [held, setHeld] = React.useState(false);
   const [error, setError] = React.useState("");
@@ -113,7 +115,7 @@ export function RemoteRunnerDrawer({
               {!runner.online && <OfflineNote />}
               {superAdmin ? (
                 <div className="mt-3">
-                  <Button variant="outline" size="sm" onClick={() => setEditing(true)}>
+                  <Button variant="outline" size="sm" onClick={() => setEditing(runner)}>
                     {RUNNER_V6.EDIT_LIMITS}
                   </Button>
                 </div>
@@ -151,9 +153,9 @@ export function RemoteRunnerDrawer({
         </SheetContent>
       </Sheet>
       <LimitsDialog
-        target={editing ? { name: runner.name, limits: runner.limits, running: runner.usage.in_use.runs, self: false } : null}
-        onOpenChange={setEditing}
-        onSave={(limits) => onSaveLimits(runner, limits)}
+        target={editing ? { name: editing.name, limits: editing.limits, running: runner.usage.in_use.runs, self: false } : null}
+        onOpenChange={(o) => !o && setEditing(null)}
+        onSave={(limits) => onSaveLimits(editing ?? runner, limits)}
         onSaved={onChanged}
       />
     </>

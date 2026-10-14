@@ -47,7 +47,7 @@ func (s *Server) holdKeyDomainChange(w http.ResponseWriter, r *http.Request, c k
 		writeKeyDomainAssignmentNotFound(w)
 		return
 	}
-	if d, err := keyDomainDeleteRefusal(r.Context(), s.cfg.KeyDomains.TruncatedWithGroups, c); err != nil {
+	if d, err := keyDomainDeleteRefusal(r.Context(), s.cfg.KeyDomains.TruncatedWithGroups, s.cfg.KeyDomains.InTwoGroupDomains, c); err != nil {
 		writeServerError(w, r, "hold key domain assignment", err)
 		return
 	} else if d != nil {
@@ -97,7 +97,9 @@ func applyKeyDomainAssignmentChange(s *Server, r *http.Request, q store.Querier,
 	}
 	target := keyDomainTarget(c)
 	if c.Delete {
-		if d, err := keyDomainDeleteRefusal(ctx, func(ctx context.Context, p string) (bool, error) { return svc.TruncatedWithGroupsQ(ctx, q, p) }, c); err != nil {
+		if d, err := keyDomainDeleteRefusal(ctx,
+			func(ctx context.Context, p string) (bool, error) { return svc.TruncatedWithGroupsQ(ctx, q, p) },
+			func(ctx context.Context, p string) (bool, error) { return svc.InTwoGroupDomainsQ(ctx, q, p) }, c); err != nil {
 			return govApplied{}, err
 		} else if d != nil {
 			return govApplied{}, &govRefusal{why: string(d.Reason), write: func(w http.ResponseWriter, r *http.Request) { s.refuse(w, r, *d) }}

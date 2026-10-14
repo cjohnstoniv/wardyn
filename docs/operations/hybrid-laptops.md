@@ -14,7 +14,7 @@
 | Concern | Org | Laptop |
 | --- | --- | --- |
 | Scheduling, placement, the ceiling | Yes, the only scheduler | Nothing decides locally |
-| Credentials | Held in the org; the laptop can use a `via_org` credential for a run's life | The person's own; and a `runner_resident` value, held in the OS keystore for one run |
+| Credentials | Held in the org; the laptop can use a `via_org` credential for a run's life | The person's own. `runner_resident` values are not yet delivered to runners in 0.9.0 |
 | A `via_org` credential's requests | The org re-checks each one and injects the credential on a TLS leg it dials itself | The proxy forwards them through the relay; it never holds the value, but sees the request in plaintext |
 | Audit | The org is the only writer; every local run is an org run record | The runner carries bytes and spools rows while offline |
 | Control plane, Postgres, OIDC client, `age.key` | Yes | None of them |
@@ -25,9 +25,12 @@
 
 ## Resident credentials and posture
 
+> [!NOTE]
+> `runner_resident` values are not yet delivered to runners in 0.9.0. An admin can set the mode and a runner reports its posture, but a run that needs such a credential is still refused (`placement_credential`).
+
 - An admin can set a credential class to `runner_resident` with a `require_posture` (`mdm_managed`, `disk_encrypted`, `os_min`).
 - The runner reports its posture when it connects and again when it changes. A root-owned `/etc/wardyn/posture.json` from your MDM wins over the runner's own probe.
-- The value sits in the OS keystore for the run (Secret Service; on macOS the Keychain, written over stdin) and is erased at run end. A runner with no keystore refuses (`runner_keystore_unavailable`).
+- A runner keeps a delivered value in the OS keystore for the run (Secret Service; on macOS the Keychain, written over stdin) and erases it at run end. A runner with no keystore refuses (`runner_keystore_unavailable`).
 - On Linux the Secret Service needs a login session bus (`DBUS_SESSION_BUS_ADDRESS`, or the user bus socket under `/run/user/<uid>`), so a system service with no login session has no keystore.
 - Posture is self-reported, and a run with a CC3 floor never takes a resident credential.
 
@@ -49,12 +52,13 @@
 | Link down at run creation | Refused `runner_offline`; no run row exists |
 | Link drops mid-run | Nothing is torn down; the proxy enforces its cached policy and spools decisions |
 | Link down past the lapse (about 1h5m) | The runner stops the proxy itself and keeps the agent and files |
-| Revoked by the owner or a security operator | The org marks that runner's runs lost and runs the kill cascade; the runner stops every governed proxy |
+| The runner process restarts | Its runs stop reaching the network until each is revived. This is fail-closed |
+| Revoked by the owner or a security operator | The org ends that runner's unfinished runs `KILLED` and runs the kill cascade; the runner stops every governed proxy |
 
 "Offline" and "ungoverned" are never the same thing: an offline runner is still governed and runs nothing new.
 
 > [!NOTE]
-> Behind a shared ingress, unauthenticated runner connections from one address share one pre-auth rate-limit bucket, so put per-client rate limits on the ingress in front of `/api/v1/runners/{id}/stream`.
+> Behind a shared ingress every runner connection shares one pre-auth rate-limit bucket, so one unauthenticated peer can keep it empty and lock every runner out. Allow only the networks your runners connect from to reach `/api/v1/runners/*/stream` at the ingress; per-client rate limits there do not close it.
 
 ## Legacy org enrolment (deprecated)
 

@@ -16,6 +16,10 @@
     "text": "Not turned on for you. Ask your admin."
   },
   {
+    "key": "command_no_hold",
+    "text": "A command can't pause a tool call for approval."
+  },
+  {
     "key": "component_unavailable",
     "text": "This component isn't available to you. Ask your admin."
   },

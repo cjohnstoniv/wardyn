@@ -42,6 +42,7 @@ func (s *Server) handleRunCapacity(w http.ResponseWriter, r *http.Request) {
 	now := time.Now().UTC()
 	c, err := reader.RunCapacity(r.Context(), store.RunCapacityOpts{
 		Now: now, CurrentKind: s.cfg.RunnerTarget, UnschedulableReason: capacityBlockerReason,
+		LocalExecutor: s.remoteRunnerConfigured,
 	})
 	if err != nil {
 		writeServerError(w, r, "run capacity", err)

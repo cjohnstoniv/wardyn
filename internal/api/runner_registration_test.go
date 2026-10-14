@@ -337,3 +337,47 @@ func TestRunnerTokenMintAnswersCarryTheOrgURLAndAListNever(t *testing.T) {
 		t.Fatalf("a token list must name its tokens and never carry org_url: %d %s", w.Code, w.Body.String())
 	}
 }
+
+// Runner registration keeps its own per-address bucket and charges failures only: a flood of failed
+// device enrolments from one address leaves a valid runner registration from it working, and a valid
+// registration is refunded, so registering more runners than the bucket holds from one address (many
+// people behind one ingress) never runs dry while failed attempts still do.
+func TestRunnerRegistrationRateBucketIsItsOwnAndChargesFailuresOnly(t *testing.T) {
+	srv, f, _ := newRunnerRegistrationServer(t)
+	const peer = "203.0.113.50:4000"
+	register := func(raw string) int {
+		t.Helper()
+		pub, _, err := ed25519.GenerateKey(rand.Reader)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, _ := json.Marshal(types.RunnerRegisterRequest{Token: raw, PublicKey: pub, Name: "laptop", Limits: testRunnerLimits()})
+		return doPeer(t, srv, http.MethodPost, "/api/v1/runners/register", "", string(body), peer).Code
+	}
+	valid := func() string {
+		raw := newBearer("wdr_")
+		now := time.Now().UTC()
+		f.lock.Lock()
+		f.tokens[raw] = types.RunnerRegistrationToken{ID: uuid.New(), Owner: "owner", MintedBy: "admin", CreatedAt: now, ExpiresAt: now.Add(time.Hour),
+			OrgURLSHA256: federation.OrgURLSHA256(srv.cfg.RunnerOrgURL)}
+		f.lock.Unlock()
+		return raw
+	}
+	for range int(enrolBurst) + 2 {
+		doPeer(t, srv, http.MethodPost, "/api/v1/devices/enrol", "", `{"token":"wde_not-a-token"}`, peer)
+	}
+	for i := range int(enrolBurst) + 2 {
+		if code := register(valid()); code != http.StatusCreated {
+			t.Fatalf("valid registration %d from an address that flooded device enrolment = %d, want 201", i+1, code)
+		}
+	}
+	refused := 0
+	for range int(enrolBurst) + 2 {
+		if register(newBearer("wdr_")) == http.StatusTooManyRequests {
+			refused++
+		}
+	}
+	if refused == 0 {
+		t.Error("failed registrations from one address were never rate limited")
+	}
+}

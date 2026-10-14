@@ -91,11 +91,13 @@ type RunCapacity struct {
 
 // RunCapacityOpts parameterises RunCapacity. CurrentKind is the deployment's runner kind; Totals
 // carries only that kind's entry; other kinds appear only under ByRunner. UnschedulableReason maps a status_detail to its capacity-blocker
-// reason, or "" when it is not one.
+// reason, or "" when it is not one. LocalExecutor says whether a run's bound executor is one of this
+// deployment's own substrates; nil treats every executor as one.
 type RunCapacityOpts struct {
 	Now                 time.Time
 	CurrentKind         string
 	UnschedulableReason func(detail string) string
+	LocalExecutor       func(executor string) bool
 }
 
 var capacityAgeBounds = []struct {
@@ -149,6 +151,14 @@ func zeroNil(p *int64) int64 {
 	return *p
 }
 
+// offDeployment reports whether a holding row is bound to a placement outside this deployment: a
+// registered runner (its id, or placement local once the runner is erased), or an executor that is
+// not one of its own substrates. localExecutor nil treats every executor as one.
+func offDeployment(runnerID *uuid.UUID, placed, executor string, localExecutor func(string) bool) bool {
+	return runnerID != nil || placed == string(types.PlacementLocal) ||
+		(executor != "" && localExecutor != nil && !localExecutor(executor))
+}
+
 // RunCapacity reads every non-terminal row in one query (the positive
 // types.NonTerminalRunStates list, never NOT IN terminal, so a new terminal state cannot be
 // counted as active) and folds it per the state table in the 0.8.6 fleet design: STARTING,
@@ -156,14 +166,17 @@ func zeroNil(p *int64) int64 {
 // included; kept rows (lost_at set) count as Kept; PENDING and QUEUED rows appear only in States (a
 // QUEUED run holds no slot and no reservation, but wardyn_runs_active still reports it). A kept
 // row whose agent may still run (HoldsSandboxSQL: kept after an outage, no agent stop recorded)
-// also holds its agent's reservation, without the proxy that was stopped.
+// also holds its agent's reservation, without the proxy that was stopped. A run bound to a placement
+// outside this deployment (a registered runner, or an executor it does not run) is counted in States,
+// Kept and Paused only: its sizing, whatever runner_kind it was stamped with and even when unstamped, is not
+// this deployment's.
 func (s PG) RunCapacity(ctx context.Context, o RunCapacityOpts) (RunCapacity, error) {
 	states := make([]string, 0, len(types.NonTerminalRunStates))
 	for _, st := range types.NonTerminalRunStates {
 		states = append(states, string(st))
 	}
 	rows, err := s.Pool.Query(ctx, `SELECT id, created_by, state, created_at, paused_at, lost_at, status_detail,
-		   runner_target, runner_kind, agent_cpu_request_millis, agent_cpu_limit_millis,
+		   runner_target, runner_kind, runner_id, placement, runner_pool_executor, agent_cpu_request_millis, agent_cpu_limit_millis,
 		   agent_memory_request_mib, agent_memory_limit_mib, proxy_cpu_millis, proxy_memory_mib,
 		   `+HoldsSandboxSQL+`
 		 FROM agent_runs WHERE state = ANY($1)`, states)
@@ -193,6 +206,8 @@ func (s PG) RunCapacity(ctx context.Context, o RunCapacityOpts) (RunCapacity, er
 		var (
 			id                         uuid.UUID
 			owner, state, detail, rtgt string
+			placed, executor           string
+			runnerID                   *uuid.UUID
 			created                    time.Time
 			paused, lost               *time.Time
 			kind                       *string
@@ -200,7 +215,7 @@ func (s PG) RunCapacity(ctx context.Context, o RunCapacityOpts) (RunCapacity, er
 			holds                      bool
 		)
 		if err := rows.Scan(&id, &owner, &state, &created, &paused, &lost, &detail, &rtgt, &kind,
-			&c, &cl, &m, &ml, &pc, &pm, &holds); err != nil {
+			&runnerID, &placed, &executor, &c, &cl, &m, &ml, &pc, &pm, &holds); err != nil {
 			return RunCapacity{}, fmt.Errorf("store: run capacity: scan: %w", err)
 		}
 		out.States[state]++
@@ -216,6 +231,9 @@ func (s PG) RunCapacity(ctx context.Context, o RunCapacityOpts) (RunCapacity, er
 		}
 		if paused != nil {
 			out.Paused++
+		}
+		if offDeployment(runnerID, placed, executor, o.LocalExecutor) {
+			continue
 		}
 		// A legacy row is attributed to its runner through runner_target.
 		k := rtgt
