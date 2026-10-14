@@ -58,7 +58,8 @@ func (k *sshKeyLimiters) evictIdle(now time.Time) bool {
 		b.mu.Lock()
 		last := b.last
 		b.mu.Unlock()
-		if now.Sub(last) >= idle && (oldest == "" || last.Before(oldestAt)) {
+		// A zero last is a bucket made a moment ago and not yet charged: never idle.
+		if !last.IsZero() && now.Sub(last) >= idle && (oldest == "" || last.Before(oldestAt)) {
 			oldest, oldestAt = fp, last
 		}
 	}
