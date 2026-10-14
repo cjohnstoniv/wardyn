@@ -60,8 +60,8 @@ func (s PG) UpdateRunStateIfIdle(ctx context.Context, id uuid.UUID, fromState, t
 
 // UpdateRunStateIfCreatedBefore transitions a run only when still in fromState,
 // its age anchor (admitted_at when it waited in the pool queue, else created_at) is at or before createdNotAfter, and its agent still runs
-// (HoldsSandboxSQL: not kept, or kept after an outage before its end; a run kept
-// with its agent stopped is left to its files grace). The
+// (HoldsSandboxSQL: not kept, or kept after an outage with no agent stop recorded; a
+// run kept with its agent stopped is left to its files grace). The
 // max-age stop's own predicate on the run's age: it carries neither the idleness
 // guard nor the open-request guard of UpdateRunStateIfIdle, because an absolute
 // age cap exists to end a run that is not going to finish by itself.

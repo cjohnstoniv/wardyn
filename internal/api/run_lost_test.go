@@ -325,6 +325,42 @@ func TestLostRun_AFailedEndRecordsNoStoppedAgent(t *testing.T) {
 	}
 }
 
+// TestLostRun_TheStopFollowsTheRowReadUnderTheLock: a lease pass lists an outage run past its
+// end, and the owner moves the end later before the pass takes the run's lock. The pass decides
+// from the row it re-reads under the lock, so only the proxy is stopped and the agent keeps
+// running. Without the extension the same pass stops the agent.
+func TestLostRun_TheStopFollowsTheRowReadUnderTheLock(t *testing.T) {
+	for name, extend := range map[string]bool{"extended after the list": true, "not extended": false} {
+		t.Run(name, func(t *testing.T) {
+			f := newLostFixture(t)
+			end := f.now.Add(time.Hour)
+			f.st.run.EndsAt = &end
+			f.ls.lapsed = true
+			f.sweepTokens(t)
+
+			f.now = end.Add(time.Minute)
+			listed, err := f.ls.ListLeasedRuns(context.Background())
+			if err != nil || len(listed) != 1 {
+				t.Fatalf("ListLeasedRuns = %d runs, %v; want the one kept run", len(listed), err)
+			}
+			if extend {
+				f.st.setEnd(f.now.Add(24 * time.Hour))
+			}
+			f.srv.leaseRun(context.Background(), f.ls, listed[0])
+			if extend {
+				if f.rn.endCount() != 0 || f.st.agentStopped || f.lr.proxyStopCount() != 2 {
+					t.Fatalf("extended: EndSandbox %d, stop recorded %v, StopProxy %d; want 0, false, 2 (the agent keeps running)",
+						f.rn.endCount(), f.st.agentStopped, f.lr.proxyStopCount())
+				}
+				return
+			}
+			if f.rn.endCount() != 1 || !f.st.agentStopped {
+				t.Fatalf("not extended: EndSandbox %d, stop recorded %v; want 1, true", f.rn.endCount(), f.st.agentStopped)
+			}
+		})
+	}
+}
+
 // renewStampStore is renewStore plus the token stamp.
 type renewStampStore struct {
 	*renewStore

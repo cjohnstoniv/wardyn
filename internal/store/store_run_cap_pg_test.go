@@ -129,12 +129,12 @@ func TestPG_CreateRunUnderCap_OutageKeptRunHoldsSlot(t *testing.T) {
 	if _, err := pg.CreateRunUnderCap(ctx, newRun(types.RunPending), 1); !errors.Is(err, store.ErrRunCapReached) {
 		t.Fatalf("create at cap 1 with an outage-kept run = %v; want ErrRunCapReached", err)
 	}
-	// Past its end the lease sweep stops its agent too, so it holds no slot.
-	if _, err := pool.Exec(ctx, `UPDATE agent_runs SET ends_at = now() - interval '1 minute' WHERE id = $1`, kept.ID); err != nil {
-		t.Fatalf("pass the run's end: %v", err)
+	// Past its end the lease sweep stops its agent too and records the stop, so it holds no slot.
+	if _, err := pool.Exec(ctx, `UPDATE agent_runs SET ends_at = now() - interval '1 minute', agent_stopped_at = now() WHERE id = $1`, kept.ID); err != nil {
+		t.Fatalf("pass the run's end and stop its agent: %v", err)
 	}
 	if _, err := pg.CreateRunUnderCap(ctx, newRun(types.RunPending), 1); err != nil {
-		t.Fatalf("create at cap 1 with an outage-kept run past its end: %v", err)
+		t.Fatalf("create at cap 1 with an outage-kept run whose agent was stopped past its end: %v", err)
 	}
 }
 
@@ -262,6 +262,37 @@ func TestPG_MarkRunAgentStopped_PinsTheLostMark(t *testing.T) {
 	}
 }
 
+// TestPG_OutageRunPastItsEndHoldsItsSlotUntilItsStopIsRecorded pins that an outage-kept run
+// past its end whose agent stop is not recorded (the stop failed, so the agent may still be
+// running) keeps its slot and its fleet capacity row: a second launch at cap 1 is refused. Once
+// the stop is recorded, the slot frees and the second launch is admitted.
+func TestPG_OutageRunPastItsEndHoldsItsSlotUntilItsStopIsRecorded(t *testing.T) {
+	ctx := context.Background()
+	pool := runsPGPoolIsolated(t)
+	pg := store.NewPG(pool)
+	a, err := pg.CreateRunUnderCap(ctx, newRun(types.RunRunning), 1)
+	if err != nil {
+		t.Fatalf("create A: %v", err)
+	}
+	var lostAt time.Time
+	if err := pool.QueryRow(ctx, `UPDATE agent_runs SET lost_at = now(), lost_reason = $2, ends_at = now() - interval '1 minute' WHERE id = $1 RETURNING lost_at`, a.ID, string(types.LostOutage)).Scan(&lostAt); err != nil {
+		t.Fatalf("keep A after an outage, past its end: %v", err)
+	}
+	c, err := pg.RunCapacity(ctx, store.RunCapacityOpts{Now: time.Now().UTC(), CurrentKind: "docker"})
+	if err != nil || c.Totals.Holding != 1 {
+		t.Fatalf("RunCapacity holding with A's stop unrecorded = %d, %v; want 1", c.Totals.Holding, err)
+	}
+	if _, err := pg.CreateRunUnderCap(ctx, newRun(types.RunRunning), 1); !errors.Is(err, store.ErrRunCapReached) {
+		t.Fatalf("second launch with A's stop unrecorded = %v; want ErrRunCapReached", err)
+	}
+	if err := pg.MarkRunAgentStopped(ctx, a.ID, lostAt); err != nil {
+		t.Fatalf("record A's stopped agent: %v", err)
+	}
+	if _, err := pg.CreateRunUnderCap(ctx, newRun(types.RunRunning), 1); err != nil {
+		t.Fatalf("second launch once A's stop is recorded = %v; want admitted", err)
+	}
+}
+
 // TestPG_MarkRunRevived_ExtendedOutageRunTakesASlot pins that a revive starting an agent takes a
 // slot: an outage-kept run past its end (its agent stopped by the lease sweep, which records
 // the stop) frees its slot, a replacement takes it, and the owner then moves the end later; the
@@ -278,19 +309,19 @@ func TestPG_MarkRunRevived_ExtendedOutageRunTakesASlot(t *testing.T) {
 	if _, err := pool.Exec(ctx, `UPDATE agent_runs SET lost_at = now(), lost_reason = $2, ends_at = now() - interval '1 minute' WHERE id = $1`, a.ID, string(types.LostOutage)); err != nil {
 		t.Fatalf("keep A after an outage, past its end: %v", err)
 	}
-	if n, err := pg.CountNonTerminalRuns(ctx, uuid.Nil); err != nil || n != 0 {
-		t.Fatalf("CountNonTerminalRuns with A past its end = %d, %v; want 0", n, err)
-	}
-	b, err := pg.CreateRunUnderCap(ctx, newRun(types.RunRunning), 1)
-	if err != nil {
-		t.Fatalf("create B in A's freed slot: %v", err)
-	}
 	cur, err := pg.GetRun(ctx, a.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := pg.MarkRunAgentStopped(ctx, a.ID, *cur.LostAt); err != nil {
 		t.Fatalf("record A's stopped agent: %v", err)
+	}
+	if n, err := pg.CountNonTerminalRuns(ctx, uuid.Nil); err != nil || n != 0 {
+		t.Fatalf("CountNonTerminalRuns with A's agent stopped past its end = %d, %v; want 0", n, err)
+	}
+	b, err := pg.CreateRunUnderCap(ctx, newRun(types.RunRunning), 1)
+	if err != nil {
+		t.Fatalf("create B in A's freed slot: %v", err)
 	}
 	later := time.Now().Add(48 * time.Hour)
 	if ok, err := pg.SetRunEndAndWait(ctx, a.ID, cur.RunLimits, cur.EndsAt, cur.WaitBudgetSec, &later, cur.WaitBudgetSec, nil); err != nil || !ok {
@@ -418,8 +449,8 @@ func TestPG_MarkRunRevived_ConcurrentExtendCannotSplitTheCapCount(t *testing.T) 
 	if err != nil {
 		t.Fatalf("create A: %v", err)
 	}
-	if _, err := pool.Exec(ctx, `UPDATE agent_runs SET lost_at = now(), lost_reason = $2, ends_at = now() - interval '1 minute' WHERE id = $1`, a.ID, string(types.LostOutage)); err != nil {
-		t.Fatalf("keep A after an outage, its end passed: %v", err)
+	if _, err := pool.Exec(ctx, `UPDATE agent_runs SET lost_at = now(), lost_reason = $2, ends_at = now() - interval '1 minute', agent_stopped_at = now() WHERE id = $1`, a.ID, string(types.LostOutage)); err != nil {
+		t.Fatalf("keep A after an outage, its end passed and its agent stopped: %v", err)
 	}
 	b, err := pg.CreateRunUnderCap(ctx, newRun(types.RunRunning), 1)
 	if err != nil {
@@ -479,8 +510,8 @@ func TestPG_MarkRunRevived_OutageRunPastItsEndIsNotClaimed(t *testing.T) {
 				t.Fatalf("create A: %v", err)
 			}
 			var lostAt time.Time
-			if err := pool.QueryRow(ctx, `UPDATE agent_runs SET lost_at = now(), lost_reason = $2, ends_at = now() - interval '1 minute' WHERE id = $1 RETURNING lost_at`, a.ID, string(types.LostOutage)).Scan(&lostAt); err != nil {
-				t.Fatalf("keep A after an outage, its end passed: %v", err)
+			if err := pool.QueryRow(ctx, `UPDATE agent_runs SET lost_at = now(), lost_reason = $2, ends_at = now() - interval '1 minute', agent_stopped_at = now() WHERE id = $1 RETURNING lost_at`, a.ID, string(types.LostOutage)).Scan(&lostAt); err != nil {
+				t.Fatalf("keep A after an outage, its end passed and its agent stopped: %v", err)
 			}
 			if ok, err := pg.MarkRunRevived(ctx, a.ID, types.LostOutage, nil, 1, startsAgent); err != nil || ok {
 				t.Fatalf("revive claim of A past its end = %v, %v; want false, nil", ok, err)

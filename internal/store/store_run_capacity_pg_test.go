@@ -199,8 +199,9 @@ func TestPG_RunCapacityAggregate_Caps(t *testing.T) {
 
 // TestPG_RunCapacityAggregate_KeptAgents pins which kept rows hold capacity: only one whose
 // agent still runs (kept after an outage, before its end) holds its agent's reservation, and
-// not its stopped proxy's. A run kept after a reboot or its end, or an outage-kept run past
-// its end, has its agent stopped and holds nothing. The deployment cap counts the same rows.
+// not its stopped proxy's. A run kept after a reboot or its end, or an outage-kept run whose
+// agent was stopped past its end (the stop recorded), holds nothing. The deployment cap counts
+// the same rows.
 func TestPG_RunCapacityAggregate_KeptAgents(t *testing.T) {
 	pool := runsPGPoolIsolated(t)
 	ctx := context.Background()
@@ -214,7 +215,8 @@ func TestPG_RunCapacityAggregate_KeptAgents(t *testing.T) {
 			AgentCPULimitMillis: 2000, AgentMemoryRequestMiB: 4096, AgentMemoryLimitMiB: 4096, ProxyMemoryMiB: 256}); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := pool.Exec(ctx, `UPDATE agent_runs SET lost_at=now(), lost_reason=$2 WHERE id=$1`, id, string(reason)); err != nil {
+		// Past its end the lease sweep has stopped the agent and recorded it.
+		if _, err := pool.Exec(ctx, `UPDATE agent_runs SET lost_at=now(), lost_reason=$2, agent_stopped_at = CASE WHEN ends_at < now() THEN now() END WHERE id=$1`, id, string(reason)); err != nil {
 			t.Fatal(err)
 		}
 	}

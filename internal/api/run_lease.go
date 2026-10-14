@@ -99,6 +99,8 @@ func (s *Server) leaseRun(ctx context.Context, leaser store.RunLeaser, run types
 		// that proxy nor revoke the revived run's broker. So the pass takes the
 		// run's lock, which a revive holds from its claim to its settle, and
 		// re-reads the row under it, holding it through the runner call below.
+		// The stop is decided from that re-read: an end moved before it (the
+		// end edit writes under this lock too) keeps the agent running.
 		// It never waits: a run whose lock is held is skipped and retried next
 		// pass. The expiry teardown above stays outside this, so a run cannot
 		// dodge it by being revived again and again. The busy mark covers the
@@ -111,9 +113,11 @@ func (s *Server) leaseRun(ctx context.Context, leaser store.RunLeaser, run types
 		if _, busy := s.reviving.Load(run.ID); busy {
 			return
 		}
-		if cur, err := s.cfg.Store.GetRun(ctx, run.ID); err != nil || cur.LostAt == nil {
+		cur, err := s.cfg.Store.GetRun(ctx, run.ID)
+		if err != nil || cur.LostAt == nil {
 			return
 		}
+		run, ended = cur, cur.LostReason == types.LostEnded
 		// Re-assert the stop every pass: a crash between the claim and the
 		// stop would otherwise leave a kept run with its proxy and broker
 		// credentials up. The broker revoke writes a row per credential, so it
@@ -121,7 +125,6 @@ func (s *Server) leaseRun(ctx context.Context, leaser store.RunLeaser, run types
 		if _, done := s.leaseEnded.LoadOrStore(run.ID, struct{}{}); !done {
 			s.revokeRunBroker(ctx, run.ID)
 		}
-		var err error
 		if ended {
 			err = s.endSandbox(ctx, run)
 		} else {

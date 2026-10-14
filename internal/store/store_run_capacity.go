@@ -165,8 +165,8 @@ func offDeployment(runnerID *uuid.UUID, placed, executor string, localExecutor f
 // RUNNING and WAITING_FOR_CONFIRMATION rows with lost_at NULL hold capacity, paused ones
 // included; kept rows (lost_at set) count as Kept; PENDING and QUEUED rows appear only in States (a
 // QUEUED run holds no slot and no reservation, but wardyn_runs_active still reports it). A kept
-// row whose agent still runs (HoldsSandboxSQL: kept after an outage, before its end) also
-// holds its agent's reservation, without the proxy that was stopped. A run bound to a placement
+// row whose agent may still run (HoldsSandboxSQL: kept after an outage, no agent stop recorded)
+// also holds its agent's reservation, without the proxy that was stopped. A run bound to a placement
 // outside this deployment (a registered runner, or an executor it does not run) is counted in States,
 // Kept and Paused only: its sizing, whatever runner_kind it was stamped with and even when unstamped, is not
 // this deployment's.

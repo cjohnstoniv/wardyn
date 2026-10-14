@@ -147,8 +147,17 @@ func (s *Server) handleSetRunEndAndWait(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 	if p.endChanged || p.waitChanged {
-		applied, err := leaser.SetRunEndAndWait(r.Context(), run.ID, run.RunLimits, run.EndsAt, run.WaitBudgetSec,
+		// Under the run's lock, which the lease sweep holds from its re-read of a
+		// kept run to its stop (leaseRun): a moved end lands before that read or
+		// after that stop, never between.
+		lctx, unlock, err := s.lockRunOp(r.Context(), run.ID)
+		if err != nil {
+			writeLockRefused(w, r, err)
+			return
+		}
+		applied, err := leaser.SetRunEndAndWait(lctx, run.ID, run.RunLimits, run.EndsAt, run.WaitBudgetSec,
 			p.resp.EndsAt, p.resp.WaitBudgetSec, s.endedKept(run, s.cfg.Now()))
+		unlock()
 		if err != nil {
 			writeServerError(w, r, "set run end and wait", err)
 			return
