@@ -24,6 +24,8 @@ const pools = {
   clearMyDefaults: vi.fn(),
   removeMine: vi.fn(),
   usePolicy: vi.fn(),
+  createMine: vi.fn(),
+  myDefaults: vi.fn(),
 };
 const remoteMineMock = vi.fn();
 vi.mock("../../../lib/api/runner-pools", () => ({
@@ -50,6 +52,7 @@ vi.mock("../../../lib/api/runners", () => ({
 }));
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 
+import { toast } from "sonner";
 import { HttpError } from "../../../lib/api/core";
 import { aheadByHours } from "../../../lib/test-clock";
 import { OperatorProvider } from "../../wardyn/operator-context";
@@ -624,5 +627,77 @@ describe("My pools", () => {
     expect(await screen.findByText("Couldn't load pools")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Retry" }));
     expect(await screen.findByText("You haven't created a pool yet.")).toBeInTheDocument();
+  });
+});
+
+describe("My runner card: the start command and the claim into a pool", () => {
+  const registerShown = async (user: ReturnType<typeof userEvent.setup>) => {
+    await expand(user);
+    await user.click(await screen.findByRole("button", { name: "Register a runner" }));
+    await screen.findByText("wdr_selfminted");
+  };
+  const VM_HINT = /^On Docker Desktop .* --total-disk <GB> to register, and --relay-listen 127\.0\.0\.1 to serve\.$/;
+
+  it("names the proxy image the server answered with in the serve command, and always says what VM-backed Docker needs", async () => {
+    listMineMock.mockResolvedValue([]);
+    mintMineMock.mockResolvedValue({ ...TOKEN, proxy_image: "ghcr.io/example/wardyn-proxy:0.9.1" });
+    const user = userEvent.setup();
+    renderCard();
+    await registerShown(user);
+    expect(screen.getByText("wardyn-runnerd serve --org https://org.example.com --proxy-image ghcr.io/example/wardyn-proxy:0.9.1")).toBeInTheDocument();
+    expect(screen.getByText(VM_HINT)).toBeInTheDocument();
+    cleanup();
+    mintMineMock.mockResolvedValue(TOKEN);
+    renderCard();
+    await registerShown(user);
+    expect(screen.queryByText(/wardyn-runnerd serve/)).toBeNull();
+    expect(screen.getByText(VM_HINT)).toBeInTheDocument();
+  });
+
+  const claimWithPool = async (user: ReturnType<typeof userEvent.setup>, pool: string, makeDefault: boolean) => {
+    listMineMock.mockResolvedValue([WAITING]);
+    claimMock.mockResolvedValue({ runner_id: "r-mbp", fingerprint: FULL, state: "claimed", org_url_sha256: "" });
+    pools.addMyRunner.mockResolvedValue({});
+    pools.myDefaults.mockResolvedValue({});
+    pools.setMyDefaults.mockResolvedValue({});
+    renderCard();
+    await expand(user);
+    await user.click(await screen.findByRole("button", { name: "Claim" }));
+    const dialog = await screen.findByRole("dialog");
+    const box = within(dialog).getByRole("checkbox", { name: "Make it my default pool" });
+    expect(box).toBeDisabled();
+    setField(within(dialog).getByRole("textbox", { name: /Fingerprint from your computer/ }), FULL);
+    setField(within(dialog).getByRole("combobox", { name: /Put it in a pool/ }), pool);
+    if (makeDefault) await user.click(box);
+    await user.click(within(dialog).getByRole("button", { name: "Claim runner" }));
+  };
+
+  it("a new pool name makes the pool, puts the claimed runner in it and makes it the default", async () => {
+    pools.createMine.mockResolvedValue(POOL("p-new", "Desk"));
+    const user = userEvent.setup();
+    await claimWithPool(user, "Desk", true);
+    await waitFor(() => expect(pools.setMyDefaults).toHaveBeenCalledWith({ pool_id: "p-new" }));
+    expect(pools.createMine).toHaveBeenCalledWith({ name: "Desk" });
+    expect(pools.addMyRunner).toHaveBeenCalledWith("p-new", "r-mbp");
+    expect(claimMock).toHaveBeenCalledWith("r-mbp", FULL);
+  });
+
+  it("one of the person's own pools is used as it is, and the default stays alone unless asked", async () => {
+    pools.list.mockResolvedValue({ pools: [ENTRY(LAPTOP_POOL), { ...ENTRY(POOL("o1", "Desk", { scope: "organization" })), scope: "organization" }] });
+    pools.get.mockResolvedValue(LAPTOP_POOL);
+    pools.members.mockResolvedValue([]);
+    const user = userEvent.setup();
+    await claimWithPool(user, "Laptop", false);
+    await waitFor(() => expect(pools.addMyRunner).toHaveBeenCalledWith("p-laptop", "r-mbp"));
+    expect(pools.createMine).not.toHaveBeenCalled();
+    expect(pools.setMyDefaults).not.toHaveBeenCalled();
+  });
+
+  it("a pool step that fails after the claim says the runner is claimed and where to finish", async () => {
+    pools.createMine.mockRejectedValue(new HttpError(422, "That name is taken.", "runner_pool_name_taken"));
+    const user = userEvent.setup();
+    await claimWithPool(user, "Desk", false);
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith(expect.stringContaining("mbp-ben is claimed but isn't in Desk. Add it from My pools.")));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
   });
 });

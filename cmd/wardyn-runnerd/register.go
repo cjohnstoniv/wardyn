@@ -87,7 +87,10 @@ func newRegisterCommand() *cobra.Command {
 			return err
 		}
 		// The limits it registered with stay on screen: with every limit given as a flag nothing else shows them.
-		fmt.Fprintf(cmd.OutOrStdout(), "registered %s; key fingerprint %s\n  %s\n  claim it: wardyn runner claim   (or in Your account → My runner)\n", name, fingerprint, limitsLine(limits))
+		fmt.Fprintf(cmd.OutOrStdout(), "registered %s; key fingerprint %s\n  %s\n", name, fingerprint, limitsLine(limits))
+		fmt.Fprintln(cmd.OutOrStdout(), "  claim it in the console (Your account → My runner) with this fingerprint, or\n"+
+			"  WARDYN_TOKEN=<your personal API token> wardyn runner claim --pool <name> --default\n"+
+			"  the admin token cannot claim; a claimed runner in no pool runs nothing")
 		return nil
 	}
 	cmd.Flags().StringVar(&org, "org", "", "organisation public HTTPS URL")
@@ -118,11 +121,16 @@ func readRegistrationToken(path string) (string, error) {
 }
 
 // registrationFailure keeps the server's own refusal and advises a fresh token
-// only when the server refused this token or had already spent it.
+// only when the server refused this token or had already spent it. A timeout or a
+// 5xx with no reason of its own says nothing about the token: the server may have
+// spent it before it failed, so the person is sent to My runners, not back to the token.
 func registrationFailure(err error) error {
 	var refused *sdk.APIError
 	if errors.As(err, &refused) && (refused.Reason == string(placement.ReasonRunnerTokenInvalid) || refused.Status == http.StatusConflict) {
 		return fmt.Errorf("runner registration refused: %w. This token cannot be used again: obtain a fresh token and choose a new private state directory before retrying (the local key was preserved)", err)
+	}
+	if !errors.As(err, &refused) || (refused.Status >= http.StatusInternalServerError && refused.Reason == "") {
+		return fmt.Errorf("runner registration failed: %w. The server may have spent the token before it failed: check Your account → My runners, and if this host is not there mint a new token and choose a new private state directory (the local key was preserved)", err)
 	}
 	return fmt.Errorf("runner registration failed: %w. The server did not refuse the token: retry with it and a new private state directory (the local key was preserved)", err)
 }

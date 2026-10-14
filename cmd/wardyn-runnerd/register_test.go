@@ -60,7 +60,7 @@ func TestRegisterCreatesPrivateBoundIdentity(t *testing.T) {
 	}
 	text := out.String()
 	if !strings.Contains(text, "registered laptop; key fingerprint "+got.Fingerprint+"\n  limits: runs at once ") ||
-		!strings.HasSuffix(text, "\n  claim it: wardyn runner claim   (or in Your account → My runner)\n") || strings.Contains(text, token) {
+		!strings.Contains(text, "claim it in the console (Your account → My runner) with this fingerprint, or\n  WARDYN_TOKEN=<your personal API token> wardyn runner claim --pool <name> --default\n") || !strings.Contains(text, "the admin token cannot claim") || strings.Contains(text, token) {
 		t.Fatal("fingerprint absent or token printed")
 	}
 }
@@ -133,6 +133,36 @@ func TestRegisterSurfacesRefusalAndAdvisesFreshTokenOnlyWhenSpent(t *testing.T) 
 			}
 			if strings.Contains(msg, "obtain a fresh token") != tc.spent || strings.Contains(msg, "wdr_") {
 				t.Fatalf("token advice wrong (spent=%v): %s", tc.spent, msg)
+			}
+		})
+	}
+}
+
+// A 5xx with no reason of its own, or a dropped connection, says nothing about the token: the server may
+// have spent it, so the person is sent to My runners and never told to retry with the same token.
+func TestRegisterAfterAnUnclearFailureDoesNotCallTheTokenUsable(t *testing.T) {
+	for name, handler := range map[string]http.HandlerFunc{
+		"bad-gateway": func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusBadGateway) },
+		"dropped": func(w http.ResponseWriter, _ *http.Request) {
+			conn, _, _ := w.(http.Hijacker).Hijack()
+			_ = conn.Close()
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			srv := httptest.NewServer(handler)
+			defer srv.Close()
+			root := t.TempDir()
+			file := filepath.Join(root, "token")
+			if err := os.WriteFile(file, []byte("wdr_"+strings.Repeat("a", 64)), 0600); err != nil {
+				t.Fatal(err)
+			}
+			cmd := newRegisterCommand()
+			cmd.SetOut(&strings.Builder{})
+			cmd.SetErr(&strings.Builder{})
+			cmd.SetArgs([]string{"--org", srv.URL, "--token-file", file, "--state-dir", filepath.Join(root, "state")})
+			err := cmd.Execute()
+			if err == nil || !strings.Contains(err.Error(), "may have spent the token") || !strings.Contains(err.Error(), "My runners") || strings.Contains(err.Error(), "retry with it") {
+				t.Fatalf("unclear failure advice = %v", err)
 			}
 		})
 	}
