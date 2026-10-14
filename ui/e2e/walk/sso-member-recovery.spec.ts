@@ -87,6 +87,7 @@ import { MODEL_ACCESS_BANNER, RAIL_MODEL_ACCESS } from "../../src/app/components
 import { CONNECTIONS } from "../../src/app/components/wardyn/copy/door";
 import { NR_FILES } from "../../src/app/components/wardyn/copy/new-run/files";
 import { NR_HARNESSES } from "../../src/app/components/wardyn/copy/new-run/harnesses";
+import { NR_LAUNCH } from "../../src/app/components/wardyn/copy/new-run/launch";
 import { NR_RUN } from "../../src/app/components/wardyn/copy/new-run/run";
 import { NR_SHAPE } from "../../src/app/components/wardyn/copy/new-run/shape";
 import { NR_SHARED } from "../../src/app/components/wardyn/copy/new-run/shared";
@@ -355,6 +356,16 @@ async function gotoAgentsTab(page: Page): Promise<void> {
   await page.getByRole("button", { name: AGENTS.AGENTS_TITLE }).click();
 }
 
+/** Puts this SSO admin's session in the named view with the console's own switch; the session cookie holds the
+ *  view. A full load first, so no dialog left open above the banner swallows the click. */
+async function inView(page: Page, view: string): Promise<void> {
+  await page.goto("/account");
+  const segment = page.getByRole("group", { name: CONSOLE_VIEW.GROUP }).getByRole("button", { name: view });
+  await expect(segment).toBeVisible({ timeout: 60_000 });
+  if ((await segment.getAttribute("aria-pressed")) !== "true") await segment.click();
+  await expect(segment).toHaveAttribute("aria-pressed", "true", { timeout: 60_000 });
+}
+
 /** An ADMIN's own AWS sign-in, which is NOT on /setup.
  *
  *  /setup renders the operator Getting Started for an operator. A person's
@@ -362,6 +373,7 @@ async function gotoAgentsTab(page: Page): Promise<void> {
  *  the admin's own sign-in is the provider's row on /account's connections
  *  card, which opens the same door and the same HarnessLoginPane. */
 async function openAdminLoginPane(page: Page): Promise<void> {
+  await inView(page, CONSOLE_VIEW.USER);
   await openModelConnections(page);
   await cardSignInAws(page).click();
   await expect(page.getByTestId("harness-login-pane")).toBeVisible({ timeout: 60_000 });
@@ -1099,6 +1111,8 @@ test("L0 (setup gate): an admin with a lapsed AWS sign-in of their own opens New
   await dexSignIn(page, ADMIN_EMAIL);
   await signInThroughPane(page, openAdminLoginPane);
   await expect.poll(async () => (await modelAccess(page)).state, { timeout: 120_000 }).toBe("live");
+  // The sign-in was the User view's; the setup-gate question below starts from the Admin view.
+  await inView(page, CONSOLE_VIEW.ADMIN);
   await ensureActionable(page, request);
   await expect.poll(async () => (await modelAccess(page)).state, { timeout: 120_000 }).toBe("expired_signin");
 
@@ -1162,6 +1176,7 @@ test("F (member-preview): an admin previews the state a member is in before they
   // sign-in is /account's (openAdminLoginPane).
   await signInThroughPane(page, openAdminLoginPane);
   await expect.poll(async () => (await modelAccess(page)).state, { timeout: 120_000 }).toBe("live");
+  await inView(page, CONSOLE_VIEW.ADMIN);
 
   // Into the preview, from the Permissions header (M-2).
   await page.goto("/admin/permissions");
@@ -1203,7 +1218,7 @@ test("F (member-preview): an admin previews the state a member is in before they
 
 // ── L — 0.7.7: Launch with a lapsed sign-in is one dialog, then the run ─────
 
-test("L (launch door): Launch with a lapsed AWS sign-in opens the sign-in itself, and the same run launches after it", async ({
+test("L (launch door): Launch with a lapsed AWS sign-in opens the sign-in itself, and the run launches from the same dialog after it", async ({
   page,
   request,
 }) => {
@@ -1212,8 +1227,9 @@ test("L (launch door): Launch with a lapsed AWS sign-in opens the sign-in itself
   // sign-in case here drives), they fill in New Run and press Launch. The
   // server refuses the run before any row exists (422, reason
   // model_credential); the Name dialog opens the AWS sign-in dialog ITSELF over
-  // it; the device flow completes on the fake; the SAME launch goes through. No
-  // trip to Getting started, no second Launch.
+  // it; the device flow completes on the fake; the sign-in re-checks and launches
+  // nothing on its own, and Launch in the SAME dialog, with what was typed still
+  // there, starts the run. No trip to Getting started.
   //
   // 0.8.6: New Run checks the body on its own, and a lapsed sign-in found by
   // that check opens the door before any click (a door whose sign-in only
@@ -1249,13 +1265,27 @@ test("L (launch door): Launch with a lapsed AWS sign-in opens the sign-in itself
   // refusal of the Name dialog's Launch is what opens the door. Driven through
   // signInThroughPane so the witness is the server's MOVED capture, not the
   // terminal node (helpers.ts explains why the DOM cannot be the witness).
+  const creates: string[] = [];
+  page.on("request", (r) => {
+    if (r.method() === "POST" && new URL(r.url()).pathname === "/api/v1/runs") creates.push(r.postData() ?? "");
+  });
   await signInThroughPane(page, async (p: Page) => {
     await launchFromReview(p, "L launch door");
     await expect(p.getByRole("heading", { name: MODEL_ACCESS_BANNER.DIALOG_TITLE })).toBeVisible({ timeout: 60_000 });
     await expect(p.getByTestId("harness-login-pane")).toBeVisible({ timeout: 60_000 });
   });
 
-  // The launch the door's completion carries on lands on the Launched screen,
+  // The completed sign-in closes its door and re-checks; it launches nothing.
+  // The Name dialog is still there with its title, its fresh check passes, and
+  // the one create so far is the refused one.
+  const dialog = page.getByRole("dialog", { name: NR_LAUNCH.TITLE });
+  await expect(page.getByRole("heading", { name: MODEL_ACCESS_BANNER.DIALOG_TITLE })).toHaveCount(0, { timeout: 60_000 });
+  await expect(dialog.getByLabel(NR_LAUNCH.TITLE_LABEL)).toHaveValue("L launch door");
+  await expect(dialog.getByText(NR_LAUNCH.CHECKED_JUST_NOW)).toBeVisible({ timeout: 60_000 });
+  expect(creates, "the sign-in launched nothing on its own").toHaveLength(1);
+  await dialog.getByRole("button", { name: NR_LAUNCH.LAUNCH, exact: true }).click();
+
+  // The second Launch lands on the Launched screen,
   // and its "View run" goes to the run page, advisories and all (#125), exactly
   // as a hand launch does (helpers.ts's launchAgentRun). NOT "Running" (walk-3):
   // the fake answers inference in seconds and the agent exits, so the run can be
@@ -1263,6 +1293,8 @@ test("L (launch door): Launch with a lapsed AWS sign-in opens the sign-in itself
   // signInThroughPane's capture poll — ever looks; the witness is the run ROW
   // and its trail below, never a state chip.
   await viewLaunchedRun(page);
+  expect(creates, "the second Launch is the only other create").toHaveLength(2);
+  expect(creates[1], "the second Launch sends the same draft").toContain(TASK);
   const runID = runIDFromURL(page);
   expect(page.url(), "the run page, not New Run or Getting started").not.toBe(urlBefore);
   expect(new URL(page.url()).pathname, "never the setup funnel").not.toMatch(/^\/setup/);
@@ -1292,8 +1324,8 @@ test("L (launch door): Launch with a lapsed AWS sign-in opens the sign-in itself
   expect(actions.filter((a) => a.startsWith("run.create:failure")), "never refused for its credential").toEqual([]);
 
   // The server agrees on both halves: the member is live again, and the run
-  // that launched is the ONE this click created (a second create would mean the
-  // door relaunched twice).
+  // that launched is the ONE the second Launch created (a second run would mean a
+  // Launch created twice).
   await expect.poll(async () => (await modelAccess(page)).state, { timeout: 120_000 }).toBe("live");
   const mine = (await page.evaluate(async () => {
     const r = await fetch("/api/v1/runs?limit=1000", { credentials: "include" });

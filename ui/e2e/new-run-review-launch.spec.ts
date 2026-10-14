@@ -212,6 +212,8 @@ test.describe("New Run, Launch: the Name dialog and the Launched screen", () => 
     await page.keyboard.press("Escape");
     await expect(page.getByTestId("harness-login-pane")).toHaveCount(0);
     await expect(page).toHaveURL(/step=review/);
+    // The Name dialog under the door is still open with what was typed, so Launch can be pressed again.
+    await expect(nameDialog(page).getByLabel(NR_LAUNCH.TITLE_LABEL)).toHaveValue("model access refusal");
   });
 
   test("a refusal that names no provider opens no sign-in", async ({ page }) => {
