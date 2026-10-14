@@ -165,9 +165,16 @@ const (
 // the person cannot make; outside it the access token still signs
 // requests, so `expiring` (not `live`) is what tells the person while there is
 // still time to act.
-func awsSSOCredentialState(blob awsSSOBlob, found, spent bool, now time.Time) string {
+//
+// refused (awsSSORefusedFor) grades an EXPIRED session dead even while it is
+// renewable: AWS refused its last renewal, so dispatch refuses it too and only
+// a sign-in repairs it.
+func awsSSOCredentialState(blob awsSSOBlob, found, spent, refused bool, now time.Time) string {
 	if !found {
 		return modelAccessNotConfigured
+	}
+	if refused && blob.expired(now) {
+		return modelAccessExpiredSignin
 	}
 	dead := modelAccessExpiredSignin
 	if spent {

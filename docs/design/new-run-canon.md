@@ -595,6 +595,7 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `SETUP_ADD` | mock | Add |
 | `SETUP_CHOOSE_PROVIDER(name)` | mock | Choose a model provider for {name} |
 | `SETUP_SIGN_IN_TO(provider)` | pending (W-38) | Sign in to {provider} |
+| `SETUP_SIGN_IN_AGAIN` | pending (W-54) | Sign in again |
 | `SIGN_IN_INTRO` | mock | You'll sign in with your own account in a new window. Wardyn keeps a refresh grant and issues the run a short-lived credential when it starts. The sandbox never sees your sign-in. |
 | `SIGN_IN_CONFIRM` | mock | Continue to sign in |
 | `SIGNED_IN` | mock | Signed in. The credential is issued when the run starts. |

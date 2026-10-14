@@ -166,6 +166,10 @@ func (s *Server) providerBedrockRefusal(ctx context.Context, p types.ModelProvid
 			return refuse(stateDenial(p.ID, mpBRRenewing, mpBRRemedyRetry))
 		}
 	}
+	// A session whose last renewal AWS refused reads the same at Review as at dispatch.
+	if detail, refused := s.awsSSORefusedFor(blob); refused && blob.expired(s.cfg.Now()) {
+		return refuse(connectDenial(p.ID, fmt.Sprintf(mpBRRefused, detail)))
+	}
 	if now := s.cfg.Now(); blob.expired(now) && (refresh || !blob.renewable(now)) {
 		return refuse(connectDenial(p.ID, mpBRNotSignedIn))
 	}

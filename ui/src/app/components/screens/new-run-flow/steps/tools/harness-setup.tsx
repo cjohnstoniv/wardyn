@@ -17,7 +17,6 @@ import { Button } from "../../../../ui/button";
 import { Label } from "../../../../ui/label";
 import { NR_TOOLS } from "../../../../wardyn/copy/new-run/tools";
 import { Chip } from "../../../../wardyn/primitives";
-import { CONNECTIONS } from "../../../../wardyn/copy/door";
 import { signsIn } from "../../../../../lib/model-access";
 import { useModelAccessDoor, useShellSetupStatus } from "../../../../wardyn/model-access-context";
 import type { RunIntent } from "../../draft/run-intent";
@@ -107,7 +106,7 @@ function ProviderPicker({ fact, access, harnessSet, intent, status, onSignedIn }
           className="w-fit"
           onClick={(e) => door.openDoor({ for: { provider: selected }, returnTo: e.currentTarget, onSignedIn: () => { announce(NR_TOOLS.SIGNED_IN); onSignedIn(); } })}
         >
-          {signedOut ? NR_TOOLS.SETUP_SIGN_IN_TO(name) : CONNECTIONS.SIGN_IN_AGAIN}
+          {signedOut ? NR_TOOLS.SETUP_SIGN_IN_TO(name) : NR_TOOLS.SETUP_SIGN_IN_AGAIN}
         </Button>
       )}
     </div>

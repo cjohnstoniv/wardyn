@@ -169,8 +169,8 @@ func TestAWSSSOErrorDescription_IsBoundedAndCarriesNoSecret(t *testing.T) {
 	if got := awsSSOErrorDescription("line\none\x1b[31m", blob); got != "line one [31m" {
 		t.Errorf("control characters kept: %q", got)
 	}
-	if got := awsSSOErrorDescription(strings.Repeat("é", 300), blob); len(got) > awsSSODescriptionMax+len("…") {
-		t.Errorf("description length %d, want at most %d", len(got), awsSSODescriptionMax+len("…"))
+	if got := awsSSOErrorDescription(strings.Repeat("é", 300), blob); len(got) > awsSSODescriptionMax {
+		t.Errorf("description length %d, want at most %d", len(got), awsSSODescriptionMax)
 	}
 }
 
@@ -208,4 +208,71 @@ func TestResolveAWSSSOInjection_RefusedRenewalIsAuditedRefused(t *testing.T) {
 		}
 	}
 	t.Fatal("no credential.reauth.request row")
+}
+
+// A refused, non-spent session must read the same everywhere: once its access
+// token has expired the readiness grade is expired_signin (the banner and the
+// Settings chip key on it), Review refuses with the same sign-in door dispatch
+// does, and a fresh sign-in, which carries a new refresh token, clears it.
+func TestAWSSSORefused_GradesSignedOutUntilASignIn(t *testing.T) {
+	s, audit, blob := ssoRefreshServer(t)
+	answer := map[string]any{"error": "invalid_request", "error_description": "Invalid request"}
+	fakeOIDC(t, func(w http.ResponseWriter, _ map[string]string, _ int) {
+		if answer["error"] != nil {
+			w.WriteHeader(http.StatusBadRequest)
+		}
+		_ = json.NewEncoder(w).Encode(answer)
+	})
+	ctx, p := context.Background(), awsSSOTestProvider()
+	want := connectDenial(p.ID, fmt.Sprintf(mpBRRefused, "invalid_request: Invalid request"))
+	grade := func() SetupProviderAccess {
+		var row SetupProviderAccess
+		s.gradeProviderBedrockSSO(ctx, &row, p, awsSSOTestOwner)
+		return row
+	}
+
+	if _, d, _ := s.providerBedrockRefusal(ctx, p, "claude-code", awsSSOTestOwner, true); d != want {
+		t.Fatalf("dispatch denial %+v, want %+v", d, want)
+	}
+	if row := grade(); row.State != modelAccessExpiredSignin || row.Action != modelAccessSignInAction {
+		t.Errorf("grade after a refusal = %q / %q, want expired_signin with the sign-in action", row.State, row.Action)
+	}
+	if _, d, _ := s.providerBedrockRefusal(ctx, p, "claude-code", awsSSOTestOwner, false); d != want {
+		t.Errorf("Review denial %+v, want the dispatch's %+v", d, want)
+	}
+	var data map[string]any
+	if rows := audit.find("harness.credential.refresh"); len(rows) != 1 || json.Unmarshal(rows[0].Data, &data) != nil || data["registration"] != "present" {
+		t.Errorf("refresh rows = %+v, want one carrying registration: present", rows)
+	}
+
+	fresh := blob
+	fresh.RefreshToken, fresh.ExpiresAt = "a-new-sign-ins-refresh-token", awsSSOTestFixedNow.Add(time.Hour)
+	storeSSOBlob(t, s, fresh)
+	if row := grade(); row.State != modelAccessLive {
+		t.Errorf("grade after a fresh sign-in = %q, want live", row.State)
+	}
+	if _, d, _ := s.providerBedrockRefusal(ctx, p, "claude-code", awsSSOTestOwner, false); d.msg != "" {
+		t.Errorf("Review after a fresh sign-in refused: %+v", d)
+	}
+
+	// A later renewal AWS accepts clears the mark on the same refresh token.
+	storeSSOBlob(t, s, blob)
+	answer = map[string]any{"accessToken": "renewed-access-token-abcdefghij", "expiresIn": 3600}
+	if _, d, _ := s.providerBedrockRefusal(ctx, p, "claude-code", awsSSOTestOwner, true); d.msg != "" {
+		t.Fatalf("renewal after AWS recovered refused: %+v", d)
+	}
+	if _, marked := s.awsSSORefusedFor(blob); marked {
+		t.Error("a successful renewal left the refused mark in place")
+	}
+}
+
+func TestAWSSSOBlobLastUsable_PairlessIsTheAccessTokensExpiry(t *testing.T) {
+	b := awsSSOBlob{RefreshToken: "rt", ExpiresAt: awsSSOTestFixedNow, RegistrationExpiresAt: awsSSOTestFixedNow.Add(90 * 24 * time.Hour)}
+	if got := b.lastUsable(); !got.Equal(b.ExpiresAt) {
+		t.Errorf("pair-less lastUsable = %v, want the access token's expiry %v", got, b.ExpiresAt)
+	}
+	b.ClientID, b.ClientSecret = "cid", "csec"
+	if got := b.lastUsable(); !got.Equal(b.RegistrationExpiresAt) {
+		t.Errorf("lastUsable with the pair = %v, want the registration's expiry", got)
+	}
 }

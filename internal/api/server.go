@@ -865,6 +865,11 @@ type Server struct {
 	// lifetime — bound it only if that ever stops being negligible.
 	ssoRefreshMu    sync.Mutex
 	ssoRefreshSpent map[string]bool
+	// ssoRefreshRefused is the non-spent counterpart (awssso_refused.go): the
+	// refresh tokens AWS last refused to renew with a re-auth code, to the code
+	// and description it answered, also under ssoRefreshMu.
+	// ponytail: process-local only; after a restart the next renewal re-refuses and re-marks.
+	ssoRefreshRefused map[string]string
 	// adoEntraTokens reuses a minted Azure DevOps access token across the
 	// per-host grants of one run (injection_ado.go), so a sidecar's boot does
 	// not rotate one person's refresh token once per host.
