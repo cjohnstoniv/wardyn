@@ -3184,8 +3184,8 @@ What the pack can and cannot show, and why every gap is closed toward refusal:
 - **The forge holding an object is not the repository vouching for it.**
   - A commit may name any object id as its parent, and GitHub serves every fork's objects through each repository in the network.
     - So a commit pushed only to a fork could otherwise vouch for its own content at a denied path.
-  - A parent counts only when GitHub's compare API reports it inside the current history of the default branch or of a branch the push updates.
-    - The forge resolves those names, so nothing the pack asserts is taken on trust.
+  - A parent counts only when GitHub's compare API reports it inside the current history of the default branch or a branch the push updates.
+    - An updated branch counts only at the forge's tip, which must equal the push's stated old value.
   - A merge passes an entry that matches any counted parent.
     - Demanding all would refuse merging the default branch in after it changed a denied path, and closes nothing a single-parent commit on the same base could not already do.
 - **History a push re-sends is taken out the same way.**
