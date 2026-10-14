@@ -744,8 +744,10 @@ wardyn run ssh <id> --json                                   # -> {"host","port"
   - a small, documented cap on concurrent SSH channels — `session` (shell/
     exec/sftp) AND `direct-tcpip` (`-L` forwards) draw from the SAME per-run
     counter. So one run cannot exhaust the daemon's own resources by opening
-    unbounded parallel shells OR unbounded forwards. The cap is eight live sessions per run on each
-    replica; a ninth is refused and audited as a `session.attach` failure.
+    unbounded parallel shells OR unbounded forwards;
+  - a separate bound on live terminal sessions: eight per run on each replica,
+    web terminals and SSH shells together. A ninth is refused and audited as a
+    `session.attach` failure.
 - **Idle auto-stop.** A shell, a running `exec`, an open sftp subsystem, and a
   held `-L` forward ALL reset the run's idle clock when they open and every 30
   seconds while they are open.
