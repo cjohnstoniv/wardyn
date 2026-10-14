@@ -66,6 +66,7 @@
 # docs/OPERATIONS.md 53840 adds 64 over 53776 (0.9 DS4-M6, after merging lane/090-DS4-M5); measured at merge.
 # docs/OPERATIONS.md 53883 adds 43 over 53840 (0.9 DS4-M6, after merging lane/090-DS4-M5); measured at merge.
 # docs/OPERATIONS.md 53884 adds 1 over 53883 (0.9 DS4-M6: the retired pool words); measured at merge.
+# docs/OPERATIONS.md 54108 adds 224 over 53884 (0.9 DS4-M6, after merging lane/090-DS4-M5); measured at merge.
 # docs/OPERATIONS.md 53883 adds 43 over 53840 (0.9 E6b-pdc, after merging lane/090-DS4-M8); measured at merge.
 # docs/OPERATIONS.md 54108 adds 224 over 53884 (0.9 E6b-pdc, after merging lane/090-DS4-M8); measured at merge.
 docs/OPERATIONS.md=54108

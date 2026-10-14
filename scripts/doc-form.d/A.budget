@@ -129,6 +129,7 @@
 # docs/AUDIT-ACTIONS.md 46111 adds 169 over 45942 (0.9 DS4-M5, after merging lane/090-RS-12); measured at merge.
 # docs/AUDIT-ACTIONS.md 45694 adds 93 over 45601 (0.9 member drives, erasure): the member_drives scope and the purge's drive fields; measured after merging DS4-M5 into DS4-M6.
 # docs/AUDIT-ACTIONS.md 45895 adds 93 over 45802 (0.9 DS4-M6, after merging lane/090-DS4-M5); measured at merge.
+# docs/AUDIT-ACTIONS.md 46204 adds 93 over 46111 (0.9 DS4-M6, after merging lane/090-DS4-M5); measured at merge.
 # docs/AUDIT-ACTIONS.md 45802 measured after merging the Files-step seam lane (RP-3 and RP-4 runner words) into E6b-pdc over the member drives chain's 45601.
 # docs/AUDIT-ACTIONS.md 46204 adds 93 over 46111 (0.9 E6b-pdc, after merging lane/090-DS4-M8); measured at merge.
 docs/AUDIT-ACTIONS.md=46204 share=8
