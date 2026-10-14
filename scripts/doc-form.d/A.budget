@@ -107,7 +107,8 @@
 # docs/AUDIT-ACTIONS.md 45702 measured at merge: the run.create row names the failed-stop fields.
 # docs/AUDIT-ACTIONS.md 45800 adds 98 (FR-0150: the rate bound on unattributed SSH and ticket refusal rows).
 # docs/AUDIT-ACTIONS.md 45807 adds 7 (the per-key bound on SSH refusal rows that name a registered key).
-docs/AUDIT-ACTIONS.md=45807 share=8
+# docs/AUDIT-ACTIONS.md 45838 adds 31 (the refused session.attach row at the per-run session cap).
+docs/AUDIT-ACTIONS.md=45838 share=8
 # docs/AUDIT-ACTIONS.md 39938 adds 1 (0.9 H7): the `placement_component_self_defined` reason in the authz.denied vocabulary.
 # 0.9 H10 r1: docs/AUDIT-ACTIONS.md 40113 adds 65 over 40048 for the token-revoke join, the off semantics and the pending connect/disconnect rows.
 # 0.9 H10: docs/AUDIT-ACTIONS.md 40048 adds 111 over 39937 for runner.token.revoke, runners.enabled.set, runner.connect and runner.disconnect.
