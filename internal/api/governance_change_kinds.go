@@ -137,7 +137,7 @@ func (s *Server) profileWriteExempt(ctx context.Context, all []types.GovernanceP
 // rename actually reorders the pair: the database's collation decides that order, not Go's. A list
 // that cannot be read answers true, so the write is held.
 func (s *Server) renameMaySelect(ctx context.Context, id uuid.UUID) bool {
-	all, err := s.cfg.Store.ListGovernanceAssignments(ctx)
+	all, err := governanceAssignmentsFor(ctx, s)
 	if err != nil {
 		return true
 	}
@@ -638,4 +638,29 @@ func (s *Server) checkUserTypeSubject(ctx context.Context, q store.Querier, subj
 		return writeRefusal(http.StatusBadRequest, reasonAccessUnknownUserType, "%s", accessUnknownUserType(subject))
 	}
 	return err
+}
+
+// assignmentsSnapshotKey carries the governance assignments a profile write read before its
+// transaction opened. The write runs its exemption proof inside that transaction, so reading the
+// assignments there would take a second pool connection while the write holds one.
+type assignmentsSnapshotKey struct{}
+
+type assignmentsSnapshot struct {
+	all []types.GovernanceAssignment
+	err error
+}
+
+// withGovernanceAssignments reads the assignments once, outside any transaction, for a later
+// renameMaySelect on the returned context. A read error is carried too, so the rename is held.
+func (s *Server) withGovernanceAssignments(ctx context.Context) context.Context {
+	all, err := s.cfg.Store.ListGovernanceAssignments(ctx)
+	return context.WithValue(ctx, assignmentsSnapshotKey{}, assignmentsSnapshot{all: all, err: err})
+}
+
+// governanceAssignmentsFor is the snapshot withGovernanceAssignments took, or a fresh read.
+func governanceAssignmentsFor(ctx context.Context, s *Server) ([]types.GovernanceAssignment, error) {
+	if snap, ok := ctx.Value(assignmentsSnapshotKey{}).(assignmentsSnapshot); ok {
+		return snap.all, snap.err
+	}
+	return s.cfg.Store.ListGovernanceAssignments(ctx)
 }

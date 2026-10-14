@@ -241,11 +241,15 @@ func (s *Server) writeGovernanceProfile(w http.ResponseWriter, r *http.Request, 
 	var effective *ResolvedProfile
 	var held *heldProfileWrite
 	createdBy := principalFromRequest(r)
+	exemptCtx := r.Context()
+	if mode == govQueue {
+		exemptCtx = s.withGovernanceAssignments(exemptCtx) // read before the write's transaction holds a connection
+	}
 	saved, err := s.cfg.Store.WriteGovernanceProfile(r.Context(), id,
 		func(all []types.GovernanceProfile) (types.GovernanceProfile, error) {
 			p, res, err := s.buildGovernanceProfile(createdBy, id, req, all)
 			effective = res
-			if err == nil && mode == govQueue && !s.profileWriteExempt(r.Context(), all, p, res) {
+			if err == nil && mode == govQueue && !s.profileWriteExempt(exemptCtx, all, p, res) {
 				held = &heldProfileWrite{all: all, row: p, res: res}
 				return p, errHoldForApproval
 			}
