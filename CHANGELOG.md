@@ -1091,7 +1091,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   replica, and a session's slot is held until its recording is saved. A ninth is refused with
   `attach_session_cap_reached` and audited.
 - Interactive attach: a database stall longer than the attach lease no longer evicts a live terminal writer. If
-  nobody else took the lapsed lease, the writer takes it back and keeps typing, with input held until the lease is
+  nobody else took the lapsed lease, the writer takes it back and keeps typing, with input discarded until the lease is
   proven; only another live holder or a take-over ends it. A newly attached or promoted writer is no longer evicted
   by a renewal that lands before it has taken its lease.
 - The Azure CLI sign-in's resolve door no longer hands a run its bearer token when the token could not be recorded
