@@ -6,6 +6,7 @@ package remote
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"maps"
 	"slices"
 	"time"
@@ -78,5 +79,11 @@ func (h *Hub) endWithControl(ctx context.Context, id uuid.UUID, kind runnerwire.
 	if err != nil {
 		return err
 	}
-	return s.peer.Send(ctx, runnerwire.Frame{Type: kind, Payload: payload})
+	// Best effort: the session is suspended and the deferred Close ends the link either way. A peer
+	// inside the resume window may be dead, so its Send can fail with DeadlineExceeded, net.ErrClosed or
+	// ErrRunnerOffline, and none of those leaves the runner any less revoked.
+	if err := s.peer.Send(ctx, runnerwire.Frame{Type: kind, Payload: payload}); err != nil {
+		slog.DebugContext(ctx, "runner control frame not delivered", slog.String("runner", id.String()), slog.String("reason", reason), slog.Any("err", err))
+	}
+	return nil
 }

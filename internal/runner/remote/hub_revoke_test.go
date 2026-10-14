@@ -178,7 +178,11 @@ func TestHubRevokeEndsASessionWithAStalledWrite(t *testing.T) {
 	revoked := make(chan error, 1)
 	go func() { revoked <- hub.Revoke(ctx, row.ID) }()
 	select {
-	case <-revoked:
+	case err := <-revoked:
+		// The control frame is best effort: the stalled write times out, and the revoke still succeeds.
+		if err != nil {
+			t.Fatalf("Revoke over a stalled write = %v, want nil", err)
+		}
 	case <-time.After(3 * time.Second):
 		_ = sc.Close() // unblock the stalled write so the test can end
 		t.Fatal("Revoke waited behind a stalled write past its one-second bound")
