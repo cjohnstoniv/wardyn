@@ -118,7 +118,7 @@ func prepareDocker(ctx context.Context, network string, explicit netip.Addr) (ne
 	defer cli.Close()
 	info, err := cli.Info(ctx, client.InfoOptions{})
 	if err != nil {
-		return netip.Addr{}, fmt.Errorf("docker engine not reachable: %w", err)
+		return netip.Addr{}, fmt.Errorf("docker engine not reachable (set DOCKER_HOST to the engine's socket if it is not the default): %w", err)
 	}
 	addr, err := relayAddress(ctx, cli, info.Info.OperatingSystem == "Docker Desktop", explicit)
 	if err != nil {
@@ -182,7 +182,7 @@ func dockerHostGateway(ctx context.Context, cli *client.Client) (netip.Addr, []n
 	}
 	iface, err := net.InterfaceByName(insp.Network.Options["com.docker.network.bridge.name"])
 	if err != nil {
-		return netip.Addr{}, nil, fmt.Errorf("relay: the Docker bridge interface: %w", err)
+		return netip.Addr{}, nil, fmt.Errorf("relay: the Docker bridge interface: %w (this engine has no host-side bridge and is not Docker Desktop; such VM engines are not supported)", err)
 	}
 	addrs, err := iface.Addrs()
 	if err != nil {
