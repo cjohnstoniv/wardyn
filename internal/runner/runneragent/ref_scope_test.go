@@ -5,13 +5,18 @@ package runneragent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/placement"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/runner/remote"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire/runnertest"
 )
@@ -90,6 +95,58 @@ func TestDispatcherRefVerbsReachOnlyThisRunnersSandboxes(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// goneEngine proves a ref as the docker driver does once nothing on the engine
+// answers to it: a name the engine gives a sandbox proves, any other does not.
+type goneEngine struct{ *runnertest.Fake }
+
+func (goneEngine) ProveRunnerSandbox(_ context.Context, ref, _ string) error {
+	id, ok := strings.CutPrefix(ref, "fake-")
+	if _, err := uuid.Parse(id); !ok || err != nil {
+		return fmt.Errorf("%q is not a sandbox name: %w", ref, runner.ErrNotRunnerSandbox)
+	}
+	return nil
+}
+
+// TestRemoteKillOfAMissingSandboxAnswersNil is the conformance suite's
+// KillMissingRef on the registered-runner path, without an engine. The org's
+// kill of a sandbox this runner could have created and no longer has reaches
+// the substrate and answers nil; a name the runner cannot prove comes back to
+// the org as a refusal, never as a success that stopped nothing.
+func TestRemoteKillOfAMissingSandboxAnswersNil(t *testing.T) {
+	runnerID := uuid.NewString()
+	fake := runnertest.NewFake()
+	d, err := newTestDispatcher(Config{RunnerID: runnerID, Substrate: goneEngine{fake},
+		HoldsSandbox: func(string) bool { return false },
+		BeforeCreate: func(context.Context, runner.SandboxSpec) error { return nil },
+		Created:      func(context.Context, runner.SandboxSpec, string) error { return nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	link := &remote.Link{}
+	org := remote.New(runnerID, link, remote.Options{})
+	orgEnd, runEnd := runnerwire.Loopback()
+	op := link.Attach(t.Context(), orgEnd)
+	var rp *runnerwire.Peer
+	rp = runnerwire.NewPeer(runEnd, runnerwire.PeerConfig{OnCall: func(ctx context.Context, call uint32, method string, raw json.RawMessage) (any, error) {
+		return d.Call(ctx, rp, call, method, raw)
+	}})
+	go rp.Run(t.Context())
+	t.Cleanup(func() { rp.Close(); op.Close() })
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+
+	gone := "fake-" + uuid.NewString()
+	if err := org.KillSandbox(ctx, placement.RunnerRefPrefix(runnerID)+gone); err != nil || !fake.Called("kill", gone) {
+		t.Fatalf("kill of a missing sandbox = %v, reached the engine = %v; want nil (idempotent)", err, fake.Called("kill", gone))
+	}
+	err = org.KillSandbox(ctx, placement.RunnerRefPrefix(runnerID)+"my-postgres")
+	var refusal *runnerwire.Error
+	if !errors.As(err, &refusal) || refusal.Code != runnerwire.CodeRefused || len(fake.Calls) != 1 {
+		t.Fatalf("kill of a name this runner cannot prove = %v, engine calls %v; want a refusal that touches nothing", err, fake.Calls)
 	}
 }
 
