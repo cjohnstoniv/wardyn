@@ -194,7 +194,9 @@ func TestHubInactiveOwnerEndsTheSessionUntilReactivated(t *testing.T) {
 	storedRowRecheck = 20 * time.Millisecond
 	t.Cleanup(func() { storedRowRecheck = recheck })
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
+	// Every Serve has returned before the cleanup restores storedRowRecheck, which Serve reads.
+	var serving sync.WaitGroup
+	defer func() { cancel(); serving.Wait() }()
 	pub, key, _ := ed25519.GenerateKey(rand.Reader)
 	row := types.Runner{ID: uuid.New(), PublicKey: pub, State: types.RunnerClaimed, OrgURLSHA256: federation.OrgURLSHA256("https://org.example")}
 	link := &Link{}
@@ -220,7 +222,7 @@ func TestHubInactiveOwnerEndsTheSessionUntilReactivated(t *testing.T) {
 			Hooks: sessionHooks(online, make(chan bool, 1)),
 			Dial: func(context.Context) (runnerwire.Conn, error) {
 				org, run := runnerwire.Loopback()
-				go func() { _ = hub.Serve(ctx, org, row.ID) }()
+				serving.Go(func() { _ = hub.Serve(ctx, org, row.ID) })
 				return run, nil
 			},
 		})
