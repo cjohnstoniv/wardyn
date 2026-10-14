@@ -33,11 +33,14 @@ type leaseCovLeases struct {
 	releases []uuid.UUID
 	reserves []leaseCovReserve
 	holds    int
+	reacqs   []store.AttachLease
 
 	// beforeAcquire runs, with no lock held, ahead of each AcquireAttachLease is evaluated.
 	beforeAcquire func()
 	// renewed gets a value each time RenewAttachLease is called, when set.
 	renewed chan struct{}
+	// beforeReacquire runs, with no lock held, ahead of each ReacquireAttachLease is evaluated.
+	beforeReacquire func()
 }
 
 type leaseCovAcquire struct {
@@ -140,6 +143,37 @@ func (l *leaseCovLeases) AcquireAttachLease(_ context.Context, lease store.Attac
 		free := !cur.ExpiresAt.After(l.now) || cur.HolderID == from || cur.HolderID == lease.HolderID ||
 			(cur.Source == attachLeaseReservedSource && cur.Principal == lease.Principal)
 		if !free {
+			return false, nil
+		}
+		lease.Epoch = cur.Epoch + 1
+	}
+	lease.ExpiresAt = l.now.Add(ttl)
+	l.rows[lease.RunID] = lease
+	return true, nil
+}
+
+func (l *leaseCovLeases) reacquireCalls() []store.AttachLease {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return append([]store.AttachLease(nil), l.reacqs...)
+}
+
+func (l *leaseCovLeases) ReacquireAttachLease(_ context.Context, lease store.AttachLease, ttl time.Duration) (bool, error) {
+	l.mu.Lock()
+	l.reacqs = append(l.reacqs, lease)
+	hook := l.beforeReacquire
+	l.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if err := l.errs["reacquire"]; err != nil {
+		return false, err
+	}
+	cur, held := l.rows[lease.RunID]
+	if held {
+		if cur.ExpiresAt.After(l.now) && cur.HolderID != lease.HolderID {
 			return false, nil
 		}
 		lease.Epoch = cur.Epoch + 1

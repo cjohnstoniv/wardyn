@@ -192,6 +192,8 @@ func TestAttachWS_TicketDenialsAreAudited(t *testing.T) {
 	h := newHarness(t)
 	cfg := baseTestConfig(h, ast)
 	cfg.Runner = &fakeRunner{}
+	frozen := time.Now()
+	cfg.Now = func() time.Time { return frozen }
 	srv := New(cfg)
 
 	run := uuid.New()
@@ -223,6 +225,21 @@ func TestAttachWS_TicketDenialsAreAudited(t *testing.T) {
 	if got[0].RunID == nil || *got[0].RunID != run {
 		t.Errorf("denial not attributed to the run being probed: %v", got[0].RunID)
 	}
+	// Past the burst the rows stop and the drops are counted instead: a caller holding no credential
+	// cannot make the trail grow with its request rate. (The clock is frozen, so nothing refills.)
+	const probes = 20
+	for range probes - 1 {
+		do(t, srv, http.MethodGet, "/api/v1/runs/"+run.String()+"/attach?ticket=deadbeef", "", "")
+	}
+	if got := denials(); len(got) != int(authFailedBurst) {
+		t.Errorf("%d invalid tickets wrote %d session.attach failures, want the burst of %d", probes, len(got), int(authFailedBurst))
+	}
+	srv.metrics.mu.Lock()
+	suppressed := srv.metrics.authFailedSuppressed
+	srv.metrics.mu.Unlock()
+	if want := int64(probes - int(authFailedBurst)); suppressed != want {
+		t.Errorf("wardyn_auth_failed_suppressed_total = %d, want %d", suppressed, want)
+	}
 
 	// (2) a ticket that resolves but does not authorize this run.
 	tok, err := mintAttachTicket(context.Background(), ast, run, types.ActorHuman, "mallory", oidc.RoleUser, oidc.Issue{At: time.Now()})
@@ -232,15 +249,17 @@ func TestAttachWS_TicketDenialsAreAudited(t *testing.T) {
 	if w := do(t, srv, http.MethodGet, "/api/v1/runs/"+run.String()+"/attach?ticket="+tok, "", ""); w.Code != http.StatusForbidden {
 		t.Fatalf("non-owner ticket: code = %d, want 403", w.Code)
 	}
+	// A ticket that proved a principal is the lane's own refusal, audited past the burst.
 	got = denials()
-	if len(got) != 2 {
-		t.Fatalf("the ticket-role refusal produced %d session.attach failures total, want 2", len(got))
+	if len(got) != int(authFailedBurst)+1 {
+		t.Fatalf("the ticket-role refusal produced %d session.attach failures total, want %d", len(got), int(authFailedBurst)+1)
 	}
-	if got[1].Actor != "mallory" {
-		t.Errorf("actor = %q, want mallory: this ticket DID prove a principal", got[1].Actor)
+	last := got[len(got)-1]
+	if last.Actor != "mallory" {
+		t.Errorf("actor = %q, want mallory: this ticket DID prove a principal", last.Actor)
 	}
-	if !strings.Contains(string(got[1].Data), "does not authorize this run") {
-		t.Errorf("denial data = %s, want the refusal reason", got[1].Data)
+	if !strings.Contains(string(last.Data), "does not authorize this run") {
+		t.Errorf("denial data = %s, want the refusal reason", last.Data)
 	}
 }
 

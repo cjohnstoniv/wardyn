@@ -60,6 +60,9 @@ type RunPauser interface {
 	// caller's read and this write win: false means leave the run running.
 	MarkRunPaused(ctx context.Context, id uuid.UUID, reason types.PauseReason, activeAt *time.Time) (bool, error)
 	// ClearRunPaused clears run id's pause, and reports whether it was paused.
+	// Clearing one restarts the run's presence clock in the same write: a
+	// resume is the newest thing that happened to the run, so the sweep counts
+	// its quiet period from there and not from the stamp the pause was judged on.
 	ClearRunPaused(ctx context.Context, id uuid.UUID) (bool, error)
 	// RunHasOpenRequest reports whether run id has a PENDING request inside
 	// its wait.
@@ -201,7 +204,7 @@ func (s PG) MarkRunPaused(ctx context.Context, id uuid.UUID, reason types.PauseR
 // ClearRunPaused — see RunPauser.
 func (s PG) ClearRunPaused(ctx context.Context, id uuid.UUID) (bool, error) {
 	tag, err := s.Pool.Exec(ctx, `
-		UPDATE agent_runs SET paused_at=NULL, paused_reason=''
+		UPDATE agent_runs SET paused_at=NULL, paused_reason='', active_at=now()
 		WHERE id=$1 AND paused_at IS NOT NULL`, id)
 	if err != nil {
 		return false, fmt.Errorf("store: clear run paused: %w", err)

@@ -44,6 +44,8 @@ func TestSameOrigin(t *testing.T) {
 		{"http on the https port is not https", "https://v.vault.azure.net", "http://v.vault.azure.net:443/secrets", false},
 		{"https on the http port is not http", "http://localhost", "https://localhost:80/secrets", false},
 		{"userinfo", "https://v.vault.azure.net", "https://u:p@v.vault.azure.net/secrets", false},
+		{"a Kelvin sign is not a k", "https://kvs.vault.azure.net", "https://\u212avs.vault.azure.net/secrets", false},
+		{"a long s is not an s", "https://kvs.vault.azure.net", "https://kv\u017f.vault.azure.net/secrets", false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			if got := sameOrigin(mustURL(t, c.base), mustURL(t, c.link)); got != c.want {

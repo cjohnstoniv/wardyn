@@ -2849,6 +2849,7 @@ The line is the substrate's own words, in the shape `<component>: <Reason>[: <me
 | unschedulable: `STARTING` with the reason `Unschedulable` | yes, and listed under `unschedulable` (at most 20, oldest first, with `unschedulable_total`) |
 | kept after an outage, before its end (its agent still runs; only its proxy was stopped) | yes, its agent only (no proxy); also counted as `kept` |
 | kept otherwise: after its end, a reboot, or an outage past its end (`lost_at` set, agent stopped) | no; counted as `kept` |
+| bound to a registered runner | no; appears only in `states`, `kept` and `paused` |
 | `PENDING` | no; appears only in `states` |
 | terminal | no |
 

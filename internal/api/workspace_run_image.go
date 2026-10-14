@@ -209,6 +209,10 @@ func (s *Server) resolveWorkspaceImageWith(ctx context.Context, runID uuid.UUID,
 	fail := imageResolveResult{}
 	reasonFor := func(key string) string { return opts.reason(primary, key) }
 	buildAudit := func(outcome string, extra map[string]any) {
+		// Bounded, and not on ctx: a build's row is written even when a kill of its run, or the
+		// build's deadline, has ended the context the build ran on.
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), killCascadeTimeout)
+		defer cancel()
 		extra["workspace_id"] = primary.ID.String()
 		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.build",
 			runID.String(), outcome, mustJSON(extra)))
@@ -455,18 +459,28 @@ func repoOwnDevcontainerURL(ws types.Workspace, p workspacescan.WorkspaceProfile
 
 // workspaceRunImage is the image a verify/record run executes in: the
 // workspace's BUILT devcontainer image (built now if needed), falling back to
-// the convention agent image when no builder is configured.
-func (s *Server) workspaceRunImage(ctx context.Context, runID uuid.UUID, ws types.Workspace) string {
+// the convention agent image when no builder is configured. Its error is a run
+// that could not be read before the build (errRunUnreadBeforeBuild): the caller
+// aborts the launch, so the run is failed rather than dispatched on a
+// substituted image.
+func (s *Server) workspaceRunImage(ctx context.Context, runID uuid.UUID, ws types.Workspace) (string, error) {
 	// Bound the build the same way the other three
 	// doors do (runs_create.go) — the record/verify launch callers detach
 	// from request cancellation before reaching here (context.WithoutCancel),
 	// so without its OWN deadline this build could run indefinitely, holding
 	// the workspace's serial import-step claim well past the reaper's grace
 	// (undispatchedGrace = 2*imageBuildTimeout).
-	buildCtx, cancel := context.WithTimeout(ctx, imageBuildTimeout)
-	defer cancel()
-	if built, ok := s.resolveWorkspaceImage(buildCtx, runID, ws, nil, s.announceImageBuild(ctx, runID)); ok {
-		return built
+	// A kill of the run stops the build too (trackRunBuild); a run already terminal builds nothing.
+	buildCtx, endBuild, live, err := s.trackRunBuild(ctx, runID)
+	defer endBuild()
+	if err != nil {
+		return "", err
 	}
-	return agentImage("claude-code", s.cfg.AgentImages)
+	if !live {
+		return agentImage("claude-code", s.cfg.AgentImages), nil
+	}
+	if built, ok := s.resolveWorkspaceImage(buildCtx, runID, ws, nil, s.announceImageBuild(ctx, runID)); ok {
+		return built, nil
+	}
+	return agentImage("claude-code", s.cfg.AgentImages), nil
 }

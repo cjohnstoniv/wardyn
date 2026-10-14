@@ -214,6 +214,7 @@ const (
 	reasonRunInspectTerminal              = "run_inspect_terminal"                // the run has finished; its sandbox is gone
 	reasonRunInspectNoSandbox             = "run_inspect_no_sandbox"              // the run never dispatched (or recorded no sandbox ref)
 	reasonRunInspectPaused                = "run_inspect_paused"                  // the run is paused
+	reasonRunInspectAgentStopped          = "run_inspect_agent_stopped"           // the run is kept with its agent stopped; there is no running sandbox to read
 	reasonRunInspectExecStreamUnsupported = "run_inspect_exec_stream_unsupported" // the runner does not support exec streaming
 	reasonRunResourcesReadFailed          = "run_resources_read_failed"           // the sandbox resource usage script failed
 	reasonRunFilesNoExecSession           = "run_files_no_exec_session"           // the runner returned no exec session
@@ -505,14 +506,15 @@ const (
 
 // POST /runs/{id}/attach (attach.go): the interactive WebSocket door.
 const (
-	reasonAttachNoRunner         = "attach_no_runner"           // this deployment configures no runner
-	reasonAttachTicketNotYourRun = "attach_ticket_not_your_run" // the ticket's stamped principal is not this run's owner
-	reasonAttachNotRunning       = "attach_not_running"         // the run is not in the RUNNING state
-	reasonAttachRunKept          = "attach_run_kept"            // the run is kept (ended/lost); its agent is stopped
-	reasonAttachNoSandbox        = "attach_no_sandbox"          // the run has no sandbox ref
-	reasonAttachResumeFailed     = "attach_resume_failed"       // thawing a paused run for the attach failed
-	reasonAttachTicketMintFailed = "attach_ticket_mint_failed"  // mintAttachTicket failed
-	reasonAttachTakeoverNoHolder = "attach_takeover_no_holder"  // nobody is currently attached to this run
+	reasonAttachNoRunner          = "attach_no_runner"           // this deployment configures no runner
+	reasonAttachTicketNotYourRun  = "attach_ticket_not_your_run" // the ticket's stamped principal is not this run's owner
+	reasonAttachNotRunning        = "attach_not_running"         // the run is not in the RUNNING state
+	reasonAttachRunKept           = "attach_run_kept"            // the run is kept (ended/lost); its agent is stopped
+	reasonAttachNoSandbox         = "attach_no_sandbox"          // the run has no sandbox ref
+	reasonAttachResumeFailed      = "attach_resume_failed"       // thawing a paused run for the attach failed
+	reasonAttachTicketMintFailed  = "attach_ticket_mint_failed"  // mintAttachTicket failed
+	reasonAttachTakeoverNoHolder  = "attach_takeover_no_holder"  // nobody is currently attached to this run
+	reasonAttachSessionCapReached = "attach_session_cap_reached" // this run already has the maximum number of live terminal sessions on this replica
 )
 
 // /api/v1/admin/presets (presets.go): validatePresetRequest's whole check is

@@ -207,7 +207,7 @@ func (s *Server) stepRequirements(f *runFold, rec *foldRecorder) bool {
 	// One workspace at a time, so each one's additions are its own.
 	for _, ws := range f.wsRefs {
 		before := f.spec.Clone()
-		f.reqEvents = append(f.reqEvents, s.applyWorkspaceRequirementsFor(ctx, f.present, &f.spec, f.req.Agent, []types.Workspace{ws}, selections)...)
+		f.reqEvents = append(f.reqEvents, s.applyWorkspaceRequirementsFor(ctx, f.present, &f.spec, f.req.Agent, []types.Workspace{ws}, f.seed.attached, selections)...)
 		recordRequirementFold(rec, before, f.spec, ws, selections[ws.ID.String()])
 	}
 	return true
@@ -484,7 +484,7 @@ func (s *Server) stepADOStanding(f *runFold, rec *foldRecorder) bool {
 // doors, the same reasons and sentences, so a narrowing the run could not
 // enforce shows before the click. Create meets them at dispatch.
 func (s *Server) stepPATNarrowing(f *runFold, rec *foldRecorder) bool {
-	if reason, detail := s.patNarrowingAtDoor(f.r, f.spec, f.scmSite); reason != "" {
+	if reason, detail := s.patNarrowingAtDoor(f.r, *f.req, f.spec, f.scmSite); reason != "" {
 		writeErrorReason(f.w, http.StatusUnprocessableEntity, reason, detail)
 		return false
 	}

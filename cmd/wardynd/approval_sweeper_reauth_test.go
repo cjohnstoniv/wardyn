@@ -58,6 +58,24 @@ func (s *sweepStore) ListApprovals(_ context.Context, state types.ApprovalState)
 	return out, nil
 }
 
+func (s *sweepStore) ListPendingApprovalsForRuns(_ context.Context, runIDs []uuid.UUID) ([]types.ApprovalRequest, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := []types.ApprovalRequest{}
+	for _, r := range s.rows {
+		if r.State != types.ApprovalPending {
+			continue
+		}
+		for _, id := range runIDs {
+			if r.RunID == id {
+				out = append(out, r)
+				break
+			}
+		}
+	}
+	return out, nil
+}
+
 func (s *sweepStore) DecideApproval(_ context.Context, id uuid.UUID, d types.ApprovalDecision) (types.ApprovalRequest, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
