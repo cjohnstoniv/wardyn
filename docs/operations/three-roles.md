@@ -183,7 +183,8 @@ Stated honestly: profiles narrow by omission — a profile that omits secret gra
 - A member's long-lived API token keeps the group snapshot it was minted with until re-minted.
 - Sandbox size is the exception.
   - A profile that omits `resources`, or leaves one of its fields at zero, inherits the deployment's size for that field (the default policy's `resources`, else `WARDYN_SANDBOX_DEFAULT_CPU_MILLIS` / `WARDYN_SANDBOX_DEFAULT_MEMORY_MIB`), so omission never grows a sandbox.
-  - A profile that sets a size keeps it, and the profile's `limits.max_cpu_millis` and `limits.max_memory_mib` (0 is unlimited, negatives refused) cap CPU and memory for its assigned members at create, preflight and dispatch; operators are exempt.
+  - A profile that sets a size keeps it. Its `limits.max_cpu_millis` and `limits.max_memory_mib` (0 is unlimited, negatives refused) lower that size for its assigned members at create, preflight and dispatch, but since 0.9 never below the size an untouched run gets (`MemberCap`). Operators are exempt.
+  - So a maximum below the deployment's default no longer shrinks a member's sandbox. To bound members below it, set a smaller size in the profile or lower the deployment's default.
 - **Limits that reach a running run (0.8.2, #1391, #1392).**
   - Two limits bind past create, keyed on the profile the run was created under as it stands now, so a limit set later reaches runs already going (a deleted profile binds nothing).
   - `deny_interactive` also refuses a terminal attach (`wardyn run attach` and the console terminal) and every SSH-gateway connection into any run under the profile, exec runs and the run's owner included.

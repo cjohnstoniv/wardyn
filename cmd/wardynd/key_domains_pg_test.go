@@ -203,7 +203,7 @@ func TestKeyDomains_BootRefusals(t *testing.T) {
 	_, err = r.boot(t, onlyB)
 	if err == nil || !strings.Contains(err.Error(), "refusing to start") ||
 		!strings.Contains(err.Error(), `2 live principal keys name key domain "a", which WARDYN_KEY_DOMAINS_FILE does not declare`) ||
-		!strings.Contains(err.Error(), "erase or destroy") || !strings.Contains(err.Error(), "DELETE /api/v1/people/{principal}/credentials") ||
+		!strings.Contains(err.Error(), "Keep the domain declared") || !strings.Contains(err.Error(), "DELETE /api/v1/people/{principal}/credentials") ||
 		!strings.Contains(err.Error(), "Never delete the rows") {
 		t.Fatalf("boot with domain a removed = %v; want the live-row count and the remedy", err)
 	}

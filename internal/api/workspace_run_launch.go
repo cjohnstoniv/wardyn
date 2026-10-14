@@ -639,7 +639,10 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 
 	// Record in the built devcontainer image so the task actually runs (its
 	// toolchain isn't in the convention agent image) — same lane as verify.
-	image := s.workspaceRunImage(ctx, runID, ws)
+	image, ierr := s.workspaceRunImage(ctx, runID, ws)
+	if ierr != nil {
+		return types.AgentRun{}, false, abort(ierr)
+	}
 
 	// The chosen model provider's host joins at dispatch, like any run's; it is
 	// part of the harness the operator configured, not per-workspace app egress

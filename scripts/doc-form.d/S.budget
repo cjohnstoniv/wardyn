@@ -92,12 +92,19 @@
 # docs/sdk.md 16987 measured after RP-1: organization and user pools, remote-hosted runners.
 # docs/sdk.md 16942 adds 120 over 16822 (G-090-cleanup slice F, docs rows that contradict the code): measured; the lead re-measures at merge.
 # docs/sdk.md 17107 measured after G-090-cleanup slice F: docs rows that contradicted the code.
+# docs/sdk.md 17151 adds 44 over 17107: 0.9 final docs pass, measured: the error field on an Azure provider refusal, the component cause and the interactive default end.
 # docs/sdk.md 17230 adds 123 over 17107 (the Azure CLI component): measured at merge.
 # docs/sdk.md 17189 adds 82 over 17107 (0.9 RP-3): runner_limits_invalid/required/unset and the runner_at_capacity row (revive, and a launch that loses the last room).
 # docs/sdk.md 17317 measured at merge: the Azure CLI component and runner limits together.
 # docs/sdk.md 17317 measured after merging the runner limits lane (17189 alone: runner_limits_invalid/required/unset and the runner_at_capacity row) with the Azure CLI component (17230 alone); their common base measures 17102, so the two add 87 and 128.
 # docs/sdk.md 17317 measured after merging the runner limits lane (above) over the Azure CLI component's 17230.
-docs/sdk.md=17317 share=21
+# docs/sdk.md 17364 measured at merge: the final docs pass over the runner limits, pool words and Azure CLI lanes.
+# docs/sdk.md 17366 adds 2 over 17364: the revive_ceiling_denies_azure_cli reason in the revive row, measured.
+# docs/sdk.md 17380 adds 16 (0.9 R1-0082): the same DELETE refusal in the key_domain_ambiguous_membership row.
+# docs/sdk.md 17382 measured at merge: secrets merge: the key-domain delete refusal row beside the revive reason.
+# docs/sdk.md 17384 measured at merge: train 62 merge of lane/090-W2-reads.
+# docs/sdk.md 17386 measured at merge: train 65: the attach_session_cap_reached reason row.
+docs/sdk.md=17386 share=21
 # Runner admission adds 10 measured words for the two default-off/config-read refusal reasons.
 # Registration adds 65 measured words for five request/setup reasons and two shared placement refusals.
 # Combined runner registration, baseline and identity changes: measured docs/sdk.md 12463 prose words.

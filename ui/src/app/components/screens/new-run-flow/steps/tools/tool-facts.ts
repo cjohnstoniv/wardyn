@@ -36,6 +36,16 @@ export function reasonText(code: string | undefined, vars: ReasonVars = {}): str
 /** What the lane does with a tool no rule names: it runs on the ungated lane, otherwise a person is asked. */
 const laneDefault = (fact: ToolPolicyFact): ToolEffect => (fact.lane === "ungated" ? "allow" : "hold");
 
+/**
+ * The policy's effect for a tool none of `policy_rules` names. On the attended lane the server leaves the
+ * policy's "*" out of `policy_rules` (it is no locked row there) but grades `rule_effects` against it, so the
+ * least strict effect it does not refuse as stricter than the policy is that "*".
+ */
+const unnamedToolEffect = (fact: ToolPolicyFact): ToolEffect =>
+  fact.lane !== "attended"
+    ? laneDefault(fact)
+    : EFFECTS.find((e) => fact.rule_effects.find((o) => o.effect === e)?.reason !== "policy_stricter_tool") ?? laneDefault(fact);
+
 export interface ChoiceState {
   effect: ToolEffect;
   available: boolean;
@@ -66,7 +76,7 @@ export function ruleChoices(fact: ToolPolicyFact, harnessName: string, tool: str
   if (!tool) {
     return fromFact(fact.rule_effects).map((o) => ({ effect: o.effect as ToolEffect, available: o.available, reason: o.available ? undefined : reasonText(o.reason, { harness: harnessName }) }));
   }
-  const policy = effectiveToolEffect(fact.policy_rules, laneDefault(fact), tool);
+  const policy = effectiveToolEffect(fact.policy_rules, unnamedToolEffect(fact), tool);
   const builtinOnly = fact.rule_tools === "mcp_only" && !tool.startsWith("mcp__");
   return fromFact(fact.rule_effects).map((o) => {
     const effect = o.effect as ToolEffect;

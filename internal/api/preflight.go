@@ -391,7 +391,7 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	runRepos := append([]string{req.Repo, req.DevcontainerRepo}, repoLocatorsOf(spec.WorkspaceRepos)...)
 	resp.GitCredential = s.gitCredentialFactForRepos(ctx, oidcHumanFromContext(ctx), runRepos)
 	resp.Components = componentFacts(componentFactInputs{
-		req: f.req, spec: f.spec, comps: f.comps, baseline: f.baseline, scmSite: f.scmSite,
+		req: f.req, spec: f.spec, harnesses: f.harnesses, comps: f.comps, baseline: f.baseline, scmSite: f.scmSite,
 		ceiling: f.ceiling, mpChoice: f.mpChoice, pushSets: f.pushSets, autonomy: f.autonomy,
 		credentialChecked: true, autonomyResolved: true,
 	}, resp.GitCredential)

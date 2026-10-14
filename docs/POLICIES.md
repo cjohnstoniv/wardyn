@@ -54,7 +54,7 @@
 | `workspace_mounts` | `[]WorkspaceMount` | `[]` | Operator-authored host bind mounts. Never agent-chosen. |
 | `workspace_repos` | `[]WorkspaceRepo` | `[]` | Additional git repos cloned into the run — the clone counterpart of `workspace_mounts`. |
 | `ui_apps` | `[]UIApp` | `[]` | In-sandbox loopback HTTP apps the UI gateway may relay to a browser. Operator-authored, never agent-chosen, and never a command string. |
-| `tool_rules` | `[]ToolRule` | `[]` | Per-tool effects for an autonomous run's own tool calls: `allow`, `hold` or `deny`. Narrows `tool_approvals=hold` from "ask about everything" to a policy. Operator-authored, evaluated proxy-side. |
+| `tool_rules` | `[]ToolRule` | `[]` | Per-tool effects for an autonomous run's tool calls: `allow`, `hold` or `deny`. A `hold` or `deny` rule routes a background Claude Code run through the tool gate. Operator-authored, evaluated proxy-side. |
 | `git_push_any_branch` | `bool` | `false` | Turns OFF branch-namespace confinement (default **ON**) for this run's brokered pushes on every brokered lane; operator-authored, never agent-settable. See [`git_push_any_branch`](#git_push_any_branch). |
 | `push_rules` | `PushRulesSpec` | omitted = **no content rules** | Content rules for this run's brokered git pushes — WHAT a push may touch, alongside `git_push_any_branch`'s WHERE. Enforced on every brokered git lane, and on the Azure DevOps REST door, before a push is forwarded: see ["`push_rules` — `PushRulesSpec`"](#push_rules--pushrulesspec) below. |
 | `azure_devops_capabilities` | `[]string` | omitted = the provider row's `default_profile` | This run's Azure DevOps capabilities on the per-person (Entra) lane, chosen only within the row's `capability_ceiling`; unknown or unpermitted choices are refused. See [`azure_devops_capabilities`](#azure_devops_capabilities). |
@@ -65,6 +65,7 @@
 ### `allowed_domains`
 
 - L2 egress allowlist: exact hosts or `*.` wildcards.
+- An exact host covers only itself: to wall off GitHub, deny `api.github.com` or `*.github.com` as well as `github.com`.
 - Empty under default-deny means the sandbox reaches nothing.
 - Each entry must be a shape the proxy's matcher can match.
 - A mid-label wildcard, a URL, a bad `:port`, or a non-ASCII spelling is rejected at write time rather than shipped as a rule that silently matches nothing.
@@ -468,7 +469,7 @@ What the check does and does not settle:
 - **One field, both brokers** since 0.7.2: `git_push_any_branch` opts out the GitHub-App lane ([`internal/egress/proxy/git_broker.go`](../internal/egress/proxy/git_broker.go)) AND the never-resident `git_pat` lane ([`internal/egress/proxy/pat_broker.go`](../internal/egress/proxy/pat_broker.go)), which the never-resident-`git_pat` row's own brokered-cleartext parsing (see `WARDYN_GIT_PAT_BROKER`, [ENV.md](ENV.md)) makes reachable the same way.
 - Since 0.8.0 it also opts out the per-person Azure DevOps (Entra) lane, where a ref outside the run's namespace then needs `code_write` instead of being refused outright ([`internal/egress/proxy/ado_gate.go`](../internal/egress/proxy/ado_gate.go)'s `adoRunBranchRule`) and Azure DevOps' own branch policies decide.
 - See [AZURE-DEVOPS.md](AZURE-DEVOPS.md#how-pushes-work).
-- Setting it on a run's policy also grades **high** on the Review rail (`composer.Grade`), which is where a human sees what a run may do before approving it.
+- Setting it on a run's policy also grades **high** in the policy's risk grade (`composer.Grade`): the Policies screen's safety meter shows it, and preflight returns it as `risk_assessment`.
 - That is the same weight a read-write host mount or a write-capable GitHub token carries.
 - Either switch produces the identical audit posture: a push forwarded with confinement off carries `rule_source: "brokered:git:branch-ns-off"` (`ruleSourceGitNSOff`) instead of the ordinary `"brokered:git"`.
 - A reader of the audit stream never has to know which of the two opt-outs was set to see that this run's pushes were not ref-checked.
@@ -856,7 +857,10 @@ What the check does and does not settle:
   - and the 201 carries a warning saying so (an agent with no tool-approval lane is refused instead)
   - See [three-roles.md § Three roles, and who sets the walls](operations/three-roles.md#three-roles-and-who-sets-the-walls) for the rubric that decides it.
 - The level never rewrites `tool_rules`, but it decides whether they take effect.
-- Under `auto` the tool gate is not wired and the rules are never consulted, so the `L1` switch to `hold` is what brings a run's `tool_rules` into force.
+- Since 0.9 a background Claude Code run whose resolved policy holds or denies any tool is routed through the tool gate automatically. So is one where the person set a tool rule or default.
+  - Tools the rules do not name keep running without a prompt: when the policy has no `*` rule of its own, the routed run's default is `*: allow`, with provenance `posture`. A policy `*` rule stays in force.
+  - A run already on the gated lane (an explicit `tool_approvals: hold`, a governance profile, autonomy `L1`) keeps its own default: an unmatched tool is held.
+  - Codex CLI and other harnesses without Wardyn's gate are not routed.
 
 ```json
 {
@@ -879,7 +883,7 @@ What the check does and does not settle:
 
 **It narrows; it never widens.**
 
-- Rules are consulted only for a run already in `hold`, so adding one cannot make a supervised run autonomous.
+- A rule never makes a supervised run autonomous: a run on the gated lane keeps its hold default. A routed run keeps the policy's own `*` rule and is never looser than the ungated run it replaces.
 - The worst a mistaken rule can do is ask a human more often, or refuse a call the agent wanted.
 - That holds across the member seam too: a member's `inline_policy` may narrow the operator's rules, never widen them.
 - The composer clamp raises any weaker effect to the operator's (`allow` < `hold` < `deny`) and carries the operator's own rules into the run.
@@ -918,6 +922,7 @@ The match is exact, so it would never fire and would silently read as enforcemen
 | The buffered pack is under the inspection ceiling but still costs more objects, inflated bytes, tree entries or changed paths than `internal/gitpack`'s own compiled-in ceilings allow | `413` | `brokered:git:push-too-large` | Push fewer commits. Raising `max_inspect_pack_mib` does not help — these ceilings are unrelated to that setting. |
 | The push cannot be read from its own bytes | `415` | `brokered:git:push-uninspectable` | Push from a complete clone (`git fetch --unshallow`) so the pack carries every object it deltifies against. |
 | | | | A body in a non-identity `Content-Encoding`, a malformed pack, a `deny_paths` list too long to evaluate, and a `deny_paths` entry the broker cannot read (one that bypassed write-time validation) land here too. |
+| A ref is set to a commit the request does not carry (for example a branch created at a commit the forge already has) | `415` | `brokered:git:push-uninspectable` | Leave the named refs out of the push, or point them at commits it carries. A complete clone (`git fetch --unshallow`) does not help, and one new commit need not fix every ref. |
 | The sidecar was busy inspecting other requests for longer than it waits | `503` | `brokered:git:push-uninspectable` | Retry the push. Inspection takes the sidecar's one inspection slot, shared with LLM request scanning, because a small compressed push can inflate to over a hundred MiB inside a sidecar capped at 256 MiB. |
 | A path matched `require_review_paths`, and an admin denied the push, nobody decided within `hold_seconds`, the request closed undecided, or it could not be asked | `403` | `brokered:git:push-held` | Wait for the decision and push the same commits again, or take those paths out of the push. |
 | A path matched `require_review_paths` on an **unattended** run | `403` | `brokered:git:push-held-unattended` | Take those paths out of the push, or run the task interactively. No approval is raised. |
@@ -939,9 +944,9 @@ The match is exact, so it would never fire and would silently read as enforcemen
 
 | Lane | Git door | REST doors that write repository content |
 |---|---|---|
-| GitHub App (`github_token`) | `/wardyn/gh/` | **None reachable.** The broker route admits only the three smart-HTTP endpoints, the installation token never leaves the proxy, `api.github.com` is denied to a brokered run's egress, and the broker's own GitHub API calls are reads (`GET`). |
+| GitHub App (`github_token`) | `/wardyn/gh/` | **None reachable.** The broker route admits only the three smart-HTTP endpoints and the installation token never leaves the proxy. `api.github.com` is denied to the run's egress, a GitHub CLI door aside; the broker's own GitHub API calls are reads (`GET`). |
 | `git_pat` | `/wardyn/git/<host>/` | **None reachable.** The route admits only the three smart-HTTP endpoints and the PAT never leaves the proxy. |
-| | | (With the broker switched `off`, or on the `ssh_key` lane, the credential is in the sandbox and no rule applies — the Review-rail warning below.) |
+| | | (With the broker switched `off`, or on the `ssh_key` lane, the credential is in the sandbox and no rule applies — the risk-grade item below.) |
 | Azure DevOps Entra | `/wardyn/git/<host>/` | The REST gate on `dev.azure.com` / `<org>.visualstudio.com`: pushes are read path by path and routes that name no paths are refused. See [Azure DevOps Entra](#azure-devops-entra). |
 
 
@@ -1069,7 +1074,7 @@ So an entry a pattern matches is judged one of two ways:
 > **Unenforceable is a warning, not a refusal.** `push_rules` is enforced only on the brokered lanes (`github_token`, `git_pat`) — git's own SSH transport has no broker seam.
 >
 > - A policy that sets `push_rules` while `ssh_key` is the run's **only** git-capable grant is legal (never a `422` at write time) but the rules cannot be enforced.
-> - The Review rail's risk grade (`composer.Grade`) surfaces that as a **medium**-risk item so the operator is told rather than blocked.
+> - The policy's risk grade (`composer.Grade`, shown by the Policies screen's safety meter and returned by preflight as `risk_assessment`) surfaces that as a **medium**-risk item so the operator is told rather than blocked.
 > - An all-zero `push_rules: {}` — nothing in `deny_paths` or `require_review_paths`, `max_inspect_pack_mib` and `max_file_size_mib` `0`/absent — reads as **absent** (a `hold_seconds` with no review path to hold for does not count), the same as `null`.
 > - It never survives an operator ceiling into a member's clamped spec, and never grades the warning above.
 
@@ -1210,7 +1215,7 @@ So an entry a pattern matches is judged one of two ways:
   - a request's `resources.disk_mib`, or the pool's or server's default, is a soft size: the run proceeds UNCAPPED with a warning.
   - A `disk_mib` the run's policy writes keeps the refusal described above, and the request may only lower it.
   - Where the runner reports it cannot cap disk, such a run is refused at Review and create: `main_drive_unenforceable`.
-- **Preview parity:** `POST /runs/preflight` and the Review rail show the number the run will actually get (`main_drive`),
+- **Preview parity:** `POST /runs/preflight` and New Run's Review show the number the run will actually get (`main_drive`),
   - computed by the one expression create and dispatch use: the request, else the policy's size, else the default, cut to the strictest of the pool, both organisation and profile maximums.
   - A run with a cap and no default gets the cap, as a soft size.
 - The effective number is always on the run's `run.policy.resolve` audit event.

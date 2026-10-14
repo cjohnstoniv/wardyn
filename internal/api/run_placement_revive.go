@@ -31,7 +31,7 @@ func (s *Server) refreshLocalDeploymentConfig(ctx context.Context, run types.Age
 	if denied != nil {
 		return fmt.Errorf("owner profile does not admit local revive")
 	}
-	p, err := s.localResolvedPlan(ctx, run, profile != nil && profile.Limits.LocalSelfDefinedComponents, sc, localStoredSpec(*cfg), nil, llmTransport{}, adoEntraRun{})
+	p, err := s.localResolvedPlan(ctx, run, profile != nil && profile.Limits.LocalSelfDefinedComponents, sc, localStoredSpec(*cfg), nil, llmTransport{})
 	if err != nil {
 		return err
 	}

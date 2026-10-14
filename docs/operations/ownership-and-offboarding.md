@@ -116,10 +116,12 @@ departed person: sessions, tokens, keys, runs, credentials, workspaces and drive
        - ends their console sessions, refuses a UI-app session at its next re-check (an attach ticket minted before the revoke is refused at redemption)
        - and revokes every `wdn_` API token they hold (its `tokens_revoked` count is the receipt; see "[Per-user API tokens: stop sharing the admin token](api-tokens.md#per-user-api-tokens-stop-sharing-the-admin-token)").
     3. Remove their registered SSH keys and end established SSH connections: [SSH access revocation](../SSH.md#revoking-access-during-an-incident).
-    4. Kill their running runs (`POST /runs/{id}/kill`). A run keeps a static key it was handed (an `api_key` injection is cached for the run) until it ends, whatever the erase does.
-    5. Erase their credentials: `DELETE /people/{principal}/credentials`.
-    6. Hand back their workspaces (`POST /workspaces/{id}/reassign`) and their user drives (the two-halves order above).
-    7. Revoke upstream what Wardyn cannot: their AWS, Anthropic and Azure DevOps sessions, a token they pasted in themselves and any gateway token.
+    4. Kill their running runs (`POST /runs/{id}/kill`).
+    5. Revoke their runners (`DELETE /runners/{id}`) and unused registration tokens (`GET /runners/tokens?owner=`, `DELETE /runners/tokens/{id}`).
+    6. Re-sponsor (`PATCH /service-identities/{name}`) or retire (`DELETE`) each service identity they sponsor.
+    7. Erase their credentials: `DELETE /people/{principal}/credentials`.
+    8. Hand back their workspaces (`POST /workspaces/{id}/reassign`) and their user drives (the two-halves order above).
+    9. Revoke upstream what Wardyn cannot: their AWS, Anthropic and Azure DevOps sessions, a token they pasted in themselves and any gateway token.
   - One copy outlives all of this in memory: wardynd keeps an Azure DevOps sign-in's refresh token in its process-wide masking set, so output quoting it is still masked.
   - It is never served or injected from there; it is let go a grace period after the credential is replaced, or when wardynd restarts.
   - A run's own masking copies go the same grace after the run ends.
