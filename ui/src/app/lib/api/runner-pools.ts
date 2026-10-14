@@ -56,6 +56,8 @@ const remote = (rid: string) => `/remote-runners/${seg(rid)}`;
 
 export const runnerPools = {
   list: () => get<RunnerPoolList>("/runner-pools"),
+  /** The pools the caller may use: for an administrator, without the oversight rows of other people's user pools. */
+  listMine: () => get<RunnerPoolList>("/me/runner-pools"),
   get: (id: string) => get<RunnerPool>(pool(id)),
   /** A pool's runners with their limits and usage: a pool the caller may use, or any pool for an administrator. */
   members: (id: string) => get<RunnerPoolMemberView[]>(`${pool(id)}/members`),

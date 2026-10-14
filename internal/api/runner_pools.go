@@ -37,7 +37,7 @@ import (
 // answers every route 501 runner_pools_unavailable.
 func (s *Server) mountRunnerPoolRoutes(r, operatorOnly, securityOps chi.Router) {
 	r.Get("/runner-pools", s.handleListRunnerPools)
-	r.Get("/me/runner-pools", s.handleListRunnerPools)
+	r.Get("/me/runner-pools", s.handleListMyRunnerPools)
 	r.Get("/runner-pools/{id}", s.handleGetRunnerPool)
 	r.Get("/runner-pools/{id}/members", s.handleListRunnerPoolMembers)
 	operatorOnly.Post("/runner-pools", s.handleCreateRunnerPool)
@@ -278,6 +278,16 @@ func (s *Server) ownRunnerAvailability(ctx context.Context, ps store.RunnerPoolS
 }
 
 func (s *Server) handleListRunnerPools(w http.ResponseWriter, r *http.Request) {
+	s.listRunnerPools(w, r, false)
+}
+
+// handleListMyRunnerPools is GET /me/runner-pools: the same list as GET /runner-pools, but only the
+// pools the caller may use, so an administrator sees no one else's user pools here.
+func (s *Server) handleListMyRunnerPools(w http.ResponseWriter, r *http.Request) {
+	s.listRunnerPools(w, r, true)
+}
+
+func (s *Server) listRunnerPools(w http.ResponseWriter, r *http.Request, forUse bool) {
 	ps, ok := s.runnerPoolStore(w)
 	if !ok {
 		return
@@ -287,7 +297,7 @@ func (s *Server) handleListRunnerPools(w http.ResponseWriter, r *http.Request) {
 		writePoolInvalid(w, "run_type is background or interactive.")
 		return
 	}
-	rows, ok := s.poolCatalogue(w, r, ps, false)
+	rows, ok := s.poolCatalogue(w, r, ps, forUse)
 	if !ok {
 		return
 	}

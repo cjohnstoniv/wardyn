@@ -23,6 +23,7 @@ describe("runner pool calls", () => {
   it("hit the routes the server mounts", async () => {
     wfetchMock.mockImplementation(async () => new Response("{}", { status: 200, headers: { "content-type": "application/json" } }));
     await runnerPools.list();
+    await runnerPools.listMine();
     await runnerPools.get("p 1");
     await runnerPools.addMyRunner("p1", "r1");
     await runnerPools.orgDefaults();
@@ -31,13 +32,14 @@ describe("runner pool calls", () => {
     const seen = wfetchMock.mock.calls.map(([path, init]) => `${init.method} ${path}`);
     expect(seen).toEqual([
       "GET /runner-pools",
+      "GET /me/runner-pools",
       "GET /runner-pools/p%201",
       "PUT /me/runner-pools/p1/runners/r1",
       "GET /runner-pool-defaults",
       "GET /me/runner-pool-defaults",
       "PUT /me/runner-pool-defaults",
     ]);
-    expect(JSON.parse(wfetchMock.mock.calls[5][1].body)).toEqual({ pool_id: "p1" });
+    expect(JSON.parse(wfetchMock.mock.calls[6][1].body)).toEqual({ pool_id: "p1" });
   });
 
   it("deletes answer 204 with no body", async () => {

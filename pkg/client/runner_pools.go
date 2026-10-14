@@ -335,7 +335,16 @@ func (c *Client) ListRunnerPools(ctx context.Context) (RunnerPoolList, error) {
 // with runner_pool_run_type_not_allowed, and each pool's limits hold only that type. "" is every type;
 // a value other than background or interactive is a 400 runner_pool_invalid.
 func (c *Client) ListRunnerPoolsFor(ctx context.Context, runType RunnerPoolRunType) (RunnerPoolList, error) {
-	path := "/api/v1/runner-pools"
+	return c.listPools(ctx, "/api/v1/runner-pools", runType)
+}
+
+// ListMyRunnerPools is ListRunnerPoolsFor over only the pools the caller may use: an administrator's
+// list here omits the oversight rows of other people's user pools, so a user-scope row is the caller's own.
+func (c *Client) ListMyRunnerPools(ctx context.Context, runType RunnerPoolRunType) (RunnerPoolList, error) {
+	return c.listPools(ctx, "/api/v1/me/runner-pools", runType)
+}
+
+func (c *Client) listPools(ctx context.Context, path string, runType RunnerPoolRunType) (RunnerPoolList, error) {
 	if runType != "" {
 		path += "?run_type=" + url.QueryEscape(string(runType))
 	}
