@@ -39,6 +39,7 @@ type setupFixture struct {
 	defaultID   *uuid.UUID
 	id          uuid.UUID
 	refuseClaim bool
+	otherPool   *sdk.RunnerPool
 }
 
 func newSetupFixture(t *testing.T, goos string) *setupFixture {
@@ -97,7 +98,11 @@ func (f *setupFixture) serve(w http.ResponseWriter, r *http.Request) {
 	case r.Method == http.MethodGet && r.URL.Path == "/api/v1/runner-pools":
 		var entries []sdk.RunnerPoolCatalogueEntry
 		for _, p := range f.pools {
-			entries = append(entries, sdk.RunnerPoolCatalogueEntry{RunnerPoolChoice: sdk.RunnerPoolChoice{ID: p.ID, Name: p.Name, Scope: p.Scope}})
+			entries = append(entries, sdk.RunnerPoolCatalogueEntry{RunnerPoolChoice: sdk.RunnerPoolChoice{ID: p.ID, Name: p.Name, Scope: p.Scope}, Slots: &sdk.PoolSlots{}})
+		}
+		if f.otherPool != nil {
+			// An administrator's list also carries other people's user pools, as manage-only rows: no Slots.
+			entries = append(entries, sdk.RunnerPoolCatalogueEntry{RunnerPoolChoice: sdk.RunnerPoolChoice{ID: f.otherPool.ID, Name: f.otherPool.Name, Scope: sdk.RunnerPoolUser}, Owner: "someone-else"})
 		}
 		reply(sdk.RunnerPoolList{Pools: entries})
 	case r.Method == http.MethodPost && r.URL.Path == "/api/v1/me/runner-pools":
@@ -408,5 +413,23 @@ func TestSetupSaysWhenTheClaimFailedAfterTheServiceStarted(t *testing.T) {
 	p, _ := f.host.paths()
 	if _, serr := os.Stat(p.unitFile); serr != nil {
 		t.Error("the service was not installed before the claim")
+	}
+}
+
+// An administrator's pool list also holds other people's user pools; a pool of the same name that is not
+// the caller's is neither picked nor reported as a second match.
+func TestSetupPoolIgnoresAnotherPersonsSameNamedPool(t *testing.T) {
+	f := newSetupFixture(t, "linux")
+	f.otherPool = &sdk.RunnerPool{ID: uuid.New(), Name: "Laptop", Scope: sdk.RunnerPoolUser}
+	t.Setenv("WARDYN_TOKEN", "wdn_secret")
+	out, err := f.run(setupOptions{tokenFile: f.tokenFile, claim: true, pool: "Laptop", makeDefault: true})
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if len(f.pools) != 1 || f.defaultID == nil || *f.defaultID != f.pools[0].ID || *f.defaultID == f.otherPool.ID {
+		t.Fatalf("pools=%v default=%v other=%s", f.pools, f.defaultID, f.otherPool.ID)
+	}
+	if f.count("PUT /api/v1/me/runner-pools/"+f.otherPool.ID.String()+"/runners/"+f.id.String()) != 0 {
+		t.Error("the runner was put in another person's pool")
 	}
 }

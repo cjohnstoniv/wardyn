@@ -79,7 +79,8 @@ func claimRunner(ctx context.Context, c *sdk.Client, id runneridentity.Identity,
 }
 
 // ownPool is the person's user pool of this name, made when they have none. A pool of an organization is
-// not theirs to put a self-hosted runner in, so one with the same name is passed over.
+// not theirs to put a self-hosted runner in, so one with the same name is passed over; so is another
+// person's user pool, which an administrator's list carries as a manage-only row (it has no Slots).
 func ownPool(ctx context.Context, c *sdk.Client, name string, out io.Writer) (sdk.RunnerPool, error) {
 	list, err := c.ListRunnerPools(ctx)
 	if err != nil {
@@ -87,7 +88,7 @@ func ownPool(ctx context.Context, c *sdk.Client, name string, out io.Writer) (sd
 	}
 	var ids []uuid.UUID
 	for _, p := range list.Pools {
-		if p.Scope == sdk.RunnerPoolUser && p.Name == name {
+		if p.Scope == sdk.RunnerPoolUser && p.Name == name && p.Slots != nil {
 			ids = append(ids, p.ID)
 		}
 	}
