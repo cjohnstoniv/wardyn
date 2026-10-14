@@ -67,7 +67,7 @@ a laptop runner, `wardyn-runnerd` works with Docker Desktop, setup is one comman
   (`bedrock_role_credentials credential is unavailable on a local runner`). It now runs when AWS SSO proxy-inject is
   on (the default); with proxy-inject off it is refused at preflight and Review, before Launch. A local Codex run with
   an MCP component was refused after Launch the same way; it now runs.
-- A run refused for its credentials on the chosen pool now points at the Runner step, and Review marks the group that
+- A run refused for its credentials on the chosen pool now points at the Run step (runner and pool), and Review marks the group that
   needs attention.
 - When AWS refuses to renew a sign-in (`invalid_request`, `access_denied`, `invalid_scope`, `unsupported_grant_type`),
   the run refusal names AWS's answer and opens the sign-in door, the console shows the sign-in as needing a new
