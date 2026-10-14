@@ -301,8 +301,12 @@ test-report-k8s: ## -tags k8s suite with reports (fake clientset; no cluster nee
 # at tree 532ca5d4 — 3.3 points above the old 75 floor. #174 re-measured the
 # union freshly after merging main (post-merge `make cover-check`: 80.4% —
 # unit 80.7%, docker 80.3%, k8s 80.8%) and re-set the floor to 79 per the rule
-# above.
-COVER_MIN ?= 79
+# above. 0.9.0 (final tip fc3b9d995, hosted union 75.7%: unit 75.5, docker 75.5,
+# k8s 75.8) re-set it to 74 by the same rule. 0.9 added about 24,000 statements,
+# mostly store SQL and Postgres-backed handlers that only the Postgres suites
+# exercise, and this union does not count those suites; everything else stays
+# at about 79%. Counting the Postgres suites in the union is the follow-up.
+COVER_MIN ?= 74
 cover-check: test-report test-report-docker test-report-k8s ## Enforce the COVER_MIN floor over ALL THREE shipped builds, unioned
 	@$(MAKE) --no-print-directory cover-union
 
