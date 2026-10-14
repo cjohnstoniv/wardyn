@@ -119,6 +119,29 @@ export const CAP_MATCH_CASES: Array<[string, string, string, boolean]> = [
   ["egress_host", "secret.example.com", "*.example.com", false],
   ["secret", "GITHUB_TOKEN", "github_token", false],
   ["image", "ghcr.io/a/b:1", "ghcr.io/a/b:2", false],
+  // DNS names, IPv4 and host:port entries: a ":port" on either side is dropped.
+  ["egress_host", "pypi.org:443", "pypi.org", true],
+  ["egress_host", "ssh.github.com", "ssh.github.com:443", true],
+  ["egress_host", "github.com:0", "github.com", true],
+  ["egress_host", "github.com", "gitlab.com", false],
+  ["egress_host", "1.2.3.4", "1.2.3.4:443", true],
+  ["egress_host", "1.2.3.4:443", "1.2.3.4", true],
+  ["egress_host", "1.2.3.4", "1.2.3.5", false],
+  // An IPv6 literal is one address: its colons are never a ":port" cut. Bare,
+  // bracketed and "[addr]:port" spellings, ::-compressed or expanded, and a
+  // v4-mapped address all key on the canonical form; a zone stays verbatim.
+  ["egress_host", "2001:db8::1", "2001:db8::1", true],
+  ["egress_host", "2001:db8::1", "2001:db8::2", false],
+  ["egress_host", "2001:db8::1", "2001:ffff::1", false],
+  ["egress_host", "[2001:db8::1]", "2001:db8::1", true],
+  ["egress_host", "2001:db8::1", "[2001:db8::1]:443", true],
+  ["egress_host", "[2001:db8::1]:443", "[2001:db8::2]:443", false],
+  ["egress_host", "2001:db8::1", "2001:0DB8:0000:0000:0000:0000:0000:0001", true],
+  ["egress_host", "2001:db8::1", "2001:0db8:0:0:0:0:0:2", false],
+  ["egress_host", "fe80::1%eth0", "fe80::1%eth0", true],
+  ["egress_host", "fe80::1%eth0", "fe80::2%eth0", false],
+  ["egress_host", "1.2.3.4", "::ffff:1.2.3.4", true],
+  ["egress_host", "::ffff:1.2.3.4", "::ffff:1.2.3.5", false],
 ];
 
 export const CAP_OVERLAP_CASES: Array<[string, string, string, boolean]> = [
@@ -129,6 +152,8 @@ export const CAP_OVERLAP_CASES: Array<[string, string, string, boolean]> = [
   ["egress_host", "*.example.com", "secret.example.com", true],
   // Still no match when the sets are disjoint.
   ["egress_host", "secret.example.com", "*.other.com", false],
+  ["egress_host", "2001:db8::1", "2001:db8::2", false],
+  ["egress_host", "1.2.3.4", "::ffff:1.2.3.4", true],
   // Only egress hosts are set-valued: every other kind stays an exact compare
   // in BOTH directions, so the reversal must not soften a near-miss.
   ["secret", "GITHUB_TOKEN", "github_token", false],

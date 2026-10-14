@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/egress/domainmatch"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -188,22 +189,36 @@ func gitBrokerManaged(entry string) bool {
 }
 
 // egressEntryHost normalizes ONE egress-list entry to its bare host: lowercased,
-// ":port" qualifier and trailing dot stripped — the same normalization
-// domainmatch.Classify applies to the WELL-FORMED entries ValidDomainEntry lets
-// through, which is every entry that can reach here.
+// ":port" qualifier and trailing dot stripped.
 //
-// It is NOT a general re-implementation of domainmatch.Classify, and a new caller must
-// not assume it. domainmatch.Classify splits with net.SplitHostPort and honours only
-// ports 1..65535; this splits at the first ":". They diverge on "github.com:0"
-// (domainmatch.Classify keeps the whole string as a host that matches nothing; this
-// yields "github.com") and on a bracketed IPv6 literal ("[::1]:443" -> "[").
-// Neither is reachable today — the first is rejected at policy write by
-// proxy.ValidDomainEntry, the second is an address, not one of the broker's host
-// NAMES, and is caught by the proxy's private-IP guard — which is why this stays
-// a five-line local helper instead of a second copy of domainmatch.Classify that could
-// drift from the real matcher. Needing either case means calling the proxy.
+// An entry with at most one ":" (a DNS name or an IPv4 address, with or without
+// a ":port", or a "*." wildcard) is cut at that ":". This is NOT
+// domainmatch.Classify, which honours only ports 1..65535: "github.com:0" yields
+// "github.com" here and stays a host that matches nothing there. That entry is
+// rejected at policy write by proxy.ValidDomainEntry, so the two never meet.
+//
+// An entry with more than one ":" is an IPv6 literal, whose colons belong to the
+// address, so it is never cut at one. Brackets around a bare literal are dropped
+// and the rest goes through domainmatch.Classify itself: a "[addr]:port" sheds
+// only a valid port, and the address is keyed on the canonical form the proxy
+// derives ("2001:0DB8::0001" and "[2001:db8::1]:443" are both "2001:db8::1", and
+// "::ffff:1.2.3.4" is "1.2.3.4"). A spelling net.ParseIP cannot read, such as a
+// zone-suffixed "fe80::1%eth0", stays verbatim and equals only itself.
+//
+// ui/src/app/lib/capabilities.ts mirrors this rule; the shared CAP_MATCH_CASES
+// table pins both.
 func egressEntryHost(entry string) string {
 	h := strings.ToLower(strings.TrimSpace(entry))
+	if strings.Count(h, ":") > 1 {
+		if inner, ok := strings.CutPrefix(h, "["); ok && strings.HasSuffix(inner, "]") {
+			h = strings.TrimSuffix(inner, "]") // "[2001:db8::1]" -> "2001:db8::1"
+		}
+		exact, wild, _ := domainmatch.Classify(h)
+		if wild != "" {
+			return "*" + wild
+		}
+		return exact
+	}
 	if host, _, ok := strings.Cut(h, ":"); ok { // "github.com:443" -> "github.com"
 		h = host
 	}
