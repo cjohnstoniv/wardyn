@@ -8,7 +8,6 @@ package docker
 import (
 	"context"
 	"fmt"
-	"net/netip"
 	"net/url"
 	"strings"
 	"sync"
@@ -86,14 +85,13 @@ type Config struct {
 	// readability check in. Empty uses defaultDriveProbeImage (busybox-class).
 	DriveProbeImage string
 	// ControlPlaneRelay, set only by wardyn-runnerd, makes sure the runner's
-	// local relay listens for a run's control-plane URL. When set, the PROXY's
-	// hosts map that URL's hostname to host-gateway, where the relay listens,
-	// and an IP-literal URL (which no hosts entry can remap) refuses the create.
-	ControlPlaneRelay func(controlPlaneURL *url.URL) error
-	// ControlPlaneHostTarget is the address the proxy's control-plane hosts entry maps to when
-	// ControlPlaneRelay is set: Docker's "host-gateway" when empty, or a literal IP (a VM engine
-	// whose host-gateway does not reach this host).
-	ControlPlaneHostTarget string
+	// local relay listens for a run's control-plane URL and returns the address
+	// the relay is reachable at from a container: "host-gateway" or a unicast,
+	// non-loopback IP (a VM engine whose host-gateway does not reach this host).
+	// The PROXY's hosts map both that URL's hostname and host.docker.internal to
+	// the target, so the proxy's control-plane clamp covers one address, and an
+	// IP-literal URL (which no hosts entry can remap) refuses the create.
+	ControlPlaneRelay func(controlPlaneURL *url.URL) (target string, err error)
 }
 
 // RecordingMountTarget is where RecordingMount appears inside the agent
@@ -126,23 +124,6 @@ func (c *Config) withDefaults() {
 	if c.InternalNetwork == "" {
 		c.InternalNetwork = "wardyn-internal"
 	}
-}
-
-// validate refuses a ControlPlaneHostTarget no container could use: anything but "host-gateway"
-// or a unicast IP literal. Loopback is the container's own, so it can never be the relay.
-func (c *Config) validate() error {
-	t := c.ControlPlaneHostTarget
-	if t == "" || t == "host-gateway" {
-		return nil
-	}
-	ip, err := netip.ParseAddr(t)
-	if err != nil {
-		return fmt.Errorf("docker: ControlPlaneHostTarget %q is neither host-gateway nor an IP address", t)
-	}
-	if ip.IsUnspecified() || ip.IsMulticast() || ip.IsLoopback() {
-		return fmt.Errorf("docker: ControlPlaneHostTarget %q is not a routable host address (unspecified, multicast or loopback)", t)
-	}
-	return nil
 }
 
 // Driver implements runner.Runner against the Docker Engine API.
@@ -229,9 +210,6 @@ var _ runner.ActivitySampler = (*Driver)(nil)
 // New constructs a Driver against the host Docker daemon. API-version
 // negotiation with the server is on by default in the moby v29 client.
 func New(cfg Config) (*Driver, error) {
-	if err := cfg.validate(); err != nil {
-		return nil, err
-	}
 	cli, err := client.New(
 		client.FromEnv,
 	)

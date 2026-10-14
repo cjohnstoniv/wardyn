@@ -6,72 +6,79 @@
 package docker
 
 import (
-	"cmp"
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/client"
+
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 )
 
-// RelayProbe asks whether a proxy container on Network reaches Target through the hosts
-// entry Host ("name:address"), the way a run's proxy reaches the runner's relay.
-type RelayProbe struct {
-	Network string        // the bridge a run's proxy leaves through (Config.InternalNetwork when empty)
-	Host    string        // ExtraHosts entry, "name:address" ("address" may be "host-gateway")
-	Target  string        // "name:port" the canary dials
-	Timeout time.Duration // whole probe, pull excluded; 20s when zero
-}
-
-// ErrRelayUnreachable means the canary ran and could not connect to the relay.
+// ErrRelayUnreachable means the canary ran and could not connect to the relay target.
 var ErrRelayUnreachable = errors.New("relay unreachable from a proxy container")
 
 const (
-	defaultRelayProbeTimeout = 20 * time.Second
-	componentRelayProbe      = "relay-probe"
+	// relayProbeHost is the name the canary dials; ExtraHosts maps it to the target, so the
+	// lookup goes through /etc/hosts the way the real proxy's control-plane name does.
+	relayProbeHost = "wardyn-relay-probe"
+	// relayProbeTimeout covers create, start and wait. It stays well above the canary's own 5s
+	// dial plus container start: a tighter bound would report "no result" for an unreachable relay.
+	relayProbeTimeout = 20 * time.Second
+	// relayProbeCleanup bounds the removals, which run on a fresh context so a spent probe
+	// bound cannot leak a container.
+	relayProbeCleanup    = 10 * time.Second
+	componentRelayProbe  = "relay-probe"
+	proxyEntrypointPath  = "/usr/local/bin/wardyn-proxy"
+	relayProbeNamePrefix = "wardyn-relay-probe-"
 )
 
-// ProbeRelay runs the proxy image's -egress-canary in a throwaway container with the given
-// hosts entry. A nil return means the dial succeeded; ErrRelayUnreachable means it ran and
-// failed; any other error means the probe itself could not run, which proves nothing about
-// the relay. The pull, if the image is absent, is bounded by ctx, not by p.Timeout.
-func (d *Driver) ProbeRelay(ctx context.Context, p RelayProbe) error {
+// ProbeRelay asks whether a container on the internal network, the proxy's only route out,
+// reaches target:port (target is "host-gateway" or an IP), running the proxy image's own
+// -egress-canary. It never pulls: the caller makes the image present first (EnsureProxyImage).
+//
+// nil means the dial connected. ErrRelayUnreachable means the canary ran and could not
+// connect. Any other error means the probe could not run, which proves nothing about the relay.
+func (d *Driver) ProbeRelay(ctx context.Context, target string, port uint16) error {
 	image := d.cfg.ProxyImage
-	if err := d.ensureImage(ctx, image, nil); err != nil {
-		return fmt.Errorf("docker: probe relay: %w", err)
-	}
-	// PullImage drops in-stream errors, so a "successful" pull can leave nothing behind.
 	present, err := d.imagePresent(ctx, image)
 	if err != nil {
 		return fmt.Errorf("docker: probe relay: %w", err)
 	}
 	if !present {
-		return fmt.Errorf("docker: probe relay: image %q is still absent after pull", image)
+		return fmt.Errorf("docker: probe relay: proxy image %q is not present locally; run `docker pull %s`", image, image)
 	}
 
-	timeout := p.Timeout
-	if timeout <= 0 {
-		timeout = defaultRelayProbeTimeout
-	}
-	ctx, cancel := context.WithTimeout(ctx, timeout)
+	ctx, cancel := context.WithTimeout(ctx, relayProbeTimeout)
 	defer cancel()
 
+	name := relayProbeNamePrefix + uuid.New().String()
+	labels := map[string]string{labelManaged: "true", labelComponent: componentRelayProbe}
+	if d.cfg.RunnerID != "" {
+		labels[runner.LabelRunnerID] = d.cfg.RunnerID // lets a sweeper claim a stray
+	}
+	remove := func(id string) {
+		rctx, rcancel := context.WithTimeout(context.Background(), relayProbeCleanup)
+		defer rcancel()
+		_, _ = d.cli.ContainerRemove(rctx, id, client.ContainerRemoveOptions{Force: true})
+	}
 	created, err := d.cli.ContainerCreate(ctx, client.ContainerCreateOptions{
-		Name: "wardyn-relay-probe-" + uuid.New().String(),
+		Name: name,
 		Config: &container.Config{
 			Image: image,
-			Cmd:   []string{"-egress-canary", p.Target}, // the image ENTRYPOINT is wardyn-proxy
-			Labels: map[string]string{
-				labelManaged:   "true",
-				labelComponent: componentRelayProbe,
-			},
+			// Explicit, so an image that is not wardyn-proxy fails at start rather than
+			// running some other entrypoint with these arguments.
+			Entrypoint: []string{proxyEntrypointPath},
+			Cmd:        []string{"-egress-canary", relayProbeHost + ":" + strconv.Itoa(int(port))},
+			Labels:     labels,
 		},
 		HostConfig: &container.HostConfig{
-			NetworkMode:    container.NetworkMode(cmp.Or(p.Network, d.cfg.InternalNetwork)),
-			ExtraHosts:     []string{p.Host},
+			NetworkMode:    container.NetworkMode(d.cfg.InternalNetwork),
+			ExtraHosts:     []string{relayProbeHost + ":" + target},
 			CapDrop:        []string{"ALL"},
 			SecurityOpt:    []string{"no-new-privileges"},
 			ReadonlyRootfs: true,
@@ -80,12 +87,11 @@ func (d *Driver) ProbeRelay(ctx context.Context, p RelayProbe) error {
 		},
 	})
 	if err != nil {
+		// A create that timed out client-side may still have made the container.
+		remove(name)
 		return fmt.Errorf("docker: probe relay: create: %w", err)
 	}
-	defer func() {
-		// Background, not ctx: the probe's bound may be spent, and a leaked container is worse.
-		_, _ = d.cli.ContainerRemove(context.Background(), created.ID, client.ContainerRemoveOptions{Force: true})
-	}()
+	defer remove(created.ID)
 
 	if _, err := d.cli.ContainerStart(ctx, created.ID, client.ContainerStartOptions{}); err != nil {
 		return fmt.Errorf("docker: probe relay: start: %w", err)
@@ -101,13 +107,13 @@ func (d *Driver) ProbeRelay(ctx context.Context, p RelayProbe) error {
 		case 0:
 			return nil
 		case 1:
-			return fmt.Errorf("%w: %s did not reach %s", ErrRelayUnreachable, p.Host, p.Target)
+			return fmt.Errorf("%w: a container on this engine did not connect to %s:%d", ErrRelayUnreachable, target, port)
 		default:
-			return fmt.Errorf("docker: probe relay: canary exited %d, not a dial result", res.StatusCode)
+			return fmt.Errorf("docker: probe relay: the proxy image %s did not run its reachability check (exit %d); it must be wardyn-proxy 0.9.0 or later", image, res.StatusCode)
 		}
 	case werr := <-wait.Error:
 		return fmt.Errorf("docker: probe relay: wait: %w", werr)
 	case <-ctx.Done():
-		return fmt.Errorf("docker: probe relay: no result within %s: %w", timeout, ctx.Err())
+		return fmt.Errorf("docker: probe relay: no result within %s: %w", relayProbeTimeout, ctx.Err())
 	}
 }

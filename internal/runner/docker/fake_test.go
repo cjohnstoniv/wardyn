@@ -138,6 +138,7 @@ type fakeDocker struct {
 
 	// failpoints
 	failCreateContainer string   // name prefix that should fail on create
+	failStartContainer  string   // name prefix that should fail on start (after a good create)
 	failImagePull       bool     // ImagePull returns an error (image absent + unpullable)
 	createWarnings      []string // Warnings the ContainerCreate response carries (e.g. a discarded resource limit)
 	// createIDOverride, when set, is returned as ContainerCreate's ID instead of
@@ -644,6 +645,9 @@ func (f *fakeDocker) ContainerStart(ctx context.Context, id string, _ client.Con
 	c := f.containers[id]
 	if c == nil {
 		return client.ContainerStartResult{}, fakeNotFound{msg: "no such container: " + id}
+	}
+	if f.failStartContainer != "" && strings.HasPrefix(c.name, f.failStartContainer) {
+		return client.ContainerStartResult{}, fmt.Errorf("boom: start %s", c.name)
 	}
 	if strings.HasPrefix(c.name, "wardyn-drive-probe-") || strings.HasPrefix(c.name, "wardyn-relay-probe-") {
 		// No real command interpreter here to run the probe's `test -r/-x`

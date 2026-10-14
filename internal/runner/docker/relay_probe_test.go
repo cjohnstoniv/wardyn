@@ -12,11 +12,11 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 )
 
-func relayProbeFixture() RelayProbe {
-	return RelayProbe{Network: "wardyn-internal", Host: "wardynd.internal:192.168.5.2", Target: "wardynd.internal:443", Timeout: 200 * time.Millisecond}
-}
+const relayProbeTarget = "192.168.5.2"
 
 // probeContainer returns the one relay-probe container the fake saw.
 func probeContainer(t *testing.T, f *fakeDocker) *createdContainer {
@@ -36,104 +36,135 @@ func probeContainer(t *testing.T, f *fakeDocker) *createdContainer {
 	return found
 }
 
-func TestProbeRelay_ExitCodes(t *testing.T) {
+func relayProbeDriver(f *fakeDocker) *Driver {
+	f.images["wardyn-proxy:dev"] = true
+	return newTestDriver(f)
+}
+
+func TestProbeRelayRunsOneHardenedThrowawayContainer(t *testing.T) {
+	f := newFakeDocker()
+	if err := relayProbeDriver(f).ProbeRelay(context.Background(), relayProbeTarget, 8443); err != nil {
+		t.Fatal(err)
+	}
+	c := probeContainer(t, f)
+	if c.cfg.Image != "wardyn-proxy:dev" ||
+		!slices.Equal(c.cfg.Entrypoint, []string{"/usr/local/bin/wardyn-proxy"}) ||
+		!slices.Equal(c.cfg.Cmd, []string{"-egress-canary", "wardyn-relay-probe:8443"}) {
+		t.Errorf("image %q entrypoint %v cmd %v", c.cfg.Image, c.cfg.Entrypoint, c.cfg.Cmd)
+	}
+	if c.cfg.User != "" || len(c.cfg.Env) != 0 {
+		t.Errorf("user %q env %v: the image's defaults are wanted", c.cfg.User, c.cfg.Env)
+	}
+	h := c.host
+	if string(h.NetworkMode) != "wardyn-internal" || !slices.Equal(h.ExtraHosts, []string{"wardyn-relay-probe:" + relayProbeTarget}) {
+		t.Errorf("network %q hosts %v", h.NetworkMode, h.ExtraHosts)
+	}
+	if !slices.Equal(h.CapDrop, []string{"ALL"}) || !slices.Contains(h.SecurityOpt, "no-new-privileges") || !h.ReadonlyRootfs ||
+		h.AutoRemove || h.Memory == 0 || h.PidsLimit == nil || len(h.Mounts)+len(h.Binds) != 0 {
+		t.Errorf("hardening wrong: %+v", h)
+	}
+	if c.cfg.Labels[labelManaged] != "true" || c.cfg.Labels[labelComponent] != componentRelayProbe {
+		t.Errorf("labels %v", c.cfg.Labels)
+	}
+	if !c.removed || !c.forceRemoved {
+		t.Errorf("probe container removed=%v force=%v", c.removed, c.forceRemoved)
+	}
+}
+
+func TestProbeRelayLabelsTheRunner(t *testing.T) {
+	f := newFakeDocker()
+	f.images["wardyn-proxy:dev"] = true
+	d := newWithClient(f, Config{ProxyImage: "wardyn-proxy:dev", RunnerID: "r-1"})
+	if err := d.ProbeRelay(context.Background(), relayProbeTarget, 8443); err != nil {
+		t.Fatal(err)
+	}
+	if got := probeContainer(t, f).cfg.Labels[runner.LabelRunnerID]; got != "r-1" {
+		t.Errorf("runner label %q", got)
+	}
+}
+
+func TestProbeRelayExitCodes(t *testing.T) {
 	for _, tc := range []struct {
 		name        string
 		code        int64
-		hang        bool
-		wantErr     bool
+		wantErr     string
 		unreachable bool
 	}{
 		{name: "reachable", code: 0},
-		{name: "unreachable", code: 1, wantErr: true, unreachable: true},
-		{name: "other exit", code: 125, wantErr: true},
-		{name: "timeout", hang: true, wantErr: true},
+		{name: "unreachable", code: 1, wantErr: "a container on this engine did not connect to 192.168.5.2:8443", unreachable: true},
+		{name: "image without the canary", code: 2, wantErr: "the proxy image wardyn-proxy:dev did not run its reachability check (exit 2); it must be wardyn-proxy 0.9.0 or later"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newFakeDocker()
-			f.images["wardyn-proxy:dev"] = true
-			f.probeExitCode, f.waitHangs = tc.code, tc.hang
-			err := newTestDriver(f).ProbeRelay(context.Background(), relayProbeFixture())
-			if (err != nil) != tc.wantErr || errors.Is(err, ErrRelayUnreachable) != tc.unreachable {
-				t.Fatalf("err = %v; wantErr %v unreachable %v", err, tc.wantErr, tc.unreachable)
+			f.probeExitCode = tc.code
+			err := relayProbeDriver(f).ProbeRelay(context.Background(), relayProbeTarget, 8443)
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatal(err)
+				}
+			} else if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("err = %v, want %q", err, tc.wantErr)
 			}
-			if tc.unreachable && (!strings.Contains(err.Error(), "wardynd.internal:192.168.5.2") || !strings.Contains(err.Error(), "wardynd.internal:443")) {
-				t.Errorf("error lacks host/target: %v", err)
+			if errors.Is(err, ErrRelayUnreachable) != tc.unreachable {
+				t.Fatalf("errors.Is unreachable = %v, want %v (%v)", !tc.unreachable, tc.unreachable, err)
 			}
-			c := probeContainer(t, f)
-			if !c.removed || !c.forceRemoved {
+			if c := probeContainer(t, f); !c.removed || !c.forceRemoved {
 				t.Errorf("probe container removed=%v force=%v", c.removed, c.forceRemoved)
 			}
 		})
 	}
 }
 
-func TestProbeRelay_CreateRequest(t *testing.T) {
-	f := newFakeDocker()
-	f.images["wardyn-proxy:dev"] = true
-	if err := newTestDriver(f).ProbeRelay(context.Background(), relayProbeFixture()); err != nil {
-		t.Fatal(err)
-	}
-	c := probeContainer(t, f)
-	if c.cfg.Image != "wardyn-proxy:dev" || !slices.Equal(c.cfg.Cmd, []string{"-egress-canary", "wardynd.internal:443"}) {
-		t.Errorf("image %q cmd %v", c.cfg.Image, c.cfg.Cmd)
-	}
-	if c.cfg.User != "" {
-		t.Errorf("user %q: the image's default is wanted", c.cfg.User)
-	}
-	h := c.host
-	if string(h.NetworkMode) != "wardyn-internal" || !slices.Equal(h.ExtraHosts, []string{"wardynd.internal:192.168.5.2"}) {
-		t.Errorf("network %q hosts %v", h.NetworkMode, h.ExtraHosts)
-	}
-	if !slices.Equal(h.CapDrop, []string{"ALL"}) || !slices.Contains(h.SecurityOpt, "no-new-privileges") || !h.ReadonlyRootfs || h.Memory == 0 || h.PidsLimit == nil {
-		t.Errorf("hardening missing: %+v", h)
-	}
-	if c.cfg.Labels[labelManaged] != "true" || c.cfg.Labels[labelComponent] != componentRelayProbe {
-		t.Errorf("labels %v", c.cfg.Labels)
-	}
+func TestProbeRelayNeverReportsUnreachableForAProbeThatDidNotRun(t *testing.T) {
+	t.Run("wait error", func(t *testing.T) {
+		f := newFakeDocker()
+		f.waitErrs = 1
+		d := relayProbeDriver(f)
+		if err := d.ProbeRelay(context.Background(), relayProbeTarget, 8443); err == nil || errors.Is(err, ErrRelayUnreachable) {
+			t.Fatalf("err = %v", err)
+		}
+		if c := probeContainer(t, f); !c.removed || !c.forceRemoved {
+			t.Error("probe container not force-removed")
+		}
+	})
+	t.Run("ctx cancelled while waiting", func(t *testing.T) {
+		f := newFakeDocker()
+		f.waitHangs = true
+		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+		defer cancel()
+		if err := relayProbeDriver(f).ProbeRelay(ctx, relayProbeTarget, 8443); err == nil || errors.Is(err, ErrRelayUnreachable) {
+			t.Fatalf("err = %v", err)
+		}
+		if c := probeContainer(t, f); !c.removed || !c.forceRemoved {
+			t.Error("probe container not force-removed")
+		}
+	})
+	t.Run("start fails after a good create", func(t *testing.T) {
+		f := newFakeDocker()
+		f.failStartContainer = "wardyn-relay-probe-"
+		if err := relayProbeDriver(f).ProbeRelay(context.Background(), relayProbeTarget, 8443); err == nil || errors.Is(err, ErrRelayUnreachable) {
+			t.Fatalf("err = %v", err)
+		}
+		if c := probeContainer(t, f); !c.removed || !c.forceRemoved {
+			t.Errorf("probe container removed=%v force=%v", c.removed, c.forceRemoved)
+		}
+	})
+	t.Run("create fails", func(t *testing.T) {
+		f := newFakeDocker()
+		f.failCreateContainer = "wardyn-relay-probe-"
+		if err := relayProbeDriver(f).ProbeRelay(context.Background(), relayProbeTarget, 8443); err == nil || errors.Is(err, ErrRelayUnreachable) {
+			t.Fatalf("err = %v", err)
+		}
+	})
 }
 
-func TestProbeRelay_DefaultsNetwork(t *testing.T) {
+func TestProbeRelayNeverPulls(t *testing.T) {
 	f := newFakeDocker()
-	f.images["wardyn-proxy:dev"] = true
-	p := relayProbeFixture()
-	p.Network = ""
-	if err := newTestDriver(f).ProbeRelay(context.Background(), p); err != nil {
-		t.Fatal(err)
-	}
-	if got := probeContainer(t, f).host.NetworkMode; got != "wardyn-internal" {
-		t.Errorf("network %q", got)
-	}
-}
-
-func TestProbeRelay_PullsAnAbsentImage(t *testing.T) {
-	f := newFakeDocker()
-	if err := newTestDriver(f).ProbeRelay(context.Background(), relayProbeFixture()); err != nil {
-		t.Fatal(err)
-	}
-	if !f.images["wardyn-proxy:dev"] {
-		t.Error("image not pulled")
-	}
-}
-
-func TestProbeRelay_ImageStillAbsentAfterPull(t *testing.T) {
-	f := newFakeDocker()
-	f.pullKeepsNothing = true
-	err := newTestDriver(f).ProbeRelay(context.Background(), relayProbeFixture())
-	if err == nil || !strings.Contains(err.Error(), "wardyn-proxy:dev") || !strings.Contains(err.Error(), "pull") || errors.Is(err, ErrRelayUnreachable) {
+	err := newTestDriver(f).ProbeRelay(context.Background(), relayProbeTarget, 8443)
+	if err == nil || !strings.Contains(err.Error(), "wardyn-proxy:dev") || !strings.Contains(err.Error(), "docker pull") || errors.Is(err, ErrRelayUnreachable) {
 		t.Fatalf("err = %v", err)
 	}
-	if len(f.containers) != 0 {
-		t.Error("a container was created without the image")
-	}
-}
-
-func TestProbeRelay_CreateFailureIsNotUnreachable(t *testing.T) {
-	f := newFakeDocker()
-	f.images["wardyn-proxy:dev"] = true
-	f.failCreateContainer = "wardyn-relay-probe-"
-	err := newTestDriver(f).ProbeRelay(context.Background(), relayProbeFixture())
-	if err == nil || errors.Is(err, ErrRelayUnreachable) {
-		t.Fatalf("err = %v", err)
+	if f.images["wardyn-proxy:dev"] || len(f.containers) != 0 {
+		t.Error("the probe pulled or created a container")
 	}
 }
