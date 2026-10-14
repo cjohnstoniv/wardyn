@@ -225,15 +225,16 @@ func (s *Server) promoteWaitingPools(ctx context.Context) {
 	}
 }
 
-// SweepRunQueue is one tick of the leader's queue sweep: end the waiting runs whose deadline passed,
-// fail the promoted runs whose start died, and promote for every pool that has waiting runs (a slot may
-// have freed with no commit this replica saw). Every write is a CAS under the pool lock, so a second
-// leader for a moment is harmless.
+// SweepRunQueue is one tick of the leader's queue sweep: end the waiting runs whose deadline passed and
+// the ones whose named runner is revoked, fail the promoted runs whose start died, and promote for every
+// pool that has waiting runs (a slot may have freed with no commit this replica saw). Every write is a
+// CAS under the pool lock, so a second leader for a moment is harmless.
 func (s *Server) SweepRunQueue(ctx context.Context) error {
 	if _, ok := s.queueStore(); !ok {
 		return nil
 	}
 	s.expireQueued(ctx)
+	s.endQueuedRunsOfRevokedRunners(ctx)
 	s.failStalePromoted(ctx)
 	s.promoteWaitingPools(ctx)
 	return nil

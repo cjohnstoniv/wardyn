@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
@@ -181,6 +182,43 @@ func (s *Server) toolRulesWithinPolicyRefusal(req createRunRequest, spec types.R
 		}
 	}
 	return nil
+}
+
+// inheritedMCPHoldRefusal refuses a run whose resolved policy explicitly holds a
+// tool of an MCP server bound to a harness nothing can pause, as
+// harnessToolRulesRefusal refuses the person's own hold: a background Codex CLI
+// run has no approval contract and no gated lane, every harness a command
+// starts is off the gated lane, and the MCP broker passes a held call, so
+// nothing would ask.
+func inheritedMCPHoldRefusal(req createRunRequest, spec types.RunPolicySpec, comps runComponents) *runRefusal {
+	var harnesses []string
+	sentence := accessSentences["harness_no_hold"]
+	switch {
+	case req.TaskMode == "exec":
+		sentence, harnesses = accessSentences["command_no_hold"], mcpIncludedHarnesses(req)
+	case req.Agent == codexHarness && !requestIsInteractive(req):
+		harnesses = []string{codexHarness}
+	}
+	for _, h := range harnesses {
+		if slices.ContainsFunc(mcpServersFor(comps, h), func(key string) bool { return policyHoldsMCPServer(spec.ToolRules, key) }) {
+			return runError(http.StatusUnprocessableEntity, reasonRequestFieldUnavailable, sentence)
+		}
+	}
+	return nil
+}
+
+// policyHoldsMCPServer reports whether rules explicitly hold a tool of the MCP
+// server key: a hold naming one of its tools, or a hold default ("*"). The
+// broker takes the exact rule for the tool called, else the default, and the
+// server's tools are not known here, so an exact allow lifts the default from
+// that one tool and never from the server. No rule at all is the broker's
+// fallback, not an explicit hold.
+func policyHoldsMCPServer(rules []types.ToolRule, key string) bool {
+	prefixes := proxy.MCPToolPrefixes(key)
+	return slices.ContainsFunc(rules, func(r types.ToolRule) bool {
+		return r.Effect == types.ToolHold &&
+			(r.Tool == "*" || slices.ContainsFunc(prefixes, func(p string) bool { return strings.HasPrefix(r.Tool, p) }))
+	})
 }
 
 // harnessToolRulesRefusal refuses a rule or default the included harness has no

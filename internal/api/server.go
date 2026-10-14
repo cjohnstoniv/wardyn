@@ -779,8 +779,8 @@ type Server struct {
 	// and lastTouch above, and correct for the same reason: replicas>1 is
 	// refused by construction (deployment.yaml). Zero value is ready to use.
 	attachHolders attachHolderRegistry
-	// creates lets a kill cancel a STARTING run's CreateSandbox (runs_create_cancel.go).
-	creates inflightCreates
+	// creates lets a kill cancel a STARTING run's CreateSandbox, and runBuilds its image build (runs_create_cancel.go).
+	creates, runBuilds inflightCreates
 	// queue is the pool queue's in-process state: kick coalescing and the gauge snapshot (metrics_queue.go).
 	queue runQueueState
 	// replica is this server's identity when no LiveBus names one (replicaName).
@@ -811,6 +811,8 @@ type Server struct {
 	// adminAuth/auditAuthFailed in http.go) so a scanner cannot flood the
 	// append-only log. Zero value is ready to use.
 	authFailedLimiter authFailedLimiter
+	// sshKeyLimiters rate-bounds the ssh.authenticate refusal rows that name a registered key, per key.
+	sshKeyLimiters sshKeyLimiters
 	// authFailedStreak is the open run of identical consecutive auth.fail rows
 	// the coalescer is folding (see coalesceAuthFailed, http.go). Process-local
 	// like the bounds above. Zero value is ready to use.
@@ -922,11 +924,8 @@ func New(cfg Config) *Server {
 		cfg.BaseCtx = context.Background()
 	}
 	s := &Server{cfg: cfg, signInCaptureKillGrace: signInCaptureKillGrace,
-		branchLimiter: principalLimiter{rate: branchListRatePerSec, burst: branchListBurst, max: branchListMaxPeople},
-		deviceRouteState: deviceRouteState{
-			enrolLimiter:         principalLimiter{rate: enrolRatePerSec, burst: enrolBurst, max: enrolLimiterMaxPeers},
-			ingestFailureLimiter: principalLimiter{rate: ingestFailureRatePerSec, burst: ingestFailureBurst, max: ingestFailureMaxDevices},
-		},
+		branchLimiter:    principalLimiter{rate: branchListRatePerSec, burst: branchListBurst, max: branchListMaxPeople},
+		deviceRouteState: newDeviceRouteState(),
 	}
 	s.scimState = newSCIMState()
 	s.defaultRunnerHooks()
