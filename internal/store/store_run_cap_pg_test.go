@@ -248,11 +248,17 @@ func TestPG_MarkRunAgentStopped_PinsTheLostMark(t *testing.T) {
 	if stopped() {
 		t.Fatal("a mark carrying a stale lost_at recorded the agent as stopped")
 	}
+	if got, err := pg.RunAgentStopped(ctx, run.ID); err != nil || got {
+		t.Fatalf("RunAgentStopped before the stop = %v, %v; want false", got, err)
+	}
 	if err := pg.MarkRunAgentStopped(ctx, run.ID, *cur.LostAt); err != nil {
 		t.Fatalf("mark under the current lost_at: %v", err)
 	}
 	if !stopped() {
 		t.Fatal("the mark under the current lost_at recorded nothing")
+	}
+	if got, err := pg.RunAgentStopped(ctx, run.ID); err != nil || !got {
+		t.Fatalf("RunAgentStopped after the stop = %v, %v; want true", got, err)
 	}
 }
 

@@ -321,7 +321,6 @@ func TestPresetDoorHoldsTheRunContract(t *testing.T) {
 	}{
 		{"a pool id that is not an id", client.CreateRunRequest{Agent: "claude-code", RunnerPoolID: "nope"}, "runner_pool_invalid"},
 		{"an image choice no lane applies yet", client.CreateRunRequest{Agent: "claude-code", AllowedImage: "ghcr.io/acme/dev:1"}, reasonRequestFieldUnavailable},
-		{"a placement that always answers placement_unavailable at launch", client.CreateRunRequest{Agent: "claude-code", Placement: client.PlacementLocal}, reasonRequestFieldUnavailable},
 		{"a built-in component no lane applies yet", client.CreateRunRequest{Agent: "claude-code", Components: []client.ComponentRef{{Builtin: "azure_devops", Org: "acme"}}}, reasonRequestFieldUnavailable},
 		{"a workspace target outside home", client.CreateRunRequest{Agent: "claude-code", Workspaces: []client.WorkspaceSelection{{WorkspaceID: wsID, Target: "/etc/x"}}}, reasonWorkspaceTargetInvalid},
 		{"a wildcard override", client.CreateRunRequest{Agent: "claude-code", Overrides: &client.RunOverrides{Agent: &client.AgentOverrides{AddHosts: []string{"*.example.com"}}}}, reasonOverrideRefused},
@@ -336,8 +335,9 @@ func TestPresetDoorHoldsTheRunContract(t *testing.T) {
 			}
 		})
 	}
-	if w := f.put(t, "team-x", client.PresetRequest{Request: client.CreateRunRequest{Agent: "claude-code", Placement: client.PlacementLocal}}); !strings.Contains(w.Body.String(), "request.placement is not available") {
-		t.Errorf("a preset carrying placement local = %d %s, want request.placement named", w.Code, w.Body.String())
+	// placement local is the launch door's to judge (stepLocalEligibility), as for a request sent directly.
+	if w := f.put(t, "team-local", client.PresetRequest{Request: client.CreateRunRequest{Agent: "claude-code", Placement: client.PlacementLocal}}); w.Code != http.StatusCreated {
+		t.Errorf("a preset carrying placement local = %d %s, want it stored", w.Code, w.Body.String())
 	}
 	if w := f.put(t, "team-x", client.PresetRequest{Request: client.CreateRunRequest{Agent: "claude-code", Shape: client.RunShapeEnvironment}}); !strings.Contains(w.Body.String(), "request.shape cannot be stored in a preset") {
 		t.Errorf("a preset carrying shape = %d %s, want request.shape named", w.Code, w.Body.String())

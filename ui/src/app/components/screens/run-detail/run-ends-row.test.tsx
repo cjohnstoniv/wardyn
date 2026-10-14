@@ -99,7 +99,12 @@ describe("RunEndsRow — the four states (mock 'Ends')", () => {
   });
 });
 
-describe("RunEndsRow — terminal and lost runs render nothing here", () => {
+describe("RunEndsRow — terminal, lost and queued runs render nothing here", () => {
+  it("a QUEUED run: its end is written when it starts, so no 'No end' and no Set an end…", () => {
+    const { container } = renderRow(detail({ state: "QUEUED" }));
+    expect(container).toBeEmptyDOMElement();
+  });
+
   it.each(["COMPLETED", "KILLED", "FAILED", "STOPPED", "ARCHIVED"])("state=%s", (state) => {
     const { container } = renderRow(detail({ state }));
     expect(container).toBeEmptyDOMElement();

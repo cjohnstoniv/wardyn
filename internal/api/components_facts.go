@@ -122,6 +122,7 @@ const (
 type componentFactInputs struct {
 	req               *createRunRequest
 	spec              types.RunPolicySpec
+	harnesses         []types.RunHarness // the run's harness set; agentPolicyDocument falls back to it
 	comps             runComponents
 	baseline          composer.Baseline
 	scmSite           types.SiteConfig

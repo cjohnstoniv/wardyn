@@ -87,7 +87,7 @@ No container holds the proxy's rendered configuration at rest (#1176): its per-r
 
 Revive is refused, nothing changed, when:
 
-- The run's captured profile no longer exists, or now denies a host its git broker needs.
+- The run's captured profile no longer exists, or now denies a host its git broker or its Azure CLI needs. A live run that is refused keeps the access it started with until it ends.
 - The model credential its proxy would inject has been erased, or its provider disabled.
 - The run is past its end and not yet extended — extend it first.
 - The run is already kept by its own end, and either it's a task run (not interactive) or it's past its files grace — the agent can't be started again; start a new run instead.

@@ -18,6 +18,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/types"
+	"github.com/cjohnstoniv/wardyn/internal/workspacescan"
 	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
 
@@ -675,6 +676,60 @@ func TestHarnessSetKeyIsNotAnAgent(t *testing.T) {
 		w := doSSO(t, srv, http.MethodPost, door, govSession(t, "sub-plain", []string{"eng"}, false), `{"agent":"claude-code+codex-cli","task":"t"}`)
 		if w.Code != http.StatusUnprocessableEntity || errorReason(w) != reasonAgentNotEnabled {
 			t.Errorf("%s = %d %s, want 422 agent_not_enabled", door, w.Code, w.Body.String())
+		}
+	}
+}
+
+// A run of two or more harnesses never runs on a custom image, and an attached, scanned workspace that
+// would build one (its repo's devcontainer, or a generated profile) replaces the set image at launch
+// with an image that carries at most one CLI. Every door refuses it with the custom-image refusal. A
+// single harness on the same workspace, a workspace that builds nothing (no profile, or no builder) and
+// a workspace-free pair are unchanged, and keep the set image.
+func TestRunMode_TwoHarnessesRefuseAWorkspaceThatBuildsAnImage(t *testing.T) {
+	images := map[string]string{"claude-code": "wardyn/agent-claude-code:local", "claude-code+codex-cli": setImage}
+	profile := func(devcontainer bool) json.RawMessage {
+		raw, _ := json.Marshal(workspacescan.WorkspaceProfile{Languages: []string{"Go"}, Confidence: workspacescan.ConfidenceHigh,
+			Source: workspacescan.SourceDeterministic, HasDevcontainer: devcontainer})
+		return raw
+	}
+	ws := func(p json.RawMessage) types.Workspace {
+		return types.Workspace{ID: uuid.MustParse(wsID), Name: "w", Status: types.WorkspaceScanned, Profile: p,
+			Sources: []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeLocalDir, Path: t.TempDir()}}}
+	}
+	attach := `"workspaces":[{"workspace_id":"` + wsID + `","target":"/home/agent/work"}]`
+	two := `"experience":"interactive","tools":[` + claudeTool + `,` + codexTool + `],` + attach
+	one := `"experience":"interactive","tools":[` + claudeTool + `],` + attach
+	for _, tc := range []struct {
+		name    string
+		ws      types.Workspace
+		builder bool
+		body    string
+		refused bool
+	}{
+		{"two harnesses and a repo devcontainer", ws(profile(true)), true, two, true},
+		{"two harnesses and a generated profile", ws(profile(false)), true, two, true},
+		{"one harness and a repo devcontainer", ws(profile(true)), true, one, false},
+		{"two harnesses and a workspace with no profile", ws(nil), true, two, false},
+		{"two harnesses and no image builder", ws(profile(true)), false, two, false},
+	} {
+		for _, door := range harnessDoors {
+			t.Run(tc.name+door, func(t *testing.T) {
+				srv, st, _ := harnessSetFixture(t, &capStore{}, images, nil)
+				st.workspaces = []types.Workspace{tc.ws}
+				if tc.builder {
+					srv.cfg.ImageBuilder = buildEventBuilder{log: &buildEventLog{}}
+				}
+				w := harnessSetCall{"sub-plain", tc.body}.ask(t, srv, door)
+				if tc.refused {
+					if w.Code != http.StatusUnprocessableEntity || errorReason(w) != reasonHarnessSetCustomImage {
+						t.Fatalf("= %d %s, want 422 %s", w.Code, w.Body.String(), reasonHarnessSetCustomImage)
+					}
+					return
+				}
+				if w.Code >= 300 {
+					t.Fatalf("= %d %s, want it admitted", w.Code, w.Body.String())
+				}
+			})
 		}
 	}
 }

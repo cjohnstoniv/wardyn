@@ -142,7 +142,8 @@ const RES_WORD = { cpu: RES.CPU, mem: RES.MEMORY.toLowerCase(), disk: RES.DISK.t
 /** A duration pair left wholly empty is unset; the pool's runners set it. */
 const durEmpty = (x: RtValues, pre: "life" | "idle", noEnd: boolean) => blank(x[`${pre}Dn`]) && blank(x[`${pre}Mn`]) && !x[`${pre}Unl`] && !noEnd;
 
-export function validate(v: FormValues): FormErrors {
+/** `loaded` is the pool's limits as the form read them: a duration field left as loaded counts as it was read. */
+export function validate(v: FormValues, loaded?: RunnerPoolLimits): FormErrors {
   const e: FormErrors = {};
   if (!v.name || v.name !== v.name.trim()) e.name = POOL_FORM.ERR_NAME;
   else if ([...v.name].length > 64) e.name = POOL_FORM.ERR_NAME_LONG;
@@ -152,6 +153,7 @@ export function validate(v: FormValues): FormErrors {
   for (const k of ["bg", "it"] as const) {
     if (!v[`${k}On`]) continue;
     const x = v[k];
+    const from = loaded?.[k === "bg" ? "background" : "interactive"];
     const title = RT_TITLE[k];
     for (const r of ["cpu", "mem", "disk"] as const) {
       const d = x[`${r}D`];
@@ -167,11 +169,10 @@ export function validate(v: FormValues): FormErrors {
     const dur = (pre: "life" | "idle", what: string, never: string) => {
       const noEnd = k === "bg" && pre === "life" && x.lifeUnl && x.lifeNoEnd;
       if (durEmpty(x, pre, noEnd)) return;
-      const dsec = num(x[`${pre}Dn`]) * SECS[x[`${pre}Du`]];
-      const msec = num(x[`${pre}Mn`]) * SECS[x[`${pre}Mu`]];
+      const { dsec, msec, keepD } = durSecs(x, pre, noEnd, from);
       const unl = x[`${pre}Unl`];
       const key = `${k}.${pre === "life" ? "life" : "idle"}`;
-      if (!noEnd && !(dsec >= 1)) e[key] = POOL_FORM.ERR_DUR_DEFAULT(title, what);
+      if (!noEnd && !keepD && !(dsec >= 1)) e[key] = POOL_FORM.ERR_DUR_DEFAULT(title, what);
       else if (!unl && !(msec >= 1)) e[key] = POOL_FORM.ERR_DUR_MAX(title, what, never);
       else if (!unl && dsec > msec) e[key] = POOL_FORM.ERR_DUR_ORDER(title, what, fmtDur(Math.round(dsec)), fmtDur(Math.round(msec)));
     };
@@ -184,31 +185,55 @@ export function validate(v: FormValues): FormErrors {
 const amount = (d: string, c: string, per: number): RunnerPoolAmount | undefined =>
   blank(d) && blank(c) ? undefined : { default: Math.round(num(d) * per), cap: Math.round(num(c) * per) };
 
-function duration(x: RtValues, pre: "life" | "idle", noEnd: boolean): RunnerPoolDuration | undefined {
+
+/**
+ * A duration's seconds as a save will send them. The form shows a duration in whole minutes, hours or days
+ * and an unset default as 1 hour, so each of the default and the maximum the person did not touch goes back
+ * as it was read from `from` (90 s stays 90 s, an idle stop that never stops by default stays default 0, a
+ * 10 s maximum is not rounded to 0 minutes) and only a field they changed converts from what they typed.
+ */
+function durSecs(x: RtValues, pre: "life" | "idle", noEnd: boolean, from?: RtLimits) {
+  const src = pre === "life" ? from?.lifetime : from?.idle;
+  const o = from && rtFrom(from);
+  const same = (a: "Dn" | "Mn", b: "Du" | "Mu") => !!o && x[`${pre}${a}`] === o[`${pre}${a}`] && x[`${pre}${b}`] === o[`${pre}${b}`];
+  const unl = x[`${pre}Unl`];
+  const keepD = !!src && same("Dn", "Du") && (src.default_sec > 0 || unl) && (pre !== "life" || x.lifeNoEnd === o?.lifeNoEnd);
+  const keepM = same("Mn", "Mu");
+  const typed = (n: "Dn" | "Mn", u: "Du" | "Mu") => Math.round(num(x[`${pre}${n}`]) * SECS[x[`${pre}${u}`]]);
+  return {
+    keepD,
+    dsec: keepD ? src.default_sec : noEnd ? 0 : typed("Dn", "Du"),
+    msec: (keepM && src?.max_sec) || typed("Mn", "Mu"),
+  };
+}
+
+function duration(x: RtValues, pre: "life" | "idle", noEnd: boolean, from?: RtLimits): RunnerPoolDuration | undefined {
   if (durEmpty(x, pre, noEnd)) return undefined;
-  const d = Math.round(num(x[`${pre}Dn`]) * SECS[x[`${pre}Du`]]);
-  if (x[`${pre}Unl`]) return { default_sec: noEnd ? 0 : d, unlimited: true };
-  return { default_sec: d, max_sec: Math.round(num(x[`${pre}Mn`]) * SECS[x[`${pre}Mu`]]) };
+  const { dsec, msec } = durSecs(x, pre, noEnd, from);
+  return x[`${pre}Unl`] ? { default_sec: dsec, unlimited: true } : { default_sec: dsec, max_sec: msec };
 }
 
 const defined = <T extends object>(o: T): T => Object.fromEntries(Object.entries(o).filter(([, v]) => v !== undefined)) as T;
 
-function rtLimits(x: RtValues, interactive: boolean): RtLimits {
+function rtLimits(x: RtValues, interactive: boolean, from?: RtLimits): RtLimits {
   const base = defined({
     cpu_millis: amount(x.cpuD, x.cpuC, 1000),
     memory_mib: amount(x.memD, x.memC, 1024),
     disk_mib: amount(x.diskD, x.diskC, 1024),
-    lifetime: duration(x, "life", !interactive && x.lifeUnl && x.lifeNoEnd),
+    lifetime: duration(x, "life", !interactive && x.lifeUnl && x.lifeNoEnd, from),
   });
-  return interactive ? defined({ ...base, idle: duration(x, "idle", false) }) : base;
+  return interactive ? defined({ ...base, idle: duration(x, "idle", false, from) }) : base;
 }
 
-/** The form's values as the wire's limits (the values must have passed validate). */
-export function toLimits(v: FormValues): RunnerPoolLimits {
+/**
+ * The form's values as the wire's limits (the values must have passed validate). `loaded` is the pool's
+ * limits as the form read them: a duration left as loaded is sent as read. Amounts round-trip exactly.
+ */
+export function toLimits(v: FormValues, loaded?: RunnerPoolLimits): RunnerPoolLimits {
   const limits: RunnerPoolLimits = { barriers: (["CC1", "CC2", "CC3"] as const).filter((_, i) => v[`cc${i + 1}` as "cc1" | "cc2" | "cc3"]) };
   if (!blank(v.maxruns)) limits.max_concurrent_runs = Number(v.maxruns);
-  if (v.bgOn) limits.background = rtLimits(v.bg, false);
-  if (v.itOn) limits.interactive = rtLimits(v.it, true);
+  if (v.bgOn) limits.background = rtLimits(v.bg, false, loaded?.background);
+  if (v.itOn) limits.interactive = rtLimits(v.it, true, loaded?.interactive);
   return limits;
 }
 

@@ -68,7 +68,9 @@ function cloneIntent(s: PrefillState): RunIntent {
     const command = s.startupCommand?.trim() ? { startup: { kind: "command" as const, command: s.startupCommand } } : {};
     return { ...common, shape: "environment", experience: "interactive", ...command };
   }
-  return { ...common, shape: "agent_task", experience: "interactive", ...(s.agent ? { startup: { kind: "harness", tool: s.agent } } : {}) };
+  // The run's first prompt is its task; a blank one is left out, never sent as an empty prompt.
+  const prompt = s.task?.trim() ? { prompt: s.task } : {};
+  return { ...common, shape: "agent_task", experience: "interactive", ...(s.agent ? { startup: { kind: "harness", tool: s.agent, ...prompt } } : {}) };
 }
 
 /** The seed a router-state prefill makes, or undefined when the state holds none. */

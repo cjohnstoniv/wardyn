@@ -16,12 +16,14 @@ import (
 type fleetCapStore struct {
 	pingStore
 	calls int
+	opts  []store.RunCapacityOpts
 	cap   store.RunCapacity
 	err   error
 }
 
-func (c *fleetCapStore) RunCapacity(context.Context, store.RunCapacityOpts) (store.RunCapacity, error) {
+func (c *fleetCapStore) RunCapacity(_ context.Context, o store.RunCapacityOpts) (store.RunCapacity, error) {
 	c.calls++
+	c.opts = append(c.opts, o)
 	return c.cap, c.err
 }
 
@@ -80,5 +82,26 @@ func TestMetricsFleetFailureOmitsFamilies(t *testing.T) {
 	}
 	if strings.Contains(body, "wardyn_runs_active") || strings.Contains(body, "wardyn_runs_unschedulable") || strings.Contains(body, "_held") || strings.Contains(body, "oldest_active") {
 		t.Errorf("capacity families present on a failed refresh:\n%s", body)
+	}
+}
+
+// The capacity handler and the metrics snapshot both tell the store which executors are this deployment's
+// own, so a run bound outside it is not counted in either.
+func TestRunCapacityReadsPassTheDeploymentExecutors(t *testing.T) {
+	cs := &fleetCapStore{}
+	cfg := baseTestConfig(newHarness(t), cs)
+	cfg.Runner = multiExecutorRunner{names: []string{"docker", "k8s"}}
+	srv := New(cfg)
+	if w := do(t, srv, http.MethodGet, "/api/v1/admin/runs/capacity", adminToken, ""); w.Code != http.StatusOK {
+		t.Fatalf("capacity = %d %s", w.Code, w.Body.String())
+	}
+	scrapeBody(t, srv)
+	if len(cs.opts) != 2 {
+		t.Fatalf("store reads = %d, want the handler's and the snapshot's", len(cs.opts))
+	}
+	for i, o := range cs.opts {
+		if o.LocalExecutor == nil || !o.LocalExecutor("k8s") || o.LocalExecutor("elsewhere") {
+			t.Errorf("read %d: LocalExecutor not wired to the deployment's executors", i)
+		}
 	}
 }
