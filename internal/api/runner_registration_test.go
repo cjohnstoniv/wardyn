@@ -212,6 +212,22 @@ func TestRunnerSelfMintNeedsTheSelfHostGrant(t *testing.T) {
 	}
 }
 
+// An operator stays exempt from the self-host gate when governed admin runs are on: the admin mint lets
+// them name themself, so the gate there would bound nothing.
+func TestRunnerSelfMintOperatorExemptWhenAdminRunsAreGoverned(t *testing.T) {
+	srv, f, _ := newRunnerRegistrationServer(t)
+	srv.cfg.GovernAdminRuns = true
+	f.selfHostRestricted = true
+	admin := memberModeSSOSession(t, "carol", "carol@example.com", oidc.RoleAdmin, false)
+	if w := doSSO(t, srv, http.MethodPost, "/api/v1/me/runners/tokens", admin, "{}"); w.Code != 201 {
+		t.Fatalf("a governed-runs admin was asked for the grant: %d %s", w.Code, w.Body.String())
+	}
+	member := memberModeSSOSession(t, "alice", "alice@example.com", oidc.RoleUser, false)
+	if w := doSSO(t, srv, http.MethodPost, "/api/v1/me/runners/tokens", member, "{}"); w.Code != 403 {
+		t.Fatalf("a member without the grant minted: %d %s", w.Code, w.Body.String())
+	}
+}
+
 func TestRunnerRegistrationAnonymousUnclaimedAndSingleUse(t *testing.T) {
 	srv, f, h := newRunnerRegistrationServer(t)
 	raw := newBearer("wdr_")

@@ -64,9 +64,9 @@ func (s *Server) handleRunnerTokenSelf(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	// An operator is exempt like everywhere else (capBatch.decide step 1): an admin minting for
-	// themself through /me is a human with the administrative tier, not a member to bound.
-	if s.denyUserCapability(w, r, capFeature, featureSelfHostRunner, "me.runners.tokens", runnerSelfHostRefusal) {
+	// An operator is exempt even with WARDYN_GOVERN_ADMIN_RUNS on: the admin mint (POST /runners/tokens)
+	// lets an operator name themself, so asking here would bound nothing.
+	if !s.isOperator(r.Context()) && s.denyUserCapability(w, r, capFeature, featureSelfHostRunner, "me.runners.tokens", runnerSelfHostRefusal) {
 		return
 	}
 	var req struct{}

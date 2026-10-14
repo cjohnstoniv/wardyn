@@ -29,6 +29,8 @@ func TestRunnerClaimRefusalNamesTheCause(t *testing.T) {
 		want                  string
 	}{
 		{name: "another person's runner", sub: "bob", fp: "fingerprint", state: types.RunnerUnclaimed, want: generic},
+		{name: "another person's revoked runner", sub: "bob", fp: "fingerprint", state: types.RunnerRevoked, want: generic},
+		{name: "another person's runner on a different org url", sub: "bob", fp: "fingerprint", state: types.RunnerUnclaimed, orgURL: "https://other.example.com", want: generic},
 		{name: "no such runner", sub: "alice", fp: "fingerprint", state: types.RunnerUnclaimed, missing: true, want: generic},
 		{name: "already claimed", sub: "alice", fp: "fingerprint", state: types.RunnerClaimed, want: "already been claimed"},
 		{name: "revoked", sub: "alice", fp: "fingerprint", state: types.RunnerRevoked, want: "was revoked"},
