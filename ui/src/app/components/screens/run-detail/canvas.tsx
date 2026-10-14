@@ -50,6 +50,13 @@ import {
 const MARGIN: [number, number] = [10, 10];
 const PADDING: [number, number] = [10, 10];
 
+// react-grid-layout's stylesheet glides every tile for 200ms on any size or
+// position change. That glide is for arranging; outside editing it slid a
+// tile's controls out from under a press that had already landed (the release
+// then hits something else and the click never fires). Inline, because that
+// stylesheet is unlayered and outranks any utility class.
+const STILL: React.CSSProperties = { transition: "none" };
+
 // The board's dot grid, on only while editing — a permanent one would compete
 // with the terminal.
 const DOT_GRID: React.CSSProperties = {
@@ -74,11 +81,14 @@ const GHOST = [
 /** Measures the scroll box: width for the grid, height to size a row.
  *  A callback ref rather than useRef, because focus mode unmounts this box and
  *  brings it back: a `[]` effect would keep observing the DETACHED node and
- *  every row height after the first exit would be stale. */
+ *  every row height after the first exit would be stale. A layout effect, so
+ *  the first frame painted is already at the measured size: a passive effect
+ *  painted the tiles at the 480px floor first and resized them a frame later,
+ *  moving every control in them after it appeared. */
 function useCanvasSize() {
   const [node, setNode] = React.useState<HTMLDivElement | null>(null);
   const [size, setSize] = React.useState({ width: 0, height: 0 });
-  React.useEffect(() => {
+  React.useLayoutEffect(() => {
     if (!node) return;
     const measure = () =>
       setSize((prev) =>
@@ -274,6 +284,7 @@ export function RunCanvas({ ctx }: { ctx: WidgetContext }) {
                 <div
                   key={id}
                   className="flex min-h-0 flex-col overflow-hidden rounded-lg"
+                  style={editing ? undefined : STILL}
                   // Load-bearing for e2e: the terminal's tile must be findable
                   // AND above the fold. Both presets place it at y=0.
                   data-testid={id === "terminal" ? "run-terminal-pane" : undefined}

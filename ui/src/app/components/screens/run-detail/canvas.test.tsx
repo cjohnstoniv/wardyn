@@ -236,6 +236,22 @@ describe("RunCanvas — a situational flip mid-edit does not clobber the in-prog
   });
 });
 
+// A gliding tile moves its controls out from under a press that already
+// landed, and the release then misses: the click never fires.
+describe("RunCanvas — tiles glide only while being arranged", () => {
+  it("holds every tile still outside editing, and gives the glide back while editing", async () => {
+    const user = userEvent.setup();
+    render(<RunCanvas ctx={ctx()} />);
+    await screen.findByRole("heading", { name: "Egress" });
+    const tiles = () => [...document.querySelectorAll<HTMLElement>(".react-grid-item")];
+    expect(tiles().length).toBeGreaterThan(1);
+    for (const tile of tiles()) expect(tile.style.transition).toBe("none");
+
+    await user.click(screen.getByRole("button", { name: RUN_COCKPIT.editLayout }));
+    for (const tile of tiles()) expect(tile.style.transition).toBe("");
+  });
+});
+
 describe("RunCanvas — the catalog", () => {
   it("takes a widget off the canvas and puts it back", async () => {
     const user = userEvent.setup();
