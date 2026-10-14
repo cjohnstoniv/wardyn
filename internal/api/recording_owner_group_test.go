@@ -167,7 +167,7 @@ func TestPGUploadRecording_OneOwnersStalledUploadsDoNotRefuseAnother(t *testing.
 	shortenUploadWindow(t)
 	var as admittedStore
 	o := newOwnerUploads(t, func(pg *recording.PGStore) recording.Store { as = newAdmittedStore(pg); return as })
-	srv := httptest.NewServer(o.srv.Handler())
+	srv := httptest.NewServer(panicFails(t, o.srv.Handler()))
 	defer srv.Close()
 	a1, a1Token := o.run("busy@example.com", false)
 	a2, a2Token := o.run("busy@example.com", false)
@@ -190,7 +190,7 @@ func TestPGUploadRecording_SeveralOwnersStalledUploadsAnswerWithinBounds(t *test
 	shortenUploadWindow(t)
 	var as admittedStore
 	o := newOwnerUploads(t, func(pg *recording.PGStore) recording.Store { as = newAdmittedStore(pg); return as })
-	srv := httptest.NewServer(o.srv.Handler())
+	srv := httptest.NewServer(panicFails(t, o.srv.Handler()))
 	defer srv.Close()
 	a, aToken := o.run("one@example.com", false)
 	b, bToken := o.run("two@example.com", false)

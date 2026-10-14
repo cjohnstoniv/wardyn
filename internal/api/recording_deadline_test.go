@@ -67,7 +67,7 @@ func TestPGUploadRecording_ReadDeadlineEndsTricklingUpload(t *testing.T) {
 	shortenUploadWindow(t)
 	store := recording.NewPGStore(throwawayPGPool(t))
 	h := newRecordingHarness(t, store, nil)
-	srv := httptest.NewServer(h.srv.Handler())
+	srv := httptest.NewServer(panicFails(t, h.srv.Handler()))
 	defer srv.Close()
 	run := uuid.New()
 	token := h.mintRunToken(t, run)
@@ -97,7 +97,7 @@ func TestPGUploadRecording_ReadDeadlineEndsSlowTrickle(t *testing.T) {
 	shortenUploadWindow(t)
 	store := recording.NewPGStore(throwawayPGPool(t))
 	h := newRecordingHarness(t, store, nil)
-	srv := httptest.NewServer(h.srv.Handler())
+	srv := httptest.NewServer(panicFails(t, h.srv.Handler()))
 	defer srv.Close()
 	run := uuid.New()
 	body, writer := io.Pipe()
@@ -169,7 +169,7 @@ func TestPGUploadRecording_StalledUploadsReleaseTheBudget(t *testing.T) {
 	pg := recording.NewPGStore(throwawayPGPool(t))
 	store := readingStore{PGStore: pg, reading: make(chan string, 8)}
 	h := newRecordingHarness(t, store, nil)
-	srv := httptest.NewServer(h.srv.Handler())
+	srv := httptest.NewServer(panicFails(t, h.srv.Handler()))
 	defer srv.Close()
 	addr := strings.TrimPrefix(srv.URL, "http://")
 
@@ -230,7 +230,7 @@ func (l noDeadlineListener) Accept() (net.Conn, error) {
 func TestUploadRecording_RefusedWithoutReadDeadline(t *testing.T) {
 	store := &fakeRecordingStore{}
 	h := newRecordingHarness(t, store, nil)
-	srv := httptest.NewUnstartedServer(h.srv.Handler())
+	srv := httptest.NewUnstartedServer(panicFails(t, h.srv.Handler()))
 	srv.Listener = noDeadlineListener{srv.Listener}
 	srv.Start()
 	defer srv.Close()
