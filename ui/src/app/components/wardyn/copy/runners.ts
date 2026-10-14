@@ -171,8 +171,6 @@ export const RUN_PLACEMENT = {
   /** The Identity rows beside "Runs on": the runner by name (its id when the name is unknown) and its pool. */
   RUNNER: "Runner",
   POOL: "Pool",
-  /** A run from before 0.9 has no recorded place. */
-  NOT_RECORDED: "Not recorded",
   CHIP: runOnChip,
   EVIDENCE: "Evidence",
   REPORTED_BY: (name: string) => `Reported by ${name}`,

@@ -41,8 +41,9 @@ export function IdentityWidget({
   // type since deleted — never the raw id.
   const ranAs = run.user_type_name;
   const principal = usePrincipal();
-  // Where the run runs, for every run: local names the computer, remote says so, and a run from before 0.9
-  // (nothing recorded) says that. The runner and pool rows name where it went, by id when no name is known.
+  // Where the run runs: local names the computer, remote says so. A run with no recorded placement (from
+  // before 0.9, or on a deployment that places nothing) has no such row. The runner and pool rows name where
+  // it went, by id when no name is known.
   const local = run.placement === "local";
   const runsOn = local
     ? principal && run.created_by === principal
@@ -50,7 +51,7 @@ export function IdentityWidget({
       : RUN_PLACEMENT.OTHERS(runnerLabel(run), run.created_by)
     : run.placement === "remote"
       ? RUN_PLACEMENT.REMOTE
-      : RUN_PLACEMENT.NOT_RECORDED;
+      : null;
   const runner = run.runner_name || run.runner_id || run.remote_runner_id || run.runner_target;
   const pool = run.runner_pool_name || run.runner_pool_id;
 
@@ -123,11 +124,15 @@ export function IdentityWidget({
           </button>
         </dd>
 
-        <dt className="text-muted-foreground">{RUN_PLACEMENT.LABEL}</dt>
-        <dd className="min-w-0 text-right text-foreground">
-          <div className="truncate">{runsOn}</div>
-          {run.placement_filled && <div className="text-muted-foreground">{RUN_PLACEMENT.FILLED}</div>}
-        </dd>
+        {runsOn && (
+          <>
+            <dt className="text-muted-foreground">{RUN_PLACEMENT.LABEL}</dt>
+            <dd className="min-w-0 text-right text-foreground">
+              <div className="truncate">{runsOn}</div>
+              {run.placement_filled && <div className="text-muted-foreground">{RUN_PLACEMENT.FILLED}</div>}
+            </dd>
+          </>
+        )}
 
         <dt className="text-muted-foreground">{RUN_PLACEMENT.RUNNER}</dt>
         <dd className="min-w-0 truncate text-right font-mono text-foreground" title={run.runner_id ?? run.remote_runner_id}>
