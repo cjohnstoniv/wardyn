@@ -44,7 +44,11 @@ func TestClassifyPackageBatchByOperation(t *testing.T) {
 		{name: "a body longer than the peek", req: oversized, wantErr: true},
 		{name: "an encoded body", req: withHeaders(batch(nuget, op("promote")), "Content-Encoding", "gzip"), wantErr: true},
 
-		// Positional: only the batch route reads the body.
+		// Positional: only the batch route reads the body. The fourth segment
+		// must be a package protocol: under any other, a body asking to promote
+		// does not lower a feed-object write to packaging_write.
+		{name: "a non-protocol segment before packagesbatch", req: batch("/acme/proj/_apis/packaging/feeds/f/views/packagesbatch", op("promote")), want: CapPackagingManage},
+		{name: "a non-protocol segment before the recycle bin batch", req: batch("/acme/proj/_apis/packaging/feeds/f/views/recyclebin/packagesbatch", op("promote")), want: CapPackagingManage},
 		{name: "a package named packagesbatch", req: onHost("pkgs.dev.azure.com", http.MethodPatch, "/acme/_apis/packaging/feeds/f/npm/packagesbatch/versions/1", `{}`), want: CapPackagingWrite},
 		{name: "a package version PATCH", req: onHost("pkgs.dev.azure.com", http.MethodPatch, "/acme/_apis/packaging/feeds/f/nuget/packages/p/versions/1", `{}`), want: CapPackagingWrite},
 		{name: "a package client publish", req: onHost("pkgs.dev.azure.com", http.MethodPut, "/acme/_packaging/feed/nuget/v2", `{}`), want: CapPackagingWrite},
