@@ -811,6 +811,8 @@ type Server struct {
 	// adminAuth/auditAuthFailed in http.go) so a scanner cannot flood the
 	// append-only log. Zero value is ready to use.
 	authFailedLimiter authFailedLimiter
+	// sshKeyLimiters rate-bounds the ssh.authenticate refusal rows that name a registered key, per key.
+	sshKeyLimiters sshKeyLimiters
 	// authFailedStreak is the open run of identical consecutive auth.fail rows
 	// the coalescer is folding (see coalesceAuthFailed, http.go). Process-local
 	// like the bounds above. Zero value is ready to use.
