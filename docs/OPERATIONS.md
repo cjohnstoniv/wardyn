@@ -1660,6 +1660,11 @@ per run per hour (per replica).
 
 Moved to [hybrid-laptops.md](operations/hybrid-laptops.md#managed-laptops-client-mode-runners).
 
+- Behind a shared ingress, runners and anonymous callers share one rate-limit bucket per route, keyed on the TCP peer (no `X-Forwarded-For` is read).
+  - The routes are `/api/v1/runners/{id}/stream`, `/api/v1/runners/register` and `/api/v1/devices/enrol`.
+  - Allow-list the networks your runners connect from on those paths, or give runners a dedicated ingress or hostname.
+  - Details and the refusal reasons: [Behind a shared ingress](operations/hybrid-laptops.md#behind-a-shared-ingress).
+
 ## Multi-user: who can change what
 
 Moved to [who-gets-in.md](operations/who-gets-in.md#multi-user-who-can-change-what).
@@ -2624,6 +2629,7 @@ The residuals an operator should plan for:
 ### AWS SSO per person
 
 - A `bedrock_sso` model provider (Settings → Model providers) means **each person signs in to AWS themselves**, and their runs use their own session.
+- Runs on a person's own runner: see [bedrock_sso on a laptop runner](operations/hybrid-laptops.md#bedrock_sso-on-a-laptop-runner); it needs proxy-inject on.
 - There is no shared AWS session: since 0.8 the agent roster carries no model credential, and the upgrade converted a `per_user` or `shared` `bedrock_sso` roster row into such a provider (migration `0100_model_provider_conversion`; see the [CHANGELOG](../CHANGELOG.md)).
 - **How somebody signs in.**
   - They open Getting Started (or the New Run screen) and choose the provider's sign-in.
@@ -2641,7 +2647,7 @@ The residuals an operator should plan for:
   - Take the SSO hosts out of the profile's `denied_domains` rather than widening `allowed_domains`.
 - **Launch with a lapsed session.**
   - `POST /runs` refuses a run whose own session for the chosen provider is missing, or expired with no refresh token that could renew it, BEFORE any run exists (`422`, with `"reason":"model_credential"`).
-  - Neither Review nor create spends a one-use refresh token; dispatch renews an expired session whose refresh token still lives, and a renewal AWS refuses fails the run naming the sign-in.
+  - Neither Review nor create spends a one-use refresh token; dispatch renews an expired session whose refresh token still lives, and a renewal AWS refuses fails the run naming AWS's answer and opens the sign-in door (0.9.1).
   - Launch is never pre-checked on the console's cached status — the server is the gate.
 - **What the sign-in sandbox is, and what it is not.**
   - It is the AWS CLI and nothing else: no LLM harness, no repo, no mounts.
@@ -3450,6 +3456,8 @@ Moved, with the sections that followed it here, to [secrets-and-keys.md](operati
 - The `MEMBER` spellings of the `USER` variables refuse boot ([ENV.md](ENV.md#removed-in-09)).
 - A plain `http://` OIDC issuer under TLS refuses boot. A mesh that encrypts the internal issuer may set `WARDYN_OIDC_INTERNAL_ISSUER_PLAINTEXT=mesh`; the public issuer has no opt-out.
 - A remote-hosted runner whose limits the upgraded server cannot measure takes no run until they are set: `wardyn runner remote list --no-limits`, then `wardyn runner remote propose <id>` and `wardyn runner set <id>` ([runner pools](operations/runner-pools.md#a-remote-hosted-runners-limits)). `make setup` does this for its own stack.
+- After an upgrade, setup status shows a "Runner limits" warning, for operators only, while any runner has none. `wardyn runner list --all --no-limits` and `wardyn runner remote list --no-limits` list the runners without limits.
+- If `wardyn runner remote propose` says the runner reports no CPU or memory, the message names the read that failed: grant the node read with `k8s.readNodes=true`, or create a ResourceQuota in the runs namespace that sets `requests.cpu`, `requests.memory` and `requests.ephemeral-storage`, then propose again.
 - First run `wardyn setup status --pre-upgrade`. It reads this shell's environment: load the Compose or desktop env file (`set -a; . FILE; set +a`), or give a chart's values as `--role-map` and `--default-role`. Exit 0 is clean, 1 leftovers.
 
 - Migrations are **forward-only**.

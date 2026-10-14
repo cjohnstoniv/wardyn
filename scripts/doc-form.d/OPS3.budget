@@ -72,7 +72,8 @@ docs/operations/api-tokens.md=5527 share=35
 # docs/operations/denials.md 4889 adds 7 (0.9 R1-0082): the DELETE of a user assignment that would leave the person in two group domains, in the key_domain_ambiguous_membership row.
 # docs/operations/denials.md 4931 adds 49 over 4882 (0.9 member drives): the drive refusals a person's own drive adds; measured at merge.
 # docs/operations/denials.md 4948 adds 17 over 4931 (0.9 DS4-M5, after merging lane/090-RS-12); measured at merge.
-docs/operations/denials.md=4948 share=35
+# docs/operations/denials.md 4963 adds 15 over 4948 (0.9.1 L8), measured: the me.runners.tokens target of capability_feature.
+docs/operations/denials.md=4963 share=35
 # Round 1: docs/operations/who-gets-in.md measured 1453 after the split banner and heading cleanup.
 # Round 1: docs/operations/admin-only-writes.md measured 2869 after the split banner and heading cleanup.
 # Round 1: docs/operations/three-roles.md measured 4012 after the split banner and heading cleanup.

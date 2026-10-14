@@ -254,7 +254,7 @@ the ADMIN pre-authorized.
 - Off for everyone: migration `0178_self_host_runner_restriction` restricts the value, so a `*` allow grants nobody.
   - An allow that names it admits its subject; one for subject `all` admits everyone, and is the way to keep the 0.9.0 behaviour.
 - Asked at `POST /me/runners/tokens` only (reason `capability_feature`, target `me.runners.tokens`). Existing runners, claims and the admin mint are never asked.
-- Operators are exempt, so an admin minting for themself is not asked; with `WARDYN_GOVERN_ADMIN_RUNS` on, an admin session is asked like a member.
+- Admins are never asked, so an admin minting for themself needs no grant.
 
 ### `GET /permissions/explain`
 

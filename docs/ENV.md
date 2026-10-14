@@ -250,7 +250,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_SANDBOX_PROXY_URL` | string | `http://wardyn-proxy:3128` | sandbox `WARDYN_PROXY_URL` override (flag `-proxy-url`) |
 | `WARDYN_GROUNDTRUTH_TOKEN_FILE` 🔒 | string | (unset) | file holding the host-sensor token. wardynd keeps it fresh and, when the internal TLS listener runs, also writes its internal CA certificate beside it as `control-plane-ca.pem` for `wardyn-tetragon-ingest` |
 | `WARDYN_PRINT_GROUNDTRUTH_TOKEN` | bool | `false` | mint+print a host-sensor token and exit (flag `-print-groundtruth-token`) |
-| `WARDYN_AGENT_IMAGES` | string (JSON) | (unset) | agent-name → OCI image ref map (flag `-agent-images`). The `base` key is what the setup connectivity probe resolves — it needs no coding agent, only `curl` |
+| `WARDYN_AGENT_IMAGES` | string (JSON) | (unset) | agent-name → OCI image ref map (flag `-agent-images`). The `base` key is what the setup probe resolves (only `curl`). Each ref must be a multi-arch index; a single-arch pin or child-manifest digest breaks a mixed ARM and x86 estate ([why](adoption/corp-image-authoring.md#multi-arch-images)) |
 | `WARDYN_ALLOW_AGENT_TELEMETRY` | bool | (unset) | re-enable the agent CLI's own telemetry inside sandboxes. Default-unset SUPPRESSES it. [Details](#wardyn_allow_agent_telemetry) |
 | `WARDYN_ALLOW_USER_ENV_SECRET` | bool | (unset) | let MEMBERS hold `env_secret` and `file_secret` grants. Default-unset DROPS a member's `env_secret` or `file_secret` grant even when the operator's ceiling lists the exact pairing (`dropAdminOnlyEnvSecretGrants`, `inline_policy_bounds.go`). [Details](#wardyn_allow_user_env_secret) |
 | `WARDYN_EGRESS_SECOND_HUMAN` | bool | (unset) | four-eyes on egress approvals: the human who DECIDES an `egress_domain` approval must not be the human who created the run (`requireSecondHuman`, `approvals_second_human.go`). **Local mode REFUSES it**, and the `admin-token` principal BYPASSES it. [Details](#wardyn_egress_second_human) |
@@ -294,7 +294,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - The compose stack supplies `demo-admin-token` ([`deploy/compose/docker-compose.yaml`](../deploy/compose/docker-compose.yaml)).
 - Nominally authenticated: that token is published here, so wardynd warns at boot when it is in use and refuses to start outright if the listen address binds a specific non-loopback interface.
 - Note the recommended `make setup` containerized path additionally writes `WARDYN_LOCAL_MODE=true` into the compose env, so the flagship install runs the no-auth loopback local mode; the bare compose file's own default is the token.
-- There is no `WARDYN_TOKEN` fallback here; that variable is CLI-only.
+- There is no `WARDYN_TOKEN` fallback here; that variable is read by the CLI and `wardyn-runnerd setup --claim` only.
 
 ### `WARDYN_PG_DSN`
 
@@ -1449,6 +1449,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - The real access token is set on the wire as `x-amz-sso_bearer_token` at the run's own `portal.sso.<region>` host (TLS-MITM, paired injection grant).
 - And a session that lapses **mid-run HOLDS** the sandbox's next `GetRoleCredentials` call while its owner signs in again (`WARDYN_CREDENTIAL_REAUTH_TIMEOUT`, below) instead of failing the run.
 - `off`: the pre-0.7.6 behaviour — the token is written into the sandbox, no `portal.sso` MITM, no hold, no sign-in requests.
+  - A `bedrock_sso` run cannot be placed on a person's own runner with it off: it is refused at Review, preflight and create (`placement_credential`).
 - An AWS CLI component has no `off` lane: with the switch off, every run door refuses it (`component_cli_aws_inject_off`), and so does dispatch.
 - On a run whose model provider is Bedrock, the sandbox's `AWS_REGION` is the Bedrock region, and it overrides an AWS CLI component's default region for `aws`. Pass `--region` where the two differ.
 - **`off` applies to NEW dispatches only**: the placeholder cache, the injection grant and the MITM entry are all authored at dispatch.
@@ -1861,7 +1862,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 |---|---|---|---|
 | `WARDYN_URL` | string | `http://localhost:8080` | control plane URL the CLI dials, from OUTSIDE the daemon (flag `-url`); a permanent CLI-side alias, not a stale duplicate. [Details](#wardyn_url) |
 | `WARDYN_ADMIN_TOKEN` 🔒 | string | (unset) | admin bearer for CLI calls |
-| `WARDYN_TOKEN` 🔒 | string | (unset) | fallback source for the CLI's admin bearer ([`cmd/wardyn/main.go`](../cmd/wardyn/main.go)) — read by the CLI only, never by `wardynd` |
+| `WARDYN_TOKEN` 🔒 | string | (unset) | fallback source for the CLI's admin bearer ([`cmd/wardyn/main.go`](../cmd/wardyn/main.go)) — read by the CLI and by `wardyn-runnerd setup --claim` (your own personal API token), never by `wardynd` |
 | `WARDYN_CLI_ALLOW_PLAINTEXT` | bool | `false` | silence the warning the CLI prints when the admin token would travel in cleartext (`http://` to a non-loopback wardynd). Advisory only — the call is never refused; set it when TLS terminates in front of the control plane |
 
 ### `WARDYN_URL`
@@ -1934,7 +1935,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_SCAN_ONLY` | bool | (unset) | scan-only run flag |
 | `WARDYN_ARTIFACT_CONFIG_B64` 🔒 | base64 | (unset) | artifact config blob |
 | `WARDYN_CLAUDE_MANAGED_B64` 🔒 | base64 | (unset) | managed Claude credential blob |
-| `WARDYN_AWS_SSO_CONFIG_B64` 🔒 | base64 | (unset) | captured AWS SSO session, delivered as a minimal synthetic `~/.aws` (config + SSO token cache) and materialized by `agent-run`; the sandbox SDK exchanges it for short-lived Bedrock role credentials |
+| `WARDYN_AWS_SSO_CONFIG_B64` | base64 | (unset) | captured AWS SSO session as a synthetic `~/.aws`, materialized by `agent-run`. With `WARDYN_AWS_SSO_PROXY_INJECT` on (the default) it is a placeholder in plain env with no token; secret (🔒) only when proxy-inject is off |
 | `WARDYN_AZURE_CLI_CONFIG_B64` | base64 | (unset) | an Azure CLI component's generated `~/.azure`, materialized by `agent-run`: the profile listing its subscriptions and a token cache whose access token is an inert placeholder. It carries no credential (`authorAzureCLI`, [`internal/api/runs_dispatch_cli_azure.go`](../internal/api/runs_dispatch_cli_azure.go)) |
 | `WARDYN_AWS_SSO_ACCOUNT_ID` | string | (unset) | the AWS account a sign-in in the **container-login** sandbox may capture, seeded from the agent roster row's `sso_account_id`. Set together with the role below, or not at all. [Details](#wardyn_aws_sso_account_id) |
 | `WARDYN_AWS_SSO_ROLE_NAME` | string | (unset) | the IAM role the same sign-in may capture, seeded from the roster row's `sso_role_name` and verified in the pinned account. Set together with the account above. [Details](#wardyn_aws_sso_role_name) |
