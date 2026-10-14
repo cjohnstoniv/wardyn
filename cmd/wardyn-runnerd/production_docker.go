@@ -169,16 +169,20 @@ func inspectEngine(ctx context.Context, cli *client.Client, unreachable string) 
 	return eng, nil
 }
 
-// relayPullBound bounds pulling the proxy image before the relay search.
-const relayPullBound = 5 * time.Minute
+// relayCheckBound bounds pulling the proxy image and the relay search together.
+const relayCheckBound = 2 * time.Minute
 
 // chooseRelay pulls the proxy image when it is missing, so the probe runs the
 // image runs will, then finds the relay pair (findRelay) with the driver's
-// probe container.
+// probe container. Both share one bound; the probe is never skipped.
 func chooseRelay(ctx context.Context, d *docker.Driver, image string, eng dockerEngine, want relayPair) (relayPair, error) {
-	pull, cancel := context.WithTimeout(ctx, relayPullBound)
-	err := d.EnsureProxyImage(pull)
-	cancel()
+	ctx, cancel := context.WithTimeout(ctx, relayCheckBound)
+	defer cancel()
+	present, err := d.ImagePresent(ctx, image)
+	if err == nil && !present {
+		slog.InfoContext(ctx, "pulling proxy image "+image)
+		err = d.EnsureProxyImage(ctx)
+	}
 	if err != nil {
 		return relayPair{}, fmt.Errorf("relay: the proxy image %s is not on this engine and could not be pulled (a registry that needs a login: docker pull it as this user first): %w", image, err)
 	}

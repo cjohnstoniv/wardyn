@@ -25,9 +25,11 @@ const (
 	relayAcceptWait = 2 * time.Second
 )
 
-// relayAttempts are when each probe of one pair starts, from the moment its listener opened: Docker
-// Desktop on WSL2 was seen to reach a fresh loopback listener only 0 to 3 seconds after it opened.
-var relayAttempts = []time.Duration{0, 1500 * time.Millisecond, 3 * time.Second, 5 * time.Second}
+// relayAttempts are when each probe of one pair starts, from the moment its listener opened: three
+// within about six seconds, no more. One is not enough: on Docker Desktop under WSL2 a container was
+// seen to reach a freshly opened loopback listener only 0 to 3 seconds after it opened (a live run
+// failed its first attempts and passed at 1.9 s and 2.9 s), while a native engine passed at once.
+var relayAttempts = []time.Duration{0, 2 * time.Second, 4 * time.Second}
 
 var relayLoopback = netip.AddrFrom4([4]byte{127, 0, 0, 1})
 

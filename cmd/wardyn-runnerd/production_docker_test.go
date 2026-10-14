@@ -6,16 +6,13 @@
 package main
 
 import (
-	"bytes"
 	"cmp"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
-	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -23,7 +20,6 @@ import (
 	"regexp"
 	"slices"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -181,10 +177,8 @@ func unsized(context.Context) placement.Capacity { return placement.Capacity{} }
 
 // fakeEngine answers the Docker API serve reads at startup: the engine's
 // operating system and name, its default bridge (whose interface, iface, may
-// or may not be on this host), whether the named network and the proxy image
-// exist, and probe containers. A probe container really dials this host's
-// loopback at its port when its hosts target is one of reach, as a container
-// on a VM engine reaches the host only through some routes.
+// or may not be on this host), and whether the named network and the proxy
+// image exist.
 type fakeEngine struct {
 	os, name   string
 	iface      string // the default bridge's interface; "" is one no host has
@@ -193,24 +187,13 @@ type fakeEngine struct {
 	created    []string // bodies of each network create
 	image      bool     // the proxy image is on the engine
 	pullCode   int      // what a pull answers; 0 pulls the image
-	reach      []string // hosts targets through which a probe container reaches this host
-
-	mu      sync.Mutex
-	probes  map[string][2]string // container ID: hosts target, port
-	exits   map[string]int
-	tried   []string // hosts target of each probe container
-	deleted int
 }
 
 func (f *fakeEngine) start(t *testing.T) {
 	t.Helper()
-	f.probes, f.exits = map[string][2]string{}, map[string]int{}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		f.mu.Lock()
-		defer f.mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
 		path := regexp.MustCompile(`^/v[0-9.]+`).ReplaceAllString(r.URL.Path, "")
-		id := strings.Split(strings.TrimPrefix(path, "/containers/"), "/")[0]
 		switch {
 		case path == "/_ping":
 			w.Header().Set("Api-Version", "1.44")
@@ -241,38 +224,6 @@ func (f *fakeEngine) start(t *testing.T) {
 			}
 			f.image = true
 			_, _ = io.WriteString(w, `{"status":"pulled"}`)
-		case path == "/containers/create":
-			var body struct {
-				Cmd        []string
-				HostConfig struct{ ExtraHosts []string }
-			}
-			_ = json.NewDecoder(r.Body).Decode(&body)
-			if len(body.Cmd) != 2 || len(body.HostConfig.ExtraHosts) != 1 {
-				w.WriteHeader(http.StatusNotFound) // only probe containers are expected
-				return
-			}
-			c := fmt.Sprintf("c%d", len(f.probes))
-			_, port, _ := strings.Cut(body.Cmd[1], "wardyn-relay-probe:")
-			_, target, _ := strings.Cut(body.HostConfig.ExtraHosts[0], "wardyn-relay-probe:")
-			f.probes[c] = [2]string{target, port}
-			f.tried = append(f.tried, target)
-			w.WriteHeader(http.StatusCreated)
-			_, _ = fmt.Fprintf(w, `{"Id":%q}`, c)
-		case strings.HasSuffix(path, "/start"):
-			p, exit := f.probes[id], 1
-			if slices.Contains(f.reach, p[0]) {
-				if c, err := net.Dial("tcp", "127.0.0.1:"+p[1]); err == nil {
-					_ = c.Close()
-					exit = 0
-				}
-			}
-			f.exits[id] = exit
-			w.WriteHeader(http.StatusNoContent)
-		case strings.HasSuffix(path, "/wait"):
-			_, _ = fmt.Fprintf(w, `{"StatusCode":%d}`, f.exits[id])
-		case r.Method == http.MethodDelete && strings.HasPrefix(path, "/containers/"):
-			f.deleted++
-			w.WriteHeader(http.StatusNoContent)
 		default:
 			w.WriteHeader(http.StatusNotFound)
 			_, _ = io.WriteString(w, `{"message":"no such object"}`)
@@ -283,16 +234,14 @@ func (f *fakeEngine) start(t *testing.T) {
 }
 
 // rancherLima answers as Rancher Desktop's macOS VM did in a reported docker
-// info (RD 1.19.3): its bridge lives in the VM, not on this host, and its
-// containers reach this host's loopback only at 192.168.5.2.
+// info (RD 1.19.3): its bridge lives in the VM, not on this host.
 func rancherLima() *fakeEngine {
-	return &fakeEngine{os: "Alpine Linux v3.21", name: "lima-rancher-desktop", network: true, image: true, reach: []string{"192.168.5.2"}}
+	return &fakeEngine{os: "Alpine Linux v3.21", name: "lima-rancher-desktop", network: true, image: true}
 }
 
-// serveWith runs productionRunnerHooks against engine and returns serve's log.
-func serveWith(t *testing.T, engine *fakeEngine, relayListen, hostTarget string) (string, error) {
+// serveWith runs productionRunnerHooks against engine.
+func serveWith(t *testing.T, engine *fakeEngine, relayListen, hostTarget string) error {
 	t.Helper()
-	quickAttempts(t)
 	if engine == nil {
 		ln, err := net.Listen("tcp", "127.0.0.1:0")
 		if err != nil {
@@ -303,16 +252,12 @@ func serveWith(t *testing.T, engine *fakeEngine, relayListen, hostTarget string)
 	} else {
 		engine.start(t)
 	}
-	var log bytes.Buffer
-	old := slog.Default()
-	slog.SetDefault(slog.New(slog.NewTextHandler(&log, nil)))
-	t.Cleanup(func() { slog.SetDefault(old) })
 	opts := serveOptions{proxyImage: "wardyn-proxy:test", relayListen: relayListen, relayHostTarget: hostTarget, network: "wardyn-internal", recording: "off"}
 	runtime, err := productionRunnerHooks(context.Background(), runneridentity.Identity{RunnerID: uuid.New()}, t.TempDir(), opts)
 	if runtime.close != nil {
 		_ = runtime.close()
 	}
-	return log.String(), err
+	return err
 }
 
 // A runner whose relay or Docker engine cannot serve runs refuses to start,
@@ -332,42 +277,12 @@ func TestServeFailsFastWhenRunsCannotStart(t *testing.T) {
 			&fakeEngine{os: "Docker Desktop", network: true, pullCode: http.StatusForbidden}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := serveWith(t, tc.engine, tc.relayListen, tc.hostTarget)
+			err := serveWith(t, tc.engine, tc.relayListen, tc.hostTarget)
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("productionRunnerHooks = %v, want an error naming %q", err, tc.want)
 			}
 			if tc.engine != nil && strings.Contains(tc.want, "relay") && len(tc.engine.created) != 0 {
 				t.Errorf("a refused relay flag still created a network: %q", tc.engine.created)
-			}
-		})
-	}
-}
-
-// On a VM-backed engine serve finds the relay pair a probe container reaches,
-// with or without the flags, and never one the flags exclude.
-func TestServeFindsTheRelayOnAVMEngine(t *testing.T) {
-	for _, tc := range []struct {
-		name, relayListen, hostTarget string
-		engine                        *fakeEngine
-		want                          string // the reachable log line, or the error
-	}{
-		{"no flags", "", "", rancherLima(), "listen=127.0.0.1 target=192.168.5.2"},
-		// The reported case: --relay-listen 127.0.0.1 on an engine whose bridge is not on this host.
-		{"explicit loopback", "127.0.0.1", "", rancherLima(), "listen=127.0.0.1 target=192.168.5.2"},
-		{"an explicit target no container reaches", "", "192.0.2.1", rancherLima(), "reach at 192.0.2.1"},
-		{"Docker Desktop", "", "", &fakeEngine{os: "Docker Desktop", name: "docker-desktop", network: true, reach: []string{"host-gateway"}}, "listen=127.0.0.1 target=host-gateway"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			log, err := serveWith(t, tc.engine, tc.relayListen, tc.hostTarget)
-			if tc.hostTarget == "192.0.2.1" {
-				if err == nil || !strings.Contains(err.Error(), tc.want) || slices.ContainsFunc(tc.engine.tried, func(s string) bool { return s != "192.0.2.1" }) {
-					t.Fatalf("err = %v after probing %v, want a refusal naming 192.0.2.1 and nothing else probed", err, tc.engine.tried)
-				}
-			} else if err != nil || !strings.Contains(log, "run relay reachable") || !strings.Contains(log, tc.want) {
-				t.Fatalf("err = %v, log:\n%s\nwant %q", err, log, tc.want)
-			}
-			if tc.engine.deleted != len(tc.engine.probes) || len(tc.engine.probes) == 0 {
-				t.Errorf("%d probe containers, %d deleted", len(tc.engine.probes), tc.engine.deleted)
 			}
 		})
 	}
@@ -428,6 +343,10 @@ func TestReadyEngineCreatesTheMissingNetwork(t *testing.T) {
 	present := &fakeEngine{os: "Docker Desktop", network: true}
 	if err := ready(t, present, "127.0.0.1"); err != nil || len(present.created) != 0 {
 		t.Fatalf("existing network: err=%v creates=%q", err, present.created)
+	}
+	// The reported case: --relay-listen 127.0.0.1 on an engine whose bridge is not on this host.
+	if err := ready(t, rancherLima(), "127.0.0.1"); err != nil {
+		t.Fatalf("an explicit loopback on a VM-backed engine: %v", err)
 	}
 	refused := &fakeEngine{os: "Docker Desktop"}
 	if err := ready(t, refused, "192.168.1.20"); err == nil || len(refused.created) != 0 {

@@ -68,6 +68,9 @@ func TestRelayCandidates(t *testing.T) {
 		{"an explicit target filters", testVM, relayPair{target: "192.168.5.2"}, vm[1:2]},
 		{"an unmatched explicit target is kept", testVM, relayPair{target: "192.0.2.1"}, []relayPair{pair("127.0.0.1", "192.0.2.1")}},
 		{"an unmatched explicit pair is exactly that pair", testVM, pair("192.168.143.2", "192.0.2.1"), []relayPair{pair("192.168.143.2", "192.0.2.1")}},
+		// Both flags must match: loopback alone matches three pairs, the target none.
+		{"both flags, only that pair", testVM, pair("127.0.0.1", "10.0.0.5"), []relayPair{pair("127.0.0.1", "10.0.0.5")}},
+		{"both flags matching one candidate", vmVeth, pair("127.0.0.1", "192.168.5.2"), vm[1:2]},
 		{"native with loopback", testNative, relayPair{bind: relayLoopback}, []relayPair{pair("127.0.0.1", "host-gateway")}},
 	} {
 		if got := relayCandidates(tc.eng, tc.want); !slices.Equal(got, tc.out) {
@@ -164,10 +167,10 @@ func dialProbe(reach ...string) relayProbe {
 	}
 }
 
-// quickAttempts runs relayAttempts' four probes back to back.
+// quickAttempts runs relayAttempts' three probes back to back.
 func quickAttempts(t *testing.T) {
 	old := relayAttempts
-	relayAttempts = []time.Duration{0, 0, 0, 0}
+	relayAttempts = []time.Duration{0, 0, 0}
 	t.Cleanup(func() { relayAttempts = old })
 }
 
@@ -187,7 +190,7 @@ func TestFindRelayRequiresTheListenerToAccept(t *testing.T) {
 	}
 	_, err := findRelay(ctx, dialProbe(), testVM, relayPair{})
 	for _, want := range []string{`"Alpine Linux v3.21" (lima-rancher-desktop)`, "listen 127.0.0.1, reach at host-gateway: did not connect",
-		"reach at 192.168.5.2", "reach at 192.168.127.254", "4 attempts", "--relay-listen", "WARDYN_RELAY_LISTEN", "--relay-host-target", "WARDYN_RELAY_HOST_TARGET"} {
+		"reach at 192.168.5.2", "reach at 192.168.127.254", "3 attempts", "--relay-listen", "WARDYN_RELAY_LISTEN", "--relay-host-target", "WARDYN_RELAY_HOST_TARGET"} {
 		if err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("no pair passed, and the refusal lacks %q: %v", want, err)
 		}

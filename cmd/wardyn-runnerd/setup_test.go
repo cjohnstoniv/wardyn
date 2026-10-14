@@ -369,6 +369,17 @@ func TestSetupWritesTheCheckedRelayPair(t *testing.T) {
 			t.Errorf("%s: output does not name the engine and pair:\n%s", goos, out)
 		}
 
+		d := newSetupFixture(t, goos)
+		d.desktop = true
+		if _, err := d.run(setupOptions{tokenFile: d.tokenFile}); err != nil {
+			t.Fatal(err)
+		}
+		dp, _ := d.host.paths()
+		dwant := map[string]string{"linux": "WARDYN_RELAY_HOST_TARGET=host-gateway\n", "darwin": "<key>WARDYN_RELAY_HOST_TARGET</key>\n    <string>host-gateway</string>"}[goos]
+		if got := d.read(map[string]string{"linux": dp.envFile, "darwin": dp.plistFile}[goos]); !strings.Contains(got, dwant) {
+			t.Errorf("%s: a VM-backed engine's host-gateway target was not pinned:\n%s", goos, got)
+		}
+
 		n := newSetupFixture(t, goos)
 		if _, err := n.run(setupOptions{tokenFile: n.tokenFile}); err != nil {
 			t.Fatal(err)
