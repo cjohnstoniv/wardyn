@@ -2520,7 +2520,7 @@ hiding them would repeat the failure mode we are designed to avoid.
 
 71. **The relay is opaque, and the local relay listener answers any process on the laptop that holds a run token [0.9, client mode].**
     - The runner relays TLS that ends at wardynd, so it sees ciphertext only (B6). Its listener binds the Docker host-gateway address, which any laptop process can open with a run token the developer can read (#69).
-    - With `--relay-listen` on Docker Desktop (`explicitRelayBind`), the listener binds host loopback instead, so any local process or container that reaches host loopback can open TLS to the organisation's internal listener as this runner. It is still bounded by the run token, the closed route list (`relayedInternalRoutes`) and the `runner_id` binding (`refuseRelayBinding`).
+    - With `--relay-listen` on Docker Desktop (`explicitRelayBind`), the listener binds host loopback, so any local process or container reaching it can open TLS to the internal listener as this runner, still bounded by the run token, `relayedInternalRoutes` and `refuseRelayBinding`.
     - With one, a laptop process can call the relayed routes (`relayedInternalRoutes`) for its owner's local runs: decisions, activity, approvals, token renewal, own-credential injection and mint, `via_org` and recording uploads.
     - So a developer can write self-serving rows about their own run (#73) and raise approvals for it. The binding refuses every other run and every unlisted route (B6).
     - A run with an unapplied pending action is fenced on both sides: no relay and no call (`runner_action_pending`).
