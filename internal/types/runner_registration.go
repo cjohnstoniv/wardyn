@@ -30,4 +30,7 @@ type RunnerRegistrationToken struct {
 	// OrgURL is the organisation URL the runner must register against: the mint answers carry it, a
 	// token list never does. wardyn-runnerd refuses an --org that does not hash to the server's.
 	OrgURL string `json:"org_url,omitempty"`
+	// ProxyImage is the egress-proxy image this control plane runs its own sandboxes with. The mint answers
+	// carry it so a runner set up from the token can start the same one; omitted when none is configured.
+	ProxyImage string `json:"proxy_image,omitempty"`
 }

@@ -411,3 +411,23 @@ func TestPG_NoDefaultAsksForAChoice(t *testing.T) {
 		}
 	}
 }
+
+// GET /me/runner-pools is the caller-scoped list under the name every other /me route has: the same
+// answer as GET /runner-pools, one person's own pools and never another's.
+func TestPG_MyRunnerPoolsListIsTheCallersCatalogue(t *testing.T) {
+	e := newPoolEnv(t, false)
+	mine := e.createOwnPool(e.person, "Laptop")
+	theirs := e.createOwnPool(e.other, "Theirs")
+	w := e.call(e.person, http.MethodGet, "/api/v1/me/runner-pools", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET /me/runner-pools = %d %s", w.Code, w.Body)
+	}
+	got := map[uuid.UUID]bool{}
+	for _, p := range decodeJSON[client.RunnerPoolList](t, w).Pools {
+		got[p.ID] = true
+	}
+	want := e.listed(e.person)
+	if !got[mine.ID] || got[theirs.ID] || len(got) != len(want) {
+		t.Fatalf("GET /me/runner-pools lists %v, want the same as GET /runner-pools (%d pools) with %s and without %s", got, len(want), mine.ID, theirs.ID)
+	}
+}

@@ -69,6 +69,8 @@ var kernelDoors = map[string][]string{
 	// Minting a personal credential.
 	"handleAddSSHKey": {"capFeature"},
 	"mintGuards":      {"capFeature"}, // both mint doors: POST /me/tokens and an invitation claim
+	// Self-hosting: POST /me/runners/tokens asks the self_host_runner value.
+	"handleRunnerTokenSelf": {"capFeature"},
 	// A sponsor entering a service identity's run: service_attach, asked with the operator step off (F6).
 	"sponsorMayEnter": {"capFeature"},
 	// The key and sign-in doors, answered as an unknown provider (D-6).

@@ -247,6 +247,7 @@ var routeMatrix = map[string]classifiedRoute{
 	// their remote-hosted runner membership and the organisation default are
 	// SUPER; the pool-use policy is the security tier.
 	"GET /api/v1/runner-pools":                                 {class: classMember},
+	"GET /api/v1/me/runner-pools":                              {class: classMember},
 	"GET /api/v1/runner-pools/{id}":                            {class: classMember},
 	"POST /api/v1/runner-pools":                                {class: classAdmin},
 	"PUT /api/v1/runner-pools/{id}":                            {class: classAdmin},

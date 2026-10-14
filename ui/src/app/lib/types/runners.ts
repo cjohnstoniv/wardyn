@@ -136,6 +136,8 @@ export interface RunnerRegistrationToken {
   consumed_at?: string;
   /** On the two mint answers only: the URL `wardyn-runnerd register --org` must match. */
   org_url?: string;
+  /** On the two mint answers only, and only when the daemon has one configured: the egress-proxy image its own sandboxes run with. */
+  proxy_image?: string;
 }
 
 /** Go: types.RunnerTokenRequest. Names the person an administrator is minting for. */
