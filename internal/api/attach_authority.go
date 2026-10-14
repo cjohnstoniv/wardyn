@@ -174,6 +174,24 @@ type wsCloser interface {
 	Close(code websocket.StatusCode, reason string) error
 }
 
+// attachEnders starts the two watchers that end an open attach from outside its pump, the mask fence
+// and the re-check of the credential that opened the socket, and returns what the close reason is once
+// the pump has returned: the fence's or the authority's when either ended it (the authority's last, as
+// the handler read them before), else the pump's own.
+func (s *Server) attachEnders(ctx context.Context, r *http.Request, runID uuid.UUID, c *websocket.Conn, holder *attachHolder, cancel context.CancelFunc) func(pumped string) string {
+	maskFenced := s.endAttachOnMaskFence(ctx, runID, c, cancel)
+	authEnded := s.holdAttachAuthority(ctx, s.attachAuthority(r, runID), func() { endAttachAuthority(c, holder, cancel) })
+	return func(reason string) string {
+		if maskFenced() {
+			reason = maskFencedReason
+		}
+		if authEnded() {
+			reason = attachAuthEndedReason
+		}
+		return reason
+	}
+}
+
 // endAttachAuthority ends an attach socket whose credential stopped authorizing it. The holder stops
 // driving the PTY at once (canWrite reads evicted), and writing the close frame stops output; the close
 // frame is sent before cancel, because a cancelled socket context tears the connection down without one
