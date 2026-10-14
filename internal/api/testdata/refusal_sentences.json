@@ -1,6 +1,11 @@
 [
   {
     "reason": "admin_surface",
+    "target": "\"drive.grant.\" + field",
+    "sentence": "field + \": only a super admin may \" + \"set an allocation's directory name or make it more writable than its drive; allocate with the drive's own posture or read-only\""
+  },
+  {
+    "reason": "admin_surface",
     "target": "\"workspaces.llm_cred\"",
     "sentence": "\"llm_cred is operator-only — an admin binds a workspace's model/harness credential \" + \"(PUT /workspaces/{id}/llm-cred); create your workspace without it and ask for the binding\""
   },

@@ -860,7 +860,10 @@ func (s *Server) handleUpsertUserDriveGrant(w http.ResponseWriter, r *http.Reque
 	}
 	g.ID = uuid.New()
 	g.CreatedBy = principalFromRequest(r)
-	saved, removed, err := s.writeUserDriveGrant(r.Context(), g, homeOverrideStated, req.Additional)
+	saved, removed, done, err := s.upsertUserDriveGrantAs(w, r, g, homeOverrideStated, req.Additional)
+	if done {
+		return
+	}
 	// ErrNotFound here is the FK refusing an unknown drive_id — a 404 naming the
 	// drive, not a 500, and not a silent no-op.
 	if notFoundIf(w, err, "user drive", reasonUserDriveNotFound) {

@@ -142,7 +142,7 @@ type driveReclaimResult struct {
 }
 
 func driveReclaimCmd(client clientFn) *cobra.Command {
-	var subject, subjectType string
+	var subject, subjectType, homeSubject string
 	var yes, asJSON bool
 	cmd := &cobra.Command{
 		Use:   "reclaim <drive-id>",
@@ -155,6 +155,11 @@ drive preview prints, and run it BEFORE deleting the allocation: with the
 allocation gone, a home directory an admin pinned (home_override) can no longer
 be recovered from the database and the name this command derives is the drive
 template's.
+
+--subject is the key the allocation is stored under. When that is an email or
+another alias, also pass --home-subject with the person's sign-in subject: a run
+derives the storage name from the sign-in subject, so the alias alone names a
+different object, and an allocation keyed by an alias is refused without it.
 
 Super-admin only. Refused with a 409 while a run still holds the object, or
 while the object answering to that name is not this drive's. Every attempt —
@@ -169,10 +174,11 @@ The outcome is 'deleted' (this call destroyed the storage) or 'already_absent'
 `,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runDriveReclaim(cmd, client(), args[0], subjectType, subject, yes, asJSON)
+			return runDriveReclaim(cmd, client(), args[0], subjectType, subject, homeSubject, yes, asJSON)
 		},
 	}
-	cmd.Flags().StringVar(&subject, "subject", "", "the person's sign-in subject (required)")
+	cmd.Flags().StringVar(&subject, "subject", "", "the subject the allocation is keyed on: the person's sign-in subject, or their email (required)")
+	cmd.Flags().StringVar(&homeSubject, "home-subject", "", "the person's sign-in subject, when --subject is another of their claims (an email)")
 	cmd.Flags().StringVar(&subjectType, "subject-type", "user", "subject type; only `user` names one object to destroy")
 	cmd.Flags().BoolVar(&yes, "yes", false, "confirm that this permanently destroys the person's stored data")
 	cmd.Flags().BoolVar(&asJSON, "json", false, "emit {drive, drive_id, subject_type, subject, backend, object, outcome} as JSON")
@@ -185,7 +191,7 @@ The outcome is 'deleted' (this call destroyed the storage) or 'already_absent'
 // often as at a keyboard, and a prompt that only appears on a terminal is a
 // guard the automated path silently loses. Asking for the flag makes the
 // deliberate half explicit in the command that gets reviewed.
-func runDriveReclaim(cmd *cobra.Command, c *sdk.Client, id, subjectType, subject string, yes, asJSON bool) error {
+func runDriveReclaim(cmd *cobra.Command, c *sdk.Client, id, subjectType, subject, homeSubject string, yes, asJSON bool) error {
 	driveID, err := uuid.Parse(strings.TrimSpace(id))
 	if err != nil {
 		return fmt.Errorf("drive reclaim: %q is not a drive id (a uuid); `wardyn drive reclaim <drive-id>`", id)
@@ -197,7 +203,11 @@ func runDriveReclaim(cmd *cobra.Command, c *sdk.Client, id, subjectType, subject
 		return fmt.Errorf("drive reclaim: refusing without --yes: this permanently destroys the storage "+
 			"allocated to %s on drive %s, and nothing undoes it", subject, driveID)
 	}
-	body, err := json.Marshal(map[string]string{"subject_type": subjectType, "subject": subject})
+	req := map[string]string{"subject_type": subjectType, "subject": subject}
+	if strings.TrimSpace(homeSubject) != "" {
+		req["home_subject"] = homeSubject
+	}
+	body, err := json.Marshal(req)
 	if err != nil {
 		return fmt.Errorf("drive reclaim: encode request: %w", err)
 	}

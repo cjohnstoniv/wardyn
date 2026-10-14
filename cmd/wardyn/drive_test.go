@@ -472,6 +472,34 @@ func TestDriveReclaim_PostsTheSubjectAndPrintsWhatWent(t *testing.T) {
 	}
 }
 
+// TestDriveReclaim_SendsTheHomeSubject: --home-subject rides the body as
+// home_subject, and without the flag the body carries no such key.
+func TestDriveReclaim_SendsTheHomeSubject(t *testing.T) {
+	driveID := uuid.New()
+	cs := newCmdServer(t, http.StatusOK, reclaimOK(driveID, "wardyn-drive-corp-nas-d-9f3a1c", "deleted"))
+	if err := execCmd(t, "--url", cs.URL, "drive", "reclaim", driveID.String(),
+		"--subject", "alice@corp.example", "--home-subject", "sub-alice", "--yes"); err != nil {
+		t.Fatalf("drive reclaim: %v", err)
+	}
+	var sent map[string]string
+	if err := json.Unmarshal(cs.last().body, &sent); err != nil {
+		t.Fatalf("decode sent body: %v", err)
+	}
+	if sent["subject"] != "alice@corp.example" || sent["home_subject"] != "sub-alice" {
+		t.Errorf("body = %v, want subject and home_subject", sent)
+	}
+	if err := execCmd(t, "--url", cs.URL, "drive", "reclaim", driveID.String(), "--subject", "sub-bob", "--yes"); err != nil {
+		t.Fatalf("drive reclaim: %v", err)
+	}
+	sent = nil
+	if err := json.Unmarshal(cs.last().body, &sent); err != nil {
+		t.Fatalf("decode sent body: %v", err)
+	}
+	if _, ok := sent["home_subject"]; ok {
+		t.Errorf("body = %v, want no home_subject without the flag", sent)
+	}
+}
+
 // TestDriveReclaim_RefusesWithoutYes is the CLI's own rail. A verb that
 // destroys a person's data must not run off a mistyped drive id, and the flag
 // is required rather than prompted so the automated offboarding path keeps the
