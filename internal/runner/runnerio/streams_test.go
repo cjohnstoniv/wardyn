@@ -158,11 +158,18 @@ func TestPeerLossClosesExecWithoutStoppingSandbox(t *testing.T) {
 	if _, err = e.Stdin.Write([]byte("after disconnect")); err == nil {
 		t.Fatal("disconnected stdin accepted bytes")
 	}
-	server.mu.Lock()
-	left := len(server.execs)
-	server.mu.Unlock()
-	if left != 0 || len(server.execSlots) != 0 {
-		t.Fatalf("disconnect leaked execs: %d", left)
+	// removeExec drops the map entry before it frees the slot, so a copy
+	// goroutine that already won the race can still be mid-close when Offline returns.
+	for deadline := time.Now().Add(2 * time.Second); ; time.Sleep(time.Millisecond) {
+		server.mu.Lock()
+		left, slots := len(server.execs), len(server.execSlots)
+		server.mu.Unlock()
+		if left == 0 && slots == 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("disconnect leaked execs: %d, slots: %d", left, slots)
+		}
 	}
 	local, _ := server.local(ref)
 	if _, err = fake.Status(ctx, local); err != nil {
