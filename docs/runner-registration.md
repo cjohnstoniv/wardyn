@@ -14,11 +14,12 @@ From 0.9 the control plane places runs on a claimed runner through its owner's u
 | Docker Desktop (macOS) | Needs no relay flag. Expected, not yet verified. |
 | Rancher Desktop, dockerd (moby) engine, on macOS and on Windows through WSL2 | Expected, not yet verified. On macOS the proxy reaches a loopback relay at `192.168.5.2`; on WSL2 the relay listens on Rancher Desktop's `veth-rd-wsl` address (`192.168.143.2`). The startup check proves it on each computer. |
 | Other VM-backed engines (Colima, Podman machine, OrbStack, rootless Docker) | Work when the startup reachability check passes; not verified by us. `--relay-host-target` is the knob when it does not. |
+| Podman on Linux (docker-compat API) | Unsupported in 0.9.1: its default network is not `bridge`, so `setup` and `serve` refuse it. |
 | Rancher Desktop, containerd (nerdctl) mode | Unsupported: it has no Docker API. Switch Rancher Desktop to the dockerd (moby) engine. |
 | `DOCKER_HOST` | `runnerd` reads `DOCKER_HOST` and never a docker context. Point it at the engine's socket, for example `unix://$HOME/.rd/docker.sock` for Rancher Desktop (expected) or `unix://$HOME/.colima/default/docker.sock` for Colima (expected). |
 | An explicit relay flag | `--relay-listen` accepts loopback on any engine, the native bridge gateway, or the `veth-rd-wsl` address. It never accepts `0.0.0.0` or another interface's address. The startup check still has to pass. |
 | The relay's port | The port of the org's `WARDYN_CONTROL_PLANE_URL` (`8443` by default), not the org URL's. No control plane may listen on that loopback port on the same computer. |
-| A privileged port | A user service cannot bind a port below 1024, so a control-plane URL on `:443` cannot be relayed. |
+| A privileged port | For a runner installed as a user service, the control-plane URL's port must be 1024 or higher. A user service cannot bind a port such as `:443`, so it cannot be relayed; this fails at the first run, not at the startup check. |
 | Internal network | `serve` creates the `--internal-network` bridge (default `wardyn-internal`) when it is missing. |
 | Windows | There is no native binary: run the runner inside WSL2 with Docker Desktop's WSL integration. |
 | Permission | `POST /api/v1/me/runners/tokens` needs the [`self_host_runner`](operations/capabilities.md#self_host_runner) permission (`403` `capability_feature`, target `me.runners.tokens`: "hosting your own runner isn't available to you. Ask your admin for the self_host_runner permission."). Admins are never asked. |
@@ -33,7 +34,7 @@ From 0.9 the control plane places runs on a claimed runner through its owner's u
 
 | If the check | Then |
 |---|---|
-| Passes | `setup` prints the listen address and the target a proxy reaches it at, and pins both in the service settings (`WARDYN_RELAY_LISTEN`, `WARDYN_RELAY_HOST_TARGET`) on a VM-backed engine. `serve` checks that one pair. |
+| Passes | `setup` prints the listen address and the target a proxy reaches it at, and pins both in the service settings (`WARDYN_RELAY_LISTEN` and `WARDYN_RELAY_HOST_TARGET`, even when the target is `host-gateway`) on a VM-backed engine. `serve` checks that one pair. |
 | Fails | It exits with the engine's name, each address pair it tried and why it failed. `setup` adds that no token was spent. Nothing is installed. |
 
 - `--relay-listen` / `WARDYN_RELAY_LISTEN` fixes where the relay listens, and `--relay-host-target` / `WARDYN_RELAY_HOST_TARGET` fixes the address a proxy dials: `host-gateway` or an IP address. A value you give is checked as given and never replaced by a guess.
