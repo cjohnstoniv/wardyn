@@ -151,6 +151,30 @@ func TestPG_AddAndReplaceUserDriveGrants(t *testing.T) {
 	}
 }
 
+// TestPG_ReplaceMovesDriveAndHomeOverrideTogether: replacing a subject's grant
+// with another drive and a new home_override applies both at once, so it does
+// not collide with another subject who holds the new drive under the old name.
+func TestPG_ReplaceMovesDriveAndHomeOverrideTogether(t *testing.T) {
+	pool := runsPGPool(t)
+	ctx := context.Background()
+	st := store.NewPG(pool)
+	uniq := uuid.NewString()[:8]
+	a := seedUserDrive(t, st, "home-move-a-"+uniq)
+	b := seedUserDrive(t, st, "home-move-b-"+uniq)
+	grant := func(sub string, d types.UserDrive, home string) types.UserDriveGrant {
+		return types.UserDriveGrant{SubjectType: types.CapabilitySubjectUser, Subject: sub, DriveID: d.ID, HomeOverride: home, Enabled: true, CreatedBy: "admin@example.com"}
+	}
+	addUserDriveGrant(t, st, grant("t-"+uniq, b, "proj"))
+	addUserDriveGrant(t, st, grant("s-"+uniq, a, "proj"))
+	replaced, _, err := st.ReplaceUserDriveGrant(ctx, grant("s-"+uniq, b, "team"), true)
+	if err != nil {
+		t.Fatalf("replace with drive b and home team: %v", err)
+	}
+	if replaced.DriveID != b.ID || replaced.HomeOverride != "team" {
+		t.Fatalf("replaced = %+v, want drive b and home team", replaced)
+	}
+}
+
 // TestPG_ConcurrentReplacesLeaveOneDrive: replacing writes for a subject with
 // no allocation yet, racing, still leave the subject exactly one drive (the
 // per-subject advisory lock); without it both insert.

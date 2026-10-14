@@ -221,7 +221,7 @@ type AgentRun struct {
 	// PausedAt/PausedReason mark a run frozen with nobody present; keeps state/memory/files/proxy until activity or resume. Not contained — kill still works.
 	PausedAt     *time.Time  `json:"paused_at,omitempty"`
 	PausedReason PauseReason `json:"paused_reason,omitempty"`
-	ActiveAt     *time.Time  `json:"active_at,omitempty"` // presence clock: last human input/egress decision/proxied bytes; keepalives never move it; nil reads as CreatedAt
+	ActiveAt     *time.Time  `json:"active_at,omitempty"` // presence clock: last human input/egress decision/proxied bytes, or a resume; keepalives never move it; nil reads as CreatedAt
 	// ModelProviderID freezes the provider id at create; the kind is deliberately NOT frozen (can change later) and lives only on the run.create audit snapshot.
 	ModelProviderID string `json:"model_provider_id,omitempty"`
 	UserType        string `json:"user_type,omitempty"` // creator's resolved user type, frozen at create

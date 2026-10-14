@@ -40,12 +40,18 @@ export const REPO_ATTACHMENT: RunAttachment = {
   target: "/home/agent/work/payments", read_only: false, starts_here: false,
 };
 
-/** POST /runs/preflight's pool and main-drive facts, per scenario. Attachments are the test's own. */
+/**
+ * POST /runs/preflight's pool and main-drive facts, per scenario, as the dry door draws them: the run's
+ * effective limits at the top level, the pool choices without limits, and the size an untouched run gets.
+ * Attachments are the test's own.
+ */
 export const filesPreflight = (facts: MainDriveFacts, diskMib = 8192, runType: EffectiveRunLimits["run_type"] = "interactive"): FilesPreflight => ({
   setup_items: [],
   enforced_confinement_class: "CC2",
   runner_pool: { ...POOL, revision: 1, selection: "organisation_default" },
-  runner_pools: [{ ...POOL, availability: "available", barriers: ["CC2"], limits: [limitsFor(runType, diskMib)], main_drive: facts }],
+  runner_pools: [{ ...POOL, availability: "available", barriers: ["CC2"], main_drive: facts }],
+  limits: limitsFor(runType, diskMib),
+  main_drive: { applied_mib: Math.min(diskMib, 4096), basis: "default", default_source: "pool", soft: false },
   attachments: [],
 });
 

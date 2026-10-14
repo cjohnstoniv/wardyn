@@ -32,6 +32,11 @@ type fakeStore struct {
 	decideCalls int
 	decideErrOn int
 	decideErr   error
+	// listAllCalls counts fleet-wide ListApprovals reads; rowsRead counts the
+	// rows the run-scoped read handed back. A raise or cancel for one run must
+	// leave listAllCalls at zero and read none of another run's rows.
+	listAllCalls int
+	rowsRead     int
 }
 
 func (f *fakeStore) CreateApproval(_ context.Context, a types.ApprovalRequest) (types.ApprovalRequest, error) {
@@ -52,9 +57,29 @@ func (f *fakeStore) GetApproval(_ context.Context, id uuid.UUID) (types.Approval
 	return types.ApprovalRequest{}, approval.ErrAlreadyDecided // sentinel not ideal, but unused in current tests
 }
 
+func (f *fakeStore) ListPendingApprovalsForRuns(_ context.Context, runIDs []uuid.UUID) ([]types.ApprovalRequest, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []types.ApprovalRequest
+	for _, a := range f.records {
+		if a.State != types.ApprovalPending {
+			continue
+		}
+		for _, id := range runIDs {
+			if a.RunID == id {
+				out = append(out, a)
+				break
+			}
+		}
+	}
+	f.rowsRead += len(out)
+	return out, nil
+}
+
 func (f *fakeStore) ListApprovals(_ context.Context, stateFilter types.ApprovalState) ([]types.ApprovalRequest, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.listAllCalls++
 	var out []types.ApprovalRequest
 	for _, a := range f.records {
 		if stateFilter == "" || a.State == stateFilter {
@@ -755,12 +780,12 @@ type racyDupStore struct {
 	hidden bool // the first list pretends the winner's row is not visible yet
 }
 
-func (d *racyDupStore) ListApprovals(ctx context.Context, state types.ApprovalState) ([]types.ApprovalRequest, error) {
+func (d *racyDupStore) ListPendingApprovalsForRuns(ctx context.Context, runIDs []uuid.UUID) ([]types.ApprovalRequest, error) {
 	if !d.hidden {
 		d.hidden = true
 		return nil, nil
 	}
-	return d.fakeStore.ListApprovals(ctx, state)
+	return d.fakeStore.ListPendingApprovalsForRuns(ctx, runIDs)
 }
 
 func (d *racyDupStore) CreateApproval(ctx context.Context, a types.ApprovalRequest) (types.ApprovalRequest, error) {
@@ -1002,5 +1027,48 @@ func TestCancelForRun_CountsMovedRowsByKind(t *testing.T) {
 	}
 	if !maps.Equal(data.ByKind, want) {
 		t.Errorf("audit by_kind = %v, want %v", data.ByKind, want)
+	}
+}
+
+// A raise or cancel for one run reads that run's own PENDING rows only: the
+// fleet-wide list is never called and none of another run's rows is read, however
+// many it holds. The match semantics are unchanged: the duplicate is still found
+// and the cancel still moves exactly this run's rows.
+func TestRequestApprovalAndCancelForRun_ReadOnlyTheRunsOwnPending(t *testing.T) {
+	ctx := context.Background()
+	st := &fakeStore{}
+	runA, runB := uuid.New(), uuid.New()
+	for i := 0; i < 50; i++ {
+		scope := json.RawMessage(`{"host":"b` + strconv.Itoa(i) + `.example.com"}`)
+		if _, err := approval.RequestApproval(ctx, st, newReq(runB, types.ApprovalEgressDomain, scope)); err != nil {
+			t.Fatalf("seed run B: %v", err)
+		}
+	}
+	st.rowsRead, st.listAllCalls = 0, 0
+	scopeA := json.RawMessage(`{"host":"a.example.com"}`)
+	first, err := approval.RequestApproval(ctx, st, newReq(runA, types.ApprovalEgressDomain, scopeA))
+	if err != nil {
+		t.Fatalf("raise A: %v", err)
+	}
+	again, err := approval.RequestApproval(ctx, st, newReq(runA, types.ApprovalEgressDomain, scopeA))
+	if err != nil {
+		t.Fatalf("re-raise A: %v", err)
+	}
+	if again.ID != first.ID {
+		t.Fatalf("duplicate raise for run A returned %s, want the existing %s", again.ID, first.ID)
+	}
+	n, err := cancelForRunTotal(ctx, st, runA, "run_killed")
+	if err != nil {
+		t.Fatalf("cancel A: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("cancel moved %d rows, want exactly run A's 1", n)
+	}
+	if st.listAllCalls != 0 {
+		t.Fatalf("fleet-wide ListApprovals called %d times, want 0", st.listAllCalls)
+	}
+	// Run A's two raises read 0 then 1 row and the cancel read 1: none of B's 50.
+	if st.rowsRead != 2 {
+		t.Fatalf("rows read = %d, want 2 (run A's own only)", st.rowsRead)
 	}
 }

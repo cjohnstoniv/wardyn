@@ -281,8 +281,9 @@ type Tx interface {
 }
 
 // Broker is the token broker. It is safe for concurrent use; all mutating
-// state lives in Postgres and every mint is serialized by SELECT ... FOR UPDATE
-// on the grant+approval rows.
+// state lives in Postgres and every approval burn is serialized by SELECT ...
+// FOR UPDATE on the grant+approval rows. Issuance runs before that lock, so a
+// losing contender's freshly minted credential is discarded.
 type Broker struct {
 	db       TxBeginner
 	secrets  secretstore.Store
@@ -321,13 +322,12 @@ const envRequireRefRuleset = "WARDYN_GITHUB_REQUIRE_REF_RULESET"
 var ErrRefRulesetRequired = errors.New("broker: " + envRequireRefRuleset + " is set and the repo is not confined by a GitHub ruleset")
 
 // refRulesetProbeTimeout bounds ONE repo's verification. checkRefRuleset runs
-// inside mint()'s transaction, holding SELECT ... FOR UPDATE on the grant row
-// and a pooled Postgres connection, and VerifyRefRuleset makes several
+// while mint() prepares the credential, and VerifyRefRuleset makes several
 // api.github.com round trips (a token mint, two rule reads, one ruleset read per
 // ruleset found, a revoke). Neither github client sets an http.Client timeout
 // and the API server sets no Read/WriteTimeout, so without a deadline here the
-// only bound is the caller's request ctx and a blackholed api.github.com pins
-// the row lock and the connection for as long as it stays black. The advisory
+// only bound is the caller's request ctx and a blackholed api.github.com holds
+// the mint for as long as it stays black. The advisory
 // /setup/status path already does the same with 5s (api.refRulesetTimeout); this
 // one is longer only because exceeding it fails the mint rather than greying out
 // a checklist row.
@@ -404,8 +404,8 @@ func (b *Broker) MintForGrant(ctx context.Context, caller *identity.Claims, gran
 	if !spec.RequiresApproval {
 		// Auto-mintable: no approval row exists or is created, so there is no
 		// single-use guard — the grant is re-mintable BY DESIGN (credential-
-		// helper refresh semantics). Every mint is serialized by the grant-row
-		// FOR UPDATE lock, capped at the <=1h TTL, and individually audited.
+		// helper refresh semantics). Each mint commits under the grant-row FOR
+		// UPDATE lock, is capped at the <=1h TTL, and is individually audited.
 		return b.mint(ctx, caller, grantID, uuid.Nil)
 	}
 
@@ -438,12 +438,13 @@ func (b *Broker) maskMinted(runID uuid.UUID, minted Minted) error {
 	if b.maskReg == nil {
 		return nil
 	}
-	for what, v := range map[string]string{"token": minted.Token, "known_hosts": minted.KnownHosts} {
-		if v == "" {
+	// Fixed order, token first: a failure stops at a known point.
+	for _, f := range [...]struct{ what, v string }{{"token", minted.Token}, {"known_hosts", minted.KnownHosts}} {
+		if f.v == "" {
 			continue
 		}
-		if err := b.maskReg.Add(runID, []byte(v)); err != nil {
-			return fmt.Errorf("broker: record the minted %s for masking: %w", what, err)
+		if err := b.maskReg.Add(runID, []byte(f.v)); err != nil {
+			return fmt.Errorf("broker: record the minted %s for masking: %w", f.what, err)
 		}
 	}
 	return nil
@@ -646,9 +647,8 @@ func (b *Broker) checkRefRuleset(ctx context.Context, repos []string) error {
 		return nil
 	}
 	// ONE deadline for the whole grant, not one fresh refRulesetProbeTimeout per
-	// repo: the loop runs inside mint()'s transaction, holding the grant row's
-	// FOR UPDATE lock and a pooled connection for as long as it takes, and a
-	// per-repo deadline lets that grow unbounded with the repo count (12 repos
+	// repo: the loop holds the mint for as long as it takes, and a per-repo
+	// deadline lets that grow unbounded with the repo count (12 repos
 	// against a blackholed api.github.com = 12 independent 15s waits). Sized
 	// from len(repos) so a legitimately large grant still gets each repo its
 	// existing budget, just under one shared, explicit ceiling.
