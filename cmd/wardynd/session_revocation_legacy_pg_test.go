@@ -16,7 +16,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// An API token or SSH key that exists when migration 0194 runs is ordered against the cuts once, by the
+// An API token or SSH key that exists when migration 0176 runs is ordered against the cuts once, by the
 // time comparison it replaces: one created before a cut is refused after the migration, one created
 // after is accepted, and a step of the clock afterwards changes neither answer.
 func TestPG_LegacyTokenAndKeyAreOrderedOnceByTheMigration(t *testing.T) {
@@ -35,11 +35,11 @@ func TestPG_LegacyTokenAndKeyAreOrderedOnceByTheMigration(t *testing.T) {
 			t.Fatalf("%s: %v", sql, err)
 		}
 	}
-	// Back to a database from before the migration: no triggers, a sequence never drawn from, 0194 unrecorded.
+	// Back to a database from before the migration: no triggers, a sequence never drawn from, 0176 unrecorded.
 	exec(`DROP TRIGGER oidc_session_revocations_stamp ON oidc_session_revocations`)
 	exec(`DROP TRIGGER oidc_session_cuts_stamp ON oidc_session_cuts`)
 	exec(`ALTER SEQUENCE oidc_revocation_seq RESTART WITH 1`)
-	exec(`DELETE FROM schema_migrations WHERE filename = '0194_revocation_order.sql'`)
+	exec(`DELETE FROM schema_migrations WHERE filename = '0176_revocation_order.sql'`)
 
 	st := store.NewPG(pool)
 	sub := "auth0|legacy-order-" + uuid.NewString()

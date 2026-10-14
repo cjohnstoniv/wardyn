@@ -9,7 +9,7 @@ import (
 	"testing"
 )
 
-// TestMigrate_RevocationOrderBackfill (0194): cut rows that exist before the migration get a seq in
+// TestMigrate_RevocationOrderBackfill (0176): cut rows that exist before the migration get a seq in
 // revoked_at order, below the sequence's value afterwards, so a credential that records the sequence at
 // its issue is not ended by a cut older than itself, and one that records nothing is still compared on
 // revoked_at; the trigger draws the seq for every later insert and update; the migration is replay-safe.
@@ -30,7 +30,7 @@ func TestMigrate_RevocationOrderBackfill(t *testing.T) {
 		('late', now() - interval '1 hour', 0), ('early', now() - interval '3 hours', 0), ('', now() - interval '2 hours', 0)`)
 	exec(`INSERT INTO oidc_session_cuts (sub, cut_at, seq) VALUES ('cut', now() - interval '90 minutes', 0)`)
 
-	sql, err := migrationFS.ReadFile("migrations/0194_revocation_order.sql")
+	sql, err := migrationFS.ReadFile("migrations/0176_revocation_order.sql")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -80,7 +80,7 @@ func TestMigrate_RevocationOrderBackfill(t *testing.T) {
 	}
 }
 
-// TestMigrate_RevocationOrderLeavesTheSequenceCalled (0194): on a sequence never drawn from, the first
+// TestMigrate_RevocationOrderLeavesTheSequenceCalled (0176): on a sequence never drawn from, the first
 // value a credential records and the first value a cut draws must differ. A fresh sequence reports
 // last_value 1 with is_called false, so the first nextval would return the value an issuer already read.
 func TestMigrate_RevocationOrderLeavesTheSequenceCalled(t *testing.T) {
@@ -97,7 +97,7 @@ func TestMigrate_RevocationOrderLeavesTheSequenceCalled(t *testing.T) {
 	exec(`DELETE FROM oidc_session_revocations`)
 	exec(`DELETE FROM oidc_session_cuts`)
 	exec(`ALTER SEQUENCE oidc_revocation_seq RESTART WITH 1`)
-	sql, err := migrationFS.ReadFile("migrations/0194_revocation_order.sql")
+	sql, err := migrationFS.ReadFile("migrations/0176_revocation_order.sql")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -121,7 +121,7 @@ func TestMigrate_RevocationOrderLeavesTheSequenceCalled(t *testing.T) {
 	}
 }
 
-// TestMigrate_RevocationOrderFreezesLegacyTokensAndKeys (0194): an API token or SSH key that exists
+// TestMigrate_RevocationOrderFreezesLegacyTokensAndKeys (0176): an API token or SSH key that exists
 // at the migration, and can outlive any session, is given its place among the cuts once: the seq of
 // the latest cut that predates it, so a cut made after it ends it and a cut made before does not. The
 // stored order does not move when a clock does.
@@ -161,7 +161,7 @@ func TestMigrate_RevocationOrderFreezesLegacyTokensAndKeys(t *testing.T) {
 		SELECT gen_random_uuid(), 'carol', '', 'at-global-cut', 'at-global-cut', revoked_at FROM oidc_session_revocations WHERE sub = ''`)
 	exec(`INSERT INTO ssh_public_keys (fingerprint, principal, name, public_key, created_at)
 		SELECT 'at-global-cut', 'carol', 'at-global-cut', 'k', revoked_at FROM oidc_session_revocations WHERE sub = ''`)
-	sql, err := migrationFS.ReadFile("migrations/0194_revocation_order.sql")
+	sql, err := migrationFS.ReadFile("migrations/0176_revocation_order.sql")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -205,7 +205,7 @@ func TestMigrate_RevocationOrderFreezesLegacyTokensAndKeys(t *testing.T) {
 	check("after a clock step")
 }
 
-// TestMigrate_RevocationOrderOrdersServiceTokensBySponsor (0194): a service identity's token is read against
+// TestMigrate_RevocationOrderOrdersServiceTokensBySponsor (0176): a service identity's token is read against
 // its current sponsor's cuts and the global one, so the backfill orders it against those. A token created
 // after its sponsor's cut stays live, one created before a sponsor or global cut is ended, and after a
 // sponsor change the token is ordered against the new sponsor while one older than the change stays refused
@@ -240,7 +240,7 @@ func TestMigrate_RevocationOrderOrdersServiceTokensBySponsor(t *testing.T) {
 		exec(`INSERT INTO api_tokens (id, principal, email, name, token_sha256, created_at)
 			VALUES (gen_random_uuid(), 'service:' || $1, '', $2, $2, now() - $3::interval)`, c.service, c.name, c.created)
 	}
-	sql, err := migrationFS.ReadFile("migrations/0194_revocation_order.sql")
+	sql, err := migrationFS.ReadFile("migrations/0176_revocation_order.sql")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -272,7 +272,7 @@ func TestMigrate_RevocationOrderOrdersServiceTokensBySponsor(t *testing.T) {
 	}
 }
 
-// TestMigrate_RevocationOrderOrdersServiceTokensByTheirOwnPrincipal (0194): a service token is also read
+// TestMigrate_RevocationOrderOrdersServiceTokensByTheirOwnPrincipal (0176): a service token is also read
 // against the cuts of its own principal (the queued start's owner check), so a replacement token minted after
 // a revoke of service:<name> stays live after the backfill, and one minted before it stays refused.
 func TestMigrate_RevocationOrderOrdersServiceTokensByTheirOwnPrincipal(t *testing.T) {
@@ -293,7 +293,7 @@ func TestMigrate_RevocationOrderOrdersServiceTokensByTheirOwnPrincipal(t *testin
 		exec(`INSERT INTO api_tokens (id, principal, email, name, token_sha256, created_at)
 			VALUES (gen_random_uuid(), 'service:svc-own', '', $1, $1, now() - $2::interval)`, c.name, c.created)
 	}
-	sql, err := migrationFS.ReadFile("migrations/0194_revocation_order.sql")
+	sql, err := migrationFS.ReadFile("migrations/0176_revocation_order.sql")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -314,7 +314,7 @@ func TestMigrate_RevocationOrderOrdersServiceTokensByTheirOwnPrincipal(t *testin
 	}
 }
 
-// TestMigrate_RevocationOrderTokenBeforeTheOldestCut (0194): a token or key created before the oldest cut
+// TestMigrate_RevocationOrderTokenBeforeTheOldestCut (0176): a token or key created before the oldest cut
 // has no earlier cut to take a seq from. It takes the value reserved below every cut, so the oldest cut,
 // which draws the first seq the migration hands out, still ends it.
 func TestMigrate_RevocationOrderTokenBeforeTheOldestCut(t *testing.T) {
@@ -332,7 +332,7 @@ func TestMigrate_RevocationOrderTokenBeforeTheOldestCut(t *testing.T) {
 	exec(`INSERT INTO oidc_session_revocations (sub, revoked_at, seq) VALUES ('dave', now() - interval '4 hours', 0)`)
 	exec(`INSERT INTO api_tokens (id, principal, name, token_sha256, created_at) VALUES (gen_random_uuid(), 'dave', 't', 't', now() - interval '5 hours')`)
 	exec(`INSERT INTO ssh_public_keys (fingerprint, principal, name, public_key, created_at) VALUES ('k', 'dave', 'k', 'k', now() - interval '5 hours')`)
-	sql, err := migrationFS.ReadFile("migrations/0194_revocation_order.sql")
+	sql, err := migrationFS.ReadFile("migrations/0176_revocation_order.sql")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -349,7 +349,7 @@ func TestMigrate_RevocationOrderTokenBeforeTheOldestCut(t *testing.T) {
 	}
 }
 
-// TestMigrate_RevocationOrderIndexesTokensByLowerEmail (0194): the per-person token revocation matches a
+// TestMigrate_RevocationOrderIndexesTokensByLowerEmail (0176): the per-person token revocation matches a
 // name against principal and lower(email); both columns have an index, so it does not read the table.
 func TestMigrate_RevocationOrderIndexesTokensByLowerEmail(t *testing.T) {
 	pool := pgPoolIsolated(t)

@@ -145,7 +145,7 @@ type IdentityRevocations interface {
 // Issue is where a credential sits against the revocation cuts: the wall-clock time it was issued and, when
 // the issuer recorded one, its revocation sequence (RevocationOrder). A zero Seq is a credential issued
 // before the sequence existed, or by a replica that predates it, and is compared on At alone. Migration
-// 0194 ordered the API tokens and SSH keys that existed, so in practice these are session cookies, which
+// 0176 ordered the API tokens and SSH keys that existed, so in practice these are session cookies, which
 // expire with the session.
 type Issue struct {
 	At  time.Time

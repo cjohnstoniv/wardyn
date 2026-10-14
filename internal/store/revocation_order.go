@@ -13,7 +13,7 @@ import (
 )
 
 // A credential is ordered against a revocation cut by the logical sequence oidc_revocation_seq (migration
-// 0194), never by two wall-clock readings. A cut draws its seq under the exclusive revocation-order lock
+// 0176), never by two wall-clock readings. A cut draws its seq under the exclusive revocation-order lock
 // and holds the lock until it commits; an issuer reads the sequence under the shared lock. A cut whose
 // value the issuer's read covers has therefore committed before the read, and every later cut draws a
 // greater one.
@@ -24,11 +24,11 @@ type batcher interface {
 }
 
 // ReadRevocationSeq is the ordering value a credential issued now records. Always at least 1 once
-// migration 0194 has run; the caller stores it as the credential's rev_seq.
+// migration 0176 has run; the caller stores it as the credential's rev_seq.
 func ReadRevocationSeq(ctx context.Context, q batcher) (int64, error) {
 	b := &pgx.Batch{}
 	b.Queue(`SELECT pg_advisory_xact_lock_shared($1, 0)`, db.RevocationOrderLockClass)
-	b.Queue(`SELECT oidc_revocation_position()`) // SECURITY DEFINER (0194): an app role holds no privilege on the sequence
+	b.Queue(`SELECT oidc_revocation_position()`) // SECURITY DEFINER (0176): an app role holds no privilege on the sequence
 	br := q.SendBatch(ctx, b)
 	defer br.Close()
 	if _, err := br.Exec(); err != nil {

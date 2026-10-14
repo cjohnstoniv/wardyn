@@ -147,7 +147,7 @@ var _ APITokensByIdentityLister = PG{}
 // ListAPITokensByIdentity returns the tokens whose principal is name or whose email equals it ignoring
 // case (the match IsSessionRevoked's email arm makes), revoked rows included. The principal matches come
 // first, newest first, then the rows only the email names. It reads api_tokens_principal_idx and
-// api_tokens_lower_email_idx (migration 0194), not the whole table. The email arm follows the session-cut
+// api_tokens_lower_email_idx (migration 0176), not the whole table. The email arm follows the session-cut
 // rule (lower(sub) = lower($2)), so for non-ASCII case pairs PG lower() can differ from the scan fallback's
 // strings.EqualFold. name must not be empty: "" is
 // the revoke-all arm, which lists everything.

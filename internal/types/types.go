@@ -503,7 +503,7 @@ type SSHPublicKey struct {
 	RoleCheckedAt *time.Time `json:"role_checked_at,omitempty"`
 	Capped        bool       `json:"capped"`
 	CreatedAt     time.Time  `json:"created_at"`
-	// RevSeq is the revocation sequence read when the key was registered; migration 0194 gave the keys
+	// RevSeq is the revocation sequence read when the key was registered; migration 0176 gave the keys
 	// that existed their order once. 0 only for a key written by a replica that predates it, which a
 	// revocation cutoff orders on CreatedAt. Never on the wire.
 	RevSeq int64 `json:"-"`
@@ -542,7 +542,7 @@ type APIToken struct {
 	// IdentityStampedAt is when Role and Groups were last stamped: at mint, then at each sign-in of
 	// the owner. Nil reads as stale under WARDYN_ROLE_STAMP_TTL. Never on the wire.
 	IdentityStampedAt *time.Time `json:"-"`
-	// RevSeq is the revocation sequence read when the token was minted; migration 0194 gave the tokens
+	// RevSeq is the revocation sequence read when the token was minted; migration 0176 gave the tokens
 	// that existed their order once. 0 only for a token written by a replica that predates it, which a
 	// revocation cutoff orders on CreatedAt. Never on the wire.
 	RevSeq int64 `json:"-"`
