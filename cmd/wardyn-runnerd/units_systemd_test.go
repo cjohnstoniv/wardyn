@@ -38,6 +38,12 @@ func TestRunnerdUserUnitStartsAndStops(t *testing.T) {
 	if os.Getenv("WARDYN_TEST_SYSTEMD_USER") != "1" {
 		t.Skip("set WARDYN_TEST_SYSTEMD_USER=1 on a host whose user systemd manager may be used")
 	}
+	// setup probes the relay with the real proxy image, so a stand-in image
+	// (busybox has no wardyn-proxy) would be refused.
+	proxyImage := os.Getenv("WARDYN_TEST_PROXY_IMAGE")
+	if proxyImage == "" {
+		t.Fatal("set WARDYN_TEST_PROXY_IMAGE to a locally present wardyn-proxy image (CI builds wardyn/wardyn-proxy:local)")
+	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		t.Fatal(err)
@@ -87,7 +93,7 @@ func TestRunnerdUserUnitStartsAndStops(t *testing.T) {
 	}
 
 	script := filepath.Join("..", "..", "deploy", "runner", "install.sh")
-	if out, err := run(t, "bash", script, "--org", unitOrg, "--binary", bin, "--proxy-image", "busybox:latest"); err != nil {
+	if out, err := run(t, "bash", script, "--org", unitOrg, "--binary", bin, "--proxy-image", proxyImage); err != nil {
 		t.Fatalf("install.sh: %v\n%s", err, out)
 	}
 
