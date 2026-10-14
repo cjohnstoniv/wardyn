@@ -24,7 +24,7 @@ type runnerRuntime struct {
 
 type runnerHooksBuilder func(context.Context, runneridentity.Identity, string, serveOptions) (runnerRuntime, error)
 
-type serveOptions struct{ proxyImage, network, recording string }
+type serveOptions struct{ proxyImage, relayListen, network, recording string }
 
 func (o serveOptions) recordingEnabled() (bool, error) {
 	switch o.recording {
@@ -82,7 +82,8 @@ func newServeCommand(build runnerHooksBuilder) *cobra.Command {
 	cmd.Flags().StringVar(&org, "org", "", "organisation public HTTPS URL used at registration")
 	cmd.Flags().StringVar(&stateDir, "state-dir", "", "private runner state directory (defaults to the user configuration directory)")
 	cmd.Flags().StringVar(&opts.proxyImage, "proxy-image", os.Getenv("WARDYN_PROXY_IMAGE"), "Wardyn proxy image matching this daemon version")
-	cmd.Flags().StringVar(&opts.network, "internal-network", cmp.Or(os.Getenv("WARDYN_INTERNAL_NETWORK"), "wardyn-internal"), "existing Docker bridge for proxy sidecars")
+	cmd.Flags().StringVar(&opts.relayListen, "relay-listen", os.Getenv("WARDYN_RELAY_LISTEN"), "address the run relay listens on instead of Docker's host-gateway (127.0.0.1 with Docker Desktop)")
+	cmd.Flags().StringVar(&opts.network, "internal-network", cmp.Or(os.Getenv("WARDYN_INTERNAL_NETWORK"), "wardyn-internal"), "Docker bridge for proxy sidecars (created when missing)")
 	cmd.Flags().StringVar(&opts.recording, "recording-store", cmp.Or(os.Getenv("WARDYN_RECORDING_STORE"), "pg"), "organisation recording mode: pg, fs or off (off disables local capture)")
 	_ = cmd.MarkFlagRequired("org")
 	return cmd

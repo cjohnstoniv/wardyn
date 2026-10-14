@@ -8,7 +8,6 @@ import (
 	"io"
 	"net"
 	"net/netip"
-	"net/url"
 	"testing"
 	"time"
 
@@ -35,10 +34,36 @@ func TestRunnerRelayListenerBindsOnlyTheGateway(t *testing.T) {
 			t.Errorf("%s: relayBind(%s) = %v, want ok=%v", tc.name, tc.addr, err, tc.ok)
 		}
 	}
-	u, _ := url.Parse("https://wardynd.internal:8443")
-	r := newLocalRelay(context.Background(), netip.MustParseAddr("0.0.0.0"), []netip.Addr{netip.MustParseAddr("0.0.0.0")}, nil)
-	if err := r.Ensure(u); err == nil || len(r.listeners) != 0 {
-		t.Fatalf("a relay bound the unspecified address: %v", err)
+}
+
+// An explicit --relay-listen address: loopback only where Docker Desktop's
+// host-gateway reaches it, otherwise exactly the engine's host-gateway.
+func TestRunnerRelayExplicitListen(t *testing.T) {
+	gw := netip.MustParseAddr("172.17.0.1")
+	bridge := []netip.Addr{gw}
+	for _, tc := range []struct {
+		name    string
+		addr    string
+		desktop bool
+		ok      bool
+	}{
+		{"loopback on Docker Desktop", "127.0.0.1", true, true},
+		{"IPv6 loopback on Docker Desktop", "::1", true, true},
+		{"loopback on a native engine", "127.0.0.1", false, false},
+		{"the native host-gateway", "172.17.0.1", false, true},
+		{"another address on a native engine", "192.168.1.20", false, false},
+		{"another address on Docker Desktop", "192.168.1.20", true, false},
+		{"every IPv4 interface on Docker Desktop", "0.0.0.0", true, false},
+		{"every IPv6 interface on a native engine", "::", false, false},
+		{"multicast on Docker Desktop", "224.0.0.1", true, false},
+		{"multicast on a native engine", "ff02::1", false, false},
+	} {
+		if err := explicitRelayBind(netip.MustParseAddr(tc.addr), tc.desktop, gw, bridge); (err == nil) != tc.ok {
+			t.Errorf("%s: explicitRelayBind(%s) = %v, want ok=%v", tc.name, tc.addr, err, tc.ok)
+		}
+	}
+	if err := explicitRelayBind(gw, false, gw, nil); err == nil {
+		t.Error("the host-gateway was admitted though the Docker bridge does not hold it")
 	}
 }
 
@@ -62,7 +87,7 @@ func TestRunnerRelayForwardsOverItsOwnStream(t *testing.T) {
 	go func() { _ = org.Run(ctx) }()
 	go func() { _ = run.Run(ctx) }()
 
-	r := &localRelay{ctx: ctx, gateway: netip.MustParseAddr("127.0.0.1"), listeners: map[uint16]net.Listener{}, conns: map[net.Conn]*runnerwire.Peer{}}
+	r := &localRelay{ctx: ctx, addr: netip.MustParseAddr("127.0.0.1"), listeners: map[uint16]net.Listener{}, conns: map[net.Conn]*runnerwire.Peer{}}
 	defer r.Close()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
