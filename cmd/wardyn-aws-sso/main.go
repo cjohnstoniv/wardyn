@@ -130,6 +130,12 @@ func run() error {
 		printFailure(serverSentence(derr))
 		return nil
 	}
+	// Without the client registration it is redeemed with, a refresh token
+	// cannot renew anything: the control plane serves this session until it
+	// expires (awsSSOBlob.renewable), so say so before the pane closes.
+	if blob.RefreshToken != "" && (blob.ClientID == "" || blob.ClientSecret == "") {
+		fmt.Fprintln(stdout, noRenewalNote)
+	}
 	// SUCCESS-ONLY marker, and a byte-for-byte contract: the setup UI's login pane
 	// scrapes the attach PTY for exactly this line to end the login
 	// (ui/.../login-flows.tsx doneMarker). Printing it on a failed upload
@@ -141,6 +147,10 @@ func run() error {
 // successMarker is the PTY line the UI waits for. Keep it in sync with
 // login-flows.tsx's LOGIN_FLOWS.aws doneMarker.
 const successMarker = "wardyn: aws sso credential captured"
+
+// noRenewalNote is printed ahead of successMarker for a captured session that
+// carries a refresh token but not the client registration that redeems it.
+const noRenewalNote = "wardyn: this session will not renew; sign in again when it expires."
 
 // stdout / stdin / stdinIsTerminal are the process's own streams, as VARIABLES
 // so a test can drive the chooser and read the markers without a pty. Same

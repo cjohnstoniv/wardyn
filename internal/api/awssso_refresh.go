@@ -154,6 +154,14 @@ const (
 		"and renewing that session did not complete — AWS did not answer the token request. " +
 		"Your sign-in is still good; launch again in a moment. Wardyn does not substitute a different model provider."
 
+	// awsSSORefreshRefusedSentence: AWS answered the renewal with a refusal a
+	// fresh sign-in answers (awsSSORefusedError) and the access token has
+	// expired. The refresh token is kept, but retrying would get the same answer,
+	// so the copy says "sign in again". The returned failure is this prefix plus
+	// the refusal's detail (the AWS code and its description).
+	awsSSORefreshRefusedSentence = "This run's model access is configured as Amazon Bedrock (captured AWS SSO session), " +
+		"and AWS refused to renew that session, so it must be signed in again. AWS answered: "
+
 	// The two failures only a create-time renewal (withCreateRenewal) returns.
 	// providerBedrockRefusal turns each into its provider's own 503 sentence.
 	//
@@ -286,8 +294,9 @@ type awsSSOTokenResponse struct {
 // awsSSOErrorIsSpent classifies a CreateToken error code. These four mean the
 // grant or the client registration behind it is gone, so no retry and no other
 // refresh token will help: the lane is dead until the person signs in again.
-// Everything else — `slow_down`, `internal_failure`, an unparseable body, a
-// transport error — is transient.
+// The re-auth class (awsSSOErrorIsReauth) keeps the token but sends the person
+// to sign in; everything else — `slow_down`, `internal_failure`, an
+// unparseable body, a transport error, any 5xx — is transient.
 func awsSSOErrorIsSpent(code string) bool {
 	switch code {
 	case "invalid_grant", "expired_token", "invalid_client", "unauthorized_client":
@@ -324,11 +333,16 @@ func (b awsSSOBlob) servableFor(now time.Time, floor time.Duration) bool {
 }
 
 // renewable reports whether this credential can be healed without a human: it
-// carries a refresh token and its client registration has not lapsed. An
-// EXPIRED access token on a renewable blob is not a dead credential — dispatch
-// renews it — which is why readiness is (renewable || !expired), never !expired.
+// carries a refresh token, the client registration CreateToken requires beside
+// it, and that registration has not lapsed. An EXPIRED access token on a
+// renewable blob is not a dead credential — dispatch renews it — which is why
+// readiness is (renewable || !expired), never !expired.
+//
+// The pair is required, not merely the refresh token: without it CreateToken
+// answers invalid_request on every attempt, so a pair-less blob serves its access
+// token until expiry and then opens the sign-in door without calling AWS.
 func (b awsSSOBlob) renewable(now time.Time) bool {
-	return b.RefreshToken != "" && !b.registrationLapsed(now)
+	return b.RefreshToken != "" && b.ClientID != "" && b.ClientSecret != "" && !b.registrationLapsed(now)
 }
 
 // awsSSOTokenFingerprint identifies a refresh token without storing it: the
@@ -682,7 +696,7 @@ func (s *Server) refreshAWSSSOBlob(parent context.Context, scope awsSSOScope, bl
 			return blob, ""
 		}
 		s.metrics.ssoRefreshRecorded(ssoRefreshOutcomeUnavailable)
-		return blob, awsSSORefreshUnavailableSentence
+		return blob, awsSSOExpiredFailure(err)
 	}
 	s.metrics.ssoRefreshRecorded(ssoRefreshOutcomeSuccess)
 
@@ -814,7 +828,7 @@ func (s *Server) auditAWSSSORefresh(ctx context.Context, scope awsSSOScope, outc
 // replaced the refresh token, never proof of it.
 func (s *Server) createAWSSSOTokenWithRetry(ctx context.Context, blob awsSSOBlob) (resp awsSSOTokenResponse, attempts int, afterLostReply bool, err error) {
 	resp, err = s.createAWSSSOToken(ctx, blob)
-	if err == nil || errors.Is(err, errAWSSSOCredentialSpent) {
+	if _, refused := awsSSORefusal(err); err == nil || refused || errors.Is(err, errAWSSSOCredentialSpent) {
 		return resp, 1, false, err
 	}
 	// Classified on its own, before the join below makes the two errors one.
@@ -900,8 +914,11 @@ func (s *Server) createAWSSSOToken(ctx context.Context, blob awsSSOBlob) (awsSSO
 		return out, fmt.Errorf("aws sso create-token: parse response (status %d): %w", resp.StatusCode, uerr)
 	}
 	if out.Error != "" {
-		if awsSSOErrorIsSpent(out.Error) {
+		switch {
+		case awsSSOErrorIsSpent(out.Error):
 			return out, awsSSOSpentError{out.Error}
+		case resp.StatusCode < 500 && awsSSOErrorIsReauth(out.Error):
+			return out, awsSSORefusedError{code: out.Error, description: awsSSOErrorDescription(out.ErrorDescription, blob)}
 		}
 		return out, fmt.Errorf("aws sso create-token refused: %s", out.Error)
 	}
