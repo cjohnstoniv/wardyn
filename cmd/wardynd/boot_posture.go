@@ -273,7 +273,8 @@ func resolveDirectoryConfig(provider, dirTenant, dirClientID, dirSecret, oidcIss
 				"set all three of WARDYN_DIRECTORY_TENANT/_CLIENT_ID/_CLIENT_SECRET, or unset all three to derive the credentials from the OIDC app registration instead",
 				strings.Join(missing, " and "), plural(len(missing), "is", "are"))
 		}
-		return directory.EntraConfig{TenantID: dirTenant, ClientID: dirClientID, ClientSecret: dirSecret}, nil
+		return directory.EntraConfig{TenantID: dirTenant, ClientID: dirClientID, ClientSecret: dirSecret,
+			AppRolesAppID: strings.TrimSpace(oidcClientID)}, nil
 	}
 
 	// Leg 2 of PF-29: nothing to derive from at all.
@@ -299,7 +300,8 @@ func resolveDirectoryConfig(provider, dirTenant, dirClientID, dirSecret, oidcIss
 			"and the connector talks to graph.microsoft.com, which no sovereign cloud serves; "+
 			"set WARDYN_DIRECTORY_TENANT/_CLIENT_ID/_CLIENT_SECRET explicitly, or unset WARDYN_DIRECTORY_PROVIDER", directoryProviderEntra, oidcIssuer)
 	}
-	return directory.EntraConfig{TenantID: tenant, ClientID: strings.TrimSpace(oidcClientID), ClientSecret: oidcSecret}, nil
+	return directory.EntraConfig{TenantID: tenant, ClientID: strings.TrimSpace(oidcClientID), ClientSecret: oidcSecret,
+		AppRolesAppID: strings.TrimSpace(oidcClientID)}, nil
 }
 
 // entraTenantFromIssuer pulls the tenant id (or verified domain) out of an Entra

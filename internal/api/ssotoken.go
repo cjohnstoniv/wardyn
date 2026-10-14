@@ -214,6 +214,27 @@ func (s *Server) handleUploadSSOToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Mask the captured token values out of THIS run's PTY capture/decision log.
+	// PER-RUN, not AddGlobal: these bytes are sandbox input — the guards
+	// above bind WHOSE IdP and WHICH run, never what the token itself contains —
+	// and secretmask's global corpus is applied to every run's output AND, via
+	// cmd/wardynd's maskingRecorder, to the Data/Target of every persisted audit
+	// event including run-less rows (Snapshot(uuid.Nil)), while Evict clears
+	// per-run entries only. Registering sandbox-chosen bytes there let a process
+	// inside the vendor login image pick strings that redact every operator's
+	// logs — "connection refused", an IP:port — for the life of the daemon.
+	// The credential itself loses NOTHING: bedrockSSOAuth merges the stored
+	// blob's access/refresh/client-secret into the global corpus on every
+	// dispatch that actually selects this credential, so the global registration
+	// follows the SERVER's decision to use the credential rather than the
+	// sandbox's decision to name a string. Add is nil-safe.
+	//
+	// Before the store: a capture whose values cannot be put on record for
+	// masking is refused, and a refused capture must leave nothing stored.
+	if s.refuseUnmasked(w, r, claims, "credential.capture", []byte(blob.AccessToken), []byte(blob.RefreshToken)) {
+		return
+	}
+
 	// The run state again, re-read inside the lock — the KILLED check at the top
 	// of this handler is a check-then-use with everything between it and the
 	// write in the window: the body read, the stamp read, the bind, the scope
@@ -270,24 +291,6 @@ func (s *Server) handleUploadSSOToken(w http.ResponseWriter, r *http.Request) {
 		// event an operator wants beside the rest rather than only in a 500.
 		s.refuseCapture(w, r, claims, http.StatusInternalServerError, reasonStoreError,
 			loggedMsg(r.Context(), "store aws sso credential", err), &scope)
-		return
-	}
-
-	// Mask the captured token values out of THIS run's PTY capture/decision log.
-	// PER-RUN, not AddGlobal: these bytes are sandbox input — the guards
-	// above bind WHOSE IdP and WHICH run, never what the token itself contains —
-	// and secretmask's global corpus is applied to every run's output AND, via
-	// cmd/wardynd's maskingRecorder, to the Data/Target of every persisted audit
-	// event including run-less rows (Snapshot(uuid.Nil)), while Evict clears
-	// per-run entries only. Registering sandbox-chosen bytes there let a process
-	// inside the vendor login image pick strings that redact every operator's
-	// logs — "connection refused", an IP:port — for the life of the daemon.
-	// The credential itself loses NOTHING: bedrockSSOAuth merges the stored
-	// blob's access/refresh/client-secret into the global corpus on every
-	// dispatch that actually selects this credential, so the global registration
-	// follows the SERVER's decision to use the credential rather than the
-	// sandbox's decision to name a string. Add is nil-safe.
-	if s.refuseUnmasked(w, r, claims, "credential.capture", []byte(blob.AccessToken), []byte(blob.RefreshToken)) {
 		return
 	}
 

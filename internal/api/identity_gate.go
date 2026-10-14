@@ -26,6 +26,7 @@ const authFailedIdentityDeactivated = oidc.DenialIdentityDeactivated
 type identityGateStore interface {
 	IdentityRefused(ctx context.Context, issuer, tenantID, objectID, principal string) (bool, error)
 	IssueLoginIdentity(ctx context.Context, in store.LoginIdentity, now time.Time) (int64, error)
+	GetIdentityByObject(ctx context.Context, issuer, tenantID, objectID string) (store.PrincipalIdentity, error)
 }
 
 type storeIdentityGate struct{ st identityGateStore }
@@ -50,6 +51,14 @@ func (g storeIdentityGate) Issue(ctx context.Context, f oidc.LoginFacts) (int64,
 		return 0, fmt.Errorf("%w: %w", oidc.ErrIdentityBindingMismatch, err)
 	}
 	return epoch, err
+}
+
+func (g storeIdentityGate) Bound(ctx context.Context, ref oidc.IdentityRef) (string, error) {
+	row, err := g.st.GetIdentityByObject(ctx, ref.Issuer, ref.TenantID, ref.ObjectID)
+	if errors.Is(err, store.ErrNotFound) {
+		return "", nil
+	}
+	return row.Principal, err
 }
 
 // ownerGuard is the guard for a write made for owner. The request's own authority epoch counts only

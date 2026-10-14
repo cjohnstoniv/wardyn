@@ -392,6 +392,8 @@ subject_token_type=urn:ietf:params:oauth:token-type:access_token   (or …:id_to
 - The subject token must verify against Wardyn's issuer and key set, be unexpired, carry an `iat`, and be either:
   - an access token for Wardyn (`aud` holds Wardyn's client id) that the portal requested (`azp` is the portal's client id), or
   - a token issued to the portal itself (`aud` is exactly the portal's client id).
+    - On Entra ID its `sub` is pairwise to the portal's app registration, so the person is the principal their own Wardyn sign-in bound to the token's `tid` and `oid`, or a person set up by that object id.
+    - With neither (the person has never signed in here), the exchange is refused (`subject_token_unbound`).
 - The person is then admitted exactly as a sign-in would admit them — reserved subjects, the email-domain gate, role and user-type derivation from the token's own claims.
 - On success the answer is `{"access_token":"wdg_…","token_type":"Bearer","expires_in":600,…}`: ten minutes, no refresh token.
 - A portal that needs longer exchanges the person's live token again.

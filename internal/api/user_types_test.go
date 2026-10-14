@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 
@@ -20,13 +21,15 @@ import (
 // whatever a test writes. refs is what UserTypeReferences answers, tokens what
 // UserTypeTokenStamps answers (tokensErr fails that read), and deleteConflict
 // makes the store's own delete refuse (a row written between the handler's
-// check and the DELETE).
+// check and the DELETE). mappings are the People role mappings; one naming the
+// type also makes the delete refuse, as their foreign key does.
 type userTypeStore struct {
 	store.Store
 	rows           map[string]types.UserType
 	refs, tokens   int
 	tokensErr      error
 	deleteConflict bool
+	mappings       []types.RoleMapping
 }
 
 func newUserTypeStore() *userTypeStore {
@@ -100,12 +103,17 @@ func (s *userTypeStore) UserTypeTokenStamps(context.Context, string) (int, error
 	return s.tokens, s.tokensErr
 }
 
+func (s *userTypeStore) ListRoleMappings(context.Context) ([]types.RoleMapping, error) {
+	return s.mappings, nil
+}
+
 func (s *userTypeStore) DeleteUserType(_ context.Context, id string) error {
 	t, ok := s.rows[id]
 	if !ok {
 		return store.ErrNotFound
 	}
-	if t.BuiltIn || s.refs > 0 || s.tokens > 0 || s.deleteConflict {
+	mapped := slices.ContainsFunc(s.mappings, func(m types.RoleMapping) bool { return m.UserType == id })
+	if t.BuiltIn || s.refs > 0 || s.tokens > 0 || s.deleteConflict || mapped {
 		return store.ErrConflict
 	}
 	delete(s.rows, id)
@@ -287,6 +295,7 @@ func TestDeleteUserTypeRefusedWhileNamed(t *testing.T) {
 		defaultRole    string
 		refs, tokens   int
 		deleteConflict bool
+		mappings       []string
 		id             string
 		want           string
 	}{
@@ -322,6 +331,15 @@ func TestDeleteUserTypeRefusedWhileNamed(t *testing.T) {
 				"Remap it in your chart, then revoke the tokens or wait for their holders to sign in again.",
 		},
 		{
+			name: "a People mapping", id: "contractor", mappings: []string{"contractor", "standard"},
+			want: "It can't be removed yet: 1 People mapping maps to it. Remap it on People.",
+		},
+		{
+			name: "People mappings and a subject row", id: "contractor", mappings: []string{"contractor", "contractor"}, refs: 1,
+			want: "It can't be removed yet: 2 People mappings map to it, and 1 permission, profile, drive or service identity row names it. " +
+				"Remap them on People, then remove those rows.",
+		},
+		{
 			name: "a row written after the check", id: "contractor", deleteConflict: true,
 			want: "It can't be removed yet: something started naming it just now. Reload and try again.",
 		},
@@ -330,6 +348,9 @@ func TestDeleteUserTypeRefusedWhileNamed(t *testing.T) {
 			st := newUserTypeStore()
 			st.rows[contractor.ID] = contractor
 			st.refs, st.tokens, st.deleteConflict = tc.refs, tc.tokens, tc.deleteConflict
+			for _, ut := range tc.mappings {
+				st.mappings = append(st.mappings, types.RoleMapping{Value: "group-" + ut, Role: oidc.RoleUser, UserType: ut})
+			}
 			var auth *oidc.Authenticator
 			if tc.roleMap != nil {
 				auth = newAccessAuth(t, tc.roleMap, tc.defaultRole, nil, nil)
@@ -367,6 +388,7 @@ func TestDeleteUserTypeRefusedWhileNamed(t *testing.T) {
 	// THE CONTROL: the same deployment with nothing naming the type removes it.
 	st = newUserTypeStore()
 	st.rows[contractor.ID] = contractor
+	st.mappings = []types.RoleMapping{{Value: "staff", Role: oidc.RoleUser, UserType: types.UserTypeStandard}}
 	srv, _ = userTypeServer(t, st, newAccessAuth(t, map[string]string{"ext-group": "admin"}, "", nil, nil))
 	if w := do(t, srv, http.MethodDelete, "/api/v1/user-types/contractor", adminToken, ""); w.Code != http.StatusNoContent {
 		t.Fatalf("DELETE unnamed = %d %s, want 204", w.Code, w.Body.String())

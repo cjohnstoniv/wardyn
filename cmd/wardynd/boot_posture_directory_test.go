@@ -198,3 +198,18 @@ func TestResolveDirectoryConfig(t *testing.T) {
 		})
 	}
 }
+
+// App Role suggestions read the app whose roles claim sign-ins carry, the OIDC
+// app, whichever registration holds the Graph credentials.
+func TestResolveDirectoryConfigAppRolesReadTheSignInApp(t *testing.T) {
+	const entraIssuer = "https://login.microsoftonline.com/00000000-1111-2222-3333-444444444444/v2.0"
+	for name, dir := range map[string][3]string{
+		"the OIDC app's credentials": {},
+		"a dedicated directory app":  {"tenant.example", "dir-app", "dir-secret"},
+	} {
+		got, err := resolveDirectoryConfig("entra", dir[0], dir[1], dir[2], entraIssuer, " oidc-app ", "oidc-secret")
+		if err != nil || got.AppRolesAppID != "oidc-app" {
+			t.Errorf("%s: AppRolesAppID = %q, err %v; want oidc-app", name, got.AppRolesAppID, err)
+		}
+	}
+}
