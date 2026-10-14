@@ -444,6 +444,27 @@ func (s *Service) TruncatedWithGroupsQ(ctx context.Context, q Querier, principal
 	return yes, nil
 }
 
+// InTwoGroupDomains says whether principal can still sign in and their last login carries groups
+// assigned to more than one domain: without a user assignment of their own, Domain refuses them by
+// name. It never reads the user assignment, so it answers for the assignments as they stand once
+// that one is deleted, whether the delete has run yet or not.
+func (s *Service) InTwoGroupDomains(ctx context.Context, principal string) (bool, error) {
+	return s.InTwoGroupDomainsQ(ctx, s.pool, principal)
+}
+
+// InTwoGroupDomainsQ is InTwoGroupDomains on q.
+func (s *Service) InTwoGroupDomainsQ(ctx context.Context, q Querier, principal string) (bool, error) {
+	var yes bool
+	err := q.QueryRow(ctx, `
+		SELECT count(DISTINCT g.domain) > 1 FROM key_domain_login_groups l
+		JOIN key_domain_assignments g ON g.subject_type='group' AND l.groups @> jsonb_build_array(g.subject)
+		WHERE l.principal = $1 AND `+liveLogin, principal).Scan(&yes)
+	if err != nil {
+		return false, unavailable("read the domains of the person's groups", err)
+	}
+	return yes, nil
+}
+
 // Changes is the assignment writes audited since a time.
 type Changes struct {
 	Count int

@@ -11,6 +11,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -66,6 +67,60 @@ func TestPut_IfRevisionWritesOnlyWhileTheRowIsUnchanged(t *testing.T) {
 	// An unguarded Put is unchanged.
 	if err := view.Put(ctx, name, []byte("plain")); err != nil {
 		t.Fatalf("unguarded put: %v", err)
+	}
+}
+
+// A guarded Delete reads the revision under the row's own lock. A local-mode
+// replace takes no advisory lock, so one that is open when the Delete starts
+// must commit first: the Delete then finds a newer row than the one its holder
+// read, is refused, and leaves that row in place.
+func TestDelete_IfRevisionKeepsARowReplacedWhileItWaited(t *testing.T) {
+	s, _, _ := newPGStore(t)
+	ctx := t.Context()
+	owner := "revision-" + uuid.NewString()
+	view := s.For(owner).(*Store)
+	name := "wardyn-revision-test"
+	if err := view.Put(ctx, name, []byte("first")); err != nil {
+		t.Fatal(err)
+	}
+	rev, err := view.Revision(ctx, name)
+	if err != nil || rev == "" {
+		t.Fatalf("revision = %q, %v", rev, err)
+	}
+	// One holder's guarded replace of the row as read, not yet committed.
+	tx, err := beginReadCommitted(ctx, holdPool(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	r, err := view.sealRow(ctx, owner, name, []byte("second"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := view.putRow(secretstore.WithIfRevision(ctx, rev), tx, name, r); err != nil {
+		t.Fatal(err)
+	}
+	// Another holder's guarded Delete, on the same read.
+	deleted := make(chan error, 1)
+	go func() { deleted <- view.Delete(secretstore.WithIfRevision(ctx, rev), name) }()
+	select {
+	case err := <-deleted:
+		t.Fatalf("the guarded Delete returned (%v) while a replace of the row was uncommitted", err)
+	case <-time.After(300 * time.Millisecond):
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-deleted; !errors.Is(err, secretstore.ErrRevisionChanged) {
+		t.Fatalf("guarded Delete of a row replaced while it waited = %v, want ErrRevisionChanged", err)
+	}
+	if got := mustGetValue(t, view, name); got != "second" {
+		t.Fatalf("stored = %q after the refused Delete, want %q", got, "second")
+	}
+	// A guarded Delete that expects no row, and finds none, deletes nothing.
+	absent := "wardyn-revision-absent"
+	if err := view.Delete(secretstore.WithIfRevision(ctx, ""), absent); err != nil {
+		t.Fatalf("guarded Delete of an absent row expected absent: %v", err)
 	}
 }
 

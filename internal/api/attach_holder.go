@@ -343,6 +343,9 @@ func writeAttachMode(ctx context.Context, c *websocket.Conn, readOnly bool, hold
 type attachHolderRegistry struct {
 	mu       sync.Mutex
 	attaches map[uuid.UUID]*runAttach
+	// slots counts each run's live attach sessions, writers and observers, until their
+	// recordings are finalized (reserveAttachSlot, attach_slots.go).
+	slots map[uuid.UUID]int
 }
 
 // runAttach is one run's attach state: the single writer, and the observers

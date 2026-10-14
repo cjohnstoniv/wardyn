@@ -74,8 +74,12 @@ func parseEndsIn(s string) (int, error) {
 	return int(d / time.Second), nil
 }
 
-// endLine is the create output's line for the end the run got.
+// endLine is the create output's line for the end the run got. A QUEUED run has none yet: the end is
+// set at its start, so its empty end never reads as "no end".
 func endLine(run sdk.AgentRun) string {
+	if run.State == sdk.RunQueued {
+		return "  ends: set at the start (queued)"
+	}
 	if run.EndsAt == nil {
 		return "  ends: never (no end)"
 	}

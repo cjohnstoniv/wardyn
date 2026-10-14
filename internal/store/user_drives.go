@@ -376,7 +376,12 @@ func replaceUserDriveGrantOn(ctx context.Context, tx pgx.Tx, g types.UserDriveGr
 		}
 		if kept.DriveID != g.DriveID {
 			removed = append(removed, kept.DriveID)
-			if _, err := tx.Exec(ctx, `UPDATE user_drive_grants SET drive_id = $2 WHERE id = $1`, kept.ID, g.DriveID); err != nil {
+			// The stated home_override moves with the drive in one statement: the (drive_id, home_override)
+			// index (migration 0059) is checked per statement, so a repoint carrying the old override could
+			// collide with another subject's row on the new drive although the requested pair is free.
+			if _, err := tx.Exec(ctx, `UPDATE user_drive_grants SET drive_id = $2,
+				home_override = CASE WHEN $4::boolean THEN $3::text ELSE home_override END WHERE id = $1`,
+				kept.ID, g.DriveID, g.HomeOverride, homeOverrideStated); err != nil {
 				return types.UserDriveGrant{}, nil, grantWriteErr(err)
 			}
 		}

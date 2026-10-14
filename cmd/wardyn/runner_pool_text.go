@@ -6,7 +6,6 @@ package main
 import (
 	"fmt"
 	"io"
-	"strings"
 
 	sdk "github.com/cjohnstoniv/wardyn/pkg/client"
 )
@@ -31,7 +30,7 @@ func printPoolCreated(w io.Writer, p sdk.RunnerPool, asJSON, withRunners bool) e
 	if own := poolLimitsText(p, sdk.RunnerAmounts{}); own != "none of its own: it follows its runners" {
 		limits = own + "; it has no runners yet"
 	}
-	_, err := fmt.Fprintf(w, "  limits: %s. Put a runner in it: wardyn runner pool add %s <runner>\n", limits, shellWord(p.Name))
+	_, err := fmt.Fprintf(w, "  limits: %s. Put a runner in it: wardyn runner pool add %s <runner>\n", limits, p.ID)
 	return err
 }
 
@@ -48,12 +47,4 @@ func printPoolDeleted(w io.Writer, p sdk.RunnerPool) error {
 		"  runs that were waiting for it ended: \"The pool this run was waiting for was removed.\"\n"+
 		"  runs already running were not stopped; its runners were taken out of it, not touched\n", p.Name, p.ID)
 	return err
-}
-
-// shellWord is name as one word on a command line: quoted when it holds a space.
-func shellWord(name string) string {
-	if strings.ContainsAny(name, " \t") {
-		return `"` + name + `"`
-	}
-	return name
 }

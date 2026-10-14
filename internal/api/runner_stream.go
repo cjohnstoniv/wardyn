@@ -19,6 +19,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/runner/remote"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 	"github.com/cjohnstoniv/wardyn/internal/store"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 type runnerStreamState struct {
@@ -126,6 +127,17 @@ func (s *Server) defaultRunnerHooks() {
 	}
 }
 
+// runnerOwnerInactive says the runner's owner is deactivated or purged (a SCIM suspension): the
+// identity read the token and SSH-key lanes make. The runner stays claimed, so a reactivation
+// readmits it with no re-claim.
+func (s *Server) runnerOwnerInactive(ctx context.Context, rn types.Runner) (bool, error) {
+	st, ok := s.cfg.Store.(store.PG)
+	if !ok {
+		return false, nil
+	}
+	return st.IdentityBlocked(ctx, rn.Owner, -1)
+}
+
 // runnerHub builds the one Hub lazily. Callbacks not injected are the durable
 // org composition: admitRunner and the asynchronous offline sweep.
 func (s *Server) runnerHub(st store.RunnerStore) *remote.Hub {
@@ -143,6 +155,9 @@ func (s *Server) runnerHub(st store.RunnerStore) *remote.Hub {
 		}
 		if cfg.Admit == nil {
 			cfg.Admit = s.admitRunner
+		}
+		if cfg.Inactive == nil {
+			cfg.Inactive = s.runnerOwnerInactive
 		}
 		// The Hub reports Disconnected only for a session it reported Connected,
 		// and calls both under the runner's session slot, Disconnected even inside

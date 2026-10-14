@@ -43,7 +43,7 @@ func (s *Server) registerLiveBus() {
 	b.Handle(livebus.KindRunEvent, s.onRunEventNotice)
 	b.Handle(livebus.KindRunKill, func(m livebus.Message) {
 		if m.Origin != b.Origin() {
-			s.creates.cancel(m.Run)
+			s.cancelLocalStart(m.Run)
 		}
 	})
 	s.registerAttachLeaseNotices(b)
@@ -66,11 +66,17 @@ func (s *Server) publishNotice(kind string, run uuid.UUID, data any) {
 	})
 }
 
-// cancelCreate stops runID's in-flight CreateSandbox on this replica and, over the bus, on
-// whichever replica holds it.
+// cancelCreate stops runID's in-flight image build and CreateSandbox on this replica and, over the
+// bus, on whichever replica holds them.
 func (s *Server) cancelCreate(runID uuid.UUID) {
-	s.creates.cancel(runID)
+	s.cancelLocalStart(runID)
 	s.publishNotice(livebus.KindRunKill, runID, nil)
+}
+
+// cancelLocalStart stops what this replica has in flight to start runID.
+func (s *Server) cancelLocalStart(runID uuid.UUID) {
+	s.runBuilds.cancel(runID)
+	s.creates.cancel(runID)
 }
 
 func (s *Server) publishRunEvents(runID uuid.UUID, evs []client.RunEvent) {
