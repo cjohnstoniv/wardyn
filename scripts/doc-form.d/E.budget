@@ -33,6 +33,9 @@
 # docs/ENV.md 36825 adds 34 over 36791 (the Vault client's redirect rule): the WARDYN_VAULT_ADDR line on same-origin redirects and Vault HA; measured.
 # docs/ENV.md 36823 measured at merge: the final docs pass over the runner limits, pool words and Azure CLI lanes.
 # docs/ENV.md 36870 adds 47 over 36823: 0.9 final docs pass 3, measured: the governance targets held under the second-human switch.
+# docs/ENV.md 36804 adds 13 over 36791 (WARDYN_USER_WRITABLE_DENY): a writable mount may not contain a denied path; measured.
+# docs/ENV.md 36900 adds 13 over 36887 (0.9 RS-10, after merging lane/090-RS-9); measured at merge.
 # docs/ENV.md 36904 measured after merging the batch into the lane (34 over its 36870: the WARDYN_VAULT_ADDR redirect line).
 # docs/ENV.md 36921 adds 17 over 36904 (0.9 RS-11, after merging lane/090-RS-9); measured at merge.
-docs/ENV.md=36921 share=5
+# docs/ENV.md 36934 adds 13 over 36921 (0.9 RS-11, after merging lane/090-RS-10); measured at merge.
+docs/ENV.md=36934 share=5

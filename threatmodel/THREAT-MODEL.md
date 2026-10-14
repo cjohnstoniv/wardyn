@@ -2724,6 +2724,7 @@ exactly these terms.
 - Per-mode coverage reported honestly:
   - an OPT-IN per-run TLS-MITM (`intercept_tls`) makes the subscription-OAuth Anthropic path and the OpenAI/Codex path **inspectable**
     - (the proxy terminates TLS with a per-run CA whose PRIVATE key never enters the sandbox; the sandbox trusts only the public cert).
+    - A Claude subscription provider's route-through host is inspected as the Anthropic Messages schema: dispatch names it to the proxy (`providerSubscriptionChannelHosts`, [`internal/api/provider_subscription.go`](../internal/api/provider_subscription.go)).
   - Without `intercept_tls`, those CONNECT tunnels stay **opaque and flagged `llm.scan.bypass`**.
   - Bedrock stays opaque regardless —
     - SigV4 because a MITM'd request cannot be re-signed,

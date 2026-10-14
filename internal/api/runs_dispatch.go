@@ -556,10 +556,10 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 			// The Azure CLI door's grant (runs_dispatch_cli_azure.go): nil without
 			// the row, and nil when a later phase withheld its credential.
 			AzureARM: plan.azureCLI.gateFor(injections),
-			// The azure_foundry lane's route gate and channel host (provider_azure.go). Empty for every
-			// run not on that lane, which leaves both off.
+			// The azure_foundry lane's route gate (provider_azure.go), and the hosts inspected as a model host without being a
+			// brokered upstream: that lane's endpoint and a Claude subscription's route-through host. Empty on every other run.
 			AzureGates:      plan.azure.gates,
-			LLMChannelHosts: plan.azure.channelHosts,
+			LLMChannelHosts: plan.channelHosts,
 			// Resolved above from site-config.UpstreamProxySecretRef; "" when
 			// unconfigured or unresolvable (direct dial, backward-compatible).
 			UpstreamProxyURL: upstreamProxyURL,
