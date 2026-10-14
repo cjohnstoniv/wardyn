@@ -81,7 +81,7 @@ wardyn-runnerd serve --org https://wardyn.example \
 | `--internal-network` / `WARDYN_INTERNAL_NETWORK` | Existing local Docker bridge for proxy sidecars; defaults to `wardyn-internal`. |
 | `--recording-store` / `WARDYN_RECORDING_STORE` | Organisation recording mode: `pg` or `fs` enables capture; `off` disables capture. Default `pg`; no local database is created. |
 
-Identity and organisation binding are checked before connecting. Private lifecycle and output state survive reconnects. After restart, existing proxies are contained before new work is admitted. Revocation stops reconnects while local containment continues until the daemon exits.
+Identity and organisation binding are checked before connecting. Private lifecycle and output state survive reconnects. After restart, existing proxies are contained before new work is admitted. After a runner restarts, its runs stop reaching the network until each is revived. Revocation stops reconnects while local containment continues until the daemon exits.
 
 ## Run as a service
 

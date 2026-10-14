@@ -426,7 +426,7 @@ func (k *KEK) getKey(ctx context.Context, name, version string) (keyBundle, stri
 // kidVersion is the version of a kid that must name key name on this vault.
 func (k *KEK) kidVersion(kid, name string) (string, error) {
 	u, err := url.Parse(kid)
-	if err != nil || !strings.EqualFold(u.Host, k.c.base.Host) {
+	if err != nil || !sameOrigin(k.c.base, u) {
 		return "", fmt.Errorf("a kid %q off this vault", kid)
 	}
 	rest, ok := strings.CutPrefix(u.Path, "/keys/")

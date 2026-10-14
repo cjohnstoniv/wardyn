@@ -27,7 +27,7 @@ func TestLocalDecisionActivityUsesAdmissionEpochOnly(t *testing.T) {
 	if err := runneractivity.Publish(dir, old); err != nil {
 		t.Fatal(err)
 	}
-	ticket, err := sink.reserve(ctx)
+	ticket, err := sink.reserve(ctx, spoolRecordEnvelope)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -41,7 +41,7 @@ func TestLocalDecisionActivityUsesAdmissionEpochOnly(t *testing.T) {
 		t.Fatalf("reconnect granted old request activity: %+v %v", marker, err)
 	}
 	for _, source := range []string{ruleSourceApprovals, "credential:reauth-timeout"} {
-		ticket, err = sink.reserve(ctx)
+		ticket, err = sink.reserve(ctx, spoolRecordEnvelope)
 		if err != nil {
 			t.Fatal(err)
 		}

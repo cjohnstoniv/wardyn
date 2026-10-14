@@ -73,6 +73,7 @@ func TestRunCreatePrintsTheAppliedEnd(t *testing.T) {
 	}{
 		{"an end", types.AgentRun{ID: uuid.New(), State: types.RunPending, EndsAt: &end}, "  ends: " + end.Format(time.RFC3339) + "\n"},
 		{"no end", types.AgentRun{ID: uuid.New(), State: types.RunPending}, "  ends: never (no end)\n"},
+		{"queued", types.AgentRun{ID: uuid.New(), State: types.RunQueued}, "  ends: set at the start (queued)\n"},
 	} {
 		srv := newCmdServer(t, http.StatusCreated, map[string]any{"id": tc.run.ID, "state": tc.run.State, "ends_at": tc.run.EndsAt})
 		out, err := execCmdCapture(t, "run", "--agent", "claude-code", "--url", srv.URL, "--token", "t")
