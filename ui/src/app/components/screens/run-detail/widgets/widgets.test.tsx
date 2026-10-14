@@ -390,8 +390,8 @@ describe("IdentityWidget: where the run ran", () => {
     });
   });
 
-  it("says a run from before 0.9 has no recorded place, and shows no pool row", () => {
-    expect(rows({})).toEqual({ placement: "Not recorded", runner: "docker", pool: null });
+  it("shows no Runs on or Pool row for a run with no recorded place, and keeps the Runner row", () => {
+    expect(rows({})).toEqual({ placement: null, runner: "docker", pool: null });
   });
 });
 
