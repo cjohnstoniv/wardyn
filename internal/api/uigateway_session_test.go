@@ -785,7 +785,7 @@ func (h *uiHarness) enterWith(ticket string) *httptest.ResponseRecorder {
 func (h *uiHarness) mintFor(principal, email, role string) string {
 	h.t.Helper()
 	ctx := withOIDCEmail(context.Background(), email)
-	tok, err := mintAttachTicket(ctx, h.store, h.run.ID, types.ActorHuman, principal, role, h.clock.now())
+	tok, err := mintAttachTicket(ctx, h.store, h.run.ID, types.ActorHuman, principal, role, oidc.Issue{At: h.clock.now()})
 	if err != nil {
 		h.t.Fatalf("mint ticket: %v", err)
 	}
@@ -919,7 +919,7 @@ func portalHarness(t *testing.T) (*uiHarness, *fakeDelegateStore, string, types.
 func (h *uiHarness) portalTicket(via types.DelegationVia) string {
 	h.t.Helper()
 	tok, err := mintAttachTicket(audit.WithDelegation(context.Background(), via), h.store, h.run.ID,
-		types.ActorHuman, h.owner, oidc.RoleUser, h.clock.now())
+		types.ActorHuman, h.owner, oidc.RoleUser, oidc.Issue{At: h.clock.now()})
 	if err != nil {
 		h.t.Fatalf("mint ticket: %v", err)
 	}

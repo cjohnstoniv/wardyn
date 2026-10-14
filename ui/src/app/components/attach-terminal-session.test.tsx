@@ -8,7 +8,7 @@
  * never exercised (issue #134): paste coalescing (native vs Ctrl+V, and a large
  * paste staying one frame), the read-only label's pointer-events-none guard, an
  * in-place promotion forcing exactly one refit + one focus + clearing the
- * footer, and the two close codes (1008 never reconnects, 1006 does and drops
+ * footer, and the close codes (1008 and 4401 never reconnect, 1006 does and drops
  * `mode` first).
  *
  * attach-terminal.test.tsx exports nothing (and is itself close to the size
@@ -281,6 +281,20 @@ describe("AttachTerminal — close codes", () => {
     act(() => ws.open());
 
     act(() => ws.drop(1008, "taken over by bob@example.com"));
+    await act(() => vi.advanceTimersByTimeAsync(30000));
+
+    expect(FakeWebSocket.instances).toHaveLength(1);
+  });
+
+  it("a 4401 close (session ended) does NOT reconnect, and drops mode", async () => {
+    render(<AttachTerminal runId="run_1" />);
+    const ws = FakeWebSocket.instances[0];
+    act(() => ws.open());
+    act(() => ws.message(attachModeFrame(false, "me@example.com")));
+    expect(screen.getByText(RUN_COCKPIT.driving)).toBeInTheDocument();
+
+    act(() => ws.drop(4401, "session ended"));
+    expect(screen.queryByText(RUN_COCKPIT.driving)).toBeNull();
     await act(() => vi.advanceTimersByTimeAsync(30000));
 
     expect(FakeWebSocket.instances).toHaveLength(1);

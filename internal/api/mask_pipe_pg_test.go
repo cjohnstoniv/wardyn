@@ -117,7 +117,7 @@ func TestMaskPipe_PG_AnAttachRelaysAtBandwidthNotAtTheReadRate(t *testing.T) {
 
 	ts := httptest.NewServer(panicFails(t, b.srv.Handler()))
 	defer ts.Close()
-	tok, err := mintAttachTicket(t.Context(), b.srv.cfg.Store, run.ID, types.ActorHuman, maskOwner, oidc.RoleAdmin, time.Now())
+	tok, err := mintAttachTicket(t.Context(), b.srv.cfg.Store, run.ID, types.ActorHuman, maskOwner, oidc.RoleAdmin, oidc.Issue{At: time.Now()})
 	if err != nil {
 		t.Fatal(err)
 	}

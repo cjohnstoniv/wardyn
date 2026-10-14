@@ -596,7 +596,7 @@ func (s *Server) sshKeyRevocationRefusal(ctx context.Context, key types.SSHPubli
 		return ""
 	}
 	// SSH rows carry the subject, so email revocation also stamps its resolved subject.
-	status, err := oidc.CheckSession(ctx, s.cfg.SessionRevocations, key.Principal, "", key.CreatedAt, -1)
+	status, err := oidc.CheckSession(ctx, s.cfg.SessionRevocations, key.Principal, "", oidc.Issue{At: key.CreatedAt, Seq: key.RevSeq}, -1)
 	if err != nil {
 		return "SSH session cutoff lookup failed"
 	}

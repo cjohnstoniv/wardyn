@@ -122,7 +122,7 @@ func (s *Server) queueOwnerLive(ctx context.Context, a queueAuthority, queuedAt 
 		}
 	}
 	if s.cfg.SessionRevocations != nil {
-		if status, err := oidc.CheckSession(ctx, s.cfg.SessionRevocations, a.Sub, a.Email, queuedAt, epoch); err != nil || status != oidc.SessionLive {
+		if status, err := oidc.CheckSession(ctx, s.cfg.SessionRevocations, a.Sub, a.Email, oidc.Issue{At: queuedAt}, epoch); err != nil || status != oidc.SessionLive {
 			return false, err
 		}
 	}
@@ -139,7 +139,7 @@ func (s *Server) queueOwnerLive(ctx context.Context, a queueAuthority, queuedAt 
 	case err != nil || !still:
 		return false, err
 	}
-	status, err := oidc.CheckSession(ctx, s.cfg.SessionRevocations, a.Sponsor, "", queuedAt, -1)
+	status, err := oidc.CheckSession(ctx, s.cfg.SessionRevocations, a.Sponsor, "", oidc.Issue{At: queuedAt}, -1)
 	return err == nil && status == oidc.SessionLive, err
 }
 

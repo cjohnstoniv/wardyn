@@ -76,7 +76,7 @@ func attachClosed(t *testing.T, profiles []types.GovernanceProfile, listErr erro
 	cfg := baseTestConfig(h, st)
 	cfg.Runner = &fakeRunner{}
 	srv := New(cfg)
-	tok, err := mintAttachTicket(context.Background(), st, run.ID, types.ActorHuman, "alice", oidc.RoleUser, time.Now())
+	tok, err := mintAttachTicket(context.Background(), st, run.ID, types.ActorHuman, "alice", oidc.RoleUser, oidc.Issue{At: time.Now()})
 	if err != nil {
 		t.Fatalf("mint: %v", err)
 	}

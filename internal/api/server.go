@@ -728,7 +728,8 @@ type Server struct {
 	// probe on an otherwise-idle attach socket) — same reason and same
 	// per-server shape as keepaliveEvery above: a test drives a dead-peer holder
 	// on a millisecond clock instead of the real 30s budget.
-	pingEvery time.Duration
+	pingEvery     time.Duration
+	authorityTest attachAuthorityTimings // per-server test overrides, the same shape as pingEvery
 	// pauseLimit overrides attachWriteTimeout as the bound on an unresumed
 	// output pause for THIS server only (tests).
 	pauseLimit time.Duration
@@ -961,14 +962,25 @@ const (
 // which the POST never reached — 404 — leaving the HttpOnly OIDC cookie valid).
 //
 //   - OIDC session mode: delegate to the OIDC LogoutHandler, which clears the
-//     HttpOnly wardyn_session cookie (and redirects to "/").
+//     HttpOnly wardyn_session cookie, cuts the person's browser sessions
+//     server-side so a copy of the cookie stops working (and redirects to "/").
 //   - Admin-token / local mode (OIDC not configured): there is NO server-side
 //     session to kill — the client just drops its local bearer token. Return 204
 //     (no content). The nil-OIDC guard is REQUIRED so this never panics in
 //     local/token mode.
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	if s.cfg.OIDC != nil {
-		s.cfg.OIDC.LogoutHandler(w, r) // clears the HttpOnly session cookie
+		// Clears the HttpOnly session cookie and, for a live session, cuts the person's browser sessions;
+		// the cut is audited like the session-only cut an admin makes (handleRevokeSessions).
+		sub, err := s.cfg.OIDC.SignOut(w, r)
+		if sub != "" {
+			outcome, data := "success", map[string]any{"scope": "sub", "sub": sub, "tokens_revoked": 0, "ssh_keys_deleted": 0, "sessions_only": true}
+			if err != nil {
+				outcome, data["error"] = "failure", err.Error()
+			}
+			s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
+				"session.revoke", sub, outcome, mustJSON(data)))
+		}
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

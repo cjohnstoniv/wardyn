@@ -104,7 +104,7 @@ func (s *Server) delegatedTokenAuth(next, fallback http.Handler) http.Handler {
 		// created_at — apiTokenAuth's owner check, epoch -1, so a session-only cut
 		// (sessions_only) leaves it working, and its fail-closed 503.
 		if s.cfg.SessionRevocations != nil {
-			status, rerr := oidc.CheckSession(r.Context(), s.cfg.SessionRevocations, t.Principal, t.Email, t.CreatedAt, -1)
+			status, rerr := oidc.CheckSession(r.Context(), s.cfg.SessionRevocations, t.Principal, t.Email, oidc.Issue{At: t.CreatedAt, Seq: t.RevSeq}, -1)
 			if rerr != nil {
 				slog.ErrorContext(r.Context(), "api: session-revocation lookup failed; this delegated token could not be authenticated",
 					"error", rerr, "path", r.URL.Path)
@@ -121,7 +121,7 @@ func (s *Server) delegatedTokenAuth(next, fallback http.Handler) http.Handler {
 			fallback.ServeHTTP(w, r)
 			return
 		}
-		ctx := withHumanIdentity(r.Context(), t.Principal, t.Email, oidc.RoleUser, t.UserType, t.Groups, t.GroupsTruncated)
+		ctx := withHumanIdentity(oidc.WithRevocationSeq(r.Context(), t.Principal, t.RevSeq), t.Principal, t.Email, oidc.RoleUser, t.UserType, t.Groups, t.GroupsTruncated)
 		r = r.WithContext(audit.WithDelegation(ctx, types.DelegationVia{Delegate: t.DelegateID, Grant: t.ID}))
 		if rctx := chi.RouteContext(r.Context()); rctx == nil || !delegationAllowed[r.Method+" "+rctx.RoutePattern()] {
 			// refuse's row with the reason on the wire too: a portal branches
