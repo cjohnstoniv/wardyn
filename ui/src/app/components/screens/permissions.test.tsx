@@ -770,3 +770,58 @@ describe("PermissionsScreen, who may define their own components", () => {
     expect(screen.getByRole("switch", { name: SWITCH })).toBeChecked();
   });
 });
+
+// The `self_host_runner` feature value: restricted (migration 0178), so the switch is the one `all` allow.
+describe("PermissionsScreen, who may register a runner of their own", () => {
+  const SWITCH = "Allow everyone to register their own runner";
+  const allowRow = () =>
+    grant({
+      id: "55555555-5555-5555-5555-555555555555",
+      subject_type: "all",
+      subject: "",
+      capability: "feature",
+      value: "self_host_runner",
+    });
+
+  it("on a fresh install nobody is granted and the switch is off", async () => {
+    renderScreen();
+    expect(await screen.findByText("By grant only")).toBeInTheDocument();
+    expect(screen.getByRole("switch", { name: SWITCH })).not.toBeChecked();
+  });
+
+  it("turning it on writes the one allow row for everyone", async () => {
+    upsertGrantMock.mockResolvedValue({ grant: allowRow(), updated: false });
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    renderScreen();
+    await user.click(await screen.findByRole("switch", { name: SWITCH }));
+    await waitFor(() =>
+      expect(upsertGrantMock).toHaveBeenCalledWith({
+        subject_type: "all",
+        subject: "",
+        capability: "feature",
+        value: "self_host_runner",
+        effect: "allow",
+      }),
+    );
+    expect(await screen.findByText("Granted to everyone")).toBeInTheDocument();
+    expect(screen.getByRole("switch", { name: SWITCH })).toBeChecked();
+  });
+
+  it("turning it off deletes that row and nothing else", async () => {
+    getPermissionsMock.mockResolvedValue({ grants: [allowRow(), grant()], enforcement: {} });
+    deleteGrantMock.mockResolvedValue(undefined);
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    renderScreen();
+    expect(await screen.findByText("Granted to everyone")).toBeInTheDocument();
+    await user.click(screen.getByRole("switch", { name: SWITCH }));
+    await waitFor(() => expect(deleteGrantMock).toHaveBeenCalledWith("55555555-5555-5555-5555-555555555555"));
+    expect(await screen.findByText("By grant only")).toBeInTheDocument();
+    expect(screen.getByText("*.github.com")).toBeInTheDocument();
+  });
+
+  it("an allow for one person is not an allow for everyone", async () => {
+    getPermissionsMock.mockResolvedValue({ grants: [{ ...allowRow(), subject_type: "user", subject: "alice@corp.example" }], enforcement: {} });
+    renderScreen();
+    expect(await screen.findByText("By grant only")).toBeInTheDocument();
+  });
+});
