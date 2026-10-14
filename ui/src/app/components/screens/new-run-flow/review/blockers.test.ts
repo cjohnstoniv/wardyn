@@ -9,7 +9,7 @@ import { NR_REVIEW } from "../../../wardyn/copy/new-run/review";
 import { NR_SHARED } from "../../../wardyn/copy/new-run/shared";
 import { NR_TEMPLATES } from "../../../wardyn/copy/new-run/templates";
 import type { SetupItem } from "../../../../lib/types/preflight";
-import { buildBlockers, missingSetup, specifies, type BlockerInput } from "./blockers";
+import { buildBlockers, groupsBlockedBy, missingSetup, specifies, type BlockerInput } from "./blockers";
 
 const ITEM: SetupItem = { id: "secret:deploy-key", kind: "secret", label: "deploy-key", required_by: "Application", status: "missing", detail: "Add the deploy key." };
 const NOTHING: BlockerInput = { issues: [], unsupported: [], templateNeeds: [], refusal: null, setupItems: [], stale: false };
@@ -40,6 +40,12 @@ describe("Review blockers", () => {
     const out = buildBlockers({ ...NOTHING, issues: [{ home: "run", code: "pool_required", focus: "nr-pool" }], refusal: { text: "Refused.", reason: "something_new" } });
     expect(out[0].text).toBe(NR_SHARED.STEP_RUN);
     expect(out[1].to).toBeUndefined();
+  });
+
+  it("marks the Review groups whose fields the refusal's step edits, and none without a blocker", () => {
+    const refused = buildBlockers({ ...NOTHING, refusal: { text: "Not available on your runner.", reason: "placement_credential" } });
+    expect([...groupsBlockedBy(refused)].sort()).toEqual(["run", "where"]);
+    expect(groupsBlockedBy(buildBlockers(NOTHING)).size).toBe(0);
   });
 
   it("adds the stale line only when nothing else holds Launch", () => {

@@ -175,9 +175,14 @@ func TestLocalAllModelProviderKindsHaveOwnClassification(t *testing.T) {
 	f := newComponentFixture(t)
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/runs", nil).WithContext(utCtx("user", "", nil))
 	for kind := range types.ClosedModelProviderKinds {
-		intent, known := f.srv.localProviderIntent(r, capSub, types.ModelProvider{ID: "selected", UID: "uid", Kind: kind})
-		if !known || intent.Origin.Class != placement.ClassOwn || !intent.Origin.Stored || intent.Origin.OwnNamespace {
-			t.Fatalf("provider %s is unclassified or missing namespace allowed: %+v", kind, intent)
+		intents, known := f.srv.localProviderIntent(r, capSub, types.ModelProvider{ID: "selected", UID: "uid", Kind: kind})
+		if !known || len(intents) == 0 {
+			t.Fatalf("provider %s is unclassified", kind)
+		}
+		for _, intent := range intents {
+			if intent.Origin.Class != placement.ClassOwn || !intent.Origin.Stored || intent.Origin.OwnNamespace {
+				t.Fatalf("provider %s is unclassified or missing namespace allowed: %+v", kind, intent)
+			}
 		}
 	}
 	if _, known := f.srv.localProviderIntent(r, capSub, types.ModelProvider{Kind: "future"}); known {
