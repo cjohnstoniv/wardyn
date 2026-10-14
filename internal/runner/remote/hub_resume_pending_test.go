@@ -378,8 +378,11 @@ func TestHubResumeEndsWhenAnActionIsQueuedAfterBothItsPendingReads(t *testing.T)
 	var mu sync.Mutex
 	var open []runnerwire.PendingAction
 	reads, writeAfter := 0, 0
+	// notReady closes once the kill's call has found the link not ready and turned to the queue.
+	notReady := make(chan struct{})
 	link := &Link{}
 	sub := New(row.ID.String(), link, Options{Queue: func(ctx context.Context, kind types.RunnerActionKind, ref string) error {
+		close(notReady)
 		for ctx.Err() == nil {
 			mu.Lock()
 			if reads >= writeAfter {
@@ -438,12 +441,15 @@ func TestHubResumeEndsWhenAnActionIsQueuedAfterBothItsPendingReads(t *testing.T)
 	_ = awaitValue(t, ctx, done)
 	_ = awaitValue(t, ctx, hubDone)
 
-	// The kill finds the runner away; its queue write waits out the resume's two looks at the queue.
+	// The kill finds the runner away; its queue write waits out the resume's two looks at the queue. The
+	// runner reconnects only once the kill's call found the link not ready: one made after the resume is
+	// READY reaches the runner live on that session and queues nothing.
 	mu.Lock()
 	writeAfter = reads + 2
 	mu.Unlock()
 	queued := make(chan error, 1)
 	go func() { queued <- sub.KillSandbox(ctx, ref) }()
+	_ = awaitValue(t, ctx, notReady)
 	go func() { done <- client.Connect(ctx) }()
 	if err := awaitValue(t, ctx, queued); !errors.Is(err, runner.ErrPendingOnRunner) {
 		t.Fatalf("kill while the runner was away = %v, want it queued for the runner", err)
