@@ -20,8 +20,8 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/egress"
 )
 
-// api answers the three GitHub REST reads the broker makes — a repository's
-// default branch, a compare, one tree listing — from the bare repository
+// api answers the GitHub REST reads the broker makes — a repository's default
+// branch, a branch's tip, a compare, one tree listing — from the bare repository
 // itself, so the answer is what this forge holds, alternates included: that
 // is how GitHub serves a fork network's objects through every repository in
 // it.
@@ -47,6 +47,10 @@ func (f *gitForge) api(w http.ResponseWriter, r *http.Request) {
 		var head string
 		head, ok = f.rev(dir, "symbolic-ref", "--short", "HEAD")
 		body = map[string]string{"default_branch": head}
+	case strings.HasPrefix(rest, "git/ref/heads/"):
+		var tip string
+		tip, ok = f.rev(dir, "rev-parse", "--verify", "-q", "refs/heads/"+strings.TrimPrefix(rest, "git/ref/heads/"))
+		body = map[string]any{"object": map[string]string{"type": "commit", "sha": tip}}
 	case strings.HasPrefix(rest, "compare/"):
 		body, ok = f.compare(dir, strings.TrimPrefix(rest, "compare/"))
 	case strings.HasPrefix(rest, "git/trees/"):
@@ -66,11 +70,14 @@ func (f *gitForge) rev(dir string, args ...string) (string, bool) {
 	return strings.TrimSpace(string(out)), err == nil
 }
 
-// compare answers "<branch>...<commit>" with the merge base, the one field of
-// GitHub's compare the broker reads.
+// compare answers "<branch or commit>...<commit>" with the merge base, the one
+// field of GitHub's compare the broker reads.
 func (f *gitForge) compare(dir, spec string) (any, bool) {
 	branch, head, _ := strings.Cut(spec, "...")
 	b, ok1 := f.rev(dir, "rev-parse", "--verify", "-q", "refs/heads/"+branch)
+	if !ok1 && isHex(branch) {
+		b, ok1 = f.rev(dir, "rev-parse", "--verify", "-q", branch+"^{commit}")
+	}
 	h, ok2 := f.rev(dir, "rev-parse", "--verify", "-q", head+"^{commit}")
 	if !ok1 || !ok2 {
 		return nil, false
@@ -510,4 +517,77 @@ func TestPushRulesKeepTheStrictReadingWhenTheForgeCannotBeRead(t *testing.T) {
 			t.Errorf("a push to a forge that is not GitHub read the GitHub API %d time(s)", n)
 		}
 	})
+}
+
+// TestPushRulesCountABranchOnlyAtTheTipTheForgeConfirms: the commands of a
+// push name the branches it updates and the commit each stands at, and those
+// are the push's own words. A branch's history vouches for a base only when
+// the forge confirms the branch stands exactly where the command says; a
+// command whose stated old value is not the branch's tip vouches for nothing,
+// so content that only that branch holds is read strictly.
+func TestPushRulesCountABranchOnlyAtTheTipTheForgeConfirms(t *testing.T) {
+	const deny = ".github/workflows/**"
+	added := map[string]string{".github/workflows/deploy.yml": "on: push\njobs: {deploy: {runs-on: ubuntu-latest}}\n"}
+	cases := []struct {
+		name      string
+		statedOld func(other, main string) string
+		allowed   bool
+	}{
+		{"the stated old value is the branch's tip", func(other, _ string) string { return other }, true},
+		{"the stated old value is not the branch's tip", func(_, main string) string { return main }, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newForgeRunVia(t, githubHost, ordinaryRepo, []string{"--depth", "1"}, deny)
+			mainTip := gitOut(t, r.work, "rev-parse", "HEAD")
+			other := r.asHuman(t, "main", "other", added)
+			runGit(t, r.work, "fetch", "-q", "origin", "other")
+			runGit(t, r.work, "checkout", "-q", "FETCH_HEAD")
+			r.editMain(t, "on other")
+			commit := gitOut(t, r.work, "rev-parse", "HEAD")
+			status, body := r.postCommands(t, commit+"\n^"+other, [][3]string{
+				{strings.Repeat("0", 40), commit, r.ref},
+				{tc.statedOld(other, mainTip), commit, "refs/heads/other"},
+			})
+			if tc.allowed {
+				if status != http.StatusOK {
+					t.Fatalf("status %d, body %q: a branch at its confirmed tip should vouch for its history", status, body)
+				}
+				return
+			}
+			if status != http.StatusForbidden || !strings.Contains(body, whyNoBase) {
+				t.Errorf("status %d, body %q: want 403 saying %q", status, body, whyNoBase)
+			}
+		})
+	}
+}
+
+// postCommands sends one receive-pack request through the git_pat lane with
+// the given commands (old, new, ref) and a pack of the objects `revs` selects.
+func (r *forgeRun) postCommands(t *testing.T, revs string, cmds [][3]string) (int, string) {
+	t.Helper()
+	pk := exec.Command("git", "pack-objects", "--revs", "--stdout")
+	pk.Dir, pk.Env, pk.Stdin = r.work, gitEnv(), strings.NewReader(revs+"\n")
+	pack, err := pk.Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var req strings.Builder
+	for i, c := range cmds {
+		line := c[0] + " " + c[1] + " " + c[2]
+		if i == 0 {
+			line += "\x00report-status object-format=sha1"
+		}
+		line += "\n"
+		fmt.Fprintf(&req, "%04x%s", len(line)+4, line)
+	}
+	req.WriteString("0000")
+	resp, err := http.Post(r.brokerURL+"/wardyn/git/"+githubHost+"/octocat/hello-world.git/git-receive-pack",
+		"application/x-git-receive-pack-request", strings.NewReader(req.String()+string(pack)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	body, _ := io.ReadAll(resp.Body)
+	return resp.StatusCode, string(body)
 }
