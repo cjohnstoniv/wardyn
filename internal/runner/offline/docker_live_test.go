@@ -9,7 +9,9 @@ import (
 	"context"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -30,9 +32,13 @@ func TestLiveDockerOfflineLapsePreservesAgentFilesAndAudit(t *testing.T) {
 	if os.Getenv("WARDYN_TEST_DOCKER") != "1" {
 		t.Skip("WARDYN_TEST_DOCKER=1 not set")
 	}
-	binary := os.Getenv("WARDYN_TEST_PROXY_BINARY")
-	if !filepath.IsAbs(binary) {
-		t.Fatal("WARDYN_TEST_PROXY_BINARY must name the current static proxy binary")
+	// Built from this checkout, static, for the daemon's platform: the proxy
+	// under test is always the current one, with nothing for a job to stage.
+	binary := filepath.Join(t.TempDir(), "wardyn-proxy")
+	build := exec.Command("go", "build", "-o", binary, "../../../cmd/wardyn-proxy")
+	build.Env = append(os.Environ(), "CGO_ENABLED=0", "GOOS=linux", "GOARCH="+runtime.GOARCH)
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build wardyn-proxy: %v\n%s", err, out)
 	}
 	for _, realWire := range []bool{false, true} {
 		name := "loopback"
