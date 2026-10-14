@@ -188,6 +188,9 @@ func (a approvalStore) GetApproval(ctx context.Context, id uuid.UUID) (types.App
 func (a approvalStore) ListApprovals(ctx context.Context, st types.ApprovalState) ([]types.ApprovalRequest, error) {
 	return store.NewPG(a.pool).ListApprovals(ctx, st)
 }
+func (a approvalStore) ListPendingApprovalsForRuns(ctx context.Context, runIDs []uuid.UUID) ([]types.ApprovalRequest, error) {
+	return store.NewPG(a.pool).ListPendingApprovalsForRuns(ctx, runIDs)
+}
 func (a approvalStore) DecideApproval(ctx context.Context, id uuid.UUID, decision types.ApprovalDecision) (types.ApprovalRequest, error) {
 	return store.NewPG(a.pool).DecideApproval(ctx, id, decision)
 }

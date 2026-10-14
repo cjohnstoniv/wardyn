@@ -202,7 +202,7 @@ func TestRunnerAdmissionPG_RevokeKillsRunsThenClosesTheSession(t *testing.T) {
 		t.Fatal(err)
 	}
 	short, cancel := context.WithTimeout(f.ctx, 300*time.Millisecond)
-	if _, err := f.srv.revokeRunner(short, f.rn.ID, types.ActorHuman, "security-admin", ""); err == nil {
+	if _, _, err := f.srv.revokeRunner(short, f.rn.ID, types.ActorHuman, "security-admin", ""); err == nil {
 		t.Fatal("a blocked revoke reported success")
 	}
 	cancel()
@@ -218,7 +218,7 @@ func TestRunnerAdmissionPG_RevokeKillsRunsThenClosesTheSession(t *testing.T) {
 	if !f.srv.RunnerOnline(f.rn.ID) {
 		t.Fatal("a READY runner reads offline")
 	}
-	rev, err := f.srv.revokeRunner(f.ctx, f.rn.ID, types.ActorHuman, "security-admin", "")
+	rev, _, err := f.srv.revokeRunner(f.ctx, f.rn.ID, types.ActorHuman, "security-admin", "")
 	if err != nil || len(rev.Killed) != 1 || rev.Killed[0].ID != f.run.ID {
 		t.Fatalf("revoke = %+v, %v", rev, err)
 	}

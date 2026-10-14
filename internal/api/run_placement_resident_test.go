@@ -66,7 +66,7 @@ func TestLocalResident_DispatchAndReviveDoorsJudgeTheFloorAndPosture(t *testing.
 		for _, g := range grants {
 			spec.ProxyConfig.Policy.EligibleGrants = append(spec.ProxyConfig.Policy.EligibleGrants, g.Spec)
 		}
-		p, err := f.srv.localResolvedPlan(context.Background(), run, false, types.SiteConfig{}, spec, nil, llmTransport{}, adoEntraRun{})
+		p, err := f.srv.localResolvedPlan(context.Background(), run, false, types.SiteConfig{}, spec, nil, llmTransport{})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -116,7 +116,7 @@ func TestLocalPlanFacts_OneDeliveryPolicyReadPerDoor(t *testing.T) {
 	}
 	reads = 0
 	run := types.AgentRun{ID: uuid.New(), CreatedBy: capSub, Placement: types.PlacementLocal}
-	if _, err := f.srv.localResolvedPlan(context.Background(), run, false, types.SiteConfig{}, runner.SandboxSpec{RunID: run.ID}, nil, llmTransport{}, adoEntraRun{}); err != nil {
+	if _, err := f.srv.localResolvedPlan(context.Background(), run, false, types.SiteConfig{}, runner.SandboxSpec{RunID: run.ID}, nil, llmTransport{}); err != nil {
 		t.Fatal(err)
 	}
 	if reads != 1 {

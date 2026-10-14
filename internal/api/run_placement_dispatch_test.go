@@ -60,7 +60,7 @@ func TestLocalDispatchStoresTheStrippedProxyConfig(t *testing.T) {
 	if raw, _ := srv.loadRunProxyConfig(ctx, run.ID); !strings.Contains(string(raw), "parent.corp") {
 		t.Fatal("fixture did not store the unstripped config first")
 	}
-	if !srv.classifyLocalDispatch(ctx, run, ceilingForDispatch(governanceCeiling{}, adoEntraUngraded(), bedrockCredUngraded()), types.SiteConfig{}, &spec, nil, llmTransport{}, adoEntraRun{}, false) {
+	if !srv.classifyLocalDispatch(ctx, run, ceilingForDispatch(governanceCeiling{}, adoEntraUngraded(), bedrockCredUngraded()), types.SiteConfig{}, &spec, nil, llmTransport{}, false) {
 		t.Fatal("an all-own plan was refused")
 	}
 	raw, err := srv.loadRunProxyConfig(ctx, run.ID)
@@ -101,7 +101,7 @@ func TestLocalDispatchRefusesTrustedOutputRunsByPersistedLink(t *testing.T) {
 			run.Task = "ordinary task"
 			tc.link(&run)
 			spec := localOrgNetworkSpec(run.ID)
-			if srv.classifyLocalDispatch(context.Background(), run, ceilingForDispatch(governanceCeiling{}, adoEntraUngraded(), bedrockCredUngraded()), types.SiteConfig{}, &spec, nil, llmTransport{}, adoEntraRun{}, false) {
+			if srv.classifyLocalDispatch(context.Background(), run, ceilingForDispatch(governanceCeiling{}, adoEntraUngraded(), bedrockCredUngraded()), types.SiteConfig{}, &spec, nil, llmTransport{}, false) {
 				t.Fatal("a trusted-output run was classified for a local runner")
 			}
 			ev := findAudit(audit.events, run.ID, "run.dispatch", "failure")
@@ -118,7 +118,7 @@ func TestUnknownPlacementIsRefusedByEveryLayer(t *testing.T) {
 	srv, ls, _, run := localDispatchFixture(t, types.Placement("future"))
 	ctx := context.Background()
 	spec := localOrgNetworkSpec(run.ID)
-	if srv.classifyLocalDispatch(ctx, run, ceilingForDispatch(governanceCeiling{}, adoEntraUngraded(), bedrockCredUngraded()), types.SiteConfig{}, &spec, nil, llmTransport{}, adoEntraRun{}, false) {
+	if srv.classifyLocalDispatch(ctx, run, ceilingForDispatch(governanceCeiling{}, adoEntraUngraded(), bedrockCredUngraded()), types.SiteConfig{}, &spec, nil, llmTransport{}, false) {
 		t.Error("classifyLocalDispatch passed an unknown placement")
 	}
 	if _, err := srv.createDispatchGrant(ctx, run, types.CredentialGrant{ID: uuid.New(), RunID: run.ID, Spec: apiKeyGrantSpec("a.example", "k")}, false); err == nil {
@@ -154,7 +154,7 @@ func TestLocalPolicyGrantOriginsMatchTheExactScopeNotTheKind(t *testing.T) {
 		for _, g := range order {
 			f.st.grants = append(f.st.grants, types.CredentialGrant{ID: uuid.New(), RunID: run.ID, Spec: g})
 		}
-		p, err := f.srv.localResolvedPlan(context.Background(), run, false, types.SiteConfig{}, spec, nil, llmTransport{}, adoEntraRun{})
+		p, err := f.srv.localResolvedPlan(context.Background(), run, false, types.SiteConfig{}, spec, nil, llmTransport{})
 		if err != nil {
 			t.Fatal(err)
 		}
