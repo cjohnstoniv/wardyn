@@ -107,6 +107,15 @@ type driveStore struct {
 // GetSiteConfig shadows noGovernanceStore's for the reason ResolveGovernanceProfile
 // does: the resolver folds the DEPLOYMENT's drive ceiling with the principal's,
 // and a double that could only answer "no providers" could not exercise the fold.
+// GetUserDrive answers the grant write's member-drive guard: the one drive,
+// else not found.
+func (s *driveStore) GetUserDrive(_ context.Context, id uuid.UUID) (types.UserDrive, error) {
+	if s.drive != nil && s.drive.ID == id {
+		return *s.drive, nil
+	}
+	return types.UserDrive{}, store.ErrNotFound
+}
+
 func (s *driveStore) GetSiteConfig(context.Context) (types.SiteConfig, error) {
 	return s.site, nil
 }

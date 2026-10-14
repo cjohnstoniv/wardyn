@@ -605,7 +605,8 @@ func (s *Server) stepLocalEligibility(f *runFold, rec *foldRecorder) bool {
 // stepDriveEligibility holds the run's drives to the kind of runner it got: no
 // drive mounts on a person's own runner, so a run stepPlacement left on one (its
 // pool has no remote-hosted runner for it, or the request asked for its own
-// runner) is refused, named, before anything is sized or minted.
+// runner) is refused, named, before anything is sized or minted. A person's own
+// drive is held off such a runner permanently (memberDriveNeverOnPool).
 func (s *Server) stepDriveEligibility(f *runFold, rec *foldRecorder) bool {
 	if len(f.drives) == 0 || !f.place.pooled || f.place.placement != types.PlacementLocal {
 		return true

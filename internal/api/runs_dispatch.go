@@ -106,6 +106,8 @@ type dispatchParams struct {
 	// runs inline in the create request, so the snapshot has no staleness window
 	// to be stale in. See user_drives_run.go.
 	Drives []types.DriveMount
+	// MemberDrives are the Drives that are people's own, id to owner, which dispatch re-reads (memberDrivesStillThere).
+	MemberDrives map[uuid.UUID]string
 	// MainDrive is the main drive create's fold decided (stepMainDrive): its size and whether it
 	// is soft. NIL for every lane that has no fold decision (scans, record, verify, logins, probes).
 	MainDrive *mainDriveDecision
@@ -664,7 +666,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	if !s.completeMaskManifestWithFileSecrets(ctx, run, policy, &spec) {
 		return
 	}
-	if !s.classifyLocalDispatch(ctx, run, ceiling, siteCfg, &spec, orgConfigKeys, llm, p.TrustedOutput) {
+	if !s.sandboxCreateAdmitted(ctx, run, ceiling, siteCfg, &spec, orgConfigKeys, llm, p) {
 		return
 	}
 	spec.ExecOutput = s.openExecOutput(run, p.Interactive)
@@ -973,21 +975,5 @@ func (s *Server) dispatchAdmitted(ctx context.Context, run types.AgentRun, ceili
 		})))
 	s.failAndRevoke(context.WithoutCancel(ctx), run.ID, types.RunPending,
 		"This run was not launched: its dispatch lane did not resolve the acting principal's governance ceiling")
-	return false
-}
-
-// claimDispatch claims PENDING->STARTING conditionally; see the KILL-RACE GUARD
-// note at its call site in dispatchRun.
-func (s *Server) claimDispatch(ctx context.Context, run types.AgentRun) bool {
-	claimed, cerr := s.casRunState(ctx, run.ID, types.RunPending, types.RunStarting)
-	if cerr == nil && claimed {
-		return true
-	}
-	data := map[string]any{"note": "run left PENDING by a concurrent kill/stop before dispatch; dispatch aborted"}
-	if cerr != nil {
-		data["error"] = cerr.Error()
-	}
-	s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.dispatch",
-		run.ID.String(), "failure", mustJSON(data)))
 	return false
 }

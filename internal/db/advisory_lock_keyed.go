@@ -87,6 +87,11 @@ const KeyDomainAssignmentLockClass int32 = 0x574B4441 // ASCII "WKDA"
 // read never sits below a cut that commits afterwards.
 const RevocationOrderLockClass int32 = 0x57525351 // ASCII "WRSQ"
 
+// MemberDriveLockClass is the classid of the TRANSACTION-scoped two-argument lock (second key: one
+// owner's subject folded with crc32) store.CreateMemberDrive takes around its per-person count and
+// insert, so two creates by one person cannot both pass the count.
+const MemberDriveLockClass int32 = 0x574D4452 // ASCII "WMDR"
+
 // LoginSupersedeLockWait is the TOTAL budget one caller spends trying to take
 // a keyed lock before being REFUSED (retry) rather than let through unlocked;
 // only ErrAdvisoryLockNoCapacity proceeds unlocked. Matches

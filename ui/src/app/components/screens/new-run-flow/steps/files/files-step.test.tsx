@@ -37,11 +37,11 @@ const json = (body: unknown, status = 200) => new Response(JSON.stringify(body),
 const LISTED: RepoBranches = { listing: "listed", branches: ["main", "dev"], default: "main", truncated: false };
 const YOUR_DRIVE: MeDrive = {
   id: "11111111-1111-4111-8111-111111111111", name: "Your drive", section: "user", source: "personal", backend: "docker_volume",
-  target: "/home/agent/drive", writable: true, enforcement: "filesystem", legacy: true,
+  target: "/home/agent/drive", writable: true, enforcement: "filesystem", legacy: true, owned: false,
 };
 const TEAM_SHARE: MeDrive = {
   id: "22222222-2222-4222-8222-222222222222", name: "Data team share", section: "shared", source: "team", backend: "host_path",
-  target: "/home/agent/shared/data-team-share", writable: false, enforcement: "none", legacy: false,
+  target: "/home/agent/shared/data-team-share", writable: false, enforcement: "none", legacy: false, owned: false,
 };
 const FINANCE: MeDrive = { ...TEAM_SHARE, id: "33333333-3333-4333-8333-333333333333", name: "Finance archive", target: "/home/agent/shared/finance-archive", unavailable_reason: "not_in_pool" };
 const CATALOGUE: MeDriveCatalogue = { drives: [YOUR_DRIVE, TEAM_SHARE, FINANCE], pool_checked: true };

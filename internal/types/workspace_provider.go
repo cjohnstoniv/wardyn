@@ -295,4 +295,20 @@ type EphemeralProvider struct {
 type UserDriveProvider struct {
 	Disabled   bool `json:"disabled,omitempty"`     // turns drives off deployment-wide, negative-sense like GitProvider.Disabled, so zero value is today
 	MaxSizeMiB int  `json:"max_size_mib,omitempty"` // largest drive allowed, refused at admin write boundary and clamped at resolve; 0 = no ceiling
+	// MemberCreate is the switch for people creating their own drives. nil = off.
+	MemberCreate *MemberDrivePolicy `json:"member_create,omitempty"`
 }
+
+// MemberDrivePolicy turns member drive creation on for the organisation (off by
+// default) and bounds it. A profile can still deny it (GovernanceLimits.DenyMemberDrives).
+type MemberDrivePolicy struct {
+	Enabled      bool `json:"enabled,omitempty"`
+	MaxPerPerson int  `json:"max_per_person,omitempty"` // 1..MaxMemberDrivesPerPerson when Enabled
+	// SizeMiB is the k8s claim request, required when Enabled and bounded by
+	// UserDriveProvider.MaxSizeMiB. A Docker volume has no size limit, so it must be 0 there.
+	SizeMiB      int    `json:"size_mib,omitempty"`
+	StorageClass string `json:"storage_class,omitempty"` // k8s only; "" = the cluster default
+}
+
+// MaxMemberDrivesPerPerson is the ceiling on MemberDrivePolicy.MaxPerPerson.
+const MaxMemberDrivesPerPerson = 20

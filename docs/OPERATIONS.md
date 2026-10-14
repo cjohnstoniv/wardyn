@@ -1379,7 +1379,7 @@ erases one person's retained records by explicit scope, in one audited act
 | Grants | User-subject grants and governance assignments: see [Grants](#grants) |
 | Runners | Revoked with their unused registration tokens (`DELETE /runners/...`) |
 | Invitations, service identities | Invitations to the person deleted, their name cleared from the rest. One they still sponsor keeps the purge pending until handed over (`PATCH /service-identities/{name}`) or retired |
-| Drives | Listed by name in `person.deprovision`, never reclaimed. Reclaim storage with the steps in "Reclaiming a departed person's storage" |
+| Drives | Listed by name in `person.deprovision`, never reclaimed, and the drives the person created are listed too. Reclaim storage with the steps in "Reclaiming a departed person's storage", and delete the drives they created as in "Member drives" |
 
 - The identity row stays as a tombstone with `purged_at` set.
 - `PATCH active=true` on it is a 400 `invalidValue` (a denied `scim.user.write` row with reason `purged`), and the
@@ -4477,6 +4477,67 @@ INFO wardynd: ssh gateway listening listen=:2222 advertise=127.0.0.1:2222 host_k
   recipe, including the wildcard Ingress, in
   [docs/UI-SANDBOXES.md §4](UI-SANDBOXES.md#4-deployment) and the chart section
   linked above.
+
+### Member drives
+
+- A **member drive** is a drive a person creates for themselves from New Run, with `POST /api/v1/me/drives`.
+- It mounts at `/home/agent/drives/<name-slug>`. Deleting it deletes its files.
+- It is off by default. Admin drives and their grants are unchanged.
+
+**Turn it on.**
+
+1. Set `storage.user_drive.member_create` in the workspace providers (`PUT /api/v1/workspace-providers`): `enabled: true`, `max_per_person` (1 to 20), and `size_mib` on Kubernetes.
+2. On Kubernetes, set the chart's `drives.enabled=true` and `drives.reclaim.enabled=true` (see below).
+3. Create a drive as a signed-in person. Creation answers 422 `member_drive_delete_unavailable` until the server can delete what it would create.
+
+| Setting | What it does |
+| --- | --- |
+| `max_per_person` | The most drives one person holds. Creation past it is refused |
+| `size_mib` | The claim size on Kubernetes. It must be 0 on Docker, which has no byte cap |
+| `storage_class` | The claim's StorageClass on Kubernetes. Empty is the cluster default |
+| profile `deny_member_drives` | A governance profile refuses creation for its people. A person can still delete a drive they have |
+
+**What differs by substrate.**
+
+| | Docker | Kubernetes |
+| --- | --- | --- |
+| Object | A named volume, `wardyn-drive-<drive-id-hex>-<home>` | A claim with the same name |
+| Size | **No byte cap.** One person can fill the daemon's disk. Bound the count with `max_per_person` and watch the disk | `size_mib` is the claim request. The StorageClass decides if it is enforced |
+| Delete | Needs nothing beyond daemon access | Needs `drives.reclaim.enabled`, which adds `delete` on `persistentvolumeclaims` to the Role |
+| Without it | Not applicable | Creation is refused: 422 `member_drive_delete_unavailable` |
+
+- Turning on `drives.reclaim.enabled` lets a compromised wardynd delete any claim in the runs namespace.
+- That is already true of the admin reclaim verb. Read the chart's `drives.reclaim` comment first.
+- A person's own runner never mounts a member drive. The volume would sit on that person's laptop, out of the server's reach.
+
+**List and delete as an admin** (super admin).
+
+- `GET /api/v1/drives/member` lists every person's drives with owner, object and state. `wardyn drive member list` does the same. `GET /drives` does not list them.
+- `DELETE /api/v1/drives/member/{id}` deletes one and its files. `wardyn drive member delete <id> --yes` does the same.
+- A person deletes their own with `DELETE /api/v1/me/drives/{id}`.
+- Every attempt is audited as `drive.member.delete`, with `by` set to `owner` or `admin`.
+
+**A delete refused as in use.**
+
+- A run holds the drive: 409 `member_drive_in_use`. Wait for the run or end it.
+- Docker also refuses while a **kept** run's stopped container still references the volume. That lasts up to `WARDYN_ENDED_RUN_GRACE` (7 days by default). Delete that run to free it.
+
+**A person who leaves.**
+
+- A SCIM purge **lists** the person's drives, by name, in `person.deprovision`, and `GET /scim/status` shows them. It deletes nothing.
+- Delete each with `DELETE /api/v1/drives/member/{id}`, or erase the person with the `member_drives` scope of `POST /api/v1/people/{principal}/erasure`.
+- The erasure deletes the same way a delete does and fails the scope, naming the drive, if one is in use. Retry once the run ends.
+
+**Orphans.**
+
+- A delete that stops part way leaves the drive hidden from its owner. A second delete after one minute takes it over. The admin list shows it as `deleting`.
+- A drive deleted while a run was launching against it can leave an object with no row. Find it by the `wardyn.drive` label and remove it by hand, as in "User drives on Docker".
+- Nothing sweeps these for you.
+
+**No downgrade.**
+
+- Member drives live in `user_drives` rows with an owner. An older wardynd would list them in `GET /drives` and let a super admin edit or delete the row without the volume.
+- Migrations are forward-only; see "Upgrades".
 
 ### User drives on Kubernetes
 

@@ -94,6 +94,9 @@ func (s *Server) erasureOrchestrator(credRep *secretstore.EraseReport, want *era
 	if _, ok := s.cfg.Store.(store.RunnerPoolStore); ok {
 		steps[erasure.RunnerPools] = s.eraseRunnerPoolsOf
 	}
+	if _, ok := s.cfg.Store.(store.MemberDriveStore); ok {
+		steps[erasure.MemberDrives] = s.eraseMemberDrivesOf
+	}
 	if s.cfg.SubjectKeys != nil {
 		steps[erasure.AuditPersonalFields] = func(ctx context.Context, person string) (any, error) {
 			return s.eraseAuditSealKeys(ctx, person, want)
@@ -534,7 +537,7 @@ func (s *Server) handleErasePerson(w http.ResponseWriter, r *http.Request) {
 	if unproved != nil {
 		err = &erasure.IncompleteError{Remaining: sortedScopes(scopes), Cause: unproved}
 	} else {
-		rep, err = s.erasureOrchestrator(nil, &names).Orchestrate(r.Context(), owner, scopes)
+		rep, err = s.erasureOrchestrator(nil, &names).Orchestrate(withRequestActor(r), owner, scopes)
 	}
 	data := map[string]any{"scopes": scopeNames(sortedScopes(scopes))}
 	outcomes := map[string]string{}

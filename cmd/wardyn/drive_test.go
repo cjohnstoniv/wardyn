@@ -591,3 +591,54 @@ func TestOperatorOtherSetCommandsIgnoreTrailingDocument(t *testing.T) {
 		})
 	}
 }
+
+// TestDriveMemberDelete_RefusesWithoutYes: deleting a person's drive destroys
+// their files, so the flag is required and nothing reaches the daemon without it.
+func TestDriveMemberDelete_RefusesWithoutYes(t *testing.T) {
+	cs := newCmdServer(t, http.StatusOK, map[string]any{})
+	err := execCmd(t, "--url", cs.URL, "drive", "member", "delete", uuid.NewString())
+	if err == nil || !strings.Contains(err.Error(), "--yes") {
+		t.Fatalf("err = %v, want a refusal naming --yes", err)
+	}
+	if len(cs.reqs) != 0 {
+		t.Errorf("the unconfirmed command reached the daemon: %v", cs.reqs)
+	}
+}
+
+// TestDriveMemberDelete_DeletesAndPrintsWhatWent sends DELETE
+// /api/v1/drives/member/{id} and prints the outcome and the object.
+func TestDriveMemberDelete_DeletesAndPrintsWhatWent(t *testing.T) {
+	id := uuid.New()
+	cs := newCmdServer(t, http.StatusOK, map[string]any{
+		"drive": "Notes", "drive_id": id.String(), "owner": "sub-alice", "backend": "docker_volume",
+		"object": "wardyn-drive-abc-d-123", "outcome": "deleted",
+	})
+	out, err := execCmdCapture(t, "--url", cs.URL, "drive", "member", "delete", id.String(), "--yes")
+	if err != nil {
+		t.Fatalf("drive member delete: %v", err)
+	}
+	if got := cs.last(); got.method != http.MethodDelete || got.path != "/api/v1/drives/member/"+id.String() {
+		t.Fatalf("request = %s %s", got.method, got.path)
+	}
+	if !strings.Contains(out, "deleted: wardyn-drive-abc-d-123") || !strings.Contains(out, "sub-alice") {
+		t.Errorf("output = %q", out)
+	}
+}
+
+// TestDriveMemberList_PrintsOwnersAndObjects reads GET /api/v1/drives/member.
+func TestDriveMemberList_PrintsOwnersAndObjects(t *testing.T) {
+	cs := newCmdServer(t, http.StatusOK, map[string]any{"total": 1, "drives": []map[string]any{{
+		"id": uuid.NewString(), "name": "Notes", "owner": "sub-alice", "backend": "docker_volume",
+		"object": "wardyn-drive-abc-d-123", "created_at": "2026-10-12T00:00:00Z", "deleting": false,
+	}}})
+	out, err := execCmdCapture(t, "--url", cs.URL, "drive", "member", "list")
+	if err != nil {
+		t.Fatalf("drive member list: %v", err)
+	}
+	if got := cs.last(); got.method != http.MethodGet || got.path != "/api/v1/drives/member" {
+		t.Fatalf("request = %s %s", got.method, got.path)
+	}
+	if !strings.Contains(out, "sub-alice") || !strings.Contains(out, "wardyn-drive-abc-d-123") {
+		t.Errorf("output = %q", out)
+	}
+}

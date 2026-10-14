@@ -25,8 +25,10 @@ type reachableDrive struct {
 	resolved *types.ResolvedDrive
 	err      error
 	// legacy marks the drive drive.enabled mounts at /home/agent/drive: the
-	// first winner, which is ResolveUserDrive's one answer.
+	// first winner, which is ResolveUserDrive's one answer. Never an owned drive.
 	legacy bool
+	// owned marks the caller's own member drive (memberReachableDrives).
+	owned bool
 }
 
 // target is where this drive mounts (runner.DriveTargetFor).
@@ -44,6 +46,8 @@ func (d reachableDrive) target() string {
 // answer is trusted only as selectByTier trusts one: every winner user-tier, or
 // no group-tier grant at all. Otherwise it is errGroupsSnapshotStale, for every
 // drive at once: a hidden group grant could outrank any non-user winner.
+//
+// The caller's own member drives follow the granted ones (memberReachableDrives).
 func (s *Server) reachableDrives(ctx context.Context, profileMaxDriveMiB int) ([]reachableDrive, error) {
 	cs, ok := s.cfg.Store.(store.UserDriveCatalogueStore)
 	if !ok {
@@ -79,7 +83,7 @@ func (s *Server) reachableDrives(ctx context.Context, profileMaxDriveMiB int) ([
 				return ws, types.CapabilitySubjectUser, nil
 			}, s.cfg.Store.HasGroupTierDriveGrants)
 		if errors.Is(err, store.ErrNotFound) {
-			return nil, nil
+			winners, err = nil, nil
 		}
 	} else {
 		winners, err = cs.ResolveUserDrives(ctx, subj.users, subj.groups, subj.userType)
@@ -96,7 +100,7 @@ func (s *Server) reachableDrives(ctx context.Context, profileMaxDriveMiB int) ([
 		}
 		out = append(out, d)
 	}
-	return out, nil
+	return s.memberReachableDrives(ctx, out, ceiling)
 }
 
 // handleListMeDrives is GET /me/drives: the drive catalogue New Run attaches
@@ -116,6 +120,7 @@ func (s *Server) handleListMeDrives(w http.ResponseWriter, r *http.Request) {
 	default:
 		out.Drives, out.PoolChecked, out.Unavailable = s.meDrives(ctx, r.URL.Query().Get("runner_pool_id"))
 	}
+	out.Create = s.memberDriveCreateState(r.WithContext(ctx))
 	writeJSON(w, http.StatusOK, out)
 }
 
@@ -138,7 +143,7 @@ func (s *Server) meDrives(ctx context.Context, poolID string) ([]client.MeDrive,
 		row := client.MeDrive{
 			ID: drive.ID.String(), Name: drive.Name, Section: client.MeDriveSectionShared,
 			Source: driveSource(d.winner.Grant.SubjectType), Backend: drive.Backend,
-			Target: d.target(), Enforcement: types.EnforcementFor(drive.Backend), Legacy: d.legacy,
+			Target: d.target(), Enforcement: types.EnforcementFor(drive.Backend), Legacy: d.legacy, Owned: d.owned,
 		}
 		if drive.Backend.Kind() == types.DriveKindManaged {
 			row.Section = client.MeDriveSectionUser
@@ -159,7 +164,7 @@ func (s *Server) driveUnavailableHere(ctx context.Context, d reachableDrive, poo
 		return client.MeDriveUnavailablePaused
 	case d.resolved == nil || d.target() == "" || s.driveBindFailureHere(ctx, *d.resolved) != nil:
 		return client.MeDriveUnavailableUnmountable
-	case checked && driveNotInPool(pool):
+	case checked && driveNotInPool(pool, d.winner.Drive):
 		return client.MeDriveUnavailableNotInPool
 	}
 	return ""
@@ -167,12 +172,17 @@ func (s *Server) driveUnavailableHere(ctx context.Context, d reachableDrive, poo
 
 // driveNotInPool is the pool half of a drive's availability: no drive mounts on
 // a person's own runner, whose substrate holds no organisation storage, so a
-// user pool with no remote-hosted runner has nowhere to mount one.
+// user pool with no remote-hosted runner has nowhere to mount one. For a
+// person's own drive that is its permanent rule (memberDriveNeverOnPool); for
+// an organisation drive it is how those runners are today.
 //
 // ponytail: a pool whose remote-hosted runners cannot mount drives waits for
 // per-executor pool facts; until then the deployment-wide runner capability
 // decides it, as unmountable.
-func driveNotInPool(pool store.RunnerPoolCatalogueRow) bool {
+func driveNotInPool(pool store.RunnerPoolCatalogueRow, d types.UserDrive) bool {
+	if d.OwnerSubject != "" {
+		return memberDriveNeverOnPool(pool, d)
+	}
 	return pool.Pool.Scope == types.RunnerPoolUser && len(pool.ExecutorIDs) == 0
 }
 

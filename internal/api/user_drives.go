@@ -180,6 +180,7 @@ func (s *Server) handleGetUserDrives(w http.ResponseWriter, r *http.Request) {
 		writeServerError(w, r, "list user drives", err)
 		return
 	}
+	drives = adminDrivesOnly(drives)
 	total := 0
 	for _, d := range drives {
 		total += d.GrantCount
@@ -465,7 +466,7 @@ func (s *Server) handleCreateUserDrive(w http.ResponseWriter, r *http.Request) {
 // request says it means it — see driveRehomeGuard, which holds the argument.
 func (s *Server) handleUpdateUserDrive(w http.ResponseWriter, r *http.Request) {
 	id, ok := parseIDParam(w, r, "id", "user drive")
-	if !ok {
+	if !ok || s.refuseMemberOwned(w, r, id) {
 		return
 	}
 	s.writeUserDrive(w, r, id, http.StatusOK)
@@ -718,7 +719,7 @@ func pluralDriveSubjects(n int) string {
 // read the refusal does not need. operatorOnly (routes.go).
 func (s *Server) handleDeleteUserDrive(w http.ResponseWriter, r *http.Request) {
 	id, ok := parseIDParam(w, r, "id", "user drive")
-	if !ok {
+	if !ok || s.refuseMemberOwned(w, r, id) {
 		return
 	}
 	err := s.cfg.Store.DeleteUserDrive(r.Context(), id)
@@ -782,6 +783,9 @@ func (s *Server) handleUpsertUserDriveGrant(w http.ResponseWriter, r *http.Reque
 	// user-tier-only home_override rule), then the row is what the store sees.
 	if err := types.ValidateUserDriveGrant(&g); err != nil {
 		writeErrorReason(w, http.StatusBadRequest, reasonUserDriveGrantInvalid, "invalid allocation: "+err.Error())
+		return
+	}
+	if s.refuseMemberOwned(w, r, g.DriveID) {
 		return
 	}
 	// The org switch and the deployment ceiling, the same pair the drive write

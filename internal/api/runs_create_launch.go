@@ -8,6 +8,7 @@ import (
 	"log/slog"
 
 	"github.com/cjohnstoniv/wardyn/internal/types"
+	"github.com/google/uuid"
 )
 
 // The run launch, split at the run row.
@@ -44,6 +45,7 @@ type createRunLaunch struct {
 	gw            grantWiring
 	wsRefs        []types.Workspace
 	driveMounts   []types.DriveMount
+	memberDrives  map[uuid.UUID]string
 	ephemeralDirs []string
 	// startFolder is the run's one working directory (stepWorkspaces): "" keeps
 	// the sandbox's own choice.
@@ -74,7 +76,7 @@ func (f *runFold) launch(req createRunRequest, spec types.RunPolicySpec, ceiling
 	spec, harnessRules := applyHarnessToolRules(spec, req.Tools, toolLaneDefault(req))
 	return createRunLaunch{
 		req: req, spec: spec, ceiling: ceilingForDispatch(ceiling, f.adoGrade, f.bedrockGrade), gw: gw,
-		wsRefs: f.wsRefs, driveMounts: f.driveMounts, ephemeralDirs: f.ephemeralDirs, startFolder: f.startFolder,
+		wsRefs: f.wsRefs, driveMounts: f.driveMounts, memberDrives: memberDriveOwners(f.drives), ephemeralDirs: f.ephemeralDirs, startFolder: f.startFolder,
 		runToken: runToken, created: created, comps: f.comps, overridden: f.source.overridden(), pushSets: f.pushSets,
 		harnessRules: harnessRules, harnesses: f.harnesses, mainDrive: f.mainDrive.decision(),
 	}
@@ -148,7 +150,8 @@ func (s *Server) finishCreateRunLaunch(ctx context.Context, l createRunLaunch) {
 			// Carried rather than re-resolved for the reason the ceiling is:
 			// resolution keys on the caller's OIDC claims, which the run row does
 			// not hold. See user_drives_run.go's own note.
-			Drives: l.driveMounts,
+			Drives:       l.driveMounts,
+			MemberDrives: l.memberDrives,
 			// The zero posture unless this run attaches a MEMBER-OWNED workspace, in
 			// which case the driver re-checks that member's own binds against these
 			// roots immediately before ContainerCreate (userMountPosture,

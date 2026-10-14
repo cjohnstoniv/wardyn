@@ -50,12 +50,16 @@ const (
 	// runners leave them and runs waiting for them end), and their name on
 	// every pool of theirs, the deleted ones included.
 	RunnerPools Scope = "runner_pools"
+	// MemberDrives: the drives the person created for themselves, each deleted
+	// with its files through the same path as their own delete. A drive a run
+	// still holds fails the scope, naming the drive.
+	MemberDrives Scope = "member_drives"
 )
 
 // order is the sequence scopes run in whatever order they were asked: live
 // consumers are fenced first, the data they could still reach is erased next,
 // and the keys go last.
-var order = []Scope{MaskCopies, RunOutputs, Recordings, RunTasks, Components, RunSetups, RunnerPools, AuditPersonalFields, Credentials}
+var order = []Scope{MaskCopies, RunOutputs, Recordings, RunTasks, Components, RunSetups, RunnerPools, MemberDrives, AuditPersonalFields, Credentials}
 
 // Scopes lists every scope in the order Orchestrate runs them.
 func Scopes() []Scope { return slices.Clone(order) }

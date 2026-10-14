@@ -162,6 +162,7 @@ export const LIMIT_FIELDS: Field[] = [
   ceilingField("deny_ui_apps", "true"),
   ceilingField("deny_placements", "list"),
   ceilingField("local_self_defined_components", "false"),
+  ceilingField("deny_member_drives", "true"),
   ceilingField("max_cpu_millis", "number"),
   ceilingField("max_memory_mib", "number"),
   ceilingField("max_end_ahead_sec", "number"),

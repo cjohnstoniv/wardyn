@@ -618,7 +618,7 @@ func (s *Server) routes() chi.Router {
 			// nothing to arrange.
 			// …and POST /drives/{id}/reclaim with them: mountUserDriveFamily
 			// (user_drives_reclaim.go) joins the family's two halves.
-			s.mountUserDriveFamily(operatorOnly, securityOps)
+			s.mountUserDriveFamily(r, operatorOnly, securityOps)
 
 			// Recording replay: GET /api/v1/runs/{id}/recording/{id}. Owner-or-admin:
 			// recordingAuthorizer is the SAME ownership rule

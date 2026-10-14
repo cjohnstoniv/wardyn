@@ -965,6 +965,8 @@ drives:
   # run still holds the claim, audited on every attempt that reaches the cluster) instead of running
   # `kubectl delete pvc` by hand. Reclaiming by hand stays supported either way.
   #
+  # Member drives (storage.user_drive.member_create) need this on Kubernetes: without it creating one is refused.
+  #
   # It does not weaken anything else: no run path, no teardown and no sweep can
   # reach a claim on either setting — a drive object carries no wardyn.run-id
   # label, which is what the per-run reaper selects on.

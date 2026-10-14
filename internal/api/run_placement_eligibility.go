@@ -18,6 +18,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/composer"
 	"github.com/cjohnstoniv/wardyn/internal/placement"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -229,6 +230,15 @@ func withinAnyRoot(path string, roots []string) bool {
 		root = filepath.Clean(root)
 		return filepath.IsAbs(root) && (path == root || strings.HasPrefix(path, strings.TrimSuffix(root, "/")+"/"))
 	})
+}
+
+// memberDriveNeverOnPool is a person's own drive on a pool that has only
+// people's own runners: never placed there, permanently. Its volume or claim
+// would live on that person's machine, which deleting the drive cannot reach.
+// No later proof a pool's runners give about local paths (verifiedLocalPaths)
+// relaxes it.
+func memberDriveNeverOnPool(pool store.RunnerPoolCatalogueRow, d types.UserDrive) bool {
+	return d.OwnerSubject != "" && pool.Pool.Scope == types.RunnerPoolUser && len(pool.ExecutorIDs) == 0
 }
 
 func localTrustedOutputRequest(req createRunRequest) bool {

@@ -42,13 +42,14 @@ func NewFake() *Fake {
 }
 
 var (
-	_ substrate.Substrate    = (*Fake)(nil)
-	_ runner.SandboxEnder    = (*Fake)(nil)
-	_ runner.ProxyStopper    = (*Fake)(nil)
-	_ runner.ProxyReviver    = (*Fake)(nil)
-	_ runner.SandboxStarter  = (*Fake)(nil)
-	_ runner.DriveProber     = (*Fake)(nil)
-	_ runner.OutputRecoverer = (*Fake)(nil)
+	_ substrate.Substrate          = (*Fake)(nil)
+	_ runner.SandboxEnder          = (*Fake)(nil)
+	_ runner.ProxyStopper          = (*Fake)(nil)
+	_ runner.ProxyReviver          = (*Fake)(nil)
+	_ runner.SandboxStarter        = (*Fake)(nil)
+	_ runner.DriveProber           = (*Fake)(nil)
+	_ runner.DriveLifecycleChecker = (*Fake)(nil)
+	_ runner.OutputRecoverer       = (*Fake)(nil)
 )
 
 func (f *Fake) note(verb, ref string) {
@@ -183,6 +184,9 @@ func (f *Fake) EnsureProxyImage(context.Context) error { f.note("ensure_proxy_im
 func (f *Fake) ProbeDrive(_ context.Context, m types.DriveMount) (runner.DriveProbe, error) {
 	return runner.DriveProbe{Result: runner.DriveProbeReadable, Detail: "fake"}, nil
 }
+
+// CanManageDrives is unavailable: the fake has no ReclaimDrive, and "can manage" must never describe a substrate that cannot delete.
+func (f *Fake) CanManageDrives(context.Context) error { return runner.ErrDriveLifecycleUnavailable }
 
 func (f *Fake) RecoverOutput(_ context.Context, ref string, w io.Writer) error {
 	f.note("recover_output", ref)

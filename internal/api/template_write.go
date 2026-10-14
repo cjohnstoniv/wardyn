@@ -166,6 +166,9 @@ func (s *Server) handleCreateTemplate(w http.ResponseWriter, r *http.Request) {
 		writeTemplateDiagnostics(w, diags...)
 		return
 	}
+	if s.templateMemberDrivesRefused(w, r, t) {
+		return
+	}
 	s.createTemplate(w, r, ts, c, t, map[string]any{})
 }
 
@@ -220,6 +223,9 @@ func (s *Server) handleUpdateTemplate(w http.ResponseWriter, r *http.Request) {
 	t, diags := templateForSave(req, cur.Owner, cur.Kind)
 	if len(diags) > 0 {
 		writeTemplateDiagnostics(w, diags...)
+		return
+	}
+	if s.templateMemberDrivesRefused(w, r, t) {
 		return
 	}
 	t.ID, t.UpdatedBy = id, c.actor.Person
@@ -292,6 +298,9 @@ func (s *Server) handleCopyTemplate(w http.ResponseWriter, r *http.Request) {
 	t, diags := templateForSave(client.TemplateSaveRequest{Name: name, Description: src.Description, Document: doc}, to, src.Kind)
 	if len(diags) > 0 {
 		writeTemplateDiagnostics(w, diags...)
+		return
+	}
+	if s.templateMemberDrivesRefused(w, r, t) {
 		return
 	}
 	s.createTemplate(w, r, ts, c, t, map[string]any{"from_id": src.ID.String()})

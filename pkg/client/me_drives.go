@@ -3,7 +3,14 @@
 
 package client
 
-import "github.com/cjohnstoniv/wardyn/internal/types"
+import (
+	"context"
+	"net/http"
+
+	"github.com/google/uuid"
+
+	"github.com/cjohnstoniv/wardyn/internal/types"
+)
 
 // MeDriveCatalogue is GET /api/v1/me/drives: every drive the caller's own
 // grants reach, the ones a run may attach through CreateRunRequest.Drives.
@@ -24,7 +31,46 @@ type MeDriveCatalogue struct {
 	// so UnavailableReason includes not_in_pool. False for no pool and for one
 	// the caller cannot use; the pool is checked again at launch.
 	PoolChecked bool `json:"pool_checked"`
+	// Create is whether the caller may create a drive now (POST /me/drives).
+	// Absent when the caller is not a person: a device, a delegated caller,
+	// SCIM, a service identity, the admin token or local mode.
+	Create *MemberDriveCreate `json:"create,omitempty"`
 }
+
+// MemberDriveCreate is the catalogue's create availability, decided by the
+// same gates as POST /me/drives except the name.
+type MemberDriveCreate struct {
+	Allowed bool `json:"allowed"`
+	// Reason is set exactly when Allowed is false.
+	Reason MemberDriveCreateReason `json:"reason,omitempty"`
+	// DeniedByProfile names the profile, with reason denied_by_profile.
+	DeniedByProfile string `json:"denied_by_profile,omitempty"`
+	// Count is the caller's drives, one being deleted included.
+	Count int `json:"count"`
+	// Limit is the switch's drives per person; 0 when the switch is off.
+	Limit int `json:"limit"`
+}
+
+// MemberDriveCreateReason is why a person cannot create a drive now. Closed;
+// the TS twin is MemberDriveCreateReason in ui/src/app/lib/api/me-drives.ts.
+type MemberDriveCreateReason string
+
+const (
+	// MemberDriveCreateDisabled: the org switch is off, or drives are off.
+	MemberDriveCreateDisabled MemberDriveCreateReason = "disabled"
+	// MemberDriveCreateDeniedByProfile: deny_member_drives or deny_user_drive.
+	MemberDriveCreateDeniedByProfile MemberDriveCreateReason = "denied_by_profile"
+	// MemberDriveCreateLimitReached: Count has reached Limit.
+	MemberDriveCreateLimitReached MemberDriveCreateReason = "limit_reached"
+	// MemberDriveCreateUnsupported: no managed backend for this deployment.
+	MemberDriveCreateUnsupported MemberDriveCreateReason = "unsupported"
+	// MemberDriveCreateDeleteUnavailable: the substrate could not delete one.
+	MemberDriveCreateDeleteUnavailable MemberDriveCreateReason = "delete_unavailable"
+	// MemberDriveCreateGovernance: the caller's governance could not be read.
+	MemberDriveCreateGovernance MemberDriveCreateReason = "governance_unavailable"
+	// MemberDriveCreateGroupsStale: the caller's group snapshot is stale.
+	MemberDriveCreateGroupsStale MemberDriveCreateReason = "groups_snapshot_stale"
+)
 
 // MeDrive is one drive of the catalogue.
 type MeDrive struct {
@@ -49,18 +95,28 @@ type MeDrive struct {
 	// UnavailableReason is why a run cannot attach this drive now: paused,
 	// unmountable or not_in_pool. "" when it can.
 	UnavailableReason string `json:"unavailable_reason,omitempty"`
+	// Owned is true for a drive the caller created (POST /me/drives). Only an
+	// owned drive takes DELETE /me/drives/{id}.
+	Owned bool `json:"owned"`
 }
 
-// The closed sets of MeDrive.
-const (
-	MeDriveSectionUser   = "user"
-	MeDriveSectionShared = "shared"
+// MemberDriveCreateRequest is POST /api/v1/me/drives: a person creates their
+// own drive. The server picks the backend, the size and the mount path.
+type MemberDriveCreateRequest struct {
+	// Name is 1 to 128 characters with at least one letter or digit, unique
+	// among the drives the caller can use.
+	Name string `json:"name"`
+}
 
-	MeDriveSourcePersonal     = "personal"
-	MeDriveSourceTeam         = "team"
-	MeDriveSourceOrganisation = "organisation"
+// CreateMyDrive creates the caller's own drive (POST /api/v1/me/drives).
+func (c *Client) CreateMyDrive(ctx context.Context, name string) (MeDrive, error) {
+	var out MeDrive
+	err := c.do(ctx, http.MethodPost, "/api/v1/me/drives", MemberDriveCreateRequest{Name: name}, &out)
+	return out, err
+}
 
-	MeDriveUnavailablePaused      = "paused"
-	MeDriveUnavailableUnmountable = "unmountable"
-	MeDriveUnavailableNotInPool   = "not_in_pool"
-)
+// DeleteMyDrive deletes the caller's own drive and its files
+// (DELETE /api/v1/me/drives/{id}).
+func (c *Client) DeleteMyDrive(ctx context.Context, id uuid.UUID) error {
+	return c.do(ctx, http.MethodDelete, "/api/v1/me/drives/"+id.String(), nil, nil)
+}

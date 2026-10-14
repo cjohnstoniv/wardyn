@@ -48,3 +48,66 @@ func TestOrchestrator_ProbeSubstrate_FallsBackToCapabilities(t *testing.T) {
 		t.Fatalf("capabilities error: ProbeSubstrate = %q, want unreachable", got)
 	}
 }
+
+// lifecycleSubstrate is a fakeSubstrate that answers the drive lifecycle check
+// but cannot reclaim.
+type lifecycleSubstrate struct {
+	*fakeSubstrate
+	err error
+}
+
+func (l lifecycleSubstrate) CanManageDrives(context.Context) error { return l.err }
+
+// reclaimerSubstrate is a fakeSubstrate that can reclaim but not check.
+type reclaimerSubstrate struct{ *fakeSubstrate }
+
+func (reclaimerSubstrate) ReclaimDrive(context.Context, types.DriveMount) (runner.DriveReclaimOutcome, error) {
+	return runner.DriveReclaimDeleted, nil
+}
+
+// fullDriveSubstrate can both reclaim and check, and records which one answered.
+type fullDriveSubstrate struct {
+	*fakeSubstrate
+	err       error
+	reclaimed *string
+}
+
+func (f fullDriveSubstrate) CanManageDrives(context.Context) error { return f.err }
+func (f fullDriveSubstrate) ReclaimDrive(context.Context, types.DriveMount) (runner.DriveReclaimOutcome, error) {
+	*f.reclaimed = f.name
+	return runner.DriveReclaimDeleted, nil
+}
+
+// CanManageDrives asks the substrate ReclaimDrive would use: the first local
+// that can do BOTH. A substrate with only one of the two does not count, and
+// none at all is unavailable.
+func TestOrchestrator_CanManageDrives_AgreesWithReclaimDrive(t *testing.T) {
+	cc1 := []types.ConfinementClass{types.CC1}
+	var reclaimed string
+	checkerOnly := lifecycleSubstrate{&fakeSubstrate{name: "checker-only", classes: cc1}, nil}
+	reclaimerOnly := reclaimerSubstrate{&fakeSubstrate{name: "reclaimer-only", classes: cc1}}
+	full := fullDriveSubstrate{&fakeSubstrate{name: "full", classes: cc1}, nil, &reclaimed}
+	fullDenied := fullDriveSubstrate{&fakeSubstrate{name: "full-denied", classes: cc1}, runner.ErrDriveLifecycleUnavailable, &reclaimed}
+	ctx := context.Background()
+
+	o := New(checkerOnly, full)
+	if err := o.CanManageDrives(ctx); err != nil {
+		t.Fatalf("checker-only before a full substrate: CanManageDrives = %v, want the full substrate's yes", err)
+	}
+	if _, err := o.ReclaimDrive(ctx, types.DriveMount{}); err != nil || reclaimed != "full" {
+		t.Fatalf("ReclaimDrive went to %q (err %v), want the same full substrate", reclaimed, err)
+	}
+	if err := New(checkerOnly, fullDenied, full).CanManageDrives(ctx); !errors.Is(err, runner.ErrDriveLifecycleUnavailable) {
+		t.Fatalf("CanManageDrives = %v, want the first full substrate's denial", err)
+	}
+	for name, o := range map[string]*Orchestrator{
+		"checker without reclaimer": New(checkerOnly),
+		"reclaimer without checker": New(reclaimerOnly),
+		"reclaimer then checker":    New(reclaimerOnly, checkerOnly),
+		"no drive substrate":        New(&fakeSubstrate{name: "plain", classes: cc1}),
+	} {
+		if err := o.CanManageDrives(ctx); !errors.Is(err, runner.ErrDriveLifecycleUnavailable) {
+			t.Errorf("%s: CanManageDrives = %v, want ErrDriveLifecycleUnavailable", name, err)
+		}
+	}
+}
