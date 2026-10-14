@@ -8,6 +8,78 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+Self-hosted runners on people's own computers, from an adopter's first rollout: a per-person AWS SSO run now starts on
+a laptop runner, `wardyn-runnerd` works with Docker Desktop, setup is one command, and the run page says where a run ran.
+
+### Before you upgrade
+
+- Hosting your own runner now needs the `self_host_runner` permission (migration `0178_self_host_runner_restriction`):
+  `POST /me/runners/tokens` (`wardyn runner token`, My runner → Get a token) answers `403 capability_feature` without
+  it. To keep 0.9.0 behaviour add an `all` allow (Permissions → Self-hosted runners, one switch). Existing runners and
+  claims keep working, the admin mint is not asked, and admins are never asked.
+- Runners registered before 0.9.0 still have no limits after an in-place upgrade and take no run. Find them with
+  `wardyn runner list --all --no-limits` (self-hosted) and `wardyn runner remote list --no-limits` (remote-hosted), then
+  `wardyn runner remote propose <id>` / `wardyn runner set <id> …`. Setup status now shows a Runner limits warning
+  while any remain.
+- With AWS SSO proxy-inject on (the default), `WARDYN_AWS_SSO_CONFIG_B64` now travels as a plain environment variable:
+  it holds a placeholder `~/.aws` (start URL, region, account id, role name) and no token, so `docker inspect` and a
+  Kubernetes pod spec show those values. With proxy-inject off it is still a secret.
+
+### Added
+
+- `wardyn-runnerd setup`: one idempotent command that registers this computer, creates the proxy bridge network,
+  installs itself with a systemd user unit or macOS LaunchAgent, and starts it. With `--claim` and your own
+  `WARDYN_TOKEN` it also claims the runner, and with `--pool NAME [--default]` puts it in your pool. Device
+  management runs it without `--claim`; the person claims afterwards. `deploy/runner/install.sh` now just runs it.
+- `wardyn-runnerd serve --relay-listen` (`WARDYN_RELAY_LISTEN`): with Docker Desktop (macOS, Windows through WSL2)
+  the run relay listens on `127.0.0.1`, which Docker Desktop's host-gateway reaches; `setup` picks it when it detects
+  Docker Desktop. On other engines only the engine's own host-gateway is accepted. macOS is expected to work and not
+  yet verified.
+- `wardyn runner claim --pool NAME [--default]` claims and puts the runner in your pool in one step; the console claim
+  dialog does the same.
+- `wardyn runner list --no-limits`, and an admin-only Runner limits row in setup status.
+- The run page shows where a run ran — placement, runner name and pool name — for every run, and `GET /runs/{id}`
+  adds `runner_pool_name` (`runner_name` now also names a remote-hosted runner). `run.create` audit rows always
+  record placement and name the pool and runner.
+- `GET /me/runner-pools`: the pools you may use.
+- Runner token mint answers carry `proxy_image` when the server has one, and the console prints the `serve` command
+  with it plus the Docker Desktop flags.
+- Sign in again on a stored AWS or Claude sign-in, in Your model connections and the New Run provider picker.
+
+### Changed
+
+- `wardyn-runnerd serve` exits at startup, with the reason, when this computer cannot run anything: Docker not
+  reachable, a relay address no proxy can reach (Docker Desktop without `--relay-listen`), or a proxy network it
+  cannot create; a missing `--internal-network` bridge is created. Before, the runner showed Online and refused every
+  run.
+- `wardyn-runnerd serve --proxy-image` and `setup` default to the release proxy image matching the binary; a
+  development build must pass it.
+- A refused runner claim says why (registration expired, already claimed, revoked, organisation URL changed, key
+  fingerprint). Another person's runner and an unknown id still get one generic sentence.
+- `wardyn-runnerd register` says how to claim (the console fingerprint, or your own API token with `wardyn runner
+  claim`; the admin token cannot claim), and after a timeout or a 5xx no longer says the token is still usable.
+
+### Fixed
+
+- A per-person AWS SSO (`bedrock_sso`) run on someone's own self-hosted runner was refused after Launch
+  (`bedrock_role_credentials credential is unavailable on a local runner`). It now runs when AWS SSO proxy-inject is
+  on (the default); with proxy-inject off it is refused at preflight and Review, before Launch. A local Codex run with
+  an MCP component was refused after Launch the same way; it now runs.
+- A run refused for its credentials on the chosen pool now points at the Runner step, and Review marks the group that
+  needs attention.
+- When AWS refuses to renew a sign-in (`invalid_request`, `access_denied`, `invalid_scope`, `unsupported_grant_type`),
+  the run refusal names AWS's answer and opens the sign-in door, the console shows the sign-in as needing a new
+  sign-in, and the `harness.credential.refresh` audit row carries AWS's `code` and `description`. Before, it read
+  "launch again in a moment" with no way to sign in. A session stored without its client registration is no longer
+  sent to AWS for renewal.
+- An admin-minted runner token for a person's email could never be claimed: the owner is now resolved to the person,
+  and an ambiguous or unknown owner is refused `422 runner_owner_invalid`.
+- Revoking a runner whose session had already dropped answered `500`; it now answers `200` with `state: revoked`.
+- `GET /me/runner-pools` answered `405`.
+- `wardyn runner remote propose` on Kubernetes now says which read it could not make (ResourceQuota list, a quota
+  that does not set an amount with `k8s.readNodes` off, or node list) instead of only "reports no CPU or memory".
+- A provider sign-in bound to a self-hosted runner is refused at sandbox creation (defensive; no path binds one).
+
 ## [0.9.0] — 2026-10-13
 
 ### Before you upgrade
