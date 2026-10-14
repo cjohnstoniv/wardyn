@@ -37,6 +37,9 @@ type PersonErasureStore interface {
 	// PrincipalEntraNames lists the entra:<tenant>:<object> forms of principal's own sign-in
 	// rows, built from their tenant and object ids and never from an alias value.
 	PrincipalEntraNames(ctx context.Context, principal string) ([]string, error)
+	// PrincipalsSharingObject lists the other principals bound to a sign-in with the same tenant and object
+	// id as one of principal's own, under another issuer: often the same human, never the same principal.
+	PrincipalsSharingObject(ctx context.Context, principal string) ([]string, error)
 	// EraseGovernanceChangePersonalFields clears the proposer and decider (and the decider's reason) of
 	// every governance change whose recorded principal is one of principals or whose recorded email is
 	// one of emails (case-folded), and moves a pending change whose proposer is one of them to expired.
@@ -220,6 +223,21 @@ func (s PG) PrincipalEntraNames(ctx context.Context, principal string) ([]string
 	names, err := pgx.CollectRows(rows, pgx.RowTo[string])
 	if err != nil {
 		return nil, fmt.Errorf("store: list a principal's entra names: %w", err)
+	}
+	return names, nil
+}
+
+func (s PG) PrincipalsSharingObject(ctx context.Context, principal string) ([]string, error) {
+	rows, err := s.Pool.Query(ctx, `
+		SELECT DISTINCT o.principal FROM principal_identities me
+		  JOIN principal_identities o ON o.tenant_id = me.tenant_id AND o.object_id = me.object_id AND o.issuer <> me.issuer
+		 WHERE me.principal = $1 AND me.object_id <> '' AND o.principal IS NOT NULL AND o.principal <> $1 ORDER BY 1`, principal)
+	if err != nil {
+		return nil, fmt.Errorf("store: list principals sharing an object id: %w", err)
+	}
+	names, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		return nil, fmt.Errorf("store: list principals sharing an object id: %w", err)
 	}
 	return names, nil
 }

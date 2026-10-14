@@ -115,7 +115,13 @@
 # docs/AUDIT-ACTIONS.md 45576 adds 31 over 45545 (0.9 S-revseq, after merging batch-090-local); measured at merge.
 # docs/AUDIT-ACTIONS.md 45871 adds 31 over 45840 (0.9 S-revseq, after merging batch-090-local); measured at merge.
 # docs/AUDIT-ACTIONS.md 44127 measured after merging S-revseq into S-clockstep.
-docs/AUDIT-ACTIONS.md=45871 share=8
+# docs/AUDIT-ACTIONS.md 41929 adds 57 over 41872 (0.9 RS-7): the purge's unproved refusal on person.deprovision, the also_named definition, and the unproved exception to the person.erasure retry.
+# docs/AUDIT-ACTIONS.md 45042 measured after merging the batch into RS-7 (59 over 44983: the same three rows).
+# docs/AUDIT-ACTIONS.md 45073 measured after merging S-clockstep into RS-7 (the batch at 44983, 31 and 59).
+# docs/AUDIT-ACTIONS.md 45432 measured after merging S-clockstep into RS-7 (57 over its 45375: the same three rows).
+# docs/AUDIT-ACTIONS.md 45633 adds 57 over 45576 (0.9 RS-7, after merging lane/090-S-clockstep); measured at merge.
+# docs/AUDIT-ACTIONS.md 45928 adds 57 over 45871 (0.9 RS-7, after merging lane/090-S-clockstep); measured at merge.
+docs/AUDIT-ACTIONS.md=45928 share=8
 # docs/AUDIT-ACTIONS.md 39938 adds 1 (0.9 H7): the `placement_component_self_defined` reason in the authz.denied vocabulary.
 # 0.9 H10 r1: docs/AUDIT-ACTIONS.md 40113 adds 65 over 40048 for the token-revoke join, the off semantics and the pending connect/disconnect rows.
 # 0.9 H10: docs/AUDIT-ACTIONS.md 40048 adds 111 over 39937 for runner.token.revoke, runners.enabled.set, runner.connect and runner.disconnect.

@@ -389,7 +389,7 @@ func (s *Server) handleRetireServiceIdentity(w http.ResponseWriter, r *http.Requ
 	if s.cfg.Secrets != nil {
 		principal := retired.After.Principal()
 		var rep secretstore.EraseReport
-		_, eerr := s.eraseCredentialsScope(ctx, principal, &rep)
+		_, eerr := s.eraseCredentialsScope(ctx, principal, nil, &rep)
 		outcome := "success"
 		if eerr != nil {
 			outcome = "failure"

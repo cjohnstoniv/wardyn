@@ -132,7 +132,7 @@ func TestLaunchIntentErasure(t *testing.T) {
 			if _, err := f.pg.GetLaunchIntent(ctx, id, run.CreatedBy); err != nil {
 				t.Fatalf("the run kept no intent: %v", err)
 			}
-			rep, err := f.srv.erasureOrchestrator(nil).Orchestrate(ctx, run.CreatedBy, []erasure.Scope{scope})
+			rep, err := f.srv.erasureOrchestrator(nil, nil).Orchestrate(ctx, run.CreatedBy, []erasure.Scope{scope})
 			if err != nil {
 				t.Fatal(err)
 			}

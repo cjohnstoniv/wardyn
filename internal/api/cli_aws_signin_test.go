@@ -277,7 +277,7 @@ func TestAWSCLI_SignInNameReserved(t *testing.T) {
 func TestAWSCLI_PersonErasureRemovesSignIn(t *testing.T) {
 	f := newReauthFixture(t, nil)
 	putCLIBlobIn(t, f, subOwner, cliAWSBlob())
-	if _, err := f.srv.erasureOrchestrator(&secretstore.EraseReport{}).Orchestrate(context.Background(), subOwner,
+	if _, err := f.srv.erasureOrchestrator(&secretstore.EraseReport{}, nil).Orchestrate(context.Background(), subOwner,
 		[]erasure.Scope{erasure.Credentials}); err != nil {
 		t.Fatal(err)
 	}

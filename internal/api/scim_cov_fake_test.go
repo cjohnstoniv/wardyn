@@ -474,7 +474,7 @@ func (s *scimCovStore) SuspendIdentity(_ context.Context, p store.SuspendPlan) (
 			i.DeactivatedAt = &t
 		}
 		i.AuthorityEpoch++
-		if i.PurgeAfter == nil && p.PurgeAfter > 0 {
+		if i.PurgeAfter == nil && p.PurgeAfter > 0 && (i.ID == p.IdentityID || slices.Contains(p.PurgePrincipals, i.Principal)) {
 			t := s.now.Add(p.PurgeAfter)
 			i.PurgeAfter = &t
 		}
@@ -501,7 +501,19 @@ func (s *scimCovStore) PrincipalsNamed(_ context.Context, name string) ([]string
 	if err := s.enter("PrincipalsNamed"); err != nil {
 		return nil, err
 	}
-	return slices.Clone(s.emailSubs[strings.ToLower(name)]), nil
+	if subs, ok := s.emailSubs[strings.ToLower(name)]; ok {
+		return slices.Clone(subs), nil
+	}
+	// An entra:<tenant>:<object> name stands for the principals bound to that object, as the store's does.
+	var out []string
+	if tid, oid, ok := strings.Cut(strings.TrimPrefix(name, entraPrincipalPrefix), ":"); ok && strings.HasPrefix(name, entraPrincipalPrefix) {
+		for _, id := range s.idents {
+			if id.Principal != "" && id.ObjectID == oid && (id.TenantID == tid || id.TenantID == "") && !slices.Contains(out, id.Principal) {
+				out = append(out, id.Principal)
+			}
+		}
+	}
+	return out, nil
 }
 
 func (s *scimCovStore) ListNonTerminalRunsBy(_ context.Context, createdBy string) ([]types.AgentRun, error) {
@@ -609,18 +621,26 @@ func (s *scimCovStore) MarkIdentityPurged(_ context.Context, id uuid.UUID, requi
 	return true, nil
 }
 
-func (s *scimCovStore) PurgeDueIdentities(_ context.Context, _ int) ([]uuid.UUID, error) {
+func (s *scimCovStore) PurgeDueIdentities(_ context.Context, _ int) ([]store.DueIdentity, error) {
 	s.mu.Lock()
 	if err := s.enter("PurgeDueIdentities"); err != nil {
 		s.mu.Unlock()
 		return nil, err
 	}
-	var out []uuid.UUID
+	var suspended, out []store.DueIdentity
 	for _, id := range s.order {
 		if i := s.idents[id]; i.PurgedAt == nil && i.DeactivatedAt != nil && i.PurgeAfter != nil && !i.PurgeAfter.After(s.now) {
-			out = append(out, id)
+			d := store.DueIdentity{ID: id, Suspended: slices.ContainsFunc(s.jobs, func(j *store.DeprovisionJob) bool {
+				return j.IdentityID == id && j.Kind == store.JobKindSuspend
+			})}
+			if d.Suspended {
+				suspended = append(suspended, d)
+			} else {
+				out = append(out, d)
+			}
 		}
 	}
+	out = append(suspended, out...)
 	hook := s.afterDue
 	s.mu.Unlock()
 	if hook != nil {

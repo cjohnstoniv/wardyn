@@ -289,7 +289,7 @@ func TestPG_CredentialErase_NestsOnOneLockConnection(t *testing.T) {
 	// A second connection for the inner lock would wait out the one-connection
 	// pool and be refused; the context bounds the test if the erase hangs.
 	var rep secretstore.EraseReport
-	if err := p.a.eraseLocked(ctx, owner, rowID, &rep); err != nil {
+	if err := p.a.eraseLocked(ctx, owner, rowID, nil, &rep); err != nil {
 		t.Fatalf("erase: %v", err)
 	}
 	if rep.Count < 2 {
