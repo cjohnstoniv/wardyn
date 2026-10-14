@@ -56,6 +56,12 @@ func runnerPoolCmd(client clientFn) *cobra.Command {
 	return subcommandGroup(cmd)
 }
 
+// manageOnly is a row the caller may only manage, an administrator's oversight row of someone else's
+// pool: it is not theirs to use or to put a runner in.
+func manageOnly(p sdk.RunnerPoolChoice) bool {
+	return p.Availability == sdk.RunnerPoolUnavailable && p.Reason == runnerpool.ReasonNotFound
+}
+
 // printRunnerPools is the list: ID NAME TYPE AVAILABILITY. A row the caller may only manage (availability
 // unavailable, reason runner_pool_not_found) is left out unless all is set, and then an OWNER column
 // is added.
@@ -67,7 +73,7 @@ func printRunnerPools(w io.Writer, list sdk.RunnerPoolList, all bool) error {
 	}
 	fmt.Fprintln(tw, head)
 	for _, p := range list.Pools {
-		if !all && p.Availability == sdk.RunnerPoolUnavailable && p.Reason == runnerpool.ReasonNotFound {
+		if !all && manageOnly(p.RunnerPoolChoice) {
 			continue
 		}
 		availability := p.Availability

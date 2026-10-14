@@ -14,6 +14,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/federation"
 	"github.com/cjohnstoniv/wardyn/internal/runneridentity"
+	"github.com/cjohnstoniv/wardyn/internal/runnerpool"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	sdk "github.com/cjohnstoniv/wardyn/pkg/client"
@@ -53,6 +54,8 @@ func TestRunnerClaimPutsTheRunnerInAPool(t *testing.T) {
 		{"existing pool", map[string]any{
 			"GET /api/v1/runner-pools": sdk.RunnerPoolList{Pools: []sdk.RunnerPoolCatalogueEntry{
 				{RunnerPoolChoice: sdk.RunnerPoolChoice{ID: uuid.New(), Name: "Laptop", Scope: sdk.RunnerPoolOrganization}},
+				// an administrator's list also carries another person's pool of the same name, as a manage-only row
+				{RunnerPoolChoice: sdk.RunnerPoolChoice{ID: uuid.New(), Name: "Laptop", Scope: sdk.RunnerPoolUser, Availability: sdk.RunnerPoolUnavailable, Reason: runnerpool.ReasonNotFound}, Owner: "bob"},
 				{RunnerPoolChoice: sdk.RunnerPoolChoice{ID: existing, Name: "Laptop", Scope: sdk.RunnerPoolUser}}}},
 			"GET /api/v1/runner-pools/" + existing.String():              sdk.RunnerPool{ID: existing, Name: "Laptop", Scope: sdk.RunnerPoolUser},
 			"GET /api/v1/runner-pools/" + existing.String() + "/members": []sdk.RunnerPoolMemberView{},
@@ -93,5 +96,26 @@ func TestRunnerClaimPoolFailureAndFlagRules(t *testing.T) {
 	n := len(srv.reqs)
 	if err := execCmd(t, "runner", "claim", "--state-dir", state, "--default", "--url", srv.URL, "--token", "t"); err == nil || len(srv.reqs) != n {
 		t.Fatalf("--default without --pool = %v after %d new requests, want a refusal before any", err, len(srv.reqs)-n)
+	}
+}
+
+// With only another person's same-named pool in the list, the person's own pool is made, not theirs used.
+func TestRunnerClaimPoolPassesOverAnotherPersonsPool(t *testing.T) {
+	id, theirs, created := uuid.New(), uuid.New(), uuid.New()
+	srv := newPoolRoutes(t, map[string]any{
+		"POST /api/v1/me/runners/" + id.String() + "/claim": types.RunnerRegistration{RunnerID: id, State: types.RunnerClaimed},
+		"GET /api/v1/runner-pools": sdk.RunnerPoolList{Pools: []sdk.RunnerPoolCatalogueEntry{
+			{RunnerPoolChoice: sdk.RunnerPoolChoice{ID: theirs, Name: "Laptop", Scope: sdk.RunnerPoolUser, Availability: sdk.RunnerPoolUnavailable, Reason: runnerpool.ReasonNotFound}, Owner: "bob"}}},
+		"POST /api/v1/me/runner-pools": sdk.RunnerPool{ID: created, Name: "Laptop", Scope: sdk.RunnerPoolUser},
+		"GET /api/v1/me/runners":       []sdk.RunnerView{{ID: id, State: types.RunnerClaimed}},
+		"PUT *":                        sdk.RunnerPoolMember{PoolID: created},
+	})
+	state := savedIdentity(t, id, srv.URL)
+	if _, err := execCmdCapture(t, "runner", "claim", "--state-dir", state, "--pool", "Laptop", "--url", srv.URL, "--token", "t"); err != nil {
+		t.Fatal(err)
+	}
+	if !srv.sent(http.MethodPost, "/api/v1/me/runner-pools") || srv.sent(http.MethodPut, "/api/v1/me/runner-pools/"+theirs.String()+"/runners/"+id.String()) ||
+		!srv.sent(http.MethodPut, "/api/v1/me/runner-pools/"+created.String()+"/runners/"+id.String()) {
+		t.Fatalf("sent %+v", srv.reqs)
 	}
 }
