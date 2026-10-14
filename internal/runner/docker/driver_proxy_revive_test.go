@@ -69,7 +69,7 @@ func TestReplaceProxy_ALostRunsProxyComesBackAtItsAddress(t *testing.T) {
 	if p == old || p == nil || p.state == nil || !p.state.Running {
 		t.Fatalf("new proxy = %+v; want a new, running container", p)
 	}
-	if got := f.stdinOf(proxyContainerName(runID)); string(got) != string(fresh) {
+	if got := f.stdinOf(proxyContainerName(runID)); !sameConfigExceptListen(t, got, fresh) {
 		t.Errorf("new proxy stdin = %s; want the config handed in", got)
 	}
 	if len(f.attached) != 1 || f.attached[0].started {
@@ -217,7 +217,7 @@ func TestReplaceProxy_NewProxyExitsAtConfigLoad(t *testing.T) {
 	// removing it — that inspect must not consume the NEW container's
 	// exitAfterInspects budget, so onCreate resets the counter the instant
 	// the NEW container is actually created.
-	f.exitAfterInspects = map[string]int{proxyContainerName(runID): 2}
+	f.exitAfterInspects = map[string]int{proxyContainerName(runID): 3} // the listen lookup takes the first inspect
 	f.logs = map[string][]byte{proxyContainerName(runID): muxFrame(1, `unknown field "y"`)}
 	f.onCreate = func(name string) {
 		if name == proxyContainerName(runID) {
@@ -381,7 +381,7 @@ func TestReplaceProxy_RetryRecoversFromEveryFailurePoint(t *testing.T) {
 			if ep == nil || ep.IPAMConfig == nil || ep.IPAMConfig.IPv4Address.String() != "10.88.0.2" {
 				t.Errorf("proxy endpoint = %+v; want it pinned to the agent's wardyn-proxy address 10.88.0.2", ep)
 			}
-			if got := f.stdinOf(name); string(got) != string(cfg) {
+			if got := f.stdinOf(name); !sameConfigExceptListen(t, got, cfg) {
 				t.Errorf("proxy stdin = %q; want the config handed in", got)
 			}
 		})

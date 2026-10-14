@@ -51,6 +51,10 @@ func (fakePullResponse) JSONMessages(context.Context) iter.Seq2[jsonstream.Messa
 }
 func (fakePullResponse) Wait(context.Context) error { return nil }
 
+// fakeJoinedNetIP is the address ContainerInspect reports on a network a
+// container joined through NetworkConnect.
+const fakeJoinedNetIP = "172.30.0.9"
+
 // createdContainer records a ContainerCreate call for assertions.
 type createdContainer struct {
 	name string
@@ -680,24 +684,26 @@ func (f *fakeDocker) ContainerInspect(ctx context.Context, id string, _ client.C
 	// to pin it in the agent's /etc/hosts). Gateway is left empty; the real
 	// gatewayless-L0 assertion runs against a real docker client (network_test).
 	nets := map[string]*network.EndpointSettings{}
-	addNet := func(name string) {
+	// A network joined later (the proxy's control-plane-facing one) gets an
+	// address of its own, so a test can tell the two endpoints apart.
+	addNet := func(name, ip string) {
 		if name == "" || name == "none" || name == "host" || name == "bridge" || name == "default" {
 			return
 		}
 		if _, ok := nets[name]; !ok {
-			nets[name] = &network.EndpointSettings{IPAddress: netip.MustParseAddr("10.88.0.2"), NetworkID: name}
+			nets[name] = &network.EndpointSettings{IPAddress: netip.MustParseAddr(ip), NetworkID: name}
 		}
 	}
 	if c.host != nil {
-		addNet(string(c.host.NetworkMode))
+		addNet(string(c.host.NetworkMode), "10.88.0.2")
 	}
 	if c.net != nil {
 		for name := range c.net.EndpointsConfig {
-			addNet(name)
+			addNet(name, "10.88.0.2")
 		}
 	}
 	for _, n := range c.connectedTo {
-		addNet(n)
+		addNet(n, fakeJoinedNetIP)
 	}
 	// Mounts: an anonymous volume per declared volume, then the run's own
 	// mounts, as the daemon reports them.
