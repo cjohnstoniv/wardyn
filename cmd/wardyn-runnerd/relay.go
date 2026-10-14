@@ -24,12 +24,11 @@ import (
 // entry maps to Docker's host-gateway; this listener there copies each
 // connection, unread, over one relay stream on the runner's own session. TLS
 // ends at the org, so only ciphertext passes through, and nothing is forwarded
-// anywhere but that stream.
+// anywhere but that stream. serve admits addr (relayBind, explicitRelayBind)
+// before the runner goes online.
 type localRelay struct {
-	ctx     context.Context
-	gateway netip.Addr
-	// unusable is why this host can listen for no relay; every Ensure answers it.
-	unusable error
+	ctx  context.Context
+	addr netip.Addr
 
 	mu        sync.Mutex
 	closed    bool
@@ -38,13 +37,8 @@ type localRelay struct {
 	conns     map[net.Conn]*runnerwire.Peer // each copy and the session carrying it
 }
 
-func newLocalRelay(ctx context.Context, gateway netip.Addr, bridge []netip.Addr, lookupErr error) *localRelay {
-	r := &localRelay{ctx: ctx, gateway: gateway, listeners: map[uint16]net.Listener{}, conns: map[net.Conn]*runnerwire.Peer{}}
-	r.unusable = lookupErr
-	if r.unusable == nil {
-		r.unusable = relayBind(gateway, bridge)
-	}
-	return r
+func newLocalRelay(ctx context.Context, addr netip.Addr) *localRelay {
+	return &localRelay{ctx: ctx, addr: addr, listeners: map[uint16]net.Listener{}, conns: map[net.Conn]*runnerwire.Peer{}}
 }
 
 // relayBind admits only Docker's host-gateway address held by the Docker
@@ -62,12 +56,28 @@ func relayBind(gateway netip.Addr, bridge []netip.Addr) error {
 	return nil
 }
 
-// Ensure is the Docker driver's ControlPlaneRelay: the relay listens on the
-// host-gateway address at the port of u, the run's control-plane URL.
-func (r *localRelay) Ensure(u *url.URL) error {
-	if r.unusable != nil {
-		return r.unusable
+// explicitRelayBind admits a --relay-listen address: never unspecified or
+// multicast. Docker Desktop's host-gateway reaches this host's loopback, so
+// there only a loopback address is reachable from a proxy. On any other engine
+// the address must be the engine's own host-gateway, held by its bridge;
+// loopback there would show the runner online and refuse every run.
+func explicitRelayBind(addr netip.Addr, desktop bool, gateway netip.Addr, bridge []netip.Addr) error {
+	switch {
+	case addr.IsUnspecified() || addr.IsMulticast():
+		return fmt.Errorf("relay: refusing --relay-listen %s: it must be one address of this host", addr)
+	case desktop && !addr.IsLoopback():
+		return fmt.Errorf("relay: refusing --relay-listen %s: Docker Desktop's host-gateway reaches only this host's loopback, so use 127.0.0.1", addr)
+	case desktop:
+		return nil
+	case addr != gateway:
+		return fmt.Errorf("relay: refusing --relay-listen %s: a proxy on this engine reaches only its host-gateway %s (loopback works only with Docker Desktop)", addr, gateway)
 	}
+	return relayBind(gateway, bridge)
+}
+
+// Ensure is the Docker driver's ControlPlaneRelay: the relay listens on its
+// address at the port of u, the run's control-plane URL.
+func (r *localRelay) Ensure(u *url.URL) error {
 	port := uint64(443)
 	if p := u.Port(); p != "" {
 		var err error
@@ -83,7 +93,7 @@ func (r *localRelay) Ensure(u *url.URL) error {
 	if r.listeners[uint16(port)] != nil {
 		return nil
 	}
-	ln, err := net.Listen("tcp", netip.AddrPortFrom(r.gateway, uint16(port)).String())
+	ln, err := net.Listen("tcp", netip.AddrPortFrom(r.addr, uint16(port)).String())
 	if err != nil {
 		return fmt.Errorf("relay: %w", err)
 	}

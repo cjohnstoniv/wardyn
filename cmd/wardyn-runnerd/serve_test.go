@@ -6,6 +6,9 @@ package main
 import (
 	"context"
 	"crypto/ed25519"
+	"errors"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"testing"
 
@@ -53,5 +56,36 @@ func TestServeRecordingModeMatchesCapture(t *testing.T) {
 		if got != tc.on || (err != nil) != tc.bad {
 			t.Fatalf("mode=%s enabled=%v error=%v", tc.mode, got, err)
 		}
+	}
+}
+
+// WARDYN_RELAY_LISTEN reaches the builder, and a builder's refusal (a relay or
+// Docker this host cannot use) ends serve before the runner ever dials its org.
+func TestServeRefusesBeforeDialingTheOrg(t *testing.T) {
+	dialed := false
+	org := httptest.NewTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { dialed = true }))
+	defer org.Close()
+	stateDir := filepath.Join(t.TempDir(), "runner")
+	key, err := runneridentity.Generate(stateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity := runneridentity.Identity{RunnerID: uuid.New(), PrivateKey: key, Fingerprint: runnerwire.Fingerprint(key.Public().(ed25519.PublicKey)), OrgURLSHA256: federation.OrgURLSHA256(org.URL)}
+	if err := runneridentity.Save(stateDir, identity); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("WARDYN_RELAY_LISTEN", "127.0.0.1")
+	refusal := errors.New("relay: unusable")
+	var got serveOptions
+	cmd := newServeCommand(func(_ context.Context, _ runneridentity.Identity, _ string, opts serveOptions) (runnerRuntime, error) {
+		got = opts
+		return runnerRuntime{}, refusal
+	})
+	cmd.SetArgs([]string{"--org", org.URL, "--state-dir", stateDir})
+	if err := cmd.Execute(); !errors.Is(err, refusal) || dialed {
+		t.Fatalf("serve = %v, dialed=%v; want the builder's refusal and no dial", err, dialed)
+	}
+	if got.relayListen != "127.0.0.1" {
+		t.Fatalf("relayListen = %q, want the WARDYN_RELAY_LISTEN value", got.relayListen)
 	}
 }

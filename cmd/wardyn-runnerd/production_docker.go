@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/containerd/errdefs"
 	"github.com/moby/moby/client"
 
 	"github.com/cjohnstoniv/wardyn/internal/placement"
@@ -41,11 +42,17 @@ func productionRunnerHooks(ctx context.Context, identity runneridentity.Identity
 	if err != nil {
 		return runnerRuntime{}, err
 	}
-	gateway, bridge, err := dockerHostGateway(ctx)
-	if err != nil {
-		slog.WarnContext(ctx, "runner relay unavailable: every run create is refused until it can listen", "error", err)
+	var explicit netip.Addr
+	if opts.relayListen != "" {
+		if explicit, err = netip.ParseAddr(opts.relayListen); err != nil {
+			return runnerRuntime{}, fmt.Errorf("--relay-listen: %w", err)
+		}
 	}
-	relay := newLocalRelay(ctx, gateway, bridge, err)
+	addr, err := prepareDocker(ctx, opts.network, explicit)
+	if err != nil {
+		return runnerRuntime{}, err
+	}
+	relay := newLocalRelay(ctx, addr)
 	sub, err := docker.New(docker.Config{RunnerID: identity.RunnerID.String(), ProxyImage: opts.proxyImage, InternalNetwork: opts.network, Record: record, RunnerStateDir: stateDir,
 		ControlPlaneRelay: relay.Ensure})
 	if err != nil {
@@ -98,24 +105,70 @@ func readDockerCapacity(ctx context.Context) (placement.Capacity, error) {
 	return engineCapacity(info.Info.NCPU, info.Info.MemTotal), nil
 }
 
-// dockerHostGateway is the address a native engine resolves host-gateway to
-// (the default bridge's gateway, unless the daemon sets host-gateway-ip, when
-// the relay is simply unreachable) and the addresses that bridge's interface
-// holds on this host. Docker Desktop's host-gateway is its VM's host address,
-// not an interface here, so it has no relay.
-func dockerHostGateway(ctx context.Context) (netip.Addr, []netip.Addr, error) {
+// prepareDocker is serve's one look at the engine before the runner dials its
+// organisation, so a runner that cannot accept runs never shows online: the
+// engine answers, the proxy sidecars' bridge exists, and the relay has an
+// address a proxy reaches. Any failure exits serve; the service manager's
+// restart policy is the retry.
+func prepareDocker(ctx context.Context, network string, explicit netip.Addr) (netip.Addr, error) {
 	cli, err := client.New(client.FromEnv)
 	if err != nil {
-		return netip.Addr{}, nil, err
+		return netip.Addr{}, err
 	}
 	defer cli.Close()
 	info, err := cli.Info(ctx, client.InfoOptions{})
 	if err != nil {
-		return netip.Addr{}, nil, err
+		return netip.Addr{}, fmt.Errorf("docker engine not reachable: %w", err)
 	}
-	if info.Info.OperatingSystem == "Docker Desktop" {
-		return netip.Addr{}, nil, errors.New("relay: Docker Desktop's host-gateway is its VM's host address, not an interface of this host")
+	addr, err := relayAddress(ctx, cli, info.Info.OperatingSystem == "Docker Desktop", explicit)
+	if err != nil {
+		return netip.Addr{}, err
 	}
+	return addr, ensureInternalNetwork(ctx, cli, network)
+}
+
+// relayAddress is where the relay listens: --relay-listen when set, otherwise
+// the native engine's host-gateway. Docker Desktop's host-gateway is its VM's
+// address for this host's loopback, not an interface here, so it needs the flag.
+func relayAddress(ctx context.Context, cli *client.Client, desktop bool, explicit netip.Addr) (netip.Addr, error) {
+	if desktop {
+		if !explicit.IsValid() {
+			return netip.Addr{}, errors.New("relay: Docker Desktop's host-gateway is not an interface of this host; serve with --relay-listen 127.0.0.1")
+		}
+		return explicit, explicitRelayBind(explicit, true, netip.Addr{}, nil)
+	}
+	gateway, bridge, err := dockerHostGateway(ctx, cli)
+	if err != nil {
+		return netip.Addr{}, err
+	}
+	if explicit.IsValid() {
+		return explicit, explicitRelayBind(explicit, false, gateway, bridge)
+	}
+	return gateway, relayBind(gateway, bridge)
+}
+
+// ensureInternalNetwork creates the proxy sidecars' bridge when it is missing,
+// as deploy/runner/install.sh does.
+func ensureInternalNetwork(ctx context.Context, cli *client.Client, name string) error {
+	_, err := cli.NetworkInspect(ctx, name, client.NetworkInspectOptions{})
+	switch {
+	case err == nil:
+		return nil
+	case !errdefs.IsNotFound(err):
+		return fmt.Errorf("docker network %s: %w", name, err)
+	}
+	if _, err := cli.NetworkCreate(ctx, name, client.NetworkCreateOptions{Driver: "bridge"}); err != nil {
+		return fmt.Errorf("create docker network %s: %w", name, err)
+	}
+	slog.InfoContext(ctx, "created the Docker network for proxy sidecars", "network", name)
+	return nil
+}
+
+// dockerHostGateway is the address a native engine resolves host-gateway to
+// (the default bridge's gateway, unless the daemon sets host-gateway-ip, when
+// the relay is simply unreachable) and the addresses that bridge's interface
+// holds on this host.
+func dockerHostGateway(ctx context.Context, cli *client.Client) (netip.Addr, []netip.Addr, error) {
 	insp, err := cli.NetworkInspect(ctx, "bridge", client.NetworkInspectOptions{})
 	if err != nil {
 		return netip.Addr{}, nil, err
