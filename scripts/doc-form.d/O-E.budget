@@ -60,6 +60,8 @@
 # docs/OPERATIONS.md 53883 adds 43 over 53840 (0.9 DS4-M6, after merging lane/090-DS4-M5); measured at merge.
 # docs/OPERATIONS.md 53884 adds 1 over 53883 (0.9 DS4-M6: the retired pool words); measured at merge.
 # docs/OPERATIONS.md 54108 adds 224 over 53884 (0.9 DS4-M6, after merging lane/090-DS4-M5); measured at merge.
+# docs/OPERATIONS.md 53883 adds 43 over 53840 (0.9 E6b-pdc, after merging lane/090-DS4-M8); measured at merge.
+# docs/OPERATIONS.md 54108 adds 224 over 53884 (0.9 E6b-pdc, after merging lane/090-DS4-M8); measured at merge.
 docs/OPERATIONS.md=54108
 # docs/OPERATIONS.md 84747 adds 1534 over 83186 for the 0.8.9 component docs: 1158 (the Custom components section, including settings, attach rules, requirements, what a launch leaves behind, one credential per host and the shared secret), 90+7+5 (the `custom_component` feature value), 18 (nine kinds need only the absence of a deny), 17 (the audit log shrinks only by the partition drop), 31 (the `components` erasure row keeps the run's policy and grants), 58+30 (A46 on the run-scoped and export reads), 9 (`capability_feature` names components), 46 (a shared-secret run's policy export is a record), 58 (Azure DevOps lane redirects lose their token), 10 (buildInjector refuses a second rule for a host). The diff tool counts 1537, the gate 1534.
 # 0.9 runner registration: +27 words for the guarded admin token route tier row.
