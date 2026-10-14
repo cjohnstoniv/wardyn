@@ -482,8 +482,8 @@ func sessionGroups(rolesClaim, groupsClaim []string, claimNames map[string]any) 
 // nil identical to "asked, none" — this marker is the only thing that tells the two apart, and
 // Wardyn fails closed rather than dereference the pointer.
 //
-// BOTH claims are checked since both feed both derivations, in one function with two callers
-// (sessionGroups' truncation bit and overageWidensRole) — they diverged once, and on
+// BOTH claims are checked since both feed both derivations, in one function shared by
+// sessionGroups' truncation bit and the role and user-type refusals — they diverged once, and on
 // WARDYN_OIDC_DEFAULT_ROLE=admin that silently promoted a group-mapped member to super admin.
 func claimsOverage(claimNames map[string]any) bool {
 	for _, claim := range []string{"groups", "roles"} {
@@ -516,6 +516,39 @@ func unanswerableWidensRole(unanswerable bool, role string, matches []Match) boo
 		return false
 	}
 	return roleRank(role) > roleRank(RoleUser)
+}
+
+// unanswerableChangesUserType is the user-type twin of unanswerableWidensRole: when a roles/groups
+// claim went unanswered, it reports whether a role-map row names a user type that, added to the
+// types d's real matches named, would make pickUserType choose differently from d.UserType or
+// refuse. Any row may be the hidden one, an "@" key included: deriveRole matches every key against
+// roles, groups and email alike, and a group value can be an email address. Only the row keyed on
+// the caller's own email is answered for certain. A row naming a lower-priority type than the one
+// the answered claims settle cannot change the pick, so that sign-in is served. The admin tier is
+// exempt, as in deriveRole: no type decides anything for it.
+func unanswerableChangesUserType(unanswerable bool, d Derivation, email string, roleMap map[string]string, userTypes map[string]types.UserType) bool {
+	if !unanswerable || d.Role == RoleAdmin {
+		return false
+	}
+	// The types the answered claims named; the default's type stands in only when they named none,
+	// and any hidden type-naming match would displace it.
+	var named []string
+	for _, m := range d.Matches {
+		if m.Source == MatchSourceMapRow && m.UserType != "" && !slices.Contains(named, m.UserType) {
+			named = append(named, m.UserType)
+		}
+	}
+	self := strings.ToLower(strings.TrimSpace(email))
+	for k, v := range roleMap {
+		_, userType, ok := SplitMappingTarget(v)
+		if !ok || userType == "" || k == self || slices.Contains(named, userType) {
+			continue
+		}
+		if id, denial, _, _ := pickUserType(append(slices.Clip(named), userType), userTypes); denial != "" || id != d.UserType {
+			return true
+		}
+	}
+	return false
 }
 
 // emailInList reports whether email case-insensitively matches an entry in list. email is trimmed
