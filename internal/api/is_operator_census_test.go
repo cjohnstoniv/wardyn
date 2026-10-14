@@ -65,6 +65,8 @@ var isOperatorCensus = map[string]int{
 	// super admin's.
 	"user_drives_preview.go:handlePreviewUserDrive": 1,
 	"user_drives_tier.go:upsertUserDriveGrantAs":    1,
+	// The measured reason can carry a substrate's own error text, so only an operator reads it.
+	"runner_usage.go:remoteUsage": 1,
 	// The predicate itself.
 	"govern_admin.go:runUngoverned": 1,
 }

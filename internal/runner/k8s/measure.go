@@ -45,6 +45,11 @@ func (d *Driver) Measure(ctx context.Context) (types.RunnerAmounts, error) {
 		}
 	}
 	m := measureCluster(quotas.Items, nodes)
+	if err == nil && len(quotas.Items) > 0 && !d.cfg.ReadNodes {
+		if unset := unsetQuotaNames(m); len(unset) > 0 {
+			why = append(why, fmt.Sprintf("no ResourceQuota in %s sets %s and k8s.readNodes is off", d.cfg.Namespace, strings.Join(unset, ", ")))
+		}
+	}
 	if len(why) > 0 && (m.CPUMillis <= 0 || m.MemoryMiB <= 0 || m.DiskMiB <= 0) {
 		return m, errors.New(strings.Join(why, "; "))
 	}
@@ -77,4 +82,19 @@ func measureCluster(quotas []corev1.ResourceQuota, nodes []corev1.ResourceList) 
 		MemoryMiB: amount(corev1.ResourceRequestsMemory, corev1.ResourceMemory, mib),
 		DiskMiB:   amount(corev1.ResourceRequestsEphemeralStorage, corev1.ResourceEphemeralStorage, mib),
 	}
+}
+
+// unsetQuotaNames names the ResourceQuota requests that measured as 0.
+func unsetQuotaNames(m types.RunnerAmounts) []string {
+	var out []string
+	if m.CPUMillis <= 0 {
+		out = append(out, string(corev1.ResourceRequestsCPU))
+	}
+	if m.MemoryMiB <= 0 {
+		out = append(out, string(corev1.ResourceRequestsMemory))
+	}
+	if m.DiskMiB <= 0 {
+		out = append(out, string(corev1.ResourceRequestsEphemeralStorage))
+	}
+	return out
 }

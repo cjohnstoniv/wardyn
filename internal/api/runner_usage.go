@@ -59,7 +59,9 @@ func (s *Server) remoteUsage(ctx context.Context, rr types.RemoteRunner, used ty
 		reported = &m
 	}
 	u := runnerpool.Usage(rr.Limits, used, online, diskCapped(facts.EphemeralDiskEnforcement), reported)
-	u.ReportedWhy = why
+	if s.isOperator(ctx) { // the reason can carry the Kubernetes API's own error text
+		u.ReportedWhy = why
+	}
 	return u
 }
 

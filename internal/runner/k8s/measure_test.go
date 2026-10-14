@@ -67,6 +67,11 @@ func TestMeasureSaysWhyAnAmountIsUnknown(t *testing.T) {
 			want: "no ResourceQuota in " + testNamespace + " and k8s.readNodes is off"},
 		"no quota, node list forbidden": {cfg: Config{ReadNodes: true}, setup: func(cs *fake.Clientset) { cs.PrependReactor("list", "nodes", forbid("nodes")) },
 			want: "node list: forbidden"},
+		"a quota that sets only CPU and memory, nodes off": {cfg: Config{}, setup: func(cs *fake.Clientset) {
+			cpuMem := quota.DeepCopy()
+			delete(cpuMem.Spec.Hard, corev1.ResourceRequestsEphemeralStorage)
+			seed(t, cs, cpuMem)
+		}, want: "no ResourceQuota in " + testNamespace + " sets requests.ephemeral-storage and k8s.readNodes is off", wantMi: 16 * 1024},
 		"a quota that sets everything": {cfg: Config{}, setup: func(cs *fake.Clientset) { seed(t, cs, quota) }, wantMi: 16 * 1024},
 	} {
 		t.Run(name, func(t *testing.T) {
