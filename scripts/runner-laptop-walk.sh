@@ -246,8 +246,8 @@ jq -e '.online == true' "${TMP}/resp.json" >/dev/null || { tail -20 "${EVIDENCE_
 pass "runner online with no relay flags: $(grep -m1 'run relay reachable' "${EVIDENCE_DIR}/serve.log" || echo 'no "run relay reachable" log line')"
 grep -q 'run relay reachable' "${EVIDENCE_DIR}/serve.log" || fail "serve.log has no 'run relay reachable' line"
 # The relay target as a run's proxy sees it: what host-gateway resolves to on
-# this engine, read by a throwaway container (the agent image carries getent).
-RELAY_TARGET_IP="$(rd run --rm --entrypoint getent --add-host walk-relay-target:host-gateway "${AGENT_IMAGE}" hosts walk-relay-target 2>/dev/null | awk '{print $1; exit}')"
+# this engine, read by a throwaway container (the agent image carries getent; ahostsv4, since Docker Desktop maps host-gateway to an IPv6 address too).
+RELAY_TARGET_IP="$(rd run --rm --entrypoint getent --add-host walk-relay-target:host-gateway "${AGENT_IMAGE}" ahostsv4 walk-relay-target 2>/dev/null | awk '{print $1; exit}')"
 [[ "${RELAY_TARGET_IP}" =~ ^[0-9.]+$ ]] || { fail "could not resolve host-gateway to an IP on the runner engine: '${RELAY_TARGET_IP}'"; RELAY_TARGET_IP="192.0.2.1"; }
 cat >"${TMP}/policy.json" <<'EOF'
 {"allowed_domains": [], "denied_domains": [], "first_use_approval": "always_deny", "allowed_methods": [],
