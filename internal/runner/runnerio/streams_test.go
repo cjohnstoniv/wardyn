@@ -133,12 +133,7 @@ func TestExecReplyKeepsStreamsAliveAndHalfCloseDrains(t *testing.T) {
 	if err = e.Close(); err != nil {
 		t.Fatal(err)
 	}
-	server.mu.Lock()
-	left := len(server.execs)
-	server.mu.Unlock()
-	if left != 0 || len(server.execSlots) != 0 {
-		t.Fatalf("exec close leaked state: %d", left)
-	}
+	waitExecsDrained(t, server, "exec close leaked state")
 	local, _ := server.local(ref)
 	if fake.Called("kill", local) || fake.Called("stop", local) {
 		t.Fatal("closing exec stopped sandbox")
@@ -158,21 +153,27 @@ func TestPeerLossClosesExecWithoutStoppingSandbox(t *testing.T) {
 	if _, err = e.Stdin.Write([]byte("after disconnect")); err == nil {
 		t.Fatal("disconnected stdin accepted bytes")
 	}
-	// removeExec drops the map entry before it frees the slot, so a copy
-	// goroutine that already won the race can still be mid-close when Offline returns.
+	waitExecsDrained(t, server, "disconnect leaked execs")
+	local, _ := server.local(ref)
+	if _, err = fake.Status(ctx, local); err != nil {
+		t.Fatalf("sandbox lost on stream disconnect: %v", err)
+	}
+}
+
+// waitExecsDrained waits for every exec and its slot to be gone. removeExec drops
+// the map entry before it frees the slot, so a copy goroutine that already won the
+// race can still be mid-close when the call under test returns.
+func waitExecsDrained(t *testing.T, server *Server, what string) {
+	t.Helper()
 	for deadline := time.Now().Add(2 * time.Second); ; time.Sleep(time.Millisecond) {
 		server.mu.Lock()
 		left, slots := len(server.execs), len(server.execSlots)
 		server.mu.Unlock()
 		if left == 0 && slots == 0 {
-			break
+			return
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("disconnect leaked execs: %d, slots: %d", left, slots)
+			t.Fatalf("%s: %d execs, %d slots", what, left, slots)
 		}
-	}
-	local, _ := server.local(ref)
-	if _, err = fake.Status(ctx, local); err != nil {
-		t.Fatalf("sandbox lost on stream disconnect: %v", err)
 	}
 }
