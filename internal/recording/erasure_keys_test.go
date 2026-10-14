@@ -13,7 +13,7 @@ import (
 
 func erasureKeyContract(t *testing.T, s recording.Store) {
 	t.Helper()
-	for _, key := range []string{".", "..~suffix", "~suffix", "parent~attach~part", "percent%_", strings.Repeat("k", 240)} {
+	for _, key := range []string{".", "..~suffix", "~suffix", "parent~attach~part", "a~b~c~d~e", "percent%_", strings.Repeat("k", 240)} {
 		t.Run(key, func(t *testing.T) {
 			family, _, _ := strings.Cut(key, "~")
 			other := family + "-distinct"
@@ -54,7 +54,7 @@ func TestPGStore_ErasureKeyFamilies(t *testing.T) {
 	pool := pgPool(t)
 	// These are deliberately fixed pathological keys; clean just these test
 	// families so rerunning against the same test database remains meaningful.
-	for _, run := range []string{".", "..", "", "parent", "..~suffix", "~suffix", "parent~attach~part", "percent%_", strings.Repeat("k", 240)} {
+	for _, run := range []string{".", "..", "", "parent", "..~suffix", "~suffix", "parent~attach~part", "a~b~c~d~e", "percent%_", strings.Repeat("k", 240)} {
 		if _, err := pool.Exec(t.Context(), `DELETE FROM recording_erasures WHERE run_id = $1`, run); err != nil {
 			t.Fatal(err)
 		}

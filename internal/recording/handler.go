@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 )
 
 // Authorizer decides whether req's caller may read the recording whose cast
@@ -34,13 +35,16 @@ type Authorizer func(r *http.Request, runIDPrefix string) bool
 // run B's cast under an authorization scoped to run A. Both checks collapse
 // to the same 404 (no existence oracle). Store errors produce 500. A bare run
 // id is served joined across its tail-uploaded parts (OpenJoined).
+//
+// A key servableKey or canonicalRunID refuses gets that same 404 before
+// authorize or the store is asked anything.
 func Handler(store Store, authorize Authorizer) http.Handler {
 	r := chi.NewRouter()
 	r.Get("/{runID}", func(w http.ResponseWriter, req *http.Request) {
 		key := chi.URLParam(req, "runID")
 		outerID := chi.URLParam(req, "id")
 		prefix, _, _ := strings.Cut(key, castSep)
-		if !strings.EqualFold(prefix, outerID) || !authorize(req, prefix) {
+		if !servableKey(key) || !canonicalRunID(prefix) || !strings.EqualFold(prefix, outerID) || !authorize(req, prefix) {
 			http.Error(w, "recording not found", http.StatusNotFound)
 			return
 		}
@@ -66,4 +70,19 @@ func Handler(store Store, authorize Authorizer) http.Handler {
 		_, _ = io.Copy(w, rc)
 	})
 	return r
+}
+
+// servableKey reports whether key may be asked of the store at all. Handler
+// checks it itself rather than leaning on the store's validKey: a store
+// refusal is not a not-found, so it would reach the caller as a 500.
+func servableKey(key string) bool {
+	return len(key) <= maxCastKeyBytes
+}
+
+// canonicalRunID reports whether prefix is a run id in its one canonical
+// spelling. uuid.Parse also takes upper case, braces, "urn:uuid:" and bare
+// hex, and the fs store takes a lock file named after each spelling it sees.
+func canonicalRunID(prefix string) bool {
+	id, err := uuid.Parse(prefix)
+	return err == nil && id.String() == prefix
 }

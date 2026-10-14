@@ -81,7 +81,7 @@ func relayedPut(t *testing.T, srv *Server, runnerID uuid.UUID, path, token, body
 	req.Header.Set("Authorization", "Bearer "+token)
 	req = req.WithContext(relayConnContext(req.Context(), relayedConn{runner: runnerID}))
 	w := httptest.NewRecorder()
-	srv.relayRoutes(srv.InternalHandler()).ServeHTTP(w, req)
+	srv.relayRoutes(srv.InternalHandler()).ServeHTTP(deadlineRecorder{w}, req)
 	return w
 }
 

@@ -7,9 +7,11 @@ import (
 	"bytes"
 	"cmp"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -72,6 +74,70 @@ func (s *Server) recordingReader(r *http.Request, run types.AgentRun) bool {
 // long PTY session's asciicast while bounding a single hostile upload. Bytes
 // beyond the cap cause http.MaxBytesReader to error, which we surface as 413.
 const maxRecordingUploadBytes = 64 << 20 // 64 MiB
+
+// recordingUploadReadWindow bounds how long an upload's body may take to
+// arrive once the store has admitted its save, so a slow or stalled client
+// holds a save slot for at most this long. It stays below the proxy's 130 s
+// control-plane call timeout: an upload admitted within the store's 65 s
+// admission wait still answers in 65 + 60 = 125 s, before its proxy gives up.
+// 60 s carries a 32 MiB part (where wardyn-rec cuts one) at about 4.5 Mbit/s
+// and a 64 MiB upload at about 9 Mbit/s. A body still arriving then fails as
+// any read error does: nothing is stored. A var so tests can shorten it.
+var recordingUploadReadWindow = 60 * time.Second
+
+// readWindow arms the connection's read deadline at the body's first Read. The
+// store reads only once it has admitted the save, so queue time is not charged.
+type readWindow struct {
+	io.ReadCloser
+	rc    *http.ResponseController
+	armed bool
+}
+
+func (b *readWindow) Read(p []byte) (int, error) {
+	if !b.armed {
+		b.armed = true
+		if err := b.rc.SetReadDeadline(time.Now().Add(recordingUploadReadWindow)); err != nil {
+			return 0, err
+		}
+	}
+	return b.ReadCloser.Read(p)
+}
+
+// storeUpload masks and stores one upload body as part of runID's cast. A
+// connection that cannot take a read deadline is refused, never read without one.
+func (s *Server) storeUpload(w http.ResponseWriter, r *http.Request, run types.AgentRun, runID uuid.UUID, part int) error {
+	rc := http.NewResponseController(w)
+	if err := rc.SetReadDeadline(time.Time{}); err != nil {
+		return fmt.Errorf("recording upload: connection takes no read deadline: %w", err)
+	}
+
+	// Cap the upload before masking; the reader preserves MaxBytesError so an
+	// over-cap upload remains a 413 rather than a successful truncated cast.
+	limited := http.MaxBytesReader(w, &readWindow{ReadCloser: r.Body, rc: rc}, maxRecordingUploadBytes)
+
+	// PRIMARY masking point: read the upload body through a MaskingWriter so
+	// verbatim secret values are replaced with "<secret-hidden>" before the bytes
+	// reach the RecordingStore. A nil MaskRegistry is a safe no-op (pass-through).
+	//
+	// Honest residual: only verbatim byte-identical occurrences are masked.
+	// base64-encoded, hex-encoded, or model-narrated representations of secrets
+	// are NOT caught. This is intentional — masking catches the most likely
+	// accidental leakage vector (token printed to stdout/asciicast).
+	//
+	// Read only on the store's demand: an early storage failure must not leave
+	// an independent goroutine blocked reading the request body.
+	body := buildGuardedMaskingBody(limited, s.cfg.MaskRegistry, runID, s.maskGuard(runID))
+	// One person's uploads queue behind each other before they queue with
+	// everyone else's; a run with no person owner queues as itself.
+	ctx := r.Context()
+	if run.CreatedBy != "" && !run.OperatorOwned {
+		ctx = recording.WithAdmissionGroup(ctx, "owner:"+run.CreatedBy)
+	}
+	if part == 1 {
+		return s.cfg.RecordingStore.SaveCast(ctx, runID.String(), body)
+	}
+	return s.cfg.RecordingStore.SaveCastNamed(ctx, runID.String(), recording.PartSuffix(part), body)
+}
 
 // handleUploadRecording accepts a PUT /api/v1/internal/recordings/{runID} from
 // wardyn-rec running inside the agent container. The caller must hold a valid
@@ -146,29 +212,7 @@ func (s *Server) saveRecording(w http.ResponseWriter, r *http.Request, part int)
 		return
 	}
 
-	// Cap the upload before masking; the reader preserves MaxBytesError so an
-	// over-cap upload remains a 413 rather than a successful truncated cast.
-	limited := http.MaxBytesReader(w, r.Body, maxRecordingUploadBytes)
-
-	// PRIMARY masking point: read the upload body through a MaskingWriter so
-	// verbatim secret values are replaced with "<secret-hidden>" before the bytes
-	// reach the RecordingStore. A nil MaskRegistry is a safe no-op (pass-through).
-	//
-	// Honest residual: only verbatim byte-identical occurrences are masked.
-	// base64-encoded, hex-encoded, or model-narrated representations of secrets
-	// are NOT caught. This is intentional — masking catches the most likely
-	// accidental leakage vector (token printed to stdout/asciicast).
-	//
-	// Read only on the store's demand: an early storage failure must not leave
-	// an independent goroutine blocked reading the request body.
-	body := buildGuardedMaskingBody(limited, s.cfg.MaskRegistry, claims.RunID, s.maskGuard(claims.RunID))
-
-	var saveErr error
-	if part == 1 {
-		saveErr = s.cfg.RecordingStore.SaveCast(r.Context(), claims.RunID.String(), body)
-	} else {
-		saveErr = s.cfg.RecordingStore.SaveCastNamed(r.Context(), claims.RunID.String(), recording.PartSuffix(part), body)
-	}
+	saveErr := s.storeUpload(w, r, run, claims.RunID, part)
 	if saveErr == nil {
 		saveErr = s.uploadedRecordingOutput(r.Context(), claims.RunID)
 	}

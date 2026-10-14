@@ -8,6 +8,7 @@ import (
 	"context"
 	"io"
 	"sync"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -77,6 +78,10 @@ func runIsUnrecordable(run types.AgentRun) bool {
 // sessions; a streaming sink is the one after that.
 const maxSessionCastBytes = 8 << 20
 
+// sessionRecordingSaveWait bounds one session recording save: the store's 65 s
+// admission wait plus 30 s for the write. A var so tests can shorten it.
+var sessionRecordingSaveWait = 95 * time.Second
+
 // capBuffer is the bounded sink under a session CastWriter. CastWriter emits one
 // complete JSON line per Write, so refusing a write WHOLE (never partially)
 // leaves the buffer line-aligned and the cast well-formed. A dropped write is
@@ -143,7 +148,11 @@ func (s *Server) newSessionRecorder(run types.AgentRun, sessionID string, opts r
 		}
 
 		key := recording.CastKey(runID.String(), sessionID)
-		err := s.cfg.RecordingStore.SaveCastNamed(ctx, runID.String(), sessionID, bytes.NewReader(snap))
+		// ctx lives as long as the daemon; bound only the save, so the audit
+		// below (and the session.detach after it) is never held behind a store wait.
+		saveCtx, cancel := context.WithTimeout(ctx, sessionRecordingSaveWait)
+		err := s.cfg.RecordingStore.SaveCastNamed(saveCtx, runID.String(), sessionID, bytes.NewReader(snap))
+		cancel()
 		outcome := "success"
 		data := map[string]any{"session": sessionID, "key": key, "bytes": len(snap)}
 		if truncated {

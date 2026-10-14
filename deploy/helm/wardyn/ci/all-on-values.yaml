@@ -345,3 +345,4 @@ runner:
       cpuMillis: 400
       memoryMiB: 192
 maxConcurrentRuns: 25
+goMemLimit: "400MiB"

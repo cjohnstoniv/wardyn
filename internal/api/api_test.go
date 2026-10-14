@@ -473,7 +473,7 @@ func doVia(t *testing.T, wrap func(testing.TB, http.Handler) http.Handler, srv *
 	// loopback peer. Model that so local-mode tests exercise the allowed path.
 	r.RemoteAddr = "127.0.0.1:54321"
 	w := httptest.NewRecorder()
-	wrap(t, srv.Handler()).ServeHTTP(w, r)
+	wrap(t, srv.Handler()).ServeHTTP(deadlineRecorder{w}, r)
 	return w
 }
 

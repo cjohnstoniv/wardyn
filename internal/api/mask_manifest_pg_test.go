@@ -418,7 +418,7 @@ func TestMaskManifest_FenceDuringAnUploadRefusesIt(t *testing.T) {
 	served := make(chan struct{})
 	go func() {
 		defer close(served)
-		panicFails(t, a.srv.Handler()).ServeHTTP(w, req)
+		panicFails(t, a.srv.Handler()).ServeHTTP(deadlineRecorder{w}, req)
 	}()
 	if _, err := pw.Write([]byte("first chunk of the cast\n")); err != nil {
 		t.Fatal(err)

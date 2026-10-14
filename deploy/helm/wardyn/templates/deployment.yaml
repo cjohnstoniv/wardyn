@@ -603,6 +603,15 @@ spec:
             - name: WARDYN_MAX_CONCURRENT_RUNS
               value: {{ .Values.maxConcurrentRuns | int | quote }}
             {{- end }}
+            {{- /* $eff holds env and extraEnv names alike, so either one naming
+            GOMEMLIMIT replaces this default instead of sitting beside it. */ -}}
+            {{- if and .Values.goMemLimit (not (hasKey $eff "GOMEMLIMIT")) }}
+            {{- if not (regexMatch "^[0-9]+(B|KiB|MiB|GiB|TiB)$" (toString .Values.goMemLimit)) }}
+            {{- fail (printf "wardyn: goMemLimit must be a quoted string with a unit, e.g. \"400MiB\" (got %q). A bare number renders in a form the Go runtime refuses at start." (toString .Values.goMemLimit)) }}
+            {{- end }}
+            - name: GOMEMLIMIT
+              value: {{ .Values.goMemLimit | quote }}
+            {{- end }}
             {{- with .Values.extraEnv }}
             # Raw EnvVar entries, so secret-bearing WARDYN_* (OIDC client secret,
             # composer API key, audit-sink JSON) ride a secretKeyRef instead of
