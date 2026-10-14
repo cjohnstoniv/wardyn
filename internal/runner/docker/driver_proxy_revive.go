@@ -109,7 +109,9 @@ func (d *Driver) startProxy(ctx context.Context, runID uuid.UUID, labels map[str
 		// docker needs the explicit mapping. Scoped to the proxy and
 		// consulted ONLY by the trusted forward path, never by the agent's
 		// policy-governed egress (still denies host IPs via the private-IP
-		// guard) — general egress is NOT broadened.
+		// guard) — general egress is NOT broadened. On a runner both this name
+		// and the control-plane name map to the relay's target below, so the
+		// proxy's control-plane clamp covers the one address either resolves to.
 		ExtraHosts: []string{"host.docker.internal:host-gateway"},
 		// SECURITY: the proxy only relays HTTP, so a tight resource envelope
 		// still leaves ample headroom while bounding a compromised proxy: its
@@ -121,11 +123,11 @@ func (d *Driver) startProxy(ctx context.Context, runID uuid.UUID, labels map[str
 		host.Binds = []string{d.cfg.ProxyBinaryHostPath + ":/usr/local/bin/wardyn-proxy:ro"}
 	}
 	if d.cfg.ControlPlaneRelay != nil {
-		entry, err := d.relayHostsEntry(cfgJSON)
+		name, target, err := d.relayHostsEntry(cfgJSON)
 		if err != nil {
 			return "", err
 		}
-		host.ExtraHosts = append(host.ExtraHosts, entry)
+		host.ExtraHosts = []string{"host.docker.internal:" + target, name + ":" + target}
 	}
 	var err error
 	cfgJSON, err = d.runnerSpoolConfig(ctx, runID, cfgJSON, cfg, host)
@@ -428,27 +430,51 @@ func pinnedProxyIP(host *container.HostConfig) netip.Addr {
 	return netip.Addr{}
 }
 
-// relayHostsEntry is the proxy's hosts entry for a runner's relay (design 0.9
-// §4.2): the run's control-plane hostname at host-gateway, where the runner's
-// local relay listens and forwards the proxy's TLS, unread, to the org. The
-// proxy keeps its URL and CA exactly as dispatched; only the name resolves
-// differently, and only in the proxy, never the agent.
-func (d *Driver) relayHostsEntry(cfgJSON []byte) (string, error) {
+// relayHostsEntry names the run's control-plane hostname and the address the runner's relay
+// is reachable at (design 0.9 §4.2): the proxy's hosts map the name there, where the relay
+// listens and forwards the proxy's TLS, unread, to the org. The proxy keeps its URL and CA
+// exactly as dispatched; only the name resolves differently, and only in the proxy, never
+// the agent.
+func (d *Driver) relayHostsEntry(cfgJSON []byte) (name, target string, err error) {
 	var cp struct {
 		ControlPlaneURL string `json:"control_plane_url"`
 	}
 	if err := json.Unmarshal(cfgJSON, &cp); err != nil {
-		return "", fmt.Errorf("docker: relay: config: %w", err)
+		return "", "", fmt.Errorf("docker: relay: config: %w", err)
 	}
 	u, err := url.Parse(cp.ControlPlaneURL)
 	if err != nil || !strings.EqualFold(u.Scheme, "https") || u.Hostname() == "" {
-		return "", fmt.Errorf("docker: relay: the control-plane URL %q is not an https URL with a hostname", cp.ControlPlaneURL)
+		return "", "", fmt.Errorf("docker: relay: the control-plane URL %q is not an https URL with a hostname", cp.ControlPlaneURL)
 	}
 	if _, err := netip.ParseAddr(u.Hostname()); err == nil {
-		return "", fmt.Errorf("docker: relay: the control-plane URL %q names an IP address, which the runner cannot route to its relay; use a hostname", cp.ControlPlaneURL)
+		return "", "", fmt.Errorf("docker: relay: the control-plane URL %q names an IP address, which the runner cannot route to its relay; use a hostname", cp.ControlPlaneURL)
 	}
-	if err := d.cfg.ControlPlaneRelay(u); err != nil {
-		return "", fmt.Errorf("docker: relay: %w", err)
+	target, err = d.cfg.ControlPlaneRelay(u)
+	if err != nil {
+		return "", "", fmt.Errorf("docker: relay: %w", err)
 	}
-	return u.Hostname() + ":host-gateway", nil
+	if err := validRelayTarget(target); err != nil {
+		return "", "", fmt.Errorf("docker: relay: %w", err)
+	}
+	return u.Hostname(), target, nil
+}
+
+// validRelayTarget accepts "host-gateway" or a unicast IP literal. Loopback is the
+// container's own, so it can never be the relay.
+func validRelayTarget(t string) error {
+	if t == "host-gateway" {
+		return nil
+	}
+	ip, err := netip.ParseAddr(t)
+	if err != nil {
+		return fmt.Errorf("the relay target %q is neither host-gateway nor an IP address", t)
+	}
+	if ip.Zone() != "" {
+		return fmt.Errorf("the relay target %q is a zoned address, which a hosts entry cannot carry", t)
+	}
+	// Unmap, so ::ffff:127.0.0.1 and ::ffff:0.0.0.0 are judged as the IPv4 they are.
+	if u := ip.Unmap(); u.IsUnspecified() || u.IsMulticast() || u.IsLoopback() {
+		return fmt.Errorf("the relay target %q is not a routable host address (unspecified, multicast or loopback)", t)
+	}
+	return nil
 }

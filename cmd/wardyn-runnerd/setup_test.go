@@ -6,11 +6,13 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -34,7 +36,11 @@ type setupFixture struct {
 	calls       []string // "METHOD path" the organisation served
 	commands    []string // "name args" run on the host
 	networks    []string
+	checks      []string    // "image network" of each engine check
+	wants       []relayPair // the explicit relay values each check was handed
+	relayErr    error       // what the engine check answers, when set
 	desktop     bool
+	vm          bool // a VM-backed engine other than Docker Desktop
 	state       types.RunnerState
 	pools       []sdk.RunnerPool
 	defaultID   *uuid.UUID
@@ -66,20 +72,42 @@ func newSetupFixture(t *testing.T, goos string) *setupFixture {
 			}
 			return nil, nil
 		},
-		docker: func(_ context.Context, network string, _ bool) (setupEngine, error) {
-			f.networks = append(f.networks, network)
-			return f.engine(), nil
-		}}
+		docker: f.docker}
 	if err := os.MkdirAll(f.host.home, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	return f
 }
 
-// engine answers as a native engine whose bridge holds its host-gateway, or as Docker Desktop.
-func (f *setupFixture) engine() setupEngine {
+// docker answers as prepareSetupDocker would on a native engine (its proxy reaches the relay through
+// host-gateway), on Docker Desktop (the same), or on a VM-backed engine reached at 192.168.5.2. An
+// explicit target always reaches. It applies the real bind rule and candidate list.
+func (f *setupFixture) docker(_ context.Context, image, network string, want relayPair) (dockerEngine, relayPair, error) {
+	f.networks = append(f.networks, network)
+	f.checks = append(f.checks, image+" "+network)
+	f.wants = append(f.wants, want)
+	if f.relayErr != nil {
+		return dockerEngine{}, relayPair{}, f.relayErr
+	}
 	gw := netip.MustParseAddr("172.17.0.1")
-	return setupEngine{desktop: f.desktop, gateway: gw, bridge: []netip.Addr{gw}}
+	eng, reach := dockerEngine{desc: `"Ubuntu 24.04 LTS" (laptop)`, native: true, gateway: gw, bridge: []netip.Addr{gw}}, hostGateway
+	switch {
+	case f.desktop:
+		eng = dockerEngine{desc: `"Docker Desktop" (docker-desktop)`, why: "Docker Desktop"}
+	case f.vm:
+		eng, reach = dockerEngine{desc: `"Alpine Linux v3.21" (lima-rancher-desktop)`, why: "its bridge interface is not on this host"}, "192.168.5.2"
+	}
+	if want.bind.IsValid() {
+		if err := admitRelayBind(want.bind, eng); err != nil {
+			return dockerEngine{}, relayPair{}, err
+		}
+	}
+	for _, p := range relayCandidates(eng, want) {
+		if p.target == reach || p.target == want.target {
+			return eng, p, nil
+		}
+	}
+	return dockerEngine{}, relayPair{}, errors.New("relay: no container on Docker engine " + eng.desc + " reached this runner")
 }
 
 func (f *setupFixture) serve(w http.ResponseWriter, r *http.Request) {
@@ -248,17 +276,20 @@ func TestSetupRefusesBeforeSpendingTheToken(t *testing.T) {
 		mutate  func(*setupFixture)
 		message string
 	}{
-		"root":                 {setupOptions{}, func(f *setupFixture) { f.host.uid = 0 }, "not as root"},
-		"no token file":        {setupOptions{}, nil, "no runner identity yet"},
-		"missing token file":   {setupOptions{tokenFile: "/nonexistent/token"}, nil, "token file not found"},
-		"bad relay address":    {setupOptions{relayListen: "not-an-address"}, nil, "--relay-listen"},
-		"default without pool": {setupOptions{claim: true, makeDefault: true}, nil, "--default needs --pool"},
-		"pool without claim":   {setupOptions{pool: "Laptop"}, nil, "--pool needs --claim"},
-		"unsafe setting":       {setupOptions{network: "net work"}, nil, "unsupported characters"},
-		"docker unusable": {setupOptions{}, func(f *setupFixture) {
-			f.host.docker = func(context.Context, string, bool) (setupEngine, error) { return setupEngine{}, os.ErrPermission }
-		}, "permission denied"},
-		"relay address the engine refuses": {setupOptions{relayListen: "127.0.0.1"}, nil, "reaches only its host-gateway 172.17.0.1"},
+		"root":                                   {setupOptions{}, func(f *setupFixture) { f.host.uid = 0 }, "not as root"},
+		"no token file":                          {setupOptions{}, nil, "no runner identity yet"},
+		"missing token file":                     {setupOptions{tokenFile: "/nonexistent/token"}, nil, "token file not found"},
+		"bad relay address":                      {setupOptions{relayListen: "not-an-address"}, nil, "--relay-listen"},
+		"default without pool":                   {setupOptions{claim: true, makeDefault: true}, nil, "--default needs --pool"},
+		"pool without claim":                     {setupOptions{pool: "Laptop"}, nil, "--pool needs --claim"},
+		"unsafe setting":                         {setupOptions{network: "net work"}, nil, "unsupported characters"},
+		"docker unusable":                        {setupOptions{}, func(f *setupFixture) { f.relayErr = os.ErrPermission }, "permission denied"},
+		"relay address another computer reaches": {setupOptions{relayListen: "192.168.1.20"}, nil, "never an address another computer can reach"},
+		"relay unreachable": {setupOptions{}, func(f *setupFixture) {
+			f.relayErr = errors.New("relay: no container on Docker engine reached this runner")
+		}, "No token was spent"},
+		"relay host target not an address": {setupOptions{relayHostTarget: "wardynd.internal"}, nil, "--relay-host-target"},
+		"relay host target loopback":       {setupOptions{relayHostTarget: "127.0.0.1"}, nil, "--relay-host-target"},
 		"user manager cannot find the unit": {setupOptions{}, func(f *setupFixture) {
 			f.host.run = func(context.Context, string, ...string) ([]byte, error) { return []byte("/etc/systemd/user"), nil }
 		}, "no token was spent"},
@@ -313,15 +344,84 @@ func TestSetupDevelopmentBuildNeedsAProxyImage(t *testing.T) {
 	}
 }
 
-func TestSetupDockerDesktopGetsLoopbackRelay(t *testing.T) {
+// On a VM-backed engine setup pins the pair its check proved, in the env file and the LaunchAgent, and
+// says which; on a native engine it writes neither, so serve reads the bridge gateway at every start.
+func TestSetupWritesTheCheckedRelayPair(t *testing.T) {
+	for _, goos := range []string{"linux", "darwin"} {
+		f := newSetupFixture(t, goos)
+		f.vm = true
+		out, err := f.run(setupOptions{tokenFile: f.tokenFile})
+		if err != nil {
+			t.Fatal(err)
+		}
+		p, _ := f.host.paths()
+		file, wants := p.envFile, []string{"WARDYN_RELAY_LISTEN=127.0.0.1\n", "WARDYN_RELAY_HOST_TARGET=192.168.5.2\n"}
+		if goos == "darwin" {
+			file, wants = p.plistFile, []string{"<key>WARDYN_RELAY_LISTEN</key>\n    <string>127.0.0.1</string>", "<key>WARDYN_RELAY_HOST_TARGET</key>\n    <string>192.168.5.2</string>"}
+		}
+		got := f.read(file)
+		for _, want := range wants {
+			if !strings.Contains(got, want) {
+				t.Errorf("%s: %s lacks %q:\n%s", goos, file, want, got)
+			}
+		}
+		if line := `Docker engine "Alpine Linux v3.21" (lima-rancher-desktop): the run relay listens on 127.0.0.1 and a run's proxy reaches it at 192.168.5.2`; !strings.Contains(out, line) {
+			t.Errorf("%s: output does not name the engine and pair:\n%s", goos, out)
+		}
+
+		d := newSetupFixture(t, goos)
+		d.desktop = true
+		if _, err := d.run(setupOptions{tokenFile: d.tokenFile}); err != nil {
+			t.Fatal(err)
+		}
+		dp, _ := d.host.paths()
+		dwant := map[string]string{"linux": "WARDYN_RELAY_HOST_TARGET=host-gateway\n", "darwin": "<key>WARDYN_RELAY_HOST_TARGET</key>\n    <string>host-gateway</string>"}[goos]
+		if got := d.read(map[string]string{"linux": dp.envFile, "darwin": dp.plistFile}[goos]); !strings.Contains(got, dwant) {
+			t.Errorf("%s: a VM-backed engine's host-gateway target was not pinned:\n%s", goos, got)
+		}
+
+		n := newSetupFixture(t, goos)
+		if _, err := n.run(setupOptions{tokenFile: n.tokenFile}); err != nil {
+			t.Fatal(err)
+		}
+		np, _ := n.host.paths()
+		got = n.read(map[string]string{"linux": np.envFile, "darwin": np.plistFile}[goos])
+		if strings.Contains(got, "WARDYN_RELAY_") || strings.Contains(got, "__") {
+			t.Errorf("%s: a native engine's relay was pinned, or a placeholder was left:\n%s", goos, got)
+		}
+	}
+}
+
+// The explicit relay values reach the engine check unchanged, and setup checks with the image it installs.
+func TestSetupHandsExplicitRelayFlagsToTheCheck(t *testing.T) {
 	f := newSetupFixture(t, "linux")
-	f.desktop = true
-	if _, err := f.run(setupOptions{tokenFile: f.tokenFile}); err != nil {
+	f.vm = true
+	if _, err := f.run(setupOptions{tokenFile: f.tokenFile, relayListen: "127.0.0.1", relayHostTarget: "192.0.2.1"}); err != nil {
 		t.Fatal(err)
 	}
-	p, _ := f.host.paths()
-	if env := f.read(p.envFile); !strings.Contains(env, "WARDYN_RELAY_LISTEN=127.0.0.1\n") {
-		t.Errorf("Docker Desktop did not get a loopback relay:\n%s", env)
+	if want := []relayPair{pair("127.0.0.1", "192.0.2.1")}; !slices.Equal(f.wants, want) {
+		t.Errorf("check was handed %v, want %v", f.wants, want)
+	}
+	if want := []string{"ghcr.io/example/proxy:1 wardyn-internal"}; !slices.Equal(f.checks, want) {
+		t.Errorf("checks = %q, want %q", f.checks, want)
+	}
+}
+
+// An explicit relay host target is written on a native engine too: setup never drops a flag.
+func TestSetupWritesTheRelayHostTarget(t *testing.T) {
+	for _, goos := range []string{"linux", "darwin"} {
+		f := newSetupFixture(t, goos)
+		if _, err := f.run(setupOptions{tokenFile: f.tokenFile, relayHostTarget: "10.0.0.9"}); err != nil {
+			t.Fatal(err)
+		}
+		p, _ := f.host.paths()
+		file, want := p.envFile, "WARDYN_RELAY_HOST_TARGET=10.0.0.9\n"
+		if goos == "darwin" {
+			file, want = p.plistFile, "<key>WARDYN_RELAY_HOST_TARGET</key>\n    <string>10.0.0.9</string>"
+		}
+		if got := f.read(file); !strings.Contains(got, want) || strings.Contains(got, "WARDYN_RELAY_LISTEN") {
+			t.Errorf("%s: %s lacks %q or pins a native relay address:\n%s", goos, file, want, got)
+		}
 	}
 }
 
@@ -352,8 +452,8 @@ func TestSetupRendersTheLaunchAgent(t *testing.T) {
 	if !contains(f.commands, "launchctl bootstrap gui/501 "+p.plistFile) {
 		t.Errorf("agent not bootstrapped: %v", f.commands)
 	}
-	if !strings.Contains(out, "Docker Desktop detected") {
-		t.Errorf("Docker Desktop default not announced:\n%s", out)
+	if !strings.Contains(out, `Docker engine "Docker Desktop" (docker-desktop): the run relay listens on 127.0.0.1 and a run's proxy reaches it at host-gateway`) {
+		t.Errorf("the engine and relay pair were not announced:\n%s", out)
 	}
 	if st, err := os.Stat(p.installed); err != nil || st.Mode().Perm() != 0o755 {
 		t.Errorf("installed binary mode: %v %v", st, err)

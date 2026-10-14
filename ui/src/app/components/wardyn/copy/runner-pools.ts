@@ -84,7 +84,7 @@ export const RUNNER_V6 = {
   MINT_ONE_PER_COMPUTER: "One runner per computer is enough: it runs several of their runs at the same time, up to its Runs at once.",
   MINT_START_LEAD: "Then start it:",
   MINT_VM_DOCKER:
-    "On Docker Desktop or another Docker that runs in a virtual machine, register cannot measure free disk: add --total-disk <GB> to register, and --relay-listen 127.0.0.1 to serve.",
+    "On Docker Desktop, Rancher Desktop (dockerd engine) or another VM-backed engine, wardyn-runnerd finds the relay address itself and checks it at startup; pass --total-disk <GB> to register, since the VM hides the disk.",
   MINT_ASKS_LIMITS: "It then asks for the runner's limits on that computer, prefilled with what it reports. Its owner can change them later in Your account → My runner.",
 } as const;
 

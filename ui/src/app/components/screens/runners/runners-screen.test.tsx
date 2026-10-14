@@ -671,7 +671,7 @@ describe("Admin -> Runners mint", () => {
     await user.click(within(dialog).getByRole("button", { name: "Create token" }));
     expect(await within(dialog).findByText(`wardyn-runnerd serve --org ${ORG} --proxy-image ghcr.io/example/wardyn-proxy:0.9.1`)).toBeInTheDocument();
     expect(within(dialog).getByText(`wardyn-runnerd register --org ${ORG} --token-file /path/to/token`)).toBeInTheDocument();
-    expect(within(dialog).getByText(/--total-disk <GB> to register, and --relay-listen 127\.0\.0\.1 to serve/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/finds the relay address itself and checks it at startup; pass --total-disk <GB> to register, since the VM hides the disk/)).toBeInTheDocument();
   });
 
   it("falls back to this page's address only when the answer carries no org_url", async () => {

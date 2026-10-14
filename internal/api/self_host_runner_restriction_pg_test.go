@@ -9,6 +9,7 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"net/http"
+	"os"
 	"strings"
 	"testing"
 
@@ -67,6 +68,65 @@ func TestPG_SelfHostRunnerNeedsTheGrant(t *testing.T) {
 	}
 	if code, body := e.mintSelf(e.other); code != http.StatusCreated {
 		t.Fatalf("an all allow did not reach a second member: %d %s", code, body)
+	}
+}
+
+// replay0178 runs migration 0178 again over the database the harness already migrated: the harness has no
+// "stop at 0177, seed, then apply 0178" step (internal/db's partial-schema test does that), so this
+// replays the file's SQL over a seeded database. The SQL is idempotent, which is what a replay needs.
+func (e *poolEnv) replay0178() {
+	e.t.Helper()
+	sql, err := os.ReadFile("../db/migrations/0178_self_host_runner_restriction.sql")
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	if _, err := e.pool.Exec(context.Background(), string(sql)); err != nil {
+		e.t.Fatalf("replay 0178: %v", err)
+	}
+}
+
+// seedRunner stores a runner a person registered with a token they minted themself, in the given state.
+func (e *poolEnv) seedRunner(owner, state string) {
+	e.t.Helper()
+	pub, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	if _, err := e.pool.Exec(context.Background(),
+		`INSERT INTO runners (id, owner, public_key, key_fingerprint, state, max_runs, minted_by) VALUES (gen_random_uuid(), $1, $2, $3, $4, 2, $1)`,
+		owner, []byte(pub), runnerwire.Fingerprint(pub), state); err != nil {
+		e.t.Fatal(err)
+	}
+}
+
+// An estate that already self-hosts keeps it open across the upgrade: 0.9.0 cannot stage the grant, so
+// the migration adds the `all` allow when someone claimed a runner whose token they minted themself.
+func TestPG_Migration0178_KeepsSelfHostingForAnEstateThatHasARunner(t *testing.T) {
+	e := newPoolEnv(t, false)
+	e.enableRunners()
+	e.seedRunner(e.otherP, "revoked") // a revoked runner alone would not count; the claimed one below does
+	e.seedRunner(e.otherP, "claimed")
+	e.replay0178()
+	e.replay0178() // idempotent
+	if n := e.count(`SELECT count(*) FROM capability_grants WHERE subject_type = 'all' AND capability = 'feature' AND value = 'self_host_runner' AND effect = 'allow' AND created_by = 'migration:0178'`); n != 1 {
+		t.Fatalf("the migration left %d all-allow rows for self_host_runner, want 1", n)
+	}
+	if code, body := e.mintSelf(e.person); code != http.StatusCreated {
+		t.Fatalf("a member of an estate that already self-hosted was refused after the upgrade: %d %s", code, body)
+	}
+}
+
+// An estate with no runner, or only revoked ones, starts closed.
+func TestPG_Migration0178_StartsClosedWithoutARunner(t *testing.T) {
+	e := newPoolEnv(t, false)
+	e.enableRunners()
+	e.seedRunner(e.otherP, "revoked")
+	e.replay0178()
+	if n := e.count(`SELECT count(*) FROM capability_grants WHERE capability = 'feature' AND value = 'self_host_runner'`); n != 0 {
+		t.Fatalf("the migration added %d self_host_runner grants to an estate with no self-minted claim", n)
+	}
+	if code, body := e.mintSelf(e.person); code != http.StatusForbidden || !strings.Contains(string(body), "capability_feature") {
+		t.Fatalf("a member of an estate with no runner minted, or was refused for another reason: %d %s", code, body)
 	}
 }
 

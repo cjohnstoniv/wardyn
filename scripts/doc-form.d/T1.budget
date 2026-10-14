@@ -32,4 +32,7 @@
 # threatmodel/THREAT-MODEL.md 58974 adds 467 over 58507 (0.9 release text for the fix sets merged at release); measured.
 # threatmodel/THREAT-MODEL.md 59012 adds 38 over 58974 (0.9.1 L2): the --relay-listen loopback residual under #71; measured.
 # threatmodel/THREAT-MODEL.md 59040 adds 28 over 59012 (0.9.1 L8), measured: service_attach and self_host_runner in the feature values.
-threatmodel/THREAT-MODEL.md=59040
+# threatmodel/THREAT-MODEL.md 59154 adds 114 over 59040 (0.9.1 L9): the VM-engine relay bind, target clamp and probe container under #71; measured.
+# threatmodel/THREAT-MODEL.md 59180 adds 26 over 59154 (0.9.1 L9): the veth bind trust class; measured.
+# threatmodel/THREAT-MODEL.md 59204 adds 24 over 59180 (0.9.1 L9): findRelay and relay.use in the probe bullet; measured.
+threatmodel/THREAT-MODEL.md=59204

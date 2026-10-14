@@ -9,12 +9,15 @@
 #      after an admin allow for `all` the mint succeeds and carries proxy_image;
 #   2. `register` + `wardyn runner claim --pool Laptop --default` with the
 #      member's own token registers, claims, makes the pool and its default;
-#   3. `serve` without --relay-listen exits non-zero before it dials (the
-#      runner is never seen);
-#   4. `serve --relay-listen 127.0.0.1` goes online, and a local exec run on it
-#      completes; its proxy's calls to the org arrive over the relay (audit
-#      data.relay = runner:<id>) and its egress decisions over the runner's
-#      session (actor runner:<id>, data.spooled);
+#   3. `serve --relay-host-target 192.0.2.1` (TEST-NET-1, never routed) exits
+#      non-zero before it dials, naming the target (the runner is never seen);
+#   4. `serve` with no relay flags goes online (Docker Desktop is classified
+#      and probed, so it needs none), and a local exec run on it completes; its
+#      proxy's calls to the org arrive over the relay (audit data.relay =
+#      runner:<id>) and its egress decisions over the runner's session (actor
+#      runner:<id>, data.spooled);
+#   4b. in that run the agent is denied host.docker.internal:8443 and the relay
+#      target's IP: the relay is the proxy's route to the org, never the agent's;
 #   5. GET /runs/{id} and the run.create audit row carry placement local,
 #      runner_name and runner_pool_name;
 #   7. the member's bedrock_sso agent run, against test/awsssofake: with AWS
@@ -218,19 +221,19 @@ if [[ -n "${POOL_ID}" && "${DEFAULT_ID}" == "${POOL_ID}" ]] && grep -q "${RID}" 
   pass "runner ${RID} claimed into user pool Laptop ${POOL_ID}, which is the member's default"
 else fail "after claim: Laptop ${POOL_ID:-missing}, default ${DEFAULT_ID:-none}, members $(cat "${TMP}/resp.json")"; fi
 
-log "STEP 1 (baseline guard): serve on Docker Desktop without --relay-listen"
-WARDYN_RELAY_LISTEN="" runnerd serve --org "${ORG_URL}" --state-dir "${STATE}" --proxy-image "${PROXY_IMAGE}" \
-  --internal-network "${RUNNER_NET}" >"${TMP}/serve-bare.log" 2>&1
+log "STEP 1 (baseline guard): serve with an unreachable --relay-host-target"
+WARDYN_RELAY_LISTEN="" WARDYN_RELAY_HOST_TARGET="" runnerd serve --org "${ORG_URL}" --state-dir "${STATE}" --proxy-image "${PROXY_IMAGE}" \
+  --internal-network "${RUNNER_NET}" --relay-host-target 192.0.2.1 >"${TMP}/serve-bare.log" 2>&1
 rc=$?
 api "${MEMBER_TOKEN}" GET "/api/v1/me/runners/${RID}" >/dev/null
-if [[ "${rc}" -ne 0 ]] && grep -q -- "--relay-listen 127.0.0.1" "${TMP}/serve-bare.log" && jq -e '.online == false and .last_seen_at == null' "${TMP}/resp.json" >/dev/null; then
+if [[ "${rc}" -ne 0 ]] && grep -q -- "192.0.2.1" "${TMP}/serve-bare.log" && jq -e '.online == false and .last_seen_at == null' "${TMP}/resp.json" >/dev/null; then
   pass "serve exited ${rc} before dialing: $(tail -1 "${TMP}/serve-bare.log"); runner never seen"
-else fail "serve without --relay-listen: exit ${rc}, $(tail -1 "${TMP}/serve-bare.log"), runner $(jq -c '{online,last_seen_at}' "${TMP}/resp.json")"; fi
+else fail "serve with --relay-host-target 192.0.2.1: exit ${rc}, $(tail -1 "${TMP}/serve-bare.log"), runner $(jq -c '{online,last_seen_at}' "${TMP}/resp.json")"; fi
 
-log "STEP 4 (run): serve --relay-listen 127.0.0.1, then a local exec run"
+log "STEP 4 (run): serve with no relay flags, then a local exec run"
 # The binary itself, not the runnerd function: a backgrounded function is a
 # subshell, and stopping its pid would leave serve running.
-DOCKER_HOST="${RUNNER_DOCKER}" "${TMP}/wardyn-runnerd" serve --org "${ORG_URL}" --state-dir "${STATE}" --proxy-image "${PROXY_IMAGE}" --relay-listen 127.0.0.1 \
+DOCKER_HOST="${RUNNER_DOCKER}" "${TMP}/wardyn-runnerd" serve --org "${ORG_URL}" --state-dir "${STATE}" --proxy-image "${PROXY_IMAGE}" \
   --internal-network "${RUNNER_NET}" >"${EVIDENCE_DIR}/serve.log" 2>&1 &
 SERVE_PID=$!
 for _ in $(seq 1 30); do
@@ -240,13 +243,18 @@ for _ in $(seq 1 30); do
   sleep 2
 done
 jq -e '.online == true' "${TMP}/resp.json" >/dev/null || { tail -20 "${EVIDENCE_DIR}/serve.log"; die "the runner never came online"; }
-pass "runner online with --relay-listen 127.0.0.1"
+pass "runner online with no relay flags: $(grep -m1 'run relay reachable' "${EVIDENCE_DIR}/serve.log" || echo 'no "run relay reachable" log line')"
+grep -q 'run relay reachable' "${EVIDENCE_DIR}/serve.log" || fail "serve.log has no 'run relay reachable' line"
+# The relay target as a run's proxy sees it: what host-gateway resolves to on
+# this engine, read by a throwaway container (the agent image carries getent; ahostsv4, since Docker Desktop maps host-gateway to an IPv6 address too).
+RELAY_TARGET_IP="$(rd run --rm --entrypoint getent --add-host walk-relay-target:host-gateway "${AGENT_IMAGE}" ahostsv4 walk-relay-target 2>/dev/null | awk '{print $1; exit}')"
+[[ "${RELAY_TARGET_IP}" =~ ^[0-9.]+$ ]] || { fail "could not resolve host-gateway to an IP on the runner engine: '${RELAY_TARGET_IP}'"; RELAY_TARGET_IP="192.0.2.1"; }
 cat >"${TMP}/policy.json" <<'EOF'
 {"allowed_domains": [], "denied_domains": [], "first_use_approval": "always_deny", "allowed_methods": [],
  "min_confinement_class": "CC1", "auto_stop_after_sec": 0}
 EOF
 w run --agent claude-code --task-mode exec --placement local --policy-file "${TMP}/policy.json" --wait --timeout 8m --json \
-  --task "echo laptop-walk-marker; curl -sS -m 10 -o /dev/null https://denied.laptop-walk.invalid/ || true" \
+  --task "echo laptop-walk-marker; curl -sS -m 10 -o /dev/null https://denied.laptop-walk.invalid/ || true; curl -sS -m 5 -o /dev/null https://host.docker.internal:${RELAY_PORT}/ || true; curl -sS -m 5 -o /dev/null https://${RELAY_TARGET_IP}:${RELAY_PORT}/ || true" \
   >"${TMP}/run.json" 2>"${TMP}/run.err"
 rc=$?
 RUN_ID="$(jq -r '.id // empty' "${TMP}/run.json" 2>/dev/null)"
@@ -268,6 +276,14 @@ if [[ -n "${relayed}" ]]; then pass "proxy-to-org calls arrived over the relay (
 else fail "no audit row for ${RUN_ID} arrived over the relay"; fi
 if [[ "${spooled}" == *"egress.deny denied.laptop-walk.invalid"* ]]; then pass "egress decided by the run's proxy, shipped by runner:${RID}: ${spooled}"
 else fail "no spooled egress.deny for the denied host: spooled=[${spooled}]"; fi
+
+log "STEP 4b (the relay is the proxy's, not the agent's): the agent is denied the relay's names"
+for t in "host.docker.internal" "${RELAY_TARGET_IP}"; do
+  denied="$(psql1 "${q} AND action = 'egress.deny' AND target LIKE '${t}%' ORDER BY seq" | tr '\n' ';')"
+  allowed="$(psql1 "${q} AND action = 'egress.allow' AND target LIKE '${t}%' ORDER BY seq" | tr '\n' ';')"
+  if [[ -n "${denied}" && -z "${allowed}" ]]; then pass "agent denied ${t}: ${denied}"
+  else fail "agent and ${t}: deny rows [${denied}], allow rows [${allowed}]"; fi
+done
 
 log "STEP 5 (where the run ran): the run read and its run.create row"
 want='.placement == "local" and .runner_name == $n and .runner_pool_name == "Laptop"'

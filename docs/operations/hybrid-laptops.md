@@ -25,7 +25,7 @@
 
 ## Requirements
 
-- Docker Desktop (macOS, and Windows through WSL2) needs `--relay-listen 127.0.0.1`, which `setup` supplies when it detects Docker Desktop. There is no native Windows binary.
+- `setup` and `serve` find the relay address and prove it with a probe container on Docker Desktop, Rancher Desktop (dockerd) and other VM-backed engines; Rancher Desktop's containerd mode is unsupported. See [Requirements](../runner-registration.md#requirements). There is no native Windows binary.
 - The full list, and why `serve` refuses to start: [Requirements](../runner-registration.md#requirements).
 
 ## Resident credentials and posture

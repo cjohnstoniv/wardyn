@@ -9,19 +9,38 @@ From 0.9 the control plane places runs on a claimed runner through its owner's u
 | Requirement | Detail |
 |---|---|
 | Docker | A reachable engine for the person. `serve` exits at startup, with the reason, when it is not: a runner never shows Online and then refuses runs. |
-| Native Linux Docker | Works with the defaults: the relay listens on Docker's host-gateway address, the default bridge's gateway. |
-| Docker Desktop (macOS; Windows through WSL2) | Needs `--relay-listen 127.0.0.1` (or `WARDYN_RELAY_LISTEN=127.0.0.1`), because its host-gateway reaches this computer's loopback. `setup` supplies it when it detects Docker Desktop. On macOS this is expected, not yet verified. |
-| A native engine with `--relay-listen` | The address must be the engine's own host-gateway. Setup and serve refuse loopback. |
+| Native Linux Docker | Works with the defaults: the relay listens on the default bridge's gateway, and a run's proxy reaches it through Docker's host-gateway. |
+| Docker Desktop (Windows through WSL2) | Works, and needs no relay flag: `setup` finds `127.0.0.1` and checks it. Verified. |
+| Docker Desktop (macOS) | Needs no relay flag. Expected, not yet verified. |
+| Rancher Desktop, dockerd (moby) engine, on macOS and on Windows through WSL2 | Expected, not yet verified. On macOS the proxy reaches a loopback relay at `192.168.5.2`; on WSL2 the relay listens on Rancher Desktop's `veth-rd-wsl` address (`192.168.143.2`). The startup check proves it on each computer. |
+| Other VM-backed engines (Colima, Podman machine, OrbStack, rootless Docker) | Work when the startup reachability check passes; not verified by us. `--relay-host-target` is the knob when it does not. |
+| Podman on Linux (docker-compat API) | Unsupported in 0.9.1: its default network is not `bridge`, so `setup` and `serve` refuse it. |
+| Rancher Desktop, containerd (nerdctl) mode | Unsupported: it has no Docker API. Switch Rancher Desktop to the dockerd (moby) engine. |
+| `DOCKER_HOST` | `runnerd` reads `DOCKER_HOST` and never a docker context. Point it at the engine's socket, for example `unix://$HOME/.rd/docker.sock` for Rancher Desktop (expected) or `unix://$HOME/.colima/default/docker.sock` for Colima (expected). |
+| An explicit relay flag | `--relay-listen` accepts loopback on any engine, the native bridge gateway, or the `veth-rd-wsl` address. It never accepts `0.0.0.0` or another interface's address. The startup check still has to pass. |
 | The relay's port | The port of the org's `WARDYN_CONTROL_PLANE_URL` (`8443` by default), not the org URL's. No control plane may listen on that loopback port on the same computer. |
-| A privileged port | A user service cannot bind a port below 1024, so a control-plane URL on `:443` cannot be relayed. |
+| A privileged port | For a runner installed as a user service, the control-plane URL's port must be 1024 or higher. A user service cannot bind a port such as `:443`, so it cannot be relayed; this fails at the first run, not at the startup check. |
 | Internal network | `serve` creates the `--internal-network` bridge (default `wardyn-internal`) when it is missing. |
 | Windows | There is no native binary: run the runner inside WSL2 with Docker Desktop's WSL integration. |
-| Untested | Colima and Rancher Desktop. Rootless Docker needs `DOCKER_HOST`. |
 | Permission | `POST /api/v1/me/runners/tokens` needs the [`self_host_runner`](operations/capabilities.md#self_host_runner) permission (`403` `capability_feature`, target `me.runners.tokens`: "hosting your own runner isn't available to you. Ask your admin for the self_host_runner permission."). Admins are never asked. |
 
-- A Docker engine that is not reachable at startup is an error; systemd `Restart=on-failure` and launchd `KeepAlive` retry it.
+- A Docker engine, or a relay address no proxy can reach, that fails the startup check is an error; systemd `Restart=on-failure` and launchd `KeepAlive` retry it.
 - On macOS verify a download with `shasum -a 256 <file>`; on Linux, `sha256sum <file>`.
 - On Docker Desktop, or any VM-backed Docker, pass `--total-disk <GB>` to `register` (free disk measures 0 there).
+
+### The startup reachability check
+
+`serve` and `setup` prove the relay address before they use it: on this engine, one throwaway container from the proxy image, on the `--internal-network` bridge, must connect to the relay's address. `setup` runs the check before it spends the token or installs the service; `serve` runs it before it shows Online.
+
+| If the check | Then |
+|---|---|
+| Passes | `setup` prints the listen address and the target a proxy reaches it at, and pins both in the service settings (`WARDYN_RELAY_LISTEN` and `WARDYN_RELAY_HOST_TARGET`, even when the target is `host-gateway`) on a VM-backed engine. `serve` checks that one pair. |
+| Fails | It exits with the engine's name, each address pair it tried and why it failed. `setup` adds that no token was spent. Nothing is installed. |
+
+- `--relay-listen` / `WARDYN_RELAY_LISTEN` fixes where the relay listens, and `--relay-host-target` / `WARDYN_RELAY_HOST_TARGET` fixes the address a proxy dials: `host-gateway` or an IP address. A value you give is checked as given and never replaced by a guess.
+- On a native engine with a firewall that drops container-to-host traffic (`firewalld`, `ufw`), the check fails; allow the bridge to reach the relay port.
+- When `DOCKER_HOST` names an engine other than this computer's own dockerd (Rancher Desktop on WSL2 beside a distro-local dockerd), pass both flags: `--relay-listen 192.168.143.2 --relay-host-target 192.168.143.2`.
+- The check pulls the proxy image first. A registry that needs a login: run `docker pull` on the image as yourself, and the runner uses the local copy.
 
 ## Register and claim by hand
 
@@ -112,13 +131,14 @@ wardyn-runnerd serve --org https://wardyn.example \
   --internal-network wardyn-internal
 ```
 
-The console prints the same command from the token mint answer, with its `proxy_image`, and a note on `--total-disk` and `--relay-listen 127.0.0.1` for VM-backed Docker.
+The console prints the same command from the token mint answer, with its `proxy_image`, and a note on `--total-disk` for VM-backed Docker. The relay flags are needed only when the [startup check](#the-startup-reachability-check) refuses.
 
 | Setting | Behaviour |
 |---|---|
 | `--state-dir` | Uses the registration directory; defaults to the user's private runner configuration directory. |
 | `--proxy-image` / `WARDYN_PROXY_IMAGE` | A release binary defaults to `ghcr.io/cjohnstoniv/wardyn-proxy:<version>`. A development build must pass it, matching this daemon version. |
-| `--relay-listen` / `WARDYN_RELAY_LISTEN` | The run relay's address instead of Docker's host-gateway: `127.0.0.1` with Docker Desktop; see [Requirements](#requirements). |
+| `--relay-listen` / `WARDYN_RELAY_LISTEN` | Where the run relay listens, instead of the engine's default; any engine, loopback included. See [the startup check](#the-startup-reachability-check). |
+| `--relay-host-target` / `WARDYN_RELAY_HOST_TARGET` | The address a run's proxy dials to reach the relay: `host-gateway` or an IP address. `setup` pins the one it proved on a VM-backed engine. |
 | `--internal-network` / `WARDYN_INTERNAL_NETWORK` | Local Docker bridge for proxy sidecars; defaults to `wardyn-internal` and is created when missing. |
 | `--recording-store` / `WARDYN_RECORDING_STORE` | Organisation recording mode: `pg` or `fs` enables capture; `off` disables capture. Default `pg`; no local database is created. |
 
@@ -141,8 +161,8 @@ The service is per user, not a root service: the runner identity sits in the per
 4. Without `--claim`, `setup` prints the key fingerprint and how to claim. With `--claim` and no `WARDYN_TOKEN`, it claims nothing and says so; the admin token cannot claim.
 
 - `--claim` uses your own personal API token from `WARDYN_TOKEN`. `--pool NAME` needs `--claim` and `--default` needs `--pool`; both are refused before the token is spent.
-- Setup checks the inputs, relay address, Docker and the user service manager before spending the single-use token; a refusal leaves it usable.
-- It accepts `--name`, `--proxy-image`, `--relay-listen`, `--internal-network` and the limit flags of `register`. At a terminal it asks for each limit not given; with output sent to a file it asks nothing.
+- Setup checks the inputs, Docker and the user service manager, and proves with a probe container that a proxy on this engine reaches the relay ([the startup check](#the-startup-reachability-check)), always and before spending the single-use token; a refusal leaves it usable.
+- It accepts `--name`, `--proxy-image`, `--relay-listen`, `--relay-host-target`, `--internal-network` and the limit flags of `register`. At a terminal it asks for each limit not given; with output sent to a file it asks nothing.
 - A release binary uses `ghcr.io/cjohnstoniv/wardyn-proxy:<version>`; a development build refuses unless `--proxy-image` is given.
 - A claim that fails after the service started says "the runner is installed and running but not claimed into place" and names `wardyn runner claim --pool <name>` to finish.
 - `deploy/runner/install.sh` is a thin wrapper: it finds a binary (`--binary`, beside the script, or on `PATH`), runs a private executable copy and passes every other argument to `setup`. It ships in `wardyn-runner-units.tar.gz`.
