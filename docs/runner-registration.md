@@ -11,7 +11,7 @@ From 0.9 the control plane places runs on a claimed runner through its owner's u
 | Docker | A reachable engine for the person. `serve` exits at startup, with the reason, when it is not: a runner never shows Online and then refuses runs. |
 | Native Linux Docker | Works with the defaults: the relay listens on Docker's host-gateway address, the default bridge's gateway. |
 | Docker Desktop (macOS; Windows through WSL2) | Needs `--relay-listen 127.0.0.1` (or `WARDYN_RELAY_LISTEN=127.0.0.1`), because its host-gateway reaches this computer's loopback. `setup` supplies it when it detects Docker Desktop. On macOS this is expected, not yet verified. |
-| A native engine with `--relay-listen` | The address must be the engine's own host-gateway. Loopback is refused at startup. |
+| A native engine with `--relay-listen` | The address must be the engine's own host-gateway. Setup and serve refuse loopback. |
 | The relay's port | The port of the org's `WARDYN_CONTROL_PLANE_URL` (`8443` by default), not the org URL's. No control plane may listen on that loopback port on the same computer. |
 | A privileged port | A user service cannot bind a port below 1024, so a control-plane URL on `:443` cannot be relayed. |
 | Internal network | `serve` creates the `--internal-network` bridge (default `wardyn-internal`) when it is missing. |
@@ -141,7 +141,7 @@ The service is per user, not a root service: the runner identity sits in the per
 4. Without `--claim`, `setup` prints the key fingerprint and how to claim. With `--claim` and no `WARDYN_TOKEN`, it claims nothing and says so; the admin token cannot claim.
 
 - `--claim` uses your own personal API token from `WARDYN_TOKEN`. `--pool NAME` needs `--claim` and `--default` needs `--pool`; both are refused before the token is spent.
-- Setup checks the inputs, Docker and the user service manager before it spends the single-use token, so a refusal leaves it usable.
+- Setup checks the inputs, relay address, Docker and the user service manager before spending the single-use token; a refusal leaves it usable.
 - It accepts `--name`, `--proxy-image`, `--relay-listen`, `--internal-network` and the limit flags of `register`. At a terminal it asks for each limit not given; with output sent to a file it asks nothing.
 - A release binary uses `ghcr.io/cjohnstoniv/wardyn-proxy:<version>`; a development build refuses unless `--proxy-image` is given.
 - A claim that fails after the service started says "the runner is installed and running but not claimed into place" and names `wardyn runner claim --pool <name>` to finish.

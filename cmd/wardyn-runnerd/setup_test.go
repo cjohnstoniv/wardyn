@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
@@ -65,14 +66,20 @@ func newSetupFixture(t *testing.T, goos string) *setupFixture {
 			}
 			return nil, nil
 		},
-		docker: func(_ context.Context, network string) (bool, error) {
+		docker: func(_ context.Context, network string, _ bool) (setupEngine, error) {
 			f.networks = append(f.networks, network)
-			return f.desktop, nil
+			return f.engine(), nil
 		}}
 	if err := os.MkdirAll(f.host.home, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	return f
+}
+
+// engine answers as a native engine whose bridge holds its host-gateway, or as Docker Desktop.
+func (f *setupFixture) engine() setupEngine {
+	gw := netip.MustParseAddr("172.17.0.1")
+	return setupEngine{desktop: f.desktop, gateway: gw, bridge: []netip.Addr{gw}}
 }
 
 func (f *setupFixture) serve(w http.ResponseWriter, r *http.Request) {
@@ -249,8 +256,9 @@ func TestSetupRefusesBeforeSpendingTheToken(t *testing.T) {
 		"pool without claim":   {setupOptions{pool: "Laptop"}, nil, "--pool needs --claim"},
 		"unsafe setting":       {setupOptions{network: "net work"}, nil, "unsupported characters"},
 		"docker unusable": {setupOptions{}, func(f *setupFixture) {
-			f.host.docker = func(context.Context, string) (bool, error) { return false, os.ErrPermission }
+			f.host.docker = func(context.Context, string, bool) (setupEngine, error) { return setupEngine{}, os.ErrPermission }
 		}, "permission denied"},
+		"relay address the engine refuses": {setupOptions{relayListen: "127.0.0.1"}, nil, "reaches only its host-gateway 172.17.0.1"},
 		"user manager cannot find the unit": {setupOptions{}, func(f *setupFixture) {
 			f.host.run = func(context.Context, string, ...string) ([]byte, error) { return []byte("/etc/systemd/user"), nil }
 		}, "no token was spent"},
@@ -314,6 +322,13 @@ func TestSetupDockerDesktopGetsLoopbackRelay(t *testing.T) {
 	p, _ := f.host.paths()
 	if env := f.read(p.envFile); !strings.Contains(env, "WARDYN_RELAY_LISTEN=127.0.0.1\n") {
 		t.Errorf("Docker Desktop did not get a loopback relay:\n%s", env)
+	}
+}
+
+func TestSetupAcceptsTheEnginesHostGatewayAsRelayAddress(t *testing.T) {
+	f := newSetupFixture(t, "linux")
+	if _, err := f.run(setupOptions{tokenFile: f.tokenFile, relayListen: "172.17.0.1"}); err != nil {
+		t.Fatal(err)
 	}
 }
 
