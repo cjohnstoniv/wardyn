@@ -41,7 +41,9 @@ a laptop runner, `wardyn-runnerd` works with Docker Desktop, setup is one comman
 - The run page shows where a run ran — placement, runner name and pool name — for every run, and `GET /runs/{id}`
   adds `runner_pool_name` (`runner_name` now also names a remote-hosted runner). `run.create` audit rows always
   record placement and name the pool and runner.
-- `GET /me/runner-pools`: the pools you may use.
+- `GET /me/runner-pools`: the pools you may use (for an administrator, without other people's user pools); the Go
+  SDK gains `ListMyRunnerPools`. `claim --pool`, `setup --claim --pool` and the console claim dialog find your own
+  pool by name through it.
 - Runner token mint answers carry `proxy_image` when the server has one, and the console prints the `serve` command
   with it plus the Docker Desktop flags.
 - Sign in again on a stored AWS or Claude sign-in, in Your model connections and the New Run provider picker.

@@ -136,10 +136,7 @@ func (s *Server) applyBedrockTransport(b bedrockAuth, policy *types.RunPolicySpe
 		// profile to know WHICH account/role to ask for — but its token cache
 		// holds an inert placeholder, and the session itself is set on the wire
 		// by the proxy at that one host. The ROLE credentials the SDK mints from
-		// it are still resident; SigV4 signs in-process and always will. The
-		// file names no secret, so it rides plain Env (no secretEnvKeys entry):
-		// a pod spec or `docker inspect` shows the start URL, account id and
-		// role name, and a person's own runner can take the run.
+		// it are still resident; SigV4 signs in-process and always will.
 		detail = "captured AWS SSO session injected proxy-side as x-amz-sso_bearer_token on the run's own portal.sso host (TLS-MITM); the sandbox's token cache holds only a placeholder — the SSO access token is never resident. The short-lived role credentials the SDK mints from it still are (SigV4 signs client-side)"
 		mode = "sso-inject-proxy"
 	default:

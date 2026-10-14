@@ -31,20 +31,20 @@ func claimIntoPool(cmd *cobra.Command, c *sdk.Client, runnerID uuid.UUID, arg st
 }
 
 // ownPoolNamed is the person's user pool an argument names, and whether it was just made for it.
-// An organization pool of the same name is not theirs to put a self-hosted runner in, and nor is another
-// person's user pool an administrator's list shows for oversight, so both are passed over.
+// It looks only in the pools the caller may use (GET /me/runner-pools), where a user-scope row is their own;
+// an organization pool of the same name is not theirs to put a self-hosted runner in, so it is passed over.
 func ownPoolNamed(cmd *cobra.Command, c *sdk.Client, arg string) (pool sdk.RunnerPool, fresh bool, err error) {
 	if id, perr := uuid.Parse(arg); perr == nil {
 		pool, err = c.GetRunnerPool(cmd.Context(), id)
 		return pool, false, err
 	}
-	list, err := c.ListRunnerPools(cmd.Context())
+	list, err := c.ListMyRunnerPools(cmd.Context(), "")
 	if err != nil {
 		return pool, false, err
 	}
 	var ids []uuid.UUID
 	for _, p := range list.Pools {
-		if p.Scope == sdk.RunnerPoolUser && p.Name == arg && !manageOnly(p.RunnerPoolChoice) {
+		if p.Scope == sdk.RunnerPoolUser && p.Name == arg {
 			ids = append(ids, p.ID)
 		}
 	}

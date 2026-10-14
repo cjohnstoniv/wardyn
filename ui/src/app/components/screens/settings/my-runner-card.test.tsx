@@ -14,6 +14,7 @@ import type { RunnerRegistrationToken, RunnerView } from "../../../lib/types/run
 
 const pools = {
   list: vi.fn(),
+  listMine: vi.fn(),
   get: vi.fn(),
   members: vi.fn(),
   addMyRunner: vi.fn(),
@@ -161,6 +162,7 @@ beforeEach(() => {
   for (const m of [listMineMock, mintMineMock, claimMock, revokeMineMock, updateMineMock, remoteMineMock, navigateMock, ...Object.values(pools)]) m.mockReset();
   listMineMock.mockResolvedValue([CLAIMED]);
   pools.list.mockResolvedValue({ pools: [] });
+  pools.listMine.mockResolvedValue({ pools: [] });
   remoteMineMock.mockResolvedValue([]);
 });
 afterEach(() => cleanup());
@@ -683,7 +685,7 @@ describe("My runner card: the start command and the claim into a pool", () => {
   });
 
   it("one of the person's own pools is used as it is, and the default stays alone unless asked", async () => {
-    pools.list.mockResolvedValue({ pools: [ENTRY(LAPTOP_POOL), { ...ENTRY(POOL("o1", "Desk", { scope: "organization" })), scope: "organization" }] });
+    pools.listMine.mockResolvedValue({ pools: [ENTRY(LAPTOP_POOL), { ...ENTRY(POOL("o1", "Desk", { scope: "organization" })), scope: "organization" }] });
     pools.get.mockResolvedValue(LAPTOP_POOL);
     pools.members.mockResolvedValue([]);
     const user = userEvent.setup();
@@ -693,9 +695,10 @@ describe("My runner card: the start command and the claim into a pool", () => {
     expect(pools.setMyDefaults).not.toHaveBeenCalled();
   });
 
-  it("passes over another person's same-named pool (an administrator's manage-only row) and makes the person's own", async () => {
+  it("passes over another person's same-named pool (an administrator's oversight row, only in the shared list) and makes the person's own", async () => {
     const theirs: RunnerPoolCatalogueEntry = { ...ENTRY(POOL("p-bob", "Desk", { owner: "bob" })), owner: "bob", availability: "unavailable", reason: "runner_pool_not_found" };
     pools.list.mockResolvedValue({ pools: [theirs] });
+    pools.listMine.mockResolvedValue({ pools: [] });
     pools.get.mockResolvedValue(POOL("p-bob", "Desk", { owner: "bob" }));
     pools.members.mockResolvedValue([]);
     pools.createMine.mockResolvedValue(POOL("p-new", "Desk"));
@@ -707,7 +710,7 @@ describe("My runner card: the start command and the claim into a pool", () => {
   });
 
   it("never makes a pool when it cannot read the person's pools", async () => {
-    pools.list.mockRejectedValue(new HttpError(500, "boom", "internal"));
+    pools.listMine.mockRejectedValue(new HttpError(500, "boom", "internal"));
     const user = userEvent.setup();
     await claimWithPool(user, "Desk", false);
     await waitFor(() => expect(toast.error).toHaveBeenCalledWith(expect.stringContaining("mbp-ben is claimed but isn't in Desk.")));

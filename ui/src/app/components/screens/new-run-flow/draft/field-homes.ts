@@ -105,6 +105,17 @@ export const HOME_OF_REASON: Record<KnownLaunchReason, FieldHome> = {
   harness_providers_conflict: "harnesses",
 };
 
+/** The one field a refusal names, where it names one: the run's runner, chosen through its pool. */
+export const FIELD_OF_REASON: Partial<Record<KnownLaunchReason, string>> = {
+  placement_credential: "runner_pool_id",
+};
+
+/** A document path's Review group: its top-level field's (or `inline_policy.<name>`). */
+export function groupOfPath(path: string): ReviewGroupId | undefined {
+  const [top, policyField] = path.replace(/\[\d*\]/g, "").split(".");
+  return (top === "inline_policy" && policyField && REVIEW_GROUP_OF_FIELD[`inline_policy.${policyField}`]) || REVIEW_GROUP_OF_FIELD[top];
+}
+
 /** A refusal's step; a reason the console does not know goes to Review. */
 export const homeOfReason = (reason: string): FieldHome =>
   (HOME_OF_REASON as Record<string, FieldHome>)[reason] ?? "review";

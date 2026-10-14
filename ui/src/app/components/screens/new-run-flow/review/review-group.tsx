@@ -40,8 +40,9 @@ export function ReviewGroup({ id, label, value, mark, detail, provenance, childr
   return (
     <div data-review-group={id} data-blocked={blocked || undefined} className="grid grid-cols-[28px_minmax(0,1fr)_auto] items-start gap-2.5 border-t border-border py-4 pr-4 pl-5 first:border-t-0">
       {blocked ? (
-        <span aria-hidden="true" className="grid size-[22px] place-items-center rounded-full border border-danger/25 bg-danger-subtle text-danger">
-          <CircleAlert className="size-3" />
+        <span className="grid size-[22px] place-items-center rounded-full border border-danger/25 bg-danger-subtle text-danger">
+          <CircleAlert aria-hidden="true" className="size-3" />
+          <span className="sr-only">{NR_REVIEW.BADGE_ATTENTION}</span>
         </span>
       ) : (
         <span aria-hidden="true" className="grid size-[22px] place-items-center rounded-full border border-success/35 bg-success-subtle text-success">
