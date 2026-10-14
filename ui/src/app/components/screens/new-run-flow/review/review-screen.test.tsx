@@ -229,13 +229,14 @@ describe("Review blockers", () => {
     await waitFor(() => expect(path()).toContain("step=shape"));
   });
 
-  it("shows the blocker mark, not the check, on the groups a refusal's fix lives under", async () => {
+  it("shows the blocker mark, not the check, on the group of the field a refusal names", async () => {
     checks.current = answered(SCENARIO_PREFLIGHT.member, 1000, { preflightError: "Not available on your runner.", preflightReason: "placement_credential" });
     open(AGENT);
     await ready();
     await waitFor(() => expect(within(blockerList()).getAllByRole("listitem")).toHaveLength(1));
     const blocked = Array.from(document.querySelectorAll("[data-review-group][data-blocked]")).map((g) => g.getAttribute("data-review-group"));
-    expect(blocked).toEqual(["run", "where"]);
+    expect(blocked).toEqual(["where"]);
+    expect(group("where").getByText(NR_REVIEW.BADGE_ATTENTION)).toBeInTheDocument();
   });
 
   it("says the setup changed, with Check again, when the only thing wrong is a stale result", async () => {
