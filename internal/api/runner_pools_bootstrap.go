@@ -45,7 +45,7 @@ func (s *Server) measureRemote(ctx context.Context, id string) (m types.RunnerAm
 		}
 	}
 	if err != nil {
-		slog.WarnContext(ctx, "wardynd: measure a remote-hosted runner", slog.String("remote_runner_id", id), slog.Any("err", err))
+		slog.DebugContext(ctx, "wardynd: measure a remote-hosted runner", slog.String("remote_runner_id", id), slog.Any("err", err))
 		return m, err.Error()
 	}
 	return m, ""
