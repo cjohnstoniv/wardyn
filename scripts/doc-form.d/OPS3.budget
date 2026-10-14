@@ -40,7 +40,8 @@ docs/operations/who-gets-in.md=1454 share=35
 # docs/operations/admin-only-writes.md 3361 adds 2 over 3359 (0.9 RP-4): PUT /remote-runners/{id} also sets a remote-hosted runner's limits.
 # docs/operations/admin-only-writes.md 3416 adds 57 over 3359 (0.9 member drives): the admin list and delete of people's drives; measured at merge.
 # docs/operations/admin-only-writes.md 3418 adds 2 over 3416 (0.9 DS4-M6, after merging lane/090-DS4-M5); measured at merge.
-docs/operations/admin-only-writes.md=3418 share=35
+# docs/operations/admin-only-writes.md 3444 adds 26 over 3418 (0.9 release text for the fix sets merged at release); measured.
+docs/operations/admin-only-writes.md=3444 share=35
 # docs/operations/three-roles.md 4024 measured after G-090-cleanup slice F: docs rows that contradicted the code.
 # docs/operations/three-roles.md 4063 adds 39 over 4024: 0.9 final docs pass 3, measured: a profile maximum never cuts below an untouched run's size.
 docs/operations/three-roles.md=4173 share=35
@@ -51,7 +52,8 @@ docs/operations/ownership-and-offboarding.md=2370 share=35
 # docs/operations/governance-writes.md 2978 adds 90 over 2888: 0.9 final docs pass 3, measured: the six 0.9 rows of the held-writes table and the super-admin approvals.
 docs/operations/governance-writes.md=3086 share=35
 docs/operations/member-runs.md=1044 share=35
-docs/operations/user-drives.md=4804 share=35
+# docs/operations/user-drives.md 4818 adds 14 over 4804 (0.9 release text for the fix sets merged at release); measured.
+docs/operations/user-drives.md=4818 share=35
 docs/operations/capabilities.md=3999 share=35
 docs/operations/custom-components.md=1184 share=35
 # G-1423: docs/operations/api-tokens.md 4002 adds 11 over 3991 for GET /runs/{id}/output on the delegated-token list.

@@ -38,4 +38,5 @@
 # docs/ENV.md 36904 measured after merging the batch into the lane (34 over its 36870: the WARDYN_VAULT_ADDR redirect line).
 # docs/ENV.md 36921 adds 17 over 36904 (0.9 RS-11, after merging lane/090-RS-9); measured at merge.
 # docs/ENV.md 36934 adds 13 over 36921 (0.9 RS-11, after merging lane/090-RS-10); measured at merge.
-docs/ENV.md=36934 share=5
+# docs/ENV.md 36939 adds 5 over 36934 (0.9 release text for the fix sets merged at release); measured.
+docs/ENV.md=36939 share=5

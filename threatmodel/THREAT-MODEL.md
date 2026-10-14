@@ -157,6 +157,7 @@ coverage verdict pointing back into this document.
      - `VerifyRefRuleset` ([`internal/broker/ruleset.go`](../internal/broker/ruleset.go)) reads it
        back — `creation`, `update` and `deletion` in force outside the run namespace, neither in
        force inside it, every backing ruleset's `current_user_can_bypass` equal to `"never"` —
+     - it is a sampled check (three outside names, at one, two and three components, plus one inside name), not a proof over every pattern,
      - the setup checklist grades it (never `fail`, only `warn`/unknown),
      - and `WARDYN_GITHUB_REQUIRE_REF_RULESET` (opt-in, default off) turns the same read into a
        pre-mint gate.
@@ -1312,6 +1313,35 @@ ADMIN pre-authorized** —
     `driveMountFor`: runner/share readiness remains pending, while read-only widening still
     refuses through `driveReadOnlyRefusal`.
 
+#### People's own drives
+
+- Member drives: ownership is the row's `owner_subject`, written once and never updated (no store statement sets it; a store test pins this).
+  - Postgres refuses any member row that could bind a host path or an admin-pre-provisioned claim (`user_drives_member_managed`).
+  - The admin drive writes cannot edit or delete a member row (owner predicate in the statement).
+  - A per-owner advisory lock makes the per-person count hold under concurrency.
+- `deny_member_drives` is a door, not a quota.
+  - It only ever closes: composed profiles OR it, and Leq refuses a lifted denial.
+  - `deny_user_drive` also blocks creation.
+  - Operators are exempt from both.
+  - Creation is also gated by the org switch, which defaults off.
+- **Member drives.** A person (session or own API token; never a device, delegated caller, SCIM, service identity, admin token or local mode) creates drives only when the org switch is on and their profile allows it.
+  - Each drive is a `docker_volume` or `k8s_pvc` object on this deployment's substrate.
+  - A per-person count cap is enforced atomically.
+  - Create and delete together are limited to 6 a minute per person.
+  - No drive is created unless the wired runner can both reclaim it and pass its lifecycle check.
+  - Name collisions are checked only against drives the caller can see.
+- **Member drives in runs.** A person's drive reaches the catalogue and `drives[]` only for the caller whose exact sign-in subject equals `owner_subject`.
+  - There is no email path and no grant row.
+  - It resolves through an in-memory user-tier grant to its owner, so the home, object name and subject hash are the ones delete reclaims.
+  - A drive being deleted (tombstoned) is not reachable.
+  - A member drive is never the legacy drive.
+- (a) Erasure now reaches a person's own drives.
+  - The delete goes through the member delete path (tombstone, lifecycle check, in-use check, row last), so an erasure cannot leave a stranded volume or skip the check.
+- (b) A SCIM purge only lists a leaver's drives.
+  - Storage is destroyed only by an explicit admin act (`DELETE /drives/member/{id}` or the erasure scope).
+- (c) Turning on k8s member drives needs `drives.reclaim.enabled`, i.e. `delete` on claims for wardynd.
+  - A compromised wardynd can then delete any claim in the runs namespace, which is already true whenever reclaim is on.
+
 ### 4.7 Boot-time state seeded into the sandbox (v0.7.5)
 
 - **Wardyn pre-answers product onboarding, never a security prompt.**
@@ -1902,6 +1932,10 @@ hiding them would repeat the failure mode we are designed to avoid.
     - **The remediation exists, is the only one, and has to be invoked deliberately.**
       - `GET /api/v1/tokens` lists every live token with its owner and `last_used_at`; `DELETE /api/v1/tokens/{id}` revokes one.
       - `POST /api/v1/sessions/revoke` with `{"sub":"<sub or email>"}` revokes a human's sessions AND every unrevoked token they hold in one call — naming either identity, because on an IdP whose `sub` is an opaque per-app identifier the operator knows the email.
+      - Sign-out is server-side: the browser session cookie is a stateless signed value, so sign-out writes the same per-person session cut as 'sign out everywhere' (ordered by the revocation sequence), and a replayed copy is refused.
+        - Residuals: the cut is per person, not per cookie;
+        - a session signed in before the 0176 upgrade is time-compared until it expires;
+        - a sign-out whose cut cannot be written clears the cookie in the caller's browser only and says so (503).
       - All three are admin or `security_admin`.
       - The `session.revoke` row's `tokens_revoked` count is the receipt that the identifier matched a person: sessions are stateless and cannot be counted, so a zero there against someone you believe holds tokens means you named them wrong.
       - Unless `WARDYN_ROLE_STAMP_TTL` is set, nothing ages a token out short of a sign-in.

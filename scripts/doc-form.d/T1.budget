@@ -29,4 +29,5 @@
 # threatmodel/THREAT-MODEL.md 52641 adds 21 (section 5.1a): a subscription route-through host is inspected as the Anthropic schema.
 # threatmodel/THREAT-MODEL.md 58505 adds 21 over 58484 (0.9 RS-10, after merging lane/090-RS-9); measured at merge.
 # threatmodel/THREAT-MODEL.md 58507 adds 2 over 58505 (0.9 RS-10, after merging lane/090-RS-1); measured at merge.
-threatmodel/THREAT-MODEL.md=58507
+# threatmodel/THREAT-MODEL.md 58974 adds 467 over 58507 (0.9 release text for the fix sets merged at release); measured.
+threatmodel/THREAT-MODEL.md=58974

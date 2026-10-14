@@ -615,8 +615,10 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - While record and source-scan launches keep their usual failure row (`run.record.start` / `source.scan`).
 - The count and the insert run under one transaction-scoped advisory lock, so replicas sharing a database admit exactly the cap.
 - It counts rows, so a crashed run frees its slot when it reaches a terminal state.
-- A run kept after its end or a reboot, or after a control-plane outage once its end passes, has no running agent and does not count.
-- A run kept after an outage before its end still runs its agent and does.
+- A run kept after its end or a reboot does not count.
+- A run kept after a control-plane outage counts until its agent's stop is recorded.
+- Before its end its agent still runs.
+- Past its end the lease stops the agent, and a failed stop keeps the run counted until a later pass confirms it.
 - Reviving a run whose agent is stopped (kept after its end or a reboot, or after an outage whose agent was stopped, its end since moved later or not).
 - It starts that agent and takes a slot under the same lock.
 - At the cap the revive is refused 422 `run_quota` before any proxy or agent starts, and the run stays kept.
@@ -1194,8 +1196,8 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - A run that carries a `lifetime_cap_at` is ended by the lease sweep at its cap: KILLED with the reason `max_lifetime_reached` (Background or Interactive), audited `run.kill` by `system`/`wardynd`.
 - A Background task whose end comes before the cap is KILLED `end_reached` at its end. An Interactive run is kept at an earlier end, as always.
 - The lifecycle reaper still stops a RUNNING run older than this that carries no cap (a run from before 0.9), busy or not, and writes a `run.max_age.expire` audit row.
-- A run kept after a control-plane outage with its agent still running (before its end) is covered the same way.
-- A run kept with its agent already stopped (after its end, a reboot, or an outage past its end) is not in the reaper's scan, because no agent runs. [`WARDYN_ENDED_RUN_GRACE`](#wardyn_ended_run_grace) decides when its files go.
+- A run kept after a control-plane outage whose agent's stop is not recorded is covered the same way.
+- A run kept with its agent's stop recorded, or kept after its end or a reboot, is left to its files grace. [`WARDYN_ENDED_RUN_GRACE`](#wardyn_ended_run_grace) decides when its files go.
 - The lease sweep still kills an outage-kept Background task at its end.
 - It is not `ends_at`, which a person may extend, but it bounds it: every new run records `lifetime_cap_at` (its creation plus this age).
 - A run launched from New Run or `POST /runs` that no source gives an end gets that cap as its end, and `no_end` at launch is refused with `403` naming this deployment.

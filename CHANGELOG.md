@@ -158,6 +158,52 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `workspace_repos`, and in a workspace's repository source. A stored workspace with such a target answers 422
   `workspace_seed_source_target_invalid` when a run uses it. Edit the field before upgrading. Folder mounts and
   scratch paths with spaces are unaffected.
+- On a deployment that sets `WARDYN_USER_WRITABLE_DENY`, a member's writable workspace on a directory that contains a
+  denied path is now refused at onboarding and at run start. A writable root that contains a deny entry, such as the
+  shipped examples' `<root>/.git`, can no longer be mounted writable as a whole: mount a project directory under it,
+  or mount the root read-only.
+- Under an allow-all ceiling, a member's own exact entry for a private-range address (RFC 1918, ULA, 100.64/10) is
+  dropped at run create, with a warning, unless the ceiling lists it. This also applies to a stored policy an assigned
+  member selects.
+- A method proposal that shares no method with the ceiling now gets the ceiling's methods instead of every method.
+- With second-person approval on, adding an `llm_inspection` that names a `detector_sidecar_url` waits for a second
+  approver.
+- A run started before the upgrade keeps its resolved policy on revive (revive does not re-resolve policy).
+- `ui_apps: []` in an overlay now means "deny UI apps": the composed profile keeps the base's list and sets
+  `deny_ui_apps`. Only a non-empty overlay list that shares no app with its base is refused. A base write that would
+  leave such a descendant gets `409 governance_overlay_unsatisfiable`. Emptying a profile's own ceiling `ui_apps`
+  waits for a second approver.
+- With second-person approval on, renaming a profile in an equal-priority group tie waits for a second approver.
+- An acknowledged role-mapping change already pending at upgrade carries no stored effect. Approving it gives `409
+  governance_change_stale`, so re-propose it.
+- Setting a CPU or memory maximum where a profile sets no size (or removing an authored size under a maximum) waits
+  for a second approver when it raises the member cap. An overlay maximum above its base's cap is refused at write. An
+  existing composition above its base's cap is lowered at resolve, with a warning.
+- A run, record session or workspace scan of a member-owned workspace whose repository URL names a private-range
+  address reaches it only where the ceiling or the workspace's approved egress lists the address with no port; an IPv6
+  address can be listed only in the ceiling. An operator scanning a library source whose locator is a private-range
+  literal now needs that address, with no port, in the deployment ceiling's allowed_domains; otherwise the scan run
+  fails as a refused clone, with a log line naming the host. Names, public literals, GitHub hosts and operator-owned
+  workspaces are unchanged, and no stored row is rewritten.
+- Recording uploads to the Postgres store are now written one at a time per server process, across all runs, with
+  session recordings on their own slot.
+- One person's uploads wait behind each other before they wait with everyone else's.
+- An upload that waits more than 65 s for its turn fails with the existing 500, where it used to queue.
+- An upload whose body takes more than 60 s to arrive after the store admits it fails with the existing 500. Through
+  the cluster proxy this does not happen, because the proxy has the whole body before it forwards; a relayed upload
+  from a runner host needs about 4.5 Mbit/s for a 32 MiB part.
+- wardyn-rec tries a refused mid-run part again after 10 minutes; only the final upload is not retried.
+- The chart sets GOMEMLIMIT=400MiB for the server by default (`goMemLimit`); keep it at about 80% of
+  `resources.limits.memory`. The value must be a quoted string with a unit, and the chart refuses anything else at
+  render.
+- Approve and deny requests now refuse a reason longer than 512 characters (400) and a body over 16 KiB (413). Clients
+  that send longer reasons must shorten them. Existing stored reasons are not changed.
+- A sign-in is refused with `auth_error=claims_overage` when a groups or roles claim the token did not carry could
+  change the person's user type. A sign-in whose type is settled by the claims the token did carry is unaffected.
+- The automatic SCIM purge removes a person only when the record shows that the person's own current suspension caused
+  the deactivation. Every other scheduled deactivation is held, and the person stays deactivated.
+- The Vault client follows a redirect only to the configured address's own scheme, host and port. With Vault HA, name
+  the active node or an endpoint that forwards requests.
 
 ### Added
 
@@ -671,6 +717,37 @@ and does not yet follow semantic versioning (interfaces are not stable).
   remote-hosted runner, as `wardyn runner set` flags, and sets nothing; `wardyn runner remote list --no-limits`
   lists the runners that take no run until they have limits. The kind quickstart reads the cluster's nodes
   (`k8s.readNodes`), so the server measures the cluster itself.
+- Migration `0177_member_drives` adds `user_drives.owner_subject` and `delete_started_at` for people's own drives.
+  Admin drives keep their global name rule. A person's drive names are unique only within their own drives. A write
+  that gives a person's drive a host path, a pre-provisioned claim, a claim-derived home or a slug-named object is
+  refused.
+- Admins can let people create their own drives with `storage.user_drive.member_create` (off by default). It takes a
+  drives-per-person limit of 1 to 20, and on Kubernetes a claim size and storage class. A governance profile can still
+  deny it with `deny_member_drives`.
+- On Docker, a size or storage class on `member_create` is refused: a Docker volume has no size limit.
+- Runners can now report whether they can delete the drives they would create (CanManageDrives): Docker always,
+  Kubernetes via a SelfSubjectAccessReview for get/create/delete on claims in the runs namespace, failing closed.
+- People can create their own drives from New Run when an admin turns on `storage.user_drive.member_create` (off by
+  default). Each person gets a set number of drives. Deleting one deletes its files (`POST /me/drives`, `DELETE
+  /me/drives/{id}`).
+- Super admins list and delete people's drives with `GET /drives/member`, `DELETE /drives/member/{id}` and `wardyn
+  drive member list|delete --yes`. `GET /drives` no longer lists people's drives, and the admin drive, allocation and
+  reclaim routes refuse one with `409 user_drive_member_owned`.
+- On Kubernetes, member drives need `drives.reclaim.enabled`; without it, creating one is refused.
+- A person's own drives appear in their New Run drive list (`GET /me/drives`, `owned: true`) and attach through
+  `drives[]`. Only the person who created a drive can see or attach it, never as the legacy `drive.enabled` drive.
+  `GET /me/drives` adds a `create` block: whether you can create a drive now and why not, with your count and limit.
+- A person's own drive never runs on a self-hosted pool: a run that would land there is refused with
+  `drive_not_in_pool` and nothing is minted. One deleted while its run waits or starts fails the run with
+  `drive_not_found`.
+- An organisation or group template can't include a person's own drive (`template_shared_field_refused`).
+- Erasing a person (`POST /people/{principal}/erasure`) has a `member_drives` scope that deletes the drives they
+  created, with their files. A drive a run still holds fails the scope, naming it; retry once the run ends. A SCIM
+  purge lists those drives in `person.deprovision` (`member_drive_ids`) and in `GET /scim/status`, and deletes none.
+- Console: admins can let people create their own drives and set drives per person under Settings -> Storage, and deny
+  it per profile with "Can't create drives" in the profile editor.
+- Console: the Files step of New Run has "+ Create user drive" for a person's own drive and "Delete drive" for one
+  they created.
 
 ### Changed
 
@@ -826,6 +903,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - The union Go coverage floor (`COVER_MIN`) is re-set from 79 to 74, one point under the 0.9.0 measurement as the
   Makefile's rule says. 0.9 added code that only the Postgres suites exercise, and the union does not count those
   suites yet; everything else stays at about 79%.
+- Revoking one person's API tokens (admin revoke, SCIM suspension or group removal) reads that person's rows through
+  indexes on principal and lower(email) instead of the whole token table (index api_tokens_lower_email_idx, in
+  migration 0176_revocation_order).
+- A domain entry made only of dots and wildcards with a port (e.g. `*.:443`) is now refused when a policy is written
+  or loaded; remove any such entry before upgrading, since a default-policy file holding one stops wardynd at start.
 
 ### Removed
 
@@ -1110,6 +1192,43 @@ and does not yet follow semantic versioning (interfaces are not stable).
   Claude Code run whose policy carries tool rules, and a run whose started agent has no document while another
   harness in its set does.
 
+### Security
+
+- Signing out now ends the person's browser sessions on the server, not only in their own browser: a copy of the
+  session cookie taken before sign-out is refused afterwards. Sign-out ends every browser session of that person,
+  including any open web or CLI terminal opened through an attach ticket; API tokens and SSH keys themselves keep
+  working. The cut is recorded as a `session.revoke` audit row (session-only, the person as actor) and is written only
+  for a request carrying a live session. If the server cannot record the cut, sign-out answers 503 and the console
+  reports it was not confirmed.
+- A run waiting in a pool queue is ordered against later revocations by the revocation sequence of the credential that
+  launched it, the same order the credential itself follows.
+- Push rules count a branch the push updates only at the tip the forge reports for it, which must equal the push's
+  stated old value.
+- A sign-in is refused with `auth_error=claims_overage` when a groups or roles claim the token did not carry could
+  change the person's user type. A sign-in whose type is settled by the claims the token did carry is unaffected.
+- The brokered model routes (`/wardyn/llm/*`) apply a run policy's `allowed_methods` and refuse a path with `.` or
+  `..` segments or control characters.
+- An egress-host capability grant or deny that names an IPv6 address matches that whole address.
+- `wardyn setup vault` stages the Kata archive in a private temporary directory before unpacking it, and on Docker
+  each run's proxy listener binds to its own per-run network address.
+- Erasure acts on a derived entra:<tenant>:<object> name only when the identity directory resolves it to the person
+  alone. It fails closed when the name is ambiguous or unknown, and it lists any same-tenant/object principal it
+  leaves alone as 'not erased: erase by subject'.
+- Runs: a run kept after a control-plane outage keeps counting under the run cap and in fleet capacity until its agent
+  is confirmed stopped. Moving a kept run's end later can no longer race the lease's stop of its agent.
+- The automatic SCIM purge removes a person only when the record shows that the person's own current suspension caused
+  the deactivation. Every other scheduled deactivation is held, and the person stays deactivated.
+- The Vault client follows a redirect only to the configured address's own scheme, host and port. With Vault HA, name
+  the active node or an endpoint that forwards requests.
+- The GitHub ref-ruleset check (`github_ref_ruleset`, `WARDYN_GITHUB_REQUIRE_REF_RULESET`) also samples nested branch
+  names, and says that it checks sampled names, not every pattern.
+- On `POST /drives/grants` a security admin allocates a drive with the drive's own posture or narrower. A new or
+  changed directory name (`home_override`) or writable exception, and turning on a disabled allocation that holds one,
+  is a super admin's write. `wardyn drive reclaim` takes `--home-subject` for an allocation keyed by an email or other
+  alias.
+- On Entra ID a token issued to a portal exchanges only for a person who signed in here once or was set up by object
+  id (`subject_token_unbound` otherwise). App Role suggestions are read from the sign-in app, and a refused user-type
+  removal names the People mappings that still use the type.
 
 ## [0.8.9] — 2026-10-09
 
