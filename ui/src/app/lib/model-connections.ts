@@ -146,7 +146,7 @@ function connectionRowCopyByKind(
   if (provider.kind === "bedrock_sso") {
     switch (access.state) {
       case "live":
-        return { chip: { label: CONNECTIONS.SIGNED_IN, tone: "success" }, forLine, line: "", title: "" };
+        return { chip: { label: CONNECTIONS.SIGNED_IN, tone: "success" }, forLine, line: "", title: "", button: CONNECTIONS.SIGN_IN_AGAIN };
       case "expiring": {
         // A clock time, not a relative offset (packet MP-D draws "Sign in
         // again before 17:30") — the same absoluteTime convention
@@ -184,7 +184,7 @@ function connectionRowCopyByKind(
   if (provider.kind === "anthropic_subscription") {
     switch (access.state) {
       case "live":
-        return { chip: { label: CONNECTIONS.SIGNED_IN, tone: "success" }, forLine, line: "", title: "" };
+        return { chip: { label: CONNECTIONS.SIGNED_IN, tone: "success" }, forLine, line: "", title: "", button: CONNECTIONS.SIGN_IN_AGAIN };
       case "expiring":
         return {
           chip: { label: CONNECTIONS.EXPIRING, tone: "warning" },

@@ -101,6 +101,17 @@ it("clicking a row's button opens the shared door, keyed to that provider", asyn
   expect(dialog).toHaveTextContent(`For ${MODEL_PROVIDERS.bedrock.name}`);
 });
 
+it("a stored AWS sign-in offers Sign in again, which opens that provider's own door", async () => {
+  const user = userEvent.setup();
+  const s = providerStatus([{ provider: MODEL_PROVIDERS.bedrock, defaultFor: ["claude-code"], state: "live" }]);
+  renderCard(s);
+  await screen.findByTestId("model-connections-card");
+  await expandCard(CONNECTIONS.TITLE);
+  await user.click(await screen.findByRole("button", { name: CONNECTIONS.SIGN_IN_AGAIN }));
+  const dialog = await screen.findByRole("dialog", { name: AGENTS.SIGN_IN_AWS });
+  expect(dialog).toHaveTextContent(`For ${MODEL_PROVIDERS.bedrock.name}`);
+});
+
 it("a key row's Replace button opens the key door with the stored state", async () => {
   const user = userEvent.setup();
   const s = providerStatus([{ provider: MODEL_PROVIDERS.anthropicKey, state: "live" }]);

@@ -8,6 +8,8 @@
 // The AWS door's title, toast and cleanup note are reused from
 // MODEL_ACCESS_BANNER, and its button from AGENTS.SIGN_IN_AWS.
 
+import { SIGN_IN_AGAIN } from "../../../lib/session-renew-copy";
+
 // The shell strip under a provider block (B1–B8). B9 is the server's sentence.
 export const BANNER = {
   B1: (harness: string, name: string) => `${harness} runs use ${name}, and you are not signed in to AWS.`,
@@ -33,6 +35,9 @@ export const CONNECTIONS = {
   STORE_UNREADABLE: "Could not check your connection. Your credential may still be stored. Wait a moment, then re-check.",
   C6_LINE: (name: string) => `Your AWS sign-in for ${name} no longer works.`,
   SIGN_IN_CLAUDE: "Sign in to Claude",
+  // A stored sign-in's door, always offered: a session AWS refuses to renew
+  // still reads as signed in until a run is refused.
+  SIGN_IN_AGAIN,
   ADD_KEY: "Add your key",
   ADD_TOKEN: "Add your token",
   TITLE: "Your model connections",

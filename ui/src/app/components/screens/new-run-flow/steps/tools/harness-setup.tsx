@@ -17,6 +17,8 @@ import { Button } from "../../../../ui/button";
 import { Label } from "../../../../ui/label";
 import { NR_TOOLS } from "../../../../wardyn/copy/new-run/tools";
 import { Chip } from "../../../../wardyn/primitives";
+import { CONNECTIONS } from "../../../../wardyn/copy/door";
+import { signsIn } from "../../../../../lib/model-access";
 import { useModelAccessDoor, useShellSetupStatus } from "../../../../wardyn/model-access-context";
 import type { RunIntent } from "../../draft/run-intent";
 import { providerControlId, setModelProvider, startsWithRun, type HarnessNames } from "../../lenses/tools-lens";
@@ -72,7 +74,10 @@ function ProviderPicker({ fact, access, harnessSet, intent, status, onSignedIn }
     ?.credentials.map((c) => access.credentials.find((x) => x.id === c))
     .find((c) => c?.id.endsWith(":model"));
   const delivery = credential?.delivery === "proxy" ? NR_TOOLS.PROVIDER_PROXY : credential?.delivery === "sandbox_short_lived" ? NR_TOOLS.DELIVERY_SHORT_LIVED : undefined;
-  const signedOut = status?.provider_access?.some((a) => a.provider === selected && NEEDS_SIGN_IN.includes(a.state));
+  const state = status?.provider_access?.find((a) => a.provider === selected)?.state ?? "";
+  const signedOut = NEEDS_SIGN_IN.includes(state);
+  // A stored sign-in keeps its door: AWS can refuse to renew a session that still reads as signed in.
+  const stored = !!current && signsIn(current.kind) && (state === "live" || state === "expiring");
 
   return (
     <div className="flex flex-col gap-2">
@@ -94,7 +99,7 @@ function ProviderPicker({ fact, access, harnessSet, intent, status, onSignedIn }
         {providers.map((p) => <option key={p.id} value={p.id}>{p.name ?? p.id}</option>)}
       </select>
       <p id={`${id}-help`} className="text-sm text-muted-foreground">{selected ? delivery : asked ? NR_TOOLS.PROVIDER_REQUIRED : null}</p>
-      {selected && signedOut && (
+      {selected && (signedOut || stored) && (
         <Button
           type="button"
           variant="outline"
@@ -102,7 +107,7 @@ function ProviderPicker({ fact, access, harnessSet, intent, status, onSignedIn }
           className="w-fit"
           onClick={(e) => door.openDoor({ for: { provider: selected }, returnTo: e.currentTarget, onSignedIn: () => { announce(NR_TOOLS.SIGNED_IN); onSignedIn(); } })}
         >
-          {NR_TOOLS.SETUP_SIGN_IN_TO(name)}
+          {signedOut ? NR_TOOLS.SETUP_SIGN_IN_TO(name) : CONNECTIONS.SIGN_IN_AGAIN}
         </Button>
       )}
     </div>
