@@ -8,6 +8,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+## [0.9.1] — 2026-10-14
+
 Self-hosted runners on people's own computers, from an adopter's first rollout: a per-person AWS SSO run now starts on
 a laptop runner, `wardyn-runnerd` works with Docker Desktop, setup is one command, and the run page says where a run ran.
 
