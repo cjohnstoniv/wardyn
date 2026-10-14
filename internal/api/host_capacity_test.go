@@ -144,7 +144,7 @@ func TestHostCapacityLaunchersRefuseBeforeState(t *testing.T) {
 	ws := types.Workspace{ID: uuid.New(), Kind: types.WorkspaceKindLocalDir, Source: "/w", Status: types.WorkspaceScanned}
 	for door, launch := range map[string]func() error{
 		"source_scan": func() error {
-			_, err := srv.launchSourceScanRun(ctx, "alice@example.com", types.Source{ID: uuid.New(), Kind: types.SourceRepo, Locator: "https://github.com/acme/widgets.git"})
+			_, err := srv.launchSourceScanRun(ctx, "alice@example.com", types.Source{ID: uuid.New(), Kind: types.SourceRepo, Locator: "https://github.com/acme/widgets.git"}, nil)
 			return err
 		},
 		"harness_login": func() error {

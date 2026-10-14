@@ -73,7 +73,7 @@ func f153Scan(t *testing.T, profile *types.GovernanceProfile, active int) (*Serv
 	srv.cfg.Runner = &fakeRunner{}
 	srv.cfg.Store = &f153ScanStore{scanLaneStore: &scanLaneStore{govEscapeStore: st}, active: active}
 	src := types.Source{ID: uuid.New(), Kind: types.SourceRepo, Locator: govWorkspaceRepo}
-	_, err := srv.launchSourceScanRun(govMemberCtx([]string{"eng"}, false), "bob@corp.example", src)
+	_, err := srv.launchSourceScanRun(govMemberCtx([]string{"eng"}, false), "bob@corp.example", src, nil)
 	return srv, err
 }
 

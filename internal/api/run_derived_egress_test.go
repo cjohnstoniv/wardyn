@@ -57,7 +57,7 @@ func TestDerivedEgress_PreviewEqualsDispatch(t *testing.T) {
 			// Create: every lane the grants open is wired.
 			gw := grantWiring{gitPATGrants: map[string]string{"dev.azure.com": "pat"}, sshGrants: map[string]string{"github.com": "ssh"}}
 			dispatched := base.Clone()
-			newComponentFixture(t).srv.unionRunEgress(context.Background(), uuid.New(), &dispatched, gw, tc.wsRefs, tc.repo, site, nil, runComponents{})
+			newComponentFixture(t).srv.unionRunEgress(context.Background(), uuid.New(), &dispatched, gw, tc.wsRefs, tc.repo, site, nil, runComponents{}, nil)
 			if !slices.Contains(dispatched.AllowedDomains, tc.want) {
 				t.Fatalf("dispatch lacks %s: %v", tc.want, dispatched.AllowedDomains)
 			}
@@ -84,7 +84,7 @@ func TestDerivedEgress_PreviewEqualsDispatch(t *testing.T) {
 func TestDerivedEgress_VetoedLaneAddsNothingAtDispatch(t *testing.T) {
 	spec := types.RunPolicySpec{EligibleGrants: []types.GrantSpec{gitPATGrant("dev.azure.com", "ado-pat")}}
 	site := types.SiteConfig{ScmHosts: []string{"ghes.corp.example"}}
-	newComponentFixture(t).srv.unionRunEgress(context.Background(), uuid.New(), &spec, grantWiring{}, nil, "", site, nil, runComponents{})
+	newComponentFixture(t).srv.unionRunEgress(context.Background(), uuid.New(), &spec, grantWiring{}, nil, "", site, nil, runComponents{}, nil)
 	if len(spec.AllowedDomains) != 0 {
 		t.Errorf("a vetoed git_pat lane still dispatched %v", spec.AllowedDomains)
 	}
@@ -128,7 +128,7 @@ func TestDerivedEgress_VetoedLanesMatchDispatch(t *testing.T) {
 				t.Fatalf("persistRunGrants answered %d %s", w.Code, w.Body.String())
 			}
 			fx.srv.applySSHLaneWarnings(ctx, req, runID, &gw)
-			fx.srv.unionRunEgress(ctx, runID, &dispatched, gw, nil, "", tc.site, nil, runComponents{})
+			fx.srv.unionRunEgress(ctx, runID, &dispatched, gw, nil, "", tc.site, nil, runComponents{}, nil)
 			if slices.Contains(dispatched.AllowedDomains, tc.dropped) {
 				t.Fatalf("create wired the lane: %v", dispatched.AllowedDomains)
 			}

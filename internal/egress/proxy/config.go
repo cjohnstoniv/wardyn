@@ -203,7 +203,8 @@ type Config struct {
 	LLMUpstreams map[string]string `json:"llm_upstreams,omitempty"`
 	// LLMChannelHosts maps a model host to the vendor whose request schema the
 	// content scanner reads on it (api.anthropic.com or api.openai.com): an
-	// azure_foundry endpoint, which speaks one of the two dialects. It feeds
+	// azure_foundry endpoint, which speaks one of the two dialects, or a Claude
+	// subscription provider's route-through host, which speaks Anthropic's. It feeds
 	// host classification only, never LLMUpstreams' reverse lookup (llm_channel_hosts.go).
 	// Control-plane-authored; omitempty because an older proxy refuses a key it does not know.
 	LLMChannelHosts map[string]string `json:"llm_channel_hosts,omitempty"`

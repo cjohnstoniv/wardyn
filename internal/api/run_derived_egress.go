@@ -34,17 +34,21 @@ const (
 // nothing but its arguments, so the dry doors and create call it alike and
 // cannot disagree about which hosts a run gets.
 //
+// trusted is the run's ceiling allowlist, the authority a member-owned workspace's clone host is
+// bounded by (runCloneEgress).
+//
 // grants are the grant specs whose lanes are wired: create passes the ones
 // persistRunGrants and applySSHLaneWarnings kept (wiredLaneGrants); the dry
 // doors pass lanesWiredFor's answer, from the same decisions. A github_token
 // grant adds no host and only counts toward declaring a repository.
 func deriveRunEgress(spec *types.RunPolicySpec, wsRefs []types.Workspace, legacyRepo string,
-	scmSite types.SiteConfig, grants []types.GrantSpec,
+	scmSite types.SiteConfig, grants []types.GrantSpec, trusted []string,
 ) []derivedEgress {
 	out := []derivedEgress{{kind: derivedWorkspace, added: unionWorkspaceEgress(spec, wsRefs)}}
 	var clone []string
 	for _, ws := range wsRefs {
-		clone = append(clone, unionAllowedDomains(spec, workspaceCloneEgress(ws))...)
+		kept, _ := runCloneEgress(ws, trusted)
+		clone = append(clone, unionAllowedDomains(spec, kept)...)
 	}
 	out = append(out, derivedEgress{kind: derivedWorkspaceClone, added: clone})
 	// A clone lane only: a sealed local-dir run inherits no SCM host. The

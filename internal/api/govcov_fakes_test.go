@@ -118,6 +118,12 @@ type govCovStore struct {
 	apiTokensErr error
 	apiToken     types.APIToken
 	deleted      []uuid.UUID
+	assignments  []types.GovernanceAssignment
+	assignErr    error
+}
+
+func (s *govCovStore) ListGovernanceAssignments(context.Context) ([]types.GovernanceAssignment, error) {
+	return s.assignments, s.assignErr
 }
 
 func (s *govCovStore) ListGovernanceChanges(_ context.Context, state string) ([]types.GovernanceChange, error) {

@@ -137,11 +137,22 @@ func (r *Registry) HasGlobalValues(owner, name string, values []GlobalPut) bool 
 	}
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	current := r.current[globalKey{owner, name}]
+	k := globalKey{owner, name}
+	current := r.current[k]
 	for _, put := range values {
-		if !containsValue(current, put.Value) && !slices.ContainsFunc(r.retired, func(v retiredValue) bool {
+		if containsValue(current, put.Value) || slices.ContainsFunc(r.retired, func(v retiredValue) bool {
 			return bytes.Equal(v.value, put.Value)
 		}) {
+			continue
+		}
+		held := false
+		for _, row := range r.rows {
+			if bytes.Equal(row.value, put.Value) && (row.key == k || !row.retiredAt.IsZero()) {
+				held = true
+				break
+			}
+		}
+		if !held {
 			return false
 		}
 	}
@@ -199,80 +210,52 @@ func Placeholder() []byte { return bytes.Clone(placeholder) }
 
 // ─── applying what another replica committed ────────────────────────────────
 
-// ApplyGlobal puts one committed credential value into this process's cache:
-// current (retiredAt zero, expiring at until if that is set) or retired at
-// retiredAt. It touches no committed row.
-func (r *Registry) ApplyGlobal(owner, name string, value []byte, until, retiredAt time.Time) {
+// ApplyGlobal puts committed row id's credential value into this process's
+// cache: current (retiredAt zero, expiring at until if that is set) or retired
+// at retiredAt. It is the row's own state and changes no other row's, so a row
+// retired or dropped later never ends what another row of the same bytes still
+// holds. It touches no committed row.
+func (r *Registry) ApplyGlobal(id uuid.UUID, owner, name string, value []byte, until, retiredAt time.Time) {
 	if r == nil || len(value) < MinLen {
 		return
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	k := globalKey{owner, name}
-	cur := r.current[k]
-	i := slices.IndexFunc(cur, func(gv globalValue) bool { return bytes.Equal(gv.value, value) })
-	if retiredAt.IsZero() {
-		if i < 0 {
-			r.current[k] = append(cur, globalValue{value: bytes.Clone(value), until: until})
-		} else {
-			cur[i].until = until
-		}
-		r.retired = slices.DeleteFunc(r.retired, func(rv retiredValue) bool { return bytes.Equal(rv.value, value) })
-		r.reflattenLocked()
-		return
+	if old, ok := r.rows[id]; ok && bytes.Equal(old.value, value) {
+		value = old.value
+	} else {
+		value = bytes.Clone(value)
 	}
-	if i >= 0 {
-		r.current[k] = slices.Delete(cur, i, i+1)
-		if len(r.current[k]) == 0 {
-			delete(r.current, k)
-		}
+	if r.rows == nil {
+		r.rows = map[uuid.UUID]globalRow{}
 	}
-	if !slices.ContainsFunc(r.retired, func(rv retiredValue) bool { return bytes.Equal(rv.value, value) }) {
-		r.retired = append(r.retired, retiredValue{value: bytes.Clone(value), at: retiredAt})
-	}
+	r.rows[id] = globalRow{key: globalKey{owner, name}, value: value, until: until, retiredAt: retiredAt}
 	r.reflattenLocked()
 }
 
-// RetireGlobalValue moves one current credential value to retired at at, where
-// it stays masked until SweepGlobals drops it. A value not current here is left
-// as it is.
-func (r *Registry) RetireGlobalValue(owner, name string, value []byte, at time.Time) {
+// RetireGlobalValue retires committed row id's current value at at, where it
+// stays masked until SweepGlobals drops it. A row not current here is left as
+// it is.
+func (r *Registry) RetireGlobalValue(id uuid.UUID, at time.Time) {
 	if r == nil {
 		return
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	k := globalKey{owner, name}
-	cur := r.current[k]
-	i := slices.IndexFunc(cur, func(gv globalValue) bool { return bytes.Equal(gv.value, value) })
-	if i < 0 {
-		return
+	if row, ok := r.rows[id]; ok && row.retiredAt.IsZero() {
+		row.retiredAt = at
+		r.rows[id] = row
 	}
-	r.retired = append(r.retired, retiredValue{value: cur[i].value, at: at})
-	r.current[k] = slices.Delete(cur, i, i+1)
-	if len(r.current[k]) == 0 {
-		delete(r.current, k)
-	}
-	r.reflattenLocked()
 }
 
-// DropGlobalValue forgets one credential value, current or retired.
-func (r *Registry) DropGlobalValue(owner, name string, value []byte) {
+// DropGlobalValue forgets committed row id's value, current or retired.
+func (r *Registry) DropGlobalValue(id uuid.UUID) {
 	if r == nil {
 		return
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	k := globalKey{owner, name}
-	if cur := r.current[k]; len(cur) > 0 {
-		cur = slices.DeleteFunc(cur, func(gv globalValue) bool { return bytes.Equal(gv.value, value) })
-		if len(cur) == 0 {
-			delete(r.current, k)
-		} else {
-			r.current[k] = cur
-		}
-	}
-	r.retired = slices.DeleteFunc(r.retired, func(rv retiredValue) bool { return bytes.Equal(rv.value, value) })
+	delete(r.rows, id)
 	r.reflattenLocked()
 }
 

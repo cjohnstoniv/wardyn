@@ -528,7 +528,7 @@ func TestDenyPlacements_SourceScanDoor(t *testing.T) {
 		srv.cfg.Runner = fr
 		srv.cfg.Store = &scanLaneStore{govEscapeStore: st}
 		src := types.Source{ID: uuid.New(), Kind: types.SourceRepo, Locator: govWorkspaceRepo}
-		_, err := srv.launchSourceScanRun(govMemberCtx([]string{"eng"}, false), "bob@corp.example", src)
+		_, err := srv.launchSourceScanRun(govMemberCtx([]string{"eng"}, false), "bob@corp.example", src, nil)
 		return srv, audit, fr, err
 	}
 

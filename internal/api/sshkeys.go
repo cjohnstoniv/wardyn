@@ -160,7 +160,7 @@ func (s *Server) handleAddSSHKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if s.cfg.SessionRevocations != nil {
-		revoked, err := oidc.IsRevoked(r.Context(), s.cfg.SessionRevocations, principal, oidcEmailFromContext(r.Context()), admittedIssue(r.Context(), principal, authorizedAt))
+		revoked, err := s.admittedRevoked(r.Context(), principal, authorizedAt)
 		if err != nil {
 			writeServerError(w, r, "add ssh key", err)
 			return

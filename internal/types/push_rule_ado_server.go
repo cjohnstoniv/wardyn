@@ -35,9 +35,9 @@ func PushRuleEntryOfServerRemote(provider, remote, basePath string) (host, org s
 	if err != nil {
 		return "", "", err
 	}
-	var base []string
-	if bp := strings.Trim(basePath, "/"); bp != "" {
-		base = strings.Split(bp, "/")
+	segs, base, err := serverPathNames(remote, segs, basePath)
+	if err != nil {
+		return "", "", err
 	}
 	if len(segs) < len(base) {
 		return "", "", fmt.Errorf("remote %q is not under the Azure DevOps Server base path %q", remote, basePath)

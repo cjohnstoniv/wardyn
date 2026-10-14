@@ -201,7 +201,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_USER_WORKSPACE_ROOTS` | CSV (absolute paths) | (unset = **members may not mount host directories**) | The absolute host directories a **member's own** `local_dir` workspace source may live under. Unset (the default) fails closed (flag `-member-workspace-roots`). [Details](#wardyn_user_workspace_roots) |
 | `WARDYN_USER_WORKSPACE_ROOTS_MAP` | JSON | (unset) | Per-member override of the list above, keyed by lowercased OIDC `sub` **or** email; a principal with an entry uses **only** that entry (flag `-member-workspace-roots-map`). [Details](#wardyn_user_workspace_roots_map) |
 | `WARDYN_USER_WRITABLE_ROOTS` | CSV (absolute paths) | (unset = **no writable member mounts at all**) | Where a member may mark **their own** mount writable. Unset means every member mount is read-only (flag `-member-writable-roots`). [Details](#wardyn_user_writable_roots) |
-| `WARDYN_USER_WRITABLE_DENY` | CSV (absolute paths) | (unset) | carve-outs from `WARDYN_USER_WRITABLE_ROOTS`. **Deny wins** over allow and is checked first, so a subtree inside a writable root can be pinned read-only for members (flag `-member-writable-deny`). |
+| `WARDYN_USER_WRITABLE_DENY` | CSV (absolute paths) | (unset) | carve-outs from `WARDYN_USER_WRITABLE_ROOTS`. **Deny wins** over allow and is checked first, so a subtree inside a writable root can be pinned read-only for members. A writable mount may neither be inside a denied path nor contain one (flag `-member-writable-deny`). |
 | `WARDYN_USER_DRIVE_HOST_ROOTS` | CSV (absolute paths) | (unset = **no `host_path` user drive may be registered**) | The absolute host directories a **user drive** of backend `host_path` may be registered inside. Unset (the default) fails closed. It must not name a tree `WARDYN_USER_WORKSPACE_ROOTS` also names; boot WARNs (`MountCeilingOverlapWarnings` and `ParseUserDriveHostRoots`, [`internal/runner/user_drive_mount.go`](../internal/runner/user_drive_mount.go); flag `-user-drive-host-roots`). [Details](#wardyn_user_drive_host_roots) |
 | `WARDYN_TLS_CERT` | string | (unset) | TLS certificate PEM path (flag `-tls-cert`) |
 | `WARDYN_TLS_KEY` 🔒 | string | (unset) | TLS private key PEM path (flag `-tls-key`). Read once at boot; each read refuses a group- or world-writable file. [Details](#wardyn_tls_key) |
@@ -366,6 +366,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 
 - Vault address for the `vaultkv` store (flag `-vault-addr`).
 - `https://`; `http://` is refused except to a loopback host.
+- A redirect is followed only to this address's own scheme, host and port. With Vault HA, name the active node or an endpoint that forwards requests, not a standby that redirects to another node.
 - Set, wardynd logs in at boot and refuses to start if it cannot; unset, there is no Vault client and a pointer row refuses by name.
 
 ### `WARDYN_VAULT_ROLE_PLATFORM`
@@ -531,6 +532,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - Delete stored session recordings older than N days; `0` (the default) keeps them forever.
 - A recording is governance evidence, so nothing is deleted unless you set a window; each sweep that removes anything emits a `recording.retention.sweep` audit event.
 - fs and pg stores (flag `-recording-retention-days`).
+- At most `106751` days; a larger value is refused at startup (use `0` to keep recordings forever).
 
 ### `WARDYN_AUDIT_RETENTION_DAYS`
 
@@ -1369,7 +1371,8 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - A change nobody decides expires after `WARDYN_GOVERNANCE_CHANGE_TTL`.
 - Exempt, and applied directly: a profile update proven narrowing by its resolved effect, a rename, and a user type's name or description edit that leaves its priority alone.
 - No other target has a narrowing exemption.
-- The local credential delivery policy (`local_credential_delivery`, `PUT /governance/credential-delivery`) is held the same way.
+- The local credential delivery policy (`local_credential_delivery`, `PUT /governance/credential-delivery`), the egress baseline, a runner pool's use policy and a remote-hosted runner's people policy are held the same way.
+- So is adding a remote-hosted runner to an organization pool while another pool holds it under a use policy, or removing it from a pool with one; only a super admin approves those.
 - A service identity's create (`POST /service-identities`) and any `PATCH /service-identities/{name}` that changes its sponsor are held the same way; the PATCH is held whole, so its description or suspend part applies only with it. A description or suspend `PATCH`, unsuspend and retire apply directly.
 - A role-mapping change is approved by a super admin only (a security admin is refused `admin_surface`).
 - Distinct means a different principal AND a different mailbox (case-folded), so one person holding an SSO session and an API token is not two humans.
@@ -1444,6 +1447,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - And a session that lapses **mid-run HOLDS** the sandbox's next `GetRoleCredentials` call while its owner signs in again (`WARDYN_CREDENTIAL_REAUTH_TIMEOUT`, below) instead of failing the run.
 - `off`: the pre-0.7.6 behaviour — the token is written into the sandbox, no `portal.sso` MITM, no hold, no sign-in requests.
 - An AWS CLI component has no `off` lane: with the switch off, every run door refuses it (`component_cli_aws_inject_off`), and so does dispatch.
+- On a run whose model provider is Bedrock, the sandbox's `AWS_REGION` is the Bedrock region, and it overrides an AWS CLI component's default region for `aws`. Pass `--region` where the two differ.
 - **`off` applies to NEW dispatches only**: the placeholder cache, the injection grant and the MITM entry are all authored at dispatch.
 - So a run already running keeps the lane it was authored with until it ends.
 - Flip it, then relaunch the runs that matter or wait them out.

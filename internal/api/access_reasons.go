@@ -19,6 +19,7 @@ var accessSentences = map[string]string{
 	"policy_stricter_default":    "Your policy {asks first for|blocks} tools with no rule. A run can only be stricter.",
 	"policy_stricter_tool":       "Your policy {asks first for|blocks} {tool}. A run can only be stricter.",
 	"harness_no_hold":            "Codex CLI can't pause a tool call for approval.",
+	"command_no_hold":            "A command can't pause a tool call for approval.",
 	"harness_no_block_builtin":   "Wardyn can't block Codex CLI's own tools. Rules for its MCP tools still apply.",
 	"attended_no_skip":           "In an interactive run Claude Code asks you before it acts, and this run's settings don't let it skip asking.",
 	"attended_rules_unavailable": "Wardyn can't set tool rules for an interactive run yet.",

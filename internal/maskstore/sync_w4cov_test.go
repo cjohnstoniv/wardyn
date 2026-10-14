@@ -161,8 +161,8 @@ func TestW4CovApplyTombstoneOfAKnownRow(t *testing.T) {
 			ref{bucket: bucketGlobal, current: true}, &retired, true, true},
 		{"a global with no retire time is dropped",
 			ref{bucket: bucketGlobal, current: true}, nil, false, false},
-		{"an already-retired global is dropped",
-			ref{bucket: bucketGlobal, current: false}, &retired, false, false},
+		{"an already-retired global stays masked through its own grace",
+			ref{bucket: bucketGlobal, current: false}, &retired, true, true},
 		{"a per-run value is dropped",
 			ref{bucket: bucketRun, current: true}, &retired, false, false},
 	}
@@ -175,7 +175,7 @@ func TestW4CovApplyTombstoneOfAKnownRow(t *testing.T) {
 			if rf.bucket == bucketRun {
 				f.reg.AddLocal(w4CovRun, rf.value)
 			} else {
-				f.reg.ApplyGlobal(w4CovOwner, "cred", rf.value, time.Time{}, time.Time{})
+				f.reg.ApplyGlobal(w4CovRowC, w4CovOwner, "cred", rf.value, time.Time{}, time.Time{})
 			}
 			f.s.note(&rf)
 			if !w4CovContains(f.snapshot(), "tombstoned-secret-value") {
@@ -363,7 +363,7 @@ func TestW4CovFullApplyDropsWhatTheTableNoLongerHas(t *testing.T) {
 		t.Run(fmt.Sprintf("full=%v", full), func(t *testing.T) {
 			f := w4CovNewFixture(t)
 			stale := []byte("stale-secret-value")
-			f.reg.ApplyGlobal(w4CovOwner, "cred", stale, time.Time{}, time.Time{})
+			f.reg.ApplyGlobal(w4CovRowC, w4CovOwner, "cred", stale, time.Time{}, time.Time{})
 			f.s.note(&ref{id: w4CovRowC, gen: 1, bucket: bucketGlobal, owner: w4CovOwner, name: "cred", value: stale, current: true})
 			live := f.sealedRow(t, w4CovRowA, bucketGlobal, "cred", nil, "live-secret-value", 2)
 

@@ -64,6 +64,8 @@ func TestRunModeRefusals(t *testing.T) {
 		{"an interactive environment keeps its idle stop", interactiveOK + `,"inline_policy":{"auto_stop_after_sec":600,"allowed_domains":["a.example.com"],"first_use_approval":"always_deny","min_confinement_class":"CC2"}`, "", "", 200},
 		{"background has no web gateway", `"experience":"background",` + agentTask + `,"inline_policy":{"ui_apps":[{"name":"ide","port":8080}]},` + noRepos, reasonRunModeConflict, "", 422},
 		{"background runs only the harness it names", `"experience":"background",` + agentTask + `,"tools":[` + codexTool + `],` + noRepos, reasonRunModeConflict, "", 422},
+		{"a background command's harness takes no tool rules", `"experience":"background","workload":{"kind":"command","command":"make"},"tools":[{"id":"claude-code","kind":"harness","tool_rules":[{"tool":"Bash","effect":"deny"}]}],` + noRepos, reasonRequestFieldUnavailable, runModeUnavailableMsg("tools[0]: tool rules in a background command"), 422},
+		{"nor a default", `"experience":"background","workload":{"kind":"command","command":"make"},"tools":[{"id":"claude-code","kind":"harness","default_effect":"hold"}],` + noRepos, reasonRequestFieldUnavailable, runModeUnavailableMsg("tools[0]: tool rules in a background command"), 422},
 		{"a background command may include a harness", `"experience":"background","workload":{"kind":"command","command":"make"},"tools":[` + claudeTool + `],` + noRepos, "", "", 200},
 		{"interactive has no workload", `"experience":"interactive",` + agentTask + `,"tools":[` + claudeTool + `],` + noRepos, reasonRunModeConflict, "", 422},
 

@@ -11,6 +11,7 @@ import (
 	"slices"
 
 	"github.com/cjohnstoniv/wardyn/internal/authz"
+	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -153,11 +154,16 @@ type capDrop struct {
 // An otherwise-ungranted allowlist still gets a run with no member-authored egress, not
 // a 403: the run's admin-authored egress is still there and is what the task usually needs.
 //
-// Under an operator ceiling of allow_all_egress the allowlist is not the gate
-// at all (composer.Clamp leaves AllowAllEgress set and the proxy allows any
-// non-denied public host), so egress_host narrowing does nothing there. That is
-// the operator's own posture, named here so nobody reads a green switch as a
-// bound that deployment does not have.
+// Under an operator ceiling of allow_all_egress composer.Clamp keeps the
+// member's entries without intersecting them, and for a public host the
+// allowlist is not the gate (the proxy allows any non-denied public host), so
+// egress_host narrowing bounds no public reach there. That is the operator's
+// own posture, named here so nobody reads a green switch as a bound that
+// deployment does not have. An exact entry is still a gate for one thing
+// allow-all never gives, the proxy's trust of a private-range literal address,
+// and neither that posture nor this capability is authority for it:
+// dropUncoveredPrivateLiterals bounds it by the ceiling's own entries before
+// the clamp, whatever is enforced or granted here.
 func (s *Server) narrowUserInlinePolicy(ctx context.Context, owner string, spec *types.RunPolicySpec) ([]string, []capDrop, error) {
 	var warns []string
 	var drops []capDrop
@@ -294,6 +300,47 @@ func (s *Server) narrowUserInlinePolicy(ctx context.Context, owner string, spec 
 	}
 
 	return warns, drops, nil
+}
+
+// dropUncoveredPrivateLiterals removes, from the allowlist of a spec a member
+// authored or selected, each exact private-range address entry the ceiling's
+// own entries do not cover. The proxy trusts such a literal past its
+// private-address guard when the run's policy names it exactly, and under an
+// allow-all ceiling composer.Clamp keeps a member's entries as authored, so
+// without this a member could give their own run that trust. Covered means the
+// ceiling holds an exact entry for the same address on every port the member's
+// entry names (proxy.Policy.ExceedsLiteralTrust, the guard's own parsing and
+// range): its allow_all_egress, a wildcard, a name that resolves there and an
+// egress_host grant are not authority.
+//
+// Only under an allow-all ceiling: any other ceiling's intersection in
+// composer.Clamp keeps an entry only when the ceiling spells the same one.
+// Public literals, names and wildcards are left to the clamp as before, and
+// what an admin adds after the member pipeline is not seen here.
+func dropUncoveredPrivateLiterals(domains []string, ceiling types.RunPolicySpec) ([]string, []string) {
+	if !ceiling.AllowAllEgress {
+		return domains, nil
+	}
+	authority := proxy.CompilePolicy(types.RunPolicySpec{AllowedDomains: ceiling.AllowedDomains})
+	kept, warns := domains[:0:0], []string(nil)
+	for _, d := range domains {
+		if authority.ExceedsLiteralTrust(d) {
+			warns = append(warns, privateLiteralDropWarning(d))
+			continue
+		}
+		kept = append(kept, d)
+	}
+	if len(warns) == 0 {
+		return domains, nil
+	}
+	return kept, warns
+}
+
+// privateLiteralDropWarning is the one sentence for an entry
+// dropUncoveredPrivateLiterals removed, so a caller that keeps the entry
+// (boundOverrideAdds, for a policy's own host) can withdraw it.
+func privateLiteralDropWarning(entry string) string {
+	return fmt.Sprintf("dropped private address entry %q: not in operator allowlist, and allow_all_egress does not cover a private address", entry)
 }
 
 // auditUserPolicyDrops records what a member's inline policy LOST — one event
