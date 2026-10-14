@@ -233,6 +233,10 @@ func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 	s.projectStatusDetailFor(r, runs)
 	s.projectRunnerFacts(r, runs)
 	run = runs[0]
+	// A local run's runner was named by projectRunnerFacts; a remote-hosted runner's name is read here.
+	if run.RunnerName == "" {
+		run.RunnerName = s.runnerNameOf(r.Context(), run)
+	}
 	// ui_apps is a READ-ONLY denormalization of the run's EFFECTIVE policy onto
 	// the run payload — the console's UI-apps lane needs it, and the run row
 	// cannot answer it (agent_runs carries policy_id only, and an inline or
@@ -254,6 +258,9 @@ func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 		ModelProviderName    string        `json:"model_provider_name,omitempty"`
 		ModelProviderDeleted bool          `json:"model_provider_deleted,omitempty"`
 		CreatedViaName       string        `json:"created_via_name,omitempty"`
+		// RunnerPoolName is the name of the pool the run was admitted into, read at request time: a pool is
+		// renamed, and a deleted one keeps its row.
+		RunnerPoolName string `json:"runner_pool_name,omitempty"`
 		// KeptUntil (#1320) is when an ended run's files are torn down. A
 		// projection for display only, never a field of types.AgentRun.
 		KeptUntil *time.Time `json:"kept_until,omitempty"`
@@ -269,6 +276,7 @@ func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 		AgentRun: run, UIApps: apps, UserTypeName: s.runUserTypeName(r, run.UserType),
 		ModelProviderName: providerName, ModelProviderDeleted: providerDeleted,
 		CreatedViaName: s.runCreatedViaName(r.Context(), run),
+		RunnerPoolName: s.runPoolName(r.Context(), run),
 		KeptUntil:      s.endedRunKeptUntil(run),
 		Policy:         s.runPolicyRef(r.Context(), run),
 		Sync:           s.runSyncOpenView(run.ID),

@@ -149,8 +149,8 @@ export const MY_RUNNER = {
 
 // Run detail (packet M-RN-3). The packet's "Placement" is not a console word (DECISIONS 2026-10-09), so the
 // Identity row reads "Runs on" and the values name the kind of runner: a run on its owner's computer is
-// "{name} · your computer", a run on a remote-hosted runner "Remote-hosted runner" (the run read carries that
-// runner's id, not its name).
+// "{name} · your computer", a run on a remote-hosted runner "Remote-hosted runner"; the Runner and Pool rows
+// below it name the runner and the pool.
 export const RUN_PLACEMENT = {
   LABEL: "Runs on",
   /** pending W-52: the recommended text until the owner answers. */
@@ -163,6 +163,11 @@ export const RUN_PLACEMENT = {
    * this run could use.", carries the banned word "placement".
    */
   FILLED: "The only place this run could run.",
+  /** The Identity rows beside "Runs on": the runner by name (its id when the name is unknown) and its pool. */
+  RUNNER: "Runner",
+  POOL: "Pool",
+  /** A run from before 0.9 has no recorded place. */
+  NOT_RECORDED: "Not recorded",
   CHIP: runOnChip,
   EVIDENCE: "Evidence",
   REPORTED_BY: (name: string) => `Reported by ${name}`,

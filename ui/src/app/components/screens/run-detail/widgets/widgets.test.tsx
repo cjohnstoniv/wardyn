@@ -5,7 +5,7 @@
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import type { AgentRun, AuditEvent, CredentialGrant, EgressDecision } from "../../../../lib/types";
+import type { AgentRun, AuditEvent, RunDetail, CredentialGrant, EgressDecision } from "../../../../lib/types";
 
 const getFilesMock = vi.fn();
 const getResourcesMock = vi.fn();
@@ -352,6 +352,49 @@ describe("IdentityWidget", () => {
   });
 });
 
+// 0.9.1: the Identity widget says where the run ran for every run that has it, a successful one included.
+describe("IdentityWidget: where the run ran", () => {
+  const run = {
+    id: "run-1",
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+    created_by: "me",
+    agent: "claude-code",
+    repo: "acme/widgets",
+    task: "",
+    confinement_class: "CC2",
+    state: "COMPLETED",
+    spiffe_id: "spiffe://x",
+    runner_target: "docker",
+    placement: "",
+  } as RunDetail;
+  const rows = (over: Partial<RunDetail>) => {
+    render(<IdentityWidget run={{ ...run, ...over }} onGoPolicy={() => {}} />);
+    const read = (label: string) => screen.queryByText(label)?.nextElementSibling?.textContent ?? null;
+    return { placement: read("Runs on"), runner: read("Runner"), pool: read("Pool") };
+  };
+
+  it("names the remote-hosted runner and its pool on a completed run that was not filled", () => {
+    expect(rows({ placement: "remote", remote_runner_id: "k8s", runner_name: "Cluster A", runner_pool_id: "p1", runner_pool_name: "Build farm" })).toEqual({
+      placement: "Remote-hosted runner",
+      runner: "Cluster A",
+      pool: "Build farm",
+    });
+  });
+
+  it("names the person's own computer, and falls back to the ids when no names are known", () => {
+    expect(rows({ placement: "local", runner_id: "7c1d2e3f-aaaa", runner_pool_id: "p2" })).toEqual({
+      placement: "Runner 7c1d2e3f · me's runner",
+      runner: "7c1d2e3f-aaaa",
+      pool: "p2",
+    });
+  });
+
+  it("says a run from before 0.9 has no recorded place, and shows no pool row", () => {
+    expect(rows({})).toEqual({ placement: "Not recorded", runner: "docker", pool: null });
+  });
+});
+
 // 0.9 (packet M-RN-3 RS1, RS1b): the Identity widget's Sync rows. Ended sessions are the run's
 // ssh.sync.transfer audit rows (bytes_in is INTO the sandbox); open ones are RunDetail.sync.open.
 describe("IdentityWidget: Sync rows", () => {
@@ -519,12 +562,13 @@ describe("IdentityWidget: Runs on and Evidence", () => {
     expect(screen.getByText("Runner 11111111 · your computer")).toBeInTheDocument();
   });
 
-  // C2: a remote run's Identity is today's, unless the resolver filled the place.
-  it.each(["substrate", "runner_asserted"] as const)("a remote run has none of it, whatever its evidence_source (%s)", (evidence_source) => {
+  // C2: a remote run says where it ran (0.9.1: placed or not), and never carries the Evidence row or note.
+  it.each(["substrate", "runner_asserted"] as const)("a remote run has no Evidence, whatever its evidence_source (%s)", (evidence_source) => {
     renderAs({ ...base, placement: "remote", runner_id: undefined, runner_name: undefined, evidence_source } as AgentRun, "me");
-    expect(screen.queryByText("Runs on")).not.toBeInTheDocument();
+    expect(screen.getByText("Remote-hosted runner")).toBeInTheDocument();
+    expect(screen.queryByText("The only place this run could run.")).not.toBeInTheDocument();
     expect(screen.queryByText("Evidence")).not.toBeInTheDocument();
-    expect(screen.queryByText(/your computer|Remote-hosted runner/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/your computer/)).not.toBeInTheDocument();
     expect(screen.queryByText(/is a computer its owner administers/)).not.toBeInTheDocument();
   });
 

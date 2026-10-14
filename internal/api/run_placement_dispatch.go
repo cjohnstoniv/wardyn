@@ -68,6 +68,10 @@ func (c dispatchCeiling) placementExempt() dispatchCeiling {
 // first substrate that can enforce its class.
 func (s *Server) createSandboxAtTarget(ctx context.Context, run types.AgentRun, spec runner.SandboxSpec) (runner.Sandbox, error) {
 	switch {
+	case run.RunnerID != nil && run.Task == harnessLoginTask:
+		// A provider sign-in runs on the server's own substrate, never a person's computer: it holds the
+		// sign-in's credentials. No code path binds one to a runner, so a bound one is refused outright.
+		return runner.Sandbox{}, fmt.Errorf("%w: a provider sign-in is never placed on a runner", runner.ErrExecutorUnavailable)
 	case run.RunnerID != nil:
 		spec.RunnerID = run.RunnerID.String()
 		if rs, ok := s.cfg.Store.(store.RunnerStore); ok {

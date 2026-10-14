@@ -121,10 +121,11 @@ export interface AgentRun {
   // The runner a local run landed on. Absent for a remote run and for a
   // pre-0.9 row; the Go side omits the key on NULL, never sends "".
   runner_id?: string;
-  // Read-side facts about that runner, on a local run only (Go: AgentRun.RunnerName and the next two):
-  // its name, whether this process has it connected, and when it last was. Never stored. The name is
-  // the one the run was created under (a runner is never renamed), so a revoked runner's run keeps it.
-  // All three are absent when the runner could not be read, which is not the same as offline:
+  // Read-side facts about that runner (Go: AgentRun.RunnerName and the next two): its name, whether this
+  // process has it connected, and when it last was. Never stored. The name is the one the run was created
+  // under (a runner is never renamed), so a revoked runner's run keeps it; GET /runs/{id} also names a
+  // remote-hosted runner, whose current name it reads. The other two are on a local run only. All are
+  // absent when the runner could not be read, which is not the same as offline:
   // runner_online false is a fact, absent is "unknown".
   runner_name?: string;
   runner_online?: boolean;
@@ -468,6 +469,8 @@ export interface RunDetail extends AgentRun {
   model_provider_name?: string;
   model_provider_deleted?: boolean;
   created_via_name?: string;
+  // The name of the pool the run was admitted into, as it reads now; a deleted pool is still named.
+  runner_pool_name?: string;
   kept_until?: string;
   // The policy the run was launched under and how to ask for a change to it
   // (GET /runs/{id}, internal/policyref.Ref). Absent when none applies.
