@@ -638,7 +638,7 @@ describe("My runner card: the start command and the claim into a pool", () => {
     await user.click(await screen.findByRole("button", { name: "Register a runner" }));
     await screen.findByText("wdr_selfminted");
   };
-  const VM_HINT = /^On Docker Desktop .* --total-disk <GB> to register, and --relay-listen 127\.0\.0\.1 to serve\.$/;
+  const VM_HINT = /^On Docker Desktop, .* --total-disk <GB> to register, since the VM hides the disk\.$/;
 
   it("names the proxy image the server answered with in the serve command, and always says what VM-backed Docker needs", async () => {
     listMineMock.mockResolvedValue([]);

@@ -112,7 +112,7 @@ wardyn-runnerd serve --org https://wardyn.example \
   --internal-network wardyn-internal
 ```
 
-The console prints the same command from the token mint answer, with its `proxy_image`, and a note on `--total-disk` and `--relay-listen 127.0.0.1` for VM-backed Docker.
+The console prints the same command from the token mint answer, with its `proxy_image`, and a note on `--total-disk` for VM-backed Docker.
 
 | Setting | Behaviour |
 |---|---|
