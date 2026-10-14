@@ -42,7 +42,7 @@ const (
 	reasonReviveSubstrateUnreadable         = "revive_substrate_unreadable"           // the run's substrate could not answer whether it can replace a proxy
 	reasonReviveConfigNotStored             = "revive_config_not_stored"              // no proxy config is stored for this run (it predates this release, or none is kept)
 	reasonReviveConfigUnreadable            = "revive_config_unreadable"              // the stored proxy config could not be read
-	reasonReviveConfigDoesNotLoad           = "revive_config_does_not_load"           // the stored proxy config failed to parse or validate
+	reasonReviveConfigDoesNotLoad           = "revive_config_does_not_load"           // the stored proxy config, or the one the revive would start the new proxy with, failed to parse or validate
 	reasonReviveNotRunning                  = "revive_not_running"                    // the run is not in the RUNNING state, or has no sandbox
 	reasonReviveEndedFilesGone              = "revive_ended_files_gone"               // the run ended and its files are no longer kept
 	reasonRevivePastEnd                     = "revive_past_end"                       // the run has passed its scheduled end; extend it first
@@ -53,6 +53,7 @@ const (
 	reasonReviveAgentStatusUnreadable       = "revive_agent_status_unreadable"        // the run's agent status could not be probed
 	reasonReviveConfigRunMismatch           = "revive_config_run_mismatch"            // the stored proxy config names a different run than the one being revived
 	reasonReviveCeilingDeniesGitBroker      = "revive_ceiling_denies_git_broker"      // the owner's current governance profile now denies GitHub, which the run's git broker needs
+	reasonReviveCeilingDeniesAzureCLI       = "revive_ceiling_denies_azure_cli"       // the owner's current governance profile now denies Azure Resource Manager, which the run's Azure CLI door needs
 	reasonReviveOwnerAuthorityUnreadable    = "revive_owner_authority_unreadable"     // the owner's launch-door or model-credential re-check, or the read of the run's git_pat grants for its brokered set, could not be completed
 	reasonReviveAdminRestartCountInvalid    = "revive_admin_restart_count_invalid"    // run_ids named none, or more than the bulk maximum
 	reasonReviveProxyWindowStoreUnavailable = "revive_proxy_window_store_unavailable" // this store cannot list run proxy releases
@@ -213,6 +214,7 @@ const (
 	reasonRunInspectTerminal              = "run_inspect_terminal"                // the run has finished; its sandbox is gone
 	reasonRunInspectNoSandbox             = "run_inspect_no_sandbox"              // the run never dispatched (or recorded no sandbox ref)
 	reasonRunInspectPaused                = "run_inspect_paused"                  // the run is paused
+	reasonRunInspectAgentStopped          = "run_inspect_agent_stopped"           // the run is kept with its agent stopped; there is no running sandbox to read
 	reasonRunInspectExecStreamUnsupported = "run_inspect_exec_stream_unsupported" // the runner does not support exec streaming
 	reasonRunResourcesReadFailed          = "run_resources_read_failed"           // the sandbox resource usage script failed
 	reasonRunFilesNoExecSession           = "run_files_no_exec_session"           // the runner returned no exec session
@@ -504,14 +506,15 @@ const (
 
 // POST /runs/{id}/attach (attach.go): the interactive WebSocket door.
 const (
-	reasonAttachNoRunner         = "attach_no_runner"           // this deployment configures no runner
-	reasonAttachTicketNotYourRun = "attach_ticket_not_your_run" // the ticket's stamped principal is not this run's owner
-	reasonAttachNotRunning       = "attach_not_running"         // the run is not in the RUNNING state
-	reasonAttachRunKept          = "attach_run_kept"            // the run is kept (ended/lost); its agent is stopped
-	reasonAttachNoSandbox        = "attach_no_sandbox"          // the run has no sandbox ref
-	reasonAttachResumeFailed     = "attach_resume_failed"       // thawing a paused run for the attach failed
-	reasonAttachTicketMintFailed = "attach_ticket_mint_failed"  // mintAttachTicket failed
-	reasonAttachTakeoverNoHolder = "attach_takeover_no_holder"  // nobody is currently attached to this run
+	reasonAttachNoRunner          = "attach_no_runner"           // this deployment configures no runner
+	reasonAttachTicketNotYourRun  = "attach_ticket_not_your_run" // the ticket's stamped principal is not this run's owner
+	reasonAttachNotRunning        = "attach_not_running"         // the run is not in the RUNNING state
+	reasonAttachRunKept           = "attach_run_kept"            // the run is kept (ended/lost); its agent is stopped
+	reasonAttachNoSandbox         = "attach_no_sandbox"          // the run has no sandbox ref
+	reasonAttachResumeFailed      = "attach_resume_failed"       // thawing a paused run for the attach failed
+	reasonAttachTicketMintFailed  = "attach_ticket_mint_failed"  // mintAttachTicket failed
+	reasonAttachTakeoverNoHolder  = "attach_takeover_no_holder"  // nobody is currently attached to this run
+	reasonAttachSessionCapReached = "attach_session_cap_reached" // this run already has the maximum number of live terminal sessions on this replica
 )
 
 // /api/v1/admin/presets (presets.go): validatePresetRequest's whole check is

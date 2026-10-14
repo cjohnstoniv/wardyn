@@ -22,10 +22,11 @@ After=network-online.target
 
 [Service]
 Type=simple
-# WARDYN_RUNNER_ORG_URL, WARDYN_PROXY_IMAGE, WARDYN_INTERNAL_NETWORK and,
-# optionally, DOCKER_HOST. `--org` is flag-only, hence the variable below.
+# WARDYN_RUNNER_ORG_URL, WARDYN_RUNNER_STATE_DIR, WARDYN_PROXY_IMAGE,
+# WARDYN_INTERNAL_NETWORK and, optionally, DOCKER_HOST. `--org` and `--state-dir`
+# are flag-only, hence the variables below.
 EnvironmentFile=%h/.config/wardyn/runnerd.env
-ExecStart=__WARDYN_RUNNERD__ serve --org ${WARDYN_RUNNER_ORG_URL}
+ExecStart=__WARDYN_RUNNERD__ serve --org ${WARDYN_RUNNER_ORG_URL} --state-dir ${WARDYN_RUNNER_STATE_DIR}
 # serve retries an unreachable organisation itself; this restarts a crash.
 Restart=on-failure
 RestartSec=10s

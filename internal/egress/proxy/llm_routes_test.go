@@ -3,7 +3,10 @@
 
 package proxy
 
-import "testing"
+import (
+	"net/url"
+	"testing"
+)
 
 // TestIsLLMHost_BedrockPrivateEndpoint pins isLLMHost's Bedrock arm across the
 // PrivateLink widening. The ACCEPT rows are the public regional endpoints plus
@@ -78,6 +81,28 @@ func TestIsLLMHost_BedrockPrivateEndpoint(t *testing.T) {
 	} {
 		if got := p.isLLMHost(tc.host); got != tc.want {
 			t.Errorf("isLLMHost(%q) = %v, want %v (%s)", tc.host, got, tc.want, tc.why)
+		}
+	}
+}
+
+// The upstream URL's host is one net/url parses back to the same host and
+// port: an IPv6 literal is bracketed on the scheme's default port as on any
+// other, where a bare one's colons read as a port.
+func TestUpstreamURLHostBracketsAnIPv6Literal(t *testing.T) {
+	for _, tc := range []struct {
+		host        string
+		port        int
+		want, wantP string
+	}{
+		{"api.anthropic.com", 443, "api.anthropic.com", ""},
+		{"api.anthropic.com", 8443, "api.anthropic.com:8443", "8443"},
+		{"2606:4700:4700::1111", 443, "[2606:4700:4700::1111]", ""},
+		{"2606:4700:4700::1111", 8443, "[2606:4700:4700::1111]:8443", "8443"},
+	} {
+		got := upstreamURLHost(tc.host, tc.port, 443)
+		u, err := url.Parse((&url.URL{Scheme: "https", Host: got, Path: "/anthropic/v1/messages"}).String())
+		if got != tc.want || err != nil || u.Hostname() != tc.host || u.Port() != tc.wantP {
+			t.Errorf("%s:%d = %q (parsed %v), want %q", tc.host, tc.port, got, err, tc.want)
 		}
 	}
 }

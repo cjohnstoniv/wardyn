@@ -250,6 +250,7 @@ func TestPreflightMirrorsThePATNarrowingRefusals(t *testing.T) {
 	ssh := types.GrantSpec{Kind: types.GrantSSHKey, Scope: json.RawMessage(`{"host":"ssh.github.com","key_secret_ref":"pat"}`)}
 	adoNarrowed := types.GrantSpec{Kind: types.GrantGitPAT, Scope: json.RawMessage(`{"host":"dev.azure.com","secret_name":"pat","access":"read"}`)}
 	githubToken := types.GrantSpec{Kind: types.GrantGitHubToken, Scope: json.RawMessage(`{"repos":["org/repo"]}`)}
+	emptyGitHubToken := types.GrantSpec{Kind: types.GrantGitHubToken, Scope: json.RawMessage(`{"repos":[]}`)}
 	bbsAPI := patGrantSpec(`"api":true,"forge":"bitbucket_server"`)
 	gitlabAPI := patGrantSpec(`"api":true,"forge":"gitlab"`)
 
@@ -257,15 +258,20 @@ func TestPreflightMirrorsThePATNarrowingRefusals(t *testing.T) {
 		name      string
 		brokerOff bool
 		grants    []types.GrantSpec
+		repo      string // the request's own repo, a declared clone
 		want      string // "" = Review passes
 	}{
-		{"broker off", true, []types.GrantSpec{narrowed}, reasonGitPATNarrowingNeedsBroker},
-		{"ssh conflict", false, []types.GrantSpec{githubNarrowed, ssh}, reasonGitPATNarrowingSSHConflict},
-		{"azure devops host", false, []types.GrantSpec{adoNarrowed}, reasonGitPATNarrowingUnsupportedHost},
-		{"brokered forge", false, []types.GrantSpec{githubNarrowed, githubToken}, reasonGitPATNarrowingUnsupportedHost},
-		{"narrowed grant, broker on", false, []types.GrantSpec{narrowed}, ""},
-		{"bitbucket api, flag off", false, []types.GrantSpec{bbsAPI}, reasonGitPATAPIForgeDisabled},
-		{"gitlab api", false, []types.GrantSpec{gitlabAPI}, ""},
+		{"broker off", true, []types.GrantSpec{narrowed}, "", reasonGitPATNarrowingNeedsBroker},
+		{"ssh conflict", false, []types.GrantSpec{githubNarrowed, ssh}, "", reasonGitPATNarrowingSSHConflict},
+		{"azure devops host", false, []types.GrantSpec{adoNarrowed}, "", reasonGitPATNarrowingUnsupportedHost},
+		{"brokered forge", false, []types.GrantSpec{githubNarrowed, githubToken}, "", reasonGitPATNarrowingUnsupportedHost},
+		// A github_token grant that names no repository and a run that declares none maps nothing to
+		// the broker, so create launches the narrowed github.com grant and Review does not refuse it.
+		{"github_token with no repos and no declared clone", false, []types.GrantSpec{githubNarrowed, emptyGitHubToken}, "", ""},
+		{"github_token with no repos, a declared github.com clone", false, []types.GrantSpec{githubNarrowed, emptyGitHubToken}, "https://github.com/org/declared", reasonGitPATNarrowingUnsupportedHost},
+		{"narrowed grant, broker on", false, []types.GrantSpec{narrowed}, "", ""},
+		{"bitbucket api, flag off", false, []types.GrantSpec{bbsAPI}, "", reasonGitPATAPIForgeDisabled},
+		{"gitlab api", false, []types.GrantSpec{gitlabAPI}, "", ""},
 	} {
 		for _, path := range []string{"/api/v1/runs/preflight", policyPreviewPath} {
 			t.Run(tc.name+path, func(t *testing.T) {
@@ -275,7 +281,11 @@ func TestPreflightMirrorsThePATNarrowingRefusals(t *testing.T) {
 				id := uuid.New()
 				st.policies[id] = types.RunPolicy{ID: id, Name: id.String(), Spec: types.RunPolicySpec{
 					MinConfinementClass: types.CC1, EligibleGrants: tc.grants}}
-				body := `{"agent":"claude-code","task":"t","policy_id":"` + id.String() + `"}`
+				body := `{"agent":"claude-code","task":"t","policy_id":"` + id.String() + `"`
+				if tc.repo != "" {
+					body += `,"repo":"` + tc.repo + `"`
+				}
+				body += `}`
 				if path == policyPreviewPath {
 					forbidPreviewSideEffects(t, srv)
 				}

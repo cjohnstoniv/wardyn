@@ -6,6 +6,7 @@ package remote
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 )
@@ -38,7 +39,7 @@ func (l *Link) AttachSession(conn runnerwire.Conn, cfg runnerwire.PeerConfig) *r
 	}
 	old := l.peer
 	l.peer = runnerwire.NewPeer(conn, cfg)
-	l.ready = false
+	l.ready, l.stated = false, false
 	if old != nil {
 		old.Close()
 	}
@@ -65,6 +66,39 @@ func (l *Link) Close() {
 	l.mu.Unlock()
 	if p != nil {
 		p.Close()
+	}
+}
+
+// stateFinal records that peer's final STATE page reached the org, or that peer resumed a session
+// already past it: judging that page is the org's last refusal of a session for an open action.
+func (l *Link) stateFinal(peer *runnerwire.Peer) {
+	l.mu.Lock()
+	if l.peer == peer {
+		l.stated = true
+	}
+	l.mu.Unlock()
+}
+
+// requireFresh ends a session past its final STATE page (stateFinal), after a teardown was queued.
+// The runner learns of a queued action only from a fresh session's PENDING, sent once at the session's
+// start, and judging the final STATE page is the last time the org refuses a session for an open
+// action; one queued after that look would otherwise wait for the next reconnect, however far off.
+// That holds once the session is READY too: the teardown was queued because its call found the link
+// not ready, and nothing in a session that became ready meanwhile carries it. Before the final page,
+// the page itself is refused; a link with no live peer has nothing to end, as its next session reads
+// the queue.
+func (l *Link) requireFresh(ctx context.Context) {
+	l.mu.Lock()
+	p, stated := l.peer, l.stated
+	l.mu.Unlock()
+	if p == nil || !stated || !p.Online() {
+		return
+	}
+	ctx, cancel := context.WithTimeout(ctx, time.Second)
+	defer cancel()
+	defer p.Close()
+	if payload, err := runnerwire.Marshal(runnerwire.Reason{Reason: "fresh_session_required"}); err == nil {
+		_ = p.Send(ctx, runnerwire.Frame{Type: runnerwire.TypeGoaway, Payload: payload})
 	}
 }
 

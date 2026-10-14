@@ -448,13 +448,8 @@ func (s *Server) queueLaunch(st *queuedStart, req createRunRequest, ceiling gove
 	s.auditQueueStart(st, started, anchor, id.JTI)
 	spec := f.spec
 	s.unionRunEgress(st.base, run.ID, &spec, gw, f.wsRefs, req.Repo, f.scmSite, f.directGitHubAdded, f.comps)
-	spec, harnessRules := applyHarnessToolRules(spec, req.Tools, toolLaneDefault(req))
 	s.metrics.queueWait(queueOutcomeStarted, run.AdmittedAt.Sub(st.entry.QueuedAt))
-	s.finishCreateRunLaunch(st.base, createRunLaunch{
-		req: req, spec: spec, ceiling: ceilingForDispatch(ceiling, f.adoGrade, f.bedrockGrade), gw: gw,
-		wsRefs: f.wsRefs, driveMounts: f.driveMounts, ephemeralDirs: f.ephemeralDirs,
-		runToken: id.Token, created: started, comps: f.comps, overridden: f.source.overridden(), pushSets: f.pushSets, harnessRules: harnessRules,
-	})
+	s.finishCreateRunLaunch(st.base, f.launch(req, spec, ceiling, gw, id.Token, started))
 	return nil
 }
 

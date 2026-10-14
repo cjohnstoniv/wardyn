@@ -21,6 +21,12 @@ func TestPushRuleEntryOfServerRemote(t *testing.T) {
 		{"the verb after the repository is not a segment of it", server + "tfs/Coll/Proj/_git/app/git-receive-pack", "/tfs", "tfs.corp.example/coll"},
 		{"base path case is not significant", server + "TFS/Coll/Proj/_git/app", "/tfs", "tfs.corp.example/coll"},
 
+		{"a collection name with a space", server + "tfs/Fabrikam%20Collection/Proj/_git/app", "/tfs", "tfs.corp.example/fabrikam collection"},
+		{"a collection name with a letter outside ASCII", server + "tfs/%C3%89quipe/Proj/_git/app", "/tfs", "tfs.corp.example/équipe"},
+		{"a collection-scoped row names its collection as written", server + "tfs/Fabrikam%20Collection/Proj/_git/app", "/tfs/Fabrikam Collection", "tfs.corp.example/fabrikam collection"},
+
+		{"a collection with an encoded separator", server + "tfs/Fabrikam%5CCollection/Proj/_git/app", "/tfs", ""},
+		{"a collection-scoped row, a remote in another collection", server + "tfs/Other%20Collection/Proj/_git/app", "/tfs/Fabrikam Collection", ""},
 		{"host-only row, a prefix segment too many", server + "tfs/Coll/Proj/_git/app", "", ""},
 		{"prefix row, one segment too many", server + "tfs/Coll/Extra/Proj/_git/app", "/tfs", ""},
 		{"collection-scoped row, a collection segment too many", server + "tfs/Coll/Other/Proj/_git/app", "/tfs/Coll", ""},

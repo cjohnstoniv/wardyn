@@ -104,9 +104,10 @@ func resolveWorkspaceSelections(req createRunRequest) map[string]client.Workspac
 //
 // Returns one entry per auto-attached secret grant and one per workspace with
 // a non-empty egress addition, for the CALLER to audit (launch does; preflight
-// discards them — see requirementAuditEntry).
+// discards them — see requirementAuditEntry). The workspaces folded here are
+// the run's own attached ones: the record door's one workspace.
 func (s *Server) applyWorkspaceRequirements(ctx context.Context, spec *types.RunPolicySpec, agent string, wsRefs []types.Workspace, selections map[string]client.WorkspaceSelection) []requirementAuditEntry {
-	return s.applyWorkspaceRequirementsFor(ctx, nil, spec, agent, wsRefs, selections)
+	return s.applyWorkspaceRequirementsFor(ctx, nil, spec, agent, wsRefs, wsRefs, selections)
 }
 
 // applyWorkspaceRequirementsFor is applyWorkspaceRequirements with the
@@ -114,8 +115,11 @@ func (s *Server) applyWorkspaceRequirements(ctx context.Context, spec *types.Run
 // already computed (presentSecretNamesFor with secretOwnerFromRequest), so a
 // workspace's integration requirement resolves a member's own key exactly as
 // their run will; nil means the operator namespace, computed lazily — the
-// record route and every existing test keep that.
-func (s *Server) applyWorkspaceRequirementsFor(ctx context.Context, present map[string]bool, spec *types.RunPolicySpec, agent string, wsRefs []types.Workspace, selections map[string]client.WorkspaceSelection) []requirementAuditEntry {
+// record route and every existing test keep that. attached is every workspace
+// the request names, which a door that folds one workspace at a time passes
+// whole: a write row whose workspace is not among them, and which grants
+// nothing, leaves the mount alone (applyWriteNarrowing).
+func (s *Server) applyWorkspaceRequirementsFor(ctx context.Context, present map[string]bool, spec *types.RunPolicySpec, agent string, wsRefs, attached []types.Workspace, selections map[string]client.WorkspaceSelection) []requirementAuditEntry {
 	var events []requirementAuditEntry
 	// Resolved at most once per call, lazily on the first integration key
 	// found — effectiveIntegrations reads the site-config
@@ -196,7 +200,7 @@ func (s *Server) applyWorkspaceRequirementsFor(ctx context.Context, present map[
 				}
 				events = append(events, s.applyIntegrationRequirement(ctx, present, integrationRows, spec, name)...)
 			case "write":
-				applyWriteNarrowing(spec, name, enabled, sel.ReadOnly)
+				applyWriteNarrowing(spec, name, enabled, sel.ReadOnly, enabled || slices.ContainsFunc(attached, func(a types.Workspace) bool { return a.ID == ws.ID }))
 			}
 		}
 		if len(addedEgress) > 0 {
@@ -267,13 +271,19 @@ func (s *Server) skipRequiredSecret(agent, secretName string) (requirementAuditE
 // add an Optional write it never enabled by putting the key in
 // EnabledOptional — only Level/EnabledOptional can grant write, never this
 // field alone).
-func applyWriteNarrowing(spec *types.RunPolicySpec, path string, grantedDefault bool, narrow *bool) {
+//
+// mayNarrow says whether a row that grants nothing may still make the mount
+// read-only: true for a workspace the run attaches, or one whose row is
+// required or enabled. A workspace that is only in the run because it stores
+// the same directory (referencedWorkspacesIn) and whose row is not enabled
+// neither grants a write nor removes one another workspace granted.
+func applyWriteNarrowing(spec *types.RunPolicySpec, path string, grantedDefault bool, narrow *bool, mayNarrow bool) {
 	granted := grantedDefault
 	if narrow != nil && *narrow {
 		granted = false
 	}
 	for i := range spec.WorkspaceMounts {
-		if spec.WorkspaceMounts[i].Source != path {
+		if spec.WorkspaceMounts[i].Source != path || (!granted && !mayNarrow) {
 			continue
 		}
 		ro := !granted
