@@ -15,8 +15,11 @@ a laptop runner, `wardyn-runnerd` works with Docker Desktop, setup is one comman
 
 - Hosting your own runner now needs the `self_host_runner` permission (migration `0178_self_host_runner_restriction`):
   `POST /me/runners/tokens` (`wardyn runner token`, My runner → Get a token) answers `403 capability_feature` without
-  it. To keep 0.9.0 behaviour add an `all` allow (Permissions → Self-hosted runners, one switch). Existing runners and
-  claims keep working, the admin mint is not asked, and admins are never asked.
+  it. An estate where someone registered and claimed a runner for themselves keeps self-hosting open: the migration
+  adds an `all` allow, so only people a `feature` deny already names, including a `*` deny, are refused. Narrow or
+  remove it afterwards (Permissions → Self-hosted runners). An estate with none starts closed; grant it there when you
+  want people to self-host. Existing runners and claims keep working, the admin mint is not asked, and admins are
+  never asked.
 - Runners registered before 0.9.0 still have no limits after an in-place upgrade and take no run. Find them with
   `wardyn runner list --all --no-limits` (self-hosted) and `wardyn runner remote list --no-limits` (remote-hosted), then
   `wardyn runner remote propose <id>` / `wardyn runner set <id> …`. Setup status now shows a Runner limits warning
