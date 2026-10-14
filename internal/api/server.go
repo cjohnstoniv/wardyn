@@ -16,7 +16,6 @@ import (
 	"context"
 	"crypto/ed25519"
 	"net"
-	"net/http"
 	"net/http/httputil"
 	"sync"
 	"sync/atomic"
@@ -728,7 +727,8 @@ type Server struct {
 	// probe on an otherwise-idle attach socket) — same reason and same
 	// per-server shape as keepaliveEvery above: a test drives a dead-peer holder
 	// on a millisecond clock instead of the real 30s budget.
-	pingEvery time.Duration
+	pingEvery     time.Duration
+	authorityTest attachAuthorityTimings // per-server test overrides, the same shape as pingEvery
 	// pauseLimit overrides attachWriteTimeout as the bound on an unresumed
 	// output pause for THIS server only (tests).
 	pauseLimit time.Duration
@@ -779,8 +779,8 @@ type Server struct {
 	// and lastTouch above, and correct for the same reason: replicas>1 is
 	// refused by construction (deployment.yaml). Zero value is ready to use.
 	attachHolders attachHolderRegistry
-	// creates lets a kill cancel a STARTING run's CreateSandbox (runs_create_cancel.go).
-	creates inflightCreates
+	// creates lets a kill cancel a STARTING run's CreateSandbox, and runBuilds its image build (runs_create_cancel.go).
+	creates, runBuilds inflightCreates
 	// queue is the pool queue's in-process state: kick coalescing and the gauge snapshot (metrics_queue.go).
 	queue runQueueState
 	// replica is this server's identity when no LiveBus names one (replicaName).
@@ -811,6 +811,8 @@ type Server struct {
 	// adminAuth/auditAuthFailed in http.go) so a scanner cannot flood the
 	// append-only log. Zero value is ready to use.
 	authFailedLimiter authFailedLimiter
+	// sshKeyLimiters rate-bounds the ssh.authenticate refusal rows that name a registered key, per key.
+	sshKeyLimiters sshKeyLimiters
 	// authFailedStreak is the open run of identical consecutive auth.fail rows
 	// the coalescer is folding (see coalesceAuthFailed, http.go). Process-local
 	// like the bounds above. Zero value is ready to use.
@@ -952,25 +954,6 @@ const (
 	auditSpoolDrainInterval = 30 * time.Second
 	auditSpoolDrainBatch    = 200
 )
-
-// handleLogout terminates the human session. FIX #6: it is mounted as
-// POST /api/v1/auth/logout inside the humanOrAdminAuth group so the UI's existing
-// POST actually kills the session (the old code only had a root GET /auth/logout,
-// which the POST never reached — 404 — leaving the HttpOnly OIDC cookie valid).
-//
-//   - OIDC session mode: delegate to the OIDC LogoutHandler, which clears the
-//     HttpOnly wardyn_session cookie (and redirects to "/").
-//   - Admin-token / local mode (OIDC not configured): there is NO server-side
-//     session to kill — the client just drops its local bearer token. Return 204
-//     (no content). The nil-OIDC guard is REQUIRED so this never panics in
-//     local/token mode.
-func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
-	if s.cfg.OIDC != nil {
-		s.cfg.OIDC.LogoutHandler(w, r) // clears the HttpOnly session cookie
-		return
-	}
-	w.WriteHeader(http.StatusNoContent)
-}
 
 // recordAudit is a best-effort audit emit for control-plane-originated events.
 // Audit failures must never block the primary operation (the Recorder owns

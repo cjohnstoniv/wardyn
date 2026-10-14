@@ -283,7 +283,7 @@ func TestPG_ErasureRemovesAPersonsPools(t *testing.T) {
 	runnerID := e.claimedRunner(e.personP)
 	e.call(e.person, http.MethodPut, addRunnerPath(gone.ID, runnerID), "")
 
-	detail, err := e.srv.erasureOrchestrator(nil).Steps[erasure.RunnerPools](context.Background(), e.personP)
+	detail, err := e.srv.erasureOrchestrator(nil, nil).Steps[erasure.RunnerPools](context.Background(), e.personP)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -556,10 +556,10 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 			// The Azure CLI door's grant (runs_dispatch_cli_azure.go): nil without
 			// the row, and nil when a later phase withheld its credential.
 			AzureARM: plan.azureCLI.gateFor(injections),
-			// The azure_foundry lane's route gate and channel host (provider_azure.go). Empty for every
-			// run not on that lane, which leaves both off.
+			// The azure_foundry lane's route gate (provider_azure.go), and the hosts inspected as a model host without being a
+			// brokered upstream: that lane's endpoint and a Claude subscription's route-through host. Empty on every other run.
 			AzureGates:      plan.azure.gates,
-			LLMChannelHosts: plan.azure.channelHosts,
+			LLMChannelHosts: plan.channelHosts,
 			// Resolved above from site-config.UpstreamProxySecretRef; "" when
 			// unconfigured or unresolvable (direct dial, backward-compatible).
 			UpstreamProxyURL: upstreamProxyURL,
@@ -721,7 +721,10 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	stopDispatchLease := s.holdRunWatcherLease(ctx, run.ID)
 	defer stopDispatchLease()
 
-	s.recordSandboxRef(ctx, run.ID, sb.Ref)
+	if err := s.recordSandboxRef(ctx, run.ID, sb.Ref); err != nil {
+		s.abortUnrecordedSandbox(ctx, run.ID, sb.Ref, err)
+		return
+	}
 
 	// Kill-race guard: advance STARTING->RUNNING CONDITIONALLY. CreateSandbox can
 	// be slow (image pull); a concurrent POST /runs/{id}/kill may have moved the
@@ -735,19 +738,9 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	applied, uerr := s.casRunState(ctx, run.ID, types.RunStarting, types.RunRunning)
 	if uerr != nil || !applied {
 		// Killed/stopped mid-dispatch (or a store error). Free the orphaned
-		// sandbox and bail without resurrecting the run. The note states only what
-		// was observed: whether the teardown actually happened is stopSandboxOrAudit's
-		// to report, never this event's to assert.
+		// sandbox and bail without resurrecting the run.
 		s.stopSandboxOrAudit(ctx, run.ID, sb.Ref, "run.dispatch")
-		data := map[string]any{
-			"sandbox_ref": sb.Ref,
-			"note":        "run left STARTING by a concurrent kill/stop during CreateSandbox; dispatch aborted",
-		}
-		if uerr != nil {
-			data["error"] = uerr.Error()
-		}
-		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.dispatch",
-			run.ID.String(), "failure", mustJSON(data)))
+		s.auditLostStart(ctx, run.ID, sb.Ref, uerr)
 		return
 	}
 

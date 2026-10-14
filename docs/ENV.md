@@ -201,7 +201,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_USER_WORKSPACE_ROOTS` | CSV (absolute paths) | (unset = **members may not mount host directories**) | The absolute host directories a **member's own** `local_dir` workspace source may live under. Unset (the default) fails closed (flag `-member-workspace-roots`). [Details](#wardyn_user_workspace_roots) |
 | `WARDYN_USER_WORKSPACE_ROOTS_MAP` | JSON | (unset) | Per-member override of the list above, keyed by lowercased OIDC `sub` **or** email; a principal with an entry uses **only** that entry (flag `-member-workspace-roots-map`). [Details](#wardyn_user_workspace_roots_map) |
 | `WARDYN_USER_WRITABLE_ROOTS` | CSV (absolute paths) | (unset = **no writable member mounts at all**) | Where a member may mark **their own** mount writable. Unset means every member mount is read-only (flag `-member-writable-roots`). [Details](#wardyn_user_writable_roots) |
-| `WARDYN_USER_WRITABLE_DENY` | CSV (absolute paths) | (unset) | carve-outs from `WARDYN_USER_WRITABLE_ROOTS`. **Deny wins** over allow and is checked first, so a subtree inside a writable root can be pinned read-only for members (flag `-member-writable-deny`). |
+| `WARDYN_USER_WRITABLE_DENY` | CSV (absolute paths) | (unset) | carve-outs from `WARDYN_USER_WRITABLE_ROOTS`. **Deny wins** over allow and is checked first, so a subtree inside a writable root can be pinned read-only for members. A writable mount may neither be inside a denied path nor contain one (flag `-member-writable-deny`). |
 | `WARDYN_USER_DRIVE_HOST_ROOTS` | CSV (absolute paths) | (unset = **no `host_path` user drive may be registered**) | The absolute host directories a **user drive** of backend `host_path` may be registered inside. Unset (the default) fails closed. It must not name a tree `WARDYN_USER_WORKSPACE_ROOTS` also names; boot WARNs (`MountCeilingOverlapWarnings` and `ParseUserDriveHostRoots`, [`internal/runner/user_drive_mount.go`](../internal/runner/user_drive_mount.go); flag `-user-drive-host-roots`). [Details](#wardyn_user_drive_host_roots) |
 | `WARDYN_TLS_CERT` | string | (unset) | TLS certificate PEM path (flag `-tls-cert`) |
 | `WARDYN_TLS_KEY` 🔒 | string | (unset) | TLS private key PEM path (flag `-tls-key`). Read once at boot; each read refuses a group- or world-writable file. [Details](#wardyn_tls_key) |
@@ -366,6 +366,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 
 - Vault address for the `vaultkv` store (flag `-vault-addr`).
 - `https://`; `http://` is refused except to a loopback host.
+- A redirect is followed only to this address's own scheme, host and port. With Vault HA, name the active node or an endpoint that forwards requests, not a standby that redirects to another node.
 - Set, wardynd logs in at boot and refuses to start if it cannot; unset, there is no Vault client and a pointer row refuses by name.
 
 ### `WARDYN_VAULT_ROLE_PLATFORM`
@@ -531,6 +532,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - Delete stored session recordings older than N days; `0` (the default) keeps them forever.
 - A recording is governance evidence, so nothing is deleted unless you set a window; each sweep that removes anything emits a `recording.retention.sweep` audit event.
 - fs and pg stores (flag `-recording-retention-days`).
+- At most `106751` days; a larger value is refused at startup (use `0` to keep recordings forever).
 
 ### `WARDYN_AUDIT_RETENTION_DAYS`
 

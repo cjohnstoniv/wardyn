@@ -154,13 +154,21 @@ func (s PG) RevokeInvitation(ctx context.Context, id uuid.UUID, by string, now t
 }
 
 func (s PG) ClaimInvitation(ctx context.Context, c InvitationClaim) (InvitationClaimed, error) {
+	g, guarded := identityGuardFrom(ctx)
+	var since int64
+	if guarded {
+		var err error
+		if since, err = ReadRevocationSeq(ctx, s.Pool); err != nil {
+			return InvitationClaimed{}, err
+		}
+	}
 	tx, err := s.Pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
 		return InvitationClaimed{}, fmt.Errorf("store: claim invitation: %w", err)
 	}
 	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
-	if g, ok := identityGuardFrom(ctx); ok {
-		if err := checkIdentityGuard(ctx, tx, g); err != nil {
+	if guarded {
+		if err := checkIdentityGuard(ctx, tx, g, since); err != nil {
 			return InvitationClaimed{}, err
 		}
 	}

@@ -4,6 +4,7 @@
 package main
 
 import (
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -11,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -291,5 +293,115 @@ func TestUploadCast_BoundedTimeout(t *testing.T) {
 	if elapsed > 2*time.Second {
 		t.Fatalf("uploadCast took %s, want it bounded well under 2s (shrunk timeouts: dial=%s client=%s)",
 			elapsed, uploadDialTimeout, uploadClientTimeout)
+	}
+}
+
+// stubAsciinema is a shell stand-in for asciinema 2.4.0: it refuses an
+// existing non-empty cast (exit 1, command not run) and otherwise runs the -c
+// command and records a cast. STUB_MODE=kill leaves a cast and exits 3 without
+// running the command, as a killed recorder would.
+const stubAsciinema = `#!/bin/sh
+# rec --stdin -q -c <cmd> <cast>
+cmd=$5; cast=$6
+if [ -s "$cast" ]; then echo "asciinema: $cast exists" >&2; exit 1; fi
+if [ "$STUB_MODE" = kill ]; then echo hdr > "$cast"; exit 3; fi
+sh -c "$cmd"
+echo hdr > "$cast"
+exit 0
+`
+
+// TestRecHelper is the child half of recOnce: it runs wardyn-rec's run() in a
+// fresh process, because run exits with the task's non-zero code.
+func TestRecHelper(t *testing.T) {
+	raw := os.Getenv("WARDYN_REC_TEST_ARGS")
+	if raw == "" {
+		t.Skip("child process only")
+	}
+	if err := run(strings.Split(raw, "\x1f")); err != nil {
+		os.Stderr.WriteString("wardyn-rec: " + err.Error() + "\n")
+		os.Exit(1)
+	}
+	os.Exit(0)
+}
+
+func recOnce(t *testing.T, castDir, stub, mode, cmd string) (int, string) {
+	t.Helper()
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	args := []string{"-cast-dir", castDir, "-run", "run-1", "-asciinema", stub,
+		"-out-dir", t.TempDir(), "--", "sh", "-c", cmd}
+	c := exec.Command(exe, "-test.run=^TestRecHelper$") //nolint:gosec
+	c.Env = append(os.Environ(), "WARDYN_REC_TEST_ARGS="+strings.Join(args, "\x1f"), "STUB_MODE="+mode)
+	out, err := c.CombinedOutput()
+	if err == nil {
+		return 0, string(out)
+	}
+	var ee *exec.ExitError
+	if !errors.As(err, &ee) {
+		t.Fatal(err)
+	}
+	return ee.ExitCode(), string(out)
+}
+
+func writeStub(t *testing.T) string {
+	t.Helper()
+	stub := filepath.Join(t.TempDir(), "asciinema")
+	if err := os.WriteFile(stub, []byte(stubAsciinema), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return stub
+}
+
+// TestRun_SecondCallSameRunRunsTask: the selftest leaves a cast and an exit
+// file holding 0; the task's call under the same run id must still run and
+// return the task's own code, zero or not.
+func TestRun_SecondCallSameRunRunsTask(t *testing.T) {
+	for _, want := range []int{0, 5} {
+		t.Run(strconv.Itoa(want), func(t *testing.T) {
+			dir, stub := t.TempDir(), writeStub(t)
+			if code, out := recOnce(t, dir, stub, "", "exit 0"); code != 0 {
+				t.Fatalf("selftest call = %d, want 0\n%s", code, out)
+			}
+			marker := filepath.Join(t.TempDir(), "task-ran")
+			code, out := recOnce(t, dir, stub, "", "touch "+marker+"; exit "+strconv.Itoa(want))
+			if _, err := os.Stat(marker); err != nil {
+				t.Fatalf("task did not run after the selftest's recording: %v\n%s", err, out)
+			}
+			if code != want {
+				t.Fatalf("task call = %d, want %d\n%s", code, want, out)
+			}
+		})
+	}
+}
+
+// TestRun_NoFreshExitFileReturnsAsciinemaCode: a recorder that dies before the
+// trailer writes the exit file must not be read back as the stale 0.
+func TestRun_NoFreshExitFileReturnsAsciinemaCode(t *testing.T) {
+	dir, stub := t.TempDir(), writeStub(t)
+	if code, out := recOnce(t, dir, stub, "", "exit 0"); code != 0 {
+		t.Fatalf("selftest call = %d, want 0\n%s", code, out)
+	}
+	if code, out := recOnce(t, dir, stub, "kill", "exit 0"); code != 3 {
+		t.Fatalf("killed call = %d, want asciinema's 3\n%s", code, out)
+	}
+}
+
+// TestRun_StaleRemovalFailureRefuses: anything but "absent" stops the call
+// before asciinema runs.
+func TestRun_StaleRemovalFailureRefuses(t *testing.T) {
+	dir, stub := t.TempDir(), writeStub(t)
+	exit := filepath.Join(dir, "run-1.exit")
+	if err := os.MkdirAll(filepath.Join(exit, "keep"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	marker := filepath.Join(t.TempDir(), "task-ran")
+	code, out := recOnce(t, dir, stub, "", "touch "+marker)
+	if code == 0 || !strings.Contains(out, "remove stale recording file") {
+		t.Fatalf("code = %d, want a removal refusal\n%s", code, out)
+	}
+	if _, err := os.Stat(marker); err == nil {
+		t.Fatal("task ran despite the removal failure")
 	}
 }

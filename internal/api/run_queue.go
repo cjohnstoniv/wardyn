@@ -52,6 +52,7 @@ type queueStore interface {
 	ExpiredQueueEntries(ctx context.Context, now time.Time, limit int) ([]store.RunQueueEntry, error)
 	QueuePoolIDs(ctx context.Context) ([]uuid.UUID, error)
 	QueueOwnerEntries(ctx context.Context, owner string) ([]store.RunQueueEntry, error)
+	QueueEntriesOfRevokedRunners(ctx context.Context, limit int) ([]store.RunQueueEntry, error)
 	GetRunQueueEntry(ctx context.Context, id uuid.UUID) (store.RunQueueEntry, error)
 	RunQueuePosition(ctx context.Context, id uuid.UUID) (int, error)
 	QueueDepth(ctx context.Context) (map[uuid.UUID]int, error)

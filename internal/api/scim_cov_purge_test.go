@@ -385,11 +385,19 @@ func scimCovDeactivated(st *scimCovStore, principal string, due bool) store.Prin
 	if !due {
 		after = scimCovNow.Add(time.Hour)
 	}
-	return st.addIdentity(store.PrincipalIdentity{Principal: principal, Issuer: scimCovIssuer, DeactivatedAt: &gone, PurgeAfter: &after})
+	ident := st.addIdentity(store.PrincipalIdentity{Principal: principal, Issuer: scimCovIssuer, DeactivatedAt: &gone, PurgeAfter: &after})
+	st.mu.Lock()
+	st.jobs = append(st.jobs, &store.DeprovisionJob{IdentityID: ident.ID, Kind: store.JobKindSuspend, Step: store.JobStepCutoff, Done: true,
+		Detail: map[string]int{"deactivated_at_us": int(gone.UnixMicro())}})
+	st.mu.Unlock()
+	return ident
 }
 
 func TestSCIMCovSweeperPurgesWhatIsDueUnderItsOwnSlot(t *testing.T) {
 	st := newSCIMCovStore()
+	gone, after := scimCovNow.Add(-48*time.Hour), scimCovNow.Add(-2*time.Hour)
+	// Deactivated and past its schedule with no suspension of its own on the ledger: never purged.
+	alongside := st.addIdentity(store.PrincipalIdentity{Principal: "sub-alongside", Issuer: scimCovIssuer, DeactivatedAt: &gone, PurgeAfter: &after})
 	due := scimCovDeactivated(st, "sub-due", true)
 	notDue := scimCovDeactivated(st, "sub-later", false)
 	e := scimCovSweepEnv(t, st)
@@ -397,8 +405,9 @@ func TestSCIMCovSweeperPurgesWhatIsDueUnderItsOwnSlot(t *testing.T) {
 	if err := e.srv.SweepSCIMPurge(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if st.identity(due.ID).PurgedAt == nil || st.identity(notDue.ID).PurgedAt != nil {
-		t.Errorf("due purged %t, not-due purged %t", st.identity(due.ID).PurgedAt != nil, st.identity(notDue.ID).PurgedAt != nil)
+	if st.identity(due.ID).PurgedAt == nil || st.identity(notDue.ID).PurgedAt != nil || st.identity(alongside.ID).PurgedAt != nil {
+		t.Errorf("due purged %t, not-due purged %t, no suspension of its own purged %t", st.identity(due.ID).PurgedAt != nil,
+			st.identity(notDue.ID).PurgedAt != nil, st.identity(alongside.ID).PurgedAt != nil)
 	}
 	if !slices.Equal(st.purgeMarks, []bool{true}) {
 		t.Errorf("MarkIdentityPurged requireDue = %v, want the sweeper's conditional mark", st.purgeMarks)

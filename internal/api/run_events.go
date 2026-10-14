@@ -366,7 +366,9 @@ func (s *Server) sessionRevokedSince(r *http.Request, principal string, openedAt
 			return false
 		}
 	}
-	revoked, err := s.cfg.SessionRevocations.IsSessionRevoked(r.Context(), principal, oidcEmailFromContext(r.Context()), openedAt)
+	// A stream an API token or a delegated token admitted is checked as that token is (epoch -1): a
+	// revoke or a deactivated identity ends it, a browser-only cut (sign-out) does not.
+	revoked, err := s.admittedRevoked(r.Context(), principal, openedAt)
 	return err != nil || revoked
 }
 

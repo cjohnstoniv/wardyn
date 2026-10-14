@@ -340,7 +340,7 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 // single-use ?ticket= minted for principal (the lane that must keep working).
 func dialAttach(t *testing.T, ts *httptest.Server, srv *Server, runID uuid.UUID, principal, query string) *websocket.Conn {
 	t.Helper()
-	tok, err := mintAttachTicket(context.Background(), srv.cfg.Store, runID, types.ActorHuman, principal, oidc.RoleAdmin, time.Now())
+	tok, err := mintAttachTicket(context.Background(), srv.cfg.Store, runID, types.ActorHuman, principal, oidc.RoleAdmin, oidc.Issue{At: time.Now()})
 	if err != nil {
 		t.Fatalf("mint ticket: %v", err)
 	}

@@ -38,7 +38,7 @@ func TestPG_RecordingUploadRefusedAfterCredentialOnlyErase(t *testing.T) {
 			}
 			switch mode {
 			case "credential-only erase":
-				rep, err := a.srv.erasureOrchestrator(nil).Orchestrate(context.Background(), maskOwner, []erasure.Scope{erasure.Credentials})
+				rep, err := a.srv.erasureOrchestrator(nil, nil).Orchestrate(context.Background(), maskOwner, []erasure.Scope{erasure.Credentials})
 				if err != nil {
 					t.Fatal(err)
 				}

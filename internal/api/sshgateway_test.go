@@ -1594,4 +1594,103 @@ func TestSSHAuditAuthFailure_IsRateBounded(t *testing.T) {
 	if want := int64(attempts - int(authFailedBurst)); suppressed != want {
 		t.Errorf("wardyn_auth_failed_suppressed_total = %d, want %d", suppressed, want)
 	}
+	// The shared bucket is empty now, and a refusal that names a registered key spends its own: its
+	// first rows are still recorded, without moving the suppressed counter.
+	before := len(audit.snapshot())
+	srv.sshAuditAuthFailure(context.Background(), sshPeer{}, nil, "alice@example.com", "SHA256:alice", "not the run owner")
+	evs := audit.snapshot()
+	if len(evs) != before+1 || evs[len(evs)-1].Actor != "alice@example.com" {
+		t.Errorf("attributed refusal with the shared limiter drained wrote %d rows, want 1 naming the principal", len(evs)-before)
+	}
+	srv.metrics.mu.Lock()
+	defer srv.metrics.mu.Unlock()
+	if srv.metrics.authFailedSuppressed != suppressed {
+		t.Errorf("an attributed refusal moved the suppressed counter to %d from %d", srv.metrics.authFailedSuppressed, suppressed)
+	}
+}
+
+func sshLimiterServer(t *testing.T) (*Server, *recRecorder) {
+	t.Helper()
+	audit := &recRecorder{}
+	frozen := time.Now()
+	return New(Config{BaseCtx: testBaseCtx(t), Store: runFilesStore{}, Audit: audit, Now: func() time.Time { return frozen }}), audit
+}
+
+func (s *Server) suppressedCount() int64 {
+	s.metrics.mu.Lock()
+	defer s.metrics.mu.Unlock()
+	return s.metrics.authFailedSuppressed
+}
+
+// A flood of refusals that name ONE registered key writes at most the burst of rows, and each dropped
+// row is counted. Such a row is written before any signature is checked, so anyone who knows the public
+// key can send it.
+func TestSSHAuditAuthFailure_OneKeyIsRateBounded(t *testing.T) {
+	srv, audit := sshLimiterServer(t)
+	const attempts = 20
+	for range attempts {
+		srv.sshAuditAuthFailure(context.Background(), sshPeer{}, nil, "alice@example.com", "SHA256:alice", "not the run owner")
+	}
+	if got := len(audit.snapshot()); got != int(authFailedBurst) {
+		t.Errorf("%d refusals naming one key wrote %d rows, want the burst of %d", attempts, got, int(authFailedBurst))
+	}
+	if want := int64(attempts - int(authFailedBurst)); srv.suppressedCount() != want {
+		t.Errorf("wardyn_auth_failed_suppressed_total = %d, want %d", srv.suppressedCount(), want)
+	}
+	// Another key has its own budget.
+	srv.sshAuditAuthFailure(context.Background(), sshPeer{}, nil, "bob@example.com", "SHA256:bob", "not the run owner")
+	if got := len(audit.snapshot()); got != int(authFailedBurst)+1 {
+		t.Errorf("a second key wrote %d rows in all, want %d", got, int(authFailedBurst)+1)
+	}
+}
+
+// An unattributed flood does not spend a named key's budget (FR-0149).
+func TestSSHAuditAuthFailure_UnattributedFloodLeavesAKeyItsBudget(t *testing.T) {
+	srv, audit := sshLimiterServer(t)
+	for range 30 {
+		srv.sshAuditAuthFailure(context.Background(), sshPeer{}, nil, "unknown", "SHA256:probe", "unregistered key")
+	}
+	before := len(audit.snapshot())
+	for range int(authFailedBurst) {
+		srv.sshAuditAuthFailure(context.Background(), sshPeer{}, nil, "alice@example.com", "SHA256:alice", "not the run owner")
+	}
+	if got := len(audit.snapshot()) - before; got != int(authFailedBurst) {
+		t.Errorf("a named key wrote %d of its %d rows after an unattributed flood", got, int(authFailedBurst))
+	}
+}
+
+// The per-key map is capped. Past the cap a key that is not tracked is charged to the shared limiter
+// and the map does not grow; a key whose bucket has gone idle is evicted to make room.
+func TestSSHAuditAuthFailure_KeyMapIsCapped(t *testing.T) {
+	var k sshKeyLimiters
+	k.limit = 3
+	now := time.Now()
+	for _, fp := range []string{"a", "b", "c"} {
+		if admitted, tracked := k.allow(fp, now); !admitted || !tracked {
+			t.Fatalf("%s: admitted=%v tracked=%v, want both", fp, admitted, tracked)
+		}
+	}
+	if admitted, tracked := k.allow("d", now); admitted || tracked {
+		t.Errorf("a fourth key at the cap: admitted=%v tracked=%v, want neither (the caller uses the shared limiter)", admitted, tracked)
+	}
+	if len(k.buckets) != 3 {
+		t.Errorf("map holds %d keys, want it held at 3", len(k.buckets))
+	}
+	later := now.Add(time.Duration(authFailedBurst/authFailedRatePerSec) * time.Second)
+	if admitted, tracked := k.allow("d", later); !admitted || !tracked {
+		t.Errorf("after the others went idle, d: admitted=%v tracked=%v, want both", admitted, tracked)
+	}
+	if len(k.buckets) != 3 {
+		t.Errorf("map holds %d keys after the eviction, want 3", len(k.buckets))
+	}
+	// Through the audit path: a key the map cannot admit spends the shared bucket.
+	srv, audit := sshLimiterServer(t)
+	srv.sshKeyLimiters.limit = 1
+	srv.sshAuditAuthFailure(context.Background(), sshPeer{}, nil, "alice@example.com", "SHA256:alice", "r")
+	for range 20 {
+		srv.sshAuditAuthFailure(context.Background(), sshPeer{}, nil, "bob@example.com", "SHA256:bob", "r")
+	}
+	if got := len(audit.snapshot()); got != 1+int(authFailedBurst) {
+		t.Errorf("rows = %d, want alice's 1 plus bob's %d from the shared bucket", got, int(authFailedBurst))
+	}
 }

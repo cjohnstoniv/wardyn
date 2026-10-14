@@ -79,7 +79,7 @@ func (s *Server) withServiceState(r *http.Request, sis ...*types.ServiceIdentity
 			si.State = types.ServiceIdentitySponsorInactive
 			continue
 		}
-		status, err := oidc.CheckSession(r.Context(), s.cfg.SessionRevocations, si.Sponsor, "", s.cfg.Now(), -1)
+		status, err := oidc.CheckSession(r.Context(), s.cfg.SessionRevocations, si.Sponsor, "", oidc.Issue{At: s.cfg.Now()}, -1)
 		if err != nil {
 			return err
 		}
@@ -389,7 +389,7 @@ func (s *Server) handleRetireServiceIdentity(w http.ResponseWriter, r *http.Requ
 	if s.cfg.Secrets != nil {
 		principal := retired.After.Principal()
 		var rep secretstore.EraseReport
-		_, eerr := s.eraseCredentialsScope(ctx, principal, &rep)
+		_, eerr := s.eraseCredentialsScope(ctx, principal, nil, &rep)
 		outcome := "success"
 		if eerr != nil {
 			outcome = "failure"
@@ -475,13 +475,26 @@ func (s *Server) handleMintServiceToken(w http.ResponseWriter, r *http.Request) 
 		writeErrorReason(w, http.StatusConflict, reasonServiceIdentityInactive, "this service identity's sponsor is not active; its tokens cannot be minted")
 		return
 	}
-	if !s.mintSessionLive(w, r, sub, authorizedAt) {
+	// The token records the revocation sequence read now, at its mint, and not the one the sponsor's
+	// session carries, so the number sits the same way against every principal's cuts: a cut of the
+	// sponsor, of the service principal or of everyone made before this read is at or below it, and one
+	// made after is above it. The read comes BEFORE the sponsor's late re-check: a cut of the sponsor the
+	// read covers has committed, so the re-check sees it and refuses the mint, and one it does not cover
+	// draws a greater sequence and ends the token.
+	issue, ierr := s.mintIssue(r.Context(), si.Principal(), authorizedAt)
+	if ierr != nil {
+		writeServerError(w, r, "create api token", ierr)
+		return
+	}
+	if _, ok := s.mintSessionLive(w, r, sub, authorizedAt); !ok {
 		return
 	}
 	expires := authorizedAt.Add(lifetime)
+	// RevSeq orders the token against its sponsor's revocation cuts (serviceTokenAuth) and its own
+	// principal's (a queued launch's owner check).
 	row := types.APIToken{
 		ID: uuid.New(), Principal: si.Principal(), Role: oidc.RoleUser, UserType: si.UserType, Groups: []string{},
-		GroupsTruncated: new(bool), Name: name, CreatedAt: authorizedAt, ExpiresAt: &expires,
+		GroupsTruncated: new(bool), Name: name, CreatedAt: authorizedAt, ExpiresAt: &expires, RevSeq: issue.Seq,
 	}
 	plaintext := newBearer(apiTokenPrefix)
 	created, err := ss.CreateServiceToken(guardOwner(r.Context(), sub), si.Name, sub, apiTokenMaxPerPrincipal, row, plaintext)

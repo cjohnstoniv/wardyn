@@ -474,7 +474,7 @@ func (s *scimCovStore) SuspendIdentity(_ context.Context, p store.SuspendPlan) (
 			i.DeactivatedAt = &t
 		}
 		i.AuthorityEpoch++
-		if i.PurgeAfter == nil && p.PurgeAfter > 0 {
+		if i.PurgeAfter == nil && p.PurgeAfter > 0 && (i.ID == p.IdentityID || slices.Contains(p.PurgePrincipals, i.Principal)) {
 			t := s.now.Add(p.PurgeAfter)
 			i.PurgeAfter = &t
 		}
@@ -485,7 +485,7 @@ func (s *scimCovStore) SuspendIdentity(_ context.Context, p store.SuspendPlan) (
 		})
 	}
 	cutoff := store.JobKey{Step: store.JobStepCutoff}
-	detail := map[string]int{"sessions_cut": len(p.CutoffSubs)}
+	detail := map[string]int{"sessions_cut": len(p.CutoffSubs), "deactivated_at_us": int(target.DeactivatedAt.UnixMicro())}
 	if j := s.findJob(p.IdentityID, store.JobKindSuspend, cutoff); j != nil {
 		j.Done, j.Attempts, j.Detail = true, j.Attempts+1, detail
 	} else {
@@ -501,7 +501,19 @@ func (s *scimCovStore) PrincipalsNamed(_ context.Context, name string) ([]string
 	if err := s.enter("PrincipalsNamed"); err != nil {
 		return nil, err
 	}
-	return slices.Clone(s.emailSubs[strings.ToLower(name)]), nil
+	if subs, ok := s.emailSubs[strings.ToLower(name)]; ok {
+		return slices.Clone(subs), nil
+	}
+	// An entra:<tenant>:<object> name stands for the principals bound to that object, as the store's does.
+	var out []string
+	if tid, oid, ok := strings.Cut(strings.TrimPrefix(name, entraPrincipalPrefix), ":"); ok && strings.HasPrefix(name, entraPrincipalPrefix) {
+		for _, id := range s.idents {
+			if id.Principal != "" && id.ObjectID == oid && (id.TenantID == tid || id.TenantID == "") && !slices.Contains(out, id.Principal) {
+				out = append(out, id.Principal)
+			}
+		}
+	}
+	return out, nil
 }
 
 func (s *scimCovStore) ListNonTerminalRunsBy(_ context.Context, createdBy string) ([]types.AgentRun, error) {
@@ -597,7 +609,7 @@ func (s *scimCovStore) MarkIdentityPurged(_ context.Context, id uuid.UUID, requi
 	if !ok {
 		return false, store.ErrNotFound
 	}
-	due := i.DeactivatedAt != nil && i.PurgeAfter != nil && !i.PurgeAfter.After(s.now)
+	due := i.DeactivatedAt != nil && i.PurgeAfter != nil && !i.PurgeAfter.After(s.now) && s.ownSuspension(i)
 	if i.PurgedAt != nil || (requireDue && !due) {
 		return false, nil
 	}
@@ -609,18 +621,31 @@ func (s *scimCovStore) MarkIdentityPurged(_ context.Context, id uuid.UUID, requi
 	return true, nil
 }
 
-func (s *scimCovStore) PurgeDueIdentities(_ context.Context, _ int) ([]uuid.UUID, error) {
+// ownSuspension mirrors the store's proof that i's current deactivation is its own suspension's: its done
+// cutoff step records the deactivated_at i carries now. Callers hold s.mu.
+func (s *scimCovStore) ownSuspension(i *store.PrincipalIdentity) bool {
+	j := s.findJob(i.ID, store.JobKindSuspend, store.JobKey{Step: store.JobStepCutoff})
+	return j != nil && j.Done && i.DeactivatedAt != nil && j.Detail["deactivated_at_us"] == int(i.DeactivatedAt.UnixMicro())
+}
+
+func (s *scimCovStore) PurgeDueIdentities(_ context.Context, _ int) ([]store.DueIdentity, error) {
 	s.mu.Lock()
 	if err := s.enter("PurgeDueIdentities"); err != nil {
 		s.mu.Unlock()
 		return nil, err
 	}
-	var out []uuid.UUID
+	var suspended, out []store.DueIdentity
 	for _, id := range s.order {
 		if i := s.idents[id]; i.PurgedAt == nil && i.DeactivatedAt != nil && i.PurgeAfter != nil && !i.PurgeAfter.After(s.now) {
-			out = append(out, id)
+			d := store.DueIdentity{ID: id, Suspended: s.ownSuspension(i)}
+			if d.Suspended {
+				suspended = append(suspended, d)
+			} else {
+				out = append(out, d)
+			}
 		}
 	}
+	out = append(suspended, out...)
 	hook := s.afterDue
 	s.mu.Unlock()
 	if hook != nil {

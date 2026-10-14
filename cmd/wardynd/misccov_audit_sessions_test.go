@@ -169,8 +169,14 @@ func TestMiscCovSessionRevocationsWrapStoreErrors(t *testing.T) {
 		do   func() error
 	}{
 		{"IsSessionRevoked", "wardynd: is-session-revoked query", func() error { _, err := r.IsSessionRevoked(ctx, "sub", "a@example.com", issued); return err }},
-		{"SessionStatus without epoch", "wardynd: is-session-revoked query", func() error { _, err := r.SessionStatus(ctx, "sub", "a@example.com", issued, -1); return err }},
-		{"SessionStatus with epoch", "wardynd: is-session-revoked query", func() error { _, err := r.SessionStatus(ctx, "sub", "a@example.com", issued, 4); return err }},
+		{"SessionStatus without epoch", "wardynd: is-session-revoked query", func() error {
+			_, err := r.SessionStatus(ctx, "sub", "a@example.com", oidc.Issue{At: issued}, -1)
+			return err
+		}},
+		{"SessionStatus with epoch", "wardynd: is-session-revoked query", func() error {
+			_, err := r.SessionStatus(ctx, "sub", "a@example.com", oidc.Issue{At: issued}, 4)
+			return err
+		}},
 		{"RevokeSub", "wardynd: revoke session cutoff", func() error { return r.RevokeSub(ctx, "sub") }},
 		{"RevokeAll", "wardynd: revoke session cutoff", func() error { return r.RevokeAll(ctx) }},
 		{"CutSessions", "wardynd: cut sessions", func() error { return r.CutSessions(ctx, "sub") }},
@@ -195,7 +201,7 @@ func TestMiscCovSessionRevocationsWrapStoreErrors(t *testing.T) {
 	if revoked, _ := r.IsSessionRevoked(ctx, "sub", "", issued); revoked {
 		t.Error("IsSessionRevoked reported revoked for a query that failed")
 	}
-	if st, _ := r.SessionStatus(ctx, "sub", "", issued, 0); st != oidc.SessionLive {
+	if st, _ := r.SessionStatus(ctx, "sub", "", oidc.Issue{At: issued}, 0); st != oidc.SessionLive {
 		t.Errorf("SessionStatus for a failed query = %v, want SessionLive", st)
 	}
 }
