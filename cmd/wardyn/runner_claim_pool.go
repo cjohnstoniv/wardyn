@@ -5,6 +5,7 @@ package main
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/spf13/cobra"
@@ -44,7 +45,7 @@ func ownPoolNamed(cmd *cobra.Command, c *sdk.Client, arg string) (pool sdk.Runne
 	}
 	var ids []uuid.UUID
 	for _, p := range list.Pools {
-		if p.Scope == sdk.RunnerPoolUser && p.Name == arg {
+		if p.Scope == sdk.RunnerPoolUser && strings.EqualFold(p.Name, arg) {
 			ids = append(ids, p.ID)
 		}
 	}

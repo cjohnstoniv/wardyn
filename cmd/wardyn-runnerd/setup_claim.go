@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/runneridentity"
@@ -88,7 +89,7 @@ func ownPool(ctx context.Context, c *sdk.Client, name string, out io.Writer) (sd
 	}
 	var ids []uuid.UUID
 	for _, p := range list.Pools {
-		if p.Scope == sdk.RunnerPoolUser && p.Name == name {
+		if p.Scope == sdk.RunnerPoolUser && strings.EqualFold(p.Name, name) {
 			ids = append(ids, p.ID)
 		}
 	}

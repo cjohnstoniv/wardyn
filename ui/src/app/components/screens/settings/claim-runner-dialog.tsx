@@ -182,7 +182,7 @@ const ownPools = (list: RunnerPoolList) => list.pools.filter((p) => p.scope === 
  * The pools are read again here, not taken from the suggestions: those may still be loading or have failed to
  * load, and a pool must not be made over one that exists. */
 async function putInPool(runnerId: string, name: string, makeDefault: boolean) {
-  const poolId = ownPools(await runnerPools.listMine()).find((p) => p.name === name)?.id ?? (await runnerPools.createMine({ name })).id;
+  const poolId = ownPools(await runnerPools.listMine()).find((p) => p.name.toLowerCase() === name.toLowerCase())?.id ?? (await runnerPools.createMine({ name })).id;
   await runnerPools.addMyRunner(poolId, runnerId);
   if (makeDefault) await runnerPools.setMyDefaults({ ...(await runnerPools.myDefaults()), pool_id: poolId });
 }

@@ -57,7 +57,7 @@ func TestRunnerClaimPutsTheRunnerInAPool(t *testing.T) {
 				{RunnerPoolChoice: sdk.RunnerPoolChoice{ID: existing, Name: "Laptop", Scope: sdk.RunnerPoolUser}}}},
 			"GET /api/v1/runner-pools/" + existing.String():              sdk.RunnerPool{ID: existing, Name: "Laptop", Scope: sdk.RunnerPoolUser},
 			"GET /api/v1/runner-pools/" + existing.String() + "/members": []sdk.RunnerPoolMemberView{},
-		}, "Laptop", existing, false},
+		}, "laptop", existing, false}, // names are unique per owner whatever their case
 	} {
 		routes := c.routes
 		routes["POST /api/v1/me/runners/"+id.String()+"/claim"] = claimed
