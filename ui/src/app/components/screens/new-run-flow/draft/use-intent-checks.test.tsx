@@ -5,7 +5,7 @@
 
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { getAuthGeneration, setSignedOutHold } from "../../../../lib/api/core";
+import { getAuthGeneration, HttpError, setSignedOutHold } from "../../../../lib/api/core";
 import { runs } from "../../../../lib/api/runs";
 import type { PreflightResult } from "../../../../lib/types";
 import type { PolicyPreviewResult } from "../../../../lib/types/policy-preview";
@@ -91,6 +91,21 @@ it("a changed body is a new generation: the old answer no longer counts and Laun
   await act(async () => next.resolve(ready));
   expect(result.current.preflightRead?.generation).toBe(first + 1);
   expect(gate()).toBe(true);
+});
+
+it("a model credential refusal is an answer that leaves the gate open; any other refusal is none", async () => {
+  preflight.mockRejectedValueOnce(new HttpError(422, "Your AWS sign-in no longer works.", "model_credential"));
+  const p = params();
+  const { result, rerender } = renderHook(useIntentChecks, { initialProps: p });
+  const gate = () => launchGateOpen({ blockers: 0, preflight: result.current.preflightRead, generation: result.current.generation, now: Date.now() });
+  await tick();
+  expect(result.current.preflightRefusal).not.toBeNull();
+  expect(gate()).toBe(true);
+  preflight.mockRejectedValueOnce(new HttpError(422, "The namespace quota is spent.", "namespace_quota_exceeded"));
+  rerender({ ...p, body: { ...BODY, no_end: true } });
+  await tick();
+  expect(result.current.preflightError).toBe("The namespace quota is spent.");
+  expect(gate()).toBe(false);
 });
 
 it("drops a late answer for a body that is no longer the draft's", async () => {

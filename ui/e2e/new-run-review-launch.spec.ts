@@ -195,11 +195,11 @@ test.describe("New Run, Launch: the Name dialog and the Launched screen", () => 
 
   test("a model_credential refusal that names its provider opens that provider's sign-in", async ({ page }) => {
     const refusal = `This run's model provider is ${BEDROCK.name}, and you are not signed in to AWS for it.`;
-    await stub(page, { preflight: CLEAR }, true);
+    const body = { error: refusal, reason: "model_credential", provider: BEDROCK.id };
+    // Preflight runs create's checks, so it refuses the same way; that refusal must not hold Launch on Review.
+    await stub(page, { preflight: { status: 422, body } }, true);
     await page.route("**/api/v1/runs", (route) =>
-      route.request().method() === "POST"
-        ? route.fulfill({ status: 422, json: { error: refusal, reason: "model_credential", provider: BEDROCK.id } })
-        : route.fallback(),
+      route.request().method() === "POST" ? route.fulfill({ status: 422, json: body }) : route.fallback(),
     );
     await openReview(page);
     await openNameDialog(page);

@@ -90,7 +90,8 @@ export function ReviewScreen({ location, go, onLaunch, ownDriveIds }: ReviewScre
     unsupported: wire.unsupported,
     templateNeeds: template.needs,
     templateUnread: template.unread,
-    refusal: checks.preflightError === null ? null : { text: checks.preflightError, reason: checks.preflightReason },
+    // A credential refusal is not a blocker: Launch's own refusal opens the provider's sign-in door.
+    refusal: checks.preflightError === null || checks.preflightRefusal ? null : { text: checks.preflightError, reason: checks.preflightReason },
     setupItems: missingSetup(pre, checks.preview.result),
   };
   const blockers = buildBlockers({ ...inputs, stale: !gate(0) });

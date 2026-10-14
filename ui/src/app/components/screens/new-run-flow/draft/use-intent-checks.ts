@@ -289,7 +289,10 @@ export function useIntentChecks(params: Params) {
   const error = checked.error;
   const reason = error instanceof HttpError ? error.reason : "";
   const refused = checked.status >= 400 && checked.status < 500 && checked.status !== 401 && checked.status !== 429 && !NEVER_BLOCKS.has(reason);
-  const preflightRead: PreflightRead | null = preflightIsCurrent && result !== null ? { generation: checked.generation, at: checked.at } : null;
+  // A credential refusal is an answer that never holds Launch (NEVER_BLOCKS): the launch it lets through opens the
+  // provider's sign-in door.
+  const preflightRead: PreflightRead | null =
+    preflightIsCurrent && (result !== null || isCredentialRefusal(error)) ? { generation: checked.generation, at: checked.at } : null;
   const missing = (kind: string) => !!result?.setup_items?.some((row) => row.kind === kind && row.status === "missing");
   const previewInScope = currentRead("preview");
   const previewIsCurrent = previewInScope && checks.preview.result !== null && !checks.preview.stale;

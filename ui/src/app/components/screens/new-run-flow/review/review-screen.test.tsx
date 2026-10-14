@@ -180,6 +180,19 @@ describe("Review Launch gate (U11)", () => {
     });
   });
 
+  it("leaves Launch open on a model credential refusal, so the launch refusal opens the sign-in door", async () => {
+    checks.current = answered(null, 1000, {
+      preflightRead: { generation: GENERATION, at: Date.now() - 1000 },
+      preflightError: "Your AWS sign-in no longer works.",
+      preflightReason: "model_credential",
+      preflightRefusal: { body: {}, provider: "bedrock-sso" },
+    });
+    open(AGENT);
+    await ready();
+    expect(launch()).toBeEnabled();
+    expect(blockerList()).toBeEmptyDOMElement();
+  });
+
   it("offers Check again while shut, reads both again, and announces once Launch opens", async () => {
     const user = userEvent.setup();
     checks.current = answered(null);
