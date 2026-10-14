@@ -74,7 +74,7 @@ func TestAWSSSOCredentialState_TheStates(t *testing.T) {
 	// The deadline the expiring line names is the REGISTRATION's while the blob
 	// can be renewed: the access token's own expiry is not what runs out.
 	reg := live(func(b *awsSSOBlob) { b.RegistrationExpiresAt = now.Add(6 * time.Hour) })
-	if got := modelAccessDeadline(reg, true, false, now); got != reg.RegistrationExpiresAt.UTC().Format(time.RFC3339) {
+	if got := modelAccessDeadline(reg, true, false, false, now); got != reg.RegistrationExpiresAt.UTC().Format(time.RFC3339) {
 		t.Errorf("deadline = %q, want the registration's lapse", got)
 	}
 }
@@ -174,10 +174,10 @@ func TestAWSSSOCredentialState_SpentBoundary(t *testing.T) {
 	// never the registration's lapse a spent credential can no longer redeem.
 	spentBlob := base(func(b *awsSSOBlob) { b.ExpiresAt = now.Add(20 * time.Minute) })
 	wantDeadline := spentBlob.ExpiresAt.Add(-awsSSORefreshSkew).UTC().Format(time.RFC3339)
-	if got := modelAccessDeadline(spentBlob, true, true, now); got != wantDeadline {
+	if got := modelAccessDeadline(spentBlob, true, true, false, now); got != wantDeadline {
 		t.Errorf("spent deadline = %q, want ExpiresAt-skew %q", got, wantDeadline)
 	}
-	if got := modelAccessDeadline(spentBlob, true, false, now); got != spentBlob.RegistrationExpiresAt.UTC().Format(time.RFC3339) {
+	if got := modelAccessDeadline(spentBlob, true, false, false, now); got != spentBlob.RegistrationExpiresAt.UTC().Format(time.RFC3339) {
 		t.Errorf("non-spent deadline changed: got %q, want the registration's own lapse (unaffected by this lane)", got)
 	}
 }

@@ -868,7 +868,9 @@ type Server struct {
 	// ssoRefreshRefused is the non-spent counterpart (awssso_refused.go): the
 	// refresh tokens AWS last refused to renew with a re-auth code, to the code
 	// and description it answered, also under ssoRefreshMu.
-	// ponytail: process-local only; after a restart the next renewal re-refuses and re-marks.
+	// ponytail: process-local, so per replica and per restart: a replica or a
+	// restarted process that has not seen the refusal grades the session live
+	// and passes Review until its own dispatch is refused and re-marks it.
 	ssoRefreshRefused map[string]string
 	// adoEntraTokens reuses a minted Azure DevOps access token across the
 	// per-host grants of one run (injection_ado.go), so a sidecar's boot does

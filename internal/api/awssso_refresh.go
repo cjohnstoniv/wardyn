@@ -338,9 +338,10 @@ func (b awsSSOBlob) servableFor(now time.Time, floor time.Duration) bool {
 // renewable blob is not a dead credential — dispatch renews it — which is why
 // readiness is (renewable || !expired), never !expired.
 //
-// The pair is required, not merely the refresh token: without it CreateToken
-// answers invalid_request on every attempt, so a pair-less blob serves its access
-// token until expiry and then opens the sign-in door without calling AWS.
+// The pair is required, not merely the refresh token: CreateToken requires
+// clientId and clientSecret, and botocore refuses to refresh without them. A
+// pair-less blob serves its access token until expiry and then opens the
+// sign-in door without calling AWS.
 func (b awsSSOBlob) renewable(now time.Time) bool {
 	return b.RefreshToken != "" && b.ClientID != "" && b.ClientSecret != "" && !b.registrationLapsed(now)
 }

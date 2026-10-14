@@ -341,7 +341,7 @@ func (s *Server) gradeProviderBedrockSSO(ctx context.Context, row *SetupProvider
 	spent := s.awsSSOTokenSpentFor(blob)
 	_, refused := s.awsSSORefusedFor(blob)
 	row.State = awsSSOCredentialState(blob, found, spent, refused, now)
-	row.Deadline = modelAccessDeadline(blob, found, spent, now)
+	row.Deadline = modelAccessDeadline(blob, found, spent, refused, now)
 	row.Action = modelAccessAction(row.State, row.Deadline)
 	if !found || p.Bedrock == nil {
 		return

@@ -245,9 +245,14 @@ func TestAWSSSORefused_GradesSignedOutUntilASignIn(t *testing.T) {
 		t.Errorf("refresh rows = %+v, want one carrying registration: present", rows)
 	}
 
+	// Expired but renewable on purpose: only a mark keyed by the refresh token
+	// leaves this one live and passing Review.
 	fresh := blob
-	fresh.RefreshToken, fresh.ExpiresAt = "a-new-sign-ins-refresh-token", awsSSOTestFixedNow.Add(time.Hour)
+	fresh.RefreshToken = "a-new-sign-ins-refresh-token"
 	storeSSOBlob(t, s, fresh)
+	if !fresh.expired(awsSSOTestFixedNow) || !fresh.renewable(awsSSOTestFixedNow) {
+		t.Fatal("the fresh blob must be expired and renewable")
+	}
 	if row := grade(); row.State != modelAccessLive {
 		t.Errorf("grade after a fresh sign-in = %q, want live", row.State)
 	}
@@ -274,5 +279,22 @@ func TestAWSSSOBlobLastUsable_PairlessIsTheAccessTokensExpiry(t *testing.T) {
 	b.ClientID, b.ClientSecret = "cid", "csec"
 	if got := b.lastUsable(); !got.Equal(b.RegistrationExpiresAt) {
 		t.Errorf("lastUsable with the pair = %v, want the registration's expiry", got)
+	}
+}
+
+// A refused session that still has a valid token inside the refresh skew is
+// `expiring` until its own expiry (dispatch serves it until then), as a spent one is.
+func TestAWSSSOCredentialState_RefusedInsideTheSkewIsExpiring(t *testing.T) {
+	now := awsSSOTestFixedNow
+	b := awsSSOBlob{RefreshToken: "rt", ClientID: "cid", ClientSecret: "csec",
+		ExpiresAt: now.Add(5 * time.Minute), RegistrationExpiresAt: now.Add(90 * 24 * time.Hour)}
+	if got := awsSSOCredentialState(b, true, false, true, now); got != modelAccessExpiring {
+		t.Errorf("refused inside the skew = %q, want expiring", got)
+	}
+	if got := modelAccessDeadline(b, true, false, true, now); got != b.ExpiresAt.UTC().Format(time.RFC3339) {
+		t.Errorf("refused deadline = %q, want the access token's own expiry", got)
+	}
+	if got := awsSSOCredentialState(b, true, false, false, now); got != modelAccessLive {
+		t.Errorf("the same blob unrefused = %q, want live", got)
 	}
 }
