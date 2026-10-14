@@ -693,6 +693,27 @@ describe("My runner card: the start command and the claim into a pool", () => {
     expect(pools.setMyDefaults).not.toHaveBeenCalled();
   });
 
+  it("passes over another person's same-named pool (an administrator's manage-only row) and makes the person's own", async () => {
+    const theirs: RunnerPoolCatalogueEntry = { ...ENTRY(POOL("p-bob", "Desk", { owner: "bob" })), owner: "bob", availability: "unavailable", reason: "runner_pool_not_found" };
+    pools.list.mockResolvedValue({ pools: [theirs] });
+    pools.get.mockResolvedValue(POOL("p-bob", "Desk", { owner: "bob" }));
+    pools.members.mockResolvedValue([]);
+    pools.createMine.mockResolvedValue(POOL("p-new", "Desk"));
+    const user = userEvent.setup();
+    await claimWithPool(user, "Desk", false);
+    await waitFor(() => expect(pools.addMyRunner).toHaveBeenCalledWith("p-new", "r-mbp"));
+    expect(pools.createMine).toHaveBeenCalledWith({ name: "Desk" });
+    expect(pools.addMyRunner).not.toHaveBeenCalledWith("p-bob", expect.anything());
+  });
+
+  it("never makes a pool when it cannot read the person's pools", async () => {
+    pools.list.mockRejectedValue(new HttpError(500, "boom", "internal"));
+    const user = userEvent.setup();
+    await claimWithPool(user, "Desk", false);
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith(expect.stringContaining("mbp-ben is claimed but isn't in Desk.")));
+    expect(pools.createMine).not.toHaveBeenCalled();
+  });
+
   it("a pool step that fails after the claim says the runner is claimed and where to finish", async () => {
     pools.createMine.mockRejectedValue(new HttpError(422, "That name is taken.", "runner_pool_name_taken"));
     const user = userEvent.setup();
