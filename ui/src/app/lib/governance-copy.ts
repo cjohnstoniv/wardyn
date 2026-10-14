@@ -437,6 +437,13 @@ export const CHANGES = {
   SUBMITTED_LINK: "View in Changes",
 } as const;
 
+// The member-drive door: the profile limit that refuses CREATING a drive
+// (deny_member_drives), beside LIMIT_DRIVE_LABEL's door on mounting one. Not in
+// governance-prompt.md's frozen tables, so a separate export.
+export const MEMBER_DRIVE_DOOR = {
+  LABEL: "Can't create drives",
+} as const;
+
 // §7.6-§7.7 — MEMBER
 
 // §7.6's two moments render ONLY when a profile is assigned. With no

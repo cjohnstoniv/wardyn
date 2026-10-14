@@ -8,11 +8,11 @@
 // the link out — NO drives table embedded (Q7).
 import * as React from "react";
 import { describe, it, expect, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import type { StorageProviders } from "../../../lib/api/providers";
-import { PROVIDERS } from "../../../lib/workspace-providers-copy";
+import { MEMBER_DRIVES, PROVIDERS } from "../../../lib/workspace-providers-copy";
 import { DRIVES } from "../../../lib/user-drives-copy";
 import { OperatorProvider } from "../../wardyn/operator-context";
 import { StorageTab } from "./storage-tab";
@@ -23,8 +23,17 @@ vi.mock("../../../lib/api/drives", async () => {
   return { ...actual, drives: { ...actual.drives, getDrives: () => getDrivesMock() } };
 });
 
-function Harness({ initial, enforcement }: { initial: StorageProviders; enforcement?: "filesystem" | "none" | "eviction" }) {
+function Harness({
+  initial,
+  enforcement,
+  onStorage,
+}: {
+  initial: StorageProviders;
+  enforcement?: "filesystem" | "none" | "eviction";
+  onStorage?: (s: StorageProviders) => void;
+}) {
   const [storage, setStorage] = React.useState(initial);
+  onStorage?.(storage);
   return (
     <MemoryRouter>
       <OperatorProvider operator>
@@ -102,5 +111,57 @@ describe("StorageTab", () => {
     render(<Harness initial={{}} enforcement="filesystem" />);
     expect(await screen.findByTestId("user-drives-card")).toBeInTheDocument();
     expect(screen.queryByRole("table")).not.toBeInTheDocument();
+  });
+
+  // The member-drive switch (storage.user_drive.member_create): off until an
+  // admin turns it on, and its count is bounded 1..20 by the server.
+  describe("member drive controls", () => {
+    it("start off, with the count unset and its field disabled", () => {
+      render(<Harness initial={{}} enforcement="filesystem" />);
+      expect(screen.getByRole("switch", { name: MEMBER_DRIVES.FIELD_ENABLED })).not.toBeChecked();
+      expect(screen.getByLabelText(MEMBER_DRIVES.FIELD_MAX)).toBeDisabled();
+    });
+
+    it("turning the switch on writes member_create.enabled with a count the server accepts, and enables the field", async () => {
+      let latest: StorageProviders = {};
+      render(<Harness initial={{}} enforcement="filesystem" onStorage={(s) => (latest = s)} />);
+      await userEvent.click(screen.getByRole("switch", { name: MEMBER_DRIVES.FIELD_ENABLED }));
+      expect(latest.user_drive?.member_create).toEqual({ enabled: true, max_per_person: 1 });
+      expect(screen.getByLabelText(MEMBER_DRIVES.FIELD_MAX)).toBeEnabled();
+    });
+
+    it("editing the count writes max_per_person and keeps the policy's other fields", async () => {
+      let latest: StorageProviders = {};
+      render(
+        <Harness
+          initial={{ user_drive: { member_create: { enabled: true, max_per_person: 2, size_mib: 1024, storage_class: "fast" } } }}
+          enforcement="eviction"
+          onStorage={(s) => (latest = s)}
+        />,
+      );
+      fireEvent.change(screen.getByLabelText(MEMBER_DRIVES.FIELD_MAX), { target: { value: "7" } });
+      expect(latest.user_drive?.member_create).toEqual({ enabled: true, max_per_person: 7, size_mib: 1024, storage_class: "fast" });
+    });
+
+    it("turning it off keeps the count, and leaves the org's drive switch alone", async () => {
+      let latest: StorageProviders = {};
+      render(<Harness initial={{ user_drive: { member_create: { enabled: true, max_per_person: 4 } } }} enforcement="filesystem" onStorage={(s) => (latest = s)} />);
+      await userEvent.click(screen.getByRole("switch", { name: MEMBER_DRIVES.FIELD_ENABLED }));
+      expect(latest.user_drive).toEqual({ member_create: { enabled: false, max_per_person: 4 } });
+      expect(screen.getByRole("switch", { name: PROVIDERS.FIELD_DRIVES_ENABLED })).toBeChecked();
+    });
+
+    it("a non-operator reads both and edits neither", () => {
+      render(
+        <MemoryRouter>
+          <OperatorProvider operator={false}>
+            <StorageTab storage={{ user_drive: { member_create: { enabled: true, max_per_person: 3 } } }} onChange={vi.fn()} enforcement="filesystem" operator={false} />
+          </OperatorProvider>
+        </MemoryRouter>,
+      );
+      expect(screen.getByRole("switch", { name: MEMBER_DRIVES.FIELD_ENABLED })).toBeDisabled();
+      expect(screen.getByLabelText(MEMBER_DRIVES.FIELD_MAX)).toBeDisabled();
+      expect(screen.getByLabelText(MEMBER_DRIVES.FIELD_MAX)).toHaveValue(3);
+    });
   });
 });

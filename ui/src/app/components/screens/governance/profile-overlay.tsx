@@ -16,7 +16,7 @@
 // are the field names themselves (wire keys, rendered mono) and On/Off.
 import * as React from "react";
 import type { CeilingOverlay, GovernanceLimits, GovernanceProfile } from "../../../lib/api/governance";
-import { GOVERNANCE as GOV } from "../../../lib/governance-copy";
+import { GOVERNANCE as GOV, MEMBER_DRIVE_DOOR } from "../../../lib/governance-copy";
 import type { ConfinementClass } from "../../../lib/types";
 import { CC_ORDER } from "../../../lib/types";
 import { Input } from "../../ui/input";
@@ -153,6 +153,7 @@ export const LIMIT_FIELDS: Field[] = [
   { key: "deny_task_mode_exec", kind: "true", label: GOV.LIMIT_EXEC_LABEL, mono: false },
   { key: "deny_interactive", kind: "true", label: GOV.LIMIT_INTERACTIVE_LABEL, mono: false },
   { key: "deny_user_drive", kind: "true", label: GOV.LIMIT_DRIVE_LABEL, mono: false },
+  { key: "deny_member_drives", kind: "true", label: MEMBER_DRIVE_DOOR.LABEL, mono: false },
   { key: "max_concurrent_runs", kind: "number", label: GOV.LIMIT_CONCURRENT_LABEL, mono: false },
   { key: "max_ephemeral_disk_mib", kind: "number", label: GOV.LIMIT_EPHEMERAL_LABEL, mono: false },
   { key: "max_drive_size_mib", kind: "number", label: GOV.LIMIT_DRIVE_SIZE_LABEL, mono: false },
@@ -162,7 +163,6 @@ export const LIMIT_FIELDS: Field[] = [
   ceilingField("deny_ui_apps", "true"),
   ceilingField("deny_placements", "list"),
   ceilingField("local_self_defined_components", "false"),
-  ceilingField("deny_member_drives", "true"),
   ceilingField("max_cpu_millis", "number"),
   ceilingField("max_memory_mib", "number"),
   ceilingField("max_end_ahead_sec", "number"),

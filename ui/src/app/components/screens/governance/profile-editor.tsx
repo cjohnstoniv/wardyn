@@ -24,7 +24,7 @@ import { HttpError, PendingChangeError } from "../../../lib/api/core";
 import { governance as api, isGrantBoundError, type AutonomyRubric, type GovernanceLimits, type GovernanceProfile, type GovernanceProfileInput } from "../../../lib/api/governance";
 import { policies as policiesApi } from "../../../lib/api/policies";
 import { getErrorMessage } from "../../../lib/format";
-import { GOVERNANCE as GOV, RUN_LIMITS as RL, RUN_LIMIT_UNITS, runLimitUnit } from "../../../lib/governance-copy";
+import { GOVERNANCE as GOV, MEMBER_DRIVE_DOOR, RUN_LIMITS as RL, RUN_LIMIT_UNITS, runLimitUnit } from "../../../lib/governance-copy";
 import { PEOPLE } from "../../../lib/people-access-copy";
 import type { PolicyContact, RunPolicySpec, SetupModelProvider } from "../../../lib/types";
 import type { StorageEnforcement } from "../../../lib/api/drives";
@@ -369,6 +369,12 @@ export function ProfileEditor({
           disabled={disabled}
           onChange={(v) => setLimits((l) => ({ ...l, deny_user_drive: v }))}
         />
+        <LimitRow
+          label={MEMBER_DRIVE_DOOR.LABEL}
+          checked={!!limits.deny_member_drives}
+          disabled={disabled}
+          onChange={(v) => setLimits((l) => ({ ...l, deny_member_drives: v }))}
+        />
         {/* R4/F032: three integer limits, one row shape (a Switch has no
             number to carry). 0 = unlimited on every one, stated in each
             hint. The ephemeral row (and only it) carries the Docker uncapped
@@ -584,7 +590,7 @@ function LimitRow({
   onChange,
 }: {
   label: string;
-  hint: React.ReactNode;
+  hint?: React.ReactNode;
   checked: boolean;
   disabled: boolean;
   onChange: (next: boolean) => void;
@@ -594,7 +600,7 @@ function LimitRow({
       <Switch checked={checked} onChange={onChange} disabled={disabled} label={label} className="mt-0.5" />
       <div className="min-w-0">
         <p className="text-body font-medium text-foreground">{label}</p>
-        <p className="mt-0.5 max-w-[62ch] text-xs text-muted-foreground">{hint}</p>
+        {hint && <p className="mt-0.5 max-w-[62ch] text-xs text-muted-foreground">{hint}</p>}
       </div>
     </div>
   );
