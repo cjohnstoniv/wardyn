@@ -242,6 +242,33 @@ func (s *Server) repairStaleWorkspaceRuns(ctx context.Context, ws types.Workspac
 	return ws
 }
 
+// writeSourceLaunchRefusal answers a record launch that one of the workspace's
+// own stored sources refused, with the status, reason and sentence the
+// create-run door answers for the identical workspace. Reports false for any
+// other error, which the caller maps as it always did.
+func writeSourceLaunchRefusal(w http.ResponseWriter, lerr error) bool {
+	// A stored source whose authored target this composition refuses is the
+	// operator's row to fix, not a daemon fault — 422, the SAME status the
+	// create-run path answers for the identical workspace
+	// (seedRequestWorkspace). The two doors disagreeing about one stored row
+	// is what made this hard to diagnose; they agree on the code and on the
+	// wording.
+	if errors.Is(lerr, errWorkspaceSourceTarget) {
+		// The SAME reason seedRequestWorkspace's own arm uses (#656 slice 1):
+		// the two doors already agree on the code and the wording.
+		writeErrorReason(w, http.StatusUnprocessableEntity, reasonWorkspaceSeedSourceTargetInvalid, lerr.Error())
+		return true
+	}
+	// A required write: row that would make a member's directory writable
+	// past the member writable roots (requirementWriteRefusal).
+	var mountRefusal *sourceRefusal
+	if errors.As(lerr, &mountRefusal) {
+		writeErrorReason(w, mountRefusal.status, mountRefusal.reason, mountRefusal.Error())
+		return true
+	}
+	return false
+}
+
 // handleRecordWorkspace launches one named OPEN recording sandbox:
 // POST /workspaces/{id}/record {"name": "...", "confined": false}
 // ("task_key" is accepted as a deprecated alias for name). The operator drives
@@ -346,16 +373,7 @@ func (s *Server) handleRecordWorkspace(w http.ResponseWriter, r *http.Request) {
 		s.recordAudit(r.Context(), s.auditEvent(nil, actorType, actor,
 			"run.record.start", id.String(), "failure",
 			auditWorkspaceData(r, ws.OwnedBy, map[string]any{"task": key, "detail": lerr.Error()})))
-		// A stored source whose authored target this composition refuses is the
-		// operator's row to fix, not a daemon fault — 422, the SAME status the
-		// create-run path answers for the identical workspace
-		// (seedRequestWorkspace). The two doors disagreeing about one stored row
-		// is what made this hard to diagnose; they agree on the code and on the
-		// wording.
-		if errors.Is(lerr, errWorkspaceSourceTarget) {
-			// The SAME reason seedRequestWorkspace's own arm uses (#656 slice 1):
-			// the two doors already agree on the code and the wording.
-			writeErrorReason(w, http.StatusUnprocessableEntity, reasonWorkspaceSeedSourceTargetInvalid, lerr.Error())
+		if writeSourceLaunchRefusal(w, lerr) {
 			return
 		}
 		// The agent roster: 422, the SAME status run create answers when

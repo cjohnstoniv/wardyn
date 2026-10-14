@@ -95,8 +95,9 @@ type UserMountPolicy struct {
 	// WritableRoots (WARDYN_USER_WRITABLE_ROOTS) is where a member may mark
 	// their own mount writable. Empty = nowhere.
 	WritableRoots []string
-	// WritableDeny (WARDYN_USER_WRITABLE_DENY) carves holes in WritableRoots.
-	// Deny WINS over allow, and is checked first.
+	// WritableDeny (WARDYN_USER_WRITABLE_DENY) carves holes in WritableRoots: a
+	// member may write neither inside an entry nor to a directory that
+	// contains one. Deny WINS over allow, and is checked first.
 	WritableDeny []string
 }
 
@@ -130,6 +131,12 @@ func (p UserMountPolicy) ValidateUserMount(principal, src string, writable bool)
 	}
 	if withinAnyRoot(real, p.WritableDeny) {
 		return fmt.Errorf("mount source %q may not be mounted writable: it is under a member writable-deny path (WARDYN_USER_WRITABLE_DENY)", src)
+	}
+	// The other direction: a writable bind of a directory covers everything
+	// under it, the denied subtree included, and nothing downstream re-covers
+	// that subtree read-only.
+	if deny := denyPathUnder(real, p.WritableDeny); deny != "" {
+		return fmt.Errorf("mount source %q may not be mounted writable: it contains the member writable-deny path %q (WARDYN_USER_WRITABLE_DENY)", src, deny)
 	}
 	if len(p.WritableRoots) == 0 {
 		return fmt.Errorf("mount source %q may not be mounted writable: no member writable roots are configured (WARDYN_USER_WRITABLE_ROOTS) — member mounts are read-only by default", src)
@@ -193,6 +200,24 @@ func withinAnyRoot(real string, roots []string) bool {
 		}
 	}
 	return false
+}
+
+// denyPathUnder returns the first of deny that lies strictly under the
+// ALREADY-RESOLVED real path, as configured, or "" when real contains none of
+// them. It is withinAnyRoot read the other way, and canonicalizes each entry
+// exactly as that does, so the two can never disagree about where an entry is.
+func denyPathUnder(real string, deny []string) string {
+	prefix := strings.TrimSuffix(real, string(filepath.Separator)) + string(filepath.Separator)
+	for _, entry := range deny {
+		d := filepath.Clean(entry)
+		if resolved, err := filepath.EvalSymlinks(d); err == nil {
+			d = resolved
+		}
+		if strings.HasPrefix(d, prefix) {
+			return entry
+		}
+	}
+	return ""
 }
 
 // deniedUserSegment returns the offending path element when real IS or

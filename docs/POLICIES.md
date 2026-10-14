@@ -1163,7 +1163,7 @@ So an entry a pattern matches is judged one of two ways:
 | `inspect_forward_egress` | `bool` | `false` | Extend inspection from the LLM routes to the generic plaintext-HTTP forward path. HTTPS connectors tunnel via opaque CONNECT and stay uninspected unless MITM'd. |
 | `max_scan_bytes` | `int` | `1048576` (1 MiB) | Cap on a single scanned span. A larger span is skipped fail-open and recorded. Negative is rejected. |
 | `on_scanner_error` | `string` | `pass` | `pass` (fail-open, the request still flows) or `block` (fail-closed in block mode). |
-| `require_inspectable_llm` | `bool` | `false` | Refuse to schedule a run whose resolved LLM transport is opaque (subscription-OAuth / Bedrock CONNECT) and therefore uninspectable. Requires `intercept_tls` — only TLS-MITM gives a runtime guarantee. Default only warns. |
+| `require_inspectable_llm` | `bool` | `false` | Refuse to schedule a run whose resolved LLM transport is opaque: Bedrock, SigV4 or bearer. A Claude subscription is inspectable, on a route-through host too. Requires `intercept_tls` — only TLS-MITM gives a runtime guarantee. Default only warns. |
 | `intercept_tls` | `bool` | `false` | Opt the run into TLS-MITM of opaque CONNECT tunnels to known LLM hosts, making the subscription-OAuth path inspectable. |
 | | | | The control plane provisions a per-run CA: the private key goes only to the proxy sidecar, the sandbox trusts only the public cert. Adds a CA trust dependency inside the sandbox (threatmodel §5.1a). |
 | `block_min_severity` | `string` | `low` | Minimum finding severity that blocks in `block` mode: `low`, `medium`, `high`, `critical`. |
