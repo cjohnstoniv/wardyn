@@ -53,6 +53,9 @@ const (
 func (p *Proxy) handleLLMAnthropic(w http.ResponseWriter, r *http.Request) {
 	rest := strings.TrimPrefix(r.URL.Path, llmAnthropicPrefix)
 	host, port, prefix := p.llmUpstream(anthropicHost)
+	if p.llmRequestRefused(w, r, host, port, rest) {
+		return
+	}
 	p.proxyLLMRequest(w, r, host, port, joinLLMPath(prefix, rest), contentscan.ChannelAnthropicMessages)
 }
 
@@ -62,7 +65,34 @@ func (p *Proxy) handleLLMAnthropic(w http.ResponseWriter, r *http.Request) {
 func (p *Proxy) handleLLMOpenAI(w http.ResponseWriter, r *http.Request) {
 	rest := strings.TrimPrefix(r.URL.Path, llmOpenAIPrefix)
 	host, port, prefix := p.llmUpstream(openaiHost)
+	if p.llmRequestRefused(w, r, host, port, rest) {
+		return
+	}
 	p.proxyLLMRequest(w, r, host, port, joinLLMPath(prefix, rest), contentscan.ChannelOpenAIChat)
+}
+
+// llmRequestRefused answers a brokered LLM request that may not be forwarded
+// and reports whether it did. allowed_methods applies here as on the forward
+// and MITM lanes, with the same 403 and policy:method decision. rest is sent
+// as-is after the gateway's path prefix, so a "." or ".." segment (see
+// isDotSegment), a backslash or a control character in it is refused with a
+// 400, never normalised and forwarded.
+func (p *Proxy) llmRequestRefused(w http.ResponseWriter, r *http.Request, host string, port int, rest string) bool {
+	if !p.evaluator.MethodAllowed(r.Method) {
+		log := decisionLog(p.reqOf(r, host, port), egress.Deny, "policy:method")
+		if p.sink != nil {
+			p.sink.emit(log)
+		}
+		p.writeEgressDeny(w, host, port, &log, false)
+		return true
+	}
+	if strings.ContainsFunc(rest, func(c rune) bool { return c == '\\' || c < 0x20 || c == 0x7f }) ||
+		slices.ContainsFunc(strings.Split(rest, "/"), isDotSegment) {
+		p.emitLLMDecision(r, host, port, egress.Deny, ruleSourceLLM, nil)
+		http.Error(w, "unsupported llm request path", http.StatusBadRequest)
+		return true
+	}
+	return false
 }
 
 // joinLLMPath prepends an internal gateway's path prefix (from its base URL)

@@ -47,7 +47,7 @@
 | `max_holds` | `int` | `0` (→ `16`) | Only `wait_for_review`: cap on concurrent held connections; the next held connection over the cap fails fast. `0`/absent keeps the built-in **16**. |
 | | | | Bounded at write time: negative, or over **256**, is rejected (`400`) at every ingest point, and a policy stored before that bound existed is clamped to 256 by the proxy when the run starts. |
 | | | | Each held connection is a goroutine polling the control plane once a second, which is what the cap exists to bound. |
-| `allowed_methods` | `[]string` | `[]` (all) | Optional HTTP method restriction, enforced on every lane the proxy can read a method on; a refused request is `403` with `rule_source` `policy:method`. See [`allowed_methods`](#allowed_methods). |
+| `allowed_methods` | `[]string` | `[]` (all) | Optional HTTP method restriction, enforced on the forward, `CONNECT`, TLS-intercepted and brokered model lanes; a refused request is `403` with `rule_source` `policy:method`. See [`allowed_methods`](#allowed_methods). |
 | `min_confinement_class` | `string` | — (**required**) | `CC1` (hardened runc), `CC2` (gVisor), or `CC3` (Kata microVM). The run refuses to launch below it; an unrecognised value is rejected at write time and would otherwise rank below CC1. |
 | `eligible_grants` | `[]GrantSpec` | `[]` | The ceiling of credential scopes this run may request. Eligibility is not issuance — the broker still mints. |
 | `auto_stop_after_sec` | `int` | `0` | Idle auto-stop in seconds: `> 0` stops an idle run after that time plus 30s slack, `0` or negative never reaps it, and a pending request keeps a run alive; details in [`auto_stop_after_sec`](#auto_stop_after_sec). |
@@ -88,12 +88,14 @@
 ### `allowed_methods`
 
 - Optional HTTP method restriction.
-- Enforced on every lane the proxy can read a method on:
+- Enforced on:
   - the plain forward request,
   - the `CONNECT` that opens a tunnel (method `CONNECT`),
-  - and — since the proxy holds the plaintext there — each request **inside** a TLS-intercepted tunnel (`intercept_tls` / subscription injection).
+  - each brokered model request (`/wardyn/llm/*`),
+  - and each request **inside** a TLS-intercepted tunnel (`intercept_tls` / subscription injection).
 - A refused request is `403` with `rule_source` `policy:method` and is never forwarded.
-- An opaque (un-intercepted) tunnel is the exception the transport forces: only its `CONNECT` is seen, so the methods carried inside it are neither visible nor restricted.
+- `/wardyn/gh/` and `/wardyn/git/` ignore it and accept only git smart-HTTP (`GET info/refs`, `POST` upload/receive-pack).
+- An opaque (un-intercepted) tunnel shows only its `CONNECT`, so the methods inside it are neither visible nor restricted.
 
 ### `auto_stop_after_sec`
 
