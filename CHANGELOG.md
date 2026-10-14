@@ -8,6 +8,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+## [0.9.0] — 2026-10-13
+
 ### Before you upgrade
 
 - Session, API token and SSH key revocation is now ordered by a database sequence instead of by comparing
