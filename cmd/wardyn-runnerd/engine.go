@@ -112,7 +112,7 @@ func parseRelayTarget(s string) (string, error) {
 	switch {
 	case err != nil:
 		return "", fmt.Errorf("--relay-host-target: %q is neither %s nor an IP address", s, hostGateway)
-	case ip.IsUnspecified() || ip.IsMulticast() || ip.IsLoopback():
+	case ip.Zone() != "" || ip.Unmap().IsUnspecified() || ip.Unmap().IsMulticast() || ip.Unmap().IsLoopback():
 		return "", fmt.Errorf("--relay-host-target: refusing %s: it must be an address a container reaches this host at", s)
 	}
 	return ip.String(), nil
@@ -182,7 +182,7 @@ func tryRelayPair(ctx context.Context, probe relayProbe, eng dockerEngine, p rel
 		}
 	}
 	if err != nil {
-		return fmt.Errorf("%w (%d attempts over %s)", err, len(relayAttempts), relayAttempts[len(relayAttempts)-1])
+		return fmt.Errorf("%w (%d attempts, the last %s after listening)", err, len(relayAttempts), relayAttempts[len(relayAttempts)-1])
 	}
 	if err := ln.SetDeadline(time.Now().Add(relayAcceptWait)); err != nil {
 		return err

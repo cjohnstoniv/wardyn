@@ -14,7 +14,7 @@ From 0.9 the control plane places runs on a claimed runner through its owner's u
 | Docker Desktop (macOS) | Needs no relay flag. Expected, not yet verified. |
 | Rancher Desktop, dockerd (moby) engine, on macOS and on Windows through WSL2 | Expected, not yet verified. On macOS the proxy reaches a loopback relay at `192.168.5.2`; on WSL2 the relay listens on Rancher Desktop's `veth-rd-wsl` address (`192.168.143.2`). The startup check proves it on each computer. |
 | Other VM-backed engines (Colima, Podman machine, OrbStack, rootless Docker) | Work when the startup reachability check passes; not verified by us. `--relay-host-target` is the knob when it does not. |
-| Podman on Linux (docker-compat API) | Unsupported in 0.9.1: its default network is not `bridge`, so `setup` and `serve` refuse it. |
+| Podman on Linux (docker-compat API) | Unsupported and not verified in 0.9.1: the startup check is expected to refuse it. |
 | Rancher Desktop, containerd (nerdctl) mode | Unsupported: it has no Docker API. Switch Rancher Desktop to the dockerd (moby) engine. |
 | `DOCKER_HOST` | `runnerd` reads `DOCKER_HOST` and never a docker context. Point it at the engine's socket, for example `unix://$HOME/.rd/docker.sock` for Rancher Desktop (expected) or `unix://$HOME/.colima/default/docker.sock` for Colima (expected). |
 | An explicit relay flag | `--relay-listen` accepts loopback on any engine, the native bridge gateway, or the `veth-rd-wsl` address. It never accepts `0.0.0.0` or another interface's address. The startup check still has to pass. |
@@ -30,7 +30,7 @@ From 0.9 the control plane places runs on a claimed runner through its owner's u
 
 ### The startup reachability check
 
-`serve` and `setup` prove the relay address before they use it: on this engine, one throwaway container from the proxy image, on the `--internal-network` bridge, must connect to the relay's address. `setup` runs the check before it spends the token or installs the service; `serve` runs it before it shows Online.
+`serve` and `setup` prove the relay address before they use it: on this engine, a throwaway container from the proxy image, on the `--internal-network` bridge, must connect to the relay's address (up to three tries per address pair, 0, 2 and 4 s apart). `setup` runs the check before it spends the token or installs the service; `serve` runs it before it shows Online.
 
 | If the check | Then |
 |---|---|
