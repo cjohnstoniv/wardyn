@@ -116,6 +116,11 @@
   },
   {
     "reason": "capKinds[capFeature].reason",
+    "target": "\"me.runners.tokens\"",
+    "sentence": "runnerSelfHostRefusal"
+  },
+  {
+    "reason": "capKinds[capFeature].reason",
     "target": "\"me.ssh_keys\"",
     "sentence": "sshKeyFeatureRefusal"
   },

@@ -131,6 +131,10 @@ type credentialWalk struct {
 func newCredentialWalk(t *testing.T) *credentialWalk {
 	t.Helper()
 	w := &credentialWalk{probeEnv: newProbeEnv(t), invitations: map[string]uuid.UUID{}, reached: map[string]int{}, found: map[string]int{}}
+	// POST /me/runners/tokens asks the self_host_runner grant (restricted by migration 0178); without it a member never reaches the mint.
+	if _, err := w.st.UpsertCapabilityGrant(context.Background(), types.CapabilityGrant{SubjectType: types.CapabilitySubjectAll, Capability: capFeature, Value: featureSelfHostRunner, Effect: types.CapabilityAllow}); err != nil {
+		t.Fatal(err)
+	}
 	w.callers = []walkCaller{{"super", "root", w.super}, {"security", "sec", w.sec}, {"member", "mem", w.mem}}
 	for _, c := range w.callers {
 		w.mustCreate(t, "walk-"+c.name, c.sub)
