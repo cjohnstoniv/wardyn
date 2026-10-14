@@ -54,10 +54,13 @@ func (s *Server) remoteUsage(ctx context.Context, rr types.RemoteRunner, used ty
 	}
 	facts, online := s.executorFacts(ctx, rr.ID)
 	var reported *types.RunnerAmounts
-	if m := s.measureRemote(ctx, rr.ID); m != (types.RunnerAmounts{}) {
+	m, why := s.measureRemote(ctx, rr.ID)
+	if m != (types.RunnerAmounts{}) {
 		reported = &m
 	}
-	return runnerpool.Usage(rr.Limits, used, online, diskCapped(facts.EphemeralDiskEnforcement), reported)
+	u := runnerpool.Usage(rr.Limits, used, online, diskCapped(facts.EphemeralDiskEnforcement), reported)
+	u.ReportedWhy = why
+	return u
 }
 
 // poolCapacity adds up a pool's runners the caller's catalogue row may show: its organization runners,

@@ -33,9 +33,8 @@ func (s *Server) configuredExecutors() []string {
 }
 
 // measureRemote is what one configured remote-hosted runner has, all zero when its substrate cannot
-// say or the read fails.
-func (s *Server) measureRemote(ctx context.Context, id string) types.RunnerAmounts {
-	var m types.RunnerAmounts
+// say or the read fails. why is the read the substrate could not make, empty when it made them all.
+func (s *Server) measureRemote(ctx context.Context, id string) (m types.RunnerAmounts, why string) {
 	var err error
 	switch r := s.cfg.Runner.(type) {
 	case runner.ExecutorMeasurer:
@@ -47,9 +46,9 @@ func (s *Server) measureRemote(ctx context.Context, id string) types.RunnerAmoun
 	}
 	if err != nil {
 		slog.WarnContext(ctx, "wardynd: measure a remote-hosted runner", slog.String("remote_runner_id", id), slog.Any("err", err))
-		return types.RunnerAmounts{}
+		return m, err.Error()
 	}
-	return m
+	return m, ""
 }
 
 // remoteRunnerProposal is the limit set boot proposes for a remote-hosted runner that measured as m:
@@ -86,13 +85,13 @@ func (s *Server) BootstrapRunnerPools(ctx context.Context) error {
 	if rs, ok := s.cfg.Store.(store.RemoteRunnerStore); ok {
 		proposals := map[string]types.RunnerLimits{}
 		for _, id := range executors {
-			m := s.measureRemote(ctx, id)
+			m, why := s.measureRemote(ctx, id)
 			if p, ok := remoteRunnerProposal(m); ok {
 				proposals[id] = p
 				continue
 			}
 			slog.WarnContext(ctx, "wardynd: not every limit of a remote-hosted runner could be measured; one with no limits set takes no run until an administrator sets them",
-				slog.String("remote_runner_id", id), slog.Int64("cpu_millis", m.CPUMillis), slog.Int64("memory_mib", m.MemoryMiB), slog.Int64("disk_mib", m.DiskMiB))
+				slog.String("remote_runner_id", id), slog.String("why", why), slog.Int64("cpu_millis", m.CPUMillis), slog.Int64("memory_mib", m.MemoryMiB), slog.Int64("disk_mib", m.DiskMiB))
 		}
 		made, proposed, err := rs.EnsureRemoteRunners(ctx, executors, proposals)
 		if err != nil {

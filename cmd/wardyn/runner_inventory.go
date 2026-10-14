@@ -7,6 +7,7 @@ import (
 	"cmp"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 	"time"
 
@@ -18,12 +19,12 @@ import (
 
 // runner_inventory.go — the runner management half of `wardyn runner`:
 //
-//	wardyn runner list [--all [--state active|revoked|all]]   your own runners; --all is every person's (admin)
+//	wardyn runner list [--all [--state active|revoked|all]] [--no-limits]   your own runners; --all is every person's (admin)
 //	wardyn runner tokens list [--owner P] | revoke <id>        the unused registration tokens (admin)
 //	wardyn runner set --max-runs N <id>                        your own runner's runs at once
 
 func runnerListCmd(client clientFn) *cobra.Command {
-	var all, asJSON bool
+	var all, asJSON, noLimits bool
 	var state string
 	var limit, offset int
 	cmd := &cobra.Command{Use: "list", Short: "List your own runners, or with --all every person's", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
@@ -42,6 +43,9 @@ func runnerListCmd(client clientFn) *cobra.Command {
 			return err
 		}
 		warnListTruncated(cmd, truncated, "runner", len(rows), offset)
+		if noLimits {
+			rows = slices.DeleteFunc(rows, func(r sdk.RunnerView) bool { return r.Limits != nil })
+		}
 		if asJSON {
 			if rows == nil {
 				rows = []sdk.RunnerView{}
@@ -51,14 +55,17 @@ func runnerListCmd(client clientFn) *cobra.Command {
 		if all {
 			return printRunners(cmd.OutOrStdout(), rows)
 		}
-		remote, err := remoteRunnersToAdd(cmd.Context(), client())
-		if err != nil {
-			return err
+		var remote []sdk.RemoteRunnerView
+		if !noLimits { // the remote-hosted ones are `wardyn runner remote list --no-limits`
+			if remote, err = remoteRunnersToAdd(cmd.Context(), client()); err != nil {
+				return err
+			}
 		}
 		return printOwnRunners(cmd.OutOrStdout(), rows, remote)
 	}}
 	cmd.Flags().BoolVar(&all, "all", false, "every person's runners (admin or security_admin)")
 	cmd.Flags().StringVar(&state, "state", "", "with --all: active (default), revoked or all")
+	cmd.Flags().BoolVar(&noLimits, "no-limits", false, "only the runners with no limits set, which take no run until their limits are set")
 	cmd.Flags().BoolVar(&asJSON, "json", false, "emit raw JSON")
 	cmd.Flags().IntVar(&limit, "limit", 0, "with --all: max rows (0 = server default page)")
 	cmd.Flags().IntVar(&offset, "offset", 0, "with --all: skip this many rows")
