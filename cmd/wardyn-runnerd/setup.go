@@ -170,7 +170,7 @@ func (h setupHost) preflight(cmd *cobra.Command, o setupOptions) (setupPlan, err
 	if err != nil {
 		return setupPlan{}, err
 	}
-	if err := probeRelay(cmd.Context(), bind, target); err != nil {
+	if err := h.probe(cmd.Context(), o.network, o.proxyImage, relayChoice{facts: f, bind: bind, target: target}); err != nil {
 		return setupPlan{}, err
 	}
 	// A native engine's relay follows its host-gateway, so serve derives it; any other bind is written.

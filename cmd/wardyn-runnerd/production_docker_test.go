@@ -30,6 +30,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/federation"
 	"github.com/cjohnstoniv/wardyn/internal/placement"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/runner/docker"
 	"github.com/cjohnstoniv/wardyn/internal/runner/remote"
 	"github.com/cjohnstoniv/wardyn/internal/runneridentity"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
@@ -232,7 +233,8 @@ func TestServeFailsFastWhenRunsCannotStart(t *testing.T) {
 		{"not an address", "localhost", "", "--relay-listen", &fakeEngine{os: "Docker Desktop"}},
 		{"network create refused", "127.0.0.1", "", "create docker network wardyn-internal", &fakeEngine{os: "Docker Desktop", createCode: http.StatusForbidden}},
 		{"bad host target", "", "localhost", "--relay-host-target", nil},
-		{"host target the driver cannot take yet", "", "192.168.5.2", "only to host-gateway, not 192.168.5.2", &fakeEngine{os: "Docker Desktop", network: true}},
+		{"relay unreachable from a proxy", "", "192.168.5.2", `listening on 127.0.0.1 through 192.168.5.2 (Docker reports OperatingSystem "Docker Desktop", Name "docker-desktop")`,
+			&fakeEngine{os: "Docker Desktop", name: "docker-desktop", network: true}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if tc.engine == nil {
@@ -245,6 +247,7 @@ func TestServeFailsFastWhenRunsCannotStart(t *testing.T) {
 			} else {
 				tc.engine.start(t)
 			}
+			stubRelayProbe(t, docker.ErrRelayUnreachable)
 			opts := serveOptions{proxyImage: "wardyn-proxy:test", relayListen: tc.relayListen, relayHostTarget: tc.hostTarget, network: "wardyn-internal", recording: "off"}
 			runtime, err := productionRunnerHooks(context.Background(), runneridentity.Identity{RunnerID: uuid.New()}, t.TempDir(), opts)
 			if runtime.close != nil {
@@ -254,6 +257,35 @@ func TestServeFailsFastWhenRunsCannotStart(t *testing.T) {
 				t.Fatalf("productionRunnerHooks = %v, want an error naming %q", err, tc.want)
 			}
 		})
+	}
+}
+
+// stubRelayProbe answers serve's relay reachability check with err, recording each probe asked for.
+func stubRelayProbe(t *testing.T, err error) *[]docker.RelayProbe {
+	t.Helper()
+	var asked []docker.RelayProbe
+	old := probeRelay
+	probeRelay = func(_ *docker.Driver, _ context.Context, p docker.RelayProbe) error {
+		asked = append(asked, p)
+		return err
+	}
+	t.Cleanup(func() { probeRelay = old })
+	return &asked
+}
+
+// A proxy container that reaches the relay's address lets serve start: the
+// probe dials a listener on the relay's bind through its hosts target.
+func TestServeStartsWhenAProxyReachesTheRelay(t *testing.T) {
+	(&fakeEngine{os: "Docker Desktop", name: "docker-desktop", network: true}).start(t)
+	asked := stubRelayProbe(t, nil)
+	opts := serveOptions{proxyImage: "wardyn-proxy:test", relayHostTarget: "192.168.5.2", network: "wardyn-internal", recording: "off"}
+	runtime, err := productionRunnerHooks(context.Background(), runneridentity.Identity{RunnerID: uuid.New()}, t.TempDir(), opts)
+	if err != nil {
+		t.Fatalf("productionRunnerHooks: %v", err)
+	}
+	_ = runtime.close()
+	if len(*asked) != 1 || (*asked)[0].Host != "wardyn-relay-probe:192.168.5.2" || !strings.HasPrefix((*asked)[0].Target, "wardyn-relay-probe:") {
+		t.Fatalf("probes = %+v, want one through 192.168.5.2", *asked)
 	}
 }
 
@@ -308,21 +340,21 @@ func TestPrepareDockerCreatesTheMissingNetwork(t *testing.T) {
 	loopback := netip.MustParseAddr("127.0.0.1")
 	missing := &fakeEngine{os: "Docker Desktop"}
 	missing.start(t)
-	addr, _, err := prepareDocker(ctx, "wardyn-internal", loopback, "")
-	if err != nil || addr != loopback {
-		t.Fatalf("prepareDocker = %s, %v", addr, err)
+	at, err := prepareDocker(ctx, "wardyn-internal", loopback, "")
+	if err != nil || at.bind != loopback || at.target != "host-gateway" {
+		t.Fatalf("prepareDocker = %+v, %v", at, err)
 	}
 	if len(missing.created) != 1 || !strings.Contains(missing.created[0], `"Name":"wardyn-internal"`) || !strings.Contains(missing.created[0], `"Driver":"bridge"`) {
 		t.Fatalf("network creates = %q, want one bridge named wardyn-internal", missing.created)
 	}
 	present := &fakeEngine{os: "Docker Desktop", network: true}
 	present.start(t)
-	if _, _, err := prepareDocker(ctx, "wardyn-internal", loopback, ""); err != nil || len(present.created) != 0 {
+	if _, err := prepareDocker(ctx, "wardyn-internal", loopback, ""); err != nil || len(present.created) != 0 {
 		t.Fatalf("existing network: err=%v creates=%q", err, present.created)
 	}
 	vm := rancherLima()
 	vm.start(t)
-	if _, _, err := prepareDocker(ctx, "wardyn-internal", netip.Addr{}, ""); err == nil || len(vm.created) != 0 {
+	if _, err := prepareDocker(ctx, "wardyn-internal", netip.Addr{}, ""); err == nil || len(vm.created) != 0 {
 		t.Fatalf("an unusable relay still touched the engine's networks: err=%v creates=%q", err, vm.created)
 	}
 }

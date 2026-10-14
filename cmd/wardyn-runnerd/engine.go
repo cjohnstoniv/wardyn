@@ -4,7 +4,6 @@
 package main
 
 import (
-	"context"
 	"fmt"
 	"net/netip"
 )
@@ -27,6 +26,13 @@ type engineFacts struct {
 	// hostBridge reports that the default bridge's interface is on this host; bridge is what it holds.
 	hostBridge bool
 	bridge     []netip.Addr
+}
+
+// relayChoice is relayPlan's answer with the facts it judged, which a failed reachability check names.
+type relayChoice struct {
+	facts  engineFacts
+	bind   netip.Addr
+	target string
 }
 
 // relayPlan decides where the run relay listens (bind) and what the proxy's hosts entry maps the
@@ -75,7 +81,3 @@ func checkRelayHostTarget(v string) error {
 	}
 	return nil
 }
-
-// probeRelay checks, from a throwaway container, that a proxy reaches a listener on bind through target.
-// TODO(L9a): wire the Docker driver's ProbeRelay; until then nothing is probed.
-var probeRelay = func(context.Context, netip.Addr, string) error { return nil }

@@ -38,6 +38,8 @@ type setupHost struct {
 	// docker checks that the engine answers as this user and the proxy bridge exists, creating it when
 	// missing, and reports the engine's facts for relayPlan.
 	docker func(ctx context.Context, network string) (engineFacts, error)
+	// probe is serve's relay reachability check (checkRelayReach), with the proxy image setup installs.
+	probe func(ctx context.Context, network, proxyImage string, at relayChoice) error
 }
 
 func osSetupHost() (setupHost, error) {
@@ -56,7 +58,7 @@ func osSetupHost() (setupHost, error) {
 		return setupHost{}, err
 	}
 	return setupHost{goos: runtime.GOOS, home: home, xdgConfig: os.Getenv("XDG_CONFIG_HOME"), xdgData: os.Getenv("XDG_DATA_HOME"),
-		dockerHost: os.Getenv("DOCKER_HOST"), uid: os.Geteuid(), exe: exe, run: runCommand, docker: prepareSetupDocker}, nil
+		dockerHost: os.Getenv("DOCKER_HOST"), uid: os.Geteuid(), exe: exe, run: runCommand, docker: prepareSetupDocker, probe: setupRelayProbe}, nil
 }
 
 func runCommand(ctx context.Context, name string, args ...string) ([]byte, error) {

@@ -9,6 +9,8 @@ import (
 	"context"
 
 	"github.com/moby/moby/client"
+
+	"github.com/cjohnstoniv/wardyn/internal/runner/docker"
 )
 
 // prepareSetupDocker is setup's look at the engine, before the token is spent: it answers as this user,
@@ -25,4 +27,14 @@ func prepareSetupDocker(ctx context.Context, network string) (engineFacts, error
 		return engineFacts{}, err
 	}
 	return f, ensureInternalNetwork(ctx, cli, network)
+}
+
+// setupRelayProbe is serve's reachability check (checkRelayReach) run from setup, before the token is
+// spent, with a driver built for it alone. The proxy image is pulled when it is missing.
+func setupRelayProbe(ctx context.Context, network, proxyImage string, at relayChoice) error {
+	d, err := docker.New(docker.Config{ProxyImage: proxyImage, InternalNetwork: network})
+	if err != nil {
+		return err
+	}
+	return checkRelayReach(ctx, d, at)
 }

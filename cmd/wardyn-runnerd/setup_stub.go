@@ -14,3 +14,8 @@ import (
 func prepareSetupDocker(context.Context, string) (engineFacts, error) {
 	return engineFacts{}, errors.New("setup requires a build with the docker tag")
 }
+
+// setupRelayProbe needs Docker, which this build has not.
+func setupRelayProbe(context.Context, string, string, relayChoice) error {
+	return errors.New("setup requires a build with the docker tag")
+}

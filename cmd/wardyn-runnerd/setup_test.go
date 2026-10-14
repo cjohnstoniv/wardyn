@@ -12,6 +12,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -35,6 +36,7 @@ type setupFixture struct {
 	calls       []string // "METHOD path" the organisation served
 	commands    []string // "name args" run on the host
 	networks    []string
+	probes      []string // "network image bind target" of each relay reachability check
 	desktop     bool
 	vm          bool // a VM-backed engine other than Docker Desktop
 	state       types.RunnerState
@@ -71,6 +73,10 @@ func newSetupFixture(t *testing.T, goos string) *setupFixture {
 		docker: func(_ context.Context, network string) (engineFacts, error) {
 			f.networks = append(f.networks, network)
 			return f.engine(), nil
+		},
+		probe: func(_ context.Context, network, image string, at relayChoice) error {
+			f.probes = append(f.probes, strings.Join([]string{network, image, at.bind.String(), at.target}, " "))
+			return nil
 		}}
 	if err := os.MkdirAll(f.host.home, 0o755); err != nil {
 		t.Fatal(err)
@@ -272,9 +278,9 @@ func TestSetupRefusesBeforeSpendingTheToken(t *testing.T) {
 		"VM-backed engine and explicit relay": {setupOptions{relayListen: "127.0.0.1"}, func(f *setupFixture) { f.vm = true }, `Name "lima-rancher-desktop"`},
 		"bad relay host target":               {setupOptions{relayHostTarget: "127.0.0.1"}, nil, "--relay-host-target"},
 		"relay unreachable": {setupOptions{}, func(f *setupFixture) {
-			old := probeRelay
-			probeRelay = func(context.Context, netip.Addr, string) error { return errors.New("relay probe: unreachable") }
-			f.t.Cleanup(func() { probeRelay = old })
+			f.host.probe = func(context.Context, string, string, relayChoice) error {
+				return errors.New("relay probe: unreachable")
+			}
 		}, "relay probe: unreachable"},
 		"user manager cannot find the unit": {setupOptions{}, func(f *setupFixture) {
 			f.host.run = func(context.Context, string, ...string) ([]byte, error) { return []byte("/etc/systemd/user"), nil }
@@ -335,6 +341,9 @@ func TestSetupDockerDesktopGetsLoopbackRelay(t *testing.T) {
 	f.desktop = true
 	if _, err := f.run(setupOptions{tokenFile: f.tokenFile}); err != nil {
 		t.Fatal(err)
+	}
+	if want := []string{"wardyn-internal ghcr.io/example/proxy:1 127.0.0.1 host-gateway"}; !slices.Equal(f.probes, want) {
+		t.Errorf("relay checks = %q, want %q: setup checks the relay it writes, with the image it installs", f.probes, want)
 	}
 	p, _ := f.host.paths()
 	if env := f.read(p.envFile); !strings.Contains(env, "WARDYN_RELAY_LISTEN=127.0.0.1\n") {

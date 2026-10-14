@@ -51,21 +51,17 @@ func productionRunnerHooks(ctx context.Context, identity runneridentity.Identity
 	if err := checkRelayHostTarget(opts.relayHostTarget); err != nil {
 		return runnerRuntime{}, err
 	}
-	addr, target, err := prepareDocker(ctx, opts.network, explicit, opts.relayHostTarget)
+	relayAt, err := prepareDocker(ctx, opts.network, explicit, opts.relayHostTarget)
 	if err != nil {
 		return runnerRuntime{}, err
 	}
-	// TODO(L9a): pass target as docker.Config.ControlPlaneHostTarget once the driver takes it.
-	if target != hostGateway {
-		return runnerRuntime{}, fmt.Errorf("relay: this build's Docker driver maps the control-plane name only to host-gateway, not %s", target)
-	}
-	relay := newLocalRelay(ctx, addr)
+	relay := newLocalRelay(ctx, relayAt.bind) // listens only once a run asks (Ensure)
 	sub, err := docker.New(docker.Config{RunnerID: identity.RunnerID.String(), ProxyImage: opts.proxyImage, InternalNetwork: opts.network, Record: record, RunnerStateDir: stateDir,
-		ControlPlaneRelay: relay.Ensure})
+		ControlPlaneRelay: relay.Ensure, ControlPlaneHostTarget: relayAt.target})
 	if err != nil {
 		return runnerRuntime{}, err
 	}
-	if err := probeRelay(ctx, addr, target); err != nil {
+	if err := checkRelayReach(ctx, sub, relayAt); err != nil {
 		return runnerRuntime{}, err
 	}
 	return localRunnerRuntime(ctx, identity, stateDir, sub, docker.SandboxRef, relay, dockerCapacity)
@@ -117,25 +113,68 @@ func readDockerCapacity(ctx context.Context) (placement.Capacity, error) {
 
 // prepareDocker is serve's one look at the engine before the runner dials its
 // organisation, so a runner that cannot accept runs never shows online: the
-// engine answers, the relay has an address a proxy reaches (relayPlan, judged
-// only once the engine's facts are gathered) and the proxy sidecars' bridge
-// exists. Any failure exits serve; the service manager's restart policy is the
-// retry. It returns the relay's address and the proxy's hosts target for it.
-func prepareDocker(ctx context.Context, network string, explicitBind netip.Addr, explicitTarget string) (netip.Addr, string, error) {
+// engine answers, the relay has an address and a hosts target (relayPlan,
+// judged only once the engine's facts are gathered) and the proxy sidecars'
+// bridge exists. Any failure exits serve; the service manager's restart policy
+// is the retry. checkRelayReach then proves a proxy reaches that address.
+func prepareDocker(ctx context.Context, network string, explicitBind netip.Addr, explicitTarget string) (relayChoice, error) {
 	cli, err := client.New(client.FromEnv)
 	if err != nil {
-		return netip.Addr{}, "", err
+		return relayChoice{}, err
 	}
 	defer cli.Close()
 	f, err := dockerEngineFacts(ctx, cli, "docker engine not reachable (set DOCKER_HOST to the engine's socket if it is not the default)")
 	if err != nil {
-		return netip.Addr{}, "", err
+		return relayChoice{}, err
 	}
 	bind, target, err := relayPlan(f, explicitBind, explicitTarget)
 	if err != nil {
-		return netip.Addr{}, "", err
+		return relayChoice{}, err
 	}
-	return bind, target, ensureInternalNetwork(ctx, cli, network)
+	return relayChoice{facts: f, bind: bind, target: target}, ensureInternalNetwork(ctx, cli, network)
+}
+
+// relayProbeName is the hosts name the reachability check's container dials.
+const relayProbeName = "wardyn-relay-probe"
+
+// relayProbeBound bounds the whole reachability check, the proxy image's pull included.
+const relayProbeBound = 2 * time.Minute
+
+// probeRelay is the Docker driver's ProbeRelay, which tests replace.
+var probeRelay = (*docker.Driver).ProbeRelay
+
+// checkRelayReach proves a run's proxy reaches the relay's address: it listens
+// on the relay's bind at an ephemeral port, closing every connection unread,
+// and has a throwaway proxy container dial it through the relay's hosts target.
+// serve and setup refuse when it cannot; serve has not dialled its organisation
+// yet, and setup has not spent the token.
+func checkRelayReach(ctx context.Context, d *docker.Driver, at relayChoice) error {
+	ln, err := net.Listen("tcp", netip.AddrPortFrom(at.bind, 0).String())
+	if err != nil {
+		return fmt.Errorf("relay: listen on %s: %w", at.bind, err)
+	}
+	defer ln.Close()
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			_ = c.Close()
+		}
+	}()
+	ctx, cancel := context.WithTimeout(ctx, relayProbeBound)
+	defer cancel()
+	port := ln.Addr().(*net.TCPAddr).Port
+	err = probeRelay(d, ctx, docker.RelayProbe{Host: relayProbeName + ":" + at.target, Target: fmt.Sprintf("%s:%d", relayProbeName, port)})
+	if errors.Is(err, docker.ErrRelayUnreachable) {
+		return fmt.Errorf("relay: a proxy container could not reach the relay listening on %s through %s (Docker reports OperatingSystem %q, Name %q); "+
+			"--relay-listen and --relay-host-target change these: %w", at.bind, at.target, at.facts.os, at.facts.name, err)
+	}
+	if err != nil {
+		return fmt.Errorf("relay: the reachability check could not run: %w", err)
+	}
+	return nil
 }
 
 // dockerEngineFacts is serve's and setup's one read of the engine (engineFacts).
