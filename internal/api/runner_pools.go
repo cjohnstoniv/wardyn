@@ -37,6 +37,7 @@ import (
 // answers every route 501 runner_pools_unavailable.
 func (s *Server) mountRunnerPoolRoutes(r, operatorOnly, securityOps chi.Router) {
 	r.Get("/runner-pools", s.handleListRunnerPools)
+	r.Get("/me/runner-pools", s.handleListRunnerPools)
 	r.Get("/runner-pools/{id}", s.handleGetRunnerPool)
 	r.Get("/runner-pools/{id}/members", s.handleListRunnerPoolMembers)
 	operatorOnly.Post("/runner-pools", s.handleCreateRunnerPool)
