@@ -42,10 +42,16 @@ describe("Review blockers", () => {
     expect(out[1].to).toBeUndefined();
   });
 
-  it("marks the Review groups whose fields the refusal's step edits, and none without a blocker", () => {
+  it("marks only the group of the field a refusal names, and none without a blocker", () => {
     const refused = buildBlockers({ ...NOTHING, refusal: { text: "Not available on your runner.", reason: "placement_credential" } });
-    expect([...groupsBlockedBy(refused)].sort()).toEqual(["run", "where"]);
+    expect([...groupsBlockedBy(refused)]).toEqual(["where"]);
     expect(groupsBlockedBy(buildBlockers(NOTHING)).size).toBe(0);
+  });
+
+  it("marks every group showing a field the step edits, subpath homes included", () => {
+    // workload.task is homed on Harnesses though workload shows in the Run group.
+    const local = buildBlockers({ ...NOTHING, issues: [{ home: "harnesses", code: "task_required", focus: "nr-task" }] });
+    expect([...groupsBlockedBy(local)].sort()).toEqual(["run", "tools"]);
   });
 
   it("adds the stale line only when nothing else holds Launch", () => {

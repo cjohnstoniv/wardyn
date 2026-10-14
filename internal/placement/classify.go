@@ -85,6 +85,7 @@ var Table = []Entry{
 	{Struct: StructSandboxSpec, Field: "SecretEnv", Variant: "env_secret grant, not OwnerOnly", Class: ClassOperator, Rule: RuleDelivery, Delivery: ClassEnvSecret, Reason: ReasonPlacementCredential},
 	{Struct: StructSandboxSpec, Field: "SecretEnv", Variant: "Bedrock role credentials, the person's own bedrock_sso: they sign in-process, so own is still runner_resident or refuse", Class: ClassOwn, Rule: RuleDelivery, Delivery: ClassBedrockRoleCreds, Reason: ReasonPlacementCredential},
 	{Struct: StructSandboxSpec, Field: "SecretEnv", Variant: "Bedrock role credentials, otherwise", Class: ClassOperator, Rule: RuleDelivery, Delivery: ClassBedrockRoleCreds, Reason: ReasonPlacementCredential},
+	{Struct: StructSandboxSpec, Field: "SecretEnv", Variant: "the Codex CLI's MCP broker URLs: a token minted per run that reaches only that run's own proxy, as Claude Code's managed MCP file does", Class: ClassPlatform, Rule: RuleAllow},
 	{Struct: StructSandboxSpec, Field: "ManagedFiles", Variant: "managed settings", Class: ClassPlatform, Rule: RuleAllow},
 	{Struct: StructSandboxSpec, Field: "ManagedFiles", Variant: "AgentOwned file_secret, OwnerOnly", Class: ClassOwn, Rule: RuleOwnerOnlyOwn, Delivery: ClassFileSecret},
 	{Struct: StructSandboxSpec, Field: "ManagedFiles", Variant: "AgentOwned file_secret, not OwnerOnly", Class: ClassOperator, Rule: RuleDelivery, Delivery: ClassFileSecret, Reason: ReasonPlacementCredential},

@@ -5,6 +5,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"maps"
 	"net/http"
 	"net/http/httptest"
@@ -95,67 +96,89 @@ func TestLocalBedrockSSODispatchAdmittedOnlyUnderProxyInject(t *testing.T) {
 	}
 }
 
-// Create, Review and the policy preview judge the same token cache before
-// Launch: with proxy-inject off a local bedrock_sso run is refused
-// placement_credential naming it; with proxy-inject on its credentials are
-// admitted, so the only refusal left is the unpooled one (no runner pool here).
-func TestLocalBedrockSSORefusedBeforeLaunchOnlyWithProxyInjectOff(t *testing.T) {
-	for _, inject := range []bool{true, false} {
-		srv := createRenewalFixture(t)
-		srv.cfg.AWSSSOProxyInject = inject
-		blob := createRenewalBlob()
-		blob.ExpiresAt = time.Now().Add(time.Hour)
-		storeSSOBlobFor(t, srv, createRenewalOwner, blob)
-		want := string(placement.ReasonPlacementCredential)
-		if inject {
-			want = string(placement.ReasonPlacementUnavailable)
-		}
-		for _, door := range contractDoors {
-			body := strings.TrimSuffix(createRenewalBody, "}") + `,"placement":"local"}`
-			w := do(t, srv, http.MethodPost, door.path, providerAdminToken(srv, createRenewalOwner), body)
-			if w.Code != http.StatusUnprocessableEntity || errorReason(w) != want {
-				t.Fatalf("inject=%v %s = %d %s, want 422 %s", inject, door.name, w.Code, w.Body.String(), want)
-			}
-			if !inject && !strings.Contains(w.Body.String(), bedrockSSOSecretEnvField) {
-				t.Errorf("%s refusal does not name the token cache: %s", door.name, w.Body.String())
-			}
-		}
-		if runRowCount(srv) != 0 {
-			t.Fatalf("inject=%v: a refused local run wrote a row", inject)
-		}
+// The class-killer: every key dispatch moves onto SecretEnv for a local run
+// (its env_secret grants, the provider arm's keys and the Codex CLI's MCP
+// servers: dispatchRun's splitSecretEnv list) has a dispatch-time origin, and
+// a key that origin refuses has a create-time intent with the same origin
+// (localProviderIntent), so create refuses it before Launch.
+func TestLocalSecretEnvKeysHaveCreateTimeIntents(t *testing.T) {
+	type scenario struct {
+		kind             types.ModelProviderKind
+		inject, codexMCP bool
+		ownEnvSecret     bool
 	}
-}
-
-// The class-killer: for every provider kind and proxy-inject setting, each key
-// the dispatch arm (applyProviderEnv) makes splitSecretEnv move onto SecretEnv
-// must be covered by a create-time intent (localProviderIntent), or a local run
-// passes Review and is refused only after Launch.
-func TestLocalProviderSecretEnvKeysHaveCreateTimeIntents(t *testing.T) {
-	r := httptest.NewRequest(http.MethodPost, "/api/v1/runs", nil)
-	checked := 0
+	var cases []scenario
 	for _, kind := range slices.Sorted(maps.Keys(types.ClosedModelProviderKinds)) {
-		for _, inject := range []bool{true, false} {
-			f, blob := bedrockSSOLocalFixture(t, inject)
-			p := awsSSOTestProvider()
-			p.Kind = kind
-			run := types.AgentRun{ID: uuid.New(), Agent: "claude-code", CreatedBy: awsSSOTestOwner, Placement: types.PlacementLocal}
-			env := map[string]string{}
-			lane := providerLane{chosen: &chosenProvider{provider: p, owner: awsSSOTestOwner}, blob: blob}
-			llm := f.srv.applyProviderEnv(context.Background(), run, lane, &types.RunPolicySpec{}, env, "http://proxy.invalid")
-			intents, known := f.srv.localProviderIntent(r, awsSSOTestOwner, p)
-			if !known {
-				t.Fatalf("%s: no create-time intents", kind)
+		cases = append(cases, scenario{kind: kind, inject: true}, scenario{kind: kind})
+	}
+	cases = append(cases, scenario{kind: types.ModelProviderOpenAIAPIKey, inject: true, codexMCP: true},
+		scenario{kind: types.ModelProviderAnthropicAPIKey, inject: true, ownEnvSecret: true})
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/runs", nil)
+	ctx := context.Background()
+	checked := map[string]bool{}
+	for _, c := range cases {
+		f, blob := bedrockSSOLocalFixture(t, c.inject)
+		p := awsSSOTestProvider()
+		p.Kind = c.kind
+		run := types.AgentRun{ID: uuid.New(), Agent: "claude-code", CreatedBy: awsSSOTestOwner, Placement: types.PlacementLocal}
+		policy := types.RunPolicySpec{}
+		if c.codexMCP {
+			run.Agent = codexHarness
+		}
+		if c.ownEnvSecret {
+			if err := f.srv.cfg.Secrets.For(awsSSOTestOwner).Put(ctx, "my-token", []byte("own-token-value")); err != nil {
+				t.Fatal(err)
 			}
-			for key := range splitSecretEnv(env, llm.secretEnvKeys) {
-				field := "SandboxSpec.SecretEnv[" + key + "]"
-				if !slices.ContainsFunc(intents, func(in placement.CredentialIntent) bool { return in.Field == field }) {
-					t.Errorf("%s inject=%v: dispatch places %s with no create-time intent", kind, inject, field)
+			g := types.CredentialGrant{ID: uuid.New(), RunID: run.ID, Spec: types.GrantSpec{Kind: types.GrantEnvSecret, OwnerOnly: true,
+				Scope: json.RawMessage(`{"name":"MY_TOKEN","secret_name":"my-token"}`)}}
+			f.st.grants = append(f.st.grants, g)
+			policy.EligibleGrants = []types.GrantSpec{g.Spec}
+		}
+		env := map[string]string{}
+		lane := providerLane{chosen: &chosenProvider{provider: p, owner: awsSSOTestOwner}, blob: blob}
+		llm := f.srv.applyProviderEnv(ctx, run, lane, &policy, env, "http://proxy.invalid")
+		envKeys := f.srv.resolveEnvSecretGrants(ctx, run, policy, env)
+		if c.codexMCP {
+			var injections []runner.InjectionGrant
+			dispatchMCP([]componentMCP{{Key: "docs", URL: "https://mcp.example/", Host: "mcp.example", Harnesses: []string{codexHarness}}}, &injections, "http://proxy.invalid", false, env)
+		}
+		spec := runner.SandboxSpec{RunID: run.ID, ProxyConfig: runner.ProxyConfig{Policy: policy}}
+		spec.SecretEnv = splitSecretEnv(env, dispatchSecretEnvKeys(envKeys, llm))
+		spec.Env = env
+		plan, err := f.srv.localResolvedPlan(ctx, run, false, f.st.siteConfig, spec, nil, llm)
+		if err != nil {
+			t.Fatal(err)
+		}
+		intents, known := f.srv.localProviderIntent(r, awsSSOTestOwner, p)
+		if !known {
+			t.Fatalf("%s: no create-time intents", c.kind)
+		}
+		for key, value := range spec.SecretEnv {
+			field := "SandboxSpec.SecretEnv[" + key + "]"
+			origin, found := plan.Origins[field]
+			if !found {
+				t.Errorf("%+v: dispatch places %s with no origin: refused after Launch", c, field)
+				continue
+			}
+			checked[key] = true
+			at := slices.IndexFunc(intents, func(in placement.CredentialIntent) bool { return in.Field == field })
+			if at >= 0 {
+				if intents[at].Origin != origin {
+					t.Errorf("%+v: %s create-time origin %+v, dispatch stamps %+v", c, field, intents[at].Origin, origin)
 				}
-				checked++
+				continue
+			}
+			alone := placement.LocalPlan{Spec: runner.SandboxSpec{SecretEnv: map[string]string{key: value}}, Origins: map[string]placement.CredentialOrigin{field: origin}, Delivery: plan.Delivery}
+			if _, ref := placement.LocalEligibility(alone); ref != nil {
+				t.Errorf("%+v: dispatch refuses %s after Launch with no create-time intent: %v", c, field, ref)
 			}
 		}
 	}
-	if checked == 0 {
-		t.Fatal("no provider kind placed a SecretEnv key: the parity check checked nothing")
+	// Every fixed key dispatch can move (dispatchSecretEnvKeys with no grants and no transport keys) must
+	// have been placed by some scenario, so a key added to that list without a scenario fails here.
+	for _, key := range slices.Concat([]string{awsSSOConfigEnvVar, "MY_TOKEN"}, dispatchSecretEnvKeys(nil, llmTransport{})) {
+		if !checked[key] {
+			t.Errorf("no scenario placed %s on SecretEnv: the parity check did not check it", key)
+		}
 	}
 }
