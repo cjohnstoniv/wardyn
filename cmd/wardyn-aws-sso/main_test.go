@@ -538,12 +538,19 @@ func runHelper(t *testing.T, portal *awsssofake.Server) ([]byte, string) {
 
 func runHelperAgainst(t *testing.T, portal *awsssofake.Server, upload http.HandlerFunc) string {
 	t.Helper()
+	return runHelperWithCache(t, portal, upload, "")
+}
+
+// runHelperWithCache is runHelperAgainst with extra JSON members spliced into
+// the cache file (each with a leading comma).
+func runHelperWithCache(t *testing.T, portal *awsssofake.Server, upload http.HandlerFunc, extra string) string {
+	t.Helper()
 	home := t.TempDir()
 	cacheDir := filepath.Join(home, ssoCacheSubdir)
 	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	cache := `{"accessToken":"` + portal.AccessToken() + `","startUrl":"https://x.awsapps.com/start","region":"us-east-1","expiresAt":"` + testutil.FutureRFC3339(24*30) + `"}`
+	cache := `{"accessToken":"` + portal.AccessToken() + `","startUrl":"https://x.awsapps.com/start","region":"us-east-1","expiresAt":"` + testutil.FutureRFC3339(24*30) + `"` + extra + `}`
 	if err := os.WriteFile(filepath.Join(cacheDir, "abc123.json"), []byte(cache), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -1030,5 +1037,32 @@ func TestRun_ChooserOffersEveryPageOfAccountsAndRoles(t *testing.T) {
 	}
 	if got.AccountID != "333333333333" || got.RoleName != "RoleOnPageTwo" {
 		t.Errorf("uploaded %q/%q, want the page-two pair 333333333333/RoleOnPageTwo", got.AccountID, got.RoleName)
+	}
+}
+
+// TestRun_WarnsWhenTheSessionCannotRenew: a refresh token captured without the
+// client registration it is redeemed with gets the no-renewal note ahead of the
+// success marker; a full registration, or no refresh token at all, gets none.
+func TestRun_WarnsWhenTheSessionCannotRenew(t *testing.T) {
+	ok := func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }
+	for extra, warn := range map[string]bool{
+		`,"refreshToken":"rt"`:                                        true,
+		`,"refreshToken":"rt","clientId":"cid"`:                       true,
+		`,"refreshToken":"rt","clientId":"cid","clientSecret":"csec"`: false,
+		``: false,
+	} {
+		portal := awsssofake.New()
+		prevBase := ssoPortalBase
+		ssoPortalBase = func(string) string { return portal.URL() }
+		out := runHelperWithCache(t, portal, ok, extra)
+		ssoPortalBase = prevBase
+		portal.Close()
+		note := strings.Index(out, noRenewalNote)
+		if (note >= 0) != warn {
+			t.Errorf("cache %q: note printed = %v, want %v; stdout = %q", extra, note >= 0, warn, out)
+		}
+		if done := strings.Index(out, successMarker); done < 0 || (warn && note > done) {
+			t.Errorf("cache %q: stdout = %q, want the note before the success marker", extra, out)
+		}
 	}
 }

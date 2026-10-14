@@ -17,7 +17,7 @@ func TestAWSSSOCredentialState_TheStates(t *testing.T) {
 	now := awsSSOTestFixedNow
 	live := func(mut func(*awsSSOBlob)) awsSSOBlob {
 		b := awsSSOBlob{
-			AccessToken: "a", RefreshToken: "r", StartURL: "https://x.awsapps.com/start",
+			AccessToken: "a", RefreshToken: "r", ClientID: "c", ClientSecret: "s", StartURL: "https://x.awsapps.com/start",
 			Region: "us-east-1", AccountID: "1", RoleName: "R",
 			ExpiresAt:             now.Add(time.Hour),
 			RegistrationExpiresAt: now.Add(90 * 24 * time.Hour),
@@ -110,7 +110,7 @@ func TestAWSSSOCredentialState_SpentBoundary(t *testing.T) {
 	now := awsSSOTestFixedNow
 	base := func(mut func(*awsSSOBlob)) awsSSOBlob {
 		b := awsSSOBlob{
-			AccessToken: "a", RefreshToken: "r", StartURL: "https://x.awsapps.com/start",
+			AccessToken: "a", RefreshToken: "r", ClientID: "c", ClientSecret: "s", StartURL: "https://x.awsapps.com/start",
 			Region: "us-east-1", AccountID: "1", RoleName: "R",
 			ExpiresAt:             now.Add(time.Hour),
 			RegistrationExpiresAt: now.Add(90 * 24 * time.Hour),

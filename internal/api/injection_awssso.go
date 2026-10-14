@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/google/uuid"
 
@@ -246,6 +247,8 @@ func (s *Server) resolveAWSSSOInjection(w http.ResponseWriter, r *http.Request,
 		switch {
 		case refreshFailure == awsSSORefreshSpentSentence:
 			reason = awsSSOReauthReasonSpent
+		case strings.HasPrefix(refreshFailure, awsSSORefreshRefusedSentence):
+			reason = awsSSOReauthReasonRefused
 		case refreshFailure != "":
 			reason = awsSSOReauthReasonUnavailable
 		case blob.expired(s.cfg.Now()):
@@ -309,6 +312,7 @@ func (s *Server) resolveAWSSSOInjection(w http.ResponseWriter, r *http.Request,
 const (
 	awsSSOReauthReasonSpent       = "spent"
 	awsSSOReauthReasonUnavailable = "unavailable"
+	awsSSOReauthReasonRefused     = "refused"
 	awsSSOReauthReasonNotFound    = "not_found"
 )
 
