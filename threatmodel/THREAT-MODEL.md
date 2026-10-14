@@ -921,8 +921,9 @@ one in v0.7.2, three in 0.8 and one in 0.8.9, and lost one in 0.8.
     and the two server-side clones, Scan and Build)
   - and — v0.8 — `feature` (whether a member may add an SSH key or mint an API token at all, and
     since 0.8.9 whether they may define a component of their own:
-  - values `ssh_key`, `api_token` and `custom_component`, a closed set refused at write time
+  - values `ssh_key`, `api_token`, `custom_component`, `service_attach` and `self_host_runner`, a closed set refused at write time
     otherwise, one check at each mint door;
+  - `service_attach` and `self_host_runner` are restricted: nobody holds them until an allow grant names them (a `*` allow grants nobody), and admins are never asked for `self_host_runner`;
   - mint only for a key or a token, so an existing one outlives a later deny until it is removed or
     revoked;
   - `custom_component` is asked when a person saves or attaches their own component, and again for

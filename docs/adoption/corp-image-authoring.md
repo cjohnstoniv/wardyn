@@ -215,3 +215,18 @@ interactive run's boot pane. On the DEFAULT interactive run there is no seed, so
 descendant of `agent-run`, and only the image `ENV` reaches it. The `:-` defaults
 are there so an operator who deliberately wants one of these can set it to `0` on
 the run.
+
+## Multi-arch images
+
+Every image Wardyn publishes is a `linux/amd64` + `linux/arm64` index (`platforms:` in [`release.yml`](../../.github/workflows/release.yml)). A run's image ref is resolved by whichever computer runs it, so one ref must work on an ARM laptop and an x86 cluster.
+
+- Keep every ref in [`WARDYN_AGENT_IMAGES`](../ENV.md) (and every image you build from our bases) a multi-arch index with both platforms.
+- Pin an index by its **index digest** (`repo@sha256:…` from `docker buildx imagetools inspect <ref>`), never by a child-manifest digest.
+- A single-arch image or a child-manifest digest pulls on one architecture and fails on the other (`no matching manifest for linux/arm64/v8`), so a mixed estate breaks while a one-architecture test passes.
+- Build and push both platforms in one command, then check the index lists both:
+
+```sh
+docker buildx build --platform linux/amd64,linux/arm64 -f deploy/images/claude-code/Dockerfile \
+  -t <your-registry>/agent-claude-code:<tag> --push .
+docker buildx imagetools inspect <your-registry>/agent-claude-code:<tag>
+```
