@@ -433,6 +433,16 @@ func (s PG) QueueOwnerEntries(ctx context.Context, owner string) ([]RunQueueEntr
 		[]any{owner}, func(row pgx.Row) (RunQueueEntry, error) { return scanRunQueueEntry(row) })
 }
 
+// QueueEntriesOfRevokedRunners are the waiting runs whose launch names a runner (its request's
+// runner_id) that is revoked, oldest first: no promotion can ever place them.
+func (s PG) QueueEntriesOfRevokedRunners(ctx context.Context, limit int) ([]RunQueueEntry, error) {
+	return collect(ctx, s.Pool, "list", "run queue entries of revoked runners",
+		`SELECT `+runQueueCols+` FROM run_queue
+		  WHERE lower(launch->'request'->>'runner_id') IN (SELECT id::text FROM runners WHERE state = 'revoked')
+		  ORDER BY queued_at, run_id LIMIT $1`,
+		[]any{limit}, func(row pgx.Row) (RunQueueEntry, error) { return scanRunQueueEntry(row) })
+}
+
 // GetRunQueueEntry is one waiting run's queue row, or ErrNotFound once the run has left the queue.
 func (s PG) GetRunQueueEntry(ctx context.Context, id uuid.UUID) (RunQueueEntry, error) {
 	e, err := scanRunQueueEntry(s.Pool.QueryRow(ctx, `SELECT `+runQueueCols+` FROM run_queue WHERE run_id = $1`, id))

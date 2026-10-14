@@ -5,6 +5,7 @@ package broker
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"reflect"
 
@@ -32,20 +33,16 @@ func (b *Broker) commitMint(ctx context.Context, caller *identity.Claims, grantI
 	}()
 
 	row, leased, err := b.checkedMintRow(ctx, tx, caller, grantID, approvalHint)
+	if errors.Is(err, ErrAlreadyMinted) {
+		// Another mint burnt the approval while this one was prepared: record
+		// the discarded credential as the conditional burn below does.
+		b.auditRefusedMint(ctx, tx, caller, grantID, prepared.approvalID, prepared.grantSpec.Scope, "denied")
+	}
 	if err != nil {
 		return Minted{}, err
 	}
 	if !reflect.DeepEqual(row, prepared) {
 		return Minted{}, errMintChanged
-	}
-	// GitHub issuance keeps its existing grant-lock serialization. Only stored
-	// secrets need preparation outside the transaction to release the pool.
-	if minted.Kind == "" {
-		minted, err = b.mintKind(ctx, caller, row.grantSpec)
-		if err != nil {
-			b.auditRefusedMint(ctx, tx, caller, grantID, row.approvalID, row.grantSpec.Scope, "failure")
-			return Minted{}, err
-		}
 	}
 	minted.GrantID = grantID
 	minted.ApprovalID = row.approvalID
@@ -61,8 +58,8 @@ func (b *Broker) commitMint(ctx context.Context, caller *identity.Claims, grantI
 	// the fast path and mints a real token. Only this conditional UPDATE, which
 	// re-checks minted_jti='' against the latest committed row and returns 0 rows,
 	// stops that second credential from being returned. On 0 rows we fail closed;
-	// the deferred Rollback discards the tx, so the minted token above is never
-	// returned and expires at its <=1h TTL. (Proven by a two-session PG16
+	// the deferred Rollback discards the tx, so the prepared token is never
+	// returned and is handed back to its issuer. (Proven by a two-session PG16
 	// experiment; see TestPG_ConcurrentMintOnApproval_ExactlyOnce.)
 	//
 	// Skipped under a lease, and that is the lease: the burn already happened on
@@ -79,8 +76,8 @@ func (b *Broker) commitMint(ctx context.Context, caller *identity.Claims, grantI
 			return Minted{}, fmt.Errorf("broker: write minted_jti: %w", err)
 		}
 		if n != 1 {
-			// A concurrent mint already claimed this approval. The token minted
-			// above is discarded (never returned); audit the loss so the throwaway
+			// A concurrent mint already claimed this approval. The prepared token
+			// is discarded (never returned); audit the loss so the throwaway
 			// mint is visible in the trail rather than silent.
 			b.auditRefusedMint(ctx, tx, caller, grantID, row.approvalID, row.grantSpec.Scope, "denied")
 			return Minted{}, ErrAlreadyMinted
@@ -122,19 +119,6 @@ func (b *Broker) commitMint(ctx context.Context, caller *identity.Claims, grantI
 	// enqueues or writes locally, so detaching cannot pin the request.
 	if b.siem != nil {
 		_ = b.siem.Emit(context.WithoutCancel(ctx), mintEv)
-	}
-
-	// Register the minted token — and, for ssh_key, its known_hosts material —
-	// in the mask registry so PTY/asciicast streams can mask verbatim
-	// occurrences of the credential. A nil registry is a no-op; only
-	// value-bearing kinds (github_token, git_pat, ssh_key) set Token — api_key
-	// never does (its value stays proxy-side). KnownHosts is mask-registered too:
-	// see the Minted.KnownHosts doc comment for why a nominally
-	// public field still gets this treatment.
-	// A value that cannot be put on record is not handed out: the mint is
-	// committed and audited, and the caller gets the error instead.
-	if err := b.maskMinted(caller.RunID, minted); err != nil {
-		return Minted{}, err
 	}
 
 	return minted, nil

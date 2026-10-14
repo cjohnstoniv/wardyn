@@ -13,10 +13,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - Split-role installs (`WARDYN_PG_MIGRATE_DSN` set) whose app role does not pick up new tables through the
   `ALTER DEFAULT PRIVILEGES` step in Operations: grant the app role `SELECT, INSERT, UPDATE, DELETE` on `runners`,
   `runner_pending_actions`, `provider_connection_changes`, `runner_inventories`, `runner_pool_members`,
-  `runner_pool_use_policies`, `run_queue`, `run_templates` and `template_group_admins`, and `SELECT, INSERT, UPDATE` on `run_template_revisions`, `template_group_labels`, `credential_delivery_policy`,
+  `runner_pool_use_policies`, `run_queue`, `run_templates`, `template_group_admins` and `person_invitations`, and `SELECT, INSERT, UPDATE` on `run_template_revisions`, `template_group_labels`, `credential_delivery_policy`,
   `runner_registration_tokens`, `audit_delivery_cursors`, `runner_spool_cursors`, `runner_executions`,
   `runner_execution_exits`, `runner_inventory_candidates`, `runner_inventory_observations`, `runner_pools`,
-  `runner_pool_org_defaults`, `remote_runners` (migration `0173_runner_pool_scope`), `secret_owner_generations`, `person_invitations`, `service_identities` and
+  `runner_pool_org_defaults`, `remote_runners` (migration `0173_runner_pool_scope`), `secret_owner_generations`, `service_identities` and
   `api_token_moves`, `SELECT, INSERT` on `run_harnesses` (migration `0164_run_harnesses`), and `SELECT, INSERT, DELETE` on
   `run_launch_intents` (migration `0171_run_launch_intents`). Without the `runner_pools` grants wardynd refuses to start at the runner pool bootstrap.
   Without the `provider_connection_changes` grant every secret write fails once migration 0143's trigger on
@@ -758,8 +758,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
   can no longer set No end or extend past the cap, a super admin included (a super admin still skips the profile's
   limits). Until the lease sweep honours the cap, the lease sweep keeps the run at the same moment the reaper stops
   it.
-- The template decoder and the component config schema refuse secret-named config keys such as `CLIENT_SECRET`,
-  `JWT_SECRET` and `*_PASSPHRASE` (`SECRET_NAME`/`SECRET_REF` stay plain).
+- The template decoder refuses secret-named config keys such as `CLIENT_SECRET`, `JWT_SECRET` and `*_PASSPHRASE`
+  (`SECRET_NAME`/`SECRET_REF` stay plain).
 - Naming a person by a typed `entra:<tenant>:<object>` (erasure, secret owner) is now refused as ambiguous when that
   tenant and object id also signed in under another issuer, instead of resolving to one principal and leaving the
   other's data.
@@ -835,9 +835,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- `WARDYN_RECORDING_RETENTION_DAYS` above 106,751 is now refused at startup; a larger value overflowed and the retention sweep could delete recent recordings. Use 0 to keep recordings forever.
+- The governance and drive previews now send the standard user type, so a profile assigned to that type shows in the preview as it applies to a run. A preview for another user type is not offered yet.
 - A refused attach or UI-gateway ticket, a UI enter on the wrong host and a refused SSH key are audited at a bounded
-  rate, sharing the authentication-failure limit; rows past the burst are counted in
-  `wardyn_auth_failed_suppressed_total`.
+  rate, sharing the authentication-failure limit; rows past the burst for an invalid attach or UI-gateway ticket are
+  counted in `wardyn_auth_failed_suppressed_total`.
 - `wardyn template save -` reads stdin again: `template save` takes `--format`.
 - A run a laptop submits with a device credential and no person is refused at launch when a per-person Azure DevOps
   connection covers one of its repositories (#731).
@@ -1044,15 +1046,60 @@ and does not yet follow semantic versioning (interfaces are not stable).
   and the offboarding guide now say which call destroys which key: `DELETE /people/{principal}/credentials` destroys
   the credential key only, and the audit-seal key is destroyed only by the irreversible `audit_personal_fields`
   erasure scope.
-- A guarded secret delete (`If-Match` revision) no longer removes a row that was replaced while the delete waited.
+- An internal guarded delete of a stored credential (the AWS sign-in refresh's) no longer removes a row that was
+  replaced while the delete waited.
   Building a run's masker no longer slows with the square of the number of stored credential values.
 - A run that is stopped but kept no longer answers 500 to the console's Files and Resources polls or writes a
   `run.files.fail` audit row each time: both reads answer 409 `run_inspect_agent_stopped`. A failed run that had
   waited in a queue no longer shows the queue's wait reason as its status reason. A bulk restart with current limits
-  is sent in batches of five, so a long list no longer outlives the browser's request deadline.
+  is sent in batches of five, each with a deadline of 3.5 minutes per run (the server's bound on one revive plus a
+  margin) and never under 60 seconds. A request that still exceeds its budget is aborted, its per-run results are lost
+  and the listing is refreshed.
 - Review and policy preview refuse a narrowed github.com `git_pat` exactly when launch would, including a run whose
   only GitHub access is a declared clone beside a GitHub App grant. A model provider or Git API host given as an
   IPv6 literal on port 443 is reached; before, every request to it failed with 502.
+- Killing a run now stops its image build, including when another replica serves the kill; the build's audit row is
+  still written. A run whose state cannot be read just before its image build starts is failed instead of built, so a
+  brief database error fails a pending run.
+- A run whose sandbox reference cannot be saved is stopped and failed instead of running untracked.
+- A kill recovered by the sweep now settles for a run on an offline or revoked self-hosted runner; its `run.kill`
+  row carries `sandbox_stop` = `queued` or `runner_revoked`, and neither says the sandbox is gone.
+- A resumed run restarts its quiet clock, so the idle-pause sweep no longer freezes it again straight away.
+- On a wrapped (bring-your-own) image with recording on, the task now runs after the image selftest; before, the
+  recorder refused to overwrite the selftest's recording, the task did not run and the run ended COMPLETED.
+- A session log longer than 64 MiB (the fallback recording used when asciinema is absent) is no longer lost:
+  wardyn-rec streams it and uploads its first part with a truncation note. Logs up to 64 MiB still upload complete;
+  the rest of a longer log is not uploaded.
+- Revoking a self-hosted runner ends the runs still waiting for it even when the revoke's own pass could not finish:
+  the queue sweep retries from the runner's revoked state.
+- A push refused under push content rules because a ref points at a commit the request does not carry (for example a
+  branch created at a commit the forge already has) now names the refs (up to ten, and counts the rest) and no
+  longer advises `git fetch --unshallow`, which did not help; it is still refused.
+- A credential mint whose value cannot be recorded for output masking now fails without using up its single-use
+  approval, and a GitHub token minted for it is revoked. Before, the approval was spent and nothing was delivered.
+- SSH: a refusal that names a registered key (not the run's owner, a revoked key, a profile that denies it) is now
+  audited at a per-key bounded rate (burst 5, 1/s), so a flood of other failed requests cannot hide it. Refusals
+  with no attributable actor share the authentication-failure rate bound (burst 5, 1/s). Drops are counted in
+  `wardyn_auth_failed_suppressed_total`; the threat model, SSH guide and audit tables say so.
+- New Run: a run of two or more harnesses attached to a workspace that builds its own image (its repo's devcontainer
+  or a generated profile) is refused with the existing custom-image message at create, preflight and preview,
+  instead of being admitted on the set image and launched on an image that lacks the other CLIs.
+- Workspaces: a workspace that is in a run only because it stores the same directory no longer turns another
+  workspace's (or a policy's) writable mount read-only through a requirement row it has not enabled. A required or
+  enabled row still decides the mount, and an attached workspace's explicit read-only still narrows it.
+- Interactive attach: a run holds at most eight live terminal sessions (writers and observers, web and SSH) on each
+  replica, and a session's slot is held until its recording is saved. A ninth is refused with
+  `attach_session_cap_reached` and audited.
+- Interactive attach: a database stall longer than the attach lease no longer evicts a live terminal writer. If
+  nobody else took the lapsed lease, the writer takes it back and keeps typing, with input discarded until the lease is
+  proven; only another live holder or a take-over ends it. A newly attached or promoted writer is no longer evicted
+  by a renewal that lands before it has taken its lease.
+- The Azure CLI sign-in's resolve door no longer hands a run its bearer token when the token could not be recorded
+  for output masking: it answers 503 `mask_state_unavailable` and audits the refusal, as the other credential doors
+  do.
+- Review and policy preview show the managed-settings document launch writes in two more cases: an interactive
+  Claude Code run whose policy carries tool rules, and a run whose started agent has no document while another
+  harness in its set does.
 
 
 ## [0.8.9] — 2026-10-09

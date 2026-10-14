@@ -509,6 +509,15 @@ func (s *Server) bridgeSSHShell(ctx context.Context, runID uuid.UUID, principal 
 		sendChannelError(channel, "wardyn: this server cannot prove this run's secrets are masked right now; the shell is refused")
 		return
 	}
+	// The web lane's per-run session cap, shared with it (attach_slots.go): reserved before the
+	// recorder is built, held until finishRecording below has returned.
+	releaseSlot, ok := s.reserveAttachSlot(runID)
+	if !ok {
+		s.auditAttachSessionCap(ctx, run, types.ActorHuman, principal, map[string]any{"transport": "ssh"})
+		sendChannelError(channel, "wardyn: "+attachSessionCapMsg)
+		return
+	}
+	defer releaseSlot()
 
 	// See attach.go's newSessionRecorder doc for the full masking/limitations
 	// story (verbatim-only masking, output-direction-only, buffered-in-memory)

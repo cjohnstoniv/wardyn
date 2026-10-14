@@ -10,4 +10,4 @@
 # threatmodel/THREAT-MODEL.md 58394 adds 865 over 57529: 0.9 final docs pass 2, measured: residuals 85-87 (runner limits, the Azure CLI lane and what it leaves open), the spool owner rule and the organisation default barrier's reason.
 # threatmodel/THREAT-MODEL.md 58433 adds 39 over 58394: 0.9 final docs pass 3, measured: the default-disk source runner, Entra's sign-in log, and attributed lifetimes.
 # threatmodel/THREAT-MODEL.md 58443 adds 10 over 58433: docs fix: run --file overlay; a policy's own * rule stays in force on a routed run, measured.
-threatmodel/THREAT-MODEL.md=58443 share=20
+threatmodel/THREAT-MODEL.md=58484 share=20

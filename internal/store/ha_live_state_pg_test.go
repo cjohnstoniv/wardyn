@@ -192,6 +192,69 @@ func TestPG_AttachLeases(t *testing.T) {
 	}
 }
 
+// A holder takes its own lease back when the row is gone, lapsed or still its own, and never
+// when another holder has it live, a take-over's reservation for the holder's own principal
+// included.
+func TestPG_ReacquireAttachLease(t *testing.T) {
+	ctx := context.Background()
+	pool := runsPGPoolIsolated(t)
+	pg := store.NewPG(pool)
+	run := persistRun(t, ctx, pool, newRun(types.RunRunning)).ID
+	a, b := uuid.New(), uuid.New()
+	lease := func(id uuid.UUID) store.AttachLease {
+		return store.AttachLease{RunID: run, HolderID: id, Replica: "A", Principal: "alice", Source: "web", Since: time.Now().UTC()}
+	}
+	lapse := func() {
+		t.Helper()
+		if _, err := pool.Exec(ctx, `UPDATE run_attach_leases SET expires_at = now() - interval '1 second' WHERE run_id = $1`, run); err != nil {
+			t.Fatalf("lapse the lease: %v", err)
+		}
+	}
+	holder := func() uuid.UUID {
+		t.Helper()
+		got, found, err := pg.GetAttachLease(ctx, run)
+		if err != nil || !found {
+			return uuid.Nil
+		}
+		return got.HolderID
+	}
+
+	if ok, err := pg.ReacquireAttachLease(ctx, lease(a), time.Minute); err != nil || !ok {
+		t.Fatalf("a free lease: ok=%v err=%v", ok, err)
+	}
+	lapse()
+	if ok, err := pg.ReacquireAttachLease(ctx, lease(a), time.Minute); err != nil || !ok {
+		t.Fatalf("its own lapsed lease: ok=%v err=%v", ok, err)
+	}
+	if held, _ := pg.HoldsAttachLease(ctx, run, a); !held {
+		t.Fatal("the holder does not hold the lease it took back")
+	}
+	if ok, err := pg.ReacquireAttachLease(ctx, lease(a), time.Minute); err != nil || !ok {
+		t.Fatalf("its own live lease: ok=%v err=%v", ok, err)
+	}
+
+	lapse()
+	if ok, _ := pg.AcquireAttachLease(ctx, lease(b), uuid.Nil, time.Minute); !ok {
+		t.Fatal("another client could not take the lapsed lease")
+	}
+	if ok, err := pg.ReacquireAttachLease(ctx, lease(a), time.Minute); err != nil || ok || holder() != b {
+		t.Fatalf("another holder's live lease: ok=%v err=%v holder=%s, want refused and b still the holder", ok, err, holder())
+	}
+
+	_, reservation, found, err := pg.ReserveAttachLease(ctx, run, b, "alice", "B", time.Minute)
+	if err != nil || !found {
+		t.Fatalf("reserve for alice: found=%v err=%v", found, err)
+	}
+	if ok, err := pg.ReacquireAttachLease(ctx, lease(a), time.Minute); err != nil || ok || holder() != reservation {
+		t.Fatalf("a live reservation for the holder's own principal: ok=%v err=%v holder=%s, want refused and the reservation kept", ok, err, holder())
+	}
+
+	lapse()
+	if ok, err := pg.ReacquireAttachLease(ctx, lease(a), time.Minute); err != nil || !ok || holder() != a {
+		t.Fatalf("a lapsed reservation: ok=%v err=%v holder=%s, want a's again", ok, err, holder())
+	}
+}
+
 // The count moves at each end's start and finish, and an end that never finished stops counting
 // as running after ADOSignInEndsStaleAfter.
 func TestPG_ADOSignInEnds(t *testing.T) {
