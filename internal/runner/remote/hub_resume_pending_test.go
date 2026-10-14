@@ -133,6 +133,8 @@ func linkReaches(ctx context.Context, link *Link, is func(*Link) bool) {
 // after the org's last look at the queue (its judging of the final STATE page), is carried by no frame
 // of that session: the session is ended at once, and the runner's next, fresh session carries it.
 func TestHubQueuedDuringAdmissionReachesTheRunnerOnAFreshSession(t *testing.T) {
+	// notReady closes once the kill's call has found the link not ready and turned to the queue.
+	notReady := make(chan struct{})
 	for _, tc := range []struct {
 		name string
 		// inPage issues the kill from the org's judging of the final STATE page, after its look at the queue.
@@ -147,9 +149,20 @@ func TestHubQueuedDuringAdmissionReachesTheRunnerOnAFreshSession(t *testing.T) {
 			kill()
 		}},
 		{name: "while the final page is judged", inPage: true},
-		// The kill's call finds the link not ready; its queue write lands once the session is READY.
-		{name: "as the session goes ready", before: func(_ context.Context, _ *Link, kill func()) { go kill() },
-			queue: func(ctx context.Context, link *Link) { linkReaches(ctx, link, func(l *Link) bool { return l.ready }) }},
+		// The kill's call finds the link not ready; its queue write lands once the session is READY. READY
+		// waits for that call: one made after it reaches the runner live on this session and queues nothing.
+		{name: "as the session goes ready",
+			before: func(ctx context.Context, _ *Link, kill func()) {
+				go kill()
+				select {
+				case <-notReady:
+				case <-ctx.Done():
+				}
+			},
+			queue: func(ctx context.Context, link *Link) {
+				close(notReady)
+				linkReaches(ctx, link, func(l *Link) bool { return l.ready })
+			}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
