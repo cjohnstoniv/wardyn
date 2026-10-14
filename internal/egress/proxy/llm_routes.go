@@ -183,6 +183,19 @@ func (p *Proxy) llmRouteTarget(host string, port int) (string, error) {
 	return target, err
 }
 
+// upstreamURLHost is the host of an upstream URL: the port is left off when it
+// is the scheme's default, and an IPv6 literal is bracketed either way, since a
+// bare one's colons read as a port.
+func upstreamURLHost(host string, port, defaultPort int) string {
+	switch {
+	case port != defaultPort:
+		return net.JoinHostPort(host, strconv.Itoa(port))
+	case strings.Contains(host, ":"):
+		return "[" + host + "]"
+	}
+	return host
+}
+
 // forwardInspectedLLM is the shared credential-strip + forward-and-respond
 // tail for a brokered/MITM'd LLM upstream, used by proxyLLMRequest and
 // serveMITMRequest. Builds the upstream request over the pinned target,
@@ -192,10 +205,7 @@ func (p *Proxy) llmRouteTarget(host string, port int) (string, error) {
 // decision, and streams the response back.
 func (p *Proxy) forwardInspectedLLM(w http.ResponseWriter, r *http.Request, host string, port int, rest, target string, hdr *injectedHeader, ownedHeader string, ruleSource string, nsOff bool, bodyReader io.Reader, scanSummary *egress.ScanSummary) {
 	scheme, defaultPort := p.upstreamSchemeFor(host, port)
-	hostport := host
-	if port != defaultPort {
-		hostport = net.JoinHostPort(host, strconv.Itoa(port))
-	}
+	hostport := upstreamURLHost(host, port, defaultPort)
 	// TRUST BOUNDARY: `rest` is the PERCENT-DECODED path classifyLLM keys the
 	// inspection decision on. Setting URL.Path (not concatenating into a
 	// string re-parsed later) makes the request re-encode those bytes, so a

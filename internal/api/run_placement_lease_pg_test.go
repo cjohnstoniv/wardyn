@@ -19,6 +19,7 @@ import (
 	"net/http/httptest"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -59,6 +60,21 @@ type runnerLeaseFixture struct {
 	h          *harness
 	// sub is the substrate the runner serves: the fake, with calls that can be made to hang.
 	sub *stallingSub
+	// leaseEnds is the end of the last LEASE the runner accepted for each run.
+	leaseMu   sync.Mutex
+	leaseEnds map[uuid.UUID]time.Time
+}
+
+// leaseEnd waits for the runner to hold a lease of run that ends at want, and reports the end it holds.
+func (f *runnerLeaseFixture) leaseEnd(run uuid.UUID, want time.Time) (got time.Time) {
+	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(5 * time.Millisecond) {
+		f.leaseMu.Lock()
+		got = f.leaseEnds[run]
+		f.leaseMu.Unlock()
+		if got.Equal(want) || time.Now().After(deadline) {
+			return got
+		}
+	}
 }
 
 // stallingSub is the runner's sandbox substrate with one verb that can be made to hang until the call's
@@ -124,7 +140,7 @@ func newRunnerLeaseFixture(t *testing.T) *runnerLeaseFixture {
 	cfg.Secrets = getErrStore{getErr: secretstore.ErrNotFound}
 	cfg.RunConfigKey = make([]byte, 32)
 	cfg.ControlPlaneURL = "http://127.0.0.1:8080" // a hop the proxy config loader accepts
-	f := &runnerLeaseFixture{ctx: ctx, st: st, srv: New(cfg), rn: rn, fake: runnertest.NewFake(), h: h}
+	f := &runnerLeaseFixture{ctx: ctx, st: st, srv: New(cfg), rn: rn, fake: runnertest.NewFake(), h: h, leaseEnds: map[uuid.UUID]time.Time{}}
 	f.sub = &stallingSub{Fake: f.fake, release: make(chan struct{})}
 	t.Cleanup(func() { close(f.sub.release) })
 
@@ -159,7 +175,16 @@ func newRunnerLeaseFixture(t *testing.T) *runnerLeaseFixture {
 			return runnerwire.Refuse("unsupported runner stream")
 		},
 		Clock: m.Clock, Pending: m.Pending, StatePages: m.StatePages,
-		BeforeReady: m.BeforeReady, Lease: m.Lease, Revoked: m.Revoked, Offline: m.Offline,
+		BeforeReady: m.BeforeReady, Revoked: m.Revoked, Offline: m.Offline,
+		Lease: func(ctx context.Context, l runnerwire.Lease) error {
+			err := m.Lease(ctx, l)
+			if err == nil {
+				f.leaseMu.Lock()
+				f.leaseEnds[l.RunID] = l.EndsAt
+				f.leaseMu.Unlock()
+			}
+			return err
+		},
 		Replay: func(ctx context.Context, peer *runnerwire.Peer) error {
 			support, err := f.fake.Classes(ctx)
 			if err != nil {
@@ -412,21 +437,24 @@ func (f *runnerLeaseFixture) contained(run types.AgentRun) bool {
 	return f.fake.Called("stop_proxy", "fake-"+run.ID.String())
 }
 
-// fix-r1 F1: changing a run's end re-sends its lease, so the runner contains it at the new end, not the old.
+// fix-r1 F1: changing a run's end re-sends its lease, so the runner holds the new end, not the old. Both
+// ends are hours ahead and the test waits on the LEASE the runner accepts, so the wall clock decides
+// nothing: a busy host only makes it slower.
 func TestPG_RunnerLease_EndChangeReLeases(t *testing.T) {
 	f := newRunnerLeaseFixture(t)
-	const margin = 6 * time.Second
-	soon := time.Now().Add(margin)
+	first := time.Now().Add(time.Hour).UTC().Truncate(time.Second)
 	extended, abandoned, renewed, control := f.localRun(t, 0), f.localRun(t, 0), f.localRun(t, 0), f.localRun(t, 0)
 	for _, run := range []*types.AgentRun{&extended, &abandoned, &renewed, &control} {
-		f.running(t, run, &soon)
+		f.running(t, run, &first)
 		f.placed(t, run)
+		if got := f.leaseEnd(run.ID, first); !got.Equal(first) {
+			t.Fatalf("the runner holds a lease ending %s for a run placed with the end %s", got, first)
+		}
 	}
-	later := time.Now().Add(2 * time.Hour).UTC().Format(time.RFC3339)
-	if w := do(t, f.srv, http.MethodPatch, "/api/v1/runs/"+extended.ID.String(), adminToken, `{"ends_at":"`+later+`"}`); w.Code != http.StatusOK {
+	end := first.Add(time.Hour)
+	if w := do(t, f.srv, http.MethodPatch, "/api/v1/runs/"+extended.ID.String(), adminToken, `{"ends_at":"`+end.Format(time.RFC3339)+`"}`); w.Code != http.StatusOK {
 		t.Fatalf("set end = %d %s", w.Code, w.Body)
 	}
-	end := time.Now().Add(2 * time.Hour)
 	// fix-r2 N3: a renewal handed a copy of the run read before its end changed sends the end it has now.
 	stale := renewed
 	moved := renewed
@@ -439,21 +467,20 @@ func TestPG_RunnerLease_EndChangeReLeases(t *testing.T) {
 	gone, cancel := context.WithCancel(f.ctx)
 	cancel()
 	f.srv.renewLeaseAfterEndChange(gone, abandoned.ID)
-	time.Sleep(margin + time.Second)
-	if err := f.manager.CheckLapses(f.ctx); err != nil {
-		t.Fatal(err)
+	for _, tc := range []struct {
+		run  types.AgentRun
+		what string
+	}{
+		{extended, "the run whose end was changed"},
+		{abandoned, "the run whose request went away"},
+		{renewed, "the run renewed from a stale copy"},
+	} {
+		if got := f.leaseEnd(tc.run.ID, end); !got.Equal(end) {
+			t.Errorf("%s: the runner holds a lease ending %s, want its new end %s", tc.what, got, end)
+		}
 	}
-	if !f.contained(control) {
-		t.Fatal("the control run was not contained at its end: the end did not pass")
-	}
-	if f.contained(extended) {
-		t.Fatal("the extended run was contained at its old end")
-	}
-	if f.contained(abandoned) {
-		t.Fatal("the run whose request went away was contained at its old end")
-	}
-	if f.contained(renewed) {
-		t.Fatal("a renewal from a stale copy put the old end back")
+	if got := f.leaseEnd(control.ID, first); !got.Equal(first) {
+		t.Errorf("the run whose end did not change: the runner holds a lease ending %s, want %s", got, first)
 	}
 }
 

@@ -412,6 +412,19 @@ func mcpToolNames(key, tool string) []string {
 	return names
 }
 
+// MCPToolPrefixes is every "mcp__<server>__" prefix a rule may name one of a
+// server's tools under (mcpToolNames): its key as the server names it, and as
+// each harness shows it.
+func MCPToolPrefixes(key string) []string {
+	out := []string{"mcp__" + key + "__"}
+	for _, norm := range []func(string) string{claudeToolName, identToolName} {
+		if prefix := "mcp__" + norm(key) + "__"; !slices.Contains(out, prefix) {
+			out = append(out, prefix)
+		}
+	}
+	return out
+}
+
 // mcpToolEffect is the run's rule for one MCP tool of harness: its own set when
 // the run carries one per harness, else the run-wide rules. No rule is a hold.
 func (p *Proxy) mcpToolEffect(harness, tool string) types.ToolEffect {

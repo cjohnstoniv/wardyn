@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"net/http"
 	"slices"
 	"strconv"
 	"strings"
@@ -259,6 +260,22 @@ func (pl azureCLIPlan) closeWithheld(policy *types.RunPolicySpec, injections []r
 	policy.AllowedDomains = slices.DeleteFunc(slices.Clone(policy.AllowedDomains), func(entry string) bool {
 		return slices.Contains(pl.opened, entry)
 	})
+}
+
+// azureCLIReviveRefusal refuses the revive of a run that has the door once its
+// owner's profile denies Resource Manager. Dispatch answers that deny with
+// closeWithheld, which needs the entries the lane opened, and a stored proxy
+// config does not say which of its allowlist entries those were. Without them a
+// revive has no safe narrowing: dropping the credential alone leaves a door the
+// proxy refuses to start with, and dropping the door as well leaves the Entra
+// sign-in host an ordinary allowed host. A run dispatched under the deny has no
+// door and revives as any run does.
+func azureCLIReviveRefusal(cfg *proxy.Config, deny []string) *reviveError {
+	if cfg.AzureARM == nil || !ceilingDenies(deny, armscope.Host) {
+		return nil
+	}
+	return reviveRefused(http.StatusConflict, reasonReviveCeilingDeniesAzureCLI,
+		"the owner's governance profile now denies Azure Resource Manager, which this run's Azure CLI needs; start a new run")
 }
 
 // authorAzureCLI stages the run's Azure CLI row: the profile and the inert
