@@ -28,7 +28,8 @@ Usage: install.sh --org <url> [--binary <path>] [--token-file <file>] [setup fla
 
 Everything else is passed to `wardyn-runnerd setup` (--org, --token-file, --proxy-image, --internal-network,
 --relay-listen, --relay-host-target, --claim, --pool, --default and the limit flags); run `wardyn-runnerd setup --help`.
-Docker Desktop needs --relay-listen 127.0.0.1 (setup supplies it when it detects Docker Desktop).
+setup finds the relay address on Docker Desktop, Rancher Desktop and other VM-backed engines; --relay-listen and
+--relay-host-target override it.
 USAGE
 }
 

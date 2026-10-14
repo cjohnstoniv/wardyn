@@ -6,7 +6,6 @@ package main
 import (
 	"errors"
 	"fmt"
-	"net/netip"
 	"os"
 	"regexp"
 
@@ -49,8 +48,8 @@ func newSetupCommand() *cobra.Command {
 	fl.StringVar(&o.tokenFile, "token-file", "", "file containing the single-use registration token (not needed once this computer is registered)")
 	fl.StringVar(&o.name, "name", "", "runner name (defaults to the host name)")
 	fl.StringVar(&o.proxyImage, "proxy-image", "", "Wardyn proxy image (defaults to the release image matching this binary; a development build needs it)")
-	fl.StringVar(&o.relayListen, "relay-listen", "", "address the run relay listens on (Docker Desktop is given 127.0.0.1 when this is left out)")
-	fl.StringVar(&o.relayHostTarget, "relay-host-target", "", "what a proxy's hosts entry maps the control-plane name to: host-gateway (the default) or this host's IP address as the engine's containers reach it")
+	fl.StringVar(&o.relayListen, "relay-listen", "", "address the run relay listens on (found by a probe container when left out)")
+	fl.StringVar(&o.relayHostTarget, "relay-host-target", "", "what a run's proxy reaches the relay at: host-gateway or an IP address (found by a probe container when left out)")
 	fl.StringVar(&o.network, "internal-network", "wardyn-internal", "Docker bridge for proxy sidecars (created when missing)")
 	fl.BoolVar(&o.claim, "claim", false, "claim the runner for yourself now; needs WARDYN_TOKEN, your own personal API token")
 	fl.StringVar(&o.pool, "pool", "", "with --claim, also put the runner in your user pool of this name (made if you have none by it)")
@@ -115,23 +114,17 @@ func (h setupHost) preflight(cmd *cobra.Command, o setupOptions) (setupPlan, err
 			return setupPlan{}, err
 		}
 	}
-	var explicit netip.Addr
-	if o.relayListen != "" {
-		var err error
-		if explicit, err = netip.ParseAddr(o.relayListen); err != nil {
-			return setupPlan{}, fmt.Errorf("--relay-listen: %w", err)
-		}
-	}
-	if err := checkRelayHostTarget(o.relayHostTarget); err != nil {
+	want, err := parseRelayWant(o.relayListen, o.relayHostTarget)
+	if err != nil {
 		return setupPlan{}, err
 	}
+	o.relayHostTarget = want.target
 	if o.proxyImage == "" {
 		if o.proxyImage = releaseProxyImage(); o.proxyImage == "" {
 			return setupPlan{}, fmt.Errorf("this wardyn-runnerd is a development build (%s): pass --proxy-image <ref>", buildVersion())
 		}
 	}
 	plan := setupPlan{setupOptions: o, dockerHost: h.dockerHost}
-	var err error
 	if plan.paths, err = h.paths(); err != nil {
 		return setupPlan{}, err
 	}
@@ -161,27 +154,16 @@ func (h setupHost) preflight(cmd *cobra.Command, o setupOptions) (setupPlan, err
 	if err := h.checkServiceManager(cmd.Context(), plan.paths); err != nil {
 		return setupPlan{}, err
 	}
-	// Always, flag or not: serve judges the same facts at startup, after the token is spent.
-	f, err := h.docker(cmd.Context(), o.network)
+	// Always, flags or not: serve runs the same check at every start, after the token is spent.
+	eng, pair, err := h.docker(cmd.Context(), o.proxyImage, o.network, want)
 	if err != nil {
-		return setupPlan{}, err
+		return setupPlan{}, fmt.Errorf("%w\nNo token was spent", err)
 	}
-	bind, target, err := relayPlan(f, explicit, o.relayHostTarget)
-	if err != nil {
-		return setupPlan{}, err
+	if !eng.native {
+		// Pinned: serve checks this one pair rather than searching again.
+		plan.relayListen, plan.relayHostTarget = pair.bind.String(), pair.target
 	}
-	if err := h.probe(cmd.Context(), o.network, o.proxyImage, relayChoice{facts: f, bind: bind, target: target}); err != nil {
-		return setupPlan{}, err
-	}
-	// A native engine's relay follows its host-gateway, so serve derives it; any other bind is written.
-	if !f.hostBridge || f.desktop {
-		plan.relayListen = bind.String()
-	}
-	if target == hostGateway {
-		plan.relayHostTarget = "" // the default, never written
-	}
-	if f.desktop {
-		fmt.Fprintln(cmd.OutOrStdout(), "Docker Desktop detected: the run relay will listen on 127.0.0.1 (expected on macOS, not yet verified).")
-	}
+	fmt.Fprintf(cmd.OutOrStdout(), "Docker engine %s: the run relay listens on %s and a run's proxy reaches it at %s (checked with a probe container).\n",
+		eng.desc, pair.bind, pair.target)
 	return plan, nil
 }
