@@ -54,7 +54,7 @@
 //     ListRunners, ListRunnersPage, GetRunner, ListMyRunners, GetMyRunner, SetMyRunnerLimits, ListRunnerTokens,
 //     ListRunnerTokensPage, RevokeRunnerToken, GetRunnerSettings, SetRunnersEnabled
 //   - runner pools (/api/v1/runner-pools, /api/v1/runner-pool-defaults; /api/v1/me/runner-pools, /api/v1/me/runner-pool-defaults):
-//     ListRunnerPools, ListRunnerPoolsFor, GetRunnerPool, CreateRunnerPool, UpdateRunnerPool, DeleteRunnerPool, CreateMyRunnerPool, UpdateMyRunnerPool, DeleteMyRunnerPool, AddMyRunnerToPool,
+//     ListRunnerPools, ListRunnerPoolsFor, ListMyRunnerPools, GetRunnerPool, CreateRunnerPool, UpdateRunnerPool, DeleteRunnerPool, CreateMyRunnerPool, UpdateMyRunnerPool, DeleteMyRunnerPool, AddMyRunnerToPool,
 //     RemoveMyRunnerFromPool, GetOrgRunnerPoolDefaults, SetOrgRunnerPoolDefaults, GetMyRunnerPoolDefaults,
 //     SetMyRunnerPoolDefaults, ClearMyRunnerPoolDefaults, AddRunnerPoolRemoteRunner, RemoveRunnerPoolRemoteRunner,
 //     AddMyPoolRemoteRunner, RemoveMyPoolRemoteRunner, ListRunnerPoolMembers, GetRunnerPoolUsePolicy, SetRunnerPoolUsePolicy,

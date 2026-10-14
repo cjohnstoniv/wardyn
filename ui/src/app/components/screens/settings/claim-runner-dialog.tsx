@@ -18,7 +18,6 @@ import { getErrorMessage } from "../../../lib/format";
 import type { RunnerPoolList } from "../../../lib/types/runner-pools";
 import type { RunnerView } from "../../../lib/types/runners";
 import { MY_RUNNER, RUNNER } from "../../wardyn/copy/runners";
-import { usablePools } from "../new-run-flow/steps/run/pool-model";
 import { makeMono } from "../../wardyn/code-block";
 import { CopyButton } from "../../wardyn/copy-button";
 import { Field } from "../../wardyn/form-primitives";
@@ -59,7 +58,7 @@ export function ClaimRunnerDialog({
     if (!id) return;
     let live = true;
     runnerPools
-      .list()
+      .listMine()
       .then((l) => live && setOwn(ownPools(l)))
       .catch(() => live && setOwn([]));
     return () => {
@@ -176,14 +175,14 @@ export function ClaimRunnerDialog({
   );
 }
 
-/** The person's own user pools in a list: an administrator's list also carries other people's, as manage-only rows. */
-const ownPools = (list: RunnerPoolList) => usablePools(list).filter((p) => p.scope === "user");
+/** The person's own user pools: in the list of pools they may use, a user-scope row is theirs. */
+const ownPools = (list: RunnerPoolList) => list.pools.filter((p) => p.scope === "user");
 
 /** Puts a runner just claimed into the person's own pool of that name, made first when they have none by it.
  * The pools are read again here, not taken from the suggestions: those may still be loading or have failed to
  * load, and a pool must not be made over one that exists. */
 async function putInPool(runnerId: string, name: string, makeDefault: boolean) {
-  const poolId = ownPools(await runnerPools.list()).find((p) => p.name === name)?.id ?? (await runnerPools.createMine({ name })).id;
+  const poolId = ownPools(await runnerPools.listMine()).find((p) => p.name === name)?.id ?? (await runnerPools.createMine({ name })).id;
   await runnerPools.addMyRunner(poolId, runnerId);
   if (makeDefault) await runnerPools.setMyDefaults({ ...(await runnerPools.myDefaults()), pool_id: poolId });
 }

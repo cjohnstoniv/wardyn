@@ -48,14 +48,12 @@ func TestRunnerClaimPutsTheRunnerInAPool(t *testing.T) {
 		wantMake bool
 	}{
 		{"new pool", map[string]any{
-			"GET /api/v1/runner-pools":     sdk.RunnerPoolList{},
+			"GET /api/v1/me/runner-pools":  sdk.RunnerPoolList{},
 			"POST /api/v1/me/runner-pools": sdk.RunnerPool{ID: created, Name: "Laptop", Scope: sdk.RunnerPoolUser},
 		}, "Laptop", created, true},
 		{"existing pool", map[string]any{
-			"GET /api/v1/runner-pools": sdk.RunnerPoolList{Pools: []sdk.RunnerPoolCatalogueEntry{
+			"GET /api/v1/me/runner-pools": sdk.RunnerPoolList{Pools: []sdk.RunnerPoolCatalogueEntry{
 				{RunnerPoolChoice: sdk.RunnerPoolChoice{ID: uuid.New(), Name: "Laptop", Scope: sdk.RunnerPoolOrganization}},
-				// an administrator's list also carries another person's pool of the same name, as a manage-only row
-				{RunnerPoolChoice: sdk.RunnerPoolChoice{ID: uuid.New(), Name: "Laptop", Scope: sdk.RunnerPoolUser, Availability: sdk.RunnerPoolUnavailable, Reason: runnerpool.ReasonNotFound}, Owner: "bob"},
 				{RunnerPoolChoice: sdk.RunnerPoolChoice{ID: existing, Name: "Laptop", Scope: sdk.RunnerPoolUser}}}},
 			"GET /api/v1/runner-pools/" + existing.String():              sdk.RunnerPool{ID: existing, Name: "Laptop", Scope: sdk.RunnerPoolUser},
 			"GET /api/v1/runner-pools/" + existing.String() + "/members": []sdk.RunnerPoolMemberView{},
@@ -75,7 +73,7 @@ func TestRunnerClaimPutsTheRunnerInAPool(t *testing.T) {
 		}
 		if !srv.sent(http.MethodPut, "/api/v1/me/runner-pools/"+c.wantPool.String()+"/runners/"+id.String()) ||
 			!srv.sent(http.MethodPut, "/api/v1/me/runner-pool-defaults") ||
-			srv.sent(http.MethodPost, "/api/v1/me/runner-pools") != (c.wantPool == created) ||
+			srv.sent(http.MethodPost, "/api/v1/me/runner-pools") != (c.wantPool == created) || srv.sent(http.MethodGet, "/api/v1/runner-pools") ||
 			!strings.Contains(out, "added to Laptop") || !strings.Contains(out, "default user pool set to Laptop") {
 			t.Errorf("%s: sent %+v and printed %q", c.name, srv.reqs, out)
 		}
@@ -99,11 +97,13 @@ func TestRunnerClaimPoolFailureAndFlagRules(t *testing.T) {
 	}
 }
 
-// With only another person's same-named pool in the list, the person's own pool is made, not theirs used.
+// An administrator's shared list carries another person's same-named pool as an oversight row; the claim
+// reads only /me/runner-pools, which has none, so the person's own pool is made and theirs never used.
 func TestRunnerClaimPoolPassesOverAnotherPersonsPool(t *testing.T) {
 	id, theirs, created := uuid.New(), uuid.New(), uuid.New()
 	srv := newPoolRoutes(t, map[string]any{
 		"POST /api/v1/me/runners/" + id.String() + "/claim": types.RunnerRegistration{RunnerID: id, State: types.RunnerClaimed},
+		"GET /api/v1/me/runner-pools":                       sdk.RunnerPoolList{},
 		"GET /api/v1/runner-pools": sdk.RunnerPoolList{Pools: []sdk.RunnerPoolCatalogueEntry{
 			{RunnerPoolChoice: sdk.RunnerPoolChoice{ID: theirs, Name: "Laptop", Scope: sdk.RunnerPoolUser, Availability: sdk.RunnerPoolUnavailable, Reason: runnerpool.ReasonNotFound}, Owner: "bob"}}},
 		"POST /api/v1/me/runner-pools": sdk.RunnerPool{ID: created, Name: "Laptop", Scope: sdk.RunnerPoolUser},
@@ -114,7 +114,7 @@ func TestRunnerClaimPoolPassesOverAnotherPersonsPool(t *testing.T) {
 	if _, err := execCmdCapture(t, "runner", "claim", "--state-dir", state, "--pool", "Laptop", "--url", srv.URL, "--token", "t"); err != nil {
 		t.Fatal(err)
 	}
-	if !srv.sent(http.MethodPost, "/api/v1/me/runner-pools") || srv.sent(http.MethodPut, "/api/v1/me/runner-pools/"+theirs.String()+"/runners/"+id.String()) ||
+	if !srv.sent(http.MethodPost, "/api/v1/me/runner-pools") || srv.sent(http.MethodGet, "/api/v1/runner-pools") || srv.sent(http.MethodPut, "/api/v1/me/runner-pools/"+theirs.String()+"/runners/"+id.String()) ||
 		!srv.sent(http.MethodPut, "/api/v1/me/runner-pools/"+created.String()+"/runners/"+id.String()) {
 		t.Fatalf("sent %+v", srv.reqs)
 	}

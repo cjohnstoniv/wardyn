@@ -95,13 +95,14 @@ func (f *setupFixture) serve(w http.ResponseWriter, r *http.Request) {
 		}
 		f.state = types.RunnerClaimed
 		reply(types.RunnerRegistration{RunnerID: f.id, State: types.RunnerClaimed})
-	case r.Method == http.MethodGet && r.URL.Path == "/api/v1/runner-pools":
+	case r.Method == http.MethodGet && (r.URL.Path == "/api/v1/runner-pools" || r.URL.Path == "/api/v1/me/runner-pools"):
+		// No Slots on a row: the lookup must not read ownership from the slot count, which can fail.
 		var entries []sdk.RunnerPoolCatalogueEntry
 		for _, p := range f.pools {
-			entries = append(entries, sdk.RunnerPoolCatalogueEntry{RunnerPoolChoice: sdk.RunnerPoolChoice{ID: p.ID, Name: p.Name, Scope: p.Scope}, Slots: &sdk.PoolSlots{}})
+			entries = append(entries, sdk.RunnerPoolCatalogueEntry{RunnerPoolChoice: sdk.RunnerPoolChoice{ID: p.ID, Name: p.Name, Scope: p.Scope}})
 		}
-		if f.otherPool != nil {
-			// An administrator's list also carries other people's user pools, as manage-only rows: no Slots.
+		if f.otherPool != nil && r.URL.Path == "/api/v1/runner-pools" {
+			// Only an administrator's shared list also carries other people's user pools, for oversight.
 			entries = append(entries, sdk.RunnerPoolCatalogueEntry{RunnerPoolChoice: sdk.RunnerPoolChoice{ID: f.otherPool.ID, Name: f.otherPool.Name, Scope: sdk.RunnerPoolUser}, Owner: "someone-else"})
 		}
 		reply(sdk.RunnerPoolList{Pools: entries})
@@ -416,8 +417,8 @@ func TestSetupSaysWhenTheClaimFailedAfterTheServiceStarted(t *testing.T) {
 	}
 }
 
-// An administrator's pool list also holds other people's user pools; a pool of the same name that is not
-// the caller's is neither picked nor reported as a second match.
+// An administrator's shared pool list also holds other people's user pools; setup reads /me/runner-pools,
+// which does not, so a same-named pool that is not the caller's is neither picked nor reported as a match.
 func TestSetupPoolIgnoresAnotherPersonsSameNamedPool(t *testing.T) {
 	f := newSetupFixture(t, "linux")
 	f.otherPool = &sdk.RunnerPool{ID: uuid.New(), Name: "Laptop", Scope: sdk.RunnerPoolUser}
@@ -428,6 +429,9 @@ func TestSetupPoolIgnoresAnotherPersonsSameNamedPool(t *testing.T) {
 	}
 	if len(f.pools) != 1 || f.defaultID == nil || *f.defaultID != f.pools[0].ID || *f.defaultID == f.otherPool.ID {
 		t.Fatalf("pools=%v default=%v other=%s", f.pools, f.defaultID, f.otherPool.ID)
+	}
+	if f.count("GET /api/v1/runner-pools") != 0 || f.count("GET /api/v1/me/runner-pools") == 0 {
+		t.Error("setup did not read the pool lookup from /me/runner-pools alone")
 	}
 	if f.count("PUT /api/v1/me/runner-pools/"+f.otherPool.ID.String()+"/runners/"+f.id.String()) != 0 {
 		t.Error("the runner was put in another person's pool")
