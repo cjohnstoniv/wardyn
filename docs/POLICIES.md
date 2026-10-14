@@ -187,6 +187,7 @@
 - A member's own entry does not create that exception under an `allow_all_egress` ceiling: run create drops it, with a `clamp_warnings` line, unless the ceiling lists the same address for every port the entry names.
 - The ceiling's `allow_all_egress`, a wildcard, a name that resolves there and an `egress_host` grant do not count as listing it; a member's public literal is kept.
 - A member's own workspace whose repository URL names a private-range address adds that clone host only where the ceiling or the workspace's `approved_egress` lists it with no port. That holds for a run, a record session and a scan run.
+- An IPv6 address can be listed only in the ceiling, since `approved_egress` takes dotted hosts, and a scan of a library source is bounded by the ceiling alone.
 - Under `deny_with_review` / `wait_for_review` it becomes an approvable unknown.
 - If you run a brokered policy with `allow_all_egress`, the broker route is the only *convenient* route, not the only one.
 - It is what git itself uses, since a clone/push URL carries a name, never a bare IP.

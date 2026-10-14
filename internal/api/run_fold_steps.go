@@ -121,8 +121,7 @@ func (s *Server) stepWorkspaces(f *runFold, rec *foldRecorder) bool {
 		recordWorkspaceSources(rec, f.spec, ws)
 		_, dropped := runCloneEgress(ws, f.ceiling.Spec.AllowedDomains)
 		for _, h := range dropped {
-			f.policyWarns = append(f.policyWarns, fmt.Sprintf(
-				"dropped clone host %q of workspace %q: a private address not in operator allowlist; allow it in the workspace's approved egress", h, ws.Name))
+			f.policyWarns = append(f.policyWarns, cloneHostDropWarning(h, "workspace", ws.Name))
 		}
 	}
 	var refusal *runRefusal

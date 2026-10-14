@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
 
@@ -190,8 +191,9 @@ func (s *Server) scanLocalDirSource(ctx context.Context, src types.Source) (prof
 // belongs to the library entry, not to any one aggregate attaching it), and
 // the upload lands via handleUploadScanResult's source lane.
 //
-// ws is the workspace the scan was asked for, nil at the library door (operator-only): a member-owned
-// one bounds the clone host by the ceiling resolved below (boundCloneHosts).
+// ws is the workspace the scan was asked for, nil at the library door (operator-only). The clone
+// host is bounded by the ceiling resolved below: for a member-owned workspace with its approved
+// egress (boundCloneHosts), at the library door by the ceiling alone.
 func (s *Server) launchSourceScanRun(ctx context.Context, actor string, src types.Source, ws *types.Workspace) (types.AgentRun, error) {
 	url := repoCloneURL(src.Locator)
 	if url == "" {
@@ -296,9 +298,15 @@ func (s *Server) launchSourceScanRun(ctx context.Context, actor string, src type
 	// for a deny to subtract from. If a per-source deny is ever wanted, it
 	// belongs on Source itself (mirroring DeniedEgress), not borrowed from an
 	// attaching workspace.
-	clone := scanEgressDomains(url)
+	// A library source has no owner and no approved egress, and a member's workspace write can have
+	// pointed it anywhere, so at the library door (ws nil) the ceiling alone is authority.
+	clone, dropped := hostsWithinLiteralTrust(scanEgressDomains(url), ceiling.Spec.AllowedDomains)
 	if ws != nil {
-		clone, _ = boundCloneHosts(clone, *ws, ceiling.Spec.AllowedDomains)
+		clone, dropped = boundCloneHosts(scanEgressDomains(url), *ws, ceiling.Spec.AllowedDomains)
+	}
+	for _, h := range dropped {
+		// No response field carries a warning from this lane: the scan then fails as a refused clone.
+		slog.WarnContext(ctx, "wardynd: "+cloneHostDropWarning(h, "source", src.Name), slog.String("run_id", runID.String()))
 	}
 	scanPolicy := types.RunPolicySpec{
 		MinConfinementClass: cc,

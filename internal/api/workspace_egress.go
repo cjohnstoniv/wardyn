@@ -5,6 +5,7 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"net"
 	"net/http"
 	neturl "net/url"
@@ -358,15 +359,36 @@ func boundCloneHosts(hosts []string, ws types.Workspace, trusted []string) (kept
 	if ws.OwnedBy == "" {
 		return hosts, nil
 	}
-	authority := proxy.CompilePolicy(types.RunPolicySpec{AllowedDomains: append(slices.Clone(trusted), ws.ApprovedEgress...)})
+	return hostsWithinLiteralTrust(hosts, append(slices.Clone(trusted), ws.ApprovedEgress...))
+}
+
+// hostsWithinLiteralTrust splits derived clone hosts by whether authority's exact entries already
+// cover the private-range literal trust each would carry (proxy.Policy.ExceedsLiteralTrust). A host
+// that carries none (a name, a public literal) is always kept.
+func hostsWithinLiteralTrust(hosts, authority []string) (kept, dropped []string) {
+	compiled := proxy.CompilePolicy(types.RunPolicySpec{AllowedDomains: authority})
 	for _, h := range hosts {
-		if authority.ExceedsLiteralTrust(h) {
+		if compiled.ExceedsLiteralTrust(h) {
 			dropped = append(dropped, h)
 			continue
 		}
 		kept = append(kept, h)
 	}
 	return kept, dropped
+}
+
+// cloneHostDropWarning is the sentence for a clone host a bound dropped, naming where an admin can
+// allow it. A workspace's approved egress takes dotted hosts only (hostrules.ValidApprovedHost), so
+// an IPv6 literal, like any host of a library source, can be listed only in the ceiling.
+func cloneHostDropWarning(host, kind, name string) string {
+	remedy := "allow it in the workspace's approved egress"
+	switch {
+	case kind == "source":
+		remedy = "list it in the deployment ceiling's allowed_domains"
+	case strings.Contains(host, ":"):
+		remedy = "list it in the ceiling's allowed_domains"
+	}
+	return fmt.Sprintf("dropped clone host %q of %s %q: a private address not in operator allowlist; %s", host, kind, name, remedy)
 }
 
 // scanEgressDomains returns the egress allowlist a scan/verify run needs to clone
