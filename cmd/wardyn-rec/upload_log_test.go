@@ -203,6 +203,7 @@ func TestRun_LogUploadKeepsAgentExit(t *testing.T) {
 	if c.ProcessState.ExitCode() != 7 {
 		t.Errorf("exit = %d, want the agent's 7", c.ProcessState.ExitCode())
 	}
+	srv.Close() // the upload came from another process: wait for the handler before reading what it stored
 	if len(*puts) != 1 || !bytes.HasSuffix((*puts)[0].tail, []byte("agent-output\n")) {
 		t.Errorf("the log of a failed agent must still upload: %+v", *puts)
 	}

@@ -269,6 +269,8 @@ test.describe("New Run, Guided setup: leaving", () => {
     await sidebarLink(page, "Runs").click();
     await expect(dialog).toBeVisible();
     await dialog.getByRole("button", { name: UNSAVED_GUARD.LEAVE }).click();
+    // A closing dialog stays mounted through its exit animation and, still the top layer, takes the next Esc.
+    await expect(dialog).toBeHidden();
     await expect(page).toHaveURL(/\/runs$/);
     // The address changes before the Runs screen replaces New Run (a route change renders a moment later),
     // and the draft goes with the screen. Coming back inside that moment would find New Run never left.
