@@ -427,7 +427,7 @@ func (s *Server) authorizeSpecWorkspaceSources(ctx context.Context, r *http.Requ
 // hosts dispatched here are the hosts that were graded. Extracted verbatim
 // from handleCreateRun.
 func (s *Server) unionRunEgress(ctx context.Context, runID uuid.UUID, spec *types.RunPolicySpec, gw grantWiring, wsRefs []types.Workspace, legacyRepo string,
-	scmSite types.SiteConfig, directGitHubAdded []string, comps runComponents,
+	scmSite types.SiteConfig, directGitHubAdded []string, comps runComponents, trusted []string,
 ) {
 	// Direct GitHub candidates were bounded before grading; audit them only now
 	// that a run exists, alongside the dispatch-only additions.
@@ -446,7 +446,7 @@ func (s *Server) unionRunEgress(ctx context.Context, runID uuid.UUID, spec *type
 	}
 	// The dispatch-only lanes come from deriveRunEgress, the function the dry
 	// doors' stepDerivedEgress calls, so Review names the hosts launched here.
-	for _, d := range deriveRunEgress(spec, wsRefs, legacyRepo, scmSite, wiredLaneGrants(spec.EligibleGrants, gw)) {
+	for _, d := range deriveRunEgress(spec, wsRefs, legacyRepo, scmSite, wiredLaneGrants(spec.EligibleGrants, gw), trusted) {
 		auditAdded(d.kind, d.added)
 	}
 }

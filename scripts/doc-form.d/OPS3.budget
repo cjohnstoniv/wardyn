@@ -41,16 +41,16 @@ docs/operations/who-gets-in.md=1454 share=35
 docs/operations/admin-only-writes.md=3361 share=35
 # docs/operations/three-roles.md 4024 measured after G-090-cleanup slice F: docs rows that contradicted the code.
 # docs/operations/three-roles.md 4063 adds 39 over 4024: 0.9 final docs pass 3, measured: a profile maximum never cuts below an untouched run's size.
-docs/operations/three-roles.md=4063 share=35
+docs/operations/three-roles.md=4173 share=35
 docs/operations/provider-policy.md=1278 share=35
 docs/operations/ownership-and-offboarding.md=2370 share=35
 # 0.9 F-1515: governance-writes.md 2754 adds 28 over 2726 for the `governance plan` bullet and example.
 # docs/operations/governance-writes.md 2888 measured after the F-1508-author merge (human_author; four-eyes on service-identity create and sponsor change).
 # docs/operations/governance-writes.md 2978 adds 90 over 2888: 0.9 final docs pass 3, measured: the six 0.9 rows of the held-writes table and the super-admin approvals.
-docs/operations/governance-writes.md=2978 share=35
+docs/operations/governance-writes.md=3086 share=35
 docs/operations/member-runs.md=1044 share=35
 docs/operations/user-drives.md=4804 share=35
-docs/operations/capabilities.md=3963 share=35
+docs/operations/capabilities.md=3999 share=35
 docs/operations/custom-components.md=1184 share=35
 # G-1423: docs/operations/api-tokens.md 4002 adds 11 over 3991 for GET /runs/{id}/output on the delegated-token list.
 # docs/operations/api-tokens.md 5466 adds 1464 over 4002 (0.9 F-1508-M3): invitations, dispositions and service identities.
@@ -64,7 +64,7 @@ docs/operations/api-tokens.md=5475 share=35
 # docs/operations/denials.md 4877 adds 21 over 4856 (0.9 DS1-S1b): the governance_profile row's runs.tools cause, a New Run command that includes a harness.
 # docs/operations/denials.md 4882 adds 5 over 4877 (G-090-cleanup slice F, docs rows that contradict the code): measured; the lead re-measures at merge.
 # docs/operations/denials.md 4889 adds 7 (0.9 R1-0082): the DELETE of a user assignment that would leave the person in two group domains, in the key_domain_ambiguous_membership row.
-docs/operations/denials.md=4889 share=35
+docs/operations/denials.md=4899 share=35
 # Round 1: docs/operations/who-gets-in.md measured 1453 after the split banner and heading cleanup.
 # Round 1: docs/operations/admin-only-writes.md measured 2869 after the split banner and heading cleanup.
 # Round 1: docs/operations/three-roles.md measured 4012 after the split banner and heading cleanup.
@@ -83,3 +83,12 @@ docs/operations/denials.md=4889 share=35
 # docs/operations/denials.md 4696 adds 19 (0.9 G-sec-rest, #1976): the exec relay refusal's denied row (target `exec.relay`) and pending output row.
 # H3 integration: admin-only-writes.md 3074 -> 3107 (+33), the security-tier DELETE /runners/{id} row moved from OPERATIONS.md.
 # F-1508 C4: docs/operations/capabilities.md 3963 adds 102 over 3861 for the service_attach value.
+# docs/operations/capabilities.md 3999 adds 36 over 3963, measured: an egress_host grant is not authority for a private address.
+# docs/operations/three-roles.md 4113 adds 50 over 4063, measured: emptying ui_apps is not a narrowing, and an overlay that leaves none is refused.
+# docs/operations/governance-writes.md 3012 adds 34 over 2978, measured: an added inspection naming a detector sidecar is held for a second approver.
+# docs/operations/three-roles.md 4123 adds 10 over 4113, measured: ui_apps named as an unsatisfiable cause.
+# docs/operations/denials.md 4898 adds 9 over 4889, measured: ui_apps named as an unsatisfiable cause.
+# three-roles.md 4124 and denials.md 4899 add 1 each, measured: an overlay's ui_apps: [] denies UI apps; only a non-empty list sharing none is refused.
+# docs/operations/governance-writes.md 3047 adds 35 over 3012, measured: a rename that can move an equal-priority group tie is held.
+# docs/operations/governance-writes.md 3076 adds 29 over 3047, measured: a held role mapping carries the effect its proposer acknowledged.
+# three-roles.md 4173 (+49) and governance-writes.md 3086 (+10), measured: a maximum where no size is set can raise the member cap.

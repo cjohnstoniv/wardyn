@@ -123,7 +123,8 @@
 # docs/AUDIT-ACTIONS.md 45928 adds 57 over 45871 (0.9 RS-7, after merging lane/090-S-clockstep); measured at merge.
 # docs/AUDIT-ACTIONS.md 45648 measured at merge: the final docs pass over the runner limits, pool words and Azure CLI lanes.
 # docs/AUDIT-ACTIONS.md 45736 measured after merging the batch into the lane (88 over its 45648: the lane's sign-out, purge and erasure rows).
-docs/AUDIT-ACTIONS.md=45928 share=8
+# docs/AUDIT-ACTIONS.md 45942 adds 14 over 45928 (0.9 RS-12, after merging lane/090-RS-11); measured at merge.
+docs/AUDIT-ACTIONS.md=45942 share=8
 # docs/AUDIT-ACTIONS.md 39938 adds 1 (0.9 H7): the `placement_component_self_defined` reason in the authz.denied vocabulary.
 # 0.9 H10 r1: docs/AUDIT-ACTIONS.md 40113 adds 65 over 40048 for the token-revoke join, the off semantics and the pending connect/disconnect rows.
 # 0.9 H10: docs/AUDIT-ACTIONS.md 40048 adds 111 over 39937 for runner.token.revoke, runners.enabled.set, runner.connect and runner.disconnect.
@@ -147,3 +148,4 @@ docs/AUDIT-ACTIONS.md=45928 share=8
 # docs/AUDIT-ACTIONS.md 40126 adds 32 (0.9 F-1511-1510 r4): credential.erase erases the subject and the entra form.
 # docs/AUDIT-ACTIONS.md 42097 adds 103 over 41994 (0.9 DS1-S2a r1): the run.toolgate_credential.write row, recording a withheld tool-approval credential and its reason.
 # docs/AUDIT-ACTIONS.md 42932 adds 92 over 42840 (0.9 TA-3 r1): run.agent_policy.write is also written for an interactive claude-code run whose tool rules name a tool, and its tool_rules field.
+# docs/AUDIT-ACTIONS.md 45662 adds 14 over 45648, measured: a member's private-range workspace clone host.

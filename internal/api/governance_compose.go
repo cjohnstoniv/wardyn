@@ -346,13 +346,27 @@ func (s *Server) applyStep(out *ResolvedProfile, base composer.Authority, row ty
 				"governance profile %q: its overlay names %s beyond what the profile it builds on allows, so it was narrowed", row.Name, field))
 		}
 	}
-	// A size the overlay names is authored by the chain: the meet's answer for that field.
-	if row.Overlay != nil && row.Overlay.Resources != nil {
-		if v := row.Overlay.Resources.CPUMillis; v != nil && *v > 0 && res.Ceiling.Resources != nil {
-			out.AuthoredResources.CPUMillis = res.Ceiling.Resources.CPUMillis
+	baseAuthored := out.AuthoredResources
+	out.AuthoredResources = authoredAfter(baseAuthored, row, res)
+	// The member cap never rises above the base's, whatever the base became after this overlay was
+	// written: a maximum the base no longer bounds is lowered to the base's own cap, and said so.
+	baseCap := s.memberCapOf(baseAuthored, base.Limits, base.Ceiling.Resources)
+	resCap := s.memberCapOf(out.AuthoredResources, res.Limits, res.Ceiling.Resources)
+	if raises := memberCapRaises(resCap, baseCap); len(raises) > 0 {
+		// The result's member default is within the base's (its size is the meet's), so a maximum of
+		// the base's cap brings the cap down to it.
+		if resCap.CPUMillis > baseCap.CPUMillis {
+			res.Limits.MaxCPUMillis = baseCap.CPUMillis
 		}
-		if v := row.Overlay.Resources.MemoryMiB; v != nil && *v > 0 && res.Ceiling.Resources != nil {
-			out.AuthoredResources.MemoryMiB = res.Ceiling.Resources.MemoryMiB
+		if resCap.MemoryMiB > baseCap.MemoryMiB {
+			res.Limits.MaxMemoryMiB = baseCap.MemoryMiB
+		}
+		for _, field := range raises {
+			out.AdminWarnings = append(out.AdminWarnings, fmt.Sprintf("governance profile %q: overlay limits.%s: above the member cap of the profile it builds on, lowered to it", row.Name, field))
+		}
+		if leaf {
+			out.Warnings = append(out.Warnings, fmt.Sprintf(
+				"governance profile %q: its overlay names a member size beyond what the profile it builds on allows, so it was narrowed", row.Name))
 		}
 	}
 	// The meet passes the overlay's own grants through unchanged: bound them by the resolved base.

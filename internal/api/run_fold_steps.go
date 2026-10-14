@@ -119,6 +119,10 @@ func (s *Server) stepWorkspaces(f *runFold, rec *foldRecorder) bool {
 	f.wsRefs = attachedWorkspaceRefs(f.seed.attached, referencedWorkspacesIn(all, f.spec))
 	for _, ws := range f.wsRefs {
 		recordWorkspaceSources(rec, f.spec, ws)
+		_, dropped := runCloneEgress(ws, f.ceiling.Spec.AllowedDomains)
+		for _, h := range dropped {
+			f.policyWarns = append(f.policyWarns, cloneHostDropWarning(h, "workspace", ws.Name))
+		}
 	}
 	var refusal *runRefusal
 	f.attachments, f.startFolder, refusal = s.runAttachments(*f.req, f.spec, f.wsRefs, indexWorkspacesBySource(all), f.seed,
@@ -167,10 +171,10 @@ func (s *Server) stepPushRuleSets(f *runFold, rec *foldRecorder) bool {
 func (s *Server) stepPreviewEgress(f *runFold, rec *foldRecorder) bool {
 	for _, ws := range f.wsRefs {
 		var contributed types.RunPolicySpec
-		unionPreviewWorkspaceEgress(&contributed, []types.Workspace{ws})
+		unionPreviewWorkspaceEgress(&contributed, []types.Workspace{ws}, f.ceiling.Spec.AllowedDomains)
 		recordSpecAdds(rec, types.RunPolicySpec{}, contributed, workspaceProvSource(ws))
 	}
-	unionPreviewWorkspaceEgress(&f.spec, f.wsRefs)
+	unionPreviewWorkspaceEgress(&f.spec, f.wsRefs, f.ceiling.Spec.AllowedDomains)
 	return true
 }
 
@@ -185,7 +189,7 @@ func (s *Server) stepPreviewEgress(f *runFold, rec *foldRecorder) bool {
 func (s *Server) stepDerivedEgress(f *runFold, rec *foldRecorder) bool {
 	policy := policyProvSource(f.source)
 	wired := lanesWiredFor(f.scmSite, f.req.Agent, repoLocatorsOf(f.spec.WorkspaceRepos), f.spec.EligibleGrants)
-	for _, d := range deriveRunEgress(&f.spec, f.wsRefs, f.req.Repo, types.SiteConfig{}, wired) {
+	for _, d := range deriveRunEgress(&f.spec, f.wsRefs, f.req.Repo, types.SiteConfig{}, wired, f.ceiling.Spec.AllowedDomains) {
 		for _, host := range d.added {
 			rec.add(fieldAllowed, host, derivedEgressSource(rec, f.spec.EligibleGrants, d.kind, host, policy), provEffectAdded)
 		}

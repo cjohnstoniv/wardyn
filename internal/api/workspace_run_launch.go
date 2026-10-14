@@ -413,7 +413,7 @@ func (s *Server) stepRunCeilingLimits(ctx context.Context, actor string, gov ste
 // funlen ratchet (.golangci.yml, 150 non-comment lines), and the agent-roster
 // check it gained is what forced a block out. Nothing about the policy changed —
 // the comments are the originals, moved with the code they explain.
-func (s *Server) recordSessionPolicy(ws types.Workspace, cc types.ConfinementClass, confined bool) types.RunPolicySpec {
+func (s *Server) recordSessionPolicy(ws types.Workspace, cc types.ConfinementClass, confined bool, trusted []string) types.RunPolicySpec {
 	// A confined verify HOLDS an off-policy host at the door (wait_for_review:
 	// the connection parks while the approval surfaces in the verify panel's
 	// live strip; approve releases it, deny/timeout fails it). The old
@@ -435,7 +435,7 @@ func (s *Server) recordSessionPolicy(ws types.Workspace, cc types.ConfinementCla
 		// learning session (open) allows all egress so the capture is complete.
 		// Same interactive attach either way.
 		AllowAllEgress: !confined,
-		AllowedDomains: s.confinedEgressDomains(ws),
+		AllowedDomains: s.confinedEgressDomains(ws, trusted),
 		// The operator's permanent per-workspace denies (Phase 4's `deny · always`)
 		// must reach BOTH branches above, not just the confined AllowedDomains set —
 		// deny beats allow_all_egress at the proxy (docs/POLICIES.md), so this line
@@ -612,7 +612,7 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 	run.Interactive = true
 	run.ModelProviderID = mp.provider.ID
 	// The session's policy, built one function over (recordSessionPolicy).
-	policy := s.recordSessionPolicy(ws, cc, confined)
+	policy := s.recordSessionPolicy(ws, cc, confined, ceiling.Spec.AllowedDomains)
 	run.AutoStopAfterSec = policy.AutoStopAfterSec // reaper reads the run row
 	cloneURLs, ephemeralDirs, werr := wireWorkspaceSource(&run, &policy, ws)
 	if werr != nil {

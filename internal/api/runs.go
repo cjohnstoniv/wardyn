@@ -352,7 +352,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// Widen the RESOLVED spec's egress from the deterministic operator-trusted
 	// sources (onboarded-workspace registries, site-config SCM hosts, the SSH and
 	// ADO SCM lanes) — never the LLM; see unionRunEgress.
-	s.unionRunEgress(ctx, runID, &spec, gw, wsRefs, req.Repo, f.scmSite, f.directGitHubAdded, comps)
+	s.unionRunEgress(ctx, runID, &spec, gw, wsRefs, req.Repo, f.scmSite, f.directGitHubAdded, comps, f.ceiling.Spec.AllowedDomains)
 
 	// …and say so when one of those operator-approved workspace hosts is walled
 	// off by the caller's own governance profile. The union above still happened

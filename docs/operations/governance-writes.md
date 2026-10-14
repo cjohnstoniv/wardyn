@@ -61,11 +61,13 @@ an operator follows to turn one on and run the queue.
   - A failure after the write rolls it back.
 - **Exemptions.**
   - Only these apply directly, with no second human:
-    - a profile update whose new effective profile is no more permissive than the current one (the same resolved comparison composition uses, `Leq`),
-    - a rename that changes nothing else,
+    - a profile update whose new effective profile is no more permissive than the current one (the same resolved comparison composition uses, `Leq`) and whose member CPU and memory cap is no higher,
+    - a rename that changes nothing else (unless held below),
     - an availability `PUT` that leaves the restricted bit as it is,
     - and a user type's name or description edit that leaves its priority alone.
   - A profile update that changes the contact is held even when it narrows.
+  - So is a rename of a profile with a group assignment that shares its priority with another profile's group assignment: a person in both groups gets the profile whose name sorts first.
+  - So is one that adds an `llm_inspection` naming a `detector_sidecar_url` where the profile had none: the sidecar receives spans of the model traffic of everyone under the profile. An added inspection without one narrows.
   - Everything else is held, deletes and every assignment write included: deleting an assignment widens its subjects back to the deployment ceiling.
   - No grant, enforcement, availability, priority or role-mapping write has a narrowing exemption, because each can widen:
     - deleting a deny grant,
@@ -82,7 +84,8 @@ an operator follows to turn one on and run the queue.
     - Staleness covers the bit and the allow rows naming the value, so a restriction accepted at proposal is applied only while its list is what it was.
   - *User-type priority* (`PUT /user-types/{id}`): held when the priority changes, whole (a name and a priority edit together are one held change).
     - A name or description edit alone applies directly.
-  - *Role mapping* (`POST`/`DELETE /access/mappings`): the posture-flip acknowledgement is judged at proposal and carried in the payload, and judged again when the change is applied.
+  - *Role mapping* (`POST`/`DELETE /access/mappings`): the posture-flip acknowledgement is judged at proposal and carried in the payload with the before and after it acknowledged, and judged again when the change is applied.
+    - If applying it would now do something else to unmatched people, the acknowledged effect is stale and the approval is `409` `governance_change_stale`.
     - The lockout guard runs when the change is applied, against the claim snapshot of the **approver**;
       - the proposer's own facts are not consulted (they may have been demoted since, and the second human is the safeguard against them).
     - The `admin-token` is exempt from the guard as it is on a direct write.

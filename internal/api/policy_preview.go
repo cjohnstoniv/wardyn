@@ -131,10 +131,11 @@ func (s *Server) authorizePreviewRequest(r *http.Request, req createRunRequest) 
 // before the requirements fold so Review grades it; stepDerivedEgress adds the
 // grant lanes after every gate. The site-config, ADO and model-provider host
 // unions remain pending.
-func unionPreviewWorkspaceEgress(spec *types.RunPolicySpec, workspaces []types.Workspace) {
+func unionPreviewWorkspaceEgress(spec *types.RunPolicySpec, workspaces []types.Workspace, trusted []string) {
 	unionWorkspaceEgress(spec, workspaces)
 	for _, ws := range workspaces {
-		unionAllowedDomains(spec, workspaceCloneEgress(ws))
+		kept, _ := runCloneEgress(ws, trusted)
+		unionAllowedDomains(spec, kept)
 	}
 }
 
