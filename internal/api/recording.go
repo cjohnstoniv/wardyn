@@ -78,8 +78,8 @@ const maxRecordingUploadBytes = 64 << 20 // 64 MiB
 // recordingUploadReadWindow bounds how long an upload's body may take to
 // arrive once the store has admitted its save, so a slow or stalled client
 // holds a save slot for at most this long. It stays below the proxy's 130 s
-// control-plane call timeout: an upload admitted within the store's 60 s
-// admission wait still answers in 60 + 60 = 120 s, before its proxy gives up.
+// control-plane call timeout: an upload admitted within the store's 65 s
+// admission wait still answers in 65 + 60 = 125 s, before its proxy gives up.
 // 60 s carries a 32 MiB part (where wardyn-rec cuts one) at about 4.5 Mbit/s
 // and a 64 MiB upload at about 9 Mbit/s. A body still arriving then fails as
 // any read error does: nothing is stored. A var so tests can shorten it.
@@ -105,7 +105,7 @@ func (b *readWindow) Read(p []byte) (int, error) {
 
 // storeUpload masks and stores one upload body as part of runID's cast. A
 // connection that cannot take a read deadline is refused, never read without one.
-func (s *Server) storeUpload(w http.ResponseWriter, r *http.Request, runID uuid.UUID, part int) error {
+func (s *Server) storeUpload(w http.ResponseWriter, r *http.Request, run types.AgentRun, runID uuid.UUID, part int) error {
 	rc := http.NewResponseController(w)
 	if err := rc.SetReadDeadline(time.Time{}); err != nil {
 		return fmt.Errorf("recording upload: connection takes no read deadline: %w", err)
@@ -127,10 +127,16 @@ func (s *Server) storeUpload(w http.ResponseWriter, r *http.Request, runID uuid.
 	// Read only on the store's demand: an early storage failure must not leave
 	// an independent goroutine blocked reading the request body.
 	body := buildGuardedMaskingBody(limited, s.cfg.MaskRegistry, runID, s.maskGuard(runID))
-	if part == 1 {
-		return s.cfg.RecordingStore.SaveCast(r.Context(), runID.String(), body)
+	// One person's uploads queue behind each other before they queue with
+	// everyone else's; a run with no person owner queues as itself.
+	ctx := r.Context()
+	if run.CreatedBy != "" && !run.OperatorOwned {
+		ctx = recording.WithAdmissionGroup(ctx, "owner:"+run.CreatedBy)
 	}
-	return s.cfg.RecordingStore.SaveCastNamed(r.Context(), runID.String(), recording.PartSuffix(part), body)
+	if part == 1 {
+		return s.cfg.RecordingStore.SaveCast(ctx, runID.String(), body)
+	}
+	return s.cfg.RecordingStore.SaveCastNamed(ctx, runID.String(), recording.PartSuffix(part), body)
 }
 
 // handleUploadRecording accepts a PUT /api/v1/internal/recordings/{runID} from
@@ -206,7 +212,7 @@ func (s *Server) saveRecording(w http.ResponseWriter, r *http.Request, part int)
 		return
 	}
 
-	saveErr := s.storeUpload(w, r, claims.RunID, part)
+	saveErr := s.storeUpload(w, r, run, claims.RunID, part)
 	if saveErr == nil {
 		saveErr = s.uploadedRecordingOutput(r.Context(), claims.RunID)
 	}

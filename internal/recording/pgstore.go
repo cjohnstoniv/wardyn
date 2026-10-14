@@ -68,7 +68,7 @@ func readCapped(r io.Reader, limit, start int) ([]byte, error) {
 // (an 8 MiB session snapshot then buffers 8 MiB, not the 64 MiB cap).
 func castBufferStart(r io.Reader) int {
 	if l, ok := r.(interface{ Len() int }); ok {
-		return l.Len() + 1
+		return max(l.Len()+1, 1)
 	}
 	return 64 << 10
 }
@@ -79,9 +79,11 @@ func castBufferStart(r io.Reader) int {
 //
 //   - streamSaveSlots: saves read from a source that sets its own pace, such
 //     as an upload body. There is one, so uploads are written one at a time
-//     per process; an upload may regrow its buffer once to the 64 MiB cap. A
-//     run holds at most one (runSaves), which matters only if the count is
-//     raised.
+//     per process; an upload may regrow its buffer once to the 64 MiB cap.
+//     Before it queues for the slot a save queues in its admission group
+//     (groupSaves): the run's owner on the upload route, else the run. A
+//     group so holds one place, in the slot or waiting for it, and a waiter
+//     from another group is behind one holder at most.
 //   - inMemorySaveSlot: saves whose reader reports Len, so its bytes are
 //     already in memory and its read cannot stall: an attach or SSH session
 //     snapshot, buffered at its own length. A stream save never takes it, so
@@ -105,13 +107,33 @@ const castStreamSlots = 1
 var (
 	streamSaveSlots  = make(chan struct{}, castStreamSlots)
 	inMemorySaveSlot = make(chan struct{}, 1)
-	runSavesMu       sync.Mutex
-	runSaves         = map[string]chan struct{}{} // closed when the run's save lets go
+	groupSavesMu     sync.Mutex
+	groupSaves       = map[string]chan struct{}{} // closed when the group's save lets go
 )
 
-// castSaveAdmitWait bounds a save's wait for admission. Below the proxy's
-// 130 s upload timeout together with the upload route's 60 s read window.
-var castSaveAdmitWait = 60 * time.Second
+type admissionGroupKey struct{}
+
+// WithAdmissionGroup names the group ctx's stream saves queue in before they
+// queue for the stream slot. The upload route passes the run's owner, so one
+// person's uploads wait behind each other, not ahead of everyone else's.
+func WithAdmissionGroup(ctx context.Context, group string) context.Context {
+	return context.WithValue(ctx, admissionGroupKey{}, group)
+}
+
+// AdmissionGroup is the group a stream save of key queues in: the one ctx
+// names, else the key's run.
+func AdmissionGroup(ctx context.Context, key string) string {
+	if g, _ := ctx.Value(admissionGroupKey{}).(string); g != "" {
+		return g
+	}
+	return castRun(key)
+}
+
+// castSaveAdmitWait bounds a save's wait for admission. It is longer than one
+// full hold (the upload route's 60 s read window plus the write), so a waiter
+// behind one holder is admitted; and 65 + 60 = 125 s stays under the proxy's
+// 130 s upload timeout.
+var castSaveAdmitWait = 65 * time.Second
 
 // castSaveWait runs each time a save finds what it needs held and is about to wait.
 var castSaveWait = func() {}
@@ -124,16 +146,16 @@ func admitCastSave(ctx context.Context, key string, r io.Reader) (release func()
 	if _, ok := r.(interface{ Len() int }); ok {
 		return takeSlot(ctx, inMemorySaveSlot)
 	}
-	releaseRun, err := holdRun(ctx, castRun(key))
+	releaseGroup, err := holdGroup(ctx, AdmissionGroup(ctx, key))
 	if err != nil {
 		return nil, err
 	}
 	releaseSlot, err := takeSlot(ctx, streamSaveSlots)
 	if err != nil {
-		releaseRun()
+		releaseGroup()
 		return nil, err
 	}
-	return func() { releaseSlot(); releaseRun() }, nil
+	return func() { releaseSlot(); releaseGroup() }, nil
 }
 
 func takeSlot(ctx context.Context, slots chan struct{}) (func(), error) {
@@ -152,23 +174,23 @@ func takeSlot(ctx context.Context, slots chan struct{}) (func(), error) {
 	}
 }
 
-// holdRun waits until no other stream save of run is admitted or waiting for a slot.
-func holdRun(ctx context.Context, run string) (func(), error) {
+// holdGroup waits until no other stream save of group is admitted or waiting for a slot.
+func holdGroup(ctx context.Context, group string) (func(), error) {
 	for {
-		runSavesMu.Lock()
-		held, busy := runSaves[run]
+		groupSavesMu.Lock()
+		held, busy := groupSaves[group]
 		if !busy {
 			mine := make(chan struct{})
-			runSaves[run] = mine
-			runSavesMu.Unlock()
+			groupSaves[group] = mine
+			groupSavesMu.Unlock()
 			return func() {
-				runSavesMu.Lock()
-				delete(runSaves, run)
-				runSavesMu.Unlock()
+				groupSavesMu.Lock()
+				delete(groupSaves, group)
+				groupSavesMu.Unlock()
 				close(mine)
 			}, nil
 		}
-		runSavesMu.Unlock()
+		groupSavesMu.Unlock()
 		castSaveWait()
 		select {
 		case <-held:

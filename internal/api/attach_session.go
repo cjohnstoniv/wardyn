@@ -78,9 +78,9 @@ func runIsUnrecordable(run types.AgentRun) bool {
 // sessions; a streaming sink is the one after that.
 const maxSessionCastBytes = 8 << 20
 
-// sessionRecordingSaveWait bounds one session recording save: the store's 60 s
+// sessionRecordingSaveWait bounds one session recording save: the store's 65 s
 // admission wait plus 30 s for the write. A var so tests can shorten it.
-var sessionRecordingSaveWait = 90 * time.Second
+var sessionRecordingSaveWait = 95 * time.Second
 
 // capBuffer is the bounded sink under a session CastWriter. CastWriter emits one
 // complete JSON line per Write, so refusing a write WHOLE (never partially)

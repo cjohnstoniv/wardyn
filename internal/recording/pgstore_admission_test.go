@@ -257,18 +257,18 @@ func TestPGStore_SaveAdmissionSmallAndMaxStreams(t *testing.T) {
 	}
 }
 
-// One run's stream saves go one at a time whatever the slot count: a second
-// hold of the same run waits for the first, another run's does not, and a
-// waiter that gives up leaves the run free.
-func TestHoldRun_OnePerRun(t *testing.T) {
+// One group's stream saves go one at a time whatever the slot count: a second
+// hold of the same group waits for the first, another group's does not, and a
+// waiter that gives up leaves the group free.
+func TestHoldGroup_OnePerGroup(t *testing.T) {
 	waits := make(chan struct{}, 4)
 	recording.OnCastSaveWait(t, func() { waits <- struct{}{} })
 	run := uuid.NewString()
-	release, err := recording.HoldRun(t.Context(), run)
+	release, err := recording.HoldGroup(t.Context(), run)
 	if err != nil {
 		t.Fatal(err)
 	}
-	releaseOther, err := recording.HoldRun(t.Context(), uuid.NewString())
+	releaseOther, err := recording.HoldGroup(t.Context(), uuid.NewString())
 	if err != nil || len(waits) != 0 {
 		t.Fatalf("another run's hold = %v after %d waits; want it at once", err, len(waits))
 	}
@@ -276,7 +276,7 @@ func TestHoldRun_OnePerRun(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(t.Context())
 	gaveUp := make(chan error, 1)
-	go func() { _, err := recording.HoldRun(ctx, run); gaveUp <- err }()
+	go func() { _, err := recording.HoldGroup(ctx, run); gaveUp <- err }()
 	<-waits
 	cancel()
 	if err := <-gaveUp; !errors.Is(err, context.Canceled) {
@@ -285,7 +285,7 @@ func TestHoldRun_OnePerRun(t *testing.T) {
 
 	next := make(chan func(), 1)
 	go func() {
-		r, err := recording.HoldRun(t.Context(), run)
+		r, err := recording.HoldGroup(t.Context(), run)
 		if err != nil {
 			t.Error(err)
 		}
@@ -294,7 +294,7 @@ func TestHoldRun_OnePerRun(t *testing.T) {
 	<-waits
 	release()
 	(<-next)()
-	again, err := recording.HoldRun(t.Context(), run)
+	again, err := recording.HoldGroup(t.Context(), run)
 	if err != nil || len(waits) != 0 {
 		t.Fatalf("hold after every release = %v after %d waits", err, len(waits))
 	}
@@ -378,5 +378,64 @@ func TestReadCast_BufferFollowsAKnownLength(t *testing.T) {
 	}
 	if buf, err := recording.ReadCast(stream(64<<10 + 1)); err != nil || len(buf) != 64<<10+1 || cap(buf) != maxCast+1 {
 		t.Errorf("stream past 64 KiB: len %d, cap %d, %v; want one regrow to %d", len(buf), cap(buf), err, maxCast+1)
+	}
+}
+
+// A stream save queues in the group its context names, and in its run's by default.
+func TestAdmissionGroup_DefaultsToTheRun(t *testing.T) {
+	run := uuid.NewString()
+	for _, key := range []string{run, run + "~part-2", run + "~ssh-" + uuid.NewString()} {
+		if got := recording.AdmissionGroup(t.Context(), key); got != run {
+			t.Errorf("default group of %q = %q, want the run", key, got)
+		}
+		if got := recording.AdmissionGroup(recording.WithAdmissionGroup(t.Context(), ""), key); got != run {
+			t.Errorf("empty group of %q = %q, want the run", key, got)
+		}
+		if got := recording.AdmissionGroup(recording.WithAdmissionGroup(t.Context(), "owner:x"), key); got != "owner:x" {
+			t.Errorf("named group of %q = %q", key, got)
+		}
+	}
+}
+
+// One owner's uploads queue behind each other before they queue for the slot,
+// so another owner's upload is behind one holder at most: over three cycles
+// of one owner's back-to-back uploads it is admitted as soon as the holder
+// returns, well inside its admission wait.
+func TestPGStore_OneOwnersUploadsDoNotCrowdOutAnother(t *testing.T) {
+	recording.ShortenCastSaveAdmitWait(t, 2*time.Second)
+	g := newGatedSaves(t)
+	busy := recording.WithAdmissionGroup(t.Context(), "owner:busy")
+	other := recording.WithAdmissionGroup(t.Context(), "owner:other")
+	upload := func(ctx context.Context) int {
+		return g.start(func(r io.Reader) error { return g.s.SaveCast(ctx, uuid.NewString(), r) })
+	}
+	holder := upload(busy)
+	if got := <-g.entered; got != holder {
+		t.Fatalf("save %d entered, want %d", got, holder)
+	}
+	for cycle := 1; cycle <= 3; cycle++ {
+		next := upload(busy) // the busy owner's next run
+		g.expectWait("the busy owner's next upload")
+		theirs := upload(other)
+		g.expectWait("another owner's upload")
+		if err := g.finish(holder); !errors.Is(err, errGate) {
+			t.Fatalf("cycle %d: holder = %v", cycle, err)
+		}
+		if got := <-g.entered; got != theirs {
+			// The busy owner's next upload holds the slot now; the other
+			// owner's waits out its admission bound behind it.
+			g.pending--
+			t.Fatalf("cycle %d: save %d was admitted ahead of the other owner's upload, which then ended with: %v", cycle, got, <-g.done)
+		}
+		if err := g.finish(theirs); !errors.Is(err, errGate) {
+			t.Fatalf("cycle %d: the other owner's upload = %v", cycle, err)
+		}
+		if got := <-g.entered; got != next {
+			t.Fatalf("cycle %d: save %d entered, want the busy owner's next %d", cycle, got, next)
+		}
+		holder = next
+	}
+	if err := g.finish(holder); !errors.Is(err, errGate) {
+		t.Fatalf("last holder = %v", err)
 	}
 }

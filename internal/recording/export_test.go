@@ -38,5 +38,5 @@ func ReadCast(r io.Reader) ([]byte, error) {
 	return readCapped(r, maxCastBytes, castBufferStart(r))
 }
 
-// HoldRun is holdRun.
-func HoldRun(ctx context.Context, run string) (func(), error) { return holdRun(ctx, run) }
+// HoldGroup is holdGroup.
+func HoldGroup(ctx context.Context, group string) (func(), error) { return holdGroup(ctx, group) }
