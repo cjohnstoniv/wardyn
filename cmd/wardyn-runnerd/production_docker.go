@@ -130,6 +130,11 @@ func prepareDocker(ctx context.Context, network string, explicit netip.Addr) (ne
 // relayAddress is where the relay listens: --relay-listen when set, otherwise
 // the native engine's host-gateway. Docker Desktop's host-gateway is its VM's
 // address for this host's loopback, not an interface here, so it needs the flag.
+// newLocalRelay is the relay for a Docker runtime; only the docker build has one.
+func newLocalRelay(ctx context.Context, addr netip.Addr) *localRelay {
+	return &localRelay{ctx: ctx, addr: addr, listeners: map[uint16]net.Listener{}, conns: map[net.Conn]*runnerwire.Peer{}}
+}
+
 func relayAddress(ctx context.Context, cli *client.Client, desktop bool, explicit netip.Addr) (netip.Addr, error) {
 	if desktop {
 		if !explicit.IsValid() {

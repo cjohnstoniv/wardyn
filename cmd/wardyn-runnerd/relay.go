@@ -37,10 +37,6 @@ type localRelay struct {
 	conns     map[net.Conn]*runnerwire.Peer // each copy and the session carrying it
 }
 
-func newLocalRelay(ctx context.Context, addr netip.Addr) *localRelay {
-	return &localRelay{ctx: ctx, addr: addr, listeners: map[uint16]net.Listener{}, conns: map[net.Conn]*runnerwire.Peer{}}
-}
-
 // relayBind admits only Docker's host-gateway address held by the Docker
 // bridge on this host: never an unspecified (0.0.0.0, ::), loopback or
 // multicast address, and never an address of another interface.

@@ -67,6 +67,8 @@ var isOperatorCensus = map[string]int{
 	"user_drives_tier.go:upsertUserDriveGrantAs":    1,
 	// The measured reason can carry a substrate's own error text, so only an operator reads it.
 	"runner_usage.go:remoteUsage": 1,
+	// Operators host their own runner without the self_host_runner grant (capabilities.md).
+	"runner_registration.go:handleRunnerTokenSelf": 1,
 	// The predicate itself.
 	"govern_admin.go:runUngoverned": 1,
 }
