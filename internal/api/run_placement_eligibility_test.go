@@ -60,21 +60,27 @@ func TestLocalPlacementDoorsP3AndUpstreamRefuseBeforeIdentityOrStore(t *testing.
 }
 
 func TestLocalPlacementRefusalCannotRenewExpiredAWSOrWritePair(t *testing.T) {
-	srv := createRenewalFixture(t)
-	srv.cfg.AWSSSOProxyInject = true // the default; off is refused earlier, as placement_credential
-	calls := renewedOIDC(t)
-	for _, door := range contractDoors {
-		body := strings.TrimSuffix(createRenewalBody, "}") + `,"placement":"local"}`
-		w := do(t, srv, http.MethodPost, door.path, providerAdminToken(srv, createRenewalOwner), body)
-		if w.Code != 422 || errorReason(w) != string(placement.ReasonPlacementUnavailable) {
-			t.Fatalf("%s=%d %s", door.name, w.Code, w.Body.String())
+	// Proxy-inject off refuses the token cache (placement_credential); on, only the unpooled refusal is left.
+	for inject, want := range map[bool]placement.Reason{true: placement.ReasonPlacementUnavailable, false: placement.ReasonPlacementCredential} {
+		srv := createRenewalFixture(t)
+		srv.cfg.AWSSSOProxyInject = inject
+		calls := renewedOIDC(t)
+		for _, door := range contractDoors {
+			body := strings.TrimSuffix(createRenewalBody, "}") + `,"placement":"local"}`
+			w := do(t, srv, http.MethodPost, door.path, providerAdminToken(srv, createRenewalOwner), body)
+			if w.Code != 422 || errorReason(w) != string(want) {
+				t.Fatalf("inject=%v %s=%d %s", inject, door.name, w.Code, w.Body.String())
+			}
+			if !inject && !strings.Contains(w.Body.String(), bedrockSSOSecretEnvField) {
+				t.Errorf("%s refusal does not name the token cache: %s", door.name, w.Body.String())
+			}
 		}
-	}
-	if calls.Load() != 0 || runRowCount(srv) != 0 {
-		t.Fatalf("refused path renewed=%d created=%d", calls.Load(), runRowCount(srv))
-	}
-	if got, _ := createRenewalStored(t, srv); got.RefreshToken != "old-refresh-token-1234567890" {
-		t.Fatal("refused local path changed the pair")
+		if calls.Load() != 0 || runRowCount(srv) != 0 {
+			t.Fatalf("inject=%v refused path renewed=%d created=%d", inject, calls.Load(), runRowCount(srv))
+		}
+		if got, _ := createRenewalStored(t, srv); got.RefreshToken != "old-refresh-token-1234567890" {
+			t.Fatalf("inject=%v refused local path changed the pair", inject)
+		}
 	}
 }
 
