@@ -24,6 +24,9 @@
 # threatmodel/THREAT-MODEL.md 58443 adds 10 over 58433: docs fix, measured: a policy's own * rule stays in force on a routed run.
 # threatmodel/THREAT-MODEL.md 58477 adds 34 (FR-0148: the SSH audit rate bound).
 # threatmodel/THREAT-MODEL.md 58484 adds 7 (the per-key bound on SSH refusal rows that name a registered key).
+# threatmodel/THREAT-MODEL.md 52622 adds 2 over 52620 (0.9 RS-1): an updated branch counts only at the forge's tip.
+# threatmodel/THREAT-MODEL.md 58486 adds 2 over 58484 (0.9 RS-1, after merging batch-090-local); measured at merge.
 # threatmodel/THREAT-MODEL.md 52641 adds 21 (section 5.1a): a subscription route-through host is inspected as the Anthropic schema.
 # threatmodel/THREAT-MODEL.md 58505 adds 21 over 58484 (0.9 RS-10, after merging lane/090-RS-9); measured at merge.
-threatmodel/THREAT-MODEL.md=58505
+# threatmodel/THREAT-MODEL.md 58507 adds 2 over 58505 (0.9 RS-10, after merging lane/090-RS-1); measured at merge.
+threatmodel/THREAT-MODEL.md=58507
