@@ -34,10 +34,12 @@ a laptop runner, `wardyn-runnerd` works with Docker Desktop, setup is one comman
   installs itself with a systemd user unit or macOS LaunchAgent, and starts it. With `--claim` and your own
   `WARDYN_TOKEN` it also claims the runner, and with `--pool NAME [--default]` puts it in your pool. Device
   management runs it without `--claim`; the person claims afterwards. `deploy/runner/install.sh` now just runs it.
-- `wardyn-runnerd serve --relay-listen` (`WARDYN_RELAY_LISTEN`): with Docker Desktop (macOS, Windows through WSL2)
-  the run relay listens on `127.0.0.1`, which Docker Desktop's host-gateway reaches; `setup` picks it when it detects
-  Docker Desktop. On other engines only the engine's own host-gateway is accepted. macOS is expected to work and not
-  yet verified.
+- `wardyn-runnerd serve --relay-listen` (`WARDYN_RELAY_LISTEN`) and the new `--relay-host-target`
+  (`WARDYN_RELAY_HOST_TARGET`): `serve` and `setup` find and prove the run relay's address with a probe container
+  on Docker Desktop, Rancher Desktop (dockerd), Colima and other VM-backed engines, so Docker Desktop no longer
+  needs a flag. `--relay-listen` loopback is accepted on any engine; the relay never binds an unspecified address.
+  `setup` pins the pair it proved on a VM-backed engine, and `serve` now pulls the proxy image at startup.
+  Rancher Desktop and macOS are expected to work and not yet verified; its containerd mode is unsupported.
 - `wardyn runner claim --pool NAME [--default]` claims and puts the runner in your pool in one step; the console claim
   dialog does the same.
 - `wardyn runner list --no-limits`, and an admin-only Runner limits row in setup status.
@@ -54,7 +56,7 @@ a laptop runner, `wardyn-runnerd` works with Docker Desktop, setup is one comman
 ### Changed
 
 - `wardyn-runnerd serve` exits at startup, with the reason, when this computer cannot run anything: Docker not
-  reachable, a relay address no proxy can reach (Docker Desktop without `--relay-listen`), or a proxy network it
+  reachable, a relay address no proxy can reach (proved with a probe container), or a proxy network it
   cannot create; a missing `--internal-network` bridge is created. Before, the runner showed Online and refused every
   run.
 - `wardyn-runnerd serve --proxy-image` and `setup` default to the release proxy image matching the binary; a
@@ -66,6 +68,9 @@ a laptop runner, `wardyn-runnerd` works with Docker Desktop, setup is one comman
 
 ### Fixed
 
+- `wardyn-runnerd`: an explicit `--relay-listen` was refused before it was read on engines without a host bridge
+  (Rancher Desktop, Colima), and `setup` on such an engine passed, installed the service, and `serve` then
+  crash-looped. `setup` now always proves the relay before it spends the token or installs anything.
 - A per-person AWS SSO (`bedrock_sso`) run on someone's own self-hosted runner was refused after Launch
   (`bedrock_role_credentials credential is unavailable on a local runner`). It now runs when AWS SSO proxy-inject is
   on (the default); with proxy-inject off it is refused at preflight and Review, before Launch. A local Codex run with
