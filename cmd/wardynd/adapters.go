@@ -230,6 +230,16 @@ func (s *approvalService) CountPendingApprovalsByRunCreator(ctx context.Context,
 
 var _ store.ApprovalsForRunsPager = (*approvalService)(nil)
 
+// ListDecidedAlwaysEgressPage is the leader-term heal's narrow, keyset-paged
+// read of decided `always` egress verdicts; the api heal type-asserts for it on
+// s.cfg.Approvals and errors without it. Pure delegation, promoted from the
+// embedded store.PG.
+func (s *approvalService) ListDecidedAlwaysEgressPage(ctx context.Context, state types.ApprovalState, afterRequestedAt time.Time, afterID uuid.UUID, limit int) ([]types.ApprovalRequest, error) {
+	return s.st.ListDecidedAlwaysEgressPage(ctx, state, afterRequestedAt, afterID, limit)
+}
+
+var _ store.DecidedAlwaysEgressPager = (*approvalService)(nil)
+
 // ApprovalEscalations / ApprovalNotifyChannelStats back the approvals list's escalation chips and
 // GET /approval-notify/status. Pure delegation, promoted from the embedded store.PG.
 func (s *approvalService) ApprovalEscalations(ctx context.Context, ids []uuid.UUID, now time.Time) (map[uuid.UUID]types.ApprovalEscalation, error) {
