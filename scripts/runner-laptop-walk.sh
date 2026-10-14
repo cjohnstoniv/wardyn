@@ -17,8 +17,14 @@
 #      session (actor runner:<id>, data.spooled);
 #   5. GET /runs/{id} and the run.create audit row carry placement local,
 #      runner_name and runner_pool_name;
-#   6. with serve stopped, the owner's revoke answers 200 state revoked, and
-#      GET /me/runner-pools answers 200 with Laptop.
+#   7. the member's bedrock_sso agent run, against test/awsssofake: with AWS
+#      SSO proxy-inject on it is admitted local and starts, the sandbox holds
+#      only the placeholder, and the fake's portal accepts the bearer the proxy
+#      injected (the model call then fails on the fake's canned Bedrock body,
+#      which is not a model reply); with proxy-inject off, preflight refuses the
+#      same local run 422 placement_credential before any run exists;
+#   6. (last) with serve stopped, the owner's revoke answers 200 state revoked,
+#      and GET /me/runner-pools answers 200 with Laptop.
 #
 # WHY NOT `setup`: it installs and starts a systemd user service and has no
 # way to skip that. This walk runs the three steps setup chains (register,
@@ -71,13 +77,21 @@ RUNNER_NET="${PROJECT}-internal" # Docker Desktop may already hold another stack
 WARDYND_IMAGE="wardyn/wardynd:${PROJECT}"
 PROXY_IMAGE="wardyn/wardyn-proxy:${PROJECT}"
 AGENT_IMAGE="${PROJECT}/agent-claude-code:pinned"
+AWSSSO_IMAGE="${PROJECT}/agent-aws-sso:pinned"
+# The AWS SSO fake for step 7, see "STEP 7" below for where it listens and why.
+FAKE_CONTAINER="${PROJECT}-awsssofake"
+FAKE_URL="http://172.17.0.1:${WARDYN_LAPTOP_WALK_FAKE_PORT:-18391}"
+PIN_ACCOUNT="222222222222" PIN_ROLE="WardynLaptopWalk" SSO_REGION="us-east-1"
+SSO_START_URL="https://wardyn-laptop-walk.awsapps.com/start"
+BEDROCK_MODEL="arn:aws:bedrock:${SSO_REGION}:${PIN_ACCOUNT}:inference-profile/us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+PROVIDER_ID="laptop-walk-bedrock"
 PG_CONTAINER="${PROJECT}-postgres"
 EVIDENCE_DIR="${WARDYN_LAPTOP_WALK_EVIDENCE:-${ROOT}/local/evidence/runner-laptop-walk}"
 mkdir -p "${EVIDENCE_DIR}"
 TMP="$(mktemp -d /tmp/wardyn-laptop-walk.XXXXXX)"
 STATE="${TMP}/runner-state"
 export SSL_CERT_FILE="${TMP}/tls/ca.crt" CURL_CA_BUNDLE="${TMP}/tls/ca.crt"
-SERVE_PID="" RID="" RUN_ID=""
+SERVE_PID="" RID="" RUN_ID="" SSO_RUN_ID="" LOGIN_RUN_ID=""
 FAILED=0
 pass() { printf '  [pass] %s\n' "$*"; }
 fail() { printf '  [FAIL] %s\n' "$*"; FAILED=1; }
@@ -86,7 +100,7 @@ compose() {
   DOCKER_HOST="${ORG_DOCKER}" COMPOSE_PROJECT_NAME="${PROJECT}" WARDYN_NS="${PROJECT}" \
     WARDYN_UP_PORT=0 WARDYN_PG_PORT=0 WARDYN_REGISTRY_PORT=0 WARDYN_SSH_PORT=0 WARDYN_UI_SANDBOX_PORT=0 \
     WARDYN_DOCKER_SOCK="${ORG_DOCKER#unix://}" WARDYN_WARDYND_IMAGE="${WARDYND_IMAGE}" WARDYN_PROXY_IMAGE="${PROXY_IMAGE}" \
-    WARDYN_AGENT_IMAGES="$(jq -nc --arg cc "${AGENT_IMAGE}" '{"claude-code":$cc}')" \
+    WARDYN_AGENT_IMAGES="$(jq -nc --arg cc "${AGENT_IMAGE}" --arg aws "${AWSSSO_IMAGE}" '{"claude-code":$cc,"aws-sso":$aws}')" \
     docker compose -p "${PROJECT}" -f deploy/compose/docker-compose.yaml -f "${TMP}/override.yaml" "$@"
 }
 
@@ -112,16 +126,19 @@ cleanup() {
   stop_serve
   [[ -f "${TMP}/override.yaml" ]] && compose logs wardynd >"${EVIDENCE_DIR}/wardynd.log" 2>&1
   local label
-  for label in ${RUN_ID:+wardyn.run-id=${RUN_ID}} ${RID:+wardyn.runner-id=${RID}}; do
+  [[ -n "${LOGIN_RUN_ID}" ]] && api "${MEMBER_TOKEN}" POST "/api/v1/runs/${LOGIN_RUN_ID}/kill" >/dev/null 2>&1
+  rd rm -f "${FAKE_CONTAINER}" >/dev/null 2>&1
+  for label in ${RUN_ID:+wardyn.run-id=${RUN_ID}} ${SSO_RUN_ID:+wardyn.run-id=${SSO_RUN_ID}} ${RID:+wardyn.runner-id=${RID}}; do
     rd ps -aq --filter "label=${label}" | xargs -r docker -H "${RUNNER_DOCKER}" rm -f >/dev/null 2>&1
     rd volume ls -q --filter "label=${label}" | xargs -r docker -H "${RUNNER_DOCKER}" volume rm >/dev/null 2>&1
   done
   [[ -n "${RUN_ID}" ]] && rd network rm "wardyn-int-${RUN_ID}" >/dev/null 2>&1
+  [[ -n "${SSO_RUN_ID}" ]] && rd network rm "wardyn-int-${SSO_RUN_ID}" >/dev/null 2>&1
   rd network rm "${RUNNER_NET}" >/dev/null 2>&1
   [[ -f "${TMP}/override.yaml" ]] && compose down --volumes >/dev/null 2>&1
   if [[ "${WARDYN_LAPTOP_WALK_KEEP_IMAGES:-}" != "1" ]]; then
-    rd rmi "${WARDYND_IMAGE}" "${PROXY_IMAGE}" "${AGENT_IMAGE}" >/dev/null 2>&1
-    od rmi "${WARDYND_IMAGE}" "${PROXY_IMAGE}" >/dev/null 2>&1
+    rd rmi "${WARDYND_IMAGE}" "${PROXY_IMAGE}" "${AGENT_IMAGE}" "${AWSSSO_IMAGE}" >/dev/null 2>&1
+    od rmi "${WARDYND_IMAGE}" "${PROXY_IMAGE}" "${AWSSSO_IMAGE}" >/dev/null 2>&1
   fi
   rm -rf "${TMP}"
   echo "cleaned up ${PROJECT} on both engines"
@@ -134,7 +151,13 @@ CGO_ENABLED=0 go build -tags docker -o "${TMP}/wardyn-runnerd" ./cmd/wardyn-runn
 rd build -q -f deploy/compose/Dockerfile.wardynd -t "${WARDYND_IMAGE}" . >"${EVIDENCE_DIR}/build-wardynd.log" 2>&1 || { tail -30 "${EVIDENCE_DIR}/build-wardynd.log"; die "wardynd image build failed"; }
 rd build -q -f deploy/compose/Dockerfile.proxy -t "${PROXY_IMAGE}" . >"${EVIDENCE_DIR}/build-proxy.log" 2>&1 || { tail -30 "${EVIDENCE_DIR}/build-proxy.log"; die "proxy image build failed"; }
 rd build -q -f deploy/images/claude-code/Dockerfile -t "${AGENT_IMAGE}" . >"${EVIDENCE_DIR}/build-agent.log" 2>&1 || { tail -30 "${EVIDENCE_DIR}/build-agent.log"; die "agent image build failed"; }
-rd save "${WARDYND_IMAGE}" "${PROXY_IMAGE}" | od load -q || die "loading the org images into ${ORG_DOCKER} failed"
+rd build -q -f deploy/images/aws-sso/Dockerfile -t "${AWSSSO_IMAGE}" . >"${EVIDENCE_DIR}/build-aws-sso.log" 2>&1 || { tail -30 "${EVIDENCE_DIR}/build-aws-sso.log"; die "aws-sso image build failed"; }
+rd save "${WARDYND_IMAGE}" "${PROXY_IMAGE}" "${AWSSSO_IMAGE}" | od load -q || die "loading the org images into ${ORG_DOCKER} failed"
+CGO_ENABLED=0 go build -o "${TMP}/awsssofake" ./test/awsssofake/cmd || die "go build awsssofake failed"
+# Persistent, so the restart in step 7b can still read the captured session.
+WARDYN_AGE_KEY="$(od run --rm "${WARDYND_IMAGE}" -gen-age-key 2>/dev/null)"
+[[ "${WARDYN_AGE_KEY}" == AGE-SECRET-KEY-* ]] || die "-gen-age-key printed no key"
+export WARDYN_AGE_KEY
 
 log "minting the walk CA and the org's certificate for ${ORG_HOST}"
 mkdir -p "${TMP}/tls" && cd "${TMP}/tls" || die "no tls dir"
@@ -152,6 +175,8 @@ services:
       WARDYN_TLS_CERT: /walk-tls/tls.crt
       WARDYN_TLS_KEY: /walk-tls/tls.key
       WARDYN_RUNNER_ORG_URL: "${ORG_URL}"
+      WARDYN_ALLOW_TEST_ENDPOINTS: "true"
+      WARDYN_AWS_SSO_ENDPOINT_OVERRIDE: "${FAKE_URL}"
     volumes: ["${TMP}/tls:/walk-tls:ro"]
     healthcheck: {disable: true}
 EOF
@@ -251,6 +276,120 @@ else fail "GET /runs/{id}: $(jq -c '{placement, runner_id, runner_name, runner_p
 psql1 "SELECT data FROM audit_events WHERE run_id = '${RUN_ID}' AND action = 'run.create' AND outcome = 'success'" >"${TMP}/create.json"
 if jq -e --arg n "${RUNNER_NAME}" "${want}" "${TMP}/create.json" >/dev/null; then pass "run.create row: $(jq -c '{placement, runner_id, runner_name, runner_pool_name}' "${TMP}/create.json")"
 else fail "run.create row: $(cat "${TMP}/create.json")"; fi
+
+# STEP 7: a member's bedrock_sso run on the laptop, against test/awsssofake.
+# WHERE THE FAKE LISTENS. A run's proxy on Docker Desktop reaches beyond its two
+# networks only through host-gateway (the org's control-plane address there,
+# which liftInternalHost never lifts) or Docker Desktop's VM itself. So the fake
+# runs on the VM's host network bound to its docker0 address 172.17.0.1: no
+# subnet of the proxy, not the control plane, and not published to this host or
+# beyond. The org never calls it: the session is captured once with a long TTL,
+# so no refresh comes due, and the walk talks to it with `docker exec`.
+fake() { rd exec "${FAKE_CONTAINER}" wget -qO- -T 10 "$@"; }
+fake_post() { fake --header 'Content-Type: application/json' --post-data "$2" "${FAKE_URL}$1"; }
+# A real RegisterClient + StartDeviceAuthorization + CreateToken against the
+# fake, printed as the session blob internal/api/harnesscred.go stores.
+fake_device_login() {
+  local reg cid csec dc tok
+  reg="$(fake_post /client/register '{"clientName":"laptop-walk","clientType":"public"}')" || return 1
+  cid="$(jq -r .clientId <<<"${reg}")"; csec="$(jq -r .clientSecret <<<"${reg}")"
+  dc="$(fake_post /device_authorization "$(jq -nc --arg c "${cid}" --arg s "${csec}" --arg u "${SSO_START_URL}" '{clientId:$c,clientSecret:$s,startUrl:$u}')" | jq -r .deviceCode)" || return 1
+  tok="$(fake_post /token "$(jq -nc --arg c "${cid}" --arg s "${csec}" --arg d "${dc}" '{clientId:$c,clientSecret:$s,grantType:"urn:ietf:params:oauth:grant-type:device_code",deviceCode:$d}')")" || return 1
+  jq -c --arg cid "${cid}" --arg cs "${csec}" --arg u "${SSO_START_URL}" --arg r "${SSO_REGION}" --arg a "${PIN_ACCOUNT}" --arg role "${PIN_ROLE}" \
+    --arg exp "$(date -u -d "+$(jq -r .expiresIn <<<"${tok}") seconds" +%Y-%m-%dT%H:%M:%SZ)" --arg now "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    '{access_token:.accessToken,refresh_token:.refreshToken,client_id:$cid,client_secret:$cs,start_url:$u,region:$r,account_id:$a,role_name:$role,expires_at:$exp,captured_at:$now}' <<<"${tok}"
+}
+
+log "STEP 7 (bedrock_sso): the fake, the provider, and the member's captured session"
+FAKE_BASE="alpine@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc" # scripts/survival-walk.sh's
+ensure_image "${FAKE_BASE}" || die "no ${FAKE_BASE} on Docker Desktop"
+rd create --name "${FAKE_CONTAINER}" --network host -e "AWSSSOFAKE_ADDR=${FAKE_URL#http://}" \
+  -e "AWSSSOFAKE_ACCOUNTS=$(jq -nc --arg a "${PIN_ACCOUNT}" --arg r "${PIN_ROLE}" '[{account_id:$a,roles:[$r]}]')" \
+  -e AWSSSOFAKE_TOKEN_TTL=2h -e AWSSSOFAKE_REAUTH_AFTER=0 "${FAKE_BASE}" /awsssofake >/dev/null || die "creating the fake failed"
+rd cp "${TMP}/awsssofake" "${FAKE_CONTAINER}:/awsssofake" && rd start "${FAKE_CONTAINER}" >/dev/null || die "starting the fake failed"
+for _ in $(seq 1 15); do fake "${FAKE_URL}/_seen" >/dev/null 2>&1 && break; sleep 1; done
+fake "${FAKE_URL}/_seen" >/dev/null || die "the fake never answered at ${FAKE_URL}"
+code="$(api "${ADMIN_TOKEN}" PUT /api/v1/model-providers "$(jq -nc --arg id "${PROVIDER_ID}" --arg r "${SSO_REGION}" --arg b "${FAKE_URL}" \
+  --arg u "${SSO_START_URL}" --arg a "${PIN_ACCOUNT}" --arg role "${PIN_ROLE}" --arg m "${BEDROCK_MODEL}" \
+  '{providers:[{id:$id,kind:"bedrock_sso",bedrock:{region:$r,base_url:$b,sso_start_url:$u,sso_account_id:$a,sso_role_name:$role},harnesses:[{harness:"claude-code",model:$m}]}]}')")"
+[[ "${code}" == 200 ]] || die "PUT /model-providers answered ${code}: $(cat "${TMP}/resp.json")"
+code="$(api "${ADMIN_TOKEN}" PUT /api/v1/agent-providers "$(jq -nc --arg id "${PROVIDER_ID}" '{agents:[{id:"claude-code",default_provider:$id}]}')")"
+[[ "${code}" == 200 ]] || die "PUT /agent-providers answered ${code}: $(cat "${TMP}/resp.json")"
+# The sign-in run is placement-exempt: it lands on the org's own Docker runner, which needs limits first.
+wardyn() { WARDYN_URL="${ORG_URL}" WARDYN_ADMIN_TOKEN="${ADMIN_TOKEN}" "${TMP}/wardyn" "$@"; }
+# shellcheck source=scripts/lib/runner-limits.sh
+source "${ROOT}/scripts/lib/runner-limits.sh"
+WARDYN_SETUP_RUNNER_LIMITS="--max-runs 2 --total-cpu 4 --total-memory 8 --total-disk 40 --per-run-cpu 2 --per-run-memory 4 --per-run-disk 20" \
+  wardyn_ensure_runner_limits </dev/null || die "could not give the org's own runner its limits"
+code="$(api "${MEMBER_TOKEN}" POST "/api/v1/model-providers/${PROVIDER_ID}/sign-in")"
+LOGIN_RUN_ID="$(jq -r '.run_id // empty' "${TMP}/resp.json")"
+[[ "${code}" == 20[01] && -n "${LOGIN_RUN_ID}" ]] || die "member sign-in answered ${code}: $(cat "${TMP}/resp.json")"
+for _ in $(seq 1 60); do [[ "$(od inspect -f '{{.State.Running}}' "wardyn-agent-${LOGIN_RUN_ID}" 2>/dev/null)" == true ]] && break; sleep 2; done
+BLOB="$(fake_device_login)" || die "the device login against the fake failed"
+REAL_TOKEN="$(jq -r .access_token <<<"${BLOB}")"
+code="$(od exec "wardyn-agent-${LOGIN_RUN_ID}" sh -c "curl -sS -m 15 -o /dev/null -w '%{http_code}' -X PUT \"\${WARDYN_PROXY_URL}/wardyn/v1/sso-token/\${WARDYN_RUN_ID}\" -H 'Content-Type: application/json' -d '${BLOB}'")"
+[[ "${code}" == 204 ]] || die "capturing the member's session into sign-in run ${LOGIN_RUN_ID} answered ${code}"
+api "${MEMBER_TOKEN}" POST "/api/v1/runs/${LOGIN_RUN_ID}/kill" >/dev/null
+api "${MEMBER_TOKEN}" GET /api/v1/setup/status >/dev/null
+jq -e --arg id "${PROVIDER_ID}" '.provider_access[]? | select(.provider == $id) | .state == "live"' "${TMP}/resp.json" >/dev/null \
+  || die "the member's session is not live: $(jq -c '.provider_access' "${TMP}/resp.json")"
+pass "member's AWS SSO session captured (sign-in run ${LOGIN_RUN_ID} on the org's runner), provider ${PROVIDER_ID} live"
+
+log "STEP 7a (proxy inject on): the member's bedrock_sso agent run on the laptop"
+# A real agent run: an exec command is not a model run and gets no model access.
+# Claude Code's AWS SDK presents the placeholder its SSO cache holds to the portal,
+# the proxy swaps in the member's session on that one GetRoleCredentials, and the
+# SDK spends the role credential on the fake's Bedrock stub, whose canned answer
+# is not a model reply.
+w run --agent claude-code --placement local --policy-file "${TMP}/policy.json" --wait --timeout 8m --json \
+  --task "Reply with the single word laptop-walk." >"${TMP}/sso-run.json" 2>"${TMP}/sso-run.err" &
+cli=$!
+agent=""
+for _ in $(seq 1 90); do
+  agent="$(rd ps -q --filter label=wardyn.managed=true --filter name=wardyn-agent- --filter label=wardyn.runner-id="${RID}" | head -1)"
+  [[ -n "${agent}" ]] && break
+  sleep 2
+done
+[[ -n "${agent}" ]] || die "no agent container started on the runner"
+SSO_RUN_ID="$(rd inspect -f '{{index .Config.Labels "wardyn.run-id"}}' "${agent}")"
+rd inspect "${agent}" >"${EVIDENCE_DIR}/sso-agent-inspect.json"
+wait "${cli}"; rc=$?
+api "${MEMBER_TOKEN}" GET "/api/v1/runs/${SSO_RUN_ID}" >/dev/null
+cp "${TMP}/resp.json" "${EVIDENCE_DIR}/sso-run.json"
+if jq -e --arg n "${RUNNER_NAME}" '.placement == "local" and .runner_name == $n' "${TMP}/resp.json" >/dev/null; then
+  pass "bedrock_sso run ${SSO_RUN_ID} admitted local on ${RUNNER_NAME}, sandbox started (agent container ${agent:0:12}); end state $(jq -r .state "${TMP}/resp.json") $(jq -c '.error // .failure // empty' "${TMP}/resp.json" | head -c 200), CLI exit ${rc}"
+else fail "bedrock_sso run ${SSO_RUN_ID}: $(jq -c '{state, placement, error}' "${TMP}/resp.json"); $(tail -3 "${TMP}/sso-run.err")"; fi
+env_records="$(jq -r '.[0].Config.Env[] | select(startswith("WARDYN_AWS_SSO_CONFIG_B64=")) | sub("^[^=]*="; "")' "${EVIDENCE_DIR}/sso-agent-inspect.json")"
+decoded="$(while IFS=$'\t' read -r _ b; do [[ -n "${b}" ]] && printf '%s' "${b}" | base64 -d; done <<<"${env_records}")"
+if [[ -n "${decoded}" ]] && ! grep -qF "${REAL_TOKEN}" "${EVIDENCE_DIR}/sso-agent-inspect.json" && ! grep -qF "${REAL_TOKEN}" <<<"${decoded}"; then
+  pass "docker inspect of the agent: no real access token, raw or in WARDYN_AWS_SSO_CONFIG_B64 (its cache holds $(grep -o '"accessToken" *: *"[^"]*"' <<<"${decoded}"))"
+else fail "the agent container carries the real access token, or no SSO config at all"; fi
+seen="$(fake "${FAKE_URL}/_seen")"
+echo "${seen}" >"${EVIDENCE_DIR}/awsssofake-seen.json"
+calls="$(jq -r --arg p "${PIN_ACCOUNT}/${PIN_ROLE}" '[.sessions[].role_cred_pairs[$p] // 0] | add // 0' <<<"${seen}")"
+if [[ "${calls}" -ge 1 ]]; then
+  pass "portal GetRoleCredentials for ${PIN_ACCOUNT}/${PIN_ROLE} accepted the bearer the proxy injected (${calls} authenticated call(s); the sandbox held only the placeholder)"
+else fail "the fake saw no authenticated GetRoleCredentials: $(jq -c '{sessions, account_id, role_name}' <<<"${seen}"); egress: $(psql1 "SELECT action || ' ' || target || ' ' || coalesce(data->>'rule_source','') FROM audit_events WHERE run_id = '${SSO_RUN_ID}' AND action LIKE 'egress.%'" | tr '\n' ';')"; fi
+echo "  fake bedrock stub: $(jq -c '{bedrock_calls, bedrock_model}' <<<"${seen}"); run output tail: $(w run output "${SSO_RUN_ID}" 2>&1 | tail -c 300 | tr '\n' ' ')"
+echo "relayed rows for ${SSO_RUN_ID}: $(psql1 "SELECT action FROM audit_events WHERE run_id = '${SSO_RUN_ID}' AND data->>'relay' = 'runner:${RID}' ORDER BY seq" | tr '\n' ' ')"
+
+log "STEP 7b (proxy inject off): the same local run is refused at preflight"
+compose_env_off() { WARDYN_AWS_SSO_PROXY_INJECT=off compose "$@"; }
+compose_env_off up -d wardynd >>"${EVIDENCE_DIR}/compose-up.log" 2>&1 || die "restarting the org with proxy-inject off failed"
+wait_healthy "${ORG_URL}" 90 2 || die "the org did not come back after the restart"
+for _ in $(seq 1 30); do
+  api "${MEMBER_TOKEN}" GET "/api/v1/me/runners/${RID}" >/dev/null
+  jq -e '.online == true' "${TMP}/resp.json" >/dev/null && break
+  sleep 2
+done
+before="$(psql1 "SELECT count(*) FROM agent_runs")"
+body="$(jq -nc --slurpfile p "${TMP}/policy.json" '{agent:"claude-code",placement:"local",task:"Reply with the single word laptop-walk.",inline_policy:$p[0]}')"
+code="$(api "${MEMBER_TOKEN}" POST /api/v1/runs/preflight "${body}")"
+after="$(psql1 "SELECT count(*) FROM agent_runs")"
+if [[ "${code}" == 422 ]] && jq -e '.reason == "placement_credential"' "${TMP}/resp.json" >/dev/null \
+  && grep -qF 'SandboxSpec.SecretEnv[WARDYN_AWS_SSO_CONFIG_B64]' "${TMP}/resp.json" && [[ "${before}" == "${after}" ]]; then
+  pass "preflight with proxy-inject off: 422 placement_credential, no run created: $(jq -c . "${TMP}/resp.json" | head -c 400)"
+else fail "preflight with proxy-inject off answered ${code} (runs ${before} -> ${after}): $(head -c 600 "${TMP}/resp.json")"; fi
 
 log "STEP 6 (revoke): stop serve, revoke the dropped runner, read the pools"
 stop_serve
