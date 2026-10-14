@@ -136,6 +136,8 @@ export interface RunnerRegistrationToken {
   consumed_at?: string;
   /** On the two mint answers only: the URL `wardyn-runnerd register --org` must match. */
   org_url?: string;
+  /** The proxy image `wardyn-runnerd serve --proxy-image` needs, on the mint answers; absent on a server that does not say. */
+  proxy_image?: string;
 }
 
 /** Go: types.RunnerTokenRequest. Names the person an administrator is minting for. */

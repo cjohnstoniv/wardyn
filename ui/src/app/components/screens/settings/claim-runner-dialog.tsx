@@ -6,11 +6,13 @@
 // My runner -> Claim (M-RN-2 MR5). The claim is the security step, so it takes the whole fingerprint from
 // the person's own computer (the CLI first, or a paste) and never offers one from this page: the field
 // starts empty, and the runner row shows only an abbreviated fingerprint. A mismatch marks the field and
-// keeps the dialog open.
+// keeps the dialog open. An optional pool (one of the person's own, or a new name) takes the runner in the
+// same step, and may become their default: a claimed runner in no pool runs nothing.
 import * as React from "react";
 import { Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { HttpError } from "../../../lib/api/core";
+import { runnerPools } from "../../../lib/api/runner-pools";
 import { runners as runnersApi } from "../../../lib/api/runners";
 import { getErrorMessage } from "../../../lib/format";
 import type { RunnerView } from "../../../lib/types/runners";
@@ -19,6 +21,7 @@ import { makeMono } from "../../wardyn/code-block";
 import { CopyButton } from "../../wardyn/copy-button";
 import { Field } from "../../wardyn/form-primitives";
 import { Button } from "../../ui/button";
+import { Checkbox } from "../../ui/checkbox";
 import { Input } from "../../ui/input";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../../ui/dialog";
 
@@ -40,11 +43,26 @@ export function ClaimRunnerDialog({
   const [busy, setBusy] = React.useState(false);
   const [mismatch, setMismatch] = React.useState(false);
   const [error, setError] = React.useState("");
+  const [pool, setPool] = React.useState("");
+  const [makeDefault, setMakeDefault] = React.useState(false);
+  // The person's own pools, offered as the field's suggestions; a name outside them makes a new pool.
+  const [own, setOwn] = React.useState<{ id: string; name: string }[]>([]);
   const id = runner?.id;
   React.useEffect(() => {
     setFingerprint("");
     setMismatch(false);
     setError("");
+    setPool("");
+    setMakeDefault(false);
+    if (!id) return;
+    let live = true;
+    runnerPools
+      .list()
+      .then((l) => live && setOwn(l.pools.filter((p) => p.scope === "user")))
+      .catch(() => live && setOwn([]));
+    return () => {
+      live = false;
+    };
   }, [id]);
   // The name stays while the dialog closes, so its words do not blank during the exit.
   const last = React.useRef(runner);
@@ -59,18 +77,27 @@ export function ClaimRunnerDialog({
     setError("");
     try {
       await runnersApi.claim(shown.id, fingerprint.trim());
-      toast.success(MY_RUNNER.CLAIMED_TOAST(shown.name));
-      onOpenChange(false);
-      onClaimed();
     } catch (err) {
       if (err instanceof HttpError && err.reason === MISMATCH) setMismatch(true);
       else setError(getErrorMessage(err));
+      setBusy(false);
+      return;
+    }
+    toast.success(MY_RUNNER.CLAIMED_TOAST(shown.name));
+    // The claim stands from here on: a pool step that fails closes the dialog and says where to finish it.
+    try {
+      if (pool.trim()) await putInPool(shown.id, pool.trim(), own, makeDefault);
+    } catch (err) {
+      toast.error(MY_RUNNER.CLAIM_POOL_FAILED(shown.name, pool.trim(), getErrorMessage(err)));
     } finally {
+      onOpenChange(false);
+      onClaimed();
       setBusy(false);
     }
   };
 
   const errId = "claim-runner-mismatch";
+  const listId = "claim-runner-pools";
   return (
     <Dialog open={runner !== null} onOpenChange={(o) => !busy && onOpenChange(o)}>
       <DialogContent className="sm:max-w-lg">
@@ -103,6 +130,25 @@ export function ClaimRunnerDialog({
               onChange={(e) => setFingerprint(e.target.value)}
             />
           </Field>
+          <Field label={MY_RUNNER.FIELD_POOL} htmlFor="claim-runner-pool" hint={MY_RUNNER.POOL_HINT}>
+            <Input
+              id="claim-runner-pool"
+              autoComplete="off"
+              list={listId}
+              placeholder={MY_RUNNER.POOL_PLACEHOLDER}
+              value={pool}
+              onChange={(e) => setPool(e.target.value)}
+            />
+          </Field>
+          <datalist id={listId}>
+            {own.map((p) => (
+              <option key={p.id} value={p.name} />
+            ))}
+          </datalist>
+          <label className="flex items-center gap-2 text-body text-muted-foreground">
+            <Checkbox checked={makeDefault && pool.trim() !== ""} disabled={pool.trim() === ""} onCheckedChange={(v) => setMakeDefault(v === true)} />
+            {MY_RUNNER.POOL_DEFAULT}
+          </label>
           {mismatch && (
             <p id={errId} className="text-body text-danger">
               {MY_RUNNER.CLAIM_MISMATCH(shown.name)}
@@ -126,4 +172,11 @@ export function ClaimRunnerDialog({
       </DialogContent>
     </Dialog>
   );
+}
+
+/** Puts a runner just claimed into the person's own pool of that name, made first when they have none by it. */
+async function putInPool(runnerId: string, name: string, own: { id: string; name: string }[], makeDefault: boolean) {
+  const poolId = own.find((p) => p.name === name)?.id ?? (await runnerPools.createMine({ name })).id;
+  await runnerPools.addMyRunner(poolId, runnerId);
+  if (makeDefault) await runnerPools.setMyDefaults({ ...(await runnerPools.myDefaults()), pool_id: poolId });
 }

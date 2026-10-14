@@ -82,6 +82,9 @@ export const RUNNER_V6 = {
   AVAILABLE_ON: (name: string) => `${name} is now available to people's pools`,
   AVAILABLE_OFF: (name: string) => `${name} is no longer available to people's pools`,
   MINT_ONE_PER_COMPUTER: "One runner per computer is enough: it runs several of their runs at the same time, up to its Runs at once.",
+  MINT_START_LEAD: "Then start it:",
+  MINT_VM_DOCKER:
+    "On Docker Desktop or another Docker that runs in a virtual machine, register cannot measure free disk: add --total-disk <GB> to register, and --relay-listen 127.0.0.1 to serve.",
   MINT_ASKS_LIMITS: "It then asks for the runner's limits on that computer, prefilled with what it reports. Its owner can change them later in Your account → My runner.",
 } as const;
 
