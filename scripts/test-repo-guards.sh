@@ -59,6 +59,9 @@
 #      build-args from the matrix, and no target or cache on either side.
 #      release.yml's promote matrix carries the same rows as the build jobs, and
 #      the staged-digest proof in preflight-green keeps its three parts.
+#  17. nightly.yml's scope=candidate skips exactly the lanes a release does not
+#      gate on: a job outside notify-new-lanes.needs (and not a notify-* job)
+#      carries `if: inputs.scope != 'candidate'`, a job inside it never does.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
@@ -609,6 +612,38 @@ else
         && printf '%s' "$promote_copy" | grep -qF 'test "$got" = "$DIGEST"' \
         || { bad "$REL: the promote job's copy step must run cosign copy --force (a final tag's :latest already exists, and cosign refuses to move it without) and then check the tag's digest equals \$DIGEST"; stage_fail=1; }
     if [ "$stage_fail" = 0 ]; then ok "nightly's staged rows and build steps match release.yml's publish set (names, dockerfiles, build-args, platforms, provenance, no cache), and no local-only image is staged"; fi
+fi
+
+# ── 17. nightly scope=candidate skips exactly the unwatched lanes ───────────
+# A release candidate's dispatch (scripts/release-patch.sh) runs nightly.yml with
+# scope=candidate so it takes only the runner slots a release needs. The skip is
+# a job-level `if:`; this keeps it in step with notify-new-lanes.needs, which
+# guard 13 ties to release.yml's watched= list. A new job must pick a side, and a
+# watched job must never be skipped (green-by-tree.sh needs it to succeed).
+if ! command -v yq >/dev/null 2>&1; then
+    if [ "${CI:-}" = "true" ]; then
+        bad "yq not installed — guard 17 (nightly scope) cannot run in CI and a skip here proves nothing"
+    else
+        echo "skip: yq not installed — nightly scope guard needs it"
+    fi
+else
+    scope_fail=0
+    scope_if="inputs.scope != 'candidate'"
+    scope_needs="$(yq -r '.jobs["notify-new-lanes"].needs[]' "$NIGHTLY")"
+    for job in $jobs; do
+        has_if="$(yq -r ".jobs[\"$job\"].if // \"\"" "$NIGHTLY")"
+        case "$job" in notify-*) want_skip=no ;; *) want_skip=yes ;; esac
+        printf '%s\n' "$scope_needs" | grep -qx "$job" && want_skip=no
+        if [ "$want_skip" = yes ] && [ "$has_if" != "$scope_if" ]; then
+            bad "$NIGHTLY: job '$job' is not watched (not in notify-new-lanes.needs) so it must carry \`if: $scope_if\`, or scope=candidate runs it for nothing"; scope_fail=1
+        fi
+        if [ "$want_skip" = no ] && [ "$has_if" = "$scope_if" ]; then
+            bad "$NIGHTLY: job '$job' is watched or a notify job but scope=candidate skips it — a release candidate's dispatch would never go green"; scope_fail=1
+        fi
+    done
+    [ "$(yq -r '.on.workflow_dispatch.inputs.scope.default' "$NIGHTLY")" = full ] \
+        || { bad "$NIGHTLY: workflow_dispatch input 'scope' must exist and default to full"; scope_fail=1; }
+    if [ "$scope_fail" = 0 ]; then ok "nightly scope=candidate skips exactly the unwatched lanes"; fi
 fi
 
 if [ "$fail" = 0 ]; then echo "--- test-repo-guards: PASS ---"; else echo "--- test-repo-guards: FAIL ---"; fi

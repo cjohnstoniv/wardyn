@@ -113,9 +113,16 @@ name: Release images
 # the candidate's branch), which pushed them to the public
 # ghcr.io/cjohnstoniv/staging/<image>:run-<nightly run id>. The `promote` job
 # copies those exact digests to the release tags, then signs, scans and attests
-# them under this workflow's identity. A tag push still takes the build path
-# (the `images` and `images-ui-sandbox` jobs) until R9 flips the default in
-# preflight-green's `path` step.
+# them under this workflow's identity. A tag push takes the promote path when the
+# newest dispatched nightly on the tag's tree is green and under 24 hours old
+# (R9), and otherwise falls back to the build path (the `images` and
+# `images-ui-sandbox` jobs); preflight-green's `path` step decides and writes
+# which one it took, and why, to the job summary.
+#
+# R9 has not been exercised on GitHub: promote last ran on 2026-08-27. The first
+# real use follows one rehearsal, `gh workflow run release.yml --ref <tag-or-
+# candidate-branch> -f path=promote` (dry_run defaults to true), which resolves
+# and verifies every staged digest and copies, signs and attests nothing.
 #
 # Where the digest comes from. preflight-green resolves
 # staging/<image>:run-<nightly_run> to its index digest, for every row of the
@@ -163,6 +170,15 @@ on:
         type: choice
         options: [build, promote]
         default: build
+
+# One release run per ref at a time. A tag push and a dispatch on the same tag
+# (a rehearsal, or the `path: build` fallback) would otherwise publish the same
+# image refs concurrently. Nothing is cancelled: a half-finished publish is worse
+# than a queued one. GitHub keeps one running and one pending run per group, so a
+# third arrival replaces the pending one; re-run it if that happens.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref_name }}
+  cancel-in-progress: false
 
 jobs:
   # The gate on a release: the tag's TREE must be green, by CI and by the
@@ -214,20 +230,57 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       # Which publish path runs: build rebuilds the images at the tag, promote
-      # copies the digests the candidate's nightly staged. Only a dispatch can
-      # ask for promote; a tag push is always build. R9 changes the push
-      # default here and only here.
+      # copies the digests the candidate's nightly staged. A dispatch asks for one
+      # (the input defaults to build). A tag push promotes when green-by-tree.sh,
+      # asked with NEED_STAGING=1, finds CI green and the newest dispatched
+      # nightly green on the tag's tree, and that nightly was created under 24
+      # hours ago (the same limit the staging step enforces, so a stale nightly
+      # falls back to build here instead of failing there). Anything else, an
+      # API error included, takes build; the `green` step below then judges the
+      # tree again and fails the run if it is not green. The watched list is typed
+      # once, here, and handed to that step (test-repo-guards.sh guard 13).
       - id: path
         name: Choose the publish path
         env:
           EVENT_NAME: ${{ github.event_name }}
           PATH_INPUT: ${{ inputs.path }}
+          GH_TOKEN: ${{ github.token }}
         run: |
-          if [ "$EVENT_NAME" = workflow_dispatch ] && [ "$PATH_INPUT" = promote ]; then
-            echo "path=promote" >> "$GITHUB_OUTPUT"
+          set -uo pipefail
+          watched="task-e2e-live ssh-e2e-live test-drive ci-mode-dogfood docker-tagged-live byoi-e2e-live ui-sandbox-e2e-live kind-sso-walk kek-conformance fuzz gvisor-cc2-live kind-sso-ado-walk compose-sso-roles daemon-proxy-secret-kind provider-subscription-docker-pg managed-settings-drift"
+          echo "watched=${watched}" >> "$GITHUB_OUTPUT"
+          choice=build
+          if [ "$EVENT_NAME" = workflow_dispatch ]; then
+            reason="workflow_dispatch asked for path=${PATH_INPUT:-build}"
+            if [ "$PATH_INPUT" = promote ]; then choice=promote; fi
           else
-            echo "path=build" >> "$GITHUB_OUTPUT"
+            probe="$(WATCHED="$watched" NEED_STAGING=1 ./scripts/green-by-tree.sh "$GITHUB_SHA" 2>/tmp/probe.err)"
+            rc=$?
+            if [ "${rc}" -ne 0 ]; then
+              reason="no usable staged nightly (green-by-tree.sh exit ${rc}): $(tail -n 3 /tmp/probe.err | tr '\n' ' ')"
+            else
+              run_id="$(sed -n 's/^nightly_run=//p' <<<"$probe")"
+              created="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}" --jq .created_at)"
+              if [ -z "${created}" ]; then
+                reason="could not read the created_at of nightly run ${run_id}"
+              elif [ $(( $(date +%s) - $(date -d "${created}" +%s) )) -gt 86400 ]; then
+                reason="nightly run ${run_id} was created ${created}, more than 24 hours ago: staged images are stale"
+              else
+                choice=promote
+                reason="nightly run ${run_id} (created ${created}) is green on the tag's tree and under 24 hours old"
+              fi
+            fi
           fi
+          echo "path=${choice}" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Publish path: ${choice}"
+            echo
+            echo "${reason}"
+            if [ "${choice}" = build ]; then
+              echo
+              echo "The images are rebuilt at the tag. To promote instead, dispatch a nightly on the candidate and wait for it to go green, then re-run this workflow."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
       # The nightly RUN's own conclusion is never success: e2e-live (known-fail,
       # #965 + the OIDC-flow issue nightly.yml's own comment names) and
       # migration-merge-check (red by design, scripts/test-repo-guards.sh's
@@ -250,10 +303,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          watched="task-e2e-live ssh-e2e-live test-drive ci-mode-dogfood docker-tagged-live byoi-e2e-live ui-sandbox-e2e-live kind-sso-walk kek-conformance fuzz gvisor-cc2-live kind-sso-ado-walk compose-sso-roles daemon-proxy-secret-kind provider-subscription-docker-pg managed-settings-drift"
           need=0
           if [ "${{ steps.path.outputs.path }}" = promote ]; then need=1; fi
-          WATCHED="$watched" NEED_STAGING="$need" ./scripts/green-by-tree.sh "$GITHUB_SHA" >> "$GITHUB_OUTPUT"
+          WATCHED="${{ steps.path.outputs.watched }}" NEED_STAGING="$need" ./scripts/green-by-tree.sh "$GITHUB_SHA" >> "$GITHUB_OUTPUT"
       - name: Rehearsal — dry_run skips the preflight (no real release contract to check)
         if: inputs.dry_run == true && steps.path.outputs.path != 'promote'
         run: |
