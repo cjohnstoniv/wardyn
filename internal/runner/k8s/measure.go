@@ -7,6 +7,9 @@ package k8s
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"strings"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -18,23 +21,39 @@ import (
 
 // Measure implements runner.Measurer: the runs namespace's ResourceQuota hard requests (the quota
 // CheckFit reads), and where a quota sets none of an amount, the nodes' allocatable when the operator
-// granted the node read. An amount neither says is 0, never a guess.
+// granted the node read. An amount neither says is 0, never a guess; when any amount is 0 the error
+// says which read could not be made, with the amounts it did get.
 func (d *Driver) Measure(ctx context.Context) (types.RunnerAmounts, error) {
 	ctx, cancel := context.WithTimeout(ctx, fitReadTimeout)
 	defer cancel()
+	var why []string
 	quotas, err := d.clientset.CoreV1().ResourceQuotas(d.cfg.Namespace).List(ctx, metav1.ListOptions{})
 	if err != nil {
 		quotas = &corev1.ResourceQuotaList{}
+		why = append(why, fmt.Sprintf("ResourceQuota list in %s: %v", d.cfg.Namespace, err))
+	} else if len(quotas.Items) == 0 && !d.cfg.ReadNodes {
+		why = append(why, fmt.Sprintf("no ResourceQuota in %s and k8s.readNodes is off", d.cfg.Namespace))
 	}
 	var nodes []corev1.ResourceList
 	if d.cfg.ReadNodes {
-		if read, state := d.cachedNodes(ctx); state == runner.ReadOK {
-			for _, n := range read {
-				nodes = append(nodes, n.allocatable)
-			}
+		read, state := d.cachedNodes(ctx)
+		if state != runner.ReadOK {
+			why = append(why, fmt.Sprintf("node list: %s", state))
+		}
+		for _, n := range read {
+			nodes = append(nodes, n.allocatable)
 		}
 	}
-	return measureCluster(quotas.Items, nodes), nil
+	m := measureCluster(quotas.Items, nodes)
+	if err == nil && len(quotas.Items) > 0 && !d.cfg.ReadNodes {
+		if unset := unsetQuotaNames(m); len(unset) > 0 {
+			why = append(why, fmt.Sprintf("no ResourceQuota in %s sets %s and k8s.readNodes is off", d.cfg.Namespace, strings.Join(unset, ", ")))
+		}
+	}
+	if len(why) > 0 && (m.CPUMillis <= 0 || m.MemoryMiB <= 0 || m.DiskMiB <= 0) {
+		return m, errors.New(strings.Join(why, "; "))
+	}
+	return m, nil
 }
 
 // measureCluster is each amount from the tightest quota that sets it, else the nodes' sum.
@@ -63,4 +82,19 @@ func measureCluster(quotas []corev1.ResourceQuota, nodes []corev1.ResourceList) 
 		MemoryMiB: amount(corev1.ResourceRequestsMemory, corev1.ResourceMemory, mib),
 		DiskMiB:   amount(corev1.ResourceRequestsEphemeralStorage, corev1.ResourceEphemeralStorage, mib),
 	}
+}
+
+// unsetQuotaNames names the ResourceQuota requests that measured as 0.
+func unsetQuotaNames(m types.RunnerAmounts) []string {
+	var out []string
+	if m.CPUMillis <= 0 {
+		out = append(out, string(corev1.ResourceRequestsCPU))
+	}
+	if m.MemoryMiB <= 0 {
+		out = append(out, string(corev1.ResourceRequestsMemory))
+	}
+	if m.DiskMiB <= 0 {
+		out = append(out, string(corev1.ResourceRequestsEphemeralStorage))
+	}
+	return out
 }

@@ -4,6 +4,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"time"
 
@@ -14,8 +15,12 @@ import (
 
 func runnerCmd(client clientFn) *cobra.Command {
 	cmd := &cobra.Command{Use: "runner", Short: "Register, claim and list runners, and set your runner pool defaults"}
-	var stateDir, owner string
-	claim := &cobra.Command{Use: "claim", Short: "Claim the runner whose fingerprint is stored on this host", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
+	var stateDir, owner, pool string
+	var makeDefault bool
+	claim := &cobra.Command{Use: "claim", Short: "Claim the runner whose fingerprint is stored on this host, optionally into a pool", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
+		if makeDefault && pool == "" {
+			return errors.New("--default needs --pool")
+		}
 		if stateDir == "" {
 			var err error
 			stateDir, err = runneridentity.DefaultDir()
@@ -33,9 +38,14 @@ func runnerCmd(client clientFn) *cobra.Command {
 			return err
 		}
 		fmt.Fprintf(cmd.OutOrStdout(), "Claimed runner %s with fingerprint %s\n", registered.RunnerID, identity.Fingerprint)
-		return nil
+		if pool == "" {
+			return nil
+		}
+		return claimIntoPool(cmd, c, registered.RunnerID, pool, makeDefault)
 	}}
 	claim.Flags().StringVar(&stateDir, "state-dir", "", "private runner state directory")
+	claim.Flags().StringVar(&pool, "pool", "", "also put the runner in your user pool of this name (an id or a name), made if you have none by it")
+	claim.Flags().BoolVar(&makeDefault, "default", false, "with --pool, also make that pool your default")
 	mint := &cobra.Command{Use: "token", Short: "Mint a single-use runner registration token", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
 		c := client()
 		if err := federation.CheckOrgURL(c.BaseURL); err != nil {

@@ -7,12 +7,15 @@
 // Change disclosure. A document-only field is a read-only row with its chip.
 
 import * as React from "react";
-import { Check } from "lucide-react";
+import { Check, CircleAlert } from "lucide-react";
 import { Button } from "../../../ui/button";
 import { Chip } from "../../../wardyn/primitives";
 import { NR_REVIEW } from "../../../wardyn/copy/new-run/review";
 import type { ReviewGroupId } from "../draft/field-homes";
 import type { DocRow } from "./review-model";
+
+/** The groups a current blocker's fix lives under (groupsBlockedBy); each shows the blocker mark, not the check. */
+export const BlockedGroups = React.createContext<ReadonlySet<ReviewGroupId>>(new Set());
 
 export interface ReviewGroupProps {
   id: ReviewGroupId;
@@ -33,11 +36,19 @@ export interface ReviewGroupProps {
 export function ReviewGroup({ id, label, value, mark, detail, provenance, children, docRows = [], editor }: ReviewGroupProps) {
   const [open, setOpen] = React.useState(false);
   const regionId = `nr-edit-${id}`;
+  const blocked = React.useContext(BlockedGroups).has(id);
   return (
-    <div data-review-group={id} className="grid grid-cols-[28px_minmax(0,1fr)_auto] items-start gap-2.5 border-t border-border py-4 pr-4 pl-5 first:border-t-0">
-      <span aria-hidden="true" className="grid size-[22px] place-items-center rounded-full border border-success/35 bg-success-subtle text-success">
-        <Check className="size-3" />
-      </span>
+    <div data-review-group={id} data-blocked={blocked || undefined} className="grid grid-cols-[28px_minmax(0,1fr)_auto] items-start gap-2.5 border-t border-border py-4 pr-4 pl-5 first:border-t-0">
+      {blocked ? (
+        <span className="grid size-[22px] place-items-center rounded-full border border-danger/25 bg-danger-subtle text-danger">
+          <CircleAlert aria-hidden="true" className="size-3" />
+          <span className="sr-only">{NR_REVIEW.BADGE_ATTENTION}</span>
+        </span>
+      ) : (
+        <span aria-hidden="true" className="grid size-[22px] place-items-center rounded-full border border-success/35 bg-success-subtle text-success">
+          <Check className="size-3" />
+        </span>
+      )}
       <div className="flex min-w-0 flex-col gap-1">
         <h3 className="label-eyebrow">{label}</h3>
         {value !== undefined && <strong className="font-medium break-words text-foreground">{value}</strong>}

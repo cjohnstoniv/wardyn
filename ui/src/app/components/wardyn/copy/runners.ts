@@ -121,7 +121,7 @@ export const MY_RUNNER = {
   TOKEN_SHOWN_ONCE: "Shown once. It works once, for 1 hour.",
   TOKEN_EXPIRES: (when: string) => `Expires ${when}.`,
   STEP_SAVE_RUN: "On the computer you're registering, save it to a file only you can read, then run:",
-  STEP_CLAIM: "The runner prints its key fingerprint. Then claim it below, or run wardyn runner claim on that computer.",
+  STEP_CLAIM: "The runner prints its key fingerprint. Then claim it below, or run wardyn runner claim on that computer with your own API token in WARDYN_TOKEN. The admin token cannot claim.",
   TOKEN_EXPIRED: "This token has expired. Register again for a new one.",
   REGISTERED_NOW: (name: string) => `${name} registered. Claim it below.`,
   WAITING_LINE: (when: string, left: string) => `Registered ${when} · claim it within ${left}`,
@@ -131,10 +131,15 @@ export const MY_RUNNER = {
   NOT_MINE: "This isn't mine",
   CLAIM_TITLE: (name: string) => `Claim ${name}`,
   CLAIM_LEAD: (name: string) =>
-    `On ${name}, run wardyn runner claim. Or paste the fingerprint its runner printed when it registered — from that computer, not from this page.`,
+    `On ${name}, run wardyn runner claim with your own API token in WARDYN_TOKEN. Or paste the fingerprint its runner printed when it registered — from that computer, not from this page.`,
   FIELD_FINGERPRINT: "Fingerprint from your computer",
   FINGERPRINT_HINT: (name: string) => `Copy it from the runner's output on ${name}.`,
   CLAIM_SUBMIT: "Claim runner",
+  FIELD_POOL: "Put it in a pool (optional)",
+  POOL_HINT: "Pick one of your pools, or type a new name to make one. A claimed runner in no pool runs nothing.",
+  POOL_PLACEHOLDER: "Pool name",
+  POOL_DEFAULT: "Make it my default pool",
+  CLAIM_POOL_FAILED: (name: string, pool: string, why: string) => `${name} is claimed but isn't in ${pool}. Add it from My pools. ${why}`,
   CLAIM_MISMATCH: (name: string) =>
     `That fingerprint doesn't match ${name}'s key. Check you're claiming the computer you registered. If you didn't register ${name}, revoke it.`,
   CLAIMED_TOAST: (name: string) => `${name} is claimed. It can run your runs now.`,
@@ -149,8 +154,8 @@ export const MY_RUNNER = {
 
 // Run detail (packet M-RN-3). The packet's "Placement" is not a console word (DECISIONS 2026-10-09), so the
 // Identity row reads "Runs on" and the values name the kind of runner: a run on its owner's computer is
-// "{name} · your computer", a run on a remote-hosted runner "Remote-hosted runner" (the run read carries that
-// runner's id, not its name).
+// "{name} · your computer", a run on a remote-hosted runner "Remote-hosted runner"; the Runner and Pool rows
+// below it name the runner and the pool.
 export const RUN_PLACEMENT = {
   LABEL: "Runs on",
   /** pending W-52: the recommended text until the owner answers. */
@@ -163,6 +168,9 @@ export const RUN_PLACEMENT = {
    * this run could use.", carries the banned word "placement".
    */
   FILLED: "The only place this run could run.",
+  /** The Identity rows beside "Runs on": the runner by name (its id when the name is unknown) and its pool. */
+  RUNNER: "Runner",
+  POOL: "Pool",
   CHIP: runOnChip,
   EVIDENCE: "Evidence",
   REPORTED_BY: (name: string) => `Reported by ${name}`,

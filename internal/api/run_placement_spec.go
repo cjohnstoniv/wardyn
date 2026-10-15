@@ -304,13 +304,17 @@ func (s *Server) localResidentOrigins(ctx context.Context, owner string, rows []
 			}
 		}
 	}
+	// Only dispatchMCP writes this key: env_secret and component names refuse WARDYN_*.
+	if _, exists := p.Spec.SecretEnv[codexMCPEnv]; exists {
+		p.Origins["SandboxSpec.SecretEnv["+codexMCPEnv+"]"] = placement.CredentialOrigin{Class: placement.ClassPlatform}
+	}
 	if llm.provider == nil || llm.provider.owner != owner || llm.provider.provider.Kind != types.ModelProviderBedrockSSO {
 		return
 	}
 	own := s.ownsSecretMemoized(ctx, owner, providerSecretName(llm.provider.provider.UID, providerSSOPart))
 	for _, key := range llm.secretEnvKeys {
 		if _, exists := p.Spec.SecretEnv[key]; exists {
-			p.Origins["SandboxSpec.SecretEnv["+key+"]"] = placement.CredentialOrigin{Class: placement.ClassOwn, Delivery: placement.ClassBedrockRoleCreds, Stored: true, OwnNamespace: own, OwnerOnly: own}
+			p.Origins["SandboxSpec.SecretEnv["+key+"]"] = bedrockSSOSecretEnvOrigin(own)
 		}
 	}
 }

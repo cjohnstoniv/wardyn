@@ -82,6 +82,8 @@ type fakeDocker struct {
 	pingBlock bool
 
 	images map[string]bool // ref -> present
+	// imageArch is the architecture ImageInspect reports per ref; absent = "" (unknown).
+	imageArch map[string]string
 
 	networks map[string]client.NetworkCreateOptions // name -> opts (id == name here)
 	// subnets is each network's IPv4 subnet: the one its create asked for, or
@@ -138,6 +140,8 @@ type fakeDocker struct {
 
 	// failpoints
 	failCreateContainer string   // name prefix that should fail on create
+	failStartContainer  string   // name prefix that should fail on start (after a good create)
+	failStartMsg        string   // that failure's text; "" is "boom: start <name>"
 	failImagePull       bool     // ImagePull returns an error (image absent + unpullable)
 	createWarnings      []string // Warnings the ContainerCreate response carries (e.g. a discarded resource limit)
 	// createIDOverride, when set, is returned as ContainerCreate's ID instead of
@@ -239,6 +243,19 @@ type fakeDocker struct {
 	// bind mount, so a ProbeDrive test scripts the answer this way instead.
 	// Zero (readable) unless a test overrides it.
 	probeExitCode int64
+	// archProbeExit and archProbeLog script the arch probe container's exit code and log;
+	// archProbeRunning leaves it running, so its wait never returns.
+	archProbeExit    int64
+	archProbeLog     string
+	archProbeRunning bool
+	// failLogs makes ContainerLogs fail, as a log driver that keeps no logs does.
+	failLogs bool
+
+	// waitHangs makes ContainerWait answer nothing until the caller's ctx ends, and
+	// pullKeepsNothing makes ImagePull succeed without storing the image (the daemon
+	// dropping an in-stream pull error); both script ProbeRelay's failure shapes.
+	waitHangs        bool
+	pullKeepsNothing bool
 
 	// exitAfterInspects, keyed by container name, makes ContainerInspect report
 	// Running for that many calls and then flip the container to exited(1) on
@@ -283,6 +300,7 @@ func newFakeDocker() *fakeDocker {
 	return &fakeDocker{
 		info:       infoWithRuntimes(),
 		images:     map[string]bool{},
+		imageArch:  map[string]string{},
 		networks:   map[string]client.NetworkCreateOptions{},
 		subnets:    map[string]netip.Prefix{},
 		containers: map[string]*createdContainer{},
@@ -370,7 +388,9 @@ func (f *fakeDocker) ImagePull(ctx context.Context, ref string, _ client.ImagePu
 	if f.failImagePull {
 		return nil, fmt.Errorf("registry: denied")
 	}
-	f.images[ref] = true
+	if !f.pullKeepsNothing {
+		f.images[ref] = true
+	}
 	return fakePullResponse{io.NopCloser(strings.NewReader(`{"status":"pulled"}`))}, nil
 }
 
@@ -378,7 +398,7 @@ func (f *fakeDocker) ImageInspect(ctx context.Context, imageID string, _ ...clie
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.images[imageID] {
-		return client.ImageInspectResult{InspectResponse: image.InspectResponse{ID: imageID}}, nil
+		return client.ImageInspectResult{InspectResponse: image.InspectResponse{ID: imageID, Architecture: f.imageArch[imageID]}}, nil
 	}
 	return client.ImageInspectResult{}, fakeNotFound{msg: "no such image: " + imageID}
 }
@@ -637,7 +657,25 @@ func (f *fakeDocker) ContainerStart(ctx context.Context, id string, _ client.Con
 	if c == nil {
 		return client.ContainerStartResult{}, fakeNotFound{msg: "no such container: " + id}
 	}
-	if strings.HasPrefix(c.name, "wardyn-drive-probe-") {
+	if f.failStartContainer != "" && strings.HasPrefix(c.name, f.failStartContainer) {
+		if f.failStartMsg != "" {
+			return client.ContainerStartResult{}, errors.New(f.failStartMsg)
+		}
+		return client.ContainerStartResult{}, fmt.Errorf("boom: start %s", c.name)
+	}
+	if strings.HasPrefix(c.name, archProbeNamePrefix) {
+		// The arch probe starts the image's own entrypoint: model it as still running, or as
+		// exited with the scripted code and log (a real exec-format failure is 255).
+		if f.archProbeRunning {
+			c.state = &container.State{Status: "running", Running: true}
+		} else {
+			c.state = &container.State{Status: "exited", ExitCode: int(f.archProbeExit)}
+			if f.logs == nil {
+				f.logs = map[string][]byte{}
+			}
+			f.logs[id] = muxFrame(2, f.archProbeLog)
+		}
+	} else if strings.HasPrefix(c.name, "wardyn-drive-probe-") || strings.HasPrefix(c.name, "wardyn-relay-probe-") {
 		// No real command interpreter here to run the probe's `test -r/-x`
 		// against a bind mount — model it as already exited with the
 		// scripted code, the same "immediate" shape a real one-shot process
@@ -739,6 +777,9 @@ func (f *fakeDocker) ContainerLogs(ctx context.Context, id string, opts client.C
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.logOpts = append(f.logOpts, opts)
+	if f.failLogs {
+		return nil, errors.New("configured logging driver does not support reading")
+	}
 	if f.containers[id] == nil {
 		return nil, fakeNotFound{msg: "no such container: " + id}
 	}
@@ -841,6 +882,10 @@ func (f *fakeDocker) ContainerWait(ctx context.Context, id string, _ client.Cont
 	statusCh := make(chan container.WaitResponse, 1)
 	errCh := make(chan error, 1)
 	f.mu.Lock()
+	if f.waitHangs {
+		f.mu.Unlock()
+		return client.ContainerWaitResult{Result: statusCh, Error: errCh}
+	}
 	if f.waitErrs > 0 {
 		f.waitErrs--
 		f.mu.Unlock()
@@ -852,6 +897,9 @@ func (f *fakeDocker) ContainerWait(ctx context.Context, id string, _ client.Cont
 	f.mu.Unlock()
 	if !ok || c == nil || c.removed {
 		errCh <- fakeNotFound{msg: "no such container: " + id}
+		return client.ContainerWaitResult{Result: statusCh, Error: errCh}
+	}
+	if c.state != nil && c.state.Running && strings.HasPrefix(c.name, archProbeNamePrefix) {
 		return client.ContainerWaitResult{Result: statusCh, Error: errCh}
 	}
 	var code int64

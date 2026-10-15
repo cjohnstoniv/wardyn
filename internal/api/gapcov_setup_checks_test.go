@@ -4,10 +4,17 @@
 package api
 
 import (
+	"encoding/json"
+	"net/http"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
+	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore/keydomain"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 func TestGapCovKeyCustodyChecksSingularWording(t *testing.T) {
@@ -41,5 +48,60 @@ func TestGapCovKeyCustodyRowsAreOmittedWhenTheCountCannotBeRead(t *testing.T) {
 	}}
 	if rows := s.keyCustodyRows(t.Context()); rows != nil {
 		t.Fatalf("keyCustodyRows = %+v, want none when Postgres does not answer", rows)
+	}
+}
+
+// The runner_limits row counts the claimed runners that take no run for want of limits, names both list
+// commands and the fix, never blocks setup, and shows only to an operator.
+func TestSetupStatusRunnerLimitsRow(t *testing.T) {
+	srv, f, _ := newRunnerRegistrationServer(t)
+	rowFor := func(cookie *http.Cookie) (SetupCheck, bool) {
+		t.Helper()
+		w := doSSO(t, srv, http.MethodGet, "/api/v1/setup/status", cookie, "")
+		if w.Code != http.StatusOK {
+			t.Fatalf("GET /setup/status = %d %s", w.Code, w.Body.String())
+		}
+		var st SetupStatus
+		if err := json.Unmarshal(w.Body.Bytes(), &st); err != nil {
+			t.Fatal(err)
+		}
+		for _, c := range st.Checks {
+			if c.ID == "runner_limits" {
+				return c, true
+			}
+		}
+		return SetupCheck{}, false
+	}
+	admin := ssoSession(t, "admin", "admin@corp.example", oidc.RoleAdmin)
+	member := ssoSession(t, "alice", "alice@corp.example", oidc.RoleUser)
+	if c, ok := rowFor(admin); ok {
+		t.Fatalf("no runner lacks limits, but the row shows: %+v", c)
+	}
+
+	f.rows[uuid.New()] = types.Runner{State: types.RunnerClaimed}
+	f.rows[uuid.New()] = types.Runner{State: types.RunnerClaimed}
+	f.rows[uuid.New()] = types.Runner{State: types.RunnerClaimed, Limits: &types.RunnerLimits{RunsAtOnce: 2}}
+	f.rows[uuid.New()] = types.Runner{State: types.RunnerUnclaimed}
+	f.rows[uuid.New()] = types.Runner{State: types.RunnerRevoked}
+	c, ok := rowFor(admin)
+	if !ok || c.Status != "warn" || c.Blocking || !strings.HasPrefix(c.Detail, "2 runners have no limits set") {
+		t.Fatalf("operator row = %+v, %v; want a non-blocking warn counting the 2 claimed runners with no limits", c, ok)
+	}
+	for _, want := range []string{"wardyn runner list --all --no-limits", "wardyn runner remote list --no-limits", "wardyn runner remote propose", "wardyn runner set"} {
+		if !strings.Contains(c.Fix, want) {
+			t.Errorf("fix lacks %q: %s", want, c.Fix)
+		}
+	}
+	if c, ok := rowFor(member); ok {
+		t.Errorf("a member sees the runner_limits row: %+v", c)
+	}
+}
+
+func TestRunnerLimitsCheckWording(t *testing.T) {
+	if _, ok := runnerLimitsCheck(0); ok {
+		t.Error("no unset runner still produced a row")
+	}
+	if c, _ := runnerLimitsCheck(1); !strings.HasPrefix(c.Detail, "1 runner has no limits set") {
+		t.Errorf("one runner: %q", c.Detail)
 	}
 }

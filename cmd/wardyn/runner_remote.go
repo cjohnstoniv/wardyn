@@ -74,7 +74,7 @@ func runnerRemoteCmd(client clientFn) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			flags, err := proposedLimitFlags(rr.Usage.Reported, freeDisk)
+			flags, err := proposedLimitFlags(rr.Usage.Reported, rr.Usage.ReportedWhy, freeDisk)
 			if err != nil {
 				return err
 			}

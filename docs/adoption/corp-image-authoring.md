@@ -215,3 +215,19 @@ interactive run's boot pane. On the DEFAULT interactive run there is no seed, so
 descendant of `agent-run`, and only the image `ENV` reaches it. The `:-` defaults
 are there so an operator who deliberately wants one of these can set it to `0` on
 the run.
+
+## Multi-arch images
+
+Every image Wardyn publishes is a `linux/amd64` + `linux/arm64` index (`platforms:` in [`release.yml`](../../.github/workflows/release.yml)). A run's image ref is resolved by whichever computer runs it, so one ref must work on an ARM laptop and an x86 cluster.
+
+- Keep every ref in [`WARDYN_AGENT_IMAGES`](../ENV.md) (and every image you build from our bases) a multi-arch index with both platforms.
+- Pin an index by its **index digest** (`repo@sha256:…` from `docker buildx imagetools inspect <ref>`), never by a child-manifest digest.
+- A multi-arch index that lacks a platform fails at pull on that architecture (`no matching manifest for linux/arm64/v8`). A single-architecture image pulls anywhere and fails only when it starts on the other architecture, unless the engine emulates it. A laptop runner starts such an image once to check and refuses it, naming the image, when it cannot run (`image_arch`).
+- If your mirror publishes one architecture per tag, name both: `{"base": "<mirror>/agent-base:<tag>", "base@arm64": "<mirror>/agent-base:<tag>-arm64"}` in `WARDYN_AGENT_IMAGES`. A run on an `arm64` runner uses the `@arm64` entry; every other run uses the plain one. Set the proxy the same way with `WARDYN_PROXY_IMAGE_ARM64` (and `_AMD64`); a runner is handed the one for its architecture when it registers.
+- Build and push both platforms in one command, then check the index lists both:
+
+```sh
+docker buildx build --platform linux/amd64,linux/arm64 -f deploy/images/claude-code/Dockerfile \
+  -t <your-registry>/agent-claude-code:<tag> --push .
+docker buildx imagetools inspect <your-registry>/agent-claude-code:<tag>
+```

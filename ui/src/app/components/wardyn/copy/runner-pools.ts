@@ -60,6 +60,7 @@ export const RUNNER_V6 = {
   ORGANIZATION: "Organization",
   IN_NO_POOL: "None — runs nothing",
   MACHINE_LEGEND: "Machine is the hostname a self-hosted runner reports at register and on each connect. It is not proof of identity.",
+  ARCH: "Architecture",
   MACHINE_HINT: "The hostname the runner reports at register and on each connect. It is not proof of identity.",
   LIMITS_BY_OWNER: "Limits set by its owner",
   LIMITS_BY_ADMIN: "Set by an admin",
@@ -82,6 +83,9 @@ export const RUNNER_V6 = {
   AVAILABLE_ON: (name: string) => `${name} is now available to people's pools`,
   AVAILABLE_OFF: (name: string) => `${name} is no longer available to people's pools`,
   MINT_ONE_PER_COMPUTER: "One runner per computer is enough: it runs several of their runs at the same time, up to its Runs at once.",
+  MINT_START_LEAD: "Then start it:",
+  MINT_VM_DOCKER:
+    "On Docker Desktop, Rancher Desktop (dockerd engine) or another VM-backed engine, wardyn-runnerd finds the relay address itself and checks it at startup; pass --total-disk <GB> to register, since the VM hides the disk.",
   MINT_ASKS_LIMITS: "It then asks for the runner's limits on that computer, prefilled with what it reports. Its owner can change them later in Your account → My runner.",
 } as const;
 

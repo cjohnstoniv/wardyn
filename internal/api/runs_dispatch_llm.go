@@ -49,11 +49,13 @@ type llmTransport struct {
 	// unchanged.
 	provider *chosenProvider
 	// secretEnvKeys are the sandboxEnv variables applyBedrockTransport filled
-	// with REAL credential material — the captured AWS SSO blob. Nil for every
-	// never-resident mode (bearer) and for every non-Bedrock transport, whose
-	// env holds only placeholders. Read by dispatch's splitSecretEnv, which
-	// moves them onto SandboxSpec.SecretEnv so a substrate does not have to
-	// publish them in a readable pod spec.
+	// with REAL credential material — the captured AWS SSO blob with proxy-inject
+	// off. Nil for every never-resident mode (bearer), for the captured-SSO lane
+	// under proxy-inject (its ~/.aws holds only a placeholder, so it rides plain
+	// Env) and for every non-Bedrock transport, whose env holds only
+	// placeholders. Read by dispatch's splitSecretEnv, which moves them onto
+	// SandboxSpec.SecretEnv so a substrate does not have to publish them in a
+	// readable pod spec.
 	secretEnvKeys []string
 	// bedrockAudit is the run.bedrock.configure row applyBedrockTransport computed but
 	// did NOT record — recording it is deferred to resolveLLMInjections, past
@@ -110,14 +112,17 @@ func isModelRun(taskMode string, workspaceID, sourceID *uuid.UUID, interactive b
 // audit a "success" injection for a run the gates go on to refuse).
 //
 // The returned keys are the sandboxEnv variables holding REAL credential
-// material: only the captured SSO blob, whose base64 payload IS the access and
-// refresh token. The bearer mode holds a placeholder.
+// material: only the captured SSO blob with proxy-inject off, whose base64
+// payload IS the access and refresh token. Under proxy-inject the blob is a
+// placeholder ~/.aws (start URL, region, account id, role name), so it stays
+// in plain Env and a person's own runner can take the run; the bearer mode
+// holds a placeholder too.
 func (s *Server) applyBedrockTransport(b bedrockAuth, policy *types.RunPolicySpec, sandboxEnv map[string]string) ([]string, bedrockTransportAudit) {
 	for k, v := range b.env {
 		sandboxEnv[k] = v
 	}
 	var secretEnvKeys []string
-	if b.ssoInject && b.env[awsSSOConfigEnvVar] != "" {
+	if b.ssoInject && !b.ssoProxyInject && b.env[awsSSOConfigEnvVar] != "" {
 		secretEnvKeys = append(secretEnvKeys, awsSSOConfigEnvVar)
 	}
 	unionAllowedDomains(policy, b.egressHosts)

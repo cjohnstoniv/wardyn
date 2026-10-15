@@ -117,6 +117,13 @@ describe("state 2 — the owner, User view: the door of the run's own provider",
     expect(await screen.findByTestId("fake-pane")).toHaveAttribute("data-model-provider", bedrock.id);
   });
 
+  it("AWS refused the renewal of a STORED sign-in: the door still opens", async () => {
+    const hint = refusal(bedrock.name, "AWS refused to renew your AWS sign-in (AWS answered invalid_request: Invalid request)", CONNECT);
+    renderBlock({ hint, audit: trail(bedrock.id, "bedrock_sso"), status: providerStatus([{ provider: bedrock, state: "live" }]) });
+    expect(screen.getByText(hint)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: MODEL_ACCESS_RUN_DOOR.SIGN_IN_ARIA })).toHaveTextContent(AGENTS.SIGN_IN_AWS);
+  });
+
   it("token: Add your token opens the token door (#146 defect 2: never Sign in to AWS)", async () => {
     const hint = refusal(gateway.name, "no token is available for it", CONNECT);
     renderBlock({ hint, audit: trail(gateway.id, "custom_endpoint") });

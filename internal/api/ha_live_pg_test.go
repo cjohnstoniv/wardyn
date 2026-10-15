@@ -195,7 +195,7 @@ func TestHALivePG_AKillOnBCancelsAsInFlightCreate(t *testing.T) {
 	built := make(chan struct{})
 	go func() {
 		defer close(built)
-		a.srv.resolveCreateRunImage(t.Context(), createRunRequest{Agent: "claude-code", Image: "ubuntu:24.04"}, run2.ID, nil)
+		a.srv.resolveCreateRunImage(t.Context(), createRunRequest{Agent: "claude-code", Image: "ubuntu:24.04"}, run2, nil)
 	}()
 	waitBuild(t, builder.entered, "A's build to start")
 	if w := do(t, b.srv, http.MethodPost, "/api/v1/runs/"+run2.ID.String()+"/kill", adminToken, ""); w.Code >= 300 {

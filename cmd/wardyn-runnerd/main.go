@@ -40,6 +40,6 @@ func exitCode(ctx context.Context, err error) int {
 
 func rootCommand() *cobra.Command {
 	cmd := &cobra.Command{Use: "wardyn-runnerd", Short: "Run a registered Wardyn runner", Version: version.String(), SilenceUsage: true, SilenceErrors: true}
-	cmd.AddCommand(newRegisterCommand(), newServeCommand(productionRunnerHooks))
+	cmd.AddCommand(newRegisterCommand(), newSetupCommand(), newServeCommand(productionRunnerHooks))
 	return cmd
 }

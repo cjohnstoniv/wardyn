@@ -34,10 +34,37 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 
 const COPY_BUTTON = "gap-1.5 rounded-md border border-border bg-card px-2.5 py-1 text-xs text-foreground hover:bg-surface-2";
 
+const orgOf = (token: RunnerRegistrationToken) => token.org_url || window.location.origin + appURL("");
+
 /** The command a person runs on their own computer. */
 export function registerCommand(token: RunnerRegistrationToken, tokenFile = "/path/to/token"): string {
-  const org = token.org_url || window.location.origin + appURL("");
-  return `wardyn-runnerd register --org ${org} --token-file ${tokenFile}`;
+  return `wardyn-runnerd register --org ${orgOf(token)} --token-file ${tokenFile}`;
+}
+
+/** The command that starts the registered runner. It names the proxy image the server answered with; without one
+ * (the server keeps one image per architecture) `serve` uses the image registration handed the runner. */
+export function serveCommand(token: RunnerRegistrationToken): string {
+  const serve = `wardyn-runnerd serve --org ${orgOf(token)}`;
+  return token.proxy_image ? `${serve} --proxy-image ${token.proxy_image}` : serve;
+}
+
+/** The start command and the note for VM-backed Docker. */
+export function StartRunnerSteps({ token }: { token: RunnerRegistrationToken }) {
+  const serve = serveCommand(token);
+  return (
+    <>
+      <section className="space-y-1.5">
+        <p className="text-body text-muted-foreground">{RUNNER_V6.MINT_START_LEAD}</p>
+        <div className="flex items-center justify-between gap-2 rounded-lg border border-border bg-surface-2/60 p-3">
+          <code className="min-w-0 break-all font-mono text-xs">{serve}</code>
+          <CopyButton text={serve} label={RUNNER.COPY_COMMAND} className={COPY_BUTTON}>
+            {RUNNER.COPY_COMMAND}
+          </CopyButton>
+        </div>
+      </section>
+      <p className="text-xs text-muted-foreground">{RUNNER_V6.MINT_VM_DOCKER}</p>
+    </>
+  );
 }
 
 export function MintTokenDialog({
@@ -132,6 +159,7 @@ export function MintTokenDialog({
                     </CopyButton>
                   </div>
                 </section>
+                <StartRunnerSteps token={token} />
                 <p className="text-body text-foreground">{RUNNER_V6.MINT_ONE_PER_COMPUTER}</p>
                 <p className="text-xs text-muted-foreground">{RUNNER_V6.MINT_ASKS_LIMITS}</p>
                 <p className="text-body text-muted-foreground">{RUNNERS.MINT_NEXT(owner)}</p>

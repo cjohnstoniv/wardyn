@@ -146,6 +146,8 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_HOST_MAX_LOAD1` | int | `0` | the same refusal while the 1-minute load average (`/proc/loadavg` field 1) is above this; same host-not-cgroup reading and fail-open rule as `WARDYN_HOST_MIN_MEM_AVAILABLE_MIB`. `0` (the default) disables it (flag `-host-max-load1`) |
 | `WARDYN_RUNNER` | string | `none` | runner substrate: `none` or a registered confinement substrate (`docker` in `-tags docker` builds, `k8s` in `-tags k8s` builds — both may be registered in a `-tags docker,k8s` build; unknown/uncompiled names fail closed at boot) (flag `-runner`) |
 | `WARDYN_INTERNAL_NETWORK` | string | `wardyn-internal` | the docker network the runner attaches each run's proxy sidecar to; must match the compose control-plane network name (both derive from the compose namespace) or the sidecar lands on the wrong bridge |
+| `WARDYN_RELAY_LISTEN` | string | (unset: probed) | **`wardyn-runnerd serve` and `setup`** (flag `--relay-listen`): the run relay's address. Only loopback, the native Docker bridge's gateway or Rancher Desktop's `veth-rd-wsl` address (`admitRelayBind`); setup writes it on a VM-backed engine |
+| `WARDYN_RELAY_HOST_TARGET` | string | (unset: probed) | **`wardyn-runnerd serve` and `setup`** (flag `--relay-host-target`): what a run's proxy reaches the relay at, `host-gateway` or an IP (`parseRelayTarget`); setup writes it on a VM-backed engine |
 | `WARDYN_ALLOW_UNENFORCEABLE_CAPS` | bool | off | escape hatch: allow a run to start on a host where the resource caps (memory/pids/cpu) can't actually be enforced. Off by default, the gate fails closed; it applies to sandbox launches only. [Details](#wardyn_allow_unenforceable_caps) |
 | `WARDYN_SANDBOX_DEFAULT_CPU_MILLIS` | int | `0` (= `2000`) | milli-CPU limit for a sandbox whose policy sets none, read by every fallback site through `runner.EffectiveLimits()` (flag `-sandbox-default-cpu-millis`). The Helm chart sets `1000`. [Details](#wardyn_sandbox_default_cpu_millis) |
 | `WARDYN_SANDBOX_DEFAULT_MEMORY_MIB` | int | `0` (= `4096`) | memory limit (MiB) for a sandbox whose policy sets none, same sites as `WARDYN_SANDBOX_DEFAULT_CPU_MILLIS` (flag `-sandbox-default-memory-mib`). The Helm chart sets `2048` (`runner.sandbox.defaultResources.memoryMiB`) |
@@ -245,11 +247,13 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_CONTROL_PLANE_URL` | string | `https://wardynd:8443` | the URL every run's proxy sidecar dials to reach this daemon's **internal TLS listener**; `http://` is refused at boot unless the host is loopback (flag `-control-plane-url`). [Details](#wardyn_control_plane_url) |
 | `WARDYN_INTERNAL_LISTEN` | string | `:8443` | listen address of the proxy-facing TLS listener, served with a certificate from wardynd's own internal CA; never publish it outside the network your proxies share with wardynd (flag `-internal-listen`). [Details](#wardyn_internal_listen) |
 | `WARDYN_PROXY_IMAGE` | string | (unset) | OCI image for the wardyn-proxy sidecar (flag `-proxy-image`). **Bump it in lockstep with wardynd**: since 0.7 the sidecar decodes its config strictly (`LoadConfigBytes`, [`internal/egress/proxy/config.go`](../internal/egress/proxy/config.go)) and refuses to start on a key it cannot honour. [Details](#wardyn_proxy_image) |
+| `WARDYN_PROXY_IMAGE_AMD64` | string | (unset) | the proxy image a self-hosted runner that reports amd64 receives when it registers (flag `-proxy-image-amd64`); unset gives the runner `WARDYN_PROXY_IMAGE`. The organisation's own sandboxes always use `WARDYN_PROXY_IMAGE` |
+| `WARDYN_PROXY_IMAGE_ARM64` | string | (unset) | the proxy image a self-hosted runner that reports arm64 receives when it registers (flag `-proxy-image-arm64`); unset gives the runner `WARDYN_PROXY_IMAGE`. The organisation's own sandboxes always use `WARDYN_PROXY_IMAGE` |
 | `WARDYN_DRIVE_PROBE_IMAGE` | string | (unset = the pinned busybox-class default) | OCI image the docker runner's `host_path` user-drive **agent-readability probe** runs a container from; an operator who overrides this must make sure the image is reachable at boot (flag `-drive-probe-image`). [Details](#wardyn_drive_probe_image) |
 | `WARDYN_SANDBOX_PROXY_URL` | string | `http://wardyn-proxy:3128` | sandbox `WARDYN_PROXY_URL` override (flag `-proxy-url`) |
 | `WARDYN_GROUNDTRUTH_TOKEN_FILE` 🔒 | string | (unset) | file holding the host-sensor token. wardynd keeps it fresh and, when the internal TLS listener runs, also writes its internal CA certificate beside it as `control-plane-ca.pem` for `wardyn-tetragon-ingest` |
 | `WARDYN_PRINT_GROUNDTRUTH_TOKEN` | bool | `false` | mint+print a host-sensor token and exit (flag `-print-groundtruth-token`) |
-| `WARDYN_AGENT_IMAGES` | string (JSON) | (unset) | agent-name → OCI image ref map (flag `-agent-images`). The `base` key is what the setup connectivity probe resolves — it needs no coding agent, only `curl` |
+| `WARDYN_AGENT_IMAGES` | string (JSON) | (unset) | agent-name → OCI image ref map (flag `-agent-images`). The `base` key is what the setup probe resolves (only `curl`). Refs should be multi-arch indexes; for one architecture per tag add `<key>@arm64` or `@amd64` beside the required plain key ([why](adoption/corp-image-authoring.md#multi-arch-images)) |
 | `WARDYN_ALLOW_AGENT_TELEMETRY` | bool | (unset) | re-enable the agent CLI's own telemetry inside sandboxes. Default-unset SUPPRESSES it. [Details](#wardyn_allow_agent_telemetry) |
 | `WARDYN_ALLOW_USER_ENV_SECRET` | bool | (unset) | let MEMBERS hold `env_secret` and `file_secret` grants. Default-unset DROPS a member's `env_secret` or `file_secret` grant even when the operator's ceiling lists the exact pairing (`dropAdminOnlyEnvSecretGrants`, `inline_policy_bounds.go`). [Details](#wardyn_allow_user_env_secret) |
 | `WARDYN_EGRESS_SECOND_HUMAN` | bool | (unset) | four-eyes on egress approvals: the human who DECIDES an `egress_domain` approval must not be the human who created the run (`requireSecondHuman`, `approvals_second_human.go`). **Local mode REFUSES it**, and the `admin-token` principal BYPASSES it. [Details](#wardyn_egress_second_human) |
@@ -293,7 +297,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - The compose stack supplies `demo-admin-token` ([`deploy/compose/docker-compose.yaml`](../deploy/compose/docker-compose.yaml)).
 - Nominally authenticated: that token is published here, so wardynd warns at boot when it is in use and refuses to start outright if the listen address binds a specific non-loopback interface.
 - Note the recommended `make setup` containerized path additionally writes `WARDYN_LOCAL_MODE=true` into the compose env, so the flagship install runs the no-auth loopback local mode; the bare compose file's own default is the token.
-- There is no `WARDYN_TOKEN` fallback here; that variable is CLI-only.
+- There is no `WARDYN_TOKEN` fallback here; that variable is read by the CLI and `wardyn-runnerd setup --claim` only.
 
 ### `WARDYN_PG_DSN`
 
@@ -1448,6 +1452,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - The real access token is set on the wire as `x-amz-sso_bearer_token` at the run's own `portal.sso.<region>` host (TLS-MITM, paired injection grant).
 - And a session that lapses **mid-run HOLDS** the sandbox's next `GetRoleCredentials` call while its owner signs in again (`WARDYN_CREDENTIAL_REAUTH_TIMEOUT`, below) instead of failing the run.
 - `off`: the pre-0.7.6 behaviour — the token is written into the sandbox, no `portal.sso` MITM, no hold, no sign-in requests.
+  - A `bedrock_sso` run cannot be placed on a person's own runner with it off: it is refused at Review, preflight and create (`placement_credential`).
 - An AWS CLI component has no `off` lane: with the switch off, every run door refuses it (`component_cli_aws_inject_off`), and so does dispatch.
 - On a run whose model provider is Bedrock, the sandbox's `AWS_REGION` is the Bedrock region, and it overrides an AWS CLI component's default region for `aws`. Pass `--region` where the two differ.
 - **`off` applies to NEW dispatches only**: the placeholder cache, the injection grant and the MITM entry are all authored at dispatch.
@@ -1860,7 +1865,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 |---|---|---|---|
 | `WARDYN_URL` | string | `http://localhost:8080` | control plane URL the CLI dials, from OUTSIDE the daemon (flag `-url`); a permanent CLI-side alias, not a stale duplicate. [Details](#wardyn_url) |
 | `WARDYN_ADMIN_TOKEN` 🔒 | string | (unset) | admin bearer for CLI calls |
-| `WARDYN_TOKEN` 🔒 | string | (unset) | fallback source for the CLI's admin bearer ([`cmd/wardyn/main.go`](../cmd/wardyn/main.go)) — read by the CLI only, never by `wardynd` |
+| `WARDYN_TOKEN` 🔒 | string | (unset) | fallback source for the CLI's admin bearer ([`cmd/wardyn/main.go`](../cmd/wardyn/main.go)) — read by the CLI and by `wardyn-runnerd setup --claim` (your own personal API token), never by `wardynd` |
 | `WARDYN_CLI_ALLOW_PLAINTEXT` | bool | `false` | silence the warning the CLI prints when the admin token would travel in cleartext (`http://` to a non-loopback wardynd). Advisory only — the call is never refused; set it when TLS terminates in front of the control plane |
 
 ### `WARDYN_URL`
@@ -1933,7 +1938,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_SCAN_ONLY` | bool | (unset) | scan-only run flag |
 | `WARDYN_ARTIFACT_CONFIG_B64` 🔒 | base64 | (unset) | artifact config blob |
 | `WARDYN_CLAUDE_MANAGED_B64` 🔒 | base64 | (unset) | managed Claude credential blob |
-| `WARDYN_AWS_SSO_CONFIG_B64` 🔒 | base64 | (unset) | captured AWS SSO session, delivered as a minimal synthetic `~/.aws` (config + SSO token cache) and materialized by `agent-run`; the sandbox SDK exchanges it for short-lived Bedrock role credentials |
+| `WARDYN_AWS_SSO_CONFIG_B64` | base64 | (unset) | captured AWS SSO session as a synthetic `~/.aws`, materialized by `agent-run`. With `WARDYN_AWS_SSO_PROXY_INJECT` on (the default) it is a placeholder in plain env with no token; secret (🔒) only when proxy-inject is off |
 | `WARDYN_AZURE_CLI_CONFIG_B64` | base64 | (unset) | an Azure CLI component's generated `~/.azure`, materialized by `agent-run`: the profile listing its subscriptions and a token cache whose access token is an inert placeholder. It carries no credential (`authorAzureCLI`, [`internal/api/runs_dispatch_cli_azure.go`](../internal/api/runs_dispatch_cli_azure.go)) |
 | `WARDYN_AWS_SSO_ACCOUNT_ID` | string | (unset) | the AWS account a sign-in in the **container-login** sandbox may capture, seeded from the agent roster row's `sso_account_id`. Set together with the role below, or not at all. [Details](#wardyn_aws_sso_account_id) |
 | `WARDYN_AWS_SSO_ROLE_NAME` | string | (unset) | the IAM role the same sign-in may capture, seeded from the roster row's `sso_role_name` and verified in the pinned account. Set together with the account above. [Details](#wardyn_aws_sso_role_name) |

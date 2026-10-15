@@ -171,9 +171,13 @@ const (
 	// restricted by migration 0167, so it is off for everyone until a grant names it, a `*` allow
 	// included. Asked only by sponsorMayEnter, with the operator step off.
 	featureServiceAttach = "service_attach"
+	// featureSelfHostRunner: "may mint a registration token for a runner of my own" (POST
+	// /me/runners/tokens). Restricted by migration 0178 on the same terms as service_attach: nobody
+	// until an allow names it, an `all` allow included. Runners and claims that already exist are untouched.
+	featureSelfHostRunner = "self_host_runner"
 )
 
-var featureValues = []string{featureSSHKey, featureAPIToken, featureCustomComponent, featureServiceAttach}
+var featureValues = []string{featureSSHKey, featureAPIToken, featureCustomComponent, featureServiceAttach, featureSelfHostRunner}
 
 // capabilityKinds is the closed set, in the order the admin surface shows them.
 var capabilityKinds = []string{capEgressHost, capSecret, capWorkspace, capImage, capAgent, capWorkspaceProvider, capModelProvider, capFeature, capPolicy, capComponent}

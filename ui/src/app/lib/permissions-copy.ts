@@ -134,7 +134,7 @@ export const KIND: Record<CapabilityKind, KindCopy> = {
     label: "SSH keys and API tokens",
     blurb: "Whether a member may add an SSH key or mint an API token.",
     valueLabel: "Feature",
-    valueHint: "ssh_key or api_token. Use * for both.",
+    valueHint: "ssh_key, api_token or custom_component. Use * for those three. self_host_runner and service_attach are never covered by *: name them.",
     unenforced: "Members can add SSH keys and mint API tokens.",
     enforced:
       "A member can only add SSH keys or mint API tokens when granted. Keys and tokens they already have keep working until removed or revoked.",
@@ -167,6 +167,20 @@ export const KIND: Record<CapabilityKind, KindCopy> = {
 };
 
 // Admin surface
+
+// The Permissions row for the `self_host_runner` feature value (POST /me/runners/tokens). Restricted by
+// migration 0178, so it is off until an allow names it: the switch is the one `all` allow row.
+export const SELF_HOST = {
+  LABEL: "Self-hosted runners",
+  BLURB: "Whether a person may register a runner of their own, on their own machine.",
+  EVERYONE_CHIP: "Granted to everyone",
+  BY_GRANT_CHIP: "By grant only",
+  EVERYONE: "Everyone signed in may mint a registration token for a runner of their own. Turn this off to stop new self-hosted runners for everyone but those named below.",
+  BY_GRANT:
+    "Nobody may register a runner of their own until you grant self_host_runner, to a person or group below or to everyone with this switch. Runners already registered keep working. Admins are never asked.",
+  SWITCH: "Allow everyone to register their own runner",
+  FAILED: "Failed to save the rule",
+} as const;
 
 export const PERM = {
   TITLE: "Permissions",

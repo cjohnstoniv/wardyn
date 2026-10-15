@@ -92,6 +92,7 @@ func TestRunnerPoolMethodsHitTheirRoutes(t *testing.T) {
 		call         func() error
 	}{
 		{"GET", "/api/v1/runner-pools", func() error { _, err := c.ListRunnerPools(ctx); return err }},
+		{"GET", "/api/v1/me/runner-pools", func() error { _, err := c.ListMyRunnerPools(ctx, ""); return err }},
 		{"GET", "/api/v1/runner-pools/" + pool.String(), func() error { _, err := c.GetRunnerPool(ctx, pool); return err }},
 		{"POST", "/api/v1/runner-pools", func() error {
 			_, err := c.CreateRunnerPool(ctx, client.CreateRunnerPoolRequest{Name: name})

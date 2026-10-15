@@ -65,7 +65,7 @@ func (s *Server) runnerView(row types.Runner, used types.RunnerTally, admin bool
 		ClaimedAt: row.ClaimedAt, LastSeenAt: row.LastSeenAt, RevokedAt: row.RevokedAt,
 		RevokedBy: row.RevokedBy, RevokeReason: row.RevokeReason,
 		PostureSource: row.PostureSource, Kind: types.RunnerKindSelfHosted, Limits: row.Limits, Usage: s.selfHostedUsage(row, used),
-		MachineName: row.MachineName,
+		MachineName: row.MachineName, Arch: row.Arch,
 	}
 	if admin {
 		v.Owner = row.Owner

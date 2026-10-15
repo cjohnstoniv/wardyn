@@ -229,6 +229,16 @@ describe("Review blockers", () => {
     await waitFor(() => expect(path()).toContain("step=shape"));
   });
 
+  it("shows the blocker mark, not the check, on the group of the field a refusal names", async () => {
+    checks.current = answered(SCENARIO_PREFLIGHT.member, 1000, { preflightError: "Not available on your runner.", preflightReason: "placement_credential" });
+    open(AGENT);
+    await ready();
+    await waitFor(() => expect(within(blockerList()).getAllByRole("listitem")).toHaveLength(1));
+    const blocked = Array.from(document.querySelectorAll("[data-review-group][data-blocked]")).map((g) => g.getAttribute("data-review-group"));
+    expect(blocked).toEqual(["where"]);
+    expect(group("where").getByText(NR_REVIEW.BADGE_ATTENTION)).toBeInTheDocument();
+  });
+
   it("says the setup changed, with Check again, when the only thing wrong is a stale result", async () => {
     checks.current = answered(SCENARIO_PREFLIGHT.member, PREFLIGHT_FRESH_MS + 1);
     open(AGENT);
@@ -244,6 +254,7 @@ describe("Review groups", () => {
     await ready();
     const labels = Array.from(document.querySelectorAll("[data-review-group] h3")).map((h) => h.textContent);
     expect(labels).toEqual([NR_REVIEW.GROUP_RUN, NR_REVIEW.GROUP_WHERE, NR_REVIEW.GROUP_WORK, NR_REVIEW.GROUP_TOOLS, NR_REVIEW.GROUP_ACCESS, NR_REVIEW.GROUP_LIMITS]);
+    expect(document.querySelector("[data-review-group][data-blocked]")).toBeNull();
     expect(group("run").getByText(NR_REVIEW.VALUE_AGENT)).toBeInTheDocument();
     expect(group("run").getByText(NR_REVIEW.TIMING_INTERACTIVE)).toBeInTheDocument();
     expect(group("where").getByText(NR_REVIEW.WHERE_VALUE("General"))).toBeInTheDocument();

@@ -14,4 +14,6 @@ docs/operations/console-branding.md=943 share=35
 # docs/operations/hybrid-laptops.md 798 measured after H13 merge-prep.
 # docs/operations/hybrid-laptops.md 827 adds 29 over 798 (G-090-cleanup slice F, docs rows that contradict the code): measured; the lead re-measures at merge.
 # docs/operations/hybrid-laptops.md 900 adds 73 over 827: 0.9 final docs pass, measured: resident values are not delivered in 0.9.0, the restart row and the ingress allowlist note.
-docs/operations/hybrid-laptops.md=900 share=35
+# docs/operations/hybrid-laptops.md 1398 adds 498 over 900 (0.9.1 L8), measured: requirements, credential class table, bedrock_sso on a laptop runner, claim and self_host_runner, per-replica session closing and the shared-ingress rate-limit section.
+# docs/operations/hybrid-laptops.md 1412 adds 14 over 1398 (0.9.1 L9), measured: the VM-engine requirements line.
+docs/operations/hybrid-laptops.md=1412 share=35

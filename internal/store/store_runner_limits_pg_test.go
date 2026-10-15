@@ -566,3 +566,39 @@ func TestPG_RemoteStartKeepsItsOwnPlaceAndReservesItsStartSize(t *testing.T) {
 		t.Fatalf("in use after the start = %+v, want the size the run started with %+v", got, want)
 	}
 }
+
+// A runner's architecture is stored at registration, kept per connect (the latest winning), left alone
+// by a revoked runner, and the database refuses one the runner images are not built for.
+func TestPG_RunnerArchIsStoredAndUpdated(t *testing.T) {
+	ctx := context.Background()
+	pool := runsPGPoolIsolated(t)
+	pg := store.NewPG(pool)
+	r := newRunner("alice")
+	r.Arch = "amd64"
+	got, err := pg.CreateRunner(ctx, r)
+	if err != nil || got.Arch != "amd64" {
+		t.Fatalf("a runner registered with arch amd64 = %q, %v", got.Arch, err)
+	}
+	if err := pg.SetRunnerArch(ctx, r.ID, "arm64"); err != nil {
+		t.Fatal(err)
+	}
+	if got, err = pg.GetRunner(ctx, r.ID); err != nil || got.Arch != "arm64" {
+		t.Fatalf("after a connect reporting arm64 = %q, %v", got.Arch, err)
+	}
+	older := newRunner("alice")
+	if got, err = pg.CreateRunner(ctx, older); err != nil || got.Arch != "" {
+		t.Fatalf("a runner registered without arch = %q, %v; want none", got.Arch, err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE runners SET arch = 'riscv64' WHERE id = $1`, older.ID); err == nil {
+		t.Fatal("the database stored an unknown architecture")
+	}
+	if _, err := pg.RevokeRunner(ctx, r.ID, time.Now().UTC(), "alice", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := pg.SetRunnerArch(ctx, r.ID, "amd64"); err != nil {
+		t.Fatal(err)
+	}
+	if got, err = pg.GetRunner(ctx, r.ID); err != nil || got.Arch != "arm64" {
+		t.Fatalf("a revoked runner's arch = %q, %v; want the one it had", got.Arch, err)
+	}
+}

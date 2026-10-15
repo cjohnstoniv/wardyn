@@ -21,30 +21,20 @@ import (
 
 // localRelay is the runner's end of the internal hop (design 0.9 §4.2). A
 // local run's proxy dials its org's internal hostname, which the proxy's hosts
-// entry maps to Docker's host-gateway; this listener there copies each
-// connection, unread, over one relay stream on the runner's own session. TLS
-// ends at the org, so only ciphertext passes through, and nothing is forwarded
-// anywhere but that stream.
+// entry maps to the relay pair's target; this listener on the pair's bind
+// copies each connection, unread, over one relay stream on the runner's own
+// session. TLS ends at the org, so only ciphertext passes through, and nothing
+// is forwarded anywhere but that stream. serve sets the pair (use) only once a
+// probe container reached it (findRelay), before the runner goes online.
 type localRelay struct {
-	ctx     context.Context
-	gateway netip.Addr
-	// unusable is why this host can listen for no relay; every Ensure answers it.
-	unusable error
+	ctx context.Context
 
 	mu        sync.Mutex
+	pair      relayPair // unset until use
 	closed    bool
 	peer      *runnerwire.Peer
 	listeners map[uint16]net.Listener
 	conns     map[net.Conn]*runnerwire.Peer // each copy and the session carrying it
-}
-
-func newLocalRelay(ctx context.Context, gateway netip.Addr, bridge []netip.Addr, lookupErr error) *localRelay {
-	r := &localRelay{ctx: ctx, gateway: gateway, listeners: map[uint16]net.Listener{}, conns: map[net.Conn]*runnerwire.Peer{}}
-	r.unusable = lookupErr
-	if r.unusable == nil {
-		r.unusable = relayBind(gateway, bridge)
-	}
-	return r
 }
 
 // relayBind admits only Docker's host-gateway address held by the Docker
@@ -62,34 +52,41 @@ func relayBind(gateway netip.Addr, bridge []netip.Addr) error {
 	return nil
 }
 
-// Ensure is the Docker driver's ControlPlaneRelay: the relay listens on the
-// host-gateway address at the port of u, the run's control-plane URL.
-func (r *localRelay) Ensure(u *url.URL) error {
-	if r.unusable != nil {
-		return r.unusable
-	}
+// use sets where the relay listens and what a run's proxy reaches it at.
+func (r *localRelay) use(p relayPair) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.pair = p
+}
+
+// Ensure is the Docker driver's ControlPlaneRelay: the relay listens on its
+// bind at the port of u, the run's control-plane URL, and returns the target a
+// run's proxy reaches it at.
+func (r *localRelay) Ensure(u *url.URL) (string, error) {
 	port := uint64(443)
 	if p := u.Port(); p != "" {
 		var err error
 		if port, err = strconv.ParseUint(p, 10, 16); err != nil || port == 0 {
-			return fmt.Errorf("relay: control-plane URL port %q", p)
+			return "", fmt.Errorf("relay: control-plane URL port %q", p)
 		}
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.closed {
-		return net.ErrClosed
+	switch {
+	case r.closed:
+		return "", net.ErrClosed
+	case !r.pair.bind.IsValid():
+		return "", errors.New("relay: no address a proxy reaches has been found yet")
+	case r.listeners[uint16(port)] != nil:
+		return r.pair.target, nil
 	}
-	if r.listeners[uint16(port)] != nil {
-		return nil
-	}
-	ln, err := net.Listen("tcp", netip.AddrPortFrom(r.gateway, uint16(port)).String())
+	ln, err := net.Listen("tcp", netip.AddrPortFrom(r.pair.bind, uint16(port)).String())
 	if err != nil {
-		return fmt.Errorf("relay: %w", err)
+		return "", fmt.Errorf("relay: %w", err)
 	}
 	r.listeners[uint16(port)] = ln
 	go r.serve(ln)
-	return nil
+	return r.pair.target, nil
 }
 
 func (r *localRelay) serve(ln net.Listener) {

@@ -55,6 +55,7 @@ import { SubmittedNote } from "./governance/submitted-note";
 import { PageHeader } from "../wardyn/page-header";
 import { PreviewAsNewUser } from "../wardyn/user-preview";
 import { DefineOwnComponentsRow } from "./components/define-own-row";
+import { SelfHostRunnerRow } from "./self-host-runner-row";
 import { Chip } from "../wardyn/primitives";
 import { Segmented } from "../wardyn/segmented";
 import { EmptyState, ErrorState, TableSkeleton, loadFailStatus, type ScreenStatus } from "../wardyn/states";
@@ -335,6 +336,19 @@ export function PermissionsScreen() {
               <DefineOwnComponentsRow
                 grants={snap.grants}
                 featureEnforced={!!snap.enforcement.feature}
+                disabled={!securityOperator}
+                onGrants={(grants) => {
+                  setSnap((s) => (s ? { ...s, grants } : s));
+                  setSubmitted(false);
+                }}
+                onSubmitted={() => {
+                  setSubmitted(true);
+                  load();
+                }}
+              />
+              {/* The `self_host_runner` feature value: restricted, so its switch is the one `all` allow row. */}
+              <SelfHostRunnerRow
+                grants={snap.grants}
                 disabled={!securityOperator}
                 onGrants={(grants) => {
                   setSnap((s) => (s ? { ...s, grants } : s));

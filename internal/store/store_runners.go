@@ -52,7 +52,7 @@ var _ RunnerStore = PG{}
 var ErrRunnerClaimMismatch = errors.New("store: runner claim does not match the owner or key fingerprint")
 
 const runnerCols = `id, owner, name, public_key, key_fingerprint, state, version, created_at, claimed_at,
-	last_seen_at, revoked_at, posture, posture_reported_at, posture_source, org_url_sha256, minted_by, revoked_by, revoke_reason, max_runs, machine_name,
+	last_seen_at, revoked_at, posture, posture_reported_at, posture_source, org_url_sha256, minted_by, revoked_by, revoke_reason, max_runs, machine_name, arch,
 	` + runnerLimitCols
 
 // prefixedRunnerCols is runnerCols on a query that names the runners table r.
@@ -65,7 +65,7 @@ func scanRunner(row pgx.Row) (types.Runner, error) {
 	var lim limitCols
 	err := row.Scan(append([]any{&r.ID, &r.Owner, &r.Name, &r.PublicKey, &r.KeyFingerprint, &state, &r.Version, &r.CreatedAt,
 		&r.ClaimedAt, &r.LastSeenAt, &r.RevokedAt, &posture, &r.PostureReportedAt, &r.PostureSource, &r.OrgURLSHA256,
-		&r.MintedBy, &r.RevokedBy, &r.RevokeReason, &r.MaxRuns, &r.MachineName}, lim.targets()...)...)
+		&r.MintedBy, &r.RevokedBy, &r.RevokeReason, &r.MaxRuns, &r.MachineName, &r.Arch}, lim.targets()...)...)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return types.Runner{}, ErrNotFound
 	}
@@ -86,16 +86,16 @@ func scanRunner(row pgx.Row) (types.Runner, error) {
 // r.MaxRuns 0 is types.RunnerMaxRunsDefault.
 func (s PG) CreateRunner(ctx context.Context, r types.Runner) (types.Runner, error) {
 	const q = `
-		INSERT INTO runners (id, owner, name, public_key, key_fingerprint, version, org_url_sha256, minted_by, max_runs, machine_name,
+		INSERT INTO runners (id, owner, name, public_key, key_fingerprint, version, org_url_sha256, minted_by, max_runs, machine_name, arch,
 			` + runnerLimitCols + `)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
 		RETURNING ` + runnerCols
 	maxRuns := cmp.Or(r.MaxRuns, types.RunnerMaxRunsDefault)
 	if r.Limits != nil {
 		maxRuns = r.Limits.RunsAtOnce
 	}
 	out, err := scanRunner(s.Pool.QueryRow(ctx, q, append([]any{r.ID, r.Owner, r.Name, r.PublicKey, r.KeyFingerprint, r.Version, r.OrgURLSHA256,
-		r.MintedBy, maxRuns, r.MachineName}, limitArgs(r.Limits)...)...))
+		r.MintedBy, maxRuns, r.MachineName, r.Arch}, limitArgs(r.Limits)...)...))
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
 		return types.Runner{}, ErrConflict

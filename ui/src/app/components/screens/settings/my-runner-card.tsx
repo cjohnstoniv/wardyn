@@ -27,10 +27,10 @@ import { STATES } from "../../wardyn/states";
 import { Button } from "../../ui/button";
 import { ConfirmDialog } from "../runners/confirm-dialog";
 import { LimitsDialog } from "../runners/limits-dialog";
-import { registerCommand } from "../runners/mint-token-dialog";
+import { registerCommand, StartRunnerSteps } from "../runners/mint-token-dialog";
 import { Hint, KindChip, OfflineNote, ResourceTable, RunsLine, Sec } from "../runners/resource-table";
 import { amountsText, proposeLimits, runnerRes } from "../runners/resources";
-import { MachineText } from "../runners/runner-card";
+import { ArchText, MachineText } from "../runners/runner-card";
 import { RunnerChip } from "../runners/runner-chip";
 import { CHIP_WORD, postureLines, runnerChipKind, shortDate, sortRunners, timeLeft } from "../runners/runner-display";
 import { ClaimRunnerDialog } from "./claim-runner-dialog";
@@ -64,6 +64,7 @@ function MachineSec({ r }: { r: RunnerView }) {
   return (
     <Sec label={RUNNER_V6.MACHINE} meta={RUNNER.REPORTED} data-machine>
       <MachineText machine={r.machine_name} />
+      <ArchText arch={r.arch} />
     </Sec>
   );
 }
@@ -235,6 +236,7 @@ function TokenBlock({ token, expired, onDone }: { token: RunnerRegistrationToken
           {RUNNER.COPY_COMMAND}
         </CopyButton>
       </div>
+      <StartRunnerSteps token={token} />
       <p className="text-body text-foreground">{MY_POOLS.REGISTER_ONE_PER_COMPUTER}</p>
       <p className="text-xs text-muted-foreground">{MY_POOLS.REGISTER_ASKS_LIMITS}</p>
       <p className="text-body text-muted-foreground">{withMono(MY_RUNNER.STEP_CLAIM)}</p>
@@ -461,6 +463,7 @@ export function MyRunnerCard() {
         onOpenChange={(o) => !o && setClaiming(null)}
         onClaimed={() => {
           read(true);
+          pools.reload();
           requestAnimationFrame(() => sectionRef.current?.focus());
         }}
       />

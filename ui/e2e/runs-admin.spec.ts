@@ -261,11 +261,12 @@ test.describe("Entry to another person's run (#1476)", () => {
   // #1888: with recording known to be off the link leads to a recording that
   // cannot exist, so the sentence stands alone.
   test("with recording off, the owner line on a person's run has no Watch link", async ({ page }) => {
+    // Cache-and-serve: a round trip per /healthz poll raced teardown disposing the response.
+    let cached: Record<string, unknown> | undefined;
     await page.route("**/healthz", async (route: Route) => {
-      const response = await route.fetch();
-      const json = await response.json();
-      json.components = { ...json.components, recording: { selected: "none", source: "disabled" } };
-      await route.fulfill({ response, json });
+      cached ??= (await (await route.fetch()).json()) as Record<string, unknown>;
+      const components = { ...(cached.components as Record<string, unknown>), recording: { selected: "none", source: "disabled" } };
+      await route.fulfill({ json: { ...cached, components } });
     });
     const id = await seedRun(page, `entry no recording ${Date.now()}`, { owner: "priya@e2e.wardyn.invalid", operatorOwned: false });
     await page.goto(`runs/${id}`);

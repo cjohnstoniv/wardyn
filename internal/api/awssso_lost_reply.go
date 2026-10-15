@@ -53,6 +53,12 @@ func awsSSOEndedInvalidGrant(err error) bool {
 // row data; after_lost_reply rides it only when true.
 func awsSSORefreshFailureData(spent bool, err error, attempts int, afterLostReply bool) map[string]any {
 	data := map[string]any{"provider": awsSSOProvider, "spent": spent, "error": err.Error(), "attempts": attempts}
+	if refused, ok := awsSSORefusal(err); ok {
+		data["code"] = refused.code
+		if refused.description != "" {
+			data["description"] = refused.description
+		}
+	}
 	if afterLostReply {
 		data["after_lost_reply"] = true
 	}

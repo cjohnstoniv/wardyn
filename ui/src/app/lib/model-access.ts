@@ -99,6 +99,11 @@ const SIGN_IN_KINDS: Record<string, "aws" | "anthropic"> = {
   anthropic_subscription: "anthropic",
 };
 
+/** Whether a provider of this kind is connected by signing in, not a typed key. */
+export function signsIn(kind: string): boolean {
+  return SIGN_IN_KINDS[kind] !== undefined;
+}
+
 function providerDoor(status: SetupStatus, p: SetupModelProvider): DoorTarget {
   const login = SIGN_IN_KINDS[p.kind];
   if (login) return { kind: "signin", login, provider: p };

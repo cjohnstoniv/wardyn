@@ -22,6 +22,7 @@ const (
 	CodeEndUnsupported    Code = "end_unsupported"
 	CodeReviveUnsupported Code = "revive_unsupported"
 	CodeNeverStarted      Code = "never_started"
+	CodeImageArch         Code = "image_arch"
 	CodeRefused           Code = "refused"
 	CodeInternal          Code = "internal"
 )
@@ -37,6 +38,7 @@ var codeSentinels = []struct {
 	{CodeEndUnsupported, runner.ErrEndUnsupported},
 	{CodeReviveUnsupported, runner.ErrReviveUnsupported},
 	{CodeNeverStarted, runner.ErrExecNeverStarted},
+	{CodeImageArch, runner.ErrImageArch},
 }
 
 // Valid reports whether c is in the closed list.

@@ -28,11 +28,11 @@ func (s *Server) localCredentialIntents(r *http.Request, req createRunRequest, s
 		return nil, ref
 	}
 	if choice.chosen {
-		intent, ok := s.localProviderIntent(r, owner, choice.provider)
+		intents, ok := s.localProviderIntent(r, owner, choice.provider)
 		if !ok {
 			return nil, runError(placement.ReasonPlacementCredential.Status(), string(placement.ReasonPlacementCredential), "model_provider: unclassified credential kind")
 		}
-		out = append(out, intent)
+		out = append(out, intents...)
 	}
 	var laneHosts []string
 	for _, repo := range append(repoLocatorsOf(spec.WorkspaceRepos), req.Repo) {
@@ -47,7 +47,11 @@ func (s *Server) localCredentialIntents(r *http.Request, req createRunRequest, s
 	return out, nil
 }
 
-func (s *Server) localProviderIntent(r *http.Request, owner string, p types.ModelProvider) (placement.CredentialIntent, bool) {
+// localProviderIntent is every credential the chosen provider's dispatch arm
+// places in a spec: its proxy-side credential, and for bedrock_sso with
+// proxy-inject off the real token cache applyBedrockTransport puts in
+// SecretEnv, so create refuses what dispatch would refuse after Launch.
+func (s *Server) localProviderIntent(r *http.Request, owner string, p types.ModelProvider) ([]placement.CredentialIntent, bool) {
 	part, field := providerKeyPart, "ProxyConfig.Injection[model_provider:"+p.ID+"]"
 	switch p.Kind {
 	case types.ModelProviderAnthropicAPIKey, types.ModelProviderOpenAIAPIKey, types.ModelProviderCustomEndpoint, types.ModelProviderBedrockBearer:
@@ -59,10 +63,24 @@ func (s *Server) localProviderIntent(r *http.Request, owner string, p types.Mode
 		part = providerEntraPart
 		field = "ProxyConfig.AzureGates[model_provider:" + p.ID + "]"
 	default:
-		return placement.CredentialIntent{}, false
+		return nil, false
 	}
 	own := owner != "" && p.UID != "" && s.ownsSecretMemoized(r.Context(), owner, providerSecretName(p.UID, part))
-	return placement.CredentialIntent{Field: field, Origin: placement.CredentialOrigin{Class: placement.ClassOwn, Stored: true, OwnNamespace: own, OwnerOnly: own}}, true
+	out := []placement.CredentialIntent{{Field: field, Origin: placement.CredentialOrigin{Class: placement.ClassOwn, Stored: true, OwnNamespace: own, OwnerOnly: own}}}
+	if p.Kind == types.ModelProviderBedrockSSO && !s.cfg.AWSSSOProxyInject {
+		out = append(out, placement.CredentialIntent{Field: bedrockSSOSecretEnvField, Origin: bedrockSSOSecretEnvOrigin(own)})
+	}
+	return out, true
+}
+
+// bedrockSSOSecretEnvField is the spec path of a captured AWS SSO token cache
+// that dispatch placed in SecretEnv (proxy-inject off).
+const bedrockSSOSecretEnvField = "SandboxSpec.SecretEnv[" + awsSSOConfigEnvVar + "]"
+
+// bedrockSSOSecretEnvOrigin is that token cache's origin, at create and at
+// dispatch: the person's own session, delivered as resident role credentials.
+func bedrockSSOSecretEnvOrigin(own bool) placement.CredentialOrigin {
+	return placement.CredentialOrigin{Class: placement.ClassOwn, Delivery: placement.ClassBedrockRoleCreds, Stored: true, OwnNamespace: own, OwnerOnly: own}
 }
 
 func (s *Server) localRedirectIntents(r *http.Request, spec types.RunPolicySpec, sc types.SiteConfig, laneHosts []string) []placement.CredentialIntent {

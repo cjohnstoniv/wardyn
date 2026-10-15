@@ -1,6 +1,6 @@
 # Wardyn Published Threat Model
 
-**Version:** v2 (tracks the shipped codebase; last reviewed at v0.9.0)
+**Version:** v2 (tracks the shipped codebase; last reviewed at v0.9.1)
 **Status:** published alongside the codebase.
 
 **Implementation status markers.** Controls are tagged inline: **[shipped]**
@@ -921,8 +921,9 @@ one in v0.7.2, three in 0.8 and one in 0.8.9, and lost one in 0.8.
     and the two server-side clones, Scan and Build)
   - and — v0.8 — `feature` (whether a member may add an SSH key or mint an API token at all, and
     since 0.8.9 whether they may define a component of their own:
-  - values `ssh_key`, `api_token` and `custom_component`, a closed set refused at write time
+  - values `ssh_key`, `api_token`, `custom_component`, `service_attach` and `self_host_runner`, a closed set refused at write time
     otherwise, one check at each mint door;
+  - `service_attach` and `self_host_runner` are restricted: nobody holds them until an allow grant names them (a `*` allow grants nobody), and admins are never asked for `self_host_runner`;
   - mint only for a key or a token, so an existing one outlives a later deny until it is removed or
     revoked;
   - `custom_component` is asked when a person saves or attaches their own component, and again for
@@ -2520,6 +2521,10 @@ hiding them would repeat the failure mode we are designed to avoid.
 
 71. **The relay is opaque, and the local relay listener answers any process on the laptop that holds a run token [0.9, client mode].**
     - The runner relays TLS that ends at wardynd, so it sees ciphertext only (B6). Its listener binds the Docker host-gateway address, which any laptop process can open with a run token the developer can read (#69).
+    - On a VM-backed engine (Docker Desktop, Rancher Desktop, Colima and the like) the listener binds host loopback, so any local process or container reaching it can open TLS to the internal listener as this runner, still bounded by the run token, `relayedInternalRoutes` and `refuseRelayBinding`.
+    - Under Rancher Desktop on WSL2 the listener may instead bind the `veth-rd-wsl` address (`192.168.143.2`), a link inside the WSL VM that Windows has no route to (expected, not yet verified). Every WSL distro and every Rancher Desktop container can reach it, so it is the same trust class as loopback on Docker Desktop: any local process. `admitRelayBind` refuses an unspecified address such as `0.0.0.0` and any other interface's address on every engine.
+    - On a runner the proxy maps the control-plane name and `host.docker.internal` to the same relay target, so `onOwnSubnetOrControlPlane` excludes that address from every allow lift.
+    - `findRelay` tries up to four ordered address pairs, with up to three throwaway proxy-image containers each (`ProbeRelay`, hardened like `ProbeDrive`), and a pair passes only when the container connects and the probe listener accepts. `relay.use` then adopts the pair. Its candidate targets `192.168.5.2` and `192.168.127.254` get one TCP connect wherever the engine routes them, with nothing sent.
     - With one, a laptop process can call the relayed routes (`relayedInternalRoutes`) for its owner's local runs: decisions, activity, approvals, token renewal, own-credential injection and mint, `via_org` and recording uploads.
     - So a developer can write self-serving rows about their own run (#73) and raise approvals for it. The binding refuses every other run and every unlisted route (B6).
     - A run with an unapplied pending action is fenced on both sides: no relay and no call (`runner_action_pending`).
@@ -2540,7 +2545,8 @@ hiding them would repeat the failure mode we are designed to avoid.
     - A developer holding a run token or the runner key (#70, #71) can suppress, delay or fabricate any of them for their own runs.
     - Rows the organisation writes from its own acts — create, mint, approvals, `via_org` decisions — stay authoritative.
     - No ground truth exists for a local run: the relay refuses `/internal/groundtruth` and no host sensor runs on a laptop. Of §8's three audit streams, one is authoritative, one self-reported and one absent.
-    - A runner's `machine_name` is its own report, bounded to `253` bytes and never used for admission.
+    - A runner's `machine_name` and `arch` are its own reports; the name is bounded to `253` bytes, the arch is `amd64`, `arm64` or empty, and neither is used for admission. `arch` only picks an image variant.
+    - On an architecture mismatch the runner starts the image once, for at most 3 s, with no network, mounts or capabilities, as uid 1000, under the engine's default runtime rather than the run's class runtime (accepted: it runs nothing the following sandbox would not).
     - A self-hosted runner's limits, `max_runs` among them, are owner-set and enforced by the organisation under the runner row lock (#85). The runner's own refusal backs up a wrong count; a killed run's sandbox counts until its kill action applies.
     - This replaces #50–#52 for client mode: one writer re-chains nothing, and the open question is what the runner chose to send.
 

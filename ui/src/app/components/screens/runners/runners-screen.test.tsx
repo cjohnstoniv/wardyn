@@ -121,6 +121,7 @@ function runner(over: Partial<RunnerView> = {}): RunnerView {
     limits: { runs_at_once: 2, total: { cpu_millis: 4000, memory_mib: 8192, disk_mib: 102400 }, per_run: { cpu_millis: 2000, memory_mib: 4096, disk_mib: 51200 } },
     usage: usageWith(2),
     machine_name: "alice-mbp-16.corp.example.com",
+    arch: "arm64",
     pools: [{ id: "p-laptop", name: "Laptop" }],
     ...over,
   };
@@ -210,6 +211,7 @@ describe("Admin -> Runners list", () => {
     const laptop = (await screen.findByRole("button", { name: "laptop-7" })).closest("li") as HTMLElement;
     expect(within(laptop).getByText("Self-hosted")).toBeInTheDocument();
     expect(within(laptop).getByText("alice-mbp-16.corp.example.com")).toBeInTheDocument();
+    expect(laptop.querySelector("[data-arch]")).toHaveTextContent("Architecture: arm64");
     expect(within(laptop).getByText("alice@example.com")).toBeInTheDocument();
     expect(within(laptop).getByRole("button", { name: "Laptop" })).toBeInTheDocument();
     const cpu = within(laptop).getByRole("row", { name: /^CPU/ });
@@ -380,7 +382,8 @@ describe("Admin -> Runners drawer and revoke", () => {
     expect(within(drawer).getByText("Managed by MDM")).toBeInTheDocument();
     expect(within(drawer).getByText("Fence · Wall")).toBeInTheDocument();
     expect(within(drawer).getByText("/Users/alice/src")).toBeInTheDocument();
-    // Machine, its resources (its owner's to set) and its pools.
+    // Machine and its architecture, its resources (its owner's to set) and its pools.
+    expect(drawer.querySelector("[data-machine] [data-arch]")).toHaveTextContent("Architecture: arm64");
     expect(within(drawer).getByText("The hostname the runner reports at register and on each connect. It is not proof of identity.")).toBeInTheDocument();
     expect(within(drawer).getByText("Limits set by its owner")).toBeInTheDocument();
     expect(within(drawer).getByText("Runs at once: 2")).toBeInTheDocument();
@@ -660,6 +663,18 @@ describe("Admin -> Runners mint", () => {
     expect(within(dialog).getByText(`wardyn-runnerd register --org ${ORG} --token-file /path/to/token`)).toBeInTheDocument();
     expect(within(dialog).getByText("Their computer then waits for alice@example.com to claim it in Your account → My runner.")).toBeInTheDocument();
     expect(within(dialog).queryByRole("button", { name: /claim/i })).toBeNull();
+  });
+
+  it("carries the proxy image the answer names in the serve command (register takes none), and the VM-backed Docker note", async () => {
+    mintMock.mockResolvedValue({ ...TOKEN, owner: "alice@example.com", token: "wdr_secret", org_url: ORG, proxy_image: "ghcr.io/example/wardyn-proxy:0.9.1" });
+    const user = userEvent.setup();
+    renderScreen();
+    const dialog = await open(user);
+    setField(within(dialog).getByRole("textbox"), "alice@example.com");
+    await user.click(within(dialog).getByRole("button", { name: "Create token" }));
+    expect(await within(dialog).findByText(`wardyn-runnerd serve --org ${ORG} --proxy-image ghcr.io/example/wardyn-proxy:0.9.1`)).toBeInTheDocument();
+    expect(within(dialog).getByText(`wardyn-runnerd register --org ${ORG} --token-file /path/to/token`)).toBeInTheDocument();
+    expect(within(dialog).getByText(/finds the relay address itself and checks it at startup; pass --total-disk <GB> to register, since the VM hides the disk/)).toBeInTheDocument();
   });
 
   it("falls back to this page's address only when the answer carries no org_url", async () => {

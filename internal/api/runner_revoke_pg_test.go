@@ -111,3 +111,24 @@ func TestRunnerRevokePG_OwnerNotMineAndSecurityAdmin(t *testing.T) {
 		t.Fatal("runner.revoke does not name the security admin")
 	}
 }
+
+// The control frame to a peer inside the resume window is best effort: a session that already dropped
+// must not turn a committed revoke into an error.
+func TestRunnerRevokePG_ASessionThatAlreadyDroppedStillRevokes(t *testing.T) {
+	f := newAdmissionFixture(t)
+	s := f.connect(t, nil, f.liveRow())
+	if !f.waitReady(s) {
+		t.Fatalf("session never reached READY: %v", s.result())
+	}
+	s.cancel()
+	<-s.done // the runner's side is gone; the org hub still holds the session for the resume window
+	sec := memberModeSSOSession(t, "sec-admin", "sec@example.com", oidc.RoleSecurityAdmin, false)
+	w := doSSO(t, f.srv, http.MethodDelete, "/api/v1/runners/"+f.rn.ID.String(), sec, "")
+	var body map[string]any
+	if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &body) != nil || body["state"] != string(types.RunnerRevoked) {
+		t.Fatalf("revoke after the session dropped = %d %s, want 200 revoked", w.Code, w.Body.String())
+	}
+	if got, _ := f.st.GetRunner(f.ctx, f.rn.ID); got.State != types.RunnerRevoked {
+		t.Fatalf("stored state = %s", got.State)
+	}
+}

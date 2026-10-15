@@ -23,10 +23,10 @@ import { HarnessSetup } from "./harness-setup";
 import { SetupNeeded } from "./setup-needed";
 import { providerControlId } from "../../lenses/tools-lens";
 
-const h = vi.hoisted(() => ({ openDoor: vi.fn(), operator: false, answered: true, providers: null as unknown[] | null }));
+const h = vi.hoisted(() => ({ openDoor: vi.fn(), operator: false, answered: true, providers: null as unknown[] | null, access: null as unknown[] | null }));
 vi.mock("../../../../wardyn/model-access-context", () => ({
   useModelAccessDoor: () => ({ openDoor: h.openDoor, open: false, operator: h.operator }),
-  useShellSetupStatus: () => ({ status: { model_providers: h.providers ?? MODEL_PROVIDERS, provider_access: PROVIDER_ACCESS }, refresh: () => {} }),
+  useShellSetupStatus: () => ({ status: { model_providers: h.providers ?? MODEL_PROVIDERS, provider_access: h.access ?? PROVIDER_ACCESS }, refresh: () => {} }),
 }));
 
 const NAMES = new Map([["claude-code", "Claude Code"], ["codex-cli", "Codex CLI"], ["custom", "Your own tools"]]);
@@ -63,7 +63,7 @@ function show(facts: ToolPolicyFact[] | undefined, intent: RunIntent = CLAUDE, r
 const draft = () => JSON.parse(screen.getByTestId("draft").textContent ?? "{}") as { tools: Record<string, unknown>[]; components: Record<string, unknown>[] };
 const card = (name: string) => within(screen.getByRole("region", { name }));
 
-beforeEach(() => { h.operator = false; h.answered = true; h.providers = null; });
+beforeEach(() => { h.operator = false; h.answered = true; h.providers = null; h.access = null; });
 afterEach(() => { cleanup(); vi.clearAllMocks(); });
 
 describe("HarnessSetup", () => {
@@ -103,6 +103,16 @@ describe("HarnessSetup", () => {
       expect(screen.queryByRole("button", { name: /Sign in/ })).toBeNull();
       await userEvent.selectOptions(screen.getByLabelText(NR_TOOLS.PROVIDER_LABEL), "bedrock-sso");
       await userEvent.click(screen.getByRole("button", { name: NR_TOOLS.SETUP_SIGN_IN_TO("Bedrock (SSO)") }));
+      expect(h.openDoor).toHaveBeenCalledWith(expect.objectContaining({ for: { provider: "bedrock-sso" } }));
+    });
+
+    it("offers Sign in again on a stored sign-in, never on a stored key", async () => {
+      h.providers = MODEL_PROVIDERS;
+      show([CLAUDE_UNGATED], { tools: [{ id: "claude-code", kind: "harness", model_provider: "anthropic-key" }] });
+      expect(screen.queryByRole("button", { name: NR_TOOLS.SETUP_SIGN_IN_AGAIN })).toBeNull();
+      h.access = [{ provider: "bedrock-sso", state: "live" }];
+      await userEvent.selectOptions(screen.getByLabelText(NR_TOOLS.PROVIDER_LABEL), "bedrock-sso");
+      await userEvent.click(screen.getByRole("button", { name: NR_TOOLS.SETUP_SIGN_IN_AGAIN }));
       expect(h.openDoor).toHaveBeenCalledWith(expect.objectContaining({ for: { provider: "bedrock-sso" } }));
     });
 

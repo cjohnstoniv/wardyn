@@ -18,6 +18,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/runneridentity"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 	"github.com/cjohnstoniv/wardyn/internal/types"
+	"github.com/cjohnstoniv/wardyn/internal/version"
 	"github.com/google/uuid"
 )
 
@@ -60,7 +61,7 @@ func TestRegisterCreatesPrivateBoundIdentity(t *testing.T) {
 	}
 	text := out.String()
 	if !strings.Contains(text, "registered laptop; key fingerprint "+got.Fingerprint+"\n  limits: runs at once ") ||
-		!strings.HasSuffix(text, "\n  claim it: wardyn runner claim   (or in Your account → My runner)\n") || strings.Contains(text, token) {
+		!strings.Contains(text, "claim it in the console (Your account → My runner) with this fingerprint, or\n  WARDYN_TOKEN=<your personal API token> wardyn runner claim --pool <name> --default\n") || !strings.Contains(text, "the admin token cannot claim") || strings.Contains(text, token) {
 		t.Fatal("fingerprint absent or token printed")
 	}
 }
@@ -138,11 +139,54 @@ func TestRegisterSurfacesRefusalAndAdvisesFreshTokenOnlyWhenSpent(t *testing.T) 
 	}
 }
 
+// A 5xx with no reason of its own, or a dropped connection, says nothing about the token: the server may
+// have spent it, so the person is sent to My runners and never told to retry with the same token.
+func TestRegisterAfterAnUnclearFailureDoesNotCallTheTokenUsable(t *testing.T) {
+	for name, handler := range map[string]http.HandlerFunc{
+		"bad-gateway": func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusBadGateway) },
+		"dropped": func(w http.ResponseWriter, _ *http.Request) {
+			conn, _, _ := w.(http.Hijacker).Hijack()
+			_ = conn.Close()
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			srv := httptest.NewServer(handler)
+			defer srv.Close()
+			root := t.TempDir()
+			file := filepath.Join(root, "token")
+			if err := os.WriteFile(file, []byte("wdr_"+strings.Repeat("a", 64)), 0600); err != nil {
+				t.Fatal(err)
+			}
+			cmd := newRegisterCommand()
+			cmd.SetOut(&strings.Builder{})
+			cmd.SetErr(&strings.Builder{})
+			cmd.SetArgs([]string{"--org", srv.URL, "--token-file", file, "--state-dir", filepath.Join(root, "state")})
+			err := cmd.Execute()
+			if err == nil || !strings.Contains(err.Error(), "may have spent the token") || !strings.Contains(err.Error(), "My runners") || strings.Contains(err.Error(), "retry with it") {
+				t.Fatalf("unclear failure advice = %v", err)
+			}
+		})
+	}
+}
+
 // testHost is the computer the register tests measure: 8 CPUs, 16 GB memory, 500 GB of free disk.
 var testHost = types.RunnerAmounts{CPUMillis: 8000, MemoryMiB: 16384, DiskMiB: 500 * 1024}
 
 func init() {
 	measureHost = func(context.Context) (types.RunnerAmounts, error) { return testHost, nil }
+	engineArch = func(context.Context) string { return "arm64" }
+}
+
+// Registration sends the engine's architecture, and none when the engine could not be asked.
+func TestRegisterSendsTheEngineArch(t *testing.T) {
+	if sent, _, _, err := registerWith(t); err != nil || sent.Arch != "arm64" {
+		t.Fatalf("arch sent = %q, %v; want arm64", sent.Arch, err)
+	}
+	engineArch = func(context.Context) string { return "" }
+	t.Cleanup(func() { engineArch = func(context.Context) string { return "arm64" } })
+	if sent, _, _, err := registerWith(t); err != nil || sent.Arch != "" {
+		t.Fatalf("arch sent with no engine = %q, %v; want none", sent.Arch, err)
+	}
 }
 
 // registerWith runs register with args against a server that records the request and answers it.
@@ -219,5 +263,67 @@ func TestRegisterSendsMeasuredProposals(t *testing.T) {
 	}
 	if sent, _, _, err := registerWith(t, "--total-disk", "100"); err != nil || sent.Limits.Total.DiskMiB != 100*1024 {
 		t.Fatalf("an unmeasured disk given = %+v, %v", sent.Limits, err)
+	}
+}
+
+// registerAnswering runs register against an organisation that answers with the given proxy image,
+// and returns the state directory, the organisation URL and what register printed.
+func registerAnswering(t *testing.T, image string) (string, string, string) {
+	t.Helper()
+	var org string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req types.RunnerRegisterRequest
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(types.RunnerRegistration{RunnerID: uuid.New(), Fingerprint: runnerwire.Fingerprint(req.PublicKey),
+			State: types.RunnerUnclaimed, OrgURLSHA256: federation.OrgURLSHA256(org), Limits: req.Limits, ProxyImage: image})
+	}))
+	t.Cleanup(srv.Close)
+	org = srv.URL
+	root := t.TempDir()
+	tokenFile := filepath.Join(root, "token")
+	if err := os.WriteFile(tokenFile, []byte("wdr_"+strings.Repeat("c", 64)), 0600); err != nil {
+		t.Fatal(err)
+	}
+	state := filepath.Join(root, "identity")
+	cmd := newRegisterCommand()
+	var out strings.Builder
+	cmd.SetOut(&out)
+	cmd.SetIn(strings.NewReader(""))
+	cmd.SetArgs([]string{"--org", org, "--token-file", tokenFile, "--state-dir", state})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	return state, org, out.String()
+}
+
+// The image the organisation answers is saved in runner.json and printed with the architecture it was
+// chosen for; one that is unsafe is named and not saved, and the release image is not saved either, so
+// a later upgrade moves it.
+func TestRegisterSavesTheProxyImageTheOrganisationNamed(t *testing.T) {
+	buildVersion = func() string { return "0.9.1" }
+	t.Cleanup(func() { buildVersion = version.String })
+	state, org, out := registerAnswering(t, "mirror.example.com/wardyn-proxy:0.9.1")
+	if got, err := runneridentity.Load(state, org); err != nil || got.ProxyImage != "mirror.example.com/wardyn-proxy:0.9.1" {
+		t.Fatalf("saved image = %q, %v", got.ProxyImage, err)
+	}
+	if !strings.Contains(out, "proxy image for this runner (arm64): mirror.example.com/wardyn-proxy:0.9.1") {
+		t.Errorf("the image was not printed with its architecture:\n%s", out)
+	}
+
+	state, org, out = registerAnswering(t, "bad image;ref")
+	if got, err := runneridentity.Load(state, org); err != nil || got.ProxyImage != "" {
+		t.Fatalf("an unsafe image was saved: %q, %v", got.ProxyImage, err)
+	}
+	if !strings.Contains(out, "bad image;ref") || !strings.Contains(out, "not saved") {
+		t.Errorf("the unsafe image was not named:\n%s", out)
+	}
+
+	state, org, _ = registerAnswering(t, "ghcr.io/cjohnstoniv/wardyn-proxy:0.9.1")
+	if got, err := runneridentity.Load(state, org); err != nil || got.ProxyImage != "" {
+		t.Fatalf("the release image was saved: %q, %v", got.ProxyImage, err)
+	}
+	if raw, _ := os.ReadFile(filepath.Join(state, "runner.json")); strings.Contains(string(raw), "proxy_image") {
+		t.Errorf("runner.json carries proxy_image for the release image: %s", raw)
 	}
 }

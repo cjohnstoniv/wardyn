@@ -75,6 +75,8 @@ export interface RunnerView {
   usage: RunnerUsage;
   /** The host name the runner last reported (registration, then each connect): runner-reported, never an identity. */
   machine_name?: string;
+  /** The CPU architecture of the runner's Docker engine ("amd64" or "arm64") as last reported: runner-reported, absent until it reports one. */
+  arch?: string;
   /** The owner's live user pools this runner is a member of; [] for none. */
   pools: RunnerPoolRef[];
 }
@@ -109,7 +111,7 @@ export interface RunnerTally {
  * Go: types.RunnerUsage. `in_use` is every run holding a sandbox on the runner, from every pool;
  * `available` is the total less that, all zero while offline or with no limits. `disk_capped` false:
  * the runner cannot cap a run's disk, so its disk is counted, not capped. `reported` is what the
- * runner says it has, never a limit.
+ * runner says it has, never a limit; `reported_why` is why some of it could not be measured.
  */
 export interface RunnerUsage {
   online: boolean;
@@ -117,6 +119,7 @@ export interface RunnerUsage {
   available: RunnerTally;
   disk_capped: boolean;
   reported?: RunnerAmounts;
+  reported_why?: string;
 }
 
 /** Go: types.RunnerPoolRef: one pool a runner is a member of. */
@@ -136,6 +139,8 @@ export interface RunnerRegistrationToken {
   consumed_at?: string;
   /** On the two mint answers only: the URL `wardyn-runnerd register --org` must match. */
   org_url?: string;
+  /** On the two mint answers only, and only when the daemon has one configured: the egress-proxy image its own sandboxes run with. */
+  proxy_image?: string;
 }
 
 /** Go: types.RunnerTokenRequest. Names the person an administrator is minting for. */
@@ -151,6 +156,8 @@ export interface RunnerRegistration {
   org_url_sha256: string;
   /** The limits the server stored; null on a runner registered before they existed. */
   limits: RunnerLimits | null;
+  /** The register answer only, and only when the organisation names one: the proxy image for the architecture the runner reported. */
+  proxy_image?: string;
 }
 
 /** The revoke answers' body (an inline map in internal/api/runner_revoke.go). */

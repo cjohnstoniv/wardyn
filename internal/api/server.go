@@ -142,6 +142,12 @@ type Config struct {
 	// RunnerOrgURL is the public organisation URL bound into runner identities.
 	// Empty disables runner registration and streams; never infer it from Host.
 	RunnerOrgURL string
+	// ProxyImage is the egress-proxy image the daemon runs sandboxes with (WARDYN_PROXY_IMAGE). The runner
+	// token mint answers carry it; empty omits it.
+	ProxyImage string
+	// ProxyImageByArch holds a per-architecture proxy image (WARDYN_PROXY_IMAGE_AMD64/_ARM64), keyed amd64
+	// or arm64; a runner's register answer carries the one for its reported architecture, else ProxyImage.
+	ProxyImageByArch map[string]string
 	// RunnerHub supplies durable runner admission and lifecycle callbacks.
 	// The server always supplies OrgURL and Lookup from its own configuration.
 	RunnerHub remote.HubConfig
@@ -313,6 +319,8 @@ type Config struct {
 	// (must parse if set); nil disables the override and the convention is used
 	// for every agent.
 	AgentImages map[string]string
+	// AgentImageVariants holds the `<key>@<arch>` entries of WARDYN_AGENT_IMAGES: arch → plain key → ref.
+	AgentImageVariants map[string]map[string]string
 	// BedrockRegion is read by nothing: the boot Bedrock lane (WARDYN_BEDROCK_*)
 	// is retired and a run's region is its provider's. ponytail: kept only so
 	// the ssotoken tests that still set it compile; delete it with those lines.
@@ -865,6 +873,13 @@ type Server struct {
 	// lifetime — bound it only if that ever stops being negligible.
 	ssoRefreshMu    sync.Mutex
 	ssoRefreshSpent map[string]bool
+	// ssoRefreshRefused is the non-spent counterpart (awssso_refused.go): the
+	// refresh tokens AWS last refused to renew with a re-auth code, to the code
+	// and description it answered, also under ssoRefreshMu.
+	// ponytail: process-local, so per replica and per restart: a replica or a
+	// restarted process that has not seen the refusal grades the session live
+	// and passes Review until its own dispatch is refused and re-marks it.
+	ssoRefreshRefused map[string]string
 	// adoEntraTokens reuses a minted Azure DevOps access token across the
 	// per-host grants of one run (injection_ado.go), so a sidecar's boot does
 	// not rotate one person's refresh token once per host.

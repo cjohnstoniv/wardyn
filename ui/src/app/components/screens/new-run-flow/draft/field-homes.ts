@@ -82,7 +82,7 @@ export const HOME_OF_REASON: Record<KnownLaunchReason, FieldHome> = {
   runner_offline: "run", runner_at_capacity: "run", runner_limits_unset: "run", runner_ambiguous: "run", runner_not_found: "run", runner_unclaimed: "run", runner_revoked: "run",
   runner_token_invalid: "run", runner_claim_mismatch: "run", runner_posture_unmet: "run", runner_keystore_unavailable: "run",
   runner_action_pending: "run", relay_runner_mismatch: "run", relay_required: "run", relay_route_refused: "run",
-  placement_credential: "tools", placement_component_self_defined: "tools", placement_capability: "tools",
+  placement_credential: "run", placement_component_self_defined: "tools", placement_capability: "tools",
   delivery_via_org: "tools", delivery_runner_resident: "tools", delivery_not_via_org: "tools",
   via_org_destination_refused: "tools", via_org_cap_exceeded: "tools",
   placement_local_path: "files",
@@ -104,6 +104,17 @@ export const HOME_OF_REASON: Record<KnownLaunchReason, FieldHome> = {
   harness_not_installed: "harnesses", harness_set_no_image: "harnesses", harness_set_custom_image: "harnesses",
   harness_providers_conflict: "harnesses",
 };
+
+/** The one field a refusal names, where it names one: the run's runner, chosen through its pool. */
+export const FIELD_OF_REASON: Partial<Record<KnownLaunchReason, string>> = {
+  placement_credential: "runner_pool_id",
+};
+
+/** A document path's Review group: its top-level field's (or `inline_policy.<name>`). */
+export function groupOfPath(path: string): ReviewGroupId | undefined {
+  const [top, policyField] = path.replace(/\[\d*\]/g, "").split(".");
+  return (top === "inline_policy" && policyField && REVIEW_GROUP_OF_FIELD[`inline_policy.${policyField}`]) || REVIEW_GROUP_OF_FIELD[top];
+}
 
 /** A refusal's step; a reason the console does not know goes to Review. */
 export const homeOfReason = (reason: string): FieldHome =>

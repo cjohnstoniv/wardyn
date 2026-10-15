@@ -15,7 +15,9 @@ import { NR_SHARED } from "../../../wardyn/copy/new-run/shared";
 import { NR_TEMPLATES } from "../../../wardyn/copy/new-run/templates";
 import type { SetupItem } from "../../../../lib/types/preflight";
 import type { TemplateSetupNeed } from "../../../../lib/types/templates";
-import { homeOfPath, homeOfReason, type FieldHome } from "../draft/field-homes";
+import {
+  FIELD_HOME_OVERRIDES, FIELD_OF_REASON, groupOfPath, homeOfPath, homeOfReason, REVIEW_GROUP_OF_FIELD, type FieldHome, type ReviewGroupId,
+} from "../draft/field-homes";
 import type { NewRunLocation } from "../draft/new-run-url";
 import type { RunIntent } from "../draft/run-intent";
 import type { StepIssue, StepIssueCode } from "../lenses/step-issues";
@@ -28,6 +30,8 @@ export interface Blocker {
   text: string;
   /** Where the fix lives; absent when it lives on Review itself. */
   to?: NewRunLocation;
+  /** The one field it names, when it names one: only that field's Review group shows it. */
+  field?: string;
 }
 
 /** The screen a field's fix lives on. Review and excluded fields have none to link to. */
@@ -87,20 +91,38 @@ export function buildBlockers(input: BlockerInput): Blocker[] {
     out.push({ id: `local:${i.code}`, kind: "local", text: ISSUE_TEXT[i.code] || HOME_LABEL[i.home], to: locationOfHome(i.home) });
   }
   for (const path of input.unsupported) {
-    out.push({ id: `unsupported:${path}`, kind: "unsupported", text: NR_REVIEW.BLOCKER_UNSUPPORTED(path), to: locationOfHome(homeOfPath(path) ?? "document") });
+    out.push({ id: `unsupported:${path}`, kind: "unsupported", text: NR_REVIEW.BLOCKER_UNSUPPORTED(path), to: locationOfHome(homeOfPath(path) ?? "document"), field: path });
   }
   for (const need of input.templateNeeds) {
-    out.push({ id: `template:${need.field}`, kind: "template_setup", text: NR_TEMPLATES.NEEDS_SETUP(fieldLabel(need.field)), to: locationOfHome(homeOfPath(need.field)) });
+    out.push({ id: `template:${need.field}`, kind: "template_setup", text: NR_TEMPLATES.NEEDS_SETUP(fieldLabel(need.field)), to: locationOfHome(homeOfPath(need.field)), field: need.field });
   }
   if (input.templateUnread) out.push({ id: "template:unread", kind: "template_unread", text: NR_REVIEW.BLOCKER_STALE });
   if (input.refusal) {
-    out.push({ id: "refusal", kind: "refusal", text: input.refusal.text, to: locationOfHome(homeOfReason(input.refusal.reason)) });
+    const field = (FIELD_OF_REASON as Record<string, string | undefined>)[input.refusal.reason];
+    out.push({ id: "refusal", kind: "refusal", text: input.refusal.text, to: locationOfHome(homeOfReason(input.refusal.reason)), ...(field && { field }) });
   }
   for (const item of input.setupItems) {
     out.push({ id: `setup:${item.id}`, kind: "setup_item", text: item.detail || item.label, to: { screen: "step", step: "tools" } });
   }
   // A stale result only matters when nothing else already holds Launch.
   if (input.stale && out.length === 0) out.push({ id: "stale", kind: "stale", text: NR_REVIEW.BLOCKER_STALE });
+  return out;
+}
+
+/** Every path with a home: the registry fields and the subpaths homed apart from their field. */
+const HOMED_PATHS = [...Object.keys(REVIEW_GROUP_OF_FIELD), ...Object.keys(FIELD_HOME_OVERRIDES)];
+
+/**
+ * The Review groups a blocker's fix lives under: the group of the one field it names, else every group
+ * showing a field the step it links to edits.
+ */
+export function groupsBlockedBy(blockers: readonly Blocker[]): Set<ReviewGroupId> {
+  const out = new Set<ReviewGroupId>();
+  for (const b of blockers) {
+    const step = b.to?.screen === "step" ? b.to.step : undefined;
+    const groups = b.field ? [groupOfPath(b.field)] : HOMED_PATHS.filter((p) => step && homeOfPath(p) === step).map(groupOfPath);
+    for (const g of groups) if (g) out.add(g);
+  }
   return out;
 }
 

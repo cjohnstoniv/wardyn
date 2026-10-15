@@ -763,6 +763,7 @@ var setupCheckNeverBlocks = map[string]bool{
 	"scm_provider": true, "host_proxy": true, "artifact_repo": true,
 	"permissions_posture": true, "llm_provider": true, "bedrock_provider": true, "audit_partitions": true,
 	"agent_image":        true,
+	"runner_limits":      true,
 	"github_ref_ruleset": true, "platform_wsl": true, "platform_macos": true,
 	// providerAccessCheck's llm_provider:<provider id>, as its test names it.
 	"llm_provider:corp-gateway": true,
@@ -797,6 +798,9 @@ func TestSetupCheckBlocking(t *testing.T) {
 	// arms — ssoRBACCheck has two distinct warn causes (#484's original and
 	// #491's default-role cause), both exercised below.
 	assertSetupCheckBlocking(t, runnerCheck(SetupRunner{Driver: "none"}))
+	if chk, ok := runnerLimitsCheck(2); ok {
+		assertSetupCheckBlocking(t, chk)
+	}
 	assertSetupCheckBlocking(t, runnerCheck(SetupRunner{Driver: "docker", ConfinementClasses: []string{"CC1"}}))
 	assertSetupCheckBlocking(t, runnerCheck(SetupRunner{Driver: "docker", ConfinementClasses: []string{"CC1", "CC2"}}))
 

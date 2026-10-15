@@ -199,7 +199,7 @@ pass "C8c the migrator rationale names every ownership-requiring migration on th
 # newest CHANGELOG section that carries a "Split-role installs" bullet. When a
 # release is cut, set UNRELEASED_FROM to the first migration after it; the next
 # release's tables then go in a new bullet under its own heading.
-UNRELEASED_FROM=0178 # v0.9.0 ships migrations up to 0177
+UNRELEASED_FROM=0179 # v0.9.1 ships migrations up to 0178
 split_note="$(awk '
   /^## \[/ { if (found) exit }
   /^- Split-role installs/ { found = 1; on = 1; print; next }

@@ -173,6 +173,9 @@ func (s *Server) newStepRun(ctx context.Context, runID uuid.UUID, actor, task st
 		Agent: stepRunAgent, Task: task,
 		ConfinementClass: cc, State: types.RunPending, SPIFFEID: id.SPIFFEID,
 		RunnerTarget: s.cfg.RunnerTarget, OperatorOwned: operatorOwned, HumanAuthor: requestSponsor(ctx, actor),
+		// No pool places a run Wardyn launches itself: it goes to the deployment's remote-hosted substrate
+		// (createSandboxAtTarget), so the row says so rather than reading as "not recorded".
+		Placement: types.PlacementRemote,
 	}
 	s.captureRunLimits(&run, gov.ceiling, nil)
 	if set != nil {
