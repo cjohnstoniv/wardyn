@@ -6,11 +6,13 @@
 package docker
 
 import (
+	"bytes"
 	"context"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/moby/moby/api/pkg/stdcopy"
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/client"
 
@@ -30,12 +32,26 @@ const (
 // A variable so a test need not wait it out.
 var archProbeWait = 3 * time.Second
 
+// archVerdictKind is what a probe proved.
+type archVerdictKind int
+
+const (
+	archInconclusive archVerdictKind = iota // the probe could not tell: allow this once, cache nothing
+	archRunnable                            // the image started, or exited without an exec format error
+	archUnrunnable                          // the engine cannot exec the image
+)
+
 // probeExecFormat starts ref once under its own entrypoint, with no network, no mounts and the
-// hardened settings, and reports whether it proved the engine cannot run it: the container
-// exited and its log says "exec format error", or the start itself failed with it (crun reports
-// it from the start call; runc and crun differ in case, so the match ignores case). Every other
-// outcome, including a probe that failed to run, proves nothing and reports false.
-func (d *Driver) probeExecFormat(ctx context.Context, ref string) bool {
+// hardened settings, and reports what that proved. Only two outcomes prove anything: the container
+// exited and its log says "exec format error" (or the start itself failed with it; crun reports it
+// from the start call, and runc and crun differ in case, so the match ignores case), which is
+// archUnrunnable; and a container still running at archProbeWait or exited with a clean log,
+// which is archRunnable. Everything else (no command to run, a wait error, a cancelled ctx, an
+// unreadable log) is archInconclusive.
+//
+// The probe runs under the engine's default runtime, not the confinement class's runtime: it is
+// a bare start of an image the engine already holds, with nothing mounted and no network.
+func (d *Driver) probeExecFormat(ctx context.Context, ref string) archVerdictKind {
 	ctx, cancel := context.WithTimeout(ctx, archProbeSetup+archProbeWait)
 	defer cancel()
 
@@ -62,24 +78,52 @@ func (d *Driver) probeExecFormat(ctx context.Context, ref string) bool {
 	})
 	if err != nil {
 		remove(name) // a create that timed out client-side may still have made it
-		return false
+		return archInconclusive
 	}
 	defer remove(created.ID)
 
 	if _, err := d.cli.ContainerStart(ctx, created.ID, client.ContainerStartOptions{}); err != nil {
-		return isExecFormat(err.Error())
+		if isExecFormat(err.Error()) {
+			return archUnrunnable
+		}
+		return archInconclusive
 	}
 	wait := d.cli.ContainerWait(ctx, created.ID, client.ContainerWaitOptions{Condition: container.WaitConditionNotRunning})
 	timer := time.NewTimer(archProbeWait)
 	defer timer.Stop()
 	select {
 	case res := <-wait.Result:
-		return res.Error == nil && isExecFormat(d.proxyExitLogTail(ctx, created.ID))
-	case <-wait.Error:
+		if res.Error != nil {
+			return archInconclusive
+		}
+		tail, err := d.archProbeLog(ctx, created.ID)
+		switch {
+		case err != nil:
+			return archInconclusive
+		case isExecFormat(tail):
+			return archUnrunnable
+		}
+		return archRunnable
 	case <-timer.C: // still running: it started, so it can run
+		return archRunnable
+	case <-wait.Error:
 	case <-ctx.Done():
 	}
-	return false
+	return archInconclusive
+}
+
+// archProbeLog is the probe's log tail; an error means the log could not be read, so the exit proves nothing.
+func (d *Driver) archProbeLog(ctx context.Context, id string) (string, error) {
+	rc, err := d.cli.ContainerLogs(ctx, id, client.ContainerLogsOptions{ShowStdout: true, ShowStderr: true, Tail: "20"})
+	if err != nil {
+		return "", err
+	}
+	defer rc.Close()
+	var buf bytes.Buffer
+	if _, err := stdcopy.StdCopy(&buf, &buf, rc); err != nil {
+		return "", err
+	}
+	return buf.String(), nil
 }
 
 func isExecFormat(s string) bool {

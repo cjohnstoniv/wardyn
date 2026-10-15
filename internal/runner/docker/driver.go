@@ -167,7 +167,7 @@ type Driver struct {
 
 	// engArch caches the engine's normalised architecture (guarded by mu).
 	engArch string
-	// archVerdicts caches, per foreign image architecture, whether the engine proved it cannot run it (bool).
+	// archVerdicts caches, per foreign image architecture, a conclusive archVerdictKind.
 	archVerdicts sync.Map
 }
 

@@ -161,9 +161,8 @@ func (p *Peer) onReply(f Frame) error {
 	if err := Unmarshal(f.Payload, &rep); err != nil {
 		return err
 	}
-	if rep.Error != nil && !rep.Error.Code.Valid() {
-		return fmt.Errorf("%w: reply error code %q is not in the closed list", ErrBadFrame, rep.Error.Code)
-	}
+	// A code outside the closed list is not a bad frame: a newer peer may know a code this one does not,
+	// and (*Error).Err degrades it to internal with the message kept.
 	p.mu.Lock()
 	pc := p.calls[f.Stream]
 	if pc == nil {

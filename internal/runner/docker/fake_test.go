@@ -248,6 +248,8 @@ type fakeDocker struct {
 	archProbeExit    int64
 	archProbeLog     string
 	archProbeRunning bool
+	// failLogs makes ContainerLogs fail, as a log driver that keeps no logs does.
+	failLogs bool
 
 	// waitHangs makes ContainerWait answer nothing until the caller's ctx ends, and
 	// pullKeepsNothing makes ImagePull succeed without storing the image (the daemon
@@ -775,6 +777,9 @@ func (f *fakeDocker) ContainerLogs(ctx context.Context, id string, opts client.C
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.logOpts = append(f.logOpts, opts)
+	if f.failLogs {
+		return nil, errors.New("configured logging driver does not support reading")
+	}
 	if f.containers[id] == nil {
 		return nil, fakeNotFound{msg: "no such container: " + id}
 	}

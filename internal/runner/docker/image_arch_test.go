@@ -172,6 +172,46 @@ func TestArchProbeStartErrorWithExecFormatRefuses(t *testing.T) {
 	}
 }
 
+// An inconclusive probe allows the image this once and caches nothing: after the fault clears, the
+// next image of the same architecture is probed again and refused.
+func TestInconclusiveArchProbeIsNotCached(t *testing.T) {
+	cases := map[string]struct {
+		set   func(f *fakeDocker, cancel func())
+		clear func(f *fakeDocker)
+	}{
+		"create fails (no command)": {
+			func(f *fakeDocker, _ func()) { f.failCreateContainer = archProbeNamePrefix },
+			func(f *fakeDocker) { f.failCreateContainer = "" }},
+		"start fails for another reason": {
+			func(f *fakeDocker, _ func()) { f.failStartContainer = archProbeNamePrefix },
+			func(f *fakeDocker) { f.failStartContainer = "" }},
+		"wait errors": {
+			func(f *fakeDocker, _ func()) { f.waitErrs = 1 },
+			func(f *fakeDocker) { f.waitErrs = 0 }},
+		"log unreadable": {
+			func(f *fakeDocker, _ func()) { f.failLogs = true },
+			func(f *fakeDocker) { f.failLogs = false }},
+		"ctx cancelled": {
+			func(f *fakeDocker, cancel func()) { f.archProbeRunning = true; f.onCreate = func(string) { cancel() } },
+			func(f *fakeDocker) { f.archProbeRunning = false; f.onCreate = nil }},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			d, f := archDriver("aarch64", map[string]string{"a:1": "amd64", "b:1": "amd64"})
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			c.set(f, cancel)
+			if err := d.ensureImage(ctx, "a:1", nil); err != nil {
+				t.Fatalf("an inconclusive probe must allow the image, got %v", err)
+			}
+			c.clear(f)
+			if err := d.ensureImage(context.Background(), "b:1", nil); !errors.Is(err, ErrImageArch) {
+				t.Fatalf("the next image of the architecture must be probed afresh and refused, got %v", err)
+			}
+		})
+	}
+}
+
 func TestCreateSandboxRefusesAnUnrunnableImage(t *testing.T) {
 	for name, images := range map[string]map[string]string{
 		"agent image": {testSpec().Image: "amd64", "wardyn-proxy:dev": "arm64"},
