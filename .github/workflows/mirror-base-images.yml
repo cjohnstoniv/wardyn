@@ -14,10 +14,22 @@ name: Mirror base images
 # of one tag (alpine:3.24 has two) never overwrite each other; the tags only
 # keep the manifests named, since CI resolves by digest.
 #
-# Idempotent: a digest already in the repository is skipped.
+# Idempotent: a digest already in the repository is skipped. Tag pins ("tag "
+# lines) are copied the same way; the composite action tags them locally.
+#
+# A Dependabot base-image bump cannot dispatch this itself (its token is read-
+# only): add the new digest to deploy/base-images.txt on the bump's branch, run
+# this workflow from the Actions tab with `ref` set to that branch, then re-run
+# the pull request's checks so they read the copy instead of Docker Hub. Only
+# the list is read from `ref`; the script is this file from the branch the run
+# is dispatched on (main by default).
 
 on:
   workflow_dispatch:
+    inputs:
+      ref:
+        description: Branch, tag or SHA whose deploy/base-images.txt to copy
+        default: main
   schedule:
     - cron: "23 5 * * 1"
   push:
@@ -44,6 +56,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
+          ref: ${{ inputs.ref || github.ref }}
           persist-credentials: false
       - name: Copy each pin to GHCR with its digest unchanged
         env:
@@ -62,6 +75,10 @@ jobs:
           fi
           failed=0
           while read -r ref; do
+            ref="${ref#tag }"
+            if ! [[ "$ref" =~ ^docker\.io/[a-z0-9._-]+/[a-z0-9._/-]+:[A-Za-z0-9._-]+@sha256:[0-9a-f]{64}$ ]]; then
+              echo "::error title=mirror-base-images::malformed entry: $ref"; failed=1; continue
+            fi
             repo="${ref%@*}"; digest="${ref#*@}"
             name="${repo%:*}"; tag="${repo##*:}"
             path="${name#docker.io/}"

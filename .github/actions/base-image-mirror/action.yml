@@ -15,6 +15,7 @@ inputs:
       builder resolves a digest pin locally first, and only a pin already in
       the local store is guaranteed not to reach Docker Hub. Empty = start the
       mirror only (docker pull, compose and kind node pulls still go through it).
+      Tag pins ("tag " lines) match the same pattern and are tagged locally.
     default: "."
   list:
     description: The mirror list, relative to the workspace.
@@ -132,27 +133,38 @@ runs:
       shell: bash
       env:
         MIRROR_PORT: "15999"
+        MIRROR_REPO: ${{ github.repository_owner }}/base-images
         PRIME: ${{ inputs.prime }}
         LIST: ${{ inputs.list }}
       run: |
         set -euo pipefail
-        # Pulled by digest, through the mirror, so the local reference store
-        # records docker.io/<repo>@sha256:<d>: the Dockerfile frontend in
-        # dockerd's builder looks a digest-pinned FROM up there before any
-        # registry. A pin that fails here (not mirrored yet, GHCR down) only
-        # warns: the build then pulls it from Docker Hub, as it did before.
-        refs="$(grep -vE '^[[:space:]]*(#|$)' "$LIST" | grep -E -- "$PRIME" | sed -E 's/:[^:/@]+@/@/' || true)"
-        [ -n "$refs" ] || { echo "::warning title=base-image-mirror::no entry in $LIST matches '$PRIME'"; exit 0; }
+        # A digest pin is pulled by its docker.io name, through the mirror, so
+        # the local reference store records docker.io/<repo>@sha256:<d>: the
+        # Dockerfile frontend in dockerd's builder looks a digest-pinned FROM
+        # up there before any registry. A tag pin ("tag " lines) is pulled from
+        # the GHCR copy directly and tagged <name>:<tag>, since the mirror only
+        # serves digests. A pin that fails here (not copied yet, GHCR down)
+        # only warns: the job then pulls it from Docker Hub, as before.
+        lines="$(grep -vE '^[[:space:]]*(#|$)' "$LIST" | grep -E -- "$PRIME" || true)"
+        [ -n "$lines" ] || { echo "::warning title=base-image-mirror::no entry in $LIST matches '$PRIME'"; exit 0; }
         accept="application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json"
-        for ref in $refs; do
-          repo="${ref%@*}"; digest="${ref#*@}"
+        copy="ghcr.io/${MIRROR_REPO,,}"
+        while read -r kind ref; do
+          [ -n "$ref" ] || { ref="$kind"; kind=digest; }
+          named="${ref%@*}"; digest="${ref#*@}"
           # Only a pin the GHCR copy already has is pulled: pulling a missing
           # one would fetch it from Docker Hub, which this step exists to avoid.
-          if ! curl -fsS -I -o /dev/null -H "Accept: $accept" "http://127.0.0.1:$MIRROR_PORT/v2/${repo#docker.io/}/manifests/$digest"; then
+          if ! curl -fsS -I -o /dev/null </dev/null -H "Accept: $accept" "http://127.0.0.1:$MIRROR_PORT/v2/${named#docker.io/}/manifests/$digest"; then
             echo "::warning title=base-image-mirror::$ref is not in the GHCR copy yet (run mirror-base-images.yml); left to Docker Hub"
-          elif docker pull -q "$ref" >/dev/null; then
-            echo "primed $ref"
+          elif [ "$kind" = tag ]; then
+            if docker pull -q "$copy@$digest" </dev/null >/dev/null && docker tag "$copy@$digest" "$named"; then
+              echo "primed $named (tag pin)"
+            else
+              echo "::warning title=base-image-mirror::could not pull $copy@$digest for $named"
+            fi
+          elif docker pull -q "${named%:*}@$digest" </dev/null >/dev/null; then
+            echo "primed ${named%:*}@$digest"
           else
             echo "::warning title=base-image-mirror::could not pull $ref through the mirror"
           fi
-        done
+        done <<<"$lines"

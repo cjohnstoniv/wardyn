@@ -548,17 +548,18 @@ So:
 
 ### Docker Hub base-image mirror
 
-Hosted runners share egress IPs, so Docker Hub answered `toomanyrequests: You have reached your unauthenticated pull rate limit` even in jobs whose `docker/login-action` step had just printed `Login Succeeded`. CI therefore reads the Docker Hub images it pins from a byte-identical copy on GHCR instead:
+Docker Hub rate-limited CI even after `docker/login-action`, so CI reads the Docker Hub images it uses from a byte-identical GHCR copy:
 
-- [`deploy/base-images.txt`](../deploy/base-images.txt) lists every Docker Hub digest pin CI pulls: the Dockerfile `FROM` pins, the compose Postgres and registry pins, and kind's default node image.
-- [`mirror-base-images.yml`](../.github/workflows/mirror-base-images.yml) copies each one into the single public repository `ghcr.io/cjohnstoniv/base-images` with `skopeo copy --all --preserve-digests`, so the copy has the pin's own index digest. It runs when the list changes on `main`, weekly, and on dispatch, and skips digests already copied.
-- [`.github/actions/base-image-mirror/action.yml`](../.github/actions/base-image-mirror/action.yml) is the step a job runs before it builds, pulls or creates a kind cluster. It starts a loopback mirror that answers `docker.io/<repo>@sha256:<digest>` from that repository, adds it to dockerd's `registry-mirrors` with a `SIGHUP` reload, and pulls the pins under their `docker.io` names. dockerd reloads that setting without restarting, so service containers that are already running keep running.
-  - dockerd's builder looks a digest-pinned `FROM` up in the local store first, so a primed pin builds without contacting any registry.
-  - Tags are not mirrored: a pull by tag, a digest the copy does not have, or a mirror that is down falls through to Docker Hub as before.
-- The Postgres service containers start before any step can run, so they name the copy directly: `ghcr.io/cjohnstoniv/base-images@sha256:<the list's postgres digest>`.
-- Dockerfiles keep their `docker.io` `FROM` lines. Dependabot keeps proposing base-image bumps, and the release images' provenance still names the upstream image. Release and staging builds run on a BuildKit container builder, which does not use the mirror.
-- Guard 17 in [`scripts/test-repo-guards.sh`](../scripts/test-repo-guards.sh) fails while any Docker Hub `FROM` pin, with or without `--platform=`, is missing from the list. A Dependabot bump therefore goes red until its pull request adds the new digest; the mirror copies it once that merges.
-- Not covered yet: images that kind nodes pull inside the cluster (containerd does not use dockerd's mirror), BuildKit container builders (`docker/build-push-action` with the `gha` cache), and pulls by floating tag such as `registry:2`.
+- [`deploy/base-images.txt`](../deploy/base-images.txt) lists them. Digest pins are the Dockerfile `FROM` pins, the compose pins and kind's node image. Tag pins (`tag ` lines), kept by hand, are images CI pulls by tag.
+- [`mirror-base-images.yml`](../.github/workflows/mirror-base-images.yml) copies each entry, digest unchanged, into `ghcr.io/cjohnstoniv/base-images`: on a list change on `main`, weekly, and on dispatch.
+  - Dependabot cannot run it: add the bump's digest to the list on its branch, dispatch with `ref` set to that branch, then re-run the pull request's checks.
+- [`base-image-mirror/action.yml`](../.github/actions/base-image-mirror/action.yml) runs before a job builds or pulls. It adds a loopback mirror over the copy to dockerd's `registry-mirrors` by a `SIGHUP` reload, which leaves service containers running. It pulls digest pins under their `docker.io` names, so a pinned `FROM` resolves locally, and tag pins from GHCR, retagged `<name>:<tag>`.
+  - Anything the copy lacks, and any tag not listed, falls through to Docker Hub as before.
+- The Postgres service containers start before any step, so they name the copy directly and pull it with the job's `GITHUB_TOKEN` (`packages: read`).
+- Dockerfiles keep their `docker.io` `FROM` lines for Dependabot and release provenance.
+- Guard 17 in [`scripts/test-repo-guards.sh`](../scripts/test-repo-guards.sh) fails while a Docker Hub `FROM` pin is not listed.
+- [`mirror-selftest.yml`](../.github/workflows/mirror-selftest.yml) (dispatch only) checks the action on ubuntu-24.04 and ubuntu-26.04 with Docker Hub unreachable.
+- Not covered: pulls inside kind nodes, which skip dockerd (`postgres:16` is copied for a future `kind load`), and BuildKit container builders.
 
 ## Driving an existing control plane instead
 

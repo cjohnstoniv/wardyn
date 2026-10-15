@@ -7,6 +7,7 @@
 # docker.io is missing here, so a Dependabot base-image bump goes red until this
 # file carries the new digest. Merging that change to main re-runs the mirror.
 # One normalized ref per line: docker.io/<namespace>/<name>:<tag>@sha256:<digest>.
+# A line starting "tag " is a tag pin (below); every other line is a digest pin.
 
 # Dockerfile FROM pins
 docker.io/library/alpine:3.20@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc
@@ -28,3 +29,22 @@ docker.io/library/registry:3@sha256:3725021071ec9383eb3d87ddbdff9ed602439b3f7c95
 # kind v0.33.0's default node image (helm/kind-action v1.15.0 installs kind
 # v0.33.0); bump with the action.
 docker.io/kindest/node:v1.37.0@sha256:a1ed56cfb0e7b93589bdf97c8cd566405a265939e3620fc4f5de89adff580ae5
+
+# Tag pins: images CI pulls by a floating TAG. The mirror cannot serve a tag,
+# so the action pulls the GHCR copy of the digest below and tags it locally as
+# <name>:<tag>; a later `docker run <name>:<tag>` then finds it without a pull.
+# HAND-MAINTAINED (guard 17 does not find these sites); each digest is what the
+# tag resolved to on 2026-10-15. Sites:
+#   ubuntu:24.04       ci.yml helm-install-test (wardyn run --image)
+#   hello-world        ci.yml conformance, envbuild-integration (docker run)
+#   busybox:latest     nightly.yml gvisor-cc2-live (docker run),
+#                      provider-subscription-docker-pg (an explicit docker pull,
+#                      which still asks a registry: drop it once primed)
+#   registry:2         scripts/kind-sso-walk.sh (docker run)
+#   postgres:16        Makefile helm-install-test, pulled INSIDE kind: copied,
+#                      but only useful once a step `kind load`s it (docs/CI.md)
+tag docker.io/library/busybox:latest@sha256:fd7dc98638c8e305f4dc34e979f1c0fdfdcaeb0fbf8fcff77ae834b6da3d7e6e
+tag docker.io/library/hello-world:latest@sha256:11a3eb1597e864c51b3f56733cb2e8a90bf0c284bfc05f9444d81c558bc848aa
+tag docker.io/library/postgres:16@sha256:ca0bd484cb98bf4b24eb1010e73fb3fcbd6714d240fbc1a10eea5b7dbecb641d
+tag docker.io/library/registry:2@sha256:a3d8aaa63ed8681a604f1dea0aa03f100d5895b6a58ace528858a7b332415373
+tag docker.io/library/ubuntu:24.04@sha256:534baea6a22c03a63003dbc8dbe78fe34bc0d7e595d9a9dc9834884ff530eb55

@@ -621,12 +621,14 @@ fi
 BASE_LIST=deploy/base-images.txt
 mirror_fail=0
 # Entries as docker.io/<ns>/<name>@sha256:<d> (the tag is cosmetic: CI resolves
-# by digest). Every line must be a normalized docker.io ref with a tag.
+# by digest). Every line must be a normalized docker.io ref with a tag, behind
+# "tag " for a tag pin. The tag pins' pull sites are hand-maintained: no
+# extractor here finds them (docker run, wardyn --image, kubectl --image).
 listed="$(grep -vE '^[[:space:]]*(#|$)' "$BASE_LIST" || true)"
 [ -n "$listed" ] || { bad "$BASE_LIST has no entries — guard 17 is pointing at nothing"; mirror_fail=1; }
-malformed="$(printf '%s\n' "$listed" | grep -vE '^docker\.io/[a-z0-9._-]+/[a-z0-9._/-]+:[A-Za-z0-9._-]+@sha256:[0-9a-f]{64}$' || true)"
+malformed="$(printf '%s\n' "$listed" | grep -vE '^(tag )?docker\.io/[a-z0-9._-]+/[a-z0-9._/-]+:[A-Za-z0-9._-]+@sha256:[0-9a-f]{64}$' || true)"
 [ -z "$malformed" ] || { bad "$BASE_LIST: not docker.io/<ns>/<name>:<tag>@sha256:<64 hex>: $(echo $malformed)"; mirror_fail=1; }
-listed_keys="$(printf '%s\n' "$listed" | sed -E 's/:[^:/@]+@/@/' | sort -u)"
+listed_keys="$(printf '%s\n' "$listed" | sed -E 's/^tag //; s/:[^:/@]+@/@/' | sort -u)"
 # FROM [--flag=...]... <image>[ AS stage]; keep digest pins whose registry is
 # Docker Hub (no '.', ':' or localhost in the first path component), then
 # normalize to the list's form: docker.io/ prefix, library/ for official images.
