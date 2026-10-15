@@ -546,6 +546,20 @@ So:
 - A console-only change is held at 10.5 minutes by the whole vitest suite in `ui`; two vitest shards behind a `ui` aggregator would bring it to about 7.5 minutes for two more jobs.
 - A run of everything (a push to `main`, a `train/*` pull request) runs that same `ui` job, so `ui` is its longest job as well.
 
+### Docker Hub base-image mirror
+
+Hosted runners share egress IPs, so Docker Hub answered `toomanyrequests: You have reached your unauthenticated pull rate limit` even in jobs whose `docker/login-action` step had just printed `Login Succeeded`. CI therefore reads the Docker Hub images it pins from a byte-identical copy on GHCR instead:
+
+- [`deploy/base-images.txt`](../deploy/base-images.txt) lists every Docker Hub digest pin CI pulls: the Dockerfile `FROM` pins, the compose Postgres and registry pins, and kind's default node image.
+- [`mirror-base-images.yml`](../.github/workflows/mirror-base-images.yml) copies each one into the single public repository `ghcr.io/cjohnstoniv/base-images` with `skopeo copy --all --preserve-digests`, so the copy has the pin's own index digest. It runs when the list changes on `main`, weekly, and on dispatch, and skips digests already copied.
+- [`.github/actions/base-image-mirror/action.yml`](../.github/actions/base-image-mirror/action.yml) is the step a job runs before it builds, pulls or creates a kind cluster. It starts a loopback mirror that answers `docker.io/<repo>@sha256:<digest>` from that repository, adds it to dockerd's `registry-mirrors` with a `SIGHUP` reload, and pulls the pins under their `docker.io` names. dockerd reloads that setting without restarting, so service containers that are already running keep running.
+  - dockerd's builder looks a digest-pinned `FROM` up in the local store first, so a primed pin builds without contacting any registry.
+  - Tags are not mirrored: a pull by tag, a digest the copy does not have, or a mirror that is down falls through to Docker Hub as before.
+- The Postgres service containers start before any step can run, so they name the copy directly: `ghcr.io/cjohnstoniv/base-images@sha256:<the list's postgres digest>`.
+- Dockerfiles keep their `docker.io` `FROM` lines. Dependabot keeps proposing base-image bumps, and the release images' provenance still names the upstream image. Release and staging builds run on a BuildKit container builder, which does not use the mirror.
+- Guard 17 in [`scripts/test-repo-guards.sh`](../scripts/test-repo-guards.sh) fails while any Docker Hub `FROM` pin, with or without `--platform=`, is missing from the list. A Dependabot bump therefore goes red until its pull request adds the new digest; the mirror copies it once that merges.
+- Not covered yet: images that kind nodes pull inside the cluster (containerd does not use dockerd's mirror), BuildKit container builders (`docker/build-push-action` with the `gha` cache), and pulls by floating tag such as `registry:2`.
+
 ## Driving an existing control plane instead
 
 - If you already run wardynd somewhere, set `WARDYN_URL` + `WARDYN_CI_TOKEN` and `ci-run.sh` launches there (see "[CI's identity](#cis-identity)" above).
