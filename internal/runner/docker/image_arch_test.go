@@ -8,13 +8,23 @@ package docker
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 )
 
+const execFormatLog = "exec /x: exec format error"
+
+// archDriver is an engine reporting `engine` (uname style) holding images of the given
+// architectures; the arch probe, if started, exits 255 with an exec-format log.
 func archDriver(engine string, images map[string]string) (*Driver, *fakeDocker) {
 	f := newFakeDocker()
 	f.info.Architecture = engine
+	f.archProbeExit = 255
+	f.archProbeLog = execFormatLog
 	for ref, a := range images {
 		f.images[ref] = true
 		f.imageArch[ref] = a
@@ -22,36 +32,98 @@ func archDriver(engine string, images map[string]string) (*Driver, *fakeDocker) 
 	return newTestDriver(f), f
 }
 
-func TestEnsureImageArch(t *testing.T) {
+// probes names the arch-probe containers the fake saw; others counts every other container.
+func probes(f *fakeDocker) (probe []*createdContainer, others int) {
+	for name, c := range f.containers {
+		if strings.HasPrefix(name, archProbeNamePrefix) {
+			probe = append(probe, c)
+		} else {
+			others++
+		}
+	}
+	return probe, others
+}
+
+func TestEnsureImageArchSkipsTheProbeWhenNothingMismatches(t *testing.T) {
 	const ref = "mirror.example/agent:1"
-	cases := []struct {
-		name, engine, image string
-		wantErr             bool
-	}{
-		{"match", "x86_64", "amd64", false},
-		{"aarch64 is arm64", "aarch64", "arm64", false},
-		{"mismatch", "aarch64", "amd64", true},
-		{"mismatch reverse", "x86_64", "arm64", true},
-		{"image arch unknown", "aarch64", "", false},
-		{"engine arch unknown", "", "amd64", false},
+	cases := []struct{ name, engine, image string }{
+		{"match", "x86_64", "amd64"},
+		{"aarch64 is arm64", "aarch64", "arm64"},
+		{"image arch unknown", "aarch64", ""},
+		{"engine arch unknown", "", "amd64"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			d, _ := archDriver(c.engine, map[string]string{ref: c.image})
-			err := d.ensureImage(context.Background(), ref, nil)
-			if !c.wantErr {
-				if err != nil {
-					t.Fatalf("got %v, want nil", err)
-				}
-				return
+			d, f := archDriver(c.engine, map[string]string{ref: c.image})
+			if err := d.ensureImage(context.Background(), ref, nil); err != nil {
+				t.Fatalf("got %v, want nil", err)
 			}
-			if !errors.Is(err, ErrImageArch) {
-				t.Fatalf("got %v, want ErrImageArch", err)
+			if p, _ := probes(f); len(p) != 0 {
+				t.Errorf("%d probe containers started, want none", len(p))
 			}
-			for _, want := range []string{ref, c.image, "this runner is " + normalizeArch(c.engine), "multi-arch"} {
-				if !strings.Contains(err.Error(), want) {
-					t.Errorf("error %q lacks %q", err, want)
-				}
+		})
+	}
+}
+
+func TestEnsureImageArchRefusesOnProvenExecFormat(t *testing.T) {
+	const ref = "mirror.example/agent:1"
+	for _, c := range []struct{ engine, image, eng string }{
+		{"aarch64", "amd64", "arm64"},
+		{"x86_64", "arm64", "amd64"},
+	} {
+		d, f := archDriver(c.engine, map[string]string{ref: c.image})
+		err := d.ensureImage(context.Background(), ref, nil)
+		if !errors.Is(err, ErrImageArch) || !errors.Is(err, runner.ErrImageArch) {
+			t.Fatalf("got %v, want ErrImageArch", err)
+		}
+		want := "this runner's engine is " + c.eng + " and cannot run " + ref + ", a single-architecture " + c.image +
+			" image (exec format error). Name an image for " + c.eng + " or publish a multi-arch one"
+		if err.Error() != want {
+			t.Errorf("message %q, want %q", err, want)
+		}
+		p, others := probes(f)
+		if len(p) != 1 || !p[0].removed || others != 0 {
+			t.Errorf("probes %d (removed %v), other containers %d: want one removed probe and nothing else", len(p), len(p) == 1 && p[0].removed, others)
+		}
+	}
+}
+
+func TestArchProbeIsConfined(t *testing.T) {
+	d, f := archDriver("aarch64", map[string]string{"a:1": "amd64"})
+	_ = d.ensureImage(context.Background(), "a:1", nil)
+	p, _ := probes(f)
+	if len(p) != 1 {
+		t.Fatalf("%d probes", len(p))
+	}
+	c := p[0]
+	if string(c.host.NetworkMode) != "none" || len(c.host.Binds) != 0 || len(c.host.Mounts) != 0 ||
+		!slices.Equal(c.host.CapDrop, []string{"ALL"}) || !c.host.ReadonlyRootfs ||
+		c.cfg.User != "1000" || c.cfg.Image != "a:1" || len(c.cfg.Entrypoint) != 0 || len(c.cfg.Cmd) != 0 ||
+		!slices.Equal(c.host.SecurityOpt, []string{"no-new-privileges"}) || c.host.PidsLimit == nil || len(c.cfg.Env) != 0 ||
+		c.cfg.Labels[labelComponent] != componentArchProbe {
+		t.Errorf("probe not confined: cfg %+v host %+v", c.cfg, c.host)
+	}
+}
+
+func TestEnsureImageArchAllowsAnEmulatedImage(t *testing.T) {
+	const ref = "mirror.example/agent:1"
+	setup := map[string]func(f *fakeDocker){
+		"exits 1 with other text": func(f *fakeDocker) { f.archProbeExit = 1; f.archProbeLog = "usage: agent" },
+		"exits 0":                 func(f *fakeDocker) { f.archProbeExit = 0; f.archProbeLog = "" },
+		"still running":           func(f *fakeDocker) { f.archProbeRunning = true },
+	}
+	old := archProbeWait
+	archProbeWait = 20 * time.Millisecond
+	t.Cleanup(func() { archProbeWait = old })
+	for name, set := range setup {
+		t.Run(name, func(t *testing.T) {
+			d, f := archDriver("aarch64", map[string]string{ref: "amd64"})
+			set(f)
+			if err := d.ensureImage(context.Background(), ref, nil); err != nil {
+				t.Fatalf("got %v, want nil", err)
+			}
+			if p, _ := probes(f); len(p) != 1 || !p[0].removed {
+				t.Errorf("want one removed probe, got %d", len(p))
 			}
 		})
 	}
@@ -65,7 +137,42 @@ func TestEnsureImageArchChecksAPulledImage(t *testing.T) {
 	}
 }
 
-func TestCreateSandboxRefusesAWrongArchImage(t *testing.T) {
+func TestArchVerdictIsCachedPerForeignArch(t *testing.T) {
+	for name, exit := range map[string]int64{"refused": 255, "allowed": 0} {
+		t.Run(name, func(t *testing.T) {
+			d, f := archDriver("aarch64", map[string]string{"a:1": "amd64", "b:1": "amd64", "c:1": "riscv64"})
+			f.archProbeExit = exit
+			if exit == 0 {
+				f.archProbeLog = ""
+			}
+			first := d.ensureImage(context.Background(), "a:1", nil)
+			second := d.ensureImage(context.Background(), "b:1", nil)
+			if (first == nil) != (second == nil) {
+				t.Errorf("verdicts differ: %v then %v", first, second)
+			}
+			if second != nil && !strings.Contains(second.Error(), "b:1") {
+				t.Errorf("the cached refusal must name the image asked about: %v", second)
+			}
+			if p, _ := probes(f); len(p) != 1 {
+				t.Errorf("%d probes for two images of one architecture, want 1", len(p))
+			}
+		})
+	}
+}
+
+func TestArchProbeStartErrorWithExecFormatRefuses(t *testing.T) {
+	d, f := archDriver("aarch64", map[string]string{"a:1": "amd64"})
+	f.failStartContainer = archProbeNamePrefix
+	f.failStartMsg = "exec container process `/x`: Exec format error"
+	if err := d.ensureImage(context.Background(), "a:1", nil); !errors.Is(err, ErrImageArch) {
+		t.Fatalf("got %v, want ErrImageArch", err)
+	}
+	if p, _ := probes(f); len(p) != 1 || !p[0].removed {
+		t.Errorf("want one removed probe")
+	}
+}
+
+func TestCreateSandboxRefusesAnUnrunnableImage(t *testing.T) {
 	for name, images := range map[string]map[string]string{
 		"agent image": {testSpec().Image: "amd64", "wardyn-proxy:dev": "arm64"},
 		"proxy image": {testSpec().Image: "arm64", "wardyn-proxy:dev": "amd64"},
@@ -76,21 +183,32 @@ func TestCreateSandboxRefusesAWrongArchImage(t *testing.T) {
 			if !errors.Is(err, ErrImageArch) {
 				t.Fatalf("got %v, want ErrImageArch", err)
 			}
-			if len(f.networks) != 0 || len(f.containers) != 0 {
-				t.Errorf("created %d networks, %d containers before refusing", len(f.networks), len(f.containers))
+			if _, others := probes(f); others != 0 || len(f.networks) != 0 {
+				t.Errorf("created %d other containers, %d networks before refusing", others, len(f.networks))
 			}
 		})
 	}
 }
 
-func TestProbeRelayRefusesAWrongArchProxyImage(t *testing.T) {
+func TestProbeRelayRefusesAnUnrunnableProxyImage(t *testing.T) {
 	d, f := archDriver("aarch64", map[string]string{"wardyn-proxy:dev": "amd64"})
 	err := d.ProbeRelay(context.Background(), relayProbeTarget, 8443)
 	if !errors.Is(err, ErrImageArch) {
 		t.Fatalf("got %v, want ErrImageArch", err)
 	}
-	if len(f.containers) != 0 {
-		t.Errorf("a probe container was created: %v", f.containers)
+	if _, others := probes(f); others != 0 {
+		t.Errorf("a relay probe container was created")
+	}
+}
+
+func TestProbeDriveRefusesAnUnrunnableImage(t *testing.T) {
+	d, f := archDriver("aarch64", map[string]string{defaultDriveProbeImage: "amd64"})
+	_, err := d.ProbeDrive(context.Background(), probeDriveFixture())
+	if !errors.Is(err, ErrImageArch) {
+		t.Fatalf("got %v, want ErrImageArch", err)
+	}
+	if _, others := probes(f); others != 0 {
+		t.Errorf("a drive probe container was created")
 	}
 }
 

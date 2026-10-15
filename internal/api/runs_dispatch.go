@@ -682,9 +682,10 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 		// Conditional: only mark FAILED if still STARTING. A kill landing between the
 		// entry claim and this failure moved the run to KILLED — don't clobber that
 		// terminal state (mirrors the STARTING->RUNNING guard below).
-		s.failAndRevoke(ctx, run.ID, types.RunStarting, "the sandbox could not be created: "+err.Error())
+		hint, reason := sandboxCreateFailure(err)
+		s.failAndRevoke(ctx, run.ID, types.RunStarting, hint)
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.create",
-			run.ID.String(), "failure", mustJSON(map[string]any{"error": err.Error(), "reason": "sandbox_create"})))
+			run.ID.String(), "failure", mustJSON(map[string]any{"error": err.Error(), "reason": reason})))
 		return
 	}
 

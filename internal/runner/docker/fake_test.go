@@ -141,6 +141,7 @@ type fakeDocker struct {
 	// failpoints
 	failCreateContainer string   // name prefix that should fail on create
 	failStartContainer  string   // name prefix that should fail on start (after a good create)
+	failStartMsg        string   // that failure's text; "" is "boom: start <name>"
 	failImagePull       bool     // ImagePull returns an error (image absent + unpullable)
 	createWarnings      []string // Warnings the ContainerCreate response carries (e.g. a discarded resource limit)
 	// createIDOverride, when set, is returned as ContainerCreate's ID instead of
@@ -242,6 +243,11 @@ type fakeDocker struct {
 	// bind mount, so a ProbeDrive test scripts the answer this way instead.
 	// Zero (readable) unless a test overrides it.
 	probeExitCode int64
+	// archProbeExit and archProbeLog script the arch probe container's exit code and log;
+	// archProbeRunning leaves it running, so its wait never returns.
+	archProbeExit    int64
+	archProbeLog     string
+	archProbeRunning bool
 
 	// waitHangs makes ContainerWait answer nothing until the caller's ctx ends, and
 	// pullKeepsNothing makes ImagePull succeed without storing the image (the daemon
@@ -650,9 +656,24 @@ func (f *fakeDocker) ContainerStart(ctx context.Context, id string, _ client.Con
 		return client.ContainerStartResult{}, fakeNotFound{msg: "no such container: " + id}
 	}
 	if f.failStartContainer != "" && strings.HasPrefix(c.name, f.failStartContainer) {
+		if f.failStartMsg != "" {
+			return client.ContainerStartResult{}, errors.New(f.failStartMsg)
+		}
 		return client.ContainerStartResult{}, fmt.Errorf("boom: start %s", c.name)
 	}
-	if strings.HasPrefix(c.name, "wardyn-drive-probe-") || strings.HasPrefix(c.name, "wardyn-relay-probe-") {
+	if strings.HasPrefix(c.name, archProbeNamePrefix) {
+		// The arch probe starts the image's own entrypoint: model it as still running, or as
+		// exited with the scripted code and log (a real exec-format failure is 255).
+		if f.archProbeRunning {
+			c.state = &container.State{Status: "running", Running: true}
+		} else {
+			c.state = &container.State{Status: "exited", ExitCode: int(f.archProbeExit)}
+			if f.logs == nil {
+				f.logs = map[string][]byte{}
+			}
+			f.logs[id] = muxFrame(2, f.archProbeLog)
+		}
+	} else if strings.HasPrefix(c.name, "wardyn-drive-probe-") || strings.HasPrefix(c.name, "wardyn-relay-probe-") {
 		// No real command interpreter here to run the probe's `test -r/-x`
 		// against a bind mount — model it as already exited with the
 		// scripted code, the same "immediate" shape a real one-shot process
@@ -871,6 +892,9 @@ func (f *fakeDocker) ContainerWait(ctx context.Context, id string, _ client.Cont
 	f.mu.Unlock()
 	if !ok || c == nil || c.removed {
 		errCh <- fakeNotFound{msg: "no such container: " + id}
+		return client.ContainerWaitResult{Result: statusCh, Error: errCh}
+	}
+	if c.state != nil && c.state.Running && strings.HasPrefix(c.name, archProbeNamePrefix) {
 		return client.ContainerWaitResult{Result: statusCh, Error: errCh}
 	}
 	var code int64
