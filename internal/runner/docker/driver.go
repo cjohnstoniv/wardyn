@@ -164,6 +164,11 @@ type Driver struct {
 	// io.Writer); every agent Exec on the ref tees its output there, the BYOI
 	// selftest included. Dropped at teardown.
 	execOutputs sync.Map
+
+	// engArch caches the engine's normalised architecture (guarded by mu).
+	engArch string
+	// archVerdicts caches, per foreign image architecture, whether the engine proved it cannot run it (bool).
+	archVerdicts sync.Map
 }
 
 // pendingAgent is the fully-built agent-container config CreateSandbox defers
@@ -281,7 +286,7 @@ func (d *Driver) ensureImage(ctx context.Context, ref string, onPulling func()) 
 		return err
 	}
 	if present {
-		return nil
+		return d.checkImageArch(ctx, ref)
 	}
 	if onPulling != nil {
 		onPulling()
@@ -291,7 +296,7 @@ func (d *Driver) ensureImage(ctx context.Context, ref string, onPulling func()) 
 	if err := dockerutil.PullImage(ctx, d.cli, ref, "docker"); err != nil {
 		return pullFailure(ref, err)
 	}
-	return nil
+	return d.checkImageArch(ctx, ref)
 }
 
 // ImagePresent implements runner.ImageChecker: exported imagePresent, so a
