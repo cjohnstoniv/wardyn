@@ -78,15 +78,15 @@ var runBuildDoors = []struct {
 	build func(*Server, context.Context, uuid.UUID) bool
 }{
 	{"create wraps a base image", func(s *Server, ctx context.Context, id uuid.UUID) bool {
-		_, failed := s.resolveCreateRunImage(ctx, createRunRequest{Agent: "claude-code", Image: "ubuntu:24.04"}, id, nil)
+		_, failed := s.resolveCreateRunImage(ctx, createRunRequest{Agent: "claude-code", Image: "ubuntu:24.04"}, types.AgentRun{ID: id}, nil)
 		return !failed
 	}},
 	{"create builds a devcontainer repo", func(s *Server, ctx context.Context, id uuid.UUID) bool {
-		_, failed := s.resolveCreateRunImage(ctx, createRunRequest{Agent: "claude-code", DevcontainerRepo: "https://github.com/acme/widgets"}, id, nil)
+		_, failed := s.resolveCreateRunImage(ctx, createRunRequest{Agent: "claude-code", DevcontainerRepo: "https://github.com/acme/widgets"}, types.AgentRun{ID: id}, nil)
 		return !failed
 	}},
 	{"create builds a workspace's image", func(s *Server, ctx context.Context, id uuid.UUID) bool {
-		_, failed := s.resolveCreateRunImage(ctx, createRunRequest{Agent: "claude-code"}, id, []types.Workspace{buildDoorWorkspace()})
+		_, failed := s.resolveCreateRunImage(ctx, createRunRequest{Agent: "claude-code"}, types.AgentRun{ID: id}, []types.Workspace{buildDoorWorkspace()})
 		return !failed
 	}},
 	{"a workspace run builds its image", func(s *Server, ctx context.Context, id uuid.UUID) bool {

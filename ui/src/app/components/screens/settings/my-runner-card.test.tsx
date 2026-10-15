@@ -89,6 +89,7 @@ function runner(over: Partial<RunnerView> = {}): RunnerView {
     limits: { runs_at_once: 2, total: { cpu_millis: 4000, memory_mib: 8192, disk_mib: 102400 }, per_run: { cpu_millis: 2000, memory_mib: 4096, disk_mib: 51200 } },
     usage: usageWith(2),
     machine_name: "alice-mbp-16.corp.example.com",
+    arch: "arm64",
     pools: [],
     ...over,
   };
@@ -235,6 +236,7 @@ describe("My runner card: a claimed runner", () => {
     await expand(user);
     expect(await screen.findByText("Version 0.9.0")).toBeInTheDocument();
     expect(screen.getByText("alice-mbp-16.corp.example.com")).toBeInTheDocument();
+    expect(document.querySelector("[data-machine] [data-arch]")).toHaveTextContent("Architecture: arm64");
     expect(screen.getByText("Self-hosted")).toBeInTheDocument();
     expect(screen.getByText("/Users/alice/src")).toBeInTheDocument();
     expect(screen.getByText("Runs on it can use folders inside these only. They're set on the computer itself.")).toBeInTheDocument();
@@ -652,7 +654,7 @@ describe("My runner card: the start command and the claim into a pool", () => {
     mintMineMock.mockResolvedValue(TOKEN);
     renderCard();
     await registerShown(user);
-    expect(screen.queryByText(/wardyn-runnerd serve/)).toBeNull();
+    expect(screen.getByText("wardyn-runnerd serve --org https://org.example.com")).toBeInTheDocument();
     expect(screen.getByText(VM_HINT)).toBeInTheDocument();
   });
 

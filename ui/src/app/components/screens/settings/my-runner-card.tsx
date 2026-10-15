@@ -30,7 +30,7 @@ import { LimitsDialog } from "../runners/limits-dialog";
 import { registerCommand, StartRunnerSteps } from "../runners/mint-token-dialog";
 import { Hint, KindChip, OfflineNote, ResourceTable, RunsLine, Sec } from "../runners/resource-table";
 import { amountsText, proposeLimits, runnerRes } from "../runners/resources";
-import { MachineText } from "../runners/runner-card";
+import { ArchText, MachineText } from "../runners/runner-card";
 import { RunnerChip } from "../runners/runner-chip";
 import { CHIP_WORD, postureLines, runnerChipKind, shortDate, sortRunners, timeLeft } from "../runners/runner-display";
 import { ClaimRunnerDialog } from "./claim-runner-dialog";
@@ -64,6 +64,7 @@ function MachineSec({ r }: { r: RunnerView }) {
   return (
     <Sec label={RUNNER_V6.MACHINE} meta={RUNNER.REPORTED} data-machine>
       <MachineText machine={r.machine_name} />
+      <ArchText arch={r.arch} />
     </Sec>
   );
 }

@@ -143,9 +143,9 @@ func run() error {
 
 	// Parse the agent images map at boot so a malformed value fails closed
 	// immediately rather than silently using the convention for all agents.
-	// Extracted into parseAgentImages (boot_deps.go): run()'s cyclomatic
+	// Extracted into parseBootImages (boot_agent_images.go): run()'s cyclomatic
 	// budget is full.
-	agentImages, err := parseAgentImages(*f.agentImagesJSON)
+	agentImages, agentImageVariants, proxyImageByArch, err := parseBootImages(f)
 	if err != nil {
 		return err
 	}
@@ -430,6 +430,7 @@ func run() error {
 		RunnerTarget:        runnerTarget,
 		RunnerOrgURL:        *f.runnerOrgURL,
 		ProxyImage:          *f.proxyImage,
+		ProxyImageByArch:    proxyImageByArch,
 		UIDir:               *f.uiDir,
 		ControlPlaneURL:     *f.controlURL,
 		ControlPlaneCAPEM:   feats.hop.caCertPEM(),
@@ -455,6 +456,7 @@ func run() error {
 		UserDriveHostRoots:       driveHostRoots,
 		ImageBuilder:             feats.imgBuilder,
 		AgentImages:              agentImages,
+		AgentImageVariants:       agentImageVariants,
 		AWSSSOEndpointOverride:   awsSSOEndpointOverride,
 		AllowTestEndpoints:       *f.allowTestEndpoints,
 		AWSSSOProxyInject:        api.ResolveAWSSSOProxyInject(*f.awsSSOProxyInject),

@@ -74,6 +74,25 @@ func replyFrame(id uint32, seq uint64) Frame {
 	return Frame{Type: TypeReply, Stream: id, Seq: seq, Payload: b}
 }
 
+// A newer peer's error code is outside this build's closed list: the call fails as an internal
+// error carrying the message, and the session stays open.
+func TestReplyWithAnUnknownErrorCodeDegradesToInternal(t *testing.T) {
+	r := newRaw(t, PeerConfig{Org: true})
+	errc := make(chan error, 1)
+	go func() { errc <- r.p.Call(ctxT(t), "echo", nil, nil) }()
+	call := r.readType(t, TypeCall)
+	b, _ := json.Marshal(Reply{Error: &Error{Code: "from_the_future", Message: "image is not runnable"}})
+	r.write(t, Frame{Type: TypeReply, Stream: call.Stream, Seq: 1, Payload: b})
+	err := <-errc
+	var we *Error
+	if !errors.As(err, &we) || we.Code != CodeInternal || !strings.Contains(we.Message, "image is not runnable") {
+		t.Fatalf("call = %v, want an internal error carrying the message", err)
+	}
+	if !r.p.Online() {
+		t.Fatalf("an unknown error code closed the session: %v", r.p.Err())
+	}
+}
+
 func callFrame(id uint32, seq uint64) Frame {
 	b, _ := json.Marshal(Call{Method: "m"})
 	return Frame{Type: TypeCall, Stream: id, Seq: seq, Payload: b}

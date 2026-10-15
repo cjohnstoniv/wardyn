@@ -258,6 +258,11 @@ var ErrExecStreamUnsupported = errors.New("runner: ExecStream not supported")
 // exec into it is not a fault of the read.
 var ErrSandboxGone = errors.New("runner: the sandbox is gone")
 
+// ErrImageArch is a runner's refusal of an image its engine cannot run: the image is built for
+// another CPU architecture and the engine does not emulate it. It crosses the wire as the
+// image_arch code, so the org can tell it from a daemon fault.
+var ErrImageArch = errors.New("runner: the image's architecture cannot run on this runner")
+
 // ExecSpec describes one exec launched via Runner.ExecStream: the argv to run,
 // exec-scoped environment, and whether it runs under a PTY.
 type ExecSpec struct {

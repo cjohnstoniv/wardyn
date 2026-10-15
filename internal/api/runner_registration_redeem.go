@@ -4,6 +4,7 @@
 package api
 
 import (
+	"cmp"
 	"crypto/ed25519"
 	"errors"
 	"net/http"
@@ -58,6 +59,10 @@ func (s *Server) handleRunnerRegister(w http.ResponseWriter, r *http.Request) {
 		writeErrorReason(w, http.StatusUnprocessableEntity, reasonRunnerRegistrationInvalid, "machine_name must be at most 253 bytes of printable characters")
 		return
 	}
+	if !types.ValidArch(req.Arch) {
+		writeErrorReason(w, http.StatusUnprocessableEntity, reasonRunnerRegistrationInvalid, `arch must be "amd64" or "arm64"`)
+		return
+	}
 	orgHash := federation.OrgURLSHA256(s.cfg.RunnerOrgURL)
 	token, valid, err := rs.ConsumeRunnerRegistrationToken(r.Context(), req.Token, orgHash, s.cfg.Now().UTC())
 	if err != nil {
@@ -74,7 +79,7 @@ func (s *Server) handleRunnerRegister(w http.ResponseWriter, r *http.Request) {
 	s.registerLimiter.refund(peerKey(r.RemoteAddr), now)
 	registered, err := rs.CreateRunner(r.Context(), types.Runner{ID: uuid.New(), Owner: token.Owner,
 		Name: req.Name, PublicKey: req.PublicKey, KeyFingerprint: runnerwire.Fingerprint(req.PublicKey), OrgURLSHA256: orgHash, MintedBy: token.MintedBy,
-		Limits: req.Limits, MachineName: req.MachineName})
+		Limits: req.Limits, MachineName: req.MachineName, Arch: req.Arch})
 	if errors.Is(err, store.ErrConflict) {
 		writeErrorReason(w, http.StatusConflict, reasonRunnerKeyAlreadyRegistered, "this key was already registered; generate a new identity and registration token")
 		return
@@ -85,5 +90,6 @@ func (s *Server) handleRunnerRegister(w http.ResponseWriter, r *http.Request) {
 	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, types.ActorSystem, "runner:"+registered.ID.String(),
 		placement.ActionRunnerEnrol, registered.ID.String(), "success", mustJSON(map[string]any{"token_id": token.ID, "fingerprint": registered.KeyFingerprint, "limits": registered.Limits})))
-	writeJSON(w, http.StatusCreated, types.RunnerRegistration{RunnerID: registered.ID, Fingerprint: registered.KeyFingerprint, State: registered.State, OrgURLSHA256: orgHash, Limits: registered.Limits})
+	writeJSON(w, http.StatusCreated, types.RunnerRegistration{RunnerID: registered.ID, Fingerprint: registered.KeyFingerprint, State: registered.State, OrgURLSHA256: orgHash, Limits: registered.Limits,
+		ProxyImage: cmp.Or(s.cfg.ProxyImageByArch[req.Arch], s.cfg.ProxyImage)})
 }

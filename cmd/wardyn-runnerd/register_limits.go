@@ -18,6 +18,9 @@ import (
 // measureHost is what this computer has for runs (hostMeasure), swapped in tests.
 var measureHost = hostMeasure
 
+// engineArch is the Docker engine's CPU architecture ("amd64", "arm64" or ""), swapped in tests.
+var engineArch = dockerArch
+
 // registerLimits are register's limit flags: Runs at once, and the total and per-run CPU (CPUs), memory
 // and disk (GB, 1024 MiB each). A flag left out takes the proposal: half of what this computer reports
 // as the total, and per run the total divided by Runs at once (at least 1 CPU and 1 GB).

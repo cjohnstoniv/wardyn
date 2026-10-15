@@ -54,7 +54,7 @@ docs/operations/governance-writes.md=3086 share=35
 docs/operations/member-runs.md=1044 share=35
 # docs/operations/user-drives.md 4818 adds 14 over 4804 (0.9 release text for the fix sets merged at release); measured.
 docs/operations/user-drives.md=4818 share=35
-docs/operations/capabilities.md=4133 share=35
+docs/operations/capabilities.md=4141 share=35
 docs/operations/custom-components.md=1184 share=35
 # G-1423: docs/operations/api-tokens.md 4002 adds 11 over 3991 for GET /runs/{id}/output on the delegated-token list.
 # docs/operations/api-tokens.md 5466 adds 1464 over 4002 (0.9 F-1508-M3): invitations, dispositions and service identities.
@@ -95,6 +95,7 @@ docs/operations/denials.md=4963 share=35
 # docs/operations/capabilities.md 3999 adds 36 over 3963, measured: an egress_host grant is not authority for a private address.
 # docs/operations/capabilities.md 4106 adds 107 over 3999, measured: the self_host_runner value (0.9.1), its table cell and the operator exemption.
 # docs/operations/capabilities.md 4133 adds 27 over 4106, measured: an estate with a self-minted claimed runner at upgrade keeps self-hosting open (migration 0178).
+# docs/operations/capabilities.md 4141 adds 8 over 4133, measured: an admin-minted estate starts closed; the grant follows the upgrade.
 # docs/operations/three-roles.md 4113 adds 50 over 4063, measured: emptying ui_apps is not a narrowing, and an overlay that leaves none is refused.
 # docs/operations/governance-writes.md 3012 adds 34 over 2978, measured: an added inspection naming a detector sidecar is held for a second approver.
 # docs/operations/three-roles.md 4123 adds 10 over 4113, measured: ui_apps named as an unsatisfiable cause.

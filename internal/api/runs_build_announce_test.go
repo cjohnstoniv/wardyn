@@ -145,7 +145,7 @@ func TestBuildAnnounce_EveryBuildSiteWritesOnMissAndNothingOnHit(t *testing.T) {
 				tc.ws.ID = uuid.New()
 				wsRefs = []types.Workspace{*tc.ws}
 			}
-			if _, failed := srv.resolveCreateRunImage(context.Background(), tc.req, uuid.New(), wsRefs); failed {
+			if _, failed := srv.resolveCreateRunImage(context.Background(), tc.req, types.AgentRun{ID: uuid.New()}, wsRefs); failed {
 				t.Fatal("resolveCreateRunImage reported a failed build")
 			}
 			if got := log.events(); !reflect.DeepEqual(got, tc.want) {

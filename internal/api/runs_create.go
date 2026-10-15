@@ -540,16 +540,23 @@ func warnCeilingDeniedWorkspaceEgress(ceiling governanceCeiling, wsRefs []types.
 // builds nothing and is failed. The resolved image is persisted for provenance
 // (best-effort: a failed write must not block dispatch — the audit trail
 // still carries build events). Extracted verbatim from handleCreateRun; ctx is
-// already detached from client cancellation.
-func (s *Server) resolveCreateRunImage(ctx context.Context, req createRunRequest, runID uuid.UUID, wsRefs []types.Workspace) (string, bool) {
+// already detached from client cancellation. run is the created run: its bound runner's
+// architecture picks the default image's `@arch` variant (run_image_arch.go).
+func (s *Server) resolveCreateRunImage(ctx context.Context, req createRunRequest, run types.AgentRun, wsRefs []types.Workspace) (string, bool) {
+	runID := run.ID
 	image := agentImage(req.Agent, s.cfg.AgentImages)
+	var fact client.ImageFact
 	if req.UsesRunMode() {
 		// The set's image (the fold already refused a set no image carries), so a
 		// run with no harness starts from the agent base image. The cases below
 		// keep their precedence over it.
-		fact, _ := harnessSetImage(harnessSet(req), s.cfg.AgentImages, customImageRequested(req, wsRefs))
+		fact, _ = harnessSetImage(harnessSet(req), s.cfg.AgentImages, customImageRequested(req, wsRefs))
 		image = fact.Ref
 	}
+	// A runner of the other architecture uses the operator's `<key>@<arch>` image for the same key. This
+	// is before the cases below, so a BYOI wrap, a devcontainer build or a workspace base image still
+	// replaces the image entirely.
+	image = archImage(image, defaultImageKey(req, fact), s.runArch(ctx, run), s.cfg.AgentImageVariants)
 
 	// Shared FAILED path for the two explicit build lanes (BYOI + devcontainer):
 	// CAS from PENDING so a run a concurrent kill already moved to KILLED is not

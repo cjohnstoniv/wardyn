@@ -19,8 +19,9 @@ a laptop runner, `wardyn-runnerd` works with Docker Desktop, setup is one comman
   `POST /me/runners/tokens` (`wardyn runner token`, My runner → Get a token) answers `403 capability_feature` without
   it. An estate where someone registered and claimed a runner for themselves keeps self-hosting open: the migration
   adds an `all` allow, so only people a `feature` deny already names, including a `*` deny, are refused. Narrow or
-  remove it afterwards (Permissions → Self-hosted runners). An estate with none starts closed; grant it there when you
-  want people to self-host. Existing runners and claims keep working, the admin mint is not asked, and admins are
+  remove it afterwards (Permissions → Self-hosted runners). An estate with none, including one whose runners an admin minted for people, starts
+  closed: 0.9.0 cannot store the grant ahead of time, so add it right after the upgrade (people asking
+  for their own token are refused until then). Existing runners and claims keep working, the admin mint is not asked, and admins are
   never asked.
 - Runners registered before 0.9.0 still have no limits after an in-place upgrade and take no run. Find them with
   `wardyn runner list --all --no-limits` (self-hosted) and `wardyn runner remote list --no-limits` (remote-hosted), then
@@ -29,6 +30,11 @@ a laptop runner, `wardyn-runnerd` works with Docker Desktop, setup is one comman
 - With AWS SSO proxy-inject on (the default), `WARDYN_AWS_SSO_CONFIG_B64` now travels as a plain environment variable:
   it holds a placeholder `~/.aws` (start URL, region, account id, role name) and no token, so `docker inspect` and a
   Kubernetes pod spec show those values. With proxy-inject off it is still a secret.
+- Upgrade the organisation before `wardyn-runnerd`: a 0.9.1 runner cannot register with a 0.9.0 organisation, and a
+  0.9.0 organisation drops a 0.9.1 runner that reports an image it cannot run.
+- A `runner.json` written by a 0.9.1 `register` carries the proxy image the organisation named, which a 0.9.0
+  `wardyn-runnerd` cannot read: going back to 0.9.0 means registering the runner again (delete the state directory's
+  `runner.json` and `runner.key`, then register with a new token).
 
 ### Added
 
@@ -51,9 +57,22 @@ a laptop runner, `wardyn-runnerd` works with Docker Desktop, setup is one comman
 - `GET /me/runner-pools`: the pools you may use (for an administrator, without other people's user pools); the Go
   SDK gains `ListMyRunnerPools`. `claim --pool`, `setup --claim --pool` and the console claim dialog find your own
   pool by name through it.
-- Runner token mint answers carry `proxy_image` when the server has one, and the console prints the `serve` command
-  with it and notes the Docker Desktop flags.
+- The runner is handed its proxy image at registration: the register answer names the one for the runner's reported
+  architecture (`WARDYN_PROXY_IMAGE_AMD64` / `_ARM64`, else `WARDYN_PROXY_IMAGE`), `register` keeps it in
+  `runner.json`, and `serve` uses it after `--proxy-image` and `WARDYN_PROXY_IMAGE` and before the release default.
+  `setup` with no `--proxy-image` on an estate that cannot reach the public release image uses the organisation's
+  answer. The token mint answer carries `proxy_image` unless per-architecture proxy images are set, and the console
+  always prints the `serve` command.
 - Sign in again on a stored AWS or Claude sign-in, in Your model connections and the New Run provider picker.
+- A self-hosted runner reports its Docker engine's CPU architecture (`amd64` or `arm64`) at registration and on each connect (migration `0179_runner_arch`); the Runners tab, My runner and `wardyn runner list` show it.
+- Per-architecture images for a mirror that publishes one architecture per tag: a `<key>@arm64` (or `@amd64`) entry in
+  `WARDYN_AGENT_IMAGES` is used for a run on a runner of that architecture, and the plain key everywhere else; images
+  a run names itself (BYOI, a devcontainer, a workspace base image) are used as given. Setup status adds an
+  information row naming the keys with no image for the architectures your runners report.
+- When an image's architecture differs from the runner's engine, the runner starts it once, without network or mounts,
+  to see whether the engine runs it (Docker Desktop and Rancher Desktop can emulate). One that cannot run is refused
+  at sandbox create with `image_arch` and a sentence naming the image, both architectures and the fix; one that runs
+  is used, with a warning. Before, the run failed later with `exec format error`.
 
 ### Changed
 

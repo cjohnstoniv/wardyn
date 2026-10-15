@@ -21,7 +21,7 @@ import { Button } from "../../ui/button";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "../../ui/sheet";
 import { Hint, KindChip, OfflineNote, ResourceTable, RunsLine } from "./resource-table";
 import { amountsText, runnerRes } from "./resources";
-import { MachineText, PoolLinks } from "./runner-card";
+import { ArchText, MachineText, PoolLinks } from "./runner-card";
 import { RunnerChip } from "./runner-chip";
 import { barrierNames, postureLines, shortDate } from "./runner-display";
 import { ConfirmDialog } from "./confirm-dialog";
@@ -116,6 +116,7 @@ export function RunnerDrawer({
               <>
                 <Section label={RUNNER_V6.MACHINE} reported={RUNNER.REPORTED} data-machine>
                   <MachineText machine={runner.machine_name} />
+                  <ArchText arch={runner.arch} />
                   <Hint>{RUNNER_V6.MACHINE_HINT}</Hint>
                 </Section>
                 <Section label={RES.RESOURCES} reported={RUNNER_V6.LIMITS_BY_OWNER} data-resources>

@@ -75,6 +75,8 @@ export interface RunnerView {
   usage: RunnerUsage;
   /** The host name the runner last reported (registration, then each connect): runner-reported, never an identity. */
   machine_name?: string;
+  /** The CPU architecture of the runner's Docker engine ("amd64" or "arm64") as last reported: runner-reported, absent until it reports one. */
+  arch?: string;
   /** The owner's live user pools this runner is a member of; [] for none. */
   pools: RunnerPoolRef[];
 }
@@ -154,6 +156,8 @@ export interface RunnerRegistration {
   org_url_sha256: string;
   /** The limits the server stored; null on a runner registered before they existed. */
   limits: RunnerLimits | null;
+  /** The register answer only, and only when the organisation names one: the proxy image for the architecture the runner reported. */
+  proxy_image?: string;
 }
 
 /** The revoke answers' body (an inline map in internal/api/runner_revoke.go). */

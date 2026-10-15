@@ -19,6 +19,7 @@ import (
 	"github.com/containerd/errdefs"
 	"github.com/moby/moby/client"
 
+	"github.com/cjohnstoniv/wardyn/internal/dockerutil"
 	"github.com/cjohnstoniv/wardyn/internal/placement"
 	"github.com/cjohnstoniv/wardyn/internal/runner/docker"
 	"github.com/cjohnstoniv/wardyn/internal/runner/keystore"
@@ -104,6 +105,24 @@ func hostMeasure(ctx context.Context) (types.RunnerAmounts, error) {
 	}
 	host := os.Getenv("DOCKER_HOST")
 	return docker.MeasureInfo(info.Info, host == "" || strings.HasPrefix(host, "unix://"), docker.FreeDiskMiB), nil
+}
+
+// dockerArch is the Docker engine's CPU architecture, "amd64" or "arm64", or "" when the engine does
+// not answer within ten seconds or reports another: the runner then reports none, and the control plane
+// keeps the one it had.
+func dockerArch(ctx context.Context) string {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	cli, err := client.New(client.FromEnv)
+	if err != nil {
+		return ""
+	}
+	defer cli.Close()
+	info, err := cli.Info(ctx, client.InfoOptions{})
+	if err != nil {
+		return ""
+	}
+	return dockerutil.NormalizeArch(info.Info.Architecture)
 }
 
 func readDockerCapacity(ctx context.Context) (placement.Capacity, error) {
@@ -316,7 +335,7 @@ func localRunnerRuntime(ctx context.Context, identity runneridentity.Identity, s
 			}
 			// A host that cannot say its name reports none, and keeps the machine name it had.
 			machine, _ := os.Hostname()
-			data, err := runnerwire.Marshal(runnerwire.Caps{Support: support, Version: version.String(), MachineName: machine, Capacity: capacity(ctx)})
+			data, err := runnerwire.Marshal(runnerwire.Caps{Support: support, Version: version.String(), MachineName: machine, Arch: engineArch(ctx), Capacity: capacity(ctx)})
 			if err != nil {
 				return err
 			}
