@@ -21,6 +21,7 @@ From 0.9 the control plane places runs on a claimed runner through its owner's u
 | The relay's port | The port of the org's `WARDYN_CONTROL_PLANE_URL` (`8443` by default), not the org URL's. No control plane may listen on that loopback port on the same computer. |
 | A privileged port | For a runner installed as a user service, the control-plane URL's port must be 1024 or higher. A user service cannot bind a port such as `:443`, so it cannot be relayed; this fails at the first run, not at the startup check. |
 | Internal network | `serve` creates the `--internal-network` bridge (default `wardyn-internal`) when it is missing. |
+| Architecture | The runner reports its engine's (`amd64` or `arm64`). Images are multi-arch indexes, or the organisation names an `@arm64` entry in `WARDYN_AGENT_IMAGES` and `WARDYN_PROXY_IMAGE_ARM64`; see [Multi-arch images](adoption/corp-image-authoring.md#multi-arch-images). |
 | Windows | There is no native binary: run the runner inside WSL2 with Docker Desktop's WSL integration. |
 | Permission | `POST /api/v1/me/runners/tokens` needs the [`self_host_runner`](operations/capabilities.md#self_host_runner) permission (`403` `capability_feature`, target `me.runners.tokens`: "hosting your own runner isn't available to you. Ask your admin for the self_host_runner permission."). Admins are never asked. |
 

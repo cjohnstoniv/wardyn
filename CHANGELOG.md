@@ -63,6 +63,10 @@ a laptop runner, `wardyn-runnerd` works with Docker Desktop, setup is one comman
   always prints the `serve` command.
 - Sign in again on a stored AWS or Claude sign-in, in Your model connections and the New Run provider picker.
 - A self-hosted runner reports its Docker engine's CPU architecture (`amd64` or `arm64`) at registration and on each connect (migration `0179_runner_arch`); the Runners tab, My runner and `wardyn runner list` show it.
+- Per-architecture images for a mirror that publishes one architecture per tag: a `<key>@arm64` (or `@amd64`) entry in
+  `WARDYN_AGENT_IMAGES` is used for a run on a runner of that architecture, and the plain key everywhere else; images
+  a run names itself (BYOI, a devcontainer, a workspace base image) are used as given. Setup status adds an
+  information row naming the keys with no image for the architectures your runners report.
 - When an image's architecture differs from the runner's engine, the runner starts it once, without network or mounts,
   to see whether the engine runs it (Docker Desktop and Rancher Desktop can emulate). One that cannot run is refused
   at sandbox create with `image_arch` and a sentence naming the image, both architectures and the fix; one that runs

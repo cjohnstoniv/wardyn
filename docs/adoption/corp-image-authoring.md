@@ -222,7 +222,8 @@ Every image Wardyn publishes is a `linux/amd64` + `linux/arm64` index (`platform
 
 - Keep every ref in [`WARDYN_AGENT_IMAGES`](../ENV.md) (and every image you build from our bases) a multi-arch index with both platforms.
 - Pin an index by its **index digest** (`repo@sha256:…` from `docker buildx imagetools inspect <ref>`), never by a child-manifest digest.
-- A single-arch image or a child-manifest digest pulls on one architecture and fails on the other (`no matching manifest for linux/arm64/v8`), so a mixed estate breaks while a one-architecture test passes.
+- A multi-arch index that lacks a platform fails at pull on that architecture (`no matching manifest for linux/arm64/v8`). A single-architecture image pulls anywhere and fails only when it starts on the other architecture, unless the engine emulates it. A laptop runner starts such an image once to check and refuses it, naming the image, when it cannot run (`image_arch`).
+- If your mirror publishes one architecture per tag, name both: `{"base": "<mirror>/agent-base:<tag>", "base@arm64": "<mirror>/agent-base:<tag>-arm64"}` in `WARDYN_AGENT_IMAGES`. A run on an `arm64` runner uses the `@arm64` entry; every other run uses the plain one. Set the proxy the same way with `WARDYN_PROXY_IMAGE_ARM64` (and `_AMD64`); a runner is handed the one for its architecture when it registers.
 - Build and push both platforms in one command, then check the index lists both:
 
 ```sh
