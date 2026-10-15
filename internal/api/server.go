@@ -145,6 +145,9 @@ type Config struct {
 	// ProxyImage is the egress-proxy image the daemon runs sandboxes with (WARDYN_PROXY_IMAGE). The runner
 	// token mint answers carry it; empty omits it.
 	ProxyImage string
+	// ProxyImageByArch holds a per-architecture proxy image (WARDYN_PROXY_IMAGE_AMD64/_ARM64), keyed amd64
+	// or arm64; a runner's register answer carries the one for its reported architecture, else ProxyImage.
+	ProxyImageByArch map[string]string
 	// RunnerHub supplies durable runner admission and lifecycle callbacks.
 	// The server always supplies OrgURL and Lookup from its own configuration.
 	RunnerHub remote.HubConfig
@@ -316,6 +319,8 @@ type Config struct {
 	// (must parse if set); nil disables the override and the convention is used
 	// for every agent.
 	AgentImages map[string]string
+	// AgentImageVariants holds the `<key>@<arch>` entries of WARDYN_AGENT_IMAGES: arch → plain key → ref.
+	AgentImageVariants map[string]map[string]string
 	// BedrockRegion is read by nothing: the boot Bedrock lane (WARDYN_BEDROCK_*)
 	// is retired and a run's region is its provider's. ponytail: kept only so
 	// the ssotoken tests that still set it compile; delete it with those lines.
