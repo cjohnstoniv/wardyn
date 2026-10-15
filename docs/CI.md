@@ -296,7 +296,8 @@ Wardyn's own [`ci.yml`](../.github/workflows/ci.yml) runs on every pull request 
 - `push:` stays narrow to `main`, `master` and `feature/**`, since every other commit already gets a run from its own PR.
 - It has no `release/**`: `release.yml` accepts CI by tree (#1461), and [`release-branch-checks.yml`](../.github/workflows/release-branch-checks.yml) runs only DCO and gitleaks there (#1466).
 - The push-gate DCO exemption for GitHub-made merges needs gpg and GitHub's web-flow key id `B5690EEEBB952194`; if GitHub rotates that key, update the id in the Makefile's `dco` recipe.
-- [`scripts/ci-parity-local.sh`](../scripts/ci-parity-local.sh) runs changed packages under `-race`, then against a throwaway Postgres with the pool guard and a `localhost` DSN.
+- [`scripts/ci-parity-local.sh`](../scripts/ci-parity-local.sh) runs changed packages under `-race`, then a throwaway Postgres (pool guard, `localhost` DSN).
+- `make candidate-preflight` vets release candidates.
 
 Image-script tests set `WARDYN_MITM_CA_DIR` to a private temporary directory to isolate generated CA files.
 The agent script defaults to `/tmp/wardyn`; deployment behavior is unchanged.
