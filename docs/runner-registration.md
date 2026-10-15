@@ -131,12 +131,12 @@ wardyn-runnerd serve --org https://wardyn.example \
   --internal-network wardyn-internal
 ```
 
-The console prints the same command from the token mint answer, with its `proxy_image`, and a note on `--total-disk` for VM-backed Docker. The relay flags are needed only when the [startup check](#the-startup-reachability-check) refuses.
+The console prints the same command from the token mint answer, with its `proxy_image` unless the organisation keeps one proxy image per architecture, and a note on `--total-disk` for VM-backed Docker. The relay flags are needed only when the [startup check](#the-startup-reachability-check) refuses.
 
 | Setting | Behaviour |
 |---|---|
 | `--state-dir` | Uses the registration directory; defaults to the user's private runner configuration directory. |
-| `--proxy-image` / `WARDYN_PROXY_IMAGE` | A release binary defaults to `ghcr.io/cjohnstoniv/wardyn-proxy:<version>`. A development build must pass it, matching this daemon version. |
+| `--proxy-image` / `WARDYN_PROXY_IMAGE` | The flag, then the variable, then the image the register answer named for this runner's architecture (kept in `runner.json`), then, on a release binary, `ghcr.io/cjohnstoniv/wardyn-proxy:<version>`. A development build with none of these must pass it. |
 | `--relay-listen` / `WARDYN_RELAY_LISTEN` | Where the run relay listens, instead of the engine's default; any engine, loopback included. See [the startup check](#the-startup-reachability-check). |
 | `--relay-host-target` / `WARDYN_RELAY_HOST_TARGET` | The address a run's proxy dials to reach the relay: `host-gateway` or an IP address. `setup` pins the one it proved on a VM-backed engine. |
 | `--internal-network` / `WARDYN_INTERNAL_NETWORK` | Local Docker bridge for proxy sidecars; defaults to `wardyn-internal` and is created when missing. |

@@ -28,8 +28,11 @@ a laptop runner, `wardyn-runnerd` works with Docker Desktop, setup is one comman
 - With AWS SSO proxy-inject on (the default), `WARDYN_AWS_SSO_CONFIG_B64` now travels as a plain environment variable:
   it holds a placeholder `~/.aws` (start URL, region, account id, role name) and no token, so `docker inspect` and a
   Kubernetes pod spec show those values. With proxy-inject off it is still a secret.
+- Upgrade the organisation before `wardyn-runnerd`: a 0.9.1 runner cannot register with a 0.9.0 organisation, and a
+  0.9.0 organisation drops a 0.9.1 runner that reports an image it cannot run.
 - A `runner.json` written by a 0.9.1 `register` carries the proxy image the organisation named, which a 0.9.0
-  `wardyn-runnerd` cannot read: going back to 0.9.0 means registering the runner again.
+  `wardyn-runnerd` cannot read: going back to 0.9.0 means registering the runner again (delete the state directory's
+  `runner.json` and `runner.key`, then register with a new token).
 
 ### Added
 

@@ -2545,7 +2545,8 @@ hiding them would repeat the failure mode we are designed to avoid.
     - A developer holding a run token or the runner key (#70, #71) can suppress, delay or fabricate any of them for their own runs.
     - Rows the organisation writes from its own acts — create, mint, approvals, `via_org` decisions — stay authoritative.
     - No ground truth exists for a local run: the relay refuses `/internal/groundtruth` and no host sensor runs on a laptop. Of §8's three audit streams, one is authoritative, one self-reported and one absent.
-    - A runner's `machine_name` is its own report, bounded to `253` bytes and never used for admission.
+    - A runner's `machine_name` and `arch` are its own reports; the name is bounded to `253` bytes, the arch is `amd64`, `arm64` or empty, and neither is used for admission. `arch` only picks an image variant.
+    - On an architecture mismatch the runner starts the image once, for at most 3 s, with no network, mounts or capabilities, as uid 1000, under the engine's default runtime rather than the run's class runtime (accepted: it runs nothing the following sandbox would not).
     - A self-hosted runner's limits, `max_runs` among them, are owner-set and enforced by the organisation under the runner row lock (#85). The runner's own refusal backs up a wrong count; a killed run's sandbox counts until its kill action applies.
     - This replaces #50–#52 for client mode: one writer re-chains nothing, and the open question is what the runner chose to send.
 
