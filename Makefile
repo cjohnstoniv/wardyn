@@ -1,4 +1,4 @@
-.PHONY: doc-links test-gaps license-headers notices diagrams build build-docker build-k8s test test-docker lint ui compose-build compose-up compose-down demo clean test-conformance-docker test-conformance-k8s test-kek-conformance test-kek-conformance-kind test-daemon-proxy-secret-kind build-conformance-agent-image test-conformance-stub test-envbuild-integration govulncheck staticcheck agent-images test-drive help test-report test-report-pg test-report-docker test-report-k8s cover-check cover-union release-check release-patch ui-test ui-typecheck test-e2e test-e2e-concurrent test-e2e-live test-e2e-byoi test-e2e-ssh test-e2e-ssh-k8s test-e2e-ui-sandbox test-provider-seed test-e2e-ui screenshots record-demo setup stop-host reset reset-all doctor dev-pg agent-images-core test-race test-race-pg tidy-check agent-image-base agent-image-full agent-image-harnesses agent-image-vscode agent-image-novnc gitleaks licenses test-scripts helm-lint helm-install-test kind-quickstart kind-down kind-sso kind-sso-down compose-config dco npm-license npm-audit npm-audit-dev ci
+.PHONY: doc-links test-gaps license-headers notices diagrams build build-docker build-k8s test test-docker lint ui compose-build compose-up compose-down demo clean test-conformance-docker test-conformance-k8s test-kek-conformance test-kek-conformance-kind test-daemon-proxy-secret-kind build-conformance-agent-image test-conformance-stub test-envbuild-integration govulncheck staticcheck agent-images test-drive help test-report test-report-pg test-report-pg-api test-report-docker test-report-k8s cover-check cover-union release-check release-patch ui-test ui-typecheck test-e2e test-e2e-concurrent test-e2e-live test-e2e-byoi test-e2e-ssh test-e2e-ssh-k8s test-e2e-ui-sandbox test-provider-seed test-e2e-ui screenshots record-demo setup stop-host reset reset-all doctor dev-pg agent-images-core test-race test-race-pg tidy-check agent-image-base agent-image-full agent-image-harnesses agent-image-vscode agent-image-novnc gitleaks licenses test-scripts helm-lint helm-install-test kind-quickstart kind-down kind-sso kind-sso-down compose-config dco npm-license npm-audit npm-audit-dev ci
 
 COMPOSE_FILE := deploy/compose/docker-compose.yaml
 
@@ -253,7 +253,17 @@ test-report-pg: ## Postgres-gated suite with reports (needs WARDYN_TEST_PG)
 # PUT). Serializing packages costs ~1 min; per-package throwaway databases are
 # the real fix if that minute ever matters.
 	@echo "Running Postgres-gated suite with reports (requires WARDYN_TEST_PG)..."
-	WARDYN_TEST_REPORT_NAME=$(PG_REPORT) ./scripts/test-report.sh pg -p 1 $(PG_PKGS)
+	WARDYN_TEST_REPORT_NAME=$(PG_REPORT) ./scripts/test-report.sh pg -p 1 $(if $(PG_RUN),-run '$(PG_RUN)') $(PG_PKGS)
+
+# The api shards: only the tests that skip without the DSN (scripts/pg-test-select.sh),
+# not the ~4400 others the `go` unit job already runs under -race. PG_PART=i/n runs the
+# i-th of n slices (ci.yml runs 1/2 and 2/2); every testfloor.Mark(t, "pg") probe is in
+# every slice, so each slice's skip floor still has to see them pass. The unit run guards
+# the selection (test-report.sh).
+PG_PART ?= 1/1
+test-report-pg-api: PG_REPORT ?= pg-api
+test-report-pg-api: ## An api slice of test-report-pg: just the Postgres-gated tests of internal/api and test/apie2e
+	$(MAKE) test-report-pg PG_REPORT='$(PG_REPORT)' PG_PKGS='$(shell ./scripts/pg-test-select.sh --packages)' PG_RUN='$(shell ./scripts/pg-test-select.sh --part $(PG_PART))'
 
 # The whole tree under -tags docker, so the container-hardening driver
 # (internal/runner/docker), internal/envbuild and the wardynd wiring that calls
@@ -663,6 +673,7 @@ test-scripts: ## Daemon-free shell regression tests (scripts/test-*.sh)
 	./scripts/test-nightly-migration-merge-check.sh
 	./scripts/test-release-check.sh
 	./scripts/test-release-commit.sh
+	./scripts/test-test-report.sh
 	./scripts/test-release-patch.sh
 	./scripts/test-report-diagnostics.sh
 	./scripts/test-repo-guards.sh
