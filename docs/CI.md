@@ -298,6 +298,12 @@ Wardyn's own [`ci.yml`](../.github/workflows/ci.yml) runs on every pull request 
 - The push-gate DCO exemption for GitHub-made merges needs gpg and GitHub's web-flow key id `B5690EEEBB952194`; if GitHub rotates that key, update the id in the Makefile's `dco` recipe.
 - [`scripts/ci-parity-local.sh`](../scripts/ci-parity-local.sh) runs changed packages under `-race`, then against a throwaway Postgres with the pool guard and a `localhost` DSN.
 
+| Go-suite control | Where | Rule |
+|---|---|---|
+| `api` shards run only DSN-gated tests | `make test-report-pg-api`, [`scripts/pg-test-select.sh`](../scripts/pg-test-select.sh) | The unit run fails if a DSN-skipped test is outside the pick; every `pg` probe is picked |
+| Postgres shards write no coverage | `WARDYN_TEST_REPORT_COVER=0` | `build` unions `unit`, `docker`, `k8s` only |
+| Flaky Go test quarantine | [`test/go-quarantine.txt`](../test/go-quarantine.txt), `go test -skip` | Issue, owner, expiry within 14 days; expired or malformed fails the suite |
+
 Image-script tests set `WARDYN_MITM_CA_DIR` to a private temporary directory to isolate generated CA files.
 The agent script defaults to `/tmp/wardyn`; deployment behavior is unchanged.
 
@@ -342,7 +348,7 @@ The agent script defaults to `/tmp/wardyn`; deployment behavior is unchanged.
 | `build` | – | pending | pending | 10 |
 | `conformance-k8s` | 58 | 11.2 | 12.8 | 35 |
 | `ui-e2e` (1/2, 2/2 matrix) | 1 | 7.0 | 7.0 | 25 |
-| `test-pg-shard` (api, store, race matrix) | – | pending | pending | 20 |
+| `test-pg-shard` (api-1, api-2, store, race) | – | pending | pending | 20 |
 | `test-pg` (aggregator) | – | pending | pending | 10 |
 | `ui` | 60 | 4.5 | 4.8 | 20 |
 | `conformance` | 60 | 4.2 | 4.7 | 45 |
