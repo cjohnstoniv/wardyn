@@ -1,0 +1,99 @@
+name: Mirror base images
+
+# Copies every docker.io digest pin in deploy/base-images.txt into ONE public
+# GHCR repository, ghcr.io/<owner>/base-images, byte-for-byte (`skopeo copy
+# --all --preserve-digests`, so the copy's index digest IS the pin's digest).
+# CI then reads Docker Hub images from that copy instead of spending Docker
+# Hub's pull quota: .github/actions/base-image-mirror serves it back under the
+# docker.io names, and the Postgres service containers name it directly.
+# Dockerfiles keep their docker.io FROM lines, so Dependabot and the release
+# images' provenance are unchanged. See docs/CI.md, "Docker Hub base-image
+# mirror".
+#
+# Each pin is tagged <namespace>-<name>-<tag>-<first 12 digest hex> so two pins
+# of one tag (alpine:3.24 has two) never overwrite each other; the tags only
+# keep the manifests named, since CI resolves by digest.
+#
+# Idempotent: a digest already in the repository is skipped. Tag pins ("tag "
+# lines) are copied the same way; the composite action tags them locally.
+#
+# A Dependabot base-image bump cannot dispatch this itself (its token is read-
+# only): add the new digest to deploy/base-images.txt on the bump's branch, run
+# this workflow from the Actions tab with `ref` set to that branch, then re-run
+# the pull request's checks so they read the copy instead of Docker Hub. Only
+# the list is read from `ref`; the script is this file from the branch the run
+# is dispatched on (main by default).
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Branch, tag or SHA whose deploy/base-images.txt to copy
+        default: main
+  schedule:
+    - cron: "23 5 * * 1"
+  push:
+    branches: [main]
+    paths:
+      - deploy/base-images.txt
+      - .github/workflows/mirror-base-images.yml
+
+permissions: {}
+
+concurrency:
+  group: mirror-base-images
+  cancel-in-progress: false
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
+    env:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+          persist-credentials: false
+      - name: Copy each pin to GHCR with its digest unchanged
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+          DEST: ghcr.io/${{ github.repository_owner }}/base-images
+          ACTOR: ${{ github.actor }}
+        run: |
+          set -euo pipefail
+          DEST="${DEST,,}"
+          printf '%s' "$GHCR_TOKEN" | skopeo login ghcr.io -u "$ACTOR" --password-stdin
+          # The source reads are Docker Hub pulls too: authenticated when the
+          # secret is present, and retried on the next schedule if one 429s.
+          if [ -n "$DOCKERHUB_USERNAME" ]; then
+            printf '%s' "$DOCKERHUB_TOKEN" | skopeo login docker.io -u "$DOCKERHUB_USERNAME" --password-stdin
+          fi
+          failed=0
+          while read -r ref; do
+            ref="${ref#tag }"
+            if ! [[ "$ref" =~ ^docker\.io/[a-z0-9._-]+/[a-z0-9._/-]+:[A-Za-z0-9._-]+@sha256:[0-9a-f]{64}$ ]]; then
+              echo "::error title=mirror-base-images::malformed entry: $ref"; failed=1; continue
+            fi
+            repo="${ref%@*}"; digest="${ref#*@}"
+            name="${repo%:*}"; tag="${repo##*:}"
+            path="${name#docker.io/}"
+            dest_tag="${path//\//-}-${tag}-${digest:7:12}"
+            if skopeo inspect --raw "docker://$DEST@$digest" >/dev/null 2>&1; then
+              echo "present  $ref"
+              continue
+            fi
+            if skopeo copy --all --preserve-digests --retry-times 3 \
+                 "docker://$name@$digest" "docker://$DEST:$dest_tag" \
+               && skopeo inspect --raw "docker://$DEST@$digest" >/dev/null; then
+              echo "copied   $ref -> $DEST:$dest_tag"
+            else
+              echo "::error title=mirror-base-images::could not copy $ref"
+              failed=1
+            fi
+          done < <(grep -vE '^[[:space:]]*(#|$)' deploy/base-images.txt)
+          exit "$failed"

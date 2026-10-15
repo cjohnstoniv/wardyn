@@ -59,6 +59,12 @@
 #      build-args from the matrix, and no target or cache on either side.
 #      release.yml's promote matrix carries the same rows as the build jobs, and
 #      the staged-digest proof in preflight-green keeps its three parts.
+#  17. every Docker Hub digest pin a Dockerfile FROM names (with or without
+#      --platform=) is in deploy/base-images.txt, the list
+#      mirror-base-images.yml copies to GHCR, and every base-images digest a
+#      workflow names is in that list — so a Dependabot base-image bump fails
+#      here until it is mirrored, instead of quietly going back to Docker Hub
+#      and its pull quota (docs/CI.md, "Docker Hub base-image mirror").
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
@@ -610,6 +616,38 @@ else
         || { bad "$REL: the promote job's copy step must run cosign copy --force (a final tag's :latest already exists, and cosign refuses to move it without) and then check the tag's digest equals \$DIGEST"; stage_fail=1; }
     if [ "$stage_fail" = 0 ]; then ok "nightly's staged rows and build steps match release.yml's publish set (names, dockerfiles, build-args, platforms, provenance, no cache), and no local-only image is staged"; fi
 fi
+
+# ── 17. every Docker Hub FROM pin is in the GHCR mirror list ────────────────
+BASE_LIST=deploy/base-images.txt
+mirror_fail=0
+# Entries as docker.io/<ns>/<name>@sha256:<d> (the tag is cosmetic: CI resolves
+# by digest). Every line must be a normalized docker.io ref with a tag, behind
+# "tag " for a tag pin. The tag pins' pull sites are hand-maintained: no
+# extractor here finds them (docker run, wardyn --image, kubectl --image).
+listed="$(grep -vE '^[[:space:]]*(#|$)' "$BASE_LIST" || true)"
+[ -n "$listed" ] || { bad "$BASE_LIST has no entries — guard 17 is pointing at nothing"; mirror_fail=1; }
+malformed="$(printf '%s\n' "$listed" | grep -vE '^(tag )?docker\.io/[a-z0-9._-]+/[a-z0-9._/-]+:[A-Za-z0-9._-]+@sha256:[0-9a-f]{64}$' || true)"
+[ -z "$malformed" ] || { bad "$BASE_LIST: not docker.io/<ns>/<name>:<tag>@sha256:<64 hex>: $(echo $malformed)"; mirror_fail=1; }
+listed_keys="$(printf '%s\n' "$listed" | sed -E 's/^tag //; s/:[^:/@]+@/@/' | sort -u)"
+# FROM [--flag=...]... <image>[ AS stage]; keep digest pins whose registry is
+# Docker Hub (no '.', ':' or localhost in the first path component), then
+# normalize to the list's form: docker.io/ prefix, library/ for official images.
+from_keys="$(git ls-files -z -- ':(glob)**/Dockerfile*' \
+    | xargs -0 sed -nE 's/^[[:space:]]*FROM[[:space:]]+(--[^[:space:]]+[[:space:]]+)*([^[:space:]]+).*/\2/p' \
+    | grep -E '@sha256:[0-9a-f]{64}$' \
+    | awk -F/ 'NF > 1 && ($1 ~ /[.:]/ || $1 == "localhost") { if ($1 != "docker.io") next; sub(/^docker\.io\//, "") }
+               { print ((index($0, "/") ? "" : "library/") $0) }' \
+    | sed -E 's|^|docker.io/|; s/:[^:/@]+@/@/' | sort -u)"
+[ -n "$from_keys" ] || { bad "no Docker Hub FROM digest pins found — guard 17's extractor is pointing at nothing"; mirror_fail=1; }
+missing="$(comm -23 <(printf '%s\n' "$from_keys") <(printf '%s\n' "$listed_keys"))"
+[ -z "$missing" ] || { bad "Dockerfile FROM pins missing from $BASE_LIST (add them so mirror-base-images.yml copies them to GHCR): $(echo $missing)"; mirror_fail=1; }
+# A workflow naming the GHCR copy directly (the Postgres service containers)
+# must name a digest the mirror actually copies.
+for d in $(git grep -hoE 'ghcr\.io/cjohnstoniv/base-images[^[:space:]"'\'']*@sha256:[0-9a-f]{64}' -- .github/workflows | sed -E 's/.*@//' | sort -u); do
+    printf '%s\n' "$listed_keys" | grep -qF "@$d" \
+        || { bad ".github/workflows names ghcr.io/cjohnstoniv/base-images@$d, which $BASE_LIST does not list (so it is never mirrored)"; mirror_fail=1; }
+done
+if [ "$mirror_fail" = 0 ]; then ok "every Docker Hub FROM pin ($(printf '%s\n' "$from_keys" | wc -l | tr -d ' ')) and every base-images digest a workflow names is in $BASE_LIST"; fi
 
 if [ "$fail" = 0 ]; then echo "--- test-repo-guards: PASS ---"; else echo "--- test-repo-guards: FAIL ---"; fi
 exit "$fail"
