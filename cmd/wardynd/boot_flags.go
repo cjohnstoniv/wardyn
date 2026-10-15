@@ -162,6 +162,8 @@ type bootFlags struct {
 	ageKey           *string
 	platformKeyFile  *string
 	proxyImage       *string
+	proxyImageAMD64  *string
+	proxyImageARM64  *string
 	driveProbeImage  *string
 
 	recordingDir       *string
@@ -453,6 +455,8 @@ func parseBootFlags() *bootFlags {
 		ageKey:                 flagEnv("age-key", "WARDYN_AGE_KEY", "", "age X25519 identity (AGE-SECRET-KEY-...) for the secret store; generated and logged if empty"),
 		platformKeyFile:        flagEnv("platform-key-file", "WARDYN_PLATFORM_KEY_FILE", "", "path to a second age identity that alone protects wardynd's signing, session and SSH host keys, and the key that seals every run's stored proxy config, when secrets are sealed locally. Empty (default): WARDYN_AGE_KEY protects both. Set on an existing install, run wardynd -rewrap -rewrap-adopt-boot-keys once; see docs/operations/secrets-and-keys.md"),
 		proxyImage:             flagEnv("proxy-image", "WARDYN_PROXY_IMAGE", "", "OCI image for the wardyn-proxy sidecar (docker runner)"),
+		proxyImageAMD64:        flagEnv("proxy-image-amd64", "WARDYN_PROXY_IMAGE_AMD64", "", "OCI image for the wardyn-proxy sidecar handed to a self-hosted runner that reports amd64 when it registers; empty gives it -proxy-image"),
+		proxyImageARM64:        flagEnv("proxy-image-arm64", "WARDYN_PROXY_IMAGE_ARM64", "", "OCI image for the wardyn-proxy sidecar handed to a self-hosted runner that reports arm64 when it registers; empty gives it -proxy-image"),
 
 		driveProbeImage: flagEnv("drive-probe-image", "WARDYN_DRIVE_PROBE_IMAGE", "", "OCI image for the host_path drive-readability probe container (docker runner). Empty (default) keeps the pinned busybox-class default"),
 		recordingDir:    flagEnv("recording-dir", "WARDYN_RECORDING_DIR", "./data/recordings", `directory for stored PTY session recordings (asciicast); used only by the "fs" recording store`),

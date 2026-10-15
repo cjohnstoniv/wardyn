@@ -42,4 +42,5 @@
 # docs/ENV.md 36975 adds 36 over 36939 (0.9.1 L2): the WARDYN_RELAY_LISTEN row, which the env-doc guard requires; measured.
 # docs/ENV.md 37032 adds 57 over 36975 (0.9.1 L8), measured: the multi-arch rule on WARDYN_AGENT_IMAGES, WARDYN_TOKEN read by setup --claim, the proxy-inject placeholder on WARDYN_AWS_SSO_CONFIG_B64 and the bedrock_sso refusal with it off.
 # docs/ENV.md 37064 adds 32 over 37032 (0.9.1 L9): the WARDYN_RELAY_HOST_TARGET row, which the env-doc guard requires; measured.
-docs/ENV.md=37064 share=5
+# docs/ENV.md 37119 adds 55 over 37064 (0.9.1 L12 W1), measured: the `@arch` entries on WARDYN_AGENT_IMAGES and the WARDYN_PROXY_IMAGE_AMD64/_ARM64 rows, which the env-doc guard requires.
+docs/ENV.md=37119 share=5
