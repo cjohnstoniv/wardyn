@@ -397,7 +397,7 @@ gh run list -R cjohnstoniv/wardyn --workflow ci.yml --status completed --limit 6
 - The 07:00 nightly and a plain dispatch run every lane. A release candidate dispatches it with `-f scope=candidate`, which [`scripts/release-patch.sh`](../scripts/release-patch.sh) does right after pushing the branch and before opening the PR.
 - Eight jobs then skip through a job-level `if: inputs.scope != 'candidate'`: `e2e-live`, `ci-mode-dogfood-model-fake`, `test-e2e-concurrent`, `kind-survival-walk`, `hybrid-walk`, `kind-upgrade-walk`, `migration-merge-check` and `published-image-scan`.
 - That frees about 60 runner-minutes by median and 12 job slots. What remains is `release.yml`'s `watched=` list plus the `multi-arch build` staging jobs.
-- [`scripts/test-repo-guards.sh`](../scripts/test-repo-guards.sh) guard 17 keeps the skip set in step with `notify-new-lanes`. A skipped job reports `skipped`, so that job stays quiet.
+- [`scripts/test-repo-guards.sh`](../scripts/test-repo-guards.sh) guard 18 keeps the skip set in step with `notify-new-lanes`. A skipped job reports `skipped`, so that job stays quiet.
 - A dispatched nightly has one concurrency group per ref and scope, so a second dispatch cancels the first. A scheduled run has its own group and is never cancelled.
 - `release.yml` has one group per ref and cancels nothing, so a dispatch and the tag push cannot publish at once.
 

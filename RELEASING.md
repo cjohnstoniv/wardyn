@@ -250,7 +250,7 @@ crash or a usage limit resumes with the same command:
   - The promote path needs the `path` input on `release.yml`, which a branch gets by containing R7.
 
 - **Promote at the tag (R9).** A `vX.Y.Z` tag push promotes the images the candidate's nightly staged instead of rebuilding them.
-  - `preflight-green` chooses: [`scripts/green-by-tree.sh`](scripts/green-by-tree.sh) with `NEED_STAGING=1` must find CI and the newest dispatched nightly green on the tag's tree, and that nightly must be under 24 hours old.
+  - `preflight-green` chooses: [`scripts/green-by-tree.sh`](scripts/green-by-tree.sh) with `NEED_STAGING=1` must find CI and the newest dispatched nightly green on the tag's tree, and that nightly must be under 23 hours old.
   - Otherwise the tag falls back to `path=build`. The job summary says which path ran and why.
   - A dispatch of `release.yml` takes the `path` input as given (`build` by default). A dispatch and a tag push for the same ref queue behind each other and nothing is cancelled.
   - Promote has not run on GitHub since 2026-08-27, so the first real use follows one rehearsal: `gh workflow run release.yml --ref <candidate branch> -f path=promote`.

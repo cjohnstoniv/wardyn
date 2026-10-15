@@ -114,7 +114,7 @@ name: Release images
 # ghcr.io/cjohnstoniv/staging/<image>:run-<nightly run id>. The `promote` job
 # copies those exact digests to the release tags, then signs, scans and attests
 # them under this workflow's identity. A tag push takes the promote path when the
-# newest dispatched nightly on the tag's tree is green and under 24 hours old
+# newest dispatched nightly on the tag's tree is green and under 23 hours old
 # (R9), and otherwise falls back to the build path (the `images` and
 # `images-ui-sandbox` jobs); preflight-green's `path` step decides and writes
 # which one it took, and why, to the job summary.
@@ -233,8 +233,8 @@ jobs:
       # copies the digests the candidate's nightly staged. A dispatch asks for one
       # (the input defaults to build). A tag push promotes when green-by-tree.sh,
       # asked with NEED_STAGING=1, finds CI green and the newest dispatched
-      # nightly green on the tag's tree, and that nightly was created under 24
-      # hours ago (the same limit the staging step enforces, so a stale nightly
+      # nightly green on the tag's tree, and that nightly was created under 23
+      # hours ago (inside the staging step's 24 h limit, so a stale nightly
       # falls back to build here instead of failing there). Anything else, an
       # API error included, takes build; the `green` step below then judges the
       # tree again and fails the run if it is not green. The watched list is typed
@@ -254,20 +254,23 @@ jobs:
             reason="workflow_dispatch asked for path=${PATH_INPUT:-build}"
             if [ "$PATH_INPUT" = promote ]; then choice=promote; fi
           else
-            probe="$(WATCHED="$watched" NEED_STAGING=1 ./scripts/green-by-tree.sh "$GITHUB_SHA" 2>/tmp/probe.err)"
-            rc=$?
+            # Not `probe=$(...)` alone: the step runs under bash -e, which would end it on a
+            # non-zero exit before the build fallback below could run.
+            probe="$(WATCHED="$watched" NEED_STAGING=1 ./scripts/green-by-tree.sh "$GITHUB_SHA" 2>/tmp/probe.err)" && rc=0 || rc=$?
             if [ "${rc}" -ne 0 ]; then
               reason="no usable staged nightly (green-by-tree.sh exit ${rc}): $(tail -n 3 /tmp/probe.err | tr '\n' ' ')"
+              cat /tmp/probe.err >&2
             else
               run_id="$(sed -n 's/^nightly_run=//p' <<<"$probe")"
-              created="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}" --jq .created_at)"
+              created="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}" --jq .created_at)" || created=""
+              # 23 h, not 24: the staging step rechecks 24 h later, so a nightly this step accepts must still pass there.
               if [ -z "${created}" ]; then
                 reason="could not read the created_at of nightly run ${run_id}"
-              elif [ $(( $(date +%s) - $(date -d "${created}" +%s) )) -gt 86400 ]; then
-                reason="nightly run ${run_id} was created ${created}, more than 24 hours ago: staged images are stale"
+              elif [ $(( $(date +%s) - $(date -d "${created}" +%s) )) -gt 82800 ]; then
+                reason="nightly run ${run_id} was created ${created}, more than 23 hours ago: staged images are too old to promote"
               else
                 choice=promote
-                reason="nightly run ${run_id} (created ${created}) is green on the tag's tree and under 24 hours old"
+                reason="nightly run ${run_id} (created ${created}) is green on the tag's tree and under 23 hours old"
               fi
             fi
           fi

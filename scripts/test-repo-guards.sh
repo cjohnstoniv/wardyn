@@ -59,7 +59,7 @@
 #      build-args from the matrix, and no target or cache on either side.
 #      release.yml's promote matrix carries the same rows as the build jobs, and
 #      the staged-digest proof in preflight-green keeps its three parts.
-#  17. nightly.yml's scope=candidate skips exactly the lanes a release does not
+#  18. nightly.yml's scope=candidate skips exactly the lanes a release does not
 #      gate on: a job outside notify-new-lanes.needs (and not a notify-* job)
 #      carries `if: inputs.scope != 'candidate'`, a job inside it never does.
 set -euo pipefail
@@ -614,7 +614,7 @@ else
     if [ "$stage_fail" = 0 ]; then ok "nightly's staged rows and build steps match release.yml's publish set (names, dockerfiles, build-args, platforms, provenance, no cache), and no local-only image is staged"; fi
 fi
 
-# ── 17. nightly scope=candidate skips exactly the unwatched lanes ───────────
+# ── 18. nightly scope=candidate skips exactly the unwatched lanes ───────────
 # A release candidate's dispatch (scripts/release-patch.sh) runs nightly.yml with
 # scope=candidate so it takes only the runner slots a release needs. The skip is
 # a job-level `if:`; this keeps it in step with notify-new-lanes.needs, which
@@ -622,7 +622,7 @@ fi
 # watched job must never be skipped (green-by-tree.sh needs it to succeed).
 if ! command -v yq >/dev/null 2>&1; then
     if [ "${CI:-}" = "true" ]; then
-        bad "yq not installed — guard 17 (nightly scope) cannot run in CI and a skip here proves nothing"
+        bad "yq not installed — guard 18 (nightly scope) cannot run in CI and a skip here proves nothing"
     else
         echo "skip: yq not installed — nightly scope guard needs it"
     fi

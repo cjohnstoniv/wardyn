@@ -38,7 +38,7 @@ concurrency:
 # minus the multi-arch builds) and the two multi-arch staging builds, which
 # green-by-tree.sh requires and `promote` copies. A skipped job reports `skipped`,
 # never `failure`, so notify-new-lanes (`if: failure()`) stays quiet.
-# test-repo-guards.sh guard 17 pins this: a job is skipped under candidate iff it
+# test-repo-guards.sh guard 18 pins this: a job is skipped under candidate iff it
 # is neither watched nor a multi-arch build, and a new job must pick a side.
 
 # Every job sets timeout-minutes, at least twice its measured maximum (docs/CI.md).
