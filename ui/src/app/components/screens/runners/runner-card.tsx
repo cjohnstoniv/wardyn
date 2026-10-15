@@ -41,6 +41,15 @@ export function MachineText({ machine }: { machine?: string }) {
   return machine ? <Mono className="break-all text-foreground">{machine}</Mono> : <span className="text-muted-foreground">{RUNNER_V6.NOT_REPORTED}</span>;
 }
 
+/** The architecture a runner reported, beside its Machine; nothing until it reports one. */
+export function ArchText({ arch }: { arch?: string }) {
+  return arch ? (
+    <div className="text-muted-foreground" data-arch>
+      {RUNNER_V6.ARCH}: <Mono className="text-foreground">{arch}</Mono>
+    </div>
+  ) : null;
+}
+
 /** The pools a runner is in, each a link to its details; a remote-hosted runner's user pools name their owner. */
 export function PoolLinks({ pools, onOpenPool }: { pools: (RunnerPoolRef | RemoteRunnerPoolRef)[]; onOpenPool: (id: string) => void }) {
   if (pools.length === 0) return <span className="text-muted-foreground">{RUNNER_V6.IN_NO_POOL}</span>;
@@ -102,7 +111,7 @@ export function RunnerCard({ f, onOpen, onOpenPool }: { f: FleetRunner; onOpen: 
         )}
         <dl className="grid grid-cols-1 gap-x-4 gap-y-2 md:grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)_minmax(0,1.3fr)]">
           <Fact label={RUNNER_V6.MACHINE} data-machine>
-            {self ? <MachineText machine={self.machine_name} /> : <span className="text-muted-foreground">{RUNNER_V6.NOT_APPLICABLE}</span>}
+            {self ? <><MachineText machine={self.machine_name} /><ArchText arch={self.arch} /></> : <span className="text-muted-foreground">{RUNNER_V6.NOT_APPLICABLE}</span>}
           </Fact>
           <Fact label={RUNNER_V6.OWNER}>{self ? self.owner : RUNNER_V6.ORGANIZATION}</Fact>
           <Fact label={RUNNER_V6.POOLS} data-pools>

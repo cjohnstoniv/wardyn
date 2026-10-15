@@ -84,7 +84,13 @@ type Runner struct {
 	// MachineName is the host name the runner last reported (at registration and on each connect):
 	// runner-reported, never an identity, "" until it reports one.
 	MachineName string `json:"machine_name"`
+	// Arch is the CPU architecture of the runner's Docker engine, as last reported (ValidArch values):
+	// runner-reported, "" until it reports one.
+	Arch string `json:"arch"`
 }
+
+// ValidArch reports whether s may be stored as a runner's architecture: "" (none reported), "amd64" or "arm64".
+func ValidArch(s string) bool { return s == "" || s == "amd64" || s == "arm64" }
 
 // MachineNameMax bounds a reported machine name: the longest DNS host name.
 const MachineNameMax = 253

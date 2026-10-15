@@ -25,26 +25,47 @@ type machineNameStore interface {
 	SetRunnerMachineName(ctx context.Context, id uuid.UUID, name string) error
 }
 
-var _ machineNameStore = store.PG{}
+// archStore records the CPU architecture a runner reports on connect.
+type archStore interface {
+	SetRunnerArch(ctx context.Context, id uuid.UUID, arch string) error
+}
 
-// capsFromRunner keeps the machine name a runner's caps event reports, the latest winning. A name past
-// types.MachineNameMax or with a control character is not stored, and neither it nor a failed write
-// refuses the event: caps is acknowledged before the runner may become ready, and a machine name is a
-// label, never something a run is admitted by.
+var (
+	_ machineNameStore = store.PG{}
+	_ archStore        = store.PG{}
+)
+
+// capsFromRunner keeps the machine name and the architecture a runner's caps event reports, the latest
+// winning. A name past types.MachineNameMax or with a control character, or an architecture that is not
+// types.ValidArch, is not stored, and neither it nor a failed write refuses the event: caps is
+// acknowledged before the runner may become ready, and both are labels, never something a run is
+// admitted by. A runner registered before it reported an architecture gets one on its next connect.
 func (s *Server) capsFromRunner(ctx context.Context, runnerID uuid.UUID, ev runnerwire.Event) {
-	ms, ok := s.cfg.Store.(machineNameStore)
 	var caps runnerwire.Caps
-	if !ok || runnerwire.Unmarshal(ev.Data, &caps) != nil {
+	if runnerwire.Unmarshal(ev.Data, &caps) != nil {
 		return
 	}
-	if caps.MachineName = strings.TrimSpace(caps.MachineName); caps.MachineName == "" {
+	if ms, ok := s.cfg.Store.(machineNameStore); ok {
+		s.recordMachineName(ctx, ms, runnerID, strings.TrimSpace(caps.MachineName))
+	}
+	if as, ok := s.cfg.Store.(archStore); ok && caps.Arch != "" {
+		if !types.ValidArch(caps.Arch) {
+			slog.WarnContext(ctx, "wardynd: runner reported an unknown architecture", slog.String("runner_id", runnerID.String()), slog.String("arch", strings.ToValidUTF8(caps.Arch, "?")))
+		} else if err := as.SetRunnerArch(ctx, runnerID, caps.Arch); err != nil {
+			slog.WarnContext(ctx, "wardynd: record runner arch", slog.String("runner_id", runnerID.String()), slog.Any("err", err))
+		}
+	}
+}
+
+func (s *Server) recordMachineName(ctx context.Context, ms machineNameStore, runnerID uuid.UUID, name string) {
+	if name == "" {
 		return
 	}
-	if !types.ValidMachineName(caps.MachineName) {
-		slog.WarnContext(ctx, "wardynd: runner reported an unusable machine name", slog.String("runner_id", runnerID.String()), slog.Int("bytes", len(caps.MachineName)))
+	if !types.ValidMachineName(name) {
+		slog.WarnContext(ctx, "wardynd: runner reported an unusable machine name", slog.String("runner_id", runnerID.String()), slog.Int("bytes", len(name)))
 		return
 	}
-	if err := ms.SetRunnerMachineName(ctx, runnerID, caps.MachineName); err != nil {
+	if err := ms.SetRunnerMachineName(ctx, runnerID, name); err != nil {
 		slog.WarnContext(ctx, "wardynd: record runner machine name", slog.String("runner_id", runnerID.String()), slog.Any("err", err))
 	}
 }
