@@ -71,21 +71,27 @@ func (d *Driver) checkImageArch(ctx context.Context, ref string) error {
 
 // archRunnable answers whether this engine can run an image of another architecture: it refuses
 // only when a probe container proves it cannot (exec format error) and otherwise warns that the
-// image runs under emulation. Emulation is a property of the engine, so the verdict is cached per
-// foreign architecture and the first image of an architecture decides for the rest.
+// image runs under emulation. Emulation is a property of the engine, so a conclusive verdict is
+// cached per foreign architecture and the first image of an architecture decides for the rest. An
+// inconclusive probe (see probeExecFormat) allows this image and caches nothing, so the next image
+// of that architecture is probed afresh.
 //
 // Known false positive, rare: an emulated image whose entrypoint execs a binary of a third
 // architecture logs exec format error and is refused although the image itself is emulable.
 func (d *Driver) archRunnable(ctx context.Context, ref, img, eng string) error {
-	unrunnable, cached := d.archVerdicts.Load(img)
-	if !cached {
-		unrunnable = d.probeExecFormat(ctx, ref)
-		d.archVerdicts.Store(img, unrunnable)
-		if !unrunnable.(bool) {
-			slog.Warn(fmt.Sprintf("running %s (%s) under emulation on an %s engine; expect it to be slower", ref, img, eng))
+	kind, cached := archInconclusive, false
+	if v, ok := d.archVerdicts.Load(img); ok {
+		kind, cached = v.(archVerdictKind), true
+	} else {
+		kind = d.probeExecFormat(ctx, ref)
+		if kind != archInconclusive {
+			d.archVerdicts.Store(img, kind)
 		}
 	}
-	if !unrunnable.(bool) {
+	if kind != archUnrunnable {
+		if !cached {
+			slog.Warn(fmt.Sprintf("running %s (%s) under emulation on an %s engine; expect it to be slower", ref, img, eng))
+		}
 		return nil
 	}
 	return &imageArchError{msg: fmt.Sprintf(
