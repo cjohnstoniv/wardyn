@@ -654,7 +654,7 @@ describe("My runner card: the start command and the claim into a pool", () => {
     mintMineMock.mockResolvedValue(TOKEN);
     renderCard();
     await registerShown(user);
-    expect(screen.queryByText(/wardyn-runnerd serve/)).toBeNull();
+    expect(screen.getByText("wardyn-runnerd serve --org https://org.example.com")).toBeInTheDocument();
     expect(screen.getByText(VM_HINT)).toBeInTheDocument();
   });
 
