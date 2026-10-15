@@ -35,9 +35,11 @@ type setupHost struct {
 	uid                int
 	exe                string
 	run                func(ctx context.Context, name string, args ...string) ([]byte, error)
-	// docker checks that the engine answers as this user, the proxy bridge exists (creating it when
-	// missing) and a probe container reaches the relay pair serve will use (findRelay), narrowed by want.
-	docker func(ctx context.Context, image, network string, want relayPair) (dockerEngine, relayPair, error)
+	// engine checks that the engine answers as this user and the proxy bridge exists (creating it when
+	// missing); relay then checks that a probe container reaches the relay pair serve will use
+	// (findRelay), narrowed by want, with the proxy image serve will run.
+	engine func(ctx context.Context, network string, want relayPair) (dockerEngine, error)
+	relay  func(ctx context.Context, image, network string, eng dockerEngine, want relayPair) (relayPair, error)
 }
 
 func osSetupHost() (setupHost, error) {
@@ -56,7 +58,7 @@ func osSetupHost() (setupHost, error) {
 		return setupHost{}, err
 	}
 	return setupHost{goos: runtime.GOOS, home: home, xdgConfig: os.Getenv("XDG_CONFIG_HOME"), xdgData: os.Getenv("XDG_DATA_HOME"),
-		dockerHost: os.Getenv("DOCKER_HOST"), uid: os.Geteuid(), exe: exe, run: runCommand, docker: prepareSetupDocker}, nil
+		dockerHost: os.Getenv("DOCKER_HOST"), uid: os.Geteuid(), exe: exe, run: runCommand, engine: readySetupEngine, relay: probeSetupRelay}, nil
 }
 
 func runCommand(ctx context.Context, name string, args ...string) ([]byte, error) {

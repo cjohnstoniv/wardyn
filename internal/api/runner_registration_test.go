@@ -504,3 +504,65 @@ func TestRunnerTokenMintOmitsAnUnsetProxyImage(t *testing.T) {
 		t.Fatalf("mint = %d %s: want 201 without proxy_image", w.Code, w.Body.String())
 	}
 }
+
+// The register answer carries the proxy image chosen for the architecture the runner reported: its
+// own variant, else the plain WARDYN_PROXY_IMAGE, else nothing. The claim answer never carries one.
+func TestRunnerRegistrationAnswersTheProxyImageForItsArch(t *testing.T) {
+	const plain, arm = "ghcr.io/example/proxy:plain", "mirror.example.com/proxy:arm"
+	for _, tc := range []struct {
+		name, arch, want string
+		plain            string
+		byArch           map[string]string
+	}{
+		{"arm64 variant", "arm64", arm, plain, map[string]string{"arm64": arm}},
+		{"amd64 without a variant falls back to the plain image", "amd64", plain, plain, map[string]string{"arm64": arm}},
+		{"unreported arch gets the plain image", "", plain, plain, map[string]string{"arm64": arm}},
+		{"variant with no plain image", "arm64", arm, "", map[string]string{"arm64": arm}},
+		{"nothing configured omits the field", "arm64", "", "", nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, f, _ := newRunnerRegistrationServer(t)
+			srv.cfg.ProxyImage, srv.cfg.ProxyImageByArch = tc.plain, tc.byArch
+			raw := newBearer("wdr_")
+			now := time.Now().UTC()
+			f.tokens[raw] = types.RunnerRegistrationToken{ID: uuid.New(), Owner: "alice", MintedBy: "alice", CreatedAt: now, ExpiresAt: now.Add(time.Hour), OrgURLSHA256: federation.OrgURLSHA256(srv.cfg.RunnerOrgURL)}
+			pub, _, err := ed25519.GenerateKey(rand.Reader)
+			if err != nil {
+				t.Fatal(err)
+			}
+			body, _ := json.Marshal(types.RunnerRegisterRequest{Token: raw, PublicKey: pub, Name: "laptop", Limits: testRunnerLimits(), Arch: tc.arch})
+			w := do(t, srv, http.MethodPost, "/api/v1/runners/register", "", string(body))
+			var got types.RunnerRegistration
+			if w.Code != 201 || json.Unmarshal(w.Body.Bytes(), &got) != nil || got.ProxyImage != tc.want {
+				t.Fatalf("register = %d %s, want proxy_image %q", w.Code, w.Body.String(), tc.want)
+			}
+			if tc.want == "" && strings.Contains(w.Body.String(), "proxy_image") {
+				t.Fatalf("an unset proxy image was sent: %s", w.Body.String())
+			}
+
+			// The claim answer, which has the same type, leaves it empty.
+			fingerprint := runnerwire.Fingerprint(pub)
+			claim, _ := json.Marshal(types.RunnerClaimRequest{Fingerprint: fingerprint})
+			cookie := memberModeSSOSession(t, "alice", "alice@example.com", oidc.RoleUser, false)
+			w = doSSO(t, srv, http.MethodPost, "/api/v1/me/runners/"+got.RunnerID.String()+"/claim", cookie, string(claim))
+			if w.Code != 200 || strings.Contains(w.Body.String(), "proxy_image") {
+				t.Fatalf("claim = %d %s, want 200 without proxy_image", w.Code, w.Body.String())
+			}
+		})
+	}
+}
+
+// The mint answer carries WARDYN_PROXY_IMAGE as it always has, unless per-architecture images are
+// configured: the runner's architecture is unknown at mint, so it then leaves the choice to register.
+func TestRunnerTokenMintProxyImageFollowsThePerArchConfig(t *testing.T) {
+	for name, byArch := range map[string]map[string]string{"no per-arch images": nil, "per-arch images": {"arm64": "mirror.example.com/proxy:arm"}} {
+		srv, _, _ := newRunnerRegistrationServer(t)
+		srv.cfg.ProxyImage, srv.cfg.ProxyImageByArch = "ghcr.io/example/proxy:plain", byArch
+		alice := memberModeSSOSession(t, "alice", "alice@example.com", oidc.RoleUser, false)
+		w := doSSO(t, srv, http.MethodPost, "/api/v1/me/runners/tokens", alice, "{}")
+		has := strings.Contains(w.Body.String(), "ghcr.io/example/proxy:plain")
+		if w.Code != http.StatusCreated || has != (byArch == nil) || strings.Contains(w.Body.String(), "mirror.example.com") {
+			t.Fatalf("%s: mint = %d %s", name, w.Code, w.Body.String())
+		}
+	}
+}

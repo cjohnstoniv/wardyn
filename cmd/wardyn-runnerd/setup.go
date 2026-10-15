@@ -4,8 +4,10 @@
 package main
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"regexp"
 
@@ -64,7 +66,13 @@ type setupPlan struct {
 	setupOptions
 	paths      setupPaths
 	registered bool
+	want       relayPair
 	dockerHost string
+	// eng is the engine preflight checked. flagged is whether --proxy-image was given. proxyImage is the
+	// best image known before registering (the flag, the saved identity's, else the release image) and
+	// is "" only on a development build with neither, when the first probe waits for the organisation's answer.
+	eng     dockerEngine
+	flagged bool
 }
 
 func runSetup(cmd *cobra.Command, h setupHost, o setupOptions) error {
@@ -83,6 +91,11 @@ func runSetup(cmd *cobra.Command, h setupHost, o setupOptions) error {
 			return err
 		}
 		fmt.Fprintf(out, "registered %s; key fingerprint %s\n  %s\n", done.name, done.fingerprint, limitsLine(done.limits))
+		if !plan.flagged {
+			if err := h.settleImageAfterRegistering(cmd, &plan, done.proxyImage); err != nil {
+				return err
+			}
+		}
 	}
 	if err := h.startService(cmd.Context(), plan, out); err != nil {
 		return err
@@ -92,6 +105,41 @@ func runSetup(cmd *cobra.Command, h setupHost, o setupOptions) error {
 		return err
 	}
 	return claimStep(cmd, plan, identity, os.Getenv("WARDYN_TOKEN"))
+}
+
+// settleImageAfterRegistering takes the organisation's answer into account once the token is spent. The
+// image preflight probed (the release image, when there is one) stands unless the answer names another,
+// which is then probed too; with no image known at all the first probe runs here. Either way the probe
+// comes before the service is installed, and a refusal needs no new token: the identity is saved, so
+// setup run again takes the registered path.
+func (h setupHost) settleImageAfterRegistering(cmd *cobra.Command, plan *setupPlan, answered string) error {
+	const again = "\nThis computer is registered: run setup again (no new token is needed)"
+	image := cmp.Or(answered, plan.proxyImage)
+	switch {
+	case image == "":
+		return fmt.Errorf("this computer is registered, but the organisation named no proxy image and this is a development build (%s): pass --proxy-image <ref> and run setup again (no new token is needed)", buildVersion())
+	case !safeSetting.MatchString(image) || !types.SafeImageRef(image):
+		return fmt.Errorf("this computer is registered, but the proxy image the organisation named has unsupported characters (%s): pass --proxy-image <ref> and run setup again (no new token is needed)", image)
+	case image == plan.proxyImage:
+		return nil
+	}
+	plan.proxyImage = image
+	pair, err := h.relay(cmd.Context(), image, plan.network, plan.eng, plan.want)
+	if err != nil {
+		return fmt.Errorf("%w%s", err, again)
+	}
+	plan.useRelay(cmd.OutOrStdout(), pair)
+	return nil
+}
+
+// useRelay records the pair the probe proved, and says so.
+func (p *setupPlan) useRelay(out io.Writer, pair relayPair) {
+	if !p.eng.native {
+		// Pinned: serve checks this one pair rather than searching again.
+		p.relayListen, p.relayHostTarget = pair.bind.String(), pair.target
+	}
+	fmt.Fprintf(out, "Docker engine %s: the run relay listens on %s and a run's proxy reaches it at %s (checked with a probe container).\n",
+		p.eng.desc, pair.bind, pair.target)
 }
 
 // preflight validates every input and checks Docker, so that a refusal comes before the single-use
@@ -119,16 +167,31 @@ func (h setupHost) preflight(cmd *cobra.Command, o setupOptions) (setupPlan, err
 		return setupPlan{}, err
 	}
 	o.relayHostTarget = want.target
-	if o.proxyImage == "" {
-		if o.proxyImage = releaseProxyImage(); o.proxyImage == "" {
-			return setupPlan{}, fmt.Errorf("this wardyn-runnerd is a development build (%s): pass --proxy-image <ref>", buildVersion())
-		}
-	}
-	plan := setupPlan{setupOptions: o, dockerHost: h.dockerHost}
+	plan := setupPlan{setupOptions: o, dockerHost: h.dockerHost, want: want, flagged: o.proxyImage != ""}
 	if plan.paths, err = h.paths(); err != nil {
 		return setupPlan{}, err
 	}
-	settings := []string{o.org, o.proxyImage, o.network, h.dockerHost, o.relayListen, o.relayHostTarget}
+	if _, err := os.Stat(plan.paths.identity()); err == nil {
+		id, err := runneridentity.Load(plan.paths.stateDir, o.org)
+		if err != nil {
+			return setupPlan{}, fmt.Errorf("this computer is registered, but not for this organisation or not intact: %w", err)
+		}
+		plan.registered = true
+		// --proxy-image, else the image the organisation named at registration, else this binary's own.
+		if plan.proxyImage = cmp.Or(o.proxyImage, id.ProxyImage, releaseProxyImage()); plan.proxyImage == "" {
+			return setupPlan{}, fmt.Errorf("this wardyn-runnerd is a development build (%s): pass --proxy-image <ref>", buildVersion())
+		}
+	} else {
+		// A first registration without the flag probes the release image, which the answer may replace.
+		plan.proxyImage = cmp.Or(o.proxyImage, releaseProxyImage())
+		if o.tokenFile == "" {
+			return setupPlan{}, errors.New("no runner identity yet: pass --token-file <file> holding the wdr_ token an administrator minted for you")
+		}
+		if _, err := os.Stat(o.tokenFile); err != nil {
+			return setupPlan{}, fmt.Errorf("token file not found: %s", o.tokenFile)
+		}
+	}
+	settings := []string{o.org, plan.proxyImage, o.network, h.dockerHost, o.relayListen, plan.relayHostTarget}
 	if h.goos == "linux" {
 		// The unit and the env file carry these paths unquoted; a LaunchAgent plist escapes its own.
 		settings = append(settings, plan.paths.installed, plan.paths.stateDir)
@@ -138,32 +201,21 @@ func (h setupHost) preflight(cmd *cobra.Command, o setupOptions) (setupPlan, err
 			return setupPlan{}, fmt.Errorf("unsupported characters in a setting: %s", v)
 		}
 	}
-	if _, err := os.Stat(plan.paths.identity()); err == nil {
-		if _, err := runneridentity.Load(plan.paths.stateDir, o.org); err != nil {
-			return setupPlan{}, fmt.Errorf("this computer is registered, but not for this organisation or not intact: %w", err)
-		}
-		plan.registered = true
-	} else {
-		if o.tokenFile == "" {
-			return setupPlan{}, errors.New("no runner identity yet: pass --token-file <file> holding the wdr_ token an administrator minted for you")
-		}
-		if _, err := os.Stat(o.tokenFile); err != nil {
-			return setupPlan{}, fmt.Errorf("token file not found: %s", o.tokenFile)
-		}
-	}
 	if err := h.checkServiceManager(cmd.Context(), plan.paths); err != nil {
 		return setupPlan{}, err
 	}
 	// Always, flags or not: serve runs the same check at every start, after the token is spent.
-	eng, pair, err := h.docker(cmd.Context(), o.proxyImage, o.network, want)
+	if plan.eng, err = h.engine(cmd.Context(), o.network, want); err != nil {
+		return setupPlan{}, fmt.Errorf("%w\nNo token was spent", err)
+	}
+	if plan.proxyImage == "" {
+		// A development build, no flag, no identity: the probe runs after the answer names the image.
+		return plan, nil
+	}
+	pair, err := h.relay(cmd.Context(), plan.proxyImage, o.network, plan.eng, want)
 	if err != nil {
 		return setupPlan{}, fmt.Errorf("%w\nNo token was spent", err)
 	}
-	if !eng.native {
-		// Pinned: serve checks this one pair rather than searching again.
-		plan.relayListen, plan.relayHostTarget = pair.bind.String(), pair.target
-	}
-	fmt.Fprintf(cmd.OutOrStdout(), "Docker engine %s: the run relay listens on %s and a run's proxy reaches it at %s (checked with a probe container).\n",
-		eng.desc, pair.bind, pair.target)
+	plan.useRelay(cmd.OutOrStdout(), pair)
 	return plan, nil
 }

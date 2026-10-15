@@ -4,6 +4,7 @@
 package api
 
 import (
+	"cmp"
 	"crypto/ed25519"
 	"errors"
 	"net/http"
@@ -89,5 +90,6 @@ func (s *Server) handleRunnerRegister(w http.ResponseWriter, r *http.Request) {
 	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, types.ActorSystem, "runner:"+registered.ID.String(),
 		placement.ActionRunnerEnrol, registered.ID.String(), "success", mustJSON(map[string]any{"token_id": token.ID, "fingerprint": registered.KeyFingerprint, "limits": registered.Limits})))
-	writeJSON(w, http.StatusCreated, types.RunnerRegistration{RunnerID: registered.ID, Fingerprint: registered.KeyFingerprint, State: registered.State, OrgURLSHA256: orgHash, Limits: registered.Limits})
+	writeJSON(w, http.StatusCreated, types.RunnerRegistration{RunnerID: registered.ID, Fingerprint: registered.KeyFingerprint, State: registered.State, OrgURLSHA256: orgHash, Limits: registered.Limits,
+		ProxyImage: cmp.Or(s.cfg.ProxyImageByArch[req.Arch], s.cfg.ProxyImage)})
 }

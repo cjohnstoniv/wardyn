@@ -132,6 +132,12 @@ func (s *Server) mintRunnerToken(w http.ResponseWriter, r *http.Request, owner s
 	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
 		placement.ActionRunnerTokenCreate, token.ID.String(), "success", mustJSON(map[string]any{"owner": owner, "expires_at": token.ExpiresAt})))
-	token.Token, token.OrgURL, token.ProxyImage = raw, s.cfg.RunnerOrgURL, s.cfg.ProxyImage
+	token.Token, token.OrgURL = raw, s.cfg.RunnerOrgURL
+	// The runner's architecture is unknown at mint, so a per-architecture image is chosen at register,
+	// and the mint answer then stays silent rather than printing one architecture's image for every
+	// computer. Without per-architecture images it carries WARDYN_PROXY_IMAGE as it always has.
+	if len(s.cfg.ProxyImageByArch) == 0 {
+		token.ProxyImage = s.cfg.ProxyImage
+	}
 	writeJSON(w, http.StatusCreated, token)
 }
