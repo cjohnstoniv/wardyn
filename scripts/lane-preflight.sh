@@ -118,7 +118,8 @@ if [ "${candidate}" = 1 ]; then
   # superuser asserted and -p 1.
   pg_lines=()
   if [ "${#go_pkgs[@]}" -gt 0 ]; then
-    mapfile -t pg_lines < <(python3 -I scripts/lib/candidate-tests.py pg "${go_pkgs[@]#./}")
+    mod=$(go list -m) # go_pkgs now holds import paths; the helper wants directories
+    mapfile -t pg_lines < <(python3 -I scripts/lib/candidate-tests.py pg "${go_pkgs[@]#"${mod}"}")
   fi
   if [ "${#pg_lines[@]}" -gt 0 ]; then
     name="candidate-pg-$$"

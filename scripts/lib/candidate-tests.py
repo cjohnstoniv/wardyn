@@ -80,7 +80,7 @@ def guards():
 def pg(dirs):
     by_dir = defaultdict(list)
     for d in dirs:
-        d = d.removeprefix("./").rstrip("/") or "."
+        d = d.removeprefix("./").strip("/") or "."
         funcs = []
         for path in go_files(("" if d == "." else d + "/") + "*.go"):
             if path.rpartition("/")[0] == ("" if d == "." else d):
