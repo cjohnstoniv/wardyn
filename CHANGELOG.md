@@ -17,8 +17,9 @@ a laptop runner, `wardyn-runnerd` works with Docker Desktop, setup is one comman
   `POST /me/runners/tokens` (`wardyn runner token`, My runner → Get a token) answers `403 capability_feature` without
   it. An estate where someone registered and claimed a runner for themselves keeps self-hosting open: the migration
   adds an `all` allow, so only people a `feature` deny already names, including a `*` deny, are refused. Narrow or
-  remove it afterwards (Permissions → Self-hosted runners). An estate with none starts closed; grant it there when you
-  want people to self-host. Existing runners and claims keep working, the admin mint is not asked, and admins are
+  remove it afterwards (Permissions → Self-hosted runners). An estate with none, including one whose runners an admin minted for people, starts
+  closed: 0.9.0 cannot store the grant ahead of time, so add it right after the upgrade (people asking
+  for their own token are refused until then). Existing runners and claims keep working, the admin mint is not asked, and admins are
   never asked.
 - Runners registered before 0.9.0 still have no limits after an in-place upgrade and take no run. Find them with
   `wardyn runner list --all --no-limits` (self-hosted) and `wardyn runner remote list --no-limits` (remote-hosted), then
@@ -52,6 +53,7 @@ a laptop runner, `wardyn-runnerd` works with Docker Desktop, setup is one comman
 - Runner token mint answers carry `proxy_image` when the server has one, and the console prints the `serve` command
   with it and notes the Docker Desktop flags.
 - Sign in again on a stored AWS or Claude sign-in, in Your model connections and the New Run provider picker.
+- A self-hosted runner reports its Docker engine's CPU architecture (`amd64` or `arm64`) at registration and on each connect (migration `0179_runner_arch`); the Runners tab, My runner and `wardyn runner list` show it.
 
 ### Changed
 

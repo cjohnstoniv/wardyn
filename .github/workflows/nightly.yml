@@ -440,6 +440,8 @@ jobs:
       - name: docker-tagged suite with reports (real Docker; WARDYN_TEST_DOCKER=1)
         env:
           WARDYN_TEST_DOCKER: "1"
+          # the relay test runs the proxy image built above (cmd/wardyn-runnerd/relay_docker_live_test.go)
+          WARDYN_TEST_PROXY_IMAGE: wardyn/wardyn-proxy:local
         shell: bash
         run: |
           set -euo pipefail

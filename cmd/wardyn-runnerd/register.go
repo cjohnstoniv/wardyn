@@ -144,7 +144,7 @@ func registerRunner(cmd *cobra.Command, a registerArgs) (registeredRunner, error
 	client.HTTPClient = &http.Client{Timeout: 30 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error {
 		return errors.New("runner registration does not follow redirects")
 	}}
-	registered, err := client.RegisterRunner(cmd.Context(), sdk.RunnerRegisterRequest{Token: token, PublicKey: key.Public().(ed25519.PublicKey), Name: name, Limits: &limits, MachineName: machine})
+	registered, err := client.RegisterRunner(cmd.Context(), sdk.RunnerRegisterRequest{Token: token, PublicKey: key.Public().(ed25519.PublicKey), Name: name, Limits: &limits, MachineName: machine, Arch: engineArch(cmd.Context())})
 	if err != nil {
 		return registeredRunner{}, registrationFailure(err)
 	}

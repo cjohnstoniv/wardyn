@@ -20,6 +20,9 @@ type RunnerRegisterRequest struct {
 	Limits *RunnerLimits `json:"limits"`
 	// MachineName is the host's own name (os.Hostname), runner-reported; omitted by an older runner.
 	MachineName string `json:"machine_name,omitempty"`
+	// Arch is the Docker engine's CPU architecture ("amd64" or "arm64"), runner-reported; omitted by an
+	// older runner or when the engine could not be asked.
+	Arch string `json:"arch,omitempty"`
 }
 
 // RunnerRegistration is safe to return to the anonymous runner; it has no human identity.

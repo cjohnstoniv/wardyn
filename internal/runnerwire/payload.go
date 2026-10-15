@@ -101,6 +101,9 @@ type Caps struct {
 	Version      string   `json:"version"`
 	// MachineName is the host's own name (os.Hostname), stored as the runner's machine_name.
 	MachineName string `json:"machine_name,omitempty"`
+	// Arch is the Docker engine's CPU architecture ("amd64" or "arm64"), stored as the runner's arch;
+	// omitted when the engine could not be asked.
+	Arch string `json:"arch,omitempty"`
 }
 
 // Waiting is the `waiting` event's data.
