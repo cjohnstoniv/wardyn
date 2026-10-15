@@ -7,6 +7,8 @@ package main
 
 import (
 	"context"
+	"fmt"
+	"log/slog"
 
 	"github.com/moby/moby/client"
 
@@ -33,5 +35,21 @@ func probeSetupRelay(ctx context.Context, image, network string, eng dockerEngin
 	if err != nil {
 		return relayPair{}, err
 	}
+	// Getting the image is told apart from the probe itself: an image setup cannot get may be one the
+	// organisation's answer replaces, but a probe that ran and failed never is.
+	if err := ensureProxyImage(ctx, d, image); err != nil {
+		return relayPair{}, fmt.Errorf("%w: %s (a registry that needs a login: docker pull it as this user first): %v", errProxyImageUnavailable, image, err)
+	}
 	return chooseRelay(ctx, d, image, eng, want)
+}
+
+func ensureProxyImage(ctx context.Context, d *docker.Driver, image string) error {
+	ctx, cancel := context.WithTimeout(ctx, relayCheckBound)
+	defer cancel()
+	present, err := d.ImagePresent(ctx, image)
+	if err == nil && !present {
+		slog.InfoContext(ctx, "pulling proxy image "+image)
+		err = d.EnsureProxyImage(ctx)
+	}
+	return err
 }

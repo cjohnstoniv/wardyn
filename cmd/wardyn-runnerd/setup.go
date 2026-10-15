@@ -22,6 +22,10 @@ import (
 // line, a quote or a placeholder.
 var safeSetting = regexp.MustCompile(`^[A-Za-z0-9._:/@%+=-]+$`)
 
+// errProxyImageUnavailable is a relay probe that never ran because the proxy image is not on the engine and
+// could not be pulled.
+var errProxyImageUnavailable = errors.New("the proxy image is not on this engine and could not be pulled")
+
 // setupOptions are `setup`'s flags.
 type setupOptions struct {
 	org, tokenFile, name             string
@@ -73,6 +77,9 @@ type setupPlan struct {
 	// is "" only on a development build with neither, when the first probe waits for the organisation's answer.
 	eng     dockerEngine
 	flagged bool
+	// unreachable is the release image when a first registration could not get it before the token: the
+	// organisation's answer is then probed after registering.
+	unreachable string
 }
 
 func runSetup(cmd *cobra.Command, h setupHost, o setupOptions) error {
@@ -116,6 +123,8 @@ func (h setupHost) settleImageAfterRegistering(cmd *cobra.Command, plan *setupPl
 	const again = "\nThis computer is registered: run setup again (no new token is needed)"
 	image := cmp.Or(answered, plan.proxyImage)
 	switch {
+	case image == "" && plan.unreachable != "":
+		return fmt.Errorf("this computer is registered, but the organisation named no proxy image and the release image %s is not reachable from this engine: pass --proxy-image <ref> and run setup again (no new token is needed)", plan.unreachable)
 	case image == "":
 		return fmt.Errorf("this computer is registered, but the organisation named no proxy image and this is a development build (%s): pass --proxy-image <ref> and run setup again (no new token is needed)", buildVersion())
 	case !safeSetting.MatchString(image) || !types.SafeImageRef(image):
@@ -213,6 +222,13 @@ func (h setupHost) preflight(cmd *cobra.Command, o setupOptions) (setupPlan, err
 		return plan, nil
 	}
 	pair, err := h.relay(cmd.Context(), plan.proxyImage, o.network, plan.eng, want)
+	if errors.Is(err, errProxyImageUnavailable) && !plan.registered && !plan.flagged {
+		// Only the release default is given up on: a flag or a saved image was named by the person. A probe
+		// that ran and failed always refuses.
+		fmt.Fprintf(cmd.OutOrStdout(), "The release proxy image %s is not reachable from this engine; the organisation's answer will be used.\n", plan.proxyImage)
+		plan.unreachable, plan.proxyImage = plan.proxyImage, ""
+		return plan, nil
+	}
 	if err != nil {
 		return setupPlan{}, fmt.Errorf("%w\nNo token was spent", err)
 	}

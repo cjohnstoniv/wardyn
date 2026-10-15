@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -42,6 +43,7 @@ type setupFixture struct {
 	relayErr    error       // what the relay probe answers, when set
 	events      []string    // engine, install, register, probe, service: the order setup did them in
 	flagless    bool        // run leaves --proxy-image out
+	unpullable  string      // an image the relay probe cannot get onto the engine
 	answered    string      // the proxy image the organisation answers a registration with
 	desktop     bool
 	vm          bool // a VM-backed engine other than Docker Desktop
@@ -121,6 +123,9 @@ func (f *setupFixture) relay(_ context.Context, image, network string, eng docke
 	f.events = append(f.events, "probe")
 	f.checks = append(f.checks, image+" "+network)
 	f.wants = append(f.wants, want)
+	if image == f.unpullable {
+		return relayPair{}, fmt.Errorf("%w: %s", errProxyImageUnavailable, image)
+	}
 	if f.relayErr != nil {
 		return relayPair{}, f.relayErr
 	}
@@ -458,6 +463,76 @@ func mustPaths(t *testing.T, f *setupFixture) setupPaths {
 		t.Fatal(err)
 	}
 	return p
+}
+
+// The release image is only a default: when this engine cannot get it (an air-gapped estate) setup does
+// not refuse before the token but probes the organisation's answer after registering. An image the person
+// named (a flag, or the saved identity's) that cannot be got, and a probe that ran and failed, still refuse
+// before the token.
+func TestSetupGivesUpOnAnUnreachableReleaseImageOnly(t *testing.T) {
+	setupBuild(t, "0.9.1")
+	const release, mirror = "ghcr.io/cjohnstoniv/wardyn-proxy:0.9.1", "mirror.example.com/wardyn-proxy:0.9.1"
+	f := newSetupFixture(t, "linux")
+	f.flagless, f.unpullable, f.answered = true, release, mirror
+	out, err := f.run(setupOptions{tokenFile: f.tokenFile})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"engine", "probe", "install", "register", "probe", "service"}; !slices.Equal(f.events, want) {
+		t.Errorf("events = %v, want %v", f.events, want)
+	}
+	if want := []string{release + " wardyn-internal", mirror + " wardyn-internal"}; !slices.Equal(f.checks, want) {
+		t.Errorf("probed %q", f.checks)
+	}
+	if !strings.Contains(out, "The release proxy image "+release+" is not reachable from this engine; the organisation's answer will be used.") {
+		t.Errorf("the give-up was not said:\n%s", out)
+	}
+	if env := f.read(mustPaths(t, f).envFile); !strings.Contains(env, "WARDYN_PROXY_IMAGE="+mirror+"\n") {
+		t.Errorf("the env file lacks the organisation's image:\n%s", env)
+	}
+
+	// Nothing named by the organisation either: refused after registering, with no new token needed.
+	g := newSetupFixture(t, "linux")
+	g.flagless, g.unpullable = true, release
+	if _, err := g.run(setupOptions{tokenFile: g.tokenFile}); err == nil || !strings.Contains(err.Error(), "not reachable from this engine") || !strings.Contains(err.Error(), "no new token is needed") {
+		t.Fatalf("no answer and no release image: %v", err)
+	}
+	if contains(g.commands, "systemctl --user enable --now wardyn-runnerd.service") {
+		t.Error("the service was started")
+	}
+
+	// A probe that ran and failed refuses before the token, whatever the image's source.
+	h := newSetupFixture(t, "linux")
+	h.flagless, h.relayErr, h.answered = true, errors.New("relay: no container reached this runner"), mirror
+	if _, err := h.run(setupOptions{tokenFile: h.tokenFile}); err == nil || !strings.Contains(err.Error(), "No token was spent") || len(h.calls) != 0 {
+		t.Fatalf("a failed probe of the release image: err=%v calls=%v", err, h.calls)
+	}
+
+	// A flag the person named, and a saved identity's image, refuse before the token when unpullable.
+	i := newSetupFixture(t, "linux")
+	i.unpullable = "ghcr.io/example/proxy:1"
+	if _, err := i.run(setupOptions{tokenFile: i.tokenFile}); err == nil || !strings.Contains(err.Error(), "No token was spent") || len(i.calls) != 0 {
+		t.Fatalf("an unpullable flag image: err=%v calls=%v", err, i.calls)
+	}
+	j := newSetupFixture(t, "linux")
+	j.flagless, j.answered = true, mirror
+	if _, err := j.run(setupOptions{tokenFile: j.tokenFile}); err != nil {
+		t.Fatal(err)
+	}
+	j.calls, j.unpullable = nil, mirror
+	if _, err := j.run(setupOptions{}); err == nil || !strings.Contains(err.Error(), "No token was spent") || len(j.calls) != 0 {
+		t.Fatalf("an unpullable saved image: err=%v calls=%v", err, j.calls)
+	}
+	// A registered computer whose identity names nothing has only the release image to fall back on.
+	k := newSetupFixture(t, "linux")
+	k.flagless = true
+	if _, err := k.run(setupOptions{tokenFile: k.tokenFile}); err != nil {
+		t.Fatal(err)
+	}
+	k.calls, k.unpullable = nil, release
+	if _, err := k.run(setupOptions{}); err == nil || !strings.Contains(err.Error(), "No token was spent") {
+		t.Fatalf("a registered computer with an unpullable release image: %v", err)
+	}
 }
 
 // With no image known before registering (a development build, no flag) the first probe runs after the
