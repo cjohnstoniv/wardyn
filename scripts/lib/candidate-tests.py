@@ -2,15 +2,10 @@
 # Copyright 2026 The Wardyn Authors
 # SPDX-License-Identifier: Apache-2.0
 #
-# candidate-tests.py — the two test lists scripts/lane-preflight.sh --candidate builds by grep, never
-# by hand, so a new guard or Postgres-gated test is picked up without anyone editing a list.
-#
-#   candidate-tests.py guards        every Go test whose file reads the repository tree: ci.yml's
-#                                    "guard packages" pattern (a docs/threatmodel/ui/.github path or
-#                                    a .md file) plus the go/parser, go/ast and directory-walking
-#                                    tests that pattern misses.
-#   candidate-tests.py pg DIR...     in each package directory, the Test functions that reach a
-#                                    WARDYN_TEST_PG read, directly or through any helper they call.
+# candidate-tests.py guards — the whole-tree guard list scripts/lane-preflight.sh --candidate builds by
+# grep, never by hand: every Go test whose file reads the repository tree. ci.yml's "guard packages"
+# pattern (a docs/threatmodel/ui/.github path or a .md file) plus the go/parser, go/ast and
+# directory-walking tests that pattern misses. (The Postgres-gated list is scripts/pg-test-select.sh.)
 #
 # Output: one "<dir>\t<Test1|Test2|...>" line per package, ready for `go test -run '^(...)$' ./<dir>`.
 # Only tagless sources matter: a test behind a build tag is simply not matched by `go test` under
@@ -77,29 +72,8 @@ def guards():
     emit(by_dir)
 
 
-def pg(dirs):
-    by_dir = defaultdict(list)
-    for d in dirs:
-        d = d.removeprefix("./").strip("/") or "."
-        funcs = []
-        for path in go_files(("" if d == "." else d + "/") + "*.go"):
-            if path.rpartition("/")[0] == ("" if d == "." else d):
-                funcs.extend(split_funcs(read(path)))
-        idents = [(n, body, set(re.findall(r"\w+", body))) for n, body in funcs]
-        hot = {n for n, body, _ in idents if "WARDYN_TEST_PG" in body}
-        while True:
-            more = {n for n, _, ids in idents if n not in hot and ids & hot}
-            if not more:
-                break
-            hot |= more
-        by_dir[d] = [n for n in hot if n.startswith("Test") and n != "TestMain"]
-    emit(by_dir)
-
-
 if __name__ == "__main__":
-    if len(sys.argv) >= 2 and sys.argv[1] == "guards":
+    if len(sys.argv) == 2 and sys.argv[1] == "guards":
         guards()
-    elif len(sys.argv) >= 3 and sys.argv[1] == "pg":
-        pg(sys.argv[2:])
     else:
-        sys.exit("usage: candidate-tests.py guards | pg DIR...")
+        sys.exit("usage: candidate-tests.py guards")

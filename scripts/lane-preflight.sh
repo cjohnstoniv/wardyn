@@ -21,7 +21,8 @@
 #   Postgres-gated tests of changed packages | vitest | changed Playwright specs x3.
 # The guard and Postgres test lists are built by grep (scripts/lib/candidate-tests.py), never by hand.
 # Every go/pnpm/e2e command goes through ${GATE:-/tmp/claude-1000/wardyn-gates/gate.sh} when that file
-# exists, so do NOT wrap the whole script in the gate (its e2e step takes the heavy slot itself).
+# exists, so do NOT wrap the whole script in the gate (its e2e step takes the heavy slot itself); if you
+# must, set WARDYN_GATED=1 so the inner commands skip the gate. The script never sets it.
 # Roughly 15 minutes on a narrow diff; a wide one (BASE=v0.9.0) is far more. Still not a substitute
 # for hosted CI: no -race, no coverage floor, no tag legs, only the changed packages' Postgres tests.
 #
@@ -45,7 +46,7 @@ done
 G=()
 if [ "${candidate}" = 1 ]; then
   gate="${GATE:-/tmp/claude-1000/wardyn-gates/gate.sh}"
-  [ -x "${gate}" ] && G=("${gate}")
+  [ -x "${gate}" ] && [ "${WARDYN_GATED:-}" != 1 ] && G=("${gate}")
 fi
 
 # step NAME CMD... — plain mode just runs CMD; candidate mode times it, logs it and, on failure,
@@ -91,8 +92,9 @@ if [ "${candidate}" = 1 ]; then
   # Whole-tree guards: every Go test whose file reads the repository (docs, ui/, .github, go/ast, a
   # directory walk), in EVERY package, because a change anywhere can break a guard elsewhere.
   # Unraced and uncached, WARDYN_TEST_PG unset, as ci.yml's guard step.
-  mapfile -t guard_lines < <(python3 -I scripts/lib/candidate-tests.py guards)
-  [ "${#guard_lines[@]}" -gt 0 ] || { warn "no whole-tree guard test found; the discovery pattern regressed" >&2; exit 1; }
+  guard_out=$(python3 -I scripts/lib/candidate-tests.py guards) || die "2 whole-tree guards: scripts/lib/candidate-tests.py failed"
+  [ -n "${guard_out}" ] || die "2 whole-tree guards: no guard test found; the discovery pattern regressed"
+  mapfile -t guard_lines <<<"${guard_out}"
   for line in "${guard_lines[@]}"; do
     IFS=$'\t' read -r dir names <<<"${line}"
     step "2 whole-tree guards ./${dir}" "${G[@]}" env WARDYN_TEST_PG='' go test -count=1 -run "^(${names})\$" "./${dir}"
@@ -112,16 +114,25 @@ else
 fi
 
 if [ "${candidate}" = 1 ]; then
-  # Postgres-gated tests of the changed packages: the Test functions that reach a WARDYN_TEST_PG
-  # read, directly or through a helper (all of internal/api's PG set when it changed, not its whole
-  # 10-minute suite). A throwaway tmpfs postgres:17, as ci-parity-local.sh, with the pool guard on,
-  # superuser asserted and -p 1.
-  pg_lines=()
+  # Postgres-gated tests of every changed package, whether its test files or its sources changed: the
+  # selection is scripts/pg-test-select.sh's (the tests that skip without WARDYN_TEST_PG, plus the
+  # probes), not the package's whole suite. A throwaway tmpfs postgres:17, as ci-parity-local.sh, with
+  # the pool guard on, superuser asserted and -p 1. Exit 1 with "no PG tests found" means none to run;
+  # any other selector failure fails the step.
+  pg_re=""
   if [ "${#go_pkgs[@]}" -gt 0 ]; then
-    mod=$(go list -m) # go_pkgs now holds import paths; the helper wants directories
-    mapfile -t pg_lines < <(python3 -I scripts/lib/candidate-tests.py pg "${go_pkgs[@]#"${mod}"}")
+    sel_err=$(mktemp)
+    if pg_re=$("${G[@]}" scripts/pg-test-select.sh "${go_pkgs[@]}" 2>"${sel_err}"); then
+      :
+    elif grep -q 'no PG tests found' "${sel_err}"; then
+      pg_re=""
+    else
+      cat "${sel_err}" >&2
+      die "4 Postgres-gated tests: scripts/pg-test-select.sh failed"
+    fi
+    rm -f "${sel_err}"
   fi
-  if [ "${#pg_lines[@]}" -gt 0 ]; then
+  if [ -n "${pg_re}" ]; then
     name="candidate-pg-$$"
     trap 'docker rm -fv "${name}" >/dev/null 2>&1 || true; summary' EXIT
     step "4 start throwaway postgres:17" docker run -d --name "${name}" -e POSTGRES_PASSWORD=wardyn -e POSTGRES_DB=wardyn \
@@ -129,13 +140,10 @@ if [ "${candidate}" = 1 ]; then
     # The image restarts its server once after initdb: ready is the second "ready to accept connections".
     step "4 wait for postgres" timeout 90 awk '/ready to accept connections/ { if (++n == 2) exit }' < <(docker logs -f "${name}" 2>&1)
     port=$(docker port "${name}" 5432/tcp | head -1 | sed 's/.*://')
-    for line in "${pg_lines[@]}"; do
-      IFS=$'\t' read -r dir names <<<"${line}"
-      step "4 Postgres-gated tests ./${dir}" "${G[@]}" env \
-        WARDYN_TEST_PG="postgres://postgres:wardyn@localhost:${port}/wardyn?sslmode=disable" \
-        WARDYN_TEST_PG_SUPERUSER=1 WARDYN_TEST_POOL_GUARD=1 \
-        go test -p 1 -count=1 -timeout 30m -run "^(${names})\$" "./${dir}"
-    done
+    step "4 Postgres-gated tests (${#go_pkgs[@]} packages)" "${G[@]}" env \
+      WARDYN_TEST_PG="postgres://postgres:wardyn@localhost:${port}/wardyn?sslmode=disable" \
+      WARDYN_TEST_PG_SUPERUSER=1 WARDYN_TEST_POOL_GUARD=1 \
+      go test -p 1 -count=1 -timeout 30m -run "${pg_re}" "${go_pkgs[@]}"
   else
     log "[candidate] 4 Postgres-gated tests: no changed package has any, skipped"
   fi
