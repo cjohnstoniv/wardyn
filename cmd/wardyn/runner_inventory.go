@@ -86,7 +86,7 @@ func runnerStateWord(r sdk.RunnerView) string {
 // then the same resource columns as your own list.
 func printRunners(w io.Writer, rows []sdk.RunnerView) error {
 	tw := newTab(w)
-	fmt.Fprintln(tw, "ID\tOWNER\tNAME\tMACHINE\tSTATE\tLAST SEEN\tRUNS\tAT ONCE\tFINGERPRINT\t"+resourceHeads)
+	fmt.Fprintln(tw, "ID\tOWNER\tNAME\tMACHINE\tARCH\tSTATE\tLAST SEEN\tRUNS\tAT ONCE\tFINGERPRINT\t"+resourceHeads)
 	for _, r := range rows {
 		lastSeen := "never"
 		if r.LastSeenAt != nil {
@@ -97,7 +97,7 @@ func printRunners(w io.Writer, rows []sdk.RunnerView) error {
 			atOnce = fmt.Sprintf("%d/%d", r.Usage.InUse.Runs, r.Limits.RunsAtOnce)
 		}
 		cells := resourceCells(r.Limits, r.Usage)
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%d\t%s\t%s\t%s\n", r.ID, r.Owner, r.Name, cmp.Or(r.MachineName, "-"), runnerStateWord(r), lastSeen,
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%d\t%s\t%s\t%s\n", r.ID, r.Owner, r.Name, cmp.Or(r.MachineName, "-"), cmp.Or(r.Arch, "-"), runnerStateWord(r), lastSeen,
 			r.Usage.InUse.Runs, atOnce, r.KeyFingerprint, strings.Join(cells[1:], "\t"))
 	}
 	return tw.Flush()

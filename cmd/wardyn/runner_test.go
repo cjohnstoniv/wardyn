@@ -56,7 +56,7 @@ func TestRunnerListAndTokensCommands(t *testing.T) {
 	id := uuid.New()
 	seen := time.Now().UTC().Add(-time.Hour).Truncate(time.Second)
 	views := []types.RunnerView{{ID: id, Owner: "alice@example.com", Name: "laptop-7", State: types.RunnerClaimed, Online: true, LastSeenAt: &seen, KeyFingerprint: "abcd1234",
-		MachineName: "alice-mbp.corp", Limits: &types.RunnerLimits{RunsAtOnce: 4}, Usage: types.RunnerUsage{InUse: types.RunnerTally{Runs: 1}}}}
+		MachineName: "alice-mbp.corp", Arch: "arm64", Limits: &types.RunnerLimits{RunsAtOnce: 4}, Usage: types.RunnerUsage{InUse: types.RunnerTally{Runs: 1}}}}
 	srv := newCmdServer(t, http.StatusOK, views)
 
 	out, err := execCmdCapture(t, "runner", "list", "--all", "--state", "revoked", "--url", srv.URL, "--token", "t")
@@ -66,7 +66,7 @@ func TestRunnerListAndTokensCommands(t *testing.T) {
 	if req := srv.last(); req.path != "/api/v1/runners" || req.query != "state=revoked" {
 		t.Fatalf("--all request %s?%s", req.path, req.query)
 	}
-	for _, want := range []string{"alice@example.com", "laptop-7", "MACHINE", "alice-mbp.corp", "AT ONCE", "1/4", "online", "abcd1234"} {
+	for _, want := range []string{"alice@example.com", "laptop-7", "MACHINE", "alice-mbp.corp", "ARCH", "arm64", "AT ONCE", "1/4", "online", "abcd1234"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("admin list lacks %q:\n%s", want, out)
 		}

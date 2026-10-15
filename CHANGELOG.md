@@ -53,6 +53,7 @@ a laptop runner, `wardyn-runnerd` works with Docker Desktop, setup is one comman
 - Runner token mint answers carry `proxy_image` when the server has one, and the console prints the `serve` command
   with it and notes the Docker Desktop flags.
 - Sign in again on a stored AWS or Claude sign-in, in Your model connections and the New Run provider picker.
+- A self-hosted runner reports its Docker engine's CPU architecture (`amd64` or `arm64`) at registration and on each connect (migration `0179_runner_arch`); the Runners tab, My runner and `wardyn runner list` show it.
 
 ### Changed
 

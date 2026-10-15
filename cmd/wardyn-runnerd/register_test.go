@@ -173,6 +173,19 @@ var testHost = types.RunnerAmounts{CPUMillis: 8000, MemoryMiB: 16384, DiskMiB: 5
 
 func init() {
 	measureHost = func(context.Context) (types.RunnerAmounts, error) { return testHost, nil }
+	engineArch = func(context.Context) string { return "arm64" }
+}
+
+// Registration sends the engine's architecture, and none when the engine could not be asked.
+func TestRegisterSendsTheEngineArch(t *testing.T) {
+	if sent, _, _, err := registerWith(t); err != nil || sent.Arch != "arm64" {
+		t.Fatalf("arch sent = %q, %v; want arm64", sent.Arch, err)
+	}
+	engineArch = func(context.Context) string { return "" }
+	t.Cleanup(func() { engineArch = func(context.Context) string { return "arm64" } })
+	if sent, _, _, err := registerWith(t); err != nil || sent.Arch != "" {
+		t.Fatalf("arch sent with no engine = %q, %v; want none", sent.Arch, err)
+	}
 }
 
 // registerWith runs register with args against a server that records the request and answers it.

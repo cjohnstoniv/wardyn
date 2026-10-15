@@ -79,6 +79,9 @@ type RunnerView struct {
 	// MachineName is the host name the runner last reported at registration or on connect. It is what
 	// the runner says, never verified and never an identity; absent until it reports one.
 	MachineName string `json:"machine_name,omitempty"`
+	// Arch is the CPU architecture of the runner's Docker engine ("amd64" or "arm64") as last reported;
+	// runner-reported, absent until it reports one.
+	Arch string `json:"arch,omitempty"`
 	// Pools are the owner's live Self-Hosted pools the runner is a member of, by name; [] for none.
 	Pools []RunnerPoolRef `json:"pools"`
 }

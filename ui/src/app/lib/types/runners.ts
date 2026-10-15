@@ -75,6 +75,8 @@ export interface RunnerView {
   usage: RunnerUsage;
   /** The host name the runner last reported (registration, then each connect): runner-reported, never an identity. */
   machine_name?: string;
+  /** The CPU architecture of the runner's Docker engine ("amd64" or "arm64") as last reported: runner-reported, absent until it reports one. */
+  arch?: string;
   /** The owner's live user pools this runner is a member of; [] for none. */
   pools: RunnerPoolRef[];
 }

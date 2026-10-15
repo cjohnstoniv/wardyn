@@ -21,6 +21,16 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
+func (f *runnerRegistrationFake) SetRunnerArch(_ context.Context, id uuid.UUID, arch string) error {
+	f.lock.Lock()
+	defer f.lock.Unlock()
+	if row, ok := f.rows[id]; ok && row.State != types.RunnerRevoked {
+		row.Arch = arch
+		f.rows[id] = row
+	}
+	return nil
+}
+
 func (f *runnerRegistrationFake) SetRunnerMachineName(_ context.Context, id uuid.UUID, name string) error {
 	f.lock.Lock()
 	defer f.lock.Unlock()
@@ -41,6 +51,11 @@ func testRunnerLimits() *types.RunnerLimits {
 // the token is still unspent.
 func registerWith(t *testing.T, srv *Server, f *runnerRegistrationFake, limits *types.RunnerLimits, machine string) (int, types.RunnerRegistration, bool, string) {
 	t.Helper()
+	return registerWithArch(t, srv, f, limits, machine, "")
+}
+
+func registerWithArch(t *testing.T, srv *Server, f *runnerRegistrationFake, limits *types.RunnerLimits, machine, arch string) (int, types.RunnerRegistration, bool, string) {
+	t.Helper()
 	raw := newBearer("wdr_")
 	now := time.Now().UTC()
 	f.lock.Lock()
@@ -50,7 +65,7 @@ func registerWith(t *testing.T, srv *Server, f *runnerRegistrationFake, limits *
 	if err != nil {
 		t.Fatal(err)
 	}
-	body, _ := json.Marshal(types.RunnerRegisterRequest{Token: raw, PublicKey: pub, Name: "laptop", Limits: limits, MachineName: machine})
+	body, _ := json.Marshal(types.RunnerRegisterRequest{Token: raw, PublicKey: pub, Name: "laptop", Limits: limits, MachineName: machine, Arch: arch})
 	w := do(t, srv, http.MethodPost, "/api/v1/runners/register", "", string(body))
 	var out types.RunnerRegistration
 	_ = json.Unmarshal(w.Body.Bytes(), &out)
@@ -174,5 +189,52 @@ func TestRunnerCapsUpdateTheMachineName(t *testing.T) {
 	sec := memberModeSSOSession(t, "sam", "sam@example.com", oidc.RoleSecurityAdmin, false)
 	if v := viewIDs(runnerViewsOf(t, doSSO(t, srv, http.MethodGet, "/api/v1/runners", sec, "")))[row.ID]; v.MachineName != "spaced.corp" {
 		t.Fatalf("admin view machine_name = %q", v.MachineName)
+	}
+}
+
+// Registration stores the architecture it is sent, "" for an older runner's; one the runner images are not
+// built for is refused (422, like a bad machine name) before the token is spent.
+func TestRunnerRegistrationStoresTheArch(t *testing.T) {
+	srv, f, _ := newRunnerRegistrationServer(t)
+	for _, arch := range []string{"amd64", "arm64", ""} {
+		code, reg, _, body := registerWithArch(t, srv, f, testRunnerLimits(), "box", arch)
+		if code != http.StatusCreated || f.rows[reg.RunnerID].Arch != arch {
+			t.Fatalf("arch %q: %d %s, stored %q", arch, code, body, f.rows[reg.RunnerID].Arch)
+		}
+	}
+	for _, arch := range []string{"x86_64", "AMD64", "riscv64", "arm64\n"} {
+		code, _, unspent, body := registerWithArch(t, srv, f, testRunnerLimits(), "box", arch)
+		if code != http.StatusUnprocessableEntity || !unspent || !strings.Contains(body, `"reason":"`+reasonRunnerRegistrationInvalid+`"`) || !strings.Contains(body, "arch must be") {
+			t.Errorf("arch %q: %d %s, token unspent %v; want 422 keeping the token", arch, code, body, unspent)
+		}
+	}
+}
+
+// A caps event gives a runner registered before 0.9.1 its architecture on its next connect, the latest
+// winning; an unknown one and an absent one change nothing and refuse nothing. Both views carry it.
+func TestRunnerCapsUpdateTheArch(t *testing.T) {
+	srv, f, _ := newRunnerRegistrationServer(t)
+	row := f.addRunner(srv, "alice", "laptop", types.RunnerClaimed, time.Hour)
+	for _, step := range []struct{ sent, want string }{
+		{"amd64", "amd64"},
+		{"", "amd64"},
+		{"riscv64", "amd64"},
+		{"arm64", "arm64"},
+	} {
+		data, _ := json.Marshal(runnerwire.Caps{Version: "0.9.1", Arch: step.sent})
+		if err := srv.EventFromRunner(context.Background(), row.ID, runnerwire.Event{Kind: runnerwire.EventCaps, Data: data}); err != nil {
+			t.Fatalf("caps arch %q refused: %v", step.sent, err)
+		}
+		if got := f.rows[row.ID].Arch; got != step.want {
+			t.Fatalf("after caps arch %q the arch is %q, want %q", step.sent, got, step.want)
+		}
+	}
+	alice := memberModeSSOSession(t, "alice", "alice@example.com", oidc.RoleUser, false)
+	if v := viewIDs(runnerViewsOf(t, doSSO(t, srv, http.MethodGet, "/api/v1/me/runners", alice, "")))[row.ID]; v.Arch != "arm64" {
+		t.Fatalf("own view arch = %q", v.Arch)
+	}
+	sec := memberModeSSOSession(t, "sam", "sam@example.com", oidc.RoleSecurityAdmin, false)
+	if v := viewIDs(runnerViewsOf(t, doSSO(t, srv, http.MethodGet, "/api/v1/runners", sec, "")))[row.ID]; v.Arch != "arm64" {
+		t.Fatalf("admin view arch = %q", v.Arch)
 	}
 }

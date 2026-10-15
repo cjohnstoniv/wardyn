@@ -60,6 +60,7 @@ export const RUNNER_V6 = {
   ORGANIZATION: "Organization",
   IN_NO_POOL: "None — runs nothing",
   MACHINE_LEGEND: "Machine is the hostname a self-hosted runner reports at register and on each connect. It is not proof of identity.",
+  ARCH: "Architecture",
   MACHINE_HINT: "The hostname the runner reports at register and on each connect. It is not proof of identity.",
   LIMITS_BY_OWNER: "Limits set by its owner",
   LIMITS_BY_ADMIN: "Set by an admin",
