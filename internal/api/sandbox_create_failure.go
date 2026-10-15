@@ -13,6 +13,7 @@ import (
 // sandboxCreateFailure is the FAILED hint and the audit reason for a CreateSandbox error. A runner's
 // image_arch refusal is a message written for the person, so it is shown without the wire prefix
 // and with where to fix it; everything else keeps the generic sentence and reason.
+// The runner's own text in the hint is operator-useful by design (#445); TestGetRun_TerminalStartupReasonSurvivesFailed pins it.
 func sandboxCreateFailure(err error) (hint, reason string) {
 	if !errors.Is(err, runner.ErrImageArch) {
 		return "the sandbox could not be created: " + err.Error(), "sandbox_create"
