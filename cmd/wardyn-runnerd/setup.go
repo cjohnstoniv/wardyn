@@ -5,6 +5,7 @@ package main
 
 import (
 	"cmp"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -77,6 +78,8 @@ type setupPlan struct {
 	// is "" only on a development build with neither, when the first probe waits for the organisation's answer.
 	eng     dockerEngine
 	flagged bool
+	// fromIdentity is whether the image is the one saved in runner.json.
+	fromIdentity bool
 	// unreachable is the release image when a first registration could not get it before the token: the
 	// organisation's answer is then probed after registering.
 	unreachable string
@@ -120,7 +123,12 @@ func runSetup(cmd *cobra.Command, h setupHost, o setupOptions) error {
 // comes before the service is installed, and a refusal needs no new token: the identity is saved, so
 // setup run again takes the registered path.
 func (h setupHost) settleImageAfterRegistering(cmd *cobra.Command, plan *setupPlan, answered string) error {
-	const again = "\nThis computer is registered: run setup again (no new token is needed)"
+	again := "\nThis computer is registered: " + h.imageHint(cmd.Context())
+	if answered != "" && plan.proxyImage != "" && (!safeSetting.MatchString(answered) || !types.SafeImageRef(answered)) {
+		// The image probed before the token works; an unusable answer does not unseat it.
+		fmt.Fprintf(cmd.OutOrStdout(), "The organisation named a proxy image setup cannot use (%q); keeping %s, which this engine reached.\n", answered, plan.proxyImage)
+		return nil
+	}
 	image := cmp.Or(answered, plan.proxyImage)
 	switch {
 	case image == "" && plan.unreachable != "":
@@ -128,7 +136,7 @@ func (h setupHost) settleImageAfterRegistering(cmd *cobra.Command, plan *setupPl
 	case image == "":
 		return fmt.Errorf("this computer is registered, but the organisation named no proxy image and this is a development build (%s): pass --proxy-image <ref> and run setup again (no new token is needed)", buildVersion())
 	case !safeSetting.MatchString(image) || !types.SafeImageRef(image):
-		return fmt.Errorf("this computer is registered, but the proxy image the organisation named has unsupported characters (%s): pass --proxy-image <ref> and run setup again (no new token is needed)", image)
+		return fmt.Errorf("this computer is registered, but the proxy image the organisation named has unsupported characters (%s): %s", image, h.imageHint(cmd.Context()))
 	case image == plan.proxyImage:
 		return nil
 	}
@@ -139,6 +147,12 @@ func (h setupHost) settleImageAfterRegistering(cmd *cobra.Command, plan *setupPl
 	}
 	plan.useRelay(cmd.OutOrStdout(), pair)
 	return nil
+}
+
+// imageHint is what to do when the proxy image the organisation named (or the saved one) does not work: the
+// person names the image for this computer's architecture, and no new token is needed.
+func (h setupHost) imageHint(ctx context.Context) string {
+	return "run setup again with --proxy-image <ref> for this computer's architecture (" + cmp.Or(engineArch(ctx), "unknown") + ") (no new token is needed)"
 }
 
 // useRelay records the pair the probe proved, and says so.
@@ -187,6 +201,7 @@ func (h setupHost) preflight(cmd *cobra.Command, o setupOptions) (setupPlan, err
 		}
 		plan.registered = true
 		// --proxy-image, else the image the organisation named at registration, else this binary's own.
+		plan.fromIdentity = o.proxyImage == "" && id.ProxyImage != ""
 		if plan.proxyImage = cmp.Or(o.proxyImage, id.ProxyImage, releaseProxyImage()); plan.proxyImage == "" {
 			return setupPlan{}, fmt.Errorf("this wardyn-runnerd is a development build (%s): pass --proxy-image <ref>", buildVersion())
 		}
@@ -228,6 +243,9 @@ func (h setupHost) preflight(cmd *cobra.Command, o setupOptions) (setupPlan, err
 		fmt.Fprintf(cmd.OutOrStdout(), "The release proxy image %s is not reachable from this engine; the organisation's answer will be used.\n", plan.proxyImage)
 		plan.unreachable, plan.proxyImage = plan.proxyImage, ""
 		return plan, nil
+	}
+	if err != nil && plan.fromIdentity {
+		return setupPlan{}, fmt.Errorf("%w\nThis computer's saved proxy image (runner.json) did not work: %s", err, h.imageHint(cmd.Context()))
 	}
 	if err != nil {
 		return setupPlan{}, fmt.Errorf("%w\nNo token was spent", err)

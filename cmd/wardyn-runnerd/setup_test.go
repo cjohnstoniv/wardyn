@@ -520,7 +520,7 @@ func TestSetupGivesUpOnAnUnreachableReleaseImageOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	j.calls, j.unpullable = nil, mirror
-	if _, err := j.run(setupOptions{}); err == nil || !strings.Contains(err.Error(), "No token was spent") || len(j.calls) != 0 {
+	if _, err := j.run(setupOptions{}); err == nil || !strings.Contains(err.Error(), "saved proxy image") || len(j.calls) != 0 {
 		t.Fatalf("an unpullable saved image: err=%v calls=%v", err, j.calls)
 	}
 	// A registered computer whose identity names nothing has only the release image to fall back on.
@@ -565,17 +565,56 @@ func TestSetupDeferredProbeFailureNeedsNoNewToken(t *testing.T) {
 	}
 }
 
-// An image the organisation names that cannot go into a unit file is refused, after registering, and
-// never written anywhere.
+// An image the organisation names that cannot go into a unit file is never written anywhere. When the
+// image probed before the token works, setup keeps it and warns; with none, it refuses after registering.
 func TestSetupRefusesAnUnsafeAnsweredImage(t *testing.T) {
+	const release = "ghcr.io/cjohnstoniv/wardyn-proxy:0.9.1"
 	setupBuild(t, "0.9.1")
 	f := newSetupFixture(t, "linux")
 	f.flagless, f.answered = true, "evil\nExecStart=/bin/sh"
-	if _, err := f.run(setupOptions{tokenFile: f.tokenFile}); err == nil || !strings.Contains(err.Error(), "unsupported characters") || !strings.Contains(err.Error(), "no new token is needed") {
-		t.Fatalf("unsafe answered image: %v", err)
+	out, err := f.run(setupOptions{tokenFile: f.tokenFile})
+	if err != nil || !strings.Contains(out, "keeping "+release) {
+		t.Fatalf("unsafe answered image with a probed release image: err=%v\n%s", err, out)
 	}
-	if _, serr := os.Stat(mustPaths(t, f).envFile); serr == nil {
+	if env := f.read(mustPaths(t, f).envFile); !strings.Contains(env, "WARDYN_PROXY_IMAGE="+release+"\n") || strings.Contains(env, "ExecStart") {
+		t.Errorf("the env file does not keep the probed image:\n%s", env)
+	}
+
+	g := newSetupFixture(t, "linux")
+	g.flagless, g.answered, g.unpullable = true, "evil\nExecStart=/bin/sh", release
+	if _, err := g.run(setupOptions{tokenFile: g.tokenFile}); err == nil || !strings.Contains(err.Error(), "unsupported characters") || !strings.Contains(err.Error(), "no new token is needed") {
+		t.Fatalf("unsafe answered image with nothing probed: %v", err)
+	}
+	if _, serr := os.Stat(mustPaths(t, g).envFile); serr == nil {
 		t.Error("an unsafe image reached the env file")
+	}
+}
+
+// A probe that fails with the image the organisation named, or with the image saved in runner.json, says
+// to run setup again with --proxy-image for this computer's architecture, and that no new token is needed.
+func TestSetupNamesTheArchitectureWhenTheNamedImageFails(t *testing.T) {
+	const mirror = "mirror.example.com/wardyn-proxy:0.9.1"
+	setupBuild(t, "0.9.1")
+	hint := "run setup again with --proxy-image <ref> for this computer's architecture (arm64) (no new token is needed)"
+
+	f := newSetupFixture(t, "linux")
+	f.flagless, f.answered, f.unpullable = true, mirror, mirror
+	if _, err := f.run(setupOptions{tokenFile: f.tokenFile}); err == nil || !strings.Contains(err.Error(), hint) {
+		t.Fatalf("answer image fails after registering: %v", err)
+	}
+
+	g := newSetupFixture(t, "linux")
+	g.flagless, g.answered = true, mirror
+	if _, err := g.run(setupOptions{tokenFile: g.tokenFile}); err != nil {
+		t.Fatal(err)
+	}
+	g.unpullable = mirror
+	if _, err := g.run(setupOptions{}); err == nil || !strings.Contains(err.Error(), hint) || !strings.Contains(err.Error(), "runner.json") {
+		t.Fatalf("saved image fails on a re-run: %v", err)
+	}
+	// A flag the person typed gets no such hint: they named it.
+	if _, err := g.run(setupOptions{proxyImage: mirror}); err == nil || strings.Contains(err.Error(), "architecture") {
+		t.Fatalf("flag image fails on a re-run: %v", err)
 	}
 }
 
