@@ -21,6 +21,9 @@
     - and `release` ([`.github/workflows/release.yml`](.github/workflows/release.yml), triggered by step 5's tag push itself, so it cannot be a prerequisite of tagging).
 - **Before tagging, dispatch `nightly.yml` on the candidate branch and wait for it to complete.**
   - `gh workflow run nightly.yml --ref release/X.Y` (or `main`, if that is the commit).
+  - For a release candidate add `-f scope=candidate`. The run then skips every job outside `release.yml`'s `watched=` list, keeping the `multi-arch build` staging jobs, which saves about 60 runner-minutes.
+  - The default, `scope=full`, and the 07:00 schedule run every lane. [`scripts/green-by-tree.sh`](scripts/green-by-tree.sh) accepts either scope.
+  - A second dispatch on the same ref and scope cancels the first. A scheduled run is never cancelled.
   - Evidence is keyed by the tag's **tree**, not its commit: any commit with the identical tree counts, so a nightly dispatched on the candidate branch still counts after a merge gives `release/X.Y` a different sha.
   - The tree must be identical.
   - A nightly on an ancestor, which has a different tree, does not count, and neither does a run from a fork.
@@ -190,9 +193,10 @@ crash or a usage limit resumes with the same command:
 
 1. **prepare.** Branch, `MERGE`, `scripts/release-commit.sh --apply`, three local
    checks that must each pass (`make dco DCO_RANGE="HEAD ^origin/main
-   ^origin/release/X.Y"`, the version tests, [`scripts/test-claims-match-code.sh`](scripts/test-claims-match-code.sh)),
-   push, a PR into `release/X.Y` titled `release: V`,
-   - and `nightly.yml` dispatched on the branch unless a dispatched nightly on the same tree is already queued, running or green.
+   ^origin/release/X.Y"`, the version tests, [`scripts/test-claims-match-code.sh`](scripts/test-claims-match-code.sh)), push,
+   - `scripts/lane-preflight.sh --candidate` runs before those three checks. A branch whose `lane-preflight.sh` lacks that mode stops with an error.
+   - Then `nightly.yml` is dispatched on the branch with `-f scope=candidate`, unless a dispatched nightly on the same tree is already queued, running or green.
+   - Only then does the PR into `release/X.Y` titled `release: V` open, so the nightly starts beside the PR's CI.
    - After the merge and again after the release-commit step, duplicate CHANGELOG heading keys (including `Unreleased`, regardless of dates) stop prepare before checks, pushes, PRs or nightly dispatch.
    - This also applies when resuming an already released or pushed candidate.
    - Commit a repair preserving the notes and history, then rerun prepare; no reset, amend or force-push is needed.
@@ -244,6 +248,14 @@ crash or a usage limit resumes with the same command:
   - It pushes nothing to `release/*` or `refs/tags/*`.
   - `BRANCH` need not contain `origin/release/X.Y` in a rehearsal (the command warns), but the branch's tree must be one that CI tested, or the wait phase has nothing to find.
   - The promote path needs the `path` input on `release.yml`, which a branch gets by containing R7.
+
+- **Promote at the tag (R9).** A `vX.Y.Z` tag push promotes the images the candidate's nightly staged instead of rebuilding them.
+  - `preflight-green` chooses: [`scripts/green-by-tree.sh`](scripts/green-by-tree.sh) with `NEED_STAGING=1` must find CI and the newest dispatched nightly green on the tag's tree, and that nightly must be under 23 hours old.
+  - Otherwise the tag falls back to `path=build`. The job summary says which path ran and why.
+  - A dispatch of `release.yml` takes the `path` input as given (`build` by default). A dispatch and a tag push for the same ref queue behind each other and nothing is cancelled.
+  - Promote has not run on GitHub since 2026-08-27, so the first real use follows one rehearsal: `gh workflow run release.yml --ref <candidate branch> -f path=promote`.
+  - `dry_run` defaults to true, so the rehearsal verifies every staged digest and copies, signs and attests nothing. Read its summary, then tag.
+  - To force a rebuild, dispatch `release.yml` on the tag with `-f path=build -f dry_run=false`.
 
 - **Recovery.** Every recovery is the same command again, or a rerun it printed.
   - A red nightly: `green-by-tree.sh` takes the **newest dispatched** nightly on the tree, so a newer red is not hidden by an older green.

@@ -151,6 +151,12 @@ STUB
 echo run >>"$FIX/claims.log"
 exit "$(cat "$FIX/claims.rc" 2>/dev/null || echo 0)"
 STUB
+  cat >scripts/lane-preflight.sh <<'STUB'
+#!/usr/bin/env bash
+# stub: the real script's --candidate mode is what release-patch.sh requires
+echo "args=$* BASE=${BASE:-}" >>"$FIX/preflight.log"
+exit "$(cat "$FIX/preflight.rc" 2>/dev/null || echo 0)"
+STUB
   chmod +x scripts/*.sh
   printf 'dco:\n\t@echo "$(DCO_RANGE)" >>"$(FIX)/dco.log"\n' >Makefile
   printf 'name: release\n# a\n          watched="w1 w2 w3"\n' >.github/workflows/release.yml
@@ -226,12 +232,14 @@ check "A: main merged --no-ff with a Signed-off-by" \
   bash -c "g() { '$REAL_GIT' \"\$@\"; }; g -C '$OR' log --merges --format=%B refs/heads/chore/release-0.8.4 | grep -q '^Signed-off-by: '"
 check "A: release commit sits on the candidate" \
   bash -c "'$REAL_GIT' -C '$OR' log -1 --format=%s refs/heads/chore/release-0.8.4 | grep -qx 'release: 0.8.4'"
+check "A: the candidate preflight ran against the release line" log_has preflight.log '^args=--candidate BASE=origin/release/0\.8$'
 check "A: make dco ran over the release's own range" log_has dco.log '^HEAD \^origin/main \^origin/release/0\.8$'
 check "A: version go test ran" log_has go.log "^test -count=1 \./cmd/wardyn/ -run TestVersionMatchesChangelog\|TestShippedVersionStringsAgree\$"
 check "A: claims script ran" log_has claims.log '^run$'
 check "A: PR into release/0.8 titled release: 0.8.4" log_has gh.log '^pr create --base release/0\.8 --head chore/release-0\.8\.4 --title release: 0\.8\.4 '
 check "A: PR body: one Closes per line" bash -c "grep -cx 'Closes #12' '$FIX/pr_body.txt' | grep -qx 1 && grep -cx 'Closes #15' '$FIX/pr_body.txt' | grep -qx 1 && [ \"\$(grep -c 'Closes' '$FIX/pr_body.txt')\" = 2 ]"
-check "A: nightly dispatched on the branch" log_has gh.log '^workflow run nightly\.yml --ref chore/release-0\.8\.4$'
+check "A: nightly dispatched on the branch with scope=candidate" log_has gh.log '^workflow run nightly\.yml --ref chore/release-0\.8\.4 -f scope=candidate$'
+check "A: nightly dispatched before the PR opened" bash -c "[ \"\$(grep -n '^workflow run nightly' '$FIX/gh.log' | head -1 | cut -d: -f1)\" -lt \"\$(grep -n '^pr create' '$FIX/gh.log' | head -1 | cut -d: -f1)\" ]"
 check "A: pushed the candidate branch" log_has push.log '^push origin HEAD:refs/heads/chore/release-0\.8\.4$'
 check "A: fast-forwarded release/0.8 to the candidate" bash -c "[ -n '$TIP' ] && [ \"\$('$REAL_GIT' -C '$OR' rev-parse refs/heads/release/0.8)\" = '$TIP' ]"
 check "A: pushed the tag, and it peels to the candidate" bash -c "[ \"\$('$REAL_GIT' -C '$OR' rev-parse 'refs/tags/v0.8.4^{commit}')\" = '$TIP' ]"
@@ -304,7 +312,7 @@ check "F: no release commit (only a --dry-run)" bash -c "grep -q '^--dry-run ' '
 check "F: a refused dry-run release commit only warns" out_has 'would be refused'
 check "F: no PR" log_lacks gh.log '^pr create'
 check "F: no Release edit" log_lacks gh.log '^release edit'
-check "F: nightly dispatched as usual" log_has gh.log '^workflow run nightly\.yml --ref feat-x$'
+check "F: nightly dispatched as usual" log_has gh.log '^workflow run nightly\.yml --ref feat-x -f scope=candidate$'
 check "F: promote dry-run dispatched" log_has gh.log '^workflow run release\.yml --ref feat-x -f path=promote -f dry_run=true$'
 check "F: watched the dry run" log_has gh.log '^run watch 950 --exit-status$'
 check "F: no verify-release" log_lacks verify.log '.'
@@ -506,7 +514,7 @@ keep_pushes
 
 # ── X-Z. duplicate heading guards also cover both prepare resume shortcuts ──
 no_prepare_checks() {
-  log_lacks dco.log '.' && log_lacks go.log '.' && log_lacks claims.log '.'
+  log_lacks dco.log '.' && log_lacks go.log '.' && log_lacks claims.log '.' && log_lacks preflight.log '.'
 }
 repair_headings() {
   # Fixture repair removes duplicate headings, retaining every notes line and commit.
