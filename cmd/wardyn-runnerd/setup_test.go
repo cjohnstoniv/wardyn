@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -38,7 +39,12 @@ type setupFixture struct {
 	networks    []string
 	checks      []string    // "image network" of each engine check
 	wants       []relayPair // the explicit relay values each check was handed
-	relayErr    error       // what the engine check answers, when set
+	engineErr   error       // what the engine check answers, when set
+	relayErr    error       // what the relay probe answers, when set
+	events      []string    // engine, install, register, probe, service: the order setup did them in
+	flagless    bool        // run leaves --proxy-image out
+	unpullable  string      // an image the relay probe cannot get onto the engine
+	answered    string      // the proxy image the organisation answers a registration with
 	desktop     bool
 	vm          bool // a VM-backed engine other than Docker Desktop
 	state       types.RunnerState
@@ -67,47 +73,72 @@ func newSetupFixture(t *testing.T, goos string) *setupFixture {
 	f.host = setupHost{goos: goos, home: filepath.Join(root, "home"), uid: 501, exe: exe,
 		run: func(_ context.Context, name string, args ...string) ([]byte, error) {
 			f.commands = append(f.commands, name+" "+strings.Join(args, " "))
+			if name == "systemctl" && len(args) > 1 {
+				switch args[1] {
+				case "stop":
+					f.events = append(f.events, "install")
+				case "enable":
+					f.events = append(f.events, "service")
+				}
+			}
 			if name == "systemctl" && len(args) > 2 && args[1] == "show" {
 				return []byte(filepath.Join(f.host.home, ".config", "systemd", "user") + " /etc/systemd/user\n"), nil
 			}
 			return nil, nil
 		},
-		docker: f.docker}
+		engine: f.engine, relay: f.relay}
 	if err := os.MkdirAll(f.host.home, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	return f
 }
 
-// docker answers as prepareSetupDocker would on a native engine (its proxy reaches the relay through
-// host-gateway), on Docker Desktop (the same), or on a VM-backed engine reached at 192.168.5.2. An
-// explicit target always reaches. It applies the real bind rule and candidate list.
-func (f *setupFixture) docker(_ context.Context, image, network string, want relayPair) (dockerEngine, relayPair, error) {
+// engine answers as readySetupEngine would on a native engine, on Docker Desktop or on a VM-backed
+// engine reached at 192.168.5.2, and applies the real bind rule.
+func (f *setupFixture) engine(_ context.Context, network string, want relayPair) (dockerEngine, error) {
+	f.events = append(f.events, "engine")
 	f.networks = append(f.networks, network)
-	f.checks = append(f.checks, image+" "+network)
-	f.wants = append(f.wants, want)
-	if f.relayErr != nil {
-		return dockerEngine{}, relayPair{}, f.relayErr
+	if f.engineErr != nil {
+		return dockerEngine{}, f.engineErr
 	}
 	gw := netip.MustParseAddr("172.17.0.1")
-	eng, reach := dockerEngine{desc: `"Ubuntu 24.04 LTS" (laptop)`, native: true, gateway: gw, bridge: []netip.Addr{gw}}, hostGateway
+	eng := dockerEngine{desc: `"Ubuntu 24.04 LTS" (laptop)`, native: true, gateway: gw, bridge: []netip.Addr{gw}}
 	switch {
 	case f.desktop:
 		eng = dockerEngine{desc: `"Docker Desktop" (docker-desktop)`, why: "Docker Desktop"}
 	case f.vm:
-		eng, reach = dockerEngine{desc: `"Alpine Linux v3.21" (lima-rancher-desktop)`, why: "its bridge interface is not on this host"}, "192.168.5.2"
+		eng = dockerEngine{desc: `"Alpine Linux v3.21" (lima-rancher-desktop)`, why: "its bridge interface is not on this host"}
 	}
 	if want.bind.IsValid() {
 		if err := admitRelayBind(want.bind, eng); err != nil {
-			return dockerEngine{}, relayPair{}, err
+			return dockerEngine{}, err
 		}
+	}
+	return eng, nil
+}
+
+// relay answers as probeSetupRelay would: the native and Docker Desktop engines' proxies reach the relay
+// through host-gateway, a VM-backed engine's at 192.168.5.2, and an explicit target always reaches.
+func (f *setupFixture) relay(_ context.Context, image, network string, eng dockerEngine, want relayPair) (relayPair, error) {
+	f.events = append(f.events, "probe")
+	f.checks = append(f.checks, image+" "+network)
+	f.wants = append(f.wants, want)
+	if image == f.unpullable {
+		return relayPair{}, fmt.Errorf("%w: %s", errProxyImageUnavailable, image)
+	}
+	if f.relayErr != nil {
+		return relayPair{}, f.relayErr
+	}
+	reach := hostGateway
+	if f.vm {
+		reach = "192.168.5.2"
 	}
 	for _, p := range relayCandidates(eng, want) {
 		if p.target == reach || p.target == want.target {
-			return eng, p, nil
+			return p, nil
 		}
 	}
-	return dockerEngine{}, relayPair{}, errors.New("relay: no container on Docker engine " + eng.desc + " reached this runner")
+	return relayPair{}, errors.New("relay: no container on Docker engine " + eng.desc + " reached this runner")
 }
 
 func (f *setupFixture) serve(w http.ResponseWriter, r *http.Request) {
@@ -119,8 +150,9 @@ func (f *setupFixture) serve(w http.ResponseWriter, r *http.Request) {
 	case r.URL.Path == "/api/v1/runners/register":
 		var req types.RunnerRegisterRequest
 		_ = json.NewDecoder(r.Body).Decode(&req)
+		f.events = append(f.events, "register")
 		w.WriteHeader(http.StatusCreated)
-		reply(types.RunnerRegistration{RunnerID: f.id, Fingerprint: runnerwire.Fingerprint(req.PublicKey), State: types.RunnerUnclaimed, OrgURLSHA256: federation.OrgURLSHA256(f.org)})
+		reply(types.RunnerRegistration{RunnerID: f.id, Fingerprint: runnerwire.Fingerprint(req.PublicKey), State: types.RunnerUnclaimed, OrgURLSHA256: federation.OrgURLSHA256(f.org), ProxyImage: f.answered})
 	case r.Method == http.MethodGet && r.URL.Path == "/api/v1/me/runners/"+f.id.String():
 		reply(types.RunnerView{ID: f.id, Name: "laptop", State: f.state})
 	case r.Method == http.MethodPost && r.URL.Path == "/api/v1/me/runners/"+f.id.String()+"/claim":
@@ -185,7 +217,7 @@ func (f *setupFixture) run(o setupOptions) (string, error) {
 	if o.network == "" {
 		o.network = "wardyn-internal"
 	}
-	if o.proxyImage == "" {
+	if o.proxyImage == "" && !f.flagless {
 		o.proxyImage = "ghcr.io/example/proxy:1"
 	}
 	cmd := newSetupCommand()
@@ -283,7 +315,8 @@ func TestSetupRefusesBeforeSpendingTheToken(t *testing.T) {
 		"default without pool":                   {setupOptions{claim: true, makeDefault: true}, nil, "--default needs --pool"},
 		"pool without claim":                     {setupOptions{pool: "Laptop"}, nil, "--pool needs --claim"},
 		"unsafe setting":                         {setupOptions{network: "net work"}, nil, "unsupported characters"},
-		"docker unusable":                        {setupOptions{}, func(f *setupFixture) { f.relayErr = os.ErrPermission }, "permission denied"},
+		"docker unusable":                        {setupOptions{}, func(f *setupFixture) { f.engineErr = os.ErrPermission }, "permission denied"},
+		"relay probe unusable":                   {setupOptions{}, func(f *setupFixture) { f.relayErr = os.ErrPermission }, "No token was spent"},
 		"relay address another computer reaches": {setupOptions{relayListen: "192.168.1.20"}, nil, "never an address another computer can reach"},
 		"relay unreachable": {setupOptions{}, func(f *setupFixture) {
 			f.relayErr = errors.New("relay: no container on Docker engine reached this runner")
@@ -317,30 +350,232 @@ func TestSetupRefusesBeforeSpendingTheToken(t *testing.T) {
 	}
 }
 
+func setupBuild(t *testing.T, v string) {
+	t.Helper()
+	old := buildVersion
+	buildVersion = func() string { return v }
+	t.Cleanup(func() { buildVersion = old })
+}
+
+// A development build has no release image. With no --proxy-image on a first registration the
+// organisation may still name one, so setup refuses only after registering, and says to run it again
+// without a new token; that second run is refused before anything is called, until the flag is given.
 func TestSetupDevelopmentBuildNeedsAProxyImage(t *testing.T) {
 	f := newSetupFixture(t, "linux")
-	build := func(v string) {
-		old := buildVersion
-		buildVersion = func() string { return v }
-		t.Cleanup(func() { buildVersion = old })
-	}
-	cmd := newSetupCommand()
-	cmd.SetOut(&strings.Builder{})
-	cmd.SetContext(context.Background())
+	f.flagless = true
+	setupBuild(t, "0.9.1+abc123def")
 
-	build("0.9.1+abc123def")
-	err := runSetup(cmd, f.host, setupOptions{org: f.org, tokenFile: f.tokenFile, network: "wardyn-internal"})
-	if err == nil || !strings.Contains(err.Error(), "development build (0.9.1+abc123def): pass --proxy-image") || len(f.calls) != 0 {
-		t.Fatalf("a development build without --proxy-image: err=%v calls=%v", err, f.calls)
+	_, err := f.run(setupOptions{tokenFile: f.tokenFile})
+	if err == nil || !strings.Contains(err.Error(), "development build (0.9.1+abc123def): pass --proxy-image") || !strings.Contains(err.Error(), "no new token is needed") {
+		t.Fatalf("a development build without --proxy-image and without an answer: %v", err)
 	}
-
-	build("0.9.1-rc.2")
-	if err := runSetup(cmd, f.host, setupOptions{org: f.org, tokenFile: f.tokenFile, network: "wardyn-internal"}); err != nil {
-		t.Fatal(err)
+	if want := []string{"engine", "install", "register"}; !slices.Equal(f.events, want) {
+		t.Errorf("events = %v, want %v: no probe and no service", f.events, want)
 	}
 	p, _ := f.host.paths()
-	if env := f.read(p.envFile); !strings.Contains(env, "WARDYN_PROXY_IMAGE=ghcr.io/cjohnstoniv/wardyn-proxy:0.9.1-rc.2\n") {
+	if _, err := os.Stat(p.envFile); err == nil {
+		t.Error("a refused setup wrote the env file")
+	}
+
+	f.calls = nil
+	if _, err := f.run(setupOptions{}); err == nil || !strings.Contains(err.Error(), "pass --proxy-image <ref>") || len(f.calls) != 0 {
+		t.Fatalf("the re-run without the flag: err=%v calls=%v", err, f.calls)
+	}
+	if _, err := f.run(setupOptions{proxyImage: "local/proxy:dev"}); err != nil || f.count("POST /api/v1/runners/register") != 0 {
+		t.Fatalf("the re-run with the flag: %v (registered %d more times)", err, f.count("POST /api/v1/runners/register"))
+	}
+
+	g := newSetupFixture(t, "linux")
+	g.flagless = true
+	setupBuild(t, "0.9.1-rc.2")
+	if _, err := g.run(setupOptions{tokenFile: g.tokenFile}); err != nil {
+		t.Fatal(err)
+	}
+	gp, _ := g.host.paths()
+	if env := g.read(gp.envFile); !strings.Contains(env, "WARDYN_PROXY_IMAGE=ghcr.io/cjohnstoniv/wardyn-proxy:0.9.1-rc.2\n") {
 		t.Errorf("a release candidate did not default to its own image:\n%s", env)
+	}
+}
+
+// Setup probes before the token is spent with the best image it knows (--proxy-image, the saved
+// identity's, else the release image). After registering it probes again only if the organisation's
+// answer names a different image, and the env file carries the image that was last probed.
+func TestSetupProbesWhenItKnowsTheProxyImage(t *testing.T) {
+	setupBuild(t, "0.9.1")
+	const release, mirror = "ghcr.io/cjohnstoniv/wardyn-proxy:0.9.1", "mirror.example.com/wardyn-proxy:0.9.1"
+	f := newSetupFixture(t, "linux")
+	f.flagless, f.answered = true, mirror
+	if _, err := f.run(setupOptions{tokenFile: f.tokenFile}); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"engine", "probe", "install", "register", "probe", "service"}; !slices.Equal(f.events, want) {
+		t.Errorf("a first flagless registration did %v, want %v", f.events, want)
+	}
+	if want := []string{release + " wardyn-internal", mirror + " wardyn-internal"}; !slices.Equal(f.checks, want) {
+		t.Errorf("probed %q, want the release image before the token and the organisation's after", f.checks)
+	}
+	if env := f.read(mustPaths(t, f).envFile); !strings.Contains(env, "WARDYN_PROXY_IMAGE="+mirror+"\n") {
+		t.Errorf("the env file lacks the organisation's image:\n%s", env)
+	}
+
+	// Registered with that image saved: one probe, first, with the saved image, and no register.
+	f.events, f.checks = nil, nil
+	if _, err := f.run(setupOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"engine", "probe", "install", "service"}; !slices.Equal(f.events, want) {
+		t.Errorf("a re-run did %v, want %v", f.events, want)
+	}
+	if want := []string{mirror + " wardyn-internal"}; !slices.Equal(f.checks, want) {
+		t.Errorf("the re-run probed with %q", f.checks)
+	}
+
+	// An answer that matches the probed image, or none, is not probed again.
+	for _, answered := range []string{"", release} {
+		g := newSetupFixture(t, "linux")
+		g.flagless, g.answered = true, answered
+		if _, err := g.run(setupOptions{tokenFile: g.tokenFile}); err != nil {
+			t.Fatal(err)
+		}
+		if want := []string{"engine", "probe", "install", "register", "service"}; !slices.Equal(g.events, want) {
+			t.Errorf("answer %q: did %v, want %v", answered, g.events, want)
+		}
+	}
+
+	// A flag probes before register, once, and wins over the answer.
+	h := newSetupFixture(t, "linux")
+	h.answered = mirror
+	if _, err := h.run(setupOptions{tokenFile: h.tokenFile}); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"engine", "probe", "install", "register", "service"}; !slices.Equal(h.events, want) {
+		t.Errorf("a flagged registration did %v, want %v", h.events, want)
+	}
+	if env := h.read(mustPaths(t, h).envFile); !strings.Contains(env, "WARDYN_PROXY_IMAGE=ghcr.io/example/proxy:1\n") {
+		t.Errorf("the flag did not win over the answer:\n%s", env)
+	}
+}
+
+func mustPaths(t *testing.T, f *setupFixture) setupPaths {
+	t.Helper()
+	p, err := f.host.paths()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+// The release image is only a default: when this engine cannot get it (an air-gapped estate) setup does
+// not refuse before the token but probes the organisation's answer after registering. An image the person
+// named (a flag, or the saved identity's) that cannot be got, and a probe that ran and failed, still refuse
+// before the token.
+func TestSetupGivesUpOnAnUnreachableReleaseImageOnly(t *testing.T) {
+	setupBuild(t, "0.9.1")
+	const release, mirror = "ghcr.io/cjohnstoniv/wardyn-proxy:0.9.1", "mirror.example.com/wardyn-proxy:0.9.1"
+	f := newSetupFixture(t, "linux")
+	f.flagless, f.unpullable, f.answered = true, release, mirror
+	out, err := f.run(setupOptions{tokenFile: f.tokenFile})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"engine", "probe", "install", "register", "probe", "service"}; !slices.Equal(f.events, want) {
+		t.Errorf("events = %v, want %v", f.events, want)
+	}
+	if want := []string{release + " wardyn-internal", mirror + " wardyn-internal"}; !slices.Equal(f.checks, want) {
+		t.Errorf("probed %q", f.checks)
+	}
+	if !strings.Contains(out, "The release proxy image "+release+" is not reachable from this engine; the organisation's answer will be used.") {
+		t.Errorf("the give-up was not said:\n%s", out)
+	}
+	if env := f.read(mustPaths(t, f).envFile); !strings.Contains(env, "WARDYN_PROXY_IMAGE="+mirror+"\n") {
+		t.Errorf("the env file lacks the organisation's image:\n%s", env)
+	}
+
+	// Nothing named by the organisation either: refused after registering, with no new token needed.
+	g := newSetupFixture(t, "linux")
+	g.flagless, g.unpullable = true, release
+	if _, err := g.run(setupOptions{tokenFile: g.tokenFile}); err == nil || !strings.Contains(err.Error(), "not reachable from this engine") || !strings.Contains(err.Error(), "no new token is needed") {
+		t.Fatalf("no answer and no release image: %v", err)
+	}
+	if contains(g.commands, "systemctl --user enable --now wardyn-runnerd.service") {
+		t.Error("the service was started")
+	}
+
+	// A probe that ran and failed refuses before the token, whatever the image's source.
+	h := newSetupFixture(t, "linux")
+	h.flagless, h.relayErr, h.answered = true, errors.New("relay: no container reached this runner"), mirror
+	if _, err := h.run(setupOptions{tokenFile: h.tokenFile}); err == nil || !strings.Contains(err.Error(), "No token was spent") || len(h.calls) != 0 {
+		t.Fatalf("a failed probe of the release image: err=%v calls=%v", err, h.calls)
+	}
+
+	// A flag the person named, and a saved identity's image, refuse before the token when unpullable.
+	i := newSetupFixture(t, "linux")
+	i.unpullable = "ghcr.io/example/proxy:1"
+	if _, err := i.run(setupOptions{tokenFile: i.tokenFile}); err == nil || !strings.Contains(err.Error(), "No token was spent") || len(i.calls) != 0 {
+		t.Fatalf("an unpullable flag image: err=%v calls=%v", err, i.calls)
+	}
+	j := newSetupFixture(t, "linux")
+	j.flagless, j.answered = true, mirror
+	if _, err := j.run(setupOptions{tokenFile: j.tokenFile}); err != nil {
+		t.Fatal(err)
+	}
+	j.calls, j.unpullable = nil, mirror
+	if _, err := j.run(setupOptions{}); err == nil || !strings.Contains(err.Error(), "No token was spent") || len(j.calls) != 0 {
+		t.Fatalf("an unpullable saved image: err=%v calls=%v", err, j.calls)
+	}
+	// A registered computer whose identity names nothing has only the release image to fall back on.
+	k := newSetupFixture(t, "linux")
+	k.flagless = true
+	if _, err := k.run(setupOptions{tokenFile: k.tokenFile}); err != nil {
+		t.Fatal(err)
+	}
+	k.calls, k.unpullable = nil, release
+	if _, err := k.run(setupOptions{}); err == nil || !strings.Contains(err.Error(), "No token was spent") {
+		t.Fatalf("a registered computer with an unpullable release image: %v", err)
+	}
+}
+
+// With no image known before registering (a development build, no flag) the first probe runs after the
+// answer, still before the service is installed. A failure starts no service and says no new token is
+// needed, and the re-run, which takes the image from the saved identity, succeeds without registering again.
+func TestSetupDeferredProbeFailureNeedsNoNewToken(t *testing.T) {
+	setupBuild(t, "0.9.1+abc123def")
+	f := newSetupFixture(t, "linux")
+	f.flagless, f.answered = true, "mirror.example.com/wardyn-proxy:0.9.1"
+	f.relayErr = errors.New("relay: no container reached this runner")
+	_, err := f.run(setupOptions{tokenFile: f.tokenFile})
+	if err == nil || !strings.Contains(err.Error(), "no container reached") || !strings.Contains(err.Error(), "no new token is needed") {
+		t.Fatalf("deferred probe failure: %v", err)
+	}
+	if want := []string{"engine", "install", "register", "probe"}; !slices.Equal(f.events, want) {
+		t.Errorf("events = %v, want %v", f.events, want)
+	}
+	if contains(f.commands, "systemctl --user enable --now wardyn-runnerd.service") {
+		t.Error("a failed probe started the service")
+	}
+	if _, serr := os.Stat(mustPaths(t, f).unitFile); serr == nil {
+		t.Error("a failed probe installed the unit")
+	}
+	f.relayErr = nil
+	if _, err := f.run(setupOptions{}); err != nil {
+		t.Fatalf("re-run without a token: %v", err)
+	}
+	if f.count("POST /api/v1/runners/register") != 1 {
+		t.Errorf("the re-run registered again (%d)", f.count("POST /api/v1/runners/register"))
+	}
+}
+
+// An image the organisation names that cannot go into a unit file is refused, after registering, and
+// never written anywhere.
+func TestSetupRefusesAnUnsafeAnsweredImage(t *testing.T) {
+	setupBuild(t, "0.9.1")
+	f := newSetupFixture(t, "linux")
+	f.flagless, f.answered = true, "evil\nExecStart=/bin/sh"
+	if _, err := f.run(setupOptions{tokenFile: f.tokenFile}); err == nil || !strings.Contains(err.Error(), "unsupported characters") || !strings.Contains(err.Error(), "no new token is needed") {
+		t.Fatalf("unsafe answered image: %v", err)
+	}
+	if _, serr := os.Stat(mustPaths(t, f).envFile); serr == nil {
+		t.Error("an unsafe image reached the env file")
 	}
 }
 

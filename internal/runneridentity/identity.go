@@ -18,6 +18,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/federation"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // Identity never serializes its private key or a person's identity.
@@ -26,6 +27,11 @@ type Identity struct {
 	PrivateKey   ed25519.PrivateKey `json:"-"`
 	Fingerprint  string             `json:"key_fingerprint"`
 	OrgURLSHA256 string             `json:"org_url_sha256"`
+	// ProxyImage is the proxy image the organisation named for this runner's architecture at
+	// registration; empty when it named none or named the release image. runner.json is decoded
+	// strictly, so a 0.9.0 wardyn-runnerd cannot load an identity that carries this field: a
+	// downgrade means registering again.
+	ProxyImage string `json:"proxy_image,omitempty"`
 }
 
 // DefaultDir is shared by runnerd and the owner's local claim command.
@@ -62,6 +68,9 @@ func Load(stateDir, orgURL string) (Identity, error) {
 	}
 	if id.RunnerID == uuid.Nil || id.OrgURLSHA256 != federation.OrgURLSHA256(orgURL) {
 		return Identity{}, errors.New("runner identity is unregistered or belongs to another organisation URL")
+	}
+	if id.ProxyImage != "" && !types.SafeImageRef(id.ProxyImage) {
+		return Identity{}, errors.New("runner identity proxy_image is not a valid image reference")
 	}
 	key, err := privateFile(root, "runner.key", ed25519.PrivateKeySize)
 	if err != nil {

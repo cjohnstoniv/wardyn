@@ -10,7 +10,13 @@ import (
 	"errors"
 )
 
-// prepareSetupDocker needs Docker, which this build has not: setup cannot tell the engine is usable.
-func prepareSetupDocker(context.Context, string, string, relayPair) (dockerEngine, relayPair, error) {
-	return dockerEngine{}, relayPair{}, errors.New("setup requires a build with the docker tag")
+// The docker build holds setup's engine check and relay probe; this build cannot tell the engine is usable.
+var errSetupNeedsDocker = errors.New("setup requires a build with the docker tag")
+
+func readySetupEngine(context.Context, string, relayPair) (dockerEngine, error) {
+	return dockerEngine{}, errSetupNeedsDocker
+}
+
+func probeSetupRelay(context.Context, string, string, dockerEngine, relayPair) (relayPair, error) {
+	return relayPair{}, errSetupNeedsDocker
 }

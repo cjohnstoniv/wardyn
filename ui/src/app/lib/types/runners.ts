@@ -156,6 +156,8 @@ export interface RunnerRegistration {
   org_url_sha256: string;
   /** The limits the server stored; null on a runner registered before they existed. */
   limits: RunnerLimits | null;
+  /** The register answer only, and only when the organisation names one: the proxy image for the architecture the runner reported. */
+  proxy_image?: string;
 }
 
 /** The revoke answers' body (an inline map in internal/api/runner_revoke.go). */

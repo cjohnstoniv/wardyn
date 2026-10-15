@@ -4,6 +4,7 @@
 package main
 
 import (
+	"cmp"
 	"crypto/ed25519"
 	"errors"
 	"fmt"
@@ -92,6 +93,9 @@ type registerArgs struct {
 type registeredRunner struct {
 	name, fingerprint string
 	limits            types.RunnerLimits
+	// proxyImage is the image the organisation answered for this runner's architecture, as received
+	// (so it can be unsafe), or "" when it named none.
+	proxyImage string
 }
 
 // registerRunner measures this host, settles the limits, spends the token and saves the identity. A
@@ -144,7 +148,8 @@ func registerRunner(cmd *cobra.Command, a registerArgs) (registeredRunner, error
 	client.HTTPClient = &http.Client{Timeout: 30 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error {
 		return errors.New("runner registration does not follow redirects")
 	}}
-	registered, err := client.RegisterRunner(cmd.Context(), sdk.RunnerRegisterRequest{Token: token, PublicKey: key.Public().(ed25519.PublicKey), Name: name, Limits: &limits, MachineName: machine, Arch: engineArch(cmd.Context())})
+	arch := engineArch(cmd.Context())
+	registered, err := client.RegisterRunner(cmd.Context(), sdk.RunnerRegisterRequest{Token: token, PublicKey: key.Public().(ed25519.PublicKey), Name: name, Limits: &limits, MachineName: machine, Arch: arch})
 	if err != nil {
 		return registeredRunner{}, registrationFailure(err)
 	}
@@ -152,8 +157,23 @@ func registerRunner(cmd *cobra.Command, a registerArgs) (registeredRunner, error
 	if registered.RunnerID == uuid.Nil || registered.State != types.RunnerUnclaimed || registered.Fingerprint != fingerprint || registered.OrgURLSHA256 != federation.OrgURLSHA256(org) {
 		return registeredRunner{}, errors.New("registration response does not match this key and organisation; identity was not activated")
 	}
-	if err := runneridentity.Save(stateDir, runneridentity.Identity{RunnerID: registered.RunnerID, PrivateKey: key, Fingerprint: fingerprint, OrgURLSHA256: registered.OrgURLSHA256}); err != nil {
+	id := runneridentity.Identity{RunnerID: registered.RunnerID, PrivateKey: key, Fingerprint: fingerprint, OrgURLSHA256: registered.OrgURLSHA256}
+	out := cmd.OutOrStdout()
+	switch image := registered.ProxyImage; {
+	case image == "":
+	case !types.SafeImageRef(image):
+		fmt.Fprintf(out, "the organisation named a proxy image this runner cannot use (%q); it was not saved. Pass --proxy-image <ref> to serve or setup.\n", image)
+	default:
+		fmt.Fprintf(out, "proxy image for this runner (%s): %s\n", cmp.Or(arch, "architecture unknown"), image)
+		// A release tag is not saved: it would pin a public tag that the next wardyn-runnerd upgrade
+		// should move. runner.json is decoded strictly, so a 0.9.0 wardyn-runnerd cannot load an
+		// identity that carries proxy_image.
+		if image != releaseProxyImage() {
+			id.ProxyImage = image
+		}
+	}
+	if err := runneridentity.Save(stateDir, id); err != nil {
 		return registeredRunner{}, err
 	}
-	return registeredRunner{name: name, fingerprint: fingerprint, limits: limits}, nil
+	return registeredRunner{name: name, fingerprint: fingerprint, limits: limits, proxyImage: registered.ProxyImage}, nil
 }
