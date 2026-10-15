@@ -82,6 +82,8 @@ type fakeDocker struct {
 	pingBlock bool
 
 	images map[string]bool // ref -> present
+	// imageArch is the architecture ImageInspect reports per ref; absent = "" (unknown).
+	imageArch map[string]string
 
 	networks map[string]client.NetworkCreateOptions // name -> opts (id == name here)
 	// subnets is each network's IPv4 subnet: the one its create asked for, or
@@ -290,6 +292,7 @@ func newFakeDocker() *fakeDocker {
 	return &fakeDocker{
 		info:       infoWithRuntimes(),
 		images:     map[string]bool{},
+		imageArch:  map[string]string{},
 		networks:   map[string]client.NetworkCreateOptions{},
 		subnets:    map[string]netip.Prefix{},
 		containers: map[string]*createdContainer{},
@@ -387,7 +390,7 @@ func (f *fakeDocker) ImageInspect(ctx context.Context, imageID string, _ ...clie
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.images[imageID] {
-		return client.ImageInspectResult{InspectResponse: image.InspectResponse{ID: imageID}}, nil
+		return client.ImageInspectResult{InspectResponse: image.InspectResponse{ID: imageID, Architecture: f.imageArch[imageID]}}, nil
 	}
 	return client.ImageInspectResult{}, fakeNotFound{msg: "no such image: " + imageID}
 }
