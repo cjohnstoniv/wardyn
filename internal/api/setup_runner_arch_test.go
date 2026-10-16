@@ -16,9 +16,10 @@ func TestRunnerArchImagesCheck(t *testing.T) {
 	if !ok {
 		t.Fatal("no row for arm64 runners with an uncovered key")
 	}
-	if chk.ID != "runner_arch_images" || chk.Status != "info" || chk.Blocking {
-		t.Errorf("row = %+v; want an info, non-blocking runner_arch_images", chk)
+	if chk.ID != "runner_arch_images" || chk.Status != "info" {
+		t.Errorf("row = %+v; want an info runner_arch_images", chk)
 	}
+	assertSetupCheckBlocking(t, chk)
 	if !strings.Contains(chk.Detail, "3 arm64 runners") || !strings.Contains(chk.Detail, "no arm64 image: base.") {
 		t.Errorf("detail %q lists the wrong keys (codex-cli is covered)", chk.Detail)
 	}
