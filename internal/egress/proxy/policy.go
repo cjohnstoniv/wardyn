@@ -586,9 +586,10 @@ func (p *Proxy) writeEgressDeny(w http.ResponseWriter, host string, port int, lo
 
 // writeEgressDenyLLM is writeEgressDeny for a request on an LLM lane (a
 // brokered /wardyn/llm/* route, or an inner request of a terminated tunnel):
-// the body is the host's provider error shape, so the SDK reads the refusal
-// instead of failing to parse text. A host that is no LLM vendor's still gets
-// the forward-lane body.
+// the body is the host's provider error shape (an AWS host's is a 403
+// AccessDeniedException), so the SDK reads the refusal instead of failing to
+// parse text. A host that is no LLM vendor's or AWS's still gets the
+// forward-lane body.
 func (p *Proxy) writeEgressDenyLLM(w http.ResponseWriter, host string, port int, log *egress.DecisionLog) {
 	p.denyEgress(w, host, port, log, false, p.shapeOfHost(host))
 }
@@ -625,7 +626,11 @@ func (p *Proxy) denyEgress(w http.ResponseWriter, host string, port int, log *eg
 		attribution = p.attributeRefusal(w)
 	}
 	if shape != shapePlain {
-		msg := brokeredMessage(reasonEgressDenied, p.hostPortLabel(host, port), reason, reasonHint(reasonEgressDenied, reason), "")
+		// The SDK shows the message, never the headers, so the attribution rides in it.
+		msg := brokeredMessage(reasonEgressDenied, p.hostPortLabel(host, port), reason, faultHint(reasonEgressDenied, reason, nil), "")
+		if attribution != "" {
+			msg += ". " + attribution
+		}
 		writeProviderError(w, shape, http.StatusForbidden, reasonEgressDenied, msg, nil)
 		return
 	}

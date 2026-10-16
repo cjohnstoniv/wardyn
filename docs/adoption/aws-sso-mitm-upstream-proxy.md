@@ -135,11 +135,8 @@ that an upstream *was configured* for that run. (The console compounds this by r
 "Refused by the built-in guard" although it is an allow.)
 
 **The `"llm"` in the parse error locates the writer.** `JSON Parse error: Unexpected identifier
-"llm"` is what a JSON parser says about a bare leading identifier, and two of the proxy's 502 bodies
-(plain text on 0.7.x) began with that word. Since 0.9.3 a refusal on an Anthropic or OpenAI route is that
-provider's JSON error shape carrying a fixed reason (`egress_denied`, `tls_untrusted`, `upstream_unreachable`,
-`credential_unavailable`, `upstream_error`), and a forward-lane CONNECT deny is JSON with an `X-Wardyn-Reason` header.
-So the failing response was the terminated portal lane's own 502,
+"llm"` is what a JSON parser says about a bare leading identifier, and two of the proxy's plain-text
+502 bodies begin with that word. So the failing response is the terminated portal lane's own 502,
 read by the SDK as if it were an API answer — which also means the request got past policy and past
 the vet, and the failure is in the dial or the handshake underneath.
 
