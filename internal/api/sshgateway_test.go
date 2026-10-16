@@ -1295,12 +1295,26 @@ func TestSSHGateway_MaxSessionsPerRunEnforced(t *testing.T) {
 	if !sshSessionRefused(t, client) {
 		t.Errorf("session over defaultSSHSessionsPerRun=%d succeeded, want rejected", defaultSSHSessionsPerRun)
 	}
+	// The cap is shared by every way a session channel starts, not just the shell.
+	if !sshSessionRefusedBy(t, client, func(s *ssh.Session) error { return s.Start("true") }) {
+		t.Errorf("exec over defaultSSHSessionsPerRun=%d succeeded, want rejected", defaultSSHSessionsPerRun)
+	}
+	if !sshSessionRefusedBy(t, client, func(s *ssh.Session) error { return s.RequestSubsystem("sftp") }) {
+		t.Errorf("sftp over defaultSSHSessionsPerRun=%d succeeded, want rejected", defaultSSHSessionsPerRun)
+	}
 }
 
 // sshSessionRefused reports whether one more shell on client is refused: the
 // channel open (shared cap full, no sync slot) or, because a session channel
 // over the shared cap is admitted for a possible wardyn-sync, its shell request.
 func sshSessionRefused(t *testing.T, client *ssh.Client) bool {
+	t.Helper()
+	return sshSessionRefusedBy(t, client, (*ssh.Session).Shell)
+}
+
+// sshSessionRefusedBy is sshSessionRefused for any first request on the channel
+// (shell, exec, a subsystem): it reports whether the open or that request is refused.
+func sshSessionRefusedBy(t *testing.T, client *ssh.Client, start func(*ssh.Session) error) bool {
 	t.Helper()
 	sess, err := client.NewSession()
 	if err != nil {
@@ -1310,7 +1324,7 @@ func sshSessionRefused(t *testing.T, client *ssh.Client) bool {
 	if _, err := sess.StdinPipe(); err != nil {
 		t.Fatalf("stdin pipe: %v", err)
 	}
-	return sess.Shell() != nil
+	return start(sess) != nil
 }
 
 // TestSSHGateway_MaxConnectionsEnforced pins the total concurrent-connection

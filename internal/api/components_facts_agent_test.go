@@ -309,10 +309,11 @@ func TestComponentFacts_GovernanceHoldMatchesDispatch(t *testing.T) {
 			profile.Ceiling.ToolRules = tc.rules
 			srv, _, _ := govEscapeFixture(t, autonomyCapStore(profile))
 			member := govSession(t, govMemberSub, []string{"eng"}, false)
-			ceiling := governanceCeiling{Profile: &ResolvedProfile{Name: profile.Name}, Limits: profile.Limits}
-			params := dispatchParams{}
-			if tc.hold {
-				params.ToolApprovals = "hold"
+			ceiling := governanceCeiling{Profile: &ResolvedProfile{Name: profile.Name}, Limits: profile.Limits, Spec: profile.Ceiling}
+			// The value create dispatches with, from create's own derivation rather than set by hand.
+			params := dispatchParams{ToolApprovals: effectiveToolApprovals(createRunRequest{Agent: "claude-code", Task: "facts"}, ceiling)}
+			if (params.ToolApprovals == "hold") != tc.hold {
+				t.Fatalf("create derives tool_approvals %q, want hold=%v", params.ToolApprovals, tc.hold)
 			}
 			dispatched, _, _ := agentPolicyDispatchCeiling(t, &fakeRunner{}, "claude-code", tc.level, "facts", params, ceiling)
 			doors := []string{componentDoors[1]}

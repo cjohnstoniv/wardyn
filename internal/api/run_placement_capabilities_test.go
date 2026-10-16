@@ -498,8 +498,9 @@ func TestDenyPlacements_OperatorExemption(t *testing.T) {
 		wantDenied bool
 	}{
 		{"SSO admin, switch off: exempt even carrying a profile", governAdminSessionCtx(), false, false},
-		{"admin token, switch off: exempt", governAdminTokenCtx(t), false, false},
+		{"personal admin token, switch off: exempt", governAdminTokenCtx(t), false, false},
 		{"SSO admin, switch on: governed, denied", governAdminSessionCtx(), true, true},
+		{"personal admin token, switch on: governed, denied", governAdminTokenCtx(t), true, true},
 		{"admin token, switch on: no person, still exempt", context.Background(), true, false},
 		{"member: denied", govMemberCtx([]string{"eng"}, false), false, true},
 	} {
@@ -521,12 +522,14 @@ func TestDenyPlacements_OperatorExemption(t *testing.T) {
 func TestDenyPlacements_SourceScanDoor(t *testing.T) {
 	denying := govProfile("walled")
 	denying.Limits.DenyPlacements = []types.Placement{types.PlacementRemote}
+	var lane *scanLaneStore
 	launch := func(t *testing.T, cs *capStore) (*Server, *recRecorder, *fakeRunner, error) {
 		t.Helper()
 		srv, st, audit := govEscapeFixture(t, cs)
 		fr := &fakeRunner{}
 		srv.cfg.Runner = fr
-		srv.cfg.Store = &scanLaneStore{govEscapeStore: st}
+		lane = &scanLaneStore{govEscapeStore: st}
+		srv.cfg.Store = lane
 		src := types.Source{ID: uuid.New(), Kind: types.SourceRepo, Locator: govWorkspaceRepo}
 		_, err := srv.launchSourceScanRun(govMemberCtx([]string{"eng"}, false), "bob@corp.example", src, nil)
 		return srv, audit, fr, err
@@ -539,6 +542,9 @@ func TestDenyPlacements_SourceScanDoor(t *testing.T) {
 	}
 	if fr.createCalls != 0 {
 		t.Errorf("a denied scan still created %d sandbox(es)", fr.createCalls)
+	}
+	if lane.cleared != 1 {
+		t.Errorf("a denied scan released the source fence %d times, want once", lane.cleared)
 	}
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/sources/x/scan", nil).WithContext(govMemberCtx([]string{"eng"}, false))
 	w := httptest.NewRecorder()
