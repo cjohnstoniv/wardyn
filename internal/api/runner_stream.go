@@ -88,11 +88,18 @@ var errRunnerStreamRateLimited = errors.New("runner stream connection rate excee
 // admitRunnerHandshake charges the anonymous budgets. ok false names the refusal.
 func (s *Server) admitRunnerHandshake(peer string) (release func(), refusal string, ok bool) {
 	rs, now := &s.runnerStreams, s.cfg.Now()
-	if !rs.limiter.allow(peer, now) || !rs.global.allow("", now) {
+	if !rs.limiter.allow(peer, now) {
+		return nil, errRunnerStreamRateLimited.Error(), false
+	}
+	// A refusal past the address bucket hands its token back, so a runner
+	// retrying through a global or cap refusal keeps its own burst.
+	if !rs.global.allow("", now) {
+		rs.limiter.refund(peer, now)
 		return nil, errRunnerStreamRateLimited.Error(), false
 	}
 	if rs.handshakes.Add(1) > rs.maxHandshakes {
 		rs.handshakes.Add(-1)
+		rs.limiter.refund(peer, now)
 		return nil, "too many runner stream handshakes in progress", false
 	}
 	return sync.OnceFunc(func() { rs.handshakes.Add(-1) }), "", true

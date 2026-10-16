@@ -10,10 +10,13 @@ import (
 	"fmt"
 	"net/http"
 	"net/netip"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/coder/websocket"
+
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 var loopbackProxies = []netip.Prefix{netip.MustParsePrefix("127.0.0.0/8"), netip.MustParsePrefix("::1/128")}
@@ -128,5 +131,80 @@ func TestRunnerHandshakeConcurrencyCap(t *testing.T) {
 		if n := h.srv.runnerStreams.handshakes.Load(); n != 1 {
 			t.Fatalf("handshakes in progress = %d, want the one still held", n)
 		}
+	}
+}
+
+// A claimed runner frees its handshake slot when it proves its key, not when
+// its session ends, so connected runners never hold the cap. The Inactive
+// hook runs after proof with the request still open.
+func TestRunnerHandshakeSlotFreedAtProof(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
+	defer cancel()
+	h := newStreamLimitHarness(t, ctx, 1)
+	var afterProof atomic.Int32
+	afterProof.Store(-1)
+	h.srv.cfg.RunnerHub.Inactive = func(context.Context, types.Runner) (bool, error) {
+		afterProof.Store(h.srv.runnerStreams.handshakes.Load())
+		return true, nil
+	}
+	rows := h.srv.cfg.Store.(limitRunnerStore).rows
+	for id, key := range h.keys {
+		row := rows[id]
+		row.State = types.RunnerClaimed
+		rows[id] = row
+		if status, _ := h.dial(t, ctx, id, key); status != http.StatusSwitchingProtocols {
+			t.Fatalf("claimed runner: status %d, want 101", status)
+		}
+	}
+	if n := afterProof.Load(); n != 0 {
+		t.Fatalf("handshakes in progress after proof = %d, want 0", n)
+	}
+}
+
+// Every proof refunds the global bucket, so runners that prove their keys
+// connect past its burst.
+func TestRunnerAdmissionProofRefundsGlobalBudget(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
+	defer cancel()
+	h := newStreamLimitHarness(t, ctx, 1)
+	h.srv.runnerStreams.global = principalLimiter{rate: 1, burst: 2, max: 1}
+	for id, key := range h.keys {
+		for i := range 3 {
+			if status, err := h.dial(t, ctx, id, key); status != http.StatusSwitchingProtocols || err != nil {
+				t.Fatalf("proof %d past a global burst of 2: status %d, err %v", i, status, err)
+			}
+		}
+	}
+}
+
+// A refusal by the global bucket or the cap hands the address token back, so
+// a runner retrying through either keeps its own burst.
+func TestRunnerAdmissionRefusalPastAddressBucketRefundsIt(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
+	defer cancel()
+	h := newStreamLimitHarness(t, ctx, 1)
+	rs, peer := &h.srv.runnerStreams, "198.51.100.1"
+	rs.global = principalLimiter{rate: 1, burst: 1, max: 1}
+	release, _, ok := h.srv.admitRunnerHandshake(peer)
+	if !ok {
+		t.Fatal("first admission refused")
+	}
+	release()
+	for i := range 2 * int(enrolBurst) {
+		if _, _, ok := h.srv.admitRunnerHandshake(peer); ok {
+			t.Fatalf("attempt %d admitted with the global bucket empty", i)
+		}
+	}
+	rs.global = principalLimiter{rate: 1, burst: 1000, max: 1}
+	maxHandshakes := rs.maxHandshakes
+	rs.maxHandshakes = 0
+	for i := range 2 * int(enrolBurst) {
+		if _, refusal, ok := h.srv.admitRunnerHandshake(peer); ok || refusal != "too many runner stream handshakes in progress" {
+			t.Fatalf("attempt %d at a full cap: ok %v, refusal %q; want the cap refusal", i, ok, refusal)
+		}
+	}
+	rs.maxHandshakes = maxHandshakes
+	if _, refusal, ok := h.srv.admitRunnerHandshake(peer); !ok {
+		t.Fatalf("after the refusals: %q; want the address burst intact", refusal)
 	}
 }
