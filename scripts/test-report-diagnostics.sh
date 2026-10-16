@@ -19,8 +19,10 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
-mkdir -p "$TMP/scripts"
+mkdir -p "$TMP/scripts/lib"
 cp "$ROOT/scripts/test-report.sh" "$TMP/scripts/"
+cp "$ROOT/scripts/lib/e2e-quarantine.sh" "$TMP/scripts/lib/"
+mkdir -p "$TMP/test" && cp "$ROOT/test/go-quarantine.txt" "$TMP/test/"
 
 cat > "$TMP/go.mod" <<'EOF'
 module reportfixture
@@ -125,8 +127,10 @@ echo "ok  a panic inside a named test is not reported as outside any test"
 # forever, so the alarm, however long, is always what ends the package.
 TMP2="$(mktemp -d)"
 trap 'rm -rf "$TMP" "$TMP2"' EXIT
-mkdir -p "$TMP2/scripts" "$TMP2/timeoutmixpkg"
+mkdir -p "$TMP2/scripts/lib" "$TMP2/timeoutmixpkg"
 cp "$ROOT/scripts/test-report.sh" "$TMP2/scripts/"
+cp "$ROOT/scripts/lib/e2e-quarantine.sh" "$TMP2/scripts/lib/"
+mkdir -p "$TMP2/test" && cp "$ROOT/test/go-quarantine.txt" "$TMP2/test/"
 cat > "$TMP2/go.mod" <<'EOF'
 module timeoutmixfixture
 
