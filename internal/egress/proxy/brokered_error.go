@@ -24,8 +24,8 @@ import (
 // shape, carrying a fixed reason and the host. The message is built from the
 // same masked, topology-redacted pieces as httpError's body, never a raw error.
 
-// The fixed reasons a refusal carries. Other lanes and the docs name them, so
-// they are not renamed.
+// The fixed reasons a refusal carries. docs/UI-SANDBOXES.md ("A refusal an
+// SDK reads") lists them with their status per shape, so they are not renamed.
 const (
 	reasonEgressDenied          = "egress_denied"
 	reasonTLSUntrusted          = "tls_untrusted"
@@ -72,6 +72,16 @@ func (p *Proxy) shapeOfHost(host string) errShape {
 		return shapeAWS
 	}
 	return shapeOfChannel(p.channelForHost(host))
+}
+
+// shapeFor is the shape for a request to host on a route of channel ch: the
+// host's own shape (AWS, or the vendor a gateway fronts) wins, so one route
+// answers in one shape, else the route's channel's.
+func (p *Proxy) shapeFor(host string, ch contentscan.Channel) errShape {
+	if s := p.shapeOfHost(host); s != shapePlain {
+		return s
+	}
+	return shapeOfChannel(ch)
 }
 
 // brokeredFault names a refusal for the SDK-facing body: Reason "" means
@@ -121,9 +131,9 @@ func reasonStatus(shape errShape, reason string) int {
 	return http.StatusInternalServerError
 }
 
-// faultHint is the fix an operator or developer reads after the host. err is
-// the failure behind the reason, nil for a policy deny.
-func faultHint(reason, ruleSource string, err error) string {
+// faultHint is the fix an operator or developer reads after host. err is the
+// failure behind the reason, nil for a policy deny.
+func faultHint(host, reason, ruleSource string, err error) string {
 	switch reason {
 	case reasonEgressDenied:
 		kind := blockKindOf(err)
@@ -149,7 +159,12 @@ func faultHint(reason, ruleSource string, err error) string {
 	case reasonUpstreamUnreachable:
 		return "the sandbox's proxy could not connect to it"
 	case reasonCredentialUnavailable:
-		return "the model credential could not be refreshed"
+		// On the portal the credential is the owner's SSO session the proxy injects: a
+		// sign-in inside the sandbox is not the fix, so the hint must not read like one.
+		if isAWSSSOPortalHost(strings.TrimSuffix(strings.ToLower(host), ".")) {
+			return "Wardyn could not refresh the SSO session it injects for this host; signing in inside the sandbox does not change it"
+		}
+		return "Wardyn could not refresh the brokered credential for this host"
 	}
 	if errors.Is(err, errGatewayVet) {
 		return "the configured gateway's address was refused or did not resolve"
@@ -256,7 +271,7 @@ func (p *Proxy) writeBrokeredFault(w http.ResponseWriter, shape errShape, host s
 	status := reasonStatus(shape, reason)
 	slog.Warn("proxy error returned to the sandbox", "reason", reason, "status", status, "err", cause)
 	writeProviderError(w, shape, status, reason,
-		brokeredMessage(reason, p.hostPortLabel(host, f.port), f.ruleSource, faultHint(reason, f.ruleSource, err), cause), nil)
+		brokeredMessage(reason, p.hostPortLabel(host, f.port), f.ruleSource, faultHint(host, reason, f.ruleSource, err), cause), nil)
 }
 
 // vetFault is the fault for a failed egressTarget: a guard refusal is the
