@@ -279,13 +279,18 @@ func dialSyncGateway(ctx context.Context, gw sshGateway, runID string, signer ss
 		},
 		Timeout: syncDialTimeout,
 	}
-	_ = conn.SetDeadline(time.Now().Add(syncHandshakeTimeout))
+	// Closing the connection ends the handshake on either transport: a ProxyCommand's
+	// pipes take no deadline, so a socket deadline alone would not bound it.
+	timer := time.AfterFunc(syncHandshakeTimeout, func() { _ = conn.Close() })
 	cc, chans, reqs, err := ssh.NewClientConn(conn, net.JoinHostPort(gw.host, port), cfg)
+	if !timer.Stop() && err == nil {
+		err = fmt.Errorf("no answer within %s", syncHandshakeTimeout)
+		_ = cc.Close()
+	}
 	if err != nil {
 		_ = conn.Close()
 		return nil, fmt.Errorf("sync: ssh handshake with the gateway: %w", err)
 	}
-	_ = conn.SetDeadline(time.Time{})
 	return ssh.NewClient(cc, chans, reqs), nil
 }
 

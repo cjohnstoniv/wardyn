@@ -70,6 +70,9 @@ func runnerRemoteCmd(client clientFn) *cobra.Command {
 	propose := &cobra.Command{Use: "propose <id> [--free-disk GB]", Args: cobra.ExactArgs(1),
 		Short: "Print the limits setup proposes for a remote-hosted runner, half of what it reports, as `wardyn runner set` flags; sets nothing (admin)",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if cmd.Flags().Changed("free-disk") && freeDisk <= 0 {
+				return fmt.Errorf("--free-disk must be a positive number of GB, got %d", freeDisk)
+			}
 			rr, err := client().GetRemoteRunner(cmd.Context(), args[0])
 			if err != nil {
 				return err
@@ -142,7 +145,10 @@ func runnerRemotePeopleCmd(client clientFn) *cobra.Command {
 	set.Flags().StringArrayVar(&roles, "role", nil, "a user type whose people may add it (repeatable)")
 	clear := &cobra.Command{Use: "clear <id>", Short: "Make a remote-hosted runner available to nobody's pools", Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			_, err := heldForApproval(cmd, client().ClearRemoteRunnerPeoplePolicy(cmd.Context(), args[0]))
+			if held, err := heldForApproval(cmd, client().ClearRemoteRunnerPeoplePolicy(cmd.Context(), args[0])); held || err != nil {
+				return err
+			}
+			_, err := fmt.Fprintf(cmd.OutOrStdout(), "remote-hosted runner %s is now available to nobody's pools\n", args[0])
 			return err
 		}}
 	cmd.AddCommand(set, clear)

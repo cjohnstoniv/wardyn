@@ -91,8 +91,8 @@ func templateFromPresetCmd(client clientFn) *cobra.Command {
 		Short: "Publish a launch preset to the organisation as a template (administrators)",
 		Long: "Convert a launch preset into a run template and save it to the organisation,\n" +
 			"under the preset's name. The preset stays as it is. The template is checked like\n" +
-			"any other document, so a preset holding something one person owns (a workspace\n" +
-			"or a drive) is refused with the path. A preset's inline_policy replaced your\n" +
+			"any other document, so a preset pinning a runner, which one person owns, is\n" +
+			"refused with the path. A preset's inline_policy replaced your\n" +
 			"default policy; in a template it is laid onto it, so a key the preset left out\n" +
 			"takes the default's value.\n\n" +
 			"A preset limited to some user types is offered to those types only, and a\n" +
