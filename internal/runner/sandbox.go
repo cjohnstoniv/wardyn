@@ -44,14 +44,16 @@ const (
 // COMBINED bundle (system roots + per-run CA) that
 // SSL_CERT_FILE/REQUESTS_CA_BUNDLE/CURL_CA_BUNDLE point at, since those vars
 // REPLACE the client trust store. Keep in lockstep with install_mitm_ca in
-// deploy/images/common/agent-run-lib.sh. No-op when WARDYN_MITM_CA_PEM is
-// unset. The idle loop is TERM-aware: as PID 1, a bare `sleep` ignores
+// deploy/images/common/agent-run-lib.sh. A runner's own bundle mounted at
+// TrustedCAMountPath is appended after the PEM. No-op when WARDYN_MITM_CA_PEM is
+// unset and nothing is mounted there. The idle loop is TERM-aware: as PID 1, a bare `sleep` ignores
 // SIGTERM and would wait out the full kill timeout; this exits 143/130, not
 // 0, so an out-of-band stop still reads as a signal kill downstream.
 const AgentIdleScript = `d=/tmp/wardyn
-if [ -n "${WARDYN_MITM_CA_PEM:-}" ]; then
+t=` + TrustedCAMountPath + `
+if [ -n "${WARDYN_MITM_CA_PEM:-}" ] || [ -s "$t" ]; then
   mkdir -p "$d" 2>/dev/null; chmod 1777 "$d" 2>/dev/null || true
-  { printf '%s\n' "$WARDYN_MITM_CA_PEM" > "$d/mitm-ca.pem" && chmod 0644 "$d/mitm-ca.pem"; } 2>/dev/null || true
+  { { [ -z "${WARDYN_MITM_CA_PEM:-}" ] || printf '%s\n' "$WARDYN_MITM_CA_PEM"; [ ! -s "$t" ] || cat "$t"; } > "$d/mitm-ca.pem" && chmod 0644 "$d/mitm-ca.pem"; } 2>/dev/null || true
   sys=""
   for c in /etc/ssl/certs/ca-certificates.crt /etc/ssl/cert.pem /etc/pki/tls/certs/ca-bundle.crt; do
     [ -f "$c" ] && sys="$c" && break

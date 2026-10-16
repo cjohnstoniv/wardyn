@@ -7,7 +7,6 @@ import (
 	"cmp"
 	"context"
 	"errors"
-	"log/slog"
 	"os"
 	"path/filepath"
 
@@ -27,8 +26,9 @@ type runnerHooksBuilder func(context.Context, runneridentity.Identity, string, s
 
 type serveOptions struct {
 	proxyImage, relayListen, relayHostTarget, network, recording string
-	// trustedCAFile is --trusted-ca-file; trustedCA is the bundle loadTrustedCA validated at startup.
-	trustedCAFile, trustedCA string
+	// trustedCAFile is --trusted-ca-file; trustedCA is the bundle validated at startup, and
+	// trustedCAPath the file it was written to for sandboxes to mount (trustedCAAtStartup).
+	trustedCAFile, trustedCA, trustedCAPath string
 }
 
 func (o serveOptions) recordingEnabled() (bool, error) {
@@ -68,13 +68,8 @@ func newServeCommand(build runnerHooksBuilder) *cobra.Command {
 		// The flag (whose default is the environment) outranks the image the organisation named at
 		// registration, which outranks this binary's release image.
 		opts.proxyImage = cmp.Or(opts.proxyImage, identity.ProxyImage, releaseProxyImage())
-		var source string
-		var n int
-		if opts.trustedCA, source, n, err = loadTrustedCA(opts.trustedCAFile, os.Getenv); err != nil {
+		if err := trustedCAAtStartup(cmd.Context(), &opts, stateDir); err != nil {
 			return err
-		}
-		if n > 0 {
-			slog.InfoContext(cmd.Context(), "corporate CA trust configured", "source", source, "cert_count", n)
 		}
 		if build == nil {
 			return errors.New("runner execution and durable offline handlers are unavailable")

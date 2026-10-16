@@ -67,7 +67,7 @@
 ### A corporate CA on a laptop runner
 
 - Behind a TLS-inspecting proxy, give the runner your organisation's roots. Every run's proxy and sandbox then trust them beside the system roots and the run's own interception CA.
-- Certificates only, under 64 KiB: export your organisation's roots, not the whole system store.
+- Certificates only. A merged system bundle works too: the sandbox reads it from a mounted file.
 
 | Source (first set wins, only it is read) | Note |
 | --- | --- |
@@ -92,7 +92,7 @@ The bundle is read when `serve` starts; a bad file stops it and is named.
    cat /etc/pki/ca-trust/source/anchors/*.pem > ~/.config/wardyn/corp-ca.pem      # Fedora, RHEL
    ```
 
-2. Run setup with the file. It checks the file before the token is spent; a rerun keeps it.
+2. Run setup with the file. It checks the file before the token is spent; a rerun keeps it. If the kept file has moved, rerun with `--trusted-ca-file <new file>`.
 
    ```sh
    wardyn-runnerd setup --org https://wardyn.example --trusted-ca-file ~/.config/wardyn/corp-ca.pem

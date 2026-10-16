@@ -15,6 +15,15 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 )
 
+// Every sandbox receives the bundle in one environment variable (WARDYN_MITM_CA_PEM, beside the
+// run's own CA), and Linux refuses to start a process with one over 128 KiB. So boot warns above
+// warnOrgTrustedCA and refuses above maxOrgTrustedCA, leaving room for the run's CA.
+const (
+	warnOrgTrustedCA   = 64 << 10
+	maxOrgTrustedCA    = 120 << 10
+	orgTrustedCARemedy = "every sandbox receives this bundle in one environment variable, which Linux caps at 128 KiB; name a file holding only your organisation's roots, not a whole system bundle"
+)
+
 // loadTrustedCA reads WARDYN_TRUSTED_CA_FILE (path, empty = unset — the
 // default) as a PEM bundle of additional roots a corporate TLS-inspecting
 // middlebox signs with, and returns it alongside a cert pool seeded from the
@@ -43,6 +52,9 @@ func loadTrustedCA(path string) (pemBundle string, pool *x509.CertPool, n int, e
 	bundle, certs, perr := runner.TrustedCABundle(raw)
 	if perr != nil {
 		return "", nil, 0, fmt.Errorf("WARDYN_TRUSTED_CA_FILE %q: %w", path, perr)
+	}
+	if len(bundle) > maxOrgTrustedCA {
+		return "", nil, 0, fmt.Errorf("WARDYN_TRUSTED_CA_FILE %q: %d bytes is over %d: %s", path, len(bundle), maxOrgTrustedCA, orgTrustedCARemedy)
 	}
 	sys, serr := x509.SystemCertPool()
 	if serr != nil || sys == nil {
@@ -105,5 +117,8 @@ func logTrustedCA(count int, pemBundle string) {
 	if count > 0 {
 		slog.Info("wardynd: corporate CA trust configured (WARDYN_TRUSTED_CA_FILE)",
 			slog.Int("cert_count", count), slog.Any("subjects", certSubjects(pemBundle)))
+	}
+	if len(pemBundle) > warnOrgTrustedCA {
+		slog.Warn("wardynd: WARDYN_TRUSTED_CA_FILE is over 64 KiB; "+orgTrustedCARemedy, slog.Int("bytes", len(pemBundle)))
 	}
 }

@@ -64,15 +64,18 @@ export CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL="${CLAUDE_CODE_DISAB
 # best-effort rewrites — within one run the content is identical, so a failed
 # rewrite over a correct file is harmless. Best-effort system-trust install
 # covers remaining clients. The CA PRIVATE key never enters the sandbox; only
-# the proxy holds it. No-op when WARDYN_MITM_CA_PEM is unset.
-# WARDYN_MITM_CA_DIR overrides the directory for tests that run the script on a
-# shared host; no run sets it.
+# the proxy holds it. A laptop runner's own CA bundle, mounted read-only at
+# /run/wardyn/trusted-ca.pem (runner.TrustedCAMountPath), is appended after the
+# PEM. No-op when WARDYN_MITM_CA_PEM is unset and nothing is mounted there.
+# WARDYN_MITM_CA_DIR and WARDYN_TRUSTED_CA_PATH override the directory and the
+# mounted file for tests that run the script on a shared host; no run sets them.
 install_mitm_ca() {
-    [[ -n "${WARDYN_MITM_CA_PEM:-}" ]] || return 0
+    local corp="${WARDYN_TRUSTED_CA_PATH:-/run/wardyn/trusted-ca.pem}"
+    [[ -n "${WARDYN_MITM_CA_PEM:-}" || -s "$corp" ]] || return 0
     local dir="${WARDYN_MITM_CA_DIR:-/tmp/wardyn}" sys="" c
     mkdir -p "$dir" 2>/dev/null || true
     chmod 1777 "$dir" 2>/dev/null || true
-    { printf '%s\n' "$WARDYN_MITM_CA_PEM" > "$dir/mitm-ca.pem" \
+    { { [[ -z "${WARDYN_MITM_CA_PEM:-}" ]] || printf '%s\n' "$WARDYN_MITM_CA_PEM"; [[ ! -s "$corp" ]] || cat "$corp"; } > "$dir/mitm-ca.pem" \
         && chmod 0644 "$dir/mitm-ca.pem"; } 2>/dev/null || true
     for c in /etc/ssl/certs/ca-certificates.crt /etc/ssl/cert.pem /etc/pki/tls/certs/ca-bundle.crt; do
         [[ -f "$c" ]] && sys="$c" && break

@@ -16,6 +16,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/mount"
 	"github.com/moby/moby/api/types/network"
 	"github.com/moby/moby/client"
 
@@ -148,7 +149,12 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 		if spec.Env == nil {
 			spec.Env = map[string]string{}
 		}
-		runner.InstallSandboxTrustedCA(d.cfg.TrustedCAPEM, spec.Env)
+		if len(d.cfg.TrustedCAPEM) <= runner.MaxEnvTrustedCAPEM {
+			runner.InstallSandboxTrustedCA(d.cfg.TrustedCAPEM, spec.Env)
+		} else {
+			// Too big for one environment string: the mounted file below carries it.
+			runner.SetSandboxCATrustVars(spec.Env, true)
+		}
 	}
 	env := envSlice(spec.Env)
 	// SandboxSpec.SecretEnv rides plain container env HERE — the honest posture on this substrate: a
@@ -186,6 +192,9 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 		return fail(err)
 	}
 	agentHost.Mounts = append(agentHost.Mounts, agentMounts...)
+	if d.cfg.TrustedCAFile != "" {
+		agentHost.Mounts = append(agentHost.Mounts, mount.Mount{Type: mount.TypeBind, Source: d.cfg.TrustedCAFile, Target: runner.TrustedCAMountPath, ReadOnly: true})
+	}
 
 	agentNetCfg := &network.NetworkingConfig{
 		EndpointsConfig: map[string]*network.EndpointSettings{

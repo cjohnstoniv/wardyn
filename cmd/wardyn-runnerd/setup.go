@@ -186,19 +186,21 @@ func (o setupOptions) checkOrgAndPool() error {
 }
 
 // checkedTrustedCAFile makes a CA bundle path absolute and runs serve's own check on it, so a bad
-// file is refused before the token is spent. An empty path stays empty.
-func checkedTrustedCAFile(path string) (string, error) {
+// file is refused before the token is spent. given is --trusted-ca-file; without it, kept is the
+// path an earlier setup wrote into from, and a refusal says so. Neither stays empty.
+func checkedTrustedCAFile(given, kept, from string) (string, error) {
+	path := cmp.Or(given, kept)
 	if path == "" {
 		return "", nil
 	}
 	abs, err := filepath.Abs(path)
-	if err != nil {
-		return "", err
+	if err == nil {
+		_, _, _, err = loadTrustedCA(abs, func(string) string { return "" })
 	}
-	if _, _, _, err := loadTrustedCA(abs, func(string) string { return "" }); err != nil {
-		return "", err
+	if err != nil && given == "" {
+		return "", fmt.Errorf("%w: kept from the earlier setup (%s); pass --trusted-ca-file <new file> or remove WARDYN_TRUSTED_CA_FILE from it", err, from)
 	}
-	return abs, nil
+	return abs, err
 }
 
 // preflight validates every input and checks Docker, so that a refusal comes before the single-use
@@ -221,7 +223,7 @@ func (h setupHost) preflight(cmd *cobra.Command, o setupOptions) (setupPlan, err
 	}
 	// A rerun keeps what an earlier setup was told explicitly.
 	keptImage, keptCA := paths.keptPins()
-	if o.trustedCAFile, err = checkedTrustedCAFile(cmp.Or(o.trustedCAFile, keptCA)); err != nil {
+	if o.trustedCAFile, err = checkedTrustedCAFile(o.trustedCAFile, keptCA, cmp.Or(paths.envFile, paths.plistFile)); err != nil {
 		return setupPlan{}, err
 	}
 	plan := setupPlan{setupOptions: o, paths: paths, dockerHost: h.dockerHost, want: want, flagged: o.proxyImage != ""}

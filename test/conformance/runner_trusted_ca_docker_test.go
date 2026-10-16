@@ -17,6 +17,7 @@ import (
 	"encoding/pem"
 	"math/big"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -111,9 +112,18 @@ func TestRunnerTrustedCADocker(t *testing.T) {
 			},
 		}
 	}
+	// start runs a sandbox the way runnerd composes the driver: the bundle for the proxy, and the
+	// same bundle as a file the sandbox mounts.
 	start := func(t *testing.T, trusted string) string {
 		t.Helper()
-		sub, err := docker.New(docker.Config{ProxyImage: proxyImage, TrustedCAPEM: trusted})
+		var file string
+		if trusted != "" {
+			file = filepath.Join(t.TempDir(), "trusted-ca.pem")
+			if err := os.WriteFile(file, []byte(trusted), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		sub, err := docker.New(docker.Config{ProxyImage: proxyImage, TrustedCAPEM: trusted, TrustedCAFile: file})
 		if err != nil {
 			t.Fatalf("docker.New: %v", err)
 		}
@@ -154,6 +164,27 @@ func TestRunnerTrustedCADocker(t *testing.T) {
 		code, out = curl(t, ref, tunnelHost)
 		if code != 0 || !strings.Contains(out, "status=202") || strings.Contains(out, runCACN) {
 			t.Fatalf("tunneled host: exit %d; want 202 on the upstream's own certificate, so the sandbox trusted the corporate CA:\n%s", code, out)
+		}
+	})
+
+	// Over 128 KiB no environment string can carry it: the sandbox trusts it through the mounted file
+	// alone, and the proxy through its stdin config.
+	t.Run("a bundle over 128 KiB", func(t *testing.T) {
+		large := bundle
+		for i := 0; len(large) <= 128<<10; i++ {
+			c, _ := runCAPEM(t, now.Add(time.Duration(i)))
+			large += c
+		}
+		ref := start(t, large)
+		if code, out := sandboxExec(t, cli, ref, "sh", "-c", `[ -z "$WARDYN_MITM_CA_PEM" ] || printf %s "$WARDYN_MITM_CA_PEM" | grep -c BEGIN`); code != 0 || strings.TrimSpace(out) != "1" {
+			t.Fatalf("WARDYN_MITM_CA_PEM should hold only the run's CA (the bundle rides the file): exit %d %q", code, out)
+		}
+		code, out := curl(t, ref, mitmHost)
+		if code != 0 || !strings.Contains(out, "status=202") || !strings.Contains(out, runCACN) {
+			t.Fatalf("intercepted host with a %d-byte bundle: exit %d:\n%s", len(large), code, out)
+		}
+		if code, out = curl(t, ref, tunnelHost); code != 0 || !strings.Contains(out, "status=202") {
+			t.Fatalf("tunneled host with a %d-byte bundle: exit %d:\n%s", len(large), code, out)
 		}
 	})
 
