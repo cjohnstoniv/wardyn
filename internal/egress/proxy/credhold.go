@@ -451,6 +451,18 @@ func (p *Proxy) httpErrorAWSAware(w http.ResponseWriter, host, plainMsg string, 
 	p.httpError(w, plainMsg, err, http.StatusBadGateway)
 }
 
+// httpErrorLLM is httpErrorAWSAware for a brokered LLM site: an Anthropic or
+// OpenAI host gets that provider's error body (brokered_error.go), since its
+// SDK parses the body as JSON too; an AWS endpoint keeps the modelled AWS
+// error, any other host the plain text.
+func (p *Proxy) httpErrorLLM(w http.ResponseWriter, host, plainMsg string, err error, withStage bool, status int, errType string, f brokeredFault) {
+	if isAWSLane(host) {
+		p.httpErrorAWSAware(w, host, plainMsg, err, withStage, status, errType)
+		return
+	}
+	p.httpErrorShaped(w, host, plainMsg, err, http.StatusBadGateway, f)
+}
+
 // reauthPendingFrom decodes the control plane's 423 body into the id to poll;
 // a body that cannot be read fails closed rather than guessing.
 func reauthPendingFrom(body []byte) (errReauthPending, bool) {

@@ -25,6 +25,7 @@ package proxy
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net"
 	"net/http"
@@ -569,7 +570,9 @@ const resolveFailedDetail = "this host did not resolve (DNS failure, no such nam
 // writeEgressDeny writes the 403 both forward paths (handlePlain,
 // handleConnect) give a DENIED request: the static refusal headers, plus — for
 // the one refusal an operator reliably misreads — the cause and where to fix
-// it. Every other refusal reason already says all there is to say.
+// it. Every other refusal reason already says all there is to say. The body is
+// JSON, {"wardyn":{"reason":"egress_denied","host":...,"rule_source":...}}, and
+// X-Wardyn-Reason repeats the reason for a CONNECT client that drops the body.
 //
 // Lives here rather than in proxy.go beside its two callers so it sits with
 // the rule it explains (and keeps proxy.go under the 1000-line split gate).
@@ -578,7 +581,20 @@ const resolveFailedDetail = "this host did not resolve (DNS failure, no such nam
 // per-run private-IP memo — true at the two sites that hand on an evaluate()
 // verdict, false at a lane that built the deny log itself.
 func (p *Proxy) writeEgressDeny(w http.ResponseWriter, host string, port int, log *egress.DecisionLog, memoed bool) {
-	body := "egress denied by policy"
+	p.denyEgress(w, host, port, log, memoed, shapePlain)
+}
+
+// writeEgressDenyLLM is writeEgressDeny for a request on an LLM lane (a
+// brokered /wardyn/llm/* route, or an inner request of a terminated tunnel):
+// the body is the host's provider error shape, so the SDK reads the refusal
+// instead of failing to parse text. A host that is no LLM vendor's still gets
+// the forward-lane body.
+func (p *Proxy) writeEgressDenyLLM(w http.ResponseWriter, host string, port int, log *egress.DecisionLog) {
+	p.denyEgress(w, host, port, log, false, p.shapeOfHost(host))
+}
+
+func (p *Proxy) denyEgress(w http.ResponseWriter, host string, port int, log *egress.DecisionLog, memoed bool, shape errShape) {
+	detail := "egress denied by policy"
 	reason := decisionReason(log)
 	// An evaluate() DENY carrying no decision log is B6's memoed private-ip
 	// refusal: evaluate() answered an identical repeat out of the per-run
@@ -595,20 +611,33 @@ func (p *Proxy) writeEgressDeny(w http.ResponseWriter, host string, port int, lo
 	switch reason {
 	case "builtin:private-ip":
 		w.Header().Set(egressHeaderRetry, egressRetryNever)
-		if detail := literalIPDenialDetail(host, port, p.policy, p.privateIPBlockKind(host, port)); detail != "" {
-			w.Header().Set(egressHeaderDetail, detail)
-			body = "egress denied: " + detail
+		if d := literalIPDenialDetail(host, port, p.policy, p.privateIPBlockKind(host, port)); d != "" {
+			w.Header().Set(egressHeaderDetail, d)
+			detail = "egress denied: " + d
 		}
 	case "builtin:resolve-failed":
 		w.Header().Set(egressHeaderDetail, resolveFailedDetail)
-		body = "egress denied: " + resolveFailedDetail
+		detail = "egress denied: " + resolveFailedDetail
 	}
 	setEgressRefusalHeadersWithReason(w, egressRefusalDenied, host, reason)
+	attribution := ""
 	if policyDecidedReason(reason) {
-		p.denyAttributed(w, body, http.StatusForbidden)
+		attribution = p.attributeRefusal(w)
+	}
+	if shape != shapePlain {
+		msg := brokeredMessage(reasonEgressDenied, p.hostPortLabel(host, port), reason, reasonHint(reasonEgressDenied, reason), "")
+		writeProviderError(w, shape, http.StatusForbidden, reasonEgressDenied, msg, nil)
 		return
 	}
-	http.Error(w, body, http.StatusForbidden)
+	body := map[string]string{"reason": reasonEgressDenied, "host": host, "rule_source": reason, "detail": detail}
+	if attribution != "" {
+		body["attribution"] = attribution
+	}
+	w.Header().Set(egressHeaderWardynReason, reasonEgressDenied)
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusForbidden)
+	out, _ := json.Marshal(map[string]any{"wardyn": body})
+	_, _ = w.Write(out)
 }
 
 // IPGuardResult records the outcome of resolving + vetting a target host.

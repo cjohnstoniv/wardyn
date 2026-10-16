@@ -83,12 +83,16 @@ func (p *Proxy) llmRequestRefused(w http.ResponseWriter, r *http.Request, host s
 		if p.sink != nil {
 			p.sink.emit(log)
 		}
-		p.writeEgressDeny(w, host, port, &log, false)
+		p.writeEgressDenyLLM(w, host, port, &log)
 		return true
 	}
 	if strings.ContainsFunc(rest, func(c rune) bool { return c == '\\' || c < 0x20 || c == 0x7f }) ||
 		slices.ContainsFunc(strings.Split(rest, "/"), isDotSegment) {
 		p.emitLLMDecision(r, host, port, egress.Deny, ruleSourceLLM, nil)
+		if shape := p.shapeOfHost(host); shape != shapePlain {
+			writeProviderError(w, shape, http.StatusBadRequest, "unsupported_path", "wardyn: unsupported llm request path", nil)
+			return true
+		}
 		http.Error(w, "unsupported llm request path", http.StatusBadRequest)
 		return true
 	}
@@ -140,11 +144,16 @@ func (p *Proxy) proxyLLMRequest(w http.ResponseWriter, r *http.Request, host str
 	hdr, ok, ierr := p.inject.resolveCtx(r.Context(), host)
 	if !ok {
 		p.emitLLMDecision(r, host, port, egress.Deny, ruleSourceLLM, nil)
+		extra := map[string]any{"wardyn": "no_llm_credential", "detail": llm404Detail(p.llmUnavailableDetail)}
+		if shape := p.shapeOfHost(host); shape != shapePlain {
+			dest := p.hostPortLabel(host, port)
+			writeProviderError(w, shape, http.StatusNotFound, reasonCredentialUnavailable,
+				brokeredMessage(reasonCredentialUnavailable, dest, ruleSourceLLM, extra["detail"].(string), ""), extra)
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusNotFound)
-		body, _ := json.Marshal(map[string]string{
-			"wardyn": "no_llm_credential", "detail": llm404Detail(p.llmUnavailableDetail),
-		})
+		body, _ := json.Marshal(extra)
 		_, _ = w.Write(body)
 		return
 	}
@@ -159,7 +168,8 @@ func (p *Proxy) proxyLLMRequest(w http.ResponseWriter, r *http.Request, host str
 			log.Cause = "credential refresh failed: " + p.dialFailureCause(ierr)
 			p.sink.emit(log)
 		}
-		p.httpErrorAWSAware(w, host, "llm credential refresh failed", ierr, false, http.StatusUnauthorized, "UnauthorizedException")
+		p.httpErrorLLM(w, host, "llm credential refresh failed", ierr, false, http.StatusUnauthorized, "UnauthorizedException",
+			brokeredFault{port: port, ruleSource: ruleSourceLLM, reason: reasonCredentialUnavailable})
 		return
 	}
 
@@ -176,7 +186,7 @@ func (p *Proxy) proxyLLMRequest(w http.ResponseWriter, r *http.Request, host str
 		}
 		p.emitLLMDecision(r, host, port, egress.Deny, source, nil)
 		// AWS lane: an AWS SDK hands plain text straight to a JSON parser and crashes on it.
-		p.httpErrorAWSAware(w, host, "llm upstream vet failed", err, false, http.StatusInternalServerError, "InternalServerException")
+		p.httpErrorLLM(w, host, "llm upstream vet failed", err, false, http.StatusInternalServerError, "InternalServerException", vetFault(port, source, err))
 		return
 	}
 
@@ -252,7 +262,8 @@ func (p *Proxy) forwardInspectedLLM(w http.ResponseWriter, r *http.Request, host
 		outReq, err := http.NewRequestWithContext(context.WithValue(r.Context(), vettedIPKey{}, target), r.Method, upstreamURL.String(), body)
 		if err != nil {
 			p.emitLLMDecision(r, host, port, egress.Deny, ruleSource, nil)
-			p.httpError(w, "build llm request", err, http.StatusBadGateway)
+			p.httpErrorShaped(w, host, "build llm request", err, http.StatusBadGateway,
+				brokeredFault{port: port, ruleSource: ruleSource, reason: reasonUpstreamError})
 			return nil, false
 		}
 		copyHeader(outReq.Header, r.Header)
@@ -273,7 +284,8 @@ func (p *Proxy) forwardInspectedLLM(w http.ResponseWriter, r *http.Request, host
 				p.sink.emit(p.denyDialFailed("builtin:dial-failed", p.reqOf(r, host, port), host, err, scanSummary))
 			}
 			// withStage=true: shares its Cause with the decision log above verbatim.
-			p.httpErrorAWSAware(w, host, "llm upstream error", err, true, http.StatusInternalServerError, "InternalServerException")
+			p.httpErrorLLM(w, host, "llm upstream error", err, true, http.StatusInternalServerError, "InternalServerException",
+				brokeredFault{port: port, ruleSource: "builtin:dial-failed"})
 			return nil, false
 		}
 		p.emitLLMAllowWithFault(r, host, port, ruleSource, scanSummary, "/"+rest, resp)
@@ -416,7 +428,7 @@ func (p *Proxy) inspectLLM(w http.ResponseWriter, r *http.Request, host string, 
 		// uninspected-channel skip, refused under fail-closed blocking.
 		if p.scanner.BlocksOnError() {
 			p.emitLLMDecision(r, host, port, egress.Deny, ruleSourceLLMBlocked, p.skipSummary("block", "uninspected_channel", channel))
-			writeScanBlocked(w, 0, nil, "uninspected_channel")
+			writeScanBlockedShaped(w, shapeOfChannel(channel), 0, nil, "uninspected_channel")
 			return nil, nil, noRelease, true
 		}
 		return r.Body, p.skipSummary("skip", "uninspected_channel", channel), noRelease, false
@@ -504,7 +516,7 @@ func (p *Proxy) scanBufferedBody(w http.ResponseWriter, r *http.Request, channel
 	if len(buffered) > maxLLMScanBody {
 		if p.scanner.BlocksOnError() {
 			emit(egress.Deny, ruleSourceLLMBlocked, p.skipSummary("block", "body_oversize", channel))
-			writeScanBlocked(w, 0, nil, "body_oversize")
+			writeScanBlockedShaped(w, shapeOfChannel(channel), 0, nil, "body_oversize")
 			return nil, nil, noRelease, true
 		}
 		release, ok := charge()
@@ -517,7 +529,7 @@ func (p *Proxy) scanBufferedBody(w http.ResponseWriter, r *http.Request, channel
 	res, _, serr := p.scanner.ScanRequest(channel, buffered)
 	if p.scanner.ShouldBlock(res) {
 		emit(egress.Deny, ruleSourceLLMBlocked, scanSummaryFrom(res, serr, p.scanner, "block", channel))
-		writeScanBlocked(w, len(res.Findings), categoriesOf(res.Findings), res.SkipReason)
+		writeScanBlockedShaped(w, shapeOfChannel(channel), len(res.Findings), categoriesOf(res.Findings), res.SkipReason)
 		return nil, nil, noRelease, true
 	}
 	var sum *egress.ScanSummary
@@ -558,14 +570,37 @@ func categoriesOf(findings []contentscan.Finding) []string {
 // refused by content inspection. TRUST BOUNDARY: the body carries counts +
 // category enums + a reason only, never the matched content.
 func writeScanBlocked(w http.ResponseWriter, findings int, categories []string, reason string) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusForbidden)
-	_ = json.NewEncoder(w).Encode(struct {
+	writeScanBlockedShaped(w, shapePlain, findings, categories, reason)
+}
+
+// writeScanBlockedShaped is writeScanBlocked in the LLM lane's provider error
+// shape, the {"wardyn":...} fields riding along as extras.
+func writeScanBlockedShaped(w http.ResponseWriter, shape errShape, findings int, categories []string, reason string) {
+	type scanBlock struct {
 		Wardyn     string   `json:"wardyn"`
 		Findings   int      `json:"findings"`
 		Categories []string `json:"categories,omitempty"`
 		Reason     string   `json:"reason,omitempty"`
-	}{Wardyn: "llm_content_blocked", Findings: findings, Categories: categories, Reason: reason})
+	}
+	b := scanBlock{Wardyn: "llm_content_blocked", Findings: findings, Categories: categories, Reason: reason}
+	if shape != shapePlain {
+		msg := "wardyn: llm_content_blocked: the request was refused by content inspection"
+		if reason != "" {
+			msg += " (" + reason + ")"
+		}
+		extra := map[string]any{"wardyn": b.Wardyn, "findings": b.Findings}
+		if len(categories) > 0 {
+			extra["categories"] = categories
+		}
+		if reason != "" {
+			extra["reason"] = reason
+		}
+		writeProviderError(w, shape, http.StatusForbidden, "llm_content_blocked", msg, extra)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusForbidden)
+	_ = json.NewEncoder(w).Encode(b)
 }
 
 // emitLLMDecision emits a decision log for an LLM or MITM route carrying a
