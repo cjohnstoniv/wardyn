@@ -41,10 +41,27 @@ export interface PoolChoice {
   disabled: boolean;
 }
 
+/** Every online runner in the pool already holds its Runs at once, so a new run waits for room. */
+export function poolHasNoRoom(pool: RunnerPoolCatalogueEntry): boolean {
+  const c = pool.capacity;
+  return !!c && c.runners_online > 0 && c.total.runs > 0 && c.available.runs === 0;
+}
+
+/**
+ * Whether a run launched now starts in this pool or waits: it waits when the pool's slots say so, or when
+ * its runners have no room. Undefined when the list carries neither fact.
+ */
+export function fitVerdict(pool: RunnerPoolCatalogueEntry): string | undefined {
+  if (pool.slots?.verdict === "waits" || poolHasNoRoom(pool)) return NR_RUN.FIT_WAITS;
+  return pool.slots ? NR_RUN.FIT_STARTS_NOW : undefined;
+}
+
 export const poolChoices = (pools: readonly RunnerPoolCatalogueEntry[], asked: RunnerPoolRunType | undefined): PoolChoice[] =>
-  pools.map((p) => p.availability === "available"
-    ? { id: p.id, label: p.name, disabled: false }
-    : { id: p.id, label: NR_RUN.POOL_OPTION_REASON(p.name, reasonLabel(p, asked)), disabled: true });
+  pools.map((p) => {
+    if (p.availability !== "available") return { id: p.id, label: NR_RUN.POOL_OPTION_REASON(p.name, reasonLabel(p, asked)), disabled: true };
+    const fit = fitVerdict(p);
+    return { id: p.id, label: fit ? NR_RUN.POOL_OPTION_REASON(p.name, fit) : p.name, disabled: false };
+  });
 
 /** The draft's pool if it has one, else the pool an untouched run resolves to; "" when neither is listed. */
 export function selectedPoolId(intent: RunIntent, list: RunnerPoolList): string {
