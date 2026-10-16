@@ -145,6 +145,24 @@ func RunnerRecordingOffMsg(name string) string {
 	return fmt.Sprintf("Recording is required, and no runner in %s records runs. Choose another pool, or turn recording on for the runner.", name)
 }
 
+// RunnerRecordingOffUnpooledMsg is runner_recording_off for a run that has no pool: the runner it
+// would use does not record.
+func RunnerRecordingOffUnpooledMsg() string {
+	return "Recording is required, and the runner this run would use does not record runs. Turn recording on for the runner."
+}
+
+// RecordingStoreOffMsg is the create and preflight refusal (recording_store_off) for a run whose
+// organisation or pool requires recording while the organisation keeps no session recordings.
+func RecordingStoreOffMsg() string {
+	return "Recording is required, and this organisation keeps no session recordings. Turn on the organisation's recording store, or set recording to preferred."
+}
+
+// RecordingSaveStoreOffMsg is recording_store_off for saving a required setting while the
+// organisation keeps no session recordings.
+func RecordingSaveStoreOffMsg() string {
+	return "Recording cannot be required while this organisation keeps no session recordings. Turn on the organisation's recording store first."
+}
+
 // RunnerLimitsUnsetMsg is the refusal (runner_limits_unset) when no runner in the pool has declared
 // its limits, so none may take a run.
 func RunnerLimitsUnsetMsg(name string) string {

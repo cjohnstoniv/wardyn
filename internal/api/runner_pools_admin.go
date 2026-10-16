@@ -72,6 +72,9 @@ func (s *Server) createPool(w http.ResponseWriter, r *http.Request, ps store.Run
 		writePoolInvalid(w, "recording is preferred or required")
 		return
 	}
+	if s.refuseRecordingWithoutStore(w, p.Recording) {
+		return
+	}
 	if p.Limits != nil {
 		if err := p.Limits.Validate(); err != nil {
 			writePoolInvalid(w, err.Error())
@@ -127,6 +130,9 @@ func (s *Server) updatePool(w http.ResponseWriter, r *http.Request, ps store.Run
 	}
 	if err := req.Validate(); err != nil {
 		writePoolInvalid(w, err.Error())
+		return
+	}
+	if req.Recording != nil && s.refuseRecordingWithoutStore(w, *req.Recording) {
 		return
 	}
 	// The audit row below is built from cur, so a request naming any other revision is refused before the
@@ -403,6 +409,9 @@ func (s *Server) handlePutOrgRunnerPoolDefaults(w http.ResponseWriter, r *http.R
 	}
 	if err := d.Validate(); err != nil {
 		writePoolInvalid(w, err.Error())
+		return
+	}
+	if s.refuseRecordingWithoutStore(w, d.Recording) {
 		return
 	}
 	rows, ok := s.poolCatalogue(w, r, ps, false)

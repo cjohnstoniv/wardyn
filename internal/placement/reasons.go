@@ -31,7 +31,10 @@ const (
 	ReasonRunnerActionPending          Reason = "runner_action_pending"
 	// ReasonRunnerRecordingOff: the organisation or the pool requires recording, and no runner that
 	// could take the run records it (--recording-store off, or a runner older than per-run recording).
-	ReasonRunnerRecordingOff       Reason = "runner_recording_off"
+	ReasonRunnerRecordingOff Reason = "runner_recording_off"
+	// ReasonRecordingStoreOff: the organisation or the pool requires recording, and the organisation
+	// keeps no session recordings; also the refusal to save a required setting while it keeps none.
+	ReasonRecordingStoreOff        Reason = "recording_store_off"
 	ReasonRelayRunnerMismatch      Reason = "relay_runner_mismatch"
 	ReasonRelayRequired            Reason = "relay_required"
 	ReasonRelayRouteRefused        Reason = "relay_route_refused"
@@ -64,6 +67,7 @@ var reasonStatus = map[Reason]int{
 	ReasonRunnerKeystoreUnavailable:    http.StatusUnprocessableEntity,
 	ReasonRunnerActionPending:          http.StatusConflict,
 	ReasonRunnerRecordingOff:           http.StatusUnprocessableEntity,
+	ReasonRecordingStoreOff:            http.StatusUnprocessableEntity,
 	ReasonRelayRunnerMismatch:          http.StatusForbidden,
 	ReasonRelayRequired:                http.StatusForbidden,
 	ReasonRelayRouteRefused:            http.StatusForbidden,

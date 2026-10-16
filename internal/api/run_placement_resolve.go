@@ -111,6 +111,9 @@ func (s *Server) resolvePlacement(ctx context.Context, in placementInput) (runPl
 		if f.req.RunnerPoolID != "" {
 			return runPlacement{}, runError(runnerpool.ReasonPoolsUnavailable.Status(), string(runnerpool.ReasonPoolsUnavailable), runnerpool.UnavailableServerMsg())
 		}
+		if refusal := s.unpooledRecordingRefusal(ctx, *f.req); refusal != nil {
+			return runPlacement{}, refusal
+		}
 		// Unpooled: the deployment and governance still size the run.
 		limits, applied, refusal := s.runSize(ctx, f, nil, nil)
 		return runPlacement{limits: limits, applied: applied}, refusal
@@ -165,6 +168,10 @@ func (s *Server) resolvePlacement(ctx context.Context, in placementInput) (runPl
 	demand := s.placementDemand(ctx, f)
 	demand.holdRunnerCapacity = !capped && !f.promoted
 	demand.requireRecording = org.Recording == types.RecordingRequired || row.Pool.Recording == types.RecordingRequired
+	if demand.requireRecording && s.cfg.RecordingStore == nil {
+		reason, msg := recordingRefusal(true, row.Pool.Name)
+		return runPlacement{}, runError(reason.Status(), string(reason), msg)
+	}
 	offered, offers, refusal := s.offerKinds(ctx, f, row.Pool, kinds, demand)
 	if refusal != nil {
 		return runPlacement{}, refusal

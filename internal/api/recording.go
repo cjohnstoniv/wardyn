@@ -215,7 +215,9 @@ func (s *Server) saveRecording(w http.ResponseWriter, r *http.Request, part int)
 	}
 
 	saveErr := s.storeUpload(w, r, run, claims.RunID, part)
+	cleared := false
 	if saveErr == nil {
+		cleared = s.clearDeclinedOnUpload(r.Context(), run)
 		saveErr = s.uploadedRecordingOutput(r.Context(), claims.RunID)
 	}
 
@@ -227,6 +229,9 @@ func (s *Server) saveRecording(w http.ResponseWriter, r *http.Request, part int)
 	fields := map[string]any{}
 	if part > 1 {
 		fields["part"] = part
+	}
+	if cleared {
+		fields["not_recorded_cleared"] = types.NotRecordedRunnerDeclined
 	}
 	if saveErr != nil {
 		outcome = "failure"

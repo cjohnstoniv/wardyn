@@ -123,3 +123,32 @@ func TestRelay_RecordingOffStaysBehindAuth(t *testing.T) {
 		}
 	}
 }
+
+// TestRelay_UploadClearsRunnerDeclined: a run marked runner_declined (a runner older than per-run
+// recording) whose runner uploads a cast anyway is recorded after all: the stored upload clears the
+// mark, and its audit row says so.
+func TestRelay_UploadClearsRunnerDeclined(t *testing.T) {
+	fs, err := recording.NewFSStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := recordingRelayFixture(t, fs)
+	if _, err := b.pool.Exec(b.ctx, `UPDATE agent_runs SET evidence_source = 'runner_asserted', not_recorded = 'runner_declined' WHERE id = $1`, b.run.ID); err != nil {
+		t.Fatal(err)
+	}
+	path := "/api/v1/internal/recordings/" + b.run.ID.String()
+	if code, body := b.relayPut(t, b.rn.ID, b.run.ID, path, "{\"version\":2}\n"); code != http.StatusNoContent {
+		t.Fatalf("upload = %d %s", code, body)
+	}
+	var mark string
+	if err := b.pool.QueryRow(b.ctx, `SELECT not_recorded FROM agent_runs WHERE id = $1`, b.run.ID).Scan(&mark); err != nil {
+		t.Fatal(err)
+	}
+	if mark != "" {
+		t.Fatalf("not_recorded = %q after a stored cast, want cleared", mark)
+	}
+	ev, ok := relayAudit(b.srv, b.run.ID, "recording.upload")
+	if !ok || ev.Outcome != "success" || auditData(t, ev)["not_recorded_cleared"] != "runner_declined" {
+		t.Fatalf("recording.upload row = %+v, %v; want a success naming the cleared mark", ev, ok)
+	}
+}

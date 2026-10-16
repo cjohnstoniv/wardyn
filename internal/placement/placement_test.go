@@ -142,11 +142,12 @@ func TestReasonsMatchDesign(t *testing.T) {
 		"via_org_cap_exceeded": http.StatusTooManyRequests,
 		// runner_at_capacity is the runner's runs at once (migration 0172), runner_limits_unset a
 		// runner that declares no limits (0174), and runner_recording_off a runner that does not record
-		// under a required setting (0180), all after the design.
-		"runner_at_capacity": 422, "runner_limits_unset": 422, "runner_recording_off": 422,
+		// under a required setting (0180), and recording_store_off an organisation that keeps no
+		// recordings under one, all after the design.
+		"runner_at_capacity": 422, "runner_limits_unset": 422, "runner_recording_off": 422, "recording_store_off": 422,
 	}
 	if got := Reasons(); len(got) != len(want) {
-		t.Fatalf("%d reasons, design §12.3 lists %d plus runner_at_capacity, runner_limits_unset and runner_recording_off", len(got), len(want)-3)
+		t.Fatalf("%d reasons, design §12.3 lists %d plus runner_at_capacity, runner_limits_unset, runner_recording_off and recording_store_off", len(got), len(want)-4)
 	}
 	for r, status := range want {
 		if r.Status() != status || !r.Valid() {

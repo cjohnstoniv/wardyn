@@ -651,6 +651,7 @@ start.
 | `runner_at_capacity` | `422`: a revive onto a runner at one of its limits (Runs at once, or a total); or a launch that lost the runner's last room to another launch between placement and the insert (launch it again). A launch whose runners are all at their limits waits in the pool's queue instead. |
 | `runner_limits_unset` | `422`: no runner of the pool that could take the run has declared its limits. |
 | `runner_recording_off` | `422`: the organisation or the pool requires recording (`recording: required`), and no runner of the pool that could take the run records: one started with `--recording-store off`, or one older than per-run recording. |
+| `recording_store_off` | `422`: the organisation or the pool requires recording, and the organisation keeps no session recordings. Saving `recording: required` (a pool, or the organisation's defaults) while it keeps none is refused with it too. |
 | `override_refused` | `422`: a widening, base-host removal or foreign secret the narrowing table never allows. |
 | `request_field_unavailable` / `main_drive_unenforceable` | `422`: a field this server cannot honour yet, refused and never dropped; or a disk size the run's policy sets that the pool's runners cannot cap. |
 | `harness_not_installed` / `harness_set_no_image` / `harness_set_custom_image` / `harness_providers_conflict` | `422`: no image here carries a harness, or the harnesses together; two or more harnesses name a custom image; or two harnesses' providers share a host. `tool` names the harness. |
