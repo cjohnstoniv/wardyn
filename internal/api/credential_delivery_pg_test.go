@@ -13,6 +13,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -103,5 +104,27 @@ func TestCredentialDeliveryWrite_HeldValidatedAudited(t *testing.T) {
 	}
 	if got := stored(); got.For(placement.ClassAPIKey).Mode != placement.ModeRefuse || got.For(placement.ClassGitHubToken).Mode != placement.ModeRefuse {
 		t.Errorf("stored after a stale approval = %+v", got)
+	}
+}
+
+// TestCredentialDeliveryWrite_IfMatch: GET carries the policy's ETag, a stale If-Match is a 412 before
+// anything is held, and the current one is accepted (and held, with the second person on).
+func TestCredentialDeliveryWrite_IfMatch(t *testing.T) {
+	e := newGovEnv(t)
+	const body = `{"classes":{"api_key":{"mode":"via_org"}}}`
+	got := e.call(e.alice, http.MethodGet, credentialDeliveryPath, "")
+	etag := got.Header().Get("ETag")
+	if got.Code != http.StatusOK || etag == "" {
+		t.Fatalf("GET = %d, ETag %q, want 200 with an ETag", got.Code, etag)
+	}
+	stale := doSSOIfMatch(t, e.srv, http.MethodPut, credentialDeliveryPath, e.alice, `"0000"`, body)
+	if stale.Code != http.StatusPreconditionFailed || !strings.Contains(stale.Body.String(), reasonCredentialDeliveryStale) {
+		t.Fatalf("stale If-Match = %d %s, want 412 %s", stale.Code, stale.Body, reasonCredentialDeliveryStale)
+	}
+	if n := e.pendingCount(); n != 0 {
+		t.Fatalf("%d changes held for a stale write", n)
+	}
+	if w := doSSOIfMatch(t, e.srv, http.MethodPut, credentialDeliveryPath, e.alice, etag, body); w.Code != http.StatusAccepted {
+		t.Fatalf("current If-Match = %d %s, want 202 (held)", w.Code, w.Body)
 	}
 }

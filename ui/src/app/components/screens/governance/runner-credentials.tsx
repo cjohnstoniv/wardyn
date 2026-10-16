@@ -58,6 +58,8 @@ interface RowDraft {
   mdm: boolean;
   disk: boolean;
   os: Record<PostureOS, string>;
+  // A stored minimum for an OS the editor has no field for rides through a save as it was, like the shared Azure class.
+  osOther: Record<string, string>;
 }
 
 type Draft = Record<string, RowDraft>;
@@ -69,6 +71,7 @@ function rowFrom(cp: ClassPolicy | undefined): RowDraft {
     mdm: !!req?.mdm_managed,
     disk: !!req?.disk_encrypted,
     os: { darwin: req?.os_min?.darwin ?? "", windows: req?.os_min?.windows ?? "", linux: req?.os_min?.linux ?? "" },
+    osOther: Object.fromEntries(Object.entries(req?.os_min ?? {}).filter(([os]) => !(POSTURE_OSES as readonly string[]).includes(os))),
   };
 }
 
@@ -78,8 +81,10 @@ function draftFrom(policy: DeliveryPolicy): Draft {
   return Object.fromEntries(editable.map((c) => [c, rowFrom(policy.classes[c])]));
 }
 
-const osMinOf = (row: RowDraft) =>
-  Object.fromEntries(POSTURE_OSES.map((os) => [os, row.os[os].trim()] as const).filter(([, v]) => v !== ""));
+const osMinOf = (row: RowDraft) => ({
+  ...row.osOther,
+  ...Object.fromEntries(POSTURE_OSES.map((os) => [os, row.os[os].trim()] as const).filter(([, v]) => v !== "")),
+});
 
 // The document the draft writes: only classes that are not Don't allow, a posture only under Store on the runner.
 function policyFrom(draft: Draft, stored: DeliveryPolicy): DeliveryPolicy {
@@ -121,6 +126,10 @@ export function RunnerCredentials({ onSubmitted }: { onSubmitted?: () => void })
   const [runnersOn, setRunnersOn] = React.useState<boolean | null>(null);
   const [outcome, setOutcome] = React.useState<{ kind: "saved" | "submitted" } | { kind: "refused"; message: string } | null>(null);
   const [busy, setBusy] = React.useState(false);
+  // The ETag of the document the draft was read from (or last saved), sent back as If-Match.
+  const etagRef = React.useRef<string | null>(null);
+  // The document last held for a second person: until the draft changes again it is not a new change.
+  const [submittedJson, setSubmittedJson] = React.useState<string | null>(null);
   const { showSpinner } = useDeferredBusy(busy);
   const refusedRef = React.useRef<HTMLHeadingElement>(null);
 
@@ -129,6 +138,8 @@ export function RunnerCredentials({ onSubmitted }: { onSubmitted?: () => void })
     Promise.all([credentialDelivery.get(), credentialDelivery.runnersEnabled().catch(() => null)])
       .then(([doc, enabled]) => {
         setStored(doc.policy);
+        etagRef.current = doc.etag ?? null;
+        setSubmittedJson(null);
         setDraft(draftFrom(doc.policy));
         setRunnersOn(enabled);
         setStatus("ready");
@@ -139,7 +150,7 @@ export function RunnerCredentials({ onSubmitted }: { onSubmitted?: () => void })
 
   const policy = React.useMemo(() => policyFrom(draft, stored), [draft, stored]);
   const baseline = React.useMemo(() => JSON.stringify(policyFrom(draftFrom(stored), stored)), [stored]);
-  const dirty = JSON.stringify(policy) !== baseline;
+  const dirty = JSON.stringify(policy) !== baseline && JSON.stringify(policy) !== submittedJson;
   const invalid = editable.some((c) => draft[c].mode === "runner_resident" && POSTURE_OSES.some((os) => versionInvalid(draft[c].os[os])));
   useUnsavedGuard("runner-credentials", dirty, () => JSON.stringify(policy, null, 2));
 
@@ -156,11 +167,13 @@ export function RunnerCredentials({ onSubmitted }: { onSubmitted?: () => void })
     setBusy(true);
     setOutcome(null);
     try {
-      const doc = await credentialDelivery.put(policy);
+      const doc = await credentialDelivery.put(policy, etagRef.current);
       setStored(doc.policy ?? policy);
+      etagRef.current = doc.etag ?? null;
       setOutcome({ kind: "saved" });
     } catch (e) {
       if (e instanceof PendingChangeError) {
+        setSubmittedJson(JSON.stringify(policy));
         setOutcome({ kind: "submitted" });
         onSubmitted?.();
       } else {

@@ -170,6 +170,36 @@ describe("RunnerCredentials — save", () => {
     expect(putMock.mock.calls[0][0]).toEqual({ classes: { api_key: { mode: "via_org" }, azure_foundry_token: { mode: "via_org" } } });
   });
 
+  it("carries a stored minimum for an OS the editor has no field for through a save", async () => {
+    getMock.mockResolvedValue(
+      doc({ env_secret: { mode: "runner_resident", require_posture: { os_min: { darwin: "14.0", freebsd: "14.1" } } } }),
+    );
+    const user = userEvent.setup();
+    renderTab();
+    await screen.findByRole("radiogroup", { name: DELIVERY.CLASS.api_key });
+    setField(screen.getByLabelText(DELIVERY.OS_MIN(DELIVERY.OS_NAME.darwin)), "15.0");
+    await user.click(screen.getByRole("button", { name: DELIVERY.SAVE }));
+    await waitFor(() => expect(putMock).toHaveBeenCalledTimes(1));
+    expect(putMock.mock.calls[0][0]).toEqual({
+      classes: { env_secret: { mode: "runner_resident", require_posture: { os_min: { darwin: "15.0", freebsd: "14.1" } } } },
+    });
+  });
+
+  it("sends the ETag it read as If-Match, then the one the save answered with", async () => {
+    getMock.mockResolvedValue({ ...doc(), etag: '"read"' });
+    putMock.mockResolvedValue({ ...doc({ api_key: { mode: "via_org" } }), etag: '"saved"' });
+    const user = userEvent.setup();
+    renderTab();
+    await screen.findByRole("radiogroup", { name: DELIVERY.CLASS.api_key });
+    await user.click(option("api_key", "via_org"));
+    await user.click(screen.getByRole("button", { name: DELIVERY.SAVE }));
+    await screen.findByText(DELIVERY.SAVED);
+    await user.click(option("env_secret", "runner_resident"));
+    await user.click(screen.getByRole("button", { name: DELIVERY.SAVE }));
+    await waitFor(() => expect(putMock).toHaveBeenCalledTimes(2));
+    expect(putMock.mock.calls.map((c) => c[1])).toEqual(['"read"', '"saved"']);
+  });
+
   it("a minimum that is not a version blocks Save and says so on its field", async () => {
     const user = userEvent.setup();
     renderTab();
@@ -197,6 +227,19 @@ describe("RunnerCredentials — save", () => {
     expect(await screen.findByText(CHANGES.SUBMITTED_TITLE)).toBeInTheDocument();
     expect(screen.queryByText(DELIVERY.SAVED)).toBeNull();
     expect(onSubmitted).toHaveBeenCalledTimes(1);
+  });
+
+  it("a held draft is not a second change: Save stays off until the draft changes again", async () => {
+    putMock.mockRejectedValue(new PendingChangeError({ id: "c1" } as GovernanceChange));
+    const user = userEvent.setup();
+    renderTab();
+    await screen.findByRole("radiogroup", { name: DELIVERY.CLASS.api_key });
+    await user.click(option("api_key", "via_org"));
+    await user.click(screen.getByRole("button", { name: DELIVERY.SAVE }));
+    await screen.findByText(CHANGES.SUBMITTED_TITLE);
+    expect(screen.getByRole("button", { name: DELIVERY.SAVE })).toBeDisabled();
+    await user.click(option("env_secret", "runner_resident"));
+    expect(screen.getByRole("button", { name: DELIVERY.SAVE })).toBeEnabled();
   });
 
   it("a 400 shows the server's sentence under the refusal heading and moves focus there", async () => {
