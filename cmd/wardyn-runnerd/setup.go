@@ -222,12 +222,13 @@ func (h setupHost) preflight(cmd *cobra.Command, o setupOptions) (setupPlan, err
 	if err != nil {
 		return setupPlan{}, err
 	}
-	// serve never reads the ambient SSL_CERT_FILE, so setup only points at it.
-	if ssl := os.Getenv("SSL_CERT_FILE"); ssl != "" && o.trustedCAFile == "" {
-		fmt.Fprintf(cmd.OutOrStdout(), "SSL_CERT_FILE is set (%s); pass --trusted-ca-file %s if runs must trust it (64 KiB at most)\n", ssl, ssl)
-	}
 	// A rerun keeps what an earlier setup was told explicitly.
 	keptImage, keptCA := paths.keptPins()
+	// serve never reads the ambient SSL_CERT_FILE, so setup only points at it, unless a CA is named
+	// or kept.
+	if ssl := os.Getenv("SSL_CERT_FILE"); ssl != "" && cmp.Or(o.trustedCAFile, keptCA) == "" {
+		fmt.Fprintf(cmd.OutOrStdout(), "SSL_CERT_FILE is set (%s); pass --trusted-ca-file %s if runs must trust it (64 KiB at most)\n", ssl, ssl)
+	}
 	if o.trustedCAFile, err = checkedTrustedCAFile(o.trustedCAFile, keptCA, cmp.Or(paths.envFile, paths.plistFile)); err != nil {
 		return setupPlan{}, err
 	}
