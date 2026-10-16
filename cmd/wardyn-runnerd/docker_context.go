@@ -16,8 +16,8 @@ import (
 )
 
 // resolveDockerHost is the engine address wardyn-runnerd uses, chosen the way the docker CLI chooses
-// its engine: DOCKER_CONTEXT, else DOCKER_HOST, else the context the CLI last selected, else the
-// default. The Docker SDK reads DOCKER_HOST alone, so a selected context would otherwise send the
+// its engine: DOCKER_HOST (which the CLI reads before DOCKER_CONTEXT), else DOCKER_CONTEXT, else the
+// context the CLI last selected, else the default. The Docker SDK reads DOCKER_HOST alone, so a selected context would otherwise send the
 // runner to a different engine than `docker` reaches. Only a context that is a local unix socket can
 // be followed; any other (tcp, ssh, TLS) is refused with the DOCKER_HOST to set, never guessed at.
 // "" is the SDK's default socket.
@@ -26,10 +26,10 @@ func resolveDockerHost(getenv func(string) string, home string) (string, error) 
 	if configDir == "" {
 		configDir = filepath.Join(home, ".docker")
 	}
-	name := getenv("DOCKER_CONTEXT")
-	if name == "" && getenv("DOCKER_HOST") != "" {
+	if getenv("DOCKER_HOST") != "" {
 		return getenv("DOCKER_HOST"), nil
 	}
+	name := getenv("DOCKER_CONTEXT")
 	if name == "" {
 		var cfg struct {
 			CurrentContext string `json:"currentContext"`

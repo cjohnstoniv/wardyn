@@ -62,8 +62,10 @@ func TestResolveDockerHost(t *testing.T) {
 		{name: "the default context", selected: "default", env: env("DOCKER_HOST", "unix:///a.sock"), want: "unix:///a.sock"},
 		{name: "a selected unix context", selected: "rancher-desktop", env: env(), want: "unix:///home/me/.rd/docker.sock"},
 		{name: "DOCKER_HOST outranks a selected context", selected: "build-box", env: env("DOCKER_HOST", "unix:///a.sock"), want: "unix:///a.sock"},
-		{name: "DOCKER_CONTEXT outranks DOCKER_HOST", env: env("DOCKER_CONTEXT", "rancher-desktop", "DOCKER_HOST", "unix:///a.sock"), want: "unix:///home/me/.rd/docker.sock"},
-		{name: "DOCKER_CONTEXT naming a remote context", env: env("DOCKER_CONTEXT", "build-box", "DOCKER_HOST", "unix:///a.sock"), refusal: "ssh://me@build.example"},
+		{name: "DOCKER_HOST outranks DOCKER_CONTEXT, as in the docker CLI", env: env("DOCKER_CONTEXT", "rancher-desktop", "DOCKER_HOST", "unix:///a.sock"), want: "unix:///a.sock"},
+		{name: "a remote DOCKER_CONTEXT does not matter while DOCKER_HOST is set", env: env("DOCKER_CONTEXT", "build-box", "DOCKER_HOST", "unix:///a.sock"), want: "unix:///a.sock"},
+		{name: "DOCKER_CONTEXT naming a unix context", env: env("DOCKER_CONTEXT", "rancher-desktop"), want: "unix:///home/me/.rd/docker.sock"},
+		{name: "DOCKER_CONTEXT naming a remote context", env: env("DOCKER_CONTEXT", "build-box"), refusal: "ssh://me@build.example"},
 		{name: "a selected tcp context", selected: "tls-engine", env: env(), refusal: "tcp://engine.example:2376"},
 		{name: "a context that does not exist", selected: "gone", env: env(), refusal: "not found"},
 	} {
