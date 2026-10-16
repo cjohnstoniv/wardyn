@@ -141,3 +141,20 @@ func TestServeUpstreamProxyIsValidatedAtStartup(t *testing.T) {
 		})
 	}
 }
+
+// serve --help must not print the upstream proxy variable: it may hold a credential, and pflag prints a
+// flag's default.
+func TestServeHelpNeverPrintsTheUpstreamProxyCredential(t *testing.T) {
+	t.Setenv("WARDYN_UPSTREAM_PROXY", "http://user:hunter2@corp.example:3128")
+	cmd := newServeCommand(nil)
+	var out strings.Builder
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{"--help"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out.String(), "hunter2") || strings.Contains(out.String(), "corp.example") {
+		t.Errorf("serve --help shows the upstream proxy variable:\n%s", out.String())
+	}
+}

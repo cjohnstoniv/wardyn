@@ -84,7 +84,9 @@ func newServeCommand(build runnerHooksBuilder) *cobra.Command {
 		if err := trustedCAAtStartup(cmd.Context(), &opts, stateDir); err != nil {
 			return err
 		}
-		opts.upstreamProxy = strings.TrimSpace(opts.upstreamProxy)
+		// The variable is read here, not as the flag's default: pflag prints a default in --help, which would
+		// show a credential.
+		opts.upstreamProxy = strings.TrimSpace(cmp.Or(opts.upstreamProxy, os.Getenv("WARDYN_UPSTREAM_PROXY")))
 		if err := proxy.ValidUpstreamProxyURL(opts.upstreamProxy); err != nil {
 			return fmt.Errorf("--upstream-proxy / WARDYN_UPSTREAM_PROXY: %w (the URL is not repeated here: it may hold a credential)", err)
 		}
@@ -114,7 +116,7 @@ func newServeCommand(build runnerHooksBuilder) *cobra.Command {
 	cmd.Flags().StringVar(&opts.relayHostTarget, "relay-host-target", os.Getenv("WARDYN_RELAY_HOST_TARGET"), "what a run's proxy reaches the relay at: host-gateway or an IP address (found by a probe container when left out)")
 	cmd.Flags().StringVar(&opts.network, "internal-network", cmp.Or(os.Getenv("WARDYN_INTERNAL_NETWORK"), "wardyn-internal"), "Docker bridge for proxy sidecars (created when missing)")
 	cmd.Flags().StringVar(&opts.trustedCAFile, "trusted-ca-file", os.Getenv("WARDYN_TRUSTED_CA_FILE"), "PEM bundle of extra roots (e.g. a TLS-inspecting corporate proxy's CA) every run's proxy and sandbox trust beside the system roots; when unset, SSL_CERT_FILE, else SSL_CERT_DIR, is used. Read at startup only")
-	cmd.Flags().StringVar(&opts.upstreamProxy, "upstream-proxy", os.Getenv("WARDYN_UPSTREAM_PROXY"), "this runner's own corporate upstream proxy, http://[user:pass@]host[:port], that every run's proxy chains its egress through; never sent to the organisation. Prefer the environment variable when it holds a credential. Read at startup only")
+	cmd.Flags().StringVar(&opts.upstreamProxy, "upstream-proxy", "", "this runner's own corporate upstream proxy, http://[user:pass@]host[:port], that every run's proxy chains its egress through; never sent to the organisation. Prefer the WARDYN_UPSTREAM_PROXY environment variable when it holds a credential (it is read after the flags are parsed, so --help never shows it). Read at startup only")
 	cmd.Flags().StringVar(&opts.recording, "recording-store", cmp.Or(os.Getenv("WARDYN_RECORDING_STORE"), "pg"), "organisation recording mode: pg, fs or off (off disables local capture)")
 	_ = cmd.MarkFlagRequired("org")
 	return cmd
