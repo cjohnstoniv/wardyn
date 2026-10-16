@@ -166,6 +166,11 @@ func TestQueryScannedDecisionsPersistNearCapacity(t *testing.T) {
 }
 
 func TestLocalSpoolReservationsBoundConcurrentForwarding(t *testing.T) {
+	// Every refusal here must be a full spool, which the drop count sees; one that timed out waiting
+	// behind the others' fsyncs is refused without a drop.
+	prev := spoolAdmitTimeout
+	spoolAdmitTimeout = time.Minute
+	t.Cleanup(func() { spoolAdmitTimeout = prev })
 	ctx := context.Background()
 	id := uuid.New()
 	dir := filepath.Join(t.TempDir(), "spool")

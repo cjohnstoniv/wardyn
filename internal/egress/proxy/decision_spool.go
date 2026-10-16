@@ -70,6 +70,10 @@ type spoolReservation struct {
 // summary without findings (a skip or bypass).
 const spoolRecordEnvelope = 64 << 10
 
+// spoolAdmitTimeout bounds how long a request waits for its audit reservation before it is refused.
+// A variable so a test of the reservation arithmetic is not at the mercy of the disk's fsync latency.
+var spoolAdmitTimeout = 5 * time.Second
+
 // spoolReservationBytes is the most a request's final decision record may take.
 // A request that may be scanned while content inspection is on (a body-bearing
 // one, or one with a query when forward egress is inspected: an API door scans
@@ -135,7 +139,7 @@ func (p *Proxy) admitSpoolHTTP(w http.ResponseWriter, r *http.Request) (*http.Re
 		http.Error(w, "egress audit record too large", http.StatusRequestURITooLong)
 		return nil, nil
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), spoolAdmitTimeout)
 	defer cancel()
 	id, err := p.sink.reserve(ctx, p.spoolReservationBytes(r))
 	if err != nil {
