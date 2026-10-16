@@ -233,10 +233,15 @@ func (p *Proxy) isCorpMITMHost(host string) bool {
 // channelForHost maps a model host to its request schema for inspection. A non-LLM host (e.g. a
 // corp artifact host MITM'd only for token injection) maps to ChannelGeneric, so the content scanner
 // never runs against package-registry traffic. A method, not a free function, so a configured
-// gateway host classifies as its vendor's channel, not generic.
+// gateway host classifies as its vendor's channel, not generic. A gateway both vendors share is
+// channelSharedGateway: only a brokered route names the schema, so a direct request's body is
+// marked uninspected (refused under fail-closed blocking), never read as one vendor's by chance.
 func (p *Proxy) channelForHost(host string) contentscan.Channel {
 	h := strings.TrimSuffix(strings.ToLower(host), ".")
-	if vendor, ok := p.gatewayVendor[h]; ok {
+	if vendor, ok := p.gatewayVendorOf(h); ok {
+		if vendor == "" {
+			return channelSharedGateway
+		}
 		h = vendor
 	} else if vendor, ok := p.channelHosts[h]; ok {
 		h = vendor

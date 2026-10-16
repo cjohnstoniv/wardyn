@@ -97,7 +97,7 @@ type Config struct {
 	// becomes every proxy's trusted_ca_pem, on create and on revive, in place
 	// of the organisation's (never sent to a runner), and is appended to the
 	// sandbox's CA trust after whatever the organisation staged
-	// (runner.InstallSandboxTrustedCA) when it is at most
+	// (runner.InstallSandboxTrustedCA) when it and the staged PEM fit
 	// runner.MaxEnvTrustedCAPEM. Empty changes nothing.
 	TrustedCAPEM string
 	// TrustedCAFile, set only by wardyn-runnerd, is the host file holding
