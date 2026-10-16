@@ -61,6 +61,21 @@ describe("ruleChoices", () => {
     expect(ruleChoices(held, "Claude Code", "Bash").map((c) => c.available)).toEqual([false, true, true]);
   });
 
+  it("a named tool's own policy rule lifts the \"*\" refusal the server graded (DR-0223)", () => {
+    const opts = (refused: Partial<Record<ToolEffect, string>>) =>
+      (["allow", "hold", "deny"] as const).map((effect) => ({ effect, available: !refused[effect], ...(refused[effect] ? { reason: refused[effect] } : {}) }));
+    // The policy's "*" denies (left out of policy_rules on the attended lane); Read is allowed by name.
+    const fact: ToolPolicyFact = {
+      ...CLAUDE_ATTENDED,
+      rule_effects: opts({ allow: "policy_stricter_tool", hold: "policy_stricter_tool" }),
+      policy_rules: [{ tool: "Read", effect: "allow", source: { kind: "policy" } }],
+    };
+    expect(ruleChoices(fact, "Claude Code", "Read").map((c) => c.available)).toEqual([true, true, true]);
+    const other = ruleChoices(fact, "Claude Code", "Bash");
+    expect(other.map((c) => c.available)).toEqual([false, false, true]);
+    expect(other[0].reason).toBe("Your policy blocks Bash. A run can only be stricter.");
+  });
+
   it("offers only what the harness can honour before a tool is named", () => {
     expect(ruleChoices(CODEX, "Codex CLI", "").map((c) => c.available)).toEqual([true, false, true]);
   });
