@@ -14,6 +14,7 @@ import (
 	"net/netip"
 	"net/url"
 	"strings"
+	"testing"
 	"time"
 
 	"github.com/google/uuid"
@@ -128,6 +129,9 @@ func (d *Driver) startProxy(ctx context.Context, runID uuid.UUID, labels map[str
 			return "", err
 		}
 		host.ExtraHosts = []string{"host.docker.internal:" + target, name + ":" + target}
+	}
+	if testing.Testing() {
+		host.ExtraHosts = append(host.ExtraHosts, d.cfg.TestProxyExtraHosts...)
 	}
 	var err error
 	cfgJSON, err = d.runnerSpoolConfig(ctx, runID, cfgJSON, cfg, host)

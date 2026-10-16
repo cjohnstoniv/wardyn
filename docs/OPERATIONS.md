@@ -2512,7 +2512,6 @@ The residuals an operator should plan for:
 - `host_suffix` is already the control; a `cidrs` list assembled from what you can see is usually wrong in a way that looks exactly like a correct configuration.
 - A laptop's corporate resolver answers a private-endpoint name into CGNAT space; inside the VPC the SAME name resolves to the interface endpoint's own ENI address, in the VPC's RFC1918 range.
 - A `cidrs` list drawn from what the operator's own machine sees excludes the range the SANDBOX actually resolves into, and the resulting 403 is indistinguishable from never having declared the entry at all.
-- This cost one deployment two failed runs before the mismatch was found.
 - Tighten `cidrs` only once you have evidence of what the sandbox itself resolves, never from what your own machine resolves.
 - The 403 says the same thing to whoever hits it next:
 
@@ -2532,6 +2531,7 @@ The residuals an operator should plan for:
 - The lift applies wherever the proxy resolves a hostname for a direct dial — the sandbox's CONNECT/plain-HTTP path, the MITM path, and the `git_pat` PAT-broker lane (its forge host is grant-derived).
 - So a declared suffix covering a self-hosted forge lets the brokered PAT reach it.
 - A lifted decision's audit `rule_source` reads `site-config:internal-host` instead of the default `policy:allowed`.
+- [Self-hosted runner](operations/hybrid-laptops.md) proxies get them too (0.9.2); a revive drops undeclared ones.
 
 > [!WARNING]
 > **Not every `builtin:private-ip` refusal is liftable, and the 403 now says so.**

@@ -92,6 +92,11 @@ type Config struct {
 	// the target, so the proxy's control-plane clamp covers one address, and an
 	// IP-literal URL (which no hosts entry can remap) refuses the create.
 	ControlPlaneRelay func(controlPlaneURL *url.URL) (target string, err error)
+	// TestProxyExtraHosts is a test-only hook: extra "name:ip" hosts entries
+	// for the proxy sidecar, so a live test can pin a name into a private range.
+	// No flag, env or file sets it, and startProxy ignores it outside a go test
+	// binary (testing.Testing).
+	TestProxyExtraHosts []string
 }
 
 // RecordingMountTarget is where RecordingMount appears inside the agent
