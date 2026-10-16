@@ -441,7 +441,7 @@ func (p *Proxy) serveAdmittedMITMRequest(w http.ResponseWriter, r *http.Request,
 		}
 		// memoed=false: built right here (policy:method on an inner request), never from the
 		// private-IP memo.
-		p.writeEgressDeny(w, host, port, &log, false)
+		p.writeEgressDenyLLM(w, host, port, &log)
 		return
 	}
 
@@ -476,9 +476,9 @@ func (p *Proxy) serveAdmittedMITMRequest(w http.ResponseWriter, r *http.Request,
 	target, _, terr := p.egressTarget(host, port)
 	if terr != nil {
 		p.emitVetFailed(r, host, port, mitmSource, terr)
-		// AWS lane: modelled, valid-JSON error body — MITM-terminated sibling of
+		// An LLM or AWS host gets its SDK's error body: MITM-terminated sibling of
 		// llm_routes.go's vet-failed site.
-		p.httpErrorAWSAware(w, host, "llm upstream vet failed", terr, false, http.StatusInternalServerError, "InternalServerException")
+		p.httpErrorShaped(w, host, "llm upstream vet failed", terr, http.StatusBadGateway, vetFault(port, mitmSource, terr))
 		return
 	}
 
@@ -558,9 +558,10 @@ func (p *Proxy) serveAdmittedMITMRequest(w http.ResponseWriter, r *http.Request,
 			return
 		}
 		p.emitLLMDecision(r, host, port, egress.Deny, mitmSource, nil)
-		// AWS lane: 401 UnauthorizedException, generalizing writeSSOUnauthorized's precedent above —
-		// a credential resolve failure is non-retryable the same way a spent hold is.
-		p.httpErrorAWSAware(w, host, "llm credential refresh failed", ierr, false, http.StatusUnauthorized, "UnauthorizedException")
+		// AWS lane: 401 UnauthorizedException (reasonStatus), generalizing writeSSOUnauthorized's
+		// precedent above — a credential resolve failure is non-retryable the same way a spent hold is.
+		p.httpErrorShaped(w, host, "llm credential refresh failed", ierr, http.StatusBadGateway,
+			brokeredFault{port: port, ruleSource: mitmSource, reason: reasonCredentialUnavailable})
 		return
 	}
 	rearmBodyDeadline(w) // the resolve may have held the request (credhold.go)

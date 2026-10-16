@@ -162,9 +162,10 @@ func TestTrustedCADialsPassingCorpCA(t *testing.T) {
 
 	// Negative control: the WHOLE POINT. With no trusted CA configured
 	// (nil == WARDYN_TRUSTED_CA_FILE unset), the SAME corp-CA-signed upstream
-	// fails certificate verification and the proxy 502s with a
-	// builtin:dial-failed deny recorded in the sink — never a silent allow.
-	t.Run("nil config -> 502 + builtin:dial-failed", func(t *testing.T) {
+	// fails certificate verification and the proxy refuses it as tls_untrusted
+	// (a 403, so no SDK retries it) with a builtin:dial-failed deny recorded in
+	// the sink — never a silent allow.
+	t.Run("nil config -> 403 tls_untrusted + builtin:dial-failed", func(t *testing.T) {
 		p, buf := newTestProxyWithTLS(nil)
 		proxySrv := httptest.NewServer(p)
 		defer proxySrv.Close()
@@ -180,8 +181,9 @@ func TestTrustedCADialsPassingCorpCA(t *testing.T) {
 		if err != nil {
 			t.Fatalf("read response: %v", err)
 		}
-		if resp.StatusCode != http.StatusBadGateway {
-			t.Fatalf("status = %d, want 502 (untrusted corp-CA-signed upstream must fail closed)", resp.StatusCode)
+		if resp.StatusCode != http.StatusForbidden || resp.Header.Get("X-Wardyn-Reason") != reasonTLSUntrusted {
+			t.Fatalf("status = %d reason %q, want 403 tls_untrusted (untrusted corp-CA-signed upstream must fail closed)",
+				resp.StatusCode, resp.Header.Get("X-Wardyn-Reason"))
 		}
 		if !strings.Contains(buf.String(), "builtin:dial-failed") {
 			t.Fatalf("decision sink = %q, want a builtin:dial-failed entry", buf.String())

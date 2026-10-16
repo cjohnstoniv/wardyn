@@ -142,7 +142,7 @@ func dialStage(err error) string {
 
 // causeSentence builds the stage-prefixed, masked, topology-redacted sentence
 // naming why a genuinely DIAL-shaped refusal happened, so the audited cause
-// and what the agent's SDK is told (httpErrorAWSAware) match. A non-dial
+// and what the agent's SDK is told (writeBrokeredFault) match. A non-dial
 // refusal wants dialFailureCause alone, since dialStage's vocabulary would
 // mislabel it as a dial never attempted.
 func (p *Proxy) causeSentence(err error) string {
