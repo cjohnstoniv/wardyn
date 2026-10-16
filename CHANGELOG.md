@@ -8,6 +8,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+Laptop runners on private-endpoint estates: a self-hosted runner now gets the organisation's `internal_hosts`, so a
+run reaches hosts that resolve to private addresses.
+
 ### Fixed
 
 - A self-hosted (laptop) runner now receives the organisation's `internal_hosts`. Before, they were dropped for every
