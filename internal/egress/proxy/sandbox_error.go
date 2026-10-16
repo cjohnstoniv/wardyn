@@ -88,6 +88,21 @@ func topologyPatterns(controlPlaneURL string, up *upstreamProxy) []*regexp.Regex
 	return out
 }
 
+// gatewayPatterns matches each configured LLM gateway's host, with any port:
+// the sandbox reaches a gateway only through its brokered route, so its
+// address in an error (a certificate's hostname mismatch, say) is topology.
+// Word-bounded so a short host name does not match inside other text; an IP
+// literal is left to ipLiteralRe.
+func gatewayPatterns(ups map[string]llmUpstream) []*regexp.Regexp {
+	var out []*regexp.Regexp
+	for _, u := range ups {
+		if u.host != "" && net.ParseIP(u.host) == nil {
+			out = append(out, regexp.MustCompile(`\b`+regexp.QuoteMeta(u.host)+`\b(:\d{1,5})?`))
+		}
+	}
+	return out
+}
+
 // The dial-failed shape: a request policy ALLOWED, where the network then
 // lost it. Every emitting site needs httpError's mask+redaction in the
 // DECISION LOG too, since auditScope hands a run's own CREATOR that whole row.

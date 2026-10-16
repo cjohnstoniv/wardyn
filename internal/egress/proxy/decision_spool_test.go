@@ -52,7 +52,7 @@ func TestLocalSpoolAdmitsMoreThan32OrdinaryRequestsInFlight(t *testing.T) {
 	p := &Proxy{sink: s}
 	for i := range 64 {
 		w := httptest.NewRecorder()
-		if admitted, _ := p.admitSpoolHTTP(w, httptest.NewRequest("GET", "http://allowed.test/x", nil)); admitted == nil {
+		if admitted, _ := p.admitSpoolHTTP(w, httptest.NewRequest("GET", "http://allowed.test/x", nil), ""); admitted == nil {
 			t.Fatalf("request %d of 64 in flight refused: %d", i+1, w.Code)
 		}
 	}
@@ -144,7 +144,7 @@ func TestQueryScannedDecisionsPersistNearCapacity(t *testing.T) {
 	const asked = 24
 	var tickets []uuid.UUID
 	for range asked {
-		if admitted, _ := p.admitSpoolHTTP(httptest.NewRecorder(), r.Clone(ctx)); admitted != nil {
+		if admitted, _ := p.admitSpoolHTTP(httptest.NewRecorder(), r.Clone(ctx), ""); admitted != nil {
 			tickets = append(tickets, spoolTicket(admitted.Context()))
 		}
 	}
@@ -186,7 +186,7 @@ func TestLocalSpoolReservationsBoundConcurrentForwarding(t *testing.T) {
 			defer wg.Done()
 			w := httptest.NewRecorder()
 			r := httptest.NewRequest("GET", "http://allowed.test/"+maxReservationPath, nil)
-			admitted, release := p.admitSpoolHTTP(w, r)
+			admitted, release := p.admitSpoolHTTP(w, r, "")
 			mu.Lock()
 			defer mu.Unlock()
 			if admitted != nil {
@@ -232,7 +232,7 @@ func TestLocalSpoolReservationsBoundConcurrentForwarding(t *testing.T) {
 		t.Fatalf("history rows%d admitted%d", rows, len(tickets))
 	}
 	w := httptest.NewRecorder()
-	r, release := p.admitSpoolHTTP(w, httptest.NewRequest("GET", "http://allowed.test/again", nil))
+	r, release := p.admitSpoolHTTP(w, httptest.NewRequest("GET", "http://allowed.test/again", nil), "")
 	if r == nil {
 		t.Fatal("drain did not reopen admission")
 	}

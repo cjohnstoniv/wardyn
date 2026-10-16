@@ -586,12 +586,11 @@ func (p *Proxy) writeEgressDeny(w http.ResponseWriter, host string, port int, lo
 
 // writeEgressDenyLLM is writeEgressDeny for a request on an LLM lane (a
 // brokered /wardyn/llm/* route, or an inner request of a terminated tunnel):
-// the body is the host's provider error shape (an AWS host's is a 403
-// AccessDeniedException), so the SDK reads the refusal instead of failing to
-// parse text. A host that is no LLM vendor's or AWS's still gets the
-// forward-lane body.
-func (p *Proxy) writeEgressDenyLLM(w http.ResponseWriter, host string, port int, log *egress.DecisionLog) {
-	p.denyEgress(w, host, port, log, false, p.shapeOfHost(host))
+// the body is shape (shapeOf: the route's, else the host's; an AWS host's is a
+// 403 AccessDeniedException), so the SDK reads the refusal instead of failing
+// to parse text. shapePlain still gets the forward-lane body.
+func (p *Proxy) writeEgressDenyLLM(w http.ResponseWriter, shape errShape, host string, port int, log *egress.DecisionLog) {
+	p.denyEgress(w, host, port, log, false, shape)
 }
 
 func (p *Proxy) denyEgress(w http.ResponseWriter, host string, port int, log *egress.DecisionLog, memoed bool, shape errShape) {
@@ -620,14 +619,18 @@ func (p *Proxy) denyEgress(w http.ResponseWriter, host string, port int, log *eg
 		w.Header().Set(egressHeaderDetail, resolveFailedDetail)
 		detail = "egress denied: " + resolveFailedDetail
 	}
-	setEgressRefusalHeadersWithReason(w, egressRefusalDenied, host, reason)
+	headerHost := host
+	if shape != shapePlain {
+		headerHost, _ = p.gatewayFront(shape, host) // a gateway's own address never reaches the sandbox
+	}
+	setEgressRefusalHeadersWithReason(w, egressRefusalDenied, headerHost, reason)
 	attribution := ""
 	if policyDecidedReason(reason) {
 		attribution = p.attributeRefusal(w)
 	}
 	if shape != shapePlain {
 		// The SDK shows the message, never the headers, so the attribution rides in it.
-		msg := brokeredMessage(reasonEgressDenied, p.hostPortLabel(host, port), reason, faultHint(host, reasonEgressDenied, reason, nil), "")
+		msg := brokeredMessage(reasonEgressDenied, p.hostPortLabel(shape, host, port), reason, faultHint(host, reasonEgressDenied, reason, nil), "")
 		if attribution != "" {
 			msg += ". " + attribution
 		}
