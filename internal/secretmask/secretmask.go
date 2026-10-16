@@ -726,15 +726,16 @@ func (m Masker) Mask(p []byte) []byte {
 // stream, even when a secret spans two adjacent Write calls (chunked PTY or
 // asciicast frames).
 //
-// Invariant: after each Write, it retains a tail of (maxSecretLen-1) bytes
-// from the masked buffer, prepended to the next chunk before masking again.
-// Close() flushes the retained tail.
+// Invariant: after each Write, it retains the last (maxSecretLen-1) bytes as
+// they arrived, unmasked, and earlier from where a whole secret crossing them
+// starts; the next chunk is appended before masking again. Close() flushes the
+// retained tail masked.
 //
 // A nil downstream or a Masker with no secrets is safe (pass-through).
 type MaskingWriter struct {
 	m    Masker
 	dst  io.Writer
-	tail []byte // pending bytes not yet forwarded
+	tail []byte // pending bytes not yet forwarded, as they arrived
 }
 
 // NewMaskingWriter wraps dst with masking. If m has no secrets the writer
@@ -744,7 +745,7 @@ func NewMaskingWriter(dst io.Writer, m Masker) *MaskingWriter {
 }
 
 // Write masks p (with any retained tail prepended) and forwards the safe
-// prefix downstream, retaining a tail of up to (maxSecretLen-1) bytes.
+// prefix downstream, retaining a tail of at least (maxSecretLen-1) bytes.
 //
 // Fail-CLOSED on masker panic: a recovered panic causes the placeholder (not
 // the raw input) to be written downstream, then returns the panic as an error
@@ -756,28 +757,19 @@ func (w *MaskingWriter) Write(p []byte) (n int, err error) {
 	// Append new data to retained tail to detect cross-boundary secrets.
 	buf := append(w.tail, p...) //nolint:gocritic // intentional re-use
 
+	// Retain the last (maxLen-1) bytes unmasked, so the next write, or the end of
+	// a cut stream (CloseCut), still sees every secret they begin; a whole secret
+	// that crosses into them is retained with them, so no secret is split.
+	split := len(buf)
+	if w.m.maxLen > 1 {
+		split = w.m.crossing(buf, max(0, len(buf)-(w.m.maxLen-1)))
+	}
 	// Apply masking with panic recovery (fail-closed: see safeMask).
-	masked, panicErr := safeMask(w.m, buf)
+	masked, panicErr := safeMask(w.m, buf[:split])
+	w.tail = bytes.Clone(buf[split:])
 
-	if w.m.maxLen <= 1 {
-		// No tail needed when there is at most one-byte overlap.
-		w.tail = nil
+	if len(masked) > 0 {
 		if _, werr := w.dst.Write(masked); werr != nil {
-			return 0, werr
-		}
-		return len(p), panicErr
-	}
-
-	// Retain up to (maxLen-1) bytes so the next write can detect splits.
-	tailLen := w.m.maxLen - 1
-	if tailLen > len(masked) {
-		tailLen = len(masked)
-	}
-	forward := masked[:len(masked)-tailLen]
-	w.tail = bytes.Clone(masked[len(masked)-tailLen:])
-
-	if len(forward) > 0 {
-		if _, werr := w.dst.Write(forward); werr != nil {
 			return 0, werr
 		}
 	}
@@ -803,16 +795,37 @@ func (w *MaskingWriter) Close() error {
 // CloseCut is Close for a stream cut short where it ends: a trailing run that begins a secret, the part of
 // it that arrived before the cut, is masked as well.
 func (w *MaskingWriter) CloseCut() error {
-	masked, _ := safeMask(w.m, w.tail)
+	tail := w.tail
 	w.tail = nil
-	if k := w.m.cutPrefixLen(masked); k > 0 {
-		masked = append(masked[:len(masked)-k:len(masked)-k], placeholder...)
+	cut := len(tail)
+	if k := w.m.cutPrefixLen(tail); k > 0 {
+		cut = w.m.crossing(tail, len(tail)-k)
+	}
+	masked, _ := safeMask(w.m, tail[:cut])
+	if cut < len(tail) {
+		masked = append(masked[:len(masked):len(masked)], placeholder...)
 	}
 	if len(masked) == 0 {
 		return nil
 	}
 	_, err := w.dst.Write(masked)
 	return err
+}
+
+// crossing is where the earliest whole secret in p that starts before at and ends after it starts, or at
+// when none does.
+func (m Masker) crossing(p []byte, at int) int {
+	start := at
+	for _, s := range m.secrets {
+		lo, hi := max(0, at-len(s)+1), min(len(p), at+len(s)-1)
+		if lo >= hi {
+			continue
+		}
+		if j := bytes.Index(p[lo:hi], s); j >= 0 {
+			start = min(start, lo+j)
+		}
+	}
+	return start
 }
 
 // cutPrefixLen is the length of the longest end of p that is the start of a secret.

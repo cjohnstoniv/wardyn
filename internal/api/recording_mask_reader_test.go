@@ -160,3 +160,35 @@ func TestBuildMaskingBody_MasksASecretALogCutSplits(t *testing.T) {
 		}
 	}
 }
+
+// chunkedReader returns at most n bytes per Read.
+type chunkedReader struct {
+	r io.Reader
+	n int
+}
+
+func (c chunkedReader) Read(p []byte) (int, error) { return c.r.Read(p[:min(c.n, len(p))]) }
+
+// A secret registered inside a longer one: a log cut inside the longer value has all of it that arrived masked,
+// whatever the read boundaries.
+func TestBuildMaskingBody_MasksANestedSecretALogCutSplits(t *testing.T) {
+	const outer, inner = "alpha-INNER1234-omega-tail", "INNER1234"
+	lines := strings.Repeat("output line\n", 4000)
+	runID := uuid.New()
+	reg := secretmask.NewRegistry()
+	for _, v := range []string{outer, inner} {
+		if err := reg.Add(runID, []byte(v)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, chunk := range []int{1, 7, 4096} {
+		for k := 1; k < len(outer); k++ {
+			head := lines + outer[:k]
+			marker := recording.LogCutMarker(int64(len(head)), int64(len(head)+len(outer)))
+			got, err := io.ReadAll(buildMaskingBody(chunkedReader{strings.NewReader(head + marker), chunk}, reg, runID))
+			if want := lines + string(secretmask.Placeholder()) + marker; err != nil || string(got) != want {
+				t.Errorf("cut at %d in %d-byte reads: %v, ends %q", k, chunk, err, got[max(0, len(got)-200):])
+			}
+		}
+	}
+}

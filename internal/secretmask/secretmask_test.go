@@ -593,3 +593,38 @@ func TestMaskingWriter_CloseCutMasksASecretTheCutSplits(t *testing.T) {
 		}
 	}
 }
+
+// A secret registered inside a longer one: a cut inside the longer value masks all of it that arrived, and a
+// stream that is not cut is masked as before, whatever the write boundaries.
+func TestMaskingWriter_CloseCutMasksANestedSecretTheCutSplits(t *testing.T) {
+	const before, outer, inner = "log line before the cut\n", "alpha-INNER1234-omega-tail", "INNER1234"
+	m := secretmask.NewMasker([][]byte{[]byte(outer), []byte(inner)})
+	run := func(chunk int, in string, cut bool) string {
+		var buf bytes.Buffer
+		w := secretmask.NewMaskingWriter(&buf, m)
+		for p := []byte(in); len(p) > 0; p = p[min(chunk, len(p)):] {
+			if _, err := w.Write(p[:min(chunk, len(p))]); err != nil {
+				t.Fatal(err)
+			}
+		}
+		end := w.Close
+		if cut {
+			end = w.CloseCut
+		}
+		if err := end(); err != nil {
+			t.Fatal(err)
+		}
+		return buf.String()
+	}
+	for _, chunk := range []int{1, 7, 4096} {
+		for k := 1; k < len(outer); k++ {
+			if got, want := run(chunk, before+outer[:k], true), before+"<secret-hidden>"; got != want {
+				t.Errorf("cut at %d of the outer value in %d-byte writes = %q, want %q", k, chunk, got, want)
+			}
+		}
+		whole := "a " + outer + " b " + inner + " c alpha-" + inner + "-o"
+		if got, want := run(chunk, whole, false), "a <secret-hidden> b <secret-hidden> c alpha-<secret-hidden>-o"; got != want {
+			t.Errorf("an uncut stream in %d-byte writes = %q, want %q", chunk, got, want)
+		}
+	}
+}
