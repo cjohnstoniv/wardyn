@@ -26,6 +26,7 @@
 ## Requirements
 
 - `setup` and `serve` find the relay address and prove it with a probe container on Docker Desktop, Rancher Desktop (dockerd) and other VM-backed engines; Rancher Desktop's containerd mode is unsupported. See [Requirements](../runner-registration.md#requirements). There is no native Windows binary.
+- The default laptop storage driver (overlayfs on Docker Desktop, Colima and Rancher Desktop) cannot cap a run's disk, so a run's `disk_mib` is not enforced there; `setup` says so. On a VM-backed engine `setup` also measures the VM's free disk by running the proxy image (`wardyn-proxy -disk-free /`); `--total-disk` overrides that figure, and is still needed when the probe cannot run.
 - The full list, and why `serve` refuses to start: [Requirements](../runner-registration.md#requirements).
 
 ## Resident credentials and posture

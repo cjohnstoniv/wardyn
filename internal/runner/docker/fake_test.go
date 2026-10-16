@@ -248,6 +248,9 @@ type fakeDocker struct {
 	archProbeExit    int64
 	archProbeLog     string
 	archProbeRunning bool
+	// diskProbeExit and diskProbeOut script the disk probe container's exit code and stdout.
+	diskProbeExit int64
+	diskProbeOut  string
 	// failLogs makes ContainerLogs fail, as a log driver that keeps no logs does.
 	failLogs bool
 
@@ -675,6 +678,13 @@ func (f *fakeDocker) ContainerStart(ctx context.Context, id string, _ client.Con
 			}
 			f.logs[id] = muxFrame(2, f.archProbeLog)
 		}
+	} else if strings.HasPrefix(c.name, diskProbeNamePrefix) {
+		// The disk probe exits with the scripted code and prints the scripted stdout.
+		c.state = &container.State{Status: "exited", ExitCode: int(f.diskProbeExit)}
+		if f.logs == nil {
+			f.logs = map[string][]byte{}
+		}
+		f.logs[id] = muxFrame(1, f.diskProbeOut)
 	} else if strings.HasPrefix(c.name, "wardyn-drive-probe-") || strings.HasPrefix(c.name, "wardyn-relay-probe-") {
 		// No real command interpreter here to run the probe's `test -r/-x`
 		// against a bind mount — model it as already exited with the

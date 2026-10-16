@@ -13,7 +13,6 @@ import (
 	"net"
 	"net/netip"
 	"os"
-	"strings"
 	"time"
 
 	"github.com/containerd/errdefs"
@@ -90,7 +89,8 @@ func dockerCapacity(ctx context.Context) placement.Capacity {
 }
 
 // hostMeasure is what this computer has for runs, as Docker reports it: its CPUs and memory, and the
-// free disk of Docker's data root when the engine is local and not Docker Desktop's VM. 0 is unknown.
+// free disk of Docker's data root when the engine is not VM-backed (a VM's disk is measured by
+// measureVMDisk). 0 is unknown.
 func hostMeasure(ctx context.Context) (types.RunnerAmounts, error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
@@ -103,8 +103,7 @@ func hostMeasure(ctx context.Context) (types.RunnerAmounts, error) {
 	if err != nil {
 		return types.RunnerAmounts{}, err
 	}
-	host := os.Getenv("DOCKER_HOST")
-	return docker.MeasureInfo(info.Info, host == "" || strings.HasPrefix(host, "unix://"), docker.FreeDiskMiB), nil
+	return docker.MeasureInfo(info.Info, os.Getenv("DOCKER_HOST"), docker.FreeDiskMiB), nil
 }
 
 // dockerArch is the Docker engine's CPU architecture, "amd64" or "arm64", or "" when the engine does
