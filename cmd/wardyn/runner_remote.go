@@ -148,7 +148,7 @@ func runnerRemotePeopleCmd(client clientFn) *cobra.Command {
 			if held, err := heldForApproval(cmd, client().ClearRemoteRunnerPeoplePolicy(cmd.Context(), args[0])); held || err != nil {
 				return err
 			}
-			_, err := fmt.Fprintf(cmd.OutOrStdout(), "remote-hosted runner %s is now available to nobody's pools\n", args[0])
+			_, err := fmt.Fprintf(cmd.OutOrStdout(), "%s is no longer available to people's pools\n", args[0])
 			return err
 		}}
 	cmd.AddCommand(set, clear)

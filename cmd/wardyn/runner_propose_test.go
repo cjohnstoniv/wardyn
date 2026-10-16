@@ -125,7 +125,7 @@ func TestRunnerRemotePropose_FreeDiskMustBePositive(t *testing.T) {
 func TestRunnerRemotePeopleClear_SaysWhatItDid(t *testing.T) {
 	srv := newCmdServer(t, http.StatusNoContent, nil)
 	out, err := execCmdCapture(t, "runner", "remote", "people", "clear", "docker", "--url", srv.URL, "--token", "t")
-	if err != nil || !strings.Contains(out, "docker") || !strings.Contains(out, "available to nobody's pools") {
+	if err != nil || !strings.Contains(out, "docker") || !strings.Contains(out, "no longer available to people's pools") {
 		t.Errorf("people clear = %q, %v; want a line naming the runner and the change", out, err)
 	}
 }
