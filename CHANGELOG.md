@@ -27,7 +27,8 @@ both architectures.
 
 - `wardyn-runnerd --trusted-ca-file` (`WARDYN_TRUSTED_CA_FILE`, at most 64 KiB): a laptop runner's corporate CA. The
   run's proxy trusts it on create and revive, and the sandbox gets the same roots. `setup --trusted-ca-file` writes it
-  into the service files. See docs/operations/hybrid-laptops.md.
+  into the service files. runnerd reads only the file it is given, never `SSL_CERT_FILE` or `SSL_CERT_DIR` (pass
+  `--trusted-ca-file "$SSL_CERT_FILE"` to use yours). See docs/operations/hybrid-laptops.md.
 - Errors on `/wardyn/llm/anthropic|openai` and the AWS lane use the provider's own error shape with a fixed reason
   (`egress_denied`, `tls_untrusted`, `upstream_unreachable`, `credential_unavailable`, `upstream_error`,
   `request_not_inspected`) naming the host and the rule. The reasons table is in docs/UI-SANDBOXES.md.
