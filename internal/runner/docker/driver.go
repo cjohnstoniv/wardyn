@@ -102,7 +102,8 @@ type Config struct {
 	TrustedCAPEM string
 	// TrustedCAFile, set only by wardyn-runnerd, is the host file holding
 	// TrustedCAPEM. It is bind-mounted read-only at runner.TrustedCAMountPath
-	// in every sandbox, so a bundle of any size reaches the sandbox's trust.
+	// in every sandbox; it alone carries the bundle when the bundle and the
+	// PEM already staged do not fit runner.MaxEnvTrustedCAPEM.
 	TrustedCAFile string
 }
 

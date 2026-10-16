@@ -23,6 +23,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/federation"
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/runneridentity"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 )
@@ -51,73 +52,30 @@ func writeFile(t *testing.T, path, text string) string {
 	return path
 }
 
-func envOf(m map[string]string) func(string) string { return func(k string) string { return m[k] } }
-
-// The first source set wins and only it is read: the flag (defaulting to WARDYN_TRUSTED_CA_FILE),
-// else SSL_CERT_FILE, else SSL_CERT_DIR, whose files are read in lexical order.
-func TestLoadTrustedCAPrecedence(t *testing.T) {
-	dir := t.TempDir()
-	a, b, c := testCAPEM(t, "flag"), testCAPEM(t, "ssl-file"), testCAPEM(t, "dir")
-	flagFile := writeFile(t, filepath.Join(dir, "flag.pem"), a)
-	sslFile := writeFile(t, filepath.Join(dir, "ssl.pem"), b)
-	certDir := filepath.Join(dir, "certs")
-	if err := os.MkdirAll(filepath.Join(certDir, "sub"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	writeFile(t, filepath.Join(certDir, "2.pem"), b)
-	writeFile(t, filepath.Join(certDir, "1.pem"), c)
-	both := map[string]string{"SSL_CERT_FILE": sslFile, "SSL_CERT_DIR": certDir}
-	for _, tc := range []struct {
-		name, file string
-		env        map[string]string
-		want       string
-		n          int
-	}{
-		{"flag over the rest", flagFile, both, a, 1},
-		{"SSL_CERT_FILE over SSL_CERT_DIR", "", both, b, 1},
-		{"SSL_CERT_DIR in lexical order", "", map[string]string{"SSL_CERT_DIR": certDir}, c + b, 2},
-		{"none", "", nil, "", 0},
-	} {
-		got, _, n, err := loadTrustedCA(tc.file, envOf(tc.env))
-		if err != nil || got != tc.want || n != tc.n {
-			t.Errorf("%s: got %d certs, err %v, bundle match %v", tc.name, n, err, got == tc.want)
-		}
-	}
-}
-
-// An unreadable, empty or non-certificate source fails, naming it; the bundle is rebuilt from the
-// parsed certificates only; a whole system bundle is refused, since no sandbox could start with it.
+// An unreadable, empty or non-certificate file fails, naming it; the bundle is rebuilt from the
+// parsed certificates only; a bundle over 64 KiB is refused, since a sandbox with nothing staged
+// could trust it only through one environment string.
 func TestLoadTrustedCARefuses(t *testing.T) {
 	dir := t.TempDir()
 	ca := testCAPEM(t, "corp")
 	keyPEM := "-----BEGIN PRIVATE KEY-----\nAAAA\n-----END PRIVATE KEY-----\n"
-	badDir := filepath.Join(dir, "bad")
-	if err := os.Mkdir(badDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	writeFile(t, filepath.Join(badDir, "a.pem"), ca)
-	bad := writeFile(t, filepath.Join(badDir, "b.pem"), "not a certificate")
-	big := strings.Repeat(ca, maxTrustedCABundle/len(ca)+1) // over the 4 MiB sanity bound
-	for _, tc := range []struct {
-		name, file string
-		env        map[string]string
-		want       string
-	}{
-		{"missing", filepath.Join(dir, "missing.pem"), nil, "missing.pem"},
-		{"empty", writeFile(t, filepath.Join(dir, "empty.pem"), ""), nil, "no PEM-encoded certificates"},
-		{"a key beside the cert", writeFile(t, filepath.Join(dir, "combined.pem"), ca+keyPEM), nil, `"PRIVATE KEY"`},
-		{"SSL_CERT_FILE unreadable", "", map[string]string{"SSL_CERT_FILE": filepath.Join(dir, "nope.pem")}, "SSL_CERT_FILE"},
-		{"an invalid file in SSL_CERT_DIR", "", map[string]string{"SSL_CERT_DIR": badDir}, bad},
-		{"an empty SSL_CERT_DIR", "", map[string]string{"SSL_CERT_DIR": t.TempDir()}, "no certificate files"},
-		{"a whole system bundle", writeFile(t, filepath.Join(dir, "big.pem"), big), nil, "limit"},
+	big := strings.Repeat(ca, runner.MaxEnvTrustedCAPEM/len(ca)+1)
+	for _, tc := range []struct{ name, file, want string }{
+		{"missing", filepath.Join(dir, "missing.pem"), "missing.pem"},
+		{"empty", writeFile(t, filepath.Join(dir, "empty.pem"), ""), "no PEM-encoded certificates"},
+		{"a key beside the cert", writeFile(t, filepath.Join(dir, "combined.pem"), ca+keyPEM), `"PRIVATE KEY"`},
+		{"over 64 KiB", writeFile(t, filepath.Join(dir, "big.pem"), big), "KiB; runners take at most 64 KiB: name a file holding only your organisation's roots, not a merged system bundle"},
 	} {
-		if _, _, _, err := loadTrustedCA(tc.file, envOf(tc.env)); err == nil || !strings.Contains(err.Error(), tc.want) {
+		if _, _, err := loadTrustedCA(tc.file); err == nil || !strings.Contains(err.Error(), tc.want) {
 			t.Errorf("%s: err = %v, want one naming %q", tc.name, err, tc.want)
 		}
 	}
-	got, _, _, err := loadTrustedCA(writeFile(t, filepath.Join(dir, "noisy.pem"), "# corp root\n"+ca+"trailing text\n"), envOf(nil))
-	if err != nil || got != ca {
-		t.Errorf("bundle = %q, %v; want only the rebuilt certificate", got, err)
+	got, n, err := loadTrustedCA(writeFile(t, filepath.Join(dir, "noisy.pem"), "# corp root\n"+ca+"trailing text\n"))
+	if err != nil || got != ca || n != 1 {
+		t.Errorf("bundle = %q (%d), %v; want only the rebuilt certificate", got, n, err)
+	}
+	if got, n, err := loadTrustedCA(" "); got != "" || n != 0 || err != nil {
+		t.Errorf("no file: %q, %d, %v; want nothing", got, n, err)
 	}
 }
 
@@ -137,10 +95,10 @@ func TestServeTrustedCAAtStartup(t *testing.T) {
 	ca := testCAPEM(t, "corp")
 	good := writeFile(t, filepath.Join(t.TempDir(), "ca.pem"), ca)
 	stop := errors.New("built")
+	t.Setenv("SSL_CERT_FILE", "")
+	t.Setenv("SSL_CERT_DIR", "")
 	serve := func(env string, args ...string) (serveOptions, bool, error) {
 		t.Setenv("WARDYN_TRUSTED_CA_FILE", env)
-		t.Setenv("SSL_CERT_FILE", "")
-		t.Setenv("SSL_CERT_DIR", "")
 		var got serveOptions
 		built := false
 		cmd := newServeCommand(func(_ context.Context, _ runneridentity.Identity, _ string, opts serveOptions) (runnerRuntime, error) {
@@ -160,14 +118,19 @@ func TestServeTrustedCAAtStartup(t *testing.T) {
 	if b, _ := os.ReadFile(file); string(b) != ca {
 		t.Fatalf("the bundle file holds %q, want the validated bundle", b)
 	}
-	if got, _, err := serve(""); !errors.Is(err, stop) || got.trustedCAPath != "" {
-		t.Fatalf("serve with no CA: err=%v path=%q", err, got.trustedCAPath)
+	if got, built, err := serve(""); !errors.Is(err, stop) || !built || got.trustedCA != "" || got.trustedCAPath != "" {
+		t.Fatalf("serve with no CA but an ambient SSL_CERT_FILE and SSL_CERT_DIR: err=%v built=%v bundle=%d bytes path=%q; want nothing trusted and no refusal", err, built, len(got.trustedCA), got.trustedCAPath)
 	}
-	if _, err := os.Stat(file); !os.IsNotExist(err) {
-		t.Fatalf("a stale bundle file survived a start with no CA: %v", err)
+	// A stopped sandbox created with the bundle still mounts the file when revived: it stays, emptied.
+	if b, err := os.ReadFile(file); err != nil || len(b) != 0 {
+		t.Fatalf("the bundle file after a start with no CA: %d bytes, %v; want it kept and empty", len(b), err)
 	}
 	if _, built, err := serve(filepath.Join(t.TempDir(), "gone.pem")); err == nil || errors.Is(err, stop) || built {
 		t.Fatalf("serve with a missing WARDYN_TRUSTED_CA_FILE: err=%v built=%v; want a startup refusal", err, built)
+	}
+	big := writeFile(t, filepath.Join(t.TempDir(), "merged.pem"), strings.Repeat(ca, runner.MaxEnvTrustedCAPEM/len(ca)+1))
+	if _, built, err := serve(big); err == nil || built || !strings.Contains(err.Error(), "runners take at most 64 KiB") {
+		t.Fatalf("serve with a bundle over 64 KiB: err=%v built=%v; want a startup refusal", err, built)
 	}
 	if got, _, err := serve(filepath.Join(t.TempDir(), "gone.pem"), "--trusted-ca-file", good); !errors.Is(err, stop) || got.trustedCA != ca {
 		t.Fatalf("--trusted-ca-file over a bad WARDYN_TRUSTED_CA_FILE: err=%v", err)
@@ -300,5 +263,86 @@ func TestSetupNamesAKeptTrustedCA(t *testing.T) {
 	_, err := f.run(setupOptions{})
 	if err == nil || !strings.Contains(err.Error(), "kept from the earlier setup ("+mustPaths(t, f).envFile+")") || !strings.Contains(err.Error(), "remove WARDYN_TRUSTED_CA_FILE") {
 		t.Fatalf("a rerun with a moved kept CA: %v", err)
+	}
+}
+
+// DR-0233: setup never adopts the ambient SSL_CERT_FILE; it names it once, with the flag that would.
+func TestSetupOnlyHintsAtSSLCertFile(t *testing.T) {
+	ssl := writeFile(t, filepath.Join(t.TempDir(), "ambient.pem"), testCAPEM(t, "ambient"))
+	t.Setenv("SSL_CERT_FILE", ssl)
+	t.Setenv("SSL_CERT_DIR", t.TempDir()+":"+t.TempDir())
+	f := newSetupFixture(t, "linux")
+	out, err := f.run(setupOptions{tokenFile: f.tokenFile})
+	if err != nil {
+		t.Fatal(err)
+	}
+	hint := "SSL_CERT_FILE is set (" + ssl + "); pass --trusted-ca-file " + ssl + " if runs must trust it (64 KiB at most)\n"
+	if strings.Count(out, hint) != 1 {
+		t.Errorf("setup output lacks the one hint %q:\n%s", hint, out)
+	}
+	if got := f.read(mustPaths(t, f).envFile); strings.Contains(got, "WARDYN_TRUSTED_CA_FILE") {
+		t.Errorf("setup adopted the ambient SSL_CERT_FILE:\n%s", got)
+	}
+	g := newSetupFixture(t, "linux")
+	ca := writeFile(t, filepath.Join(t.TempDir(), "corp-ca.pem"), testCAPEM(t, "corp"))
+	if out, err := g.run(setupOptions{tokenFile: g.tokenFile, trustedCAFile: ca}); err != nil || strings.Contains(out, "SSL_CERT_FILE is set") {
+		t.Errorf("with --trusted-ca-file: err=%v; the hint should not print:\n%s", err, out)
+	}
+}
+
+// DR-0233: serve never reads the ambient SSL_CERT_FILE or SSL_CERT_DIR. Unset, a valid file, a
+// colon list or a directory mixing certificates with other files changes nothing and never stops
+// startup; the named file stays strict.
+func TestServeIgnoresAmbientSSLCert(t *testing.T) {
+	stateDir := filepath.Join(t.TempDir(), "runner")
+	key, err := runneridentity.Generate(stateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	org := "https://org.example"
+	identity := runneridentity.Identity{RunnerID: uuid.New(), PrivateKey: key, Fingerprint: runnerwire.Fingerprint(key.Public().(ed25519.PublicKey)), OrgURLSHA256: federation.OrgURLSHA256(org)}
+	if err := runneridentity.Save(stateDir, identity); err != nil {
+		t.Fatal(err)
+	}
+	ca := testCAPEM(t, "corp")
+	good := writeFile(t, filepath.Join(t.TempDir(), "ca.pem"), ca)
+	bad := writeFile(t, filepath.Join(t.TempDir(), "key.pem"), "-----BEGIN PRIVATE KEY-----\nAAAA\n-----END PRIVATE KEY-----\n")
+	mixed := t.TempDir()
+	writeFile(t, filepath.Join(mixed, "5ed36f99.0"), testCAPEM(t, "ambient"))
+	writeFile(t, filepath.Join(mixed, "README"), "not a certificate")
+	if err := os.Mkdir(filepath.Join(mixed, "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ambientFile := writeFile(t, filepath.Join(t.TempDir(), "ambient.pem"), testCAPEM(t, "ambient"))
+	stop := errors.New("built")
+	serve := func(named string) (serveOptions, bool, error) {
+		t.Setenv("WARDYN_TRUSTED_CA_FILE", named)
+		var got serveOptions
+		built := false
+		cmd := newServeCommand(func(_ context.Context, _ runneridentity.Identity, _ string, opts serveOptions) (runnerRuntime, error) {
+			got, built = opts, true
+			return runnerRuntime{}, stop
+		})
+		cmd.SetArgs([]string{"--org", org, "--state-dir", stateDir})
+		return got, built, cmd.Execute()
+	}
+	for _, tc := range []struct{ name, file, dir string }{
+		{"unset", "", ""},
+		{"a valid file", ambientFile, ""},
+		{"a missing file", filepath.Join(t.TempDir(), "gone.pem"), ""},
+		{"a colon list", "", mixed + ":" + filepath.Join(t.TempDir(), "gone")},
+		{"a mixed directory", "", mixed},
+	} {
+		t.Setenv("SSL_CERT_FILE", tc.file)
+		t.Setenv("SSL_CERT_DIR", tc.dir)
+		if got, built, err := serve(""); !errors.Is(err, stop) || !built || got.trustedCA != "" {
+			t.Errorf("%s, nothing named: err=%v built=%v bundle=%d bytes; want nothing trusted and no refusal", tc.name, err, built, len(got.trustedCA))
+		}
+		if got, _, err := serve(good); !errors.Is(err, stop) || got.trustedCA != ca {
+			t.Errorf("%s, a named file: err=%v; want exactly the named bundle", tc.name, err)
+		}
+		if _, built, err := serve(bad); err == nil || built || !strings.Contains(err.Error(), bad) {
+			t.Errorf("%s, an invalid named file: err=%v built=%v; want a startup refusal naming it", tc.name, err, built)
+		}
 	}
 }

@@ -69,13 +69,9 @@
 ### A corporate CA on a laptop runner
 
 - Behind a TLS-inspecting proxy, give the runner your organisation's roots. Every run's proxy and sandbox then trust them beside the system roots and the run's own interception CA.
-- Certificates only, ideally only your organisation's roots. Over 64 KiB (a merged system bundle) the sandbox reads it from a mounted file only, which agent images older than 0.9.3 ignore.
-
-| Source (first set wins, only it is read) | Note |
-| --- | --- |
-| `--trusted-ca-file` / `WARDYN_TRUSTED_CA_FILE` | what setup writes |
-| `SSL_CERT_FILE` | |
-| `SSL_CERT_DIR` | one directory, files in lexical order |
+- Certificates only, your organisation's roots, 64 KiB at most: a merged system bundle is refused.
+- Only `--trusted-ca-file` or `WARDYN_TRUSTED_CA_FILE` (what setup writes) is read, never `SSL_CERT_FILE` or `SSL_CERT_DIR`.
+- When an organisation's own CA is also staged and the two pass 64 KiB, agent images older than 0.9.3 trust only the organisation's roots.
 
 The bundle is read when `serve` starts; a bad file stops it and is named.
 
@@ -100,7 +96,7 @@ The bundle is read when `serve` starts; a bad file stops it and is named.
    wardyn-runnerd setup --org https://wardyn.example --trusted-ca-file ~/.config/wardyn/corp-ca.pem
    ```
 
-3. The service does not see your shell's `SSL_CERT_FILE`, so pass the file to setup anyway.
+3. If your shell's `SSL_CERT_FILE` already names the roots, setup says so; pass it with `--trusted-ca-file "$SSL_CERT_FILE"`.
 
 ## Claiming a runner
 

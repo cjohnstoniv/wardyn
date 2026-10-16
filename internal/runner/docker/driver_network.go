@@ -634,12 +634,12 @@ func (d *Driver) withRunnerTrustedCA(env map[string]string) map[string]string {
 	}
 	if len(env["WARDYN_MITM_CA_PEM"])+len(d.cfg.TrustedCAPEM) <= runner.MaxEnvTrustedCAPEM {
 		runner.InstallSandboxTrustedCA(d.cfg.TrustedCAPEM, env)
-	} else if env["WARDYN_MITM_CA_PEM"] != "" {
-		// Too big for one environment string with what is already staged: the
-		// mounted file below carries it. The trust variables REPLACE each
-		// client's bundle, so they are set only where a PEM is staged and
-		// even an older image's install_mitm_ca builds the file they name;
-		// without one, a current image still adds the mount to system trust.
+	} else {
+		// Too big for one environment string with the PEM the organisation
+		// staged (runnerd refuses a bundle that is too big alone): the mounted
+		// file carries it, and an agent image older than 0.9.3 trusts only the
+		// staged roots. Even an older image's install_mitm_ca builds the file
+		// the trust variables name from the staged PEM.
 		runner.SetSandboxCATrustVars(env, true)
 	}
 

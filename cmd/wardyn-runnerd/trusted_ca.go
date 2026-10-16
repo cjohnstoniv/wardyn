@@ -16,55 +16,28 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 )
 
-// maxTrustedCABundle is a sanity bound, not a delivery limit: the proxy gets its config on stdin and
-// the sandbox a mounted file, so neither is bound by an environment string. A bundle this big is
-// almost certainly the wrong file.
-const maxTrustedCABundle = 4 << 20
-
 // loadTrustedCA reads this runner's own corporate CA bundle, at startup only (a change needs a
-// restart). The first source set wins and only it is read: file (--trusted-ca-file, whose default
-// is WARDYN_TRUSTED_CA_FILE), else SSL_CERT_FILE, else SSL_CERT_DIR, a directory whose files are
-// read in lexical order. Every file goes through the daemon's certificate-only validation and
-// reconstruction (runner.TrustedCABundle), and an unreadable, empty or invalid one fails startup
-// with its name. None set is "", with no error.
-func loadTrustedCA(file string, getenv func(string) string) (bundle, source string, n int, err error) {
-	if file = strings.TrimSpace(file); file != "" {
-		source = "--trusted-ca-file / WARDYN_TRUSTED_CA_FILE " + file
-	} else if file = strings.TrimSpace(getenv("SSL_CERT_FILE")); file != "" {
-		source = "SSL_CERT_FILE " + file
+// restart), from file alone (--trusted-ca-file, whose default is WARDYN_TRUSTED_CA_FILE). The
+// ambient SSL_CERT_FILE and SSL_CERT_DIR are never read: a runner trusts only a bundle its operator
+// named. The file goes through the daemon's certificate-only validation and reconstruction
+// (runner.TrustedCABundle); an unreadable, empty or invalid one, or one over
+// runner.MaxEnvTrustedCAPEM, fails startup with its name. No file is "", with no error.
+//
+// The bound is a delivery limit: a sandbox on a run with no TLS-inspecting proxy trusts the bundle
+// only through WARDYN_MITM_CA_PEM, one environment string, so a bigger one would reach no client.
+func loadTrustedCA(file string) (bundle string, n int, err error) {
+	if file = strings.TrimSpace(file); file == "" {
+		return "", 0, nil
 	}
-	switch dir := strings.TrimSpace(getenv("SSL_CERT_DIR")); {
-	case source != "":
-		if bundle, n, err = readCAFile(file); err != nil {
-			return "", "", 0, fmt.Errorf("%s: %w", source, err)
-		}
-	case dir != "":
-		source = "SSL_CERT_DIR " + dir
-		entries, err := os.ReadDir(dir)
-		if err != nil {
-			return "", "", 0, fmt.Errorf("%s: %w", source, err)
-		}
-		for _, e := range entries {
-			path := filepath.Join(dir, e.Name())
-			if st, err := os.Stat(path); err == nil && st.IsDir() {
-				continue
-			}
-			b, c, err := readCAFile(path)
-			if err != nil {
-				return "", "", 0, fmt.Errorf("SSL_CERT_DIR file %s: %w", path, err)
-			}
-			bundle, n = bundle+b, n+c
-		}
-		if n == 0 {
-			return "", "", 0, fmt.Errorf("%s: no certificate files", source)
-		}
-	default:
-		return "", "", 0, nil
+	source := "--trusted-ca-file / WARDYN_TRUSTED_CA_FILE " + file
+	if bundle, n, err = readCAFile(file); err != nil {
+		return "", 0, fmt.Errorf("%s: %w", source, err)
 	}
-	if len(bundle) > maxTrustedCABundle {
-		return "", "", 0, fmt.Errorf("%s: %d certificates (%d bytes) is over the %d-byte sanity limit; name a file holding your organisation's roots with --trusted-ca-file", source, n, len(bundle), maxTrustedCABundle)
+	if len(bundle) > runner.MaxEnvTrustedCAPEM {
+		return "", 0, fmt.Errorf("%s: the corporate CA bundle is %d KiB; runners take at most %d KiB: name a file holding only your organisation's roots, not a merged system bundle",
+			source, (len(bundle)+1023)>>10, runner.MaxEnvTrustedCAPEM>>10)
 	}
-	return bundle, source, n, nil
+	return bundle, n, nil
 }
 
 func readCAFile(path string) (string, int, error) {
@@ -77,19 +50,22 @@ func readCAFile(path string) (string, int, error) {
 }
 
 // trustedCAAtStartup loads the bundle into opts and writes it to <stateDir>/trusted-ca.pem, the file
-// every sandbox mounts (mode 0644: the sandbox's user reads it), or removes a stale one when none is
-// configured.
+// every sandbox mounts (mode 0644: the sandbox's user reads it), or empties an earlier one when none
+// is configured.
 func trustedCAAtStartup(ctx context.Context, opts *serveOptions, stateDir string) error {
-	bundle, source, n, err := loadTrustedCA(opts.trustedCAFile, os.Getenv)
+	bundle, n, err := loadTrustedCA(opts.trustedCAFile)
 	if err != nil {
 		return err
 	}
 	path := filepath.Join(stateDir, "trusted-ca.pem")
 	if bundle == "" {
-		if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
-			return err
+		// A stopped sandbox created with a bundle still bind-mounts this file when it is revived, and
+		// Docker refuses to start one whose bind source is gone: it stays, emptied, which both
+		// sandbox scripts skip.
+		if _, err := os.Stat(path); errors.Is(err, fs.ErrNotExist) {
+			return nil
 		}
-		return nil
+		return os.WriteFile(path, nil, 0o644)
 	}
 	if err := os.WriteFile(path, []byte(bundle), 0o644); err != nil {
 		return err
@@ -98,11 +74,6 @@ func trustedCAAtStartup(ctx context.Context, opts *serveOptions, stateDir string
 		return err
 	}
 	opts.trustedCA, opts.trustedCAPath = bundle, path
-	slog.InfoContext(ctx, "corporate CA trust configured", "source", source, "cert_count", n, "file", path)
-	if len(bundle) > runner.MaxEnvTrustedCAPEM {
-		slog.WarnContext(ctx, "corporate CA bundle is over 64 KiB: sandboxes get it from the mounted file only, not WARDYN_MITM_CA_PEM. "+
-			"Agent images older than 0.9.3 ignore that file, and on a current image only clients that read system trust use it "+
-			"on a run without a TLS-inspecting proxy; name a file holding only your organisation's roots", "bytes", len(bundle))
-	}
+	slog.InfoContext(ctx, "corporate CA trust configured", "file", opts.trustedCAFile, "cert_count", n, "sandbox_file", path)
 	return nil
 }
