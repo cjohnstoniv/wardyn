@@ -104,6 +104,8 @@ func (s *Server) unpooledRecordingRefusal(ctx context.Context, req createRunRequ
 	case s.cfg.RecordingStore == nil:
 		records = false
 	case requestPlacement(req) == types.PlacementLocal:
+		// Unlike dispatch (applyRunRecording), a runner whose facts cannot be read is refused here:
+		// nothing has started yet, so required recording fails closed at the door.
 		f, _ := s.runnerFacts(requestRunnerID(req))
 		records = f.Records
 	case s.cfg.Runner != nil:
