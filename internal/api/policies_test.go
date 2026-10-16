@@ -274,3 +274,12 @@ func TestGetDeletePolicyBadID(t *testing.T) {
 		t.Errorf("delete bad id: code = %d, want 400", w.Code)
 	}
 }
+
+// The scope decoders match keys without regard to case, so a member read strips
+// a secret-naming key whatever its spelling.
+func TestRedactScopeSecretRefsIgnoresKeyCase(t *testing.T) {
+	got := string(redactScopeSecretRefs(json.RawMessage(`{"host":"github.com","Secret_Name":"n","KEY_SECRET_REF":"k"}`)))
+	if got != `{"host":"github.com"}` {
+		t.Errorf("redactScopeSecretRefs = %s, want only the host kept", got)
+	}
+}

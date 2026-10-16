@@ -112,6 +112,9 @@ func validatePolicySpecMode(spec types.RunPolicySpec, strict bool) error {
 			return fmt.Errorf("denied_domains[%d]: %w", i, err)
 		}
 	}
+	if err := validateAllowedMethods(spec.AllowedMethods); err != nil {
+		return err
+	}
 	for i, g := range spec.EligibleGrants {
 		if err := validateEligibleGrantMode(i, g, strict); err != nil {
 			return err
@@ -729,6 +732,17 @@ func validateGrantLaneExclusivity(grants []types.GrantSpec) error {
 				"CONNECT tunnel no parser can read — and a GitHub PAT is usually a user PAT, wider than the repo-scoped installation token. "+
 				"Choose one: drop the git_pat grant to keep the brokered, branch-confined lane, or drop the github_token grant to push with "+
 				"your own PAT, unbrokered and unbound. A git_pat for a non-brokered host (dev.azure.com, gitlab.com, GHES) is unaffected", i, host)
+		}
+	}
+	return nil
+}
+
+// validateAllowedMethods refuses a blank entry: it reads as a method restriction
+// and names no method, so the list would be stored and enforce nothing.
+func validateAllowedMethods(methods []string) error {
+	for i, m := range methods {
+		if strings.TrimSpace(m) == "" {
+			return fmt.Errorf("allowed_methods[%d]: must not be blank", i)
 		}
 	}
 	return nil

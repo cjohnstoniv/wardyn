@@ -38,6 +38,9 @@ func decodePolicyRequest(w http.ResponseWriter, r *http.Request, ado adoHostsLoa
 	if req.Name == "" {
 		return policyRequest{}, reasonPolicyRequestInvalid, "name is required"
 	}
+	if len(req.Name) > maxGovernanceProfileNameLen || !controlCharFree(req.Name) { // a handle, bounded like a profile's
+		return policyRequest{}, reasonPolicyRequestInvalid, "name is invalid"
+	}
 	repos := make([]string, len(req.Spec.WorkspaceRepos))
 	for i, wr := range req.Spec.WorkspaceRepos {
 		repos[i] = wr.Repo
@@ -253,8 +256,10 @@ func redactScopeSecretRefs(scope json.RawMessage) json.RawMessage {
 		return nil
 	}
 	found := false
-	for _, k := range memberSecretScopeKeys {
-		if _, ok := fields[k]; ok {
+	// The decoders that read a scope match its keys without regard to case, so
+	// "Secret_Name" names the secret as surely as "secret_name".
+	for k := range fields {
+		if slices.ContainsFunc(memberSecretScopeKeys, func(m string) bool { return strings.EqualFold(k, m) }) {
 			delete(fields, k)
 			found = true
 		}
