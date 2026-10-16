@@ -675,7 +675,8 @@ func TestSCIMSuspendLeavesAnotherPrincipalSharingTheEmail(t *testing.T) {
 
 // With no identity row binding a principal, the suspension resolves the SCIM user's emails to subs through
 // the tokens stamped with them: that person's runs are killed, keys deleted, token revoked. An email that
-// names more than one principal names nobody: the suspension touches nothing, answers 5xx and records why.
+// names more than one principal names nobody: the suspension deactivates the identity row alone, leaves its
+// step 1 pending with the reason, answers 5xx and records why.
 func TestSCIMSuspendResolvesEmailsToSubs(t *testing.T) {
 	t.Run("a person known only by a token stamped with their email", func(t *testing.T) {
 		e := newSCIMEnv(t)
@@ -711,11 +712,19 @@ func TestSCIMSuspendResolvesEmailsToSubs(t *testing.T) {
 			}
 		}
 		id := e.listIDs(e.a, "externalId", oidGhost)[0]
-		if e.identity(id).DeactivatedAt != nil {
-			t.Error("step 1 committed")
+		if row := e.identity(id); row.DeactivatedAt == nil || row.PurgeAfter != nil {
+			t.Errorf("identity = %+v, want it deactivated and no purge scheduled", row)
 		}
-		if jobs, err := e.st.ListDeprovisionJobs(context.Background(), uuid.MustParse(id), store.JobKindSuspend); err != nil || len(jobs) != 0 {
-			t.Errorf("ledger rows = %+v (%v), want none", jobs, err)
+		if refused, err := e.st.IdentityRefused(context.Background(), e.issuer, e.tenant, oidGhost, ""); err != nil || !refused {
+			t.Errorf("a sign-in as the object = refused %v (%v), want refused", refused, err)
+		}
+		if _, err := e.st.IssueLoginIdentity(context.Background(), store.LoginIdentity{Principal: "sub-ghost", Issuer: e.issuer, TenantID: e.tenant,
+			ObjectID: oidGhost, Email: "twin@corp.example"}, time.Now()); !errors.Is(err, store.ErrIdentityDeactivated) {
+			t.Errorf("issuing a session to the object = %v, want %v", err, store.ErrIdentityDeactivated)
+		}
+		jobs, err := e.st.ListDeprovisionJobs(context.Background(), uuid.MustParse(id), store.JobKindSuspend)
+		if err != nil || len(jobs) != 1 || jobs[0].Step != store.JobStepCutoff || jobs[0].Done || jobs[0].LastError != reasonOwnerAmbiguous {
+			t.Errorf("ledger rows = %+v (%v), want step 1 alone, pending with %s", jobs, err, reasonOwnerAmbiguous)
 		}
 		if e.tokenRevoked(tok1) || e.tokenRevoked(tok2) {
 			t.Error("a twin's token was revoked")
@@ -725,6 +734,111 @@ func TestSCIMSuspendResolvesEmailsToSubs(t *testing.T) {
 		}
 		if rows := e.rows(e.a, "person.deprovision"); len(rows) != 2 || dataOf(t, rows[1])["reason"] != reasonOwnerAmbiguous {
 			t.Errorf("person.deprovision rows = %+v, want one %s refusal per attempt", rows, reasonOwnerAmbiguous)
+		}
+	})
+}
+
+// A refused suspension reaches only what the identity row itself proves, and the rest stays pending until
+// the person's emails resolve.
+func TestSCIMSuspendOfAnUnresolvedOwnerCutsOnlyTheProvenForms(t *testing.T) {
+	const twin = "twin@corp.example"
+	seedTwins := func(e *scimEnv) (tok1, tok2 uuid.UUID, raw1, raw2 string, run1 uuid.UUID) {
+		tok1, raw1 = e.seedToken("sub-t1", twin)
+		tok2, raw2 = e.seedToken("sub-t2", twin)
+		return tok1, tok2, raw1, raw2, e.seedRun("sub-t1", types.RunRunning)
+	}
+	cutoffFor := func(e *scimEnv, sub string) bool {
+		var n int
+		if err := e.pool.QueryRow(context.Background(), `SELECT count(*) FROM oidc_session_revocations WHERE sub = $1`, sub).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n > 0
+	}
+
+	t.Run("a retry once the emails resolve runs the whole suspension", func(t *testing.T) {
+		e := newSCIMEnv(t)
+		tok1, tok2, raw1, raw2, run1 := seedTwins(e)
+		form := entraPrincipalPrefix + e.tenant + ":" + oidGhost
+		id := e.postUserID(e.a, oidGhost, twin, twin)
+		if w := e.patch(e.a, id, patchOf("false")); w.Code != http.StatusInternalServerError {
+			t.Fatalf("suspend = %d %s, want 5xx", w.Code, w.Body.String())
+		}
+		if e.identity(id).DeactivatedAt == nil || !cutoffFor(e, form) || cutoffFor(e, twin) {
+			t.Error("step 1 did not cut exactly the object-id form")
+		}
+		if e.tokenRevoked(tok1) || e.tokenRevoked(tok2) || !e.tokenWorks(e.b, raw1) || !e.tokenWorks(e.b, raw2) || e.runState(run1) != types.RunRunning {
+			t.Error("a principal the address names was reached")
+		}
+		if fails, err := e.st.ListDeprovisionFailures(context.Background(), 10); err != nil || len(fails) != 1 || fails[0].Step != store.JobStepCutoff || fails[0].LastError != reasonOwnerAmbiguous {
+			t.Errorf("failures = %+v (%v), want step 1 pending with %s", fails, err, reasonOwnerAmbiguous)
+		}
+		if len(e.rows(e.a, "scim.user.deactivate")) != 0 {
+			t.Error("a suspension that is not done was recorded as done")
+		}
+
+		if _, err := e.pool.Exec(context.Background(), `DELETE FROM api_tokens WHERE id = $1`, tok2); err != nil {
+			t.Fatal(err)
+		}
+		if w := e.patch(e.b, id, patchOf("false")); w.Code != http.StatusOK {
+			t.Fatalf("the retry = %d %s", w.Code, w.Body.String())
+		}
+		if !e.allJobsDone(id) || !cutoffFor(e, twin) || len(e.rows(e.b, "scim.user.deactivate")) != 1 {
+			t.Error("the retry did not finish the suspension")
+		}
+		if !e.tokenRevoked(tok1) || e.runState(run1) != types.RunKilled {
+			t.Error("the retry did not reach the one principal the address names")
+		}
+	})
+
+	t.Run("an object-id form another issuer's sign-in holds is not cut", func(t *testing.T) {
+		e := newSCIMEnv(t)
+		tok1, tok2, _, _, _ := seedTwins(e)
+		form := entraPrincipalPrefix + e.tenant + ":" + oidGhost
+		other := e.seedOtherIssuersPrincipal(form, oidGhost)
+		id := e.postUserID(e.a, oidGhost, twin, twin)
+		if w := e.patch(e.a, id, patchOf("false")); w.Code != http.StatusInternalServerError {
+			t.Fatalf("suspend = %d %s, want 5xx", w.Code, w.Body.String())
+		}
+		if e.identity(id).DeactivatedAt == nil {
+			t.Error("the leaver's identity row is active")
+		}
+		if row, err := e.st.GetIdentityByObject(context.Background(), other.issuer, e.tenant, oidGhost); err != nil || row.DeactivatedAt != nil || row.PurgeAfter != nil {
+			t.Errorf("the other issuer's identity = %+v (%v), want it untouched", row, err)
+		}
+		if refused, err := e.st.IdentityRefused(context.Background(), other.issuer, e.tenant, oidGhost, form); err != nil || refused {
+			t.Errorf("the other issuer's sign-in = refused %v (%v), want admitted", refused, err)
+		}
+		if cutoffFor(e, form) || e.tokenRevoked(tok1) || e.tokenRevoked(tok2) {
+			t.Error("a form the identity row does not prove was cut")
+		}
+		e.keptRecords(other, "after the refused suspension")
+	})
+
+	t.Run("a sign-in that binds the row first is suspended in full", func(t *testing.T) {
+		e := newSCIMEnv(t)
+		tok1, tok2, raw1, _, run1 := seedTwins(e)
+		const sub = "sub-late"
+		id := e.postUserID(e.a, oidGhost, twin, twin)
+		var run uuid.UUID
+		wrapped := &bindBeforeSuspend{PG: e.st, hook: func() {
+			if _, err := e.st.IssueLoginIdentity(context.Background(), store.LoginIdentity{Principal: sub, Issuer: e.issuer, TenantID: e.tenant,
+				ObjectID: oidGhost, Email: twin}, time.Now()); err != nil {
+				t.Fatal(err)
+			}
+			run = e.seedRun(sub, types.RunRunning)
+		}}
+		n := e.node(func(c *Config) { c.Store = wrapped })
+		if w := e.patch(n, id, patchOf("false")); w.Code != http.StatusOK {
+			t.Fatalf("suspend = %d %s", w.Code, w.Body.String())
+		}
+		if row := e.identity(id); row.Principal != sub || row.DeactivatedAt == nil || !e.allJobsDone(id) {
+			t.Errorf("identity = %+v, want %q bound, deactivated and the ledger done", row, sub)
+		}
+		if e.runState(run) != types.RunKilled {
+			t.Error("the newly bound principal's run survived")
+		}
+		if e.tokenRevoked(tok1) || e.tokenRevoked(tok2) || !e.tokenWorks(e.b, raw1) || e.runState(run1) != types.RunRunning {
+			t.Error("a principal the address names was reached")
 		}
 	})
 }

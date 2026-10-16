@@ -145,7 +145,7 @@ func (s *Server) leaverForms(ctx context.Context, st scimStore, ident store.Prin
 		c := entraPrincipalPrefix + tenant + ":" + ident.ObjectID
 		f.bound = nonEmptyForms(append(f.bound, c)...)
 		if err := f.proveForm(ctx, st, ident, c); err != nil {
-			f.refusal = reasonIdentityDirectoryUnreadable
+			f.notOwned, f.unproved, f.refusal = c, c, reasonIdentityDirectoryUnreadable
 			return f, err
 		}
 	}
@@ -276,18 +276,32 @@ func (s *Server) suspendStepOne(ctx context.Context, st scimStore, id uuid.UUID)
 		return ident, leaverForms{}, nil, err
 	}
 	forms, err := s.deprovisionForms(ctx, st, ident, store.JobKindSuspend)
-	if err != nil {
+	if err != nil && forms.refusal == "" {
 		return ident, forms, nil, err
 	}
-	jobs, err := st.ListDeprovisionJobs(ctx, id, store.JobKindSuspend)
-	if err != nil {
+	jobs, jobsErr := st.ListDeprovisionJobs(ctx, id, store.JobKindSuspend)
+	if jobsErr != nil {
+		return ident, forms, nil, errors.Join(err, jobsErr)
+	}
+	cutoff, ok := jobByKey(jobs, store.JobStepCutoff, "")
+	stepOne := ident.DeactivatedAt == nil || !ok || !cutoff.Done
+	if forms.refusal != "" {
+		// The forms the identity row itself proves are still cut: the row and its own binding, never an
+		// email, and not the object-id form while another sign-in may hold it. Step 1 stays pending with the
+		// reason and no other step runs, so a retry that resolves every form runs the whole suspension.
+		if stepOne {
+			proven := forms.destructive().bound
+			_, partialErr := st.SuspendIdentity(ctx, store.SuspendPlan{IdentityID: id, Principal: ident.Principal,
+				Principals: proven, CutoffSubs: proven, Partial: forms.refusal})
+			err = errors.Join(err, partialErr)
+		}
 		return ident, forms, nil, err
 	}
 	keys := []store.JobKey{{Step: jobStepAuditDeact}, {Step: jobStepAuditDeprov}}
 	for _, t := range forms.targets {
 		keys = append(keys, store.JobKey{Step: jobStepSweep, Target: t})
 	}
-	if cutoff, ok := jobByKey(jobs, store.JobStepCutoff, ""); ident.DeactivatedAt == nil || !ok || !cutoff.Done {
+	if stepOne {
 		// The pending steps commit with the deactivation, so a crash right after it leaves them for the sweeper.
 		plan := store.SuspendPlan{IdentityID: id, Principal: ident.Principal, Principals: forms.bound, PurgePrincipals: forms.destructive().bound,
 			CutoffSubs: forms.cutTargets(), PendingJobs: keys}

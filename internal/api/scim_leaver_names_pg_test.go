@@ -178,7 +178,8 @@ func TestPG_SCIMLeaver_AnUnboundLeaversAddressNeverReachesATokenEmailClaimant(t 
 }
 
 // An unbound leaver whose address two people claimed at sign-in: the address names nobody alone, so
-// neither is reached. The suspension and the purge refuse, answer 5xx and say why in the audit trail.
+// neither is reached. The suspension deactivates the leaver's identity row alone; it and the purge refuse
+// the rest, answer 5xx and say why in the audit trail.
 func TestPG_SCIMLeaver_AnUnboundLeaversAmbiguousAddressReachesNobody(t *testing.T) {
 	e := newSCIMEnv(t)
 	var claimants []bystander
@@ -189,8 +190,8 @@ func TestPG_SCIMLeaver_AnUnboundLeaversAmbiguousAddressReachesNobody(t *testing.
 	id := e.postUserID(e.a, leaverOID, earlyName, earlyName)
 
 	e.removeLeaver(t, id, http.StatusInternalServerError, http.StatusInternalServerError, claimants...)
-	if e.identity(id).DeactivatedAt != nil {
-		t.Error("the refused suspension deactivated the identity")
+	if e.identity(id).DeactivatedAt == nil {
+		t.Error("the refused suspension left the leaver's identity active")
 	}
 	// DELETE completes the suspension first, so its refusal is the suspension's too.
 	for req, n := range map[string]*scimNode{"suspend": e.a, "DELETE": e.b} {

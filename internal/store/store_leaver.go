@@ -68,6 +68,10 @@ type SuspendPlan struct {
 	// PendingJobs are added as pending ledger rows in the same transaction, so a crash after the
 	// commit still leaves the rest of the suspension for the sweeper. Existing rows are kept.
 	PendingJobs []JobKey
+	// Partial is why the plan names only some of the person's forms. The cutoff step then stays pending
+	// with it as its last error, so a later plan with every form runs step 1 again, and no purge is
+	// scheduled.
+	Partial string
 }
 
 // SuspendResult is step 1's outcome. WasActive says the identity was active before it, so this
@@ -298,7 +302,8 @@ var ErrIdentityRebound = errors.New("store: the identity was bound since the sus
 // SuspendIdentity is step 1 of a suspension, one transaction. It takes every row it will change
 // FOR UPDATE, in id order (so a sign-in holding one of them finishes first or is refused), writes
 // the session cutoff for every sub and email form, deactivates the identity rows and bumps their
-// authority epoch, stamps the people rows, records the step done and the plan's pending steps. A
+// authority epoch, stamps the people rows, records the step done (pending under a Partial plan) and the
+// plan's pending steps. A
 // suspension of an active identity first clears the ledger of any earlier one.
 func (s PG) SuspendIdentity(ctx context.Context, p SuspendPlan) (SuspendResult, error) {
 	tx, err := s.Pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
@@ -307,6 +312,10 @@ func (s PG) SuspendIdentity(ctx context.Context, p SuspendPlan) (SuspendResult, 
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 	principals := nonEmptyStrings(p.Principals)
+	purgeAfter := p.PurgeAfter
+	if p.Partial != "" {
+		purgeAfter = 0
+	}
 	rows, err := tx.Query(ctx, `
 		SELECT id, deactivated_at IS NULL, COALESCE(principal, '') FROM principal_identities
 		 WHERE id = $1 OR principal = ANY($2::text[]) ORDER BY id FOR UPDATE`, p.IdentityID, principals)
@@ -345,7 +354,7 @@ func (s PG) SuspendIdentity(ctx context.Context, p SuspendPlan) (SuspendResult, 
 		   SET deactivated_at = COALESCE(deactivated_at, clock_timestamp()), authority_epoch = authority_epoch + 1,
 		       purge_after = COALESCE(purge_after, CASE WHEN $3::bigint > 0 AND (id = $1 OR principal = ANY($4::text[]))
 		                                           THEN clock_timestamp() + $3::bigint * interval '1 microsecond' END)
-		 WHERE id = $1 OR principal = ANY($2::text[])`, p.IdentityID, principals, p.PurgeAfter.Microseconds(), nonEmptyStrings(p.PurgePrincipals)); err != nil {
+		 WHERE id = $1 OR principal = ANY($2::text[])`, p.IdentityID, principals, purgeAfter.Microseconds(), nonEmptyStrings(p.PurgePrincipals)); err != nil {
 		return SuspendResult{}, fmt.Errorf("store: deactivate identities: %w", err)
 	}
 	cutoffSubs := nonEmptyStrings(p.CutoffSubs)
@@ -374,12 +383,13 @@ func (s PG) SuspendIdentity(ctx context.Context, p SuspendPlan) (SuspendResult, 
 	// proof that the identity's current deactivation is its own (ownSuspension).
 	detail, _ := json.Marshal(map[string]int{"sessions_cut": len(cutoffSubs)})
 	if _, err = tx.Exec(ctx, `
-		INSERT INTO deprovision_jobs (identity_id, kind, step, target, state, attempts, detail)
-		VALUES ($1, $2, $3, '', 'done', 1, $4::jsonb || jsonb_build_object('deactivated_at_us',
+		INSERT INTO deprovision_jobs (identity_id, kind, step, target, state, attempts, last_error, detail)
+		VALUES ($1, $2, $3, '', CASE WHEN $5 = '' THEN 'done' ELSE 'pending' END, 1, $5, $4::jsonb || jsonb_build_object('deactivated_at_us',
 		        (SELECT (extract(epoch FROM i.deactivated_at) * 1000000)::bigint FROM principal_identities i WHERE i.id = $1)))
 		ON CONFLICT (identity_id, kind, step, target) DO UPDATE
-		   SET state = 'done', attempts = deprovision_jobs.attempts + 1, detail = EXCLUDED.detail, updated_at = now()`,
-		p.IdentityID, JobKindSuspend, JobStepCutoff, detail); err != nil {
+		   SET state = EXCLUDED.state, attempts = deprovision_jobs.attempts + 1, last_error = EXCLUDED.last_error,
+		       detail = EXCLUDED.detail, updated_at = now()`,
+		p.IdentityID, JobKindSuspend, JobStepCutoff, detail, p.Partial); err != nil {
 		return SuspendResult{}, fmt.Errorf("store: record cutoff step: %w", err)
 	}
 	for _, k := range p.PendingJobs {

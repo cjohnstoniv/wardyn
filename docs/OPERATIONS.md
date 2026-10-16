@@ -1449,8 +1449,12 @@ lose access now, do not wait for it:
     - A person no sign-in has bound is known only by their emails, so for them every alias is cut and the one principal
       each alias names is swept as theirs. A cutoff under such an alias also ends a session or token whose email claim
       spells it.
-    - An alias that names more than one principal, or a directory that cannot be read, stops a suspension or purge
-      before it touches anything: the request answers 5xx and a `person.deprovision` row says why.
+    - An alias that names more than one principal, or a directory that cannot be read, stops a purge before it
+      touches anything: the request answers 5xx and a `person.deprovision` row says why.
+    - A suspension in that state still deactivates the person's own identity row and cuts the sessions of the
+      principal that row binds, never an email and never an object-id form another issuer's sign-in holds. Its
+      other steps wait: it answers 5xx, a `person.deprovision` row says why, it stays pending with the reason on
+      the SCIM status card, and a retry once the emails name one principal runs it in full.
     - A SCIM group removal stops the same way before it cuts a session or revokes a token. It stays pending with the
       reason, listed on the SCIM status card, and a retry finishes it once the person's emails name one principal.
 - **Role changes that are not SCIM group removals** at the identity provider still lag until the person signs in

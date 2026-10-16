@@ -474,7 +474,7 @@ func (s *scimCovStore) SuspendIdentity(_ context.Context, p store.SuspendPlan) (
 			i.DeactivatedAt = &t
 		}
 		i.AuthorityEpoch++
-		if i.PurgeAfter == nil && p.PurgeAfter > 0 && (i.ID == p.IdentityID || slices.Contains(p.PurgePrincipals, i.Principal)) {
+		if i.PurgeAfter == nil && p.PurgeAfter > 0 && p.Partial == "" && (i.ID == p.IdentityID || slices.Contains(p.PurgePrincipals, i.Principal)) {
 			t := s.now.Add(p.PurgeAfter)
 			i.PurgeAfter = &t
 		}
@@ -487,9 +487,10 @@ func (s *scimCovStore) SuspendIdentity(_ context.Context, p store.SuspendPlan) (
 	cutoff := store.JobKey{Step: store.JobStepCutoff}
 	detail := map[string]int{"sessions_cut": len(p.CutoffSubs), "deactivated_at_us": int(target.DeactivatedAt.UnixMicro())}
 	if j := s.findJob(p.IdentityID, store.JobKindSuspend, cutoff); j != nil {
-		j.Done, j.Attempts, j.Detail = true, j.Attempts+1, detail
+		j.Done, j.Attempts, j.LastError, j.Detail = p.Partial == "", j.Attempts+1, p.Partial, detail
 	} else {
-		s.jobs = append(s.jobs, &store.DeprovisionJob{IdentityID: p.IdentityID, Kind: store.JobKindSuspend, Step: cutoff.Step, Done: true, Attempts: 1, Detail: detail})
+		s.jobs = append(s.jobs, &store.DeprovisionJob{IdentityID: p.IdentityID, Kind: store.JobKindSuspend, Step: cutoff.Step,
+			Done: p.Partial == "", LastError: p.Partial, Attempts: 1, Detail: detail})
 	}
 	res.Epoch = target.AuthorityEpoch
 	return res, nil
