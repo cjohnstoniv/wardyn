@@ -17,10 +17,12 @@ import (
 // delivers a managed file (see docker's deliverManagedFiles and volumeOverSecretDir).
 const TrustedCAMountPath = "/etc/wardyn-trusted-ca.pem"
 
-// MaxEnvTrustedCAPEM is the largest runner bundle also copied into WARDYN_MITM_CA_PEM, the fallback
-// for agent images whose install_mitm_ca predates TrustedCAMountPath. That variable is one
-// environment string, and Linux refuses to start a process with one over 128 KiB, so a bigger
-// bundle reaches the sandbox through the mounted file only.
+// MaxEnvTrustedCAPEM is the largest runner bundle wardyn-runnerd accepts, and the largest
+// WARDYN_MITM_CA_PEM it builds by appending one. That variable is one environment string, and Linux
+// refuses to start a process with one over 128 KiB. It is also the only way the bundle reaches a
+// sandbox's clients on a run with no PEM staged, so runnerd refuses a bigger bundle at startup.
+// When the bundle plus an organisation-staged PEM exceed it, the bundle rides only the mount at
+// TrustedCAMountPath, and an agent image older than 0.9.3 then trusts only the organisation's roots.
 const MaxEnvTrustedCAPEM = 64 << 10
 
 // ParseCertsPEM decodes every "CERTIFICATE" PEM block in raw. Any block that

@@ -1629,10 +1629,11 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - Needs an agent image that installs the bundle (`install_mitm_ca` in `agent-run-lib.sh`; every published image from 0.7 does, including `agent-base`).
 - A BYOI image that never calls it sees the REPLACE-vars point at a missing file.
 - **On a laptop runner** (`wardyn-runnerd serve`, flag `--trusted-ca-file`) the organisation's bundle never reaches the run's proxy; the runner's own does ([`cmd/wardyn-runnerd/trusted_ca.go`](../cmd/wardyn-runnerd/trusted_ca.go)).
-- Sources, first set wins and only it is read: the flag, `WARDYN_TRUSTED_CA_FILE`, `SSL_CERT_FILE`, then `SSL_CERT_DIR` (one directory, its files read in lexical order).
+- Never read from `SSL_CERT_FILE` or `SSL_CERT_DIR`; run `setup --trusted-ca-file "$SSL_CERT_FILE"` to use one.
 - Same validation as `wardynd`, read at startup only; a bad file (named) refuses startup.
 - It becomes every proxy's `trusted_ca_pem` (create and revive, on stdin) and is written to `<state dir>/trusted-ca.pem`, which every sandbox mounts read-only at `/etc/wardyn-trusted-ca.pem`.
-- While it and the CA already staged fit in 64 KiB, it is also appended to `WARDYN_MITM_CA_PEM` for agent images older than 0.9.3; over 4 MiB refuses startup.
+- Over 64 KiB refuses startup: with nothing staged, the sandbox trusts it only through `WARDYN_MITM_CA_PEM`.
+- Appended there while it and the organisation's staged CA fit 64 KiB; beyond, only the mounted file carries it (images from 0.9.3).
 - On `wardynd` boot warns over 64 KiB and refuses over 120 KiB: the sandbox gets it in one environment variable, which Linux caps at 128 KiB.
 - `setup --trusted-ca-file` writes it into the service definition; a rerun keeps it.
 

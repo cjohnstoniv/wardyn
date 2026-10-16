@@ -89,21 +89,21 @@ func TestWithTrustedCA(t *testing.T) {
 	}
 }
 
-// The runner's bundle file is mounted read-only into every sandbox. When it and the PEM already
-// staged do not fit one environment string, the bundle is left out of WARDYN_MITM_CA_PEM. The trust
-// variables (REPLACE semantics) are then set only where a PEM is staged, because an agent image
-// older than the mount builds the file they name only from that PEM.
+// The runner's bundle file is mounted read-only into every sandbox. runnerd refuses a bundle over
+// 64 KiB, so with nothing staged it always fits WARDYN_MITM_CA_PEM. When it and the PEM the
+// organisation staged do not fit one environment string, it is left out and rides the mount alone;
+// the trust variables still name the file even an older image builds from the staged PEM.
 func TestRunnerTrustedCA_LargeBundleRidesTheMountOnly(t *testing.T) {
 	trustVars := map[string]string{}
 	runner.SetSandboxCATrustVars(trustVars, false)
 	for _, tc := range []struct {
 		name, staged string
 		bundle       int
-		wantVars     bool
+		appended     bool
 	}{
-		{name: "over 64 KiB with a PEM staged", staged: "run-ca-pem", bundle: runner.MaxEnvTrustedCAPEM + 1, wantVars: true},
-		{name: "over 64 KiB with nothing staged", bundle: runner.MaxEnvTrustedCAPEM + 1},
-		{name: "70 KiB staged plus a 60 KiB bundle", staged: strings.Repeat("s", 70<<10), bundle: 60 << 10, wantVars: true},
+		{name: "a 64 KiB bundle with nothing staged", bundle: runner.MaxEnvTrustedCAPEM, appended: true},
+		{name: "10 KiB staged plus a 60 KiB bundle", staged: strings.Repeat("s", 10<<10), bundle: 60 << 10},
+		{name: "70 KiB staged plus a 60 KiB bundle", staged: strings.Repeat("s", 70<<10), bundle: 60 << 10},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			big := strings.Repeat("x", tc.bundle)
@@ -129,12 +129,12 @@ func TestRunnerTrustedCA_LargeBundleRidesTheMountOnly(t *testing.T) {
 				k, v, _ := strings.Cut(kv, "=")
 				env[k] = v
 			}
-			if env["WARDYN_MITM_CA_PEM"] != tc.staged {
-				t.Errorf("WARDYN_MITM_CA_PEM has %d bytes, want only the %d staged", len(env["WARDYN_MITM_CA_PEM"]), len(tc.staged))
+			if pem := env["WARDYN_MITM_CA_PEM"]; tc.appended != strings.Contains(pem, big) || !tc.appended && pem != tc.staged {
+				t.Errorf("WARDYN_MITM_CA_PEM has %d bytes (staged %d, bundle %d); want the bundle appended: %v", len(pem), len(tc.staged), len(big), tc.appended)
 			}
 			for k, v := range trustVars {
-				if got, set := env[k]; tc.wantVars && got != v || !tc.wantVars && set {
-					t.Errorf("%s = %q (set %v); want set to %q: %v", k, got, set, v, tc.wantVars)
+				if env[k] != v {
+					t.Errorf("%s = %q; want %q", k, env[k], v)
 				}
 			}
 			if got := trustedCAOf(t, f.stdinOf(proxyContainerName(spec.RunID))); got != big {

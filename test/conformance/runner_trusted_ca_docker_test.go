@@ -89,12 +89,16 @@ func TestRunnerTrustedCADocker(t *testing.T) {
 		t.Fatal(err)
 	}
 	proxyImage := cmp.Or(os.Getenv("WARDYN_TEST_PROXY_IMAGE"), bootEgressProxyImage)
-	spec := func() runner.SandboxSpec {
+	spec := func(staged string, unstaged bool) runner.SandboxSpec {
 		proxyURL := "http://wardyn-proxy:" + strconv.Itoa(runner.ProxyListenPort)
 		// What dispatch stages for an intercepted run: proxy env and the run's own CA. One component
 		// secret keeps the managed-file guards in play beside the bundle's mount.
-		env := map[string]string{"HTTPS_PROXY": proxyURL, "https_proxy": proxyURL, "WARDYN_MITM_CA_PEM": runCert}
+		env := map[string]string{"HTTPS_PROXY": proxyURL, "https_proxy": proxyURL, "WARDYN_MITM_CA_PEM": runCert + staged}
 		runner.SetSandboxCATrustVars(env, false)
+		if unstaged {
+			// A run with nothing staged: no interception CA, no organisation roots, no trust variables.
+			env = map[string]string{"HTTPS_PROXY": proxyURL, "https_proxy": proxyURL}
+		}
 		return runner.SandboxSpec{
 			RunID:            uuid.New(),
 			Image:            "wardyn/agent-claude-code:local",
@@ -116,8 +120,9 @@ func TestRunnerTrustedCADocker(t *testing.T) {
 		}
 	}
 	// start runs a sandbox the way runnerd composes the driver: the bundle for the proxy, and the
-	// same bundle as a file the sandbox mounts.
-	start := func(t *testing.T, trusted string) string {
+	// same bundle as a file the sandbox mounts. staged stands in for organisation roots dispatch
+	// staged after the run's CA.
+	start := func(t *testing.T, trusted, staged string, unstaged bool) (string, *docker.Driver, string) {
 		t.Helper()
 		var file string
 		if trusted != "" {
@@ -132,7 +137,7 @@ func TestRunnerTrustedCADocker(t *testing.T) {
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 		defer cancel()
-		s := spec()
+		s := spec(staged, unstaged)
 		sb, err := sub.CreateSandbox(ctx, s)
 		if err != nil {
 			t.Fatalf("CreateSandbox: %v", err)
@@ -145,7 +150,7 @@ func TestRunnerTrustedCADocker(t *testing.T) {
 		// The idle main process assembles the CA bundle the curl below reads.
 		for deadline := time.Now().Add(30 * time.Second); ; {
 			if code, _ := sandboxExec(t, cli, sb.Ref, "sh", "-c", "test -s /tmp/wardyn/ca-bundle.pem"); code == 0 {
-				return sb.Ref
+				return sb.Ref, sub, file
 			}
 			if time.Now().After(deadline) {
 				t.Fatal("the sandbox never assembled /tmp/wardyn/ca-bundle.pem")
@@ -159,7 +164,7 @@ func TestRunnerTrustedCADocker(t *testing.T) {
 	}
 
 	t.Run("with the runner's bundle", func(t *testing.T) {
-		ref := start(t, bundle)
+		ref, _, _ := start(t, bundle, "", false)
 		code, out := curl(t, ref, mitmHost)
 		if code != 0 || !strings.Contains(out, "status=202") || !strings.Contains(out, runCACN) {
 			t.Fatalf("intercepted host: exit %d; want 202 through the proxy's interception (issuer %q), so the proxy trusted the corporate CA:\n%s", code, runCACN, out)
@@ -173,24 +178,39 @@ func TestRunnerTrustedCADocker(t *testing.T) {
 		}
 	})
 
-	// Over 128 KiB no environment string can carry it: the sandbox trusts it through the mounted file
-	// alone, and the proxy through its stdin config.
-	t.Run("a bundle over 128 KiB", func(t *testing.T) {
-		large := bundle
-		for i := 0; len(large) <= 128<<10; i++ {
-			c, _ := runCAPEM(t, now.Add(time.Duration(i)))
-			large += c
+	// With nothing staged the env copy is the bundle's route to every client, on any agent image.
+	t.Run("nothing staged", func(t *testing.T) {
+		ref, _, _ := start(t, bundle, "", true)
+		code, out := sandboxExec(t, cli, ref, "sh", "-c", `e=$(mktemp) && printf '%s\n' "$WARDYN_MITM_CA_PEM" > "$e" && grep -c BEGIN "$e" && `+
+			`curl -sS -f --max-time 20 --cacert "$e" -o /dev/null -w 'status=%{http_code}\n' https://`+tunnelHost+`:8443/`)
+		if code != 0 || !strings.Contains(out, "status=202") || !strings.HasPrefix(out, "1\n") {
+			t.Fatalf("tunneled host trusting only WARDYN_MITM_CA_PEM (want the bundle's one certificate): exit %d:\n%s", code, out)
 		}
-		ref := start(t, large)
-		if code, out := sandboxExec(t, cli, ref, "sh", "-c", `[ -z "$WARDYN_MITM_CA_PEM" ] || printf %s "$WARDYN_MITM_CA_PEM" | grep -c BEGIN`); code != 0 || strings.TrimSpace(out) != "1" {
-			t.Fatalf("WARDYN_MITM_CA_PEM should hold only the run's CA (the bundle rides the file): exit %d %q", code, out)
+		if code, out = curl(t, ref, tunnelHost); code != 0 || !strings.Contains(out, "status=202") {
+			t.Fatalf("tunneled host through the trust variables: exit %d:\n%s", code, out)
+		}
+	})
+
+	// runnerd refuses a bundle over 64 KiB at startup (cmd/wardyn-runnerd's TestLoadTrustedCARefuses
+	// and TestServeTrustedCAAtStartup). What remains is a bundle that fits alone but not after the
+	// organisation's staged roots: it rides the mounted file only, and the proxy its stdin config.
+	t.Run("an organisation CA staged past 64 KiB", func(t *testing.T) {
+		var staged string
+		n := 0
+		for ; len(runCert+staged) <= runner.MaxEnvTrustedCAPEM; n++ {
+			c, _ := runCAPEM(t, now.Add(time.Duration(n+1)))
+			staged += c
+		}
+		ref, _, _ := start(t, bundle, staged, false)
+		if code, out := sandboxExec(t, cli, ref, "sh", "-c", `printf %s "$WARDYN_MITM_CA_PEM" | grep -c BEGIN`); code != 0 || strings.TrimSpace(out) != strconv.Itoa(n+1) {
+			t.Fatalf("WARDYN_MITM_CA_PEM should hold only the %d staged certificates (the bundle rides the file): exit %d %q", n+1, code, out)
 		}
 		code, out := curl(t, ref, mitmHost)
 		if code != 0 || !strings.Contains(out, "status=202") || !strings.Contains(out, runCACN) {
-			t.Fatalf("intercepted host with a %d-byte bundle: exit %d:\n%s", len(large), code, out)
+			t.Fatalf("intercepted host with %d bytes staged: exit %d:\n%s", len(staged), code, out)
 		}
 		if code, out = curl(t, ref, tunnelHost); code != 0 || !strings.Contains(out, "status=202") {
-			t.Fatalf("tunneled host with a %d-byte bundle: exit %d:\n%s", len(large), code, out)
+			t.Fatalf("tunneled host with %d bytes staged: exit %d:\n%s", len(staged), code, out)
 		}
 		// The curls above trust the bundle the idle script assembled. A task-mode run assembles it
 		// with the image's own install_mitm_ca instead, which reads the mount only from 0.9.3 on.
@@ -206,8 +226,28 @@ func TestRunnerTrustedCADocker(t *testing.T) {
 		})
 	})
 
+	// A start with no CA empties the state-dir file rather than removing it (trustedCAAtStartup), so a
+	// stopped sandbox that bind-mounts it still revives.
+	t.Run("revived after the CA is removed", func(t *testing.T) {
+		ref, sub, file := start(t, bundle, "", false)
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+		if _, err := cli.ContainerStop(ctx, ref, dockerclient.ContainerStopOptions{}); err != nil {
+			t.Fatalf("stop the agent: %v", err)
+		}
+		if err := os.WriteFile(file, nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := sub.StartSandbox(ctx, ref); err != nil {
+			t.Fatalf("revive with the emptied CA file: %v", err)
+		}
+		if code, out := sandboxExec(t, cli, ref, "true"); code != 0 {
+			t.Fatalf("the revived sandbox does not run: exit %d %s", code, out)
+		}
+	})
+
 	t.Run("without it", func(t *testing.T) {
-		ref := start(t, "")
+		ref, _, _ := start(t, "", "", false)
 		code, out := curl(t, ref, mitmHost)
 		// The proxy reached the upstream and refused its certificate: not a policy or guard denial.
 		if code == 0 || strings.Contains(out, "X-Wardyn-Egress: denied") || !strings.Contains(out, "< HTTP/1.1 502") {

@@ -195,7 +195,7 @@ func checkedTrustedCAFile(given, kept, from string) (string, error) {
 	}
 	abs, err := filepath.Abs(path)
 	if err == nil {
-		_, _, _, err = loadTrustedCA(abs, func(string) string { return "" })
+		_, _, err = loadTrustedCA(abs)
 	}
 	if err != nil && given == "" {
 		return "", fmt.Errorf("%w: kept from the earlier setup (%s); pass --trusted-ca-file <new file> or remove WARDYN_TRUSTED_CA_FILE from it", err, from)
@@ -220,6 +220,10 @@ func (h setupHost) preflight(cmd *cobra.Command, o setupOptions) (setupPlan, err
 	paths, err := h.paths()
 	if err != nil {
 		return setupPlan{}, err
+	}
+	// serve never reads the ambient SSL_CERT_FILE, so setup only points at it.
+	if ssl := os.Getenv("SSL_CERT_FILE"); ssl != "" && o.trustedCAFile == "" {
+		fmt.Fprintf(cmd.OutOrStdout(), "SSL_CERT_FILE is set (%s); pass --trusted-ca-file %s if runs must trust it (64 KiB at most)\n", ssl, ssl)
 	}
 	// A rerun keeps what an earlier setup was told explicitly.
 	keptImage, keptCA := paths.keptPins()
