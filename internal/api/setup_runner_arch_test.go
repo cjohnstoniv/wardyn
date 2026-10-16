@@ -25,6 +25,11 @@ func TestRunnerArchImagesCheck(t *testing.T) {
 	if !strings.Contains(chk.Fix, `"base@arm64"`) {
 		t.Errorf("fix %q does not name the first uncovered key", chk.Fix)
 	}
+	for _, want := range []string{"docker buildx build --platform linux/amd64,linux/arm64", "docker buildx imagetools inspect"} {
+		if !strings.Contains(chk.Fix, want) {
+			t.Errorf("fix %q lacks %q", chk.Fix, want)
+		}
+	}
 
 	for name, tc := range map[string]struct {
 		counts map[string]int

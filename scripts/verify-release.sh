@@ -11,6 +11,7 @@
 # The image list is derived from .github/workflows/release.yml (every `- name: <image>` matrix entry); the
 # expected assets are one sbom-<image>.cdx.json per image, every name on the release-assets job's `for want in`
 # list, and wardyn-$V.tgz. A missing name AND an extra name are each a failure.
+# Every image index must also contain linux/amd64 and linux/arm64; a missing platform fails with the image name.
 # WSL law: an empty DOCKER_CONFIG so the desktop credential helper cannot break anonymous pulls of public packages.
 # Exit status = the number of failures (capped at 255).
 set -uo pipefail
@@ -36,6 +37,10 @@ for img in $IMAGES; do
   digest=$(docker buildx imagetools inspect "$ref" --format '{{json .Manifest.Digest}}' 2>/dev/null | tr -d '"')
   plats=$(docker buildx imagetools inspect "$ref" --format '{{range .Manifest.Manifests}}{{.Platform.OS}}/{{.Platform.Architecture}} {{end}}' 2>/dev/null)
   if [[ -z "$digest" ]]; then echo "FAIL $img: no index digest"; fails=$((fails+1)); continue; fi
+  # Every published index must carry both laptop architectures (an arm64 laptop pulls the same tag).
+  for plat in linux/amd64 linux/arm64; do
+    [[ " $plats" == *" $plat "* ]] || { echo "FAIL $img: index has no $plat [$plats]"; fails=$((fails+1)); }
+  done
   if cosign verify "ghcr.io/cjohnstoniv/$img@$digest" --certificate-identity "$ID" --certificate-oidc-issuer "$ISS" >"$OUT/cosign-$img.json" 2>"$OUT/cosign-$img.err"; then
     echo "OK   $img@$digest  [$plats]"
   else echo "FAIL $img cosign verify"; tail -3 "$OUT/cosign-$img.err"; fails=$((fails+1)); fi

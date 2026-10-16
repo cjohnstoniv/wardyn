@@ -21,6 +21,9 @@ func parseBootImages(f *bootFlags) (agent map[string]string, variants map[string
 	if agent, variants, err = parseAgentImages(*f.agentImagesJSON); err != nil {
 		return nil, nil, nil, err
 	}
+	if plain := *f.proxyImage; plain != "" && !types.SafeImageRef(plain) {
+		return nil, nil, nil, fmt.Errorf("WARDYN_PROXY_IMAGE %q is not an image reference: use only letters, digits and . _ : / @ %% + = - (at most 512 bytes), with no spaces or quotes", plain)
+	}
 	for _, p := range []struct{ env, arch, ref string }{
 		{"WARDYN_PROXY_IMAGE_AMD64", "amd64", *f.proxyImageAMD64},
 		{"WARDYN_PROXY_IMAGE_ARM64", "arm64", *f.proxyImageARM64},
@@ -36,7 +39,27 @@ func parseBootImages(f *bootFlags) (agent map[string]string, variants map[string
 		}
 		proxyByArch[p.arch] = p.ref
 	}
+	warnPlainProxyImage(*f.proxyImage, proxyByArch)
 	return agent, variants, proxyByArch, nil
+}
+
+// composeProxyImage is the compose file's default proxy image: built on the host, so it has the host's one architecture.
+const composeProxyImage = "wardyn/wardyn-proxy:local"
+
+// publishedProxyRepo is the repository of our proxy images, every tag of which is a linux/amd64 + linux/arm64 index.
+const publishedProxyRepo = "ghcr.io/cjohnstoniv/wardyn-proxy"
+
+// warnPlainProxyImage warns at boot when WARDYN_PROXY_IMAGE is the proxy image for runners of an architecture that has no
+// WARDYN_PROXY_IMAGE_<ARCH> of its own. Boot makes no registry call, so it cannot tell a multi-arch index from a one-platform
+// copy; it names the ref and the check instead. Our published repository and the compose default are not warned about.
+func warnPlainProxyImage(plain string, byArch map[string]string) {
+	if plain == "" || plain == composeProxyImage || strings.HasPrefix(plain, publishedProxyRepo+":") || strings.HasPrefix(plain, publishedProxyRepo+"@") {
+		return
+	}
+	if byArch["amd64"] != "" && byArch["arm64"] != "" {
+		return
+	}
+	slog.Warn("wardynd: WARDYN_PROXY_IMAGE serves runners of every architecture that has no WARDYN_PROXY_IMAGE_AMD64 / _ARM64; it must be a multi-arch index, and a one-platform copy fails on a runner of the other architecture. Check it with: docker buildx imagetools inspect " + plain)
 }
 
 // parseAgentImages decodes WARDYN_AGENT_IMAGES (a JSON object mapping agent
