@@ -381,39 +381,43 @@ func (failingBody) Read([]byte) (int, error) { return 0, errors.New("client went
 
 // A body the proxy could not take in to inspect (a failed read, or the scan
 // queue or retain budget expiring), and a body inspection blocked, are the
-// provider's error on an LLM channel, and the AWS error on Bedrock: the tunnel
-// under inspect_forward_egress (a generic channel), and a brokered route to a
-// Bedrock gateway, which answers its connection faults in the AWS shape too.
+// provider's error on an LLM route or host, and the AWS error on Bedrock: the
+// tunnel under inspect_forward_egress, and a brokered route to a Bedrock
+// gateway (an AWS host keeps the AWS shape on every route).
 func TestScanFaultIsAProviderError(t *testing.T) {
 	p := newProxy(Options{RunID: uuid.New(), Policy: CompilePolicy(types.RunPolicySpec{})})
 	for _, c := range []struct {
-		name    string
-		host    string
-		channel contentscan.Channel
-		shape   errShape
+		name  string
+		host  string
+		route errShape // shapePlain: no brokered route
+		shape errShape
 	}{
-		{"anthropic", anthropicHost, contentscan.ChannelAnthropicMessages, shapeAnthropic},
-		{"openai", openaiHost, contentscan.ChannelOpenAIChat, shapeOpenAI},
-		{"bedrock tunnel", bedrockHost, contentscan.ChannelGeneric, shapeAWS},
-		{"bedrock gateway route", bedrockHost, contentscan.ChannelAnthropicMessages, shapeAWS},
+		{"anthropic host", anthropicHost, shapePlain, shapeAnthropic},
+		{"openai host", openaiHost, shapePlain, shapeOpenAI},
+		{"bedrock tunnel", bedrockHost, shapePlain, shapeAWS},
+		{"anthropic route to a bedrock gateway", bedrockHost, shapeAnthropic, shapeAWS},
+		{"openai route", openaiHost, shapeOpenAI, shapeOpenAI},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			rec := httptest.NewRecorder()
 			req := httptest.NewRequest(http.MethodPost, "/", io.NopCloser(failingBody{}))
-			_, _, release, blocked := p.scanBufferedBody(rec, req, c.host, c.channel, "read llm body", func(egress.Decision, string, *egress.ScanSummary) {})
+			if c.route != shapePlain {
+				req = withRouteShape(req, c.route)
+			}
+			rec := httptest.NewRecorder()
+			_, _, release, blocked := p.scanBufferedBody(rec, req, c.host, contentscan.ChannelGeneric, "read llm body", func(egress.Decision, string, *egress.ScanSummary) {})
 			release()
 			v := decodeSDK(t, c.shape, rec)
 			if !blocked || rec.Code != http.StatusBadRequest || !strings.Contains(v.message, "read llm body: client went away") {
 				t.Errorf("read failure: blocked %v status %d message %q", blocked, rec.Code, v.message)
 			}
 			rec = httptest.NewRecorder()
-			p.scanFault(rec, p.shapeFor(c.host, c.channel), "read llm body", context.DeadlineExceeded, http.StatusBadGateway)
+			p.scanFault(rec, p.shapeOf(req, c.host), "read llm body", context.DeadlineExceeded, http.StatusBadGateway)
 			if v := decodeSDK(t, c.shape, rec); rec.Code != http.StatusBadGateway || rec.Header().Get("X-Wardyn-Reason") != reasonNotInspected ||
 				!strings.Contains(v.message, "deadline exceeded") {
 				t.Errorf("queue expiry: status %d message %q", rec.Code, v.message)
 			}
 			rec = httptest.NewRecorder()
-			writeScanBlockedShaped(rec, p.shapeFor(c.host, c.channel), 1, []string{"secret"}, "")
+			writeScanBlockedShaped(rec, p.shapeOf(req, c.host), 1, []string{"secret"}, "")
 			if v := decodeSDK(t, c.shape, rec); rec.Code != http.StatusForbidden || !strings.Contains(v.message, reasonContentBlocked) {
 				t.Errorf("content block: status %d message %q", rec.Code, v.message)
 			}

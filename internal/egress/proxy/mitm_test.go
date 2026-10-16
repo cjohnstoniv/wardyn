@@ -829,7 +829,7 @@ func TestHTTPErrorShapedLogsOnTheAWSBranch(t *testing.T) {
 	p := newProxy(Options{RunID: uuid.New(), Policy: CompilePolicy(types.RunPolicySpec{})})
 	rec := httptest.NewRecorder()
 	err := errors.New("dns down")
-	p.httpErrorShaped(rec, awsHost, "llm upstream vet failed", err, http.StatusBadGateway, vetFault(443, ruleSourceArtifactMITM, err))
+	p.httpErrorShaped(rec, shapeAWS, awsHost, "llm upstream vet failed", err, http.StatusBadGateway, vetFault(443, ruleSourceArtifactMITM, err))
 
 	if got := strings.Count(logs.String(), "level=WARN"); got != 1 {
 		t.Errorf("warnings = %d, want 1; log=%q", got, logs.String())

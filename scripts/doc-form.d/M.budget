@@ -23,7 +23,8 @@ docs/SSH.md=5691 share=35
 # docs/UI-SANDBOXES.md 5341 measured after C-mode-doors merge.
 # docs/UI-SANDBOXES.md 5472 adds 131 over 5341 (0.9.3 lane B): the reasons table for a refusal an SDK reads.
 # docs/UI-SANDBOXES.md 5477 adds 5 (0.9.3 lane B review): the AWS no-credential 404 in the reasons table.
-docs/UI-SANDBOXES.md=5477 share=35
+# docs/UI-SANDBOXES.md 5508 adds 31 (0.9.3 lane B round 4): the route-shape line and three more reasons.
+docs/UI-SANDBOXES.md=5508 share=35
 # docs/NEW-RUN.md 2905 measured (0.9 final docs pass): the New run guide.
 # docs/NEW-RUN.md 2914 adds 9 over 2905: 0.9 final docs pass 2, measured: the runner-limit wait reason and the runner pools links.
 # docs/NEW-RUN.md 2915 adds 1 over 2914: docs fix: run --file overlay; a policy's own * rule stays in force on a routed run, measured.

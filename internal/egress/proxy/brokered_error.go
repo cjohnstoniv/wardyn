@@ -4,6 +4,7 @@
 package proxy
 
 import (
+	"context"
 	"crypto/x509"
 	"encoding/json"
 	"errors"
@@ -38,6 +39,12 @@ const (
 	reasonUnsupportedPath = "unsupported_path"
 	reasonContentBlocked  = "llm_content_blocked"
 	reasonNotInspected    = "request_not_inspected"
+	// A request the run's egress audit could not record is not sent: its target
+	// is too long for one record, or the audit spool cannot take another.
+	reasonAuditRecordTooLarge = "audit_record_too_large"
+	reasonAuditUnavailable    = "audit_spool_unavailable"
+	// The upstream answered HTTP/2 on a connection that negotiated HTTP/1.1.
+	reasonProtocolMismatch = "upstream_protocol_mismatch"
 )
 
 // egressHeaderWardynReason carries the fixed reason on the forward lane, where
@@ -64,24 +71,94 @@ func shapeOfChannel(ch contentscan.Channel) errShape {
 	return shapePlain
 }
 
-// shapeOfHost is the shape for a request to host: an AWS endpoint answers in
-// the AWS SDKs' shape, and a gateway or mirror of an LLM vendor in that
-// vendor's.
+// shapeOfHost is the shape for a request to host when no route names the
+// vendor: an AWS endpoint answers in the AWS SDKs' shape, and a gateway or
+// mirror of one LLM vendor in that vendor's. A gateway both vendors share has
+// no shape of its own.
 func (p *Proxy) shapeOfHost(host string) errShape {
 	if isAWSLane(host) {
 		return shapeAWS
 	}
+	if vendor, ok := p.gatewayVendorOf(host); ok {
+		return shapeOfVendor(vendor)
+	}
 	return shapeOfChannel(p.channelForHost(host))
 }
 
-// shapeFor is the shape for a request to host on a route of channel ch: the
-// host's own shape (AWS, or the vendor a gateway fronts) wins, so one route
-// answers in one shape, else the route's channel's.
-func (p *Proxy) shapeFor(host string, ch contentscan.Channel) errShape {
-	if s := p.shapeOfHost(host); s != shapePlain {
-		return s
+// routeShapeKey carries the shape a brokered /wardyn/llm/* route answers in.
+type routeShapeKey struct{}
+
+// withRouteShape marks r as a brokered route's request: its route names the
+// SDK reading the answer, whichever host it is forwarded to.
+func withRouteShape(r *http.Request, s errShape) *http.Request {
+	return r.WithContext(context.WithValue(r.Context(), routeShapeKey{}, s))
+}
+
+// shapeOf is the shape for r to host: the brokered route's when r came in on
+// one (Claude Code and Codex may share one gateway host), else the host's.
+func (p *Proxy) shapeOf(r *http.Request, host string) errShape {
+	if s, ok := r.Context().Value(routeShapeKey{}).(errShape); ok {
+		return routeShape(s, host)
 	}
-	return shapeOfChannel(ch)
+	return p.shapeOfHost(host)
+}
+
+// routeShape is the shape of a brokered route's answer when it forwards to
+// host: the route's own, except that an AWS host keeps the AWS shape.
+func routeShape(route errShape, host string) errShape {
+	if isAWSLane(host) {
+		return shapeAWS
+	}
+	return route
+}
+
+func shapeOfVendor(vendor string) errShape {
+	switch vendor {
+	case anthropicHost:
+		return shapeAnthropic
+	case openaiHost:
+		return shapeOpenAI
+	}
+	return shapePlain
+}
+
+// gatewayVendorOf reports whether host is a configured gateway's, and the
+// vendor host it fronts: "" when both vendors share it, since then only the
+// request's route can say which.
+func (p *Proxy) gatewayVendorOf(host string) (vendor string, ok bool) {
+	h := strings.TrimSuffix(strings.ToLower(host), ".")
+	for v, u := range p.llmUpstreams {
+		if u.host != h {
+			continue
+		}
+		if ok && vendor != v {
+			return "", true
+		}
+		vendor, ok = v, true
+	}
+	return vendor, ok
+}
+
+// gatewayFront is the vendor host a configured gateway stands for in an answer
+// to the sandbox, which reaches it only through a brokered route and never
+// learns its address: the vendor it fronts, else the one shape names, else
+// redactedEndpoint. A host that is no gateway's is itself.
+func (p *Proxy) gatewayFront(shape errShape, host string) (front string, gateway bool) {
+	vendor, ok := p.gatewayVendorOf(host)
+	if !ok {
+		return host, false
+	}
+	if vendor == "" {
+		switch shape {
+		case shapeAnthropic:
+			vendor = anthropicHost
+		case shapeOpenAI:
+			vendor = openaiHost
+		default:
+			vendor = redactedEndpoint
+		}
+	}
+	return vendor, true
 }
 
 // brokeredFault names a refusal for the SDK-facing body: Reason "" means
@@ -93,7 +170,8 @@ type brokeredFault struct {
 }
 
 // classifyUpstreamErr maps a failed upstream leg to a reason: a certificate the
-// runner does not trust, a leg that never connected, or anything else.
+// runner does not trust, a leg that never connected, or anything else (a
+// connection that broke after it opened included).
 func classifyUpstreamErr(err error) string {
 	var unknownAuth x509.UnknownAuthorityError
 	var certInvalid x509.CertificateInvalidError
@@ -101,11 +179,22 @@ func classifyUpstreamErr(err error) string {
 	if errors.As(err, &unknownAuth) || errors.As(err, &certInvalid) || errors.As(err, &hostname) {
 		return reasonTLSUntrusted
 	}
-	var netErr net.Error
 	switch dialStage(err) {
 	case "tcp dial", "upstream proxy connect", "tls handshake":
 		return reasonUpstreamUnreachable
 	}
+	// A read or write that failed on an open connection, before the answer's
+	// headers (a reset while it was awaited), did connect: not "could not
+	// connect". An answer that broke after its headers never reaches here.
+	var connecting *connectStageError
+	if errors.As(err, &connecting) {
+		return reasonUpstreamUnreachable
+	}
+	var opErr *net.OpError
+	if errors.As(err, &opErr) && (opErr.Op == "read" || opErr.Op == "write") {
+		return reasonUpstreamError
+	}
+	var netErr net.Error
 	if errors.As(err, &netErr) {
 		return reasonUpstreamUnreachable
 	}
@@ -175,7 +264,7 @@ func faultHint(host, reason, ruleSource string, err error) string {
 // awsErrorType is the modelled AWS error a status is answered with.
 func awsErrorType(status int) string {
 	switch status {
-	case http.StatusBadRequest:
+	case http.StatusBadRequest, http.StatusRequestURITooLong:
 		return "ValidationException"
 	case http.StatusUnauthorized:
 		return "UnauthorizedException"
@@ -183,16 +272,19 @@ func awsErrorType(status int) string {
 		return "AccessDeniedException"
 	case http.StatusNotFound:
 		return "ResourceNotFoundException"
+	case http.StatusServiceUnavailable:
+		return "ServiceUnavailableException"
 	}
 	return "InternalServerException"
 }
 
 // hostPortLabel is the destination as the SDK's user reads it. A configured
-// gateway is named by the vendor it fronts, never by its own address.
-func (p *Proxy) hostPortLabel(host string, port int) string {
-	h := strings.TrimSuffix(strings.ToLower(host), ".")
-	if vendor, ok := p.gatewayVendor[h]; ok {
-		return vendor + " (via the configured gateway)"
+// gateway is named by the vendor it fronts (gatewayFront), never by its own
+// address; the masked cause after it has the gateway's host redacted too
+// (gatewayPatterns), and so does X-Wardyn-Host on a shaped deny.
+func (p *Proxy) hostPortLabel(shape errShape, host string, port int) string {
+	if front, ok := p.gatewayFront(shape, host); ok {
+		return front + " (via the configured gateway)"
 	}
 	return p.redactTopology(net.JoinHostPort(host, strconv.Itoa(port)))
 }
@@ -215,7 +307,7 @@ func brokeredMessage(reason, dest, ruleSource, hint, cause string) string {
 // providers spell these the same.
 func providerStatusType(status int) string {
 	switch status {
-	case http.StatusBadRequest:
+	case http.StatusBadRequest, http.StatusRequestURITooLong:
 		return "invalid_request_error"
 	case http.StatusUnauthorized:
 		return "authentication_error"
@@ -271,7 +363,7 @@ func (p *Proxy) writeBrokeredFault(w http.ResponseWriter, shape errShape, host s
 	status := reasonStatus(shape, reason)
 	slog.Warn("proxy error returned to the sandbox", "reason", reason, "status", status, "err", cause)
 	writeProviderError(w, shape, status, reason,
-		brokeredMessage(reason, p.hostPortLabel(host, f.port), f.ruleSource, faultHint(host, reason, f.ruleSource, err), cause), nil)
+		brokeredMessage(reason, p.hostPortLabel(shape, host, f.port), f.ruleSource, faultHint(host, reason, f.ruleSource, err), cause), nil)
 }
 
 // vetFault is the fault for a failed egressTarget: a guard refusal is the
@@ -289,10 +381,10 @@ func vetFault(port int, ruleSource string, err error) brokeredFault {
 	return f
 }
 
-// httpErrorShaped is httpError for a brokered site: an LLM vendor's or AWS
-// host gets its provider's error body, any other host the plain text.
-func (p *Proxy) httpErrorShaped(w http.ResponseWriter, host, plainMsg string, err error, status int, f brokeredFault) {
-	if shape := p.shapeOfHost(host); shape != shapePlain {
+// httpErrorShaped is httpError for a brokered site: shape (shapeOf) is the
+// provider's error body, shapePlain the plain text.
+func (p *Proxy) httpErrorShaped(w http.ResponseWriter, shape errShape, host, plainMsg string, err error, status int, f brokeredFault) {
+	if shape != shapePlain {
 		p.writeBrokeredFault(w, shape, host, f, err)
 		return
 	}

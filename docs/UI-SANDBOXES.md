@@ -138,6 +138,7 @@
 - Its message: `wardyn: <reason>: <host:port> (<rule_source>) — <fix>`, then the
   masked cause; `rule_source` matches the audit row.
 - `X-Wardyn-Reason` carries the reason; so does the OpenAI `error.code`.
+- A brokered route answers in its own vendor's shape; an AWS host in the AWS one.
 
 | Reason | Anthropic, OpenAI | AWS |
 |---|---|---|
@@ -149,6 +150,9 @@
 | `unsupported_path` | 400 `invalid_request_error` | 400 `ValidationException` |
 | `llm_content_blocked` | 403 `permission_error` | 403 `AccessDeniedException` |
 | `request_not_inspected` | 400 (unreadable body) or 502 (scan busy) | 400 or 502 |
+| `upstream_protocol_mismatch` | 400 `invalid_request_error` | 400 `UpstreamProtocolMismatchException` |
+| `audit_record_too_large` | 414 `invalid_request_error` | 414 `ValidationException` |
+| `audit_spool_unavailable` | 503 `api_error` | 503 `ServiceUnavailableException` |
 
 ## Extensions are not installable by default
 

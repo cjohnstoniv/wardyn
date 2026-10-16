@@ -146,17 +146,25 @@ func (p *Proxy) offerHTTP2(egressDial dialFunc, base *tls.Config) {
 	}
 }
 
+// connectStageError marks a failure while the upstream connection was being
+// set up (the dial or the TLS handshake), so classifyUpstreamErr keeps a reset
+// there apart from one on an open connection. Its text is err's own.
+type connectStageError struct{ err error }
+
+func (e *connectStageError) Error() string { return e.err.Error() }
+func (e *connectStageError) Unwrap() error { return e.err }
+
 func handshakeOver(ctx context.Context, dial dialFunc, network, addr string, cfg *tls.Config) (*tls.Conn, error) {
 	raw, err := dial(ctx, network, addr)
 	if err != nil {
-		return nil, err
+		return nil, &connectStageError{err}
 	}
 	hctx, cancel := context.WithTimeout(ctx, tlsHandshakeTimeout)
 	defer cancel()
 	tc := tls.Client(raw, cfg)
 	if err := tc.HandshakeContext(hctx); err != nil {
 		_ = raw.Close()
-		return nil, err
+		return nil, &connectStageError{err}
 	}
 	return tc, nil
 }
@@ -376,7 +384,7 @@ func (p *Proxy) upstreamProtocolMismatchCause(e *h2MismatchError) string {
 // arm. seen carries the request/scan the deny row reports; nil emits no
 // decision. denyDialFailed's sibling: same Via computation, but Cause is the
 // h2-mismatch sentence, since the peer ANSWERED.
-func (p *Proxy) refuseH2Mismatch(w http.ResponseWriter, err error, ruleSource string, seen *egress.DecisionLog, host, msg string) bool {
+func (p *Proxy) refuseH2Mismatch(w http.ResponseWriter, shape errShape, err error, ruleSource string, seen *egress.DecisionLog, host, msg string) bool {
 	var mm *h2MismatchError
 	if !errors.As(err, &mm) {
 		return false
@@ -389,7 +397,11 @@ func (p *Proxy) refuseH2Mismatch(w http.ResponseWriter, err error, ruleSource st
 		dl.Scan = seen.Scan
 		p.sink.emit(dl)
 	}
-	p.writeUpstreamProtocolMismatch(w, host, msg, cause, err)
+	port := 443
+	if seen != nil && seen.Request.Port != 0 {
+		port = seen.Request.Port
+	}
+	p.writeUpstreamProtocolMismatch(w, shape, host, port, ruleSource, msg, cause, err)
 	return true
 }
 
@@ -398,7 +410,7 @@ func (p *Proxy) refuseH2Mismatch(w http.ResponseWriter, err error, ruleSource st
 // lane's allow row is only ever emitted after a successful round trip, so a
 // failed dial never over-reports an allow. seen may be nil.
 func (p *Proxy) failUpstream(w http.ResponseWriter, err error, seen *egress.DecisionLog, host, msg string) {
-	if p.refuseH2Mismatch(w, err, ruleSourceUpstreamProtocolMismatch, seen, host, msg) {
+	if p.refuseH2Mismatch(w, p.shapeOfHost(host), err, ruleSourceUpstreamProtocolMismatch, seen, host, msg) {
 		return
 	}
 	if seen != nil && p.sink != nil {
@@ -409,19 +421,27 @@ func (p *Proxy) failUpstream(w http.ResponseWriter, err error, seen *egress.Deci
 
 // writeUpstreamProtocolMismatch answers the refusal to the sandbox with
 // cause, never the raw wrapped net/http error — the one refusal that does
-// NOT go through httpError. The AWS lane gets writeAWSSDKError's modelled
-// body; every other host gets a plain 400, not the usual 502, since 502 is
-// exactly the class an SDK retries blindly and a retry only helps once
-// roundTripUpstream's memo routes the host to HTTP/2.
+// NOT go through httpError. A 400, not the usual 502, since 502 is exactly the
+// class an SDK retries blindly and a retry only helps once
+// roundTripUpstream's memo routes the host to HTTP/2. The AWS lane gets
+// writeAWSSDKError's modelled UpstreamProtocolMismatchException, an LLM lane
+// (shape) its provider's body, any other host plain text.
 //
 // SECURITY: err carries the RAW, un-redacted error onto the operator-only
 // slog line, masked — never into the decision row or the sandbox body.
-func (p *Proxy) writeUpstreamProtocolMismatch(w http.ResponseWriter, host, msg, cause string, err error) {
+func (p *Proxy) writeUpstreamProtocolMismatch(w http.ResponseWriter, shape errShape, host string, port int, ruleSource, msg, cause string, err error) {
 	slog.Warn("proxy error returned to the sandbox", "msg", msg, "status", http.StatusBadRequest,
 		"err", cause, "raw_err", string(maskDecisionBytes([]byte(err.Error()))))
-	if isAWSLane(host) {
-		writeAWSSDKError(w, http.StatusBadRequest, "UpstreamProtocolMismatchException", cause)
+	if shape == shapePlain {
+		http.Error(w, msg+": "+cause, http.StatusBadRequest)
 		return
 	}
-	http.Error(w, msg+": "+cause, http.StatusBadRequest)
+	message := brokeredMessage(reasonProtocolMismatch, p.hostPortLabel(shape, host, port), ruleSource,
+		"it answered HTTP/2 on a connection that did not negotiate it", cause)
+	if shape == shapeAWS {
+		w.Header().Set(egressHeaderWardynReason, reasonProtocolMismatch)
+		writeAWSSDKError(w, http.StatusBadRequest, "UpstreamProtocolMismatchException", message)
+		return
+	}
+	writeProviderError(w, shape, http.StatusBadRequest, reasonProtocolMismatch, message, nil)
 }

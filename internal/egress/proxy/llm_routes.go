@@ -53,6 +53,7 @@ const (
 func (p *Proxy) handleLLMAnthropic(w http.ResponseWriter, r *http.Request) {
 	rest := strings.TrimPrefix(r.URL.Path, llmAnthropicPrefix)
 	host, port, prefix := p.llmUpstream(anthropicHost)
+	r = withRouteShape(r, shapeAnthropic)
 	if p.llmRequestRefused(w, r, host, port, rest) {
 		return
 	}
@@ -65,6 +66,7 @@ func (p *Proxy) handleLLMAnthropic(w http.ResponseWriter, r *http.Request) {
 func (p *Proxy) handleLLMOpenAI(w http.ResponseWriter, r *http.Request) {
 	rest := strings.TrimPrefix(r.URL.Path, llmOpenAIPrefix)
 	host, port, prefix := p.llmUpstream(openaiHost)
+	r = withRouteShape(r, shapeOpenAI)
 	if p.llmRequestRefused(w, r, host, port, rest) {
 		return
 	}
@@ -83,13 +85,13 @@ func (p *Proxy) llmRequestRefused(w http.ResponseWriter, r *http.Request, host s
 		if p.sink != nil {
 			p.sink.emit(log)
 		}
-		p.writeEgressDenyLLM(w, host, port, &log)
+		p.writeEgressDenyLLM(w, p.shapeOf(r, host), host, port, &log)
 		return true
 	}
 	if strings.ContainsFunc(rest, func(c rune) bool { return c == '\\' || c < 0x20 || c == 0x7f }) ||
 		slices.ContainsFunc(strings.Split(rest, "/"), isDotSegment) {
 		p.emitLLMDecision(r, host, port, egress.Deny, ruleSourceLLM, nil)
-		if shape := p.shapeOfHost(host); shape != shapePlain {
+		if shape := p.shapeOf(r, host); shape != shapePlain {
 			writeProviderError(w, shape, http.StatusBadRequest, reasonUnsupportedPath, "wardyn: unsupported llm request path", nil)
 			return true
 		}
@@ -145,8 +147,8 @@ func (p *Proxy) proxyLLMRequest(w http.ResponseWriter, r *http.Request, host str
 	if !ok {
 		p.emitLLMDecision(r, host, port, egress.Deny, ruleSourceLLM, nil)
 		extra := map[string]any{"wardyn": "no_llm_credential", "detail": llm404Detail(p.llmUnavailableDetail)}
-		if shape := p.shapeOfHost(host); shape != shapePlain {
-			dest := p.hostPortLabel(host, port)
+		if shape := p.shapeOf(r, host); shape != shapePlain {
+			dest := p.hostPortLabel(shape, host, port)
 			writeProviderError(w, shape, http.StatusNotFound, reasonCredentialUnavailable,
 				brokeredMessage(reasonCredentialUnavailable, dest, ruleSourceLLM, extra["detail"].(string), ""), extra)
 			return
@@ -176,7 +178,7 @@ func (p *Proxy) proxyLLMRequest(w http.ResponseWriter, r *http.Request, host str
 		}
 		p.emitLLMDecision(r, host, port, egress.Deny, source, nil)
 		// An SDK hands plain text straight to a JSON parser and crashes on it.
-		p.httpErrorShaped(w, host, "llm upstream vet failed", err, http.StatusBadGateway, vetFault(port, source, err))
+		p.httpErrorShaped(w, p.shapeOf(r, host), host, "llm upstream vet failed", err, http.StatusBadGateway, vetFault(port, source, err))
 		return
 	}
 
@@ -188,7 +190,7 @@ func (p *Proxy) proxyLLMRequest(w http.ResponseWriter, r *http.Request, host str
 			log.Cause = "credential refresh failed: " + p.dialFailureCause(ierr)
 			p.sink.emit(log)
 		}
-		p.httpErrorShaped(w, host, "llm credential refresh failed", ierr, http.StatusBadGateway,
+		p.httpErrorShaped(w, p.shapeOf(r, host), host, "llm credential refresh failed", ierr, http.StatusBadGateway,
 			brokeredFault{port: port, ruleSource: ruleSourceLLM, reason: reasonCredentialUnavailable})
 		return
 	}
@@ -265,7 +267,7 @@ func (p *Proxy) forwardInspectedLLM(w http.ResponseWriter, r *http.Request, host
 		outReq, err := http.NewRequestWithContext(context.WithValue(r.Context(), vettedIPKey{}, target), r.Method, upstreamURL.String(), body)
 		if err != nil {
 			p.emitLLMDecision(r, host, port, egress.Deny, ruleSource, nil)
-			p.httpErrorShaped(w, host, "build llm request", err, http.StatusBadGateway,
+			p.httpErrorShaped(w, p.shapeOf(r, host), host, "build llm request", err, http.StatusBadGateway,
 				brokeredFault{port: port, ruleSource: ruleSource, reason: reasonUpstreamError})
 			return nil, false
 		}
@@ -280,14 +282,14 @@ func (p *Proxy) forwardInspectedLLM(w http.ResponseWriter, r *http.Request, host
 		resp, err := p.roundTripUpstream(outReq)
 		if err != nil {
 			seen := &egress.DecisionLog{Request: p.reqOf(r, host, port), Scan: scanSummary}
-			if p.refuseH2Mismatch(w, err, ruleSourceUpstreamProtocolMismatch, seen, host, "llm upstream error") {
+			if p.refuseH2Mismatch(w, p.shapeOf(r, host), err, ruleSourceUpstreamProtocolMismatch, seen, host, "llm upstream error") {
 				return nil, false
 			}
 			if p.sink != nil {
 				p.sink.emit(p.denyDialFailed("builtin:dial-failed", p.reqOf(r, host, port), host, err, scanSummary))
 			}
 			// No reason: classified from err, and the message ends with the decision log's Cause above.
-			p.httpErrorShaped(w, host, "llm upstream error", err, http.StatusBadGateway,
+			p.httpErrorShaped(w, p.shapeOf(r, host), host, "llm upstream error", err, http.StatusBadGateway,
 				brokeredFault{port: port, ruleSource: "builtin:dial-failed"})
 			return nil, false
 		}
@@ -431,7 +433,7 @@ func (p *Proxy) inspectLLM(w http.ResponseWriter, r *http.Request, host string, 
 		// uninspected-channel skip, refused under fail-closed blocking.
 		if p.scanner.BlocksOnError() {
 			p.emitLLMDecision(r, host, port, egress.Deny, ruleSourceLLMBlocked, p.skipSummary("block", "uninspected_channel", channel))
-			writeScanBlockedShaped(w, p.shapeFor(host, channel), 0, nil, "uninspected_channel")
+			writeScanBlockedShaped(w, p.shapeOf(r, host), 0, nil, "uninspected_channel")
 			return nil, nil, noRelease, true
 		}
 		return r.Body, p.skipSummary("skip", "uninspected_channel", channel), noRelease, false
@@ -483,7 +485,7 @@ func (p *Proxy) inspectForwardBody(w http.ResponseWriter, r *http.Request, host 
 // The returned release MUST be deferred by the caller: gives the buffer back
 // to maxRetainedScanBytes. Always non-nil and safe to call more than once.
 func (p *Proxy) scanBufferedBody(w http.ResponseWriter, r *http.Request, host string, channel contentscan.Channel, readErrMsg string, emit func(egress.Decision, string, *egress.ScanSummary)) (io.Reader, *egress.ScanSummary, func(), bool) {
-	shape := p.shapeFor(host, channel)
+	shape := p.shapeOf(r, host)
 	// Scan slot (maxConcurrentScans) bounds live heap against the sidecar's
 	// cgroup cap. Waited through the request ctx AND a wall-clock bound
 	// (scanQueueWait); fails CLOSED on either, since an uninspectable request
@@ -572,8 +574,8 @@ func categoriesOf(findings []contentscan.Finding) []string {
 
 // scanFault answers a request scanBufferedBody could not take in, so did not
 // forward: the scan queue or the retain budget expired (502, a load condition
-// worth a retry), or the body could not be read (400). shape is shapeFor(host,
-// channel): a provider or AWS error body, or the plain lane's text.
+// worth a retry), or the body could not be read (400). shape is shapeOf(r,
+// host): a provider or AWS error body, or the plain lane's text.
 func (p *Proxy) scanFault(w http.ResponseWriter, shape errShape, readErrMsg string, err error, status int) {
 	switch {
 	case shape != shapePlain:
