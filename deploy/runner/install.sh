@@ -26,7 +26,7 @@ Usage: install.sh --org <url> [--binary <path>] [--token-file <file>] [setup fla
   --binary <path>   wardyn-runnerd to install (default: beside this script, else on PATH)
   --uninstall       stop and remove the service and the installed binary; keeps the runner identity
 
-Everything else is passed to `wardyn-runnerd setup` (--org, --token-file, --proxy-image, --internal-network,
+Everything else is passed to `wardyn-runnerd setup` (--org, --token-file, --proxy-image, --internal-network, --trusted-ca-file,
 --relay-listen, --relay-host-target, --claim, --pool, --default and the limit flags); run `wardyn-runnerd setup --help`.
 setup finds the relay address on Docker Desktop, Rancher Desktop and other VM-backed engines; --relay-listen and
 --relay-host-target override it.

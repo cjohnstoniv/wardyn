@@ -6,12 +6,13 @@ package main
 import (
 	"crypto/tls"
 	"crypto/x509"
-	"encoding/pem"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
 	"strings"
+
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 )
 
 // loadTrustedCA reads WARDYN_TRUSTED_CA_FILE (path, empty = unset — the
@@ -39,7 +40,7 @@ func loadTrustedCA(path string) (pemBundle string, pool *x509.CertPool, n int, e
 	if rerr != nil {
 		return "", nil, 0, fmt.Errorf("WARDYN_TRUSTED_CA_FILE: %w", rerr)
 	}
-	certs, perr := parseCertsPEM(raw)
+	bundle, certs, perr := runner.TrustedCABundle(raw)
 	if perr != nil {
 		return "", nil, 0, fmt.Errorf("WARDYN_TRUSTED_CA_FILE %q: %w", path, perr)
 	}
@@ -47,46 +48,10 @@ func loadTrustedCA(path string) (pemBundle string, pool *x509.CertPool, n int, e
 	if serr != nil || sys == nil {
 		sys = x509.NewCertPool() // no system pool on this platform: additive to an empty base
 	}
-	var bundle []byte
 	for _, c := range certs {
 		sys.AddCert(c)
-		// The forwarded bundle is REBUILT from the parsed certificates — never the
-		// raw file — so nothing but CERTIFICATE blocks can reach a sandbox env
-		// (WARDYN_MITM_CA_PEM) or a proxy config (trusted_ca_pem).
-		bundle = append(bundle, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: c.Raw})...)
 	}
-	return string(bundle), sys, len(certs), nil
-}
-
-// parseCertsPEM decodes every "CERTIFICATE" PEM block in raw. Any block that
-// fails to parse as a certificate, any block that is NOT a certificate (a
-// private key or CSR pasted alongside the cert — the common combined-export
-// shape), or a raw input with no certificate block at all is an error —
-// never a silent skip: a corp CA file that doesn't parse as configured is a
-// configuration mistake, not a partial success, and a private key must never
-// ride into every sandbox as trusted-issuer material.
-func parseCertsPEM(raw []byte) ([]*x509.Certificate, error) {
-	var certs []*x509.Certificate
-	rest := raw
-	for {
-		var block *pem.Block
-		block, rest = pem.Decode(rest)
-		if block == nil {
-			break
-		}
-		if block.Type != "CERTIFICATE" {
-			return nil, fmt.Errorf("unexpected %q PEM block: the file must hold certificates only", block.Type)
-		}
-		cert, err := x509.ParseCertificate(block.Bytes)
-		if err != nil {
-			return nil, fmt.Errorf("parse certificate: %w", err)
-		}
-		certs = append(certs, cert)
-	}
-	if len(certs) == 0 {
-		return nil, fmt.Errorf("no PEM-encoded certificates found")
-	}
-	return certs, nil
+	return bundle, sys, len(certs), nil
 }
 
 // installTrustedCA additively sets pool as the RootCAs of tr's TLS config —
@@ -123,7 +88,7 @@ func installTrustedCA(tr *http.Transport, pool *x509.CertPool) {
 // it degrades to nil (an empty subjects list) rather than a second boot
 // failure over a log line.
 func certSubjects(pemBundle string) []string {
-	certs, err := parseCertsPEM([]byte(pemBundle))
+	certs, err := runner.ParseCertsPEM([]byte(pemBundle))
 	if err != nil {
 		return nil
 	}

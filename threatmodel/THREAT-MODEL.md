@@ -1750,7 +1750,7 @@ hiding them would repeat the failure mode we are designed to avoid.
     - The bundle is additive to the system roots, so while the knob is set the middlebox can read and rewrite anything the three processes send over TLS.
     - `wardynd`'s own OIDC discovery, GitHub App transport and audit-webhook calls (all on the one mutated `http.DefaultTransport`).
     - The proxy sidecar's forward and control-plane transports.
-    - And — because `installSandboxTrustedCA` appends the same PEM into the sandbox's CA trust — the agent's TLS clients on a passthrough (non-MITM'd) CONNECT tunnel.
+    - And — because `runner.InstallSandboxTrustedCA` appends the same PEM into the sandbox's CA trust — the agent's TLS clients on a passthrough (non-MITM'd) CONNECT tunnel.
     - Wardyn's own inspection/masking (the `llm_inspection` guardrail, the per-run MITM CA) sits INSIDE that envelope, not above it.
     - There is no certificate pinning anywhere this trust applies — the bound is scope, not depth.
     - The PEM is operator-set at process boot only (read once, never a `SiteConfig` field an admin API write or a member could reach, never agent-reachable), additive rather than a replacement.
