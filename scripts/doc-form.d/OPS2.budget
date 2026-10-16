@@ -22,4 +22,5 @@ docs/operations/console-branding.md=943 share=35
 # docs/operations/hybrid-laptops.md 1747 adds 13 over 1734 (0.9.3 A1 fix), measured: certificate file note, rerun line.
 # docs/operations/hybrid-laptops.md 1761 adds 14 (0.9.3 A1 fix): the agent-image caveat for a merged bundle.
 # docs/operations/hybrid-laptops.md 2077 adds 316 over 1761 (0.9.3 Fr), measured: the upstream proxy, running without a service and Docker engine sections.
-docs/operations/hybrid-laptops.md=2077 share=35
+docs/operations/hybrid-laptops.md=2295 share=35
+# docs/operations/hybrid-laptops.md 2295 adds 218 over 2077 (0.9.3 Fr fix round 1), measured: the proxy-image section (follows the organisation, any image, the pin), the --no-service refusal and quoted command, and the plist-credential warning.

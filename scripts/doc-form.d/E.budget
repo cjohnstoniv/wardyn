@@ -48,4 +48,5 @@
 # docs/ENV.md 37321 adds 57 over 37264 (0.9.3 A1 fix), measured: CA file delivery, WARDYN_PROXY_IMAGE_PINNED.
 # docs/ENV.md 37330 adds 9 (0.9.3 A1 fix): the CA mount path and the staged-PEM rule.
 # docs/ENV.md 37505 adds 175 over 37330 (0.9.3 Fr), measured: the WARDYN_UPSTREAM_PROXY row and details section, and the WARDYN_PROXY_IMAGE_PINNED row now read by serve.
-docs/ENV.md=37505 share=5
+docs/ENV.md=37533 share=5
+# docs/ENV.md 37533 adds 28 over 37505 (0.9.3 Fr fix round 1), measured: the PINNED row names the unmarked-image rule, and the plist-credential warning.

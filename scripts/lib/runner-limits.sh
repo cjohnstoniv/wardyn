@@ -148,21 +148,29 @@ _rl_set() {
   if wardyn runner set "$1" --if-unset ${_rl_flags} </dev/null >&2; then _rl_rc=0; else _rl_rc=$?; fi
   case "${_rl_opts}" in *f*) ;; *) set +f ;; esac
   if [ "${_rl_rc}" -ne 0 ]; then
+    # --if-unset loses to a limit declared between the list and the set: then the runner has limits, just
+    # not these.
+    if _rl_still="$(wardyn runner remote list --no-limits --set-up-here --ids </dev/null 2>/dev/null)" &&
+      ! printf '%s\n' "${_rl_still}" | grep -qx -- "$1"; then
+      _rl_say "$1: limits were set meanwhile by someone else; they are kept and these were not applied"
+      return 0
+    fi
     _rl_say "$1: these limits were not set; it takes no run until they are"
     return 1
   fi
 }
 
 wardyn_ensure_runner_limits() {
-  _rl_list="$(wardyn runner remote list --no-limits </dev/null)" || {
+  # Ids, one per line (--ids): a name may hold spaces, so no table is parsed. A row that is not set up on
+  # this server is another computer's or cluster's: it cannot take a run here, so it is left out.
+  _rl_all="$(wardyn runner remote list --no-limits --ids </dev/null)" &&
+    _rl_ids="$(wardyn runner remote list --no-limits --set-up-here --ids </dev/null)" || {
     _rl_say "could not list the server's remote-hosted runners (wardyn runner remote list --no-limits)"
     return 1
   }
-  # The table's cells are two or more spaces apart; SET UP HERE is the third. A row that is not set up on
-  # this server is another computer's or cluster's: it cannot take a run here, so it is left out.
-  _rl_ids="$(printf '%s\n' "${_rl_list}" | awk -F '  +' 'NR > 1 && NF && $3 != "no" {print $1}')"
-  for _rl_id in $(printf '%s\n' "${_rl_list}" | awk -F '  +' 'NR > 1 && NF && $3 == "no" {print $1}'); do
-    _rl_say "${_rl_id}: not set up on this server, so it takes no run here and is left as it is"
+  for _rl_id in ${_rl_all}; do
+    printf '%s\n' "${_rl_ids}" | grep -qx -- "${_rl_id}" ||
+      _rl_say "${_rl_id}: not set up on this server, so it takes no run here and is left as it is"
   done
   if [ -z "${_rl_ids}" ]; then
     _rl_say "every remote-hosted runner set up here already has its limits; nothing changed"

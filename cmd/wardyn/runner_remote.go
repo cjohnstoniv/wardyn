@@ -20,7 +20,7 @@ import (
 // pools ("Available to people's pools") is set by an admin or security admin, and may be held for a
 // second person's approval.
 //
-//	wardyn runner remote list [--mine] [--no-limits]
+//	wardyn runner remote list [--mine] [--no-limits] [--set-up-here] [--ids]
 //	wardyn runner remote show <id>
 //	wardyn runner remote propose <id> [--free-disk GB]
 //	wardyn runner remote set <id> --name "Build host"
@@ -31,7 +31,7 @@ import (
 // policy; `people set` is the only way to list people, groups and roles.
 func runnerRemoteCmd(client clientFn) *cobra.Command {
 	cmd := &cobra.Command{Use: "remote", Short: "List and manage remote-hosted runners, the Docker host or Kubernetes cluster this server is set up with"}
-	var mine, asJSON, noLimits bool
+	var mine, asJSON, noLimits, setUpHere, idsOnly bool
 	list := &cobra.Command{Use: "list", Short: "List the remote-hosted runners (admin), or with --mine those you may add to your own user pools",
 		Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
 			list := client().ListRemoteRunners
@@ -45,6 +45,15 @@ func runnerRemoteCmd(client clientFn) *cobra.Command {
 			if noLimits {
 				out = slices.DeleteFunc(out, func(rr sdk.RemoteRunnerView) bool { return rr.Limits != nil })
 			}
+			if setUpHere {
+				out = slices.DeleteFunc(out, func(rr sdk.RemoteRunnerView) bool { return !rr.Configured })
+			}
+			if idsOnly {
+				for _, rr := range out {
+					fmt.Fprintln(cmd.OutOrStdout(), rr.ID)
+				}
+				return nil
+			}
 			if asJSON {
 				return emitJSON(cmd.OutOrStdout(), out)
 			}
@@ -52,6 +61,8 @@ func runnerRemoteCmd(client clientFn) *cobra.Command {
 		}}
 	list.Flags().BoolVar(&mine, "mine", false, "only the ones you may add to your own user pools")
 	list.Flags().BoolVar(&noLimits, "no-limits", false, "only the ones with no limits set, which take no run until an admin sets them")
+	list.Flags().BoolVar(&setUpHere, "set-up-here", false, "only the ones set up on this server (SET UP HERE: yes)")
+	list.Flags().BoolVar(&idsOnly, "ids", false, "print only the ids, one per line, for a script (a name can hold spaces; an id cannot)")
 	list.Flags().BoolVar(&asJSON, "json", false, "emit raw JSON")
 	var showJSON bool
 	show := &cobra.Command{Use: "show <id>", Short: "Show one remote-hosted runner (admin)", Args: cobra.ExactArgs(1),
