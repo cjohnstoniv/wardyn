@@ -828,3 +828,29 @@ func TestSetupPoolIgnoresAnotherPersonsSameNamedPool(t *testing.T) {
 		t.Error("the runner was put in another person's pool")
 	}
 }
+
+// The proxy image setup settled reaches registration, so a VM-backed engine's disk is probed with it.
+func TestSetupProbesTheVMDiskWithTheNamedProxyImage(t *testing.T) {
+	f := newSetupFixture(t, "linux")
+	asked := stubDisk(t, types.RunnerAmounts{CPUMillis: 8000, MemoryMiB: 16384}, 204800, true)
+	if _, err := f.run(setupOptions{tokenFile: f.tokenFile, proxyImage: "local/proxy:dev"}); err != nil || *asked != "local/proxy:dev" {
+		t.Fatalf("the VM disk was probed with %q, %v; want local/proxy:dev", *asked, err)
+	}
+}
+
+// Setup says once that runs have no disk cap, and nothing when the engine caps them.
+func TestSetupSaysWhenTheEngineHasNoDiskCap(t *testing.T) {
+	old := engineDiskCapped
+	t.Cleanup(func() { engineDiskCapped = old })
+	for _, tc := range []struct {
+		capped bool
+		want   int
+	}{{false, 1}, {true, 0}} {
+		engineDiskCapped = func(context.Context) (bool, bool) { return tc.capped, true }
+		f := newSetupFixture(t, "linux")
+		out, err := f.run(setupOptions{tokenFile: f.tokenFile})
+		if n := strings.Count(out, noDiskCapLine); err != nil || n != tc.want {
+			t.Errorf("capped=%v: the no-cap line appeared %d times, want %d (%v)\n%s", tc.capped, n, tc.want, err, out)
+		}
+	}
+}
