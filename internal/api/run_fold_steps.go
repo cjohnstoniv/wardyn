@@ -559,10 +559,27 @@ func (s *Server) stepResources(f *runFold, rec *foldRecorder) bool {
 	}
 	rl.CPUMillis, rl.MemoryMiB = a.CPUMillis.Applied, a.MemoryMiB.Applied
 	f.spec.Resources = &rl
+	if idle := f.place.limits.Idle; idle != nil {
+		f.spec.AutoStopAfterSec = poolIdleStop(f.spec.AutoStopAfterSec, *idle)
+	}
 	if (a.CPUMillis.Capped || a.MemoryMiB.Capped) && !slices.Contains(f.policyWarns, composer.WarnResourcesCapped) {
 		f.policyWarns = append(f.policyWarns, composer.WarnResourcesCapped)
 	}
 	return true
+}
+
+// poolIdleStop is a run's auto_stop_after_sec under its pool's idle stop (an Interactive run's only;
+// Idle is nil for a Background run): the pool's default when the policy sets none (0, or the -1 an
+// interactive session uses for never), never above the pool's cap. The idle reaper stops the run on that
+// value as on any other.
+func poolIdleStop(sec int, idle types.EffectiveLimit) int {
+	if sec <= 0 && !idle.Default.Unlimited {
+		sec = idle.Default.Value
+	}
+	if !idle.Cap.Unlimited && (sec <= 0 || sec > idle.Cap.Value) {
+		sec = idle.Cap.Value
+	}
+	return sec
 }
 
 // stepLocalEligibility is before confinement/provider liveness: create may
