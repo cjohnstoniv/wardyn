@@ -129,10 +129,37 @@ func TestRunnerSetMockLines(t *testing.T) {
 		t.Fatalf("remote limits sent %+v, %v", remoteSent, err)
 	}
 
+	// --if-unset on a runner that has none behaves as an ordinary set; on one that declared limits
+	// meanwhile it leaves them, and an ordinary set still overwrites.
+	whole := []string{"--max-runs", "6", "--total-cpu", "24", "--total-memory", "96", "--total-disk", "1000", "--per-run-cpu", "4", "--per-run-memory", "16", "--per-run-disk", "160"}
+	if out, err := run(append([]string{"runner", "set", "sandbox-cluster", "--if-unset"}, whole...)...); err != nil || !strings.Contains(out, "limits for sandbox-cluster updated") {
+		t.Fatalf("--if-unset on an unlimited runner = %q, %v", out, err)
+	}
+	if _, ok := srv.wrote()["PUT /api/v1/remote-runners/sandbox-cluster"]; !ok {
+		t.Fatal("--if-unset on an unlimited runner wrote nothing")
+	}
+	declared := remote
+	declared.Limits = &sdk.RunnerLimits{RunsAtOnce: 2, Total: sdk.RunnerAmounts{CPUMillis: 8000, MemoryMiB: 16384, DiskMiB: 102400}, PerRun: sdk.RunnerAmounts{CPUMillis: 2000, MemoryMiB: 4096, DiskMiB: 20480}}
+	srv = newLimitsServer(t, desk, declared, sdk.RunnerPool{})
+	if out, err := run(append([]string{"runner", "set", "sandbox-cluster", "--if-unset"}, whole...)...); err != nil || !strings.Contains(out, "already has limits; left as they are") {
+		t.Fatalf("--if-unset on a runner that declared limits = %q, %v", out, err)
+	}
+	if w := srv.wrote(); len(w) != 0 {
+		t.Fatalf("--if-unset overwrote declared limits: %v", w)
+	}
+	if _, err := run(append([]string{"runner", "set", "sandbox-cluster"}, whole...)...); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := srv.wrote()["PUT /api/v1/remote-runners/sandbox-cluster"]; !ok {
+		t.Fatal("an ordinary set no longer overwrites declared limits")
+	}
+
 	for _, tc := range []struct {
 		args []string
 		want string
 	}{
+		{[]string{"runner", "set", "desk-2", "--max-runs", "2", "--if-unset"}, "--if-unset is for a remote-hosted runner"},
+		{[]string{"runner", "set", "sandbox-cluster", "--if-unset"}, "--if-unset goes with the limit flags"},
 		{[]string{"runner", "set", "desk-2", "--per-run-memory", "64", "--total-memory", "32"}, "per-run memory (64) can't be more than total memory (32)"},
 		{[]string{"runner", "set", "desk-2"}, "name something to change: --max-runs, a --total-* or --per-run-* flag"},
 		{[]string{"runner", "set", "desk-2", "--max-runs", "0"}, "--max-runs is a whole number, 1 or more"},
