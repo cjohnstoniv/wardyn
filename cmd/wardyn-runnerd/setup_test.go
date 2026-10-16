@@ -392,8 +392,9 @@ func TestSetupDevelopmentBuildNeedsAProxyImage(t *testing.T) {
 		t.Fatal(err)
 	}
 	gp, _ := g.host.paths()
-	if env := g.read(gp.envFile); !strings.Contains(env, "WARDYN_PROXY_IMAGE=ghcr.io/cjohnstoniv/wardyn-proxy:0.9.1-rc.2\n") {
-		t.Errorf("a release candidate did not default to its own image:\n%s", env)
+	// The derived release image is probed but not pinned (DR-0202): serve picks its own release image.
+	if env := g.read(gp.envFile); !slices.Contains(g.checks, "ghcr.io/cjohnstoniv/wardyn-proxy:0.9.1-rc.2 wardyn-internal") || strings.Contains(env, "WARDYN_PROXY_IMAGE") {
+		t.Errorf("a release candidate did not default to its own image unpinned: probed %v\n%s", g.checks, env)
 	}
 }
 
@@ -576,8 +577,9 @@ func TestSetupRefusesAnUnsafeAnsweredImage(t *testing.T) {
 	if err != nil || !strings.Contains(out, "keeping "+release) {
 		t.Fatalf("unsafe answered image with a probed release image: err=%v\n%s", err, out)
 	}
-	if env := f.read(mustPaths(t, f).envFile); !strings.Contains(env, "WARDYN_PROXY_IMAGE="+release+"\n") || strings.Contains(env, "ExecStart") {
-		t.Errorf("the env file does not keep the probed image:\n%s", env)
+	// The probed image is this binary's release image, which serve picks unpinned (DR-0202).
+	if env := f.read(mustPaths(t, f).envFile); strings.Contains(env, "WARDYN_PROXY_IMAGE") || strings.Contains(env, "ExecStart") {
+		t.Errorf("the env file pins the derived release image or the answer:\n%s", env)
 	}
 
 	g := newSetupFixture(t, "linux")

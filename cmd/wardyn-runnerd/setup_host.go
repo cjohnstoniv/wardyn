@@ -161,7 +161,14 @@ func (h setupHost) startService(ctx context.Context, plan setupPlan, out io.Writ
 		return h.startLaunchAgent(ctx, plan, out)
 	}
 	p := plan.paths
-	env := fmt.Sprintf("WARDYN_RUNNER_ORG_URL=%s\nWARDYN_PROXY_IMAGE=%s\nWARDYN_INTERNAL_NETWORK=%s\nWARDYN_RUNNER_STATE_DIR=%s\n", plan.org, plan.proxyImage, plan.network, p.stateDir)
+	env := "WARDYN_RUNNER_ORG_URL=" + plan.org + "\n"
+	if image := plan.pinnedImage(); image != "" {
+		env += "WARDYN_PROXY_IMAGE=" + image + "\n"
+	}
+	env += fmt.Sprintf("WARDYN_INTERNAL_NETWORK=%s\nWARDYN_RUNNER_STATE_DIR=%s\n", plan.network, p.stateDir)
+	if plan.trustedCAFile != "" {
+		env += "WARDYN_TRUSTED_CA_FILE=" + plan.trustedCAFile + "\n"
+	}
 	if plan.relayListen != "" {
 		env += "WARDYN_RELAY_LISTEN=" + plan.relayListen + "\n"
 	}
@@ -196,14 +203,53 @@ func (h setupHost) startService(ctx context.Context, plan setupPlan, out io.Writ
 	return nil
 }
 
+// pinnedImage is the proxy image the service definition names, or "" when setup only derived this
+// binary's release image: serve then picks its own release image, so replacing the binary alone
+// moves the proxy with it. An image the person or the organisation named is always written, even
+// when it equals the release image.
+func (p setupPlan) pinnedImage() string {
+	if !p.flagged && !p.fromIdentity && p.proxyImage == releaseProxyImage() {
+		return ""
+	}
+	return p.proxyImage
+}
+
+// keptPins reads the proxy image and CA file an earlier setup wrote into the service definition, so
+// setup run again without --proxy-image or --trusted-ca-file keeps them. A release image of this
+// project found there is an older setup's derived default, not a pin, and is dropped.
+func (p setupPaths) keptPins() (image, caFile string) {
+	read := func(key string) string {
+		if p.envFile != "" {
+			b, _ := os.ReadFile(p.envFile)
+			for _, line := range strings.Split(string(b), "\n") {
+				if v, ok := strings.CutPrefix(line, key+"="); ok {
+					return strings.TrimSpace(v)
+				}
+			}
+			return ""
+		}
+		b, _ := os.ReadFile(p.plistFile)
+		if m := regexp.MustCompile(`<key>` + key + `</key>\s*<string>([^<]*)</string>`).FindSubmatch(b); m != nil {
+			return html.UnescapeString(strings.TrimSpace(string(m[1])))
+		}
+		return ""
+	}
+	image = read("WARDYN_PROXY_IMAGE")
+	if tag, ok := strings.CutPrefix(image, releaseProxyRepo+":"); ok && releaseVersion.MatchString(tag) {
+		image = ""
+	}
+	return image, read("WARDYN_TRUSTED_CA_FILE")
+}
+
 // plistComment is the template's documentation, which is not written into the user's LaunchAgents.
 var plistComment = regexp.MustCompile(`(?s)<!--.*?-->\n`)
 
-// renderLaunchAgent fills the embedded plist, dropping the DOCKER_HOST, WARDYN_RELAY_LISTEN and
-// WARDYN_RELAY_HOST_TARGET keys when there is no value rather than setting them empty.
+// renderLaunchAgent fills the embedded plist, dropping the optional keys when there is no value rather
+// than setting them empty.
 func renderLaunchAgent(plan setupPlan) string {
 	tpl := plistComment.ReplaceAllString(runnerunits.LaunchAgent, "")
-	for key, val := range map[string]string{"DOCKER_HOST": plan.dockerHost, "WARDYN_RELAY_LISTEN": plan.relayListen, "WARDYN_RELAY_HOST_TARGET": plan.relayHostTarget} {
+	for key, val := range map[string]string{"DOCKER_HOST": plan.dockerHost, "WARDYN_RELAY_LISTEN": plan.relayListen, "WARDYN_RELAY_HOST_TARGET": plan.relayHostTarget,
+		"WARDYN_PROXY_IMAGE": plan.pinnedImage(), "WARDYN_TRUSTED_CA_FILE": plan.trustedCAFile} {
 		if val == "" {
 			tpl = regexp.MustCompile(`[ \t]*<key>`+key+`</key>\n[ \t]*<string>[^<]*</string>\n`).ReplaceAllString(tpl, "")
 		}
@@ -211,7 +257,8 @@ func renderLaunchAgent(plan setupPlan) string {
 	return strings.NewReplacer(
 		"__WARDYN_RUNNERD__", html.EscapeString(plan.paths.installed),
 		"__WARDYN_ORG_URL__", html.EscapeString(plan.org),
-		"__WARDYN_PROXY_IMAGE__", html.EscapeString(plan.proxyImage),
+		"__WARDYN_PROXY_IMAGE__", html.EscapeString(plan.pinnedImage()),
+		"__WARDYN_TRUSTED_CA_FILE__", html.EscapeString(plan.trustedCAFile),
 		"__WARDYN_INTERNAL_NETWORK__", html.EscapeString(plan.network),
 		"__DOCKER_HOST__", html.EscapeString(plan.dockerHost),
 		"__RELAY_LISTEN__", html.EscapeString(plan.relayListen),

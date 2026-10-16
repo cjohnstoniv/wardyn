@@ -210,7 +210,7 @@ type Config struct {
 	// knob is unset. Forwarded verbatim to two other trust boundaries dispatch
 	// composes per run — the proxy sidecar (runner.ProxyConfig.TrustedCAPEM,
 	// which rides WARDYN_PROXY_CONFIG_JSON) and the sandbox's own CA trust
-	// (installSandboxTrustedCA, appended to WARDYN_MITM_CA_PEM) — wardynd's OWN
+	// (runner.InstallSandboxTrustedCA, appended to WARDYN_MITM_CA_PEM) — wardynd's OWN
 	// outbound TLS trusts it separately, via installTrustedCA mutating
 	// http.DefaultTransport at boot. Control-plane-authored only: never a
 	// SiteConfig field, never agent-reachable.

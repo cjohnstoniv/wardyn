@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net/netip"
 	"time"
 
@@ -139,6 +140,15 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	idleCmd := []string{"sh", "-c", runner.AgentIdleScript}
 	if spec.Interactive {
 		idleCmd = []string{"agent-run", "--idle"}
+	}
+	if d.cfg.TrustedCAPEM != "" {
+		// A runner's own roots join the sandbox's CA trust after whatever the
+		// organisation staged (Config.TrustedCAPEM); a copy, not the caller's map.
+		spec.Env = maps.Clone(spec.Env)
+		if spec.Env == nil {
+			spec.Env = map[string]string{}
+		}
+		runner.InstallSandboxTrustedCA(d.cfg.TrustedCAPEM, spec.Env)
 	}
 	env := envSlice(spec.Env)
 	// SandboxSpec.SecretEnv rides plain container env HERE — the honest posture on this substrate: a

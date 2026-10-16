@@ -92,6 +92,13 @@ type Config struct {
 	// the target, so the proxy's control-plane clamp covers one address, and an
 	// IP-literal URL (which no hosts entry can remap) refuses the create.
 	ControlPlaneRelay func(controlPlaneURL *url.URL) (target string, err error)
+	// TrustedCAPEM, set only by wardyn-runnerd, is the runner's own validated
+	// corporate CA bundle (--trusted-ca-file, runner.TrustedCABundle). It
+	// becomes every proxy's trusted_ca_pem, on create and on revive, in place
+	// of the organisation's (never sent to a runner), and is appended to the
+	// sandbox's CA trust after whatever the organisation staged
+	// (runner.InstallSandboxTrustedCA). Empty changes nothing.
+	TrustedCAPEM string
 }
 
 // RecordingMountTarget is where RecordingMount appears inside the agent

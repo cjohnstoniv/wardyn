@@ -1626,6 +1626,12 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - See [OPERATIONS.md § Network](OPERATIONS.md#network-upstream-proxy-and-egress-redirects)
 - Needs an agent image that installs the bundle (`install_mitm_ca` in `agent-run-lib.sh`; every published image from 0.7 does, including `agent-base`).
 - A BYOI image that never calls it sees the REPLACE-vars point at a missing file.
+- **On a laptop runner** (`wardyn-runnerd serve`, flag `--trusted-ca-file`) the organisation's bundle never reaches the run's proxy; the runner's own does ([`cmd/wardyn-runnerd/trusted_ca.go`](../cmd/wardyn-runnerd/trusted_ca.go)).
+- Sources, first set wins and only it is read: the flag, `WARDYN_TRUSTED_CA_FILE`, `SSL_CERT_FILE`, then `SSL_CERT_DIR` (one directory, its files read in lexical order).
+- Same validation as `wardynd`, read at startup only; a bad file (named) refuses startup.
+- It becomes every proxy's `trusted_ca_pem` (create and revive) and is appended to the sandbox's `WARDYN_MITM_CA_PEM`.
+- Over 64 KiB is refused: Linux will not start a process with one environment variable over 128 KiB.
+- `setup --trusted-ca-file` writes it into the service definition; a rerun keeps it.
 
 ### `WARDYN_DAEMON_PROXY_URL`
 
@@ -1916,7 +1922,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_START_FOLDER` | string | (unset) | the run's `start_folder`: a folder inside one attachment, or `image_default` for the image's own directory. `agent-run` fails rather than start elsewhere |
 | `WARDYN_USER_DRIVE` | string (`<target>:ro\|rw`) | (unset) | the run's USER DRIVE, present ONLY when one is mounted: the in-container target and the mode. An ANNOUNCEMENT, never the mechanism: the mount is made by the runner (`applyUserDriveEnv`, [`internal/api/runs_dispatch_mounts.go`](../internal/api/runs_dispatch_mounts.go)). [Details](#wardyn_user_drive) |
 | `WARDYN_SSH_GRANTS` 🔒 | string (JSON) | (unset) | brokered SSH grants |
-| `WARDYN_MITM_CA_PEM` | string (PEM bundle) | (unset) | CA certificate(s) the sandbox trusts: the per-run TLS-MITM CA when active, with the operator's `WARDYN_TRUSTED_CA_FILE` bundle appended when configured (`installSandboxTrustedCA`, [`internal/api/runs_dispatch_llm.go`](../internal/api/runs_dispatch_llm.go)). [Details](#wardyn_mitm_ca_pem) |
+| `WARDYN_MITM_CA_PEM` | string (PEM bundle) | (unset) | CA certificate(s) the sandbox trusts: the per-run TLS-MITM CA when active, with the operator's `WARDYN_TRUSTED_CA_FILE` bundle appended when configured (`runner.InstallSandboxTrustedCA`, [`internal/runner/trusted_ca.go`](../internal/runner/trusted_ca.go)). [Details](#wardyn_mitm_ca_pem) |
 | `WARDYN_TASK_MODE` | string | (unset) | run task mode (e.g. exec) |
 | `WARDYN_INTERACTIVE_START` | string | (unset) | `agent` makes an INTERACTIVE run's attach shell open in the image's agent CLI in the prepared workspace; unset/`shell` is a bare shell. Only ever set for interactive runs. [Details](#wardyn_interactive_start) |
 | `WARDYN_INTERACTIVE_SEED` | string | (unset) | the run's optional boot seed, its `task`, exported verbatim for an interactive run only; fires once at sandbox boot. [Details](#wardyn_interactive_seed) |
@@ -1952,7 +1958,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 
 ### `WARDYN_MITM_CA_PEM`
 
-- CA certificate(s) the sandbox trusts — the per-run TLS-MITM CA when `intercept_tls`/Claude sign-in injection is active, with the operator's `WARDYN_TRUSTED_CA_FILE` bundle appended when configured (`installSandboxTrustedCA`, [`internal/api/runs_dispatch_llm.go`](../internal/api/runs_dispatch_llm.go))
+- CA certificate(s) the sandbox trusts — the per-run TLS-MITM CA when `intercept_tls`/Claude sign-in injection is active, with the operator's `WARDYN_TRUSTED_CA_FILE` bundle appended when configured (`runner.InstallSandboxTrustedCA`, [`internal/runner/trusted_ca.go`](../internal/runner/trusted_ca.go))
 - A run with neither active never has this key at all.
 - `install_mitm_ca` (`agent-run-lib.sh`) treats it as an opaque PEM bundle, so multiple concatenated certificates work.
 

@@ -129,7 +129,10 @@ func (d *Driver) startProxy(ctx context.Context, runID uuid.UUID, labels map[str
 		}
 		host.ExtraHosts = []string{"host.docker.internal:" + target, name + ":" + target}
 	}
-	var err error
+	cfgJSON, err := withTrustedCA(cfgJSON, d.cfg.TrustedCAPEM)
+	if err != nil {
+		return "", err
+	}
 	cfgJSON, err = d.runnerSpoolConfig(ctx, runID, cfgJSON, cfg, host)
 	if err != nil {
 		return "", err
