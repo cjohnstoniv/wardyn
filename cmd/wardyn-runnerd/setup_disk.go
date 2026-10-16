@@ -21,7 +21,7 @@ var (
 )
 
 // noDiskCapLine is what setup says, once, when runs on this engine have no disk cap.
-const noDiskCapLine = "runs on this engine have no disk cap (overlayfs); see docs/operations/hybrid-laptops.md"
+const noDiskCapLine = "Runs on this engine have no disk cap: its storage driver cannot set a size quota. See docs/operations/hybrid-laptops.md in the Wardyn repository."
 
 // measureWithVMDisk is measureHost plus, on a VM-backed engine whose data root is not a path here, the
 // VM's free disk read by the proxy image (image, else the release image). A probe that cannot run leaves

@@ -8,6 +8,7 @@ package docker
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"syscall"
@@ -19,21 +20,30 @@ import (
 )
 
 // Measure implements runner.Measurer: the CPUs and memory Docker reports, and the free space of
-// Docker's data root. On a VM-backed engine that path is not on this host, so the proxy image
-// reports the VM's free disk instead; a probe that fails leaves the disk unknown.
+// Docker's data root when it is a path on this host (not on a VM-backed engine).
 func (d *Driver) Measure(ctx context.Context) (types.RunnerAmounts, error) {
 	res, err := d.cli.Info(ctx, client.InfoOptions{})
 	if err != nil {
 		return types.RunnerAmounts{}, fmt.Errorf("docker: info: %w", err)
 	}
-	host := os.Getenv("DOCKER_HOST")
-	out := MeasureInfo(res.Info, host, FreeDiskMiB)
-	if out.DiskMiB == 0 && d.cfg.ProxyImage != "" && VMBacked(res.Info, host) {
-		if mib, err := d.ProbeDiskFreeMiB(ctx); err == nil {
-			out.DiskMiB = mib
-		}
+	return MeasureInfo(res.Info, os.Getenv("DOCKER_HOST"), FreeDiskMiB), nil
+}
+
+// VMBackedEngine asks the engine whether it is VM-backed (see VMBacked).
+func (d *Driver) VMBackedEngine(ctx context.Context) (bool, error) {
+	res, err := d.cli.Info(ctx, client.InfoOptions{})
+	if err != nil {
+		return false, fmt.Errorf("docker: info: %w", err)
 	}
-	return out, nil
+	return VMBacked(res.Info, os.Getenv("DOCKER_HOST")), nil
+}
+
+// Close releases the driver's engine client.
+func (d *Driver) Close() error {
+	if c, ok := d.cli.(io.Closer); ok {
+		return c.Close()
+	}
+	return nil
 }
 
 // vmSocketDirs are the directories a VM-backed engine's socket lives under on this host: Docker

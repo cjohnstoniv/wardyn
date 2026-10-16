@@ -8,7 +8,6 @@ package main
 import (
 	"context"
 	"log/slog"
-	"os"
 	"time"
 
 	"github.com/moby/moby/client"
@@ -24,17 +23,12 @@ func vmEngineDiskMiB(ctx context.Context, image string) (int64, bool) {
 	}
 	ctx, cancel := context.WithTimeout(ctx, 40*time.Second)
 	defer cancel()
-	cli, err := client.New(client.FromEnv)
-	if err != nil {
-		return 0, false
-	}
-	defer cli.Close()
-	info, err := cli.Info(ctx, client.InfoOptions{})
-	if err != nil || !docker.VMBacked(info.Info, os.Getenv("DOCKER_HOST")) {
-		return 0, false
-	}
 	d, err := docker.New(docker.Config{ProxyImage: image})
 	if err != nil {
+		return 0, false
+	}
+	defer d.Close()
+	if vm, err := d.VMBackedEngine(ctx); err != nil || !vm {
 		return 0, false
 	}
 	mib, err := d.ProbeDiskFreeMiB(ctx)

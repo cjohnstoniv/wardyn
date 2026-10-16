@@ -133,27 +133,3 @@ func TestVMBacked(t *testing.T) {
 		}
 	}
 }
-
-// A VM-backed Driver.Measure reads the disk from the probe; a probe that cannot run leaves it unknown.
-func TestMeasureReadsTheVMDiskFromTheProbe(t *testing.T) {
-	for _, tc := range []struct {
-		name string
-		exit int64
-		out  string
-		want int64
-	}{
-		{"probe answers", 0, "102400\n", 102400},
-		{"probe fails", 2, "", 0},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			f := newFakeDocker()
-			f.info.OperatingSystem, f.info.DockerRootDir, f.info.NCPU, f.info.MemTotal = "Docker Desktop", "/var/lib/docker", 4, 8<<30
-			f.images["wardyn-proxy:dev"] = true
-			f.diskProbeExit, f.diskProbeOut = tc.exit, tc.out
-			got, err := newTestDriver(f).Measure(context.Background())
-			if err != nil || got.DiskMiB != tc.want || got.CPUMillis != 4000 {
-				t.Fatalf("Measure = %+v, %v; want disk %d", got, err, tc.want)
-			}
-		})
-	}
-}
