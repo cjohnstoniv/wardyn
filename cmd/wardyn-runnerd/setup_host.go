@@ -163,28 +163,51 @@ func writeAtomic(path string, mode os.FileMode, write func(io.Writer) error) (er
 	return os.Rename(f.Name(), path)
 }
 
+// plainShellWord is what needs no quoting in a shell or in systemd's EnvironmentFile; every setting a Linux
+// unit carries passed safeSetting, which is a subset.
+var plainShellWord = regexp.MustCompile(`^[A-Za-z0-9._:/@%+=,-]+$`)
+
+// shellQuote is s as one shell word: unchanged when plain, else in single quotes. A macOS path holds a space
+// ("Application Support"), which a bare KEY=value line or command argument would split.
+func shellQuote(s string) string {
+	if plainShellWord.MatchString(s) {
+		return s
+	}
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+// shellUnquote undoes shellQuote for a value read back from an environment file.
+func shellUnquote(s string) string {
+	if len(s) >= 2 && s[0] == '\'' && s[len(s)-1] == '\'' {
+		return strings.ReplaceAll(s[1:len(s)-1], `'\''`, "'")
+	}
+	return s
+}
+
 // serviceEnv is the runner's environment as setup settled it, one KEY=value line each, in the form
-// systemd's EnvironmentFile reads and a shell can source (every value passed safeSetting).
+// systemd's EnvironmentFile reads (a Linux unit's values are all plain) and a shell can source (a value
+// with a space, such as a macOS state directory, is single-quoted).
 func (p setupPlan) serviceEnv() string {
-	env := "WARDYN_RUNNER_ORG_URL=" + p.org + "\n"
+	line := func(k, v string) string { return k + "=" + shellQuote(v) + "\n" }
+	env := line("WARDYN_RUNNER_ORG_URL", p.org)
 	if image := p.pinnedImage(); image != "" {
-		env += "WARDYN_PROXY_IMAGE=" + image + "\n"
+		env += line("WARDYN_PROXY_IMAGE", image)
 	}
 	if p.pinMarker() != "" {
 		env += "WARDYN_PROXY_IMAGE_PINNED=1\n"
 	}
-	env += fmt.Sprintf("WARDYN_INTERNAL_NETWORK=%s\nWARDYN_RUNNER_STATE_DIR=%s\n", p.network, p.paths.stateDir)
+	env += line("WARDYN_INTERNAL_NETWORK", p.network) + line("WARDYN_RUNNER_STATE_DIR", p.paths.stateDir)
 	if p.trustedCAFile != "" {
-		env += "WARDYN_TRUSTED_CA_FILE=" + p.trustedCAFile + "\n"
+		env += line("WARDYN_TRUSTED_CA_FILE", p.trustedCAFile)
 	}
 	if p.relayListen != "" {
-		env += "WARDYN_RELAY_LISTEN=" + p.relayListen + "\n"
+		env += line("WARDYN_RELAY_LISTEN", p.relayListen)
 	}
 	if p.relayHostTarget != "" {
-		env += "WARDYN_RELAY_HOST_TARGET=" + p.relayHostTarget + "\n"
+		env += line("WARDYN_RELAY_HOST_TARGET", p.relayHostTarget)
 	}
 	if p.dockerHost != "" {
-		env += "DOCKER_HOST=" + p.dockerHost + "\n"
+		env += line("DOCKER_HOST", p.dockerHost)
 	}
 	return env
 }
@@ -221,6 +244,19 @@ func (h setupHost) startService(ctx context.Context, plan setupPlan, out io.Writ
 	return nil
 }
 
+// installedService is the unit or LaunchAgent file already installed, or "".
+func (p setupPaths) installedService() string {
+	for _, f := range []string{p.unitFile, p.plistFile} {
+		if f == "" {
+			continue
+		}
+		if _, err := os.Stat(f); err == nil {
+			return f
+		}
+	}
+	return ""
+}
+
 // noServiceEnvFile is where --no-service writes the environment: the file a Linux service reads, and on
 // macOS, which has no such file, one beside the identity's directory.
 func (p setupPaths) noServiceEnvFile() string {
@@ -238,7 +274,7 @@ func (h setupHost) writeRunConfig(plan setupPlan, out io.Writer) error {
 		return err
 	}
 	fmt.Fprintf(out, "Wrote %s. No service was installed. Run the runner yourself, from a shell that keeps it running:\n  set -a; . %s; set +a; %s serve --org %s --state-dir %s\n",
-		path, path, plan.paths.installed, plan.org, plan.paths.stateDir)
+		path, shellQuote(path), shellQuote(plan.paths.installed), shellQuote(plan.org), shellQuote(plan.paths.stateDir))
 	return nil
 }
 
@@ -267,20 +303,25 @@ func (p setupPlan) pinMarker() string {
 // setup run again without --proxy-image or --trusted-ca-file keeps them. An unmarked release image
 // of this project is what a setup before 0.9.3 derived, not a pin, and is dropped.
 func (p setupPaths) keptPins() (image, caFile string) {
+	// The source is the one the service actually uses: a Linux unit's environment file, or on macOS the
+	// LaunchAgent once one is installed. The environment file --no-service writes there is read only while no
+	// LaunchAgent exists, so an older one never outranks a newer plist (or mixes with it).
+	var plist []byte
+	if p.plistFile != "" {
+		plist, _ = os.ReadFile(p.plistFile)
+	}
 	read := func(key string) string {
-		// The environment file first: the one a Linux service reads, or what --no-service wrote on macOS.
+		if plist != nil {
+			if m := regexp.MustCompile(`<key>` + key + `</key>\s*<string>([^<]*)</string>`).FindSubmatch(plist); m != nil {
+				return html.UnescapeString(strings.TrimSpace(string(m[1])))
+			}
+			return ""
+		}
 		b, _ := os.ReadFile(p.noServiceEnvFile())
 		for _, line := range strings.Split(string(b), "\n") {
 			if v, ok := strings.CutPrefix(line, key+"="); ok {
-				return strings.TrimSpace(v)
+				return shellUnquote(strings.TrimSpace(v))
 			}
-		}
-		if p.envFile != "" {
-			return ""
-		}
-		b, _ = os.ReadFile(p.plistFile)
-		if m := regexp.MustCompile(`<key>` + key + `</key>\s*<string>([^<]*)</string>`).FindSubmatch(b); m != nil {
-			return html.UnescapeString(strings.TrimSpace(string(m[1])))
 		}
 		return ""
 	}

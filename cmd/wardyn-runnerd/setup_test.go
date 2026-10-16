@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"net/netip"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -850,7 +851,7 @@ func TestSetupNoServiceWritesTheEnvironmentAndInstallsNoUnit(t *testing.T) {
 			}
 			envFile := p.noServiceEnvFile()
 			env := f.read(envFile)
-			for _, want := range []string{"WARDYN_RUNNER_ORG_URL=" + f.org + "\n", "WARDYN_PROXY_IMAGE=ghcr.io/example/proxy:1\n", "WARDYN_PROXY_IMAGE_PINNED=1\n", "WARDYN_RUNNER_STATE_DIR=" + p.stateDir + "\n"} {
+			for _, want := range []string{"WARDYN_RUNNER_ORG_URL=" + f.org + "\n", "WARDYN_PROXY_IMAGE=ghcr.io/example/proxy:1\n", "WARDYN_PROXY_IMAGE_PINNED=1\n", "WARDYN_RUNNER_STATE_DIR=" + shellQuote(p.stateDir) + "\n"} {
 				if !strings.Contains(env, want) {
 					t.Errorf("env file lacks %q:\n%s", want, env)
 				}
@@ -869,7 +870,7 @@ func TestSetupNoServiceWritesTheEnvironmentAndInstallsNoUnit(t *testing.T) {
 			if len(f.commands) != 0 {
 				t.Errorf("--no-service ran %v", f.commands)
 			}
-			if want := "set -a; . " + envFile + "; set +a; " + p.installed + " serve --org " + f.org + " --state-dir " + p.stateDir; !strings.Contains(out, want) {
+			if want := "set -a; . " + shellQuote(envFile) + "; set +a; " + shellQuote(p.installed) + " serve --org " + shellQuote(f.org) + " --state-dir " + shellQuote(p.stateDir); !strings.Contains(out, want) {
 				t.Errorf("the run command is not printed (want %q):\n%s", want, out)
 			}
 			if strings.Contains(out, "Started the wardyn-runnerd") {
@@ -906,5 +907,94 @@ func TestSetupPinsTheEngineInTheService(t *testing.T) {
 		if plist := renderLaunchAgent(setupPlan{dockerHost: host.dockerHost}); !strings.Contains(plist, "<string>"+tc.want+"</string>") {
 			t.Errorf("LaunchAgent lacks DOCKER_HOST %s:\n%s", tc.want, plist)
 		}
+	}
+}
+
+// On macOS every path holds "Application Support". The command --no-service prints, run through sh, must
+// reach the binary with the state directory as one argument and in its environment.
+func TestSetupNoServicePrintsACommandAShellRunsWithASpaceInThePath(t *testing.T) {
+	f := newSetupFixture(t, "darwin")
+	stub := "#!/bin/sh\nprintf 'state=%s\\n' \"$WARDYN_RUNNER_STATE_DIR\"\nfor a; do printf 'arg=%s\\n' \"$a\"; done\n"
+	if err := os.WriteFile(f.host.exe, []byte(stub), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	p, _ := f.host.paths()
+	if !strings.Contains(p.stateDir, " ") {
+		t.Fatalf("the macOS state directory %q has no space; the test proves nothing", p.stateDir)
+	}
+	out, err := f.run(setupOptions{tokenFile: f.tokenFile, noService: true})
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	var command string
+	for _, l := range strings.Split(out, "\n") {
+		if strings.HasPrefix(l, "  set -a; ") {
+			command = strings.TrimSpace(l)
+		}
+	}
+	if command == "" {
+		t.Fatalf("no run command printed:\n%s", out)
+	}
+	got, err := exec.Command("sh", "-c", command).CombinedOutput()
+	if err != nil {
+		t.Fatalf("sh -c %q: %v\n%s", command, err, got)
+	}
+	for _, want := range []string{"state=" + p.stateDir + "\n", "arg=serve\n", "arg=--state-dir\narg=" + p.stateDir + "\n", "arg=--org\narg=" + f.org + "\n"} {
+		if !strings.Contains(string(got), want) {
+			t.Errorf("the printed command's run lacks %q:\n%s", want, got)
+		}
+	}
+}
+
+// Setup run plain after a --no-service run and then a service setup that pinned another image and CA file
+// keeps the service's pins, not the older environment file's.
+func TestSetupKeepsTheLaunchAgentsPinsOverAStaleNoServiceEnvironment(t *testing.T) {
+	f := newSetupFixture(t, "darwin")
+	dir := t.TempDir()
+	caX := writeFile(t, filepath.Join(dir, "x.pem"), testCAPEM(t, "x"))
+	caZ := writeFile(t, filepath.Join(dir, "z.pem"), testCAPEM(t, "z"))
+	p, _ := f.host.paths()
+	if _, err := f.run(setupOptions{tokenFile: f.tokenFile, noService: true, proxyImage: "ghcr.io/example/proxy:x", trustedCAFile: caX}); err != nil {
+		t.Fatal(err)
+	}
+	if env := f.read(p.noServiceEnvFile()); !strings.Contains(env, "proxy:x") {
+		t.Fatalf("the --no-service run wrote no X pin:\n%s", env)
+	}
+	if _, err := f.run(setupOptions{proxyImage: "ghcr.io/example/proxy:z", trustedCAFile: caZ}); err != nil {
+		t.Fatal(err)
+	}
+	f.flagless = true
+	if _, err := f.run(setupOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	plist := f.read(p.plistFile)
+	for _, want := range []string{"proxy:z", caZ, "<key>WARDYN_PROXY_IMAGE_PINNED</key>"} {
+		if !strings.Contains(plist, want) {
+			t.Errorf("the plain setup dropped %q from the LaunchAgent:\n%s", want, plist)
+		}
+	}
+	if strings.Contains(plist, "proxy:x") || strings.Contains(plist, caX) {
+		t.Errorf("the plain setup took the stale environment file's pins:\n%s", plist)
+	}
+}
+
+// --no-service is refused, before a token is spent, while a service for this runner is installed: running
+// both would be two processes with one identity.
+func TestSetupNoServiceRefusesWhileAServiceIsInstalled(t *testing.T) {
+	for _, goos := range []string{"linux", "darwin"} {
+		t.Run(goos, func(t *testing.T) {
+			f := newSetupFixture(t, goos)
+			if _, err := f.run(setupOptions{tokenFile: f.tokenFile}); err != nil {
+				t.Fatal(err)
+			}
+			registered := f.count("POST /api/v1/runners/register")
+			_, err := f.run(setupOptions{noService: true})
+			if err == nil || !strings.Contains(err.Error(), "already installed") {
+				t.Fatalf("--no-service beside an installed service = %v, want a refusal", err)
+			}
+			if f.count("POST /api/v1/runners/register") != registered {
+				t.Error("the refusal came after the registration")
+			}
+		})
 	}
 }

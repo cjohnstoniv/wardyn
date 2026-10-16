@@ -272,6 +272,11 @@ func (h setupHost) preflight(cmd *cobra.Command, o setupOptions) (setupPlan, err
 		if err := h.checkServiceManager(cmd.Context(), plan.paths); err != nil {
 			return setupPlan{}, err
 		}
+	} else if installed := paths.installedService(); installed != "" {
+		// Refused rather than disabled: --no-service promises to touch no service, and a unit left running beside
+		// the foreground command would be a second process with this one identity, which the organisation
+		// refuses.
+		return setupPlan{}, fmt.Errorf("a service is already installed for this runner (%s): running the runner by hand as well starts a second process with one identity. Stop and remove the service first (Linux: systemctl --user disable --now %s; macOS: launchctl bootout gui/%d/%s, then delete the file), then run setup --no-service again; no token was spent", installed, serviceUnit, h.uid, serviceLabel)
 	}
 	// Always, flags or not: serve runs the same check at every start, after the token is spent.
 	if plan.eng, err = h.engine(cmd.Context(), o.network, want); err != nil {
