@@ -82,6 +82,10 @@ func dispatchInternalHostsRun(t *testing.T, sc *types.SiteConfig, runnerID uuid.
 		t.Fatal(err)
 	}
 	spec := localStoredSpec(*cfg)
+	if spec.ProxyConfig.Policy.LLMInspection != nil {
+		// The stored row equals the runner's spec only without an inspection corpus (withInspectionCorpus).
+		t.Fatal("this pin assumes a policy with no inspection corpus")
+	}
 	spec.Image, spec.ConfinementClass, spec.RunnerID = image, types.CC1, runnerID.String()
 	return srv, run, spec
 }
