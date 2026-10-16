@@ -656,7 +656,7 @@ The organisation side of hybrid enrolment ([PLAN.md](design/0.8/PLAN.md), "Hybri
 | Marked in | How |
 |---|---|
 | `actor` | Its `actor` is `device:<id>/<claimed actor>` (`FederatedActor` in [internal/store/store_devices.go](../internal/store/store_devices.go)), so no filter or rule keyed on an organisation principal matches a laptop's claim to be that principal. |
-| `data.device_origin` | Its `data.device_origin` (`mergeDeviceOrigin`) holds the device id, its local seq, the hashes it claimed and the `actor` and `source_ip` it claimed. |
+| `data.device_origin` | Its `data.device_origin` (`mergeDeviceOrigin`) holds the device id, its local seq, the hashes it claimed and the `actor` and `source_ip` it claimed, plus `proxy_peer` when it came through a trusted proxy. |
 | `device_id` | And every audit read and the NDJSON export carry a top-level `device_id` on it (absent on the organisation's own rows), and filter on `?origin=device` or `?origin=organisation`. |
 
 - A row counts as forwarded only when the `actor` prefix and `data.device_origin.device_id` name the same device (`FederatedDeviceID`).

@@ -126,7 +126,7 @@ The runner stream has two more anonymous limits and one per-runner limit, all pe
 1. Wardyn reads the header only when the TCP peer is inside the list.
 2. It walks the chain right to left, skipping addresses inside the list; the first address outside it is the client. Entries left of it were written by that client and are never read.
 3. A malformed, loopback or unspecified entry, more than 32 entries or more than 2048 bytes, or a chain made only of listed addresses, keeps the TCP peer.
-4. The client becomes the row's `source_ip`, and the peer is kept as `data.proxy_peer` on every audit row the request writes.
+4. The client becomes the row's `source_ip`, and the peer is kept as `data.proxy_peer` on every audit row the request writes (`data.device_origin.proxy_peer` on a device-forwarded row).
 
 - List only your proxies' addresses. Any address in the list can name the client, so a range that holds callers lets them choose their own `source_ip`.
 - Your proxy must append the client to `X-Forwarded-For`, or replace the header, never pass a client's value through alone.
