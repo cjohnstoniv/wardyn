@@ -27,7 +27,9 @@ import (
 func (s *Server) applyRunRecording(ctx context.Context, run *types.AgentRun, spec *runner.SandboxSpec) bool {
 	orgOn := s.cfg.RecordingStore != nil
 	spec.Record = &orgOn
-	run.NotRecorded = types.NotRecordedFor(orgOn, s.targetRecords(ctx, *run))
+	// A target whose facts cannot be read now is not marked: only a known non-recording runner is.
+	records, known := s.targetRecords(ctx, *run)
+	run.NotRecorded = types.NotRecordedFor(orgOn, records || !known)
 	if run.NotRecorded == "" {
 		return true
 	}
@@ -143,19 +145,20 @@ func (s *Server) clearDeclinedOnUpload(ctx context.Context, run types.AgentRun) 
 }
 
 // targetRecords is whether the run's target records a run its organisation asks it to: the bound
-// self-hosted runner's or remote-hosted runner's own facts, else this deployment's runner. Unknown
-// facts read as not recording.
-func (s *Server) targetRecords(ctx context.Context, run types.AgentRun) bool {
+// self-hosted runner's or remote-hosted runner's own facts, else this deployment's runner. known is
+// false when those facts cannot be read now (a runner not registered here, a capabilities read that
+// failed).
+func (s *Server) targetRecords(ctx context.Context, run types.AgentRun) (records, known bool) {
 	switch {
 	case run.RunnerID != nil:
-		f, _ := s.runnerFacts(*run.RunnerID)
-		return f.Records
+		f, ok := s.runnerFacts(*run.RunnerID)
+		return f.Records, ok
 	case run.RunnerPoolExecutor != "":
-		f, _ := s.executorFacts(ctx, run.RunnerPoolExecutor)
-		return f.Records
+		f, ok := s.executorFacts(ctx, run.RunnerPoolExecutor)
+		return f.Records, ok
 	case s.cfg.Runner != nil:
 		caps, err := s.cfg.Runner.Capabilities(ctx)
-		return err == nil && caps.SessionRecording
+		return err == nil && caps.SessionRecording, err == nil
 	}
-	return false
+	return false, true
 }

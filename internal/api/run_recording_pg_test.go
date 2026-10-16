@@ -259,9 +259,13 @@ func TestPG_RecordingRequired_HoldsARunWithNoPool(t *testing.T) {
 			{"required, runner records", fs, true, true, "", ""},
 			{"required, runner declines", fs, true, false, placement.ReasonRunnerRecordingOff, runnerpool.RunnerRecordingOffUnpooledMsg()},
 			{"required, no store", nil, true, true, placement.ReasonRecordingStoreOff, runnerpool.RecordingStoreOffMsg()},
+			{"required, runner facts unknown", fs, true, false, "", ""},
 		} {
 			e.srv.cfg.RecordingStore = tc.store
 			e.setRecords(id, tc.records)
+			if tc.name == "required, runner facts unknown" {
+				delete(e.runner.runnerFacts, id.String())
+			}
 			if tc.required {
 				e.requireRecording(types.RecordingRequired)
 			} else {
@@ -291,4 +295,31 @@ func TestPG_RecordingRequired_HoldsARunWithNoPool(t *testing.T) {
 			}
 		}
 	})
+}
+
+// TestPG_QueuedRunWaitsForARecordingRunner: under required, a queued run whose only free runner does not
+// record keeps its place (runner_pool_no_runner_free) instead of being promoted to fail, and starts once
+// the runner records.
+func TestPG_QueuedRunWaitsForARecordingRunner(t *testing.T) {
+	fs, err := recording.NewFSStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := newQueueEnv(t)
+	e.srv.cfg.RecordingStore = fs
+	pool := e.cappedPool("Busy", 1)
+	occupant := e.occupy(pool)
+	waiting := e.queuedLaunch(nil, pool, "")
+	e.requireRecording(types.RecordingRequired)
+	e.free(occupant)
+	e.sweep()
+	if got := e.run(waiting.ID); got.State != types.RunQueued || got.StatusDetail != "queue: runner_pool_no_runner_free" || e.queueRows(waiting.ID) != 1 {
+		t.Fatalf("with only a non-recording runner free the run is %s %q with %d rows; want QUEUED waiting with runner_pool_no_runner_free",
+			got.State, got.StatusDetail, e.queueRows(waiting.ID))
+	}
+	f := e.runner.execFacts["alpha"]
+	f.Records = true
+	e.runner.execFacts["alpha"] = f
+	e.sweep()
+	e.waitStarted(waiting.ID)
 }
