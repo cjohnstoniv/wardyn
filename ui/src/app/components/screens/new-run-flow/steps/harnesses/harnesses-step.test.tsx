@@ -91,6 +91,15 @@ describe("Harnesses step: roster rows", () => {
     expect(screen.getByRole("button", { name: NR_HARNESSES.ADD_ANOTHER })).toBeDisabled();
   });
 
+  it("offers a combination a larger declared set carries (DR-0225)", async () => {
+    const user = userEvent.setup();
+    const triple = [ROSTER.harnesses[0].id, ROSTER.harnesses[1].id, ROSTER.harnesses[2].id];
+    show({ ...INTERACTIVE, tools: [harness("claude-code")] }, { ...ROSTER, sets: [triple] });
+    await user.click(await screen.findByRole("button", { name: NR_HARNESSES.ADD_ANOTHER }));
+    expect(intentNow().tools?.map((t) => t.id)).toEqual(["claude-code", "codex-cli"]);
+    expect(screen.queryByText(NR_HARNESSES.NO_COMBINATION("Claude Code", "Codex CLI"))).not.toBeInTheDocument();
+  });
+
   it("adds the first addable row, then the next", async () => {
     const user = userEvent.setup();
     show({ ...INTERACTIVE, tools: [harness("claude-code")] });
