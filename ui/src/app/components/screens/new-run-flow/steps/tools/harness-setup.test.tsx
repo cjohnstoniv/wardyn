@@ -77,9 +77,18 @@ describe("HarnessSetup", () => {
   });
 
   it("heads each harness with whether it starts with the run", () => {
-    show([CLAUDE_UNGATED, CODEX], { tools: [{ id: "claude-code", kind: "harness" }, { id: "codex-cli", kind: "harness" }] });
+    show([CLAUDE_UNGATED, CODEX], { tools: [{ id: "claude-code", kind: "harness" }, { id: "codex-cli", kind: "harness" }], startup: { kind: "harness", tool: "claude-code" } });
     expect(card("Claude Code").getByText(NR_TOOLS.SUB_STARTS)).toBeTruthy();
     expect(card("Codex CLI").getByText(NR_TOOLS.SUB_AVAILABLE)).toBeTruthy();
+  });
+
+  it.each([
+    ["no startup", {}],
+    ["a command startup", { startup: { kind: "command", command: "make test" } }],
+  ] as const)("starts no harness with %s (DR-0230)", (_name, over) => {
+    show([CLAUDE_UNGATED, CODEX], { tools: [{ id: "claude-code", kind: "harness" }, { id: "codex-cli", kind: "harness" }], ...over } as RunIntent);
+    expect(card("Claude Code").getByText(NR_TOOLS.SUB_AVAILABLE)).toBeTruthy();
+    expect(card("Claude Code").queryByText(NR_TOOLS.SUB_STARTS)).toBeNull();
   });
 
   describe("model provider", () => {
