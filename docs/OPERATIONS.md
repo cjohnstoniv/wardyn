@@ -525,11 +525,12 @@ commands are the ones in "Back them up" and "Restore them", and in
   live trail first.
 - **Revocation order.** With no high-water mark (the replaced database is lost),
   no value proves the sequence is past every session it issued, so do not pick one.
-  End every console session instead, with every wardynd still stopped: replace the
-  session key the way [the boot keys are replaced](operations/secrets-and-keys.md)
-  (`DELETE FROM secrets WHERE owned_by = '' AND name = 'wardyn-session-key';`, so the
-  next boot mints a new one), and run step 3b with `0` in place of the mark. Every
-  person then signs in again.
+  End every console session instead, with every wardynd still stopped: after step 3
+  has loaded the dump and before step 3b, replace the session key the way
+  [the boot keys are replaced](operations/secrets-and-keys.md), so the next boot
+  mints a new one:
+  `docker exec -i wardyn-postgres psql -U wardyn -d wardyn -c "DELETE FROM secrets WHERE owned_by = '' AND name = 'wardyn-session-key';"`.
+  Then run step 3b with `0` in place of the mark. Every person then signs in again.
 - **Drives.** Record the volume to drive id to person map at backup time. After
   a restore, a volume you recreate by hand is adopted by name, so the
   `wardyn.drive=<id>` label is the only check that it belongs to the right drive.
