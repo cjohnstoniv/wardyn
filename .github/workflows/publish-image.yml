@@ -169,6 +169,8 @@ jobs:
           push: true
           # Both laptop architectures, so :latest and :sha-<n> are an index like the release tags.
           platforms: linux/amd64,linux/arm64
+          # No attestation manifests in the index; see release.yml's `provenance: false` note.
+          provenance: false
           tags: ${{ steps.tags.outputs.tags }}
       # Sign by DIGEST, the same way release.yml does, so :latest and :sha-<n>
       # carry a verifiable signature rather than being the one publishing lane

@@ -9,6 +9,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"github.com/moby/moby/client"
 
@@ -91,9 +92,13 @@ func (d *Driver) archRunnable(ctx context.Context, ref, img, eng, runtime string
 	}
 	if kind != archUnrunnable {
 		if !cached {
-			// This runner never learns which WARDYN_AGENT_IMAGES key supplied ref, so the text says how to find it.
-			slog.Warn(fmt.Sprintf("running %s (%s image) under emulation on an %s engine; expect it to be slower. The ref comes from the WARDYN_AGENT_IMAGES entry whose value is %s, or is the published default if no entry has it. If you built this image, build it multi-arch (docker buildx build --platform linux/amd64,linux/arm64) or add a <key>@%s entry; if it is a published Wardyn image, check your mirror copied all platforms (docker buildx imagetools inspect %s)",
-				ref, img, eng, ref, eng, ref))
+			// This runner never learns which setting supplied ref, so the text says how to find it.
+			source := fmt.Sprintf("If this is an agent image, it comes from the WARDYN_AGENT_IMAGES entry whose value is %s, or is the published default if no entry has it; add a <key>@%s entry (used by runs on a registered %s runner) or build it multi-arch (docker buildx build --platform linux/amd64,linux/arm64)", ref, eng, eng)
+			if ref == d.cfg.ProxyImage {
+				source = fmt.Sprintf("This is the proxy image, set by WARDYN_PROXY_IMAGE or, for a registered %s runner, WARDYN_PROXY_IMAGE_%s; point one of them at an %s image or build it multi-arch (docker buildx build --platform linux/amd64,linux/arm64)", eng, strings.ToUpper(eng), eng)
+			}
+			slog.Warn(fmt.Sprintf("running %s (%s image) under emulation on an %s engine; expect it to be slower. %s. If it is a published Wardyn image, check your mirror copied all platforms (docker buildx imagetools inspect %s)",
+				ref, img, eng, source, ref))
 		}
 		return nil
 	}

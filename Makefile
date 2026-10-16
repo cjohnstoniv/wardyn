@@ -113,7 +113,8 @@ agent-images: agent-images-core ## Build all agent OCI images (core + oracle e2e
 # The claude-code image for BOTH laptop architectures in one command. The vendor CLI is not
 # redistributable, so Wardyn publishes no claude-code image and `agent-images-core` builds only the
 # engine's own architecture; a fleet with arm64 and amd64 laptops needs one multi-arch index. A
-# multi-platform result cannot be loaded into the local image store, so this pushes it: name a registry
+# multi-platform build needs the containerd image store or a `docker buildx create --use` builder (the
+# classic store cannot hold the result, so it must be pushed); this pushes it: name a registry
 # repo you can push to (and QEMU for the foreign platform: docker run --privileged --rm tonistiigi/binfmt --install all).
 #   make agent-image-claude-code-multiarch CLAUDE_CODE_IMAGE=registry.example/team/agent-claude-code:1
 #   WARDYN_AGENT_IMAGES='{"claude-code":"registry.example/team/agent-claude-code:1"}'

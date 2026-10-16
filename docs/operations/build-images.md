@@ -150,7 +150,7 @@ Wardyn's published images are `linux/amd64` + `linux/arm64` indexes. A fleet wit
 ### Building the claude-code harness image for both architectures
 
 - Wardyn publishes no claude-code image (it bundles a vendor CLI), so this is the image an arm64 laptop most often gets wrong: `make agent-images-core` builds only the architecture of the engine that ran it.
-- One command builds and pushes both platforms. A multi-platform result cannot be loaded into the local image store, so name a registry repository you can push to:
+- One command builds and pushes both platforms. A multi-platform build needs the containerd image store or a `docker buildx create --use` builder, and with the classic store it must be pushed, so name a registry repository:
 
   ```sh
   make agent-image-claude-code-multiarch CLAUDE_CODE_IMAGE=<your-registry>/agent-claude-code:<tag>
@@ -173,7 +173,7 @@ Wardyn's published images are `linux/amd64` + `linux/arm64` indexes. A fleet wit
 - `crane copy` and `regctl image copy` copy the whole index; `skopeo copy` needs `--all`.
 - Check the copy lists both platforms: `docker buildx imagetools inspect <mirror>/agent-base:<version>`.
 - Pin the **index digest** (`<mirror>/agent-base@sha256:...`, from that command's `Digest:` line), never a child-manifest digest.
-- Mirror `wardyn-proxy` the same way. A plain `WARDYN_PROXY_IMAGE` serves every runner architecture that has no `WARDYN_PROXY_IMAGE_AMD64` / `WARDYN_PROXY_IMAGE_ARM64`, and wardynd warns at boot when it is set to a ref outside the published repository.
+- Mirror `wardyn-proxy` the same way. A plain `WARDYN_PROXY_IMAGE` serves every runner architecture that has no `WARDYN_PROXY_IMAGE_AMD64` / `WARDYN_PROXY_IMAGE_ARM64`.
 
 ### One image per architecture
 
