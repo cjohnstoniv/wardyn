@@ -142,24 +142,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	if spec.Interactive {
 		idleCmd = []string{"agent-run", "--idle"}
 	}
-	if d.cfg.TrustedCAPEM != "" {
-		// A runner's own roots join the sandbox's CA trust after whatever the
-		// organisation staged (Config.TrustedCAPEM); a copy, not the caller's map.
-		spec.Env = maps.Clone(spec.Env)
-		if spec.Env == nil {
-			spec.Env = map[string]string{}
-		}
-		if len(spec.Env["WARDYN_MITM_CA_PEM"])+len(d.cfg.TrustedCAPEM) <= runner.MaxEnvTrustedCAPEM {
-			runner.InstallSandboxTrustedCA(d.cfg.TrustedCAPEM, spec.Env)
-		} else if spec.Env["WARDYN_MITM_CA_PEM"] != "" {
-			// Too big for one environment string with what is already staged: the
-			// mounted file below carries it. The trust variables REPLACE each
-			// client's bundle, so they are set only where a PEM is staged and
-			// even an older image's install_mitm_ca builds the file they name;
-			// without one, a current image still adds the mount to system trust.
-			runner.SetSandboxCATrustVars(spec.Env, true)
-		}
-	}
+	spec.Env = d.withRunnerTrustedCA(spec.Env)
 	env := envSlice(spec.Env)
 	// SandboxSpec.SecretEnv rides plain container env HERE — the honest posture on this substrate: a
 	// docker container's config is reachable only through the daemon socket, the same
@@ -637,4 +620,28 @@ func (d *Driver) SweepOrphanedSandboxes(ctx context.Context, minAge time.Duratio
 		swept++
 	}
 	return swept, errors.Join(errs...)
+}
+
+// withRunnerTrustedCA adds this runner's own roots to a sandbox's CA trust after whatever the
+// organisation staged (Config.TrustedCAPEM); it returns a copy, never the caller's map.
+func (d *Driver) withRunnerTrustedCA(env map[string]string) map[string]string {
+	if d.cfg.TrustedCAPEM == "" {
+		return env
+	}
+	env = maps.Clone(env)
+	if env == nil {
+		env = map[string]string{}
+	}
+	if len(env["WARDYN_MITM_CA_PEM"])+len(d.cfg.TrustedCAPEM) <= runner.MaxEnvTrustedCAPEM {
+		runner.InstallSandboxTrustedCA(d.cfg.TrustedCAPEM, env)
+	} else if env["WARDYN_MITM_CA_PEM"] != "" {
+		// Too big for one environment string with what is already staged: the
+		// mounted file below carries it. The trust variables REPLACE each
+		// client's bundle, so they are set only where a PEM is staged and
+		// even an older image's install_mitm_ca builds the file they name;
+		// without one, a current image still adds the mount to system trust.
+		runner.SetSandboxCATrustVars(env, true)
+	}
+
+	return env
 }

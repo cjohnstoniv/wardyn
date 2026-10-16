@@ -100,7 +100,9 @@ func trustedCAAtStartup(ctx context.Context, opts *serveOptions, stateDir string
 	opts.trustedCA, opts.trustedCAPath = bundle, path
 	slog.InfoContext(ctx, "corporate CA trust configured", "source", source, "cert_count", n, "file", path)
 	if len(bundle) > runner.MaxEnvTrustedCAPEM {
-		slog.WarnContext(ctx, "corporate CA bundle is over 64 KiB: sandboxes get it from the mounted file only, not WARDYN_MITM_CA_PEM. Agent images older than 0.9.3 ignore that file, and on a current image only clients that read system trust use it on a run without a TLS-inspecting proxy; name a file holding only your organisation's roots", "bytes", len(bundle))
+		slog.WarnContext(ctx, "corporate CA bundle is over 64 KiB: sandboxes get it from the mounted file only, not WARDYN_MITM_CA_PEM. "+
+			"Agent images older than 0.9.3 ignore that file, and on a current image only clients that read system trust use it "+
+			"on a run without a TLS-inspecting proxy; name a file holding only your organisation's roots", "bytes", len(bundle))
 	}
 	return nil
 }
