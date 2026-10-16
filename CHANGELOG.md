@@ -8,6 +8,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+## [0.9.2] — 2026-10-16
+
 Laptop runners on private-endpoint estates: a self-hosted runner now gets the organisation's `internal_hosts`, so a
 run reaches hosts that resolve to private addresses.
 
