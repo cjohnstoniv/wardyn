@@ -21,8 +21,8 @@ func WithProxyPeer(ctx context.Context, peer string) context.Context {
 // connection Wardyn saw. Data that is not a JSON object is kept whole under
 // "data".
 func StampProxyPeer(ctx context.Context, sourceIP string, data json.RawMessage) json.RawMessage {
-	peer, ok := ctx.Value(proxyPeerKey{}).(string)
-	if !ok || peer == "" || sourceIP == "" {
+	peer := ProxyPeer(ctx)
+	if peer == "" || sourceIP == "" {
 		return data
 	}
 	fields := map[string]json.RawMessage{}
@@ -34,4 +34,10 @@ func StampProxyPeer(ctx context.Context, sourceIP string, data json.RawMessage) 
 	fields["proxy_peer"], _ = json.Marshal(peer)
 	out, _ := json.Marshal(fields)
 	return out
+}
+
+// ProxyPeer is the TCP peer WithProxyPeer recorded, or "".
+func ProxyPeer(ctx context.Context) string {
+	peer, _ := ctx.Value(proxyPeerKey{}).(string)
+	return peer
 }

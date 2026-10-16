@@ -62,7 +62,9 @@ pending runner action). On `/internal/via-org/{grantID}/…`: `delivery_not_via_
 **Trusted proxies.** When `WARDYN_TRUSTED_PROXIES` lists a request's TCP peer, the
 row's `source_ip` is the client that proxy reported in `X-Forwarded-For`, and every
 row the request writes with a `source_ip` adds `data.proxy_peer`, the TCP peer
-Wardyn saw ([Trusted proxies](operations/hybrid-laptops.md#trusted-proxies)).
+Wardyn saw ([Trusted proxies](operations/hybrid-laptops.md#trusted-proxies)). A
+device-forwarded row carries it as `data.device_origin.proxy_peer`, so the device's
+claim still recomputes.
 
 ## Grammar
 
