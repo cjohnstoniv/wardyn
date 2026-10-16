@@ -105,9 +105,9 @@
 
 - Those are the same static strings the decision log records, so nothing is
   disclosed here that the audit trail does not already hold.
-- The two policy headers, and one added line in the body ("This run is governed by
-  the profile "Team A".
-  To request a change: …").
+- The two policy headers, and the attribution ("This run is governed by the profile
+  "Team A". To request a change: …"): the JSON `attribution` field on the forward
+  lane, a trailing sentence in the provider-shaped message on the SDK lanes.
 - These come only with `policy:denied`,
   `policy:default-deny`, `policy:method` and `approval:denied`, and with the git,
   PAT and Azure DevOps broker refusals the policy decides (a repository or host not
