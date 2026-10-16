@@ -45,4 +45,5 @@
 # docs/ENV.md 37119 adds 55 over 37064 (0.9.1 L12 W1), measured: the `@arch` entries on WARDYN_AGENT_IMAGES and the WARDYN_PROXY_IMAGE_AMD64/_ARM64 rows, which the env-doc guard requires.
 # docs/ENV.md 37222 adds 103 over 37119 (0.9.3 A1), measured: the laptop-runner bullets under WARDYN_TRUSTED_CA_FILE (sources, validation, the 64 KiB sandbox limit, setup).
 # docs/ENV.md 37279 adds 57 over 37222 (0.9.3 A1 fix round), measured: the WARDYN_PROXY_IMAGE_PINNED row the env-doc guard requires, the mounted bundle file and the wardynd size bounds.
-docs/ENV.md=37279 share=5
+# docs/ENV.md 37288 adds 9 over 37279 (0.9.3 A1 fix round 3), measured: the env copy counts the CA already staged and names the 0.9.3 images.
+docs/ENV.md=37288 share=5

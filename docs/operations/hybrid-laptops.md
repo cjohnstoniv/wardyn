@@ -67,7 +67,7 @@
 ### A corporate CA on a laptop runner
 
 - Behind a TLS-inspecting proxy, give the runner your organisation's roots. Every run's proxy and sandbox then trust them beside the system roots and the run's own interception CA.
-- Certificates only. A merged system bundle works too: the sandbox reads it from a mounted file.
+- Certificates only, ideally only your organisation's roots. Over 64 KiB (a merged system bundle) the sandbox reads it from a mounted file only, which agent images older than 0.9.3 ignore.
 
 | Source (first set wins, only it is read) | Note |
 | --- | --- |
