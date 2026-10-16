@@ -37,6 +37,11 @@ func ParseTrustedProxies(list string) ([]netip.Prefix, error) {
 		if p.Bits() == 0 {
 			return nil, fmt.Errorf("WARDYN_TRUSTED_PROXIES: %q trusts every address; list only your proxies", f)
 		}
+		// Peers and hops are unmapped before the compare, so a 4-in-6 prefix
+		// would parse yet never match.
+		if p.Addr().Is4In6() {
+			return nil, fmt.Errorf("WARDYN_TRUSTED_PROXIES: %q is an IPv4-mapped IPv6 prefix, which never matches; list the IPv4 CIDR instead", f)
+		}
 		out = append(out, p.Masked())
 	}
 	return out, nil
@@ -95,7 +100,9 @@ func forwardedClient(peer string, xff []string, trusted []netip.Prefix) (string,
 }
 
 // forwardedHop accepts an address, or an address with a port (some cloud
-// gateways append one). A zone, a hostname or "unknown" is malformed.
+// gateways append one). A zone, a hostname or "unknown" is malformed, and so
+// is a loopback or unspecified address: no remote client has one, and a
+// loopback source_ip would satisfy the local-mode loopback-peer gate.
 func forwardedHop(h string) (netip.Addr, bool) {
 	a, err := netip.ParseAddr(h)
 	if err != nil {
@@ -105,10 +112,11 @@ func forwardedHop(h string) (netip.Addr, bool) {
 		}
 		a = ap.Addr()
 	}
-	if a.Zone() != "" {
+	a = a.Unmap()
+	if a.Zone() != "" || a.IsLoopback() || a.IsUnspecified() {
 		return netip.Addr{}, false
 	}
-	return a.Unmap(), true
+	return a, true
 }
 
 func inPrefixes(a netip.Addr, ps []netip.Prefix) bool {
