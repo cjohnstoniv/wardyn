@@ -16,5 +16,5 @@ docs/operations/console-branding.md=943 share=35
 # docs/operations/hybrid-laptops.md 900 adds 73 over 827: 0.9 final docs pass, measured: resident values are not delivered in 0.9.0, the restart row and the ingress allowlist note.
 # docs/operations/hybrid-laptops.md 1398 adds 498 over 900 (0.9.1 L8), measured: requirements, credential class table, bedrock_sso on a laptop runner, claim and self_host_runner, per-replica session closing and the shared-ingress rate-limit section.
 # docs/operations/hybrid-laptops.md 1412 adds 14 over 1398 (0.9.1 L9), measured: the VM-engine requirements line.
-# docs/operations/hybrid-laptops.md 1503 adds 91 (0.9.2): the "Private endpoints and internal_hosts" section.
-docs/operations/hybrid-laptops.md=1503 share=35
+# docs/operations/hybrid-laptops.md 1535 adds 123 (0.9.2): the "Private endpoints and internal_hosts" section.
+docs/operations/hybrid-laptops.md=1535 share=35
