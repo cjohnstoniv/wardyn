@@ -332,7 +332,8 @@ func (s *Server) removeGroupMember(ctx context.Context, st scimStore, g store.Sc
 		if i < 0 {
 			return nil
 		}
-		return errors.Join(s.refuseDeprovision(ctx, ident, store.JobKindGroupRemove, forms.refusal, err),
+		j, _ := jobByKey(jobs, store.GroupRemovalSteps[i], g.ID.String())
+		return errors.Join(s.refuseDeprovision(ctx, ident, store.JobKindGroupRemove, forms.refusal, err, j.LastError == forms.refusal),
 			finish(store.GroupRemovalSteps[i], errors.New(forms.refusal), nil))
 	}
 	if err != nil {

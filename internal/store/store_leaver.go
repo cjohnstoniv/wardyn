@@ -295,6 +295,10 @@ func nonEmptyStrings(in []string) []string {
 	return out
 }
 
+// CutoffDetailBound is the cutoff step's detail key that says whether the plan's identity row was bound to
+// a principal (1) or not (0).
+const CutoffDetailBound = "principal_bound"
+
 // ErrIdentityRebound is a SuspendPlan made before a sign-in bound the identity row: its forms miss the
 // newly bound principal, so the caller reads the row again and makes a new plan.
 var ErrIdentityRebound = errors.New("store: the identity was bound since the suspension was planned")
@@ -381,7 +385,11 @@ func (s PG) SuspendIdentity(ctx context.Context, p SuspendPlan) (SuspendResult, 
 	}
 	// The cutoff step also records the deactivated_at this suspension leaves on the identity: the purge's
 	// proof that the identity's current deactivation is its own (ownSuspension).
-	detail, _ := json.Marshal(map[string]int{"sessions_cut": len(cutoffSubs)})
+	bound := 0
+	if p.Principal != "" {
+		bound = 1
+	}
+	detail, _ := json.Marshal(map[string]int{"sessions_cut": len(cutoffSubs), CutoffDetailBound: bound})
 	if _, err = tx.Exec(ctx, `
 		INSERT INTO deprovision_jobs (identity_id, kind, step, target, state, attempts, last_error, detail)
 		VALUES ($1, $2, $3, '', CASE WHEN $5 = '' THEN 'done' ELSE 'pending' END, 1, $5, $4::jsonb || jsonb_build_object('deactivated_at_us',

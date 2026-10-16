@@ -806,8 +806,8 @@ func TestSCIMGroupRemovalWaitsForOneOwner(t *testing.T) {
 		t.Errorf("pending = %+v, want the removal listed with %s", got, reasonOwnerAmbiguous)
 	}
 	rows := e.rows(e.a, "person.deprovision")
-	if len(rows) != 2 || rows[1].Outcome != "denied" || dataOf(t, rows[1])["reason"] != reasonOwnerAmbiguous || dataOf(t, rows[1])["kind"] != store.JobKindGroupRemove {
-		t.Errorf("person.deprovision rows = %+v, want one denied %s per attempt", rows, reasonOwnerAmbiguous)
+	if len(rows) != 1 || rows[0].Outcome != "denied" || dataOf(t, rows[0])["reason"] != reasonOwnerAmbiguous || dataOf(t, rows[0])["kind"] != store.JobKindGroupRemove {
+		t.Errorf("person.deprovision rows = %+v, want one denied %s for the removal and none for its retry", rows, reasonOwnerAmbiguous)
 	}
 	if n := cuts(); n != 0 {
 		t.Errorf("%d session cuts written for a refused removal, want none", n)

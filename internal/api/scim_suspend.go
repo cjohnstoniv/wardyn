@@ -204,18 +204,22 @@ func (s *Server) deprovisionForms(ctx context.Context, st scimStore, ident store
 	if forms.refusal == "" {
 		return forms, err
 	}
-	return forms, s.refuseDeprovision(ctx, ident, kind, forms.refusal, err)
+	return forms, s.refuseDeprovision(ctx, ident, kind, forms.refusal, err, false)
 }
 
 // refuseDeprovision leaves the person.deprovision row saying why a step of kind stops, and returns the error
 // the request answers 5xx with: err when the forms could not be read, errDeprovisionIncomplete otherwise.
-func (s *Server) refuseDeprovision(ctx context.Context, ident store.PrincipalIdentity, kind, reason string, err error) error {
+// recorded is a step the ledger already holds pending with this reason: its row was written when it first
+// stopped, so a retry answers the same without another.
+func (s *Server) refuseDeprovision(ctx context.Context, ident store.PrincipalIdentity, kind, reason string, err error, recorded bool) error {
 	outcome := "failure"
 	if err == nil {
 		outcome, err = "denied", fmt.Errorf("%w: the person's emails name more than one principal", errDeprovisionIncomplete)
 	}
-	s.recordAudit(ctx, s.auditEvent(nil, types.ActorSystem, scimActor, "person.deprovision", ident.ID.String(), outcome,
-		mustJSON(map[string]any{"kind": kind, "reason": reason})))
+	if !recorded {
+		s.recordAudit(ctx, s.auditEvent(nil, types.ActorSystem, scimActor, "person.deprovision", ident.ID.String(), outcome,
+			mustJSON(map[string]any{"kind": kind, "reason": reason})))
+	}
 	return err
 }
 
@@ -277,12 +281,15 @@ func (s *Server) suspendStepOne(ctx context.Context, st scimStore, id uuid.UUID)
 	if err != nil {
 		return ident, leaverForms{}, nil, err
 	}
-	forms, err := s.deprovisionForms(ctx, st, ident, store.JobKindSuspend)
+	forms, err := s.leaverForms(ctx, st, ident)
 	if err != nil && forms.refusal == "" {
 		return ident, forms, nil, err
 	}
 	jobs, jobsErr := st.ListDeprovisionJobs(ctx, id, store.JobKindSuspend)
 	if jobsErr != nil {
+		if forms.refusal != "" {
+			err = s.refuseDeprovision(ctx, ident, store.JobKindSuspend, forms.refusal, err, false)
+		}
 		return ident, forms, nil, errors.Join(err, jobsErr)
 	}
 	cutoff, ok := jobByKey(jobs, store.JobStepCutoff, "")
@@ -291,8 +298,22 @@ func (s *Server) suspendStepOne(ctx context.Context, st scimStore, id uuid.UUID)
 		// The forms the identity row itself proves are still cut: the row and its own binding, never an
 		// email, and not the object-id form while another sign-in may hold it. Step 1 stays pending with the
 		// reason and no other step runs, so a retry that resolves every form runs the whole suspension.
+		proven := forms.destructive().bound
+		bound := 0
+		if ident.Principal != "" {
+			bound = 1
+		}
+		// A step 1 already stopped for this reason, under the same binding and with as many forms cut, has
+		// nothing new to cut or record: the retry only touches its ledger row, so the sweeper still waits
+		// before it looks again.
+		again := ident.DeactivatedAt != nil && ok && !cutoff.Done && cutoff.LastError == forms.refusal &&
+			cutoff.Detail[store.CutoffDetailBound] == bound && cutoff.Detail["sessions_cut"] == len(proven)
+		err = s.refuseDeprovision(ctx, ident, store.JobKindSuspend, forms.refusal, err, again)
+		if again {
+			key := store.JobKey{Step: store.JobStepCutoff}
+			return ident, forms, nil, errors.Join(err, st.FailDeprovisionJob(ctx, id, store.JobKindSuspend, key, errors.New(forms.refusal)))
+		}
 		if stepOne {
-			proven := forms.destructive().bound
 			_, partialErr := st.SuspendIdentity(ctx, store.SuspendPlan{IdentityID: id, Principal: ident.Principal,
 				Principals: proven, CutoffSubs: proven, Partial: forms.refusal})
 			err = errors.Join(err, partialErr)

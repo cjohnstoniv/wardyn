@@ -732,8 +732,8 @@ func TestSCIMSuspendResolvesEmailsToSubs(t *testing.T) {
 		if len(e.rows(e.a, "scim.user.deactivate")) != 0 {
 			t.Error("a suspension that is not done was recorded as done")
 		}
-		if rows := e.rows(e.a, "person.deprovision"); len(rows) != 2 || dataOf(t, rows[1])["reason"] != reasonOwnerAmbiguous {
-			t.Errorf("person.deprovision rows = %+v, want one %s refusal per attempt", rows, reasonOwnerAmbiguous)
+		if rows := e.rows(e.a, "person.deprovision"); len(rows) != 1 || dataOf(t, rows[0])["reason"] != reasonOwnerAmbiguous {
+			t.Errorf("person.deprovision rows = %+v, want one %s refusal and none for the retry", rows, reasonOwnerAmbiguous)
 		}
 	})
 }

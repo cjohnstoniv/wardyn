@@ -8,6 +8,7 @@ import (
 	"errors"
 	"net/http"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -92,5 +93,65 @@ func TestSCIMSuspendWhileTheDirectoryIsUnreadableCutsTheExactRow(t *testing.T) {
 				t.Error("the retry revoked another principal's token")
 			}
 		})
+	}
+}
+
+// The sweeper's resume of a suspension still stopped for the same reason writes no new audit row and
+// leaves the identity's epoch and cutoff alone; it only touches the ledger, and finishes once the
+// emails resolve.
+func TestSCIMSweeperResumeOfAStoppedSuspensionWritesNothingNew(t *testing.T) {
+	const twin = "twin@corp.example"
+	e := newSCIMEnv(t)
+	tok1, _ := e.seedToken("sub-t1", twin)
+	tok2, _ := e.seedToken("sub-t2", twin)
+	form := entraPrincipalPrefix + e.tenant + ":" + oidGhost
+	id := e.postUserID(e.a, oidGhost, twin, twin)
+	if w := e.patch(e.a, id, patchOf("false")); w.Code != http.StatusInternalServerError {
+		t.Fatalf("suspend = %d %s, want 5xx", w.Code, w.Body.String())
+	}
+	type state struct {
+		audits, attempts int
+		epoch            int64
+		cut              time.Time
+	}
+	read := func() state {
+		var s state
+		if err := e.pool.QueryRow(context.Background(), `
+			SELECT (SELECT revoked_at FROM oidc_session_revocations WHERE sub = $2),
+			       (SELECT attempts FROM deprovision_jobs WHERE identity_id = $1 AND kind = 'suspend' AND step = $3)`,
+			id, form, store.JobStepCutoff).Scan(&s.cut, &s.attempts); err != nil {
+			t.Fatal(err)
+		}
+		s.audits, s.epoch = len(e.rows(e.a, "person.deprovision"))+len(e.rows(e.b, "person.deprovision")), e.identity(id).AuthorityEpoch
+		return s
+	}
+	tick := func() {
+		if _, err := e.pool.Exec(context.Background(), `UPDATE deprovision_jobs SET updated_at = now() - interval '1 hour' WHERE identity_id = $1`, id); err != nil {
+			t.Fatal(err)
+		}
+		_ = e.b.srv.SweepSCIMPurge(context.Background())
+	}
+
+	first := read()
+	if first.audits != 1 {
+		t.Fatalf("person.deprovision rows after the request = %d, want 1", first.audits)
+	}
+	for i := 1; i <= 2; i++ {
+		tick()
+		got := read()
+		if got.audits != first.audits || got.epoch != first.epoch || !got.cut.Equal(first.cut) {
+			t.Errorf("tick %d: audits %d epoch %d cut %v, want %d %d %v", i, got.audits, got.epoch, got.cut, first.audits, first.epoch, first.cut)
+		}
+		if got.attempts != first.attempts+i {
+			t.Errorf("tick %d: attempts %d, want %d (the sweeper resumed it)", i, got.attempts, first.attempts+i)
+		}
+	}
+
+	if _, err := e.pool.Exec(context.Background(), `DELETE FROM api_tokens WHERE id = $1`, tok2); err != nil {
+		t.Fatal(err)
+	}
+	tick()
+	if !e.allJobsDone(id) || !e.tokenRevoked(tok1) {
+		t.Error("the resume once the emails resolve did not finish the suspension")
 	}
 }

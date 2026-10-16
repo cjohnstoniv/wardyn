@@ -485,7 +485,10 @@ func (s *scimCovStore) SuspendIdentity(_ context.Context, p store.SuspendPlan) (
 		})
 	}
 	cutoff := store.JobKey{Step: store.JobStepCutoff}
-	detail := map[string]int{"sessions_cut": len(p.CutoffSubs), "deactivated_at_us": int(target.DeactivatedAt.UnixMicro())}
+	detail := map[string]int{"sessions_cut": len(p.CutoffSubs), "deactivated_at_us": int(target.DeactivatedAt.UnixMicro()), store.CutoffDetailBound: 0}
+	if p.Principal != "" {
+		detail[store.CutoffDetailBound] = 1
+	}
 	if j := s.findJob(p.IdentityID, store.JobKindSuspend, cutoff); j != nil {
 		j.Done, j.Attempts, j.LastError, j.Detail = p.Partial == "", j.Attempts+1, p.Partial, detail
 	} else {
