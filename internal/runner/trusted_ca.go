@@ -11,8 +11,11 @@ import (
 
 // TrustedCAMountPath is where a laptop runner's own CA bundle is bind-mounted, read-only, into a
 // sandbox. AgentIdleScript and install_mitm_ca (deploy/images/common/agent-run-lib.sh) append it to
-// the sandbox's CA trust; keep the three in lockstep.
-const TrustedCAMountPath = "/run/wardyn/trusted-ca.pem"
+// the sandbox's CA trust; keep the three in lockstep. It sits directly in /etc, outside /run (the
+// component-secret anchor) and beside, not inside, /etc/claude-code: a mount on or above a
+// managed-file directory, or a directory Docker creates for one, would refuse every run that
+// delivers a managed file (see docker's deliverManagedFiles and volumeOverSecretDir).
+const TrustedCAMountPath = "/etc/wardyn-trusted-ca.pem"
 
 // MaxEnvTrustedCAPEM is the largest runner bundle also copied into WARDYN_MITM_CA_PEM, the fallback
 // for agent images whose install_mitm_ca predates TrustedCAMountPath. That variable is one

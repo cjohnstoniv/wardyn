@@ -20,4 +20,5 @@ docs/operations/console-branding.md=943 share=35
 # docs/operations/hybrid-laptops.md 1679 adds 144 over 1535 (0.9.3 A1), measured: the "A corporate CA on a laptop runner" section.
 # docs/operations/hybrid-laptops.md 1734 adds 55 over 1679 (0.9.3 A2/A3), measured: the VM disk probe and no-disk-cap lines.
 # docs/operations/hybrid-laptops.md 1747 adds 13 over 1734 (0.9.3 A1 fix), measured: certificate file note, rerun line.
-docs/operations/hybrid-laptops.md=1747 share=35
+# docs/operations/hybrid-laptops.md 1761 adds 14 (0.9.3 A1 fix): the agent-image caveat for a merged bundle.
+docs/operations/hybrid-laptops.md=1761 share=35

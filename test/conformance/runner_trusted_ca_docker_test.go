@@ -91,7 +91,8 @@ func TestRunnerTrustedCADocker(t *testing.T) {
 	proxyImage := cmp.Or(os.Getenv("WARDYN_TEST_PROXY_IMAGE"), bootEgressProxyImage)
 	spec := func() runner.SandboxSpec {
 		proxyURL := "http://wardyn-proxy:" + strconv.Itoa(runner.ProxyListenPort)
-		// What dispatch stages for an intercepted run: proxy env and the run's own CA.
+		// What dispatch stages for an intercepted run: proxy env and the run's own CA. One component
+		// secret keeps the managed-file guards in play beside the bundle's mount.
 		env := map[string]string{"HTTPS_PROXY": proxyURL, "https_proxy": proxyURL, "WARDYN_MITM_CA_PEM": runCert}
 		runner.SetSandboxCATrustVars(env, false)
 		return runner.SandboxSpec{
@@ -100,6 +101,8 @@ func TestRunnerTrustedCADocker(t *testing.T) {
 			ConfinementClass: types.CC1,
 			Labels:           map[string]string{"wardyn.conformance": "true"},
 			Env:              env,
+			ManagedFiles: []runner.ManagedFile{{Path: runner.ComponentSecretDir + "/probe", Mode: runner.ComponentSecretFileMode,
+				AgentOwned: true, Content: []byte("probe-secret")}},
 			ProxyConfig: runner.ProxyConfig{
 				RunToken:          "ca-run-token",
 				ControlPlaneURL:   "https://" + cpHost + ":8443",
@@ -165,6 +168,9 @@ func TestRunnerTrustedCADocker(t *testing.T) {
 		if code != 0 || !strings.Contains(out, "status=202") || strings.Contains(out, runCACN) {
 			t.Fatalf("tunneled host: exit %d; want 202 on the upstream's own certificate, so the sandbox trusted the corporate CA:\n%s", code, out)
 		}
+		if code, out := sandboxExec(t, cli, ref, "cat", runner.ComponentSecretDir+"/probe"); code != 0 || out != "probe-secret" {
+			t.Fatalf("component secret beside the CA mount: exit %d %q", code, out)
+		}
 	})
 
 	// Over 128 KiB no environment string can carry it: the sandbox trusts it through the mounted file
@@ -186,6 +192,18 @@ func TestRunnerTrustedCADocker(t *testing.T) {
 		if code, out = curl(t, ref, tunnelHost); code != 0 || !strings.Contains(out, "status=202") {
 			t.Fatalf("tunneled host with a %d-byte bundle: exit %d:\n%s", len(large), code, out)
 		}
+		// The curls above trust the bundle the idle script assembled. A task-mode run assembles it
+		// with the image's own install_mitm_ca instead, which reads the mount only from 0.9.3 on.
+		t.Run("the image's install_mitm_ca", func(t *testing.T) {
+			if code, _ := sandboxExec(t, cli, ref, "grep", "-qF", runner.TrustedCAMountPath, "/usr/local/bin/agent-run-lib.sh"); code != 0 {
+				t.Skipf("the agent image's agent-run-lib.sh predates %s, so only the idle script's assembly is covered; rebuild it with make agent-images-core to cover install_mitm_ca", runner.TrustedCAMountPath)
+			}
+			code, out := sandboxExec(t, cli, ref, "bash", "-c", `d=$(mktemp -d) && export WARDYN_MITM_CA_DIR=$d && . /usr/local/bin/agent-run-lib.sh && install_mitm_ca && `+
+				`curl -sS -f --max-time 20 --cacert "$d/ca-bundle.pem" -o /dev/null -w 'status=%{http_code}\n' https://`+tunnelHost+`:8443/`)
+			if code != 0 || !strings.Contains(out, "status=202") {
+				t.Fatalf("install_mitm_ca's bundle on the tunneled host: exit %d:\n%s", code, out)
+			}
+		})
 	})
 
 	t.Run("without it", func(t *testing.T) {

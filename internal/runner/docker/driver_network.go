@@ -149,10 +149,14 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 		if spec.Env == nil {
 			spec.Env = map[string]string{}
 		}
-		if len(d.cfg.TrustedCAPEM) <= runner.MaxEnvTrustedCAPEM {
+		if len(spec.Env["WARDYN_MITM_CA_PEM"])+len(d.cfg.TrustedCAPEM) <= runner.MaxEnvTrustedCAPEM {
 			runner.InstallSandboxTrustedCA(d.cfg.TrustedCAPEM, spec.Env)
-		} else {
-			// Too big for one environment string: the mounted file below carries it.
+		} else if spec.Env["WARDYN_MITM_CA_PEM"] != "" {
+			// Too big for one environment string with what is already staged: the
+			// mounted file below carries it. The trust variables REPLACE each
+			// client's bundle, so they are set only where a PEM is staged and
+			// even an older image's install_mitm_ca builds the file they name;
+			// without one, a current image still adds the mount to system trust.
 			runner.SetSandboxCATrustVars(spec.Env, true)
 		}
 	}
