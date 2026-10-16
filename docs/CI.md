@@ -296,7 +296,14 @@ Wardyn's own [`ci.yml`](../.github/workflows/ci.yml) runs on every pull request 
 - `push:` stays narrow to `main`, `master` and `feature/**`, since every other commit already gets a run from its own PR.
 - It has no `release/**`: `release.yml` accepts CI by tree (#1461), and [`release-branch-checks.yml`](../.github/workflows/release-branch-checks.yml) runs only DCO and gitleaks there (#1466).
 - The push-gate DCO exemption for GitHub-made merges needs gpg and GitHub's web-flow key id `B5690EEEBB952194`; if GitHub rotates that key, update the id in the Makefile's `dco` recipe.
-- [`scripts/ci-parity-local.sh`](../scripts/ci-parity-local.sh) runs changed packages under `-race`, then against a throwaway Postgres with the pool guard and a `localhost` DSN.
+- [`scripts/ci-parity-local.sh`](../scripts/ci-parity-local.sh) runs changed packages under `-race`, then a throwaway Postgres (pool guard, `localhost` DSN).
+- `make candidate-preflight` vets release candidates.
+
+| Go-suite control | Where | Rule |
+|---|---|---|
+| `api` shards run only DSN-gated tests | `make test-report-pg-api`, [`scripts/pg-test-select.sh`](../scripts/pg-test-select.sh) | The unit run fails if a DSN-skipped test is outside the pick; every `pg` probe is picked |
+| Postgres shards write no coverage | `WARDYN_TEST_REPORT_COVER=0` | `build` unions `unit`, `docker`, `k8s` only |
+| Flaky Go test quarantine | [`test/go-quarantine.txt`](../test/go-quarantine.txt), `go test -skip` | Issue, owner, expiry within 14 days; expired or malformed fails the suite |
 
 Image-script tests set `WARDYN_MITM_CA_DIR` to a private temporary directory to isolate generated CA files.
 The agent script defaults to `/tmp/wardyn`; deployment behavior is unchanged.
@@ -342,7 +349,7 @@ The agent script defaults to `/tmp/wardyn`; deployment behavior is unchanged.
 | `build` | – | pending | pending | 10 |
 | `conformance-k8s` | 58 | 11.2 | 12.8 | 35 |
 | `ui-e2e` (1/2, 2/2 matrix) | 1 | 7.0 | 7.0 | 25 |
-| `test-pg-shard` (api, store, race matrix) | – | pending | pending | 20 |
+| `test-pg-shard` (api-1, api-2, store, race) | – | pending | pending | 20 |
 | `test-pg` (aggregator) | – | pending | pending | 10 |
 | `ui` | 60 | 4.5 | 4.8 | 20 |
 | `conformance` | 60 | 4.2 | 4.7 | 45 |
@@ -391,6 +398,15 @@ gh run list -R cjohnstoniv/wardyn --workflow ci.yml --status completed --limit 6
 ```
 
 `make ci`, the local merge gate, prints the same kind of table for its own targets when it finishes or stops.
+
+### Nightly scope and release runs
+
+- The 07:00 nightly and a plain dispatch run every lane. A release candidate dispatches it with `-f scope=candidate`, which [`scripts/release-patch.sh`](../scripts/release-patch.sh) does right after pushing the branch and before opening the PR.
+- Eight jobs then skip through a job-level `if: inputs.scope != 'candidate'`: `e2e-live`, `ci-mode-dogfood-model-fake`, `test-e2e-concurrent`, `kind-survival-walk`, `hybrid-walk`, `kind-upgrade-walk`, `migration-merge-check` and `published-image-scan`.
+- That frees about 60 runner-minutes by median and 12 job slots. What remains is `release.yml`'s `watched=` list plus the `multi-arch build` staging jobs.
+- [`scripts/test-repo-guards.sh`](../scripts/test-repo-guards.sh) guard 18 keeps the skip set in step with `notify-new-lanes`. A skipped job reports `skipped`, so that job stays quiet.
+- A dispatched nightly has one concurrency group per ref and scope, so a second dispatch cancels the first. A scheduled run has its own group and is never cancelled.
+- `release.yml` has one group per ref and cancels nothing, so a dispatch and the tag push cannot publish at once.
 
 ### Incremental CI
 
@@ -545,6 +561,21 @@ So:
 - What changed for it is the wall time: `test-pg` and `ui-e2e` are split, the long jobs get their runners first, and vitest runs 76 files (71 s) where it ran 341 (547 s).
 - A console-only change is held at 10.5 minutes by the whole vitest suite in `ui`; two vitest shards behind a `ui` aggregator would bring it to about 7.5 minutes for two more jobs.
 - A run of everything (a push to `main`, a `train/*` pull request) runs that same `ui` job, so `ui` is its longest job as well.
+
+### Docker Hub base-image mirror
+
+Docker Hub rate-limited CI even after `docker/login-action`, so CI reads the Docker Hub images it uses from a byte-identical GHCR copy:
+
+- [`deploy/base-images.txt`](../deploy/base-images.txt) lists them. Digest pins are the Dockerfile `FROM` pins, the compose pins and kind's node image. Tag pins (`tag ` lines), kept by hand, are images CI pulls by tag.
+- [`mirror-base-images.yml`](../.github/workflows/mirror-base-images.yml) copies each entry, digest unchanged, into `ghcr.io/cjohnstoniv/base-images`: on a list change on `main`, weekly, and on dispatch.
+  - Dependabot cannot run it: add the bump's digest to the list on its branch, dispatch with `ref` set to that branch, then re-run the pull request's checks.
+- [`base-image-mirror/action.yml`](../.github/actions/base-image-mirror/action.yml) runs before a job builds or pulls. It adds a loopback mirror over the copy to dockerd's `registry-mirrors` by a `SIGHUP` reload, which leaves service containers running. It pulls digest pins under their `docker.io` names, so a pinned `FROM` resolves locally, and tag pins from GHCR, retagged `<name>:<tag>`.
+  - Anything the copy lacks, and any tag not listed, falls through to Docker Hub as before.
+- The Postgres service containers start before any step, so they name the copy directly and pull it with the job's `GITHUB_TOKEN` (`packages: read`).
+- Dockerfiles keep their `docker.io` `FROM` lines for Dependabot and release provenance.
+- Guard 17 in [`scripts/test-repo-guards.sh`](../scripts/test-repo-guards.sh) fails while a Docker Hub `FROM` pin is not listed.
+- [`mirror-selftest.yml`](../.github/workflows/mirror-selftest.yml) (dispatch only) checks the action on ubuntu-24.04 and ubuntu-26.04 with Docker Hub unreachable.
+- Not covered: pulls inside kind nodes, which skip dockerd (`postgres:16` is copied for a future `kind load`), and BuildKit container builders.
 
 ## Driving an existing control plane instead
 

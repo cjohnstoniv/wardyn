@@ -1504,13 +1504,16 @@ jobs:
   # before (a HIGH finding) — only the nightly `integration-pg` job exercised
   # it. Mirrors that job's postgres service (postgres:17, matching compose/prod).
   #
-  # Three shards, each with its OWN Postgres service, so the ~12-minute suite and
+  # Four shards, each with its OWN Postgres service, so the ~12-minute suite and
   # the ~5-minute race proofs stop queueing behind each other. -p 1 stays inside
   # each shard: its packages still share ONE database whose singleton state
   # (site_config) internal/api and test/apie2e both mutate. The shard package
   # lists are the old `make test-report-pg` list split in two; with
   # `make test-race-pg` they run exactly what the single job ran.
-  #   api   — internal/api and test/apie2e
+  #   api-1, api-2 — the Postgres-gated tests of internal/api and test/apie2e, two
+  #           slices by test-name hash (make test-report-pg-api; scripts/pg-test-select.sh
+  #           picks them, the go unit run proves the pick misses none). Each slice
+  #           also runs every skip-floor probe. The ~4400 other tests run in `go`.
   #   store — store, db, secretstore, broker, recording, cmd/wardynd
   #   race  — `make test-race-pg` (the three -race -p 1 passes)
   # The required context `test-pg` is the aggregator below, which reports the
@@ -1526,9 +1529,13 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - shard: api
-            suite: pg-api
-            run: make test-report-pg PG_REPORT=pg-api PG_PKGS='./internal/api/... ./test/apie2e/...'
+          - shard: api-1
+            suite: pg-api-1
+            run: make test-report-pg-api PG_PART=1/2 PG_REPORT=pg-api-1
+            superuser: "1"
+          - shard: api-2
+            suite: pg-api-2
+            run: make test-report-pg-api PG_PART=2/2 PG_REPORT=pg-api-2
             superuser: "1"
           - shard: store
             suite: pg-store
@@ -1600,6 +1607,9 @@ jobs:
           WARDYN_TEST_PG: postgres://postgres:wardyn@localhost:5432/wardyn?sslmode=disable
           WARDYN_TEST_PG_SUPERUSER: ${{ matrix.superuser }}
           WARDYN_TEST_POOL_GUARD: '1'
+          # No gate reads a PG shard's coverage (the floor and cover-union take unit,
+          # docker and k8s); atomic -coverpkg=./... instrumentation is pure cost here.
+          WARDYN_TEST_REPORT_COVER: '0'
         run: ${{ matrix.run }}
       - name: Upload PG test reports
         id: upload_pg_test_reports

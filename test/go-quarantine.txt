@@ -1,0 +1,23 @@
+# Flaky Go tests: scripts/test-report.sh skips every test named here with `go test -skip`, in every
+# suite it runs (unit, docker, k8s, pg, and nightly's docker-tagged suite). Same rule and format as
+# ui/e2e/quarantine.txt (scripts/lib/e2e-quarantine.sh):
+#   - a quarantine is a short, reviewed, tracked exception, never a fix;
+#   - every entry names an open issue and an owner, and expires within 14 days of the day it is written;
+#   - an expired or malformed entry fails every test-report.sh run AND `make test-scripts`, so it
+#     turns every PR red until someone fixes the test and deletes the line, or renews the date in a
+#     reviewed PR;
+#   - every run prints the quarantined tests at the start and the end of its log.
+#
+# Format: '#' lines are comments. One entry per line, five fields separated by ' | ' (space, pipe,
+# space):
+#
+#   <package, e.g. internal/api> | <TestName or TestName/subtest> | #<issue> | @<owner> | <YYYY-MM-DD>
+#
+# The name is matched across every package the run tests (the package field is for the reader), each
+# '/'-separated element anchored, so `TestX` skips TestX and all its subtests and `TestX/sub` skips
+# only that subtest. The date is the last day the quarantine applies (UTC).
+#
+# Example (keep commented out):
+#   internal/api | TestPG_SomethingFlaky | #1234 | @cjohnstoniv | 2026-10-21
+#
+# Entries:
