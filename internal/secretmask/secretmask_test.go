@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -625,6 +626,95 @@ func TestMaskingWriter_CloseCutMasksANestedSecretTheCutSplits(t *testing.T) {
 		whole := "a " + outer + " b " + inner + " c alpha-" + inner + "-o"
 		if got, want := run(chunk, whole, false), "a <secret-hidden> b <secret-hidden> c alpha-<secret-hidden>-o"; got != want {
 			t.Errorf("an uncut stream in %d-byte writes = %q, want %q", chunk, got, want)
+		}
+	}
+}
+
+// writeInChunks writes in to w in chunk-byte writes (the whole of it when chunk is 0) and ends it with Close,
+// or CloseCut when cut.
+func writeInChunks(t *testing.T, w *secretmask.MaskingWriter, in string, chunk int, cut bool) {
+	t.Helper()
+	if chunk == 0 {
+		chunk = len(in)
+	}
+	for p := []byte(in); len(p) > 0; p = p[min(chunk, len(p)):] {
+		if _, err := w.Write(p[:min(chunk, len(p))]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	end := w.Close
+	if cut {
+		end = w.CloseCut
+	}
+	if err := end(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Secrets that overlap without nesting are masked as one run at every write boundary, with or without a cut:
+// no byte of a secret that arrived whole is forwarded, and a cut masks the part of a secret that arrived.
+func TestMaskingWriter_IntersectingSecretsAtEveryChunking(t *testing.T) {
+	const a, b = "abcdefghijklmnop", "klmnopqrstuvwxy" // b begins with the last six bytes of a
+	const x, y = "zz-key-1234", "1234-and-more-key-tail"
+	const c1, c2, c3 = "first-secret-AAAA", "AAAA-second-BBBB", "BBBB-third-secret"
+	for _, tc := range []struct {
+		name    string
+		secrets []string
+		in      string
+		cut     bool
+		want    string
+	}{
+		{"a then b in one 35-byte write", []string{a, b}, a + "qrstuvwxy" + "0123456789", false, "<secret-hidden>0123456789"},
+		{"a then b after text", []string{a, b}, "0123456789" + a + "qrstuvwxy", false, "0123456789<secret-hidden>"},
+		{"a whole, b partial, uncut", []string{a, b}, a + "qr!", false, "<secret-hidden>qr!"},
+		{"cut inside b after a whole", []string{a, b}, "0123456789" + a + "qrs", true, "0123456789<secret-hidden>"},
+		{"cut inside a where b begins", []string{a, b}, "0123456789" + a[:13], true, "0123456789<secret-hidden>"},
+		{"shorter secret first", []string{x, y}, "log zz-key-1234-and-more-key-tail end", false, "log <secret-hidden> end"},
+		{"cut inside the longer, shorter whole", []string{x, y}, "log zz-key-1234-and-mo", true, "log <secret-hidden>"},
+		{"chain of three", []string{c1, c2, c3}, "[first-secret-AAAA-second-BBBB-third-secret]", false, "[<secret-hidden>]"},
+		{"touching values stay two", []string{a, b}, "x" + b + b, false, "x<secret-hidden><secret-hidden>"},
+	} {
+		var secrets [][]byte
+		for _, s := range tc.secrets {
+			secrets = append(secrets, []byte(s))
+		}
+		m := secretmask.NewMasker(secrets)
+		for _, chunk := range []int{1, 2, 3, 7, 16, 35, 0} {
+			var buf bytes.Buffer
+			writeInChunks(t, secretmask.NewMaskingWriter(&buf, m), tc.in, chunk, tc.cut)
+			if buf.String() != tc.want {
+				t.Errorf("%s in %d-byte writes = %q, want %q", tc.name, chunk, buf.String(), tc.want)
+			}
+		}
+	}
+}
+
+// A periodic chain of overlapping secrets is one run, and the writer never holds back more than the longest
+// secret's length less one byte, however long the chain runs.
+func TestMaskingWriter_PeriodicChainHoldsBounded(t *testing.T) {
+	m := secretmask.NewMasker([][]byte{[]byte("abababab"), []byte("xyzw-0123"), []byte("0123-xyzw")})
+	const maxHeld = len("xyzw-0123") - 1
+	for _, chain := range []string{strings.Repeat("ab", 5000), strings.Repeat("xyzw-0123-", 1000) + "xyzw"} {
+		for _, chunk := range []int{1, 2, 3, 7, 16, 35, 4096} {
+			var buf bytes.Buffer
+			w := secretmask.NewMaskingWriter(&buf, m)
+			for p := []byte(chain); len(p) > 0; p = p[min(chunk, len(p)):] {
+				if _, err := w.Write(p[:min(chunk, len(p))]); err != nil {
+					t.Fatal(err)
+				}
+				if w.Held() > maxHeld {
+					t.Fatalf("%q... in %d-byte writes holds %d bytes, want at most %d", chain[:10], chunk, w.Held(), maxHeld)
+				}
+			}
+			if _, err := w.Write([]byte(" end")); err != nil {
+				t.Fatal(err)
+			}
+			if err := w.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if got, want := buf.String(), "<secret-hidden> end"; got != want {
+				t.Errorf("%q... in %d-byte writes = %q, want %q", chain[:10], chunk, got, want)
+			}
 		}
 	}
 }
