@@ -23,6 +23,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
+	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -357,6 +358,7 @@ func (s PG) IngestDeviceAudit(ctx context.Context, deviceID uuid.UUID, peer stri
 		if err != nil {
 			return DeviceIngestResult{}, fmt.Errorf("store: merge device origin: %w", err)
 		}
+		data = audit.StampProxyPeer(ctx, peer, data)
 		var appended int64
 		if err := tx.QueryRow(ctx, insertQ,
 			r.ID, r.Time, r.RunID, string(r.ActorType), FederatedActor(deviceID, r.Actor), r.Action,

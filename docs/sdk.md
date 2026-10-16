@@ -583,7 +583,7 @@ start.
 | Reason | Meaning |
 |---|---|
 | `runners_disabled` / `runners_config_unavailable` | Runner routes require enabled, readable site configuration. |
-| `runner_stream_unavailable` / `runner_stream_rate_limited` | Runner stream URL/store unavailable, or peer connection rate exceeded. |
+| `runner_stream_unavailable` / `runner_stream_rate_limited` | Runner stream URL/store unavailable, or admission limits exceeded. |
 | `runner_registration_unavailable` | Runner registration requires a configured public org URL and registration store. |
 | `runner_registration_rate_limited` | Too many registration attempts; retry later. |
 | `runner_registration_invalid` / `runner_owner_invalid` | Registration fields or token owner are invalid. |

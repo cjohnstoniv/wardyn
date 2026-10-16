@@ -59,6 +59,11 @@ pending runner action). On `/internal/via-org/{grantID}/…`: `delivery_not_via_
 `via_org_destination_refused` and `via_org_cap_exceeded` (`429`). The org-side
 `via_org` decision rows carry `data.relay` too.
 
+**Trusted proxies.** When `WARDYN_TRUSTED_PROXIES` lists a request's TCP peer, the
+row's `source_ip` is the client that proxy reported in `X-Forwarded-For`, and every
+row the request writes with a `source_ip` adds `data.proxy_peer`, the TCP peer
+Wardyn saw ([Trusted proxies](operations/hybrid-laptops.md#trusted-proxies)).
+
 ## Grammar
 
 - Every action is `<noun>[.<sub>].<verb>`: two or three dot-separated `snake_case` segments, the last an imperative verb from the list below — never a past tense (`capability.grant.create`, not `capability.grant.created`) and never a noun (`run.policy.resolve`, not `run.policy.effective`).

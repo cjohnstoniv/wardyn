@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/coder/websocket"
@@ -26,6 +27,7 @@ type runnerStreamState struct {
 	once    sync.Once
 	hub     *remote.Hub
 	limiter principalLimiter
+	global  principalLimiter
 	runners principalLimiter
 	subsMu  sync.Mutex
 	subs    map[uuid.UUID]runnerEndpoint
@@ -33,30 +35,77 @@ type runnerStreamState struct {
 	owners  map[string]ownerSlots
 	offline runnerOfflineSweeps
 	relay   relayListener
+
+	// handshakes counts connections admitted and not yet proved or closed.
+	handshakes    atomic.Int32
+	maxHandshakes int32
 }
+
+// Anonymous admission, before a runner proves its key, is two buckets and a
+// cap, all per replica (an HA install's limits are these times the replica
+// count): the address bucket (enrolBurst, then enrolRatePerSec, per client
+// address), one global bucket shared by every address, and at most
+// runnerStreamMaxHandshakes connections between arrival and proof. A runner
+// that proves its key is refunded both buckets and frees its slot, so only
+// failed and unfinished handshakes spend them; runnerwire's handshake deadline
+// bounds how long one slot is held.
+//
+// Memory, per replica: a keyed bucket entry is under 128 bytes (measured about
+// 90 with map overhead), so each keyed limiter stays under 512 KiB at
+// enrolLimiterMaxPeers. A slot pins one connection's goroutine, HTTP buffers
+// and WebSocket reader, under 64 KiB (measured about 46 KiB for both ends of a
+// loopback pair), so the cap bounds unproved connections under 16 MiB.
+const (
+	runnerStreamGlobalBurst      = 512.0
+	runnerStreamGlobalRatePerSec = 10.0
+	runnerStreamMaxHandshakes    = 256
+)
 
 // This route has its own proof-of-possession handshake. Human sessions and
 // admin bearer tokens never authorize a runner or replace its AUTH signature.
-// The address limiter charges every connection before any read and refunds a
-// runner that proves its key: behind a proxy every runner shares one address.
-// Each verified runner's reconnects are limited by its own id.
+// Every connection is charged before any read. The runner-id bucket is charged
+// only after Verified: a route id is a claim until the key proves it, so a
+// caller who cannot prove it never spends that runner's reconnect budget.
 func (s *Server) mountRunnerStreamRoutes(r chi.Router) {
 	s.runnerStreams.limiter = principalLimiter{rate: enrolRatePerSec, burst: enrolBurst, max: enrolLimiterMaxPeers}
+	s.runnerStreams.global = principalLimiter{rate: runnerStreamGlobalRatePerSec, burst: runnerStreamGlobalBurst, max: 1}
+	s.runnerStreams.maxHandshakes = runnerStreamMaxHandshakes
 	s.runnerStreams.runners = principalLimiter{rate: enrolRatePerSec, burst: enrolBurst, max: enrolLimiterMaxPeers}
 	r.Get("/runners/{id}/stream", s.handleRunnerStream)
 }
 
-// runnerPeerKey carries the request's address key, which Verified refunds.
-type runnerPeerKey struct{}
+// runnerAdmissionKey carries the request's runnerAdmission to Verified.
+type runnerAdmissionKey struct{}
+
+// runnerAdmission is what one connection holds until its runner proves its key.
+type runnerAdmission struct {
+	peer    string
+	release func()
+}
 
 var errRunnerStreamRateLimited = errors.New("runner stream connection rate exceeded")
 
+// admitRunnerHandshake charges the anonymous budgets. ok false names the refusal.
+func (s *Server) admitRunnerHandshake(peer string) (release func(), refusal string, ok bool) {
+	rs, now := &s.runnerStreams, s.cfg.Now()
+	if !rs.limiter.allow(peer, now) || !rs.global.allow("", now) {
+		return nil, errRunnerStreamRateLimited.Error(), false
+	}
+	if rs.handshakes.Add(1) > rs.maxHandshakes {
+		rs.handshakes.Add(-1)
+		return nil, "too many runner stream handshakes in progress", false
+	}
+	return sync.OnceFunc(func() { rs.handshakes.Add(-1) }), "", true
+}
+
 func (s *Server) handleRunnerStream(w http.ResponseWriter, r *http.Request) {
 	peer := peerKey(r.RemoteAddr)
-	if !s.runnerStreams.limiter.allow(peer, s.cfg.Now()) {
-		writeErrorReason(w, http.StatusTooManyRequests, reasonRunnerStreamRateLimited, errRunnerStreamRateLimited.Error())
+	release, refusal, ok := s.admitRunnerHandshake(peer)
+	if !ok {
+		writeErrorReason(w, http.StatusTooManyRequests, reasonRunnerStreamRateLimited, refusal)
 		return
 	}
+	defer release()
 	if !s.requireRunnersEnabled(w, r) {
 		return
 	}
@@ -81,7 +130,7 @@ func (s *Server) handleRunnerStream(w http.ResponseWriter, r *http.Request) {
 	}
 	// Serve owns the connection, always closes it, and cannot Attach a Link
 	// until nonce, stored key, route id and the admitted Substrate all agree.
-	_ = hub.Serve(context.WithValue(r.Context(), runnerPeerKey{}, peer), runnerwire.NewWebSocket(conn), id)
+	_ = hub.Serve(context.WithValue(r.Context(), runnerAdmissionKey{}, runnerAdmission{peer: peer, release: release}), runnerwire.NewWebSocket(conn), id)
 }
 
 // RevokeRunnerSession notifies an already connected runner after the caller
@@ -148,8 +197,10 @@ func (s *Server) runnerHub(st store.RunnerStore) *remote.Hub {
 			if !s.runnerStreams.runners.allow(id.String(), s.cfg.Now()) {
 				return errRunnerStreamRateLimited
 			}
-			if peer, ok := ctx.Value(runnerPeerKey{}).(string); ok {
-				s.runnerStreams.limiter.refund(peer, s.cfg.Now())
+			if a, ok := ctx.Value(runnerAdmissionKey{}).(runnerAdmission); ok {
+				s.runnerStreams.limiter.refund(a.peer, s.cfg.Now())
+				s.runnerStreams.global.refund("", s.cfg.Now())
+				a.release()
 			}
 			return nil
 		}

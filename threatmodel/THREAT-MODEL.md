@@ -3151,7 +3151,7 @@ has four-eyes.**
 
 **`SourceIP` does not separate principals on a Kubernetes deployment either.**
 
-- Wardyn deliberately does not install a `RealIP` middleware (an `X-Forwarded-For` a client can set is not an identity), so behind an ingress or a load balancer `SourceIP` is the proxy's address and every caller shares it.
+- Wardyn reads `X-Forwarded-For` only from a `WARDYN_TRUSTED_PROXIES` peer (a header a client can set is not an identity), so behind an unlisted ingress or load balancer `SourceIP` is the proxy's address and every caller shares it.
 - A credential-stuffing run against one path and reason therefore arrives as ONE streak on any deployment, and the fold is what a defender is reading.
 
 What bounds that is the window, the count and the rate limiter, not the key:
