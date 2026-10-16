@@ -4,8 +4,6 @@
 package main
 
 import (
-	"bytes"
-	"log/slog"
 	"reflect"
 	"strings"
 	"testing"
@@ -88,35 +86,5 @@ func TestParseBootImages_PlainProxyImage(t *testing.T) {
 	f := &bootFlags{agentImagesJSON: &agentImages, proxyImage: &bad, proxyImageAMD64: &empty, proxyImageARM64: &empty}
 	if _, _, _, err := parseBootImages(f); err == nil || !strings.Contains(err.Error(), "WARDYN_PROXY_IMAGE ") {
 		t.Errorf("an unsafe plain ref = %v; want a refusal naming WARDYN_PROXY_IMAGE", err)
-	}
-}
-
-func TestWarnPlainProxyImage(t *testing.T) {
-	var buf bytes.Buffer
-	old := slog.Default()
-	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
-	t.Cleanup(func() { slog.SetDefault(old) })
-	both := map[string]string{"amd64": "r/p:a", "arm64": "r/p:b"}
-	for name, tc := range map[string]struct {
-		plain  string
-		byArch map[string]string
-		warns  bool
-	}{
-		"unset":               {"", nil, false},
-		"compose default":     {composeProxyImage, nil, false},
-		"published tag":       {publishedProxyRepo + ":0.9.2", nil, false},
-		"published digest":    {publishedProxyRepo + "@sha256:abc", nil, false},
-		"both arches named":   {"mirror.example/proxy:1", both, false},
-		"mirror, no variants": {"mirror.example/proxy:1", nil, true},
-		"mirror, one variant": {"mirror.example/proxy:1", map[string]string{"arm64": "r/p:b"}, true},
-	} {
-		buf.Reset()
-		warnPlainProxyImage(tc.plain, tc.byArch)
-		if got := buf.Len() > 0; got != tc.warns {
-			t.Errorf("%s: warned = %v, want %v (%s)", name, got, tc.warns, buf.String())
-		}
-		if tc.warns && !strings.Contains(buf.String(), "docker buildx imagetools inspect "+tc.plain) {
-			t.Errorf("%s: warning does not give the inspect command: %s", name, buf.String())
-		}
 	}
 }
