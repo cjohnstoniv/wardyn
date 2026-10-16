@@ -41,7 +41,7 @@ func (s *authzStore) GetGovernanceProfileChain(context.Context, uuid.UUID) ([]ty
 }
 
 func (s *authzStore) WriteGovernanceProfile(_ context.Context, id uuid.UUID, build store.GovernanceProfileBuild) (types.GovernanceProfile, error) {
-	p, err := build(nil)
+	p, err := build(nil, nil)
 	p.ID = id
 	return p, err
 }
