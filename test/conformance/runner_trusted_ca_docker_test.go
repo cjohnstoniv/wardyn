@@ -164,8 +164,8 @@ func TestRunnerTrustedCADocker(t *testing.T) {
 		if code == 0 || strings.Contains(out, "X-Wardyn-Egress: denied") || !strings.Contains(out, "< HTTP/1.1 502") {
 			t.Fatalf("intercepted host: exit %d; want the proxy's 502 for an upstream certificate it does not trust:\n%s", code, out)
 		}
-		// TODO(lane B, 0.9.3): once B's refusal body is on main, also assert the proxy answered the
-		// shared "tls_untrusted" reason here (the lead finishes this at integration).
+		// A plain intercepted host keeps the proxy's 502; the provider-shaped "tls_untrusted" body is
+		// for the brokered model routes (internal/egress/proxy trusted_ca_test.go).
 		if code, out = curl(t, ref, tunnelHost); code != 60 {
 			t.Fatalf("tunneled host: exit %d; want curl's 60 (certificate not trusted) with no corporate CA in the sandbox:\n%s", code, out)
 		}
