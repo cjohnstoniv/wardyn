@@ -102,7 +102,7 @@ export const RUNNER_POOL_REFUSAL = {
   REMOTE_NOT_CONFIGURED: (id: string) => `${id} isn't a remote-hosted runner this server is set up with.`,
   REMOTE_NOT_AVAILABLE: (id: string) => `${id} is not available to people's pools. Ask your admin to make it available.`,
   UNAVAILABLE_SERVER: () => "This server does not manage runner pools yet.",
-  RUN_TYPE_MISSING: () => "this request has no run type; older clients omit it \u2014 pass --experience background|interactive or upgrade the client",
+  RUN_TYPE_MISSING: () => "This request has no run type, which older clients leave out. Set experience (--experience on the CLI) to background or interactive, or upgrade the client.",
   RUN_TYPE_NOT_ALLOWED: (name: string, runType: keyof typeof RUN_TYPE_PLURAL) =>
     `${name} doesn't take ${RUN_TYPE_PLURAL[runType]}. Choose another pool or run type.`,
   BARRIER_NOT_ALLOWED: (name: string, asked: keyof typeof BARRIER_LABEL, allowed: (keyof typeof BARRIER_LABEL)[]) => {

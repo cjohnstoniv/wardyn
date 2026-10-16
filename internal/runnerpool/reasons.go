@@ -163,7 +163,7 @@ func KindMismatchMsg(name string) string {
 
 // RunTypeMissingMsg: the request names no run type, so a pool with limits has none to check.
 func RunTypeMissingMsg() string {
-	return "this request has no run type; older clients omit it — pass --experience background|interactive or upgrade the client"
+	return "This request has no run type, which older clients leave out. Set experience (--experience on the CLI) to background or interactive, or upgrade the client."
 }
 
 func RunTypeNotAllowedMsg(name string, t types.RunnerPoolRunType) string {

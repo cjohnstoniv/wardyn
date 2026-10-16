@@ -691,7 +691,7 @@ func TestPoolSourceTakesTheStoredRunType(t *testing.T) {
 		}
 	}
 	_, ref := PoolSource(testPool(&l), "")
-	if ref.Message() != "this request has no run type; older clients omit it \u2014 pass --experience background|interactive or upgrade the client" || ref.Reason.Status() != 422 {
+	if ref.Message() != "This request has no run type, which older clients leave out. Set experience (--experience on the CLI) to background or interactive, or upgrade the client." || ref.Reason.Status() != 422 {
 		t.Errorf("the missing run type reads %q (%d)", ref.Message(), ref.Reason.Status())
 	}
 	if got := RunTypeNotAllowedMsg("P", ""); strings.Contains(got, "take .") {
