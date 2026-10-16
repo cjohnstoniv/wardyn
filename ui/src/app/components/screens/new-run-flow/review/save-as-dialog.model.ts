@@ -86,16 +86,19 @@ export function pickIntent(intent: RunIntent, fields: readonly string[]): RunInt
 /**
  * A draft shared with other people leaves out the saver's own member drives:
  * a shared template shows the names it references to its whole audience, and
- * the people it is offered to can never attach them.
+ * the people it is offered to can never attach them. A start folder on one of
+ * them goes with it, the way detaching the drive clears it.
  */
 export function leaveOutOwnDrives(intent: RunIntent, ownDriveIds: ReadonlySet<string>): { intent: RunIntent; leftOut: boolean } {
-  const drives = (intent as { drives?: { drive_id?: string }[] }).drives;
-  if (!Array.isArray(drives)) return { intent, leftOut: false };
+  const drives = Array.isArray(intent.drives) ? intent.drives : [];
   const kept = drives.filter((d) => !(d.drive_id && ownDriveIds.has(d.drive_id)));
-  if (kept.length === drives.length) return { intent, leftOut: false };
+  const start = intent.start_folder;
+  const startOwn = start?.kind === "attachment" && !!start.drive_id && ownDriveIds.has(start.drive_id);
+  if (kept.length === drives.length && !startOwn) return { intent, leftOut: false };
   const rest: Record<string, unknown> = { ...intent };
   if (kept.length > 0) rest.drives = kept;
   else delete rest.drives;
+  if (startOwn) delete rest.start_folder;
   return { intent: rest as RunIntent, leftOut: true };
 }
 
