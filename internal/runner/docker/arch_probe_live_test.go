@@ -36,11 +36,11 @@ func TestArchProbe_Live(t *testing.T) {
 		}
 		return d
 	}
-	if err := newDriver().checkImageArch(ctx, emulated); err != nil {
+	if err := newDriver().checkImageArch(ctx, emulated, ""); err != nil {
 		t.Errorf("the emulated image must be allowed, got %v", err)
 	}
 	d := newDriver()
-	err := d.checkImageArch(ctx, unrunnable)
+	err := d.checkImageArch(ctx, unrunnable, "")
 	if !errors.Is(err, ErrImageArch) {
 		t.Fatalf("the unrunnable image must be refused with ErrImageArch, got %v", err)
 	}

@@ -53,7 +53,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	}
 
 	// Best-effort image presence: pull the agent image if absent.
-	if err := d.ensureImage(ctx, spec.Image, func() { spec.NotifyWaiting("image: Pulling: " + spec.Image) }); err != nil {
+	if err := d.ensureImage(ctx, spec.Image, runtimeName, func() { spec.NotifyWaiting("image: Pulling: " + spec.Image) }); err != nil {
 		return runner.Sandbox{}, err
 	}
 	// ...and the proxy sidecar image, which nothing else fetches: only a repo checkout or CI (which
@@ -62,7 +62,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	// it — without this pull, the one-line install and desktop tier reach a healthy console and then
 	// fail the FIRST RUN with an unresolvable ref. No-ops where the image is already resident; k8s is
 	// untouched, since kubelet pulls the sidecar there.
-	if err := d.ensureImage(ctx, d.cfg.ProxyImage, func() { spec.NotifyWaiting("image: Pulling: " + d.cfg.ProxyImage) }); err != nil {
+	if err := d.ensureImage(ctx, d.cfg.ProxyImage, "", func() { spec.NotifyWaiting("image: Pulling: " + d.cfg.ProxyImage) }); err != nil {
 		return runner.Sandbox{}, err
 	}
 

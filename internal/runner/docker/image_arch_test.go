@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 const execFormatLog = "exec /x: exec format error"
@@ -55,7 +56,7 @@ func TestEnsureImageArchSkipsTheProbeWhenNothingMismatches(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			d, f := archDriver(c.engine, map[string]string{ref: c.image})
-			if err := d.ensureImage(context.Background(), ref, nil); err != nil {
+			if err := d.ensureImage(context.Background(), ref, "", nil); err != nil {
 				t.Fatalf("got %v, want nil", err)
 			}
 			if p, _ := probes(f); len(p) != 0 {
@@ -72,7 +73,7 @@ func TestEnsureImageArchRefusesOnProvenExecFormat(t *testing.T) {
 		{"x86_64", "arm64", "amd64"},
 	} {
 		d, f := archDriver(c.engine, map[string]string{ref: c.image})
-		err := d.ensureImage(context.Background(), ref, nil)
+		err := d.ensureImage(context.Background(), ref, "", nil)
 		if !errors.Is(err, ErrImageArch) || !errors.Is(err, runner.ErrImageArch) {
 			t.Fatalf("got %v, want ErrImageArch", err)
 		}
@@ -90,7 +91,7 @@ func TestEnsureImageArchRefusesOnProvenExecFormat(t *testing.T) {
 
 func TestArchProbeIsConfined(t *testing.T) {
 	d, f := archDriver("aarch64", map[string]string{"a:1": "amd64"})
-	_ = d.ensureImage(context.Background(), "a:1", nil)
+	_ = d.ensureImage(context.Background(), "a:1", "", nil)
 	p, _ := probes(f)
 	if len(p) != 1 {
 		t.Fatalf("%d probes", len(p))
@@ -119,7 +120,7 @@ func TestEnsureImageArchAllowsAnEmulatedImage(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			d, f := archDriver("aarch64", map[string]string{ref: "amd64"})
 			set(f)
-			if err := d.ensureImage(context.Background(), ref, nil); err != nil {
+			if err := d.ensureImage(context.Background(), ref, "", nil); err != nil {
 				t.Fatalf("got %v, want nil", err)
 			}
 			if p, _ := probes(f); len(p) != 1 || !p[0].removed {
@@ -132,29 +133,85 @@ func TestEnsureImageArchAllowsAnEmulatedImage(t *testing.T) {
 func TestEnsureImageArchChecksAPulledImage(t *testing.T) {
 	d, f := archDriver("aarch64", nil)
 	f.onPull = func(ref string) { f.imageArch[ref] = "amd64" }
-	if err := d.ensureImage(context.Background(), "mirror.example/agent:2", nil); !errors.Is(err, ErrImageArch) {
+	if err := d.ensureImage(context.Background(), "mirror.example/agent:2", "", nil); !errors.Is(err, ErrImageArch) {
 		t.Fatalf("got %v, want ErrImageArch", err)
 	}
 }
 
 func TestArchVerdictIsCachedPerForeignArch(t *testing.T) {
-	for name, exit := range map[string]int64{"refused": 255, "allowed": 0} {
+	d, f := archDriver("aarch64", map[string]string{"a:1": "amd64", "b:1": "amd64"})
+	f.archProbeExit, f.archProbeLog = 0, ""
+	if err := d.ensureImage(context.Background(), "a:1", "", nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.ensureImage(context.Background(), "b:1", "", nil); err != nil {
+		t.Fatal(err)
+	}
+	if p, _ := probes(f); len(p) != 1 {
+		t.Errorf("%d probes for two runnable images of one architecture, want 1", len(p))
+	}
+}
+
+// One image's own output must not decide for the next image of its architecture: a refusal is
+// never cached, so the next image is probed afresh and allowed.
+func TestArchRefusalIsNotCachedForOtherImages(t *testing.T) {
+	for name, set := range map[string]func(f *fakeDocker){
+		"log says exec format error": func(f *fakeDocker) { f.archProbeExit = 0 },
+		"start says exec format error": func(f *fakeDocker) {
+			f.failStartContainer, f.failStartMsg = archProbeNamePrefix, "exec: \"/exec format error\": stat: no such file"
+		},
+	} {
 		t.Run(name, func(t *testing.T) {
-			d, f := archDriver("aarch64", map[string]string{"a:1": "amd64", "b:1": "amd64", "c:1": "riscv64"})
-			f.archProbeExit = exit
-			if exit == 0 {
-				f.archProbeLog = ""
+			d, f := archDriver("aarch64", map[string]string{"a:1": "amd64", "b:1": "amd64"})
+			set(f)
+			if err := d.ensureImage(context.Background(), "a:1", "", nil); !errors.Is(err, ErrImageArch) {
+				t.Fatalf("got %v, want ErrImageArch", err)
 			}
-			first := d.ensureImage(context.Background(), "a:1", nil)
-			second := d.ensureImage(context.Background(), "b:1", nil)
-			if (first == nil) != (second == nil) {
-				t.Errorf("verdicts differ: %v then %v", first, second)
+			f.failStartContainer, f.archProbeExit, f.archProbeLog = "", 0, ""
+			if err := d.ensureImage(context.Background(), "b:1", "", nil); err != nil {
+				t.Fatalf("the next image of the architecture must be probed afresh and allowed, got %v", err)
 			}
-			if second != nil && !strings.Contains(second.Error(), "b:1") {
-				t.Errorf("the cached refusal must name the image asked about: %v", second)
+			if p, _ := probes(f); len(p) != 2 {
+				t.Errorf("%d probes, want 2", len(p))
 			}
-			if p, _ := probes(f); len(p) != 1 {
-				t.Errorf("%d probes for two images of one architecture, want 1", len(p))
+		})
+	}
+}
+
+// A runnable verdict under one runtime says nothing about another.
+func TestArchVerdictIsCachedPerRuntime(t *testing.T) {
+	d, f := archDriver("aarch64", map[string]string{"a:1": "amd64"})
+	f.archProbeExit, f.archProbeLog = 0, ""
+	if err := d.ensureImage(context.Background(), "a:1", "", nil); err != nil {
+		t.Fatal(err)
+	}
+	f.archProbeExit, f.archProbeLog = 255, execFormatLog
+	if err := d.ensureImage(context.Background(), "a:1", "runsc", nil); !errors.Is(err, ErrImageArch) {
+		t.Fatalf("got %v, want the runsc probe to refuse", err)
+	}
+}
+
+// The image-architecture probe of a run's image starts it only under the run's class runtime.
+func TestCreateSandboxProbesTheImageUnderTheClassRuntime(t *testing.T) {
+	for class, rt := range map[types.ConfinementClass]string{types.CC1: "", types.CC2: "runsc", types.CC3: "kata-runtime"} {
+		t.Run(string(class), func(t *testing.T) {
+			d, f := archDriver("aarch64", map[string]string{testSpec().Image: "amd64", "wardyn-proxy:dev": "arm64"})
+			arch := f.info.Architecture
+			f.info = infoWithRuntimes("runsc", "kata-runtime")
+			f.info.Architecture = arch
+			f.archProbeExit, f.archProbeLog = 0, ""
+			spec := testSpec()
+			spec.ConfinementClass = class
+			if _, err := d.CreateSandbox(context.Background(), spec); err != nil {
+				t.Fatalf("CreateSandbox: %v", err)
+			}
+			p, _ := probes(f)
+			agent := f.containers[agentContainerName(spec.RunID)]
+			if len(p) != 1 || agent == nil {
+				t.Fatalf("%d probes, agent %v", len(p), agent != nil)
+			}
+			if p[0].host.Runtime != rt || agent.host.Runtime != rt {
+				t.Errorf("probe runtime %q, agent runtime %q, want %q for both", p[0].host.Runtime, agent.host.Runtime, rt)
 			}
 		})
 	}
@@ -164,7 +221,7 @@ func TestArchProbeStartErrorWithExecFormatRefuses(t *testing.T) {
 	d, f := archDriver("aarch64", map[string]string{"a:1": "amd64"})
 	f.failStartContainer = archProbeNamePrefix
 	f.failStartMsg = "exec container process `/x`: Exec format error"
-	if err := d.ensureImage(context.Background(), "a:1", nil); !errors.Is(err, ErrImageArch) {
+	if err := d.ensureImage(context.Background(), "a:1", "", nil); !errors.Is(err, ErrImageArch) {
 		t.Fatalf("got %v, want ErrImageArch", err)
 	}
 	if p, _ := probes(f); len(p) != 1 || !p[0].removed {
@@ -201,11 +258,11 @@ func TestInconclusiveArchProbeIsNotCached(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 			c.set(f, cancel)
-			if err := d.ensureImage(ctx, "a:1", nil); err != nil {
+			if err := d.ensureImage(ctx, "a:1", "", nil); err != nil {
 				t.Fatalf("an inconclusive probe must allow the image, got %v", err)
 			}
 			c.clear(f)
-			if err := d.ensureImage(context.Background(), "b:1", nil); !errors.Is(err, ErrImageArch) {
+			if err := d.ensureImage(context.Background(), "b:1", "", nil); !errors.Is(err, ErrImageArch) {
 				t.Fatalf("the next image of the architecture must be probed afresh and refused, got %v", err)
 			}
 		})
@@ -265,7 +322,7 @@ func TestEngineArchIsCached(t *testing.T) {
 
 func TestCheckImageArchSkipsAnImageGoneSinceThePresenceCheck(t *testing.T) {
 	d, _ := archDriver("aarch64", nil)
-	if err := d.checkImageArch(context.Background(), "absent:1"); err != nil {
+	if err := d.checkImageArch(context.Background(), "absent:1", ""); err != nil {
 		t.Fatalf("got %v, want nil", err)
 	}
 }

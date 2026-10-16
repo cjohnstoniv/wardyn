@@ -32,6 +32,9 @@ const (
 // A variable so a test need not wait it out.
 var archProbeWait = 3 * time.Second
 
+// archVerdictKey keys the runnable verdict: emulation depends on the engine and the runtime.
+type archVerdictKey struct{ arch, runtime string }
+
 // archVerdictKind is what a probe proved.
 type archVerdictKind int
 
@@ -41,17 +44,18 @@ const (
 	archUnrunnable                          // the engine cannot exec the image
 )
 
-// probeExecFormat starts ref once under its own entrypoint, with no network, no mounts and the
-// hardened settings, and reports what that proved. Only two outcomes prove anything: the container
+// probeExecFormat starts ref once under its own entrypoint and under runtime, the runtime the image
+// is about to run under ("" is the engine default), with no network, no mounts and the hardened
+// settings, and reports what that proved. Only two outcomes prove anything: the container
 // exited and its log says "exec format error" (or the start itself failed with it; crun reports it
 // from the start call, and runc and crun differ in case, so the match ignores case), which is
 // archUnrunnable; and a container still running at archProbeWait or exited with a clean log,
 // which is archRunnable. Everything else (no command to run, a wait error, a cancelled ctx, an
 // unreadable log) is archInconclusive.
 //
-// The probe runs under the engine's default runtime, not the confinement class's runtime: it is
-// a bare start of an image the engine already holds, with nothing mounted and no network.
-func (d *Driver) probeExecFormat(ctx context.Context, ref string) archVerdictKind {
+// The probe takes the sandbox's hardened host config for that runtime, so it runs no image code
+// outside the confinement the image would run under anyway.
+func (d *Driver) probeExecFormat(ctx context.Context, ref, runtime string) archVerdictKind {
 	ctx, cancel := context.WithTimeout(ctx, archProbeSetup+archProbeWait)
 	defer cancel()
 
@@ -65,16 +69,16 @@ func (d *Driver) probeExecFormat(ctx context.Context, ref string) archVerdictKin
 		defer rcancel()
 		_, _ = d.cli.ContainerRemove(rctx, id, client.ContainerRemoveOptions{Force: true})
 	}
+	info, err := d.cli.Info(ctx, client.InfoOptions{})
+	if err != nil {
+		return archInconclusive
+	}
+	host := hardenedHostConfig("none", runtime, runner.Resources{}, info.Info)
+	host.ReadonlyRootfs = true
 	created, err := d.cli.ContainerCreate(ctx, client.ContainerCreateOptions{
-		Name:   name,
-		Config: &container.Config{Image: ref, User: archProbeUser, Labels: labels},
-		HostConfig: &container.HostConfig{
-			NetworkMode:    "none",
-			CapDrop:        []string{"ALL"},
-			SecurityOpt:    []string{"no-new-privileges"},
-			ReadonlyRootfs: true,
-			Resources:      proxyResources(false),
-		},
+		Name:       name,
+		Config:     &container.Config{Image: ref, User: archProbeUser, Labels: labels},
+		HostConfig: host,
 	})
 	if err != nil {
 		remove(name) // a create that timed out client-side may still have made it
