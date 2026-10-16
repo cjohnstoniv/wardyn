@@ -918,10 +918,11 @@ func (s *Server) mountInternalRoutes(r chi.Router) {
 
 	// Recording upload: PUT /api/v1/internal/recordings/{runID}
 	// wardyn-rec POSTs the finished cast from inside the agent container.
-	if s.cfg.RecordingStore != nil {
-		r.Put("/internal/recordings/{runID}", s.handleUploadRecording)
-		r.Put("/internal/recordings/{runID}/parts/{part}", s.handleUploadRecordingPart)
-	}
+	// Registered with no store too, so a relayed upload reaches internalAuth
+	// and the relay binding and is answered recording_off (saveRecording),
+	// never refused by the relay's route filter as an unknown route.
+	r.Put("/internal/recordings/{runID}", s.handleUploadRecording)
+	r.Put("/internal/recordings/{runID}/parts/{part}", s.handleUploadRecordingPart)
 
 	// Scan-result upload: PUT /api/v1/internal/scan-results/{runID}
 	// wardyn-scan PUTs the workspace ScanFacts from inside a governed scan

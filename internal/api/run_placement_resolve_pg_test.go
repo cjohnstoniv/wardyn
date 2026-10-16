@@ -262,7 +262,7 @@ func (e *placementEnv) limitedPool(name string, barriers ...types.ConfinementCla
 		Background: &types.RunnerPoolBackgroundLimits{CPUMillis: &types.RunnerPoolAmount{Default: 1000, Cap: 2000}, MemoryMiB: &types.RunnerPoolAmount{Default: 1024, Cap: 2048}, Lifetime: &types.RunnerPoolDuration{DefaultSec: 3600, MaxSec: 7200}},
 		Barriers:   barriers,
 	}
-	out, err := e.pg.UpdateRunnerPool(context.Background(), p.ID, e.revision(p.ID), nil, nil, &limits)
+	out, err := e.pg.UpdateRunnerPool(context.Background(), p.ID, e.revision(p.ID), nil, nil, &limits, nil)
 	if err != nil {
 		e.t.Fatalf("set pool limits: %v", err)
 	}

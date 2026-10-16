@@ -162,6 +162,9 @@ type AgentRun struct {
 	// runner_asserted, empty for a legacy or unresolved record. Not
 	// `confinement_source`, which says who CHOSE the class.
 	EvidenceSource RunEvidenceSource `json:"evidence_source,omitempty"`
+	// NotRecorded says why the run has no session recording, decided once at dispatch and kept for
+	// the run's life; empty when the run is recorded (or predates the field).
+	NotRecorded RunNotRecorded `json:"not_recorded,omitempty"`
 	// RunnerPoolID is the runner pool the run was admitted into, and the next three fields say how
 	// (all written once at create). A pool is a label for a choice and never admission: the run
 	// goes to the exact runner recorded in RunnerID (a self-hosted runner) or RunnerPoolExecutor (a

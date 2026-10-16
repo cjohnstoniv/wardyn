@@ -150,7 +150,8 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	// it through a Secret instead, since a Pod spec is readable by anyone holding pods/get).
 	// Concatenation needs no dedup: dispatch's splitSecretEnv keeps the two maps disjoint.
 	env = append(env, envSlice(spec.SecretEnv)...)
-	if d.cfg.Record {
+	record := spec.RecordWithin(d.cfg.Record)
+	if record {
 		// The one in-sandbox signal that session recording is configured; boot_seed_rec_wrap keys its
 		// wrap on this rather than on the /var/log/wardyn dir a one-shot root exec creates, since that
 		// exec can race the interactive boot-seed pane and silently ship an unrecorded seed session.
@@ -161,7 +162,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 		Image:    spec.Image,
 		Hostname: "agent",
 		Env:      env,
-		Labels:   wardynLabels(spec.RunID, componentAgent, spec.Labels),
+		Labels:   withRecordLabel(wardynLabels(spec.RunID, componentAgent, spec.Labels), record),
 		Tty:      true, // keep a TTY so Exec can attach a PTY for recording.
 		Cmd:      idleCmd,
 	}
@@ -246,7 +247,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	// agent user: CastDir (root-owned 0755 under /var/log) and the RecordingMount target (a fresh
 	// named volume the daemon creates root-owned 0755). Both are prepared via a single one-shot ROOT
 	// exec right after start. Best-effort: a failure here only impairs recording, surfaced separately.
-	if d.cfg.Record {
+	if record {
 		d.prepareRecordingDirs(ctx, agentResp.ID)
 	}
 	d.keepExecOutput(agentContainerName(spec.RunID), spec.ExecOutput)

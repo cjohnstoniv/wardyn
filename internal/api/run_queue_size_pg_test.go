@@ -43,7 +43,7 @@ func TestPG_QueuedRunIsSizedForTheRunnerItIsPromotedOnto(t *testing.T) {
 	}
 	poolCap := func(n int) {
 		limits.MaxConcurrentRuns = intp(n)
-		if _, err := e.pg.UpdateRunnerPool(ctx, pool.ID, e.revision(pool.ID), nil, nil, &limits); err != nil {
+		if _, err := e.pg.UpdateRunnerPool(ctx, pool.ID, e.revision(pool.ID), nil, nil, &limits, nil); err != nil {
 			t.Fatal(err)
 		}
 	}

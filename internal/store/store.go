@@ -463,14 +463,14 @@ const runInsertCols = `id, created_at, updated_at, created_by, agent, repo, task
 // insert and summed by runnerUsageSQL, never read back into a run.
 const runReservedCols = `reserved_cpu_millis, reserved_memory_mib, reserved_disk_mib`
 
-const runCols = runInsertCols + `, failure_hint, status_detail, lost_at, lost_reason, containment_error, containment_error_at, ended_at, paused_at, paused_reason, active_at, end_tightened_at, admitted_at`
+const runCols = runInsertCols + `, failure_hint, status_detail, lost_at, lost_reason, containment_error, containment_error_at, ended_at, paused_at, paused_reason, active_at, end_tightened_at, admitted_at, not_recorded`
 
 // scanRun is the ONE reader for runCols. A new column is appended to
 // runInsertCols/runCols and to the end of this Scan — appending is the one edit
 // that can't silently transpose two same-typed columns past the compiler.
 func scanRun(row pgx.Row) (types.AgentRun, error) {
 	var r types.AgentRun
-	var cc, state, autonomyLevel, lostReason, pausedReason, placement, evidenceSource, experience, capSource, poolSelection string
+	var cc, state, autonomyLevel, lostReason, pausedReason, placement, evidenceSource, experience, capSource, poolSelection, notRecorded string
 	var limitsRaw []byte
 	var containmentErr *string
 	err := row.Scan(
@@ -483,7 +483,7 @@ func scanRun(row pgx.Row) (types.AgentRun, error) {
 		&placement, &r.PlacementFilled, &r.RunnerID, &evidenceSource, &experience, &r.LifetimeCapAt, &capSource,
 		&r.RunnerPoolID, &r.RunnerPoolRevision, &poolSelection, &r.RunnerPoolExecutor, &r.HumanAuthor,
 		&r.FailureHint, &r.StatusDetail, &r.LostAt, &lostReason, &containmentErr, &r.ContainmentErrorAt, &r.EndedAt,
-		&r.PausedAt, &pausedReason, &r.ActiveAt, &r.EndTightenedAt, &r.AdmittedAt,
+		&r.PausedAt, &pausedReason, &r.ActiveAt, &r.EndTightenedAt, &r.AdmittedAt, &notRecorded,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return types.AgentRun{}, ErrNotFound
@@ -500,7 +500,7 @@ func scanRun(row pgx.Row) (types.AgentRun, error) {
 	r.EvidenceSource = types.RunEvidenceSource(evidenceSource)
 	r.Experience = types.RunExperience(experience)
 	r.LifetimeCapSource = types.LimitSource(capSource)
-	r.RunnerPoolSelection = types.RunnerPoolSelection(poolSelection)
+	r.RunnerPoolSelection, r.NotRecorded = types.RunnerPoolSelection(poolSelection), types.RunNotRecorded(notRecorded)
 	if containmentErr != nil {
 		r.ContainmentError = *containmentErr
 	}
