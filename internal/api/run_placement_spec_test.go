@@ -75,7 +75,9 @@ func TestLocalReviveRefusesBeforeOperatorSecretReadsAndStripsCopy(t *testing.T) 
 	run := types.AgentRun{ID: uuid.New(), CreatedBy: capSub, Placement: types.PlacementLocal}
 	for _, secretRef := range []string{"corporate-secret", ""} {
 		f.st.siteConfig.UpstreamProxySecretRef = secretRef
-		cfg := proxy.Config{RunID: run.ID, UpstreamProxyURL: "https://user:password@parent", TrustedCAPEM: "corporate", InternalHosts: []types.InternalHost{{HostSuffix: "corp"}}, LLMUpstreams: map[string]string{"vendor": "corp"}}
+		f.st.siteConfig.InternalHosts = []types.InternalHost{{HostSuffix: "corp"}}
+		// "removed" was declared at dispatch and has since been deleted: a revive must not keep lifting it.
+		cfg := proxy.Config{RunID: run.ID, UpstreamProxyURL: "https://user:password@parent", TrustedCAPEM: "corporate", InternalHosts: []types.InternalHost{{HostSuffix: "corp"}, {HostSuffix: "removed"}}, LLMUpstreams: map[string]string{"vendor": "corp"}}
 		ref := f.srv.reviveOwnerRecheck(context.Background(), run, &cfg, types.ActorSystem, "wardynd")
 		// An own plan revives; the organisation's upstream proxy secret is never sent to a runner.
 		if secretRef != "" && (ref == nil || ref.reason != string(placement.ReasonPlacementCredential)) {
@@ -84,7 +86,7 @@ func TestLocalReviveRefusesBeforeOperatorSecretReadsAndStripsCopy(t *testing.T) 
 		if secretRef == "" && ref != nil {
 			t.Fatalf("revive of an own plan = %v, want it admitted", ref)
 		}
-		if secretRef == "" && (cfg.UpstreamProxyURL != "" || cfg.TrustedCAPEM != "" || len(cfg.InternalHosts)+len(cfg.LLMUpstreams) != 0) {
+		if secretRef == "" && (cfg.UpstreamProxyURL != "" || cfg.TrustedCAPEM != "" || len(cfg.LLMUpstreams) != 0 || len(cfg.InternalHosts) != 1 || cfg.InternalHosts[0].HostSuffix != "corp") {
 			t.Fatal("revive retained organisation network configuration")
 		}
 	}

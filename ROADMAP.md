@@ -42,6 +42,7 @@
 | **v0.8.9** | Run-level custom components (granted, saved and inline), their secrets added at the proxy or, where allowed, delivered as a variable or file. Also a four-panel New Run, person erasure, restructured docs and Go 1.26.9 | **Shipped (pre-alpha)** — `v0.8.9`, 2026-10-09 (see [CHANGELOG.md](CHANGELOG.md)) |
 | **v0.9.0** | Hybrid local and remote runs: client-mode runners, Self-Hosted and Remote Provided pools and a run queue. Also a redesigned New Run with run documents, templates and several drives, an AWS KMS key provider and React 19 | **Shipped (pre-alpha)** — `v0.9.0`, 2026-10-13 (see [CHANGELOG.md](CHANGELOG.md)) |
 | **v0.9.1** | Self-hosted runners on people's own computers: an AWS SSO run starts on a laptop runner, wardyn-runnerd works with Docker Desktop, and setup is one command. Also a self_host_runner permission and a run page that says where a run ran | **Shipped (pre-alpha)** — `v0.9.1`, 2026-10-14 (see [CHANGELOG.md](CHANGELOG.md)) |
+| **v0.9.2** | Laptop runners on private-endpoint estates: a self-hosted runner now receives the organisation's internal_hosts | **Shipped (pre-alpha)** — `v0.9.2`, 2026-10-16 (see [CHANGELOG.md](CHANGELOG.md)) |
 
 ## Shipped detail
 

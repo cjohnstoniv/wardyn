@@ -8,6 +8,20 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+## [0.9.2] — 2026-10-16
+
+Laptop runners on private-endpoint estates: a self-hosted runner now gets the organisation's `internal_hosts`, so a
+run reaches hosts that resolve to private addresses.
+
+### Fixed
+
+- A self-hosted (laptop) runner now receives the organisation's `internal_hosts`. Before, they were dropped for every
+  local run, so a host resolving to a private address (PrivateLink, Private Service Connect, a zero-trust client's
+  `100.64.0.0/10` range) was denied `builtin:private-ip` on a laptop even though the same declaration worked in the
+  cluster. That included the AWS SSO portal a per-person Bedrock run renews through. A declaration still lifts only the
+  private-IP guard for its suffix; the egress allowlist decides as before. The organisation's upstream proxy, trusted
+  CA, `upstream_proxy_no_proxy` and LLM upstream overrides are still not sent.
+
 ## [0.9.1] — 2026-10-14
 
 Self-hosted runners on people's own computers, from an adopter's first rollout: a per-person AWS SSO run now starts on

@@ -57,6 +57,13 @@
 - The short-lived role credentials the SDK mints from it are still resident in the sandbox, because SigV4 signs in-process.
 - The provider's sign-in and renewal: [AWS SSO per person](../OPERATIONS.md#aws-sso-per-person).
 
+### Private endpoints and `internal_hosts`
+
+- The organisation's [`internal_hosts`](../OPERATIONS.md#network-upstream-proxy-and-egress-redirects) declarations reach a laptop runner's proxy as they do a cluster one. A host that resolves to a private address (PrivateLink, Private Service Connect, a zero-trust client's `100.64.0.0/10` range) is reached when it is declared there, and the decision row reads `rule_source: site-config:internal-host`.
+- A declaration lifts only the private-IP guard for that suffix. The egress allowlist still decides, and loopback, link-local and metadata addresses stay closed.
+- On a laptop the sandbox resolves through the person's network, so declare `cidrs` on each entry a laptop estate uses. An entry without them lifts the whole private range for that suffix.
+- The organisation's upstream proxy, trusted CA, `upstream_proxy_no_proxy` and LLM upstream overrides are still not sent to a laptop.
+
 ## Claiming a runner
 
 1. The owner mints a single-use `wdr_` registration token (`wardyn runner token`, or *My runner*). It lasts 1 hour, and needs the [`self_host_runner`](capabilities.md#self_host_runner) permission; admins are never asked.

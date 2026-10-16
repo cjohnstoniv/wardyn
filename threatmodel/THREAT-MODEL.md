@@ -1,6 +1,6 @@
 # Wardyn Published Threat Model
 
-**Version:** v2 (tracks the shipped codebase; last reviewed at v0.9.1)
+**Version:** v2 (tracks the shipped codebase; last reviewed at v0.9.2)
 **Status:** published alongside the codebase.
 
 **Implementation status markers.** Controls are tagged inline: **[shipped]**
@@ -2504,7 +2504,7 @@ hiding them would repeat the failure mode we are designed to avoid.
 69. **On a runner host the developer is root: every control binds the agent, not the developer, and everything a local run uses is developer-readable [0.9, client mode].**
     - A run placed `local` runs on its owner's laptop under `wardyn-runnerd`, with the same sandbox, proxy sidecar and gatewayless network as any Docker run (B12).
     - The developer administers that Docker daemon, proxy container and runner state. Egress policy, managed settings, Azure DevOps narrowing, push rules, method pins and tool rules therefore bind the agent; the developer acts from their own shell.
-    - Readable by the developer, by design: the run token, the per-run MITM CA key, the proxy's config, the sandbox, the started harness's tool-approval credential (`stampHarnessCredential`), and their own credentials.
+    - Readable by the developer, by design: the run token, the per-run MITM CA key, the proxy's config (including the organisation's `internal_hosts` suffixes and CIDRs, since 0.9.2), the sandbox, the started harness's tool-approval credential (`stampHarnessCredential`), and their own credentials.
     - The organisation keeps what it never sends (#72, #75), the ceiling, whether local placement is allowed (`deny_placements`), and the audit chain, whose laptop content is self-reported (#73).
     - A run lands only on its launching person's own claimed runner (`OwnRunnerCandidates`), so nobody reaches another person's run through their own runner.
     - An organisation-side erase reaches the laptop late: a runner reporting a run the organisation no longer holds gets a kill and a quarantine, and deletes that run's local evidence at revocation or `90` days later (`RunnerAssertedEvidenceTTL`).
@@ -2538,7 +2538,8 @@ hiding them would repeat the failure mode we are designed to avoid.
     - A local run's own stored-secret grants are persisted `OwnerOnly` once the owner's namespace is proven, so injection never falls back to the operator namespace.
     - **What reaches the laptop by design:** own material, the run token and the per-run MITM CA key, which intercepts one's own sandbox only.
     - Organisation-component `config` is operator data: the laptop-bound environment drops every key an organisation's component wrote (`applyComponentConfigEnv`).
-    - Operator network configuration (upstream proxy, trusted CA, internal hosts, LLM upstreams) is not sent; a destination that needs the organisation's position takes `via_org`.
+    - Operator network configuration (upstream proxy, trusted CA, `upstream_proxy_no_proxy`, LLM upstreams) is not sent; a destination that needs the organisation's position takes `via_org`.
+    - `internal_hosts` are sent (0.9.2): they lift only the private-IP guard for declared suffixes, the allowlist still decides, and a revive keeps only entries still declared.
 
 73. **A laptop run's decisions, recording, output, exit codes, capabilities and posture are self-reported [0.9, client mode].**
     - The organisation writes every row, but for a local run their content comes from a developer-administered host: proxy decisions, the PTY recording (`recording.upload` rows carry `evidence_source: runner_asserted`), `ExecOutput`, exit codes, advertised capabilities and posture.

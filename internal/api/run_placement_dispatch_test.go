@@ -49,7 +49,9 @@ func localOrgNetworkSpec(runID uuid.UUID) runner.SandboxSpec {
 
 // After classification the run's stored proxy config is the stripped copy, not
 // the config stored before file-secret completion: a revive or proxy restart
-// must never read the organisation's upstream proxy, CA or internal hosts.
+// must never read the organisation's upstream proxy or CA. Internal hosts are
+// kept: they only lift the private-IP guard for declared suffixes, and a laptop
+// on a private-endpoint estate needs them for every run.
 func TestLocalDispatchStoresTheStrippedProxyConfig(t *testing.T) {
 	srv, ls, _, run := localDispatchFixture(t, types.PlacementLocal)
 	ctx := context.Background()
@@ -71,7 +73,7 @@ func TestLocalDispatchStoresTheStrippedProxyConfig(t *testing.T) {
 	if err := json.Unmarshal(raw, &stored); err != nil {
 		t.Fatal(err)
 	}
-	if stored.UpstreamProxyURL != "" || stored.TrustedCAPEM != "" || len(stored.InternalHosts)+len(stored.LLMUpstreams) != 0 {
+	if stored.UpstreamProxyURL != "" || stored.TrustedCAPEM != "" || len(stored.LLMUpstreams) != 0 || len(stored.InternalHosts) != 1 {
 		t.Fatalf("stored config kept organisation network configuration: %s", raw)
 	}
 	want, err := runner.BuildProxyConfig(run.ID, spec.ProxyConfig, runner.ProxyListenPort)

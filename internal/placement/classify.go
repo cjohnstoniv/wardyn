@@ -131,7 +131,7 @@ var Table = []Entry{
 	{Struct: StructProxyConfig, Field: "AzureARM", Variant: "the Azure CLI's Resource Manager token, redeemed by the organisation from the person's Entra sign-in", Class: ClassBrokered, Rule: RuleRefuse, Reason: ReasonPlacementCredential},
 	{Struct: StructProxyConfig, Field: "UpstreamProxyURL", Class: ClassOperator, Rule: RuleNotSent, Variant: "the runner's own upstream-proxy config applies"},
 	{Struct: StructProxyConfig, Field: "TrustedCAPEM", Class: ClassOperator, Rule: RuleNotSent, Variant: "org network; destinations needing it take via_org"},
-	{Struct: StructProxyConfig, Field: "InternalHosts", Class: ClassOperator, Rule: RuleNotSent, Variant: "org network"},
+	{Struct: StructProxyConfig, Field: "InternalHosts", Class: ClassOperator, Rule: RuleAllow, Variant: "the org's internal_hosts lift only the private-IP guard for declared suffixes; the egress allowlist still decides"},
 	{Struct: StructProxyConfig, Field: "UpstreamProxyNoProxy", Class: ClassOperator, Rule: RuleNotSent, Variant: "org network"},
 	{Struct: StructProxyConfig, Field: "LLMUpstreams", Class: ClassOperator, Rule: RuleNotSent, Variant: "org network"},
 	{Struct: StructProxyConfig, Field: "MITMHosts", Class: ClassOperator, Rule: RuleStrip, Variant: "only hosts of own and runner_resident injections and every via_org destination; operator-only hosts dropped"},

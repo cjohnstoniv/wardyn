@@ -578,12 +578,19 @@ func (s *Server) refreshDeploymentConfig(ctx context.Context, run types.AgentRun
 	cfg.UpstreamProxyURL = s.resolveRunUpstreamProxy(ctx, run.ID, sc, nil)
 	cfg.UpstreamProxyNoProxy = sc.UpstreamProxyNoProxy
 	cfg.TrustedCAPEM = s.cfg.TrustedCAPEM
-	cfg.InternalHosts = slices.DeleteFunc(cfg.InternalHosts, func(h types.InternalHost) bool {
+	cfg.InternalHosts = currentInternalHosts(cfg.InternalHosts, sc)
+	return nil
+}
+
+// currentInternalHosts keeps the stored internal-host entries today's site
+// configuration still declares, never one added since: a revive cannot widen
+// what the run was dispatched with, and an entry the organisation removed stops lifting.
+func currentInternalHosts(stored []types.InternalHost, sc types.SiteConfig) []types.InternalHost {
+	return slices.DeleteFunc(stored, func(h types.InternalHost) bool {
 		return !slices.ContainsFunc(sc.InternalHosts, func(c types.InternalHost) bool {
 			return c.HostSuffix == h.HostSuffix && slices.Equal(c.CIDRs, h.CIDRs)
 		})
 	})
-	return nil
 }
 
 // reviveOwnerRecheck runs the re-checks above for a revive, before its claim,
