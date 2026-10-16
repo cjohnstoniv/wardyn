@@ -41,7 +41,8 @@ docs/operations/who-gets-in.md=1454 share=35
 # docs/operations/admin-only-writes.md 3416 adds 57 over 3359 (0.9 member drives): the admin list and delete of people's drives; measured at merge.
 # docs/operations/admin-only-writes.md 3418 adds 2 over 3416 (0.9 DS4-M6, after merging lane/090-DS4-M5); measured at merge.
 # docs/operations/admin-only-writes.md 3444 adds 26 over 3418 (0.9 release text for the fix sets merged at release); measured.
-docs/operations/admin-only-writes.md=3444 share=35
+# docs/operations/admin-only-writes.md 3471 adds 27 over 3444 (0.9.3 RV4b R2-0057): the /governance/egress-baseline tier row; measured.
+docs/operations/admin-only-writes.md=3471 share=35
 # docs/operations/three-roles.md 4024 measured after G-090-cleanup slice F: docs rows that contradicted the code.
 # docs/operations/three-roles.md 4063 adds 39 over 4024: 0.9 final docs pass 3, measured: a profile maximum never cuts below an untouched run's size.
 docs/operations/three-roles.md=4173 share=35
