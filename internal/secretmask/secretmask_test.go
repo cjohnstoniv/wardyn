@@ -563,3 +563,33 @@ func TestJSONEscapedVariants_CostFollowsCorpusSize(t *testing.T) {
 		t.Fatalf("expanding %d secrets searched %d entries for duplicates, want at most %d: the de-dup is scanning its own output", n, *scanned, len(got))
 	}
 }
+
+// A stream cut short inside a secret masks the part of it that arrived, at every cut offset, for a one-line and
+// a multi-line value, whatever the write boundaries.
+func TestMaskingWriter_CloseCutMasksASecretTheCutSplits(t *testing.T) {
+	const before = "log line before the cut\n"
+	for _, secret := range []string{"cut-secret-0123456789", "-----BEGIN KEY-----\nAAAAline1\nBBBBline2\n-----END KEY-----\n"} {
+		m := secretmask.NewMasker([][]byte{[]byte(secret)})
+		for k := 0; k <= len(secret); k++ {
+			want := before
+			if k > 0 {
+				want += "<secret-hidden>"
+			}
+			for _, chunk := range []int{1, 7, 4096} {
+				var buf bytes.Buffer
+				w := secretmask.NewMaskingWriter(&buf, m)
+				for p := []byte(before + secret[:k]); len(p) > 0; p = p[min(chunk, len(p)):] {
+					if _, err := w.Write(p[:min(chunk, len(p))]); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if err := w.CloseCut(); err != nil {
+					t.Fatal(err)
+				}
+				if buf.String() != want {
+					t.Errorf("cut at %d of %q in %d-byte writes = %q, want %q", k, secret, chunk, buf.String(), want)
+				}
+			}
+		}
+	}
+}

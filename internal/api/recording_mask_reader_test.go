@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/recording"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 )
 
@@ -132,5 +133,30 @@ func TestBuildMaskingBody_MaskFailureDoesNotReturnRawInput(t *testing.T) {
 	got, err := io.ReadAll(body)
 	if err == nil || strings.Contains(string(got), "registered-recording-secret") || !strings.Contains(string(got), "<secret-hidden>") {
 		t.Fatalf("mask failure returned (%q, %v)", got, err)
+	}
+}
+
+// A plain log wardyn-rec cut short ends with its marker: a registered secret the cut split is masked as far as
+// it arrived, at every cut offset, for a one-line and a multi-line value. A log with no marker is uploaded whole,
+// so its end is left as it is.
+func TestBuildMaskingBody_MasksASecretALogCutSplits(t *testing.T) {
+	lines := strings.Repeat("output line\n", 4000)
+	for _, secret := range []string{"cut-secret-0123456789", "-----BEGIN KEY-----\nAAAAline1\nBBBBline2\n-----END KEY-----\n"} {
+		runID := uuid.New()
+		reg := secretmask.NewRegistry()
+		if err := reg.Add(runID, []byte(secret)); err != nil {
+			t.Fatal(err)
+		}
+		for k := 1; k < len(secret); k++ {
+			head := lines + secret[:k]
+			marker := recording.LogCutMarker(int64(len(head)), int64(len(head)+len(secret)))
+			got, err := io.ReadAll(buildMaskingBody(strings.NewReader(head+marker), reg, runID))
+			if want := lines + string(secretmask.Placeholder()) + marker; err != nil || string(got) != want {
+				t.Errorf("cut at %d of %q: %v, ends %q", k, secret, err, got[max(0, len(got)-200):])
+			}
+			if got, err := io.ReadAll(buildMaskingBody(strings.NewReader(head), reg, runID)); err != nil || string(got) != head {
+				t.Errorf("a whole log ending at %d of %q was changed: %v", k, secret, err)
+			}
+		}
 	}
 }

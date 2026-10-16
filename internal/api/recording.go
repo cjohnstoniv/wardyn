@@ -301,18 +301,36 @@ func buildGuardedMaskingBody(src io.Reader, reg *secretmask.Registry, runID uuid
 	// caught — the `"],[t,"o","` event framing breaks the verbatim byte run,
 	// which no per-value match closes.
 	snap = secretmask.JSONEscapedVariants(snap)
-	r := &recordingMaskReader{src: src, guard: guard}
-	r.masker = secretmask.NewMaskingWriter(&r.output, secretmask.NewMasker(snap))
+	r := &recordingMaskReader{src: src, guard: guard, mask: secretmask.NewMasker(snap)}
+	r.masker = secretmask.NewMaskingWriter(&r.output, r.mask)
 	return r
 }
 
 type recordingMaskReader struct {
 	src    io.Reader
 	output bytes.Buffer
+	mask   secretmask.Masker
 	masker *secretmask.MaskingWriter
 	chunk  [32 << 10]byte
-	err    error
-	guard  func() bool // nil, or false once the run is no longer covered
+	// held are the last bytes read, kept from the masker until the end says whether they are a log cut marker.
+	held  []byte
+	err   error
+	guard func() bool // nil, or false once the run is no longer covered
+}
+
+// finish masks the held bytes and flushes the masker. A body that ends with wardyn-rec's log cut marker
+// was cut just before it, so a secret the cut split is masked as far as it arrived.
+func (r *recordingMaskReader) finish(eof bool) error {
+	held := r.held
+	r.held = nil
+	if i := recording.LogCutAt(held); eof && i >= 0 {
+		_, err := r.masker.Write(held[:i])
+		err = cmp.Or(err, r.masker.CloseCut())
+		r.output.Write(r.mask.Mask(held[i:]))
+		return err
+	}
+	_, err := r.masker.Write(held)
+	return cmp.Or(err, r.masker.Close())
 }
 
 func (r *recordingMaskReader) Read(p []byte) (int, error) {
@@ -325,12 +343,17 @@ func (r *recordingMaskReader) Read(p []byte) (int, error) {
 			return 0, r.err
 		}
 		n, readErr := r.src.Read(r.chunk[:])
-		_, maskErr := r.masker.Write(r.chunk[:n])
+		r.held = append(r.held, r.chunk[:n]...)
+		var maskErr error
+		if over := len(r.held) - recording.LogCutMarkerMax; over > 0 {
+			_, maskErr = r.masker.Write(r.held[:over])
+			r.held = append(r.held[:0], r.held[over:]...)
+		}
 		r.err = cmp.Or(maskErr, readErr)
 		if r.err != nil {
 			// Flush the retained masked tail before exposing EOF or the source
 			// error, including MaxBytesError. Neither may discard buffered bytes.
-			closeErr := r.masker.Close()
+			closeErr := r.finish(r.err == io.EOF)
 			if r.err == io.EOF && closeErr != nil {
 				r.err = closeErr
 			}

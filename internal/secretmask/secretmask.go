@@ -800,6 +800,35 @@ func (w *MaskingWriter) Close() error {
 	return nil
 }
 
+// CloseCut is Close for a stream cut short where it ends: a trailing run that begins a secret, the part of
+// it that arrived before the cut, is masked as well.
+func (w *MaskingWriter) CloseCut() error {
+	masked, _ := safeMask(w.m, w.tail)
+	w.tail = nil
+	if k := w.m.cutPrefixLen(masked); k > 0 {
+		masked = append(masked[:len(masked)-k:len(masked)-k], placeholder...)
+	}
+	if len(masked) == 0 {
+		return nil
+	}
+	_, err := w.dst.Write(masked)
+	return err
+}
+
+// cutPrefixLen is the length of the longest end of p that is the start of a secret.
+func (m Masker) cutPrefixLen(p []byte) int {
+	best := 0
+	for _, s := range m.secrets {
+		for k := min(len(s)-1, len(p)); k > best; k-- {
+			if bytes.HasSuffix(p, s[:k]) {
+				best = k
+				break
+			}
+		}
+	}
+	return best
+}
+
 // MaskCallForTest is a package-level seam so that tests can inject a panicking
 // masker and prove the fail-CLOSED path never emits raw input. Production code
 // leaves it at the default, which simply calls Masker.Mask. It is exported only
