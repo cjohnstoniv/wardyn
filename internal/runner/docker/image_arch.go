@@ -49,8 +49,8 @@ func (d *Driver) engineArch(ctx context.Context) string {
 // checkImageArch refuses a present image the engine cannot run. An image of
 // another architecture is not refused on that alone: engines emulate (Rosetta,
 // qemu), so archRunnable probes it. An empty architecture on either side is
-// unknown, not a mismatch.
-func (d *Driver) checkImageArch(ctx context.Context, ref string) error {
+// unknown, not a mismatch. runtime is the runtime ref will run under ("" is the engine default).
+func (d *Driver) checkImageArch(ctx context.Context, ref, runtime string) error {
 	res, err := d.cli.ImageInspect(ctx, ref)
 	if isNotFound(err) {
 		return nil // gone since the presence check: nothing to compare
@@ -66,26 +66,27 @@ func (d *Driver) checkImageArch(ctx context.Context, ref string) error {
 	if eng == "" || eng == img {
 		return nil
 	}
-	return d.archRunnable(ctx, ref, img, eng)
+	return d.archRunnable(ctx, ref, img, eng, runtime)
 }
 
 // archRunnable answers whether this engine can run an image of another architecture: it refuses
 // only when a probe container proves it cannot (exec format error) and otherwise warns that the
-// image runs under emulation. Emulation is a property of the engine, so a conclusive verdict is
-// cached per foreign architecture and the first image of an architecture decides for the rest. An
-// inconclusive probe (see probeExecFormat) allows this image and caches nothing, so the next image
-// of that architecture is probed afresh.
+// image runs under emulation, probing under runtime, the runtime the image will run under. Emulation
+// is a property of the engine and runtime, so a runnable verdict is cached per foreign architecture
+// and runtime. A refusal can rest on the image's own output, so it is never cached and the next image
+// of that architecture is probed afresh, as after an inconclusive probe (see probeExecFormat).
 //
 // Known false positive, rare: an emulated image whose entrypoint execs a binary of a third
 // architecture logs exec format error and is refused although the image itself is emulable.
-func (d *Driver) archRunnable(ctx context.Context, ref, img, eng string) error {
+func (d *Driver) archRunnable(ctx context.Context, ref, img, eng, runtime string) error {
 	kind, cached := archInconclusive, false
-	if v, ok := d.archVerdicts.Load(img); ok {
+	key := archVerdictKey{img, runtime}
+	if v, ok := d.archVerdicts.Load(key); ok {
 		kind, cached = v.(archVerdictKind), true
 	} else {
-		kind = d.probeExecFormat(ctx, ref)
-		if kind != archInconclusive {
-			d.archVerdicts.Store(img, kind)
+		kind = d.probeExecFormat(ctx, ref, runtime)
+		if kind == archRunnable {
+			d.archVerdicts.Store(key, kind)
 		}
 	}
 	if kind != archUnrunnable {

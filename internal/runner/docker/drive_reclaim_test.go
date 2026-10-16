@@ -223,7 +223,7 @@ func TestReclaimDrive_RealDockerRefusesWhileAContainerMountsIt(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	if err := d.ensureImage(ctx, "busybox:latest", nil); err != nil {
+	if err := d.ensureImage(ctx, "busybox:latest", "", nil); err != nil {
 		t.Fatalf("pull busybox: %v", err)
 	}
 

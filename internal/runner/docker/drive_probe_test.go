@@ -154,10 +154,10 @@ func TestProbeDrive_RealDocker(t *testing.T) {
 	// daemon this test must pre-pull it, the same way it already pre-pulls
 	// "busybox:latest" below for makeRootOwnedHostDir's own unchecked
 	// ContainerCreate.
-	if err := d.ensureImage(ctx, defaultDriveProbeImage, nil); err != nil {
+	if err := d.ensureImage(ctx, defaultDriveProbeImage, "", nil); err != nil {
 		t.Fatalf("pull probe image: %v", err)
 	}
-	if err := d.ensureImage(ctx, "busybox:latest", nil); err != nil {
+	if err := d.ensureImage(ctx, "busybox:latest", "", nil); err != nil {
 		t.Fatalf("pull busybox: %v", err)
 	}
 

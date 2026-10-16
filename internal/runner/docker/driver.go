@@ -167,7 +167,7 @@ type Driver struct {
 
 	// engArch caches the engine's normalised architecture (guarded by mu).
 	engArch string
-	// archVerdicts caches, per foreign image architecture, a conclusive archVerdictKind.
+	// archVerdicts caches, per archVerdictKey, a runnable archVerdictKind.
 	archVerdicts sync.Map
 }
 
@@ -280,13 +280,16 @@ func (d *Driver) Classes(ctx context.Context) (substrate.ClassSupport, error) {
 // onPulling (nil-safe) fires immediately BEFORE the pull that blocks, and
 // only there: imagePresent has just said the image is absent, so this is the
 // one place a first download can be ASSERTED rather than hedged.
-func (d *Driver) ensureImage(ctx context.Context, ref string, onPulling func()) error {
+//
+// runtime is the runtime ref will run under ("" is the engine default): the image-architecture
+// check may start ref, and only ever under that runtime.
+func (d *Driver) ensureImage(ctx context.Context, ref, runtime string, onPulling func()) error {
 	present, err := d.imagePresent(ctx, ref)
 	if err != nil {
 		return err
 	}
 	if present {
-		return d.checkImageArch(ctx, ref)
+		return d.checkImageArch(ctx, ref, runtime)
 	}
 	if onPulling != nil {
 		onPulling()
@@ -296,7 +299,7 @@ func (d *Driver) ensureImage(ctx context.Context, ref string, onPulling func()) 
 	if err := dockerutil.PullImage(ctx, d.cli, ref, "docker"); err != nil {
 		return pullFailure(ref, err)
 	}
-	return d.checkImageArch(ctx, ref)
+	return d.checkImageArch(ctx, ref, runtime)
 }
 
 // ImagePresent implements runner.ImageChecker: exported imagePresent, so a
