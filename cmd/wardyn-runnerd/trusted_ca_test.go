@@ -79,6 +79,34 @@ func TestLoadTrustedCARefuses(t *testing.T) {
 	}
 }
 
+// A bundle of exactly 64 KiB is the largest accepted: the refusal is "over", not "at".
+func TestLoadTrustedCAAcceptsExactly64KiB(t *testing.T) {
+	// Certificates of many lengths, then x copies of one and y of another that add up to 64 KiB.
+	byLen := map[int]string{}
+	for n := 1; n <= 300; n++ {
+		c := testCAPEM(t, strings.Repeat("c", n))
+		byLen[len(c)] = c
+	}
+	var bundle string
+search:
+	for la, a := range byLen {
+		for lb, b := range byLen {
+			for y := 1; y <= 3; y++ {
+				if rem := runner.MaxEnvTrustedCAPEM - y*lb; rem > 0 && rem%la == 0 {
+					bundle = strings.Repeat(a, rem/la) + strings.Repeat(b, y)
+					break search
+				}
+			}
+		}
+	}
+	if len(bundle) != runner.MaxEnvTrustedCAPEM {
+		t.Fatalf("could not build a bundle of exactly %d bytes", runner.MaxEnvTrustedCAPEM)
+	}
+	if got, _, err := loadTrustedCA(writeFile(t, filepath.Join(t.TempDir(), "exact.pem"), bundle)); err != nil || got != bundle {
+		t.Errorf("a %d-byte bundle: err=%v, kept=%v; want it accepted whole", len(bundle), err, got == bundle)
+	}
+}
+
 // serve resolves the bundle at startup, from WARDYN_TRUSTED_CA_FILE when the flag is not given, and
 // a bad one ends serve before the runtime is built; a good one reaches the builder.
 func TestServeTrustedCAAtStartup(t *testing.T) {
@@ -119,7 +147,7 @@ func TestServeTrustedCAAtStartup(t *testing.T) {
 		t.Fatalf("the bundle file holds %q, want the validated bundle", b)
 	}
 	if got, built, err := serve(""); !errors.Is(err, stop) || !built || got.trustedCA != "" || got.trustedCAPath != "" {
-		t.Fatalf("serve with no CA but an ambient SSL_CERT_FILE and SSL_CERT_DIR: err=%v built=%v bundle=%d bytes path=%q; want nothing trusted and no refusal", err, built, len(got.trustedCA), got.trustedCAPath)
+		t.Fatalf("serve with no CA configured: err=%v built=%v bundle=%d bytes path=%q; want nothing trusted and no refusal", err, built, len(got.trustedCA), got.trustedCAPath)
 	}
 	// A stopped sandbox created with the bundle still mounts the file when revived: it stays, emptied.
 	if b, err := os.ReadFile(file); err != nil || len(b) != 0 {
@@ -287,6 +315,10 @@ func TestSetupOnlyHintsAtSSLCertFile(t *testing.T) {
 	ca := writeFile(t, filepath.Join(t.TempDir(), "corp-ca.pem"), testCAPEM(t, "corp"))
 	if out, err := g.run(setupOptions{tokenFile: g.tokenFile, trustedCAFile: ca}); err != nil || strings.Contains(out, "SSL_CERT_FILE is set") {
 		t.Errorf("with --trusted-ca-file: err=%v; the hint should not print:\n%s", err, out)
+	}
+	// A rerun that keeps the earlier CA has nothing to be told.
+	if out, err := g.run(setupOptions{}); err != nil || strings.Contains(out, "SSL_CERT_FILE is set") {
+		t.Errorf("a rerun keeping a CA: err=%v; the hint should not print:\n%s", err, out)
 	}
 }
 

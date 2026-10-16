@@ -843,14 +843,14 @@ func TestSetupSaysWhenTheEngineHasNoDiskCap(t *testing.T) {
 	old := engineDiskCapped
 	t.Cleanup(func() { engineDiskCapped = old })
 	for _, tc := range []struct {
-		capped bool
-		want   int
-	}{{false, 1}, {true, 0}} {
-		engineDiskCapped = func(context.Context) (bool, bool) { return tc.capped, true }
+		capped, known bool
+		want          int
+	}{{false, true, 1}, {true, true, 0}, {false, false, 0}} {
+		engineDiskCapped = func(context.Context) (bool, bool) { return tc.capped, tc.known }
 		f := newSetupFixture(t, "linux")
 		out, err := f.run(setupOptions{tokenFile: f.tokenFile})
 		if n := strings.Count(out, noDiskCapLine); err != nil || n != tc.want {
-			t.Errorf("capped=%v: the no-cap line appeared %d times, want %d (%v)\n%s", tc.capped, n, tc.want, err, out)
+			t.Errorf("capped=%v known=%v: the no-cap line appeared %d times, want %d (%v)\n%s", tc.capped, tc.known, n, tc.want, err, out)
 		}
 	}
 }
