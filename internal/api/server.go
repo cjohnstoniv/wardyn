@@ -879,6 +879,7 @@ type Server struct {
 	// ponytail: process-local, so per replica and per restart: a replica or a
 	// restarted process that has not seen the refusal grades the session live
 	// and passes Review until its own dispatch is refused and re-marks it.
+	// Bounded by awsSSORefusedMax.
 	ssoRefreshRefused map[string]string
 	// adoEntraTokens reuses a minted Azure DevOps access token across the
 	// per-host grants of one run (injection_ado.go), so a sidecar's boot does

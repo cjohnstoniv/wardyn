@@ -89,14 +89,31 @@ func (s *Server) auditAWSSSORenewalFailure(ctx context.Context, scope awsSSOScop
 		if blob.ClientID != "" && blob.ClientSecret != "" {
 			data["registration"] = "present"
 		}
-		s.ssoRefreshMu.Lock()
-		if s.ssoRefreshRefused == nil {
-			s.ssoRefreshRefused = map[string]string{}
-		}
-		s.ssoRefreshRefused[awsSSOTokenFingerprint(blob.RefreshToken)] = refused.detail()
-		s.ssoRefreshMu.Unlock()
+		s.markAWSSSORefused(awsSSOTokenFingerprint(blob.RefreshToken), refused.detail())
 	}
 	s.auditAWSSSORefresh(ctx, scope, "failure", data)
+}
+
+// awsSSORefusedMax bounds the refused marks one process keeps (a fingerprint and a short detail each).
+const awsSSORefusedMax = 1024
+
+// markAWSSSORefused records a refusal. A refresh token a sign-in replaced is never looked up again, so at
+// the bound an arbitrary mark is evicted to make room.
+// ponytail: random eviction; past awsSSORefusedMax live refusals an evicted one grades live again until
+// its next dispatch is refused and re-marks it, as on a fresh replica.
+func (s *Server) markAWSSSORefused(fingerprint, detail string) {
+	s.ssoRefreshMu.Lock()
+	defer s.ssoRefreshMu.Unlock()
+	if s.ssoRefreshRefused == nil {
+		s.ssoRefreshRefused = map[string]string{}
+	}
+	if _, ok := s.ssoRefreshRefused[fingerprint]; !ok && len(s.ssoRefreshRefused) >= awsSSORefusedMax {
+		for k := range s.ssoRefreshRefused {
+			delete(s.ssoRefreshRefused, k)
+			break
+		}
+	}
+	s.ssoRefreshRefused[fingerprint] = detail
 }
 
 // clearAWSSSORefused drops a refused mark once its refresh token renews.
