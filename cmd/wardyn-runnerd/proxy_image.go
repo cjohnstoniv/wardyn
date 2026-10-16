@@ -35,13 +35,17 @@ func releaseProxyImage() string {
 // proxyImagePinned says whether the image serve was given (--proxy-image or WARDYN_PROXY_IMAGE, "" when
 // neither) was named on purpose, so the organisation's answer at connect must not replace it: it was
 // passed as a flag, setup marked it WARDYN_PROXY_IMAGE_PINNED=1, or it is not this project's release
-// image (a mirror). An unmarked release image is what a setup before 0.9.3 derived, not a pin.
-func proxyImagePinned(image string, flagGiven bool, getenv func(string) string) bool {
+// image (a mirror) and not the image the organisation named at registration (identityImage, which a
+// setup writes unmarked). An unmarked release image is what a setup before 0.9.3 derived, not a pin.
+func proxyImagePinned(image, identityImage string, flagGiven bool, getenv func(string) string) bool {
 	if image == "" {
 		return false
 	}
 	if flagGiven || getenv("WARDYN_PROXY_IMAGE_PINNED") == "1" {
 		return true
+	}
+	if image == identityImage {
+		return false
 	}
 	tag, ok := strings.CutPrefix(image, releaseProxyRepo+":")
 	return !(ok && releaseVersion.MatchString(tag))

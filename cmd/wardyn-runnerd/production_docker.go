@@ -165,7 +165,7 @@ func readyEngine(ctx context.Context, cli *client.Client, unreachable, network s
 func inspectEngine(ctx context.Context, cli *client.Client, unreachable string) (dockerEngine, error) {
 	info, err := cli.Info(ctx, client.InfoOptions{})
 	if err != nil {
-		return dockerEngine{}, fmt.Errorf("%s; Rancher Desktop must use the dockerd (moby) engine; runnerd reads DOCKER_HOST, never a docker context: %w", unreachable, err)
+		return dockerEngine{}, fmt.Errorf("%s; Rancher Desktop must use the dockerd (moby) engine; runnerd follows DOCKER_HOST, else a docker context that is a local unix socket: %w", unreachable, err)
 	}
 	eng := dockerEngine{desc: fmt.Sprintf("%q (%s)", info.Info.OperatingSystem, info.Info.Name)}
 	if iface, err := net.InterfaceByName(rancherWSLVeth); err == nil {

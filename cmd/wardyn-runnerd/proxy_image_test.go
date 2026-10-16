@@ -54,6 +54,8 @@ func TestServeProxyImagePrecedence(t *testing.T) {
 		{"release", "", "", "", release},
 		// An unmarked release image in the environment is what a setup before 0.9.3 derived, not a pin.
 		{"stale derived environment", "", "ghcr.io/cjohnstoniv/wardyn-proxy:0.9.0", fromIdentity, fromIdentity},
+		// A setup writes the image the organisation named unmarked; it is that answer, not a pin.
+		{"environment equal to the identity's", "", fromIdentity, fromIdentity, fromIdentity},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			org := httptest.NewTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
@@ -99,18 +101,20 @@ func TestProxyImagePinned(t *testing.T) {
 	}
 	const release, mirror = "ghcr.io/cjohnstoniv/wardyn-proxy:0.9.0", "mirror.corp/wardyn-proxy:0.9.0"
 	for _, tc := range []struct {
-		name, image string
-		flag        bool
-		getenv      func(string) string
-		want        bool
+		name, image, identity string
+		flag                  bool
+		getenv                func(string) string
+		want                  bool
 	}{
-		{"nothing named", "", true, marked, false},
-		{"flag", release, true, none, true},
-		{"marked by setup", release, false, marked, true},
-		{"unmarked release image", release, false, none, false},
-		{"unmarked mirror", mirror, false, none, true},
+		{"nothing named", "", "", true, marked, false},
+		{"flag", release, "", true, none, true},
+		{"marked by setup", release, "", false, marked, true},
+		{"unmarked release image", release, "", false, none, false},
+		{"unmarked mirror", mirror, "", false, none, true},
+		{"the image the organisation named at registration", mirror, mirror, false, none, false},
+		{"marked, though it is the organisation's", mirror, mirror, false, marked, true},
 	} {
-		if got := proxyImagePinned(tc.image, tc.flag, tc.getenv); got != tc.want {
+		if got := proxyImagePinned(tc.image, tc.identity, tc.flag, tc.getenv); got != tc.want {
 			t.Errorf("%s: pinned = %v, want %v", tc.name, got, tc.want)
 		}
 	}
