@@ -36,4 +36,5 @@
 # threatmodel/THREAT-MODEL.md 59180 adds 26 over 59154 (0.9.1 L9): the veth bind trust class; measured.
 # threatmodel/THREAT-MODEL.md 59204 adds 24 over 59180 (0.9.1 L9): findRelay and relay.use in the probe bullet; measured.
 # threatmodel/THREAT-MODEL.md 59263 adds 59 over 59204 (0.9.1 L11/L12): the runner's arch report and the arch probe; measured.
-threatmodel/THREAT-MODEL.md=59263
+# threatmodel/THREAT-MODEL.md 59296 adds 33 (0.9.2): internal_hosts in #69 and #72.
+threatmodel/THREAT-MODEL.md=59296
