@@ -165,6 +165,9 @@ func (h setupHost) startService(ctx context.Context, plan setupPlan, out io.Writ
 	if image := plan.pinnedImage(); image != "" {
 		env += "WARDYN_PROXY_IMAGE=" + image + "\n"
 	}
+	if plan.pinMarker() != "" {
+		env += "WARDYN_PROXY_IMAGE_PINNED=1\n"
+	}
 	env += fmt.Sprintf("WARDYN_INTERNAL_NETWORK=%s\nWARDYN_RUNNER_STATE_DIR=%s\n", plan.network, p.stateDir)
 	if plan.trustedCAFile != "" {
 		env += "WARDYN_TRUSTED_CA_FILE=" + plan.trustedCAFile + "\n"
@@ -214,9 +217,19 @@ func (p setupPlan) pinnedImage() string {
 	return p.proxyImage
 }
 
+// pinMarker is "1" when the image was named with --proxy-image (now or to an earlier setup). setup
+// writes it as WARDYN_PROXY_IMAGE_PINNED beside the image, so a rerun can tell a pin from a derived
+// default by provenance rather than by the image's name (DR-0202). serve ignores it.
+func (p setupPlan) pinMarker() string {
+	if p.flagged && p.pinnedImage() != "" {
+		return "1"
+	}
+	return ""
+}
+
 // keptPins reads the proxy image and CA file an earlier setup wrote into the service definition, so
-// setup run again without --proxy-image or --trusted-ca-file keeps them. A release image of this
-// project found there is an older setup's derived default, not a pin, and is dropped.
+// setup run again without --proxy-image or --trusted-ca-file keeps them. An unmarked release image
+// of this project is what a setup before 0.9.3 derived, not a pin, and is dropped.
 func (p setupPaths) keptPins() (image, caFile string) {
 	read := func(key string) string {
 		if p.envFile != "" {
@@ -235,7 +248,7 @@ func (p setupPaths) keptPins() (image, caFile string) {
 		return ""
 	}
 	image = read("WARDYN_PROXY_IMAGE")
-	if tag, ok := strings.CutPrefix(image, releaseProxyRepo+":"); ok && releaseVersion.MatchString(tag) {
+	if tag, ok := strings.CutPrefix(image, releaseProxyRepo+":"); ok && releaseVersion.MatchString(tag) && read("WARDYN_PROXY_IMAGE_PINNED") != "1" {
 		image = ""
 	}
 	return image, read("WARDYN_TRUSTED_CA_FILE")
@@ -249,7 +262,7 @@ var plistComment = regexp.MustCompile(`(?s)<!--.*?-->\n`)
 func renderLaunchAgent(plan setupPlan) string {
 	tpl := plistComment.ReplaceAllString(runnerunits.LaunchAgent, "")
 	for key, val := range map[string]string{"DOCKER_HOST": plan.dockerHost, "WARDYN_RELAY_LISTEN": plan.relayListen, "WARDYN_RELAY_HOST_TARGET": plan.relayHostTarget,
-		"WARDYN_PROXY_IMAGE": plan.pinnedImage(), "WARDYN_TRUSTED_CA_FILE": plan.trustedCAFile} {
+		"WARDYN_PROXY_IMAGE": plan.pinnedImage(), "WARDYN_PROXY_IMAGE_PINNED": plan.pinMarker(), "WARDYN_TRUSTED_CA_FILE": plan.trustedCAFile} {
 		if val == "" {
 			tpl = regexp.MustCompile(`[ \t]*<key>`+key+`</key>\n[ \t]*<string>[^<]*</string>\n`).ReplaceAllString(tpl, "")
 		}
@@ -259,6 +272,7 @@ func renderLaunchAgent(plan setupPlan) string {
 		"__WARDYN_ORG_URL__", html.EscapeString(plan.org),
 		"__WARDYN_PROXY_IMAGE__", html.EscapeString(plan.pinnedImage()),
 		"__WARDYN_TRUSTED_CA_FILE__", html.EscapeString(plan.trustedCAFile),
+		"__WARDYN_PROXY_IMAGE_PINNED__", plan.pinMarker(),
 		"__WARDYN_INTERNAL_NETWORK__", html.EscapeString(plan.network),
 		"__DOCKER_HOST__", html.EscapeString(plan.dockerHost),
 		"__RELAY_LISTEN__", html.EscapeString(plan.relayListen),

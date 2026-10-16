@@ -57,7 +57,7 @@ func productionRunnerHooks(ctx context.Context, identity runneridentity.Identity
 	}
 	relay := newLocalRelay(ctx)
 	sub, err := docker.New(docker.Config{RunnerID: identity.RunnerID.String(), ProxyImage: opts.proxyImage, InternalNetwork: opts.network, Record: record, RunnerStateDir: stateDir,
-		ControlPlaneRelay: relay.Ensure, TrustedCAPEM: opts.trustedCA})
+		ControlPlaneRelay: relay.Ensure, TrustedCAPEM: opts.trustedCA, TrustedCAFile: opts.trustedCAPath})
 	if err != nil {
 		return runnerRuntime{}, err
 	}

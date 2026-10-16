@@ -15,7 +15,7 @@
   The __WARDYN_*__, __DOCKER_HOST__, __RELAY_LISTEN__ and __RELAY_HOST_TARGET__ tokens
   are placeholders — `wardyn-runnerd setup` (embedded from this file) renders it to
   ~/Library/LaunchAgents with them replaced, and drops the WARDYN_PROXY_IMAGE (when it is
-  only this release's default), DOCKER_HOST, WARDYN_RELAY_LISTEN, WARDYN_RELAY_HOST_TARGET and
+  only this release's default), WARDYN_PROXY_IMAGE_PINNED (when no one named the image), DOCKER_HOST, WARDYN_RELAY_LISTEN, WARDYN_RELAY_HOST_TARGET and
   WARDYN_TRUSTED_CA_FILE keys when they are empty. Committed as-is it is still valid, parseable plist XML — see
   scripts/test-runner-units.sh.
 -->
@@ -34,6 +34,8 @@
   <dict>
     <key>WARDYN_PROXY_IMAGE</key>
     <string>__WARDYN_PROXY_IMAGE__</string>
+    <key>WARDYN_PROXY_IMAGE_PINNED</key>
+    <string>__WARDYN_PROXY_IMAGE_PINNED__</string>
     <key>WARDYN_INTERNAL_NETWORK</key>
     <string>__WARDYN_INTERNAL_NETWORK__</string>
     <key>DOCKER_HOST</key>

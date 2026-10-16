@@ -9,6 +9,17 @@ import (
 	"fmt"
 )
 
+// TrustedCAMountPath is where a laptop runner's own CA bundle is bind-mounted, read-only, into a
+// sandbox. AgentIdleScript and install_mitm_ca (deploy/images/common/agent-run-lib.sh) append it to
+// the sandbox's CA trust; keep the three in lockstep.
+const TrustedCAMountPath = "/run/wardyn/trusted-ca.pem"
+
+// MaxEnvTrustedCAPEM is the largest runner bundle also copied into WARDYN_MITM_CA_PEM, the fallback
+// for agent images whose install_mitm_ca predates TrustedCAMountPath. That variable is one
+// environment string, and Linux refuses to start a process with one over 128 KiB, so a bigger
+// bundle reaches the sandbox through the mounted file only.
+const MaxEnvTrustedCAPEM = 64 << 10
+
 // ParseCertsPEM decodes every "CERTIFICATE" PEM block in raw. Any block that
 // fails to parse as a certificate, any block that is NOT a certificate (a
 // private key or CSR pasted alongside the cert — the common combined-export

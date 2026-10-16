@@ -97,7 +97,7 @@ func TestLoadTrustedCARefuses(t *testing.T) {
 	}
 	writeFile(t, filepath.Join(badDir, "a.pem"), ca)
 	bad := writeFile(t, filepath.Join(badDir, "b.pem"), "not a certificate")
-	big := strings.Repeat(ca, maxTrustedCABundle/len(ca)+1)
+	big := strings.Repeat(ca, maxTrustedCABundle/len(ca)+1) // over the 4 MiB sanity bound
 	for _, tc := range []struct {
 		name, file string
 		env        map[string]string
@@ -150,8 +150,21 @@ func TestServeTrustedCAAtStartup(t *testing.T) {
 		cmd.SetArgs(append([]string{"--org", org, "--state-dir", stateDir}, args...))
 		return got, built, cmd.Execute()
 	}
-	if got, built, err := serve(good); !errors.Is(err, stop) || !built || got.trustedCA != ca {
+	if got, built, err := serve(good); !errors.Is(err, stop) || !built || got.trustedCA != ca || got.trustedCAPath != filepath.Join(stateDir, "trusted-ca.pem") {
 		t.Fatalf("serve with WARDYN_TRUSTED_CA_FILE: err=%v built=%v; want the bundle at the builder", err, built)
+	}
+	file := filepath.Join(stateDir, "trusted-ca.pem")
+	if st, err := os.Stat(file); err != nil || st.Mode().Perm() != 0o644 {
+		t.Fatalf("the bundle file for sandboxes: %v, %v; want it written 0644", st, err)
+	}
+	if b, _ := os.ReadFile(file); string(b) != ca {
+		t.Fatalf("the bundle file holds %q, want the validated bundle", b)
+	}
+	if got, _, err := serve(""); !errors.Is(err, stop) || got.trustedCAPath != "" {
+		t.Fatalf("serve with no CA: err=%v path=%q", err, got.trustedCAPath)
+	}
+	if _, err := os.Stat(file); !os.IsNotExist(err) {
+		t.Fatalf("a stale bundle file survived a start with no CA: %v", err)
 	}
 	if _, built, err := serve(filepath.Join(t.TempDir(), "gone.pem")); err == nil || errors.Is(err, stop) || built {
 		t.Fatalf("serve with a missing WARDYN_TRUSTED_CA_FILE: err=%v built=%v; want a startup refusal", err, built)
@@ -226,12 +239,66 @@ func TestSetupPinsOnlyANamedProxyImage(t *testing.T) {
 	if got := f.read(env); !strings.Contains(got, "WARDYN_PROXY_IMAGE="+custom+"\n") {
 		t.Errorf("a rerun dropped the named image:\n%s", got)
 	}
-	legacy := strings.Replace(f.read(env), custom, "ghcr.io/cjohnstoniv/wardyn-proxy:0.9.2", 1)
+	// A setup before 0.9.3 wrote its derived release image with no marker.
+	legacy := strings.Replace(strings.Replace(f.read(env), custom, "ghcr.io/cjohnstoniv/wardyn-proxy:0.9.2", 1), "WARDYN_PROXY_IMAGE_PINNED=1\n", "", 1)
 	writeFile(t, env, legacy)
 	if _, err := f.run(setupOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	if got := f.read(env); strings.Contains(got, "WARDYN_PROXY_IMAGE") {
 		t.Errorf("a rerun kept an older setup's derived release pin:\n%s", got)
+	}
+}
+
+// DR-0202: a release image named with --proxy-image carries the pinned marker, so a flagless rerun
+// keeps it (on both systems) instead of mistaking it for an older setup's derived default.
+func TestSetupKeepsANamedReleaseImage(t *testing.T) {
+	const release = "ghcr.io/cjohnstoniv/wardyn-proxy:0.9.3"
+	setupBuild(t, "0.9.3")
+	for _, goos := range []string{"linux", "darwin"} {
+		f := newSetupFixture(t, goos)
+		p := mustPaths(t, f)
+		file, wants := p.envFile, []string{"WARDYN_PROXY_IMAGE=" + release + "\n", "WARDYN_PROXY_IMAGE_PINNED=1\n"}
+		if goos == "darwin" {
+			file, wants = p.plistFile, []string{"<key>WARDYN_PROXY_IMAGE</key>\n    <string>" + release + "</string>", "<key>WARDYN_PROXY_IMAGE_PINNED</key>\n    <string>1</string>"}
+		}
+		if _, err := f.run(setupOptions{tokenFile: f.tokenFile, proxyImage: release}); err != nil {
+			t.Fatal(err)
+		}
+		f.flagless = true
+		if _, err := f.run(setupOptions{}); err != nil {
+			t.Fatal(err)
+		}
+		got := f.read(file)
+		for _, want := range wants {
+			if !strings.Contains(got, want) {
+				t.Errorf("%s: a flagless rerun dropped the named release image (%q):\n%s", goos, want, got)
+			}
+		}
+
+		g := newSetupFixture(t, goos)
+		g.flagless = true
+		if _, err := g.run(setupOptions{tokenFile: g.tokenFile}); err != nil {
+			t.Fatal(err)
+		}
+		if got := g.read(map[string]string{"linux": mustPaths(t, g).envFile, "darwin": mustPaths(t, g).plistFile}[goos]); strings.Contains(got, "PINNED") {
+			t.Errorf("%s: a derived image was marked pinned:\n%s", goos, got)
+		}
+	}
+}
+
+// A kept CA file that no longer checks out names where it was kept and how to replace or drop it.
+func TestSetupNamesAKeptTrustedCA(t *testing.T) {
+	f := newSetupFixture(t, "linux")
+	ca := writeFile(t, filepath.Join(t.TempDir(), "corp-ca.pem"), testCAPEM(t, "corp"))
+	if _, err := f.run(setupOptions{tokenFile: f.tokenFile, trustedCAFile: ca}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(ca); err != nil {
+		t.Fatal(err)
+	}
+	_, err := f.run(setupOptions{})
+	if err == nil || !strings.Contains(err.Error(), "kept from the earlier setup ("+mustPaths(t, f).envFile+")") || !strings.Contains(err.Error(), "remove WARDYN_TRUSTED_CA_FILE") {
+		t.Fatalf("a rerun with a moved kept CA: %v", err)
 	}
 }

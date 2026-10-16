@@ -8,8 +8,16 @@ package docker
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
+
+	"github.com/moby/moby/api/types/mount"
+
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 )
 
 func trustedCAOf(t *testing.T, cfg []byte) string {
@@ -77,5 +85,63 @@ func TestWithTrustedCA(t *testing.T) {
 	}
 	if out, err := withTrustedCA(in, ""); err != nil || string(out) != string(in) {
 		t.Fatalf("withTrustedCA(no bundle) = %s, %v; want the config untouched", out, err)
+	}
+}
+
+// The runner's bundle file is mounted read-only into every sandbox. A bundle too big for one
+// environment string is left out of WARDYN_MITM_CA_PEM, but the trust variables still point at the
+// assembled bundle, which the mounted file joins.
+func TestRunnerTrustedCA_LargeBundleRidesTheMountOnly(t *testing.T) {
+	big := strings.Repeat("x", runner.MaxEnvTrustedCAPEM+1)
+	f := newFakeDocker()
+	f.images["busybox:latest"] = true
+	d := newWithClient(f, Config{ProxyImage: "wardyn-proxy:dev", InternalNetwork: "wardyn-internal", TrustedCAPEM: big, TrustedCAFile: "/state/trusted-ca.pem"})
+	spec := testSpec()
+	spec.Env = map[string]string{"WARDYN_MITM_CA_PEM": "run-ca-pem"}
+	sb, err := d.CreateSandbox(context.Background(), spec)
+	if err != nil {
+		t.Fatalf("CreateSandbox: %v", err)
+	}
+	agent := f.containers[sb.Ref]
+	if !slices.ContainsFunc(agent.host.Mounts, func(m mount.Mount) bool {
+		return m.Type == mount.TypeBind && m.Source == "/state/trusted-ca.pem" && m.Target == runner.TrustedCAMountPath && m.ReadOnly
+	}) {
+		t.Errorf("sandbox mounts = %+v; want the bundle file read-only at %s", agent.host.Mounts, runner.TrustedCAMountPath)
+	}
+	for _, want := range []string{"WARDYN_MITM_CA_PEM=run-ca-pem", "SSL_CERT_FILE=/tmp/wardyn/ca-bundle.pem", "NODE_EXTRA_CA_CERTS=/tmp/wardyn/mitm-ca.pem"} {
+		if !slices.Contains(agent.cfg.Env, want) {
+			t.Errorf("sandbox env lacks %q: %v", want, agent.cfg.Env)
+		}
+	}
+	if got := trustedCAOf(t, f.stdinOf(proxyContainerName(spec.RunID))); got != big {
+		t.Errorf("proxy trusted_ca_pem has %d bytes, want the whole %d-byte bundle (stdin has no size bound)", len(got), len(big))
+	}
+}
+
+// install_mitm_ca appends the mounted bundle after the PEM, and runs on the mounted file alone.
+func TestAgentRunLib_InstallMITMCAAppendsTheMountedBundle(t *testing.T) {
+	lib, err := filepath.Abs(agentRunLibPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	corp := filepath.Join(dir, "trusted-ca.pem")
+	if err := os.WriteFile(corp, []byte("corp-ca-pem\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct{ pem, want string }{{"run-ca-pem", "run-ca-pem\ncorp-ca-pem\n"}, {"", "corp-ca-pem\n"}} {
+		out := filepath.Join(t.TempDir(), "ca")
+		cmd := exec.Command("bash", "-c", `set -euo pipefail; source "$1"; install_mitm_ca`, "lib-test", lib)
+		cmd.Env = append(os.Environ(), "WARDYN_MITM_CA_PEM="+tc.pem, "WARDYN_MITM_CA_DIR="+out, "WARDYN_TRUSTED_CA_PATH="+corp)
+		if b, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("install_mitm_ca: %v\n%s", err, b)
+		}
+		got, err := os.ReadFile(filepath.Join(out, "mitm-ca.pem"))
+		if err != nil || string(got) != tc.want {
+			t.Errorf("WARDYN_MITM_CA_PEM=%q: mitm-ca.pem = %q, %v; want %q", tc.pem, got, err, tc.want)
+		}
+		if bundle, err := os.ReadFile(filepath.Join(out, "ca-bundle.pem")); err != nil || !strings.HasSuffix(string(bundle), tc.want) {
+			t.Errorf("WARDYN_MITM_CA_PEM=%q: ca-bundle.pem does not end with the CA file: %v", tc.pem, err)
+		}
 	}
 }

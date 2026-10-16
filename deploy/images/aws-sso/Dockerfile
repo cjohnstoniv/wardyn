@@ -150,7 +150,7 @@ RUN if [ -f /corp-ca/corp-ca.pem ]; then \
 # unconditionally is correct anyway — on a non-corp build the OS bundle is
 # simply the public roots, so the CLI behaves exactly as it did before.
 # (Runtime is separate and additive: dispatch sets AWS_CA_BUNDLE per run when
-# TLS is intercepted — installSandboxTrustedCA, internal/api/runs_dispatch_llm.go.)
+# TLS is intercepted — runner.InstallSandboxTrustedCA, internal/runner/trusted_ca.go.)
 ENV AWS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
 ARG HTTP_PROXY=
 ARG HTTPS_PROXY=
