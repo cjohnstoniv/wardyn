@@ -168,25 +168,47 @@ func (p *setupPlan) useRelay(out io.Writer, pair relayPair) {
 		p.eng.desc, pair.bind, pair.target)
 }
 
+// checkOrgAndPool validates the organisation URL and the --pool, --claim and --default combination.
+func (o setupOptions) checkOrgAndPool() error {
+	if err := federation.CheckOrgURL(o.org); err != nil {
+		return err
+	}
+	if o.makeDefault && o.pool == "" {
+		return errors.New("--default needs --pool")
+	}
+	if o.pool == "" {
+		return nil
+	}
+	if !o.claim {
+		return errors.New("--pool needs --claim")
+	}
+	return types.ValidateRunnerPoolName(o.pool)
+}
+
+// checkedTrustedCAFile makes a CA bundle path absolute and runs serve's own check on it, so a bad
+// file is refused before the token is spent. An empty path stays empty.
+func checkedTrustedCAFile(path string) (string, error) {
+	if path == "" {
+		return "", nil
+	}
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	if _, _, _, err := loadTrustedCA(abs, func(string) string { return "" }); err != nil {
+		return "", err
+	}
+	return abs, nil
+}
+
 // preflight validates every input and checks Docker, so that a refusal comes before the single-use
 // token is spent or any file is written.
 func (h setupHost) preflight(cmd *cobra.Command, o setupOptions) (setupPlan, error) {
 	if h.uid == 0 {
 		return setupPlan{}, errors.New("run setup as the person who owns this runner, not as root: the runner identity lives in that person's own configuration directory")
 	}
-	if err := federation.CheckOrgURL(o.org); err != nil {
+	if err := o.checkOrgAndPool(); err != nil {
 		return setupPlan{}, err
-	}
-	if o.makeDefault && o.pool == "" {
-		return setupPlan{}, errors.New("--default needs --pool")
-	}
-	if o.pool != "" {
-		if !o.claim {
-			return setupPlan{}, errors.New("--pool needs --claim")
-		}
-		if err := types.ValidateRunnerPoolName(o.pool); err != nil {
-			return setupPlan{}, err
-		}
 	}
 	want, err := parseRelayWant(o.relayListen, o.relayHostTarget)
 	if err != nil {
@@ -199,15 +221,8 @@ func (h setupHost) preflight(cmd *cobra.Command, o setupOptions) (setupPlan, err
 	}
 	// A rerun keeps what an earlier setup was told explicitly.
 	keptImage, keptCA := paths.keptPins()
-	o.trustedCAFile = cmp.Or(o.trustedCAFile, keptCA)
-	if o.trustedCAFile != "" {
-		if o.trustedCAFile, err = filepath.Abs(o.trustedCAFile); err != nil {
-			return setupPlan{}, err
-		}
-		// serve's own check, so a bad file is refused before the token is spent.
-		if _, _, _, err := loadTrustedCA(o.trustedCAFile, func(string) string { return "" }); err != nil {
-			return setupPlan{}, err
-		}
+	if o.trustedCAFile, err = checkedTrustedCAFile(cmp.Or(o.trustedCAFile, keptCA)); err != nil {
+		return setupPlan{}, err
 	}
 	plan := setupPlan{setupOptions: o, paths: paths, dockerHost: h.dockerHost, want: want, flagged: o.proxyImage != ""}
 	if _, err := os.Stat(plan.paths.identity()); err == nil {
