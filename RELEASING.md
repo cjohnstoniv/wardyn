@@ -483,15 +483,16 @@ gh api -X PATCH repos/cjohnstoniv/wardyn/branches/main/protection/required_statu
     "trivy (wardynd)", "trivy (wardyn-proxy)", "trivy (agent-base)",
     "trivy (agent-codex-cli)", "trivy (agent-aws-sso)",
     "trivy (agent-vscode)", "trivy (agent-novnc)",
-    "trivy (wardynd-fips)"
+    "trivy (wardynd-fips)", "runner-units"
   ]
 }
 JSON
 ```
 
 - The first 24 contexts are the ones `main` requires today, read back on 2026-10-06 with the command below.
-- The last, **`trivy (wardynd-fips)`, is not required today**: its job runs and reports on every pull request, but a red `trivy (wardynd-fips)` does not block a merge until the owner runs this PATCH.
-- Run as written, the command drops nothing that is required now and adds that one context.
+- The last two, **`trivy (wardynd-fips)` and `runner-units`**, are not required today.
+- Their jobs report on every pull request, but a red one blocks no merge until the owner runs this PATCH.
+- Run as written, the command drops nothing that is required now and adds those two contexts.
 - The PATCH replaces the whole list, so read the live list back first: a context that is live and missing from this body would be dropped.
 
 - Every context in the list reports on every pull request, as skipped when the change cannot affect it ([docs/CI.md](docs/CI.md), "Incremental CI"), so each is an eligible context.
