@@ -151,6 +151,7 @@ func (s *Server) leaverForms(ctx context.Context, st scimStore, ident store.Prin
 	}
 	aliases, err := st.IdentityAliasValues(ctx, ident.ID)
 	if err != nil {
+		f.refusal, f.targets = reasonIdentityDirectoryUnreadable, f.bound
 		return f, err
 	}
 	emails := slices.DeleteFunc(append(aliases, strings.ToLower(ident.EmailLower), strings.ToLower(ident.ScimUserName)),
@@ -188,6 +189,7 @@ func (s *Server) leaverForms(ctx context.Context, st scimStore, ident store.Prin
 	f.targets = nonEmptyForms(slices.Concat(f.bound, own, subs)...)
 	if ident.Principal != "" {
 		if f.shared, err = st.HeldEmails(ctx, ident.ID, f.bound, own); err != nil {
+			f.refusal, f.targets, f.shared = reasonIdentityDirectoryUnreadable, f.bound, nil
 			return f, err
 		}
 	}

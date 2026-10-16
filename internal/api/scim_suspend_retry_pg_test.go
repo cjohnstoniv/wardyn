@@ -1,0 +1,96 @@
+// Copyright 2025 The Wardyn Authors
+// SPDX-License-Identifier: Apache-2.0
+
+package api
+
+import (
+	"context"
+	"errors"
+	"net/http"
+	"testing"
+
+	"github.com/google/uuid"
+
+	"github.com/cjohnstoniv/wardyn/internal/store"
+)
+
+// failDirectoryOnce fails the named directory read once, after skip calls of it succeed.
+type failDirectoryOnce struct {
+	store.PG
+	fail string
+	skip int
+}
+
+func (s *failDirectoryOnce) failed(name string) error {
+	if s.fail != name {
+		return nil
+	}
+	if s.skip > 0 {
+		s.skip--
+		return nil
+	}
+	s.fail = ""
+	return errors.New("directory read failed")
+}
+
+func (s *failDirectoryOnce) IdentityAliasValues(ctx context.Context, id uuid.UUID) ([]string, error) {
+	if err := s.failed("IdentityAliasValues"); err != nil {
+		return nil, err
+	}
+	return s.PG.IdentityAliasValues(ctx, id)
+}
+
+func (s *failDirectoryOnce) HeldEmails(ctx context.Context, id uuid.UUID, bound, emails []string) ([]string, error) {
+	if err := s.failed("HeldEmails"); err != nil {
+		return nil, err
+	}
+	return s.PG.HeldEmails(ctx, id, bound, emails)
+}
+
+// A suspension whose email directory cannot be read deactivates the exact row and cuts its own binding,
+// leaves step 1 pending with the reason, and a retry once the read works runs the whole suspension.
+func TestSCIMSuspendWhileTheDirectoryIsUnreadableCutsTheExactRow(t *testing.T) {
+	// A PATCH reads the aliases twice before it suspends.
+	for read, skip := range map[string]int{"IdentityAliasValues": 2, "HeldEmails": 0} {
+		t.Run(read, func(t *testing.T) {
+			const sub, email = "sub-leaver", "leaver@corp.example"
+			e := newSCIMEnv(t)
+			e.seedEntra(sub, email, oidPat)
+			own, _ := e.seedToken(sub, email)
+			other, otherRaw := e.seedToken("sub-other", email)
+			id := e.postUserID(e.a, oidPat, email, email)
+			n := e.node(func(c *Config) { c.Store = &failDirectoryOnce{PG: e.st, fail: read, skip: skip} })
+
+			if w := e.patch(n, id, patchOf("false")); w.Code != http.StatusInternalServerError {
+				t.Fatalf("suspend = %d %s, want 5xx", w.Code, w.Body.String())
+			}
+			if row := e.identity(id); row.DeactivatedAt == nil || row.Principal != sub {
+				t.Fatalf("identity = %+v, want %q deactivated", row, sub)
+			}
+			if refused, err := e.st.IdentityRefused(context.Background(), e.issuer, e.tenant, oidPat, sub); err != nil || !refused {
+				t.Errorf("sign-in = refused %v (%v), want refused", refused, err)
+			}
+			if fails, err := e.st.ListDeprovisionFailures(context.Background(), 10); err != nil || len(fails) != 1 ||
+				fails[0].Step != store.JobStepCutoff || fails[0].LastError != reasonIdentityDirectoryUnreadable {
+				t.Errorf("failures = %+v (%v), want step 1 pending with %s", fails, err, reasonIdentityDirectoryUnreadable)
+			}
+			rows := e.rows(n, "person.deprovision")
+			if len(rows) != 1 || rows[0].Outcome != "failure" || dataOf(t, rows[0])["reason"] != reasonIdentityDirectoryUnreadable {
+				t.Errorf("person.deprovision rows = %+v, want one failure with %s", rows, reasonIdentityDirectoryUnreadable)
+			}
+			if e.tokenRevoked(other) || !e.tokenWorks(e.b, otherRaw) || len(e.rows(n, "scim.user.deactivate")) != 0 {
+				t.Error("the stopped suspension reached another principal or was recorded as done")
+			}
+
+			if w := e.patch(n, id, patchOf("false")); w.Code != http.StatusOK {
+				t.Fatalf("the retry = %d %s", w.Code, w.Body.String())
+			}
+			if !e.allJobsDone(id) || !e.tokenRevoked(own) || len(e.rows(n, "scim.user.deactivate")) != 1 {
+				t.Error("the retry did not finish the suspension")
+			}
+			if e.tokenRevoked(other) {
+				t.Error("the retry revoked another principal's token")
+			}
+		})
+	}
+}

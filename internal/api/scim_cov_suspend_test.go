@@ -394,14 +394,16 @@ func TestSCIMCovSuspensionStopsAtAFailedStoreStep(t *testing.T) {
 		name, method string
 		wantPlans    int
 		wantRevoked  bool
+		// wantRefusals is the person.deprovision rows: an unreadable directory still cuts the exact row.
+		wantRefusals int
 	}{
-		{"reading the identity", "GetIdentity", 0, false},
-		{"reading the aliases", "IdentityAliasValues", 0, false},
-		{"reading the ledger", "ListDeprovisionJobs", 0, false},
-		{"the cutoff transaction", "SuspendIdentity", 1, false},
-		{"opening the ledger rows", "EnsureDeprovisionJobs", 1, false},
-		{"listing the person's runs", "ListNonTerminalRunsBy", 1, true},
-		{"recording a finished step", "FinishDeprovisionJob", 1, true},
+		{"reading the identity", "GetIdentity", 0, false, 0},
+		{"reading the aliases", "IdentityAliasValues", 1, false, 1},
+		{"reading the ledger", "ListDeprovisionJobs", 0, false, 0},
+		{"the cutoff transaction", "SuspendIdentity", 1, false, 0},
+		{"opening the ledger rows", "EnsureDeprovisionJobs", 1, false, 0},
+		{"listing the person's runs", "ListNonTerminalRunsBy", 1, true, 0},
+		{"recording a finished step", "FinishDeprovisionJob", 1, true, 0},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			st := newSCIMCovStore()
@@ -419,10 +421,11 @@ func TestSCIMCovSuspensionStopsAtAFailedStoreStep(t *testing.T) {
 			if revoked, _ := e.rev.snapshot(); (len(revoked) > 0) != c.wantRevoked {
 				t.Errorf("sessions revoked = %v, want revoked %t", revoked, c.wantRevoked)
 			}
-			for _, action := range []string{"scim.user.deactivate", "person.deprovision"} {
-				if rows := e.auditRows(action); len(rows) != 0 {
-					t.Errorf("%s was written after a failed step: %+v", action, rows)
-				}
+			if rows := e.auditRows("scim.user.deactivate"); len(rows) != 0 {
+				t.Errorf("scim.user.deactivate was written after a failed step: %+v", rows)
+			}
+			if rows := e.auditRows("person.deprovision"); len(rows) != c.wantRefusals {
+				t.Errorf("person.deprovision rows = %+v, want %d", rows, c.wantRefusals)
 			}
 		})
 	}
