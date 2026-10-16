@@ -136,6 +136,7 @@ func TestGovCovBuildGovernanceProfile(t *testing.T) {
 		wantReason string
 		wantMsg    string
 	}{
+		{"a name another profile holds", []types.GovernanceProfile{base}, `{"name":"base"}`, 409, reasonGovernanceProfileNameConflict, "already exists"},
 		{"a base with no overlay", nil, `{"name":"c","base_profile_id":"` + baseID + `","overlay":null}`, 400, reasonGovernanceOverlayInvalid, "a base needs an overlay"},
 		{"overlay limits with no overlay", nil, `{"name":"c","overlay":null,"overlay_limits":{"max_concurrent_runs":1}}`, 400, reasonGovernanceOverlayInvalid, "overlay_limits: needs an overlay"},
 		{"a composed profile that also states a ceiling", []types.GovernanceProfile{base},
