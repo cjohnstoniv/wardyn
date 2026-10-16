@@ -1451,6 +1451,8 @@ lose access now, do not wait for it:
       spells it.
     - An alias that names more than one principal, or a directory that cannot be read, stops a suspension or purge
       before it touches anything: the request answers 5xx and a `person.deprovision` row says why.
+    - A SCIM group removal stops the same way before it cuts a session or revokes a token. It stays pending with the
+      reason, listed on the SCIM status card, and a retry finishes it once the person's emails name one principal.
 - **Role changes that are not SCIM group removals** at the identity provider still lag until the person signs in
   again.
 - **Long-lived connections.** A suspension kills every live run, which ends its attach and SSH sessions. Other

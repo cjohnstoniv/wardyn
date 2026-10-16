@@ -202,13 +202,19 @@ func (s *Server) deprovisionForms(ctx context.Context, st scimStore, ident store
 	if forms.refusal == "" {
 		return forms, err
 	}
+	return forms, s.refuseDeprovision(ctx, ident, kind, forms.refusal, err)
+}
+
+// refuseDeprovision leaves the person.deprovision row saying why a step of kind stops, and returns the error
+// the request answers 5xx with: err when the forms could not be read, errDeprovisionIncomplete otherwise.
+func (s *Server) refuseDeprovision(ctx context.Context, ident store.PrincipalIdentity, kind, reason string, err error) error {
 	outcome := "failure"
 	if err == nil {
 		outcome, err = "denied", fmt.Errorf("%w: the person's emails name more than one principal", errDeprovisionIncomplete)
 	}
 	s.recordAudit(ctx, s.auditEvent(nil, types.ActorSystem, scimActor, "person.deprovision", ident.ID.String(), outcome,
-		mustJSON(map[string]any{"kind": kind, "reason": forms.refusal})))
-	return forms, err
+		mustJSON(map[string]any{"kind": kind, "reason": reason})))
+	return err
 }
 
 func nonEmptyForms(in ...string) []string {

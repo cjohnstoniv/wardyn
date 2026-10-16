@@ -747,3 +747,88 @@ func (r *revokeRaceStore) RevokeAPIToken(ctx context.Context, id uuid.UUID, prin
 	}
 	return r.PG.RevokeAPIToken(ctx, id, principal, now)
 }
+
+// A member whose emails name more than one principal has no forms to remove: nothing is cut or revoked, the
+// request answers 5xx, and the removal stays pending with the reason where the card shows it. Once the
+// address names one principal, the retry finishes it.
+func TestSCIMGroupRemovalWaitsForOneOwner(t *testing.T) {
+	const twin = "twin@corp.example"
+	e := newSCIMEnv(t)
+	seed := func(principal string) (uuid.UUID, string) {
+		raw := apiTokenPrefix + uuid.NewString()
+		f := false
+		tok, err := e.st.CreateAPIToken(context.Background(), types.APIToken{
+			ID: uuid.New(), Principal: principal, Email: twin, Role: "user", UserType: types.UserTypeStandard,
+			Groups: []string{groupClaim}, GroupsTruncated: &f, Name: "t", CreatedAt: time.Now().UTC(),
+		}, raw)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return tok.ID, raw
+	}
+	tok1, raw1 := seed("sub-t1")
+	tok2, raw2 := seed("sub-t2")
+	id := e.postUserID(e.a, oidGhost, twin, twin)
+	g, code := e.postGroup(e.a, groupExternalID, "Engineering")
+	if code != http.StatusCreated {
+		t.Fatalf("POST /Groups = %d", code)
+	}
+	if r := e.patchGroup(e.a, g.ID, addMembersPatch(id)); r.Code != http.StatusOK {
+		t.Fatalf("add member = %d %s", r.Code, r.Body.String())
+	}
+	cuts := func() int {
+		var n int
+		if err := e.pool.QueryRow(context.Background(), `SELECT (SELECT count(*) FROM oidc_session_revocations) + (SELECT count(*) FROM oidc_session_cuts)`).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	patch := groupRemovePatch(t, "entra-doc-patch-group-remove-members-value-array.json", id)
+
+	for attempt := 1; attempt <= 2; attempt++ {
+		if r := e.patchGroup(e.a, g.ID, patch); r.Code != http.StatusInternalServerError {
+			t.Fatalf("attempt %d = %d %s, want 5xx while the owner is ambiguous", attempt, r.Code, r.Body.String())
+		}
+	}
+	if e.groupJobsDone(id, g.ID) || len(e.rows(e.a, "scim.group.member_remove")) != 0 {
+		t.Fatal("a refused removal is recorded as done")
+	}
+	jobs, err := e.st.ListDeprovisionJobs(context.Background(), uuid.MustParse(id), store.JobKindGroupRemove)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, j := range jobs {
+		if j.Done || (j.Step == store.GroupStepSessions) != (j.LastError == reasonOwnerAmbiguous) {
+			t.Errorf("ledger row %+v, want every step pending and the reason on the session step", j)
+		}
+	}
+	if got := e.scimStatusOf(e.a).Pending; len(got) != 1 || got[0].Step != store.GroupStepSessions || got[0].LastError != reasonOwnerAmbiguous {
+		t.Errorf("pending = %+v, want the removal listed with %s", got, reasonOwnerAmbiguous)
+	}
+	rows := e.rows(e.a, "person.deprovision")
+	if len(rows) != 2 || rows[1].Outcome != "denied" || dataOf(t, rows[1])["reason"] != reasonOwnerAmbiguous || dataOf(t, rows[1])["kind"] != store.JobKindGroupRemove {
+		t.Errorf("person.deprovision rows = %+v, want one denied %s per attempt", rows, reasonOwnerAmbiguous)
+	}
+	if n := cuts(); n != 0 {
+		t.Errorf("%d session cuts written for a refused removal, want none", n)
+	}
+	if e.tokenRevoked(tok1) || e.tokenRevoked(tok2) || !e.tokenWorks(e.b, raw1) || !e.tokenWorks(e.b, raw2) {
+		t.Error("a token of a principal the address names was revoked")
+	}
+
+	if _, err := e.pool.Exec(context.Background(), `DELETE FROM api_tokens WHERE principal = 'sub-t2'`); err != nil {
+		t.Fatal(err)
+	}
+	if r := e.patchGroup(e.b, g.ID, patch); r.Code != http.StatusOK {
+		t.Fatalf("the retry once the address names one principal = %d %s", r.Code, r.Body.String())
+	}
+	if !e.groupJobsDone(id, g.ID) || len(e.rows(e.b, "scim.group.member_remove")) != 1 {
+		t.Error("the retry did not finish the removal")
+	}
+	if !e.tokenRevoked(tok1) || cuts() == 0 {
+		t.Error("the retry did not reach the one principal the address names")
+	}
+	if got := e.scimStatusOf(e.a).Pending; len(got) != 0 {
+		t.Errorf("pending after the retry = %+v, want none", got)
+	}
+}

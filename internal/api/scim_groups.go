@@ -308,10 +308,6 @@ func (s *Server) removeGroupMember(ctx context.Context, st scimStore, g store.Sc
 	} else if err := st.StartGroupRemoval(ctx, g.ID, identityID); err != nil {
 		return err
 	}
-	forms, err := s.leaverForms(ctx, st, ident)
-	if err != nil {
-		return err
-	}
 	all, err := st.ListDeprovisionJobs(ctx, identityID, store.JobKindGroupRemove)
 	if err != nil {
 		return err
@@ -327,6 +323,20 @@ func (s *Server) removeGroupMember(ctx context.Context, st scimStore, g store.Sc
 			return errors.Join(runErr, st.FailDeprovisionJob(ctx, identityID, store.JobKindGroupRemove, key, runErr))
 		}
 		return st.FinishDeprovisionJob(ctx, identityID, store.JobKindGroupRemove, key, detail)
+	}
+	forms, err := s.leaverForms(ctx, st, ident)
+	if forms.refusal != "" {
+		// Nothing is cut or revoked while the person's forms do not resolve. The removal stays pending with the
+		// reason on its first unfinished step, for the provider's retry or the sweeper.
+		i := slices.IndexFunc(store.GroupRemovalSteps, pending)
+		if i < 0 {
+			return nil
+		}
+		return errors.Join(s.refuseDeprovision(ctx, ident, store.JobKindGroupRemove, forms.refusal, err),
+			finish(store.GroupRemovalSteps[i], errors.New(forms.refusal), nil))
+	}
+	if err != nil {
+		return err
 	}
 
 	var errs []error
