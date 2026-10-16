@@ -91,6 +91,24 @@ func encodedFrame(t *testing.T, f Frame) []byte {
 	return b
 }
 
+// The organisation's refusal reason is read from the start of its body, and only a bounded prefix of it.
+func TestWebSocketRefusalReasonIsReadFromABoundedPrefix(t *testing.T) {
+	for name, tc := range map[string]struct{ pad, want string }{
+		"reason":     {"", "(reason runner_revoked)"},
+		"past bound": {strings.Repeat(" ", refusalBodyLimit), ""},
+	} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = w.Write([]byte(tc.pad + `{"reason":"runner_revoked"}`))
+		}))
+		_, err := DialWebSocket(context.Background(), srv.URL, uuid.NewString(), srv.Client())
+		srv.Close()
+		if err == nil || (tc.want != "" && !strings.Contains(err.Error(), tc.want)) || (tc.want == "" && strings.Contains(err.Error(), "reason")) {
+			t.Errorf("%s: err = %v, want it to contain %q", name, err, tc.want)
+		}
+	}
+}
+
 func TestWebSocketRefusesRedirect(t *testing.T) {
 	targetCalled := make(chan struct{}, 1)
 	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { targetCalled <- struct{}{} }))
