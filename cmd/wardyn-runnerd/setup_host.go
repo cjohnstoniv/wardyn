@@ -20,6 +20,11 @@ import (
 	runnerunits "github.com/cjohnstoniv/wardyn/deploy/runner"
 )
 
+// defaultDockerSocket is where the Docker SDK connects when DOCKER_HOST is unset. Setup writes the engine it
+// checked into the service every time, this included, so the service never has to look at the person's docker
+// CLI context: a later `docker context use` cannot move it to another engine or stop it starting.
+const defaultDockerSocket = "unix:///var/run/docker.sock"
+
 const (
 	serviceLabel = "com.wardyn.runnerd"
 	serviceUnit  = "wardyn-runnerd.service"
@@ -61,7 +66,7 @@ func osSetupHost() (setupHost, error) {
 		return setupHost{}, err
 	}
 	return setupHost{goos: runtime.GOOS, home: home, xdgConfig: os.Getenv("XDG_CONFIG_HOME"), xdgData: os.Getenv("XDG_DATA_HOME"),
-		dockerHost: os.Getenv("DOCKER_HOST"), uid: os.Geteuid(), exe: exe, run: runCommand, engine: readySetupEngine, relay: probeSetupRelay}, nil
+		dockerHost: cmp.Or(os.Getenv("DOCKER_HOST"), defaultDockerSocket), uid: os.Geteuid(), exe: exe, run: runCommand, engine: readySetupEngine, relay: probeSetupRelay}, nil
 }
 
 func runCommand(ctx context.Context, name string, args ...string) ([]byte, error) {

@@ -887,3 +887,24 @@ func TestSetupNoServiceWritesTheEnvironmentAndInstallsNoUnit(t *testing.T) {
 		})
 	}
 }
+
+// Setup names the engine it checked in the service every time, the default socket included, so the
+// service never consults the person's docker context and cannot be moved by a later `docker context use`.
+func TestSetupPinsTheEngineInTheService(t *testing.T) {
+	for _, tc := range []struct{ env, want string }{{"", defaultDockerSocket}, {"unix:///home/me/.colima/default/docker.sock", "unix:///home/me/.colima/default/docker.sock"}} {
+		t.Setenv("DOCKER_HOST", tc.env)
+		host, err := osSetupHost()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if host.dockerHost != tc.want {
+			t.Fatalf("DOCKER_HOST=%q: setup host engine = %q, want %q", tc.env, host.dockerHost, tc.want)
+		}
+		if env := (setupPlan{dockerHost: host.dockerHost}).serviceEnv(); !strings.Contains(env, "DOCKER_HOST="+tc.want+"\n") {
+			t.Errorf("service environment lacks DOCKER_HOST=%s:\n%s", tc.want, env)
+		}
+		if plist := renderLaunchAgent(setupPlan{dockerHost: host.dockerHost}); !strings.Contains(plist, "<string>"+tc.want+"</string>") {
+			t.Errorf("LaunchAgent lacks DOCKER_HOST %s:\n%s", tc.want, plist)
+		}
+	}
+}
