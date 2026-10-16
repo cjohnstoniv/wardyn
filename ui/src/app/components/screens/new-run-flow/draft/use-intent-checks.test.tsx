@@ -93,6 +93,26 @@ it("a changed body is a new generation: the old answer no longer counts and Laun
   expect(gate()).toBe(true);
 });
 
+it("a model credential refusal keeps the setup blockers it carries, and the recheck after sign-in reads fresh ones", async () => {
+  const backend = { id: "backend:CC1", kind: "backend", label: "Sandbox barrier", required_by: "x", status: "missing" };
+  const refusal = new HttpError(422, "Your AWS sign-in no longer works.", "model_credential", "", "bedrock-sso");
+  refusal.setupItems = [backend];
+  preflight.mockRejectedValueOnce(refusal);
+  const { result } = renderHook(useIntentChecks, { initialProps: params() });
+  await tick();
+  expect(result.current.preflightRefusal).toMatchObject({ provider: "bedrock-sso", setupItems: [backend] });
+  expect(result.current.preflightRead).not.toBeNull();
+  expect(result.current.preflightBlock).toBe(true);
+  // Signed in: the recheck answers with the checklist alone, and its rows are the ones that hold.
+  preflight.mockResolvedValueOnce({ ...ready, setup_items: [backend] });
+  await act(() => result.current.preflight());
+  expect(result.current.preflightRefusal).toBeNull();
+  expect(result.current.preflightBlock).toBe(true);
+  preflight.mockResolvedValueOnce(ready);
+  await act(() => result.current.preflight());
+  expect(result.current.preflightBlock).toBe(false);
+});
+
 it("a model credential refusal is an answer that leaves the gate open; any other refusal is none", async () => {
   preflight.mockRejectedValueOnce(new HttpError(422, "Your AWS sign-in no longer works.", "model_credential"));
   const p = params();

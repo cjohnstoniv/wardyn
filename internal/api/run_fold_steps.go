@@ -344,6 +344,14 @@ func (s *Server) stepModelProvider(f *runFold, rec *foldRecorder) bool {
 		grantHarnessProviders(f.harnesses, f.harnessChoices)
 		return ok
 	}
+	if f.mode == foldPreflight {
+		w := f.w
+		// Every setup row but model access, which the refusal itself answers.
+		f.w = credentialSetupWriter{w, func() []SetupItem {
+			return s.deriveRunSetupItems(f.r.Context(), s.secretOwnerFromRequest(f.r), preflightRunInput(f.req, f.enforced, f.baseline), f.spec, f.present, nil, f.wsRefs)
+		}}
+		defer func() { f.w = w }()
+	}
 	var choice runProviderChoice
 	if choice, ok = s.enforceRunModelProvider(f.w, f.r, *f.req, f.spec, f.wsRefs, f.mode == foldCreate, f.queued); !ok {
 		return false

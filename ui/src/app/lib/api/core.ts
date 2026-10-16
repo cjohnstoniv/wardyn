@@ -9,7 +9,7 @@
 // token store, and one 401 handler across the whole client. Split out of the
 // former monolithic lib/api.ts so unused domains tree-shake per route chunk.
 import { lsGet, lsSet, ssGet, ssSet } from "../storage";
-import { CC_ORDER, type ConfinementClass, type GovernanceChange } from "../types";
+import { CC_ORDER, type ConfinementClass, type GovernanceChange, type SetupItem } from "../types";
 import { apiURL } from "../base-path";
 import type { PolicyRef } from "./health";
 
@@ -159,6 +159,9 @@ export class HttpError extends Error {
   policy?: PolicyRef;
   /** A refusal's Retry-After, set by the one caller that retries on it (previewRunPolicy). */
   declare retryAfter?: string;
+  /** A preflight model_credential refusal's setup rows (runs.preflightRunWire): the checklist the
+   *  server resolved before the provider refused, so Review keeps those blockers. */
+  declare setupItems?: SetupItem[];
   constructor(
     status: number,
     message: string,
