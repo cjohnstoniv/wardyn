@@ -29,6 +29,9 @@ type serveOptions struct {
 	// trustedCAFile is --trusted-ca-file; trustedCA is the bundle validated at startup, and
 	// trustedCAPath the file it was written to for sandboxes to mount (trustedCAAtStartup).
 	trustedCAFile, trustedCA, trustedCAPath string
+	// proxyImagePinned is whether proxyImage was named on purpose (proxyImagePinned), so the
+	// organisation's answer at connect does not replace it.
+	proxyImagePinned bool
 }
 
 func (o serveOptions) recordingEnabled() (bool, error) {
@@ -65,9 +68,13 @@ func newServeCommand(build runnerHooksBuilder) *cobra.Command {
 		if err != nil {
 			return err
 		}
-		// The flag (whose default is the environment) outranks the image the organisation named at
-		// registration, which outranks this binary's release image.
-		opts.proxyImage = cmp.Or(opts.proxyImage, identity.ProxyImage, releaseProxyImage())
+		// A pinned image (the flag, whose default is the environment) outranks everything. Otherwise
+		// the organisation's answer at each connect wins; until the first connect, the image it named
+		// at registration, else this binary's release image, else an unmarked image an earlier setup left.
+		opts.proxyImagePinned = proxyImagePinned(opts.proxyImage, cmd.Flags().Changed("proxy-image"), os.Getenv)
+		if !opts.proxyImagePinned {
+			opts.proxyImage = cmp.Or(identity.ProxyImage, releaseProxyImage(), opts.proxyImage)
+		}
 		if err := trustedCAAtStartup(cmd.Context(), &opts, stateDir); err != nil {
 			return err
 		}

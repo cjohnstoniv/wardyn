@@ -4,6 +4,7 @@
 package api
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"log/slog"
@@ -138,6 +139,12 @@ func (s *Server) runnerOwnerInactive(ctx context.Context, rn types.Runner) (bool
 	return st.IdentityBlocked(ctx, rn.Owner, -1)
 }
 
+// runnerProxyImage is the proxy image this organisation runs for rn's architecture, the same answer
+// registration gave: the per-architecture image, else WARDYN_PROXY_IMAGE. "" when it names none.
+func (s *Server) runnerProxyImage(rn types.Runner) string {
+	return cmp.Or(s.cfg.ProxyImageByArch[rn.Arch], s.cfg.ProxyImage)
+}
+
 // runnerHub builds the one Hub lazily. Callbacks not injected are the durable
 // org composition: admitRunner and the asynchronous offline sweep.
 func (s *Server) runnerHub(st store.RunnerStore) *remote.Hub {
@@ -158,6 +165,9 @@ func (s *Server) runnerHub(st store.RunnerStore) *remote.Hub {
 		}
 		if cfg.Inactive == nil {
 			cfg.Inactive = s.runnerOwnerInactive
+		}
+		if cfg.ProxyImage == nil {
+			cfg.ProxyImage = s.runnerProxyImage
 		}
 		// The Hub reports Disconnected only for a session it reported Connected,
 		// and calls both under the runner's session slot, Disconnected even inside

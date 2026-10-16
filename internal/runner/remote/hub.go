@@ -61,6 +61,10 @@ type HubConfig struct {
 	// GOAWAY before admission, and the stored-row recheck ends a live session
 	// the same way, so a connection after reactivation is admitted again.
 	Inactive func(context.Context, types.Runner) (bool, error)
+	// ProxyImage, when set, names the proxy image the organisation runs for a claimed runner (chosen
+	// for its reported architecture); AUTH_OK carries it, so the runner follows the organisation's
+	// upgrades. "" says nothing.
+	ProxyImage func(types.Runner) string
 }
 
 type hubSession struct {
@@ -303,6 +307,9 @@ func (h *Hub) start(ctx context.Context, conn runnerwire.Conn, row types.Runner,
 		}
 	}
 	ok := runnerwire.AuthOK{SessionID: s.id, Resumed: resumed, PingInterval: runnerwire.PingInterval, LastSeq: cfg.LastReceived}
+	if h.cfg.ProxyImage != nil {
+		ok.ProxyImage = h.cfg.ProxyImage(current)
+	}
 	if err := runnerwire.WriteControl(ctx, conn, runnerwire.TypeAuthOK, ok); err != nil {
 		return nil, err
 	}

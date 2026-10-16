@@ -74,7 +74,7 @@ var _ runner.SandboxStarter = (*Driver)(nil)
 // removes what it created.
 func (d *Driver) startProxy(ctx context.Context, runID uuid.UUID, labels map[string]string, env []string, cfgJSON []byte, ip netip.Addr) (string, error) {
 	cfg := &container.Config{
-		Image:    d.cfg.ProxyImage,
+		Image:    d.proxyImage(),
 		Hostname: "wardyn-proxy",
 		Labels:   labels,
 		Env:      env,
@@ -332,7 +332,7 @@ func (d *Driver) proxyExitLogTail(ctx context.Context, id string) string {
 // slow FIRST pull out of the window between the revive claim and the new
 // proxy actually starting.
 func (d *Driver) EnsureProxyImage(ctx context.Context) error {
-	return d.ensureImage(ctx, d.cfg.ProxyImage, "", func() {})
+	return d.ensureImage(ctx, d.proxyImage(), "", func() {})
 }
 
 // CanReplaceProxy — see runner.ProxyReviver: Docker always can.
@@ -376,7 +376,7 @@ func (d *Driver) ReplaceProxy(ctx context.Context, ref string, cfgJSON []byte) e
 	if agent.Container.Config != nil {
 		agentLabels = agent.Container.Config.Labels
 	}
-	if err := d.ensureImage(ctx, d.cfg.ProxyImage, "", func() {}); err != nil {
+	if err := d.ensureImage(ctx, d.proxyImage(), "", func() {}); err != nil {
 		return err
 	}
 	// A failed remove may still have removed it.

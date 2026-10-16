@@ -40,6 +40,10 @@ type (
 		PingInterval time.Duration `json:"ping_interval"`
 		// LastSeq is the org's received cursor; the runner replays after it.
 		LastSeq uint64 `json:"last_seq"`
+		// ProxyImage is the egress-proxy image the organisation runs for this runner's architecture, so
+		// an upgraded organisation's image reaches the runner without a reinstall. Empty when the
+		// organisation names none; an older runner ignores the field.
+		ProxyImage string `json:"proxy_image,omitempty"`
 	}
 	// Reason is the payload of REVOKED and GOAWAY.
 	Reason struct {

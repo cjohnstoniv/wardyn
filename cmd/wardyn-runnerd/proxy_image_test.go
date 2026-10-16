@@ -52,6 +52,8 @@ func TestServeProxyImagePrecedence(t *testing.T) {
 		{"environment", "", fromEnv, fromIdentity, fromEnv},
 		{"identity", "", "", fromIdentity, fromIdentity},
 		{"release", "", "", "", release},
+		// An unmarked release image in the environment is what a setup before 0.9.3 derived, not a pin.
+		{"stale derived environment", "", "ghcr.io/cjohnstoniv/wardyn-proxy:0.9.0", fromIdentity, fromIdentity},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			org := httptest.NewTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
@@ -84,5 +86,48 @@ func TestServeProxyImagePrecedence(t *testing.T) {
 				t.Errorf("serve ran with proxy image %q, want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestProxyImagePinned(t *testing.T) {
+	none := func(string) string { return "" }
+	marked := func(k string) string {
+		if k == "WARDYN_PROXY_IMAGE_PINNED" {
+			return "1"
+		}
+		return ""
+	}
+	const release, mirror = "ghcr.io/cjohnstoniv/wardyn-proxy:0.9.0", "mirror.corp/wardyn-proxy:0.9.0"
+	for _, tc := range []struct {
+		name, image string
+		flag        bool
+		getenv      func(string) string
+		want        bool
+	}{
+		{"nothing named", "", true, marked, false},
+		{"flag", release, true, none, true},
+		{"marked by setup", release, false, marked, true},
+		{"unmarked release image", release, false, none, false},
+		{"unmarked mirror", mirror, false, none, true},
+	} {
+		if got := proxyImagePinned(tc.image, tc.flag, tc.getenv); got != tc.want {
+			t.Errorf("%s: pinned = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
+// The organisation's answer at connect moves an unpinned runner to its image, once per change, ignores
+// an unusable answer, and never touches a pinned runner.
+func TestFollowOrgProxyImage(t *testing.T) {
+	var set []string
+	follow := followOrgProxyImage("org/proxy:1", false, func(s string) { set = append(set, s) })
+	for _, answer := range []string{"org/proxy:1", "org/proxy:2", "org/proxy:2", "bad image;rm", "org/proxy:3"} {
+		follow(answer)
+	}
+	if want := []string{"org/proxy:2", "org/proxy:3"}; strings.Join(set, ",") != strings.Join(want, ",") {
+		t.Errorf("applied %v, want %v", set, want)
+	}
+	if followOrgProxyImage("pinned/proxy:1", true, func(string) { t.Error("a pinned image was replaced") }) != nil {
+		t.Error("a pinned runner has a hook")
 	}
 }
