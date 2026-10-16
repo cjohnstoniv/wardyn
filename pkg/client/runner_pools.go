@@ -6,8 +6,10 @@ package client
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/url"
+	"strings"
 
 	"github.com/google/uuid"
 
@@ -384,6 +386,36 @@ func (c *Client) CreateMyRunnerPool(ctx context.Context, req CreateMyRunnerPoolR
 	var out RunnerPool
 	err := c.do(ctx, http.MethodPost, "/api/v1/me/runner-pools", req, &out)
 	return out, err
+}
+
+// OwnRunnerPool is the caller's user pool named name (in any case), made when they have none, and
+// whether it was just made. It reads only the pools the caller may use (GET /me/runner-pools), where a
+// user-scope row is their own; an organization pool of the same name is not theirs to put a self-hosted
+// runner in, so it is passed over.
+func (c *Client) OwnRunnerPool(ctx context.Context, name string) (pool RunnerPool, created bool, err error) {
+	list, err := c.ListMyRunnerPools(ctx, "")
+	if err != nil {
+		return pool, false, err
+	}
+	var ids []uuid.UUID
+	for _, p := range list.Pools {
+		if p.Scope == RunnerPoolUser && strings.EqualFold(p.Name, name) {
+			ids = append(ids, p.ID)
+		}
+	}
+	switch len(ids) {
+	case 0:
+		req := CreateMyRunnerPoolRequest{Name: name}
+		if err = req.Validate(); err != nil {
+			return pool, false, err
+		}
+		pool, err = c.CreateMyRunnerPool(ctx, req)
+		return pool, err == nil, err
+	case 1:
+		pool, err = c.GetRunnerPool(ctx, ids[0])
+		return pool, false, err
+	}
+	return pool, false, fmt.Errorf("%d of your pools are named %q; name it by id with `wardyn runner claim --pool <id>`", len(ids), name)
 }
 
 // UpdateMyRunnerPool renames, switches or re-limits one of the caller's own
