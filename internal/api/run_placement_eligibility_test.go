@@ -217,6 +217,30 @@ func TestLocalPlacement_OrgDriveRefusedOnSelfHosted(t *testing.T) {
 	}
 }
 
+// An MCP server's credential the organisation holds never reaches a person's own runner: the broker there
+// could only resolve it through the relay, which serves a grant delivered own. The doors refuse it by name;
+// the same server with the person's own secret is admitted.
+func TestLocalPlacement_MCPSharedCredentialRefused(t *testing.T) {
+	f := newComponentFixture(t)
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/runs", nil).WithContext(utCtx("user", "", nil))
+	req := createRunRequest{Placement: placement.Local}
+	comps := runComponents{mcpHosts: []string{"mcp.example"}}
+	grant := func(secret string, shared bool) types.RunPolicySpec {
+		scope, _ := json.Marshal(map[string]any{"host": "MCP.example", "secret_name": secret, "shared": shared})
+		return types.RunPolicySpec{EligibleGrants: []types.GrantSpec{{Kind: types.GrantAPIKey, Scope: scope, OwnerOnly: !shared}}}
+	}
+	_, ref := f.srv.localPlacementRefusal(r, req, true, grant("operator-only-secret", true), governanceCeiling{}, comps, nil, nil, composer.Baseline{})
+	if ref == nil || ref.body.Reason != string(placement.ReasonPlacementCredential) || ref.body.Error != localMCPSharedCredentialMsg {
+		t.Fatalf("org-held MCP credential on a local run = %+v, want %s naming the MCP server", ref, placement.ReasonPlacementCredential)
+	}
+	if _, ref := f.srv.localPlacementRefusal(r, req, true, grant("person-secret", false), governanceCeiling{}, comps, nil, nil, composer.Baseline{}); ref != nil {
+		t.Errorf("own MCP credential on a local run = %+v, want it admitted", ref)
+	}
+	if _, ref := f.srv.localPlacementRefusal(r, req, true, grant("operator-only-secret", true), governanceCeiling{}, runComponents{}, nil, nil, composer.Baseline{}); ref != nil && ref.body.Error == localMCPSharedCredentialMsg {
+		t.Error("a shared header credential that is not an MCP server's was refused as one")
+	}
+}
+
 // storedPolicy is the delivery policy the store holds now: what a create's local plan would be judged on.
 func storedPolicy(t *testing.T, s *Server) placement.DeliveryPolicy {
 	t.Helper()

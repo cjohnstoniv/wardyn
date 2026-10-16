@@ -186,6 +186,9 @@ func (s *Server) localAdmittedPlan(r *http.Request, req createRunRequest,
 		if ref != nil {
 			return placement.LocalPlan{}, ref
 		}
+		if origin.Class != placement.ClassOwn && mcpHeaderGrant(g, comps.mcpHosts) {
+			return placement.LocalPlan{}, runError(placement.ReasonPlacementCredential.Status(), string(placement.ReasonPlacementCredential), localMCPSharedCredentialMsg)
+		}
 		p.Origins["ProxyConfig.Policy.EligibleGrants["+strconv.Itoa(i)+"]"] = origin
 		if origin.Class == placement.ClassOwn && origin.Stored {
 			p.Spec.ProxyConfig.Policy.EligibleGrants[i].OwnerOnly = true
@@ -197,6 +200,21 @@ func (s *Server) localAdmittedPlan(r *http.Request, req createRunRequest,
 	}
 	p.CredentialIntents = intents
 	return p, nil
+}
+
+// localMCPSharedCredentialMsg refuses a local run whose MCP server carries a credential the organisation
+// holds. The MCP broker resolves its server's credential itself, and on a runner that resolve rides the
+// relay, which serves only a grant delivered own (refuseRelayedDelivery); via_org forwards requests
+// whose header the organisation injects, and the broker's tool rules would not run there.
+const localMCPSharedCredentialMsg = "components: an MCP server's credential that your organisation shares can't reach your own runner; use a secret of your own for it, or run this on a remote-hosted runner"
+
+// mcpHeaderGrant reports whether g is the header credential of one of the run's MCP servers.
+func mcpHeaderGrant(g types.GrantSpec, mcpHosts []string) bool {
+	if g.Kind != types.GrantAPIKey {
+		return false
+	}
+	rule, err := injectionRuleFromScope(g.Scope)
+	return err == nil && slices.ContainsFunc(mcpHosts, func(h string) bool { return hostEqual(h, rule.Host) })
 }
 
 // boundLocalPath is a local path and the runner it was registered for.
