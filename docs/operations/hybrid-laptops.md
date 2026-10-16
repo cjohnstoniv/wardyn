@@ -115,7 +115,7 @@ The bundle is read when `serve` starts; a bad file stops it and is named.
 
 - `wardyn-runnerd setup --no-service` registers, installs the binary and writes the environment file, then prints the command that runs the runner. It installs no systemd unit or LaunchAgent and runs no service command.
 - Use it where you run the runner yourself, or device management installs the unit.
-- It is refused while a systemd unit or LaunchAgent for this runner is installed: running both would be two processes with one identity, which the organisation refuses. Remove the service first (`systemctl --user disable --now wardyn-runnerd`, or `launchctl bootout` and delete the plist), then run setup again.
+- It is refused while a systemd unit or LaunchAgent for this runner is installed: running both would be two processes with one identity, which the organisation refuses. Remove the service first (`systemctl --user disable --now wardyn-runnerd` or `launchctl bootout`, then delete its file), then run setup again.
 - The environment file is `~/.config/wardyn/runnerd.env` on Linux and `runnerd.env` beside the runner's state directory on macOS, mode `0600`.
 
 1. Run `wardyn-runnerd setup --org https://wardyn.example --token-file <file> --no-service`.
