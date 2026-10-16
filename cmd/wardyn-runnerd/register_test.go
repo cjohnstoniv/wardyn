@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -265,6 +266,18 @@ func TestRegisterSendsMeasuredProposals(t *testing.T) {
 	}
 	if sent, _, _, err := registerWith(t, "--total-disk", "100"); err != nil || sent.Limits.Total.DiskMiB != 100*1024 {
 		t.Fatalf("an unmeasured disk given = %+v, %v", sent.Limits, err)
+	}
+}
+
+// A host that cannot be measured says why, beside the "not measured" figures.
+func TestRegisterSaysWhyTheHostWasNotMeasured(t *testing.T) {
+	measureHost = func(context.Context) (types.RunnerAmounts, error) {
+		return types.RunnerAmounts{}, errors.New("docker did not answer")
+	}
+	t.Cleanup(func() { measureHost = func(context.Context) (types.RunnerAmounts, error) { return testHost, nil } })
+	_, called, out, err := registerWith(t)
+	if err == nil || called || !strings.Contains(out, "measuring this computer failed: docker did not answer") {
+		t.Fatalf("an unmeasurable host = %v (sent %v)\n%s", err, called, out)
 	}
 }
 
