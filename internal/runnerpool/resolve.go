@@ -71,6 +71,8 @@ func (r *Refusal) Message() string {
 		return NoEligibleMemberMsg(r.Name)
 	case ReasonPoolsUnavailable:
 		return UnavailableServerMsg()
+	case ReasonRunTypeMissing:
+		return RunTypeMissingMsg()
 	case ReasonRunTypeNotAllowed:
 		return RunTypeNotAllowedMsg(r.Name, r.RunType)
 	case ReasonBarrierNotAllowed:

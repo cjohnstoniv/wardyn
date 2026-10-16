@@ -238,13 +238,17 @@ func WithInteractiveLifetimeDefault(deployment SourceLimits, runType types.Runne
 // pool never answers limits for a run it would not take.
 //
 // runType is the run's STORED experience (background or interactive), never one
-// inferred from the request: an empty or unknown value (the older-client shape)
-// never satisfies a pool's run-type list and is refused.
+// inferred from the request: an empty value (the older-client shape) is refused
+// ReasonRunTypeMissing and an unknown one ReasonRunTypeNotAllowed; neither
+// satisfies a pool's run-type list.
 func PoolSource(p types.RunnerPool, runType types.RunnerPoolRunType) (SourceLimits, *Refusal) {
 	out := SourceLimits{Source: types.LimitSourcePool}
 	l := p.Limits
 	if l == nil {
 		return out, nil
+	}
+	if runType == "" {
+		return out, &Refusal{Reason: ReasonRunTypeMissing, Name: p.Name}
 	}
 	if !l.AllowsRunType(runType) {
 		return out, &Refusal{Reason: ReasonRunTypeNotAllowed, Name: p.Name, RunType: runType}

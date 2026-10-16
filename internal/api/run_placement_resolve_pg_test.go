@@ -229,7 +229,7 @@ func TestPG_PoolReasonsAreTheSameAtEveryDoor(t *testing.T) {
 	checkBody("a barrier the pool does not allow", `{`+background+`,"confinement_class":"CC3",`+pinned+`}`, http.StatusUnprocessableEntity, runnerpool.ReasonBarrierNotAllowed)
 	// D-1319 carry: a request that names no experience (an older client) is never read as Background by a
 	// pool that sets limits; it is refused at every door, and the same request in a pool with no limits is fine.
-	checkBody("an older-shape request in a pool with limits", runBody(pinned), http.StatusUnprocessableEntity, runnerpool.ReasonRunTypeNotAllowed)
+	checkBody("an older-shape request in a pool with limits", runBody(pinned), http.StatusUnprocessableEntity, runnerpool.ReasonRunTypeMissing)
 	e.orgDefaults(fmt.Sprintf(`{"pool_id":%q}`, soon.ID))
 	if w := e.admin(http.MethodPut, "/api/v1/runner-pools/"+soon.ID.String(), fmt.Sprintf(`{"revision":%d,"state":"disabled"}`, e.revision(soon.ID))); w.Code != http.StatusOK {
 		t.Fatalf("disable = %d %s", w.Code, w.Body)
