@@ -747,15 +747,24 @@ func (s PG) GetRunnerPoolOrgDefaults(ctx context.Context) (types.RunnerPoolDefau
 	return d, err
 }
 
-// PutRunnerPoolOrgDefaults replaces the organisation's defaults. The caller has checked the pool; a
-// default only names one, and the resolver refuses a name that has since gone or been switched off.
+// PutRunnerPoolOrgDefaults replaces the organisation's defaults. The caller has checked the pool's
+// state; a default only names one, and the resolver refuses a name that has since been switched off.
+// A pool deleted between that check and this write is ErrNotFound: the pool row is locked first, as a
+// delete locks it before it clears the default, so the two cannot interleave.
 func (s PG) PutRunnerPoolOrgDefaults(ctx context.Context, d types.RunnerPoolDefaults, by string) error {
-	_, err := s.Pool.Exec(ctx, `
+	return s.inTx(ctx, func(q Querier) error {
+		if d.PoolID != nil {
+			if _, err := livePoolForUpdate(ctx, q, *d.PoolID); err != nil {
+				return err
+			}
+		}
+		_, err := q.Exec(ctx, `
 		INSERT INTO runner_pool_org_defaults (pool_id, barrier, updated_by) VALUES ($1,$2,$3)
 		ON CONFLICT (singleton) DO UPDATE SET pool_id = EXCLUDED.pool_id, barrier = EXCLUDED.barrier,
 		       updated_by = EXCLUDED.updated_by, updated_at = now()`,
-		d.PoolID, string(d.Barrier), by)
-	return err
+			d.PoolID, string(d.Barrier), by)
+		return err
+	})
 }
 
 // BootstrapRunnerPools is the one-time upgrade step: when this deployment has configured remote-hosted

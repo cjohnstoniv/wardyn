@@ -353,6 +353,8 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	// show a rosier picture than the launch it previews. WARN, never refuse:
 	// nothing above this line changed.
 	warnings, _ := appendCredentialConfinementAdvisory(clampWarnings, spec, enforced, modelCred.Kind)
+	// The autonomy gate's own sentences, as create carries them (runs.go), so Review shows a derived hold.
+	warnings = append(warnings, f.autonomyWarns...)
 	warnings = append(warnings, f.fitWarnings...)
 
 	// A zero residency means no provider was chosen (none serves the agent, or a

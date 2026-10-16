@@ -991,6 +991,32 @@ func TestAutonomyWarningsOnTheCreatedRun(t *testing.T) {
 	}
 }
 
+// TestAutonomyWarningsOnPreflight: Review's warnings carry the gate's derived-hold sentence the
+// 201 would, and say nothing for a caller who already asked for hold.
+func TestAutonomyWarningsOnPreflight(t *testing.T) {
+	for _, tc := range []struct {
+		name, approvals string
+		want            bool
+	}{
+		{"an overridden auto is previewed", "auto", true},
+		{"an explicit hold is not", "hold", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := govProfile("autonomy-warnings")
+			p.Limits = types.GovernanceLimits{AutonomyRubric: autonomyRubric(types.AutonomyL1)}
+			srv, _, _ := govEscapeFixture(t, autonomyCapStore(p))
+			body := `{"agent":"claude-code","task":"t","confinement_class":"CC2","tool_approvals":"` + tc.approvals + `"}`
+			w := doSSO(t, srv, http.MethodPost, "/api/v1/runs/preflight", govSession(t, "sub-autonomy", []string{"eng"}, false), body)
+			if w.Code != http.StatusOK {
+				t.Fatalf("preflight = %d, want 200: %s", w.Code, w.Body.String())
+			}
+			if got := strings.Contains(w.Body.String(), "tool_approvals was set to hold"); got != tc.want {
+				t.Errorf("Review says the derived hold = %v, want %v: %s", got, tc.want, w.Body.String())
+			}
+		})
+	}
+}
+
 // TestAutonomyUndefinedLevelFailsClosed is the corrupted-column case: a stored
 // rubric carrying a level no AutonomyLevel defines.
 //
