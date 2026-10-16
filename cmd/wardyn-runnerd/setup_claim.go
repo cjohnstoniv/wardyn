@@ -33,7 +33,11 @@ func claimStep(cmd *cobra.Command, plan setupPlan, id runneridentity.Identity, t
 	c := sdk.New(plan.org, token)
 	c.HTTPClient = &http.Client{Timeout: 30 * time.Second}
 	if err := claimRunner(cmd.Context(), c, id, plan, out); err != nil {
-		return fmt.Errorf("the runner is installed and running but not claimed into place: %w; finish with `wardyn runner claim --pool <name>`", err)
+		state := "installed and running"
+		if plan.noService {
+			state = "registered"
+		}
+		return fmt.Errorf("the runner is %s but not claimed into place: %w; finish with `wardyn runner claim --pool <name>`", state, err)
 	}
 	return nil
 }

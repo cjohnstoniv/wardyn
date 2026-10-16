@@ -248,7 +248,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_CONTROL_PLANE_URL` | string | `https://wardynd:8443` | the URL every run's proxy sidecar dials to reach this daemon's **internal TLS listener**; `http://` is refused at boot unless the host is loopback (flag `-control-plane-url`). [Details](#wardyn_control_plane_url) |
 | `WARDYN_INTERNAL_LISTEN` | string | `:8443` | listen address of the proxy-facing TLS listener, served with a certificate from wardynd's own internal CA; never publish it outside the network your proxies share with wardynd (flag `-internal-listen`). [Details](#wardyn_internal_listen) |
 | `WARDYN_PROXY_IMAGE` | string | (unset) | OCI image for the wardyn-proxy sidecar (flag `-proxy-image`). **Bump it in lockstep with wardynd**: since 0.7 the sidecar decodes its config strictly (`LoadConfigBytes`, [`internal/egress/proxy/config.go`](../internal/egress/proxy/config.go)) and refuses to start on a key it cannot honour. [Details](#wardyn_proxy_image) |
-| `WARDYN_PROXY_IMAGE_PINNED` | `1` | (unset) | **`wardyn-runnerd setup` only**: written beside `WARDYN_PROXY_IMAGE` when `--proxy-image` named it, so a rerun keeps the pin; serve ignores it |
+| `WARDYN_PROXY_IMAGE_PINNED` | `1` | (unset) | **`wardyn-runnerd`**: `setup` writes it beside `WARDYN_PROXY_IMAGE` when `--proxy-image` named it; `serve` then keeps that image instead of the organisation's answer at connect. Unmarked, a release image of this project is derived, not pinned |
 | `WARDYN_PROXY_IMAGE_AMD64` | string | (unset) | the proxy image a self-hosted runner that reports amd64 receives when it registers (flag `-proxy-image-amd64`); unset gives the runner `WARDYN_PROXY_IMAGE`. The organisation's own sandboxes always use `WARDYN_PROXY_IMAGE` |
 | `WARDYN_PROXY_IMAGE_ARM64` | string | (unset) | the proxy image a self-hosted runner that reports arm64 receives when it registers (flag `-proxy-image-arm64`); unset gives the runner `WARDYN_PROXY_IMAGE`. The organisation's own sandboxes always use `WARDYN_PROXY_IMAGE` |
 | `WARDYN_DRIVE_PROBE_IMAGE` | string | (unset = the pinned busybox-class default) | OCI image the docker runner's `host_path` user-drive **agent-readability probe** runs a container from; an operator who overrides this must make sure the image is reachable at boot (flag `-drive-probe-image`). [Details](#wardyn_drive_probe_image) |
@@ -286,6 +286,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_UI_SANDBOX_STRIP_COOKIES` | string | (unset) | inbound cookie policy for the UI-sandbox gateway (flag `-ui-sandbox-strip-cookies`): `allow:<names>` forwards only the listed cookies, `deny:<names>` strips them. Unset forwards every cookie except `wardyn_*`. [Details](#wardyn_ui_sandbox_strip_cookies) |
 | `WARDYN_METRICS_LISTEN` | string | (unset) | dedicated metrics listener address (flag `-metrics-listen`); empty means off. Set, it serves `GET /metrics` in plain HTTP with no credential, and boot refuses an address shared with another listener (`validateMetricsListenConfig`, [`cmd/wardynd/boot_metrics.go`](../cmd/wardynd/boot_metrics.go)). [Details](#wardyn_metrics_listen) |
 | `WARDYN_TRUSTED_CA_FILE` | string (path) | (unset) | path to a PEM bundle of additional trusted roots, additive to the system roots (flag `-trusted-ca-file`; `loadTrustedCA`, [`cmd/wardynd/trusted_ca.go`](../cmd/wardynd/trusted_ca.go)); a missing file or one with no parseable certificate refuses boot. [Details](#wardyn_trusted_ca_file) |
+| `WARDYN_UPSTREAM_PROXY` | string (URL) | (unset) | **`wardyn-runnerd serve`** (flag `--upstream-proxy`): this runner's own corporate upstream proxy, `http://[user:pass@]host[:port]`, that every run's proxy chains its egress through. Checked at startup with the proxy's own rule; never sent to the organisation. [Details](#wardyn_upstream_proxy) |
 | `WARDYN_DAEMON_PROXY_URL` | string (URL) | (unset = direct) | the forward proxy wardynd's own outbound HTTP calls traverse (flag `-daemon-proxy-url`; `installDaemonProxy`, [`cmd/wardynd/daemon_proxy.go`](../cmd/wardynd/daemon_proxy.go)); a malformed value refuses boot. [Details](#wardyn_daemon_proxy_url) |
 | `WARDYN_DAEMON_NO_PROXY` | string (CSV) | (unset) | destinations `WARDYN_DAEMON_PROXY_URL` must not be used for, in `NO_PROXY` spelling (flag `-daemon-no-proxy`; `x/net/http/httpproxy` semantics). Wardynd appends `KUBERNETES_SERVICE_HOST`, any `WARDYN_AWS_SSO_ENDPOINT_OVERRIDE` or `WARDYN_OIDC_INTERNAL_ISSUER` host, and the AWS link-local credential endpoints. Ignored when the proxy URL is unset |
 | `WARDYN_DAEMON_PROXY_SECRET` | string (path) | (unset) | path to a file holding one forward-proxy URL that MAY embed `user:pass@` (flag `-daemon-proxy-secret-file`; `installDaemonProxySecret`, [`cmd/wardynd/daemon_proxy.go`](../cmd/wardynd/daemon_proxy.go)); a group- or world-writable file refuses boot. [Details](#wardyn_daemon_proxy_secret) |
@@ -1635,6 +1636,16 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - While it and the CA already staged fit in 64 KiB, it is also appended to `WARDYN_MITM_CA_PEM` for agent images older than 0.9.3; over 4 MiB refuses startup.
 - On `wardynd` boot warns over 64 KiB and refuses over 120 KiB: the sandbox gets it in one environment variable, which Linux caps at 128 KiB.
 - `setup --trusted-ca-file` writes it into the service definition; a rerun keeps it.
+
+### `WARDYN_UPSTREAM_PROXY`
+
+- **On a laptop runner** (`wardyn-runnerd serve`, flag `--upstream-proxy`) it is the runner's own corporate proxy for run egress.
+- The organisation's `upstream_proxy_url` is never sent to a runner; this takes its place.
+- Form: `http://[user:pass@]host[:port]`. Only `http` is supported, the proxy's own rule, checked at startup; a bad value (not repeated, it may hold a credential) refuses startup.
+- It becomes every proxy's `upstream_proxy_url` (create and revive, on stdin) beside the runner's CA bundle ([`cmd/wardyn-runnerd/serve.go`](../cmd/wardyn-runnerd/serve.go)).
+- Traffic to the organisation (the run's control-plane relay) does not traverse it.
+- Prefer the variable to the flag when it holds a credential: a flag shows in the process list.
+- `setup` does not write it: add it to the service's environment, and again after a setup rerun, which rewrites that file.
 
 ### `WARDYN_DAEMON_PROXY_URL`
 

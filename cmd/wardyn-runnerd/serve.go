@@ -7,11 +7,14 @@ import (
 	"cmp"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/spf13/cobra"
 
+	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/runneridentity"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 )
@@ -32,6 +35,9 @@ type serveOptions struct {
 	// proxyImagePinned is whether proxyImage was named on purpose (proxyImagePinned), so the
 	// organisation's answer at connect does not replace it.
 	proxyImagePinned bool
+	// upstreamProxy is --upstream-proxy: this runner's own corporate upstream proxy URL, validated at
+	// startup and handed to every run's proxy. It is never sent to the organisation.
+	upstreamProxy string
 }
 
 func (o serveOptions) recordingEnabled() (bool, error) {
@@ -78,6 +84,10 @@ func newServeCommand(build runnerHooksBuilder) *cobra.Command {
 		if err := trustedCAAtStartup(cmd.Context(), &opts, stateDir); err != nil {
 			return err
 		}
+		opts.upstreamProxy = strings.TrimSpace(opts.upstreamProxy)
+		if err := proxy.ValidUpstreamProxyURL(opts.upstreamProxy); err != nil {
+			return fmt.Errorf("--upstream-proxy / WARDYN_UPSTREAM_PROXY: %w (the URL is not repeated here: it may hold a credential)", err)
+		}
 		if build == nil {
 			return errors.New("runner execution and durable offline handlers are unavailable")
 		}
@@ -104,6 +114,7 @@ func newServeCommand(build runnerHooksBuilder) *cobra.Command {
 	cmd.Flags().StringVar(&opts.relayHostTarget, "relay-host-target", os.Getenv("WARDYN_RELAY_HOST_TARGET"), "what a run's proxy reaches the relay at: host-gateway or an IP address (found by a probe container when left out)")
 	cmd.Flags().StringVar(&opts.network, "internal-network", cmp.Or(os.Getenv("WARDYN_INTERNAL_NETWORK"), "wardyn-internal"), "Docker bridge for proxy sidecars (created when missing)")
 	cmd.Flags().StringVar(&opts.trustedCAFile, "trusted-ca-file", os.Getenv("WARDYN_TRUSTED_CA_FILE"), "PEM bundle of extra roots (e.g. a TLS-inspecting corporate proxy's CA) every run's proxy and sandbox trust beside the system roots; when unset, SSL_CERT_FILE, else SSL_CERT_DIR, is used. Read at startup only")
+	cmd.Flags().StringVar(&opts.upstreamProxy, "upstream-proxy", os.Getenv("WARDYN_UPSTREAM_PROXY"), "this runner's own corporate upstream proxy, http://[user:pass@]host[:port], that every run's proxy chains its egress through; never sent to the organisation. Prefer the environment variable when it holds a credential. Read at startup only")
 	cmd.Flags().StringVar(&opts.recording, "recording-store", cmp.Or(os.Getenv("WARDYN_RECORDING_STORE"), "pg"), "organisation recording mode: pg, fs or off (off disables local capture)")
 	_ = cmd.MarkFlagRequired("org")
 	return cmd

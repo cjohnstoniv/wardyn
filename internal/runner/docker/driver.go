@@ -105,6 +105,11 @@ type Config struct {
 	// TrustedCAPEM. It is bind-mounted read-only at runner.TrustedCAMountPath
 	// in every sandbox, so a bundle of any size reaches the sandbox's trust.
 	TrustedCAFile string
+	// UpstreamProxyURL, set only by wardyn-runnerd, is the runner's own corporate upstream proxy
+	// (--upstream-proxy), validated at startup. It becomes every proxy's upstream_proxy_url, on create
+	// and on revive, as TrustedCAPEM becomes trusted_ca_pem; the organisation never sends one to a
+	// runner. It may carry a credential, so it is never logged. Empty changes nothing.
+	UpstreamProxyURL string
 }
 
 // RecordingMountTarget is where RecordingMount appears inside the agent

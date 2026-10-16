@@ -127,10 +127,16 @@ func (d *Driver) startProxy(ctx context.Context, runID uuid.UUID, labels map[str
 		if err != nil {
 			return "", err
 		}
+		if err := d.checkRelayOutsideRunSubnet(ctx, runID, target); err != nil {
+			return "", err
+		}
 		host.ExtraHosts = []string{"host.docker.internal:" + target, name + ":" + target}
 	}
 	cfgJSON, err := withTrustedCA(cfgJSON, d.cfg.TrustedCAPEM)
 	if err != nil {
+		return "", err
+	}
+	if cfgJSON, err = withUpstreamProxy(cfgJSON, d.cfg.UpstreamProxyURL); err != nil {
 		return "", err
 	}
 	cfgJSON, err = d.runnerSpoolConfig(ctx, runID, cfgJSON, cfg, host)
@@ -460,6 +466,28 @@ func (d *Driver) relayHostsEntry(cfgJSON []byte) (name, target string, err error
 		return "", "", fmt.Errorf("docker: relay: %w", err)
 	}
 	return u.Hostname(), target, nil
+}
+
+// checkRelayOutsideRunSubnet refuses a relay target inside the run's own bridge subnet. Docker may give a
+// per-run network a pool that contains the target (a VM engine's 192.168.5.2 sits in 192.168.0.0/20); the
+// proxy would then route the relay onto its own bridge, where nothing answers, and the run could never
+// reach the organisation. host-gateway names no address, so it cannot overlap.
+func (d *Driver) checkRelayOutsideRunSubnet(ctx context.Context, runID uuid.UUID, target string) error {
+	ip, err := netip.ParseAddr(target)
+	if err != nil {
+		return nil
+	}
+	name := internalNetName(runID)
+	insp, err := d.cli.NetworkInspect(ctx, name, client.NetworkInspectOptions{})
+	if err != nil {
+		return fmt.Errorf("docker: relay: inspect the run's network %s: %w", name, err)
+	}
+	for _, c := range insp.Network.IPAM.Config {
+		if c.Subnet.Contains(ip.Unmap()) {
+			return fmt.Errorf("docker: relay: this run's network %s was given the subnet %s, which contains the relay target %s, so the run's proxy would look for the relay on its own bridge. Move the engine's default-address-pools off %s, or point the runner's relay at an address outside %s (--relay-host-target)", name, c.Subnet, target, c.Subnet, c.Subnet)
+		}
+	}
+	return nil
 }
 
 // validRelayTarget accepts "host-gateway" or a unicast IP literal. Loopback is the

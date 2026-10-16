@@ -102,6 +102,30 @@ The bundle is read when `serve` starts; a bad file stops it and is named.
 
 3. The service does not see your shell's `SSL_CERT_FILE`, so pass the file to setup anyway.
 
+### A corporate upstream proxy on a laptop runner
+
+- Where the only way out is your organisation's HTTP proxy, give the runner its URL. Every run's proxy then chains its egress through it.
+- The organisation's own upstream proxy is not sent to a laptop; this is the laptop's own.
+- Start `serve` with `--upstream-proxy http://proxy.example:3128` or `WARDYN_UPSTREAM_PROXY`. Only `http://` is supported. The URL is checked at startup, never sent to the organisation, and never printed.
+- Setup does not write it. Add it to the service's environment after setup (the env file on Linux, `EnvironmentVariables` in the LaunchAgent on macOS), and again after a rerun, which rewrites that file.
+- Put a credential in the variable, not the flag: a flag shows in the process list. See [`WARDYN_UPSTREAM_PROXY`](../ENV.md#wardyn_upstream_proxy).
+
+### Running without a service
+
+- `wardyn-runnerd setup --no-service` registers, installs the binary and writes the environment file, then prints the command that runs the runner. It installs no systemd unit or LaunchAgent and runs no service command.
+- Use it where you run the runner yourself, or device management installs the unit.
+- The environment file is `~/.config/wardyn/runnerd.env` on Linux and `runnerd.env` beside the runner's state directory on macOS, mode `0600`.
+
+1. Run `wardyn-runnerd setup --org https://wardyn.example --token-file <file> --no-service`.
+2. Run the printed command from a shell that stays open: `set -a; . <env file>; set +a; <binary> serve --org <url> --state-dir <dir>`.
+3. Claim the runner as for a service: see below.
+
+### The Docker engine setup and serve use
+
+- `wardyn-runnerd` reads `DOCKER_HOST` and the engine's default socket. It does not read a docker CLI context.
+- Setup refuses `DOCKER_CERT_PATH`, `DOCKER_TLS_VERIFY` and `DOCKER_API_VERSION`: the service never sees them, so it would reach a different engine than the one setup checked.
+- A selected docker context (`docker context use`, `DOCKER_CONTEXT`) is resolved when it is a local unix socket, and carried into the service as `DOCKER_HOST`. A TCP, SSH or TLS context is refused with the `DOCKER_HOST` to set instead.
+
 ## Claiming a runner
 
 1. The owner mints a single-use `wdr_` registration token (`wardyn runner token`, or *My runner*). It lasts 1 hour, and needs the [`self_host_runner`](capabilities.md#self_host_runner) permission; admins are never asked.

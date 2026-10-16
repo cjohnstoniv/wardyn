@@ -46,6 +46,9 @@ func osSetupHost() (setupHost, error) {
 	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
 		return setupHost{}, fmt.Errorf("unsupported OS: %s (on Windows, run setup inside WSL2)", runtime.GOOS)
 	}
+	if err := checkUntransportedDockerEnv(os.Getenv); err != nil {
+		return setupHost{}, err
+	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return setupHost{}, err
@@ -112,8 +115,8 @@ func (h setupHost) checkServiceManager(ctx context.Context, p setupPaths) error 
 
 // installBinary stops a running copy and replaces the installed binary with this one, atomically. It
 // leaves a binary that is already the installed one alone, so setup also works run from there.
-func (h setupHost) installBinary(ctx context.Context, dst string) error {
-	if h.goos == "linux" {
+func (h setupHost) installBinary(ctx context.Context, dst string, stopService bool) error {
+	if stopService && h.goos == "linux" {
 		_, _ = h.run(ctx, "systemctl", "--user", "stop", serviceUnit)
 	}
 	if a, aerr := os.Stat(h.exe); aerr == nil {
@@ -155,32 +158,39 @@ func writeAtomic(path string, mode os.FileMode, write func(io.Writer) error) (er
 	return os.Rename(f.Name(), path)
 }
 
+// serviceEnv is the runner's environment as setup settled it, one KEY=value line each, in the form
+// systemd's EnvironmentFile reads and a shell can source (every value passed safeSetting).
+func (p setupPlan) serviceEnv() string {
+	env := "WARDYN_RUNNER_ORG_URL=" + p.org + "\n"
+	if image := p.pinnedImage(); image != "" {
+		env += "WARDYN_PROXY_IMAGE=" + image + "\n"
+	}
+	if p.pinMarker() != "" {
+		env += "WARDYN_PROXY_IMAGE_PINNED=1\n"
+	}
+	env += fmt.Sprintf("WARDYN_INTERNAL_NETWORK=%s\nWARDYN_RUNNER_STATE_DIR=%s\n", p.network, p.paths.stateDir)
+	if p.trustedCAFile != "" {
+		env += "WARDYN_TRUSTED_CA_FILE=" + p.trustedCAFile + "\n"
+	}
+	if p.relayListen != "" {
+		env += "WARDYN_RELAY_LISTEN=" + p.relayListen + "\n"
+	}
+	if p.relayHostTarget != "" {
+		env += "WARDYN_RELAY_HOST_TARGET=" + p.relayHostTarget + "\n"
+	}
+	if p.dockerHost != "" {
+		env += "DOCKER_HOST=" + p.dockerHost + "\n"
+	}
+	return env
+}
+
 // startService writes the service definition and (re)starts it.
 func (h setupHost) startService(ctx context.Context, plan setupPlan, out io.Writer) error {
 	if h.goos == "darwin" {
 		return h.startLaunchAgent(ctx, plan, out)
 	}
 	p := plan.paths
-	env := "WARDYN_RUNNER_ORG_URL=" + plan.org + "\n"
-	if image := plan.pinnedImage(); image != "" {
-		env += "WARDYN_PROXY_IMAGE=" + image + "\n"
-	}
-	if plan.pinMarker() != "" {
-		env += "WARDYN_PROXY_IMAGE_PINNED=1\n"
-	}
-	env += fmt.Sprintf("WARDYN_INTERNAL_NETWORK=%s\nWARDYN_RUNNER_STATE_DIR=%s\n", plan.network, p.stateDir)
-	if plan.trustedCAFile != "" {
-		env += "WARDYN_TRUSTED_CA_FILE=" + plan.trustedCAFile + "\n"
-	}
-	if plan.relayListen != "" {
-		env += "WARDYN_RELAY_LISTEN=" + plan.relayListen + "\n"
-	}
-	if plan.relayHostTarget != "" {
-		env += "WARDYN_RELAY_HOST_TARGET=" + plan.relayHostTarget + "\n"
-	}
-	if plan.dockerHost != "" {
-		env += "DOCKER_HOST=" + plan.dockerHost + "\n"
-	}
+	env := plan.serviceEnv()
 	unit := strings.ReplaceAll(runnerunits.SystemdUnit, "__WARDYN_RUNNERD__", p.installed)
 	for _, f := range []struct {
 		path, text string
@@ -203,6 +213,27 @@ func (h setupHost) startService(ctx context.Context, plan setupPlan, out io.Writ
 	if h.xdgConfig != "" {
 		fmt.Fprintf(out, "XDG_CONFIG_HOME is set here, so pass --state-dir %s to wardyn runner claim.\n", p.stateDir)
 	}
+	return nil
+}
+
+// noServiceEnvFile is where --no-service writes the environment: the file a Linux service reads, and on
+// macOS, which has no such file, one beside the identity's directory.
+func (p setupPaths) noServiceEnvFile() string {
+	return cmp.Or(p.envFile, filepath.Join(filepath.Dir(p.stateDir), "runnerd.env"))
+}
+
+// writeRunConfig is --no-service: it writes the environment file and prints the command that runs the
+// runner in the foreground, and installs no unit, plist or login item.
+func (h setupHost) writeRunConfig(plan setupPlan, out io.Writer) error {
+	path := plan.paths.noServiceEnvFile()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	if err := writeAtomic(path, 0o600, func(w io.Writer) error { _, err := io.WriteString(w, plan.serviceEnv()); return err }); err != nil {
+		return err
+	}
+	fmt.Fprintf(out, "Wrote %s. No service was installed. Run the runner yourself, from a shell that keeps it running:\n  set -a; . %s; set +a; %s serve --org %s --state-dir %s\n",
+		path, path, plan.paths.installed, plan.org, plan.paths.stateDir)
 	return nil
 }
 
@@ -232,16 +263,17 @@ func (p setupPlan) pinMarker() string {
 // of this project is what a setup before 0.9.3 derived, not a pin, and is dropped.
 func (p setupPaths) keptPins() (image, caFile string) {
 	read := func(key string) string {
-		if p.envFile != "" {
-			b, _ := os.ReadFile(p.envFile)
-			for _, line := range strings.Split(string(b), "\n") {
-				if v, ok := strings.CutPrefix(line, key+"="); ok {
-					return strings.TrimSpace(v)
-				}
+		// The environment file first: the one a Linux service reads, or what --no-service wrote on macOS.
+		b, _ := os.ReadFile(p.noServiceEnvFile())
+		for _, line := range strings.Split(string(b), "\n") {
+			if v, ok := strings.CutPrefix(line, key+"="); ok {
+				return strings.TrimSpace(v)
 			}
+		}
+		if p.envFile != "" {
 			return ""
 		}
-		b, _ := os.ReadFile(p.plistFile)
+		b, _ = os.ReadFile(p.plistFile)
 		if m := regexp.MustCompile(`<key>` + key + `</key>\s*<string>([^<]*)</string>`).FindSubmatch(b); m != nil {
 			return html.UnescapeString(strings.TrimSpace(string(m[1])))
 		}

@@ -828,3 +828,62 @@ func TestSetupPoolIgnoresAnotherPersonsSameNamedPool(t *testing.T) {
 		t.Error("the runner was put in another person's pool")
 	}
 }
+
+// --no-service registers and installs the binary, writes the environment file and prints the command
+// that runs the runner, and installs nothing a login would start: no unit, no plist, no service
+// command, and no check that a systemd user manager would find a unit.
+func TestSetupNoServiceWritesTheEnvironmentAndInstallsNoUnit(t *testing.T) {
+	for _, goos := range []string{"linux", "darwin"} {
+		t.Run(goos, func(t *testing.T) {
+			f := newSetupFixture(t, goos)
+			f.host.run = func(_ context.Context, name string, args ...string) ([]byte, error) {
+				f.commands = append(f.commands, name+" "+strings.Join(args, " "))
+				return []byte("/nowhere"), nil // a user manager that would never find the unit
+			}
+			p, _ := f.host.paths()
+			out, err := f.run(setupOptions{tokenFile: f.tokenFile, noService: true})
+			if err != nil {
+				t.Fatalf("%v\n%s", err, out)
+			}
+			if f.count("POST /api/v1/runners/register") != 1 || f.read(p.installed) != "binary" {
+				t.Fatal("--no-service did not register or install the binary")
+			}
+			envFile := p.noServiceEnvFile()
+			env := f.read(envFile)
+			for _, want := range []string{"WARDYN_RUNNER_ORG_URL=" + f.org + "\n", "WARDYN_PROXY_IMAGE=ghcr.io/example/proxy:1\n", "WARDYN_PROXY_IMAGE_PINNED=1\n", "WARDYN_RUNNER_STATE_DIR=" + p.stateDir + "\n"} {
+				if !strings.Contains(env, want) {
+					t.Errorf("env file lacks %q:\n%s", want, env)
+				}
+			}
+			if st, err := os.Stat(envFile); err != nil || st.Mode().Perm() != 0o600 {
+				t.Errorf("env file mode: %v %v", st, err)
+			}
+			for _, path := range []string{p.unitFile, p.plistFile} {
+				if path == "" {
+					continue
+				}
+				if _, err := os.Stat(path); err == nil {
+					t.Errorf("--no-service installed %s", path)
+				}
+			}
+			if len(f.commands) != 0 {
+				t.Errorf("--no-service ran %v", f.commands)
+			}
+			if want := "set -a; . " + envFile + "; set +a; " + p.installed + " serve --org " + f.org + " --state-dir " + p.stateDir; !strings.Contains(out, want) {
+				t.Errorf("the run command is not printed (want %q):\n%s", want, out)
+			}
+			if strings.Contains(out, "Started the wardyn-runnerd") {
+				t.Errorf("--no-service claims to have started a service:\n%s", out)
+			}
+
+			// Setup run again without --proxy-image keeps what it wrote.
+			f.flagless = true
+			if _, err := f.run(setupOptions{noService: true}); err != nil {
+				t.Fatal(err)
+			}
+			if f.read(envFile) != env {
+				t.Error("a second --no-service run changed the environment file")
+			}
+		})
+	}
+}
