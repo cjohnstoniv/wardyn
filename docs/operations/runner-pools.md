@@ -48,7 +48,7 @@
 
 - A pool takes background tasks, interactive environments or both: its limits carry a `background` block, an `interactive` block or both (`--run-type`).
 - The pool list answers `run_types` and `run_types_source`: `pool` when the pool's own limits name them, `none` for a pool with no limits, which takes both.
-- A launch of a type the pool does not take is refused `runner_pool_run_type_not_allowed`. So is a request with no run type, by any pool that has limits (`PoolSource`, [`internal/runnerpool/limits.go`](../../internal/runnerpool/limits.go)).
+- A launch of a type the pool does not take is refused `runner_pool_run_type_not_allowed`. A request with no run type (an older client) is refused `runner_pool_run_type_missing` (`422`) by any pool that has limits: pass `--experience background|interactive` or upgrade the client (`PoolSource`, [`internal/runnerpool/limits.go`](../../internal/runnerpool/limits.go)).
 
 ## Limits: the strictest wins
 

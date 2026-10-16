@@ -22,6 +22,7 @@ export const RUNNER_POOL_REASONS = [
   "runner_pool_member_mismatch",
   "runner_pools_unavailable",
   "runner_pool_run_type_not_allowed",
+  "runner_pool_run_type_missing",
   "runner_pool_barrier_not_allowed",
   "runner_pool_queue_full",
   "runner_pool_full",
@@ -101,6 +102,7 @@ export const RUNNER_POOL_REFUSAL = {
   REMOTE_NOT_CONFIGURED: (id: string) => `${id} isn't a remote-hosted runner this server is set up with.`,
   REMOTE_NOT_AVAILABLE: (id: string) => `${id} is not available to people's pools. Ask your admin to make it available.`,
   UNAVAILABLE_SERVER: () => "This server does not manage runner pools yet.",
+  RUN_TYPE_MISSING: () => "this request has no run type; older clients omit it \u2014 pass --experience background|interactive or upgrade the client",
   RUN_TYPE_NOT_ALLOWED: (name: string, runType: keyof typeof RUN_TYPE_PLURAL) =>
     `${name} doesn't take ${RUN_TYPE_PLURAL[runType]}. Choose another pool or run type.`,
   BARRIER_NOT_ALLOWED: (name: string, asked: keyof typeof BARRIER_LABEL, allowed: (keyof typeof BARRIER_LABEL)[]) => {
@@ -146,6 +148,7 @@ export const RUNNER_POOL_REFUSAL_REASON: Record<keyof typeof RUNNER_POOL_REFUSAL
   REMOTE_NOT_CONFIGURED: "runner_pool_member_mismatch",
   REMOTE_NOT_AVAILABLE: "runner_pool_member_mismatch",
   UNAVAILABLE_SERVER: "runner_pools_unavailable",
+  RUN_TYPE_MISSING: "runner_pool_run_type_missing",
   RUN_TYPE_NOT_ALLOWED: "runner_pool_run_type_not_allowed",
   BARRIER_NOT_ALLOWED: "runner_pool_barrier_not_allowed",
   QUEUE_FULL: "runner_pool_queue_full",
@@ -169,6 +172,7 @@ export const RUNNER_POOL_REFUSAL_BY_KEY: Record<keyof typeof RUNNER_POOL_REFUSAL
   REMOTE_NOT_CONFIGURED: (...a) => RUNNER_POOL_REFUSAL.REMOTE_NOT_CONFIGURED(a[0]),
   REMOTE_NOT_AVAILABLE: (...a) => RUNNER_POOL_REFUSAL.REMOTE_NOT_AVAILABLE(a[0]),
   UNAVAILABLE_SERVER: () => RUNNER_POOL_REFUSAL.UNAVAILABLE_SERVER(),
+  RUN_TYPE_MISSING: () => RUNNER_POOL_REFUSAL.RUN_TYPE_MISSING(),
   RUN_TYPE_NOT_ALLOWED: (...a) => RUNNER_POOL_REFUSAL.RUN_TYPE_NOT_ALLOWED(a[0], a[1] as keyof typeof RUN_TYPE_PLURAL),
   BARRIER_NOT_ALLOWED: (...a) =>
     RUNNER_POOL_REFUSAL.BARRIER_NOT_ALLOWED(a[0], a[1] as keyof typeof BARRIER_LABEL, a.slice(2) as (keyof typeof BARRIER_LABEL)[]),

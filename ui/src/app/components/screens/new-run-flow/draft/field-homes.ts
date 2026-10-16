@@ -91,7 +91,7 @@ export const HOME_OF_REASON: Record<KnownLaunchReason, FieldHome> = {
   run_shape_conflict: "shape",
   runner_pool_invalid: "run", runner_pool_required: "run", runner_pool_not_found: "run", runner_pool_unavailable: "run",
   runner_pool_default_unavailable: "run", runner_pool_stale: "run", runner_pool_no_eligible_member: "run",
-  runner_pool_member_mismatch: "run", runner_pools_unavailable: "run", runner_pool_run_type_not_allowed: "run",
+  runner_pool_member_mismatch: "run", runner_pools_unavailable: "run", runner_pool_run_type_not_allowed: "run", runner_pool_run_type_missing: "run",
   runner_pool_barrier_not_allowed: "run", runner_pool_queue_full: "run", runner_pool_full: "run",
   template_document_invalid: "document", template_version_unsupported: "document", template_field_unknown: "document",
   template_field_invalid: "document", template_field_excluded: "document", template_secret_refused: "document",

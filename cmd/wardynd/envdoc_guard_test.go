@@ -251,10 +251,23 @@ var wardynVarLit = regexp.MustCompile(`WARDYN_[A-Z0-9_]+`)
 // unscoped over these trees it also matches a var name split across a
 // wrapped comment line and a dynamic-prefix concatenation literal
 // ("WARDYN_ANTHROPIC_" + suffix), neither of which is a var to document.
+//
+// A third form, WARDYN_X= on a non-comment line, is an assignment emitted
+// inside a format string (cmd/wardyn-runnerd/setup_host.go writes
+// WARDYN_RUNNER_STATE_DIR into the unit's env file that way). The runner's
+// deploy templates (deploy/runner/*.service, *.plist, *.env.example) are
+// scanned for every WARDYN_ name they carry, since they exist to set them.
 func readVars(t *testing.T, root string) map[string]bool {
 	t.Helper()
-	lit := regexp.MustCompile(`"(WARDYN_[A-Z0-9_]+)"|\$\{(WARDYN_[A-Z0-9_]+)[:}]`)
+	lit := regexp.MustCompile(`"(WARDYN_[A-Z0-9_]+)"|\$\{(WARDYN_[A-Z0-9_]+)[:}]|(WARDYN_[A-Z0-9_]+)=`)
 	seen := map[string]bool{}
+	add := func(name string) {
+		// A trailing "_" is a prefix (refuseRetiredModelEnv's "WARDYN_BEDROCK_")
+		// or a template placeholder (WARDYN_ORG_URL__), not a variable to document.
+		if !strings.HasSuffix(name, "_") {
+			seen[name] = true
+		}
+	}
 	for _, sub := range envDocRoots {
 		err := filepath.WalkDir(filepath.Join(root, sub), func(path string, d os.DirEntry, err error) error {
 			if err != nil || d.IsDir() {
@@ -267,17 +280,33 @@ func readVars(t *testing.T, root string) map[string]bool {
 			if err != nil {
 				return err
 			}
-			for _, m := range lit.FindAllStringSubmatch(string(b), -1) {
-				// A trailing "_" is a prefix (refuseRetiredModelEnv's
-				// "WARDYN_BEDROCK_"), not a variable to document.
-				if name := m[1] + m[2]; !strings.HasSuffix(name, "_") {
-					seen[name] = true
+			for _, line := range strings.Split(string(b), "\n") {
+				if strings.HasPrefix(strings.TrimSpace(line), "//") {
+					continue
+				}
+				for _, m := range lit.FindAllStringSubmatch(line, -1) {
+					add(m[1] + m[2] + m[3])
 				}
 			}
 			return nil
 		})
 		if err != nil {
 			t.Fatalf("walk %s: %v", sub, err)
+		}
+	}
+	for _, glob := range []string{"*.service", "*.plist", "*.env.example"} {
+		files, err := filepath.Glob(filepath.Join(root, "deploy", "runner", glob))
+		if err != nil || len(files) == 0 {
+			t.Fatalf("deploy/runner/%s matched no file (err %v) — the runner's templates moved", glob, err)
+		}
+		for _, f := range files {
+			b, err := os.ReadFile(f)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, name := range wardynVarLit.FindAllString(string(b), -1) {
+				add(name)
+			}
 		}
 	}
 	return seen

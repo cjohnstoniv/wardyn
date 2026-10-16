@@ -34,6 +34,9 @@ const (
 	// barrier the pool does not allow. A pool at its concurrent-run cap is not a
 	// refusal: see Wait.
 	ReasonRunTypeNotAllowed Reason = "runner_pool_run_type_not_allowed"
+	// ReasonRunTypeMissing: the request carries no run type (an older client's shape), so a pool with
+	// limits cannot tell which of its run types applies. An unknown value is ReasonRunTypeNotAllowed.
+	ReasonRunTypeMissing    Reason = "runner_pool_run_type_missing"
 	ReasonBarrierNotAllowed Reason = "runner_pool_barrier_not_allowed"
 	// The pool queue's two refusals (a wait is never one: see Wait). QueueFull answers a create when the
 	// person already has the most runs waiting for the pool; Full answers a revive into a pool at its cap
@@ -53,6 +56,7 @@ var reasonStatus = map[Reason]int{
 	ReasonMemberMismatch:     http.StatusUnprocessableEntity,
 	ReasonPoolsUnavailable:   http.StatusNotImplemented,
 	ReasonRunTypeNotAllowed:  http.StatusUnprocessableEntity,
+	ReasonRunTypeMissing:     http.StatusUnprocessableEntity,
 	ReasonBarrierNotAllowed:  http.StatusUnprocessableEntity,
 	ReasonQueueFull:          http.StatusUnprocessableEntity,
 	ReasonFull:               http.StatusUnprocessableEntity,
@@ -155,6 +159,11 @@ func MemberMismatchMsg(runner, name string) string {
 // KindMismatchMsg: the pool has no runner of the kind the request's placement asks for.
 func KindMismatchMsg(name string) string {
 	return fmt.Sprintf("%s has no runner of the kind this run asks for. Choose another pool.", name)
+}
+
+// RunTypeMissingMsg: the request names no run type, so a pool with limits has none to check.
+func RunTypeMissingMsg() string {
+	return "this request has no run type; older clients omit it — pass --experience background|interactive or upgrade the client"
 }
 
 func RunTypeNotAllowedMsg(name string, t types.RunnerPoolRunType) string {

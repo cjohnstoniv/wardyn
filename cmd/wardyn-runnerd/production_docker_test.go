@@ -181,6 +181,7 @@ func unsized(context.Context) placement.Capacity { return placement.Capacity{} }
 // image exist.
 type fakeEngine struct {
 	os, name   string
+	arch       string // the engine's reported Architecture; "" omits it
 	iface      string // the default bridge's interface; "" is one no host has
 	network    bool
 	createCode int
@@ -198,7 +199,7 @@ func (f *fakeEngine) start(t *testing.T) {
 		case path == "/_ping":
 			w.Header().Set("Api-Version", "1.44")
 		case path == "/info":
-			_ = json.NewEncoder(w).Encode(map[string]any{"OperatingSystem": f.os, "Name": f.name})
+			_ = json.NewEncoder(w).Encode(map[string]any{"OperatingSystem": f.os, "Name": f.name, "Architecture": f.arch})
 		case path == "/networks/bridge":
 			_ = json.NewEncoder(w).Encode(map[string]any{"Name": "bridge", "Id": "b", "Driver": "bridge",
 				"IPAM":    map[string]any{"Config": []map[string]string{{"Subnet": "172.17.0.0/16", "Gateway": "172.17.0.1"}}},
@@ -237,6 +238,12 @@ func (f *fakeEngine) start(t *testing.T) {
 // info (RD 1.19.3): its bridge lives in the VM, not on this host.
 func rancherLima() *fakeEngine {
 	return &fakeEngine{os: "Alpine Linux v3.21", name: "lima-rancher-desktop", network: true, image: true}
+}
+
+// rancherLimaV324Arm64 is the same VM on an Apple-silicon Mac with the newer
+// Alpine base: a different OperatingSystem string, still not Docker Desktop.
+func rancherLimaV324Arm64() *fakeEngine {
+	return &fakeEngine{os: "Alpine Linux v3.24", name: "lima-rancher-desktop", arch: "aarch64", network: true, image: true}
 }
 
 // serveWith runs productionRunnerHooks against engine.
@@ -302,6 +309,7 @@ func TestInspectEngine(t *testing.T) {
 		{"native", &fakeEngine{os: "Ubuntu 24.04 LTS", name: "laptop", iface: "lo"}, true, ""},
 		{"Docker Desktop beside a host bridge", &fakeEngine{os: "Docker Desktop", name: "docker-desktop", iface: "lo"}, false, "Docker Desktop"},
 		{"VM-backed", rancherLima(), false, "its bridge interface is not on this host"},
+		{"VM-backed, Alpine v3.24 on arm64", rancherLimaV324Arm64(), false, "its bridge interface is not on this host"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			tc.engine.start(t)

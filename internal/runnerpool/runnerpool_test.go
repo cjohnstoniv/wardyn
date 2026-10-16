@@ -44,6 +44,7 @@ func TestRefusalSentencesMatchGolden(t *testing.T) {
 		"REMOTE_NOT_CONFIGURED":        func(a []string) string { return RemoteNotConfiguredMsg(a[0]) },
 		"REMOTE_NOT_AVAILABLE":         func(a []string) string { return RemoteNotAvailableMsg(a[0]) },
 		"UNAVAILABLE_SERVER":           func([]string) string { return UnavailableServerMsg() },
+		"RUN_TYPE_MISSING":             func([]string) string { return RunTypeMissingMsg() },
 		"RUN_TYPE_NOT_ALLOWED":         func(a []string) string { return RunTypeNotAllowedMsg(a[0], types.RunnerPoolRunType(a[1])) },
 		"BARRIER_NOT_ALLOWED": func(a []string) string {
 			var allowed []types.ConfinementClass
@@ -228,6 +229,7 @@ func TestEveryReasonHasItsOwnSentence(t *testing.T) {
 		ReasonNoEligibleMember:   {{Reason: ReasonNoEligibleMember, Name: "P"}, {Reason: ReasonNoEligibleMember, Name: "P", Scope: types.RunnerPoolUser}},
 		ReasonMemberMismatch:     {{Reason: ReasonMemberMismatch, Name: "P", Scope: types.RunnerPoolUser}, {Reason: ReasonMemberMismatch, Name: "P", Runner: "desk-1"}},
 		ReasonPoolsUnavailable:   {{Reason: ReasonPoolsUnavailable}},
+		ReasonRunTypeMissing:     {{Reason: ReasonRunTypeMissing, Name: "P"}},
 		ReasonRunTypeNotAllowed:  {{Reason: ReasonRunTypeNotAllowed, Name: "P", RunType: types.RunnerPoolRunBackground}},
 		ReasonBarrierNotAllowed:  {{Reason: ReasonBarrierNotAllowed, Name: "P", Barrier: types.CC1, Allowed: []types.ConfinementClass{types.CC3}}},
 		ReasonQueueFull:          {{Reason: ReasonQueueFull, Name: "P", Count: 100}},
