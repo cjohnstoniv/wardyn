@@ -177,7 +177,7 @@ jobs:
         # Evidence, not a gate: a storage-side error must not fail a REQUIRED job
         # (#372). The step below says so loudly.
         continue-on-error: true
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: ci-full-tree-${{ steps.tree.outputs.tree }}
           path: tested-tree.txt
@@ -339,7 +339,7 @@ jobs:
       # rather than leaving `build` to fail later on a missing directory.
       - name: Upload the suite's reports and coverage profile
         if: always() && matrix.suite != 'lint' && needs.changes.outputs.backend != 'false'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: go-test-reports-${{ matrix.suite }}
           path: test/reports/go/${{ matrix.suite }}/**
@@ -398,7 +398,7 @@ jobs:
         run: for a in amd64 arm64; do GOOS=darwin GOARCH=$a CGO_ENABLED=0 go build -tags docker -o /dev/null ./cmd/wardyn-runnerd || exit 1; done
       - name: Download the three suites' profiles
         if: needs.changes.outputs.backend != 'false'
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: go-test-reports-*
           path: test/reports/go
@@ -422,7 +422,7 @@ jobs:
         # loudly, because a run that is green with no reports attached is the one
         # case where you need them.
         continue-on-error: true
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: go-test-reports-union
           path: test/reports/go/union/**
@@ -595,7 +595,7 @@ jobs:
         # loudly, because a run that is green with no reports attached is the one
         # case where you need them.
         continue-on-error: true
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: ui-test-reports
           path: test/reports/ui/**
@@ -724,7 +724,7 @@ jobs:
         # loudly, because a run that is green with no reports attached is the one
         # case where you need them.
         continue-on-error: true
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: playwright-report-${{ matrix.shard }}
           path: |
@@ -737,7 +737,7 @@ jobs:
       - name: Upload the flaky-test list
         if: always()
         continue-on-error: true
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: e2e-flaky-${{ matrix.shard }}
           path: test/reports/e2e/flaky.tsv
@@ -893,7 +893,7 @@ jobs:
           load: true
           cache-from: type=gha,scope=wardyn-proxy
           cache-to: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'type=gha,mode=max,scope=wardyn-proxy' || '' }}
-      - uses: helm/kind-action@06c1ae10762d3b9c1644e7fe69596ae519e015a2 # v1.15.0
+      - uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
         if: needs.changes.outputs.backend != 'false'
         with:
           cluster_name: wardyn-test
@@ -1160,7 +1160,7 @@ jobs:
       # own doc and deploy/kind/Dockerfile.conformance-agent.
       - name: Build the conformance agent image (busybox:1.36 + wardyn-rec)
         run: make build-conformance-agent-image CONFORMANCE_AGENT_IMAGE=wardyn/conformance-agent:kind-test
-      - uses: helm/kind-action@06c1ae10762d3b9c1644e7fe69596ae519e015a2 # v1.15.0
+      - uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
         with:
           cluster_name: wardyn-conformance-k8s
           config: deploy/kind/conformance-kind-config.yaml
@@ -1200,7 +1200,7 @@ jobs:
         # No continue-on-error: a real conformance failure must block the build.
       - name: Upload conformance-k8s test reports
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: conformance-k8s-test-reports
           path: test/reports/go/conformance-k8s/**
@@ -1409,7 +1409,7 @@ jobs:
         # No continue-on-error: a real conformance failure must block the build.
       - name: Upload conformance-docker test reports
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: conformance-docker-test-reports
           path: test/reports/go/conformance-docker/**
@@ -1484,7 +1484,7 @@ jobs:
         # cycle must block the build.
       - name: Upload envbuild test reports
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: envbuild-test-reports
           path: test/reports/go/envbuild/**
@@ -1620,7 +1620,7 @@ jobs:
         # loudly, because a run that is green with no reports attached is the one
         # case where you need them.
         continue-on-error: true
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: pg-test-reports-${{ matrix.shard }}
           path: test/reports/go/${{ matrix.suite }}/**
@@ -2118,7 +2118,7 @@ jobs:
       # One list per ui-e2e shard, each in its own directory (flaky/e2e-flaky-<n>/).
       - name: Download the flaky-test lists
         continue-on-error: true
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: e2e-flaky-*
           path: flaky
