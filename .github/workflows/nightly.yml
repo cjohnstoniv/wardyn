@@ -24,12 +24,6 @@ jobs:
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
     steps:
-      - name: Log in to Docker Hub (skipped when the secret is absent, e.g. a fork)
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
-        if: env.DOCKERHUB_USERNAME != ''
-        with:
-          username: ${{ env.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
       - name: Pull Docker Hub images through mirror.gcr.io (Docker Hub 429s)
         run: |
           command -v dockerd >/dev/null || exit 0
@@ -37,7 +31,7 @@ jobs:
           cur='{}'; [ -s "$f" ] && cur="$(sudo cat "$f")"
           printf '%s' "$cur" | jq '. + {"registry-mirrors": ["https://mirror.gcr.io"]}' | sudo tee "$f" >/dev/null
           sudo kill -HUP "$(pidof dockerd)"; sleep 2
-          docker info --format 'mirrors: {{.RegistryConfig.Mirrors}}'
+          docker info --format '{{.RegistryConfig.Mirrors}}' | grep -q mirror.gcr.io
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
@@ -81,12 +75,6 @@ jobs:
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
     steps:
-      - name: Log in to Docker Hub (skipped when the secret is absent, e.g. a fork)
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
-        if: env.DOCKERHUB_USERNAME != ''
-        with:
-          username: ${{ env.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
       - name: Pull Docker Hub images through mirror.gcr.io (Docker Hub 429s)
         run: |
           command -v dockerd >/dev/null || exit 0
@@ -94,7 +82,7 @@ jobs:
           cur='{}'; [ -s "$f" ] && cur="$(sudo cat "$f")"
           printf '%s' "$cur" | jq '. + {"registry-mirrors": ["https://mirror.gcr.io"]}' | sudo tee "$f" >/dev/null
           sudo kill -HUP "$(pidof dockerd)"; sleep 2
-          docker info --format 'mirrors: {{.RegistryConfig.Mirrors}}'
+          docker info --format '{{.RegistryConfig.Mirrors}}' | grep -q mirror.gcr.io
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
@@ -145,12 +133,6 @@ jobs:
       RUNSC_SHA512: ea985c4a505a37c50726b35fa5d48fdb8058dce36833d7710d49be035e08623b425869f91deb9133c1c5b35a33a77aed5ddcbc6926801a2dc49ddb0805aed7dc
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
     steps:
-      - name: Log in to Docker Hub (skipped when the secret is absent, e.g. a fork)
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
-        if: env.DOCKERHUB_USERNAME != ''
-        with:
-          username: ${{ env.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
       - name: Pull Docker Hub images through mirror.gcr.io (Docker Hub 429s)
         run: |
           command -v dockerd >/dev/null || exit 0
@@ -158,7 +140,7 @@ jobs:
           cur='{}'; [ -s "$f" ] && cur="$(sudo cat "$f")"
           printf '%s' "$cur" | jq '. + {"registry-mirrors": ["https://mirror.gcr.io"]}' | sudo tee "$f" >/dev/null
           sudo kill -HUP "$(pidof dockerd)"; sleep 2
-          docker info --format 'mirrors: {{.RegistryConfig.Mirrors}}'
+          docker info --format '{{.RegistryConfig.Mirrors}}' | grep -q mirror.gcr.io
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
@@ -234,12 +216,6 @@ jobs:
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
     steps:
-      - name: Log in to Docker Hub (skipped when the secret is absent, e.g. a fork)
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
-        if: env.DOCKERHUB_USERNAME != ''
-        with:
-          username: ${{ env.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
       - name: Pull Docker Hub images through mirror.gcr.io (Docker Hub 429s)
         run: |
           command -v dockerd >/dev/null || exit 0
@@ -247,7 +223,7 @@ jobs:
           cur='{}'; [ -s "$f" ] && cur="$(sudo cat "$f")"
           printf '%s' "$cur" | jq '. + {"registry-mirrors": ["https://mirror.gcr.io"]}' | sudo tee "$f" >/dev/null
           sudo kill -HUP "$(pidof dockerd)"; sleep 2
-          docker info --format 'mirrors: {{.RegistryConfig.Mirrors}}'
+          docker info --format '{{.RegistryConfig.Mirrors}}' | grep -q mirror.gcr.io
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
@@ -286,12 +262,6 @@ jobs:
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
     steps:
-      - name: Log in to Docker Hub (skipped when the secret is absent, e.g. a fork)
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
-        if: env.DOCKERHUB_USERNAME != ''
-        with:
-          username: ${{ env.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
       - name: Pull Docker Hub images through mirror.gcr.io (Docker Hub 429s)
         run: |
           command -v dockerd >/dev/null || exit 0
@@ -299,7 +269,7 @@ jobs:
           cur='{}'; [ -s "$f" ] && cur="$(sudo cat "$f")"
           printf '%s' "$cur" | jq '. + {"registry-mirrors": ["https://mirror.gcr.io"]}' | sudo tee "$f" >/dev/null
           sudo kill -HUP "$(pidof dockerd)"; sleep 2
-          docker info --format 'mirrors: {{.RegistryConfig.Mirrors}}'
+          docker info --format '{{.RegistryConfig.Mirrors}}' | grep -q mirror.gcr.io
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Docker available
         run: docker --version
@@ -321,12 +291,6 @@ jobs:
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
     steps:
-      - name: Log in to Docker Hub (skipped when the secret is absent, e.g. a fork)
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
-        if: env.DOCKERHUB_USERNAME != ''
-        with:
-          username: ${{ env.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
       - name: Pull Docker Hub images through mirror.gcr.io (Docker Hub 429s)
         run: |
           command -v dockerd >/dev/null || exit 0
@@ -334,7 +298,7 @@ jobs:
           cur='{}'; [ -s "$f" ] && cur="$(sudo cat "$f")"
           printf '%s' "$cur" | jq '. + {"registry-mirrors": ["https://mirror.gcr.io"]}' | sudo tee "$f" >/dev/null
           sudo kill -HUP "$(pidof dockerd)"; sleep 2
-          docker info --format 'mirrors: {{.RegistryConfig.Mirrors}}'
+          docker info --format '{{.RegistryConfig.Mirrors}}' | grep -q mirror.gcr.io
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Docker available
         run: docker --version
@@ -384,12 +348,6 @@ jobs:
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
     steps:
-      - name: Log in to Docker Hub (skipped when the secret is absent, e.g. a fork)
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
-        if: env.DOCKERHUB_USERNAME != ''
-        with:
-          username: ${{ env.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
       - name: Pull Docker Hub images through mirror.gcr.io (Docker Hub 429s)
         run: |
           command -v dockerd >/dev/null || exit 0
@@ -397,7 +355,7 @@ jobs:
           cur='{}'; [ -s "$f" ] && cur="$(sudo cat "$f")"
           printf '%s' "$cur" | jq '. + {"registry-mirrors": ["https://mirror.gcr.io"]}' | sudo tee "$f" >/dev/null
           sudo kill -HUP "$(pidof dockerd)"; sleep 2
-          docker info --format 'mirrors: {{.RegistryConfig.Mirrors}}'
+          docker info --format '{{.RegistryConfig.Mirrors}}' | grep -q mirror.gcr.io
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
@@ -452,12 +410,6 @@ jobs:
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
     steps:
-      - name: Log in to Docker Hub (skipped when the secret is absent, e.g. a fork)
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
-        if: env.DOCKERHUB_USERNAME != ''
-        with:
-          username: ${{ env.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
       - name: Pull Docker Hub images through mirror.gcr.io (Docker Hub 429s)
         run: |
           command -v dockerd >/dev/null || exit 0
@@ -465,7 +417,7 @@ jobs:
           cur='{}'; [ -s "$f" ] && cur="$(sudo cat "$f")"
           printf '%s' "$cur" | jq '. + {"registry-mirrors": ["https://mirror.gcr.io"]}' | sudo tee "$f" >/dev/null
           sudo kill -HUP "$(pidof dockerd)"; sleep 2
-          docker info --format 'mirrors: {{.RegistryConfig.Mirrors}}'
+          docker info --format '{{.RegistryConfig.Mirrors}}' | grep -q mirror.gcr.io
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
@@ -548,12 +500,6 @@ jobs:
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
     steps:
-      - name: Log in to Docker Hub (skipped when the secret is absent, e.g. a fork)
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
-        if: env.DOCKERHUB_USERNAME != ''
-        with:
-          username: ${{ env.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
       - name: Pull Docker Hub images through mirror.gcr.io (Docker Hub 429s)
         run: |
           command -v dockerd >/dev/null || exit 0
@@ -561,7 +507,7 @@ jobs:
           cur='{}'; [ -s "$f" ] && cur="$(sudo cat "$f")"
           printf '%s' "$cur" | jq '. + {"registry-mirrors": ["https://mirror.gcr.io"]}' | sudo tee "$f" >/dev/null
           sudo kill -HUP "$(pidof dockerd)"; sleep 2
-          docker info --format 'mirrors: {{.RegistryConfig.Mirrors}}'
+          docker info --format '{{.RegistryConfig.Mirrors}}' | grep -q mirror.gcr.io
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
@@ -617,12 +563,6 @@ jobs:
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
     steps:
-      - name: Log in to Docker Hub (skipped when the secret is absent, e.g. a fork)
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
-        if: env.DOCKERHUB_USERNAME != ''
-        with:
-          username: ${{ env.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
       - name: Pull Docker Hub images through mirror.gcr.io (Docker Hub 429s)
         run: |
           command -v dockerd >/dev/null || exit 0
@@ -630,7 +570,7 @@ jobs:
           cur='{}'; [ -s "$f" ] && cur="$(sudo cat "$f")"
           printf '%s' "$cur" | jq '. + {"registry-mirrors": ["https://mirror.gcr.io"]}' | sudo tee "$f" >/dev/null
           sudo kill -HUP "$(pidof dockerd)"; sleep 2
-          docker info --format 'mirrors: {{.RegistryConfig.Mirrors}}'
+          docker info --format '{{.RegistryConfig.Mirrors}}' | grep -q mirror.gcr.io
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Docker available
         run: docker --version
@@ -662,12 +602,6 @@ jobs:
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
     steps:
-      - name: Log in to Docker Hub (skipped when the secret is absent, e.g. a fork)
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
-        if: env.DOCKERHUB_USERNAME != ''
-        with:
-          username: ${{ env.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
       - name: Pull Docker Hub images through mirror.gcr.io (Docker Hub 429s)
         run: |
           command -v dockerd >/dev/null || exit 0
@@ -675,7 +609,7 @@ jobs:
           cur='{}'; [ -s "$f" ] && cur="$(sudo cat "$f")"
           printf '%s' "$cur" | jq '. + {"registry-mirrors": ["https://mirror.gcr.io"]}' | sudo tee "$f" >/dev/null
           sudo kill -HUP "$(pidof dockerd)"; sleep 2
-          docker info --format 'mirrors: {{.RegistryConfig.Mirrors}}'
+          docker info --format '{{.RegistryConfig.Mirrors}}' | grep -q mirror.gcr.io
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Docker available
         run: docker --version
@@ -721,12 +655,6 @@ jobs:
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
     steps:
-      - name: Log in to Docker Hub (skipped when the secret is absent, e.g. a fork)
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
-        if: env.DOCKERHUB_USERNAME != ''
-        with:
-          username: ${{ env.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
       - name: Pull Docker Hub images through mirror.gcr.io (Docker Hub 429s)
         run: |
           command -v dockerd >/dev/null || exit 0
@@ -734,7 +662,7 @@ jobs:
           cur='{}'; [ -s "$f" ] && cur="$(sudo cat "$f")"
           printf '%s' "$cur" | jq '. + {"registry-mirrors": ["https://mirror.gcr.io"]}' | sudo tee "$f" >/dev/null
           sudo kill -HUP "$(pidof dockerd)"; sleep 2
-          docker info --format 'mirrors: {{.RegistryConfig.Mirrors}}'
+          docker info --format '{{.RegistryConfig.Mirrors}}' | grep -q mirror.gcr.io
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
@@ -845,7 +773,7 @@ jobs:
           cur='{}'; [ -s "$f" ] && cur="$(sudo cat "$f")"
           printf '%s' "$cur" | jq '. + {"registry-mirrors": ["https://mirror.gcr.io"]}' | sudo tee "$f" >/dev/null
           sudo kill -HUP "$(pidof dockerd)"; sleep 2
-          docker info --format 'mirrors: {{.RegistryConfig.Mirrors}}'
+          docker info --format '{{.RegistryConfig.Mirrors}}' | grep -q mirror.gcr.io
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
@@ -859,12 +787,6 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Log in to Docker Hub (skipped when the secret is absent, e.g. a fork)
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
-        if: env.DOCKERHUB_USERNAME != ''
-        with:
-          username: ${{ env.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
       - name: Build both platforms (pushed to staging on a dispatch, discarded otherwise)
         id: build
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
@@ -933,7 +855,7 @@ jobs:
           cur='{}'; [ -s "$f" ] && cur="$(sudo cat "$f")"
           printf '%s' "$cur" | jq '. + {"registry-mirrors": ["https://mirror.gcr.io"]}' | sudo tee "$f" >/dev/null
           sudo kill -HUP "$(pidof dockerd)"; sleep 2
-          docker info --format 'mirrors: {{.RegistryConfig.Mirrors}}'
+          docker info --format '{{.RegistryConfig.Mirrors}}' | grep -q mirror.gcr.io
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
@@ -946,12 +868,6 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Log in to Docker Hub (skipped when the secret is absent, e.g. a fork)
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
-        if: env.DOCKERHUB_USERNAME != ''
-        with:
-          username: ${{ env.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
       - name: Resolve the staged agent-base digest
         id: base
         run: |
@@ -1036,12 +952,6 @@ jobs:
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
     steps:
-      - name: Log in to Docker Hub (skipped when the secret is absent, e.g. a fork)
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
-        if: env.DOCKERHUB_USERNAME != ''
-        with:
-          username: ${{ env.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
       - name: Pull Docker Hub images through mirror.gcr.io (Docker Hub 429s)
         run: |
           command -v dockerd >/dev/null || exit 0
@@ -1049,7 +959,7 @@ jobs:
           cur='{}'; [ -s "$f" ] && cur="$(sudo cat "$f")"
           printf '%s' "$cur" | jq '. + {"registry-mirrors": ["https://mirror.gcr.io"]}' | sudo tee "$f" >/dev/null
           sudo kill -HUP "$(pidof dockerd)"; sleep 2
-          docker info --format 'mirrors: {{.RegistryConfig.Mirrors}}'
+          docker info --format '{{.RegistryConfig.Mirrors}}' | grep -q mirror.gcr.io
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
         with:
@@ -1205,12 +1115,6 @@ jobs:
       WARDYN_QUICKSTART_SSH_PORT: "2522"
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
     steps:
-      - name: Log in to Docker Hub (skipped when the secret is absent, e.g. a fork)
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
-        if: env.DOCKERHUB_USERNAME != ''
-        with:
-          username: ${{ env.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
       - name: Pull Docker Hub images through mirror.gcr.io (Docker Hub 429s)
         run: |
           command -v dockerd >/dev/null || exit 0
@@ -1218,7 +1122,7 @@ jobs:
           cur='{}'; [ -s "$f" ] && cur="$(sudo cat "$f")"
           printf '%s' "$cur" | jq '. + {"registry-mirrors": ["https://mirror.gcr.io"]}' | sudo tee "$f" >/dev/null
           sudo kill -HUP "$(pidof dockerd)"; sleep 2
-          docker info --format 'mirrors: {{.RegistryConfig.Mirrors}}'
+          docker info --format '{{.RegistryConfig.Mirrors}}' | grep -q mirror.gcr.io
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
         with:
@@ -1290,12 +1194,6 @@ jobs:
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
     steps:
-      - name: Log in to Docker Hub (skipped when the secret is absent, e.g. a fork)
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
-        if: env.DOCKERHUB_USERNAME != ''
-        with:
-          username: ${{ env.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
       - name: Pull Docker Hub images through mirror.gcr.io (Docker Hub 429s)
         run: |
           command -v dockerd >/dev/null || exit 0
@@ -1303,7 +1201,7 @@ jobs:
           cur='{}'; [ -s "$f" ] && cur="$(sudo cat "$f")"
           printf '%s' "$cur" | jq '. + {"registry-mirrors": ["https://mirror.gcr.io"]}' | sudo tee "$f" >/dev/null
           sudo kill -HUP "$(pidof dockerd)"; sleep 2
-          docker info --format 'mirrors: {{.RegistryConfig.Mirrors}}'
+          docker info --format '{{.RegistryConfig.Mirrors}}' | grep -q mirror.gcr.io
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
         with:
@@ -1368,12 +1266,6 @@ jobs:
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
     steps:
-      - name: Log in to Docker Hub (skipped when the secret is absent, e.g. a fork)
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
-        if: env.DOCKERHUB_USERNAME != ''
-        with:
-          username: ${{ env.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
       - name: Pull Docker Hub images through mirror.gcr.io (Docker Hub 429s)
         run: |
           command -v dockerd >/dev/null || exit 0
@@ -1381,7 +1273,7 @@ jobs:
           cur='{}'; [ -s "$f" ] && cur="$(sudo cat "$f")"
           printf '%s' "$cur" | jq '. + {"registry-mirrors": ["https://mirror.gcr.io"]}' | sudo tee "$f" >/dev/null
           sudo kill -HUP "$(pidof dockerd)"; sleep 2
-          docker info --format 'mirrors: {{.RegistryConfig.Mirrors}}'
+          docker info --format '{{.RegistryConfig.Mirrors}}' | grep -q mirror.gcr.io
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
@@ -1447,12 +1339,6 @@ jobs:
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
     steps:
-      - name: Log in to Docker Hub (skipped when the secret is absent, e.g. a fork)
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
-        if: env.DOCKERHUB_USERNAME != ''
-        with:
-          username: ${{ env.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
       - name: Pull Docker Hub images through mirror.gcr.io (Docker Hub 429s)
         run: |
           command -v dockerd >/dev/null || exit 0
@@ -1460,7 +1346,7 @@ jobs:
           cur='{}'; [ -s "$f" ] && cur="$(sudo cat "$f")"
           printf '%s' "$cur" | jq '. + {"registry-mirrors": ["https://mirror.gcr.io"]}' | sudo tee "$f" >/dev/null
           sudo kill -HUP "$(pidof dockerd)"; sleep 2
-          docker info --format 'mirrors: {{.RegistryConfig.Mirrors}}'
+          docker info --format '{{.RegistryConfig.Mirrors}}' | grep -q mirror.gcr.io
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
@@ -1536,12 +1422,6 @@ jobs:
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
     steps:
-      - name: Log in to Docker Hub (skipped when the secret is absent, e.g. a fork)
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
-        if: env.DOCKERHUB_USERNAME != ''
-        with:
-          username: ${{ env.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
       - name: Pull Docker Hub images through mirror.gcr.io (Docker Hub 429s)
         run: |
           command -v dockerd >/dev/null || exit 0
@@ -1549,7 +1429,7 @@ jobs:
           cur='{}'; [ -s "$f" ] && cur="$(sudo cat "$f")"
           printf '%s' "$cur" | jq '. + {"registry-mirrors": ["https://mirror.gcr.io"]}' | sudo tee "$f" >/dev/null
           sudo kill -HUP "$(pidof dockerd)"; sleep 2
-          docker info --format 'mirrors: {{.RegistryConfig.Mirrors}}'
+          docker info --format '{{.RegistryConfig.Mirrors}}' | grep -q mirror.gcr.io
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
         with:
@@ -1604,12 +1484,6 @@ jobs:
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
     steps:
-      - name: Log in to Docker Hub (skipped when the secret is absent, e.g. a fork)
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
-        if: env.DOCKERHUB_USERNAME != ''
-        with:
-          username: ${{ env.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
       - name: Pull Docker Hub images through mirror.gcr.io (Docker Hub 429s)
         run: |
           command -v dockerd >/dev/null || exit 0
@@ -1617,7 +1491,7 @@ jobs:
           cur='{}'; [ -s "$f" ] && cur="$(sudo cat "$f")"
           printf '%s' "$cur" | jq '. + {"registry-mirrors": ["https://mirror.gcr.io"]}' | sudo tee "$f" >/dev/null
           sudo kill -HUP "$(pidof dockerd)"; sleep 2
-          docker info --format 'mirrors: {{.RegistryConfig.Mirrors}}'
+          docker info --format '{{.RegistryConfig.Mirrors}}' | grep -q mirror.gcr.io
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
@@ -1658,12 +1532,6 @@ jobs:
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
     steps:
-      - name: Log in to Docker Hub (skipped when the secret is absent, e.g. a fork)
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
-        if: env.DOCKERHUB_USERNAME != ''
-        with:
-          username: ${{ env.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
       - name: Pull Docker Hub images through mirror.gcr.io (Docker Hub 429s)
         run: |
           command -v dockerd >/dev/null || exit 0
@@ -1671,7 +1539,7 @@ jobs:
           cur='{}'; [ -s "$f" ] && cur="$(sudo cat "$f")"
           printf '%s' "$cur" | jq '. + {"registry-mirrors": ["https://mirror.gcr.io"]}' | sudo tee "$f" >/dev/null
           sudo kill -HUP "$(pidof dockerd)"; sleep 2
-          docker info --format 'mirrors: {{.RegistryConfig.Mirrors}}'
+          docker info --format '{{.RegistryConfig.Mirrors}}' | grep -q mirror.gcr.io
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
@@ -1699,7 +1567,7 @@ jobs:
           cur='{}'; [ -s "$f" ] && cur="$(sudo cat "$f")"
           printf '%s' "$cur" | jq '. + {"registry-mirrors": ["https://mirror.gcr.io"]}' | sudo tee "$f" >/dev/null
           sudo kill -HUP "$(pidof dockerd)"; sleep 2
-          docker info --format 'mirrors: {{.RegistryConfig.Mirrors}}'
+          docker info --format '{{.RegistryConfig.Mirrors}}' | grep -q mirror.gcr.io
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
@@ -1767,12 +1635,6 @@ jobs:
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
     steps:
-      - name: Log in to Docker Hub (skipped when the secret is absent, e.g. a fork)
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
-        if: env.DOCKERHUB_USERNAME != ''
-        with:
-          username: ${{ env.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
       - name: Pull Docker Hub images through mirror.gcr.io (Docker Hub 429s)
         run: |
           command -v dockerd >/dev/null || exit 0
@@ -1780,7 +1642,7 @@ jobs:
           cur='{}'; [ -s "$f" ] && cur="$(sudo cat "$f")"
           printf '%s' "$cur" | jq '. + {"registry-mirrors": ["https://mirror.gcr.io"]}' | sudo tee "$f" >/dev/null
           sudo kill -HUP "$(pidof dockerd)"; sleep 2
-          docker info --format 'mirrors: {{.RegistryConfig.Mirrors}}'
+          docker info --format '{{.RegistryConfig.Mirrors}}' | grep -q mirror.gcr.io
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
@@ -1810,12 +1672,6 @@ jobs:
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
     steps:
-      - name: Log in to Docker Hub (skipped when the secret is absent, e.g. a fork)
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
-        if: env.DOCKERHUB_USERNAME != ''
-        with:
-          username: ${{ env.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
       - name: Pull Docker Hub images through mirror.gcr.io (Docker Hub 429s)
         run: |
           command -v dockerd >/dev/null || exit 0
@@ -1823,7 +1679,7 @@ jobs:
           cur='{}'; [ -s "$f" ] && cur="$(sudo cat "$f")"
           printf '%s' "$cur" | jq '. + {"registry-mirrors": ["https://mirror.gcr.io"]}' | sudo tee "$f" >/dev/null
           sudo kill -HUP "$(pidof dockerd)"; sleep 2
-          docker info --format 'mirrors: {{.RegistryConfig.Mirrors}}'
+          docker info --format '{{.RegistryConfig.Mirrors}}' | grep -q mirror.gcr.io
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false # the probe runs a third-party CLI; keep the token out of .git/config
@@ -1872,7 +1728,7 @@ jobs:
           cur='{}'; [ -s "$f" ] && cur="$(sudo cat "$f")"
           printf '%s' "$cur" | jq '. + {"registry-mirrors": ["https://mirror.gcr.io"]}' | sudo tee "$f" >/dev/null
           sudo kill -HUP "$(pidof dockerd)"; sleep 2
-          docker info --format 'mirrors: {{.RegistryConfig.Mirrors}}'
+          docker info --format '{{.RegistryConfig.Mirrors}}' | grep -q mirror.gcr.io
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
