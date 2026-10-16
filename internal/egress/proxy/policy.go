@@ -627,7 +627,7 @@ func (p *Proxy) denyEgress(w http.ResponseWriter, host string, port int, log *eg
 	}
 	if shape != shapePlain {
 		// The SDK shows the message, never the headers, so the attribution rides in it.
-		msg := brokeredMessage(reasonEgressDenied, p.hostPortLabel(host, port), reason, faultHint(reasonEgressDenied, reason, nil), "")
+		msg := brokeredMessage(reasonEgressDenied, p.hostPortLabel(host, port), reason, faultHint(host, reasonEgressDenied, reason, nil), "")
 		if attribution != "" {
 			msg += ". " + attribution
 		}

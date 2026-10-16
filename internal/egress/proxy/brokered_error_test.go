@@ -131,7 +131,7 @@ func TestBrokeredErrorsParseAsTheProviderSDKError(t *testing.T) {
 			func(w http.ResponseWriter, shape errShape, host string) {
 				p.writeBrokeredFault(w, shape, host, brokeredFault{port: 443, ruleSource: "builtin:dial-failed"}, dialErr)
 			}},
-		{"credential_unavailable", reasonCredentialUnavailable, 502, 401, "api_error", "api_error", "credential could not be refreshed", "answered",
+		{"credential_unavailable", reasonCredentialUnavailable, 502, 401, "api_error", "api_error", "Wardyn could not refresh the", "model credential",
 			func(w http.ResponseWriter, shape errShape, host string) {
 				p.writeBrokeredFault(w, shape, host, brokeredFault{port: 443, ruleSource: ruleSourceLLM, reason: reasonCredentialUnavailable}, errors.New("injection status 424"))
 			}},
@@ -322,7 +322,8 @@ func TestAWSLaneRefreshFailureNamesThePortal(t *testing.T) {
 	p.serveMITMRequest(rec, httptest.NewRequest(http.MethodGet, "https://"+awsHost+"/federation/credentials", nil), awsHost, 443)
 	row := lastDecision(t, buf)
 	v := decodeSDK(t, shapeAWS, rec)
-	want := "wardyn: credential_unavailable: " + awsHost + ":443 (" + row.RuleSource + ")"
+	want := "wardyn: credential_unavailable: " + awsHost + ":443 (" + row.RuleSource + ") — " +
+		"Wardyn could not refresh the SSO session it injects for this host; signing in inside the sandbox does not change it"
 	if rec.Code != http.StatusUnauthorized || v.typ != "UnauthorizedException" || !strings.HasPrefix(v.message, want) {
 		t.Errorf("status %d type %q message %q, want 401 UnauthorizedException starting %q", rec.Code, v.typ, v.message, want)
 	}
@@ -379,26 +380,43 @@ type failingBody struct{}
 func (failingBody) Read([]byte) (int, error) { return 0, errors.New("client went away") }
 
 // A body the proxy could not take in to inspect (a failed read, or the scan
-// queue or retain budget expiring) is the provider's error on an LLM channel.
+// queue or retain budget expiring), and a body inspection blocked, are the
+// provider's error on an LLM channel, and the AWS error on Bedrock: the tunnel
+// under inspect_forward_egress (a generic channel), and a brokered route to a
+// Bedrock gateway, which answers its connection faults in the AWS shape too.
 func TestScanFaultIsAProviderError(t *testing.T) {
 	p := newProxy(Options{RunID: uuid.New(), Policy: CompilePolicy(types.RunPolicySpec{})})
 	for _, c := range []struct {
+		name    string
+		host    string
 		channel contentscan.Channel
 		shape   errShape
-	}{{contentscan.ChannelAnthropicMessages, shapeAnthropic}, {contentscan.ChannelOpenAIChat, shapeOpenAI}} {
-		rec := httptest.NewRecorder()
-		req := httptest.NewRequest(http.MethodPost, "/", io.NopCloser(failingBody{}))
-		_, _, release, blocked := p.scanBufferedBody(rec, req, c.channel, "read llm body", func(egress.Decision, string, *egress.ScanSummary) {})
-		release()
-		v := decodeSDK(t, c.shape, rec)
-		if !blocked || rec.Code != http.StatusBadRequest || !strings.Contains(v.message, "read llm body: client went away") {
-			t.Errorf("read failure: blocked %v status %d message %q", blocked, rec.Code, v.message)
-		}
-		rec = httptest.NewRecorder()
-		p.scanFault(rec, c.channel, "read llm body", context.DeadlineExceeded, http.StatusBadGateway)
-		if v := decodeSDK(t, c.shape, rec); rec.Code != http.StatusBadGateway || rec.Header().Get("X-Wardyn-Reason") != reasonNotInspected ||
-			!strings.Contains(v.message, "deadline exceeded") {
-			t.Errorf("queue expiry: status %d message %q", rec.Code, v.message)
-		}
+	}{
+		{"anthropic", anthropicHost, contentscan.ChannelAnthropicMessages, shapeAnthropic},
+		{"openai", openaiHost, contentscan.ChannelOpenAIChat, shapeOpenAI},
+		{"bedrock tunnel", bedrockHost, contentscan.ChannelGeneric, shapeAWS},
+		{"bedrock gateway route", bedrockHost, contentscan.ChannelAnthropicMessages, shapeAWS},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodPost, "/", io.NopCloser(failingBody{}))
+			_, _, release, blocked := p.scanBufferedBody(rec, req, c.host, c.channel, "read llm body", func(egress.Decision, string, *egress.ScanSummary) {})
+			release()
+			v := decodeSDK(t, c.shape, rec)
+			if !blocked || rec.Code != http.StatusBadRequest || !strings.Contains(v.message, "read llm body: client went away") {
+				t.Errorf("read failure: blocked %v status %d message %q", blocked, rec.Code, v.message)
+			}
+			rec = httptest.NewRecorder()
+			p.scanFault(rec, p.shapeFor(c.host, c.channel), "read llm body", context.DeadlineExceeded, http.StatusBadGateway)
+			if v := decodeSDK(t, c.shape, rec); rec.Code != http.StatusBadGateway || rec.Header().Get("X-Wardyn-Reason") != reasonNotInspected ||
+				!strings.Contains(v.message, "deadline exceeded") {
+				t.Errorf("queue expiry: status %d message %q", rec.Code, v.message)
+			}
+			rec = httptest.NewRecorder()
+			writeScanBlockedShaped(rec, p.shapeFor(c.host, c.channel), 1, []string{"secret"}, "")
+			if v := decodeSDK(t, c.shape, rec); rec.Code != http.StatusForbidden || !strings.Contains(v.message, reasonContentBlocked) {
+				t.Errorf("content block: status %d message %q", rec.Code, v.message)
+			}
+		})
 	}
 }

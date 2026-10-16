@@ -422,7 +422,7 @@ func (p *Proxy) inspectLLM(w http.ResponseWriter, r *http.Request, host string, 
 	}
 	switch classifyLLM(channel, r.Method, rest) {
 	case scanMessages:
-		return p.scanBufferedBody(w, r, channel, "read llm body",
+		return p.scanBufferedBody(w, r, host, channel, "read llm body",
 			func(d egress.Decision, ruleSource string, scan *egress.ScanSummary) {
 				p.emitLLMDecision(r, host, port, d, ruleSource, scan)
 			})
@@ -431,7 +431,7 @@ func (p *Proxy) inspectLLM(w http.ResponseWriter, r *http.Request, host string, 
 		// uninspected-channel skip, refused under fail-closed blocking.
 		if p.scanner.BlocksOnError() {
 			p.emitLLMDecision(r, host, port, egress.Deny, ruleSourceLLMBlocked, p.skipSummary("block", "uninspected_channel", channel))
-			writeScanBlockedShaped(w, shapeOfChannel(channel), 0, nil, "uninspected_channel")
+			writeScanBlockedShaped(w, p.shapeFor(host, channel), 0, nil, "uninspected_channel")
 			return nil, nil, noRelease, true
 		}
 		return r.Body, p.skipSummary("skip", "uninspected_channel", channel), noRelease, false
@@ -466,7 +466,7 @@ func hasScannableBody(r *http.Request) bool {
 // buffered body + a content-free summary. blocked=true means a 403/error was
 // already written.
 func (p *Proxy) inspectForwardBody(w http.ResponseWriter, r *http.Request, host string, port int) (io.Reader, *egress.ScanSummary, func(), bool) {
-	return p.scanBufferedBody(w, r, contentscan.ChannelGeneric, "read body",
+	return p.scanBufferedBody(w, r, host, contentscan.ChannelGeneric, "read body",
 		func(d egress.Decision, ruleSource string, scan *egress.ScanSummary) {
 			p.emitLLMDecision(r, host, port, d, ruleSource, scan)
 		})
@@ -482,7 +482,8 @@ func (p *Proxy) inspectForwardBody(w http.ResponseWriter, r *http.Request, host 
 //
 // The returned release MUST be deferred by the caller: gives the buffer back
 // to maxRetainedScanBytes. Always non-nil and safe to call more than once.
-func (p *Proxy) scanBufferedBody(w http.ResponseWriter, r *http.Request, channel contentscan.Channel, readErrMsg string, emit func(egress.Decision, string, *egress.ScanSummary)) (io.Reader, *egress.ScanSummary, func(), bool) {
+func (p *Proxy) scanBufferedBody(w http.ResponseWriter, r *http.Request, host string, channel contentscan.Channel, readErrMsg string, emit func(egress.Decision, string, *egress.ScanSummary)) (io.Reader, *egress.ScanSummary, func(), bool) {
+	shape := p.shapeFor(host, channel)
 	// Scan slot (maxConcurrentScans) bounds live heap against the sidecar's
 	// cgroup cap. Waited through the request ctx AND a wall-clock bound
 	// (scanQueueWait); fails CLOSED on either, since an uninspectable request
@@ -495,14 +496,14 @@ func (p *Proxy) scanBufferedBody(w http.ResponseWriter, r *http.Request, channel
 		defer func() { <-scanSlots }()
 	case <-ctx.Done():
 		emit(egress.Deny, ruleSourceLLM, nil)
-		p.scanFault(w, channel, readErrMsg, ctx.Err(), http.StatusBadGateway)
+		p.scanFault(w, shape, readErrMsg, ctx.Err(), http.StatusBadGateway)
 		return nil, nil, noRelease, true
 	}
 
 	buffered, rerr := io.ReadAll(io.LimitReader(r.Body, int64(maxLLMScanBody)+1))
 	if rerr != nil {
 		emit(egress.Deny, ruleSourceLLM, nil)
-		p.scanFault(w, channel, readErrMsg, rerr, http.StatusBadRequest)
+		p.scanFault(w, shape, readErrMsg, rerr, http.StatusBadRequest)
 		return nil, nil, noRelease, true
 	}
 	// Charge the buffer to the LIFETIME budget after the read/scan peak, still
@@ -511,7 +512,7 @@ func (p *Proxy) scanBufferedBody(w http.ResponseWriter, r *http.Request, channel
 		release, ok := retainScanBuffer(ctx, len(buffered))
 		if !ok {
 			emit(egress.Deny, ruleSourceLLM, nil)
-			p.scanFault(w, channel, readErrMsg, ctx.Err(), http.StatusBadGateway)
+			p.scanFault(w, shape, readErrMsg, ctx.Err(), http.StatusBadGateway)
 			return noRelease, false
 		}
 		return release, true
@@ -519,7 +520,7 @@ func (p *Proxy) scanBufferedBody(w http.ResponseWriter, r *http.Request, channel
 	if len(buffered) > maxLLMScanBody {
 		if p.scanner.BlocksOnError() {
 			emit(egress.Deny, ruleSourceLLMBlocked, p.skipSummary("block", "body_oversize", channel))
-			writeScanBlockedShaped(w, shapeOfChannel(channel), 0, nil, "body_oversize")
+			writeScanBlockedShaped(w, shape, 0, nil, "body_oversize")
 			return nil, nil, noRelease, true
 		}
 		release, ok := charge()
@@ -532,7 +533,7 @@ func (p *Proxy) scanBufferedBody(w http.ResponseWriter, r *http.Request, channel
 	res, _, serr := p.scanner.ScanRequest(channel, buffered)
 	if p.scanner.ShouldBlock(res) {
 		emit(egress.Deny, ruleSourceLLMBlocked, scanSummaryFrom(res, serr, p.scanner, "block", channel))
-		writeScanBlockedShaped(w, shapeOfChannel(channel), len(res.Findings), categoriesOf(res.Findings), res.SkipReason)
+		writeScanBlockedShaped(w, shape, len(res.Findings), categoriesOf(res.Findings), res.SkipReason)
 		return nil, nil, noRelease, true
 	}
 	var sum *egress.ScanSummary
@@ -571,10 +572,9 @@ func categoriesOf(findings []contentscan.Finding) []string {
 
 // scanFault answers a request scanBufferedBody could not take in, so did not
 // forward: the scan queue or the retain budget expired (502, a load condition
-// worth a retry), or the body could not be read (400). An LLM channel gets its
-// provider's error body; the plain lane keeps its text.
-func (p *Proxy) scanFault(w http.ResponseWriter, channel contentscan.Channel, readErrMsg string, err error, status int) {
-	shape := shapeOfChannel(channel)
+// worth a retry), or the body could not be read (400). shape is shapeFor(host,
+// channel): a provider or AWS error body, or the plain lane's text.
+func (p *Proxy) scanFault(w http.ResponseWriter, shape errShape, readErrMsg string, err error, status int) {
 	switch {
 	case shape != shapePlain:
 		writeProviderError(w, shape, status, reasonNotInspected, "wardyn: "+reasonNotInspected+": "+readErrMsg+": "+p.dialFailureCause(err), nil)
