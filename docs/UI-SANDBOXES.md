@@ -144,7 +144,7 @@
 | `egress_denied` | 403 `permission_error` | 403 `AccessDeniedException` |
 | `tls_untrusted` | 403 `permission_error` | 403 `AccessDeniedException` |
 | `upstream_unreachable` | 502 `api_error` | 500 `InternalServerException` |
-| `credential_unavailable` | 502 `api_error`; 404 with no credential | 401 `UnauthorizedException` |
+| `credential_unavailable` | 502 `api_error`; 404 with no credential | 401 `UnauthorizedException`; 404 `ResourceNotFoundException` with no credential |
 | `upstream_error` | 502 `api_error` | 500 `InternalServerException` |
 | `unsupported_path` | 400 `invalid_request_error` | 400 `ValidationException` |
 | `llm_content_blocked` | 403 `permission_error` | 403 `AccessDeniedException` |
