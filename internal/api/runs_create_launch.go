@@ -58,7 +58,7 @@ type createRunLaunch struct {
 	overridden bool
 	// pushSets are the run's push rules per SCM entry (pushRuleSetsFor).
 	pushSets []types.PushRuleSet
-	// harnessRules are the run's tool rules per included harness (harnessToolRulesFor).
+	// harnessRules are the run's tool rules per included harness (applyHarnessToolRules).
 	harnessRules []types.HarnessToolRules
 	// harnesses is the run's harness set as create authorised it, in tools[]
 	// order, each with the model provider it was granted (the run_harnesses rows).

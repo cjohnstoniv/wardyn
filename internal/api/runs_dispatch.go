@@ -123,7 +123,7 @@ type dispatchParams struct {
 	// carries them INSTEAD of the policy's run-wide push_rules.
 	PushRuleSets []types.PushRuleSet
 	// HarnessToolRules are the run's tool rules per included harness
-	// (harnessToolRulesFor). When set, the proxy carries them, and a credential
+	// (applyHarnessToolRules). When set, the proxy carries them, and a credential
 	// per harness, INSTEAD of the policy's run-wide tool_rules.
 	HarnessToolRules []types.HarnessToolRules
 	// Harnesses are the run's run_harnesses rows, nil without the harness set;

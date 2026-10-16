@@ -94,7 +94,7 @@ func TestLeaseRecoveryADatabaseErrorKeepsTheWriterFencedAndLogsOnce(t *testing.T
 	if n := len(leases.reacquireCalls()); n != 3 {
 		t.Fatalf("reacquire calls = %d, want one per tick and one from the fence check", n)
 	}
-	if got := logs.with("wardynd: could not take back a run's attach lease; the client's input is held until it can"); len(got) != 1 {
+	if got := logs.with("wardynd: could not take back a run's attach lease; the client's input is discarded until it can"); len(got) != 1 {
 		t.Fatalf("logged %d times, want once for the run of errors", len(got))
 	}
 

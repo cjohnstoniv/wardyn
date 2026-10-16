@@ -40,7 +40,7 @@
 //   - presets (/api/v1/presets):         ListPresets, GetPreset, PutPreset, DeletePreset, ApplyPresets
 //   - templates (/api/v1/templates):     ListTemplates, GetTemplate, SaveTemplate, DeleteTemplate, CopyTemplate,
 //     ImportTemplate — and, on /api/v1/admin/template-group-admins, ListTemplateGroupAdmins, GrantTemplateGroupAdmin,
-//     RevokeTemplateGroupAdmin. The server answers 501 templates_unavailable until the template store lands
+//     RevokeTemplateGroupAdmin. The server answers 501 templates_unavailable when its store holds no templates
 //   - governance (/api/v1/governance):   GetGovernance, PlanGovernance, ApplyGovernance, ApplyGovernanceResult
 //   - governance changes (/api/v1/governance/changes): ListGovernanceChanges, GetGovernanceChange,
 //     ApproveGovernanceChange, RejectGovernanceChange
