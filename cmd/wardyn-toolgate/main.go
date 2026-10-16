@@ -116,8 +116,8 @@ func deadlineDefault() time.Duration {
 // reason since it was written; this client and internal/sidecar's had not.
 func directClient() *http.Client {
 	var rt http.RoundTripper = &http.Transport{Proxy: nil}
-	// The credential dispatch gave THIS harness (secret env, its own process
-	// tree): the proxy names the harness of a call from it, never from the body.
+	// The credential dispatch gave THIS harness (an agent-owned file its launch
+	// read into this process tree's environment): the proxy names the harness of a call from it, never from the body.
 	// Absent, the call carries no harness and the proxy holds it for a human.
 	if cred := os.Getenv("WARDYN_TOOLGATE_CREDENTIAL"); cred != "" {
 		rt = bearerTransport{base: rt, token: cred}

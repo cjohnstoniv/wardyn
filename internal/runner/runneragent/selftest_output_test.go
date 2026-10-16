@@ -86,8 +86,8 @@ func (f *execPerDrain) Wait(_ context.Context, ref string) (int, error) {
 }
 
 // selftestArgvForTest is what the org's BYOI dispatch execs before the task
-// (internal/api/runs_dispatch_byoi.go).
-var selftestArgvForTest = []string{"/usr/local/bin/agent-run", "--selftest"}
+// (internal/api/runs_dispatch_byoi.go), read from the one list both sides use.
+var selftestArgvForTest = runner.SelftestArgv()
 
 // sealedOutput is the org's ExecOutput: it records the bytes and the EOF the
 // runner's output stream delivers.

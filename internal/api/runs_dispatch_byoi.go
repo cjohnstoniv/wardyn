@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -56,7 +57,7 @@ const byoiSelftestTimeout = 2 * time.Minute
 func (s *Server) byoiSelftest(ctx context.Context, run types.AgentRun, ref string, failClosed bool) bool {
 	ctx, cancel := context.WithTimeout(ctx, byoiSelftestTimeout)
 	defer cancel()
-	if _, xerr := s.cfg.Runner.Exec(ctx, ref, []string{"/usr/local/bin/agent-run", "--selftest"}); xerr != nil {
+	if _, xerr := s.cfg.Runner.Exec(ctx, ref, runner.SelftestArgv()); xerr != nil {
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.selftest",
 			run.ID.String(), "failure", mustJSON(map[string]any{
 				"error": xerr.Error(), "fail_closed": failClosed,

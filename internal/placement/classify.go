@@ -165,7 +165,7 @@ var Table = []Entry{
 	{Struct: StructProxyConfig, Field: "Attribution", Class: ClassExempt, Rule: RuleExempt},
 	{Struct: StructProxyConfig, Field: "PushRuleBase", Class: ClassExempt, Rule: RuleExempt, Variant: "the run's push rules after the ceiling, for an entry with no set; policy content, no credential"},
 	{Struct: StructProxyConfig, Field: "PushRuleSets", Class: ClassExempt, Rule: RuleExempt, Variant: "push content rules per SCM entry; policy content, no credential"},
-	{Struct: StructProxyConfig, Field: "HarnessCredentials", Class: ClassExempt, Rule: RuleExempt, Variant: "SHA-256 of each harness's approval credential; a digest, never the plaintext, which goes to that harness's own process as secret env"},
+	{Struct: StructProxyConfig, Field: "HarnessCredentials", Class: ClassExempt, Rule: RuleExempt, Variant: "SHA-256 of each harness's approval credential; a digest, never the plaintext, which goes to that harness as an agent-owned file its own launch reads into that one process"},
 	{Struct: StructProxyConfig, Field: "HarnessToolRules", Class: ClassExempt, Rule: RuleExempt, Variant: "tool rules per included harness; policy content, no credential"},
 	{Struct: StructProxyConfig, Field: "ViaOrgRoutes", Class: ClassExempt, Rule: RuleExempt, Variant: "grant id and destination host of each via_org grant; no credential, and the organisation re-checks both"},
 	{Struct: StructProxyConfig, Field: "MCPServers", Class: ClassExempt, Rule: RuleExempt, Variant: "key, URL and the grant id of each MCP server's header credential; no credential, which the broker resolves from the control plane per request"},

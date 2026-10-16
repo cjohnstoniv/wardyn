@@ -49,14 +49,14 @@ func (f runEndFlags) apply(body *sdk.CreateRunRequest) error {
 // endsInDays matches every run of digits and dots before a d; only a plain <n> or <n>.<m> is a number of days.
 var endsInDays = regexp.MustCompile(`[\d.]+d`)
 
-var endsInDaysNumber = regexp.MustCompile(`^\d+(?:\.\d+)?$`)
+var endsInDaysNumber = regexp.MustCompile(`^(?:\d+(?:\.\d+)?|\.\d+)$`)
 
 // parseEndsIn reads a Go duration in which d is 24 hours, as whole seconds.
 func parseEndsIn(s string) (int, error) {
 	var bad error
 	expanded := endsInDays.ReplaceAllStringFunc(s, func(m string) string {
 		if !endsInDaysNumber.MatchString(m[:len(m)-1]) {
-			return m // ".5d" and "1..5d" stay as written, so time.ParseDuration refuses them
+			return m // "1..5d" stays as written, so time.ParseDuration refuses it
 		}
 		days, err := strconv.ParseFloat(m[:len(m)-1], 64)
 		if err != nil {
