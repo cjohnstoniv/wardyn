@@ -1449,10 +1449,13 @@ lose access now, do not wait for it:
     - A person no sign-in has bound is known only by their emails, so for them every alias is cut and the one principal
       each alias names is swept as theirs. A cutoff under such an alias also ends a session or token whose email claim
       spells it.
-    - An alias that names more than one principal, or a directory that cannot be read, stops a suspension or purge
-      before it touches anything: the request answers 5xx and a `person.deprovision` row says why.
+    - For a person no sign-in has bound, an alias that names more than one principal, or aliases that together name
+      different principals, stops a suspension or purge before it touches anything. A bound person's aliases never
+      fail for that. A directory that cannot be read stops either kind of person the same way. The request answers
+      5xx and a `person.deprovision` row says why.
 - **Role changes that are not SCIM group removals** at the identity provider still lag until the person signs in
   again.
+- **No identity-provider logout.** Signing out at the identity provider does not end a Wardyn session: Wardyn has no front- or back-channel logout, and SCIM deprovisioning is a separate revocation, not the propagation of an IdP logout. A person's own sign-out ends their console sessions only (`session.revoke` with `sessions_only`, [AUDIT-ACTIONS](AUDIT-ACTIONS.md)).
 - **Long-lived connections.** A suspension kills every live run, which ends its attach and SSH sessions. Other
   console streams end at their next authentication check or reconnect.
 - **A database writer** can clear `deactivated_at`, as it could any other row. The authority epoch only rises, so
@@ -2118,6 +2121,8 @@ It is dropped there with an audited reason (`unloadable-upstream-url`, a
 > [!IMPORTANT]
 > **`http://` only — an `https://` upstream proxy URL is rejected server-side, always** (`validateSiteConfig`, same file).
 
+- The corporate proxy must allow `CONNECT` to every destination port the policy allows, port 80 included: a plain-HTTP request and a non-443 destination are also sent as `CONNECT host:80` or `CONNECT host:port`, which a stock Squid refuses.
+  - In Squid, add the ports to `acl SSL_ports port ...` (for example `acl SSL_ports port 80`), or allow `CONNECT` for those ports in a separate `acl`.
 - The hop from wardyn-proxy to your corporate proxy is a plaintext CONNECT + `Proxy-Authorization` header; an `https://` URL would need a TLS wrap the sidecar doesn't do, or would leak that Basic credential in cleartext.
 - Dispatch applies the same gate (`resolveUpstreamProxyURL`, [`internal/api/runs_bedrock.go`](../internal/api/runs_bedrock.go)), and a secret referenced via `upstream_proxy_secret_ref` carries the same restriction — store the plain `http://` proxy URL in the secret even when it embeds a credential.
 
@@ -2855,8 +2860,9 @@ The line is the substrate's own words, in the shape `<component>: <Reason>[: <me
 | unschedulable: `STARTING` with the reason `Unschedulable` | yes, and listed under `unschedulable` (at most 20, oldest first, with `unschedulable_total`) |
 | kept after an outage, before its end (its agent still runs; only its proxy was stopped) | yes, its agent only (no proxy); also counted as `kept` |
 | kept otherwise: after its end, a reboot, or an outage past its end (`lost_at` set, agent stopped) | no; counted as `kept` |
-| bound to a registered runner | no; appears only in `states`, `kept` and `paused` |
+| bound to a registered runner, or placed outside this deployment (a local placement, or an executor that is not one of its own) | no; appears only in `states`, `kept` and `paused` |
 | `PENDING` | no; appears only in `states` |
+| `QUEUED` (waiting for a slot in a capped runner pool) | no; it holds no slot and no reservation, and appears only in `states` |
 | terminal | no |
 
 - Kubernetes rows sum requests and report limits beside them; Docker rows report caps, and a proxy with no CPU cap adds nothing to the CPU sum (`proxy_cpu_uncapped` counts them).
@@ -3458,7 +3464,7 @@ Moved, with the sections that followed it here, to [secrets-and-keys.md](operati
 - A remote-hosted runner whose limits the upgraded server cannot measure takes no run until they are set: `wardyn runner remote list --no-limits`, then `wardyn runner remote propose <id>` and `wardyn runner set <id>` ([runner pools](operations/runner-pools.md#a-remote-hosted-runners-limits)). `make setup` does this for its own stack.
 - After an upgrade, setup status shows a "Runner limits" warning, for operators only, while any runner has none. `wardyn runner list --all --no-limits` and `wardyn runner remote list --no-limits` list the runners without limits.
 - If `wardyn runner remote propose` says the runner reports no CPU or memory, the message names the read that failed: grant the node read with `k8s.readNodes=true`, or create a ResourceQuota in the runs namespace that sets `requests.cpu`, `requests.memory` and `requests.ephemeral-storage`, then propose again.
-- First run `wardyn setup status --pre-upgrade`. It reads this shell's environment: load the Compose or desktop env file (`set -a; . FILE; set +a`), or give a chart's values as `--role-map` and `--default-role`. Exit 0 is clean, 1 leftovers.
+- First run `wardyn setup status --pre-upgrade`. It reads this shell's environment: load the Compose or desktop env file (`set -a; . FILE; set +a`), or give a chart's values as `--role-map` and `--default-role`. Exit 0 is clean, 1 leftovers. It checks the first two breaks only, a `member` role and a `MEMBER` variable spelling; check the issuer URL yourself.
 
 - Migrations are **forward-only**.
 - `internal/db` records each applied filename in `schema_migrations` and applies anything new on boot, under an advisory lock so concurrent starts do not race.
@@ -3815,7 +3821,9 @@ image digests in `wardyn.env`, not a re-run of anything
 - `0161` (`0161_run_human_author`) adds `agent_runs.human_author` (`0001`'s table), the principal accountable for the run at create (not proof that a person was present); existing runs keep it empty.
 - `0162` (`0162_run_queue`) widens `agent_runs`' state check with `QUEUED`, adds `agent_runs.admitted_at` and rebuilds its watcher sweep index (`0001`'s table) beside its new `run_queue` table, and re-creates `audit_retention_partitions` (as `0123` does).
 - `0163` (`0163_workspace_image_build`) adds `workspaces.image_build` (`0008`'s table), the image build record.
+- `0166` (`0166_run_component_mcp_harnesses`) adds `run_components.mcp_harnesses` (`0137`'s table), the harnesses each MCP component's server was turned on for.
 - `0168` (`0168_runner_pool_owner`) adds `runner_pools.owner` and checks on `runner_pools` and `runner_pool_org_defaults` (`0152`'s tables), removes the ownerless user pools made before it, and clears an organisation preference for self-hosted runners.
+- `0169` (`0169_user_drive_grants_per_drive`) replaces the unique key on `user_drive_grants` (`0054`'s table) so a subject may hold one grant per drive.
 - `0172` (`0172_runner_max_runs`) adds `runners.max_runs` and `runners.machine_name` (`0139`'s table).
 - `0173` (`0173_runner_pool_scope`) replaces `runner_pools.hosting_type` with `scope`, renames `runner_pool_members.executor_id` to `remote_runner_id` with a foreign key to its new `remote_runners` table and adds a generated `kind`, keeps one pool and the barrier on `runner_pool_org_defaults` (`0152`'s tables), rewrites each person's `runner_pool_defaults.v1` preference to `runner_pool_default.v2`, and rewrites a held add on `governance_changes` (`0126`'s table); every pool change held for a second human then goes stale and is proposed again.
 - `0174` (`0174_runner_limits`) adds the six limit columns (`total_cpu_millis`, `total_memory_mib`, `total_disk_mib`, `run_cpu_millis`, `run_memory_mib`, `run_disk_mib`) to `runners` (`0139`'s table) and to `remote_runners` (`0173`'s table), with `max_runs` on `remote_runners`, and `reserved_cpu_millis`, `reserved_memory_mib` and `reserved_disk_mib` to `agent_runs` (`0001`'s table), backfilled for runs holding a sandbox.
@@ -3826,7 +3834,7 @@ image digests in `wardyn.env`, not a re-run of anything
   `push_content_paths` table in the same file, so the migrator owns both from the start.
 - `0087` adds `agent_runs.preset` and `agent_runs.preset_version` beside its new
   `launch_presets` table.
-- [`scripts/test-claims-match-code.sh`](../scripts/test-claims-match-code.sh) derives that list from the migration bodies, so a new `ALTER TABLE` landing undocumented fails there rather than here.
+- [`scripts/test-claims-match-code.sh`](../scripts/test-claims-match-code.sh) checks that list against the migration bodies, but only for an `ALTER TABLE` of a table created at or before `0049` and for any `CREATE OR REPLACE FUNCTION`. An `ALTER TABLE` of a table created later, as `0166` and `0169` do, is not checked there, so name it here when you add one.
 
 > [!WARNING]
 > The failure is loud and the boot is refused — but **it is not a rollback, and it does

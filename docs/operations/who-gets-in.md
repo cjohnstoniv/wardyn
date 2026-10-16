@@ -10,7 +10,8 @@ chart/console/IdP split, and the derivation rules behind a signed cookie.
 
 - The API authenticates with **either** an OIDC session (human SSO) **or** the admin bearer token; local mode skips both on a loopback-only bind.
 - That is authentication.
-- Authorization is a real three-role model: every OIDC session carries an **admin**, **`security_admin`** or **member** role, derived once at login (`internal/auth/oidc`'s `deriveRole`) and stamped into the signed session cookie.
+- Authorization is a real three-role model: every OIDC session carries an **admin**, **`security_admin`** or **user** role (0.9 removed `member`), derived once at login (`internal/auth/oidc`'s `deriveRole`) and stamped into the signed session cookie.
+- A sign-in whose subject starts with `service:` (and one that starts `local:`, `device:` or `subject:`) is refused: those names are reserved. A `service:<name>` principal is a service identity and authenticates only by its own tokens, never by signing in (`isReservedPrincipal`, [`internal/api/reserved_principal.go`](../../internal/api/reserved_principal.go)).
 - A cookie signed before this existed (pre-0.5) decodes as no session, forcing a re-login that derives one fresh.
 
 | The merged map (chart `WARDYN_OIDC_ROLE_MAP` + console People-step rows) | Signed-in humans | Admin token / local mode |

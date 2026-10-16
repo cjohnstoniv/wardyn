@@ -523,8 +523,8 @@ wardyn run --agent claude-code --task-mode exec --task 'echo ok' \
 - The task text lives in [`ui/e2e/demo/task.ts`](../ui/e2e/demo/task.ts) (`DEMO_TASK`), with the reasoning in [`examples/workspaces/demo-node/TASK.md`](../examples/workspaces/demo-node/TASK.md).
 - **The `always` beat's second half, once the run finishes:** Workspaces → the onboarded workspace → the **Allowed hosts** card, spotlighting `example.com` now on the permanent list.
 - Then a SECOND, much smaller run against the same workspace —
-  - **New run** → **Title** (`PROOF_RUN_TITLE`) → **Terminal — a shell in the workspace dir** (an interactive Agent task; only what starts with the sandbox changes) → the same workspace → **Launch run**,
-  - with Confinement and Network left untouched entirely.
+  - **New run** → **Environment** → **Harnesses** → **Files** (the same workspace) → **Tools** → **Review**,
+  - then **Launch run**, the name (`PROOF_RUN_TITLE`) and **Launch**, with no barrier or network edits.
 - In the attached terminal, `curl -sSI https://example.com` succeeds immediately — no hold, no approval row, just the `live-approvals-idle` hint — because the workspace's own permanent grant folds into the run automatically.
 - The driver then navigates back to the main run's URL (captured before this detour) so Act 6 recaps that run's audit trail and recording, not the proof run's.
 
