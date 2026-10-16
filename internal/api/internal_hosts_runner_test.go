@@ -8,7 +8,10 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"strings"
 	"testing"
+
+	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
@@ -40,34 +43,46 @@ func (s siteConfigDispatchStore) GetSiteConfig(context.Context) (types.SiteConfi
 	return *s.sc, nil
 }
 
-// dispatchInternalHostsRun runs the organisation's local-placement dispatch for
-// a run under *sc: internal_hosts rendered as dispatchRun renders them
-// (proxyInternalHosts of the site config it read), the config kept before
-// classification, then classifyLocalDispatch. The control-plane pair is the
-// server's (s.cfg), which dispatch and revive both read. It returns the spec
-// dispatch hands the runner.
-func dispatchInternalHostsRun(t *testing.T, sc *types.SiteConfig, image, cpURL, cpCAPEM string) (*Server, types.AgentRun, runner.SandboxSpec) {
+// DeleteRunProxyConfig keeps the row: dispatch drops a run's config when the
+// run fails, and here it fails at the runner lease (see dispatchInternalHostsRun).
+func (siteConfigDispatchStore) DeleteRunProxyConfig(context.Context, uuid.UUID) error { return nil }
+
+// dispatchInternalHostsRun runs the organisation's dispatch (dispatchRun) for a
+// local-placement run bound to runnerID under *sc and returns the runner spec
+// its proxy config makes. Dispatch renders internal_hosts from the site config
+// (runs_dispatch.go), classifies the spec for the laptop and stores the
+// classified proxy config (classifyLocalDispatch), then leases the run to its
+// runner, which needs Postgres (leaseRunnerExecution): without it dispatch
+// stops there, before CreateSandbox. The stored row is the config the runner
+// would have been handed (kept past the failure, see DeleteRunProxyConfig), and
+// the one revive rebuilds from; localStoredSpec is
+// revive's own conversion back to a spec. The control-plane pair is the
+// server's (s.cfg), which dispatch and revive both read.
+func dispatchInternalHostsRun(t *testing.T, sc *types.SiteConfig, runnerID uuid.UUID, image, cpURL, cpCAPEM string) (*Server, types.AgentRun, runner.SandboxSpec) {
 	t.Helper()
 	srv, ls, _, run := localDispatchFixture(t, types.PlacementLocal)
+	run.RunnerID = &runnerID
+	ls.dispatchTestStore.run, ls.dispatchTestStore.state = run, types.RunPending
 	srv.cfg.Store = siteConfigDispatchStore{localDispatchStore: ls, sc: sc}
 	srv.cfg.ControlPlaneURL, srv.cfg.ControlPlaneCAPEM = cpURL, cpCAPEM
 	ctx := context.Background()
-	siteCfg, err := srv.siteConfigForDispatch(ctx)
+	srv.dispatchRun(ctx, run, ceilingForDispatch(governanceCeiling{}, adoEntraUngraded(), bedrockCredUngraded()), dispatchParams{
+		RunToken: "run-token", Image: image, Interactive: true,
+		Policy: types.RunPolicySpec{AllowedDomains: []string{internalHostDeclared, internalHostUndeclared}, MinConfinementClass: types.CC1},
+	})
+	if hint := ls.dispatchTestStore.FailureHint(); !strings.Contains(hint, "lease the run to its runner") {
+		t.Fatalf("dispatch did not reach the runner lease: %s %q", ls.dispatchTestStore.State(), hint)
+	}
+	raw, err := srv.loadRunProxyConfig(ctx, run.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	pc := runner.ProxyConfig{
-		RunToken: "run-token", ControlPlaneURL: srv.cfg.ControlPlaneURL, ControlPlaneCAPEM: srv.cfg.ControlPlaneCAPEM,
-		Policy:        types.RunPolicySpec{AllowedDomains: []string{internalHostDeclared, internalHostUndeclared}},
-		InternalHosts: proxyInternalHosts(siteCfg.InternalHosts),
-	}
-	spec := runner.SandboxSpec{RunID: run.ID, Image: image, ConfinementClass: types.CC1, ProxyConfig: pc}
-	if err := srv.keepRunProxyConfig(ctx, run.ID, spec.ProxyConfig); err != nil {
+	cfg, err := proxy.LoadConfigBytes(raw)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if !srv.classifyLocalDispatch(ctx, run, ceilingForDispatch(governanceCeiling{}, adoEntraUngraded(), bedrockCredUngraded()), siteCfg, &spec, nil, llmTransport{}, false) {
-		t.Fatal("local dispatch refused the run")
-	}
+	spec := localStoredSpec(*cfg)
+	spec.Image, spec.ConfinementClass, spec.RunnerID = image, types.CC1, runnerID.String()
 	return srv, run, spec
 }
 
@@ -85,7 +100,7 @@ const dispatchedInternalHostsGolden = "../egress/proxy/testdata/dispatched_inter
 // WARDYN_UPDATE_GOLDEN=1 go test ./internal/api -run TestInternalHostsDispatchWireConfig
 func TestInternalHostsDispatchWireConfig(t *testing.T) {
 	sc := internalHostsSite()
-	_, _, spec := dispatchInternalHostsRun(t, &sc, "busybox:latest", "http://127.0.0.1:9", "")
+	_, _, spec := dispatchInternalHostsRun(t, &sc, uuid.New(), "busybox:latest", "http://127.0.0.1:9", "")
 
 	data, err := runnerwire.Marshal(runnerwire.CreateSandboxArgs{Spec: spec})
 	if err != nil {

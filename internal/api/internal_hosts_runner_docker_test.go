@@ -88,9 +88,8 @@ func TestInternalHostsOnRunnerDocker(t *testing.T) {
 	}
 	sc := internalHostsSite()
 	sc.Runners = &types.RunnerSettings{Enabled: true}
-	srv, run, spec := dispatchInternalHostsRun(t, &sc, "busybox:latest", "https://"+cpHost+":8443", string(ca.CertPEM))
 	runnerID := uuid.New()
-	spec.RunnerID = runnerID.String()
+	srv, run, spec := dispatchInternalHostsRun(t, &sc, runnerID, "busybox:latest", "https://"+cpHost+":8443", string(ca.CertPEM))
 	attachRunner(t, srv, runnerID, sub)
 	ep := srv.runnerEndpoint(runnerID)
 	sb, err := ep.sub.CreateSandbox(ctx, spec)
