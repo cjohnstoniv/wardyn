@@ -274,6 +274,12 @@ func (s *Server) holdProfileWrite(w http.ResponseWriter, r *http.Request, id uui
 		p.before, beforeStored = before, &before.profileDiffStored
 	}
 	p.changed = changedPaths(beforeStored, after.profileDiffStored)
+	// The notes a direct write returns as warnings (writeGovernanceProfile), kept with the change so the
+	// proposer and the approver read what the person who saved it directly would have.
+	if !row.Composed() {
+		p.notes = governanceOmissionWarnings(row.Ceiling, s.cfg.DefaultPolicy, row.Limits)
+	}
+	p.notes = append(p.notes, h.res.AdminWarnings...)
 	s.proposeGovernanceChange(w, r, p)
 }
 

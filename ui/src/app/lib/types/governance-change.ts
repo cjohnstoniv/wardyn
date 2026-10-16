@@ -36,4 +36,6 @@ export interface GovernanceChangeDiff {
   before?: unknown;
   after?: unknown;
   changed: string[];
+  // Advisory sentences the server wrote about the proposed change (a profile's omission warnings); absent when none.
+  notes?: string[];
 }

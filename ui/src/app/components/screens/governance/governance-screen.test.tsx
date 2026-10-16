@@ -943,6 +943,22 @@ describe("GovernanceScreen — a 202 is submitted, never saved", () => {
     expect(getGovernanceMock).toHaveBeenCalled();
   });
 
+  it("a profile save held for approval shows the held change's notes under the deployment-ceiling heading", async () => {
+    const note = "this profile omits 1 denied domain(s) the deployment default denies (evil.example) — members under it are NOT walled from them";
+    updateProfileMock.mockRejectedValue(
+      new PendingChangeError({ ...HELD.change, diff: { changed: [], notes: [note] } }),
+    );
+    renderScreen();
+    await screen.findByText(GREENFIELD.name);
+
+    await userEvent.click(screen.getByRole("button", { name: `${GOV.EDIT} ${GREENFIELD.name}` }));
+    await userEvent.click(screen.getByRole("button", { name: GOV.SAVE }));
+
+    expect(await screen.findByText(CHANGES.SUBMITTED_TITLE)).toBeInTheDocument();
+    expect(screen.getByText(GOV.OMISSION_TITLE)).toBeInTheDocument();
+    expect(screen.getByText(note)).toBeInTheDocument();
+  });
+
   it("a profile delete held for approval closes the dialog and shows the note", async () => {
     deleteProfileMock.mockRejectedValue(HELD);
     renderScreen();
