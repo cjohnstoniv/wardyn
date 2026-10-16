@@ -71,7 +71,7 @@ func TestLocalEligibilityStripsOperatorConfigWithoutMutating(t *testing.T) {
 	if r != nil {
 		t.Fatal(r)
 	}
-	if out.Env["ORG_KEY"] != "" || out.Env["OWN"] != "value" || out.ProxyConfig.UpstreamProxyURL != "" || out.ProxyConfig.TrustedCAPEM != "" || len(out.ProxyConfig.InternalHosts)+len(out.ProxyConfig.LLMUpstreams)+len(out.ProxyConfig.MITMHosts) != 0 || len(out.ProxyConfig.Policy.LLMInspection.WorkspaceSecretValues)+len(out.ProxyConfig.Policy.LLMInspection.WorkspaceSecretNames) != 0 {
+	if out.Env["ORG_KEY"] != "" || out.Env["OWN"] != "value" || out.ProxyConfig.UpstreamProxyURL != "" || out.ProxyConfig.TrustedCAPEM != "" || len(out.ProxyConfig.LLMUpstreams)+len(out.ProxyConfig.MITMHosts) != 0 || len(out.ProxyConfig.InternalHosts) != 1 || len(out.ProxyConfig.Policy.LLMInspection.WorkspaceSecretValues)+len(out.ProxyConfig.Policy.LLMInspection.WorkspaceSecretNames) != 0 {
 		t.Fatalf("operator config leaked: %+v", out)
 	}
 	if p.Spec.Env["ORG_KEY"] != "private" || li.WorkspaceSecretValues[0] != "private" || p.Spec.ProxyConfig.UpstreamProxyURL == "" {

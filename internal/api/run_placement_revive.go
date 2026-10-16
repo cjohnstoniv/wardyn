@@ -41,7 +41,7 @@ func (s *Server) refreshLocalDeploymentConfig(ctx context.Context, run types.Age
 	}
 	cfg.Policy, cfg.MITMHosts = stripped.ProxyConfig.Policy, stripped.ProxyConfig.MITMHosts
 	cfg.UpstreamProxyURL, cfg.TrustedCAPEM = "", ""
-	cfg.InternalHosts, cfg.UpstreamProxyNoProxy, cfg.LLMUpstreams = nil, nil, nil
+	cfg.UpstreamProxyNoProxy, cfg.LLMUpstreams = nil, nil
 	return nil
 }
 
