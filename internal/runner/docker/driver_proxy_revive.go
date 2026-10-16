@@ -408,7 +408,7 @@ func (d *Driver) StartSandbox(ctx context.Context, ref string) error {
 	if _, err := d.cli.ContainerStart(ctx, ref, client.ContainerStartOptions{}); err != nil {
 		return fmt.Errorf("docker: start agent: %w", err)
 	}
-	if d.cfg.Record {
+	if d.recordsAgent(ctx, ref) {
 		d.prepareRecordingDirs(ctx, ref)
 	}
 	return nil

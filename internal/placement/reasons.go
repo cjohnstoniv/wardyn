@@ -29,14 +29,17 @@ const (
 	ReasonRunnerPostureUnmet           Reason = "runner_posture_unmet"
 	ReasonRunnerKeystoreUnavailable    Reason = "runner_keystore_unavailable"
 	ReasonRunnerActionPending          Reason = "runner_action_pending"
-	ReasonRelayRunnerMismatch          Reason = "relay_runner_mismatch"
-	ReasonRelayRequired                Reason = "relay_required"
-	ReasonRelayRouteRefused            Reason = "relay_route_refused"
-	ReasonDeliveryViaOrg               Reason = "delivery_via_org"
-	ReasonDeliveryRunnerResident       Reason = "delivery_runner_resident"
-	ReasonDeliveryNotViaOrg            Reason = "delivery_not_via_org"
-	ReasonViaOrgDestinationRefused     Reason = "via_org_destination_refused"
-	ReasonViaOrgCapExceeded            Reason = "via_org_cap_exceeded"
+	// ReasonRunnerRecordingOff: the organisation or the pool requires recording, and no runner that
+	// could take the run records it (--recording-store off, or a runner older than per-run recording).
+	ReasonRunnerRecordingOff       Reason = "runner_recording_off"
+	ReasonRelayRunnerMismatch      Reason = "relay_runner_mismatch"
+	ReasonRelayRequired            Reason = "relay_required"
+	ReasonRelayRouteRefused        Reason = "relay_route_refused"
+	ReasonDeliveryViaOrg           Reason = "delivery_via_org"
+	ReasonDeliveryRunnerResident   Reason = "delivery_runner_resident"
+	ReasonDeliveryNotViaOrg        Reason = "delivery_not_via_org"
+	ReasonViaOrgDestinationRefused Reason = "via_org_destination_refused"
+	ReasonViaOrgCapExceeded        Reason = "via_org_cap_exceeded"
 )
 
 // reasonStatus is the HTTP status each reason answers with.
@@ -60,6 +63,7 @@ var reasonStatus = map[Reason]int{
 	ReasonRunnerPostureUnmet:           http.StatusUnprocessableEntity,
 	ReasonRunnerKeystoreUnavailable:    http.StatusUnprocessableEntity,
 	ReasonRunnerActionPending:          http.StatusConflict,
+	ReasonRunnerRecordingOff:           http.StatusUnprocessableEntity,
 	ReasonRelayRunnerMismatch:          http.StatusForbidden,
 	ReasonRelayRequired:                http.StatusForbidden,
 	ReasonRelayRouteRefused:            http.StatusForbidden,

@@ -139,6 +139,12 @@ func RunnerAtCapacityMsg(name string) string {
 	return fmt.Sprintf("Every runner in %s is at its limit. Try again when a run there finishes, or raise the runner's limits.", name)
 }
 
+// RunnerRecordingOffMsg is the create and preflight refusal (runner_recording_off) for a run whose
+// organisation or pool requires recording when no runner in the pool that could take it records.
+func RunnerRecordingOffMsg(name string) string {
+	return fmt.Sprintf("Recording is required, and no runner in %s records runs. Choose another pool, or turn recording on for the runner.", name)
+}
+
 // RunnerLimitsUnsetMsg is the refusal (runner_limits_unset) when no runner in the pool has declared
 // its limits, so none may take a run.
 func RunnerLimitsUnsetMsg(name string) string {

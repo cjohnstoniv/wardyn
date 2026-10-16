@@ -16,6 +16,7 @@ import {
   RUN_WAIT_REASON,
   RUN_TYPE_PLURAL,
   RUNNER_CAPACITY,
+  RUNNER_RECORDING,
   RUNNER_POOL_REASONS,
   RUNNER_POOL_REFUSAL,
   RUNNER_POOL_REFUSAL_BY_KEY,
@@ -35,7 +36,7 @@ const root = repoRoot();
 
 describe("runner pool refusal sentences", () => {
   it("are the golden bytes the server's twin is pinned to", () => {
-    const waits = ["WAIT_AT_CAPACITY", "WAIT_NO_RUNNER_FREE", "WAIT_RUNNERS_AT_CAPACITY", "NO_ONLINE_RUNNER", "RUNNER_AT_CAPACITY", "RUNNER_LIMITS_UNSET"];
+    const waits = ["WAIT_AT_CAPACITY", "WAIT_NO_RUNNER_FREE", "WAIT_RUNNERS_AT_CAPACITY", "NO_ONLINE_RUNNER", "RUNNER_AT_CAPACITY", "RUNNER_LIMITS_UNSET", "RUNNER_RECORDING_OFF"];
     expect(golden.map((g) => g.key).sort()).toEqual([...Object.keys(RUNNER_POOL_REFUSAL), ...waits].sort());
     for (const g of golden.filter((x) => !waits.includes(x.key))) {
       expect(RUNNER_POOL_REFUSAL_BY_KEY[g.key as keyof typeof RUNNER_POOL_REFUSAL](...g.args), g.key).toBe(g.text);
@@ -73,6 +74,9 @@ describe("runner pool refusal sentences", () => {
     expect(PLACEMENT_REASONS).toContain("runner_at_capacity");
     const u = golden.find((x) => x.key === "RUNNER_LIMITS_UNSET")!;
     expect(RUNNER_CAPACITY.RUNNER_LIMITS_UNSET(u.args[0])).toBe(u.text);
+    const rec = golden.find((x) => x.key === "RUNNER_RECORDING_OFF")!;
+    expect(RUNNER_RECORDING.RUNNER_RECORDING_OFF(rec.args[0])).toBe(rec.text);
+    expect(PLACEMENT_REASONS).toContain("runner_recording_off");
     expect(PLACEMENT_REASONS).toContain("runner_limits_unset");
   });
 

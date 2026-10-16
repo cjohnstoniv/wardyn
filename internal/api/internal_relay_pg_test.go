@@ -318,12 +318,17 @@ func TestRelay_RefusesUnlistedAndTrustedOutputRoutes(t *testing.T) {
 
 // TestEveryInternalRouteIsClassifiedForRelay holds relayedInternalRoutes to
 // the router: every /internal/ route is classified, and no row names a route
-// that does not exist.
+// that does not exist, with recording on and off alike.
 func TestEveryInternalRouteIsClassifiedForRelay(t *testing.T) {
 	recordings, err := recording.NewFSStore(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Run("recording on", func(t *testing.T) { checkInternalRoutesClassified(t, recordings) })
+	t.Run("recording off", func(t *testing.T) { checkInternalRoutesClassified(t, nil) })
+}
+
+func checkInternalRoutesClassified(t *testing.T, recordings recording.Store) {
 	srv := New(Config{AdminToken: adminToken, Secrets: getErrStore{getErr: secretstore.ErrNotFound}, RecordingStore: recordings})
 	registered := map[string]bool{}
 	walk := func(method, route string, _ http.Handler, _ ...func(http.Handler) http.Handler) error {

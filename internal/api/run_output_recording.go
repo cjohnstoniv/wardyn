@@ -25,7 +25,7 @@ var errRecordingOutputOverBudget = errors.New("recording output read outlived it
 
 func (s *Server) recordingOutputEnabled(ctx context.Context, run types.AgentRun) bool {
 	if s.cfg.RecordingStore == nil || s.cfg.ExecOutputTailOff || s.runOutputStore() == nil ||
-		run.Interactive || runIsUnrecordable(run) || s.runOutputExpiredByRetention(run) {
+		run.Interactive || runIsUnrecordable(run) || run.NotRecorded != "" || s.runOutputExpiredByRetention(run) {
 		return false
 	}
 	uncaptured, known := s.execOutputCapture(ctx)

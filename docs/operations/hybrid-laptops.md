@@ -64,6 +64,14 @@
 - On a laptop the sandbox resolves through the person's network, so declare `cidrs` on each entry a laptop estate uses. An entry without them lifts the whole private range for that suffix.
 - The organisation's upstream proxy, trusted CA, `upstream_proxy_no_proxy` and LLM upstream overrides are still not sent to a laptop.
 
+### Session recordings
+
+- `wardyn-rec` uploads a laptop run's cast to `wardyn-proxy:3128`, as on a cluster. The proxy's in-cluster control-plane name maps to the runner's relay by design, which carries the upload to the organisation bound to the run's own runner.
+- The organisation decides per run, at dispatch. With its recording store off (`WARDYN_RECORDING_STORE=off`) the run page says `org_off`.
+- `wardyn-runnerd serve --recording-store off` is the runner's ceiling: it never records. Otherwise the runner records the runs its organisation asks it to; a runner older than 0.9.3 records by its own setting, and counts as not recording.
+- An organisation or pool can set `recording: required` (default `preferred`). A run only a non-recording runner could take is then refused `runner_recording_off`; under `preferred` its page says `runner_declined`.
+- An upload with no store is answered `409` `recording_off`, a reason the `brokered:recording` row and `wardyn-rec`'s log carry (migration `0180_run_recording`).
+
 ## Claiming a runner
 
 1. The owner mints a single-use `wdr_` registration token (`wardyn runner token`, or *My runner*). It lasts 1 hour, and needs the [`self_host_runner`](capabilities.md#self_host_runner) permission; admins are never asked.

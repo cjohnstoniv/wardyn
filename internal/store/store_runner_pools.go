@@ -34,7 +34,7 @@ type RunnerPoolStore interface {
 	// runnerpool.OwnRunnerCandidates.
 	ListRunnerPoolMembers(ctx context.Context, id uuid.UUID) ([]types.RunnerPoolMember, error)
 	CreateRunnerPool(ctx context.Context, p types.RunnerPool, by string) (types.RunnerPool, error)
-	UpdateRunnerPool(ctx context.Context, id uuid.UUID, revision int64, name *string, state *types.RunnerPoolState, limits *types.RunnerPoolLimits) (types.RunnerPool, error)
+	UpdateRunnerPool(ctx context.Context, id uuid.UUID, revision int64, name *string, state *types.RunnerPoolState, limits *types.RunnerPoolLimits, recording *types.RecordingRequirement) (types.RunnerPool, error)
 	DeleteRunnerPool(ctx context.Context, id uuid.UUID) (RunnerPoolDeletion, error)
 	DeleteRunnerPoolsByOwner(ctx context.Context, owner string) ([]RunnerPoolDeletion, error)
 
@@ -107,20 +107,20 @@ type RunnerPoolDeletion struct {
 	CancelledRuns []uuid.UUID
 }
 
-const runnerPoolCols = `id, name, scope, COALESCE(owner, ''), state, revision, limits, created_at, updated_at`
+const runnerPoolCols = `id, name, scope, COALESCE(owner, ''), state, revision, limits, created_at, updated_at, recording`
 
 func scanRunnerPool(row pgx.Row) (types.RunnerPool, error) {
 	var p types.RunnerPool
-	var scope, state string
+	var scope, state, recording string
 	var limits []byte
-	err := row.Scan(&p.ID, &p.Name, &scope, &p.Owner, &state, &p.Revision, &limits, &p.CreatedAt, &p.UpdatedAt)
+	err := row.Scan(&p.ID, &p.Name, &scope, &p.Owner, &state, &p.Revision, &limits, &p.CreatedAt, &p.UpdatedAt, &recording)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return types.RunnerPool{}, ErrNotFound
 	}
 	if err != nil {
 		return types.RunnerPool{}, fmt.Errorf("store: scan runner pool: %w", err)
 	}
-	p.Scope, p.State = types.RunnerPoolScope(scope), types.RunnerPoolState(state)
+	p.Scope, p.State, p.Recording = types.RunnerPoolScope(scope), types.RunnerPoolState(state), types.RecordingRequirement(recording)
 	if p.Limits, err = unmarshalPoolLimits(limits); err != nil {
 		return types.RunnerPool{}, err
 	}
@@ -193,7 +193,7 @@ func (s PG) ListRunnerPoolMembers(ctx context.Context, id uuid.UUID) ([]types.Ru
 // members, the count of owner's own claimed runners it holds and the ids of owner's runners in it.
 func (s PG) ListRunnerPoolCatalogue(ctx context.Context, owner string, all bool) ([]RunnerPoolCatalogueRow, error) {
 	const q = `
-		SELECT p.id, p.name, p.scope, COALESCE(p.owner, ''), p.state, p.revision, p.limits, p.created_at, p.updated_at,
+		SELECT p.id, p.name, p.scope, COALESCE(p.owner, ''), p.state, p.revision, p.limits, p.created_at, p.updated_at, p.recording,
 		       u.subjects, u.revision, u.updated_by, u.updated_at,
 		       COALESCE((SELECT array_agg(m.remote_runner_id ORDER BY m.remote_runner_id) FROM runner_pool_members m
 		                 WHERE m.pool_id = p.id AND m.remote_runner_id IS NOT NULL), '{}'),
@@ -210,16 +210,16 @@ func (s PG) ListRunnerPoolCatalogue(ctx context.Context, owner string, all bool)
 	}
 	return collect(ctx, s.Pool, "list", "runner pools", q, []any{owner, limit, all}, func(row pgx.Row) (RunnerPoolCatalogueRow, error) {
 		var r RunnerPoolCatalogueRow
-		var scope, state string
+		var scope, state, recording string
 		var subjects, limits []byte
 		var polRev *int64
 		var polBy *string
 		var polAt *time.Time
-		if err := row.Scan(&r.Pool.ID, &r.Pool.Name, &scope, &r.Pool.Owner, &state, &r.Pool.Revision, &limits, &r.Pool.CreatedAt, &r.Pool.UpdatedAt,
+		if err := row.Scan(&r.Pool.ID, &r.Pool.Name, &scope, &r.Pool.Owner, &state, &r.Pool.Revision, &limits, &r.Pool.CreatedAt, &r.Pool.UpdatedAt, &recording,
 			&subjects, &polRev, &polBy, &polAt, &r.ExecutorIDs, &r.OwnRunners, &r.OwnRunnerIDs); err != nil {
 			return r, fmt.Errorf("store: scan runner pool catalogue: %w", err)
 		}
-		r.Pool.Scope, r.Pool.State = types.RunnerPoolScope(scope), types.RunnerPoolState(state)
+		r.Pool.Scope, r.Pool.State, r.Pool.Recording = types.RunnerPoolScope(scope), types.RunnerPoolState(state), types.RecordingRequirement(recording)
 		var err error
 		if r.Pool.Limits, err = unmarshalPoolLimits(limits); err != nil {
 			return r, err
@@ -268,19 +268,19 @@ func insertRunnerPoolQ(ctx context.Context, q Querier, p types.RunnerPool, by st
 		return err
 	}
 	*out, err = scanRunnerPool(q.QueryRow(ctx, `
-		INSERT INTO runner_pools (id, name, scope, owner, created_by, limits) VALUES ($1,$2,$3,NULLIF($4, ''),$5,$6) RETURNING `+runnerPoolCols,
-		p.ID, p.Name, string(p.Scope), p.Owner, by, limits))
+		INSERT INTO runner_pools (id, name, scope, owner, created_by, limits, recording) VALUES ($1,$2,$3,NULLIF($4, ''),$5,$6,$7) RETURNING `+runnerPoolCols,
+		p.ID, p.Name, string(p.Scope), p.Owner, by, limits, string(p.Recording)))
 	if isUniqueViolation(err) {
 		return ErrConflict
 	}
 	return err
 }
 
-// UpdateRunnerPool renames, switches or re-limits a pool, only at the revision the caller read:
-// ErrRunnerPoolStale otherwise, ErrNotFound for an unknown or deleted pool, ErrConflict when the name is
-// taken. A non-nil limits replaces the stored block whole; nil leaves it. A change that moves nothing,
-// limits compared as canonical JSON, writes nothing and keeps the revision.
-func (s PG) UpdateRunnerPool(ctx context.Context, id uuid.UUID, revision int64, name *string, state *types.RunnerPoolState, limits *types.RunnerPoolLimits) (types.RunnerPool, error) {
+// UpdateRunnerPool renames, switches, re-limits or sets the recording requirement of a pool, only at the
+// revision the caller read: ErrRunnerPoolStale otherwise, ErrNotFound for an unknown or deleted pool,
+// ErrConflict when the name is taken. A non-nil limits replaces the stored block whole; nil leaves it. A
+// change that moves nothing, limits compared as canonical JSON, writes nothing and keeps the revision.
+func (s PG) UpdateRunnerPool(ctx context.Context, id uuid.UUID, revision int64, name *string, state *types.RunnerPoolState, limits *types.RunnerPoolLimits, recording *types.RecordingRequirement) (types.RunnerPool, error) {
 	var out types.RunnerPool
 	err := s.inTx(ctx, func(q Querier) error {
 		cur, err := livePoolForUpdate(ctx, q, id)
@@ -299,14 +299,14 @@ func (s PG) UpdateRunnerPool(ctx context.Context, id uuid.UUID, revision int64, 
 			return err
 		}
 		if (name == nil || *name == cur.Name) && (state == nil || *state == cur.State) &&
-			(limits == nil || bytes.Equal(newLimits, oldLimits)) {
+			(limits == nil || bytes.Equal(newLimits, oldLimits)) && (recording == nil || *recording == cur.Recording) {
 			out = cur
 			return nil
 		}
 		out, err = scanRunnerPool(q.QueryRow(ctx, `
 			UPDATE runner_pools SET name = COALESCE($2, name), state = COALESCE($3, state),
-			       limits = COALESCE($4, limits), revision = revision + 1, updated_at = now()
-			WHERE id = $1 RETURNING `+runnerPoolCols, id, name, stateText(state), newLimits))
+			       limits = COALESCE($4, limits), recording = COALESCE($5, recording), revision = revision + 1, updated_at = now()
+			WHERE id = $1 RETURNING `+runnerPoolCols, id, name, stateText(state), newLimits, (*string)(recording)))
 		if isUniqueViolation(err) {
 			return ErrConflict
 		}
@@ -408,7 +408,7 @@ func (s PG) DeleteRunnerPoolsByOwner(ctx context.Context, owner string) ([]Runne
 // clearOrgDefaultSlotsQ clears the organisation default when it names pool id and records the
 // defaults before and after on out; it records nothing when it did not name it.
 func clearOrgDefaultSlotsQ(ctx context.Context, q Querier, id uuid.UUID, out *RunnerPoolDeletion) error {
-	before, err := scanOrgDefaults(q.QueryRow(ctx, `SELECT pool_id, barrier FROM runner_pool_org_defaults FOR UPDATE`))
+	before, err := scanOrgDefaults(q.QueryRow(ctx, `SELECT pool_id, barrier, recording FROM runner_pool_org_defaults FOR UPDATE`))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil
 	}
@@ -740,7 +740,7 @@ func DeleteRunnerPoolUsePolicyQ(ctx context.Context, q Querier, id uuid.UUID) er
 
 // GetRunnerPoolOrgDefaults reads the organisation's defaults; the zero value when none were written.
 func (s PG) GetRunnerPoolOrgDefaults(ctx context.Context) (types.RunnerPoolDefaults, error) {
-	d, err := scanOrgDefaults(s.Pool.QueryRow(ctx, `SELECT pool_id, barrier FROM runner_pool_org_defaults`))
+	d, err := scanOrgDefaults(s.Pool.QueryRow(ctx, `SELECT pool_id, barrier, recording FROM runner_pool_org_defaults`))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return types.RunnerPoolDefaults{}, nil
 	}
@@ -751,10 +751,10 @@ func (s PG) GetRunnerPoolOrgDefaults(ctx context.Context) (types.RunnerPoolDefau
 // default only names one, and the resolver refuses a name that has since gone or been switched off.
 func (s PG) PutRunnerPoolOrgDefaults(ctx context.Context, d types.RunnerPoolDefaults, by string) error {
 	_, err := s.Pool.Exec(ctx, `
-		INSERT INTO runner_pool_org_defaults (pool_id, barrier, updated_by) VALUES ($1,$2,$3)
+		INSERT INTO runner_pool_org_defaults (pool_id, barrier, recording, updated_by) VALUES ($1,$2,$3,$4)
 		ON CONFLICT (singleton) DO UPDATE SET pool_id = EXCLUDED.pool_id, barrier = EXCLUDED.barrier,
-		       updated_by = EXCLUDED.updated_by, updated_at = now()`,
-		d.PoolID, string(d.Barrier), by)
+		       recording = EXCLUDED.recording, updated_by = EXCLUDED.updated_by, updated_at = now()`,
+		d.PoolID, string(d.Barrier), string(d.Recording), by)
 	return err
 }
 
@@ -794,7 +794,7 @@ func (s PG) BootstrapRunnerPools(ctx context.Context, executors []string, name s
 		d, err := scanOrgDefaults(q.QueryRow(ctx, `
 			INSERT INTO runner_pool_org_defaults (pool_id, updated_by) VALUES ($1, 'system')
 			ON CONFLICT (singleton) DO UPDATE SET pool_id = EXCLUDED.pool_id, updated_by = 'system', updated_at = now()
-			RETURNING pool_id, barrier`, p.ID))
+			RETURNING pool_id, barrier, recording`, p.ID))
 		if err != nil {
 			return err
 		}
@@ -806,8 +806,8 @@ func (s PG) BootstrapRunnerPools(ctx context.Context, executors []string, name s
 
 func scanOrgDefaults(row pgx.Row) (types.RunnerPoolDefaults, error) {
 	var d types.RunnerPoolDefaults
-	var barrier string
-	err := row.Scan(&d.PoolID, &barrier)
-	d.Barrier = types.ConfinementClass(barrier)
+	var barrier, recording string
+	err := row.Scan(&d.PoolID, &barrier, &recording)
+	d.Barrier, d.Recording = types.ConfinementClass(barrier), types.RecordingRequirement(recording)
 	return d, err
 }

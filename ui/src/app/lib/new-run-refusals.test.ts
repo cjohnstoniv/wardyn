@@ -58,7 +58,7 @@ describe("reasons", () => {
   it("the placement reasons are the Go closed set", () => {
     const go = readFileSync(join(root, "internal/placement/reasons.go"), "utf8");
     const goReasons = [...go.matchAll(/\bReason\w+\s+Reason = "([a-z_]+)"/g)].map((m) => m[1]);
-    expect(goReasons).toHaveLength(27);
+    expect(goReasons).toHaveLength(28);
     expect(new Set(PLACEMENT_REASONS)).toEqual(new Set(goReasons));
   });
 });

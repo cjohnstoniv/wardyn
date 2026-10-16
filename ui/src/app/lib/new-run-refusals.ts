@@ -65,6 +65,7 @@ export const PLACEMENT_REASONS = [
   "runner_posture_unmet",
   "runner_keystore_unavailable",
   "runner_action_pending",
+  "runner_recording_off",
   "relay_runner_mismatch",
   "relay_required",
   "relay_route_refused",

@@ -66,6 +66,15 @@ export const RUNNER_CAPACITY = {
   RUNNER_LIMITS_UNSET: (name: string) => `No runner in ${name} has its limits set. Every runner needs limits before it can run anything.`,
 } as const;
 
+/**
+ * A run whose organisation or pool requires recording when no runner in the pool that could take it
+ * records (runnerpool.RunnerRecordingOffMsg): the create and preflight runner_recording_off.
+ */
+export const RUNNER_RECORDING = {
+  RUNNER_RECORDING_OFF: (name: string) =>
+    `Recording is required, and no runner in ${name} records runs. Choose another pool, or turn recording on for the runner.`,
+} as const;
+
 /** How a sentence names runs of a type (types.RunnerPoolRunType.Plural). */
 export const RUN_TYPE_PLURAL = { background: "background tasks", interactive: "interactive environments" } as const;
 
