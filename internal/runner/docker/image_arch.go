@@ -91,7 +91,9 @@ func (d *Driver) archRunnable(ctx context.Context, ref, img, eng, runtime string
 	}
 	if kind != archUnrunnable {
 		if !cached {
-			slog.Warn(fmt.Sprintf("running %s (%s) under emulation on an %s engine; expect it to be slower", ref, img, eng))
+			// This runner never learns which WARDYN_AGENT_IMAGES key supplied ref, so the text says how to find it.
+			slog.Warn(fmt.Sprintf("running %s (%s image) under emulation on an %s engine; expect it to be slower. The ref comes from the WARDYN_AGENT_IMAGES entry whose value is %s, or is the published default if no entry has it. If you built this image, build it multi-arch (docker buildx build --platform linux/amd64,linux/arm64) or add a <key>@%s entry; if it is a published Wardyn image, check your mirror copied all platforms (docker buildx imagetools inspect %s)",
+				ref, img, eng, ref, eng, ref))
 		}
 		return nil
 	}
