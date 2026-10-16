@@ -641,7 +641,7 @@ func (p *packReader) header() (objectType, int64, error) {
 		}
 		size |= int64(b&0x7f) << shift
 		if size < 0 || size > maxObjectBytes {
-			return 0, 0, fmt.Errorf("gitpack: object header declares more than the %d-byte ceiling", int64(maxObjectBytes))
+			return 0, 0, fmt.Errorf("%w: an object header declares more than the %d-byte ceiling", ErrTooLarge, int64(maxObjectBytes))
 		}
 	}
 	return typ, size, nil
@@ -675,8 +675,8 @@ func (p *packReader) offsetEncoding() (int64, error) {
 // object, long means the next header isn't where the pack said.
 func (p *packReader) inflate(off, declared int64) ([]byte, error) {
 	if declared > maxObjectBytes {
-		return nil, fmt.Errorf("gitpack: the object at %d declares more than the %d-byte ceiling",
-			off, int64(maxObjectBytes))
+		return nil, fmt.Errorf("%w: the object at %d declares more than the %d-byte ceiling",
+			ErrTooLarge, off, int64(maxObjectBytes))
 	}
 	if err := p.charge(declared); err != nil {
 		return nil, err
@@ -729,7 +729,7 @@ func applyDelta(base, delta []byte) ([]byte, error) {
 		return nil, fmt.Errorf("unreadable result size: %w", err)
 	}
 	if want > maxObjectBytes {
-		return nil, fmt.Errorf("declares a %d-byte result, more than the %d-byte ceiling", want, int64(maxObjectBytes))
+		return nil, fmt.Errorf("%w: declares a %d-byte result, more than the %d-byte ceiling", ErrTooLarge, want, int64(maxObjectBytes))
 	}
 	out := make([]byte, 0, want)
 	for {

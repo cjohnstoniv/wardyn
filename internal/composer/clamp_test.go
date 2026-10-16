@@ -754,6 +754,12 @@ func TestClamp_Resources(t *testing.T) {
 		t.Errorf("an explicit CPU request above the ceiling was cut without a warning: %v", warns)
 	}
 
+	// A ceiling that sizes CPU and memory but is silent on pids still bounds pids, at the platform default.
+	got, _ = Clamp(types.RunPolicySpec{Resources: &types.ResourceLimits{PidsLimit: 1 << 20}}, ceiling, types.GovernanceLimits{})
+	if got.Resources.PidsLimit != int(runner.DefaultPidsLimit) {
+		t.Errorf("PidsLimit = %d, want capped to the default %d", got.Resources.PidsLimit, runner.DefaultPidsLimit)
+	}
+
 	// No ceiling opinion: falls back to the platform defaults —
 	// the SAME conservative caps CreateSandbox itself applies when a
 	// Resources field is zero — never left uncapped.

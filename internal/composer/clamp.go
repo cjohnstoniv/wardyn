@@ -183,7 +183,7 @@ func clampResources(out *types.RunPolicySpec, ceiling types.RunPolicySpec, limit
 	var own types.ResourceLimits
 	pids := int(eff.PidsLimit)
 	if ceiling.Resources != nil {
-		own, pids = *ceiling.Resources, ceiling.Resources.PidsLimit
+		own, pids = *ceiling.Resources, cmp.Or(ceiling.Resources.PidsLimit, pids) // a ceiling silent on pids keeps the default bound
 	}
 	effCeilingResources := &types.ResourceLimits{
 		CPUMillis: runnerpool.MemberCap(size.CPUMillis, limits.MaxCPUMillis, untouched.CPUMillis),
