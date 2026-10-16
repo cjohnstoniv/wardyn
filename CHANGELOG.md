@@ -17,11 +17,13 @@ both architectures.
   receives the bundle in one environment variable, which Linux caps at 128 KiB. Name a file holding only your
   organisation's roots, not a whole system bundle.
 - A refusal on the brokered model routes, and a forward-lane egress deny, now answer with a JSON body and an
-  `X-Wardyn-Reason` header. A TLS failure to the upstream (`tls_untrusted`) is 403, not 502, so SDKs stop retrying it; on the
-  AWS lane an egress deny is 403 and a missing credential 401. Clients keyed on
-  `{"wardyn":…}` fields still find them.
+  `X-Wardyn-Reason` header. Clients keyed on `{"wardyn":…}` fields still find them.
+- On a brokered route, or in a tunnel the proxy terminates (an LLM host, Bedrock, the AWS SSO portal), a TLS failure
+  to the upstream (`tls_untrusted`) is 403, not 502, so SDKs stop retrying it; other intercepted hosts keep 502.
+- On the AWS lane an egress deny is 403, an upstream fault is 500 (was 502), and a missing credential is 404 (401 only
+  when a refresh fails).
 - A runner pool that limits run types now refuses a run with no `--experience` as `runner_pool_run_type_missing`
-  (422); `run_type_not_allowed` stays for a type the pool does not allow.
+  (422); `runner_pool_run_type_not_allowed` stays for a type the pool does not allow.
 
 ### Added
 
@@ -31,7 +33,8 @@ both architectures.
   `--trusted-ca-file "$SSL_CERT_FILE"` to use yours). See docs/operations/hybrid-laptops.md.
 - Errors on `/wardyn/llm/anthropic|openai` and the AWS lane use the provider's own error shape with a fixed reason
   (`egress_denied`, `tls_untrusted`, `upstream_unreachable`, `credential_unavailable`, `upstream_error`,
-  `request_not_inspected`) naming the host and the rule. The reasons table is in docs/UI-SANDBOXES.md.
+  `request_not_inspected`, `upstream_protocol_mismatch`, `audit_record_too_large`, `audit_spool_unavailable`) naming
+  the host and the rule. The reasons table is in docs/UI-SANDBOXES.md.
 - `wardyn-runnerd setup` and `serve` measure free disk on Docker Desktop, Colima and Rancher/Lima with a probe
   container, and `setup` says when runs on the engine have no disk cap (overlayfs).
 - The release checks that every published image has linux/amd64 and linux/arm64, and `wardynd:latest` is now

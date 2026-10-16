@@ -136,9 +136,12 @@
 - On a brokered LLM route, or in a tunnel the proxy terminates (an LLM host,
   Bedrock, the AWS SSO portal), a refusal is the provider's own JSON error.
 - Its message: `wardyn: <reason>: <host:port> (<rule_source>) — <fix>`, then the
-  masked cause; `rule_source` matches the audit row.
+  masked cause; `rule_source` matches the audit row. An audit refusal
+  (`audit_record_too_large`, `audit_spool_unavailable`) reads
+  `wardyn: <reason>: <sentence>`.
 - `X-Wardyn-Reason` carries the reason; so does the OpenAI `error.code`.
 - A brokered route answers in its own vendor's shape; an AWS host in the AWS one.
+  A tunnel to a gateway both vendors share answers in plain text.
 
 | Reason | Anthropic, OpenAI | AWS |
 |---|---|---|
