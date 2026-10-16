@@ -40,6 +40,9 @@ func (m *Manager) refuseAction(ctx context.Context, a runnerwire.PendingAction, 
 // the encoded result fits the org's bound: JSON escaping can grow a byte to
 // six, and a result the org refuses would replay on every reconnect.
 func fitRefusalReason(r *runnerwire.ActionResult) {
+	// An invalid byte encodes as six (\ufffd escaped) and decodes to three at the org, so it is
+	// dropped first, whatever the length.
+	r.Reason = strings.ToValidUTF8(r.Reason, "")
 	if len(r.Reason) > runnerwire.MaxRefusalReason {
 		r.Reason = strings.ToValidUTF8(r.Reason[:runnerwire.MaxRefusalReason], "")
 	}

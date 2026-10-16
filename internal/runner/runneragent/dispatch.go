@@ -323,10 +323,13 @@ func (d *Dispatcher) dispatchRef(ctx context.Context, method, ref string, a refA
 	case runnerwire.MethodAgentStatus:
 		return sub.AgentStatus(ctx, ref, a.AgentExecID)
 	case runnerwire.MethodStop:
+		d.selftests.Delete(ref)
 		return nil, sub.StopSandbox(ctx, ref)
 	case runnerwire.MethodKill:
+		d.selftests.Delete(ref)
 		return nil, sub.KillSandbox(ctx, ref)
 	case runnerwire.MethodEnd:
+		d.selftests.Delete(ref)
 		if end, ok := sub.(runner.SandboxEnder); ok {
 			return nil, end.EndSandbox(ctx, ref)
 		}

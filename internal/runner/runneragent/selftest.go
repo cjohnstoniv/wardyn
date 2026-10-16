@@ -9,13 +9,15 @@ import (
 	"log/slog"
 	"slices"
 	"strings"
+
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 )
 
 // The org execs a BYOI image's contract check before its task
 // (internal/api/runs_dispatch_byoi.go) and answers it by the exit code alone.
 // Its output is not the run's: the run's output ends when its copy ends, so a
 // selftest copied there would end the run's output before the task's starts.
-var selftestArgv = []string{"/usr/local/bin/agent-run", "--selftest"}
+// runner.SelftestArgv names it for both sides.
 
 // selftestLogMax bounds how much of a selftest's output the runner logs.
 const selftestLogMax = 4 << 10
@@ -38,7 +40,7 @@ func (d *Dispatcher) awaitSelftest(ref, image string) {
 // and reports false when argv is not that selftest.
 func (d *Dispatcher) execSelftest(ctx context.Context, ref string, argv []string) (string, bool, error) {
 	to, ok := d.cfg.Substrate.(execerTo)
-	if !ok || !slices.Equal(argv, selftestArgv) {
+	if !ok || !slices.Equal(argv, runner.SelftestArgv()) {
 		return "", false, nil
 	}
 	if _, awaited := d.selftests.LoadAndDelete(ref); !awaited {
@@ -64,6 +66,6 @@ func (l *selftestLog) Write(p []byte) (int, error) {
 }
 
 func (l *selftestLog) Close() error {
-	slog.Info("BYOI selftest output", slog.String("ref", l.ref), slog.String("output", string(l.tail)))
+	slog.Debug("BYOI selftest output", slog.String("ref", l.ref), slog.String("output", string(l.tail)))
 	return nil
 }
