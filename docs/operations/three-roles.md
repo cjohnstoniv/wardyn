@@ -235,7 +235,7 @@ Stated honestly: profiles narrow by omission — a profile that omits secret gra
     ```
 
   - It claims only what the deployment forces on every run, so a row it calls inert really is.
-    - Confinement: the classes the deployment's executor offers at or above the profile's floor. With self-hosted runners on, or an executor that cannot answer, every class counts.
+    - Confinement: the classes the deployment's runner offers at or above the profile's floor. With self-hosted runners on, or a runner that cannot answer, every class counts.
     - Secrets: the weakest model credential any launchable harness folds. A harness no enabled provider serves, and Your own tools, fold none, so `secrets_none` can bind on any deployment that offers one.
     - A run on a model provider is also named on its own, when its provider's credential forces a higher grade.
     - Egress: always from `sealed` up, because a run can narrow its allowlist.
