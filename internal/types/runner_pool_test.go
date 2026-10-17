@@ -28,24 +28,32 @@ func TestRunnerPoolMemberOrganizationPoolsHoldRemoteHostedOnly(t *testing.T) {
 		m     RunnerPoolMember
 		scope RunnerPoolScope
 		ok    bool
+		kind  RunnerOwnerKind
 	}{
-		{"self-hosted runner in a user pool", RunnerPoolMember{RunnerID: &id}, RunnerPoolUser, true},
-		{"remote-hosted runner in an organization pool", RunnerPoolMember{RemoteRunnerID: "build-1"}, RunnerPoolOrganization, true},
-		{"remote-hosted runner in a user pool", RunnerPoolMember{RemoteRunnerID: "build-1"}, RunnerPoolUser, true},
-		{"self-hosted runner in an organization pool", RunnerPoolMember{RunnerID: &id}, RunnerPoolOrganization, false},
-		{"both runners", RunnerPoolMember{RunnerID: &id, RemoteRunnerID: "build-1"}, RunnerPoolUser, false},
-		{"no runner", RunnerPoolMember{}, RunnerPoolUser, false},
-		{"nil runner id", RunnerPoolMember{RunnerID: &nilID}, RunnerPoolUser, false},
-		{"an address is not a remote runner id", RunnerPoolMember{RemoteRunnerID: "tcp://10.0.0.1:2376"}, RunnerPoolOrganization, false},
-		{"a claimed runner's substrate name is not a remote runner id", RunnerPoolMember{RemoteRunnerID: "runner:" + id.String()}, RunnerPoolOrganization, false},
-		{"a UUID is not a remote runner id", RunnerPoolMember{RemoteRunnerID: id.String()}, RunnerPoolOrganization, false},
-		{"a socket path is not a remote runner id", RunnerPoolMember{RemoteRunnerID: "/var/run/docker.sock"}, RunnerPoolOrganization, false},
+		{"self-hosted runner in a user pool", RunnerPoolMember{RunnerID: &id}, RunnerPoolUser, true, ""},
+		{"remote-hosted runner in an organization pool", RunnerPoolMember{RemoteRunnerID: "build-1"}, RunnerPoolOrganization, true, ""},
+		{"remote-hosted runner in a user pool", RunnerPoolMember{RemoteRunnerID: "build-1"}, RunnerPoolUser, true, ""},
+		{"self-hosted runner in an organization pool", RunnerPoolMember{RunnerID: &id}, RunnerPoolOrganization, false, ""},
+		{"organization runner in an organization pool", RunnerPoolMember{RunnerID: &id}, RunnerPoolOrganization, true, RunnerOwnerOrg},
+		{"organization runner in a user pool", RunnerPoolMember{RunnerID: &id}, RunnerPoolUser, false, RunnerOwnerOrg},
+		{"a runner of no known kind in an organization pool", RunnerPoolMember{RunnerID: &id}, RunnerPoolOrganization, false, "robot"},
+		{"both runners", RunnerPoolMember{RunnerID: &id, RemoteRunnerID: "build-1"}, RunnerPoolUser, false, ""},
+		{"no runner", RunnerPoolMember{}, RunnerPoolUser, false, ""},
+		{"nil runner id", RunnerPoolMember{RunnerID: &nilID}, RunnerPoolUser, false, ""},
+		{"an address is not a remote runner id", RunnerPoolMember{RemoteRunnerID: "tcp://10.0.0.1:2376"}, RunnerPoolOrganization, false, ""},
+		{"a claimed runner's substrate name is not a remote runner id", RunnerPoolMember{RemoteRunnerID: "runner:" + id.String()}, RunnerPoolOrganization, false, ""},
+		{"a UUID is not a remote runner id", RunnerPoolMember{RemoteRunnerID: id.String()}, RunnerPoolOrganization, false, ""},
+		{"a socket path is not a remote runner id", RunnerPoolMember{RemoteRunnerID: "/var/run/docker.sock"}, RunnerPoolOrganization, false, ""},
 	} {
-		if err := tc.m.Validate(tc.scope); (err == nil) != tc.ok {
+		kind := tc.kind
+		if kind == "" {
+			kind = RunnerOwnerPerson
+		}
+		if err := tc.m.Validate(tc.scope, kind); (err == nil) != tc.ok {
 			t.Errorf("%s: err = %v, want ok=%v", tc.name, err, tc.ok)
 		}
 	}
-	if err := (RunnerPoolMember{RunnerID: &id}).Validate(RunnerPoolOrganization); err == nil || err.Error() != OrgPoolSelfHostedMsg {
+	if err := (RunnerPoolMember{RunnerID: &id}).Validate(RunnerPoolOrganization, RunnerOwnerPerson); err == nil || err.Error() != OrgPoolSelfHostedMsg {
 		t.Errorf("a self-hosted runner in an organization pool: %v, want the ruling's sentence", err)
 	}
 }

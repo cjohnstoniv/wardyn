@@ -27,6 +27,27 @@ type residentFactsStore struct {
 	policy  json.RawMessage
 	posture types.RunnerPosture
 	reads   *int // delivery-policy reads, when set
+	// trust is the runner's stored class and recorded the run's admitted one; personal when unset.
+	trust, recorded types.RunnerTrustClass
+	unrecorded      bool // the run has no recorded class
+}
+
+func orPersonal(c types.RunnerTrustClass) types.RunnerTrustClass {
+	if c == "" {
+		return types.RunnerTrustPersonal
+	}
+	return c
+}
+
+func (s residentFactsStore) RunRunnerTrustClass(context.Context, uuid.UUID) (types.RunnerTrustClass, error) {
+	if s.unrecorded {
+		return "", nil
+	}
+	return orPersonal(s.recorded), nil
+}
+
+func (s residentFactsStore) SetRunRunnerTrustClass(context.Context, uuid.UUID, types.RunnerTrustClass) error {
+	return nil
 }
 
 func (s residentFactsStore) GetCredentialDeliveryPolicy(context.Context) (types.CredentialDeliveryPolicyDoc, error) {
@@ -38,7 +59,7 @@ func (s residentFactsStore) GetCredentialDeliveryPolicy(context.Context) (types.
 
 func (s residentFactsStore) GetRunner(_ context.Context, id uuid.UUID) (types.Runner, error) {
 	reported := time.Now()
-	return types.Runner{ID: id, State: types.RunnerClaimed, Posture: s.posture, PostureReportedAt: &reported}, nil
+	return types.Runner{ID: id, State: types.RunnerClaimed, Posture: s.posture, PostureReportedAt: &reported, TrustClass: orPersonal(s.trust)}, nil
 }
 
 // N1/Q7: the dispatch and revive doors judge a runner_resident credential on the
@@ -110,7 +131,7 @@ func TestLocalPlanFacts_OneDeliveryPolicyReadPerDoor(t *testing.T) {
 	reads := 0
 	f.srv.cfg.Store = residentFactsStore{localPlanTestStore: localPlanTestStore{f.st}, policy: json.RawMessage(`{"classes":{}}`), reads: &reads}
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/runs", nil).WithContext(utCtx("user", "", nil))
-	_, _ = f.srv.localPlacementRefusal(r, createRunRequest{Placement: placement.Local}, false, types.RunPolicySpec{}, governanceCeiling{}, runComponents{}, nil, nil, composer.Baseline{})
+	_, _ = f.srv.localPlacementRefusal(r, createRunRequest{Placement: placement.Local}, false, nil, types.RunPolicySpec{}, governanceCeiling{}, runComponents{}, nil, nil, composer.Baseline{})
 	if reads != 1 {
 		t.Errorf("create read the delivery policy %d times, want 1", reads)
 	}

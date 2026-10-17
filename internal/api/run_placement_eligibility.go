@@ -80,31 +80,37 @@ func placementDeniedMsg(p types.Placement, profile string) string {
 
 // localPlacementRefusal is the create-time answer for a local request: the
 // admitted plan's own refusal, else nil for a pooled run, which create binds to
-// one of the person's own runners (runPlacement.apply), with the delivery policy
-// the plan was judged on. Dispatch classifies the actual spec again
+// one of its eligible runners (runPlacement.apply), with the delivery policy and
+// trust class the plan was judged at. The plan is judged at each of trusts (the
+// eligible runners' classes, candidateTrusts), highest first, and the first that
+// admits it is the run's. Dispatch classifies the actual spec again
 // (classifyLocalDispatch) for what late authoring adds. An unpooled local
 // request has no runner to go to and is refused.
-func (s *Server) localPlacementRefusal(r *http.Request, req createRunRequest, pooled bool,
+func (s *Server) localPlacementRefusal(r *http.Request, req createRunRequest, pooled bool, trusts []types.RunnerTrustClass,
 	spec types.RunPolicySpec, ceiling governanceCeiling, comps runComponents,
 	drives []types.DriveMount, workspaces []types.Workspace, baseline composer.Baseline,
-) (placement.DeliveryPolicy, *runRefusal) {
+) (localJudgement, *runRefusal) {
 	if req.Placement != placement.Local {
-		return placement.DeliveryPolicy{}, nil
+		return localJudgement{}, nil
 	}
 	p, refusal := s.localAdmittedPlan(r, req, spec, ceiling, comps, drives, workspaces)
 	if refusal != nil {
-		return placement.DeliveryPolicy{}, refusal
+		return localJudgement{}, refusal
 	}
 	if err := s.localPlanFacts(r.Context(), &p, baseline, nil); err != nil {
-		return placement.DeliveryPolicy{}, runServerError("read the local placement facts", err)
+		return localJudgement{}, runServerError("read the local placement facts", err)
 	}
-	if _, ref := placement.LocalEligibility(p); ref != nil {
-		return placement.DeliveryPolicy{}, s.localEligibilityRefusal(r, ceiling, ref)
+	if trusts == nil {
+		trusts = placement.TrustClassesByRank()
+	}
+	trust, ref := judgeAtTrust(p, trusts)
+	if ref != nil {
+		return localJudgement{}, s.localEligibilityRefusal(r, ceiling, ref)
 	}
 	if pooled {
-		return p.Delivery, nil
+		return localJudgement{policy: p.Delivery, trust: trust}, nil
 	}
-	return placement.DeliveryPolicy{}, runError(placement.ReasonPlacementUnavailable.Status(), string(placement.ReasonPlacementUnavailable), localUnpooledMsg)
+	return localJudgement{}, runError(placement.ReasonPlacementUnavailable.Status(), string(placement.ReasonPlacementUnavailable), localUnpooledMsg)
 }
 
 // remoteInsteadMsg follows a local refusal of a run its pool put on the person's own runner while a
@@ -119,9 +125,11 @@ const localUnpooledMsg = "Your own runner is not available to this run: a local 
 
 // localPlanFacts fills what every LocalEligibility door (create, dispatch and
 // revive) judges a runner_resident credential on: the stored delivery policy,
-// the bound runner's reported posture, and the run's blast-radius floor (Q7).
-// Before a runner is bound (create) Posture stays nil; a store that keeps no
-// policy leaves every class refused.
+// the bound runner's reported posture and stored trust class, and the run's
+// blast-radius floor (Q7). Before a runner is bound (create) Posture and Trust
+// stay unset (create sets Trust per candidate class); a store that keeps no
+// policy leaves every class refused, and a bound runner whose trust class is
+// unknown refuses.
 func (s *Server) localPlanFacts(ctx context.Context, p *placement.LocalPlan, baseline composer.Baseline, runnerID *uuid.UUID) error {
 	p.ConfinementFloor = composer.RequiredConfinementFloor(p.Spec.ProxyConfig.Policy, baseline)
 	policy, err := s.storedDeliveryPolicy(ctx)
@@ -143,6 +151,10 @@ func (s *Server) localPlanFacts(ctx context.Context, p *placement.LocalPlan, bas
 		posture := rn.Posture
 		p.Posture = &posture
 	}
+	if !rn.TrustClass.Valid() {
+		return fmt.Errorf("runner %s has no known trust class", rn.ID)
+	}
+	p.Trust = rn.TrustClass
 	return nil
 }
 
@@ -320,10 +332,11 @@ type localGrantDelivery struct {
 
 // ownLocalGrantSpecs verifies the entire set before the first write. Local own
 // grant persistence never depends on a caller remembering to stamp OwnerOnly.
-// An org-held grant is admitted only when policy, the delivery policy the run's
-// plan was judged on, delivers its class via_org and its kind has the via_org
-// shape; it stays as authored (never OwnerOnly) and is recorded via_org.
-func (s *Server) ownLocalGrantSpecs(r *http.Request, spec types.RunPolicySpec, policy placement.DeliveryPolicy) (types.RunPolicySpec, []localGrantDelivery, *runRefusal) {
+// An org-held grant is admitted only when the delivery policy the run's plan was
+// judged on, at the trust class it was admitted at, delivers its class via_org
+// and its kind has the via_org shape; it stays as authored (never OwnerOnly) and
+// is recorded via_org.
+func (s *Server) ownLocalGrantSpecs(r *http.Request, spec types.RunPolicySpec, j localJudgement) (types.RunPolicySpec, []localGrantDelivery, *runRefusal) {
 	spec = spec.Clone()
 	out := make([]localGrantDelivery, len(spec.EligibleGrants))
 	for i, g := range spec.EligibleGrants {
@@ -331,7 +344,7 @@ func (s *Server) ownLocalGrantSpecs(r *http.Request, spec types.RunPolicySpec, p
 		if ref != nil {
 			return types.RunPolicySpec{}, nil, ref
 		}
-		if placement.ViaOrgGrant(origin, policy) {
+		if placement.ViaOrgGrant(origin, j.policy, j.trust) {
 			out[i] = localGrantDelivery{class: origin.Delivery, mode: placement.ModeViaOrg}
 			continue
 		}

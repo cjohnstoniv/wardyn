@@ -35,6 +35,9 @@ func (s *Server) refreshLocalDeploymentConfig(ctx context.Context, run types.Age
 	if err != nil {
 		return err
 	}
+	if err := s.trustChangedRefusal(ctx, run, p.Trust); err != nil {
+		return err
+	}
 	stripped, ref := placement.LocalEligibility(p)
 	if ref != nil {
 		return ref

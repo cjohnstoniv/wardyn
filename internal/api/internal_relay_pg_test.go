@@ -395,7 +395,7 @@ func TestRelay_InjectionAndMintServeOnlyOwn(t *testing.T) {
 	for _, p := range []types.Placement{types.PlacementLocal, types.PlacementRemote} {
 		runID := uuid.New()
 		f.createRun(t, runID, "alice", p)
-		if _, ok := f.h.srv.persistRunGrants(context.Background(), httptest.NewRecorder(), localMemberRequest("alice"), runID, time.Now().UTC(), spec, p, storedPolicy(t, f.h.srv)); !ok {
+		if _, ok := f.h.srv.persistRunGrants(context.Background(), httptest.NewRecorder(), localMemberRequest("alice"), runID, time.Now().UTC(), spec, p, personalJudgement(storedPolicy(t, f.h.srv))); !ok {
 			t.Fatalf("%s grants were refused", p)
 		}
 		rows, err := f.h.srv.cfg.Store.ListGrantsByRun(context.Background(), runID)

@@ -20,7 +20,6 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
-	"github.com/cjohnstoniv/wardyn/internal/placement"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -617,7 +616,7 @@ func TestProviderLaneVetoAtTheThreeGrantArms(t *testing.T) {
 			st.siteConfig = tc.sc
 			runID := uuid.New()
 			gw, ok := srv.persistRunGrants(context.Background(), httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/api/v1/runs", nil), runID, time.Now().UTC(),
-				types.RunPolicySpec{EligibleGrants: []types.GrantSpec{tc.grant}}, types.PlacementRemote, placement.DeliveryPolicy{})
+				types.RunPolicySpec{EligibleGrants: []types.GrantSpec{tc.grant}}, types.PlacementRemote, localJudgement{})
 			if !ok {
 				t.Fatal("persistRunGrants failed")
 			}
@@ -664,7 +663,7 @@ func TestProviderLaneVetoPermitsWhatTheRowPermits(t *testing.T) {
 			srv, st, _ := govEscapeFixture(t, &capStore{})
 			st.siteConfig = tc.sc
 			gw, ok := srv.persistRunGrants(context.Background(), httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/api/v1/runs", nil), uuid.New(), time.Now().UTC(),
-				types.RunPolicySpec{EligibleGrants: []types.GrantSpec{{Kind: types.GrantGitPAT, Scope: scope}}}, types.PlacementRemote, placement.DeliveryPolicy{})
+				types.RunPolicySpec{EligibleGrants: []types.GrantSpec{{Kind: types.GrantGitPAT, Scope: scope}}}, types.PlacementRemote, localJudgement{})
 			if !ok {
 				t.Fatal("persistRunGrants failed")
 			}
@@ -758,7 +757,7 @@ func TestLaneVetoAsksTheROWThatAdmitted(t *testing.T) {
 					WorkspaceRepos: []types.WorkspaceRepo{{Repo: admitOnRow}},
 					EligibleGrants: []types.GrantSpec{{Kind: types.GrantGitPAT,
 						Scope: mustJSON(map[string]any{"host": "github.com", "secret_name": "gh-pat"})}},
-				}, types.PlacementRemote, placement.DeliveryPolicy{})
+				}, types.PlacementRemote, localJudgement{})
 			if !ok {
 				t.Fatal("persistRunGrants failed")
 			}
@@ -780,7 +779,7 @@ func TestLaneVetoAsksTheROWThatAdmitted(t *testing.T) {
 				WorkspaceRepos: []types.WorkspaceRepo{{Repo: admitOnRow}},
 				EligibleGrants: []types.GrantSpec{{Kind: types.GrantGitPAT,
 					Scope: mustJSON(map[string]any{"host": "github.com", "secret_name": "gh-pat"})}},
-			}, types.PlacementRemote, placement.DeliveryPolicy{})
+			}, types.PlacementRemote, localJudgement{})
 		if !ok {
 			t.Fatal("persistRunGrants failed")
 		}
@@ -818,7 +817,7 @@ func TestLaneVetoAsksTheROWThatAdmitted(t *testing.T) {
 		st.siteConfig = sc
 		gw, ok := srv.persistRunGrants(context.Background(), httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/api/v1/runs", nil), uuid.New(), time.Now().UTC(),
 			types.RunPolicySpec{EligibleGrants: []types.GrantSpec{{Kind: types.GrantGitPAT,
-				Scope: mustJSON(map[string]any{"host": "github.com", "secret_name": "gh-pat"})}}}, types.PlacementRemote, placement.DeliveryPolicy{})
+				Scope: mustJSON(map[string]any{"host": "github.com", "secret_name": "gh-pat"})}}}, types.PlacementRemote, localJudgement{})
 		if !ok {
 			t.Fatal("persistRunGrants failed")
 		}

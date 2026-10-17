@@ -24,6 +24,7 @@ func residentPlan(cp ClassPolicy, posture *types.RunnerPosture) LocalPlan {
 		Origins:  map[string]CredentialOrigin{secretEnvPath: {Class: ClassOperator, Delivery: ClassEnvSecret}},
 		Delivery: DeliveryPolicy{Classes: map[string]ClassPolicy{ClassEnvSecret: cp}},
 		Posture:  posture,
+		Trust:    types.RunnerTrustPersonal,
 	}
 }
 
@@ -77,6 +78,7 @@ func adoResidentPlan(origin CredentialOrigin) LocalPlan {
 		CredentialIntents: []CredentialIntent{{Field: adoPath, Origin: origin}},
 		Delivery:          DeliveryPolicy{Classes: map[string]ClassPolicy{ClassADOMintedPAT: {Mode: ModeRunnerResident}}},
 		Posture:           &types.RunnerPosture{OS: "linux"},
+		Trust:             types.RunnerTrustPersonal,
 	}
 }
 
@@ -111,6 +113,7 @@ func TestLocalEligibility_ResidentValueMustBeItsPlaceholder(t *testing.T) {
 			Spec:     runner.SandboxSpec{ManagedFiles: []runner.ManagedFile{{Path: "/run/secret", AgentOwned: true, Content: []byte(content)}}},
 			Origins:  map[string]CredentialOrigin{filePath: {Class: ClassOperator, Delivery: ClassFileSecret}},
 			Delivery: DeliveryPolicy{Classes: map[string]ClassPolicy{ClassFileSecret: cp}},
+			Trust:    types.RunnerTrustPersonal,
 		}
 	}
 	if _, r := LocalEligibility(file("an-inline-file")); r == nil || r.Reason != ReasonPlacementCredential || r.Field != filePath {
@@ -161,14 +164,14 @@ func TestViaOrgGrant_RequiresTheViaOrgMode(t *testing.T) {
 	policy := func(m Mode) DeliveryPolicy {
 		return DeliveryPolicy{Classes: map[string]ClassPolicy{ClassAPIKey: {Mode: m}}}
 	}
-	if !ViaOrgGrant(origin, policy(ModeViaOrg)) {
+	if !ViaOrgGrant(origin, policy(ModeViaOrg), types.RunnerTrustPersonal) {
 		t.Fatal("an operator api_key under a via_org policy is not via_org")
 	}
 	saved := slices.Clone(Table)
 	t.Cleanup(func() { Table = saved })
 	Table = append([]Entry{{Struct: StructGrantKind, Field: "api_key", Variant: "test allow", Class: ClassOperator, Rule: RuleAllow, Delivery: ClassAPIKey}}, saved...)
 	for _, m := range []Mode{ModeRefuse, ModeRunnerResident} {
-		if ViaOrgGrant(origin, policy(m)) {
+		if ViaOrgGrant(origin, policy(m), types.RunnerTrustPersonal) {
 			t.Errorf("an admitted operator api_key under a %s policy answered via_org", m)
 		}
 	}

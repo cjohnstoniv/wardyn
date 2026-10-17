@@ -274,6 +274,7 @@ func TestLocalEligibilityOwnBedrockRoleCredentialsAreDeliveryOrRefuse(t *testing
 		t.Fatalf("mode refuse: %v", r)
 	}
 	p.Delivery = DeliveryPolicy{Classes: map[string]ClassPolicy{ClassBedrockRoleCreds: {Mode: ModeRunnerResident}}}
+	p.Trust = types.RunnerTrustPersonal
 	p.Spec.SecretEnv = map[string]string{"ROLE_SIGNING_KEY": ResidentPlaceholder(uuid.New())}
 	if _, r := LocalEligibility(p); r != nil {
 		t.Fatalf("mode runner_resident: %v", r)

@@ -61,6 +61,8 @@ var docTierRows = []struct{ route, token string }{
 	{"DELETE /api/v1/runner-pools/{id}", "the `/runner-pools` writes"},
 	{"PUT /api/v1/runner-pools/{id}/remote-runners/{rid}", "the `/runner-pools` writes"},
 	{"DELETE /api/v1/runner-pools/{id}/remote-runners/{rid}", "the `/runner-pools` writes"},
+	{"PUT /api/v1/runner-pools/{id}/runners/{runner}", "the `/runner-pools` writes"},
+	{"DELETE /api/v1/runner-pools/{id}/runners/{runner}", "the `/runner-pools` writes"},
 	{"PUT /api/v1/remote-runners/{rid}", "the `/runner-pools` writes"},
 	{"PUT /api/v1/runner-pool-defaults", "the `/runner-pools` writes"},
 	{"GET /api/v1/runner-pools/{id}/use-policy", "the `/runner-pools/{id}/use-policy` routes"},

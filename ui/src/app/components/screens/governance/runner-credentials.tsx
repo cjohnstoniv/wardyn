@@ -101,7 +101,8 @@ function policyFrom(draft: Draft, stored: DeliveryPolicy): DeliveryPolicy {
   }
   const azure = stored.classes.azure_foundry_token;
   if (azure && azure.mode !== "refuse") classes.azure_foundry_token = azure;
-  return { classes };
+  // Per-trust-class overrides have no editor control yet; a save keeps them as stored.
+  return stored.by_trust ? { classes, by_trust: stored.by_trust } : { classes };
 }
 
 const versionInvalid = (v: string) => v.trim() !== "" && !VERSION.test(v.trim());

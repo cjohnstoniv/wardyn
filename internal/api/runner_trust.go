@@ -1,0 +1,143 @@
+// Copyright 2026 The Wardyn Authors
+// SPDX-License-Identifier: Apache-2.0
+
+package api
+
+import (
+	"context"
+	"fmt"
+	"slices"
+
+	"github.com/google/uuid"
+
+	"github.com/cjohnstoniv/wardyn/internal/placement"
+	"github.com/cjohnstoniv/wardyn/internal/store"
+	"github.com/cjohnstoniv/wardyn/internal/types"
+)
+
+// The trust class through the local placement doors (K1 §2). A runner's trust class is stored and written
+// only by a security operator (runner_registration_trust.go); the delivery policy is read at it
+// (placement.DeliveryPolicy.ForTrust). Create judges a run's plan at each trust class among its eligible
+// runners, highest first, records the first that admits it (agent_runs.runner_trust_class) and binds the
+// run to a runner of that class. Dispatch takes the bound runner only when its class still gives every
+// persisted grant its persisted mode; a revive refuses runner_trust_changed when the class differs.
+
+// localJudgement is how a local run's credential plan was admitted: the delivery policy it was read
+// from and the trust class it was read at. Create persists the grants by the same judgement.
+type localJudgement struct {
+	policy placement.DeliveryPolicy
+	trust  types.RunnerTrustClass
+}
+
+// candidateTrusts is the distinct trust classes of the run's eligible runners, highest first. With no
+// runner among them (an unpooled request, or one waiting on remote-hosted runners) it is every class,
+// so the plan's own refusal is the one any runner would give.
+func candidateTrusts(targets []poolTarget) []types.RunnerTrustClass {
+	var out []types.RunnerTrustClass
+	for _, c := range placement.TrustClassesByRank() {
+		if slices.ContainsFunc(targets, func(t poolTarget) bool { return t.runnerID != nil && t.trust == c }) {
+			out = append(out, c)
+		}
+	}
+	if !slices.ContainsFunc(targets, func(t poolTarget) bool { return t.runnerID != nil }) {
+		return placement.TrustClassesByRank()
+	}
+	return out
+}
+
+// judgeAtTrust judges p at each class in turn and answers the first that admits it. When none does, the
+// refusal is the first class's, which names that class.
+func judgeAtTrust(p placement.LocalPlan, classes []types.RunnerTrustClass) (types.RunnerTrustClass, *placement.Refusal) {
+	var first *placement.Refusal
+	for _, c := range classes {
+		p.Trust = c
+		_, ref := placement.LocalEligibility(p)
+		if ref == nil {
+			return c, nil
+		}
+		if first == nil {
+			first = ref
+		}
+	}
+	if first == nil {
+		first = &placement.Refusal{Reason: placement.ReasonPlacementCredential, Field: "trust_class", Detail: "no runner of a known trust class can take this run"}
+	}
+	return "", first
+}
+
+// narrowToTrust keeps the run's eligible runners of class c: the bind then picks one the plan was
+// admitted at. Remote-hosted targets are left as they are.
+func narrowToTrust(targets []poolTarget, c types.RunnerTrustClass) []poolTarget {
+	return slices.DeleteFunc(slices.Clone(targets), func(t poolTarget) bool { return t.runnerID != nil && t.trust != c })
+}
+
+// runnerTrust is a runner's stored trust class. An unknown class, or a runner that cannot be read,
+// refuses: the class is never guessed.
+func (s *Server) runnerTrust(ctx context.Context, id uuid.UUID) (types.RunnerTrustClass, error) {
+	st, ok := s.cfg.Store.(interface {
+		GetRunner(context.Context, uuid.UUID) (types.Runner, error)
+	})
+	if !ok {
+		return "", fmt.Errorf("the store keeps no runners")
+	}
+	rn, err := st.GetRunner(ctx, id)
+	if err != nil {
+		return "", err
+	}
+	if !rn.TrustClass.Valid() {
+		return "", fmt.Errorf("runner %s has no known trust class", id)
+	}
+	return rn.TrustClass, nil
+}
+
+// recordRunTrust stores the class a local run was admitted at, before its grants. A store that keeps
+// no run trust records none, and a revive there refuses.
+func (s *Server) recordRunTrust(ctx context.Context, runID uuid.UUID, c types.RunnerTrustClass) error {
+	ts, ok := s.cfg.Store.(store.RunTrustStore)
+	if !ok {
+		return nil
+	}
+	return ts.SetRunRunnerTrustClass(ctx, runID, c)
+}
+
+// grantModesRefusal is dispatch's trust door: the bound runner's trust class must give every grant
+// recorded via_org or runner_resident its recorded mode. An own grant is the person's own material,
+// which the policy does not deliver.
+func grantModesRefusal(p placement.LocalPlan, rows []types.CredentialGrant, classOf func(types.CredentialGrant) (string, bool)) *placement.Refusal {
+	for _, g := range rows {
+		if g.Delivery != types.GrantDeliveryViaOrg && g.Delivery != types.GrantDeliveryResident {
+			continue
+		}
+		class, ok := classOf(g)
+		if !ok || p.Delivery.ForTrust(class, p.Trust).Mode != placement.Mode(g.Delivery) {
+			return &placement.Refusal{Reason: placement.ReasonPlacementCredential, Field: "eligible_grants",
+				Detail: fmt.Sprintf("a %s credential recorded %s is not delivered that way on a runner of trust class %s", class, g.Delivery, p.Trust)}
+		}
+	}
+	return nil
+}
+
+// trustChangedRefusal is the revive's trust door: the bound runner's class must be the one the run was
+// admitted at. A run with no recorded class is refused alike.
+func (s *Server) trustChangedRefusal(ctx context.Context, run types.AgentRun, current types.RunnerTrustClass) error {
+	ts, ok := s.cfg.Store.(store.RunTrustStore)
+	if !ok {
+		return &placement.Refusal{Reason: placement.ReasonRunnerTrustChanged, Field: "trust_class", Detail: "the run's admitted trust class cannot be read"}
+	}
+	recorded, err := ts.RunRunnerTrustClass(ctx, run.ID)
+	if err != nil {
+		return err
+	}
+	if !current.Valid() || recorded != current {
+		return &placement.Refusal{Reason: placement.ReasonRunnerTrustChanged, Field: "trust_class",
+			Detail: fmt.Sprintf("the runner's trust class is %s; the run was admitted at %s", current, trustLabel(recorded))}
+	}
+	return nil
+}
+
+func trustLabel(c types.RunnerTrustClass) string {
+	if c == "" {
+		return "no recorded class"
+	}
+	return string(c)
+}

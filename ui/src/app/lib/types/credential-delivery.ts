@@ -8,6 +8,8 @@
 // Go struct and credential-delivery.wire.test.ts pins its json tags, the closed value sets and the
 // bounds table below to internal/placement/delivery.go, which is where the server enforces them.
 
+import type { RunnerTrustClass } from "./runners";
+
 /** Go: placement.Mode. */
 export type DeliveryMode = "own" | "via_org" | "runner_resident" | "refuse";
 
@@ -68,9 +70,19 @@ export interface ClassPolicy {
   require_posture?: PostureRequirement;
 }
 
-/** Go: placement.DeliveryPolicy. A class absent from `classes` means `refuse`. */
+/** Go: placement.TrustPolicy — one runner trust class's overrides of the global classes. */
+export interface TrustPolicy {
+  classes: Partial<Record<DeliveryClass, ClassPolicy>>;
+}
+
+/**
+ * Go: placement.DeliveryPolicy. A class absent from `classes` means `refuse`. `by_trust` overrides a class
+ * on runners of one trust class; a class it does not name falls back to `classes`. An override never sets
+ * or overrides `via_org`, and never carries `require_posture` under `org_cluster` (the server's 400).
+ */
 export interface DeliveryPolicy {
   classes: Partial<Record<DeliveryClass, ClassPolicy>>;
+  by_trust?: Partial<Record<RunnerTrustClass, TrustPolicy>>;
 }
 
 /** Go: types.CredentialDeliveryPolicyDoc (GET /governance/credential-delivery). */
