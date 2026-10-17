@@ -426,7 +426,7 @@ func (o *Orchestrator) local(executor string) (substrate.Substrate, bool) {
 }
 
 // ExecutorFacts is the classes one configured executor can enforce now; false when it is not one of
-// this deployment's executors or cannot report.
+// this deployment's executors, or cannot report (with ProbeErr set).
 func (o *Orchestrator) ExecutorFacts(ctx context.Context, executor string) (runner.TargetFacts, bool) {
 	sub, ok := o.local(executor)
 	if !ok {
@@ -434,7 +434,7 @@ func (o *Orchestrator) ExecutorFacts(ctx context.Context, executor string) (runn
 	}
 	cs, err := o.classesFor(ctx, sub)
 	if err != nil {
-		return runner.TargetFacts{}, false
+		return runner.TargetFacts{ProbeErr: err}, false
 	}
 	_, keeps := sub.(runner.SandboxEnder)
 	return runner.TargetFacts{Classes: slices.Clone(cs.Classes), EphemeralDiskEnforcement: cs.EphemeralDiskEnforcement,

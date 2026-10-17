@@ -6,6 +6,7 @@ package api
 import (
 	"cmp"
 	"context"
+	"fmt"
 	"maps"
 	"net/http"
 	"slices"
@@ -182,6 +183,9 @@ func (s *Server) resolvePlacement(ctx context.Context, in placementInput) (runPl
 		decision = placementFor(f.req.PlacementRequest(), offers, s.deniedPlacements(ctx, f.ceiling))
 	}
 	if decision.Refusal != "" {
+		if err := probeFailure(kinds); err != nil {
+			return runPlacement{}, runError(http.StatusServiceUnavailable, reasonRunnerCapabilitiesUnavailable, loggedMsg(ctx, "runner capabilities unavailable", err))
+		}
 		return runPlacement{}, targetRefusal(decision.Refusal, row.Pool.Name, pool.Scope)
 	}
 	var choices []client.RunnerPoolChoice
@@ -196,6 +200,21 @@ func (s *Server) resolvePlacement(ctx context.Context, in placementInput) (runPl
 	return runPlacement{pooled: true, pool: pool, row: row.Pool, placement: decision.Placement, filled: decision.Filled, remoteOffered: remoteOffered,
 		eligible: picked, targets: chosen.targets, orgBarrier: org.Barrier, choices: choices, limits: chosen.limits, applied: chosen.applied,
 		waitsForRoom: waits, runnersFull: (capped || waits) && len(picked) > 0 && !slices.ContainsFunc(picked, func(t poolTarget) bool { return !t.full })}, nil
+}
+
+// probeFailure is the first probe error among the run's candidates: a configured executor whose facts
+// could not be read might have taken the run, so a refusal cannot be decided and the answer is the logged
+// 503, never one that says the pool has no runner for it. A registered runner that is offline is no such
+// error.
+func probeFailure(kinds map[types.Placement][]poolTarget) error {
+	for _, kind := range kindOrder {
+		for _, t := range kinds[kind] {
+			if t.facts.ProbeErr != nil {
+				return fmt.Errorf("executor %s: %w", t.executor, t.facts.ProbeErr)
+			}
+		}
+	}
+	return nil
 }
 
 // anyAtCapacity reports whether one of the kinds was refused only because its runners have no room now.
