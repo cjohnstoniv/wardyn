@@ -1404,7 +1404,9 @@ jobs:
   # creates and deletes its own clusters (the 1.31 kubelet floor, then the latest kind node image),
   # installs the runnerd chart with its rendered Role against test/k6/fakeorg, and runs test/k6
   # under runnerd's own token. bind-delete-serial and bind-delete-overlap are the release gate for
-  # the unbound-pod arm (design K1 §8). Kept out of release.yml's watched= until the lead adds it.
+  # the unbound-pod arm (design K1 §8). NEVER RUN BEFORE: NOTIFY_EXEMPT in
+  # scripts/test-repo-guards.sh, out of notify-new-lanes' needs and release.yml's watched= until it
+  # has gone green here, the same posture kind-survival-walk has.
   k6-kind-conformance:
     if: inputs.scope != 'candidate'
     runs-on: ubuntu-latest
@@ -1957,7 +1959,7 @@ jobs:
           fi
 
   notify-new-lanes:
-    needs: [task-e2e-live, ssh-e2e-live, test-drive, ci-mode-dogfood, docker-tagged-live, byoi-e2e-live, ui-sandbox-e2e-live, buildx-smoke, buildx-smoke-ui-sandbox, kind-sso-walk, kek-conformance, fuzz, gvisor-cc2-live, kind-sso-ado-walk, compose-sso-roles, daemon-proxy-secret-kind, provider-subscription-docker-pg, managed-settings-drift, k6-kind-conformance]
+    needs: [task-e2e-live, ssh-e2e-live, test-drive, ci-mode-dogfood, docker-tagged-live, byoi-e2e-live, ui-sandbox-e2e-live, buildx-smoke, buildx-smoke-ui-sandbox, kind-sso-walk, kek-conformance, fuzz, gvisor-cc2-live, kind-sso-ado-walk, compose-sso-roles, daemon-proxy-secret-kind, provider-subscription-docker-pg, managed-settings-drift]
     # main only: a workflow_dispatch on any other branch must not post to the main-health issue.
     if: failure() && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest

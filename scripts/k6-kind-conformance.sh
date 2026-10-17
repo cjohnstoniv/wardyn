@@ -37,7 +37,7 @@ TAG="k6-$$"
 RUNNERD_IMAGE="wardyn/wardyn-runnerd:$TAG"
 PROXY_IMAGE="wardyn/wardyn-proxy:$TAG"
 ORG_IMAGE="wardyn/k6-fakeorg:$TAG"
-AGENT_IMAGE="busybox:1.36"
+AGENT_IMAGE="wardyn/k6-agent:$TAG"
 ORG_NS=wardyn-k6-org
 OWN_NS=wardyn-k6-runner
 RUNS_NS=wardyn-k6-runs
@@ -52,7 +52,7 @@ START=$SECONDS
 had() { docker image inspect "$1" >/dev/null 2>&1 && echo yes || echo no; }
 HAD_RUNNERD_LOCAL="$(had wardyn/wardyn-runnerd:local)"
 HAD_PROXY_LOCAL="$(had wardyn/wardyn-proxy:local)"
-HAD_AGENT="$(had "$AGENT_IMAGE")"
+HAD_BUSYBOX="$(had busybox:1.36)"
 
 # shellcheck disable=SC2317  # reached through the EXIT trap
 cleanup() {
@@ -60,10 +60,10 @@ cleanup() {
   set +e
   [ -n "${SAMPLER:-}" ] && kill "$SAMPLER" 2>/dev/null
   [ -n "$CREATED" ] && kind delete cluster --name "$CREATED" >/dev/null 2>&1
-  docker rmi "$RUNNERD_IMAGE" "$PROXY_IMAGE" "$ORG_IMAGE" >/dev/null 2>&1
+  docker rmi "$RUNNERD_IMAGE" "$PROXY_IMAGE" "$ORG_IMAGE" "$AGENT_IMAGE" >/dev/null 2>&1
   [ "$HAD_RUNNERD_LOCAL" = no ] && docker rmi wardyn/wardyn-runnerd:local >/dev/null 2>&1
   [ "$HAD_PROXY_LOCAL" = no ] && docker rmi wardyn/wardyn-proxy:local >/dev/null 2>&1
-  [ "$HAD_AGENT" = no ] && docker rmi "$AGENT_IMAGE" >/dev/null 2>&1
+  [ "$HAD_BUSYBOX" = no ] && docker rmi busybox:1.36 >/dev/null 2>&1
   rm -rf "$WORK"
   return "$rc"
 }
@@ -92,7 +92,10 @@ docker tag wardyn/wardyn-runnerd:local "$RUNNERD_IMAGE"
 docker tag wardyn/wardyn-proxy:local "$PROXY_IMAGE"
 docker build -q -f test/k6/fakeorg/Dockerfile -t "$ORG_IMAGE" . >>"$WORK/build.log" 2>&1 \
   || { tail -40 "$WORK/build.log"; die "fake org image build failed"; }
-docker pull -q "$AGENT_IMAGE" >/dev/null
+# The agent is busybox, rebuilt as a single-platform local image: kind load cannot import a pulled
+# multi-platform index from Docker Desktop's containerd store (content digest not found).
+printf 'FROM busybox:1.36\n' | docker build -q -t "$AGENT_IMAGE" - >>"$WORK/build.log" 2>&1 \
+  || { tail -20 "$WORK/build.log"; die "agent image build failed"; }
 
 log "fake org TLS ($ORG_HOST)"
 openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj "/CN=k6 org CA" \
