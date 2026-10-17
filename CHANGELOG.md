@@ -15,6 +15,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - A runner's reconnect reads only the runs its leftover objects name, not every run in the organisation. Its decision
   sink refuses a session whose spool lock does not free within 10 s instead of stalling every other run's session.
 - A clone failure that points at a declined Azure DevOps credential names the repository whose clone failed.
+- A kill a runner deferred is asked again once that runner completes its next inventory, and the run's fence lifts when
+  the runner confirms it; before, the deferred answer stayed the run's last word until someone killed the run again.
 
 ## [0.9.3-rc.3] — 2026-10-17
 
