@@ -139,6 +139,23 @@ func TestService_UserAssignmentNamedLikeAGroupIsNotTheGroup(t *testing.T) {
 	}
 }
 
+// The refusal guards read group assignments only: a user assignment whose subject spells a group
+// name is neither a second group domain for the people in that group nor a group assignment that
+// makes a truncated login unplaceable.
+func TestService_GuardsIgnoreUserAssignmentsNamedLikeGroups(t *testing.T) {
+	pool := subjectkeytest.ThrowawayDB(t)
+	s := keydomain.NewService(pool, []string{"a", "b"})
+	login(t, s, "gina", false, "eng", "ops")
+	login(t, s, "hal", true, "eng")
+	set(t, s, "user", "ops", "b")
+	if n, err := s.AmbiguousIfGroup(t.Context(), "eng", "a"); err != nil || n != 0 {
+		t.Fatalf("AmbiguousIfGroup = (%d, %v); want 0: the user named ops is not a group assigned to another domain", n, err)
+	}
+	if yes, err := s.TruncatedWithGroups(t.Context(), "hal"); err != nil || yes {
+		t.Fatalf("TruncatedWithGroups = (%v, %v); want false: no group is assigned, only a user", yes, err)
+	}
+}
+
 // The API's guard counts who a group assignment would lock out: people whose last login lost
 // groups and who have no user assignment.
 func TestService_TruncatedUnassigned(t *testing.T) {

@@ -15,6 +15,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -837,5 +838,82 @@ func TestAcked_BenignVerdictGoesStaleBeforeTheBatchIsRead(t *testing.T) {
 	}
 	if acked, _, _, _, resets := base.state(); resets != 1 || acked != 7 {
 		t.Errorf("checkpoint = %d resets = %d, want 7 and 1", acked, resets)
+	}
+}
+
+// failNthRead fails the nth ListAuditEventsAfterSeq call, the interleaving of a
+// batch read that errors after a benign verdict.
+type failNthRead struct {
+	*fakeDeliveryStore
+	n, reads int
+}
+
+func (s *failNthRead) ListAuditEventsAfterSeq(ctx context.Context, seq int64, limit int) ([]types.FederatedAuditEvent, error) {
+	if s.reads++; s.reads == s.n {
+		return nil, errors.New("read failed")
+	}
+	return s.fakeDeliveryStore.ListAuditEventsAfterSeq(ctx, seq, limit)
+}
+
+// A benign verdict whose batch read then fails must not outlive that step: if the
+// next step finds a real gap, the one loss is reported once, not again in Deliver.
+func TestAcked_BenignVerdictLeftByAFailedReadReportsALaterLossOnce(t *testing.T) {
+	t.Parallel()
+
+	all := ackedRows(7)
+	base := &fakeDeliveryStore{haveRow: true, acked: 3, hash: "h3"}
+	base.setRows(all[3:5])                            // seqs 4,5: the checkpoint row is gone, nothing unacknowledged is
+	st := &failNthRead{fakeDeliveryStore: base, n: 3} // read 3 is the replacement batch read
+	col := &lineCollector{}
+	srv := col.server(t)
+	rec := &fakeRecorder{}
+
+	a, err := NewAckedWebhook(WebhookConfig{URL: srv.URL, RetryBaseDelay: "1ms"}, st, rec)
+	if err != nil {
+		t.Fatalf("NewAckedWebhook: %v", err)
+	}
+	ctx := context.Background()
+	a.step(ctx)
+	if n := rec.count(); n != 0 {
+		t.Fatalf("recorder holds %d events after the benign gap, want none", n)
+	}
+
+	base.setRows(all[5:]) // retention dropped the unacknowledged 4,5
+	if _, stop := a.step(ctx); stop {
+		t.Fatal("step stopped on a healthy collector")
+	}
+	if n := rec.count(); n != 1 {
+		t.Errorf("recorder holds %d events, want one audit.delivery.reset for the one loss", n)
+	}
+	if acked, _, _, _, resets := base.state(); resets != 1 || acked != 7 {
+		t.Errorf("checkpoint = %d resets = %d, want 7 and 1", acked, resets)
+	}
+}
+
+// Retention drops time partitions, so a row older than the checkpoint can outlive
+// it. The replacement batch then starts below the checkpoint, and the benign verdict
+// must be judged on the first row past it.
+func TestAcked_RetainedRowOlderThanTheCheckpointIsNotAGap(t *testing.T) {
+	t.Parallel()
+
+	all := ackedRows(5)
+	st := &fakeDeliveryStore{haveRow: true, acked: 3, hash: "h3"}
+	st.setRows([]types.FederatedAuditEvent{all[1], all[3], all[4]}) // seqs 2,4,5: 1 and 3 are gone
+	col := &lineCollector{}
+	srv := col.server(t)
+	rec := &fakeRecorder{}
+
+	a, err := NewAckedWebhook(WebhookConfig{URL: srv.URL, RetryBaseDelay: "1ms"}, st, rec)
+	if err != nil {
+		t.Fatalf("NewAckedWebhook: %v", err)
+	}
+	if _, stop := a.step(context.Background()); stop {
+		t.Fatal("step stopped on a healthy collector")
+	}
+	if n := rec.count(); n != 0 {
+		t.Errorf("recorder holds %d events, want none: only accepted rows were lost", n)
+	}
+	if acked, _, _, _, resets := st.state(); resets != 0 || acked != 5 {
+		t.Errorf("checkpoint = %d resets = %d, want 5 and 0", acked, resets)
 	}
 }

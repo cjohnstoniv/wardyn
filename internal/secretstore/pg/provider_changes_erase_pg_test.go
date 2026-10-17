@@ -364,7 +364,7 @@ func TestPG_StoreModeFencedPutEraseAndProviderDeleteDoNotDeadlock(t *testing.T) 
 	waitLockWaiters(t, base, 1) // the erase queues for the counter row behind the delete
 	put := make(chan error, 1)
 	go func() { put <- s.For(owner).Put(began, name, []byte("external-value-00")) }()
-	time.Sleep(200 * time.Millisecond) // the Put reaches whichever lock it takes first
+	waitLockWaiters(t, base, 2) // the Put reaches whichever lock it takes first and waits there
 	deleted := make(chan error, 1)
 	go func() { _, err := s.deleteLocked(t.Context(), del, owner, name); deleted <- err }()
 

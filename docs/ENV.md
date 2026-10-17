@@ -467,7 +467,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - Not together with `WARDYN_VAULT_TRANSIT_KEY*` or `WARDYN_AZURE_KEK_KEY*`, or with a platform key or `WARDYN_KEY_DOMAINS_FILE` domains: AWS KMS has neither yet.
 - Reached through `WARDYN_DAEMON_PROXY_URL` and `WARDYN_TRUSTED_CA_FILE`, in the `wardynd -rewrap` modes too.
 - `AWS_CA_BUNDLE` (or a profile's `ca_bundle`) is honoured too: with `WARDYN_TRUSTED_CA_FILE` unset it replaces the system roots (AWS CLI semantics), and with both set it is added to them.
-- Reached with the AWS SDK's default credential chain; a long-lived access key boots but raises the amber `kek_service_static_key` row.
+- Reached with the AWS SDK's default credential chain; a long-lived access key, or the EC2 node's instance role, boots but raises the amber `kek_service_static_key` row.
 - Each wrap is bound to its row by a hash in the encryption context, so CloudTrail shows no owner or credential name.
 - Its row `kek_id` is `awskms:<key ARN>`.
 

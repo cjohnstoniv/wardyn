@@ -317,6 +317,15 @@ func (a *audited) KeyServiceStaticKey() bool {
 	return false
 }
 
+// KeyServiceNodeRole forwards whether the key service is reached with the
+// node's instance role; false when the wrapped store does not say.
+func (a *audited) KeyServiceNodeRole() bool {
+	if d, ok := a.inner.(interface{ KeyServiceNodeRole() bool }); ok {
+		return d.KeyServiceNodeRole()
+	}
+	return false
+}
+
 func (a *audited) For(owner string) Store {
 	return &audited{inner: a.inner.For(owner), rec: a.rec, owner: owner}
 }
