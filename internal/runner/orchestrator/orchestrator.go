@@ -237,6 +237,17 @@ func (o *Orchestrator) ImagePresent(ctx context.Context, ref string) (bool, erro
 	return false, errors.New("orchestrator: no wired substrate supports image presence checks")
 }
 
+// DescribeImage implements runner.ImageDescriber by delegating to the first wired substrate that
+// implements it, as ImagePresent does.
+func (o *Orchestrator) DescribeImage(ctx context.Context, ref string) (string, error) {
+	for _, s := range o.locals() {
+		if id, ok := s.(runner.ImageDescriber); ok {
+			return id.DescribeImage(ctx, ref)
+		}
+	}
+	return "", errors.New("orchestrator: no wired substrate has a local image store")
+}
+
 // ProbeDrive implements runner.DriveProber by delegating to the first wired
 // substrate that implements it — the same single-fan-out ImagePresent uses. A
 // drive's backend is already scoped to this deployment's dispatch target

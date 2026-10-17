@@ -108,6 +108,15 @@ func (d *Driver) archRunnable(ctx context.Context, ref string, info image.Inspec
 		eng, ref, img, eng)}
 }
 
+// DescribeImage implements runner.ImageDescriber over the engine's local image store.
+func (d *Driver) DescribeImage(ctx context.Context, ref string) (string, error) {
+	res, err := d.cli.ImageInspect(ctx, ref)
+	if err != nil {
+		return "", fmt.Errorf("docker: image inspect %q: %w", ref, err)
+	}
+	return describeSelectedImage(ref, res.InspectResponse), nil
+}
+
 // describeSelectedImage says which image the local store resolved ref to: the registry digest, the
 // image's own platform, and whether the digest is a multi-arch index. It reads only the inspect
 // result. The classic image store reports no descriptor, so it cannot tell an index from a single

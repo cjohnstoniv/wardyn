@@ -47,4 +47,5 @@
 # docs/ENV.md 37264 adds 42 over 37222 (0.9.3 D), measured: the WARDYN_RUNNER_STATE_DIR row.
 # docs/ENV.md 37321 adds 57 over 37264 (0.9.3 A1 fix), measured: CA file delivery, WARDYN_PROXY_IMAGE_PINNED.
 # docs/ENV.md 37330 adds 9 (0.9.3 A1 fix): the CA mount path and the staged-PEM rule.
-docs/ENV.md=37330 share=5
+# docs/ENV.md 37389 adds 59 (0.9.3 M-6/R19): the air-gapped default of the drive probe image.
+docs/ENV.md=37389 share=5
