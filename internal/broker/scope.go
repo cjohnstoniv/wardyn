@@ -74,11 +74,11 @@ func ttlFor(spec types.GrantSpec) time.Duration {
 	return time.Duration(spec.TTLSeconds) * time.Second
 }
 
-// gitPATUsername resolves the git username to pair with a brokered PAT for a
+// GitPATUsername resolves the git username to pair with a brokered PAT for a
 // non-GitHub host. An explicit override always wins; otherwise Azure DevOps
 // (dev.azure.com and *.visualstudio.com) uses "pat" and everything else uses
 // "oauth2".
-func gitPATUsername(host, override string) string {
+func GitPATUsername(host, override string) string {
 	if override != "" {
 		return override
 	}

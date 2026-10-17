@@ -115,6 +115,7 @@ type Proxy struct {
 	// brokeredPATGrantIDs is every git_pat grant id of the run while the PAT
 	// broker is on; the mint relay refuses a body naming one (isBrokeredPATGrant).
 	brokeredPATGrantIDs []uuid.UUID
+	residentMints       map[uuid.UUID]ResidentMint // runner_resident mints answered locally (resident_mint.go)
 	// adoGrants answers the run's Azure DevOps grant per host for the REST gate
 	// (ado_gate.go). Nil == no host gated.
 	adoGrants adoGrantsByHost

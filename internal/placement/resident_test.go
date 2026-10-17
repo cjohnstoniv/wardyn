@@ -143,15 +143,25 @@ func TestLocalEligibility_GitHubTokenIsNeverResident(t *testing.T) {
 }
 
 // The grant-record call shape H12's via_org admission (ViaOrgGrant) uses: a
-// nil answer must never stand for a resident grant, under any posture, or a
-// resident-configured class would be stamped via_org.
-func TestClassifyCredential_ResidentGrantRecordIsNeverAdmitted(t *testing.T) {
+// nil answer must never stand for via_org under a resident policy. A record of
+// a class whose resident delivery is not built stays refused under any
+// posture; a built class's record is admitted resident and is still never
+// via_org.
+func TestClassifyCredential_ResidentGrantRecordNeverStandsForViaOrg(t *testing.T) {
 	healthy := &types.RunnerPosture{MDMManaged: true, DiskEncrypted: true, OS: "linux"}
 	for _, class := range []string{ClassAPIKey, ClassEnvSecret} {
 		origin := CredentialOrigin{Class: ClassOperator, Delivery: class, GrantKind: types.GrantKind(classGrantKind[class]), Stored: true}
-		p := LocalPlan{Delivery: DeliveryPolicy{Classes: map[string]ClassPolicy{class: {Mode: ModeRunnerResident}}}, Posture: healthy}
-		if r := classifyCredential(Entries, "ProxyConfig.Policy.EligibleGrants", origin, p, reflect.Value{}); r == nil || r.Reason != ReasonPlacementCredential {
+		policy := DeliveryPolicy{Classes: map[string]ClassPolicy{class: {Mode: ModeRunnerResident}}}
+		p := LocalPlan{Delivery: policy, Posture: healthy, Trust: types.RunnerTrustPersonal}
+		r := classifyCredential(Entries, "ProxyConfig.Policy.EligibleGrants", origin, p, reflect.Value{})
+		switch {
+		case !residentBuilt[class] && (r == nil || r.Reason != ReasonPlacementCredential):
 			t.Errorf("%s resident grant record: %+v, want %s", class, r, ReasonPlacementCredential)
+		case residentBuilt[class] && r != nil:
+			t.Errorf("%s resident grant record of a built class: %+v, want admitted", class, r)
+		}
+		if ViaOrgGrant(origin, policy, types.RunnerTrustPersonal) {
+			t.Errorf("%s resident grant record answered via_org", class)
 		}
 	}
 }

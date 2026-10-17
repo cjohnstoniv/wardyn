@@ -75,6 +75,10 @@ type Dispatcher struct {
 	selftests sync.Map
 }
 
+// Residents reports whether the runner holds runner_resident credentials, its
+// caps' Resident.
+func (d *Dispatcher) Residents() bool { return d.cfg.Resident != nil }
+
 func New(cfg Config) (*Dispatcher, error) {
 	id, err := uuid.Parse(cfg.RunnerID)
 	if err != nil || id.String() != cfg.RunnerID || cfg.Substrate == nil || cfg.HoldsSandbox == nil || cfg.BeforeCreate == nil || cfg.Created == nil || cfg.CreateFailed == nil || cfg.BeforeRefCall == nil || cfg.AfterRefCall == nil || cfg.MutationFinished == nil || cfg.ExecutionResult == nil {
