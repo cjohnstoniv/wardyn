@@ -62,12 +62,15 @@ export function AdminMintedTokens() {
   const inFlight = React.useRef(false);
 
   // The list stays on screen while the toggle's request is out, so the toggle keeps its place and focus.
+  // Only the newest read may answer: a slow earlier one must not overwrite the toggle's current choice.
+  const newest = React.useRef(0);
   const load = React.useCallback(() => {
+    const mine = ++newest.current;
     setFailed(false);
     credentialsApi
       .listAdminMintedTokens(includeRevoked)
-      .then(setTokens)
-      .catch(() => setFailed(true));
+      .then((rows) => { if (mine === newest.current) setTokens(rows); })
+      .catch(() => { if (mine === newest.current) setFailed(true); });
   }, [includeRevoked]);
   React.useEffect(load, [load]);
 

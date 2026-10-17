@@ -102,6 +102,24 @@ describe("the State column", () => {
     await waitFor(() => expect(screen.queryByText("dana@example.com")).not.toBeInTheDocument());
   });
 
+  it("a slow earlier read never overwrites the toggle's current choice (FUG-L356)", async () => {
+    render(<AdminMintedTokens />);
+    await screen.findByText("alice@example.com");
+    const toggle = () => screen.getByRole("checkbox", { name: MINTED.INCLUDE_REVOKED });
+    await user.click(toggle()); // on: answers at once
+    expect(await screen.findByText("dana@example.com")).toBeInTheDocument();
+    let release: (rows: AdminMintedToken[]) => void = () => {};
+    listMintedMock.mockImplementationOnce(() => new Promise<AdminMintedToken[]>((r) => { release = r; }));
+    await user.click(toggle()); // off: the slow read
+    await user.click(toggle()); // on again: answers at once
+    await waitFor(() => expect(listMintedMock).toHaveBeenLastCalledWith(true));
+    expect(await screen.findByText("dana@example.com")).toBeInTheDocument();
+    release(live); // the old read ends last, with no revoked rows
+    await new Promise((r) => setTimeout(r, 20));
+    expect(screen.getByText("dana@example.com")).toBeInTheDocument();
+    expect(toggle()).toBeChecked();
+  });
+
   it("with only revoked tokens, says none work and keeps the toggle", async () => {
     listMintedMock.mockImplementation(async (includeRevoked?: boolean) => (includeRevoked ? revoked : []));
     render(<AdminMintedTokens />);
