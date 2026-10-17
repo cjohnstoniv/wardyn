@@ -433,7 +433,7 @@ func TestResidentGitPAT_FlagMatrix(t *testing.T) {
 	}
 	// Every spelling of an Azure DevOps host, including a stored scope from
 	// before a host had to be bare.
-	for _, host := range []string{"dev.azure.com", "dev.azure.com:443", "Dev.Azure.Com.", "ssh.dev.azure.com", "org.dev.azure.com", "org.visualstudio.com"} {
+	for _, host := range []string{"dev.azure.com", "dev.azure.com:443", "Dev.Azure.Com.", "ssh.dev.azure.com", "org.dev.azure.com", "org.visualstudio.com", "https://dev.azure.com", "dev.azure.com/org"} {
 		ado := types.GrantSpec{Kind: types.GrantGitPAT, Scope: json.RawMessage(`{"host":"` + host + `","secret_name":"op-pat"}`)}
 		if _, _, ref := f.srv.ownLocalGrantSpecs(localMemberRequest("bob"), types.RunPolicySpec{EligibleGrants: []types.GrantSpec{ado}}, policy); ref == nil || !strings.Contains(ref.body.Error, residentADOGitPATRefused) {
 			t.Fatalf("an Azure DevOps git token for %q was admitted runner_resident: %+v", host, ref)

@@ -103,17 +103,20 @@ func residentADOGitPAT(sc types.SiteConfig, g types.GrantSpec) bool {
 	if err != nil {
 		return true
 	}
+	// A stored host that is not a hostname once folded (a scheme, a path or
+	// userinfo written before the host was checked) cannot be shown not to be
+	// Azure DevOps, so it is refused the same.
 	host := gitPATHostKey(pat.Host)
-	return host == "dev.azure.com" || strings.HasSuffix(host, ".dev.azure.com") || adoGrantHost(sc, host)
+	return !validGitPATHost(host) || host == "dev.azure.com" || strings.HasSuffix(host, ".dev.azure.com") || adoGrantHost(sc, host)
 }
 
 // gitPATHostKey is host as a forge names it: lowercased, trimmed of space and
-// of a trailing dot, with any port split off. A stored scope written before
+// of a trailing dot, with a numeric port split off. A stored scope written before
 // the host had to be bare (validGitPATHost) is judged on this form.
 func gitPATHostKey(host string) string {
 	host = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(host), "."))
-	if h, _, err := net.SplitHostPort(host); err == nil {
-		host = strings.TrimSuffix(h, ".")
+	if h, port, err := net.SplitHostPort(host); err == nil && port != "" && strings.Trim(port, "0123456789") == "" {
+		host = strings.TrimSuffix(h, ".") // a numeric port only: "https://x" keeps its scheme and is refused
 	}
 	return host
 }
