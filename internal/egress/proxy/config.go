@@ -520,6 +520,20 @@ func (c *Config) applyDefaultsAndValidate() error {
 	if err := c.validateTerminatedGates(); err != nil {
 		return err
 	}
+	if c.SelfLapse != (c.DecisionSink != nil) {
+		return fmt.Errorf("config: self_lapse and decision_sink are set together (k8s runners), never one alone")
+	}
+	if c.DecisionSink != nil {
+		if c.DecisionSpoolDir != "" {
+			return fmt.Errorf("config: decision_sink and decision_spool_dir are exclusive")
+		}
+		if err := c.DecisionSink.validate(); err != nil {
+			return fmt.Errorf("config: %w", err)
+		}
+	}
+	if err := c.validateHardDeny(); err != nil {
+		return err
+	}
 	if err := c.validateMCP(); err != nil {
 		return err
 	}
