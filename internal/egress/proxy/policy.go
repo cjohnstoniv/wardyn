@@ -539,6 +539,9 @@ func literalIPDenialDetail(host string, port int, pol *Policy, kind blockKind) s
 		return egressPrivateRangeCause + "; " + egressInternalHostsRemedy + ". " +
 			siteInternalHostsCIDRHint + " " + egressDenialSuffix
 	}
+	if kind == blockHardDeny {
+		return neverLiftableDetail("literal IP "+ip.String(), kind)
+	}
 	if pol != nil {
 		if _, denied := pol.deniedExact[ip.String()]; denied {
 			return "literal IP " + ip.String() + " is on denied_domains, and a deny always beats an allow"

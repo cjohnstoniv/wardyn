@@ -1,0 +1,5 @@
+# Prose-word budgets (scripts/doc-form.sh): path=N share=S.
+# docs/operations/k8s-runners.md 3717 measured (0.9.3): the operator guide for an organisation runner in a Kubernetes cluster, resolved against the merged code and the kind results, then corrected after review (fullnameOverride, pool add scope, cleanup labels; 3280 at the draft).
+# docs/operations/k8s-runners.md 3896 = 3717 + 179, measured at the merge: the node record form, route and rules replace the not-yet-shipped warning, plus the relay-fence row, the apiserver deny line, the boot refusal of an upstream proxy and the pool add step.
+# docs/operations/k8s-runners.md 3915 = 3896 + 19, measured: a helm template render adds no apiserver addresses.
+docs/operations/k8s-runners.md=3915 share=35

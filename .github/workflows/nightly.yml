@@ -1310,6 +1310,71 @@ jobs:
           path: test/reports/e2e/kind-survival-walk.log
           if-no-files-found: error
 
+  # scripts/k6-kind-conformance.sh, the Kubernetes runner's kind conformance. It creates and
+  # deletes its own clusters (the 1.31 kubelet floor, then the latest kind node image), stands up a
+  # real organisation (wardynd and postgres from deploy/helm/wardyn), enrols runnerd through its
+  # chart and rendered Role, and runs test/k6 against both, then under runnerd's own token.
+  # bind-delete-serial and bind-delete-overlap are the release gate for the unbound-pod arm: a pod
+  # deleted before it binds must never leave a proxy no one can stop. NEVER RUN BEFORE: NOTIFY_EXEMPT in
+  # scripts/test-repo-guards.sh, out of notify-new-lanes' needs and release.yml's watched= until it
+  # has gone green here, the same posture kind-survival-walk has.
+  k6-kind-conformance:
+    if: inputs.scope != 'candidate'
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      - name: Pull Docker Hub images through mirror.gcr.io (Docker Hub 429s)
+        run: |
+          command -v dockerd >/dev/null || exit 0
+          f=/etc/docker/daemon.json
+          cur='{}'; [ -s "$f" ] && cur="$(sudo cat "$f")"
+          printf '%s' "$cur" | jq '. + {"registry-mirrors": ["https://mirror.gcr.io"]}' | sudo tee "$f" >/dev/null
+          # A SIGHUP reload resets the host-gateway address, so restart, then bring back any service container.
+          running="$(docker ps -q)"; sudo systemctl restart docker
+          [ -z "$running" ] || docker start $running >/dev/null
+          docker info --format '{{.RegistryConfig.Mirrors}}' | grep -q mirror.gcr.io
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
+        with:
+          version: latest
+      - uses: helm/kind-action@06c1ae10762d3b9c1644e7fe69596ae519e015a2 # v1.15.0
+        with:
+          install_only: "true"
+      - name: Kubernetes runner kind conformance (floor and latest kubelet)
+        env:
+          WARDYN_TEST_K8S: "1"
+          K6_KEEP_LOGS: ${{ github.workspace }}/test/reports/e2e
+        shell: bash
+        run: |
+          set +e
+          mkdir -p test/reports/e2e
+          ./scripts/k6-kind-conformance.sh 2>&1 | tee test/reports/e2e/k6-kind-conformance.log
+          echo "K6_EXIT=${PIPESTATUS[0]}" >> "$GITHUB_ENV"
+      - name: Assert the harness ran (not a self-skip) and passed
+        shell: bash
+        run: |
+          set -euo pipefail
+          log=test/reports/e2e/k6-kind-conformance.log
+          if [ "${K6_EXIT:-}" = "77" ]; then
+            echo "::error::k6-kind-conformance.sh self-skipped (exit 77) — WARDYN_TEST_K8S did not reach the step"
+            exit 1
+          fi
+          if [ "${K6_EXIT:-1}" != "0" ]; then
+            echo "::error::k6-kind-conformance.sh exited ${K6_EXIT:-<unset>} — see the uploaded log"
+            exit 1
+          fi
+          grep -q '^k6-kind-conformance: PASS' "$log" || { echo "::error::the harness never reached its own closing PASS line"; exit 1; }
+      - name: Upload harness evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: k6-kind-conformance-results
+          path: test/reports/e2e/
+          if-no-files-found: error
+
   # T-41 (#701): scripts/hybrid-walk.sh — laptop compose <-> org kind. Same
   # `make kind-quickstart` cluster as the job above; the laptop is its own
   # dedicated compose project this job builds fresh (nightly runners share

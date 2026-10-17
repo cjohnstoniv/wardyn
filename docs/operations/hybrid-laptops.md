@@ -5,6 +5,7 @@
 - In 0.9 a laptop joins an org as a **client-mode runner**: it runs `wardyn-runnerd`, not a control plane, and the person who owns it claims it.
 - A run is placed on it through one of its owner's user pools: see [Runner pools](runner-pools.md).
 - Set it up with `wardyn-runnerd setup`, one command that installs the per-user service: see [Set up a runner](../runner-registration.md#set-up-a-runner).
+- A cluster can be an organisation's runner instead of a laptop: see [Organisation runners in a Kubernetes cluster](k8s-runners.md).
 - Design: [docs/design/0.9/PLAN.md](../design/0.9/PLAN.md). Org enrolment of a full daemon (`WARDYN_ORG_URL`) still works in 0.9, logs a deprecation warning at boot, and is removed in 1.0; see [Legacy org enrolment](#legacy-org-enrolment-deprecated).
 
 ## Where each thing lives

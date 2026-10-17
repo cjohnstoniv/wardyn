@@ -895,10 +895,15 @@ func (o *Orchestrator) KillSandbox(ctx context.Context, ref string) error {
 // containers keyed by the wardyn.run-id label. This makes the Orchestrator
 // satisfy the sweeper interface even though the concrete implementation is
 // build-tagged behind a substrate.
+//
+// Runners are swept too, under the same rule and age: a run whose create died
+// with runnerd leaves its proxy pod on the runner, and nothing else reaches it.
+// The runner lists only what it created and removes only the ids the org names;
+// an offline runner is skipped.
 func (o *Orchestrator) SweepOrphanedSandboxes(ctx context.Context, minAge time.Duration, isOrphan func(runID uuid.UUID) bool) (int, error) {
 	var total int
 	var errs []error
-	for _, s := range o.locals() {
+	for _, s := range o.snapshot() {
 		sw, ok := s.(interface {
 			SweepOrphanedSandboxes(context.Context, time.Duration, func(uuid.UUID) bool) (int, error)
 		})
@@ -907,7 +912,7 @@ func (o *Orchestrator) SweepOrphanedSandboxes(ctx context.Context, minAge time.D
 		}
 		n, err := sw.SweepOrphanedSandboxes(ctx, minAge, isOrphan)
 		total += n
-		if err != nil {
+		if err != nil && !errors.Is(err, runner.ErrRunnerOffline) {
 			errs = append(errs, err)
 		}
 	}

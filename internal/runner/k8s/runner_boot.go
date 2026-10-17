@@ -262,9 +262,22 @@ func (d *Driver) ProbeRelaySource(ctx context.Context, target string, port int32
 	if _, err := d.clientset.CoreV1().Pods(ns).Create(ctx, pod, metav1.CreateOptions{}); err != nil {
 		return fmt.Errorf("%w: create probe pod: %w", errRelayProbeInconclusive, err)
 	}
+	seen := make(chan string, 1)
+	go d.watchProbeIP(ctx, ns, name, seen)
 	src, err := observed(ctx)
 	if err != nil {
 		return fmt.Errorf("%w: the relay saw no probe connection: %w", errRelayProbeInconclusive, err)
+	}
+	// The probe connects and exits within moments, before its kubelet has posted the pod's status, so
+	// the pod's IP can still be missing when the relay sees the connection. Wait for it, bounded.
+	var seenIP string
+	select {
+	case seenIP = <-seen:
+	case <-time.After(probeIPWait):
+	case <-ctx.Done():
+	}
+	if seenIP != "" {
+		return relaySourceVerdict(seenIP, src)
 	}
 	got, err := d.clientset.CoreV1().Pods(ns).Get(ctx, name, metav1.GetOptions{})
 	if err != nil {
@@ -274,6 +287,37 @@ func (d *Driver) ProbeRelaySource(ctx context.Context, target string, port int32
 		return fmt.Errorf("%w: read probe pod: %w", errRelayProbeInconclusive, err)
 	}
 	return relaySourceVerdict(got.Status.PodIP, src)
+}
+
+// probeIPPoll is how often watchProbeIP reads the probe pod.
+const probeIPPoll = 100 * time.Millisecond
+
+// probeIPWait is how long the verdict waits for the IP after the relay saw the connection (a
+// variable so a test can bound it short).
+var probeIPWait = 30 * time.Second
+
+// watchProbeIP sends the probe pod's IP on seen the first time a read shows one, then returns. A pod
+// that is gone sends "" at once, so the verdict falls through without waiting out probeIPWait. It
+// also returns when ctx ends.
+func (d *Driver) watchProbeIP(ctx context.Context, ns, name string, seen chan<- string) {
+	t := time.NewTicker(probeIPPoll)
+	defer t.Stop()
+	for {
+		got, err := d.clientset.CoreV1().Pods(ns).Get(ctx, name, metav1.GetOptions{})
+		switch {
+		case err == nil && got.Status.PodIP != "":
+			seen <- got.Status.PodIP
+			return
+		case apierrors.IsNotFound(err):
+			seen <- ""
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+	}
 }
 
 // relaySourceVerdict compares the probe pod's IP with the source the relay saw.

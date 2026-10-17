@@ -286,3 +286,32 @@ func (h *runnerHarness) boundAgent(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// TestRunnerHeldTeardownIsTyped: a runner-mode teardown (a kill) whose pods have no completion
+// evidence past both delete bounds answers the typed ContainmentPendingError, so the manager holds
+// that run and the runner's session still reaches READY (§8 P2), and keeps the NetworkPolicies.
+func TestRunnerHeldTeardownIsTyped(t *testing.T) {
+	ctx := context.Background()
+	h := newRunnerHarness(t)
+	f := fenceSet{}
+	f.wire(h)
+	pod := h.boundProxy(t)
+	if _, err := h.d.mutate(h.runID, func(ev *runEvidence) (bool, error) {
+		ev.pod(componentAgent, agentPodName(h.runID)).UID = "uid-agent"
+		return true, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.cs.Tracker().Delete(podsGVR, testNamespace, pod.Name); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 3; i++ {
+		_ = h.d.StopProxy(ctx, agentPodName(h.runID))
+	}
+	zero := int64(0)
+	err := h.d.teardownByRunID(ctx, h.runID, &zero)
+	var pending *runner.ContainmentPendingError
+	if !errors.As(err, &pending) || pending.Kind != runner.ContainmentPendingDelete || !strings.Contains(err.Error(), "NetworkPolicies kept") {
+		t.Fatalf("held teardown: %v", err)
+	}
+}

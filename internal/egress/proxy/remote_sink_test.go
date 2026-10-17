@@ -17,6 +17,7 @@ import (
 	"io"
 	"math/big"
 	"net"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
@@ -317,6 +318,79 @@ func TestRemoteSink_DrainClosesOpenTunnels(t *testing.T) {
 	_ = client.SetReadDeadline(time.Now().Add(2 * time.Second))
 	if _, err := br.ReadByte(); !errors.Is(err, io.EOF) {
 		t.Fatalf("tunnel still open after the drain: %v", err)
+	}
+}
+
+// TestRemoteSink_DrainEndsInFlightMITMRequest: a drain with a
+// MITM inner request still waiting on its upstream closes the agent's connection, the inner request
+// ends at once (the upstream sees its context cancelled), and its final decision is emitted before the
+// drained reply, so the drain is exact and the record is in it.
+func TestRemoteSink_DrainEndsInFlightMITMRequest(t *testing.T) {
+	const host = "mirror.corp"
+	started := make(chan struct{}, 1)
+	ended := make(chan time.Time, 1)
+	up := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		started <- struct{}{}
+		<-r.Context().Done()
+		ended <- time.Now()
+	}))
+	defer up.Close()
+	certPEM, keyPEM := genTestCA(t)
+	ca, err := newCertAuthority(certPEM, keyPEM)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rs, f := startedSink(t)
+	c := accept(t, rs, f.next(), 1, 0, 10, 1<<20)
+	p := newProxy(Options{
+		RunID: uuid.New(), Policy: CompilePolicy(types.RunPolicySpec{AllowedDomains: []string{host}}),
+		Sink: &decisionSink{remote: rs}, Scanner: forwardScanEngine(t, "block"), CA: ca, MITMHosts: []string{host},
+		Resolver: publicResolver{}, TLSClientConfig: testInsecureTLSConfig, Dial: redirectDial(upstreamAddr(up)),
+	})
+	srv := httptest.NewServer(p)
+	defer srv.Close()
+	conn, status := connectThrough(t, srv.URL, host+":443")
+	defer conn.Close()
+	if !strings.Contains(status, "200") {
+		t.Fatalf("CONNECT status = %q", status)
+	}
+	pool := x509.NewCertPool()
+	pool.AppendCertsFromPEM(certPEM)
+	tc := tls.Client(conn, &tls.Config{ServerName: host, RootCAs: pool})
+	if err := tc.Handshake(); err != nil {
+		t.Fatalf("handshake through the MITM tunnel: %v", err)
+	}
+	req, _ := http.NewRequest(http.MethodGet, "https://"+host+"/slow", nil)
+	if err := req.Write(tc); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the inner request never reached the upstream")
+	}
+	drainAt := time.Now()
+	writeFrame(t, c, SinkFrame{T: FrameDrain, Gen: 1})
+	var recorded bool
+	var d SinkFrame
+	for d.T != FrameDrained {
+		d = readFrame(t, c)
+		if d.T == FrameRecord {
+			recorded = recorded || strings.Contains(string(d.Body), "/slow")
+			writeFrame(t, c, SinkFrame{T: FrameAck, Gen: d.Gen, Seq: d.Seq, Disposition: "appended"})
+		}
+	}
+	drainedAt := time.Now()
+	select {
+	case at := <-ended:
+		if took := at.Sub(drainAt); took > 3*time.Second {
+			t.Fatalf("inner request ended %s after the drain began, past the 3 s drain", took)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatalf("the inner request was still waiting on its upstream 5 s after the drained reply (drain took %s; drained %+v, recorded %v)", drainedAt.Sub(drainAt), d, recorded)
+	}
+	if !recorded || d.Consumed != uint64(d.FinalSeq) {
+		t.Fatalf("drained %+v, /slow decision recorded %v: want an exact drain carrying the inner request's decision", d, recorded)
 	}
 }
 

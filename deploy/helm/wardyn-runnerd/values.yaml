@@ -73,7 +73,8 @@ egress:
   orgCIDRs: []
   # Raw NetworkPolicyEgressRule list appended to runnerd's egress.
   extra: []
-  # Written into every proxy's hard_deny on top of the in-cluster names and addresses runnerd adds itself.
+  # Written into every proxy's hard_deny on top of the in-cluster names and addresses runnerd adds itself,
+  # and the apiserver addresses the chart reads from the kubernetes Service at install and upgrade.
   # Recommended: the cluster's pod and service CIDRs.
   hardDenyCIDRs: []
 
