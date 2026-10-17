@@ -398,6 +398,10 @@ helm install wardyn oci://ghcr.io/cjohnstoniv/charts/wardyn --version "$WARDYN_V
   - wardynd refuses to boot, naming the key, on a reserved label (`wardyn.managed`, `wardyn.run-id`, `wardyn.component`) or on any `kubernetes.io/` or `k8s.io/` annotation or label except `cluster-autoscaler.kubernetes.io/safe-to-evict`, which is never set by default.
 - `k8s.readNodes` (`WARDYN_K8S_READ_NODES`, default `false`): adds `list` on `nodes` to the ClusterRole so preflight and create can warn that no node a run may be placed on is large enough.
   - It compares a run's requests to node size, honouring `k8s.sandbox.*`, never to free capacity: pods of other namespaces are invisible to wardynd, and the scheduler stays the authority.
+  - It also shortens a start wait.
+    - A pod the scheduler reports `Unschedulable` fails at the start timeout, not the capacity wait, when a Ready node exists and none passes the `k8s.sandbox.*` selector, affinity and taints.
+    - Cordon, not-ready and autoscaler deletion taints are not counted, and zero nodes keeps the wait.
+    - A pool the autoscaler scales from zero reads as no match while other nodes are healthy, so leave the flag off for it.
   - Without it the warning is absent.
   - With no ResourceQuota in the runs namespace, it is also how wardynd measures the cluster at boot to propose the cluster runner's limits. With neither, the runner gets none and takes no run until an admin sets them. The kind quickstart turns it on for that.
   - Separately and always on, the runner Role has `list` on `resourcequotas`: a run that cannot fit the runs namespace's quota is refused before it is created (`namespace_quota_exceeded`),

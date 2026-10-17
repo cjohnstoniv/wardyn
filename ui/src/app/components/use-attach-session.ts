@@ -74,6 +74,17 @@ const AUTH_ENDED_CLOSE_CODE = 4401;
 const AUTH_ENDED_REASON = "session ended";
 
 // Helpers
+
+/** The grid the container would fit, whatever the local grid is pinned to. */
+export function realFit(fit: FitAddon | null): { cols: number; rows: number } | null {
+  try {
+    const d = fit?.proposeDimensions();
+    return d && d.cols > 0 && d.rows > 0 ? { cols: d.cols, rows: d.rows } : null;
+  } catch {
+    return null;
+  }
+}
+
 function buildWsUrl(runId: string, ticket?: string, cols?: number, rows?: number): string {
   const q = new URLSearchParams();
   if (ticket) q.set("ticket", ticket);
@@ -312,6 +323,11 @@ export function useAttachSession(args: UseAttachSessionArgs) {
       send(new TextEncoder().encode(text));
     };
 
+    // What the server is told this client's size is. A pinned observer's local grid
+    // is the writer's, so a reconnect URL built from it would hand the server the
+    // writer's size as the observer's own.
+    const connectSize = () => (observerPinRef.current ? realFit(fitAddonRef.current) : null) ?? { cols: term.cols, rows: term.rows };
+
     const connect = () => {
       if (disposed) return;
       setConnState(reconnectAttempts > 0 ? "reconnecting" : "connecting");
@@ -338,7 +354,8 @@ export function useAttachSession(args: UseAttachSessionArgs) {
           .attachTicket(runId)
           .then((ticket) => {
             if (disposed) return;
-            openSocket(buildWsUrl(runId, ticket, term.cols, term.rows));
+            const sz = connectSize();
+            openSocket(buildWsUrl(runId, ticket, sz.cols, sz.rows));
           })
           .catch((e: unknown) => {
             if (disposed) return;
@@ -350,7 +367,8 @@ export function useAttachSession(args: UseAttachSessionArgs) {
           });
         return;
       }
-      openSocket(buildWsUrl(runId, undefined, term.cols, term.rows));
+      const sz = connectSize();
+      openSocket(buildWsUrl(runId, undefined, sz.cols, sz.rows));
     };
 
     const openSocket = (url: string) => {
