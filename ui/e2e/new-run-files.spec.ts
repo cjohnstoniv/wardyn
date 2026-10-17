@@ -18,6 +18,7 @@ import { test, expect, gotoConsole, navToRoute } from "./fixtures";
 import { NR_DOCUMENT } from "../src/app/components/wardyn/copy/new-run/document";
 import { NR_REVIEW } from "../src/app/components/wardyn/copy/new-run/review";
 import { NR_FILES } from "../src/app/components/wardyn/copy/new-run/files";
+import { NR_RUN } from "../src/app/components/wardyn/copy/new-run/run";
 import { NR_SHAPE } from "../src/app/components/wardyn/copy/new-run/shape";
 import { NR_SHARED } from "../src/app/components/wardyn/copy/new-run/shared";
 import { NR_TOOLS } from "../src/app/components/wardyn/copy/new-run/tools";
@@ -433,5 +434,15 @@ test.describe("New Run, Files: the person's drive (public)", () => {
     await dialog(page).getByRole("button", { name: new RegExp(`^${NR_FILES.KIND_USER_DRIVE}`) }).click();
     await expect(dialog(page).getByTestId("nr-drive-reason")).toHaveText(DRIVE_MEMBER.NR_DENIED("Contractors"));
     await expect(dialog(page).getByRole("radio")).toHaveCount(0);
+  });
+
+  test("a drive whose person may not run on remote-hosted runners says the profile, not the pool", async ({ page }) => {
+    await stub(page, { drives: [{ ...DRIVE, unavailable_reason: "placement_denied" }] });
+    await toFiles(page, "application");
+    await press(page, NR_FILES.ADD_ARIA);
+    await dialog(page).getByRole("button", { name: new RegExp(`^${NR_FILES.KIND_USER_DRIVE}`) }).click();
+    await expect(dialog(page).getByRole("radio", { name: new RegExp(`^${DRIVE.name}`) })).toBeDisabled();
+    await expect(dialog(page).getByText(NR_RUN.REASON_NOT_ALLOWED_PROFILE)).toBeVisible();
+    await expect(dialog(page).getByText(NR_FILES.NOT_IN_POOL)).toHaveCount(0);
   });
 });
