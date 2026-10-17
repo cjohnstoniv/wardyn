@@ -200,7 +200,7 @@ func (d *Driver) waitCanaryTerminal(ctx context.Context, podName string) (reache
 	if pollErr != nil {
 		// Name the remedy on timeout — "timed out" alone gives an operator nothing to act on.
 		if errors.Is(pollErr, context.DeadlineExceeded) {
-			return reachedRunning, 0, fmt.Errorf("timed out after %s waiting for the canary pod to reach a terminal state (reached_running=%v) — pre-pull the wardyn-proxy image onto this cluster's nodes, or check scheduling capacity (node resources, taints/tolerations): %w",
+			return reachedRunning, 0, fmt.Errorf("timed out after %s waiting for the canary pod to reach a terminal state (reached_running=%v) — pre-pull the wardyn-proxy image onto this cluster's nodes, or check scheduling capacity (node resources, taints/tolerations), or a node selector or required node affinity that no node satisfies (a runner pins kubernetes.io/arch to its --arch; an affinity naming the other arch leaves every pod Pending): %w",
 				canaryWaitTimeout, reachedRunning, pollErr)
 		}
 		return reachedRunning, 0, pollErr

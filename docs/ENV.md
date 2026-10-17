@@ -152,7 +152,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_RUNNERD_RELAY_SERVICE_PORT` | port | (required) | **`serve --substrate k8s`**, chart-set: the relay Service's port, which run proxies dial at its ClusterIP |
 | `WARDYN_RUNNERD_SINK_PORT` | port | (required) | **`serve --substrate k8s`**, chart-set: the decision sink's port, on the pod IP and on the relay Service; each proxy's `decision_sink.url` names it |
 | `WARDYN_RUNNERD_CLUSTER_DOMAIN` | DNS name | (required) | **`serve --substrate k8s`**, chart-set: the cluster DNS suffix every proxy hard-denies |
-| `WARDYN_RUNNERD_APISERVER_PEERS` | CIDR list | (unset) | **`serve --substrate k8s`**, chart-set: the API server's addresses, comma-separated; each proxy hard-denies them |
+| `WARDYN_RUNNERD_APISERVER_PEERS` | JSON list | (unset) | **`serve --substrate k8s`**, chart-set from `apiServer.peers`: NetworkPolicy peers whose `ipBlock.cidr` every proxy hard-denies |
 | `WARDYN_RUNNERD_HARD_DENY_CIDRS` | CIDR list | (unset) | **`serve --substrate k8s`**, chart-set: further in-cluster CIDRs (pod and Service ranges) every proxy hard-denies |
 | `WARDYN_RUNNERD_POD_SELECTOR` | JSON object | (required) | **`serve --substrate k8s`**, chart-set: runnerd's own pod labels, which each run's proxy NetworkPolicy admits for the relay and sink ports |
 | `WARDYN_RUNNERD_ARCH` | `amd64` or `arm64` | (required for k8s) | **`register`, `serve --substrate k8s`**, `--arch`'s twin, chart `sandbox.arch`: run pods get this `kubernetes.io/arch` node selector and the runner reports it. Another selector arch refuses boot; Docker refuses it. Mixed clusters install one release per arch |
