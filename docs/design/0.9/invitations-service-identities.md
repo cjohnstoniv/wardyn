@@ -258,14 +258,14 @@ The docs lane places these as new numbered residuals. [`ARCHITECTURE.md`](../../
 
 | Slice | Executor | Content | After |
 |---|---|---|---|
-| C1 | core, Sonnet high | Migration 0157; invitation store and routes; the shared mint core; claim; mint-site pin | owner decisions |
-| C2 | core, Sonnet high | Service identity store, routes and auth branch; `ActorService`; allow-list; sponsor checks; run sponsor; actor-type call-site review | C1 |
-| C4 | core, Sonnet high | `ownsRunOrSponsorOrAdmin` on the read and kill routes only; the `service_attach` value and its restriction row (`0167_service_attach_restriction`); the sponsor arm of `mayEnterRun`; the sponsor ticket stamp ([sponsor reach](service-identities.md#8-sponsor-reach-over-the-services-runs)) | C2 |
-| C3 | core, Sonnet high | Dispositions; `POST /tokens/{id}/move`; sponsored-token sweep in `revokePersonCredentials`; directory exclusions | C1, C2 |
-| U1 | Sonnet, console | One mock round, then the Account claim card, the sponsor's mint card and the disposition column | C1–C3 |
-| M1 | free or Haiku | `pkg/client` methods, CLI verbs, TS mirror (the `service_attach` feature label included), wire-parity tests | C1–C4 |
-| M2 | free or Haiku | `TestNoRouteReturnsAnotherPersonsCredential`, `TestDelegation_PortalRevokeKeepsThePersonSignedIn`, the caller-by-route probe table from [§3.4](#34-who-gets-what) and the service page's §4, §6 and §8 | C1–C4 |
-| M3 | free or Haiku | [api-tokens.md](../../operations/api-tokens.md), [CI.md](../../CI.md), [AUDIT-ACTIONS.md](../../AUDIT-ACTIONS.md), [sdk.md](../../sdk.md) rows; §9 text in REPORT | C1–C4 |
+| C1 | core | Migration 0157; invitation store and routes; the shared mint core; claim; mint-site pin | owner decisions |
+| C2 | core | Service identity store, routes and auth branch; `ActorService`; allow-list; sponsor checks; run sponsor; actor-type call-site review | C1 |
+| C4 | core | `ownsRunOrSponsorOrAdmin` on the read and kill routes only; the `service_attach` value and its restriction row (`0167_service_attach_restriction`); the sponsor arm of `mayEnterRun`; the sponsor ticket stamp ([sponsor reach](service-identities.md#8-sponsor-reach-over-the-services-runs)) | C2 |
+| C3 | core | Dispositions; `POST /tokens/{id}/move`; sponsored-token sweep in `revokePersonCredentials`; directory exclusions | C1, C2 |
+| U1 | console | One mock round, then the Account claim card, the sponsor's mint card and the disposition column | C1–C3 |
+| M1 | free | `pkg/client` methods, CLI verbs, TS mirror (the `service_attach` feature label included), wire-parity tests | C1–C4 |
+| M2 | free | `TestNoRouteReturnsAnotherPersonsCredential`, `TestDelegation_PortalRevokeKeepsThePersonSignedIn`, the caller-by-route probe table from [§3.4](#34-who-gets-what) and the service page's §4, §6 and §8 | C1–C4 |
+| M3 | free | [api-tokens.md](../../operations/api-tokens.md), [CI.md](../../CI.md), [AUDIT-ACTIONS.md](../../AUDIT-ACTIONS.md), [sdk.md](../../sdk.md) rows; §9 text in REPORT | C1–C4 |
 
 Every slice: each named test fails with its fix reverted and passes restored; the full tree with Postgres, lint, staticcheck, file size and lane preflight exit `0`.
 

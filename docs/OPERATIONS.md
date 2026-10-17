@@ -629,6 +629,9 @@ commands are the ones in "Back them up" and "Restore them", and in
   - and the drain replays it through the RAW store recorder, deliberately not through the sink fanout (a replay into
     a still-down store has to be retryable, not re-spooled),
   - so it is never streamed a second time.
+- One exception: a row that waited in the spool under the pending key never reached the sinks.
+  - The drain streams it once, after the store takes it, with its hashes.
+  - It arrives late and out of `seq` order, so a consumer that checks chain continuity in arrival order sees a gap, then the fill.
 - The queryable trail heals completely; the SIEM's head-hash series does not.
 - Across an outage window a SIEM holds those events unchained, and the rows they become are chained when the drain
   replays them, interleaved with whatever else is being written then.
@@ -1143,6 +1146,8 @@ curl -fsS -H "Authorization: Bearer $WARDYN_TOKEN" "$WARDYN_URL/api/v1/audit/cha
   - So `wardyn_audit_partitions_ahead` (months past the current one that have a partition) is exported on `/metrics`,
     and `/setup/status` carries an `audit_partitions` warning below 3.
   - A warning that stays means the leader sweeper is not running or cannot reach the database.
+  - The catch-up is bounded by the distance to the latest audit row, not by the look-ahead. A database clock excursion far into the future that landed one row makes the next ensure create one empty partition per month up to that row's month, plus the look-ahead.
+  - A clock set to year 2200 for one append is about 2,100 partitions. Repair is by hand, by the database owner: the lever is the database clock or table ownership, as before.
 
 - **Privileges.**
   - `audit_retention_drop`, `audit_retention_set_policy` and the two read helpers are owned by the migrator, run as
@@ -3870,7 +3875,9 @@ image digests in `wardyn.env`, not a re-run of anything
 - `0177` (`0177_member_drives`) adds `user_drives.owner_subject` and `delete_started_at` (`0054`'s table) and replaces the table's name uniqueness with per-owner indexes and two checks.
 - `0180` (`0180_run_recording`) adds `recording` to `runner_pools` and `runner_pool_org_defaults` (`0152`'s tables) and `not_recorded` to `agent_runs` (`0001`'s table).
 - `0181` (`0181_runner_org_trust`) adds `owner_kind`, `trust_class`, `trust_set_by`, `trust_set_at` and `registration_token_id` to `runners` (`0139`'s table) and `owner_kind`, `minted_by_kind`, `minted_by_email` and `break_glass` to `runner_registration_tokens` (`0142`'s table), with checks that an org row has no owner and that `org_cluster` is the trust class of an org runner and only of one; existing rows become `person` and `personal`.
+- `0183` (`0183_runner_retirements`) adds `runners.retire_capable` (`0139`'s table), `runner_execution_exits.receipt_only` (`0148`'s table) and replaces the `settlement` check on `runner_pending_actions` (`0139`'s table) so it admits `abandoned`, beside its new `runner_output_watermarks` and `runner_retirements` tables. A split migrator and app role install grants the app role `SELECT, INSERT, UPDATE` on both new tables, and on `runner_resident_runs` (`0182_runner_resident_runs`).
 - `0184` (`0184_run_runner_trust_class`) adds `runner_trust_class` to `agent_runs`: the trust class a local run's credential plan was admitted at, which a revive holds its runner to; local runs already bound to a runner become `personal`.
+- `0185` (`0185_runner_pool_org_default_revision`) adds `runner_pool_org_defaults.revision` (`0152`'s table), which starts at 1 and rises by one on every write of the organisation's runner-pool defaults.
 - `0085` is named for its `CREATE OR REPLACE FUNCTION push_content_paths_immutable()`,
   but it is not an instance of the hazard: it creates that function and the
   `push_content_paths` table in the same file, so the migrator owns both from the start.

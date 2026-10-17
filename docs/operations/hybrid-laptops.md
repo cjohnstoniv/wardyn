@@ -50,6 +50,9 @@
 - A runner keeps a delivered value in the OS keystore for the run (Secret Service; on macOS the Keychain, written over stdin) and erases it at run end. A runner with no keystore refuses (`runner_keystore_unavailable`).
 - On Linux the Secret Service needs a login session bus (`DBUS_SESSION_BUS_ADDRESS`, or the user bus socket under `/run/user/<uid>`), so a system service with no login session has no keystore.
 - Posture is self-reported, and a run with a CC3 floor never takes a resident credential.
+- Placement judges the posture on record, the runner's last report, so a change on the laptop counts once the runner reports it.
+- A runner that has not reported posture misses every `require_posture` (`runner_posture_unmet`).
+- `os_min` must name every OS a runner may run: a runner on an OS it leaves out misses it.
 
 ### bedrock_sso on a laptop runner
 
@@ -135,6 +138,7 @@ The bundle is read when `serve` starts; a bad file stops it and is named.
 
 - An unpinned runner follows the organisation: at every connect it takes the proxy image the organisation answers for its architecture, so an upgraded organisation's image reaches the laptop without a reinstall. Runs started from then on use it; runs already going keep theirs.
 - It takes any well-formed image the organisation names, including an older one. There is no version floor, and the change is logged at info level only.
+- A proxy older than the organisation refuses a configuration that carries a field it does not know, because the proxy reads its configuration strictly. The run then fails to start rather than running with a rule dropped, so pin only an image from the organisation's own release.
 - To fix the image, run `wardyn-runnerd setup --proxy-image <image>`. Setup marks it pinned and `serve` then never replaces it. A mirror of your own that is not the registration image, and an image `serve` is given by flag, count as pinned too.
 
 ### The Docker engine setup and serve use
