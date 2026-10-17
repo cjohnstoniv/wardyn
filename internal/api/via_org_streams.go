@@ -184,12 +184,13 @@ func (st *viaOrgStream) moved(n int) bool {
 }
 
 // watchViaOrgRun keeps the run's state until the run ends. A stream idle past the timeout is ended;
-// while the run is away (kept, or its runner offline) every stream is ended and the engine released,
-// and so is an engine idle with no stream; the run's byte total is kept through all of these. The
+// while the run is away (kept, its runner offline, or two reads of it failing in a row) every stream
+// is ended and the engine released, and so is an engine idle with no stream; the run's byte total is kept through all of these. The
 // state, and with it the total, is dropped only when the run ends (design §7.3: the bounds are per run).
 func (s *Server) watchViaOrgRun(run *viaOrgRun) {
 	t := time.NewTicker(run.period)
 	defer t.Stop()
+	misses := 0 // consecutive reads of the run that failed
 	for {
 		select {
 		case <-run.done:
@@ -199,7 +200,18 @@ func (s *Server) watchViaOrgRun(run *viaOrgRun) {
 			return
 		case <-t.C:
 		}
-		switch s.viaOrgRunState(run) {
+		status := s.viaOrgRunState(run)
+		if status == viaOrgRunUnreadable {
+			// One failed read is a database blip, not an answer: closing every relayed stream on it would cut a
+			// run's streams for nothing. A second in a row is treated as the run being away.
+			if misses++; misses < 2 {
+				continue
+			}
+			status = viaOrgRunAway
+		} else {
+			misses = 0
+		}
+		switch status {
 		case viaOrgRunEnded:
 			s.releaseViaOrgRun(run, true, true)
 			return
@@ -232,10 +244,11 @@ func (run *viaOrgRun) closeIdle(now time.Time) bool {
 type viaOrgRunStatus int
 
 const (
-	viaOrgRunLive  viaOrgRunStatus = iota
-	viaOrgRunAway                  // kept, its runner offline, or the run unreadable: nothing may stream
-	viaOrgRunMoved                 // placed on another runner: this runner's state is dropped
-	viaOrgRunEnded                 // terminal or gone: the state and the run's byte total are dropped
+	viaOrgRunLive       viaOrgRunStatus = iota
+	viaOrgRunAway                       // kept, or its runner offline: nothing may stream
+	viaOrgRunUnreadable                 // the run could not be read: away only once it fails twice in a row
+	viaOrgRunMoved                      // placed on another runner: this runner's state is dropped
+	viaOrgRunEnded                      // terminal or gone: the state and the run's byte total are dropped
 )
 
 // viaOrgRunState reads where the run stands for its via_org egress.
@@ -245,7 +258,7 @@ func (s *Server) viaOrgRunState(run *viaOrgRun) viaOrgRunStatus {
 	case errors.Is(err, store.ErrNotFound):
 		return viaOrgRunEnded
 	case err != nil:
-		return viaOrgRunAway
+		return viaOrgRunUnreadable
 	case isTerminalRunState(got.State):
 		return viaOrgRunEnded
 	case got.RunnerID == nil || *got.RunnerID != run.runner:
