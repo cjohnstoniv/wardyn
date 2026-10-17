@@ -126,7 +126,7 @@ func (s *Server) revokeRunner(ctx context.Context, id uuid.UUID, actorType types
 	}
 	// An admission racing the revoke may have re-registered the endpoint.
 	s.unrouteRunner(id)
-	queued, qerr := s.endQueuedRunsPinnedTo(ctx, rev.Runner.Owner, id)
+	queued, qerr := s.endQueuedRunsPinnedTo(ctx, rev.Runner, id)
 	s.recordAudit(ctx, s.auditEvent(nil, actorType, by, placement.ActionRunnerRevoke, id.String(), "success",
 		mustJSON(map[string]any{"by": by, "reason": reason, "runs_killed": len(rev.Killed) + queued})))
 	online := s.RunnerOnline(id)
@@ -137,17 +137,22 @@ func (s *Server) revokeRunner(ctx context.Context, id uuid.UUID, actorType types
 	return rev, queued, errors.Join(errs...)
 }
 
-// endQueuedRunsPinnedTo ends, as the system, each run owner has waiting in a pool's queue that names
-// runner id (runner_id), which can never start once id is revoked, with reason runner_revoked on its
-// run.kill row, and returns how many it ended. The owner's other waiting runs are judged again at once,
-// without the runner. A run another exit takes first is not counted. One that cannot be read or ended
-// does not keep the rest waiting: its error is returned with the others'.
-func (s *Server) endQueuedRunsPinnedTo(ctx context.Context, owner string, id uuid.UUID) (int, error) {
+// endQueuedRunsPinnedTo ends, as the system, each run rn's owner has waiting in a pool's queue that
+// names runner id (runner_id), which can never start once id is revoked, with reason runner_revoked on
+// its run.kill row, and returns how many it ended. The owner's other waiting runs are judged again at
+// once, without the runner. An org runner has no owner: anyone's run may name it, so the list is every
+// waiting run of a revoked runner (the sweep's, one tick's worth; the sweep ends any past it). A run
+// another exit takes first is not counted. One that cannot be read or ended does not keep the rest
+// waiting: its error is returned with the others'.
+func (s *Server) endQueuedRunsPinnedTo(ctx context.Context, rn types.Runner, id uuid.UUID) (int, error) {
 	qs, ok := s.queueStore()
 	if !ok {
 		return 0, nil
 	}
-	entries, err := qs.QueueOwnerEntries(ctx, owner)
+	entries, err := qs.QueueOwnerEntries(ctx, rn.Owner)
+	if rn.OwnerKind == types.RunnerOwnerOrg {
+		entries, err = qs.QueueEntriesOfRevokedRunners(ctx, queueRevokedScanLimit)
+	}
 	if err != nil {
 		return 0, err
 	}

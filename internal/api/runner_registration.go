@@ -4,6 +4,7 @@
 package api
 
 import (
+	"cmp"
 	"net/http"
 	"strings"
 	"time"
@@ -25,6 +26,17 @@ func (s *Server) mountRunnerRegistrationRoutes(r chi.Router) {
 		r.Post("/me/runners/tokens", s.handleRunnerTokenSelf)
 		r.Post("/me/runners/{id}/claim", s.handleRunnerClaim)
 	})
+}
+
+// mountOrgRunnerRoutes are the organization runner doors, all on the security tier (routes.go):
+//
+//	POST /runners/org-tokens       mint a token for an org runner
+//	POST /runners/{id}/claim-org   claim it, under a human session
+//	PUT  /runners/{id}/trust       change a runner's trust class (runner_registration_trust.go)
+func (s *Server) mountOrgRunnerRoutes(securityOps chi.Router) {
+	securityOps.Post("/runners/org-tokens", s.handleRunnerOrgToken)
+	securityOps.Post("/runners/{id}/claim-org", s.handleRunnerClaimOrg)
+	securityOps.Put("/runners/{id}/trust", s.handlePutRunnerTrust)
 }
 
 func (s *Server) runnerRegistrationStore(w http.ResponseWriter) (store.RunnerRegistrationStore, bool) {
@@ -73,7 +85,7 @@ func (s *Server) handleRunnerTokenSelf(w http.ResponseWriter, r *http.Request) {
 	if !decodeStrict(w, r, &req) {
 		return
 	}
-	s.mintRunnerToken(w, r, owner, time.Hour)
+	s.mintRunnerToken(w, r, types.RunnerRegistrationToken{Owner: owner}, time.Hour, nil)
 }
 
 func (s *Server) handleRunnerTokenAdmin(w http.ResponseWriter, r *http.Request) {
@@ -100,7 +112,36 @@ func (s *Server) handleRunnerTokenAdmin(w http.ResponseWriter, r *http.Request) 
 		writeErrorReason(w, http.StatusUnprocessableEntity, reasonRunnerOwnerInvalid, runnerOwnerRefusal(refusal))
 		return
 	}
-	s.mintRunnerToken(w, r, resolved, 72*time.Hour)
+	s.mintRunnerToken(w, r, types.RunnerRegistrationToken{Owner: resolved}, 72*time.Hour, nil)
+}
+
+// govTargetRunnerOrgToken is the target_kind of the governance.change.bypass row an admin-token org mint
+// writes. It is never held: a human mint is direct, and the four-eyes rule falls on the claim.
+const govTargetRunnerOrgToken = "runner_org_token"
+
+// handleRunnerOrgToken mints a single-use, 72 h token for an organization's runner (POST
+// /runners/org-tokens, the security tier). With WARDYN_GOVERNANCE_SECOND_HUMAN on, a human's mint is
+// direct and the claim must be someone else's; the admin token's is break-glass: applied, stored
+// break_glass, with a governance.change.bypass row, and never counted as a second human.
+func (s *Server) handleRunnerOrgToken(w http.ResponseWriter, r *http.Request) {
+	if !s.requireRunnersEnabled(w, r) {
+		return
+	}
+	var req types.RunnerOrgTokenRequest
+	if !decodeStrict(w, r, &req) {
+		return
+	}
+	name := strings.TrimSpace(req.Name)
+	if name == "" || len(name) > 200 || !controlCharFree(name) {
+		writeErrorReason(w, http.StatusUnprocessableEntity, reasonRunnerRegistrationInvalid, "name must be 1 to 200 bytes without control characters")
+		return
+	}
+	mode, ok := s.governanceWriteMode(w, r)
+	if !ok {
+		return
+	}
+	s.mintRunnerToken(w, r, types.RunnerRegistrationToken{OwnerKind: types.RunnerOwnerOrg, BreakGlass: mode == govBypass}, 72*time.Hour,
+		map[string]any{"name": name})
 }
 
 // runnerOwnerRefusal words resolveSecretOwner's refusal for this route's `owner` field: its own sentences
@@ -115,23 +156,39 @@ func runnerOwnerRefusal(refusal string) string {
 	return "No person on this deployment is known by that name, so no one could claim a runner minted for it. Name someone who has signed in."
 }
 
-func (s *Server) mintRunnerToken(w http.ResponseWriter, r *http.Request, owner string, ttl time.Duration) {
+// mintRunnerToken mints seed (its Owner, OwnerKind and BreakGlass) for ttl as the caller and answers
+// it. extra joins the runner.token.create row's data.
+func (s *Server) mintRunnerToken(w http.ResponseWriter, r *http.Request, seed types.RunnerRegistrationToken, ttl time.Duration, extra map[string]any) {
 	rs, ok := s.runnerRegistrationStore(w)
 	if !ok {
 		return
 	}
 	now := s.cfg.Now().UTC()
 	raw := newBearer("wdr_")
-	token, err := rs.MintRunnerRegistrationToken(r.Context(), raw, types.RunnerRegistrationToken{
-		ID: uuid.New(), Owner: owner, MintedBy: principalFromRequest(r), CreatedAt: now,
-		ExpiresAt: now.Add(ttl), OrgURLSHA256: federation.OrgURLSHA256(s.cfg.RunnerOrgURL),
-	})
+	seed.ID, seed.MintedBy, seed.CreatedAt, seed.ExpiresAt = uuid.New(), principalFromRequest(r), now, now.Add(ttl)
+	seed.OrgURLSHA256 = federation.OrgURLSHA256(s.cfg.RunnerOrgURL)
+	seed.OwnerKind = cmp.Or(seed.OwnerKind, types.RunnerOwnerPerson)
+	seed.MintedByKind, seed.MintedByEmail = types.RunnerMintedByHuman, oidcEmailFromContext(r.Context())
+	if isAdminTokenCaller(r) {
+		seed.MintedByKind, seed.MintedByEmail = types.RunnerMintedByAdminToken, ""
+	}
+	token, err := rs.MintRunnerRegistrationToken(r.Context(), raw, seed)
 	if err != nil {
 		writeServerError(w, r, "mint runner registration token", err)
 		return
 	}
+	data := map[string]any{"owner": seed.Owner, "expires_at": token.ExpiresAt, "owner_kind": seed.OwnerKind, "minted_by_kind": seed.MintedByKind}
+	for k, v := range extra {
+		data[k] = v
+	}
+	if seed.BreakGlass {
+		data["break_glass"] = true
+	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
-		placement.ActionRunnerTokenCreate, token.ID.String(), "success", mustJSON(map[string]any{"owner": owner, "expires_at": token.ExpiresAt})))
+		placement.ActionRunnerTokenCreate, token.ID.String(), "success", mustJSON(data)))
+	if seed.BreakGlass {
+		s.recordGovernanceBypass(r, govTargetRunnerOrgToken, token.ID.String(), "success", nil)
+	}
 	token.Token, token.OrgURL = raw, s.cfg.RunnerOrgURL
 	// The runner's architecture is unknown at mint, so a per-architecture image is chosen at register,
 	// and the mint answer then stays silent rather than printing one architecture's image for every

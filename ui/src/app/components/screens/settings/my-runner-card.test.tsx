@@ -73,6 +73,8 @@ function runner(over: Partial<RunnerView> = {}): RunnerView {
     id: "r-laptop",
     name: "laptop-7",
     state: "claimed",
+    owner_kind: "person",
+    trust_class: "personal",
     online: true,
     key_fingerprint: FULL,
     key_fingerprint_abbreviated: false,
@@ -115,6 +117,9 @@ const WAITING = runner({
 const TOKEN: RunnerRegistrationToken = {
   id: "t1",
   owner: "alice",
+  owner_kind: "person",
+  minted_by_kind: "human",
+  break_glass: false,
   minted_by: "alice",
   token: "wdr_selfminted",
   created_at: aheadByHours(0),

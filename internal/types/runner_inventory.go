@@ -82,6 +82,12 @@ type RunnerView struct {
 	// Arch is the CPU architecture of the runner's Docker engine ("amd64" or "arm64") as last reported;
 	// runner-reported, absent until it reports one.
 	Arch string `json:"arch,omitempty"`
+	// OwnerKind and TrustClass are the stored values (migration 0180), on every route. TrustSetBy and
+	// TrustSetAt name the last writer, on the administrators' routes only.
+	OwnerKind  RunnerOwnerKind  `json:"owner_kind"`
+	TrustClass RunnerTrustClass `json:"trust_class"`
+	TrustSetBy string           `json:"trust_set_by,omitempty"`
+	TrustSetAt *time.Time       `json:"trust_set_at,omitempty"`
 	// Pools are the owner's live Self-Hosted pools the runner is a member of, by name; [] for none.
 	Pools []RunnerPoolRef `json:"pools"`
 }

@@ -970,6 +970,7 @@ const (
 	reasonRunnersOrgURLInvalid   = "runners_org_url_invalid"
 	reasonRunnersEnabledRequired = "runners_enabled_required"
 	reasonRunnerLimitsInvalid    = "runner_limits_invalid"
+	reasonRunnerTrustInvalid     = "runner_trust_invalid" // PUT /runners/{id}/trust: an unknown class, no reason, an unclaimed runner, or a class its owner kind cannot hold
 )
 
 // Runner route admission fails closed on absent or unreadable configuration.

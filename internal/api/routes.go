@@ -280,6 +280,7 @@ func (s *Server) routes() chi.Router {
 			s.mountRunnerRevokeRoutes(r, securityOps)             // runner_revoke.go: the security tier, or the runner's own owner
 			s.mountRunnerPoolRoutes(r, operatorOnly, securityOps) // runner_pools.go: 501 until the pool storage lands
 			s.mountRunnerInventoryRoutes(r, operatorOnly, securityOps)
+			s.mountOrgRunnerRoutes(securityOps) // runner_registration.go: org runner mint, claim and trust
 			s.mountTemplateRoutes(r, operatorOnly)
 			r.Get("/me", s.handleMe)
 			// #1197: the shell's two nav badges in one small object, replacing
