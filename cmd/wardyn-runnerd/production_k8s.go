@@ -12,8 +12,10 @@ import (
 	"log/slog"
 	"net"
 	"net/netip"
+	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -92,6 +94,9 @@ func k8sRunnerHooks(ctx context.Context, identity runneridentity.Identity, state
 	clusterIP := addrs[0]
 	hardDeny, err := k8s.NewHardDeny(env.clusterDomain, []string{clusterIP, env.podIP.String()}, append(env.apiserverPeers, env.hardDenyCIDRs...))
 	if err != nil {
+		return runnerRuntime{}, err
+	}
+	if err := upstreamProxyOutsideHardDeny(opts.upstreamProxy, hardDeny); err != nil {
 		return runnerRuntime{}, err
 	}
 	relay := newK8sRelay(ctx, env.podIP, uint16(env.relayPort), uint16(env.relayServicePort), clusterIP)
@@ -242,4 +247,32 @@ func (a sinkAdapter) Drain(ctx context.Context, id uuid.UUID) error {
 func (a sinkAdapter) ProducerGone(ctx context.Context, id uuid.UUID) error {
 	_, err := a.s.ProducerGone(ctx, id)
 	return err
+}
+
+// upstreamProxyOutsideHardDeny refuses an --upstream-proxy whose literal address is one the run's hard
+// deny covers (design DQ9): an upstream proxy inside the cluster would reach the in-cluster addresses
+// the deny set keeps every run away from, so the misconfiguration is refused at boot.
+func upstreamProxyOutsideHardDeny(raw string, h *k8s.HardDeny) error {
+	if raw == "" {
+		return nil
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return fmt.Errorf("--upstream-proxy / WARDYN_UPSTREAM_PROXY: %w", err)
+	}
+	ip, err := netip.ParseAddr(strings.Trim(u.Hostname(), "[]"))
+	if err != nil {
+		return nil // a name: the proxy's own resolution and the hard deny's name check stand
+	}
+	ip = ip.Unmap()
+	inside := slices.Contains(h.Hosts, ip.String())
+	for _, c := range h.CIDRs {
+		if p, perr := netip.ParsePrefix(c); perr == nil && p.Contains(ip) {
+			inside = true
+		}
+	}
+	if inside {
+		return fmt.Errorf("--upstream-proxy / WARDYN_UPSTREAM_PROXY names %s, an address inside this runner's hard deny: an upstream proxy in the cluster would reach the in-cluster addresses every run is kept from", ip)
+	}
+	return nil
 }
