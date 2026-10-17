@@ -43,6 +43,10 @@ const (
 	sinkDrainTimeout = 5 * time.Second
 )
 
+// sinkAcceptBound bounds Accept, which runs under the sink's lock: a spool whose file lock never frees
+// (a hung disk) refuses that one session instead of stalling every run's hello, Tick and Drain.
+var sinkAcceptBound = sinkHelloTimeout
+
 var (
 	errNoSinkSession = errors.New("decision sink: no live session for the run")
 	// errSinkRunUnknown: the sink holds no such run, never registered or forgotten (sealed, or its spool
@@ -311,7 +315,9 @@ func (s *spoolSink) handle(c *tls.Conn) {
 		s.mu.Unlock()
 		return
 	}
-	acc, err := r.spool.Accept(ctx, instance)
+	actx, cancel := context.WithTimeout(ctx, sinkAcceptBound)
+	acc, err := r.spool.Accept(actx, instance)
+	cancel()
 	if err != nil {
 		s.mu.Unlock()
 		slog.Warn("runnerd: decision sink session refused", slog.String("run_id", r.id.String()), slog.Any("err", err))
