@@ -436,13 +436,14 @@ func TestPut_CheckAndSetAndCreateOnly(t *testing.T) {
 // before the write began is someone else's and stays a failure.
 func TestPut_ARetriedWriteThatAlreadyLandedSucceeds(t *testing.T) {
 	for _, c := range []struct {
-		name string
-		skew time.Duration
-		want bool
-	}{{"landed", 0, true}, {"created before the write", -time.Hour, false}} {
+		name      string
+		skew      time.Duration
+		noCreated bool
+		want      bool
+	}{{"landed", 0, false, true}, {"created before the write", -time.Hour, false, false}, {"no creation time", 0, true, false}} {
 		t.Run(c.name, func(t *testing.T) {
 			f := newFakeVault(t)
-			f.landThenFail, f.createdSkew = 1, c.skew
+			f.landThenFail, f.createdSkew, f.noCreated = 1, c.skew, c.noCreated
 			s := newFakeStore(t, f)
 			ref, err := s.Put(t.Context(), "", "k", "", []byte("v1"), false)
 			if (err == nil) != c.want {

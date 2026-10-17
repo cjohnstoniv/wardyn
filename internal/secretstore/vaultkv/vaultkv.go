@@ -337,16 +337,18 @@ func casMismatch(err error) bool {
 // landed reports whether the write that expected to create version want is the
 // one Vault holds: a retry after a lost answer meets its own first attempt's
 // version as a check-and-set mismatch. It reads the metadata, never the value.
-// The version must be the current one and, when Vault says when it was
-// created, no earlier than the write began (so another writer's is not taken
-// for it; a Vault clock behind this one's fails closed, as before).
+// The version must be the current one, and Vault must say it was created no
+// earlier than the write began: an older version is another writer's, and a
+// missing or unreadable time, or a Vault clock behind this one's, fails closed.
+// It cannot tell this write's version from one another writer made after the
+// write began; that writer's value is accepted as this write's.
 func (s *Store) landed(ctx context.Context, rel string, want int, began time.Time) bool {
 	m, found, err := s.metadata(ctx, rel)
 	if err != nil || !found || m.CurrentVersion != want {
 		return false
 	}
 	created, err := time.Parse(time.RFC3339Nano, m.Versions[fmt.Sprint(want)].CreatedTime)
-	return err != nil || !created.Before(began)
+	return err == nil && !created.Before(began)
 }
 
 func sameMap(a, b map[string]string) bool {
