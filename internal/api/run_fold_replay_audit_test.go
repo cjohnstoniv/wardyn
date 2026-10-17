@@ -28,7 +28,7 @@ func TestStepPolicy_AReplayedStartWritesNoSecondPolicyAuditRow(t *testing.T) {
 		if !h.srv.stepPolicy(f, &foldRecorder{}) {
 			t.Fatalf("stepPolicy refused: %s", f.w.(*httptest.ResponseRecorder).Body.String())
 		}
-		// The fold writes the staged rows at its last step (foldRunRequest); a promoted start stages none.
+		// Create writes the staged rows with the run's insert; a promoted start stages none.
 		n := 0
 		for _, ev := range f.source.applyAudits {
 			if ev.Action == "policy.inline.apply" {
@@ -38,9 +38,9 @@ func TestStepPolicy_AReplayedStartWritesNoSecondPolicyAuditRow(t *testing.T) {
 		return n
 	}
 	if n := fold(context.Background(), false); n != 1 {
-		t.Fatalf("a create fold wrote %d policy.inline.apply rows, want 1", n)
+		t.Fatalf("a create fold staged %d policy.inline.apply rows, want 1", n)
 	}
 	if n := fold(withPromotedStart(context.Background(), uuid.New(), nil, "", false), true); n != 0 {
-		t.Fatalf("a promoted start's fold wrote %d policy.inline.apply rows, want 0", n)
+		t.Fatalf("a promoted start's fold staged %d policy.inline.apply rows, want 0", n)
 	}
 }

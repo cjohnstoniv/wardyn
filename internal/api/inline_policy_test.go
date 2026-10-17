@@ -178,6 +178,9 @@ func TestCreateRun_MemberInlineClamped(t *testing.T) {
 	if got := previewedInlinePolicy(t, h, member, body).MinConfinementClass; got != types.CC2 {
 		t.Fatalf("member: previewed min_confinement_class = %q, want %q (clamped up to DefaultPolicy)", got, types.CC2)
 	}
+	if got, _ := stagedInlineApply(t, h, operatorCtx("sub-member", "member@corp.example", oidc.RoleUser), body); got != types.CC2 {
+		t.Fatalf("member: create's staged min_confinement_class = %q, want %q (clamped up to DefaultPolicy)", got, types.CC2)
+	}
 
 	w = do(t, h.srv, http.MethodPost, "/api/v1/runs", adminToken, body)
 	if w.Code != http.StatusInternalServerError {
@@ -186,6 +189,39 @@ func TestCreateRun_MemberInlineClamped(t *testing.T) {
 	if got := previewedInlinePolicy(t, h, nil, body).MinConfinementClass; got != types.CC1 {
 		t.Fatalf("admin: previewed min_confinement_class = %q, want %q (unclamped)", got, types.CC1)
 	}
+	if got, _ := stagedInlineApply(t, h, operatorCtx("sub-admin", "admin@corp.example", oidc.RoleAdmin), body); got != types.CC1 {
+		t.Fatalf("admin: create's staged min_confinement_class = %q, want %q (unclamped)", got, types.CC1)
+	}
+}
+
+// stagedInlineApply runs a create-mode policy step for the request in ctx and returns the policy.inline.apply
+// row it staged (create writes it with the run's insert), decoded: the clamp as create itself applies it.
+func stagedInlineApply(t *testing.T, h *harness, ctx context.Context, body string) (class types.ConfinementClass, grants int) {
+	t.Helper()
+	var req createRunRequest
+	if err := json.Unmarshal([]byte(body), &req); err != nil {
+		t.Fatal(err)
+	}
+	f := &runFold{mode: foldCreate, w: httptest.NewRecorder(), req: &req,
+		r: httptest.NewRequest(http.MethodPost, "/api/v1/runs", nil).WithContext(ctx)}
+	if !h.srv.stepPolicy(f, &foldRecorder{}) {
+		t.Fatalf("stepPolicy refused: %s", f.w.(*httptest.ResponseRecorder).Body.String())
+	}
+	for _, ev := range f.source.applyAudits {
+		if ev.Action != "policy.inline.apply" {
+			continue
+		}
+		var d struct {
+			Class  types.ConfinementClass `json:"min_confinement_class"`
+			Grants int                    `json:"eligible_grants"`
+		}
+		if err := json.Unmarshal(ev.Data, &d); err != nil {
+			t.Fatal(err)
+		}
+		return d.Class, d.Grants
+	}
+	t.Fatal("the create-mode policy step staged no policy.inline.apply row")
+	return "", 0
 }
 
 // previewedInlinePolicy answers body at the policy preview door as the session (or the admin token when
@@ -356,6 +392,9 @@ func TestCreateRun_MemberInlineGrantExfilDropped(t *testing.T) {
 	if got := len(previewedInlinePolicy(t, h, ssoSession(t, "sub-member", "member@corp.example", oidc.RoleUser), body).EligibleGrants); got != 0 {
 		t.Fatalf("member: previewed eligible_grants = %d, want 0 (exfil pairing dropped)", got)
 	}
+	if _, got := stagedInlineApply(t, h, operatorCtx("sub-member", "member@corp.example", oidc.RoleUser), body); got != 0 {
+		t.Fatalf("member: create's staged eligible_grants = %d, want 0 (exfil pairing dropped)", got)
+	}
 
 	// Operator (ceiling authority) is unclamped - their grant is kept.
 	w = do(t, h.srv, http.MethodPost, "/api/v1/runs", adminToken, body)
@@ -364,6 +403,9 @@ func TestCreateRun_MemberInlineGrantExfilDropped(t *testing.T) {
 	}
 	if got := len(previewedInlinePolicy(t, h, nil, body).EligibleGrants); got != 1 {
 		t.Fatalf("admin: previewed eligible_grants = %d, want 1 (unclamped)", got)
+	}
+	if _, got := stagedInlineApply(t, h, operatorCtx("sub-admin", "admin@corp.example", oidc.RoleAdmin), body); got != 1 {
+		t.Fatalf("admin: create's staged eligible_grants = %d, want 1 (unclamped)", got)
 	}
 }
 
