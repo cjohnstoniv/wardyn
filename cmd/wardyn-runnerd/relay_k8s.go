@@ -160,12 +160,16 @@ func (r *k8sRelay) forward(c net.Conn) {
 }
 
 // Fence marks run fenced, refuses its recorded proxy IP from now on, and closes the run's open
-// connections (after unlocking, as Offline does). Leases and sessions never clear it.
+// connections (after unlocking, as Offline does). Leases and sessions never clear it. An IP already
+// refused for another run keeps that run as its owner: a run refused on the IP (its create rolled
+// back through containment) must not take the refusal over and later release it by its own witness.
 func (r *k8sRelay) Fence(run uuid.UUID, proxyIP string) {
 	r.mu.Lock()
 	r.fenced[run] = true
 	if ip, err := netip.ParseAddr(proxyIP); err == nil {
-		r.fencedIPs[ip.Unmap()] = run
+		if _, held := r.fencedIPs[ip.Unmap()]; !held {
+			r.fencedIPs[ip.Unmap()] = run
+		}
 	}
 	var mine []net.Conn
 	for c, rc := range r.conns {
