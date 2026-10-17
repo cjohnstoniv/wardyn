@@ -391,12 +391,15 @@ func TestResident_ProxyOnlyNeverReachesTheSandbox(t *testing.T) {
 		"secret env":    {SecretEnv: map[string]string{"AZURE_DEVOPS_EXT_PAT": placement.ResidentPlaceholder(proxyOnly)}},
 		"managed files": {ManagedFiles: []runner.ManagedFile{{Path: "/run/pat", AgentOwned: true, Content: []byte(placement.ResidentPlaceholder(proxyOnly))}}},
 	} {
-		if err := f.create(spec); err == nil {
-			t.Fatalf("%s: a proxy-only grant reached the sandbox", name)
+		// A failed create erases its run's values, so each refusal gets its
+		// own run.
+		r := newResidentFixture(t, nil)
+		if err := r.deliver(proxyOnly, "proxy-only-pat", false); err != nil {
+			t.Fatal(err)
 		}
-	}
-	if len(f.fake.Created) != 0 {
-		t.Fatalf("created %d sandboxes, want none", len(f.fake.Created))
+		if err := r.create(spec); err == nil || len(r.fake.Created) != 0 {
+			t.Fatalf("%s: a proxy-only grant reached the sandbox (%v)", name, err)
+		}
 	}
 	var persisted runner.SandboxSpec
 	f.d.cfg.Created = func(_ context.Context, s runner.SandboxSpec, _ string) error { persisted = s; return nil }

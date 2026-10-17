@@ -283,6 +283,7 @@ func (s *Server) revokeRunCascade(ctx context.Context, runID uuid.UUID) error {
 		data["proxy_config_error"] = perr.Error()
 	}
 	s.revokeRunPATs(ctx, runID, adoPATRevokeRunEnd)
+	s.kickRunResidentErase(ctx, runID)
 	if st, ok := s.cfg.Store.(store.RunPATStore); ok {
 		rows, err := st.ListUnrevokedRunPATs(ctx, store.RunPATFilter{RunID: runID})
 		if err != nil {

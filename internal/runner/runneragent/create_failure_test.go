@@ -8,9 +8,11 @@ import (
 	"errors"
 	"io"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/placement"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire/runnertest"
@@ -77,5 +79,37 @@ func TestCreateFailureContainsAfterCancellationAndPreservesErrors(t *testing.T) 
 	}
 	if _, err := d.Call(context.Background(), peer, 4, runnerwire.MethodCreateSandbox, data); err == nil || contained != 1 || forgotten != 0 {
 		t.Fatalf("duplicate contained existing intent: error=%v contained=%d forgotten=%d", err, contained, forgotten)
+	}
+}
+
+// A create that fails after its resident values were delivered erases them
+// (the value is deleted, the erasure reported) and takes no further delivery
+// for the run.
+func TestDispatcher_CreateFailureErasesResident(t *testing.T) {
+	f := newResidentFixture(t, nil)
+	grant := uuid.New()
+	if err := f.deliver(grant, "s3cret", true); err != nil {
+		t.Fatal(err)
+	}
+	provisionErr := errors.New("provision failed")
+	d, err := newTestDispatcher(Config{RunnerID: f.id, Substrate: interruptedCreate{runnertest.NewFake(), func() {}, provisionErr}, Resident: f.res,
+		BeforeCreate: func(context.Context, runner.SandboxSpec) error { return nil },
+		Created:      func(context.Context, runner.SandboxSpec, string) error { return nil }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, _ := runnerwire.Marshal(runnerwire.CreateSandboxArgs{Spec: runner.SandboxSpec{RunID: f.run, RunnerID: f.id,
+		SecretEnv: map[string]string{"TOKEN": placement.ResidentPlaceholder(grant)}}})
+	if _, err := d.Call(context.Background(), f.peer, 3, runnerwire.MethodCreateSandbox, data); !errors.Is(err, provisionErr) {
+		t.Fatalf("create = %v, want the provision error", err)
+	}
+	if f.ks.size() != 0 {
+		t.Fatalf("keystore after a failed create holds %d items, want none", f.ks.size())
+	}
+	if ev := f.takeEvents(); len(ev) != 1 || ev[0].GrantID != grant || ev[0].Outcome != runnerwire.ResidentErased {
+		t.Fatalf("events after a failed create = %+v, want the grant reported erased", ev)
+	}
+	if err := f.deliverTo(f.run, uuid.New(), "v", true, f.clock.now().Add(time.Hour)); err == nil {
+		t.Fatal("a delivery for a run whose create failed was taken")
 	}
 }

@@ -63,6 +63,12 @@ type residentValue struct {
 	value []byte
 }
 
+// residentByGrantID orders resident values by grant id, the order they are
+// delivered in.
+func residentByGrantID(a, b residentValue) int {
+	return strings.Compare(a.grant.ID.String(), b.grant.ID.String())
+}
+
 // residentClass is the delivery class a resident grant of kind is judged and
 // delivered as; "" for a kind that is never runner_resident.
 func residentClass(kind types.GrantKind) string {
@@ -94,7 +100,7 @@ func residentForSandbox(class string) bool {
 // be used: the caller skips the grant as it skips any unreadable one.
 func (s *Server) readResidentValue(ctx context.Context, run types.AgentRun, grant types.CredentialGrant, secretName string) (residentValue, error) {
 	class := residentClass(grant.Spec.Kind)
-	if class == "" || run.RunnerID == nil || s.cfg.Secrets == nil {
+	if class == "" || grant.Delivery != types.GrantDeliveryResident || run.RunnerID == nil || s.cfg.Secrets == nil {
 		return residentValue{}, errors.New("api: the grant cannot be delivered runner_resident")
 	}
 	data := map[string]any{"purpose": string(secretstore.PurposeRunnerResident), "grant_id": grant.ID, "runner_id": *run.RunnerID,
@@ -155,29 +161,6 @@ func residentNotAfter(run types.AgentRun, now time.Time) time.Time {
 		}
 	}
 	return notAfter
-}
-
-// residentAdmits re-judges one resident value at delivery against the plan
-// localPlanFacts filled for the bound runner: the class is runner_resident
-// under the current delivery policy and may be, the run has no blast-radius
-// floor (a runner-asserted class never meets one), and the runner's current
-// posture meets the class's requirement. These are the conditions placement's
-// own runner_resident gate applies at create and at the dispatch classify.
-func residentAdmits(class string, p placement.LocalPlan) *placement.Refusal {
-	field := "runner_resident." + class
-	cp := p.Delivery.For(class)
-	switch {
-	case cp.Mode != placement.ModeRunnerResident || !slices.Contains(placement.AllowedModes(class), placement.ModeRunnerResident):
-		return &placement.Refusal{Reason: placement.ReasonPlacementCredential, Field: field, Detail: class + " is no longer delivered runner_resident"}
-	case p.ConfinementFloor != "":
-		return &placement.Refusal{Reason: placement.ReasonRunnerPostureUnmet, Field: field,
-			Detail: "a runner-asserted class never meets the " + string(p.ConfinementFloor) + " floor for a runner_resident credential"}
-	}
-	if unmet := placement.PostureUnmet(cp.RequirePosture, p.Posture); unmet != "" {
-		return &placement.Refusal{Reason: placement.ReasonRunnerPostureUnmet, Field: field,
-			Detail: unmet + ": the runner's reported posture no longer meets " + class + "'s requirement"}
-	}
-	return nil
 }
 
 // macKeychainCommandTooLong reports whether the runner's macOS keychain write of
@@ -276,9 +259,13 @@ func (s *Server) deliverResident(ctx context.Context, run types.AgentRun, policy
 	if err != nil {
 		return refuse(placement.ReasonPlacementCredential, uuid.Nil, "the delivery policy or the runner's posture could not be read")
 	}
-	values = slices.SortedFunc(slices.Values(values), func(a, b residentValue) int { return strings.Compare(a.grant.ID.String(), b.grant.ID.String()) })
+	values = slices.SortedFunc(slices.Values(values), residentByGrantID)
 	for _, v := range values {
-		if r := residentAdmits(v.class, p); r != nil {
+		if v.grant.Delivery != types.GrantDeliveryResident || v.grant.RunID != run.ID {
+			return refuse(placement.ReasonPlacementCredential, v.grant.ID, "only a grant of this run recorded runner_resident is handed to its runner")
+		}
+		origin := placement.CredentialOrigin{Class: placement.ClassOperator, Delivery: v.class, GrantKind: v.grant.Spec.Kind}
+		if r := placement.ResidentAdmits(origin, p, "runner_resident."+v.class); r != nil {
 			return refuse(r.Reason, v.grant.ID, r.Field+": "+r.Detail)
 		}
 		if p.Posture != nil && p.Posture.OS == "darwin" && macKeychainCommandTooLong(runnerID, run.ID, v.grant.ID, v.value) {
@@ -326,8 +313,28 @@ func (s *Server) leaseDeliverCreate(ctx, createCtx context.Context, run types.Ag
 // path, when this replica holds the runner's session; the sweep retries
 // whatever it leaves.
 func (s *Server) kickResidentErase(runnerID uuid.UUID) {
+	if s.runnerOnline(runnerID) {
+		s.startResidentErase(runnerID)
+	}
+}
+
+// kickRunResidentErase is kickResidentErase for the runner a run that has
+// just ended was bound to (design §5.4, from revokeRunCascade).
+func (s *Server) kickRunResidentErase(ctx context.Context, runID uuid.UUID) {
+	if _, ok := s.cfg.Store.(store.PG); !ok || s.cfg.RunnerOnline == nil {
+		return
+	}
+	if run, err := s.cfg.Store.GetRun(ctx, runID); err == nil && run.RunnerID != nil {
+		s.kickResidentErase(*run.RunnerID)
+	}
+}
+
+// startResidentErase runs runnerID's resident erase in the background. The
+// runner-ready path calls it directly: the session it was told of is this
+// replica's, though the hub reports it online only once READY returns.
+func (s *Server) startResidentErase(runnerID uuid.UUID) {
 	st, ok := s.cfg.Store.(store.PG)
-	if !ok || s.cfg.BaseCtx == nil || !s.runnerOnline(runnerID) {
+	if !ok || s.cfg.BaseCtx == nil {
 		return
 	}
 	s.goBackground(func() {
@@ -344,11 +351,14 @@ func (s *Server) kickResidentErase(runnerID uuid.UUID) {
 // for the replica that holds it.
 func (s *Server) sweepResidentErase(ctx context.Context) error {
 	st, ok := s.cfg.Store.(store.PG)
-	if !ok || s.cfg.RunnerAuditPrepare == nil {
+	if !ok {
 		return nil
 	}
 	now := s.cfg.Now()
-	_, abandonErr := st.AbandonResidentErase(ctx, now, s.cfg.RunnerAuditPrepare)
+	var abandonErr error
+	if s.cfg.RunnerAuditPrepare != nil { // abandonment writes its audit rows through it; erasing does not need it
+		_, abandonErr = st.AbandonResidentErase(ctx, now, s.cfg.RunnerAuditPrepare)
+	}
 	runners, err := st.DueResidentEraseRunners(ctx, now)
 	if err != nil {
 		return errors.Join(abandonErr, err)
