@@ -688,6 +688,21 @@ replaced by a digest scan of the real tag once one exists._
 | `ca-certificates` | 20250419~deb12u1 | GPL-2, GPL-2+, MPL-2.0 | deb |
 | `netbase` | 6.4 | GPL-2 | deb |
 
+## `ghcr.io/cjohnstoniv/wardyn-runnerd` (not yet published)
+
+_Scanned before publication, from `wardyn/wardyn-runnerd:local` built at commit
+`248401645` — the same recipe this image will publish from once it
+lands, though apt package versions can float between rebuilds of that
+recipe. No published digest exists yet to scan; this section will be
+replaced by a digest scan of the real tag once one exists._
+
+2 package(s) carrying a GPL or LGPL term.
+
+| package | version | licence | type |
+|---|---|---|---|
+| `ca-certificates` | 20250419~deb12u1 | GPL-2, GPL-2+, MPL-2.0 | deb |
+| `netbase` | 6.4 | GPL-2 | deb |
+
 ## `ghcr.io/cjohnstoniv/wardynd:0.8.2`
 
 2 package(s) carrying a GPL or LGPL term.
