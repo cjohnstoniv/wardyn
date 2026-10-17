@@ -47,13 +47,14 @@ var ReservedV6 = []netip.Prefix{
 	// denied with them: it tunnels to an embedded IPv4; the terminated ORCHID row is denied too). 2001::/23 is
 	// NOT listed wholesale: 2001:1::1/128, 2001:1::2/128, 2001:3::/32, 2001:4:112::/48, 2001:20::/28 and
 	// 2001:30::/28 inside it are globally reachable.
-	netip.MustParsePrefix("2001::/32"),     // TEREDO (RFC4380)
-	netip.MustParsePrefix("2001:2::/48"),   // benchmarking (RFC5180)
-	netip.MustParsePrefix("2001:10::/28"),  // deprecated ORCHID (RFC4843)
-	netip.MustParsePrefix("2001:db8::/32"), // documentation (RFC3849)
-	netip.MustParsePrefix("3fff::/20"),     // documentation (RFC9637)
-	netip.MustParsePrefix("5f00::/16"),     // SRv6 SIDs (RFC9602)
-	netip.MustParsePrefix("100::/64"),      // discard-only (RFC6666)
+	netip.MustParsePrefix("2001::/32"),      // TEREDO (RFC4380)
+	netip.MustParsePrefix("2001:2::/48"),    // benchmarking (RFC5180)
+	netip.MustParsePrefix("2001:10::/28"),   // deprecated ORCHID (RFC4843)
+	netip.MustParsePrefix("2001:db8::/32"),  // documentation (RFC3849)
+	netip.MustParsePrefix("3fff::/20"),      // documentation (RFC9637)
+	netip.MustParsePrefix("5f00::/16"),      // SRv6 SIDs (RFC9602)
+	netip.MustParsePrefix("100::/64"),       // discard-only (RFC6666)
+	netip.MustParsePrefix("100:0:0:1::/64"), // dummy IPv6 prefix (RFC9780)
 }
 
 // NAT64Prefixes are the well-known + local-use NAT64 translation prefixes (RFC 6052 / RFC 8215).
@@ -129,8 +130,8 @@ func NAT64EmbeddedV4(ip net.IP) (net.IP, bool) {
 }
 
 // GatewayIPRefused reports whether ip is a kind an operator-configured internal model gateway can never
-// legitimately be: loopback, link-local (metadata address included), unspecified, multicast, or
-// NAT64-embedded. RFC1918/ULA/CGNAT are NOT refused — an internal gateway is expected to live there, so
+// legitimately be: loopback, link-local (metadata address included), unspecified, multicast, a cloud
+// instance-metadata endpoint inside the ULA or CGNAT space (NeverLift), or NAT64-embedded. RFC1918/ULA/CGNAT are NOT refused — an internal gateway is expected to live there, so
 // this is a DIFFERENT predicate from PrivateReserved, not a subset of it.
 //
 // TRUST BOUNDARY: shared body for two consumers whose agreement matters — the control plane validates the
@@ -145,6 +146,9 @@ func GatewayIPRefused(ip net.IP) bool {
 	}
 	if ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() ||
 		ip.IsMulticast() || ip.IsUnspecified() {
+		return true
+	}
+	if addr, _ := addrOf(ip); slices.ContainsFunc(NeverLift, func(p netip.Prefix) bool { return p.Contains(addr) }) {
 		return true
 	}
 	_, isNAT64 := NAT64EmbeddedV4(ip)

@@ -129,7 +129,7 @@ The step reads the server's policy preview for the draft ([the `access` block](s
 |---|---|
 | CLIs | Azure, GitHub and AWS cards, each named for the row your admin granted (`cli_not_granted` otherwise). **Google Cloud CLI** and **kubectl** are **Coming soon** |
 | GitHub CLI | Works only with this run's GitHub repositories (`cli_no_github_repo`). The proxy adds its token |
-| AWS CLI | Role credentials are issued into the sandbox, short-lived |
+| AWS CLI | Role credentials are issued into the sandbox, short-lived. On a run whose model provider is Bedrock, `AWS_REGION` and `AWS_DEFAULT_REGION` are the provider's region and win over the profile's; pass `--region` for another |
 | Organisation components | MCP servers and APIs your admin published, marked **From your organisation** |
 | **Add a secret** | One of your saved secrets as **Request header** (preferred), **Environment variable** or **File** |
 | **Allow a host** | One more host with no credential. Your organisation's ceiling still applies |

@@ -1064,7 +1064,7 @@ stands. Q1–Q3 decided by rule.
 
 ### Round notes (author, 2026-09-01)
 
-0. **Coordinator, after the Opus copy review:** the `email` home template is gone (a full
+0. **Coordinator, after the copy review:** the `email` home template is gone (a full
    address can never pass the segment rule, and a PVC name must be DNS-1123) — `hash`, `sub`,
    `email_local` remain; `email_local` plus a per-user directory override cover a corporate home
    named by username. Namespaces renamed `DRIVE_MEMBER` / `DRIVE_RUN` and the Getting Started

@@ -115,6 +115,65 @@ func TestOverrides_ADONarrowsWithinTheRowDefaultProfileOnANoPolicyRun(t *testing
 	}
 }
 
+// A run whose only Azure DevOps repository comes from a selected workspace narrows within the default
+// profile of the row that admits it, as a run naming that repository does: the narrowing waits for the
+// workspace seeding (stepADOOverride), so no door answers "resolves to no per-person Azure DevOps access".
+func TestOverrides_ADONarrowsWithinTheSelectedWorkspacesRowDefault(t *testing.T) {
+	site := adoSite(adoEntraTestRow()) // default profile [code_read code_write], ceiling adds pr
+	ws := &types.Workspace{ID: uuid.New(), Name: "app", Status: types.WorkspaceScanned, Sources: []types.WorkspaceSource{
+		{Type: types.WorkspaceSourceTypeRepo, Source: adoTestRepo, Target: "/home/agent/app"}}}
+	cookie := ssoSession(t, "member", "m@example.com", oidc.RoleUser)
+	body := func(caps string) string {
+		return `{"agent":"claude-code","task":"t","workspace_id":"` + ws.ID.String() + `","overrides":{"azure_devops":{"capabilities":[` + caps + `]}}}`
+	}
+	person := provSource{Kind: provKindPerson}
+	for _, door := range []string{previewDoor, preflightDoor} {
+		srv := providerRunFixture(t, site, &capStore{}, ws)
+		w := doSSO(t, srv, http.MethodPost, door, cookie, body(`"code_read"`))
+		if !provHas(provRows(t, w), fieldADOCaps, "code_write", person, provEffectNarrowed) {
+			t.Errorf("%s: dropping code_write from the workspace row's default profile is not the person's narrowing: %d %s", door, w.Code, w.Body.String())
+		}
+		w = doSSO(t, srv, http.MethodPost, door, cookie, body(`"code_read","code_write"`))
+		for _, row := range provRows(t, w) {
+			if row.Source == person {
+				t.Errorf("%s: keeping the whole default recorded %+v", door, row)
+			}
+		}
+	}
+	var pv policyPreviewResponse
+	srv := providerRunFixture(t, site, &capStore{}, ws)
+	if w := doSSO(t, srv, http.MethodPost, previewDoor, cookie, body(`"code_read"`)); json.Unmarshal(w.Body.Bytes(), &pv) != nil ||
+		!slices.Equal(pv.Spec.AzureDevOpsCapabilities, []adoscope.Capability{adoscope.CapCodeRead}) {
+		t.Errorf("preview: resolved ADO capabilities = %v: %s", pv.Spec.AzureDevOpsCapabilities, w.Body.String())
+	}
+	// Create no longer refuses it, and a run it creates records the narrowing in its policy source.
+	srv = providerRunFixture(t, site, &capStore{}, ws)
+	w := doSSO(t, srv, http.MethodPost, "/api/v1/runs", cookie, body(`"code_read"`))
+	if errorReason(w) == reasonOverrideRefused {
+		t.Fatalf("create = %d %s, want the workspace's repository to resolve its row", w.Code, w.Body.String())
+	}
+	if w.Code == http.StatusCreated {
+		var created struct {
+			ID uuid.UUID `json:"id"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &created); err != nil {
+			t.Fatal(err)
+		}
+		ev := waitForRecAudit(t, srv.cfg.Audit.(*recRecorder), created.ID, "run.create", "success")
+		var data struct {
+			PolicySource struct {
+				OverridesDiff *client.RunOverridesDiff `json:"overrides_diff"`
+			} `json:"policy_source"`
+		}
+		if err := json.Unmarshal(ev.Data, &data); err != nil {
+			t.Fatal(err)
+		}
+		if d := data.PolicySource.OverridesDiff; d == nil || d.AzureDevOps == nil || !slices.Equal(d.AzureDevOps.Capabilities, []string{"code_read"}) {
+			t.Errorf("run.create policy_source.overrides_diff = %+v, want the Azure DevOps narrowing to code_read", d)
+		}
+	}
+}
+
 // remove_secrets asks who owns the name before it looks at the policy, and a name
 // that is someone else's answers exactly as one nobody has, at every door and in
 // every member output. A secret the caller owns still removes the grant that

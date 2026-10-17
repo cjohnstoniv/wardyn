@@ -74,6 +74,8 @@ const (
 		"and none is configured. Remove the Azure CLI from the run, or ask your admin."
 	azureCLINotPersonRefusal = "This run uses the Azure CLI, which uses your own Azure sign-in, and the admin token is a shared " +
 		"credential rather than a person. Sign in to the console and start the run as yourself."
+	azureCLIServiceIdentityRefusal = "This run uses the Azure CLI, which uses a person's own Azure sign-in, and a service identity has none. " +
+		"Remove the Azure CLI from the run, or have a person start it."
 	azureCLINotSignedIn = "This run uses the Azure CLI, and you are not signed in to Azure for it. " +
 		"Sign in to Azure for the component, then start the run again."
 	azureCLINoCertificateAuthority = "This run was not launched: its Azure sign-in needs a per-run certificate authority to be added on the wire, " +
@@ -306,6 +308,8 @@ func (s *Server) authorAzureCLI(ctx context.Context, run types.AgentRun, cli *az
 		return refuse(azureCLINoEntraRefusal)
 	case !s.credentialPerson(owner):
 		return refuse(azureCLINotPersonRefusal)
+	case isServicePrincipal(owner):
+		return refuse(azureCLIServiceIdentityRefusal)
 	}
 	if signedIn, err := s.azureCLISignedIn(secretstore.WithPurpose(ctx, secretstore.PurposeDispatch), owner, cli.ComponentID); err != nil {
 		return refuse("Wardyn couldn't read your Azure sign-in for this run's Azure CLI just now — nothing was started. Try again in a moment.")

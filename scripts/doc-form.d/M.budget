@@ -41,4 +41,6 @@ docs/UI-SANDBOXES.md=5566 share=35
 # docs/NEW-RUN.md 2946 adds 31 over 2915: UIN lane (FUG-L369): the repo_no_credential bullet beside the resident_off one, measured.
 # docs/NEW-RUN.md 2966 = 2935 + 31 (UIN), measured at the wave-C merge.
 # docs/NEW-RUN.md 3032 adds 66 over 2966, measured: the repository .mcp.json bullet and the shared-user MCP address bullet.
-docs/NEW-RUN.md=3032 share=35
+# docs/NEW-RUN.md 2990 adds 24 over 2966 (0.9.3 FIN-E), measured: the AWS CLI region note on a Bedrock-provider run.
+# docs/NEW-RUN.md 3056, measured at the FIN-E2 merge into the final train (both sides' sentences).
+docs/NEW-RUN.md=3056 share=35

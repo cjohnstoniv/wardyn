@@ -14,7 +14,7 @@
   { "key": "STARTUP_PROMPT_SHAPE", "args": [], "text": "startup.prompt: only a harness startup takes a starting prompt" },
   { "key": "HARNESS_NOT_INSTALLED", "args": ["Claude Code"], "text": "Claude Code isn't installed in this server's sandbox images, so the run was not created. Ask an admin to add an image that includes it." },
   { "key": "HARNESS_SET_NO_IMAGE", "args": ["Claude Code", "Codex CLI", "acme-agent"], "text": "No sandbox image on this server includes Claude Code, Codex CLI and acme-agent together, so the run was not created. Remove one, or ask an admin to add an image with all of them." },
-  { "key": "HARNESS_SET_CUSTOM_IMAGE", "args": [], "text": "A run with more than one harness starts from an image your admin declared for them, so it can't use a custom image." },
+  { "key": "HARNESS_SET_CUSTOM_IMAGE", "args": [], "text": "A run with more than one harness starts from an image your admin declared for them, so it can't use the custom image, build or workspace base image this launch names." },
   { "key": "HARNESS_SIGNIN_NOT_PRIMARY", "args": ["Codex CLI", "Acme Bedrock"], "text": "Model provider Acme Bedrock uses an AWS sign-in, which only the harness a run starts, or else lists first, can use, so the run was not created. Make Codex CLI that harness, or choose another provider for it." },
   { "key": "HARNESS_PROVIDERS_CONFLICT", "args": ["Claude Code", "Codex CLI"], "text": "Claude Code and Codex CLI use different model providers that reach the same host, so the proxy can't keep their credentials apart. Choose one provider for both, or another provider." },
   { "key": "MAIN_DRIVE_UNENFORCEABLE", "args": [], "text": "This run's policy sets a disk size that this pool's runners can't cap. Choose another pool, or ask your admin." },

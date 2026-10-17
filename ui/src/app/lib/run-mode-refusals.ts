@@ -68,7 +68,7 @@ export const RUN_MODE_REFUSAL = {
     return `No sandbox image on this server includes ${list} together, so the run was not created. Remove one, or ask an admin to add an image with ${both}.`;
   },
   HARNESS_SET_CUSTOM_IMAGE: () =>
-    "A run with more than one harness starts from an image your admin declared for them, so it can't use a custom image.",
+    "A run with more than one harness starts from an image your admin declared for them, so it can't use the custom image, build or workspace base image this launch names.",
   HARNESS_PROVIDERS_CONFLICT: (a: string, b: string) =>
     `${a} and ${b} use different model providers that reach the same host, so the proxy can't keep their credentials apart. Choose one provider for both, or another provider.`,
   HARNESS_SIGNIN_NOT_PRIMARY: (harness: string, provider: string) =>

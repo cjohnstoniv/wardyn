@@ -170,7 +170,9 @@
 # docs/AUDIT-ACTIONS.md 47661, measured at the FIN-A2b merge into the final train (both sides' sentences).
 # docs/AUDIT-ACTIONS.md 47307 adds 57 over 47250 (0.9.3 RR-de review), measured: the run.resident_mint.skip row.
 # docs/AUDIT-ACTIONS.md 47718, measured at the RR-de merge into the final train (both sides' rows).
-docs/AUDIT-ACTIONS.md=47718 share=8
+# docs/AUDIT-ACTIONS.md 47479 adds 117 over 47362 (0.9.3 FIN-E), measured: secret.write/list/unbind/run.dispatch refusals, and the policy.*.apply rows.
+# docs/AUDIT-ACTIONS.md 47835, measured at the FIN-E2 merge into the final train (both sides' sentences).
+docs/AUDIT-ACTIONS.md=47835 share=8
 # docs/AUDIT-ACTIONS.md 39938 adds 1 (0.9 H7): the `placement_component_self_defined` reason in the authz.denied vocabulary.
 # 0.9 H10 r1: docs/AUDIT-ACTIONS.md 40113 adds 65 over 40048 for the token-revoke join, the off semantics and the pending connect/disconnect rows.
 # 0.9 H10: docs/AUDIT-ACTIONS.md 40048 adds 111 over 39937 for runner.token.revoke, runners.enabled.set, runner.connect and runner.disconnect.

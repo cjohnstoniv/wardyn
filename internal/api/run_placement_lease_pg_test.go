@@ -525,6 +525,38 @@ func TestPG_RunnerLease_EndChangeReLeases(t *testing.T) {
 	}
 }
 
+// End to end: after a run's end moves, the runner does not contain it at the old end, while a run whose
+// end did not move is contained there. Two runs only, with ends far enough ahead that placing both fits
+// before a lease is refused near its end; the test waits on the lease the runner accepts before the old
+// end passes.
+func TestPG_RunnerLease_OldEndIsNotEnforcedAfterAnEndChange(t *testing.T) {
+	f := newRunnerLeaseFixture(t)
+	const margin = 10 * time.Second
+	soon := time.Now().Add(margin).UTC().Truncate(time.Second)
+	extended, control := f.localRun(t, 0), f.localRun(t, 0)
+	for _, run := range []*types.AgentRun{&extended, &control} {
+		f.running(t, run, &soon)
+		f.placed(t, run)
+	}
+	end := time.Now().Add(2 * time.Hour).UTC().Truncate(time.Second)
+	if w := do(t, f.srv, http.MethodPatch, "/api/v1/runs/"+extended.ID.String(), adminToken, `{"ends_at":"`+end.Format(time.RFC3339)+`"}`); w.Code != http.StatusOK {
+		t.Fatalf("set end = %d %s", w.Code, w.Body)
+	}
+	if got := f.leaseEnd(extended.ID, end); !got.Equal(end) {
+		t.Fatalf("the runner holds a lease ending %s, want the new end %s", got, end)
+	}
+	time.Sleep(time.Until(soon) + time.Second)
+	if err := f.manager.CheckLapses(f.ctx); err != nil {
+		t.Fatal(err)
+	}
+	if !f.contained(control) {
+		t.Fatal("the control run was not contained at its end: the end did not pass")
+	}
+	if f.contained(extended) {
+		t.Fatal("the run whose end moved was contained at its old end")
+	}
+}
+
 // fix-r1 Fable M1: a lease the runner would refuse is never sent, since a refused LEASE ends the runner's
 // whole session. The run is refused alone; nothing is persisted for it, and the session carries on.
 func TestPG_RunnerLease_RefusesALeaseTheRunnerWouldRefuse(t *testing.T) {
