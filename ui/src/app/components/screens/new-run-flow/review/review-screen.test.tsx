@@ -185,12 +185,25 @@ describe("Review Launch gate (U11)", () => {
       preflightRead: { generation: GENERATION, at: Date.now() - 1000 },
       preflightError: "Your AWS sign-in no longer works.",
       preflightReason: "model_credential",
-      preflightRefusal: { body: {}, provider: "bedrock-sso" },
+      preflightRefusal: { body: {}, provider: "bedrock-sso", setupItems: [] },
     });
     open(AGENT);
     await ready();
     expect(launch()).toBeEnabled();
     expect(blockerList()).toBeEmptyDOMElement();
+  });
+
+  it("keeps the setup items a model credential refusal carries as blockers", async () => {
+    checks.current = answered(null, 1000, {
+      preflightRead: { generation: GENERATION, at: Date.now() - 1000 },
+      preflightError: "Your AWS sign-in no longer works.",
+      preflightReason: "model_credential",
+      preflightRefusal: { body: {}, provider: "bedrock-sso", setupItems: SCENARIO_PREFLIGHT.app.setup_items },
+    });
+    open(AGENT);
+    await ready();
+    expect(launch()).toBeDisabled();
+    expect(within(blockerList()).getAllByRole("listitem").map((li) => li.textContent)).toEqual(["deploy-key"]);
   });
 
   it("offers Check again while shut, reads both again, and announces once Launch opens", async () => {

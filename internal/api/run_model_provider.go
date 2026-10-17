@@ -197,6 +197,11 @@ func (s *Server) writeProviderRefusalAs(w http.ResponseWriter, r *http.Request, 
 	if credential {
 		body.Reason = llmRefusalAuditReason
 		d = d.With("remedy", llmRefusalAuditReason)
+		if cw, ok := w.(credentialSetupWriter); ok {
+			s.recordRefusal(r.Context(), r, d)
+			writeJSON(w, http.StatusUnprocessableEntity, preflightCredentialRefusal{body, cw.setup()})
+			return
+		}
 	} else {
 		// #656 slice 3: the non-credential states (off, not serving, not
 		// granted, no such provider) had no wire reason at all — the SAME

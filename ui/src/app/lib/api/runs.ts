@@ -300,7 +300,16 @@ export const runs = {
   // LAUNCH_DEADLINE_MS because that resolution (mounts, grants, the blast-radius raise) is synchronous.
   async preflightRunWire(body: object, signal?: AbortSignal): Promise<PreflightResult> {
     const res = await wfetch("/runs/preflight", { method: "POST", body: JSON.stringify(body), signal }, LAUNCH_DEADLINE_MS);
-    return asJson<PreflightResult>(res);
+    const copy = res.ok ? null : res.clone();
+    try {
+      return await asJson<PreflightResult>(res);
+    } catch (e) {
+      if (copy && isCredentialRefusal(e)) {
+        const rows = await copy.json().then((j: { setup_items?: unknown }) => j.setup_items, () => undefined);
+        (e as HttpError).setupItems = Array.isArray(rows) ? rows : [];
+      }
+      throw e;
+    }
   },
   async previewRunPolicyWire(body: object, signal?: AbortSignal): Promise<PolicyPreviewResult> {
     const res = await wfetch("/runs/policy-preview", { method: "POST", body: JSON.stringify(body), signal });

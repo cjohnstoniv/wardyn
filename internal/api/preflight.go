@@ -306,15 +306,7 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	// The RunInput deriveSetupItems keys off — the scalar create-run fields, with
 	// the ENFORCED class so the backend row probes the class this run will really
 	// run at (post-floor/raise), matching launch.
-	runInput := composer.RunInput{
-		Agent:            req.Agent,
-		Repo:             req.Repo,
-		Task:             req.Task,
-		ConfinementClass: string(enforced),
-		Interactive:      req.Interactive,
-		DevcontainerRepo: req.DevcontainerRepo,
-		Baseline:         f.baseline,
-	}
+	runInput := preflightRunInput(&req, enforced, f.baseline)
 
 	// Deterministic risk grade: the SAME composer.Grade/OverallLevel
 	// call compose.go runs for the AI Run Composer's Review, on the SAME
@@ -408,4 +400,33 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	}
 	resp.Access = access
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// preflightRunInput is the RunInput deriveSetupItems keys off: the scalar create-run fields, at the
+// enforced class.
+func preflightRunInput(req *createRunRequest, enforced types.ConfinementClass, baseline composer.Baseline) composer.RunInput {
+	return composer.RunInput{
+		Agent:            req.Agent,
+		Repo:             req.Repo,
+		Task:             req.Task,
+		ConfinementClass: string(enforced),
+		Interactive:      req.Interactive,
+		DevcontainerRepo: req.DevcontainerRepo,
+		Baseline:         baseline,
+	}
+}
+
+// credentialSetupWriter is preflight's writer for stepModelProvider: writeProviderRefusalAs answers a
+// model_credential refusal written through it with preflightCredentialRefusal, so Review keeps the
+// setup rows resolved before the refusal while Launch opens the sign-in door.
+type credentialSetupWriter struct {
+	http.ResponseWriter
+	setup func() []SetupItem
+}
+
+// preflightCredentialRefusal is preflight's model_credential 422: the envelope, and the setup rows
+// the fold resolved before the provider refused.
+type preflightCredentialRefusal struct {
+	errorBody
+	SetupItems []SetupItem `json:"setup_items,omitempty"`
 }

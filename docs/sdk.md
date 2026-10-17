@@ -919,7 +919,7 @@ console depends on for its own sign-in/connect doors ([`ui/src/app/lib/api/runs.
 
 | Reason | Meaning |
 |---|---|
-| `model_credential` | `POST /runs`' dispatch-time model-credential gate (`runs_dispatch_llm_mechanism.go`): the run was refused specifically over a model credential — the class the console's sign-in door opens on, deliberately not narrowed further (a renewal that merely did not complete grades live and offers no button). |
+| `model_credential` | `POST /runs`' dispatch-time model-credential gate (`runs_dispatch_llm_mechanism.go`): the run was refused specifically over a model credential — the class the console's sign-in door opens on, deliberately not narrowed further (a renewal that merely did not complete grades live and offers no button). On `/runs/preflight` this 422 also carries `setup_items`: the checklist rows resolved before the refusal, model access aside. |
 | `git_credential` | New Run's per-user Azure DevOps connect gate (`scmaccess.go`, the 0.7.7 relaunch path): admitted, but this person has not connected their own git credential yet. |
 
 ## Pending approval (governance writes)

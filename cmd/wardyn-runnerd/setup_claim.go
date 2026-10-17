@@ -8,13 +8,11 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/runneridentity"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	sdk "github.com/cjohnstoniv/wardyn/pkg/client"
-	"github.com/google/uuid"
 	"github.com/spf13/cobra"
 )
 
@@ -60,7 +58,10 @@ func claimRunner(ctx context.Context, c *sdk.Client, id runneridentity.Identity,
 	if plan.pool == "" {
 		return nil
 	}
-	pool, err := ownPool(ctx, c, plan.pool, out)
+	pool, created, err := c.OwnRunnerPool(ctx, plan.pool)
+	if created {
+		fmt.Fprintf(out, "created user pool %s (%s)\n", pool.Name, pool.ID)
+	}
 	if err != nil {
 		return err
 	}
@@ -81,31 +82,4 @@ func claimRunner(ctx context.Context, c *sdk.Client, id runneridentity.Identity,
 	}
 	fmt.Fprintf(out, "default pool set to %s\n", pool.Name)
 	return nil
-}
-
-// ownPool is the person's user pool of this name, made when they have none. A pool of an organization is
-// not theirs to put a self-hosted runner in, so one with the same name is passed over. The list is the
-// pools the caller may use (GET /me/runner-pools), where a user-scope row is their own.
-func ownPool(ctx context.Context, c *sdk.Client, name string, out io.Writer) (sdk.RunnerPool, error) {
-	list, err := c.ListMyRunnerPools(ctx, "")
-	if err != nil {
-		return sdk.RunnerPool{}, err
-	}
-	var ids []uuid.UUID
-	for _, p := range list.Pools {
-		if p.Scope == sdk.RunnerPoolUser && strings.EqualFold(p.Name, name) {
-			ids = append(ids, p.ID)
-		}
-	}
-	switch len(ids) {
-	case 0:
-		pool, err := c.CreateMyRunnerPool(ctx, sdk.CreateMyRunnerPoolRequest{Name: name})
-		if err == nil {
-			fmt.Fprintf(out, "created user pool %s (%s)\n", pool.Name, pool.ID)
-		}
-		return pool, err
-	case 1:
-		return c.GetRunnerPool(ctx, ids[0])
-	}
-	return sdk.RunnerPool{}, fmt.Errorf("%d of your pools are named %q; use `wardyn runner claim --pool <id>`", len(ids), name)
 }

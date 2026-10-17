@@ -61,6 +61,7 @@ const poolSelect = async () => {
   await waitFor(() => expect(select).toBeEnabled());
   return select;
 };
+const tally = (runs: number) => ({ runs, cpu_millis: 0, memory_mib: 0, disk_mib: 0 });
 const optionLabels = (select: HTMLElement) => within(select).getAllByRole("option").map((o) => o.textContent);
 const list = (pools: RunnerPoolCatalogueEntry[], over: Partial<RunnerPoolList> = {}): RunnerPoolList => ({ ...MEMBER, pools, ...over });
 const barrierRadio = (barrier: string) => screen.getAllByRole("radio", { name: barrier }).find((r) => !isInaccessible(r)) as HTMLInputElement;
@@ -75,7 +76,7 @@ describe("Run step: pool select", () => {
     const hidden = unavailablePool({ ...SHARED, id: "gone", name: "Gone" }, "runner_pool_not_found");
     show(AGENT, list([SHARED, TEAM_LAPTOPS, hidden], { default: { pool_id: SHARED.id, selection: "organisation_default" } }));
     const select = await poolSelect();
-    expect(optionLabels(select)).toEqual(["Shared pool", "Team laptops"]);
+    expect(optionLabels(select)).toEqual([NR_RUN.POOL_OPTION_REASON("Shared pool", NR_RUN.FIT_STARTS_NOW), NR_RUN.POOL_OPTION_REASON("Team laptops", NR_RUN.FIT_STARTS_NOW)]);
     expect(select).toHaveValue(SHARED.id);
     expect(intentNow().runner_pool_id).toBeUndefined();
     await userEvent.selectOptions(select, TEAM_LAPTOPS.id);
@@ -92,6 +93,22 @@ describe("Run step: pool select", () => {
     show(AGENT, list([SHARED, unavailablePool(TEAM_LAPTOPS, reason)]));
     const option = await screen.findByRole("option", { name: NR_RUN.POOL_OPTION_REASON("Team laptops", label) });
     expect(option).toBeDisabled();
+  });
+
+  it("says on each usable pool whether a run starts now or waits, and nothing where the list says neither", async () => {
+    const full = { ...SHARED, id: "full", name: "CI pool", slots: { used: 10, waiting: 3, max: 10, verdict: "waits" as const } };
+    const noRoom = {
+      ...TEAM_LAPTOPS, id: "busy", name: "Busy laptops",
+      capacity: { total: tally(2), in_use: tally(2), available: tally(0), largest_per_run: { cpu_millis: 2000, memory_mib: 4096, disk_mib: 0 }, runners: 1, runners_online: 1 },
+    };
+    const unknown = { ...SHARED, id: "quiet", name: "Quiet pool", slots: undefined };
+    show(AGENT, list([SHARED, full, noRoom, unknown]));
+    expect(optionLabels(await poolSelect())).toEqual([
+      NR_RUN.POOL_OPTION_REASON("Shared pool", NR_RUN.FIT_STARTS_NOW),
+      NR_RUN.POOL_OPTION_REASON("CI pool", NR_RUN.FIT_WAITS),
+      NR_RUN.POOL_OPTION_REASON("Busy laptops", NR_RUN.FIT_WAITS),
+      "Quiet pool",
+    ]);
   });
 
   it("names the run type the pool does not take, from the type asked", async () => {
@@ -146,11 +163,11 @@ describe("Run step: pool select", () => {
     await userEvent.click(screen.getByRole("radio", { name: NR_RUN.MODE_AUTONOMOUS }));
     await waitFor(() => expect(load).toHaveBeenCalledWith("background", expect.any(AbortSignal)));
     answers.background(list([{ ...SHARED, name: "Background pool" }]));
-    expect(await screen.findByRole("option", { name: "Background pool" })).toBeInTheDocument();
+    expect(await screen.findByRole("option", { name: NR_RUN.POOL_OPTION_REASON("Background pool", NR_RUN.FIT_STARTS_NOW) })).toBeInTheDocument();
     answers.interactive(list([{ ...SHARED, name: "Interactive pool" }]));
     await new Promise((r) => setTimeout(r, 20));
-    expect(screen.queryByRole("option", { name: "Interactive pool" })).not.toBeInTheDocument();
-    expect(screen.getByRole("option", { name: "Background pool" })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: NR_RUN.POOL_OPTION_REASON("Interactive pool", NR_RUN.FIT_STARTS_NOW) })).not.toBeInTheDocument();
+    expect(screen.getByRole("option", { name: NR_RUN.POOL_OPTION_REASON("Background pool", NR_RUN.FIT_STARTS_NOW) })).toBeInTheDocument();
   });
 
   it("with no default and no choice, Continue focuses the pool and says one is required", async () => {

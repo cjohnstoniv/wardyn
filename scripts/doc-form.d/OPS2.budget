@@ -31,4 +31,6 @@ docs/operations/console-branding.md=943 share=35
 # docs/operations/hybrid-laptops.md 2077 adds 316 over 1761 (0.9.3 Fr), measured: the upstream proxy, running without a service and Docker engine sections.
 # docs/operations/hybrid-laptops.md 2295 adds 218 over 2077 (0.9.3 Fr fix round 1), measured: the proxy-image section (follows the organisation, any image, the pin), the --no-service refusal and quoted command, and the plist-credential warning.
 # docs/operations/hybrid-laptops.md 2787 = 2253 + 534 (Fr), measured at the wave-A merge.
-docs/operations/hybrid-laptops.md=2787 share=35
+# docs/operations/hybrid-laptops.md 1786 adds 25 (0.9.3 F-R14), measured: an org-shared MCP credential is refused on a runner.
+# docs/operations/hybrid-laptops.md 2812 = 2787 + 25 (Fo), measured at the wave-A merge.
+docs/operations/hybrid-laptops.md=2812 share=35

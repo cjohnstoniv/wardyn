@@ -139,6 +139,8 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `POOL_HELP` | deviation (DS-5 §8) | A pool is required. Pools you can use stay visible, with the reason when one can't take this run. |
 | `POOL_OPTION_REASON(pool, reason)` | mock | {pool} · {reason} |
 | `REASON_NO_ONLINE` | mock | No online runners |
+| `FIT_STARTS_NOW` | pending (W-55) | Starts now |
+| `FIT_WAITS` | pending (W-55) | Waits for a slot |
 | `REASON_SWITCHED_OFF` | pending (W-03) | Switched off |
 | `REASON_NO_RUNNERS` | pending (W-03) | No runners |
 | `REASON_BACKGROUND_ONLY` | pending (W-03) | Background only |
