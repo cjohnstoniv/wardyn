@@ -93,6 +93,8 @@ export const NR_TOOLS = {
   CODEX_NOTE:
     "Codex CLI can't pause a tool call for approval, and Wardyn can't block its own tools. Rules for its MCP tools are enforced by the proxy.",
   RULES_LABEL: "Tool rules",
+  /** Lead wording 2026-10-17 (FUG-L771): read out on a policy's locked rule row, which shows a lock icon only. */
+  ROW_LOCKED: "Set by your organisation's policy",
   ADD_RULE: "Add a tool rule",
   MCP_FOR_HARNESS: "MCP servers for this harness",
   MCP_FOLLOWS: "Calls to an MCP server follow this harness's tool rules, as mcp__<server>__<tool>.",

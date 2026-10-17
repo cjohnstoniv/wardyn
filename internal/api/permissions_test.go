@@ -35,6 +35,11 @@ import (
 // exactly how the handler tells a create (201) from a re-grant (200).
 type permStore struct{ *capStore }
 
+// DryRunGovernance runs nothing: a direct delete reads the row it removes for its audit row
+// (readDeleteAudit) through a database querier this fake has none of, so the row records no detail;
+// governance_delete_audit_pg_test pins what it records.
+func (s *permStore) DryRunGovernance(context.Context, func(store.Querier) error) error { return nil }
+
 func (s *permStore) UpsertCapabilityGrant(_ context.Context, g types.CapabilityGrant) (types.CapabilityGrant, error) {
 	for i, ex := range s.grants {
 		if ex.SubjectType == g.SubjectType && ex.Subject == g.Subject &&

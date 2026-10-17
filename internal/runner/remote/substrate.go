@@ -411,6 +411,14 @@ func (s *Substrate) ProbeDrive(ctx context.Context, mount types.DriveMount) (run
 // RecoverOutput reads the runner-side output buffer into w. For a live run adopted after a restart the
 // sink is registered before the runner is asked, so the OPEN the runner sends at connect finds it.
 func (s *Substrate) RecoverOutput(ctx context.Context, ref string, w io.Writer) error {
+	if err := s.own(ref); err != nil {
+		return err
+	}
+	// The stream is claimed on the session that answered the call, as Attach does.
+	sess, err := s.pin()
+	if err != nil {
+		return err
+	}
 	var adopted *outputSink
 	id, adopting := runner.OutputRun(ctx)
 	if adopting {
@@ -433,11 +441,7 @@ func (s *Substrate) RecoverOutput(ctx context.Context, ref string, w io.Writer) 
 	}
 	gapper, canGap := w.(runner.OutputGapMarker)
 	var res runnerwire.RecoverResult
-	if err := s.own(ref); err != nil {
-		drop()
-		return err
-	}
-	if err := s.call(ctx, runnerwire.MethodRecoverOutput, runnerwire.RecoverOutputArgs{Ref: ref, Gap: canGap}, &res); err != nil {
+	if err := sess.Call(ctx, runnerwire.MethodRecoverOutput, runnerwire.RecoverOutputArgs{Ref: ref, Gap: canGap}, &res); err != nil {
 		drop()
 		return err
 	}
@@ -445,7 +449,7 @@ func (s *Substrate) RecoverOutput(ctx context.Context, ref string, w io.Writer) 
 		drop()
 		return runner.ErrOutputUnrecoverable
 	}
-	st, err := s.t.TakeStream(res.Stream)
+	st, err := sess.TakeStream(res.Stream)
 	if err != nil {
 		drop()
 		return err

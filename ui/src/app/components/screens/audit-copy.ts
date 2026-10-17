@@ -28,4 +28,6 @@ export const AUDIT = {
   EXPIRED_DELETE_LOST_REPLY_FAILED:
     "Could not remove a stored sign-in after a renewal whose reply may have been lost",
   EXPIRED_DELETE_EXPIRED_FAILED: "Could not remove a stored sign-in that had expired",
+  // A run.build row the image cache answered (data.cache_hit): nothing was built.
+  REUSED_IMAGE: "Reused the cached sandbox image",
 } as const;

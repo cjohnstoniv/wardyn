@@ -41,6 +41,7 @@ type fakeExecutor struct {
 	gotStdout bool
 	gotStderr bool
 	resizes   chan remotecommand.TerminalSize
+	silent    bool // true: never write output, like an exec upgrade that hangs
 }
 
 func newFakeExecutor() *fakeExecutor {
@@ -81,6 +82,9 @@ func (f *fakeExecutor) StreamWithContext(ctx context.Context, opts remotecommand
 		}()
 	}
 
+	if !f.silent && opts.Stdout != nil {
+		go func() { _, _ = opts.Stdout.Write([]byte("$ ")) }() // the shell's first output
+	}
 	<-ctx.Done() // "connected" until Close cancels the stream context
 	return nil
 }
@@ -240,6 +244,45 @@ func TestAttach_ExecSemanticsResizeAndClose(t *testing.T) {
 	}
 	if err := sess.Close(); err != nil {
 		t.Errorf("second Close must be idempotent, got %v", err)
+	}
+}
+
+// A Kubernetes exec connects in the background, so Attach must not report a
+// session until the stream has spoken: with a hung upgrade it returns only when
+// its context ends, and the stream it started is closed.
+func TestAttach_WaitsForTheExecToConnect(t *testing.T) {
+	d, cs := newTestDriver(t, Config{})
+	ref := createAgentPodFixture(t, cs, uuid.New(), "wardyn/agent-claude:local", nil)
+	fe := newFakeExecutor()
+	fe.silent = true
+	d.execFactory = fe.execFactory
+
+	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	sess, err := d.Attach(ctx, ref, runner.AttachOptions{Cols: 80, Rows: 24})
+	if err == nil {
+		_ = sess.Close()
+		t.Fatal("Attach returned a session for an exec that never connected")
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("Attach err = %v, want the context deadline", err)
+	}
+	if time.Since(start) < 100*time.Millisecond {
+		t.Errorf("Attach returned after %v, before its context ended", time.Since(start))
+	}
+}
+
+// An exec that fails while connecting is an Attach error, not a session whose
+// reads fail later.
+func TestAttach_ExecThatFailsToConnectIsAnError(t *testing.T) {
+	d, cs := newTestDriver(t, Config{})
+	ref := createAgentPodFixture(t, cs, uuid.New(), "wardyn/agent-claude:local", nil)
+	d.execFactory = func(string, string, []string, bool, bool) (remotecommand.Executor, error) {
+		return errExecutor{errors.New("unable to upgrade connection: container not found")}, nil
+	}
+	if _, err := d.Attach(context.Background(), ref, runner.AttachOptions{}); !errors.Is(err, runner.ErrSandboxGone) {
+		t.Errorf("Attach err = %v, want runner.ErrSandboxGone", err)
 	}
 }
 

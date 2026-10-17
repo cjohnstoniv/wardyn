@@ -430,6 +430,7 @@ func TestRunnersSwitchRefusesAnOrgURLThatIsNotHTTPS(t *testing.T) {
 		{"unset", "", "https://wardynd.internal:8443", http.StatusConflict},
 		{"userinfo", "https://user:pw@org.example.com", "https://wardynd.internal:8443", http.StatusConflict},
 		{"plain http control plane", "https://org.example.com", "http://wardynd.internal:8080", http.StatusConflict},
+		{"loopback http control plane serves no relay", "https://org.example.com", "http://127.0.0.1:8080", http.StatusConflict},
 		{"https control plane", "https://org.example.com", "https://wardynd.internal:8443", http.StatusOK},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

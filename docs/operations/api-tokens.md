@@ -209,7 +209,7 @@ curl -X POST -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/jso
   - Only a row keyed by tenant and object id can be unbound (`409`, `identity_not_rebindable`, otherwise); any other is found by its principal alone and would be orphaned.
   - A deactivated or purged identity is refused too (`409`, `identity_deactivated`).
   - The unbind clears only the row's principal. It keeps `authority_epoch`, `deactivated_at` and the SCIM linkage, and it cuts the released `sub`'s sessions.
-  - **The old `sub` must hold nothing first.** After the re-bind a suspension reaches only the new `sub`, so the unbind is refused (`409`, `identity_principal_in_use`, with the counts) while the old `sub` still holds an API token, an SSH key or a run that has not ended. Revoke or end them, then unbind.
+  - **The old `sub` must hold nothing first.** After the re-bind a suspension reaches only the new `sub`, so the unbind is refused (`409`, `identity_principal_in_use`, with the counts) while the old `sub` still holds an API token, an SSH key or a run that has not ended, sponsors a service identity, or is named by a pending invitation. Revoke or end them, then unbind.
   - Its stored credentials, workspaces and drive stay under the old principal, which the person no longer signs in as: expect to re-create them.
   - It writes an `identity.unbind` audit row naming the principal it released and the admin who did it. The next sign-in's bind is not audited; it shows as the identity's new principal on People.
 - `POST /people` answers `409` rather than create an ambiguous identity.
@@ -247,6 +247,7 @@ Both replace a token an admin created for someone else, and nothing that works t
   - Only the target, signed in as themselves, can claim it, so a forwarded link reaches nothing.
   - Anyone else who is signed in, an admin included, gets `404` `invitation_not_found`, the answer for a missing id.
   - The target's own claim of a dead invitation is `409` `invitation_not_pending`, with its `state`.
+  - The target's own `wdn_` token may list their pending invitations (`GET /me/invitations`); only a signed-in claim mints.
 - **A claim is a self-mint.**
   - The token carries the claimer's own role, user type and groups, exactly as `POST /me/tokens` does, and has no `minted_by`.
   - Claiming never grants the `api_token` feature: a person without it is refused `403` `capability_feature`.
@@ -261,14 +262,14 @@ Both replace a token an admin created for someone else, and nothing that works t
 
 Each row of `GET /api/v1/tokens?minted_for_others=true` carries a `disposition`, derived when you read it.
 Revoked and expired rows stay out unless you add `&include_revoked=true`, so a finished move stays visible.
-Admin > Credentials shows it as a State column and an "Also show revoked tokens" toggle.
+Admin > Credentials shows it as a State column and an "Also show revoked and expired tokens" toggle.
 
 | `disposition` | Condition |
 |---|---|
-| `needs_decision` | Live; no pending invitation replaces it; not moved. |
+| `needs_decision` | Live, an expired token not yet revoked included (only `DELETE` acts on one); no pending invitation replaces it; not moved, or moved to an identity since retired. |
 | `awaiting_owner` | Live; a pending invitation names it in `replaces_token_id`. |
 | `replaced_by_owner` | Revoked by that invitation's claim. |
-| `linked_to_service_identity` | Live; moved to a service identity. |
+| `linked_to_service_identity` | Live; moved to a service identity that is not retired. |
 | `moved_to_service_identity` | Revoked after a move. |
 | `revoked` | Revoked, neither of the above. |
 

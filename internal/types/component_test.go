@@ -702,3 +702,23 @@ func TestComponentCLI_Shape(t *testing.T) {
 		})
 	}
 }
+
+// A component's description is one plain line within the config description limit: a longer one, one
+// with a line break and one with markup are refused, naming the field.
+func TestComponentDefinition_DescriptionIsOnePlainLine(t *testing.T) {
+	def := func(desc string) types.ComponentDefinition {
+		return types.ComponentDefinition{Description: desc, Hosts: []string{"api.example.com"}}
+	}
+	if err := def("Query the analytics replica.").Validate(proxy.ValidDomainEntry, false); err != nil {
+		t.Fatalf("a plain line was refused: %v", err)
+	}
+	for name, desc := range map[string]string{
+		"too long":    strings.Repeat("a", types.MaxConfigDescriptionRunes+1),
+		"two lines":   "one\ntwo",
+		"with markup": "<b>bold</b>",
+	} {
+		if err := def(desc).Validate(proxy.ValidDomainEntry, true); err == nil || !strings.HasPrefix(err.Error(), "description: ") {
+			t.Errorf("%s: err = %v, want a description refusal", name, err)
+		}
+	}
+}

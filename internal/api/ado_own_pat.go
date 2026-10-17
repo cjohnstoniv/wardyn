@@ -80,7 +80,7 @@ const (
 	adoOwnPATMismatchRefusal       = "This token belongs to a different Azure DevOps account than yours."
 	adoOwnPATUnavailableRefusal    = "Wardyn couldn't reach Azure DevOps to check this token. Try again in a moment."
 	adoOwnPATTokenInvalidRefusal   = "Paste the token itself: one value, with no spaces"
-	// DRAFT (owner approval pending): nothing was compared, so the mismatch
+	// Nothing was compared, so the mismatch
 	// sentence would be untrue.
 	adoOwnPATNoEmailRefusal = "Your Wardyn sign-in has no email address, so Wardyn can't check that this token is yours."
 )

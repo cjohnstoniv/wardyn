@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -211,5 +212,36 @@ func TestMemberDriveErasureReachesTheStoredOwnerSpelling(t *testing.T) {
 				t.Errorf("erasure of %q left the drive", typed)
 			}
 		})
+	}
+}
+
+// TestMemberDriveErasureKeepsDrivesWhileARunStarts: while the person has a run
+// in STARTING, erasure keeps their drives with no tombstone written, fails the
+// member_drives scope by drive name, and a retry once the run has left STARTING
+// finishes.
+func TestMemberDriveErasureKeepsDrivesWhileARunStarts(t *testing.T) {
+	st := newMemberDriveStore()
+	d := seedMemberDrive(st, aliceSub, "Notes")
+	st.starting = map[string]bool{aliceSub: true}
+	rn := &memberDriveRunner{reclaimRunner: reclaimRunner{outcome: runner.DriveReclaimDeleted}}
+	srv, rec := erasureDriveServer(st, rn)
+
+	code, body := eraseMemberDrivesAs(srv, aliceSub)
+	if code != http.StatusInternalServerError || !strings.Contains(body, reasonErasureIncomplete) || !strings.Contains(body, `"remaining":["member_drives"]`) {
+		t.Fatalf("erasure = %d %s, want the incomplete 500 naming member_drives", code, body)
+	}
+	if got, ok := st.drives[d.ID]; !ok || got.DeleteStartedAt != nil || st.begins != 0 || len(rn.calls) != 0 {
+		t.Fatalf("kept = %v (tombstone %v), tombstone writes = %d, substrate calls = %d; want kept, never tombstoned, no call",
+			ok, got.DeleteStartedAt, st.begins, len(rn.calls))
+	}
+	if outcome, data := erasureRowOf(t, rec); outcome != "failure" || !strings.Contains(fmt.Sprint(data["error"]), `"Notes"`) {
+		t.Errorf("person.erasure = %s %v, want a failure naming the drive Notes", outcome, data)
+	}
+	st.starting = nil // the run left STARTING: a retry finishes
+	if code, body := eraseMemberDrivesAs(srv, aliceSub); code != http.StatusOK {
+		t.Fatalf("retry = %d %s, want 200", code, body)
+	}
+	if len(st.owned(aliceSub)) != 0 || len(rn.calls) != 1 {
+		t.Errorf("after the retry alice owns %d drives, substrate calls = %d; want none left after one reclaim", len(st.owned(aliceSub)), len(rn.calls))
 	}
 }

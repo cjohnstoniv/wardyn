@@ -29,15 +29,18 @@ mkdir -p "$WORK/bin"
 
 # The shim: `gh api [-X GET] [--paginate] <endpoint> [-f k=v ...]` prints
 # $FIX/<endpoint with / as _>.json, and appends its arguments to $FIX/calls.log.
+# Like gh, it serves page one alone unless --paginate is given; with it, the
+# page-two file <endpoint>.p2.json (when present) follows as a second document.
 cat >"$WORK/bin/gh" <<'SHIM'
 #!/usr/bin/env bash
 [ "${GH_SHIM_FAIL:-0}" = 1 ] && { echo "gh: HTTP 500" >&2; exit 1; }
 printf '%s\n' "$*" >>"$FIX/calls.log"
-ep=""
+ep=""; pg=0
 shift # api
 while [ $# -gt 0 ]; do
   case "$1" in
     -X|-f|-F) shift 2 ;;
+    --paginate) pg=1; shift ;;
     --*) shift ;;
     *) ep="$1"; shift ;;
   esac
@@ -45,6 +48,8 @@ done
 f="$FIX/$(printf '%s' "$ep" | tr '/' '_').json"
 [ -f "$f" ] || { echo "gh: no fixture for $ep (HTTP 404)" >&2; exit 1; }
 cat "$f"
+[ "$pg" = 1 ] && [ -f "${f%.json}.p2.json" ] && cat "${f%.json}.p2.json"
+exit 0
 SHIM
 chmod +x "$WORK/bin/gh"
 
@@ -61,6 +66,7 @@ bad() { echo "FAIL: $1"; fail=1; }
 
 fixture() { printf '%s/%s.json' "$FIX" "$(printf '%s' "$1" | tr '/' '_')"; }
 put() { printf '%s\n' "$2" >"$(fixture "$1")"; }
+put2() { printf '%s\n' "$2" >"$(fixture "$1" | sed 's/\.json$/.p2.json/')"; }  # page two of a paginated listing
 
 jobs_json() {  # names... -> {"jobs":[{"name":n,"conclusion":"success"}...]}
   local out="" n
@@ -183,6 +189,36 @@ baseline 14; mut "repos/$R/actions/workflows/nightly.yml/runs" ".workflow_runs[0
 run; want "14 a nightly on another tree (an ancestor never counts)" 1
 baseline 15; mut "repos/$R/actions/workflows/nightly.yml/runs" '.workflow_runs[0].head_repository.full_name = "fork/wardyn"'
 run; want "15 a nightly from a fork" 1
+
+# ── 17. evidence on page two of a paginated listing ─────────────────────────
+# Page one holds only other trees' rows; the tree's evidence is on page two.
+# gh serves page two only under --paginate, so a first-page-only read fails.
+nightly_row() {  # nightly_row <id> <created_at> <conclusion> <tree>
+  printf '{"id":%s,"event":"workflow_dispatch","status":"completed","conclusion":"%s","created_at":"%s","head_sha":"%s","head_repository":{"full_name":"%s"},"head_commit":{"tree_id":"%s"}}' "$1" "$3" "$2" "$OTHER" "$R" "$4"
+}
+baseline 17
+put "repos/$R/actions/workflows/nightly.yml/runs" "{\"workflow_runs\":[$(nightly_row 650 2030-01-02T02:00:00Z success "$OTHER")]}"
+put2 "repos/$R/actions/workflows/nightly.yml/runs" "{\"workflow_runs\":[$(nightly_row 700 2030-01-02T01:00:00Z success "$T")]}"
+run; want "17 a green nightly on page two is found" 0
+grep -qx "nightly_run=700" <<<"$OUT" && ok "17 the page-two nightly is the one reported" || bad "17 stdout was: $OUT"
+baseline 17b
+put "repos/$R/actions/artifacts" "{\"artifacts\":[{\"name\":\"ci-full-tree-$OTHER\",\"expired\":false,\"created_at\":\"2030-01-03T00:00:00Z\",\"workflow_run\":{\"id\":499,\"head_repository_id\":$REPO_ID}}]}"
+put2 "repos/$R/actions/artifacts" "{\"artifacts\":[{\"name\":\"ci-full-tree-$T\",\"expired\":false,\"created_at\":\"2030-01-02T00:00:00Z\",\"workflow_run\":{\"id\":500,\"head_repository_id\":$REPO_ID}}]}"
+run; want "17 a CI marker on page two is found" 0
+grep -qx "ci_run=500" <<<"$OUT" && ok "17 the page-two CI run is the one reported" || bad "17 stdout was: $OUT"
+# The newest dispatched run decides across pages: newer red on page one beats an
+# older green on page two; a newer green on page two beats an older red on page one.
+baseline 17c
+put "repos/$R/actions/workflows/nightly.yml/runs" "{\"workflow_runs\":[$(nightly_row 701 2030-01-03T01:00:00Z failure "$T")]}"
+put2 "repos/$R/actions/workflows/nightly.yml/runs" "{\"workflow_runs\":[$(nightly_row 700 2030-01-02T01:00:00Z success "$T")]}"
+put "repos/$R/actions/runs/701/jobs" "$(jobs_json w1 'multi-arch build (wardynd)')"
+run; want "17 a newer red nightly on page one is not rescued by an older green on page two" 1 "701"
+baseline 17d
+put "repos/$R/actions/workflows/nightly.yml/runs" "{\"workflow_runs\":[$(nightly_row 700 2030-01-02T01:00:00Z failure "$T")]}"
+put2 "repos/$R/actions/workflows/nightly.yml/runs" "{\"workflow_runs\":[$(nightly_row 702 2030-01-04T01:00:00Z success "$T")]}"
+put "repos/$R/actions/runs/702/jobs" "$(jobs_json w1 w2 'multi-arch build (wardynd)')"
+run; want "17 ordering is global: the newest run decides wherever its page" 0
+grep -qx "nightly_run=702" <<<"$OUT" && ok "17 the newest run is reported" || bad "17 stdout was: $OUT"
 
 baseline 16
 OUT="$(PATH="$WORK/bin:$PATH" GITHUB_REPOSITORY=$R GH_TOKEN=x WATCHED="$WATCHED" "$SCRIPT" not-a-sha 2>/dev/null)"; RC=$?

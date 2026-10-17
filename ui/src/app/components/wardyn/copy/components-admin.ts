@@ -53,6 +53,8 @@ export const COMPONENTS_ADMIN = {
   EDITOR_EDIT: "Edit component",
   NAME: "Name",
   NAME_HINT: "People you make it available to see this name. Up to 64 characters.",
+  DESCRIPTION: "Description",
+  DESCRIPTION_HINT: "One line on the component's card in New Run, such as what it lets a run do. Up to 500 characters.",
   HOSTS: "Hosts",
   HOSTS_HINT: "One per line, such as api.example.com or *.example.com. A run that uses this component can reach these hosts.",
   SECRETS_LABEL: "Secrets",

@@ -126,13 +126,13 @@
   },
   {
     "reason": "capKinds[capFeature].reason",
-    "target": "\"me.tokens\"",
-    "sentence": "apiTokenFeatureRefusal"
+    "target": "\"runs.component\"",
+    "sentence": "\"Custom components aren't turned on for you. Ask your admin.\""
   },
   {
     "reason": "capKinds[capFeature].reason",
-    "target": "\"runs.component\"",
-    "sentence": "\"Custom components aren't turned on for you. Ask your admin.\""
+    "target": "target",
+    "sentence": "apiTokenFeatureRefusal"
   },
   {
     "reason": "capKinds[capPolicy].reason",
@@ -463,6 +463,11 @@
     "reason": "second_human_required",
     "target": "id.String()",
     "sentence": "sw + \" is set: this run has no recorded human author, so no decision on it can be verified as a second human's\""
+  },
+  {
+    "reason": "second_human_required",
+    "target": "r.URL.Path",
+    "sentence": "envGovernanceSecondHuman + \" is set: you minted this organization runner's token, so someone else claims it\""
   },
   {
     "reason": "security_admin_surface",

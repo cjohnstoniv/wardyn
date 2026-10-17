@@ -1,8 +1,8 @@
 # 0.9 Pool queue: a full pool makes a run wait, not fail
 
-Status: **Built in 0.9; the owner accepted every recommendation in [Owner options](#21-owner-options).** It designed the 2026-10-10 owner ruling: a launch into a runner pool at its concurrent-run cap queues until a slot frees.
+Status: **Built in 0.9; the owner accepted every recommendation in [Owner options](#19-owner-options).** It designed the 2026-10-10 owner ruling: a launch into a runner pool at its concurrent-run cap queues until a slot frees.
 It built on the pool-limits contract (`AtCapacity` returns a `*Wait`) and the accepted #1319 rulings.
-Every product call was in [Owner options](#21-owner-options), each with a recommendation.
+Every product call was in [Owner options](#19-owner-options), each with a recommendation.
 
 ## 1. Problem and scope
 
@@ -14,13 +14,6 @@ A busy pool must not refuse a launch. The run waits holding nothing a running ru
 | Order, flood limits, pool changes, runner availability | Deployment cap, host capacity, quota outside a capped pool: unchanged |
 | Failover, audit, metrics, API, SDK, CLI, TS, console placement | Runner selection (D-117, H3), pool storage and screens (H10-pools) |
 | The queue's refusal and end reasons, HTTP status, matchers | Server-authored runs (sign-in, scans, probes, record runs): never queue |
-
-| Depends on | What this design consumes | State |
-|---|---|---|
-| C-pool-limits | `AtCapacity`, `Wait`, `WaitAtCapacity`, `Effective`, `PoolSource`, `CheckBarrier`, `types.RunEndReason` | On batch; needs the [§20](#20-coordination-notes) additions |
-| D-117 / D-116 | The resolved pool at create, `agent_runs.runner_pool_id`, a request-free runner pick | In flight; the pool id on the run is a hard prerequisite |
-| D-1319 | `ends_after_sec`, `no_end`, `lifetime_cap_at`, end reasons through `status_detail` | Accepted; anchors move ([§20](#20-coordination-notes)) |
-| H10-pools | Pool rows, limits, use policies, delete and switch-off | In flight |
 
 ## 2. What exists today
 
@@ -265,18 +258,7 @@ One migration; its number comes from the lead.
 | Queue flood | 100 waiting per person per pool; Q2b | Without a cap, 100 rows per person per pool |
 | Crashed promoter | Stale-lease pass on promoted runs | A dead promoted run holds its slot about 100 s |
 
-## 18. Lane split
-
-| Lane | Owns | DONE WHEN (binary) |
-|---|---|---|
-| Q-a store and state | Migration, `RunQueued`, `SlotHoldingRunStates`, `run_queue` calls, counts, reapers, projection | §19 PG tests pass; the report lists each reader of `NonTerminalRunStates`, `nonTerminalStateNames`, `IsTerminal` and its decision |
-| Q-b create, start, sweep | `foldQueue`, the fit verdict, the promoter and kicks, the start, timeout sweep, kill and revive changes (revive takes the pool lock first), pool hooks, audit, metrics, §9 in Go | Every §9 token exists with its HTTP status, recording point and sentence; §19 invariant tests and mutations fail when broken |
-| Q-c surface | API projection, SDK, CLI, TS, §9 TS twins and golden rows; console after the mock round | Wire parity, golden and vitest pass; browser spec green |
-| Docs | AUDIT-ACTIONS rows, threat-model text, run-lifecycle and CLI docs | Doc gates pass |
-
-- Q-a merges first. Q-b takes the security review track. Q-b's DONE WHEN includes, verbatim: the queue-timeout and queue-impossible reasons of §9, each with its reason string, HTTP status, recording point and console matcher.
-
-## 19. Tests and mutation obligations
+## 18. Tests and mutation obligations
 
 | Layer | Proof |
 |---|---|
@@ -294,16 +276,7 @@ One migration; its number comes from the lead.
 
 Mutations, each failing a named test: mint before the queue decision; renew in `foldQueue`; refuse `Need > Left` at enqueue; apply host capacity at enqueue; count `QUEUED` as a slot; drop the pool row lock; drop the `QUEUED` CAS predicate; drop `admitted_at IS NOT NULL` from the stale-lease pass; pin the captured profile id instead of re-resolving; read the delegated token's expiry at the start; keep the `run_queue` row on kill (fails the flood-limit test: 100 cancelled runs still block a new launch); skip one §7 re-check; age the reaper from `created_at`; answer `runner_pool_at_capacity` as an HTTP refusal.
 
-## 20. Coordination notes
-
-| Lane | Note |
-|---|---|
-| C-pool-limits | `wait.go` gains `runner_pool_no_runner_free`; `reasons.go` gains `runner_pool_queue_full` and `runner_pool_full` (`422`); `RunEndReason` gains `queue_timeout`, `queue_profile_changed`, `queue_policy_changed`, `runner_pool_removed` |
-| D-1319 | Anchor `ends_after_sec` and `lifetime_cap_at` on `COALESCE(admitted_at, created_at)`; the "No end" filter (O8-A) excludes `QUEUED`; `projectStatusDetail` keeps `queue:` end reasons on `FAILED`; the O5-B sweep skips `QUEUED` |
-| D-117 / D-116 | `runner_pool_id` on the run; a request-free runner pick; its FK makes the pool lock `FOR NO KEY UPDATE` |
-| H10-pools | Pool delete cancels queued runs in its transaction; cap changes kick the promoter |
-
-## 21. Owner options
+## 19. Owner options
 
 ### Q1. The queued state (decided)
 

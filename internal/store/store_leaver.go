@@ -115,7 +115,7 @@ type LeaverStore interface {
 	PurgeDueIdentities(ctx context.Context, limit int) ([]DueIdentity, error)
 	PendingLeavers(ctx context.Context, idleFor time.Duration, limit int) ([]PendingLeaver, error)
 	PendingRefusalAudits(ctx context.Context, idleFor time.Duration, limit int) ([]PendingRefusalAudit, error)
-	DeleteUserSubjectRows(ctx context.Context, id uuid.UUID, principals, emails []string) (grants, assignments, kept int64, err error)
+	DeleteUserSubjectRows(ctx context.Context, id uuid.UUID, principals, emails []string) (UserSubjectRowsDeleted, error)
 	HeldEmails(ctx context.Context, id uuid.UUID, principals, emails []string) ([]string, error)
 	ListDeactivatedIdentities(ctx context.Context, limit int) ([]PrincipalIdentity, error)
 	ListDeprovisionFailures(ctx context.Context, limit int) ([]DeprovisionFailure, error)
@@ -368,18 +368,6 @@ func (s PG) SuspendIdentity(ctx context.Context, p SuspendPlan) (SuspendResult, 
 		return SuspendResult{}, fmt.Errorf("store: deactivate identities: %w", err)
 	}
 	cutoffSubs := nonEmptyStrings(p.CutoffSubs)
-	if len(cutoffSubs) > 0 {
-		if err = LockRevocationOrder(ctx, tx); err != nil {
-			return SuspendResult{}, err
-		}
-	}
-	for _, sub := range cutoffSubs {
-		if _, err = tx.Exec(ctx, `
-			INSERT INTO oidc_session_revocations (sub, revoked_at) VALUES ($1, clock_timestamp())
-			ON CONFLICT (sub) DO UPDATE SET revoked_at = EXCLUDED.revoked_at`, sub); err != nil {
-			return SuspendResult{}, fmt.Errorf("store: session cutoff: %w", err)
-		}
-	}
 	if _, err = tx.Exec(ctx, `UPDATE people SET deactivated_at = COALESCE(deactivated_at, clock_timestamp()) WHERE principal = ANY($1::text[])`,
 		principals); err != nil {
 		return SuspendResult{}, fmt.Errorf("store: deactivate person: %w", err)
@@ -412,6 +400,21 @@ func (s PG) SuspendIdentity(ctx context.Context, p SuspendPlan) (SuspendResult, 
 			INSERT INTO deprovision_jobs (identity_id, kind, step, target) VALUES ($1, 'suspend', $2, $3)
 			ON CONFLICT (identity_id, kind, step, target) DO NOTHING`, p.IdentityID, k.Step, k.Target); err != nil {
 			return SuspendResult{}, fmt.Errorf("store: record pending suspension step: %w", err)
+		}
+	}
+	// The cut goes last: the exclusive revocation-order lock it takes holds every sign-in and mint
+	// (ReadRevocationSeq's shared lock) until this commits, so it is taken after the other writes.
+	// Every row this transaction locks is taken before it, so no holder of the shared lock waits on them.
+	if len(cutoffSubs) > 0 {
+		if err = LockRevocationOrder(ctx, tx); err != nil {
+			return SuspendResult{}, err
+		}
+	}
+	for _, sub := range cutoffSubs {
+		if _, err = tx.Exec(ctx, `
+			INSERT INTO oidc_session_revocations (sub, revoked_at) VALUES ($1, clock_timestamp())
+			ON CONFLICT (sub) DO UPDATE SET revoked_at = EXCLUDED.revoked_at`, sub); err != nil {
+			return SuspendResult{}, fmt.Errorf("store: session cutoff: %w", err)
 		}
 	}
 	if err = tx.QueryRow(ctx, `SELECT authority_epoch FROM principal_identities WHERE id = $1`, p.IdentityID).Scan(&res.Epoch); err != nil {

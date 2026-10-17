@@ -27,6 +27,7 @@ import (
 type localJudgement struct {
 	policy placement.DeliveryPolicy
 	trust  types.RunnerTrustClass
+	floor  types.ConfinementClass // the run's blast-radius floor (Q7), which no runner_resident credential meets
 }
 
 // candidateTrusts is the distinct trust classes of the run's eligible runners in the order create judges
@@ -86,25 +87,6 @@ func (p *runPlacement) narrowToTrust(c types.RunnerTrustClass) {
 	noRoom := !slices.ContainsFunc(p.eligible, func(t poolTarget) bool { return !t.full })
 	p.runnersFull = p.queues() && len(p.eligible) > 0 && noRoom
 	p.waitsForRoom = p.waitsForRoom && noRoom
-}
-
-// runnerTrust is a runner's stored trust class. An unknown class, or a runner that cannot be read,
-// refuses: the class is never guessed.
-func (s *Server) runnerTrust(ctx context.Context, id uuid.UUID) (types.RunnerTrustClass, error) {
-	st, ok := s.cfg.Store.(interface {
-		GetRunner(context.Context, uuid.UUID) (types.Runner, error)
-	})
-	if !ok {
-		return "", fmt.Errorf("the store keeps no runners")
-	}
-	rn, err := st.GetRunner(ctx, id)
-	if err != nil {
-		return "", err
-	}
-	if !rn.TrustClass.Valid() {
-		return "", fmt.Errorf("runner %s has no known trust class", id)
-	}
-	return rn.TrustClass, nil
 }
 
 // recordRunTrust stores the class a local run was admitted at, before its grants. A store that keeps

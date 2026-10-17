@@ -116,6 +116,11 @@ type Caps struct {
 	// no_output (0.9.3 on). The org queues retire_run only to a runner that
 	// says so; an older runner keeps every run's output, as before.
 	Retire bool `json:"retire,omitempty"`
+	// Resident says the runner holds runner_resident credentials: it serves
+	// deliver_resident and fills a ResidentMints placeholder (0.9.3 on). The org
+	// reads and sends a resident value only for a runner that says so; an older
+	// runner's run with one is refused before any value is read.
+	Resident bool `json:"resident,omitempty"`
 }
 
 // Waiting is the `waiting` event's data.

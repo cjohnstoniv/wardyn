@@ -103,6 +103,8 @@ func validRunnerDecision(r runnerspool.Record) bool {
 	return r.Count == 0 && r.DropEnd == 0
 }
 
+// runnerSpoolRun's FOR SHARE on the runner row can starve RevokeRunner only if ingest for one runner ever
+// runs concurrently: its 5 s revoke bound rests on one session's events being ingested in order on its read loop.
 func runnerSpoolRun(ctx context.Context, tx pgx.Tx, runnerID, runID uuid.UUID) (types.AgentRun, error) {
 	var kind, owner, state string
 	var revoked *time.Time

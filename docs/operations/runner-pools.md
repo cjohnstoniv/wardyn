@@ -48,6 +48,7 @@
 
 - A pool takes background tasks, interactive environments or both: its limits carry a `background` block, an `interactive` block or both (`--run-type`).
 - The pool list answers `run_types` and `run_types_source`: `pool` when the pool's own limits name them, `none` for a pool with no limits, which takes both.
+- A pool's limits, once set, are edited, never removed: `{"background":{},"interactive":{},"barriers":[]}` takes both run types and bounds nothing, though a request with no run type is then refused.
 - A launch of a type the pool does not take is refused `runner_pool_run_type_not_allowed`. A request with no run type (an older client) is refused `runner_pool_run_type_missing` (`422`) by any pool that has limits: pass `--experience background|interactive` or upgrade the client (`PoolSource`, [`internal/runnerpool/limits.go`](../../internal/runnerpool/limits.go)).
 
 ## Limits: the strictest wins
@@ -126,6 +127,7 @@ A launch waits, stored `QUEUED`, when its pool is running its Runs at once or wh
 ## Your own pools
 
 - You create, edit and delete your user pools, and nobody else sees or uses them; an admin lists them read-only with their owner.
+- That admin list holds at most 1,000 pools: the organisation's, then the admin's own, then everyone else's by name, with `X-Wardyn-Truncated` set when more exist.
 - You put in only your own claimed runners and the remote-hosted runners available to you. No route adds another person's runner.
 - A user pool whose runners are all yours is available while one of them is online. With none online the pool list says `runner_pool_no_online_runner`, and a launch is refused `runner_offline`: "None of your runners in {pool} is online."
 - A remote-hosted runner stops taking your runs as soon as its people policy no longer admits you.

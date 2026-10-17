@@ -57,7 +57,7 @@ const (
 	// and never repeatedly — a bound, not a retry policy.
 	supersedeCASAttempts = 3
 	// signInBusyRefusal is the 503 a sign-in launch or capture answers when the
-	// per-person lock could not be taken in time. DRAFT (M2 canon pending)
+	// per-person lock could not be taken in time.
 	signInBusyRefusal = "another sign-in is in progress, so this one was not started or saved; try again in a moment"
 	// signInUnserializedReasonNoCapacity is auth.signin_unserialized's one
 	// reason: the pool could not spare a connection for the lock.

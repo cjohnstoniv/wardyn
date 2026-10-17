@@ -37,14 +37,22 @@ func (s *Server) isReservedPrincipal(p string) bool {
 		strings.HasPrefix(p, audit.SubjectActorPrefix)
 }
 
+// subjectNameReservedMsg is the 422 reserved_principal sentence, after the field's name, for a
+// person's name given as a person's audit subject.
+const subjectNameReservedMsg = "that name is reserved for a person's audit subject, not a person"
+
+// isSubjectName reports whether name is a person's audit subject ("subject:<id>"). Every route that
+// resolves a person's name by directory lookup refuses one: it is not a name, and must never reach one.
+func isSubjectName(name string) bool {
+	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(name)), audit.SubjectActorPrefix)
+}
+
 // refuseSubjectPrincipalParam answers 422 reserved_principal, before the
 // handler runs, for a /people/{principal} path naming a person's audit subject.
-// The person routes resolve a name by directory lookup, and "subject:<id>" is
-// not a name: it must never reach one.
 func (s *Server) refuseSubjectPrincipalParam(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(strings.ToLower(strings.TrimSpace(principalParam(r))), audit.SubjectActorPrefix) {
-			writeErrorReason(w, http.StatusUnprocessableEntity, reasonReservedPrincipal, "principal: that name is reserved for a person's audit subject, not a person")
+		if isSubjectName(principalParam(r)) {
+			writeErrorReason(w, http.StatusUnprocessableEntity, reasonReservedPrincipal, "principal: "+subjectNameReservedMsg)
 			return
 		}
 		next.ServeHTTP(w, r)

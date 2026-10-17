@@ -48,7 +48,7 @@ func TestApplyWorkspaceRequirements_OnlyAttachedOrEnabledRowsNarrow(t *testing.T
 			ro := tc.authored
 			spec := &types.RunPolicySpec{WorkspaceMounts: []types.WorkspaceMount{{Source: path, Target: "/home/agent/work", ReadOnly: &ro}}}
 			for _, ws := range tc.folded {
-				srv.applyWorkspaceRequirementsFor(context.Background(), nil, spec, "claude-code", []types.Workspace{ws}, tc.attached, nil)
+				srv.applyWorkspaceRequirementsFor(context.Background(), nil, spec, "claude-code", []types.Workspace{ws}, tc.attached, nil, nil)
 			}
 			if got := !spec.WorkspaceMounts[0].ReadOnlyOrDefault(); got != tc.wantWrite {
 				t.Errorf("writable = %v, want %v", got, tc.wantWrite)

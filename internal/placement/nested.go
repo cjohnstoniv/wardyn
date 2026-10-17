@@ -20,11 +20,12 @@ import (
 // exempts a newly added child: both the table and this closed schema must cover it.
 var nestedFields = map[reflect.Type][]string{
 	reflect.TypeFor[proxy.Config](): strings.Fields("RunID ControlPlaneURL ControlPlaneCAPEM RunToken Policy Injection Listen DecisionBufferSize SelfLapse DecisionSink HardDeny MITMCACertPEM MITMCAKeyPEM MITMHosts GitGrants PATGrants " +
-		"BrokeredPATGrantIDs ADOGrant AzureGates GitHubAPI AzureARM MITMLLM UpstreamProxyURL UpstreamProxyNoProxy TrustedCAPEM InternalHosts LLMUpstreams LLMChannelHosts LLMUnavailableDetail Unattended Attribution DecisionSpoolDir PushRuleSets PushRuleBase HarnessToolRules HarnessCredentials ViaOrgRoutes MCPServers MCPBindings"),
+		"BrokeredPATGrantIDs ResidentMints ADOGrant AzureGates GitHubAPI AzureARM MITMLLM UpstreamProxyURL UpstreamProxyNoProxy TrustedCAPEM InternalHosts LLMUpstreams LLMChannelHosts LLMUnavailableDetail Unattended Attribution DecisionSpoolDir PushRuleSets PushRuleBase HarnessToolRules HarnessCredentials ViaOrgRoutes MCPServers MCPBindings"),
 	reflect.TypeFor[proxy.InjectionConfig]():    strings.Fields("InjectionRule GrantID"),
 	reflect.TypeFor[proxy.DecisionSinkConfig](): strings.Fields("URL SPKISHA256 Key"),
 	reflect.TypeFor[proxy.HardDenyConfig]():     strings.Fields("Suffixes Hosts CIDRs"),
 	reflect.TypeFor[proxy.ViaOrgRoute]():        strings.Fields("GrantID Host"),
+	reflect.TypeFor[proxy.ResidentMint]():       strings.Fields("GrantID Kind Username KnownHosts Token ExpiresAt"),
 	reflect.TypeFor[proxy.MCPServerConfig]():    strings.Fields("Key URL GrantID Ordinal"),
 	reflect.TypeFor[proxy.MCPBinding]():         strings.Fields("Harness SHA256 Servers"),
 	reflect.TypeFor[LocalPlan]():                strings.Fields("Spec Origins CredentialIntents OrgConfigKeys VerifiedLocalPaths UpstreamProxySecretRef TrustedOutput SelfDefinedComponents LocalSelfDefinedComponents Delivery Posture ConfinementFloor Trust"),
@@ -146,6 +147,7 @@ var tableRoots = map[reflect.Type]bool{reflect.TypeFor[runner.SandboxSpec](): tr
 var opaqueFields = map[string]string{
 	"SandboxSpec.OnWaiting":  "a callback, tagged json:\"-\"; waiting events replace it",
 	"SandboxSpec.ExecOutput": "a writer, tagged json:\"-\"; the output stream replaces it",
+	"ResidentMint.ExpiresAt": "a time.Time, an opaque scalar: the instant the proxy stops answering the grant",
 }
 
 func mergeOpaque(extra map[string]string) map[string]string {

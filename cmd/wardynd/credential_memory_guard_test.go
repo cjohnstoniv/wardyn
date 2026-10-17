@@ -205,7 +205,7 @@ var decryptSites = map[string]string{
 	"internal/secretstore/kek/kek.go|Local.Unwrap|kek.Open":                        "the local KEK unwraps a row's data key",
 	"internal/secretstore/pg/pg.go|Store.open|KEK.Unwrap":                          "a local-mode Get unwraps the row's data key, bound to the row's owner and name",
 	"internal/secretstore/pg/pg.go|Store.open|kek.Open":                            "a local-mode Get opens the value, bound to the row's owner and name",
-	"internal/secretstore/pg/pg.go|rewrap|KEK.Unwrap":                              "-rotate-age-key rewraps a data key; the value itself is never opened",
+	"internal/secretstore/pg/rewrap.go|rewrap|KEK.Unwrap":                          "-rotate-age-key rewraps a data key; the value itself is never opened",
 	"internal/secretstore/pg/principal_rows.go|Store.openPrincipal|kek.Open":       "a Get of a row under its owner's principal key (enc_version 3) opens the data key, then the value, each bound to the row",
 	"internal/secretstore/pg/principal_rows.go|Store.sealV1ToPrincipal|KEK.Unwrap": "-rewrap-principal-keys unwraps a v1 data key to wrap it under the owner's principal key; the value itself is never opened",
 	"internal/secretstore/subjectkey/subjectkey.go|Manager.Reseal|kek.Open":        "-rewrap-principal-keys opens a data key under an owner's earlier key generation to seal it under the current one; the value the data key seals is never opened",

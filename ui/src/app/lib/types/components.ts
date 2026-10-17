@@ -49,6 +49,8 @@ export interface ComponentSecret {
 }
 
 export interface ComponentDefinition {
+  // One plain line on the component's card.
+  description?: string;
   hosts: string[];
   secrets?: ComponentSecret[];
   // Plain, non-secret environment.
@@ -155,6 +157,8 @@ export interface ComponentSecretView {
 export interface OrgComponentView {
   id: string;
   name: string;
+  // The admin's one line for the card, when they wrote one.
+  description?: string;
   hosts: string[];
   secrets: ComponentSecretView[];
   config_keys: string[];

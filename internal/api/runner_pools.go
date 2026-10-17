@@ -303,6 +303,11 @@ func (s *Server) listRunnerPools(w http.ResponseWriter, r *http.Request, forUse 
 	if !ok {
 		return
 	}
+	// Only the oversight read can pass the cap: it reads one row more, so the list can say more exist.
+	if len(rows) > store.RunnerPoolsOversightMax {
+		rows = rows[:store.RunnerPoolsOversightMax]
+		w.Header().Set("X-Wardyn-Truncated", "true")
+	}
 	subj, err := s.callerSubjects(r.Context())
 	if err != nil {
 		writeCeilingError(w, r, err)

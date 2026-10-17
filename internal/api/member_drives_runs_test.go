@@ -496,3 +496,45 @@ func TestMemberDriveAttachAndDispatchAgree(t *testing.T) {
 		}
 	}
 }
+
+// startingFirstStore records the run's state each time dispatch re-reads a member drive.
+type startingFirstStore struct {
+	*memberRecheckStore
+	statesAtRead []types.RunState
+}
+
+func (s *startingFirstStore) GetMemberDriveOf(ctx context.Context, owner string, id uuid.UUID) (types.UserDrive, error) {
+	s.statesAtRead = append(s.statesAtRead, s.State())
+	return s.memberRecheckStore.GetMemberDriveOf(ctx, owner, id)
+}
+
+// TestMemberDriveRereadFollowsTheStartingClaim: dispatch claims PENDING->STARTING before it re-reads
+// the run's member drives. A delete reads STARTING after its tombstone, so with this order either the
+// re-read meets the tombstone or the delete meets the STARTING run; a re-read before the claim would
+// let both miss.
+func TestMemberDriveRereadFollowsTheStartingClaim(t *testing.T) {
+	id := uuid.New()
+	row := types.UserDrive{ID: id, Name: "Mine", Backend: types.DriveBackendDockerVolume, OwnerSubject: aliceSub}
+	fr := &fakeRunner{}
+	srv, st, _, run := dispatchTeardownFixture(t, fr, types.RunPending)
+	order := &startingFirstStore{memberRecheckStore: &memberRecheckStore{dispatchTestStore: st, drives: map[uuid.UUID]types.UserDrive{id: row}}}
+	srv.cfg.Store = order
+	run.Task, run.CreatedBy, st.run.CreatedBy = "", aliceSub, aliceSub
+	mount := types.DriveMount{DriveID: id, Backend: types.DriveBackendDockerVolume, ObjectName: "wardyn-drive-x", DriveName: "Mine",
+		HomeName: "d-x", Target: runner.DrivesRoot + "/mine", Enforcement: types.StorageEnforcementNone}
+	srv.dispatchRun(context.Background(), run, ceilingForDispatch(governanceCeiling{}, adoEntraUngraded(), bedrockCredUngraded()), dispatchParams{
+		RunToken: "run-token", Image: "wardyn/claude-code:latest", Drives: []types.DriveMount{mount},
+		MemberDrives: map[uuid.UUID]string{id: aliceSub},
+	})
+	if len(order.statesAtRead) == 0 {
+		t.Fatal("dispatch never re-read the member drive")
+	}
+	for i, s := range order.statesAtRead {
+		if s != types.RunStarting {
+			t.Fatalf("re-read %d ran with the run %s, want STARTING: the claim must come first", i, s)
+		}
+	}
+	if fr.createCalls != 1 {
+		t.Fatalf("CreateSandbox calls = %d, want the drive mounted once", fr.createCalls)
+	}
+}

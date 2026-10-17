@@ -303,17 +303,15 @@ func idleCPUSignalCheck(off bool) SetupCheck {
 	}
 }
 
-// DRAFT (M2 canon pending) — the fix a mechanism principal's provider row
+// The fix a mechanism principal's provider row
 // carries.
 const (
-	// DRAFT (M2 canon pending)
 	bedrockMechanismFix = "Sign in to the console (or use your own wdn_ API token) to see your own model access."
 	// internalHostsCheckLabel names internalHostsCheck's dedicated row.
 	// Detail is internalHostsDeclaredSentence
 	// (site_config.go), reused verbatim from the write-time log, so it is
 	// not repeated here.
 	//
-	// DRAFT (M2 canon pending)
 	internalHostsCheckLabel = "Internal hosts (SSRF guard override)"
 )
 

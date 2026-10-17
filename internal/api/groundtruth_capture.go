@@ -20,8 +20,6 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// DRAFT (M2 canon pending)
-
 // The kernel-ground-truth notes a reviewer reads on a capture
 // (RecordTaskResult.Caveats) and on a synthesized profile
 // (profileResponse.Warnings).

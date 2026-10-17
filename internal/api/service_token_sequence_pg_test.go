@@ -207,3 +207,31 @@ func TestPG_ServiceTokenMintBehindAnInFlightRevokeOfItsSponsorIsRefused(t *testi
 		t.Errorf("the mint = %d %s; want the late re-check's 403", w.Code, w.Body)
 	}
 }
+
+// A revoke by the sponsor's email reaches the tokens of the service they sponsor even when SSH keys are
+// registered under the email itself: the sponsor is stored by subject, so the sweep follows the subject
+// the email names in the directory, not the key owner.
+func TestPG_RevokeBySponsorEmailThatOwnsKeysRevokesTheServiceTokens(t *testing.T) {
+	e := newQueueEnv(t)
+	si, cookie := e.sponsoredService(e.revocations())
+	w := e.mintServiceToken(cookie, si)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("mint = %d %s", w.Code, w.Body)
+	}
+	tok := decodeToken(t, w)
+	const email = "person@corp.example"
+	if _, err := e.pg.AddSSHKey(context.Background(), types.SSHPublicKey{Fingerprint: "SHA256:email-owned-key", Principal: email, Name: "k",
+		PublicKey: "ssh-ed25519 AAAA " + email, Role: oidc.RoleUser, CreatedAt: time.Now().UTC()}); err != nil {
+		t.Fatal(err)
+	}
+
+	rw := httptest.NewRecorder()
+	e.srv.handleRevokeSessions(rw, httptest.NewRequest(http.MethodPost, "/api/v1/sessions/revoke", strings.NewReader(`{"sub":"`+email+`"}`)))
+	var revoked bool
+	if err := e.pool.QueryRow(context.Background(), `SELECT revoked_at IS NOT NULL FROM api_tokens WHERE id = $1`, tok.ID).Scan(&revoked); err != nil {
+		t.Fatal(err)
+	}
+	if !revoked {
+		t.Errorf("the revoke by %s (%d %s) left the sponsored service's token live", email, rw.Code, rw.Body)
+	}
+}

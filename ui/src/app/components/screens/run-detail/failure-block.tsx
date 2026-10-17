@@ -178,7 +178,19 @@ function revokedRunnerCopy(online: boolean, name: string): EndingCopy {
   };
 }
 
-function killedCopy(evidence: RunEnding["evidence"], held: HeldCredentials | undefined, localRunner?: string): EndingCopy {
+function killedCopy(
+  evidence: RunEnding["evidence"],
+  held: HeldCredentials | undefined,
+  localRunner: string | undefined,
+  runner: string,
+): EndingCopy {
+  // The stop waits in the offline runner's queue: credentials are gone, the sandbox is not yet.
+  if (evidence === "queued") {
+    return {
+      happened: (elapsed) => LOCAL_RUN.KILL_QUEUED(elapsed, runner),
+      todo: [KILL_AUDIT_ROW, LOCAL_RUN.KILL_QUEUED_FILES(runner), ...heldLines(held), KILL_START_NEW],
+    };
+  }
   if (evidence === "partial") {
     return {
       happened: (elapsed) =>
@@ -294,7 +306,7 @@ export function RunFailureBlock({
       ? // A revocation whose cascade did not finish is a partial teardown first: its credentials may still work.
         ending.runnerRevoked && ending.evidence === "confirmed"
         ? revokedRunnerCopy(ending.runnerRevoked.online, runnerLabel(run))
-        : killedCopy(ending.evidence, held, run.placement === "local" ? runnerLabel(run) : undefined)
+        : killedCopy(ending.evidence, held, run.placement === "local" ? runnerLabel(run) : undefined, runnerLabel(run))
       : ENDING_COPY[ending.kind];
   // The ending event's own timestamp bounds the run's lifetime; without one
   // (a truncated trail) fall back to the run's last update, which is what the

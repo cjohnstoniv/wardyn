@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/http/httptest"
 	"slices"
 	"strings"
 	"testing"
@@ -134,6 +135,22 @@ func TestPeopleRoutesRefuseAnAuditSubjectPrincipal(t *testing.T) {
 		{http.MethodGet, "/api/v1/people/subject:0f0e/tokens", ""},
 	} {
 		w := doSSO(t, srv, rt.method, rt.path, sa, rt.body)
+		if w.Code != http.StatusUnprocessableEntity || errorReason(w) != reasonReservedPrincipal {
+			t.Errorf("%s %s = %d %s, want 422 %s", rt.method, rt.path, w.Code, w.Body, reasonReservedPrincipal)
+		}
+	}
+	// The other routes that take a person's name refuse it too.
+	rw := httptest.NewRecorder()
+	srv.handleRevokeSessions(rw, httptest.NewRequest(http.MethodPost, "/api/v1/sessions/revoke", strings.NewReader(`{"sub":"subject:0f0e"}`)))
+	if rw.Code != http.StatusUnprocessableEntity || errorReason(rw) != reasonReservedPrincipal {
+		t.Errorf("POST /sessions/revoke sub=subject:0f0e = %d %s, want 422 %s", rw.Code, rw.Body, reasonReservedPrincipal)
+	}
+	admin := ssoSession(t, "adm-2", "adm2@corp.example", oidc.RoleAdmin)
+	for _, rt := range []struct{ method, path, body string }{
+		{http.MethodGet, "/api/v1/secrets?owner=subject:0f0e", ""},
+		{http.MethodDelete, "/api/v1/secrets/npm-token?owner=Subject:0f0e", ""},
+	} {
+		w := doSSO(t, srv, rt.method, rt.path, admin, rt.body)
 		if w.Code != http.StatusUnprocessableEntity || errorReason(w) != reasonReservedPrincipal {
 			t.Errorf("%s %s = %d %s, want 422 %s", rt.method, rt.path, w.Code, w.Body, reasonReservedPrincipal)
 		}

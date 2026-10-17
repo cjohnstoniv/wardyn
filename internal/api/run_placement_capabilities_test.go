@@ -584,7 +584,7 @@ func TestProbeFailureNamesTheUnreadableExecutor(t *testing.T) {
 		{id: "alpha", executor: "alpha", offline: true},
 		{id: "beta", executor: "beta", offline: true, facts: runner.TargetFacts{ProbeErr: errors.New("daemon down")}},
 	}}
-	if err := probeFailure(kinds); err == nil || !strings.Contains(err.Error(), "executor beta: daemon down") {
+	if err := probeFailure(kinds); err == nil || !strings.Contains(err.Error(), "runner beta: daemon down") {
 		t.Errorf("probeFailure = %v, want beta's probe error", err)
 	}
 	kinds[types.PlacementRemote][1].facts.ProbeErr = nil

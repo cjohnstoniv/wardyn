@@ -225,7 +225,7 @@ func TestValidateWorkspaceProviders(t *testing.T) {
 }
 
 // TestValidateWorkspaceProvidersRefusalStrings pins that the refusals go out
-// through the DRAFT constants rather than hand-typed prose, so the owner's canon
+// through the constants rather than hand-typed prose, so the owner's canon
 // sitting swaps one file and no test.
 func TestValidateWorkspaceProvidersRefusalStrings(t *testing.T) {
 	err := validateWorkspaceProviders(&types.WorkspaceProviders{Storage: &types.StorageProviders{
@@ -816,7 +816,7 @@ func TestWorkspaceProvidersPut(t *testing.T) {
 
 // TestWorkspaceProvidersPutRefusals pins the two refusal doors: a malformed
 // block never reaches the store, and a stale If-Match is a 412 carrying the
-// DRAFT canon sentence rather than a silent overwrite.
+// canon sentence rather than a silent overwrite.
 func TestWorkspaceProvidersPutRefusals(t *testing.T) {
 	fake := &fakeProvidersStore{fakeSiteConfigStore: &fakeSiteConfigStore{}}
 	srv, audit := newProvidersHarness(t, fake)

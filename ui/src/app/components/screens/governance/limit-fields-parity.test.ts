@@ -39,4 +39,29 @@ describe("LIMIT_FIELDS vs Go types.LimitsOverlay", () => {
     // An exemption that gained a row is stale.
     expect(Object.keys(EXEMPT).filter((t) => rows.has(t))).toEqual([]);
   });
+
+  it("has no embedded struct, whose tags the scan above would not see", () => {
+    expect(limitsOverlayLines().filter((line) => /^[A-Za-z_.*]+(\s+`[^`]*`)?$/.test(line))).toEqual([]);
+  });
+
+  it("types each row by the Go field: deny doors are true, permissive flags false, ints numbers, slices lists", () => {
+    const want: Record<string, string> = {};
+    for (const line of limitsOverlayLines()) {
+      const m = /^\w+\s+(\S+)\s+`json:"([^",]+)/.exec(line);
+      if (!m || m[2] in EXEMPT) continue;
+      const [, goType, tag] = m;
+      want[tag] = goType === "*bool" ? (tag.startsWith("deny_") ? "true" : "false") : goType === "*int" ? "number" : goType.startsWith("*[]") ? "list" : goType;
+    }
+    expect(Object.keys(want).length).toBeGreaterThan(10);
+    const got = Object.fromEntries(LIMIT_FIELDS.filter((f) => f.key in want).map((f) => [f.key, f.kind]));
+    expect(got).toEqual(want);
+  });
 });
+
+// The trimmed field lines of Go types.LimitsOverlay.
+function limitsOverlayLines(): string[] {
+  const src = readFileSync(join(repoRoot(), "internal/types/overlay.go"), "utf8");
+  const body = /type\s+LimitsOverlay\s+struct\s*\{([\s\S]*?)\n\}/.exec(src);
+  if (!body) throw new Error("struct LimitsOverlay not found");
+  return body[1].split("\n").map((l) => l.replace(/\s+/g, " ").trim()).filter((l) => l !== "" && !l.startsWith("//"));
+}

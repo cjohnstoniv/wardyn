@@ -67,6 +67,8 @@ export interface AccessCredential {
   row: string;
   kind: string;
   owner: "own" | "shared" | "org_app" | (string & {});
+  // The credential named by its kind and whose it is; absent for a model credential.
+  label?: string;
   delivery: AccessDelivery;
   // A minted value's ceiling; absent when the run's lifetime bounds it or Wardyn does not set it.
   lifetime_sec?: number;

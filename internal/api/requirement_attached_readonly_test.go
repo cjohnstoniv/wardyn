@@ -34,7 +34,7 @@ func TestRequirementFold_AttachedReadOnlySelectionBeatsAStoringWorkspacesRequire
 				spec := &types.RunPolicySpec{WorkspaceMounts: []types.WorkspaceMount{{Source: path, Target: "/home/agent/work", ReadOnly: &ro}}}
 				srv := New(Config{})
 				for _, ws := range order {
-					if _, refusal := srv.applyWorkspaceRequirementsFor(context.Background(), nil, spec, "claude-code", []types.Workspace{ws}, []types.Workspace{o}, selections); refusal != nil {
+					if _, refusal := srv.applyWorkspaceRequirementsFor(context.Background(), nil, spec, "claude-code", []types.Workspace{ws}, []types.Workspace{o}, selections, nil); refusal != nil {
 						t.Fatalf("O row %s, O first %v, authored read_only %v: the fold refused: %v", oLevel, ws.ID == o.ID, authoredRO, refusal)
 					}
 				}

@@ -45,8 +45,6 @@ const azureApprovalLane = "azure_foundry"
 
 // The refusal bodies. Machine-facing (the caller is the proxy sidecar, which fails its boot closed on
 // any of them), but each names the one thing a person reading the run's failure could do about it.
-//
-// DRAFT (M2 canon pending)
 const (
 	azureResolveNotRecorded = "A model provider's Azure sign-in is injected only through the grant Wardyn authors when a run launches on " +
 		"that provider, which records whose sign-in the run uses; this grant carries no such record"

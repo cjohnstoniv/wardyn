@@ -129,14 +129,10 @@ var (
 var errReauthCapped = errReauthEnded{reason: "no further sign-in will be requested for this run"}
 
 // reauthTimedOutSentence tells the sandbox's SDK nothing was substituted.
-//
-// DRAFT (M2 canon pending)
 const reauthTimedOutSentence = "wardyn held this AWS SSO credential request while its owner was " +
 	"asked to sign in again, and nobody signed in before the hold expired; nothing was substituted"
 
 // reauthEndedSentence is the same answer for a hold that did NOT expire.
-//
-// DRAFT (M2 canon pending)
 const reauthEndedSentence = "wardyn asked this AWS SSO credential request's owner to sign in again, and " +
 	"the request ended before a sign-in arrived; nothing was substituted"
 

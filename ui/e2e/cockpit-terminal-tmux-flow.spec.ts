@@ -23,6 +23,7 @@ import { termText, waitForShell } from "./terminal-text";
 import { FLOW_HIGH_WATERMARK } from "../src/app/components/attach-terminal-flow";
 
 const MAIN_THREAD_BUDGET_MS = 200;
+// The echo's allowance beyond the idle echo measured first, so a starved runner's own cost is not charged to the page.
 const ECHO_BUDGET_MS = 200;
 
 // Types `echo <marker>-42`, presses Enter and returns the ms from that Enter to the frame after xterm
@@ -184,12 +185,12 @@ test("50 MB of output keeps the page responsive and ends on the right screen", a
   await expect.poll(() => frames.resume).toBe(frames.pause);
 
   // Input echo once the stream is over, recorded beside its own baseline, then held to ECHO_BUDGET_MS: from the Enter
-  // keydown to the frame after xterm parsed the shell's answer, timed in the page
+  // keydown to the frame after xterm parsed the shell's answer (ECHO_BUDGET_MS over the baseline), timed in the page
   // so the harness's own round trips to it are not counted. The answer
   // (flow-echo-42) differs from what the typed line shows, so only it counts.
   await cdp.send("Emulation.setCPUThrottlingRate", { rate: 1 });
   const echoMs = await timeEcho(page, "flow-echo");
   test.info().annotations.push({ type: "input-to-echo", description: `${Math.round(echoMs)} ms` });
   test.info().annotations.push({ type: "input-to-echo baseline", description: `${Math.round(baselineMs)} ms` });
-  expect(echoMs, "input-to-echo ms").toBeLessThan(ECHO_BUDGET_MS);
+  expect(echoMs, `input-to-echo ms (baseline ${Math.round(baselineMs)} ms)`).toBeLessThan(baselineMs + ECHO_BUDGET_MS);
 });

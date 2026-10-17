@@ -22,8 +22,6 @@ import (
 // one.
 
 // bedrockBearerNotRecorded refuses a grant naming bedrock-api-key.
-//
-// DRAFT (M2 canon pending)
 const bedrockBearerNotRecorded = "bedrock-api-key is no longer a model credential: a run's Bedrock key comes from its " +
 	"model provider, so this grant is not served"
 

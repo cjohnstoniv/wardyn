@@ -479,7 +479,50 @@ func TestFederation_OneAuditStream(t *testing.T) {
 		return
 	}
 	// The cursor is now the fifth post-purge row; eight new rows reach past it.
-	t.Run("a truncate that restarts the laptop's seq and refills past the cursor is a chain reset, never a halt", func(t *testing.T) {
+	if !t.Run("a truncate that restarts the laptop's seq and refills past the cursor is a chain reset, never a halt", func(t *testing.T) {
 		purge(t, resetLaptopAudit, 8, true, true, 3, fedRows+10)
+	}) {
+		return
+	}
+
+	// A bare TRUNCATE leaves the recorded head in audit_partition_meta (0130), so the next rows link to
+	// the removed head. The laptop's own sweep reports the break, but the organisation holds that head
+	// as its cursor and sees the new rows continue it: it records no chain reset. This pins that view.
+	t.Run("a bare truncate that leaves the recorded head is a break on the laptop and a continuation at the organisation", func(t *testing.T) {
+		const added = 3
+		cursorSeq, cursorHash := laptopCursor(t, laptop)
+		asSuperuser(t, laptop, func(tx pgx.Tx) error {
+			_, err := tx.Exec(ctx, `TRUNCATE audit_events`)
+			return err
+		})
+		newHead := writeLaptopRows(t, laptop, added, "bare-truncate")
+		want := laptopChain(t, laptop)
+		if len(want) != added || want[0].prevHash != cursorHash || newHead <= cursorSeq {
+			t.Fatalf("precondition: %d rows after a bare truncate, first links to %q past seq %d, want the removed head %q: %+v",
+				added, want[0].prevHash, cursorSeq, cursorHash, want)
+		}
+		if st, err := store.NewPG(laptop).VerifyAuditChain(ctx); err != nil || st.OK {
+			t.Fatalf("the laptop's own sweep over a bare truncate = %+v, %v; want a break", st, err)
+		}
+
+		forward(t, h.srv.URL, laptop, cred, func(s federation.Status) bool {
+			return s.AckedSeq == newHead && s.LastError == ""
+		})
+		if n := orgAuditCount(t, org, "device.chain.reset", cred.DeviceID, "success", ""); n != 3 {
+			t.Fatalf("organisation recorded %d chain resets, want the earlier 3 and none for a bare truncate", n)
+		}
+		got := orgOrigins(t, org, cred.DeviceID)
+		if len(got) != fedRows+18+added {
+			t.Fatalf("organisation holds %d rows for the device, want %d", len(got), fedRows+18+added)
+		}
+		for i, w := range want {
+			if got[fedRows+18+i] != w {
+				t.Fatalf("row %d after the bare truncate: organisation holds %+v, laptop chained %+v", i, got[fedRows+18+i], w)
+			}
+		}
+		if d := orgDevice(t, h, cred.DeviceID); d.LastSeq != newHead || d.LastRowHash != want[added-1].rowHash {
+			t.Fatalf("organisation's recorded cursor = (%d, %s), want (%d, %s)", d.LastSeq, d.LastRowHash, newHead, want[added-1].rowHash)
+		}
+		requireChainOK(t, "organisation", org, int64(fedRows+18+added))
 	})
 }

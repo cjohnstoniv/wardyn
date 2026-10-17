@@ -121,6 +121,11 @@ describe("Credentials total", () => {
     expect(credentials().getByText(NR_TOOLS.CREDENTIALS_POLICY)).toBeInTheDocument();
   });
 
+  it("names a credential that is not a model's by the server's label for its kind", () => {
+    render(<Totals names={HARNESS_NAMES} access={MEMBER} answered />);
+    expect(credentials().getByText("Your organisation's GitHub App")).toBeInTheDocument();
+  });
+
   it("names a model credential's provider once known, and says Model provider until then", () => {
     render(<Totals names={HARNESS_NAMES} access={MEMBER} answered />);
     expect(credentials().getByText(NR_TOOLS.PROVIDER_LABEL, { exact: false })).toBeInTheDocument();

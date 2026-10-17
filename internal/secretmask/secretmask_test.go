@@ -565,6 +565,33 @@ func TestJSONEscapedVariants_CostFollowsCorpusSize(t *testing.T) {
 	}
 }
 
+// A run's snapshot holds each of its values and each global once, and the
+// de-dup between the two sets is an index lookup: its cost follows the corpus
+// size, not globals times the run's values.
+func TestSnapshot_CostFollowsCorpusSize(t *testing.T) {
+	const n = 300
+	reg := secretmask.NewRegistry()
+	run := uuid.New()
+	globals := make([][]byte, n)
+	for i := range n {
+		v := fmt.Appendf(nil, "run-secret-%06d", i)
+		reg.AddLocal(run, v)
+		globals[i] = fmt.Appendf(nil, "global-secret-%06d", i)
+	}
+	globals[0] = []byte("run-secret-000000") // a value the run also holds
+	if err := reg.AddGlobal(0, "owner", "cred", time.Now(), globals...); err != nil {
+		t.Fatal(err)
+	}
+	scanned := secretmask.CountScanned(t)
+	snap := reg.Snapshot(run)
+	if len(snap) != 2*n-1 {
+		t.Fatalf("snapshot holds %d entries, want %d (the shared value once)", len(snap), 2*n-1)
+	}
+	if *scanned > len(snap) {
+		t.Fatalf("a snapshot of %d entries searched %d for duplicates, want at most %d", len(snap), *scanned, len(snap))
+	}
+}
+
 // A stream cut short inside a secret masks the part of it that arrived, at every cut offset, for a one-line and
 // a multi-line value, whatever the write boundaries.
 func TestMaskingWriter_CloseCutMasksASecretTheCutSplits(t *testing.T) {

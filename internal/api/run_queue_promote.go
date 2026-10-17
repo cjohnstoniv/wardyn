@@ -142,6 +142,10 @@ func (s *Server) queueRunnerFree(ctx context.Context, pool types.RunnerPool, lau
 		in.ceiling = ceiling
 	}
 	targets, refusal := s.poolTargets(ctx, &req, ps, row)
+	if refusal != nil && refusal.err != nil {
+		// A read that failed says nothing about the runners: the run keeps its place with no wait recorded.
+		return out, fmt.Errorf("read the pool's runners: %w", refusal.err)
+	}
 	if refusal != nil {
 		out.wait = runnerpool.WaitNoRunnerFree
 		return out, nil

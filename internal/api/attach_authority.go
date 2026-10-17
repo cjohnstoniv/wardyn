@@ -57,7 +57,9 @@ func (s *Server) attachAuthorityLookupBound() time.Duration {
 
 // attachAuthority returns the check an attach socket opened by r repeats while it is open, or nil for a
 // lane with nothing to repeat: the admin bearer token, local mode and a token presented directly on the
-// socket keep their handshake-only semantics. A ticket is checked whatever credential minted it.
+// socket keep their handshake-only semantics. A ticket is checked whatever credential minted it, so a
+// ticket socket in local mode is handshake-only only while RoleStampTTL is unset: with it set, the
+// socket still ends at the ticket's issue time plus it.
 //
 //   - Ticket lane: what redemption asked (ticketAuthority), against the ticket's own issue time and
 //     sequence. The ticket's 30-second redemption window is not the terminal's lifetime; with

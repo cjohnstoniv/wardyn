@@ -198,6 +198,19 @@ test.describe("New Run, step 5: one teal action", () => {
   });
 });
 
+test.describe("New Run, step 5: what an organisation component says of itself", () => {
+  test("an organisation card shows its description, and a credential is named by its kind (FUG-L374)", async ({ page }) => {
+    const description = "Search and update Linear issues from the run.";
+    await stub(page, false);
+    const catalogue = { ...CATALOGUE, org: CATALOGUE.org.map((o) => (o.id === ORG_LINEAR.id ? { ...o, description } : o)) };
+    await page.route("**/api/v1/me/components", (route) => (route.request().method() === "GET" ? route.fulfill({ json: catalogue }) : route.fallback()));
+    await openTools(page);
+    const linear = page.getByRole("listitem").filter({ has: page.getByRole("heading", { name: ORG_LINEAR.name, exact: true }) });
+    await expect(linear.getByText(description, { exact: true })).toBeVisible();
+    await expect(page.getByText("Your organisation's GitHub App", { exact: true }).first()).toBeVisible();
+  });
+});
+
 test.describe("New Run, step 5: the harness card", () => {
   test("a harness that is only available is not labelled as starting with the run (DR-0230)", async ({ page }) => {
     await openToolsFor(page, ENV_CLAUDE, withFacts(SCENARIO_ACCESS.app, [CLAUDE_UNGATED]));
@@ -219,6 +232,14 @@ test.describe("New Run, step 5: the harness card", () => {
     await expect(dialog.getByRole("radio", { name: NR_TOOLS.EFFECT_ALLOW })).toBeEnabled();
     await dialog.getByLabel(NR_TOOLS.RULE_TOOL).fill("Bash");
     await expect(dialog.getByRole("radio", { name: NR_TOOLS.EFFECT_ALLOW })).toBeDisabled();
+  });
+
+  test("a policy's locked rule row is read out as set by the policy, not only shown with a lock (FUG-L771)", async ({ page }) => {
+    const fact = { ...CLAUDE_ATTENDED, policy_rules: [{ tool: "Read", effect: "allow", source: { kind: "policy" } }] };
+    await openToolsFor(page, ENV_CLAUDE, withFacts(SCENARIO_ACCESS.app, [fact]));
+    const row = card(page, "Claude Code").locator("li[data-locked]").filter({ hasText: "Read" });
+    await expect(row).toContainText("Set by your organisation's policy");
+    await expect(row.getByText("Set by your organisation's policy")).toHaveClass(/sr-only/);
   });
 
   test("an inline MCP server's per-harness toggle changes the draft (DR-0250)", async ({ page }) => {

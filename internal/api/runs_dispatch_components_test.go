@@ -353,24 +353,29 @@ func TestDispatch_CredentialHostCollisionCoversEveryAuthor(t *testing.T) {
 	component := componentRule("portal.sso.us-east-1.amazonaws.com")
 	portal := runner.InjectionGrant{GrantID: uuid.New(), Rule: egress.InjectionRule{Host: "portal.sso.us-east-1.amazonaws.com", Header: "x-amz-sso_bearer_token"}}
 	api := uuid.New()
+	door := &proxy.GitHubAPIGrant{Grants: map[string]uuid.UUID{"acme": uuid.New(), "zeta": uuid.New()}}
 	for _, tc := range []struct {
 		name       string
 		injections []runner.InjectionGrant
 		pat        map[string]proxy.PATGrant
+		door       *proxy.GitHubAPIGrant
 		collide    bool
 	}{
-		{"nothing", nil, nil, false},
-		{"distinct hosts", []runner.InjectionGrant{componentRule("a.example"), componentRule("b.example"), componentRule("a.example.org")}, nil, false},
-		{"a component header on the access-portal host of a Bedrock sign-in", []runner.InjectionGrant{portal, component}, nil, true},
-		{"a redirect's token on a policy credential's host", []runner.InjectionGrant{componentRule("mirror.corp"), componentRule("mirror.corp")}, nil, true},
+		{"nothing", nil, nil, nil, false},
+		{"distinct hosts", []runner.InjectionGrant{componentRule("a.example"), componentRule("b.example"), componentRule("a.example.org")}, nil, nil, false},
+		{"a component header on the access-portal host of a Bedrock sign-in", []runner.InjectionGrant{portal, component}, nil, nil, true},
+		{"a redirect's token on a policy credential's host", []runner.InjectionGrant{componentRule("mirror.corp"), componentRule("mirror.corp")}, nil, nil, true},
 		{"a header on a forge whose API door carries the PAT", []runner.InjectionGrant{componentRule("gitlab.corp")},
-			map[string]proxy.PATGrant{"gitlab.corp": {GrantID: api, API: true}}, true},
+			map[string]proxy.PATGrant{"gitlab.corp": {GrantID: api, API: true}}, nil, true},
 		{"a header on a forge whose PAT stays on the git route", []runner.InjectionGrant{componentRule("gitlab.corp")},
-			map[string]proxy.PATGrant{"gitlab.corp": {GrantID: api}}, false},
-		{"hosts that do not parse are compared as written", []runner.InjectionGrant{componentRule("bad host"), componentRule("BAD HOST")}, nil, true},
+			map[string]proxy.PATGrant{"gitlab.corp": {GrantID: api}}, nil, false},
+		{"hosts that do not parse are compared as written", []runner.InjectionGrant{componentRule("bad host"), componentRule("BAD HOST")}, nil, nil, true},
+		{"the GitHub CLI door alone, over two owners", nil, nil, door, false},
+		{"the GitHub CLI door beside a rule on another host", []runner.InjectionGrant{componentRule("api.example")}, nil, door, false},
+		{"a rule on the GitHub CLI door's host", []runner.InjectionGrant{componentRule("api.github.com")}, nil, door, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			grants, found := credentialHostCollision(tc.injections, tc.pat)
+			grants, found := credentialHostCollision(tc.injections, tc.pat, tc.door)
 			if found != tc.collide {
 				t.Fatalf("collision = %v (%v), want %v", found, grants, tc.collide)
 			}
@@ -529,7 +534,7 @@ func TestDispatch_ALaneRunLeavesARedirectOntoALaneHostWithoutItsToken(t *testing
 	if len(onFeed) != 1 || onFeed[0].SecretName != types.ADOEntraAccessTokenSecret || !onFeed[0].RequireTLS {
 		t.Fatalf("rules for %s = %+v, want exactly the lane's", feedHost, onFeed)
 	}
-	if _, found := credentialHostCollision(pc.Injection, pc.PATGrants); found {
+	if _, found := credentialHostCollision(pc.Injection, pc.PATGrants, pc.GitHubAPI); found {
 		t.Error("the composed proxy config still carries two credentials for one host")
 	}
 	for _, g := range ls.written {
