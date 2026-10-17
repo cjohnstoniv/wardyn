@@ -32,7 +32,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
   runner log (`registration_lapsed`) instead of seeing a bare refusal; the sentence is sent only after the runner
   proved its key.
 - Switching runners off now ends a runner session that was admitted while the switch was being turned off, and a
-  revoke or quarantine ends an admission that was stalled on a dead link instead of waiting out its timeouts.
+  revoke, switching runners off or deactivating the owner ends an admission that was stalled on a dead link instead
+  of waiting out its timeouts.
 - A runner that cannot open one run's spool still replays the other runs' evidence, and a quarantine that lands
   mid-replay stops that run's remaining backlog. A retired run no longer publishes activity every second.
 - A runner link no longer stalls when a peer opens many streams the runner refuses, and a handler panic ends that one

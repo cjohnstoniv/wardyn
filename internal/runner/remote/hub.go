@@ -135,7 +135,7 @@ func (h *Hub) Serve(ctx context.Context, conn runnerwire.Conn, id uuid.UUID) err
 	current, err := h.cfg.Lookup(ctx, id)
 	if err != nil || current.ID != id || string(current.PublicKey) != string(row.PublicKey) || current.OrgURLSHA256 != row.OrgURLSHA256 {
 		if err == nil {
-			// The registration is gone or replaced; a failed read says nothing the runner could act on.
+			// The registration was replaced; a deleted row (ErrNotFound) or a failed read tells the runner nothing.
 			_ = runnerwire.WriteControl(ctx, conn, runnerwire.TypeGoaway, runnerwire.Reason{Reason: runnerwire.ReasonRegistrationLapsed})
 		}
 		return fmt.Errorf("%w: the registration changed or could not be read while the runner authenticated: %s", runnerwire.ErrAuth, readCause(err))

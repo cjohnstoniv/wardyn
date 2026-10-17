@@ -257,7 +257,8 @@ func (s *Stream) Reset(code uint32) error {
 
 // resetQueued is Reset for the read loop: the RESET frame goes to the reply worker rather than being
 // written here, because a read loop that waits on a write can stop two peers reading each other. It
-// reports whether the reply queue refused the frame (full), in which case the peer is not told.
+// returns an error when the reply queue refused the frame (full, which only a flooding peer reaches); the
+// callers that return it end the link.
 func (s *Stream) resetQueued(code uint32) error {
 	if !s.abort(code) {
 		return nil
