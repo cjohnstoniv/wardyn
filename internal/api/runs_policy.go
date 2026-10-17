@@ -185,6 +185,7 @@ func (s *Server) handleListRuns(w http.ResponseWriter, r *http.Request) {
 			s.projectRecordingMeta(r, runs)
 			s.projectStatusDetailFor(r, runs)
 			s.projectRunnerFacts(r, runs)
+			redactRunRepos(runs)
 			return runs, nil
 		}, nil)
 		return
@@ -199,6 +200,7 @@ func (s *Server) handleListRuns(w http.ResponseWriter, r *http.Request) {
 			s.projectRecordingMeta(r, runs)
 			s.projectStatusDetailFor(r, runs)
 			s.projectRunnerFacts(r, runs)
+			redactRunRepos(runs)
 			return runs, nil
 		}
 	}
@@ -210,6 +212,7 @@ func (s *Server) handleListRuns(w http.ResponseWriter, r *http.Request) {
 		s.projectRecordingMeta(r, runs)
 		s.projectStatusDetailFor(r, runs)
 		s.projectRunnerFacts(r, runs)
+		redactRunRepos(runs)
 		return runs, nil
 	})
 }
@@ -232,6 +235,7 @@ func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 	s.projectRecordingMeta(r, runs)
 	s.projectStatusDetailFor(r, runs)
 	s.projectRunnerFacts(r, runs)
+	redactRunRepos(runs)
 	run = runs[0]
 	// A local run's runner was named by projectRunnerFacts; a remote-hosted runner's name is read here.
 	if run.RunnerName == "" {

@@ -576,7 +576,7 @@ func createRunAuditData(req createRunRequest, policyID *uuid.UUID, enforced type
 		confinementSource = "requested"
 	}
 	data := map[string]any{
-		"agent": req.Agent, "repo": req.Repo, "policy_id": policyID,
+		"agent": req.Agent, "repo": redactRepoURL(req.Repo), "policy_id": policyID,
 		"confinement_class": enforced, "confinement_source": confinementSource, "jti": jti,
 		"inline_policy": req.InlinePolicy != nil,
 	}

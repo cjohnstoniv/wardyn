@@ -45,7 +45,7 @@ func (s *Server) handleGradePolicy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := validatePolicySpec(req.Spec); err != nil {
-		writeErrorReason(w, http.StatusBadRequest, reasonPolicyGradeSpecInvalid, "invalid policy spec: "+err.Error())
+		writeErrorReason(w, http.StatusBadRequest, specRefusalReason(err, reasonPolicyGradeSpecInvalid), "invalid policy spec: "+err.Error())
 		return
 	}
 	baseline, ok := s.baselineOr500(w, r)

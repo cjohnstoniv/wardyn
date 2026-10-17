@@ -195,6 +195,7 @@ func (s *Server) handleListSources(w http.ResponseWriter, r *http.Request) {
 		writeServerError(w, r, "list sources", err)
 		return
 	}
+	redactSourceRepoURLs(list)
 	writeJSON(w, http.StatusOK, map[string]any{"sources": list})
 }
 
@@ -279,7 +280,7 @@ func (s *Server) handleCreateSource(w http.ResponseWriter, r *http.Request) {
 	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
 		"source.write", created.ID.String(), "success", mustJSON(map[string]any{
-			"kind": string(created.Kind), "locator": created.Locator, "ref": created.Ref,
+			"kind": string(created.Kind), "locator": redactRepoURL(created.Locator), "ref": created.Ref,
 		})))
 	// The legacy-host grace on the LIBRARY door too: admission admitted it
 	// on sufferance and audited that, and this is the other surface an admin
@@ -309,6 +310,7 @@ func (s *Server) handleGetSource(w http.ResponseWriter, r *http.Request) {
 		writeServerError(w, r, "get source", err)
 		return
 	}
+	src.Locator = redactRepoURL(src.Locator)
 	writeJSON(w, http.StatusOK, src)
 }
 
@@ -455,7 +457,7 @@ func (s *Server) upsertAndAttach(r *http.Request, srcs []types.WorkspaceSource, 
 			// persist to a HOST directory, so it belongs in the trail.
 			s.recordAudit(ctx, s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
 				"source.write", row.ID.String(), "success", mustJSON(map[string]any{
-					"kind": string(row.Kind), "locator": row.Locator, "ref": row.Ref, "writable": src.Writable,
+					"kind": string(row.Kind), "locator": redactRepoURL(row.Locator), "ref": row.Ref, "writable": src.Writable,
 				})))
 		}
 		id := row.ID

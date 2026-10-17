@@ -312,7 +312,7 @@ func buildRepoRecords(legacyRepo string, repos []types.WorkspaceRepo) (string, [
 		ref = strings.TrimSpace(ref)
 		if ref != "" && !repoFieldSafe(ref) {
 			slog.Warn("wardynd: repo ref is not a safe clone field; dropping the repo",
-				slog.String("slug", slug), slog.String("err", fmt.Sprintf(repoField400Charset, "ref")))
+				slog.String("slug", redactRepoURL(slug)), slog.String("err", fmt.Sprintf(repoField400Charset, "ref")))
 			return
 		}
 		if t := strings.TrimSpace(slug); t != "" && !repoFieldSafe(t) {
@@ -339,10 +339,10 @@ func buildRepoRecords(legacyRepo string, repos []types.WorkspaceRepo) (string, [
 			// ever cloned. Say it on the 201 (run create appends the returned
 			// sentence) and in the log.
 			slog.Warn("wardynd: repo clone target is not an allowed destination; dropping the repo",
-				slog.String("slug", slug), slog.String("dest", dest), slog.String("err", terr.Error()))
+				slog.String("slug", redactRepoURL(slug)), slog.String("dest", dest), slog.String("err", terr.Error()))
 			warnings = append(warnings, fmt.Sprintf(
 				"repository %s was NOT cloned: its workspace_repos target %s is refused (%s) — fix the target in the policy and launch again",
-				slug, dest, terr))
+				redactRepoURL(slug), dest, terr))
 			return
 		}
 		if first, taken := seenDest[dest]; taken {
@@ -355,7 +355,7 @@ func buildRepoRecords(legacyRepo string, repos []types.WorkspaceRepo) (string, [
 			// agent goes looking for a repo that was never there, so the 201
 			// says it as well as the log.
 			slog.Warn("wardynd: repo clone target collides with another repo in this run; dropping the later one",
-				slog.String("slug", slug), slog.String("dest", dest))
+				slog.String("slug", redactRepoURL(slug)), slog.String("dest", dest))
 			if first == slug {
 				// The same repository named twice — a workspace launch names its
 				// repo as the run's own repo too — is one clone, not a drop.
@@ -363,7 +363,7 @@ func buildRepoRecords(legacyRepo string, repos []types.WorkspaceRepo) (string, [
 			}
 			warnings = append(warnings, fmt.Sprintf(
 				"repository %s was NOT cloned: %s is already where %s is cloned — give one of them its own target and launch again",
-				slug, dest, first))
+				redactRepoURL(slug), dest, redactRepoURL(first)))
 			return
 		}
 		seenDest[dest] = slug

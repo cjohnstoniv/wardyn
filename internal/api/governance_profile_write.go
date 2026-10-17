@@ -231,7 +231,7 @@ func (s *Server) writeGovernanceProfile(w http.ResponseWriter, r *http.Request, 
 	}
 	req, msg := decodeGovernanceProfileRequest(w, r)
 	if msg != "" {
-		writeErrorReason(w, http.StatusBadRequest, reasonGovernanceProfileRequestInvalid, msg)
+		writeErrorReason(w, http.StatusBadRequest, repoURLMsgReason(msg, reasonGovernanceProfileRequestInvalid), msg)
 		return
 	}
 	if msg := req.parseComposition(); msg != "" {
@@ -376,7 +376,7 @@ func (s *Server) buildGovernanceProfile(createdBy string, id uuid.UUID, req gove
 	} else {
 		// A standalone row's ceiling is judged in full here, an empty one included (decode skips it).
 		if err := validatePolicySpec(req.Ceiling); err != nil {
-			return p, nil, writeRefusal(http.StatusBadRequest, reasonGovernanceProfileRequestInvalid, "invalid ceiling: %v", err)
+			return p, nil, writeRefusal(http.StatusBadRequest, specRefusalReason(err, reasonGovernanceProfileRequestInvalid), "invalid ceiling: %v", err)
 		}
 		// The structural bound (governance_grantbound.go). A profile may narrow the
 		// deployment's credential eligibility; it may never mint eligibility the
@@ -493,7 +493,7 @@ func (s *Server) checkOverlay(p types.GovernanceProfile, chain []types.Governanc
 				"overlay_limits: raises the member size above what the profile it builds on allows: %s", strings.Join(raises, ", "))
 		}
 		if verr := validatePolicySpec(eff.Ceiling); verr != nil && validatePolicySpec(base.Ceiling) == nil {
-			return writeRefusal(http.StatusBadRequest, reasonGovernanceOverlayInvalid, "invalid overlay: %v", verr)
+			return writeRefusal(http.StatusBadRequest, specRefusalReason(verr, reasonGovernanceOverlayInvalid), "invalid overlay: %v", verr)
 		}
 	}
 	return nil

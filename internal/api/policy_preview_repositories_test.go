@@ -23,8 +23,8 @@ func TestPolicyPreviewRepositoryLocators(t *testing.T) {
 		name, repo, want, kind string
 	}{
 		{"slug", "acme/one", "https://github.com/acme/one.git", "github"},
-		{"https", "https://PRIVATE-USER:PRIVATE-PASSWORD@GitHub.com/Acme/one.git?token=PRIVATE-QUERY#PRIVATE-FRAGMENT", "https://github.com/Acme/one.git", "github"},
-		{"http port", "http://PRIVATE-USER:PRIVATE-PASSWORD@Forge.example:8080/Group/Sub/one.git/?token=PRIVATE-QUERY#PRIVATE-FRAGMENT", "http://forge.example:8080/Group/Sub/one.git", "other"},
+		{"https", "https://GitHub.com/Acme/one.git?token=PRIVATE-QUERY#PRIVATE-FRAGMENT", "https://github.com/Acme/one.git", "github"},
+		{"http port", "http://Forge.example:8080/Group/Sub/one.git/?token=PRIVATE-QUERY#PRIVATE-FRAGMENT", "http://forge.example:8080/Group/Sub/one.git", "other"},
 		{"ipv6", "https://[2001:db8::1]:8443/Group/one.git", "https://[2001:db8::1]:8443/Group/one.git", "other"},
 		{"scp", "PRIVATE-USER@GitHub.com:acme/one.git", "ssh://github.com/acme/one.git", "github"},
 		{"scp alias", "PRIVATE-USER@ssh.github.com:acme/one.git?token=PRIVATE-QUERY#PRIVATE-FRAGMENT", "ssh://github.com/acme/one.git", "github"},
