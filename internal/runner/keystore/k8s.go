@@ -36,9 +36,10 @@ func NewK8s(cs kubernetes.Interface, ns, runnerID string) *K8s {
 // k8sCallBound bounds one Secret call: the resident path is synchronous with a delivery.
 const k8sCallBound = 10 * time.Second
 
-// SecretName is the Secret holding account's value.
-func SecretName(account string) string {
-	sum := sha256.Sum256([]byte(service + "/" + account))
+// SecretName is the Secret holding account's value: a hash of the runner's own
+// keystore service (For(runnerID)) and the account.
+func (k *K8s) SecretName(account string) string {
+	sum := sha256.Sum256([]byte(For(k.runnerID).service + "/" + account))
 	return "wardyn-resident-" + hex.EncodeToString(sum[:20])
 }
 
@@ -50,7 +51,7 @@ func (k *K8s) Set(account, value string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), k8sCallBound)
 	defer cancel()
 	sec := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{Name: SecretName(account), Namespace: k.ns,
+		ObjectMeta: metav1.ObjectMeta{Name: k.SecretName(account), Namespace: k.ns,
 			Labels: map[string]string{"wardyn.managed": "true", "wardyn.runner-id": k.runnerID, "wardyn.component": "resident"}},
 		Type: corev1.SecretTypeOpaque,
 		Data: map[string][]byte{k8sValueKey: []byte(value)},
@@ -72,7 +73,7 @@ func (k *K8s) Set(account, value string) error {
 func (k *K8s) Get(account string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), k8sCallBound)
 	defer cancel()
-	sec, err := k.cs.CoreV1().Secrets(k.ns).Get(ctx, SecretName(account), metav1.GetOptions{})
+	sec, err := k.cs.CoreV1().Secrets(k.ns).Get(ctx, k.SecretName(account), metav1.GetOptions{})
 	if err != nil {
 		return "", fmt.Errorf("%w: %w", ErrUnavailable, err)
 	}
@@ -87,7 +88,7 @@ func (k *K8s) Get(account string) (string, error) {
 func (k *K8s) Delete(account string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), k8sCallBound)
 	defer cancel()
-	if err := k.cs.CoreV1().Secrets(k.ns).Delete(ctx, SecretName(account), metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
+	if err := k.cs.CoreV1().Secrets(k.ns).Delete(ctx, k.SecretName(account), metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
 		return fmt.Errorf("%w: %w", ErrUnavailable, err)
 	}
 	return nil

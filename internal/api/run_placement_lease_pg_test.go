@@ -14,6 +14,7 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"errors"
+	"io"
 	"maps"
 	"net/http"
 	"net/http/httptest"
@@ -65,6 +66,15 @@ type runnerLeaseFixture struct {
 	// leaseEnds is the end of the last LEASE the runner accepted for each run.
 	leaseMu   sync.Mutex
 	leaseEnds map[uuid.UUID]time.Time
+	// dir is the runner's state directory.
+	dir string
+	// streams is the runner's output server.
+	streams *runnerio.Server
+	// oldCaps makes the runner's caps event omit retire, as a runner older
+	// than 0.9.3 sends it.
+	oldCaps atomic.Bool
+	// execOutput, when set, is the org's sink for each create's output.
+	execOutput io.Writer
 }
 
 // leaseEnd waits for the runner to hold a lease of run that ends at want, and reports the end it holds.
@@ -85,6 +95,24 @@ type stallingSub struct {
 	*runnertest.Fake
 	stall   atomic.Value // the verb that hangs: "can_replace" or "replace_proxy"
 	release chan struct{}
+	// goneIsStopped answers Status and AgentStatus for a removed sandbox as
+	// the docker driver does (stopped) instead of the fake's ErrSandboxGone.
+	goneIsStopped atomic.Bool
+}
+
+func (s *stallingSub) gone(st runner.Status, err error) (runner.Status, error) {
+	if s.goneIsStopped.Load() && errors.Is(err, runner.ErrSandboxGone) {
+		return runner.Status{State: types.RunStopped, Message: "container not found"}, nil
+	}
+	return st, err
+}
+
+func (s *stallingSub) Status(ctx context.Context, ref string) (runner.Status, error) {
+	return s.gone(s.Fake.Status(ctx, ref))
+}
+
+func (s *stallingSub) AgentStatus(ctx context.Context, ref, execID string) (runner.Status, error) {
+	return s.gone(s.Fake.AgentStatus(ctx, ref, execID))
 }
 
 func (s *stallingSub) hang(ctx context.Context, verb string) error {
@@ -148,6 +176,7 @@ func newRunnerLeaseFixture(t *testing.T) *runnerLeaseFixture {
 
 	// The runner side, composed as wardyn-runnerd composes it.
 	dir := t.TempDir()
+	f.dir = dir
 	streams, err := runnerio.New(f.sub, id.String(), dir)
 	if err != nil {
 		t.Fatal(err)
@@ -157,7 +186,9 @@ func newRunnerLeaseFixture(t *testing.T) *runnerLeaseFixture {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = f.manager.Close() })
+	f.streams = streams
 	m := f.manager
+	m.ReleaseSettledOutput(streams.ReleaseOutput)
 	dispatcher, err := runneragent.New(runneragent.Config{RunnerID: id.String(), Substrate: f.sub, HoldsSandbox: m.HoldsSandbox,
 		BeforeCreate: m.BeforeCreate, Created: m.Created, CreateFailed: m.CreateFailed,
 		BeforeRefCall: m.BeforeRefCall, AfterRefCall: m.AfterRefCall, MutationFinished: m.MutationFinished, ExecutionResult: m.ExecutionResult,
@@ -196,7 +227,7 @@ func newRunnerLeaseFixture(t *testing.T) *runnerLeaseFixture {
 			if err != nil {
 				return err
 			}
-			data, err := runnerwire.Marshal(runnerwire.Caps{Support: support, Version: "test", BYOISelftest: dispatcher.Selftests() && !f.oldRunner.Load()})
+			data, err := runnerwire.Marshal(runnerwire.Caps{Support: support, Version: "test", BYOISelftest: dispatcher.Selftests() && !f.oldRunner.Load(), Retire: !f.oldCaps.Load()})
 			if err != nil {
 				return err
 			}
@@ -259,7 +290,7 @@ func (f *runnerLeaseFixture) localRun(t *testing.T, stampAge time.Duration) type
 // create asks for the run's sandbox on its runner and records its ref, as dispatch does.
 func (f *runnerLeaseFixture) create(t *testing.T, run *types.AgentRun) error {
 	t.Helper()
-	sb, err := f.srv.createSandboxAtTarget(f.ctx, *run, runner.SandboxSpec{RunID: run.ID, ConfinementClass: types.CC1})
+	sb, err := f.srv.createSandboxAtTarget(f.ctx, *run, runner.SandboxSpec{RunID: run.ID, ConfinementClass: types.CC1, ExecOutput: f.execOutput})
 	if err != nil {
 		return err
 	}

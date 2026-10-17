@@ -28,7 +28,7 @@ func TestK8sKeystore(t *testing.T) {
 	if v, err := k.Get("run/a"); err != nil || v != "v2" {
 		t.Fatalf("Get = %q %v", v, err)
 	}
-	sec, err := cs.CoreV1().Secrets("wardyn-runner").Get(t.Context(), SecretName("run/a"), metav1.GetOptions{})
+	sec, err := cs.CoreV1().Secrets("wardyn-runner").Get(t.Context(), k.SecretName("run/a"), metav1.GetOptions{})
 	if err != nil || sec.Labels["wardyn.runner-id"] != "runner-1" {
 		t.Fatalf("secret %+v %v", sec, err)
 	}
@@ -43,7 +43,7 @@ func TestK8sKeystore(t *testing.T) {
 	if err := k.Delete("run/a"); err != nil {
 		t.Fatalf("Delete of a gone value: %v", err)
 	}
-	if SecretName("run/a") == SecretName("run/b") || len(SecretName("run/a")) > 63 {
+	if k.SecretName("run/a") == k.SecretName("run/b") || len(k.SecretName("run/a")) > 63 {
 		t.Fatal("secret names collide or exceed a DNS label")
 	}
 }

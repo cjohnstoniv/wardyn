@@ -97,14 +97,15 @@ func (s PG) AcceptRunnerExit(ctx context.Context, runnerID, runID uuid.UUID, exi
 func runnerExitAccepted(ctx context.Context, tx pgx.Tx, runID, generation uuid.UUID, hash string) (bool, error) {
 	var oldHash string
 	var acceptedAt *time.Time
-	err := tx.QueryRow(ctx, `SELECT payload_hash,accepted_at FROM runner_execution_exits WHERE run_id=$1 AND generation=$2`, runID, generation).Scan(&oldHash, &acceptedAt)
+	var receiptOnly bool
+	err := tx.QueryRow(ctx, `SELECT payload_hash,accepted_at,receipt_only FROM runner_execution_exits WHERE run_id=$1 AND generation=$2`, runID, generation).Scan(&oldHash, &acceptedAt, &receiptOnly)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return false, nil
 	}
 	if err != nil {
 		return false, err
 	}
-	if oldHash != hash {
+	if oldHash != hash || receiptOnly {
 		return false, ErrRunnerExecutionRefused
 	}
 	return acceptedAt != nil, nil
@@ -166,10 +167,11 @@ func (s PG) runnerExitTail(ctx context.Context, runnerID, runID, generation uuid
 	}
 	var payload []byte
 	var acceptedAt *time.Time
-	if err := tx.QueryRow(ctx, `SELECT payload,tail_complete,accepted_at FROM runner_execution_exits WHERE run_id=$1 AND generation=$2 AND runner_id=$3`, runID, generation, runnerID).Scan(&payload, &complete, &acceptedAt); err != nil {
+	var receiptOnly bool
+	if err := tx.QueryRow(ctx, `SELECT payload,tail_complete,accepted_at,receipt_only FROM runner_execution_exits WHERE run_id=$1 AND generation=$2 AND runner_id=$3`, runID, generation, runnerID).Scan(&payload, &complete, &acceptedAt, &receiptOnly); err != nil {
 		return run, exit, false, err
 	}
-	if acceptedAt == nil {
+	if acceptedAt == nil || receiptOnly {
 		return run, exit, false, ErrRunnerExecutionRefused
 	}
 	if complete {

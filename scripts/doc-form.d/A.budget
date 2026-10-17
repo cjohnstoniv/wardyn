@@ -151,7 +151,11 @@
 # docs/AUDIT-ACTIONS.md 46899 = 46750 + 149 (K3a), measured at the wave-A merge.
 # docs/AUDIT-ACTIONS.md 46558 adds 26 (0.9.3 C2), measured: recording.upload refuses recording_off for a runner_declined run.
 # docs/AUDIT-ACTIONS.md 46925 = 46899 + 26 (C2), measured at the rc.2 into final merge.
-docs/AUDIT-ACTIONS.md=46925 share=8
+# docs/AUDIT-ACTIONS.md 46561 adds 25 over 46536, measured at the merge of lane/093-RV2 into RR-K10: RV2's branch-list purpose next to RR-b's runner-resident text.
+# docs/AUDIT-ACTIONS.md 46634 adds 73 over 46561, measured (0.9.3 RR-K10): the runner.retire row.
+# docs/AUDIT-ACTIONS.md 46660 adds 26 over 46634, measured (0.9.3 RR-K10 review fixes): the runner.retire row names the retire caps gate, successor rows and the unclaimed-runner reason.
+# docs/AUDIT-ACTIONS.md 47174 = 46925 + 249 (RR-K10), measured at the wave-B merge.
+docs/AUDIT-ACTIONS.md=47174 share=8
 # docs/AUDIT-ACTIONS.md 39938 adds 1 (0.9 H7): the `placement_component_self_defined` reason in the authz.denied vocabulary.
 # 0.9 H10 r1: docs/AUDIT-ACTIONS.md 40113 adds 65 over 40048 for the token-revoke join, the off semantics and the pending connect/disconnect rows.
 # 0.9 H10: docs/AUDIT-ACTIONS.md 40048 adds 111 over 39937 for runner.token.revoke, runners.enabled.set, runner.connect and runner.disconnect.
@@ -179,3 +183,4 @@ docs/AUDIT-ACTIONS.md=46925 share=8
 # docs/AUDIT-ACTIONS.md 46389 adds 10 over 46379, measured (0.9.1 L7 r1): run.create placement fields name 0.9 pooled rows and 0.9.1 every successful POST /runs row.
 # docs/AUDIT-ACTIONS.md 46410 adds 21 over 46389, measured (0.9.3 C): run.create names runner_recording_off and recording_store_off; recording.upload names not_recorded_cleared.
 # docs/AUDIT-ACTIONS.md 46423 adds 13 over 46410, measured (0.9.3 merge of C onto batch): the batch's own AUDIT-ACTIONS rows plus C's.
+# docs/AUDIT-ACTIONS.md 46536 adds 147 over 46389, measured (0.9.3 RR-b): the runner-resident secret.read sink fields, the run.dispatch resident refusal reasons, and runner.resident.erase report identity and the org abandonment variant.

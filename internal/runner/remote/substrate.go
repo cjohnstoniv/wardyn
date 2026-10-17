@@ -63,6 +63,10 @@ type Options struct {
 	// session's authenticated runner id. It runs on the peer read loop, so it
 	// must not block; an error refuses the stream. Nil refuses every relay.
 	Relay func(runnerID string, conn net.Conn) error
+	// OutputAccepted, when set, durably records that the org accepted run's
+	// output up to accepted (an absolute end that only grows) before the
+	// runner is told. It must be idempotent: a resent prefix repeats it.
+	OutputAccepted func(ctx context.Context, run uuid.UUID, accepted int64) error
 }
 
 // callTimeout bounds the calls an io-shaped method (Resize, ExecSession.Wait)
@@ -451,8 +455,14 @@ func (s *Substrate) SweepOrphanedSandboxes(ctx context.Context, minAge time.Dura
 
 // DeliverResident hands one runner_resident value to the runner's keystore,
 // after claim and before CreateSandbox. It is the only way the value travels:
-// never /internal/*, never inside CreateSandbox.
+// never /internal/*, never inside CreateSandbox. The Dispatch gate is read
+// first, as for CreateSandbox: with runners turned off nothing is sent.
 func (s *Substrate) DeliverResident(ctx context.Context, a runnerwire.DeliverResidentArgs) error {
+	if s.opts.Dispatch != nil {
+		if err := s.opts.Dispatch(ctx); err != nil {
+			return err
+		}
+	}
 	if err := s.call(ctx, runnerwire.MethodDeliverResident, a, nil); err != nil {
 		return err
 	}

@@ -180,6 +180,9 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// read straight off p (the named-field struct is already self-documenting).
 	policy := p.Policy // local copy; the phases below mutate policy.AllowedDomains
 	injections := p.Injections
+	// The run's runner_resident values, each read where its placeholder is
+	// authored; deliverResident hands them to the runner before the create.
+	var resident []residentValue
 
 	// Client-disconnect isolation: dispatch is invoked synchronously from the
 	// create-run handler, so a client disconnect cancels ctx mid-flight — which would
@@ -678,14 +681,15 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 		return
 	}
 	spec.ExecOutput = s.openExecOutput(run, p.Interactive)
-	// A run on a runner is leased first: its runner refuses a create no lease authorizes.
-	execution, err := s.leaseRunOnRunner(ctx, run)
-	var sb runner.Sandbox
-	if err == nil {
-		sb, err = s.createSandboxAtTarget(createCtx, run, spec)
-	}
+	s.recordRunnerOutputWatermark(ctx, run, spec.ExecOutput != nil)
+	// The lease, the runner_resident values, then the create, in that order: a runner
+	// refuses a create no lease authorizes, and the create names the values.
+	execution, sb, refused, err := s.leaseDeliverCreate(ctx, createCtx, run, spec, resident)
 	endStartWait()
 	stopCreateLease()
+	if refused {
+		return // deliverResident failed the run and recorded why; no create was asked for
+	}
 	if err != nil {
 		// Conditional: only mark FAILED if still STARTING. A kill landing between the
 		// entry claim and this failure moved the run to KILLED — don't clobber that

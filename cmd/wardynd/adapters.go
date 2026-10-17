@@ -481,14 +481,16 @@ func (r spoolingRecorder) Record(ctx context.Context, ev types.AuditEvent) error
 		slog.Any("err", err),
 	)
 	if r.spool != nil {
-		ferr := r.spool.Append(ev)
-		if ferr == nil {
-			return fmt.Errorf("%w: %w", audit.ErrSpooled, err)
+		if ferr := r.spool.Append(ev); ferr != nil {
+			slog.ErrorContext(ctx, "wardynd: AUDIT FALLBACK SPOOL FAILED (EVENT LOST)",
+				slog.String("action", ev.Action),
+				slog.Any("err", ferr),
+			)
+			return err
 		}
-		slog.ErrorContext(ctx, "wardynd: AUDIT FALLBACK SPOOL FAILED (EVENT LOST)",
-			slog.String("action", ev.Action),
-			slog.Any("err", ferr),
-		)
+		// Still an error, so no caller reads a spooled event as stored; the
+		// sentinel tells one that needs acceptance that the event is not lost.
+		return fmt.Errorf("%w: %w", audit.ErrSpooled, err)
 	}
 	return err
 }

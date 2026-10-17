@@ -19,9 +19,11 @@ type Recorder interface {
 	Record(ctx context.Context, ev types.AuditEvent) error
 }
 
-// ErrSpooled marks a Record error whose event the durable local spool accepted after the system of
-// record refused it: the row is not lost, the drain writes it later.
-var ErrSpooled = errors.New("audit: the event is held in the durable spool")
+// ErrSpooled marks a Record whose store write failed while the event was kept
+// in the durable local spool, which drains it into the store once the store
+// answers. The error also wraps the store's own. A caller that must know its
+// event was accepted (not lost) treats ErrSpooled as accepted.
+var ErrSpooled = errors.New("audit: the store write failed and the event is held in the local spool")
 
 // Sink streams recorded events to an external destination. Sinks must not
 // block recording; failures are logged and retried, never silently dropped.
