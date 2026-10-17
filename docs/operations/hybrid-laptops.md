@@ -229,7 +229,7 @@ The bundle is read when `serve` starts; a bad file stops it and is named.
 | Link drops mid-run | Nothing is torn down; the proxy enforces its cached policy and spools decisions. A full spool holds a request up to 10 s, then answers a retryable `503` naming the runner's link |
 | Link down past the lapse (about 1h5m) | The runner stops the proxy itself and keeps the agent and files |
 | The runner process restarts | Its runs stop reaching the network until each is revived. This is fail-closed |
-| The control plane restarts, or answers `503` while it starts | The runner reconnects on its own once the organisation answers, and live runs keep running. A teardown queued for a run it keeps only for containment is refused, so it cannot hold the connection. Nothing needs resetting |
+| The control plane restarts, or answers `503` while it starts | The runner reconnects once the organisation answers; live runs keep running. A teardown of a run it keeps only for containment is refused, so it cannot hold the connection; the next restart kills that agent instead. Nothing needs resetting |
 | The computer is registered again under a new identity | At first start `serve` stops the old registration's run proxies, then moves `offline/`, `spools/` and `output/` into `previous/` (Docker; spooled decisions are kept, not delivered). If one cannot be stopped, it exits naming the fix and retries next start |
 | Revoked by the owner or a security operator | The org ends that runner's unfinished runs `KILLED` and runs the kill cascade; the runner stops every governed proxy |
 

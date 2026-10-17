@@ -237,7 +237,8 @@ what to set for the old behaviour.
   deactivating the owner ends an admission that was stalled on a dead link instead of waiting out its timeouts.
 - Runner recovery: a runner that met a control-plane restart no longer stays offline, looping on `containment-only
   identity refuses this action`. The end the restart queues for a run the runner keeps only for containment is refused
-  with a receipt, which closes it, so the runner reconnects with its local state untouched. A computer registered
+  with a receipt, which closes it, so the runner reconnects with its local state untouched, and the next control-plane
+  start sends that run a kill, which stops its agent, instead of the same end again. A computer registered
   again (Docker runtime) stops the proxies of the earlier registration's runs at its first start and moves that
   registration's `offline/`, `spools/` and `output/` into `previous/` in the state directory, instead of refusing them
   at every start; decisions still spooled there are kept, not delivered. `setup` on a computer that is already

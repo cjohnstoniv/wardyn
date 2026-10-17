@@ -249,7 +249,12 @@ func (s *Server) stopSandboxOrAudit(ctx context.Context, runID uuid.UUID, ref, a
 	if s.cfg.Runner == nil || ref == "" {
 		return true
 	}
-	serr := s.cfg.Runner.StopSandbox(ctx, ref)
+	return s.teardownOrAudit(ctx, runID, ref, action, s.cfg.Runner.StopSandbox)
+}
+
+// teardownOrAudit is stopSandboxOrAudit with the teardown verb given.
+func (s *Server) teardownOrAudit(ctx context.Context, runID uuid.UUID, ref, action string, teardown func(context.Context, string) error) bool {
+	serr := teardown(ctx, ref)
 	if serr == nil {
 		return true
 	}

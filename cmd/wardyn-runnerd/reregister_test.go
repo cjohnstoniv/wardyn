@@ -17,6 +17,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/runneridentity"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire/runnertest"
 )
@@ -40,7 +41,7 @@ func TestReRegisteredRunnerStartsWithItsEarlierRunStateSetAside(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sub := runnertest.NewFake()
+	sub := earlierSandboxes{Fake: runnertest.NewFake(), runnerID: earlier.String()}
 	rt, err := localRunnerRuntime(ctx, runneridentity.Identity{RunnerID: uuid.New(), PrivateKey: key}, stateDir, sub, ref, newLocalRelay(ctx), unsized)
 	if err != nil {
 		t.Fatalf("the re-registered runner did not start: %v", err)
@@ -49,7 +50,21 @@ func TestReRegisteredRunnerStartsWithItsEarlierRunStateSetAside(t *testing.T) {
 	if !sub.Called("stop_proxy", ref(run)) {
 		t.Fatalf("the earlier registration's run proxy was not stopped: %v", sub.Calls)
 	}
-	if moved, _ := filepath.Glob(filepath.Join(stateDir, "previous", earlier.String()+"-*", "offline", "state.json")); len(moved) != 1 {
+	if moved, _ := filepath.Glob(filepath.Join(stateDir, "previous", earlier.String(), "offline", "state.json")); len(moved) != 1 {
 		t.Fatalf("the earlier registration's state was not set aside: %v", moved)
 	}
+}
+
+// earlierSandboxes proves a ref a sandbox only of runnerID, as the engine does for the containers
+// that runner labelled.
+type earlierSandboxes struct {
+	*runnertest.Fake
+	runnerID string
+}
+
+func (s earlierSandboxes) ProveRunnerSandbox(_ context.Context, ref, runnerID string) error {
+	if runnerID != s.runnerID {
+		return fmt.Errorf("%s is not runner %s's: %w", ref, runnerID, runner.ErrNotRunnerSandbox)
+	}
+	return nil
 }
