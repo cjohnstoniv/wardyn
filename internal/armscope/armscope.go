@@ -75,12 +75,17 @@ func methodOverride(header string) bool {
 }
 
 // pathOverride reports whether a header name asks a front end to act on another
-// path than the request line's: X-Original-URL, X-Original-URI, X-Rewrite-URL,
-// X-Forwarded-Prefix, in any case and with hyphens or underscores. Refused for the
-// same reason as methodOverride: the path Azure would act on is not knowable.
+// path than the request line's: X-Original-URL, X-Original-URI, X-Original-Path,
+// X-Envoy-Original-Path, X-Rewrite-URL, X-Rewrite-URI, X-Forwarded-Prefix,
+// X-Forwarded-Uri, X-Forwarded-Path, X-Override-URL, in any case and with hyphens or
+// underscores. Refused for the same reason as methodOverride: the path Azure would
+// act on is not knowable.
 func pathOverride(header string) bool {
 	name := normalizedHeader(header)
-	for _, part := range []string{"originalurl", "originaluri", "rewriteurl", "forwardedprefix"} {
+	for _, part := range []string{
+		"originalurl", "originaluri", "originalpath", "rewriteurl", "rewriteuri",
+		"forwardedprefix", "forwardeduri", "forwardedpath", "overrideurl", "overrideuri",
+	} {
 		if strings.Contains(name, part) {
 			return true
 		}
