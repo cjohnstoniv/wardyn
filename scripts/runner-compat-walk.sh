@@ -20,7 +20,9 @@
 #      exec run to COMPLETED. A release before 0.9.3 cannot take back a runner
 #      that has retired a run (docs/runner-registration.md, rolling back), so
 #      against one the rolled-back runner has only registered and gone online;
-#      from 0.9.3 on it is the runner from step 1, after its run;
+#      from 0.9.3 on it is the runner from step 1, after its run, stopped only
+#      once its audit spool is acknowledged through its last record (the same
+#      page's condition for that rollback);
 #   3. a candidate organisation (images built from this tree): the released
 #      wardyn-runnerd registers, is claimed, goes online and runs one exec run
 #      to COMPLETED.
@@ -217,7 +219,7 @@ smoke() {
   else fail "$1: no egress.deny for the denied host from runner:$3"; return 1; fi
 }
 
-# smoke_refused LABEL CLI: below 0.9.3, the run on a candidate runner under a released organisation fails at
+# smoke_refused LABEL CLI RID: below 0.9.3, the run on a candidate runner under a released organisation fails at
 # its proxy's config load, and the failure names the fix.
 smoke_refused() {
   local rc run_id
@@ -230,10 +232,28 @@ smoke_refused() {
   api "${MEMBER_TOKEN}" GET "/api/v1/runs/${run_id}" >/dev/null
   cp "${TMP}/resp.json" "${EVIDENCE_DIR}/run-$1.json"
   cp "${TMP}/run.err" "${EVIDENCE_DIR}/run-$1.err"
-  if [[ "${rc}" -ne 0 ]] && jq -e '.state == "FAILED"' "${TMP}/resp.json" >/dev/null \
+  if [[ "${rc}" -ne 0 ]] && jq -e --arg r "$3" '.state == "FAILED" and .runner_id == $r' "${TMP}/resp.json" >/dev/null \
     && grep -q 'reason: .*upgrade the organisation before its runners' "${TMP}/run.err"; then
     pass "$1: run ${run_id} FAILED with the refusal that names its fix: $(grep -m1 -o 'the proxy image is older[^;]*' "${TMP}/run.err")"
   else fail "$1: run ${run_id} exit ${rc}, $(jq -c '{state, runner_id}' "${TMP}/resp.json"); want FAILED naming the fix, got: $(tail -3 "${TMP}/run.err")"; return 1; fi
+}
+
+# spool_drained LABEL STATE: wait (serve still running) until every run spool in the runner's state
+# directory is acknowledged through its last record, the condition docs/runner-registration.md sets for
+# rolling a runner back. A spool already erased has nothing left to send.
+spool_drained() {
+  local f pending=()
+  for _ in $(seq 1 30); do
+    pending=()
+    for f in "$2"/spools/*/state.json; do
+      [[ -f "${f}" ]] || continue
+      jq -e '.ack.Seq >= .last' "${f}" >/dev/null || pending+=("${f}")
+    done
+    [[ "${#pending[@]}" -eq 0 ]] && { pass "$1: audit spool acknowledged through its last record"; return 0; }
+    sleep 2
+  done
+  fail "$1: audit spool still unacknowledged after 60 s: ${pending[*]} $(jq -c '{last, ack}' "${pending[@]}" 2>/dev/null | tr '\n' ' ')"
+  return 1
 }
 
 revoke() {
@@ -263,6 +283,9 @@ arch="$(go env GOARCH)"
 mkdir -p "${TMP}/rel"
 for f in SHA256SUMS "wardyn-linux-${arch}" "wardyn-runnerd-linux-${arch}"; do
   curl -fsSL -o "${TMP}/rel/${f}" "https://github.com/${REPO}/releases/download/${REL_TAG}/${f}" || die "downloading ${f} from ${REL_TAG} failed"
+done
+for f in "wardyn-linux-${arch}" "wardyn-runnerd-linux-${arch}"; do
+  grep -q "[ /]${f}\$" "${TMP}/rel/SHA256SUMS" || die "${f} is not listed in ${REL_TAG}'s SHA256SUMS"
 done
 (cd "${TMP}/rel" && sha256sum -c --ignore-missing --quiet SHA256SUMS) || die "a released binary does not match SHA256SUMS"
 chmod +x "${TMP}/rel/wardyn-linux-${arch}" "${TMP}/rel/wardyn-runnerd-linux-${arch}"
@@ -313,10 +336,11 @@ org_up released "${REL_WARDYND}" "${REL_PROXY}"
 register cand-on-rel "${CAND_RUNNERD}" "${CAND_CLI}" "${TMP}/state-cand-on-rel"
 CAND_RID="${RID}"
 if from_093 "${REL_VER}"; then
-  serve "${CAND_RUNNERD}" "${TMP}/state-cand-on-rel" cand-on-rel && { smoke cand-on-rel "${REL_CLI}" "${CAND_RID}"; stop_serve; }
+  serve "${CAND_RUNNERD}" "${TMP}/state-cand-on-rel" cand-on-rel \
+    && { smoke cand-on-rel "${REL_CLI}" "${CAND_RID}" && spool_drained cand-on-rel "${TMP}/state-cand-on-rel"; stop_serve; }
 else
   echo "${REL_VER} predates decision_sink: the run must fail naming the fix (upgrade the organisation first)"
-  serve "${CAND_RUNNERD}" "${TMP}/state-cand-on-rel" cand-on-rel && { smoke_refused cand-on-rel "${REL_CLI}"; stop_serve; }
+  serve "${CAND_RUNNERD}" "${TMP}/state-cand-on-rel" cand-on-rel && { smoke_refused cand-on-rel "${REL_CLI}" "${CAND_RID}"; stop_serve; }
 fi
 
 log "STEP 2: rollback, the released wardyn-runnerd serving a candidate runner's state directory"
