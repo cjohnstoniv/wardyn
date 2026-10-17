@@ -28,5 +28,6 @@
   { "key": "RUNNER_RECORDING_OFF_UNPOOLED", "args": [], "text": "Recording is required, and the runner this run would use does not record runs. Turn recording on for the runner." },
   { "key": "RECORDING_STORE_OFF", "args": [], "text": "Recording is required, and this organisation keeps no session recordings. Turn on the organisation's recording store, or set recording to preferred." },
   { "key": "RECORDING_SAVE_STORE_OFF", "args": [], "text": "Recording cannot be required while this organisation keeps no session recordings. Turn on the organisation's recording store first." },
-  { "key": "WAIT_RUNNERS_AT_CAPACITY", "args": ["Home server"], "text": "Every runner in Home server is at its limit. This run starts when one has room." }
+  { "key": "WAIT_RUNNERS_AT_CAPACITY", "args": ["Home server"], "text": "Every runner in Home server is at its limit. This run starts when one has room." },
+  { "key": "WAIT_RECORDING_STORE_OFF", "args": [], "text": "Recording is required, and this organisation keeps no session recordings. This run starts when the organisation's recording store is on." }
 ]

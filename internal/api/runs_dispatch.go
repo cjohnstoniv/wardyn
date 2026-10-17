@@ -352,8 +352,11 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// the LLM phase, where the per-run CA this lane cannot run without is minted;
 	// it is AUTHORED after both. A failed site-config read decides nothing — no
 	// row, no lane — and says so for a run on an Azure DevOps Services host. A
-	// decline is announced (run.ado_lane.skip and the sandbox env), never refused.
-	adoRun := s.decideADOLane(ctx, run, siteCfg, siteCfgErr, policy.WorkspaceRepos, p.ADOLaneRepo, sandboxEnv)
+	// decline is announced (run.ado_lane.skip and the sandbox env), never refused,
+	// and only once the dispatch is going ahead: a run refused below was never
+	// dispatched without the credential.
+	adoDecision := s.decideADOLane(ctx, run, siteCfg, siteCfgErr, policy.WorkspaceRepos, p.ADOLaneRepo)
+	adoRun := adoDecision.run
 	adoInject := adoRun.rowID != ""
 
 	var artifactPlan artifactRedirectPlan
@@ -403,6 +406,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	if !s.enforceablePATNarrowing(ctx, run, p, grantRows, siteCfg, adoRun, adoInject) {
 		return
 	}
+	s.announceADODecline(ctx, run, adoDecision, sandboxEnv)
 
 	// Brokered git: make the broker route the only route to the managed host names.
 	// Last of the policy

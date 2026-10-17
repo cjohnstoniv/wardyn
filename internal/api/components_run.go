@@ -428,7 +428,8 @@ func (s *Server) componentHostsBounded(r *http.Request, adm *componentAdmission,
 	// on any host of GitHub's family walls GitHub off, and dispatch would only
 	// withhold the door (githubDoorWithheld), which it still does as a backstop.
 	if cli := def.CLI; cli != nil && cli.Kind == types.CLIKindGitHub && ceilingDeniesAny(adm.bounds.deny, gitBrokerManagedHosts) {
-		return componentRefused(c, i, reasonComponentHostDenied, githubCLIBlockedProblem, githubCLIBlockedOrgProblem)
+		// A person-defined CLI block is refused earlier (types.validateCLI): only the organisation's wording is read.
+		return componentRefused(c, i, reasonComponentHostDenied, "", githubCLIBlockedOrgProblem)
 	}
 	// A GitHub CLI row credentials its door's host. Every GitHub CLI row of the
 	// run shares that one door, so only the first adds the host.

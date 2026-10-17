@@ -52,7 +52,7 @@ type ResolvedProfile struct {
 	Chain   []profileLink
 	Ceiling types.RunPolicySpec
 	Limits  types.GovernanceLimits
-	// AuthoredResources is the CPU and memory the chain's own rows set, before Ceiling inherits the
+	// AuthoredResources is the CPU, memory and PIDs limit the chain's own rows set, before Ceiling inherits the
 	// deployment's size: a zero field is one no row set. The member cap reads it (#1949), so a
 	// maximum with no size of its own is the size.
 	AuthoredResources types.ResourceLimits
@@ -271,7 +271,7 @@ func (s *Server) composeChain(chain []types.GovernanceProfile) (*ResolvedProfile
 		var warns []string
 		base, warns = s.standaloneAuthority(chain[root])
 		if r := chain[root].Ceiling.Resources; r != nil {
-			out.AuthoredResources = types.ResourceLimits{CPUMillis: r.CPUMillis, MemoryMiB: r.MemoryMiB}
+			out.AuthoredResources = types.ResourceLimits{CPUMillis: r.CPUMillis, MemoryMiB: r.MemoryMiB, PidsLimit: r.PidsLimit}
 		}
 		out.AdminWarnings = append(out.AdminWarnings, warns...)
 		if root == 0 {

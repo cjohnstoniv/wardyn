@@ -5,6 +5,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -29,13 +30,19 @@ type adoLaneDispatch struct {
 
 func dispatchADOLane(t *testing.T, site types.SiteConfig, mutRun func(*types.AgentRun), p dispatchParams) adoLaneDispatch {
 	t.Helper()
+	return dispatchADOLaneRead(t, site, nil, mutRun, p)
+}
+
+// dispatchADOLaneRead is dispatchADOLane with the site config read failing with siteErr when it is set.
+func dispatchADOLaneRead(t *testing.T, site types.SiteConfig, siteErr error, mutRun func(*types.AgentRun), p dispatchParams) adoLaneDispatch {
+	t.Helper()
 	fr := &fakeRunner{}
 	srv, st, audit, run := dispatchTeardownFixture(t, fr, types.RunPending)
 	if mutRun != nil {
 		mutRun(&run)
 		st.run = run
 	}
-	srv.cfg.Store = &laneDispatchStore{siteDispatchStore: &siteDispatchStore{dispatchTestStore: st, site: site}}
+	srv.cfg.Store = &laneDispatchStore{siteDispatchStore: &siteDispatchStore{dispatchTestStore: st, site: site, siteErr: siteErr}}
 	p.RunToken, p.Image = "run-token", "wardyn/claude-code:latest"
 	p.Policy.MinConfinementClass = types.CC1
 	p.Policy.AllowedDomains = append(p.Policy.AllowedDomains, "api.anthropic.com")
@@ -118,6 +125,37 @@ func TestDispatch_ADOLaneDeclineIsAnnouncedNotRefused(t *testing.T) {
 	d := dispatchADOLane(t, adoSite(adoEntraTestRow()), nil, dispatchParams{ADOLaneRepo: "https://github.com/acme/r"})
 	if len(d.skipRows()) != 0 || d.spec.Env[adoLaneDeclinedEnv] != "" {
 		t.Errorf("a GitHub-only run wrote skip=%+v env=%q, want neither", d.skipRows(), d.spec.Env[adoLaneDeclinedEnv])
+	}
+}
+
+// A run the dispatch then refuses was never dispatched without the credential, so a double site-config
+// read failure on a model run writes no decline row; with no Azure DevOps row there is nothing to claim.
+func TestDispatch_ADOLaneDeclineIsSilentOnARefusedRunAndWithNoRow(t *testing.T) {
+	d := dispatchADOLaneRead(t, types.SiteConfig{}, errors.New("db down"), nil, dispatchParams{ADOLaneRepo: adoTestRepo})
+	if d.st.State() != types.RunFailed || d.runner.createCalls != 0 {
+		t.Fatalf("state %s, CreateSandbox calls %d; want the model run refused on the unreadable config", d.st.State(), d.runner.createCalls)
+	}
+	if rows := d.skipRows(); len(rows) != 0 {
+		t.Errorf("a refused run wrote skip rows %+v, want none", rows)
+	}
+	d = dispatchADOLane(t, types.SiteConfig{}, nil, dispatchParams{ADOLaneRepo: adoTestRepo})
+	if len(d.skipRows()) != 0 || d.spec.Env[adoLaneDeclinedEnv] != "" || d.spec.Env[adoLaneDeclinedHostsEnv] != "" {
+		t.Errorf("no azure_devops row: skip=%+v env=%q hosts=%q, want silence", d.skipRows(), d.spec.Env[adoLaneDeclinedEnv], d.spec.Env[adoLaneDeclinedHostsEnv])
+	}
+}
+
+// The decline names the hosts that went without, and only hosts: not the other repositories' hosts, and no address.
+func TestDispatch_ADOLaneDeclineNamesOnlyTheDecliningHosts(t *testing.T) {
+	shared := adoEntraTestRow()
+	shared.CredentialSource = ""
+	p := dispatchParams{ADOLaneRepo: adoTestRepo, Policy: types.RunPolicySpec{WorkspaceRepos: []types.WorkspaceRepo{
+		{Repo: adoTestRepo}, {Repo: "https://github.com/acme/r"}}}}
+	d := dispatchADOLane(t, adoSite(shared), nil, p)
+	if got := d.spec.Env[adoLaneDeclinedHostsEnv]; got != "dev.azure.com" {
+		t.Errorf("%s = %q, want dev.azure.com alone", adoLaneDeclinedHostsEnv, got)
+	}
+	if got := d.spec.Env[adoLaneDeclinedEnv]; got != string(adoDeclineCredentialSource) {
+		t.Errorf("%s = %q, want credential_source", adoLaneDeclinedEnv, got)
 	}
 }
 

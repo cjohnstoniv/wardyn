@@ -265,3 +265,20 @@ func TestResourcesPidsWithinTheLimitIsNotCapped(t *testing.T) {
 		t.Errorf("pids_limit = %+v, want a deployment cut", got)
 	}
 }
+
+// A profile whose own PIDs limit equals the deployment's is still the profile's cut, as a CPU or memory tie is.
+func TestResourcesPidsCutAtTheDeploymentsValueIsTheProfiles(t *testing.T) {
+	id := uuid.New()
+	st := &memberBoundStore{
+		profile: &types.GovernanceProfile{ID: uuid.New(), Name: "same",
+			Ceiling: types.RunPolicySpec{MinConfinementClass: types.CC2, AllowedDomains: []string{"api.anthropic.com"},
+				Resources: &types.ResourceLimits{PidsLimit: int(runner.DefaultPidsLimit)}}},
+		policy: types.RunPolicy{ID: id, Spec: types.RunPolicySpec{MinConfinementClass: types.CC2, AllowedDomains: []string{"api.anthropic.com"},
+			Resources: &types.ResourceLimits{PidsLimit: 1 << 20}}},
+	}
+	f := resourceFold(t, resourceServer(t, st), sizeMemberCtx(), createRunRequest{Agent: "claude-code", PolicyID: &id})
+	want := client.AppliedAmount{Requested: 1 << 20, Applied: int(runner.DefaultPidsLimit), Capped: true, Source: types.LimitSourceGovernance, SourceName: "same"}
+	if got := f.place.applied.PidsLimit; got == nil || *got != want {
+		t.Errorf("pids_limit = %+v, want %+v", got, want)
+	}
+}

@@ -112,6 +112,7 @@ A launch waits, stored `QUEUED`, when its pool is running its Runs at once or wh
 |---|---|---|
 | `runner_pool_at_capacity` | The pool is running its Runs at once. | "{pool} is running its limit of {n}. This run starts when there's room." |
 | `runner_pool_runners_at_capacity` | A runner the run could start on is usable, and each one is at one of its limits. | "Every runner in {pool} is at its limit. This run starts when one has room." |
+| `runner_pool_recording_store_off` | Recording is required (by the organisation or the pool) and the organisation keeps no session recordings. | "Recording is required, and this organisation keeps no session recordings. This run starts when the organisation's recording store is on." |
 | `runner_pool_no_runner_free` | No runner the run could start on is usable yet: each is offline, declares no limits or cannot enforce the run's barrier. | "None of your runners in {pool} is online. This run starts when one is." |
 
 - The oldest waiting run that can be placed starts first, after its owner's access, role and user type are checked again. A run that cannot be placed yet keeps its place.

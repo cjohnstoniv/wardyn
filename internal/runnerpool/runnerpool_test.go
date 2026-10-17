@@ -65,6 +65,7 @@ func TestRefusalSentencesMatchGolden(t *testing.T) {
 		"RECORDING_STORE_OFF":           func([]string) string { return RecordingStoreOffMsg() },
 		"RECORDING_SAVE_STORE_OFF":      func([]string) string { return RecordingSaveStoreOffMsg() },
 		"WAIT_RUNNERS_AT_CAPACITY":      func(a []string) string { return WaitRunnersAtCapacityMsg(a[0]) },
+		"WAIT_RECORDING_STORE_OFF":      func([]string) string { return WaitRecordingStoreOffMsg() },
 	}
 	var golden []struct {
 		Key  string   `json:"key"`

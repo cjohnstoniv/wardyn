@@ -21,9 +21,9 @@ const expectedPrincipalMismatch = "this page was opened as a different person th
 // expectedPrincipalGuard answers 412 before any write when a draft was composed
 // under a different person than the one the shared session cookie now names:
 // another tab signed in as someone else after this tab last confirmed its own
-// identity. It is the same stale answer an If-Match miss gives
-// (reasonSiteConfigStale), so nothing is re-sent on its own and the person
-// retries explicitly. No header (an older console, the CLI, a script) is
+// identity. It is a stale answer like an If-Match miss, but with a reason of its
+// own (reasonExpectedPrincipalMismatch), so nothing is re-sent on its own and the
+// person retries explicitly. No header (an older console, the CLI, a script) is
 // permitted, exactly as with If-Match. Reads never carry the header's meaning.
 // Mounted after humanOrAdminAuth, which is what makes principalFromRequest the
 // same value /me reported to the console.
@@ -39,6 +39,6 @@ func (s *Server) expectedPrincipalGuard(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		writeErrorReason(w, http.StatusPreconditionFailed, reasonSiteConfigStale, expectedPrincipalMismatch)
+		writeErrorReason(w, http.StatusPreconditionFailed, reasonExpectedPrincipalMismatch, expectedPrincipalMismatch)
 	})
 }

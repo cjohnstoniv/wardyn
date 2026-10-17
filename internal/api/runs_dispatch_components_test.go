@@ -390,9 +390,14 @@ func TestDispatch_CredentialHostCollisionCoversEveryAuthor(t *testing.T) {
 type siteDispatchStore struct {
 	*dispatchTestStore
 	site types.SiteConfig
+	// siteErr, when set, is every read's answer: the config is unreadable.
+	siteErr error
 }
 
 func (s *siteDispatchStore) GetSiteConfig(context.Context) (types.SiteConfig, error) {
+	if s.siteErr != nil {
+		return types.SiteConfig{}, s.siteErr
+	}
 	return s.site, nil
 }
 

@@ -47,8 +47,10 @@ func serviceOfRun(run types.AgentRun) (string, bool) {
 // sponsoredService is the service identity a session that passed the entry gate on run entered as the sponsor of,
 // or "": a service identity's run is entered only through the sponsor arm (mayEnterRunOrSponsor).
 func sponsoredService(run types.AgentRun) string {
-	name, _ := serviceOfRun(run)
-	return name
+	if name, ok := serviceOfRun(run); ok {
+		return name
+	}
+	return ""
 }
 
 // sponsorEntryData is the data a sponsor's entry rows add to their own: the service identity and

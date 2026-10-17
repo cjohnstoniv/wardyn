@@ -13,6 +13,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - A run on a laptop runner whose proxy image is older than the runner now fails with the fix in its reason: the
   error names the setting the proxy refused and says to upgrade the organisation before its runners, or to pin a proxy
   image at least as new as the runner, followed by the proxy's own output.
+- The `412` the console's expected-principal check answers now carries the reason `expected_principal_mismatch`;
+  rc.3 sent `site_config_stale`.
+- A queued run under required recording, in an organisation that keeps no session recordings, waits with
+  `runner_pool_recording_store_off` instead of `runner_pool_no_runner_free`.
 
 ### Corrections to earlier notes
 

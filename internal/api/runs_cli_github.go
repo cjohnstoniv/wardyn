@@ -145,12 +145,9 @@ func confineBrokerEgress(policy *types.RunPolicySpec, p dispatchParams, sandboxE
 // githubDoorLane is how the ceiling re-assertion names the GitHub CLI door in dropped_broker_lanes.
 const githubDoorLane = "github_api"
 
-// The GitHub CLI row's refusal under a ceiling that walls GitHub off (componentHostsBounded): the
-// row the person defined, then an organisation's, which componentRefused words as "this component ...".
-const (
-	githubCLIBlockedProblem    = "cli: GitHub is blocked by your organisation."
-	githubCLIBlockedOrgProblem = "uses the GitHub CLI, and GitHub is blocked by your organisation."
-)
+// githubCLIBlockedOrgProblem is the GitHub CLI row's refusal under a ceiling that walls GitHub off
+// (componentHostsBounded), as componentRefused words an organisation's component: "this component ...".
+const githubCLIBlockedOrgProblem = "uses the GitHub CLI, and GitHub is blocked by your organisation."
 
 // githubDoorWithheld reports whether a ceiling's denies take the GitHub CLI door away. The door
 // follows the git broker's family rule, not an exact-host one: a profile that denies any host

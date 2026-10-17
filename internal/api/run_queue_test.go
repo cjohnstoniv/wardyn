@@ -191,6 +191,7 @@ func TestMaxWaitShape(t *testing.T) {
 // identity and a portal's via all come back on the start's context as they were.
 func TestQueueAuthorityRoundTrip(t *testing.T) {
 	via := types.DelegationVia{Delegate: uuid.New(), Grant: uuid.New()}
+	deviceID := uuid.New()
 	for _, tc := range []struct {
 		name   string
 		ctx    context.Context
@@ -231,6 +232,15 @@ func TestQueueAuthorityRoundTrip(t *testing.T) {
 			func(t *testing.T, ctx context.Context) {
 				if got, ok := audit.DelegationFrom(ctx); !ok || got != via {
 					t.Errorf("via = %+v, %v; want %+v", got, ok, via)
+				}
+			}},
+		{"device", context.WithValue(context.Background(), deviceCtxKey{}, types.Device{ID: deviceID}),
+			func(t *testing.T, ctx context.Context) {
+				if d, ok := deviceFromContext(ctx); !ok || d.ID != deviceID {
+					t.Fatalf("device = %+v, %v; want %s", d, ok, deviceID)
+				}
+				if _, actor := actorFromContext(ctx, ""); actor != deviceActor(deviceID) || operatorOwnedRequest(ctx) {
+					t.Errorf("a promoted device run acts as %q, operator-owned %v; want the device, not the admin token", actor, operatorOwnedRequest(ctx))
 				}
 			}},
 		{"the admin token", context.Background(),

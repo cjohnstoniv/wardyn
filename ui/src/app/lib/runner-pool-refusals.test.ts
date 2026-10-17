@@ -36,7 +36,7 @@ const root = repoRoot();
 
 describe("runner pool refusal sentences", () => {
   it("are the golden bytes the server's twin is pinned to", () => {
-    const waits = ["WAIT_AT_CAPACITY", "WAIT_NO_RUNNER_FREE", "WAIT_RUNNERS_AT_CAPACITY", "NO_ONLINE_RUNNER", "RUNNER_AT_CAPACITY", "RUNNER_LIMITS_UNSET", ...Object.keys(RUNNER_RECORDING)];
+    const waits = ["WAIT_AT_CAPACITY", "WAIT_NO_RUNNER_FREE", "WAIT_RUNNERS_AT_CAPACITY", "WAIT_RECORDING_STORE_OFF", "NO_ONLINE_RUNNER", "RUNNER_AT_CAPACITY", "RUNNER_LIMITS_UNSET", ...Object.keys(RUNNER_RECORDING)];
     expect(golden.map((g) => g.key).sort()).toEqual([...Object.keys(RUNNER_POOL_REFUSAL), ...waits].sort());
     for (const g of golden.filter((x) => !waits.includes(x.key))) {
       expect(RUNNER_POOL_REFUSAL_BY_KEY[g.key as keyof typeof RUNNER_POOL_REFUSAL](...g.args), g.key).toBe(g.text);
@@ -62,6 +62,14 @@ describe("runner pool refusal sentences", () => {
     expect(RUN_WAIT.NO_RUNNER_FREE(g.args[0])).toBe(g.text);
     expect(RUNNER_POOL_REASONS as readonly string[]).not.toContain(RUN_WAIT_REASON.NO_RUNNER_FREE);
     expect(readFileSync(join(root, "internal/runnerpool/wait.go"), "utf8")).toContain(`WaitReason = "${RUN_WAIT_REASON.NO_RUNNER_FREE}"`);
+  });
+
+  it("says a queued run held by a required recording with no store as a wait, never as the refusal", () => {
+    const g = golden.find((x) => x.key === "WAIT_RECORDING_STORE_OFF")!;
+    expect(RUN_WAIT.RECORDING_STORE_OFF()).toBe(g.text);
+    expect(RUNNER_POOL_REASONS as readonly string[]).not.toContain(RUN_WAIT_REASON.RECORDING_STORE_OFF);
+    expect(PLACEMENT_REASONS).toContain("recording_store_off");
+    expect(readFileSync(join(root, "internal/runnerpool/wait.go"), "utf8")).toContain(`WaitReason = "${RUN_WAIT_REASON.RECORDING_STORE_OFF}"`);
   });
 
   it("says a run whose runners are all at their runs at once as a wait when queued, a refusal when not", () => {
