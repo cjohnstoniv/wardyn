@@ -240,6 +240,33 @@ func TestMCPServerKeys_OrgClaimsItsKeyFirst(t *testing.T) {
 	}
 }
 
+// TestMCPServerKeys_OrgKeysFollowComponentIDNotAttachOrder: two organisation
+// servers whose names cut to one key (a row saved before orgMCPKeyFree) take
+// it in component-id order, so the key an organisation's rules name is the
+// same server on every run whatever order it was attached in.
+func TestMCPServerKeys_OrgKeysFollowComponentIDNotAttachOrder(t *testing.T) {
+	low, high := uuid.MustParse("00000000-0000-0000-0000-000000000001"), uuid.MustParse("00000000-0000-0000-0000-000000000002")
+	org := func(id uuid.UUID) attachedComponent {
+		return attachedComponent{snapshot: types.RunComponent{Name: "Linear", ComponentID: &id,
+			Definition: types.ComponentDefinition{MCP: &types.ComponentMCP{URL: "https://mcp.linear.test/mcp"}}}}
+	}
+	for name, attached := range map[string][]attachedComponent{
+		"low first":  {org(low), org(high)},
+		"high first": {org(high), org(low)},
+	} {
+		keys := mcpServerKeys(attached)
+		for i, a := range attached {
+			want := "linear"
+			if *a.snapshot.ComponentID == high {
+				want = "linear-2"
+			}
+			if keys[i] != want {
+				t.Errorf("%s: component %s key = %q, want %q", name, a.snapshot.ComponentID, keys[i], want)
+			}
+		}
+	}
+}
+
 // TestDispatchMCP_AutonomousRunNeverCarriesManagedMCP: Claude Code refuses
 // --strict-mcp-config while managed-mcp.json exists, so no autonomous run is
 // given it.
