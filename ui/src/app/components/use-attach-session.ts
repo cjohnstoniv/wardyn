@@ -566,8 +566,11 @@ export function useAttachSession(args: UseAttachSessionArgs) {
         // A socket opened without a ticket shows a browser no status or body when its handshake is refused, so the
         // run's session cap would read as a bare failure. The ticket mint answers it with its reason (attach_ticket.go).
         if (direct && !opened) {
-          runs.attachTicket(runId).then(retry, (e: unknown) => {
-            if (disposed) return;
+          const g = gen;
+          runs.attachTicket(runId).then(() => {
+            if (g === gen) retry();
+          }, (e: unknown) => {
+            if (disposed || g !== gen) return;
             if (e instanceof HttpError && e.reason === ATTACH_CAP_REASON) {
               setMode(null);
               setConnState("error");
@@ -599,6 +602,14 @@ export function useAttachSession(args: UseAttachSessionArgs) {
     // admitted (or we had none) — so: drop our socket and attach again; the
     // fresh attach registers as holder. Between the eviction and that attach
     // the holder endpoint honestly reports held:false.
+    // A deliberate attach replaces any automatic one still pending: a ticket mint in flight (retired by `gen`) or a
+    // backoff timer. Without this, one click could open two sockets.
+    const cancelPendingAttach = () => {
+      gen += 1;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+    };
+
     reclaimRef.current = () => {
       if (disposed) return;
       const cur = wsRef.current;
@@ -616,6 +627,7 @@ export function useAttachSession(args: UseAttachSessionArgs) {
       }
       wsRef.current = null;
       reconnectAttempts = 0; // a deliberate re-attach starts from a full budget
+      cancelPendingAttach();
       connect();
     };
 
@@ -626,6 +638,7 @@ export function useAttachSession(args: UseAttachSessionArgs) {
       reconnectAttempts = 0;
       setReconnectAttempt(0);
       setReconnectExhausted(false);
+      cancelPendingAttach();
       connect();
     };
 
