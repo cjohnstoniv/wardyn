@@ -64,9 +64,9 @@ var (
 	ErrRunnerPoolGoverned = errors.New("store: runner pool now has a use policy, so the detach must be held")
 	// ErrRunnerPoolLimit: the organisation is at RunnerPoolsMax pools, or the owner at RunnerPoolsPerOwnerMax.
 	ErrRunnerPoolLimit = errors.New("store: too many runner pools")
-	// ErrRunnerPoolScope: a self-hosted runner was offered to an organization pool, which takes
-	// remote-hosted runners only.
-	ErrRunnerPoolScope = errors.New("store: organization pools take remote-hosted runners only")
+	// ErrRunnerPoolScope: a person's self-hosted runner was offered to an organization pool, which takes
+	// remote-hosted runners and the organization's own runners.
+	ErrRunnerPoolScope = errors.New("store: organization pools take remote-hosted runners and organization runners only")
 	// ErrRunnerPoolHasPolicy: a pool with a use policy is not deleted, because the delete would clear
 	// the policy outside the second-human hold; clear the policy first.
 	ErrRunnerPoolHasPolicy = errors.New("store: the runner pool still has a use policy")
@@ -610,7 +610,7 @@ func removeMemberQ(ctx context.Context, q Querier, id uuid.UUID, stmt string, ar
 // AddOwnRunnerToPool adds a self-hosted runner to a live user pool only when owner owns both the pool
 // and the runner, the runner is claimed and bound to this organisation's URL, all decided in the insert
 // itself so a revocation or a transfer cannot slip between a check and the write. An organization pool
-// is ErrRunnerPoolScope: it takes remote-hosted runners only. ErrNotFound covers every other case alike:
+// is ErrRunnerPoolScope: it takes remote-hosted and organization runners only. ErrNotFound covers every other case alike:
 // an unknown pool or runner, and a pool or a runner that is not the owner's.
 func (s PG) AddOwnRunnerToPool(ctx context.Context, id, runnerID uuid.UUID, owner, orgURLSHA256 string) (types.RunnerPoolMember, bool, int64, error) {
 	var m types.RunnerPoolMember

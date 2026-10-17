@@ -147,7 +147,7 @@ export const LIMITS_DIALOG = {
 export const POOLS = {
   LEAD: "A pool is a named choice for where a run goes. Its limits come from its runners, and it can narrow them, never widen them.",
   ORG_TITLE: "Organization pools",
-  ORG_LEDE: "Pools your organization provides, made of remote-hosted runners only. Choosing one grants nobody a runner, a credential or a drive.",
+  ORG_LEDE: "Pools your organization provides, made of remote-hosted runners and the organization's own runners. Choosing one grants nobody a runner, a credential or a drive.",
   ORG_CLI: "Organization pools are created on the command line:",
   ORG_CLI_COMMAND: "wardyn runner pool create --scope organization --runner <runner>",
   ORG_CLI_EDIT: "You edit them here.",
