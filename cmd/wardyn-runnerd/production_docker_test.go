@@ -17,8 +17,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"os"
+	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -400,7 +403,7 @@ func TestDockerSinkListensWhereItDidBeforeARestart(t *testing.T) {
 	ctx := t.Context()
 	dir := t.TempDir()
 	lo := netip.MustParseAddr("127.0.0.1")
-	first, err := newDockerSink(ctx, dir)
+	first, err := newDockerSink(ctx, dir, dockerEngine{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -411,7 +414,7 @@ func TestDockerSinkListensWhereItDidBeforeARestart(t *testing.T) {
 	if err := first.Close(); err != nil {
 		t.Fatal(err)
 	}
-	again, err := newDockerSink(ctx, dir)
+	again, err := newDockerSink(ctx, dir, dockerEngine{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -423,5 +426,43 @@ func TestDockerSinkListensWhereItDidBeforeARestart(t *testing.T) {
 	_ = c.Close()
 	if err := again.use(lo); err != nil || again.proxyURL() != url {
 		t.Fatalf("after the restart new proxies get %q (%v), want %q", again.proxyURL(), err, url)
+	}
+}
+
+// A kept address the relay may not listen on, here every interface, is never listened on at a restart:
+// the sink waits for use, on the relay's own address.
+func TestDockerSinkNeverListensOnAKeptAddressTheRelayMayNotUse(t *testing.T) {
+	dir := t.TempDir()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := ln.Addr().(*net.TCPAddr).Port
+	_ = ln.Close()
+	if err := os.WriteFile(filepath.Join(dir, sinkAddrFile), []byte("0.0.0.0:"+strconv.Itoa(port)+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	d, err := newDockerSink(t.Context(), dir, dockerEngine{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	d.addrMu.Lock()
+	defer d.addrMu.Unlock()
+	if len(d.bound) != 0 {
+		t.Fatalf("the restarted sink listens on %v from a kept 0.0.0.0 address", d.bound)
+	}
+}
+
+// Settling a run the sink no longer holds (sealed, erased, or retired before a restart) is nothing to do
+// for the Docker driver, so a later stop of that run, such as the orphan sweep's, still succeeds.
+func TestDockerSinkSettlesARunItNoLongerHoldsAsDone(t *testing.T) {
+	h := newSinkHarness(t)
+	gone := uuid.New()
+	if _, err := h.sink.ProducerGone(t.Context(), gone); !errors.Is(err, errSinkRunUnknown) {
+		t.Fatalf("the sink's own answer = %v, want %v", err, errSinkRunUnknown)
+	}
+	if err := (sinkAdapter{s: h.sink}).ProducerGone(t.Context(), gone); err != nil {
+		t.Fatalf("the driver's settle of a run the sink no longer holds = %v, want nothing to do", err)
 	}
 }

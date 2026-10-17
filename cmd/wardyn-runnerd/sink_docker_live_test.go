@@ -88,7 +88,7 @@ func TestDockerProxySendsDecisionsToTheSink_Live(t *testing.T) {
 	}
 	identity := runneridentity.Identity{RunnerID: uuid.New(), PrivateKey: key}
 	stateDir := t.TempDir()
-	sink, err := newDockerSink(ctx, stateDir)
+	sink, err := newDockerSink(ctx, stateDir, dockerEngine{})
 	if err != nil {
 		t.Fatal(err)
 	}

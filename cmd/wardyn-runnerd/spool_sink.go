@@ -23,6 +23,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"math/big"
 	"net"
@@ -42,7 +43,12 @@ const (
 	sinkDrainTimeout = 5 * time.Second
 )
 
-var errNoSinkSession = errors.New("decision sink: no live session for the run")
+var (
+	errNoSinkSession = errors.New("decision sink: no live session for the run")
+	// errSinkRunUnknown: the sink holds no such run, never registered or forgotten (sealed, or its spool
+	// erased).
+	errSinkRunUnknown = errors.New("decision sink: run not registered")
+)
 
 type spoolSinkOptions struct {
 	Cert         tls.Certificate
@@ -294,28 +300,25 @@ func (s *spoolSink) handle(c *tls.Conn) {
 		return
 	}
 	ctx := context.Background()
-	// Accept persists the new generation and the grant before the reply. It runs
-	// under the sink's lock with the key checked again, so a hello that passed
-	// with a key Succeed has since replaced never claims the new producer's spool.
+	epoch := runneractivity.Capture(s.opts.ActivityDir(r.id))
+	// Invariant: a session is accepted and published in one section under the sink's lock, the one
+	// ProducerGone settles under. Accept persists the new generation and the grant before the reply, with
+	// the key checked again, so a hello that passed with a key Succeed has since replaced never claims the
+	// new producer's spool; and a settlement either takes this session or comes first, when Accept refuses
+	// the settled producer.
 	s.mu.Lock()
 	if s.runs[r.id] != r || r.keyHash != keyHash {
 		s.mu.Unlock()
 		return
 	}
 	acc, err := r.spool.Accept(ctx, instance)
-	s.mu.Unlock()
 	if err != nil {
+		s.mu.Unlock()
 		slog.Warn("runnerd: decision sink session refused", slog.String("run_id", r.id.String()), slog.Any("err", err))
 		return
 	}
-	ss := &sinkSession{run: r, conn: c, gen: acc.Gen, instance: instance, grant: acc.Grant, drainCh: make(chan runnerspool.Drained, 1),
-		epoch: runneractivity.Capture(s.opts.ActivityDir(r.id))}
-	s.mu.Lock()
+	ss := &sinkSession{run: r, conn: c, gen: acc.Gen, instance: instance, grant: acc.Grant, drainCh: make(chan runnerspool.Drained, 1), epoch: epoch}
 	old := r.sess
-	if s.runs[r.id] != r {
-		s.mu.Unlock()
-		return
-	}
 	r.sess = ss
 	s.mu.Unlock()
 	if old != nil {
@@ -470,33 +473,30 @@ func (s *spoolSink) Drain(ctx context.Context, runID uuid.UUID) (runnerspool.Dra
 // (never a NotFound alone or termination unknown): exact after a drained reply
 // at the current gen with every sequence committed, else the upper bound. It
 // emits the loss row when the reserve is free (Tick retries otherwise) and
-// releases the writer lock, so Seal waits only for the org's ack.
+// releases the writer lock, so Seal waits only for the org's ack. The settlement
+// runs under the sink's lock, as handle's Accept does (the invariant there). A
+// record the closing session still sends is refused by the settled grant.
 func (s *spoolSink) ProducerGone(ctx context.Context, runID uuid.UUID) (runnerspool.Loss, error) {
 	s.mu.Lock()
 	r := s.runs[runID]
-	var ss *sinkSession
-	var drained *runnerspool.Drained
-	if r != nil {
-		ss, r.sess, drained = r.sess, nil, r.drained
+	if r == nil {
+		s.mu.Unlock()
+		return runnerspool.Loss{}, fmt.Errorf("%w: %s", errSinkRunUnknown, runID)
+	}
+	ss := r.sess
+	r.sess = nil
+	loss, err := r.spool.SettleLoss(ctx, r.drained)
+	if err == nil {
+		_, err = r.spool.EmitLoss(ctx)
+	}
+	var w *os.File
+	if err == nil {
+		w, r.writer = r.writer, nil
 	}
 	s.mu.Unlock()
-	if r == nil {
-		return runnerspool.Loss{}, fmt.Errorf("decision sink: run %s not registered", runID)
-	}
 	if ss != nil {
 		ss.conn.Close()
 	}
-	loss, err := r.spool.SettleLoss(ctx, drained)
-	if err != nil {
-		return loss, err
-	}
-	if _, err := r.spool.EmitLoss(ctx); err != nil {
-		return loss, err
-	}
-	s.mu.Lock()
-	w := r.writer
-	r.writer = nil
-	s.mu.Unlock()
 	if w != nil {
 		err = w.Close()
 	}
@@ -515,7 +515,10 @@ func (s *spoolSink) Liability(ctx context.Context, runID uuid.UUID) (runnerspool
 }
 
 // Tick regrants live sessions (fresh capacity after org acks, a new activity
-// epoch) and retries loss rows waiting on the reserve.
+// epoch) and retries loss rows waiting on the reserve. It forgets a run whose
+// spool directory is gone (its evidence erased) and a settled run whose spool
+// is sealed (retired): neither has anything left for the sink, and each would
+// otherwise keep its handles and be read every tick for the process's life.
 func (s *spoolSink) Tick(ctx context.Context) {
 	s.mu.Lock()
 	runs := make([]*sinkRun, 0, len(s.runs))
@@ -525,11 +528,21 @@ func (s *spoolSink) Tick(ctx context.Context) {
 	s.mu.Unlock()
 	for _, r := range runs {
 		if _, err := r.spool.EmitLoss(ctx); err != nil {
+			if _, serr := os.Stat(s.opts.SpoolDir(r.id)); errors.Is(serr, fs.ErrNotExist) {
+				s.forget(r)
+				continue
+			}
 			slog.Warn("runnerd: decision sink loss row not written", slog.String("run_id", r.id.String()), slog.Any("err", err))
 		}
 		s.mu.Lock()
-		ss := r.sess
+		ss, settled := r.sess, r.writer == nil && r.sess == nil
 		s.mu.Unlock()
+		if settled {
+			if l, err := r.spool.Liability(ctx); err == nil && l.Sealed {
+				s.forget(r)
+				continue
+			}
+		}
 		if ss != nil {
 			if err := s.regrant(ctx, ss, 0, 0); err != nil {
 				ss.conn.Close()
@@ -551,6 +564,20 @@ func (s *spoolSink) Unregister(runID uuid.UUID) {
 	if r != nil {
 		r.close(ss)
 	}
+}
+
+// forget drops r and releases its handles, unless another registration has taken its id since.
+func (s *spoolSink) forget(r *sinkRun) {
+	s.mu.Lock()
+	if s.runs[r.id] != r {
+		s.mu.Unlock()
+		return
+	}
+	delete(s.runs, r.id)
+	ss := r.sess
+	r.sess = nil
+	s.mu.Unlock()
+	r.close(ss)
 }
 
 func (r *sinkRun) close(ss *sinkSession) {

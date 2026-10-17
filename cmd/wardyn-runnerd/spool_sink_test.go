@@ -4,13 +4,16 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -417,4 +420,56 @@ func TestSpoolSinkSucceedHandsTheRunToANewProxy(t *testing.T) {
 	if ok, err := s.Seal(ctx, r); ok || err != nil {
 		t.Fatalf("seal = %v, %v while the new proxy holds the writer lock", ok, err)
 	}
+}
+
+// Tick forgets a run whose spool was erased, with no loss-row warning on every tick, and a settled run
+// whose spool is sealed: neither keeps its handles or is read again.
+func TestSpoolSinkTickForgetsErasedAndSealedRuns(t *testing.T) {
+	var logs bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	registered := func(h *sinkHarness) bool {
+		h.sink.mu.Lock()
+		defer h.sink.mu.Unlock()
+		return h.sink.runs[h.id] != nil
+	}
+	t.Run("erased", func(t *testing.T) {
+		ctx := t.Context()
+		h := newSinkHarness(t)
+		if err := os.RemoveAll(filepath.Join(h.dir, "spools", h.id.String())); err != nil {
+			t.Fatal(err)
+		}
+		h.sink.Tick(ctx)
+		h.sink.Tick(ctx)
+		if registered(h) || strings.Contains(logs.String(), "loss row not written") {
+			t.Fatalf("after its spool was erased the run is still registered (%v), or Tick warned:\n%s", registered(h), logs.String())
+		}
+		if _, err := h.sink.ProducerGone(ctx, h.id); !errors.Is(err, errSinkRunUnknown) {
+			t.Fatalf("settling a forgotten run = %v, want %v", err, errSinkRunUnknown)
+		}
+	})
+	t.Run("sealed", func(t *testing.T) {
+		ctx := t.Context()
+		h := newSinkHarness(t)
+		if _, err := h.sink.ProducerGone(ctx, h.id); err != nil {
+			t.Fatal(err)
+		}
+		h.sink.Tick(ctx)
+		if !registered(h) {
+			t.Fatal("a settled run was forgotten before its spool was sealed")
+		}
+		s := h.spool()
+		r, err := s.Receipt(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if ok, err := s.Seal(ctx, r); !ok || err != nil {
+			t.Fatalf("seal = %v, %v", ok, err)
+		}
+		h.sink.Tick(ctx)
+		if registered(h) {
+			t.Fatal("a settled run whose spool is sealed is still registered")
+		}
+	})
 }

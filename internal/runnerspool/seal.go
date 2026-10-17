@@ -110,12 +110,14 @@ func (s *Spool) HoldWriter() (*os.File, error) {
 	return writer, nil
 }
 
-// Liability is the remote producer's durable state.
+// Liability is the remote producer's durable state, and whether the spool is
+// sealed.
 type Liability struct {
 	Gen         uint64
 	Producer    *Producer
 	Grant       *Grant
 	PendingLoss *PendingLoss
+	Sealed      bool
 }
 
 // Settled reports a producer whose liability has been written off.
@@ -126,7 +128,7 @@ func (s *Spool) Liability(ctx context.Context) (out Liability, err error) {
 	err = s.locked(ctx, func() error {
 		m, err := s.readManifest()
 		if err == nil {
-			out = Liability{Gen: m.Gen, Producer: m.Producer, Grant: m.Grant, PendingLoss: m.PendingLoss}
+			out = Liability{Gen: m.Gen, Producer: m.Producer, Grant: m.Grant, PendingLoss: m.PendingLoss, Sealed: m.Sealed}
 		}
 		return err
 	})
