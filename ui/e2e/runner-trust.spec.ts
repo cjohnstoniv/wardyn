@@ -92,7 +92,11 @@ test("a change held for a second person says so and changes nothing", async ({ p
   expect(puts).toHaveLength(1);
   // Nothing was announced as done, and the runner's card behind the drawer still carries no Managed device chip.
   await expect(page.getByText(RUNNER_TRUST.DONE("dana-laptop", RUNNER_TRUST.MANAGED))).toHaveCount(0);
-  await expect(page.locator('li[aria-label="dana-laptop"]').getByText(RUNNER_TRUST.MANAGED)).toHaveCount(0);
+  const card = page.locator('li[aria-label="dana-laptop"]');
+  await expect(card).toBeVisible();
+  await expect(card.getByText(RUNNER_TRUST.MANAGED)).toHaveCount(0);
+  // The drawer's Save is off while the proposal waits.
+  await expect(drawer.getByRole("button", { name: RUNNER_TRUST.SAVE })).toBeDisabled();
 });
 
 test("an organization's runner shows Organization cluster and offers no control", async ({ page }) => {

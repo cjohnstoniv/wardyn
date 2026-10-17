@@ -50,6 +50,7 @@ function TrustEditor({ runner, onChanged }: { runner: RunnerView; onChanged: () 
   const [busy, setBusy] = React.useState(false);
   const [held, setHeld] = React.useState(false);
   const [error, setError] = React.useState("");
+  // A held proposal blocks another for the same runner (409), so Save waits: approval changes the class and remounts this.
   const id = `rn-trust-reason-${runner.id}`;
   const save = async () => {
     setBusy(true);
@@ -97,7 +98,7 @@ function TrustEditor({ runner, onChanged }: { runner: RunnerView; onChanged: () 
         </p>
       )}
       <div className="mt-3">
-        <Button variant="outline" size="sm" disabled={busy || draft === runner.trust_class || reason.trim() === ""} onClick={() => void save()}>
+        <Button variant="outline" size="sm" disabled={busy || held || draft === runner.trust_class || reason.trim() === ""} onClick={() => void save()}>
           {RUNNER_TRUST.SAVE}
         </Button>
       </div>

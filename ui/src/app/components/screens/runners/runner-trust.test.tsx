@@ -99,6 +99,15 @@ describe("Admin -> Runners trust class: a person's runner, a security admin", ()
     expect(screen.getByRole("button", { name: "Change trust class" })).toBeDisabled();
   });
 
+  it("sits between Resources and Pools, as the mock has it", async () => {
+    open(runner());
+    await screen.findByRole("combobox", { name: "Trust class" });
+    const at = (sel: string) => document.querySelector(sel) as Element;
+    const before = (a: Element, b: Element) => Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+    expect(before(at("[data-resources]"), at("[data-trust]"))).toBe(true);
+    expect(before(at("[data-trust]"), at("[data-pools]"))).toBe(true);
+  });
+
   it("saves with the reason, says what the runner is now, and re-reads", async () => {
     const user = userEvent.setup();
     setTrustMock.mockResolvedValue(runner({ trust_class: "managed_device" }));
@@ -126,6 +135,8 @@ describe("Admin -> Runners trust class: a person's runner, a security admin", ()
     expect(toast.success).not.toHaveBeenCalled();
     expect(onChanged).not.toHaveBeenCalled();
     expect(screen.queryByRole("alert")).toBeNull();
+    // Another save would meet the 409 for the proposal already waiting, so Save stays off until it resolves.
+    expect(screen.getByRole("button", { name: "Change trust class" })).toBeDisabled();
   });
 
   it("shows the server's own sentence when it refuses, and does not re-read", async () => {

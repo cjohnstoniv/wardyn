@@ -83,6 +83,12 @@ export function RunnerDrawer({
   const reportedAt = runner.posture_reported_at ? RUNNER.REPORTED_AT(relativeTime(runner.posture_reported_at)) : "";
   const reported = (extra?: string) => [RUNNER.REPORTED, extra].filter(Boolean).join(" · ");
   const res = runnerRes(runner.limits, runner.usage);
+  // Between Resources and Pools on a claimed runner; an unclaimed one has neither, so it leads.
+  const trust = (
+    <Section label={RUNNER_TRUST.TITLE} reported={RUNNER_TRUST.META} data-trust>
+      <RunnerTrust runner={runner} canEdit={securityAdmin} onChanged={onChanged} />
+    </Section>
+  );
 
   return (
     <>
@@ -116,9 +122,7 @@ export function RunnerDrawer({
             </div>
           </SheetHeader>
           <div className="px-4">
-            <Section label={RUNNER_TRUST.TITLE} reported={RUNNER_TRUST.META} data-trust>
-              <RunnerTrust runner={runner} canEdit={securityAdmin} onChanged={onChanged} />
-            </Section>
+            {!claimed && trust}
             {claimed && (
               <>
                 <Section label={RUNNER_V6.MACHINE} reported={RUNNER.REPORTED} data-machine>
@@ -143,6 +147,7 @@ export function RunnerDrawer({
                     </Hint>
                   )}
                 </Section>
+                {trust}
                 <Section label={RUNNER_V6.POOLS} data-pools>
                   <PoolLinks pools={runner.pools} onOpenPool={onOpenPool} />
                   <Hint>{RUNNER_V6.POOLS_HINT}</Hint>
