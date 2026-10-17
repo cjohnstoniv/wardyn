@@ -69,8 +69,8 @@
 - A `require_posture` class is refused at launch until per-runner placement lands.
 - On Linux the Secret Service needs a login session bus (`DBUS_SESSION_BUS_ADDRESS`, or the user bus socket under `/run/user/<uid>`), so a system service with no login session has no keystore.
 - Posture is self-reported, and a run with a CC3 floor never takes a resident credential.
-- Placement judges the posture on record, the runner's last report, so a change on the laptop counts once the runner reports it.
-- A runner that has not reported posture misses every `require_posture` (`runner_posture_unmet`).
+- Placement judges the posture on record, the runner's last report, however old it is. A change on the laptop counts once the runner reports it, which it does at every connect and when the posture changes.
+- A runner that has not reported posture misses every `require_posture` (`runner_posture_unmet`). A class with no `require_posture` places on any runner, one that has never reported posture included; to demand a report, set at least one requirement.
 - `os_min` must name every OS a runner may run: a runner on an OS it leaves out misses it.
 
 ### bedrock_sso on a laptop runner
