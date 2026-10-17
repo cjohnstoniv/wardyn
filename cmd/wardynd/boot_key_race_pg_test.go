@@ -14,6 +14,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"errors"
 	"os"
 	"sync"
 	"sync/atomic"
@@ -139,12 +140,27 @@ func TestLoadHopTLS_TwoConcurrentFirstBootsEndOnOneCA(t *testing.T) {
 	_ = storeA.Delete(ctx, secretInternalCA)
 	t.Cleanup(func() { _ = storeA.Delete(context.Background(), secretInternalCA) })
 
+	// Each boot's first read of the CA row holds until BOTH have read it empty,
+	// so the two always meet at the create step; only the create lock can then
+	// keep them on one CA, and removing it turns this red every time.
+	var arrivals atomic.Int32
+	both := make(chan struct{})
+	arrive := func() {
+		if arrivals.Add(1) == 2 {
+			close(both)
+		}
+		select {
+		case <-both:
+		case <-time.After(10 * time.Second):
+		}
+	}
+
 	hops := make([]*hopTLS, 2)
 	errs := make([]error, 2)
 	var wg sync.WaitGroup
 	for i, s := range []bootKeyStore{
-		newBootKeyStore(storeA, poolA, true),
-		newBootKeyStore(storeB, poolB, true),
+		newBootKeyStore(overlapStore{storeA, arrive}, poolA, true),
+		newBootKeyStore(overlapStore{storeB, arrive}, poolB, true),
 	} {
 		wg.Add(1)
 		go func() {
@@ -162,4 +178,19 @@ func TestLoadHopTLS_TwoConcurrentFirstBootsEndOnOneCA(t *testing.T) {
 	if hops[0].caPEM == "" || hops[0].caPEM != hops[1].caPEM {
 		t.Fatal("the two first boots serve different internal CAs: a proxy pinned to one replica fails closed against the other")
 	}
+}
+
+// overlapStore calls arrive after a read of the internal CA row finds it empty,
+// before the caller can go on to create it.
+type overlapStore struct {
+	secretKeyStore
+	arrive func()
+}
+
+func (o overlapStore) Get(ctx context.Context, name string) ([]byte, error) {
+	v, err := o.secretKeyStore.Get(ctx, name)
+	if name == secretInternalCA && errors.Is(err, secretstore.ErrNotFound) {
+		o.arrive()
+	}
+	return v, err
 }
