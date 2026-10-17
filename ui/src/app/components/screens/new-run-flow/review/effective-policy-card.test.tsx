@@ -3,8 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { afterEach, describe, expect, it } from "vitest";
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ADO_ACCESS, adoCapName } from "../../../../lib/ado-access-copy";
 import { ADO_ENTRA_EDITOR } from "../../../../lib/workspace-providers-copy";
@@ -23,6 +23,19 @@ import { SCENARIO_ACCESS } from "../../../../lib/new-run-fixtures/scenarios/tool
 import type { ReviewPreflight } from "./review-seams";
 import { changedRows } from "./policy-rows";
 import type { PolicyPreviewResult } from "../../../../lib/types/policy-preview";
+
+// The roster the Tools group names harnesses from: the card names them the same way.
+vi.mock("../../../../lib/api/setup", async (orig) => ({
+  ...(await orig<typeof import("../../../../lib/api/setup")>()),
+  setup: {
+    getSetupStatus: async () => ({
+      harnesses: [
+        { id: "claude-code", display: "Claude Code" },
+        { id: "codex-cli", display: "Codex" },
+      ],
+    }),
+  },
+}));
 
 afterEach(cleanup);
 
@@ -115,12 +128,26 @@ describe("Effective policy card", () => {
     expect(tools.queryByText(NR_REVIEW.POLICY_AUTOMATIC)).toBeNull();
   });
 
-  it("shows each distinct harness default instead of the first harness's alone", () => {
-    const access = withDefaults(["claude-code", "allow"], ["codex-cli", "deny"]) as never;
+  it("names each harness when the included harnesses default differently (DR-0244)", async () => {
+    const access = withDefaults(["claude-code", "hold"], ["codex-cli", "deny"]) as never;
     render(<EffectivePolicyCard draft={draftOf(BASE)} pre={{ ...SCENARIO_PREFLIGHT.member, access } as never} preview={null} />);
     const tools = document.querySelector("[data-policy-row=tools]") as HTMLElement;
-    expect(tools).toHaveTextContent(NR_REVIEW.POLICY_AUTOMATIC);
-    expect(tools).toHaveTextContent(NR_TOOLS.EFFECT_DENY);
+    await waitFor(() => expect(tools).toHaveTextContent(`Claude Code: ${NR_REVIEW.POLICY_HOLD} · Codex: ${NR_TOOLS.EFFECT_DENY}`));
+    expect(tools.textContent).toContain(NR_REVIEW.POLICY_TOOLS_OF("Claude Code", NR_REVIEW.POLICY_HOLD));
+  });
+
+  it("falls back to the harness id until the roster answers, and keeps one value with its source when the defaults agree", async () => {
+    const mixed = withDefaults(["claude-code", "allow"], ["codex-cli", "deny"]) as never;
+    const view = render(<EffectivePolicyCard draft={draftOf(BASE)} pre={{ ...SCENARIO_PREFLIGHT.member, access: mixed } as never} preview={null} />);
+    expect(document.querySelector("[data-policy-row=tools]")).toHaveTextContent(`claude-code: ${NR_REVIEW.POLICY_AUTOMATIC} · codex-cli: ${NR_TOOLS.EFFECT_DENY}`);
+    view.unmount();
+    const same = withDefaults(["claude-code", "hold"], ["codex-cli", "hold"]) as never;
+    render(<EffectivePolicyCard draft={draftOf(BASE)} pre={{ ...SCENARIO_PREFLIGHT.member, access: same } as never} preview={null} />);
+    const tools = document.querySelector("[data-policy-row=tools]") as HTMLElement;
+    expect(tools).toHaveTextContent(NR_REVIEW.POLICY_HOLD);
+    expect(tools).not.toHaveTextContent("claude-code:");
+    expect(tools).not.toHaveTextContent("Claude Code:");
+    expect(tools).toHaveTextContent(CLAUDE_UNGATED.default.source.name);
   });
 
   it.each([[["pypi.org"], NR_REVIEW.POLICY_HOST_ONE], [["pypi.org", "registry.npmjs.org"], NR_REVIEW.POLICY_HOSTS(2)]])(

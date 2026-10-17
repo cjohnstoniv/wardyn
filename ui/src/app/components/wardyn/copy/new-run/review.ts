@@ -124,6 +124,8 @@ export const NR_REVIEW = {
   POLICY_TOOLS: "Tools and pushes",
   POLICY_HOLD: "Hold for approval",
   POLICY_AUTOMATIC: "Run automatically",
+  /** One harness's default when the included harnesses default differently. */
+  POLICY_TOOLS_OF: (harness: string | number, effect: string | number) => `${harness}: ${effect}`,
   RAW_TITLE: (format: string | number) => `${format} run document`,
   RAW_BODY: "Read-only resolved draft",
   COPY: "Copy",

@@ -743,6 +743,7 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `POLICY_TOOLS` | mock | Tools and pushes |
 | `POLICY_HOLD` | mock | Hold for approval |
 | `POLICY_AUTOMATIC` | mock | Run automatically |
+| `POLICY_TOOLS_OF(harness, effect)` | mock | {harness}: {effect} |
 | `RAW_TITLE(format)` | mock | {format} run document |
 | `RAW_BODY` | mock | Read-only resolved draft |
 | `COPY` | mock | Copy |

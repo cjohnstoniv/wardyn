@@ -56,7 +56,13 @@ export function changedRows(intent: RunIntent, base: RunIntent): Set<PolicyRowId
 
 const FILE_KEYS = ROW_KEYS.files;
 
-export function policyRows(draft: NewRunDraft, pre: ReviewPreflight | null, preview: PolicyPreviewResult | null): PolicyRow[] {
+export function policyRows(
+  draft: NewRunDraft,
+  pre: ReviewPreflight | null,
+  preview: PolicyPreviewResult | null,
+  /** A harness's display name; its id until the roster answers. */
+  harnessLabel: (id: string) => string = (id) => id,
+): PolicyRow[] {
   const { intent } = draft;
   const ctx = { draft, pre, preview };
   const access = pre?.access ?? preview?.access;
@@ -92,9 +98,15 @@ export function policyRows(draft: NewRunDraft, pre: ReviewPreflight | null, prev
   rows.push({ id: "files", label: NR_REVIEW.POLICY_FILES, value: names ?? NR_REVIEW.WORK_NONE, detail: serverSource(ctx, { fields: ["workspace_mounts", "workspace_repos"] }) ?? draftSource(draft, FILE_KEYS, NR_REVIEW.PROV_ADDED) });
 
   // One value per distinct default across the included harnesses, so a mixed set is not summarised by its first.
-  const defaults = (access?.harnesses ?? []).flatMap((h) => (h.default ? [h.default] : []));
-  const effects = [...new Set(defaults.map((d) => d.effective))].map((e) => EFFECT_VALUE[e] ?? NR_REVIEW.POLICY_HOLD);
-  const value = defaults.length ? joined(...effects) : intent.tool_approvals === "hold" ? NR_REVIEW.POLICY_HOLD : NR_REVIEW.POLICY_AUTOMATIC;
-  rows.push({ id: "tools", label: NR_REVIEW.POLICY_TOOLS, value, detail: effects.length === 1 ? defaults[0].source.name : undefined });
+  // When they differ each says which harness it is for; when they agree it is one value and its source policy.
+  const defaults = (access?.harnesses ?? []).flatMap((h) => (h.default ? [{ harness: h.harness, default: h.default }] : []));
+  const effectOf = (d: { default: { effective: string } }) => EFFECT_VALUE[d.default.effective] ?? NR_REVIEW.POLICY_HOLD;
+  const effects = [...new Set(defaults.map(effectOf))];
+  const value = !defaults.length
+    ? intent.tool_approvals === "hold" ? NR_REVIEW.POLICY_HOLD : NR_REVIEW.POLICY_AUTOMATIC
+    : effects.length > 1
+      ? joined(...defaults.map((d) => NR_REVIEW.POLICY_TOOLS_OF(harnessLabel(d.harness), effectOf(d))))
+      : effects[0];
+  rows.push({ id: "tools", label: NR_REVIEW.POLICY_TOOLS, value, detail: effects.length === 1 ? defaults[0].default.source.name : undefined });
   return rows;
 }

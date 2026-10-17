@@ -320,6 +320,16 @@ test.describe("New Run, Review: what the summaries say the server will do", () =
     await expect(tools).not.toContainText(NR_REVIEW.POLICY_AUTOMATIC);
   });
 
+  test("harnesses with different tool defaults are each named in the Tools and pushes row (DR-0244)", async ({ page }) => {
+    const held = { ...CLAUDE_UNGATED, harness: "claude-code", default: { ...CLAUDE_UNGATED.default, effective: "hold" } };
+    const denied = { ...CLAUDE_UNGATED, harness: "codex-cli", default: { ...CLAUDE_UNGATED.default, effective: "deny" } };
+    await stub(page, { preflight: { ...CLEAR, access: { ...SCENARIO_ACCESS.member, harnesses: [held, denied] } } as never });
+    await openReviewWith(page, ENV);
+    await expect(page.locator("[data-policy-row=tools]")).toContainText(
+      new RegExp(`(Claude Code|claude-code): ${NR_REVIEW.POLICY_HOLD} · (Codex[^:·]*|codex-cli): ${TOOLS_COPY.EFFECT_DENY}`),
+    );
+  });
+
   test("a CPU cut and a main-drive cut keep the shared resources-capped line beside the narrowed notice (DR-0263)", async ({ page }) => {
     const line = "resources capped to operator maximum";
     const cut = { source: "governance", source_name: "Platform team", capped: true };
