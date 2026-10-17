@@ -133,7 +133,9 @@ func (m *Manager) apply(ctx context.Context, a runnerwire.PendingAction) (runner
 		return runnerwire.ActionResult{}, errors.New("unexpected quarantine proof")
 	}
 	if r.ContainmentOnly && !missingIdentityAction(a) {
-		return runnerwire.ActionResult{}, errors.New("containment-only identity refuses this action")
+		// Refused for the same reason: a record kept only for containment never takes another action,
+		// and every control-plane boot queues an end for a terminal run that kept its sandbox ref.
+		return m.refuseAction(ctx, a, refusal(errors.New("containment-only identity refuses this action")))
 	}
 	if a.Kind == types.RunnerActionRecoverContainment {
 		return m.recoverContainment(a, r)

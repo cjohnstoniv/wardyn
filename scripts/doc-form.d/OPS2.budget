@@ -54,4 +54,5 @@ docs/operations/console-branding.md=943 share=35
 # docs/operations/hybrid-laptops.md 3538 adds 99 over 3439 (0.9.3 FIN-E), measured: the posture-on-record notes and the proxy-image skew note.
 # docs/operations/hybrid-laptops.md 3864, measured at the FIN-E2 merge into the final train (both sides' sentences).
 # docs/operations/hybrid-laptops.md 3926 adds 62, measured: runner trust classes (with the required --reason) and by_trust in Resident credentials and posture.
-docs/operations/hybrid-laptops.md=3926 share=35
+# docs/operations/hybrid-laptops.md 4022 adds 96 over 3926, measured: the control-plane restart and re-registration rows in Offline and revocation.
+docs/operations/hybrid-laptops.md=4022 share=35
