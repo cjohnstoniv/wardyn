@@ -247,13 +247,6 @@ func (o *orgEnv) liveUntil(t, owner *testing.T, extra map[string]any) string {
 	return id
 }
 
-// agent runs argv in the run's agent container.
-func (o *orgEnv) agent(t *testing.T, id string, argv ...string) string {
-	t.Helper()
-	out, _ := exec.Command("kubectl", append([]string{"--kubeconfig", o.adminKC, "-n", o.runsNS, "exec", "wardyn-agent-" + id, "-c", "agent", "--"}, argv...)...).CombinedOutput()
-	return string(out)
-}
-
 // proxyNode and proxyPID name the node holding the run's proxy pod and the PID of its sandbox, whose
 // network namespace a node-side probe enters (nsenter -t PID -n) to dial as the proxy.
 func (o *orgEnv) proxyNetns(t *testing.T, id string) (string, string) {
