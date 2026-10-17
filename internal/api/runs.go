@@ -157,6 +157,21 @@ func (s *Server) warnWorkspaceCollision(r *http.Request, runID uuid.UUID, worksp
 // mints the run identity, and (if a runner is wired) dispatches the sandbox.
 // Without a runner the run stays PENDING with a clear status message (headless
 // API-only operation is allowed for v0).
+// refuseCreatedRun answers a run insert that failed: it revokes the identity minted for the run, then
+// answers a pool refusal when the insert lost to a pool change, or a server error.
+func (s *Server) refuseCreatedRun(w http.ResponseWriter, r *http.Request, runID uuid.UUID, pool types.ResolvedRunnerPool, err error) {
+	s.cfg.Identity.RevokeRun(context.WithoutCancel(r.Context()), runID) //nolint:errcheck // best-effort cleanup of the minted-but-unused token
+	if errors.Is(err, store.ErrRunnerPoolStale) {
+		writePoolRefusal(w, runnerpool.Refusal{Reason: runnerpool.ReasonStale, Name: pool.Name})
+		return
+	}
+	if refusal := insertRoomRefusal(err, pool); refusal != nil {
+		refusal.write(s, w, r)
+		return
+	}
+	writeServerError(w, r, "create run", err)
+}
+
 func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	var asked []byte // the request as asked, for the launch intent (launch_intent.go)
 	r = withAskedRequest(r, &asked)
@@ -238,16 +253,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	run.LaunchIntent = intent.doc
 	created, err := s.createRun(ctx, run)
 	if err != nil {
-		s.cfg.Identity.RevokeRun(context.WithoutCancel(ctx), runID) //nolint:errcheck // best-effort cleanup of the minted-but-unused token
-		if errors.Is(err, store.ErrRunnerPoolStale) {
-			writePoolRefusal(w, runnerpool.Refusal{Reason: runnerpool.ReasonStale, Name: f.place.pool.Name})
-			return
-		}
-		if refusal := insertRoomRefusal(err, f.place.pool); refusal != nil {
-			refusal.write(s, w, r)
-			return
-		}
-		writeServerError(w, r, "create run", err)
+		s.refuseCreatedRun(w, r, runID, f.place.pool, err)
 		return
 	}
 	s.recordPolicyApplyAudits(ctx, f.source)
