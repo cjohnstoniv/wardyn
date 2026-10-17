@@ -159,6 +159,19 @@ func TestDispatch_ADOLaneDeclineNamesOnlyTheDecliningHosts(t *testing.T) {
 	}
 }
 
+// An SSH clone of a declined repository keeps its ssh. host, so the hosts the sandbox is given carry
+// that spelling too, or agent-run's clone-failure hint stays silent for it.
+func TestDispatch_ADOLaneDeclineNamesTheSSHHost(t *testing.T) {
+	shared := adoEntraTestRow()
+	shared.CredentialSource = ""
+	const sshRepo = "git@ssh.dev.azure.com:v3/contoso/proj/app"
+	p := dispatchParams{ADOLaneRepo: sshRepo, Policy: types.RunPolicySpec{WorkspaceRepos: []types.WorkspaceRepo{{Repo: sshRepo}}}}
+	d := dispatchADOLane(t, adoSite(shared), nil, p)
+	if got := d.spec.Env[adoLaneDeclinedHostsEnv]; got != "dev.azure.com ssh.dev.azure.com" {
+		t.Errorf("%s = %q, want dev.azure.com ssh.dev.azure.com", adoLaneDeclinedHostsEnv, got)
+	}
+}
+
 // T8 (H2): a source scan of an Azure DevOps repository never takes the lane:
 // it sets run.Repo and dispatches with no ADOLaneRepo.
 func TestSourceScan_NeverTakesTheADOLane(t *testing.T) {

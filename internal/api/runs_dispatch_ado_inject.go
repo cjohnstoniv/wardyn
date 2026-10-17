@@ -980,7 +980,9 @@ func declinedADOHosts(sc types.SiteConfig, siteCfgErr error, ws []types.Workspac
 		} else if a, why, isADO := adoEntraLaneForRepo(sc, r, owner); !isADO || (why == "" && a.rowID != "") {
 			continue
 		}
-		hosts = append(hosts, strings.ToLower(h))
+		// Both spellings: agent-run compares the clone URL's own host, and an SSH clone
+		// keeps ssh.dev.azure.com where the lane folds it to dev.azure.com.
+		hosts = append(hosts, strings.ToLower(h), strings.ToLower(t.host))
 	}
 	slices.Sort(hosts)
 	return slices.Compact(hosts)
