@@ -11,6 +11,7 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
@@ -54,6 +55,10 @@ func main() {
 	// runner's probe passes a name its --add-host maps to the relay's address, so the
 	// target may be resolved through /etc/hosts.
 	egressCanary := flag.String("egress-canary", "", "internal: TCP-dial host:port, exit 0 on connect / 1 on refuse-or-timeout (k8s substrate and Docker runner relay probes only)")
+	// diskFree is the Docker runner's disk probe: run in a throwaway container on a VM-backed engine
+	// (Docker Desktop, Colima, Rancher Desktop), whose disk is not a path on the host, it prints the
+	// MiB free to an unprivileged writer under the path and exits 0, or exits 1 when it cannot be read.
+	diskFree := flag.String("disk-free", "", "internal: print the MiB free under this path and exit (Docker runner disk probe only)")
 	// stageConfigSrc/stageConfigDst are the k8s substrate's init-container
 	// mode (T-28, issue #688): this binary, run once as an init container
 	// with the SAME image the sidecar itself uses, stages the proxy config
@@ -72,6 +77,15 @@ func main() {
 			os.Exit(1)
 		}
 		_ = conn.Close()
+		os.Exit(0)
+	}
+
+	if *diskFree != "" {
+		mib, err := freeDiskMiB(*diskFree)
+		if err != nil {
+			os.Exit(1)
+		}
+		fmt.Println(mib)
 		os.Exit(0)
 	}
 
@@ -296,4 +310,13 @@ func cgroupMemoryLimitBytes(paths ...string) (int64, bool) {
 		return v, true
 	}
 	return 0, false
+}
+
+// freeDiskMiB is the space free to an unprivileged writer under path, in MiB.
+func freeDiskMiB(path string) (int64, error) {
+	var st syscall.Statfs_t
+	if err := syscall.Statfs(path, &st); err != nil {
+		return 0, err
+	}
+	return int64(st.Bavail) * int64(st.Bsize) >> 20, nil
 }

@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/contentscan"
@@ -136,24 +137,54 @@ func (s *decisionSink) drop(id uuid.UUID) {
 
 func (s *decisionSink) release(id uuid.UUID) { s.mu.Lock(); s.drop(id); s.mu.Unlock() }
 
-func (p *Proxy) admitSpoolHTTP(w http.ResponseWriter, r *http.Request) (*http.Request, func()) {
+// admitSpoolHTTP reserves r's audit record before r is served. mitmHost is the
+// terminated tunnel's host for an inner request, "" for one ServeHTTP admits.
+func (p *Proxy) admitSpoolHTTP(w http.ResponseWriter, r *http.Request, mitmHost string) (*http.Request, func()) {
 	if p.sink == nil || p.sink.local == nil {
 		return r, func() {}
 	}
 	// JSON can expand one control byte into six. Refuse an oversized target
 	// before forwarding rather than discover that the final row cannot fit.
 	if r.URL == nil || 6*(len(r.URL.String())+len(r.Host)+len(r.Method)) > runnerspool.MaxRecordBytes-4096 {
-		http.Error(w, "egress audit record too large", http.StatusRequestURITooLong)
+		p.refuseUnaudited(w, r, mitmHost, http.StatusRequestURITooLong, reasonAuditRecordTooLarge, "egress audit record too large",
+			"the request target is too long to record in the run's egress audit, so it was not sent")
 		return nil, nil
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), spoolAdmitTimeout)
 	defer cancel()
 	id, err := p.sink.reserve(ctx, p.spoolReservationBytes(r))
 	if err != nil {
-		http.Error(w, "egress audit spool unavailable", http.StatusServiceUnavailable)
+		p.refuseUnaudited(w, r, mitmHost, http.StatusServiceUnavailable, reasonAuditUnavailable, "egress audit spool unavailable",
+			"the run's egress audit cannot record another request now, so it was not sent")
 		return nil, nil
 	}
 	return r.WithContext(context.WithValue(r.Context(), spoolTicketKey{}, id)), func() { p.sink.release(id) }
+}
+
+// refuseUnaudited answers a request the audit could not record, keeping its
+// status: plain text on the forward lane, the SDK's error shape on a brokered
+// route or an LLM or AWS host. ServeHTTP admits before it routes, so a
+// brokered route is told by its path here.
+func (p *Proxy) refuseUnaudited(w http.ResponseWriter, r *http.Request, mitmHost string, status int, reason, plainMsg, sentence string) {
+	shape := shapePlain
+	switch {
+	case mitmHost != "":
+		shape = p.shapeOfHost(mitmHost)
+	case r.Method == http.MethodConnect || r.URL == nil:
+	case r.URL.Host != "":
+		shape = p.shapeOfHost(r.URL.Hostname())
+	case strings.HasPrefix(r.URL.Path, llmAnthropicPrefix):
+		host, _, _ := p.llmUpstream(anthropicHost)
+		shape = routeShape(shapeAnthropic, host)
+	case strings.HasPrefix(r.URL.Path, llmOpenAIPrefix):
+		host, _, _ := p.llmUpstream(openaiHost)
+		shape = routeShape(shapeOpenAI, host)
+	}
+	if shape == shapePlain {
+		http.Error(w, plainMsg, status)
+		return
+	}
+	writeProviderError(w, shape, status, reason, "wardyn: "+reason+": "+sentence, nil)
 }
 
 func (s *decisionSink) emitLocal(log egress.DecisionLog) {

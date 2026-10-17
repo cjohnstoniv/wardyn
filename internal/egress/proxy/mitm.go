@@ -233,10 +233,15 @@ func (p *Proxy) isCorpMITMHost(host string) bool {
 // channelForHost maps a model host to its request schema for inspection. A non-LLM host (e.g. a
 // corp artifact host MITM'd only for token injection) maps to ChannelGeneric, so the content scanner
 // never runs against package-registry traffic. A method, not a free function, so a configured
-// gateway host classifies as its vendor's channel, not generic.
+// gateway host classifies as its vendor's channel, not generic. A gateway both vendors share is
+// channelSharedGateway: only a brokered route names the schema, so a direct request's body is
+// marked uninspected (refused under fail-closed blocking), never read as one vendor's by chance.
 func (p *Proxy) channelForHost(host string) contentscan.Channel {
 	h := strings.TrimSuffix(strings.ToLower(host), ".")
-	if vendor, ok := p.gatewayVendor[h]; ok {
+	if vendor, ok := p.gatewayVendorOf(h); ok {
+		if vendor == "" {
+			return channelSharedGateway
+		}
 		h = vendor
 	} else if vendor, ok := p.channelHosts[h]; ok {
 		h = vendor
@@ -421,7 +426,7 @@ func (p *Proxy) serveMITMRequest(w http.ResponseWriter, r *http.Request, host st
 		return
 	}
 	var release func()
-	r, release = p.admitSpoolHTTP(w, r)
+	r, release = p.admitSpoolHTTP(w, r, host)
 	if r == nil {
 		return
 	}
@@ -441,7 +446,7 @@ func (p *Proxy) serveAdmittedMITMRequest(w http.ResponseWriter, r *http.Request,
 		}
 		// memoed=false: built right here (policy:method on an inner request), never from the
 		// private-IP memo.
-		p.writeEgressDeny(w, host, port, &log, false)
+		p.writeEgressDenyLLM(w, p.shapeOfHost(host), host, port, &log)
 		return
 	}
 
@@ -476,9 +481,9 @@ func (p *Proxy) serveAdmittedMITMRequest(w http.ResponseWriter, r *http.Request,
 	target, _, terr := p.egressTarget(host, port)
 	if terr != nil {
 		p.emitVetFailed(r, host, port, mitmSource, terr)
-		// AWS lane: modelled, valid-JSON error body — MITM-terminated sibling of
+		// An LLM or AWS host gets its SDK's error body: MITM-terminated sibling of
 		// llm_routes.go's vet-failed site.
-		p.httpErrorAWSAware(w, host, "llm upstream vet failed", terr, false, http.StatusInternalServerError, "InternalServerException")
+		p.httpErrorShaped(w, p.shapeOfHost(host), host, "llm upstream vet failed", terr, http.StatusBadGateway, vetFault(port, mitmSource, terr))
 		return
 	}
 
@@ -558,9 +563,10 @@ func (p *Proxy) serveAdmittedMITMRequest(w http.ResponseWriter, r *http.Request,
 			return
 		}
 		p.emitLLMDecision(r, host, port, egress.Deny, mitmSource, nil)
-		// AWS lane: 401 UnauthorizedException, generalizing writeSSOUnauthorized's precedent above —
-		// a credential resolve failure is non-retryable the same way a spent hold is.
-		p.httpErrorAWSAware(w, host, "llm credential refresh failed", ierr, false, http.StatusUnauthorized, "UnauthorizedException")
+		// AWS lane: 401 UnauthorizedException (reasonStatus), generalizing writeSSOUnauthorized's
+		// precedent above — a credential resolve failure is non-retryable the same way a spent hold is.
+		p.httpErrorShaped(w, p.shapeOfHost(host), host, "llm credential refresh failed", ierr, http.StatusBadGateway,
+			brokeredFault{port: port, ruleSource: mitmSource, reason: reasonCredentialUnavailable})
 		return
 	}
 	rearmBodyDeadline(w) // the resolve may have held the request (credhold.go)

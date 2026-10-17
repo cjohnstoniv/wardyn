@@ -92,6 +92,19 @@ type Config struct {
 	// the target, so the proxy's control-plane clamp covers one address, and an
 	// IP-literal URL (which no hosts entry can remap) refuses the create.
 	ControlPlaneRelay func(controlPlaneURL *url.URL) (target string, err error)
+	// TrustedCAPEM, set only by wardyn-runnerd, is the runner's own validated
+	// corporate CA bundle (--trusted-ca-file, runner.TrustedCABundle). It
+	// becomes every proxy's trusted_ca_pem, on create and on revive, in place
+	// of the organisation's (never sent to a runner), and is appended to the
+	// sandbox's CA trust after whatever the organisation staged
+	// (runner.InstallSandboxTrustedCA) when it and the staged PEM fit
+	// runner.MaxEnvTrustedCAPEM. Empty changes nothing.
+	TrustedCAPEM string
+	// TrustedCAFile, set only by wardyn-runnerd, is the host file holding
+	// TrustedCAPEM. It is bind-mounted read-only at runner.TrustedCAMountPath
+	// in every sandbox; it alone carries the bundle when the bundle and the
+	// PEM already staged do not fit runner.MaxEnvTrustedCAPEM.
+	TrustedCAFile string
 }
 
 // RecordingMountTarget is where RecordingMount appears inside the agent
@@ -167,7 +180,7 @@ type Driver struct {
 
 	// engArch caches the engine's normalised architecture (guarded by mu).
 	engArch string
-	// archVerdicts caches, per foreign image architecture, a conclusive archVerdictKind.
+	// archVerdicts caches, per archVerdictKey, a runnable archVerdictKind.
 	archVerdicts sync.Map
 }
 
@@ -280,13 +293,16 @@ func (d *Driver) Classes(ctx context.Context) (substrate.ClassSupport, error) {
 // onPulling (nil-safe) fires immediately BEFORE the pull that blocks, and
 // only there: imagePresent has just said the image is absent, so this is the
 // one place a first download can be ASSERTED rather than hedged.
-func (d *Driver) ensureImage(ctx context.Context, ref string, onPulling func()) error {
+//
+// runtime is the runtime ref will run under ("" is the engine default): the image-architecture
+// check may start ref, and only ever under that runtime.
+func (d *Driver) ensureImage(ctx context.Context, ref, runtime string, onPulling func()) error {
 	present, err := d.imagePresent(ctx, ref)
 	if err != nil {
 		return err
 	}
 	if present {
-		return d.checkImageArch(ctx, ref)
+		return d.checkImageArch(ctx, ref, runtime)
 	}
 	if onPulling != nil {
 		onPulling()
@@ -296,7 +312,7 @@ func (d *Driver) ensureImage(ctx context.Context, ref string, onPulling func()) 
 	if err := dockerutil.PullImage(ctx, d.cli, ref, "docker"); err != nil {
 		return pullFailure(ref, err)
 	}
-	return d.checkImageArch(ctx, ref)
+	return d.checkImageArch(ctx, ref, runtime)
 }
 
 // ImagePresent implements runner.ImageChecker: exported imagePresent, so a

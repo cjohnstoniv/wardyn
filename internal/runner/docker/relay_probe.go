@@ -52,7 +52,7 @@ func (d *Driver) ProbeRelay(ctx context.Context, target string, port uint16) err
 	if !present {
 		return fmt.Errorf("docker: probe relay: proxy image %q is not present locally; run `docker pull %s`", image, image)
 	}
-	if err := d.checkImageArch(ctx, image); err != nil {
+	if err := d.checkImageArch(ctx, image, ""); err != nil {
 		return fmt.Errorf("docker: probe relay: %w", err)
 	}
 

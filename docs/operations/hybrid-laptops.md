@@ -26,6 +26,8 @@
 ## Requirements
 
 - `setup` and `serve` find the relay address and prove it with a probe container on Docker Desktop, Rancher Desktop (dockerd) and other VM-backed engines; Rancher Desktop's containerd mode is unsupported. See [Requirements](../runner-registration.md#requirements). There is no native Windows binary.
+- The default laptop storage driver (overlayfs on Docker Desktop, Colima and Rancher Desktop) cannot cap a run's disk, so `disk_mib` is not enforced there; `setup` says so.
+- On a VM-backed engine `setup` measures the VM's free disk with the proxy image (`wardyn-proxy -disk-free /`). `--total-disk` overrides it, and is needed when the probe cannot run.
 - The full list, and why `serve` refuses to start: [Requirements](../runner-registration.md#requirements).
 
 ## Resident credentials and posture
@@ -62,7 +64,39 @@
 - The organisation's [`internal_hosts`](../OPERATIONS.md#network-upstream-proxy-and-egress-redirects) declarations reach a laptop runner's proxy as they do a cluster one. A host that resolves to a private address (PrivateLink, Private Service Connect, a zero-trust client's `100.64.0.0/10` range) is reached when it is declared there, and the decision row reads `rule_source: site-config:internal-host`.
 - A declaration lifts only the private-IP guard for that suffix. The egress allowlist still decides, and loopback, link-local and metadata addresses stay closed.
 - On a laptop the sandbox resolves through the person's network, so declare `cidrs` on each entry a laptop estate uses. An entry without them lifts the whole private range for that suffix.
-- The organisation's upstream proxy, trusted CA, `upstream_proxy_no_proxy` and LLM upstream overrides are still not sent to a laptop.
+- The organisation's upstream proxy, trusted CA, `upstream_proxy_no_proxy` and LLM upstream overrides are still not sent to a laptop's proxy. The runner's own CA bundle takes the trusted CA's place: see below.
+
+### A corporate CA on a laptop runner
+
+- Behind a TLS-inspecting proxy, give the runner your organisation's roots. Every run's proxy and sandbox then trust them beside the system roots and the run's own interception CA.
+- Certificates only, your organisation's roots, 64 KiB at most: a merged system bundle is refused.
+- Only `--trusted-ca-file` or `WARDYN_TRUSTED_CA_FILE` (what setup writes) is read, never `SSL_CERT_FILE` or `SSL_CERT_DIR`.
+- When an organisation's own CA is also staged and the two pass 64 KiB, agent images older than 0.9.3 trust only the organisation's roots.
+
+The bundle is read when `serve` starts; a bad file stops it and is named.
+
+1. Export the roots. On macOS (one `-c` per root):
+
+   ```sh
+   security find-certificate -a -p -c "Example Corp Root CA" /Library/Keychains/System.keychain \
+     > "$HOME/Library/Application Support/wardyn/corp-ca.pem"
+   ```
+
+   On Linux:
+
+   ```sh
+   mkdir -p ~/.config/wardyn
+   cat /usr/local/share/ca-certificates/*.crt > ~/.config/wardyn/corp-ca.pem      # Debian, Ubuntu
+   cat /etc/pki/ca-trust/source/anchors/*.pem > ~/.config/wardyn/corp-ca.pem      # Fedora, RHEL
+   ```
+
+2. Run setup with the file. It checks the file before the token is spent; a rerun keeps it. If the kept file has moved, rerun with `--trusted-ca-file <new file>`.
+
+   ```sh
+   wardyn-runnerd setup --org https://wardyn.example --trusted-ca-file ~/.config/wardyn/corp-ca.pem
+   ```
+
+3. If your shell's `SSL_CERT_FILE` already names the roots, setup says so; pass it with `--trusted-ca-file "$SSL_CERT_FILE"`.
 
 ## Claiming a runner
 

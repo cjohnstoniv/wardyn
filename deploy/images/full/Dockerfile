@@ -86,12 +86,15 @@ RUN if [ -n "$NPM_REGISTRY" ]; then npm config set registry "$NPM_REGISTRY"; fi;
     npm install -g "pnpm@${PNPM_VERSION}" && pnpm --version
 
 # JDK 21 (Temurin) + Maven, for jsoup (needs 21) and JVM projects generally.
+ARG TARGETARCH
 RUN install -d /etc/apt/keyrings \
     && wget -qO - https://packages.adoptium.net/artifactory/api/gpg/key/public | gpg --dearmor -o /etc/apt/keyrings/adoptium.gpg \
     && echo "deb [signed-by=/etc/apt/keyrings/adoptium.gpg] https://packages.adoptium.net/artifactory/deb trixie main" > /etc/apt/sources.list.d/adoptium.list \
     && apt-get update && apt-get install -y --no-install-recommends temurin-21-jdk maven \
-    && rm -rf /var/lib/apt/lists/*
-ENV JAVA_HOME=/usr/lib/jvm/temurin-21-jdk-amd64
+    && rm -rf /var/lib/apt/lists/* \
+    && ln -s "/usr/lib/jvm/temurin-21-jdk-${TARGETARCH:-$(dpkg --print-architecture)}" /usr/lib/jvm/temurin-21-jdk
+# The JDK installs under an architecture-suffixed directory (-amd64, -arm64); the arch-neutral link keeps JAVA_HOME one value.
+ENV JAVA_HOME=/usr/lib/jvm/temurin-21-jdk
 
 # ── Azure CLI (az) (the Azure CLI component, cli.kind azure) ─────────────────
 # From Microsoft's apt repository. The repository's signing key is checked by
@@ -190,7 +193,7 @@ RUN printf '%s\n' \
       'export GOTOOLCHAIN=local' \
       'export CARGO_HOME=/opt/rust' \
       'export RUSTUP_HOME=/opt/rust' \
-      'export JAVA_HOME=/usr/lib/jvm/temurin-21-jdk-amd64' \
+      'export JAVA_HOME=/usr/lib/jvm/temurin-21-jdk' \
       'export npm_config_cache=/home/agent/.cache/npm' \
       > /etc/profile.d/toolchains.sh
 

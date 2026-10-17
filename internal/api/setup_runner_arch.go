@@ -64,10 +64,12 @@ func runnerArchImagesCheck(counts map[string]int, plainArch string, images map[s
 		if n == 1 {
 			noun = "runner"
 		}
-		detail = append(detail, fmt.Sprintf("%d %s %s. These WARDYN_AGENT_IMAGES keys name no %s image: %s. A run on an %s runner uses the plain ref, which works only if it is a multi-arch image.",
+		detail = append(detail, fmt.Sprintf("%d %s %s. These WARDYN_AGENT_IMAGES keys name no %s image: %s. A run on an %s runner uses the plain ref, which works only if it is a multi-arch image; a single-arch image runs under emulation, or is refused when the engine cannot emulate it.",
 			n, arch, noun, arch, strings.Join(missing, ", "), arch))
 		if fix == "" {
-			fix = fmt.Sprintf("Add %q: \"<%s ref>\" (the same ref if it is multi-arch), then restart wardynd.", missing[0]+"@"+arch, arch)
+			fix = fmt.Sprintf("Add %q: \"<%s ref>\" (the same ref if it is multi-arch; used by runs on a registered %s runner), then restart wardynd. ", missing[0]+"@"+arch, arch, arch) +
+				"If you built the image, build it multi-arch (docker buildx build --platform linux/amd64,linux/arm64); " +
+				"if it is a published Wardyn image, check your mirror copied all platforms (docker buildx imagetools inspect <ref>)."
 		}
 	}
 	if len(detail) == 0 {

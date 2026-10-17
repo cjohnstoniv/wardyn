@@ -192,6 +192,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_USER_DESKTOP` | bool | `false` | **user desktop**: asserts that the human using this daemon is a **user**; boot is **refused** unless local mode is off and OIDC is configured (flag `-member-mode`). Set `WARDYN_ORG_URL` to enrol, see [Enrolling into an org control plane](DESKTOP.md#enrolling-into-an-org-control-plane). [Details](#wardyn_user_desktop) |
 | `WARDYN_ORG_URL` | string | (unset) | Desktop enrolment URL (`-org-url`); unset disables hybrid posture. Requires `WARDYN_USER_DESKTOP`; failed enrolment refuses boot. [Details](#wardyn_org_url) |
 | `WARDYN_RUNNER_ORG_URL` | string | (unset) | Public runner identity binding (`-runner-org-url`); invalid/unset refuses registration/streams. HTTPS or loopback HTTP; no userinfo/query/fragment. Never inferred from headers. |
+| `WARDYN_RUNNER_STATE_DIR` | path | (unset) | **`wardyn-runnerd setup`** writes it into the runner service's env file ([`setup_host.go`](../cmd/wardyn-runnerd/setup_host.go)), and the Linux unit ([`wardyn-runnerd.service`](../deploy/runner/wardyn-runnerd.service)) passes it as `serve --state-dir`: the private directory holding the runner's identity (`runner.json`). `wardyn-runnerd` does not read it; run by hand, pass `--state-dir`. |
 | `WARDYN_ORG_ENROLMENT_TOKEN` 🔒 | string | (unset) | Secret enrolment token this device presents to `WARDYN_ORG_URL`. Setting it with `WARDYN_ORG_URL` unset is **refused** at boot; it is required on first boot (flag `-org-enrolment-token`). [Details](#wardyn_org_enrolment_token) |
 | `WARDYN_ORG_ENROLMENT_TOKEN_FILE` | string (path) | (unset) | File holding `WARDYN_ORG_ENROLMENT_TOKEN`'s value, read once at boot. Setting it together with `WARDYN_ORG_ENROLMENT_TOKEN` refuses boot (`resolveSecretFiles`, [`cmd/wardynd/secret_file.go`](../cmd/wardynd/secret_file.go)). [Details](#wardyn_org_enrolment_token_file) |
 | `WARDYN_SCIM_TOKEN` 🔒 | string | (unset = **no SCIM route is mounted**) | The bearer the SCIM 2.0 Users routes accept: at least 32 bytes. Set, boot is **refused** unless OIDC is configured on an Entra issuer naming one tenant (`https://login.microsoftonline.com/<tenant id>/v2.0`); on a database outage every sign-in fails closed (flag `-scim-token`). [Details](#wardyn_scim_token) |
@@ -247,6 +248,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_CONTROL_PLANE_URL` | string | `https://wardynd:8443` | the URL every run's proxy sidecar dials to reach this daemon's **internal TLS listener**; `http://` is refused at boot unless the host is loopback (flag `-control-plane-url`). [Details](#wardyn_control_plane_url) |
 | `WARDYN_INTERNAL_LISTEN` | string | `:8443` | listen address of the proxy-facing TLS listener, served with a certificate from wardynd's own internal CA; never publish it outside the network your proxies share with wardynd (flag `-internal-listen`). [Details](#wardyn_internal_listen) |
 | `WARDYN_PROXY_IMAGE` | string | (unset) | OCI image for the wardyn-proxy sidecar (flag `-proxy-image`). **Bump it in lockstep with wardynd**: since 0.7 the sidecar decodes its config strictly (`LoadConfigBytes`, [`internal/egress/proxy/config.go`](../internal/egress/proxy/config.go)) and refuses to start on a key it cannot honour. [Details](#wardyn_proxy_image) |
+| `WARDYN_PROXY_IMAGE_PINNED` | `1` | (unset) | **`wardyn-runnerd setup` only**: written beside `WARDYN_PROXY_IMAGE` when `--proxy-image` named it, so a rerun keeps the pin; serve ignores it |
 | `WARDYN_PROXY_IMAGE_AMD64` | string | (unset) | the proxy image a self-hosted runner that reports amd64 receives when it registers (flag `-proxy-image-amd64`); unset gives the runner `WARDYN_PROXY_IMAGE`. The organisation's own sandboxes always use `WARDYN_PROXY_IMAGE` |
 | `WARDYN_PROXY_IMAGE_ARM64` | string | (unset) | the proxy image a self-hosted runner that reports arm64 receives when it registers (flag `-proxy-image-arm64`); unset gives the runner `WARDYN_PROXY_IMAGE`. The organisation's own sandboxes always use `WARDYN_PROXY_IMAGE` |
 | `WARDYN_DRIVE_PROBE_IMAGE` | string | (unset = the pinned busybox-class default) | OCI image the docker runner's `host_path` user-drive **agent-readability probe** runs a container from; an operator who overrides this must make sure the image is reachable at boot (flag `-drive-probe-image`). [Details](#wardyn_drive_probe_image) |
@@ -1626,6 +1628,14 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - See [OPERATIONS.md § Network](OPERATIONS.md#network-upstream-proxy-and-egress-redirects)
 - Needs an agent image that installs the bundle (`install_mitm_ca` in `agent-run-lib.sh`; every published image from 0.7 does, including `agent-base`).
 - A BYOI image that never calls it sees the REPLACE-vars point at a missing file.
+- **On a laptop runner** (`wardyn-runnerd serve`, flag `--trusted-ca-file`) the organisation's bundle never reaches the run's proxy; the runner's own does ([`cmd/wardyn-runnerd/trusted_ca.go`](../cmd/wardyn-runnerd/trusted_ca.go)).
+- Never read from `SSL_CERT_FILE` or `SSL_CERT_DIR`; run `setup --trusted-ca-file "$SSL_CERT_FILE"` to use one.
+- Same validation as `wardynd`, read at startup only; a bad file (named) refuses startup.
+- It becomes every proxy's `trusted_ca_pem` (create and revive, on stdin) and is written to `<state dir>/trusted-ca.pem`, which every sandbox mounts read-only at `/etc/wardyn-trusted-ca.pem`.
+- Over 64 KiB refuses startup: with nothing staged, the sandbox trusts it only through `WARDYN_MITM_CA_PEM`.
+- Appended there while it and the organisation's staged CA fit 64 KiB; beyond, only the mounted file carries it (images from 0.9.3).
+- On `wardynd` boot warns over 64 KiB and refuses over 120 KiB: the sandbox gets it in one environment variable, which Linux caps at 128 KiB.
+- `setup --trusted-ca-file` writes it into the service definition; a rerun keeps it.
 
 ### `WARDYN_DAEMON_PROXY_URL`
 
@@ -1916,7 +1926,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_START_FOLDER` | string | (unset) | the run's `start_folder`: a folder inside one attachment, or `image_default` for the image's own directory. `agent-run` fails rather than start elsewhere |
 | `WARDYN_USER_DRIVE` | string (`<target>:ro\|rw`) | (unset) | the run's USER DRIVE, present ONLY when one is mounted: the in-container target and the mode. An ANNOUNCEMENT, never the mechanism: the mount is made by the runner (`applyUserDriveEnv`, [`internal/api/runs_dispatch_mounts.go`](../internal/api/runs_dispatch_mounts.go)). [Details](#wardyn_user_drive) |
 | `WARDYN_SSH_GRANTS` 🔒 | string (JSON) | (unset) | brokered SSH grants |
-| `WARDYN_MITM_CA_PEM` | string (PEM bundle) | (unset) | CA certificate(s) the sandbox trusts: the per-run TLS-MITM CA when active, with the operator's `WARDYN_TRUSTED_CA_FILE` bundle appended when configured (`installSandboxTrustedCA`, [`internal/api/runs_dispatch_llm.go`](../internal/api/runs_dispatch_llm.go)). [Details](#wardyn_mitm_ca_pem) |
+| `WARDYN_MITM_CA_PEM` | string (PEM bundle) | (unset) | CA certificate(s) the sandbox trusts: the per-run TLS-MITM CA when active, with the operator's `WARDYN_TRUSTED_CA_FILE` bundle appended when configured (`runner.InstallSandboxTrustedCA`, [`internal/runner/trusted_ca.go`](../internal/runner/trusted_ca.go)). [Details](#wardyn_mitm_ca_pem) |
 | `WARDYN_TASK_MODE` | string | (unset) | run task mode (e.g. exec) |
 | `WARDYN_INTERACTIVE_START` | string | (unset) | `agent` makes an INTERACTIVE run's attach shell open in the image's agent CLI in the prepared workspace; unset/`shell` is a bare shell. Only ever set for interactive runs. [Details](#wardyn_interactive_start) |
 | `WARDYN_INTERACTIVE_SEED` | string | (unset) | the run's optional boot seed, its `task`, exported verbatim for an interactive run only; fires once at sandbox boot. [Details](#wardyn_interactive_seed) |
@@ -1952,7 +1962,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 
 ### `WARDYN_MITM_CA_PEM`
 
-- CA certificate(s) the sandbox trusts — the per-run TLS-MITM CA when `intercept_tls`/Claude sign-in injection is active, with the operator's `WARDYN_TRUSTED_CA_FILE` bundle appended when configured (`installSandboxTrustedCA`, [`internal/api/runs_dispatch_llm.go`](../internal/api/runs_dispatch_llm.go))
+- CA certificate(s) the sandbox trusts — the per-run TLS-MITM CA when `intercept_tls`/Claude sign-in injection is active, with the operator's `WARDYN_TRUSTED_CA_FILE` bundle appended when configured (`runner.InstallSandboxTrustedCA`, [`internal/runner/trusted_ca.go`](../internal/runner/trusted_ca.go))
 - A run with neither active never has this key at all.
 - `install_mitm_ca` (`agent-run-lib.sh`) treats it as an opaque PEM bundle, so multiple concatenated certificates work.
 

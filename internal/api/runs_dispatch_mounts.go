@@ -554,7 +554,7 @@ func applyEphemeralDirsEnv(sandboxEnv map[string]string, dirs []string) {
 //
 // Dispatch composes ONE env map and splits it once, at the end, so every
 // "is this variable already set?" refusal along the way (resolveEnvSecretGrants'
-// own overwrite guard, setSandboxCATrustVars' onlyIfUnset) still sees the whole
+// own overwrite guard, runner.SetSandboxCATrustVars' onlyIfUnset) still sees the whole
 // environment rather than half of it.
 //
 // Move, not copy: a key left in both maps would reach a k8s Pod spec twice —

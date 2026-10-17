@@ -119,7 +119,7 @@ describe("reasons", () => {
   it("are the Go closed set of internal/runnerpool/reasons.go", () => {
     const go = readFileSync(join(root, "internal/runnerpool/reasons.go"), "utf8");
     const goReasons = [...go.matchAll(/\bReason\w+\s+Reason = "([a-z_]+)"/g)].map((m) => m[1]);
-    expect(goReasons).toHaveLength(13);
+    expect(goReasons).toHaveLength(14);
     expect(new Set(RUNNER_POOL_REASONS)).toEqual(new Set(goReasons));
   });
 });

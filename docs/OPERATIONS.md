@@ -2387,7 +2387,7 @@ grep 'daemon egress proxy configured' <logs>
 - `WARDYN_TRUSTED_CA_FILE` closes that gap: a PATH to a PEM bundle of additional trusted roots, additive to the system roots, read once at `wardynd` boot ([ENV.md](ENV.md)).
 - The file must hold certificates only — a private key or CSR exported alongside the root is refused at boot (`loadTrustedCA`).
 - The bundle handed to the sidecar and the sandboxes is rebuilt from the parsed certificates, never copied from the raw file.
-- It reaches all three processes: `wardynd` mutates the shared `http.DefaultTransport`; the proxy sidecar and every sandbox get the SAME bundle forwarded per run (`runner.ProxyConfig.TrustedCAPEM`, `installSandboxTrustedCA`).
+- It reaches all three processes: `wardynd` mutates the shared `http.DefaultTransport`; the proxy sidecar and every sandbox get the SAME bundle forwarded per run (`runner.ProxyConfig.TrustedCAPEM`, `runner.InstallSandboxTrustedCA`).
 - Unset is byte-identical to today.
 - A file that does not exist, or whose content has no parseable certificate, refuses boot naming the var.
 

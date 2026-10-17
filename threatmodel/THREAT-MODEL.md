@@ -1,6 +1,6 @@
 # Wardyn Published Threat Model
 
-**Version:** v2 (tracks the shipped codebase; last reviewed at v0.9.2)
+**Version:** v2 (tracks the shipped codebase; last reviewed at v0.9.3-rc.1)
 **Status:** published alongside the codebase.
 
 **Implementation status markers.** Controls are tagged inline: **[shipped]**
@@ -1750,7 +1750,7 @@ hiding them would repeat the failure mode we are designed to avoid.
     - The bundle is additive to the system roots, so while the knob is set the middlebox can read and rewrite anything the three processes send over TLS.
     - `wardynd`'s own OIDC discovery, GitHub App transport and audit-webhook calls (all on the one mutated `http.DefaultTransport`).
     - The proxy sidecar's forward and control-plane transports.
-    - And — because `installSandboxTrustedCA` appends the same PEM into the sandbox's CA trust — the agent's TLS clients on a passthrough (non-MITM'd) CONNECT tunnel.
+    - And — because `runner.InstallSandboxTrustedCA` appends the same PEM into the sandbox's CA trust — the agent's TLS clients on a passthrough (non-MITM'd) CONNECT tunnel.
     - Wardyn's own inspection/masking (the `llm_inspection` guardrail, the per-run MITM CA) sits INSIDE that envelope, not above it.
     - There is no certificate pinning anywhere this trust applies — the bound is scope, not depth.
     - The PEM is operator-set at process boot only (read once, never a `SiteConfig` field an admin API write or a member could reach, never agent-reachable), additive rather than a replacement.
@@ -2547,7 +2547,7 @@ hiding them would repeat the failure mode we are designed to avoid.
     - Rows the organisation writes from its own acts — create, mint, approvals, `via_org` decisions — stay authoritative.
     - No ground truth exists for a local run: the relay refuses `/internal/groundtruth` and no host sensor runs on a laptop. Of §8's three audit streams, one is authoritative, one self-reported and one absent.
     - A runner's `machine_name` and `arch` are its own reports; the name is bounded to `253` bytes, the arch is `amd64`, `arm64` or empty, and neither is used for admission. `arch` only picks an image variant.
-    - On an architecture mismatch the runner starts the image once, for at most 3 s, with no network, mounts or capabilities, as uid 1000, under the engine's default runtime rather than the run's class runtime (accepted: it runs nothing the following sandbox would not).
+    - On an architecture mismatch the driver starts the image once, for at most 3 s, under the run's class runtime, with no network, host mounts or capabilities, as uid 1000. Only a runnable verdict is cached, per architecture and runtime.
     - A self-hosted runner's limits, `max_runs` among them, are owner-set and enforced by the organisation under the runner row lock (#85). The runner's own refusal backs up a wrong count; a killed run's sandbox counts until its kill action applies.
     - This replaces #50–#52 for client mode: one writer re-chains nothing, and the open question is what the runner chose to send.
 

@@ -16,11 +16,14 @@ var releaseVersion = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$`
 // buildVersion is this binary's version, swapped in tests.
 var buildVersion = version.String
 
+// releaseProxyRepo is where release proxy images are published.
+const releaseProxyRepo = "ghcr.io/cjohnstoniv/wardyn-proxy"
+
 // releaseProxyImage is the published proxy image built from this binary's version, or "" on a
 // development build, which has no matching image.
 func releaseProxyImage() string {
 	if v := buildVersion(); releaseVersion.MatchString(v) {
-		return "ghcr.io/cjohnstoniv/wardyn-proxy:" + v
+		return releaseProxyRepo + ":" + v
 	}
 	return ""
 }

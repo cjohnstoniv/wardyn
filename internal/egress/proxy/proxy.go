@@ -138,8 +138,8 @@ type Proxy struct {
 	// brokered routes (/wardyn/v1/...) to forward to the internal API.
 	controlPlaneURL string
 	// topologyRe are the operator-configured endpoints redactTopology removes
-	// from a SANDBOX-facing error body (httpError) — the control-plane base URL
-	// and the corp upstream proxy address. Compiled once; see topologyPatterns.
+	// from a SANDBOX-facing error body (httpError) — the control-plane base URL,
+	// the corp upstream proxy and LLM gateway hosts. See topologyPatterns.
 	topologyRe []*regexp.Regexp
 	// runToken is the per-run token that authenticates internal calls. It is
 	// held ONLY here in proxy memory and injected toward controlPlaneURL on the
@@ -462,7 +462,7 @@ func newProxy(opts Options) *Proxy {
 		controlPlaneURL:      controlPlaneEndpoint(opts.ControlPlaneURL, ""),
 		runToken:             opts.RunToken,
 		upstream:             opts.Upstream,
-		topologyRe:           topologyPatterns(controlPlaneEndpoint(opts.ControlPlaneURL, ""), opts.Upstream),
+		topologyRe:           append(topologyPatterns(controlPlaneEndpoint(opts.ControlPlaneURL, ""), opts.Upstream), gatewayPatterns(llmUpstreams)...),
 		noProxy:              compileNoProxy(opts.UpstreamNoProxy),
 		internalHosts:        internalHosts,
 		localSubnets:         opts.LocalSubnets,
@@ -594,7 +594,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var release func()
-	r, release = p.admitSpoolHTTP(w, r)
+	r, release = p.admitSpoolHTTP(w, r, "")
 	if r == nil {
 		return
 	}

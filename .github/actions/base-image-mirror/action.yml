@@ -110,17 +110,17 @@ runs:
         PY
         curl -fsS --retry 10 --retry-connrefused --retry-delay 1 -o /dev/null "http://127.0.0.1:$MIRROR_PORT/v2/"
 
-        # registry-mirrors is one of dockerd's live-reloadable options
-        # (docs.docker.com/reference/cli/dockerd, "Configuration reload
-        # behavior"): SIGHUP applies it with no restart, so containers already
-        # running (a job's `services:`) are untouched. Mirrors apply to
-        # docker.io only; loopback registries are insecure (plain http) by
-        # default.
+        # Put this mirror ahead of any mirror already configured (the job's
+        # mirror.gcr.io step). Mirrors apply to docker.io only; loopback
+        # registries are insecure (plain http) by default. A SIGHUP reload
+        # resets the host-gateway address, so restart dockerd and bring back
+        # the job's service containers.
         conf=/etc/docker/daemon.json
         sudo test -s "$conf" || echo '{}' | sudo tee "$conf" >/dev/null
-        sudo jq --arg m "http://127.0.0.1:$MIRROR_PORT" '.["registry-mirrors"] = [$m]' "$conf" > "$RUNNER_TEMP/daemon.json"
+        sudo jq --arg m "http://127.0.0.1:$MIRROR_PORT" '.["registry-mirrors"] = [$m] + ((.["registry-mirrors"] // []) - [$m])' "$conf" > "$RUNNER_TEMP/daemon.json"
         sudo install -m 0644 "$RUNNER_TEMP/daemon.json" "$conf"
-        sudo kill -HUP "$(pidof dockerd)"
+        running="$(docker ps -q)"; sudo systemctl restart docker
+        [ -z "$running" ] || docker start $running >/dev/null
         for _ in 1 2 3 4 5 6 7 8 9 10; do
           docker info --format '{{json .RegistryConfig.Mirrors}}' | grep -qF "127.0.0.1:$MIRROR_PORT" && break
           sleep 1

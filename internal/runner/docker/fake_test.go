@@ -84,6 +84,8 @@ type fakeDocker struct {
 	images map[string]bool // ref -> present
 	// imageArch is the architecture ImageInspect reports per ref; absent = "" (unknown).
 	imageArch map[string]string
+	// imageMeta overlays RepoDigests, Os, Variant and Descriptor on the ImageInspect result per ref.
+	imageMeta map[string]image.InspectResponse
 
 	networks map[string]client.NetworkCreateOptions // name -> opts (id == name here)
 	// subnets is each network's IPv4 subnet: the one its create asked for, or
@@ -248,6 +250,9 @@ type fakeDocker struct {
 	archProbeExit    int64
 	archProbeLog     string
 	archProbeRunning bool
+	// diskProbeExit and diskProbeOut script the disk probe container's exit code and stdout.
+	diskProbeExit int64
+	diskProbeOut  string
 	// failLogs makes ContainerLogs fail, as a log driver that keeps no logs does.
 	failLogs bool
 
@@ -301,6 +306,7 @@ func newFakeDocker() *fakeDocker {
 		info:       infoWithRuntimes(),
 		images:     map[string]bool{},
 		imageArch:  map[string]string{},
+		imageMeta:  map[string]image.InspectResponse{},
 		networks:   map[string]client.NetworkCreateOptions{},
 		subnets:    map[string]netip.Prefix{},
 		containers: map[string]*createdContainer{},
@@ -398,7 +404,9 @@ func (f *fakeDocker) ImageInspect(ctx context.Context, imageID string, _ ...clie
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.images[imageID] {
-		return client.ImageInspectResult{InspectResponse: image.InspectResponse{ID: imageID, Architecture: f.imageArch[imageID]}}, nil
+		m := f.imageMeta[imageID]
+		return client.ImageInspectResult{InspectResponse: image.InspectResponse{ID: imageID, Architecture: f.imageArch[imageID],
+			RepoDigests: m.RepoDigests, Os: m.Os, Variant: m.Variant, Descriptor: m.Descriptor}}, nil
 	}
 	return client.ImageInspectResult{}, fakeNotFound{msg: "no such image: " + imageID}
 }
@@ -675,6 +683,13 @@ func (f *fakeDocker) ContainerStart(ctx context.Context, id string, _ client.Con
 			}
 			f.logs[id] = muxFrame(2, f.archProbeLog)
 		}
+	} else if strings.HasPrefix(c.name, diskProbeNamePrefix) {
+		// The disk probe exits with the scripted code and prints the scripted stdout.
+		c.state = &container.State{Status: "exited", ExitCode: int(f.diskProbeExit)}
+		if f.logs == nil {
+			f.logs = map[string][]byte{}
+		}
+		f.logs[id] = muxFrame(1, f.diskProbeOut)
 	} else if strings.HasPrefix(c.name, "wardyn-drive-probe-") || strings.HasPrefix(c.name, "wardyn-relay-probe-") {
 		// No real command interpreter here to run the probe's `test -r/-x`
 		// against a bind mount — model it as already exited with the

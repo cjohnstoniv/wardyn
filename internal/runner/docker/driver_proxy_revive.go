@@ -129,7 +129,10 @@ func (d *Driver) startProxy(ctx context.Context, runID uuid.UUID, labels map[str
 		}
 		host.ExtraHosts = []string{"host.docker.internal:" + target, name + ":" + target}
 	}
-	var err error
+	cfgJSON, err := withTrustedCA(cfgJSON, d.cfg.TrustedCAPEM)
+	if err != nil {
+		return "", err
+	}
 	cfgJSON, err = d.runnerSpoolConfig(ctx, runID, cfgJSON, cfg, host)
 	if err != nil {
 		return "", err
@@ -329,7 +332,7 @@ func (d *Driver) proxyExitLogTail(ctx context.Context, id string) string {
 // slow FIRST pull out of the window between the revive claim and the new
 // proxy actually starting.
 func (d *Driver) EnsureProxyImage(ctx context.Context) error {
-	return d.ensureImage(ctx, d.cfg.ProxyImage, func() {})
+	return d.ensureImage(ctx, d.cfg.ProxyImage, "", func() {})
 }
 
 // CanReplaceProxy — see runner.ProxyReviver: Docker always can.
@@ -373,7 +376,7 @@ func (d *Driver) ReplaceProxy(ctx context.Context, ref string, cfgJSON []byte) e
 	if agent.Container.Config != nil {
 		agentLabels = agent.Container.Config.Labels
 	}
-	if err := d.ensureImage(ctx, d.cfg.ProxyImage, func() {}); err != nil {
+	if err := d.ensureImage(ctx, d.cfg.ProxyImage, "", func() {}); err != nil {
 		return err
 	}
 	// A failed remove may still have removed it.

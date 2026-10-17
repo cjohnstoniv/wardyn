@@ -392,8 +392,9 @@ func TestSetupDevelopmentBuildNeedsAProxyImage(t *testing.T) {
 		t.Fatal(err)
 	}
 	gp, _ := g.host.paths()
-	if env := g.read(gp.envFile); !strings.Contains(env, "WARDYN_PROXY_IMAGE=ghcr.io/cjohnstoniv/wardyn-proxy:0.9.1-rc.2\n") {
-		t.Errorf("a release candidate did not default to its own image:\n%s", env)
+	// The derived release image is probed but not pinned (DR-0202): serve picks its own release image.
+	if env := g.read(gp.envFile); !slices.Contains(g.checks, "ghcr.io/cjohnstoniv/wardyn-proxy:0.9.1-rc.2 wardyn-internal") || strings.Contains(env, "WARDYN_PROXY_IMAGE") {
+		t.Errorf("a release candidate did not default to its own image unpinned: probed %v\n%s", g.checks, env)
 	}
 }
 
@@ -576,8 +577,9 @@ func TestSetupRefusesAnUnsafeAnsweredImage(t *testing.T) {
 	if err != nil || !strings.Contains(out, "keeping "+release) {
 		t.Fatalf("unsafe answered image with a probed release image: err=%v\n%s", err, out)
 	}
-	if env := f.read(mustPaths(t, f).envFile); !strings.Contains(env, "WARDYN_PROXY_IMAGE="+release+"\n") || strings.Contains(env, "ExecStart") {
-		t.Errorf("the env file does not keep the probed image:\n%s", env)
+	// The probed image is this binary's release image, which serve picks unpinned (DR-0202).
+	if env := f.read(mustPaths(t, f).envFile); strings.Contains(env, "WARDYN_PROXY_IMAGE") || strings.Contains(env, "ExecStart") {
+		t.Errorf("the env file pins the derived release image or the answer:\n%s", env)
 	}
 
 	g := newSetupFixture(t, "linux")
@@ -824,5 +826,31 @@ func TestSetupPoolIgnoresAnotherPersonsSameNamedPool(t *testing.T) {
 	}
 	if f.count("PUT /api/v1/me/runner-pools/"+f.otherPool.ID.String()+"/runners/"+f.id.String()) != 0 {
 		t.Error("the runner was put in another person's pool")
+	}
+}
+
+// The proxy image setup settled reaches registration, so a VM-backed engine's disk is probed with it.
+func TestSetupProbesTheVMDiskWithTheNamedProxyImage(t *testing.T) {
+	f := newSetupFixture(t, "linux")
+	asked := stubDisk(t, types.RunnerAmounts{CPUMillis: 8000, MemoryMiB: 16384}, 204800, true)
+	if _, err := f.run(setupOptions{tokenFile: f.tokenFile, proxyImage: "local/proxy:dev"}); err != nil || *asked != "local/proxy:dev" {
+		t.Fatalf("the VM disk was probed with %q, %v; want local/proxy:dev", *asked, err)
+	}
+}
+
+// Setup says once that runs have no disk cap, and nothing when the engine caps them.
+func TestSetupSaysWhenTheEngineHasNoDiskCap(t *testing.T) {
+	old := engineDiskCapped
+	t.Cleanup(func() { engineDiskCapped = old })
+	for _, tc := range []struct {
+		capped, known bool
+		want          int
+	}{{false, true, 1}, {true, true, 0}, {false, false, 0}} {
+		engineDiskCapped = func(context.Context) (bool, bool) { return tc.capped, tc.known }
+		f := newSetupFixture(t, "linux")
+		out, err := f.run(setupOptions{tokenFile: f.tokenFile})
+		if n := strings.Count(out, noDiskCapLine); err != nil || n != tc.want {
+			t.Errorf("capped=%v known=%v: the no-cap line appeared %d times, want %d (%v)\n%s", tc.capped, tc.known, n, tc.want, err, out)
+		}
 	}
 }

@@ -138,7 +138,7 @@ func replaceManagedFile(ctx context.Context, t *testing.T, d *Driver, ref, p str
 // USER user and any further Dockerfile changes. Removed at cleanup.
 func commitImage(ctx context.Context, t *testing.T, d *Driver, script, user string, changes ...string) string {
 	t.Helper()
-	if err := d.ensureImage(ctx, "busybox:latest", func() {}); err != nil {
+	if err := d.ensureImage(ctx, "busybox:latest", "", func() {}); err != nil {
 		t.Fatalf("ensure busybox: %v", err)
 	}
 	cli, err := client.New(client.FromEnv)
@@ -192,7 +192,7 @@ func TestManagedFiles_LeavesAMountedDirectoryAlone_RealDocker(t *testing.T) {
 	d := newNetworkTestDriver(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
-	if err := d.ensureImage(ctx, "busybox:latest", func() {}); err != nil {
+	if err := d.ensureImage(ctx, "busybox:latest", "", func() {}); err != nil {
 		t.Fatalf("ensure busybox: %v", err)
 	}
 
