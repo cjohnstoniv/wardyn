@@ -60,7 +60,7 @@ func productionRunnerHooks(ctx context.Context, identity runneridentity.Identity
 	}
 	relay := newLocalRelay(ctx)
 	sub, err := docker.New(docker.Config{RunnerID: identity.RunnerID.String(), ProxyImage: opts.proxyImage, InternalNetwork: opts.network, Record: record, RunnerStateDir: stateDir,
-		ControlPlaneRelay: relay.Ensure, TrustedCAPEM: opts.trustedCA, TrustedCAFile: opts.trustedCAPath})
+		ControlPlaneRelay: relay.Ensure, TrustedCAPEM: opts.trustedCA, TrustedCAFile: opts.trustedCAPath, UpstreamProxyURL: opts.upstreamProxy})
 	if err != nil {
 		return runnerRuntime{}, err
 	}
@@ -69,6 +69,7 @@ func productionRunnerHooks(ctx context.Context, identity runneridentity.Identity
 	if err != nil {
 		return runnerRuntime{}, err
 	}
+	rt.hooks.ProxyImage = followOrgProxyImage(opts.proxyImage, opts.proxyImagePinned, sub.SetProxyImage)
 	pair, err := chooseRelay(ctx, sub, opts.proxyImage, eng, want)
 	if err != nil {
 		return runnerRuntime{}, errors.Join(err, rt.close())
@@ -167,7 +168,7 @@ func readyEngine(ctx context.Context, cli *client.Client, unreachable, network s
 func inspectEngine(ctx context.Context, cli *client.Client, unreachable string) (dockerEngine, error) {
 	info, err := cli.Info(ctx, client.InfoOptions{})
 	if err != nil {
-		return dockerEngine{}, fmt.Errorf("%s; Rancher Desktop must use the dockerd (moby) engine; runnerd reads DOCKER_HOST, never a docker context: %w", unreachable, err)
+		return dockerEngine{}, fmt.Errorf("%s; Rancher Desktop must use the dockerd (moby) engine; runnerd follows DOCKER_HOST, else a docker context that is a local unix socket: %w", unreachable, err)
 	}
 	eng := dockerEngine{desc: fmt.Sprintf("%q (%s)", info.Info.OperatingSystem, info.Info.Name)}
 	if iface, err := net.InterfaceByName(rancherWSLVeth); err == nil {
@@ -325,9 +326,10 @@ func runnerRuntimeWith(ctx context.Context, identity runneridentity.Identity, st
 	}()
 	ks := extra.keystore
 	if ks.Set == nil {
-		ks = runneragent.Keystore{Set: keystore.Set, Get: keystore.Get, Delete: keystore.Delete}
+		store := keystore.For(identity.RunnerID.String())
+		ks = runneragent.Keystore{Set: store.Set, Get: store.Get, Delete: store.Delete, DeleteAll: store.DeleteAll, Precheck: store.Precheck}
 	}
-	resident, err := runneragent.NewResident(ks, stateDir)
+	resident, err := runneragent.NewResident(ks, stateDir, manager.AdmitResident, time.Now)
 	if err != nil {
 		return runnerRuntime{}, err
 	}
@@ -346,7 +348,7 @@ func runnerRuntimeWith(ctx context.Context, identity runneridentity.Identity, st
 	dispatcher, err := runneragent.New(runneragent.Config{
 		RunnerID: identity.RunnerID.String(), Substrate: sub, HoldsSandbox: manager.HoldsSandbox,
 		BeforeCreate: manager.BeforeCreate, Created: manager.Created, CreateFailed: manager.CreateFailed,
-		BeforeRefCall: manager.BeforeRefCall, AfterRefCall: manager.AfterRefCall,
+		BeforeRefCall: manager.BeforeRefCall, AfterRefCall: manager.AfterRefCall, CheckSelftest: manager.CheckSelftest,
 		MutationFinished: manager.MutationFinished,
 		ExecutionResult:  manager.ExecutionResult,
 		Streams:          streams.Call, Output: streams.Output, BindOutput: streams.BindOutput, ForgetOutput: streams.ForgetOutput,
@@ -371,7 +373,10 @@ func runnerRuntimeWith(ctx context.Context, identity runneridentity.Identity, st
 			return runnerwire.Refuse("unsupported runner stream")
 		},
 		Clock: manager.Clock, Pending: manager.Pending, StatePages: manager.StatePages,
-		BeforeReady: manager.BeforeReady, Lease: manager.Lease, Revoked: manager.Revoked, Offline: manager.Offline,
+		BeforeReady: manager.BeforeReady, Lease: manager.Lease, Offline: manager.Offline,
+		// manager.Revoked has released the manager's lock before the resident
+		// erase runs (lock order: Resident, then Manager).
+		Revoked: func(ctx context.Context) error { return errors.Join(manager.Revoked(ctx), resident.EraseAll(ctx)) },
 		Replay: func(ctx context.Context, peer *runnerwire.Peer) error {
 			support, err := sub.Classes(ctx)
 			if err != nil {
@@ -383,7 +388,7 @@ func runnerRuntimeWith(ctx context.Context, identity runneridentity.Identity, st
 			if arch == "" {
 				arch = engineArch(ctx)
 			}
-			data, err := runnerwire.Marshal(runnerwire.Caps{Support: support, Version: version.String(), MachineName: machine, Arch: arch, Capacity: capacity(ctx)})
+			data, err := runnerwire.Marshal(runnerwire.Caps{Support: support, Version: version.String(), MachineName: machine, Arch: arch, Capacity: capacity(ctx), BYOISelftest: dispatcher.Selftests(), Retire: true, Resident: dispatcher.Residents()})
 			if err != nil {
 				return err
 			}
@@ -413,7 +418,14 @@ func runnerRuntimeWith(ctx context.Context, identity runneridentity.Identity, st
 		},
 	}
 	run := func(ctx context.Context) error {
-		go resident.SweepExpired(ctx, time.Minute)
+		go func() {
+			if manager.IsRevoked() {
+				if err := resident.EraseAll(ctx); err != nil {
+					slog.WarnContext(ctx, "runner resident erase after revocation will retry on the sweep", "error", err)
+				}
+			}
+			resident.SweepExpired(ctx, time.Minute)
+		}()
 		return manager.Run(ctx)
 	}
 	return runnerRuntime{hooks: hooks, run: run, close: func() error {

@@ -17,8 +17,25 @@ import { useDeferredBusy } from "../../../../lib/use-deferred-busy";
 import type { DraftIdentity } from "../draft/use-intent-checks";
 import type { CreateRunWire } from "../draft/intent-to-wire";
 
-export function useLaunchRun(identity: DraftIdentity, onCreated: (created: CreateRunResult) => void, onRefused: (e: unknown) => void) {
+/**
+ * Whether a create is out. It is held by the route, not the dialog or its form: Cancel unmounts the form with
+ * the request still pending, and a form that began again, or a Review that was left and came back to, would let a second Launch make a second run.
+ */
+export interface PendingLaunch {
+  inFlight: React.MutableRefObject<boolean>;
+  creating: boolean;
+  setCreating: (creating: boolean) => void;
+}
+
+export function usePendingLaunch(): PendingLaunch {
+  const inFlight = React.useRef(false);
   const [creating, setCreating] = React.useState(false);
+  return { inFlight, creating, setCreating };
+}
+
+export function useLaunchRun(identity: DraftIdentity, onCreated: (created: CreateRunResult) => void, onRefused: (e: unknown) => void, held?: PendingLaunch) {
+  const own = usePendingLaunch();
+  const { inFlight, creating, setCreating } = held ?? own;
   const [refusal, setRefusal] = React.useState<string | null>(null);
   const [policy, setPolicy] = React.useState<HttpError["policy"]>();
   const { showSpinner: spinning } = useDeferredBusy(creating);
@@ -31,7 +48,6 @@ export function useLaunchRun(identity: DraftIdentity, onCreated: (created: Creat
       mounted.current = false;
     };
   }, []);
-  const inFlight = React.useRef(false);
 
   const launch = async (body: CreateRunWire) => {
     const { principal, resolved, authGeneration } = latest.current.identity;
@@ -53,7 +69,7 @@ export function useLaunchRun(identity: DraftIdentity, onCreated: (created: Creat
       latest.current.onRefused(e);
     } finally {
       inFlight.current = false;
-      if (mounted.current) setCreating(false);
+      setCreating(false);
     }
   };
 

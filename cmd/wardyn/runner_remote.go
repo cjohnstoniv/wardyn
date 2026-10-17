@@ -20,7 +20,7 @@ import (
 // pools ("Available to people's pools") is set by an admin or security admin, and may be held for a
 // second person's approval.
 //
-//	wardyn runner remote list [--mine] [--no-limits]
+//	wardyn runner remote list [--mine] [--no-limits] [--set-up-here] [--ids]
 //	wardyn runner remote show <id>
 //	wardyn runner remote propose <id> [--free-disk GB]
 //	wardyn runner remote set <id> --name "Build host"
@@ -31,7 +31,7 @@ import (
 // policy; `people set` is the only way to list people, groups and roles.
 func runnerRemoteCmd(client clientFn) *cobra.Command {
 	cmd := &cobra.Command{Use: "remote", Short: "List and manage remote-hosted runners, the Docker host or Kubernetes cluster this server is set up with"}
-	var mine, asJSON, noLimits bool
+	var mine, asJSON, noLimits, setUpHere, idsOnly bool
 	list := &cobra.Command{Use: "list", Short: "List the remote-hosted runners (admin), or with --mine those you may add to your own user pools",
 		Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
 			list := client().ListRemoteRunners
@@ -45,6 +45,15 @@ func runnerRemoteCmd(client clientFn) *cobra.Command {
 			if noLimits {
 				out = slices.DeleteFunc(out, func(rr sdk.RemoteRunnerView) bool { return rr.Limits != nil })
 			}
+			if setUpHere {
+				out = slices.DeleteFunc(out, func(rr sdk.RemoteRunnerView) bool { return !rr.Configured })
+			}
+			if idsOnly {
+				for _, rr := range out {
+					fmt.Fprintln(cmd.OutOrStdout(), rr.ID)
+				}
+				return nil
+			}
 			if asJSON {
 				return emitJSON(cmd.OutOrStdout(), out)
 			}
@@ -52,6 +61,8 @@ func runnerRemoteCmd(client clientFn) *cobra.Command {
 		}}
 	list.Flags().BoolVar(&mine, "mine", false, "only the ones you may add to your own user pools")
 	list.Flags().BoolVar(&noLimits, "no-limits", false, "only the ones with no limits set, which take no run until an admin sets them")
+	list.Flags().BoolVar(&setUpHere, "set-up-here", false, "only the ones set up on this server (SET UP HERE: yes)")
+	list.Flags().BoolVar(&idsOnly, "ids", false, "print only the ids, one per line, for a script (a name can hold spaces; an id cannot)")
 	list.Flags().BoolVar(&asJSON, "json", false, "emit raw JSON")
 	var showJSON bool
 	show := &cobra.Command{Use: "show <id>", Short: "Show one remote-hosted runner (admin)", Args: cobra.ExactArgs(1),
@@ -70,6 +81,9 @@ func runnerRemoteCmd(client clientFn) *cobra.Command {
 	propose := &cobra.Command{Use: "propose <id> [--free-disk GB]", Args: cobra.ExactArgs(1),
 		Short: "Print the limits setup proposes for a remote-hosted runner, half of what it reports, as `wardyn runner set` flags; sets nothing (admin)",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if cmd.Flags().Changed("free-disk") && freeDisk <= 0 {
+				return fmt.Errorf("--free-disk must be a positive number of GB, got %d", freeDisk)
+			}
 			rr, err := client().GetRemoteRunner(cmd.Context(), args[0])
 			if err != nil {
 				return err
@@ -142,7 +156,10 @@ func runnerRemotePeopleCmd(client clientFn) *cobra.Command {
 	set.Flags().StringArrayVar(&roles, "role", nil, "a user type whose people may add it (repeatable)")
 	clear := &cobra.Command{Use: "clear <id>", Short: "Make a remote-hosted runner available to nobody's pools", Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			_, err := heldForApproval(cmd, client().ClearRemoteRunnerPeoplePolicy(cmd.Context(), args[0]))
+			if held, err := heldForApproval(cmd, client().ClearRemoteRunnerPeoplePolicy(cmd.Context(), args[0])); held || err != nil {
+				return err
+			}
+			_, err := fmt.Fprintf(cmd.OutOrStdout(), "%s is no longer available to people's pools\n", args[0])
 			return err
 		}}
 	cmd.AddCommand(set, clear)

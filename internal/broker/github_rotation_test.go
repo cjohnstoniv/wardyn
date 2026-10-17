@@ -218,3 +218,44 @@ func TestGitHubMinter_StaleInstallationIDDroppedOn401(t *testing.T) {
 		t.Fatalf("expected the installation lookup to run twice (cache dropped on 401 and re-resolved), got %d", n)
 	}
 }
+
+// InstallationPermissions drops a dead cached installation id as a mint does, so
+// a reinstalled App is not read through the old id until something else clears it.
+func TestGitHubMinter_InstallationPermissionsDropsAStaleInstallationID(t *testing.T) {
+	ctx := context.Background()
+	store := newMemSecrets()
+	_ = store.Put(ctx, "github-app-id", []byte("111"))
+	_ = store.Put(ctx, "github-app-key", genPEM(t))
+
+	var installLookups atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/installation"):
+			if installLookups.Add(1) == 1 {
+				_, _ = w.Write([]byte(`{"id": 42}`)) // dead after the reinstall
+			} else {
+				_, _ = w.Write([]byte(`{"id": 99}`))
+			}
+		case strings.HasSuffix(r.URL.Path, "/app/installations/99"):
+			_, _ = w.Write([]byte(`{"id": 99, "permissions": {"contents": "read"}}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	gm, err := NewGitHubMinter(store, GitHubMinterConfig{AppIDSecret: "github-app-id", PrivateKeySecret: "github-app-key"})
+	if err != nil {
+		t.Fatalf("NewGitHubMinter: %v", err)
+	}
+	m := gm.(*githubMinter)
+	m.baseURL = srv.URL + "/"
+
+	if _, err := m.InstallationPermissions(ctx, "acme/widgets"); err == nil {
+		t.Fatal("the first read through the dead installation id must fail")
+	}
+	perms, err := m.InstallationPermissions(ctx, "acme/widgets")
+	if err != nil || perms["contents"] != "read" {
+		t.Fatalf("second read = %v, %v; want it re-resolved to the new installation", perms, err)
+	}
+}

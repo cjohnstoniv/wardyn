@@ -35,6 +35,9 @@ type TokenReplacement struct {
 type TokenDispositionFacts struct {
 	Replacements map[uuid.UUID][]TokenReplacement
 	Moves        map[uuid.UUID]types.TokenMove
+	// Retired are the moves whose service identity has since been retired: a live token moved to one is
+	// no longer handled, since the identity can never take its traffic.
+	Retired map[uuid.UUID]bool
 }
 
 // TokenMoveStore holds the links between admin-minted tokens and the service identities that replace them
@@ -95,7 +98,7 @@ func (s PG) MoveAPIToken(ctx context.Context, id uuid.UUID, serviceIdentity, by 
 }
 
 func (s PG) TokenDispositionFacts(ctx context.Context, now time.Time) (TokenDispositionFacts, error) {
-	out := TokenDispositionFacts{Replacements: map[uuid.UUID][]TokenReplacement{}, Moves: map[uuid.UUID]types.TokenMove{}}
+	out := TokenDispositionFacts{Replacements: map[uuid.UUID][]TokenReplacement{}, Moves: map[uuid.UUID]types.TokenMove{}, Retired: map[uuid.UUID]bool{}}
 	repl, err := collect(ctx, s.Pool, "list", "token replacements", `
 		SELECT replaces_token_id, target, claimed_at FROM person_invitations
 		WHERE replaces_token_id IS NOT NULL AND (claimed_at IS NOT NULL OR (revoked_at IS NULL AND expires_at > $1))`,
@@ -110,17 +113,25 @@ func (s PG) TokenDispositionFacts(ctx context.Context, now time.Time) (TokenDisp
 	for _, t := range repl {
 		out.Replacements[t.TokenID] = append(out.Replacements[t.TokenID], t)
 	}
+	type move struct {
+		types.TokenMove
+		retired bool
+	}
 	moves, err := collect(ctx, s.Pool, "list", "token moves",
-		`SELECT token_id, service_identity, linked_by, linked_at FROM api_token_moves`, nil, func(r pgx.Row) (types.TokenMove, error) {
-			var m types.TokenMove
-			err := r.Scan(&m.TokenID, &m.ServiceIdentity, &m.LinkedBy, &m.LinkedAt)
+		`SELECT m.token_id, m.service_identity, m.linked_by, m.linked_at, si.retired_at IS NOT NULL
+		 FROM api_token_moves m JOIN service_identities si ON si.name = m.service_identity`, nil, func(r pgx.Row) (move, error) {
+			var m move
+			err := r.Scan(&m.TokenID, &m.ServiceIdentity, &m.LinkedBy, &m.LinkedAt, &m.retired)
 			return m, err
 		})
 	if err != nil {
 		return out, err
 	}
 	for _, m := range moves {
-		out.Moves[m.TokenID] = m
+		out.Moves[m.TokenID] = m.TokenMove
+		if m.retired {
+			out.Retired[m.TokenID] = true
+		}
 	}
 	return out, nil
 }

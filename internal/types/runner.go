@@ -87,6 +87,56 @@ type Runner struct {
 	// Arch is the CPU architecture of the runner's Docker engine, as last reported (ValidArch values):
 	// runner-reported, "" until it reports one.
 	Arch string `json:"arch"`
+	// OwnerKind is person, or org for an organization's runner, whose Owner is always empty. It is copied
+	// from the registration token at redeem and never changes (migration 0181).
+	OwnerKind RunnerOwnerKind `json:"owner_kind"`
+	// TrustClass is written by the claim and afterwards only by a security operator's
+	// PUT /runners/{id}/trust; nothing the runner reports, its posture included, feeds it. TrustSetBy and
+	// TrustSetAt name the last writer, empty and nil until one.
+	TrustClass RunnerTrustClass `json:"trust_class"`
+	TrustSetBy string           `json:"-"`
+	TrustSetAt *time.Time       `json:"-"`
+	// RegistrationTokenID is the token the runner redeemed, nil on a runner registered before 0181. The org
+	// claim reads its minter from it.
+	RegistrationTokenID *uuid.UUID `json:"-"`
+}
+
+// OwnerHeld reports whether the row names its owner the way its kind requires: a person's runner a
+// non-empty owner, an organization's runner none (runners_org_owner_empty).
+func (r Runner) OwnerHeld() bool {
+	if r.OwnerKind == RunnerOwnerOrg {
+		return r.Owner == ""
+	}
+	return r.Owner != ""
+}
+
+// RunnerOwnerKind says who owns a runner: one person, or the organization.
+type RunnerOwnerKind string
+
+const (
+	RunnerOwnerPerson RunnerOwnerKind = "person"
+	RunnerOwnerOrg    RunnerOwnerKind = "org"
+)
+
+// RunnerTrustClass is a runner's trust class, a closed set ordered personal < managed_device <
+// org_cluster. managed_device is an administrator's assertion, never the runner's.
+type RunnerTrustClass string
+
+const (
+	RunnerTrustPersonal      RunnerTrustClass = "personal"
+	RunnerTrustManagedDevice RunnerTrustClass = "managed_device"
+	RunnerTrustOrgCluster    RunnerTrustClass = "org_cluster"
+)
+
+// Valid reports whether c is one of the three classes.
+func (c RunnerTrustClass) Valid() bool {
+	return c == RunnerTrustPersonal || c == RunnerTrustManagedDevice || c == RunnerTrustOrgCluster
+}
+
+// FitsOwner reports whether a runner of kind may hold c: org_cluster if and only if the organization
+// owns it (the runners_trust_class_coupling CHECK).
+func (c RunnerTrustClass) FitsOwner(kind RunnerOwnerKind) bool {
+	return c.Valid() && (c == RunnerTrustOrgCluster) == (kind == RunnerOwnerOrg)
 }
 
 // ValidArch reports whether s may be stored as a runner's architecture: "" (none reported), "amd64" or "arm64".

@@ -17,8 +17,7 @@
 export const PUSH = {
   KIND_LABEL: "Push",
   CARD_TITLE: "A push is held for review",
-  // DRAFT (canon pending owner approval, packet 7b) — review finding 4: the
-  // decided-list title this file's own card bypasses (it never falls through
+  // The decided-list title this file's own card bypasses (it never falls through
   // to deriveTitle's default) still needs one for the DecidedRow list —
   // "Push" alone said nothing about WHICH repository.
   LIST_TITLE: (repo: string) => `Push to ${repo}`,

@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/google/uuid"
@@ -174,8 +175,16 @@ func TestSourceScanKeepsStrongest(t *testing.T) {
 	if before.Code != http.StatusOK {
 		t.Fatalf("read the organisation defaults = %d %s", before.Code, before.Body)
 	}
+	// The restore leaves the revision out: the barrier write below moves it on, and a write naming the
+	// one read here would be refused 409 runner_pool_stale, leaving the barrier and no default pool.
+	restore := decodeJSON[types.RunnerPoolDefaults](t, before)
+	restore.Revision = 0
+	restoreBody, err := json.Marshal(restore)
+	if err != nil {
+		t.Fatal(err)
+	}
 	t.Cleanup(func() {
-		if w := do(t, srv, http.MethodPut, "/api/v1/runner-pool-defaults", adminToken, before.Body.String()); w.Code != http.StatusOK {
+		if w := do(t, srv, http.MethodPut, "/api/v1/runner-pool-defaults", adminToken, string(restoreBody)); w.Code != http.StatusOK {
 			t.Errorf("restore the organisation defaults = %d %s", w.Code, w.Body)
 		}
 	})
@@ -202,5 +211,50 @@ func TestSourceScanKeepsStrongest(t *testing.T) {
 	run := decodeJSON[types.AgentRun](t, do(t, srv, http.MethodGet, "/api/v1/runs/"+ids[0].String(), adminToken, ""))
 	if run.ConfinementClass != types.CC3 {
 		t.Errorf("the scan run enforces %s with the organisation default CC2, want the strongest offered, CC3", run.ConfinementClass)
+	}
+}
+
+// FUG-L406: the organisation's default carries a revision, every write raises it by one, and a write
+// that names a revision another administrator's write has passed is refused instead of replacing it.
+func TestOrgDefaultsRevisionRefusesAStaleWrite(t *testing.T) {
+	e := newPlacementEnv(t)
+	put := func(body string) *httptest.ResponseRecorder {
+		return e.admin(http.MethodPut, "/api/v1/runner-pool-defaults", body)
+	}
+	read := func() types.RunnerPoolDefaults {
+		return decodeJSON[types.RunnerPoolDefaults](t, e.admin(http.MethodGet, "/api/v1/runner-pool-defaults", ""))
+	}
+
+	first := put(`{"barrier":"CC1"}`)
+	if first.Code != http.StatusOK {
+		t.Fatalf("first write = %d %s", first.Code, first.Body)
+	}
+	got := decodeJSON[types.RunnerPoolDefaults](t, first)
+	if got.Revision < 1 || read().Revision != got.Revision {
+		t.Fatalf("first write answered revision %d, a read says %d, want the same and at least 1", got.Revision, read().Revision)
+	}
+
+	// Two administrators read the same revision; the first one's write wins and the second is refused.
+	seen := got.Revision
+	if w := put(fmt.Sprintf(`{"barrier":"CC2","revision":%d}`, seen)); w.Code != http.StatusOK {
+		t.Fatalf("write at the revision read = %d %s", w.Code, w.Body)
+	} else if next := decodeJSON[types.RunnerPoolDefaults](t, w).Revision; next != seen+1 {
+		t.Errorf("a write answered revision %d, want %d", next, seen+1)
+	}
+	w := put(fmt.Sprintf(`{"barrier":"CC3","revision":%d}`, seen))
+	if w.Code != http.StatusConflict || wireReason(t, w) != string(runnerpool.ReasonStale) {
+		t.Fatalf("stale write = %d %s, want 409 runner_pool_stale", w.Code, w.Body)
+	}
+	if read().Barrier != types.CC2 {
+		t.Errorf("a refused write changed the default to %q", read().Barrier)
+	}
+
+	// Omitting the revision still writes, as before, and still raises it.
+	if w := put(`{"barrier":"CC3"}`); w.Code != http.StatusOK || decodeJSON[types.RunnerPoolDefaults](t, w).Revision != seen+2 {
+		t.Errorf("unconditional write = %d %s, want 200 at revision %d", w.Code, w.Body, seen+2)
+	}
+	// A person's own default has no revision to name.
+	if w := e.call(e.person, http.MethodPut, "/api/v1/me/runner-pool-defaults", `{"revision":1}`); w.Code != http.StatusBadRequest {
+		t.Errorf("personal default naming a revision = %d %s, want 400", w.Code, w.Body)
 	}
 }

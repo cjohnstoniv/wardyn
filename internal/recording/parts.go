@@ -8,7 +8,10 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
+	"math"
+	"regexp"
 	"strconv"
 
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -20,6 +23,25 @@ import (
 // short run's single upload has always landed — and part n >= 2 under
 // CastKey(runID, PartSuffix(n)). OpenJoined and StatJoined put them back
 // together; nothing else needs to know a cast was split.
+
+// LogCutMarker is the line wardyn-rec appends to a plain log it uploads cut short: the first keep of size
+// bytes, then this.
+func LogCutMarker(keep, size int64) string {
+	return fmt.Sprintf("\n[wardyn-rec: log truncated: the first %d of %d bytes were uploaded; the rest was not]\n", keep, size)
+}
+
+// LogCutMarkerMax is the longest LogCutMarker.
+var LogCutMarkerMax = len(LogCutMarker(math.MaxInt64, math.MaxInt64))
+
+var logCutMarker = regexp.MustCompile(`\n\[wardyn-rec: log truncated: the first [0-9]+ of [0-9]+ bytes were uploaded; the rest was not\]\n\z`)
+
+// LogCutAt is where a LogCutMarker that ends b starts, or -1.
+func LogCutAt(b []byte) int {
+	if loc := logCutMarker.FindIndex(b); loc != nil {
+		return loc[0]
+	}
+	return -1
+}
 
 // PartSuffix is the cast-key suffix part n (n >= 2) of a run's cast is stored
 // under. It cannot collide with an attach session's suffix, which is a UUID.

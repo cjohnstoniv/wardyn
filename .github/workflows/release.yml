@@ -990,6 +990,54 @@ jobs:
             wardyn-runnerd-${{ matrix.goos }}-${{ matrix.goarch }}
           if-no-files-found: error
 
+  # The laptop runner's macOS installer, built from the two darwin wardyn-runnerd binaries above.
+  # pkgbuild, productbuild, productsign and notarytool exist only on macOS, hence this runner.
+  # Signing turns on by secret and each step is skipped with a log line when its secrets are unset
+  # (scripts/build-runner-pkg.sh header): APPLE_DEVELOPER_ID_APPLICATION_* signs the binary,
+  # APPLE_DEVELOPER_ID_INSTALLER_* signs the package, APPLE_NOTARY_* notarizes it once both are signed.
+  # With none set the package is unsigned: a person allows it in System Settings (Privacy & Security, Open
+  # Anyway), and only an MDM agent or script install can push it (Apple's own app-install command needs a
+  # Developer ID Installer signature).
+  runner-pkg:
+    name: macOS runner package (.pkg)
+    runs-on: macos-14
+    needs: [preflight-green, binaries]
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: "cli-darwin-*"
+          merge-multiple: true
+          path: bin
+      - name: Build, sign and notarize (each only with its secrets)
+        env:
+          APPLE_DEVELOPER_ID_APPLICATION_P12_BASE64: ${{ secrets.APPLE_DEVELOPER_ID_APPLICATION_P12_BASE64 }}
+          APPLE_DEVELOPER_ID_APPLICATION_P12_PASSWORD: ${{ secrets.APPLE_DEVELOPER_ID_APPLICATION_P12_PASSWORD }}
+          APPLE_DEVELOPER_ID_APPLICATION_IDENTITY: ${{ secrets.APPLE_DEVELOPER_ID_APPLICATION_IDENTITY }}
+          APPLE_DEVELOPER_ID_INSTALLER_P12_BASE64: ${{ secrets.APPLE_DEVELOPER_ID_INSTALLER_P12_BASE64 }}
+          APPLE_DEVELOPER_ID_INSTALLER_P12_PASSWORD: ${{ secrets.APPLE_DEVELOPER_ID_INSTALLER_P12_PASSWORD }}
+          APPLE_DEVELOPER_ID_INSTALLER_IDENTITY: ${{ secrets.APPLE_DEVELOPER_ID_INSTALLER_IDENTITY }}
+          APPLE_NOTARY_APPLE_ID: ${{ secrets.APPLE_NOTARY_APPLE_ID }}
+          APPLE_NOTARY_TEAM_ID: ${{ secrets.APPLE_NOTARY_TEAM_ID }}
+          APPLE_NOTARY_PASSWORD: ${{ secrets.APPLE_NOTARY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          version=$(sed -n 's/^const Version = "\(.*\)"$/\1/p' internal/version/version.go)
+          scripts/build-runner-pkg.sh --version "$version" \
+            --arm64 bin/wardyn-runnerd-darwin-arm64 --amd64 bin/wardyn-runnerd-darwin-amd64 \
+            --out wardyn-runnerd.pkg
+          # An unsigned package has no signature to check; a signed one must verify.
+          pkgutil --check-signature wardyn-runnerd.pkg || true
+          grep -q 'usr/local/wardyn/bin/wardyn-runnerd' <<<"$(pkgutil --payload-files wardyn-runnerd.pkg)"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: runner-pkg
+          path: wardyn-runnerd.pkg
+          if-no-files-found: error
+
   # The chart, published as an OCI artifact so installing does not require cloning.
   #
   # Until 0.6.2 the images were published and the CHART was not, which made the
@@ -1062,7 +1110,7 @@ jobs:
     # !failure() lets this run when `images` or `promote` was skipped by the path
     # choice; any job that FAILED still stops it.
     if: ${{ !cancelled() && !failure() && inputs.dry_run != true }}
-    needs: [preflight-green, images, images-ui-sandbox, promote, chart, binaries]
+    needs: [preflight-green, images, images-ui-sandbox, promote, chart, binaries, runner-pkg]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -1085,7 +1133,7 @@ jobs:
       - name: Collect the per-image SBOMs
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          pattern: "{sbom-*,chart,cli-*}"
+          pattern: "{sbom-*,chart,cli-*,runner-pkg}"
           merge-multiple: true
           path: assets
       - name: Assemble the asset set
@@ -1136,7 +1184,7 @@ jobs:
           for want in SHA256SUMS SHA256SUMS.sig SHA256SUMS.pem THIRD-PARTY-NOTICES.md LICENSE NOTICE \
                       install.sh wardyn-linux-amd64 wardyn-linux-arm64 wardyn-darwin-amd64 wardyn-darwin-arm64 \
                       wardyn-runnerd-linux-amd64 wardyn-runnerd-linux-arm64 wardyn-runnerd-darwin-amd64 wardyn-runnerd-darwin-arm64 \
-                      wardyn-runner-units.tar.gz; do
+                      wardyn-runner-units.tar.gz wardyn-runnerd.pkg; do
             grep -qx "$want" <<<"$have" || { echo "MISSING RELEASE ASSET: $want"; exit 1; }
           done
           echo "$have"

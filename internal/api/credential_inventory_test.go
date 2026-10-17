@@ -105,7 +105,7 @@ func TestEmailsByPrincipal_FirstPairingWins(t *testing.T) {
 }
 
 // TestCredInventoryNoMeta_Canon pins the packet-F canon 503 sentence — was
-// DRAFT and lower-case; a reader must never see either the old wording or
+// frozen and lower-case; a reader must never see either the old wording or
 // see it regress.
 func TestCredInventoryNoMeta_Canon(t *testing.T) {
 	const want = "This deployment's secret store keeps no credential metadata, so there is nothing to list."

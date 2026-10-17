@@ -136,6 +136,9 @@ func validateSourceWrite(src types.Source, adoServerHosts []string) string {
 		// The write-door half of the traversal guard: refused here as
 		// a 400 regardless of provider mode, so a never-clonable locator cannot be
 		// AUTHORED and sit in the library waiting for a provider row to widen.
+		if repoURLHasUserinfo(src.Locator) {
+			return repoURLUserinfo400 // ahead of the shape check, which names no reason of its own
+		}
 		if !repoLocatorPathSafe(src.Locator, adoServerHosts) {
 			return fmt.Sprintf(repo400LocatorShape, "locator")
 		}
@@ -195,6 +198,7 @@ func (s *Server) handleListSources(w http.ResponseWriter, r *http.Request) {
 		writeServerError(w, r, "list sources", err)
 		return
 	}
+	redactSourceRepoURLs(list)
 	writeJSON(w, http.StatusOK, map[string]any{"sources": list})
 }
 
@@ -233,7 +237,7 @@ func (s *Server) handleCreateSource(w http.ResponseWriter, r *http.Request) {
 		CreatedAt: s.cfg.Now().UTC(), UpdatedAt: s.cfg.Now().UTC(),
 	}
 	if msg := validateSourceWrite(src, ado); msg != "" {
-		writeErrorReason(w, http.StatusBadRequest, reasonSourceWriteInvalid, storeNamedLocatorRefusal(msg, "locator", src.Locator, adoErr))
+		writeErrorReason(w, http.StatusBadRequest, repoURLMsgReason(msg, reasonSourceWriteInvalid), storeNamedLocatorRefusal(msg, "locator", src.Locator, adoErr))
 		return
 	}
 	// Provider admission on the LIBRARY door, not only the workspace one. This is
@@ -279,7 +283,7 @@ func (s *Server) handleCreateSource(w http.ResponseWriter, r *http.Request) {
 	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
 		"source.write", created.ID.String(), "success", mustJSON(map[string]any{
-			"kind": string(created.Kind), "locator": created.Locator, "ref": created.Ref,
+			"kind": string(created.Kind), "locator": redactRepoURL(created.Locator), "ref": created.Ref,
 		})))
 	// The legacy-host grace on the LIBRARY door too: admission admitted it
 	// on sufferance and audited that, and this is the other surface an admin
@@ -309,6 +313,7 @@ func (s *Server) handleGetSource(w http.ResponseWriter, r *http.Request) {
 		writeServerError(w, r, "get source", err)
 		return
 	}
+	src.Locator = redactRepoURL(src.Locator)
 	writeJSON(w, http.StatusOK, src)
 }
 
@@ -455,7 +460,7 @@ func (s *Server) upsertAndAttach(r *http.Request, srcs []types.WorkspaceSource, 
 			// persist to a HOST directory, so it belongs in the trail.
 			s.recordAudit(ctx, s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
 				"source.write", row.ID.String(), "success", mustJSON(map[string]any{
-					"kind": string(row.Kind), "locator": row.Locator, "ref": row.Ref, "writable": src.Writable,
+					"kind": string(row.Kind), "locator": redactRepoURL(row.Locator), "ref": row.Ref, "writable": src.Writable,
 				})))
 		}
 		id := row.ID

@@ -220,6 +220,14 @@ for _ in $(seq 1 30); do
 done
 [[ "${before_row}" == "RUNNING" ]] || die "expected run ${RUN_A_ID} to reach RUNNING in Postgres before the pod delete; still ${before_row} after 60s"
 
+# The proxy-hop CA (T-40, #700): runs already up pin it, so a restart that
+# minted a new one would fail every carried proxy closed. The stored row is
+# sealed, so its digest is compared, not its content: unchanged means the
+# boot read the CA it found instead of minting another.
+CA_ROW_SQL="SELECT COALESCE(md5(string_agg(encode(ciphertext,'hex'), ',' ORDER BY name)),'') FROM secrets WHERE name LIKE '%wardyn-internal-ca'"
+ca_before="$(psql1 "${CA_ROW_SQL}")"
+[[ "${ca_before}" =~ ^[0-9a-f]{32}$ ]] || die "could not read the stored internal CA row before the pod delete (got '${ca_before}')"
+
 wardynd_pod="$(kubectl --context "${CONTEXT}" -n "${NAMESPACE}" get pods -l app.kubernetes.io/name=wardyn \
   -o jsonpath='{.items[0].metadata.name}')"
 [[ -n "${wardynd_pod}" ]] || die "could not find wardynd's own pod (label app.kubernetes.io/name=wardyn)"
@@ -244,6 +252,12 @@ case "${after_row}" in
   *)
     fail "expected run ${RUN_A_ID}'s row to still be readable with a known state after the control-plane pod was recreated; got '${after_row}'" ;;
 esac
+
+step "confirming the proxy-hop CA is the same one across the restart"
+ca_after="$(psql1 "${CA_ROW_SQL}")"
+[[ "${ca_after}" == "${ca_before}" ]] \
+  && pass "the stored internal CA row is unchanged across wardynd's restart (${ca_after})" \
+  || fail "the stored internal CA row changed across wardynd's restart (${ca_before} -> ${ca_after}): carried proxies pinned to the old CA now fail closed"
 
 # ── B. a RUNNING run's OWN agent pod, evicted by a cordon of its node ──────
 step "B: launching a second run, then cordoning its node and deleting its pod directly (single-node drain — see this file's header)"

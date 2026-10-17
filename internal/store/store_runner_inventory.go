@@ -122,7 +122,7 @@ func (s PG) BeginRunnerInventory(ctx context.Context, runnerID uuid.UUID, sessio
 	_, err = tx.Exec(ctx, `INSERT INTO runner_inventory_candidates(runner_id,run_id,run_version,ref,generation)
 		SELECT $1,a.id,a.xmin::text,a.sandbox_ref,COALESCE(e.generation,$3)
 		FROM agent_runs a LEFT JOIN runner_executions e ON e.run_id=a.id
-		WHERE a.runner_id=$1 AND a.created_by=$2 AND a.placement='local'
+		WHERE a.runner_id=$1 AND ($2='' OR a.created_by=$2) AND a.placement='local'
 		AND a.state='RUNNING' AND a.lost_at IS NULL AND a.sandbox_ref<>''`, runnerID, owner, uuid.Nil)
 	if err != nil {
 		return err
@@ -130,12 +130,16 @@ func (s PG) BeginRunnerInventory(ctx context.Context, runnerID uuid.UUID, sessio
 	return tx.Commit(ctx)
 }
 
+// inventoryOwner is the owner a claimed, unrevoked runner's inventory is scoped to: a person's runner
+// its owner's runs, an org runner's empty owner every run bound to it (runnerReportsOn's rule, which the
+// candidate and omission queries apply as an empty $2 or created_by = $2).
 func inventoryOwner(ctx context.Context, tx pgx.Tx, runnerID uuid.UUID) (string, error) {
 	if _, err := tx.Exec(ctx, `SET LOCAL lock_timeout='2s'`); err != nil {
 		return "", err
 	}
 	var owner string
-	err := tx.QueryRow(ctx, `SELECT owner FROM runners WHERE id=$1 AND state='claimed' AND revoked_at IS NULL AND owner<>'' FOR SHARE`, runnerID).Scan(&owner)
+	err := tx.QueryRow(ctx, `SELECT owner FROM runners WHERE id=$1 AND state='claimed' AND revoked_at IS NULL
+		AND ((owner_kind='person' AND owner<>'') OR (owner_kind='org' AND owner='')) FOR SHARE`, runnerID).Scan(&owner)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return "", ErrRunnerExecutionRefused
 	}
@@ -242,7 +246,7 @@ func (s PG) intakeRunnerStateRow(ctx context.Context, tx pgx.Tx, runnerID uuid.U
 const inventoryOmissionsSQL = `SELECT EXISTS (
 	SELECT 1 FROM runner_inventory_candidates c JOIN agent_runs a ON a.id=c.run_id
 	LEFT JOIN runner_executions e ON e.run_id=a.id
-	WHERE c.runner_id=$1 AND NOT c.seen AND a.runner_id=$1 AND a.created_by=$2
+	WHERE c.runner_id=$1 AND NOT c.seen AND a.runner_id=$1 AND ($2='' OR a.created_by=$2)
 	AND a.placement='local' AND a.state='RUNNING' AND a.lost_at IS NULL
 	AND a.sandbox_ref=c.ref AND a.xmin::text=c.run_version AND COALESCE(e.generation,$3)=c.generation
 )`

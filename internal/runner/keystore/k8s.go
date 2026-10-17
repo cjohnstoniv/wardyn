@@ -19,9 +19,9 @@ import (
 )
 
 // K8s holds a k8s runner's runner_resident values as Secrets in runnerd's own namespace (design K1
-// §3.1 "Resident keystore"): one Secret per run and grant, with create, get and delete only, never
-// list. A Secret's name derives from its account, so whoever holds the account (the resident index
-// in runnerd's state) deletes it by name.
+// §3.1 "Resident keystore"): one Secret per run and grant, with create, get, delete and a
+// label-scoped deletecollection only, never list. A Secret's name derives from its account, so
+// whoever holds the account (the resident index in runnerd's state) deletes it by name.
 type K8s struct {
 	cs       kubernetes.Interface
 	ns       string
@@ -36,13 +36,26 @@ func NewK8s(cs kubernetes.Interface, ns, runnerID string) *K8s {
 // k8sCallBound bounds one Secret call: the resident path is synchronous with a delivery.
 const k8sCallBound = 10 * time.Second
 
-// SecretName is the Secret holding account's value.
-func SecretName(account string) string {
-	sum := sha256.Sum256([]byte(service + "/" + account))
+// SecretName is the Secret holding account's value: a hash of the runner's own
+// keystore service (For(runnerID)) and the account.
+func (k *K8s) SecretName(account string) string {
+	sum := sha256.Sum256([]byte(For(k.runnerID).service + "/" + account))
 	return "wardyn-resident-" + hex.EncodeToString(sum[:20])
 }
 
 const k8sValueKey = "value"
+
+// k8sValueLimit is the largest value Precheck admits: a Secret holds at most 1 MiB, and 64 KiB of
+// that is left for its name, labels and other metadata.
+const k8sValueLimit = 1<<20 - 64<<10
+
+// Precheck refuses, before any API call, a value one Secret cannot hold.
+func (k *K8s) Precheck(account, value string) error {
+	if len(value) > k8sValueLimit {
+		return fmt.Errorf("%w: the value is too long for a Kubernetes Secret (%d bytes, the limit is %d)", ErrUnavailable, len(value), k8sValueLimit)
+	}
+	return nil
+}
 
 // Set stores value under account. A Secret already there is deleted and created again: the Role
 // grants no update.
@@ -50,7 +63,7 @@ func (k *K8s) Set(account, value string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), k8sCallBound)
 	defer cancel()
 	sec := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{Name: SecretName(account), Namespace: k.ns,
+		ObjectMeta: metav1.ObjectMeta{Name: k.SecretName(account), Namespace: k.ns,
 			Labels: map[string]string{"wardyn.managed": "true", "wardyn.runner-id": k.runnerID, "wardyn.component": "resident"}},
 		Type: corev1.SecretTypeOpaque,
 		Data: map[string][]byte{k8sValueKey: []byte(value)},
@@ -72,7 +85,7 @@ func (k *K8s) Set(account, value string) error {
 func (k *K8s) Get(account string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), k8sCallBound)
 	defer cancel()
-	sec, err := k.cs.CoreV1().Secrets(k.ns).Get(ctx, SecretName(account), metav1.GetOptions{})
+	sec, err := k.cs.CoreV1().Secrets(k.ns).Get(ctx, k.SecretName(account), metav1.GetOptions{})
 	if err != nil {
 		return "", fmt.Errorf("%w: %w", ErrUnavailable, err)
 	}
@@ -87,7 +100,23 @@ func (k *K8s) Get(account string) (string, error) {
 func (k *K8s) Delete(account string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), k8sCallBound)
 	defer cancel()
-	if err := k.cs.CoreV1().Secrets(k.ns).Delete(ctx, SecretName(account), metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
+	if err := k.cs.CoreV1().Secrets(k.ns).Delete(ctx, k.SecretName(account), metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
+		return fmt.Errorf("%w: %w", ErrUnavailable, err)
+	}
+	return nil
+}
+
+// residentSelector selects this runner's resident Secrets, the two labels Set puts on each.
+func (k *K8s) residentSelector() string {
+	return "wardyn.runner-id=" + k.runnerID + ",wardyn.component=resident"
+}
+
+// DeleteAll removes every resident Secret of this runner, and no other: one label-scoped
+// deletecollection, so the keystore still never lists.
+func (k *K8s) DeleteAll() error {
+	ctx, cancel := context.WithTimeout(context.Background(), k8sCallBound)
+	defer cancel()
+	if err := k.cs.CoreV1().Secrets(k.ns).DeleteCollection(ctx, metav1.DeleteOptions{}, metav1.ListOptions{LabelSelector: k.residentSelector()}); err != nil {
 		return fmt.Errorf("%w: %w", ErrUnavailable, err)
 	}
 	return nil

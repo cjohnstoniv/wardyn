@@ -44,7 +44,7 @@ const (
 // nil means the dial connected. ErrRelayUnreachable means the canary ran and could not
 // connect. Any other error means the probe could not run, which proves nothing about the relay.
 func (d *Driver) ProbeRelay(ctx context.Context, target string, port uint16) error {
-	image := d.cfg.ProxyImage
+	image := d.proxyImage()
 	present, err := d.imagePresent(ctx, image)
 	if err != nil {
 		return fmt.Errorf("docker: probe relay: %w", err)

@@ -127,7 +127,6 @@ var awsSSORegionPattern = regexp.MustCompile(`^[a-z]{2}(-gov|-iso[a-z]?)?-[a-z]+
 // so a log line still names which code said so.
 var errAWSSSOCredentialSpent = errors.New("aws sso refresh credential is spent")
 
-// DRAFT (M2 canon pending)
 // The sentences below are the user-facing copy this lane introduces. They
 // are held in ONE block so the canon swap is a single-file diff, and every test
 // asserts through the constants rather than the literals.

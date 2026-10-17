@@ -36,6 +36,9 @@ describe("since and gives up", () => {
   it("reads the hours left from deadline_at in the canon hour words, then the time it gives up", () => {
     expect(givesUp(at(24 * HOUR), NOW)).toBe("In 24 hours");
     expect(givesUp(at(HOUR), NOW)).toBe("In 1 hour");
+    // FR-0101: inside the last hour it is the time, not "In 1 hour" from 30 minutes out.
+    expect(givesUp(at(30 * MIN), NOW)).toBe(shortTime(at(30 * MIN)));
+    expect(givesUp(at(59 * MIN), NOW)).toBe(shortTime(at(59 * MIN)));
     expect(givesUp(at(20 * MIN), NOW)).toBe(shortTime(at(20 * MIN)));
     expect(givesUp(at(-5 * MIN), NOW)).toBe(shortTime(at(-5 * MIN)));
   });

@@ -133,8 +133,8 @@ func TestGoawayCarriesTheOrgReason(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := goaway(payload); !errors.Is(err, ErrGoaway) || !strings.Contains(err.Error(), "runner_unclaimed") {
-		t.Fatalf("goaway = %v", err)
+	if err := goaway(payload); !errors.Is(err, ErrGoaway) || !strings.Contains(err.Error(), "runner_unclaimed") || !strings.Contains(err.Error(), "wardyn runner claim") {
+		t.Fatalf("goaway = %v, want the reason code and what to do", err)
 	}
 	if err := goaway(nil); err != ErrGoaway { //nolint:errorlint // the bare sentinel is the expected value
 		t.Fatalf("goaway without a reason = %v", err)

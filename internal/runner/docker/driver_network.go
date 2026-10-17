@@ -64,7 +64,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	// it — without this pull, the one-line install and desktop tier reach a healthy console and then
 	// fail the FIRST RUN with an unresolvable ref. No-ops where the image is already resident; k8s is
 	// untouched, since kubelet pulls the sidecar there.
-	if err := d.ensureImage(ctx, d.cfg.ProxyImage, "", func() { spec.NotifyWaiting("image: Pulling: " + d.cfg.ProxyImage) }); err != nil {
+	if err := d.ensureImage(ctx, d.proxyImage(), "", func() { spec.NotifyWaiting("image: Pulling: " + d.proxyImage()) }); err != nil {
 		return runner.Sandbox{}, err
 	}
 

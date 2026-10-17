@@ -162,6 +162,96 @@ func TestPG_LaunchIntentEraseLinearizesWithLaunches(t *testing.T) {
 	}
 }
 
+// The same linearization on the queued path: CreateQueuedRun takes the person lock before it waits for
+// the pool row, so a queued launch that began before an erase keeps its intent until the erase removes
+// it, and one that meets the queued erase starts with none.
+func TestPG_LaunchIntentEraseLinearizesWithQueuedLaunches(t *testing.T) {
+	pool := runsPGPoolIsolated(t)
+	st := store.NewPG(pool)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	p := queuePool(t, st)
+	poolHold, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = poolHold.Rollback(context.WithoutCancel(ctx)) }()
+	var locked uuid.UUID
+	if err := poolHold.QueryRow(ctx, `SELECT id FROM runner_pools WHERE id = $1 FOR NO KEY UPDATE`, p.ID).Scan(&locked); err != nil {
+		t.Fatal(err)
+	}
+	// waitOnPool returns once n sessions wait on that row lock, through the connection this test already holds.
+	waitOnPool := func(n int) {
+		t.Helper()
+		for {
+			var waiting int
+			if err := poolHold.QueryRow(ctx, `SELECT count(*) FROM pg_locks WHERE locktype IN ('transactionid', 'tuple') AND NOT granted`).Scan(&waiting); err != nil {
+				t.Fatal(err)
+			}
+			if waiting >= n {
+				return
+			}
+			select {
+			case <-ctx.Done():
+				t.Fatalf("%d sessions never waited on the pool row", n)
+			case <-time.After(10 * time.Millisecond):
+			}
+		}
+	}
+	type created struct {
+		run types.AgentRun
+		err error
+	}
+	launch := func(r types.AgentRun) chan created {
+		ch := make(chan created, 1)
+		go func() {
+			got, err := st.CreateQueuedRun(ctx, r, store.RunQueueEntry{QueuedAt: time.Now().UTC(), DeadlineAt: time.Now().UTC().Add(time.Hour)}, 0)
+			ch <- created{got, err}
+		}()
+		return ch
+	}
+	queued := func(task string) types.AgentRun {
+		r := poolRun(p, types.RunQueued, "alice")
+		r.LaunchIntent = intentRun("alice", `{"agent":"claude-code","task":"`+task+`"}`).LaunchIntent
+		return r
+	}
+
+	before := queued("before")
+	beforeDone := launch(before)
+	waitOnPool(1) // holds alice's lock, waits on the pool row
+	erased := make(chan int, 1)
+	go func() {
+		n, err := st.DeleteLaunchIntentsCreatedBy(ctx, "alice")
+		if err != nil {
+			t.Error(err)
+		}
+		erased <- n
+	}()
+	waitAdvisoryWaiters(ctx, t, poolHold, 1) // the erase waits for that launch
+	during := queued("during")
+	duringDone := launch(during)
+	waitOnPool(2) // met the queued erase, now waits on the pool row
+	if err := poolHold.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	b, d, n := <-beforeDone, <-duringDone, <-erased
+	if b.err != nil || d.err != nil {
+		t.Fatalf("queued launches: %v / %v", b.err, d.err)
+	}
+	if b.run.LaunchIntent == nil || n != 1 {
+		t.Errorf("the queued launch ahead of the erase kept %v and the erase removed %d, want kept then removed", b.run.LaunchIntent != nil, n)
+	}
+	if d.run.LaunchIntent != nil {
+		t.Error("the queued launch that met the erase kept an intent")
+	}
+	for name, run := range map[string]types.AgentRun{"before": b.run, "during": d.run} {
+		if _, err := st.GetLaunchIntent(ctx, run.ID, "alice"); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("the queued launch %s the erase still has an intent after it: %v", name, err)
+		}
+	}
+}
+
 // waitAdvisoryWaiters returns once n sessions wait on an advisory lock. It polls
 // through q, the connection the test already holds: a second pool acquire while
 // the cap holder is out would trip the nested-acquire guard.

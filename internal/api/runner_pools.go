@@ -45,6 +45,8 @@ func (s *Server) mountRunnerPoolRoutes(r, operatorOnly, securityOps chi.Router) 
 	operatorOnly.Delete("/runner-pools/{id}", s.handleDeleteRunnerPool)
 	operatorOnly.Put("/runner-pools/{id}/remote-runners/{rid}", s.handleAddRunnerPoolExecutor)
 	operatorOnly.Delete("/runner-pools/{id}/remote-runners/{rid}", s.handleRemoveRunnerPoolExecutor)
+	operatorOnly.Put("/runner-pools/{id}/runners/{runner}", s.handleAddRunnerPoolOrgRunner)
+	operatorOnly.Delete("/runner-pools/{id}/runners/{runner}", s.handleRemoveRunnerPoolOrgRunner)
 	r.Post("/me/runner-pools", s.handleCreateMyRunnerPool)
 	r.Put("/me/runner-pools/{id}", s.handleUpdateMyRunnerPool)
 	r.Delete("/me/runner-pools/{id}", s.handleDeleteMyRunnerPool)
@@ -300,6 +302,11 @@ func (s *Server) listRunnerPools(w http.ResponseWriter, r *http.Request, forUse 
 	rows, ok := s.poolCatalogue(w, r, ps, forUse)
 	if !ok {
 		return
+	}
+	// Only the oversight read can pass the cap: it reads one row more, so the list can say more exist.
+	if len(rows) > store.RunnerPoolsOversightMax {
+		rows = rows[:store.RunnerPoolsOversightMax]
+		w.Header().Set("X-Wardyn-Truncated", "true")
 	}
 	subj, err := s.callerSubjects(r.Context())
 	if err != nil {

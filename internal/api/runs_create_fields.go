@@ -34,7 +34,6 @@ const (
 	maxRunAgentLen = 128
 )
 
-// DRAFT (M2 canon pending)
 const (
 	// runFieldControlCharRefusal is the 400 for a control character in a
 	// create-run text field. NUL is the one that mattered: Postgres rejects it

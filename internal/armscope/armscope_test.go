@@ -99,6 +99,8 @@ func TestARMScope_UnreadableIsRefused(t *testing.T) {
 		"/subscriptions%3bx/" + pinned, "/subscriptions/" + pinned + "%3b/resourcegroups",
 		base + "/..%253b/" + other, base + "/rg%2541", base + "/rg%25", base + "/rg%3Fx", base + "/rg%23x",
 		base + "/%2E%2E/" + other, base + "/rg%0a", base + "/rg%7f", base + "/%20rg", base + "/rg.",
+		// A dot or lookalike with no letter or digit: fullwidth dots, ".." with a zero-width character, "..+".
+		base + "/%EF%BC%8E%EF%BC%8E/" + other, base + "/..%E2%80%8B/" + other, base + "/..+/" + other, base + "/%E2%80%A4/" + other,
 	} {
 		if err := scope(true).Admit(http.MethodGet, path, nil); !errors.Is(err, ErrUnreadable) {
 			t.Errorf("GET %q = %v, want ErrUnreadable", path, err)

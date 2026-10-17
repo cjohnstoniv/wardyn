@@ -96,6 +96,26 @@ func TestRunnerRemoteListNoLimits(t *testing.T) {
 	}
 }
 
+// `--ids` prints one id per line, whatever the names hold, and `--set-up-here` leaves out the rows that are
+// another computer's: a script reads these instead of the table, whose columns a double space in a name shifts.
+func TestRunnerRemoteListIDsAndSetUpHere(t *testing.T) {
+	here := sdk.RemoteRunnerView{RemoteRunner: sdk.RemoteRunner{ID: "docker", Name: "say  no"}, Configured: true}
+	away := sdk.RemoteRunnerView{RemoteRunner: sdk.RemoteRunner{ID: "k8s", Name: "Cluster"}}
+	srv := newCmdServer(t, http.StatusOK, []sdk.RemoteRunnerView{here, away})
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"--ids"}, "docker\nk8s\n"},
+		{[]string{"--ids", "--set-up-here"}, "docker\n"},
+	} {
+		out, err := execCmdCapture(t, append([]string{"runner", "remote", "list"}, append(tc.args, "--url", srv.URL, "--token", "t")...)...)
+		if err != nil || out != tc.want {
+			t.Errorf("list %v = %q, %v; want %q", tc.args, out, err, tc.want)
+		}
+	}
+}
+
 // `wardyn runner list --no-limits` keeps only the self-hosted runners that take no run until limits are
 // set, and skips the remote-hosted section (`wardyn runner remote list --no-limits` is that list).
 func TestRunnerListNoLimits(t *testing.T) {
@@ -107,5 +127,25 @@ func TestRunnerListNoLimits(t *testing.T) {
 		if err != nil || !strings.Contains(out, "no-limits-yet") || strings.Contains(out, "has-limits") {
 			t.Fatalf("%v = %v\n%s\nwant the runner with no limits alone", args, err, out)
 		}
+	}
+}
+
+// A --free-disk of zero or less is refused before any request, not ignored.
+func TestRunnerRemotePropose_FreeDiskMustBePositive(t *testing.T) {
+	for _, v := range []string{"0", "-5"} {
+		srv := newCmdServer(t, http.StatusOK, sdk.RemoteRunnerView{})
+		out, err := execCmdCapture(t, "runner", "remote", "propose", "docker", "--free-disk", v, "--url", srv.URL, "--token", "t")
+		if err == nil || !strings.Contains(err.Error(), "--free-disk must be a positive") || out != "" || len(srv.reqs) != 0 {
+			t.Errorf("--free-disk %s = %q, %v, %d requests; want it refused before any request", v, out, err, len(srv.reqs))
+		}
+	}
+}
+
+// `runner remote people clear` says what it did, like its sibling verbs.
+func TestRunnerRemotePeopleClear_SaysWhatItDid(t *testing.T) {
+	srv := newCmdServer(t, http.StatusNoContent, nil)
+	out, err := execCmdCapture(t, "runner", "remote", "people", "clear", "docker", "--url", srv.URL, "--token", "t")
+	if err != nil || !strings.Contains(out, "docker") || !strings.Contains(out, "no longer available to people's pools") {
+		t.Errorf("people clear = %q, %v; want a line naming the runner and the change", out, err)
 	}
 }

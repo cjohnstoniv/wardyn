@@ -237,6 +237,9 @@ func validateWorkspaceSource(src types.WorkspaceSource, adoServerHosts []string)
 			return fmt.Sprintf(repoField400Charset, "target")
 		}
 		// Write-door half of the traversal guard — see validateSourceWrite.
+		if repoURLHasUserinfo(src.Source) {
+			return repoURLUserinfo400 // ahead of the shape check, which names no reason of its own
+		}
 		if !repoLocatorPathSafe(src.Source, adoServerHosts) {
 			return fmt.Sprintf(repo400LocatorShape, "source")
 		}
@@ -506,7 +509,7 @@ func (s *Server) sshWorkspaceSourcesReady(ctx context.Context, sources []types.W
 func (s *Server) handleCreateWorkspace(w http.ResponseWriter, r *http.Request) {
 	req, msg := decodeWorkspaceRequest(w, r, s.adoHostsLoader(r.Context()))
 	if msg != "" {
-		writeErrorReason(w, http.StatusBadRequest, reasonWorkspaceRequestInvalid, msg)
+		writeErrorReason(w, http.StatusBadRequest, repoURLMsgReason(msg, reasonWorkspaceRequestInvalid), msg)
 		return
 	}
 	if msg := s.sshWorkspaceSourcesReady(r.Context(), req.Sources); msg != "" {
@@ -659,7 +662,7 @@ func (s *Server) handleUpdateWorkspace(w http.ResponseWriter, r *http.Request) {
 	}
 	req, msg := decodeWorkspaceRequest(w, r, s.adoHostsLoader(r.Context()))
 	if msg != "" {
-		writeErrorReason(w, http.StatusBadRequest, reasonWorkspaceRequestInvalid, msg)
+		writeErrorReason(w, http.StatusBadRequest, repoURLMsgReason(msg, reasonWorkspaceRequestInvalid), msg)
 		return
 	}
 	if msg := s.sshWorkspaceSourcesReady(r.Context(), req.Sources); msg != "" {

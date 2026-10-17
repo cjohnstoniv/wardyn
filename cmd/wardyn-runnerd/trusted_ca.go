@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"log/slog"
 	"os"
@@ -40,10 +41,25 @@ func loadTrustedCA(file string) (bundle string, n int, err error) {
 	return bundle, n, nil
 }
 
+// maxCAFileRead bounds what is read of the named file, so a path naming something huge is refused
+// without reading it all. It is well above runner.MaxEnvTrustedCAPEM: the bound that matters applies
+// to the rebuilt bundle, and a file with comments or a merged system bundle (a few hundred KiB)
+// should still get that message.
+const maxCAFileRead = 1 << 20
+
 func readCAFile(path string) (string, int, error) {
-	raw, err := os.ReadFile(path)
+	f, err := os.Open(path)
 	if err != nil {
 		return "", 0, err
+	}
+	defer f.Close()
+	raw, err := io.ReadAll(io.LimitReader(f, maxCAFileRead+1))
+	if err != nil {
+		return "", 0, err
+	}
+	if len(raw) > maxCAFileRead {
+		return "", 0, fmt.Errorf("the file is over %d KiB; runners take at most %d KiB of certificates: name a file holding only your organisation's roots, not a merged system bundle",
+			maxCAFileRead>>10, runner.MaxEnvTrustedCAPEM>>10)
 	}
 	bundle, certs, err := runner.TrustedCABundle(raw)
 	return bundle, len(certs), err

@@ -231,7 +231,7 @@ func TestPG_QueueEndsAuditOnlyWhatTheyEnded(t *testing.T) {
 	e.srv.endPromoted(e.startOf(queueAuthority{Sub: e.personP}, run), &queueEnd{token: string(types.RunEndQueuePolicyChanged)})
 	fs := &queueFaultStore{PG: e.pg, stale: []types.AgentRun{run}}
 	e.srv.cfg.Store = fs
-	e.srv.failStalePromoted(ctx)
+	_ = e.srv.failStalePromoted(ctx)
 	if rows := e.audits(run.ID, "run.queue.start"); len(rows) != 0 {
 		t.Errorf("run.queue.start rows for a run already ended = %d, want 0", len(rows))
 	}

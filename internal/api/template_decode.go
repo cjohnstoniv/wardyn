@@ -388,9 +388,12 @@ func (d *templateDecoder) scanString(path, s string) {
 	}
 }
 
-func isRedactedPlaceholder(s string) bool {
-	return strings.Contains(strings.ToLower(s), "redacted") && len(s) <= 32
-}
+// redactedPlaceholderRE is the word "redacted" alone, bracketed or starred ("<redacted>", "[REDACTED]",
+// "***redacted***"), or the count form a policy copy carries ("<2 value(s) redacted>").
+var redactedPlaceholderRE = regexp.MustCompile(`(?i)^[<>\[\]()*_\s-]*(\d+ value\(s\) )?redacted[<>\[\]()*_\s-]*$`)
+
+// isRedactedPlaceholder: an ordinary name or task that merely contains the word is a value.
+func isRedactedPlaceholder(s string) bool { return redactedPlaceholderRE.MatchString(s) }
 
 // walkRaw reads a free-form value (a grant's scope): one bounded object whose
 // strings are scanned. Its fields are checked per grant kind where the grant

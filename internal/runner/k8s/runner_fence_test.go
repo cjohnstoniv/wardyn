@@ -71,6 +71,15 @@ func TestRunnerFenceReleasedOnWitness(t *testing.T) {
 		if len(h.fences) != 1 || h.d.cfg.IPFenced(testProxyIP) {
 			t.Fatalf("fences %v, IP still refused %v", h.fences, h.d.cfg.IPFenced(testProxyIP))
 		}
+		// The sandbox stop that follows, which contains the still-held agent pod, keeps the released
+		// IP released.
+		h.boundAgent(t)
+		if err := h.d.StopSandbox(ctx, agentPodName(h.runID)); err != nil {
+			t.Fatal(err)
+		}
+		if h.d.cfg.IPFenced(testProxyIP) {
+			t.Fatalf("StopSandbox after StopProxy refused the released IP again: fences %v", h.fences)
+		}
 		restarted := fenceSet{}
 		restarted.wire(h)
 		h.fences = nil
@@ -194,5 +203,31 @@ func TestRunnerApproversDedupeOnEitherKey(t *testing.T) {
 				t.Fatalf("AcceptNodeRecord: %v", err)
 			}
 		})
+	}
+}
+
+// boundAgent records the harness run's agent pod on node n1 as the start wait would, held under the
+// stop-proof finalizer like the proxy.
+func (h *runnerHarness) boundAgent(t *testing.T) {
+	t.Helper()
+	ctx := context.Background()
+	pod := h.proxyPod("n1")
+	pod.Name, pod.UID = agentPodName(h.runID), "uid-agent-1"
+	pod.Labels = wardynLabels(h.runID, componentAgent, nil)
+	pod.Labels[runner.LabelRunnerID] = testRunnerID
+	pod.Status.PodIP = "10.244.1.8"
+	b := &bracket{d: h.d, runID: h.runID, component: componentAgent}
+	if err := b.before(ctx, pod.Name); err != nil {
+		t.Fatal(err)
+	}
+	created, err := h.cs.CoreV1().Pods(testNamespace).Create(ctx, pod, metav1.CreateOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := b.created(created); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.d.observePod(ctx, h.runID, componentAgent, created); err != nil {
+		t.Fatal(err)
 	}
 }

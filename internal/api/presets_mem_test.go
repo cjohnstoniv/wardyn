@@ -295,6 +295,30 @@ func TestPresetClosedToOtherUserTypesIsHidden(t *testing.T) {
 	}
 }
 
+// A member's read of a preset redacts its stored inline_policy as a policy read
+// does; the operator's read, and the stored row a launch expands, keep the path.
+func TestPresetReadRedactsTheInlinePolicyForAMember(t *testing.T) {
+	f := newMemPresetFixture(t)
+	inline := &client.RunPolicySpec{MinConfinementClass: types.CC2,
+		WorkspaceMounts: []types.WorkspaceMount{{Source: "/srv/team-data", Target: "/home/agent/data"}}}
+	if w := f.put(t, "open", client.PresetRequest{Request: client.CreateRunRequest{Agent: "claude-code", InlinePolicy: inline}}); w.Code != http.StatusCreated {
+		t.Fatalf("put = %d: %s", w.Code, w.Body.String())
+	}
+	member := ssoSession(t, "sub-preset-redact", "member@corp.example", oidc.RoleUser)
+	for path, tc := range map[string]struct {
+		w    *httptest.ResponseRecorder
+		want bool
+	}{
+		"member get":  {doSSO(t, f.srv, http.MethodGet, "/api/v1/presets/open", member, ""), false},
+		"member list": {doSSO(t, f.srv, http.MethodGet, "/api/v1/presets", member, ""), false},
+		"admin get":   {do(t, f.srv, http.MethodGet, "/api/v1/presets/open", adminToken, ""), true},
+	} {
+		if tc.w.Code != http.StatusOK || strings.Contains(tc.w.Body.String(), "/srv/team-data") != tc.want {
+			t.Errorf("%s = %d, path visible=%v, want %v: %s", path, tc.w.Code, strings.Contains(tc.w.Body.String(), "/srv/team-data"), tc.want, tc.w.Body.String())
+		}
+	}
+}
+
 // TestExpandRunPreset drives the launch-side expansion directly: what a
 // preset launch may carry, what it is refused for, and what the expanded
 // request keeps of the caller's body.

@@ -20,7 +20,7 @@ Every string the New Run flow shows lives once in this file and once in the lazy
 | Start | Three paths meet at Review: AI composer (Coming soon), Guided setup, and the YAML or JSON run document. |
 | Template and Run again | Choosing one loads the saved setup and opens Review. Anything missing is a blocker that links to its step. |
 | Review | Blockers come first: local issues, unsupported document fields, template setup items, the server refusal, missing setup items, then a stale check. Launch stays shut until a check under 60 seconds old matches the draft. |
-| Name dialog | Opening it runs a fresh check. "Checked just now" shows only from that result; "Checking…" shows while it runs. |
+| Name dialog | Opening it runs a fresh check. "Checked just now" shows only from that result; "Checking…" shows while it runs. A check that fails or is rate-limited leaves Launch available, since the create is the authority. |
 | Launched | Starting shows an indeterminate bar. Waiting shows the place in line, the time waiting and when the run gives up. |
 | Disabled options | Every disabled option shows its reason as visible text or an InfoTip. |
 
@@ -85,6 +85,7 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 |---|---|---|
 | `TITLE` | mock | What are you running? |
 | `LEDE` | mock | Pick the closest shape. You can adjust every detail before launch. |
+| `SHAPE_REQUIRED` | deviation (lead wording 2026-10-17, FR-0099) | Choose a shape for this run. |
 | `START_FROM` | mock | Start from |
 | `SOURCE_SCRATCH` | mock | From scratch |
 | `SOURCE_TEMPLATE` | mock | Saved template |
@@ -96,6 +97,8 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `AGAIN_NOTE` | pending (W-01) | Settings are rechecked now. Short-lived credentials are issued fresh; standing approvals still apply. |
 | `EMPTY_TEMPLATES` | pending (W-23) | No saved templates yet. |
 | `EMPTY_AGAIN` | pending (W-23) | No previous runs to start again. |
+| `TEMPLATES_LOADING` | deviation (lead wording 2026-10-17, FUG-L771) | Loading saved templates… |
+| `AGAIN_LOADING` | deviation (lead wording 2026-10-17, FUG-L771) | Loading previous runs… |
 | `AGENT_TITLE` | mock | Agent task |
 | `AGENT_BODY` | mock | A one-time coding task, driven by you or running autonomously. |
 | `AGENT_SUB` | mock | Interactive · Autonomous · Repeat / schedule coming soon |
@@ -134,11 +137,14 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `APP_SERVER_BODY` | mock | App servers and MCP servers. |
 | `COMMAND_LABEL` | mock | Command |
 | `COMMAND_HELP` | mock | Run verbatim in the sandbox. The run ends when the command exits. |
+| `COMMAND_REQUIRED` | deviation (lead wording 2026-10-17, FR-0099) | A command run needs a command to run. |
 | `WHERE_LABEL` | mock | Where should it run? |
 | `POOL_LABEL` | mock | Pool |
 | `POOL_HELP` | deviation (DS-5 §8) | A pool is required. Pools you can use stay visible, with the reason when one can't take this run. |
 | `POOL_OPTION_REASON(pool, reason)` | mock | {pool} · {reason} |
 | `REASON_NO_ONLINE` | mock | No online runners |
+| `FIT_STARTS_NOW` | pending (W-55) | Starts now |
+| `FIT_WAITS` | pending (W-55) | Waits for a slot |
 | `REASON_SWITCHED_OFF` | pending (W-03) | Switched off |
 | `REASON_NO_RUNNERS` | pending (W-03) | No runners |
 | `REASON_BACKGROUND_ONLY` | pending (W-03) | Background only |
@@ -257,6 +263,7 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `TASK_PLACEHOLDER` | mock | What should this agent accomplish? |
 | `TASK_HELP` | mock | This harness starts automatically when it has a task. |
 | `TASK_ERROR` | mock | An autonomous run needs at least one task to perform. |
+| `HARNESS_REQUIRED` | deviation (lead wording 2026-10-17, FR-0099) | A run needs at least one harness. |
 | `ADD_HARNESS` | mock | Add a harness |
 | `ADD_ANOTHER` | mock | Add another harness |
 | `ADDED` | mock | Harness added. |
@@ -271,12 +278,13 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `MAIN_TITLE` | mock | Main drive |
 | `MAIN_BODY` | deviation (DS-3 W3) | The sandbox's own disk: system, tools and /home/agent. Every run has one. |
 | `SIZE_LABEL` | mock | Size |
-| `UP_TO(cap)` | mock | Up to {cap} GiB in this pool |
-| `CLAMP_POOL(cap, pool)` | mock | Clamped to {cap} GiB by the {pool} pool. |
-| `CLAMP_PROFILE(cap, profile)` | pending (W-11) | Clamped to {cap} GiB by {profile}. |
-| `CLAMP_SERVER(cap)` | pending (W-11) | Clamped to {cap} GiB by this server. |
-| `CLAMP_POLICY(cap)` | pending (W-11) | Clamped to {cap} GiB by this run's policy. |
-| `CLAMP_ORG(cap)` | pending (W-11) | Clamped to {cap} GiB by your organisation's limits. |
+| `UP_TO(size)` | mock | Up to {size} in this pool |
+| `CLAMP_POOL(size, pool)` | mock | Clamped to {size} by the {pool} pool. |
+| `CLAMP_PROFILE(size, profile)` | pending (W-11) | Clamped to {size} by {profile}. |
+| `CLAMP_SERVER(size)` | pending (W-11) | Clamped to {size} by this server. |
+| `CLAMP_POLICY(size)` | pending (W-11) | Clamped to {size} by this run's policy. |
+| `CLAMP_ORG(size)` | pending (W-11) | Clamped to {size} by your organisation's limits. |
+| `SIZE_EXACT(mib)` | mock | Exactly {mib} MiB |
 | `SIZE_ERROR` | mock | Set a size for the main drive. |
 | `ENFORCED` | mock | Enforced |
 | `ENFORCED_TIP` | deviation (DS-3 W1) | Writes past this size fail. |
@@ -345,20 +353,21 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `NO_EXTRA_DELETED` | mock | Only the main drive. Nothing from this run is kept. |
 | `NO_EXTRA_KEPT(grace)` | pending (W-12) | Only the main drive. It is deleted {grace} after the run's end time. |
 | `CHOOSE_FILES` | deviation (owner-approved Files prototype 2026-10-13) | Add what it needs, or choose No extra files. |
+| `STARTS_HERE_REQUIRED` | deviation (lead wording 2026-10-17, FR-0099) | Choose the folder the run starts in. |
 | `MOUNT_TITLE` | mock | Mount map |
 | `MOUNT_BODY` | mock | Read-only view of where files appear in the sandbox. |
-| `MOUNT_MAIN(n)` | mock | Main drive · {n} GiB |
+| `MOUNT_MAIN(size)` | mock | Main drive · {size} |
 | `MOUNT_ITEM(name)` | mock | ← {name} |
 | `MOUNT_STARTS` | mock | (Starts here) |
 | `MOUNT_READ_ONLY` | mock | (read-only) |
-| `SUMMARY_MAIN(n)` | mock | Main drive {n} GiB |
+| `SUMMARY_MAIN(size)` | mock | Main drive {size} |
 | `SUMMARY_STARTS(name)` | mock | starts in {name} |
 | `SUMMARY_KEPT_ONE(names)` | mock | {names} is kept |
 | `SUMMARY_KEPT_MANY(names)` | mock | {names} are kept |
 | `SUMMARY_DELETED` | mock | the main drive is deleted when the run ends |
 | `SUMMARY_KEPT(grace)` | pending (W-12) | the main drive is kept {grace} after its end time |
 | `SUMMARY_NO_END` | pending (W-12) | the main drive is kept until you end the run |
-| `SUMMARY_NO_EXTRA(n, life)` | mock | Main drive {n} GiB · no extra files · {life}. |
+| `SUMMARY_NO_EXTRA(size, life)` | mock | Main drive {size} · no extra files · {life}. |
 | `ATTACH_TITLE` | deviation (owner-approved Files prototype 2026-10-13) | Repositories, drives and folders |
 | `ATTACH_BODY` | deviation (owner-approved Files prototype 2026-10-13) | Each one appears in the sandbox at its mount path. |
 | `ADD` | deviation (owner-approved Files prototype 2026-10-13) | + Add |
@@ -481,6 +490,7 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `CODEX_HOLD_TIP` | mock | Codex CLI can't pause a tool call for approval. |
 | `CODEX_NOTE` | pending (W-32) | Codex CLI can't pause a tool call for approval, and Wardyn can't block its own tools. Rules for its MCP tools are enforced by the proxy. |
 | `RULES_LABEL` | mock | Tool rules |
+| `ROW_LOCKED` | deviation (lead wording 2026-10-17, FUG-L771) | Set by your organisation's policy |
 | `ADD_RULE` | mock | Add a tool rule |
 | `MCP_FOR_HARNESS` | mock | MCP servers for this harness |
 | `MCP_FOLLOWS` | mock | Calls to an MCP server follow this harness's tool rules, as `mcp__<server>__<tool>`. |
@@ -518,6 +528,7 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `SECRET_INTRO` | pending (W-39) | Choose one of your saved secrets and how the run receives it. Prefer a request header: no copy is placed in the sandbox. |
 | `SECRET_LABEL` | mock | Secret |
 | `SECRET_HELP` | mock | Values are stored encrypted and never shown again. Add new secrets under Your account. |
+| `SECRET_NONE` | deviation (owner approved 2026-10-17, FR-0110) | You have no saved secrets yet. |
 | `DELIVERY_LABEL` | mock | Delivery |
 | `DELIVERY_HEADER_OPTION` | pending (W-39) | Request header |
 | `DELIVERY_ENV_OPTION` | pending (W-39) | Environment variable |
@@ -633,6 +644,10 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `ANNOUNCE_VALID` | mock | Document valid. |
 | `JSON_INVALID` | mock | This JSON document isn't valid. Check the highlighted structure. |
 | `YAML_INVALID` | pending (W-19) | This YAML document isn't valid. Check the highlighted structure. |
+| `TOO_LARGE` | deviation (owner approved 2026-10-17, FR-0098) | This file is over 1 MiB, the most the editor reads. |
+| `FILE_UNREADABLE` | deviation (owner approved 2026-10-17, FR-0098) | The browser could not read this file. |
+| `DOC_INVALID` | deviation (lead wording 2026-10-17, FR-0099) | Fix the errors in the document. |
+| `NO_HARNESS` | deviation (lead wording 2026-10-17, FR-0098) | Choose a harness to load its example. |
 | `ERR_TITLE_EXCLUDED` | server | reason template_field_excluded, mapped by run-document-canon (it owns the sentence) |
 | `ERR_END_CONFLICT` | server | reason run_end_conflicting_fields, mapped by run-document-canon (it owns the sentence) |
 | `ERR_VERSION` | server | reason template_version_unsupported, mapped by run-document-canon (it owns the sentence) |
@@ -691,7 +706,7 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `WORK_NONE` | mock | No repositories or drives |
 | `WORK_ITEM_ONE` | mock | 1 item attached |
 | `WORK_ITEMS(n)` | mock | {n} items attached |
-| `MAIN_DRIVE(n)` | mock | Main drive · {n} GiB |
+| `MAIN_DRIVE(size)` | mock | Main drive · {size} |
 | `NO_HARNESSES` | mock | No harnesses |
 | `TOOLS_COMMAND_ONE` | mock | Command · 1 optional harness |
 | `TOOLS_COMMAND(n)` | mock | Command · {n} optional harnesses |
@@ -742,6 +757,7 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `POLICY_TOOLS` | mock | Tools and pushes |
 | `POLICY_HOLD` | mock | Hold for approval |
 | `POLICY_AUTOMATIC` | mock | Run automatically |
+| `POLICY_TOOLS_OF(harness, effect)` | mock | {harness}: {effect} |
 | `RAW_TITLE(format)` | mock | {format} run document |
 | `RAW_BODY` | mock | Read-only resolved draft |
 | `COPY` | mock | Copy |
@@ -780,6 +796,8 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `CANCEL_SAVE` | mock | Cancel |
 | `CONFIRM_TEMPLATE` | mock | Save template |
 | `CONFIRM_POLICY` | mock | Save policy |
+| `NOTHING_PICKED` | deviation (lead wording 2026-10-17, FUG-L771) | Choose at least one part to include. |
+| `OWN_DRIVES_LEFT_OUT` | deviation (DS-2, FUG-L771) | Your own drives are left out of shared templates. |
 | `SAVED(kind)` | mock | {kind} saved without changing the draft. |
 | `NAME_TAKEN` | server | reason template_name_taken (Go owns the sentence) |
 | `LIMIT_REACHED` | server | reason template_limit_reached (Go owns the sentence) |
@@ -861,8 +879,10 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `USE` | mock | Use |
 | `RENAME` | mock | Rename |
 | `DELETE` | mock | Delete |
-| `PUBLISH` | pending (W-24) | Publish to organisation |
-| `WHY_ORG` | mock | Published by your organisation. Only organisation admins can change it. |
+| `PUBLISH` | deviation (lead wording 2026-10-17, FR-0120) | Publish to organization |
+| `PUBLISH_TITLE(name)` | deviation (lead wording 2026-10-17, FR-0120) | Publish {name} to your organization? |
+| `PUBLISHED(name)` | deviation (lead wording 2026-10-17, FR-0120) | {name} published to your organization. |
+| `WHY_ORG` | deviation (lead wording 2026-10-17, FR-0120) | Published by your organization. Only organization admins can change it. |
 | `WHY_GROUP(scope)` | mock | Published to {scope}. Only its template managers can change it. |
 | `EMPTY_TITLE` | mock | No templates yet |
 | `EMPTY_BODY` | mock | When you review a run, choose Save as template to start from the same setup next time. |

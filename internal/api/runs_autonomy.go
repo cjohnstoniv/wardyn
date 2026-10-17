@@ -91,13 +91,11 @@ func (s *Server) resolveRunAutonomy(w http.ResponseWriter, r *http.Request, req 
 	// read once — a gate and an author that resolved it separately could
 	// disagree, and an admin's edit between them is exactly how they would.
 	//
-	// runIdentitySubject(principalFromRequest), the SAME pair dispatch resolves
-	// it from (runs_dispatch.go reads run.CreatedBy, which IS
-	// principalFromRequest at this door) — never secretOwnerFromRequest, which
-	// answers "" for every operator and would hide the lane from an admin whose
-	// own run dispatch credentials fine.
-	adoRun, adoOn := resolveADOEntraRun(scmSite, repoLocatorsOf(spec.WorkspaceRepos),
-		runIdentitySubject(r.Context(), principalFromRequest(r)))
+	// The SAME inputs dispatch resolves it from: the workspace repositories and
+	// the run's own repo (dispatch's ADOLaneRepo is this request's Repo), for
+	// adoLaneOwnerOf — the creator create records, and nobody for an operator
+	// token, local mode or a service identity, which hold no connection.
+	adoRun, adoOn := resolveADOEntraRun(scmSite, spec.WorkspaceRepos, req.Repo, adoLaneOwnerOf(r))
 	grade := adoEntraGradedAs(adoRun, adoOn)
 	bedrock := bedrockCredGradedAs(modelCred)
 	posture := composer.AutonomyPostureOf(autonomyPostureSpec(spec, wsRefs, req.Repo, scmSite, grade, bedrock, ceiling.Spec.AllowedDomains), enforced, baseline)

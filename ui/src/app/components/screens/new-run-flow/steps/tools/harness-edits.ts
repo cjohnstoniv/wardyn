@@ -40,8 +40,25 @@ export function removeToolRule(intent: RunIntent, toolId: string, tool: string):
 /** A component entry as step 5 writes it: the harnesses its MCP server is turned on for. Absent leaves the server's own default. */
 export type McpComponentRef = ComponentRef & { mcp_harnesses?: string[] };
 
-export function setMcpHarnesses(intent: RunIntent, componentId: string, harnesses: string[]): RunIntent {
-  const components = ((intent.components ?? []) as McpComponentRef[]).map((c) => (c.id === componentId ? { ...c, mcp_harnesses: harnesses } : c));
+/**
+ * The draft's component an MCP row stands for: a stored one by its id, an inline one by the ordinal the
+ * server numbered it with (`inline:<n>`, its place in `components`). An inline row must still name the
+ * component now at that place, else it is stale and stands for none.
+ */
+export function mcpComponentIndex(intent: RunIntent, componentId: string, name: string): number {
+  const refs = (intent.components ?? []) as McpComponentRef[];
+  const inline = /^inline:(\d+)$/.exec(componentId);
+  if (!inline) return refs.findIndex((c) => c.id === componentId);
+  const at = Number(inline[1]);
+  const ref = refs[at];
+  return ref && !ref.id && !ref.builtin && ref.inline && ref.name === name ? at : -1;
+}
+
+/** Turns an MCP server on for exactly `harnesses`. A row that stands for no component of the draft changes nothing. */
+export function setMcpHarnesses(intent: RunIntent, componentId: string, name: string, harnesses: string[]): RunIntent {
+  const at = mcpComponentIndex(intent, componentId, name);
+  if (at < 0) return intent;
+  const components = ((intent.components ?? []) as McpComponentRef[]).map((c, i) => (i === at ? { ...c, mcp_harnesses: harnesses } : c));
   return withKeys(intent, { components });
 }
 

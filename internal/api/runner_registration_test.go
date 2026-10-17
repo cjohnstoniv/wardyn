@@ -8,6 +8,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -313,6 +314,21 @@ func TestRunnerRegistrationUnsetOrgURLFailsClosed(t *testing.T) {
 	w := do(t, srv, http.MethodPost, "/api/v1/runners/register", "", "{}")
 	if w.Code != 503 || !strings.Contains(w.Body.String(), "WARDYN_RUNNER_ORG_URL") {
 		t.Fatalf("missing org configuration:%d %s", w.Code, w.Body.String())
+	}
+}
+
+// The per-peer limiter runs before the site-config read: a caller past its burst is answered 429 without
+// the store being asked, even while the store cannot answer.
+func TestRunnerRegistrationLimiterRunsBeforeTheSiteConfigRead(t *testing.T) {
+	srv, f, _ := newRunnerRegistrationServer(t)
+	f.configErr = errors.New("store down")
+	for i := range int(enrolBurst) {
+		if w := do(t, srv, http.MethodPost, "/api/v1/runners/register", "", "{}"); w.Code != 503 {
+			t.Fatalf("attempt %d inside the burst = %d, want 503 (the config read)", i, w.Code)
+		}
+	}
+	if w := do(t, srv, http.MethodPost, "/api/v1/runners/register", "", "{}"); w.Code != 429 {
+		t.Fatalf("attempt past the burst = %d %s, want 429 before the config read", w.Code, w.Body.String())
 	}
 }
 

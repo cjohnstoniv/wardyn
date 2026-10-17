@@ -29,3 +29,7 @@ func ready() error {
 	}
 	return os.Setenv("DBUS_SESSION_BUS_ADDRESS", "unix:path="+dbus.EscapeBusAddressValue(bus))
 }
+
+// precheck: the Secret Service takes the value over D-Bus, with no length cap
+// short of the message limit.
+func precheck(string, string, string) error { return nil }

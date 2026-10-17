@@ -11,6 +11,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { isInaccessible, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { BarrierCompareTable, type BarrierOption } from "./barrier-compare-table";
+import { NR_RUN } from "./copy/new-run/run";
 import { CAVEAT_PREFIX, CC_MATRIX_ROWS, CC_META } from "./cc-meta";
 
 const NARROW = ".hidden{display:none}";
@@ -111,6 +112,8 @@ describe.each([
     renderTable();
     await userEvent.click(screen.getByRole("button", { name: "About Vault" }));
     expect(screen.getByText(CC_META.CC3.mechanism)).toBeInTheDocument();
+    // FR-0119: the three headings are the canon strings.
+    for (const head of [NR_RUN.PROTECTS_HEAD, NR_RUN.NOT_PROTECTS_HEAD, NR_RUN.HOW_HEAD]) expect(screen.getByText(head)).toBeInTheDocument();
   });
 
   it("shows the badges and hides Where it runs when asked", () => {

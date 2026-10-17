@@ -122,6 +122,10 @@ func (s *Server) handleRevokeSessions(w http.ResponseWriter, r *http.Request) {
 		writeErrorReason(w, http.StatusBadRequest, reasonSessionsRevokeParamInvalid, `"sessions_only" applies to "sub", not "all"`)
 		return
 	}
+	if isSubjectName(body.Sub) {
+		writeErrorReason(w, http.StatusUnprocessableEntity, reasonReservedPrincipal, "sub: "+subjectNameReservedMsg)
+		return
+	}
 	scope, target := "sub", body.Sub
 	actorCtx := withRequestActor(r)
 	var res personRevocation
@@ -132,7 +136,7 @@ func (s *Server) handleRevokeSessions(w http.ResponseWriter, r *http.Request) {
 			writeServerError(w, r, "revoke sessions", err)
 			return
 		}
-		res, err = s.revokeCredentials(actorCtx, "")
+		res, err = s.revokeCredentials(actorCtx, "", true)
 	} else if body.SessionsOnly {
 		if err = oidc.CutSessions(r.Context(), s.cfg.SessionRevocations, body.Sub); err != nil {
 			writeServerError(w, r, "revoke sessions", err)
@@ -205,6 +209,13 @@ type personRevocation struct {
 // as everyone, and that lever stays in handleRevokeSessions. An unresolved key
 // owner is zero keys and success; an ambiguous one is a failure.
 func (s *Server) revokePersonCredentials(ctx context.Context, principal string) (personRevocation, error) {
+	return s.revokePersonCredentialsBy(ctx, principal, true)
+}
+
+// revokePersonCredentialsBy is revokePersonCredentials with the choice of how the SSH keys are found:
+// resolveKeys false deletes the keys whose owner is principal exactly as given, never resolving an email
+// through the directory, so an address two principals could claim cannot refuse the sweep.
+func (s *Server) revokePersonCredentialsBy(ctx context.Context, principal string, resolveKeys bool) (personRevocation, error) {
 	if principal == "" {
 		return personRevocation{}, errors.New("revoke person credentials: principal required")
 	}
@@ -216,17 +227,26 @@ func (s *Server) revokePersonCredentials(ctx context.Context, principal string) 
 	if err := s.cfg.SessionRevocations.RevokeSub(ctx, principal); err != nil {
 		return personRevocation{}, err
 	}
-	res, err := s.revokeCredentials(ctx, principal)
+	res, err := s.revokeCredentials(ctx, principal, resolveKeys)
 	res.Stamped = true
-	// A sponsor is stored by subject, so an email-form revoke sweeps under the subject the key resolver found too.
+	// A sponsor is stored by subject, so an email-form revoke sweeps under the subject the email names too:
+	// resolved through the directory, since the key resolver keeps an email that owns keys itself.
 	n, serr := s.revokeSponsoredTokens(ctx, principal)
 	res.Tokens += n
 	// A run waiting in a pool's queue holds the person's authority as of its launch; it goes with the rest.
 	_, qerr := s.cancelQueuedRunsOf(ctx, principal, queueCancelSessionRevoked)
-	if res.KeyPrincipal != "" && res.KeyPrincipal != principal {
-		n, kerr := s.revokeSponsoredTokens(ctx, res.KeyPrincipal)
+	subject := res.KeyPrincipal
+	if resolveKeys && strings.Contains(principal, "@") {
+		named, _, refusal, rerr := s.resolveSecretOwner(ctx, principal)
+		if rerr == nil && refusal == "" {
+			subject = named
+		}
+		serr = errors.Join(serr, rerr)
+	}
+	if subject != "" && subject != principal {
+		n, kerr := s.revokeSponsoredTokens(ctx, subject)
 		res.Tokens += n
-		_, kqerr := s.cancelQueuedRunsOf(ctx, res.KeyPrincipal, queueCancelSessionRevoked)
+		_, kqerr := s.cancelQueuedRunsOf(ctx, subject, queueCancelSessionRevoked)
 		serr = errors.Join(serr, kerr, kqerr)
 	}
 	return res, errors.Join(err, serr, qerr)
@@ -261,13 +281,13 @@ func (s *Server) revokeSponsoredTokens(ctx context.Context, principal string) (i
 // revokeCredentials sweeps tokens and keys for principal ("" is everyone). Each
 // lane still runs if the other fails. The cutoff has already committed, so the
 // audit records the completed work before returning failure.
-func (s *Server) revokeCredentials(ctx context.Context, principal string) (personRevocation, error) {
+func (s *Server) revokeCredentials(ctx context.Context, principal string, resolveKeys bool) (personRevocation, error) {
 	var res personRevocation
 	var tokenErr error
 	res.Tokens, tokenErr = s.revokeAPITokensFor(ctx, principal)
 	var keyPrincipal string
 	var keyErr error
-	res.Keys, keyPrincipal, res.Refusal, res.KeyReason, keyErr = s.deleteSSHKeysFor(ctx, principal, true)
+	res.Keys, keyPrincipal, res.Refusal, res.KeyReason, keyErr = s.deleteSSHKeysFor(ctx, principal, resolveKeys)
 	res.KeyPrincipal = keyPrincipal
 	// SSH keys have no email column. Preserve the named cutoff for sessions and
 	// tokens, and stamp the resolved subject to catch registrations the DELETE missed.

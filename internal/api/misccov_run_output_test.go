@@ -856,3 +856,15 @@ func TestMiscCovFinishWritesNothingWhenTheOutputIsErasedMeanwhile(t *testing.T) 
 		}
 	})
 }
+
+// The queue never drops inside the tail the table keeps.
+func TestChunkQueueHoldsAtLeastTheKeptTail(t *testing.T) {
+	f, _ := miscCovOutFixture(t)
+	keep := runOutputChunkQueueMax * 2
+	q := &chunkQueue{s: f.srv, running: true, keep: keep}
+	data := miscCovPattern(keep + 10)
+	q.add(data)
+	if !bytes.Equal(q.pend, data[10:]) {
+		t.Fatalf("queued %d bytes, want the newest %d", len(q.pend), keep)
+	}
+}

@@ -19,6 +19,8 @@ import type { Page } from "@playwright/test";
 // oldest seeded run to RUNNING and does not restore it — it deletes only the
 // approval row it inserts; nothing else in this file mutates state at all.
 test.describe.configure({ mode: "serial" });
+// Keep the first attempt's trace: the click-loss flake fails only there, and the config records a trace on retry only.
+test.use({ trace: "retain-on-first-failure" });
 
 // Open the Runs screen and wait for the seeded page to render. PENDING
 // fixture 0 is always live, so it always renders (as "Queued" now — #1197 D2
@@ -164,6 +166,30 @@ test.describe("Run cockpit — a long kill outcome scrolls instead of clipping",
     const audit = block.getByRole("button", { name: "Open audit trail" });
     await audit.scrollIntoViewIfNeeded();
     await expect(audit).toBeInViewport();
+  });
+});
+
+// A kill whose sandbox stop was queued for an offline runner (run.kill success with data.sandbox_stop
+// "queued", from a lifetime or sweep kill) says the sandbox waits on the runner, never that it was removed.
+// The kill row is spliced: the hermetic backend has no offline runner to queue a stop for.
+test.describe("Run cockpit — a kill queued for an offline runner", () => {
+  test("says the credentials are revoked and the sandbox stays until the runner reconnects", async ({ page }) => {
+    const auth = { Authorization: `Bearer ${ADMIN_TOKEN}` };
+    const list = (await (await page.request.get("api/v1/runs?limit=1000", { headers: auth })).json()) as { id: string; task: string }[];
+    const id = list.find((r) => r.task === "e2e fixture 7")!.id;
+    const at = new Date().toISOString();
+    await page.route(/\/api\/v1\/audit\?/, async (route) => {
+      if (new URL(route.request().url()).searchParams.get("action") === "run.kill") {
+        return route.fulfill({ json: [{ id: "k1", time: at, actor_type: "system", actor: "wardynd", action: "run.kill", outcome: "success", data: { reason: "lifetime_cap", sandbox_stop: "queued" } }] });
+      }
+      return route.fallback();
+    });
+    await page.goto(`runs/${id}`);
+    const block = page.getByTestId("run-failure-block");
+    await expect(block).toHaveAttribute("data-evidence", "queued");
+    await expect(block).toContainText("Its credentials were revoked at once");
+    await expect(block).toContainText("was told to remove the sandbox when it next connects");
+    await expect(block).not.toContainText(/stopped and removed the sandbox|reported it removed the sandbox/);
   });
 });
 

@@ -86,7 +86,7 @@ export const workspaces = {
     // legacy-scm_hosts grace is the one that reaches this door (F1). Callers
     // surface them; they never mean the create failed.
   }): Promise<WorkspaceWriteResult> {
-    const res = await wfetch("/workspaces", { method: "POST", body: JSON.stringify(input) });
+    const res = await wfetch("/workspaces", { method: "POST", asPerson: true, body: JSON.stringify(input) });
     return asJson<WorkspaceWriteResult>(res);
   },
 
@@ -110,6 +110,7 @@ export const workspaces = {
   ): Promise<WorkspaceWriteResult> {
     const res = await wfetch(`/workspaces/${encodeURIComponent(id)}`, {
       method: "PUT",
+      asPerson: true,
       body: JSON.stringify(input),
     });
     return asJson<WorkspaceWriteResult>(res);

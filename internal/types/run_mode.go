@@ -120,9 +120,8 @@ func PushRulesForRemoteAt(sets []PushRuleSet, provider, remote, basePath string)
 // proxy's local approvals route, so a harness read from the body lets one tool
 // borrow a sibling's allow. The binding is a per-included-tool local credential
 // minted at dispatch and injected only into that harness's own hook
-// configuration; A-L3 lands it. Until it does, the run door keeps refusing more
-// than one included tool and any per-tool rule or default effect
-// (runModeUnavailable), so no run has a second harness to confuse.
+// configuration (mintHarnessCredentials), so a second harness cannot use a
+// sibling's allow.
 //
 // Like PushRuleSet, the sets are the product after the ceiling: policy and
 // ceiling rules are laid into each harness's set first, and a request's per-tool

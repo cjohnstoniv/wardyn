@@ -72,6 +72,8 @@ export function selfRunner(over: Partial<RunnerView> = {}): RunnerView {
     name: "laptop-7",
     state: "claimed",
     owner: "dana@example.com",
+    owner_kind: "person",
+    trust_class: "personal",
     online: true,
     key_fingerprint: "SHA256:abc",
     key_fingerprint_abbreviated: false,

@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Copyright 2026 The Wardyn Authors
+  SPDX-License-Identifier: Apache-2.0
+
+  com.wardyn.runnerd.managed — the LaunchAgent the macOS .pkg installs to /Library/LaunchAgents, so
+  launchd starts it in every person's login session. Like deploy/runner/com.wardyn.runnerd.plist (the one
+  `wardyn-runnerd setup` writes to ~/Library/LaunchAgents) it keeps `wardyn-runnerd serve` running as the
+  person who owns the runner, and restarts it after a crash.
+
+  It differs in two ways. The organisation, proxy image, CA bundle and the rest come from the
+  com.wardyn.runnerd managed preferences (wardyn-runnerd.mobileconfig) rather than from this file. And
+  the label is different, so a person who ran `setup` themselves never has two agents:
+  runnerd-managed-start.sh exits 0, which this plist does not restart, until the person is registered
+  and has no setup agent of their own.
+
+  Committed as-is it is valid plist XML — see scripts/test-runner-pkg.sh.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.wardyn.runnerd.managed</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/local/wardyn/bin/runnerd-managed-start</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
+</dict>
+</plist>

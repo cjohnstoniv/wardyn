@@ -109,6 +109,8 @@ export const EXPLAIN = {
   SSH_KEYS: "SSH keys",
   API_TOKENS: "API tokens",
   SSH_AND_TOKENS: "SSH keys · API tokens",
+  // FUG-L357 L3: the `service_attach` feature value, the grant a service's sponsor needs to enter its runs.
+  SERVICE_ATTACH: "Entering a service's runs",
   // G-3: the `*` row on the seven kinds packet A didn't name.
   ALL_EGRESS_HOSTS: "All egress hosts",
   ALL_SECRETS: "All secrets",

@@ -156,6 +156,10 @@ func mcpServerKeys(attached []attachedComponent) []string {
 	return keys
 }
 
+// orgMCPKeyLockPart names the one lock (db.ComponentKeyLockClass) an organisation MCP server's save holds
+// across orgMCPKeyFree and its write.
+const orgMCPKeyLockPart = "org-mcp-key"
+
 // orgMCPKeyFree refuses an organisation MCP component whose server key (its
 // name's slug, as cut for the key) is another organisation MCP component's:
 // that key is what an organisation's rules name, so it must name one server

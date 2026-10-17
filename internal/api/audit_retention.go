@@ -49,9 +49,6 @@ func (s *Server) handleGetAuditRetention(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusOK, st)
 }
 
-// sweeperActor is the actor name audit_retention_drop treats as the retention sweeper.
-const sweeperActor = "wardynd"
-
 // dropAuditPartitionRequest is POST /audit/retention/drop's body: the partition, and the digest of the
 // export the operator checked.
 type dropAuditPartitionRequest struct {
@@ -81,7 +78,7 @@ func (s *Server) handleDropAuditPartition(w http.ResponseWriter, r *http.Request
 	// request may carry it: local mode takes the name from X-Wardyn-Principal, and an OIDC subject is
 	// whatever the provider issued. The sweeper's own path (AutodropAuditPartition) does not come here.
 	actor := principalFromRequest(r)
-	if actor == sweeperActor {
+	if actor == store.SystemAuditActor {
 		s.refuse(w, r, authz.Deny(authz.ReasonAuditRetentionActorReserved, "audit.retention", `the actor name "wardynd" is reserved for the retention sweeper`))
 		return
 	}

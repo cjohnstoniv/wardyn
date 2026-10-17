@@ -6,7 +6,7 @@ package api
 import (
 	"context"
 	"errors"
-	"log/slog"
+	"fmt"
 
 	"github.com/google/uuid"
 
@@ -30,24 +30,37 @@ type runnerFit struct {
 }
 
 // runnerFits is every runner the caller's runs could be placed on, by target id: the caller's own
-// self-hosted runners and every remote-hosted runner. A store that cannot say, or a read that fails,
-// answers none, so every candidate is then refused as declaring no limits: a runner is never taken
-// as unlimited.
-func (s *Server) runnerFits(ctx context.Context) map[string]runnerFit {
+// self-hosted runners, the organization's own runners and every remote-hosted runner. A store that
+// cannot say answers none, so every candidate is then refused as declaring no limits: a runner is never
+// taken as unlimited. A read that fails is an error, so the caller answers a retryable failure, not
+// advice to set limits.
+func (s *Server) runnerFits(ctx context.Context) (map[string]runnerFit, error) {
 	out := map[string]runnerFit{}
 	rs, ok := s.cfg.Store.(store.RunnerInventoryStore)
 	if !ok {
-		return out
+		return out, nil
 	}
 	var ids []uuid.UUID
 	if owner := poolOwner(ctx); owner != "" {
 		if own, ok := s.cfg.Store.(store.RunnerStore); ok {
 			runners, err := own.ListRunnersByOwner(ctx, owner)
 			if err != nil {
-				slog.WarnContext(ctx, "wardynd: read runner limits; no runner of yours is a candidate", slog.Any("err", err))
-				return map[string]runnerFit{}
+				return nil, fmt.Errorf("read runner limits: %w", err)
 			}
 			for _, r := range runners {
+				ids = append(ids, r.ID)
+				out[r.ID.String()] = runnerFit{limits: r.Limits}
+			}
+		}
+	}
+	// The organization's own runners, which an organization pool offers (orgRunnerTargets).
+	if rr, ok := s.cfg.Store.(store.RunnerStore); ok {
+		runners, err := rr.ListRunners(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("read organization runner limits: %w", err)
+		}
+		for _, r := range runners {
+			if r.OwnerKind == types.RunnerOwnerOrg && r.State == types.RunnerClaimed {
 				ids = append(ids, r.ID)
 				out[r.ID.String()] = runnerFit{limits: r.Limits}
 			}
@@ -57,8 +70,7 @@ func (s *Server) runnerFits(ctx context.Context) map[string]runnerFit {
 	if rr, ok := s.cfg.Store.(store.RemoteRunnerStore); ok {
 		rows, err := rr.ListRemoteRunners(ctx)
 		if err != nil {
-			slog.WarnContext(ctx, "wardynd: read remote runner limits; no remote-hosted runner is a candidate", slog.Any("err", err))
-			return map[string]runnerFit{}
+			return nil, fmt.Errorf("read remote runner limits: %w", err)
 		}
 		for _, row := range rows {
 			remotes = append(remotes, row.Runner.ID)
@@ -69,14 +81,13 @@ func (s *Server) runnerFits(ctx context.Context) map[string]runnerFit {
 	// it reserves there, are this run's own, so they never count against it.
 	used, err := rs.RunnerUsage(ctx, ids, remotes, promotedRun(ctx))
 	if err != nil {
-		slog.WarnContext(ctx, "wardynd: read runner usage; no runner is a candidate", slog.Any("err", err))
-		return map[string]runnerFit{}
+		return nil, fmt.Errorf("read runner usage: %w", err)
 	}
 	for k, f := range out {
 		f.used = used[k]
 		out[k] = f
 	}
-	return out
+	return out, nil
 }
 
 // need is what the run reserves on its runner, as far as the fold knows it here.

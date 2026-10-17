@@ -259,8 +259,9 @@ func TestSecretSetAndDeleteChooseTheirRoute(t *testing.T) {
 	}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { t.Error("request sent") }))
 	defer srv.Close()
-	if _, err := operatorCommand(t, srv.URL, "x\n", "secret", "set", "demo", "--personal", "--shared"); err == nil {
-		t.Error("--personal with --shared was accepted")
+	// Empty stdin would fail as "empty secret value" if it were read first: the conflict is named before any input.
+	if _, err := operatorCommand(t, srv.URL, "", "secret", "set", "demo", "--personal", "--shared"); err == nil || !strings.Contains(err.Error(), "exclusive") {
+		t.Errorf("--personal with --shared = %v, want the flag conflict named before stdin is read", err)
 	}
 }
 

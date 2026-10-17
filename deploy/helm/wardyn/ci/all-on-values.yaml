@@ -345,4 +345,5 @@ runner:
       cpuMillis: 400
       memoryMiB: 192
 maxConcurrentRuns: 25
+trustedProxies: "10.42.0.0/16,fd00:42::/64"
 goMemLimit: "400MiB"

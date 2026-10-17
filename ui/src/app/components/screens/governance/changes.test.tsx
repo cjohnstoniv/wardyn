@@ -30,7 +30,7 @@ vi.mock("../../../lib/api/governance", async () => {
 });
 
 import { HttpError } from "../../../lib/api/core";
-import { CHANGES, DELIVERY } from "../../../lib/governance-copy";
+import { CHANGES, DELIVERY, GOVERNANCE } from "../../../lib/governance-copy";
 import type { GovernanceChange } from "../../../lib/types";
 import { OperatorProvider } from "../../wardyn/operator-context";
 import { aheadByHours } from "../../../lib/test-clock";
@@ -101,6 +101,31 @@ describe("the Changes tab", () => {
     expect(screen.queryByText("7b1f0c52-0000-4000-8000-000000000001")).toBeNull();
   });
 
+  // Q6: a runner trust change's key is the runner's id; the server's diff carries its name on both sides.
+  it("lists a runner trust change as Runner trust class · Edit over the runner's name, not its id", async () => {
+    const id = "3f9c1c2e-7a41-4d0b-9e6a-5b2f0d8c1a77";
+    renderTab([
+      change({
+        target_kind: "runner_trust",
+        target_key: id,
+        diff: { before: { name: "dana-laptop", trust_class: "personal" }, after: { name: "dana-laptop", trust_class: "managed_device" }, changed: ["trust_class"] },
+      }),
+    ]);
+    expect(screen.getByRole("button", { name: "Runner trust class · Edit" })).toBeInTheDocument();
+    expect(screen.getByText("dana-laptop")).toBeInTheDocument();
+    expect(screen.queryByText(id)).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: "Runner trust class · Edit" }));
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByText("trust_class")).toBeInTheDocument();
+    expect(within(dialog).getByText("personal")).toBeInTheDocument();
+    expect(within(dialog).getByText("managed_device")).toBeInTheDocument();
+  });
+
+  it("falls back to the runner trust change's key when the diff carries no name", () => {
+    renderTab([change({ target_kind: "runner_trust", target_key: "r-old", diff: { after: { trust_class: "managed_device" }, changed: ["trust_class"] } })]);
+    expect(screen.getByText("r-old")).toBeInTheDocument();
+  });
+
   it("keeps the key as the target for a kind whose key is already natural", () => {
     renderTab([change({ target_kind: "governance_assignment", op: "upsert", target_key: "group:eng", diff: { changed: [] } })]);
     expect(screen.getByText("group:eng")).toBeInTheDocument();
@@ -127,6 +152,59 @@ describe("the change drawer", () => {
     expect(within(dialog).getByText(CHANGES.DIFF_FULL)).toBeInTheDocument();
     expect(within(dialog).getByText(CHANGES.REASON_LABEL)).toBeInTheDocument();
     expect(within(dialog).getByText(CHANGES.REASON_HINT)).toBeInTheDocument();
+  });
+
+  it("shows the notes the server kept with the change, for the person approving", async () => {
+    const note = "this profile omits 3 denied domain(s) the deployment default denies (a, b, c) — members under it are NOT walled from them";
+    renderTab([change({ diff: { ...change().diff, notes: [note] } })]);
+    await userEvent.click(screen.getByRole("button", { name: "Profile · Edit" }));
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByText(GOVERNANCE.OMISSION_TITLE)).toBeInTheDocument();
+    expect(within(dialog).getByText(note)).toBeInTheDocument();
+  });
+
+  // The owner-approved mock (2026-10-17, 4a): the notes sit between the diff and the reason, one per line.
+  it("puts the notes between the diff and the reason, one per line", async () => {
+    const notes = ["first note", "second note"];
+    renderTab([change({ diff: { ...change().diff, notes } })]);
+    await userEvent.click(screen.getByRole("button", { name: "Profile · Edit" }));
+    const dialog = await screen.findByRole("dialog");
+    const follows = (a: Element, b: Element) => Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+    const diffHeader = within(dialog).getByText(CHANGES.DIFF_FIELD);
+    const heading = within(dialog).getByText(GOVERNANCE.OMISSION_TITLE);
+    const reason = within(dialog).getByText(CHANGES.REASON_LABEL);
+    expect(follows(diffHeader, heading)).toBe(true);
+    expect(follows(heading, within(dialog).getByText(notes[0]))).toBe(true);
+    expect(follows(within(dialog).getByText(notes[1]), reason)).toBe(true);
+    expect(follows(within(dialog).getByText(notes[0]), within(dialog).getByText(notes[1]))).toBe(true);
+  });
+
+  it("on an assignment, puts the notes after the profile it assigns and before the reason", async () => {
+    const notes = ["first note"];
+    renderTab([
+      change({
+        target_kind: "governance_assignment",
+        op: "upsert",
+        diff: {
+          after: { subject_type: "group", subject: "g", profile_id: "p9", priority: 0, profile: { id: "p9", name: "Embedded profile", ceiling: {}, limits: {} } },
+          changed: ["profile_id"],
+          notes,
+        },
+      }),
+    ]);
+    await userEvent.click(screen.getByRole("button", { name: "Assignment · Set" }));
+    const dialog = await screen.findByRole("dialog");
+    const follows = (a: Element, b: Element) => Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+    const assigned = within(dialog).getByText(CHANGES.ASSIGNED_PROFILE);
+    expect(follows(assigned, within(dialog).getByText(GOVERNANCE.OMISSION_TITLE))).toBe(true);
+    expect(follows(within(dialog).getByText(notes[0]), within(dialog).getByText(CHANGES.REASON_LABEL))).toBe(true);
+  });
+
+  it("shows no notes heading for a change that carries none", async () => {
+    renderTab([change()]);
+    await userEvent.click(screen.getByRole("button", { name: "Profile · Edit" }));
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).queryByText(GOVERNANCE.OMISSION_TITLE)).toBeNull();
   });
 
   it("shows an absent side as Not set", async () => {

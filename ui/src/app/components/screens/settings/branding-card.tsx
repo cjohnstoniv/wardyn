@@ -32,6 +32,7 @@ import { useThemeName } from "../../wardyn/theme-provider";
 import { BrandingContext } from "../../wardyn/branding-context";
 import { branding as brandingApi, type BrandingSave } from "../../../lib/api/branding";
 import { getErrorMessage } from "../../../lib/format";
+import { useUnsavedGuard } from "../../../lib/use-unsaved-guard";
 import {
   contrastRatio,
   deriveDarkPrimary,
@@ -58,6 +59,9 @@ interface Draft {
   link: string;
   logo: { name: string; size: number; type: string; file: File } | null;
 }
+
+/** The draft as text: what the unsaved-changes guard compares and shows. The chosen logo file is named, not read. */
+const draftText = (d: Draft): string => JSON.stringify({ ...d, logo: d.logo && { name: d.logo.name, size: d.logo.size, type: d.logo.type } }, null, 2);
 
 function draftFrom(b: Branding | null): Draft {
   return {
@@ -167,6 +171,9 @@ export function BrandingCard() {
     touched.current = true;
     setDraft((d) => ({ ...d, ...patch }));
   };
+
+  // Leaving with edits that were not saved asks first, like the other editors.
+  useUnsavedGuard("branding-card", draftText(draft) !== draftText(draftFrom(brand)), () => draftText(draft));
 
   const light = pairCheck(draft.primary, draft.text);
   const dark = draft.darkOn ? pairCheck(draft.darkPrimary, draft.darkText) : null;

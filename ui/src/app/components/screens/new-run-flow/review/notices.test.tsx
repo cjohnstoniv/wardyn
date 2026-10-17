@@ -9,6 +9,7 @@ import { NR_REVIEW } from "../../../wardyn/copy/new-run/review";
 import { RUN_WAIT } from "../../../../lib/runner-pool-refusals";
 import { SCENARIO_PREFLIGHT } from "../../../../lib/new-run-fixtures/scenarios/preflight";
 import type { AppliedResources } from "../../../../lib/types/new-run-contract";
+import { DROPPED_HOSTS } from "./drop-warnings";
 import { Notices } from "./notices";
 
 afterEach(cleanup);
@@ -71,6 +72,42 @@ describe("Review notices", () => {
     expect(screen.queryByText(warn[1])).toBeNull();
   });
 
+  describe("the shared resources-capped line (DR-0263)", () => {
+    const line = "resources capped to operator maximum";
+    const cpuOnly: AppliedResources = {
+      cpu_millis: { requested: 16000, applied: 8000, capped: true, source: "governance", source_name: "Platform team" },
+      memory_mib: { requested: 4096, applied: 4096 },
+    };
+    const memoryOnly: AppliedResources = {
+      cpu_millis: { requested: 2000, applied: 2000 },
+      memory_mib: { requested: 16384, applied: 8192, capped: true, source: "pool", source_name: "General" },
+    };
+
+    it.each([["CPU only", cpuOnly], ["memory only", memoryOnly]])("is said once, by the narrowed notice, when only %s was cut", (_name, applied) => {
+      render(<Notices poolName="General" applied={applied} askedByYou={false} warnings={[line]} />);
+      expect(screen.queryByText(line)).toBeNull();
+    });
+
+    it("stays beside the narrowed notice when the process limit was cut too (CPU + PIDs)", () => {
+      const withPids: AppliedResources = { ...cpuOnly, pids_limit: { requested: 4096, applied: 256, capped: true, source: "governance", source_name: "Platform team" } };
+      render(<Notices poolName="General" applied={withPids} askedByYou={false} warnings={[line]} />);
+      expect(screen.getByText(NR_REVIEW.NARROWED_BY("Platform team"))).toBeInTheDocument();
+      expect(screen.getByText(line)).toBeInTheDocument();
+    });
+
+    it("is not kept by a process limit that was not cut", () => {
+      const uncut: AppliedResources = { ...cpuOnly, pids_limit: { requested: 64, applied: 64 } };
+      render(<Notices poolName="General" applied={uncut} askedByYou={false} warnings={[line]} />);
+      expect(screen.queryByText(line)).toBeNull();
+    });
+
+    it("stays beside the narrowed notice when the main drive was cut too (CPU + disk)", () => {
+      render(<Notices poolName="General" applied={cpuOnly} askedByYou={false} warnings={[line]} diskCut />);
+      expect(screen.getByText(NR_REVIEW.NARROWED_BY("Platform team"))).toBeInTheDocument();
+      expect(screen.getByText(line)).toBeInTheDocument();
+    });
+  });
+
   it("shows the resources-capped line when no CPU or memory cut is rendered (a pids or disk cut)", () => {
     render(<Notices askedByYou={false} warnings={["resources capped to operator maximum"]} />);
     expect(screen.getByText("resources capped to operator maximum")).toBeInTheDocument();
@@ -84,5 +121,11 @@ describe("Review notices", () => {
   it("shows no warnings notice when there are none", () => {
     const { container } = render(<Notices askedByYou={false} warnings={[]} />);
     expect(container).toBeEmptyDOMElement();
+  });
+
+  it("says a host the ceiling dropped in the ceiling's words (FUG-L749 N3)", () => {
+    render(<Notices askedByYou={false} warnings={["dropped 1 egress domain(s) not in operator allowlist: pastebin.com", 'confinement raised from "CC1" to operator minimum "CC2"']} />);
+    expect(screen.getByText(DROPPED_HOSTS.ONE("pastebin.com"))).toBeInTheDocument();
+    expect(screen.getByText('confinement raised from "CC1" to operator minimum "CC2"')).toBeInTheDocument();
   });
 });

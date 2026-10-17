@@ -10,6 +10,8 @@
 export const NR_SHAPE = {
   TITLE: "What are you running?",
   LEDE: "Pick the closest shape. You can adjust every detail before launch.",
+  /** Lead wording 2026-10-17 (FR-0099): the Review blocker for a run with no shape chosen. */
+  SHAPE_REQUIRED: "Choose a shape for this run.",
   START_FROM: "Start from",
   SOURCE_SCRATCH: "From scratch",
   SOURCE_TEMPLATE: "Saved template",
@@ -25,6 +27,10 @@ export const NR_SHAPE = {
   EMPTY_TEMPLATES: "No saved templates yet.",
   /** pending W-23: the recommended text until the owner answers. */
   EMPTY_AGAIN: "No previous runs to start again.",
+  /** Lead wording 2026-10-17 (FUG-L771): the saved-template picker while its list loads. */
+  TEMPLATES_LOADING: "Loading saved templates…",
+  /** Lead wording 2026-10-17 (FUG-L771): the previous-run picker while its list loads. */
+  AGAIN_LOADING: "Loading previous runs…",
   AGENT_TITLE: "Agent task",
   AGENT_BODY: "A one-time coding task, driven by you or running autonomously.",
   AGENT_SUB: "Interactive · Autonomous · Repeat / schedule coming soon",

@@ -30,7 +30,7 @@ const FIXED: Names = {
   agent: { "*": EXPLAIN.ALL_AGENTS },
   workspace_provider: { "*": EXPLAIN.ALL_GIT_PROVIDERS },
   model_provider: { "*": EXPLAIN.ALL_MODEL_PROVIDERS },
-  feature: { "*": EXPLAIN.SSH_AND_TOKENS, ssh_key: EXPLAIN.SSH_KEYS, api_token: EXPLAIN.API_TOKENS },
+  feature: { "*": EXPLAIN.SSH_AND_TOKENS, ssh_key: EXPLAIN.SSH_KEYS, api_token: EXPLAIN.API_TOKENS, service_attach: EXPLAIN.SERVICE_ATTACH },
   policy: { "*": EXPLAIN.ALL_POLICIES },
 };
 

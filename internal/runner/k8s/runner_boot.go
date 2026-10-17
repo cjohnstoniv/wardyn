@@ -56,7 +56,7 @@ func (c accessCheck) String() string {
 }
 
 // runnerAccess lists every verb §4 grants: the server Role in the runs namespace plus pods: patch,
-// secrets create/get/delete in runnerd's own namespace, and the ClusterRole's runtimeclasses: get
+// secrets create/get/delete/deletecollection in runnerd's own namespace, and the ClusterRole's runtimeclasses: get
 // and nodes: list.
 func runnerAccess(runsNS, ownNS string) []accessCheck {
 	var out []accessCheck
@@ -74,7 +74,7 @@ func runnerAccess(runsNS, ownNS string) []accessCheck {
 	add(runsNS, "", "events", "list")
 	add(runsNS, "metrics.k8s.io", "pods", "list")
 	add(runsNS, "", "resourcequotas", "list")
-	add(ownNS, "", "secrets", "create", "get", "delete")
+	add(ownNS, "", "secrets", "create", "get", "delete", "deletecollection")
 	add("", "node.k8s.io", "runtimeclasses", "get")
 	add("", "", "nodes", "list")
 	return out

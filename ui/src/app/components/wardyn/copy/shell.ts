@@ -30,7 +30,10 @@ export const SHELL = {
   // POST does not PROVE the session survived, only that nothing confirmed it
   // died.
   SIGN_OUT_FAILED_TITLE: "Signed out here, but not on the server",
-  SIGN_OUT_FAILED_BODY: "Your session may still be active on the server. Close the browser, or try signing out again.",
+  // Retrying from this tab cannot help: the cookie is already cleared, so a
+  // second sign-out has nothing to end. Signing in again and out ends every
+  // browser session of the person.
+  SIGN_OUT_FAILED_BODY: "Your session may still be active on the server. Sign in again, then sign out, to end it in every browser.",
 } as const;
 
 // #217 — the console's one dirty-navigation guard (lib/use-unsaved-guard.tsx),

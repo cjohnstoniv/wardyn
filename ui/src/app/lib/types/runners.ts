@@ -13,6 +13,15 @@ import type { ConfinementClass } from "./runs";
 /** Go: types.RunnerState. */
 export type RunnerState = "unclaimed" | "claimed" | "revoked";
 
+/** Go: types.RunnerOwnerKind. An org runner's `owner` is always empty. */
+export type RunnerOwnerKind = "person" | "org";
+
+/**
+ * Go: types.RunnerTrustClass, ordered personal < managed_device < org_cluster. Written by the claim, then
+ * only by a security operator (PUT /runners/{id}/trust); org_cluster if and only if the owner kind is org.
+ */
+export type RunnerTrustClass = "personal" | "managed_device" | "org_cluster";
+
 /** Go: types.RunnerCapacity: the per-run ceiling a runner advertised. */
 export interface RunnerCapacity {
   cpu_millis_max: number;
@@ -79,6 +88,11 @@ export interface RunnerView {
   arch?: string;
   /** The owner's live user pools this runner is a member of; [] for none. */
   pools: RunnerPoolRef[];
+  owner_kind: RunnerOwnerKind;
+  trust_class: RunnerTrustClass;
+  /** The administrators' routes only: who last wrote the trust class, and when. */
+  trust_set_by?: string;
+  trust_set_at?: string;
 }
 
 /** Go: types.RunnerAmounts: CPU in milli-CPU, memory and disk in MiB. */
@@ -141,6 +155,22 @@ export interface RunnerRegistrationToken {
   org_url?: string;
   /** On the two mint answers only, and only when the daemon has one configured: the egress-proxy image its own sandboxes run with. */
   proxy_image?: string;
+  /** org on a token minted on POST /runners/org-tokens (owner is then empty). */
+  owner_kind: RunnerOwnerKind;
+  minted_by_kind: "human" | "admin_token";
+  /** An org token the admin token minted while WARDYN_GOVERNANCE_SECOND_HUMAN was on. */
+  break_glass: boolean;
+}
+
+/** Go: types.RunnerOrgTokenRequest. `name` labels the token in its audit row. */
+export interface RunnerOrgTokenRequest {
+  name: string;
+}
+
+/** Go: types.RunnerTrustRequest: a security operator's trust class change and its reason. */
+export interface RunnerTrustRequest {
+  trust_class: RunnerTrustClass;
+  reason: string;
 }
 
 /** Go: types.RunnerTokenRequest. Names the person an administrator is minting for. */
@@ -193,4 +223,5 @@ export type RunnerManagementReason =
   | "runner_session_required"
   | "runners_org_url_invalid"
   | "runners_enabled_required"
-  | "runner_limits_invalid";
+  | "runner_limits_invalid"
+  | "runner_trust_invalid";

@@ -51,7 +51,7 @@ func TestGovCovChangedPaths(t *testing.T) {
 
 func TestGovCovRenderGovernanceDiff(t *testing.T) {
 	var d governanceDiffBody
-	raw := renderGovernanceDiff(nil, map[string]any{"name": "n"}, nil)
+	raw := renderGovernanceDiff(nil, map[string]any{"name": "n"}, nil, nil)
 	if err := json.Unmarshal(raw, &d); err != nil {
 		t.Fatal(err)
 	}
@@ -65,7 +65,7 @@ func TestGovCovRenderGovernanceDiff(t *testing.T) {
 		t.Errorf("a diff with no changed paths must serialize changed as [], got %s", raw)
 	}
 
-	raw = renderGovernanceDiff(map[string]any{"name": "o"}, nil, []string{"name"})
+	raw = renderGovernanceDiff(map[string]any{"name": "o"}, nil, []string{"name"}, nil)
 	d = governanceDiffBody{}
 	if err := json.Unmarshal(raw, &d); err != nil {
 		t.Fatal(err)
@@ -246,7 +246,7 @@ func TestGovCovProposeGovernanceChange(t *testing.T) {
 	if ch.BaseHash != computeETag(map[string]any{"base": 1}) || ch.DeploymentHash != computeETag(s.cfg.DefaultPolicy) {
 		t.Errorf("hashes = %q / %q, want the base state's and the deployment default's", ch.BaseHash, ch.DeploymentHash)
 	}
-	if !reflect.DeepEqual(ch.Diff, renderGovernanceDiff(map[string]any{"v": 1}, map[string]any{"v": 2}, []string{"v"})) {
+	if !reflect.DeepEqual(ch.Diff, renderGovernanceDiff(map[string]any{"v": 1}, map[string]any{"v": 2}, []string{"v"}, nil)) {
 		t.Errorf("diff = %s", ch.Diff)
 	}
 	if st.proposedTTL != 5*time.Hour {
@@ -277,9 +277,10 @@ func TestGovCovProposeRefusalCarriesTheHeldChange(t *testing.T) {
 		wantHeld    bool
 		wantMatches bool
 	}{
-		{"the held change is this proposal", types.GovernanceChange{ID: pendingID, State: types.GovernanceChangePending, Op: "update", Payload: json.RawMessage(`{ "a": 1 }`)}, nil, true, true},
-		{"the held change has another payload", types.GovernanceChange{ID: pendingID, State: types.GovernanceChangePending, Op: "update", Payload: json.RawMessage(`{"a":2}`)}, nil, true, false},
-		{"the held change is another op", types.GovernanceChange{ID: pendingID, State: types.GovernanceChangePending, Op: "delete", Payload: json.RawMessage(`{"a":1}`)}, nil, true, false},
+		{"the held change is this proposal", types.GovernanceChange{ID: pendingID, TargetKind: govKindProfile, State: types.GovernanceChangePending, Op: "update", Payload: json.RawMessage(`{ "a": 1 }`)}, nil, true, true},
+		{"the held change has another payload", types.GovernanceChange{ID: pendingID, TargetKind: govKindProfile, State: types.GovernanceChangePending, Op: "update", Payload: json.RawMessage(`{"a":2}`)}, nil, true, false},
+		{"the held change is another op", types.GovernanceChange{ID: pendingID, TargetKind: govKindProfile, State: types.GovernanceChangePending, Op: "delete", Payload: json.RawMessage(`{"a":1}`)}, nil, true, false},
+		{"the held change is one the caller's role may not read", types.GovernanceChange{ID: pendingID, TargetKind: govKindRoleMapping, State: types.GovernanceChangePending, Op: "update", Payload: json.RawMessage(`{"a":1}`)}, nil, false, false},
 		{"the read fails", types.GovernanceChange{}, errors.New("pg: gone"), false, false},
 		{"it was decided meanwhile", types.GovernanceChange{ID: pendingID, State: types.GovernanceChangeApplied}, nil, false, false},
 	} {

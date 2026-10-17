@@ -5,8 +5,10 @@ package runnerwire
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"os"
+	"strings"
 	"testing"
 	"time"
 )
@@ -99,5 +101,14 @@ func TestStreamReadDeadlineLeavesTheStreamUsable(t *testing.T) {
 	}
 	if n, err := in.Read(make([]byte, 1)); n != 1 || err != nil {
 		t.Fatalf("read after the deadline was cleared = %d, %v", n, err)
+	}
+}
+
+// A reset names its reason in words, keeps the numeric code for support, and does not say which side ended it.
+func TestResetErrorNamesItsReason(t *testing.T) {
+	for code, want := range map[uint32]string{ResetRefused: "it was refused", ResetCapacity: "no room for another stream", ResetInternal: "serving it failed", 99: "reason unknown"} {
+		if got := (&ResetError{Code: code}).Error(); !strings.Contains(got, want) || !strings.Contains(got, fmt.Sprintf("(code %d)", code)) || !strings.HasPrefix(got, "runnerwire: stream ended: ") {
+			t.Errorf("reset %d reads %q, want it to say %q and keep the code", code, got, want)
+		}
 	}
 }

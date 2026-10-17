@@ -338,6 +338,27 @@ func TestMemberMount_WritableDenyBothDirections(t *testing.T) {
 	}
 }
 
+// A deny entry that does not exist yet and is spelled through a symlinked parent still sits where
+// the resolved parent does, so a writable mount of that parent is refused.
+func TestMemberMount_WritableDenyBehindASymlinkedParentThatDoesNotExistYet(t *testing.T) {
+	root, project := memberRoot(t)
+	pkg := filepath.Join(project, "pkg")
+	if err := os.MkdirAll(pkg, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	link := filepath.Join(root, "link")
+	if err := os.Symlink(pkg, link); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+	p := UserMountPolicy{Roots: []string{root}, WritableRoots: []string{root}, WritableDeny: []string{filepath.Join(link, "ghost", "vendor")}}
+	if err := p.ValidateUserMount("alice", pkg, true); err == nil || !strings.Contains(err.Error(), "contains the member writable-deny path") {
+		t.Errorf("writable mount of the resolved parent = %v, want the contains refusal", err)
+	}
+	if err := p.ValidateUserMount("alice", pkg, false); err != nil {
+		t.Errorf("read-only = %v, want allowed", err)
+	}
+}
+
 // TestParseMemberMountPolicy_FailsClosed pins the boot parse: a malformed root
 // stops the daemon rather than starting it with a half-understood allowlist.
 func TestParseMemberMountPolicy_FailsClosed(t *testing.T) {

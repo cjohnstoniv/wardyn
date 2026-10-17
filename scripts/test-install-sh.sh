@@ -72,13 +72,13 @@ grep -q 'could not resolve the latest release' "$INSTALL" \
 # `main` means the signed copy is never the executed one.
 grep -q 'raw\.githubusercontent\.com/cjohnstoniv/wardyn/main/install\.sh' README.md \
   && fail "README.md curls install.sh from main — nothing signs tip-of-main. Point it at the releases/download/ asset."
-grep -q 'releases/download/v[0-9]\+\.[0-9]\+\.[0-9]\+/install\.sh' README.md \
+grep -q 'releases/download/v[0-9]\+\.[0-9]\+\.[0-9]\+\(-rc\.[0-9]\+\)\?/install\.sh' README.md \
   || fail "README.md's install one-liner does not point at a pinned releases/download/ install.sh"
 
 # ── 6. That pin is a version string, so it must be swept as one ───────────
 # RELEASING.md step 1b owns the bump; this only catches the two drifting apart.
-readme_v="$(grep -o 'releases/download/v[0-9]\+\.[0-9]\+\.[0-9]\+/install\.sh' README.md | head -1 | sed 's|.*/v\([0-9.]*\)/.*|\1|')"
-header_v="$(grep -o 'releases/download/v[0-9]\+\.[0-9]\+\.[0-9]\+/install\.sh' "$INSTALL" | head -1 | sed 's|.*/v\([0-9.]*\)/.*|\1|')"
+readme_v="$(grep -o 'releases/download/v[0-9]\+\.[0-9]\+\.[0-9]\+\(-rc\.[0-9]\+\)\?/install\.sh' README.md | head -1 | sed 's|.*/v\([^/]*\)/.*|\1|')"
+header_v="$(grep -o 'releases/download/v[0-9]\+\.[0-9]\+\.[0-9]\+\(-rc\.[0-9]\+\)\?/install\.sh' "$INSTALL" | head -1 | sed 's|.*/v\([^/]*\)/.*|\1|')"
 [ -n "$readme_v" ] || fail "could not read the pinned version out of README.md"
 [ -n "$header_v" ] || fail "$INSTALL's header comment lost its pinned install URL"
 [ "$readme_v" = "$header_v" ] \

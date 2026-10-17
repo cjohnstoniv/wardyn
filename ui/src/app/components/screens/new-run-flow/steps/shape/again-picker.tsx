@@ -7,7 +7,7 @@ import { NR_SHAPE } from "../../../../wardyn/copy/new-run/shape";
 import { Label } from "../../../../ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../../../ui/select";
 import { relativeTime } from "../../../../../lib/format";
-import type { LaunchIntentSummary } from "../../../../../lib/new-run-fixtures/scenarios/templates";
+import type { LaunchIntentSummary } from "../../../../../lib/types/launch-intents";
 import { launchIntentSource } from "./shape-sources";
 import { INLINE_CHOICE, INLINE_LABEL, useShown } from "./inline-choice";
 import { useLoaded } from "./use-loaded";
@@ -35,7 +35,7 @@ export function AgainPicker({ selectedRunId, onPick }: { selectedRunId?: string;
         }}
       >
         <SelectTrigger id="nr-previous-run" aria-busy={loaded.status === "loading"} className="w-full bg-card dark:bg-card">
-          <SelectValue />
+          <SelectValue placeholder={loaded.status === "loading" ? NR_SHAPE.AGAIN_LOADING : undefined} />
         </SelectTrigger>
         <SelectContent>
           {intents.map((i) => (

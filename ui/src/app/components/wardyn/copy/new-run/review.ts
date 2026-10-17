@@ -65,7 +65,7 @@ export const NR_REVIEW = {
   WORK_NONE: "No repositories or drives",
   WORK_ITEM_ONE: "1 item attached",
   WORK_ITEMS: (n: string | number) => `${n} items attached`,
-  MAIN_DRIVE: (n: string | number) => `Main drive · ${n} GiB`,
+  MAIN_DRIVE: (size: string | number) => `Main drive · ${size}`,
   NO_HARNESSES: "No harnesses",
   TOOLS_COMMAND_ONE: "Command · 1 optional harness",
   TOOLS_COMMAND: (n: string | number) => `Command · ${n} optional harnesses`,
@@ -124,6 +124,8 @@ export const NR_REVIEW = {
   POLICY_TOOLS: "Tools and pushes",
   POLICY_HOLD: "Hold for approval",
   POLICY_AUTOMATIC: "Run automatically",
+  /** One harness's default when the included harnesses default differently. */
+  POLICY_TOOLS_OF: (harness: string | number, effect: string | number) => `${harness}: ${effect}`,
   RAW_TITLE: (format: string | number) => `${format} run document`,
   RAW_BODY: "Read-only resolved draft",
   COPY: "Copy",

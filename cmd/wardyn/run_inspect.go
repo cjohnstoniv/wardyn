@@ -4,12 +4,16 @@
 package main
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/spf13/cobra"
 
 	"github.com/cjohnstoniv/wardyn/internal/types"
+	sdk "github.com/cjohnstoniv/wardyn/pkg/client"
 )
 
 // The read-only `wardyn run` subcommands that inspect runs: list, get, kill and
@@ -77,6 +81,10 @@ func runGetCmd(client clientFn) *cobra.Command {
 				fmt.Fprintf(cmd.OutOrStdout(), "\nwaiting: %d ahead in pool %s; queued %s, gives up %s (%s)\n",
 					q.Position, q.PoolID, q.QueuedAt.Format(time.RFC3339), q.DeadlineAt.Format(time.RFC3339), q.Reason)
 			}
+			// A run the per-person Azure DevOps lane declined says why (run.ado_lane.skip).
+			if detail := adoLaneDeclineDetail(cmd.Context(), client(), run.ID); detail != "" {
+				fmt.Fprintf(cmd.OutOrStdout(), "\nazure devops: %s\n", detail)
+			}
 			// A FAILED run must not hide its reason on the default surface. Surface
 			// the failure reason from audit inline; fall back to a pointer so the
 			// user is never left with a bare "FAILED".
@@ -92,6 +100,24 @@ func runGetCmd(client clientFn) *cobra.Command {
 	}
 	get.Flags().BoolVar(&getJSON, "json", false, "emit raw JSON")
 	return get
+}
+
+// adoLaneDeclineDetail is the sentence of the run's run.ado_lane.skip row, "" when
+// it has none or the trail could not be read.
+func adoLaneDeclineDetail(ctx context.Context, c *sdk.Client, runID uuid.UUID) string {
+	events, _, err := c.AuditEventsPage(ctx, runID, sdk.AuditFilter{ActionPrefix: "run.ado_lane.skip"})
+	if err != nil {
+		return ""
+	}
+	for _, e := range events {
+		var d struct {
+			Detail string `json:"detail"`
+		}
+		if e.Action == "run.ado_lane.skip" && json.Unmarshal(e.Data, &d) == nil && d.Detail != "" {
+			return d.Detail
+		}
+	}
+	return ""
 }
 
 func runKillCmd(client clientFn) *cobra.Command {

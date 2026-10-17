@@ -7,10 +7,11 @@ import { describe, expect, it } from "vitest";
 import { includedMark } from "./catalogue-pending";
 
 describe("includedMark", () => {
-  it("marks each harness as the prototype does, and another harness by its own name rather than Claude's mark", () => {
+  it("marks each harness as the prototype does, and any other harness by the shared mark rather than Claude's", () => {
     expect(includedMark({ from: "harness", name: "claude-code" })).toBe("cc");
     expect(includedMark({ from: "harness", name: "codex-cli" })).toBe("cx");
-    expect(includedMark({ from: "harness", name: "gemini-cli" })).toBe("ge");
+    expect(includedMark({ from: "harness", name: "gemini-cli" })).toBe("ag");
+    expect(includedMark({ from: "harness", name: "acme-agent" })).toBe("ag");
   });
 
   it("marks the other sources", () => {

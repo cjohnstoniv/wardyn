@@ -8,6 +8,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"errors"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -164,5 +165,53 @@ func TestHubPendingActionsPrecedeStateAndReady(t *testing.T) {
 	}
 	if err := cfg.OnControlChecked(state); !errors.Is(err, runnerwire.ErrBadFrame) {
 		t.Fatalf("failed durable action unblocked STATE: %v", err)
+	}
+}
+
+// A refused authentication is ErrAuth and names its cause, so the operator's log line can tell a runner
+// that is not registered (or a failing store) from one whose proof did not verify.
+func TestHubAuthRefusalNamesItsCause(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	pub, _, _ := ed25519.GenerateKey(rand.Reader)
+	_, wrong, _ := ed25519.GenerateKey(rand.Reader)
+	row := types.Runner{ID: uuid.New(), PublicKey: pub, OrgURLSHA256: federation.OrgURLSHA256("https://org.example"), State: types.RunnerClaimed}
+	for name, tc := range map[string]struct {
+		lookup func(context.Context, uuid.UUID) (types.Runner, error)
+		sign   bool
+		want   string
+	}{
+		"store down": {func(context.Context, uuid.UUID) (types.Runner, error) {
+			return types.Runner{}, errors.New("store down")
+		}, false, "store down"},
+		"wrong proof": {func(context.Context, uuid.UUID) (types.Runner, error) { return row, nil }, true, "did not verify"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			hub := NewHub(ctx, HubConfig{OrgURL: "https://org.example", Lookup: tc.lookup})
+			defer hub.Close()
+			org, run := runnerwire.Loopback()
+			defer run.Close()
+			done := make(chan error, 1)
+			go func() { done <- hub.Serve(ctx, org, row.ID) }()
+			if tc.sign {
+				frame, err := run.ReadFrame(ctx)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var hello runnerwire.Hello
+				if err := runnerwire.Unmarshal(frame.Payload, &hello); err != nil {
+					t.Fatal(err)
+				}
+				id := row.ID.String()
+				auth := runnerwire.Auth{RunnerID: id, Version: runnerwire.ProtocolVersion, Sig: runnerwire.SignAuth(wrong, hello.Nonce, id, hello.OrgURLSHA256)}
+				if err := runnerwire.WriteControl(ctx, run, runnerwire.TypeAuth, auth); err != nil {
+					t.Fatal(err)
+				}
+			}
+			err := awaitValue(t, ctx, done)
+			if !errors.Is(err, runnerwire.ErrAuth) || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("Serve = %v, want ErrAuth naming %q", err, tc.want)
+			}
+		})
 	}
 }

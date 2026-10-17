@@ -24,7 +24,6 @@ const (
 	ruleSourceRequireTLS = "policy:require-tls"
 	// injectRequireTLSBody is the 403 body, with the host substituted.
 	//
-	// DRAFT (M2 canon pending).
 	injectRequireTLSBody = "credential injection for %s requires TLS: " +
 		"this rule sets require_tls and the request was plain HTTP"
 )
@@ -57,7 +56,15 @@ func (p *Proxy) handlePlain(w http.ResponseWriter, r *http.Request) {
 	}
 	host, port := splitHostPort(r.URL.Host, defaultPortForScheme(r.URL.Scheme))
 
-	decision, target, log := p.evaluate(r.Context(), host, port, r.Method, r.URL.Path)
+	recordPath := r.URL.Path
+	if strings.HasPrefix(recordPath, routeMCPBroker) {
+		// A harness that ignores NO_PROXY sends its MCP broker address through this lane: the record
+		// carries the broker's redacted form, so the harness's token never reaches the audit.
+		token, key, _ := parseMCPBrokerPath(recordPath)
+		harness, _ := p.mcp.bind(token)
+		recordPath = mcpRedactedPath(harness, key)
+	}
+	decision, target, log := p.evaluate(r.Context(), host, port, r.Method, recordPath)
 	switch decision {
 	case egress.Deny:
 		if log != nil {

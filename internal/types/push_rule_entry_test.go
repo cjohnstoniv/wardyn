@@ -50,6 +50,8 @@ func TestPushRuleEntryOfRemote(t *testing.T) {
 		{"ado legacy ssh", "azure_devops", "contoso@vs-ssh.visualstudio.com:v3/contoso/proj/repo", "dev.azure.com", "contoso", false},
 		{"ado server collection", "azure_devops", "https://tfs.corp.example/DefaultCollection/proj/_git/repo", "tfs.corp.example", "defaultcollection", false},
 		{"no path", "github", "https://github.com/", "", "", true},
+		{"github owner without a repository (url)", "github", "https://github.com/acme", "", "", true},
+		{"github owner without a repository (scp)", "github", "git@github.com:acme.git", "", "", true},
 		{"neither url nor scp", "github", "not a remote", "", "", true},
 		{"an owner that is not canonical", "github", "https://github.com/ac%20me/repo", "", "", true},
 		{"legacy ssh without v3", "azure_devops", "git@vs-ssh.visualstudio.com:contoso/repo", "", "", true},

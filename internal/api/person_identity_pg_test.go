@@ -427,6 +427,17 @@ func crossRoutes() []crossRoute {
 	}
 }
 
+// dbNow is the database's clock. A key's destroyed_at is stamped by it, so an instant compared against
+// destroyed_at is read from it too: the app's clock can sit behind the database's under load or a step.
+func dbNow(t *testing.T, pg store.PG) time.Time {
+	t.Helper()
+	var at time.Time
+	if err := pg.Pool.QueryRow(t.Context(), `SELECT clock_timestamp()`).Scan(&at); err != nil {
+		t.Fatalf("read the database clock: %v", err)
+	}
+	return at.UTC()
+}
+
 // Every route that erases or deletes by a typed name resolves it once, the same way: a victim's name,
 // however the attacker's claims spell it (a sign-in email, an API token's email, a SCIM email, in any
 // case), reaches the victim and never the attacker, and an email both claim is refused, not guessed.
@@ -452,7 +463,7 @@ func TestPG_ErasureRoutes_AVictimsNameNeverReachesTheClaimant(t *testing.T) {
 					rt.seed(t, srv, pg, sec, victimSubject)
 				}
 				claimed := crossClaimedChange(t, pg, attacker, tc.typed)
-				since := time.Now().UTC() // after an earlier name's erasure
+				since := dbNow(t, pg) // after an earlier name's erasure, on the clock that stamped it
 				w := rt.call(t, srv, tc.typed)
 				switch {
 				case tc.victim == "":

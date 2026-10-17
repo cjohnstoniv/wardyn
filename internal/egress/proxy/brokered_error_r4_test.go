@@ -14,9 +14,11 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/runnerspool"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -100,12 +102,13 @@ func TestGatewayHostIsRedactedFromTheCause(t *testing.T) {
 func TestUnauditedRequestIsRefusedInTheSDKShape(t *testing.T) {
 	ctx := context.Background()
 	newSpoolProxy := func(t *testing.T) *Proxy {
-		s, err := newLocalDecisionSink(filepath.Join(t.TempDir(), "spool"), uuid.New(), nil)
+		runID := uuid.New()
+		s, err := newLocalDecisionSink(filepath.Join(t.TempDir(), "spool"), runID, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
 		t.Cleanup(func() { s.close(ctx) })
-		return &Proxy{sink: s}
+		return &Proxy{sink: s, now: time.Now, runID: runID}
 	}
 	for _, c := range []struct {
 		name     string
@@ -131,9 +134,20 @@ func TestUnauditedRequestIsRefusedInTheSDKShape(t *testing.T) {
 	}
 	t.Run("forward lane keeps its text", func(t *testing.T) {
 		rec := httptest.NewRecorder()
-		newSpoolProxy(t).admitSpoolHTTP(rec, httptest.NewRequest(http.MethodGet, "http://allowed.test/"+tooLongTarget, nil), "")
+		p := newSpoolProxy(t)
+		p.admitSpoolHTTP(rec, httptest.NewRequest(http.MethodGet, "http://allowed.test/"+tooLongTarget+"?q=secret", nil), "")
 		if rec.Code != http.StatusRequestURITooLong || rec.Body.String() != "egress audit record too large\n" {
 			t.Errorf("status %d body %q", rec.Code, rec.Body.String())
+		}
+		// The refusal leaves a bounded deny: host, method and the start of the path, never the query.
+		rows, err := p.sink.local.After(ctx, 0, 2)
+		if err != nil || len(rows) != 1 {
+			t.Fatalf("spooled %d rows, %v; want the one too-large deny", len(rows), err)
+		}
+		d := rows[0].Decision
+		if d.Decision != egress.Deny || d.RuleSource != ruleSourceAuditRecordTooLarge || d.Request.Host != "allowed.test" ||
+			d.Request.Method != http.MethodGet || len(d.Request.Path) != tooLargeFieldBytes || strings.Contains(d.Request.Path, "secret") {
+			t.Errorf("deny = %+v", d)
 		}
 	})
 	t.Run("bedrock tunnel, spool unavailable", func(t *testing.T) {

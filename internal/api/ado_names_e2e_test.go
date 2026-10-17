@@ -59,7 +59,7 @@ func TestADONames_ImportLaunchCloneFetchPush(t *testing.T) {
 	}
 
 	// LAUNCH: admission, the dispatch lane, and the clone records.
-	ado, ok := resolveADOEntraRun(adoSite(adoEntraTestRow()), []string{repo}, adoTestOwner)
+	ado, ok := resolveADOEntraRun(adoSite(adoEntraTestRow()), nil, repo, adoTestOwner)
 	if !ok {
 		t.Fatalf("no Azure DevOps lane for %q", repo)
 	}

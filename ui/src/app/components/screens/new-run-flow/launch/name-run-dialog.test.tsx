@@ -140,6 +140,18 @@ describe("Name this run: the fresh check (U12)", () => {
     await waitFor(() => expect(preflight).toHaveBeenCalledTimes(2));
   });
 
+  it.each([[500, "The server could not answer."], [429, "Too many checks."]])(
+    "a check that failed or was rate-limited (%i) leaves Launch available: the create is the authority (FR-0100)",
+    async (status, message) => {
+      preflight.mockRejectedValue(refusal(status, message));
+      open();
+      const box = await dialog();
+      await userEvent.type(within(box).getByLabelText(NR_LAUNCH.TITLE_LABEL), "x");
+      await waitFor(() => expect(within(box).queryByText(NR_LAUNCH.CHECKING)).not.toBeInTheDocument());
+      expect(launchButton()).toBeEnabled();
+    },
+  );
+
   it("Launch needs a title", async () => {
     open();
     const box = await dialog();
@@ -174,6 +186,12 @@ describe("Name this run: summary", () => {
   it("holds the asked lifetime to the answer's cap, and uses the answer's default when nothing was asked", () => {
     expect(summaryLine(CLEAR, { ...INTENT, ends_after_sec: 36_000 })).toBe("General · 2 CPU · 2 hours");
     expect(summaryLine(CLEAR, { ...INTENT, ends_after_sec: undefined })).toBe("General · 2 CPU · 1 hour");
+  });
+
+  it("says No end when it was asked for and the answer allows it, and the finite default when it does not (DR-0245)", () => {
+    const allowed = { ...CLEAR, limits: { lifetime_sec: LIFETIME, no_end_allowed: true } } as unknown as PreflightResult;
+    expect(summaryLine(allowed, { ...INTENT, ends_after_sec: undefined, no_end: true })).toBe("General · 2 CPU · No end");
+    expect(summaryLine(CLEAR, { ...INTENT, ends_after_sec: undefined, no_end: true })).toBe("General · 2 CPU · 1 hour");
   });
 });
 

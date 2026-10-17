@@ -45,7 +45,7 @@ type k8sRelay struct {
 	ln        net.Listener
 	conns     map[net.Conn]k8sRelayConn
 	fenced    map[uuid.UUID]bool
-	fencedIPs map[netip.Addr]uuid.UUID
+	fencedIPs map[netip.Addr]map[uuid.UUID]bool
 	probe     chan netip.Addr // set during the boot source probe
 }
 
@@ -56,7 +56,7 @@ type k8sRelayConn struct {
 
 func newK8sRelay(ctx context.Context, podIP netip.Addr, targetPort, servicePort uint16, clusterIP string) *k8sRelay {
 	return &k8sRelay{ctx: ctx, bind: netip.AddrPortFrom(podIP, targetPort), servicePort: servicePort, clusterIP: clusterIP,
-		conns: map[net.Conn]k8sRelayConn{}, fenced: map[uuid.UUID]bool{}, fencedIPs: map[netip.Addr]uuid.UUID{}}
+		conns: map[net.Conn]k8sRelayConn{}, fenced: map[uuid.UUID]bool{}, fencedIPs: map[netip.Addr]map[uuid.UUID]bool{}}
 }
 
 // listen binds the pod IP (never an unspecified or loopback address) at the target port.
@@ -142,7 +142,7 @@ func (r *k8sRelay) forward(c net.Conn) {
 	run, ok, err := r.lookup(r.ctx, src)
 	r.mu.Lock()
 	peer := r.peer
-	_, ipFenced := r.fencedIPs[src]
+	ipFenced := len(r.fencedIPs[src]) > 0
 	if err != nil || !ok || peer == nil || r.closed || ipFenced || r.fenced[run] {
 		r.mu.Unlock()
 		_ = c.Close()
@@ -160,12 +160,18 @@ func (r *k8sRelay) forward(c net.Conn) {
 }
 
 // Fence marks run fenced, refuses its recorded proxy IP from now on, and closes the run's open
-// connections (after unlocking, as Offline does). Leases and sessions never clear it.
+// connections (after unlocking, as Offline does). Leases and sessions never clear it. An IP is
+// refused while any run fenced on it is unwitnessed: two runs can share one (a run refused on the IP
+// still had its proxy running there), and each one's release is its own.
 func (r *k8sRelay) Fence(run uuid.UUID, proxyIP string) {
 	r.mu.Lock()
 	r.fenced[run] = true
 	if ip, err := netip.ParseAddr(proxyIP); err == nil {
-		r.fencedIPs[ip.Unmap()] = run
+		a := ip.Unmap()
+		if r.fencedIPs[a] == nil {
+			r.fencedIPs[a] = map[uuid.UUID]bool{}
+		}
+		r.fencedIPs[a][run] = true
 	}
 	var mine []net.Conn
 	for c, rc := range r.conns {
@@ -188,8 +194,10 @@ func (r *k8sRelay) Unfence(run uuid.UUID, proxyIP string) {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.fencedIPs[ip.Unmap()] == run {
-		delete(r.fencedIPs, ip.Unmap())
+	a := ip.Unmap()
+	delete(r.fencedIPs[a], run)
+	if len(r.fencedIPs[a]) == 0 {
+		delete(r.fencedIPs, a)
 	}
 }
 
@@ -201,8 +209,7 @@ func (r *k8sRelay) IPFenced(ip string) bool {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	_, ok := r.fencedIPs[a.Unmap()]
-	return ok
+	return len(r.fencedIPs[a.Unmap()]) > 0
 }
 
 // awaitProbe arms the boot source probe and returns the wait for the source address of the next

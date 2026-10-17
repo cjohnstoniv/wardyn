@@ -1,6 +1,6 @@
 # Wardyn Published Threat Model
 
-**Version:** v2 (tracks the shipped codebase; last reviewed at v0.9.2)
+**Version:** v2 (tracks the shipped codebase; last reviewed at v0.9.3-rc.2)
 **Status:** published alongside the codebase.
 
 **Implementation status markers.** Controls are tagged inline: **[shipped]**
@@ -516,7 +516,7 @@ is not the deployment described above.**
 | | So the listener exists on those deployments and only the loopback host-port publish keeps it off the network. | |
 | Impersonation / unregistered-key access to the SSH gateway | **[v0.5+ shipped]** Public-key auth only (no password/keyboard-interactive method is ever offered); the trust root is a fingerprint a human registers against their OWN principal (`POST /api/v1/me/ssh-keys`, self-service, no admin-on-behalf-of). | B9, AU |
 | | Authorization is owner-or-admin (`run.created_by == the key's principal`, OR the key's `role` column — migration `0043`, re-stamped bounded-stale on every OIDC login (`0046`, `WARDYN_SSH_ROLE_TTL`), never read live, residual #15). A member's key never satisfies the override. | |
-| | Every attempt is audited under `ssh.authenticate` with the source IP and, where a registered key was involved, the actual principal rather than "unknown"; refusals that name a registered key are recorded at a per-key bounded rate (burst 5, 1/s), and refusals with no attributable actor (unknown key, bad username, unknown run) share the `auth.fail` rate bound (burst 5, 1/s), with drops counted in `wardyn_auth_failed_suppressed_total`. Bounds: [`docs/SSH.md`](../docs/SSH.md). | |
+| | Every success and a bounded share of refusals are audited under `ssh.authenticate` with the source IP and, where a registered key was involved, the actual principal rather than "unknown"; refusals that name a registered key are recorded at a per-key bounded rate (burst 5, 1/s; per-key buckets are capped at 1024 live keys, and a key past the cap shares the `auth.fail` bound), and refusals with no attributable actor (unknown key, bad username, unknown run) share the `auth.fail` rate bound (burst 5, 1/s), with drops counted in `wardyn_auth_failed_suppressed_total`. Bounds: [`docs/SSH.md`](../docs/SSH.md). | |
 | SSH session resource exhaustion against one run | **[v0.5+ shipped]** A per-run cap on concurrent SSH channels, which `session` (shell/exec/sftp) and `direct-tcpip` (`-L`) share, independent of the connection-level cap. Since 0.9 `WARDYN_SSH_MAX_SESSIONS_PER_RUN` sets it; sync has its own cap. | B9 |
 | Unrecovered panic in a per-channel SSH goroutine crashing the daemon (and its kill switch) | **[v0.5+ shipped]** Every per-connection AND per-channel goroutine runs through one shared `sshGo` wrapper with `recover()` — a bug in one session never reaches the process. | B1, B9 |
 | | Distinct from a nil-Runner panic: `sshFreshRun` (every bridge's first call) refuses closed with a clean channel error when no Runner is configured (`-runner none`, a supported headless mode). | |
@@ -807,6 +807,7 @@ is not the deployment described above.**
   - A new sign-in can use a later snapshot.
   - Fences survive row retention and process restarts.
   - Erasure reaches another replica's cached globals at its next fresh read; ordered cache reads do not reapply old work after that read.
+  - A full registry reload keeps any value committed at a generation above its snapshot, and the next read applies it, so a reload never unmasks a value committed after the snapshot.
   - Global registration also requires its rows to have been applied and its values to remain available for masking: a healthy corpus read that skipped an unreadable row cannot authorize credential use.
   - Cached retired values still mask through their existing grace.
   - Already-held bytes and previously returned maskers are not revoked, and restoring a pre-erasure backup restores that backup's fence state too.
@@ -1084,6 +1085,19 @@ ADMIN pre-authorized** —
   - And the spool drain replays it into Postgres through the raw store recorder rather than back
     onto a sink — the off-box head series therefore has a gap across an outage.
     - ([`docs/OPERATIONS.md`](../docs/OPERATIONS.md), "What the drain does not restore").
+  - A row sealed under the pending key waits in the spool and is not streamed while it waits.
+    - The drain sends it once, with its chain hashes, when the store has it, so it arrives late and out of `seq` order.
+    - A consumer that checks chain continuity in arrival order sees a gap, then the fill.
+  - Rows the database writes itself (`audit.retention.set`, `audit.retention.partition_dropped`, `principal_key.destroyed`, `credential.reauth.resolve`) are streamed after their commit, hashes included.
+    - A crash between the commit and the send drops the row from the stream. The committed row is the record.
+  - Sink delivery from the process is at-most-once, in emit order, and a failure is counted in `wardyn_audit_sink_drops_total`.
+  - The opt-in acknowledged webhook delivery ([`docs/ENV.md`](../docs/ENV.md#acknowledged-delivery-delivery-acknowledged)) closes that gap for the webhook only, and it is at-least-once.
+    - It reads the stored, masked rows in `seq` order from a checkpoint kept in Postgres, so hashes ride along and an outage costs a delay, not a hole.
+    - A 2xx means the collector accepted the line, not that it kept it, so a collector can lose an accepted event.
+    - If retention removes the row at the checkpoint, delivery resends from the oldest retained row and records a chained `audit.delivery.reset` event naming the lost position. The gap is reported, not refused.
+    - Syslog stays best-effort. The loop runs on the sweeper leader and is never on a write, kill or revoke path.
+  - A retention drop made with the shared admin token is attributed to a `system` actor named for the token, not to a person.
+    - The database function reads the name `wardynd` as the sweeper's unattested drop, so the API refuses that name (`audit_retention_actor_reserved`). That API door is the only guard for a caller other than the sweeper's own role.
   - Pre-migration rows keep NULL hashes and sit outside the chain (no backfill — hashes computed
     after the fact by the process that could have altered the rows prove nothing).
   - Signed receipts under a key no database role can reach are the next rung and are
@@ -2090,10 +2104,17 @@ hiding them would repeat the failure mode we are designed to avoid.
     - (b) **Under the default, `local` KEK**, whoever holds both the database (or a backup) and `WARDYN_AGE_KEY` reads every value, offline and unlogged.
       - A deleted or erased credential (`DELETE /people/{principal}/credentials`, or the daily expiry sweep) still decrypts from any earlier backup while both exist.
       - The erasure horizon is the deployment's backup retention, not the API call.
-      - **A key service that keeps the KEK away from the database has shipped for two providers.**
+      - **A key service that keeps the KEK away from the database has shipped for three providers.**
         - `WARDYN_KEK=transit` moves the wrap to Vault or OpenBao's Transit engine, which narrows this to residual 49(c)'s shape — a Vault-side actor, not a database reader alone — rather than closing it.
         - And `WARDYN_KEK=azurekv` moves it to Azure Key Vault, with what (d) leaves open.
-        - AWS KMS key-wrapping remains planned (Azure Key Vault as a plain external secret STORE has also shipped and inherits this residual unchanged, since Wardyn does no at-rest cryptography of its own on a row held there).
+        - And `WARDYN_KEK=awskms` moves it to AWS KMS, with what [the operations page](../docs/operations/secrets-and-keys.md#key-service-aws-kms) says.
+          - `kms:Decrypt` on the key plus a database read opens every credential, so the key policy names the wardynd role and no other principal.
+          - Each wrap's encryption context is an unsalted SHA-256 of the row's binding. CloudTrail records it in clear, so someone with CloudTrail access who can guess an owner and credential name can confirm the pair.
+          - Rows stay bound to the configured key's ARN. A multi-Region replica in another region is a different ARN and gives no failover.
+          - `AWS_ENDPOINT_URL` and `AWS_ENDPOINT_URL_KMS` are operator-controlled, and an endpoint that ignores the context fails the boot probe.
+        - Azure Key Vault as a plain external secret STORE has also shipped and inherits this residual unchanged, since Wardyn does no at-rest cryptography of its own on a row held there.
+        - `WARDYN_KEK_REQUIRED` guarantees that new writes are wrapped by a key service. Rows written earlier under the local key stay wrapped by it until `wardynd -rewrap` moves them.
+          - `/setup/status` reports their count as `kek_local_rows`. A deployment that must prove no local-key row exists checks that row, or the `-rewrap` result.
     - (c) **Metadata stays in the clear:** who holds which named credential, and since when, is readable to anyone who can read the table.
     - (d) **Under the Key Vault KEK** (`WARDYN_KEK=azurekv`, `azurekv.KEK`), four things stay open.
       - **`keys/sign` is at least as powerful as `keys/unwrap`:** a principal with `sign` on the signing key and write on the database plants a boot key, forges admin sessions with it, and reaches every credential through the console.
@@ -2123,10 +2144,14 @@ hiding them would repeat the failure mode we are designed to avoid.
       - **An erase and a concurrent write (0.9):** each person has an erase generation in Postgres.
         - A fenced write shares a transaction with a `FOR SHARE` read of that counter, and an erase advances it under the row lock. Either the write commits first and the erase deletes it, or the erase commits first and the write is refused (`409` `credential_erased_during_write`).
         - The counter holds a number and a time, never a credential.
+        - The row outlives the erase on purpose. It keeps the subject id, the counter and the time of its last change, because deleting it would reset the counter to 0 and let a write that began before the erase land.
+        - A request to remove every trace of a subject id from the database has to treat this row as a table of its own.
         - Residual: a store with no generation falls back to in-process locks (`write_fence` `locks_only`), and a pre-upgrade daemon in a mixed fleet is unfenced.
+      - **Outside every erasure scope (0.9):** a person's saved preferences (`principal_prefs`: the chosen view and the default runner pool) and the `created_by` and `updated_by` columns of organization runner pools and remote-hosted runners keep their name.
       - **Who a name is (0.9):** every route that erases, deletes or assigns by name resolves the name once, through `PrincipalsNamed`.
         - The order is: an exact principal (sign-in, admin-created person, API-token owner, workspace owner); then `entra:<tenant>:<object>` from recorded ids; then the principal case-folded; then, only for a name with an `@`, every recorded email together.
         - Two principals in a tier, or an unreadable directory, refuses; nothing falls through to a guess.
+        - A reserved non-person name (the admin token, `local:`, `device:`, a portal delegate or the local operator) is refused `422` `reserved_principal` on both erase routes.
         - Audit-seal aliases and a governance row's email column count only when the directory names them as this person alone.
         - Residual: a namespace no directory records can be shadowed, for an `@` name, by another person's email claim; the self-erase check matches claim-text aliases, so a person who claims a security admin's email cannot be erased by that admin (another security admin or the admin token can); SCIM deprovisioning still builds its own forms from claim-text emails.
     - (f) **Key domains (`WARDYN_KEY_DOMAINS_FILE`, 0.8.6)** narrow what a leaked domain key exposes.
@@ -2236,6 +2261,7 @@ hiding them would repeat the failure mode we are designed to avoid.
     - Tearing a run down early is scoped differently: a security admin already has that axis, on any run in the deployment (`POST /runs/{id}/kill`, gated by `ownsRunOrAdmin` in [`internal/api/helpers.go`](../internal/api/helpers.go), which admits `isSecurityOperator`).
     - It is keeping a run alive that no narrower role can do.
     - The action is fully audited with both the actor and the owner as `subject` (`run.revive`, [`docs/AUDIT-ACTIONS.md`](../docs/AUDIT-ACTIONS.md)), so misuse is visible after the fact; nothing today narrows who holds the button in advance.
+    - A run stored with the background experience has no interactive door (terminal, exec, SSH, the UI gateway and desktop). The doors read the stored experience after entry authorization, so no principal, an admin included, can enter one (`run_background_only`), and a revive keeps the experience.
 
 56. **A revived or restarted run keeps its ORIGINAL agent image — revive never re-pulls or rebuilds it.**
     - A proxy-only revive (a control-plane outage) touches only the proxy sidecar; a revive after a reboot restarts the SAME, already-created agent container rather than recreating it from the current agent image.
@@ -2286,6 +2312,7 @@ hiding them would repeat the failure mode we are designed to avoid.
     - The portal's own credential (`wdp_`) plus the person's token buys a delegated token (`wdg_`).
     - A stolen portal credential alone mints nothing, but the portal already sees its signed-in people's tokens, so a compromised portal reaches every such person in its registered group.
     - That is at user reach only, on the delegation allow-list only (`delegationAllowed` in [`internal/api/delegation.go`](../internal/api/delegation.go); every other route is 403 `delegation_scope`), and recorded as `data.via` on every row.
+    - `GET /runs/{id}/output` reads command output only. A row recovered from the recording, or an interactive run's pane snapshot, is withheld from a delegated token and answered as if absent, with an audited `delegation_scope` refusal naming the run. A portal never starts the recording repair, and the failure hint's quote of the recording is dropped from the run reads it receives.
     - Bounds: revoking the portal, or `POST /sessions/revoke` for the person, ends its outstanding tokens on their next request (the lookup joins the portal's `revoked_at`; the person's cutoff is `IsSessionRevoked`).
     - A disable made ONLY at the identity provider is seen at the next exchange, so it lags by at most the ten-minute token lifetime (`delegatedTokenTTL`), not the subject token's own.
     - A UI-app session a portal opens through an attach ticket is a credential derived from the grant and is bounded by it (0.8.5, #1475).
@@ -2518,6 +2545,9 @@ hiding them would repeat the failure mode we are designed to avoid.
     - It cannot create a run, reach another person's, or read a `via_org` value. No TPM or Secure Enclave binds the key in 0.9.
     - **A stolen registration token** buys only an `unclaimed` runner. *My runner* shows its fingerprint abbreviated (`abbreviateFingerprint`), so a claim must carry the full fingerprint, read where the key lives.
     - **Revocation**, by an admin, a security admin or the owner (`not_mine`), ends every unfinished run on the runner KILLED in one transaction (`revokeRunner`), then runs each run's kill cascade. A live session closes; an offline runner learns it on reconnect (#77).
+    - A session another replica holds closes at its next stored-row recheck, within one 15-second ping interval, so under `WARDYN_HA` a revoked runner's live session can outlast the revoke by that long. Its runs are already KILLED, its credentials revoked and its writes refused.
+    - An administrator sees every runner's owner and whole fingerprint, but claims only their own runner (the claim needs the owner's own session) and mints a token for someone else only on the super-admin tier.
+    - **Token rows pile up.** Registration-token rows are never pruned, and a person with the `self_host_runner` permission (or an admin) mints without a rate limit. A token buys only an `unclaimed` runner, which is swept after `24h`.
 
 71. **The relay is opaque, and the local relay listener answers any process on the laptop that holds a run token [0.9, client mode].**
     - The runner relays TLS that ends at wardynd, so it sees ciphertext only (B6). Its listener binds the Docker host-gateway address, which any laptop process can open with a run token the developer can read (#69).
@@ -2527,6 +2557,7 @@ hiding them would repeat the failure mode we are designed to avoid.
     - `findRelay` tries up to four ordered address pairs, with up to three throwaway proxy-image containers each (`ProbeRelay`, hardened like `ProbeDrive`), and a pair passes only when the container connects and the probe listener accepts. `relay.use` then adopts the pair. Its candidate targets `192.168.5.2` and `192.168.127.254` get one TCP connect wherever the engine routes them, with nothing sent.
     - With one, a laptop process can call the relayed routes (`relayedInternalRoutes`) for its owner's local runs: decisions, activity, approvals, token renewal, own-credential injection and mint, `via_org` and recording uploads.
     - So a developer can write self-serving rows about their own run (#73) and raise approvals for it. The binding refuses every other run and every unlisted route (B6).
+    - A hostile `wardyn-runnerd` writes its own runs' proxy configuration, the run token and the control-plane CA it trusts, so it can end the TLS hop for those runs. It reaches only what those runs' own-delivery grants hold.
     - A run with an unapplied pending action is fenced on both sides: no relay and no call (`runner_action_pending`).
     - Terminal, SSH and UI-gateway byte streams keep their own principal checks and audit rows, stamped `data.relay`, and are reset, never resumed, on reconnect. The relay serves no human route, and a runner cannot open a terminal or exec stream toward the organisation itself.
 
@@ -2613,6 +2644,7 @@ hiding them would repeat the failure mode we are designed to avoid.
     - Nothing is minted, renewed or delivered while a run is `QUEUED`, and the internal routes refuse that state.
     - The start re-checks deactivation, the session-revocation cutoff since the run was queued, a service identity's retirement and sponsor, and the role and user type the current mappings derive from the launch's email and groups.
     - A session revoke, a service identity's retirement, an erase and a leaver purge cancel a person's waiting runs.
+    - A revoke that lands after the start's checks and before its synchronous dispatch is not seen by that start, as it is not by a create; the run's own credentials are revoked with the rest.
     - Residual: a group removed at the identity provider is not seen before the wait ends: `24h` for a background run, `1h` for an interactive one, at most `7d` when the launch asks.
     - The queue row holds the owner's snapshot and request, names and references with no secret value, and every exit deletes it. A person may hold `100` waiting runs per pool.
     - Slot counts and `queue.position` are aggregate counts over the pool. They name no run, owner or runner, and `queue` is visible only where the run is.
@@ -2664,6 +2696,21 @@ hiding them would repeat the failure mode we are designed to avoid.
     - Withdrawing a person's grant for the component does not end a running run's lane. A purge or erasure is not seen by a running proxy until its next resolve, and Entra has no per-token revoke: an issued token lapses by Entra's default access-token lifetime, `60` to `90` minutes.
     - Azure's activity log attributes every operation to the person, and nothing marks it as an agent's. In Entra's sign-in log the interactive sign-in shows the person's own browser, and each later renewal shows the control plane's address. There is no per-person disconnect: a sign-in leaves by row purge, erasure, or revocation at Entra.
     - The token is kept out of the sandbox's configuration, not out of responses. A local runner is refused the lane. `az` is pinned by version and by its repository key's fingerprint, not by a package digest.
+
+88. **A recovery rehearsal proves a staged set, not the restore it stands for [0.9].** ([Design](../docs/design/0.9/recovery-set.md#10-residuals-and-threat-model-delta), [operations](../docs/operations/recovery-rehearsal.md).)
+    - The manifest is plain JSON and not authenticated. It detects a mismatched pair, and anyone who can rewrite the stored set can rewrite it to match.
+    - Identity is the audit head, so two dumps with one head and different non-audited rows look alike.
+    - A restored pre-erasure set resurrects erased credentials, principal keys, recordings and drive bytes while the wrapping key lives. Residual 48(a) and (b) state the horizon.
+    - The set-overlap check sees only this process's mounts. A live volume mounted only at the set path is not caught.
+    - The set can be the staging copy itself, so a pass then proves the copy. A set staged with hard links into live files digests the live bytes, because `os.Root` cannot tell them apart.
+    - The rehearsal decrypts every stored value in memory, as an operator holding the keys and the dump can already do offline. It adds the audited begin row, not a capability.
+    - Each plaintext and data key is cleared and `nodump.Disable` refuses core dumps and same-uid ptrace on Linux. Copies in swap or moved by the garbage collector are best-effort.
+    - The scratch copies it leaves are the operator's to dispose of. Wardyn never deletes them.
+    - A logical replica of live passes the lock probe and the standby check.
+    - Its checks defend against mistakes, not against a key-holder who controls both DSNs: a decoy `WARDYN_PG_DSN` sends the begin row elsewhere while the target is the real database. While runs are live, the single-instance lock is the backstop.
+    - Which drive homes a person should have is not derivable from the database, so a person's home missing from the set is not detected.
+    - The tree digest includes the permission bits with setuid, setgid and sticky, so stage and restore with modes preserved.
+    - Other sealed blobs (masking manifests, sealed audit fields, sealed proxy configs) are reached through keys the rehearsal proves but are not opened. The verdict does not look for target rows the manifest does not describe.
 
 ### The injected call is pinned on the wire (security INFO-1 / W6-S F3) — SHIPPED, not deferred
 
@@ -3136,6 +3183,7 @@ has four-eyes.**
      that is not retired, references cannot be deleted);
    - a service identity's description, suspend, unsuspend and retire;
    - `PUT /runners/settings`, which lets self-hosted runners register and connect at all; where a run may land (`deny_placements`) and what an org credential may reach there (`PUT /governance/credential-delivery`) stay covered;
+   - `POST /admin/identities/{id}/unbind`, one super admin's act that clears the principal an Entra identity row is bound to, so the person's next sign-in binds it to a new pairwise `sub` after an app re-registration. It is refused for a deactivated or purged identity, and while the released principal holds an API token, an SSH key or a live run, sponsors a service identity or is named by a pending invitation. It cuts that `sub`'s sessions. The old principal's workspaces, stored credentials and drive stay under it, out of the person's reach;
    - the SCIM purge, which deletes the departed person's user-subject governance assignments and
      capability grants directly, without a pending change: the identity provider is the single
      authority for that write.
@@ -3151,7 +3199,7 @@ has four-eyes.**
 
 **`SourceIP` does not separate principals on a Kubernetes deployment either.**
 
-- Wardyn deliberately does not install a `RealIP` middleware (an `X-Forwarded-For` a client can set is not an identity), so behind an ingress or a load balancer `SourceIP` is the proxy's address and every caller shares it.
+- Wardyn reads `X-Forwarded-For` only from a `WARDYN_TRUSTED_PROXIES` peer (a header a client can set is not an identity), so behind an unlisted ingress or load balancer `SourceIP` is the proxy's address and every caller shares it.
 - A credential-stuffing run against one path and reason therefore arrives as ONE streak on any deployment, and the fold is what a defender is reading.
 
 What bounds that is the window, the count and the rate limiter, not the key:

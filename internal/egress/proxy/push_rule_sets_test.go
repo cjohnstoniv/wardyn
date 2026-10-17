@@ -105,6 +105,24 @@ func TestGitRoute_ADOServerPathPrefixWithoutBasePathRefused(t *testing.T) {
 	}
 }
 
+// One host, two collections, each set under its own base path: a push to the second collection is held
+// to that collection's rules, not refused because the first set's base path does not hold it.
+func TestGitRoute_ADOServerTwoCollectionsOnOneHost(t *testing.T) {
+	p, sink, up, push := adoServerLane(t, "/tfs/colla")
+	p.pushSets = []types.PushRuleSet{
+		{Provider: string(types.GitProviderAzureDevOps), Host: prSetsServerHost, Org: "colla", BasePath: "/tfs/colla"},
+		{Provider: string(types.GitProviderAzureDevOps), Host: prSetsServerHost, Org: "collb", BasePath: "/tfs/collb",
+			Rules: types.PushRulesSpec{DenyPaths: []string{".github/workflows/**"}}},
+	}
+	rec := push("tfs/collb/proj/_git/app")
+	if rec.Code != http.StatusForbidden || !strings.Contains(sink.String(), `"rule_source":"`+ruleSourceGitRules+`"`) {
+		t.Fatalf("second collection: %d %q log %q, want its own content-rules refusal", rec.Code, rec.Body.String(), sink.String())
+	}
+	if up.gitHits != 0 {
+		t.Errorf("a refused push reached the forge %d times", up.gitHits)
+	}
+}
+
 // An error from the lookup refuses the push on every route that applies rules; it
 // is never read as "this entry has no rules".
 func TestGitRoute_PushRulesForRemoteErrorRefuses(t *testing.T) {

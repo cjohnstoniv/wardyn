@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"slices"
 	"strings"
@@ -149,6 +150,11 @@ func TestCapabilityFeatureKind(t *testing.T) {
 				c, b, n, r := try(t, d, &capStore{grants: rows}, pm(t))
 				wantRefused(t, d, c, b, n, r)
 			})
+			t.Run("enforced, a staged allow of an unknown feature grants nothing", func(t *testing.T) {
+				rows := []types.CapabilityGrant{grant(types.CapabilitySubjectUserType, utPM, capFeature, "future_feature", allow)}
+				c, b, n, r := try(t, d, &capStore{enf: enforced(), grants: rows}, pm(t))
+				wantRefused(t, d, c, b, n, r)
+			})
 			t.Run("a deny on the other feature does not bite", func(t *testing.T) {
 				rows := []types.CapabilityGrant{grant(types.CapabilitySubjectAll, "", capFeature, other, deny)}
 				c, b, n, r := try(t, d, &capStore{grants: rows}, pm(t))
@@ -195,6 +201,32 @@ func TestFeatureGrantValueIsTheClosedSet(t *testing.T) {
 		if _, err := canonicalGrantValue(capFeature, bad); err == nil {
 			t.Errorf("canonicalGrantValue(%q) accepted a value no mint door asks about", bad)
 		}
+	}
+}
+
+// TestFeatureAllowOfAnUnknownValueIsStaged: an allow naming a feature this version does not know is
+// stored (lowercased), so an administrator can stage it before the upgrade that ships the feature, and
+// reads back inert; a deny of one, or a name that is not snake_case ASCII, is still refused.
+func TestFeatureAllowOfAnUnknownValueIsStaged(t *testing.T) {
+	g := func(value string, effect types.CapabilityEffect) types.CapabilityGrant {
+		return types.CapabilityGrant{SubjectType: types.CapabilitySubjectAll, Capability: capFeature, Value: value, Effect: effect}
+	}
+	staged := g(" Future_Feature ", types.CapabilityAllow)
+	if err := validateCapabilityGrant(&staged); err != nil || staged.Value != "future_feature" {
+		t.Fatalf("staged allow: value %q, err %v; want stored as future_feature", staged.Value, err)
+	}
+	for _, bad := range []types.CapabilityGrant{
+		g("future_feature", types.CapabilityDeny), g("future-feature", types.CapabilityAllow),
+		g("sſh_key", types.CapabilityAllow), g("9lives", types.CapabilityAllow),
+	} {
+		if err := validateCapabilityGrant(&bad); err == nil {
+			t.Errorf("%s %q was stored, want refused", bad.Effect, bad.Value)
+		}
+	}
+	views := New(Config{}).markInertGrants(httptest.NewRequest(http.MethodGet, "/api/v1/permissions", nil),
+		[]types.CapabilityGrant{staged, g(featureSSHKey, types.CapabilityAllow)})
+	if !views[0].Inert || views[1].Inert {
+		t.Errorf("inert = %v, %v; want the staged allow inert and the known one live", views[0].Inert, views[1].Inert)
 	}
 }
 

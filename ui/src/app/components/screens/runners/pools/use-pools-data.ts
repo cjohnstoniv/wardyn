@@ -100,9 +100,13 @@ export function usePoolsData(openPoolId: string | null): PoolsData & { reload: (
         setData({ status: "ready", message: "", ...r });
       })
       .catch((e: unknown) => {
-        if (mine !== seq.current || silent) return;
-        if (e instanceof HttpError && e.status === 501) setData({ ...EMPTY, status: "unavailable", message: e.message });
-        else setData((d) => ({ ...d, status: "error" }));
+        if (mine !== seq.current) return;
+        // A silent read that failed says nothing on a tab that is showing pools, but one that overtook a
+        // full load is the only answer that load will get: leaving "loading" up would never offer Retry.
+        setData((d) => {
+          if (silent && d.status !== "loading") return d;
+          return e instanceof HttpError && e.status === 501 ? { ...EMPTY, status: "unavailable", message: e.message } : { ...d, status: "error" };
+        });
       });
   }, []);
 

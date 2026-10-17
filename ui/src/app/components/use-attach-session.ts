@@ -74,6 +74,17 @@ const AUTH_ENDED_CLOSE_CODE = 4401;
 const AUTH_ENDED_REASON = "session ended";
 
 // Helpers
+
+/** The grid the container would fit, whatever the local grid is pinned to. */
+export function realFit(fit: FitAddon | null): { cols: number; rows: number } | null {
+  try {
+    const d = fit?.proposeDimensions();
+    return d && d.cols > 0 && d.rows > 0 ? { cols: d.cols, rows: d.rows } : null;
+  } catch {
+    return null;
+  }
+}
+
 function buildWsUrl(runId: string, ticket?: string, cols?: number, rows?: number): string {
   const q = new URLSearchParams();
   if (ticket) q.set("ticket", ticket);
@@ -168,11 +179,18 @@ export function useAttachSession(args: UseAttachSessionArgs) {
 
   // Read at each (re)connect, not keyed on: /me landing late must not rebuild
   // the terminal (one socket and one ticket per page load). Teardown on a
-  // changed authorisation still rides `mayEnter` and `signedOut` below.
+  // changed authorisation still rides `mayEnter` below.
   const operatorRef = React.useRef(operator);
   const operatorResolvedRef = React.useRef(operatorResolved);
   operatorRef.current = operator;
   operatorResolvedRef.current = operatorResolved;
+  // Signing out mid-page closes the socket and stops retries and input, but
+  // keeps the terminal and what it shows: the same person signing back in
+  // reconnects into it. Someone else signing in reloads the page (reauth.ts
+  // reloadAs), which disposes it with everything else.
+  const signedOutRef = React.useRef(signedOut);
+  signedOutRef.current = signedOut;
+  const suspendRef = React.useRef<(on: boolean) => void>(() => {});
 
   React.useEffect(() => {
     // Fail-open default (operator-context.tsx) means this stays exactly
@@ -180,9 +198,13 @@ export function useAttachSession(args: UseAttachSessionArgs) {
     // never sets WARDYN_OIDC_OPERATOR_EMAILS. A confirmed non-operator on a run
     // whose stated creator is somebody else skips straight to the reason below,
     // before creating a terminal or a socket.
-    if (signedOut || !mayEnter) {
-      setConnState(signedOut ? "closed" : "error");
-      setErrorMsg(signedOut ? "" : refusal);
+    if (!mayEnter) {
+      const showRefusal = (on: boolean) => {
+        setConnState(on ? "closed" : "error");
+        setErrorMsg(on ? "" : refusal);
+      };
+      showRefusal(signedOutRef.current);
+      suspendRef.current = showRefusal;
       return;
     }
 
@@ -267,6 +289,10 @@ export function useAttachSession(args: UseAttachSessionArgs) {
     let reconnectAttempts = 0;
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
     let disposed = false; // set in cleanup so a pending backoff never reconnects
+    // Signed out: no socket, no retry, no input. `gen` retires a ticket mint
+    // still in flight when the sign-out landed.
+    let suspended = signedOutRef.current;
+    let gen = 0;
 
     // Streaming decoder for the output observer (a multibyte glyph split across
     // frames stays correct; our token of interest is ASCII regardless).
@@ -312,8 +338,14 @@ export function useAttachSession(args: UseAttachSessionArgs) {
       send(new TextEncoder().encode(text));
     };
 
+    // What the server is told this client's size is. A pinned observer's local grid
+    // is the writer's, so a reconnect URL built from it would hand the server the
+    // writer's size as the observer's own.
+    const connectSize = () => (observerPinRef.current ? realFit(fitAddonRef.current) : null) ?? { cols: term.cols, rows: term.rows };
+
     const connect = () => {
-      if (disposed) return;
+      if (disposed || suspended) return;
+      const g = gen;
       setConnState(reconnectAttempts > 0 ? "reconnecting" : "connecting");
       // Ticket lane needed for token-only mode (the bearer can't ride a WS
       // handshake) AND for a non-operator owner (the cookie lane is
@@ -337,11 +369,12 @@ export function useAttachSession(args: UseAttachSessionArgs) {
         runs
           .attachTicket(runId)
           .then((ticket) => {
-            if (disposed) return;
-            openSocket(buildWsUrl(runId, ticket, term.cols, term.rows));
+            if (disposed || g !== gen) return;
+            const sz = connectSize();
+            openSocket(buildWsUrl(runId, ticket, sz.cols, sz.rows));
           })
           .catch((e: unknown) => {
-            if (disposed) return;
+            if (disposed || g !== gen) return;
             setConnState("error");
             setErrorMsg(
               entryErrorMessage(e, (err) => `Could not mint an attach ticket: ${err instanceof Error ? err.message : String(err)}`),
@@ -350,11 +383,12 @@ export function useAttachSession(args: UseAttachSessionArgs) {
           });
         return;
       }
-      openSocket(buildWsUrl(runId, undefined, term.cols, term.rows));
+      const sz = connectSize();
+      openSocket(buildWsUrl(runId, undefined, sz.cols, sz.rows));
     };
 
     const openSocket = (url: string) => {
-      if (disposed) return;
+      if (disposed || suspended) return;
       const ws = new WebSocket(url);
       ws.binaryType = "arraybuffer";
       wsRef.current = ws;
@@ -403,6 +437,7 @@ export function useAttachSession(args: UseAttachSessionArgs) {
           autoRunSent = true;
           const cmd = autoRunRef.current;
           autoRunTimer = setTimeout(() => {
+            autoRunTimer = null;
             send(new TextEncoder().encode(cmd + "\r"));
           }, 900);
         }
@@ -570,7 +605,53 @@ export function useAttachSession(args: UseAttachSessionArgs) {
       connect();
     };
 
-    connect();
+    suspendRef.current = (on: boolean) => {
+      if (disposed || on === suspended) return;
+      suspended = on;
+      if (!on) {
+        reconnectAttempts = 0;
+        setReconnectAttempt(0);
+        setReconnectExhausted(false);
+        connect();
+        return;
+      }
+      gen += 1;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+      if (connectTimer) clearTimeout(connectTimer);
+      connectTimer = null;
+      if (autoRunTimer) {
+        // Not typed yet: the next connect types it instead.
+        clearTimeout(autoRunTimer);
+        autoRunTimer = null;
+        autoRunSent = false;
+      }
+      const cur = wsRef.current;
+      if (cur) {
+        // Our own teardown, not a drop: no reconnect bookkeeping on the way out.
+        cur.onclose = null;
+        cur.onerror = null;
+        cur.onmessage = null;
+        try {
+          cur.close(1000, "signed out");
+        } catch {
+          /* already closing */
+        }
+      }
+      wsRef.current = null;
+      writerWs = null;
+      copyGate.reset();
+      setMode(null);
+      setConnState("closed");
+      setErrorMsg("");
+    };
+
+    if (suspended) {
+      setConnState("closed");
+      setErrorMsg("");
+    } else {
+      connect();
+    }
 
     // Terminal input → WebSocket binary frame (reads the current socket).
     const inputDispose = term.onData((data) => {
@@ -684,7 +765,14 @@ export function useAttachSession(args: UseAttachSessionArgs) {
       wsRef.current = null;
     };
     // mayEnter is keyed on deliberately: a confirmed non-owner tears the
-    // terminal down. operator and operatorResolved are read through refs.
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- refs and setters are stable identities (useRef/useState in the caller); these deps are unchanged from the effect this hook was extracted from
-  }, [runId, tokenOnlyMode, refit, mayEnter, refusal, signedOut]);
+    // terminal down. operator, operatorResolved and signedOut are read
+    // through refs; signedOut acts through suspendRef below.
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- refs and setters are stable identities (useRef/useState in the caller)
+  }, [runId, tokenOnlyMode, refit, mayEnter, refusal]);
+
+  // Declared after the effect above, so on mount it finds suspendRef already
+  // set to the state that effect started in, and does nothing.
+  React.useEffect(() => {
+    suspendRef.current(signedOut);
+  }, [signedOut]);
 }

@@ -52,6 +52,8 @@ export const RUNNER_V6 = {
   SEARCH_PLACEHOLDER: "Name, machine or owner",
   LIST_LABEL: "Runners",
   LAST_SEEN: (when: string) => `Last seen ${when}`,
+  /** What Last seen reads while the runner is online. */
+  LAST_SEEN_NOW: "now",
   MACHINE: "Machine",
   OWNER: "Owner",
   POOLS: "Pools",
@@ -87,6 +89,28 @@ export const RUNNER_V6 = {
   MINT_VM_DOCKER:
     "On Docker Desktop, Rancher Desktop (dockerd engine) or another VM-backed engine, wardyn-runnerd finds the relay address itself and checks it at startup; pass --total-disk <GB> to register, since the VM hides the disk.",
   MINT_ASKS_LIMITS: "It then asks for the runner's limits on that computer, prefilled with what it reports. Its owner can change them later in Your account → My runner.",
+} as const;
+
+/**
+ * A runner's trust class on Admin -> Runners (0.9.3, owner mock item 3, Q5). The mock's strings, with the
+ * console's own spelling "Organization" (Q5), not the mock's "Organisation".
+ */
+export const RUNNER_TRUST = {
+  TITLE: "Trust class",
+  META: "Security admin",
+  PERSONAL: "Personal",
+  MANAGED: "Managed device",
+  ORG: "Organization cluster",
+  PERSONAL_DESC: "A person's own computer. Wardyn assumes nothing about how it is managed.",
+  MANAGED_DESC: "A person's computer your organization manages. This is your assertion; Wardyn can't check it.",
+  ORG_DESC: "A cluster your organization runs. An organization's runner is always this class.",
+  HINT: "Credential delivery rules in Governance can differ by class. Reviving a run started under the old class is checked again and refused if the rules differ.",
+  REASON_LABEL: "Reason",
+  REASON_HINT: "Required. Kept on the change and in the audit trail.",
+  SAVE: "Change trust class",
+  SET_BY: (who: string, when: string) => `Set by ${who} ${when}`,
+  UNCLAIMED: "Available once its owner has claimed it.",
+  DONE: (runner: string, label: string) => `${runner} is now ${label}`,
 } as const;
 
 export const LIMITS_DIALOG = {
@@ -336,6 +360,8 @@ export const POOL_FORM = {
   CREATED: (name: string) => `Created ${name}`,
   STALE_HINT: "Reload the pool to see the other change, then redo yours.",
   RELOAD: "Reload",
+  // Lead wording 2026-10-17 (F4): the form's own sentence when Reload cannot re-read the pool.
+  RELOAD_FAILED: "Couldn't reload this pool. Your changes are still here. Try Reload again.",
   ERR_NAME: "Name the pool in 1 to 64 characters, without leading or trailing spaces.",
   ERR_NAME_LONG: "A pool name is at most 64 characters.",
   ERR_TYPES: "A pool allows at least one run type: choose background, interactive or both.",
@@ -385,8 +411,8 @@ export const MY_POOLS = {
   REMOVE_FROM: (runner: string, pool: string) => `Remove ${runner} from ${pool}`,
   ADDED: (runner: string, pool: string) => `${runner} added to ${pool}`,
   TITLE: "My pools",
-  ONLY_YOU: "Only you can see or change these",
-  LEDE: "A user pool is your own set of runners with limits that can narrow theirs. It can mix your self-hosted runners and remote-hosted runners your admin made available. Create as many as you like, for example Laptop and Home server. A run goes to one of your own runners with room first, then to a remote-hosted runner.",
+  ONLY_YOU: "Only you can change these. Administrators can see them.",
+  LEDE: "A user pool is your own set of runners with limits that can narrow theirs. It can mix your self-hosted runners and remote-hosted runners your admin made available. You can have up to 10 pools, for example Laptop and Home server. A run goes to one of your own runners with room first, then to a remote-hosted runner.",
   EMPTY: "You haven't created a pool yet.",
   RUNNERS_IN_IT: "Runners in it",
   ADD_RUNNER: "Add runner",
@@ -404,6 +430,9 @@ export const MY_POOLS = {
   DEFAULT_GONE: "Your default pool is no longer available. Choose a pool to continue.",
   CREATE: "Create a pool",
   UNAVAILABLE: "This server does not manage runner pools yet.",
+  /** FUG-L404: the card's one-line summary, beside its title, when My runner is not on the page. */
+  SUMMARY_NONE: "No pools",
+  SUMMARY_COUNT: (n: number) => (n === 1 ? "1 pool" : `${n} pools`),
 } as const;
 
 export const PICKER = {

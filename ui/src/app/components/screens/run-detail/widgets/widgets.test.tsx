@@ -4,7 +4,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { AgentRun, AuditEvent, RunDetail, CredentialGrant, EgressDecision } from "../../../../lib/types";
 
 const getFilesMock = vi.fn();
@@ -36,6 +36,7 @@ import { FilesChangedWidget } from "./files-changed";
 import { SandboxWidget } from "./sandbox";
 import { CredentialsWidget } from "./credentials";
 import { IdentityWidget } from "./identity";
+import { SYNC_REREAD_MS } from "./identity-sync";
 import { aheadByHours } from "../../../../lib/test-clock";
 import { OperatorProvider } from "../../../wardyn/operator-context";
 
@@ -460,6 +461,42 @@ describe("IdentityWidget: Sync rows", () => {
     expect(await screen.findByText(`${fmtBytes(4_000_000)} to the sandbox · ${fmtBytes(1000)} from the sandbox`)).toBeInTheDocument();
     expect(listAuditMock).toHaveBeenCalledWith("run-1", { action: "ssh.sync.transfer" });
     expect(screen.queryByText("Nothing synced yet.")).not.toBeInTheDocument();
+  });
+
+  it("reads the sync rows again while the run is live, for a session that opened and ended between two polls (DR-0167)", async () => {
+    vi.useFakeTimers();
+    try {
+      healthMock.mockResolvedValue({ status: "ok", ssh: { enabled: true } });
+      listAuditMock.mockResolvedValue([]);
+      renderRows({});
+      await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+      const syncReads = () => listAuditMock.mock.calls.filter((c) => (c[1] as { action?: string } | undefined)?.action === "ssh.sync.transfer").length;
+      const first = syncReads();
+      expect(first).toBeGreaterThan(0);
+      await act(async () => { await vi.advanceTimersByTimeAsync(SYNC_REREAD_MS); });
+      expect(syncReads()).toBe(first + 1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a re-read that fails keeps the rows the last good read found (FR-0113)", async () => {
+    vi.useFakeTimers();
+    try {
+      healthMock.mockResolvedValue({ status: "ok", ssh: { enabled: true } });
+      listAuditMock.mockImplementation((_id: string, f?: { action?: string }) =>
+        Promise.resolve(f?.action === "ssh.sync.transfer" ? [transfer("/workspace/app", 4_000_000, 1000)] : []),
+      );
+      renderRows({});
+      await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+      const line = `${fmtBytes(4_000_000)} to the sandbox · ${fmtBytes(1000)} from the sandbox`;
+      expect(screen.getByText(line)).toBeInTheDocument();
+      listAuditMock.mockRejectedValue(new Error("offline"));
+      await act(async () => { await vi.advanceTimersByTimeAsync(SYNC_REREAD_MS); });
+      expect(screen.getByText(line)).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("an ended session's error is shown verbatim under its directory", () => {

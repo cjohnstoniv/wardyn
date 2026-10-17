@@ -36,9 +36,8 @@ import (
 
 // PROVIDERS_400 — the refusal bodies this file writes.
 //
-// DRAFT (M2 canon pending): every string here is provisional until the owner's
-// canon sitting freezes it. They are constants, and the tests assert THROUGH the
-// constants, so the post-sitting swap is a one-file diff with no test churn.
+// Every string here is frozen as shipped. They are constants, and the tests assert THROUGH the
+// constants, so a wording change is a one-file diff with no test churn.
 const (
 	providers400BaseURL     = "base_urls[%d]: must be an https URL with a host and no credentials, query or fragment"
 	providers400HostKind    = "base_urls[%d]: %q is not a %s host"
@@ -791,7 +790,7 @@ func storageProvidersConfigured(sc types.SiteConfig) bool {
 // ("github", "azure_devops") is a closed enum this build already ships in its
 // own documentation, so it discloses nothing the console does not already say.
 //
-// DRAFT (M2 canon pending), the same terms as the PROVIDERS_400 block above.
+// Frozen as shipped, the same terms as the PROVIDERS_400 block above.
 const capProvider403 = "you are not granted this deployment's %s provider — ask an admin to grant it, " +
 	"or launch against a repository on a provider you hold"
 

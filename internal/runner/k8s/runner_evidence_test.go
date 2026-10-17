@@ -79,7 +79,7 @@ type runnerHarness struct {
 
 func newRunnerHarness(t *testing.T) *runnerHarness {
 	t.Helper()
-	h := &runnerHarness{ev: &memEvidence{m: map[uuid.UUID][]byte{}}, runID: uuid.New(), clock: time.Date(2026, 10, 16, 12, 0, 0, 0, time.UTC)}
+	h := &runnerHarness{ev: &memEvidence{m: map[uuid.UUID][]byte{}}, runID: uuid.New(), clock: time.Now().UTC()}
 	cfg := Config{RunnerID: testRunnerID, Arch: "amd64", Evidence: h.ev, HardDeny: &HardDeny{Suffixes: []string{"svc", "cluster.local"}},
 		Fence: func(_ uuid.UUID, ip string) { h.fences = append(h.fences, ip) }}
 	h.d, h.cs = newTestDriver(t, cfg)

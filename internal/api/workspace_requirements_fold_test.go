@@ -21,6 +21,13 @@ import (
 
 // This file covers Task 2 (the fold), Task 3 (per-run selections threaded
 // through create + preflight) and the Task 4 compose_setup.go escalation —
+// applyWorkspaceRequirements folds with the operator namespace and no egress
+// bound. Tests only: every production door passes its own bound to
+// applyWorkspaceRequirementsFor, so no caller can fold unbounded egress rows.
+func (s *Server) applyWorkspaceRequirements(ctx context.Context, spec *types.RunPolicySpec, agent string, wsRefs []types.Workspace, selections map[string]client.WorkspaceSelection) ([]requirementAuditEntry, *sourceRefusal) {
+	return s.applyWorkspaceRequirementsFor(ctx, nil, spec, agent, wsRefs, wsRefs, selections, nil)
+}
+
 // applyWorkspaceRequirements is the load-bearing function under test
 // throughout (defined in runs_create.go, beside applyWorkspaceCreds).
 
@@ -431,7 +438,7 @@ func TestApplyWorkspaceRequirements_WriteHeldToMemberWritableRoots(t *testing.T)
 			folded := supplier(tc.folded, tc.level)
 			sel := map[string]client.WorkspaceSelection{folded.ID.String(): {WorkspaceID: folded.ID.String(), EnabledOptional: []string{"write:" + project}}}
 
-			_, refusal := srv.applyWorkspaceRequirementsFor(context.Background(), nil, spec, "claude-code", []types.Workspace{folded}, tc.attached, sel)
+			_, refusal := srv.applyWorkspaceRequirementsFor(context.Background(), nil, spec, "claude-code", []types.Workspace{folded}, tc.attached, sel, nil)
 
 			if tc.wantReason == "" {
 				if refusal != nil || spec.WorkspaceMounts[0].ReadOnlyOrDefault() {
@@ -470,13 +477,54 @@ func TestApplyWorkspaceRequirements_ReadOnlySelectionPinsThePath(t *testing.T) {
 		}
 		attached := []types.Workspace{operator}
 		for _, ws := range []types.Workspace{operator, member} { // the fold step's order: attached, then referenced
-			if _, refusal := srv.applyWorkspaceRequirementsFor(context.Background(), nil, spec, "claude-code", []types.Workspace{ws}, attached, sel); refusal != nil {
+			if _, refusal := srv.applyWorkspaceRequirementsFor(context.Background(), nil, spec, "claude-code", []types.Workspace{ws}, attached, sel, nil); refusal != nil {
 				t.Fatalf("pinned=%v: refused: %v", pinned, refusal)
 			}
 		}
 		if got := spec.WorkspaceMounts[0].ReadOnlyOrDefault(); got != pinned {
 			t.Errorf("pinned=%v: read-only = %v; the run's read_only selection must hold, and only it", pinned, got)
 		}
+	}
+}
+
+// TestApplyWorkspaceRequirements_AWriteRowThatGrantsNothingLeavesAGrantedMountWritable: two attached
+// workspaces hold the same directory, one granting write and one carrying an Optional row the run did
+// not enable. The mount is writable in either fold order; only a read_only the run asked for narrows it.
+func TestApplyWorkspaceRequirements_AWriteRowThatGrantsNothingLeavesAGrantedMountWritable(t *testing.T) {
+	const path = "/srv/app"
+	row := func(level string) map[string]types.WorkspaceRequirement {
+		return map[string]types.WorkspaceRequirement{"write:" + path: {Level: level, Provenance: "operator_set"}}
+	}
+	grants := types.Workspace{ID: uuid.New(), Requirements: row("required")}
+	idle := types.Workspace{ID: uuid.New(), Requirements: row("optional")}
+	st := newOwnerStore()
+	st.put(types.Workspace{ID: grants.ID, Sources: []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeLocalDir, Path: path}}})
+	srv := New(Config{Store: st})
+	yes := true
+	for _, tc := range []struct {
+		name     string
+		order    []types.Workspace
+		sel      map[string]client.WorkspaceSelection
+		readOnly bool
+	}{
+		{"granting first", []types.Workspace{grants, idle}, nil, false},
+		{"granting last", []types.Workspace{idle, grants}, nil, false},
+		{"the run asked for read_only on the idle row", []types.Workspace{grants, idle},
+			map[string]client.WorkspaceSelection{idle.ID.String(): {WorkspaceID: idle.ID.String(), ReadOnly: &yes}}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ro := true
+			spec := &types.RunPolicySpec{WorkspaceMounts: []types.WorkspaceMount{{Source: path, Target: "/home/agent/work", ReadOnly: &ro}}}
+			attached := []types.Workspace{grants, idle}
+			for _, ws := range tc.order {
+				if _, refusal := srv.applyWorkspaceRequirementsFor(context.Background(), nil, spec, "claude-code", []types.Workspace{ws}, attached, tc.sel, nil); refusal != nil {
+					t.Fatalf("refused: %v", refusal)
+				}
+			}
+			if got := spec.WorkspaceMounts[0].ReadOnlyOrDefault(); got != tc.readOnly {
+				t.Errorf("read-only = %v, want %v", got, tc.readOnly)
+			}
+		})
 	}
 }
 

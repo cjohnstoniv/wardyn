@@ -146,6 +146,24 @@ func TestPATBrokerClonesGrantedHost(t *testing.T) {
 	}
 }
 
+// A granted forge named by an IPv6 literal is re-originated with the literal bracketed in the Host header
+// (RFC 3986 §3.2.2): a bare "2606:4700:4700::1111" there is read as a host with a port, and the forge answers 400.
+func TestPATBrokerBracketsAnIPv6LiteralInTheHostHeader(t *testing.T) {
+	const literal = "2606:4700:4700::1111"
+	up := newPATBrokerUpstream(t, "T", "oauth2")
+	p, _ := newPATBrokerProxy(t, map[string]PATGrant{literal: {GrantID: uuid.New()}}, upstreamAddr(up.srv))
+
+	rec := httptest.NewRecorder()
+	p.ServeHTTP(rec, mustLocalReq(t, http.MethodGet, "/wardyn/git/"+literal+"/org/repo.git/info/refs?service=git-upload-pack", nil))
+
+	if rec.Code != http.StatusOK || up.gitHits != 1 {
+		t.Fatalf("status = %d (%q) with %d forge hits, want 200 and one", rec.Code, rec.Body.String(), up.gitHits)
+	}
+	if up.gitHost != "["+literal+"]" {
+		t.Errorf("upstream Host = %q, want %q", up.gitHost, "["+literal+"]")
+	}
+}
+
 // The path split IS the authorization surface: whatever comes out of it is
 // looked up in the per-host allowlist, and anything that is not an exact
 // granted host 403s before an upstream URL is formed. So the cases that matter

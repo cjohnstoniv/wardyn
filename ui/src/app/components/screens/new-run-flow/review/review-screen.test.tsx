@@ -10,6 +10,7 @@ import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { setField } from "../../../../../test/set-field";
 import { OperatorProvider } from "../../../wardyn/operator-context";
 import { NR_FILES } from "../../../wardyn/copy/new-run/files";
+import { ENDS_NONE } from "../../../wardyn/copy/run-lifetime";
 import { NR_REVIEW } from "../../../wardyn/copy/new-run/review";
 import { NR_SAVE } from "../../../wardyn/copy/new-run/save";
 import { NR_SHAPE } from "../../../wardyn/copy/new-run/shape";
@@ -185,12 +186,25 @@ describe("Review Launch gate (U11)", () => {
       preflightRead: { generation: GENERATION, at: Date.now() - 1000 },
       preflightError: "Your AWS sign-in no longer works.",
       preflightReason: "model_credential",
-      preflightRefusal: { body: {}, provider: "bedrock-sso" },
+      preflightRefusal: { body: {}, provider: "bedrock-sso", setupItems: [] },
     });
     open(AGENT);
     await ready();
     expect(launch()).toBeEnabled();
     expect(blockerList()).toBeEmptyDOMElement();
+  });
+
+  it("keeps the setup items a model credential refusal carries as blockers", async () => {
+    checks.current = answered(null, 1000, {
+      preflightRead: { generation: GENERATION, at: Date.now() - 1000 },
+      preflightError: "Your AWS sign-in no longer works.",
+      preflightReason: "model_credential",
+      preflightRefusal: { body: {}, provider: "bedrock-sso", setupItems: SCENARIO_PREFLIGHT.app.setup_items },
+    });
+    open(AGENT);
+    await ready();
+    expect(launch()).toBeDisabled();
+    expect(within(blockerList()).getAllByRole("listitem").map((li) => li.textContent)).toEqual(["deploy-key"]);
   });
 
   it("offers Check again while shut, reads both again, and announces once Launch opens", async () => {
@@ -217,7 +231,7 @@ describe("Review blockers", () => {
     await waitFor(() => expect(within(blockerList()).getAllByRole("listitem")).toHaveLength(5));
     const items = within(blockerList()).getAllByRole("listitem").map((li) => li.textContent);
     expect(items).toEqual([
-      NR_SHARED.STEP_SHAPE,
+      NR_SHAPE.SHAPE_REQUIRED,
       NR_REVIEW.BLOCKER_UNSUPPORTED("legacy_extra"),
       NR_TEMPLATES.NEEDS_SETUP("Model provider"),
       "None of your runners is online.",
@@ -225,7 +239,7 @@ describe("Review blockers", () => {
     ]);
     expect(blockerList()).toHaveTextContent(NR_REVIEW.BLOCKERS_MANY(5));
     expect(launch()).toBeDisabled();
-    await user.click(within(blockerList()).getByRole("button", { name: NR_SHARED.STEP_SHAPE }));
+    await user.click(within(blockerList()).getByRole("button", { name: NR_SHAPE.SHAPE_REQUIRED }));
     await waitFor(() => expect(path()).toContain("step=shape"));
   });
 
@@ -293,6 +307,17 @@ describe("Review groups", () => {
     open(withDrives);
     await screen.findAllByText(NR_REVIEW.GROUP_WORK);
     await waitFor(() => expect(group("work").getByText(NR_REVIEW.WORK_ITEMS(2))).toBeInTheDocument());
+  });
+
+  it.each([
+    ["an ask over the cap is shown held to it", { ends_after_sec: 36_000 }, "2 hours"],
+    ["no end shows as No end when the answer allows it", { no_end: true }, ENDS_NONE],
+  ])("Limits summary: %s (DR-0245)", async (_name, ask, text) => {
+    const limits = { lifetime_sec: { default: { value: 3600 }, cap: { value: 7200 } }, no_end_allowed: true };
+    checks.current = answered({ ...SCENARIO_PREFLIGHT.member, limits } as unknown as PreflightResult);
+    open({ ...AGENT, ...ask });
+    await ready();
+    expect(group("limits").getByText(NR_REVIEW.LIMITS_VALUE("2", "4,096", text))).toBeInTheDocument();
   });
 
   it("shows a document-only field as a read-only row with its Run document chip, no Change on the row", async () => {
@@ -516,7 +541,7 @@ describe("Review Files and Limits detail", () => {
     checks.current = answered({ ...pre, main_drive: { applied_mib: 20480, basis: "default", soft: true }, runner_pools: [pool] } as unknown as PreflightResult);
     open(AGENT);
     await ready();
-    expect(group("work").getByText(NR_REVIEW.MAIN_DRIVE(20))).toBeInTheDocument();
+    expect(group("work").getByText(NR_REVIEW.MAIN_DRIVE("20 GiB"))).toBeInTheDocument();
     expect(group("work").getByText(NR_FILES.NOT_ENFORCED)).toBeInTheDocument();
   });
 

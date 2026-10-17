@@ -254,6 +254,23 @@ func TestTokenMove_NeverRevokesAndRefusesInvalid(t *testing.T) {
 	}
 }
 
+// TestTokenMove_ARetiredIdentityHandsTheTokenBack: a live token moved to a service identity that is then
+// retired is no longer handled; it needs a decision again and names no identity.
+func TestTokenMove_ARetiredIdentityHandsTheTokenBack(t *testing.T) {
+	e := newMoveEnv(t)
+	e.mustCreate(t, svcName, svcSponsor)
+	tok := e.minted(t)
+	if w := e.move(t, e.sec, tok.ID, `{"service_identity":"`+svcName+`"}`); w.Code != http.StatusOK {
+		t.Fatalf("move: %d %s", w.Code, w.Body.String())
+	}
+	if w := doSSO(t, e.h.srv, http.MethodDelete, "/api/v1/service-identities/"+svcName, e.sec, ""); w.Code != http.StatusOK {
+		t.Fatalf("retire: %d %s", w.Code, w.Body.String())
+	}
+	if got := e.inventory(t, true)[tok.ID]; got.Disposition != types.TokenNeedsDecision || got.ServiceIdentity != "" {
+		t.Errorf("a live token moved to a retired identity reads %q (%q), want needs_decision and no identity", got.Disposition, got.ServiceIdentity)
+	}
+}
+
 // TestRevokePersonCredentials_SweepsSponsoredTokens: a sponsor's full session revoke leaves the tokens of the
 // identities they sponsor revoked in GET /tokens, and leaves another sponsor's alone. A session-only cut
 // revokes none.

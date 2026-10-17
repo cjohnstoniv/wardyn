@@ -31,7 +31,7 @@ func TestApplyWorkspaceRequirements_PolicyMountUnreadableListRefuses(t *testing.
 	supplier := types.Workspace{ID: uuid.New(), Requirements: map[string]types.WorkspaceRequirement{"write:" + path: {Level: "required", Provenance: "operator_set"}}}
 	srv := New(Config{Store: listFailStore{newOwnerStore()}})
 
-	_, refusal := srv.applyWorkspaceRequirementsFor(context.Background(), nil, spec, "claude-code", []types.Workspace{supplier}, nil, nil)
+	_, refusal := srv.applyWorkspaceRequirementsFor(context.Background(), nil, spec, "claude-code", []types.Workspace{supplier}, nil, nil, nil)
 
 	if refusal == nil || refusal.status != http.StatusUnprocessableEntity || refusal.reason != reasonWorkspaceSourcesListUnavailable {
 		t.Fatalf("refusal = %v, want 422 %s", refusal, reasonWorkspaceSourcesListUnavailable)

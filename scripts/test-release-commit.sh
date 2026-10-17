@@ -39,6 +39,7 @@ done
 
 CUR=$(sed -n 's/^const Version = "\(.*\)"$/\1/p' "$ROOT/internal/version/version.go")
 IFS=. read -r MAJ MIN PAT <<<"$CUR"
+PAT=${PAT%%-*}  # a candidate version (X.Y.Z-rc.N) bumps from its X.Y.Z
 NEXT="$MAJ.$MIN.$((PAT + 1))"
 [ -n "$CUR" ] || { echo "FAIL: cannot read the current version"; exit 1; }
 

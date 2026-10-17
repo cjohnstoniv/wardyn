@@ -30,6 +30,10 @@ export function MarkCell({
       className="mx-auto inline-flex text-warning"
     >
       <AlertTriangle className="size-5" aria-hidden />
+      {/* The residual risk as text a screen reader reads, not only the hover title (CONSOLE-RULES section 8). */}
+      <span className="sr-only">
+        {caveatPrefix} {CC_META[cc].doesntProtect}
+      </span>
     </span>
   );
 }

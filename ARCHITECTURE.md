@@ -216,7 +216,8 @@ stateDiagram-v2
   reason that may appear on an `authz.denied` row.
   - It is **append-only from the
     0.8.0 tag** — a removal or rename after that is a major version.
-  - [`docs/ OPERATIONS.md`](docs/OPERATIONS.md#every-denial-that-isnt-a-404)'s "Every denial that isn't a 404" table and [`docs/ AUDIT-ACTIONS.md`](docs/AUDIT-ACTIONS.md)'s `authz.denied` row are checked against it (not
+  - The "Every denial that isn't a 404" table in [`docs/operations/denials.md`](docs/operations/denials.md) is the source of record for the reasons, and
+    [`docs/AUDIT-ACTIONS.md`](docs/AUDIT-ACTIONS.md)'s `authz.denied` row points back to it. Both are checked against the registry (not
     hand-copied) by `TestAuthzDeniedReasonsAreDocumented`.
 - **`(*Server).refuse`** ([`internal/api/refusal.go`](internal/api/refusal.go)) is the one emitter: it
   looks up the registry row for a `Decision`'s reason, writes the HTTP status
@@ -224,8 +225,8 @@ stateDiagram-v2
   - and — when the registry says the reason is audited — writes
     the `authz.denied` row through `authz.Datum`,
   - so every row carries the same
-    shape (including the member-mode marker and, once the org control plane
-    lands in 0.9, the device-origin marker)
+    shape (including the `user_view` marker and, for a request that came through a
+    device channel, `device_channel`)
   - instead of each of the 18 former
     call sites building its own map.
   - An unregistered reason fails closed: 500 in

@@ -21,6 +21,8 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
+	"github.com/cjohnstoniv/wardyn/internal/broker"
+	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/federation"
 	"github.com/cjohnstoniv/wardyn/internal/hoptls"
 	"github.com/cjohnstoniv/wardyn/internal/recording"
@@ -357,6 +359,12 @@ func checkInternalRoutesClassified(t *testing.T, recordings recording.Store) {
 // persisted `own` (a remote run's carry no delivery).
 func TestRelay_InjectionAndMintServeOnlyOwn(t *testing.T) {
 	b := newBindingFixture(t)
+	// An own grant must be served, not just pass the delivery rule: the broker mints an api_key rule and
+	// the store holds its key.
+	const served = "relay-served-value"
+	b.srv.cfg.Broker.(*fakeBroker).minted = broker.Minted{Kind: types.GrantAPIKey,
+		Injection: &egress.InjectionRule{Host: "api.example", Header: "X-Api-Key", SecretName: "k", Format: "%s"}}
+	b.srv.cfg.Secrets = getErrStore{val: []byte(served)}
 	grant := func(d types.GrantDelivery) uuid.UUID {
 		g, err := b.st.CreateGrant(b.ctx, types.CredentialGrant{ID: uuid.New(), RunID: b.run.ID, CreatedAt: time.Now().UTC(), Delivery: d,
 			Spec: types.GrantSpec{Kind: types.GrantAPIKey, Scope: mustJSON(map[string]any{"host": "api.example", "secret_name": "k"})}})
@@ -382,6 +390,9 @@ func TestRelay_InjectionAndMintServeOnlyOwn(t *testing.T) {
 				if r := reasonOf(t, w); strings.HasPrefix(r, "delivery_") || r == "relay_route_refused" {
 					t.Errorf("%s of an own grant was refused by the delivery rule: %d %s", name, w.Code, w.Body.String())
 				}
+				if name == "injection" && (w.Code != http.StatusOK || !strings.Contains(w.Body.String(), served)) {
+					t.Errorf("injection of an own grant = %d %s, want it served with the stored key", w.Code, w.Body.String())
+				}
 				continue
 			}
 			if w.Code != http.StatusForbidden || reasonOf(t, w) != tc.reason {
@@ -400,7 +411,7 @@ func TestRelay_InjectionAndMintServeOnlyOwn(t *testing.T) {
 	for _, p := range []types.Placement{types.PlacementLocal, types.PlacementRemote} {
 		runID := uuid.New()
 		f.createRun(t, runID, "alice", p)
-		if _, ok := f.h.srv.persistRunGrants(context.Background(), httptest.NewRecorder(), localMemberRequest("alice"), runID, time.Now().UTC(), spec, p, storedPolicy(t, f.h.srv)); !ok {
+		if _, ok := f.h.srv.persistRunGrants(context.Background(), httptest.NewRecorder(), localMemberRequest("alice"), runID, time.Now().UTC(), spec, p, personalJudgement(storedPolicy(t, f.h.srv))); !ok {
 			t.Fatalf("%s grants were refused", p)
 		}
 		rows, err := f.h.srv.cfg.Store.ListGrantsByRun(context.Background(), runID)

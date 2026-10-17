@@ -120,8 +120,8 @@ func appendMissing(dst, add []string) []string {
 }
 
 // pushRuleProvider is the provider kind of a clone URL and, for an Azure DevOps
-// Server, the base path of the row that claims its host: the path of that row's
-// base URL. The row that claims the host decides the kind; with no row, the host
+// Server, the base path of the row that claims its host: the path of the row's
+// base URL the clone URL is under (serverBasePath). The row that claims the host decides the kind; with no row, the host
 // names it (dev.azure.com and *.visualstudio.com are Azure DevOps, the rest GitHub).
 func pushRuleProvider(sc types.SiteConfig, cloneURL string) (provider, basePath string) {
 	t, ok := parseCloneTarget(cloneURL, adoServerHosts(sc))
@@ -133,11 +133,7 @@ func pushRuleProvider(sc types.SiteConfig, cloneURL string) (provider, basePath 
 			continue
 		}
 		if row.Kind == types.GitProviderAzureDevOps && adoEgressDomains(t.host) == nil {
-			for _, raw := range row.BaseURLs {
-				if u, err := url.Parse(raw); err == nil && hostrules.HostOf(raw) == t.host {
-					return string(row.Kind), strings.TrimRight(u.Path, "/")
-				}
-			}
+			return string(row.Kind), serverBasePath(row.BaseURLs, t)
 		}
 		return string(row.Kind), ""
 	}
@@ -145,6 +141,31 @@ func pushRuleProvider(sc types.SiteConfig, cloneURL string) (provider, basePath 
 		return string(types.GitProviderAzureDevOps), ""
 	}
 	return string(types.GitProviderGitHub), ""
+}
+
+// serverBasePath is the path of the row's base URL on t's host that t is under, the longest when several
+// are (one Azure DevOps Server host can serve several collections, one base URL each). With none under
+// it, the first on the host, so the remote's derivation names the mismatch.
+func serverBasePath(baseURLs []string, t cloneTarget) string {
+	var first, best string
+	var onHost, under bool
+	for _, raw := range baseURLs {
+		u, err := url.Parse(raw)
+		if err != nil || hostrules.HostOf(raw) != t.host {
+			continue
+		}
+		p := strings.TrimRight(u.Path, "/")
+		if !onHost {
+			first, onHost = p, true
+		}
+		if pathAdmits(strings.ToLower(t.path), strings.ToLower(p)) && (!under || len(p) > len(best)) {
+			best, under = p, true
+		}
+	}
+	if under {
+		return best
+	}
+	return first
 }
 
 // pushReviewRules reports whether the run's rules include a require-review

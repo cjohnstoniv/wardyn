@@ -29,8 +29,6 @@ const (
 	sessionRoleStale = oidc.SessionRoleStampStale
 )
 
-// DRAFT (M2 canon pending)
-//
 // The bodies a rejected session gets. Before these, an OIDC-only deployment
 // (admin token unset — which cmd/wardynd's own startup line recommends)
 // answered expired, revoked, tampered and unverifiable sessions ALL with

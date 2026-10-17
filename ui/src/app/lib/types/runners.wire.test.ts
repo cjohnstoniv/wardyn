@@ -54,6 +54,8 @@ describe("runners management wire", () => {
     ["internal/types/runner_registration_wire.go", "RunnerTokenRequest", "RunnerTokenRequest"],
     ["internal/types/runner_registration_wire.go", "RunnerClaimRequest", "RunnerClaimRequest"],
     ["internal/types/runner_registration_wire.go", "RunnerRegistration", "RunnerRegistration"],
+    ["internal/types/runner_registration_wire.go", "RunnerOrgTokenRequest", "RunnerOrgTokenRequest"],
+    ["internal/types/runner_registration_wire.go", "RunnerTrustRequest", "RunnerTrustRequest"],
   ])("%#: %s has full parity with its TS mirror", (file, goName, tsName) => {
     const tags = goJSONTags(read(file), goName);
     expect(tags.length).toBeGreaterThanOrEqual(1);
@@ -65,6 +67,17 @@ describe("runners management wire", () => {
     const m = /export type RunnerState =([^;]+);/.exec(stripComments(ts));
     if (!m) throw new Error("type RunnerState not found");
     expect(new Set([...m[1].matchAll(/"([a-z]+)"/g)].map((x) => x[1]))).toEqual(new Set(go));
+  });
+
+  it.each([
+    ["RunnerOwnerKind", /RunnerOwner(?:Person|Org)\s+RunnerOwnerKind = "([a-z_]+)"/g],
+    ["RunnerTrustClass", /RunnerTrust(?:Personal|ManagedDevice|OrgCluster)\s+RunnerTrustClass = "([a-z_]+)"/g],
+  ])("%s is the Go constants", (name, re) => {
+    const go = [...read("internal/types/runner.go").matchAll(re as RegExp)].map((m) => m[1]);
+    const m = new RegExp(`export type ${name} =([^;]+);`).exec(stripComments(ts));
+    if (!m) throw new Error(`type ${name} not found`);
+    expect(go.length).toBeGreaterThanOrEqual(2);
+    expect(new Set([...m[1].matchAll(/"([a-z_]+)"/g)].map((x) => x[1]))).toEqual(new Set(go));
   });
 
   it("RunnerManagementReason is the Go reason block", () => {

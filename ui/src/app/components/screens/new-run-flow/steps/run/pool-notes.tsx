@@ -10,7 +10,7 @@
 import { Link } from "react-router-dom";
 import type { RunnerPoolCatalogueEntry, RunnerPoolRunType } from "../../../../../lib/types/runner-pools";
 import { NR_USER_POOLS, RES } from "../../../../wardyn/copy/runner-pools";
-import { limitsFor } from "./pool-model";
+import { limitsFor, poolHasNoRoom } from "./pool-model";
 
 const LINK = "text-info underline underline-offset-2 hover:no-underline";
 const MY_RUNNER = "/account#my-runner";
@@ -46,8 +46,7 @@ function biggestRun(pool: RunnerPoolCatalogueEntry, runType: RunnerPoolRunType |
 export function PoolNotes({ pools, chosen, runType }: { pools: RunnerPoolCatalogueEntry[]; chosen: RunnerPoolCatalogueEntry | undefined; runType: RunnerPoolRunType | undefined }) {
   if (chosen) {
     if (chosen.scope !== "user") return null;
-    const c = chosen.capacity;
-    const full = !!c && c.runners_online > 0 && c.total.runs > 0 && c.available.runs === 0;
+    const full = poolHasNoRoom(chosen);
     const biggest = biggestRun(chosen, runType);
     if (!full && !biggest) return null;
     return (

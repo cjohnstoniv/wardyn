@@ -149,6 +149,7 @@ derives its role.
   - A member sees their own profile's name and contact, and the effective content: `GET /policies/default`, `/me` and denial bodies serve the profile that binds them, never the chain.
   - A base's name, overlay and contact are not disclosed, and a profile with no `contact` falls back to the site's `policy_help` rather than inherit a base's contact, since that would name the base.
   - Only an admin or a `security_admin` can read the graph (`GET /governance`).
+  - `GET /governance` returns every profile and every assignment. `/governance/profiles` and `/governance/profiles/{id}` take writes only, so a `GET` on either answers `405`.
   - When you write an example for a member, show the effective result and the profile's own name; do not describe the structure behind it.
 - *Deleting and unassigning.*
   - Deleting a profile requires unassigning it first, and a base that still has profiles built on it is a `409` naming them (never a silent widening).
@@ -185,7 +186,7 @@ Stated honestly: profiles narrow by omission — a profile that omits secret gra
   - A profile that omits `resources`, or leaves one of its fields at zero, inherits the deployment's size for that field (the default policy's `resources`, else `WARDYN_SANDBOX_DEFAULT_CPU_MILLIS` / `WARDYN_SANDBOX_DEFAULT_MEMORY_MIB`), so omission never grows a sandbox.
   - A profile that sets a size keeps it. Its `limits.max_cpu_millis` and `limits.max_memory_mib` (0 is unlimited, negatives refused) lower that size for its assigned members at create, preflight and dispatch, but since 0.9 never below the size an untouched run gets (`MemberCap`). Operators are exempt.
   - So a maximum below the deployment's default no longer shrinks a member's sandbox. To bound members below it, set a smaller size in the profile or lower the deployment's default.
-  - A maximum where no size is set is the size, so setting one can raise the member cap: such an update waits for a second approver, an overlay may not raise the cap above its base's, and a base that later stops bounding lowers the overlay's to its own.
+  - A maximum where no size is set is the size, so setting one can raise the member cap: such an update waits for a second approver, an overlay may not raise the cap above its base's, and a base that later stops bounding lowers the overlay's to its own. A size set in an overlay applies only over a base that sets one; over a base with none the deployment's default size applies.
 - **Limits that reach a running run (0.8.2, #1391, #1392).**
   - Two limits bind past create, keyed on the profile the run was created under as it stands now, so a limit set later reaches runs already going (a deleted profile binds nothing).
   - `deny_interactive` also refuses a terminal attach (`wardyn run attach` and the console terminal) and every SSH-gateway connection into any run under the profile, exec runs and the run's owner included.

@@ -106,7 +106,7 @@ func (s *Server) runnerEndpoint(id uuid.UUID) runnerEndpoint {
 	ep := runnerEndpoint{link: &remote.Link{}}
 	ep.sub = remote.New(id.String(), ep.link, remote.Options{Queue: func(ctx context.Context, kind types.RunnerActionKind, ref string) error {
 		return s.queueRunnerTeardown(ctx, id, kind, ref)
-	}, Dispatch: s.runnersEnabled, Relay: s.acceptRelay,
+	}, Dispatch: s.runnersEnabled, Relay: s.acceptRelay, OutputAccepted: s.runnerOutputAccepted,
 		ExecutionGeneration: func(ctx context.Context, method, ref string) (uuid.UUID, error) {
 			return s.dispatchedGeneration(ctx, id, method, ref)
 		}})
@@ -118,6 +118,16 @@ func (s *Server) runnerEndpoint(id uuid.UUID) runnerEndpoint {
 		reg.Add(ep.sub)
 	}
 	return ep
+}
+
+// runnerOutputAccepted commits a runner run's accepted output end before the
+// runner is told (remote.Options.OutputAccepted).
+func (s *Server) runnerOutputAccepted(ctx context.Context, runID uuid.UUID, accepted int64) error {
+	st, ok := s.cfg.Store.(store.PG)
+	if !ok {
+		return nil
+	}
+	return st.AdvanceRunnerOutputWatermark(ctx, runID, accepted)
 }
 
 func (s *Server) queueRunnerTeardown(ctx context.Context, runnerID uuid.UUID, kind types.RunnerActionKind, ref string) error {
@@ -165,7 +175,10 @@ func (s *Server) admitRunner(_ context.Context, rn types.Runner) (remote.Admissi
 		},
 		Event:    func(ctx context.Context, ev runnerwire.Event) error { return s.EventFromRunner(ctx, id, ev) },
 		Activity: func(ctx context.Context, runID uuid.UUID) error { return s.ActivityFromRunner(ctx, id, runID) },
-		Ready:    func() { go s.releaseRunnerLeases(s.cfg.BaseCtx, id) },
+		Ready: func() {
+			go s.releaseRunnerLeases(s.cfg.BaseCtx, id)
+			s.startResidentErase(id)
+		},
 	}, nil
 }
 

@@ -111,6 +111,26 @@ type Config struct {
 	// session, so a longer session should be paired with RoleStampTTL.
 	SessionTTL time.Duration
 
+	// The session-lifetime behaviours (session_life.go), each off at its zero value.
+	//
+	// SessionRenewCap is WARDYN_OIDC_SESSION_RENEW_CAP: when set, console activity (sessionActivity)
+	// extends a session past half its life by its original length, never beyond IssuedAt plus this
+	// cap or the role-stamp deadline. Boot refuses more than 24 hours.
+	SessionRenewCap time.Duration
+	// SessionIdleTimeout is WARDYN_OIDC_SESSION_IDLE_TIMEOUT: when set, a session with no console
+	// activity for this long is refused as expired, whatever its expiry says.
+	SessionIdleTimeout time.Duration
+	// SilentReauth is WARDYN_OIDC_SILENT_REAUTH: a browser that completed a sign-in, and has not
+	// signed out since, asks the identity provider with prompt=none first and falls back once to
+	// the ordinary interactive sign-in when the provider refuses.
+	SilentReauth bool
+	// LoginHint is WARDYN_OIDC_LOGIN_HINT: a browser that completed a sign-in sends that account
+	// as login_hint on the next one, until it signs out.
+	LoginHint bool
+	// BrowserSessionCookie is WARDYN_OIDC_BROWSER_SESSION_COOKIE: the session cookie carries no
+	// Expires, so the browser drops it when it closes. The server-side expiry is unchanged.
+	BrowserSessionCookie bool
+
 	// OnLogin, when set, is called synchronously after an APPROVED login with what that login
 	// established (LoginFacts). A failure inside it must never fail the login; nil is a no-op.
 	OnLogin func(ctx context.Context, facts LoginFacts)
@@ -192,6 +212,13 @@ type Session struct {
 	// clock says. omitempty: a cookie without it was issued by a replica that predates it and is
 	// compared on IssuedAt, as before.
 	RevocationSeq int64 `json:"rseq,omitempty"`
+	// LastActive is the unix second of the session's last console activity (SessionIdleTimeout);
+	// 0 reads as IssuedAt. RenewSpan is the session's original length in seconds, stamped by its
+	// first renewal (SessionRenewCap); 0 reads as Expiry minus IssuedAt. Both omitempty, so a
+	// deployment with neither behaviour on writes the same cookie as before. An older replica in a
+	// mixed-version rollout ignores both: it neither renews nor enforces the idle timeout.
+	LastActive int64 `json:"la,omitempty"`
+	RenewSpan  int64 `json:"rspan,omitempty"`
 	// Groups is the LOGIN-TIME SNAPSHOT of the human's group identity (normalized union of the ID
 	// token's "roles"/"groups" claims), against which a `group`-subject grant matches. Nothing
 	// refreshes it — a group added at the IdP reaches Wardyn on the next login. NO omitempty,
@@ -454,13 +481,14 @@ func warnUnrequestedGroupsScope(gated bool, requested []string, cfg Config) {
 // random state and nonce, stores them in HttpOnly SameSite=Lax cookies, and
 // redirects the user to the IdP authorization endpoint.
 func (a *Authenticator) LoginHandler(w http.ResponseWriter, r *http.Request) {
-	a.startLogin(w, r, true)
+	a.startLogin(w, r, true, a.silentEligible(r))
 }
 
 // startLogin is LoginHandler's body; LoginHandler always passes widen=true. The callback passes
 // false to restart the SAME login without extra scopes — the recovery path that keeps a downstream
-// resource's refusal from costing anyone their console session. See widenRetryableError.
-func (a *Authenticator) startLogin(w http.ResponseWriter, r *http.Request, widen bool) {
+// resource's refusal from costing anyone their console session. See widenRetryableError. silent
+// asks the provider with prompt=none (SilentReauth); every restart from the callback passes false.
+func (a *Authenticator) startLogin(w http.ResponseWriter, r *http.Request, widen, silent bool) {
 	state := randomToken()
 	nonce := randomToken()
 	// PKCE: 32-octet verifier, meeting RFC 7636 §4.1's 43-char minimum.
@@ -490,6 +518,7 @@ func (a *Authenticator) startLogin(w http.ResponseWriter, r *http.Request, widen
 		// Clear a marker left by an earlier attempt so an unwidened callback is never retried.
 		a.expireWidenedMarker(w)
 	}
+	opts = append(opts, a.reauthOptions(w, r, silent)...)
 	authURL := a.oauth2.AuthCodeURL(state, opts...)
 	http.Redirect(w, r, authURL, http.StatusFound)
 }
@@ -520,6 +549,7 @@ func (a *Authenticator) SignOut(w http.ResponseWriter, r *http.Request) (cutSub 
 	for _, name := range []string{stateCookieName, nonceCookieName, pkceCookieName, widenedCookieName} {
 		a.clearCookie(w, name)
 	}
+	a.forgetDevice(w, r)
 	if sess, derr := a.decodeSession(r); derr == nil && a.cfg.Revocations != nil && PrincipalFromContext(r.Context()) == sess.Sub {
 		if err = CutSessions(r.Context(), a.cfg.Revocations, sess.Sub); err != nil {
 			slog.Error("oidc: sign-out could not cut the session server-side", "error", err)
@@ -567,8 +597,14 @@ func (a *Authenticator) Middleware(next http.Handler) http.Handler {
 						return
 					}
 				}
+				if a.idleExpired(sess, time.Now().UTC()) {
+					a.clearSessionCookie(w)
+					next.ServeHTTP(w, r.WithContext(withSessionRejected(r.Context(), "expired_session")))
+					return
+				}
 				// Valid session: stash the principal and continue.
-				ctx := contextWithPrincipal(r.Context(), sess)
+				sess = a.touchSession(w, r, sess)
+				ctx := a.withPrincipal(r.Context(), sess)
 				next.ServeHTTP(w, r.WithContext(ctx))
 				return
 			}
@@ -718,6 +754,13 @@ const (
 	// widenedCookieName marks an authorization request that asked for more than the login's own
 	// scopes, so a refusal of the extras can be retried without them (login_grant.go). No secret.
 	widenedCookieName = "wardyn_oidc_widened"
+	// silentCookieName marks an authorization request sent with prompt=none (SilentReauth), so the
+	// callback falls back to the interactive sign-in once when the provider refuses it. No secret.
+	silentCookieName = "wardyn_oidc_silent"
+	// reauthCookieName and hintCookieName outlive a session: this browser completed a sign-in and
+	// has not signed out since (SilentReauth), and the account it used (LoginHint). Sign-out clears both.
+	reauthCookieName = "wardyn_oidc_reauth"
+	hintCookieName   = "wardyn_oidc_hint"
 )
 
 // ─── sentinel errors ─────────────────────────────────────────────────────────

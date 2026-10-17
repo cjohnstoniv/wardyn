@@ -22,7 +22,6 @@ import { useNewRunDispatch, useNewRunDraft, type NewRunScreenProps } from "../ne
 import { StepShell, useAnnounce } from "../steps/step-shell";
 import { NR_DOCUMENT } from "../../../wardyn/copy/new-run/document";
 import { NR_SHARED } from "../../../wardyn/copy/new-run/shared";
-import { MISSING_COPY } from "./missing-copy";
 import { importRunDocument, type ImportDocument } from "./import-door";
 import { exampleDocumentText, MAX_DOCUMENT_BYTES, placeDiagnostics, runDocumentText, tooLarge, type DocumentFormat } from "./run-document";
 import { ValidationPanel, type DocumentStatus } from "./validation-panel";
@@ -39,6 +38,12 @@ const EDITOR_ID = "run-document";
 const STATUS_ID = `${EDITOR_ID}-status`;
 const NO_HARNESS_ID = `${EDITOR_ID}-no-harness`;
 
+/** Drops a file read in flight and returns the next, empty one: the text it holds is about a choice made before whatever came after. */
+function cancelRead(r: { id: number; reader?: FileReader }): { id: number } {
+  r.reader?.abort();
+  return { id: r.id + 1 };
+}
+
 export function DocumentScreen({ location, go, copy = NR_DOCUMENT, deps }: NewRunScreenProps & { copy?: typeof NR_DOCUMENT; deps?: Partial<DocumentDeps> }) {
   const draft = useNewRunDraft();
   const dispatch = useNewRunDispatch();
@@ -54,20 +59,24 @@ export function DocumentScreen({ location, go, copy = NR_DOCUMENT, deps }: NewRu
   const [lines, setLines] = React.useState<string[]>([]);
   const [valid, setValid] = React.useState(false);
   const [busy, setBusy] = React.useState(false);
-  // undefined while the roster loads, null when it holds no enabled harness.
+  // undefined while the roster loads (or could not be read), null when it holds no enabled harness.
   const [harness, setHarness] = React.useState<string | null | undefined>(undefined);
   const check = React.useRef<{ id: number; abort?: AbortController }>({ id: 0 });
   const fileInput = React.useRef<HTMLInputElement>(null);
+  // The file being read, if any. Its text is about a choice made earlier than whatever came after.
+  const read = React.useRef<{ id: number; reader?: FileReader }>({ id: 0 });
 
   React.useEffect(() => {
     let off = false;
     loadHarnesses().then(
       (roster) => !off && setHarness(roster.find((h) => h.enabled !== false)?.id ?? null),
-      () => !off && setHarness(null),
+      // A roster that could not be read says nothing about the harnesses: the button stays off with no reason given.
+      () => undefined,
     );
     return () => { off = true; };
   }, [loadHarnesses]);
   React.useEffect(() => () => check.current.abort?.abort(), []);
+  React.useEffect(() => () => void (read.current = cancelRead(read.current)), []);
 
   /** Drops any check in flight: its answer is about text that is no longer there. */
   const supersede = () => {
@@ -82,6 +91,7 @@ export function DocumentScreen({ location, go, copy = NR_DOCUMENT, deps }: NewRu
   const buffer = (next: string, as: DocumentFormat, rest: Pick<DocBuffer, "diagnostics" | "validated">): DocBuffer | undefined =>
     next === runDocumentText(latest.current.intent, as) ? undefined : { format: as, text: next, ...rest };
   const setSource = (next: string, as: DocumentFormat) => {
+    read.current = cancelRead(read.current);
     supersede();
     dispatch({ type: "doc", doc: buffer(next, as, { diagnostics: [], validated: false }) });
     if (as !== format) go({ screen: "document", format: as }, { replace: true });
@@ -114,7 +124,7 @@ export function DocumentScreen({ location, go, copy = NR_DOCUMENT, deps }: NewRu
     check.current = mine;
     setBusy(true);
     try {
-      if (tooLarge(source)) return void refuse(mine.id, [MISSING_COPY.TOO_LARGE]);
+      if (tooLarge(source)) return void refuse(mine.id, [copy.TOO_LARGE]);
       // A document that does not parse is refused here, without a request.
       if (!parsePolicySource(source, as).ok) return void refuse(mine.id, [as === "json" ? copy.JSON_INVALID : copy.YAML_INVALID]);
       const answer = await importDocument(as, source, mine.abort.signal);
@@ -146,13 +156,16 @@ export function DocumentScreen({ location, go, copy = NR_DOCUMENT, deps }: NewRu
 
   const importFile = (file: File | undefined) => {
     if (!file) return;
+    read.current = cancelRead(read.current);
     if (file.size > MAX_DOCUMENT_BYTES) {
       supersede();
-      return refuse(check.current.id, [MISSING_COPY.TOO_LARGE]);
+      return refuse(check.current.id, [copy.TOO_LARGE]);
     }
     const reader = new FileReader();
-    reader.onload = () => setSource(String(reader.result), /\.json$/i.test(file.name) ? "json" : "yaml");
-    reader.onerror = () => refuse(check.current.id, [MISSING_COPY.FILE_UNREADABLE]);
+    const mine = { id: read.current.id, reader };
+    read.current = mine;
+    reader.onload = () => mine.id === read.current.id && setSource(String(reader.result), /\.json$/i.test(file.name) ? "json" : "yaml");
+    reader.onerror = () => mine.id === read.current.id && refuse(check.current.id, [copy.FILE_UNREADABLE]);
     reader.readAsText(file);
   };
 
@@ -201,13 +214,13 @@ export function DocumentScreen({ location, go, copy = NR_DOCUMENT, deps }: NewRu
                 importFile(file);
               }}
             />
-            <Button type="button" variant="outline" disabled={!harness} aria-describedby={harness === null && MISSING_COPY.NO_HARNESS ? NO_HARNESS_ID : undefined}
+            <Button type="button" variant="outline" disabled={!harness} aria-describedby={harness === null ? NO_HARNESS_ID : undefined}
               onClick={() => harness && setSource(exampleDocumentText(harness, format), format)}>
               {copy.LOAD_EXAMPLE}
             </Button>
           </div>
         </div>
-        {harness === null && MISSING_COPY.NO_HARNESS && <p id={NO_HARNESS_ID} className="text-xs text-muted-foreground">{MISSING_COPY.NO_HARNESS}</p>}
+        {harness === null && <p id={NO_HARNESS_ID} className="text-xs text-muted-foreground">{copy.NO_HARNESS}</p>}
         <DocumentEditor
           id={EDITOR_ID}
           value={text}

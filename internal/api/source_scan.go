@@ -300,9 +300,11 @@ func (s *Server) launchSourceScanRun(ctx context.Context, actor string, src type
 	// attaching workspace.
 	// A library source has no owner and no approved egress, and a member's workspace write can have
 	// pointed it anywhere, so at the library door (ws nil) the ceiling alone is authority.
-	clone, dropped := hostsWithinLiteralTrust(scanEgressDomains(url), ceiling.Spec.AllowedDomains)
+	var clone, dropped []string
 	if ws != nil {
 		clone, dropped = boundCloneHosts(scanEgressDomains(url), *ws, ceiling.Spec.AllowedDomains)
+	} else {
+		clone, dropped = hostsWithinLiteralTrust(scanEgressDomains(url), ceiling.Spec.AllowedDomains)
 	}
 	for _, h := range dropped {
 		// No response field carries a warning from this lane: the scan then fails as a refused clone.

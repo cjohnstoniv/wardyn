@@ -43,7 +43,7 @@ func localDispatchFixture(t *testing.T, p types.Placement, comps ...types.RunCom
 func localOrgNetworkSpec(runID uuid.UUID) runner.SandboxSpec {
 	return runner.SandboxSpec{RunID: runID, ProxyConfig: runner.ProxyConfig{
 		RunToken: "run-token", UpstreamProxyURL: "https://user:password@parent.corp", TrustedCAPEM: "corporate-ca",
-		InternalHosts: []types.InternalHost{{HostSuffix: "corp"}}, LLMUpstreams: map[string]string{"vendor": "corp"},
+		InternalHosts: []types.InternalHost{{HostSuffix: "corp"}},
 	}}
 }
 
@@ -111,6 +111,26 @@ func TestLocalDispatchRefusesTrustedOutputRunsByPersistedLink(t *testing.T) {
 				t.Fatalf("no canonical refusal: %s", auditDump(audit.events, run.ID))
 			}
 		})
+	}
+}
+
+// The dispatch door judges the actual spec, so a provider lane routed through a gateway
+// (LLMUpstreams, which a runner never gets) is refused before Launch, and no laptop proxy config holding a
+// credential keyed on the gateway, with nothing routing the vendor host there, is ever stored.
+func TestLocalDispatchRefusesAGatewayRoutedProviderLane(t *testing.T) {
+	srv, _, audit, run := localDispatchFixture(t, types.PlacementLocal)
+	ctx := context.Background()
+	spec := localOrgNetworkSpec(run.ID)
+	spec.ProxyConfig.LLMUpstreams = map[string]string{"api.anthropic.com": "https://gw.corp.example/v1"}
+	if srv.classifyLocalDispatch(ctx, run, ceilingForDispatch(governanceCeiling{}, adoEntraUngraded(), bedrockCredUngraded()), types.SiteConfig{}, &spec, nil, llmTransport{}, false) {
+		t.Fatal("a gateway-routed provider lane was classified for a local runner")
+	}
+	ev := findAudit(audit.events, run.ID, "run.dispatch", "failure")
+	if ev == nil || !strings.Contains(string(ev.Data), string(placement.ReasonPlacementCredential)) || !strings.Contains(string(ev.Data), "ProxyConfig.LLMUpstreams") {
+		t.Fatalf("no canonical refusal: %s", auditDump(audit.events, run.ID))
+	}
+	if raw, _ := srv.loadRunProxyConfig(ctx, run.ID); len(raw) != 0 {
+		t.Fatalf("a laptop proxy config was stored for a refused run: %s", raw)
 	}
 }
 

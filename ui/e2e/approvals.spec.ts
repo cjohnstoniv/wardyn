@@ -232,6 +232,24 @@ test.describe("Approvals screen", () => {
     await expect(page.getByRole("dialog")).toHaveCount(0);
   });
 
+  test("the reason stops at 512 characters, the length the server accepts (FUG-L725, FUG-L699)", async ({ page }) => {
+    await page.getByRole("button", { name: "Deny" }).first().click();
+    const reason = page.getByRole("dialog").getByLabel(/Reason/);
+    await expect(reason).toHaveAttribute("maxlength", "512");
+    await reason.pressSequentially("x".repeat(520));
+    expect((await reason.inputValue()).length).toBe(512);
+  });
+
+  test("a typed reason makes the browser ask before the tab is left (DR-0021)", async ({ page }) => {
+    await page.getByRole("button", { name: "Deny" }).first().click();
+    await page.getByRole("dialog").getByLabel(/Reason/).fill("Domain not on allowlist");
+    const asked = page.waitForEvent("dialog");
+    await page.close({ runBeforeUnload: true });
+    const prompt = await asked;
+    expect(prompt.type()).toBe("beforeunload");
+    await prompt.dismiss();
+  });
+
   test("Decided tab surfaces APPROVED, DENIED and EXPIRED, with DENIED in the danger tone", async ({ page }) => {
     await page.getByRole("tab", { name: "Decided" }).click();
 

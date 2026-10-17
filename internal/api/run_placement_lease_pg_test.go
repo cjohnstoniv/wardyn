@@ -14,6 +14,7 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"errors"
+	"io"
 	"maps"
 	"net/http"
 	"net/http/httptest"
@@ -55,6 +56,8 @@ type runnerLeaseFixture struct {
 	key     ed25519.PrivateKey
 	// execs counts the Exec frames that reached the runner.
 	execs atomic.Int32
+	// oldRunner makes the runner one from before the BYOI selftest call, from its next session on.
+	oldRunner atomic.Bool
 	// disconnect ends the current session.
 	disconnect context.CancelFunc
 	h          *harness
@@ -63,6 +66,15 @@ type runnerLeaseFixture struct {
 	// leaseEnds is the end of the last LEASE the runner accepted for each run.
 	leaseMu   sync.Mutex
 	leaseEnds map[uuid.UUID]time.Time
+	// dir is the runner's state directory.
+	dir string
+	// streams is the runner's output server.
+	streams *runnerio.Server
+	// oldCaps makes the runner's caps event omit retire, as a runner older
+	// than 0.9.3 sends it.
+	oldCaps atomic.Bool
+	// execOutput, when set, is the org's sink for each create's output.
+	execOutput io.Writer
 }
 
 // leaseEnd waits for the runner to hold a lease of run that ends at want, and reports the end it holds.
@@ -83,6 +95,24 @@ type stallingSub struct {
 	*runnertest.Fake
 	stall   atomic.Value // the verb that hangs: "can_replace" or "replace_proxy"
 	release chan struct{}
+	// goneIsStopped answers Status and AgentStatus for a removed sandbox as
+	// the docker driver does (stopped) instead of the fake's ErrSandboxGone.
+	goneIsStopped atomic.Bool
+}
+
+func (s *stallingSub) gone(st runner.Status, err error) (runner.Status, error) {
+	if s.goneIsStopped.Load() && errors.Is(err, runner.ErrSandboxGone) {
+		return runner.Status{State: types.RunStopped, Message: "container not found"}, nil
+	}
+	return st, err
+}
+
+func (s *stallingSub) Status(ctx context.Context, ref string) (runner.Status, error) {
+	return s.gone(s.Fake.Status(ctx, ref))
+}
+
+func (s *stallingSub) AgentStatus(ctx context.Context, ref, execID string) (runner.Status, error) {
+	return s.gone(s.Fake.AgentStatus(ctx, ref, execID))
 }
 
 func (s *stallingSub) hang(ctx context.Context, verb string) error {
@@ -146,6 +176,7 @@ func newRunnerLeaseFixture(t *testing.T) *runnerLeaseFixture {
 
 	// The runner side, composed as wardyn-runnerd composes it.
 	dir := t.TempDir()
+	f.dir = dir
 	streams, err := runnerio.New(f.sub, id.String(), dir)
 	if err != nil {
 		t.Fatal(err)
@@ -155,11 +186,14 @@ func newRunnerLeaseFixture(t *testing.T) *runnerLeaseFixture {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = f.manager.Close() })
+	f.streams = streams
 	m := f.manager
+	m.ReleaseSettledOutput(streams.ReleaseOutput)
 	dispatcher, err := runneragent.New(runneragent.Config{RunnerID: id.String(), Substrate: f.sub, HoldsSandbox: m.HoldsSandbox,
 		BeforeCreate: m.BeforeCreate, Created: m.Created, CreateFailed: m.CreateFailed,
 		BeforeRefCall: m.BeforeRefCall, AfterRefCall: m.AfterRefCall, MutationFinished: m.MutationFinished, ExecutionResult: m.ExecutionResult,
-		Streams: streams.Call, Output: streams.Output, BindOutput: streams.BindOutput, ForgetOutput: streams.ForgetOutput})
+		CheckSelftest: m.CheckSelftest,
+		Streams:       streams.Call, Output: streams.Output, BindOutput: streams.BindOutput, ForgetOutput: streams.ForgetOutput})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -168,6 +202,9 @@ func newRunnerLeaseFixture(t *testing.T) *runnerLeaseFixture {
 		Call: func(ctx context.Context, peer *runnerwire.Peer, id uint32, method string, args json.RawMessage) (any, error) {
 			if method == runnerwire.MethodExec {
 				f.execs.Add(1)
+			}
+			if method == runnerwire.MethodSelftest && f.oldRunner.Load() {
+				return nil, runnerwire.Refuse("unknown runner method") // what an older dispatcher answers
 			}
 			return dispatcher.Call(ctx, peer, id, method, args)
 		},
@@ -190,7 +227,7 @@ func newRunnerLeaseFixture(t *testing.T) *runnerLeaseFixture {
 			if err != nil {
 				return err
 			}
-			data, err := runnerwire.Marshal(runnerwire.Caps{Support: support, Version: "test"})
+			data, err := runnerwire.Marshal(runnerwire.Caps{Support: support, Version: "test", BYOISelftest: dispatcher.Selftests() && !f.oldRunner.Load(), Retire: !f.oldCaps.Load()})
 			if err != nil {
 				return err
 			}
@@ -244,6 +281,10 @@ func (f *runnerLeaseFixture) localRun(t *testing.T, stampAge time.Duration) type
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Admission records the class the run was admitted at; a revive holds the runner to it.
+	if err := f.st.SetRunRunnerTrustClass(f.ctx, run.ID, types.RunnerTrustPersonal); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := f.st.Pool.Exec(f.ctx, `UPDATE agent_runs SET token_renewed_at = now() - $2::interval WHERE id = $1`, run.ID, stampAge.String()); err != nil {
 		t.Fatal(err)
 	}
@@ -253,7 +294,7 @@ func (f *runnerLeaseFixture) localRun(t *testing.T, stampAge time.Duration) type
 // create asks for the run's sandbox on its runner and records its ref, as dispatch does.
 func (f *runnerLeaseFixture) create(t *testing.T, run *types.AgentRun) error {
 	t.Helper()
-	sb, err := f.srv.createSandboxAtTarget(f.ctx, *run, runner.SandboxSpec{RunID: run.ID, ConfinementClass: types.CC1})
+	sb, err := f.srv.createSandboxAtTarget(f.ctx, *run, runner.SandboxSpec{RunID: run.ID, ConfinementClass: types.CC1, ExecOutput: f.execOutput})
 	if err != nil {
 		return err
 	}
@@ -481,6 +522,38 @@ func TestPG_RunnerLease_EndChangeReLeases(t *testing.T) {
 	}
 	if got := f.leaseEnd(control.ID, first); !got.Equal(first) {
 		t.Errorf("the run whose end did not change: the runner holds a lease ending %s, want %s", got, first)
+	}
+}
+
+// End to end: after a run's end moves, the runner does not contain it at the old end, while a run whose
+// end did not move is contained there. Two runs only, with ends far enough ahead that placing both fits
+// before a lease is refused near its end; the test waits on the lease the runner accepts before the old
+// end passes.
+func TestPG_RunnerLease_OldEndIsNotEnforcedAfterAnEndChange(t *testing.T) {
+	f := newRunnerLeaseFixture(t)
+	const margin = 10 * time.Second
+	soon := time.Now().Add(margin).UTC().Truncate(time.Second)
+	extended, control := f.localRun(t, 0), f.localRun(t, 0)
+	for _, run := range []*types.AgentRun{&extended, &control} {
+		f.running(t, run, &soon)
+		f.placed(t, run)
+	}
+	end := time.Now().Add(2 * time.Hour).UTC().Truncate(time.Second)
+	if w := do(t, f.srv, http.MethodPatch, "/api/v1/runs/"+extended.ID.String(), adminToken, `{"ends_at":"`+end.Format(time.RFC3339)+`"}`); w.Code != http.StatusOK {
+		t.Fatalf("set end = %d %s", w.Code, w.Body)
+	}
+	if got := f.leaseEnd(extended.ID, end); !got.Equal(end) {
+		t.Fatalf("the runner holds a lease ending %s, want the new end %s", got, end)
+	}
+	time.Sleep(time.Until(soon) + time.Second)
+	if err := f.manager.CheckLapses(f.ctx); err != nil {
+		t.Fatal(err)
+	}
+	if !f.contained(control) {
+		t.Fatal("the control run was not contained at its end: the end did not pass")
+	}
+	if f.contained(extended) {
+		t.Fatal("the run whose end moved was contained at its old end")
 	}
 }
 

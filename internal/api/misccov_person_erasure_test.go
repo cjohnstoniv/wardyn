@@ -299,7 +299,7 @@ func TestMiscCovEraseMaskCopiesStopsWhenTheFenceFails(t *testing.T) {
 	srv := newHarness(t).srv
 	srv.cfg.MaskManifests = maskmanifest.New(pool, nil, secretmask.NewRegistry())
 	srv.cfg.ADORunPATs = adorunpat.New(pool, nil)
-	detail, err := srv.eraseMaskCopies(t.Context(), "bob")
+	detail, err := srv.eraseMaskCopies(t.Context(), "bob", nil)
 	if !errors.Is(err, closedErr) {
 		t.Fatalf("err = %v, want the fence's error", err)
 	}
@@ -310,7 +310,7 @@ func TestMiscCovEraseMaskCopiesStopsWhenTheFenceFails(t *testing.T) {
 	if _, ran := m["run_tokens"]; ran {
 		t.Errorf("run tokens were deleted after the fence failed: %v", detail)
 	}
-	if _, err := srv.eraseMaskCopies(t.Context(), ""); !errors.Is(err, maskmanifest.ErrNoOwner) {
+	if _, err := srv.eraseMaskCopies(t.Context(), "", nil); !errors.Is(err, maskmanifest.ErrNoOwner) {
 		t.Errorf("a blank person = %v, want ErrNoOwner", err)
 	}
 }

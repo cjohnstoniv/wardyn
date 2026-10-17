@@ -18,7 +18,7 @@ import (
 
 // The declarative configuration schema of a custom component (0.9): the typed
 // fields a component author exposes, with labels, groups, bounds, defaults and
-// one level of conditional visibility, so the New Run wizard can render the
+// conditional visibility (a chain of at most 64 fields), so the New Run wizard can render the
 // component's settings with its own controls. It is data, never code: no
 // markup, no expressions, no references to fetch. The vocabulary is closed and
 // versioned, and anything outside it is refused rather than ignored.
@@ -361,6 +361,7 @@ func validateConfigOptions(path string, f ConfigField, add func(string, string, 
 // field, and each key to the component env-name rules (reserved names too).
 func validateConfigBindings(fields []ConfigField, add func(string, string, ...any)) {
 	seen := map[ConfigBinding]bool{}
+	targetOf := map[string]ConfigBindTarget{} // a key's first target: one env var is never config and secret
 	counts := map[ConfigBindTarget]int{}
 	for i, f := range fields {
 		path := fmt.Sprintf("fields[%d].bind", i)
@@ -388,6 +389,10 @@ func validateConfigBindings(fields []ConfigField, add func(string, string, ...an
 		if seen[f.Bind] {
 			add(path, "%s %q is fed by two fields", f.Bind.Target, f.Bind.Key)
 		}
+		if t, ok := targetOf[f.Bind.Key]; ok && t != f.Bind.Target {
+			add(path, "%q is fed by a %s field and a %s field: one variable cannot be both", f.Bind.Key, t, f.Bind.Target)
+		}
+		targetOf[f.Bind.Key] = f.Bind.Target
 		seen[f.Bind] = true
 		counts[f.Bind.Target]++
 	}

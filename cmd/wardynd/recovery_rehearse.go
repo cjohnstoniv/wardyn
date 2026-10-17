@@ -160,11 +160,23 @@ func writeReport(out io.Writer, rep *rehearseReport, scrub scrubber) error {
 	if rep.Verdict == "" {
 		rep.Verdict, _ = rep.verdictOf()
 	}
-	raw, err := json.MarshalIndent(rep, "", "  ")
+	// Only the free text is scrubbed: rewriting the whole JSON would turn a secret that happens to
+	// spell an enum (a password "pass") into a verdict of "[redacted]".
+	shown := *rep
+	shown.Checks = make([]rehearseCheck, len(rep.Checks))
+	for i, c := range rep.Checks {
+		c.Detail = scrub.text(c.Detail)
+		c.Failing = slices.Clone(c.Failing)
+		for j := range c.Failing {
+			c.Failing[j] = scrub.text(c.Failing[j])
+		}
+		shown.Checks[i] = c
+	}
+	raw, err := json.MarshalIndent(shown, "", "  ")
 	if err != nil {
 		return err
 	}
-	if _, err := fmt.Fprintln(out, scrub.text(string(raw))); err != nil {
+	if _, err := fmt.Fprintln(out, string(raw)); err != nil {
 		return err
 	}
 	if rep.Verdict == resultPass {

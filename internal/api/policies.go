@@ -38,6 +38,9 @@ func decodePolicyRequest(w http.ResponseWriter, r *http.Request, ado adoHostsLoa
 	if req.Name == "" {
 		return policyRequest{}, reasonPolicyRequestInvalid, "name is required"
 	}
+	if len(req.Name) > maxGovernanceProfileNameLen || !controlCharFree(req.Name) { // a handle, bounded like a profile's
+		return policyRequest{}, reasonPolicyRequestInvalid, "name is invalid"
+	}
 	repos := make([]string, len(req.Spec.WorkspaceRepos))
 	for i, wr := range req.Spec.WorkspaceRepos {
 		repos[i] = wr.Repo
@@ -159,6 +162,10 @@ func (s *Server) handleGetDefaultPolicy(w http.ResponseWriter, r *http.Request) 
 	resp := defaultPolicyResponse{
 		RunPolicySpec: redactSpecForRead(ceiling.Spec, s.isSecurityOperator(r.Context())),
 	}
+	if ceiling.Limits.DenyUIApps {
+		// A run under this ceiling gets no UI apps, so the read lists none.
+		resp.UIApps = nil
+	}
 	if ceiling.Profile != nil {
 		resp.GovernanceProfileName = ceiling.Profile.Name
 	}
@@ -184,6 +191,7 @@ func redactPolicyForRead(p types.RunPolicy, operator bool) types.RunPolicy {
 // handleGetDefaultPolicy (which reads a bare spec, not a stored types.RunPolicy)
 // gets the same redaction without a fake wrapper row.
 func redactSpecForRead(spec types.RunPolicySpec, operator bool) types.RunPolicySpec {
+	spec.WorkspaceRepos = redactWorkspaceRepoList(spec.WorkspaceRepos) // a legacy row, every tier
 	if !operator {
 		spec = redactSpecForUser(spec)
 	}
@@ -212,10 +220,11 @@ func redactPoliciesForRead(ps []types.RunPolicy, operator bool) []types.RunPolic
 // member reaches because the ceiling is what clamps them.
 var memberSecretScopeKeys = []string{"secret_name", "key_secret_ref", "known_hosts_secret_ref"}
 
-// redactSpecForUser strips the two operator-only details a policy spec
+// redactSpecForUser strips the operator-only details a policy spec
 // carries out of a MEMBER-reachable read: the host filesystem paths behind
 // workspace_mounts[].source (the blessed ~/.claude credential mount among
-// them) and the stored-secret names on the eligible grants. Everything else —
+// them), the stored-secret names on the eligible grants and
+// llm_inspection.workspace_secret_names. Everything else —
 // the egress allowlist, the confinement floor, the grant KINDS and hosts — is
 // exactly what a member is being clamped by and stays visible.
 //
@@ -237,6 +246,13 @@ func redactSpecForUser(spec types.RunPolicySpec) types.RunPolicySpec {
 		}
 		spec.EligibleGrants = grants
 	}
+	// The workspace secret names are the operator's secret names too, the same
+	// thing memberSecretScopeKeys hides on the grants, so they are counted, not listed.
+	if li := spec.LLMInspection; li != nil && len(li.WorkspaceSecretNames) > 0 {
+		cp := *li
+		cp.WorkspaceSecretNames = []string{fmt.Sprintf("<%d name(s) redacted>", len(li.WorkspaceSecretNames))}
+		spec.LLMInspection = &cp
+	}
 	return spec
 }
 
@@ -253,8 +269,10 @@ func redactScopeSecretRefs(scope json.RawMessage) json.RawMessage {
 		return nil
 	}
 	found := false
-	for _, k := range memberSecretScopeKeys {
-		if _, ok := fields[k]; ok {
+	// The decoders that read a scope match its keys without regard to case, so
+	// "Secret_Name" names the secret as surely as "secret_name".
+	for k := range fields {
+		if slices.ContainsFunc(memberSecretScopeKeys, func(m string) bool { return strings.EqualFold(k, m) }) {
 			delete(fields, k)
 			found = true
 		}

@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"maps"
 	"slices"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -34,10 +35,14 @@ func (h *Hub) GoawayAll(ctx context.Context) error {
 	h.mu.Lock()
 	ids := slices.Collect(maps.Keys(h.sessions))
 	h.mu.Unlock()
-	errs := make([]error, 0, len(ids))
-	for _, id := range ids {
-		errs = append(errs, h.Goaway(ctx, id))
+	// Concurrently: each Goaway may wait out its own 1 s bound on a stalled link, and the caller
+	// (the runners settings write) waits for all of them.
+	errs := make([]error, len(ids))
+	var wg sync.WaitGroup
+	for i, id := range ids {
+		wg.Go(func() { errs[i] = h.Goaway(ctx, id) })
 	}
+	wg.Wait()
 	return errors.Join(errs...)
 }
 

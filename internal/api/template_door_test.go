@@ -311,6 +311,21 @@ func TestTemplateFullCoverage(t *testing.T) {
 	}
 }
 
+// A full background template can fix the agent and leave the prompt for use time under the run-mode
+// carriers, as it can with the older task field; a Run document is still held to the run's own shape.
+func TestTemplateAgentTaskLeavesItsPromptForUseTime(t *testing.T) {
+	const intent = `{"experience":"background","workload":{"kind":"agent_task","agent":"claude-code"},` +
+		`"tools":[{"id":"claude-code","kind":"harness"}],"no_repositories_or_drives":true}`
+	doc := `{"api_version":"wardyn/v1","kind":"RunTemplate","coverage":"full","intent":` + intent + `}`
+	if diags := validateTemplateImport([]byte(doc), client.TemplateFormatJSON, "").Diagnostics; len(diags) != 0 {
+		t.Fatalf("a full agent-task template with no prompt: %v", diagReasons(diags))
+	}
+	blank := strings.Replace(doc, `"agent":"claude-code"}`, `"agent":"claude-code","task":"  "}`, 1)
+	if diags := validateTemplateImport([]byte(blank), client.TemplateFormatJSON, "").Diagnostics; len(diags) == 0 {
+		t.Fatal("a prompt of spaces is text the template wrote, and is held to the run's shape")
+	}
+}
+
 // TestTemplatePendingRulesAreStillRefusedByTheRun keeps a request field's
 // Pending flag honest. A pending row whose field now exists on CreateRunRequest
 // must still be refused by the run itself; when its lane honours the field, the
@@ -393,6 +408,18 @@ func TestTemplateRegistryFollowsTheOwnersAccessAndModeRulings(t *testing.T) {
 	for _, r := range slices.Concat(templateRequestRules, templatePolicyRules) {
 		if r.Part == "info" {
 			t.Errorf("%s still belongs to the removed Info tab", r.Name)
+		}
+	}
+}
+
+// A placeholder is the word alone; a name or task that contains it is a value.
+func TestIsRedactedPlaceholder(t *testing.T) {
+	for s, want := range map[string]bool{
+		"<redacted>": true, "[REDACTED]": true, "<2 value(s) redacted>": true, "***redacted***": true, "redacted": true,
+		"unredacted notes": false, "Redacted report": false, "": false,
+	} {
+		if got := isRedactedPlaceholder(s); got != want {
+			t.Errorf("isRedactedPlaceholder(%q) = %v, want %v", s, got, want)
 		}
 	}
 }

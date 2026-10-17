@@ -4,10 +4,12 @@
 package approval_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"maps"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -37,6 +39,7 @@ type fakeStore struct {
 	// leave listAllCalls at zero and read none of another run's rows.
 	listAllCalls int
 	rowsRead     int
+	pageSizes    []int // rows each ListExpiredPendingApprovals page returned
 }
 
 func (f *fakeStore) CreateApproval(_ context.Context, a types.ApprovalRequest) (types.ApprovalRequest, error) {
@@ -86,6 +89,24 @@ func (f *fakeStore) ListApprovals(_ context.Context, stateFilter types.ApprovalS
 			out = append(out, a)
 		}
 	}
+	return out, nil
+}
+
+// ListExpiredPendingApprovals filters in memory the way the store's SQL does: keyset by id, PENDING
+// only, requested at or before the cutoff or past its own expiry. pageSizes records each page read.
+func (f *fakeStore) ListExpiredPendingApprovals(_ context.Context, now, cutoff time.Time, afterID uuid.UUID, limit int) ([]types.ApprovalRequest, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []types.ApprovalRequest
+	for _, a := range f.records {
+		runBound := a.ExpiresAt != nil && !a.ExpiresAt.After(now)
+		if a.State == types.ApprovalPending && bytes.Compare(a.ID[:], afterID[:]) > 0 && (!a.RequestedAt.After(cutoff) || runBound) {
+			out = append(out, a)
+		}
+	}
+	slices.SortFunc(out, func(x, y types.ApprovalRequest) int { return bytes.Compare(x.ID[:], y.ID[:]) })
+	out = out[:min(len(out), limit)]
+	f.pageSizes = append(f.pageSizes, len(out))
 	return out, nil
 }
 

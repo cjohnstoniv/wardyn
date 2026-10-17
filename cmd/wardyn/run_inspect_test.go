@@ -58,3 +58,36 @@ func TestRunGetCmd_QueuedShowsPositionAndDeadline(t *testing.T) {
 		})
 	}
 }
+
+// T18: `run get` prints the Azure DevOps decline when the run has a
+// run.ado_lane.skip row, and nothing of the kind otherwise.
+func TestRunGetCmd_PrintsTheADOLaneDecline(t *testing.T) {
+	runID := uuid.New()
+	const detail = "This run was not given an Azure DevOps credential: its repositories span more than one Azure DevOps organisation."
+	for _, withRow := range []bool{true, false} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/api/v1/audit" {
+				var rows []types.AuditEvent
+				if withRow && r.URL.Query().Get("action_prefix") == "run.ado_lane.skip" {
+					data, _ := json.Marshal(map[string]string{"reason": "cross_repo_conflict", "detail": detail})
+					rows = append(rows, types.AuditEvent{RunID: &runID, Action: "run.ado_lane.skip", Outcome: "denied", Data: data})
+				}
+				_ = json.NewEncoder(w).Encode(rows)
+				return
+			}
+			_ = json.NewEncoder(w).Encode(types.AgentRun{ID: runID, Agent: "claude-code", State: types.RunRunning})
+		}))
+		out := &strings.Builder{}
+		root := rootCmd()
+		root.SetArgs([]string{"run", "get", runID.String(), "--url", srv.URL, "--token", "tok"})
+		root.SetOut(out)
+		root.SetErr(&strings.Builder{})
+		if err := root.Execute(); err != nil {
+			t.Fatal(err)
+		}
+		srv.Close()
+		if got := strings.Contains(out.String(), "azure devops: "+detail); got != withRow {
+			t.Errorf("row=%v: output carries the decline = %v:\n%s", withRow, got, out)
+		}
+	}
+}

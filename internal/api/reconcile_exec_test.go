@@ -201,8 +201,7 @@ func TestReconcileOnBoot_ExecRunFinalizesFromAgentExit(t *testing.T) {
 	cfg := baseTestConfig(h, fake)
 	cfg.Runner = fr
 	cfg.Broker = h.broker
-	cfg.BaseCtx = testBaseCtx(t)
-	srv := New(cfg)
+	srv := testServer(t, cfg)
 
 	if err := srv.ReconcileOnBoot(context.Background()); err != nil {
 		t.Fatalf("reconcile on boot: %v", err)
@@ -237,8 +236,7 @@ func TestReconcileOnBoot_ExecRunFailsFromNonZeroExit(t *testing.T) {
 	cfg := baseTestConfig(h, fake)
 	cfg.Runner = fr
 	cfg.Broker = h.broker
-	cfg.BaseCtx = testBaseCtx(t)
-	srv := New(cfg)
+	srv := testServer(t, cfg)
 
 	if err := srv.ReconcileOnBoot(context.Background()); err != nil {
 		t.Fatalf("reconcile on boot: %v", err)
@@ -275,7 +273,7 @@ func TestReconcileOnBoot_TransientProbeErrorDoesNotFinalize(t *testing.T) {
 	// exits promptly (it would otherwise need reconcileMaxProbeErrors ticks anyway).
 	ctx, cancel := context.WithCancel(context.Background())
 	cfg.BaseCtx = ctx
-	srv := New(cfg)
+	srv := testServer(t, cfg)
 
 	err := srv.ReconcileOnBoot(context.Background())
 	cancel()
@@ -314,8 +312,7 @@ func TestReconcileOnBoot_UndispatchedRunAgeGate(t *testing.T) {
 			cfg := baseTestConfig(h, fake)
 			cfg.Runner = &fakeRunner{}
 			cfg.Broker = h.broker
-			cfg.BaseCtx = testBaseCtx(t)
-			srv := New(cfg)
+			srv := testServer(t, cfg)
 
 			if err := srv.ReconcileOnBoot(context.Background()); err != nil {
 				t.Fatalf("reconcile on boot: %v", err)
@@ -343,8 +340,7 @@ func TestStartCompletionWatcher_HoldsTheLease(t *testing.T) {
 	cfg := baseTestConfig(h, fake)
 	cfg.Runner = &fakeRunner{} // Wait blocks until BaseCtx is cancelled
 	cfg.Broker = h.broker
-	cfg.BaseCtx = testBaseCtx(t)
-	srv := New(cfg)
+	srv := testServer(t, cfg)
 
 	srv.startCompletionWatcher(run.ID, run.SandboxRef, run.AgentExecID)
 
@@ -370,11 +366,9 @@ func TestRunWatcherSweeper_PeriodicClaimAdoptsAndLeases(t *testing.T) {
 	cfg := baseTestConfig(h, fake)
 	cfg.Runner = &fakeRunner{} // AgentStatus: RUNNING — adopt, do not finalize
 	cfg.Broker = h.broker
-	ctx := testBaseCtx(t)
-	cfg.BaseCtx = ctx
-	srv := New(cfg)
+	srv := testServer(t, cfg)
 
-	go srv.runWatcherSweeper(ctx, 10*time.Millisecond)
+	srv.goBackground(func() { srv.runWatcherSweeper(srv.cfg.BaseCtx, 10*time.Millisecond) })
 
 	select {
 	case got := <-fake.beats:
@@ -408,12 +402,10 @@ func TestRunWatcherSweeper_PeriodicallyReapsUndispatchedOrphans(t *testing.T) {
 	cfg := baseTestConfig(h, fake)
 	cfg.Runner = &fakeRunner{}
 	cfg.Broker = h.broker
-	ctx := testBaseCtx(t)
-	cfg.BaseCtx = ctx
-	srv := New(cfg)
+	srv := testServer(t, cfg)
 
 	// Deliberately NOT ReconcileOnBoot: the periodic tick alone has to reap it.
-	go srv.runWatcherSweeper(ctx, 10*time.Millisecond)
+	srv.goBackground(func() { srv.runWatcherSweeper(srv.cfg.BaseCtx, 10*time.Millisecond) })
 
 	select {
 	case to := <-fake.finals:
@@ -453,8 +445,7 @@ func TestSweepRunWatchers_NeverExecdRunFinalizesWithoutAgeGate(t *testing.T) {
 	cfg := baseTestConfig(h, fake)
 	cfg.Runner = &fakeRunner{} // AgentStatus would report RUNNING — must not be consulted
 	cfg.Broker = h.broker
-	cfg.BaseCtx = testBaseCtx(t)
-	srv := New(cfg)
+	srv := testServer(t, cfg)
 
 	if err := srv.sweepRunWatchers(context.Background()); err != nil {
 		t.Fatalf("sweepRunWatchers: %v", err)
@@ -514,8 +505,7 @@ func TestSweepRunWatchers_ExecLessRunNotFinalized(t *testing.T) {
 	cfg := baseTestConfig(h, fake)
 	cfg.Runner = rn
 	cfg.Broker = h.broker
-	cfg.BaseCtx = testBaseCtx(t)
-	srv := New(cfg)
+	srv := testServer(t, cfg)
 
 	// The dispatch phase under test: persists the real post-Exec value for an
 	// exec-less launch, exactly as it does mid-dispatchRun.
@@ -661,8 +651,7 @@ func TestDispatchExecIDWriteLostFailsTheRunLoudly(t *testing.T) {
 	cfg := baseTestConfig(h, fake)
 	cfg.Runner = fr
 	cfg.Broker = h.broker
-	cfg.BaseCtx = testBaseCtx(t)
-	srv := New(cfg)
+	srv := testServer(t, cfg)
 
 	srv.startAgentOrIdle(context.Background(), run, run.SandboxRef, "wardyn/claude-code:latest", false, runnerExecution{}, nil)
 
@@ -716,8 +705,7 @@ func TestDispatchExecIDWritePersistsOnTheHappyPath(t *testing.T) {
 	cfg := baseTestConfig(h, fake)
 	cfg.Runner = &fakeRunner{}
 	cfg.Broker = h.broker
-	cfg.BaseCtx = testBaseCtx(t)
-	srv := New(cfg)
+	srv := testServer(t, cfg)
 
 	srv.startAgentOrIdle(context.Background(), run, run.SandboxRef, "wardyn/claude-code:latest", false, runnerExecution{}, nil)
 

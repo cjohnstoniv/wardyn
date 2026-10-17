@@ -22,7 +22,7 @@ func TestEmitArtifactConfig_PerEcosystemSyntax(t *testing.T) {
 		"go":    "https://artifactory.corp/api/go/go-remote",
 		"nuget": "https://artifactory.corp/api/nuget/nuget-remote/v3/index.json",
 	}
-	files, env := EmitArtifactConfig(bases)
+	files, env := EmitArtifactConfig(bases, false)
 
 	// npm .npmrc
 	if got, want := files[".npmrc"], "registry=https://artifactory.corp/api/npm/npm-remote/\n"; got != want {
@@ -72,8 +72,8 @@ func TestEmitArtifactConfig_PerEcosystemSyntax(t *testing.T) {
 	if env["GOPROXY"] != "https://artifactory.corp/api/go/go-remote" {
 		t.Errorf("GOPROXY = %q, want the corp base", env["GOPROXY"])
 	}
-	if env["GOSUMDB"] != "off" {
-		t.Errorf("GOSUMDB = %q, want off", env["GOSUMDB"])
+	if want := "sum.golang.org https://artifactory.corp/api/go/go-remote/sumdb/sum.golang.org"; env["GOSUMDB"] != want {
+		t.Errorf("GOSUMDB = %q, want %q (the checksum database through the mirror)", env["GOSUMDB"], want)
 	}
 	if _, ok := env["GOPRIVATE"]; ok {
 		t.Errorf("GOPRIVATE must NOT be set (GOPRIVATE=* would route modules to direct VCS, defeating the corp GOPROXY)")
@@ -87,7 +87,7 @@ func TestEmitArtifactConfig_PerEcosystemSyntax(t *testing.T) {
 // TestEmitArtifactConfig_PartialAndEmpty: only configured ecosystems emit; empty
 // input yields nil maps; unknown keys are skipped; no secret leaks.
 func TestEmitArtifactConfig_PartialAndEmpty(t *testing.T) {
-	files, env := EmitArtifactConfig(nil)
+	files, env := EmitArtifactConfig(nil, false)
 	if files != nil || env != nil {
 		t.Errorf("empty input must yield nil maps; got files=%v env=%v", files, env)
 	}
@@ -96,7 +96,7 @@ func TestEmitArtifactConfig_PartialAndEmpty(t *testing.T) {
 		"npm":     "https://corp/npm/",
 		"unknown": "https://corp/x/",
 		"go":      "  ", // whitespace-only base is skipped
-	})
+	}, false)
 	if len(files) != 1 {
 		t.Fatalf("want exactly the npm file, got %v", files)
 	}
@@ -105,5 +105,17 @@ func TestEmitArtifactConfig_PartialAndEmpty(t *testing.T) {
 	}
 	if env != nil {
 		t.Errorf("blank go base must not emit env, got %v", env)
+	}
+}
+
+// TestEmitArtifactConfig_GoChecksumDBOptOut: the per-mirror opt-out is the only way to GOSUMDB=off.
+func TestEmitArtifactConfig_GoChecksumDBOptOut(t *testing.T) {
+	_, env := EmitArtifactConfig(map[string]string{"go": "https://go-mirror.corp/repo/"}, true)
+	if env["GOSUMDB"] != "off" || env["GOPROXY"] != "https://go-mirror.corp/repo/" {
+		t.Errorf("opted-out env = %v, want GOSUMDB=off with the mirror as GOPROXY", env)
+	}
+	_, env = EmitArtifactConfig(map[string]string{"go": "https://go-mirror.corp/repo/"}, false)
+	if want := "sum.golang.org https://go-mirror.corp/repo/sumdb/sum.golang.org"; env["GOSUMDB"] != want {
+		t.Errorf("default env GOSUMDB = %q, want %q (one slash between the mirror and /sumdb/)", env["GOSUMDB"], want)
 	}
 }

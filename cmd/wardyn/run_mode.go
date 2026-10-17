@@ -63,8 +63,8 @@ func applyRunModeFlags(body *sdk.CreateRunRequest, f runModeFlags) error {
 		body.StartFolder = folder
 	}
 	if f.experience == "" {
-		if f.command != "" || len(f.tools) > 0 || f.startup != "" {
-			return errors.New("--command, --tool and --startup need --experience background or interactive: the run mode is never inferred")
+		if f.command != "" || len(f.tools) > 0 || f.startup != "" || f.startFolder != "" || f.noRepos {
+			return errors.New("--command, --tool, --startup, --start-folder and --no-repos need --experience background or interactive: the run mode is never inferred")
 		}
 		return nil
 	}

@@ -109,7 +109,7 @@ func TestReconcileOnBoot_SweepsOrphanedTerminalSandbox(t *testing.T) {
 	rn := &orphanSweepRunner{fakeRunner: &fakeRunner{}}
 	cfg := baseTestConfig(h, st)
 	cfg.Runner = rn
-	srv := New(cfg)
+	srv := testServer(t, cfg)
 
 	if err := srv.ReconcileOnBoot(context.Background()); err != nil {
 		t.Fatalf("ReconcileOnBoot: %v", err)
@@ -151,7 +151,7 @@ func TestReconcileOnBoot_OrphanSweepRetriesRevoke(t *testing.T) {
 	cfg := baseTestConfig(h, st)
 	cfg.Runner = rn
 	cfg.Broker = h.broker
-	srv := New(cfg)
+	srv := testServer(t, cfg)
 
 	if err := srv.ReconcileOnBoot(context.Background()); err != nil {
 		t.Fatalf("ReconcileOnBoot: %v", err)
@@ -184,7 +184,7 @@ func TestReconcileOnBoot_OrphanSweepFailureAudited(t *testing.T) {
 	rn := &orphanSweepRunner{fakeRunner: &fakeRunner{}, failRef: "still-stuck"}
 	cfg := baseTestConfig(h, st)
 	cfg.Runner = rn
-	srv := New(cfg)
+	srv := testServer(t, cfg)
 
 	if err := srv.ReconcileOnBoot(context.Background()); err != nil {
 		t.Fatalf("ReconcileOnBoot: %v", err)

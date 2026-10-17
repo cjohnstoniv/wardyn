@@ -33,6 +33,8 @@ const CEILING = {
   first_use_approval: "deny_with_review",
   min_confinement_class: "CC2",
 };
+// What the server says a direct save of CEILING omits from the deployment default: the held change carries the same notes.
+let notes: string[] = [];
 const CHANGE_LABEL = `${CHANGES.KIND.governance_profile} · ${CHANGES.OP.update}`;
 
 test.describe("governance — a covered write waits for a second human", () => {
@@ -43,6 +45,8 @@ test.describe("governance — a covered write waits for a second human", () => {
       data: { name: NAME, ceiling: CEILING, limits: { max_concurrent_runs: 3 } },
     });
     expect(created.status()).toBe(201);
+    notes = ((await created.json()).warnings ?? []) as string[];
+    expect(notes.length, "the deployment default must differ from CEILING so there is a note to carry").toBeGreaterThan(0);
 
     await asRealSecurityAdmin(page);
     await gotoConsole(page, "admin");
@@ -56,6 +60,9 @@ test.describe("governance — a covered write waits for a second human", () => {
     await expect(page.getByText(CHANGES.SUBMITTED_TITLE, { exact: true })).toBeVisible();
     await expect(page.getByText(CHANGES.SUBMITTED_BODY, { exact: true })).toBeVisible();
     await expect(page.getByTestId("governance-profile-editor")).toHaveCount(0);
+    // R1-0098: the proposer sees the same notes a direct save shows, above the submitted note.
+    await expect(page.getByText(GOV.OMISSION_TITLE, { exact: true })).toBeVisible();
+    for (const n of notes) await expect(page.getByText(n, { exact: true })).toBeVisible();
     const row = page.getByRole("row").filter({ hasText: NAME });
     await expect(row.getByText(GOV.LIMIT_QUOTA_LABEL(3))).toBeVisible();
 
@@ -78,6 +85,9 @@ test.describe("governance — a covered write waits for a second human", () => {
     await expect(drawer.getByText(NAME, { exact: true }).first()).toBeVisible();
     // The server's own diff: the changed field, before and after.
     await expect(drawer.getByText("limits.max_concurrent_runs", { exact: true })).toBeVisible();
+    // R1-0098: the approver's drawer carries the notes, under the existing heading.
+    await expect(drawer.getByText(GOV.OMISSION_TITLE, { exact: true })).toBeVisible();
+    for (const n of notes) await expect(drawer.getByText(n, { exact: true })).toBeVisible();
     await expect(drawer.getByText(CHANGES.OWN_NOTE, { exact: true })).toBeVisible();
     await expect(drawer.getByRole("button", { name: CHANGES.APPROVE, exact: true })).toBeDisabled();
     await expect(drawer.getByRole("button", { name: CHANGES.REJECT, exact: true })).toBeEnabled();

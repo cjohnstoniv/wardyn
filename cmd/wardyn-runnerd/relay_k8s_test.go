@@ -92,13 +92,21 @@ func TestK8sRelayFencedIPRefusedForAnotherRun(t *testing.T) {
 	if !closed(t, b) {
 		t.Fatal("a fenced IP was admitted for another run")
 	}
+	// The refused run's rollback fences it on the same IP (its proxy did run there). Each release is
+	// its own: the IP stays refused until both runs are witnessed, in either order.
+	r.Fence(next, "10.244.1.7")
 	r.Unfence(next, "10.244.1.7")
 	if !r.IPFenced("10.244.1.7") {
-		t.Fatal("an Unfence by another run released the refusal")
+		t.Fatal("a run refused on the IP released the first run's refusal")
 	}
+	r.Fence(next, "10.244.1.7")
 	r.Unfence(fencedRun, "10.244.1.7")
+	if !r.IPFenced("10.244.1.7") {
+		t.Fatal("the first run's witness released the second run's refusal")
+	}
+	r.Unfence(next, "10.244.1.7")
 	if r.IPFenced("10.244.1.7") {
-		t.Fatal("the witnessed run's IP is still refused")
+		t.Fatal("the IP is still refused after both runs were witnessed")
 	}
 }
 

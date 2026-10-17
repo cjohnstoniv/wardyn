@@ -868,3 +868,15 @@ func TestADOOrgConflictEveryPair(t *testing.T) {
 		t.Fatalf("one workspace, two organisations: %d %s", w.Code, w.Body.String())
 	}
 }
+
+// A repository one workspace seeded belongs to every other of the run's workspaces that carries it too,
+// so a target nested in it from such a workspace is nesting inside that workspace's own sources.
+func TestRunTargets_ASeededRepoBelongsToEveryWorkspaceCarryingIt(t *testing.T) {
+	p := types.Workspace{ID: uuid.New(), Name: "p", Sources: []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeRepo, Source: "octocat/linguist"}}}
+	q := types.Workspace{ID: uuid.New(), Name: "q", Sources: []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeRepo, Source: "octocat/linguist"}}}
+	spec := types.RunPolicySpec{WorkspaceRepos: []types.WorkspaceRepo{{Repo: "octocat/linguist"}}}
+	got := runTargets(spec, []types.Workspace{p, q}, workspaceSourceIndex{}, workspaceSeed{repoOwners: []types.Workspace{p}}, nil)
+	if len(got) != 1 || got[0].owner != p.ID.String() || !slices.Equal(got[0].carriers, []string{p.ID.String(), q.ID.String()}) {
+		t.Fatalf("targets = %+v, want the seeded repo shown under p and carried by p and q", got)
+	}
+}

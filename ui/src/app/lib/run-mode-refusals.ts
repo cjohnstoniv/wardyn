@@ -68,9 +68,11 @@ export const RUN_MODE_REFUSAL = {
     return `No sandbox image on this server includes ${list} together, so the run was not created. Remove one, or ask an admin to add an image with ${both}.`;
   },
   HARNESS_SET_CUSTOM_IMAGE: () =>
-    "A run with more than one harness starts from an image your admin declared for them, so it can't use a custom image.",
+    "A run with more than one harness starts from an image your admin declared for them, so it can't use the custom image, build or workspace base image this launch names.",
   HARNESS_PROVIDERS_CONFLICT: (a: string, b: string) =>
     `${a} and ${b} use different model providers that reach the same host, so the proxy can't keep their credentials apart. Choose one provider for both, or another provider.`,
+  HARNESS_SIGNIN_NOT_PRIMARY: (harness: string, provider: string) =>
+    `Model provider ${provider} uses an AWS sign-in, which only the harness a run starts, or else lists first, can use, so the run was not created. Make ${harness} that harness, or choose another provider for it.`,
   MAIN_DRIVE_UNENFORCEABLE: () => "This run's policy sets a disk size that this pool's runners can't cap. Choose another pool, or ask your admin.",
   CODEX_BUILTIN_RULE: (tool: string) =>
     `${tool} is one of Codex CLI's own tools, and Wardyn can't block those. Only its MCP tools can be blocked.`,
@@ -97,6 +99,7 @@ export const RUN_MODE_REFUSAL_BY_KEY: Record<keyof typeof RUN_MODE_REFUSAL, (...
   HARNESS_SET_NO_IMAGE: (...a) => RUN_MODE_REFUSAL.HARNESS_SET_NO_IMAGE(...a),
   HARNESS_SET_CUSTOM_IMAGE: () => RUN_MODE_REFUSAL.HARNESS_SET_CUSTOM_IMAGE(),
   HARNESS_PROVIDERS_CONFLICT: (...a) => RUN_MODE_REFUSAL.HARNESS_PROVIDERS_CONFLICT(a[0], a[1]),
+  HARNESS_SIGNIN_NOT_PRIMARY: (...a) => RUN_MODE_REFUSAL.HARNESS_SIGNIN_NOT_PRIMARY(a[0], a[1]),
   MAIN_DRIVE_UNENFORCEABLE: () => RUN_MODE_REFUSAL.MAIN_DRIVE_UNENFORCEABLE(),
   CODEX_BUILTIN_RULE: (...a) => RUN_MODE_REFUSAL.CODEX_BUILTIN_RULE(a[0]),
   POLICY_OVERLAY_INVALID: (...a) => RUN_MODE_REFUSAL.POLICY_OVERLAY_INVALID(a[0], a[1]),

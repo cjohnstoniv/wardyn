@@ -46,23 +46,38 @@ type Action = "revive" | "extend" | "endRun" | "resume" | null;
 
 // Whether a local run lost to an outage or a reboot was stopped LATE: its runner came back with the network still on and
 // the org had it stopped then (a run.containment.reassert row with containment "late"). Only that row tells the
-// two stopped sentences apart, so it is read for a local outage-lost run alone; null until it has been read.
-function useStoppedLate(run: RunDetail): boolean | null {
+// two stopped sentences apart, so it is read for a local outage-lost run alone.
+//
+// null means "not read yet" (or read for a different loss than this one): the banner stays silent. "failed" means the
+// read was made and failed: the stop's timing is unknown, so the banner keeps its title and its actions but claims
+// neither sentence. Only a read that succeeded may answer false, because false is what lets the banner say the stop
+// was on time. A late row counts only
+// when it names this loss (its lost_at is the run's current one), so a row left by an earlier loss of a revived run
+// proves nothing about this one.
+function useStoppedLate(run: RunDetail): boolean | "failed" | null {
   const applies = run.placement === "local" && (run.lost_reason === "outage" || run.lost_reason === "reboot");
-  const [late, setLate] = React.useState<boolean | null>(null);
+  const loss = `${run.id}@${run.lost_at ?? ""}`;
+  const [read, setRead] = React.useState<{ loss: string; late: boolean | "failed" } | null>(null);
   React.useEffect(() => {
     if (!applies) return;
     let live = true;
+    const lostAt = Date.parse(run.lost_at ?? "");
     auditApi
       .listAudit(run.id, { action: "run.containment.reassert" })
-      // A failed read must not assert the confirmed sentence on a run that may have been stopped late.
-      .then((rows) => live && setLate(rows.some((r) => r.data?.containment === "late")))
-      .catch(() => live && setLate(false));
+      .then(
+        (rows) =>
+          live &&
+          setRead({
+            loss,
+            late: rows.some((r) => r.data?.containment === "late" && Date.parse(String(r.data?.lost_at)) === lostAt),
+          }),
+      )
+      .catch(() => live && setRead({ loss, late: "failed" }));
     return () => {
       live = false;
     };
-  }, [applies, run.id, run.lost_at, run.runner_online]);
-  return applies ? late : null;
+  }, [applies, run.id, run.lost_at, run.runner_online, loss]);
+  return applies && read?.loss === loss ? read.late : null;
 }
 
 export function RunLifetimeBanner({
@@ -176,18 +191,32 @@ export function RunLifetimeBanner({
     // whether the network was stopped is the runner's report, not Wardyn's own act. Chosen from server facts
     // only: the runner's liveness and the late-stop row, never elapsed time.
     if (local && (run.lost_reason === "outage" || run.lost_reason === "reboot")) {
-      // Only a runner that is known to be connected can have confirmed the stop; an unknown one is treated as
-      // offline, which claims no more than "can't confirm that yet".
-      const offline = run.runner_online !== true && stoppedLate !== true;
-      // Online and the late-stop row not read yet: say nothing rather than the wrong stopped sentence.
-      if (!offline && stoppedLate === null) return null;
+      // Only a runner that is known to be connected can have confirmed the stop. One reported offline cannot, and one the
+      // server cannot report on (WARDYN_HA: this replica may not hold its connection) is neither: it keeps Revive and
+      // Extend, since they are the only way to act, and a revive the server cannot serve says why.
+      const offline = run.runner_online === false && stoppedLate !== true;
+      const unknown = run.runner_online === undefined && stoppedLate !== true;
+      // Online and the late-stop row not read yet: say nothing rather than the wrong stopped sentence. A read that
+      // failed is different: the title and Revive / Extend / End run stay (they are the only way to act on the run),
+      // and only the on-time / late sentence is left out.
+      if (!offline && !unknown && stoppedLate === null) return null;
       const seen = run.runner_last_seen_at ? absoluteTime(run.runner_last_seen_at) : "—";
       return (
         <Banner
-          data-testid={offline ? "run-lifetime-local-lapse" : "run-lifetime-local-stopped"}
+          data-testid={unknown ? "run-lifetime-local-unknown" : offline ? "run-lifetime-local-lapse" : "run-lifetime-local-stopped"}
           tone="danger"
-          title={offline ? LOCAL_RUN.LAPSE_TITLE(runner) : LOCAL_RUN.STOPPED_TITLE}
-          body={offline ? LOCAL_RUN.LAPSE_BODY(runner, seen) : stoppedLate ? LOCAL_RUN.STOPPED_LATE(runner) : LOCAL_RUN.STOPPED_BODY(runner)}
+          title={unknown ? LOCAL_RUN.UNKNOWN_TITLE(runner) : offline ? LOCAL_RUN.LAPSE_TITLE(runner) : LOCAL_RUN.STOPPED_TITLE}
+          body={
+            unknown
+              ? LOCAL_RUN.UNKNOWN_BODY(runner, seen)
+              : offline
+                ? LOCAL_RUN.LAPSE_BODY(runner, seen)
+                : stoppedLate === "failed"
+                  ? undefined
+                  : stoppedLate
+                    ? LOCAL_RUN.STOPPED_LATE(runner)
+                    : LOCAL_RUN.STOPPED_BODY(runner)
+          }
         >
           {offline && <p className="mt-1 text-xs text-muted-foreground">{LOCAL_RUN.REVIVE_WHEN_BACK(runner)}</p>}
           {canAct && (

@@ -218,10 +218,10 @@ func TestSCIMCovStatusAuditReadFailures(t *testing.T) {
 
 func TestSCIMCovStatusDrivesToReclaim(t *testing.T) {
 	st := newSCIMCovStore()
-	pat := st.addIdentity(store.PrincipalIdentity{Principal: "sub-pat", EmailLower: "pat@corp.example", ScimUserName: "Pat"})
+	pat := st.addIdentity(store.PrincipalIdentity{Principal: "sub-pat", EmailLower: "pat@corp.example", ScimUserName: "Pat", ObjectID: "oid-pat", TenantID: "tenant-1"})
 	sam := st.addIdentity(store.PrincipalIdentity{Principal: "sub-sam", EmailLower: "sam@corp.example"})
 	st.drives = []types.UserDriveListItem{
-		{UserDrive: types.UserDrive{Name: "alpha"}}, {UserDrive: types.UserDrive{Name: "zeta"}}, {UserDrive: types.UserDrive{Name: "omega"}},
+		{UserDrive: types.UserDrive{Name: "alpha"}}, {UserDrive: types.UserDrive{Name: "zeta"}}, {UserDrive: types.UserDrive{Name: "omega"}}, {UserDrive: types.UserDrive{Name: "beta"}},
 	}
 	t1 := time.Now().UTC().Truncate(time.Second).In(time.FixedZone("x", 3600))
 	t2 := t1.Add(-24 * time.Hour)
@@ -235,7 +235,7 @@ func TestSCIMCovStatusDrivesToReclaim(t *testing.T) {
 		}
 	}
 	rows := []types.AuditEvent{
-		purge(pat.ID.String(), t1, `["alpha","zeta","deleted-drive"]`),
+		purge(pat.ID.String(), t1, `["alpha","zeta","beta","deleted-drive"]`),
 		purge(sam.ID.String(), t2, `["omega","alpha"]`),
 		scimCovAudit("person.deprovision", pat.ID.String(), t1, `{"kind":"suspend","drives":["omega"]}`),
 		purge("not-a-uuid", t1, `["omega"]`),
@@ -247,6 +247,8 @@ func TestSCIMCovStatusDrivesToReclaim(t *testing.T) {
 		reclaim(t1.Add(time.Hour), "zeta", "sam@corp.example", "user"),
 		reclaim(t1.Add(time.Hour), "zeta", "pat@corp.example", "group"),
 		reclaim(t2.Add(time.Hour), "omega", "sub-sam", "user"),
+		// A drive allocated under the person's object-id form is freed by a reclaim under that form.
+		reclaim(t1.Add(time.Hour), "beta", "ENTRA:tenant-1:oid-pat", "user"),
 	}
 	e, paged := scimCovPagedEnv(t, st, rows)
 

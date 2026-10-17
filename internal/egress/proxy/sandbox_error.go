@@ -40,8 +40,10 @@ func (p *Proxy) httpError(w http.ResponseWriter, msg string, err error, code int
 }
 
 // redactErr is err's text as the sandbox may see it: secret-masked, with no
-// topology, and with no name off a configured gateway's certificate — the
-// names a hostname mismatch lists are the gateway's own, so topology too.
+// topology, and with no name off a certificate chain. A hostname mismatch
+// lists the gateway's own names (redacted for a configured gateway only, since
+// its Host says which); an unknown-authority hint and a name-constraint
+// refusal carry no Host, so their CA and constraint names go for every host.
 func (p *Proxy) redactErr(err error) string {
 	s := err.Error()
 	var mismatch x509.HostnameError
@@ -50,8 +52,18 @@ func (p *Proxy) redactErr(err error) string {
 			s = strings.Replace(s, "valid for "+certNames(mismatch)+", not ", "valid for "+redactedEndpoint+", not ", 1)
 		}
 	}
+	s = candidateAuthorityRe.ReplaceAllString(s, `${1}"`+redactedEndpoint+`"`)
+	var invalid x509.CertificateInvalidError
+	if errors.As(err, &invalid) && invalid.Detail != "" &&
+		(invalid.Reason == x509.CANotAuthorizedForThisName || invalid.Reason == x509.UnconstrainedName) {
+		s = strings.ReplaceAll(s, invalid.Detail, redactedEndpoint)
+	}
 	return p.redactTopology(string(maskDecisionBytes([]byte(s))))
 }
+
+// candidateAuthorityRe matches the quoted CA subject x509.UnknownAuthorityError
+// appends as its hint (its fields are unexported, so the text is all there is).
+var candidateAuthorityRe = regexp.MustCompile(`(while trying to verify candidate authority certificate )"(?:[^"\\]|\\.)*"`)
 
 // certNames is the name list x509.HostnameError's text prints: the IP SANs
 // for an IP host, else the DNS SANs.

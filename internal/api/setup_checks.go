@@ -302,17 +302,15 @@ func idleCPUSignalCheck(off bool) SetupCheck {
 	}
 }
 
-// DRAFT (M2 canon pending) — the fix a mechanism principal's provider row
+// The fix a mechanism principal's provider row
 // carries.
 const (
-	// DRAFT (M2 canon pending)
 	bedrockMechanismFix = "Sign in to the console (or use your own wdn_ API token) to see your own model access."
 	// internalHostsCheckLabel names internalHostsCheck's dedicated row.
 	// Detail is internalHostsDeclaredSentence
 	// (site_config.go), reused verbatim from the write-time log, so it is
 	// not repeated here.
 	//
-	// DRAFT (M2 canon pending)
 	internalHostsCheckLabel = "Internal hosts (SSRF guard override)"
 )
 
@@ -923,6 +921,13 @@ func artifactRepoCheck(sc types.SiteConfig) SetupCheck {
 		len(sc.EgressRedirects), strings.Join(parts, "; "))
 	if tokened > 0 {
 		detail += fmt.Sprintf(" %d with a token injected proxy-side.", tokened)
+	}
+	if off := goChecksumDBOffHosts(sc.EgressRedirects); len(off) > 0 {
+		return SetupCheck{
+			ID: "artifact_repo", Label: "Egress redirection", Status: "warn",
+			Detail: detail + " Go checksum-database verification is OFF for " + strings.Join(off, ", ") + " (go_checksum_db_off): modules that mirror serves are not checked against sum.golang.org.",
+			Fix:    "Make the mirror proxy /sumdb/sum.golang.org and clear go_checksum_db_off on that redirect.",
+		}
 	}
 	return SetupCheck{ID: "artifact_repo", Label: "Egress redirection", Status: "info", Detail: detail}
 }

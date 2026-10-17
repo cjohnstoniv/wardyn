@@ -56,7 +56,7 @@ func newOwnPATRunOn(t *testing.T, row types.GitProvider, repo string) *ownPATRun
 		Store: f.st, Secrets: &memSecrets{m: map[string][]byte{}}, MaskRegistry: secretmask.NewRegistry(),
 		Now: func() time.Time { return f.now }, Audit: f.audit, Approvals: fa,
 	}}
-	ado, ok := resolveADOEntraRun(base.site, []string{repo}, capSub)
+	ado, ok := resolveADOEntraRun(base.site, nil, repo, capSub)
 	if !ok {
 		t.Fatal("the own-token row resolved no lane")
 	}
@@ -127,7 +127,7 @@ func TestAuthorADOEntraInjection_OwnPATRow(t *testing.T) {
 	row.Entra.TokenMode = types.ADOTokenModeMintedPAT
 	st := &adoTestStore{site: adoSite(row)}
 	srv := &Server{cfg: Config{Store: st, Audit: &memAudit{}, Now: time.Now}}
-	ado, _ := resolveADOEntraRun(st.site, []string{adoTestRepo}, capSub)
+	ado, _ := resolveADOEntraRun(st.site, nil, adoTestRepo, capSub)
 	if _, _, ok := srv.authorADOEntraInjection(context.Background(), types.AgentRun{ID: uuid.New()}, ado,
 		"CERT", "KEY", &types.RunPolicySpec{}, map[string]string{}, nil); ok || len(st.grants) != 0 {
 		t.Fatal("a minted_pat row was dispatched")

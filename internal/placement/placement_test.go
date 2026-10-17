@@ -145,9 +145,11 @@ func TestReasonsMatchDesign(t *testing.T) {
 		// under a required setting (0180), and recording_store_off an organisation that keeps no
 		// recordings under one, all after the design.
 		"runner_at_capacity": 422, "runner_limits_unset": 422, "runner_recording_off": 422, "recording_store_off": 422,
+		// runner_trust_changed is a revive whose runner's trust class is no longer the run's (K1 §2).
+		"runner_trust_changed": 409,
 	}
 	if got := Reasons(); len(got) != len(want) {
-		t.Fatalf("%d reasons, design §12.3 lists %d plus runner_at_capacity, runner_limits_unset, runner_recording_off and recording_store_off", len(got), len(want)-4)
+		t.Fatalf("%d reasons, design §12.3 lists %d plus runner_at_capacity, runner_limits_unset, runner_recording_off, recording_store_off and runner_trust_changed", len(got), len(want)-5)
 	}
 	for r, status := range want {
 		if r.Status() != status || !r.Valid() {
@@ -261,10 +263,10 @@ func TestDeliveryPolicyValidate(t *testing.T) {
 			t.Errorf("%s: validated (%v)", name, err)
 		}
 	}
-	if got := ok.For("api_key").Mode; got != ModeViaOrg {
+	if got := ok.ForTrust("api_key", types.RunnerTrustPersonal).Mode; got != ModeViaOrg {
 		t.Errorf("api_key = %q", got)
 	}
-	if got := ok.For("bedrock_bearer").Mode; got != ModeRefuse {
+	if got := ok.ForTrust("bedrock_bearer", types.RunnerTrustPersonal).Mode; got != ModeRefuse {
 		t.Errorf("an absent class = %q, want refuse", got)
 	}
 }

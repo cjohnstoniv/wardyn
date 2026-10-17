@@ -24,9 +24,10 @@ vi.mock("../screens/settings/harness-login-pane", () => ({
 
 import { ModelAccessBanner } from "./model-access-banner";
 import { MODEL_ACCESS_BANNER } from "./model-access-copy";
-import { BANNER } from "./copy/door";
+import { BANNER, CONNECTIONS } from "./copy/door";
 import { ModelAccessProvider, useClaimModelAccessDoor, useModelAccessDoor } from "./model-access-context";
 import { OperatorProvider } from "./operator-context";
+import { ViewAccessProvider, type ViewAccess } from "./console-view";
 import { AGENTS } from "../../lib/workspace-providers-copy";
 import { MODEL_PROVIDERS, providerStatus } from "../../lib/test-fixtures";
 import type { SetupStatus } from "../../lib/types";
@@ -34,10 +35,12 @@ import type { SetupStatus } from "../../lib/types";
 const { bedrock } = MODEL_PROVIDERS;
 const B1 = BANNER.B1("Claude Code", bedrock.name);
 
-function statusFor(state: string): SetupStatus {
-  return providerStatus([{ provider: bedrock, defaultFor: ["claude-code"], state }], {
+function statusFor(state: string, cause?: string): SetupStatus {
+  const s = providerStatus([{ provider: bedrock, defaultFor: ["claude-code"], state }], {
     harnesses: [{ id: "claude-code", display: "Claude Code", has_gateway: false, has_login: true }],
   });
+  if (cause) s.provider_access![0].cause = cause;
+  return s;
 }
 
 /** A page surface that owns the door (the New Run rail, a failure block). */
@@ -48,6 +51,7 @@ function Claimer() {
 
 function renderStrip({
   state = "not_configured",
+  cause,
   operator = false,
   principal = "member@corp.example",
   resolved = true,
@@ -55,27 +59,33 @@ function renderStrip({
   onRefresh = vi.fn(),
   claimed = false,
   page,
+  access,
 }: {
   state?: string;
+  cause?: string;
   operator?: boolean;
   principal?: string;
   resolved?: boolean;
   path?: string;
-  onRefresh?: () => void;
+  onRefresh?: () => void | Promise<unknown>;
   claimed?: boolean;
   page?: React.ReactNode;
+  /** The view access the shell provides; absent is the one-operator default, where the URL decides. */
+  access?: ViewAccess;
 }) {
   return render(
     <MemoryRouter initialEntries={[path]}>
-      <ModelAccessProvider status={statusFor(state)} onRefresh={onRefresh}>
+      <ModelAccessProvider status={statusFor(state, cause)} onRefresh={onRefresh}>
         <OperatorProvider operator={operator} securityOperator={operator} operatorResolved={resolved} principal={principal}>
           {claimed && <Claimer />}
           {/* The shell's own two pieces of context: the live region it mounts
               EAGERLY around this lazy chunk, and the skip-to-main target focus
               lands on when the strip that opened the door is gone. */}
-          <div role="status">
-            <ModelAccessBanner />
-          </div>
+          <ViewAccessProvider value={access ?? "url"}>
+            <div role="status">
+              <ModelAccessBanner />
+            </div>
+          </ViewAccessProvider>
           <main id="main-content" tabIndex={-1}>
             {page ?? "screen"}
           </main>
@@ -119,6 +129,19 @@ describe("the door itself", () => {
     expect(onRefresh).toHaveBeenCalledTimes(1);
     expect(success).toHaveBeenCalledWith(MODEL_ACCESS_BANNER.SIGNED_IN_TOAST);
     expect(screen.queryByRole("heading", { name: MODEL_ACCESS_BANNER.DIALOG_TITLE })).toBeNull();
+  });
+});
+
+describe("the strip's Re-check on an unreadable store", () => {
+  it("is disabled while the status read is out, then live again", async () => {
+    let finish: () => void = () => {};
+    const onRefresh = vi.fn(() => new Promise<void>((resolve) => { finish = resolve; }));
+    renderStrip({ cause: "store_unreadable", onRefresh });
+    await userEvent.click(screen.getByRole("button", { name: CONNECTIONS.RECHECK }));
+    expect(onRefresh).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("button", { name: CONNECTIONS.RECHECK })).toBeDisabled();
+    await act(async () => finish());
+    expect(screen.getByRole("button", { name: CONNECTIONS.RECHECK })).toBeEnabled();
   });
 });
 
@@ -181,5 +204,32 @@ describe("where the strip says nothing", () => {
   it("never on /setup — the page is the door", () => {
     renderStrip({ path: "/setup" });
     expect(screen.queryByText(B1)).toBeNull();
+  });
+});
+
+describe("the strip follows the session's view (FUG-L772)", () => {
+  it("is not drawn on /account when the session holds the Admin view", () => {
+    renderStrip({ path: "/account", access: "session-admin" });
+    expect(screen.queryByRole("button", { name: /sign in/i })).not.toBeInTheDocument();
+  });
+
+  it("is drawn on /account for a one-operator install, where the path decides", () => {
+    renderStrip({ path: "/account" });
+    expect(screen.getByRole("button", { name: /sign in/i })).toBeInTheDocument();
+  });
+
+  it("is not drawn above a switch page: an SSO admin in member mode on /admin/runs (F5)", () => {
+    renderStrip({ path: "/admin/runs", access: "session-user" });
+    expect(screen.queryByRole("button", { name: /sign in/i })).not.toBeInTheDocument();
+  });
+
+  it("is drawn for that same member-mode session on a User page that renders", () => {
+    renderStrip({ path: "/runs", access: "session-user" });
+    expect(screen.getByRole("button", { name: /sign in/i })).toBeInTheDocument();
+  });
+
+  it("is not drawn for a one-view admin token on a User page", () => {
+    renderStrip({ path: "/runs", access: "admin-only" });
+    expect(screen.queryByRole("button", { name: /sign in/i })).not.toBeInTheDocument();
   });
 });
