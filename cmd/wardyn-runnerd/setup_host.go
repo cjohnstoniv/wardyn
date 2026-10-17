@@ -104,7 +104,10 @@ func (h setupHost) checkServiceManager(ctx context.Context, p setupPaths) error 
 	}
 	out, err := h.run(ctx, "systemctl", "--user", "show", "-p", "UnitPath", "--value")
 	if err != nil {
-		return fmt.Errorf("the systemd user manager did not answer (%w: %s), so setup cannot start the service: no token was spent", err, strings.TrimSpace(string(out)))
+		if detail := strings.TrimSpace(string(out)); detail != "" {
+			err = fmt.Errorf("%w: %s", err, detail)
+		}
+		return fmt.Errorf("the systemd user manager did not answer (%w), so setup cannot start the service: no token was spent", err)
 	}
 	dir := filepath.Dir(p.unitFile)
 	if !strings.Contains(" "+strings.TrimSpace(string(out))+" ", " "+dir+" ") {

@@ -269,6 +269,21 @@ func TestRegisterSendsMeasuredProposals(t *testing.T) {
 	}
 }
 
+// A missing token file is reported before the computer is measured (and so before any limit question).
+func TestRegisterReadsTheTokenFileBeforeMeasuring(t *testing.T) {
+	measured := false
+	measureHost = func(context.Context) (types.RunnerAmounts, error) { measured = true; return testHost, nil }
+	t.Cleanup(func() { measureHost = func(context.Context) (types.RunnerAmounts, error) { return testHost, nil } })
+	cmd := newRegisterCommand()
+	cmd.SetOut(&strings.Builder{})
+	cmd.SetIn(strings.NewReader(""))
+	root := t.TempDir()
+	cmd.SetArgs([]string{"--org", "https://org.example", "--token-file", filepath.Join(root, "missing"), "--state-dir", filepath.Join(root, "identity")})
+	if err := cmd.Execute(); err == nil || !strings.Contains(err.Error(), "open registration token file") || measured {
+		t.Fatalf("err = %v, measured = %v; want the token file refused before the host was measured", err, measured)
+	}
+}
+
 // A host that cannot be measured says why, beside the "not measured" figures.
 func TestRegisterSaysWhyTheHostWasNotMeasured(t *testing.T) {
 	measureHost = func(context.Context) (types.RunnerAmounts, error) {
