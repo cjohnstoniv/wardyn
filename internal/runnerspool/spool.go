@@ -245,11 +245,12 @@ func (s *Spool) readManifest() (manifest, error) {
 	if (m.Ack.Seq == 0 && m.Ack.Hash != "") || (m.Ack.Seq > 0 && len(m.Ack.Hash) != 64) {
 		return m, errors.New("invalid spool acknowledgement")
 	}
-	if m.Sealed && (m.Last != m.Ack.Seq || m.Drops != m.Reported || m.Overflow != nil || !m.remoteSettled()) {
-		return manifest{}, errors.New("sealed spool has unsettled evidence")
-	}
+	// Before the sealed check, which reads Producer through remoteSettled.
 	if err := m.validRemote(); err != nil {
 		return m, err
+	}
+	if m.Sealed && (m.Last != m.Ack.Seq || m.Drops != m.Reported || m.Overflow != nil || !m.remoteSettled()) {
+		return manifest{}, errors.New("sealed spool has unsettled evidence")
 	}
 	if r := m.Overflow; r != nil && (r.Seq != 0 || !r.ValidHash() || r.SpoolID != m.SpoolID || r.Decision.Request.RunID != s.runID || r.Count == 0 || r.Count > m.Drops-m.Reported || r.DropEnd != m.Reported+r.Count || r.Decision.Decision != egress.Deny || r.Decision.RuleSource != "builtin:spool-full") {
 		return m, errors.New("invalid spool overflow record")
@@ -361,15 +362,23 @@ func (s *Spool) Refuse(ctx context.Context) error {
 }
 
 // Remote-sink grant ceilings (design §3.2 item 2). The last record slot and the
-// last LossReserveBytes stay free for the builtin:spool-lost row.
+// last LossReserveBytes stay free for the builtin:spool-lost row. The byte
+// credit covers GrantReservations requests reserved at the largest record
+// (a scanned body-bearing request reserves MaxRecordBytes), as the local
+// spool admits them, within the spool's own MaxBytes.
 const (
-	GrantRecords     = 5000
-	GrantBytes       = 4 << 20
-	LossReserveBytes = 4 << 10
+	GrantRecords      = 5000
+	GrantReservations = 16
+	GrantBytes        = GrantReservations * MaxRecordBytes
+	LossReserveBytes  = 4 << 10
 	// grantRecordEnvelope is what a spool row adds to a record body: the
 	// stream id, sequence and hash. A grant's byte credit leaves it per record.
 	grantRecordEnvelope = 512
 )
+
+// A full grant, its record envelopes and the loss reserve fit an empty spool:
+// this constant underflows, failing the build, if they ever do not.
+const _ = uint64(MaxBytes - GrantBytes - GrantRecords*grantRecordEnvelope - LossReserveBytes)
 
 var (
 	// ErrProducer refuses a frame from a foreign, settled or out-of-order producer.

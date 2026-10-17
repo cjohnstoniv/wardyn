@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"math"
 	"math/rand/v2"
 	"net/http"
 	"sync"
@@ -53,7 +54,17 @@ type lapseGate struct {
 
 func newLapseGate(clock bootClock, ttl time.Duration) *lapseGate {
 	// Closed from start: until a renew succeeds the bound is process start + TTL.
-	return &lapseGate{clock: clock, ttl: ttl, deadline: clock.Now() + ttl, done: make(chan struct{})}
+	return &lapseGate{clock: clock, ttl: ttl, deadline: addSat(clock.Now(), ttl), done: make(chan struct{})}
+}
+
+// addSat adds without wrapping: a far-future clock reading (the fail-closed
+// answer of a clock that cannot be read) gives the far-future deadline, which
+// that same reading has already reached.
+func addSat(a, b time.Duration) time.Duration {
+	if a > math.MaxInt64-b {
+		return math.MaxInt64
+	}
+	return a + b
 }
 
 // serving reports whether agent requests may be served now, lapsing first when
@@ -91,7 +102,7 @@ func (g *lapseGate) renewed(sent time.Duration, apply func()) bool {
 		return false
 	}
 	apply()
-	g.state, g.deadline = lapseOpen, sent+g.ttl
+	g.state, g.deadline = lapseOpen, addSat(sent, g.ttl)
 	return true
 }
 
