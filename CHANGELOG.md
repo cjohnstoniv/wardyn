@@ -8,6 +8,12 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+### Changed
+
+- A run on a laptop runner whose proxy image is older than the runner now fails with the fix in its reason: the
+  error names the setting the proxy refused and says to upgrade the organisation before its runners, or to pin a proxy
+  image at least as new as the runner, followed by the proxy's own output.
+
 ### Corrections to earlier notes
 
 - Since 0.9.0, the launch warning that a run's managed settings were not delivered is built from the runner the run is placed on and covers every harness in the run, so it appears for a secondary Claude Code harness and a runner-placed run, and no longer appears for a run that is refused over its tool rules. Earlier notes did not say so.

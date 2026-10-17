@@ -6,7 +6,9 @@
 # RELEASING.md (0.9.3 PKG side): +24 (0.9.3 PKG): the runner-pkg asset bullet and the asset name. +31: the two Docker Hub Actions secrets, one line each. +7: the runner-units job and the runner release assets (#1968). +249: nightly scope=candidate, dispatch before the PR, and promote at the tag with its rehearsal.
 # RELEASING.md 5688 = 5664 + 24 (PKG), measured at the wave-B merge.
 # RELEASING.md 5796 = 5688 + 108, measured: the Defaults changed by this upgrade convention.
-RELEASING.md=5796 share=35 # +31: the two Docker Hub Actions secrets, one line each. +7: the runner-units job and the runner release assets (#1968). +249: nightly scope=candidate, dispatch before the PR, and promote at the tag with its rehearsal.
+# RELEASING.md 5840 = 5796 + 44, measured: the final-release step that moves the split-role anchor UNRELEASED_FROM
+# RELEASING.md 5885 = 5840 + 45, measured: the post-publish runner compatibility rehearsal
+RELEASING.md=5885 share=35 # +31: the two Docker Hub Actions secrets, one line each. +7: the runner-units job and the runner release assets (#1968). +249: nightly scope=candidate, dispatch before the PR, and promote at the tag with its rehearsal.
 # ROADMAP.md 5870 measured after merging G-chores-a.
 # ROADMAP.md 5988 adds 118 over 5870: 0.9 final docs pass, measured: the New Run line of the 0.9 scope and the 0.10 scope table.
 # ROADMAP.md 6133 adds 33 over 6100: the v0.9.3-rc.1 Shipped row the release commit adds.

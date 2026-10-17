@@ -497,6 +497,43 @@ func TestCreateSandbox_ProxyExitsAtConfigLoad(t *testing.T) {
 	}
 }
 
+// TestCreateSandbox_OlderProxyImageNamesTheFix: a proxy image older than this runner refuses a
+// setting it does not know at config load. The failure names that cause and its fix, then keeps the
+// proxy's own output; a config-load failure of any other kind keeps the plain message.
+func TestCreateSandbox_OlderProxyImageNamesTheFix(t *testing.T) {
+	for _, tc := range []struct{ name, log, want string }{
+		{"escaped in a log attribute", `ERROR wardyn-proxy: load config failed err="parse config: json: unknown field \"decision_sink\""`,
+			"the proxy image is older than this runner (it refused setting decision_sink): upgrade the organisation before its runners, " +
+				"or pin a proxy image at least as new as this runner; proxy exited at config load (exit 1): "},
+		{"plain", `unknown field "x"`, "(it refused setting x): upgrade the organisation before its runners"},
+		{"another refusal", `parse config: unexpected end of JSON input`, "docker: proxy exited at config load (exit 1): parse config"},
+		{"a quote that spans lines", "unknown field \"\nnext line\"", "docker: proxy exited at config load (exit 1): unknown field"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFakeDocker()
+			f.images["busybox:latest"] = true
+			d := newTestDriver(f)
+			d.proxySettle = proxyStartSettle
+			runID := testSpec().RunID
+			f.exitAfterInspects = map[string]int{proxyContainerName(runID): 3}
+			f.logs = map[string][]byte{proxyContainerName(runID): muxFrame(1, tc.log)}
+			_, err := d.CreateSandbox(context.Background(), testSpec())
+			if err == nil {
+				t.Fatal("expected the proxy's config-load failure")
+			}
+			if !strings.Contains(err.Error(), tc.want) || !strings.HasSuffix(err.Error(), tc.log) {
+				t.Errorf("error = %v; want %q and the proxy's output last", err, tc.want)
+			}
+			if !strings.HasPrefix(tc.want, "docker: proxy exited") {
+				return
+			}
+			if strings.Contains(err.Error(), "older than this runner") {
+				t.Errorf("error = %v; only a named unknown setting on one line means an older proxy image", err)
+			}
+		})
+	}
+}
+
 // TestCreateSandbox_ProxyExitsAtConfigLoad_ClockSkew pins L1 (PR #1051's
 // second review): a daemon whose clock lags the host's — a remote daemon, or
 // Docker Desktop's VM clock after the host sleeps — can report a StartedAt

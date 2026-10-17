@@ -212,6 +212,9 @@ crash or a usage limit resumes with the same command:
    - the annotated tag `vX.Y.Z` and its push (by full ref; a local `vX.Y.Z` that points anywhere but the commit just verified is refused by name),
    - `gh run watch` on `release.yml`'s run for the tag, `gh release edit vX.Y.Z --draft=false --prerelease` on the draft that `release-assets` made, and [`scripts/verify-release.sh`](scripts/verify-release.sh), which must end `fails=0`.
    - The forward-port commands are printed, never run.
+   - After a final release, rehearse the runner compatibility walk against it once: `WARDYN_TEST_DOCKER=1
+     WARDYN_COMPAT_RELEASED=vX.Y.Z scripts/runner-compat-walk.sh` on a native Docker engine, or a nightly on `main`.
+     From 0.9.3 on it also rolls back a runner that has retired a run, which no earlier release could rehearse.
    - If `gh release edit` finds no draft, the command prints the releases listing and stops.
 
 - A final `X.Y.Z` fast-forwards `release/X.Y`.
@@ -289,6 +292,10 @@ crash or a usage limit resumes with the same command:
    - **Also bump [`threatmodel/THREAT-MODEL.md`](threatmodel/THREAT-MODEL.md)'s currency line** (`**Version:** v2
      (tracks the shipped codebase; last reviewed at vX.Y.Z)`) to the version you're
      cutting — this has drifted from the shipped version before, twice.
+   - **At a final release (not a release candidate), move the split-role anchor.** Set `UNRELEASED_FROM` in
+     [`scripts/test-claims-match-code.sh`](scripts/test-claims-match-code.sh) to the first migration number this
+     release does not ship, and keep this release's `Split-role installs` bullet in its own section; the next release
+     starts a new bullet.
    - **Then put a fresh, empty `## [Unreleased]` heading back above the new section.**
      - `make release-check` hard-fails if `CHANGELOG.md` has no `## [Unreleased]` (`grep -q "## \[Unreleased\]" CHANGELOG.md || exit 1`), so renaming it away and not restoring it leaves the gate red for the *next* release —
        - which is a confusing failure to debug from the tag commit backwards.

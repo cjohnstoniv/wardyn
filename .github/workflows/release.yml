@@ -250,7 +250,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -uo pipefail
-          watched="task-e2e-live ssh-e2e-live test-drive ci-mode-dogfood docker-tagged-live byoi-e2e-live ui-sandbox-e2e-live kind-sso-walk kek-conformance fuzz gvisor-cc2-live kind-sso-ado-walk compose-sso-roles daemon-proxy-secret-kind provider-subscription-docker-pg managed-settings-drift"
+          watched="task-e2e-live ssh-e2e-live test-drive ci-mode-dogfood docker-tagged-live byoi-e2e-live ui-sandbox-e2e-live kind-sso-walk kek-conformance fuzz gvisor-cc2-live kind-sso-ado-walk compose-sso-roles daemon-proxy-secret-kind provider-subscription-docker-pg managed-settings-drift runner-compat-walk"
           echo "watched=${watched}" >> "$GITHUB_OUTPUT"
           choice=build
           if [ "$EVENT_NAME" = workflow_dispatch ]; then
@@ -302,6 +302,9 @@ jobs:
       # daemon-proxy-secret-kind (T-59, #719), provider-subscription-docker-pg
       # (T-17, #677) and managed-settings-drift (#1395) each joined after a
       # green hosted run (see nightly.yml's own comment on each job).
+      # runner-compat-walk joined before its first hosted run, on purpose: it is
+      # the check that a released runner and a released organisation keep working
+      # with this tag (nightly.yml's own comment on the job).
       - id: green
         name: The tag's tree must be green by CI and by a dispatched nightly
         if: inputs.dry_run != true || steps.path.outputs.path == 'promote'
