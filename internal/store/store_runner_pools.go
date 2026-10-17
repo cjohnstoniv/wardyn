@@ -74,8 +74,9 @@ var (
 
 // RunnerPoolsMax bounds the organisation's live pools and RunnerPoolsPerOwnerMax one person's, so a
 // person's catalogue read is bounded and no person's pools can crowd the organisation's out of it.
-// RunnerPoolsOversightMax bounds the oversight read, which lists the organisation's pools and then the
-// caller's own before anyone else's, so neither can drop out of it.
+// RunnerPoolsOversightMax bounds the oversight list, which lists the organisation's pools and then the
+// caller's own before anyone else's, so neither can drop out of it. The read takes one more row, so the
+// list can say that more exist.
 const (
 	RunnerPoolsMax          = 200
 	RunnerPoolsPerOwnerMax  = 10
@@ -206,7 +207,7 @@ func (s PG) ListRunnerPoolCatalogue(ctx context.Context, owner string, all bool)
 		ORDER BY CASE WHEN p.owner IS NULL THEN 0 WHEN p.owner = $1 THEN 1 ELSE 2 END, lower(p.name), p.id LIMIT $2`
 	limit := RunnerPoolsMax + RunnerPoolsPerOwnerMax
 	if all {
-		limit = RunnerPoolsOversightMax
+		limit = RunnerPoolsOversightMax + 1
 	}
 	return collect(ctx, s.Pool, "list", "runner pools", q, []any{owner, limit, all}, func(row pgx.Row) (RunnerPoolCatalogueRow, error) {
 		var r RunnerPoolCatalogueRow

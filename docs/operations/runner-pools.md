@@ -126,6 +126,7 @@ A launch waits, stored `QUEUED`, when its pool is running its Runs at once or wh
 ## Your own pools
 
 - You create, edit and delete your user pools, and nobody else sees or uses them; an admin lists them read-only with their owner.
+- That admin list holds at most 1,000 pools: the organisation's, then the admin's own, then everyone else's by name, with `X-Wardyn-Truncated` set when more exist.
 - You put in only your own claimed runners and the remote-hosted runners available to you. No route adds another person's runner.
 - A user pool whose runners are all yours is available while one of them is online. With none online the pool list says `runner_pool_no_online_runner`, and a launch is refused `runner_offline`: "None of your runners in {pool} is online."
 - A remote-hosted runner stops taking your runs as soon as its people policy no longer admits you.

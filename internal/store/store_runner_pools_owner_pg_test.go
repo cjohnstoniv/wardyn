@@ -85,7 +85,7 @@ func TestPG_OversightCatalogueKeepsTheOrganisationsAndTheCallersOwnPools(t *test
 	for _, r := range rows {
 		found[r.Pool.ID] = true
 	}
-	if len(rows) != store.RunnerPoolsOversightMax || !found[remote.ID] || !found[mine.ID] {
+	if len(rows) != store.RunnerPoolsOversightMax+1 || !found[remote.ID] || !found[mine.ID] {
 		t.Errorf("oversight read of %d rows: remote listed %v, own listed %v", len(rows), found[remote.ID], found[mine.ID])
 	}
 }
