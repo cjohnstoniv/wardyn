@@ -309,6 +309,38 @@ describe("where the server starts a workspace (first target: folders before repo
   });
 });
 
+describe("an unnamed workspace start with some of its repositories cloned (DR-0253)", () => {
+  const TWO_REPOS: Workspace = {
+    ...SCENARIO_FILES_WORKSPACES.member[0], id: "ws-two", name: "pair", source: "github.com/acme/one",
+    sources: [
+      { type: "repo", source: "github.com/acme/one", ref: "main", clone_target: "/home/agent/work/one" },
+      { type: "repo", source: "github.com/acme/two", ref: "main", clone_target: "/home/agent/work/two" },
+    ],
+  };
+  const starting = (name: string) => within(card(name)).queryByText(NR_FILES.STARTS_HERE);
+
+  it("starts in the one repository cloned, though the workspace holds two", async () => {
+    workspaceList = [...SCENARIO_FILES_WORKSPACES.member, TWO_REPOS];
+    show({ ...BACKGROUND, workspaces: [{ workspace_id: "ws-two", repos: [{ repo: "github.com/acme/two" }] }], start_folder: { kind: "attachment", attachment: "ws-two" } });
+    await screen.findByRole("button", { name: NR_FILES.EDIT_NAMED("two") });
+    expect(starting("two")).toBeInTheDocument();
+  });
+
+  it("starts in the first of two cloned, and an explicit repository still wins", async () => {
+    workspaceList = [...SCENARIO_FILES_WORKSPACES.member, TWO_REPOS];
+    const both = [{ repo: "github.com/acme/one" }, { repo: "github.com/acme/two" }];
+    show({ ...BACKGROUND, workspaces: [{ workspace_id: "ws-two", repos: both }], start_folder: { kind: "attachment", attachment: "ws-two" } });
+    await screen.findByRole("button", { name: NR_FILES.EDIT_NAMED("two") });
+    expect(starting("one")).toBeInTheDocument();
+    expect(starting("two")).toBeNull();
+    cleanup();
+    show({ ...BACKGROUND, workspaces: [{ workspace_id: "ws-two", repos: both }], start_folder: { kind: "attachment", attachment: "ws-two", repo: "github.com/acme/two" } });
+    await screen.findByRole("button", { name: NR_FILES.EDIT_NAMED("two") });
+    expect(starting("two")).toBeInTheDocument();
+    expect(starting("one")).toBeNull();
+  });
+});
+
 describe("drives (GET /me/drives)", () => {
   it("adds the person's drive by its catalogue id, at the path Wardyn assigns, narrowed to read-only when asked", async () => {
     show(BACKGROUND);

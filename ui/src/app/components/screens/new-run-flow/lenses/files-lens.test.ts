@@ -30,9 +30,9 @@ describe("Starts here never attaches (U6)", () => {
 
   it("reads a start folder with no repo as the workspace's only repository", () => {
     const intent = setStartsHere(BASE, "w1");
-    expect(startsAt(intent, "w1", "acme/api", 1)).toBe(true);
-    expect(startsAt(intent, "w1", "acme/api", 2)).toBe(false);
-    expect(startsAt(setStartsHere(BASE, "w1", "acme/web"), "w1", "acme/api", 2)).toBe(false);
+    expect(startsAt(intent, "w1", "acme/api", true)).toBe(true);
+    expect(startsAt(intent, "w1", "acme/api", false)).toBe(false);
+    expect(startsAt(setStartsHere(BASE, "w1", "acme/web"), "w1", "acme/api", true)).toBe(false);
   });
 });
 
