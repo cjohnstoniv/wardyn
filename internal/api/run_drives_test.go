@@ -374,14 +374,18 @@ func TestDriveUnavailableHere_Pool(t *testing.T) {
 	self := store.RunnerPoolCatalogueRow{Pool: types.RunnerPool{Scope: types.RunnerPoolUser}}
 	remote := store.RunnerPoolCatalogueRow{Pool: types.RunnerPool{Scope: types.RunnerPoolOrganization}}
 	ctx := context.Background()
-	if got := srv.driveUnavailableHere(ctx, d, self, true); got != client.MeDriveUnavailableNotInPool {
+	if got := srv.driveUnavailableHere(ctx, d, self, true, false); got != client.MeDriveUnavailableNotInPool {
 		t.Errorf("self-hosted = %q", got)
 	}
-	if got := srv.driveUnavailableHere(ctx, d, remote, true); got != "" {
+	if got := srv.driveUnavailableHere(ctx, d, remote, true, false); got != "" {
 		t.Errorf("remote-provided = %q", got)
 	}
-	if got := srv.driveUnavailableHere(ctx, d, self, false); got != "" {
+	if got := srv.driveUnavailableHere(ctx, d, self, false, false); got != "" {
 		t.Errorf("unchecked pool = %q", got)
+	}
+	// A profile that denies remote-hosted runners leaves a drive nowhere to mount, in any pool.
+	if got := srv.driveUnavailableHere(ctx, d, remote, true, true); got != client.MeDriveUnavailableNotInPool {
+		t.Errorf("remote-provided, remote denied = %q", got)
 	}
 }
 

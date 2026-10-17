@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"slices"
 
 	"github.com/google/uuid"
 
@@ -128,9 +129,11 @@ func (s *Server) handleListMeDrives(w http.ResponseWriter, r *http.Request) {
 // cannot be attached: paused, then unmountable (driveBindFailureHere, the
 // launch's own decision), then not_in_pool against the named pool.
 func (s *Server) meDrives(ctx context.Context, poolID string) ([]client.MeDrive, bool, string) {
-	profileMaxDriveMiB := 0
+	profileMaxDriveMiB, remoteDenied := 0, false
 	if ceiling, err := s.effectiveCeiling(ctx); err == nil {
 		profileMaxDriveMiB = ceiling.Limits.MaxDriveSizeMiB
+		// Drives mount only on remote-hosted runners, so a profile that denies them leaves a drive nowhere.
+		remoteDenied = slices.Contains(s.deniedPlacements(ctx, ceiling), types.PlacementRemote)
 	}
 	reach, err := s.reachableDrives(ctx, profileMaxDriveMiB)
 	if err != nil {
@@ -151,20 +154,20 @@ func (s *Server) meDrives(ctx context.Context, poolID string) ([]client.MeDrive,
 		if d.resolved != nil {
 			row.Writable, row.SizeMiB, row.Enforcement = d.resolved.Writable, d.resolved.SizeMiB, d.resolved.Enforcement
 		}
-		row.UnavailableReason = s.driveUnavailableHere(ctx, d, pool, checked)
+		row.UnavailableReason = s.driveUnavailableHere(ctx, d, pool, checked, remoteDenied)
 		out = append(out, row)
 	}
 	return out, checked, ""
 }
 
 // driveUnavailableHere is one catalogue row's unavailable_reason.
-func (s *Server) driveUnavailableHere(ctx context.Context, d reachableDrive, pool store.RunnerPoolCatalogueRow, checked bool) string {
+func (s *Server) driveUnavailableHere(ctx context.Context, d reachableDrive, pool store.RunnerPoolCatalogueRow, checked, remoteDenied bool) string {
 	switch {
 	case d.resolved != nil && d.resolved.Paused:
 		return client.MeDriveUnavailablePaused
 	case d.resolved == nil || d.target() == "" || s.driveBindFailureHere(ctx, *d.resolved) != nil:
 		return client.MeDriveUnavailableUnmountable
-	case checked && driveNotInPool(pool, d.winner.Drive):
+	case checked && (remoteDenied || driveNotInPool(pool, d.winner.Drive)):
 		return client.MeDriveUnavailableNotInPool
 	}
 	return ""

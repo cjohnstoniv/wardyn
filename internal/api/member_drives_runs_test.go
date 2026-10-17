@@ -168,7 +168,7 @@ func TestMemberDriveNeverOnSelfHosted(t *testing.T) {
 
 	srv, _ := multiDriveServer()
 	d := reachableDrive{owned: true, winner: store.UserDriveWinner{Drive: member}, resolved: &types.ResolvedDrive{Drive: member, Writable: true}}
-	if got := srv.driveUnavailableHere(context.Background(), d, self, true); got != client.MeDriveUnavailableNotInPool {
+	if got := srv.driveUnavailableHere(context.Background(), d, self, true, false); got != client.MeDriveUnavailableNotInPool {
 		t.Errorf("catalogue on a self-hosted pool = %q, want not_in_pool", got)
 	}
 
