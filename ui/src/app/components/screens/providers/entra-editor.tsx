@@ -250,8 +250,9 @@ export function EntraEditor({
                 checked={cfg.runner_resident === true}
                 disabled={!operator}
                 label={E.RUNNER_TOGGLE}
-                // Off takes the sandbox switch with it: the server refuses the sandbox without the runner.
-                onChange={(on) => set(on ? { runner_resident: true } : { runner_resident: false, runner_resident_sandbox: false })}
+                // Off takes the sandbox switch with it (the server refuses the sandbox without the runner), and writes
+                // nothing rather than false: the stored document leaves both out, so an on-then-off stays clean.
+                onChange={(on) => set(on ? { runner_resident: true } : { runner_resident: undefined, runner_resident_sandbox: undefined })}
               />
               <span>
                 <span className="block text-body font-medium text-foreground">{E.RUNNER_TOGGLE}</span>
@@ -263,7 +264,7 @@ export function EntraEditor({
                 checked={cfg.runner_resident_sandbox === true}
                 disabled={!operator || cfg.runner_resident !== true}
                 label={E.SANDBOX_TOGGLE}
-                onChange={(on) => set({ runner_resident_sandbox: on })}
+                onChange={(on) => set({ runner_resident_sandbox: on ? true : undefined })}
               />
               <span>
                 <span className="block text-body font-medium text-foreground">{E.SANDBOX_TOGGLE}</span>

@@ -686,6 +686,29 @@ test.describe("providers — how people connect to Azure DevOps (#1428)", () => 
     await expect(runner).toHaveCount(0);
   });
 
+  test("turning the runner and sandbox switches on and off again leaves Providers clean", async ({ page }) => {
+    const minted = {
+      id: "azure_devops",
+      kind: "azure_devops",
+      base_urls: ["https://dev.azure.com/wardyn-e2e"],
+      lanes: ["entra"],
+      credential_source: "per_user",
+      entra: { tenant_id: ADO_TENANT, client_id: ADO_CLIENT, token_mode: "minted_pat", capability_ceiling: ["project_read", "code_read"], default_profile: ["code_read"] },
+    };
+    await spliceProviders(page, minted, (body) => ({ status: 200, json: { git: body.git, sources_no_longer_admitted: 0 } }));
+    await gotoProviders(page);
+    const row = page.getByTestId("provider-row-azure_devops");
+    const runner = row.getByRole("switch", { name: ADO_ENTRA_EDITOR.RUNNER_TOGGLE });
+    const sandbox = row.getByRole("switch", { name: ADO_ENTRA_EDITOR.SANDBOX_TOGGLE });
+    await runner.click();
+    await sandbox.click();
+    await expect(page.getByTestId("unsaved-marker")).toBeVisible();
+    await sandbox.click();
+    await runner.click();
+    await expect(sandbox).toBeDisabled();
+    await expect(page.getByTestId("unsaved-marker")).toHaveCount(0);
+  });
+
   test("the token choice: setup note, the organisation check, a lifespan refusal, the blocked banner, and a refused Save", async ({ page }) => {
     const minted = {
       id: "azure_devops",

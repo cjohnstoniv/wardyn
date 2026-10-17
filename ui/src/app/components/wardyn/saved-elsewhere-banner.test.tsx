@@ -65,7 +65,7 @@ describe("SavedElsewhereBanner", () => {
     expect(onDiscard).toHaveBeenCalledTimes(1);
   });
 
-  it("on a screen that already reloaded, says what it shows and offers Hide my copy, not a reload", async () => {
+  it("on a screen that already reloaded, says what it shows and offers Dismiss, not a reload", async () => {
     const onDiscard = vi.fn();
     render(<SavedElsewhereBanner reloaded documentText="{}" onDiscard={onDiscard} />);
     expect(screen.getByText(PROVIDERS_EXTRA.SAVED_ELSEWHERE_RELOADED_BODY)).toBeInTheDocument();

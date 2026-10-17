@@ -180,9 +180,22 @@ describe("EntraEditor", () => {
     expect(latest?.entra?.runner_resident_sandbox).toBe(true);
     // Off takes the sandbox switch with it: the server refuses the sandbox without the runner.
     await userEvent.click(screen.getByRole("switch", { name: E.RUNNER_TOGGLE }));
-    expect(latest?.entra?.runner_resident).toBe(false);
-    expect(latest?.entra?.runner_resident_sandbox).toBe(false);
+    expect(latest?.entra?.runner_resident).toBeUndefined();
+    expect(latest?.entra?.runner_resident_sandbox).toBeUndefined();
     expect(screen.getByRole("switch", { name: E.SANDBOX_TOGGLE })).toBeDisabled();
+  });
+
+  it("turning the runner and sandbox switches on and off again leaves the row as it was", async () => {
+    let latest: GitProvider | undefined;
+    const row = entraRow();
+    render(<Harness initial={row} onLatest={(r) => (latest = r)} />);
+    await userEvent.click(screen.getByRole("switch", { name: E.RUNNER_TOGGLE }));
+    await userEvent.click(screen.getByRole("switch", { name: E.SANDBOX_TOGGLE }));
+    await userEvent.click(screen.getByRole("switch", { name: E.SANDBOX_TOGGLE }));
+    expect(latest?.entra?.runner_resident_sandbox).toBeUndefined();
+    await userEvent.click(screen.getByRole("switch", { name: E.RUNNER_TOGGLE }));
+    expect(latest?.entra).toEqual(row.entra);
+    expect(JSON.stringify(latest?.entra)).toBe(JSON.stringify(row.entra));
   });
 
   it("offers neither runner switch on a row whose tokens the person pastes in", () => {

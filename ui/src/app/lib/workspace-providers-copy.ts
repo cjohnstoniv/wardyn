@@ -335,7 +335,7 @@ export const PROVIDERS_EXTRA = {
   // (Runner credentials): nothing is left to reload, so it says what the screen now holds.
   SAVED_ELSEWHERE_RELOADED_BODY:
     "Your copy is out of date, so saving it would overwrite their change. The screen now shows what they saved. Copy your edits somewhere safe, then make them again.",
-  DISCARD_RELOADED: "Hide my copy",
+  DISCARD_RELOADED: "Dismiss",
   // #460 (Q460-3): the 412 banner's FIRST control — reversed from #217's
   // "changed fields only" rule. It now copies the WHOLE document as the
   // editor holds it (saved-elsewhere-banner.tsx), so nothing typed is left
