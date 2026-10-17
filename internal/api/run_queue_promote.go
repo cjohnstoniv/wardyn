@@ -141,6 +141,17 @@ func (s *Server) queueRunnerFree(ctx context.Context, pool types.RunnerPool, lau
 	if ceiling, err := s.queueCeiling(ctx); err == nil {
 		in.ceiling = ceiling
 	}
+	org, err := ps.GetRunnerPoolOrgDefaults(ctx)
+	if err != nil {
+		return out, fmt.Errorf("read the organisation's runner pool defaults: %w", err)
+	}
+	requireRecording := org.Recording == types.RecordingRequired || row.Pool.Recording == types.RecordingRequired
+	// A required setting with no store has no room anywhere, and no runner coming online changes that, so
+	// it is said before any runner is looked at: the start would refuse recording_store_off.
+	if requireRecording && s.cfg.RecordingStore == nil {
+		out.wait = runnerpool.WaitRecordingStoreOff
+		return out, nil
+	}
 	targets, refusal := s.poolTargets(ctx, &req, ps, row)
 	if refusal != nil && refusal.err != nil {
 		// A read that failed says nothing about the runners: the run keeps its place with no wait recorded.
@@ -158,21 +169,12 @@ func (s *Server) queueRunnerFree(ctx context.Context, pool types.RunnerPool, lau
 	// Room is read here without a lock, by each runner's declared limits and In use, for the size the
 	// run would start with on that runner; the promotion holds that size to it again under the runner
 	// rows' locks, the person's own runners first.
-	org, err := ps.GetRunnerPoolOrgDefaults(ctx)
-	if err != nil {
-		return out, fmt.Errorf("read the organisation's runner pool defaults: %w", err)
-	}
 	fits, err := s.runnerFits(ctx)
 	if err != nil {
 		return out, err
 	}
 	demand := placementDemand{reqCC: in.reqCC, reqCCOK: in.reqCCOK, fits: fits,
-		requireRecording: org.Recording == types.RecordingRequired || row.Pool.Recording == types.RecordingRequired}
-	// A required setting with no store has no room anywhere: the start would refuse recording_store_off.
-	if demand.requireRecording && s.cfg.RecordingStore == nil {
-		out.wait = runnerpool.WaitRecordingStoreOff
-		return out, nil
-	}
+		requireRecording: requireRecording}
 	out.needs = map[string]types.RunnerAmounts{}
 	online := false
 	for _, t := range slices.Concat(kinds[types.PlacementLocal], kinds[types.PlacementRemote]) {

@@ -104,8 +104,9 @@ func appliedAmount(l types.EffectiveLimit, asked int, names map[types.LimitSourc
 // appliedPids is the process limit the run's source policy asked for held against the one it got after
 // the ceiling clamp. The pools fold no PIDs limit, so the cut is the ceiling's alone: the caller's
 // governance profile when its chain authored a limit, even one equal to the deployment's, else the
-// deployment (a profile with none inherits the deployment's, which is not the profile's). A profile used as the policy asks nothing of its own; a policy_overlay
-// that names resources asks through the overlaid spec, which is where the console's ask arrives.
+// deployment (a profile with none inherits the deployment's, which is not the profile's). A profile
+// used as the policy asks nothing of its own; a policy_overlay that names resources asks through the
+// overlaid spec, which is where the console's ask arrives.
 func appliedPids(source policySourceRecord, ceiling governanceCeiling, applied int) *client.AppliedAmount {
 	asked := 0
 	switch {

@@ -410,6 +410,17 @@ func TestPG_QueuedRunWaitsForTheRecordingStore(t *testing.T) {
 		t.Fatalf("with no recording store the run is %s %q with %d rows; want QUEUED waiting with runner_pool_recording_store_off",
 			got.State, got.StatusDetail, e.queueRows(waiting.ID))
 	}
+	// No runner can clear the store-off wait, so it does not give way to "no runner is online".
+	e.srv.bg.Wait()
+	wired := e.srv.cfg.Runner
+	e.srv.cfg.Runner = nil // the pool's executor is no longer configured: no usable runner
+	e.sweep()
+	if got := e.run(waiting.ID); got.StatusDetail != "queue: runner_pool_recording_store_off" {
+		t.Fatalf("with no store and no usable runner the run says %q; want runner_pool_recording_store_off", got.StatusDetail)
+	}
+	e.srv.bg.Wait()
+	e.srv.cfg.Runner = wired
+	e.srv.bg.Wait()
 	e.srv.cfg.RecordingStore = fs
 	e.sweep()
 	e.waitStarted(waiting.ID)

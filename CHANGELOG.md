@@ -8,6 +8,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+- The `412` the console's expected-principal check answers now carries the reason `expected_principal_mismatch`;
+  rc.3 sent `site_config_stale`.
+- A queued run under required recording, in an organisation that keeps no session recordings, waits with
+  `runner_pool_recording_store_off` instead of `runner_pool_no_runner_free`.
+
 ## [0.9.3-rc.3] — 2026-10-17
 
 Organisation runners and resident credentials: an organisation can run sandboxes on its own runner in a Kubernetes
@@ -83,11 +88,10 @@ what to set for the old behaviour.
   at 32, and its next save is refused until the value is lowered.
 - A run, or a save of `recording: required` (a pool, or the organisation's defaults), is refused `422`
   `recording_store_off` when the organisation keeps no session recordings and recording is required.
-  A run already waiting in that state says so (wait reason `runner_pool_recording_store_off`) instead of that no runner is online.
 - A kill whose teardown is incomplete still answers `500`, now with reason `internal_error`, and its `errors` field is
   an array of the failed step names instead of an object of step and error text. The text is in the `run.revoke`
   audit row; retry the kill.
-- The console's draft saves, the providers Saves among them, can now be refused `412` (`expected_principal_mismatch`) before
+- The console's draft saves, the providers Saves among them, can now be refused `412` (`site_config_stale`) before
   anything is written. Reload and retry. Writes without the console's header (the CLI, scripts) are unaffected.
 - A runner older than 0.9.3 is refused a run that needs a resident credential (`placement_credential`) and is not
   asked to retire a finished run's output. Upgrade runners after the organisation.
