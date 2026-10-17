@@ -115,7 +115,8 @@
 # docs/sdk.md 17760 adds 91 (0.9.3 lane C): recording required/preferred and not_recorded.
 # docs/sdk.md 17898 adds 138 over 17760, measured (0.9.3 ADO): ado_lane_declined on policy preview and the governance 405 line.
 # docs/sdk.md 17898 = 17760 + 138 (ADO), measured at the rc.2 merge.
-docs/sdk.md=17898 share=21
+# docs/sdk.md 17936 adds 38 (0.9.3 C2), measured: recording_off for a declining runner's run; the org-defaults PUT keeps an omitted recording.
+docs/sdk.md=17936 share=21
 # Runner admission adds 10 measured words for the two default-off/config-read refusal reasons.
 # Registration adds 65 measured words for five request/setup reasons and two shared placement refusals.
 # Combined runner registration, baseline and identity changes: measured docs/sdk.md 12463 prose words.

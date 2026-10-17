@@ -129,9 +129,28 @@ func (s *Server) refuseRecordingWithoutStore(w http.ResponseWriter, rec types.Re
 	return true
 }
 
+// refuseDeclinedUpload answers 409 recording_off to an upload for a run marked runner_declined unless
+// its runner records whatever the organisation asks (TargetFacts.RecordsUnasked), and reports whether
+// it did. A runner that takes the per-run flag and declined, or one that records nothing, wraps
+// nothing in wardyn-rec, so a cast for its run can only come from the sandbox; the mark stays. Only a
+// self-hosted runner can be that old, and one whose facts cannot be read now is refused too: the mark
+// is cleared only on the runner's own word.
+func (s *Server) refuseDeclinedUpload(w http.ResponseWriter, run types.AgentRun) bool {
+	if run.NotRecorded != types.NotRecordedRunnerDeclined {
+		return false
+	}
+	if run.RunnerID != nil {
+		if f, ok := s.runnerFacts(*run.RunnerID); ok && f.RecordsUnasked {
+			return false
+		}
+	}
+	writeErrorReason(w, http.StatusConflict, reasonRecordingOff, "this run's runner does not record it")
+	return true
+}
+
 // clearDeclinedOnUpload clears not_recorded: runner_declined once a cast for the run is stored: a
-// runner that records anyway (one older than per-run recording) proves the mark wrong. It reports
-// whether the mark was cleared, for the upload's audit row.
+// runner that records anyway (one older than per-run recording, refuseDeclinedUpload) proves the
+// mark wrong. It reports whether the mark was cleared, for the upload's audit row.
 func (s *Server) clearDeclinedOnUpload(ctx context.Context, run types.AgentRun) bool {
 	st, ok := s.cfg.Store.(interface {
 		ClearRunDeclined(context.Context, uuid.UUID) (bool, error)

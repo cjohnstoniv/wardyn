@@ -181,8 +181,8 @@ export const RUN_PLACEMENT = {
 /** Pending a mock round: the run's not_recorded, on the Identity card. */
 export const RUN_RECORDING = {
   LABEL: "Recording",
-  org_off: "Not recorded: this organisation keeps no recordings.",
-  runner_declined: "Not recorded: the runner does not record.",
+  org_off: "Not recorded; the organization kept no recordings when it started.",
+  runner_declined: "Not recorded by the runner; organization sessions are recorded.",
 } as const;
 
 export const RUN_SYNC = {

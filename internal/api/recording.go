@@ -214,6 +214,13 @@ func (s *Server) saveRecording(w http.ResponseWriter, r *http.Request, part int)
 		return
 	}
 
+	if s.refuseDeclinedUpload(w, run) {
+		runID := claims.RunID
+		s.recordAudit(r.Context(), s.auditEvent(&runID, types.ActorAgent, claims.SPIFFEID, "recording.upload",
+			runID.String(), "failure", mustJSON(labelRecordingEvidence(run, map[string]any{"part": part, "reason": reasonRecordingOff}))))
+		return
+	}
+
 	saveErr := s.storeUpload(w, r, run, claims.RunID, part)
 	cleared := false
 	if saveErr == nil {
