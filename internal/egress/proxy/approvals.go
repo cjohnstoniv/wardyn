@@ -503,7 +503,7 @@ type egressScope struct {
 	Host string `json:"host"`
 	Mode string `json:"mode,omitempty"`
 	// HoldSeconds is the hold this proxy resolved, in whole seconds, stamped for a wait_for_review run so the
-	// console reports a hold for as long as the proxy holds it, not for the default 30 s.
+	// console shows a hold for as long as the proxy holds it, not for the default 30 s.
 	HoldSeconds int `json:"hold_seconds,omitempty"`
 }
 
