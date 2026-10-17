@@ -255,6 +255,34 @@ describe("RunnerCredentials — save", () => {
   });
 });
 
+describe("RunnerCredentials — a stale save", () => {
+  const RAW = "If-Match does not match the current credential delivery policy";
+
+  it("a 412 reloads the stored document and its ETag, offers the refused draft in the saved-elsewhere banner, and never shows the raw sentence", async () => {
+    // Someone else saved env_secret first: the reload after the 412 brings their document and its new ETag.
+    getMock
+      .mockResolvedValueOnce({ ...doc(), etag: '"read"' })
+      .mockResolvedValue({ ...doc({ env_secret: { mode: "runner_resident" } }), etag: '"theirs"' });
+    putMock.mockRejectedValueOnce(new HttpError(412, RAW));
+    const user = userEvent.setup();
+    renderTab();
+    await screen.findByRole("radiogroup", { name: DELIVERY.CLASS.api_key });
+    await user.click(option("api_key", "via_org"));
+    await user.click(screen.getByRole("button", { name: DELIVERY.SAVE }));
+    expect(await screen.findByText("Someone else saved this first")).toBeInTheDocument();
+    expect(screen.getByText(/"api_key"/)).toBeInTheDocument();
+    expect(screen.queryByText(new RegExp(RAW))).toBeNull();
+    expect(screen.queryByRole("heading", { name: DELIVERY.REFUSED_TITLE })).toBeNull();
+    // The next Save is against the reloaded ETag, not the refused one.
+    await waitFor(() => expect(getMock).toHaveBeenCalledTimes(2));
+    await screen.findByRole("radiogroup", { name: DELIVERY.CLASS.api_key });
+    await user.click(option("api_key", "via_org"));
+    await user.click(screen.getByRole("button", { name: DELIVERY.SAVE }));
+    await waitFor(() => expect(putMock).toHaveBeenCalledTimes(2));
+    expect(putMock.mock.calls.map((c) => c[1])).toEqual(['"read"', '"theirs"']);
+  });
+});
+
 describe("RunnerCredentials — loading", () => {
   it("a failed read says so and offers Retry, which reads again", async () => {
     getMock.mockRejectedValueOnce(new Error("boom"));

@@ -33,6 +33,7 @@ import {
 } from "../../../lib/types/credential-delivery";
 import { useDeferredBusy } from "../../../lib/use-deferred-busy";
 import { useUnsavedGuard } from "../../../lib/use-unsaved-guard";
+import { SavedElsewhereBanner } from "../../wardyn/saved-elsewhere-banner";
 import { Button } from "../../ui/button";
 import { Checkbox } from "../../ui/checkbox";
 import { Input } from "../../ui/input";
@@ -126,6 +127,9 @@ export function RunnerCredentials({ onSubmitted }: { onSubmitted?: () => void })
   const [runnersOn, setRunnersOn] = React.useState<boolean | null>(null);
   const [outcome, setOutcome] = React.useState<{ kind: "saved" | "submitted" } | { kind: "refused"; message: string } | null>(null);
   const [busy, setBusy] = React.useState(false);
+  // The draft as it stood when a save met a 412 (someone saved first): shown in the shared saved-elsewhere banner so
+  // the person can copy it, while the screen itself is reloaded to the stored document and its ETag.
+  const [savedElsewhere, setSavedElsewhere] = React.useState<string | null>(null);
   // The ETag of the document the draft was read from (or last saved), sent back as If-Match.
   const etagRef = React.useRef<string | null>(null);
   // The document last held for a second person: until the draft changes again it is not a new change.
@@ -171,8 +175,14 @@ export function RunnerCredentials({ onSubmitted }: { onSubmitted?: () => void })
       setStored(doc.policy ?? policy);
       etagRef.current = doc.etag ?? null;
       setOutcome({ kind: "saved" });
+      setSavedElsewhere(null);
     } catch (e) {
-      if (e instanceof PendingChangeError) {
+      if (e instanceof HttpError && e.status === 412) {
+        // Never the server's raw If-Match sentence: reload the stored document and its ETag (so the next Save is
+        // against what is stored now) and offer the draft that was refused.
+        setSavedElsewhere(JSON.stringify(policy, null, 2));
+        load();
+      } else if (e instanceof PendingChangeError) {
         setSubmittedJson(JSON.stringify(policy));
         setOutcome({ kind: "submitted" });
         onSubmitted?.();
@@ -230,6 +240,7 @@ export function RunnerCredentials({ onSubmitted }: { onSubmitted?: () => void })
           </div>
 
           <div className="flex flex-col gap-2 px-6 py-4">
+            {savedElsewhere !== null && <SavedElsewhereBanner documentText={savedElsewhere} onDiscard={() => setSavedElsewhere(null)} />}
             {outcome?.kind === "saved" && <Note role="status">{DELIVERY.SAVED}</Note>}
             {outcome?.kind === "submitted" && <SubmittedNote />}
             {outcome?.kind === "refused" && (
