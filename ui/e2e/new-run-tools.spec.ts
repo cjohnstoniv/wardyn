@@ -128,6 +128,22 @@ test.describe("New Run, step 5: setup items and blockers", () => {
     await expect(page.getByText(NR_TOOLS.SETUP_ALL_SET)).toBeVisible();
   });
 
+  test("a check refused for rate says it was not checked yet, not that it failed", async ({ page }) => {
+    await stub(page, false);
+    await openTools(page);
+    await expect(page.getByText(NR_TOOLS.SETUP_ALL_SET)).toBeVisible();
+
+    await page.route("**/api/v1/runs/policy-preview", (route) =>
+      route.fulfill({ status: 429, json: { error: "too many checks", reason: "rate_limited" } }),
+    );
+    await press(page, NR_TOOLS.HOST_CARD_BUTTON);
+    const dialog = page.getByRole("dialog", { name: NR_TOOLS.HOST_CARD_TITLE });
+    await dialog.getByLabel(NR_TOOLS.HOST_LABEL).fill("pypi.org");
+    await dialog.getByRole("button", { name: NR_TOOLS.ADD_TO_RUN }).click();
+    await expect(page.getByText(NR_TOOLS.NOT_CHECKED)).toBeVisible();
+    await expect(page.getByRole("alert").filter({ hasText: "too many checks" })).toHaveCount(0);
+  });
+
   test("Add a secret with no saved secrets says so, and adds nothing (FR-0110)", async ({ page }) => {
     await stub(page, false);
     await page.route("**/api/v1/secrets", (route) => route.fulfill({ json: { names: [], mine: [] } }));

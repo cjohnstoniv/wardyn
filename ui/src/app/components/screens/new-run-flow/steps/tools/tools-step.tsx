@@ -10,6 +10,7 @@
 
 import * as React from "react";
 import { Button } from "../../../../ui/button";
+import { HttpError } from "../../../../../lib/api/core";
 import { useModelAccessDoor, useShellSetupStatus } from "../../../../wardyn/model-access-context";
 import { NR_SHARED } from "../../../../wardyn/copy/new-run/shared";
 import { NR_REVIEW } from "../../../../wardyn/copy/new-run/review";
@@ -53,12 +54,15 @@ function useAccess() {
   const last = React.useRef<{ access: AccessFacts; harnessSet?: HarnessSetFact; components: RunIntent["components"] } | undefined>(undefined);
   const answer = checks.preview.result?.access;
   const current = answer && withoutNamelessHarness(answer);
+  // A check refused for rate is not a failure of the run: the step was not checked yet, and says so.
+  const rateLimited = !current && checks.preview.error instanceof HttpError && checks.preview.error.status === 429;
   if (current) last.current = { access: current, harnessSet: checks.preview.result?.harness_set, components: draft.intent.components };
   return {
     access: current ?? last.current?.access, harnessSet: last.current?.harnessSet, answeredFor: last.current?.components, answered: checks.preview.current && !!current, recheck: checks.invalidateChecks,
     // The server refused or could not answer this body: the step has nothing true to list, and says so. It stays
     // up while the next check is out, so the button the person pressed is not replaced by an all-clear.
-    failure: !current && checks.preview.error ? checkFailureText(checks.preview.error) : null,
+    failure: !current && !rateLimited && checks.preview.error ? checkFailureText(checks.preview.error) : null,
+    notChecked: rateLimited,
     asking: checks.preview.busy,
     retry: checks.preview.retry,
     // The run's own Azure DevOps capabilities, as its policy resolves them.
@@ -68,7 +72,7 @@ function useAccess() {
 
 export function ToolsStep({ go }: NewRunScreenProps) {
   const draft = useNewRunDraft();
-  const { access, harnessSet, answered, answeredFor, recheck, adoCaps, failure, asking, retry } = useAccess();
+  const { access, harnessSet, answered, answeredFor, recheck, adoCaps, failure, notChecked, asking, retry } = useAccess();
   const { status } = useShellSetupStatus();
   const door = useModelAccessDoor();
   const ado = useAdoConnect();
@@ -126,6 +130,12 @@ export function ToolsStep({ go }: NewRunScreenProps) {
     >
       {failure === null ? (
         <>
+          {notChecked && (
+            <div className="flex flex-col items-start gap-2">
+              <p role="status" className="text-sm text-muted-foreground">{NR_TOOLS.NOT_CHECKED}</p>
+              <Button type="button" variant="outline" aria-busy={asking || undefined} aria-disabled={asking || undefined} onClick={() => { if (!asking) void retry(); }}>{NR_REVIEW.CHECK_AGAIN}</Button>
+            </div>
+          )}
           <AlreadyIncluded access={access} answered={answered} intent={draft.intent} names={names} providers={providers} />
           <HarnessSetup access={access} harnessSet={harnessSet} intent={draft.intent} answered={answered} names={names} onSignedIn={recheck} />
         </>
