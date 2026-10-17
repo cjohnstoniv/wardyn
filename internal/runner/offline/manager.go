@@ -561,10 +561,14 @@ func (m *Manager) ObserveProxies(ctx context.Context) error {
 		return nil
 	}
 	m.lastObserved = m.now()
+	// Every unretired run is listed, held ones included, so the substrate's per-tick checks (the
+	// name-reuse list, identity sampling) keep covering them; only open runs take an obligation.
 	var ids []uuid.UUID
+	open := map[uuid.UUID]bool{}
 	for _, id := range m.runIDs() {
-		if r := m.state.Runs[id]; !r.Retired && r.Ref != "" && r.ProxyExited == nil && r.ProxyStoppedAt == nil {
+		if r := m.state.Runs[id]; !r.Retired && r.Ref != "" {
 			ids = append(ids, id)
+			open[id] = r.ProxyExited == nil && r.ProxyStoppedAt == nil
 		}
 	}
 	obs := m.observer
@@ -578,7 +582,7 @@ func (m *Manager) ObserveProxies(ctx context.Context) error {
 		errs = append(errs, err)
 	}
 	for id, o := range seen {
-		if o.Exited() || o == runner.ProxyPendingPastStart {
+		if open[id] && (o.Exited() || o == runner.ProxyPendingPastStart) {
 			errs = append(errs, m.ProxyExited(id, string(o)))
 		}
 	}
@@ -673,13 +677,14 @@ func (m *Manager) SinkRunIDs() []uuid.UUID {
 	return ids
 }
 
-// EvidenceRunIDs lists the runs holding a substrate evidence record, for the relay's fence replay.
+// EvidenceRunIDs lists the unretired runs holding a substrate evidence record, for the relay's
+// fence replay: a fence is dropped with the run's offline state at retirement.
 func (m *Manager) EvidenceRunIDs() []uuid.UUID {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	var ids []uuid.UUID
 	for _, id := range m.runIDs() {
-		if len(m.state.Runs[id].Substrate) > 0 {
+		if r := m.state.Runs[id]; len(r.Substrate) > 0 && !r.Retired {
 			ids = append(ids, id)
 		}
 	}

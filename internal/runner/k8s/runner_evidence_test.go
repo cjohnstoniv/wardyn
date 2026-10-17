@@ -550,6 +550,12 @@ func TestRunnerEvaluateTiers(t *testing.T) {
 				p.OutOfService, p.Node.MachineID = true, "m9"
 				return &p
 			}},
+		{name: "unbound but not being deleted",
+			edit: func(_ *runEvidence, pe *podEvidence, pod *corev1.Pod, post *nodeHolder) *nodeHolder {
+				pe.NodeName, pod.Spec.NodeName = "", ""
+				pod.Status.Phase = corev1.PodPending
+				return nil
+			}},
 		{name: "deleted before binding", arm: armUnbound,
 			edit: func(_ *runEvidence, pe *podEvidence, pod *corev1.Pod, post *nodeHolder) *nodeHolder {
 				pe.NodeName, pod.Spec.NodeName = "", ""

@@ -129,6 +129,9 @@ type Config struct {
 	// Fence applies a persisted relay fence in the relay: closes the run's connections and refuses
 	// its proxy IP. Called after the fence is durable, before runnerd's first delete.
 	Fence func(runID uuid.UUID, proxyIP string)
+	// Unfence releases a fenced run's proxy IP once the proxy's witness is persisted: its termination
+	// is known, and CNIs hand freed pod IPs to new pods.
+	Unfence func(runID uuid.UUID, proxyIP string)
 	// IPFenced reports a proxy IP another run's fence refuses (Fable L5).
 	IPFenced func(ip string) bool
 	// Sink is runnerd's remote decision sink (design K1 §3.2, lane K9's contract). Runner mode
