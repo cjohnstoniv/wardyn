@@ -355,3 +355,52 @@ func TestRemoteCorruptSealedManifestIsRefused(t *testing.T) {
 		t.Fatal("corrupt sealed manifest accepted")
 	}
 }
+
+// TestRemoteSucceedOpensTheSpoolToANewProducer: a revived proxy is a new
+// instance. While the old producer holds a grant it is refused; once settled,
+// Succeed lets the new instance in from sequence 1, keeps the old records and
+// the pending loss, and the settled instance cannot take the spool back.
+func TestRemoteSucceedOpensTheSpoolToANewProducer(t *testing.T) {
+	ctx := context.Background()
+	s, _, id := testSpool(t)
+	acc, err := s.Accept(ctx, inst)
+	if err != nil {
+		t.Fatal(err)
+	}
+	produce(t, s, id, acc.Gen, 1, true)
+	if err := s.Succeed(ctx); !errors.Is(err, ErrProducer) {
+		t.Fatalf("succeed over a producer with a grant = %v, want ErrProducer", err)
+	}
+	if _, err := s.SettleLoss(ctx, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Succeed(ctx); err != nil {
+		t.Fatal(err)
+	}
+	const next = "fedcba9876543210fedcba9876543210"
+	acc, err = s.Accept(ctx, next)
+	if err != nil || acc.Seq != 0 || acc.Grant.Base != 0 {
+		t.Fatalf("new producer accept = %+v, %v; want a fresh producer at seq 0", acc, err)
+	}
+	d, fresh, err := s.Produce(ctx, Produced{Gen: acc.Gen, Instance: next, Seq: 1, Hash: hashOf(1), Admitted: true, Decision: decision(id)})
+	if err != nil || !fresh || d != Appended {
+		t.Fatalf("new producer seq 1 = %s %v %v", d, fresh, err)
+	}
+	if _, err := s.Accept(ctx, inst); !errors.Is(err, ErrProducer) {
+		t.Fatalf("settled instance reaccepted: %v", err)
+	}
+	if l := liability(t, s); l.PendingLoss == nil || l.Producer.Instance != next {
+		t.Fatalf("after succeed: %+v", l)
+	}
+	var hosts int
+	if err := s.Replay(ctx, func(_ context.Context, rows []Record) error {
+		for _, r := range rows {
+			if r.Decision.Request.Host == "example.test" {
+				hosts++
+			}
+		}
+		return nil
+	}); err != nil || hosts != 2 {
+		t.Fatalf("records from both producers = %d, %v; want 2", hosts, err)
+	}
+}

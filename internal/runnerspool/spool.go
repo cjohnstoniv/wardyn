@@ -540,8 +540,8 @@ type Session struct {
 }
 
 // Accept starts a session for instance at a new generation and, in the same
-// write, issues its grant or re-issues the outstanding one no lower. One
-// instance owns a spool for life; a settled producer is never reopened.
+// write, issues its grant or re-issues the outstanding one no lower. A settled
+// producer is never reopened; only Succeed opens the spool to a new instance.
 func (s *Spool) Accept(ctx context.Context, instance string) (out Session, err error) {
 	if !validInstance(instance) {
 		return out, ErrProducer

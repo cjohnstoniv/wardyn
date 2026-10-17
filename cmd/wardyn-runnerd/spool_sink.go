@@ -204,6 +204,33 @@ func (s *spoolSink) Register(runID uuid.UUID, keyHash [32]byte) error {
 	return nil
 }
 
+// Succeed hands a run to a new proxy under a new key (Docker runners): a
+// revive starts a new proxy process, a new producer. A run not registered yet
+// is registered. A registered run's producer must be settled (ProducerGone)
+// first, so the new producer never overlaps the old one; the old key stops
+// authenticating in the same step.
+func (s *spoolSink) Succeed(runID uuid.UUID, keyHash [32]byte) error {
+	s.mu.Lock()
+	r := s.runs[runID]
+	if r == nil {
+		s.mu.Unlock()
+		return s.Register(runID, keyHash)
+	}
+	defer s.mu.Unlock()
+	if r.writer != nil || r.sess != nil {
+		return fmt.Errorf("decision sink: run %s still has a live producer", runID)
+	}
+	w, err := r.spool.HoldWriter()
+	if err != nil {
+		return err
+	}
+	if err := r.spool.Succeed(context.Background()); err != nil {
+		return errors.Join(err, w.Close())
+	}
+	r.keyHash, r.writer, r.drained = keyHash, w, nil
+	return nil
+}
+
 // Serve accepts proxy sessions on ln until Close.
 func (s *spoolSink) Serve(ln net.Listener) error {
 	s.mu.Lock()
@@ -229,45 +256,54 @@ func (s *spoolSink) Serve(ln net.Listener) error {
 }
 
 // hello authenticates the first frame: the run is registered and sha256(key)
-// matches its stored hash, compared in constant time.
-func (s *spoolSink) hello(c *tls.Conn) (*sinkRun, string, error) {
+// matches its stored hash, compared in constant time. It returns the hash it
+// matched, which handle checks again at Accept (Succeed may replace it).
+func (s *spoolSink) hello(c *tls.Conn) (*sinkRun, [32]byte, string, error) {
 	_ = c.SetDeadline(time.Now().Add(sinkHelloTimeout))
 	if err := c.Handshake(); err != nil {
-		return nil, "", err
+		return nil, [32]byte{}, "", err
 	}
 	if c.ConnectionState().NegotiatedProtocol != proxy.SinkALPN {
-		return nil, "", errors.New("decision sink: wrong protocol")
+		return nil, [32]byte{}, "", errors.New("decision sink: wrong protocol")
 	}
 	f, err := proxy.ReadSinkFrame(c)
 	if err != nil {
-		return nil, "", err
+		return nil, [32]byte{}, "", err
 	}
 	key, kerr := hex.DecodeString(f.Key)
 	id, ierr := uuid.Parse(f.RunID)
 	s.mu.Lock()
 	r := s.runs[id]
-	s.mu.Unlock()
 	want := [32]byte{}
 	if r != nil {
 		want = r.keyHash
 	}
+	s.mu.Unlock()
 	got := sha256.Sum256(key)
 	match := subtle.ConstantTimeCompare(got[:], want[:]) == 1
 	if f.T != proxy.FrameHello || f.V != proxy.SinkVersion || kerr != nil || len(key) != 32 || ierr != nil || r == nil || !match {
-		return nil, "", errors.New("decision sink: hello refused")
+		return nil, [32]byte{}, "", errors.New("decision sink: hello refused")
 	}
-	return r, f.Instance, nil
+	return r, want, f.Instance, nil
 }
 
 func (s *spoolSink) handle(c *tls.Conn) {
 	defer c.Close()
-	r, instance, err := s.hello(c)
+	r, keyHash, instance, err := s.hello(c)
 	if err != nil {
 		return
 	}
 	ctx := context.Background()
-	// Accept persists the new generation and the grant before the reply.
+	// Accept persists the new generation and the grant before the reply. It runs
+	// under the sink's lock with the key checked again, so a hello that passed
+	// with a key Succeed has since replaced never claims the new producer's spool.
+	s.mu.Lock()
+	if s.runs[r.id] != r || r.keyHash != keyHash {
+		s.mu.Unlock()
+		return
+	}
 	acc, err := r.spool.Accept(ctx, instance)
+	s.mu.Unlock()
 	if err != nil {
 		slog.Warn("runnerd: decision sink session refused", slog.String("run_id", r.id.String()), slog.Any("err", err))
 		return
