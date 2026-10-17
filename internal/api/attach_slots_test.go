@@ -331,6 +331,45 @@ func TestAttachSlots_TicketMintNamesTheCap(t *testing.T) {
 	}
 }
 
+// TestAttachSlots_TicketMintAppliesThePerPrincipalCap: on an operator-owned run a principal at seven of
+// the eight sessions is refused at the mint, not handed a ticket the upgrade would then refuse; another
+// principal's slots do not count against it.
+func TestAttachSlots_TicketMintAppliesThePerPrincipalCap(t *testing.T) {
+	ast := newAuthzStore()
+	h := newHarness(t)
+	cfg := baseTestConfig(h, ast)
+	cfg.Runner = &fakeRunner{}
+	srv := New(cfg)
+	run := types.AgentRun{ID: uuid.New(), CreatedBy: "alice", OperatorOwned: true, State: types.RunRunning, SandboxRef: "sbx-1"}
+	ast.mu.Lock()
+	ast.runs[run.ID] = run
+	ast.mu.Unlock()
+	mint := func() *httptest.ResponseRecorder {
+		return do(t, srv, http.MethodPost, "/api/v1/runs/"+run.ID.String()+"/attach-ticket", adminToken, "")
+	}
+	for range maxAttachSessionsPerPrincipal {
+		if _, ok := srv.reserveAttachSlot(run, adminTokenPrincipal); !ok {
+			t.Fatal("a slot below the per-principal cap was refused")
+		}
+	}
+	if w := mint(); w.Code != http.StatusServiceUnavailable || !strings.Contains(w.Body.String(), reasonAttachSessionCapReached) {
+		t.Fatalf("mint at the principal's cap = %d %s, want 503 %s", w.Code, w.Body, reasonAttachSessionCapReached)
+	}
+	// Seven held by someone else leave this principal room on the run.
+	other := types.AgentRun{ID: uuid.New(), CreatedBy: "alice", OperatorOwned: true, State: types.RunRunning, SandboxRef: "sbx-2"}
+	ast.mu.Lock()
+	ast.runs[other.ID] = other
+	ast.mu.Unlock()
+	for range maxAttachSessionsPerPrincipal {
+		if _, ok := srv.reserveAttachSlot(other, "bob@example.com"); !ok {
+			t.Fatal("another principal was refused below its cap")
+		}
+	}
+	if w := do(t, srv, http.MethodPost, "/api/v1/runs/"+other.ID.String()+"/attach-ticket", adminToken, ""); w.Code != http.StatusOK {
+		t.Fatalf("mint with room for this principal = %d %s, want 200", w.Code, w.Body)
+	}
+}
+
 // TestAttachSlots_OnePrincipalCannotFillARunMorePrincipalsCanEnter: on an operator-owned run one
 // principal stops at seven of the eight sessions and is refused the eighth like a full run, so another
 // principal still gets in; the run cap holds for everyone. A personal run admits only its owner's own

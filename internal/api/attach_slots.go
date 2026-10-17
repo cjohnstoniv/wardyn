@@ -57,7 +57,7 @@ func (s *Server) reserveAttachSlot(run types.AgentRun, principal string) (releas
 	}
 	key := attachPrincipalKey{run.ID, principal}
 	perPrincipal := multiPrincipalAttach(run)
-	if reg.slots[run.ID] >= maxAttachSessionsPerRun || (perPrincipal && reg.principalSlots[key] >= maxAttachSessionsPerPrincipal) {
+	if reg.attachFullLocked(run, principal) {
 		return nil, false
 	}
 	reg.slots[run.ID]++
@@ -81,15 +81,22 @@ func (s *Server) reserveAttachSlot(run types.AgentRun, principal string) (releas
 	}, true
 }
 
-// attachSlotsFull reports whether runID is at maxAttachSessionsPerRun on this replica. It reserves
-// nothing: the ticket mint asks it so the person is told the cap in a response they can read (a
-// failed WebSocket handshake shows a browser no status or body), and the upgrade still takes the
+// attachFullLocked is the one refusal rule: run is at maxAttachSessionsPerRun or, on a run more than
+// one principal can attach to, principal is at maxAttachSessionsPerPrincipal. reg.mu is held.
+func (reg *attachHolderRegistry) attachFullLocked(run types.AgentRun, principal string) bool {
+	return reg.slots[run.ID] >= maxAttachSessionsPerRun ||
+		(multiPrincipalAttach(run) && reg.principalSlots[attachPrincipalKey{run.ID, principal}] >= maxAttachSessionsPerPrincipal)
+}
+
+// attachSlotsFull reports whether reserveAttachSlot(run, principal) would refuse on this replica. It
+// reserves nothing: the ticket mint asks it so the person is told the cap in a response they can read
+// (a failed WebSocket handshake shows a browser no status or body), and the upgrade still takes the
 // slot itself.
-func (s *Server) attachSlotsFull(runID uuid.UUID) bool {
+func (s *Server) attachSlotsFull(run types.AgentRun, principal string) bool {
 	reg := s.attachRegistry()
 	reg.mu.Lock()
 	defer reg.mu.Unlock()
-	return reg.slots[runID] >= maxAttachSessionsPerRun
+	return reg.attachFullLocked(run, principal)
 }
 
 // webAttachSlot is reserveAttachSlot for the web lane, before the upgrade: a refusal is answered
