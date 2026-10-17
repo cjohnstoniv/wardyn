@@ -126,10 +126,11 @@ func short(t *testing.T) context.Context {
 
 func refusedTotal(rs *remoteSink) uint64 { rs.mu.Lock(); defer rs.mu.Unlock(); return rs.refused }
 
-// TestRemoteSink_GrantSurvivesTransportLoss (H1, design Q5 and §6.2): after a
-// transport loss the proxy keeps enforcing on its outstanding grant; once that
-// is used up it refuses new requests uncounted (no live session) and keeps the
-// run; the reconnect's grant restores credit.
+// TestRemoteSink_GrantSurvivesTransportLoss (H1, M4, design Q5 and §6.2):
+// after a transport loss the proxy keeps enforcing on its outstanding grant;
+// once that is used up it refuses new requests, counted (a held, exhausted
+// grant) and forwarded on the reconnect, and keeps the run; the reconnect's
+// grant restores credit.
 func TestRemoteSink_GrantSurvivesTransportLoss(t *testing.T) {
 	rs, f := startedSink(t)
 	c := accept(t, rs, f.next(), 1, 0, 3, 1<<20)
@@ -151,10 +152,13 @@ func TestRemoteSink_GrantSurvivesTransportLoss(t *testing.T) {
 	rs.mu.Lock()
 	closed := rs.closed
 	rs.mu.Unlock()
-	if refusedTotal(rs) != 0 || closed {
-		t.Fatalf("refused=%d closed=%v: an outage refusal is not a full spool, and the run is kept", refusedTotal(rs), closed)
+	if refusedTotal(rs) != 1 || closed {
+		t.Fatalf("refused=%d closed=%v: an outage refusal past the held grant counts once, and the run is kept", refusedTotal(rs), closed)
 	}
-	accept(t, rs, next, 2, 0, 10, 1<<20)
+	next = accept(t, rs, next, 2, 0, 10, 1<<20)
+	if r := readUntil(t, next, FrameRefused); r.Total != 1 || r.Gen != 2 {
+		t.Fatalf("refused total after the reconnect = %+v", r)
+	}
 	if _, err := rs.reserve(t.Context(), 100); err != nil {
 		t.Fatalf("reserve after the reconnect grant: %v", err)
 	}
@@ -194,6 +198,25 @@ func TestRemoteSink_RefusalsCountedOnlyWhenFull(t *testing.T) {
 	rs.emit(egress.DecisionLog{Decision: egress.Deny})
 	if refusedTotal(rs) != 1 {
 		t.Fatalf("refused=%d: a drain refusal or a post-drain emit was counted", refusedTotal(rs))
+	}
+}
+
+// TestRemoteSink_CancelledAdmissionUncounted (M5): a client that cancels its
+// admission against an exhausted grant is not a Drop; a deadline that expires
+// on the exhausted grant is.
+func TestRemoteSink_CancelledAdmissionUncounted(t *testing.T) {
+	rs, f := startedSink(t)
+	accept(t, rs, f.next(), 1, 0, 1, 1<<20)
+	if _, err := rs.reserve(t.Context(), 100); err != nil {
+		t.Fatal(err)
+	}
+	gone, cancel := context.WithCancel(t.Context())
+	cancel()
+	if _, err := rs.reserve(gone, 100); !errors.Is(err, context.Canceled) || refusedTotal(rs) != 0 {
+		t.Fatalf("cancelled admission: err=%v refused=%d, want Canceled uncounted", err, refusedTotal(rs))
+	}
+	if _, err := rs.reserve(short(t), 100); !errors.Is(err, runnerspool.ErrFull) || refusedTotal(rs) != 1 {
+		t.Fatalf("expired admission on an exhausted grant: err=%v refused=%d, want ErrFull counted", err, refusedTotal(rs))
 	}
 }
 
