@@ -7,7 +7,7 @@
 // mp-packet-B.html draws, every visible string asserted against
 // lib/model-providers-copy.ts (itself pinned to
 // docs/design/model-providers-canon.md by model-providers-copy.test.ts).
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { toast } from "sonner";
@@ -16,12 +16,25 @@ import type { ModelProvidersList } from "../../../lib/api/model-providers";
 import { T } from "../../../lib/integrations";
 import { MODEL_PROVIDERS, PROVIDER_EDITOR as E, PROVIDERS } from "../../../lib/model-providers-copy";
 import type { ModelProvider } from "../../../lib/types/site";
-import { AGENTS, AGENTS_EXTRA, PROVIDERS as WS_PROVIDERS } from "../../../lib/workspace-providers-copy";
+import { AGENTS, AGENTS_EXTRA, PROVIDERS as WS_PROVIDERS, PROVIDERS_EXTRA as WS_PROVIDERS_EXTRA } from "../../../lib/workspace-providers-copy";
 import { ModelProviderEditor, type ModelProviderEditorProps } from "./model-provider-editor";
 import { addressChanged, providerIdFrom } from "./model-provider-draft";
 import { setField } from "../../../../test/set-field";
+import { OperatorProvider } from "../../wardyn/operator-context";
 
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
+
+const whoamiMock = vi.fn();
+vi.mock("../../../lib/api/health", async () => {
+  const actual = await vi.importActual<typeof import("../../../lib/api/health")>("../../../lib/api/health");
+  return { ...actual, health: { ...actual.health, whoami: (...a: unknown[]) => whoamiMock(...a) } };
+});
+
+const releaseMock = vi.fn();
+vi.mock("../../../lib/use-unsaved-guard", async () => {
+  const actual = await vi.importActual<typeof import("../../../lib/use-unsaved-guard")>("../../../lib/use-unsaved-guard");
+  return { ...actual, releaseUnloadGuard: (...a: unknown[]) => releaseMock(...a) };
+});
 
 const putMock = vi.fn();
 vi.mock("../../../lib/api/model-providers", () => ({
@@ -82,14 +95,16 @@ function renderEditor(props: Partial<ModelProviderEditorProps> = {}) {
   const onSaved = vi.fn();
   const user = userEvent.setup();
   render(
-    <ModelProviderEditor
-      list={list()}
-      editing={null}
-      harnesses={HARNESSES}
-      onClose={onClose}
-      onSaved={onSaved}
-      {...props}
-    />,
+    <OperatorProvider operator principal="alice">
+      <ModelProviderEditor
+        list={list()}
+        editing={null}
+        harnesses={HARNESSES}
+        onClose={onClose}
+        onSaved={onSaved}
+        {...props}
+      />
+    </OperatorProvider>,
   );
   return { onClose, onSaved, user };
 }
@@ -99,7 +114,13 @@ const alert = () => screen.getByRole("alertdialog");
 const box = (name: string) => screen.getByRole("checkbox", { name });
 const putBody = () => putMock.mock.calls[0][0] as { providers: ModelProvider[] };
 
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
 beforeEach(() => {
+  whoamiMock.mockReset();
+  releaseMock.mockReset();
   putMock.mockReset().mockImplementation((doc) => Promise.resolve({ providers: doc, etag: '"e2"' }));
   vi.mocked(toast.success).mockReset();
   vi.mocked(toast.error).mockReset();
@@ -469,6 +490,69 @@ describe("E6 — save refused", () => {
     const { user } = renderEditor({ editing: CORP, list: list([CORP]) });
     await user.click(screen.getByRole("button", { name: E.SAVE }));
     expect(await screen.findByText(WS_PROVIDERS.SAVED_ELSEWHERE_TITLE)).toBeInTheDocument();
+  });
+
+  it("Discard mine and reload: a different person reloads the page, not just the list", async () => {
+    const assign = vi.fn();
+    const reload = vi.fn();
+    vi.spyOn(window, "location", "get").mockReturnValue({ ...window.location, assign, reload });
+    putMock.mockRejectedValue(new HttpError(412, "model providers changed since you loaded them — reload and retry"));
+    whoamiMock.mockResolvedValue({ principal: "someone-else" });
+    const { user, onSaved } = renderEditor({ editing: CORP, list: list([CORP]) });
+    await user.click(screen.getByRole("button", { name: E.SAVE }));
+    await user.click(await screen.findByRole("button", { name: WS_PROVIDERS_EXTRA.DISCARD_AND_RELOAD }));
+    await waitFor(() => expect(whoamiMock).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(assign).toHaveBeenCalledTimes(1));
+    expect(releaseMock).toHaveBeenCalledWith(true);
+    expect(reload).not.toHaveBeenCalled();
+    expect(onSaved).not.toHaveBeenCalled();
+  });
+
+  it("Discard mine and reload: a different person on a page with a fragment reloads it in place", async () => {
+    const assign = vi.fn();
+    const reload = vi.fn();
+    vi.spyOn(window, "location", "get").mockReturnValue({ ...window.location, hash: "#top", assign, reload });
+    putMock.mockRejectedValue(new HttpError(412, "model providers changed since you loaded them — reload and retry"));
+    whoamiMock.mockResolvedValue({ principal: "someone-else" });
+    const { user, onSaved } = renderEditor({ editing: CORP, list: list([CORP]) });
+    await user.click(screen.getByRole("button", { name: E.SAVE }));
+    await user.click(await screen.findByRole("button", { name: WS_PROVIDERS_EXTRA.DISCARD_AND_RELOAD }));
+    await waitFor(() => expect(whoamiMock).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(reload).toHaveBeenCalledTimes(1));
+    expect(assign).not.toHaveBeenCalled();
+    expect(onSaved).not.toHaveBeenCalled();
+  });
+
+  it("Discard mine and reload: the same person reloads only the list", async () => {
+    const assign = vi.fn();
+    const reload = vi.fn();
+    vi.spyOn(window, "location", "get").mockReturnValue({ ...window.location, assign, reload });
+    putMock.mockRejectedValue(new HttpError(412, "model providers changed since you loaded them — reload and retry"));
+    whoamiMock.mockResolvedValue({ principal: "alice" });
+    const { user, onSaved } = renderEditor({ editing: CORP, list: list([CORP]) });
+    await user.click(screen.getByRole("button", { name: E.SAVE }));
+    await user.click(await screen.findByRole("button", { name: WS_PROVIDERS_EXTRA.DISCARD_AND_RELOAD }));
+    await waitFor(() => expect(whoamiMock).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(onSaved).toHaveBeenCalledTimes(1));
+    expect(assign).not.toHaveBeenCalled();
+    expect(reload).not.toHaveBeenCalled();
+    expect(releaseMock).not.toHaveBeenCalled();
+  });
+
+  it("Discard mine and reload: no answer from /me reloads only the list", async () => {
+    const assign = vi.fn();
+    const reload = vi.fn();
+    vi.spyOn(window, "location", "get").mockReturnValue({ ...window.location, assign, reload });
+    putMock.mockRejectedValue(new HttpError(412, "model providers changed since you loaded them — reload and retry"));
+    whoamiMock.mockResolvedValue(null);
+    const { user, onSaved } = renderEditor({ editing: CORP, list: list([CORP]) });
+    await user.click(screen.getByRole("button", { name: E.SAVE }));
+    await user.click(await screen.findByRole("button", { name: WS_PROVIDERS_EXTRA.DISCARD_AND_RELOAD }));
+    await waitFor(() => expect(whoamiMock).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(onSaved).toHaveBeenCalledTimes(1));
+    expect(assign).not.toHaveBeenCalled();
+    expect(reload).not.toHaveBeenCalled();
+    expect(releaseMock).not.toHaveBeenCalled();
   });
 });
 

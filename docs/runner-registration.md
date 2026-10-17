@@ -124,6 +124,13 @@ Every runner declares its limits: Runs at once (`runs_at_once`, 1 to 64 for a se
 
 Migration `0144_runner_minted_by` records on each runner who minted the registration token it redeemed, so the owner's list can tell a token they made from one an administrator made for them.
 
+## Runner and organisation versions
+
+- The runner and the organisation speak one wire protocol version, and a session is refused outright when they differ. No release so far has changed it, so a release does not by itself end a session.
+- A newer feature is negotiated: the runner states what it serves in its `caps` event, and the organisation sends it only what the runner said. An older runner therefore keeps working with fewer features; for example it keeps every run's output, because `caps.retire` is absent and the organisation queues no `retire_run` for it.
+- The organisation ignores a field in `caps` it does not know, but it refuses an event kind it does not know. A runner newer than its organisation can therefore be refused when it sends a kind the organisation lacks, and a new runner's proxy settings may not suit an older proxy image. Upgrade the organisation first, then its runners.
+- After a runner is downgraded to a release without `caps.retire`, a `retire_run` that was already deferred for it stays idle until the runner is upgraded again. The run's output and spool are kept meanwhile.
+
 ## Serving
 
 `wardyn-runnerd setup` starts `serve` for you. To run it by hand, build `wardyn-runnerd` with the `docker` tag, then connect the registered identity:
@@ -168,7 +175,7 @@ The service is per user, not a root service: the runner identity sits in the per
 - Setup checks the inputs, Docker and the user service manager, and proves with a probe container that a proxy on this engine reaches the relay ([the startup check](#the-startup-reachability-check)). With no image the engine has yet, that proof waits for the organisation's answer, after the token is spent; a refusal then needs no new token.
 - It accepts `--name`, `--proxy-image`, `--relay-listen`, `--relay-host-target`, `--internal-network`, `--trusted-ca-file` and the limit flags of `register`. At a terminal it asks for each limit not given; with output sent to a file it asks nothing.
 - A release binary uses `ghcr.io/cjohnstoniv/wardyn-proxy:<version>` without pinning it, so replacing the binary moves the proxy too. A named image is pinned and kept by a rerun. Installs from before 0.9.3 pinned the release image: run setup once after replacing the binary. A development build without `--proxy-image` uses the organisation's answer and refuses when there is none.
-- Rolling a runner back to 0.9.2 after it has retired a run needs its state directory cleared, so it registers and is claimed again; rolling back from a later release to 0.9.3 keeps its identity and run state, but let the runner reconnect until its audit spool is empty first: a spooled decision written by a later release may fail 0.9.3's integrity check.
+- Rolling a runner back to 0.9.2 after it ran anything under 0.9.3 needs its state directory cleared (0.9.3 records a captured-output flag for an ordinary run, which 0.9.2 refuses to read), so it registers and is claimed again; rolling back from a later release to 0.9.3 keeps its identity and run state, but let the runner reconnect until its audit spool is empty first: a spooled decision written by a later release may fail 0.9.3's integrity check.
 - A claim that fails after the service started says "the runner is installed and running but not claimed into place" and names `wardyn runner claim --pool <name>` to finish.
 - `deploy/runner/install.sh` is a thin wrapper: it finds a binary (`--binary`, beside the script, or on `PATH`), runs a private executable copy and passes every other argument to `setup`. It ships in `wardyn-runner-units.tar.gz`.
 

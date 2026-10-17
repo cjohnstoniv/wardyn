@@ -5,11 +5,12 @@ package api
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 
 	"github.com/google/uuid"
 
-	"github.com/cjohnstoniv/wardyn/internal/types"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 )
 
 // sweepRunnerOrphansOnReady sweeps one runner's orphans the moment its session is READY, so a run
@@ -22,27 +23,21 @@ import (
 // runs are read only after the runner lists its candidates, so any run whose objects it listed was
 // already inserted: "no row" is a leak, never a run created after the read.
 func (s *Server) sweepRunnerOrphansOnReady(ctx context.Context, runnerID uuid.UUID, sub SandboxOrphanSweeper) {
-	var byID map[uuid.UUID]types.AgentRun
 	var loadErr error
 	isOrphan := func(runID uuid.UUID) bool {
-		if byID == nil && loadErr == nil {
-			var runs []types.AgentRun
-			if runs, loadErr = s.cfg.Store.ListRuns(ctx); loadErr == nil {
-				byID = make(map[uuid.UUID]types.AgentRun, len(runs))
-				for _, run := range runs {
-					byID[run.ID] = run
-				}
-			}
+		run, err := s.cfg.Store.GetRun(ctx, runID)
+		if errors.Is(err, store.ErrNotFound) {
+			return true
 		}
-		if loadErr != nil {
+		if err != nil {
+			loadErr = err
 			return false
 		}
-		run, known := byID[runID]
-		return !known || isTerminalRunState(run.State)
+		return isTerminalRunState(run.State)
 	}
 	swept, err := sub.SweepOrphanedSandboxes(ctx, 0, isOrphan)
 	if loadErr != nil {
-		slog.WarnContext(ctx, "wardynd: runner orphan sweep on reconnect: list runs", slog.String("runner_id", runnerID.String()), slog.Any("err", loadErr))
+		slog.WarnContext(ctx, "wardynd: runner orphan sweep on reconnect: read run", slog.String("runner_id", runnerID.String()), slog.Any("err", loadErr))
 	}
 	if err != nil {
 		slog.WarnContext(ctx, "wardynd: runner orphan sweep on reconnect", slog.String("runner_id", runnerID.String()), slog.Any("err", err))

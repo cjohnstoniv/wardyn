@@ -211,6 +211,7 @@ func (q queuedCreate) answer(s *Server, w http.ResponseWriter, r *http.Request) 
 		writeServerError(w, r, "create run", err)
 		return
 	}
+	s.recordPolicyApplyAudits(ctx, q.f.source)
 	abort := func(hint string) { s.abortQueuedRun(ctx, created.ID, hint) }
 	if err := s.persistRunComponents(ctx, created.ID, q.f.comps); err != nil {
 		abort(createRunComponentsAbortHint)

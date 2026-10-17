@@ -208,3 +208,19 @@ func TestRunOutput_UnpooledRunOnRecordedK8sReadsTheRecording(t *testing.T) {
 		t.Fatalf("read = %d %+v, want 200 with the recording's bytes", code, got)
 	}
 }
+
+// A torn-down run's ref no longer names its executor: its class's executor answers, so a Docker run
+// keeps its tail. A runner's ref the deployment cannot name is unknown to the orchestrator and takes
+// the deployment's merged answer, here the recorder's.
+func TestRunOutput_UnresolvedRefFallsBackByKind(t *testing.T) {
+	f, _, _ := unpooledDockerAndRecordedK8s(t, types.CC1)
+	run := f.run
+	run.SandboxRef = "torn-down-ref"
+	if u, known := f.srv.execOutputCapture(t.Context(), run); !known || u {
+		t.Fatalf("torn-down Docker run = (%v, %v), want captured: its class lands on Docker", u, known)
+	}
+	run.SandboxRef = substrate.RemotePrefix + uuid.NewString() + "/sandbox"
+	if u, known := f.srv.execOutputCapture(t.Context(), run); !known || !u {
+		t.Fatalf("unnamed runner ref = (%v, %v), want the merged answer: uncaptured", u, known)
+	}
+}

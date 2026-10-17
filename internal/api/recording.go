@@ -211,7 +211,9 @@ func (s *Server) saveRecording(w http.ResponseWriter, r *http.Request, part int)
 	if !ok && s.cfg.Store != nil {
 		var err error
 		if run, err = s.cfg.Store.GetRun(r.Context(), claims.RunID); err != nil {
-			writeServerError(w, r, "load run", err)
+			if !notFoundIf(w, err, "run", reasonRunNotFound) {
+				writeServerError(w, r, "load run", err)
+			}
 			return
 		}
 	}

@@ -8,10 +8,32 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+### Changed
+
+- A run on a laptop runner whose proxy image is older than the runner now fails with the fix in its reason: the
+  error names the setting the proxy refused and says to upgrade the organisation before its runners, or to pin a proxy
+  image at least as new as the runner, followed by the proxy's own output.
 - The `412` the console's expected-principal check answers now carries the reason `expected_principal_mismatch`;
   rc.3 sent `site_config_stale`.
 - A queued run under required recording, in an organisation that keeps no session recordings, waits with
   `runner_pool_recording_store_off` instead of `runner_pool_no_runner_free`.
+
+### Corrections to earlier notes
+
+- Since 0.9.0, the launch warning that a run's managed settings were not delivered is built from the runner the run is placed on and covers every harness in the run, so it appears for a secondary Claude Code harness and a runner-placed run, and no longer appears for a run that is refused over its tool rules. Earlier notes did not say so.
+
+### Fixed
+
+- "Discard mine and reload" on the Providers and Agents screens and the model provider editor now also re-reads who you are signed in as and reloads the page when another tab switched the session to someone else, so the page no longer keeps refusing every save as the previous person.
+- The run page's "Not recorded by the runner" note no longer claims the organization's sessions are recorded now.
+- A forward-lane request the egress audit cannot record (a full decision spool, or a record too large) now carries
+  `X-Wardyn-Reason` on its plain-text refusal, as the other refusal shapes do.
+- A runner's reconnect reads only the runs its leftover objects name, not every run in the organisation. Its decision
+  sink refuses a session whose spool lock does not free within 10 s instead of stalling every other run's session.
+- A clone failure that points at a declined Azure DevOps credential names the repository whose clone failed.
+- A kill a runner deferred is asked again once that runner completes its next inventory, and the run's fence lifts when
+  the runner confirms it; before, the deferred answer stayed the run's last word until someone killed the run again.
+- A policy apply is audited together with the run's creation, so a refused launch leaves no policy apply row, and a recording upload for a run that no longer exists answers 404.
 
 ## [0.9.3-rc.3] — 2026-10-17
 

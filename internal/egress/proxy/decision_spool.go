@@ -301,8 +301,8 @@ func (p *Proxy) recordTooLarge(r *http.Request, mitmHost string) {
 		Path: clip(path), Time: p.now()}, egress.Deny, ruleSourceAuditRecordTooLarge))
 }
 
-// refuseUnaudited answers a request the audit could not record, keeping its
-// status: plain text on the forward lane, the SDK's error shape on a brokered
+// refuseUnaudited answers a request the audit could not record with its status
+// and X-Wardyn-Reason: plain text on the forward lane, the SDK's error shape on a brokered
 // route or an LLM or AWS host. ServeHTTP admits before it routes, so a
 // brokered route is told by its path here.
 func (p *Proxy) refuseUnaudited(w http.ResponseWriter, r *http.Request, mitmHost string, status int, reason, plainMsg, sentence string) {
@@ -321,6 +321,7 @@ func (p *Proxy) refuseUnaudited(w http.ResponseWriter, r *http.Request, mitmHost
 		shape = routeShape(shapeOpenAI, host)
 	}
 	if shape == shapePlain {
+		w.Header().Set(egressHeaderWardynReason, reason) // as writeProviderError sets it on the other shapes
 		http.Error(w, plainMsg, status)
 		return
 	}

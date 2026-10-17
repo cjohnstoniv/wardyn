@@ -20,6 +20,9 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=lib/common.sh
 source "$ROOT/scripts/lib/common.sh"
+# PREFLIGHT_SRC: where lane-preflight.sh and its lib/ come from. scripts/test-preflight-mutations.sh points it
+# at mutated copies to prove each case below goes red when the behaviour it pins is broken.
+SRC="${PREFLIGHT_SRC:-$ROOT/scripts}"
 
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
@@ -29,8 +32,8 @@ WORK="$TMP/repo"
 BIN="$TMP/bin"
 LOG="$TMP/calls.log"
 mkdir -p "$WORK/scripts/lib" "$BIN" "$WORK/ui/src/app"
-cp "$ROOT/scripts/lane-preflight.sh" "$WORK/scripts/"
-cp "$ROOT/scripts/lib/common.sh" "$WORK/scripts/lib/"
+cp "$SRC/lane-preflight.sh" "$WORK/scripts/"
+cp "$SRC/lib/common.sh" "$WORK/scripts/lib/"
 
 # Each stub records "<name> <args...>" and fails when the command it was asked
 # for is the one PREFLIGHT_<NAME>_FAIL names (never when unset), so a case can
@@ -103,10 +106,12 @@ seed ui/e2e/flow.spec.ts "// spec"
 cat >"$WORK/scripts/run-ui-e2e.sh" <<SHIM
 #!/usr/bin/env bash
 printf 'e2e skip_build=%s %s\n' "\${WARDYN_E2E_SKIP_BUILD:-0}" "\$*" >>"$LOG"
+[ "\${E2E_FAIL_LATER:-}" = 1 ] && [ "\${WARDYN_E2E_SKIP_BUILD:-0}" = 1 ] && exit 1
+exit 0
 SHIM
 chmod +x "$WORK/scripts/run-ui-e2e.sh"
 mkdir -p "$WORK/scripts/lib"
-cp "$ROOT/scripts/lib/candidate-tests.py" "$WORK/scripts/lib/"
+cp "$SRC/lib/candidate-tests.py" "$WORK/scripts/lib/"
 # The selector stub records its patterns and answers the way the real one does: a regexp, or the
 # "no PG tests found" failure for the package PG_NONE names.
 cat >"$WORK/scripts/pg-test-select.sh" <<SHIM
@@ -319,6 +324,12 @@ run_preflight BASE=origin/main GATE=none
 assert "a changed spec runs three passes" test "$(calls | grep -c '^e2e ')" -eq 3
 assert "only the first pass builds" test "$(calls | grep -c '^e2e skip_build=1 flow$')" -eq 2
 echo "ok  a changed Playwright spec runs three times, building once"
+# A race is a failure on a later seed: a red second pass fails the run, and the third never runs.
+run_preflight BASE=origin/main GATE=none E2E_FAIL_LATER=1
+[[ ${RC} -ne 0 ]] || die "a red second Playwright pass passed"
+grep -q 'FAILED at step: 6 playwright pass 2/3' "$TMP/err" || die "the red second pass was not named"
+assert "nothing ran after the red second pass" test "$(calls | grep -c '^e2e ')" -eq 2
+echo "ok  a red later Playwright pass fails the candidate run"
 
 # Without --candidate none of it runs.
 ARGS=()
@@ -336,11 +347,14 @@ git -C "$GT" init -q
 printf 'package walk\nimport "path/filepath"\nfunc TestWalks(t *testing.T) {\n\t_ = filepath.WalkDir\n}\n' >"$GT/pkg/walk/walk_test.go"
 printf 'package docs\nfunc TestReadsDocs(t *testing.T) {\n\t_ = "../../docs/ENV.md"\n}\n' >"$GT/pkg/docs/docs_test.go"
 printf 'package plain\nfunc TestPlain(t *testing.T) {\n}\n' >"$GT/pkg/plain/plain_test.go"
-got="$(cd "$GT" && python3 -I "$ROOT/scripts/lib/candidate-tests.py" guards)"
+got="$(cd "$GT" && python3 -I "$SRC/lib/candidate-tests.py" guards)"
 assert "a test that walks the tree is a guard" test "$(grep -c $'^pkg/walk\tTestWalks$' <<<"${got}")" -eq 1
 assert "a test that reads docs/ is a guard" test "$(grep -c $'^pkg/docs\tTestReadsDocs$' <<<"${got}")" -eq 1
 assert "a plain unit test is not" test "$(grep -c plain <<<"${got}")" -eq 0
-real="$(cd "$ROOT" && python3 -I scripts/lib/candidate-tests.py guards)"
+real="$(cd "$ROOT" && python3 -I "$SRC/lib/candidate-tests.py" guards)"
 assert "the operator-census guard is in the real list" grep -q $'^internal/api\t.*\\bTestIsOperatorCensus\\b' <<<"${real}"
 assert "the retired-words guard is in the real list" grep -q $'^internal/runnerpool\t.*\\bTestRetiredPoolWordsAbsentFromCommandsConsoleAndDocs\\b' <<<"${real}"
 echo "ok  the guard list takes tree-walking and docs-reading tests and leaves plain ones"
+
+# The cases above, checked against mutated copies of the preflight (skipped when this run IS one of those).
+[ -n "${PREFLIGHT_SRC:-}" ] || "$ROOT/scripts/test-preflight-mutations.sh"

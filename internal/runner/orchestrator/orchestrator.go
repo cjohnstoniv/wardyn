@@ -511,13 +511,16 @@ func (o *Orchestrator) CreateSandbox(ctx context.Context, spec runner.SandboxSpe
 // ExecOutputUncapturedFor implements runner.ExecOutputReporter. Once the
 // sandbox exists the substrate that holds ref answers; before the create, the
 // substrate CreateSandbox routes class to (substrateFor, the same first match).
+// A local ref that no longer resolves (its row goes at teardown) falls back to
+// the class's substrate, where the run was routed; a runner's ref never does.
 // known is false when that substrate cannot be named or its capabilities read.
 func (o *Orchestrator) ExecOutputUncapturedFor(ctx context.Context, ref string, class types.ConfinementClass) (uncaptured, known bool) {
 	var sub substrate.Substrate
 	var err error
 	if ref != "" {
 		sub, err = o.subForRef(ctx, ref)
-	} else {
+	}
+	if remote := strings.HasPrefix(ref, substrate.RemotePrefix); ref == "" || (err != nil && !remote) {
 		sub, err = o.substrateFor(ctx, class)
 	}
 	if err != nil {

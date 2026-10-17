@@ -15,10 +15,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/identity"
 	"github.com/cjohnstoniv/wardyn/internal/recording"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -324,5 +327,41 @@ func TestUploadRecording_FailureRowSurvivesAHungUpClient(t *testing.T) {
 	panicFails(t, h.srv.Handler()).ServeHTTP(deadlineRecorder{httptest.NewRecorder()}, req)
 	if event := lastAuditEvent(t, h.audit.snapshot(), "recording.upload"); event.Outcome != "failure" {
 		t.Fatalf("upload outcome = %q, want failure", event.Outcome)
+	}
+}
+
+// TestUploadRecording_RunReadFailure: a call that reached the handler without the
+// liveness gate's run read re-reads the run itself. A run that is gone is a 404; only a
+// store fault is a 500, and nothing is stored either way.
+func TestUploadRecording_RunReadFailure(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+		want int
+	}{
+		{"run gone", store.ErrNotFound, http.StatusNotFound},
+		{"store fault", errors.New("pgx: dial failed"), http.StatusInternalServerError},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rs := &fakeRecordingStore{}
+			h := newHarness(t)
+			cfg := baseTestConfig(h, errRunStore{err: tc.err})
+			cfg.RecordingStore = rs
+			srv := New(cfg)
+			runID := uuid.New()
+			req := httptest.NewRequest(http.MethodPut, "/api/v1/internal/recordings/"+runID.String(), strings.NewReader(partsHeader))
+			rctx := chi.NewRouteContext()
+			rctx.URLParams.Add("runID", runID.String())
+			ctx := context.WithValue(req.Context(), chi.RouteCtxKey, rctx)
+			req = req.WithContext(contextWithClaims(ctx, &identity.Claims{RunID: runID}))
+			w := httptest.NewRecorder()
+			srv.saveRecording(w, req, 1)
+			if w.Code != tc.want {
+				t.Fatalf("status %d, want %d: %s", w.Code, tc.want, w.Body.String())
+			}
+			if rs.saved != nil {
+				t.Fatalf("a refused upload reached the store: %q", rs.saved)
+			}
+		})
 	}
 }

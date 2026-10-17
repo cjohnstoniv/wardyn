@@ -101,3 +101,24 @@ func TestDispatcher_ResidentsAdvertised(t *testing.T) {
 		t.Fatalf("an older runner's caps decode Resident=%v (%v), want false", older.Resident, err)
 	}
 }
+
+// A placeholder is replaced only where it is a whole JSON string: one that
+// follows an escaped quote inside a longer string is left as it is.
+func TestResident_FillSkipsAnEscapedQuote(t *testing.T) {
+	f := newResidentFixture(t, nil)
+	grant := uuid.New()
+	if err := f.deliver(grant, "the-value", false); err != nil {
+		t.Fatal(err)
+	}
+	ph := placement.ResidentPlaceholder(grant)
+	for _, c := range []struct{ in, want string }{
+		{`"` + ph + `"`, `"the-value"`},
+		{`["a","` + ph + `"]`, `["a","the-value"]`},
+		{`"say \"` + ph + `"`, `"say \"` + ph + `"`},
+	} {
+		got, err := f.res.fillJSON(context.Background(), f.run, []byte(c.in))
+		if err != nil || string(got) != c.want {
+			t.Errorf("fillJSON(%s) = %s, %v; want %s", c.in, got, err, c.want)
+		}
+	}
+}

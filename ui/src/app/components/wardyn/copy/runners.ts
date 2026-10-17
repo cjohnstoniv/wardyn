@@ -185,7 +185,7 @@ export const RUN_PLACEMENT = {
 export const RUN_RECORDING = {
   LABEL: "Recording",
   org_off: "Not recorded; the organization kept no recordings when it started.",
-  runner_declined: "Not recorded by the runner; organization sessions are recorded.",
+  runner_declined: "Not recorded by the runner; the organization kept recordings when it started.",
 } as const;
 
 export const RUN_SYNC = {

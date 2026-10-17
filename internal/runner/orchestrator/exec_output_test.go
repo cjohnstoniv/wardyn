@@ -52,4 +52,14 @@ func TestExecOutputUncapturedFor_ClassBeforeCreateRefAfter(t *testing.T) {
 	if u, known := o.ExecOutputUncapturedFor(ctx, sb.Ref, types.CC1); !known || u {
 		t.Fatalf("Docker's sandbox = (%v, %v), want captured: the substrate holding the ref answers", u, known)
 	}
+	// Torn down, the ref row is gone: the class's substrate answers, as before the create. A runner's ref
+	// the orchestrator cannot name stays unknown, never a local substrate's answer.
+	if u, known := o.ExecOutputUncapturedFor(ctx, "gone-ref", types.CC2); !known || !u {
+		t.Fatalf("unresolved local ref = (%v, %v), want the class's answer", u, known)
+	}
+	for _, ref := range []string{substrate.RemotePrefix + uuid.NewString() + "/x", substrate.RemotePrefix + uuid.NewString()} {
+		if _, known := o.ExecOutputUncapturedFor(ctx, ref, types.CC2); known {
+			t.Fatalf("an unregistered runner's ref %q answered", ref)
+		}
+	}
 }

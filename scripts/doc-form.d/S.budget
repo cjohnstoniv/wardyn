@@ -151,8 +151,10 @@
 # docs/sdk.md 18663 measured after merging the organization-runner pool wording with the ASK-6 notes.
 # docs/sdk.md 18880 adds 217 over 18663, measured: the node-loss containment wording after merging the runner sweep.
 # docs/sdk.md 18908 = 18880 + 28, measured: merge of the run output source fields.
+# docs/sdk.md 18946 = 18908 + 38, measured: revision on PUT /runner-pool-defaults
 # docs/sdk.md 18954 = 18908 + 46, measured: the expected_principal_mismatch reason row
-docs/sdk.md=18954 share=21
+# docs/sdk.md 18992 = 18946 + 46, measured: both sides after the final-train merge: revision on PUT /runner-pool-defaults and the expected_principal_mismatch row
+docs/sdk.md=18992 share=21
 # docs/sdk.md 18691 adds 28 over 18663, measured: where a run's output comes from: the runner that served it, and a recording store moving remote Kubernetes runs' output to the recording source.
 # Runner admission adds 10 measured words for the two default-off/config-read refusal reasons.
 # Registration adds 65 measured words for five request/setup reasons and two shared placement refusals.

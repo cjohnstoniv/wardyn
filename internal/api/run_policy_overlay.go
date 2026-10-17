@@ -142,14 +142,23 @@ func (s *Server) applyPolicyOverlay(ctx context.Context, r *http.Request, base t
 	return spec, warns, nil
 }
 
-// auditPolicyOverlay records a launch's overlay once the policy step has passed
-// every check, as policy.inline.apply is. Keys only, never values: the run id is
-// not minted yet, and run.create carries the same keys bound to it.
-func (s *Server) auditPolicyOverlay(ctx context.Context, r *http.Request, keys []string) {
-	if len(keys) > 0 {
-		s.recordAudit(ctx, s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
-			"policy.overlay.apply", "", "success", mustJSON(map[string]any{"keys": keys})))
+// recordPolicyApplyAudits writes the policy apply rows the fold staged, right after the run's row is
+// inserted: they exist exactly when a run does, and a launch refused anywhere earlier leaves none.
+func (s *Server) recordPolicyApplyAudits(ctx context.Context, src policySourceRecord) {
+	for _, ev := range src.applyAudits {
+		s.recordAudit(ctx, ev)
 	}
+}
+
+// auditPolicyOverlay builds a launch's overlay row, as policy.inline.apply is: staged with the other
+// apply rows and written with the run's creation. Keys only, never values:
+// the run id is not minted yet, and run.create carries the same keys bound to it.
+func (s *Server) auditPolicyOverlay(r *http.Request, keys []string) []types.AuditEvent {
+	if len(keys) == 0 {
+		return nil
+	}
+	return []types.AuditEvent{s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
+		"policy.overlay.apply", "", "success", mustJSON(map[string]any{"keys": keys}))}
 }
 
 // capDropField is the policy key a member-pipeline drop took its entry from.

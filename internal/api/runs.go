@@ -250,6 +250,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		writeServerError(w, r, "create run", err)
 		return
 	}
+	s.recordPolicyApplyAudits(ctx, f.source)
 
 	// From here on a run row exists, so no early return may simply answer and
 	// walk away: the row is PENDING, the identity minted above is live, and

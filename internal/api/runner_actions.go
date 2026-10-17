@@ -192,7 +192,8 @@ func (s *Server) admitRunner(_ context.Context, rn types.Runner) (remote.Admissi
 
 // BeginInventoryFromRunner is Admission.BeginInventory, off the read loop:
 // when the previous session completed its inventory, an asserted subject's
-// deferred action continues in one successor, then the new inventory begins.
+// deferred action, and a run's deferred kill, each continue in one successor,
+// then the new inventory begins.
 // The successor is in this session's PENDING.
 func (s *Server) BeginInventoryFromRunner(ctx context.Context, runnerID uuid.UUID, sessionID string) error {
 	st, ok := s.cfg.Store.(store.PG)
@@ -200,6 +201,9 @@ func (s *Server) BeginInventoryFromRunner(ctx context.Context, runnerID uuid.UUI
 		return store.ErrRunnerExecutionRefused
 	}
 	if _, err := st.ReissueDeferredAssertedRunnerActions(ctx, runnerID, sessionID); err != nil {
+		return err
+	}
+	if _, err := st.ReissueDeferredRunKills(ctx, runnerID, sessionID); err != nil {
 		return err
 	}
 	return st.BeginRunnerInventory(ctx, runnerID, sessionID)

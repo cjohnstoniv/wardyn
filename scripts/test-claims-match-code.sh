@@ -198,10 +198,12 @@ pass "C8c the migrator rationale names every ownership-requiring migration on th
 # hand, and the CHANGELOG's split-role bullet is that list. Twice it missed
 # tables, and wardynd then failed at boot or on the first write. Derived: every
 # table a migration numbered UNRELEASED_FROM or later creates is named in the
-# newest CHANGELOG section that carries a "Split-role installs" bullet. When a
-# release is cut, set UNRELEASED_FROM to the first migration after it; the next
-# release's tables then go in a new bullet under its own heading.
-UNRELEASED_FROM=0181 # v0.9.3-rc.2 ships migrations up to 0180
+# newest CHANGELOG section that carries a "Split-role installs" bullet. It is the
+# first migration the last FINAL release does not ship: an upgrade from that
+# release needs every grant since, whichever release candidates came between.
+# When a final release is cut, set it to the first migration after that release
+# (RELEASING.md, step 1); the next release's tables then go in a new bullet.
+UNRELEASED_FROM=0180 # v0.9.2, the last final release, ships migrations up to 0179
 split_note="$(awk '
   /^## \[/ { if (found) exit }
   /^- Split-role installs/ { found = 1; on = 1; print; next }
