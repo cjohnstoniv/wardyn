@@ -108,5 +108,5 @@ func (a *Authenticator) DropUserView(w http.ResponseWriter, r *http.Request) (co
 		return nil, err
 	}
 	http.SetCookie(w, cookie)
-	return contextWithPrincipal(r.Context(), sess), nil
+	return a.withPrincipal(r.Context(), sess), nil
 }
