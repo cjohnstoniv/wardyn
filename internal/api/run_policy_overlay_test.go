@@ -4,6 +4,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"reflect"
@@ -13,6 +14,8 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/runnerpool"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -355,20 +358,49 @@ func TestRunPolicyViewOverlayCause(t *testing.T) {
 }
 
 // A create the policy step let through and a later step refused leaves no policy
-// apply row either, for an overlay and for an inline policy alike.
+// apply row either, for an overlay and for an inline policy alike. The workspace is
+// refused after the policy step, so each body reaches it.
 func TestPolicyApplyRowsWaitForTheWholeFold(t *testing.T) {
 	srv, st := ovOverlayFixture(t)
 	for _, body := range []string{
 		`{"agent":"claude-code","task":"t","policy_overlay":{"denied_domains":["x.example"]},"workspace_id":"` + uuid.NewString() + `"}`,
 		`{"agent":"claude-code","task":"t","inline_policy":{"min_confinement_class":"CC2"},"workspace_id":"` + uuid.NewString() + `"}`,
 	} {
-		if w := doSSO(t, srv, http.MethodPost, "/api/v1/runs", ovCookie(t), body); w.Code == http.StatusCreated {
-			t.Fatalf("create = %d, want a refusal after the policy step: %s", w.Code, w.Body.String())
+		if w := doSSO(t, srv, http.MethodPost, "/api/v1/runs", ovCookie(t), body); w.Code != http.StatusNotFound || errorReason(w) != reasonWorkspaceNotFound {
+			t.Fatalf("create = %d %s, want the workspace's 404 %s after the policy step", w.Code, w.Body.String(), reasonWorkspaceNotFound)
 		}
 	}
 	for _, ev := range st.audit.snapshot() {
 		if ev.Action == "policy.overlay.apply" || ev.Action == "policy.inline.apply" {
 			t.Errorf("a create refused after the policy step wrote %s %s", ev.Action, ev.Data)
+		}
+	}
+}
+
+// stalePoolStore refuses the run's insert as a pool changed under it: the last refusal a create
+// can answer, after its policy has been resolved and its identity minted.
+type stalePoolStore struct{ store.Store }
+
+func (stalePoolStore) CreateRun(context.Context, types.AgentRun) (types.AgentRun, error) {
+	return types.AgentRun{}, store.ErrRunnerPoolStale
+}
+
+// The policy apply rows are written with the run's row: a create refused at the insert leaves
+// neither them nor a run.create.
+func TestPolicyApplyRowsFollowTheRunRow(t *testing.T) {
+	srv, st := ovOverlayFixture(t)
+	srv.cfg.Store = stalePoolStore{srv.cfg.Store}
+	for _, body := range []string{
+		ovOverlayBody(`{"denied_domains":["x.example"]}`),
+		`{"agent":"claude-code","task":"t","inline_policy":{"min_confinement_class":"CC2"}}`,
+	} {
+		if w := doSSO(t, srv, http.MethodPost, "/api/v1/runs", ovCookie(t), body); w.Code != http.StatusConflict || errorReason(w) != string(runnerpool.ReasonStale) {
+			t.Fatalf("create = %d %s, want 409 %s at the insert", w.Code, w.Body.String(), runnerpool.ReasonStale)
+		}
+	}
+	for _, ev := range st.audit.snapshot() {
+		if ev.Action == "policy.overlay.apply" || ev.Action == "policy.inline.apply" || ev.Action == "run.create" {
+			t.Errorf("a create refused at the insert wrote %s %s", ev.Action, ev.Data)
 		}
 	}
 }

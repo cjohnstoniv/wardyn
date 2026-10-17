@@ -216,9 +216,5 @@ func (s *Server) foldRunRequest(w http.ResponseWriter, r *http.Request, mode fol
 		}
 	}
 	f.prov = rec.result()
-	// The policy apply rows wait for the last step: a refusal after the policy step leaves none.
-	for _, ev := range f.source.applyAudits {
-		s.recordAudit(r.Context(), ev)
-	}
 	return f, true
 }

@@ -155,11 +155,9 @@ func TestCreateRun_InlineLocalMountRejectedUnlessOnboarded(t *testing.T) {
 
 // TestCreateRun_MemberInlineClamped pins item 5: a member's inline_policy is
 // clamped to DefaultPolicy BEFORE resolution/validation; an admin's identical
-// request is not. Observed via the policy.inline.apply audit event's
-// min_confinement_class field, which resolveRunPolicy records right after
-// clamping — BEFORE the no-Store harness's later CreateRun panic (see the
-// file's "accepted past validation" 500-sentinel doc comment above), so the
-// clamp's effect is visible even though the request never fully succeeds.
+// request is not. Create reaches CreateRun (the 500 sentinel) and the policy preview
+// door, which resolves with the same code, shows the clamp's effect: create's
+// policy.inline.apply row waits for the run's insert, which this harness never gets.
 func TestCreateRun_MemberInlineClamped(t *testing.T) {
 	h := newHarness(t)
 	h.srv.cfg.OIDC = &oidc.Authenticator{}
@@ -176,37 +174,35 @@ func TestCreateRun_MemberInlineClamped(t *testing.T) {
 	if w.Code != http.StatusInternalServerError {
 		t.Fatalf("member: code = %d, want 500 (errCreateRunNoStoreConfigured — proves it reached CreateRun)", w.Code)
 	}
-	if got := lastInlinePolicyConfinement(t, h.audit.events); got != string(types.CC2) {
-		t.Fatalf("member: policy.inline.apply min_confinement_class = %q, want %q (clamped up to DefaultPolicy)", got, types.CC2)
+	member := ssoSession(t, "sub-member", "member@corp.example", oidc.RoleUser)
+	if got := previewedInlinePolicy(t, h, member, body).MinConfinementClass; got != types.CC2 {
+		t.Fatalf("member: previewed min_confinement_class = %q, want %q (clamped up to DefaultPolicy)", got, types.CC2)
 	}
 
 	w = do(t, h.srv, http.MethodPost, "/api/v1/runs", adminToken, body)
 	if w.Code != http.StatusInternalServerError {
 		t.Fatalf("admin: code = %d, want 500 (errCreateRunNoStoreConfigured — proves it reached CreateRun)", w.Code)
 	}
-	if got := lastInlinePolicyConfinement(t, h.audit.events); got != string(types.CC1) {
-		t.Fatalf("admin: policy.inline.apply min_confinement_class = %q, want %q (unclamped)", got, types.CC1)
+	if got := previewedInlinePolicy(t, h, nil, body).MinConfinementClass; got != types.CC1 {
+		t.Fatalf("admin: previewed min_confinement_class = %q, want %q (unclamped)", got, types.CC1)
 	}
 }
 
-// lastInlinePolicyConfinement returns the min_confinement_class of the LAST
-// policy.inline.apply audit event in events, failing the test if there is none.
-func lastInlinePolicyConfinement(t *testing.T, events []types.AuditEvent) string {
+// previewedInlinePolicy answers body at the policy preview door as the session (or the admin token when
+// session is nil): the same resolver as create, whose apply row now waits for the run's insert.
+func previewedInlinePolicy(t *testing.T, h *harness, session *http.Cookie, body string) types.RunPolicySpec {
 	t.Helper()
-	for i := len(events) - 1; i >= 0; i-- {
-		if events[i].Action != "policy.inline.apply" {
-			continue
-		}
-		var d struct {
-			MinConfinementClass string `json:"min_confinement_class"`
-		}
-		if err := json.Unmarshal(events[i].Data, &d); err != nil {
-			t.Fatalf("decode policy.inline.apply data: %v", err)
-		}
-		return d.MinConfinementClass
+	var w *httptest.ResponseRecorder
+	if session != nil {
+		w = doSSO(t, h.srv, http.MethodPost, previewDoor, session, body)
+	} else {
+		w = do(t, h.srv, http.MethodPost, previewDoor, adminToken, body)
 	}
-	t.Fatal("no policy.inline.apply audit event recorded")
-	return ""
+	var pv policyPreviewResponse
+	if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &pv) != nil {
+		t.Fatalf("policy preview = %d %s", w.Code, w.Body.String())
+	}
+	return pv.Spec
 }
 
 // TestFilterMemberGrants covers the secret-exfil gate: a member's inline
@@ -344,9 +340,8 @@ func TestCreateRun_MemberInlineGrantExfilDropped(t *testing.T) {
 
 	// Pair a REAL operator secret (seeded) with an attacker-controlled but
 	// allowlisted host. CC2 (like TestCreateRun_MemberInlineClamped) stops the run
-	// at the confinement gate on this daemonless harness — AFTER resolveRunPolicy
-	// records policy.inline.apply — so the audit shows the resolved grant count, and the
-	// admin's kept grant clears validateInlineSecretRefs (the secret exists).
+	// at the confinement gate on this daemonless harness, so the preview
+	// shows the resolved grant count, and the admin's kept grant clears validateInlineSecretRefs (the secret exists).
 	const body = `{"agent":"claude-code","repo":"acme/widgets","inline_policy":{"min_confinement_class":"CC2","eligible_grants":[{"kind":"api_key","scope":{"host":"attacker.example","secret_name":"anthropic-api-key"}}]}}`
 
 	// Member: the exfil pairing is dropped - the resolved inline policy carries
@@ -358,8 +353,8 @@ func TestCreateRun_MemberInlineGrantExfilDropped(t *testing.T) {
 	if w.Code != http.StatusInternalServerError {
 		t.Fatalf("member: code = %d, want 500 (errCreateRunNoStoreConfigured — proves it reached CreateRun)", w.Code)
 	}
-	if got := lastInlinePolicyGrantCount(t, h.audit.events); got != 0 {
-		t.Fatalf("member: policy.inline.apply eligible_grants = %d, want 0 (exfil pairing dropped)", got)
+	if got := len(previewedInlinePolicy(t, h, ssoSession(t, "sub-member", "member@corp.example", oidc.RoleUser), body).EligibleGrants); got != 0 {
+		t.Fatalf("member: previewed eligible_grants = %d, want 0 (exfil pairing dropped)", got)
 	}
 
 	// Operator (ceiling authority) is unclamped - their grant is kept.
@@ -367,29 +362,9 @@ func TestCreateRun_MemberInlineGrantExfilDropped(t *testing.T) {
 	if w.Code != http.StatusInternalServerError {
 		t.Fatalf("admin: code = %d, want 500 (errCreateRunNoStoreConfigured — proves it reached CreateRun)", w.Code)
 	}
-	if got := lastInlinePolicyGrantCount(t, h.audit.events); got != 1 {
-		t.Fatalf("admin: policy.inline.apply eligible_grants = %d, want 1 (unclamped)", got)
+	if got := len(previewedInlinePolicy(t, h, nil, body).EligibleGrants); got != 1 {
+		t.Fatalf("admin: previewed eligible_grants = %d, want 1 (unclamped)", got)
 	}
-}
-
-// lastInlinePolicyGrantCount returns the eligible_grants count of the LAST
-// policy.inline.apply audit event in events, failing the test if there is none.
-func lastInlinePolicyGrantCount(t *testing.T, events []types.AuditEvent) int {
-	t.Helper()
-	for i := len(events) - 1; i >= 0; i-- {
-		if events[i].Action != "policy.inline.apply" {
-			continue
-		}
-		var d struct {
-			EligibleGrants int `json:"eligible_grants"`
-		}
-		if err := json.Unmarshal(events[i].Data, &d); err != nil {
-			t.Fatalf("decode policy.inline.apply data: %v", err)
-		}
-		return d.EligibleGrants
-	}
-	t.Fatal("no policy.inline.apply audit event recorded")
-	return 0
 }
 
 // TestValidateInlineSecretRefs_Matrix exercises validateInlineSecretRefs across
