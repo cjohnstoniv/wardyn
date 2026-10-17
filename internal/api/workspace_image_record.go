@@ -16,6 +16,7 @@ import (
 	"github.com/distribution/reference"
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/contentscan"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/internal/version"
 	"github.com/cjohnstoniv/wardyn/internal/workspacescan"
@@ -86,7 +87,13 @@ func repoRecordURL(cloneURL string) string {
 	scheme, rest, ok := strings.Cut(cloneURL, "://")
 	if !ok {
 		if scpRepoURL.MatchString(cloneURL) {
-			return cloneURL // user@host:path carries a user name, never a password
+			// user@host:path carries a user name, never a password; a user name that is a token's
+			// shape is dropped, since ssh never needed it to authenticate.
+			user, hostPath, _ := strings.Cut(cloneURL, "@")
+			if _, secret := contentscan.MatchSecretFormat(user); secret {
+				return hostPath
+			}
+			return cloneURL
 		}
 		return unparseableRepoURL
 	}
@@ -121,7 +128,9 @@ func (s *Server) imageBuildView(ctx context.Context, ws types.Workspace) (rec *t
 		}
 		return nil, false, ""
 	}
-	id, found, err := ider.LocalImage(ctx, ws.ImageRef)
+	lctx, cancel := context.WithTimeout(ctx, localImageTimeout)
+	defer cancel()
+	id, found, err := ider.LocalImage(lctx, ws.ImageRef)
 	switch {
 	case err != nil:
 		return nil, false, ""
@@ -211,6 +220,10 @@ func buildSuccessData(data map[string]any, imageID string) map[string]any {
 
 // remoteDigestTimeout bounds each registry lookup a build makes before it starts.
 const remoteDigestTimeout = 10 * time.Second
+
+// localImageTimeout bounds the build host's answer for what a tag names, so a hung daemon cannot hold
+// GET /build open; no answer reads as unrecorded.
+const localImageTimeout = 10 * time.Second
 
 const pinnedInputGoneError = "a pinned input is no longer available; refresh the image to resolve it again"
 

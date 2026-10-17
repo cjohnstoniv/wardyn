@@ -273,6 +273,27 @@ func TestImageBuildView_MissingImageIsCurrentAndMissing(t *testing.T) {
 	}
 }
 
+// deadlineBuilder is an idBuilder that notes whether the host was asked under a deadline.
+type deadlineBuilder struct {
+	idBuilder
+	bounded bool
+}
+
+func (b *deadlineBuilder) LocalImage(ctx context.Context, ref string) (string, bool, error) {
+	_, b.bounded = ctx.Deadline()
+	return b.idBuilder.LocalImage(ctx, ref)
+}
+
+// The build host is asked what a tag names under a deadline, even when the caller's context has none, so a
+// hung daemon cannot hold GET /build open.
+func TestImageBuildView_AsksTheHostUnderADeadline(t *testing.T) {
+	b := &deadlineBuilder{idBuilder: idBuilder{id: recImageID, found: true}}
+	srv, _ := recServer(t, nil, b)
+	if rec, _, _ := srv.imageBuildView(context.Background(), recCurrentWorkspace()); rec == nil || !b.bounded {
+		t.Fatalf("imageBuildView = %v, asked under a deadline = %v; want a record, asked under one", rec, b.bounded)
+	}
+}
+
 func TestImageBuild_ResolvedFollowsTheLaneTable(t *testing.T) {
 	pinnedGenerated := types.ImageBuildInputs{
 		Base:       types.ImageBuildRef{Ref: "base", Digest: recBaseDigest},
@@ -522,6 +543,8 @@ func TestRepoRecordURL(t *testing.T) {
 		"https://tok@host.example/x.git":      "https://host.example/x.git",
 		"https://host.example/x.git":          "https://host.example/x.git",
 		"git@host.example:org/x.git":          "git@host.example:org/x.git",
+		// A token used as the scp user name is never recorded.
+		"ghp_" + strings.Repeat("a1B2", 9) + "@host.example:org/x.git": "host.example:org/x.git",
 	} {
 		if got := repoRecordURL(in); got != want {
 			t.Errorf("repoRecordURL(%q) = %q, want %q", in, got, want)
