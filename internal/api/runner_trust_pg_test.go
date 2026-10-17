@@ -291,3 +291,22 @@ func TestPG_OrgPool_RevokeEndsTheRunWaitingForTheOrgRunner(t *testing.T) {
 		t.Errorf("the ended run still has %d queue rows", n)
 	}
 }
+
+// Fable K4 H1: a capped user pool of two laptops whose trust classes differ, the legacy delivery document.
+// With the managed_device laptop full, a run promoted to the personal laptop that has room starts there:
+// the invariant TestPG_QueuedRunStartsOnTheRunnerItsPromotionChose pins for two personal laptops.
+func TestPG_RunTrust_PromotedRunStartsOnTheFreePersonalLaptopBesideAFullManagedOne(t *testing.T) {
+	e := newQueueEnv(t)
+	p, a, b := cappedLaptops(e, 1)
+	e.setTrust(a, types.RunnerTrustManagedDevice)
+	occupyRunner(e, p, a)
+	for i := 0; i < 3; i++ {
+		_, got := launchThroughQueue(e, p, a, b)
+		if got.State == types.RunFailed || got.RunnerID == nil || *got.RunnerID != b {
+			t.Fatalf("launch %d = %s on %v detail %q; want it started on the personal laptop with room %s", i, got.State, got.RunnerID, got.StatusDetail, b)
+		}
+		if c := e.runTrust(got.ID); c != types.RunnerTrustPersonal {
+			t.Errorf("launch %d recorded %q, want personal", i, c)
+		}
+	}
+}

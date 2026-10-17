@@ -29,20 +29,33 @@ type localJudgement struct {
 	trust  types.RunnerTrustClass
 }
 
-// candidateTrusts is the distinct trust classes of the run's eligible runners, highest first. With no
-// runner among them (an unpooled request, or one waiting on remote-hosted runners) it is every class,
-// so the plan's own refusal is the one any runner would give.
-func candidateTrusts(targets []poolTarget) []types.RunnerTrustClass {
-	var out []types.RunnerTrustClass
-	for _, c := range placement.TrustClassesByRank() {
-		if slices.ContainsFunc(targets, func(t poolTarget) bool { return t.runnerID != nil && t.trust == c }) {
-			out = append(out, c)
-		}
-	}
+// candidateTrusts is the distinct trust classes of the run's eligible runners in the order create judges
+// them: the class of prefer (the runner a promotion found room on) first, then the classes with a runner
+// that has room, then the rest, each by rank. A full runner of a higher class never hides a lower class
+// with room. With no runner among the targets (an unpooled request, or one waiting on remote-hosted
+// runners) it is every class, so the plan's own refusal is the one any runner would give.
+func candidateTrusts(targets []poolTarget, prefer *uuid.UUID) []types.RunnerTrustClass {
 	if !slices.ContainsFunc(targets, func(t poolTarget) bool { return t.runnerID != nil }) {
 		return placement.TrustClassesByRank()
 	}
+	var out []types.RunnerTrustClass
+	add := func(keep func(t poolTarget) bool) {
+		for _, c := range placement.TrustClassesByRank() {
+			if !slices.Contains(out, c) && slices.ContainsFunc(targets, func(t poolTarget) bool { return t.runnerID != nil && t.trust == c && keep(t) }) {
+				out = append(out, c)
+			}
+		}
+	}
+	add(func(t poolTarget) bool { return prefer != nil && *t.runnerID == *prefer })
+	add(func(t poolTarget) bool { return !t.full })
+	add(func(poolTarget) bool { return true })
 	return out
+}
+
+// waitingLocalTrusts is the classes a person's own runner can hold (org_cluster is an organization's
+// only): what a run waiting on remote-hosted runners is judged at for the person's own.
+func waitingLocalTrusts() []types.RunnerTrustClass {
+	return []types.RunnerTrustClass{types.RunnerTrustManagedDevice, types.RunnerTrustPersonal}
 }
 
 // judgeAtTrust judges p at each class in turn and answers the first that admits it. When none does, the
@@ -66,9 +79,13 @@ func judgeAtTrust(p placement.LocalPlan, classes []types.RunnerTrustClass) (type
 }
 
 // narrowToTrust keeps the run's eligible runners of class c: the bind then picks one the plan was
-// admitted at. Remote-hosted targets are left as they are.
-func narrowToTrust(targets []poolTarget, c types.RunnerTrustClass) []poolTarget {
-	return slices.DeleteFunc(slices.Clone(targets), func(t poolTarget) bool { return t.runnerID != nil && t.trust != c })
+// admitted at. Remote-hosted targets are left as they are. Whether every runner left is full is
+// recomputed from the narrowed set.
+func (p *runPlacement) narrowToTrust(c types.RunnerTrustClass) {
+	p.eligible = slices.DeleteFunc(slices.Clone(p.eligible), func(t poolTarget) bool { return t.runnerID != nil && t.trust != c })
+	noRoom := !slices.ContainsFunc(p.eligible, func(t poolTarget) bool { return !t.full })
+	p.runnersFull = p.queues() && len(p.eligible) > 0 && noRoom
+	p.waitsForRoom = p.waitsForRoom && noRoom
 }
 
 // runnerTrust is a runner's stored trust class. An unknown class, or a runner that cannot be read,

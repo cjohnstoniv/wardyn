@@ -578,23 +578,24 @@ func (s *Server) stepLocalEligibility(f *runFold, rec *foldRecorder) bool {
 		req.Placement = f.place.placement
 	}
 	var refusal *runRefusal
-	f.localDelivery, refusal = s.localPlacementRefusal(f.r, req, f.place.pooled, candidateTrusts(f.place.eligible), f.spec, f.ceiling, f.comps, f.driveMounts, f.wsRefs, f.baseline)
+	f.localDelivery, refusal = s.localPlacementRefusal(f.r, req, f.place.pooled, candidateTrusts(f.place.eligible, promotedRunner(f.r.Context())), f.spec, f.ceiling, f.comps, f.driveMounts, f.wsRefs, f.baseline)
 	if refusal != nil && refusal.status < http.StatusInternalServerError && f.place.remoteOffered {
 		refusal.body.Error += " " + remoteInsteadMsg(f.place.pool.Name)
 	}
 	if refusal.write(s, f.w, f.r) {
 		return false
 	}
-	// The run is bound only to a runner of the trust class its plan was admitted at.
+	// The run is bound only to a runner of the trust class its plan was admitted at. A run that waits is
+	// judged again at its start, the promotion's runner's class first (candidateTrusts).
 	if req.Placement == types.PlacementLocal && f.place.pooled {
-		f.place.eligible = narrowToTrust(f.place.eligible, f.localDelivery.trust)
+		f.place.narrowToTrust(f.localDelivery.trust)
 	}
 	// A launch that waits on the pool's remote-hosted runners records this step's answer for the person's
 	// own: the queue then never offers it a runner of theirs that frees first, which the start would
 	// refuse here, ending a run that was accepted to wait.
 	if f.queued && f.place.pooled && req.Placement == types.PlacementRemote {
 		req.Placement = types.PlacementLocal
-		_, local := s.localPlacementRefusal(f.r, req, true, nil, f.spec, f.ceiling, f.comps, f.driveMounts, f.wsRefs, f.baseline)
+		_, local := s.localPlacementRefusal(f.r, req, true, waitingLocalTrusts(), f.spec, f.ceiling, f.comps, f.driveMounts, f.wsRefs, f.baseline)
 		// A read that failed answers nothing (a server error carries its error, not a status): the launch
 		// then behaves as one with nothing recorded.
 		failed := local != nil && (local.err != nil || local.status >= http.StatusInternalServerError)

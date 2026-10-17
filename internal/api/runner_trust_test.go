@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 
@@ -27,20 +28,49 @@ func trustTarget(c types.RunnerTrustClass) poolTarget {
 	return poolTarget{id: id.String(), runnerID: &id, trust: c}
 }
 
-// Create judges at the eligible runners' classes, highest first, and binds only to the admitted class.
-func TestCandidateTrusts_HighestFirstAndNarrowed(t *testing.T) {
+// Create judges at the eligible runners' classes: the promotion's runner's class first, then classes with
+// room, then the rest, each highest first; it binds only to the admitted classes.
+func TestCandidateTrusts_PreferredThenRoomThenRank(t *testing.T) {
 	personal, managed := trustTarget(types.RunnerTrustPersonal), trustTarget(types.RunnerTrustManagedDevice)
 	remote := poolTarget{id: "alpha", executor: "alpha"}
-	got := candidateTrusts([]poolTarget{personal, managed, remote, trustTarget(types.RunnerTrustPersonal)})
-	if len(got) != 2 || got[0] != types.RunnerTrustManagedDevice || got[1] != types.RunnerTrustPersonal {
-		t.Errorf("classes = %v, want [managed_device personal]", got)
+	got := candidateTrusts([]poolTarget{personal, managed, remote, trustTarget(types.RunnerTrustPersonal)}, nil)
+	if !slices.Equal(got, []types.RunnerTrustClass{types.RunnerTrustManagedDevice, types.RunnerTrustPersonal}) {
+		t.Errorf("all with room: %v, want [managed_device personal]", got)
 	}
-	if got := candidateTrusts([]poolTarget{remote}); len(got) != 3 {
+	fullManaged := managed
+	fullManaged.full = true
+	if got := candidateTrusts([]poolTarget{fullManaged, personal}, nil); !slices.Equal(got, []types.RunnerTrustClass{types.RunnerTrustPersonal, types.RunnerTrustManagedDevice}) {
+		t.Errorf("the managed_device runner full: %v, want personal (room) first", got)
+	}
+	if got := candidateTrusts([]poolTarget{managed, personal}, personal.runnerID); !slices.Equal(got, []types.RunnerTrustClass{types.RunnerTrustPersonal, types.RunnerTrustManagedDevice}) {
+		t.Errorf("promoted to the personal runner: %v, want personal first", got)
+	}
+	if got := candidateTrusts([]poolTarget{remote}, nil); len(got) != 3 {
 		t.Errorf("no runner among the targets: %v, want every class", got)
 	}
-	narrowed := narrowToTrust([]poolTarget{personal, managed, remote}, types.RunnerTrustManagedDevice)
-	if len(narrowed) != 2 || narrowed[0].id != managed.id || narrowed[1].id != "alpha" {
-		t.Errorf("narrowed = %+v, want the managed_device runner and the remote-hosted one", narrowed)
+}
+
+// Narrowing keeps the admitted classes and the remote-hosted targets, and recomputes whether every runner
+// left is full.
+func TestRunPlacementNarrowToTrust_RecomputesRoom(t *testing.T) {
+	personal, managed := trustTarget(types.RunnerTrustPersonal), trustTarget(types.RunnerTrustManagedDevice)
+	managed.full = true
+	limit := 2
+	capped := &types.RunnerPoolLimits{MaxConcurrentRuns: &limit}
+	p := runPlacement{pooled: true, row: types.RunnerPool{Limits: capped}, eligible: []poolTarget{personal, managed}}
+	p.narrowToTrust(types.RunnerTrustManagedDevice)
+	if len(p.eligible) != 1 || p.eligible[0].id != managed.id || !p.runnersFull {
+		t.Errorf("narrowed to the full managed_device runner: %+v runnersFull=%v, want it alone and full", p.eligible, p.runnersFull)
+	}
+	p = runPlacement{pooled: true, row: types.RunnerPool{Limits: capped}, eligible: []poolTarget{personal, managed}, runnersFull: true}
+	p.narrowToTrust(types.RunnerTrustPersonal)
+	if len(p.eligible) != 1 || p.eligible[0].id != personal.id || p.runnersFull {
+		t.Errorf("narrowed to the personal runner with room: %+v runnersFull=%v, want it alone with room", p.eligible, p.runnersFull)
+	}
+	p = runPlacement{pooled: true, eligible: []poolTarget{personal, managed}, waitsForRoom: true}
+	p.narrowToTrust(types.RunnerTrustPersonal)
+	if p.waitsForRoom {
+		t.Error("a narrowed set with room still waits for room")
 	}
 }
 
@@ -58,6 +88,21 @@ func TestJudgeAtTrust_FirstAdmittingClassElseTheFirstRefusal(t *testing.T) {
 	c, ref := judgeAtTrust(p, []types.RunnerTrustClass{types.RunnerTrustPersonal})
 	if c != "" || ref == nil || ref.Reason != placement.ReasonPlacementCredential || !strings.Contains(ref.Detail, "trust class personal") {
 		t.Errorf("personal only: %q %+v, want refused naming personal", c, ref)
+	}
+}
+
+// L1: a run waiting on remote-hosted runners is judged for the person's own at the classes a person's
+// runner can hold, never at org_cluster: a plan only org_cluster admits is refused there.
+func TestWaitingLocalTrusts_NeverOrgCluster(t *testing.T) {
+	p := placement.LocalPlan{
+		Spec:    runner.SandboxSpec{SecretEnv: map[string]string{"TOKEN": placement.ResidentPlaceholder(uuid.New())}},
+		Origins: map[string]placement.CredentialOrigin{"SandboxSpec.SecretEnv[TOKEN]": {Class: placement.ClassOperator, Delivery: placement.ClassEnvSecret}},
+		Delivery: placement.DeliveryPolicy{Classes: map[string]placement.ClassPolicy{}, ByTrust: map[types.RunnerTrustClass]placement.TrustPolicy{
+			types.RunnerTrustOrgCluster: {Classes: map[string]placement.ClassPolicy{placement.ClassEnvSecret: {Mode: placement.ModeRunnerResident}}}}},
+		Posture: &types.RunnerPosture{OS: "linux"},
+	}
+	if c, ref := judgeAtTrust(p, waitingLocalTrusts()); c != "" || ref == nil {
+		t.Errorf("a plan only org_cluster admits, judged for the person's own runners: %q %v, want refused", c, ref)
 	}
 }
 
