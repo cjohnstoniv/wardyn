@@ -72,8 +72,8 @@ docs/operations/member-runs.md=1044 share=35
 docs/operations/user-drives.md=4823 share=35
 # docs/operations/capabilities.md 4169 = 4169 + 0 (RV5), measured at the wave-A merge.
 # docs/operations/capabilities.md 4205 adds 36: the withdrawn component grant line (0.9.3 FIN-B2).
-# docs/operations/capabilities.md 4381 = 4205 + 176, measured: a restricted value is closed whatever the switch says, the explain cross-reference and the exact self_host_runner grant.
-docs/operations/capabilities.md=4381 share=35
+# docs/operations/capabilities.md 4383 = 4205 + 178, measured: a restricted value is closed whatever the switch says, the explain cross-reference and the exact self_host_runner grant.
+docs/operations/capabilities.md=4383 share=35
 # docs/operations/custom-components.md 1365 adds 181 over 1184, measured: the credential confinement floor on a CC1-only estate (0.9.3 ASK-6).
 # docs/operations/custom-components.md 1269, measured: the credential-floor section trimmed from 181 to 85 added words over 1184 (0.9.3 ASK-6 review).
 docs/operations/custom-components.md=1269 share=35
