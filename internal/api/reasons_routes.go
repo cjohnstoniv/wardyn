@@ -272,6 +272,10 @@ const (
 	reasonGrantRunMismatch                    = "grant_run_mismatch"          // the grant belongs to a different run
 	reasonGrantNotFound                       = "grant_not_found"             // no such grant
 	reasonGrantRequiresSPIRE                  = "grant_requires_spire"        // the grant needs the embedded SPIRE identity provider
+	reasonGrantRunRevoked                     = "grant_run_revoked"           // the run's credentials were revoked, so nothing is minted for it
+	reasonGrantNotApproved                    = "grant_not_approved"          // the grant's approval is not in the approved state
+	reasonGrantRefRulesetRequired             = "grant_ref_ruleset_required"  // a required GitHub ref ruleset does not confine the repository
+	reasonGrantKindUnsupported                = "grant_kind_unsupported"      // this server cannot mint a credential of the grant's kind
 	reasonRunRenewStoreUnavailable            = "run_renew_store_unavailable" // no store configured to verify the run is still alive
 	reasonRunRenewReadFailed                  = "run_renew_read_failed"       // reading the run for the renew gate failed
 	reasonRunRenewStampFailed                 = "run_renew_stamp_failed"      // stamping the run's token-renewed marker failed
