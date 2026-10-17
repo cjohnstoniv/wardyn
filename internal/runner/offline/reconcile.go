@@ -192,6 +192,8 @@ func (m *Manager) settleApplied(ctx context.Context, a runnerwire.PendingAction,
 	r := m.state.Runs[a.RunID]
 	at := m.now().UTC()
 	r.ProxyStoppedAt = &at
+	// StopProxy returned nil only on completion evidence, so a pending report the tick held goes with it.
+	r.ContainmentPending = nil
 	outcome := "deferred"
 	if m.mutationsDrained(a.RunID) && (r.Containment.Contained || r.Containment.Operation == string(a.Kind)) {
 		outcome = "success"

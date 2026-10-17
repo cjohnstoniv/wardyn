@@ -60,3 +60,33 @@ func TestPendingStopProxyOnALostNodeStillReachesReady(t *testing.T) {
 		t.Fatalf("state page lacks the pending hold: %+v %v", row, err)
 	}
 }
+
+// A run the tick already holds pending whose queued stop_proxy then succeeds on a fresh session (the
+// node returned while the runner was down) drops the pending report with the stop stamp. A page
+// carrying both is refused by the org, so the runner would never reach READY.
+func TestApplySuccessClearsPendingBesideStopStamp(t *testing.T) {
+	m, sub, _, org := managerFixture(t)
+	id := createLocal(t, m, org)
+	m.Offline(t.Context())
+	if err := m.holdPending(id, &runner.ContainmentPendingError{Kind: runner.ContainmentPendingDelete, Err: errors.New("termination unknown")}); err != nil {
+		t.Fatal(err)
+	}
+	sub.stopErr = nil // the node is back, the pods are gone: StopProxy succeeds
+	a := pendingContainment(m, id, types.RunnerActionStopProxy)
+	res, err := m.apply(t.Context(), a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := m.state.Runs[id]
+	if r.ProxyStoppedAt == nil {
+		t.Fatalf("stop not stamped: %+v", res)
+	}
+	afterApply := r.ContainmentPending
+	if err := m.CheckLapses(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	afterTick := m.state.Runs[id].ContainmentPending
+	if afterApply != nil || afterTick != nil {
+		t.Fatalf("pending report kept beside the stop stamp: after apply %+v, after the next tick %+v", afterApply, afterTick)
+	}
+}
