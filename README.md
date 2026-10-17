@@ -252,3 +252,7 @@ flowchart LR
 - Contributor sign-off via DCO (`Signed-off-by`).
 - CNCF Sandbox is the governance target, not a status.
 - Contributions welcome — see [`CONTRIBUTING.md`](CONTRIBUTING.md).
+
+Most of Wardyn's code is written by AI coding agents, with a human maintainer
+driving, deciding and testing. [`docs/HOW-WARDYN-IS-BUILT.md`](docs/HOW-WARDYN-IS-BUILT.md)
+describes the planning and review every change goes through.
