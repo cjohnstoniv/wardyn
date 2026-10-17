@@ -95,6 +95,7 @@ var (
 	_ runner.ProxyStopper    = (*Substrate)(nil)
 	_ runner.ProxyReviver    = (*Substrate)(nil)
 	_ runner.SandboxStarter  = (*Substrate)(nil)
+	_ runner.Selftester      = (*Substrate)(nil)
 	_ runner.SubstrateProber = (*Substrate)(nil)
 	_ runner.DriveProber     = (*Substrate)(nil)
 	_ runner.OutputRecoverer = (*Substrate)(nil)
@@ -262,6 +263,27 @@ func (s *Substrate) Exec(ctx context.Context, ref string, argv []string) (string
 		return "", err
 	}
 	return res.ExecID, nil
+}
+
+// Selftest runs the BYOI selftest on the runner under the task's issued
+// generation, which the runner checks and does not spend. A runner that does
+// not advertise it is refused here, so the check is never skipped.
+func (s *Substrate) Selftest(ctx context.Context, ref string) (int, error) {
+	if err := s.own(ref); err != nil {
+		return 0, err
+	}
+	if c, ok := s.Caps(); !ok || !c.BYOISelftest {
+		return 0, runnerwire.Refuse("this runner does not support the BYOI selftest; upgrade it to run BYOI images")
+	}
+	generation, err := s.executionGeneration(ctx, runnerwire.MethodSelftest, ref)
+	if err != nil {
+		return 0, err
+	}
+	var res runnerwire.SelftestResult
+	if err := s.call(ctx, runnerwire.MethodSelftest, runnerwire.SelftestArgs{Ref: ref, ExecutionGeneration: generation}, &res); err != nil {
+		return 0, err
+	}
+	return res.ExitCode, nil
 }
 
 // Wait is a long call: a link drop answers runner.ErrRunnerOffline, which is

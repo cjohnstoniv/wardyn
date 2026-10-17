@@ -5,6 +5,7 @@ package api
 
 import (
 	"context"
+	"slices"
 	"testing"
 	"time"
 
@@ -47,5 +48,52 @@ func TestStartAgentOrIdle_BYOIFailingSelftestRefusesTheRun(t *testing.T) {
 	const want = "the BYOI image failed its agent-run --selftest (missing shell/harness binary, or a nonzero selftest exit)"
 	if got := st.FailureHint(); got != want {
 		t.Fatalf("failure reason = %q, want %q", got, want)
+	}
+}
+
+// selftesterRunner is a local runner that also offers runner.Selftester and
+// records the argv of each Exec.
+type selftesterRunner struct {
+	*quickExecRunner
+	argvs     [][]string
+	selftests int
+}
+
+func (r *selftesterRunner) Exec(ctx context.Context, ref string, argv []string) (string, error) {
+	r.argvs = append(r.argvs, argv)
+	return r.quickExecRunner.Exec(ctx, ref, argv)
+}
+
+func (r *selftesterRunner) Selftest(context.Context, string) (int, error) {
+	r.selftests++
+	return 0, nil
+}
+
+// TestStartAgentOrIdle_BYOILocalSelftestUnchanged: a run on the
+// organisation's own executors keeps its selftest as an Exec of the selftest
+// argv and a Wait, then the task Exec; the runner's selftest call is not used.
+func TestStartAgentOrIdle_BYOILocalSelftestUnchanged(t *testing.T) {
+	h := newHarness(t)
+	runID := uuid.New()
+	now := time.Now().UTC()
+	run := types.AgentRun{
+		ID: runID, CreatedAt: now, UpdatedAt: now, CreatedBy: "t@example.com",
+		Agent: "claude-code", ConfinementClass: types.CC1, State: types.RunRunning,
+		RunnerTarget: "docker", Task: "do the thing",
+	}
+	st := &dispatchTestStore{run: run, state: types.RunRunning}
+	rn := &selftesterRunner{quickExecRunner: &quickExecRunner{fakeRunner: &fakeRunner{}}}
+	cfg := baseTestConfig(h, st)
+	cfg.Runner = rn
+	srv := New(cfg)
+
+	srv.startAgentOrIdle(context.Background(), run, "fake-"+runID.String(), "wardyn-byoi/custom:latest", false, runnerExecution{}, nil)
+
+	want := [][]string{{"/usr/local/bin/agent-run", "--selftest"}, {"/usr/local/bin/agent-run", "do the thing"}}
+	if !slices.EqualFunc(rn.argvs, want, slices.Equal) || rn.selftests != 0 {
+		t.Fatalf("Exec argvs = %v, selftest calls = %d; want %v and none", rn.argvs, rn.selftests, want)
+	}
+	if got := st.State(); got == types.RunFailed {
+		t.Fatalf("run state = %q, want not FAILED", got)
 	}
 }

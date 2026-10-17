@@ -60,6 +60,9 @@ type Config struct {
 	Output       func(uuid.UUID) (io.Writer, error)
 	BindOutput   func(uuid.UUID, string) error
 	ForgetOutput func(uuid.UUID) error
+	// CheckSelftest admits a BYOI selftest under the task's unattempted
+	// generation without spending it; nil refuses the selftest.
+	CheckSelftest func(context.Context, string, uuid.UUID) error
 	// Resident is the runner_resident adapter; nil refuses both verbs and any
 	// create or proxy replacement that names a resident grant.
 	Resident *Resident
@@ -122,6 +125,8 @@ func (d *Dispatcher) Call(ctx context.Context, peer *runnerwire.Peer, id uint32,
 		return probe.ProbeDrive(ctx, drive)
 	case runnerwire.MethodSweep:
 		return d.sweep(ctx, args)
+	case runnerwire.MethodSelftest:
+		return d.selftest(ctx, args)
 	}
 	return d.refCall(ctx, method, args)
 }
@@ -198,8 +203,8 @@ func (d *Dispatcher) create(ctx context.Context, peer *runnerwire.Peer, id uint3
 		if err := d.cfg.BindOutput(a.Spec.RunID, sandbox.Ref); err != nil {
 			return nil, d.rollbackCreate(ctx, a, sandbox.Ref, err)
 		}
-		d.awaitSelftest(sandbox.Ref, a.Spec.Image)
 	}
+	d.awaitSelftest(sandbox.Ref, a.Spec.Image)
 	sandbox.Ref = placement.RunnerRefPrefix(d.cfg.RunnerID) + sandbox.Ref
 	return runnerwire.CreateSandboxResult{Sandbox: sandbox}, nil
 }
@@ -310,9 +315,6 @@ func (d *Dispatcher) dispatchRef(ctx context.Context, method, ref string, a refA
 	sub := d.cfg.Substrate
 	switch method {
 	case runnerwire.MethodExec:
-		if id, ok, err := d.execSelftest(ctx, ref, a.Argv); ok {
-			return runnerwire.ExecResult{ExecID: id}, err
-		}
 		id, err := sub.Exec(ctx, ref, a.Argv)
 		return runnerwire.ExecResult{ExecID: id}, err
 	case runnerwire.MethodWait:

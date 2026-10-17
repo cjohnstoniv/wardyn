@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -53,9 +54,19 @@ func (s *Server) byoiExecLessRefused(ctx context.Context, run types.AgentRun, re
 // goroutine forever — on timeout the gate fails closed (returns false).
 const byoiSelftestTimeout = 2 * time.Minute
 
-func (s *Server) byoiSelftest(ctx context.Context, run types.AgentRun, ref string, failClosed bool) bool {
+// byoiSelftest of a run on a runner is the runner's own selftest call
+// (runner.Selftester), under execution's generation, which it does not spend.
+func (s *Server) byoiSelftest(ctx context.Context, run types.AgentRun, ref string, execution runnerExecution, failClosed bool) bool {
 	ctx, cancel := context.WithTimeout(ctx, byoiSelftestTimeout)
 	defer cancel()
+	if run.RunnerID != nil {
+		st, ok := s.cfg.Runner.(runner.Selftester)
+		if !ok {
+			return s.byoiSelftestExit(ctx, run, 0, runner.ErrSelftestUnsupported, failClosed)
+		}
+		code, err := st.Selftest(execution.selftest().bind(ctx), ref)
+		return s.byoiSelftestExit(ctx, run, code, err, failClosed)
+	}
 	if _, xerr := s.cfg.Runner.Exec(ctx, ref, []string{"/usr/local/bin/agent-run", "--selftest"}); xerr != nil {
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.selftest",
 			run.ID.String(), "failure", mustJSON(map[string]any{
@@ -65,6 +76,11 @@ func (s *Server) byoiSelftest(ctx context.Context, run types.AgentRun, ref strin
 		return false
 	}
 	code, werr := s.cfg.Runner.Wait(ctx, ref)
+	return s.byoiSelftestExit(ctx, run, code, werr, failClosed)
+}
+
+// byoiSelftestExit audits a selftest's outcome and reports whether it passed.
+func (s *Server) byoiSelftestExit(ctx context.Context, run types.AgentRun, code int, werr error, failClosed bool) bool {
 	if werr != nil {
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.selftest",
 			run.ID.String(), "failure", mustJSON(map[string]any{
