@@ -15,6 +15,7 @@
 // nothing for a non-operator admin, or before the first load ever finds
 // anything outside the window.
 import * as React from "react";
+import { Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { WFETCH_TIMEOUT_MS } from "../../../lib/api/core";
 import { runs as runsApi } from "../../../lib/api/runs";
@@ -96,7 +97,8 @@ export function AdminOlderLimitsCard() {
             <Chip tone="neutral">
               {RL.OLDER_LIMITS_CHIP} · {outsideIds.length}
             </Chip>
-            <Button size="sm" onClick={() => void restart()} disabled={busy}>
+            <Button size="sm" onClick={() => void restart()} disabled={busy} aria-busy={busy}>
+              {busy && <Loader2 className="size-4 animate-spin" aria-hidden />}
               {RL.RESTART_WITH_CURRENT_LIMITS}
             </Button>
           </div>

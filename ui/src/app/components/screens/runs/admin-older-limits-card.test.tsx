@@ -83,6 +83,28 @@ describe("AdminOlderLimitsCard", () => {
     await waitFor(() => expect(getAdminProxyWindowMock).toHaveBeenCalledTimes(2));
   });
 
+  it("FR-0163: shows the restart in flight: the button is disabled, busy and spinning until it settles", async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    getAdminProxyWindowMock.mockResolvedValue({
+      release: "0.8.0",
+      window: ["0.8"],
+      outside: [{ run_id: "r1", created_by: "u1", state: "RUNNING", proxy_release: "0.6" }],
+    });
+    let settle: (v: unknown) => void = () => {};
+    restartAdminRunsMock.mockReturnValue(new Promise((resolve) => { settle = resolve; }));
+    renderCard();
+    await screen.findByText("Older limits · 1");
+    const button = screen.getByRole("button", { name: "Restart with current limits" });
+    expect(button).not.toHaveAttribute("aria-busy", "true");
+    await user.click(button);
+    expect(button).toBeDisabled();
+    expect(button).toHaveAttribute("aria-busy", "true");
+    expect(button.querySelector("svg.animate-spin")).not.toBeNull();
+    settle({ results: [{ run_id: "r1", ok: true }] });
+    await waitFor(() => expect(button).not.toHaveAttribute("aria-busy", "true"));
+    expect(button.querySelector("svg.animate-spin")).toBeNull();
+  });
+
   // R2-4 (PR #1317 round-2 review): a real restart rewrites the run's own
   // proxy_release (store_run_revive.go), so the very NEXT listing this same
   // reload asks for comes back with nothing outside the window — the result
