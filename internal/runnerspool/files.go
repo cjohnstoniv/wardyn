@@ -31,7 +31,8 @@ func (s *Spool) readJSON(name string, limit int64, out any) error {
 		return errors.New("unsafe or oversized spool file")
 	}
 	dec := json.NewDecoder(io.LimitReader(f, limit+1))
-	dec.DisallowUnknownFields()
+	// Unknown keys are ignored (from 0.9.3 on) so a spool a later runner wrote still loads after a
+	// rollback; the file checks above, trailing data and each caller's validation still refuse.
 	if err := dec.Decode(out); err != nil {
 		return err
 	}

@@ -92,7 +92,8 @@ func (m *Manager) load() error {
 		return errors.New("unsafe runner lifecycle state")
 	}
 	dec := json.NewDecoder(io.LimitReader(f, stateLimit+1))
-	dec.DisallowUnknownFields()
+	// Unknown keys are ignored (from 0.9.3 on) so a state file a later runner wrote still loads after a
+	// rollback. The size, mode, symlink, trailing-data and identity checks still refuse.
 	if err := dec.Decode(&m.state); err != nil {
 		return err
 	}
