@@ -1037,6 +1037,8 @@ spec:
 - `extraObjects`: extra Kubernetes objects rendered with the release, each through `tpl` (the only value that is).
   - Empty by default; see [SSH on a 443-only estate](#ssh-on-a-443-only-estate) for an Istio example.
 - `persistence.enabled`: decides the recording store — `WARDYN_RECORDING_STORE=fs` with `WARDYN_RECORDING_DIR=<mountPath>/recordings` when on, `WARDYN_RECORDING_STORE=off` (no recording, no replay) when off.
+  - **The chart default records nothing** until you set `env.WARDYN_RECORDING_STORE=pg` or turn on `persistence`; `wardyn setup status` shows it in the "Session recording" row.
+  - Enabling a store moves remote Kubernetes runs' output reads to the recording source.
   - wardynd's own default directory writes to the read-only root FS and would crash-loop the pod (it did, on 0.7.0's empty-dir spelling).
   - The chart pins the store itself — not because `pg` is unsafe here (its casts are already readable from any replica), but because this chart is single-replica by policy (see `replicas` below),
     - so there is no HA reason to force the unbounded-by-default `pg` store on every install.

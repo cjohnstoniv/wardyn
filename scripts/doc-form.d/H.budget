@@ -1,7 +1,8 @@
 # deploy/helm/wardyn/README.md 11085 adds 2 over 11083 (G-090-cleanup slice F, docs rows that contradict the code): measured; the lead re-measures at merge.
 # deploy/helm/wardyn/README.md 11131 adds 46 over 11085 (setup-limits round 1): k8s.readNodes also lets boot measure the cluster and propose its runner's limits; measured.
 # deploy/helm/wardyn/README.md 11204 = 11131 + 73, measured: k8s.readNodes also shortens a start wait for a placement no healthy node allows.
-deploy/helm/wardyn/README.md=11204 share=35
+# deploy/helm/wardyn/README.md 11240 = 11204 + 36, measured: the recording-off sentences beside the setup status row.
+deploy/helm/wardyn/README.md=11240 share=35
 deploy/kind/sso/README.md=557 share=35
 # deploy/azure-entra-sso/README.md 3138 adds 54 over 3084, itemised by the diff:
 # 31 (the Postgres PVC 05-kind-deploy.sh now adopts, and that its FIRST run costs

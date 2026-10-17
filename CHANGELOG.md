@@ -27,6 +27,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - Setup status names, for admins, the defaults an upgrade changed that reach this deployment's own configuration
   ("Defaults changed by this upgrade"), each with what to set for the old behaviour. wardynd records each release it
   boots (migration `0190_deployment_versions`).
+- Setup status shows a "Session recording" row for admins: whether recording is on and which store, and when it is off, why and how to turn it on (`env.WARDYN_RECORDING_STORE=pg` or `persistence.enabled=true`). The chart's default records nothing.
 - Setup status warns admins when `self_host_runner` is restricted, runners people own are claimed and no permission names it, so
   only admins can mint runner tokens; it gives the grant to write.
 - `wardyn runner revoke <runner>` revokes one of your own runners by id or name, the command-line twin of My runner.

@@ -322,6 +322,8 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 		if chk, ok := s.runnerLimitsRow(ctx); ok {
 			checks = append(checks, chk)
 		}
+		// recording: whether session recording is on, and how to turn it on. Never Blocking.
+		checks = append(checks, s.recordingRows()...)
 		// runner_arch_images: image keys with no image for a registered runner's architecture. Never Blocking.
 		if chk, ok := s.runnerArchImagesRow(ctx); ok {
 			checks = append(checks, chk)
