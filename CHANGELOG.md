@@ -14,7 +14,7 @@ keystore for a run. A security operator sets each runner's trust class, and macO
 package and an MDM profile. This section lists the changes since 0.9.3-rc.2; read it with the rc.1 and rc.2 notes
 below.
 
-<!-- lead: verify the summary's scope claims once K3b, K6, K7, ASK6R, ASK6D and SPOOL have merged. -->
+<!-- lead: verify the summary's scope claims once K6, K7, ASK6D and SPOOL have merged. -->
 
 ### Before you upgrade
 
@@ -41,6 +41,9 @@ below.
   (migration `0182_runner_resident_runs`), `runner_output_watermarks` and `runner_retirements` (migration
   `0183_runner_retirements`). Without them a runner cannot be handed a
   `runner_resident` credential, and a finished runner run's output is never retired.
+- The same installs: grant the app role `SELECT, INSERT, UPDATE, DELETE` on `run_containment_pending` and
+  `SELECT, INSERT, UPDATE` on `run_node_records` (migration `0189_run_containment_pending`). Without them a
+  Kubernetes runner's state page is refused while it holds a run as containment pending.
 - A repository URL with a user name, password or token before its http(s) host is now refused (`400`
   `repo_url_credentials`). Workspaces, library sources, policies, presets and templates stored with one now fail
   closed at launch and scan, and must be edited to the plain URL with the credential in a `git_pat` grant. Azure
@@ -117,7 +120,15 @@ below.
 - `wardyn-runnerd register --trusted-ca-file` makes the registration call trust a corporate CA beside the system
   roots; the Kubernetes chart passes it to its register container when `trustedCA.configMap` is set.
 - Security admins can set who may use a remote-hosted runner.
-<!-- pending merge: K3b -->
+- A run a Kubernetes runner deleted but cannot prove stopped shows on run detail as "Containment pending; egress
+  bounded until T", then "Egress bound passed; termination unknown". The run keeps its lease hold, its proxy's token
+  renewal is refused (`run_containment_pending`), and a security operator can release it with a node record ("node
+  powered off" or "no prior holder") from run detail or `wardyn runner node-record`; a run whose node name was
+  reused, or that the runner could not tie to one machine, needs two people. Migration `0189_run_containment_pending`
+  adds `run_containment_pending` and `run_node_records` and lets a `stop_proxy` action carry a node record instead
+  of an outage loss.
+- A Kubernetes run whose proxy was given an address still fenced for an earlier run fails at start with
+  `relay_ip_fenced`.
 - Governance has a Baseline hosts tab, the console for `PUT /governance/egress-baseline`: the hosts the autonomy
   rubric and the risk grade treat as baseline beside the built-in public set. A run whose allowlist holds only such
   hosts does not grade egress `open`, and an `api_key` to one, a Bedrock provider's credential included, grades

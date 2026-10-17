@@ -430,6 +430,16 @@ describe("dispatch failures in plain words (M2)", () => {
     );
   });
 
+  it("relay_ip_fenced is its own ending, with its own copy", () => {
+    const fenced = [ev("run.create", "failure", { data: { error: "k8s: proxy pod 10.244.1.7: relay_ip_fenced: x", reason: "relay_ip_fenced" } })];
+    expect(runEndingFromAudit("FAILED", fenced)?.kind).toBe("relay_ip_fenced");
+    renderBlock("FAILED", fenced);
+    const block = screen.getByTestId("run-failure-block");
+    expect(block.getAttribute("data-ending")).toBe("relay_ip_fenced");
+    expect(block.textContent).toContain("its proxy was given a network address the runner still holds for an earlier run");
+    expect(block.textContent).toContain("Start the run again. The policy and workspace are unchanged.");
+  });
+
   it("sandbox_create renders its copy, the stripped words, and the unstripped text behind a closed disclosure", () => {
     renderBlock("FAILED", [ev("run.create", "failure", { data: { error: WRAPPED, reason: "sandbox_create" } })]);
     const block = screen.getByTestId("run-failure-block");

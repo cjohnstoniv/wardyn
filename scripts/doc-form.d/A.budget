@@ -176,7 +176,8 @@
 # docs/AUDIT-ACTIONS.md 47970 = 47835 + 135, measured: at the FIN-C2 merge into the final train (both sides' sentences).
 # docs/AUDIT-ACTIONS.md 47373 adds 11: the sponsor_not_entitled reason and the purge row counts (invitations, service identities) and the policy before/after fields (0.9.3 FIN-B2).
 # docs/AUDIT-ACTIONS.md 47981, measured at the second decided-rows merge into the final train (both sides' sentences).
-docs/AUDIT-ACTIONS.md=47981 share=8
+# docs/AUDIT-ACTIONS.md 48237 adds 256, measured: the run.containment.hold and run.node.record rows and the identity.renew reason.
+docs/AUDIT-ACTIONS.md=48237 share=8
 # docs/AUDIT-ACTIONS.md 39938 adds 1 (0.9 H7): the `placement_component_self_defined` reason in the authz.denied vocabulary.
 # 0.9 H10 r1: docs/AUDIT-ACTIONS.md 40113 adds 65 over 40048 for the token-revoke join, the off semantics and the pending connect/disconnect rows.
 # 0.9 H10: docs/AUDIT-ACTIONS.md 40048 adds 111 over 39937 for runner.token.revoke, runners.enabled.set, runner.connect and runner.disconnect.

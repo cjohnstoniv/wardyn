@@ -30,6 +30,9 @@ func (s *Server) StatePageFromRunner(ctx context.Context, runnerID uuid.UUID, se
 	if err == nil && result.AssertedCapHeld {
 		s.RecordRunnerInventoryHold(ctx, runnerID)
 	}
+	if err == nil {
+		s.recordRunContainmentEvents(ctx, result.Containment)
+	}
 	if err != nil || !result.Complete {
 		return err
 	}

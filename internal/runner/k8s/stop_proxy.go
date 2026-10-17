@@ -32,8 +32,9 @@ import (
 var (
 	errRunnerNetPolOverride = errors.New("k8s: a runner boots only on an enforced NetworkPolicy canary verdict: WARDYN_K8S_ALLOW_UNENFORCED_NETPOL and WARDYN_K8S_ACK_AMBIENT_DEFAULT_DENY are refused " +
 		"(for an ambient platform default-deny, use a runs namespace that deny does not cover)")
-	// errRelayIPFenced: a new proxy pod reported an IP a fenced run still holds (Fable L5).
-	errRelayIPFenced = errors.New("relay_ip_fenced: the proxy pod's IP is still fenced for another run whose termination is unknown")
+	// errRelayIPFenced: a new proxy pod reported an IP a fenced run still holds. It wraps the
+	// runner.ErrRelayIPFenced sentinel, so it crosses the wire as its own code.
+	errRelayIPFenced = fmt.Errorf("the proxy pod's IP is still fenced for another run whose termination is unknown: %w", runner.ErrRelayIPFenced)
 	// errDecisionSinkUnwired: runner mode has no decision sink to hand the proxy.
 	errDecisionSinkUnwired = errors.New("k8s: this runner has no decision sink for the proxy's decisions; refusing to create a sandbox")
 	// errTerminationUnknown: no arm of completion evidence holds yet.

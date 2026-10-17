@@ -21,6 +21,7 @@ import type {
   RunnerUpdateRequest,
   RunnerView,
 } from "../types/runners";
+import type { RunContainment, RunNodeRecord, RunNodeRecordRequest } from "../types/run-containment";
 import type { RunnerSettings } from "../types/site";
 import { asJson, asNoContent, LIST_LIMIT, unwrapList, wfetch } from "./core";
 
@@ -70,6 +71,13 @@ export const runners = {
     wfetch(`/runners/${seg(id)}/trust`, { method: "PUT", asPerson: true, headers: JSON_HEADERS, body: JSON.stringify({ trust_class, reason } satisfies RunnerTrustRequest) }).then((r) =>
       asJson<RunnerView>(r),
     ),
+  /** GET /runs/{id}/containment (the run's owner or an admin): whether its Kubernetes runner holds it as containment pending. */
+  runContainment: (runId: string) => wfetch(`/runs/${seg(runId)}/containment`, { method: "GET" }).then((r) => asJson<RunContainment>(r)),
+  /**
+   * POST /runs/{id}/node-record (security tier): a node record naming the tuple the form showed. A record that needs
+   * a second person answers 202, which throws PendingChangeError.
+   */
+  recordNode: (runId: string, body: RunNodeRecordRequest) => post<RunNodeRecord>(`/runs/${seg(runId)}/node-record`, body),
   /** DELETE /runners/{id} (security tier). */
   revoke: (id: string) => wfetch(`/runners/${seg(id)}`, { method: "DELETE" }).then((r) => asJson<RunnerRevokeAnswer>(r)),
   /** DELETE /me/runners/{id}; `notMine` marks a runner the person did not register, so security tooling can tell it apart. */
