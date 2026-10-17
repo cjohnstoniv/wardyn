@@ -86,7 +86,7 @@ export interface RunQueue {
   queued_at: string;
   deadline_at: string;
   position: number;
-  /** runner_pool_at_capacity, runner_pool_no_runner_free or runner_pool_runners_at_capacity (RUN_WAIT_REASON). */
+  /** runner_pool_at_capacity, runner_pool_no_runner_free, runner_pool_runners_at_capacity or runner_pool_recording_store_off (RUN_WAIT_REASON). */
   reason: string;
 }
 

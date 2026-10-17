@@ -385,3 +385,32 @@ func TestPG_DefaultsWriteWithoutRecordingKeepsIt(t *testing.T) {
 		t.Fatalf("pool after a rename = %+v, %v; want recording required", p.Recording, err)
 	}
 }
+
+// TestPG_QueuedRunWaitsForTheRecordingStore: under required, a queued run in an organisation that keeps
+// no session recordings says so (runner_pool_recording_store_off) rather than that no runner is online,
+// keeps its place, and starts once the store is back.
+func TestPG_QueuedRunWaitsForTheRecordingStore(t *testing.T) {
+	fs, err := recording.NewFSStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := newQueueEnv(t)
+	e.srv.cfg.RecordingStore = fs
+	f := e.runner.execFacts["alpha"]
+	f.Records = true
+	e.runner.execFacts["alpha"] = f
+	pool := e.cappedPool("Busy", 1)
+	occupant := e.occupy(pool)
+	waiting := e.queuedLaunch(nil, pool, "")
+	e.requireRecording(types.RecordingRequired)
+	e.srv.cfg.RecordingStore = nil
+	e.free(occupant)
+	e.sweep()
+	if got := e.run(waiting.ID); got.State != types.RunQueued || got.StatusDetail != "queue: runner_pool_recording_store_off" || e.queueRows(waiting.ID) != 1 {
+		t.Fatalf("with no recording store the run is %s %q with %d rows; want QUEUED waiting with runner_pool_recording_store_off",
+			got.State, got.StatusDetail, e.queueRows(waiting.ID))
+	}
+	e.srv.cfg.RecordingStore = fs
+	e.sweep()
+	e.waitStarted(waiting.ID)
+}

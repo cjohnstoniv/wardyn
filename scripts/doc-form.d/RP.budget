@@ -12,4 +12,5 @@
 # docs/operations/runner-pools.md 1972 = 1951 + 21, measured: at the FIN-C2 merge into the final train (both sides' sentences).
 # docs/operations/runner-pools.md 1976 = 1972 + 4, measured: the add row names organization runners.
 # docs/operations/runner-pools.md 1980 = 1976 + 4, measured: the organization pool row names organization runners.
-docs/operations/runner-pools.md=1980 share=35
+# docs/operations/runner-pools.md 2017 = 1980 + 37, measured: the runner_pool_recording_store_off wait-reason row
+docs/operations/runner-pools.md=2017 share=35

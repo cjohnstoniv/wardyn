@@ -170,7 +170,7 @@ func (s *Server) queueRunnerFree(ctx context.Context, pool types.RunnerPool, lau
 		requireRecording: org.Recording == types.RecordingRequired || row.Pool.Recording == types.RecordingRequired}
 	// A required setting with no store has no room anywhere: the start would refuse recording_store_off.
 	if demand.requireRecording && s.cfg.RecordingStore == nil {
-		out.wait = runnerpool.WaitNoRunnerFree
+		out.wait = runnerpool.WaitRecordingStoreOff
 		return out, nil
 	}
 	out.needs = map[string]types.RunnerAmounts{}

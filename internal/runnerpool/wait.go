@@ -23,9 +23,14 @@ const WaitNoRunnerFree WaitReason = "runner_pool_no_runner_free"
 // (its Runs at once, or a total this run would pass), so the run keeps its place until one has room.
 const WaitRunnersAtCapacity WaitReason = "runner_pool_runners_at_capacity"
 
+// WaitRecordingStoreOff: recording is required (by the organisation or the pool) and the organisation
+// keeps no session recordings, so no runner has room for the run until the store is on. A run created
+// in that state is refused recording_store_off; this is the wait of one already queued.
+const WaitRecordingStoreOff WaitReason = "runner_pool_recording_store_off"
+
 // Valid reports whether w is a wait reason.
 func (w WaitReason) Valid() bool {
-	return w == WaitAtCapacity || w == WaitNoRunnerFree || w == WaitRunnersAtCapacity
+	return w == WaitAtCapacity || w == WaitNoRunnerFree || w == WaitRunnersAtCapacity || w == WaitRecordingStoreOff
 }
 
 // Wait is the answer when a new run must queue behind a pool's cap. Whoever owns
@@ -54,4 +59,10 @@ func WaitRunnersAtCapacityMsg(pool string) string {
 // WaitNoRunnerFreeMsg is the sentence of a queued run no runner of its owner can take yet.
 func WaitNoRunnerFreeMsg(pool string) string {
 	return fmt.Sprintf("None of your runners in %s is online. This run starts when one is.", pool)
+}
+
+// WaitRecordingStoreOffMsg is the sentence of a queued run held because recording is required and the
+// organisation keeps no session recordings.
+func WaitRecordingStoreOffMsg() string {
+	return "Recording is required, and this organisation keeps no session recordings. This run starts when the organisation's recording store is on."
 }

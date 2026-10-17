@@ -83,10 +83,11 @@ what to set for the old behaviour.
   at 32, and its next save is refused until the value is lowered.
 - A run, or a save of `recording: required` (a pool, or the organisation's defaults), is refused `422`
   `recording_store_off` when the organisation keeps no session recordings and recording is required.
+  A run already waiting in that state says so (wait reason `runner_pool_recording_store_off`) instead of that no runner is online.
 - A kill whose teardown is incomplete still answers `500`, now with reason `internal_error`, and its `errors` field is
   an array of the failed step names instead of an object of step and error text. The text is in the `run.revoke`
   audit row; retry the kill.
-- The console's draft saves, the providers Saves among them, can now be refused `412` (`site_config_stale`) before
+- The console's draft saves, the providers Saves among them, can now be refused `412` (`expected_principal_mismatch`) before
   anything is written. Reload and retry. Writes without the console's header (the CLI, scripts) are unaffected.
 - A runner older than 0.9.3 is refused a run that needs a resident credential (`placement_credential`) and is not
   asked to retire a finished run's output. Upgrade runners after the organisation.

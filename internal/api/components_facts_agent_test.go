@@ -384,6 +384,9 @@ func TestComponentFacts_HarnessSetFallbackMatchesDispatch(t *testing.T) {
 	if got == nil || got.Path != want.path || got.Document != string(want.content) {
 		t.Fatalf("preflight reports %+v; dispatch writes %s at %s", got, want.content, want.path)
 	}
+	if got.Harness != want.harness {
+		t.Errorf("managed_settings.harness = %q, want %q: the fact names the harness whose document dispatch writes, not the started codex-cli", got.Harness, want.harness)
+	}
 }
 
 // Control: an exec run has no agent process, so no agent fact, as before.
