@@ -4,6 +4,7 @@
 package proxy
 
 import (
+	"context"
 	"crypto/tls"
 	"errors"
 	"net"
@@ -37,6 +38,8 @@ func TestPostConnectFailureIsAfterConnectWhateverItsType(t *testing.T) {
 		{wrap(errors.New(`http2: server sent GOAWAY and closed the connection; LastStreamID=1, ErrCode=NO_ERROR, debug=""`)), "after connect", reasonUpstreamError},
 		{wrap(errors.New("stream error: stream ID 1; INTERNAL_ERROR; received from peer")), "after connect", reasonUpstreamError},
 		{wrap(errors.New("http: server closed idle connection")), "after connect", reasonUpstreamError},
+		// B-R4-L3: the request context's deadline passing while the answer's headers are awaited.
+		{wrap(context.DeadlineExceeded), "after connect", reasonUpstreamError},
 		{wrap(&net.OpError{Op: "dial", Net: "tcp", Err: syscall.ECONNREFUSED}), "tcp dial", reasonUpstreamUnreachable},
 		{wrap(&connectStageError{errors.New("i/o timeout")}), "dial", reasonUpstreamUnreachable},
 	} {
@@ -83,5 +86,18 @@ func TestPostHandshakeResetIsUpstreamError(t *testing.T) {
 		!strings.HasPrefix(v.message, "wardyn: "+reasonUpstreamError+": ") || !strings.HasPrefix(d.Cause, "after connect: ") ||
 		d.RuleSource != "builtin:dial-failed" {
 		t.Errorf("status %d reason %q message %q row %s %q", rec.Code, rec.Header().Get("X-Wardyn-Reason"), v.message, d.RuleSource, d.Cause)
+	}
+}
+
+// R6-L1: a plain-HTTP forward whose dial fails before the connection opened with an error that is
+// no net dial error (no vetted target on the context here) is a "dial" failure, not "after connect".
+func TestPlainHTTPDialFailureBeforeConnectReadsDial(t *testing.T) {
+	p := newProxy(Options{RunID: uuid.New(), Policy: CompilePolicy(types.RunPolicySpec{})})
+	_, err := p.transport.DialContext(context.Background(), "tcp", "example.test:80")
+	if err == nil {
+		t.Fatal("dial with no vetted target succeeded")
+	}
+	if got := dialStage(err); got != "dial" || classifyUpstreamErr(err) != reasonUpstreamUnreachable {
+		t.Errorf("dialStage(%v) = %q, reason %q; want dial, %q", err, got, classifyUpstreamErr(err), reasonUpstreamUnreachable)
 	}
 }
