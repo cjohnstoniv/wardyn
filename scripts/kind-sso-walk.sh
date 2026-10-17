@@ -689,17 +689,6 @@ EFFECTIVE_INJECT="$(kubectl --context "${CONTEXT}" -n "${NAMESPACE}" get deploym
   "the deployment runs WARDYN_AWS_SSO_PROXY_INJECT='${EFFECTIVE_INJECT:-<unset>}' but this walk intended '${PROXY_INJECT}' — the helm upgrade did not reach the pod (see ${EVIDENCE_DIR}/helm-upgrade.log); a walk that certifies the wrong posture is worse than no walk"
 echo "kill switch:     WARDYN_AWS_SSO_PROXY_INJECT=${EFFECTIVE_INJECT} (intended ${PROXY_INJECT})"
 
-manifest_images() {
-  local first=1
-  for img in "${WARDYND_IMAGE}" "${PROXY_IMAGE}" "${AGENT_IMAGE}" "${AWS_SSO_IMAGE}" "${FAKE_IMAGE}"; do
-    local h n
-    h="$(host_digest "${img}")"; n="$(node_ref_for "${img}")"
-    [[ ${first} -eq 1 ]] || printf ','
-    first=0
-    jq -cn --arg i "${img}" --arg h "${h}" --arg n "${n}" \
-      '{image:$i, host_id:$h, node_id:$n, agree:($h==$n and $h!="")}'
-  done
-}
 FAKE_ENV="$(kubectl --context "${CONTEXT}" -n "${NAMESPACE}" get deployment "${FAKE_SVC}" \
   -o json 2>/dev/null | jq -c '[.spec.template.spec.containers[0].env[]? | select(.name|startswith("AWSSSOFAKE_")) | {(.name): .value}] | add // {}')"
 # An unreadable deployment must not make `--argjson` choke on an empty string.
