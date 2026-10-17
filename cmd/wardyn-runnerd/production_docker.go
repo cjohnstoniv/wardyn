@@ -149,8 +149,12 @@ func readDockerCapacity(ctx context.Context) (placement.Capacity, error) {
 // search: it answers (unreachable is the refusal when it does not), an
 // explicit --relay-listen passes admitRelayBind before anything on the engine
 // changes, and the proxy sidecars' bridge exists. Any failure exits serve;
-// the service manager's restart policy is the retry.
+// the service manager's restart policy is the retry. An engine that accepts
+// the connection and never answers fails at engineCheckBound, so serve exits
+// with a log line instead of waiting, silent, for ever.
 func readyEngine(ctx context.Context, cli *client.Client, unreachable, network string, want relayPair) (dockerEngine, error) {
+	ctx, cancel := context.WithTimeout(ctx, engineCheckBound)
+	defer cancel()
 	eng, err := inspectEngine(ctx, cli, unreachable)
 	if err != nil {
 		return dockerEngine{}, err
@@ -197,6 +201,9 @@ func inspectEngine(ctx context.Context, cli *client.Client, unreachable string) 
 
 // relayCheckBound bounds pulling the proxy image and the relay search together.
 const relayCheckBound = 2 * time.Minute
+
+// engineCheckBound bounds readyEngine's calls to the engine.
+var engineCheckBound = 30 * time.Second
 
 // chooseRelay pulls the proxy image when it is missing, so the probe runs the
 // image runs will, then finds the relay pair (findRelay) with the driver's

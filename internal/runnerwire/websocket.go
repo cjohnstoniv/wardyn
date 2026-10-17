@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/coder/websocket"
 	"github.com/google/uuid"
@@ -73,6 +74,11 @@ func StreamURL(orgURL, runnerID string) (string, error) {
 	return u.String(), nil
 }
 
+// dialTimeout bounds a WebSocket dial up to the upgrade's answer. The transport bounds the TCP and TLS
+// handshakes but not the wait for that answer, so a middlebox that takes the upgrade and never replies
+// would hold the reconnect loop for ever. coder/websocket uses the context for the handshake only.
+var dialTimeout = 30 * time.Second
+
 // DialWebSocket uses the HTTP transport's TLS roots and HTTPS_PROXY support.
 // Redirects are always refused, including when a caller supplies a client.
 func DialWebSocket(ctx context.Context, orgURL, runnerID string, client *http.Client) (*WebSocket, error) {
@@ -80,6 +86,8 @@ func DialWebSocket(ctx context.Context, orgURL, runnerID string, client *http.Cl
 	if err != nil {
 		return nil, err
 	}
+	ctx, cancel := context.WithTimeout(ctx, dialTimeout)
+	defer cancel()
 	hc := http.Client{}
 	if client != nil {
 		hc = *client

@@ -329,6 +329,37 @@ func TestInspectEngine(t *testing.T) {
 	}
 }
 
+// An engine that takes the connection and never answers fails readyEngine at engineCheckBound, so
+// serve exits with a reason the service manager logs instead of waiting, silent, through every restart.
+func TestReadyEngineGivesUpOnAnEngineThatNeverAnswers(t *testing.T) {
+	prev := engineCheckBound
+	engineCheckBound = 100 * time.Millisecond
+	t.Cleanup(func() { engineCheckBound = prev })
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { <-release }))
+	t.Cleanup(srv.Close)
+	t.Cleanup(func() { close(release) })
+	t.Setenv("DOCKER_HOST", "tcp://"+strings.TrimPrefix(srv.URL, "http://"))
+	cli, err := client.New(client.FromEnv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cli.Close()
+	done := make(chan error, 1)
+	go func() {
+		_, err := readyEngine(context.Background(), cli, "unreachable", "wardyn-internal", relayPair{})
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err == nil || !errors.Is(err, context.DeadlineExceeded) && !strings.Contains(err.Error(), "deadline exceeded") {
+			t.Fatalf("readyEngine = %v, want the engine check deadline", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("readyEngine still waits on an engine that never answers")
+	}
+}
+
 // readyEngine creates a missing proxy-sidecar bridge as the installer does,
 // leaves an existing one alone, and creates nothing for a refused bind.
 func TestReadyEngineCreatesTheMissingNetwork(t *testing.T) {

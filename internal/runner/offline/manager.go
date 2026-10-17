@@ -160,6 +160,9 @@ func (m *Manager) Clock(h runnerwire.Hello, received time.Time) error {
 	return m.clock.Hello(h, received)
 }
 
+// beforeReadyContainBound bounds the containment BeforeReady runs before a session is ready.
+var beforeReadyContainBound = 30 * time.Second
+
 // BeforeReady enables admission only after pending actions and fresh replay.
 // It does not write to peer; resumed peers have not started their read loop.
 func (m *Manager) BeforeReady(ctx context.Context, peer *runnerwire.Peer, _ bool) error {
@@ -169,7 +172,12 @@ func (m *Manager) BeforeReady(ctx context.Context, peer *runnerwire.Peer, _ bool
 	if revoked {
 		return runnerwire.ErrRevoked
 	}
-	if err := m.CheckLapses(ctx); err != nil {
+	// A resumed session calls this before its peer starts, so no link failure ends a stop that waits on
+	// a wedged engine: bound it as the containment loop bounds its own.
+	contain, done := context.WithTimeout(ctx, beforeReadyContainBound)
+	err := m.CheckLapses(contain)
+	done()
+	if err != nil {
 		return err
 	}
 	m.mu.Lock()
