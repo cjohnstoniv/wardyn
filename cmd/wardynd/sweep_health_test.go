@@ -13,6 +13,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/cjohnstoniv/wardyn/internal/api"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/store"
@@ -291,9 +293,9 @@ type listFailingApprovals struct {
 	err error
 }
 
-func (l listFailingApprovals) ListApprovals(ctx context.Context, state types.ApprovalState) ([]types.ApprovalRequest, error) {
+func (l listFailingApprovals) ListExpiredPendingApprovals(ctx context.Context, now, cutoff time.Time, afterID uuid.UUID, limit int) ([]types.ApprovalRequest, error) {
 	if l.err != nil {
 		return nil, l.err
 	}
-	return l.sweepStore.ListApprovals(ctx, state)
+	return l.sweepStore.ListExpiredPendingApprovals(ctx, now, cutoff, afterID, limit)
 }

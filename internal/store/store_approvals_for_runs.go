@@ -11,6 +11,7 @@ package store
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -52,6 +53,19 @@ func (s PG) ListPendingApprovalsForRuns(ctx context.Context, runIDs []uuid.UUID)
 		FROM approvals
 		WHERE state = 'PENDING' AND run_id = ANY($1)`
 	return collect(ctx, s.Pool, "list", "pending approvals for runs", q, []any{runIDs}, scanApproval)
+}
+
+// ListExpiredPendingApprovals — see approval.Store. Keyset on id, so each sweep page is an index
+// range over the partial pending index and a failed row never makes the next page re-read it.
+func (s PG) ListExpiredPendingApprovals(ctx context.Context, now, cutoff time.Time, afterID uuid.UUID, limit int) ([]types.ApprovalRequest, error) {
+	q := `
+		SELECT ` + approvalCols + `
+		FROM approvals
+		WHERE state = 'PENDING' AND id > $1
+		  AND (requested_at <= $2 OR COALESCE(` + approvalExpiresAtSQL + ` <= $3, false))
+		ORDER BY id
+		LIMIT $4`
+	return collect(ctx, s.Pool, "list", "expired pending approvals", q, []any{afterID, cutoff, now, limit}, scanApproval)
 }
 
 // CountPendingApprovals — see ApprovalsForRunsPager. Backed by the partial
