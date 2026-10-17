@@ -126,6 +126,7 @@ func TestInternalHostsOnRunnerDocker(t *testing.T) {
 
 	// The organisation removes the declaration; the run is revived.
 	sc.InternalHosts = nil
+	srv.cfg.Store = reviveTrustDispatchStore{srv.cfg.Store.(siteConfigDispatchStore)}
 	raw, err := srv.loadRunProxyConfig(ctx, run.ID)
 	if err != nil {
 		t.Fatal(err)
