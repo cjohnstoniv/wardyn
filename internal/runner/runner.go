@@ -505,6 +505,14 @@ type ImageChecker interface {
 	ImagePresent(ctx context.Context, ref string) (bool, error) // present in the substrate's local image store right now
 }
 
+// ImageDescriber is an OPTIONAL Runner capability: a substrate with a local image store (docker)
+// says which image the store resolved ref to (registry digest, platform, and whether that digest
+// is a multi-arch index when the store can tell). It reads the local store only, never a registry.
+// An error means the store has no such image or cannot be read.
+type ImageDescriber interface {
+	DescribeImage(ctx context.Context, ref string) (string, error)
+}
+
 // ImageRemover is an OPTIONAL Runner capability: a substrate with a local
 // image store (docker) implements this so a superseded workspace-built image
 // can be reclaimed instead of leaking forever. Best-effort, same posture as

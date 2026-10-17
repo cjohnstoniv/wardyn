@@ -58,4 +58,6 @@
 # docs/ENV.md 37620 = 37609 + 11 (RV2), measured at the wave-A merge.
 # docs/ENV.md 37334 adds 4 (0.9.3 RV4e, FR-0161): the run-output retention day bound.
 # docs/ENV.md 37619 = 37620 + -1 (RV4e), measured at the wave-A merge.
-docs/ENV.md=37619 share=5
+# docs/ENV.md 37389 adds 59 (0.9.3 M-6/R19): the air-gapped default of the drive probe image.
+# docs/ENV.md 37679 = 37619 + 60 (M2), measured at the wave-A merge.
+docs/ENV.md=37679 share=5

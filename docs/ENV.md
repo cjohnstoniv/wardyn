@@ -1325,6 +1325,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - Pulled only by `PrewarmImages` in the background at boot.
 - `ProbeDrive` itself only CHECKS presence and fails the probe (open, never a refusal — see `WARDYN_PROXY_IMAGE`'s sibling budget note at `driveShareProbeTimeout`) rather than pulling inline on a request.
 - So an operator who overrides this must make sure the image is reachable at boot (flag `-drive-probe-image`).
+- Unset, the probe runs the pinned `busybox@sha256:...` default from docker.io (a multi-arch index, so it runs on either laptop architecture). An air-gapped estate cannot pull it: the boot pull fails with a warning, `ProbeDrive` finds no image, and the readability check fails open and unanswered (`wardyn_drive_probe_errors_total` rises). Mirror busybox with every platform and set this variable to the mirrored ref.
 
 ### `WARDYN_ALLOW_AGENT_TELEMETRY`
 
