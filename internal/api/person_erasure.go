@@ -18,8 +18,6 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/google/uuid"
-
 	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/erasure"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
@@ -89,7 +87,9 @@ func (s *Server) erasureOrchestrator(credRep *secretstore.EraseReport, want *era
 		})
 	}
 	if s.cfg.MaskManifests != nil {
-		steps[erasure.MaskCopies] = s.eraseMaskCopies
+		steps[erasure.MaskCopies] = func(ctx context.Context, person string) (any, error) {
+			return s.eraseMaskCopies(ctx, person, want)
+		}
 	}
 	if _, ok := s.cfg.Store.(store.RunnerPoolStore); ok {
 		steps[erasure.RunnerPools] = s.eraseRunnerPoolsOf
@@ -157,13 +157,22 @@ func (s *Server) eraseCredentialsScope(ctx context.Context, owner string, want *
 	}
 	defer finish()
 	s.revokeOwnerRunPATs(ctx, owner, adoPATRevokeOffboarding)
-	var runs []uuid.UUID
+	fenced := 0
 	if s.cfg.MaskManifests != nil && owner != "" { // "" is refused by the erase below
-		if runs, err = s.cfg.MaskManifests.FenceSubject(ctx, owner); err != nil {
+		// Every namespace eraseLocked erases: a run started under an entra form owns its manifest by it.
+		namespaces, err := s.personNamespaces(ctx, owner, want)
+		if err != nil {
 			return 0, err
 		}
+		for _, ns := range namespaces {
+			runs, err := s.cfg.MaskManifests.FenceSubject(ctx, ns)
+			fenced += len(runs)
+			if err != nil {
+				return fenced, err
+			}
+		}
 	}
-	return len(runs), s.eraseLocked(ctx, owner, rowID, want, rep)
+	return fenced, s.eraseLocked(ctx, owner, rowID, want, rep)
 }
 
 // alsoEraseLaunchIntents runs step, then erases the person's launch intents and

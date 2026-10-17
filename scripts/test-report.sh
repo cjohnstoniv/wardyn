@@ -228,13 +228,15 @@ esac
 # default-off shape. WARDYN_TEST_REPORT_SKIP_FLOOR silences this floor too.
 # Exact names, not a pattern: EVERY one must pass (checked below), so dropping
 # or renaming one case reddens the job even while the others still match.
+# The PlacementRouting cases cannot skip here: these substrates advertise CC1 only (no gVisor or Kata on
+# CI; the k8s suite sets no ConfinementRuntimes), and the remote suite supplies the offline runner.
 REQUIRE_ALL=""
 if [ -z "${WARDYN_TEST_REPORT_SKIP_FLOOR:-}" ]; then
   if [ "$SUITE" = "conformance-docker" ] && [ "${WARDYN_TEST_DOCKER:-}" = "1" ]; then
-    REQUIRE_ALL='TestConformanceDocker/L0StructuralEgress TestConformanceDocker/CreateStatusStop TestConformanceDocker/ExecStream TestConformanceDocker/ManagedFiles TestConformanceDocker/UserDrives TestBootEgress_NoFirstUseApproval'
+    REQUIRE_ALL='TestConformanceDocker/L0StructuralEgress TestConformanceDocker/CreateStatusStop TestConformanceDocker/ExecStream TestConformanceDocker/ManagedFiles TestConformanceDocker/UserDrives TestBootEgress_NoFirstUseApproval TestConformanceDocker/PlacementRouting/UnregisteredRunnerIsRefusedNeverSubstituted TestConformanceDocker/PlacementRouting/UnadvertisedClassIsRefusedNeverDowngraded TestConformanceDocker/PlacementRouting/AskedPlacementIsHonoured TestConformanceDockerThroughRemote/PlacementRouting/OfflineRunnerIsRefusedNotRoutedLocally'
   fi
   if [ "$SUITE" = "conformance-k8s" ] && [ "${WARDYN_TEST_K8S:-}" = "1" ]; then
-    REQUIRE_ALL='TestConformanceK8s/AgentCannotReachAPIServer TestConformanceK8s/AgentCannotReachAnythingButTheProxy TestConformanceK8s/CreateStatusStop TestConformanceK8s/WaitExitCode TestConformanceK8s/UserDrives'
+    REQUIRE_ALL='TestConformanceK8s/AgentCannotReachAPIServer TestConformanceK8s/AgentCannotReachAnythingButTheProxy TestConformanceK8s/CreateStatusStop TestConformanceK8s/WaitExitCode TestConformanceK8s/UserDrives TestConformanceK8s/PlacementRouting/UnregisteredRunnerIsRefusedNeverSubstituted TestConformanceK8s/PlacementRouting/UnadvertisedClassIsRefusedNeverDowngraded TestConformanceK8s/PlacementRouting/AskedPlacementIsHonoured'
   fi
   if [ "$SUITE" = "envbuild" ] && [ "${WARDYN_TEST_DOCKER:-}" = "1" ]; then
     REQUIRE_ALL='TestBuild_SmokeDockerd TestBuildFromDevcontainerFiles_BakesAgentCLI'

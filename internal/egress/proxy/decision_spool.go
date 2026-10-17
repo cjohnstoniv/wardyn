@@ -245,6 +245,7 @@ func (p *Proxy) admitSpoolHTTP(w http.ResponseWriter, r *http.Request, mitmHost 
 	// JSON can expand one control byte into six. Refuse an oversized target
 	// before forwarding rather than discover that the final row cannot fit.
 	if r.URL == nil || 6*(len(r.URL.String())+len(r.Host)+len(r.Method)) > runnerspool.MaxRecordBytes-4096 {
+		p.recordTooLarge(r, mitmHost)
 		p.refuseUnaudited(w, r, mitmHost, http.StatusRequestURITooLong, reasonAuditRecordTooLarge, "egress audit record too large",
 			"the request target is too long to record in the run's egress audit, so it was not sent")
 		return nil, nil
@@ -272,6 +273,31 @@ func (p *Proxy) admitSpoolHTTP(w http.ResponseWriter, r *http.Request, mitmHost 
 		return nil, nil
 	}
 	return r.WithContext(context.WithValue(r.Context(), spoolTicketKey{}, id)), func() { p.sink.release(id) }
+}
+
+// ruleSourceAuditRecordTooLarge marks the deny written for a request whose target is too long to record.
+const ruleSourceAuditRecordTooLarge = "builtin:audit-record-too-large"
+
+// tooLargeFieldBytes bounds each request string the too-large deny keeps.
+const tooLargeFieldBytes = 512
+
+// recordTooLarge writes a bounded deny for a request refused because its target cannot be recorded:
+// the host, method and the start of the path, never the query. It was never sent, so it needs no
+// reservation; a spool with no room counts it as a refusal, as any unadmitted deny.
+func (p *Proxy) recordTooLarge(r *http.Request, mitmHost string) {
+	host, path := mitmHost, ""
+	if r.URL != nil {
+		path = r.URL.Path
+		if host == "" {
+			host = r.URL.Hostname()
+		}
+	}
+	if host == "" {
+		host = r.Host
+	}
+	clip := func(v string) string { return strings.ToValidUTF8(v[:min(len(v), tooLargeFieldBytes)], "") }
+	p.sink.emit(decisionLog(egress.Request{RunID: p.runID, Host: clip(strings.ToLower(host)), Method: clip(strings.ToUpper(r.Method)),
+		Path: clip(path), Time: p.now()}, egress.Deny, ruleSourceAuditRecordTooLarge))
 }
 
 // refuseUnaudited answers a request the audit could not record, keeping its

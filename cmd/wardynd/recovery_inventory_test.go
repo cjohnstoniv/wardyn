@@ -6,8 +6,13 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"maps"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"filippo.io/age"
 )
 
 // recoveryFlagsFor is the bootFlags a `wardynd -recovery-inventory` run resolves for one deployment, with
@@ -147,5 +152,66 @@ func TestRecoveryMode_RefusesACombinedMaintenanceMode(t *testing.T) {
 	ran, err := recoveryMode(f)
 	if !ran || err == nil {
 		t.Fatalf("recovery verb with -reconcile: ran %v, err %v; want a refusal", ran, err)
+	}
+}
+
+// A secret that spells a report enum is redacted where it can appear, in a check's free text, and never
+// rewrites the verdict or a result: a database password "pass" still reads as a passing rehearsal.
+func TestRehearsalReport_ScrubsFreeTextNotTheVerdict(t *testing.T) {
+	rep := &rehearseReport{SetID: "set-1", Verdict: resultPass, Checks: []rehearseCheck{
+		{Name: "pairing", Result: resultPass, Detail: "dialled postgres://u:pass@db/x", Failing: []string{"pass in a row reference"}},
+	}}
+	var out bytes.Buffer
+	if err := writeReport(&out, rep, scrubber{"pass"}); err != nil {
+		t.Fatalf("a passing report: %v", err)
+	}
+	var got rehearseReport
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("%v: %s", err, out.String())
+	}
+	if got.Verdict != resultPass || got.Checks[0].Result != resultPass {
+		t.Fatalf("an enum was scrubbed: %s", out.String())
+	}
+	if strings.Contains(got.Checks[0].Detail, "pass") || strings.Contains(got.Checks[0].Failing[0], "pass") {
+		t.Fatalf("the secret survived in free text: %s", out.String())
+	}
+	if rep.Checks[0].Detail != "dialled postgres://u:pass@db/x" {
+		t.Fatal("writeReport rewrote the caller's report")
+	}
+}
+
+// The manifest names the platform key's recipient and every key-service mount and key name that is set,
+// never a secret: a set taken under a second key, or under Transit, says which keys a restore needs.
+func TestRecoveryManifest_KeysNameThePlatformRecipientAndKeyNames(t *testing.T) {
+	ageID, _ := age.GenerateX25519Identity()
+	platform, _ := age.GenerateX25519Identity()
+	path := filepath.Join(t.TempDir(), "platform.key")
+	if err := os.WriteFile(path, []byte(platform.String()+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s := func(v string) *string { return &v }
+	f := recoveryFlagsFor("docker", "postgres://db/x", "", "local")
+	f.ageKey, f.platformKeyFile = s(ageID.String()), s(path)
+	f.vault.transitMount, f.vault.transitKey, f.vault.transitKeyPlatform = s("transit"), s("wardyn-kek"), s("")
+	f.azure.kekKey = s("")
+	in := manifestSourcesOf(f, "/sets/1")
+	k, err := recoveryKeyFingerprints(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if k.PlatformRecipient != platform.Recipient().String() || k.AgeRecipient != ageID.Recipient().String() {
+		t.Fatalf("recipients = %q %q", k.AgeRecipient, k.PlatformRecipient)
+	}
+	want := map[string]string{"WARDYN_VAULT_TRANSIT_KEY": "wardyn-kek", "WARDYN_VAULT_TRANSIT_MOUNT": "transit"}
+	if !maps.Equal(k.KEKKeys, want) {
+		t.Fatalf("kek_keys = %v, want %v", k.KEKKeys, want)
+	}
+	raw, _ := json.Marshal(k)
+	if strings.Contains(string(raw), "AGE-SECRET-KEY") {
+		t.Fatalf("a secret key reached the manifest: %s", raw)
+	}
+	f.vault.transitKey = s("")
+	if names := kekKeyNames(f); names != nil {
+		t.Fatalf("the Transit mount's default is named with no Transit key: %v", names)
 	}
 }

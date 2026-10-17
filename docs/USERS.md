@@ -288,6 +288,7 @@ resolves your drive the same way, in a dry run too:
 - A shared template shows the names of what it uses (a secret's name, a workspace), never a value.
 - Readers of a shared template are not told who published it.
 - Your own templates are erased with the `run_setups` scope of an erasure.
+- Your stored preferences, such as the pool you default to, are erased with the `runner_pools` scope of an erasure and by a SCIM purge.
 
 ## Where your runs' audit lives
 

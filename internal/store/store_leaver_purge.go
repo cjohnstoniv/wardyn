@@ -136,58 +136,67 @@ func (s PG) PendingLeavers(ctx context.Context, idleFor time.Duration, limit int
 // authenticate again. Rows keyed by one of emails go only while no other principal holds that address,
 // because an address can be recycled and the new holder's deny rows are theirs: another identity that is
 // neither deactivated nor purged, or an API token or people row under a principal that is not in
-// principals (or the address itself, a form of the leaver). Rows kept for that reason are counted in kept.
-func (s PG) DeleteUserSubjectRows(ctx context.Context, id uuid.UUID, principals, emails []string) (grants, assignments, kept int64, err error) {
+// principals (or the address itself, a form of the leaver). Rows kept for that reason are counted in Kept.
+func (s PG) DeleteUserSubjectRows(ctx context.Context, id uuid.UUID, principals, emails []string) (UserSubjectRowsDeleted, error) {
+	var out UserSubjectRowsDeleted
 	own, mails := lowerForms(principals), lowerForms(emails)
 	if len(own)+len(mails) == 0 {
-		return 0, 0, 0, nil
+		return out, nil
 	}
 	tx, err := s.Pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
-		return 0, 0, 0, fmt.Errorf("store: delete user subject rows: %w", err)
+		return out, fmt.Errorf("store: delete user subject rows: %w", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 	held, err := heldEmails(ctx, tx, id, own, mails)
 	if err != nil {
-		return 0, 0, 0, err
+		return out, err
 	}
 	subjects := slices.Concat(own, slices.DeleteFunc(slices.Clone(mails), func(m string) bool { return slices.Contains(held, m) }))
 	tag, err := tx.Exec(ctx, `DELETE FROM capability_grants WHERE subject_type = 'user' AND lower(subject) = ANY($1::text[])`, subjects)
 	if err != nil {
-		return 0, 0, 0, fmt.Errorf("store: delete user grants: %w", err)
+		return UserSubjectRowsDeleted{}, fmt.Errorf("store: delete user grants: %w", err)
 	}
-	grants = tag.RowsAffected()
+	out.Grants = tag.RowsAffected()
 	tag, err = tx.Exec(ctx, `DELETE FROM governance_assignments WHERE subject_type = 'user' AND lower(subject) = ANY($1::text[])`, subjects)
 	if err != nil {
-		return 0, 0, 0, fmt.Errorf("store: delete user assignments: %w", err)
+		return UserSubjectRowsDeleted{}, fmt.Errorf("store: delete user assignments: %w", err)
 	}
-	assignments = tag.RowsAffected()
-	if err = stripRunnerPoolUseSubjects(ctx, tx, subjects); err != nil {
-		return 0, 0, 0, err
+	out.Assignments = tag.RowsAffected()
+	if out.PoolsNarrowed, out.PoolsEmptied, err = stripRunnerPoolUseSubjects(ctx, tx, subjects); err != nil {
+		return UserSubjectRowsDeleted{}, err
 	}
 	if err = stripRemoteRunnerPeopleSubjects(ctx, tx, subjects); err != nil {
-		return 0, 0, 0, err
+		return UserSubjectRowsDeleted{}, err
 	}
 	if len(held) > 0 {
 		err = tx.QueryRow(ctx, `SELECT
 			(SELECT count(*) FROM capability_grants WHERE subject_type = 'user' AND lower(subject) = ANY($1::text[])) +
-			(SELECT count(*) FROM governance_assignments WHERE subject_type = 'user' AND lower(subject) = ANY($1::text[]))`, held).Scan(&kept)
+			(SELECT count(*) FROM governance_assignments WHERE subject_type = 'user' AND lower(subject) = ANY($1::text[]))`, held).Scan(&out.Kept)
 		if err != nil {
-			return 0, 0, 0, fmt.Errorf("store: count kept user rows: %w", err)
+			return UserSubjectRowsDeleted{}, fmt.Errorf("store: count kept user rows: %w", err)
 		}
 	}
 	if err = tx.Commit(ctx); err != nil {
-		return 0, 0, 0, fmt.Errorf("store: commit user subject delete: %w", err)
+		return UserSubjectRowsDeleted{}, fmt.Errorf("store: commit user subject delete: %w", err)
 	}
-	return grants, assignments, kept, nil
+	return out, nil
+}
+
+// UserSubjectRowsDeleted is what DeleteUserSubjectRows changed: the grants and assignments deleted, the
+// email-keyed rows kept, and the runner pools whose use policy lost a subject, of which PoolsEmptied
+// were left with none and so permit nobody until an administrator acts.
+type UserSubjectRowsDeleted struct {
+	Grants, Assignments, Kept   int64
+	PoolsNarrowed, PoolsEmptied int64
 }
 
 // stripRunnerPoolUseSubjects removes the user subjects (lower-cased forms) from every pool use policy
 // and raises each changed pool's revision, locking the pools in id order so two purges cannot deadlock.
 // The policy row is never deleted: a policy narrows a pool, so
 // deleting it would open the pool to everyone, while a list emptied by the purge permits nobody until
-// an administrator replaces or clears it.
-func stripRunnerPoolUseSubjects(ctx context.Context, q Querier, subjects []string) error {
+// an administrator replaces or clears it. It says how many policies changed, and how many of them it emptied.
+func stripRunnerPoolUseSubjects(ctx context.Context, q Querier, subjects []string) (narrowed, emptied int64, err error) {
 	const stmt = `
 		WITH hit AS MATERIALIZED (
 			SELECT p.id AS pool_id FROM runner_pools p WHERE EXISTS (
@@ -197,16 +206,19 @@ func stripRunnerPoolUseSubjects(ctx context.Context, q Querier, subjects []strin
 			ORDER BY p.id FOR UPDATE OF p),
 		bumped AS (
 			UPDATE runner_pools p SET revision = p.revision + 1, updated_at = now()
-			FROM hit WHERE p.id = hit.pool_id RETURNING p.id, p.revision)
-		UPDATE runner_pool_use_policies u
-		SET subjects = COALESCE((SELECT jsonb_agg(e) FROM jsonb_array_elements(u.subjects) e
-		                         WHERE NOT (e->>'subject_type' = 'user' AND lower(e->>'subject') = ANY($1::text[]))), '[]'::jsonb),
-		    revision = bumped.revision, updated_by = 'leaver purge', updated_at = now()
-		FROM bumped WHERE u.pool_id = bumped.id`
-	if _, err := q.Exec(ctx, stmt, subjects); err != nil {
-		return fmt.Errorf("store: strip runner pool use policy subjects: %w", err)
+			FROM hit WHERE p.id = hit.pool_id RETURNING p.id, p.revision),
+		stripped AS (
+			UPDATE runner_pool_use_policies u
+			SET subjects = COALESCE((SELECT jsonb_agg(e) FROM jsonb_array_elements(u.subjects) e
+			                         WHERE NOT (e->>'subject_type' = 'user' AND lower(e->>'subject') = ANY($1::text[]))), '[]'::jsonb),
+			    revision = bumped.revision, updated_by = 'leaver purge', updated_at = now()
+			FROM bumped WHERE u.pool_id = bumped.id
+			RETURNING u.subjects = '[]'::jsonb AS emptied)
+		SELECT count(*), count(*) FILTER (WHERE emptied) FROM stripped`
+	if err := q.QueryRow(ctx, stmt, subjects).Scan(&narrowed, &emptied); err != nil {
+		return 0, 0, fmt.Errorf("store: strip runner pool use policy subjects: %w", err)
 	}
-	return nil
+	return narrowed, emptied, nil
 }
 
 // stripRemoteRunnerPeopleSubjects removes the user subjects (lower-cased forms) from every remote-hosted

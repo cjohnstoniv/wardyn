@@ -1225,7 +1225,7 @@ erases one person's retained records by explicit scope, in one audited act
 | `run_tasks` | the task text of the runs the person created, and the launch intents of those runs |
 | `components` | the components the person saved, the launch intents of their runs, and what each run's snapshot of one they defined says about it; the run keeps a content-free row, which is what a revived run is checked against. A finished run's resolved policy and grants keep the hosts and secret names the run used, as for any other policy, and so do its `run.env_secret.resolve`, `run.file_secret.resolve`, `secret.read` and `run.policy.resolve` rows |
 | `run_setups` | the person's own run templates and every revision of them, the launch intents of their runs, their group template-manager grants, and their name as the author of shared templates, revisions and grants, which stay without it |
-| `runner_pools` | the person's own user pools, deleted as their own delete would, and their name on every pool row of theirs; their runners stay |
+| `runner_pools` | the person's own user pools, deleted as their own delete would, their name on every pool row of theirs, and their stored preferences (the pool they default to, their last view); their runners stay |
 | `audit_personal_fields` | the person's audit-seal key, every generation: each sealed audit field of theirs reads `[erased]` everywhere it was copied, and the chain still verifies |
 | `credentials` | the person's stored credentials, their encryption key and provider connection-change records (also erased by `DELETE /people/{principal}/credentials`) |
 
@@ -1236,6 +1236,8 @@ erases one person's retained records by explicit scope, in one audited act
   `person.erasure` row records a `failure` naming each scope's outcome, and a retry with the same scopes finishes the
   rest.
 - Erasure is reported complete (`200`, `outcome` success) only when every scope asked for finished.
+- An email address another identity also holds is never used to match, because it cannot prove whose a record is.
+  A record found only by that address keeps it.
 - No scope reaches runners, invitations or service identities; a [purge](#what-a-purge-removes) does, but a retired
   service identity keeps its last sponsor.
 
@@ -5291,7 +5293,7 @@ What the switch needs, and refuses to render or boot without:
   - the **site-config** and **capability-enforcement** writers, the **audit chain verify sweep**, and the **AWS SSO** and
     **Azure DevOps sign-in refresh** single-flights, which keep one rotating refresh token from being redeemed twice.
 - They are taken in one order (run operation, run-token mint,
-  AWS SSO, Azure DevOps sign-in, the document locks, the audit sweep last), each
+  AWS SSO, Azure DevOps sign-in, the organisation MCP server key, the document locks, the audit sweep last), each
   nested lock shares its caller's connection, and none proceeds unlocked.
 - A lock
   that cannot be taken answers `503` `lock_unavailable` and is retried.

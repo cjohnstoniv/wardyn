@@ -7,7 +7,8 @@
 # docs/USERS.md 4432 adds 38 over 4394: 0.9 final docs pass 3, measured: the pool and runner policy changes in who approves a governance change.
 # docs/USERS.md 4433 adds 1 over 4432: offboarding merge, measured: the runner, invitation and sponsor sentence beside the docs pass.
 # docs/USERS.md 4629 adds 196 over 4433 (0.9.3 RV5), measured: new section on how long a session lasts and what sign-out cuts and leaves.
-docs/USERS.md=4629 share=35
+# docs/USERS.md 4653 adds 24 over 4629, measured: a person's stored preferences are erased with the runner_pools scope and by a SCIM purge.
+docs/USERS.md=4653 share=35
 # docs/SSH.md 5396 adds 84 (0.9 SSH lane): the wardyn-sync subsystem and its env, the sync cap, the configurable channel cap and the sync audit action.
 # docs/SSH.md 5508 adds 112 over 5396 (0.9 E-S1): the `wardyn sync` section (command, safety rules, the rsync alternative).
 # docs/SSH.md 5586 adds 78 over 5508 (0.9 E-S1 round 1): the pull byte limits, the plain-http refusal, the invisible-name and normalisation rules, the one-second mtime limit and the rsync caveat.
@@ -39,4 +40,5 @@ docs/UI-SANDBOXES.md=5566 share=35
 # docs/NEW-RUN.md 2935 adds 20 over 2915: the Name dialog keeps Launch available when its check fails or is rate-limited (FR-0100), measured.
 # docs/NEW-RUN.md 2946 adds 31 over 2915: UIN lane (FUG-L369): the repo_no_credential bullet beside the resident_off one, measured.
 # docs/NEW-RUN.md 2966 = 2935 + 31 (UIN), measured at the wave-C merge.
-docs/NEW-RUN.md=2966 share=35
+# docs/NEW-RUN.md 3032 adds 66 over 2966, measured: the repository .mcp.json bullet and the shared-user MCP address bullet.
+docs/NEW-RUN.md=3032 share=35
