@@ -168,7 +168,8 @@ func TestSharedGatewayRefusalsKeepTheRoutesShape(t *testing.T) {
 	for _, rt := range []struct {
 		prefix string
 		shape  errShape
-	}{{llmAnthropicPrefix, shapeAnthropic}, {llmOpenAIPrefix, shapeOpenAI}} {
+		vendor string
+	}{{llmAnthropicPrefix, shapeAnthropic, anthropicHost}, {llmOpenAIPrefix, shapeOpenAI, openaiHost}} {
 		rec := httptest.NewRecorder()
 		sharedGatewayProxy(types.RunPolicySpec{}, publicResolver{}).ServeHTTP(rec, mustLocalReq(t, http.MethodPost, rt.prefix+"v1/a%5Cb", strings.NewReader("{}")))
 		if v := decodeSDK(t, rt.shape, rec); rec.Code != http.StatusBadRequest || v.typ != "invalid_request_error" ||
@@ -177,7 +178,8 @@ func TestSharedGatewayRefusalsKeepTheRoutesShape(t *testing.T) {
 		}
 		rec = httptest.NewRecorder()
 		noCred.ServeHTTP(rec, mustLocalReq(t, http.MethodPost, rt.prefix+"v1/messages", strings.NewReader("{}")))
-		if v := decodeSDK(t, rt.shape, rec); rec.Code != http.StatusNotFound || !strings.HasPrefix(v.message, "wardyn: "+reasonCredentialUnavailable+": ") ||
+		if v := decodeSDK(t, rt.shape, rec); rec.Code != http.StatusNotFound || rec.Header().Get("X-Wardyn-Reason") != reasonCredentialUnavailable ||
+			!strings.HasPrefix(v.message, "wardyn: "+reasonCredentialUnavailable+": "+rt.vendor+" (via the configured gateway) (brokered:llm) — ") ||
 			strings.Contains(rec.Body.String(), sharedGatewayHost) {
 			t.Errorf("%s no credential: status %d body %q", rt.prefix, rec.Code, rec.Body.String())
 		}
