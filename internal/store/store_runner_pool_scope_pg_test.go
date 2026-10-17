@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -121,5 +122,91 @@ func TestPG_OrgDefaultRefusesADeletedPool(t *testing.T) {
 	}
 	if got, _ := pg.GetRunnerPoolOrgDefaults(ctx); got.PoolID != nil {
 		t.Errorf("the refused write named %v", got.PoolID)
+	}
+}
+
+// The first organisation-defaults write has no row to lock. A write that meets another one's still
+// uncommitted first row must audit that row as its before, not a zero: the seed gives the row lock
+// something to queue on.
+func TestPG_OrgDefaultsFirstWriteRaceAuditsARealBefore(t *testing.T) {
+	pool := runsPGPoolIsolated(t)
+	pg := store.NewPG(pool)
+	ctx := context.Background()
+	first, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer first.Rollback(ctx) //nolint:errcheck // committed below on the happy path
+	var blockerPID int
+	if err := first.QueryRow(ctx, `SELECT pg_backend_pid()`).Scan(&blockerPID); err != nil {
+		t.Fatal(err)
+	}
+	// The other writer's first row, not yet committed.
+	if _, err := first.Exec(ctx, `INSERT INTO runner_pool_org_defaults (barrier, updated_by) VALUES ('CC2', 'first')`); err != nil {
+		t.Fatal(err)
+	}
+	type result struct {
+		before, after types.RunnerPoolDefaults
+		err           error
+	}
+	done := make(chan result, 1)
+	go func() {
+		b, a, err := pg.PutRunnerPoolOrgDefaults(ctx, types.RunnerPoolDefaults{Barrier: types.CC3}, "second")
+		done <- result{b, a, err}
+	}()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		var waiting bool
+		if err := pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM pg_stat_activity
+			WHERE wait_event_type = 'Lock' AND $1 = ANY(pg_blocking_pids(pid))
+			AND query ILIKE '%INSERT INTO runner_pool_org_defaults%')`, blockerPID).Scan(&waiting); err != nil {
+			t.Fatal(err)
+		}
+		if waiting {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the second write never queued behind the first row")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if err := first.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	r := <-done
+	if r.err != nil {
+		t.Fatal(r.err)
+	}
+	if r.before.Barrier != types.CC2 || r.before.Revision != 1 {
+		t.Errorf("the second write audited before=%+v, want the first write's row (CC2, revision 1)", r.before)
+	}
+	if r.after.Barrier != types.CC3 || r.after.Revision != 2 {
+		t.Errorf("the second write returned after=%+v, want CC3 at revision 2", r.after)
+	}
+}
+
+// Deleting the pool the organisation default names audits the revision the UPDATE wrote, one past the
+// one read under the lock.
+func TestPG_DeletingTheDefaultPoolAuditsTheBumpedRevision(t *testing.T) {
+	pool := runsPGPoolIsolated(t)
+	pg := store.NewPG(pool)
+	ctx := context.Background()
+	org, err := pg.CreateRunnerPool(ctx, types.RunnerPool{ID: uuid.New(), Name: "Builds", Scope: types.RunnerPoolOrganization}, "admin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, written, err := pg.PutRunnerPoolOrgDefaults(ctx, types.RunnerPoolDefaults{PoolID: &org.ID}, "admin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	del, err := pg.DeleteRunnerPool(ctx, org.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if del.OrgDefaultsAfter == nil || del.OrgDefaultsAfter.Revision != written.Revision+1 {
+		t.Fatalf("delete audited after=%+v, want revision %d", del.OrgDefaultsAfter, written.Revision+1)
+	}
+	if got, _ := pg.GetRunnerPoolOrgDefaults(ctx); got.Revision != del.OrgDefaultsAfter.Revision {
+		t.Errorf("stored revision %d differs from the audited %d", got.Revision, del.OrgDefaultsAfter.Revision)
 	}
 }
