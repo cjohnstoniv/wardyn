@@ -120,32 +120,9 @@ func (s *Server) resolvePlacement(ctx context.Context, in placementInput) (runPl
 		return runPlacement{limits: limits, applied: applied}, refusal
 	}
 	ps := s.cfg.Store.(store.RunnerPoolStore)
-	rows, refusal := s.permittedPools(ctx, ps, true)
+	rows, org, pool, refusal := s.resolveRunPool(ctx, ps, f.req.RunnerPoolID)
 	if refusal != nil {
 		return runPlacement{}, refusal
-	}
-	personal, refusal := s.personalPoolDefaults(ctx)
-	if refusal != nil {
-		return runPlacement{}, refusal
-	}
-	org, err := ps.GetRunnerPoolOrgDefaults(ctx)
-	if err != nil {
-		return runPlacement{}, runServerError("read runner pool defaults", err)
-	}
-	// The request's placement no longer chooses a pool: it narrows the pool's runners to one kind
-	// (kindTargets), after the pool is resolved.
-	var choice runnerpool.Choice
-	if f.req.RunnerPoolID != "" {
-		id, _ := uuid.Parse(f.req.RunnerPoolID) // the contract step already refused a malformed id
-		choice.PoolID = &id
-	}
-	permitted := make([]types.RunnerPool, len(rows))
-	for i, row := range rows {
-		permitted[i] = row.Pool
-	}
-	pool, ref := runnerpool.Resolve(permitted, choice, personal, org)
-	if ref != nil {
-		return runPlacement{}, poolRefusal(ref)
 	}
 	row, _ := catalogueRow(rows, pool.ID)
 	targets, refusal := s.poolTargets(ctx, f.req, ps, row)
@@ -209,6 +186,40 @@ func (s *Server) resolvePlacement(ctx context.Context, in placementInput) (runPl
 	return runPlacement{pooled: true, pool: pool, row: row.Pool, placement: decision.Placement, filled: decision.Filled, remoteOffered: remoteOffered,
 		eligible: picked, targets: chosen.targets, orgBarrier: org.Barrier, choices: choices, limits: chosen.limits, applied: chosen.applied,
 		waitsForRoom: waits, runnersFull: (capped || waits) && len(picked) > 0 && !slices.ContainsFunc(picked, func(t poolTarget) bool { return !t.full })}, nil
+}
+
+// resolveRunPool picks the run's pool from the caller's catalogue: the pool the request names, else the
+// person's default, else the organisation's (runnerpool.Resolve). It answers the catalogue and the
+// organisation's defaults too, which the rest of placement reads.
+func (s *Server) resolveRunPool(ctx context.Context, ps store.RunnerPoolStore, named string) ([]store.RunnerPoolCatalogueRow, types.RunnerPoolDefaults, types.ResolvedRunnerPool, *runRefusal) {
+	rows, refusal := s.permittedPools(ctx, ps, true)
+	if refusal != nil {
+		return nil, types.RunnerPoolDefaults{}, types.ResolvedRunnerPool{}, refusal
+	}
+	personal, refusal := s.personalPoolDefaults(ctx)
+	if refusal != nil {
+		return nil, types.RunnerPoolDefaults{}, types.ResolvedRunnerPool{}, refusal
+	}
+	org, err := ps.GetRunnerPoolOrgDefaults(ctx)
+	if err != nil {
+		return nil, types.RunnerPoolDefaults{}, types.ResolvedRunnerPool{}, runServerError("read runner pool defaults", err)
+	}
+	// The request's placement no longer chooses a pool: it narrows the pool's runners to one kind
+	// (kindTargets), after the pool is resolved.
+	var choice runnerpool.Choice
+	if named != "" {
+		id, _ := uuid.Parse(named) // the contract step already refused a malformed id
+		choice.PoolID = &id
+	}
+	permitted := make([]types.RunnerPool, len(rows))
+	for i, row := range rows {
+		permitted[i] = row.Pool
+	}
+	pool, ref := runnerpool.Resolve(permitted, choice, personal, org)
+	if ref != nil {
+		return nil, types.RunnerPoolDefaults{}, types.ResolvedRunnerPool{}, poolRefusal(ref)
+	}
+	return rows, org, pool, nil
 }
 
 // probeFailure is the first probe error among the run's candidates: a configured executor whose facts
