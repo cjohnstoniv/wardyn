@@ -7,10 +7,12 @@ package docker
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
 	"strings"
 	"sync"
+	"testing"
 	"time"
 
 	"github.com/moby/moby/api/types/container"
@@ -105,6 +107,11 @@ type Config struct {
 	// in every sandbox; it alone carries the bundle when the bundle and the
 	// PEM already staged do not fit runner.MaxEnvTrustedCAPEM.
 	TrustedCAFile string
+	// TestProxyExtraHosts is a test-only hook: extra "name:ip" hosts entries
+	// for the proxy sidecar, so a live test can pin a name into a private range.
+	// No flag, env or file sets it, and New refuses it outside a go test binary
+	// (testing.Testing).
+	TestProxyExtraHosts []string
 }
 
 // RecordingMountTarget is where RecordingMount appears inside the agent
@@ -228,6 +235,9 @@ var _ runner.ActivitySampler = (*Driver)(nil)
 // New constructs a Driver against the host Docker daemon. API-version
 // negotiation with the server is on by default in the moby v29 client.
 func New(cfg Config) (*Driver, error) {
+	if len(cfg.TestProxyExtraHosts) > 0 && !testing.Testing() {
+		return nil, errors.New("docker: TestProxyExtraHosts is test-only")
+	}
 	cli, err := client.New(
 		client.FromEnv,
 	)
