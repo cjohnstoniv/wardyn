@@ -12,12 +12,14 @@ import { NR_DOCUMENT } from "../src/app/components/wardyn/copy/new-run/document"
 import { NR_REVIEW } from "../src/app/components/wardyn/copy/new-run/review";
 import { NR_START } from "../src/app/components/wardyn/copy/new-run/start";
 import { NR_TOOLS } from "../src/app/components/wardyn/copy/new-run/tools";
-import reasons from "../src/app/lib/access-reasons.golden.json";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { SCENARIO_HARNESSES, SCENARIO_HARNESS_SETS } from "../src/app/lib/new-run-fixtures/scenarios/harnesses";
 import { SCENARIO_PREFLIGHT } from "../src/app/lib/new-run-fixtures/scenarios/preflight";
 import { SCENARIO_ACCESS } from "../src/app/lib/new-run-fixtures/scenarios/tools";
 
 const DOCUMENT = "api_version: wardyn/v1\nkind: Run\nintent:\n  shape: application\n  experience: background\n  workload:\n    kind: command\n    command: npm test\n  no_repositories_or_drives: true\n";
+const reasons = JSON.parse(readFileSync(join(process.cwd(), "src/app/lib/access-reasons.golden.json"), "utf8")) as { key: string; text: string }[];
 const SENTENCE = reasons.find((r) => r.key === "repo_no_credential")!.text;
 
 const press = (page: Page, name: string) => page.getByRole("button", { name, exact: true }).click();

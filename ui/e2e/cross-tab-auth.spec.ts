@@ -24,7 +24,8 @@ test("signed out in one tab, the other says so and carries on once signed back i
   const dialog = other.getByRole("dialog", { name: REAUTH_DIALOG.TITLE });
   await expect(dialog).toBeVisible({ timeout: 15_000 });
   await expect(dialog.getByText(REAUTH_EXTRA.SIGNED_OUT_ELSEWHERE)).toBeVisible();
-  await expect(sidebarLink(other, "Runs")).toBeVisible();
+  // The page behind the dialog is still there (the dialog hides it from the accessibility tree).
+  await expect(other.getByRole("link", { name: /^Runs/, includeHidden: true })).toHaveCount(1);
 
   // Signed back in on the first tab (and remembered on this device): the second needs no token typed.
   await page.locator("#token").fill(ADMIN_TOKEN);

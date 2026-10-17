@@ -32,4 +32,5 @@ docs/UI-SANDBOXES.md=5566 share=35
 # docs/NEW-RUN.md 2905 measured (0.9 final docs pass): the New run guide.
 # docs/NEW-RUN.md 2914 adds 9 over 2905: 0.9 final docs pass 2, measured: the runner-limit wait reason and the runner pools links.
 # docs/NEW-RUN.md 2915 adds 1 over 2914: docs fix: run --file overlay; a policy's own * rule stays in force on a routed run, measured.
-docs/NEW-RUN.md=2915 share=35
+# docs/NEW-RUN.md 2946 adds 31 over 2915: UIN lane (FUG-L369): the repo_no_credential bullet beside the resident_off one, measured.
+docs/NEW-RUN.md=2946 share=35
