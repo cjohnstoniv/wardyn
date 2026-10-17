@@ -120,7 +120,7 @@ export interface ComponentRef {
   repos?: string[];
   // Empty reads as read.
   access?: "read" | "write";
-  // The included harnesses (tools[].id) an MCP component's server is turned on for; absent means every harness that can take it.
+  // The included harnesses (tools[].id) an MCP component's server is turned on for; absent means every harness that can take it, [] means none.
   mcp_harnesses?: string[];
 }
 
