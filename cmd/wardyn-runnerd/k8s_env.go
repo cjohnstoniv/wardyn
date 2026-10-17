@@ -64,6 +64,14 @@ func readK8sEnv(environ []string) (k8sEnv, error) {
 			errs = append(errs, fmt.Errorf("%s is not a setting this runnerd reads", k))
 		}
 	}
+	// The canary overrides the control plane honours are refused here, before any cluster call: a
+	// runner holds runs it cannot see, so it boots only on an enforced NetworkPolicy verdict, never on
+	// an operator's word that policy is enforced.
+	for _, k := range []string{"WARDYN_K8S_ALLOW_UNENFORCED_NETPOL", "WARDYN_K8S_ACK_AMBIENT_DEFAULT_DENY"} {
+		if _, set := env[k]; set {
+			errs = append(errs, fmt.Errorf("%s is set: a runner boots only on an enforced NetworkPolicy canary verdict and takes no override; remove it from the runnerd container", k))
+		}
+	}
 	var err error
 	if e.podIP, err = netip.ParseAddr(env["POD_IP"]); err != nil {
 		errs = append(errs, fmt.Errorf("POD_IP: %w", err))

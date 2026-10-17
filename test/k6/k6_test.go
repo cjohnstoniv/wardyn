@@ -3,8 +3,8 @@
 
 //go:build k8s
 
-// Package k6_test is lane K6's kind conformance suite for the Kubernetes runner (design K1 §8, and
-// the K6 list in lanes/K2/review-fable.md). scripts/k6-kind-conformance.sh is its only caller: it
+// Package k6_test is the kind conformance suite for the Kubernetes runner.
+// scripts/k6-kind-conformance.sh is its only caller: it
 // creates the kind cluster, installs the runnerd chart, and runs this suite once per kubelet version.
 //
 // The suite drives the real k8s runner-mode Driver in process, as runnerd would, under runnerd's own
@@ -18,7 +18,7 @@
 //
 // Each case prints one line, `K6-CASE <name> <status> <detail>`, which the script tabulates.
 // Statuses: PASS, FAIL, INCONCLUSIVE (the cluster did not produce the condition the case needs;
-// never a pass), and BLOCKED-ON-<lane> rows for items that need org-side behaviour not built yet.
+// never a pass), and BLOCKED-ON-<work> for an item the product cannot yet put in front of a cluster.
 package k6_test
 
 import (
@@ -160,7 +160,7 @@ func TestK6(t *testing.T) {
 		results = append(results, fmt.Sprintf("K6-CASE\t%s\t%s\t%s", name, status, detail))
 	}
 
-	// (Fable r8 L1) The IDs the guard compares must be distinct across kind nodes before any guard case.
+	// The IDs the guard compares must be distinct across kind nodes before any guard case.
 	kase("node-identity-distinct", caseNodeIdentity)
 	if t.Failed() {
 		t.Fatal("kind node IDs are not distinct: every node guard below would be meaningless")
@@ -183,24 +183,9 @@ func TestK6(t *testing.T) {
 	kase("hard-deny-in-proxy-config", caseHardDenyConfig)
 	kase("retained-policy-probe", caseRetainedPolicy)
 	kase("node-name-reuse-tick", caseNodeReuse) // last: it restarts a kind node
-	for _, b := range blockedCases {
-		results = append(results, fmt.Sprintf("K6-CASE\t%s\t%s\t%s", b[0], b[1], b[2]))
-	}
 	for _, r := range results {
 		fmt.Println(r)
 	}
-}
-
-// blockedCases are §8 / Fable items that need org-side behaviour no lane has built yet.
-var blockedCases = [][3]string{
-	{"fence-live-http2", "BLOCKED-ON-K3", "a renew and an activity report ride the relay to the org over a hub org session; the fake org has no hub"},
-	{"self-lapse-end-to-end", "BLOCKED-ON-K3", "the lapse needs a renew refused through the relay (org session) and the lapsed frame on runnerd's real sink, which only runs for org-leased runs"},
-	{"hard-deny-from-agent", "BLOCKED-ON-K3", "the proxy stays closed until its first renew through the org, so an agent request cannot reach the hard-deny check; the config half is hard-deny-in-proxy-config"},
-	{"restart-fence-replay-reregister-sinks", "BLOCKED-ON-K3", "needs runnerd's own sink and relay holding a live proxy, i.e. an org-leased run"},
-	{"org-triggered-sweep-rollback", "BLOCKED-ON-K3", "the sweep is dispatched by the org over the hub"},
-	{"keystore-deleted-on-revoke", "BLOCKED-ON-K3", "revoke is an org message; keystore-under-role covers Set/Get/Delete under the Role"},
-	{"mitm-inner-request-drain", "BLOCKED-ON-K3", "K9's open item (a closed client ends an in-flight MITM inner request inside the 3 s drain) needs a proxy serving agent traffic, which needs its first renew through an org session"},
-	{"walk-trust-placement", "BLOCKED-ON-K4", "by_trust.org_cluster placement and the personal-runner refusal are K4's (needs RR)"},
 }
 
 // --- notes and statuses ------------------------------------------------------------------------
@@ -417,7 +402,7 @@ func (f *fences) fenced(ip string) bool {
 	return false
 }
 
-// unfence is the driver's release of a run's IP refusal at witness save (K2 round 3, Fable H2).
+// unfence is the driver's release of a run's IP refusal at witness save.
 func (f *fences) unfence(run uuid.UUID, ip string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

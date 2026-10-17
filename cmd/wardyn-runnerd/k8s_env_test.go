@@ -45,6 +45,9 @@ func TestReadK8sEnv(t *testing.T) {
 		{"empty selector", "WARDYN_RUNNERD_POD_SELECTOR={}", "WARDYN_RUNNERD_POD_SELECTOR"},
 		{"bad arch", "WARDYN_RUNNERD_ARCH=x86_64", "WARDYN_RUNNERD_ARCH"},
 		{"empty arch", "WARDYN_RUNNERD_ARCH=", "WARDYN_RUNNERD_ARCH"},
+		{"unenforced netpol override", "WARDYN_K8S_ALLOW_UNENFORCED_NETPOL=1", "WARDYN_K8S_ALLOW_UNENFORCED_NETPOL is set"},
+		{"unenforced netpol override off", "WARDYN_K8S_ALLOW_UNENFORCED_NETPOL=false", "WARDYN_K8S_ALLOW_UNENFORCED_NETPOL is set"},
+		{"ambient deny override", "WARDYN_K8S_ACK_AMBIENT_DEFAULT_DENY=true", "WARDYN_K8S_ACK_AMBIENT_DEFAULT_DENY is set"},
 	} {
 		t.Run(bad.name, func(t *testing.T) {
 			if _, err := readK8sEnv(k8sEnvFixture(bad.kv)); err == nil || !strings.Contains(err.Error(), bad.want) {

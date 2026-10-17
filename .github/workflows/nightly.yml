@@ -1310,11 +1310,12 @@ jobs:
           path: test/reports/e2e/kind-survival-walk.log
           if-no-files-found: error
 
-  # Lane K6 (0.9.3): scripts/k6-kind-conformance.sh, the Kubernetes runner's kind conformance. It
-  # creates and deletes its own clusters (the 1.31 kubelet floor, then the latest kind node image),
-  # installs the runnerd chart with its rendered Role against test/k6/fakeorg, and runs test/k6
-  # under runnerd's own token. bind-delete-serial and bind-delete-overlap are the release gate for
-  # the unbound-pod arm (design K1 §8). NEVER RUN BEFORE: NOTIFY_EXEMPT in
+  # scripts/k6-kind-conformance.sh, the Kubernetes runner's kind conformance. It creates and
+  # deletes its own clusters (the 1.31 kubelet floor, then the latest kind node image), stands up a
+  # real organisation (wardynd and postgres from deploy/helm/wardyn), enrols runnerd through its
+  # chart and rendered Role, and runs test/k6 against both, then under runnerd's own token.
+  # bind-delete-serial and bind-delete-overlap are the release gate for the unbound-pod arm: a pod
+  # deleted before it binds must never leave a proxy no one can stop. NEVER RUN BEFORE: NOTIFY_EXEMPT in
   # scripts/test-repo-guards.sh, out of notify-new-lanes' needs and release.yml's watched= until it
   # has gone green here, the same posture kind-survival-walk has.
   k6-kind-conformance:
@@ -1342,7 +1343,7 @@ jobs:
       - uses: helm/kind-action@06c1ae10762d3b9c1644e7fe69596ae519e015a2 # v1.15.0
         with:
           install_only: "true"
-      - name: K6 kind conformance (floor and latest kubelet)
+      - name: Kubernetes runner kind conformance (floor and latest kubelet)
         env:
           WARDYN_TEST_K8S: "1"
           K6_KEEP_LOGS: ${{ github.workspace }}/test/reports/e2e

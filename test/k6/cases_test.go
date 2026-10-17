@@ -145,7 +145,7 @@ func caseBootChecks(t *testing.T, e *env) {
 	} else {
 		note(t, "pod naming runnerd's SA refused (%d)", statusCode(err))
 	}
-	// What the rendered Role must not grant (design §8 security checklist; Fable item 7).
+	// What the rendered Role must not grant.
 	for _, a := range []authorizationv1.ResourceAttributes{
 		{Namespace: e.runsNS, Verb: "get", Resource: "secrets"},
 		{Namespace: e.runsNS, Verb: "list", Resource: "secrets"},
@@ -319,7 +319,7 @@ func caseNormalStop(t *testing.T, e *env) {
 		t.Errorf("relay fence: %q (recorded %v), want the proxy IP %s", ip, ok, p.PodIP)
 	}
 	if !e.fences.wasReleased(id) || e.fences.fenced(p.PodIP) {
-		t.Errorf("the IP refusal for %s was not released at witness save (Fable H2)", p.PodIP)
+		t.Errorf("the IP refusal for %s was not released at witness save", p.PodIP)
 	}
 	e.stoppedIP = p.PodIP
 	note(t, "StopProxy %s, arm terminal, assoc %s, kubelet %s", took.Round(100*time.Millisecond), p.Assoc, e.kubelet(t))
@@ -348,7 +348,7 @@ func (e *env) kubelet(t *testing.T) string {
 	return n.Status.NodeInfo.KubeletVersion
 }
 
-// casePodIPReuse is Fable item 3: after a normal stop the next proxy on the node may receive the
+// casePodIPReuse: after a normal stop the next proxy on the node may receive the
 // freed IP and still starts (the refusal was released at witness save); a run still pending keeps
 // its refusal, so a proxy that receives a pending run's IP is refused with relay_ip_fenced.
 func casePodIPReuse(t *testing.T, e *env) {
@@ -415,7 +415,7 @@ func (e *env) reuseIP(t *testing.T, ip string, refused bool) bool {
 			e.waitRunGone(t, id, goneWait)
 			return true
 		case err != nil && strings.Contains(err.Error(), ip):
-			t.Fatalf("run %d: the next proxy received the stopped run's IP %s and was refused: %v (Fable H2)", i, ip, err)
+			t.Fatalf("run %d: the next proxy received the stopped run's IP %s and was refused: %v", i, ip, err)
 		case err != nil:
 			t.Fatalf("run %d: CreateSandbox: %v", i, err)
 		case got == ip && refused:
@@ -461,7 +461,7 @@ loop:
 	}
 	note(t, "observations during create: %v", seen)
 	if seen[runner.ProxyNotFound] > 0 {
-		t.Errorf("the 30 s list answered not_found %d times for a run mid-create; the manager would contain it (Fable H1)", seen[runner.ProxyNotFound])
+		t.Errorf("the 30 s list answered not_found %d times for a run mid-create; the manager would contain it", seen[runner.ProxyNotFound])
 	}
 	e.stopRun(t, id)
 }
@@ -832,7 +832,7 @@ func caseHardDenyConfig(t *testing.T, e *env) {
 	e.stopRun(t, id)
 }
 
-// caseRetainedPolicy is Fable L4: a force-deleted sandbox pod held by the finalizer keeps its
+// caseRetainedPolicy: a force-deleted sandbox pod held by the finalizer keeps its
 // NetworkPolicy, then the finalizer is stripped and the CNI's behaviour is recorded.
 func caseRetainedPolicy(t *testing.T, e *env) {
 	e.setSched(t, e.pin)

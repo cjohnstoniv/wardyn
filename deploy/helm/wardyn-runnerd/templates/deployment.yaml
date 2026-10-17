@@ -136,7 +136,19 @@ spec:
             - name: WARDYN_RUNNERD_APISERVER_PEERS
               value: {{ toJson . | quote }}
             {{- end }}
-            {{- with .Values.egress.hardDenyCIDRs }}
+            {{- /* The apiserver's own addresses join the proxy's hard deny whatever apiServer.peers says: an
+              agent must never reach the control plane by the node address behind the kubernetes Service.
+              Read at install and upgrade from that Service's EndpointSlice; deny-only, so an address that
+              later moves is over-denied, never opened. helm template (no cluster) reads nothing. */}}
+            {{- $hardDeny := .Values.egress.hardDenyCIDRs | default list }}
+            {{- with lookup "discovery.k8s.io/v1" "EndpointSlice" "default" "kubernetes" }}
+            {{- range .endpoints }}
+            {{- range .addresses }}
+            {{- $hardDeny = append $hardDeny (printf "%s/%s" . (ternary "128" "32" (contains ":" .))) }}
+            {{- end }}
+            {{- end }}
+            {{- end }}
+            {{- with $hardDeny }}
             - name: WARDYN_RUNNERD_HARD_DENY_CIDRS
               value: {{ join "," . | quote }}
             {{- end }}
