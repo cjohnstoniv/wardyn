@@ -4,6 +4,7 @@
 package docker
 
 import (
+	"encoding/base64"
 	"fmt"
 	"os"
 	"os/exec"
@@ -243,5 +244,22 @@ func TestAgentBaseExecTaskRunsInTheStartingFolder(t *testing.T) {
 	wantLaunch, _ := filepath.EvalSymlinks(launch)
 	if got := run(""); got != wantLaunch {
 		t.Errorf("exec task with no starting folder ran in %q, want the launch directory %q", got, wantLaunch)
+	}
+}
+
+// An exec task with a starting folder gets the same credential prep --idle does before the task
+// starts: artifact config files written and, for a git grant, the helper secret provisioned and exported.
+func TestAgentBaseExecTaskPreparesCredentialsBeforeTheTask(t *testing.T) {
+	script := baseRunnableAgentRun(t)
+	home := t.TempDir()
+	start := t.TempDir()
+	cmd := exec.Command("bash", script, `test "$(cat "$HOME/cfg/x.conf")" = hi && test -f "$HOME/.wardyn/git-helper.secret" && test -n "$WARDYN_GIT_HELPER_SECRET" && echo ready`)
+	cmd.Dir = start
+	cmd.Env = append(os.Environ(), "HOME="+home, "WARDYN_TASK_MODE=exec", "WARDYN_START_FOLDER="+start,
+		"WARDYN_REPOS=", "WARDYN_REPO_URL=", "WARDYN_MITM_CA_PEM=", "WARDYN_GITHUB_GRANT_ID=grant-1",
+		"WARDYN_ARTIFACT_CONFIG_B64=cfg/x.conf\t"+base64.StdEncoding.EncodeToString([]byte("hi")))
+	out, err := cmd.Output()
+	if err != nil || strings.TrimSpace(string(out)) != "ready" {
+		t.Fatalf("exec task did not see the prepared credentials: err=%v out=%q", err, out)
 	}
 }
