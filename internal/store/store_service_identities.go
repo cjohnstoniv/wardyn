@@ -182,7 +182,7 @@ func CreateServiceIdentityQ(ctx context.Context, tx Querier, si types.ServiceIde
 	}
 	out, err := scanServiceIdentity(tx.QueryRow(ctx, `
 		INSERT INTO service_identities (name, description, sponsor, sponsor_since, user_type, created_by, created_at)
-		VALUES ($1, $2, $3, clock_timestamp(), $4, $5, clock_timestamp()) RETURNING `+serviceIdentityCols,
+		SELECT $1, $2, $3, c.at, $4, $5, c.at FROM (SELECT clock_timestamp() AS at) c RETURNING `+serviceIdentityCols,
 		si.Name, si.Description, si.Sponsor, si.UserType, si.CreatedBy))
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
@@ -346,6 +346,11 @@ func (s PG) CreateServiceToken(ctx context.Context, name, sponsor string, maxLiv
 	out, err := s.insertAPIToken(ctx, tx, t, raw)
 	if err != nil {
 		return types.APIToken{}, err
+	}
+	// A token at or before sponsor_since never authenticates (serviceTokenAuth): refuse it rather than
+	// hand back a credential that is dead on arrival.
+	if !out.CreatedAt.After(si.SponsorSince) {
+		return types.APIToken{}, ErrServiceIdentityInactive
 	}
 	if err = tx.Commit(ctx); err != nil {
 		return types.APIToken{}, fmt.Errorf("store: commit service token: %w", err)

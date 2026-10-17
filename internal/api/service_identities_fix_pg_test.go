@@ -285,3 +285,25 @@ func TestServiceIdentity_StreamClockBehindTheDatabase(t *testing.T) {
 		t.Error("a stream opened after the create, on a clock 10s behind the database, ended")
 	}
 }
+
+// TestServiceIdentity_StoreMintRefusesATokenBornDead: a token stamped at or before the identity's
+// sponsor_since never authenticates, so the store refuses to mint it (409 inactive) and keeps no row.
+func TestServiceIdentity_StoreMintRefusesATokenBornDead(t *testing.T) {
+	e := newSvcEnv(t)
+	e.mustCreate(t, svcName, svcSponsor)
+	si, err := e.st.GetServiceIdentity(context.Background(), svcName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := false
+	_, err = e.st.CreateServiceToken(context.Background(), svcName, svcSponsor, apiTokenMaxPerPrincipal, types.APIToken{
+		ID: uuid.New(), Principal: svcPrin, Role: oidc.RoleUser, UserType: types.UserTypeStandard, Groups: []string{},
+		GroupsTruncated: &f, Name: "dead", CreatedAt: si.SponsorSince.Add(-time.Second), ExpiresAt: ptrTime(time.Now().Add(time.Hour)),
+	}, "wdn_"+uuid.NewString())
+	if !errors.Is(err, store.ErrServiceIdentityInactive) {
+		t.Fatalf("a mint stamped before sponsor_since = %v, want ErrServiceIdentityInactive", err)
+	}
+	if toks, err := e.st.ListAPITokensByPrincipal(context.Background(), svcPrin); err != nil || len(toks) != 0 {
+		t.Errorf("tokens after the refused mint = %+v (%v), want none", toks, err)
+	}
+}
