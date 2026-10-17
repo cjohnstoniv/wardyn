@@ -426,7 +426,7 @@ export const governance = {
   // approve (another human, with the authority to make that write): a 403 or 409 reaches the caller as an
   // HttpError whose message is its own sentence.
   async approveChange(id: string): Promise<GovernanceChange> {
-    const res = await wfetch(`/governance/changes/${encodeURIComponent(id)}/approve`, { method: "POST" });
+    const res = await wfetch(`/governance/changes/${encodeURIComponent(id)}/approve`, { method: "POST", asPerson: true });
     return asJson<GovernanceChange>(res);
   },
 
