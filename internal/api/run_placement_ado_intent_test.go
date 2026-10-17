@@ -26,7 +26,7 @@ func TestLocalADOIntentFollowsTheAggregateLane(t *testing.T) {
 	intents := func(t *testing.T, sc types.SiteConfig, req createRunRequest, spec types.RunPolicySpec) []placement.CredentialIntent {
 		t.Helper()
 		srv := &Server{cfg: Config{Store: &adoTestStore{site: sc}, Secrets: &memSecrets{m: map[string][]byte{feedToken: []byte("v")}}}}
-		out, ref := srv.localCredentialIntents(r, req, spec, runComponents{}, nil, sc)
+		out, _, ref := srv.localCredentialIntents(r, req, spec, runComponents{}, nil, sc)
 		if ref != nil {
 			t.Fatalf("refused: %+v", ref.body)
 		}
@@ -67,7 +67,7 @@ func TestLocalCredentialIntentsRefuseTheAWSCLI(t *testing.T) {
 	comps := runComponents{attached: []attachedComponent{{snapshot: types.RunComponent{ComponentID: &id,
 		Definition: types.ComponentDefinition{CLI: &types.ComponentCLI{Kind: types.CLIKindAWS, AWS: &types.CLIAWS{AccountID: "123456789012"}}}}}}}
 	srv := &Server{cfg: Config{Store: &adoTestStore{}}}
-	_, ref := srv.localCredentialIntents(r, createRunRequest{}, types.RunPolicySpec{}, comps, nil, types.SiteConfig{})
+	_, _, ref := srv.localCredentialIntents(r, createRunRequest{}, types.RunPolicySpec{}, comps, nil, types.SiteConfig{})
 	if ref == nil || ref.body.Reason != string(placement.ReasonPlacementCredential) || ref.body.Error != localAWSCLIRefusal {
 		t.Fatalf("refusal = %+v, want %s with the AWS CLI sentence", ref, placement.ReasonPlacementCredential)
 	}

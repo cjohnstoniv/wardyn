@@ -15,6 +15,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/composer"
 	"github.com/cjohnstoniv/wardyn/internal/placement"
 	"github.com/cjohnstoniv/wardyn/internal/types"
+	"github.com/cjohnstoniv/wardyn/pkg/client"
 	"github.com/google/uuid"
 )
 
@@ -238,6 +239,81 @@ func TestLocalPlacement_MCPSharedCredentialRefused(t *testing.T) {
 	}
 	if _, ref := f.srv.localPlacementRefusal(r, req, true, grant("operator-only-secret", true), governanceCeiling{}, runComponents{}, nil, nil, composer.Baseline{}); ref != nil && ref.body.Error == localMCPSharedCredentialMsg {
 		t.Error("a shared header credential that is not an MCP server's was refused as one")
+	}
+}
+
+// A key provider that routes through a configured gateway (a BaseURL, or any custom endpoint) is
+// refused for the person's own runner at create, preflight and preview (localPlacementRefusal). The runner
+// never gets the gateway table (LLMUpstreams is the organisation's network), so its brokered route would dial
+// the vendor host while the credential is keyed on the gateway, and every model call would fail. The same key
+// provider with no gateway is admitted.
+func TestLocalPlacement_GatewayKeyLaneRefused(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		kind    types.ModelProviderKind
+		base    string
+		refused bool
+	}{
+		{"anthropic key through a gateway", types.ModelProviderAnthropicAPIKey, "https://gw.corp.example/v1", true},
+		{"custom endpoint", types.ModelProviderCustomEndpoint, "https://llm.corp.example", true},
+		{"anthropic key to the vendor", types.ModelProviderAnthropicAPIKey, "", false},
+	} {
+		f := newComponentFixture(t)
+		f.srv.cfg.Store = localPlanTestStore{f.st}
+		p := types.ModelProvider{ID: "gw", UID: "uid-gw", Kind: tc.kind, BaseURL: tc.base, Harnesses: []types.ProviderHarness{{Harness: "claude-code"}}}
+		f.st.siteConfig = types.SiteConfig{ModelProviders: providerBlock(p)}
+		ctx := utCtx("user", "", nil)
+		if err := f.srv.cfg.Secrets.For(runIdentitySubject(ctx, capSub)).Put(ctx, providerSecretName(p.UID, providerKeyPart), []byte("own-key")); err != nil {
+			t.Fatal(err)
+		}
+		r := httptest.NewRequest(http.MethodPost, "/api/v1/runs", nil).WithContext(ctx)
+		req := createRunRequest{Placement: placement.Local, Agent: "claude-code", ModelProvider: p.ID}
+		_, ref := f.srv.localPlacementRefusal(r, req, true, types.RunPolicySpec{}, governanceCeiling{}, runComponents{}, nil, nil, composer.Baseline{})
+		switch {
+		case tc.refused && (ref == nil || ref.body.Reason != string(placement.ReasonPlacementCredential) || !strings.HasPrefix(ref.body.Error, "ProxyConfig.LLMUpstreams: ")):
+			t.Errorf("%s: refusal %+v, want placement_credential on ProxyConfig.LLMUpstreams", tc.name, ref)
+		case !tc.refused && ref != nil:
+			t.Errorf("%s: refusal %+v, want it admitted", tc.name, ref)
+		}
+	}
+}
+
+// A harness set judges every harness's provider at the doors, as dispatch authors every lane: a second
+// harness on a gateway-routed key provider is refused at create, preflight and preview, not only after
+// the run was accepted. The same set with the second harness on the vendor host is admitted.
+func TestLocalPlacement_SecondHarnessGatewayRefused(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		base    string
+		refused bool
+	}{
+		{"second harness through a gateway", "https://gw.corp.example/v1", true},
+		{"second harness to the vendor", "", false},
+	} {
+		f := newComponentFixture(t)
+		f.srv.cfg.Store = localPlanTestStore{f.st}
+		primary := types.ModelProvider{ID: "direct", UID: "uid-direct", Kind: types.ModelProviderAnthropicAPIKey, Harnesses: []types.ProviderHarness{{Harness: "claude-code"}}}
+		second := types.ModelProvider{ID: "second", UID: "uid-second", Kind: types.ModelProviderOpenAIAPIKey, BaseURL: tc.base, Harnesses: []types.ProviderHarness{{Harness: codexHarness}}}
+		f.st.siteConfig = types.SiteConfig{ModelProviders: providerBlock(primary, second)}
+		ctx := utCtx("user", "", nil)
+		for _, p := range []types.ModelProvider{primary, second} {
+			if err := f.srv.cfg.Secrets.For(runIdentitySubject(ctx, capSub)).Put(ctx, providerSecretName(p.UID, providerKeyPart), []byte("own-key")); err != nil {
+				t.Fatal(err)
+			}
+		}
+		req := createRunRequest{Experience: client.ExperienceInteractive, Placement: placement.Local, Tools: []client.IncludedTool{
+			{ID: "claude-code", Kind: client.IncludedToolHarness, ModelProvider: primary.ID},
+			{ID: codexHarness, Kind: client.IncludedToolHarness, ModelProvider: second.ID},
+		}}
+		projectRunMode(&req)
+		r := httptest.NewRequest(http.MethodPost, "/api/v1/runs", nil).WithContext(ctx)
+		_, ref := f.srv.localPlacementRefusal(r, req, true, types.RunPolicySpec{}, governanceCeiling{}, runComponents{}, nil, nil, composer.Baseline{})
+		switch {
+		case tc.refused && (ref == nil || ref.body.Reason != string(placement.ReasonPlacementCredential) || !strings.HasPrefix(ref.body.Error, "ProxyConfig.LLMUpstreams: ")):
+			t.Errorf("%s: refusal %+v, want placement_credential on ProxyConfig.LLMUpstreams", tc.name, ref)
+		case !tc.refused && ref != nil:
+			t.Errorf("%s: refusal %+v, want it admitted", tc.name, ref)
+		}
 	}
 }
 

@@ -64,9 +64,23 @@ func TestLocalEligibilityApprovalGrantAndUnknownKind(t *testing.T) {
 	}
 }
 
+// The gateway table is never sent, and a plan that needs it (a provider lane routed through a
+// gateway) is refused rather than stripped: stripped, the runner's brokered route would dial the vendor host
+// while the credential is keyed on the gateway.
+func TestLocalEligibilityRefusesAGatewayRoute(t *testing.T) {
+	p := LocalPlan{Spec: runner.SandboxSpec{ProxyConfig: runner.ProxyConfig{LLMUpstreams: map[string]string{"api.anthropic.com": "https://gw.corp.example/v1"}}}}
+	if _, r := LocalEligibility(p); r == nil || r.Reason != ReasonPlacementCredential || r.Field != "ProxyConfig.LLMUpstreams" {
+		t.Fatalf("refusal %v, want placement_credential on ProxyConfig.LLMUpstreams", r)
+	}
+	p.Spec.ProxyConfig.LLMUpstreams = nil
+	if _, r := LocalEligibility(p); r != nil {
+		t.Fatalf("a plan with no gateway route was refused: %v", r)
+	}
+}
+
 func TestLocalEligibilityStripsOperatorConfigWithoutMutating(t *testing.T) {
 	li := &types.LLMInspectionSpec{Mode: "block", WorkspaceSecretNames: []string{"operator-key"}, WorkspaceSecretValues: []string{"private"}, DetectSecretPatterns: true}
-	p := LocalPlan{OrgConfigKeys: []string{"ORG_KEY"}, Spec: runner.SandboxSpec{Env: map[string]string{"ORG_KEY": "private", "OWN": "value"}, ProxyConfig: runner.ProxyConfig{Policy: types.RunPolicySpec{LLMInspection: li}, UpstreamProxyURL: "https://user:password@parent", TrustedCAPEM: "corporate", InternalHosts: []types.InternalHost{{HostSuffix: "corp"}}, LLMUpstreams: map[string]string{"vendor": "corp"}, MITMHosts: []string{"corp:443"}}}}
+	p := LocalPlan{OrgConfigKeys: []string{"ORG_KEY"}, Spec: runner.SandboxSpec{Env: map[string]string{"ORG_KEY": "private", "OWN": "value"}, ProxyConfig: runner.ProxyConfig{Policy: types.RunPolicySpec{LLMInspection: li}, UpstreamProxyURL: "https://user:password@parent", TrustedCAPEM: "corporate", InternalHosts: []types.InternalHost{{HostSuffix: "corp"}}, MITMHosts: []string{"corp:443"}}}}
 	out, r := LocalEligibility(p)
 	if r != nil {
 		t.Fatal(r)
