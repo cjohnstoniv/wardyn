@@ -99,7 +99,7 @@ The pool list's `barrier_options` always answers Fence, Wall and Vault (`CC1`, `
 - A pool with an empty `barriers` list allows every barrier its runners offer.
 - A launch that names no barrier gets the organization's default barrier when it is available (`default_source: organisation`), otherwise the strongest available one (`default_source: server`).
 - An admin sets the organization's default barrier with `wardyn runner pool org-default set --barrier CC1|CC2|CC3|none`, or `PUT /api/v1/runner-pool-defaults` with `barrier`. That `PUT` replaces the document, so one that leaves `barrier` out clears it; one that leaves `recording` out keeps it.
-- The organization's default has a `revision` (migration `0180_runner_pool_org_default_revision`). A `PUT` naming a revision that has moved on is refused `runner_pool_stale` (409); one naming none writes unconditionally.
+- The organization's default has a `revision` (migration `0185_runner_pool_org_default_revision`). A `PUT` naming a revision that has moved on is refused `runner_pool_stale` (409); one naming none writes unconditionally.
 - A person's own default names a pool only; it cannot set a barrier.
 
 ## The queue
