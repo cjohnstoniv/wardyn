@@ -356,15 +356,16 @@ func alpnOrNone(proto string) string {
 
 // h2MismatchSentence is upstreamProtocolMismatchCause's sentence before the
 // mask/redact pass. hadTLS is false only for the plain-HTTP test-only branch,
-// where no handshake ran, so naming an ALPN outcome would be false.
-func h2MismatchSentence(e *h2MismatchError) string {
+// where no handshake ran, so naming an ALPN outcome would be false. h2Cause is
+// the HTTP/2 resend's failure as the sandbox may see it (Proxy.redactErr).
+func h2MismatchSentence(e *h2MismatchError, h2Cause string) string {
 	if !e.hadTLS {
 		return "peer answered HTTP/2 to an HTTP/1.1 request"
 	}
 	s := "peer answered HTTP/2 to an HTTP/1.1 request (ALPN: " + alpnOrNone(e.alpn) + ")"
 	switch {
 	case e.h2Err != nil:
-		s += "; the HTTP/2 resend also failed: " + e.h2Err.Error()
+		s += "; the HTTP/2 resend also failed: " + h2Cause
 	case e.notResent:
 		s += "; not resent over HTTP/2 because the request had already been written and its body cannot be replayed; later requests to this host use HTTP/2"
 	}
@@ -373,9 +374,14 @@ func h2MismatchSentence(e *h2MismatchError) string {
 
 // upstreamProtocolMismatchCause runs h2MismatchSentence through the SAME
 // mask + topology-redaction pass every other Cause takes: the row is visible
-// to the run's own creator.
+// to the run's own creator. The resend's error goes through redactErr first,
+// since it can be a certificate failure naming the gateway's chain.
 func (p *Proxy) upstreamProtocolMismatchCause(e *h2MismatchError) string {
-	masked := string(maskDecisionBytes([]byte(h2MismatchSentence(e))))
+	var h2Cause string
+	if e.h2Err != nil {
+		h2Cause = p.redactErr(e.h2Err)
+	}
+	masked := string(maskDecisionBytes([]byte(h2MismatchSentence(e, h2Cause))))
 	return p.redactTopology(masked)
 }
 

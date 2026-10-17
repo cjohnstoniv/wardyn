@@ -820,6 +820,12 @@ helm-lint: ## Lint + template-render the Helm chart (default + all-on values + t
 	echo "$$out" | grep -A1 'name: GOMEMLIMIT' | grep -q 'value: "400MiB"' || { echo "default render does not set GOMEMLIMIT=400MiB for wardynd"; exit 1; }; \
 	out=$$(helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set goMemLimit=); \
 	echo "$$out" | grep -q 'GOMEMLIMIT' && { echo "empty goMemLimit still rendered GOMEMLIMIT"; exit 1; } || true
+	@out=$$(helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true); \
+	echo "$$out" | grep -q 'WARDYN_TRUSTED_PROXIES' && { echo "the DEFAULT render sets WARDYN_TRUSTED_PROXIES — trusting X-Forwarded-For must be opt-in"; exit 1; } || true; \
+	out=$$(helm template wardyn ./deploy/helm/wardyn -f deploy/helm/wardyn/ci/all-on-values.yaml); \
+	echo "$$out" | grep -A1 'name: WARDYN_TRUSTED_PROXIES' | grep -q 'value: "10.42.0.0/16,fd00:42::/64"' || { echo "all-on: trustedProxies did not render WARDYN_TRUSTED_PROXIES"; exit 1; }; \
+	out=$$(helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set trustedProxies=10.0.0.0/8 --set 'extraEnv[0].name=WARDYN_TRUSTED_PROXIES' --set 'extraEnv[0].value=192.168.0.0/16'); \
+	[ "$$(echo "$$out" | grep -c 'name: WARDYN_TRUSTED_PROXIES')" = "1" ] || { echo "an extraEnv WARDYN_TRUSTED_PROXIES rendered beside the trustedProxies value"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set goMemLimit=419430400 2>&1 | grep -q "goMemLimit must be a quoted string with a unit" || { echo "a bare-number goMemLimit did not refuse to render"; exit 1; }
 	@out=$$(helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set 'extraEnv[0].name=GOMEMLIMIT' --set 'extraEnv[0].value=300MiB'); \
 	[ "$$(echo "$$out" | grep -c 'name: GOMEMLIMIT')" = "1" ] || { echo "an extraEnv GOMEMLIMIT rendered beside the goMemLimit default"; exit 1; }
