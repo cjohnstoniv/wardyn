@@ -92,3 +92,21 @@ func appliedAmount(l types.EffectiveLimit, asked int, names map[types.LimitSourc
 	out.SourceName = names[out.Source]
 	return out
 }
+
+// appliedPids is the process limit the run's source policy asked for held against the one it got after
+// the ceiling clamp. The pools fold no PIDs limit, so the cut is the ceiling's alone: the caller's
+// governance profile when it has one, else the deployment. A profile used as the policy asks nothing of its own.
+func appliedPids(source policySourceRecord, ceiling governanceCeiling, applied int) *client.AppliedAmount {
+	asked := 0
+	if source.Kind != policyKindProfile && source.Spec.Resources != nil {
+		asked = source.Spec.Resources.PidsLimit
+	}
+	out := client.AppliedAmount{Requested: asked, Applied: applied}
+	if asked > 0 && applied > 0 && applied < asked {
+		out.Capped, out.Source = true, types.LimitSourceDeployment
+		if p := ceiling.Profile; p != nil {
+			out.Source, out.SourceName = types.LimitSourceGovernance, p.Name
+		}
+	}
+	return &out
+}

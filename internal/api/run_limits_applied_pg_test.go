@@ -338,7 +338,7 @@ func TestRunCreateAuditCarriesAppliedResources(t *testing.T) {
 	if err := json.Unmarshal(rows[0].Data, &data); err != nil {
 		t.Fatal(err)
 	}
-	if data.ResourcesApplied == nil || *data.ResourcesApplied != *created.ResourcesApplied {
+	if data.ResourcesApplied == nil || !reflect.DeepEqual(data.ResourcesApplied, created.ResourcesApplied) {
 		t.Fatalf("run.create resources_applied = %+v, the 201 says %+v", data.ResourcesApplied, created.ResourcesApplied)
 	}
 	wantAmount(t, "audited cpu", data.ResourcesApplied.CPUMillis, 2000, true, types.LimitSourcePool, "Small")
