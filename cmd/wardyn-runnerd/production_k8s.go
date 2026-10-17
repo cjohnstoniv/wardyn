@@ -162,7 +162,7 @@ func k8sRunnerHooks(ctx context.Context, identity runneridentity.Identity, state
 		return nil
 	}
 	rt, err := runnerRuntimeWith(ctx, identity, stateDir, drv, k8s.SandboxRef, relay, unknownCapacity, runtimeExtras{
-		keystore:  runneragent.Keystore{Set: ks.Set, Get: ks.Get, Delete: ks.Delete},
+		keystore:  runneragent.Keystore{Set: ks.Set, Get: ks.Get, Delete: ks.Delete, DeleteAll: ks.DeleteAll, Precheck: ks.Precheck},
 		noPosture: true,
 		arch:      opts.arch,
 		options:   offline.Options{ProxySelfLapses: true, Tick: sink.Tick},

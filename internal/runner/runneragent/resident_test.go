@@ -1252,3 +1252,16 @@ func TestResident_ExpiryDeleteFailureRetries(t *testing.T) {
 		t.Fatalf("entry after the successful delete = %+v (items %d)", g, f.ks.size())
 	}
 }
+
+// A keystore without Precheck or DeleteAll does not panic: a delivery skips the
+// precheck, and the idle backstop reports errNoDeleteAll as a failed erase.
+func TestResident_KeystoreWithoutPrecheckOrDeleteAll(t *testing.T) {
+	f := newResidentFixture(t, nil)
+	f.res.keystore.Precheck, f.res.keystore.DeleteAll = nil, nil
+	if err := f.res.EraseExpired(context.Background(), f.clock.add(2*time.Hour)); !errors.Is(err, errNoDeleteAll) {
+		t.Fatalf("idle backstop without DeleteAll = %v, want errNoDeleteAll", err)
+	}
+	if err := f.deliver(uuid.New(), "v", true); err != nil {
+		t.Fatalf("delivery without Precheck: %v", err)
+	}
+}

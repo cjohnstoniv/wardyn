@@ -111,6 +111,6 @@ cluster="$(docs "$out" 'select(.kind == "ClusterRole") | .rules')"
   || die "the runs-namespace Role's one addition is not exactly pods: patch: $runs_role"
 [ "$cluster" = "$server_cluster" ] \
   || die "the ClusterRole is not the control-plane ClusterRole with k8s.readNodes: runnerd $cluster vs server $server_cluster"
-[ "$(docs "$out" 'select(.kind == "Role" and .metadata.namespace == null) | .rules')" = '[{"apiGroups":[""],"resources":["secrets"],"verbs":["create","get","delete"]}]' ] \
-  || die "the release-namespace Role is not exactly secrets create/get/delete"
+[ "$(docs "$out" 'select(.kind == "Role" and .metadata.namespace == null) | .rules')" = '[{"apiGroups":[""],"resources":["secrets"],"verbs":["create","get","delete","deletecollection"]}]' ] \
+  || die "the release-namespace Role is not exactly secrets create/get/delete/deletecollection"
 ok "RBAC parity: server Role + pods: patch; server ClusterRole with readNodes; own-namespace secrets only"

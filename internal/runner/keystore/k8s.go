@@ -19,9 +19,9 @@ import (
 )
 
 // K8s holds a k8s runner's runner_resident values as Secrets in runnerd's own namespace (design K1
-// §3.1 "Resident keystore"): one Secret per run and grant, with create, get and delete only, never
-// list. A Secret's name derives from its account, so whoever holds the account (the resident index
-// in runnerd's state) deletes it by name.
+// §3.1 "Resident keystore"): one Secret per run and grant, with create, get, delete and a
+// label-scoped deletecollection only, never list. A Secret's name derives from its account, so
+// whoever holds the account (the resident index in runnerd's state) deletes it by name.
 type K8s struct {
 	cs       kubernetes.Interface
 	ns       string
@@ -44,6 +44,18 @@ func (k *K8s) SecretName(account string) string {
 }
 
 const k8sValueKey = "value"
+
+// k8sValueLimit is the largest value Precheck admits: a Secret holds at most 1 MiB, and 64 KiB of
+// that is left for its name, labels and other metadata.
+const k8sValueLimit = 1<<20 - 64<<10
+
+// Precheck refuses, before any API call, a value one Secret cannot hold.
+func (k *K8s) Precheck(account, value string) error {
+	if len(value) > k8sValueLimit {
+		return fmt.Errorf("%w: the value is too long for a Kubernetes Secret (%d bytes, the limit is %d)", ErrUnavailable, len(value), k8sValueLimit)
+	}
+	return nil
+}
 
 // Set stores value under account. A Secret already there is deleted and created again: the Role
 // grants no update.
@@ -89,6 +101,22 @@ func (k *K8s) Delete(account string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), k8sCallBound)
 	defer cancel()
 	if err := k.cs.CoreV1().Secrets(k.ns).Delete(ctx, k.SecretName(account), metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
+		return fmt.Errorf("%w: %w", ErrUnavailable, err)
+	}
+	return nil
+}
+
+// residentSelector selects this runner's resident Secrets, the two labels Set puts on each.
+func (k *K8s) residentSelector() string {
+	return "wardyn.runner-id=" + k.runnerID + ",wardyn.component=resident"
+}
+
+// DeleteAll removes every resident Secret of this runner, and no other: one label-scoped
+// deletecollection, so the keystore still never lists.
+func (k *K8s) DeleteAll() error {
+	ctx, cancel := context.WithTimeout(context.Background(), k8sCallBound)
+	defer cancel()
+	if err := k.cs.CoreV1().Secrets(k.ns).DeleteCollection(ctx, metav1.DeleteOptions{}, metav1.ListOptions{LabelSelector: k.residentSelector()}); err != nil {
 		return fmt.Errorf("%w: %w", ErrUnavailable, err)
 	}
 	return nil
