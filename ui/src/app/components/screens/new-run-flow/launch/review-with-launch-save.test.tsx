@@ -90,4 +90,19 @@ describe("Review route Save as and the saver's own drives (DR-0221)", () => {
     expect(intent.drives).toEqual([{ drive_id: TEAM }]);
     expect(intent.start_folder).toBeUndefined();
   });
+
+  // Unknown is not "no drives": while the catalogue loads, or after it failed, no drive can be told apart as the saver's own.
+  it.each([
+    ["is still loading", () => new Promise<Response>(() => {})],
+    ["failed to load", () => Promise.reject(new Error("drives unavailable"))],
+  ])("omits every drive and the start folder from a shared template when the catalogue %s", async (_name, catalogue) => {
+    mount(catalogue);
+    await screen.findByRole("button", { name: NR_REVIEW.SAVE_TEMPLATE });
+    await vi.waitFor(() => expect(wfetchMock.mock.calls.some(([p]) => String(p).startsWith("/me/drives"))).toBe(true));
+    await saveShared();
+    await vi.waitFor(() => expect(posted()).toBeDefined());
+    const intent = posted() as RunIntent;
+    expect(intent.drives).toBeUndefined();
+    expect(intent.start_folder).toBeUndefined();
+  });
 });

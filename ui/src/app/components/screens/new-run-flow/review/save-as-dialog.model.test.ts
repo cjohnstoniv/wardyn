@@ -86,6 +86,12 @@ describe("pickIntent", () => {
 describe("leaveOutOwnDrives", () => {
   const intent = { drives: [{ drive_id: "mine" }, { drive_id: "team" }], experience: "background" } as unknown as RunIntent;
 
+  it("with the catalogue unknown, removes every drive and the drive start folder", () => {
+    const got = leaveOutOwnDrives({ ...intent, start_folder: { kind: "attachment", drive_id: "team" } } as unknown as RunIntent, undefined);
+    expect(got.leftOut).toBe(true);
+    expect(got.intent).toEqual({ experience: "background" });
+  });
+
   it("removes the saver's own drives and says it did", () => {
     const got = leaveOutOwnDrives(intent, new Set(["mine"]));
     expect(got.leftOut).toBe(true);

@@ -87,13 +87,16 @@ export function pickIntent(intent: RunIntent, fields: readonly string[]): RunInt
  * A draft shared with other people leaves out the saver's own member drives:
  * a shared template shows the names it references to its whole audience, and
  * the people it is offered to can never attach them. A start folder on one of
- * them goes with it, the way detaching the drive clears it.
+ * them goes with it, the way detaching the drive clears it. `ownDriveIds` undefined means the catalogue is
+ * not known (loading, or it failed): then no drive can be told apart as the saver's own, so every drive and
+ * the drive start folder go, rather than the unknown being read as "no drives".
  */
-export function leaveOutOwnDrives(intent: RunIntent, ownDriveIds: ReadonlySet<string>): { intent: RunIntent; leftOut: boolean } {
+export function leaveOutOwnDrives(intent: RunIntent, ownDriveIds: ReadonlySet<string> | undefined): { intent: RunIntent; leftOut: boolean } {
+  const isOwn = (id: string) => ownDriveIds === undefined || ownDriveIds.has(id);
   const drives = Array.isArray(intent.drives) ? intent.drives : [];
-  const kept = drives.filter((d) => !(d.drive_id && ownDriveIds.has(d.drive_id)));
+  const kept = drives.filter((d) => !(d.drive_id && isOwn(d.drive_id)));
   const start = intent.start_folder;
-  const startOwn = start?.kind === "attachment" && !!start.drive_id && ownDriveIds.has(start.drive_id);
+  const startOwn = start?.kind === "attachment" && !!start.drive_id && isOwn(start.drive_id);
   if (kept.length === drives.length && !startOwn) return { intent, leftOut: false };
   const rest: Record<string, unknown> = { ...intent };
   if (kept.length > 0) rest.drives = kept;

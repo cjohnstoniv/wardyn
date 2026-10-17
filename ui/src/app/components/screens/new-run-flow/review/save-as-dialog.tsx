@@ -68,7 +68,6 @@ export const SAVE_AS_COPY = {
 export type SaveAsCopy = typeof SAVE_AS_COPY;
 
 const NAME_MAX = 128;
-const NO_DRIVES: ReadonlySet<string> = new Set();
 export const SELECT_CLASS =
   "border-input bg-input-background dark:bg-input/30 focus-visible:border-ring focus-visible:ring-ring h-9 w-full rounded-md border px-3 text-base outline-none focus-visible:ring-[3px] md:text-sm";
 
@@ -106,7 +105,7 @@ export function SaveAsDialog(props: SaveAsDialogProps) {
 }
 
 function SaveAsForm({
-  onOpenChange, kind, intent, hasBlockers, publish, ownDriveIds = NO_DRIVES, copy = SAVE_AS_COPY, save = saveTemplate, onSaved,
+  onOpenChange, kind, intent, hasBlockers, publish, ownDriveIds, copy = SAVE_AS_COPY, save = saveTemplate, onSaved,
 }: SaveAsDialogProps) {
   const [name, setName] = React.useState("");
   const [audienceValue, setAudienceValue] = React.useState(ONLY_ME);
