@@ -711,6 +711,8 @@ type Server struct {
 	viaOrg viaOrgState
 	// fleet is the 15-second capacity snapshot behind the /metrics capacity gauges (metrics_fleet.go).
 	fleet fleetSnapshot
+	// revokedEndRetry spaces out the queue sweep's retries of a run it could not end (runner_revoke.go).
+	revokedEndRetry revokedEndRetry
 	// capRowsScanned counts capability-grant rows compared inside capBatch (see
 	// capabilities.go). It is INSTRUMENTATION, read by nothing on any request
 	// path: the per-request cost of the capability seam is chosen partly by the

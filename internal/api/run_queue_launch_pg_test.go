@@ -165,8 +165,8 @@ func (e *queueEnv) launchedLanes(id uuid.UUID, spec runner.SandboxSpec) (granted
 
 // The same parity for a run with two harnesses on two model providers, a main drive and a start folder:
 // after the queue each harness has its own provider lane, as it has at once (its authored grant and its
-// injection at the proxy), the same harness rows are recorded, and the disk the promotion reserved is
-// the disk dispatched.
+// injection at the proxy), the same harness rows are recorded, both start from the image declared for
+// the two harnesses, and the disk the promotion reserved is the disk dispatched.
 func TestPG_QueuedTwoHarnessRunLaunchesWhatAnImmediateStartLaunches(t *testing.T) {
 	e := newQueueEnv(t)
 	e.setDiskWord(types.StorageEnforcementFilesystem)
@@ -213,6 +213,9 @@ func TestPG_QueuedTwoHarnessRunLaunchesWhatAnImmediateStartLaunches(t *testing.T
 		if now.Env[k] == "" || later.Env[k] != now.Env[k] {
 			t.Errorf("%s: at once %q, after the queue %q; want the same, and set", k, now.Env[k], later.Env[k])
 		}
+	}
+	if now.Image != setImage || later.Image != now.Image {
+		t.Errorf("image: at once %q, after the queue %q; want the two-harness image %q for both", now.Image, later.Image, setImage)
 	}
 	wantRows := []types.RunHarness{{Harness: "claude-code", ModelProviderID: a.ID, Starts: true}, {Harness: "codex-cli", ModelProviderID: b.ID}}
 	wantLanes := map[string]string{
