@@ -112,11 +112,11 @@ type accessMappingView struct {
 	// Role is the tier; UserType the row's type, set only when Role is the
 	// user tier (a chart value naming a type id arrives here split the same
 	// way sign-in splits it).
-	Role        string    `json:"role"`
-	UserType    string    `json:"user_type,omitempty"`
-	Source      string    `json:"source"` // "chart" | "console"
-	Shadowed    bool      `json:"shadowed"`
-	ShadowCause string    `json:"shadow_cause"` // "" | "chart" | "operator_allowlist"
+	Role        string `json:"role"`
+	UserType    string `json:"user_type,omitempty"`
+	Source      string `json:"source"` // "chart" | "console"
+	Shadowed    bool   `json:"shadowed"`
+	ShadowCause string `json:"shadow_cause"` // "" | "chart" | "operator_allowlist"
 	// MigratedFromMember (migration 0098) is set only on a console row 0074's
 	// rename rewrote from role='member' — never on a chart row, whose target
 	// arrives from ChartRoleMap already resolved to "user" by ParseRoleMap
@@ -148,9 +148,11 @@ type accessResponse struct {
 	// (no new per-row field), and uses this alongside that to render the
 	// §7.2 warn badge / the opt-in state, matching what a write would accept.
 	AllowEmailMappings bool `json:"allow_email_mappings"`
-	// EmailDomainsConfigured reports whether WARDYN_OIDC_EMAIL_DOMAINS
-	// is set (oidc.Authenticator.HasEmailDomains) — the EMAIL_KEY badge copy
-	// depends on this, and the response otherwise cannot express it.
+	// EmailDomainsConfigured reports whether sign-in enforces email_verified —
+	// WARDYN_OIDC_EMAIL_DOMAINS is set or WARDYN_OIDC_REQUIRE_EMAIL_VERIFIED is
+	// on (oidc.Authenticator.EnforcesEmailVerified). The wire name predates the
+	// second setting. The EMAIL_KEY badge copy depends on this, and the response
+	// otherwise cannot express it.
 	EmailDomainsConfigured bool `json:"email_domains_configured"`
 	// Provider is a human-facing IdP name derived SERVER-SIDE from the OIDC
 	// issuer URL (e.g. "Microsoft Entra ID") so the console's SSO chip names
@@ -303,7 +305,7 @@ func (s *Server) handleGetAccess(w http.ResponseWriter, r *http.Request) {
 		OperatorEmailsPresent:  s.cfg.OIDC.HasOperatorEmails(),
 		OperatorEmails:         operatorEmails,
 		AllowEmailMappings:     s.cfg.AllowEmailMappings,
-		EmailDomainsConfigured: s.cfg.OIDC.HasEmailDomains(),
+		EmailDomainsConfigured: s.cfg.OIDC.EnforcesEmailVerified(),
 		Provider:               ssoProviderName(s.cfg.OIDC.Issuer()),
 		Posture: accessPosture{
 			// MapEmpty is the REAL merged-map emptiness (chart + rows,
@@ -350,13 +352,13 @@ func (s *Server) accessUnmatchedOutcome(rows []oidc.RoleMapping, userTypes []typ
 // canonicalRoleMapValue trims+lowers value and validates it against EXACTLY
 // the contract mergeRoleMaps enforces on a console row (RoleMapping's own doc
 // comment): non-empty, ASCII (matching is ASCII-only — a non-ASCII value can
-// never match a claim, see oidc.ASCIIOnly), and free of control characters
+// never match a claim, see types.ASCIIOnlySubject), and free of control characters
 // (the same hygiene validateCapabilityGrant applies to its own Value field —
 // an empty/control-char value stored raw would be either a dead key or,
 // worse for whitespace, one that matches ANY empty/whitespace claim).
 //
 // The ASCII guard runs before the fold, mirroring the chart-side twin
-// oidc.ParseRoleMap (its ASCIIOnly refusal precedes its own ToLower) and
+// oidc.ParseRoleMap (its ASCIIOnlySubject refusal precedes its own ToLower) and
 // oidc's deriveRole lookup loop. strings.ToLower folds KELVIN SIGN U+212A to
 // 'k' and U+0130 to 'i', so guarding the LOWERED value accepts a value the
 // operator did not type and stores a DIFFERENT, ASCII one under it — the
@@ -367,7 +369,7 @@ func canonicalRoleMapValue(value string) (string, error) {
 	if raw == "" {
 		return "", fmt.Errorf("value: required")
 	}
-	if !oidc.ASCIIOnly(raw) {
+	if !types.ASCIIOnlySubject(raw) {
 		return "", fmt.Errorf("value: must be ASCII — matching is ASCII-only, a non-ASCII value can never match a claim")
 	}
 	v := strings.ToLower(raw)
@@ -578,6 +580,10 @@ func (s *Server) handleUpsertRoleMapping(w http.ResponseWriter, r *http.Request)
 	if !s.requireOIDC(w) {
 		return
 	}
+	mode, ok := s.governanceWriteMode(w, r)
+	if !ok {
+		return
+	}
 	var req roleMappingWriteRequest
 	if !decodeStrict(w, r, &req) {
 		return
@@ -592,56 +598,25 @@ func (s *Server) handleUpsertRoleMapping(w http.ResponseWriter, r *http.Request)
 		writeServerError(w, r, "list user types", err)
 		return
 	}
-	write, msg := accessMappingTarget(req, value, userTypes)
-	if msg != "" {
-		writeErrorReason(w, http.StatusBadRequest, reasonAccessMappingTargetInvalid, msg)
-		return
-	}
-	chart := s.cfg.OIDC.ChartRoleMap()
-	if cause := accessCollisionCause(value, chart, s.cfg.OIDC); cause != "" {
-		writeAccessCollision(w, value, cause)
-		return
-	}
-	// Adjudication (docs/design/people-access-prompt.md): an email-shaped
-	// CONSOLE value is refused unless the org opted in
-	// (WARDYN_OIDC_ALLOW_EMAIL_MAPPINGS) — an SSO/Entra deployment's default
-	// posture steers an admin to an App Role or group key instead. env
-	// WARDYN_OIDC_ROLE_MAP's own email-keyed entries are UNAFFECTED (legacy,
-	// boot-warned separately — see buildOptionalFeatures). Checked AFTER the
-	// collision check on purpose: an email value that already collides with
-	// the chart/operator allowlist (e.g. an operator's own address) gets that
-	// more specific, more actionable refusal — not a generic "email mappings
-	// are off" that would be true but beside the point.
-	if strings.Contains(value, "@") && !s.cfg.AllowEmailMappings {
-		writeErrorReason(w, http.StatusBadRequest, reasonAccessEmailMappingDisabled, accessEmailKeyRefused)
-		return
-	}
-
-	existing, err := s.cfg.Store.ListRoleMappings(r.Context())
+	// The gates (shape, chart collision, email opt-in, posture flip, lockout) are gateRoleMappingUpsert's:
+	// a held change runs the same ones when it is approved. A write that is held is not lockout-checked
+	// here: the guard is the APPLYING human's, so it runs on the approval.
+	g, refuse, err := s.gateRoleMappingUpsert(r, req, value, userTypes, func() ([]types.RoleMapping, error) {
+		return s.cfg.Store.ListRoleMappings(r.Context())
+	}, mode != govQueue)
 	if err != nil {
 		writeServerError(w, r, "list role mappings", err)
 		return
 	}
-	candidate := accessCandidateRows(existing, "", write)
-
-	// Posture-flip guard: fires iff this write actually moves the
-	// unmatched-human outcome — derived from the REAL merged map via
-	// accessUnmatchedOutcome (existing rows vs. candidate rows), not a raw
-	// row-count precondition, which would miss a flip whenever a stored
-	// row was shadowed (see accessUnmatchedOutcome's doc).
-	if !req.AcknowledgeAccessChange {
-		before := s.accessUnmatchedOutcome(toOIDCRoleMappings(existing), userTypes)
-		after := s.accessUnmatchedOutcome(candidate, userTypes)
-		if before != after {
-			writeAccessPostureFlip(w, before, after)
-			return
-		}
-	}
-
-	if lerr := s.accessLockoutErr(r, existing, candidate, userTypes); lerr != nil {
-		writeErrorReason(w, http.StatusBadRequest, reasonAccessLockout, lerr.Error())
+	if refuse != nil {
+		refuse(w)
 		return
 	}
+	if mode == govQueue {
+		s.holdRoleMappingUpsert(w, r, req, g)
+		return
+	}
+	write, existing, candidate := g.write, g.existing, g.candidate
 
 	// A fresh candidate id: UpsertRoleMapping returns the EXISTING row's id on
 	// a natural-key (value) conflict, never this one — comparing the two is
@@ -677,12 +652,19 @@ func (s *Server) handleUpsertRoleMapping(w http.ResponseWriter, r *http.Request)
 	// value before the edit acted — so the audit row carries both numbers:
 	// what was outstanding, and what this write actually revoked.
 	stale := s.noteStaleRoleSnapshots(r.Context(), saved.Value, "upsert")
-	revoked := s.revokeDemotedRoleSnapshots(r, saved.Value, toOIDCRoleMappings(existing), candidate, userTypes)
+	revoked, revokeErr := s.revokeDemotedRoleSnapshots(r, saved.Value, toOIDCRoleMappings(existing), candidate, userTypes)
+	data := map[string]any{
+		"value": saved.Value, "role": saved.Role, "user_type": saved.UserType,
+		"stale_token_snapshots": stale, "tokens_revoked": revoked,
+	}
+	if revokeErr != nil {
+		data["tokens_revocation_failed"] = true
+	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
-		action, saved.ID.String(), "success", mustJSON(map[string]any{
-			"value": saved.Value, "role": saved.Role, "user_type": saved.UserType,
-			"stale_token_snapshots": stale, "tokens_revoked": revoked,
-		})))
+		action, saved.ID.String(), "success", mustJSON(data)))
+	if mode == govBypass {
+		s.recordGovernanceBypass(r, govKindRoleMapping, saved.ID.String(), "success", nil)
+	}
 	// Embedded, so the response is a strict SUPERSET of the RoleMapping every
 	// existing client already decodes — the console, pkg/client and the CLI keep
 	// working byte for byte, and a client that wants the signal reads one more
@@ -690,9 +672,12 @@ func (s *Server) handleUpsertRoleMapping(w http.ResponseWriter, r *http.Request)
 	// at all.
 	writeJSON(w, status, struct {
 		types.RoleMapping
-		StaleTokenSnapshots int `json:"stale_token_snapshots,omitempty"`
-		TokensRevoked       int `json:"tokens_revoked,omitempty"`
-	}{RoleMapping: saved, StaleTokenSnapshots: stale, TokensRevoked: revoked})
+		StaleTokenSnapshots    int    `json:"stale_token_snapshots,omitempty"`
+		TokensRevoked          int    `json:"tokens_revoked,omitempty"`
+		TokensRevocationFailed bool   `json:"tokens_revocation_failed,omitempty"`
+		Detail                 string `json:"detail,omitempty"`
+	}{RoleMapping: saved, StaleTokenSnapshots: stale, TokensRevoked: revoked,
+		TokensRevocationFailed: revokeErr != nil, Detail: roleTokensNotReachedDetail(revokeErr)})
 }
 
 // DELETE /access/mappings/{id}
@@ -705,6 +690,10 @@ func (s *Server) handleUpsertRoleMapping(w http.ResponseWriter, r *http.Request)
 // computation keyed on chart/row counts.
 func (s *Server) handleDeleteRoleMapping(w http.ResponseWriter, r *http.Request) {
 	if !s.requireOIDC(w) {
+		return
+	}
+	mode, ok := s.governanceWriteMode(w, r)
+	if !ok {
 		return
 	}
 	id, ok := parseIDParam(w, r, "id", "role mapping")
@@ -736,17 +725,12 @@ func (s *Server) handleDeleteRoleMapping(w http.ResponseWriter, r *http.Request)
 	// natural-key delete has no body) — ParseBool over a bare == "true"
 	// so "1"/"TRUE"/"T" also work, err (including absent) => false.
 	acknowledge, _ := strconv.ParseBool(r.URL.Query().Get("acknowledge_access_change"))
-	if !acknowledge {
-		before := s.accessUnmatchedOutcome(toOIDCRoleMappings(existing), userTypes)
-		after := s.accessUnmatchedOutcome(candidate, userTypes)
-		if before != after {
-			writeAccessPostureFlip(w, before, after)
-			return
-		}
+	if refuse := s.gateRoleMappingEffect(r, acknowledge, existing, candidate, userTypes, mode != govQueue); refuse != nil {
+		refuse(w)
+		return
 	}
-
-	if lerr := s.accessLockoutErr(r, existing, candidate, userTypes); lerr != nil {
-		writeErrorReason(w, http.StatusBadRequest, reasonAccessLockout, lerr.Error())
+	if mode == govQueue {
+		s.holdRoleMappingDelete(w, r, id, acknowledge, s.roleMappingEffect(existing, candidate, userTypes), existing, matched)
 		return
 	}
 
@@ -765,13 +749,31 @@ func (s *Server) handleDeleteRoleMapping(w http.ResponseWriter, r *http.Request)
 	// the audit row and the WARN line rather than the wire — a body here would
 	// change this route's status shape for every existing client.
 	staleDeleted := s.noteStaleRoleSnapshots(r.Context(), matched.Value, "delete")
-	revokedDeleted := s.revokeDemotedRoleSnapshots(r, matched.Value, toOIDCRoleMappings(existing), candidate, userTypes)
+	revokedDeleted, revokeErr := s.revokeDemotedRoleSnapshots(r, matched.Value, toOIDCRoleMappings(existing), candidate, userTypes)
+	data := map[string]any{
+		"value": matched.Value, "role": matched.Role, "user_type": matched.UserType,
+		"stale_token_snapshots": staleDeleted, "tokens_revoked": revokedDeleted,
+	}
+	if revokeErr != nil {
+		data["tokens_revocation_failed"] = true
+	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
-		"access.role_mapping.delete", id.String(), "success", mustJSON(map[string]any{
-			"value": matched.Value, "role": matched.Role, "user_type": matched.UserType,
-			"stale_token_snapshots": staleDeleted, "tokens_revoked": revokedDeleted,
-		})))
+		"access.role_mapping.delete", id.String(), "success", mustJSON(data)))
+	if mode == govBypass {
+		s.recordGovernanceBypass(r, govKindRoleMapping, id.String(), "success", nil)
+	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// roleTokensNotReachedDetail is the upsert response's statement that a
+// role-mapping change was saved but did not reach every outstanding API token
+// ("" when it did). The delete answers 204 with no body, so on that route only
+// the audit row and the WARN line carry the signal. The remedy names the door that exists: POST /sessions/revoke.
+func roleTokensNotReachedDetail(revokeErr error) string {
+	if revokeErr == nil {
+		return ""
+	}
+	return "The change is saved, but Wardyn could not revoke every API token that may still hold the old role. Revoke them with POST /sessions/revoke."
 }
 
 // POST /access/preview

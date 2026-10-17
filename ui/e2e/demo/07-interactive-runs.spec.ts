@@ -8,7 +8,7 @@
  *
  * WHAT THIS FILMS. Video 06's run needed nobody; this one is the opposite: an
  * interactive agent run you drive by hand. The take launches it through the
- * same New Run form (only the choices that change get airtime), lands in the
+ * same guided New Run flow (only the choices that change get airtime), lands in the
  * sandbox's own shell over the cockpit terminal, and then earns the series'
  * central credential claim FROM INSIDE THE BOX: the environment holds no API
  * key, the credentials file Claude Code reads carries a token that names
@@ -38,17 +38,18 @@
  * asserted in the audit BEFORE the model call (it fires at sandbox startup,
  * when the credential is minted — never on traffic).
  *
- * STAGING THE FORM GETS RIGHT ON CAMERA (each one was a take-killer for the
+ * STAGING THE FLOW GETS RIGHT ON CAMERA (each one was a take-killer for the
  * retired spec's operators):
- *   - Run mode INTERACTIVE, start with "Terminal — a shell in the workspace
- *     dir". The wizard's default start is the agent itself, and that attach
- *     lands INSIDE Claude Code's TUI — beats 2-4 would type shell commands
- *     into a prompt box. The Terminal choice is the supported shape, and
- *     picking it on camera teaches that the choice exists.
- *   - Network preset "Just the model provider" (the form's own default): the
+ *   - Agent task, Interactive, with Claude Code already added on Harnesses and
+ *     "Start the run in this harness" switched OFF (it opens ON). Left on, the run attaches INSIDE
+ *     Claude Code's TUI and beats 2-4 would type shell commands into a prompt
+ *     box. Off is the supported shape: a shell in the sandbox with the harness
+ *     available, which is what lets a human inspect the box and launch the
+ *     agent themselves.
+ *   - A model provider chosen on Tools and access, and no host added: the
  *     managed credential only injects when the policy can reach
- *     api.anthropic.com, and an api-key grant would pre-empt the managed
- *     fallback silently. This form adds no grants and allows exactly that host.
+ *     api.anthropic.com, which the harness brings on its own, and an api-key
+ *     grant would pre-empt the managed fallback silently.
  *
  * STATE IT INHERITS. Videos 01-03's stack: managed subscription connected
  * (asserted, not assumed), slugify workspace onboarded writable. No reset.
@@ -85,9 +86,28 @@ import {
   typeInTerminal,
 } from "./overlay";
 import { decide } from "./funnel";
+import {
+  addRepository,
+  chooseShape,
+  harnessPicker,
+  launchRunButton,
+  modeCard,
+  nextStep,
+  NEW_RUN_HEADING,
+  newRunHeading,
+  openNameDialog,
+  providerPicker,
+  runTitleField,
+  startGuided,
+  startInHarness,
+  confirmLaunchButton,
+  viewRunButton,
+} from "./new-run";
 import { sweepStaleState } from "./sweep";
 // stage.ts is the rig: importing it registers this file's beforeAll/afterAll.
 import { stage } from "./stage";
+import { termText } from "../terminal-text";
+import { NR_TOOLS } from "../../src/app/components/wardyn/copy/new-run/tools";
 
 test.skip(!process.env.WARDYN_DEMO, "demo recording — run via `make record-demo` (exports WARDYN_DEMO=1)");
 
@@ -161,9 +181,10 @@ test.beforeAll(async () => {
     "GET /api/v1/setup/status failed — is the stack up on :8080?",
   ).toBe(true);
 
-  // (2) NO stored anthropic-api-key: it would pre-empt the managed fallback
-  // silently and beat 3 would cat a file that never materialized. (Video 02's
-  // secret beat deliberately uses a neutral name for exactly this reason.)
+  // (2) NO stored anthropic-api-key: a current daemon refuses to store one and
+  // sweeps any left at boot (secrets.go's retiredModelCredentialNames), so this
+  // only catches a stack that predates that. (Video 02's secret beat
+  // deliberately uses a neutral name for exactly this reason.)
   expect(
     !present.includes("anthropic-api-key"),
     "an anthropic-api-key secret is stored on this stack — it pre-empts the managed subscription lane, " +
@@ -197,7 +218,7 @@ test.beforeAll(async () => {
 });
 
 // ---------------------------------------------------------------------------
-// Beat 1 — the form again, but only the choices that change
+// Beat 1 — the flow again, but only the choices that change
 // ---------------------------------------------------------------------------
 
 test("V07 beat 1 — an agent, and a hand on the wheel", async () => {
@@ -209,7 +230,7 @@ test("V07 beat 1 — an agent, and a hand on the wheel", async () => {
   await expect
     .poll(() => page.evaluate(() => typeof (window as unknown as Record<string, unknown>).__demo), { timeout: 15_000 })
     .toBe("object");
-  await expect(page.getByRole("heading", { name: "New run", level: 1 })).toBeVisible({ timeout: 30_000 });
+  await expect(newRunHeading(page, NEW_RUN_HEADING.start)).toBeVisible({ timeout: 30_000 });
 
   await chapter(page, "Interactive runs", "Drive the agent yourself — inside the boundary");
   await caption(page, "So far, we've watched commands run on their own.");
@@ -223,33 +244,38 @@ test("V07 beat 1 — an agent, and a hand on the wheel", async () => {
   await caption(page, "But this time, you have the keyboard.");
   await beat(page, BEAT_SHORT + 400);
 
-  const title = page.getByLabel("Title");
-  await title.fill(RUN_TITLE);
+  // No owner line names Start, so it plays silent.
+  await startGuided(page);
 
   // Agent task this time — and Interactive, which is the video.
-  await act(page, page.getByRole("radio", { name: /Agent task/ }), "Agent task.");
+  await chooseShape(page, "agent_task", "Agent task.");
   await caption(page, "This is a Claude Code task — Claude Code is the coding agent we'll be driving.");
   await beat(page, BEAT_SHORT);
-  await act(page, page.getByRole("radio", { name: /^Interactive/ }), "Interactive.");
+  await act(page, modeCard(page, "interactive"), "Interactive.");
   await caption(page, "Interactive means the sandbox starts up and gives us a terminal.");
   await beat(page, PACE.read);
   await caption(page, "We're the ones driving.");
   await beat(page, BEAT_SHORT);
+  await nextStep(page, NEW_RUN_HEADING.harnesses);
 
-  // Start in a SHELL, not in the agent's own TUI. The default drops you
-  // inside Claude Code's prompt box; the shell start is what lets a human
-  // inspect the box and launch the agent themselves — which is this video.
-  // No owner line covers this click — the choreography still needs it (the
-  // agent's own TUI is the wrong start for a hand-driven shell) — so it plays
-  // silent rather than inventing dialog (see the report).
-  const startWith = page.getByRole("radiogroup", { name: "Start with" });
-  await startWith.scrollIntoViewIfNeeded().catch(() => {});
-  await act(page, startWith.getByRole("radio", { name: /^Terminal/ }));
+  // Claude Code is already added, and "Start the run in this harness" opens ON,
+  // so it is switched OFF: a shell, not the agent's own TUI (see the header).
+  // No owner line covers this choice, so it plays silent rather than inventing dialog.
+  await expect(harnessPicker(page)).toBeVisible();
+  await harnessPicker(page).selectOption("claude-code");
+  await expect(startInHarness(page), "a new Interactive agent task opens with the harness starting the run").toBeChecked();
+  await act(page, startInHarness(page));
+  await expect(startInHarness(page), "the harness would start with the run and attach inside its TUI").not.toBeChecked();
+  await spotlight(page, startInHarness(page));
+  await beat(page, BEAT_SHORT);
+  await spotlight(page, null);
+  await nextStep(page, NEW_RUN_HEADING.files);
 
   // The workspace, and the envelope: exactly one host, the model's.
-  const wsPicker = page.getByRole("combobox").filter({ hasText: /workspace|Ephemeral/i }).first();
-  await act(page, wsPicker, "Attach the workspace.");
-  await act(page, page.getByRole("option", { name: new RegExp(WORKSPACE_NAME) }).first());
+  // OPEN: the shared slugify workspace is a local directory, and Files lists
+  // only repositories (a local directory is never offered). Lead: where does a
+  // local-directory workspace attach in the guided flow?
+  await addRepository(page, WORKSPACE_NAME, "Attach the workspace.");
   await caption(page, "Same workspace as before.");
   await beat(page, BEAT_SHORT);
   await caption(page, "And notice something important:");
@@ -258,33 +284,51 @@ test("V07 beat 1 — an agent, and a hand on the wheel", async () => {
   await beat(page, PACE.read);
   await caption(page, "The agent still gets the same workspace.");
   await beat(page, BEAT_SHORT + 400);
+  // The main drive's size is prefilled only when the pool offers a default.
+  const mainDriveSize = page.locator("#nr-main-drive-size");
+  if ((await mainDriveSize.count()) > 0 && (await mainDriveSize.inputValue()) === "") await mainDriveSize.fill("10");
+  await nextStep(page, NEW_RUN_HEADING.tools);
 
-  // The Confinement/Network cards and their "Confined" radio + "Just the
-  // model provider" preset are GONE — policy-panel.tsx replaces both with one
-  // spec-JSON Policy card. It already OPENS on the Minimal template
-  // (allowed_domains: [api.anthropic.com], first_use_approval:
-  // deny_with_review) — confined by construction, the same default the old
-  // "Confined" radio asserted. Clicking the Minimal chip re-asserts it for
-  // the camera in one click.
-  await act(page, page.getByRole("button", { name: "Minimal" }), "Minimal — confined.");
+  // The model provider the managed credential rides on. OPEN: index 1 is the
+  // first provider after the "Choose a model provider" placeholder; lead: is
+  // that the managed-subscription provider on the recording stack?
+  const provider = providerPicker(page, "claude-code");
+  await expect(provider, "no model provider serves Claude Code — V01's model step did not stick").toBeEnabled({ timeout: 30_000 });
+  await provider.selectOption({ index: 1 });
+
+  // The old Confinement/Network cards and the policy editor's Minimal chip are
+  // GONE. "What this run can reach" on Tools and access lists the network: the
+  // harness brings api.anthropic.com and the rest is default-deny, so the beat
+  // points at the totals instead of clicking a template.
+  const reach = page.getByRole("region", { name: NR_TOOLS.TOTALS_ARIA });
+  await spotlight(page, reach);
+  await caption(page, "Confined.");
+  await beat(page, BEAT_SHORT);
   await caption(page, "And the network is still default-deny — nothing out unless we list it.");
   await beat(page, PACE.read);
   await caption(page, "The agent needs to reach one address — its AI provider — so we'll allow exactly that one.");
   await beat(page, PACE.read);
   // DIALOG-STALE(old UI): "Add api.anthropic.com." narrated clicking the
-  // deleted "Just the model provider" Network preset radio. The Minimal chip
-  // clicked above already scopes allowed_domains to exactly
-  // api.anthropic.com, so there is no second click left to attach this line
-  // to — re-spotlighting the panel's Spec (JSON) textarea is the closest
-  // honest on-screen event.
-  await spotlight(page, page.getByLabel("Spec (JSON)"));
+  // deleted "Just the model provider" Network preset radio. The harness already
+  // brings the host, so there is no click left to attach this line to; ringing
+  // the host's row in the totals is the closest honest on-screen event.
+  await expect(reach.getByText("api.anthropic.com").first()).toBeVisible({ timeout: 30_000 });
+  await spotlight(page, reach.getByText("api.anthropic.com").first());
   await caption(page, "Add api.anthropic.com.");
   await beat(page, BEAT_SHORT);
   await caption(page, "That's the entire network contract for this run.");
   await beat(page, PACE.read);
   await spotlight(page, null);
 
-  await act(page, page.getByRole("button", { name: "Launch run" }), "Launch.");
+  // Review, then Launch run opens the Name dialog; the dialog's Launch creates the run.
+  await nextStep(page, NEW_RUN_HEADING.review);
+  await expect(launchRunButton(page)).toBeEnabled({ timeout: 60_000 });
+  await openNameDialog(page, "Launch.");
+  await runTitleField(page).fill(RUN_TITLE);
+  await act(page, confirmLaunchButton(page));
+  // POST /runs dispatches synchronously: the Launched screen offers View run
+  // only once the sandbox is provisioned, so the click waits that long.
+  await viewRunButton(page).click({ timeout: SANDBOX_UP });
   await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{8,}/i, { timeout: 60_000 });
 });
 
@@ -312,12 +356,12 @@ test("V07 beat 2 — inside the box", async () => {
 
   // The payoff, in the order the line claims it (lifted from the retired
   // model-access spec, assertions intact — see the file header).
-  await expect(screen).toContainText("ANTHROPIC_BASE_URL=https://api.anthropic.com", { timeout: COMMAND_ECHOES });
-  await expect(screen).toContainText("CLAUDE_CONFIG_DIR=");
-  await expect(screen).toContainText("WARDYN_CLAUDE_MANAGED_B64=");
+  await expect.poll(() => termText(screen), { timeout: COMMAND_ECHOES }).toContain("ANTHROPIC_BASE_URL=https://api.anthropic.com");
+  expect(await termText(screen)).toContain("CLAUDE_CONFIG_DIR=");
+  expect(await termText(screen)).toContain("WARDYN_CLAUDE_MANAGED_B64=");
   // "No API key" is a claim about an ABSENCE — asserted only after the grep's
   // output demonstrably landed, or an empty screen satisfies it trivially.
-  await expect(screen).not.toContainText("ANTHROPIC_API_KEY");
+  expect(await termText(screen)).not.toContain("ANTHROPIC_API_KEY");
   await caption(page, "No API key.");
   await beat(page, BEAT_SHORT);
   await caption(page, "There is a credential-shaped value here, but let's look at what it actually is.");
@@ -339,7 +383,7 @@ test("V07 beat 3 — the decoy", async () => {
   await typeInTerminal(page, "cat $CLAUDE_CONFIG_DIR/.credentials.json");
 
   // The FULL token — a Go constant, matched whole.
-  await expect(screen).toContainText(SENTINEL, { timeout: COMMAND_ECHOES });
+  await expect.poll(() => termText(screen), { timeout: COMMAND_ECHOES }).toContain(SENTINEL);
   await spotlightTerminalRow(page, "sk-ant-oat01-wardyn-inert-sentinel");
   await caption(page, "And the value inside is a decoy.");
   await beat(page, BEAT_SHORT);
@@ -412,8 +456,8 @@ test("V07 beat 4 — drive the agent", async () => {
   // "You've hit your weekly limit · resets ..." — the subscription's own
   // quota, which no preflight can detect because only a real call reveals it.
   const OUTCOME = /\b(red|yellow|blue)\b|hit your (weekly|session|usage) limit|invalid.*key|authentication_error|credit balance/i;
-  await expect(screen).toContainText(OUTCOME, { timeout: MODEL_ANSWERS });
-  const text = (await screen.textContent()) ?? "";
+  await expect.poll(() => termText(screen), { timeout: MODEL_ANSWERS }).toMatch(OUTCOME);
+  const text = await termText(screen);
   expect(
     /\b(red|yellow|blue)\b/i.test(text) && !/hit your (weekly|session|usage) limit|invalid.*key|authentication_error|credit balance/i.test(text),
     `the model call was refused, not answered — the terminal shows a quota/auth failure. ` +

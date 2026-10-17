@@ -106,8 +106,8 @@ func TestLive_TransitKEKConformance(t *testing.T) {
 	mount, cfg := liveTransitKey(t, a)
 	hooks := kektest.Hooks{
 		Rotate: func(t *testing.T) { a.on(t).must(http.MethodPost, mount+"/keys/wardyn/rotate", nil) },
-		Retire: func(t *testing.T, n int) {
-			a.on(t).must(http.MethodPost, mount+"/keys/wardyn/config", map[string]any{"min_decryption_version": n})
+		Retire: func(t *testing.T, keep string) {
+			a.on(t).must(http.MethodPost, mount+"/keys/wardyn/config", map[string]any{"min_decryption_version": minDecryption(t, keep)})
 		},
 		Disable: func(t *testing.T) {
 			a := a.on(t)
@@ -212,8 +212,8 @@ func TestLive_TransitRewrapIsResumableAndIdempotent(t *testing.T) {
 	}
 	for _, n := range []string{"a", "b", "c"} {
 		_, w := rowKEK(t, pool, "", n)
-		if v, _ := tr.WrapVersion(w); v != 1 {
-			t.Errorf("row %s is under v%d after the aborted rewrap, want v1 (nothing committed)", n, v)
+		if v, _ := tr.WrapVersion(w); v != "1" {
+			t.Errorf("row %s is under v%s after the aborted rewrap, want v1 (nothing committed)", n, v)
 		}
 	}
 	// a and c were never touched by the aborted run; b's corrupted payload is
@@ -229,7 +229,7 @@ func TestLive_TransitRewrapIsResumableAndIdempotent(t *testing.T) {
 	if v, err := s.Get(ctx, "b"); err != nil || string(v) != "v-b" {
 		t.Fatalf("Get(b) after the aborted rewrap = (%q, %v); want it still readable under v1", v, err)
 	}
-	if res, err = rewrap(); err != nil || res.Rewrapped != 3 || res.KeyVersion != 2 {
+	if res, err = rewrap(); err != nil || res.Rewrapped != 3 || res.KeyVersion != "2" {
 		t.Fatalf("re-run = (%+v, %v); want all 3 rows moved (the aborted run committed nothing), to v2", res, err)
 	}
 	if res, err = rewrap(); err != nil || res.Rewrapped != 0 {
@@ -238,8 +238,8 @@ func TestLive_TransitRewrapIsResumableAndIdempotent(t *testing.T) {
 	a.must(http.MethodPost, mount+"/keys/wardyn/config", map[string]any{"min_decryption_version": 2})
 	for _, n := range []string{"a", "b", "c"} {
 		_, w := rowKEK(t, pool, "", n)
-		if v, _ := tr.WrapVersion(w); v != 2 {
-			t.Errorf("row %s is under v%d after the rewrap, want v2", n, v)
+		if v, _ := tr.WrapVersion(w); v != "2" {
+			t.Errorf("row %s is under v%s after the rewrap, want v2", n, v)
 		}
 		if v, err := s.Get(ctx, n); err != nil || string(v) != "v-"+n {
 			t.Fatalf("Get(%s) with v1 retired = (%q, %v)", n, v, err)

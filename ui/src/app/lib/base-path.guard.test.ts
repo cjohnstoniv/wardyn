@@ -23,6 +23,8 @@ const ROOT_ABSOLUTE: RegExp[] = [
   /["'`]\/(healthz|readyz|metrics)\b/, // the probes
   /["'`]\/(__wardyn|assets)\//, // the enter route, the bundle's own assets
   /["'`]wss?:["'`]/, // a WebSocket URL assembled by hand
+  /location\.origin\s*\}\//, // an origin glued to a root path (`${location.origin}/runs/…`): the base path is skipped
+  /location\.origin\s*\+\s*["'`]\//, // the same, by concatenation
   /\bhref=["'`]\/(?!\/)/, // a raw anchor to a root-absolute path (a <Link> gets the router's basename)
 ];
 

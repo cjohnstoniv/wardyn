@@ -503,8 +503,8 @@ func (s *Server) runSiteConfigProbe(ctx context.Context, actor, script string, a
 		return runID, probeRunResult{}, err
 	}
 
-	s.dispatchRun(launchCtx, created, dc, dispatchParams{
-		RunToken: token,
+	s.dispatchRun(launchCtx, created, dc.placementExempt(), dispatchParams{
+		TrustedOutput: true, RunToken: token,
 		// "base": the probe runs a plain curl, never a coding agent -- base is
 		// the image Wardyn actually publishes for exec-only tasks. "claude-code"
 		// here pulled an image the project ships as a devcontainer harness, not
@@ -768,8 +768,8 @@ func (s *Server) reclaimProbeRun(ctx context.Context, runID uuid.UUID) {
 		return
 	}
 	if applied, _ := s.casRunState(ctx, runID, run.State, types.RunKilled); applied {
-		s.finalizeRunTail(ctx, runID, run.SandboxRef, "site_config.probe.kill",
-			"failure", map[string]any{"reason": "probe wait timed out; run reclaimed"})
+		s.finalizeRunTailOrdered(ctx, runID, run.SandboxRef, "site_config.probe.kill",
+			"failure", map[string]any{"reason": "probe wait timed out; run reclaimed"}, true, false)
 	}
 }
 

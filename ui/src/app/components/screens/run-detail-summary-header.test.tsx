@@ -32,6 +32,7 @@ import {
   PENDING_NO_DETAIL,
   STARTING_CONTAINER_CREATING,
 } from "./run-status-detail";
+import { setField } from "../../../test/set-field";
 
 // SummaryHeader now renders a "Runs" breadcrumb <Link> (react-router-dom),
 // which throws outside a Router context — wrap every render the same way
@@ -52,6 +53,7 @@ const runningInteractive: AgentRun = {
   state: "RUNNING",
   spiffe_id: "spiffe://x",
   runner_target: "docker",
+  placement: "",
   interactive: true,
 };
 
@@ -67,13 +69,58 @@ describe("SummaryHeader — attachable chip predicate", () => {
     expect(screen.queryByText("Interactive — attachable")).toBeNull();
   });
 
-  it("shows 'Interactive — attachable' for an operator on a RUNNING interactive run", () => {
+  it("shows 'Interactive — attachable' for the run's own person, admin or not", () => {
     renderHeader(
-      <OperatorProvider operator={true}>
+      <OperatorProvider operator={true} principal="me">
         <SummaryHeader run={runningInteractive} terminal={false} onKill={() => {}} />
       </OperatorProvider>,
     );
     expect(screen.getByText("Interactive — attachable")).toBeInTheDocument();
+  });
+
+  // #1476: entry is owner-gated, so a super admin on someone else's run is
+  // not promised a terminal the server will refuse.
+  it("a super admin on ANOTHER person's run gets the plain 'Interactive' chip", () => {
+    renderHeader(
+      <OperatorProvider operator={true} principal="sam@acme.io">
+        <SummaryHeader run={runningInteractive} terminal={false} onKill={() => {}} />
+      </OperatorProvider>,
+    );
+    expect(screen.getByText("Interactive")).toBeInTheDocument();
+    expect(screen.queryByText("Interactive — attachable")).toBeNull();
+  });
+
+  it("a super admin keeps 'attachable' on an operator-owned run", () => {
+    renderHeader(
+      <OperatorProvider operator={true} principal="sam@acme.io">
+        <SummaryHeader run={{ ...runningInteractive, operator_owned: true } as AgentRun} terminal={false} onKill={() => {}} />
+      </OperatorProvider>,
+    );
+    expect(screen.getByText("Interactive — attachable")).toBeInTheDocument();
+  });
+});
+
+// 0.9 (M-RN-3 RS3, #111): a neutral chip names the computer of a LOCAL run beside the barrier; a remote run's
+// default place needs none (RN-Q14), so its header is what it was.
+describe("SummaryHeader — where a local run is", () => {
+  const onLaptop = { ...runningInteractive, placement: "local", runner_id: "11111111-2222-3333-4444-555555555555", runner_name: "laptop-7" } as AgentRun;
+
+  it("shows 'On {name}' for a local run", () => {
+    renderHeader(
+      <OperatorProvider operator={false}>
+        <SummaryHeader run={onLaptop} terminal={false} onKill={() => {}} />
+      </OperatorProvider>,
+    );
+    expect(screen.getByText("On laptop-7")).toBeInTheDocument();
+  });
+
+  it.each([["remote"], [""]] as const)("shows no chip for a run whose placement is %j", (placement) => {
+    renderHeader(
+      <OperatorProvider operator={false}>
+        <SummaryHeader run={{ ...onLaptop, placement } as AgentRun} terminal={false} onKill={() => {}} />
+      </OperatorProvider>,
+    );
+    expect(screen.queryByText(/^On /)).toBeNull();
   });
 });
 
@@ -129,6 +176,18 @@ describe("SummaryHeader — command bar", () => {
       </OperatorProvider>,
     );
     expect(screen.queryByText(/waiting/i)).toBeNull();
+  });
+});
+
+describe("SummaryHeader — the short run id", () => {
+  it("shows 8 characters and keeps the full id on the title", () => {
+    const id = "7f3c9a21-5b6d-4e8f-9a0b-1c2d3e4f5a6b";
+    renderHeader(
+      <OperatorProvider operator={true}>
+        <SummaryHeader run={{ ...runningInteractive, id }} terminal={false} onKill={() => {}} />
+      </OperatorProvider>,
+    );
+    expect(screen.getByTitle(id).textContent).toBe("· 7f3c9a21");
   });
 });
 
@@ -619,6 +678,31 @@ describe("SummaryHeader — the run's model provider chip", () => {
   });
 });
 
+// #1234: the thin line under the bar for a run a portal launched. The two
+// strings are the approved canon, asserted verbatim.
+describe("SummaryHeader — Launched via", () => {
+  const portalId = "0b1c2d3e-0000-4000-8000-000000000001";
+  function header(run: RunDetail) {
+    renderHeader(<SummaryHeader run={run} terminal={false} onKill={() => {}} />);
+  }
+
+  it("a portal-launched run: the line, with the portal's name", () => {
+    header({ ...runningInteractive, created_via: portalId, created_via_name: "Acme Support Portal" });
+    expect(screen.getByTestId("run-launched-via")).toHaveTextContent(/^Launched via Acme Support Portal$/);
+  });
+
+  it("a portal the server could not name: the fallback line", () => {
+    header({ ...runningInteractive, created_via: portalId });
+    expect(screen.getByTestId("run-launched-via")).toHaveTextContent(/^Launched via a portal$/);
+  });
+
+  it("a self-launched run: no line", () => {
+    header({ ...runningInteractive, created_via_name: "Acme Support Portal" });
+    expect(screen.queryByTestId("run-launched-via")).toBeNull();
+    expect(screen.queryByText(/Launched via/)).toBeNull();
+  });
+});
+
 // #1197 L2, review round 2 (F3/F5): what the Rename draft is seeded with,
 // and what happens when it is submitted empty.
 describe("SummaryHeader — Rename draft seeding and empty-submit", () => {
@@ -684,7 +768,7 @@ describe("SummaryHeader — Rename draft seeding and empty-submit", () => {
     await user.click(screen.getByRole("button", { name: "Rename" }));
     const input = screen.getByLabelText("Title");
     await user.clear(input);
-    await user.type(input, "A real new title");
+    setField(input, "A real new title");
     await user.click(screen.getByRole("button", { name: "Save" }));
     expect(onRename).toHaveBeenCalledWith("A real new title");
   });

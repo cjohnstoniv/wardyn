@@ -23,9 +23,9 @@ import (
 type Hooks struct {
 	// Rotate makes a new key version the one every wrap uses.
 	Rotate func(t *testing.T)
-	// Retire refuses unwraps under versions below minVersion
-	// (Transit's min_decryption_version).
-	Retire func(t *testing.T, minVersion int)
+	// Retire refuses unwraps under every version but keep (a
+	// Versioned.LatestVersion); keep "" undoes it.
+	Retire func(t *testing.T, keep string)
 	// Unreachable stops the service answering and returns the func that
 	// brings it back.
 	Unreachable func(t *testing.T) (restore func())
@@ -86,6 +86,24 @@ func MustUnwrap(t *testing.T, k kek.KEK, w, dek []byte, bind map[string]string) 
 	if !bytes.Equal(got, dek) {
 		t.Fatal("Unwrap opened to different bytes")
 	}
+}
+
+// Open opens sealed under key and aad, failing the test on error.
+func Open(t *testing.T, key, sealed, aad []byte) []byte {
+	t.Helper()
+	plain, err := kek.Open(key, sealed, aad)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	return plain
+}
+
+// UnwrapRefused fails the test unless k refuses to unwrap w under bind with a
+// definitive error (see Definitive).
+func UnwrapRefused(t *testing.T, k kek.KEK, w []byte, bind map[string]string, what string) {
+	t.Helper()
+	_, err := k.Unwrap(t.Context(), w, bind)
+	Definitive(t, what, err)
 }
 
 // Definitive fails the test unless err is a refusal the sink drops the
@@ -186,24 +204,24 @@ func rotateRetire(t *testing.T, v kek.Versioned, h Hooks) {
 		t.Fatalf("WrapVersion of a fresh wrap: %v", err)
 	}
 	if latest, err := v.LatestVersion(ctx); err != nil || latest != n1 {
-		t.Fatalf("LatestVersion = (%d, %v), want %d (the version the last wrap named)", latest, err, n1)
+		t.Fatalf("LatestVersion = (%q, %v), want %q (the version the last wrap named)", latest, err, n1)
 	}
 	h.Rotate(t)
 	latest, err := v.LatestVersion(ctx)
-	if err != nil || latest != n1+1 {
-		t.Fatalf("LatestVersion after a rotation = (%d, %v), want %d", latest, err, n1+1)
+	if err != nil || latest == n1 {
+		t.Fatalf("LatestVersion after a rotation = (%q, %v), want a version other than %q", latest, err, n1)
 	}
 	dek2 := DEK(t)
 	w2 := Wrap(t, v, dek2, bind)
-	if n, _ := v.WrapVersion(w2); n != n1+1 {
-		t.Fatalf("a wrap after the rotation names v%d, want v%d", n, n1+1)
+	if n, _ := v.WrapVersion(w2); n != latest {
+		t.Fatalf("a wrap after the rotation names %q, want %q", n, latest)
 	}
 	MustUnwrap(t, v, w1, dek1, bind) // the old version still opens until it is retired
 	if h.Retire == nil {
 		return
 	}
-	h.Retire(t, n1+1)
-	t.Cleanup(func() { h.Retire(t, 1) })
+	h.Retire(t, latest)
+	t.Cleanup(func() { h.Retire(t, "") })
 	_, err = v.Unwrap(ctx, w1, bind)
 	Definitive(t, "Unwrap under a retired version", err)
 	MustUnwrap(t, v, w2, dek2, bind)

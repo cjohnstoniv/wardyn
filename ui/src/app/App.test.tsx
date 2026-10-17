@@ -19,6 +19,7 @@ import { SESSION_ENDED_REASON } from "./lib/api/core";
 import { RoleProvider, type Role } from "./components/wardyn/operator-context";
 import { baseStatus } from "./lib/test-fixtures";
 import type { SetupStatus } from "./lib/types";
+import { setField } from "../test/set-field";
 
 // H1/H2/M2 — full App mount, real onUnauthorized wiring, mocked fetch. The
 // board itself (RunsScreen) is stubbed: these cases only care about the
@@ -36,6 +37,11 @@ vi.mock("./components/screens/settings/admin-settings-screen", () => ({
 }));
 vi.mock("./components/screens/settings/your-account-screen", () => ({
   YourAccountScreen: () => <div>your account screen stub</div>,
+}));
+
+// 0.9 — the Templates routes: the same stubbed screen at both paths, which are the two views of one page.
+vi.mock("./components/screens/templates/templates-screen", () => ({
+  TemplatesScreen: () => <div>templates screen stub</div>,
 }));
 
 function renderLanding(role: Role, roleResolved: boolean, status: SetupStatus | null) {
@@ -365,7 +371,7 @@ describe("App — the setup-status poll behind the model-access door", () => {
       landingRead.resolve(jsonResponse(200, SETUP_STATUS_READY));
     });
 
-    await user.type(screen.getByLabelText("Admin token"), "any-token");
+    setField(screen.getByLabelText("Admin token"), "any-token");
     await user.click(screen.getByRole("button", { name: "Sign in" }));
 
     // The next person's landing decision waits for THEIR OWN read: with the
@@ -396,5 +402,19 @@ describe("App — the settings-split route table", () => {
     renderApp("/account");
     expect(await screen.findByText("your account screen stub")).toBeInTheDocument();
     expect(screen.queryByText("admin settings screen stub")).toBeNull();
+  });
+});
+
+describe("App — the Templates route table", () => {
+  it.each(["/templates", "/admin/templates"])("mounts TemplatesScreen at %s", async (path) => {
+    const { fetch } = mockFetch({});
+    vi.stubGlobal("fetch", fetch);
+    renderApp(path);
+    expect(await screen.findByText("templates screen stub")).toBeInTheDocument();
+  });
+
+  it("a member reaches /templates and nothing under /admin/templates", () => {
+    expect(roleCanReach("/templates", "user")).toBe(true);
+    expect(roleCanReach("/admin/templates", "user")).toBe(false);
   });
 });

@@ -223,6 +223,7 @@ var capKindsGolden = map[int]string{
 	2: "egress_host:narrowing,secret:narrowing,workspace:narrowing,image:widening,agent:narrowing,integration:narrowing,workspace_provider:narrowing,model_provider:narrowing",
 	3: "egress_host:narrowing,secret:narrowing,workspace:narrowing,image:widening,agent:narrowing,integration:narrowing,workspace_provider:narrowing,model_provider:narrowing,feature:narrowing,policy:narrowing",
 	4: "egress_host:narrowing,secret:narrowing,workspace:narrowing,image:widening,agent:narrowing,workspace_provider:narrowing,model_provider:narrowing,feature:narrowing,policy:narrowing",
+	5: "egress_host:narrowing,secret:narrowing,workspace:narrowing,image:widening,agent:narrowing,workspace_provider:narrowing,model_provider:narrowing,feature:narrowing,policy:narrowing,component:narrowing",
 }
 
 // TestCapKindsVersionPinsTheTable fails on a kind-table change that does not

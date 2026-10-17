@@ -103,6 +103,8 @@ func TestRunPolicy_HeaderLines(t *testing.T) {
 	view.Redacted = true
 	view.Changes = append(view.Changes, sdk.RunPolicyChange{
 		Cause: "limits", Field: "allowed_domains", Removed: []string{"pastebin.com"}, Detail: []string{"Removed pastebin.com."},
+	}, sdk.RunPolicyChange{
+		Cause: "component", Field: "allowed_domains", Added: []string{"api.stripe.com"},
 	})
 	t.Run("the owner", func(t *testing.T) {
 		out, err := execRunPolicy(t, policyViewServer(t, view, "alice", "alice"), view.RunID.String())
@@ -114,6 +116,7 @@ func TestRunPolicy_HeaderLines(t *testing.T) {
 			`# Started from the saved policy "ci".`,
 			"# Changed when the run started\n",
 			"# Added for the workspace: registry.npmjs.org\n",
+			"# Added for an attached component: api.stripe.com\n",
 			"# Limited by the walled governance profile: corp.example\n",
 			"# Blocked when the run was restarted on " + restartedOn + ": paste.example\n",
 			"# Narrowed to fit your limits: pastebin.com\n",
@@ -164,6 +167,31 @@ func TestRunPolicy_HeaderLines(t *testing.T) {
 	})
 }
 
+// A run launched with an organization component's shared header secret carries
+// "shared": true on its grant. The export keeps it (the security tier reads the
+// policy as recorded), and policy validation refuses it, so the header says the
+// output is a record. TestRunPolicyView_SharedComponentExportIsARecord (internal/api)
+// pins the refusal itself.
+func TestRunPolicy_SharedComponentGrantSaysTheExportIsARecord(t *testing.T) {
+	view := recordedView()
+	view.Spec.EligibleGrants = append(view.Spec.EligibleGrants, types.GrantSpec{
+		Kind: types.GrantAPIKey, TTLSeconds: 3600,
+		Scope: json.RawMessage(`{"host":"org-api.example","secret_name":"corp-token","require_tls":true,"shared":true}`),
+	})
+	out, err := execRunPolicy(t, policyViewServer(t, view, "alice", "alice"), view.RunID.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	head, _, _ := strings.Cut(out, "allowed_domains:")
+	if !strings.Contains(head, "# "+runPolicyShared+"\n") {
+		t.Errorf("header lacks the record sentence:\n%s", head)
+	}
+	plain, err := execRunPolicy(t, policyViewServer(t, recordedView(), "alice", "alice"), view.RunID.String())
+	if err != nil || strings.Contains(plain, "shared secret") {
+		t.Errorf("a run with no shared grant must not carry the sentence (err %v):\n%s", err, plain)
+	}
+}
+
 func TestRunPolicy_JSONPrintsTheWholeResponse(t *testing.T) {
 	view := recordedView()
 	out, err := execRunPolicy(t, policyViewServer(t, view, "alice", "alice"), view.RunID.String(), "--json")
@@ -197,7 +225,7 @@ func TestRunPolicy_HelpIsThePacketsWording(t *testing.T) {
 	if cmd.Short != "Show the policy a run got when it started, as YAML" {
 		t.Errorf("short = %q", cmd.Short)
 	}
-	if want := `Shows where a run's policy came from, what Wardyn changed when the run started, and the policy itself as YAML. If you're an admin, you can reuse the YAML as is with "wardyn run --policy-file". Anyone else sees hidden values as <redacted> and fills them in first.`; cmd.Long != want {
+	if want := `Shows where a run's policy came from, what Wardyn changed when the run started, and the policy itself as YAML. If you're an admin, you can reuse the YAML as is with "wardyn run --policy-file", unless the run used an organization component's shared secret: then the YAML is a record of the run, not a policy to reuse, and you select the component again on the new run. Anyone else sees hidden values as <redacted> and fills them in first.`; cmd.Long != want {
 		t.Errorf("long = %q", cmd.Long)
 	}
 	if f := cmd.Flags().Lookup("json"); f == nil || f.Usage != "print the full response as JSON" {

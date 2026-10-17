@@ -145,6 +145,33 @@ func TestProxyConfig_WarnsOnUncoveredAWSSSOInjectionHost(t *testing.T) {
 	}
 }
 
+// TestProxyConfig_UncoveredAWSSSOWarningNamesResolvabilityPrecondition: the
+// warning must not read as "add the host to the bypass list and the run
+// works". Under a bypass entry the proxy resolves the name itself, so the
+// warning names that precondition and keeps the host attribute.
+func TestProxyConfig_UncoveredAWSSSOWarningNamesResolvabilityPrecondition(t *testing.T) {
+	logged, _, err := captureConfigLoadLogs(t, baseConfigJSON(t, map[string]any{
+		"upstream_proxy_url":      "http://corp-proxy.internal:8080",
+		"upstream_proxy_no_proxy": []string{},
+		"injection": []map[string]any{
+			{"host": testSSOPortalHost, "header": "x-amz-sso_bearer_token", "grant_id": uuid.New().String()},
+		},
+	}))
+	if err != nil {
+		t.Fatalf("LoadConfigBytes: %v", err)
+	}
+	for _, want := range []string{
+		"not covered",
+		"a bypass entry helps only if wardyn-proxy itself (not the sandbox) can resolve and reach the host",
+		"the estate needs a route, not a configuration change",
+		"host=" + testSSOPortalHost,
+	} {
+		if !strings.Contains(logged, want) {
+			t.Errorf("warning missing %q:\n%s", want, logged)
+		}
+	}
+}
+
 // TestProxyConfig_NoWarnWhenBypassCoversSSOHost: the negative control — a
 // upstream_proxy_no_proxy entry covering the portal's suffix means the SSO
 // host will NOT be chained through the upstream, so no warning is due.
@@ -260,6 +287,30 @@ func TestLoadConfig_OneADOGrantPerSidecar(t *testing.T) {
 		g, ok := newADOGrantsByHost(cfg.ADOGrant).ADOGrantFor("dev.azure.com")
 		if !ok || g.Organization != "acme" {
 			t.Errorf("%s: grant for dev.azure.com = %+v, %v; want organisation acme", key, g, ok)
+		}
+	}
+}
+
+// TestLoadConfigRefusesRulesCarriedTwoWays: the per-entry push rule sets and the
+// per-harness tool rules are the product after the ceiling and exclusive of the
+// run-wide blocks, so a config that carries both is refused at start instead of
+// leaving a reader to pick one.
+func TestLoadConfigRefusesRulesCarriedTwoWays(t *testing.T) {
+	sets := []any{map[string]any{"provider": "github", "org": "acme", "rules": map[string]any{"deny_paths": []string{"infra/"}}}}
+	harness := []any{map[string]any{"harness": "claude-code", "default": "hold"}}
+	for name, tc := range map[string]struct {
+		extra   map[string]any
+		wantErr string
+	}{
+		"sets alone":          {map[string]any{"push_rule_sets": sets}, ""},
+		"harness rules alone": {map[string]any{"harness_tool_rules": harness}, ""},
+		"run-wide alone":      {map[string]any{"policy": map[string]any{"push_rules": map[string]any{"deny_paths": []string{"infra/"}}, "tool_rules": []any{map[string]any{"tool": "Bash", "effect": "hold"}}}}, ""},
+		"sets beside push":    {map[string]any{"push_rule_sets": sets, "policy": map[string]any{"push_rules": map[string]any{"deny_paths": []string{"infra/"}}}}, "push_rule_sets"},
+		"harness beside tool": {map[string]any{"harness_tool_rules": harness, "policy": map[string]any{"tool_rules": []any{map[string]any{"tool": "Bash", "effect": "hold"}}}}, "harness_tool_rules"},
+	} {
+		_, err := LoadConfigBytes(baseConfigJSON(t, tc.extra))
+		if (tc.wantErr == "") != (err == nil) || (tc.wantErr != "" && !strings.Contains(err.Error(), tc.wantErr)) {
+			t.Errorf("%s: err = %v, want one naming %q", name, err, tc.wantErr)
 		}
 	}
 }

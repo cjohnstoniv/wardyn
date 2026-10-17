@@ -75,6 +75,20 @@ beforeEach(() => {
   searchMock.mockReset();
 });
 
+// #1486: the combobox is a wrapper, so a Field's aria-describedby (cloned onto
+// it) reached nothing. It takes the prop by name and puts it on its input.
+describe("DirectoryCombobox — aria-describedby", () => {
+  it("forwards a named aria-describedby to the real input, and adds none of its own", () => {
+    searchMock.mockResolvedValue(null);
+    const { rerender } = render(<DirectoryCombobox label={PERM.FIELD_WHO} value="" onChange={() => {}} />);
+    expect(field()).not.toHaveAttribute("aria-describedby");
+    rerender(<DirectoryCombobox label={PERM.FIELD_WHO} value="" onChange={() => {}} aria-describedby="who-hint" />);
+    expect(field()).toHaveAttribute("aria-describedby", "who-hint");
+    // Free-text mode and the accessible name are unchanged.
+    expect(field()).toHaveAccessibleName(PERM.FIELD_WHO);
+  });
+});
+
 describe("DirectoryCombobox — absent mode", () => {
   // THE spine: a "who" field must stay free text forever, so the deployment
   // with no connector sees exactly what it saw before this feature existed.

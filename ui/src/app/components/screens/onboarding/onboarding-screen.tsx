@@ -149,7 +149,7 @@ function ReadinessRow({
   // Barrier (the one hard requirement) + Model (optional). The model chip reads
   // neutral "optional" when absent — not a warning "Needs setup" — because a run
   // works with no model (you drive it, or bring your own container). No Composer
-  // chip (zero composer UI on the hero; composerReady is left unused here).
+  // chip (zero composer UI on the hero).
   const modelChip =
     loading || !readiness ? (
       <Chip tone="neutral">

@@ -16,7 +16,7 @@ import type {
   MeCapabilities,
   PermissionsSnapshot,
 } from "../types";
-import { asJson, errText, HttpError, unwrapList, wfetch } from "./core";
+import { asJson, errText, HttpError, throwIfPending, unwrapList, wfetch } from "./core";
 
 // The Explain grid (K4/AK-5, #739) — GET /permissions/explain's body. Each row
 // is one (kind, value) cell of the type editor's "What this type gets" grid
@@ -112,6 +112,7 @@ export const permissions = {
   // either way, which is what the caller asked for.
   async deleteGrant(id: string): Promise<void> {
     const res = await wfetch(`/permissions/grants/${encodeURIComponent(id)}`, { method: "DELETE" });
+    await throwIfPending(res);
     if (!res.ok && res.status !== 404) {
       throw new HttpError(res.status, await errText(res));
     }
@@ -164,6 +165,7 @@ export const permissions = {
       enforcement: body.enforcement ?? {},
       session_groups: unwrapList<string>(body.session_groups),
       groups_snapshot_stale: !!body.groups_snapshot_stale,
+      kinds_version: body.kinds_version ?? 0,
     };
   },
 

@@ -4,7 +4,6 @@
 package api
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -156,7 +155,9 @@ type sweepSecrets struct {
 	err  error
 }
 
-func (s *sweepSecrets) DeleteExpired(context.Context) ([]secretstore.Expired, error) { return s.gone, s.err }
+func (s *sweepSecrets) DeleteExpired(context.Context) ([]secretstore.Expired, error) {
+	return s.gone, s.err
+}
 
 // wardynd serves with the store wrapped in secretstore.Audited; the sweep must
 // still reach the wrapped store's DeleteExpired through it.
@@ -165,7 +166,7 @@ func TestSweepExpiredCredentials_ReachesThroughTheAuditedWrapper(t *testing.T) {
 	inner := &sweepSecrets{memSecrets: &memSecrets{m: map[string][]byte{}},
 		gone: []secretstore.Expired{{Owner: "bob", Name: "wardyn-harness-aws-oauth", ExpiresAt: time.Now().Add(-time.Hour)}}}
 	h.srv.cfg.Secrets = secretstore.Audited(inner, nil)
-	if n := h.srv.SweepExpiredCredentials(context.Background()); n != 1 {
+	if n, _ := h.srv.SweepExpiredCredentials(context.Background()); n != 1 {
 		t.Fatalf("swept %d through the audited wrapper, want 1", n)
 	}
 }
@@ -175,7 +176,7 @@ func TestSweepExpiredCredentials_ReachesThroughTheAuditedWrapper(t *testing.T) {
 func TestSweepExpiredCredentials_WrappedStoreWithoutSweepLogsOnce(t *testing.T) {
 	noSweepOnce = sync.Once{}
 	t.Cleanup(func() { noSweepOnce = sync.Once{} })
-	var logged bytes.Buffer
+	var logged lockedBuffer
 	prev := slog.Default()
 	slog.SetDefault(slog.New(slog.NewTextHandler(&logged, nil)))
 	t.Cleanup(func() { slog.SetDefault(prev) })
@@ -183,7 +184,7 @@ func TestSweepExpiredCredentials_WrappedStoreWithoutSweepLogsOnce(t *testing.T) 
 	h := newHarness(t)
 	h.srv.cfg.Secrets = secretstore.Audited(&memSecrets{m: map[string][]byte{}}, nil)
 	for range 2 {
-		if n := h.srv.SweepExpiredCredentials(context.Background()); n != 0 {
+		if n, _ := h.srv.SweepExpiredCredentials(context.Background()); n != 0 {
 			t.Fatalf("swept %d with a store that cannot sweep, want 0", n)
 		}
 	}
@@ -201,7 +202,7 @@ func TestSweepExpiredCredentials_AuditsEachDeletion(t *testing.T) {
 	h.srv.cfg.Secrets = &sweepSecrets{memSecrets: &memSecrets{m: map[string][]byte{}},
 		gone: []secretstore.Expired{{Owner: "bob", Name: "wardyn-harness-aws-oauth", ExpiresAt: at}},
 		err:  errors.New("one row was kept")}
-	if n := h.srv.SweepExpiredCredentials(context.Background()); n != 1 {
+	if n, _ := h.srv.SweepExpiredCredentials(context.Background()); n != 1 {
 		t.Fatalf("swept %d, want 1", n)
 	}
 	ev := lastAuditEvent(t, h.audit.events, "credential.expired.delete")
@@ -213,7 +214,30 @@ func TestSweepExpiredCredentials_AuditsEachDeletion(t *testing.T) {
 	}
 
 	h.srv.cfg.Secrets = &memSecrets{m: map[string][]byte{}}
-	if n := h.srv.SweepExpiredCredentials(context.Background()); n != 0 {
+	if n, _ := h.srv.SweepExpiredCredentials(context.Background()); n != 0 {
 		t.Fatalf("a store without a sweep swept %d", n)
+	}
+}
+
+// A store that keeps no erase generation degrades to the in-process locks, and
+// the erase says so.
+func TestErasePersonCredentials_SaysWhenNoGenerationFencedIt(t *testing.T) {
+	sec := &memSecrets{m: map[string][]byte{}}
+	h, srv := eraseFixture(t, sec)
+	sa := ssoSession(t, "sec-1", "sec@corp.example", oidc.RoleSecurityAdmin)
+	if w := doSSO(t, srv, http.MethodDelete, "/api/v1/people/bob/credentials", sa, ""); w.Code != http.StatusOK {
+		t.Fatalf("erase = %d %s", w.Code, w.Body)
+	}
+	ev := lastAuditEvent(t, h.audit.events, "credential.erase")
+	if got, _ := auditDataField(t, ev, "write_fence"); got != writeFenceLocksOnly {
+		t.Fatalf("credential.erase write_fence = %q, want %q", got, writeFenceLocksOnly)
+	}
+}
+
+// A person's erase is fenced only when every namespace's was.
+func TestMergeEraseReports_FencedOnlyWhenEveryNamespaceWas(t *testing.T) {
+	first := mergeEraseReports(secretstore.EraseReport{}, secretstore.EraseReport{Count: 1, Fenced: true}, true)
+	if got := mergeEraseReports(first, secretstore.EraseReport{Count: 1}, false); got.Fenced || got.Count != 2 {
+		t.Errorf("merged = %+v, want count 2 and not fenced", got)
 	}
 }

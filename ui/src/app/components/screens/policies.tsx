@@ -19,7 +19,7 @@ import {
   TriangleAlert,
   ChevronRight,
 } from "lucide-react";
-import type { RunPolicy, RunPolicySpec } from "../../lib/types";
+import type { RunPolicy, RunPolicySpec, SetupModelProvider } from "../../lib/types";
 import { policies as api } from "../../lib/api/policies";
 import { LIST_LIMIT } from "../../lib/api/core";
 import { getErrorMessage, relativeTime } from "../../lib/format";
@@ -56,8 +56,10 @@ import {
 } from "../ui/sheet";
 import { ConfinementChip, Chip, OperatorOnlyHint } from "../wardyn/primitives";
 import { Field } from "../wardyn/form-primitives";
-import { POLICY_TEMPLATES, PolicyPanel, egressSummary, lifecycleSummary } from "../wardyn/policy-panel";
-import { Mono, YamlBlock } from "../wardyn/code-block";
+import { PolicyPanel, egressSummary, lifecycleSummary, minimalSpec, parseSpec } from "../wardyn/policy-panel";
+import { PolicyDocumentView } from "../wardyn/policy-document/policy-document";
+import { specToSource, type PolicySourceFormat } from "../wardyn/policy-document/policy-source";
+import { Mono } from "../wardyn/code-block";
 import { EmptyState, ErrorState, TableSkeleton, TruncatedNote } from "../wardyn/states";
 import { PageHeader } from "../wardyn/page-header";
 import { CC_META } from "../wardyn/cc-meta";
@@ -76,7 +78,7 @@ import { setup as setupApi } from "../../lib/api/setup";
 
 // The starter spec that prefills the "create" editor IS the panel's Minimal
 // template — one const, no hand-maintained twin to drift.
-const STARTER_SPEC: RunPolicySpec = POLICY_TEMPLATES.find((t) => t.id === "minimal")!.spec;
+const STARTER_SPEC: RunPolicySpec = minimalSpec();
 
 // egressSummary/lifecycleSummary (used by the table rows below) now live in
 // policy-panel.tsx — one copy, shared with the panel's own derivations.
@@ -142,7 +144,7 @@ export function PoliciesScreen() {
             <ChevronRight className="size-3.5 transition-transform group-open:rotate-90" />
             Default (ceiling) policy — applied to runs with no policy_id, and to every member's inline policy
           </summary>
-          <YamlBlock value={defaultPolicy} className="m-2 mt-0 rounded-md border-0" />
+          <PolicyDocumentView className="m-3 mt-1" spec={defaultPolicy} />
         </details>
       ) : (
         <p className="mb-4 text-xs text-muted-foreground">
@@ -423,13 +425,13 @@ function PolicyDetail({
               note={AVAILABILITY.POLICY_NOTE}
             />
 
-            {/* Raw JSON stays one click away (C7), never the primary content. */}
+            {/* One click away (C7): the shared read-only document. Viewing never writes. */}
             <details className="group rounded-lg border border-border">
               <summary className="flex cursor-pointer select-none items-center gap-1.5 px-3 py-2 text-xs font-medium text-muted-foreground hover:text-foreground">
                 <ChevronRight className="size-3.5 transition-transform group-open:rotate-90" />
                 View raw JSON
               </summary>
-              <YamlBlock value={policy.spec} className="m-2 mt-0 rounded-md border-0" />
+              <PolicyDocumentView className="m-3 mt-1" spec={policy.spec} />
             </details>
 
             <div className="flex items-center justify-end gap-2">
@@ -454,10 +456,11 @@ function DetailField({ label, value }: { label: string; value: React.ReactNode }
   );
 }
 
-// PolicyEditor is a minimal create/edit form: a name field plus a JSON textarea
-// for the spec. The server is the source of truth for validation — it rejects a
-// bad spec with HTTP 400, which we surface verbatim. We only do light client-side
-// JSON parsing so a syntactically broken document never reaches the API.
+// PolicyEditor is a minimal create/edit form: a name field plus the shared
+// source editor for the spec (YAML unless JSON is chosen). The server is the
+// source of truth for validation — it rejects a bad spec with HTTP 400, which we
+// surface verbatim. We only parse client-side so a broken document never reaches
+// the API; what is saved is the parsed object, so comments are not stored.
 function PolicyEditor({
   editor,
   onClose,
@@ -473,6 +476,7 @@ function PolicyEditor({
   const operator = useOperator();
   const [name, setName] = React.useState("");
   const [specText, setSpecText] = React.useState("");
+  const [format, setFormat] = React.useState<PolicySourceFormat>("yaml");
   const [error, setError] = React.useState<string | null>(null);
   const [saving, setSaving] = React.useState(false);
   // F5-F9: what the editor opened WITH — the dirty check below compares
@@ -494,25 +498,44 @@ function PolicyEditor({
     setPartial(null);
     setAudience({ restricted: false, audiences: [] });
     const seedName = editor.mode === "edit" && editor.policy ? editor.policy.name : "";
-    const seedSpec = JSON.stringify(
-      editor.mode === "edit" && editor.policy ? editor.policy.spec : STARTER_SPEC,
-      null,
-      2,
-    );
+    const seedSpec = specToSource(editor.mode === "edit" && editor.policy ? editor.policy.spec : STARTER_SPEC);
     setName(seedName);
     setSpecText(seedSpec);
+    setFormat("yaml");
     initial.current = { name: seedName, specText: seedSpec };
   }, [editor]);
 
   // The Azure DevOps row's ceiling, so the editor locks what a run could never
   // be granted. Unknown (no row, unreachable) locks nothing.
   const [adoCeiling, setAdoCeiling] = React.useState<string[] | undefined>();
+  const [modelProviders, setModelProviders] = React.useState<SetupModelProvider[] | undefined>();
   React.useEffect(() => {
     if (!editor) return;
-    void setupApi.getSetupStatus().then((st) => setAdoCeiling(st.scm_access?.capability_ceiling)).catch(() => {});
+    let alive = true;
+    void setupApi
+      .getSetupStatus()
+      .then((st) => {
+        if (!alive) return;
+        setAdoCeiling(st.scm_access?.capability_ceiling);
+        const providers = st.unreachable ? undefined : st.model_providers;
+        setModelProviders(providers);
+        // A new, untouched policy re-opens on the starter that follows the providers.
+        if (editor.mode !== "edit") {
+          const seeded = specToSource(minimalSpec(providers));
+          const was = initial.current.specText;
+          setSpecText((prev) => (prev === was ? seeded : prev));
+          initial.current = { ...initial.current, specText: seeded };
+        }
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
   }, [editor]);
 
   const dirty = name !== initial.current.name || specText !== initial.current.specText;
+  // What Save would send: the source as it parses NOW, never an earlier valid one.
+  const parsed = React.useMemo(() => parseSpec(specText, format), [specText, format]);
 
   const save = async () => {
     setError(null);
@@ -520,13 +543,8 @@ function PolicyEditor({
       setError("Name is required.");
       return;
     }
-    let spec: RunPolicySpec;
-    try {
-      spec = JSON.parse(specText) as RunPolicySpec;
-    } catch (e) {
-      setError(`Spec is not valid JSON: ${getErrorMessage(e)}`);
-      return;
-    }
+    if (!parsed.ok) return;
+    const spec = parsed.spec;
     setSaving(true);
     try {
       if (editing) {
@@ -596,7 +614,16 @@ function PolicyEditor({
               required
             />
           </Field>
-          <PolicyPanel instance="policies" value={specText} onChange={setSpecText} adoCeiling={adoCeiling} />
+          <PolicyPanel
+            instance="policies"
+            value={specText}
+            onChange={setSpecText}
+            format={format}
+            onFormatChange={setFormat}
+            adoCeiling={adoCeiling}
+            modelProviders={modelProviders}
+            serverError={error}
+          />
           {/* The creation form asks; an existing policy's list lives on its
               sheet, except right after a refused list write. */}
           {(!editing || partial) && (
@@ -644,7 +671,7 @@ function PolicyEditor({
           </Button>
           <Button
             onClick={save}
-            disabled={!operator || saving || !name.trim()}
+            disabled={!operator || saving || !name.trim() || !parsed.ok}
             aria-describedby={
               [error ? "policy-editor-error" : undefined, !operator ? "policy-editor-operator-reason" : undefined]
                 .filter(Boolean)

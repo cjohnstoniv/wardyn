@@ -9,8 +9,8 @@
 // nothing fetched, rather than the tier-appropriate leftovers this page used
 // to render for them.
 //
-// Host · Model providers · Providers · User drives · Admin
-// SSH keys. The personal cards (a person's own model connection, Azure
+// Host · Model providers · Providers · Custom components · User drives · Admin
+// SSH keys · Approval notifications. The personal cards (a person's own model connection, Azure
 // DevOps, Your SSH keys) moved to Your account (your-account-screen.tsx) —
 // nothing on this page belongs to the admin as a person.
 //
@@ -53,6 +53,9 @@ import { ProvidersCard } from "../setup/providers-card";
 import { ModelProvidersList } from "./model-providers-list";
 import { BrandingCard } from "./branding-card";
 import { AdminSshKeysCard } from "./admin-ssh-keys-card";
+import { ApprovalNotifyCard } from "./approval-notify-card";
+import { ScimCard } from "./scim-card";
+import { ComponentsSettingsCard } from "./components-settings-card";
 import { ViewNotice } from "../../wardyn/console-view";
 import { VIEW_REFUSAL, SETTINGS_SUPER_ONLY } from "../../wardyn/copy/console-view";
 import { Button } from "../../ui/button";
@@ -307,7 +310,7 @@ export function AdminSettingsScreen() {
   }
 
   return (
-    <div className="mx-auto w-full max-w-[900px] px-6 py-8">
+    <div className="mx-auto w-full max-w-[900px] px-6 pt-8 pb-4">
       <PageHeader
         title="Settings"
         description="This host, what runs your agents, and how Wardyn reaches your code."
@@ -315,9 +318,9 @@ export function AdminSettingsScreen() {
       {state === "loading" && <TableSkeleton />}
       {state === "error" && <ErrorState onRetry={load} />}
       {state === "ready" && status && (
-        // space-y-2, not -4: seven collapsed cards plus this page's own
-        // header must fit 744px (the approved mock's §4).
-        <div className="space-y-2">
+        // space-y-1 and pb-4, not -2 and py-8: nine collapsed cards plus this
+        // page's own header must fit 744px (the approved mock's §4, #1200).
+        <div className="space-y-1">
           <HostCard
             status={status}
             siteConfig={configFailed ? "error" : siteConfig}
@@ -341,6 +344,9 @@ export function AdminSettingsScreen() {
               the same shared component the funnel's `providers` step body
               renders (setup/providers-card.tsx). */}
           <ProvidersCard harnesses={status?.harnesses} compact />
+          {/* 0.8.9 components (C16): the org's policy for custom components, after the providers
+              it sits beside; the card reads its own site-config snapshot for the ETag it saves with. */}
+          <ComponentsSettingsCard />
           {/* The FIFTH card, and so the last one (user-drives-prompt.md §6) —
               the SAME component the setup funnel's Workspaces step renders,
               summarising and linking exactly as the Corporate proxy disclosure
@@ -352,6 +358,11 @@ export function AdminSettingsScreen() {
               adds an SSH key that reaches other people's runs, now that Your
               account is the only door left for a personal one. */}
           <AdminSshKeysCard />
+          {/* notify-e4 (packet M6 S3): the seventh card — read-only channel
+              health for the approval notifications WARDYN_APPROVAL_NOTIFY sets. */}
+          <ApprovalNotifyCard />
+          {/* 0.8.6 scim-a7 (mock M5, D1 as amended): where leaver deprovisioning stands. Read-only. */}
+          <ScimCard />
         </div>
       )}
     </div>

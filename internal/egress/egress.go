@@ -17,6 +17,7 @@ package egress
 import (
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 
@@ -37,12 +38,14 @@ const (
 
 // Request is one normalized outbound attempt observed at the proxy.
 type Request struct {
-	RunID  uuid.UUID
-	Host   string // lowercased hostname, no port
-	Port   int
-	Method string // HTTP method, or "CONNECT" for tunneled TLS
-	Path   string // empty for CONNECT (hostname-only visibility)
-	Time   time.Time
+	// AuditReservation is proxy-local admission state, never a wire authority.
+	AuditReservation uuid.UUID `json:"-"`
+	RunID            uuid.UUID
+	Host             string // lowercased hostname, no port
+	Port             int
+	Method           string // HTTP method, or "CONNECT" for tunneled TLS
+	Path             string // empty for CONNECT (hostname-only visibility)
+	Time             time.Time
 }
 
 // DecisionLog is the structured record streamed to the control plane for
@@ -55,15 +58,24 @@ type DecisionLog struct {
 	// Cause is the masked, topology-redacted sentence naming WHY a builtin
 	// dial-shaped refusal happened and at what STAGE (TCP dial, TLS
 	// handshake, upstream-proxy CONNECT). It runs through the same masking
-	// passes a sandbox-facing error body does before reaching this field, and
-	// is empty on every decision that is not a dial-shaped refusal.
-	// builtin:upstream-protocol-mismatch is the one exception: that round
-	// trip COMPLETED, so Cause there is a fixed sentence naming the protocol
-	// answered, never a stage prefix.
+	// passes a sandbox-facing error body does before reaching this field.
+	// Three other rows carry one, each a fixed sentence and not a stage plus
+	// an error text: builtin:upstream-protocol-mismatch (that round trip
+	// COMPLETED, so it names the protocol answered), builtin:tunnel-failed
+	// (what ended a CONNECT tunnel after its 200) and a
+	// builtin:resolve-failed written with an upstream proxy configured (the
+	// name is bypassed and did not resolve at the proxy). A
+	// policy:tool-allow/policy:tool-deny row carries the quoted tool name the
+	// run's tool_rules answered. A brokered:llm deny whose credential could
+	// not be refreshed carries that masked refusal. Empty on every other
+	// decision.
 	Cause string `json:"cause,omitempty"`
-	// Via names the CLASS of hop a dial-shaped refusal attempted
-	// ("upstream-proxy" or "direct"), never an address — Cause's redaction
-	// pass exists to strip that, and Via must not reopen the hole.
+	// Via names the CLASS of hop that carried the request, or that a refusal
+	// attempted ("upstream-proxy" or "direct"), never an address — Cause's
+	// redaction pass exists to strip that, and Via must not reopen the hole.
+	// It rides every row that has a Cause, and every allow that followed a
+	// forward dial. An allow that dialled nothing (the CONNECT allow of a
+	// tunnel the proxy terminates itself) has none.
 	Via string `json:"via,omitempty"`
 	// UpstreamFault names the AWS error class when Bedrock's data plane
 	// refused a call the proxy ALLOWED and relayed, or "recovered" on the
@@ -144,10 +156,22 @@ type InjectionRule struct {
 	// session holds. Both empty = unpinned = every other rule.
 	PinPath  string            `json:"pin_path,omitempty"`
 	PinQuery map[string]string `json:"pin_query,omitempty"`
+	// PinRoutes narrows this rule's credential to a SET of method-and-path
+	// pairs: a request carries the credential only when its method and its
+	// decoded path equal one entry exactly (no prefix match; the query string
+	// is not looked at). Unlike PinPath it admits methods other than GET.
+	// When PinPath is also set, a request must satisfy both.
+	PinRoutes []PinRoute `json:"pin_routes,omitempty"`
+}
+
+// PinRoute is one method-and-path pair an InjectionRule's PinRoutes admits.
+type PinRoute struct {
+	Method string `json:"method"`
+	Path   string `json:"path"`
 }
 
 // Pinned reports whether this rule narrows its credential to one request shape.
-func (r InjectionRule) Pinned() bool { return r.PinPath != "" }
+func (r InjectionRule) Pinned() bool { return r.PinPath != "" || len(r.PinRoutes) > 0 }
 
 // AllowsInjection reports whether a request may carry this rule's credential.
 // An UNPINNED rule allows every request, which is what every rule but the
@@ -166,6 +190,14 @@ func (r InjectionRule) Pinned() bool { return r.PinPath != "" }
 func (r InjectionRule) AllowsInjection(method, path, rawQuery string) bool {
 	if !r.Pinned() {
 		return true
+	}
+	if len(r.PinRoutes) > 0 {
+		if !slices.Contains(r.PinRoutes, PinRoute{Method: method, Path: path}) {
+			return false
+		}
+		if r.PinPath == "" {
+			return true
+		}
 	}
 	if method != http.MethodGet || path != r.PinPath {
 		return false
@@ -226,6 +258,35 @@ func ValidHeaderName(name string) bool {
 		}
 	}
 	return true
+}
+
+// Non-policy DENY rule_sources: rows where policy ALLOWED the destination and
+// the NETWORK then lost it. The host was never refused, so every consumer that
+// asks "did policy refuse this?" must exclude them — the deny counter
+// (isPolicyDeny), observed-egress promotion candidates
+// (handleObservedEgress) and Record Mode's deny/anomaly accounting all read
+// this one predicate rather than each keeping its own copy of the list.
+//
+// Deliberately ABSENT, because each is a refusal of something rather than a
+// network fault, and each exclusion has to be re-derived if it is added here:
+// builtin:resolve-failed (a name that did not resolve), the gateway-vet guard
+// refusal, builtin:upstream-protocol-mismatch (a round trip that GOT an
+// answer), credential:reauth-timeout and the dropped-decisions summary.
+const (
+	// RuleSourceDialFailed marks a request policy ALLOWED and the dial that
+	// followed losing the connection.
+	RuleSourceDialFailed = "builtin:dial-failed"
+	// RuleSourceTunnelFailed marks a CONNECT tunnel acknowledged and then
+	// broken before it carried an answer; the dial succeeded, so the allow row
+	// stands and this deny follows it.
+	RuleSourceTunnelFailed = "builtin:tunnel-failed"
+)
+
+// IsNetworkFault reports whether rule_source marks a network fault — a
+// destination policy ALLOWED and the network lost the connection — rather than
+// a refusal. Callers that count or report policy denials exclude these.
+func IsNetworkFault(ruleSource string) bool {
+	return ruleSource == RuleSourceDialFailed || ruleSource == RuleSourceTunnelFailed
 }
 
 // maxHeaderNameLen bounds an authored header name. No real field name comes

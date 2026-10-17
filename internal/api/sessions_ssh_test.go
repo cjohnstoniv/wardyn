@@ -8,6 +8,8 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
@@ -218,4 +220,148 @@ func TestRevokeSessions_TokenDirectoryFailureStillDeletesExactSSHPrincipal(t *te
 		t.Fatalf("token directory failure left exact SSH keys usable: %+v", st.keys)
 	}
 	assertSSHDeletionAudit(t, audit, "sub-alice", "success", 2)
+}
+
+// revocationAuditRows is the credential audit rows of one revoke, in order, as
+// (action, target, outcome, actor type, actor, data) strings.
+func revocationAuditRows(audit *recRecorder) []string {
+	var rows []string
+	for _, ev := range audit.snapshot() {
+		if ev.Action == "token.revoke" || ev.Action == "ssh_key.delete" {
+			rows = append(rows, strings.Join([]string{ev.Action, ev.Target, ev.Outcome, string(ev.ActorType), ev.Actor, string(ev.Data)}, "|"))
+		}
+	}
+	return rows
+}
+
+// TestRevokePersonCredentials_RequestFreeMatchesRoute: the deprovisioning job
+// runs the route's credential sequence with no request, and the same cutoffs,
+// deletions and audit rows (actor included) come out.
+func TestRevokePersonCredentials_RequestFreeMatchesRoute(t *testing.T) {
+	routeSt := sshOffboardingStore()
+	routeSrv, routeCutoffs, routeAudit := sshOffboardingServer(t, routeSt)
+	admin := ssoSession(t, "responder", "responder@example.com", oidc.RoleSecurityAdmin)
+	if w := doSSO(t, routeSrv, http.MethodPost, "/api/v1/sessions/revoke", admin, `{"sub":"alice@example.com"}`); w.Code != http.StatusNoContent {
+		t.Fatalf("route status=%d body=%s", w.Code, w.Body.String())
+	}
+
+	st := sshOffboardingStore()
+	srv, cutoffs, audit := sshOffboardingServer(t, st)
+	ctx := withActor(context.Background(), types.ActorHuman, "responder")
+	res, err := srv.revokePersonCredentials(ctx, "alice@example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Tokens != 1 || res.Keys != 2 || !res.Stamped {
+		t.Fatalf("result=%+v", res)
+	}
+	if !slices.Equal(cutoffs.revokedSubs, routeCutoffs.revokedSubs) || len(cutoffs.revokedSubs) != 2 || cutoffs.revokedSubs[1] != "sub-alice" {
+		t.Fatalf("cutoffs=%v route=%v", cutoffs.revokedSubs, routeCutoffs.revokedSubs)
+	}
+	if len(st.keys) != 1 || len(st.revoked) != len(routeSt.revoked) || len(st.keys) != len(routeSt.keys) {
+		t.Fatalf("keys=%+v revoked=%v route keys=%+v revoked=%v", st.keys, st.revoked, routeSt.keys, routeSt.revoked)
+	}
+	rows, routeRows := revocationAuditRows(audit), revocationAuditRows(routeAudit)
+	if len(rows) != 2 || !slices.Equal(rows, routeRows) {
+		t.Fatalf("audit rows=%q route=%q", rows, routeRows)
+	}
+	for _, row := range rows {
+		if !strings.Contains(row, "|human|responder|") {
+			t.Fatalf("audit row not attributed to the attached actor: %q", row)
+		}
+	}
+}
+
+// TestRevokePersonCredentials_RefusesBareContext: a caller that forgot
+// withActor would be audited as the admin token, so nothing runs.
+func TestRevokePersonCredentials_RefusesBareContext(t *testing.T) {
+	st := sshOffboardingStore()
+	srv, cutoffs, audit := sshOffboardingServer(t, st)
+	if _, err := srv.revokePersonCredentials(context.Background(), "alice@example.com"); err == nil {
+		t.Fatal("bare context was accepted")
+	}
+	if len(st.revoked) != 0 || len(st.keys) != 3 || len(cutoffs.revokedSubs)+cutoffs.revokedAll != 0 || len(audit.snapshot()) != 0 {
+		t.Fatalf("bare context changed state: %+v cutoffs=%+v audit=%d", st, cutoffs, len(audit.snapshot()))
+	}
+}
+
+func TestRevokePersonCredentials_EmptyPrincipalChangesNothing(t *testing.T) {
+	st := sshOffboardingStore()
+	srv, cutoffs, audit := sshOffboardingServer(t, st)
+	if _, err := srv.revokePersonCredentials(withActor(context.Background(), types.ActorSystem, "wardyn/scim"), ""); err == nil {
+		t.Fatal("empty principal was accepted")
+	}
+	if len(st.revoked) != 0 || len(st.keys) != 3 || len(cutoffs.revokedSubs)+cutoffs.revokedAll != 0 || len(audit.snapshot()) != 0 {
+		t.Fatalf("empty principal changed state: %+v cutoffs=%+v audit=%d", st, cutoffs, len(audit.snapshot()))
+	}
+}
+
+func TestRevokePersonCredentials_UnknownEmailIsSuccessWithZeroDeletions(t *testing.T) {
+	st := sshOffboardingStore()
+	srv, cutoffs, _ := sshOffboardingServer(t, st)
+	res, err := srv.revokePersonCredentials(withActor(context.Background(), types.ActorSystem, "wardyn/scim"), "nobody@example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Tokens != 0 || res.Keys != 0 || !res.Stamped || len(st.revoked) != 0 || len(st.keys) != 3 {
+		t.Fatalf("result=%+v state=%+v", res, st)
+	}
+	if len(cutoffs.revokedSubs) != 1 || cutoffs.revokedSubs[0] != "nobody@example.com" {
+		t.Fatalf("cutoffs=%v", cutoffs.revokedSubs)
+	}
+}
+
+// "sessions_only" is the routine sign-out: the session-only cut lands, the
+// credential cutoff does not, and the person's API tokens and SSH keys are left
+// exactly as they were.
+func TestRevokeSessions_SessionsOnlyLeavesTokensAndKeys(t *testing.T) {
+	st := sshOffboardingStore()
+	srv, cutoffs, audit := sshOffboardingServer(t, st)
+	admin := ssoSession(t, "responder", "responder@example.com", oidc.RoleSecurityAdmin)
+	w := doSSO(t, srv, http.MethodPost, "/api/v1/sessions/revoke", admin, `{"sub":"sub-alice","sessions_only":true}`)
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	if !slices.Equal(cutoffs.cutSubs, []string{"sub-alice"}) || len(cutoffs.revokedSubs)+cutoffs.revokedAll != 0 {
+		t.Fatalf("cuts=%v cutoffs=%v all=%d, want the cut [sub-alice] and no cutoff", cutoffs.cutSubs, cutoffs.revokedSubs, cutoffs.revokedAll)
+	}
+	if len(st.keys) != 3 {
+		t.Fatalf("SSH keys=%+v, want all 3 kept", st.keys)
+	}
+	if len(st.revoked) != 0 {
+		t.Fatalf("revoked tokens=%v, want none", st.revoked)
+	}
+	var rows int
+	for _, ev := range audit.snapshot() {
+		if ev.Action == "ssh_key.delete" || ev.Action == "token.revoke" {
+			t.Fatalf("unexpected %s audit row", ev.Action)
+		}
+		if ev.Action != "session.revoke" {
+			continue
+		}
+		rows++
+		var data map[string]any
+		if err := json.Unmarshal(ev.Data, &data); err != nil {
+			t.Fatal(err)
+		}
+		if data["tokens_revoked"] != float64(0) || data["ssh_keys_deleted"] != float64(0) || data["sessions_only"] != true || data["sub"] != "sub-alice" {
+			t.Fatalf("session audit=%s", ev.Data)
+		}
+	}
+	if rows != 1 {
+		t.Fatalf("session.revoke rows=%d, want 1", rows)
+	}
+}
+
+func TestRevokeSessions_SessionsOnlyRefusesAll(t *testing.T) {
+	st := sshOffboardingStore()
+	srv, cutoffs, _ := sshOffboardingServer(t, st)
+	admin := ssoSession(t, "responder", "responder@example.com", oidc.RoleSecurityAdmin)
+	w := doSSO(t, srv, http.MethodPost, "/api/v1/sessions/revoke", admin, `{"all":true,"sessions_only":true}`)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	if len(cutoffs.revokedSubs) != 0 || cutoffs.revokedAll != 0 || len(st.keys) != 3 {
+		t.Fatalf("a refused request changed state: %v %d %d", cutoffs.revokedSubs, cutoffs.revokedAll, len(st.keys))
+	}
 }

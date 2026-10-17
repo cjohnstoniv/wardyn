@@ -161,9 +161,25 @@ func TestDispatch_RedirectMITMHostsCarryNoDuplicateBareHost(t *testing.T) {
 	t.Cleanup(func() { _, _ = srv.cfg.Store.PutSiteConfig(context.Background(), types.SiteConfig{}) })
 
 	spec := dispatchAndCaptureSpec(t, srv, fr)
+	if len(assertNoDuplicateBareMITMHost(t, spec.ProxyConfig.MITMHosts)) == 0 {
+		t.Fatal("no MITM host authored; the redirect never applied and this guard proved nothing")
+	}
 
+	// The azure_foundry lane is a fourth producer into the same list. Dispatched beside the same two
+	// redirects it adds exactly one entry, the endpoint, and collides with neither.
+	azure := assertNoDuplicateBareMITMHost(t, azurePGDispatch(t).ProxyConfig.MITMHosts)
+	if azure[azA3Host] != azA3Host+":443" || azure["artifactory.corp"] == "" {
+		t.Fatalf("with an azure_foundry run the MITM entries are %v, want the endpoint beside the redirect host", azure)
+	}
+}
+
+// assertNoDuplicateBareMITMHost fails on two MITM entries for one bare host and returns the bare hosts.
+// Every producer appending to ProxyConfig.MITMHosts (artifact redirects, Bedrock, Azure DevOps and
+// azure_foundry) is held to it by the dispatches that author them.
+func assertNoDuplicateBareMITMHost(t *testing.T, entries []string) map[string]string {
+	t.Helper()
 	seen := map[string]string{}
-	for _, entry := range spec.ProxyConfig.MITMHosts {
+	for _, entry := range entries {
 		bare := entry
 		if h, _, err := net.SplitHostPort(entry); err == nil {
 			bare = h
@@ -176,7 +192,5 @@ func TestDispatch_RedirectMITMHostsCarryNoDuplicateBareHost(t *testing.T) {
 		}
 		seen[bare] = entry
 	}
-	if len(seen) == 0 {
-		t.Fatal("no MITM host authored; the redirect never applied and this guard proved nothing")
-	}
+	return seen
 }

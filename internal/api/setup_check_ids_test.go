@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
+	"github.com/cjohnstoniv/wardyn/internal/notify"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -102,9 +103,13 @@ func TestSetupCheckIds_Golden(t *testing.T) {
 		// new k8s_egress_containment row — absent on every other fixture here,
 		// which all leave Runner unset (Driver "none").
 		"with_k8s_runner": setupCheckIds(t, New(Config{
+			BaseCtx:    testBaseCtx(t),
 			AdminToken: adminToken,
 			Runner:     k8sRunner{networkPolicy: true},
 		})),
+
+		// WARDYN_HA adds the three high-availability rows, and only with it.
+		"with_ha": setupCheckIds(t, New(Config{AdminToken: adminToken, HA: true})),
 
 		"with_store": setupCheckIds(t, New(Config{
 			AdminToken: adminToken,
@@ -123,6 +128,12 @@ func TestSetupCheckIds_Golden(t *testing.T) {
 			}},
 		})),
 
+		// An AWS KMS key service reached with a long-lived access key adds the
+		// kek_service_static_key row; no other fixture has a key service.
+		"with_aws_kms_static_key": setupCheckIds(t, New(Config{
+			AdminToken: adminToken, SecretKeyService: "AWS KMS in us-east-1", SecretKeyServiceStaticKey: true,
+		})),
+
 		// OIDC configured (a zero-value Authenticator — the rbac_test.go idiom;
 		// Middleware/decodeSession never touch its unset provider/verifier), the
 		// role map left unset, and an https redirect with WARDYN_TLS_TERMINATED
@@ -134,5 +145,9 @@ func TestSetupCheckIds_Golden(t *testing.T) {
 			OIDCRedirectURL: "https://wardyn.example.com/auth/callback",
 		})),
 	}
+	// Approval notifications configured: surfaces the approval_notify row, absent on every other fixture.
+	activateNotifyConfig(t)
+	got["with_approval_notify"] = setupCheckIds(t, New(Config{AdminToken: adminToken, Approvals: newNotifyApprovals()}))
+	notify.SetActive(nil, nil)
 	compareOrUpdateGolden(t, "testdata/setup_check_ids_golden.json", got)
 }

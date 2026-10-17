@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 )
 
 // SessionCodecVersion is the wardyn_session payload's format version, stamped
@@ -80,6 +81,17 @@ func (a *Authenticator) encodeSession(sess Session) (*http.Cookie, error) {
 		Expires:  sess.Expiry,
 	}
 	return cookie, nil
+}
+
+// SessionBounds reads the request's session cookie when its signature verifies and returns its subject,
+// expiry and sign-in time. It makes none of Middleware's expiry, role-stamp or revocation checks: a caller
+// uses it only to bound a credential the request presents beside the cookie.
+func (a *Authenticator) SessionBounds(r *http.Request) (sub string, expiry, issuedAt time.Time, ok bool) {
+	sess, err := a.decodeSession(r)
+	if err != nil {
+		return "", time.Time{}, time.Time{}, false
+	}
+	return sess.Sub, sess.Expiry, sess.IssuedAt, true
 }
 
 // decodeSession reads and verifies the session cookie from the request.

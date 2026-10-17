@@ -6,6 +6,7 @@ package pg
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 
@@ -51,6 +52,23 @@ func (s *Store) ConvertV0(ctx context.Context, legacy age.Identity) ([]secretsto
 		return nil, fmt.Errorf("pg secretstore: convert scan: %w", err)
 	}
 
+	// A platform key is configured only after the boot keys were converted
+	// (the documented order boots once on the age key alone first), so a v0
+	// boot key beside it was written since, by whoever holds the age key and
+	// the table: converting it would seal their key under the platform key.
+	if s.separate || s.platformService != nil {
+		for _, e := range all {
+			if secretstore.Kind(e.ownedBy, e.name) == "platform" {
+				return nil, &refusal{ErrV0BootKey, fmt.Sprintf("pg secretstore: v0 conversion REFUSED (nothing committed): %s is a pre-envelope boot key, "+
+					"but a platform key is configured, and boot keys are converted only before it is set. "+
+					"If this install is upgrading from 0.7.x or earlier, start wardynd once WITHOUT the platform key so it converts its secrets, "+
+					"then set the platform key and run `wardynd -rewrap -rewrap-adopt-boot-keys`. "+
+					"If it was already running 0.8 with a platform key, this row was not written by Wardyn: "+
+					"investigate before moving anything (updated_at, the audit log, database access logs) and restore the boot key from a backup if it is forged", rowRef(e.ownedBy, e.name))}
+			}
+		}
+	}
+
 	// Row at a time, so at most ONE plaintext is resident at any moment.
 	converted := make([]secretstore.Row, 0, len(all))
 	for i, e := range all {
@@ -68,6 +86,10 @@ func (s *Store) ConvertV0(ctx context.Context, legacy age.Identity) ([]secretsto
 	}
 	return converted, nil
 }
+
+// ErrV0BootKey is a pre-envelope boot key found while a platform key is
+// configured; ConvertV0 refuses it and commits nothing.
+var ErrV0BootKey = errors.New("pre-envelope boot key beside a platform key")
 
 // convertRow re-seals one row. opened reports that its value was decrypted,
 // whether or not the conversion then succeeded: that is a read to record.
@@ -92,18 +114,22 @@ func (s *Store) convertRow(ctx context.Context, tx pgx.Tx, legacy age.Identity, 
 }
 
 // LocalRows counts rows only a local KEK (or the age key itself, for v0) can
-// open. wardynd refuses to boot on an ephemeral age key while any exist.
+// open: the `secrets` rows, and the live principal keys wrapped under a local
+// key. wardynd refuses to boot on an ephemeral age key while any exist, and
+// refuseIdleAgeKey never advises removing an age key that still wraps one.
 func (s *Store) LocalRows(ctx context.Context) (int, error) {
 	var n int
-	if err := s.pool.QueryRow(ctx,
-		`SELECT count(*) FROM secrets WHERE enc_version=0 OR kek_id LIKE 'local:%' OR kek_id LIKE 'local/%'`,
+	if err := s.pool.QueryRow(ctx, `
+		SELECT (SELECT count(*) FROM secrets WHERE enc_version=0 OR kek_id LIKE 'local:%' OR kek_id LIKE 'local/%')
+		     + (SELECT count(*) FROM principal_keys WHERE destroyed_at IS NULL AND (kek_id LIKE 'local:%' OR kek_id LIKE 'local/%'))`,
 	).Scan(&n); err != nil {
 		return 0, fmt.Errorf("pg secretstore: count local rows: %w", err)
 	}
 	return n, nil
 }
 
-// ageDecrypt opens a legacy v0 payload. Its only caller is convertRow.
+// ageDecrypt opens a legacy v0 payload for convertRow and for CheckRows, which reads it without
+// convertRow's write.
 func ageDecrypt(identity age.Identity, ciphertext []byte) ([]byte, error) {
 	r, err := age.Decrypt(bytes.NewReader(ciphertext), identity)
 	if err != nil {

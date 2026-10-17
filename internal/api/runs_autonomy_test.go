@@ -35,6 +35,13 @@ func autonomyRubric(level types.AutonomyLevel) *types.AutonomyRubric {
 	}
 }
 
+// lockedL2Rubric is autonomyRubric(L2) with the guardrail-locks term set as given.
+func lockedL2Rubric(locks bool) *types.AutonomyRubric {
+	r := autonomyRubric(types.AutonomyL2)
+	r.AgentGuardrailLocks = locks
+	return r
+}
+
 // autonomyProfile is the assigned profile the table runs under: govProfileSpec's
 // ceiling, and a rubric as the ONLY limit.
 //
@@ -853,6 +860,24 @@ func TestAutonomyWarningsOnTheCreatedRun(t *testing.T) {
 			absent:         []string{undelivered, derived, noLane},
 		},
 		{
+			// The locked L2 document already protects the hold lane's gate, so the hold
+			// does not choose it: the sentence names the level, as the dispatch hint does.
+			name:           "a hold run at a locked L2 is told the level's settings are undelivered",
+			rubric:         lockedL2Rubric(true),
+			body:           `{"agent":"claude-code","task":"t","confinement_class":"CC2","tool_approvals":"hold"}`,
+			noManagedFiles: true,
+			want:           []string{"claude-code's " + undelivered + " L2 are not delivered"},
+			absent:         []string{holdUndelivered, derived, noLane},
+		},
+		{
+			name:           "a hold run at an unlocked L2 is told its hold-lane settings are undelivered",
+			rubric:         lockedL2Rubric(false),
+			body:           `{"agent":"claude-code","task":"t","confinement_class":"CC2","tool_approvals":"hold"}`,
+			noManagedFiles: true,
+			want:           []string{holdUndelivered},
+			absent:         []string{undelivered, derived, noLane},
+		},
+		{
 			// Off the hold lane an unbound run generates no file, so there is
 			// nothing undelivered to report.
 			name:           "an auto run no rubric bound is not told about managed settings",
@@ -1047,13 +1072,13 @@ func TestAutonomyPostureGradesTheADOEntraCredentialAtCreate(t *testing.T) {
 		SecretsBaseline: types.AutonomyL2, SecretsPowerful: types.AutonomyL1,
 	}
 
-	graded := composer.AutonomyPostureOf(autonomyPostureSpec(spec, []types.Workspace{ws}, "", site, grade, bedrockCredUngraded()), types.CC2)
+	graded := composer.AutonomyPostureOf(autonomyPostureSpec(spec, []types.Workspace{ws}, "", site, grade, bedrockCredUngraded(), nil), types.CC2, composer.Baseline{})
 	level, boundBy := composer.FoldAutonomy(rubric, graded)
 
 	// The same spec as dispatch leaves it: the grants the lane really writes.
 	dispatched := spec
 	dispatched.EligibleGrants = adoEntraPostureGrants("contoso", types.ADOTokenModeBearer)
-	after := composer.AutonomyPostureOf(autonomyPostureSpec(dispatched, []types.Workspace{ws}, "", site, grade, bedrockCredUngraded()), types.CC2)
+	after := composer.AutonomyPostureOf(autonomyPostureSpec(dispatched, []types.Workspace{ws}, "", site, grade, bedrockCredUngraded(), nil), types.CC2, composer.Baseline{})
 	afterLevel, afterBound := composer.FoldAutonomy(rubric, after)
 
 	if graded.Secrets != types.AutonomySecretsPowerful {

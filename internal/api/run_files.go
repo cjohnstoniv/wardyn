@@ -30,9 +30,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
-
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 const (
@@ -202,7 +201,7 @@ type runFilesResponse struct {
 //	      {"path":"docs/logo.png","status":"A","binary":true},
 //	      {"path":"scratch.txt","status":"??"}]}
 //	200 {"vcs":"none","files":[],"truncated":false}   — not a git work tree
-//	409  the run never got a sandbox, or its sandbox is already gone (nothing to read)
+//	409  the run never got a sandbox, its sandbox is already gone, or it is kept with its agent stopped (nothing to read)
 //	501  the runner has no ExecStream primitive
 //	500  the exec launched but the read failed
 //
@@ -243,6 +242,9 @@ func (s *Server) handleRunFiles(w http.ResponseWriter, r *http.Request) {
 		writeErrorReason(w, http.StatusConflict, reasonRunInspectPaused, runPausedReadMsg)
 		return
 	}
+	if s.refuseKeptAgentStopped(w, r, run) {
+		return
+	}
 
 	ctx, cancel := context.WithTimeout(r.Context(), runFilesTimeout)
 	defer cancel()
@@ -255,10 +257,10 @@ func (s *Server) handleRunFiles(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		if errors.Is(err, runner.ErrSandboxGone) {
-			writeRunInspectGone(w, run)
+			writeRunInspectSandboxGone(w, run)
 			return
 		}
-		s.auditRunFilesFailure(r, id, err)
+		s.auditRunFilesFailure(r, run, err)
 		if errors.Is(err, runner.ErrExecStreamUnsupported) {
 			writeErrorReason(w, http.StatusNotImplemented, reasonRunInspectExecStreamUnsupported, loggedMsg(ctx, runFilesUnsupportedMsg, err))
 			return
@@ -297,7 +299,7 @@ func (s *Server) handleRunFiles(w http.ResponseWriter, r *http.Request) {
 	// return and the deferred Close above is the only thing that frees it.
 	out, capped, readErr := readExecStdout(sess.Stdout, runFilesMaxOutput)
 	if errors.Is(readErr, runner.ErrSandboxGone) {
-		writeRunInspectGone(w, run)
+		writeRunInspectSandboxGone(w, run)
 		return
 	}
 	inspectedPath, files, truncated := parseRunFiles(bytes.NewReader(out))
@@ -323,12 +325,12 @@ func (s *Server) handleRunFiles(w http.ResponseWriter, r *http.Request) {
 		code, werr := sess.Wait()
 		if werr != nil {
 			if errors.Is(werr, runner.ErrSandboxGone) {
-				writeRunInspectGone(w, run)
+				writeRunInspectSandboxGone(w, run)
 				return
 			}
 			// The exec itself broke (deadline, connection loss) — distinct from
 			// "git said no", and a genuine failure of the read.
-			s.auditRunFilesFailure(r, id, werr)
+			s.auditRunFilesFailure(r, run, werr)
 			writeServerError(w, r, "read workspace files", werr)
 			return
 		}
@@ -373,9 +375,9 @@ func repoCloneLeaf(repo string) string {
 
 // auditRunFilesFailure records the FAILURE-only run.files.fail audit row (see
 // handleRunFiles' doc for why success is silent).
-func (s *Server) auditRunFilesFailure(r *http.Request, runID uuid.UUID, err error) {
-	s.recordAudit(r.Context(), s.auditEvent(&runID, actorTypeFromRequest(r), principalFromRequest(r),
-		"run.files.fail", runID.String(), "failure", mustJSON(map[string]any{"error": err.Error()})))
+func (s *Server) auditRunFilesFailure(r *http.Request, run types.AgentRun, err error) {
+	s.recordStreamAudit(r.Context(), run.SandboxRef, s.auditEvent(&run.ID, actorTypeFromRequest(r), principalFromRequest(r),
+		"run.files.fail", run.ID.String(), "failure", mustJSON(map[string]any{"error": err.Error()})))
 }
 
 // parseRunFiles reads runFilesScript's stdout — the numstat section, the

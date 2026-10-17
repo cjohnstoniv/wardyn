@@ -36,11 +36,10 @@ import (
 // against internal/api, internal/db and internal/store together lets one of
 // two brief windows on that shared database produce a row with NO hash at
 // all, which a concurrent whole-chain verify (or another -count rep) then
-// reads as "seq=N row carries no hash": internal/db's own
-// TestMigrateRestoresADisabledChainTrigger (migrate_pg_test.go, via its
-// shared-DB pgPool) disables the chain trigger outright for the span of the
-// test, and this package's own F11 probes (auditchain_f11_probe_pg_test.go)
-// insert under `session_replication_role = replica`, which bypasses the same
+// reads as "seq=N row carries no hash": internal/db's trigger-mutating
+// migrate tests used to do that on the shared database (they now use
+// pgPoolIsolated, #1301/#1318), and this package's own F11 probes
+// (auditchain_f11_probe_pg_test.go) insert under `session_replication_role = replica`, which bypasses the same
 // trigger. (auditchain_pg_test.go's TestPG_AuditChain_DetectsTamperedMiddleRow
 // disables a DIFFERENT trigger — audit_events_no_update — to REWRITE a row
 // in place, which produces a hash MISMATCH on that one row, never a missing

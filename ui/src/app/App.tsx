@@ -57,9 +57,9 @@ export const HEALTH_POLL_MS = 5000;
 // setup (the demo steps' own lazy chunk), asciinema-player on
 // run-detail/recordings. Rollup hoists
 // what several lazy routes share into its own chunk automatically.
-const NewRunScreen = React.lazy(() =>
-  import("./components/screens/new-run/new-run-screen").then((m) => ({
-    default: m.NewRunScreen,
+const NewRunRoute = React.lazy(() =>
+  import("./components/screens/new-run-flow/new-run-route").then((m) => ({
+    default: m.NewRunRoute,
   })),
 );
 const RunDetailScreen = React.lazy(() =>
@@ -98,6 +98,20 @@ const ProvidersScreen = React.lazy(() =>
     default: m.ProvidersScreen,
   })),
 );
+// The org's custom components (0.8.9): the catalog and who may use each. Super admin only, no nav item:
+// reached from the Settings card.
+const ComponentsScreen = React.lazy(() =>
+  import("./components/screens/components/components-screen").then((m) => ({
+    default: m.ComponentsScreen,
+  })),
+);
+// Saved starting points (0.9): /templates in the User view, /admin/templates in the Admin view. The copy
+// modules it reads are lazy-only, so the screen is never imported by the entry chunk.
+const TemplatesScreen = React.lazy(() =>
+  import("./components/screens/templates/templates-screen").then((m) => ({
+    default: m.TemplatesScreen,
+  })),
+);
 const PermissionsScreen = React.lazy(() =>
   import("./components/screens/permissions").then((m) => ({
     default: m.PermissionsScreen,
@@ -117,6 +131,26 @@ const UserTypesScreen = React.lazy(() =>
 const CredentialsScreen = React.lazy(() =>
   import("./components/screens/credentials").then((m) => ({
     default: m.CredentialsScreen,
+  })),
+);
+// People (0.8.6 ppl-p2, mock M12) — everyone with access and every per-person action. securityOps
+// server-side, so both admin tiers reach it; no member route.
+const PeopleScreen = React.lazy(() =>
+  import("./components/screens/people/people-screen").then((m) => ({
+    default: m.PeopleScreen,
+  })),
+);
+// Runners (0.9, packet M-RN-1) — the computers people registered to run their own runs. securityOps
+// server-side, so both admin tiers reach it; no member route.
+const RunnersScreen = React.lazy(() =>
+  import("./components/screens/runners/runners-screen").then((m) => ({
+    default: m.RunnersScreen,
+  })),
+);
+// A pool's form: an organization pool's edit (super admin) and a person's own user pool, new or edited.
+const PoolFormScreen = React.lazy(() =>
+  import("./components/screens/runners/pools/pool-form").then((m) => ({
+    default: m.PoolFormScreen,
   })),
 );
 const SecretsScreen = React.lazy(() =>
@@ -367,8 +401,10 @@ export default function App() {
   // tree unmounts first (dropping every draft and its beforeunload guard)
   // and the document then loads fresh as them.
   const [reloadTo, setReloadTo] = React.useState<string | null>(null);
-  const { reauth, lapse, reset: resetReauth } = useReauthController(setReloadTo);
-  const lapsed = reauth.phase !== "none";
+  const endingSession = React.useCallback(() => signingOutRef.current, []);
+  const { reauth, lapse, reset: resetReauth } = useReauthController(setReloadTo, endingSession);
+  // Not the phase: a renewal from the expiry banner leaves the page working.
+  const lapsed = reauth.signedOut;
   // H1: onUnauthorized fires for EVERY 401, including the cold mount probe
   // (no session at all yet) — mirrored in a ref (not read from `auth` state
   // directly) because the handler below is registered once (its only
@@ -441,7 +477,7 @@ export default function App() {
   }, [lapse]);
   // …and released only when the lapse ends: the same person resumed, or the
   // console was signed out and reset.
-  React.useEffect(() => setSignedOutHold(lapsed), [lapsed]);
+  React.useEffect(() => setSignedOutHold(lapsed), [lapsed, auth]);
   React.useEffect(() => {
     if (reloadTo !== null) window.location.assign(appURL(safeReturnPath(reloadTo)));
   }, [reloadTo]);
@@ -615,6 +651,7 @@ export default function App() {
               // (undefined -> false) while setupStatus hasn't landed yet,
               // never a guess painted off no data.
               noBarrier={setupStatus ? !deriveReadiness(setupStatus).barrierReady : false}
+              tier={setupStatus?.tier}
               onSignOut={async () => {
                 // HIGH fix (sign-out): tell the server to clear the OIDC session
                 // BEFORE dropping local state. Clearing only the local admin token
@@ -638,6 +675,7 @@ export default function App() {
                 // passes it, core.ts WfetchInit.endsSession) and drops with
                 // resetReauth below, once the logout has settled.
                 signingOutRef.current = true;
+                setSignedOutHold(true);
                 if (!(await health.logout())) {
                   toast.error(SHELL.SIGN_OUT_FAILED_TITLE, {
                     description: SHELL.SIGN_OUT_FAILED_BODY,
@@ -696,9 +734,13 @@ export default function App() {
             <Route path="/admin/runs/new" element={<Navigate to="/admin/runs" replace />} />
             <Route path="/admin/runs/:id" element={suspend(<RunDetailScreen />)} />
             <Route path="/admin/approvals" element={suspend(<ApprovalsScreen onChanged={refreshBadges} />)} />
+            <Route path="/admin/people" element={suspend(<PeopleScreen />)} />
+            <Route path="/admin/runners" element={suspend(<RunnersScreen />)} />
+            <Route path="/admin/runners/pools/:id/edit" element={suspend(<PoolFormScreen scope="admin" />)} />
             <Route path="/admin/workspaces" element={suspend(<WorkspacesScreen />)} />
             <Route path="/admin/workspaces/:id" element={suspend(<WorkspaceDetailScreen />)} />
             <Route path="/admin/policies" element={suspend(<PoliciesScreen />)} />
+            <Route path="/admin/templates" element={suspend(<TemplatesScreen />)} />
             <Route path="/admin/governance" element={suspend(<GovernanceScreen />)} />
             <Route path="/admin/permissions" element={suspend(<PermissionsScreen />)} />
             <Route path="/admin/user-types" element={suspend(<UserTypesScreen />)} />
@@ -709,15 +751,18 @@ export default function App() {
             <Route path="/admin/settings" element={suspend(<AdminSettingsScreen />)} />
             <Route path="/admin/providers" element={suspend(<ProvidersScreen />)} />
             <Route path="/admin/drives" element={suspend(<DrivesScreen />)} />
+            <Route path="/admin/components" element={suspend(<ComponentsScreen />)} />
             <Route path="/admin/*" element={<Navigate to="/admin/runs" replace />} />
             <Route path="/account" element={suspend(<YourAccountScreen />)} />
+            <Route path="/account/pools/new" element={suspend(<PoolFormScreen scope="mine" />)} />
+            <Route path="/account/pools/:id/edit" element={suspend(<PoolFormScreen scope="mine" />)} />
             <Route path="/runs" element={<RunsScreen />} />
             {/* Ahead of /runs/:id so "new" is never read as a run id. */}
             <Route
               path="/runs/new"
               element={
                 <React.Suspense fallback={<RouteFallback />}>
-                  <NewRunScreen />
+                  <NewRunRoute />
                 </React.Suspense>
               }
             />
@@ -729,6 +774,7 @@ export default function App() {
                 </React.Suspense>
               }
             />
+            <Route path="/templates" element={suspend(<TemplatesScreen />)} />
             <Route
               path="/approvals"
               element={

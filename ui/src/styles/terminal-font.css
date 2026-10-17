@@ -1,0 +1,16 @@
+/*
+ * Copyright 2025 The Wardyn Authors
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+/* The terminal's own JetBrains Mono (OFL-1.1). The fontsource subsets carry no
+ * box-drawing or block glyphs (U+2500-259F), so the terminal used an OS
+ * fallback for them; this full build draws them itself, in both renderers. A
+ * separate family keeps the console's latin-only faces untouched. */
+@font-face {
+  font-family: "JetBrains Mono Terminal";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("../../node_modules/jetbrains-mono/fonts/webfonts/JetBrainsMono-Regular.woff2") format("woff2");
+}

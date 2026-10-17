@@ -19,7 +19,14 @@ every row with it byte for byte.
 | REAUTH_DIALOG.ROLE_CHANGED_BODY | You're signed in, but this page is no longer yours to open. Copy anything you need — Wardyn will take you to Runs. | Dialog body, same person with a narrower role |
 | REAUTH_BAR.BODY | You're signed out. This page is read-only until you sign in again. | Bar across the top after "Not now" |
 | REAUTH_BAR.CTA | Sign in | Bar button (reopens the dialog); the dialog's token submit |
+| REAUTH_RENEW.CTA | Sign in again | The session-expiry banner's button; the renewal strip after the sign-in window closed |
+| REAUTH_RENEW.CANCEL | Cancel | Renewal strip, every state |
+| REAUTH_RENEW.RENEWED | Signed in again. Your session now lasts until {time}. | Toast once the session is renewed; `{time}` is the new expiry |
 | SESSION_ENDED_REASON | You were signed out. Sign in again to continue. | The full sign-in screen's own notice (`lib/api/core.ts`), amber not red (Q457-10) |
+
+The renewal strip (the session-expiry banner's "Sign in again", renewing in place) reuses
+`REAUTH_DIALOG.WAITING`, `POPUP_BLOCKED`, `POPUP_FALLBACK`, `CLOSED_WITHOUT` and `UNREACHABLE` for
+its states, and `ROLE_CHANGED_BODY` with **Go to Runs** for a narrowed role.
 
 Reused, not restated: "Copy my changes" and its toast (`PROVIDERS_EXTRA.CONFLICT_COPY`,
 `CONFLICT_COPIED_TOAST`), "Not now" (`MODEL_ACCESS_BANNER.NOT_NOW`), "Sign in with SSO"

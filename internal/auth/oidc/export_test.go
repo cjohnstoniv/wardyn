@@ -78,6 +78,17 @@ func SetRevocationsForTest(a *Authenticator, r SessionRevocations) {
 	a.cfg.Revocations = r
 }
 
+// SetRoleStampTTLForTest sets Config.RoleStampTTL on an already-built Authenticator, like
+// SetRevocationsForTest.
+func SetRoleStampTTLForTest(a *Authenticator, ttl time.Duration) {
+	a.cfg.RoleStampTTL = ttl
+}
+
+// SetSessionTTLForTest sets Config.SessionTTL on an already-built Authenticator.
+func SetSessionTTLForTest(a *Authenticator, ttl time.Duration) {
+	a.cfg.SessionTTL = ttl
+}
+
 // DeriveRoleForTest exposes deriveRole for direct table-testing of role
 // derivation precedence and Match provenance, without driving a signed ID
 // token through the whole callback for every case.
@@ -103,7 +114,7 @@ func MergeRoleMapsForTest(chart map[string]string, legacyAdminEmails []string, r
 
 // EmailDomainAllowedForTest exposes the WARDYN_OIDC_EMAIL_DOMAINS gate so the
 // fold-escalation ordering (guard the RAW domain, THEN lower) pins directly as
-// a table, the way emailInList's and CanonicalGroupSubject's twin guards
+// a table, the way emailInList's and types.CanonicalGroupSubject's twin guards
 // already do — without signing an id_token per case.
 func EmailDomainAllowedForTest(email string, allowed []string) bool {
 	return emailDomainAllowed(email, allowed)
@@ -136,3 +147,11 @@ func SetLoginGrantTimeoutForTest(a *Authenticator, d time.Duration) {
 // SetEntraForTest marks a test IdP's Authenticator as Entra ID, so the
 // person-keying step (resolvePerson) runs against a plain httptest issuer.
 func SetEntraForTest(a *Authenticator) { a.entra = true }
+
+// SetIDPHTTPTimeoutForTest shortens the token-exchange/JWKS request timeout
+// for Authenticators built after the call; the returned func restores it.
+func SetIDPHTTPTimeoutForTest(d time.Duration) (restore func()) {
+	prev := idpHTTPTimeout
+	idpHTTPTimeout = d
+	return func() { idpHTTPTimeout = prev }
+}

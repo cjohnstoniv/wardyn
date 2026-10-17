@@ -101,6 +101,17 @@ it("clicking a row's button opens the shared door, keyed to that provider", asyn
   expect(dialog).toHaveTextContent(`For ${MODEL_PROVIDERS.bedrock.name}`);
 });
 
+it("a stored AWS sign-in offers Sign in again, which opens that provider's own door", async () => {
+  const user = userEvent.setup();
+  const s = providerStatus([{ provider: MODEL_PROVIDERS.bedrock, defaultFor: ["claude-code"], state: "live" }]);
+  renderCard(s);
+  await screen.findByTestId("model-connections-card");
+  await expandCard(CONNECTIONS.TITLE);
+  await user.click(await screen.findByRole("button", { name: CONNECTIONS.SIGN_IN_AGAIN }));
+  const dialog = await screen.findByRole("dialog", { name: AGENTS.SIGN_IN_AWS });
+  expect(dialog).toHaveTextContent(`For ${MODEL_PROVIDERS.bedrock.name}`);
+});
+
 it("a key row's Replace button opens the key door with the stored state", async () => {
   const user = userEvent.setup();
   const s = providerStatus([{ provider: MODEL_PROVIDERS.anthropicKey, state: "live" }]);
@@ -127,4 +138,31 @@ it("shows the Added/Last used meta line only for a row that holds a credential",
   // The unconnected row (nothing ever stored) gets no meta line at all —
   // its own "Your key goes to …" line is the only second line it renders.
   expect(within(card).getAllByText(/^Added /)).toHaveLength(1);
+});
+
+it("a store read failure re-checks without opening a replacement dialog", async () => {
+  const s = providerStatus([{ provider: MODEL_PROVIDERS.gateway, state: "not_configured" }]);
+  s.provider_access![0].cause = "store_unreadable";
+  const changed = vi.fn();
+  const refreshed = vi.fn();
+  render(<WithDoor status={s} path="/account" operator={false} onRefresh={refreshed}>
+    <ModelConnectionsCard status={s} onChanged={changed} />
+  </WithDoor>);
+  await expandCard(CONNECTIONS.TITLE);
+  expect(screen.getByText(CONNECTIONS.STORE_UNREADABLE)).toBeInTheDocument();
+  await userEvent.click(screen.getByRole("button", { name: CONNECTIONS.RECHECK }));
+  expect(changed).toHaveBeenCalledOnce();
+  expect(refreshed).not.toHaveBeenCalled();
+  expect(screen.queryByRole("dialog")).toBeNull();
+});
+
+it("an address change shows the new destination before fresh consent", async () => {
+  const s = providerStatus([{ provider: MODEL_PROVIDERS.gateway, state: "not_configured" }]);
+  s.provider_access![0].cause = "destination_changed";
+  s.provider_access![0].new_destination = MODEL_PROVIDERS.gateway.host;
+  renderCard(s);
+  await expandCard(CONNECTIONS.TITLE);
+  expect(screen.getByText(CONNECTIONS.DESTINATION_CHANGED(MODEL_PROVIDERS.gateway.host))).toBeInTheDocument();
+  await userEvent.click(screen.getByRole("button", { name: CONNECTIONS.REVIEW_RECONNECT }));
+  expect(await screen.findByRole("dialog")).toBeInTheDocument();
 });

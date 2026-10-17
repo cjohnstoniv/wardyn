@@ -56,6 +56,7 @@ func TestPushRulesSpecRoundTrip(t *testing.T) {
 		PushRules: &PushRulesSpec{
 			DenyPaths:         []string{".github/workflows/**", "infra/**"},
 			MaxInspectPackMiB: 8,
+			MaxFileSizeMiB:    10,
 		},
 	}
 	b, err := json.Marshal(in)
@@ -67,6 +68,9 @@ func TestPushRulesSpecRoundTrip(t *testing.T) {
 	}
 	if !strings.Contains(string(b), `"max_inspect_pack_mib":8`) {
 		t.Errorf("json = %s, want max_inspect_pack_mib present", b)
+	}
+	if !strings.Contains(string(b), `"max_file_size_mib":10`) {
+		t.Errorf("json = %s, want max_file_size_mib present", b)
 	}
 	var out RunPolicySpec
 	if err := json.Unmarshal(b, &out); err != nil {
@@ -151,5 +155,20 @@ func TestPushRulesIsSetCountsReviewPaths(t *testing.T) {
 	}
 	if (&PushRulesSpec{HoldSeconds: 60}).IsSet() {
 		t.Error("hold_seconds alone reads as a rule, but there is nothing to hold")
+	}
+}
+
+// TestPushRulesIsSetCountsFileSize: a size limit alone is a rule the broker
+// must buffer and inspect for, and Clone carries it.
+func TestPushRulesIsSetCountsFileSize(t *testing.T) {
+	if !(&PushRulesSpec{MaxFileSizeMiB: 10}).IsSet() {
+		t.Error("max_file_size_mib alone reads as no rule")
+	}
+	if (&PushRulesSpec{DenyNewExecutables: true}).IsSet() {
+		t.Error("deny_new_executables alone reads as a rule, but nothing enforces it yet")
+	}
+	orig := RunPolicySpec{PushRules: &PushRulesSpec{MaxFileSizeMiB: 10}}
+	if got := orig.Clone().PushRules.MaxFileSizeMiB; got != 10 {
+		t.Errorf("Clone dropped max_file_size_mib: got %d, want 10", got)
 	}
 }

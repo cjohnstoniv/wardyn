@@ -174,6 +174,7 @@ const runStateMeta: Record<
   string,
   { tone: Tone; label: string; pulse?: boolean; Icon?: React.ElementType; solid?: boolean }
 > = {
+  QUEUED: { tone: "neutral", label: "Queued" },
   PENDING: { tone: "neutral", label: "Pending" },
   STARTING: { tone: "info", label: "Starting", pulse: true },
   RUNNING: { tone: "success", label: "Running", pulse: true },
@@ -184,6 +185,9 @@ const runStateMeta: Record<
   FAILED: { tone: "danger", label: "Failed", Icon: CircleX },
   KILLED: { tone: "danger", label: "Killed", Icon: ShieldX, solid: true },
 };
+
+/** The badge's label for a run state, for surfaces that name states in prose. */
+export const runStateLabel = (s: string): string => metaFor(runStateMeta, s, { tone: "neutral", label: s }).label;
 
 /**
  * `variant`:
@@ -433,7 +437,7 @@ export function RiskBadge({ level }: { level: RiskLevel }) {
 }
 
 /* Egress decision. */
-export function EgressDecisionChip({ decision }: { decision: "allow" | "deny" | "pending" }) {
+export function EgressDecisionChip({ decision }: { decision: "allow" | "deny" | "pending" | "failed" }) {
   const tone: Tone = decision === "allow" ? "success" : decision === "deny" ? "danger" : "warning";
   return <Chip tone={tone} dot mono>{decision}</Chip>;
 }

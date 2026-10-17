@@ -6,8 +6,9 @@
 // Your account (M-5, #636) — the user-view half of the settings split. Was
 // part of the unsplit settings-screen.test.tsx until M-5 split the page in
 // two (issue #636's own "Check": "the settings specs split per view").
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, within } from "@testing-library/react";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 
 const getSetupStatusMock = vi.fn();
@@ -24,6 +25,13 @@ vi.mock("../../../lib/api/ssh-keys", () => ({
   },
 }));
 
+// My runner (0.9) reads /me/runners; the default here is runners off, which is "no card".
+const listMineMock = vi.fn();
+vi.mock("../../../lib/api/runners", () => ({
+  RUNNERS_DISABLED: "runners_disabled",
+  runners: { listMine: (...a: unknown[]) => listMineMock(...a) },
+}));
+
 vi.mock("../../../lib/api/secrets", () => ({
   secrets: { setSecret: vi.fn(), deleteSecret: vi.fn() },
 }));
@@ -34,9 +42,11 @@ vi.mock("./harness-login-pane", () => ({
   HarnessLoginPane: () => <div data-testid="login-pane" />,
 }));
 
+import { HttpError } from "../../../lib/api/core";
 import { YourAccountScreen } from "./your-account-screen";
 import { MODEL_PROVIDERS, baseStatus, providerStatus } from "../../../lib/test-fixtures";
 import { WithDoor } from "../../../../test/door-harness";
+import { CONNECTIONS } from "../../wardyn/copy/door";
 import { YOUR_ACCOUNT } from "../../wardyn/copy/console-view";
 import { OperatorProvider } from "../../wardyn/operator-context";
 import { expandCard, startsWith } from "../../../lib/test-dom";
@@ -54,6 +64,7 @@ function renderScreen(operator = false) {
 beforeEach(() => {
   getSetupStatusMock.mockReset().mockResolvedValue(baseStatus());
   listKeysMock.mockReset().mockResolvedValue([]);
+  listMineMock.mockReset().mockRejectedValue(new HttpError(403, "runners are off", "runners_disabled"));
 });
 
 describe("YourAccountScreen", () => {
@@ -111,6 +122,41 @@ describe("YourAccountScreen", () => {
 // S-2 (#636, approved 2026-09-27): the SSH pane's own strings, rewritten so
 // the non-admin side is never called "member" and its "no admin view of
 // anyone else's" no longer collides with the console's Admin view.
+// 0.9 (M-RN-2): My runner is the fifth card, after My components and before SSH keys, in the User view only,
+// and absent while runners are off.
+describe("YourAccountScreen — My runner", () => {
+  const renderAt = (path: string) =>
+    render(
+      <WithDoor status={baseStatus()} path={path} operator={false}>
+        <YourAccountScreen />
+      </WithDoor>,
+    );
+
+  it("is absent while runners are off", async () => {
+    renderAt("/account");
+    await screen.findByRole("heading", { name: startsWith("Your SSH keys"), level: 3 });
+    await waitFor(() => expect(listMineMock).toHaveBeenCalled());
+    expect(screen.queryByRole("heading", { name: startsWith("My runner") })).toBeNull();
+  });
+
+  it("sits right before Your SSH keys in the User view", async () => {
+    listMineMock.mockReset().mockResolvedValue([]);
+    renderAt("/account");
+    const runner = await screen.findByRole("heading", { name: startsWith("My runner"), level: 3 });
+    const keys = await screen.findByRole("heading", { name: startsWith("Your SSH keys"), level: 3 });
+    expect(runner.compareDocumentPosition(keys) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(runner.closest("section")?.id).toBe("my-runner");
+  });
+
+  it("is not read at all in the Admin view", async () => {
+    listMineMock.mockReset().mockResolvedValue([]);
+    renderAt("/admin/account");
+    await screen.findByRole("heading", { name: startsWith("Your SSH keys"), level: 3 });
+    expect(screen.queryByRole("heading", { name: startsWith("My runner") })).toBeNull();
+    expect(listMineMock).not.toHaveBeenCalled();
+  });
+});
+
 describe("YourAccountScreen — Your SSH keys, the S-2 strings", () => {
   it("carries the rewritten description", async () => {
     renderScreen();
@@ -175,5 +221,69 @@ describe("YourAccountScreen — Your model connections", () => {
     renderAt("/admin/account");
     expect(await screen.findByRole("heading", { name: startsWith("Your SSH keys"), level: 3 })).toBeInTheDocument();
     expect(screen.queryByTestId("model-connections-card")).toBeNull();
+  });
+});
+
+
+it("model re-check refreshes the shared snapshot once and keeps the recovery dialog current", async () => {
+  const status = providerStatus([{ provider: MODEL_PROVIDERS.gateway }]);
+  status.provider_access![0].cause = "store_unreadable";
+  const refresh = vi.fn();
+  const { rerender } = render(<WithDoor status={status} path="/account" operator={false} onRefresh={refresh}>
+    <YourAccountScreen />
+  </WithDoor>);
+  await screen.findByTestId("model-connections-card");
+  await expandCard(CONNECTIONS.TITLE);
+  await userEvent.click(screen.getByRole("button", { name: CONNECTIONS.RECHECK }));
+  expect(refresh).toHaveBeenCalledOnce();
+  expect(getSetupStatusMock).toHaveBeenCalledOnce();
+  const recovered = { ...status, provider_access: [{ ...status.provider_access![0], cause: "destination_changed" }] };
+  rerender(<WithDoor status={recovered} path="/account" operator={false} onRefresh={refresh}>
+    <YourAccountScreen />
+  </WithDoor>);
+  await userEvent.click(screen.getByRole("button", { name: CONNECTIONS.REVIEW_RECONNECT }));
+  const dialog = await screen.findByRole("dialog");
+  expect(within(dialog).getByText(CONNECTIONS.DESTINATION_CHANGED(MODEL_PROVIDERS.gateway.host))).toBeInTheDocument();
+});
+
+// #1508: the Invitations card leads the page and the service identities the person sponsors come last; with
+// nothing waiting and nothing sponsored, neither card is drawn.
+describe("the token cards (#1508)", () => {
+  const answer = (invitations: unknown[], identities: unknown[]) =>
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (path: string) => {
+        const p = String(path);
+        const body = p.startsWith("/api/v1/me/invitations") ? invitations : p.startsWith("/api/v1/me/service-identities") ? identities : null;
+        // Every other read on the page (components, runners) is not this test's concern: it fails, as the card tolerates.
+        if (body === null) return new Response(JSON.stringify({ error: "not stubbed" }), { status: 404, headers: { "content-type": "application/json" } });
+        return new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
+      }),
+    );
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("draws Invitations first and Service identities I sponsor after the SSH keys", async () => {
+    answer(
+      [{ id: "i1", target: "me", created_by: "ops@example.com", created_at: "2026-10-12T00:00:00Z", expires_at: "2099-01-01T00:00:00Z", state: "pending" }],
+      [{ name: "ci-nightly", sponsor: "me", sponsor_since: "", user_type: "standard", created_by: "a", created_at: "", state: "active" }],
+    );
+    renderScreen();
+    const cards = await waitFor(() => {
+      const found = screen.getAllByRole("heading", { level: 3 }).map((h) => h.textContent ?? "");
+      expect(found.some((t) => t.startsWith("Invitations"))).toBe(true);
+      expect(found.some((t) => t.startsWith("Service identities I sponsor"))).toBe(true);
+      return found;
+    });
+    const at = (prefix: string) => cards.findIndex((t) => t.startsWith(prefix));
+    expect(at("Invitations")).toBe(0);
+    expect(at("Service identities I sponsor")).toBeGreaterThan(at("Your SSH keys"));
+  });
+
+  it("draws neither when nothing is waiting and nothing is sponsored", async () => {
+    answer([], []);
+    renderScreen();
+    expect(await screen.findByRole("heading", { name: startsWith("Your SSH keys"), level: 3 })).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByTestId("invitations-card")).not.toBeInTheDocument());
+    expect(screen.queryByTestId("service-identities-card")).not.toBeInTheDocument();
   });
 });

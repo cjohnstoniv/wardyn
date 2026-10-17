@@ -46,6 +46,16 @@ describe("runs.getGrants — grant-record projection", () => {
     expect(g.scope).toBe('github_token {"repo":"acme/widgets"}');
   });
 
+  it("carries the scope's host (git_pat, ssh_key) and nothing else of the scope onto the host field", async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse([{ id: "g-9", spec: { kind: "git_pat", scope: { host: "dev.azure.com", secret: "S" } } }]),
+    );
+    const [g] = await runs.getGrants("run-9");
+    expect(g.host).toBe("dev.azure.com");
+    fetchMock.mockResolvedValueOnce(jsonResponse([{ id: "g-8", spec: { kind: "github_token", scope: { repo: "a/b" } } }]));
+    expect((await runs.getGrants("run-8"))[0].host).toBeUndefined();
+  });
+
   it("falls back to the kind alone when no scope object is present", async () => {
     fetchMock.mockResolvedValueOnce(jsonResponse([{ id: "g-2", spec: { kind: "cloud_sts" } }]));
     const [g] = await runs.getGrants("run-2");
@@ -126,5 +136,23 @@ describe("runs.listRuns — explicit paging (#159)", () => {
     fetchMock.mockResolvedValueOnce(jsonResponse([]));
     const got = await runs.listRuns({ limit: 100, offset: 0 });
     expect(got.truncated).toBe(false);
+  });
+});
+
+// Review nit: takeoverAttach threw a bare HttpError, so a run_owner_only refusal
+// lost its reason and the console could not map it to its own sentence.
+describe("runs.takeoverAttach — the refusal keeps its reason", () => {
+  afterEach(() => vi.unstubAllGlobals());
+  it("carries the envelope's reason on a 403", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ error: "only the person who started this run can open it interactively", reason: "run_owner_only" }), {
+          status: 403,
+          headers: { "Content-Type": "application/json" },
+        }),
+      ),
+    );
+    await expect(runs.takeoverAttach("run-1")).rejects.toMatchObject({ status: 403, reason: "run_owner_only" });
   });
 });

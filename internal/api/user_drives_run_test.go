@@ -33,7 +33,7 @@ import (
 
 // the seam harness
 
-// driveRunServer builds the create-path server seedRequestDrive runs inside:
+// driveRunServer builds the create-path server seedRequestDrives runs inside:
 // the drive store double, an audit recorder (so the door's authz.denied row can
 // be asserted, and its ABSENCE on every 422 arm), and the deployment's runner
 // target.
@@ -66,21 +66,24 @@ func driveRunRequest(enabled bool, readOnly *bool) createRunRequest {
 	return createRunRequest{Agent: "claude-code", Task: "t", Drive: &client.DriveSelection{Enabled: enabled, ReadOnly: readOnly}}
 }
 
-// driveSeed runs seedRequestDrive as a signed-in MEMBER and hands back
+// driveSeed runs seedRequestDrives as a signed-in MEMBER and hands back
 // everything an assertion needs.
 func driveSeed(t *testing.T, srv *Server, req createRunRequest, ceiling governanceCeiling,
 	ctx context.Context) (*types.DriveMount, bool, *httptest.ResponseRecorder) {
 	t.Helper()
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/runs", nil).WithContext(ctx)
 	w := httptest.NewRecorder()
-	mount, ok := srv.seedRequestDrive(w, r, req, ceiling)
-	return mount, ok, w
+	_, mounts, ok := srv.seedRequestDrives(w, r, req, ceiling)
+	if len(mounts) == 0 {
+		return nil, ok, w
+	}
+	return &mounts[0], ok, w
 }
 
 // deniedCeiling is an ASSIGNED profile whose door is shut.
 func deniedCeiling() governanceCeiling {
 	return governanceCeiling{
-		Profile: &types.GovernanceProfile{Name: "contractors"},
+		Profile: &ResolvedProfile{Name: "contractors"},
 		Limits:  types.GovernanceLimits{DenyUserDrive: true},
 	}
 }
@@ -150,7 +153,7 @@ func TestSeedRequestDriveDoorIs403WithAudit(t *testing.T) {
 			// would ever notice the revert.
 			name: "a blank-named profile shuts it too",
 			ceiling: governanceCeiling{
-				Profile: &types.GovernanceProfile{Name: ""},
+				Profile: &ResolvedProfile{Name: ""},
 				Limits:  types.GovernanceLimits{DenyUserDrive: true},
 			},
 			want: "mounting a user drive is not allowed by your governance profile \"\". Launch without drive.",
@@ -198,7 +201,7 @@ func TestSeedRequestDriveDoorIs403WithAudit(t *testing.T) {
 }
 
 // TestSeedRequestDriveOperatorSkipsTheDoor pins the exemption named in
-// denyUserDrive: the DOOR does not apply to an operator, and RESOLUTION still
+// userDriveDoorRefusal: the DOOR does not apply to an operator, and RESOLUTION still
 // runs for them. An operator whose drive resolves gets it — drives are
 // per-principal, not per-tier.
 func TestSeedRequestDriveOperatorSkipsTheDoor(t *testing.T) {
@@ -672,14 +675,14 @@ func driveProbeShare(t *testing.T) (root string, st *driveStore, ctx context.Con
 // API seam: a home directory that EXISTS (os.Stat, run by this daemon as
 // root, already says yes) but that the wired Runner's ProbeDrive says the
 // AGENT'S OWN UID cannot read must refuse the run — the exact gap an inline
-// root-run stat could not see. seedRequestDrive is the ONE function
+// root-run stat could not see. seedRequestDrives is the ONE function
 // handleCreateRun and handlePreflightRun both call for this seam (this
 // file's own header doc), so pinning it here pins both doors at once — the
 // same argument TestSeedRequestDriveGatesOnRunnerCapability already rests
 // on for the runner-capability gate.
 func TestSeedRequestDriveRefusesAnUnreadableHome(t *testing.T) {
 	root, st, ctx := driveProbeShare(t)
-	srv := New(Config{Store: st, Audit: &recRecorder{}, RunnerTarget: "docker", UserDriveHostRoots: []string{root},
+	srv := New(Config{BaseCtx: testBaseCtx(t), Store: st, Audit: &recRecorder{}, RunnerTarget: "docker", UserDriveHostRoots: []string{root},
 		Runner: driveProbeRunner{fakeRunner: &fakeRunner{}, probe: runner.DriveProbe{Result: runner.DriveProbeUnreadable}}})
 
 	mount, ok, w := driveSeed(t, srv, driveRunRequest(true, nil), governanceCeiling{}, ctx)
@@ -706,7 +709,7 @@ func TestSeedRequestDriveRefusesAnUnreadableHome(t *testing.T) {
 func TestSeedRequestDriveProbeUnknownStillMounts(t *testing.T) {
 	_, st, ctx := driveProbeShare(t)
 	root2 := st.drive.HostRoot
-	srv := New(Config{Store: st, Audit: &recRecorder{}, RunnerTarget: "docker", UserDriveHostRoots: []string{root2},
+	srv := New(Config{BaseCtx: testBaseCtx(t), Store: st, Audit: &recRecorder{}, RunnerTarget: "docker", UserDriveHostRoots: []string{root2},
 		Runner: driveProbeRunner{fakeRunner: &fakeRunner{}, probe: runner.DriveProbe{Result: runner.DriveProbeUnknown}}})
 
 	mount, ok, w := driveSeed(t, srv, driveRunRequest(true, nil), governanceCeiling{}, ctx)
@@ -723,7 +726,7 @@ func TestSeedRequestDriveProbeUnknownStillMounts(t *testing.T) {
 func TestSeedRequestDriveProbeErrorFailsOpen(t *testing.T) {
 	_, st, ctx := driveProbeShare(t)
 	root2 := st.drive.HostRoot
-	srv := New(Config{Store: st, Audit: &recRecorder{}, RunnerTarget: "docker", UserDriveHostRoots: []string{root2},
+	srv := New(Config{BaseCtx: testBaseCtx(t), Store: st, Audit: &recRecorder{}, RunnerTarget: "docker", UserDriveHostRoots: []string{root2},
 		Runner: driveProbeRunner{fakeRunner: &fakeRunner{}, err: errors.New("docker: no such host")}})
 
 	mount, ok, w := driveSeed(t, srv, driveRunRequest(true, nil), governanceCeiling{}, ctx)
@@ -756,7 +759,7 @@ func (r driveProbeSleepsRunner) ProbeDrive(ctx context.Context, _ types.DriveMou
 // whole outer budget. A slow probe must never refuse a healthy share.
 func TestSeedRequestDriveSlowProbeDoesNotRefuseAHealthyShare(t *testing.T) {
 	root, st, ctx := driveProbeShare(t)
-	srv := New(Config{Store: st, Audit: &recRecorder{}, RunnerTarget: "docker", UserDriveHostRoots: []string{root},
+	srv := New(Config{BaseCtx: testBaseCtx(t), Store: st, Audit: &recRecorder{}, RunnerTarget: "docker", UserDriveHostRoots: []string{root},
 		Runner: driveProbeSleepsRunner{fakeRunner: &fakeRunner{}}})
 
 	start := time.Now()
@@ -779,7 +782,7 @@ func TestSeedRequestDriveSlowProbeDoesNotRefuseAHealthyShare(t *testing.T) {
 func TestSeedRequestDriveNoProberIsUnchanged(t *testing.T) {
 	_, st, ctx := driveProbeShare(t)
 	root2 := st.drive.HostRoot
-	srv := New(Config{Store: st, Audit: &recRecorder{}, RunnerTarget: "docker", UserDriveHostRoots: []string{root2},
+	srv := New(Config{BaseCtx: testBaseCtx(t), Store: st, Audit: &recRecorder{}, RunnerTarget: "docker", UserDriveHostRoots: []string{root2},
 		Runner: &fakeRunner{}})
 
 	mount, ok, w := driveSeed(t, srv, driveRunRequest(true, nil), governanceCeiling{}, ctx)
@@ -798,7 +801,7 @@ func TestSeedRequestDriveNoProberIsUnchanged(t *testing.T) {
 // mounted" from the member's side.
 func TestMeUserDriveRefusesAnUnreadableHome(t *testing.T) {
 	root, st, ctx := driveProbeShare(t)
-	srv := New(Config{Store: st, Audit: &recRecorder{}, RunnerTarget: "docker", UserDriveHostRoots: []string{root},
+	srv := New(Config{BaseCtx: testBaseCtx(t), Store: st, Audit: &recRecorder{}, RunnerTarget: "docker", UserDriveHostRoots: []string{root},
 		Runner: driveProbeRunner{fakeRunner: &fakeRunner{}, probe: runner.DriveProbe{Result: runner.DriveProbeUnreadable}}})
 
 	ud, denied, unavailable := meDriveBody(t, srv, ctx)
@@ -987,7 +990,7 @@ func TestSeedRequestDriveTruncatedGroupsIs403(t *testing.T) {
 }
 
 // TestSeedRequestDriveDoorPrecedesTheResolver pins the ORDER inside
-// seedRequestDrive, and the SCOPING of denyUserDrive — two properties the
+// seedRequestDrives, and the SCOPING of userDriveDoorRefusal — two properties the
 // door's own test cannot state, because it runs on a store that answers.
 //
 // The order is load-bearing in the direction that produces the RIGHT sentence.
@@ -1232,7 +1235,7 @@ func TestMeUserDrive(t *testing.T) {
 	})
 
 	t.Run("an operator is never reported as denied", func(t *testing.T) {
-		// The door keys on isOperator exactly as denyUserDrive does, so a
+		// The door keys on isOperator exactly as userDriveDoorRefusal does, so a
 		// profile that happens to carry DenyUserDrive never renders a closed
 		// door for a caller it does not bind.
 		cs := &capStore{
@@ -1358,7 +1361,7 @@ func TestMeUserDrive(t *testing.T) {
 // create ↔ preflight parity
 
 // TestPreflightAnswersTheSameDriveRefusalAsCreate is the parity pin, and it is
-// the whole reason seedRequestDrive is called from two places. Preflight is the
+// the whole reason seedRequestDrives is called from two places. Preflight is the
 // wizard's Review dry run; a Review that previewed a green checklist for a
 // launch that will 422 is the exact failure the preflight handler exists not to
 // have.
@@ -1385,7 +1388,7 @@ func TestPreflightAnswersTheSameDriveRefusalAsCreate(t *testing.T) {
 
 	t.Run("the door: 403 on both", func(t *testing.T) {
 		// And the counterfactual the placement guards: preflight runs
-		// denyUserRequest FIRST, so the ceiling it hands seedRequestDrive is
+		// denyUserRequest FIRST, so the ceiling it hands seedRequestDrives is
 		// the SAME one create resolved — a preflight that passed a zero ceiling
 		// would preview an open door for a run the door will refuse.
 		srv, _, rec := govEscapeFixture(t, assignedStore(limitsProfile("contractors",
@@ -1638,7 +1641,7 @@ func (r driveCapsRunner) Capabilities(ctx context.Context) (runner.Capabilities,
 // plane was the liar: its only substrate question was the BACKEND-vs-TARGET
 // string match, which a docker_volume drive on a Docker deployment passes, so
 // preflight previewed green, create answered 201, and dispatch then failed the
-// run. seedRequestDrive's own doc calls that "the one thing the preflight
+// run. seedRequestDrives's own doc calls that "the one thing the preflight
 // handler exists not to do".
 //
 // Fixing driveMountFor fixes BOTH doors at once, because preflight and create
@@ -1649,7 +1652,7 @@ func TestSeedRequestDriveGatesOnRunnerCapability(t *testing.T) {
 	ctx := driveMemberCtx(nil, false)
 
 	serverWith := func(rn runner.Runner) *Server {
-		return New(Config{Store: st, Audit: &recRecorder{}, RunnerTarget: "docker", Runner: rn})
+		return New(Config{BaseCtx: testBaseCtx(t), Store: st, Audit: &recRecorder{}, RunnerTarget: "docker", Runner: rn})
 	}
 
 	t.Run("a runner that cannot mount drives refuses the run", func(t *testing.T) {
@@ -1796,7 +1799,7 @@ func TestDriveRefusalLeavesAnOperatorVisibleRecord(t *testing.T) {
 				// the only thing that can refuse it.
 				d := driveFixture(nil)
 				st := &driveStore{drive: d, grant: grantFixture(d.ID, nil), tier: types.CapabilitySubjectUser}
-				return st, New(Config{Store: st, Audit: &recRecorder{}, RunnerTarget: "docker",
+				return st, New(Config{BaseCtx: testBaseCtx(t), Store: st, Audit: &recRecorder{}, RunnerTarget: "docker",
 					Runner: driveCapsRunner{fakeRunner: &fakeRunner{}, drives: false}})
 			},
 			reason: driveRefusalRunnerCannotMount,
@@ -1851,7 +1854,7 @@ func TestDriveRefusalLeavesAnOperatorVisibleRecord(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, srv := tc.build(t)
-			var buf bytes.Buffer
+			var buf lockedBuffer
 			restore := slog.Default()
 			slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})))
 			t.Cleanup(func() { slog.SetDefault(restore) })

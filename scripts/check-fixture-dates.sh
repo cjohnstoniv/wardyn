@@ -58,10 +58,21 @@ literal_dates() {
 declare -A ALLOWLIST=(
   ["cmd/wardyn-aws-sso/main_test.go"]=2
   ["cmd/wardyn/commands_test.go"]=6
+  ["cmd/wardyn/drive_test.go"]=1 # passthrough only: the member drive list's created_at, never compared to the clock
+  ["cmd/wardyn/people_test.go"]=3 # display only: personDay formats LastSignedInAt, never compared to the clock
   ["cmd/wardyn/policyio_test.go"]=2
   ["cmd/wardyn/siteconfig_test.go"]=4
   ["cmd/wardynd/login_stamp_test.go"]=1
   ["cmd/wardynd/rekey_test.go"]=1
+  # ar-l1.2's partition tests: the 2200-01-01 sentinel is a far-future bound passed through as data,
+  # never compared against the clock.
+  ["internal/api/audit_partition_export_test.go"]=1
+  ["internal/db/audit_partition_digest_pg_test.go"]=1
+  ["internal/store/auditpartition_pg_test.go"]=1
+  # ar-l1.6's retention tab test: the partition bounds and the pending date are display data the
+  # table renders in the packet's own wording ("3 Oct 2026", "Oct 2026"), asserted as literal
+  # strings so the canon wording is pinned. Nothing compares them against the clock.
+  ["ui/src/app/components/screens/audit-retention.test.tsx"]=13
   ["internal/api/access_test.go"]=1
   ["internal/api/ado_entra_test.go"]=1
   ["internal/api/auth_failed_coalesce_test.go"]=1
@@ -80,6 +91,7 @@ declare -A ALLOWLIST=(
   ["internal/egress/egress_test.go"]=1
   ["internal/egress/proxy/llm_unavailable_detail_test.go"]=3
   ["internal/egress/proxy/tool_rules_test.go"]=1
+  ["internal/notify/render_test.go"]=1 # display only: the golden body prints RequestedAt, never compared to the clock
   ["internal/runner/k8s/drives_test.go"]=2
   ["internal/types/types_test.go"]=1
   ["pkg/client/client_more_test.go"]=2
@@ -101,13 +113,43 @@ declare -A ALLOWLIST=(
   # code comment (line 147) that names the OLD literal in prose, explaining
   # why the test below it now uses aheadByHours instead — matched by this
   # script's regex incidentally, same as any other date-shaped text.
-  ["ui/src/app/components/screens/new-run/new-run-rail.test.tsx"]=1
   ["ui/src/app/components/wardyn/model-access-banner.test.tsx"]=2
   ["ui/src/app/lib/model-access.test.ts"]=5
   # #1425: the run policy view fixture's created_at/updated_at and a restart
   # change's `at` are display data rendered into the tab (S-21 prints the
   # restart date); nothing compares them against the clock.
   ["ui/src/app/components/screens/run-detail/policy-tab.test.tsx"]=3
+  # 0.8.6 W4: a run output's captured_at is printed as a clock time ("Captured
+  # 14:02") or decoded and passed through (the CLI's --json), and a key-domain
+  # assignment's set_at is passed through and never rendered; nothing compares
+  # either against the clock.
+  ["cmd/wardyn/run_output_test.go"]=1
+  ["ui/e2e/run-output.spec.ts"]=1
+  ["ui/src/app/components/screens/run-detail/output-tab.test.tsx"]=1
+  ["ui/src/app/components/screens/credentials-key-domains.test.tsx"]=2
+  # #1649: the governance profile fixture's created_at/updated_at are passthrough
+  # data on the Runner credentials tab; nothing renders or compares them.
+  ["ui/src/app/components/screens/governance/governance-delivery-tab.test.tsx"]=2
+  # #1508 C4: migration 0167's keep-an-existing-row test seeds a fixed created_at and checks it is kept;
+  # nothing compares it against the clock.
+  ["internal/db/service_attach_restriction_pg_test.go"]=1
+  # Q-c: a queued run's queued_at is a fixed instant the CLI prints back (and its deadline from it);
+  # nothing compares it against the clock.
+  ["cmd/wardyn/run_inspect_test.go"]=1
+  ["cmd/wardyn/run_queue_wait_test.go"]=1
+  # The approved runner design's own command-line frame: `use-policy get` prints the policy's time verbatim
+  # ("revision 9, updated 2026-10-09T14:02:11Z"), and both tests hold the CLI to that line. Never compared to the clock.
+  ["cmd/wardyn/runner_design_lines_test.go"]=1
+  ["cmd/wardyn/runner_pool_use_policy_test.go"]=2
+  # New Run Launched: the wait/elapsed words are computed from a fixed reference instant passed in as now;
+  # nothing reads the real clock.
+  ["ui/src/app/components/screens/new-run-flow/launch/launched-model.test.ts"]=1
+  # Invitations and service identities: a fixed instant that is wire passthrough (CLI table rows, the account
+  # lists) or the frozen clock the token dialog and the copy formatters are tested against; nothing reads the real clock.
+  ["cmd/wardyn/service_identity_test.go"]=1
+  ["ui/src/app/components/screens/settings/token-dialog.test.tsx"]=1
+  ["ui/src/app/components/screens/settings/your-account-screen.test.tsx"]=2
+  ["ui/src/app/components/wardyn/copy/service-tokens.test.ts"]=4
   # #541 fix review: connectionRowCopy's C5 (expiring) test pins a LITERAL
   # expected string for absoluteTime's clock-time rendering, deliberately not
   # a recomputation through absoluteTime itself (that would let the
@@ -120,6 +162,26 @@ declare -A ALLOWLIST=(
   # assertion compares the rendered string against the clock, so the literal
   # dates themselves never go stale.
   ["ui/src/app/components/screens/credentials.test.tsx"]=2
+  # 0.8.6 W2a: the seed of an injected fake clock (sweep health, substrate
+  # health), never compared against the wall clock; the audit-partition tests'
+  # '2200-01-01' high-water mark, which only has to sit after every partition
+  # bound; and a mocked workspace's created_at/updated_at, rendered, never graded.
+  ["cmd/wardynd/sweep_health_test.go"]=5
+  ["internal/api/substrate_health_test.go"]=2
+  ["internal/sweephealth/sweephealth_test.go"]=2
+  ["internal/api/audit_partition_export_test.go"]=1
+  ["internal/db/audit_partition_digest_pg_test.go"]=1
+  ["internal/store/auditpartition_pg_test.go"]=1
+  ["ui/e2e/governed-admin.spec.ts"]=2
+  # 0.8.6 W3: the directory fake stamps CreatedAt and a listing row's
+  # LastSignInAt with a fixed instant that is only echoed into the JSON body;
+  # the hourly test's t0 seeds an injected fake clock, never the wall clock.
+  ["internal/api/people_keydomains_fake_test.go"]=2
+  ["internal/notify/worker_unit_test.go"]=1
+  ["internal/store/workspaces_order_pg_test.go"]=1 # passthrough: one shared created_at so only the id tie-break orders the list
+  ["ui/src/app/components/screens/new-run-flow/steps/shape/seed-loaders.test.ts"]=1 # passthrough: a launch intent's created_at, never compared to the clock
+  ["ui/src/app/components/screens/templates/rename-template-dialog.test.tsx"]=1 # display only: a template's updated_at
+  ["ui/src/app/components/screens/templates/templates-screen.test.tsx"]=1 # display only: a template's updated_at
 )
 
 fail=0

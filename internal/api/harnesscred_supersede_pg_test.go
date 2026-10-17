@@ -31,6 +31,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 	"github.com/cjohnstoniv/wardyn/internal/store"
+	"github.com/cjohnstoniv/wardyn/internal/testutil"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -277,10 +278,7 @@ func TestPG_LoginSupersedeRefusesWhenThePersonsLockIsHeld(t *testing.T) {
 	db.LoginSupersedeLockWait = 500 * time.Millisecond
 	t.Cleanup(func() { db.LoginSupersedeLockWait = prev })
 
-	holder, err := pool.Acquire(context.Background())
-	if err != nil {
-		t.Fatalf("acquire the holder's connection: %v", err)
-	}
+	holder := testutil.PGConn(t, pool)
 	obj := int32(crc32.ChecksumIEEE([]byte(actor)))
 	if _, err := holder.Exec(context.Background(), `SELECT pg_advisory_lock($1, $2)`, db.LoginSupersedeLockClass, obj); err != nil {
 		t.Fatalf("hold the person's sign-in lock: %v", err)
@@ -289,7 +287,7 @@ func TestPG_LoginSupersedeRefusesWhenThePersonsLockIsHeld(t *testing.T) {
 	release := func() {
 		if !released {
 			holder.Exec(context.Background(), `SELECT pg_advisory_unlock($1, $2)`, db.LoginSupersedeLockClass, obj) //nolint:errcheck // test cleanup
-			holder.Release()
+			_ = holder.Close(context.Background())
 			released = true
 		}
 	}
@@ -311,7 +309,7 @@ func TestPG_LoginSupersedeRefusesWhenThePersonsLockIsHeld(t *testing.T) {
 		t.Fatal("aws-sso harness login convention missing")
 	}
 
-	_, _, err = srv.launchHarnessLoginRun(context.Background(), actor, hl, loginTarget{startURL: perUserPortal})
+	_, _, err := srv.launchHarnessLoginRun(context.Background(), actor, hl, loginTarget{startURL: perUserPortal})
 	if !errors.Is(err, errSignInBusy) {
 		t.Fatalf("launch err = %v, want errSignInBusy — a held lock must refuse, not proceed unlocked", err)
 	}

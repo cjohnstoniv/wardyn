@@ -14,7 +14,7 @@
 // drive grant or a run (the five-source guard, UT-1 §7).
 import * as React from "react";
 import { AlertTriangle, Loader2, UsersRound } from "lucide-react";
-import { HttpError } from "../../../lib/api/core";
+import { HttpError, PendingChangeError } from "../../../lib/api/core";
 import { userTypes as api } from "../../../lib/api/user-types";
 import { governance as governanceApi, type GovernanceSnapshot } from "../../../lib/api/governance";
 import { getErrorMessage, relativeTime } from "../../../lib/format";
@@ -38,6 +38,7 @@ import { Chip } from "../../wardyn/primitives";
 import { EmptyState, TableSkeleton, loadFailStatus, type ScreenStatus } from "../../wardyn/states";
 import { SECURITY_ONLY_REASON } from "../../wardyn/copy";
 import { Note, question } from "../governance/display";
+import { SubmittedNote } from "../governance/submitted-note";
 import { UserTypeEditor } from "./user-type-editor";
 
 export function UserTypesScreen() {
@@ -69,9 +70,15 @@ export function UserTypesScreen() {
   }, []);
   React.useEffect(load, [load]);
 
-  const openEditor = (type: UserType | null) => setEditing({ type });
+  // A write the server held for a second person (202): nothing has changed yet.
+  const [submitted, setSubmitted] = React.useState(false);
+  const openEditor = (type: UserType | null) => {
+    setSubmitted(false);
+    setEditing({ type });
+  };
   const openDelete = (t: UserType) => {
     setDeleteError(null);
+    setSubmitted(false);
     setToDelete(t);
   };
 
@@ -82,6 +89,12 @@ export function UserTypesScreen() {
       setToDelete(null);
       load();
     } catch (e) {
+      if (e instanceof PendingChangeError) {
+        setToDelete(null);
+        setSubmitted(true);
+        load();
+        return;
+      }
       setDeleteError(e instanceof HttpError ? e.message : getErrorMessage(e));
     } finally {
       setBusy(false);
@@ -127,6 +140,12 @@ export function UserTypesScreen() {
               </Button>
             )}
           </div>
+
+          {submitted && (
+            <div className="px-6">
+              <SubmittedNote />
+            </div>
+          )}
 
           <div className="mt-4">
             {status === "loading" ? (
@@ -220,6 +239,11 @@ export function UserTypesScreen() {
               onCancel={() => setEditing(null)}
               onSaved={() => {
                 setEditing(null);
+                load();
+              }}
+              onSubmitted={() => {
+                setEditing(null);
+                setSubmitted(true);
                 load();
               }}
             />

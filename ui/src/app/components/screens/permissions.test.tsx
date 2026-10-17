@@ -45,8 +45,10 @@ import type { CapabilityGrant } from "../../lib/types";
 import { PermissionsScreen } from "./permissions";
 import { OperatorProvider } from "../wardyn/operator-context";
 import { SECURITY_ONLY_REASON } from "../wardyn/copy";
-import { HttpError } from "../../lib/api/core";
+import { HttpError, PendingChangeError } from "../../lib/api/core";
+import { CHANGES } from "../../lib/governance-copy";
 import { aheadByHours } from "../../lib/test-clock";
+import { setField } from "../../../test/set-field";
 
 function grant(over: Partial<CapabilityGrant> = {}): CapabilityGrant {
   return {
@@ -436,7 +438,7 @@ describe("PermissionsScreen — add a grant", () => {
 
     await user.click(screen.getByRole("combobox", { name: PERM.FIELD_WHO }));
     await user.click(await screen.findByRole("option", { name: "Portfolio manager" }));
-    await user.type(screen.getByLabelText(KIND.egress_host.valueLabel), "*.github.com");
+    setField(screen.getByLabelText(KIND.egress_host.valueLabel), "*.github.com");
     await user.click(screen.getByRole("button", { name: PERM.ADD_CTA }));
 
     await waitFor(() =>
@@ -459,7 +461,7 @@ describe("PermissionsScreen — add a grant", () => {
     await user.click(screen.getByRole("button", { name: PERM.SUBJECT_USER_TYPE }));
     await user.click(screen.getByRole("combobox", { name: PERM.FIELD_WHO }));
     await user.click(await screen.findByRole("option", { name: "Portfolio manager" }));
-    await user.type(screen.getByLabelText(KIND.egress_host.valueLabel), "*.github.com");
+    setField(screen.getByLabelText(KIND.egress_host.valueLabel), "*.github.com");
     await user.click(screen.getByRole("button", { name: PERM.EFFECT_DENY }));
     await user.click(screen.getByRole("button", { name: PERM.ADD_CTA }));
 
@@ -486,8 +488,8 @@ describe("PermissionsScreen — add a grant", () => {
     renderScreen();
 
     await screen.findByText(PERM.ADD_TITLE);
-    await user.type(screen.getByRole("textbox", { name: PERM.FIELD_WHO }), "alice@corp.example");
-    await user.type(screen.getByLabelText(KIND.egress_host.valueLabel), "*.github.com");
+    setField(screen.getByRole("textbox", { name: PERM.FIELD_WHO }), "alice@corp.example");
+    setField(screen.getByLabelText(KIND.egress_host.valueLabel), "*.github.com");
     await user.click(screen.getByRole("button", { name: PERM.EFFECT_DENY }));
     await user.click(screen.getByRole("button", { name: PERM.ADD_CTA }));
     await waitFor(() => expect(upsertGrantMock).toHaveBeenCalled());
@@ -500,8 +502,8 @@ describe("PermissionsScreen — add a grant", () => {
     renderScreen();
 
     await screen.findByText(PERM.ADD_TITLE);
-    await user.type(screen.getByRole("textbox", { name: PERM.FIELD_WHO }), "alice@corp.example");
-    await user.type(screen.getByLabelText(KIND.egress_host.valueLabel), "*.github.com");
+    setField(screen.getByRole("textbox", { name: PERM.FIELD_WHO }), "alice@corp.example");
+    setField(screen.getByLabelText(KIND.egress_host.valueLabel), "*.github.com");
     await user.click(screen.getByRole("button", { name: PERM.SUBJECT_USER_TYPE }));
     expect(screen.getByRole("button", { name: PERM.ADD_CTA })).toBeDisabled();
     await user.click(screen.getByRole("button", { name: PERM.SUBJECT_USER }));
@@ -514,8 +516,8 @@ describe("PermissionsScreen — add a grant", () => {
     renderScreen();
 
     await screen.findByText(PERM.ADD_TITLE);
-    await user.type(screen.getByLabelText(PERM.FIELD_WHO), "alice@corp.example");
-    await user.type(screen.getByLabelText(KIND.egress_host.valueLabel), "*.github.com");
+    setField(screen.getByLabelText(PERM.FIELD_WHO), "alice@corp.example");
+    setField(screen.getByLabelText(KIND.egress_host.valueLabel), "*.github.com");
     await user.click(screen.getByRole("button", { name: PERM.EFFECT_DENY }));
     await user.click(screen.getByRole("button", { name: PERM.ADD_CTA }));
 
@@ -590,5 +592,236 @@ describe("PermissionsScreen — a 403 is a tier, not an outage", () => {
     getPermissionsMock.mockRejectedValue(new HttpError(500, "boom"));
     renderMember();
     expect(await screen.findAllByRole("button", { name: /retry/i })).not.toHaveLength(0);
+  });
+});
+
+// 0.8.6 four-eyes: a covered write the server holds for a second person (202) is "submitted", never saved.
+describe("PermissionsScreen — a 202 is submitted, never saved", () => {
+  const held = () =>
+    new PendingChangeError({
+      id: "c1",
+      target_kind: "capability_grant",
+      op: "upsert",
+      target_key: "x",
+      state: "pending",
+      proposed_by: "ana",
+      proposed_at: aheadByHours(-1),
+      expires_at: aheadByHours(20),
+      diff: { changed: [] },
+    });
+
+  it("an enforcement change held for approval shows the note, no error toast, and reads the snapshot again", async () => {
+    getPermissionsMock.mockResolvedValue({ grants: [grant()], enforcement: {} });
+    putEnforcementMock.mockRejectedValue(held());
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    renderScreen();
+
+    await screen.findByText(KIND.egress_host.unenforced);
+    getPermissionsMock.mockClear();
+    await user.click(screen.getByRole("switch", { name: `${PERM.ENFORCEMENT_TITLE} ${KIND.egress_host.label}` }));
+    const dialog = await screen.findByRole("alertdialog");
+    await user.click(within(dialog).getByRole("button", { name: PERM.ENFORCE_CONFIRM }));
+
+    expect(await screen.findByText(CHANGES.SUBMITTED_TITLE)).toBeInTheDocument();
+    expect(toastError).not.toHaveBeenCalled();
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    await waitFor(() => expect(getPermissionsMock).toHaveBeenCalled());
+  });
+
+  it("a grant removal held for approval keeps the row and shows the note", async () => {
+    getPermissionsMock.mockResolvedValue({ grants: [grant()], enforcement: {} });
+    deleteGrantMock.mockRejectedValue(held());
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    renderScreen();
+
+    await screen.findByText("*.github.com");
+    await user.click(screen.getByRole("button", { name: `${PERM.REMOVE} ${KIND.egress_host.label} *.github.com` }));
+    const dialog = await screen.findByRole("alertdialog");
+    await user.click(within(dialog).getByRole("button", { name: PERM.REMOVE }));
+
+    expect(await screen.findByText(CHANGES.SUBMITTED_TITLE)).toBeInTheDocument();
+    expect(toastError).not.toHaveBeenCalled();
+    expect(await screen.findByText("*.github.com")).toBeInTheDocument();
+  });
+
+  it("a grant add held for approval shows the note in the form and no duplicate chip", async () => {
+    upsertGrantMock.mockRejectedValue(held());
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    renderScreen();
+
+    await screen.findByText(PERM.ADD_TITLE);
+    setField(screen.getByLabelText(PERM.FIELD_WHO), "alice@corp.example");
+    setField(screen.getByLabelText(KIND.egress_host.valueLabel), "*.github.com");
+    await user.click(screen.getByRole("button", { name: PERM.ADD_CTA }));
+
+    expect(await screen.findByText(CHANGES.SUBMITTED_TITLE)).toBeInTheDocument();
+    expect(screen.queryByText(PERM.DUPLICATE)).toBeNull();
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+});
+
+// The `custom_component` feature value (component lanes): default ON and narrowing, so its
+// switch is "no deny row for everyone" and moves that one row.
+describe("PermissionsScreen, who may define their own components", () => {
+  const SWITCH = "Allow people to define their own components";
+  const denyRow = (over: Partial<CapabilityGrant> = {}) =>
+    grant({
+      id: "22222222-2222-2222-2222-222222222222",
+      subject_type: "all",
+      subject: "",
+      capability: "feature",
+      value: "custom_component",
+      effect: "deny",
+      ...over,
+    });
+
+  it("on a fresh install it reads Allowed, with the switch on", async () => {
+    renderScreen();
+    expect(await screen.findByText("Custom components")).toBeInTheDocument();
+    expect(screen.getByText("Allowed")).toBeInTheDocument();
+    expect(screen.getByText("Everyone signed in may define their own components. Turn this off to stop it for everyone.")).toBeInTheDocument();
+    expect(screen.getByRole("switch", { name: SWITCH })).toBeChecked();
+  });
+
+  it("turning it off writes the one deny row for everyone and reads Turned off", async () => {
+    upsertGrantMock.mockResolvedValue({ grant: denyRow(), updated: false });
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    renderScreen();
+    await user.click(await screen.findByRole("switch", { name: SWITCH }));
+    await waitFor(() =>
+      expect(upsertGrantMock).toHaveBeenCalledWith({
+        subject_type: "all",
+        subject: "",
+        capability: "feature",
+        value: "custom_component",
+        effect: "deny",
+      }),
+    );
+    expect(await screen.findByText("Turned off")).toBeInTheDocument();
+    expect(screen.getByRole("switch", { name: SWITCH })).not.toBeChecked();
+    // The new row is in the grant table too.
+    expect(screen.getAllByText("custom_component").length).toBeGreaterThan(0);
+  });
+
+  it("turning it back on deletes that row and nothing else", async () => {
+    getPermissionsMock.mockResolvedValue({ grants: [denyRow(), grant()], enforcement: {} });
+    deleteGrantMock.mockResolvedValue(undefined);
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    renderScreen();
+    expect(await screen.findByText("Turned off")).toBeInTheDocument();
+    expect(screen.getByText("Nobody may define their own components. Components you add and make available still work.")).toBeInTheDocument();
+    await user.click(screen.getByRole("switch", { name: SWITCH }));
+    await waitFor(() => expect(deleteGrantMock).toHaveBeenCalledWith("22222222-2222-2222-2222-222222222222"));
+    expect(await screen.findByText("Allowed")).toBeInTheDocument();
+    expect(screen.getByText("*.github.com")).toBeInTheDocument();
+  });
+
+  it("only a deny for everyone on this value turns it off", async () => {
+    getPermissionsMock.mockResolvedValue({
+      grants: [
+        denyRow({ id: "33333333-3333-3333-3333-333333333333", subject_type: "group", subject: "contractors" }),
+        denyRow({ id: "44444444-4444-4444-4444-444444444444", value: "ssh_key" }),
+      ],
+      enforcement: {},
+    });
+    renderScreen();
+    expect(await screen.findByText("Allowed")).toBeInTheDocument();
+  });
+
+  it("where the feature rule is enforced, it says only an allow admits a person", async () => {
+    getPermissionsMock.mockResolvedValue({ grants: [grant({ capability: "feature", value: "ssh_key" })], enforcement: { feature: true } });
+    renderScreen();
+    expect(await screen.findByText("By allow only")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "The rule for SSH keys and API tokens is enforced, so only people with an allow for custom_component may define their own components.",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("a write held for a second person says so and changes nothing", async () => {
+    upsertGrantMock.mockRejectedValue(
+      new PendingChangeError({
+        id: "c1",
+        target_kind: "capability_grant",
+        op: "upsert",
+        target_key: "x",
+        state: "pending",
+        proposed_by: "ana",
+        proposed_at: aheadByHours(-1),
+        expires_at: aheadByHours(20),
+        diff: { changed: [] },
+      }),
+    );
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    renderScreen();
+    await user.click(await screen.findByRole("switch", { name: SWITCH }));
+    expect(await screen.findByText(CHANGES.SUBMITTED_TITLE)).toBeInTheDocument();
+    expect(toastError).not.toHaveBeenCalled();
+    expect(screen.getByRole("switch", { name: SWITCH })).toBeChecked();
+  });
+
+  it("a refusal is a toast with the server's words, and the switch stays", async () => {
+    upsertGrantMock.mockRejectedValue(new HttpError(500, "boom"));
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    renderScreen();
+    await user.click(await screen.findByRole("switch", { name: SWITCH }));
+    await waitFor(() => expect(toastError).toHaveBeenCalledWith("Failed to save the rule", expect.anything()));
+    expect(screen.getByRole("switch", { name: SWITCH })).toBeChecked();
+  });
+});
+
+// The `self_host_runner` feature value: restricted (migration 0178), so the switch is the one `all` allow.
+describe("PermissionsScreen, who may register a runner of their own", () => {
+  const SWITCH = "Allow everyone to register their own runner";
+  const allowRow = () =>
+    grant({
+      id: "55555555-5555-5555-5555-555555555555",
+      subject_type: "all",
+      subject: "",
+      capability: "feature",
+      value: "self_host_runner",
+    });
+
+  it("on a fresh install nobody is granted and the switch is off", async () => {
+    renderScreen();
+    expect(await screen.findByText("By grant only")).toBeInTheDocument();
+    expect(screen.getByRole("switch", { name: SWITCH })).not.toBeChecked();
+  });
+
+  it("turning it on writes the one allow row for everyone", async () => {
+    upsertGrantMock.mockResolvedValue({ grant: allowRow(), updated: false });
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    renderScreen();
+    await user.click(await screen.findByRole("switch", { name: SWITCH }));
+    await waitFor(() =>
+      expect(upsertGrantMock).toHaveBeenCalledWith({
+        subject_type: "all",
+        subject: "",
+        capability: "feature",
+        value: "self_host_runner",
+        effect: "allow",
+      }),
+    );
+    expect(await screen.findByText("Granted to everyone")).toBeInTheDocument();
+    expect(screen.getByRole("switch", { name: SWITCH })).toBeChecked();
+  });
+
+  it("turning it off deletes that row and nothing else", async () => {
+    getPermissionsMock.mockResolvedValue({ grants: [allowRow(), grant()], enforcement: {} });
+    deleteGrantMock.mockResolvedValue(undefined);
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    renderScreen();
+    expect(await screen.findByText("Granted to everyone")).toBeInTheDocument();
+    await user.click(screen.getByRole("switch", { name: SWITCH }));
+    await waitFor(() => expect(deleteGrantMock).toHaveBeenCalledWith("55555555-5555-5555-5555-555555555555"));
+    expect(await screen.findByText("By grant only")).toBeInTheDocument();
+    expect(screen.getByText("*.github.com")).toBeInTheDocument();
+  });
+
+  it("an allow for one person is not an allow for everyone", async () => {
+    getPermissionsMock.mockResolvedValue({ grants: [{ ...allowRow(), subject_type: "user", subject: "alice@corp.example" }], enforcement: {} });
+    renderScreen();
+    expect(await screen.findByText("By grant only")).toBeInTheDocument();
   });
 });

@@ -17,10 +17,13 @@ import {
   AlertTriangle,
   CircleUser,
   Compass,
+  Contact,
   Fingerprint,
   FolderOpen,
   HardDrive,
   KeyRound,
+  Laptop,
+  LayoutTemplate,
   Lock,
   Menu,
   Play,
@@ -44,7 +47,7 @@ import { SidebarLowerLinks } from "./sidebar-settings-link";
 // from nav-copy.ts rather than the screen's own copy module so the eager
 // sidebar doesn't drag a whole screen-only canon table into the entry chunk
 // (#498) for one string.
-import { CREDENTIALS_NAV_TITLE, GOVERNANCE_NAV_TITLE, USER_TYPES_NAV_TITLE } from "../../lib/nav-copy";
+import { CREDENTIALS_NAV_TITLE, GOVERNANCE_NAV_TITLE, RUNNERS_NAV_TITLE, USER_TYPES_NAV_TITLE } from "../../lib/nav-copy";
 import { cn } from "../ui/utils";
 import { Button } from "../ui/button";
 import { Sheet, SheetContent, SheetTitle, SheetTrigger } from "../ui/sheet";
@@ -54,13 +57,13 @@ import { ErrorBoundary } from "../wardyn/error-boundary";
 import {
   OperatorProvider,
   RoleProvider,
-  type Role,
-  type UserTypeMeta,
 } from "../wardyn/operator-context";
-import { health as api, type Me, type MeUserDrive } from "../../lib/api/health";
+import { useMeta, type ShellMeta } from "./use-shell-meta";
+export type { ShellMeta } from "./use-shell-meta";
 import { useReauth } from "../../lib/reauth";
 import { TopBar } from "./top-bar";
-import { appURL } from "../../lib/base-path";
+import type { SetupStatus } from "../../lib/types";
+import { SessionRenewButton, SessionRenewSlot } from "../wardyn/session-renew-button";
 import { ViewAccessProvider, type ConsoleView } from "../wardyn/console-view";
 import {
   useShellView,
@@ -68,227 +71,13 @@ import {
   UserViewDroppedNotice,
   UserViewEyebrow,
   ViewSwitch,
-  type ViewUserType,
 } from "../wardyn/view-switch";
 import { CONSOLE_VIEW, NAV } from "../wardyn/copy/console-view";
+import { PEOPLE_PAGE } from "../wardyn/copy/people";
 import { NAV as SETTINGS_NAV } from "../../lib/unsaved-copy";
 // The run wizard reaches the workspaces + secrets screens and their dialogs, so
 // importing it eagerly pulled all of that into the entry chunk even though the
 // dialog only ever mounts on a "New run" click. Fetched on that click instead.
-
-// useMeta fetches the real trust boundary (/healthz) + signed-in principal
-// (/api/v1/me) so the shell never shows placeholder identity/tenant values.
-export interface ShellMeta {
-  trustDomain: string;
-  identityProvider: string;
-  // principal is the OWNERSHIP key (the OIDC sub, "admin-token", "local:…"):
-  // it feeds MeIdentity.principal and every `usePrincipal() === run.created_by`
-  // gate. email and name are DISPLAY ONLY — what the header shows for "you",
-  // in that order of preference — and are "" outside SSO or when the IdP sent
-  // none, so the header falls back to the principal there (0.7.1).
-  principal: string;
-  email: string;
-  name: string;
-  method: string;
-  // True once the /me fetch has SETTLED — success or failure. This is the
-  // landing gate's signal (App.tsx's FirstRunLanding), and it must not be
-  // derived from `method` ("" after a failed /me) or a failed fetch strands
-  // "/" on a spinner forever; the role it then reads is the fail-open admin.
-  resolved: boolean;
-  // True only when /me actually ANSWERED (a body came back), which `resolved`
-  // above deliberately does not say — whoami() swallows every failure and
-  // returns null, so `resolved` flips on a FAILED fetch too. Anything that
-  // picks a lane off `operator` rather than merely offering a control needs
-  // this one instead (R4-F110; see operator-context.tsx's
-  // MeIdentity.operatorResolved for the attach-WS case that named it).
-  identityResolved: boolean;
-  // Fail-open (see operator-context.tsx): starts true and stays true unless
-  // /me resolves and explicitly says otherwise — an unresolved or failed
-  // fetch must never read as "viewer".
-  operator: boolean;
-  // The SECOND server predicate (admin OR security_admin — /me's
-  // `security_operator`), gating the security-governance surfaces. Same
-  // fail-open default as `operator`, and deliberately a separate field: with
-  // three role values the two booleans are not complements of each other.
-  securityOperator: boolean;
-  // The same B1-derived tier as `operator`, named directly (B3) — fail-open
-  // "admin" for the identical three cases (unresolved /me, a failed fetch, an
-  // unwrapped test). Kept alongside `operator` rather than replacing it: every
-  // existing operator-only gate stays exactly as it was.
-  role: Role;
-  // When the SSO session dies outright (no refresh) — null for
-  // local/token auth, which has no session to expire.
-  sessionExpiresAt: Date | null;
-  // M3 — see operator-context.tsx's MeIdentity.memberLocalDirRoot. null until /me
-  // resolves and stays null (fail-closed: unavailable) if it never does.
-  memberLocalDirRoot: string | null;
-  // 0.7 — the caller's own allocation and the profile door beside it, the same
-  // /me body every other field here comes from. New Run and the member Getting
-  // Started page read them off the context rather than issuing a second and a
-  // third GET /me of their own; same fail-closed default as memberLocalDirRoot.
-  // The trade that buys is FRESHNESS PER PAGE LOAD, not per navigation — a
-  // member paused mid-session keeps the offer until they reload and learns at
-  // launch, which is the direction of error this feature can afford (see
-  // operator-context.tsx's UserDriveMeta for the whole argument).
-  userDrive: MeUserDrive | null;
-  userDriveDeniedByProfile: string;
-  // R4/F091 — the THIRD drive key: WHY /me could not answer, "" when it could.
-  // The server always sends it on 0.7 and suppresses the allocation alongside
-  // it; without it four distinguishable answers reach the member as the single
-  // one whose remedy is wrong for all of them (operator-context.tsx's
-  // UserDriveMeta.unavailable carries the whole argument). Same fail-closed
-  // default as the two above: an unresolved or failed /me reads as "" —
-  // nothing is claimed about a drive that is also null.
-  userDriveUnavailable: string;
-  // 0.8 (UT-7a) — the caller's own user type, the same /me body every other
-  // field here comes from (operator-context.tsx's MeIdentity.userType).
-  // Absent reads as null.
-  userType?: UserTypeMeta | null;
-  /** #912 — the type the switch's dropdown preselects before the view is
-   *  entered (/me's user_view_preselect_type). "" means nothing to preselect. */
-  userViewPreselectType: string;
-  /** #912 (UT-13) — the type whose deletion turned this session's user view
-   *  off, until the next switch (/me's user_view_dropped). null otherwise. */
-  userViewDropped: { user_type: string; user_type_name?: string } | null;
-  /** #912 (H2) — /me's user_view_types: the org's user types, present only
-   *  for a caller whose STAMPED role is admin or security_admin (never a
-   *  real member). This is the switch/eyebrow/notice's ONLY source for the
-   *  type list — it must never call GET /user-types itself, which a clamped
-   *  in-view session cannot reach (securityOps). Empty for anyone who never
-   *  renders a picker. */
-  userViewTypes: ViewUserType[];
-  /** 0.7.4 "view as member" — an admin whose role is paused for this session. */
-  memberMode: boolean;
-  /** 0.7.5 — WHICH posture of that mode: the no-credential preview, in which
-   *  this admin's own model credential reads as not signed in. Implies
-   *  memberMode, so only the banner's wording changes on it. */
-  memberModeNoCredential: boolean;
-  /** 0.7.5 — whether this deployment's roster makes the no-credential preview
-   *  mean anything. False hides the second account-menu entry entirely. */
-  memberPreviewAvailable: boolean;
-  /** #162 — /healthz's `runner` ("docker" / "k8s" / "" on a pre-mount default
-   *  or an older daemon) and `network_policy` ("enforced" / "acknowledged" /
-   *  "unenforced", absent as ""). Neither is read directly by a screen — both
-   *  feed resolveConfinementPosture (confinement-posture.tsx), which is the
-   *  only place that may tell "not applicable" (Docker) from "could not
-   *  confirm" (a k8s daemon that omitted the verdict) apart. */
-  runner: string;
-  networkPolicy: string;
-  /** #510-F6 — /healthz's `demo_video_base_url`, read once here rather than
-   *  once per episode card (use-demo-video-base-url.ts's old per-hook fetch
-   *  issued 24 requests on one Getting Started mount). undefined means "no
-   *  mirror configured"; lib/demo-videos.ts's episodeUrl falls back to its
-   *  own hardcoded GitHub base either way. */
-  demoVideoBaseUrl?: string;
-  /** /healthz's `sso`: OIDC is configured. With it, the admin token is not a
-   *  person and has no User view (console-view.tsx#viewAccess). */
-  sso: boolean;
-}
-
-/** Everything the shell holds that /me decides — `me` null is a failed /me.
- *  One mapping for the mount read and adopt(): a partial copy on adopt kept the
- *  placeholder principal after a resume, so every later lapse in the tab
- *  skipped the different-person check (#483, Q457-12). */
-function identityFromMe(me: Me | null) {
-  return {
-    principal: me?.principal || "unknown",
-    email: me?.email ?? "",
-    // ?? "": a pre-0.7.1 daemon never sends name — absent must read as
-    // "none", which falls back to the email, then the principal.
-    name: me?.name ?? "",
-    method: me?.method || "",
-    identityResolved: me !== null,
-    operator: me?.operator ?? true,
-    // ?? true, not `?? me?.operator`: an older daemon that never sends
-    // this field must fail OPEN like every other identity signal here.
-    securityOperator: me?.security_operator ?? true,
-    role: me?.role ?? "admin",
-    // F3-F11: a bad string parses to an Invalid Date, not null — guard
-    // NaN here so useSessionExpiry never has to.
-    sessionExpiresAt: validExpiry(me?.session_expires_at),
-    memberLocalDirRoot: me?.member_local_dir_root ?? null,
-    userDrive: me?.user_drive ?? null,
-    userDriveDeniedByProfile: me?.user_drive_denied_by_profile ?? "",
-    userDriveUnavailable: me?.user_drive_unavailable ?? "",
-    userType: me?.user_type ?? null,
-    userViewPreselectType: me?.user_view_preselect_type ?? "",
-    userViewDropped: me?.user_view_dropped ?? null,
-    userViewTypes: me?.user_view_types ?? [],
-    memberMode: me?.user_view ?? false,
-    memberModeNoCredential: me?.user_view_no_credential ?? false,
-    memberPreviewAvailable: me?.user_preview_available ?? false,
-  } satisfies Partial<ShellMeta>;
-}
-
-/** The shell's identity, the retry that re-fires /me (B1's banner action), and
- *  adopt() for a /me the reauth dialog already read (#483). */
-function useMeta(): [ShellMeta, () => void, (me: Me) => void] {
-  // Bumped by retry(), which is the effect's only other dependency: /me is
-  // fetched once per load today, so after a failure identityResolved would stay
-  // false forever and the banner below would have nothing to offer.
-  const [attempt, setAttempt] = React.useState(0);
-  const [meta, setMeta] = React.useState<ShellMeta>({
-    trustDomain: "…",
-    identityProvider: "…",
-    principal: "…",
-    email: "",
-    name: "",
-    method: "",
-    resolved: false,
-    identityResolved: false,
-    operator: true,
-    securityOperator: true,
-    role: "admin",
-    sessionExpiresAt: null,
-    memberLocalDirRoot: null,
-    userDrive: null,
-    userDriveDeniedByProfile: "",
-    userDriveUnavailable: "",
-    userType: null,
-    userViewPreselectType: "",
-    userViewDropped: null,
-    userViewTypes: [],
-    memberMode: false,
-    memberModeNoCredential: false,
-    memberPreviewAvailable: false,
-    runner: "",
-    networkPolicy: "",
-    demoVideoBaseUrl: undefined,
-    sso: false,
-  });
-  React.useEffect(() => {
-    let alive = true;
-    Promise.all([api.health(), api.whoami()])
-      .then(([h, me]) => {
-        if (!alive) return;
-        setMeta({
-          trustDomain: h.trust_domain || "unknown",
-          identityProvider: h.identity_provider || "unknown",
-          ...identityFromMe(me),
-          resolved: true,
-          runner: h.runner ?? "",
-          networkPolicy: h.network_policy ?? "",
-          // "" (unset) reads the same as absent: both mean "no mirror".
-          demoVideoBaseUrl: h.demo_video_base_url || undefined,
-          sso: h.sso ?? false,
-        });
-      })
-      .catch(() => {
-        // health()/whoami() swallow their own errors today, so this is unreachable;
-        // it exists so `resolved` never depends on two other functions keeping
-        // that promise — a rejection here would strand the landing gate.
-        if (alive) setMeta((m) => ({ ...m, resolved: true }));
-      });
-    return () => {
-      alive = false;
-    };
-  }, [attempt]);
-  // The same person signed back in over the page: take the whole identity
-  // from the /me the dialog read, rather than re-asking — a failed re-ask
-  // would settle as an unknown identity and blank the page it just kept.
-  const adopt = React.useCallback((me: Me) => setMeta((m) => ({ ...m, ...identityFromMe(me), resolved: true })), []);
-  return [meta, React.useCallback(() => setAttempt((n) => n + 1), []), adopt];
-}
 
 // SESSION_WARN_MS — how far ahead of the session's real expiry to start
 // warning. The session itself has no refresh; this is advance
@@ -311,12 +100,6 @@ export const SESSION_EXPIRY_COPY = {
   soon: ["Your session is expiring soon.", "to avoid losing your place."],
   expired: ["Your session has expired.", "to get back in."],
 } as const;
-
-function validExpiry(iso: string | null | undefined): Date | null {
-  if (!iso) return null;
-  const d = new Date(iso);
-  return Number.isNaN(d.getTime()) ? null : d;
-}
 
 function useSessionExpiry(expiresAt: Date | null): SessionExpiryState {
   const [state, setState] = React.useState<SessionExpiryState>("none");
@@ -357,8 +140,17 @@ interface NavItem {
 const ADMIN_NAV: NavItem[] = [
   { to: "/admin/runs", label: "Runs", icon: Activity, badge: "attention" },
   { to: "/admin/approvals", label: "Approvals", icon: ShieldCheck, badge: "approvals" },
+  // 0.8.6 (ppl-p2, M12 D1): right after Approvals, because leaver work is frequent and urgent. securityOps
+  // server-side, so both admin tiers see it.
+  { to: "/admin/people", label: PEOPLE_PAGE.NAV, icon: Contact },
+  // 0.9: people's own computers that run their runs. securityOps server-side, so both admin tiers see it;
+  // the page explains the off state, so the item is always there (RN-Q4).
+  { to: "/admin/runners", label: RUNNERS_NAV_TITLE, icon: Laptop },
   { to: "/admin/workspaces", label: "Workspaces", icon: FolderOpen },
   { to: "/admin/policies", label: "Policies", icon: UserCog },
+  // 0.9: saved starting points; org admins rename, delete and publish here. A member route server-side, so
+  // both admin tiers see it. The label is literal like its neighbours: the screen's copy module is lazy-only.
+  { to: "/admin/templates", label: "Templates", icon: LayoutTemplate },
   // GOVERNANCE_NAV_TITLE is one string for the nav and the screen's heading.
   { to: "/admin/governance", label: GOVERNANCE_NAV_TITLE, icon: Scale },
   { to: "/admin/permissions", label: "Permissions", icon: Users },
@@ -377,6 +169,7 @@ const ADMIN_NAV: NavItem[] = [
 ];
 const USER_NAV: NavItem[] = [
   { to: "/runs", label: "Runs", icon: Activity, badge: "attention" },
+  { to: "/templates", label: "Templates", icon: LayoutTemplate },
   { to: "/approvals", label: "Approvals", icon: ShieldCheck, badge: "approvals" },
   { to: "/workspaces", label: "Workspaces", icon: FolderOpen },
 ];
@@ -454,6 +247,15 @@ const ConfinementPostureBanner = React.lazy(() =>
 // #484 — same lazy rationale; mounted between the two bands above.
 const EveryoneAdminBanner = React.lazy(() =>
   import("../wardyn/everyone-admin-banner").then((m) => ({ default: m.EveryoneAdminBanner })),
+);
+// Constrained-admin mode (mock M10) — same lazy rationale; mounted after the
+// everyone-is-an-admin band, ahead of the confinement note.
+const GovernedAdminBanner = React.lazy(() =>
+  import("../wardyn/governed-admin-banner").then((m) => ({ default: m.GovernedAdminBanner })),
+);
+// M10 (o-o2b) — same lazy rationale; mounted after GovernedAdminBanner.
+const SubstrateHealthBanner = React.lazy(() =>
+  import("../wardyn/substrate-health-banner").then((m) => ({ default: m.SubstrateHealthBanner })),
 );
 // #659 Q2 — same lazy rationale; mounted FIRST in the stack, ahead of every
 // deployment-wide band: it answers what the person just did (a redirect they
@@ -625,6 +427,7 @@ export function AppShell({
   unreachable,
   lastOkAt,
   noBarrier,
+  tier,
 }: {
   pendingApprovals: number;
   attentionCount: number;
@@ -643,6 +446,8 @@ export function AppShell({
   // than guess, where this is a deployment-wide fact that is always resolved
   // once setupStatus has landed. False/undefined renders nothing.
   noBarrier?: boolean;
+  // SetupStatus.tier, for the top bar's account menu and local-only chip.
+  tier?: SetupStatus["tier"];
 }) {
   const [meta, retryIdentity, adoptIdentity] = useMeta();
   const reauth = useReauth();
@@ -666,12 +471,16 @@ export function AppShell({
   // Environment step: an operator (meta.operator resolves NO_BARRIER.ADMIN_ROUTE
   // directly, whichever view they're in — console-view.tsx's viewVerdict
   // `pass`es "url"/"admin-only"/"session-admin" straight through) or a
-  // session-user (an SSO admin who switched to the User view: ViewGate's own
-  // "to-admin" interstitial asks before switching, and its target already
-  // carries `?step=environment` — see NO_BARRIER's doc comment). Anyone else
-  // (a member, a security admin) gets the banner's text with no link — there
-  // is nothing behind that route for them to open.
-  const canReachEnvironmentStep = meta.operator || access === "session-user";
+  // super admin in the User view (access "session-user" AND /me's
+  // user_view_super_admin, #1335: ViewGate's own "to-admin" interstitial asks
+  // before switching, and its target already carries `?step=environment` — see
+  // NO_BARRIER's doc comment). Anyone else gets the banner's text with no
+  // link: a member, a security admin in the Admin view, and a security admin
+  // in the User view too (session-user, but /admin/setup is super-admin-only
+  // and would land them on the member recap) — there is nothing behind that
+  // route for them to open.
+  const canReachEnvironmentStep =
+    meta.operator || (access === "session-user" && meta.userViewSuperAdmin);
   React.useEffect(() => {
     document.title = view === "admin" ? CONSOLE_VIEW.TITLE_ADMIN : CONSOLE_VIEW.TITLE_USER;
   }, [view]);
@@ -694,7 +503,10 @@ export function AppShell({
       operator={meta.operator}
       operatorResolved={meta.identityResolved}
       securityOperator={meta.securityOperator}
+      userViewSuperAdmin={meta.userViewSuperAdmin}
       principal={meta.principal}
+      identityRevision={meta.identityRevision}
+      authGeneration={meta.authGeneration}
       memberLocalDirRoot={meta.memberLocalDirRoot}
       userDrive={meta.userDrive}
       userDriveDeniedByProfile={meta.userDriveDeniedByProfile}
@@ -719,13 +531,10 @@ export function AppShell({
             >
               Skip to main content
             </a>
-            {/* #483: first, above everything — while it shows, nothing below
-                it can save. */}
-            {reauth.phase !== "none" && (
-              <React.Suspense fallback={null}>
-                <ReauthLayer onResumed={adoptIdentity} />
-              </React.Suspense>
-            )}
+            {/* The lazy coordinator also reconciles auth changes while no dialog or watch is active. */}
+            <React.Suspense fallback={null}>
+              <ReauthLayer onResumed={adoptIdentity} />
+            </React.Suspense>
             {/* Hidden — not merely covered — in focus mode: the cockpit's overlay is
           painted over the shell anyway, but leaving the header mounted would
           keep a dozen focusable controls ahead of the terminal in tab order
@@ -738,6 +547,7 @@ export function AppShell({
                 attentionCount={attentionCount}
                 onNewRun={() => navigate("/runs/new")}
                 noBarrier={!unreachable && !!noBarrier}
+                tier={tier}
               />
             )}
             {/* The no-credential preview's band, and its way out. FIRST of the
@@ -818,22 +628,19 @@ export function AppShell({
           (while the current session still works) replaces it before it dies. */}
             {/* F3-F11: three-state, so an already-past-expiry session doesn't
                 read "expiring soon" forever. */}
-            {!unreachable && sessionExpiry !== "none" && (
+            {!unreachable && sessionExpiry !== "none" && reauth.phase !== "renew" && (
               <div
                 role="status"
                 className="relative z-50 flex shrink-0 items-center gap-2 border-b border-border bg-warning-subtle px-4 py-2 text-sm text-warning"
               >
                 <AlertTriangle className="size-4 shrink-0" />
                 <span>{SESSION_EXPIRY_COPY[sessionExpiry][0]}</span>
-                <a
-                  href={appURL("/auth/login")}
-                  className="font-medium underline underline-offset-2"
-                >
-                  Sign in again
-                </a>
+                <SessionRenewButton meta={meta} />
                 <span>{SESSION_EXPIRY_COPY[sessionExpiry][1]}</span>
               </div>
             )}
+            {/* While a renewal waits, its strip (the reauth layer's) stands here instead. */}
+            <SessionRenewSlot />
             {/* LAST in the stack, and not hidden in focus mode: a dead control
           plane, an unknown identity and a dying session are each the better
           explanation of what you are looking at and are read first — but this
@@ -863,6 +670,16 @@ export function AppShell({
               before the cluster-wide confinement note. */}
               <React.Suspense fallback={null}>
                 <EveryoneAdminBanner />
+              </React.Suspense>
+              {/* M10 — Admin view, admins only: the substrate_health row as the
+              server graded it. */}
+              <React.Suspense fallback={null}>
+                <SubstrateHealthBanner view={view} />
+              </React.Suspense>
+              {/* Constrained-admin mode (mock M10): Admin view only, an info
+              band beside the everyone-is-an-admin one. */}
+              <React.Suspense fallback={null}>
+                <GovernedAdminBanner view={view} />
               </React.Suspense>
               {/* #162 — last in the stack (mock-approval ruling 3): the four
               bands above are each the better explanation of what you are

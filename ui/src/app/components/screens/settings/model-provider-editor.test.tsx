@@ -19,6 +19,7 @@ import type { ModelProvider } from "../../../lib/types/site";
 import { AGENTS, AGENTS_EXTRA, PROVIDERS as WS_PROVIDERS } from "../../../lib/workspace-providers-copy";
 import { ModelProviderEditor, type ModelProviderEditorProps } from "./model-provider-editor";
 import { addressChanged, providerIdFrom } from "./model-provider-draft";
+import { setField } from "../../../../test/set-field";
 
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 
@@ -166,11 +167,11 @@ describe("E1 — a new key provider", () => {
     const { onSaved, user } = renderEditor({ list: list([CORP]) });
     await user.click(screen.getByRole("button", { name: MODEL_PROVIDERS.KIND.anthropic_api_key }));
     await user.clear(screen.getByLabelText(E.NAME));
-    await user.type(screen.getByLabelText(E.NAME), "Anthropic via LLM gateway");
-    await user.type(screen.getByLabelText(E.ROUTE_THROUGH), "https://llm.corp.example");
+    setField(screen.getByLabelText(E.NAME), "Anthropic via LLM gateway");
+    setField(screen.getByLabelText(E.ROUTE_THROUGH), "https://llm.corp.example");
     await user.click(screen.getByRole("button", { name: "Claude Code" }));
     expect(screen.getByText(E.MODEL_HINT)).toBeInTheDocument();
-    await user.type(screen.getByLabelText(E.MODEL), "acme-claude-large");
+    setField(screen.getByLabelText(E.MODEL), "acme-claude-large");
     await user.click(screen.getByRole("button", { name: E.SAVE }));
 
     await waitFor(() => expect(onSaved).toHaveBeenCalled());
@@ -224,7 +225,7 @@ describe("E2 — a new endpoint on both agents", () => {
     await user.click(chevron);
     expect(screen.getAllByLabelText(E.PATH)).toHaveLength(2);
 
-    await user.type(screen.getAllByLabelText(E.PATH)[0], "/anthropic");
+    setField(screen.getAllByLabelText(E.PATH)[0], "/anthropic");
     expect(chevron).toBeEnabled();
     await user.click(chevron);
     expect(screen.getAllByLabelText(E.PATH)).toHaveLength(1);
@@ -234,12 +235,12 @@ describe("E2 — a new endpoint on both agents", () => {
     const { user } = renderEditor();
     await user.click(screen.getByRole("button", { name: MODEL_PROVIDERS.KIND.custom_endpoint }));
     await user.clear(screen.getByLabelText(E.NAME));
-    await user.type(screen.getByLabelText(E.NAME), "Corp gateway");
-    await user.type(screen.getByLabelText(E.BASE_URL), "https://gateway.corp.example");
+    setField(screen.getByLabelText(E.NAME), "Corp gateway");
+    setField(screen.getByLabelText(E.BASE_URL), "https://gateway.corp.example");
     const [claudePath, codexPath] = screen.getAllByLabelText(E.PATH);
-    await user.type(claudePath, "/anthropic");
-    await user.type(codexPath, "/v1");
-    await user.type(screen.getAllByLabelText(E.MODEL)[1], "acme-codex-large");
+    setField(claudePath, "/anthropic");
+    setField(codexPath, "/v1");
+    setField(screen.getAllByLabelText(E.MODEL)[1], "acme-codex-large");
     await user.click(screen.getByRole("button", { name: E.SAVE }));
 
     await waitFor(() => expect(putMock).toHaveBeenCalled());
@@ -321,12 +322,12 @@ describe("E3 — a new Bedrock provider (#538)", () => {
     const { user } = renderEditor();
     await user.click(screen.getByRole("button", { name: MODEL_PROVIDERS.KIND.bedrock_sso }));
     await user.clear(screen.getByLabelText(E.NAME));
-    await user.type(screen.getByLabelText(E.NAME), "Bedrock (prod)");
-    await user.type(screen.getByLabelText(E.REGION), "us-east-1");
-    await user.type(screen.getByLabelText(AGENTS.FIELD_SSO_START_URL), "https://acme.awsapps.com/start");
-    await user.type(screen.getByLabelText(AGENTS_EXTRA.FIELD_SSO_ACCOUNT_ID), "111122223333");
-    await user.type(screen.getByLabelText(AGENTS_EXTRA.FIELD_SSO_ROLE_NAME), "WardynBedrockUser");
-    await user.type(screen.getByLabelText(E.MODEL), "acme.claude-sonnet");
+    setField(screen.getByLabelText(E.NAME), "Bedrock (prod)");
+    setField(screen.getByLabelText(E.REGION), "us-east-1");
+    setField(screen.getByLabelText(AGENTS.FIELD_SSO_START_URL), "https://acme.awsapps.com/start");
+    setField(screen.getByLabelText(AGENTS_EXTRA.FIELD_SSO_ACCOUNT_ID), "111122223333");
+    setField(screen.getByLabelText(AGENTS_EXTRA.FIELD_SSO_ROLE_NAME), "WardynBedrockUser");
+    setField(screen.getByLabelText(E.MODEL), "acme.claude-sonnet");
     await user.click(screen.getByRole("button", { name: E.SAVE }));
 
     await waitFor(() => expect(putMock).toHaveBeenCalled());
@@ -354,8 +355,8 @@ describe("E3 — a new Bedrock provider (#538)", () => {
   it("Region required: Save is withheld when it's empty, even with everything else filled", async () => {
     const { user } = renderEditor();
     await user.click(screen.getByRole("button", { name: MODEL_PROVIDERS.KIND.bedrock_sso }));
-    await user.type(screen.getByLabelText(AGENTS.FIELD_SSO_START_URL), "https://acme.awsapps.com/start");
-    await user.type(screen.getByLabelText(E.MODEL), "acme.claude-sonnet");
+    setField(screen.getByLabelText(AGENTS.FIELD_SSO_START_URL), "https://acme.awsapps.com/start");
+    setField(screen.getByLabelText(E.MODEL), "acme.claude-sonnet");
     await user.click(screen.getByRole("button", { name: E.SAVE }));
     expect(putMock).not.toHaveBeenCalled();
   });
@@ -452,7 +453,7 @@ describe("E6 — save refused", () => {
     putMock.mockRejectedValue(new HttpError(400, body));
     const { onSaved, user } = renderEditor({ editing: CORP, list: list([CORP]) });
     await user.clear(screen.getByLabelText(E.BASE_URL));
-    await user.type(screen.getByLabelText(E.BASE_URL), "http://gateway.corp.example");
+    setField(screen.getByLabelText(E.BASE_URL), "http://gateway.corp.example");
     await user.click(screen.getByRole("button", { name: E.SAVE }));
 
     const note = await screen.findByRole("alert");
@@ -484,7 +485,7 @@ describe("editing", () => {
 
     // A rename is no change of address: no confirm, even with 12 people connected.
     await user.clear(screen.getByLabelText(E.NAME));
-    await user.type(screen.getByLabelText(E.NAME), "Corp gateway (EU)");
+    setField(screen.getByLabelText(E.NAME), "Corp gateway (EU)");
     await user.click(screen.getByRole("button", { name: E.SAVE }));
     await waitFor(() => expect(putMock).toHaveBeenCalled());
     expect(screen.queryByRole("alertdialog")).toBeNull();
@@ -539,7 +540,7 @@ describe("E9 — changing where it sends requests", () => {
     const { onSaved, user } = renderEditor({ editing: provider, list: list([provider], { [provider.id]: n }) });
     const url = screen.getByLabelText(provider.kind === "custom_endpoint" ? E.BASE_URL : E.ROUTE_THROUGH);
     await user.clear(url);
-    await user.type(url, "https://new.corp.example");
+    setField(url, "https://new.corp.example");
     await user.click(screen.getByRole("button", { name: E.SAVE }));
 
     expect(within(alert()).getByText(E.ADDRESS_TITLE(provider.name!))).toBeInTheDocument();
@@ -555,7 +556,7 @@ describe("E9 — changing where it sends requests", () => {
     await user.click(screen.getByRole("button", { name: "Claude Code" }));
     const path = screen.getByLabelText(E.PATH);
     await user.clear(path);
-    await user.type(path, "/claude");
+    setField(path, "/claude");
     await user.click(screen.getByRole("button", { name: E.SAVE }));
     expect(within(alert()).getByText(E.ADDRESS_BODY(12))).toBeInTheDocument();
     await user.click(within(alert()).getByRole("button", { name: E.CANCEL }));
@@ -565,7 +566,7 @@ describe("E9 — changing where it sends requests", () => {
   it("with nobody connected yet, Save saves with no confirm", async () => {
     const { onSaved, user } = renderEditor({ editing: CORP, list: list([CORP], { "corp-gateway": 0 }) });
     await user.clear(screen.getByLabelText(E.BASE_URL));
-    await user.type(screen.getByLabelText(E.BASE_URL), "https://new.corp.example");
+    setField(screen.getByLabelText(E.BASE_URL), "https://new.corp.example");
     await user.click(screen.getByRole("button", { name: E.SAVE }));
     await waitFor(() => expect(onSaved).toHaveBeenCalled());
     expect(screen.queryByRole("alertdialog")).toBeNull();
@@ -575,7 +576,7 @@ describe("E9 — changing where it sends requests", () => {
   it("a changed Bedrock region asks too, with the key wording", async () => {
     const { user } = renderEditor({ editing: BEDROCK, list: list([BEDROCK], { "bedrock-prod": 3 }) });
     await user.clear(screen.getByLabelText(E.REGION));
-    await user.type(screen.getByLabelText(E.REGION), "eu-west-1");
+    setField(screen.getByLabelText(E.REGION), "eu-west-1");
     await user.click(screen.getByRole("button", { name: E.SAVE }));
     expect(within(alert()).getByText(E.ADDRESS_BODY_KEY(3))).toBeInTheDocument();
     await user.click(within(alert()).getByRole("button", { name: E.CANCEL }));

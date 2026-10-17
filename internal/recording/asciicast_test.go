@@ -220,7 +220,7 @@ func TestReadCapped(t *testing.T) {
 		{"over the cap", "123456789abcdef", limit + 1},
 		{"empty", "", 0},
 	} {
-		got, err := readCapped(iotest.OneByteReader(strings.NewReader(tc.in)), limit)
+		got, err := readCapped(iotest.OneByteReader(strings.NewReader(tc.in)), limit, 64<<10)
 		if err != nil {
 			t.Fatalf("%s: readCapped: %v", tc.name, err)
 		}
@@ -229,7 +229,7 @@ func TestReadCapped(t *testing.T) {
 		}
 	}
 
-	if _, err := readCapped(iotest.TimeoutReader(strings.NewReader("abcd")), limit); err == nil {
+	if _, err := readCapped(iotest.TimeoutReader(strings.NewReader("abcd")), limit, 64<<10); err == nil {
 		t.Error("readCapped must propagate a mid-stream read error, not truncate silently")
 	}
 }
@@ -244,7 +244,7 @@ func TestReadCapped_GrowsInOneStep(t *testing.T) {
 	const limit = 70 << 10 // above the 64 KiB start, so the regrow must happen
 	in := strings.Repeat("a", 65<<10)
 
-	got, err := readCapped(strings.NewReader(in), limit)
+	got, err := readCapped(strings.NewReader(in), limit, 64<<10)
 	if err != nil {
 		t.Fatalf("readCapped: %v", err)
 	}

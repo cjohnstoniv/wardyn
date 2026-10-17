@@ -178,6 +178,7 @@ export const RUN_COCKPIT = {
   allow: (n: number) => `${n} allow`,
   held: (n: number) => `${n} held`,
   deny: (n: number) => `${n} deny`,
+  failed: (n: number) => `${n} failed`,
   credentials: "credentials",
   // Grants are ELIGIBILITY (what the run MAY request), never live credentials —
   // the same distinction credentials.tsx makes. Only a credential.mint audit

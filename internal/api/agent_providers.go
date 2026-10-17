@@ -29,6 +29,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -40,6 +41,7 @@ import (
 const (
 	agent400Unknown = "agents: %q names no agent this deployment can run — a catalog id or a WARDYN_AGENT_IMAGES key"
 	agent400DupID   = "agents: id %q is not unique"
+	agent400SetKey  = "agents: %q joins harness ids with +, which names a harness-set image, not an agent"
 	agent412Stale   = "agents changed since you loaded them — reload and retry"
 
 	// The default model provider. A turned-off provider is still a valid
@@ -52,6 +54,7 @@ const (
 	// MEMBER ever reads. It names the agent and nothing else: no base URL, no
 	// secret name, no mechanism, no start URL.
 	agent422NotEnabled = "agent: %q is not an enabled agent on this deployment — ask an admin"
+	agent422SetKey     = "agent: %q names an image for several harnesses, not an agent — name one agent, or include each harness in tools"
 )
 
 // errAgentNotEnabled marks a step-run launch refused by the agent roster, so the
@@ -133,6 +136,11 @@ func agentEnabled(sc types.SiteConfig, agentID string) bool {
 // admitting on a database hiccup would silently reopen the roster, and refusing
 // would blame the caller for an outage.
 func (s *Server) agentRosterRefusal(ctx context.Context, agent string) (string, error) {
+	// A harness-set key is in WARDYN_AGENT_IMAGES but is never an agent, roster
+	// or not: launched as one, it would start the set image with no harness.
+	if strings.Contains(agent, harnessSetSeparator) {
+		return fmt.Sprintf(agent422SetKey, agent), nil
+	}
 	if agent == "" || s.cfg.Store == nil {
 		return "", nil
 	}
@@ -209,6 +217,9 @@ func validateAgentProviders(p *types.AgentProviders, images map[string]string) e
 			return fmt.Errorf(agent400DupID, row.ID)
 		}
 		seen[row.ID] = true
+		if strings.Contains(row.ID, harnessSetSeparator) {
+			return fmt.Errorf(agent400SetKey, row.ID)
+		}
 		if _, inCatalog := harnessByID(row.ID); !inCatalog {
 			if _, known := images[row.ID]; !known {
 				return fmt.Errorf(agent400Unknown, row.ID)
@@ -285,8 +296,11 @@ func (s *Server) handlePutAgentProviders(w http.ResponseWriter, r *http.Request)
 	// integration handlers), which read and rewrite the SAME singleton document —
 	// see handlePutIntegration's SEAM-1 comment for why an unguarded RMW here
 	// silently erases a concurrent one.
-	s.siteConfigMu.Lock()
-	defer s.siteConfigMu.Unlock()
+	r, unlock, ok := s.lockDoor(w, r, db.SiteConfigLockClass)
+	if !ok {
+		return
+	}
+	defer unlock()
 	ctx := r.Context()
 	existing, err := s.cfg.Store.GetSiteConfig(ctx)
 	if err != nil {
@@ -306,6 +320,7 @@ func (s *Server) handlePutAgentProviders(w http.ResponseWriter, r *http.Request)
 	// EffectiveScmHosts is projected on read and never stored — a value that rode
 	// in on a GET-spread body would otherwise be persisted into the JSONB.
 	candidate.EffectiveScmHosts = nil
+	candidate.WithheldScmHosts = nil
 	saved, err := s.cfg.Store.PutSiteConfig(ctx, candidate)
 	if err != nil {
 		writeServerError(w, r, "put site config", err)

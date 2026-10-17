@@ -499,11 +499,11 @@ func TestCreateSandbox_RollbackOnFailure(t *testing.T) {
 
 // TestCreateSandbox_RollbackOnProxyIPTimeout covers the podIP-wait failure
 // path specifically: the proxy pod is created, but its IP never resolves
-// (here: the reactor errors on every Get, aborting the poll immediately
-// rather than exhausting the real 90s timeout) — CreateSandbox must still
+// (here: the reactor errors on every Get; the wait rides that error out and the
+// short StartTimeout ends it) — CreateSandbox must still
 // roll back the proxy pod + both netpols + the secret.
 func TestCreateSandbox_RollbackOnProxyIPTimeout(t *testing.T) {
-	d, cs := newTestDriver(t, Config{})
+	d, cs := newTestDriver(t, Config{StartTimeout: 300 * time.Millisecond})
 	cs.PrependReactor("get", "pods", func(action clienttesting.Action) (bool, runtime.Object, error) {
 		ga, ok := action.(clienttesting.GetAction)
 		if !ok || !strings.HasPrefix(ga.GetName(), "wardyn-proxy-") {
@@ -522,12 +522,11 @@ func TestCreateSandbox_RollbackOnProxyIPTimeout(t *testing.T) {
 
 // TestCreateSandbox_RollbackOnAgentRunningTimeout covers the agent-pod
 // readiness wait's failure path: the pod is created, but its main container
-// never reports Running (here: the reactor errors on every Get, aborting the
-// poll immediately rather than exhausting the real canaryWaitTimeout) —
-// CreateSandbox must still roll back the agent pod itself + the proxy pod +
-// both netpols + the secret. Mirrors TestCreateSandbox_RollbackOnProxyIPTimeout.
+// never reports Running (here: the reactor errors on every Get; the wait rides
+// that error out and the short StartTimeout ends it) — CreateSandbox must still
+// roll back the agent pod itself + the proxy pod + both netpols + the secret. Mirrors TestCreateSandbox_RollbackOnProxyIPTimeout.
 func TestCreateSandbox_RollbackOnAgentRunningTimeout(t *testing.T) {
-	d, cs := newTestDriver(t, Config{})
+	d, cs := newTestDriver(t, Config{StartTimeout: 300 * time.Millisecond})
 	installProxyIPReactor(t, cs, "10.244.0.7")
 	cs.PrependReactor("get", "pods", func(action clienttesting.Action) (bool, runtime.Object, error) {
 		ga, ok := action.(clienttesting.GetAction)
@@ -557,7 +556,7 @@ func TestCreateSandbox_RollbackOnAgentRunningTimeout(t *testing.T) {
 // the wait-for-gone poll — THEN the netpol delete-collection), mirroring
 // TestTeardown_WaitsForPodsGoneBeforeDroppingNetPols in lifecycle_test.go.
 func TestCreateSandbox_RollbackWaitsForPodsGoneBeforeDroppingNetPols(t *testing.T) {
-	d, cs := newTestDriver(t, Config{})
+	d, cs := newTestDriver(t, Config{StartTimeout: 300 * time.Millisecond})
 	installProxyIPReactor(t, cs, "10.244.0.7")
 	// Fail the agent pod's readiness wait so rollback fires with BOTH pods
 	// and BOTH netpols already created — the maximal-exposure failure point.
@@ -694,7 +693,7 @@ func TestCreateSandbox_DriveShapesTheAgentPod(t *testing.T) {
 	cs.ClearActions()
 
 	spec := testSandboxSpec()
-	spec.Drive = testDriveMount()
+	spec.Drives = []types.DriveMount{*testDriveMount()}
 	sb, err := d.CreateSandbox(context.Background(), spec)
 	if err != nil {
 		t.Fatalf("CreateSandbox: %v", err)
@@ -733,8 +732,8 @@ func TestCreateSandbox_DriveShapesTheAgentPod(t *testing.T) {
 	if vol.Name != driveVolumeName || vol.PersistentVolumeClaim == nil {
 		t.Fatalf("agent pod volume = %+v, want a %q persistentVolumeClaim volume", vol, driveVolumeName)
 	}
-	if vol.PersistentVolumeClaim.ClaimName != spec.Drive.ObjectName {
-		t.Errorf("claimName = %q, want %q", vol.PersistentVolumeClaim.ClaimName, spec.Drive.ObjectName)
+	if vol.PersistentVolumeClaim.ClaimName != spec.Drives[0].ObjectName {
+		t.Errorf("claimName = %q, want %q", vol.PersistentVolumeClaim.ClaimName, spec.Drives[0].ObjectName)
 	}
 	// PSS Restricted admits persistentVolumeClaim and forbids hostPath; no drive
 	// backend on this substrate offers one, and none may ever be added here.
@@ -837,7 +836,7 @@ func TestCreateSandbox_DriveAsksGvisorForDirectfsOff(t *testing.T) {
 
 			spec := testSandboxSpec()
 			spec.ConfinementClass = tc.class
-			spec.Drive = testDriveMount()
+			spec.Drives = []types.DriveMount{*testDriveMount()}
 			sb, err := d.CreateSandbox(context.Background(), spec)
 			if err != nil {
 				t.Fatalf("CreateSandbox: %v", err)
@@ -886,8 +885,8 @@ func TestCreateSandbox_DriveReadOnlyOnBothHalves(t *testing.T) {
 	installAgentRunningReactor(t, cs)
 
 	spec := testSandboxSpec()
-	spec.Drive = testDriveMount()
-	spec.Drive.ReadOnly = true
+	spec.Drives = []types.DriveMount{*testDriveMount()}
+	spec.Drives[0].ReadOnly = true
 	sb, err := d.CreateSandbox(context.Background(), spec)
 	if err != nil {
 		t.Fatalf("CreateSandbox: %v", err)
@@ -926,7 +925,7 @@ func TestCreateSandbox_DriveSurvivesTeardown(t *testing.T) {
 	installAgentRunningReactor(t, cs)
 
 	spec := testSandboxSpec()
-	spec.Drive = testDriveMount()
+	spec.Drives = []types.DriveMount{*testDriveMount()}
 	sb, err := d.CreateSandbox(context.Background(), spec)
 	if err != nil {
 		t.Fatalf("CreateSandbox: %v", err)
@@ -937,7 +936,7 @@ func TestCreateSandbox_DriveSurvivesTeardown(t *testing.T) {
 	}
 	assertRunObjectsGone(t, cs, spec.RunID)
 
-	pvc, err := cs.CoreV1().PersistentVolumeClaims(testNamespace).Get(context.Background(), spec.Drive.ObjectName, metav1.GetOptions{})
+	pvc, err := cs.CoreV1().PersistentVolumeClaims(testNamespace).Get(context.Background(), spec.Drives[0].ObjectName, metav1.GetOptions{})
 	if err != nil {
 		t.Fatalf("the drive's claim did not survive teardown: %v", err)
 	}
@@ -960,8 +959,8 @@ func TestCreateSandbox_DriveRefusalCreatesNothing(t *testing.T) {
 	cs.ClearActions()
 
 	spec := testSandboxSpec()
-	spec.Drive = testDriveMount()
-	spec.Drive.Backend = types.DriveBackendK8sPVCStatic
+	spec.Drives = []types.DriveMount{*testDriveMount()}
+	spec.Drives[0].Backend = types.DriveBackendK8sPVCStatic
 
 	if _, err := d.CreateSandbox(context.Background(), spec); !errors.Is(err, errDriveClaimNotProvisioned) {
 		t.Fatalf("err = %v, want errors.Is(err, errDriveClaimNotProvisioned)", err)
@@ -981,7 +980,7 @@ func TestCreateSandbox_MountsStayRefusedWithADrive(t *testing.T) {
 	cs.ClearActions()
 
 	spec := testSandboxSpec()
-	spec.Drive = testDriveMount()
+	spec.Drives = []types.DriveMount{*testDriveMount()}
 	spec.Mounts = []runner.Mount{{Source: "/home/op/work", Target: "/work"}}
 
 	if _, err := d.CreateSandbox(context.Background(), spec); !errors.Is(err, errMountsUnsupported) {
@@ -1194,7 +1193,7 @@ func TestWaitContainerRunning_TimeoutNamesTheUnboundClaim(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 	defer cancel()
-	err := d.waitContainerRunning(ctx, pod.Name, mainContainerName, nil)
+	err := d.waitContainerRunning(ctx, d.newStartClock(), pod.Name, mainContainerName, nil)
 	if err == nil {
 		t.Fatal("waitContainerRunning: want a timeout on a pod that never starts")
 	}
@@ -1366,8 +1365,8 @@ func TestCreateSandbox_ProxyPodCarriesTheOperatorKnobs(t *testing.T) {
 	}
 	for name, want := range map[string]string{
 		"WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS": "app:false,pat:on",
-		"WARDYN_LLM_SCAN":                      "off",
-		"WARDYN_CREDENTIAL_REAUTH_TIMEOUT":     "45s",
+		"WARDYN_LLM_SCAN":                     "off",
+		"WARDYN_CREDENTIAL_REAUTH_TIMEOUT":    "45s",
 	} {
 		if got[name] != want {
 			t.Errorf("proxy pod env %s = %q, want %q — the knob is set on wardynd and unreachable in the pod",
@@ -1454,7 +1453,7 @@ func TestWaitContainerRunning_OnWaitingFiresOncePerReasonChange(t *testing.T) {
 	})
 
 	var seen []string
-	err := d.waitContainerRunning(context.Background(), podName, mainContainerName, func(detail string) {
+	err := d.waitContainerRunning(context.Background(), d.newStartClock(), podName, mainContainerName, func(detail string) {
 		seen = append(seen, detail)
 	})
 	if err == nil {
@@ -1494,7 +1493,7 @@ func TestWaitPodIP_ReportsTheProxyPodsReason(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 700*time.Millisecond)
 	defer cancel()
 	var seen []string
-	if _, err := d.waitPodIP(ctx, podName, func(detail string) { seen = append(seen, detail) }); err == nil {
+	if _, err := d.waitPodIP(ctx, d.newStartClock(), podName, func(detail string) { seen = append(seen, detail) }); err == nil {
 		t.Fatal("waitPodIP: want a timeout on a pod that never gets an IP")
 	}
 	if len(seen) != 1 || !strings.HasPrefix(seen[0], "pod: Unschedulable: ") || !strings.Contains(seen[0], taint) {

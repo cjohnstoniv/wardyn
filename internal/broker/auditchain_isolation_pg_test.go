@@ -30,6 +30,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/cjohnstoniv/wardyn/internal/db"
+	"github.com/cjohnstoniv/wardyn/internal/testutil"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -110,11 +111,8 @@ func TestPG_MintDoesNotForkTheAuditChainAtRepeatableRead(t *testing.T) {
 
 	// The WINNER holds the chain lock in an open transaction. Everything the
 	// mint does after this point happens with the lock already taken.
-	blocker, err := pool.Acquire(ctx)
-	if err != nil {
-		t.Fatalf("acquire blocker conn: %v", err)
-	}
-	defer blocker.Release()
+	blocker := testutil.PGConn(t, pool)
+	defer func() { _ = blocker.Close(ctx) }()
 	btx, err := blocker.Begin(ctx)
 	if err != nil {
 		t.Fatalf("begin blocker tx: %v", err)
@@ -163,9 +161,8 @@ func TestPG_MintDoesNotForkTheAuditChainAtRepeatableRead(t *testing.T) {
 
 	// The winner appends and commits WHILE the mint waits.
 	var winnerHash string
-	if err := btx.QueryRow(ctx, `INSERT INTO audit_events (id, actor_type, actor, action, outcome)
-		VALUES (gen_random_uuid(), 'system', 'brk-iso-probe', 'test.isolation.winner', 'success')
-		RETURNING row_hash`).Scan(&winnerHash); err != nil {
+	if err := btx.QueryRow(ctx, `SELECT row_hash
+		FROM audit_append(gen_random_uuid(), now(), NULL, 'system', 'brk-iso-probe', 'test.isolation.winner', '', 'success', '', NULL)`).Scan(&winnerHash); err != nil {
 		t.Fatalf("winner append: %v", err)
 	}
 	if err := btx.Commit(ctx); err != nil {

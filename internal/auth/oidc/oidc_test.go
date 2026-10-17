@@ -944,7 +944,7 @@ func TestCallbackScalarGroupsClaimMapSetContributesNothing(t *testing.T) {
 // TestParseRoleMap
 //
 // M2/M3/L8: non-empty input that yields no usable entry, a non-ASCII key
-// (can never match — see ASCIIOnly), and a duplicate key must all be parse
+// (can never match — see types.ASCIIOnlySubject), and a duplicate key must all be parse
 // errors, never a silent "close enough" map.
 
 func TestParseRoleMap(t *testing.T) {
@@ -969,7 +969,7 @@ func TestParseRoleMap(t *testing.T) {
 		// M2: non-empty input, but every entry is blank — must error, not
 		// silently return nil (which deriveRole reads as "everyone is admin").
 		{"all-blank input is an error, not silently unset", ",,,", nil, true},
-		// M3: a non-ASCII key can never match a claim (deriveRole's ASCIIOnly
+		// M3: a non-ASCII key can never match a claim (deriveRole's ASCIIOnlySubject
 		// guard skips non-ASCII claim values before lookup) — a silent dead
 		// entry that inverts intent under WARDYN_OIDC_DEFAULT_ROLE=admin.
 		{"non-ASCII key can never match", "roſs@corp.example=admin", nil, true},
@@ -1614,6 +1614,7 @@ func doCallbackVia(t *testing.T, auth *writoidc.Authenticator, callback http.Han
 			Role:     writoidc.RoleFromContext(r.Context()),
 			UserType: writoidc.UserTypeFromContext(r.Context()),
 			Groups:   writoidc.GroupsFromContext(r.Context()),
+			ObjectID: writoidc.ObjectIDFromContext(r.Context()),
 		}
 	})
 	checkReq := httptest.NewRequest(http.MethodGet, "/", nil)
@@ -1713,7 +1714,7 @@ func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { retu
 
 // newAuthWithOnLogin is newAuth plus Config.OnLogin (migration 0046's
 // callback-refresh hook), for TestCallbackInvokesOnLoginWithSubAndRole.
-func (e *idpEnv) newAuthWithOnLogin(t *testing.T, onLogin func(context.Context, string, string, string, []string, bool)) *writoidc.Authenticator {
+func (e *idpEnv) newAuthWithOnLogin(t *testing.T, onLogin func(context.Context, writoidc.LoginFacts)) *writoidc.Authenticator {
 	t.Helper()
 	rt := &rewriteTokenRT{
 		base:          http.DefaultTransport,
@@ -1753,9 +1754,9 @@ func TestCallbackInvokesOnLoginWithSubAndRole(t *testing.T) {
 	var gotGroups []string
 	var gotTruncated bool
 	calls := 0
-	auth := env.newAuthWithOnLogin(t, func(ctx context.Context, sub, role, userType string, groups []string, truncated bool) {
+	auth := env.newAuthWithOnLogin(t, func(ctx context.Context, f writoidc.LoginFacts) {
 		calls++
-		gotCtx, gotSub, gotRole, gotUserType, gotGroups, gotTruncated = ctx, sub, role, userType, groups, truncated
+		gotCtx, gotSub, gotRole, gotUserType, gotGroups, gotTruncated = ctx, f.Sub, f.Role, f.UserType, f.Groups, f.GroupsTruncated
 	})
 
 	loginReq := httptest.NewRequest(http.MethodGet, "/auth/login", nil)
@@ -1826,7 +1827,7 @@ func TestCallbackDeniedLoginNeverInvokesOnLogin(t *testing.T) {
 		ClientSecret: "secret",
 		RedirectURL:  "http://localhost/auth/callback",
 		RoleMap:      map[string]string{"some-other-role": writoidc.RoleAdmin},
-		OnLogin:      func(context.Context, string, string, string, []string, bool) { calls++ },
+		OnLogin:      func(context.Context, writoidc.LoginFacts) { calls++ },
 	}, testHMACKey)
 	if err != nil {
 		t.Fatalf("writoidc.New: %v", err)

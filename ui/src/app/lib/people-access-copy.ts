@@ -57,6 +57,8 @@ export const PEOPLE = {
   // string: two homes for one frozen label is how they drift.
   ROLE_SECURITY_ADMIN: "Security admin",
   ROLE_USER: "User",
+  // The People page when the last sign-in's groups were truncated, so the role they derive is not known.
+  ROLE_UNKNOWN: "Unknown",
   // The built-in user type's name, for when GET /access carries no list to
   // read it from. A "user" row's chip shows its type's name (UT-2b).
   TYPE_STANDARD: "Standard user",

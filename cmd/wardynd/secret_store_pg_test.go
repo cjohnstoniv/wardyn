@@ -217,7 +217,7 @@ func TestPG_BootConversionRecordsABootReadPerRow(t *testing.T) {
 	for _, r := range seeded {
 		seedOwnedV0Row(t, pool, id, r.owner, r.name, []byte(r.value))
 	}
-	rec, fan, _, _, err := buildAuditChain(ctx, "", "", "", pool, secretmask.NewRegistry())
+	rec, fan, _, _, err := buildAuditChain(ctx, "", "", "", pool, secretmask.NewRegistry(), nil)
 	if err != nil {
 		t.Fatalf("build the audit chain: %v", err)
 	}
@@ -427,7 +427,7 @@ func TestPG_AbortedBootConversionRecordsTheRowsItOpenedAsFailures(t *testing.T) 
 	stray, _ := age.GenerateX25519Identity()
 	seedOwnedV0Row(t, pool, id, "", "a-first", []byte("value-of-the-first-row"))
 	seedOwnedV0Row(t, pool, stray, "", "b-second", []byte("under-another-key"))
-	rec, _, _, _, err := buildAuditChain(ctx, "", "", "", pool, secretmask.NewRegistry())
+	rec, _, _, _, err := buildAuditChain(ctx, "", "", "", pool, secretmask.NewRegistry(), nil)
 	if err != nil {
 		t.Fatalf("build the audit chain: %v", err)
 	}

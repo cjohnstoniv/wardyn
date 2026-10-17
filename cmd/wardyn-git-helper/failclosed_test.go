@@ -145,3 +145,18 @@ func TestMintWithApproval_TerminalArms(t *testing.T) {
 		}
 	})
 }
+
+// TestMintWithApproval_AlreadyMintedHintNamesTheCLI pins the spelling of the
+// command the helper tells the operator to run when a second git operation
+// meets a single-use grant: it is shown at the moment a credential lease is
+// decided, so it must be the live `approval approve` verb.
+func TestMintWithApproval_AlreadyMintedHintNamesTheCLI(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusConflict, pendingResponse{Code: mintConflictAlreadyMinted})
+	}))
+	t.Cleanup(srv.Close)
+	_, _, err := mintWithApproval(context.Background(), srv.Client(), srv.URL, "grant", time.Second, io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "`wardyn approval approve <id> --scope run`") {
+		t.Fatalf("err = %v, want the `wardyn approval approve <id> --scope run` hint", err)
+	}
+}

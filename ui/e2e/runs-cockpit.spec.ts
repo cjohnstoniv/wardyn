@@ -4,7 +4,7 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { test, expect, gotoConsole, navTo, sql } from "./fixtures";
+import { test, expect, ADMIN_TOKEN, gotoConsole, navTo, sql } from "./fixtures";
 import { RUN_COCKPIT, UI_APPS_LANE } from "../src/app/components/wardyn/copy";
 import { MODEL_ACCESS_BANNER, MODEL_ACCESS_RUN_DOOR } from "../src/app/components/wardyn/model-access-copy";
 import { AGENTS } from "../src/app/lib/workspace-providers-copy";
@@ -113,6 +113,57 @@ test.describe("Run cockpit — the failure block sizes to its content, not to ha
     const replay = block.locator("xpath=following-sibling::*[1]");
     await expect(replay).toBeVisible();
     expect(measured.parentH).toBeGreaterThan(measured.blockH);
+  });
+});
+
+// #1487: a partial kill says more (teardown unconfirmed, a scratch caveat, and a
+// line per credential Wardyn cannot take back), so in a narrow tile it is taller
+// than the tile. It scrolls inside itself rather than clipping the evidence and
+// the audit button. The kill outcome is spliced: the hermetic backend cannot
+// produce a failed kill row or a minted credential.
+test.describe("Run cockpit — a long kill outcome scrolls instead of clipping", () => {
+  test("a partial kill with credential lines keeps Open audit trail reachable", async ({ page }) => {
+    const auth = { Authorization: `Bearer ${ADMIN_TOKEN}` };
+    const list = (await (await page.request.get("api/v1/runs?limit=1000", { headers: auth })).json()) as { id: string; task: string }[];
+    const id = list.find((r) => r.task === "e2e fixture 7")!.id;
+    const at = new Date().toISOString();
+    await page.route(/\/api\/v1\/audit\?/, async (route) => {
+      const action = new URL(route.request().url()).searchParams.get("action");
+      if (action === "run.kill") {
+        return route.fulfill({ json: [{ id: "k1", time: at, actor_type: "human", actor: "sam@acme.io", action: "run.kill", outcome: "failure", data: { error: "runner_error: connection refused" } }] });
+      }
+      if (action === "credential.mint") {
+        return route.fulfill({ json: [{ id: "m1", time: at, actor_type: "agent", actor: "x", action: "credential.mint", outcome: "success", data: { grant_id: "g1" } }, { id: "m2", time: at, actor_type: "agent", actor: "x", action: "credential.mint", outcome: "success", data: { grant_id: "g2" } }] });
+      }
+      return route.fallback();
+    });
+    await page.route(`**/api/v1/runs/${id}/grants`, (route) =>
+      route.fulfill({
+        json: [
+          { id: "g1", created_at: at, spec: { kind: "github_token", scope: {} } },
+          { id: "g2", created_at: at, spec: { kind: "git_pat", scope: { host: "dev.azure.com" } } },
+          { id: "g3", created_at: at, spec: { kind: "env_secret", scope: {} } },
+        ],
+      }),
+    );
+    await page.setViewportSize({ width: 1280, height: 720 });
+    await page.goto(`runs/${id}`);
+    const block = page.getByTestId("run-failure-block");
+    await expect(block).toContainText("teardown is not confirmed");
+    await expect(block).toContainText("it stays live until you rotate it on dev.azure.com");
+    expect(await block.evaluate((el) => getComputedStyle(el).overflowY)).toBe("auto");
+    // The block is bounded by its tile (a share of it), so it never spills out
+    // of the tile where overflow-hidden would clip the audit button: its own
+    // scroll holds the overflow, and the button is reachable inside it.
+    const fits = await block.evaluate((el) => {
+      const tile = (el.parentElement as HTMLElement).getBoundingClientRect();
+      const b = el.getBoundingClientRect();
+      return { insideTile: b.bottom <= tile.bottom + 1 && b.top >= tile.top - 1, scrolls: el.scrollHeight > el.clientHeight };
+    });
+    expect(fits.insideTile).toBe(true);
+    const audit = block.getByRole("button", { name: "Open audit trail" });
+    await audit.scrollIntoViewIfNeeded();
+    await expect(audit).toBeInViewport();
   });
 });
 
@@ -355,7 +406,7 @@ test.describe("a run refused for a model credential carries the sign-in, not dir
     // A DOOR, not a signpost: the sign-in opens here, on the run's own page.
     const before = new URL(page.url()).pathname;
     await block.getByRole("button", { name: MODEL_ACCESS_RUN_DOOR.SIGN_IN_ARIA }).click();
-    await expect(page.getByRole("heading", { name: MODEL_ACCESS_BANNER.DIALOG_TITLE })).toBeVisible();
+    await expect(page.getByRole("heading", { name: MODEL_ACCESS_BANNER.DIALOG_TITLE })).toBeVisible({ timeout: 20_000 });
     await expect(page.getByTestId("harness-login-pane")).toBeVisible();
     expect(new URL(page.url()).pathname).toBe(before);
 

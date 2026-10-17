@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
@@ -89,7 +90,15 @@ type setupCheckLite struct {
 }
 type setupStatusLite struct {
 	Ready  bool             `json:"ready"`
+	Tier   string           `json:"tier"`
 	Checks []setupCheckLite `json:"checks"`
+}
+
+// tierLabels are the PLAN §10.3 tier ids' words, the same ones the console's account menu shows.
+var tierLabels = map[string]string{
+	"local-only": "local only — not governed by an organisation",
+	"runner":     "client-mode runner for an organisation",
+	"org":        "organisation",
 }
 
 func fetchSetupStatus(ctx context.Context, c *sdk.Client) (setupStatusLite, error) {
@@ -109,12 +118,16 @@ func fetchSetupStatus(ctx context.Context, c *sdk.Client) (setupStatusLite, erro
 // next command beside each unmet check, so the CLI route needs no separate model
 // picker.
 func setupStatusCmd(client clientFn) *cobra.Command {
-	var asJSON bool
+	var asJSON, preUpgrade bool
+	var roleMap, defaultRole string
 	cmd := &cobra.Command{
 		Use:   "status",
 		Short: "Show this host's setup readiness (model access, secrets, tiers) with next-step commands",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if preUpgrade {
+				return preUpgradeMemberCheck(cmd.OutOrStdout(), roleMap, defaultRole)
+			}
 			c := client()
 			if asJSON {
 				raw, err := c.SetupStatus(cmd.Context())
@@ -133,6 +146,9 @@ func setupStatusCmd(client clientFn) *cobra.Command {
 				ready = "ready"
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "Wardyn setup: %s\n", ready)
+			if label := tierLabels[st.Tier]; label != "" {
+				fmt.Fprintf(cmd.OutOrStdout(), "Tier: %s\n", label)
+			}
 			for _, ck := range st.Checks {
 				fmt.Fprintf(cmd.OutOrStdout(), "  [%-4s] %s: %s\n", ck.Status, ck.Label, ck.Detail)
 				if ck.Fix != "" {
@@ -143,7 +159,46 @@ func setupStatusCmd(client clientFn) *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVar(&asJSON, "json", false, "emit the raw setup-status JSON")
+	cmd.Flags().BoolVar(&preUpgrade, "pre-upgrade", false, "check the OIDC role settings for the 0.9 upgrade instead of asking the server: lists every leftover \"member\" role and removed WARDYN_MEMBER_* variable, exits non-zero if any (reads no server)")
+	cmd.Flags().StringVar(&roleMap, "role-map", cliutil.EnvOr("WARDYN_OIDC_ROLE_MAP", ""), "with --pre-upgrade: the WARDYN_OIDC_ROLE_MAP value to check (default: the variable in this environment)")
+	cmd.Flags().StringVar(&defaultRole, "default-role", cliutil.EnvOr("WARDYN_OIDC_DEFAULT_ROLE", ""), "with --pre-upgrade: the WARDYN_OIDC_DEFAULT_ROLE value to check (default: the variable in this environment)")
 	return cmd
+}
+
+// leftoverMemberRoles lists each WARDYN_OIDC_ROLE_MAP pair whose role is the removed "member", as
+// written, and WARDYN_OIDC_DEFAULT_ROLE when it is. Tolerant of other malformed input: boot reports
+// those. The CLI stays off internal/auth/oidc, so the word is spelled here.
+func leftoverMemberRoles(roleMap, defaultRole string) []string {
+	var out []string
+	for _, pair := range strings.Split(roleMap, ",") {
+		pair = strings.TrimSpace(pair)
+		if _, role, cut := strings.Cut(pair, "="); cut && strings.TrimSpace(role) == "member" {
+			out = append(out, "WARDYN_OIDC_ROLE_MAP entry "+strconv.Quote(pair))
+		}
+	}
+	if strings.TrimSpace(defaultRole) == "member" {
+		out = append(out, "WARDYN_OIDC_DEFAULT_ROLE=member")
+	}
+	return out
+}
+
+// preUpgradeMemberCheck is the 0.9 upgrade's pre-flight: 0.9 refuses to boot on a role setting that
+// still says "member" and on a removed WARDYN_MEMBER_* variable, so it lists them while the old server
+// is still running. A server that holds one cannot report it after the upgrade, which is why this reads
+// the settings and this shell's environment, not the server or the deployment's own env file.
+func preUpgradeMemberCheck(w io.Writer, roleMap, defaultRole string) error {
+	left := append(leftoverMemberRoles(roleMap, defaultRole), cliutil.RemovedEnvLeftovers(os.Environ())...)
+	if len(left) == 0 {
+		fmt.Fprintln(w, "Wardyn 0.9 pre-upgrade check: no leftover \"member\" role or removed WARDYN_MEMBER_* variable in this shell's environment or the settings given.")
+		fmt.Fprintln(w, "  A chart or compose deployment keeps its settings elsewhere: load its env file first (set -a; . FILE; set +a), or check its values.")
+		return nil
+	}
+	fmt.Fprintf(w, "Wardyn 0.9 pre-upgrade check: %d leftover setting(s) — 0.9 refuses to boot on them:\n", len(left))
+	for _, e := range left {
+		fmt.Fprintf(w, "  - %s\n", e)
+	}
+	fmt.Fprintln(w, "  → remap a \"member\" role to \"user\" (the built-in Standard user type) or a user type id, and rename a variable as shown, in your chart/env and in Getting started -> People, then upgrade")
+	return fmt.Errorf("%d leftover setting(s): fix them before upgrading to 0.9", len(left))
 }
 
 // setupDetectProxyCmd runs the host-proxy detector IN THIS PROCESS and prints the
@@ -717,8 +772,12 @@ case "$(uname -m)" in
   *)       ARCH="$(uname -m)" ;;
 esac
 if ! command -v zstd >/dev/null 2>&1; then ` + zstdBootstrapLine(e.family) + `; fi
-curl -fsSL -o /tmp/kata-static.tar.zst "https://github.com/kata-containers/kata-containers/releases/download/${VER}/kata-static-${VER}-${ARCH}.tar.zst"
-sudo tar -C / --zstd -xf /tmp/kata-static.tar.zst
+# Stage the archive in a fresh owner-only directory, removed on exit, and
+# unpack it only once the download has completed.
+KATA_TMP="$(mktemp -d /tmp/wardyn-kata.XXXXXXXXXX)"
+trap 'rm -rf "$KATA_TMP"' EXIT
+curl -fsSL -o "$KATA_TMP/kata-static.tar.zst" "https://github.com/kata-containers/kata-containers/releases/download/${VER}/kata-static-${VER}-${ARCH}.tar.zst"
+sudo tar -C / --zstd -xf "$KATA_TMP/kata-static.tar.zst"
 echo "-> checking host virtualization"
 # Non-fatal: the check can be conservative (e.g. under a nested hypervisor) even
 # when Kata runs fine as docker-root; do not abort the install/registration on it.

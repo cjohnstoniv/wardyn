@@ -120,20 +120,20 @@ type disconnectBuilder struct {
 	mu         sync.Mutex
 }
 
-func (b *disconnectBuilder) FinalizeBase(ctx context.Context, _, _ string, _ io.Writer) (string, error) {
+func (b *disconnectBuilder) FinalizeBase(ctx context.Context, _, _ string, _ io.Writer, _ bool) (BuiltImage, error) {
 	b.mu.Lock()
 	b.buildCtx = ctx
 	b.mu.Unlock()
 	b.disconnect() // the client hangs up while the image pulls
-	return "", b.err
+	return BuiltImage{}, b.err
 }
 
-func (b *disconnectBuilder) BuildDevcontainer(context.Context, string, string, string, io.Writer) (string, error) {
-	return "", nil
+func (b *disconnectBuilder) BuildDevcontainer(context.Context, string, string, string, io.Writer) (BuiltImage, error) {
+	return BuiltImage{}, nil
 }
 
-func (b *disconnectBuilder) BuildFromDevcontainerFiles(context.Context, map[string]string, string, io.Writer) (string, error) {
-	return "", nil
+func (b *disconnectBuilder) BuildFromDevcontainerFiles(context.Context, map[string]string, string, io.Writer) (BuiltImage, error) {
+	return BuiltImage{}, nil
 }
 
 func (b *disconnectBuilder) observedCtx() context.Context {

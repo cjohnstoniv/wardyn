@@ -62,6 +62,9 @@ type SetupStatus struct {
 	// Unlike Checks (the same fact as admin-only detail), this is KEPT through
 	// redactSetupStatusForUser — every person reads it, not just an admin.
 	CredentialStorage string `json:"credential_storage,omitempty"`
+	// Tier is who governs this install: local-only, runner or org (setupTier).
+	// Kept through redactSetupStatusForUser — the account menu names it for everyone.
+	Tier string `json:"tier"`
 	// HasRuns drives the wizard's "launch your first run" done state.
 	HasRuns bool `json:"has_runs"`
 	// OnboardingComplete reports whether an operator has finished (or
@@ -92,6 +95,10 @@ type SetupStatus struct {
 	// wire each one a managed model credential or a container-login
 	// subscription. ADDITIVE field; omitted when empty.
 	Harnesses []SetupHarnessTool `json:"harnesses,omitempty"`
+	// HarnessSets is each combination of two or more harnesses one declared
+	// sandbox image carries, as sorted ids: only combinations whose every
+	// harness is in Harnesses (this caller may use it). Never null.
+	HarnessSets [][]string `json:"harness_sets"`
 	// LLMReady is the server-computed "does SOME run's LLM access path exist"
 	// verdict (HIGH-4 review fix): at least one enabled model provider serves an
 	// agent (llmPathExists). A DEPLOYMENT fact — whether THIS person can use one
@@ -149,6 +156,12 @@ type SetupStatus struct {
 type SetupAuth struct {
 	Mode          string `json:"mode"`
 	LocalLoopback bool   `json:"local_loopback"`
+	// GovernAdminRuns is WARDYN_GOVERN_ADMIN_RUNS and GovernAdminRunsExempt the
+	// lanes WARDYN_GOVERN_ADMIN_RUNS_EXEMPT leaves ungoverned. Neither is a
+	// secret, and redactSetupStatusForUser leaves Auth alone, so every signed-in
+	// person can read the posture their own runs are under.
+	GovernAdminRuns       bool     `json:"govern_admin_runs"`
+	GovernAdminRunsExempt []string `json:"govern_admin_runs_exempt,omitempty"`
 }
 
 // SetupRunner echoes the runner name and the live confinement classes/substrates.
@@ -173,6 +186,21 @@ type SetupRunner struct {
 	// them the Docker host's /dev/kvm remedy for Vault. A boolean, deliberately
 	// not the driver name or anything a substrate reports about itself.
 	Kubernetes bool `json:"kubernetes,omitempty"`
+	// SandboxStart is the Kubernetes sandbox start deadlines (WARDYN_SANDBOX_START_TIMEOUT,
+	// WARDYN_SANDBOX_CAPACITY_WAIT), kept in a member's redacted body because the run page's
+	// "taking longer than expected" bound follows them. Absent off Kubernetes.
+	SandboxStart *SetupSandboxStart `json:"sandbox_start,omitempty"`
+	// capsUnreadable marks a runner that IS configured but whose Capabilities()
+	// call failed, so runnerCheck can tell it from "no runner configured". Never
+	// on the wire.
+	capsUnreadable bool
+}
+
+// SetupSandboxStart is how long a Kubernetes sandbox has to start, and how much longer one that no
+// machine has room for waits. Seconds on the wire; a capacity wait of 0 is the wait switched off.
+type SetupSandboxStart struct {
+	StartTimeoutSeconds int `json:"start_timeout_seconds"`
+	CapacityWaitSeconds int `json:"capacity_wait_seconds"`
 }
 
 // SetupProvider is a coding-agent CLI (claude|codex) detected on the wardynd
@@ -283,13 +311,47 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 	if chk, ok := confinementFloorCheck(rnr, s.cfg.DefaultPolicy.MinConfinementClass); ok {
 		checks = append(checks, chk)
 	}
+	// substrate_health: operator callers only, because a member's Checks are
+	// discarded below and a member's poll must not trigger or wait on a
+	// substrate call. Never Blocking; see substrateHealthCheck.
+	if s.isOperator(ctx) {
+		if chk, ok := s.substrateHealthRow(ctx); ok {
+			checks = append(checks, chk)
+		}
+		// runner_limits: runners that take no run until limits are set. Never Blocking.
+		if chk, ok := s.runnerLimitsRow(ctx); ok {
+			checks = append(checks, chk)
+		}
+		// runner_arch_images: image keys with no image for a registered runner's architecture. Never Blocking.
+		if chk, ok := s.runnerArchImagesRow(ctx); ok {
+			checks = append(checks, chk)
+		}
+		// High availability rows: present only while WARDYN_HA is on, and read
+		// Postgres, so they share this operator-only gate.
+		if s.cfg.HA {
+			checks = append(checks, s.haChecks(ctx)...)
+		}
+	}
 	// k8s_egress_containment: the boot-time NetworkPolicy canary verdict —
 	// absent (no row) on a non-k8s driver; see k8sEgressContainmentCheck.
 	if chk, ok := k8sEgressContainmentCheck(rnr.Driver, k8sNetpolProven); ok {
 		checks = append(checks, chk)
 	}
+	// idle_cpu_signal: whether idle auto-stop can see CPU work in a sandbox.
+	if chk, ok := s.idleCPUSignalRow(ctx); ok {
+		checks = append(checks, chk)
+	}
 
-	checks = append(checks, secretStoreChecks(s.cfg.SecretStoreExternal, s.cfg.SecretKeyService, s.cfg.AgeKeyDurable, s.cfg.OIDC != nil, s.cfg.PlatformKeySeparate)...)
+	if chk, ok := sandboxStartCheck(rnr.SandboxStart); ok {
+		checks = append(checks, chk)
+	}
+
+	checks = append(checks, secretStoreChecks(s.cfg.SecretStoreExternal, s.cfg.SecretKeyService, s.cfg.AgeKeyDurable, s.cfg.OIDC != nil, s.cfg.PlatformKeySeparate, s.cfg.KEKRequired)...)
+	if chk, ok := staticKeyServiceCheck(s.cfg.SecretKeyService, s.cfg.SecretKeyServiceStaticKey); ok {
+		checks = append(checks, chk)
+	}
+	checks = append(checks, s.kekLocalRows(ctx)...)
+	checks = append(checks, s.keyCustodyRows(ctx)...)
 	checks = append(checks, hostProxyCheck(hostProxy, plat.Containerized && !setup.HostProxySeeded()))
 
 	// sso_rbac / tls_cookie_posture: both OIDC-gated (mirror how every other
@@ -301,6 +363,9 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 	if chk, ok := tlsCookiePostureCheck(oidcConfigured, s.cfg.OIDCRedirectURL, s.cfg.OIDCSecureCookies); ok {
 		checks = append(checks, chk)
 	}
+	if chk, ok := governAdminRunsCheck(s.cfg.GovernAdminRuns, s.governAdminRunsExempts("recording"), oidcConfigured); ok {
+		checks = append(checks, chk)
+	}
 
 	// Filled from the site-config read below, not a second one. A read failure
 	// leaves it false, which is the conservative direction: it opens the funnel
@@ -310,7 +375,7 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 	// two. It also feeds the agent roster below (setupHarnessTools); a failed
 	// read leaves the zero value, which reads as legacy open mode.
 	if siteCfgOK {
-		checks = siteConfigStatusChecks(checks, siteCfg, present)
+		checks = siteConfigStatusChecks(checks, siteCfg, present, s.siteConfigSeed)
 		onboardingComplete = siteCfg.OnboardingCompletedAt != nil
 	}
 	if s.cfg.Store != nil {
@@ -323,6 +388,9 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	if chk, ok := s.approvalNotifyCheck(ctx); ok {
+		checks = append(checks, chk)
+	}
 	checks = append(checks, scmProviderCheck(sec.GitHubApp, secretNames, scmPosture))
 
 	// github_ref_ruleset: the only row that leaves the machine. Gated on the App
@@ -331,7 +399,7 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 	if chk, ok := s.githubRefRulesetCheck(ctx, sec.GitHubApp); ok {
 		checks = append(checks, chk)
 	}
-	checks = append(checks, platformChecks(plat)...)
+	checks = append(checks, append(platformChecks(plat), s.auditPartitionChecks(ctx)...)...)
 
 	hasRuns := s.setupHasRuns(ctx)
 
@@ -343,12 +411,13 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 	resp := SetupStatus{
 		Ready:              ready,
 		Checks:             checks,
-		Auth:               SetupAuth{Mode: authMode, LocalLoopback: s.cfg.LocalLoopback},
+		Auth:               SetupAuth{Mode: authMode, LocalLoopback: s.cfg.LocalLoopback, GovernAdminRuns: s.cfg.GovernAdminRuns, GovernAdminRunsExempt: s.cfg.GovernAdminRunsExempt},
 		Runner:             rnr,
 		Providers:          providers,
 		Secrets:            sec,
 		AgeKey:             SetupAgeKey{Durable: s.cfg.AgeKeyDurable},
 		CredentialStorage:  credentialStorageMode(s.cfg.SecretStoreExternal, s.cfg.SecretKeyService),
+		Tier:               s.setupTier(),
 		HasRuns:            hasRuns,
 		OnboardingComplete: onboardingComplete,
 		Platform:           SetupPlatform{OS: plat.OS, WSL: plat.WSL, KVM: plat.KVM},
@@ -365,6 +434,7 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 		// describes — no second boot-time field to keep in sync. 0 when unset.
 		TrustedCACerts: strings.Count(s.cfg.TrustedCAPEM, "-----BEGIN CERTIFICATE-----"),
 	}
+	resp.HarnessSets = visibleHarnessSets(s.cfg.AgentImages, resp.Harnesses)
 	// DELIBERATELY isOperator (three-tier doctrine, internal/auth/oidc's
 	// RoleSecurityAdmin): what this redaction drops is the DEPLOYER's funnel —
 	// the environment/credential checklist, resident-CLI login detection,
@@ -462,7 +532,7 @@ func redactSetupStatusForUser(st SetupStatus) SetupStatus {
 	st.ChecksRedacted = true
 	st.Providers = []SetupProvider{}
 	st.Secrets = SetupSecrets{Present: demoSecretPresence(st.Secrets.Present)}
-	st.Runner = SetupRunner{ConfinementClasses: st.Runner.ConfinementClasses, Kubernetes: st.Runner.Kubernetes}
+	st.Runner = SetupRunner{ConfinementClasses: st.Runner.ConfinementClasses, Kubernetes: st.Runner.Kubernetes, SandboxStart: st.Runner.SandboxStart}
 	// Host credential/environment posture — a description of the OPERATOR'S
 	// MACHINE, not of anything a member can act on, and the last place a member
 	// could read it off this endpoint. SCM names which git credentials sit on
@@ -555,8 +625,17 @@ func setupRunnerInfo(ctx context.Context, rn runner.Runner) (SetupRunner, string
 	}
 	out.Driver = rn.Name()
 	out.Kubernetes = out.Driver == "k8s"
-	c, err := rn.Capabilities(ctx)
+	if out.Kubernetes {
+		start, capacity := runner.SandboxStartDeadlines()
+		out.SandboxStart = &SetupSandboxStart{StartTimeoutSeconds: int(start.Seconds()), CapacityWaitSeconds: int(capacity.Seconds())}
+	}
+	// Bounded like every other substrate read on this page: a black-holed
+	// substrate must not hang the one surface that reports it.
+	cctx, cancel := context.WithTimeout(ctx, storePingTimeout)
+	defer cancel()
+	c, err := rn.Capabilities(cctx)
 	if err != nil {
+		out.capsUnreadable = true
 		return out, ""
 	}
 	for _, cc := range c.ConfinementClasses {

@@ -50,32 +50,30 @@ func TestSetupScriptTeamModeCopyIsHonest(t *testing.T) {
 	}
 }
 
-// TestMaskRegistryFailOpenDocsNameSingleReplicaRestart guards against
-// docs/OPERATIONS.md and threatmodel/THREAT-MODEL.md bounding the
-// secretmask.Registry fail-open (buildMaskingBody / liveMaskWriter passing an
-// upload through unmasked when Snapshot(runID) is empty) to a multi-replica
-// risk only. The registry is wiped by ANY process restart, so a single
-// `replicas: 1` wardynd that restarts mid-run (upgrade, crash) reproduces the
-// identical empty-snapshot fail-open — the docs must say so, not imply
-// `replicas: 1` alone makes the gap inert.
-func TestMaskRegistryFailOpenDocsNameSingleReplicaRestart(t *testing.T) {
+// TestMaskRegistryDocsNameTheResiduals guards docs/OPERATIONS.md and
+// threatmodel/THREAT-MODEL.md against describing the shared masking registry as
+// closing more than it does. Since 0.8.6 a registry miss fails closed for runs
+// the manifest covers; what stays open is a run that predates 0.8.6 (refused
+// after a restart, not masked) and the SSH paths that were never masked, and
+// both documents must say so.
+func TestMaskRegistryDocsNameTheResiduals(t *testing.T) {
 	root := repoRoot(t)
 
 	for _, tc := range []struct {
 		rel  string
-		want string
+		want []string
 	}{
-		{filepath.Join("docs", "OPERATIONS.md"), "not bounded to two replicas"},
-		{filepath.Join("threatmodel", "THREAT-MODEL.md"), "single-process case is not inert"},
+		{filepath.Join("docs", "OPERATIONS.md"), []string{"Runs that predate 0.8.6 have no masking manifest", "SSH exec, SFTP and direct-tcpip were never masked"}},
+		{filepath.Join("threatmodel", "THREAT-MODEL.md"), []string{"Runs that predate 0.8.6 have no manifest", "SSH exec, SFTP and direct-tcpip were never masked"}},
 	} {
 		body, err := os.ReadFile(filepath.Join(root, tc.rel))
 		if err != nil {
 			t.Fatalf("read %s: %v", tc.rel, err)
 		}
-		if !strings.Contains(string(body), tc.want) {
-			t.Errorf("%s: mask-registry fail-open discussion must name the single-replica "+
-				"restart case (a wardynd restart wipes the in-memory registry the same way "+
-				"a second replica does), not bound the risk to replicas>1 — missing %q", tc.rel, tc.want)
+		for _, want := range tc.want {
+			if !strings.Contains(string(body), want) {
+				t.Errorf("%s: the masking residuals must name every case the shared registry leaves open: missing %q", tc.rel, want)
+			}
 		}
 	}
 }

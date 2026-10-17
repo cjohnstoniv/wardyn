@@ -14,6 +14,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -353,13 +354,16 @@ func (s *Server) handlePutIntegration(w http.ResponseWriter, r *http.Request) {
 		writeErrorReason(w, http.StatusBadRequest, reasonIntegrationInvalid, "invalid integration: "+err.Error())
 		return
 	}
-	ctx := r.Context()
 	// SEAM-1: serializes this read-modify-write against the site config's
 	// other two writers (handleDeleteIntegration, handlePutSiteConfig) — see
 	// handlePutIntegration's own SEAM-1 comment for why an
 	// unguarded RMW here can silently erase a concurrent one.
-	s.siteConfigMu.Lock()
-	defer s.siteConfigMu.Unlock()
+	r, unlock, ok := s.lockDoor(w, r, db.SiteConfigLockClass)
+	if !ok {
+		return
+	}
+	defer unlock()
+	ctx := r.Context()
 	sc, err := s.cfg.Store.GetSiteConfig(ctx)
 	if err != nil {
 		writeServerError(w, r, "get site config", err)
@@ -419,10 +423,13 @@ func (s *Server) handlePutIntegration(w http.ResponseWriter, r *http.Request) {
 //	DELETE /api/v1/integrations/{id}
 func (s *Server) handleDeleteIntegration(w http.ResponseWriter, r *http.Request) {
 	id := integrationIDParam(r)
-	ctx := r.Context()
 	// SEAM-1: see handlePutIntegration's comment.
-	s.siteConfigMu.Lock()
-	defer s.siteConfigMu.Unlock()
+	r, unlock, ok := s.lockDoor(w, r, db.SiteConfigLockClass)
+	if !ok {
+		return
+	}
+	defer unlock()
+	ctx := r.Context()
 	sc, err := s.cfg.Store.GetSiteConfig(ctx)
 	if err != nil {
 		writeServerError(w, r, "get site config", err)
@@ -472,14 +479,25 @@ type SetupHarnessTool struct {
 	// Code is just gone" becomes a support ticket.
 	Enabled bool `json:"enabled"`
 	// ProvidersUngranted (#1052) is true when at least one enabled model
-	// provider serves this harness but this caller's own granted set
-	// (setupModelProviderState's capVisible-narrowed model_providers) serves
-	// none of them — canon.md's R5b, "no provider serves this person for this
-	// harness at all". Distinct from R9 (nothing serves the harness at all,
+	// provider serves this harness but none of the ENABLED providers in this
+	// caller's own granted set (setupModelProviderState's capVisible-narrowed
+	// model_providers) serve it — canon.md's R5b, "no provider serves this
+	// person for this harness at all". Enabled rows only on both sides: a
+	// provider the caller is granted but an admin turned off serves nobody, so
+	// it does not answer a different enabled provider they are not granted. Distinct from R9 (nothing serves the harness at all,
 	// which leaves this false): /setup/status's model_providers list is
 	// already narrowed to granted providers before the wire, so without this
 	// fact the two states were indistinguishable to the console.
 	ProvidersUngranted bool `json:"providers_ungranted,omitempty"`
+	// Installed: a sandbox image this server launches carries this harness's
+	// CLI: Wardyn's own published image for it, an image the operator named for
+	// it, or a declared harness-set image (harnessInstalled). False when the only
+	// image is Wardyn's agent base, which ships no vendor CLI, or none resolves.
+	Installed bool `json:"installed"`
+	// ApprovalHold: Wardyn can hold this harness's tool calls for approval when it
+	// starts the harness on an autonomous run (an external tool-approval contract).
+	// False for codex-cli, "Your own tools" and custom agents.
+	ApprovalHold bool `json:"approval_hold"`
 }
 
 // setupHarnessTools projects the static harness catalog for SetupStatus, folded
@@ -516,7 +534,9 @@ type SetupHarnessTool struct {
 // — provider_access.go's doc) — reused rather than re-derived, so this fact and
 // the picker's own candidate set can never disagree about who is granted what.
 // providers_ungranted (#1052) is true for a harness at least one ENABLED
-// provider serves org-wide but none of granted's rows serve — canon.md's R5b.
+// provider serves org-wide but none of granted's ENABLED rows serve — canon.md's
+// R5b. A granted row that is disabled counts for nothing, as in the org-wide
+// set.
 func setupHarnessTools(sc types.SiteConfig, agentImages map[string]string, granted []SetupModelProvider) []SetupHarnessTool {
 	configured := agentProvidersConfigured(sc)
 	serving := map[string]bool{}
@@ -547,6 +567,8 @@ func setupHarnessTools(sc types.SiteConfig, agentImages map[string]string, grant
 			NoManagedAuth:      d.NoManagedAuth,
 			Enabled:            true,
 			ProvidersUngranted: serving[d.ID] && !grantedFor[d.ID],
+			Installed:          harnessInstalled(d.ID, agentImages),
+			ApprovalHold:       d.ApprovalHold,
 		}
 		if configured {
 			row, ok := agentProviderFor(sc, d.ID)
@@ -563,6 +585,7 @@ func setupHarnessTools(sc types.SiteConfig, agentImages map[string]string, grant
 				ID: row.ID, Display: row.ID, NoManagedAuth: true,
 				Enabled:            !row.Disabled,
 				ProvidersUngranted: serving[row.ID] && !grantedFor[row.ID],
+				Installed:          harnessInstalled(row.ID, agentImages),
 			})
 		}
 	}

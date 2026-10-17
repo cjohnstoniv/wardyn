@@ -69,9 +69,9 @@ func getRecording(t *testing.T, s recording.Store, key string) string {
 // later part with its re-prefixed header line dropped.
 func TestHandler_JoinsTailUploadedParts(t *testing.T) {
 	s, _ := recording.NewFSStore(t.TempDir())
-	saveParts(t, s, "run-j", partHeader+partEv1, partHeader+partEv2, partHeader+partEv3)
+	saveParts(t, s, "0a000000-0000-4000-8000-000000000007", partHeader+partEv1, partHeader+partEv2, partHeader+partEv3)
 
-	if got, want := getRecording(t, s, "run-j"), partHeader+partEv1+partEv2+partEv3; got != want {
+	if got, want := getRecording(t, s, "0a000000-0000-4000-8000-000000000007"), partHeader+partEv1+partEv2+partEv3; got != want {
 		t.Fatalf("joined cast =\n%q\nwant\n%q", got, want)
 	}
 }
@@ -82,9 +82,9 @@ func TestHandler_JoinsTailUploadedParts(t *testing.T) {
 func TestHandler_JoinStopsAtAForeignHeader(t *testing.T) {
 	s, _ := recording.NewFSStore(t.TempDir())
 	older := strings.Replace(partHeader, "1700000000", "1600000000", 1)
-	saveParts(t, s, "run-f", partHeader+partEv1, older+partEv2, partHeader+partEv3)
+	saveParts(t, s, "0a000000-0000-4000-8000-000000000008", partHeader+partEv1, older+partEv2, partHeader+partEv3)
 
-	if got, want := getRecording(t, s, "run-f"), partHeader+partEv1; got != want {
+	if got, want := getRecording(t, s, "0a000000-0000-4000-8000-000000000008"), partHeader+partEv1; got != want {
 		t.Fatalf("joined cast = %q, want only part 1 %q", got, want)
 	}
 }
@@ -93,11 +93,11 @@ func TestHandler_JoinStopsAtAForeignHeader(t *testing.T) {
 // own cast; the join applies to the bare run id only.
 func TestHandler_SessionKeyIsNotJoined(t *testing.T) {
 	s, _ := recording.NewFSStore(t.TempDir())
-	saveParts(t, s, "run-s", partHeader+partEv1, partHeader+partEv2)
-	if err := s.SaveCastNamed(context.Background(), "run-s", "sess", strings.NewReader(partHeader+partEv3)); err != nil {
+	saveParts(t, s, "0a000000-0000-4000-8000-000000000009", partHeader+partEv1, partHeader+partEv2)
+	if err := s.SaveCastNamed(context.Background(), "0a000000-0000-4000-8000-000000000009", "sess", strings.NewReader(partHeader+partEv3)); err != nil {
 		t.Fatal(err)
 	}
-	if got := getRecording(t, s, "run-s~sess"); got != partHeader+partEv3 {
+	if got := getRecording(t, s, "0a000000-0000-4000-8000-000000000009~sess"); got != partHeader+partEv3 {
 		t.Fatalf("session cast = %q", got)
 	}
 }

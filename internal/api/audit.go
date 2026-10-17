@@ -4,13 +4,18 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"time"
 
+	"github.com/go-chi/chi/v5/middleware"
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/audit"
+	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -57,6 +62,15 @@ func (s *Server) auditScope(w http.ResponseWriter, r *http.Request, writeEmpty f
 		owned := raw != ""
 		if owned {
 			run, gerr := s.cfg.Store.GetRun(r.Context(), runID)
+			if gerr != nil && !errors.Is(gerr, store.ErrNotFound) {
+				// An ownership read that cannot be answered is not "not yours":
+				// the empty 200 below would present an outage as a run with no
+				// events. Not-found and another person's run keep that empty 200.
+				slog.ErrorContext(r.Context(), "wardyn: audit scope could not read the run",
+					slog.String("run_id", runID.String()), slog.Any("err", gerr))
+				writeErrorReason(w, http.StatusServiceUnavailable, reasonAuditScopeUnavailable, "the audit scope could not be determined; try again")
+				return nil, false
+			}
 			owned = gerr == nil && run.CreatedBy == principalFromRequest(r)
 		}
 		if !owned {
@@ -105,7 +119,7 @@ const (
 // session id already lives in Data (JSONB), no migration to add the column.
 func (s *Server) handleQueryAudit(w http.ResponseWriter, r *http.Request) {
 	pager, _ := s.cfg.Store.(store.Pager)
-	filter, ok := parseAuditFilter(w, r)
+	filter, ok := s.parseAuditFilterFor(w, r)
 	if !ok {
 		return
 	}
@@ -113,6 +127,7 @@ func (s *Server) handleQueryAudit(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	served := s.auditRowsFor(r, scope)
 	// The historical caps differ by shape: a run's whole trail is worth more
 	// rows than the org-wide feed's first screen.
 	limit := auditGlobalDefaultLimit
@@ -140,14 +155,85 @@ func (s *Server) handleQueryAudit(w http.ResponseWriter, r *http.Request) {
 	}
 	// The fetch-all fallback MUST apply the same predicate: filtering only on
 	// the pager path would answer a filtered request with unfiltered events.
-	servePage(w, r, page, pageFn, func() ([]types.AuditEvent, error) {
+	servePage(w, r, page, servedPage(served, pageFn), func() ([]types.AuditEvent, error) {
 		if scope == nil {
 			all, err := s.cfg.Store.QueryRecentAuditEvents(r.Context(), 0)
-			return filter.Keep(all), err
+			return served(filter.Keep(all), err)
 		}
 		all, err := s.cfg.Store.QueryAuditEvents(r.Context(), *scope, 0)
-		return filter.Keep(all), err
+		return served(filter.Keep(all), err)
 	})
+}
+
+// auditRowsFor is how rows leave for this caller, on both feed reads: sealed
+// fields opened, and for anyone auditScope narrowed to a run of their own, no
+// reference to an organisation's shared secret (sharedRefs). The caller it
+// exempts is the one auditScope hands the whole log — the same predicate, so
+// the two cannot drift: the security tier reads every operator row there is,
+// the rows that name the operator's secrets among them.
+func (s *Server) auditRowsFor(r *http.Request, scope *uuid.UUID) func([]types.AuditEvent, error) ([]types.AuditEvent, error) {
+	ctx := r.Context()
+	if s.isSecurityOperator(ctx) {
+		return func(evs []types.AuditEvent, err error) ([]types.AuditEvent, error) { return s.unsealed(ctx, evs, err) }
+	}
+	refs := &sharedRefs{}
+	if scope != nil {
+		refs.grants = func() ([]types.CredentialGrant, error) { return s.cfg.Store.ListGrantsByRun(ctx, *scope) }
+	}
+	return func(evs []types.AuditEvent, err error) ([]types.AuditEvent, error) {
+		if evs, err = s.unsealed(ctx, evs, err); err != nil {
+			return nil, err
+		}
+		return refs.events(evs)
+	}
+}
+
+// unsealed opens the sealed personal fields of evs (WARDYN_AUDIT_SEAL) on their
+// way out; a field whose person was erased reads "[erased]". A key store that
+// cannot answer fails the read, so ciphertext never passes for the record.
+func (s *Server) unsealed(ctx context.Context, evs []types.AuditEvent, err error) ([]types.AuditEvent, error) {
+	if err != nil || s.cfg.AuditUnsealer == nil {
+		return evs, err
+	}
+	return s.cfg.AuditUnsealer.Unseal(ctx, evs)
+}
+
+// parseAuditFilterFor is parseAuditFilter plus the one translation sealing
+// needs: under WARDYN_AUDIT_SEAL=full a human row stores "subject:<id>" as its
+// actor, and a person-target row as its target, so ?actor=<person> and
+// ?target=<person> also match the subject the person resolves to. Rows written
+// before it was turned on keep the name, so the name still matches.
+func (s *Server) parseAuditFilterFor(w http.ResponseWriter, r *http.Request) (store.AuditFilter, bool) {
+	f, ok := parseAuditFilter(w, r)
+	if !ok || (f.Actor == "" && f.Target == "") {
+		return f, ok
+	}
+	t, has := s.cfg.AuditUnsealer.(audit.ActorTranslator)
+	if !has {
+		return f, true
+	}
+	for _, p := range []struct{ name, alt *string }{{&f.Actor, &f.ActorAlt}, {&f.Target, &f.TargetAlt}} {
+		if *p.name == "" {
+			continue
+		}
+		stored, found, err := t.StoredActor(r.Context(), *p.name)
+		if err != nil {
+			writeServerError(w, r, "translate the audit actor or target filter", err)
+			return store.AuditFilter{}, false
+		}
+		if found {
+			*p.alt = stored
+		}
+	}
+	return f, true
+}
+
+// servedPage is pageFn with its rows passed through served (auditRowsFor); nil stays nil, the store has no pager.
+func servedPage(served func([]types.AuditEvent, error) ([]types.AuditEvent, error), pageFn func(store.Page) ([]types.AuditEvent, error)) func(store.Page) ([]types.AuditEvent, error) {
+	if pageFn == nil {
+		return nil
+	}
+	return func(p store.Page) ([]types.AuditEvent, error) { return served(pageFn(p)) }
 }
 
 // handleExportAudit streams the audit feed as newline-delimited JSON (one event
@@ -166,16 +252,28 @@ func (s *Server) handleQueryAudit(w http.ResponseWriter, r *http.Request) {
 // the same no-existence-oracle collapse a collection endpoint uses.
 //
 // Requires a Pager backend (store.PG is one); a non-Pager store (test fakes with
-// no pager) gets 501 rather than a silently-capped read. A mid-stream store error
-// after the header is sent can only stop and log — the NDJSON is then a truncated
-// prefix, which a consumer detects by the request not ending cleanly.
+// no pager) gets 501 rather than a silently-capped read.
+//
+// An export that cannot be finished never looks finished. A read failure before
+// the first byte is a 503 (reasonAuditExportReadFailed, a JSON body with a fixed
+// message, never the store's error text). After a byte is written the 200 is
+// committed, so the failure aborts the response (http.ErrAbortHandler): the
+// client's body read fails and cannot reach a clean end of stream. chi's
+// Recoverer re-panics that value, so net/http cuts the connection without a
+// trailing chunk. The same holds for a held push's path list that cannot be
+// read and for an event that cannot be encoded. A buffering reverse proxy in
+// front can hide the abort (docs/OPERATIONS.md).
 func (s *Server) handleExportAudit(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Query().Has("partition") {
+		s.exportAuditPartition(w, r)
+		return
+	}
 	pager, ok := s.cfg.Store.(store.Pager)
 	if !ok {
 		writeErrorReason(w, http.StatusNotImplemented, reasonAuditExportStoreUnavailable, "audit export requires a paging store backend")
 		return
 	}
-	filter, ok := parseAuditFilter(w, r)
+	filter, ok := s.parseAuditFilterFor(w, r)
 	if !ok {
 		return
 	}
@@ -185,25 +283,37 @@ func (s *Server) handleExportAudit(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	served := s.auditRowsFor(r, scope)
 	w.Header().Set("Content-Type", "application/x-ndjson")
-	enc := json.NewEncoder(w)
+	wrote := false // a byte has reached the response: the 200 is committed
 	offset := 0
+	fail := func(what string, err error) { s.failAuditExport(w, r, what, offset, wrote, err) }
 	for {
 		page, err := pager.QueryAuditEventsFilteredPage(r.Context(), scope, filter,
 			store.Page{Limit: auditExportPageSize, Offset: offset})
 		if err != nil {
-			// Header (200) is already committed; a truncated NDJSON prefix is all we
-			// can leave. Log so the operator can tell a partial export from a whole one.
-			slog.ErrorContext(r.Context(), "wardyn: audit export page failed mid-stream",
-				slog.Int("offset", offset), slog.Any("err", err))
+			fail("page read", err)
+			return
+		}
+		if page, err = served(page, nil); err != nil {
+			fail("row view", err)
 			return
 		}
 		for i := range page {
 			ev := page[i]
 			if ev.Action == pushPathsAuditAction {
-				ev = s.withPushPaths(r.Context(), ev)
+				if ev, err = s.withPushPaths(r.Context(), ev); err != nil {
+					fail("push path list read", err)
+					return
+				}
 			}
-			if err := enc.Encode(ev); err != nil {
+			line, err := json.Marshal(ev)
+			if err != nil {
+				fail("event encode", err)
+				return
+			}
+			wrote = true
+			if _, err := w.Write(append(line, '\n')); err != nil {
 				return // client hung up
 			}
 		}
@@ -213,8 +323,24 @@ func (s *Server) handleExportAudit(w http.ResponseWriter, r *http.Request) {
 		offset += len(page)
 		if fl, ok := w.(http.Flusher); ok {
 			fl.Flush()
+			wrote = true
 		}
 	}
+}
+
+// failAuditExport ends an export that cannot be finished: a 503 while nothing has been written,
+// otherwise an aborted response. It always logs first (the abort carries no message of its own) and
+// never returns.
+func (s *Server) failAuditExport(w http.ResponseWriter, r *http.Request, what string, offset int, wrote bool, err error) {
+	slog.ErrorContext(r.Context(), "wardyn: audit export failed",
+		slog.String("what", what), slog.Int("offset", offset), slog.Bool("after_first_byte", wrote),
+		slog.String("request_id", middleware.GetReqID(r.Context())), slog.String("actor", principalFromRequest(r)),
+		slog.Any("err", err))
+	if !wrote {
+		writeErrorReason(w, http.StatusServiceUnavailable, reasonAuditExportReadFailed, "the audit store could not be read; nothing was exported")
+		return
+	}
+	panic(http.ErrAbortHandler)
 }
 
 // handleVerifyAuditChain runs the audit hash-chain sweep (migration 0047) and
@@ -254,12 +380,20 @@ func (s *Server) handleVerifyAuditChain(w http.ResponseWriter, r *http.Request) 
 	// which is the one thing it must not do. The paged sweep checks the request
 	// context between pages instead, so a client that goes away stops the work —
 	// which the single materializing statement it replaced could not.
-	if !s.auditChainSweep.TryLock() {
+	// The lock is taken last in db.LockOrder and only ever tried: a sweep never
+	// waits for another, on this replica or any other.
+	sweepCtx, unlockSweep, got, lerr := s.locker().TryLock(r.Context(), db.NewLockKey(db.AuditSweepLockClass))
+	if lerr != nil {
+		writeLockRefused(w, r, lerr)
+		return
+	}
+	if !got {
 		w.Header().Set("Retry-After", "30")
 		writeErrorReason(w, http.StatusTooManyRequests, reasonAuditChainVerifyBusy, "an audit chain verification is already running; retry when it finishes")
 		return
 	}
-	defer s.auditChainSweep.Unlock()
+	defer unlockSweep()
+	r = r.WithContext(sweepCtx)
 
 	st, err := v.VerifyAuditChain(r.Context())
 	if err != nil {
@@ -278,9 +412,10 @@ func (s *Server) handleVerifyAuditChain(w http.ResponseWriter, r *http.Request) 
 }
 
 // parseAuditFilter reads the optional narrowing predicates off the query string
-// (?since=&until=&action=&action_prefix=&actor=&actor_type=&outcome=&origin=),
+// (?since=&until=&action=&action_prefix=&actor=&target=&actor_type=&outcome=&origin=),
 // writing a 400 and returning ok=false on a malformed value. ?actor= is the exact
-// principal ("everything developer X did"); ?origin= separates the rows enrolled
+// principal ("everything developer X did"); ?target= is the exact target column,
+// a person's principal for a person.* row; ?origin= separates the rows enrolled
 // devices forwarded (device) from the organisation's own (organisation). All are additive and optional; none
 // set is the zero filter, which changes nothing about the query taken.
 // Timestamps are RFC3339, the same encoding the audit rows are served in.
@@ -290,6 +425,7 @@ func parseAuditFilter(w http.ResponseWriter, r *http.Request) (store.AuditFilter
 		Action:       q.Get("action"),
 		ActionPrefix: q.Get("action_prefix"),
 		Actor:        q.Get("actor"),
+		Target:       q.Get("target"),
 		ActorType:    types.ActorType(q.Get("actor_type")),
 		Outcome:      q.Get("outcome"),
 		Origin:       q.Get("origin"),
@@ -310,9 +446,9 @@ func parseAuditFilter(w http.ResponseWriter, r *http.Request) (store.AuditFilter
 		*p.dst = t
 	}
 	switch f.ActorType {
-	case "", types.ActorHuman, types.ActorAgent, types.ActorSystem:
+	case "", types.ActorHuman, types.ActorAgent, types.ActorSystem, types.ActorService:
 	default:
-		writeErrorReason(w, http.StatusBadRequest, reasonAuditInvalidActorType, "invalid actor_type (want human, agent, or system)")
+		writeErrorReason(w, http.StatusBadRequest, reasonAuditInvalidActorType, "invalid actor_type (want human, agent, system, or service)")
 		return store.AuditFilter{}, false
 	}
 	switch f.Origin {
@@ -322,4 +458,19 @@ func parseAuditFilter(w http.ResponseWriter, r *http.Request) (store.AuditFilter
 		return store.AuditFilter{}, false
 	}
 	return f, true
+}
+
+// auditEvent is a small constructor used across handlers.
+func (s *Server) auditEvent(runID *uuid.UUID, actorType types.ActorType, actor, action, target, outcome string, data []byte) types.AuditEvent {
+	return types.AuditEvent{
+		ID:        uuid.New(),
+		Time:      s.cfg.Now().UTC(),
+		RunID:     runID,
+		ActorType: actorType,
+		Actor:     actor,
+		Action:    action,
+		Target:    target,
+		Outcome:   outcome,
+		Data:      data,
+	}
 }

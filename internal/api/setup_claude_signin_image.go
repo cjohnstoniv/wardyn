@@ -68,7 +68,7 @@ func claudeSignInImageResolves(ctx context.Context, images map[string]string, rn
 
 // claudeSignInImageOK is a write door's image answer for E4
 // (validateModelProviderImagePrereqs). It is a runner call, so each door asks
-// BEFORE taking siteConfigMu, and only when block holds a subscription that is
+// BEFORE taking the site-config lock, and only when block holds a subscription that is
 // on (introduced against nothing) — the only block E4 can refuse.
 func (s *Server) claudeSignInImageOK(ctx context.Context, block *types.ModelProviders) bool {
 	return introducedSubscription(block, nil) == "" || claudeSignInImageResolves(ctx, s.cfg.AgentImages, s.cfg.Runner)

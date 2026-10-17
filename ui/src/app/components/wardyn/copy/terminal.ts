@@ -43,3 +43,46 @@ export const TERMINAL = {
   CLOSED_BODY: (maxAttempts: number) =>
     `Wardyn stopped retrying after ${maxAttempts} attempts. This ends the terminal session only — the run itself is unaffected. Reconnect to watch it again.`,
 } as const;
+
+// M11 S6 (term-t13): the confirm dialog for a link the sandbox printed. Every
+// click outside the compiled-in allowlist (attach-terminal-links.ts) asks first.
+export const TERMINAL_LINK = {
+  TITLE: "Open this link?",
+  BODY: "The sandbox printed this link. Check the address before you open it. It opens in a new tab.",
+  USERINFO: (host: string) => `This address has a name before the host. The site it opens is ${host}.`,
+  CANCEL: "Cancel",
+  OPEN: "Open link",
+} as const;
+
+// Canon: docs/design/terminal-escape-canon.md, "Copy strings" (M11, term-t3b).
+// The selection hint, the copy-offer card and the copy-blocked notice.
+const plural = (n: number | string, one: string, many: string) => (n === 1 ? `1 ${one}` : `${n} ${many}`);
+export const TERMINAL_COPY = {
+  NATIVE_CHORD: (mac: boolean) => (mac ? "Option+drag" : "Shift+drag"),
+  SELECT_HINT: (chord: string) => `${chord} selects for right-click Copy`,
+  OFFER_TITLE: "Copy selection",
+  OFFER_SIZE: (n: number | string) => plural(n, "character", "characters"),
+  OFFER_BREAKS: (n: number | string) => plural(n, "line break", "line breaks"),
+  OFFER_INVISIBLE: (n: number | string) => plural(n, "invisible character", "invisible characters"),
+  OFFER_EXPIRES: (s: number | string) => `Closes in ${s}s`,
+  OFFER_KEYS: (mac: boolean) => (mac ? "Cmd+C copies" : "Ctrl+C copies"),
+  COPY: "Copy",
+  DISMISS: "Dismiss",
+  COPIED: "Copied",
+  WRITE_FAILED: "The browser refused the clipboard write. Nothing was copied.",
+  BLOCKED: "Copy blocked. The terminal sent different text than you selected, so nothing was copied.",
+} as const;
+
+// The terminal-renderer menu and its fell-back notice (M11 S4, S5).
+export const TERMINAL_RENDERER = {
+  LABEL: "Terminal renderer",
+  AUTO: "Auto",
+  AUTO_HINT: "GPU when this browser supports it, otherwise Compatible.",
+  GPU: "GPU",
+  GPU_HINT: "Faster with heavy output. Falls back to Compatible if the GPU stops.",
+  GPU_UNAVAILABLE: "Not available in this browser.",
+  COMPATIBLE: "Compatible",
+  COMPATIBLE_HINT: "Draws with the page. Use it if text looks wrong or the terminal goes blank.",
+  FOOTER: (active: string) => `In use: ${active}. Saved in this browser only.`,
+  FELL_BACK: "The GPU renderer stopped, so this terminal switched to Compatible. The session is unaffected.",
+} as const;

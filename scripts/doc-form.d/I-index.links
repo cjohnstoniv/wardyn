@@ -1,0 +1,4 @@
+# The must-link rule in scripts/check-doc-links.sh applies to these docs.
+README.md
+docs/README.md
+docs/TRY-IT.md

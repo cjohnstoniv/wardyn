@@ -103,6 +103,15 @@ test.describe("People step — role mappings editor (0.7 SSO Phase 3)", () => {
 
   // The SSO chip names the provider (GET /access's derived `provider`, from the
   // OIDC issuer), not a bare "SSO" — so an admin sees WHERE sign-in comes from.
+  // #1486: Field wired aria-describedby onto the combobox wrapper, which
+  // dropped it, so the real input announced no hint.
+  test("the Value input is described by its hint", async ({ page }) => {
+    await mockSsoStatus(page);
+    await mockAccessGet(page, baseAccessBody());
+    await gotoPeopleStep(page);
+    await expect(page.getByLabel(PEOPLE.FIELD_VALUE, { exact: true })).toHaveAccessibleDescription(PEOPLE.VALUE_HINT);
+  });
+
   test("(a) the SSO chip names the provider from /access", async ({ page }) => {
     await mockSsoStatus(page);
     await mockAccessGet(page, baseAccessBody());

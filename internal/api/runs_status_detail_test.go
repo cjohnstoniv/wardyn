@@ -234,3 +234,45 @@ func TestListRuns_BlanksStatusDetailOnNonStartingRun(t *testing.T) {
 		t.Errorf("completed run on the board = %q/%q, want both blank", got.StatusDetail, got.StatusReason)
 	}
 }
+
+// TestProjectStatusDetail_KilledKeepsOnlyAValidEndReason: a KILLED run keeps a
+// lifetime end reason (and its token), and any other stale detail is blanked.
+func TestProjectStatusDetail_KilledKeepsOnlyAValidEndReason(t *testing.T) {
+	for _, tc := range []struct {
+		name, detail, wantDetail, wantReason string
+	}{
+		{"max lifetime", "lifetime: max_lifetime_reached", "lifetime: max_lifetime_reached", "max_lifetime_reached"},
+		{"end reached", "lifetime: end_reached", "lifetime: end_reached", "end_reached"},
+		{"a stale substrate wait", "agent: ContainerCreating", "", ""},
+		{"a leftover build line", statusDetailBuilding, "", ""},
+		{"an unknown lifetime reason", "lifetime: fell_asleep", "", ""},
+		{"no detail", "", "", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			runs := []types.AgentRun{{ID: uuid.New(), State: types.RunKilled, StatusDetail: tc.detail}}
+			projectStatusDetail(runs)
+			if runs[0].StatusDetail != tc.wantDetail || runs[0].StatusReason != tc.wantReason {
+				t.Errorf("(detail, reason) = (%q, %q), want (%q, %q)",
+					runs[0].StatusDetail, runs[0].StatusReason, tc.wantDetail, tc.wantReason)
+			}
+		})
+	}
+}
+
+// A run that came through the queue stops saying it waits the moment it leaves it: the queue's wait
+// reason is blanked for a PENDING, a STARTING and a RUNNING run alike, and a STARTING run still shows
+// the reason the substrate wrote.
+func TestStartedRunDoesNotSayItWaits(t *testing.T) {
+	for _, st := range []types.RunState{types.RunPending, types.RunStarting, types.RunRunning} {
+		runs := []types.AgentRun{{State: st, StatusDetail: "queue: runner_pool_runners_at_capacity"}}
+		projectStatusDetail(runs)
+		if runs[0].StatusDetail != "" || runs[0].StatusReason != "" {
+			t.Errorf("a %s run still says %q / %q", st, runs[0].StatusDetail, runs[0].StatusReason)
+		}
+	}
+	runs := []types.AgentRun{{State: types.RunStarting, StatusDetail: "container: ContainerCreating"}}
+	projectStatusDetail(runs)
+	if runs[0].StatusDetail != "container: ContainerCreating" || runs[0].StatusReason != "ContainerCreating" {
+		t.Errorf("a STARTING run's own detail reads %q / %q, want it kept", runs[0].StatusDetail, runs[0].StatusReason)
+	}
+}

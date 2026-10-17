@@ -3,10 +3,18 @@
 
 package api
 
-// Each `minted_pat` run's current personal access token, held in wardynd
-// memory and nowhere else. The ado_run_pats row records that a token exists
-// (so it can be revoked after a crash); only this cache holds its value, so a
-// restart loses it and the run's next resolve creates another.
+// Each `minted_pat` run's current personal access token. The ado_run_pats row
+// records that a token exists (so it can be revoked after a crash); the value
+// lives in ado_run_pat_state (internal/adorunpat), sealed under the run owner's
+// key, so a resolve served by any replica hands out the token another created,
+// and a restart loses nothing. A server with no such store (a test, a build with
+// no database) keeps it in this process, and a restart loses it: the run's next
+// resolve creates another.
+//
+// Every mint and revoke for one run takes the run's token lock (db.ADORunTokenLockClass),
+// a Postgres advisory lock, so a dozen hosts resolving at once, on one replica or
+// several, create one token, and a pause's revoke cannot interleave with a mint.
+// A lock that cannot be taken refuses the work; nothing proceeds unlocked.
 //
 // The proxy keeps one header per Azure DevOps host and nothing here can reach
 // it, so a token a host may still hold is never revoked early: renewal and
@@ -15,12 +23,16 @@ package api
 // header it holds, and gets the cache's token.
 
 import (
+	"context"
+	"fmt"
 	"sync"
 	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/adorunpat"
 	"github.com/cjohnstoniv/wardyn/internal/adoscope"
+	"github.com/cjohnstoniv/wardyn/internal/db"
 )
 
 // adoRunPATRenewWindow is how long before its validTo a run's token is
@@ -34,9 +46,7 @@ const adoRunPATRenewWindow = 10 * time.Minute
 // does not fix would otherwise mint on every refused request.
 const adoRunPATForcedEvery = time.Minute
 
-// adoRunPATCache is the per-run token map. Process-local, like every other
-// in-memory credential bound in this package: more than one replica is
-// refused by construction.
+// adoRunPATCache is the in-process token map, the state of a server with no ADORunPATs store.
 type adoRunPATCache struct {
 	mu   sync.Mutex
 	runs map[uuid.UUID]*adoRunPATEntry
@@ -44,10 +54,11 @@ type adoRunPATCache struct {
 	sweptAt time.Time
 }
 
-// adoRunPATEntry is one run's tokens. mu single-flights every mint and revoke
-// for the run, so a dozen hosts resolving at once create one token.
+// adoRunPATEntry is one run's tokens, valid while the caller holds the run's token lock.
 type adoRunPATEntry struct {
-	mu sync.Mutex
+	// owner is the run owner's secret subject, the key the value is sealed under; "" until a
+	// token has been created or a record read.
+	owner string
 	// cur is the token the run's resolves hand out; zero when there is none
 	// (not yet created, revoked at pause, lost to a restart).
 	cur adoPAT
@@ -59,16 +70,29 @@ type adoRunPATEntry struct {
 	paused bool
 	// forcedAt is when a stale current token last forced a mint.
 	forcedAt time.Time
-	// dropped marks an entry the end paths removed; a waiter holding it looks
-	// the run up again rather than write into a removed entry.
-	dropped bool
 }
 
-// lock returns runID's entry locked, creating it when absent. The caller must
-// call the returned unlock.
-func (c *adoRunPATCache) lock(runID uuid.UUID) (*adoRunPATEntry, func()) {
-	for {
+// lockRunPAT takes runID's token lock and returns the run's state, read after the lock is held.
+// The returned context is the guarded work's, cancelled if the lock is lost; call unlock when
+// done, then save or drop what changed before it.
+func (s *Server) lockRunPAT(ctx context.Context, runID uuid.UUID) (context.Context, *adoRunPATEntry, func(), error) {
+	lctx, unlock, err := s.lock(ctx, db.ADORunTokenLockClass, runID.String())
+	if err != nil {
+		return ctx, nil, nil, err
+	}
+	e, err := s.loadRunPAT(lctx, runID)
+	if err != nil {
+		unlock()
+		return ctx, nil, nil, err
+	}
+	return lctx, e, unlock, nil
+}
+
+func (s *Server) loadRunPAT(ctx context.Context, runID uuid.UUID) (*adoRunPATEntry, error) {
+	c := &s.adoRunPATs
+	if s.cfg.ADORunPATs == nil {
 		c.mu.Lock()
+		defer c.mu.Unlock()
 		if c.runs == nil {
 			c.runs = map[uuid.UUID]*adoRunPATEntry{}
 		}
@@ -77,23 +101,55 @@ func (c *adoRunPATCache) lock(runID uuid.UUID) (*adoRunPATEntry, func()) {
 			e = &adoRunPATEntry{}
 			c.runs[runID] = e
 		}
-		c.mu.Unlock()
-		e.mu.Lock()
-		if !e.dropped {
-			return e, e.mu.Unlock
-		}
-		e.mu.Unlock()
+		return e, nil
 	}
+	rec, found, err := s.cfg.ADORunPATs.Load(ctx, runID)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", errADOPATStateUnavailable, err)
+	}
+	e := &adoRunPATEntry{}
+	if found {
+		e.owner, e.paused, e.forcedAt = rec.Owner, rec.Paused, rec.ForcedAt
+		e.cur = adoPAT{AuthorizationID: rec.AuthorizationID, Token: rec.Token, Scope: rec.Scope, ValidTo: rec.ValidTo}
+		for _, c := range rec.Capabilities {
+			e.caps = append(e.caps, adoscope.Capability(c))
+		}
+	}
+	return e, nil
 }
 
-// drop removes runID's entry. The caller holds e locked.
-func (c *adoRunPATCache) drop(runID uuid.UUID, e *adoRunPATEntry) {
-	e.dropped, e.cur = true, adoPAT{}
-	c.mu.Lock()
-	if c.runs[runID] == e {
-		delete(c.runs, runID)
+// saveRunPAT writes e as runID's state, under the lock loadRunPAT's caller holds. An entry with
+// nothing in it is deleted instead.
+func (s *Server) saveRunPAT(ctx context.Context, runID uuid.UUID, e *adoRunPATEntry) error {
+	if s.cfg.ADORunPATs == nil {
+		return nil
 	}
+	if e.owner == "" || (e.cur.Token == "" && !e.paused && len(e.caps) == 0 && e.forcedAt.IsZero()) {
+		return s.cfg.ADORunPATs.Delete(ctx, runID)
+	}
+	rec := adorunpat.Record{
+		Owner: e.owner, AuthorizationID: e.cur.AuthorizationID, Token: e.cur.Token, Scope: e.cur.Scope,
+		ValidTo: e.cur.ValidTo, Paused: e.paused, ForcedAt: e.forcedAt,
+	}
+	for _, c := range e.caps {
+		rec.Capabilities = append(rec.Capabilities, string(c))
+	}
+	if err := s.cfg.ADORunPATs.Save(ctx, runID, e.owner, rec); err != nil {
+		return fmt.Errorf("%w: %w", errADOPATStateUnavailable, err)
+	}
+	return nil
+}
+
+// dropRunPAT forgets runID's state: the run ended, or its tokens were revoked.
+func (s *Server) dropRunPAT(ctx context.Context, runID uuid.UUID) error {
+	if s.cfg.ADORunPATs != nil {
+		return s.cfg.ADORunPATs.Delete(ctx, runID)
+	}
+	c := &s.adoRunPATs
+	c.mu.Lock()
+	delete(c.runs, runID)
 	c.mu.Unlock()
+	return nil
 }
 
 // covers reports whether the entry's current token was built from every

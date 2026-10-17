@@ -59,7 +59,7 @@ const (
 // TestNoAdHocAuthz (G4) requires of a registered reason.
 const adminViewLaunchRefusal = "Runs start in the user view. Use User view at the top of the console to start one."
 
-// refuseAdminViewLaunch answers POST /runs and POST /runs/preflight with a 409
+// refuseAdminViewLaunch answers create, preflight and policy-preview with a 409
 // when the caller is an SSO browser session in the Admin view, and reports
 // whether it did. The User view needs no test of its own: contextWithPrincipal
 // clamps its role to member, so isSecurityOperator is already false there.

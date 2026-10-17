@@ -13,6 +13,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -41,6 +42,8 @@ type countingShellSession struct {
 	mu      sync.Mutex
 	writes  [][]byte
 	resizes int
+	sizes   [][2]uint16 // every Resize, in order
+	closed  atomic.Bool
 }
 
 func newCountingShellSession() *countingShellSession {
@@ -57,14 +60,32 @@ func (s *countingShellSession) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-func (s *countingShellSession) Resize(context.Context, uint16, uint16) error {
+func (s *countingShellSession) Resize(_ context.Context, cols, rows uint16) error {
 	s.mu.Lock()
 	s.resizes++
+	s.sizes = append(s.sizes, [2]uint16{cols, rows})
 	s.mu.Unlock()
 	return nil
 }
 
-func (s *countingShellSession) Close() error { _ = s.w.Close(); return s.r.Close() }
+// lastSize is the size of the most recent Resize (0,0 when none).
+func (s *countingShellSession) lastSize() (cols, rows uint16) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.sizes) == 0 {
+		return 0, 0
+	}
+	l := s.sizes[len(s.sizes)-1]
+	return l[0], l[1]
+}
+
+func (s *countingShellSession) Close() error {
+	s.closed.Store(true)
+	_ = s.w.Close()
+	return s.r.Close()
+}
+
+func (s *countingShellSession) isClosed() bool { return s.closed.Load() }
 
 // feed pushes PTY output toward the client (blocks until the pump reads it).
 func (s *countingShellSession) feed(b string) { _, _ = io.WriteString(s.w, b) }
@@ -87,6 +108,19 @@ func (s *countingShellSession) writtenBytes() int {
 	return n
 }
 
+// resizedOtherThan lists every Resize whose size is not want.
+func (s *countingShellSession) resizedOtherThan(want [2]uint16) [][2]uint16 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var other [][2]uint16
+	for _, sz := range s.sizes {
+		if sz != want {
+			other = append(other, sz)
+		}
+	}
+	return other
+}
+
 func (s *countingShellSession) resizeCount() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -102,14 +136,33 @@ type holderTestRunner struct {
 	fakeRunner
 	mu       sync.Mutex
 	sessions []*countingShellSession
+	opts     []runner.AttachOptions // the options each Attach was called with
 }
 
-func (r *holderTestRunner) Attach(context.Context, string, runner.AttachOptions) (runner.Session, error) {
+func (r *holderTestRunner) Attach(_ context.Context, _ string, opts runner.AttachOptions) (runner.Session, error) {
 	sess := newCountingShellSession()
 	r.mu.Lock()
 	r.sessions = append(r.sessions, sess)
+	r.opts = append(r.opts, opts)
 	r.mu.Unlock()
 	return sess, nil
+}
+
+// attachOpts is the options the i-th Attach was called with.
+func (r *holderTestRunner) attachOpts(i int) runner.AttachOptions {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if i >= len(r.opts) {
+		return runner.AttachOptions{}
+	}
+	return r.opts[i]
+}
+
+// waitForSession waits for the i-th Attach and returns its session.
+func waitForSession(t *testing.T, r *holderTestRunner, i int) *countingShellSession {
+	t.Helper()
+	waitFor(t, "the attach exec to open", func() bool { return r.session(i) != nil })
+	return r.session(i)
 }
 
 func (r *holderTestRunner) session(i int) *countingShellSession {
@@ -244,11 +297,24 @@ func holderTestServerWithAudit(t *testing.T, rec audit.Recorder) (*Server, *touc
 	cfg.OIDC = &oidc.Authenticator{}
 	srv := New(cfg)
 
-	run := types.AgentRun{ID: uuid.New(), CreatedBy: holderOwner, State: types.RunRunning, SandboxRef: "sbx-1"}
+	// Operator-owned, so the second human these tests bring (a super admin) may
+	// enter it: the holder mechanics under test are independent of the entry rule
+	// (run_entry.go), which has its own tests on a person-owned run.
+	run := types.AgentRun{ID: uuid.New(), CreatedBy: holderOwner, OperatorOwned: true, State: types.RunRunning, SandboxRef: "sbx-1"}
 	ast.mu.Lock()
 	ast.runs[run.ID] = run
 	ast.mu.Unlock()
 	return srv, st, fr, run
+}
+
+// holderPersonOwned makes the run a person's (not the operator's), the shape on
+// which a super admin may not enter.
+func holderPersonOwned(st *touchCountingStore, runID uuid.UUID) {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	r := st.runs[runID]
+	r.OperatorOwned = false
+	st.runs[runID] = r
 }
 
 const (
@@ -274,7 +340,7 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 // single-use ?ticket= minted for principal (the lane that must keep working).
 func dialAttach(t *testing.T, ts *httptest.Server, srv *Server, runID uuid.UUID, principal, query string) *websocket.Conn {
 	t.Helper()
-	tok, err := mintAttachTicket(context.Background(), srv.cfg.Store, runID, types.ActorHuman, principal, oidc.RoleAdmin, time.Now())
+	tok, err := mintAttachTicket(context.Background(), srv.cfg.Store, runID, types.ActorHuman, principal, oidc.RoleAdmin, oidc.Issue{At: time.Now()})
 	if err != nil {
 		t.Fatalf("mint ticket: %v", err)
 	}
@@ -667,8 +733,13 @@ func TestAttachWS_SecondClientReadOnlyThenTakeover(t *testing.T) {
 	if n := observed.written(); n != 0 {
 		t.Errorf("observer's keystrokes reached the sandbox (%d writes) — read-only is not enforced server-side", n)
 	}
-	if n := observed.resizeCount(); n != 0 {
-		t.Errorf("observer resized the SHARED tmux session (%d resizes) — that clamps the holder's terminal", n)
+	// The observer's exec follows the WRITER's size; its own 20x5 never reaches
+	// the shared window.
+	if o := fr.attachOpts(1); !o.Observer || o.Cols != 132 || o.Rows != 50 {
+		t.Errorf("observer attach options = %+v, want an observer seeded at the writer's 132x50", o)
+	}
+	if cols, rows := observed.lastSize(); cols == 20 || rows == 5 {
+		t.Errorf("observer resized the SHARED tmux session to its own %dx%d — that clamps the holder's terminal", cols, rows)
 	}
 	if v := srv.attachHolderFor(run.ID).view(); v.Cols != 132 || v.Rows != 50 {
 		t.Errorf("observer's resize overwrote the holder's geometry: %+v", v)
@@ -852,8 +923,8 @@ func TestSSHAttachHolder_SecondIsReadOnly(t *testing.T) {
 	if n := observed.written(); n != 0 {
 		t.Errorf("read-only ssh client's keystrokes reached the sandbox (%d writes)", n)
 	}
-	if n := observed.resizeCount(); n != 0 {
-		t.Errorf("read-only ssh client resized the shared tmux session (%d resizes)", n)
+	if cols, rows := observed.lastSize(); cols == 20 || rows == 5 {
+		t.Errorf("read-only ssh client resized the shared tmux session to its own %dx%d", cols, rows)
 	}
 	if v := srv.attachHolderFor(run.ID).view(); v.Principal != holderOwner || v.Cols != 100 {
 		t.Errorf("the observer disturbed the holder record: %+v", v)
@@ -871,35 +942,45 @@ func TestSSHAttachHolder_SecondIsReadOnly(t *testing.T) {
 }
 
 // TestAttachTakeover_OwnerOrSuperAdminOnly is the take-over PREDICATE table
-// (ownsRunOrSuperAdmin, helpers.go). Take-over is the one /runs/{id} route that
+// (getRunForEntry, run_entry.go). Take-over is the one /runs/{id} route that
 // WRITES into a live sandbox rather than inspecting or stopping it, so it does
 // NOT ride ownsRunOrAdmin's isSecurityOperator arm: a security_admin is refused
-// the same byte-identical 404 a non-owning member gets — never a 403, which
-// would confirm the run exists — and the refusal displaces nobody and audits no
-// take-over. The security tier is refused an attach ticket, refused the cookie
-// attach lane and stamped `member` on its SSH keys; a tier that can reach no
-// terminal on a foreign run must not be able to end one on it either.
+// the same byte-identical 404 a non-owning member gets — which would otherwise
+// confirm the run exists — and the refusal displaces nobody and audits no
+// take-over. The super admin is refused too (#1476): a 403 naming why, since they
+// can already see the run, unless the run has no personal owner. The security
+// tier is refused an attach ticket, refused the cookie attach lane and stamped
+// `member` on its SSH keys; a tier that can reach no terminal on a foreign run
+// must not be able to end one on it either.
 func TestAttachTakeover_OwnerOrSuperAdminOnly(t *testing.T) {
 	for _, tc := range []struct {
-		name    string
-		session func(*testing.T) *http.Cookie
-		want    int
+		name     string
+		session  func(*testing.T) *http.Cookie
+		personal bool // the run is a person's; false = operator-owned
+		want     int
+		wantBody string
 	}{
 		{"owner", func(t *testing.T) *http.Cookie {
 			return ssoSession(t, holderOwner, holderOwner, oidc.RoleUser)
-		}, http.StatusOK},
-		{"super admin", func(t *testing.T) *http.Cookie {
+		}, true, http.StatusOK, ""},
+		{"super admin on a person's run", func(t *testing.T) *http.Cookie {
 			return ssoSession(t, "sub-admin", "admin@corp.example", oidc.RoleAdmin)
-		}, http.StatusOK},
+		}, true, http.StatusForbidden, `"reason":"run_owner_only"`},
+		{"super admin on an operator-owned run", func(t *testing.T) *http.Cookie {
+			return ssoSession(t, "sub-admin", "admin@corp.example", oidc.RoleAdmin)
+		}, false, http.StatusOK, ""},
 		{"security admin", func(t *testing.T) *http.Cookie {
 			return ssoSession(t, "sub-sec", "sec@corp.example", oidc.RoleSecurityAdmin)
-		}, http.StatusNotFound},
+		}, true, http.StatusNotFound, "run not found"},
 		{"member, not the owner", func(t *testing.T) *http.Cookie {
 			return ssoSession(t, "sub-mallory", "mallory@corp.example", oidc.RoleUser)
-		}, http.StatusNotFound},
+		}, true, http.StatusNotFound, "run not found"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			srv, _, _, audit, run := holderTestServer(t)
+			srv, st, _, audit, run := holderTestServer(t)
+			if tc.personal {
+				holderPersonOwned(st, run.ID)
+			}
 			displaced := make(chan string, 1)
 			held := &attachHolder{
 				principal: holderOwner, source: attachSourceWeb, since: time.Now(),
@@ -925,10 +1006,14 @@ func TestAttachTakeover_OwnerOrSuperAdminOnly(t *testing.T) {
 				}
 				return
 			}
-			// Refused: the byte-identical 404 (no existence oracle), nobody
-			// displaced, nothing audited as a take-over.
-			if !strings.Contains(w.Body.String(), "run not found") {
-				t.Errorf("refusal body = %s, want the byte-identical run-not-found 404", w.Body.String())
+			// Refused: the 404 a missing run gets, or the 403 naming why for a
+			// super admin; nobody displaced, nothing audited as a take-over.
+			if !strings.Contains(w.Body.String(), tc.wantBody) {
+				t.Errorf("refusal body = %s, want %s", w.Body.String(), tc.wantBody)
+			}
+			if tc.want == http.StatusForbidden && !strings.Contains(w.Body.String(),
+				`"error":"only the person who started this run can open it interactively"`) {
+				t.Errorf("403 body = %s, want the approved sentence", w.Body.String())
 			}
 			if ev != nil {
 				t.Errorf("a refused take-over was audited as a success: %s", ev.Data)
@@ -972,8 +1057,18 @@ func TestAttachWS_EvictionStopsAPasteMidFlight(t *testing.T) {
 	if srv.evictAttachHolder(run.ID) == nil {
 		t.Fatal("nothing to evict")
 	}
-	close(sess.release)
-	wsPing(t, c) // barrier: the pump is back at c.Read, so the paste is settled
+	// A ping cannot settle the paste: the socket reader answers it, and the drain
+	// goroutine that writes keystrokes runs apart from it. Release exactly the
+	// parked chunk and wait for it to land. A write past the eviction would be
+	// issued by the same goroutine straight after it, with nothing in between to
+	// block on, and would show up on entered.
+	sess.release <- struct{}{}
+	waitFor(t, "the parked chunk to land", func() bool { return len(sess.deliveredStrings()) > 0 })
+	select {
+	case p := <-sess.entered:
+		t.Errorf("a %d-byte write entered Session.Write after the take-over was decided", len(p))
+	case <-time.After(200 * time.Millisecond):
+	}
 
 	got := sess.deliveredStrings()
 	if len(got) != 1 || len(got[0]) != attachWriteChunk {

@@ -102,3 +102,26 @@ func TestADOGate_ChunkedBypassCompletionIsPeeked(t *testing.T) {
 		t.Fatalf("adoCheck = %q, %v; want a hold naming %s", msg, held, adoscope.CapPolicyBypass)
 	}
 }
+
+// A package batch is peeked for its operation: under packaging_write alone a
+// chunked batch delete is held for packaging_manage, a promote passes, and an
+// operation the gate cannot read is refused.
+func TestADOGate_PackageBatchIsClassifiedByItsOperation(t *testing.T) {
+	const host = "pkgs.dev.azure.com"
+	batch := func(body string) *http.Request {
+		r := httptest.NewRequest(http.MethodPost, "/acme/proj/_apis/packaging/feeds/f/nuget/packagesbatch", strings.NewReader(body))
+		r.ContentLength = -1
+		r.Header.Del("Content-Length")
+		return r
+	}
+	grant := ADOGrant{Organization: "acme", Capabilities: []adoscope.Capability{adoscope.CapPackagingRead, adoscope.CapPackagingWrite}}
+	if msg, held := adoCheck(batch(`{"operation":"delete","packages":[]}`), host, grant, refuseEveryRef); held == nil || held.Capability != adoscope.CapPackagingManage {
+		t.Fatalf("batch delete = %q, %v; want a hold naming %s", msg, held, adoscope.CapPackagingManage)
+	}
+	if msg, held := adoCheck(batch(`{"operation":"promote","packages":[]}`), host, grant, refuseEveryRef); msg != "" || held != nil {
+		t.Fatalf("batch promote = %q, %v; want it allowed", msg, held)
+	}
+	if msg, _ := adoCheck(batch(`{"operation":"promote","operation":"delete"}`), host, grant, refuseEveryRef); !strings.Contains(msg, "could not tell") {
+		t.Fatalf("batch with a repeated operation = %q; want it refused", msg)
+	}
+}

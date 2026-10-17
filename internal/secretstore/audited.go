@@ -30,6 +30,7 @@ const (
 	PurposeDispatch     Purpose = "dispatch"
 	PurposeManagedToken Purpose = "managed-token"
 	PurposeMigrate      Purpose = "migrate"
+	PurposeRehearse     Purpose = "rehearse"
 	PurposeSSORefresh   Purpose = "sso-refresh"
 	PurposeADORefresh   Purpose = "ado-refresh"
 	PurposeStatus       Purpose = "status"
@@ -183,6 +184,10 @@ type audited struct {
 
 func (a *audited) Name() string { return a.inner.Name() }
 
+// Unwrap is the store this one records reads for, so a caller can reach a
+// capability the audit wrapper does not forward (the pg store's SubjectKeys).
+func (a *audited) Unwrap() Store { return a.inner }
+
 func (a *audited) Put(ctx context.Context, name string, value []byte) error {
 	return a.inner.Put(ctx, name, value)
 }
@@ -193,6 +198,35 @@ func (a *audited) List(ctx context.Context) ([]string, error) { return a.inner.L
 
 func (a *audited) DeleteEverywhere(ctx context.Context, names []string) (int, error) {
 	return a.inner.DeleteEverywhere(ctx, names)
+}
+
+// Revision forwards the wrapped store's row revision (Revisioned), or answers
+// ErrNoRevision. A guarded Put needs no forwarding: its context reaches the
+// wrapped Put unchanged. Not audited: it reads no value.
+func (a *audited) Revision(ctx context.Context, name string) (string, error) {
+	r, ok := a.inner.(Revisioned)
+	if !ok {
+		return "", ErrNoRevision
+	}
+	return r.Revision(ctx, name)
+}
+
+// Generation and AdvanceGeneration forward the wrapped store's erase generation
+// (Generational), or answer ErrNoGeneration. Not audited: neither reads a value.
+func (a *audited) Generation(ctx context.Context) (int64, error) {
+	g, ok := a.inner.(Generational)
+	if !ok {
+		return 0, ErrNoGeneration
+	}
+	return g.Generation(ctx)
+}
+
+func (a *audited) AdvanceGeneration(ctx context.Context) (int64, error) {
+	g, ok := a.inner.(Generational)
+	if !ok {
+		return 0, ErrNoGeneration
+	}
+	return g.AdvanceGeneration(ctx)
 }
 
 // Holders is not audited: it reads which namespaces hold a row, never a value.
@@ -254,6 +288,15 @@ func (a *audited) MetadataEverywhere(ctx context.Context, names []string) ([]Met
 	return m.MetadataEverywhere(ctx, names)
 }
 
+// DestroyCredentialKey forwards to the wrapped store when it seals credentials
+// under per-person keys, and is a no-op otherwise: there is nothing to destroy.
+func (a *audited) DestroyCredentialKey(ctx context.Context, owner string) ([]int, error) {
+	if d, ok := a.inner.(CredentialKeyDestroyer); ok {
+		return d.DestroyCredentialKey(ctx, owner)
+	}
+	return nil, nil
+}
+
 // KeyService forwards the wrapped store's description of the key service that
 // wraps its writes (the pg store under WARDYN_KEK=transit), or "": metadata
 // for the setup row, never a value.
@@ -262,6 +305,15 @@ func (a *audited) KeyService() string {
 		return d.KeyService()
 	}
 	return ""
+}
+
+// KeyServiceStaticKey forwards whether the key service is reached with a
+// long-lived credential; false when the wrapped store does not say.
+func (a *audited) KeyServiceStaticKey() bool {
+	if d, ok := a.inner.(interface{ KeyServiceStaticKey() bool }); ok {
+		return d.KeyServiceStaticKey()
+	}
+	return false
 }
 
 func (a *audited) For(owner string) Store {
@@ -307,4 +359,21 @@ func RecordRead(ctx context.Context, rec audit.Recorder, p Purpose, owner string
 	if rerr := rec.Record(ctx, ev); rerr != nil {
 		audit.LogWriteFailure(ctx, ev, rerr)
 	}
+}
+
+// ProviderChange forwards owner-scoped history without reading a secret.
+func (a *audited) ProviderChange(ctx context.Context, uid string) (ProviderChange, bool, error) {
+	m, ok := a.inner.(ProviderChangeStore)
+	if !ok {
+		return ProviderChange{}, false, ErrNoMetadata
+	}
+	return m.ProviderChange(ctx, uid)
+}
+
+// DeleteProviderChanges erases this owner's history when the store retains it.
+func (a *audited) DeleteProviderChanges(ctx context.Context) error {
+	if history, ok := a.inner.(ProviderChangeStore); ok {
+		return history.DeleteProviderChanges(ctx)
+	}
+	return nil
 }

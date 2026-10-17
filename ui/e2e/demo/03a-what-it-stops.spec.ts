@@ -104,6 +104,7 @@ import {
   startAndBoot,
   walkPolicyKey,
 } from "./demos";
+import { termText } from "../terminal-text";
 
 test.skip(!process.env.WARDYN_DEMO, "demo recording — run via `make record-demo` (exports WARDYN_DEMO=1)");
 
@@ -543,7 +544,7 @@ test("V03a act 4 — write-only, proved from inside", async () => {
   const screen = card.locator(".xterm-screen").first();
   await typeInTerminal(page, "printenv | sort", card);
   await pollScreen(screen, /WARDYN_PROXY_URL=/, "printenv never echoed inside the demo sandbox");
-  const envText = await screen.innerText();
+  const envText = await termText(screen);
   expect(envText.includes(DEMO_KEY_VALUE), "the stored secret's VALUE printed inside the demo sandbox").toBe(false);
   expect(
     envText.includes(DEMO_KEY),
@@ -641,7 +642,7 @@ test("V03a act 5 — the key that never enters the box", async () => {
   await frameRun(page, "key-never-in-the-box");
   await typeInTerminal(page, "printenv | sort", card);
   await pollScreen(screen, /WARDYN_PROXY_URL=/, "printenv never echoed inside the demo sandbox");
-  const envText = await screen.innerText();
+  const envText = await termText(screen);
   expect(envText.includes(DEMO_KEY_VALUE), "the granted key's VALUE printed inside the sandbox").toBe(false);
   expect(
     envText.includes(DEMO_KEY),

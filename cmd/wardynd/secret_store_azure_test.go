@@ -14,14 +14,15 @@ func strp(s string) *string { return &s }
 func testExternalFlags(vaultAddr, kvURL string) (vaultFlags, azureFlags) {
 	timeout, versions, maxV := 5*time.Second, 1, 100
 	v := vaultFlags{
-		addr: strp(vaultAddr), namespace: strp(""), auth: strp("token-file"), authMount: strp("kubernetes"), role: strp(""), rolePlatform: strp(""),
+		awsKMSKey: new(string), addr: strp(vaultAddr), namespace: strp(""), auth: strp("token-file"), authMount: strp("kubernetes"), role: strp(""), rolePlatform: strp(""),
 		k8sTokenFile: strp(""), tokenFile: strp("/nonexistent"), caCertFile: strp(""), kvMount: strp("wardyn"), kvPrefix: strp("wardyn"),
 		maxVersions: &versions, timeout: &timeout,
 	}
 	az := azureFlags{
 		vaultURL: strp(kvURL), auth: strp("workload-identity"), tenantID: strp("tenant-1"), clientID: strp("client-1"),
 		federatedTokenFile: strp("/nonexistent"), authorityHost: strp("https://login.microsoftonline.com"), prefix: strp("wardyn"),
-		purge: strp("auto"), maxVersions: &maxV,
+		purge: strp("auto"), maxVersions: &maxV, kekKey: strp(""), kekSigningKey: strp(""),
+		kekKeyPlatform: strp(""), kekSigningKeyPlatform: strp(""), clientIDPlatform: strp(""),
 	}
 	return v, az
 }

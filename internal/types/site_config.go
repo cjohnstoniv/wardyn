@@ -8,7 +8,11 @@
 
 package types
 
-import "time"
+import (
+	"time"
+
+	"github.com/cjohnstoniv/wardyn/internal/policyref"
+)
 
 // The site-config family: SiteConfig and the value types its fields carry.
 // Split out of types.go by seam in 0.7.2; nothing here changed meaning.
@@ -22,6 +26,9 @@ import "time"
 // SECURITY: secret VALUES never live here — only secret NAMES (refs) the
 // broker/proxy resolve at dispatch/injection time, mirroring GrantSpec.Scope.
 type SiteConfig struct {
+	// Runners defaults off. PUT /site-config retains the stored value; the
+	// dedicated audited runner enablement operation owns changes.
+	Runners *RunnerSettings `json:"runners,omitempty"`
 	// UpstreamProxySecretRef names a secret holding the corporate upstream
 	// proxy URL, or "" for none. UpstreamProxyURL wins if both are set (not
 	// rejected, so an operator can migrate between the two).
@@ -32,8 +39,11 @@ type SiteConfig struct {
 	UpstreamProxyURL string `json:"upstream_proxy_url,omitempty"`
 	// UpstreamProxyNoProxy is the upstream proxy's BYPASS list (like
 	// NO_PROXY): destinations wardyn-proxy dials DIRECTLY, matched by
-	// host/domain-suffix or CIDR. Exists because a corporate forward proxy
-	// won't CONNECT to an internal address (breaks PrivateLink estates).
+	// host/domain-suffix or CIDR. Exists for a private-endpoint estate whose
+	// corporate forward proxy has no route to the endpoint but this sidecar
+	// does: an entry is for a host the sidecar can itself resolve and reach.
+	// Where the corporate proxy is the only route, leave the host off this
+	// list and declare it in InternalHosts alone.
 	//
 	// SECURITY: a bypassed dial still hits the unconditional private/
 	// reserved-IP SSRF guard (InternalHosts is the only lift) and grants no
@@ -70,6 +80,11 @@ type SiteConfig struct {
 	// This only lifts the SSRF builtin; policy still decides reachability.
 	// Admin-only, validated against ipguard.Liftable. Empty => no lift.
 	InternalHosts []InternalHost `json:"internal_hosts,omitempty"`
+	// Egress is the org's egress-grading policy. A POINTER for the same
+	// byte-identical-GET reason as the provider blocks. Written ONLY through
+	// PUT /governance/egress-baseline (a governance write); PUT /site-config
+	// carries an absent or unchanged block forward and refuses a changed one.
+	Egress *SiteEgress `json:"egress,omitempty"`
 	// WorkspaceProviders is the org's workspace-provider POLICY: which git
 	// hosts a run may clone from, with which credential lanes, plus storage
 	// ceilings. A POINTER since a value struct's omitempty is a no-op
@@ -94,11 +109,37 @@ type SiteConfig struct {
 	// URL is http(s) only.
 	SignInHelpText string `json:"sign_in_help_text,omitempty"`
 	SignInHelpURL  string `json:"sign_in_help_url,omitempty"`
+	// PolicyHelp is the contact a signed-in person is shown when a deployment-wide
+	// rule (no profile binds them) refuses them. A POINTER for the same
+	// byte-identical-GET reason as the provider blocks.
+	//
+	// NOT public: unlike the sign-in help pair, /healthz never publishes it.
+	// Validated by policyref.Validate at PUT; a stored value is re-validated by
+	// policyref.Project on every read.
+	PolicyHelp *policyref.Contact `json:"policy_help,omitempty"`
+	// Branding is the part of the console branding (#1215) a site config can
+	// carry: today only the logo, as a file wardynd reads when this document is
+	// applied. A POINTER for the same byte-identical-GET reason as the provider
+	// blocks; nil is "the site config says nothing about branding". Name and
+	// colours stay with the Branding card (PUT /branding/settings).
+	Branding *SiteBranding `json:"branding,omitempty"`
+	// Components is the org's custom-component POLICY. A POINTER for the same
+	// byte-identical-GET reason as the provider blocks. Nil — never set, or a
+	// document stored before the block existed — is the owner-decided default:
+	// no autonomy cap, env-var and file delivery allowed, no CC3 floor for
+	// component credentials.
+	Components *ComponentSettings `json:"components,omitempty"`
 	// EffectiveScmHosts is READ-ONLY, SERVER-OWNED: ScmHosts minus hosts a
 	// provider row claims, union enabled providers' hosts. A real field
 	// (not a wrapper key) so a get|set round trip still decodes under
 	// DisallowUnknownFields. PUT ignores a submitted value; never stored.
 	EffectiveScmHosts []string `json:"effective_scm_hosts,omitempty"`
+	// WithheldScmHosts is READ-ONLY, SERVER-OWNED, on the same terms as
+	// EffectiveScmHosts: each host a DISABLED provider row claims that
+	// EffectiveScmHosts therefore leaves out, with the row that withholds it, so
+	// an admin is told why a host is missing rather than left to look for it.
+	// Projected on read, ignored on PUT, never stored.
+	WithheldScmHosts []WithheldScmHost `json:"withheld_scm_hosts,omitempty"`
 	// OnboardingCompletedAt records when an operator finished (or left) the
 	// Getting Started funnel on THIS INSTALL. Nil until then.
 	//
@@ -111,6 +152,47 @@ type SiteConfig struct {
 	OnboardingCompletedAt *time.Time `json:"onboarding_completed_at,omitempty"`
 }
 
+// SiteEgress is SiteConfig.Egress.
+type SiteEgress struct {
+	// BaselineHosts are exact hostnames the composer grades as baseline egress,
+	// beside its built-in public set: an allowlist holding only these is not
+	// graded OPEN, and an api_key to one does not raise the CC3 floor.
+	//
+	// SECURITY: this LOWERS the egress grade and the confinement floor, so it is
+	// a governance write — security operators only, held for a second human where
+	// WARDYN_GOVERNANCE_SECOND_HUMAN is on, audited with the before/after sets,
+	// like the InternalHost.Baseline marks it shares one writer with.
+	// Exact lowercase hostnames only: no wildcard, scheme, port or IP. It grades;
+	// it never allows — a host must still pass allowed_domains.
+	BaselineHosts []string `json:"baseline_hosts,omitempty"`
+}
+
+// SiteBranding is SiteConfig.Branding. LogoPath is an absolute path on the
+// wardynd host to an SVG or PNG file; it is read, checked as a console upload
+// is, and stored as the branding logo at every apply. Naming it makes the file
+// the logo's owner: the console offers no Remove logo while it is set. Taking
+// it out of the document (and applying) removes the logo it delivered.
+type SiteBranding struct {
+	LogoPath string `json:"logo_path,omitempty"`
+}
+
+// ComponentSettings is SiteConfig.Components. Every field's zero value is the
+// owner-decided default, so an absent block and an all-zero one mean the same
+// thing (PUT /site-config stores the latter as the former).
+type ComponentSettings struct {
+	// RequireVaultForCredentials restores the CC3 confinement floor for a
+	// component's header credential to a non-baseline host, org and person rows
+	// alike. False (default) lifts the floor for component-authored grants only.
+	RequireVaultForCredentials bool `json:"require_vault_for_credentials,omitempty"`
+	// DenyResidentDelivery refuses env-var and file delivery DEPLOYMENT-WIDE,
+	// for org and person rows alike; header delivery keeps working.
+	DenyResidentDelivery bool `json:"deny_resident_delivery,omitempty"`
+	// AutonomyCap caps a run carrying a SELF-DEFINED component, with or without
+	// a governance profile: "" no cap (default), "L1" holds tool calls, "L0"
+	// refuses unattended runs. No other value is accepted: the cap only tightens.
+	AutonomyCap AutonomyLevel `json:"autonomy_cap,omitempty"`
+}
+
 // InternalHost is one SiteConfig.InternalHosts entry — see that field's doc.
 type InternalHost struct {
 	// HostSuffix matches a request host by label suffix: itself, or any host
@@ -120,6 +202,12 @@ type InternalHost struct {
 	// fc00::/7, or 100.64.0.0/10 (ipguard.Liftable) — never loopback/
 	// link-local/metadata/multicast/NAT64. Empty lifts the full Liftable set.
 	CIDRs []string `json:"cidrs,omitempty"`
+	// Baseline grades this host and EVERY subdomain as baseline egress, where
+	// SiteEgress.BaselineHosts names exact hosts. Default false, so declaring an
+	// internal host never changes a grade unless the operator says so. Set only
+	// through PUT /governance/egress-baseline (or the boot seed on an empty
+	// document): PUT /site-config refuses a changed set of marks.
+	Baseline bool `json:"baseline,omitempty"`
 }
 
 // ArtifactOverride is one ecosystem's corporate artifact-registry redirect:
@@ -163,4 +251,18 @@ type EgressRedirect struct {
 	// ("npm"|"pip"|"cargo"|"maven"|"go"|"nuget") this redirect ALSO emits a
 	// config file for. Empty means NETWORK-ONLY: no config file is emitted.
 	Ecosystem string `json:"ecosystem,omitempty"`
+}
+
+// WithheldScmHost is one entry of SiteConfig.WithheldScmHosts: a host kept out
+// of the effective set because the named provider row is turned off. The row is
+// named the way a refused clone names it, by kind and id.
+type WithheldScmHost struct {
+	Host         string          `json:"host"`
+	ProviderID   string          `json:"provider_id"`
+	ProviderKind GitProviderKind `json:"provider_kind"`
+}
+
+// RunnerSettings controls admission to runner routes. Nil and false both deny.
+type RunnerSettings struct {
+	Enabled bool `json:"enabled"`
 }

@@ -10,15 +10,17 @@
 // or audit-row fixtures.
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
-import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { Link, MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 
 const getRunMock = vi.fn();
+const killRunMock = vi.fn().mockResolvedValue(undefined);
 vi.mock("../../lib/api/runs", () => ({
   runs: {
     getRun: (...a: unknown[]) => getRunMock(...a),
     getGrants: vi.fn().mockResolvedValue([]),
-    killRun: vi.fn(),
+    killRun: (...a: unknown[]) => killRunMock(...a),
     getFiles: vi.fn().mockRejectedValue(new Error("no runner in this test")),
     getResources: vi.fn().mockRejectedValue(new Error("no runner in this test")),
     getAttachHolder: vi.fn().mockResolvedValue({ held: false }),
@@ -235,5 +237,140 @@ describe("RunDetailScreen — a background poll blip keeps the last-good cockpit
     expect(screen.queryByText(CONTROL_PLANE_SENTENCE)).toBeNull();
     expect((await screen.findAllByText(RUN.task)).length).toBeGreaterThan(0);
     expect(screen.getByRole("button", { name: /Kill/ })).toBeInTheDocument();
+  });
+});
+
+// #1483: the route changed but the screen did not remount, so run A's late
+// answers (and its poll, its approvals filter, its detached ending fetch)
+// landed on run B's page, and the Kill dialog named A while sending B.
+describe("RunDetailScreen — a route change drops everything run A was doing", () => {
+  const A = { ...RUN, id: "run-a", task: "Distinct task A" };
+  const B = { ...RUN, id: "run-b", task: "Distinct task B" };
+
+  function Location() {
+    return <output data-testid="pathname">{useLocation().pathname}</output>;
+  }
+
+  function renderAB(prefix: "/runs" | "/admin/runs" = "/runs") {
+    return render(
+      <MemoryRouter initialEntries={[`${prefix}/run-a`]}>
+        <Location />
+        <Link to={`${prefix}/run-b`}>Switch to B</Link>
+        <Routes>
+          <Route path="/runs/:id" element={<RunDetailScreen />} />
+          <Route path="/admin/runs/:id" element={<RunDetailScreen />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+  }
+
+  function seed(onA: () => Promise<unknown>) {
+    getRunMock.mockImplementation((id: string) => (id === "run-a" ? onA() : Promise.resolve(B)));
+  }
+
+  for (const prefix of ["/runs", "/admin/runs"] as const) {
+    it(`${prefix}: A answering late never renders on B, and the Kill dialog names the run it kills`, async () => {
+      const user = userEvent.setup();
+      let settleA!: (v: unknown) => void;
+      seed(() => new Promise((r) => (settleA = r)));
+      renderAB(prefix);
+      await waitFor(() => expect(getRunMock).toHaveBeenCalledWith("run-a"));
+      await user.click(screen.getByRole("link", { name: "Switch to B" }));
+      await screen.findAllByText("Distinct task B");
+      await act(async () => settleA(A));
+      expect(screen.getByTestId("pathname")).toHaveTextContent(`${prefix}/run-b`);
+      expect(screen.queryAllByText("Distinct task A")).toHaveLength(0);
+      expect(screen.queryAllByText("Distinct task B").length).toBeGreaterThan(0);
+
+      await user.click(screen.getByRole("button", { name: /^Kill/ }));
+      const dialog = screen.getByRole("alertdialog");
+      expect(dialog).toHaveAccessibleName("Kill run-b?");
+      await user.click(within(dialog).getByRole("button", { name: "Kill run" }));
+      expect(killRunMock).toHaveBeenCalledTimes(1);
+      expect(killRunMock).toHaveBeenCalledWith("run-b");
+    });
+  }
+
+  it("a late REJECTION of A does not error B's page", async () => {
+    const user = userEvent.setup();
+    let rejectA!: (e: unknown) => void;
+    seed(() => new Promise((_, rej) => (rejectA = rej)));
+    renderAB();
+    await waitFor(() => expect(getRunMock).toHaveBeenCalledWith("run-a"));
+    await user.click(screen.getByRole("link", { name: "Switch to B" }));
+    await screen.findAllByText("Distinct task B");
+    await act(async () => rejectA(new Error("A went away")));
+    expect(screen.queryByText(CONTROL_PLANE_SENTENCE)).toBeNull();
+    expect(screen.queryAllByText("Distinct task B").length).toBeGreaterThan(0);
+  });
+
+  it("B's Approvals strip shows nothing from A's late approvals answer", async () => {
+    const user = userEvent.setup();
+    let settleApprovals!: (v: unknown) => void;
+    getRunMock.mockImplementation((id: string) => Promise.resolve(id === "run-a" ? A : B));
+    listApprovalsMock.mockImplementation((_s: string, id: string) =>
+      id === "run-a" ? new Promise((r) => (settleApprovals = r)) : Promise.resolve([]),
+    );
+    renderAB();
+    await waitFor(() => expect(listApprovalsMock).toHaveBeenCalledWith("", "run-a"));
+    await user.click(screen.getByRole("link", { name: "Switch to B" }));
+    await screen.findAllByText("Distinct task B");
+    await act(async () =>
+      settleApprovals([{ id: "ap-1", run_id: "run-a", kind: "egress_domain", state: "PENDING", scope: { host: "a.example" } }]),
+    );
+    // A pending approval on the tab label would read "Approvals 1".
+    expect(screen.getByRole("tab", { name: /Approvals/ })).toHaveTextContent(/^Approvals$/);
+  });
+
+  describe("polling", () => {
+    beforeEach(() => vi.useFakeTimers({ shouldAdvanceTime: true }));
+    afterEach(() => vi.useRealTimers());
+
+    it("B polls on schedule even though A's tick never answered", async () => {
+      let ticksOfA = 0;
+      getRunMock.mockImplementation((id: string) => {
+        if (id === "run-b") return Promise.resolve(B);
+        ticksOfA += 1;
+        // A's foreground load answers; every later tick hangs.
+        return ticksOfA === 1 ? Promise.resolve(A) : new Promise(() => {});
+      });
+      renderAB();
+      await screen.findAllByText("Distinct task A");
+      await vi.advanceTimersByTimeAsync(4000); // A's poll starts and stalls
+      await act(async () => screen.getByRole("link", { name: "Switch to B" }).click());
+      await screen.findAllByText("Distinct task B");
+      const bCalls = () => getRunMock.mock.calls.filter((c) => c[0] === "run-b").length;
+      const before = bCalls();
+      await vi.advanceTimersByTimeAsync(4000);
+      expect(bCalls()).toBeGreaterThan(before);
+    });
+  });
+});
+
+// Review nit: the page drops an answer for a different run id; a non-canonical
+// (upper-case) UUID in the URL must not read as "a different run" and spin.
+describe("RunDetailScreen — a run id in the URL is matched case-insensitively", () => {
+  it("renders the run when the URL's id differs from the answer's only in case", async () => {
+    getRunMock.mockResolvedValue({ ...RUN, id: "5f0c1a2b-aaaa-bbbb-cccc-0123456789ab" });
+    render(
+      <MemoryRouter initialEntries={["/runs/5F0C1A2B-AAAA-BBBB-CCCC-0123456789AB"]}>
+        <Routes>
+          <Route path="/runs/:id" element={<RunDetailScreen />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+    expect((await screen.findAllByText(RUN.task)).length).toBeGreaterThan(0);
+  });
+});
+
+// Review G4: the approvals filter matches run ids case-insensitively too.
+describe("RunDetailScreen — approvals match the run id case-insensitively", () => {
+  it("counts a pending approval whose run_id differs from the URL's only in case", async () => {
+    listApprovalsMock.mockResolvedValue([
+      { id: "ap-1", run_id: "RUN-1", kind: "egress_domain", state: "PENDING", scope: { host: "a.example" } },
+    ]);
+    renderRun({ ...RUN, state: "RUNNING" });
+    await screen.findAllByText(RUN.task);
+    expect(await screen.findByRole("tab", { name: /Approvals\s*1/ })).toBeInTheDocument();
   });
 });

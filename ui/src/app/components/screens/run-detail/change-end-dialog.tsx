@@ -61,7 +61,9 @@ export function ChangeEndDialog({
     try {
       const endsAt = noEnd ? null : new Date(changeValue).toISOString();
       const res = await runsApi.setRunEndAndWait(run.id, { endsAt });
-      if (res.capped.includes("ends_at") && res.latest_end) {
+      if (res.capped.includes("ends_at") && res.ends_cap_loosened) {
+        toast.warning(RL.ENDS_CAPPED_LOOSENED);
+      } else if (res.capped.includes("ends_at") && res.latest_end) {
         toast.warning(RL.endsCapped(Math.ceil((Date.parse(res.latest_end) - Date.now()) / DAY_MS)));
       }
       onChanged();

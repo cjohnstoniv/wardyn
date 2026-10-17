@@ -31,12 +31,11 @@ import { secrets as secretsApi } from "../../../lib/api/secrets";
 import { setup as setupApi } from "../../../lib/api/setup";
 import { access as accessApi } from "../../../lib/api/access";
 import { HttpError } from "../../../lib/api/core";
-import { deriveIntegrations } from "../../../lib/api/integrations";
 import { useWorkspaceList } from "../../../lib/use-workspace-list";
 import type { AccessResponse } from "../../../lib/types";
 import type { AccessLoadState } from "./access-panel";
 import { resolveDefaultCc } from "../../wardyn/default-confinement";
-import { deploymentMode, deriveReadiness, lastCheckedLabel } from "../../../lib/readiness";
+import { deploymentMode, deriveReadiness, lastCheckedLabel, modelProviderCount } from "../../../lib/readiness";
 import { useOperator, useOperatorResolved } from "../../wardyn/operator-context";
 import { switchView, useViewAccess } from "../../wardyn/console-view";
 import { useShellSetupStatus } from "../../wardyn/model-access-context";
@@ -441,16 +440,15 @@ export function SetupScreen({
   const hostProxySeenRef = React.useRef<string | null>(null);
   const recheck = React.useCallback((opts?: { force?: boolean }) => {
     setRechecking(true);
-    // Resync SiteConfig too (F2): the rail's Integrations badge count is
-    // derived from it (via deriveIntegrations), so mount (via this recheck)
+    // Resync SiteConfig too (F2): the Corporate network step's proxy and
+    // redirect state is derived from it, so mount (via this recheck)
     // and every manual Re-check pull it — a failure leaves the last-known
     // config (or the initial null) in place, never clobbers it. This is the
     // ORCHESTRATOR'S sole GET path.
     void reloadSiteConfig();
-    // Secret names feed the SAME Integrations badge (deriveIntegrations) —
-    // without this, adding/deleting a secret-backed integration inside the
-    // embedded step never reaches the rail, which keeps reading the
-    // mount-time snapshot until a full page reload.
+    // Secret names feed the embedded step's own secret list — without this,
+    // adding/deleting a secret inside it keeps the mount-time snapshot until a
+    // full page reload.
     void loadSecrets();
     void loadProviderCount();
     return setupApi
@@ -677,13 +675,13 @@ export function SetupScreen({
     );
   }
 
-  // The one number the Secrets rail badge needs: AI only, since 0.7.2 (the git
-  // credential lanes moved to the `providers` step/screen, whose OWN badge now
-  // counts enabled provider rows — see providerCount below). SCM's count is
-  // not folded in here: GitHostCard, which used to carry a git credential on
-  // THIS step, is retired (workspace-providers-prompt.md §2.1).
-  const integrationsData = deriveIntegrations(status, siteConfig, secretNames);
-  const integrationsCount = integrationsData.ai.length;
+  // The one number the Secrets rail badge needs: the model providers the server
+  // counts as connected (#1421 — never the secrets a status lists), since the
+  // git credential lanes moved to the `providers` step/screen, whose OWN badge
+  // counts enabled provider rows — see providerCount below. SCM's count is not
+  // folded in here: GitHostCard, which used to carry a git credential on THIS
+  // step, is retired (workspace-providers-prompt.md §2.1).
+  const integrationsCount = modelProviderCount(status);
   integrationsCountRef.current = integrationsCount;
   const corpRedirects = siteConfig?.egress_redirects ?? [];
   const corpNetwork: CorpNetworkState = {

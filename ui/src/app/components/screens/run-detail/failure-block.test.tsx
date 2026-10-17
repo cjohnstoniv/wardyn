@@ -13,6 +13,10 @@ import type { AgentRun, AuditEvent, RunState } from "../../../lib/types";
 import { makeRun } from "../../../../test/factories";
 import { runEndingFromAudit } from "../../../lib/api/audit";
 import { RunFailureBlock } from "./failure-block";
+import type { HeldCredential, HeldCredentials } from "../../../lib/held-credentials";
+
+const ENV_SECRET_LINE = "Wardyn can't revoke a secret this run received as an environment variable — rotate it where it was issued.";
+const UNREADABLE_LINE = "Wardyn couldn't read which credentials this run held.";
 
 // The "killed: names how far into the run..." test below asserts an exact
 // "26m 0s" elapsed (ending.time or run.updated_at, minus run.created_at —
@@ -83,17 +87,37 @@ describe("runEndingFromAudit — the state picks the family, the audit picks the
     });
   });
 
-  it("a KILLED run with no run.kill row still reports the kill — only the attribution is missing", () => {
+  it("a KILLED run with no run.kill row still reports the kill — only the attribution is missing, and the evidence is unknown", () => {
     expect(runEndingFromAudit("KILLED", [])).toEqual({
       kind: "killed",
       action: "run.kill",
       outcome: undefined,
       actor: undefined,
       time: undefined,
+      evidence: "unknown",
     });
   });
 
-  // An interactive BYOI run's selftest is warn-only (runs_dispatch.go's
+  // #1487: the LATEST kill row decides, by its own timestamp — not by where a
+  // concatenated fetch happened to put it.
+  it("evidence follows the latest run.kill row: failure then success is confirmed, success then failure is partial", () => {
+    const early = new Date(NOW_MS - 120_000).toISOString();
+    const late = new Date(NOW_MS - 60_000).toISOString();
+    const fail = ev("run.kill", "failure", { time: early });
+    const ok = ev("run.kill", "success", { time: late });
+    expect(runEndingFromAudit("KILLED", [fail, ok])).toMatchObject({ evidence: "confirmed", outcome: "success" });
+    expect(runEndingFromAudit("KILLED", [ok, fail])).toMatchObject({ evidence: "confirmed", outcome: "success" });
+    const okFirst = ev("run.kill", "success", { time: early });
+    const failLast = ev("run.kill", "failure", { time: late });
+    expect(runEndingFromAudit("KILLED", [okFirst, failLast])).toMatchObject({ evidence: "partial", outcome: "failure" });
+    expect(runEndingFromAudit("KILLED", [failLast, okFirst])).toMatchObject({ evidence: "partial", outcome: "failure" });
+  });
+
+  it("only a KILLED ending carries evidence", () => {
+    expect(runEndingFromAudit("FAILED", [ev("run.build", "failure")])).not.toHaveProperty("evidence");
+  });
+
+  // An interactive BYOI run's selftest is warn-only (runs_dispatch_byoi.go's
   // byoiSelftest(…, false)): it records run.selftest/failure and the run carries
   // on. Treating that row as the cause would tell an operator whose run failed an
   // hour later that it was "refused before any task ran" — a false diagnosis of a
@@ -164,6 +188,120 @@ describe("RunFailureBlock", () => {
     expect(screen.getByText(/An operator killed this run 26m 0s in\./)).toBeInTheDocument();
     expect(screen.getByText(/a killed run cannot resume/)).toBeInTheDocument();
     expect(screen.getByText(/run\.kill · success · alice/)).toBeInTheDocument();
+  });
+
+  // #1487: three outcomes, each saying only what Wardyn knows.
+  it("killed, teardown confirmed: says what Wardyn did and claims nothing about upstream secrets", () => {
+    renderBlock("KILLED", [ev("run.kill", "success", { actor: "alice", actor_type: "human" })]);
+    expect(
+      screen.getByText(
+        "An operator killed this run 26m 0s in. Wardyn stopped and removed the sandbox and will issue it no more credentials.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByText("The audit row names who killed it and the reason they gave.")).toBeInTheDocument();
+    expect(screen.getByText("Files written to a mounted workspace are still on the host; scratch is gone.")).toBeInTheDocument();
+    expect(screen.getByText("Start a new run if the work still needs doing — a killed run cannot resume.")).toBeInTheDocument();
+    expect(screen.queryByText(/torn down|stopped working at that moment|identity revoked/)).not.toBeInTheDocument();
+    expect(screen.getByTestId("run-failure-block")).toHaveAttribute("data-evidence", "confirmed");
+  });
+
+  // Ported from the review probe: a kill that failed partway printed "may
+  // still be live" and "scratch is gone" together.
+  it("killed with a runner failure: partial copy, teardown unconfirmed, and no scratch-is-gone claim", () => {
+    renderBlock("KILLED", [
+      ev("run.kill", "failure", { actor: "alice", actor_type: "human", data: { error: "runner_error: connection refused" } }),
+    ]);
+    expect(
+      screen.getByText(
+        "An operator killed this run 26m 0s in, and a teardown step failed. The state is KILLED, but teardown is not confirmed: the sandbox may still be live, and a credential it held may still work.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByText("runner_error: connection refused")).toHaveClass("font-mono");
+    expect(screen.getByText("The audit row names the step that failed — read it before treating this run as contained.")).toBeInTheDocument();
+    expect(screen.getByText("Killing it again re-runs the same teardown; the cascade is safe to repeat.")).toBeInTheDocument();
+    expect(
+      screen.getByText("Whether scratch files remain is not confirmed. Files written to a mounted workspace are still on the host."),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/scratch is gone/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/torn down/)).not.toBeInTheDocument();
+    expect(screen.getByText(/run\.kill · failure · alice/)).toBeInTheDocument();
+    expect(screen.getByTestId("run-failure-block")).toHaveAttribute("data-evidence", "partial");
+  });
+
+  // Ported from the review probe: a KILLED run whose trail has no run.kill row
+  // invented the ending from the state alone and printed the clean claim.
+  it("KILLED with no kill record: says it cannot confirm, with no actor, elapsed time or run.kill line", () => {
+    renderBlock("KILLED", []);
+    expect(
+      screen.getByText(
+        "This run is marked KILLED, but its audit trail has no kill record, so Wardyn can't confirm who killed it or whether teardown finished.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Kill it again to run teardown once more; the cascade is safe to repeat.")).toBeInTheDocument();
+    expect(screen.getByText("Start a new run if the work still needs doing — a killed run cannot resume.")).toBeInTheDocument();
+    expect(screen.queryByText(/An operator killed this run/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/scratch is gone|torn down|stopped and removed/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/run\.kill/)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Open audit trail/ })).toBeInTheDocument();
+    expect(screen.getByTestId("run-failure-block")).toHaveAttribute("data-evidence", "unknown");
+  });
+
+  describe("per-kind credential lines", () => {
+    const kill = (outcome: "success" | "failure") => [ev("run.kill", outcome, { actor: "alice", actor_type: "human" })];
+    const held = (items: HeldCredential[]): HeldCredentials => ({ readable: true, items });
+    const withHeld = (state: RunState, audit: AuditEvent[], h: HeldCredentials | undefined) =>
+      render(<RunFailureBlock run={run(state)} audit={audit} held={h} onGoAudit={vi.fn()} />);
+
+    it("a GitHub token it held: stays valid until it expires, on a confirmed kill", () => {
+      withHeld("KILLED", kill("success"), held([{ kind: "github_token" }]));
+      expect(screen.getByText("A GitHub token it already held stays valid until it expires, within an hour.")).toBeInTheDocument();
+    });
+
+    it("a git token and an SSH key name the kind and the host, and appear on a partial kill too", () => {
+      withHeld(
+        "KILLED",
+        kill("failure"),
+        held([
+          { kind: "git_pat", host: "dev.azure.com" },
+          { kind: "ssh_key", host: "github.com" },
+        ]),
+      );
+      expect(
+        screen.getByText("Wardyn can't revoke the git token this run used — it stays live until you rotate it on dev.azure.com."),
+      ).toBeInTheDocument();
+      expect(
+        screen.getByText("Wardyn can't revoke the SSH key this run used — it stays live until you rotate it on github.com."),
+      ).toBeInTheDocument();
+    });
+
+    it("an environment secret gets the rotation line", () => {
+      withHeld("KILLED", kill("success"), held([{ kind: "env_secret" }]));
+      expect(screen.getByText(ENV_SECRET_LINE)).toBeInTheDocument();
+    });
+
+    it("no held credential of those kinds: no per-kind line at all", () => {
+      withHeld("KILLED", kill("success"), held([]));
+      expect(screen.queryByText(/stays valid until it expires|can't revoke|rotate/)).not.toBeInTheDocument();
+      expect(screen.queryByText(UNREADABLE_LINE)).not.toBeInTheDocument();
+    });
+
+    it("facts that could not be read say so, on confirmed and partial", () => {
+      withHeld("KILLED", kill("success"), { readable: false });
+      expect(screen.getByText("Wardyn couldn't read which credentials this run held.")).toBeInTheDocument();
+      cleanup();
+      withHeld("KILLED", kill("failure"), { readable: false });
+      expect(screen.getByText(UNREADABLE_LINE)).toBeInTheDocument();
+    });
+
+    it("facts still loading render no credential line", () => {
+      withHeld("KILLED", kill("success"), undefined);
+      expect(screen.queryByText(UNREADABLE_LINE)).not.toBeInTheDocument();
+    });
+
+    it("an unknown outcome has no per-kind lines: the trail it would read is the thing in doubt", () => {
+      withHeld("KILLED", [], held([{ kind: "github_token" }]));
+      expect(screen.queryByText(/stays valid until it expires/)).not.toBeInTheDocument();
+    });
   });
 
   it("auto_stop: framed as the policy working, and names the field that sets it", () => {
@@ -258,5 +396,126 @@ describe("RunFailureBlock", () => {
   it("carries no second clone door — the run header is the one door", () => {
     renderBlock("KILLED", [ev("run.kill", "success", { actor: "alice", actor_type: "human" })]);
     expect(screen.queryByRole("button", { name: /Start a run like this one/i })).toBeNull();
+  });
+});
+
+// f-f6 — sandbox-create and agent-start failures, graded by the stamped reason.
+describe("dispatch failures in plain words (M2)", () => {
+  const WRAPPED = "rpc error: code = Unknown desc = pull access denied for registry.example/team/agent:1.4";
+  const STRIPPED = "pull access denied for registry.example/team/agent:1.4";
+
+  it("grades each reason exactly; an unclassified run.create failure stays unknown", () => {
+    expect(
+      runEndingFromAudit("FAILED", [ev("run.create", "failure", { data: { error: "x", reason: "sandbox_create" } })])?.kind,
+    ).toBe("sandbox_create");
+    expect(
+      runEndingFromAudit("FAILED", [ev("run.exec", "failure", { data: { error: "x", reason: "agent_start" } })])?.kind,
+    ).toBe("agent_start");
+    expect(runEndingFromAudit("FAILED", [ev("run.create", "failure", { data: { error: "sandbox_create refused" } })])?.kind).toBe(
+      "unknown",
+    );
+  });
+
+  it("sandbox_create renders its copy, the stripped words, and the unstripped text behind a closed disclosure", () => {
+    renderBlock("FAILED", [ev("run.create", "failure", { data: { error: WRAPPED, reason: "sandbox_create" } })]);
+    const block = screen.getByTestId("run-failure-block");
+    expect(block.getAttribute("data-ending")).toBe("sandbox_create");
+    expect(block.textContent).toContain(
+      "The sandbox could not be created, so the run stopped before the agent started. There is no exit code because nothing ran.",
+    );
+    expect(block.textContent).toContain("Read the runner's message above — it names what it could not create or find.");
+    expect(block.textContent).toContain("Fix that, then start a new run — the policy and workspace are unchanged.");
+    const details = block.querySelector("details") as HTMLDetailsElement;
+    expect(details.open).toBe(false);
+    expect(details.textContent).toContain("Platform message");
+    expect(details.textContent).toContain(WRAPPED);
+    // The visible line outside the disclosure carries no wrapper.
+    expect(block.textContent?.split(WRAPPED).length).toBe(2);
+    expect(block.textContent).toContain(STRIPPED);
+  });
+
+  it("agent_start renders its copy and omits the disclosure when nothing was stripped", () => {
+    renderBlock("FAILED", [
+      ev("run.exec", "failure", { data: { error: "OCI runtime exec failed: unable to start", reason: "agent_start" } }),
+    ]);
+    const block = screen.getByTestId("run-failure-block");
+    expect(block.getAttribute("data-ending")).toBe("agent_start");
+    expect(block.textContent).toContain(
+      "The sandbox was created, but the agent could not be started in it, so no task ran. There is no exit code because nothing ran.",
+    );
+    expect(block.textContent).toContain("Read the runner's message above — it says why the agent process would not start.");
+    expect(block.querySelector("details")).toBeNull();
+  });
+});
+
+// 0.9 (M-RN-3 RS5, RN-Q29): a run on a person's own computer. A runner's revocation ends its runs KILLED with a
+// run.kill row naming the reason and whether the runner was connected; that is not an operator's kill, so it
+// has no killer and its own arms. A clean kill of a local run says what the computer reported.
+describe("RunFailureBlock: a run on a person's computer", () => {
+  const localRun = (over: Partial<AgentRun> = {}): AgentRun => ({
+    ...run("KILLED"),
+    placement: "local",
+    runner_id: "11111111-2222-3333-4444-555555555555",
+    runner_name: "laptop-7",
+    ...over,
+  });
+  const revoked = (online: boolean) =>
+    ev("run.kill", "success", { actor: "wardynd", data: { reason: "runner_revoked", runner_online: online } });
+  const renderLocal = (audit: AuditEvent[], over: Partial<AgentRun> = {}) =>
+    render(<RunFailureBlock run={localRun(over)} audit={audit} onGoAudit={vi.fn()} />);
+
+  it("runEndingFromAudit reads a revocation off the kill row, with whether the runner was online", () => {
+    expect(runEndingFromAudit("KILLED", [revoked(true)])).toMatchObject({ kind: "killed", evidence: "confirmed", runnerRevoked: { online: true } });
+    expect(runEndingFromAudit("KILLED", [revoked(false)])?.runnerRevoked).toEqual({ online: false });
+    expect(runEndingFromAudit("KILLED", [ev("run.kill", "success", { data: { reason: "enough" } })])?.runnerRevoked).toBeUndefined();
+    // Not the runner's reason as a "detail" under the heading: the arm says it in its own words.
+    expect(runEndingFromAudit("KILLED", [revoked(true)])?.detail).toBeUndefined();
+  });
+
+  it("revoked while online: the runner was told to stop its network, the files stay there, and no operator is blamed", () => {
+    renderLocal([revoked(true)]);
+    expect(screen.getByText("laptop-7 was revoked")).toBeInTheDocument();
+    expect(screen.getByText("This run's credentials were revoked, and laptop-7 was told to stop its network. Anything it wrote stays on laptop-7.")).toBeInTheDocument();
+    expect(screen.getByText("The audit row for revoking laptop-7 names who did it.")).toBeInTheDocument();
+    expect(screen.getByText("The sandbox and its files stay on laptop-7. Wardyn can't remove them; the computer's owner can.")).toBeInTheDocument();
+    expect(screen.getByText("Start a new run if the work still needs doing — a killed run cannot resume.")).toBeInTheDocument();
+    expect(screen.queryByText(/An operator killed this run/)).toBeNull();
+    expect(screen.queryByText(/laptop-7 was revoked while offline/)).toBeNull();
+  });
+
+  // C4: the arm follows data.runner_online, and the two are alternatives, never stacked.
+  it("revoked while offline: the replacement arm says it stops when it next connects", () => {
+    renderLocal([revoked(false)]);
+    expect(screen.getByText("laptop-7 was revoked while offline")).toBeInTheDocument();
+    expect(screen.getByText("This run's credentials were revoked at once; laptop-7 stops its network when it next connects. Anything it wrote stays on laptop-7.")).toBeInTheDocument();
+    expect(screen.queryByText("laptop-7 was revoked")).toBeNull();
+    expect(screen.queryByText(/was told to stop its network/)).toBeNull();
+  });
+
+  it("offers no Revive, Extend or End run", () => {
+    renderLocal([revoked(true)]);
+    expect(screen.queryByRole("button", { name: /Revive|Extend|End run/ })).toBeNull();
+    expect(screen.getByRole("button", { name: /Open audit trail/ })).toBeInTheDocument();
+  });
+
+  it("a revocation whose cascade did not finish is still a partial teardown first", () => {
+    renderLocal([ev("run.kill", "failure", { data: { reason: "runner_revoked", runner_online: true, identity_error: "x" } })]);
+    expect(screen.getByTestId("run-failure-block")).toHaveAttribute("data-evidence", "partial");
+    expect(screen.queryByText("laptop-7 was revoked")).toBeNull();
+  });
+
+  // C5: the local complete arm, and the remote one unchanged.
+  it("a clean kill of a local run uses what the computer reported and says the files are on it", () => {
+    renderLocal([ev("run.kill", "success", { actor: "alice", actor_type: "human" })]);
+    expect(screen.getByText("An operator killed this run 26m 0s in. laptop-7 reported it removed the sandbox; Wardyn issues it no more credentials.")).toBeInTheDocument();
+    expect(screen.getByText("Files the run wrote to a folder on laptop-7 are still there; scratch is gone.")).toBeInTheDocument();
+    expect(screen.queryByText(/Wardyn stopped and removed the sandbox/)).toBeNull();
+    expect(screen.queryByText(/still on the host/)).toBeNull();
+  });
+
+  it("a remote kill reads exactly as before", () => {
+    renderLocal([ev("run.kill", "success", { actor: "alice", actor_type: "human" })], { placement: "remote", runner_id: undefined, runner_name: undefined });
+    expect(screen.getByText("An operator killed this run 26m 0s in. Wardyn stopped and removed the sandbox and will issue it no more credentials.")).toBeInTheDocument();
+    expect(screen.getByText("Files written to a mounted workspace are still on the host; scratch is gone.")).toBeInTheDocument();
   });
 });

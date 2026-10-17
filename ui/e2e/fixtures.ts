@@ -4,6 +4,7 @@
  */
 
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { basename } from "node:path";
 import {
   test as base,
@@ -11,6 +12,18 @@ import {
   type Locator,
   type Page,
 } from "@playwright/test";
+import { RUN_DOCUMENT_KIND, TEMPLATE_API_VERSION } from "../src/app/lib/types/templates";
+import { NR_DOCUMENT } from "../src/app/components/wardyn/copy/new-run/document";
+import { NR_FILES } from "../src/app/components/wardyn/copy/new-run/files";
+import { NR_HARNESSES } from "../src/app/components/wardyn/copy/new-run/harnesses";
+import { NR_LAUNCH } from "../src/app/components/wardyn/copy/new-run/launch";
+import { NR_REVIEW } from "../src/app/components/wardyn/copy/new-run/review";
+import { NR_RUN } from "../src/app/components/wardyn/copy/new-run/run";
+import { NR_SHAPE } from "../src/app/components/wardyn/copy/new-run/shape";
+import { NR_SHARED } from "../src/app/components/wardyn/copy/new-run/shared";
+import { NR_START } from "../src/app/components/wardyn/copy/new-run/start";
+import { NR_TOOLS } from "../src/app/components/wardyn/copy/new-run/tools";
+import { SCENARIO_POOLS } from "../src/app/lib/new-run-fixtures/scenarios/pools";
 
 // Shared Playwright fixtures for the Wardyn UI e2e suite. Specs run against the
 // seeded test backend booted by scripts/e2e-backend.sh (real wardynd + Postgres +
@@ -19,7 +32,7 @@ import {
 // The admin token the seeded backend is started with. The app stores it under
 // localStorage["wardyn_admin_token"] and probes /api/v1/runs on mount to decide
 // auth; injecting it before first navigation boots the app already signed in.
-export const ADMIN_TOKEN = process.env.WARDYN_E2E_TOKEN || "wardyn-e2e-token";
+export const ADMIN_TOKEN = process.env.WARDYN_E2E_TOKEN || "";
 // #510-F11 — exported so no OTHER e2e file has to re-type this literal (it
 // mirrors lib/api/core.ts's own private TOKEN_KEY; a rename there that this
 // file's own hand-typed copy missed used to make the two-tabs case in
@@ -27,9 +40,13 @@ export const ADMIN_TOKEN = process.env.WARDYN_E2E_TOKEN || "wardyn-e2e-token";
 // instead of a clear mismatch).
 export const TOKEN_KEY = "wardyn_admin_token";
 
-// Synthetic credentials: e2e-backend.sh stores only their SHA-256 hashes.
-export const MEMBER_TOKEN = `wdn_${"1".repeat(64)}`;
-const SECURITY_ADMIN_TOKEN = `wdn_${"2".repeat(64)}`;
+// Rotate with each backend; e2e-backend.sh stores only their SHA-256 hashes.
+function personToken(principal: string): string {
+  return `wdn_${createHash("sha256").update(`${ADMIN_TOKEN}:${principal}`).digest("hex")}`;
+}
+export const MEMBER_TOKEN = personToken("e2e-member");
+const SECURITY_ADMIN_TOKEN = personToken("e2e-security-admin");
+const SECURITY_ADMIN_2_TOKEN = personToken("e2e-security-admin-2");
 export const MEMBER_PRINCIPAL = "e2e-member";
 
 // T-68 — page-health teardown gate. A spec whose page threw an uncaught JS
@@ -65,6 +82,7 @@ function pageHealthAllowed(testFile: string): boolean {
 // `test` from "@playwright/test" instead and manage storage themselves.
 export const test = base.extend({
   page: async ({ page }, use, testInfo) => {
+    if (!ADMIN_TOKEN) throw new Error("WARDYN_E2E_TOKEN is missing; use scripts/run-ui-e2e.sh or read e2e-backend.sh token for this backend");
     await page.addInitScript(
       ([key, tok]) => {
         try {
@@ -101,6 +119,15 @@ export const test = base.extend({
       });
     });
 
+    // The hermetic backend runs no runner, so its pool list is empty and New Run's Run step would hold
+    // Continue for a pool nobody can choose. New Run's own pool question (the list asked with run_type)
+    // is answered with one organisation default pool; the run then names no pool, as an untouched one
+    // does, and the server takes it. Registered first, so a spec's own route for the list wins.
+    await page.route(
+      (url) => url.pathname.endsWith("/api/v1/runner-pools") && url.searchParams.has("run_type"),
+      (route) => route.fulfill({ json: SCENARIO_POOLS.member }),
+    );
+
     await use(page);
 
     if (pageHealthAllowed(testInfo.file)) return;
@@ -122,6 +149,8 @@ export { expect };
 export type NavLabel =
   | "Runs"
   | "Approvals"
+  // 0.8.6 (ppl-p2) — right after Approvals, both admin tiers.
+  | "People"
   | "Workspaces"
   | "Policies"
   // 0.7 — sits between Policies and Permissions (app-shell.tsx's NAV_ITEMS), so
@@ -184,20 +213,218 @@ export async function navTo(page: Page, label: NavLabel): Promise<void> {
 // that has already installed a failing route intercept would never mount the
 // shell at all. React Router listens to popstate, so pushState + popstate is
 // exactly what a <NavLink> click does.
-// launchRun clicks the wizard's Launch and lands on the run's detail page.
-// #125: a launch that answers 2xx always navigates in the same tick now,
-// warnings or not — there is no longer a held screen to click through, so
-// this is just the click and the wait.
-export async function launchRun(page: Page): Promise<void> {
-  await page.getByRole("button", { name: "Launch run" }).click();
-  await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{8,}/, { timeout: 15_000 });
-}
-
 export async function navToRoute(page: Page, path: string): Promise<void> {
   await page.evaluate((p) => {
     window.history.pushState({}, "", p);
     window.dispatchEvent(new PopStateEvent("popstate"));
   }, path);
+}
+
+// ---------------------------------------------------------------------------
+// New Run, the guided flow: Start, then Shape, Run, Harnesses, Files, Tools
+// and access, Review, the Name dialog and the Launched screen. Every string is
+// the copy module's, so a wording change breaks nothing here. A spec that is
+// about something other than New Run reaches Review through walkGuidedToReview
+// and launches through launchRun; a spec about one step drives that step itself.
+// ---------------------------------------------------------------------------
+
+const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const startsWith = (s: string) => new RegExp(`^${escapeRe(s)}`);
+
+export type NewRunShape = "agent_task" | "environment" | "application";
+export type NewRunMode = "interactive" | "autonomous";
+
+const SHAPE_TITLE: Record<NewRunShape, string> = {
+  agent_task: NR_SHAPE.AGENT_TITLE,
+  environment: NR_SHAPE.ENV_TITLE,
+  application: NR_SHAPE.APP_TITLE,
+};
+const RUN_TITLE: Record<NewRunShape, string> = {
+  agent_task: NR_RUN.TITLE_AGENT,
+  environment: NR_RUN.TITLE_ENV,
+  application: NR_RUN.TITLE_APP,
+};
+// The footer's one primary action: "Continue to <step>", and "Review run" from the last step.
+const CONTINUE = new RegExp(`^(${escapeRe(NR_SHARED.CONTINUE_TO(""))}.+|${escapeRe(NR_SHARED.REVIEW_RUN)})$`);
+
+/** A screen's h1: focus moves to it on every screen change, so it is the "arrived" signal. */
+export const newRunHeading = (page: Page, title: string): Locator => page.getByRole("heading", { name: title, level: 1 });
+
+/** Opens New Run from the shell's button, as a person does, and waits for the Start screen. */
+export async function openNewRun(page: Page): Promise<void> {
+  await page.getByRole("button", { name: "New run" }).click();
+  await expect(newRunHeading(page, NR_START.TITLE)).toBeVisible();
+}
+
+/** Start screen, "Start guided setup": lands on Shape. */
+export async function startGuided(page: Page): Promise<void> {
+  await page.getByRole("button", { name: NR_START.GUIDED_FOOT }).click();
+  await expect(newRunHeading(page, NR_SHAPE.TITLE)).toBeVisible();
+}
+
+/** Shape: a workload button writes the shape and opens the Run step. */
+export async function chooseShape(page: Page, shape: NewRunShape): Promise<void> {
+  await page.getByRole("button", { name: SHAPE_TITLE[shape], exact: true }).click();
+  await expect(newRunHeading(page, RUN_TITLE[shape])).toBeVisible();
+}
+
+/** The footer's primary action, then the next screen's heading as the arrived signal. */
+export async function continueNewRun(page: Page, nextHeading: string): Promise<void> {
+  await page.getByRole("button", { name: CONTINUE }).click();
+  await expect(newRunHeading(page, nextHeading)).toBeVisible();
+}
+
+export async function chooseRunMode(page: Page, mode: NewRunMode): Promise<void> {
+  const label = mode === "autonomous" ? NR_RUN.MODE_AUTONOMOUS : NR_RUN.MODE_INTERACTIVE;
+  await page.getByRole("radio", { name: startsWith(label) }).click();
+}
+
+/**
+ * Harnesses step of a new agent task: the step itself adds the first harness the roster offers. Waits for
+ * it, and fills an Autonomous run's task.
+ */
+export async function firstHarness(page: Page, task?: string): Promise<Locator> {
+  const picker = page.locator("#nr-harness-0");
+  await expect(picker).toBeVisible();
+  if (task !== undefined) await page.locator("#nr-task").fill(task);
+  return picker;
+}
+
+/** Files step's Add dialog, opened on the repositories this person can choose. */
+export async function openRepositoryPicker(page: Page): Promise<Locator> {
+  await page.getByRole("button", { name: NR_FILES.ADD_ARIA }).click();
+  const dialog = page.getByRole("dialog");
+  await dialog.getByRole("button", { name: startsWith(NR_FILES.REPOSITORY_BADGE) }).click();
+  await expect(dialog.getByRole("heading", { name: NR_FILES.ADD_REPO_TITLE })).toBeVisible();
+  return dialog;
+}
+
+/** One repository in the Add dialog's list. */
+export const repositoryOption = (dialog: Locator, repo: string): Locator =>
+  dialog.getByRole("radio", { name: new RegExp(`^${escapeRe(repo)}(\\s|$)`) });
+
+/** Adds one repository at the mount path the dialog offers. The first thing added is where the run starts. */
+export async function addRepository(page: Page, repo: string): Promise<void> {
+  const dialog = await openRepositoryPicker(page);
+  await repositoryOption(dialog, repo).check();
+  await dialog.getByRole("button", { name: NR_SHARED.CONTINUE, exact: true }).click();
+  await dialog.getByRole("button", { name: NR_FILES.ADD_CONFIRM, exact: true }).click();
+  await expect(dialog).toBeHidden();
+}
+
+/**
+ * Files step: "No extra files" when `repos` is empty, otherwise each repository added through the dialog;
+ * the run starts in the first.
+ */
+export async function chooseFiles(page: Page, repos: readonly string[] = []): Promise<void> {
+  if (repos.length === 0) {
+    await page.getByRole("radio", { name: startsWith(NR_FILES.NO_EXTRA) }).check();
+  } else {
+    for (const repo of repos) await addRepository(page, repo);
+  }
+  await fillMainDriveSize(page);
+}
+
+/** Files step: an untouched main drive size is filled, since a run with no size is not complete. */
+export async function fillMainDriveSize(page: Page): Promise<void> {
+  const size = page.locator("#nr-main-drive-size");
+  if ((await size.count()) > 0 && (await size.inputValue()) === "") await size.fill("10");
+}
+
+export interface GuidedPlan {
+  /** Default "environment": it needs no harness, task or command. */
+  shape?: NewRunShape;
+  /** An agent task's mode; default "interactive". */
+  mode?: NewRunMode;
+  /** An application's command. */
+  command?: string;
+  /** An Autonomous run's task. */
+  task?: string;
+  /** Repository names to include on Files; none means "No extra files". */
+  repos?: readonly string[];
+}
+
+/**
+ * From the Start screen to the Files step with the fewest choices a complete run needs, nothing chosen on
+ * Files yet. A spec about the Files step drives it from here.
+ */
+export async function walkGuidedToFiles(page: Page, plan: GuidedPlan = {}): Promise<void> {
+  const shape = plan.shape ?? "environment";
+  const mode = plan.mode ?? "interactive";
+  await startGuided(page);
+  await chooseShape(page, shape);
+  if (shape === "agent_task") await chooseRunMode(page, mode);
+  if (shape === "application") await page.getByLabel(NR_RUN.COMMAND_LABEL).fill(plan.command ?? "echo e2e");
+  await continueNewRun(page, NR_HARNESSES.TITLE);
+  if (shape === "agent_task") await firstHarness(page, mode === "autonomous" ? (plan.task ?? "e2e task") : undefined);
+  await continueNewRun(page, NR_FILES.TITLE);
+}
+
+/** From the Start screen to Review. Stops there, so a spec can read the page, change a setting or launch. */
+export async function walkGuidedToReview(page: Page, plan: GuidedPlan = {}): Promise<void> {
+  await walkGuidedToFiles(page, plan);
+  await chooseFiles(page, plan.repos);
+  await continueNewRun(page, NR_TOOLS.TITLE);
+  await continueNewRun(page, NR_REVIEW.TITLE);
+}
+
+/** Start's JSON door: paste a run document (the intent only), validate it and continue to Review. */
+export async function reviewRunDocument(page: Page, intent: Record<string, unknown>): Promise<void> {
+  await page.getByRole("button", { name: NR_START.DOC_JSON }).click();
+  const doc = { api_version: TEMPLATE_API_VERSION, kind: RUN_DOCUMENT_KIND, intent };
+  await page.getByLabel(NR_DOCUMENT.EDITOR_ARIA(NR_DOCUMENT.FORMAT_JSON)).fill(JSON.stringify(doc));
+  await page.getByRole("button", { name: NR_DOCUMENT.VALIDATE }).click();
+  await page.getByRole("button", { name: NR_DOCUMENT.CONTINUE_REVIEW }).click();
+  await expect(newRunHeading(page, NR_REVIEW.TITLE)).toBeVisible();
+}
+
+/**
+ * Answers New Run's own preflight clear. Review keeps Launch shut until the server's check passes, and
+ * the hermetic backend's real answer (no model providers, no barrier) can hold it, so a case about what a
+ * LAUNCH does answers the check itself.
+ */
+export async function mockPreflightClear(page: Page): Promise<void> {
+  await page.route("**/api/v1/runs/preflight", (route) =>
+    route.fulfill({ json: { enforced_confinement_class: "CC1", setup_items: [] } }),
+  );
+}
+
+/**
+ * Sends New Run's preflight to the real server and drops the one item the hermetic backend always answers
+ * with: it runs no runner, so no barrier can be built. Everything else the server says stays, so a case
+ * still proves the server holds or frees Launch for its own reason.
+ */
+export async function ignoreMissingRunner(page: Page): Promise<void> {
+  await page.route("**/api/v1/runs/preflight", async (route) => {
+    const response = await route.fetch();
+    if (!response.ok()) return route.fulfill({ response });
+    const json = (await response.json()) as { setup_items?: { kind?: string }[] };
+    json.setup_items = (json.setup_items ?? []).filter((item) => item.kind !== "backend");
+    await route.fulfill({ response, json });
+  });
+}
+
+/** Review's Launch run, which opens the Name dialog. */
+export async function openLaunchDialog(page: Page): Promise<Locator> {
+  await page.getByRole("button", { name: NR_REVIEW.LAUNCH_RUN }).click();
+  const dialog = page.getByRole("dialog", { name: NR_LAUNCH.TITLE });
+  await expect(dialog).toBeVisible();
+  return dialog;
+}
+
+/** Names the run in the dialog and presses Launch. The dialog stays open on a refusal. */
+export async function submitLaunch(page: Page, title = "e2e run"): Promise<Locator> {
+  const dialog = await openLaunchDialog(page);
+  await dialog.getByLabel(NR_LAUNCH.TITLE_LABEL).fill(title);
+  await dialog.getByRole("button", { name: NR_LAUNCH.LAUNCH, exact: true }).click();
+  return dialog;
+}
+
+/** Launches from Review and follows "View run" to the run's detail page. */
+export async function launchRun(page: Page, title = "e2e run"): Promise<void> {
+  await submitLaunch(page, title);
+  await page.getByRole("button", { name: NR_LAUNCH.VIEW_RUN }).or(page.getByRole("link", { name: NR_LAUNCH.VIEW_RUN })).click();
+  await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{8,}/, { timeout: 15_000 });
 }
 
 // #1200 compact cards: every CollapsibleCard on Admin Settings/Your account
@@ -252,6 +479,12 @@ export async function asRealMember(page: Page): Promise<void> {
 
 export async function asRealSecurityAdmin(page: Page): Promise<void> {
   await asRealPerson(page, SECURITY_ADMIN_TOKEN, "e2e-security-admin", "security_admin");
+}
+
+// The second security admin, a different human from asRealSecurityAdmin's: its own principal and mailbox.
+// The governance four-eyes spec needs a proposer and an approver who are two people.
+export async function asRealSecurityAdmin2(page: Page): Promise<void> {
+  await asRealPerson(page, SECURITY_ADMIN_2_TOKEN, "e2e-security-admin-2", "security_admin");
 }
 
 // Render-only splices for specs that supply deliberately hypothetical states.

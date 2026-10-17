@@ -19,6 +19,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
+	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -198,14 +199,14 @@ func validateCapabilityGrant(g *types.CapabilityGrant) error {
 		// snapshot, and that snapshot is strictly narrower than "lowercase it":
 		// sessionGroups can only carry printable ASCII, checked BEFORE the fold.
 		// So the write surface asks the match surface itself — one function,
-		// oidc.CanonicalGroupSubject — rather than a second, looser spelling of
+		// types.CanonicalGroupSubject — rather than a second, looser spelling of
 		// the same rule. Without it a subject no session can ever produce is
 		// stored 201-Created and rendered on the Permissions screen as active
 		// while it matches nobody: a DENY that protects nothing (the failure
 		// the egress_host arm above added ValidDomainEntry to close, on the
 		// VALUE half of the identical record), and a group tier that
 		// HasGroupTierAssignments still counts as present.
-		subject, ok := oidc.CanonicalGroupSubject(g.Subject)
+		subject, ok := types.CanonicalGroupSubject(g.Subject)
 		if !ok {
 			return fmt.Errorf("subject: must be printable ASCII — a group subject is matched against the login-time group snapshot, which carries printable ASCII only, so this value can never match anyone")
 		}
@@ -218,14 +219,14 @@ func validateCapabilityGrant(g *types.CapabilityGrant) error {
 			return fmt.Errorf("subject: %q is not a user type id", g.Subject)
 		}
 	} else {
-		// A USER subject gets canonicalUserSubject, not a bare ToLower. The
+		// A USER subject gets types.CanonicalUserSubject, not a bare ToLower. The
 		// fold is UNICODE: U+212A folds to ASCII 'k' and U+0130 to ASCII 'i',
 		// so a plain lowercase stored an admin's "Kim@Korp.com" (crafted K's)
 		// as "kim@korp.com" — binding a DENY, or a governance profile, to a
 		// real human the author never named, and to the exact string that
 		// human's own claims resolve to. Same function as the read side, so
 		// what a caller can BE is what this can store.
-		g.Subject = canonicalUserSubject(g.Subject)
+		g.Subject = types.CanonicalUserSubject(g.Subject)
 	}
 	if len(g.Subject) > maxCapabilityGrantFieldLen || !controlCharFree(g.Subject) {
 		return fmt.Errorf("subject: invalid")
@@ -270,14 +271,14 @@ func validateCapabilityGrant(g *types.CapabilityGrant) error {
 //     capSecret DENY would be byte-for-byte the same inert row the workspace
 //     arm exists to prevent, and folding can only ever make the grant match
 //     the row the author meant. The ASCII guard runs BEFORE the fold, the
-//     same order canonicalUserSubject and oidc.CanonicalGroupSubject use: a
-//     non-ASCII value can never name one of these rows, and folding first would
+//     same order types.CanonicalUserSubject and types.CanonicalGroupSubject
+//     use: a non-ASCII value can never name one of these rows, and folding first would
 //     let U+212A land on an ASCII name the author never typed.
 //
 //   - feature: LOWERCASED (ASCII guard first, as above), then held to the
-//     closed featureValues set. The mint doors ask about exactly those two
-//     strings, so any other value is a row that can never match — a deny that
-//     turns nothing off.
+//     closed featureValues set. The mint doors and componentAttachRefusal ask
+//     about exactly those strings, so any other value is a row that can never
+//     match — a deny that turns nothing off.
 //
 //   - agent and image: STORED VERBATIM, and that is a decision rather than an
 //     omission. An agent id is not held to a closed catalog at the run boundary
@@ -311,7 +312,7 @@ func canonicalGrantValue(capability, value string) (string, error) {
 		if !imageRefPathSafe(v) {
 			return "", fmt.Errorf("value: "+image400DotSegment, fmt.Sprintf("%q", v))
 		}
-	case capWorkspace, capPolicy:
+	case capWorkspace, capPolicy, capComponent:
 		id, err := uuid.Parse(v)
 		if err != nil {
 			return "", fmt.Errorf("value: %q is not a %s id — a %s capability names one by uuid, and the resolver compares it exactly, so a value it cannot read can never match anything", v, capability, capability)
@@ -319,7 +320,7 @@ func canonicalGrantValue(capability, value string) (string, error) {
 		return id.String(), nil
 	case capFeature:
 		lowered := strings.ToLower(v)
-		if !oidc.ASCIIOnly(v) || !slices.Contains(featureValues, lowered) {
+		if !types.ASCIIOnlySubject(v) || !slices.Contains(featureValues, lowered) {
 			return "", fmt.Errorf("value: %q is not a feature — a feature capability is one of %s, and the resolver compares it exactly, so any other value can never match anything", v, strings.Join(featureValues, ", "))
 		}
 		return lowered, nil
@@ -331,7 +332,7 @@ func canonicalGrantValue(capability, value string) (string, error) {
 		case capModelProvider:
 			grammar, what = modelProviderIDPattern, "model provider id"
 		}
-		if !oidc.ASCIIOnly(v) {
+		if !types.ASCIIOnlySubject(v) {
 			return "", fmt.Errorf("value: %q is not a %s — one is written in lowercase ASCII, so this value can never match a stored row", v, what)
 		}
 		lowered := strings.ToLower(v)
@@ -350,6 +351,10 @@ func canonicalGrantValue(capability, value string) (string, error) {
 // happened: 201 for a genuinely new row, 200 when an existing one was
 // updated (the console's DUPLICATE copy). securityOps (routes.go).
 func (s *Server) handleUpsertCapabilityGrant(w http.ResponseWriter, r *http.Request) {
+	mode, ok := s.governanceWriteMode(w, r)
+	if !ok {
+		return
+	}
 	var req grantWriteRequest
 	if !decodeStrict(w, r, &req) {
 		return
@@ -371,6 +376,10 @@ func (s *Server) handleUpsertCapabilityGrant(w http.ResponseWriter, r *http.Requ
 	// A fresh candidate id: UpsertCapabilityGrant returns the EXISTING row's id
 	// on a natural-key conflict, never this one — comparing the two is how the
 	// handler tells created from updated without a separate existence read.
+	if mode == govQueue {
+		s.holdGrantUpsert(w, r, g)
+		return
+	}
 	g.ID = uuid.New()
 	g.CreatedBy = principalFromRequest(r)
 	saved, err := s.cfg.Store.UpsertCapabilityGrant(r.Context(), g)
@@ -383,13 +392,10 @@ func (s *Server) handleUpsertCapabilityGrant(w http.ResponseWriter, r *http.Requ
 		action, status = "capability.grant.update", http.StatusOK
 	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
-		action, saved.ID.String(), "success", mustJSON(map[string]any{
-			"subject_type": saved.SubjectType,
-			"subject":      saved.Subject,
-			"capability":   saved.Capability,
-			"value":        saved.Value,
-			"effect":       saved.Effect,
-		})))
+		action, saved.ID.String(), "success", mustJSON(grantAuditData(saved))))
+	if mode == govBypass {
+		s.recordGovernanceBypass(r, govKindGrant, saved.ID.String(), "success", nil)
+	}
 	writeJSON(w, status, saved)
 }
 
@@ -398,8 +404,17 @@ func (s *Server) handleUpsertCapabilityGrant(w http.ResponseWriter, r *http.Requ
 // unknown id is the whole story (no existence oracle to protect: an admin
 // already sees the full table via GET /permissions).
 func (s *Server) handleDeleteCapabilityGrant(w http.ResponseWriter, r *http.Request) {
+	mode, ok := s.governanceWriteMode(w, r)
+	if !ok {
+		return
+	}
 	id, ok := parseIDParam(w, r, "id", "capability grant")
 	if !ok {
+		return
+	}
+	if mode == govQueue {
+		// Never exempt: deleting a deny grant widens.
+		s.holdGrantDelete(w, r, id)
 		return
 	}
 	if err := s.cfg.Store.DeleteCapabilityGrant(r.Context(), id); err != nil {
@@ -411,6 +426,9 @@ func (s *Server) handleDeleteCapabilityGrant(w http.ResponseWriter, r *http.Requ
 	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
 		"capability.grant.delete", id.String(), "success", nil))
+	if mode == govBypass {
+		s.recordGovernanceBypass(r, govKindGrant, id.String(), "success", nil)
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -427,10 +445,14 @@ func (s *Server) handleDeleteCapabilityGrant(w http.ResponseWriter, r *http.Requ
 // If-Match (etag.go) is optional optimistic concurrency on top of this
 // whole-map replace: an absent header behaves exactly as before, a present
 // one that no longer matches GET /permissions's current Enforcement ETag is
-// refused with 412 before the write reaches the store. capEnforcementMu
-// (server.go) makes the check-then-write atomic against a second overlapping
-// PUT on this process.
+// refused with 412 before the write reaches the store. the
+// capability-enforcement lock (locks.go) makes the check-then-write atomic
+// against a second overlapping PUT on any replica.
 func (s *Server) handlePutCapabilityEnforcement(w http.ResponseWriter, r *http.Request) {
+	mode, ok := s.governanceWriteMode(w, r)
+	if !ok {
+		return
+	}
 	var body map[string]bool
 	if !decodeStrict(w, r, &body) {
 		return
@@ -441,8 +463,16 @@ func (s *Server) handlePutCapabilityEnforcement(w http.ResponseWriter, r *http.R
 			return
 		}
 	}
-	s.capEnforcementMu.Lock()
-	defer s.capEnforcementMu.Unlock()
+	if mode == govQueue {
+		// Turning enforcement on lets grants through, so no replacement is exempt.
+		s.holdEnforcement(w, r, body)
+		return
+	}
+	r, unlock, ok := s.lockDoor(w, r, db.CapEnforcementLockClass)
+	if !ok {
+		return
+	}
+	defer unlock()
 	existing, err := s.cfg.Store.GetCapabilityEnforcement(r.Context())
 	if err != nil {
 		writeServerError(w, r, "get existing capability enforcement", err)
@@ -460,6 +490,9 @@ func (s *Server) handlePutCapabilityEnforcement(w http.ResponseWriter, r *http.R
 	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
 		"capability.enforcement.write", "capability_enforcement", "success", mustJSON(saved)))
+	if mode == govBypass {
+		s.recordGovernanceBypass(r, govKindEnforcement, govEnforcementKey, "success", nil)
+	}
 	w.Header().Set("ETag", computeETag(saved))
 	writeJSON(w, http.StatusOK, saved)
 }

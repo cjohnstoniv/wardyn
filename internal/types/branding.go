@@ -26,6 +26,7 @@ type Branding struct {
 	SupportURL      string
 	Logo            []byte
 	LogoType        string
+	LogoFromFile    bool // the logo is the site config's branding.logo_path file (0105_branding_logo_from_file)
 	UpdatedAt       time.Time
 	UpdatedBy       string
 }

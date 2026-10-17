@@ -7,7 +7,7 @@
 // types screen. Mirrors internal/api/user_types.go; every route is under
 // /api/v1 via wfetch.
 import type { UserType, UserTypeInput } from "../types";
-import { asJson, errText, HttpError, unwrapList, wfetch } from "./core";
+import { asJson, errText, HttpError, throwIfPending, unwrapList, wfetch } from "./core";
 
 export const userTypes = {
   // GET /api/v1/user-types -> {user_types}. A nil Go slice encodes as null,
@@ -41,6 +41,7 @@ export const userTypes = {
   // reaches the caller verbatim. A 404 is tolerated as "already gone".
   async deleteUserType(id: string): Promise<void> {
     const res = await wfetch(`/user-types/${encodeURIComponent(id)}`, { method: "DELETE" });
+    await throwIfPending(res);
     if (!res.ok && res.status !== 404) {
       throw new HttpError(res.status, await errText(res));
     }

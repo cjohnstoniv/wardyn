@@ -127,7 +127,7 @@ func drivePreviewWarning(tmpl types.HomeTemplate, users []string) string {
 //     tell an admin a profile refused somebody it did not.
 //  1. THE DOOR, resolved for the PREVIEWED claims rather than for the admin
 //     doing the previewing (driveDoorShut over ResolveGovernanceProfile).
-//     seedRequestDrive runs it after the switch and before the resolver, so a
+//     seedRequestDrives runs it after the switch and before the resolver, so a
 //     403 beats a 500 or an allocation-shaped 422; so does this.
 //  2. The unanswerable group tier. A request that carries no `groups` at all
 //     has not evaluated the group tier, which is the same condition a nil
@@ -148,7 +148,7 @@ func drivePreviewWarning(tmpl types.HomeTemplate, users []string) string {
 // absent: it folds a run request's read_only, and a preview has no run request.
 //
 // Still not audited. Running the door here does not make this an authorization
-// event: nothing is minted and nothing changes, and denyUserDrive's
+// event: nothing is minted and nothing changes, and userDriveDoorRefusal's
 // authz.denied row is about a member's own attempt to launch.
 //
 // And that is enforced, not merely stated. Both of this handler's
@@ -166,8 +166,8 @@ func drivePreviewWarning(tmpl types.HomeTemplate, users []string) string {
 // step: every line of this endpoint is a display, so a step added later inherits
 // the right posture instead of having to remember it.
 //
-// Routing is SUPER-only, beside the /drives CRUD family; this handler is
-// deliberately complete so that registration is one line.
+// Routing is securityOps (admin or security_admin), beside the /drives CRUD
+// family; this handler is deliberately complete so that registration is one line.
 func (s *Server) handlePreviewUserDrive(w http.ResponseWriter, r *http.Request) {
 	r = r.WithContext(withDisplayRead(r.Context()))
 	var req governancePreviewRequest
@@ -266,11 +266,18 @@ func (s *Server) handlePreviewUserDrive(w http.ResponseWriter, r *http.Request) 
 	if resolved.Paused {
 		homeSubject = ""
 	}
+	// A host_path object name is a path under the drive's host_root, which only
+	// a super admin is shown (GET /drives stays operatorOnly for that reason);
+	// this route is also on the security tier, so it answers that tier without it.
+	objectName := resolved.ObjectName
+	if !types.DriveObjectNamedByWardyn(resolved.Drive.Backend) && !s.isOperator(r.Context()) {
+		objectName = ""
+	}
 	writeJSON(w, http.StatusOK, userDrivePreviewResponse{
 		DriveName:   resolved.Drive.Name,
 		MatchedTier: resolved.Tier,
 		HomeName:    resolved.HomeName,
-		ObjectName:  resolved.ObjectName,
+		ObjectName:  objectName,
 		SizeMiB:     resolved.SizeMiB,
 		Writable:    resolved.Writable,
 		Enforcement: resolved.Enforcement,
@@ -283,12 +290,12 @@ func (s *Server) handlePreviewUserDrive(w http.ResponseWriter, r *http.Request) 
 // drivePreviewDoorIsOpen runs the profile DOOR against the claims an admin
 // typed, writing the launch path's own 403 and returning false once it has.
 //
-// The door at launch keys on the CALLER (denyUserDrive → driveDoorProfile,
-// which exempts an operator). Here the caller is always an operator — every
-// /drives route is SUPER — so asking about them would answer "open" for every
-// previewed principal and the preview would keep saying "this person mounts
-// their drive" about somebody whose profile forbids it. So the ceiling is
-// resolved for the PREVIEWED claims and only the shared predicate
+// The door at launch keys on the CALLER (userDriveDoorRefusal → driveDoorProfile,
+// which exempts an operator). Here the caller is always an admin, never the
+// previewed person, so asking about the caller would answer for the wrong
+// principal ("open" for a super admin) and the preview would keep saying "this
+// person mounts their drive" about somebody whose profile forbids it. So the
+// ceiling is resolved for the PREVIEWED claims and only the shared predicate
 // (driveDoorShut) is asked.
 //
 // SAME BYTES as the launch refusal (driveDeniedByProfileMsg): an admin checking
@@ -329,8 +336,8 @@ func (s *Server) drivePreviewDoorIsOpen(w http.ResponseWriter, r *http.Request, 
 	if len(groups) == 0 {
 		ceiling, err = s.ceilingWithUnusableGroups(r.Context(), users, userType, deployment)
 	} else {
-		p, _, rerr := s.cfg.Store.ResolveGovernanceProfile(r.Context(), users, groups, userType)
-		ceiling, err = s.ceilingFromProfile(p, rerr, deployment)
+		p, _, rerr := s.resolveAssignedProfile(r.Context(), users, groups, userType)
+		ceiling, err = s.ceilingFromProfile(r.Context(), p, rerr, deployment)
 	}
 	if err != nil {
 		writeCeilingError(w, r, err)

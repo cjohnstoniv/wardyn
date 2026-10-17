@@ -60,6 +60,9 @@ type RunPauser interface {
 	// caller's read and this write win: false means leave the run running.
 	MarkRunPaused(ctx context.Context, id uuid.UUID, reason types.PauseReason, activeAt *time.Time) (bool, error)
 	// ClearRunPaused clears run id's pause, and reports whether it was paused.
+	// Clearing one restarts the run's presence clock in the same write: a
+	// resume is the newest thing that happened to the run, so the sweep counts
+	// its quiet period from there and not from the stamp the pause was judged on.
 	ClearRunPaused(ctx context.Context, id uuid.UUID) (bool, error)
 	// RunHasOpenRequest reports whether run id has a PENDING request inside
 	// its wait.
@@ -67,6 +70,66 @@ type RunPauser interface {
 }
 
 var _ RunPauser = PG{}
+
+// PauseSettle is one run a pause compensation may have left with its agent
+// container not matching its pause mark (migration 0132).
+type PauseSettle struct {
+	RunID uuid.UUID
+	DueAt time.Time
+}
+
+// PauseSettler is the durable record of the runs whose container may not match
+// their pause mark. Optional like RunPauser; production is always PG.
+type PauseSettler interface {
+	// NotePauseSettle records run id as owing a settle from after on (the
+	// database's clock), moving a due_at already recorded only forward, and
+	// returns the due_at it holds.
+	NotePauseSettle(ctx context.Context, id uuid.UUID, after time.Duration) (time.Time, error)
+	// DuePauseSettles lists the runs whose settle is due.
+	DuePauseSettles(ctx context.Context) ([]PauseSettle, error)
+	// ClearPauseSettle deletes run id's record only while it still reads due,
+	// so a later note survives.
+	ClearPauseSettle(ctx context.Context, id uuid.UUID, due time.Time) error
+}
+
+var _ PauseSettler = PG{}
+
+// NotePauseSettle — see PauseSettler.
+func (s PG) NotePauseSettle(ctx context.Context, id uuid.UUID, after time.Duration) (time.Time, error) {
+	var due time.Time
+	err := s.Pool.QueryRow(ctx, `
+		INSERT INTO run_pause_settles (run_id, due_at) VALUES ($1, now() + make_interval(secs => $2))
+		ON CONFLICT (run_id) DO UPDATE SET due_at = GREATEST(run_pause_settles.due_at, EXCLUDED.due_at)
+		RETURNING due_at`, id, after.Seconds()).Scan(&due)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("store: note a pause settle: %w", err)
+	}
+	return due, nil
+}
+
+// DuePauseSettles — see PauseSettler.
+func (s PG) DuePauseSettles(ctx context.Context) ([]PauseSettle, error) {
+	rows, err := s.Pool.Query(ctx, `SELECT run_id, due_at FROM run_pause_settles WHERE due_at <= now() ORDER BY due_at`)
+	if err != nil {
+		return nil, fmt.Errorf("store: list due pause settles: %w", err)
+	}
+	out, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (PauseSettle, error) {
+		var p PauseSettle
+		return p, r.Scan(&p.RunID, &p.DueAt)
+	})
+	if err != nil {
+		return nil, fmt.Errorf("store: list due pause settles: %w", err)
+	}
+	return out, nil
+}
+
+// ClearPauseSettle — see PauseSettler.
+func (s PG) ClearPauseSettle(ctx context.Context, id uuid.UUID, due time.Time) error {
+	if _, err := s.Pool.Exec(ctx, `DELETE FROM run_pause_settles WHERE run_id = $1 AND due_at = $2`, id, due); err != nil {
+		return fmt.Errorf("store: clear a pause settle: %w", err)
+	}
+	return nil
+}
 
 // withExtra scans runCols and then the extra columns a query appends.
 type withExtra struct {
@@ -141,7 +204,7 @@ func (s PG) MarkRunPaused(ctx context.Context, id uuid.UUID, reason types.PauseR
 // ClearRunPaused — see RunPauser.
 func (s PG) ClearRunPaused(ctx context.Context, id uuid.UUID) (bool, error) {
 	tag, err := s.Pool.Exec(ctx, `
-		UPDATE agent_runs SET paused_at=NULL, paused_reason=''
+		UPDATE agent_runs SET paused_at=NULL, paused_reason='', active_at=now()
 		WHERE id=$1 AND paused_at IS NOT NULL`, id)
 	if err != nil {
 		return false, fmt.Errorf("store: clear run paused: %w", err)

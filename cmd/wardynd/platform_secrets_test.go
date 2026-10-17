@@ -107,7 +107,10 @@ func bootKeyNames(t *testing.T) []string {
 //
 // Adding a boot key and not adding it to both maps fails here.
 func TestPlatformSecretsAreReservedEverywhere(t *testing.T) {
-	for _, name := range bootKeyNames(t) {
+	// wardyn-write-probe is no boot key: it is the row create's store write
+	// probe (internal/api's writeProbeSecretName) puts and deletes, and
+	// a crash between the two must leave nothing a grant can resolve.
+	for _, name := range append(bootKeyNames(t), "wardyn-write-probe") {
 		if !api.ReservedPlatformSecret(name) {
 			t.Errorf("%s: not in internal/api's reserved set — GET /secrets lists it and PUT/DELETE clobbers it", name)
 		}

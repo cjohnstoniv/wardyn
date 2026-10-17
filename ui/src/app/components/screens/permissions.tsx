@@ -22,7 +22,7 @@
 import * as React from "react";
 import { Info, Loader2, ShieldCheck } from "lucide-react";
 import { toast } from "sonner";
-import { HttpError } from "../../lib/api/core";
+import { HttpError, PendingChangeError } from "../../lib/api/core";
 import { permissions as api } from "../../lib/api/permissions";
 import { runs as runsApi } from "../../lib/api/runs";
 import { getErrorMessage, relativeTime } from "../../lib/format";
@@ -51,12 +51,15 @@ import {
 import { cn } from "../ui/utils";
 import { Field, Switch } from "../wardyn/form-primitives";
 import { Mono } from "../wardyn/code-block";
+import { SubmittedNote } from "./governance/submitted-note";
 import { PageHeader } from "../wardyn/page-header";
 import { PreviewAsNewUser } from "../wardyn/user-preview";
+import { DefineOwnComponentsRow } from "./components/define-own-row";
+import { SelfHostRunnerRow } from "./self-host-runner-row";
 import { Chip } from "../wardyn/primitives";
+import { Segmented } from "../wardyn/segmented";
 import { EmptyState, ErrorState, TableSkeleton, loadFailStatus, type ScreenStatus } from "../wardyn/states";
 import { SECURITY_ONLY_REASON } from "../wardyn/copy";
-import { UNSAVED } from "../../lib/unsaved-copy";
 import { usePrincipal, useSecurityOperator } from "../wardyn/operator-context";
 import { useUserTypeName, useUserTypes } from "../../lib/use-user-types";
 
@@ -67,9 +70,9 @@ const ADMIN_TOKEN_PRINCIPAL = "admin-token";
 // The subject-type segments, in the order the add form offers them, paired with
 // the hint each one puts under the Who field.
 //
-// Exported, with SUBJECT_LABEL and subjectText below, for the SAME reason
-// Segmented is: the governance assignments block and the drive allocations
-// block author a subject with this exact vocabulary, and three copies of it is
+// Exported, with SUBJECT_LABEL and subjectText below, because the governance
+// assignments block and the drive allocations block author a subject with this
+// exact vocabulary (through wardyn/segmented.tsx), and three copies of it is
 // how a capability grant, a profile assignment and an allocation start
 // disagreeing about what "Everyone signed in" means. ONE home, beside the
 // control that renders it.
@@ -91,7 +94,7 @@ export const SUBJECTS: { value: PickableSubjectType; label: string; hint: string
 // The "Who" input for a user_type subject — a closed <Select> of the org's
 // types, never free text: a type is a bounded, admin-authored set (unlike a
 // user or a group, which the directory search assists but never enumerates).
-// Exported for the SAME reason Segmented/SUBJECTS are: the governance
+// Exported for the SAME reason SUBJECTS is: the governance
 // assignments block and the drive allocations block need this exact control
 // too, and a third hand-rolled copy is how the three forms disagree about
 // what picking "a user type" looks like.
@@ -190,66 +193,6 @@ function Note({
   );
 }
 
-// A two- or three-way segmented picker. Buttons with aria-pressed, not tabs and
-// not a Select: these are form choices, they are all visible at once in the
-// mock, and a plain button is the one control that stays clickable in both the
-// vitest and Playwright harnesses without a pointer-events dance.
-// Exported: the People step's role-mappings add form (access-panel.tsx) reuses
-// this exact idiom for its Admin/Member picker per the mock's own note ("per
-// the /permissions idiom") rather than a second near-identical component.
-export function Segmented<T extends string>({
-  value,
-  options,
-  onChange,
-  disabled,
-}: {
-  value: T;
-  options: {
-    value: T;
-    label: string;
-    /** #460 — this option's own draft differs from what loaded; renders the
-     *  dirty chip beside its label, the tab's own "title". Optional: only
-     *  providers-screen.tsx's Git/Storage/Agents options set it today. */
-    dirty?: boolean;
-  }[];
-  onChange: (v: T) => void;
-  disabled?: boolean;
-}) {
-  return (
-    <div className="inline-flex w-fit overflow-hidden rounded-lg border border-border-strong">
-      {options.map((o) => (
-        <button
-          key={o.value}
-          type="button"
-          aria-pressed={value === o.value}
-          disabled={disabled}
-          onClick={() => onChange(o.value)}
-          className={cn(
-            "flex items-center gap-1.5 border-l border-border px-3 py-1.5 text-xs transition-colors first:border-l-0 disabled:cursor-not-allowed disabled:opacity-50",
-            value === o.value
-              ? o.value === "deny"
-                ? "bg-danger-subtle font-medium text-danger"
-                : "bg-muted font-medium text-foreground"
-              : "text-muted-foreground hover:text-foreground",
-          )}
-        >
-          {o.label}
-          {/* aria-hidden: the chip is a VISUAL echo of a fact already
-              announced elsewhere (the PageHeader chip, the beside-Save
-              marker) — folding its text into this button's accessible name
-              would silently break every exact-string `getByRole(...,
-              {name: o.label})` lookup the moment the tab it names is dirty. */}
-          {o.dirty && (
-            <span aria-hidden="true" data-testid={`tab-dirty-chip-${o.value}`}>
-              <Chip tone="warning">{UNSAVED.DIRTY_CHIP}</Chip>
-            </span>
-          )}
-        </button>
-      ))}
-    </div>
-  );
-}
-
 export function PermissionsScreen() {
   // useSecurityOperator, not useOperator (0.7 §B): all four /permissions routes
   // register on securityOps (routes.go's mountPermissionRoutes) — this IS the
@@ -275,6 +218,8 @@ export function PermissionsScreen() {
   const [confirm, setConfirm] = React.useState<{ kind: CapabilityKind; next: boolean } | null>(null);
   const [toRemove, setToRemove] = React.useState<CapabilityGrant | null>(null);
   const [busy, setBusy] = React.useState(false);
+  // A write the server held for a second person (202): nothing has changed yet.
+  const [submitted, setSubmitted] = React.useState(false);
 
   const load = React.useCallback(() => {
     setStatus("loading");
@@ -308,7 +253,14 @@ export function PermissionsScreen() {
       const saved = await api.putEnforcement(body);
       setSnap((s) => ({ grants: s?.grants ?? [], enforcement: saved }));
       setConfirm(null);
+      setSubmitted(false);
     } catch (e) {
+      if (e instanceof PendingChangeError) {
+        setConfirm(null);
+        setSubmitted(true);
+        load();
+        return;
+      }
       toast.error("Failed to save enforcement", { description: getErrorMessage(e) });
     } finally {
       setBusy(false);
@@ -321,7 +273,14 @@ export function PermissionsScreen() {
       await api.deleteGrant(g.id);
       setSnap((s) => (s ? { ...s, grants: s.grants.filter((x) => x.id !== g.id) } : s));
       setToRemove(null);
+      setSubmitted(false);
     } catch (e) {
+      if (e instanceof PendingChangeError) {
+        setToRemove(null);
+        setSubmitted(true);
+        load();
+        return;
+      }
       toast.error("Failed to remove grant", { description: getErrorMessage(e) });
     } finally {
       setBusy(false);
@@ -338,6 +297,8 @@ export function PermissionsScreen() {
         <Fact icon={ShieldCheck}>{PERM.DOCTRINE}</Fact>
         <Fact icon={Info}>{PERM.EXEMPT}</Fact>
       </div>
+
+      {submitted && <SubmittedNote />}
 
       {/* The upgrade-from-0.5 posture: every kind off and no grants at all. */}
       {status === "ready" && nothingEnforced && snap!.grants.length === 0 && (
@@ -360,16 +321,45 @@ export function PermissionsScreen() {
           ) : status === "error" || !snap ? (
             <ErrorState onRetry={load} />
           ) : (
-            CAPABILITY_KINDS.map((kind) => (
-              <KindRow
-                key={kind}
-                kind={kind}
-                enforced={!!snap.enforcement[kind]}
-                grants={grantsFor(kind)}
+            <>
+              {CAPABILITY_KINDS.map((kind) => (
+                <KindRow
+                  key={kind}
+                  kind={kind}
+                  enforced={!!snap.enforcement[kind]}
+                  grants={grantsFor(kind)}
+                  disabled={!securityOperator}
+                  onToggle={(next) => setConfirm({ kind, next })}
+                />
+              ))}
+              {/* The `custom_component` feature value: default on, so its switch is "no deny row". */}
+              <DefineOwnComponentsRow
+                grants={snap.grants}
+                featureEnforced={!!snap.enforcement.feature}
                 disabled={!securityOperator}
-                onToggle={(next) => setConfirm({ kind, next })}
+                onGrants={(grants) => {
+                  setSnap((s) => (s ? { ...s, grants } : s));
+                  setSubmitted(false);
+                }}
+                onSubmitted={() => {
+                  setSubmitted(true);
+                  load();
+                }}
               />
-            ))
+              {/* The `self_host_runner` feature value: restricted, so its switch is the one `all` allow row. */}
+              <SelfHostRunnerRow
+                grants={snap.grants}
+                disabled={!securityOperator}
+                onGrants={(grants) => {
+                  setSnap((s) => (s ? { ...s, grants } : s));
+                  setSubmitted(false);
+                }}
+                onSubmitted={() => {
+                  setSubmitted(true);
+                  load();
+                }}
+              />
+            </>
           )}
         </div>
       </section>
@@ -456,7 +446,14 @@ export function PermissionsScreen() {
         </div>
       </section>
 
-      <AddGrantForm disabled={!securityOperator} onAdded={load} />
+      <AddGrantForm
+        disabled={!securityOperator}
+        onAdded={() => {
+          setSubmitted(false);
+          load();
+        }}
+        onSubmitted={load}
+      />
 
       <section className="mt-6 rounded-xl border border-border bg-card px-6 py-5">
         <h2 className="text-sm font-medium text-foreground">{PERM.SNAPSHOT_TITLE}</h2>
@@ -628,11 +625,14 @@ export interface FixedGrantSubject {
 export function AddGrantForm({
   disabled,
   onAdded,
+  onSubmitted,
   fixed,
   hideTitle,
 }: {
   disabled: boolean;
   onAdded: () => void;
+  /** The write was held for a second person (202): nothing was added. The form says so itself. */
+  onSubmitted?: () => void;
   fixed?: FixedGrantSubject;
   hideTitle?: boolean;
 }) {
@@ -648,6 +648,8 @@ export function AddGrantForm({
   // never a toast, so the caller never has to look away from the dialog they
   // are still looking at (the dialog itself never closes on a refusal).
   const [error, setError] = React.useState<string | null>(null);
+  // The 202 branch: held for a second person, so not added, and said in the form the caller is looking at.
+  const [submitted, setSubmitted] = React.useState(false);
 
   const copy = KIND[kind];
   const whoHint = SUBJECTS.find((s) => s.value === subjectType)?.hint ?? "";
@@ -657,6 +659,7 @@ export function AddGrantForm({
     setSaving(true);
     setDuplicate(false);
     setError(null);
+    setSubmitted(false);
     try {
       const res = await api.upsertGrant({
         subject_type: subjectType,
@@ -671,6 +674,12 @@ export function AddGrantForm({
       setValue("");
       onAdded();
     } catch (e) {
+      if (e instanceof PendingChangeError) {
+        setValue("");
+        setSubmitted(true);
+        onSubmitted?.();
+        return;
+      }
       setError(e instanceof HttpError ? e.message : getErrorMessage(e));
     } finally {
       setSaving(false);
@@ -782,6 +791,7 @@ export function AddGrantForm({
           {error}
         </Note>
       )}
+      {submitted && <SubmittedNote />}
       <AlertDialog open={confirmWall} onOpenChange={setConfirmWall}>
         <AlertDialogContent>
           <AlertDialogHeader>

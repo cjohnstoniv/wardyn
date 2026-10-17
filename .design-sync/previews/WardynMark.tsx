@@ -5,4 +5,4 @@
 
 import { WardynMark } from '@wardyn/ui';
 
-export const Mark = () => <WardynMark className="size-16 text-primary" />;
+export const Mark = () => <WardynMark className="size-12" />;

@@ -16,9 +16,9 @@ import (
 )
 
 // P2-5 (T-25, the 0.8 testing-gap audit's gaps-planned-08.md): S1 (M-8,
-// admin_view_launch_test.go) refuses POST /runs and POST /runs/preflight from
+// admin_view_launch_test.go) refuses POST /runs, POST /runs/preflight and POST /runs/policy-preview from
 // an Admin-view SSO session, but refuseAdminViewLaunch is called at exactly
-// those two sites. The design (admin-member-modes-design.md §2.5, §6 QM-10)
+// those three sites. The design (admin-member-modes-design.md §2.5, §6 QM-10)
 // names three OTHER launch doors that are deliberately left untouched — Record,
 // the site-config probes, and harness login — because they are operator
 // controls, not a member's own run. Each test below proves the request still
@@ -142,6 +142,7 @@ func TestLocalMode_LaunchesNeverAdminView(t *testing.T) {
 	}{
 		{"/api/v1/runs", http.StatusCreated},
 		{"/api/v1/runs/preflight", http.StatusOK},
+		{policyPreviewPath, http.StatusOK},
 	} {
 		t.Run(door.path, func(t *testing.T) {
 			srv, _, _ := govEscapeFixture(t, &capStore{})

@@ -22,7 +22,7 @@ func TestAttachTicket_NonRunningRunIs409AndMintsNothing(t *testing.T) {
 			h := newHarness(t)
 			srv := New(baseTestConfig(h, ast))
 			run := uuid.New()
-			ast.runs[run] = types.AgentRun{ID: run, CreatedBy: "alice", State: state, SandboxRef: "sbx-1"}
+			ast.runs[run] = types.AgentRun{ID: run, CreatedBy: "alice", OperatorOwned: true, State: state, SandboxRef: "sbx-1"}
 
 			w := do(t, srv, http.MethodPost, "/api/v1/runs/"+run.String()+"/attach-ticket", adminToken, "")
 			if w.Code != http.StatusConflict {

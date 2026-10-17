@@ -15,6 +15,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/ackcursor"
 	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -67,7 +68,7 @@ type Forwarder struct {
 	audit    audit.Recorder
 	interval time.Duration
 
-	ackedHash string // row_hash of the local row at status.AckedSeq when it was acknowledged
+	cursor *ackcursor.Cursor[types.FederatedAuditEvent]
 
 	mu      sync.Mutex
 	status  Status
@@ -86,8 +87,17 @@ type Forwarder struct {
 
 // NewForwarder returns a forwarder for cred. Nothing is read until Load or Run.
 func NewForwarder(c *Client, st Store, cred Credential, rec audit.Recorder) *Forwarder {
-	return &Forwarder{client: c, store: st, cred: cred, audit: rec, interval: tickInterval,
+	f := &Forwarder{client: c, store: st, cred: cred, audit: rec, interval: tickInterval,
 		status: Status{DeviceID: cred.DeviceID}, done: make(chan struct{})}
+	f.cursor = &ackcursor.Cursor[types.FederatedAuditEvent]{
+		Source: auditSource{st}, Sink: pushSink{f}, Store: cursorStore{st}, Batch: batchSize,
+		Key: func(e types.FederatedAuditEvent) ackcursor.Pos { return ackcursor.Pos{Seq: e.Seq, Hash: e.RowHash} },
+		OnReset: func(p ackcursor.Pos) {
+			slog.Error("federation: the local audit row at the forwarding cursor is gone or changed; the local table was reset, resending from the start",
+				"device_id", cred.DeviceID, "head_seq", f.Status().HeadSeq, "acked_seq", p.Seq)
+		},
+	}
+	return f
 }
 
 // Done closes once Run has returned — after ctx ends or the organisation
@@ -113,8 +123,7 @@ func (f *Forwarder) update(fn func(*Status)) {
 // starts so a laptop revoked before a restart refuses new runs from its first
 // request, regardless of organisation reachability.
 func (f *Forwarder) Load(ctx context.Context) error {
-	acked, ackedHash, err := f.store.GetFederationCursor(ctx)
-	if err != nil {
+	if err := f.cursor.Load(ctx); err != nil {
 		return err
 	}
 	revoked, err := f.store.FederationRevoked(ctx)
@@ -122,12 +131,12 @@ func (f *Forwarder) Load(ctx context.Context) error {
 		return err
 	}
 	f.update(func(s *Status) {
-		s.AckedSeq, s.Revoked = acked, revoked
+		s.AckedSeq, s.Revoked = f.cursor.Pos().Seq, revoked
 		if revoked {
 			s.LastError = "the organisation revoked this device before this start"
 		}
 	})
-	f.ackedHash, f.loaded = ackedHash, true
+	f.loaded = true
 	return nil
 }
 
@@ -155,8 +164,7 @@ func (f *Forwarder) Run(ctx context.Context) {
 // none — and says how long to wait before the next.
 //
 // Head is read before anything can fail upstream, so an unreachable
-// organisation shows as growing lag. Rows with no row_hash predate the chain
-// and can't be verified upstream; skipped, never sent, cursor moves past them.
+// organisation shows as growing lag.
 func (f *Forwarder) step(ctx context.Context) (time.Duration, bool) {
 	if !f.loaded {
 		if err := f.Load(ctx); err != nil {
@@ -177,80 +185,72 @@ func (f *Forwarder) step(ctx context.Context) (time.Duration, bool) {
 		return f.retry(err, 0), false
 	}
 	f.update(func(s *Status) { s.HeadSeq = head })
-	acked := f.Status().AckedSeq
 
-	var rows []types.FederatedAuditEvent
-	if acked > 0 {
-		// One read, one snapshot: the row at the cursor, then the batch after
-		// it. It must still be the row the organisation acknowledged; if gone
-		// or carrying another hash, the local chain was reset — rows after it
-		// would link to nothing the organisation holds, so start over from
-		// genesis (it skips what it already holds and records a chain reset).
-		if rows, err = f.store.ListAuditEventsAfterSeq(ctx, acked-1, batchSize+1); err != nil {
-			return f.retry(err, 0), false
-		}
-		if len(rows) > 0 && rows[0].Seq == acked && rows[0].RowHash == f.ackedHash {
-			rows = rows[1:]
-		} else {
-			slog.Error("federation: the local audit row at the forwarding cursor is gone or changed; the local table was reset, resending from the start",
-				"device_id", f.cred.DeviceID, "head_seq", head, "acked_seq", acked)
-			if err := f.store.SetFederationCursor(ctx, 0, ""); err != nil {
-				return f.retry(err, 0), false
-			}
-			acked, f.ackedHash, rows = 0, "", nil
-			f.update(func(s *Status) { s.AckedSeq = 0 })
-		}
-	}
-	if acked == 0 && !f.halted {
-		if rows, err = f.store.ListAuditEventsAfterSeq(ctx, 0, batchSize); err != nil {
-			return f.retry(err, 0), false
-		}
-	}
-	if f.halted {
-		rows = nil
-	}
-	chained := slices.DeleteFunc(slices.Clone(rows), func(e types.FederatedAuditEvent) bool { return e.RowHash == "" })
-
-	next := acked
-	switch {
-	case len(chained) > 0:
-		ack, perr := f.client.Push(ctx, f.cred, chained)
-		if perr != nil {
-			return f.refused(ctx, perr)
-		}
-		// Never past what was read, never backwards.
-		next = max(acked, min(ack, rows[len(rows)-1].Seq))
-	case len(rows) > 0:
-		next = rows[len(rows)-1].Seq
-	default:
-		if _, herr := f.client.Heartbeat(ctx, f.cred); herr != nil {
-			return f.refused(ctx, herr)
-		}
-	}
-	if next != acked {
-		// The hash of the row at next, as read; a next that is not a row read
-		// here keeps "", which the next tick reads as a reset and resends from
-		// the start — the safe direction.
-		hash := ""
-		if i := slices.IndexFunc(rows, func(e types.FederatedAuditEvent) bool { return e.Seq == next }); i >= 0 {
-			hash = rows[i].RowHash
-		}
-		if err := f.store.SetFederationCursor(ctx, next, hash); err != nil {
-			return f.retry(err, 0), false
-		}
-		f.ackedHash = hash
+	more, err := f.advance(ctx)
+	acked := f.cursor.Pos().Seq
+	if err != nil {
+		f.update(func(s *Status) { s.AckedSeq = acked })
+		return f.refused(ctx, err)
 	}
 	f.backoff = 0
 	f.update(func(s *Status) {
-		s.AckedSeq, s.LastOK = next, time.Now().UTC()
+		s.AckedSeq, s.LastOK = acked, time.Now().UTC()
 		if !f.halted {
 			s.LastError = ""
 		}
 	})
-	if len(rows) == batchSize {
+	if more && !f.halted {
 		return 0, false
 	}
 	return f.interval, false
+}
+
+// advance steps the cursor; a halted forwarder with nothing acknowledged only
+// heart-beats, reading no rows.
+func (f *Forwarder) advance(ctx context.Context) (bool, error) {
+	if f.halted && f.cursor.Pos().Seq == 0 {
+		_, err := f.client.Heartbeat(ctx, f.cred)
+		return false, err
+	}
+	return f.cursor.Step(ctx)
+}
+
+// auditSource adapts Store to ackcursor.Source.
+type auditSource struct{ st Store }
+
+func (s auditSource) After(ctx context.Context, seq int64, limit int) ([]types.FederatedAuditEvent, error) {
+	return s.st.ListAuditEventsAfterSeq(ctx, seq, limit)
+}
+
+// cursorStore adapts Store to ackcursor.Store.
+type cursorStore struct{ st Store }
+
+func (s cursorStore) Get(ctx context.Context) (ackcursor.Pos, error) {
+	seq, hash, err := s.st.GetFederationCursor(ctx)
+	return ackcursor.Pos{Seq: seq, Hash: hash}, err
+}
+
+func (s cursorStore) Set(ctx context.Context, p ackcursor.Pos) error {
+	return s.st.SetFederationCursor(ctx, p.Seq, p.Hash)
+}
+
+// pushSink delivers a batch to the organisation, or heartbeats when there is
+// none. Rows with no row_hash predate the chain and can't be verified
+// upstream; skipped, never sent, the cursor moves past them. A halted
+// forwarder only heart-beats.
+type pushSink struct{ f *Forwarder }
+
+func (p pushSink) Deliver(ctx context.Context, rows []types.FederatedAuditEvent) (int64, error) {
+	f := p.f
+	chained := slices.DeleteFunc(slices.Clone(rows), func(e types.FederatedAuditEvent) bool { return e.RowHash == "" })
+	switch {
+	case f.halted || len(rows) == 0:
+		_, err := f.client.Heartbeat(ctx, f.cred)
+		return 0, err
+	case len(chained) > 0:
+		return f.client.Push(ctx, f.cred, chained)
+	}
+	return rows[len(rows)-1].Seq, nil
 }
 
 // refused maps an organisation answer to what the forwarder does next:

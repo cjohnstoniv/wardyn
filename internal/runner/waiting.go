@@ -25,3 +25,8 @@ var TerminalWaitingReasons = map[string]bool{
 // IsTerminalWaitingReason reports whether reason is one that waiting cannot fix.
 // The empty reason is not: "we have not read one yet" is not a verdict.
 func IsTerminalWaitingReason(reason string) bool { return TerminalWaitingReasons[reason] }
+
+// CapacityBlockerReasons is the CLOSED set of substrate reasons that mean a starting sandbox is
+// waiting for room rather than for work: the fleet capacity view lists a STARTING run carrying
+// one as unschedulable, and the startup wait decides its capacity wait against this same set.
+var CapacityBlockerReasons = map[string]bool{"Unschedulable": true}

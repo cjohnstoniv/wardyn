@@ -16,7 +16,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -24,6 +23,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/cjohnstoniv/wardyn/internal/db"
+	"github.com/cjohnstoniv/wardyn/internal/notify"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/internal/version"
 )
@@ -82,34 +82,214 @@ func (s PG) Ping(ctx context.Context) error {
 // AgentRun
 
 // createRunSQL is CreateRun's statement: one placeholder per runInsertCols
-// column, in order (TestCreateRunBindsEveryInsertColumn).
+// and runReservedCols column, in order (TestCreateRunBindsEveryInsertColumn).
 var createRunSQL = `
-		INSERT INTO agent_runs (` + runInsertCols + `)
-		VALUES ($1,$2,` + db.AppClockAgeSQL("$3") + `,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35)
+		INSERT INTO agent_runs (` + runInsertCols + `, ` + runReservedCols + `)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39,$40,$41,$42,` + runnerPoolFence + `,$44,$45,$46,$47,$48,$49,$50)
 		RETURNING ` + runCols
 
-// CreateRun inserts a new run and returns the persisted row.
-func (s PG) CreateRun(ctx context.Context, r types.AgentRun) (types.AgentRun, error) {
-	// updated_at is stamped on the DATABASE's clock like every other writer,
-	// back-dated by the row's own age so an app-clock write here can't skew the
-	// idle reaper's DB-clock idleness measurement (30s TouchDebounce margin).
-	updatedAge := int64(0)
-	if !r.UpdatedAt.IsZero() {
-		updatedAge = db.AppClockAgeMicros(r.UpdatedAt, s.now())
+// runnerPoolFence is the value of the runner_pool_id column in createRunSQL: the pool read through its
+// own row, locked FOR SHARE, only when it is still active at the revision the run was admitted against.
+// A pool that moved or was switched off since yields NULL, which agent_runs_runner_pool_binding refuses
+// against the run's selection (runInsertErr). One statement, so no pool change can slip between the
+// admission and the row. $43 and $44 are the pool id and revision columns' own placeholders.
+const runnerPoolFence = `(SELECT id FROM runner_pools WHERE id = $43 AND revision = $44 AND state = 'active' FOR SHARE)`
+
+// runInsertErr names a pool-fence failure (ErrRunnerPoolStale, store_runner_pools.go); any other error passes through unchanged.
+func runInsertErr(err error) error {
+	var pe *pgconn.PgError
+	if errors.As(err, &pe) && pe.Code == "23514" && pe.ConstraintName == "agent_runs_runner_pool_binding" {
+		return ErrRunnerPoolStale
 	}
+	return err
+}
+
+// CreateRun inserts a new run and returns the persisted row. A run bound to a runner pool is inserted
+// only while that pool is still active at the recorded revision, else ErrRunnerPoolStale. A run that
+// carries a LaunchIntent is inserted with it in one transaction (store_launch_intents.go); the returned
+// run carries it only when it was kept.
+func (s PG) CreateRun(ctx context.Context, r types.AgentRun) (types.AgentRun, error) {
+	if holdsRunnerSlot(r) {
+		return s.CreateRunUnderCap(ctx, r, 0)
+	}
+	args, err := s.createRunArgs(r)
+	if err != nil {
+		return types.AgentRun{}, err
+	}
+	var out types.AgentRun
+	write := func(q queryRower) (e error) {
+		keep, e := lockLaunchIntent(ctx, q, r)
+		if e != nil {
+			return e
+		}
+		anchor, e := db.CaptureAppClock(ctx, q, s.now)
+		if e != nil {
+			return e
+		}
+		if r.UpdatedAt.IsZero() {
+			args[2] = anchor.DatabaseAt
+		} else {
+			args[2] = anchor.Translate(r.UpdatedAt)
+		}
+		if out, e = scanRun(q.QueryRow(ctx, createRunSQL, args...)); e != nil || !keep {
+			return e
+		}
+		out, e = insertLaunchIntent(ctx, q, out, r.LaunchIntent)
+		return e
+	}
+	if r.LaunchIntent != nil {
+		err = s.createRunWithIntent(ctx, write)
+	} else {
+		err = s.guarded(ctx, write)
+	}
+	return out, runInsertErr(err)
+}
+
+// ErrRunCapReached is CreateRunUnderCap's refusal: the deployment already holds
+// its cap of non-terminal runs.
+var ErrRunCapReached = errors.New("store: deployment run cap reached")
+
+// CreateRunUnderCap is CreateRun with a deployment-wide ceiling on non-terminal
+// runs (WARDYN_MAX_CONCURRENT_RUNS). The count and the insert share one
+// transaction-scoped advisory lock, so two replicas racing at the cap admit
+// exactly the cap. limit <= 0 is unlimited and takes no lock. Rows are counted,
+// not kept in a counter, so a crashed path cannot drift it. A run bound to a
+// runner of either kind is also held to that runner's limits (Runs at once, its
+// totals and its per-run limit, what it reserves counted) under its row lock, cap
+// or none (RunnerAtCapacityError).
+func (s PG) CreateRunUnderCap(ctx context.Context, r types.AgentRun, limit int) (types.AgentRun, error) {
+	if limit <= 0 && !holdsRunnerSlot(r) {
+		return s.CreateRun(ctx, r)
+	}
+	args, err := s.createRunArgs(r)
+	if err != nil {
+		return types.AgentRun{}, err
+	}
+	g, guarded := identityGuardFrom(ctx)
+	var since int64
+	if guarded {
+		if since, err = ReadRevocationSeq(ctx, s.Pool); err != nil {
+			return types.AgentRun{}, err
+		}
+	}
+	tx, err := s.Pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
+	if err != nil {
+		return types.AgentRun{}, err
+	}
+	defer tx.Rollback(context.WithoutCancel(ctx)) //nolint:errcheck // a no-op after Commit
+	if guarded {
+		if err := checkIdentityGuard(ctx, tx, g, since); err != nil {
+			return types.AgentRun{}, err
+		}
+	}
+	keep, err := lockLaunchIntent(ctx, tx, r)
+	if err != nil {
+		return types.AgentRun{}, err
+	}
+	// Every writer that adds a slot-holder takes the pool row, then the deployment cap's advisory lock,
+	// then runner rows: the insert's pool fence would take the pool row FOR SHARE after the advisory lock,
+	// the other way round from a promotion or a revive, so it is taken here first. (The launch intent's
+	// lock is a try-lock and never waits.)
+	if r.RunnerPoolID != nil {
+		if _, err := tx.Exec(ctx, `SELECT 1 FROM runner_pools WHERE id = $1 FOR SHARE`, *r.RunnerPoolID); err != nil {
+			return types.AgentRun{}, fmt.Errorf("store: lock run pool: %w", err)
+		}
+	}
+	if limit > 0 {
+		active, err := lockAndCountActiveRuns(ctx, tx, uuid.Nil)
+		if err != nil {
+			return types.AgentRun{}, err
+		}
+		if active >= limit {
+			return types.AgentRun{}, ErrRunCapReached
+		}
+	}
+	if holdsRunnerSlot(r) {
+		if err := admitOnRunner(ctx, tx, runnerKeyOf(r.RunnerID, r.RunnerPoolExecutor), r.Reserved, uuid.Nil); err != nil {
+			return types.AgentRun{}, err
+		}
+	}
+	anchor, err := db.CaptureAppClock(ctx, tx, s.now)
+	if err != nil {
+		return types.AgentRun{}, err
+	}
+	if r.UpdatedAt.IsZero() {
+		args[2] = anchor.DatabaseAt
+	} else {
+		args[2] = anchor.Translate(r.UpdatedAt)
+	}
+	created, err := scanRun(tx.QueryRow(ctx, createRunSQL, args...))
+	if err != nil {
+		return types.AgentRun{}, runInsertErr(err)
+	}
+	if keep {
+		if created, err = insertLaunchIntent(ctx, tx, created, r.LaunchIntent); err != nil {
+			return types.AgentRun{}, err
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return types.AgentRun{}, err
+	}
+	return created, nil
+}
+
+// lockAndCountActiveRuns takes the deployment cap's transaction-scoped advisory
+// lock and counts the slot-holding runs (CountNonTerminalRuns' predicate) other than
+// except (uuid.Nil for none), in one statement. Every writer that adds a run to
+// that count (a create, a kept run's revive) holds the lock from this count to its
+// commit. q must be a pgx.Tx.
+func lockAndCountActiveRuns(ctx context.Context, q Querier, except uuid.UUID) (int, error) {
+	if _, err := q.Exec(ctx, `SELECT pg_advisory_xact_lock($1, 0)`, db.RunCapLockClass); err != nil {
+		return 0, err
+	}
+	var active int
+	if err := q.QueryRow(ctx, activeRunsCountSQL, slotHoldingStateNames(), except).Scan(&active); err != nil {
+		return 0, fmt.Errorf("store: count active runs: %w", err)
+	}
+	return active, nil
+}
+
+// HoldsSandboxSQL is TRUE when the agent_runs row's agent may still be running: the run
+// is not kept, or it was kept after a control-plane outage and no stop of its agent is
+// recorded (agent_stopped_at, written by MarkRunAgentStopped once the lease sweep stopped
+// it past its end). A failed stop records nothing, so the run holds its slot past its end
+// until the stop is confirmed. A run kept after its end or a reboot, or an outage-kept run
+// whose agent was stopped, has no agent, even if an extension has since moved its end
+// ahead. It is the one rule for a live run under WARDYN_MAX_CONCURRENT_RUNS, in the fleet
+// capacity view and under WARDYN_RUN_MAX_AGE.
+const HoldsSandboxSQL = `(lost_at IS NULL OR (lost_reason = '` + string(types.LostOutage) + `' AND agent_stopped_at IS NULL))`
+
+const activeRunsCountSQL = `SELECT count(*) FROM agent_runs WHERE state = ANY($1) AND id <> $2 AND ` + HoldsSandboxSQL
+
+// CountNonTerminalRuns is the number of run rows that hold a slot: a slot-holding state
+// (types.SlotHoldingRunStates, never QUEUED) whose agent still runs (HoldsSandboxSQL), the quantity CreateRunUnderCap holds under the cap. except is a
+// run never counted (uuid.Nil for none): a revive counts the OTHER runs, as
+// markRunRevivedUnderCap does. It takes no lock: a pre-flight read for a refusal that
+// must come before an identity is minted, never the authority.
+func (s PG) CountNonTerminalRuns(ctx context.Context, except uuid.UUID) (int, error) {
+	var n int
+	if err := s.Pool.QueryRow(ctx, activeRunsCountSQL, slotHoldingStateNames(), except).Scan(&n); err != nil {
+		return 0, fmt.Errorf("store: count active runs: %w", err)
+	}
+	return n, nil
+}
+
+func (s PG) createRunArgs(r types.AgentRun) ([]any, error) {
 	limitsJSON, err := json.Marshal(r.RunLimits)
 	if err != nil {
-		return types.AgentRun{}, fmt.Errorf("store: marshal run limits: %w", err)
+		return nil, fmt.Errorf("store: marshal run limits: %w", err)
 	}
-	row := s.Pool.QueryRow(ctx, createRunSQL,
-		r.ID, r.CreatedAt, updatedAge, r.CreatedBy, r.Agent, r.Repo, r.Task,
+	return []any{
+		r.ID, r.CreatedAt, r.UpdatedAt, r.CreatedBy, r.Agent, r.Repo, r.Task,
 		r.PolicyID, string(r.ConfinementClass), string(r.State),
 		r.SPIFFEID, r.RunnerTarget, r.SandboxRef, r.Interactive, r.WorkspacePath, r.WorkspaceID, r.SourceID, r.Image, r.AutoStopAfterSec,
 		r.AgentExecID, r.Title, r.Description, r.WorkspaceIDs, string(r.AutonomyLevel),
 		r.EndsAt, r.WaitBudgetSec, limitsJSON, r.GovernanceProfileID, r.ModelProviderID, r.UserType,
 		r.Preset, r.PresetVersion, r.OperatorOwned, r.CreatedVia, r.DiskMiB,
-	)
-	return scanRun(row)
+		string(r.Placement), r.PlacementFilled, r.RunnerID, string(r.EvidenceSource), string(r.Experience),
+		r.LifetimeCapAt, string(r.LifetimeCapSource), r.RunnerPoolID, r.RunnerPoolRevision, string(r.RunnerPoolSelection), r.RunnerPoolExecutor, r.HumanAuthor,
+		r.Reserved.CPUMillis, r.Reserved.MemoryMiB, r.Reserved.DiskMiB,
+	}, nil
 }
 
 // GetRun returns the run for id, or ErrNotFound.
@@ -149,45 +329,6 @@ func (s PG) CountActiveRunsBy(ctx context.Context, createdBy string) (int, error
 		return 0, fmt.Errorf("store: count active runs: %w", err)
 	}
 	return n, nil
-}
-
-// UpdateRunStateIf conditionally transitions a run from fromState to toState in
-// a single UPDATE ... WHERE id=$ AND state=$from, returning whether it applied.
-// TOCTOU-safe: a concurrent kill/stop that already moved the run to a terminal
-// state is never clobbered. False with a nil error means someone else won the
-// transition (or the run doesn't exist); the caller does nothing.
-func (s PG) UpdateRunStateIf(ctx context.Context, id uuid.UUID, fromState, toState types.RunState) (bool, error) {
-	tag, err := s.Pool.Exec(ctx,
-		`UPDATE agent_runs SET state=$1, updated_at=now(), ended_at=CASE WHEN $4 THEN now() ELSE ended_at END
-		 WHERE id=$2 AND state=$3`,
-		string(toState), id, string(fromState), toState.IsTerminal(),
-	)
-	if err != nil {
-		return false, fmt.Errorf("store: conditional update run state: %w", err)
-	}
-	return tag.RowsAffected() > 0, nil
-}
-
-// UpdateRunStateIfIdle is UpdateRunStateIf plus an idleness guard: it transitions
-// a run only when still in fromState, updated_at has not advanced past notAfter
-// (the caller's snapshot), it has no lost/end mark, and it has no open hold-aware
-// request within its wait. Closes the reaper's idleness TOCTOU — an active
-// `wardyn run attach` TouchRun can bump updated_at between snapshot and UPDATE,
-// so guarding on state alone could stop a now-active run; notAfter makes a
-// touched-since-snapshot run no-op instead. The hold-aware clause enforces "idle
-// stop never fires while a request is open within its wait" inside the same
-// atomic CAS, since a request raised in that window is visible only to a check
-// inside the statement.
-func (s PG) UpdateRunStateIfIdle(ctx context.Context, id uuid.UUID, fromState, toState types.RunState, notAfter time.Time) (bool, error) {
-	tag, err := s.Pool.Exec(ctx,
-		`UPDATE agent_runs SET state=$1, updated_at=now(), ended_at=CASE WHEN $5 THEN now() ELSE ended_at END
-		 WHERE id=$2 AND state=$3 AND updated_at <= $4 AND lost_at IS NULL AND NOT (`+openHoldSQL+`)`,
-		string(toState), id, string(fromState), notAfter, toState.IsTerminal(),
-	)
-	if err != nil {
-		return false, fmt.Errorf("store: conditional idle update run state: %w", err)
-	}
-	return tag.RowsAffected() > 0, nil
 }
 
 // openHoldSQL is TRUE when agent_runs (the outer query's row) has a PENDING
@@ -244,6 +385,29 @@ func (s PG) SetRunDiskMiB(ctx context.Context, id uuid.UUID, mib int) error {
 		`UPDATE agent_runs SET disk_mib=$1, updated_at=now() WHERE id=$2`, mib, id)
 }
 
+// RunSizing is the configured reservation recorded at dispatch (migration 0117). A nil
+// ProxyCPUMillis means the proxy had no CPU cap.
+type RunSizing struct {
+	RunnerKind            string
+	AgentCPURequestMillis int64
+	AgentCPULimitMillis   int64
+	AgentMemoryRequestMiB int64
+	AgentMemoryLimitMiB   int64
+	ProxyCPUMillis        *int64
+	ProxyMemoryMiB        int64
+}
+
+// SetRunSizing scoped-writes ONLY the dispatch-time sizing columns. It does not bump
+// updated_at: the record is not activity, and the idle clock reads updated_at.
+func (s PG) SetRunSizing(ctx context.Context, id uuid.UUID, z RunSizing) error {
+	return s.execRun(ctx, "set run sizing",
+		`UPDATE agent_runs SET runner_kind=$1, agent_cpu_request_millis=$2, agent_cpu_limit_millis=$3,
+		   agent_memory_request_mib=$4, agent_memory_limit_mib=$5, proxy_cpu_millis=$6, proxy_memory_mib=$7
+		 WHERE id=$8`,
+		z.RunnerKind, z.AgentCPURequestMillis, z.AgentCPULimitMillis, z.AgentMemoryRequestMiB,
+		z.AgentMemoryLimitMiB, z.ProxyCPUMillis, z.ProxyMemoryMiB, id)
+}
+
 // SetRunAgentExecID scoped-writes ONLY agent_exec_id, once the driver execs the
 // agent. The crash reconciler reads it to observe agent liveness across a restart.
 func (s PG) SetRunAgentExecID(ctx context.Context, id uuid.UUID, execID string) error {
@@ -261,7 +425,7 @@ func (s PG) SetRunFailureHint(ctx context.Context, id uuid.UUID, hint string) er
 
 // SetRunStatusDetail scoped-writes ONLY status_detail — what the substrate says
 // a STARTING run is waiting on, or the control plane's own `image: Building`
-// line on a PENDING run. Fed by runner.SandboxSpec.OnWaiting, once per
+// line on a PENDING run (a lifetime end reason rides KillRunAtLifetimeIf). Fed by runner.SandboxSpec.OnWaiting, once per
 // CHANGE of reason. Deliberately does NOT bump updated_at: that column is also
 // what the idle reaper and the killed-run tail-upload grace measure by, and a
 // diagnostic line a kubelet triggers must never buy a run more life or hold a
@@ -292,15 +456,21 @@ func (s PG) TouchRun(ctx context.Context, id uuid.UUID) error {
 // The read list is the write list plus the columns only a scoped UPDATE writes,
 // so a column appended to runInsertCols reaches both lists at once.
 const runInsertCols = `id, created_at, updated_at, created_by, agent, repo, task, policy_id, confinement_class, state, spiffe_id, runner_target, sandbox_ref, interactive, workspace_path, workspace_id, source_id, image, auto_stop_after_sec, agent_exec_id, title, description, workspace_ids, autonomy_level, ` +
-	`ends_at, wait_budget_sec, run_limits, governance_profile_id, model_provider_id, user_type, preset, preset_version, operator_owned, created_via, disk_mib`
-const runCols = runInsertCols + `, failure_hint, status_detail, lost_at, lost_reason, containment_error, containment_error_at, ended_at, paused_at, paused_reason, active_at, end_tightened_at`
+	`ends_at, wait_budget_sec, run_limits, governance_profile_id, model_provider_id, user_type, preset, preset_version, operator_owned, created_via, disk_mib, placement, placement_filled, runner_id, ` +
+	`evidence_source, experience, lifetime_cap_at, lifetime_cap_source, runner_pool_id, runner_pool_revision, runner_pool_selection, runner_pool_executor, human_author`
+
+// runReservedCols are what a run holds on its runner (0174, types.AgentRun.Reserved): written at
+// insert and summed by runnerUsageSQL, never read back into a run.
+const runReservedCols = `reserved_cpu_millis, reserved_memory_mib, reserved_disk_mib`
+
+const runCols = runInsertCols + `, failure_hint, status_detail, lost_at, lost_reason, containment_error, containment_error_at, ended_at, paused_at, paused_reason, active_at, end_tightened_at, admitted_at`
 
 // scanRun is the ONE reader for runCols. A new column is appended to
 // runInsertCols/runCols and to the end of this Scan — appending is the one edit
 // that can't silently transpose two same-typed columns past the compiler.
 func scanRun(row pgx.Row) (types.AgentRun, error) {
 	var r types.AgentRun
-	var cc, state, autonomyLevel, lostReason, pausedReason string
+	var cc, state, autonomyLevel, lostReason, pausedReason, placement, evidenceSource, experience, capSource, poolSelection string
 	var limitsRaw []byte
 	var containmentErr *string
 	err := row.Scan(
@@ -310,8 +480,10 @@ func scanRun(row pgx.Row) (types.AgentRun, error) {
 		&r.AgentExecID, &r.Title, &r.Description, &r.WorkspaceIDs, &autonomyLevel,
 		&r.EndsAt, &r.WaitBudgetSec, &limitsRaw, &r.GovernanceProfileID, &r.ModelProviderID, &r.UserType,
 		&r.Preset, &r.PresetVersion, &r.OperatorOwned, &r.CreatedVia, &r.DiskMiB,
+		&placement, &r.PlacementFilled, &r.RunnerID, &evidenceSource, &experience, &r.LifetimeCapAt, &capSource,
+		&r.RunnerPoolID, &r.RunnerPoolRevision, &poolSelection, &r.RunnerPoolExecutor, &r.HumanAuthor,
 		&r.FailureHint, &r.StatusDetail, &r.LostAt, &lostReason, &containmentErr, &r.ContainmentErrorAt, &r.EndedAt,
-		&r.PausedAt, &pausedReason, &r.ActiveAt, &r.EndTightenedAt,
+		&r.PausedAt, &pausedReason, &r.ActiveAt, &r.EndTightenedAt, &r.AdmittedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return types.AgentRun{}, ErrNotFound
@@ -324,6 +496,11 @@ func scanRun(row pgx.Row) (types.AgentRun, error) {
 	r.AutonomyLevel = types.AutonomyLevel(autonomyLevel)
 	r.LostReason = types.LostReason(lostReason)
 	r.PausedReason = types.PauseReason(pausedReason)
+	r.Placement = types.Placement(placement)
+	r.EvidenceSource = types.RunEvidenceSource(evidenceSource)
+	r.Experience = types.RunExperience(experience)
+	r.LifetimeCapSource = types.LimitSource(capSource)
+	r.RunnerPoolSelection = types.RunnerPoolSelection(poolSelection)
 	if containmentErr != nil {
 		r.ContainmentError = *containmentErr
 	}
@@ -428,6 +605,8 @@ func scanPolicy(row pgx.Row) (types.RunPolicy, error) {
 
 // CredentialGrant
 
+const grantCols = `id, run_id, created_at, spec, delivery`
+
 // CreateGrant inserts a credential grant (eligibility record) and returns it.
 func (s PG) CreateGrant(ctx context.Context, g types.CredentialGrant) (types.CredentialGrant, error) {
 	specJSON, err := json.Marshal(g.Spec)
@@ -435,15 +614,15 @@ func (s PG) CreateGrant(ctx context.Context, g types.CredentialGrant) (types.Cre
 		return types.CredentialGrant{}, fmt.Errorf("store: marshal grant spec: %w", err)
 	}
 	const q = `
-		INSERT INTO credential_grants (id, run_id, created_at, spec)
-		VALUES ($1,$2,$3,$4)
-		RETURNING id, run_id, created_at, spec`
-	return scanGrant(s.Pool.QueryRow(ctx, q, g.ID, g.RunID, g.CreatedAt, specJSON))
+		INSERT INTO credential_grants (id, run_id, created_at, spec, delivery)
+		VALUES ($1,$2,$3,$4,$5)
+		RETURNING ` + grantCols
+	return scanGrant(s.Pool.QueryRow(ctx, q, g.ID, g.RunID, g.CreatedAt, specJSON, string(g.Delivery)))
 }
 
 // ListGrantsByRun returns all grants for a run.
 func (s PG) ListGrantsByRun(ctx context.Context, runID uuid.UUID) ([]types.CredentialGrant, error) {
-	const q = `SELECT id, run_id, created_at, spec FROM credential_grants WHERE run_id=$1 ORDER BY created_at, id`
+	const q = `SELECT ` + grantCols + ` FROM credential_grants WHERE run_id=$1 ORDER BY created_at, id`
 	return collect(ctx, s.Pool, "list", "grants", q, []any{runID}, scanGrant)
 }
 
@@ -452,23 +631,42 @@ func scanGrant(row pgx.Row) (types.CredentialGrant, error) {
 	var specRaw []byte
 	// No ErrNoRows mapping: the only callers are CreateGrant (INSERT ...
 	// RETURNING always yields a row) and the ListGrantsByRun iteration.
-	err := row.Scan(&g.ID, &g.RunID, &g.CreatedAt, &specRaw)
+	var delivery string
+	err := row.Scan(&g.ID, &g.RunID, &g.CreatedAt, &specRaw, &delivery)
 	if err != nil {
 		return types.CredentialGrant{}, fmt.Errorf("store: scan grant: %w", err)
 	}
 	if err := json.Unmarshal(specRaw, &g.Spec); err != nil {
 		return types.CredentialGrant{}, fmt.Errorf("store: unmarshal grant spec: %w", err)
 	}
+	g.Delivery = types.GrantDelivery(delivery)
 	return g, nil
 }
 
 // ApprovalRequest
 
-// CreateApproval inserts a new approval request.
+// CreateApproval inserts a new approval request. With approval notifications configured it also
+// inserts the approval's outbox rows in the same transaction, so no crash can leave an approval nobody
+// was told about; without them the INSERT is the only write.
 func (s PG) CreateApproval(ctx context.Context, a types.ApprovalRequest) (types.ApprovalRequest, error) {
 	scopeJSON, err := json.Marshal(a.RequestedScope)
 	if err != nil {
 		return types.ApprovalRequest{}, fmt.Errorf("store: marshal approval scope: %w", err)
+	}
+	tx, err := s.Pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
+	if err != nil {
+		return types.ApprovalRequest{}, fmt.Errorf("store: begin approval tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	var profileID *uuid.UUID
+	if notify.Enabled() {
+		if _, err := tx.Exec(ctx, notify.BudgetLockSQL, a.RunID.String()); err != nil {
+			return types.ApprovalRequest{}, fmt.Errorf("store: lock the run's notification budget: %w", err)
+		}
+		// Read in the approval's own transaction, so a concurrent profile change cannot route it by stale data.
+		if err := tx.QueryRow(ctx, notify.ProfileSQL, a.RunID).Scan(&profileID); err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			return types.ApprovalRequest{}, fmt.Errorf("store: read run profile: %w", err)
+		}
 	}
 	// INSERT omits decision_scope/decision_expires_at: their SQL DEFAULTs already
 	// mean "no decision"; RETURNING names them so the caller sees those defaults.
@@ -476,20 +674,34 @@ func (s PG) CreateApproval(ctx context.Context, a types.ApprovalRequest) (types.
 		INSERT INTO approvals (` + approvalInsertCols + `)
 		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
 		RETURNING ` + approvalCols
-	out, err := scanApproval(s.Pool.QueryRow(ctx, q,
+	out, err := scanApproval(tx.QueryRow(ctx, q,
 		a.ID, a.RunID, a.GrantID, string(a.Kind), scopeJSON, string(a.State), a.RequestedAt,
 		a.DecidedAt, a.DecidedBy, a.MintedJTI, a.Reason,
 	))
 	if err != nil {
 		// A partial unique index rejecting the insert means a concurrent raise
 		// already persisted the open PENDING row; surface a sentinel so
-		// RequestApproval can dedup to the winner instead of erroring.
+		// RequestApproval can dedup to the winner instead of erroring. The deferred
+		// rollback is what makes the loser enqueue nothing.
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
 			return types.ApprovalRequest{}, ErrDuplicatePending
 		}
 		return types.ApprovalRequest{}, err
 	}
+	enq := notify.NewEnqueue(out.Kind, profileID)
+	var raised, queued int64
+	if enq.On() {
+		const src = `WITH ins AS (SELECT $1::uuid AS id, $2::uuid AS run_id, $3::timestamptz AS requested_at)`
+		args := append([]any{out.ID, out.RunID, out.RequestedAt}, enq.Args()...)
+		if err := tx.QueryRow(ctx, src+enq.Tail(4), args...).Scan(&raised, &queued); err != nil {
+			return types.ApprovalRequest{}, fmt.Errorf("store: enqueue approval notifications: %w", err)
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return types.ApprovalRequest{}, fmt.Errorf("store: commit approval: %w", err)
+	}
+	enq.Done(ctx, out.ID, out.RunID, raised, queued)
 	return out, nil
 }
 
@@ -526,22 +738,20 @@ func (s PG) CountApprovalsForRun(ctx context.Context, runID uuid.UUID) (int, err
 // separate from RETURNING: updating only RETURNING would echo an un-updated row
 // back as a green result over a silent no-op.
 func (s PG) DecideApproval(ctx context.Context, id uuid.UUID, decision types.ApprovalDecision) (types.ApprovalRequest, error) {
-	// decided_at is stamped on the DATABASE's clock (db.AppClockAgeSQL): it's
-	// later compared against workspaces.egress_edited_at by the boot heal's
-	// newer-action guard, and a daemon-clock stamp running ahead of the DB could
-	// make a reverted `always` approval look newer than the revert and get
-	// fail-OPEN re-applied at the next restart (migration 0055 exists to prevent
-	// this). q is built, not const, since only a func can call the shared age
-	// expression.
+	// The boot-heal newer-action guard compares this with a DB-stamped revert.
+	// Freeze the decision before the UPDATE can wait on its row lock.
 	decidedAt := s.now()
-	age := db.AppClockAgeMicros(decidedAt, s.now())
-	q := `
+	anchor, err := db.CaptureAppClock(ctx, s.Pool, s.now)
+	if err != nil {
+		return types.ApprovalRequest{}, err
+	}
+	const q = `
 		UPDATE approvals
-		SET state=$1, decided_at=` + db.AppClockAgeSQL("$2") + `, decided_by=$3, reason=$4, decision_scope=$5, decision_expires_at=$6
+		SET state=$1, decided_at=$2, decided_by=$3, reason=$4, decision_scope=$5, decision_expires_at=$6
 		WHERE id=$7 AND state='PENDING'
 		RETURNING ` + approvalCols
 	a, err := scanApproval(s.Pool.QueryRow(ctx, q,
-		string(decision.State), age, decision.DecidedBy, decision.Reason,
+		string(decision.State), anchor.Translate(decidedAt), decision.DecidedBy, decision.Reason,
 		string(decision.Scope), decision.ExpiresAt, id,
 	))
 	if errors.Is(err, ErrNotFound) {
@@ -605,10 +815,11 @@ func scanApproval(row pgx.Row) (types.ApprovalRequest, error) {
 // so an external SIEM ends up holding a head hash Wardyn cannot later disown.
 //
 // Runs in a transaction because pg_advisory_xact_lock must be held across the
-// INSERT: this caller's seq allocation and head read must not interleave with
-// another writer's, keeping seq order and chain order identical. The DB trigger
-// takes the same lock, binding writers this package knows nothing about; the
-// lock here is re-entrant and free.
+// append: this caller's seq allocation and head read must not interleave with
+// another writer's, keeping seq order and chain order identical. audit_append
+// takes the same lock itself (the only way a row enters the table since 0111);
+// the lock here is re-entrant and free, and keeps the bounded wait below in
+// front of it.
 func InsertAuditEvent(ctx context.Context, pool *pgxpool.Pool, ev *types.AuditEvent) error {
 	// The cap lives at the one INSERT every audit writer reaches (api server,
 	// broker, identity, approval sweeper, spool drain), not in Server.auditEvent,
@@ -639,13 +850,13 @@ func InsertAuditEvent(ctx context.Context, pool *pgxpool.Pool, ev *types.AuditEv
 		return fmt.Errorf("store: lock audit chain (waited up to %s; another transaction that inserted into audit_events may still be open): %w",
 			db.AuditChainLockTimeout, err)
 	}
-	// COALESCE: the genesis row's prev_hash is SQL NULL, which won't scan into a
-	// string; empty string and NULL both mean "nothing before this row".
+	// audit_append is the only way a row enters audit_events: it allocates seq and recorded_at under
+	// the chain lock and the chain trigger refuses a row it did not allocate. COALESCE: the genesis
+	// row's prev_hash is SQL NULL, which won't scan into a string; empty string and NULL both mean
+	// "nothing before this row".
 	const q = `
-		INSERT INTO audit_events
-			(` + auditCols + `)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
-		RETURNING COALESCE(prev_hash,''), COALESCE(row_hash,'')`
+		SELECT COALESCE(prev_hash,''), COALESCE(row_hash,'')
+		FROM audit_append($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`
 	if err := tx.QueryRow(ctx, q,
 		ev.ID, ev.Time, ev.RunID, string(ev.ActorType), ev.Actor, ev.Action,
 		ev.Target, ev.Outcome, ev.SourceIP, dataJSON,
@@ -735,8 +946,13 @@ func scanAuditEvent(row pgx.Row) (types.AuditEvent, error) {
 // no config, and "unconfigured" is a valid, common state rather than a
 // failure the caller must special-case.
 func (s PG) GetSiteConfig(ctx context.Context) (types.SiteConfig, error) {
+	return GetSiteConfigQ(ctx, s.Pool)
+}
+
+// GetSiteConfigQ is GetSiteConfig on q.
+func GetSiteConfigQ(ctx context.Context, q Querier) (types.SiteConfig, error) {
 	var raw []byte
-	err := s.Pool.QueryRow(ctx, `SELECT config FROM site_config WHERE singleton`).Scan(&raw)
+	err := q.QueryRow(ctx, `SELECT config FROM site_config WHERE singleton`).Scan(&raw)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return types.SiteConfig{}, nil
 	}
@@ -756,18 +972,24 @@ func (s PG) GetSiteConfig(ctx context.Context) (types.SiteConfig, error) {
 // partial merge; the API validates the full document first) but keeps any key
 // it doesn't, which only a newer wardynd could have written (declaredJSONKeys).
 func (s PG) PutSiteConfig(ctx context.Context, cfg types.SiteConfig) (types.SiteConfig, error) {
+	return PutSiteConfigQ(ctx, s.Pool, cfg)
+}
+
+// PutSiteConfigQ is PutSiteConfig on q. A held governance change applies
+// through it inside the decision transaction.
+func PutSiteConfigQ(ctx context.Context, q Querier, cfg types.SiteConfig) (types.SiteConfig, error) {
 	raw, err := json.Marshal(cfg)
 	if err != nil {
 		return types.SiteConfig{}, fmt.Errorf("store: marshal site config: %w", err)
 	}
-	const q = `
+	const stmt = `
 		INSERT INTO site_config (singleton, config, updated_at)
 		VALUES (true, $1, now())
 		ON CONFLICT (singleton) DO UPDATE
 			SET config = (site_config.config - $2::text[]) || EXCLUDED.config, updated_at = now()
 		RETURNING config`
 	var out []byte
-	if err := s.Pool.QueryRow(ctx, q, raw, declaredJSONKeys(cfg)).Scan(&out); err != nil {
+	if err := q.QueryRow(ctx, stmt, raw, declaredJSONKeys(cfg)).Scan(&out); err != nil {
 		return types.SiteConfig{}, fmt.Errorf("store: put site config: %w", err)
 	}
 	var saved types.SiteConfig

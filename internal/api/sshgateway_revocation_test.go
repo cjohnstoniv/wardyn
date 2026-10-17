@@ -122,6 +122,7 @@ func TestSSHGateway_ChangedKeyCannotOpenAnotherChannel(t *testing.T) {
 			k := types.SSHPublicKey{Fingerprint: ssh.FingerprintSHA256(pub), Principal: principal, PublicKey: string(ssh.MarshalAuthorizedKey(pub)), CreatedAt: now, Role: oidc.RoleAdmin, RoleCheckedAt: &now}
 			if tc.override {
 				run.CreatedBy = "another-owner"
+				run.OperatorOwned = true // the carve-out: the only run an admin key may enter (#1476)
 				st.putRun(run)
 			}
 			st.putKey(k)

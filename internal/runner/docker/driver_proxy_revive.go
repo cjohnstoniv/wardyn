@@ -10,7 +10,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/netip"
+	"net/url"
 	"strings"
 	"time"
 
@@ -107,16 +109,30 @@ func (d *Driver) startProxy(ctx context.Context, runID uuid.UUID, labels map[str
 		// docker needs the explicit mapping. Scoped to the proxy and
 		// consulted ONLY by the trusted forward path, never by the agent's
 		// policy-governed egress (still denies host IPs via the private-IP
-		// guard) — general egress is NOT broadened.
+		// guard) — general egress is NOT broadened. On a runner both this name
+		// and the control-plane name map to the relay's target below, so the
+		// proxy's control-plane clamp covers the one address either resolves to.
 		ExtraHosts: []string{"host.docker.internal:host-gateway"},
 		// SECURITY: the proxy only relays HTTP, so a tight resource envelope
 		// still leaves ample headroom while bounding a compromised proxy: its
 		// own PID cap (fork-bomb guard) and a modest memory cap (MemorySwap
 		// pinned so the cap isn't silently doubled via swap).
-		Resources: proxyResources(),
+		Resources: proxyResources(runner.ConfigHasAzureGates(cfgJSON)),
 	}
 	if d.cfg.ProxyBinaryHostPath != "" {
 		host.Binds = []string{d.cfg.ProxyBinaryHostPath + ":/usr/local/bin/wardyn-proxy:ro"}
+	}
+	if d.cfg.ControlPlaneRelay != nil {
+		name, target, err := d.relayHostsEntry(cfgJSON)
+		if err != nil {
+			return "", err
+		}
+		host.ExtraHosts = []string{"host.docker.internal:" + target, name + ":" + target}
+	}
+	var err error
+	cfgJSON, err = d.runnerSpoolConfig(ctx, runID, cfgJSON, cfg, host)
+	if err != nil {
+		return "", err
 	}
 	var netCfg *network.NetworkingConfig
 	if ip.IsValid() {
@@ -146,7 +162,7 @@ func (d *Driver) startProxy(ctx context.Context, runID uuid.UUID, labels map[str
 		remove()
 		return "", fmt.Errorf("docker: connect proxy to %s: %w", d.cfg.InternalNetwork, err)
 	}
-	if err := d.startWithConfig(ctx, resp.ID, cfgJSON); err != nil {
+	if err := d.startWithConfig(ctx, runID, resp.ID, cfgJSON); err != nil {
 		remove()
 		return "", err
 	}
@@ -169,8 +185,9 @@ func (d *Driver) startProxy(ctx context.Context, runID uuid.UUID, labels map[str
 // startWithConfig attaches to the created proxy's stdin, starts it, writes
 // cfgJSON there and closes it: the proxy reads its config to EOF. Attaching
 // before the start is what `docker run -i` does, so no byte is written before
-// the proxy's stdin exists.
-func (d *Driver) startWithConfig(ctx context.Context, id string, cfgJSON []byte) error {
+// the proxy's stdin exists. The config's listen address is first bound to the
+// proxy's own address on runID's per-run network (see listenOnRunNetwork).
+func (d *Driver) startWithConfig(ctx context.Context, runID uuid.UUID, id string, cfgJSON []byte) error {
 	att, err := d.cli.ContainerAttach(ctx, id, client.ContainerAttachOptions{Stream: true, Stdin: true})
 	if err != nil {
 		return fmt.Errorf("docker: attach proxy stdin: %w", err)
@@ -178,6 +195,9 @@ func (d *Driver) startWithConfig(ctx context.Context, id string, cfgJSON []byte)
 	defer att.Close()
 	if _, err := d.cli.ContainerStart(ctx, id, client.ContainerStartOptions{}); err != nil {
 		return fmt.Errorf("docker: start proxy: %w", err)
+	}
+	if cfgJSON, err = d.listenOnRunNetwork(ctx, runID, id, cfgJSON); err != nil {
+		return err
 	}
 	_ = att.Conn.SetWriteDeadline(time.Now().Add(proxyConfigWriteTimeout))
 	if _, err := att.Conn.Write(cfgJSON); err != nil {
@@ -187,6 +207,45 @@ func (d *Driver) startWithConfig(ctx context.Context, id string, cfgJSON []byte)
 		return fmt.Errorf("docker: close proxy stdin: %w", err)
 	}
 	return nil
+}
+
+// listenOnRunNetwork returns cfgJSON with its listen address set to the
+// started proxy id's address on runID's per-run network, keeping the port.
+// The proxy also sits on the control-plane-facing network, which other
+// containers share; binding to the per-run address keeps its listener off
+// that network, so only the run's own agent can reach it. The address exists
+// only once the container has started, which is why this runs between the
+// start and the config write.
+func (d *Driver) listenOnRunNetwork(ctx context.Context, runID uuid.UUID, id string, cfgJSON []byte) ([]byte, error) {
+	res, err := d.cli.ContainerInspect(ctx, id, client.ContainerInspectOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("docker: inspect proxy for its listen address: %w", err)
+	}
+	var addr netip.Addr
+	if ns := res.Container.NetworkSettings; ns != nil {
+		if ep := ns.Networks[internalNetName(runID)]; ep != nil {
+			addr = ep.IPAddress
+		}
+	}
+	if !addr.IsValid() || addr.IsUnspecified() {
+		return nil, fmt.Errorf("docker: proxy has no IP on the per-run internal network %q to listen on", internalNetName(runID))
+	}
+	var data map[string]json.RawMessage
+	if err := json.Unmarshal(cfgJSON, &data); err != nil {
+		return nil, fmt.Errorf("docker: proxy config: %w", err)
+	}
+	var listen string
+	if err := json.Unmarshal(data["listen"], &listen); err != nil {
+		return nil, fmt.Errorf("docker: proxy config listen: %w", err)
+	}
+	_, port, err := net.SplitHostPort(listen)
+	if err != nil {
+		return nil, fmt.Errorf("docker: proxy config listen %q: %w", listen, err)
+	}
+	if data["listen"], err = json.Marshal(net.JoinHostPort(addr.Unmap().String(), port)); err != nil {
+		return nil, err
+	}
+	return json.Marshal(data)
 }
 
 // watchProxyExit polls id for up to proxyStartWatch, returning a named error
@@ -369,4 +428,53 @@ func pinnedProxyIP(host *container.HostConfig) netip.Addr {
 		}
 	}
 	return netip.Addr{}
+}
+
+// relayHostsEntry names the run's control-plane hostname and the address the runner's relay
+// is reachable at (design 0.9 §4.2): the proxy's hosts map the name there, where the relay
+// listens and forwards the proxy's TLS, unread, to the org. The proxy keeps its URL and CA
+// exactly as dispatched; only the name resolves differently, and only in the proxy, never
+// the agent.
+func (d *Driver) relayHostsEntry(cfgJSON []byte) (name, target string, err error) {
+	var cp struct {
+		ControlPlaneURL string `json:"control_plane_url"`
+	}
+	if err := json.Unmarshal(cfgJSON, &cp); err != nil {
+		return "", "", fmt.Errorf("docker: relay: config: %w", err)
+	}
+	u, err := url.Parse(cp.ControlPlaneURL)
+	if err != nil || !strings.EqualFold(u.Scheme, "https") || u.Hostname() == "" {
+		return "", "", fmt.Errorf("docker: relay: the control-plane URL %q is not an https URL with a hostname", cp.ControlPlaneURL)
+	}
+	if _, err := netip.ParseAddr(u.Hostname()); err == nil {
+		return "", "", fmt.Errorf("docker: relay: the control-plane URL %q names an IP address, which the runner cannot route to its relay; use a hostname", cp.ControlPlaneURL)
+	}
+	target, err = d.cfg.ControlPlaneRelay(u)
+	if err != nil {
+		return "", "", fmt.Errorf("docker: relay: %w", err)
+	}
+	if err := validRelayTarget(target); err != nil {
+		return "", "", fmt.Errorf("docker: relay: %w", err)
+	}
+	return u.Hostname(), target, nil
+}
+
+// validRelayTarget accepts "host-gateway" or a unicast IP literal. Loopback is the
+// container's own, so it can never be the relay.
+func validRelayTarget(t string) error {
+	if t == "host-gateway" {
+		return nil
+	}
+	ip, err := netip.ParseAddr(t)
+	if err != nil {
+		return fmt.Errorf("the relay target %q is neither host-gateway nor an IP address", t)
+	}
+	if ip.Zone() != "" {
+		return fmt.Errorf("the relay target %q is a zoned address, which a hosts entry cannot carry", t)
+	}
+	// Unmap, so ::ffff:127.0.0.1 and ::ffff:0.0.0.0 are judged as the IPv4 they are.
+	if u := ip.Unmap(); u.IsUnspecified() || u.IsMulticast() || u.IsLoopback() {
+		return fmt.Errorf("the relay target %q is not a routable host address (unspecified, multicast or loopback)", t)
+	}
+	return nil
 }

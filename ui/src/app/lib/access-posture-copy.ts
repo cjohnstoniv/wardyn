@@ -24,6 +24,18 @@ export const ADMIN_ACCESS_BANNER = {
   ACTION: "Set who is an admin",
 } as const;
 
+// Mock M10 (approved 2026-10-03), byte-for-byte: the governed-admin band. The
+// state is /setup/status's auth.govern_admin_runs (WARDYN_GOVERN_ADMIN_RUNS);
+// BODY_RECORDING_EXEMPT replaces BODY when "recording" is in
+// auth.govern_admin_runs_exempt.
+export const GOVERNED_ADMIN_BANNER = {
+  TITLE: "Your runs are governed like everyone else's",
+  BODY: "This deployment governs admins' own runs. Yours are bounded by the governance profile and grants that apply to you. Record Mode is refused while this is on. The admin token stays outside, for break-glass.",
+  BODY_RECORDING_EXEMPT:
+    "This deployment governs admins' own runs. Yours are bounded by the governance profile and grants that apply to you. Record Mode is exempt and runs as before. The admin token stays outside, for break-glass.",
+  HIDE: "Hide",
+} as const;
+
 // The People step, where role mappings live (setup/steps.ts's "people").
 export const ADMIN_ACCESS_PEOPLE_STEP = "/admin/setup?step=people";
 

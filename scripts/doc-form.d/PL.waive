@@ -1,0 +1,3 @@
+# kind	path	key	words	reason
+sentence	docs/RECORDING-ROOT-READ.md	88f7649b0fbc3eab42cd82cfc2ef0af3a48dfb1c	38	one sentence of 38 words with no clause joiner (a comma list of what the fix does not do); text kept byte-identical (ledger row R0038)
+sentence	docs/VERIFY.md	83ecd3e3b240c25d6286264be92868e0d817565f	36	one sentence of 36 words with no clause joiner (35 without the link target the gate counts as a word); text kept byte-identical (ledger row R0077, first part)

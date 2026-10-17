@@ -58,6 +58,24 @@ func (s *sweepStore) ListApprovals(_ context.Context, state types.ApprovalState)
 	return out, nil
 }
 
+func (s *sweepStore) ListPendingApprovalsForRuns(_ context.Context, runIDs []uuid.UUID) ([]types.ApprovalRequest, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := []types.ApprovalRequest{}
+	for _, r := range s.rows {
+		if r.State != types.ApprovalPending {
+			continue
+		}
+		for _, id := range runIDs {
+			if r.RunID == id {
+				out = append(out, r)
+				break
+			}
+		}
+	}
+	return out, nil
+}
+
 func (s *sweepStore) DecideApproval(_ context.Context, id uuid.UUID, d types.ApprovalDecision) (types.ApprovalRequest, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -147,7 +165,7 @@ func TestRunApprovalSweeper_CountsCredentialReauthExpiriesAtTheTransition(t *tes
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		runApprovalSweeper(ctx, st, 5*time.Millisecond, time.Hour, counter)
+		runApprovalSweeper(ctx, st, 5*time.Millisecond, time.Hour, counter, nil)
 	}()
 	deadline := time.Now().Add(5 * time.Second)
 	for st.stateOf(reauth.ID) != types.ApprovalExpired || st.stateOf(adoSignIn.ID) != types.ApprovalExpired {
@@ -198,7 +216,7 @@ func TestRunApprovalSweeper_ReportsNothingWhenNoReauthExpires(t *testing.T) {
 	counter := &countingExpiry{}
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Millisecond)
 	defer cancel()
-	runApprovalSweeper(ctx, st, 5*time.Millisecond, time.Hour, counter)
+	runApprovalSweeper(ctx, st, 5*time.Millisecond, time.Hour, counter, nil)
 	if got := counter.total(); got != 0 {
 		t.Errorf("the sweep reported %d re-auth expiries with none present", got)
 	}

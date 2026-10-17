@@ -78,6 +78,22 @@ const (
 // agent image cloning shallow makes a push whose bases live on the remote ordinary.
 var ErrUninspectable = errors.New("gitpack: the push cannot be inspected from its own bytes")
 
+// MissingObjectError is the ErrUninspectable answer for refs whose target
+// object the request does not carry: a tip, or the object an annotated tag
+// peels to, that is absent from the pack, or any updated ref when there is no
+// pack at all. A push can miss one target and carry another, so it names every
+// ref that misses. It is not set for a target that is present but cannot be
+// read as a commit (wrong type, malformed tag, peel limit).
+type MissingObjectError struct{ Refs []string }
+
+func (e *MissingObjectError) Error() string {
+	return fmt.Sprintf("%v: the request does not carry the object %s points to",
+		ErrUninspectable, strings.Join(e.Refs, ", "))
+}
+
+// Is makes the error an ErrUninspectable.
+func (e *MissingObjectError) Is(target error) bool { return target == ErrUninspectable }
+
 // ErrTooLarge reports that the request carries everything an answer needs
 // but costs more than one of this package's ceilings allows; the fix is on
 // the sender's side, push fewer commits at a time.
@@ -208,9 +224,14 @@ func Inspect(body []byte) (Result, error) {
 	res := Result{ObjectFormat: format.name, Commands: cmds}
 	if len(rest) == 0 {
 		// No pack at all: fine for a delete-only push, a refusal otherwise.
-		if i := slices.IndexFunc(cmds, func(c Command) bool { return !isZeroOID(c.New) }); i >= 0 {
-			return Result{}, fmt.Errorf("%w: %s updates a ref and the request carries no packfile",
-				ErrUninspectable, cmds[i].Ref)
+		var missing []string
+		for _, c := range cmds {
+			if !isZeroOID(c.New) {
+				missing = append(missing, c.Ref)
+			}
+		}
+		if len(missing) > 0 {
+			return Result{}, &MissingObjectError{Refs: missing}
 		}
 		return res, nil
 	}
@@ -239,7 +260,7 @@ func readCommandSection(body []byte) (cmds []Command, caps string, rest []byte, 
 		if len(body) < 4 {
 			return nil, "", nil, errors.New("gitpack: truncated pkt-line length")
 		}
-		n, err := strconv.ParseUint(string(body[:4]), 16, 32)
+		n, err := strconv.ParseUint(string(body[:4]), 16, 16)
 		if err != nil {
 			return nil, "", nil, fmt.Errorf("gitpack: malformed pkt-line length %q", body[:4])
 		}
@@ -290,7 +311,7 @@ func skipPktSection(body []byte) ([]byte, error) {
 		if len(body) < 4 {
 			return nil, errors.New("truncated pkt-line length")
 		}
-		n, err := strconv.ParseUint(string(body[:4]), 16, 32)
+		n, err := strconv.ParseUint(string(body[:4]), 16, 16)
 		if err != nil {
 			return nil, fmt.Errorf("malformed pkt-line length %q", body[:4])
 		}

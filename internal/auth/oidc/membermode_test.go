@@ -429,3 +429,51 @@ func TestMemberMode_NoCredentialWithoutTheModeIsInert(t *testing.T) {
 		t.Error("MemberPreviewNoCredential = true for a cookie carrying mmnc with no mm — the posture is not a primitive of its own")
 	}
 }
+
+// UserViewStampedRole is the one reader of the STAMPED role while the user view is on (#1335): it
+// answers from the verified cookie, only inside the view, and never from a cookie it cannot verify.
+func TestUserViewStampedRole(t *testing.T) {
+	a := &writoidc.Authenticator{}
+	read := func(c *http.Cookie) string {
+		r := httptest.NewRequest(http.MethodGet, "/api/v1/me", nil)
+		if c != nil {
+			r.AddCookie(c)
+		}
+		return a.UserViewStampedRole(r)
+	}
+	in, err := writoidc.EncodeSessionForTest(a, memberModeSession())
+	if err != nil {
+		t.Fatalf("EncodeSessionForTest: %v", err)
+	}
+	if got := read(in); got != "" {
+		t.Errorf("outside the view = %q, want empty", got)
+	}
+	if got := read(setMemberMode(t, a, in, true)); got != writoidc.RoleAdmin {
+		t.Errorf("stamped admin in the view = %q, want %q", got, writoidc.RoleAdmin)
+	}
+	if got := read(nil); got != "" {
+		t.Errorf("no cookie = %q, want empty", got)
+	}
+
+	sa := memberModeSession()
+	sa.Role = writoidc.RoleSecurityAdmin
+	sa.MemberMode = true
+	c, err := writoidc.EncodeSessionForTest(a, sa)
+	if err != nil {
+		t.Fatalf("EncodeSessionForTest: %v", err)
+	}
+	if got := read(c); got != writoidc.RoleSecurityAdmin {
+		t.Errorf("stamped security admin in the view = %q, want %q", got, writoidc.RoleSecurityAdmin)
+	}
+
+	// A payload edited after signing (role promoted to admin) is never trusted.
+	_, sig, _ := strings.Cut(c.Value, ".")
+	forged := memberModeSession()
+	forged.Role = writoidc.RoleAdmin
+	forged.MemberMode = true
+	fp, _ := json.Marshal(forged)
+	bad := &http.Cookie{Name: c.Name, Value: base64.RawURLEncoding.EncodeToString(fp) + "." + sig}
+	if got := read(bad); got != "" {
+		t.Errorf("tampered cookie = %q, want empty", got)
+	}
+}

@@ -19,7 +19,8 @@
 // page's Audit tab.
 import { Link } from "react-router-dom";
 import { cn } from "../ui/utils";
-import { toolRuleDecision, type AuditEvent } from "../../lib/types";
+import { erasedFieldNames, toolRuleDecision, type AuditEvent } from "../../lib/types";
+import { AUDIT } from "../screens/audit-copy";
 import { Chip } from "./primitives";
 import { PUSH } from "./copy/push";
 
@@ -66,6 +67,32 @@ export function AuditDecision({ event, className }: { event: AuditEvent; classNa
 interface RuleSourceLabel {
   label: string;
   tone: "neutral" | "info" | "danger";
+}
+
+// The refusals that name the governing policy (the egress proxy's
+// internal/egress/proxy/refusal_attribution.go and the broker refusals it
+// attributes). The Request access remedy renders beside a refused row only for
+// these: a builtin:* guard or policy:evaluator-error is a fault, and sending
+// someone to the policy owner for one costs that owner a ticket that is not theirs.
+export const ATTRIBUTED_RULE_SOURCES: ReadonlySet<string> = new Set([
+  "policy:denied",
+  "policy:default-deny",
+  "policy:method",
+  "approval:denied",
+  "brokered:git",
+  "brokered:git-pat:denied",
+  "brokered:git:branch-ns",
+  "brokered:git:push-rules",
+  "brokered:git:push-too-large",
+  "brokered:ado:denied",
+  "brokered:ado-git:denied",
+]);
+
+// True for a refusal row (an egress.deny) whose rule_source is in the set. The
+// action check matters: the broker sources also label ALLOW rows.
+export function isAttributedRefusal(event: AuditEvent): boolean {
+  const source = event.data?.rule_source;
+  return event.action === "egress.deny" && typeof source === "string" && ATTRIBUTED_RULE_SOURCES.has(source);
 }
 
 export function ruleSourceLabel(source: string): RuleSourceLabel | null {
@@ -118,6 +145,11 @@ export function ruleSourceLabel(source: string): RuleSourceLabel | null {
   if (source === "builtin:resolve-failed") {
     return { label: "Refused because the name did not resolve, not by policy or the address rule", tone: "danger" };
   }
+  // builtin:tunnel-failed is not a refusal at all: the proxy allowed the
+  // connection, it opened, and the network then killed it. Named before the
+  // generic bucket so it does not read as a guard hit; the tone stays that of
+  // its neighbours.
+  if (source === "builtin:tunnel-failed") return { label: "Connection died after it opened", tone: "danger" };
   // builtin:* is the proxy's own guard family (dial-failed, gateway-vet-failed,
   // …) — every remaining value here is a refusal (builtin:upstream-proxy, the
   // one ALLOW in the family, is handled above and never reaches this line).
@@ -192,5 +224,25 @@ export function RuleSourceChip({ event, className }: { event: AuditEvent; classN
       {chip}
       {causeSpan}
     </span>
+  );
+}
+
+// A field the person it describes had erased (a sealed field whose key was
+// destroyed) renders "Erased", never the wire sentinel (mock packet M4,
+// surface D). Nothing else on the row changes; shared by the two mounts that
+// show a trail, like AuditDecision above. One note per erased field, named by
+// its key, with the explanation as its title. The target is not here: its row
+// shows it in place.
+export function ErasedFields({ event, className }: { event: AuditEvent; className?: string }) {
+  const names = erasedFieldNames(event).filter((n) => n !== "target");
+  if (names.length === 0) return null;
+  return (
+    <>
+      {names.map((n) => (
+        <span key={n} className={cn("text-muted-foreground", className)} title={AUDIT.ERASED_HINT}>
+          {n}: {AUDIT.ERASED}
+        </span>
+      ))}
+    </>
   );
 }

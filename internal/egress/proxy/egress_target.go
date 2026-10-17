@@ -28,6 +28,7 @@ import (
 	"strings"
 
 	"github.com/cjohnstoniv/wardyn/internal/ipguard"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 const (
@@ -216,35 +217,6 @@ func noProxyRulesCoverHost(rules []noProxyRule, host string) bool {
 	return false
 }
 
-// NoProxyCovers reports whether entries — an UNCOMPILED
-// SiteConfig.UpstreamProxyNoProxy list, exactly as an admin wrote it — would
-// bypass a dial to host, the same routing question bypassUpstream answers for
-// a live Proxy's already-compiled list. Exposed as a pure function, not a
-// *Proxy method, so a caller with no running Proxy (cmd/wardynd's boot-time
-// advisory for a gateway host with no covering bypass entry) can ask it. It
-// compiles entries via compileNoProxy — the same compiler bypassUpstream's
-// caller (NewServer) feeds p.noProxy from — so a typo'd entry that would be
-// silently dropped there is silently absent here too, never a false cover.
-func NoProxyCovers(entries []string, host string) bool {
-	h := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(host)), ".")
-	if h == "" {
-		return false
-	}
-	ip := net.ParseIP(h)
-	for _, r := range compileNoProxy(entries) {
-		if r.cidr != nil {
-			if ip != nil && r.cidr.Contains(ip) {
-				return true
-			}
-			continue
-		}
-		if h == r.suffix || strings.HasSuffix(h, "."+r.suffix) {
-			return true
-		}
-	}
-	return false
-}
-
 // noProxyRule is one compiled SiteConfig.UpstreamProxyNoProxy entry: either a
 // CIDR (matched against a literal-IP destination) or a lowercased host/domain
 // suffix (matched by label suffix, never mid-label). Exactly one is set.
@@ -370,8 +342,9 @@ const (
 // per-request resolve+pin — it is CONTROL-PLANE-authored (the operator typed
 // it at boot), so no InternalHosts declaration is needed for it.
 // The upstream bypass applies here too, for the same reason it applies to an
-// ordinary host: an internal model gateway a corp proxy cannot CONNECT to is
-// exactly the destination the operator declared on the bypass list.
+// ordinary host: an internal model gateway that the corp proxy has no route to,
+// and this proxy can itself resolve and reach, is the destination the operator
+// declares on the bypass list.
 func (p *Proxy) gatewayTarget(host string, port int) (string, error) {
 	if p.upstream != nil && !p.bypassUpstream(host) {
 		return net.JoinHostPort(host, strconv.Itoa(port)), nil
@@ -489,4 +462,44 @@ func (p *Proxy) onOwnSubnetOrControlPlane(ip net.IP) bool {
 		}
 	}
 	return false
+}
+
+// parseInternalHostCIDRs parses a SiteConfig.InternalHosts entry's CIDR
+// list, failing the WHOLE entry (ok=false) the moment one fails to parse —
+// never returning a partial list. liftInternalHost treats zero CIDRs as "no
+// CIDRs declared" and lifts the FULL liftable set for the suffix, so
+// silently dropping only the one bad CIDR out of several would widen an
+// entry meant to be narrow into that full-set default, the opposite of what
+// a parse failure should do.
+func parseInternalHostCIDRs(raw []string) (cidrs []*net.IPNet, ok bool) {
+	cidrs = make([]*net.IPNet, 0, len(raw))
+	for _, c := range raw {
+		_, n, err := net.ParseCIDR(c)
+		if err != nil {
+			return nil, false
+		}
+		cidrs = append(cidrs, n)
+	}
+	return cidrs, true
+}
+
+// compileInternalHosts compiles each declared internal host: lowercase + trim the suffix (same
+// normalization VetHost applies to the request host, so the comparison in
+// liftInternalHost is exact), parse its CIDRs (already validated at
+// site-config write time and at proxy Config load) via
+// parseInternalHostCIDRs, which drops the WHOLE entry on a parse failure.
+func compileInternalHosts(hosts []types.InternalHost) []internalHostRule {
+	out := make([]internalHostRule, 0, len(hosts))
+	for _, h := range hosts {
+		suffix := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(h.HostSuffix)), ".")
+		if suffix == "" {
+			continue
+		}
+		cidrs, ok := parseInternalHostCIDRs(h.CIDRs)
+		if !ok {
+			continue
+		}
+		out = append(out, internalHostRule{suffix: suffix, cidrs: cidrs})
+	}
+	return out
 }

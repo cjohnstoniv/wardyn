@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"slices"
 	"sync/atomic"
 	"time"
 
@@ -16,6 +17,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/store"
+	"github.com/cjohnstoniv/wardyn/internal/sweephealth"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -100,7 +102,10 @@ type SandboxOrphanSweeper interface {
 // persisted agent_exec_id rather than the container — an idle-container exec run
 // whose agent already exited is finalized instead of stranded.
 func (s *Server) ReconcileOnBoot(ctx context.Context) error {
-	buildErr := s.sweepOrphanedBuilds(ctx)
+	// Coverage first: every live run's masking manifest is loaded here, so a
+	// restarted replica masks (and its doors admit) before the first request
+	// asks, on any replica, whether or not it ever holds a watcher lease.
+	buildErr := errors.Join(s.loadMaskManifests(ctx), s.sweepOrphanedBuilds(ctx))
 	if _, ok := s.cfg.ImageBuilder.(ImageBuildSweeper); ok && s.watcherBaseCtx() != nil {
 		go s.orphanedBuildSweeper(s.watcherBaseCtx(), buildSweepInterval)
 	}
@@ -144,7 +149,7 @@ func (s *Server) ReconcileOnBoot(ctx context.Context) error {
 	// run history. Election is NOT free, though: claimSingleInstance
 	// (cmd/wardynd/single_instance.go) holds db.SingleInstanceLockKey for the
 	// whole process lifetime only in the DEFAULT configuration — a deployment
-	// booted with -allow-multi-instance skips that claim entirely, and a
+	// booted with WARDYN_HA skips that claim entirely, and a
 	// Postgres restart/failover can release its session under a still-running
 	// daemon while a second one boots and claims it (SingleInstanceLockKey's
 	// own HONEST CEILING). So the ticker takes its own per-tick advisory lock
@@ -328,7 +333,9 @@ func (s *Server) orphanedBuildSweeper(ctx context.Context, every time.Duration) 
 							slog.Any("panic", r))
 					}
 				}()
-				if err := s.sweepOrphanedBuilds(ctx); err != nil {
+				// Recorded as the orphaned_build sweep: an error is an attempt
+				// without a success.
+				if err := s.cfg.SweepHealth.Tick(ctx, sweephealth.OrphanedBuild, s.sweepOrphanedBuilds); err != nil {
 					slog.WarnContext(ctx, "wardynd: orphaned build sweep", slog.Any("err", err))
 				}
 			}()
@@ -348,9 +355,10 @@ func (s *Server) orphanedBuildSweeper(ctx context.Context, every time.Duration) 
 // being early FAILS a healthy run mid-dispatch and tears its sandbox down.
 const undispatchedGrace = 2 * imageBuildTimeout
 
-// finalizeUndispatchedRuns finalizes every non-terminal run that never got a
-// sandbox ref: the dispatch goroutine that would have provisioned it died with
-// the previous process, so nothing will ever start it — FAILED + revoke.
+// finalizeUndispatchedRuns finalizes every slot-holding run (types.SlotHoldingRunStates) that never got
+// a sandbox ref: the dispatch goroutine that would have provisioned it died with
+// the previous process, so nothing will ever start it — FAILED + revoke. A QUEUED run is never
+// here: it has no sandbox and waits past the grace by design.
 //
 // The age gate is what makes this safe to run PERIODICALLY as well as at boot,
 // and it has to be run periodically: this is the ONLY reaper of a sandbox-less
@@ -375,10 +383,15 @@ func (s *Server) finalizeUndispatchedRuns(ctx context.Context) error {
 	leaser, hasLease := s.cfg.Store.(store.RunWatcherLeaser)
 	var finalized int
 	for _, run := range runs {
-		if isTerminalRunState(run.State) || run.SandboxRef != "" {
+		if !slices.Contains(types.SlotHoldingRunStates, run.State) || run.SandboxRef != "" {
 			continue
 		}
-		if now.Sub(run.CreatedAt) < undispatchedGrace {
+		// A promoted run's dispatch window starts when it left the queue, not when it was requested.
+		started := run.CreatedAt
+		if run.AdmittedAt != nil {
+			started = *run.AdmittedAt
+		}
+		if now.Sub(started) < undispatchedGrace {
 			continue // still inside its own dispatch window; not abandoned
 		}
 		// A FRESH watcher lease means a LIVE process is responsible for this run:
@@ -530,54 +543,63 @@ func (s *Server) runWatcherSweeper(ctx context.Context, every time.Duration) {
 							slog.Any("panic", r))
 					}
 				}()
-				if now := s.cfg.Now(); now.Sub(lastUndispatched) >= undispatchedGrace {
-					lastUndispatched = now
-					if err := s.finalizeUndispatchedRuns(ctx); err != nil {
-						slog.WarnContext(ctx, "wardynd: undispatched run reconcile", slog.Any("err", err))
-					}
-					// Same slow cadence as the undispatched pass (both are unbounded
-					// full-table reads whose eligibility only changes on the
-					// undispatchedGrace timescale), and AFTER it, so a just-finalized
-					// ref-empty run's leaked containers are swept the same tick.
-					// ponytail: no separate ticker — piggy-backing this cadence keeps
-					// one ContainerList per grace period, free next to what it reclaims.
-					if err := s.sweepOrphanedSandboxes(ctx); err != nil {
-						slog.WarnContext(ctx, "wardynd: orphaned sandbox sweep", slog.Any("err", err))
-					}
-					if err := s.purgeTerminalRunProxyConfigs(ctx); err != nil {
-						slog.WarnContext(ctx, "wardynd: terminal run proxy config purge", slog.Any("err", err))
-					}
-				}
-				if err := s.sweepRunWatchers(ctx); err != nil {
-					slog.WarnContext(ctx, "wardynd: run watcher sweep", slog.Any("err", err))
-				}
-				// A tightened profile reaches its live runs on this cadence,
-				// before the lease reads their ends.
-				if err := s.sweepRunLimits(ctx); err != nil {
-					slog.WarnContext(ctx, "wardynd: run limits re-clamp", slog.Any("err", err))
-				}
-				// The lease rides this cadence too: its warnings are minutes
-				// apart and the end is a minute late at worst.
-				if err := s.sweepRunLeases(ctx); err != nil {
-					slog.WarnContext(ctx, "wardynd: run lease sweep", slog.Any("err", err))
-				}
-				// And the pause, after the lease so a run ending this tick is
-				// not frozen first; its backstop resumes a run whose request
-				// closed without a writer calling approvalClosed.
-				if err := s.sweepRunPauses(ctx); err != nil {
-					slog.WarnContext(ctx, "wardynd: run pause sweep", slog.Any("err", err))
-				}
-				// A run whose token lapsed loses its proxy within a tick.
-				if err := s.sweepLapsedRunTokens(ctx); err != nil {
-					slog.WarnContext(ctx, "wardynd: lapsed run token sweep", slog.Any("err", err))
-				}
-				// Azure DevOps personal access tokens, on their own slower clock.
-				if err := s.sweepRunPATs(ctx); err != nil {
-					slog.WarnContext(ctx, "wardynd: run personal access token sweep", slog.Any("err", err))
-				}
+				// One tick, recorded as the run_watcher sweep: the first sub-pass
+				// error is the tick's, so an attempt that failed has no success.
+				_ = s.cfg.SweepHealth.Tick(ctx, sweephealth.RunWatcher, func(ctx context.Context) error {
+					return s.runWatcherTick(ctx, &lastUndispatched)
+				})
 			}()
 		}
 	}
+}
+
+// runWatcherTick is one pass of the run watcher sweep: the undispatched-run
+// reconcile on its slow cadence, then every sub-pass that rides this tick. Each
+// sub-pass runs whatever the others returned, and each error is logged as it
+// happens; the first is returned, so one failing sub-pass keeps the tick from
+// counting as a success.
+func (s *Server) runWatcherTick(ctx context.Context, lastUndispatched *time.Time) error {
+	var first error
+	pass := func(what string, err error) {
+		if err == nil {
+			return
+		}
+		slog.WarnContext(ctx, "wardynd: "+what, slog.Any("err", err))
+		if first == nil {
+			first = err
+		}
+	}
+	if now := s.cfg.Now(); now.Sub(*lastUndispatched) >= undispatchedGrace {
+		*lastUndispatched = now
+		pass("undispatched run reconcile", s.finalizeUndispatchedRuns(ctx))
+		// Same slow cadence as the undispatched pass (both are unbounded
+		// full-table reads whose eligibility only changes on the
+		// undispatchedGrace timescale), and AFTER it, so a just-finalized
+		// ref-empty run's leaked containers are swept the same tick.
+		// ponytail: no separate ticker — piggy-backing this cadence keeps
+		// one ContainerList per grace period, free next to what it reclaims.
+		pass("orphaned sandbox sweep", s.sweepOrphanedSandboxes(ctx))
+		pass("terminal run proxy config purge", s.purgeTerminalRunProxyConfigs(ctx))
+		pass("asserted runner subject purge", s.purgeAssertedRunnerSubjects(ctx))
+	}
+	pass("run watcher sweep", s.sweepRunWatchers(ctx))
+	// A tightened profile reaches its live runs on this cadence,
+	// before the lease reads their ends.
+	pass("run limits re-clamp", s.sweepRunLimits(ctx))
+	// The lease rides this cadence too: its warnings are minutes
+	// apart and the end is a minute late at worst.
+	pass("run lease sweep", s.sweepRunLeases(ctx))
+	// And the pause, after the lease so a run ending this tick is
+	// not frozen first; its backstop resumes a run whose request
+	// closed without a writer calling approvalClosed.
+	pass("run pause sweep", s.sweepRunPauses(ctx))
+	// A run whose token lapsed loses its proxy within a tick.
+	pass("lapsed run token sweep", s.sweepLapsedRunTokens(ctx))
+	// Azure DevOps personal access tokens, on their own slower clock.
+	pass("run personal access token sweep", s.sweepRunPATs(ctx))
+	// Unclaimed runners that outlived their 24h wait.
+	pass("lapsed unclaimed runner sweep", s.sweepLapsedRunners(ctx))
+	return first
 }
 
 // holdRunWatcherLease marks this process as the live watcher for runID and keeps
@@ -689,6 +711,9 @@ func (s *Server) reconcileWatch(ctx context.Context, runID uuid.UUID, ref, agent
 	// here or on another replica, adopts the run).
 	stopLease := s.holdRunWatcherLease(ctx, runID)
 	defer stopLease()
+	// A run adopted live by a process with no tail for it resumes its output
+	// capture from the substrate, so the run's end persists all of it.
+	s.resumeRunOutput(ctx, runID, ref)
 	baseInterval := time.Duration(reconcileWatchIntervalNS.Load())
 	tick := time.NewTicker(baseInterval)
 	defer tick.Stop()
@@ -746,6 +771,20 @@ func (s *Server) reconcileWatch(ctx context.Context, runID uuid.UUID, ref, agent
 // revoke cascade, so 2× that with headroom.
 const reconcileFinalizeTimeout = 60 * time.Second
 
+// runnerReceived reports whether the run has a runner execution row: its runner was handed a task to
+// run. A run with no task has none, even while the runner holds its sandbox. A store that cannot say,
+// or a read that fails, answers yes, so the receipt worker keeps the run.
+func (s *Server) runnerReceived(ctx context.Context, runID uuid.UUID) bool {
+	ex, ok := s.cfg.Store.(interface {
+		RunnerExecutionOf(context.Context, uuid.UUID) (store.RunnerExecution, error)
+	})
+	if !ok {
+		return true
+	}
+	_, err := ex.RunnerExecutionOf(ctx, runID)
+	return !errors.Is(err, store.ErrNotFound)
+}
+
 // reconcileFinalize transitions a stranded run to a terminal state — conditional
 // on it still being non-terminal so a concurrent kill/complete is never clobbered
 // — then runs the revoke cascade and (best-effort) tears the sandbox down.
@@ -759,6 +798,13 @@ func (s *Server) reconcileFinalize(ctx context.Context, runID uuid.UUID, to type
 	if err != nil {
 		slog.ErrorContext(ctx, "wardynd: reconcile get run failed",
 			slog.String("run_id", runID.String()), slog.Any("err", err))
+		return
+	}
+	// A run its runner holds is ended by the runner, which this must not race: one with a sandbox there
+	// (an interactive run has no task, so no execution row) and one handed a task (its durable exit
+	// receipt). One with neither (a crash between create and dispatch) has nothing on the runner to
+	// report, so it is finalized here like any other run that was never dispatched.
+	if cur.Placement == types.PlacementLocal && cur.RunnerID != nil && (cur.SandboxRef != "" || s.runnerReceived(ctx, runID)) {
 		return
 	}
 	if isTerminalRunState(cur.State) {

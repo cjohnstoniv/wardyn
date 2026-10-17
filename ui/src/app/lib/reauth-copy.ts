@@ -3,6 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import { SIGN_IN_AGAIN } from "./session-renew-copy";
+
 // #483 — signing in again in place. Frozen canon: docs/design/reauth-in-place-canon.md
 // (reauth-copy.test.ts parses that table back and compares every row).
 //
@@ -27,6 +29,15 @@ export const REAUTH_DIALOG = {
 export const REAUTH_BAR = {
   BODY: "You're signed out. This page is read-only until you sign in again.",
   CTA: "Sign in",
+} as const;
+
+// The expiry banner's "Sign in again", renewing in place. The renewal strip's
+// four states reuse REAUTH_DIALOG's own sentences; these are the rest. CTA is
+// also the banner's own button, which is eager: see session-renew-copy.ts.
+export const REAUTH_RENEW = {
+  CTA: SIGN_IN_AGAIN,
+  CANCEL: "Cancel",
+  RENEWED: (time: string) => `Signed in again. Your session now lasts until ${time}.`,
 } as const;
 
 // Shipped copy, frozen by #206: the role-changed view's continue action. The

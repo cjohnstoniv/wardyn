@@ -160,7 +160,7 @@ func TestDesktopDocSecretTierMatchesTheRouter(t *testing.T) {
 // TestAuthzDeniedGovernanceProfileRowNamesEveryTarget closes the level
 // the reason-set guard cannot see.
 //
-// docs/OPERATIONS.md's denial table declares itself the source of record for
+// docs/operations/denials.md's denial table declares itself the source of record for
 // authz.denied's reason vocabulary, and internal/api's own guard pins the set
 // of REASONS. Nothing pinned the CAUSES inside a row: the governance_profile
 // row enumerated four, and 0.7 added a fifth emitter — the user-drive door —
@@ -172,10 +172,10 @@ func TestAuthzDeniedGovernanceProfileRowNamesEveryTarget(t *testing.T) {
 	if len(targets) < 5 {
 		t.Fatalf("found %d authz.Deny targets for governance_profile (%v) — the matcher needs updating, it is checking almost nothing", len(targets), targets)
 	}
-	row := opsTableRow(t, readDoc(t, "docs/OPERATIONS.md"), "governance_profile")
+	row := opsTableRow(t, readDoc(t, "docs/operations/denials.md"), "governance_profile")
 	for _, target := range targets {
 		if !strings.Contains(row, "`"+target+"`") {
-			t.Errorf("docs/OPERATIONS.md's `governance_profile` row does not name the target %q, so a denial with that target has no documented cause in the section that calls itself the source of record", target)
+			t.Errorf("docs/operations/denials.md's `governance_profile` row does not name the target %q, so a denial with that target has no documented cause in the section that calls itself the source of record", target)
 		}
 	}
 }
@@ -217,7 +217,7 @@ func opsTableRow(t *testing.T, doc, key string) string {
 	t.Helper()
 	start := strings.Index(doc, "| `"+key+"` | ")
 	if start < 0 {
-		t.Fatalf("no table row keyed `%s` in docs/OPERATIONS.md — the guard's anchor moved", key)
+		t.Fatalf("no table row keyed `%s` in docs/operations/denials.md — the guard's anchor moved", key)
 	}
 	rest := doc[start+1:]
 	if end := strings.Index(rest, " | ⛔ "); end >= 0 {
@@ -246,12 +246,12 @@ func TestManagedObjectNameRationaleMatchesTheNamingFunction(t *testing.T) {
 			t.Fatalf("%s mints %q, which no longer carries the home — re-derive the runbook's collision argument", backend, shape)
 		}
 	}
-	doc := readDoc(t, "docs/OPERATIONS.md")
-	mustNotSay(t, doc, "docs/OPERATIONS.md",
+	doc := readDoc(t, "docs/operations/user-drives.md")
+	mustNotSay(t, doc, "docs/operations/user-drives.md",
 		"a volume name carries only the *home*",
 		"names a managed object after the home and nothing else",
 	)
-	mustSay(t, doc, "docs/OPERATIONS.md",
+	mustSay(t, doc, "docs/operations/user-drives.md",
 		"a volume name carries the drive and the *home*",
 		"names a managed object after the drive and the home",
 	)
@@ -408,10 +408,10 @@ const (
 // The existing caveat guard pins that the caveat is PRESENT; nothing pinned
 // where it came from, which is why the wrong URL survived a round.
 func TestGroupClaimCaveatCitesThePageThatCarriesIt(t *testing.T) {
-	doc := readDoc(t, "docs/OPERATIONS.md")
+	doc := readDoc(t, "docs/operations/capabilities.md")
 	i := strings.Index(doc, nestedMembershipRule)
 	if i < 0 {
-		t.Fatalf("docs/OPERATIONS.md no longer quotes the nested-membership rule — the caveat guard owns its presence, but this guard is now asserting nothing")
+		t.Fatalf("docs/operations/capabilities.md no longer quotes the nested-membership rule — the caveat guard owns its presence, but this guard is now asserting nothing")
 	}
 	window := doc[i:min(i+600, len(doc))]
 	if !strings.Contains(window, entraGroupClaimsPage) {
@@ -672,8 +672,11 @@ func TestOperationsDocNamesTheUnscopedNetworkRedirectDeny(t *testing.T) {
 func TestAuditActionsDocCredentialRevokeRowMatchesRevokeRun(t *testing.T) {
 	src := readSrc(t, "internal", "broker", "revoke.go")
 	fn := funcBody(t, src, "(b *Broker) RevokeRun")
-	if !strings.Contains(fn, `"jti":  mc.JTI`) || !strings.Contains(fn, `"note": revokeNote(mc.Kind)`) {
+	if !strings.Contains(fn, `"jti":   mc.JTI`) || !strings.Contains(fn, `"note":  revokeNote(mc.Kind)`) {
 		t.Fatal("Broker.RevokeRun no longer writes jti+revokeNote(kind) — re-derive the doc row before trusting this guard")
+	}
+	if !strings.Contains(fn, `"scope": "run_credentials"`) {
+		t.Fatal("Broker.RevokeRun no longer stamps scope run_credentials — the doc row and the Audit view's sentence depend on it")
 	}
 	if !strings.Contains(fn, "b.db.MintedCredentials(ctx, runID)") {
 		t.Fatal("Broker.RevokeRun no longer enumerates via MintedCredentials — re-derive the doc row before trusting this guard")
@@ -784,7 +787,7 @@ func TestAuditActionsDocNamesTheErrorScanAction(t *testing.T) {
 }
 
 // llmScanAuditKey pulls one quoted map[string]any key out of
-// recordLLMScanAudit's body — deliberately narrow to that literal's shape
+// ScanAudit's body — deliberately narrow to that literal's shape
 // (lowercase, underscored) so it does not also match the doc strings or the
 // audit action literal sitting in the same function.
 var llmScanAuditKey = regexp.MustCompile(`"([a-z][a-z_]*)":`)
@@ -795,7 +798,7 @@ var maxAuditFindingsConst = regexp.MustCompile(`(?m)^const maxAuditFindings = (\
 
 // TestAuditActionsDocLLMScanDataFieldsMatchTheEmitSite (B1-AUDITACTIONS-LLMSCAN-ROW-STALE)
 // pins AUDIT-ACTIONS.md's llm.scan.* row's Data column to every key
-// recordLLMScanAudit actually marshals onto the wire.
+// ScanAudit actually marshals onto the wire.
 //
 // The fix added findings_capped, findings_past_cap and findings_reported to the
 // emit site's map[string]any{...} literal, and repointed finding_count away
@@ -804,20 +807,28 @@ var maxAuditFindingsConst = regexp.MustCompile(`(?m)^const maxAuditFindings = (\
 // hits when a scan was truncated. No prior guard read the emit site's key set
 // at all, which is why every other gate stayed green with the row wrong.
 func TestAuditActionsDocLLMScanDataFieldsMatchTheEmitSite(t *testing.T) {
-	body := methodBody(t, readSrc(t, "internal", "api", "internal.go"), "recordLLMScanAudit")
+	body := funcBody(t, readSrc(t, "internal", "egress", "scan_audit.go"), "ScanAudit")
+	for _, caller := range []string{
+		methodBody(t, readSrc(t, "internal", "api", "internal.go"), "recordLLMScanAudit"),
+		funcBody(t, readSrc(t, "internal", "store", "store_runner_spool.go"), "runnerDecisionEvents"),
+	} {
+		if !strings.Contains(caller, "egress.ScanAudit(") {
+			t.Fatal("direct and replay scan audit paths must use the shared builder")
+		}
+	}
 	mapStart := strings.Index(body, "json.Marshal(map[string]any{")
 	if mapStart < 0 {
-		t.Fatalf("recordLLMScanAudit's map[string]any literal not found — the guard's anchor moved")
+		t.Fatalf("ScanAudit's map[string]any literal not found — the guard's anchor moved")
 	}
 	mapEnd := strings.Index(body[mapStart:], "})")
 	if mapEnd < 0 {
-		t.Fatalf("recordLLMScanAudit's map[string]any literal has no closing '})' — the guard's anchor moved")
+		t.Fatalf("ScanAudit's map[string]any literal has no closing '})' — the guard's anchor moved")
 	}
 	mapLiteral := body[mapStart : mapStart+mapEnd]
 
 	matches := llmScanAuditKey.FindAllStringSubmatch(mapLiteral, -1)
 	if len(matches) == 0 {
-		t.Fatalf("recordLLMScanAudit's map[string]any literal has no quoted keys — the guard's anchor moved")
+		t.Fatalf("ScanAudit's map[string]any literal has no quoted keys — the guard's anchor moved")
 	}
 	seen := map[string]bool{}
 	var keys []string
@@ -850,7 +861,7 @@ func TestAuditActionsDocLLMScanDataFieldsMatchTheEmitSite(t *testing.T) {
 	}
 	for _, k := range keys {
 		if !strings.Contains(dataCell, "`"+k+"`") {
-			t.Errorf("docs/AUDIT-ACTIONS.md's llm.scan.* row Data column is missing %q, which recordLLMScanAudit marshals onto the wire: %q", k, strings.TrimSpace(dataCell))
+			t.Errorf("docs/AUDIT-ACTIONS.md's llm.scan.* row Data column is missing %q, which ScanAudit marshals onto the wire: %q", k, strings.TrimSpace(dataCell))
 		}
 	}
 
@@ -862,17 +873,17 @@ func TestAuditActionsDocLLMScanDataFieldsMatchTheEmitSite(t *testing.T) {
 	// exceeding `findings_reported` is a one-way implication of
 	// `findings_capped`, not an iff — block mode's severity keep-backs can
 	// leave a capped scan's two counts equal.
-	internalSrc := readSrc(t, "internal", "api", "internal.go")
+	internalSrc := readSrc(t, "internal", "egress", "scan_audit.go")
 	constMatch := maxAuditFindingsConst.FindStringSubmatch(internalSrc)
 	if constMatch == nil {
-		t.Fatalf("const maxAuditFindings = <N> not found in internal/api/internal.go — the guard's anchor moved")
+		t.Fatalf("const maxAuditFindings = <N> not found in internal/egress/scan_audit.go — the guard's anchor moved")
 	}
 	maxFindings, err := strconv.Atoi(constMatch[1])
 	if err != nil {
 		t.Fatalf("parse maxAuditFindings value %q: %v", constMatch[1], err)
 	}
 	if !strings.Contains(proseCell, strconv.Itoa(maxFindings)) {
-		t.Errorf("docs/AUDIT-ACTIONS.md's llm.scan.* row prose does not name the maxAuditFindings bound (%d) that recordLLMScanAudit truncates the embedded `findings` array to: %q", maxFindings, strings.TrimSpace(proseCell))
+		t.Errorf("docs/AUDIT-ACTIONS.md's llm.scan.* row prose does not name the maxAuditFindings bound (%d) that ScanAudit truncates the embedded `findings` array to: %q", maxFindings, strings.TrimSpace(proseCell))
 	}
 	if !strings.Contains(proseCell, "ONLY when `findings_capped`") {
 		t.Errorf("docs/AUDIT-ACTIONS.md's llm.scan.* row prose must state the finding_count-exceeds-findings_reported relation as a ONE-WAY implication of findings_capped (block mode's keep-backs make the converse false), not an \"exactly when\" iff: %q", strings.TrimSpace(proseCell))

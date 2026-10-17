@@ -84,13 +84,13 @@ func refusalBody(t *testing.T, w *httptest.ResponseRecorder) string {
 func TestEffectiveToolApprovals(t *testing.T) {
 	assigned := governanceCeiling{
 		Spec:    holdProfile("walled").Ceiling,
-		Profile: holdProfile("walled"),
+		Profile: resolvedOf(holdProfile("walled")),
 	}
 	// The same rules, reached through Config.DefaultPolicy with no profile bound.
 	unassigned := governanceCeiling{Spec: holdProfile("walled").Ceiling}
 	allowOnly := governanceCeiling{
 		Spec:    types.RunPolicySpec{ToolRules: []types.ToolRule{{Tool: "*", Effect: types.ToolAllow}}},
-		Profile: holdProfile("yolo"),
+		Profile: resolvedOf(holdProfile("yolo")),
 	}
 
 	for _, tc := range []struct {
@@ -176,14 +176,17 @@ func TestGovernanceToolApprovalsOnCreate(t *testing.T) {
 		}
 	})
 
-	t.Run("the same rules with NO assignment leave the run alone", func(t *testing.T) {
-		// The counterfactual again, end to end: only the assignment differs.
+	t.Run("the same rules with NO assignment gate the run as the policy's own rules", func(t *testing.T) {
+		// The counterfactual end to end: with no assignment there is no
+		// profile derivation, but the run's policy holds and blocks tools, so
+		// the tool lane puts a background Claude Code run on the gated lane
+		// (applyToolPosture) with "*: allow" under the rules.
 		srv, st, audit := govEscapeFixture(t, &capStore{})
 		srv.cfg.DefaultPolicy.ToolRules = holdProfile("x").Ceiling.ToolRules
 		govCreateAndDispatch(t, srv, st, audit, govSession(t, "sub-plain", []string{"eng"}, false),
 			`{"agent":"claude-code","task":"t"}`)
-		if got := toolApprovalsOf(t, audit); got != "" {
-			t.Errorf("run.create tool_approvals = %q for an UNASSIGNED member, want empty — that is not byte-for-byte today", got)
+		if got := toolApprovalsOf(t, audit); got != "hold" {
+			t.Errorf("run.create tool_approvals = %q for an UNASSIGNED member under a policy that holds, want hold", got)
 		}
 	})
 
@@ -922,6 +925,45 @@ func TestGovernanceLimitsMaxConcurrentRuns(t *testing.T) {
 			if w := do(t, srv, http.MethodPost, "/api/v1/runs", adminToken, body); w.Code != http.StatusCreated {
 				t.Fatalf("admin run %d = %d, want 201: %s", i+1, w.Code, w.Body.String())
 			}
+		}
+	})
+}
+
+// TestCeilingReassertNoteAndEmptyLists pins the run.ceiling.reassert row's two
+// note sentences and that empty action lists marshal as [], never null.
+func TestCeilingReassertNoteAndEmptyLists(t *testing.T) {
+	read := func(t *testing.T, deny []string) (note string, raw map[string]json.RawMessage) {
+		t.Helper()
+		events, runID := r3bWalledRun(t, "p", deny)
+		ev := findAudit(events, runID, "run.ceiling.reassert", "success")
+		if ev == nil {
+			t.Fatalf("no run.ceiling.reassert row; events=%s", auditDump(events, runID))
+		}
+		if err := json.Unmarshal(ev.Data, &raw); err != nil {
+			t.Fatalf("row data is not an object: %v (%s)", err, ev.Data)
+		}
+		if err := json.Unmarshal(raw["note"], &note); err != nil {
+			t.Fatalf("note is not a string: %v (%s)", err, ev.Data)
+		}
+		return note, raw
+	}
+
+	t.Run("nothing denied or withheld reads the short sentence with [] lists", func(t *testing.T) {
+		note, raw := read(t, nil)
+		if want := "the acting principal's governance profile applies to this run; it denied no host and withheld no credential lane"; note != want {
+			t.Errorf("note = %q, want %q", note, want)
+		}
+		for _, k := range []string{"denied_added", "dropped_injection_hosts", "dropped_broker_lanes"} {
+			if got := string(raw[k]); got != "[]" {
+				t.Errorf("%s = %s, want []", k, got)
+			}
+		}
+	})
+
+	t.Run("a denied host reads the long sentence", func(t *testing.T) {
+		note, _ := read(t, []string{"*.corp.example"})
+		if !strings.HasPrefix(note, "the acting principal's governance profile denies these hosts;") {
+			t.Errorf("note = %q, want the long denies sentence", note)
 		}
 	})
 }

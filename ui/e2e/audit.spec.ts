@@ -180,3 +180,37 @@ test("clicking a run drills into that run's trail, and 'Show all events' restore
   await expect(page.getByRole("button", { name: "Show all events" })).toHaveCount(0);
   await expect(eventCount(page)).toHaveText(fullCount);
 });
+
+// #1878: on a failed-connection row (builtin:tunnel-failed) the rule-source chip
+// and a long cause sat beside the sentence and squeezed it to zero width. The
+// text stayed in the DOM and the tooltip, so only a measured box shows it.
+test("a failed-connection row keeps its sentence visible beside a long cause", async ({ page }) => {
+  await page.route(/\/api\/v1\/audit(\?|$)/, (route) =>
+    route.fulfill({
+      json: [
+        {
+          id: "e2e-tunnel-failed",
+          time: new Date().toISOString(),
+          actor_type: "agent",
+          actor: "spiffe://wardyn/agent",
+          action: "egress.deny",
+          target: "flaky.example.com:443",
+          outcome: "denied",
+          run_id: "run_e2etunnelfailed",
+          data: {
+            rule_source: "builtin:tunnel-failed",
+            cause: `upstream connection reset after the tunnel opened ${"while relaying the response body ".repeat(8)}`,
+          },
+        },
+      ],
+    }),
+  );
+  for (const width of [1280, 1500, 1920]) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.reload();
+    const sentence = page.locator("main").getByText("Failed egress to flaky.example.com:443");
+    await expect(sentence).toBeVisible();
+    const box = await sentence.boundingBox();
+    expect(box?.width ?? 0, `sentence width at ${width}`).toBeGreaterThan(100);
+  }
+});

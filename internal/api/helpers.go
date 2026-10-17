@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"maps"
 	"net/http"
 	"slices"
@@ -18,6 +19,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/identity"
 	"github.com/cjohnstoniv/wardyn/internal/store"
@@ -376,35 +378,6 @@ func (s *Server) mayLaunchWorkspace(r *http.Request, ws types.Workspace) bool {
 	return ws.OwnedBy == "" || s.ownsWorkspaceOrAdmin(r, ws)
 }
 
-// getWorkspaceLaunchable loads the workspace a run REQUEST named and authorizes
-// the CALLER to launch against it (mayLaunchWorkspace). Callers must return
-// immediately when ok is false.
-//
-// It is getWorkspaceReadable's launch twin, and it exists because the create
-// path had no caller-scoped gate at all: seedRequestWorkspace resolved the id
-// through the store and folded its sources onto the spec, and the only
-// member-mount check downstream is evaluated against the workspace OWNER's
-// roots — so per-principal roots did not constrain the caller, and any member
-// (or a security admin) could bind another member's host directory into a
-// sandbox they own.
-//
-// A foreign member-owned row gets denyForeignWorkspace's byte-identical 404,
-// which on this route is the SAME answer getWorkspaceOr404 gives a truly-missing
-// id — so the status is not an existence oracle across members. That parity is
-// why the load happens HERE rather than being folded into seedRequestWorkspace's
-// own 422 arm, which answers a different code for a missing row.
-func (s *Server) getWorkspaceLaunchable(w http.ResponseWriter, r *http.Request, id uuid.UUID) (types.Workspace, bool) {
-	ws, ok := s.getWorkspaceOr404(w, r, id)
-	if !ok {
-		return types.Workspace{}, false
-	}
-	if s.mayLaunchWorkspace(r, ws) {
-		return ws, true
-	}
-	s.denyForeignWorkspace(w, r, ws)
-	return types.Workspace{}, false
-}
-
 // getRunOr404 loads a run, writing a 404 (missing) or 500 (store error) and
 // returning ok=false on failure — the run-noun twin of getWorkspaceOr404.
 // Callers must return immediately when ok is false.
@@ -446,21 +419,56 @@ func (s *Server) getRunOr404(w http.ResponseWriter, r *http.Request, id uuid.UUI
 // are NOT inspect-or-stop, so neither may use this predicate —
 //
 //   - the attach-ticket mint, which hands out an interactive shell in a foreign
-//     sandbox: handleAttachTicket carries its OWN explicit strict re-check
-//     against isOperator (attach_ticket.go). That guard is load-bearing, not
+//     sandbox: handleAttachTicket carries its OWN explicit entry check
+//     (mayEnterRun, run_entry.go). That guard is load-bearing, not
 //     belt-and-braces: without it this one-word change silently grants a PTY.
 //   - POST /runs/{id}/attach/takeover, which ENDS another human's live terminal
 //     and frees the writer slot on a sandbox holding that run's injected
-//     credentials: it authorizes on ownsRunOrSuperAdmin below.
+//     credentials: it loads the run through getRunForEntry (run_entry.go).
 func (s *Server) ownsRunOrAdmin(r *http.Request, run types.AgentRun) bool {
 	return s.isSecurityOperator(r.Context()) || run.CreatedBy == principalFromRequest(r)
+}
+
+// sponsorsRun reports whether the caller of r is the CURRENT sponsor of the service identity that created
+// run, whatever that identity's state: a sponsor keeps sight of, and the stop on, a suspended or retired
+// service's live runs. A store that cannot answer is no. A portal's delegated token never is: it acts for
+// the person but gets no sponsor reach, as portals are refused at the service token mint.
+func (s *Server) sponsorsRun(r *http.Request, run types.AgentRun) bool {
+	name, ok := strings.CutPrefix(run.CreatedBy, types.ServicePrincipalPrefix)
+	principal := principalFromRequest(r)
+	if !ok || principal == "" || isServicePrincipal(principal) || delegatedRequest(r.Context()) {
+		return false
+	}
+	si, err := s.serviceRecord(r.Context(), name)
+	if err != nil && !errors.Is(err, store.ErrNotFound) {
+		slog.ErrorContext(r.Context(), "wardynd: service identity lookup failed; the sponsor arm refuses", "run_id", run.ID, "err", err)
+	}
+	return err == nil && si.Sponsor == principal
+}
+
+// delegatedRequest reports whether ctx carries a portal's delegated token.
+func delegatedRequest(ctx context.Context) bool {
+	_, delegated := audit.DelegationFrom(ctx)
+	return delegated
+}
+
+// ownsRunOrSponsorOrAdmin is ownsRunOrAdmin plus the sponsor of the service identity that created run (F3):
+// read and stop, nothing else. It is wired into exactly GET /runs/{id}, /events, /output and POST
+// /runs/{id}/kill (GET /runs lists through the store, runs_policy.go); every other run route keeps
+// ownsRunOrAdmin, so a sponsor reaches no hold, file, grant, profile or run token. A census test pins the set.
+func (s *Server) ownsRunOrSponsorOrAdmin(r *http.Request, run types.AgentRun) bool {
+	return s.ownsRunOrAdmin(r, run) || s.sponsorsRun(r, run)
 }
 
 // ownsRunOrSuperAdmin is ownsRunOrAdmin's strict twin: the run's owner, or a
 // SUPER admin (isOperator) — never a security_admin.
 //
-// It exists for the one route that WRITES into a live PTY rather than reading or
-// stopping it (handleAttachTakeover). The security tier is refused an attach
+// Since 0.8.5 (#1476) it is only the first gate on take-over, the one route that
+// WRITES into a live PTY: getRunForEntry (run_entry.go) narrows it with
+// mayEnterRun, because a super admin is refused a shell in a person's run. Its
+// other callers — revive, resume, end-wait — open no shell and re-check the
+// owner's capabilities, so super admins keep them (until the owner-consented
+// support session). The security tier is refused an attach
 // ticket (attach_ticket.go), refused the cookie attach lane (ticketOrHumanAuth →
 // requireOperator) and stamped `member` on its SSH keys (sshkeys.go), so a tier
 // that can reach no terminal on a foreign run must not be able to END one on it

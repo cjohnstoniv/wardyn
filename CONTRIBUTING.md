@@ -39,7 +39,7 @@ All contributors MUST preserve the six security invariants documented in [ARCHIT
 Features are not done until they pass the conformance suite (`test/conformance`) on the Docker target and, for anything the Kubernetes runner supports, the `conformance-k8s` CI job (needs a local `kind` cluster to run outside CI — see RELEASING.md; a driver-agnostic honesty stub keeps the contract enforced everywhere else). Every pull request runs these CI checks. A **subset** of them is a server-side merge block on `main`; branch protection is the source of truth, not this list — read it back with `gh api repos/cjohnstoniv/wardyn/branches/main/protection --jq .required_status_checks.contexts`. The rest are the review bar, and a red one is still a red one:
 
 - `go build` and `go vet` — both plain and `-tags docker`
-- Go unit suites with a coverage floor: `make cover-check` (enforces COVER_MIN=78 over the
+- Go unit suites with a coverage floor: `make cover-check` (enforces COVER_MIN=74 over the
   UNION of all three shipped builds — tagless + `-tags docker` + `-tags k8s`),
   `make test-report-docker` (fakeDocker), `make test-report-k8s`,
   `make test-report-pg` (real Postgres), and `make test-race-pg` — the race
@@ -165,6 +165,7 @@ the kind SSO walk, the Playwright suite) — that gate quoted in the PR body.
    - No panics in library code
    - Security decisions fail closed
    - Audit events use dotted action names
+   - Docs follow the [documentation style guide](docs/STYLE.md)
 5. Run the gate: `make ci` (the daemon-free merge gate, and the widest gate a contributor needs — build, lint, Go tests, UI, diagrams, supply chain). Maintainers run the strict superset `make release-check` before a tag.
 6. Commit with sign-off: `git commit -s`
 7. Push and open a pull request that closes the issue

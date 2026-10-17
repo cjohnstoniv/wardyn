@@ -32,10 +32,12 @@
  *           refuses to launch below it"), the derived "Wall" floor badge, and
  *           the barrier-tier callback — all TAUGHT in the editor.
  *   Act 4 — save, then reuse. Name it, Create it (operator-gated), read its new
- *           identity off the row, then hop to the New Run form to show the
- *           policy reused BY REFERENCE and the floor REFUSING every barrier
- *           below it (Fence disabled beneath the Wall floor, the Seg's own
- *           reason line). It STOPS before launch — launching this run is 06.
+ *           identity off the row, then hop to New Run to show the policy
+ *           reused BY REFERENCE (policy_id in the run document, which Review's
+ *           Effective policy card reads back) and the floor REFUSING every
+ *           barrier below it (Fence disabled beneath the Wall floor on the Run
+ *           step, with the barrier table's own reason line). It STOPS before
+ *           launch — launching this run is 06.
  *
  * ── PROVENANCE: the retiring-08 lift ───────────────────────────────────────
  * The confinement-floor teaching, the create/save beat, the wall-vs-rules
@@ -59,7 +61,7 @@
  * exact noun when it reworks "your first run" to reuse-by-reference.
  *
  * KEYLESS, no launch. This episode never starts a sandbox: it authors a policy
- * and previews the floor on the form, then stops. No model, no quota, no
+ * and previews the floor in New Run, then stops. No model, no quota, no
  * workspace dependency, no host-capability probe (the floor's disable is driven
  * by the POLICY floor, not the host — unlike old-08, which clicked Wall for real
  * and so needed a CC2-capable host in beforeAll).
@@ -85,8 +87,8 @@
  * ITSELF, there is no OS window during a take, and nothing here may depend on
  * window geometry. Every locator is a role, a label or page text.
  *
- * Every literal below exists in ui/src today (re-read 2026-08-24 against
- * policies.tsx, policy-panel.tsx, safety-meter.tsx and new-run/new-run-screen.tsx).
+ * Every literal below exists in ui/src today (policies.tsx, policy-panel.tsx and
+ * safety-meter.tsx for Acts 1-3; the copy/new-run modules for Act 4's New Run).
  *
  * DIALOG FIDELITY: every caption()/act() narration string here is a stanza
  * line in the episode-05 proposal (take order); an untracked stanza-check
@@ -100,6 +102,13 @@ import { act, beat, caption, centerInFrame, chapter, PACE, spotlight } from "./o
 // out of stage() inside a test body rather than closing over a module binding.
 import { stage } from "./stage";
 import { sweepStaleState } from "./sweep";
+import { SPEC_LABEL } from "../policy-source";
+import { NR_DOCUMENT } from "../../src/app/components/wardyn/copy/new-run/document";
+import { NR_REVIEW } from "../../src/app/components/wardyn/copy/new-run/review";
+import { NR_RUN } from "../../src/app/components/wardyn/copy/new-run/run";
+import { NR_SHARED } from "../../src/app/components/wardyn/copy/new-run/shared";
+import { NR_START } from "../../src/app/components/wardyn/copy/new-run/start";
+import { NEW_RUN_HEADING, newRunHeading } from "./new-run";
 
 test.skip(!process.env.WARDYN_DEMO, "demo recording — run via `make record-demo` (exports WARDYN_DEMO=1)");
 
@@ -119,7 +128,7 @@ test.describe.configure({ mode: "serial" });
 const POLICY_NAME = "first-policy";
 
 /**
- * The saved spec — floored at CC2 (Wall) so Act 4's Barrier Seg has a floor to
+ * The saved spec — floored at CC2 (Wall) so Act 4's Run step has a floor to
  * refuse Fence beneath, and two allowed hosts so the panel's derived egress
  * chip reads "2 domains allowed" (egressSummary, policy-panel.tsx). deny_with_
  * review is the "everything else requires a decision" mode; auto_stop keeps the
@@ -147,6 +156,25 @@ function apiHeaders(): Record<string, string> | undefined {
   // Local mode (the series' posture) has no auth; the token lane exists for a
   // stack booted with one. Same shape old-08's beforeAll used.
   return process.env.WARDYN_DEMO_TOKEN ? { Authorization: `Bearer ${process.env.WARDYN_DEMO_TOKEN}` } : undefined;
+}
+
+/**
+ * Reuse a saved policy BY REFERENCE through New Run's JSON door: Start's "JSON"
+ * opens the run document, and policy_id is the document's own key for a stored
+ * policy. The draft needs a shape to validate; an interactive environment needs
+ * no agent and no key, and this episode never launches it. Ends on Review,
+ * which reads the policy back.
+ */
+async function referencePolicy(page: Page, policyId: string): Promise<void> {
+  const editor = page.getByLabel(NR_DOCUMENT.EDITOR_ARIA(NR_DOCUMENT.FORMAT_JSON));
+  await expect(editor).toBeVisible();
+  const doc = JSON.parse(await editor.inputValue()) as { intent?: Record<string, unknown> };
+  doc.intent = { ...doc.intent, shape: "environment", experience: "interactive", policy_id: policyId };
+  await editor.fill(JSON.stringify(doc, null, 2));
+  await act(page, page.getByRole("button", { name: NR_DOCUMENT.VALIDATE, exact: true }));
+  await expect(page.getByText(NR_DOCUMENT.VALID), "the run document with this policy_id did not validate").toBeVisible({ timeout: 30_000 });
+  await act(page, page.getByRole("button", { name: NR_DOCUMENT.CONTINUE_REVIEW, exact: true }));
+  await expect(newRunHeading(page, NEW_RUN_HEADING.review)).toBeVisible({ timeout: 30_000 });
 }
 
 /** The editor Dialog, scoped by its title (the detail Sheet is role=dialog too). */
@@ -302,7 +330,7 @@ test("A2 — the safety meter", async () => {
   const page = stage();
   const dlg = editorDialog(page);
   const meter = dlg.getByTestId("safety-meter");
-  const specBox = dlg.getByLabel("Spec (JSON)");
+  const specBox = dlg.getByLabel(SPEC_LABEL);
 
   // The meter is already grading Act 1's Package-registries document. Introduce
   // it, then surface its own title — it grades the DOCUMENT, not any one run.
@@ -375,7 +403,7 @@ test("A3 — the confinement floor", async () => {
   test.setTimeout(180_000);
   const page = stage();
   const dlg = editorDialog(page);
-  const specBox = dlg.getByLabel("Spec (JSON)");
+  const specBox = dlg.getByLabel(SPEC_LABEL);
 
   // Settle on the policy we will save — floored at CC2, two hosts, review-first.
   await specBox.fill(JSON.stringify(POLICY_SPEC, null, 2));
@@ -483,28 +511,30 @@ test("A4 — save, then reuse", async () => {
   await beat(page, PACE.read);
   await spotlight(page, null);
 
-  // ── REUSE, BY REFERENCE, ON THE RUN FORM ──────────────────────────────
+  // ── REUSE, BY REFERENCE, IN NEW RUN ───────────────────────────────────
   // The setup for episode 06: a run just points at the saved policy. This
   // episode STOPS before launch.
   await act(page, page.locator("header").getByRole("button", { name: "New run" }), "New run.");
   await expect(page).toHaveURL(/\/runs\/new/, { timeout: 30_000 });
+  await expect(newRunHeading(page, NEW_RUN_HEADING.start)).toBeVisible();
 
-  // "Reuse a saved policy" is the Policy panel's MODE ROW (an OptionCard — an
-  // aria-pressed <button> whose accessible name is its title plus its hint, so
-  // prefix-match the title). The picker renders once this half is lit.
-  await act(page, page.getByRole("button", { name: /^Reuse a saved policy/ }), "Select saved policy.");
-  await act(page, page.getByRole("combobox", { name: "Saved policy" }));
-  await act(page, page.getByRole("option", { name: POLICY_NAME }));
+  // OPEN: New Run has no saved-policy mode row. A policy saved on the Policies
+  // screen is not a saved template, so Shape's "Saved template" list does not
+  // offer it; the JSON door's policy_id is the one by-reference route that names
+  // it. Is that the route to film, or should this act save first-policy with
+  // Review's "Save as policy" and reuse it from Shape's "Saved template"?
+  await act(page, page.getByRole("button", { name: NR_START.DOC_JSON, exact: true }), "Select saved policy.");
+  await referencePolicy(page, createdPolicyId);
 
-  // The rail names the STORED policy, its own floor and host count, and says
-  // the attached workspace (only) still merges into it. Scoped to the rail
-  // (the sidebar is an <aside>) because the name also shows in the Select trigger.
-  const rail = page.locator("aside").filter({ hasText: "What this run can do" });
-  await expect(rail.getByText(POLICY_NAME, { exact: true })).toBeVisible();
-  const railPolicy = rail.getByText(/^The stored spec governs this run/);
-  await expect(railPolicy).toBeVisible();
+  // Review's Effective policy card names the STORED policy as the source of the
+  // network row and shows the barrier the run will get. Located by the card's
+  // own label because the policy name also shows inside the run document.
+  const card = page.getByRole("complementary", { name: NR_REVIEW.POLICY_TITLE });
+  await expect(card.getByText(POLICY_NAME).first()).toBeVisible({ timeout: 30_000 });
+  const cardPolicy = card.getByText(NR_REVIEW.PROV_SOURCE_POLICY).first();
+  await expect(cardPolicy).toBeVisible();
 
-  await spotlight(page, rail);
+  await spotlight(page, card);
   await caption(page, "There it is — the policy we just saved, ready to reuse by name.");
   await beat(page, PACE.read);
   await caption(page, "A run doesn't copy these rules. It points at them.");
@@ -513,12 +543,12 @@ test("A4 — save, then reuse", async () => {
   await beat(page, PACE.read);
 
   // Barrier = the wall (the run's requested class, a separate wire field from
-  // the policy floor); policy = the rules the rail is showing.
-  const barrier = page.getByRole("radiogroup", { name: "Barrier" });
-  await spotlight(page, barrier);
+  // the policy floor); policy = the rules the card is showing.
+  const barrierRow = card.getByText(NR_REVIEW.POLICY_BARRIER, { exact: true });
+  await spotlight(page, barrierRow);
   await caption(page, "The sandbox is the wall around the workload.");
   await beat(page, PACE.read);
-  await spotlight(page, railPolicy);
+  await spotlight(page, cardPolicy);
   await caption(page, "The policy is the set of rules governing what happens around that wall.");
   await beat(page, PACE.read);
   await caption(page, "The policy brings those rules with it.");
@@ -526,26 +556,31 @@ test("A4 — save, then reuse", async () => {
   await spotlight(page, null);
 
   // ── THE FLOOR, FILMED ─────────────────────────────────────────────────
-  // A STANDING refusal: the Barrier Seg disables every tier below the attached
-  // policy's floor and prints its own reason line, so Fence is greyed the moment
-  // the policy is picked. RING it rather than click it — clicking a disabled
-  // button would park act() for the full 45s action timeout. (Lifted from
-  // old-08 B4; three lines carry old-08's DIALOG-STALE note.)
-  const fenceRadio = barrier.getByRole("radio", { name: "Fence" });
+  // A STANDING refusal: the Run step's barrier table disables every tier below
+  // the attached policy's floor and prints its own reason line, so Fence is
+  // greyed the moment the policy is attached. Review reaches it through the
+  // Where it runs group's Change. RING it rather than click it — clicking a
+  // disabled radio would park act() for the full 45s action timeout. (Lifted
+  // from old-08 B4; three lines carry old-08's DIALOG-STALE note.)
+  await act(page, page.getByRole("button", { name: `${NR_REVIEW.CHANGE} ${NR_REVIEW.GROUP_WHERE}` }));
+  await act(page, page.getByRole("button", { name: NR_REVIEW.EDIT_RUN }));
+  await expect(newRunHeading(page, NEW_RUN_HEADING.runEnvironment)).toBeVisible();
+  const barrier = page.getByRole("radiogroup", { name: NR_RUN.BARRIER_LABEL });
+  const fenceRadio = barrier.getByRole("radio", { name: new RegExp(`^${NR_SHARED.BARRIER_FENCE}`) });
   await centerInFrame(fenceRadio);
   await spotlight(page, fenceRadio);
   await caption(page, "Now we'll try to pick a barrier below the policy's minimum.");
   await beat(page, PACE.read);
   await expect(
     fenceRadio,
-    "Fence is selectable beneath the policy's CC2 floor — the floor is not being enforced on the form",
+    "Fence is selectable beneath the policy's CC2 floor — the floor is not being enforced on the Run step",
   ).toBeDisabled();
 
-  // The Seg's OWN reason line for a floor-disabled tier — distinct from the
+  // The table's OWN reason line for a floor-disabled tier — distinct from the
   // "isn't installed on this host" line. Both labels are OUR policy's floor and
   // OUR choice of tier, never a claim about the host.
-  const floorReason = page.getByText(`Fence is below the policy's floor (${POLICY_FLOOR_LABEL}).`);
-  await expect(floorReason, "the Seg disables Fence without saying why — the floor is enforced but not explained").toBeVisible();
+  const floorReason = page.getByText(NR_RUN.BARRIER_POLICY_REQUIRES(NR_SHARED.BARRIER_WALL));
+  await expect(floorReason, "the table disables Fence without saying why — the floor is enforced but not explained").toBeVisible();
   await spotlight(page, floorReason);
   await caption(page, "And the console won't let us pick it — Fence is below the policy's floor, and it says why.");
   await beat(page, PACE.read);

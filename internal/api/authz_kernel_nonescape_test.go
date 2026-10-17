@@ -44,11 +44,13 @@ var kernelDoors = map[string][]string{
 	// run.create (and its dry run): the request's own fields, then the inline
 	// policy's entries, then the image a workspace seeds and the git rows its
 	// repos resolve to, then the model provider it will use.
-	"denyUserRequest":            {"capAgent", "capImage", "capPolicy", "capWorkspace"},
-	"narrowUserInlinePolicy":     {"capEgressHost", "capSecret", "capWorkspace"},
-	"denyUserSeededImage":        {"capImage"},
-	"denyUserWorkspaceProviders": {"capWorkspaceProvider"},
-	"enforceRunModelProvider":    {"capModelProvider"},
+	"runRequestGovernance":      {"capAgent", "capImage", "capPolicy", "capWorkspace"},
+	"narrowUserInlinePolicy":    {"capEgressHost", "capSecret", "capWorkspace"},
+	"seededImageRefusal":        {"capImage"},
+	"workspaceProvidersRefusal": {"capWorkspaceProvider"},
+	"chooseRunModelProvider":    {"capModelProvider"},
+	// Every harness a run-mode request includes, beside the projected agent.
+	"harnessSetRefusalFor": {"capAgent"},
 	// A record session's model provider, chosen as a run's would be.
 	"recordProviderChoice": {"capModelProvider"},
 	// A revive or an extension, re-checked as the run's owner.
@@ -59,9 +61,18 @@ var kernelDoors = map[string][]string{
 	// egress-host gate — asked from the attention rule (row 8) and from
 	// TestMayDecideAgreesWithDecide, never from decide() itself.
 	"decidableKindAndOwner": {"capEgressHost"},
+	// Attaching a component: an org row by id, a person-defined one by feature.
+	"componentAttachRefusal": {"capComponent", "capFeature"},
+	// The hosts a component reaches: the same egress_host rows that bound an
+	// inline policy's hosts.
+	"componentHostsBounded": {"capEgressHost"},
 	// Minting a personal credential.
-	"handleAddSSHKey":      {"capFeature"},
-	"handleCreateAPIToken": {"capFeature"},
+	"handleAddSSHKey": {"capFeature"},
+	"mintGuards":      {"capFeature"}, // both mint doors: POST /me/tokens and an invitation claim
+	// Self-hosting: POST /me/runners/tokens asks the self_host_runner value.
+	"handleRunnerTokenSelf": {"capFeature"},
+	// A sponsor entering a service identity's run: service_attach, asked with the operator step off (F6).
+	"sponsorMayEnter": {"capFeature"},
 	// The key and sign-in doors, answered as an unknown provider (D-6).
 	"denyProviderAsMissing": {"capModelProvider"},
 	// A workspace read hides a pin to a provider the reader may not use.
@@ -69,12 +80,15 @@ var kernelDoors = map[string][]string{
 	// Reading one stored policy.
 	"handleGetPolicy": {"capPolicy"},
 	// The list carriers (design K2): what a person is offered.
-	"handleListPolicies":             {"capPolicy"},
-	"handleSetupStatus":              {"capAgent"},
-	"setupModelProviders":            {"capAgent"},
-	"setupModelProviderState":        {"capModelProvider"},
-	"computeSCMAccessRowsFor":        {"capWorkspaceProvider"},
-	"adoOwnPATRowFor":                {"capWorkspaceProvider"}, // PUT/DELETE /me/scm/azure-devops/token (D-6)
+	"handleListPolicies":      {"capPolicy"},
+	"handleSetupStatus":       {"capAgent"},
+	"setupModelProviders":     {"capAgent"},
+	"setupModelProviderState": {"capModelProvider"},
+	"computeSCMAccessRowsFor": {"capWorkspaceProvider"},
+	"adoOwnPATRowFor":         {"capWorkspaceProvider"}, // PUT/DELETE /me/scm/azure-devops/token (D-6)
+	// DELETE /me/scm/azure-devops/token's audit row_state: whether the caller
+	// may still use a row whose token they are removing (#1479).
+	"adoOwnPATRowState":              {"capWorkspaceProvider"},
 	"userVisibleOperatorSecretNames": {"capSecret"},
 	// #1267: GET /workspaces' and GET /workspaces/{id}'s per-row
 	// available_to_you, over the two values that apply to EVERY run type —

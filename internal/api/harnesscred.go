@@ -195,10 +195,11 @@ const (
 // Phase B changes is that this AccessToken/RefreshToken pair stops being
 // resident too.
 type awsSSOBlob struct {
-	AccessToken  string `json:"access_token"`
-	RefreshToken string `json:"refresh_token,omitempty"`
-	ClientID     string `json:"client_id,omitempty"`
-	ClientSecret string `json:"client_secret,omitempty"`
+	maskGeneration int64  // captured before reading; never persisted with the credential
+	AccessToken    string `json:"access_token"`
+	RefreshToken   string `json:"refresh_token,omitempty"`
+	ClientID       string `json:"client_id,omitempty"`
+	ClientSecret   string `json:"client_secret,omitempty"`
 	// StartURL + Region identify the SSO session; both are required to rebuild a
 	// usable ~/.aws/config and to derive the cache filename (sha1 of the session
 	// name / start URL).
@@ -237,8 +238,9 @@ type awsSSOBlob struct {
 func (b awsSSOBlob) valid() bool { return len(b.missingFields()) == 0 }
 
 // expired reports whether the SSO access token has lapsed. A blob with a refresh
-// token can still be renewed (sso-session profiles); one without must be
-// re-captured by re-running the login.
+// token and its client registration pair can still be renewed (sso-session
+// profiles, awsSSOBlob.renewable); one without must be re-captured by re-running
+// the login.
 func (b awsSSOBlob) expired(now time.Time) bool { return !now.Before(b.ExpiresAt) }
 
 // harnessTokenAging: setup-token tokens live ~1 year and their exact expiry is
@@ -314,7 +316,17 @@ func (s *Server) readAWSSSOBlob(ctx context.Context, scope awsSSOScope) (awsSSOB
 			return awsSSOBlob{}, false, nil
 		}
 	}
-	return readHarnessBlob(ctx, st, scope.ssoSecret(), "aws sso credential", awsSSOBlob.valid)
+	var generation int64
+	if scope.rowOwner() != "" {
+		var err error
+		generation, err = s.cfg.MaskRegistry.GlobalGeneration(ctx)
+		if err != nil {
+			return awsSSOBlob{}, false, err
+		}
+	}
+	blob, found, err := readHarnessBlob(ctx, st, scope.ssoSecret(), "aws sso credential", awsSSOBlob.valid)
+	blob.maskGeneration = generation
+	return blob, found, err
 }
 
 // storeAWSSSOBlob persists a captured AWS SSO credential under the reserved
@@ -343,17 +355,17 @@ func (s *Server) storeAWSSSOBlob(ctx context.Context, scope awsSSOScope, blob aw
 	if at := blob.lastUsable(); !at.IsZero() {
 		ctx = secretstore.WithExpiry(ctx, at)
 	}
-	err = st.Put(ctx, scope.ssoSecret(), raw)
+	err = s.putOwned(ctx, owner, func(ctx context.Context) error { return st.Put(ctx, scope.ssoSecret(), raw) })
 	s.auditRowNotWritten(ctx, err, types.ActorSystem, "wardynd", owner, scope.ssoSecret())
 	return err
 }
 
 // lastUsable is the latest time this sign-in can still be used or renewed,
-// the row's expires_at: the access token's expiry without a refresh token, the
-// registration's with one. Zero when that is unknown (a refresh token and no
+// the row's expires_at: the access token's expiry without a refresh token and
+// its client registration pair, the registration's with them. Zero when that is unknown (a refresh token and no
 // registration expiry), so the row is never swept on a guess.
 func (b awsSSOBlob) lastUsable() time.Time {
-	if b.RefreshToken == "" {
+	if b.RefreshToken == "" || b.ClientID == "" || b.ClientSecret == "" {
 		return b.ExpiresAt
 	}
 	if b.RegistrationExpiresAt.IsZero() {
@@ -367,7 +379,8 @@ func (b awsSSOBlob) lastUsable() time.Time {
 
 // deleteSpentAWSSSOBlob deletes the stored AWS SSO sign-in in scope's
 // namespace once AWS has refused its refresh token (deleteDeadCredential).
-func (s *Server) deleteSpentAWSSSOBlob(ctx context.Context, scope awsSSOScope) {
+// afterLostReply: that refusal followed a lost renewal reply.
+func (s *Server) deleteSpentAWSSSOBlob(ctx context.Context, scope awsSSOScope, afterLostReply bool) {
 	st, owner := s.cfg.Secrets, ""
 	if st == nil {
 		return
@@ -378,7 +391,7 @@ func (s *Server) deleteSpentAWSSSOBlob(ctx context.Context, scope awsSSOScope) {
 		}
 		st, owner = st.For(scope.owner), scope.owner
 	}
-	s.deleteDeadCredential(ctx, st, owner, scope.ssoSecret(), awsSSOProvider)
+	s.deleteDeadCredential(ctx, st, owner, scope.ssoSecret(), awsSSOProvider, afterLostReply)
 }
 
 // Login run launch
@@ -407,8 +420,8 @@ func (s *Server) deleteSpentAWSSSOBlob(ctx context.Context, scope awsSSOScope) {
 // still record who attached, when, and why — no provenance is lost.)
 // Conservative small defaults for the sign-in sandbox (#1100): it drives only a
 // CLI device-code flow (no workload, no mounts, no injections), so it has no
-// business inheriting runner.DefaultCPUMillis/DefaultMemoryMiB (2 vCPU / 4 GiB —
-// sized for an agent run). A namespace LimitRange sized for a small node refuses
+// business inheriting runner.EffectiveLimits() (the deployment's default agent-run
+// size, 2 vCPU / 4 GiB unless configured). A namespace LimitRange sized for a small node refuses
 // that default outright, stranding a member's own sign-in. Configurable via
 // Config.HarnessLoginCPUMillis/HarnessLoginMemoryMiB
 // (WARDYN_HARNESS_LOGIN_CPU_MILLIS/WARDYN_HARNESS_LOGIN_MEMORY_MIB); zero (unset)
@@ -477,6 +490,9 @@ func (s *Server) launchHarnessLoginRun(ctx context.Context, actor string, hl har
 	if cerr != nil {
 		return types.AgentRun{}, harnessLoginDispatch{}, cerr
 	}
+	// Exempt from deny_placements on purpose, at create, dispatch (dispatchCeiling.placementExempt) and
+	// revive (revivePlacementDenied): Wardyn-authored, no workspace content, and the only way to
+	// authenticate a harness.
 	// Strongest advertised at or above the floor: a ~1yr credential deserves the
 	// best available isolation, so the capture must never run weaker than the
 	// admin floor demands. ceilingFloorClass is the same admin floor
@@ -642,6 +658,9 @@ type loginRunStamp struct {
 	ModelProviderAddress string `json:"model_provider_address,omitempty"`
 	SSORegion            string `json:"sso_region,omitempty"`
 	Model                string `json:"model,omitempty"`
+	// CLIComponentID is the AWS CLI org row a sign-in through its door is for
+	// ("" on a provider's): the capture lands under that row's id.
+	CLIComponentID string `json:"cli_component_id,omitempty"`
 }
 
 // loginRunStamp also accepts a run launched before 0.8, whose row was written

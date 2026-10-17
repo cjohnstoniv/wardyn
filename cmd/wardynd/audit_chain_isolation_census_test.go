@@ -37,6 +37,7 @@ import (
 	"go/token"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"testing"
@@ -70,9 +71,10 @@ func (s txSite) pinned() bool {
 // audit_events" from the same source the claim is about would let both move
 // together and prove nothing.
 var auditWriterPins = map[string]string{
-	"internal/store/store.go:InsertAuditEvent":           "the control plane's audit writer: pool.BeginTx(pgx.ReadCommitted), then the chain lock, then the INSERT",
-	"internal/broker/pgx.go:PgxStore.BeginReadCommitted": "the broker's mint transaction: broker.mint opens it through the TxBeginner interface's ONLY opener, BeginReadCommitted (R3 HANDOFF-1), whose first statement is SET TRANSACTION ISOLATION LEVEL READ COMMITTED with a fail-closed rollback; insertAuditEventTx chains the mint's audit row inside it. The interface carries no bare Begin any more, so every caller of the seam is pinned by construction",
-	"internal/db/db.go:beginReadCommitted":               "the boot chain canary, which INSERTs a synthetic audit row and rolls it back",
+	"internal/store/store_runner_exit.go:PG.AcceptRunnerExit": "runner exit transition, durable receipt and chained audit commit atomically at READ COMMITTED",
+	"internal/store/store.go:InsertAuditEvent":                "the control plane's audit writer: pool.BeginTx(pgx.ReadCommitted), then the chain lock, then the INSERT",
+	"internal/broker/pgx.go:PgxStore.BeginReadCommitted":      "the broker's mint transaction: broker.mint opens it through the TxBeginner interface's ONLY opener, BeginReadCommitted (R3 HANDOFF-1), whose first statement is SET TRANSACTION ISOLATION LEVEL READ COMMITTED with a fail-closed rollback; insertAuditEventTx chains the mint's audit row inside it. The interface carries no bare Begin any more, so every caller of the seam is pinned by construction",
+	"internal/db/db.go:beginReadCommitted":                    "the boot chain canary, which INSERTs a synthetic audit row and rolls it back",
 }
 
 // declaredNonAuditTx are the transactions that do NOT write audit_events, each
@@ -80,6 +82,13 @@ var auditWriterPins = map[string]string{
 // act; the alternative — an unlisted bare Begin — is what shipped the false
 // claim in the first place.
 var declaredNonAuditTx = map[string]string{
+	"internal/store/auditchain.go:PG.VerifyAuditChain": "the verify sweep: one READ ONLY repeatable-read snapshot, so the " +
+		"chain, the anchors, the high-water mark and the manifest are one instant. Postgres refuses any write in it, " +
+		"audit_events included, so there is no head for it to chain onto stale",
+	"internal/store/auditpartition.go:PG.ExportAuditPartition": "reads one closed partition and its manifest from one READ ONLY " +
+		"repeatable-read snapshot, so the header can never disagree with the rows. Postgres refuses any write in it",
+	"internal/store/auditretention.go:PG.AuditRetentionStatus": "reads the retention policy, the partitions and their eligibility " +
+		"from one READ ONLY repeatable-read snapshot, so the three describe one instant. Postgres refuses any write in it",
 	"internal/db/db.go:applyMigration": "runs one migration's DDL and records it in schema_migrations; it never inserts " +
 		"into audit_events, and migration DDL is not chain-linked",
 	"internal/db/advisory_lock_keyed.go:AdvisoryLockKeyed": "exists ONLY to scope SET LOCAL lock_timeout around the " +
@@ -88,6 +97,11 @@ var declaredNonAuditTx = map[string]string{
 		"so it writes no chain-linked row and its isolation level decides nothing. The LOCK it takes is " +
 		"session-level and deliberately outlives the commit; the caller's guarded work runs afterwards, on its " +
 		"own connection and its own transactions, which are classified on their own",
+	"internal/maskmanifest/maskmanifest.go:Manifests.snapshot": "a READ ONLY REPEATABLE READ snapshot of one run's masking " +
+		"manifest row and its value rows, read together so the revision it records is the one its values belong to. " +
+		"It carries no INSERT, UPDATE or DELETE on any table, audit_events included, so it writes no chain-linked " +
+		"row and its isolation level decides nothing. The transactions of this package that write (Manifests.insert, " +
+		"Manifests.FenceSubject) pin READ COMMITTED and are classified by the census itself",
 	"internal/db/db.go:replayTriggerMigrations": "re-executes the DDL of the trigger-defining migrations to restore " +
 		"a dropped or impostor audit trigger, in ONE transaction so a failure partway cannot commit a superseded " +
 		"function body. The replay set contains no DML at all — no INSERT, UPDATE or DELETE, on audit_events " +
@@ -95,6 +109,14 @@ var declaredNonAuditTx = map[string]string{
 		"That is not taken on trust: the set is DISCOVERED by content (db.triggerMigrationFiles), so " +
 		"assertReplaySetIsPureDDL below re-derives it and checks, and a future migration that redefines the chain " +
 		"trigger AND carries DML reddens this test instead of joining the replay silently",
+	"cmd/wardynd/recovery_target.go:holdLiveLock": "the rehearsal's T3 probe: takes pg_advisory_xact_lock on a random key " +
+		"and reads pg_locks, then rolls back. It carries no INSERT, UPDATE or DELETE on any table, audit_events " +
+		"included, so it writes no chain-linked row and its isolation level decides nothing. The rehearsal's two " +
+		"audit rows go through the recorder chain, whose transactions pin READ COMMITTED and are classified by the census",
+	"cmd/wardynd/recovery_target.go:rehearseSession.readTx": "a READ ONLY transaction on the rehearsal's target backend " +
+		"(the audit chain sweep, the pairing read and the key checks). Postgres refuses any write in it, " +
+		"audit_events included, so there is no head for it to chain onto stale; the backend is also " +
+		"default_transaction_read_only",
 }
 
 // auditChainTriggerName is the trigger whose migrations replayTriggerMigrations
@@ -102,6 +124,10 @@ var declaredNonAuditTx = map[string]string{
 // and a census that re-derived its subject from the package under scrutiny would
 // move with it.
 const auditChainTriggerName = "audit_events_chain"
+
+// updateStatementRE matches an UPDATE statement's head (upper-cased input): UPDATE, an optional ONLY, a
+// possibly schema-qualified table, an optional alias, then SET.
+var updateStatementRE = regexp.MustCompile(`\bUPDATE\s+(ONLY\s+)?[\w."@]+(\s+(AS\s+)?\w+)?\s+SET\b`)
 
 // assertReplaySetIsPureDDL re-derives replayTriggerMigrations' set the way
 // db.triggerMigrationFiles does — by CONTENT, not by a list — and fails if any
@@ -129,13 +155,21 @@ func assertReplaySetIsPureDDL(t *testing.T) {
 		}
 		found++
 		upper := strings.ToUpper(string(body))
-		for _, dml := range []string{"INSERT INTO", "UPDATE ", "DELETE FROM"} {
+		for _, dml := range []string{"INSERT INTO", "DELETE FROM"} {
 			if strings.Contains(upper, dml) {
 				t.Errorf("migration %s joins the boot-time replay set (it defines %s) and contains %q. "+
 					"replayTriggerMigrations is DECLARED in declaredNonAuditTx as a transaction that cannot write "+
 					"audit_events, and that declaration is now false: either pin the replay transaction to READ "+
 					"COMMITTED or keep the replayed migrations pure DDL.", e.Name(), auditChainTriggerName, dml)
 			}
+		}
+		// An UPDATE STATEMENT (UPDATE <table> SET ...), not the word: the append-only trigger the replay
+		// re-creates is declared BEFORE UPDATE OR DELETE, an event list that is DDL.
+		if loc := updateStatementRE.FindStringIndex(upper); loc != nil {
+			t.Errorf("migration %s joins the boot-time replay set (it defines %s) and contains the UPDATE statement %q. "+
+				"replayTriggerMigrations is DECLARED in declaredNonAuditTx as a transaction that cannot write "+
+				"audit_events, and that declaration is now false: either pin the replay transaction to READ "+
+				"COMMITTED or keep the replayed migrations pure DDL.", e.Name(), auditChainTriggerName, upper[loc[0]:loc[1]])
 		}
 	}
 	if found == 0 {

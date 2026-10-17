@@ -235,3 +235,28 @@ func TestOrchestrator_SweepOrphanedSandboxes_JoinsErrorsButKeepsSumming(t *testi
 		t.Errorf("ok must still be swept after failing's error (fan-out must not abort); sweptRefs=%v", ok.sweptRefs)
 	}
 }
+
+// fitSubstrate is a substrate with a fit to check: CheckFit records the size it was asked.
+type fitSubstrate struct {
+	*fakeSubstrate
+	asked []runner.Resources
+}
+
+func (f *fitSubstrate) CheckFit(_ context.Context, res runner.Resources) (runner.Fit, error) {
+	f.asked = append(f.asked, res)
+	return runner.Fit{Quotas: runner.ReadForbidden}, nil
+}
+
+// TestOrchestrator_CheckFit_DelegatesToTheSubstrateWithAFit: docker has no quota to read and is
+// skipped; with no substrate that has one the answer is runner.ErrFitUnsupported, not a verdict.
+func TestOrchestrator_CheckFit_DelegatesToTheSubstrateWithAFit(t *testing.T) {
+	oci, _ := twoSubstrates()
+	if _, err := New(oci).CheckFit(context.Background(), runner.Resources{}); !errors.Is(err, runner.ErrFitUnsupported) {
+		t.Fatalf("no substrate with a fit: err = %v, want ErrFitUnsupported", err)
+	}
+	k8s := &fitSubstrate{fakeSubstrate: &fakeSubstrate{name: "k8s"}}
+	got, err := New(oci, k8s).CheckFit(context.Background(), runner.Resources{CPUMillis: 1500})
+	if err != nil || got.Quotas != runner.ReadForbidden || len(k8s.asked) != 1 || k8s.asked[0].CPUMillis != 1500 {
+		t.Fatalf("got %+v err=%v asked=%+v, want the k8s answer for the size asked", got, err, k8s.asked)
+	}
+}

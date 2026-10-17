@@ -37,7 +37,7 @@ async function openRuns(page: Page): Promise<void> {
 // run.autonomy_level freezes the level resolveRunAutonomy capped this run at,
 // at create time — never populated by the seeded backend's operator bearer
 // (same operator short-circuit governance.spec.ts's header note explains for
-// the rail), so spliced onto the real GET response — the same
+// the member's New Run), so spliced onto the real GET response — the same
 // route.fetch()+patch+refulfill technique the interactive/failure_hint splice
 // in runs-detail.spec.ts uses.
 test.describe("Run header — the autonomy chip (#93/#97)", () => {
@@ -68,6 +68,48 @@ test.describe("Run header — the autonomy chip (#93/#97)", () => {
     for (const meta of Object.values(AUTONOMY_META)) {
       await expect(header.getByText(meta.label, { exact: true })).toHaveCount(0);
     }
+  });
+});
+
+// #1234 — the thin "Launched via" line under the bar. The seeded backend has
+// no registered portal, so created_via (and the name the server resolves for
+// it, proven in internal/api/run_created_via_name_test.go) is spliced onto the
+// real GET response, the same route.fetch()+patch+refulfill technique as above.
+test.describe("Run header — Launched via (#1234)", () => {
+  async function openFixture2(page: Page, splice?: (json: Record<string, unknown>) => void): Promise<void> {
+    await openRuns(page);
+    if (splice) {
+      await page.route("**/api/v1/runs/*", async (route) => {
+        if (route.request().method() !== "GET") return route.fallback();
+        const response = await route.fetch();
+        const json = await response.json();
+        if (json.task === "e2e fixture 2") splice(json);
+        await route.fulfill({ response, json });
+      });
+    }
+    await page.getByText("e2e fixture 2").click();
+    await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{8,}/);
+    await expect(page.getByTestId("run-summary-header")).toBeVisible();
+  }
+
+  test("a portal-launched run says which portal, under the bar", async ({ page }) => {
+    await openFixture2(page, (json) => {
+      json.created_via = "0b1c2d3e-0000-4000-8000-000000000001";
+      json.created_via_name = "Acme Support Portal";
+    });
+    await expect(page.getByTestId("run-launched-via")).toHaveText("Launched via Acme Support Portal");
+  });
+
+  test("a portal the server could not name falls back to 'a portal'", async ({ page }) => {
+    await openFixture2(page, (json) => {
+      json.created_via = "0b1c2d3e-0000-4000-8000-000000000001";
+    });
+    await expect(page.getByTestId("run-launched-via")).toHaveText("Launched via a portal");
+  });
+
+  test("a self-launched run has no line", async ({ page }) => {
+    await openFixture2(page);
+    await expect(page.getByTestId("run-launched-via")).toHaveCount(0);
   });
 });
 
@@ -290,3 +332,55 @@ test.describe("Run header — PENDING's own queued sentence (#125)", () => {
     await expect(page.getByText(PENDING_NO_DETAIL, { exact: true })).toHaveCount(0);
   });
 });
+
+// h-h1: the run id is the 8-character short form and never paints under the
+// state badge, even with every shrink-0 chip beside it. Fixture 1 is STARTING.
+for (const [w, h] of [
+  [1536, 900],
+  [1920, 1080],
+]) {
+  test.describe(`Run header — the id stays clear of the state badge at ${w}px`, () => {
+    test.use({ viewport: { width: w, height: h } });
+    test("a STARTING run with a long title and every chip keeps the id intact", async ({ page }) => {
+      await page.route("**/api/v1/runs/*", async (route) => {
+        if (route.request().method() !== "GET") return route.fallback();
+        const response = await route.fetch();
+        const json = await response.json();
+        if (json.task === "e2e fixture 1") {
+          json.task = "e2e fixture 1 with a deliberately long title that competes with every chip for the row";
+          json.status_detail = "agent: ContainerCreating";
+          json.status_reason = "ContainerCreating";
+          json.autonomy_level = "L1";
+          json.interactive = true;
+        }
+        await route.fulfill({ response, json });
+      });
+      await openRuns(page);
+      await page.getByText(/^e2e fixture 1/).first().click();
+      await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{8,}/);
+
+      const header = page.getByTestId("run-summary-header");
+      const idSpan = header.locator("span[title]").filter({ hasText: /^· [0-9a-f]{8}$/ });
+      await expect(idSpan).toBeVisible();
+      const badge = header.getByText("Starting", { exact: true });
+      const copy = header.getByRole("button", { name: "Copy link to this run" });
+      const m = await page.evaluate(
+        ([idEl, badgeEl, copyEl]) => {
+          const r = (e: Element) => e.getBoundingClientRect();
+          const id = idEl as HTMLElement;
+          const group = id.parentElement as HTMLElement;
+          return {
+            idRight: r(id).right,
+            badgeLeft: r(badgeEl as Element).left,
+            overflow: id.scrollWidth > id.clientWidth,
+            copyInside: r(copyEl as Element).right <= r(group).right + 0.5 && r(copyEl as Element).left >= r(group).left,
+          };
+        },
+        [await idSpan.elementHandle(), await badge.elementHandle(), await copy.elementHandle()],
+      );
+      expect(m.idRight).toBeLessThanOrEqual(m.badgeLeft);
+      expect(m.overflow).toBe(false);
+      expect(m.copyInside).toBe(true);
+    });
+  });
+}

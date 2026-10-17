@@ -90,7 +90,10 @@ func TestAWSSSORefresh_AnExpiredTokenStillWaitsForTheRenewal(t *testing.T) {
 			"accessToken": "fresh-access-token-abcdefghij", "expiresIn": 3600,
 		})
 	})
-	unlock := s.lockAWSSSOOwner(awsSSOTestScope().owner)
+	_, unlock, err := s.lockAWSSSOOwner(context.Background(), awsSSOTestScope().owner)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	done := make(chan struct{})
 	go func() {

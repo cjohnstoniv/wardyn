@@ -35,7 +35,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
 	"net/http"
 	"slices"
 	"strings"
@@ -150,10 +149,11 @@ func (s *Server) pushActsAs(ctx context.Context, run types.AgentRun, subject str
 	case types.GrantGitHubToken:
 		return types.PushActsAsGitHubApp, run.CreatedBy, nil
 	case types.GrantGitPAT:
-		_, secret, _, serr := gitPATScopeFields(grants[i].Spec.Scope)
+		pat, serr := types.DecodeGitPATScope(grants[i].Spec.Scope)
 		if serr != nil {
 			return "", "", fmt.Errorf("acts_as %q: %w", actsAs, serr)
 		}
+		secret := pat.SecretName
 		if subject != "" && s.cfg.Secrets != nil {
 			if names, lerr := s.cfg.Secrets.For(subject).List(ctx); lerr == nil && slices.Contains(names, secret) {
 				return types.PushActsAsGitPAT, run.CreatedBy, nil
@@ -236,24 +236,23 @@ func (s *Server) recordPushPathList(w http.ResponseWriter, r *http.Request, clai
 // the export's memory stays one page plus one list. The chained row's
 // stored_list_digest was fixed when the list was stored, so a reader checks
 // the inlined paths against it (types.PushPathsDigest) and a list altered in
-// push_content_paths since no longer matches. A list that cannot be read
-// leaves the row as stored, without paths, and is logged.
-func (s *Server) withPushPaths(ctx context.Context, ev types.AuditEvent) types.AuditEvent {
+// push_content_paths since no longer matches. A list that cannot be read is an
+// error: the export fails (handleExportAudit) instead of showing the row as if
+// it had no paths, since a reader could not tell that from an incomplete one.
+func (s *Server) withPushPaths(ctx context.Context, ev types.AuditEvent) (types.AuditEvent, error) {
 	lists, ok := s.cfg.Store.(store.PushPathListStore)
 	id, perr := uuid.Parse(ev.Target)
 	var data map[string]json.RawMessage
 	if !ok || perr != nil || json.Unmarshal(ev.Data, &data) != nil {
-		return ev
+		return ev, nil
 	}
 	l, err := lists.GetPushPathList(ctx, id)
 	if err != nil {
-		slog.ErrorContext(ctx, "wardyn: audit export could not read a held push's path list",
-			slog.String("approval_id", ev.Target), slog.Any("err", err))
-		return ev
+		return ev, fmt.Errorf("read path list of approval %s: %w", ev.Target, err)
 	}
 	data["paths"] = mustJSON(l.Paths)
 	ev.Data = mustJSON(data)
-	return ev
+	return ev, nil
 }
 
 // handleGetPushPathList returns a push_content approval's complete path list

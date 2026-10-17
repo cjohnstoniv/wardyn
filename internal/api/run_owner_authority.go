@@ -15,6 +15,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
+	"github.com/cjohnstoniv/wardyn/internal/placement"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -29,6 +30,12 @@ import (
 // the owner. A revive also re-checks the model credential its proxy would
 // inject, and rebuilds the deployment-wide parts of the proxy config from the
 // current configuration instead of reusing the rendered copy.
+//
+// A run's components are read back from its run_components rows, which outlive
+// the erasure of everything a person typed into them: each row still says
+// whether its component was the owner's own (the custom_component feature) or
+// an organisation's (that component's grant), so the door is re-checked after
+// the content is gone. No rows at all is a run launched without components.
 //
 // Two doors cannot be read back from the run, and are not re-checked: an
 // explicit integration_id (the run row does not record it) and an explicit
@@ -57,7 +64,15 @@ type ownerRefusal struct {
 // admin's revive, restart or extension of their run needs an allow row for
 // the owner's sub, type or everyone. The owner's own session passes.
 func (s *Server) ownerCapabilityRefusal(ctx context.Context, run types.AgentRun, callerIsOwner bool, repos []string) (*ownerRefusal, error) {
-	if callerIsOwner && s.isOperator(ctx) {
+	// Before either exemption below: a deleted component is gone for everyone.
+	comps, err := s.runComponentSnapshot(ctx, run.ID)
+	if err != nil {
+		return nil, err
+	}
+	if ref, err := s.componentGoneRefusal(ctx, comps); ref != nil || err != nil {
+		return ref, err
+	}
+	if callerIsOwner && s.runUngoverned(ctx) {
 		return nil, nil
 	}
 	// An operator-owned run (the admin token, local mode) has no person whose
@@ -66,11 +81,26 @@ func (s *Server) ownerCapabilityRefusal(ctx context.Context, run types.AgentRun,
 	if !callerIsOwner && run.OperatorOwned {
 		return nil, nil
 	}
+	// A built-in GitHub component's repositories, from the grant its admission
+	// wrote: a run with no stored proxy config still meets their provider door.
+	if s.cfg.Store != nil {
+		grants, err := s.cfg.Store.ListGrantsByRun(ctx, run.ID)
+		if err != nil {
+			return nil, fmt.Errorf("read the run's grants: %w", err)
+		}
+		for _, g := range grants {
+			repos = append(repos, builtinGitHubRepos([]types.GrantSpec{g.Spec})...)
+		}
+	}
 	rows, err := s.ownerProviderRows(ctx, repos)
 	if err != nil {
 		return nil, err
 	}
-	for _, d := range persistedLaunchDoors(run, rows) {
+	pairs, err := s.runHarnessPairs(ctx, run)
+	if err != nil {
+		return nil, err
+	}
+	for _, d := range append(persistedLaunchDoors(run, rows, comps), harnessLaunchDoors(pairs)...) {
 		var allowed bool
 		if callerIsOwner {
 			allowed, err = s.capSeamAllowed(ctx, d.kind, d.value)
@@ -90,12 +120,12 @@ func (s *Server) ownerCapabilityRefusal(ctx context.Context, run types.AgentRun,
 
 // capabilityLostReason is ownerCapabilityRefusal's wire reason for a closed
 // launch-door capability, kept as a lookup rather than string-concatenating
-// "capability_"+kind (#656 slice 3): the five kinds persistedLaunchDoors can
+// "capability_"+kind (#656 slice 3): the kinds persistedLaunchDoors can
 // ever produce are capabilities.go's own cap* consts, a closed set, so the
 // reason is one of reasons_routes.go's own reasonOwnerCapability* literals —
 // visible to TestReasonDocsMatchReasonsGo, which reads both reasons files'
 // string literals, not a runtime concatenation. reasonOwnerCapabilityUnknown
-// is defensive only: none of the five known kinds falls through to it today.
+// is defensive only: none of the known kinds falls through to it today.
 func capabilityLostReason(kind string) string {
 	switch kind {
 	case capAgent:
@@ -108,6 +138,11 @@ func capabilityLostReason(kind string) string {
 		return reasonOwnerCapabilityPolicy
 	case capWorkspaceProvider:
 		return reasonOwnerCapabilityWorkspaceProvider
+	case capComponent, capFeature:
+		// The one feature value a run records is custom_component, the door of
+		// a component its owner defined: either kind is the run's permission to
+		// carry a component.
+		return reasonOwnerCapabilityComponent
 	default:
 		return reasonOwnerCapabilityUnknown
 	}
@@ -119,9 +154,14 @@ func capabilityLostReason(kind string) string {
 type door struct{ kind, value, label string }
 
 // persistedLaunchDoors is the launch doors the run row records, rows being the
-// git provider rows of its repos. A legacy row with no model provider or no
-// selected policy adds no door for it.
-func persistedLaunchDoors(run types.AgentRun, rows []types.GitProvider) []door {
+// git provider rows of its repos and comps its component snapshot. A legacy
+// row with no model provider or no selected policy adds no door for it.
+//
+// A component's door is read off the snapshot row and nothing else: an
+// organisation's component needs that component's grant, and any component the
+// owner defined — inline, saved, or erased since, which leaves the row and
+// clears its content — needs the custom_component feature, asked once.
+func persistedLaunchDoors(run types.AgentRun, rows []types.GitProvider, comps []types.RunComponent) []door {
 	var doors []door
 	if run.Agent != "" {
 		doors = append(doors, door{capAgent, run.Agent, run.Agent})
@@ -138,7 +178,105 @@ func persistedLaunchDoors(run types.AgentRun, rows []types.GitProvider) []door {
 	for _, row := range rows {
 		doors = append(doors, door{capWorkspaceProvider, row.ID, "this deployment's " + string(row.Kind) + " provider"})
 	}
+	selfDefined := false
+	for _, c := range comps {
+		switch {
+		case c.SelfDefined:
+			selfDefined = true
+		case c.ComponentID != nil:
+			// Named by what it is, never its id or name: the refusal says
+			// nothing about an organisation's component, as at the attach door.
+			doors = append(doors, door{capComponent, c.ComponentID.String(), "a component your organisation provides"})
+		}
+	}
+	if selfDefined {
+		doors = append(doors, door{capFeature, featureCustomComponent, "custom components"})
+	}
 	return doors
+}
+
+// harnessLaunchDoors is the launch doors of the harnesses a run's set carries
+// beside its own agent (runHarnessPairs past the first): each harness's agent
+// door, and its model provider's door when it was granted one. The run's own
+// agent and provider are persistedLaunchDoors'.
+func harnessLaunchDoors(pairs []types.RunHarness) []door {
+	var doors []door
+	for _, h := range pairs[min(1, len(pairs)):] {
+		doors = append(doors, door{capAgent, h.Harness, h.Harness})
+		if h.ModelProviderID != "" {
+			doors = append(doors, door{capModelProvider, h.ModelProviderID, h.ModelProviderID})
+		}
+	}
+	return doors
+}
+
+// runHarnessPairs is the (harness, model provider id) pairs a run was launched
+// with: its own agent and provider first, then each other harness of its set
+// as its run_harnesses row records it. A run launched without the set, and a
+// store that keeps none, has the first alone.
+func (s *Server) runHarnessPairs(ctx context.Context, run types.AgentRun) ([]types.RunHarness, error) {
+	pairs := []types.RunHarness{{Harness: run.Agent, ModelProviderID: run.ModelProviderID}}
+	st, ok := s.cfg.Store.(store.RunHarnessStore)
+	if !ok {
+		return pairs, nil
+	}
+	rows, err := st.ListRunHarnesses(ctx, run.ID)
+	if err != nil {
+		return nil, fmt.Errorf("read the run's harnesses: %w", err)
+	}
+	for _, h := range rows {
+		if h.Harness != run.Agent {
+			pairs = append(pairs, h)
+		}
+	}
+	return pairs, nil
+}
+
+// runComponentSnapshot is the run's component snapshot, erased rows included.
+// Empty for a run launched without components, and on a store that keeps none.
+func (s *Server) runComponentSnapshot(ctx context.Context, runID uuid.UUID) ([]types.RunComponent, error) {
+	st, ok := s.cfg.Store.(store.ComponentStore)
+	if !ok {
+		return nil, nil
+	}
+	comps, err := st.ListRunComponents(ctx, runID)
+	if err != nil {
+		return nil, fmt.Errorf("read the run's components: %w", err)
+	}
+	return comps, nil
+}
+
+// componentGoneRefusal refuses a run that carried an organisation's component
+// which no longer exists. Deleting a component withdraws it: its grant rows
+// say nothing any more, so the capability re-check alone could read a deleted
+// component's door as open, and the revived proxy would carry its hosts and
+// the credential the organisation provided for it again. Asked of every
+// caller, the owner's own admin session included.
+func (s *Server) componentGoneRefusal(ctx context.Context, comps []types.RunComponent) (*ownerRefusal, error) {
+	st, ok := s.cfg.Store.(store.ComponentStore)
+	if !ok {
+		return nil, nil
+	}
+	gone := &ownerRefusal{status: http.StatusConflict, reason: reasonOwnerComponentGone,
+		msg: "a component this run was launched with no longer exists; start a new run"}
+	for _, c := range comps {
+		if c.SelfDefined {
+			continue
+		}
+		// An organisation's row always names its component; one that does not
+		// names nothing that could still exist.
+		if c.ComponentID == nil {
+			return gone, nil
+		}
+		_, err := st.GetComponent(ctx, *c.ComponentID, "")
+		if errors.Is(err, store.ErrNotFound) {
+			return gone, nil
+		}
+		if err != nil {
+			return nil, fmt.Errorf("read the run's component: %w", err)
+		}
+	}
+	return nil, nil
 }
 
 // ownerProviderRows is the git provider rows repos resolve to, as the
@@ -198,7 +336,7 @@ func (s *Server) capAllowedForSub(ctx context.Context, sub, userType, kind, valu
 	if err != nil {
 		return false, err
 	}
-	sub = canonicalUserSubject(sub)
+	sub = types.CanonicalUserSubject(sub)
 	allow := false
 	for _, g := range grants {
 		if g.Capability != kind {
@@ -227,24 +365,27 @@ func (s *Server) capAllowedForSub(ctx context.Context, sub, userType, kind, valu
 	return !enforced && !restricted, nil
 }
 
-// ownerProfile is the run's captured profile, refusing when it no longer exists:
-// its walls cannot be known. A run that captured none (an unassigned or
-// super-admin owner) passes.
-func (s *Server) ownerProfile(ctx context.Context, run types.AgentRun) (*types.GovernanceProfile, *ownerRefusal) {
+// ownerProfile is the run's captured profile, composed from its chain as it stands now, refusing
+// when it no longer exists (its walls cannot be known), when it cannot be read (a base included:
+// never a partial chain) and when a composition nothing satisfies leaves it with no valid policy. A
+// run that captured none (an unassigned or super-admin owner) passes.
+func (s *Server) ownerProfile(ctx context.Context, run types.AgentRun) (*ResolvedProfile, *ownerRefusal) {
 	if run.GovernanceProfileID == nil {
 		return nil, nil
 	}
-	profiles, err := s.cfg.Store.ListGovernanceProfiles(ctx)
+	p, err := s.resolveProfileByID(ctx, *run.GovernanceProfileID)
+	if u, ok := isOverlayUnsatisfiable(err); ok {
+		return nil, &ownerRefusal{status: http.StatusForbidden, reason: reasonGovernanceOverlayUnsatisfiable, msg: u.Error()}
+	}
+	if errors.Is(err, store.ErrNotFound) {
+		return nil, &ownerRefusal{status: http.StatusConflict, reason: reasonOwnerProfileGone,
+			msg: "the governance profile this run was created under no longer exists; start a new run"}
+	}
 	if err != nil {
 		return nil, &ownerRefusal{status: http.StatusServiceUnavailable, reason: reasonOwnerProfileUnreadable,
 			msg: "resolve the owner's governance profile: " + err.Error()}
 	}
-	i := slices.IndexFunc(profiles, func(p types.GovernanceProfile) bool { return p.ID == *run.GovernanceProfileID })
-	if i < 0 {
-		return nil, &ownerRefusal{status: http.StatusConflict, reason: reasonOwnerProfileGone,
-			msg: "the governance profile this run was created under no longer exists; start a new run"}
-	}
-	return &profiles[i], nil
+	return p, nil
 }
 
 // modelCredentialRefusal re-checks every api_key injection the revived proxy
@@ -272,17 +413,37 @@ func (s *Server) modelCredentialRefusal(ctx context.Context, run types.AgentRun,
 		}
 		var scope struct {
 			SecretName string `json:"secret_name"`
+			Shared     bool   `json:"shared"`
 		}
 		if err := json.Unmarshal(g.Spec.Scope, &scope); err != nil || scope.SecretName == "" {
 			continue
 		}
-		present, err := s.secretPresentFor(ctx, runIdentitySubject(ctx, run.CreatedBy), scope.SecretName)
+		// The check looks where the sink reads the grant, and names the
+		// secret only where the name is the owner's own to know. A shared
+		// grant is read from the operator's namespace alone, and what the
+		// organisation's secret is called is the operator's. An owner_only
+		// grant is read from the owner's namespace alone, and is theirs. Any
+		// other grant on a person's run may be answered by the operator's
+		// row, so its refusal names the host and not the secret.
+		subject := runIdentitySubject(ctx, run.CreatedBy)
+		namespaces := []string{subject, ""}
+		gone := fmt.Sprintf("the credential this run injects for %s no longer exists; start a new run", in.Host)
+		switch {
+		case scope.Shared:
+			namespaces = []string{""}
+			gone = fmt.Sprintf("the credential your organisation provides for %s on this run no longer exists; ask your admin, then start a new run", in.Host)
+		case g.Spec.OwnerOnly:
+			namespaces = []string{grantReadOwner(subject, true, run.OperatorOwned)}
+			fallthrough
+		case run.OperatorOwned:
+			gone = fmt.Sprintf("the credential this run injects for %s (secret %s) no longer exists; start a new run", in.Host, scope.SecretName)
+		}
+		present, err := s.secretPresentIn(ctx, namespaces, scope.SecretName)
 		if err != nil {
 			return nil, err
 		}
 		if !present {
-			return &ownerRefusal{status: http.StatusConflict, reason: reasonOwnerModelCredentialErased, msg: fmt.Sprintf(
-				"the credential this run injects for %s (secret %s) no longer exists; start a new run", in.Host, scope.SecretName)}, nil
+			return &ownerRefusal{status: http.StatusConflict, reason: reasonOwnerModelCredentialErased, msg: gone}, nil
 		}
 		if sc == nil {
 			got, err := s.cfg.Store.GetSiteConfig(ctx)
@@ -299,54 +460,68 @@ func (s *Server) modelCredentialRefusal(ctx context.Context, run types.AgentRun,
 	return nil, nil
 }
 
-// modelProviderRefusal refuses a run whose model provider has since been
-// deleted or turned off, and a run that carries a credential its provider
-// authored (a grant whose snapshot names the provider's UID) when that
-// provider was re-created under the same id (a new UID). The injection sink
-// would refuse the run's first model call (provider_changed), or a run
-// dispatched before 0.8.2 would come back with no model credential at all;
-// this answers before a revive replaces the proxy or an extension keeps the
-// run alive.
+// modelProviderRefusal refuses a run one of whose model providers — its own
+// agent's or another harness's of its set (runHarnessPairs) — has since been
+// deleted or turned off, and a run that carries a credential a provider
+// authored for a harness (a grant whose snapshot names the provider's UID and
+// that harness, or no harness, as before the set) when that harness's provider
+// was re-created under the same id (a new UID). The injection sink would
+// refuse the run's first model call (provider_changed), or a run dispatched
+// before 0.8.2 would come back with no model credential at all; this answers
+// before a revive replaces the proxy or an extension keeps the run alive.
 func (s *Server) modelProviderRefusal(ctx context.Context, run types.AgentRun) (*ownerRefusal, error) {
-	if run.ModelProviderID == "" {
+	pairs, err := s.runHarnessPairs(ctx, run)
+	if err != nil {
+		return nil, err
+	}
+	pairs = slices.DeleteFunc(pairs, func(h types.RunHarness) bool { return h.ModelProviderID == "" })
+	if len(pairs) == 0 {
 		return nil, nil
 	}
 	grants, err := s.cfg.Store.ListGrantsByRun(ctx, run.ID)
 	if err != nil {
 		return nil, fmt.Errorf("read the run's grants: %w", err)
 	}
-	var uids []string
+	var snapshots []providerGrantSnapshot
 	for _, g := range grants {
 		var scope struct {
 			Snapshot providerGrantSnapshot `json:"snapshot"`
 		}
 		if json.Unmarshal(g.Spec.Scope, &scope) == nil && scope.Snapshot.ProviderUID != "" {
-			uids = append(uids, scope.Snapshot.ProviderUID)
+			snapshots = append(snapshots, scope.Snapshot)
 		}
 	}
 	sc, err := s.cfg.Store.GetSiteConfig(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("read site config: %w", err)
 	}
-	p, found := modelProviderByID(sc.ModelProviders, run.ModelProviderID)
-	switch {
-	case !found || (len(uids) > 0 && !slices.Contains(uids, p.UID)):
-		return &ownerRefusal{status: http.StatusConflict, reason: reasonOwnerModelProviderGone, msg: fmt.Sprintf(
-			"the model provider %s this run was launched with no longer exists; start a new run", run.ModelProviderID)}, nil
-	case p.Disabled:
-		return &ownerRefusal{status: http.StatusConflict, reason: reasonOwnerModelProviderDisabled, msg: fmt.Sprintf(
-			"the model provider %s this run was launched with is turned off; start a new run", run.ModelProviderID)}, nil
+	for _, h := range pairs {
+		var uids []string
+		for _, sn := range snapshots {
+			if sn.Harness == "" || sn.Harness == h.Harness {
+				uids = append(uids, sn.ProviderUID)
+			}
+		}
+		p, found := modelProviderByID(sc.ModelProviders, h.ModelProviderID)
+		switch {
+		case !found || (len(uids) > 0 && !slices.Contains(uids, p.UID)):
+			return &ownerRefusal{status: http.StatusConflict, reason: reasonOwnerModelProviderGone, msg: fmt.Sprintf(
+				"the model provider %s this run was launched with no longer exists; start a new run", h.ModelProviderID)}, nil
+		case p.Disabled:
+			return &ownerRefusal{status: http.StatusConflict, reason: reasonOwnerModelProviderDisabled, msg: fmt.Sprintf(
+				"the model provider %s this run was launched with is turned off; start a new run", h.ModelProviderID)}, nil
+		}
 	}
 	return nil, nil
 }
 
-// secretPresentFor reports whether name exists in owner's namespace or the
-// operator's. A store that cannot list is an error, never "present".
-func (s *Server) secretPresentFor(ctx context.Context, owner, name string) (bool, error) {
+// secretPresentIn reports whether name exists in any of namespaces ("" is the
+// operator's). A store that cannot list is an error, never "present".
+func (s *Server) secretPresentIn(ctx context.Context, namespaces []string, name string) (bool, error) {
 	if s.cfg.Secrets == nil {
 		return false, errors.New("no secret store configured")
 	}
-	for _, ns := range []string{owner, ""} {
+	for _, ns := range namespaces {
 		names, err := s.cfg.Secrets.For(ns).List(ctx)
 		if err != nil && !errors.Is(err, secretstore.ErrNotFound) {
 			return false, fmt.Errorf("list secrets: %w", err)
@@ -397,15 +572,25 @@ func (s *Server) refreshDeploymentConfig(ctx context.Context, run types.AgentRun
 	if err != nil {
 		return fmt.Errorf("read site config: %w", err)
 	}
+	if !remotePlacement(run.Placement) {
+		return s.refreshLocalDeploymentConfig(ctx, run, sc, cfg)
+	}
 	cfg.UpstreamProxyURL = s.resolveRunUpstreamProxy(ctx, run.ID, sc, nil)
 	cfg.UpstreamProxyNoProxy = sc.UpstreamProxyNoProxy
 	cfg.TrustedCAPEM = s.cfg.TrustedCAPEM
-	cfg.InternalHosts = slices.DeleteFunc(cfg.InternalHosts, func(h types.InternalHost) bool {
+	cfg.InternalHosts = currentInternalHosts(cfg.InternalHosts, sc)
+	return nil
+}
+
+// currentInternalHosts keeps the stored internal-host entries today's site
+// configuration still declares, never one added since: a revive cannot widen
+// what the run was dispatched with, and an entry the organisation removed stops lifting.
+func currentInternalHosts(stored []types.InternalHost, sc types.SiteConfig) []types.InternalHost {
+	return slices.DeleteFunc(stored, func(h types.InternalHost) bool {
 		return !slices.ContainsFunc(sc.InternalHosts, func(c types.InternalHost) bool {
 			return c.HostSuffix == h.HostSuffix && slices.Equal(c.CIDRs, h.CIDRs)
 		})
 	})
-	return nil
 }
 
 // reviveOwnerRecheck runs the re-checks above for a revive, before its claim,
@@ -416,6 +601,20 @@ func (s *Server) refreshDeploymentConfig(ctx context.Context, run types.AgentRun
 // must not refuse over a credential the strip removes. A refusal is audited as
 // run.revive denied; a check that cannot be answered refuses too.
 func (s *Server) reviveOwnerRecheck(ctx context.Context, run types.AgentRun, cfg *proxy.Config, actorType types.ActorType, actor string) *reviveError {
+	// A run on a runner is re-classified first, before any operator secret is resolved below; an own plan
+	// then meets the same owner rechecks as any run.
+	local := !remotePlacement(run.Placement)
+	if local {
+		err := s.refreshDeploymentConfig(ctx, run, cfg)
+		var denied *placement.Refusal
+		if errors.As(err, &denied) {
+			s.recordAudit(ctx, s.auditEvent(&run.ID, actorType, actor, "run.revive", run.ID.String(), "denied", mustJSON(map[string]any{"reason": denied.Reason})))
+			return reviveRefused(denied.Reason.Status(), string(denied.Reason), denied.Error())
+		}
+		if err != nil {
+			return reviveRefused(http.StatusServiceUnavailable, reasonReviveOwnerAuthorityUnreadable, loggedMsg(ctx, "re-check local placement authority", err))
+		}
+	}
 	ref, err := s.ownerCapabilityRefusal(ctx, run, actor == run.CreatedBy, runRepos(run, cfg))
 	if err == nil && ref == nil {
 		ref, err = s.modelProviderRefusal(ctx, run)
@@ -424,9 +623,10 @@ func (s *Server) reviveOwnerRecheck(ctx context.Context, run types.AgentRun, cfg
 		if rerr := s.stripRevivedModelInjections(ctx, run, cfg); rerr != nil {
 			return rerr
 		}
+		s.pruneUnpairedInterception(cfg)
 		ref, err = s.modelCredentialRefusal(ctx, run, cfg)
 	}
-	if err == nil && ref == nil {
+	if err == nil && ref == nil && !local {
 		err = s.refreshDeploymentConfig(ctx, run, cfg)
 	}
 	if err != nil {
@@ -438,6 +638,22 @@ func (s *Server) reviveOwnerRecheck(ctx context.Context, run types.AgentRun, cfg
 		return reviveRefused(ref.status, ref.reason, ref.msg)
 	}
 	return nil
+}
+
+// encodeRevivedConfig is the bytes a revive hands the new proxy, loaded here as
+// that proxy will load them. A config it would refuse is refused now, before
+// the claim and before the old proxy is touched: replacing a proxy with one
+// that exits at config load leaves the run no proxy at all.
+func encodeRevivedConfig(cfg *proxy.Config) ([]byte, *reviveError) {
+	b, err := json.Marshal(cfg)
+	if err != nil {
+		return nil, reviveRefused(http.StatusInternalServerError, reasonReviveEncodeConfigFailed, "encode proxy config: "+err.Error())
+	}
+	if _, err := proxy.LoadConfigBytes(b); err != nil {
+		return nil, reviveRefused(http.StatusConflict, reasonReviveConfigDoesNotLoad,
+			"the run's revived proxy config does not load, so its proxy was not replaced: "+err.Error())
+	}
+	return b, nil
 }
 
 // runRepos is the run's repos: its legacy repo field and, when its rendered

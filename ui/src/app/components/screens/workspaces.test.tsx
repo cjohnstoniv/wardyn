@@ -57,6 +57,7 @@ import { OperatorProvider, RoleProvider } from "../wardyn/operator-context";
 import { DENIED } from "../../lib/permissions-copy";
 import { DRIVES } from "../../lib/user-drives-copy";
 import { PROVIDERS } from "../../lib/workspace-providers-copy";
+import { setField } from "../../../test/set-field";
 
 function renderScreen() {
   return render(
@@ -434,7 +435,7 @@ describe("WorkspacesScreen — member workspace access", () => {
     await user.click(within(dialog).getByRole("button", { name: /^Advanced/ }));
     await user.click(within(dialog).getByRole("checkbox", { name: /allow writes/i }));
     await user.click(within(dialog).getByRole("button", { name: "Local directory" }));
-    await user.type(within(dialog).getByLabelText("Path on this host"), "/home/agent-projects/payments");
+    setField(within(dialog).getByLabelText("Path on this host"), "/home/agent-projects/payments");
     await user.click(within(dialog).getByRole("button", { name: "Add workspace" }));
 
     await waitFor(() => expect(createWorkspaceMock).toHaveBeenCalled());

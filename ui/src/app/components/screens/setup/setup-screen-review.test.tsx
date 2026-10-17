@@ -83,8 +83,8 @@ vi.mock("../../../lib/api/providers", () => ({
 }));
 vi.mock("../../../lib/api/runs", () => ({
   // The demo step's useDemoRuns calls getRun (reload re-attach) + killRun (end) in
-  // addition to createRun; stub all three so the lazily-loaded step mounts cleanly.
-  runs: { createRun: vi.fn(), getRun: vi.fn(), killRun: vi.fn() },
+  // addition to createRunWire; stub all three so the lazily-loaded step mounts cleanly.
+  runs: { createRunWire: vi.fn(), getRun: vi.fn(), killRun: vi.fn() },
 }));
 // The connection step's cards derive from the SetupStatus/site-config/secrets
 // mocks above — there is no separate GET /integrations fetch to stub any more
@@ -222,9 +222,11 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
 
     it("a connected integration never shows Skipped, even after navigating past it", async () => {
       getSetupStatusMock.mockResolvedValue(
-        baseStatus({ secrets: { present: ["anthropic-api-key"], github_app: false } }),
+        baseStatus({
+          llm_ready: true,
+          model_providers: [{ id: "corp", kind: "custom_endpoint", harnesses: ["claude-code"], host: "gw.corp.example" }],
+        }),
       );
-      listSecretsMock.mockResolvedValue(["anthropic-api-key"]);
       renderScreen(<SetupScreen onDone={() => {}} />);
       await screen.findByText("Fence");
 

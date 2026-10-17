@@ -478,6 +478,20 @@ start_revive_session() {
     fi
 }
 
+# --prepare-only: this harness's CLI configuration and nothing else (no clone, no
+# boot session, no hold). The harnesses image runs it for every harness it is not
+# starting (deploy/images/common/agent-run-set), so a claude started by hand is
+# configured like one this launcher starts. Idempotent.
+if [[ "${1:-}" == "--prepare-only" ]]; then
+    : "${HOME:=/home/agent}"; export HOME
+    prepare_claude_config_dir
+    seed_claude_onboarding
+    materialize_managed_claude_config
+    materialize_aws_sso_config
+    materialize_azure_cli_config
+    exit 0
+fi
+
 # A container that has booted before is being revived: same prep, no seed.
 if [[ "${1:-}" == "--idle" ]] && booted_before; then
     set -- --revive
@@ -500,6 +514,7 @@ if [[ "${1:-}" == "--idle" || "${1:-}" == "--revive" ]]; then
     materialize_managed_claude_config  # sentinel creds for managed subscription (compose)
     install_artifact_config
     materialize_aws_sso_config
+    materialize_azure_cli_config
     provision_git_helper_secret
     provision_ssh_grants
     trap wipe_ssh_grants EXIT
@@ -679,6 +694,7 @@ materialize_managed_claude_config
 # unless WARDYN_ARTIFACT_CONFIG_B64 is set) before the clone/install/verify below.
 install_artifact_config
 materialize_aws_sso_config
+materialize_azure_cli_config
 
 # Provision the git credential helper caller-auth secret BEFORE any git runs
 # (the clone below and the agent's own git both need it).  Called directly so the
@@ -792,6 +808,23 @@ echo "agent-run: anthropic auth mode = $ANTHROPIC_MODE" >&2
 #     Only this lane: the autonomous lane below already runs every tool, and the
 #     interactive lanes have no Wardyn gate to bypass (the human in the pane is
 #     the approver, behind Claude Code's own workspace-trust prompt).
+#   WARDYN_TOOLGATE_CREDENTIAL   the approval credential dispatch delivered for
+#     this harness alone, as a file only the agent's uid can read. It is read
+#     into claude's exec environment and nowhere else: never exported here,
+#     never in the container's env, the tmux server's or a login shell's, so a
+#     harness started any other way sends none and is held. claude's MCP child
+#     (wardyn-toolgate) inherits it from claude. Empty when there is no file.
+# The run's MCP servers, when it has any: the file dispatch delivers, whose URLs
+# reach each server only through the proxy's broker route.  Both autonomous lanes
+# load it with --mcp-config under --strict-mcp-config (beside the gate's file on
+# the hold lane), so a workspace .mcp.json adds no server.  It is not
+# /etc/claude-code/managed-mcp.json: Claude Code (2.1.231, pinned live) refuses
+# --strict-mcp-config while that file exists, so only an interactive run gets it.
+wardyn_mcp_config=()
+if [[ -r /etc/claude-code/wardyn-mcp.json ]]; then
+    wardyn_mcp_config=(--mcp-config /etc/claude-code/wardyn-mcp.json)
+fi
+
 if [[ "${WARDYN_TOOL_APPROVALS:-}" == "hold" ]]; then
     mkdir -p "$HOME/.wardyn"  # only --idle creates it; this is the exec path
     export CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT=0
@@ -813,9 +846,13 @@ if [[ "${WARDYN_TOOL_APPROVALS:-}" == "hold" ]]; then
     fi
     printf '{"mcpServers":{"gate":{"command":"wardyn-toolgate"%s}}}\n' "$toolgate_args" > "$HOME/.wardyn/toolgate-mcp.json"
     echo "agent-run: tool-approval hold — gated tool use parks on Wardyn approvals" >&2
-    exec claude -p "$task" --output-format text \
+    toolgate_credential=""
+    if [[ -r /run/wardyn/secrets/wardyn-toolgate-claude-code ]]; then
+        toolgate_credential=$(< /run/wardyn/secrets/wardyn-toolgate-claude-code)
+    fi
+    WARDYN_TOOLGATE_CREDENTIAL="$toolgate_credential" exec claude -p "$task" --output-format text \
         --permission-mode manual --setting-sources user \
-        --mcp-config "$HOME/.wardyn/toolgate-mcp.json" --strict-mcp-config \
+        --mcp-config "$HOME/.wardyn/toolgate-mcp.json" ${wardyn_mcp_config[@]+"${wardyn_mcp_config[@]}"} --strict-mcp-config \
         --permission-prompt-tool mcp__gate__approve
 fi
 
@@ -833,4 +870,5 @@ fi
 #     as uid 1000 (USER agent), so the CLI's refuse-to-skip-as-root guard does
 #     not trip. The per-run opt-out of this posture is the hold branch above.
 # The exit code from `claude` propagates to the caller.
-exec claude -p "$task" --output-format text --dangerously-skip-permissions
+exec claude -p "$task" --output-format text --dangerously-skip-permissions \
+    ${wardyn_mcp_config[@]+"${wardyn_mcp_config[@]}" --strict-mcp-config}

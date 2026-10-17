@@ -1,0 +1,4 @@
+# kind	path	key	words	reason
+sentence	threatmodel/THREAT-MODEL.md	c4d529221261161bf7fff6632ae5676ac77bcab8	36	residual 48(b), "AWS KMS key-wrapping remains planned (...)": one clause and its parenthesis, no clause joiner
+sentence	threatmodel/THREAT-MODEL.md	7da944baf31fb8f6fa84e6bfe651cdf2ae939f8c	38	residual 54, "Once the control plane returns, ...": the only cut is at ", but", which is not a clause joiner
+sentence	threatmodel/THREAT-MODEL.md	dc908a6f97a79b155b6d71cd417842940df33628	38	residual 62 Breadth, "A compromised wardynd store PLUS ...": one clause with its bound ("each bounded only by ..."), no clause joiner

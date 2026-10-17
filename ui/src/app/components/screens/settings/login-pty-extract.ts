@@ -105,24 +105,29 @@ export function extractAuthUrl(s: string): string | null {
 // buffer, so a CSI landing inside `user_code=…` would end a match early and
 // still pass the `user_code=` check: visible junk traded for an invisible,
 // silently truncated code. Chosen fix: keep every candidate seen (not just
-// the first) and prefer the longest `user_code=` one — a genuine redraw
-// eventually reprints the same tail whole, and the untruncated capture is the
-// longer one. (The alternative — requiring a fixed code shape — ties this to
-// AWS's current `XXXX-XXXX` format; the buffer already holds the evidence to
-// pick correctly without assuming that.)
+// the first) and let the LATEST `user_code=` one win, except over a strict
+// prefix of the one already kept — a genuine redraw eventually reprints the
+// same tail whole, and a truncated repaint of it must not replace it. Latest,
+// not longest: a buffer holding two attempts with equal-length codes must give
+// the second attempt's live code, never the first's dead one (the shared cases
+// in internal/api/testdata/sign_in_pane_fixtures.json, which the server's
+// parser reads too). (The alternative — requiring a fixed code shape — ties
+// this to AWS's current `XXXX-XXXX` format; the buffer already holds the
+// evidence to pick correctly without assuming that.)
 export function extractDeviceVerificationUrl(s: string): string | null {
   const re = new RegExp(
     `https://(?:device\\.sso\\.[a-z0-9-]+\\.amazonaws\\.com|[a-z0-9-]+\\.awsapps\\.com)/${URL_BODY_CHARS}*`,
     "gi",
   );
-  let bestComplete: string | null = null; // longest user_code= candidate seen
+  let bestComplete: string | null = null; // the latest attempt's user_code= candidate
   let bestBare: string | null = null; // fallback: first complete match without one
   let m: RegExpExecArray | null;
   while ((m = re.exec(s)) !== null) {
     if (m.index + m[0].length >= s.length) continue; // still streaming
     const url = m[0].replace(/[.,)]+$/, "");
     if (url.includes("user_code=")) {
-      if (!bestComplete || url.length > bestComplete.length) bestComplete = url;
+      const truncatedRepaint = !!bestComplete && url.length < bestComplete.length && bestComplete.startsWith(url);
+      if (!truncatedRepaint) bestComplete = url;
     } else if (!bestBare) {
       bestBare = url;
     }

@@ -248,4 +248,9 @@ func TestAuthorBedrockSSOInjection_ScopeCarriesThePathPin(t *testing.T) {
 	if rule.AllowsInjection(http.MethodPost, "/logout", "") {
 		t.Error("POST /logout is allowed the session — it ends the owner's sign-in for every run they have")
 	}
+	// The rule still pins GET only: no method-and-path set, so no other method is admitted on the pinned path.
+	if len(rule.PinRoutes) != 0 || rule.AllowsInjection(http.MethodPost, "/federation/credentials",
+		"account_id="+want["account_id"]+"&role_name="+want["role_name"]) {
+		t.Error("the AWS SSO rule admits something other than a GET of its pinned path")
+	}
 }

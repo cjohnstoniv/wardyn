@@ -16,6 +16,7 @@ import type { SetupCheck, SetupCheckStatus, SetupStatus, SiteConfig, Workspace }
 import { getErrorMessage } from "../../../lib/format";
 import { Chip, SectionCard, SectionLabel } from "../../wardyn/primitives";
 import { BTN, OPERATOR_ONLY_REASON, PEOPLE_STEP as PT, SETUP } from "../../wardyn/copy";
+import { PEOPLE_PAGE } from "../../wardyn/copy/people";
 import { useOperator } from "../../wardyn/operator-context";
 import { Button } from "../../ui/button";
 import { AddWorkspaceDialog } from "../add-workspace-dialog";
@@ -395,6 +396,14 @@ export function DeploymentStep({
   accessState?: AccessLoadState;
   onReloadAccess?: () => void;
 }) {
+  // 0.8.6 ppl-p2: the one-line pointer to the admin People page, in both modes.
+  const managePeopleLink = (
+    <p className="mt-2 text-xs">
+      <Link to="/admin/people" className="text-info hover:underline">
+        {PEOPLE_PAGE.SETUP_LINK}
+      </Link>
+    </p>
+  );
   if (deploymentMode(status) === "single-user") {
     // Only token mode has "the token the installer printed"; local AND the
     // (currently unreachable) disabled mode are both no-sign-in consoles.
@@ -413,6 +422,7 @@ export function DeploymentStep({
             <span className="font-mono">{PT.SINGLE_USER_SSO_NOTE_DOC}</span>
             {PT.SINGLE_USER_SSO_NOTE_SUFFIX}
           </p>
+          {managePeopleLink}
         </SectionCard>
       </div>
     );
@@ -450,6 +460,7 @@ export function DeploymentStep({
           </Button>
           <span className="text-xs text-muted-foreground">{PT.MULTI_USER_PERMISSIONS_HINT}</span>
         </div>
+        {managePeopleLink}
       </SectionCard>
 
       {/* §6: role mappings table + add form + Defaults, then the preview panel,

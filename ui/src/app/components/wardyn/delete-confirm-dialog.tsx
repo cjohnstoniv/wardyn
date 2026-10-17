@@ -20,10 +20,10 @@ import {
 import { useOperator } from "./operator-context";
 import { OPERATOR_ONLY_REASON } from "./copy";
 
-// Shared destructive delete-confirm dialog for the list screens (workspaces,
-// policies, secrets): owns the busy spinner and the toast.success /
-// toast.error(getErrorMessage) pair so all three report failures the same
-// way instead of re-rolling the same try/toast/finally block.
+// Shared destructive delete-confirm dialog for four callers: Secrets,
+// Policies, Workspaces and the workspace detail page. It owns the busy
+// spinner, the toast.success / toast.error(getErrorMessage) pair and the
+// one-delete-per-confirm guard. Other screens keep bespoke dialogs.
 export function DeleteConfirmDialog({
   name,
   entity,
@@ -52,13 +52,17 @@ export function DeleteConfirmDialog({
   onDeleted: () => void;
 }) {
   const [deleting, setDeleting] = React.useState(false);
-  // Every delete in the console (secret/policy/workspace/SCM host/credential)
-  // routes through this one dialog, so gating it here is the single chokepoint
-  // for all of them — no need to also gate each screen's "Delete" trigger.
+  // A ref, not the state above: two clicks in one tick both see deleting ===
+  // false until React re-renders, so only a synchronous flag stops the second.
+  const inFlight = React.useRef(false);
+  // The four callers' deletes route through this dialog, so gating it here is
+  // the chokepoint for them; a screen with a bespoke dialog gates its own.
   const operator = useOperator();
   const canConfirm = allowed ?? operator;
 
   const confirmDelete = async () => {
+    if (inFlight.current) return;
+    inFlight.current = true;
     setDeleting(true);
     try {
       await onDelete();
@@ -67,12 +71,13 @@ export function DeleteConfirmDialog({
     } catch (e) {
       toast.error(`Failed to delete ${entity} “${name}”`, { description: getErrorMessage(e) });
     } finally {
+      inFlight.current = false;
       setDeleting(false);
     }
   };
 
   return (
-    <AlertDialog open={!!name} onOpenChange={(o) => !o && onOpenChange(false)}>
+    <AlertDialog open={!!name} onOpenChange={(o) => !o && !inFlight.current && onOpenChange(false)}>
       <AlertDialogContent>
         <AlertDialogHeader>
           <AlertDialogTitle>
@@ -88,13 +93,13 @@ export function DeleteConfirmDialog({
           )}
         </AlertDialogHeader>
         <AlertDialogFooter>
-          <AlertDialogCancel>Cancel</AlertDialogCancel>
+          <AlertDialogCancel disabled={deleting}>Cancel</AlertDialogCancel>
           <AlertDialogAction
             onClick={(e) => {
               e.preventDefault();
               void confirmDelete();
             }}
-            disabled={!canConfirm}
+            disabled={!canConfirm || deleting}
             aria-describedby={canConfirm ? undefined : "delete-confirm-operator-reason"}
             className="bg-danger text-danger-foreground hover:bg-danger/90"
           >

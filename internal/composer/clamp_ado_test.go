@@ -21,7 +21,7 @@ func TestClamp_ADOCapabilitiesPassThrough(t *testing.T) {
 		ceiling := operatorCeiling(t)
 		ceiling.AzureDevOpsCapabilities = ceilingCaps
 		proposed := types.RunPolicySpec{AzureDevOpsCapabilities: []adoscope.Capability{r, pa}}
-		got, warns := Clamp(proposed, ceiling, 0)
+		got, warns := Clamp(proposed, ceiling, types.GovernanceLimits{})
 		if !slices.Equal(got.AzureDevOpsCapabilities, proposed.AzureDevOpsCapabilities) || hasWarn(warns, "azure_devops") {
 			t.Errorf("%s ceiling: %v (warns %v), want the choice unchanged", name, got.AzureDevOpsCapabilities, warns)
 		}
@@ -29,7 +29,7 @@ func TestClamp_ADOCapabilitiesPassThrough(t *testing.T) {
 		if proposed.AzureDevOpsCapabilities[0] != r {
 			t.Errorf("%s ceiling: the clamped spec aliases the proposal's slice", name)
 		}
-		if got, _ := Clamp(types.RunPolicySpec{}, ceiling, 0); got.AzureDevOpsCapabilities != nil {
+		if got, _ := Clamp(types.RunPolicySpec{}, ceiling, types.GovernanceLimits{}); got.AzureDevOpsCapabilities != nil {
 			t.Errorf("%s ceiling: unset proposal = %v, want unset (never inherited)", name, got.AzureDevOpsCapabilities)
 		}
 	}

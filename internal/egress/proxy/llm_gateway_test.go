@@ -169,6 +169,57 @@ func TestLLMGateway_GatewayHostnameOnConnectPath_StillBuiltinPrivateIP(t *testin
 	}
 }
 
+// TestLLMGateway_InternalHostsNotNeeded_LiftWidensOrdinaryConnect pins what
+// OPERATIONS.md "Internal model gateway" tells an operator. The brokered route
+// reaches a private-address gateway with NO InternalHosts entry on both routes
+// (through the corp proxy, and dialled directly from the bypass list), and
+// declaring one is not free: the lift is by host, not by route, so the same
+// sandbox CONNECT to the gateway's :22 goes from builtin:private-ip to
+// allowed. That is why the recipe must not ask for it.
+func TestLLMGateway_InternalHostsNotNeeded_LiftWidensOrdinaryConnect(t *testing.T) {
+	const host = "llm-gateway.corp.internal"
+	up, err := parseUpstreamProxy("http://192.0.2.10:3128")
+	if err != nil {
+		t.Fatalf("parse upstream: %v", err)
+	}
+	for _, route := range []struct {
+		name             string
+		noProxy          []string
+		brokered, lifted string
+	}{
+		{"through the corp proxy", nil, host + ":8443", host + ":22"},
+		{"on the bypass list", []string{host}, "10.40.1.5:8443", "10.40.1.5:22"},
+	} {
+		for _, declared := range []bool{false, true} {
+			var internalHosts []types.InternalHost
+			if declared {
+				internalHosts = []types.InternalHost{{HostSuffix: host}}
+			}
+			p := newProxy(Options{
+				RunID:           uuid.New(),
+				Policy:          CompilePolicy(types.RunPolicySpec{AllowedDomains: []string{host}}),
+				Sink:            &decisionSink{out: &bytes.Buffer{}, ch: make(chan egress.DecisionLog, 8)},
+				Resolver:        fakeResolver{m: map[string][]net.IP{host: ips("10.40.1.5")}},
+				Upstream:        up,
+				UpstreamNoProxy: route.noProxy,
+				InternalHosts:   internalHosts,
+				LLMUpstreams:    map[string]string{anthropicHost: "https://" + host + ":8443/v1"},
+			})
+			if target, err := p.gatewayTarget(host, 8443); err != nil || target != route.brokered {
+				t.Fatalf("%s, internal_hosts declared=%v: gatewayTarget = (%q, %v), want (%q, nil) — the brokered route must not depend on the declaration", route.name, declared, target, err, route.brokered)
+			}
+			decision, target, log := p.evaluate(context.Background(), host, 22, "CONNECT", "")
+			wantDecision, wantTarget, wantSource := egress.Deny, "", "builtin:private-ip"
+			if declared {
+				wantDecision, wantTarget, wantSource = egress.Allow, route.lifted, "site-config:internal-host"
+			}
+			if decision != wantDecision || target != wantTarget || log == nil || log.RuleSource != wantSource {
+				t.Fatalf("%s, internal_hosts declared=%v: ordinary CONNECT :22 = %v/%q/%+v, want %v/%q/%s", route.name, declared, decision, target, log, wantDecision, wantTarget, wantSource)
+			}
+		}
+	}
+}
+
 // TestLLMGateway_ResolvesToOwnSubnet_Refused: a configured gateway resolving
 // into the proxy's own control-plane host (the sidecar shares its compose
 // network with postgres/dex/registry) must be refused by vetTrustedHost even

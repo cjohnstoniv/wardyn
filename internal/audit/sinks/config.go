@@ -4,6 +4,7 @@
 package sinks
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 
@@ -60,7 +61,6 @@ func ParseSinks(cfgJSON []byte) ([]audit.Sink, error) {
 	if err := json.Unmarshal(cfgJSON, &cfg); err != nil {
 		return nil, fmt.Errorf("sinks.ParseSinks: invalid JSON: %w", err)
 	}
-
 	var out []audit.Sink
 
 	if cfg.Syslog != nil {
@@ -72,11 +72,23 @@ func ParseSinks(cfgJSON []byte) ([]audit.Sink, error) {
 	}
 
 	if cfg.Webhook != nil {
-		s, err := NewWebhookSink(*cfg.Webhook)
-		if err != nil {
-			return out, fmt.Errorf("sinks.ParseSinks: webhook: %w", err)
+		if cfg.Webhook.Delivery == DeliveryAcknowledged {
+			// Acknowledged delivery is not a fan-out sink: the leader-only loop
+			// reads the stored trail from the durable checkpoint instead
+			// (AckedWebhook). The config is still validated exactly as the
+			// sink would have, so a bad one refuses boot here rather than at
+			// first delivery.
+			c := cfg.Webhook.withDefaults()
+			if _, _, _, err := c.validate(); err != nil {
+				return out, fmt.Errorf("sinks.ParseSinks: webhook: %w", err)
+			}
+		} else {
+			s, err := NewWebhookSink(*cfg.Webhook)
+			if err != nil {
+				return out, fmt.Errorf("sinks.ParseSinks: webhook: %w", err)
+			}
+			out = append(out, s)
 		}
-		out = append(out, s)
 	}
 
 	if cfg.File != nil {
@@ -88,4 +100,28 @@ func ParseSinks(cfgJSON []byte) ([]audit.Sink, error) {
 	}
 
 	return out, nil
+}
+
+// AcknowledgedWebhook returns the defaulted webhook config when the sinks
+// config asks for acknowledged delivery, and nil otherwise — so a caller that
+// would start the leader-only loop asks one question instead of re-parsing the
+// JSON. An empty or blank cfgJSON (no sinks configured at all) is nil, nil.
+// A config that fails validation is an error, exactly as ParseSinks reports
+// it: boot has already refused it by the time this runs.
+func AcknowledgedWebhook(cfgJSON []byte) (*WebhookConfig, error) {
+	if len(bytes.TrimSpace(cfgJSON)) == 0 {
+		return nil, nil
+	}
+	var cfg Config
+	if err := json.Unmarshal(cfgJSON, &cfg); err != nil {
+		return nil, fmt.Errorf("sinks.AcknowledgedWebhook: invalid JSON: %w", err)
+	}
+	if cfg.Webhook == nil || cfg.Webhook.Delivery != DeliveryAcknowledged {
+		return nil, nil
+	}
+	c := cfg.Webhook.withDefaults()
+	if _, _, _, err := c.validate(); err != nil {
+		return nil, err
+	}
+	return &c, nil
 }

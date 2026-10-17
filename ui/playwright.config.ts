@@ -9,7 +9,7 @@ import { defineConfig, devices } from "@playwright/test";
 //
 //   chromium (hermetic, the default): specs in ui/e2e/ drive the built UI against
 //   a seeded test backend (real wardynd + Postgres + the `none` runner, seeded
-//   with deterministic fixtures and a fixed admin token) — NOT the full docker
+//   with deterministic fixtures and a per-up admin token) — NOT the full docker
 //   stack, so PR runs are fast and hermetic.
 //
 // X2-F9: this file's own fullyParallel:true + multi-worker settings are safe
@@ -24,8 +24,8 @@ import { defineConfig, devices } from "@playwright/test";
 // against a backend YOU know is exclusively yours.
 //
 // The hermetic backend URL is provided via WARDYN_E2E_BASE_URL (default
-// localhost:8088). Start the seeded backend out-of-band (scripts/e2e-backend.sh)
-// or set PLAYWRIGHT_WEB_SERVER to let Playwright manage it. Port 8088 (not 8080)
+// localhost:8088). For an out-of-band scripts/e2e-backend.sh up, export
+// WARDYN_E2E_TOKEN from that instance's `e2e-backend.sh token`. Port 8088 (not 8080)
 // avoids colliding with a developer's local compose stack on the default port.
 const baseURL = process.env.WARDYN_E2E_BASE_URL || "http://localhost:8088";
 

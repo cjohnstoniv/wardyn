@@ -1,0 +1,1 @@
+One path per line, '#' comments allowed: *.list = docs asserted against every cap (one file per lane), *.budget = "path=N share=S" budgets (prose words N, strict paragraph share S percent; "share=S" optional), *.links = docs the link gate's must-link rule applies to (scripts/check-doc-links.sh).

@@ -25,6 +25,19 @@
 # Run via `make lint`.
 set -euo pipefail
 cd "$(dirname "$0")/.."
+# shellcheck source=lib/common.sh
+source scripts/lib/common.sh
+
+# Git scopes discovery to this checkout, including new recipes. The non-git
+# path is for test-image-pins.sh's small fixture tree, never adjacent worktrees.
+if [ "$(git rev-parse --show-toplevel 2>/dev/null || true)" = "$PWD" ]; then
+  mapfile -d '' -t dockerfiles < <(git ls-files --cached --others --exclude-standard -z -- \
+    Dockerfile 'Dockerfile.*' '**/Dockerfile' '**/Dockerfile.*')
+else
+  mapfile -d '' -t dockerfiles < <(find . -type d \( -name .git -o -name node_modules -o -name .claude -o -name worktrees \) -prune \
+    -o -type f \( -name Dockerfile -o -name 'Dockerfile.*' \) -print0)
+fi
+[ "${#dockerfiles[@]}" -gt 0 ] || die "no Dockerfiles found in this checkout"
 
 # Matched on the REF, not the file: exempting a whole Dockerfile would silently
 # waive every OTHER FROM in it (full/ also pulls digest-pinned toolchain stages).
@@ -79,7 +92,10 @@ while IFS= read -r df; do
       fail=1
     fi
   done < <(grep -iE '^FROM ' "$df")
-done < <(find . \( -name 'Dockerfile' -o -name 'Dockerfile.*' \) ! -path './.git/*' ! -path './ui/node_modules/*' ! -path './.claude/*')
+done < <(printf '%s\n' "${dockerfiles[@]}")
+
+# ── every curl artifact is checked before use, in the same logical RUN ──────
+python3 scripts/lib/image_downloads.py "${dockerfiles[@]}" || fail=1
 
 # ── compose registry images (base AND every overlay: ci-run.sh starts the stack
 #    with -f docker-compose.yaml -f docker-compose.ci.yaml) ──────────────────
@@ -189,16 +205,27 @@ if [ -f "$RELEASE_WF" ] && [ -f "$CI_WF" ]; then
   # gate but detects nothing and prints no reason. The emptiness check below is
   # what turns that into a stated failure.
   published=$(grep -oE '^[[:space:]]+- name: [a-z0-9-]+$' "$RELEASE_WF" | awk '{print $3}' | sort -u || true)
-  scanned=$(awk '/^  trivy:/{f=1} f&&/^  [a-z]/&&!/^  trivy:/{f=0} f' "$CI_WF" \
-            | grep -oE '^[[:space:]]+- name: [a-z0-9-]+$' | awk '{print $3}' | sort -u || true)
+  # ci.yml scans one image per `trivy (<image>)` job; TRIVY_IMAGE is the image
+  # that job builds and scans.
+  scanned=$(grep -oE '^[[:space:]]+TRIVY_IMAGE: [a-z0-9-]+$' "$CI_WF" | awk '{print $2}' | sort -u || true)
   if [ -z "$published" ]; then
-    echo "FAIL: $RELEASE_WF exists but no '- name:' image entries were found — the scan-coverage cross-check's published-image list derivation has broken, and this gate would silently compare an empty list against the trivy matrix." >&2
+    echo "FAIL: $RELEASE_WF exists but no '- name:' image entries were found — the scan-coverage cross-check's published-image list derivation has broken, and this gate would silently compare an empty list against the trivy jobs." >&2
     fail=1
   fi
   missing=$(comm -23 <(printf '%s\n' "$published") <(printf '%s\n' "$scanned"))
   if [ -n "$missing" ]; then
-    echo "FAIL: image(s) published by $RELEASE_WF but never scanned in $CI_WF's trivy matrix:" >&2
+    echo "FAIL: image(s) published by $RELEASE_WF but never scanned by a trivy job in $CI_WF:" >&2
     printf '  %s\n' $missing >&2
+    fail=1
+  fi
+  # The check name is what branch protection requires and TRIVY_IMAGE is what
+  # the job scans: a job named for one image and scanning another would report
+  # a green `trivy (<image>)` for an image nothing scanned.
+  misnamed=$(awk '/^    name: trivy \(/ { want = $0; sub(/.*\(/, "", want); sub(/\)$/, "", want) }
+                  /^      TRIVY_IMAGE: / { if ($2 != want) print "trivy (" want ") scans " $2; want = "" }' "$CI_WF")
+  if [ -n "$misnamed" ]; then
+    echo "FAIL: a trivy job in $CI_WF is named for one image and scans another:" >&2
+    printf '  %s\n' "$misnamed" >&2
     fail=1
   fi
 fi
@@ -318,14 +345,14 @@ done < <(grep -h -v '^[[:space:]]*#' ./deploy/images/*/Dockerfile 2>/dev/null \
 # refs are pinned by the RELEASE TAG the run resolved. That reasoning does NOT
 # carry to deploy/desktop/install.sh, whose default enrolment image is the
 # CONTINUOUS `:latest` publish-image.yml pushes after CI passes on main and
-# never cosign-signs — and it runs AS ROOT to mint the device's age identity
+# signs by digest, which nothing in that lane verifies — and it runs AS ROOT to mint the device's age identity
 # (F113/F184). Hard-failing on the default itself would need a release digest,
 # which is a network value this gate cannot resolve; what IS checkable offline is
 # that the installer still tells the person running it.
 DESKTOP_INSTALL=./deploy/desktop/install.sh
 if [ -f "$DESKTOP_INSTALL" ]; then
   grep -qF 'is a MUTABLE tag, not a digest' "$DESKTOP_INSTALL" \
-    || { echo "FAIL: $DESKTOP_INSTALL no longer warns that a non-digest WARDYN_INSTALL_IMAGE floats. Its default is the unsigned continuous :latest, run AS ROOT to mint the device's age identity, and no pin gate can catch a \`docker run\` in a shell script — the warning is the only control there is (F113/F184)." >&2; fail=1; }
+    || { echo "FAIL: $DESKTOP_INSTALL no longer warns that a non-digest WARDYN_INSTALL_IMAGE floats. Its default is the continuous :latest, whose signature nothing in that lane verifies, run AS ROOT to mint the device's age identity, and no pin gate can catch a \`docker run\` in a shell script — the warning is the only control there is (F113/F184)." >&2; fail=1; }
 fi
 
 if ((fail)); then

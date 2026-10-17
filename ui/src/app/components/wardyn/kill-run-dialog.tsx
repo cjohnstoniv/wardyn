@@ -29,7 +29,9 @@ export function KillRunDialog({
   // The run to kill; also doubles as the "is the dialog open" flag (null = closed).
   runId: string | null;
   onOpenChange: (open: boolean) => void;
-  onConfirm: () => void;
+  // Called with the id the dialog is showing, so the kill can only ever hit
+  // the run the title names.
+  onConfirm: (runId: string) => void;
 }) {
   return (
     <AlertDialog open={!!runId} onOpenChange={onOpenChange}>
@@ -44,7 +46,7 @@ export function KillRunDialog({
         <AlertDialogFooter>
           <AlertDialogCancel>Cancel</AlertDialogCancel>
           <AlertDialogAction
-            onClick={onConfirm}
+            onClick={() => runId && onConfirm(runId)}
             className="bg-danger text-danger-foreground hover:bg-danger/90"
           >
             Kill run

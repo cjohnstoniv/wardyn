@@ -418,6 +418,18 @@ func TestDocsOpsContinuousImageLaneDocumentedHonestly(t *testing.T) {
 	if signs && regexp.MustCompile(`publish-image\.yml(?s).{0,600}?\bUnsigned\.`).MatchString(releasing) {
 		t.Error(`RELEASING.md still calls the continuous lane "Unsigned." — publish-image.yml runs cosign sign on the pushed digest`)
 	}
+	// install.sh and DESKTOP.md describe this lane to the person running the
+	// enrolment mint. When the workflow signs, neither may call the image
+	// unsigned: that is the same false claim RELEASING.md carried. Signing is not
+	// verification either, so they say that nothing in the lane checks it.
+	if signs {
+		calledUnsigned := regexp.MustCompile(`(?is)(?:continuous|:latest|main-tip).{0,150}\bnot\b\W{0,6}cosign-sign|unsigned (?:main-tip|continuous)|:latest[^.\n]{0,60}\bunsigned\b`)
+		for _, rel := range [][]string{{"deploy", "desktop", "install.sh"}, {"docs", "DESKTOP.md"}} {
+			if m := calledUnsigned.FindString(readOpsDoc(t, rel...)); m != "" {
+				t.Errorf("%s calls the continuous image unsigned (%q) — publish-image.yml runs cosign sign on the pushed digest; say that nothing in the install lane verifies the signature instead", filepath.Join(rel...), m)
+			}
+		}
+	}
 	if !attests {
 		if !strings.Contains(verify, "publish-image.yml") {
 			t.Error("docs/VERIFY.md never mentions publish-image.yml — its :latest/:sha- tags carry no SBOM and no provenance, and the release identity regexp on that page structurally cannot verify them")
@@ -677,7 +689,7 @@ func TestDocsOpsRunAuditRowsCiteEveryEmitFile(t *testing.T) {
 //     PLUGGABILITY.md's governance due-diligence sentence must not list it
 //     among them. Kata is an OpenInfra Foundation project and appears in the
 //     CNCF directory at no maturity level.
-//   - OPERATIONS.md's quotation about nested group membership is from Entra's
+//   - The capability page's quotation about nested group membership is from Entra's
 //     "Configure group claims for applications", not "Configure optional
 //     claims" — that page's only nested-group sentence points the other way.
 //
@@ -693,17 +705,18 @@ func TestDocsOpsExternalAttributionsAreRight(t *testing.T) {
 		t.Errorf("docs/PLUGGABILITY.md lists Kata inside the CNCF parenthetical (%q); Kata Containers is an OpenInfra Foundation project and is not a CNCF project at any maturity level", cncf[1])
 	}
 
-	ops := readOpsDoc(t, "docs", "OPERATIONS.md")
+	// The quote lives in the capability-grants page since the multi-user split.
+	ops := readOpsDoc(t, "docs", "operations", "capabilities.md")
 	i := strings.Index(ops, "nested groups are not included")
 	if i < 0 {
-		t.Fatal("docs/OPERATIONS.md no longer quotes Entra's nested-group sentence — re-anchor this guard")
+		t.Fatal("docs/operations/capabilities.md no longer quotes Entra's nested-group sentence — re-anchor this guard")
 	}
 	window := ops[i:min(i+500, len(ops))]
 	if strings.Contains(window, "identity-platform/optional-claims") {
-		t.Error(`docs/OPERATIONS.md cites the quoted nested-group sentence to Entra's "Configure optional claims", which does not contain it — the sentence is on "Configure group claims for applications" (how-to-connect-fed-group-claims)`)
+		t.Error(`docs/operations/capabilities.md cites the quoted nested-group sentence to Entra's "Configure optional claims", which does not contain it — the sentence is on "Configure group claims for applications" (how-to-connect-fed-group-claims)`)
 	}
 	if !strings.Contains(window, "how-to-connect-fed-group-claims") {
-		t.Error("docs/OPERATIONS.md's nested-group quotation is not cited to the page that carries it (how-to-connect-fed-group-claims)")
+		t.Error("docs/operations/capabilities.md's nested-group quotation is not cited to the page that carries it (how-to-connect-fed-group-claims)")
 	}
 }
 

@@ -16,12 +16,14 @@ import * as React from "react";
 import { toast } from "sonner";
 import type { ApprovalRequest, RunDetail } from "../../../lib/types";
 import { isTerminalRunState } from "../../../lib/types";
+import { audit as auditApi } from "../../../lib/api/audit";
 import { runs as runsApi } from "../../../lib/api/runs";
-import { getErrorMessage } from "../../../lib/format";
+import { absoluteTime, getErrorMessage } from "../../../lib/format";
 import { useOperator, usePrincipal } from "../../wardyn/operator-context";
 import { Button } from "../../ui/button";
 import * as RL from "../../wardyn/copy/run-lifetime";
-import { weekdayClock } from "./run-ends-row";
+import { LOCAL_RUN, runnerLabel } from "../../wardyn/copy/runners";
+import { keptUntilText, weekdayClock } from "./run-ends-row";
 import { ChangeEndDialog } from "./change-end-dialog";
 
 // Same three thresholds the board row's own chip warns at (runs-model.ts).
@@ -41,6 +43,27 @@ function isClaudeCode(agent: string): boolean {
 // Extend on the Lost banner relabelled Revive too. Track WHICH action is
 // running instead.
 type Action = "revive" | "extend" | "endRun" | "resume" | null;
+
+// Whether a local run lost to an outage or a reboot was stopped LATE: its runner came back with the network still on and
+// the org had it stopped then (a run.containment.reassert row with containment "late"). Only that row tells the
+// two stopped sentences apart, so it is read for a local outage-lost run alone; null until it has been read.
+function useStoppedLate(run: RunDetail): boolean | null {
+  const applies = run.placement === "local" && (run.lost_reason === "outage" || run.lost_reason === "reboot");
+  const [late, setLate] = React.useState<boolean | null>(null);
+  React.useEffect(() => {
+    if (!applies) return;
+    let live = true;
+    auditApi
+      .listAudit(run.id, { action: "run.containment.reassert" })
+      // A failed read must not assert the confirmed sentence on a run that may have been stopped late.
+      .then((rows) => live && setLate(rows.some((r) => r.data?.containment === "late")))
+      .catch(() => live && setLate(false));
+    return () => {
+      live = false;
+    };
+  }, [applies, run.id, run.lost_at, run.runner_online]);
+  return applies ? late : null;
+}
 
 export function RunLifetimeBanner({
   run,
@@ -140,11 +163,54 @@ export function RunLifetimeBanner({
   };
 
   const busy = action !== null;
+  const stoppedLate = useStoppedLate(run);
+  const local = run.placement === "local";
+  const runner = runnerLabel(run);
 
   // renderPrimary — the Lost/Ended/Paused/warning priority chain, as its own
   // function (not a component-level early return) so the tightened note
   // below can still render alongside whichever of these wins (F19).
   function renderPrimary(): React.ReactNode {
+    // ---- A local run its runner lost contact with, whatever the lost reason (RS4b/c/d, RN3-D6): what the runner did, as it reported it ----
+    // The remote sentences say Wardyn was unreachable; for a computer that went offline that is false, and
+    // whether the network was stopped is the runner's report, not Wardyn's own act. Chosen from server facts
+    // only: the runner's liveness and the late-stop row, never elapsed time.
+    if (local && (run.lost_reason === "outage" || run.lost_reason === "reboot")) {
+      // Only a runner that is known to be connected can have confirmed the stop; an unknown one is treated as
+      // offline, which claims no more than "can't confirm that yet".
+      const offline = run.runner_online !== true && stoppedLate !== true;
+      // Online and the late-stop row not read yet: say nothing rather than the wrong stopped sentence.
+      if (!offline && stoppedLate === null) return null;
+      const seen = run.runner_last_seen_at ? absoluteTime(run.runner_last_seen_at) : "—";
+      return (
+        <Banner
+          data-testid={offline ? "run-lifetime-local-lapse" : "run-lifetime-local-stopped"}
+          tone="danger"
+          title={offline ? LOCAL_RUN.LAPSE_TITLE(runner) : LOCAL_RUN.STOPPED_TITLE}
+          body={offline ? LOCAL_RUN.LAPSE_BODY(runner, seen) : stoppedLate ? LOCAL_RUN.STOPPED_LATE(runner) : LOCAL_RUN.STOPPED_BODY(runner)}
+        >
+          {offline && <p className="mt-1 text-xs text-muted-foreground">{LOCAL_RUN.REVIVE_WHEN_BACK(runner)}</p>}
+          {canAct && (
+            <div className="mt-2.5 flex flex-wrap gap-2">
+              {!offline && (
+                <>
+                  <Button size="sm" onClick={() => void revive()} disabled={busy}>
+                    {action === "revive" ? RL.REVIVING : RL.REVIVE}
+                  </Button>
+                  <Button size="sm" variant="outline" onClick={() => void extend(24 * 60 * 60 * 1000)} disabled={busy}>
+                    {RL.ENDS_EXTEND}
+                  </Button>
+                </>
+              )}
+              <Button size="sm" variant="outline" onClick={() => void endRun()} disabled={busy}>
+                {RL.END_RUN}
+              </Button>
+            </div>
+          )}
+        </Banner>
+      );
+    }
+
     // ---- Lost (reboot / outage): kept, no network, Revive as the owner ----
     if (run.lost_reason === "reboot" || run.lost_reason === "outage") {
       const outage = run.lost_reason === "outage";
@@ -205,7 +271,7 @@ export function RunLifetimeBanner({
           data-testid="run-lifetime-ended"
           tone="plain"
           title={RL.ENDED_TITLE}
-          body={run.interactive ? RL.ENDED_BODY_NO_DATE : RL.ENDED_BODY_TASK}
+          body={run.interactive ? (run.kept_until ? RL.endedBody(keptUntilText(run.kept_until)) : RL.ENDED_BODY_NO_DATE) : RL.ENDED_BODY_TASK}
         >
           {canAct && (
             <div className="mt-2.5 flex flex-wrap gap-2">
@@ -259,6 +325,20 @@ export function RunLifetimeBanner({
             </div>
           )}
         </Banner>
+      );
+    }
+
+    // ---- A local run on a computer that is offline (RS4a): the run goes on there ----
+    // Only the runner's own liveness says so; nothing is inferred from time. No buttons: Kill stays in the
+    // command bar, and nothing can be sent to the computer until it reconnects.
+    if (local && run.state === "RUNNING" && run.runner_online === false) {
+      return (
+        <Banner
+          data-testid="run-lifetime-local-offline"
+          tone="warn"
+          title={LOCAL_RUN.OFFLINE_TITLE(runner)}
+          body={`${LOCAL_RUN.OFFLINE_BODY(runner, run.runner_last_seen_at ? absoluteTime(run.runner_last_seen_at) : "—")} ${LOCAL_RUN.OFFLINE_SPOOL}`}
+        />
       );
     }
 

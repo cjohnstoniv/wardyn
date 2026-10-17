@@ -1,0 +1,10 @@
+{{/*
+extraObjects: operator-supplied objects rendered with the release, each through
+tpl so a value may name the release. The chart's only use of tpl; ssh.proxyCommand
+and every other value render verbatim. `| default list` keeps a --reuse-values
+upgrade from an older release (no extraObjects key) rendering.
+*/}}
+{{- range (.Values.extraObjects | default list) }}
+---
+{{ tpl (toYaml .) $ }}
+{{- end }}

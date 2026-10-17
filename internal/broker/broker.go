@@ -36,6 +36,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/cliutil"
 	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/egress"
+	"github.com/cjohnstoniv/wardyn/internal/ghscope"
 	"github.com/cjohnstoniv/wardyn/internal/identity"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
@@ -200,6 +201,15 @@ type GitHubMinter interface {
 	// a minter that silently did nothing would leave the discard doors leaking
 	// exactly as they leaked before, and the compiler must ask.
 	Revoke(ctx context.Context, token string) error
+	// ListBranches lists repo's ("owner/name") branches for the New Run branch
+	// picker (github.go). It mints its own one-repo, read-only token outside
+	// mint(), like VerifyRefRuleset's probe.
+	ListBranches(ctx context.Context, repo string, limit int) (branches []string, defaultBranch string, truncated bool, err error)
+	// InstallationPermissions is the App's own grant on the installation that
+	// covers repo ("owner/name"): each permission it holds, at its level. A
+	// GitHub CLI token asks for no more (githubAPIPermissions), since GitHub
+	// refuses the whole token request for one permission the App lacks.
+	InstallationPermissions(ctx context.Context, repo string) (map[string]string, error)
 }
 
 // Querier is the minimal transaction surface the broker needs. It is satisfied
@@ -271,8 +281,9 @@ type Tx interface {
 }
 
 // Broker is the token broker. It is safe for concurrent use; all mutating
-// state lives in Postgres and every mint is serialized by SELECT ... FOR UPDATE
-// on the grant+approval rows.
+// state lives in Postgres and every approval burn is serialized by SELECT ...
+// FOR UPDATE on the grant+approval rows. Issuance runs before that lock, so a
+// losing contender's freshly minted credential is discarded.
 type Broker struct {
 	db       TxBeginner
 	secrets  secretstore.Store
@@ -311,13 +322,12 @@ const envRequireRefRuleset = "WARDYN_GITHUB_REQUIRE_REF_RULESET"
 var ErrRefRulesetRequired = errors.New("broker: " + envRequireRefRuleset + " is set and the repo is not confined by a GitHub ruleset")
 
 // refRulesetProbeTimeout bounds ONE repo's verification. checkRefRuleset runs
-// inside mint()'s transaction, holding SELECT ... FOR UPDATE on the grant row
-// and a pooled Postgres connection, and VerifyRefRuleset makes several
+// while mint() prepares the credential, and VerifyRefRuleset makes several
 // api.github.com round trips (a token mint, two rule reads, one ruleset read per
 // ruleset found, a revoke). Neither github client sets an http.Client timeout
 // and the API server sets no Read/WriteTimeout, so without a deadline here the
-// only bound is the caller's request ctx and a blackholed api.github.com pins
-// the row lock and the connection for as long as it stays black. The advisory
+// only bound is the caller's request ctx and a blackholed api.github.com holds
+// the mint for as long as it stays black. The advisory
 // /setup/status path already does the same with 5s (api.refRulesetTimeout); this
 // one is longer only because exceeding it fails the mint rather than greying out
 // a checklist row.
@@ -394,8 +404,8 @@ func (b *Broker) MintForGrant(ctx context.Context, caller *identity.Claims, gran
 	if !spec.RequiresApproval {
 		// Auto-mintable: no approval row exists or is created, so there is no
 		// single-use guard — the grant is re-mintable BY DESIGN (credential-
-		// helper refresh semantics). Every mint is serialized by the grant-row
-		// FOR UPDATE lock, capped at the <=1h TTL, and individually audited.
+		// helper refresh semantics). Each mint commits under the grant-row FOR
+		// UPDATE lock, is capped at the <=1h TTL, and is individually audited.
 		return b.mint(ctx, caller, grantID, uuid.Nil)
 	}
 
@@ -422,214 +432,22 @@ func (b *Broker) MintForGrant(ctx context.Context, caller *identity.Claims, gran
 	}
 }
 
-// mint runs the authoritative single-transaction mint. approvalHint, when
-// non-Nil, narrows the SELECT to that approval id (used after MintForGrant's
-// ensureApproval); when Nil it resolves the approval (or auto-approval) by
-// grant id. caller.SPIFFEID is the audit actor.
-func (b *Broker) mint(ctx context.Context, caller *identity.Claims, grantID, approvalHint uuid.UUID) (Minted, error) {
-	tx, err := b.db.BeginReadCommitted(ctx)
-	if err != nil {
-		return Minted{}, fmt.Errorf("broker: begin tx: %w", err)
+// maskMinted registers a minted credential's value-bearing fields with the mask
+// registry, committed before it returns. A nil registry is a no-op.
+func (b *Broker) maskMinted(runID uuid.UUID, minted Minted) error {
+	if b.maskReg == nil {
+		return nil
 	}
-	committed := false
-	defer func() {
-		if !committed {
-			_ = tx.Rollback(ctx)
+	// Fixed order, token first: a failure stops at a known point.
+	for _, f := range [...]struct{ what, v string }{{"token", minted.Token}, {"known_hosts", minted.KnownHosts}} {
+		if f.v == "" {
+			continue
 		}
-	}()
-
-	row, err := selectGrantApprovalForUpdate(ctx, tx, grantID, approvalHint)
-	if err != nil {
-		return Minted{}, err
-	}
-	if row.grantRunID != caller.RunID {
-		return Minted{}, ErrRunMismatch
-	}
-
-	if row.grantSpec.Kind == types.GrantCloudSTS {
-		b.auditMint(ctx, caller, grantID, row.approvalID, "", row.grantSpec.Scope, "denied")
-		return Minted{}, ErrRequiresSPIRE
-	}
-
-	// Single-use guard: a written minted_jti blocks re-mint — UNLESS the human
-	// scoped their decision to the whole run, which is the B2 lease (see
-	// leaseCoversRemint). `leased` rides the rest of this function: it suppresses
-	// the minted_jti burn below (already burnt, and the conditional UPDATE would
-	// return 0 rows and fail the mint closed) and it is stamped on the audit
-	// event, because a lease widens what ONE approval authorizes and the stream
-	// has to say which mints were the human's and which were the lease's.
-	leased := false
-	if row.mintedJTI != "" {
-		if !leaseCoversRemint(row) {
-			return Minted{}, ErrAlreadyMinted
-		}
-		leased = true
-	}
-
-	// Chokepoint self-enforcement: an approval-required grant must carry an
-	// approval row. MintForGrant's routing guarantees this, but re-check it in
-	// the tx so the mint is self-contained for EVERY entry point (a caller
-	// passing a Nil approval hint would otherwise auto-mint an approval-gated
-	// grant that has no approval row). Fail closed.
-	if row.grantSpec.RequiresApproval && !row.hasApproval {
-		b.auditMint(ctx, caller, grantID, uuid.Nil, "", row.grantSpec.Scope, "denied")
-		return Minted{}, ErrNotApproved
-	}
-
-	if row.hasApproval {
-		// Anything that is not APPROVED refuses here, so DENIED, EXPIRED and
-		// CANCELLED all land on ErrNotApproved — the mint chokepoint's
-		// fail-closed default needs no per-state arm, and a state it has never
-		// heard of refuses too.
-		if row.approvalState != types.ApprovalApproved {
-			if row.approvalState == types.ApprovalPending {
-				return Minted{}, ErrApprovalPending{ApprovalID: row.approvalID}
-			}
-			return Minted{}, ErrNotApproved
-		}
-		if row.approvalRunID != caller.RunID {
-			return Minted{}, ErrRunMismatch
-		}
-		// No-widening: the approver saw exactly requested_scope; it must
-		// deep-equal the grant spec scope.
-		if !jsonScopeEqual(row.requestedScope, row.grantSpec.Scope) {
-			b.auditMint(ctx, caller, grantID, row.approvalID, "", row.grantSpec.Scope, "denied")
-			return Minted{}, ErrScopeMismatch
+		if err := b.maskReg.Add(runID, []byte(f.v)); err != nil {
+			return fmt.Errorf("broker: record the minted %s for masking: %w", f.what, err)
 		}
 	}
-
-	// Kill-switch: refuse to mint for a run that has already been revoked. The
-	// check runs inside the mint tx so a durably-recorded revocation blocks a
-	// subsequent mint — closing the gap where a mint reaching the broker after
-	// the run was killed still produced a live credential. The sub-RTT concurrent
-	// case (a revoke committing during this tx, after the check) is the published
-	// 1h-minted-token residual, not closed here. See threatmodel §5 #7.
-	if revoked, err := runRevoked(ctx, tx, row.grantRunID); err != nil {
-		return Minted{}, err
-	} else if revoked {
-		b.auditMint(ctx, caller, grantID, row.approvalID, "", row.grantSpec.Scope, "denied")
-		return Minted{}, ErrRunRevoked
-	}
-
-	// Mint the kind-specific credential.
-	minted, err := b.mintKind(ctx, caller, row.grantSpec)
-	if err != nil {
-		b.auditMint(ctx, caller, grantID, row.approvalID, "", row.grantSpec.Scope, "failure")
-		return Minted{}, err
-	}
-	minted.GrantID = grantID
-	minted.ApprovalID = row.approvalID
-
-	// From here on a REAL credential exists, and it only becomes the
-	// caller's on commit. Every arm below that returns an error instead is a
-	// DISCARD door — the lost single-use race, a failed minted_jti write, a
-	// failed audit insert, a failed commit — and a discarded github_token is a
-	// live ghs_… with contents:write for GitHub's full ~1h that reached NO
-	// committed credential.mint row: no jti, so mintedCredentialsSQL cannot see
-	// it and RevokeRun cannot reach it. Hand it back here.
-	//
-	// ONE defer rather than a call at each door, deliberately: the doors are the
-	// arms of a rollback that the `committed` flag already tracks for the tx, and
-	// a fifth arm added later would silently skip a fourth call site while this
-	// covers it by construction. It runs BEFORE the rollback defer above (LIFO)
-	// and depends on nothing the rollback touches.
-	defer func() {
-		if !committed {
-			b.discardMinted(ctx, minted)
-		}
-	}()
-
-	// Write minted_jti back in the SAME transaction (the provable join), and
-	// require the conditional UPDATE to affect exactly one row. This rows-affected
-	// check is LOAD-BEARING for single-use, not a backstop: the row.mintedJTI fast
-	// path above only catches contenders whose statement snapshot postdates the
-	// winner's commit. A contender that BLOCKS on the FOR UPDATE OF g lock mid-tx
-	// resumes on its ORIGINAL snapshot and reads a stale minted_jti='' from the
-	// joined approval row — Postgres runs EvalPlanQual only for the locked tuple
-	// (g), never re-fetching the non-locked, nullable-side approval — so it passes
-	// the fast path and mints a real token. Only this conditional UPDATE, which
-	// re-checks minted_jti='' against the latest committed row and returns 0 rows,
-	// stops that second credential from being returned. On 0 rows we fail closed;
-	// the deferred Rollback discards the tx, so the minted token above is never
-	// returned and expires at its <=1h TTL. (Proven by a two-session PG16
-	// experiment; see TestPG_ConcurrentMintOnApproval_ExactlyOnce.)
-	//
-	// Skipped under a lease, and that is the lease: the burn already happened on
-	// the first mint, so this conditional UPDATE would match 0 rows and fail a
-	// re-mint the human explicitly authorized. Nothing else is skipped — the
-	// approval state, run ownership, no-widening and kill-switch checks above all
-	// still ran on this transaction, so a revoked run's lease is dead the moment
-	// the revocation commits.
-	if row.hasApproval && !leased {
-		n, err := tx.Exec(ctx,
-			`UPDATE approvals SET minted_jti = $1 WHERE id = $2 AND minted_jti = ''`,
-			minted.JTI, row.approvalID)
-		if err != nil {
-			return Minted{}, fmt.Errorf("broker: write minted_jti: %w", err)
-		}
-		if n != 1 {
-			// A concurrent mint already claimed this approval. The token minted
-			// above is discarded (never returned); audit the loss so the throwaway
-			// mint is visible in the trail rather than silent.
-			b.auditMint(ctx, caller, grantID, row.approvalID, "", row.grantSpec.Scope, "denied")
-			return Minted{}, ErrAlreadyMinted
-		}
-	}
-
-	// Write the credential.mint SUCCESS row on the SAME tx as the minted_jti
-	// burn, so the audit event and the single-use burn commit atomically. A
-	// post-commit write on a SEPARATE connection would open a crash window:
-	// minted_jti committed, then a crash before the audit write burns the approval
-	// with NO credential.mint row and nothing delivered — the git helper's retry
-	// then gets 409 already_minted forever. Fail CLOSED: if the durable record
-	// cannot be written, roll the whole mint back rather than hand out an
-	// unrecorded credential.
-	mintEv := mintEvent(caller, grantID, row.approvalID, minted.JTI, row.grantSpec.Scope, "success")
-	mintEv.Data = withSecretScope(mintEv.Data, minted)
-	if leased {
-		// A lease widens what ONE human decision authorizes, so the stream must
-		// say which mints the human made and which the lease did — B2's own
-		// condition for the feature. Stamped on the event rather than raised as a
-		// separate action so an existing credential.mint consumer sees it without
-		// subscribing to anything new.
-		mintEv.Data = withLeaseMarker(mintEv.Data, row.decisionScope)
-	}
-	if err := insertAuditEventTx(ctx, tx, mintEv); err != nil {
-		return Minted{}, err
-	}
-
-	if err := tx.Commit(ctx); err != nil {
-		return Minted{}, fmt.Errorf("broker: commit mint tx: %w", err)
-	}
-	committed = true
-
-	// The durable record is committed above (in-tx). Fan the SAME event out to the
-	// SIEM sinks — best-effort, primary store NOT re-written (see the siem field
-	// doc). The Fanout logs any per-child failure itself. WithoutCancel: the
-	// credential is already the caller's, so a client hanging up now must not
-	// cost its SIEM record (SyslogSink.Emit skips on a done ctx). Every sink
-	// enqueues or writes locally, so detaching cannot pin the request.
-	if b.siem != nil {
-		_ = b.siem.Emit(context.WithoutCancel(ctx), mintEv)
-	}
-
-	// Register the minted token — and, for ssh_key, its known_hosts material —
-	// in the mask registry so PTY/asciicast streams can mask verbatim
-	// occurrences of the credential. A nil registry is a no-op; only
-	// value-bearing kinds (github_token, git_pat, ssh_key) set Token — api_key
-	// never does (its value stays proxy-side). KnownHosts is mask-registered too:
-	// see the Minted.KnownHosts doc comment for why a nominally
-	// public field still gets this treatment.
-	if b.maskReg != nil {
-		if minted.Token != "" {
-			b.maskReg.Add(caller.RunID, []byte(minted.Token))
-		}
-		if minted.KnownHosts != "" {
-			b.maskReg.Add(caller.RunID, []byte(minted.KnownHosts))
-		}
-	}
-
-	return minted, nil
+	return nil
 }
 
 // leaseCoversRemint reports whether an ALREADY-MINTED approval still authorizes
@@ -686,7 +504,7 @@ func withLeaseMarker(data json.RawMessage, scope types.ApprovalScope) json.RawMe
 // clamped to the contents:write + pull_requests:write ceiling and tagged with
 // the per-run branch namespace. api_key resolves to a proxy InjectionRule
 // (secret value never returned). cloud_sts is refused (caller already checked),
-// and so is env_secret — see its case.
+// and so are env_secret and file_secret — see their case.
 func (b *Broker) mintKind(ctx context.Context, caller *identity.Claims, spec types.GrantSpec) (Minted, error) {
 	ttl := ttlFor(spec)
 	switch spec.Kind {
@@ -709,6 +527,10 @@ func (b *Broker) mintKind(ctx context.Context, caller *identity.Claims, spec typ
 		// clear refusal — not a token, and not a puzzling "unknown kind" for a
 		// kind this binary knows perfectly well.
 		return Minted{}, fmt.Errorf("%w: %q is delivered as a sandbox env var at dispatch, not minted", ErrUnknownGrantKind, spec.Kind)
+	case types.GrantFileSecret:
+		// env_secret's refusal, for the file it is delivered as instead
+		// (api.resolveFileSecretGrants): no mint, no TTL, no JTI.
+		return Minted{}, fmt.Errorf("%w: %q is delivered as a sandbox file at dispatch, not minted", ErrUnknownGrantKind, spec.Kind)
 	default:
 		return Minted{}, fmt.Errorf("%w: %q", ErrUnknownGrantKind, spec.Kind)
 	}
@@ -718,6 +540,12 @@ func (b *Broker) mintKind(ctx context.Context, caller *identity.Claims, spec typ
 type githubScope struct {
 	Repos       []string          `json:"repos"`
 	Permissions map[string]string `json:"permissions"`
+	// API marks the GitHub CLI's grant, which the run's proxy mints for its
+	// api.github.com door. Only create authors it (ValidateGitHubScopeShape
+	// refuses it on a policy). Its permissions come from Capabilities, never
+	// from Permissions or the git lane's clamp.
+	API          bool                 `json:"api,omitempty"`
+	Capabilities []ghscope.Capability `json:"capabilities,omitempty"`
 }
 
 func (b *Broker) mintGitHub(ctx context.Context, caller *identity.Claims, spec types.GrantSpec, ttl time.Duration) (Minted, error) {
@@ -733,6 +561,12 @@ func (b *Broker) mintGitHub(ctx context.Context, caller *identity.Claims, spec t
 	// pull_requests:write MAX. Requested perms are intersected DOWN to this
 	// ceiling; anything outside is dropped (fail closed, never widen).
 	clamped := clampGitHubPermissions(sc.Permissions)
+	if sc.API {
+		var err error
+		if clamped, err = b.githubAPIPermissions(ctx, sc); err != nil {
+			return Minted{}, err
+		}
+	}
 
 	if err := b.checkRefRuleset(ctx, sc.Repos); err != nil {
 		return Minted{}, err
@@ -759,6 +593,42 @@ func (b *Broker) mintGitHub(ctx context.Context, caller *identity.Claims, spec t
 	}, nil
 }
 
+// githubAPIPermissions is the GitHub CLI grant's permission set: what its
+// capabilities need (ghscope.PermissionsFor, the one capability-to-permission
+// table) narrowed to the App's own grant on the installation, so a permission
+// the App lacks is left off rather than failing the token request. The
+// request then meets GitHub's own 403, which is the honest answer until the
+// installation's owners approve the App's wider permissions.
+//
+// The capabilities are refused, not filtered, when one is missing or not
+// available to the CLI: the scope is server-authored, so a mismatch is a
+// broken scope, not a narrower one. The result always holds metadata: read,
+// so it is never the empty map GitHub reads as every permission.
+func (b *Broker) githubAPIPermissions(ctx context.Context, sc githubScope) (map[string]string, error) {
+	caps := types.CLIGitHubCapabilities(sc.Capabilities)
+	if len(caps) == 0 || len(caps) != len(sc.Capabilities) {
+		return nil, fmt.Errorf("broker: github api grant: capabilities %v are empty or include one the GitHub CLI may not hold", sc.Capabilities)
+	}
+	want, err := ghscope.PermissionsFor(caps)
+	if err != nil {
+		return nil, fmt.Errorf("broker: github api grant: %w", err)
+	}
+	if len(sc.Repos) == 0 {
+		return nil, errors.New("broker: github api grant names no repository")
+	}
+	app, err := b.github.InstallationPermissions(ctx, sc.Repos[0])
+	if err != nil {
+		return nil, fmt.Errorf("broker: read the GitHub App's permissions: %w", err)
+	}
+	out := map[string]string{"metadata": "read"}
+	for perm, level := range want {
+		if have, ok := app[perm]; ok && perm != "metadata" {
+			out[perm] = minLevel(level, have)
+		}
+	}
+	return out, nil
+}
+
 // checkRefRuleset enforces the OPT-IN envRequireRefRuleset gate: every repo in
 // the grant must be confined by a GitHub repository ruleset before the token is
 // minted. No-op (nil) when the gate is off, which is the default.
@@ -777,9 +647,8 @@ func (b *Broker) checkRefRuleset(ctx context.Context, repos []string) error {
 		return nil
 	}
 	// ONE deadline for the whole grant, not one fresh refRulesetProbeTimeout per
-	// repo: the loop runs inside mint()'s transaction, holding the grant row's
-	// FOR UPDATE lock and a pooled connection for as long as it takes, and a
-	// per-repo deadline lets that grow unbounded with the repo count (12 repos
+	// repo: the loop holds the mint for as long as it takes, and a per-repo
+	// deadline lets that grow unbounded with the repo count (12 repos
 	// against a blackholed api.github.com = 12 independent 15s waits). Sized
 	// from len(repos) so a legitimately large grant still gets each repo its
 	// existing budget, just under one shared, explicit ceiling.
@@ -805,13 +674,6 @@ type apiKeyScope struct {
 	Header     string `json:"header"`
 	Format     string `json:"format"`
 	SecretName string `json:"secret_name"`
-}
-
-// gitPATScope is the JSON shape of a git_pat grant scope.
-type gitPATScope struct {
-	Host       string `json:"host"`
-	SecretName string `json:"secret_name"`
-	Username   string `json:"username"`
 }
 
 // reservedBrokerSecretNames is the reserved-name guard for the git_pat/ssh_key
@@ -847,25 +709,28 @@ type gitPATScope struct {
 // four extra names above are enforced ONLY here — the actual mint chokepoint a
 // git_pat/ssh_key value would otherwise cross into the sandbox.
 var reservedBrokerSecretNames = map[string]bool{
-	"wardyn-signing-key":    true,
-	"wardyn-session-key":    true,
-	"wardyn-ui-session-key": true,
-	"wardyn-run-config-key": true,
-	"aws-access-key-id":     true,
-	"aws-secret-access-key": true,
-	"aws-session-token":     true,
-	"github-app-id":         true,
-	"github-app-key":        true,
-	"wardyn-ssh-host-key":   true,
-	"wardyn-internal-ca":    true,
-	"bedrock-api-key":       true,
+	"wardyn-signing-key":       true,
+	"wardyn-session-key":       true,
+	"wardyn-ui-session-key":    true,
+	"wardyn-run-config-key":    true,
+	"wardyn-audit-pending-key": true,
+	"aws-access-key-id":        true,
+	"aws-secret-access-key":    true,
+	"aws-session-token":        true,
+	"github-app-id":            true,
+	"github-app-key":           true,
+	"wardyn-ssh-host-key":      true,
+	"wardyn-internal-ca":       true,
+	"bedrock-api-key":          true,
 	// The hybrid device credential: no grant may hand it into a sandbox.
 	"wardyn-org-device-credential": true,
+	// internal/api's writeProbeSecretName: a store write probe's row, never a grant's value.
+	"wardyn-write-probe": true,
 }
 
 // reservedBrokerSecret mirrors internal/api.reservedSecret (secrets.go): the
 // static keys above PLUS the managed-harness OAuth-blob pattern
-// (wardyn-harness-<provider>-oauth) PLUS every model-provider credential name. The static map alone missed the pattern, so
+// (wardyn-harness-<provider>-oauth) PLUS every model-provider credential name PLUS every CLI sign-in name. The static map alone missed the pattern, so
 // a policy could name e.g. "wardyn-harness-anthropic-oauth" as a git_pat/ssh_key
 // secret and have the broker resolve the resident OAuth token into the sandbox.
 func reservedBrokerSecret(name string) bool {
@@ -873,11 +738,16 @@ func reservedBrokerSecret(name string) bool {
 		return true
 	}
 	return strings.HasPrefix(name, "wardyn-harness-") && strings.HasSuffix(name, "-oauth") ||
-		strings.HasPrefix(name, providerSecretPrefix)
+		strings.HasPrefix(name, providerSecretPrefix) || strings.HasPrefix(name, cliSecretPrefix)
 }
 
+// cliSecretPrefix mirrors internal/api's: every person's CLI sign-in capture
+// (wardyn-cli-<component id>-{sso,entra}). The proxy injects it through its
+// own grant; minted, it would hand the whole sign-in record to the sandbox.
+const cliSecretPrefix = "wardyn-cli-"
+
 // providerSecretPrefix mirrors internal/api's: every per-person model-provider
-// credential (wardyn-provider-<uid>-{key,oauth,sso}). A model key is injected
+// credential (wardyn-provider-<uid>-{key,oauth,sso,entra}). A model key is injected
 // proxy-side as a header, never minted, so a git_pat/ssh_key grant naming one
 // could only hand the person's own API key to the sandbox as a git password.
 const providerSecretPrefix = "wardyn-provider-"
@@ -932,35 +802,19 @@ func mintEvent(caller *identity.Claims, grantID, approvalID uuid.UUID, jti strin
 	}
 }
 
-// auditMint emits a credential.mint audit event via the Recorder chain. Used for
-// the DENIED and FAILURE outcomes, which all fire on error paths where the mint
-// tx has ALREADY rolled back — so they cannot ride the tx, and the Recorder's own
-// spooling fallback is the durability they get. The SUCCESS outcome does NOT go
-// through here: it rides the mint tx (insertAuditEventTx) so the audit row and the
-// minted_jti burn commit atomically.
-func (b *Broker) auditMint(ctx context.Context, caller *identity.Claims, grantID, approvalID uuid.UUID, jti string, scope json.RawMessage, outcome string) {
-	ev := mintEvent(caller, grantID, approvalID, jti, scope, outcome)
-	if err := b.audit.Record(ctx, ev); err != nil {
-		audit.LogWriteFailure(ctx, ev, err)
-	}
-}
-
 // insertAuditEventTx writes ev into audit_events on the broker's OWN mint tx, so
 // a credential.mint row commits atomically with the minted_jti burn. It
 // mirrors store.InsertAuditEvent's statement exactly — the broker cannot import
 // that helper (it takes *pgxpool.Pool, not the Querier seam this package is built
 // on), the same reason the grant/approval SQL is inlined here.
 //
-// prev_hash/row_hash are NOT written here: migration 0047's BEFORE INSERT
-// trigger fills them for every insert path, including this one. What this path
-// DOES owe the chain is the serializing lock — it must be taken before the
-// INSERT statement, on this same tx, so this writer's seq allocation and head
-// read cannot interleave with another's. Since migration 0056 the trigger takes
-// the same lock and allocates seq under it, so an out-of-tree writer cannot fork
-// the chain either; advisory locks are re-entrant within a transaction, so
-// taking it here still costs nothing (db.AuditChainLockKey). Taken here, as late in the mint tx as
-// possible, so the chain lock is always acquired AFTER this tx's grant/approval
-// row locks and can never invert a lock order with a concurrent mint.
+// The row goes in through audit_append (migration 0111), the only way a row enters
+// audit_events: the function allocates seq and recorded_at under the chain lock, and
+// the chain trigger fills prev_hash/row_hash. The lock is still taken here, before the
+// call, on this same tx; advisory locks are re-entrant within a transaction, so
+// audit_append's own acquisition costs nothing (db.AuditChainLockKey). Taken here, as
+// late in the mint tx as possible, so the chain lock is always acquired AFTER this tx's
+// grant/approval row locks and can never invert a lock order with a concurrent mint.
 func insertAuditEventTx(ctx context.Context, tx Querier, ev types.AuditEvent) error {
 	dataJSON, err := json.Marshal(ev.Data)
 	if err != nil {
@@ -977,14 +831,12 @@ func insertAuditEventTx(ctx context.Context, tx Querier, ev types.AuditEvent) er
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, db.AuditChainLockKey); err != nil {
 		return fmt.Errorf("broker: lock audit chain (waited up to %s): %w", db.AuditChainLockTimeout, err)
 	}
-	const q = `
-		INSERT INTO audit_events
-			(id, time, run_id, actor_type, actor, action, target, outcome, source_ip, data)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`
-	if _, err := tx.Exec(ctx, q,
+	const q = `SELECT seq FROM audit_append($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`
+	var seq int64
+	if err := tx.QueryRow(ctx, q,
 		ev.ID, ev.Time, ev.RunID, string(ev.ActorType), ev.Actor, ev.Action,
 		ev.Target, ev.Outcome, ev.SourceIP, dataJSON,
-	); err != nil {
+	).Scan(&seq); err != nil {
 		return fmt.Errorf("broker: insert mint audit: %w", err)
 	}
 	return nil

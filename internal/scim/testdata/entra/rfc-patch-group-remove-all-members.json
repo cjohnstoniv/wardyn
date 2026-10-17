@@ -1,0 +1,15 @@
+{
+  "source": "https://www.rfc-editor.org/rfc/rfc7644#section-3.5.2.2",
+  "captured": false,
+  "body": {
+    "schemas": [
+      "urn:ietf:params:scim:api:messages:2.0:PatchOp"
+    ],
+    "Operations": [
+      {
+        "op": "remove",
+        "path": "members"
+      }
+    ]
+  }
+}

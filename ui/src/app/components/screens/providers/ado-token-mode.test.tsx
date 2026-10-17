@@ -19,9 +19,10 @@ import { OperatorProvider } from "../../wardyn/operator-context";
 import { EntraEditor } from "./entra-editor";
 
 const orgCheckMock = vi.fn();
+const refusalMock = vi.fn();
 vi.mock("../../../lib/api/ado-pat", async () => {
   const actual = await vi.importActual<typeof import("../../../lib/api/ado-pat")>("../../../lib/api/ado-pat");
-  return { ...actual, adoPat: { ...actual.adoPat, orgCheck: (id: string) => orgCheckMock(id) } };
+  return { ...actual, adoPat: { ...actual.adoPat, orgCheck: (id: string) => orgCheckMock(id), refusal: (id: string) => refusalMock(id) } };
 });
 
 const TENANT = "8f14e45f-ceea-4d2c-a3f9-1a2b3c4d5e6f";
@@ -65,6 +66,8 @@ function Harness({
 
 beforeEach(() => {
   orgCheckMock.mockReset();
+  refusalMock.mockReset();
+  refusalMock.mockResolvedValue(null);
 });
 
 describe("state 1: how people connect", () => {
@@ -241,6 +244,37 @@ describe("state 8: the organisation blocks token creation", () => {
     expect(screen.getByRole("radio", { name: ADO_PAT.MODE_BEARER })).toBeChecked();
     // Already on the Entra sign-in: nothing left to switch to.
     expect(screen.queryByRole("button", { name: ADO_PAT.POLICY_BANNER_BUTTON })).not.toBeInTheDocument();
+  });
+
+  it("8c: a member's refused launch raises the banner naming that person, with no check run", async () => {
+    refusalMock.mockResolvedValue({ person: "priya@corp.example", at: at(9, 12) });
+    render(<Harness initial={row({ token_mode: "minted_pat" })} />);
+    expect(await screen.findByText(ADO_PAT.POLICY_BANNER("priya@corp.example"))).toBeInTheDocument();
+    expect(refusalMock).toHaveBeenCalledWith("ado");
+    expect(orgCheckMock).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: ADO_PAT.POLICY_BANNER_BUTTON })).toBeInTheDocument();
+  });
+
+  it("no refusal in seven days raises no banner", async () => {
+    render(<Harness initial={row({ token_mode: "minted_pat" })} />);
+    await screen.findByTestId("ado-token-mode");
+    expect(refusalMock).toHaveBeenCalled();
+    expect(screen.queryByText(/refused to create a token for/)).not.toBeInTheDocument();
+  });
+
+  it("a person viewing without operator rights never asks, and sees no banner", async () => {
+    refusalMock.mockResolvedValue({ person: "priya@corp.example", at: at(9, 12) });
+    render(<Harness initial={row({ token_mode: "minted_pat" })} operator={false} />);
+    await screen.findByTestId("ado-token-mode");
+    expect(refusalMock).not.toHaveBeenCalled();
+    expect(screen.queryByText(/refused to create a token for/)).not.toBeInTheDocument();
+  });
+
+  it("a refusal the server cannot read raises no banner", async () => {
+    refusalMock.mockRejectedValue(new Error("boom"));
+    render(<Harness initial={row({ token_mode: "minted_pat" })} />);
+    await screen.findByTestId("ado-token-mode");
+    expect(screen.queryByText(/refused to create a token for/)).not.toBeInTheDocument();
   });
 
   it("a check that was not refused on the policy raises no banner", async () => {

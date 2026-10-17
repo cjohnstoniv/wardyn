@@ -13,7 +13,7 @@ import "fmt"
 // loginEgress is the allowlist the login sandbox actually runs under: the row's
 // region-free hosts plus, for a region-scoped flow, the AWS SSO endpoints for
 // ssoRegion.
-// Region-DERIVED, never wildcarded: the proxy's matcher (classifyDomain) knows
+// Region-DERIVED, never wildcarded: the proxy's matcher (domainmatch.Classify) knows
 // only a LEADING "*." or an exact host, so "oidc.*.amazonaws.com" allows nothing,
 // and "*.amazonaws.com" opens every AWS service — too wide for a login box.
 // ssoRegion == "" pre-allows nothing regional: the CLI's hosts then surface as

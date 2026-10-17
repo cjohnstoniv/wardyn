@@ -99,7 +99,12 @@ describe("RunEndsRow — the four states (mock 'Ends')", () => {
   });
 });
 
-describe("RunEndsRow — terminal and lost runs render nothing here", () => {
+describe("RunEndsRow — terminal, lost and queued runs render nothing here", () => {
+  it("a QUEUED run: its end is written when it starts, so no 'No end' and no Set an end…", () => {
+    const { container } = renderRow(detail({ state: "QUEUED" }));
+    expect(container).toBeEmptyDOMElement();
+  });
+
   it.each(["COMPLETED", "KILLED", "FAILED", "STOPPED", "ARCHIVED"])("state=%s", (state) => {
     const { container } = renderRow(detail({ state }));
     expect(container).toBeEmptyDOMElement();
@@ -146,6 +151,32 @@ describe("RunEndsRow — Extend", () => {
     await user.click(screen.getByRole("button", { name: "Extend" }));
     await user.click(await screen.findByText(/As far as allowed \(30 days\)/));
     await waitFor(() => expect(toastWarningMock).toHaveBeenCalledWith(expect.stringMatching(/as far as your admin allows/)));
+  });
+
+  it("#1322: a capped extend the admin has since loosened says so instead of the capped sentence", async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    const latestEnd = new Date(NOW + 30 * 24 * 3600_000).toISOString();
+    setRunEndAndWaitMock.mockResolvedValue({
+      id: "run-1",
+      ends_at: latestEnd,
+      wait_budget_sec: 0,
+      capped: ["ends_at"],
+      latest_end: latestEnd,
+      ends_cap_loosened: true,
+    });
+    const run = detail({
+      ends_at: new Date(NOW + 8 * 3600_000).toISOString(),
+      run_limits: { user_changes_limits: true, max_end_ahead_sec: 30 * 24 * 3600 },
+    });
+    renderRow(run);
+    await user.click(screen.getByRole("button", { name: "Extend" }));
+    await user.click(await screen.findByText(/As far as allowed \(30 days\)/));
+    await waitFor(() =>
+      expect(toastWarningMock).toHaveBeenCalledWith(
+        "Your admin loosened this after the run started. Start a new run to get the new limit.",
+      ),
+    );
+    expect(toastWarningMock).not.toHaveBeenCalledWith(expect.stringMatching(/as far as your admin allows/));
   });
 
   it("a 1-day limit reads '(1 day)', not '(1 days)'", async () => {

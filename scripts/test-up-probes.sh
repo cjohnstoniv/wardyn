@@ -356,8 +356,10 @@ pass "C1 wardynd_probe reports the probe container's own failure and still yield
 # printed only where that check returned 0.
 cv_body="$(sed -n '/^cosign_verify() {/,/^}/p' "${UP_SH}")"
 [ -n "${cv_body}" ] || fail "scripts/up.sh has no cosign_verify() — the pull path announces 'cosign-signed, SBOM-attested' and nothing in the script verifies anything (F005/F100)"
-printf '%s' "${cv_body}" | grep -q 'certificate-identity-regexp' \
+printf '%s' "${cv_body}" | grep -q -- '--certificate-identity ' \
   || fail "cosign_verify() does not pin the certificate IDENTITY — a keyless signature verified against no identity says only 'somebody signed this' (docs/VERIFY.md s1)"
+! printf '%s' "${cv_body}" | grep -q 'identity-regexp' \
+  || fail "cosign_verify() pins a certificate identity REGEXP — a signature from any other release tag would pass for the version being installed (#1496)"
 printf '%s' "${cv_body}" | grep -q 'verify-attestation' \
   || fail "cosign_verify() checks the signature but not the SBOM attestation — 'SBOM-attested' is half the claim being made (docs/VERIFY.md s2)"
 
@@ -365,19 +367,27 @@ printf '%s' "${cv_body}" | grep -q 'verify-attestation' \
 # present and refusing -> 1; cosign present and happy -> 0.
 mkdir -p "${dir}/c4-cosign-bin"
 eval "${cv_body}"
-( PATH="${dir}/c4-empty"; export PATH; cosign_verify ghcr.io/x/y:1 ) && cv_rc=0 || cv_rc=$?
+( PATH="${dir}/c4-empty"; export PATH; cosign_verify ghcr.io/x/y:1 0.8.3 ) && cv_rc=0 || cv_rc=$?
 [ "${cv_rc}" = 2 ] || fail "cosign_verify returned ${cv_rc} with no cosign on PATH, want 2 — a missing tool must be distinguishable from a passing check, or 'verified' is announced on every box that has no cosign"
 
 cat > "${dir}/c4-cosign-bin/cosign" <<'STUB'
 #!/usr/bin/env bash
+echo "$*" >> "$(dirname "$0")/argv"
 [ -f "$(dirname "$0")/refuse" ] && exit 1
 exit 0
 STUB
 chmod +x "${dir}/c4-cosign-bin/cosign"
-( PATH="${dir}/c4-cosign-bin:${PATH}"; export PATH; cosign_verify ghcr.io/x/y:1 ) && cv_rc=0 || cv_rc=$?
+( PATH="${dir}/c4-cosign-bin:${PATH}"; export PATH; cosign_verify ghcr.io/x/y:1 0.8.3 ) && cv_rc=0 || cv_rc=$?
 [ "${cv_rc}" = 0 ] || fail "cosign_verify returned ${cv_rc} when cosign verified both the signature and the attestation, want 0"
+# Both halves, `verify` AND `verify-attestation`, bind the signer to the version being installed.
+want_id="--certificate-identity https://github.com/cjohnstoniv/wardyn/.github/workflows/release.yml@refs/tags/v0.8.3 "
+[ "$(grep -c -- "${want_id}" "${dir}/c4-cosign-bin/argv")" = 2 ] \
+  || fail "cosign_verify did not pass the exact identity of the requested tag to both verify and verify-attestation: $(cat "${dir}/c4-cosign-bin/argv")"
+! grep -q 'regexp' "${dir}/c4-cosign-bin/argv" || fail "cosign_verify still passes an identity regexp to cosign"
+( PATH="${dir}/c4-cosign-bin:${PATH}"; export PATH; cosign_verify ghcr.io/x/y:1 "" ) && cv_rc=0 || cv_rc=$?
+[ "${cv_rc}" = 1 ] || fail "cosign_verify returned ${cv_rc} with no version to bind the signer to, want 1 (never a fallback to any tag)"
 : > "${dir}/c4-cosign-bin/refuse"
-( PATH="${dir}/c4-cosign-bin:${PATH}"; export PATH; cosign_verify ghcr.io/x/y:1 ) && cv_rc=0 || cv_rc=$?
+( PATH="${dir}/c4-cosign-bin:${PATH}"; export PATH; cosign_verify ghcr.io/x/y:1 0.8.3 ) && cv_rc=0 || cv_rc=$?
 [ "${cv_rc}" = 1 ] || fail "cosign_verify returned ${cv_rc} when cosign REFUSED the image, want 1 — a refusal that reads as success is worse than no check"
 
 # ...and the claim itself is inside the branch that check gates.
@@ -386,6 +396,8 @@ claim_line="$(grep -n 'cosign-signed, SBOM-attested' "${UP_SH}" | head -1 | cut 
 guard_line="$(grep -n '^    if \$verified_all; then' "${UP_SH}" | head -1 | cut -d: -f1 || true)"
 [ -n "${guard_line}" ] && [ "${guard_line}" -lt "${claim_line}" ] \
   || fail "scripts/up.sh prints 'cosign-signed, SBOM-attested' outside the \$verified_all branch — the claim is made again on boxes where cosign never ran (F005/F100)"
+grep -q 'cosign_verify "\$remote" "\$ver"' "${UP_SH}" \
+  || fail "up.sh no longer passes the version being installed to cosign_verify — the signer is not bound to the tag (#1496)"
 pass "C4 up.sh verifies with cosign (identity + CycloneDX attestation) before it claims the images are signed"
 
 # ── C5: "Skipped the local build" means the pulled images are the ones used ──

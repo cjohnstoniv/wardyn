@@ -119,7 +119,7 @@ func TestHandler_Serve(t *testing.T) {
 	store, _ := recording.NewFSStore(t.TempDir())
 	ctx := context.Background()
 	const cast = `{"version":2}` + "\n" + `[1.0,"o","hi\r\n"]` + "\n"
-	const runID = "abc123"
+	const runID = "0a000000-0000-4000-8000-000000000001"
 	_ = store.SaveCast(ctx, runID, strings.NewReader(cast))
 
 	srv := httptest.NewServer(newTestRouter(store))
@@ -148,7 +148,7 @@ func TestHandler_NotFound(t *testing.T) {
 	srv := httptest.NewServer(newTestRouter(store))
 	defer srv.Close()
 
-	resp, err := http.Get(srv.URL + "/api/v1/runs/ghost/recording/ghost")
+	resp, err := http.Get(srv.URL + "/api/v1/runs/0a000000-0000-4000-8000-000000000002/recording/0a000000-0000-4000-8000-000000000002")
 	if err != nil {
 		t.Fatalf("GET: %v", err)
 	}
@@ -169,7 +169,7 @@ func TestHandler_OuterInnerMismatch(t *testing.T) {
 	store, _ := recording.NewFSStore(t.TempDir())
 	ctx := context.Background()
 	const cast = `{"version":2}` + "\n"
-	const runB = "run-b"
+	const runB = "0a000000-0000-4000-8000-000000000003"
 	_ = store.SaveCast(ctx, runB, strings.NewReader(cast))
 
 	var authorizeCalled bool
@@ -177,7 +177,7 @@ func TestHandler_OuterInnerMismatch(t *testing.T) {
 	srv := httptest.NewServer(newTestRouterWithAuth(store, authorize))
 	defer srv.Close()
 
-	resp, err := http.Get(srv.URL + "/api/v1/runs/run-a/recording/" + runB)
+	resp, err := http.Get(srv.URL + "/api/v1/runs/0a000000-0000-4000-8000-000000000004/recording/" + runB)
 	if err != nil {
 		t.Fatalf("GET: %v", err)
 	}
@@ -196,7 +196,7 @@ func TestHandler_OuterInnerMismatch(t *testing.T) {
 func TestHandler_AuthorizerDenies(t *testing.T) {
 	store, _ := recording.NewFSStore(t.TempDir())
 	ctx := context.Background()
-	const runID = "owned-by-someone-else"
+	const runID = "0a000000-0000-4000-8000-000000000005"
 	_ = store.SaveCast(ctx, runID, strings.NewReader(`{"version":2}`+"\n"))
 
 	deny := func(*http.Request, string) bool { return false }

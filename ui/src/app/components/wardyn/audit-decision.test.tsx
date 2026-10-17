@@ -111,6 +111,16 @@ describe("ruleSourceLabel", () => {
       label: "Refused by the built-in guard",
       tone: "danger",
     });
+    // A tunnel that died after it opened has its own label; the generic
+    // fallback still catches an unnamed builtin:* source.
+    expect(ruleSourceLabel("builtin:tunnel-failed")).toEqual({
+      label: "Connection died after it opened",
+      tone: "danger",
+    });
+    expect(ruleSourceLabel("builtin:gateway-vet-failed")).toEqual({
+      label: "Refused by the built-in guard",
+      tone: "danger",
+    });
     expect(ruleSourceLabel("brokered:git")).toEqual({ label: "Brokered", tone: "neutral" });
     expect(ruleSourceLabel("brokered:git:branch-ns-off")).toEqual({ label: "Brokered", tone: "neutral" });
     // every brokered lane the proxy emits, not only git

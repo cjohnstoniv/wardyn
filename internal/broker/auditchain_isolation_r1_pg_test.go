@@ -38,6 +38,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/cjohnstoniv/wardyn/internal/db"
+	"github.com/cjohnstoniv/wardyn/internal/testutil"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -132,11 +133,8 @@ func TestPG_BrokerMintDoesNotForkTheChainAtRepeatableRead(t *testing.T) {
 	// A BLOCKER holds the chain lock, so the broker's transaction opens, takes
 	// its snapshot, and then parks — which is the production shape: two writers,
 	// one chain lock.
-	blocker, err := base.Acquire(ctx)
-	if err != nil {
-		t.Fatalf("acquire blocker conn: %v", err)
-	}
-	defer blocker.Release()
+	blocker := testutil.PGConn(t, base)
+	defer func() { _ = blocker.Close(ctx) }()
 	btx, err := blocker.Begin(ctx)
 	if err != nil {
 		t.Fatalf("begin blocker tx: %v", err)
@@ -197,9 +195,8 @@ func TestPG_BrokerMintDoesNotForkTheChainAtRepeatableRead(t *testing.T) {
 	// The WINNER commits while the broker waits. Its row_hash is the head the
 	// broker's row must chain onto.
 	var winner string
-	if err := btx.QueryRow(ctx, `INSERT INTO audit_events (id, actor_type, actor, action, outcome)
-		VALUES (gen_random_uuid(), 'system', 'blocker', 'test.f331.winner', 'success')
-		RETURNING COALESCE(row_hash, '')`).Scan(&winner); err != nil {
+	if err := btx.QueryRow(ctx, `SELECT COALESCE(row_hash, '')
+		FROM audit_append(gen_random_uuid(), now(), NULL, 'system', 'blocker', 'test.f331.winner', '', 'success', '', NULL)`).Scan(&winner); err != nil {
 		t.Fatalf("blocker appends the winning row: %v", err)
 	}
 	if winner == "" {

@@ -39,7 +39,6 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
-	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/hostrules"
 	"github.com/cjohnstoniv/wardyn/internal/recordmode"
 	"github.com/cjohnstoniv/wardyn/internal/store"
@@ -243,6 +242,33 @@ func (s *Server) repairStaleWorkspaceRuns(ctx context.Context, ws types.Workspac
 	return ws
 }
 
+// writeSourceLaunchRefusal answers a record launch that one of the workspace's
+// own stored sources refused, with the status, reason and sentence the
+// create-run door answers for the identical workspace. Reports false for any
+// other error, which the caller maps as it always did.
+func writeSourceLaunchRefusal(w http.ResponseWriter, lerr error) bool {
+	// A stored source whose authored target this composition refuses is the
+	// operator's row to fix, not a daemon fault — 422, the SAME status the
+	// create-run path answers for the identical workspace
+	// (seedRequestWorkspace). The two doors disagreeing about one stored row
+	// is what made this hard to diagnose; they agree on the code and on the
+	// wording.
+	if errors.Is(lerr, errWorkspaceSourceTarget) {
+		// The SAME reason seedRequestWorkspace's own arm uses (#656 slice 1):
+		// the two doors already agree on the code and the wording.
+		writeErrorReason(w, http.StatusUnprocessableEntity, reasonWorkspaceSeedSourceTargetInvalid, lerr.Error())
+		return true
+	}
+	// A required write: row that would make a member's directory writable
+	// past the member writable roots (requirementWriteRefusal).
+	var mountRefusal *sourceRefusal
+	if errors.As(lerr, &mountRefusal) {
+		writeErrorReason(w, mountRefusal.status, mountRefusal.reason, mountRefusal.Error())
+		return true
+	}
+	return false
+}
+
 // handleRecordWorkspace launches one named OPEN recording sandbox:
 // POST /workspaces/{id}/record {"name": "...", "confined": false}
 // ("task_key" is accepted as a deprecated alias for name). The operator drives
@@ -347,16 +373,7 @@ func (s *Server) handleRecordWorkspace(w http.ResponseWriter, r *http.Request) {
 		s.recordAudit(r.Context(), s.auditEvent(nil, actorType, actor,
 			"run.record.start", id.String(), "failure",
 			auditWorkspaceData(r, ws.OwnedBy, map[string]any{"task": key, "detail": lerr.Error()})))
-		// A stored source whose authored target this composition refuses is the
-		// operator's row to fix, not a daemon fault — 422, the SAME status the
-		// create-run path answers for the identical workspace
-		// (seedRequestWorkspace). The two doors disagreeing about one stored row
-		// is what made this hard to diagnose; they agree on the code and on the
-		// wording.
-		if errors.Is(lerr, errWorkspaceSourceTarget) {
-			// The SAME reason seedRequestWorkspace's own arm uses (#656 slice 1):
-			// the two doors already agree on the code and the wording.
-			writeErrorReason(w, http.StatusUnprocessableEntity, reasonWorkspaceSeedSourceTargetInvalid, lerr.Error())
+		if writeSourceLaunchRefusal(w, lerr) {
 			return
 		}
 		// The agent roster: 422, the SAME status run create answers when
@@ -368,11 +385,26 @@ func (s *Server) handleRecordWorkspace(w http.ResponseWriter, r *http.Request) {
 			writeErrorReason(w, http.StatusUnprocessableEntity, reasonAgentNotEnabled, strings.TrimPrefix(lerr.Error(), errAgentNotEnabled.Error()+": "))
 			return
 		}
-		// The model-provider choice: the create door's 422 and sentence, without
-		// its provider/kind/reason fields yet (#797) — the same generic bucket
-		// run_model_provider.go's own non-credential refusals carry.
-		if errors.Is(lerr, errModelProviderRefused) {
-			writeErrorReason(w, http.StatusUnprocessableEntity, string(authz.ReasonModelProviderUnavailable), strings.TrimPrefix(lerr.Error(), errModelProviderRefused.Error()+": "))
+		// The model-provider choice: written by the create door's own writer
+		// (writeProviderChoiceRefusal), so the status, body and authz.denied
+		// row are the ones POST /runs answers for the same choice.
+		var mpRefusal *modelProviderRefusal
+		if errors.As(lerr, &mpRefusal) {
+			s.writeProviderChoiceRefusal(w, r, mpRefusal.choice, mpRefusal.live)
+			return
+		}
+		// A chosen provider's credential that could not be read: the create
+		// door's 503, the provider named in the sentence only.
+		var readErr *modelProviderReadError
+		if errors.As(lerr, &readErr) {
+			slog.ErrorContext(r.Context(), "api: read model provider credential", slog.String("provider", readErr.provider.ID), slog.Any("err", readErr.err))
+			writeError(w, http.StatusServiceUnavailable, readErr.sentence())
+			return
+		}
+		// An unreadable provider block: the bare 503 the create door answers.
+		if errors.Is(lerr, errModelProvidersUnreadable) {
+			slog.ErrorContext(r.Context(), "api: get site config for model-provider choice", slog.Any("err", lerr))
+			writeError(w, http.StatusServiceUnavailable, mpRunUnreadable)
 			return
 		}
 		// Provider admission, the roster refusal's sibling and mapped the
@@ -412,7 +444,7 @@ func (s *Server) handleRecordWorkspace(w http.ResponseWriter, r *http.Request) {
 		// so it reveals nothing a principal who may launch here could not
 		// already see. The sentence is the create path's, verbatim.
 		if errors.Is(lerr, errRecordCeilingLimit) {
-			writeErrorReason(w, http.StatusForbidden, reasonRecordCeilingLimit, strings.TrimPrefix(lerr.Error(), errRecordCeilingLimit.Error()+": "))
+			writeErrorReasonPolicy(w, http.StatusForbidden, reasonRecordCeilingLimit, strings.TrimPrefix(lerr.Error(), errRecordCeilingLimit.Error()+": "), recordCeilingRef(lerr))
 			return
 		}
 		// An unresolvable ceiling is a 403 naming its remedy, not a 500 —
@@ -435,6 +467,9 @@ func (s *Server) handleRecordWorkspace(w http.ResponseWriter, r *http.Request) {
 	if weakCC {
 		auditData["weak_confinement"] = "cc1"
 	}
+	// With the switch on, a launch that stood outside governance (the admin
+	// token, local mode, or the recording exemption) says so.
+	s.markGovernanceExempt(r.Context(), auditData)
 	// The cross-user audit marker, on both emits. workspace_owner.go states the
 	// decision as "the cross-user audit marker every workspace-scoped write
 	// stamps", and warns that "a second copy of the actor != owner comparison is

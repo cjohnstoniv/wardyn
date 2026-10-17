@@ -55,6 +55,12 @@ func newUIMemStore() *uiMemStore {
 	return &uiMemStore{sshMemStore: newSSHMemStore(), tickets: map[string]store.AttachTicket{}}
 }
 
+// GetSiteConfig answers an empty config: a refusal reads the site's policy_help
+// for a contactless leaf, and the embedded fake has no store to ask.
+func (s *uiMemStore) GetSiteConfig(context.Context) (types.SiteConfig, error) {
+	return types.SiteConfig{}, nil
+}
+
 func (s *uiMemStore) MintAttachTicket(_ context.Context, token string, t store.AttachTicket, _, _ time.Time) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -288,7 +294,7 @@ func newUIHarness(t *testing.T, backend http.Handler) *uiHarness {
 // does, for the given principal and role.
 func (h *uiHarness) ticket(runID uuid.UUID, principal, role string) string {
 	h.t.Helper()
-	tok, err := mintAttachTicket(context.Background(), h.store, runID, types.ActorHuman, principal, role, time.Now())
+	tok, err := mintAttachTicket(context.Background(), h.store, runID, types.ActorHuman, principal, role, oidc.Issue{At: time.Now()})
 	if err != nil {
 		h.t.Fatalf("mint ticket: %v", err)
 	}
@@ -532,10 +538,12 @@ func TestUIGateway_UnboundTicketIsByteIdenticalToGarbageTicket(t *testing.T) {
 	}
 }
 
-// TestUIGateway_EnterRejectsNonOwnerTicket: minting is owner-or-admin, but a
-// member CAN hold a ticket for a run they own — the gateway re-checks the
-// ticket's stamped principal/role against the freshly loaded run, exactly as
-// the attach WebSocket does, because this lane runs no auth middleware at all.
+// TestUIGateway_EnterRejectsNonOwnerTicket: a member CAN hold a ticket for a run
+// they own — the gateway re-checks the ticket's stamped principal/role against
+// the freshly loaded run, exactly as the attach WebSocket does, because this
+// lane runs no auth middleware at all. A super admin's ticket for someone
+// else's run is refused too (#1476), with a 403 naming why; on a run with no
+// personal owner it is admitted.
 func TestUIGateway_EnterRejectsNonOwnerTicket(t *testing.T) {
 	h := newUIHarness(t, okBackend())
 	rec := h.enter(url.Values{
@@ -545,14 +553,29 @@ func TestUIGateway_EnterRejectsNonOwnerTicket(t *testing.T) {
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("non-owner ticket: %d %s", rec.Code, rec.Body.String())
 	}
-	// An ADMIN's ticket for someone else's run is accepted (owner-OR-admin,
-	// the same authorization the ticket endpoint itself applies).
+	rec = h.enter(url.Values{
+		"run": {h.run.ID.String()}, "app": {"code"},
+		"ticket": {h.ticket(h.run.ID, "root", oidc.RoleAdmin)},
+	})
+	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), `"reason":"run_owner_only"`) ||
+		!strings.Contains(rec.Body.String(), "only the person who started this run can open it interactively") {
+		t.Fatalf("admin ticket for a person's run: %d %s, want 403 run_owner_only", rec.Code, rec.Body.String())
+	}
+	if cs := setUICookies(rec); len(cs) != 0 {
+		t.Fatalf("a refused admin ticket set a relay cookie: %+v", cs)
+	}
+	if rows := h.audit.auditRows("authz.denied", "denied"); len(rows) != 1 || !strings.Contains(string(rows[0].Data), "run_owner_only") {
+		t.Fatalf("authz.denied rows = %+v, want one run_owner_only", rows)
+	}
+	owned := h.run
+	owned.OperatorOwned = true
+	h.store.putRun(owned)
 	rec = h.enter(url.Values{
 		"run": {h.run.ID.String()}, "app": {"code"},
 		"ticket": {h.ticket(h.run.ID, "root", oidc.RoleAdmin)},
 	})
 	if rec.Code != http.StatusFound {
-		t.Fatalf("admin ticket: %d %s", rec.Code, rec.Body.String())
+		t.Fatalf("admin ticket for an operator-owned run: %d %s", rec.Code, rec.Body.String())
 	}
 }
 
@@ -1268,7 +1291,7 @@ func TestUIGateway_SessionCookieIsSignedAndBounded(t *testing.T) {
 	h := newUIHarness(t, okBackend())
 	now := time.Now()
 	sess := uiSession{Run: h.run.ID, App: "code", Port: uiTestPort, Principal: "alice",
-		Expires: now.Add(time.Hour).Unix(), IssuedAt: now.Unix()}
+		Expires: now.Add(time.Hour).Unix(), IssuedAt: now.Unix(), AuthorizedAt: now.Unix()}
 	value := h.srv.encodeUISession(sess)
 
 	req := func(v string) *http.Request {
@@ -1290,5 +1313,55 @@ func TestUIGateway_SessionCookieIsSignedAndBounded(t *testing.T) {
 	other := New(Config{UIListenAddr: ":8081", UISessionKey: make([]byte, 32)})
 	if _, ok := other.decodeUISession(req(value), now); ok {
 		t.Fatal("a cookie signed under another key was accepted")
+	}
+}
+
+// TestUIGateway_TicketRefusalsAreRateBounded: the refusals that happen before any ticket
+// proves who is asking (a ticket that does not resolve, one with no binding cookie, an enter on the
+// wrong host) write their ui.authorize/denied row only within the shared auth-failure burst, and the
+// drops are counted in wardyn_auth_failed_suppressed_total. The harness clock is not advanced.
+func TestUIGateway_TicketRefusalsAreRateBounded(t *testing.T) {
+	const probes = 20
+	for name, probe := range map[string]func(h *uiHarness){
+		"invalid ticket": func(h *uiHarness) {
+			h.enter(url.Values{"run": {h.run.ID.String()}, "app": {"code"}, "ticket": {"deadbeef"}})
+		},
+		"ticket not bound": func(h *uiHarness) {
+			q := url.Values{"run": {h.run.ID.String()}, "app": {"code"}, "ticket": {"deadbeef"}}
+			h.gateway.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, uiEnterPath+"?"+q.Encode(), nil))
+		},
+		"wrong host": func(h *uiHarness) {
+			q := url.Values{"run": {h.run.ID.String()}, "app": {"code"}, "ticket": {"deadbeef"}}
+			req := h.bound(httptest.NewRequest(http.MethodGet, uiEnterPath+"?"+q.Encode(), nil), q)
+			req.Host = "run-" + uuid.New().String() + ".ui.example.com"
+			h.gateway.ServeHTTP(httptest.NewRecorder(), req)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := newUIHarness(t, okBackend())
+			if name == "wrong host" {
+				h.srv.cfg.UIOriginTemplate = "https://run-{run}.ui.example.com"
+			}
+			for range probes {
+				probe(h)
+			}
+			rows := 0
+			h.audit.mu.Lock()
+			for _, ev := range h.audit.events {
+				if ev.Action == "ui.authorize" && ev.Outcome == "denied" {
+					rows++
+				}
+			}
+			h.audit.mu.Unlock()
+			if rows != int(authFailedBurst) {
+				t.Errorf("%d refusals wrote %d ui.authorize/denied rows, want the burst of %d", probes, rows, int(authFailedBurst))
+			}
+			h.srv.metrics.mu.Lock()
+			suppressed := h.srv.metrics.authFailedSuppressed
+			h.srv.metrics.mu.Unlock()
+			if want := int64(probes - int(authFailedBurst)); suppressed != want {
+				t.Errorf("wardyn_auth_failed_suppressed_total = %d, want %d", suppressed, want)
+			}
+		})
 	}
 }

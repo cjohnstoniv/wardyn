@@ -24,9 +24,10 @@ import type { HarnessLoginPaneHandle } from "../screens/settings/harness-login-p
 import { modelProviderCredentials } from "../../lib/api/model-provider-credentials";
 import { getErrorMessage } from "../../lib/format";
 import type { DoorTarget } from "../../lib/model-access";
+import { modelConnectionCause } from "../../lib/model-connection-cause";
 import type { SetupModelProvider, SetupStatus } from "../../lib/types";
 import { MODEL_ACCESS_BANNER } from "./model-access-copy";
-import { CLAUDE_DOOR, CRED_NOTICE, DOOR, KEY_DOOR, REMOVE_CONFIRM, WRITE_ONLY } from "./copy/door";
+import { CLAUDE_DOOR, CONNECTIONS, CRED_NOTICE, DOOR, KEY_DOOR, REMOVE_CONFIRM, WRITE_ONLY } from "./copy/door";
 
 // Lazy, and that is a gate rather than a nicety: the strip that mounts this is
 // in the shell, and the login pane drags xterm + addon-fit + its stylesheet
@@ -65,6 +66,8 @@ function credNoticeLine2(storage: SetupStatus["credential_storage"]): string {
   switch (storage) {
     case "key_service":
       return CRED_NOTICE.KEY_SERVICE("Vault");
+    case "key_service_key_vault":
+      return CRED_NOTICE.KEY_SERVICE("Key Vault");
     case "vault":
       return CRED_NOTICE.KEK("Vault");
     case "key_vault":
@@ -281,6 +284,8 @@ function removeConfirmBody(storage: SetupStatus["credential_storage"]): string {
 export function DoorDialog({
   target,
   credentialStorage,
+  access,
+  onRecheck,
   focusSeq,
   onCancel,
   onDone,
@@ -288,6 +293,8 @@ export function DoorDialog({
   onCloseAutoFocus,
 }: {
   target: DoorTarget | null;
+  access?: SetupStatus["provider_access"];
+  onRecheck?: () => void | Promise<unknown>;
   /** /setup/status's credential_storage (design F-3) — the key door's
    *  store-mode notice line and remove-confirm retention line key off it.
    *  Undefined reads as local, the same default credNoticeLine2 takes. */
@@ -331,6 +338,30 @@ export function DoorDialog({
     if (focusSeq > 0) document.getElementById(DOOR_ID)?.focus();
   }, [focusSeq]);
 
+  const currentAccess = access?.find((a) => a.provider === t?.provider.id);
+  const rawUnreadable = currentAccess?.state === "not_configured" && currentAccess.cause === "store_unreadable";
+  // A door already showing its sign-in pane or key form keeps it: a later
+  // status refresh that reads the store as unreadable must not unmount the
+  // pane (its sign-in run would keep running, and a recovery would mount a
+  // second pane that starts another). Latched per open target.
+  const doorKey = target ? `${target.kind}:${target.provider.id}` : null;
+  const mountedKey = React.useRef<string | null>(null);
+  const latched = doorKey !== null && mountedKey.current === doorKey;
+  const unreadable = rawUnreadable && !latched;
+  React.useEffect(() => {
+    mountedKey.current = unreadable ? null : doorKey;
+  }, [doorKey, unreadable]);
+  const cause = t && !(rawUnreadable && latched) ? modelConnectionCause(t.provider, currentAccess) : undefined;
+  const wasUnreadable = React.useRef(false);
+  React.useEffect(() => {
+    if (target && wasUnreadable.current && (currentAccess?.state === "live" || currentAccess?.state === "expiring")) onCancel();
+    wasUnreadable.current = target !== null && unreadable;
+  }, [target, currentAccess?.state, unreadable, onCancel]);
+  const [checking, setChecking] = React.useState(false);
+  const recheck = async () => {
+    setChecking(true);
+    try { await onRecheck?.(); } finally { setChecking(false); }
+  };
   const signIn = t && t.kind !== "key" ? t : null;
   return (
     <Dialog
@@ -355,8 +386,12 @@ export function DoorDialog({
             : undefined
         }
       >
-        {t && <DialogTitle>{doorTitle(t, confirmingRemove)}</DialogTitle>}
-        {t?.kind === "key" && target && (
+        {t && <DialogTitle>{unreadable ? CONNECTIONS.COULD_NOT_CHECK : doorTitle(t, confirmingRemove)}</DialogTitle>}
+        {cause && (unreadable
+          ? <DialogDescription>{cause.line}</DialogDescription>
+          : <p className="text-body text-muted-foreground">{cause.line}</p>)}
+        {unreadable && <Button variant="outline" disabled={checking} onClick={() => void recheck()}>{CONNECTIONS.RECHECK}</Button>}
+        {t?.kind === "key" && target && !unreadable && (
           <KeyDoor
             key={t.provider.id}
             target={t}
@@ -368,8 +403,8 @@ export function DoorDialog({
             onRemoved={onRemoved}
           />
         )}
-        {signIn && <SignInHeader target={signIn} />}
-        {signIn && target && (
+        {signIn && !unreadable && <SignInHeader target={signIn} />}
+        {signIn && target && !unreadable && (
           <div className="min-w-0">
             {/* The same mark + spinner App.tsx's RouteFallback shows for a
                 lazy route: a chunk in flight reads as the console still

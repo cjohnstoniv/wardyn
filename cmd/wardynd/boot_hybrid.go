@@ -59,6 +59,8 @@ func bootHybrid(ctx, rootCtx context.Context, orgURL, enrolToken string, secrets
 	if orgURL == "" {
 		return nil, nil
 	}
+	slog.Warn("wardynd: WARDYN_ORG_URL (enrolment into an org control plane) is deprecated and is removed in 1.0; " +
+		"use a client-mode runner claimed by its owner instead (docs/operations/hybrid-laptops.md)")
 	client := federation.NewClient(orgURL)
 	orgHash := federation.OrgURLSHA256(orgURL)
 	boundElsewhere := false

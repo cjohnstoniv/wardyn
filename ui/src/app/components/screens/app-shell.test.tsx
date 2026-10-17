@@ -5,7 +5,7 @@
 
 import * as React from "react";
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 
@@ -14,6 +14,9 @@ import { type Role } from "../wardyn/operator-context";
 import { ThemeProvider } from "../wardyn/theme-provider";
 import { UnsavedGuardProvider } from "../../lib/use-unsaved-guard";
 import { aheadByHours } from "../../lib/test-clock";
+import { ReauthContext, useReauthController } from "../../lib/reauth";
+import { REAUTH_DIALOG, REAUTH_RENEW } from "../../lib/reauth-copy";
+import { RENEW_STRIP_SLOT } from "../../lib/use-session-renew";
 
 // below md the desktop aside is hidden, so this Sheet-based hamburger is
 // the ONLY navigation. These pins fail if the drawer stops opening, drops nav
@@ -32,6 +35,8 @@ function renderMobileNav(role: Role = "admin", memberMode = false) {
             trustDomain: "example.test",
             identityProvider: "spiffe",
             principal: "u@example.test",
+            identityRevision: 0,
+            authGeneration: 0,
             email: "",
             name: "",
             method: "sso",
@@ -39,6 +44,7 @@ function renderMobileNav(role: Role = "admin", memberMode = false) {
             identityResolved: true,
             operator: role === "admin",
             securityOperator: role !== "user",
+            userViewSuperAdmin: false,
             role,
             sessionExpiresAt: null,
             memberLocalDirRoot: null,
@@ -137,24 +143,54 @@ describe("AppShell — session-expiry warning", () => {
     return render(
       <MemoryRouter>
         <ThemeProvider>
-          <AppShell
-            pendingApprovals={0}
-            attentionCount={0}
-            onSignOut={() => {}}
-          />
+          <WithReauth>
+            <AppShell
+              pendingApprovals={0}
+              attentionCount={0}
+              onSignOut={() => {}}
+            />
+          </WithReauth>
         </ThemeProvider>
       </MemoryRouter>,
     );
   }
+  // The real reauth state, as App.tsx provides it: the banner's button starts
+  // a renewal in it, and the shell's lazy layer draws the strip from it.
+  function WithReauth({ children }: { children: React.ReactNode }) {
+    const { reauth } = useReauthController(() => {});
+    return <ReauthContext.Provider value={reauth}>{children}</ReauthContext.Provider>;
+  }
 
-  it("warns and offers a re-auth link when the session is about to die", async () => {
+  it("warns when the session is about to die, and Sign in again renews in place instead of leaving the page", async () => {
+    const popup = { closed: false, close: vi.fn(), opener: window as unknown, location: { href: "" } };
+    const open = vi.fn(() => popup);
+    vi.stubGlobal("open", open);
+    const user = userEvent.setup();
     renderWithMe(aheadByHours(2 / 60)); // 2 minutes
     expect(
       await screen.findByText(/session is expiring soon/i),
     ).toBeInTheDocument();
-    expect(
-      screen.getByRole("link", { name: /sign in again/i }),
-    ).toHaveAttribute("href", "/auth/login");
+    // A button, not a link: nothing here navigates the tab away.
+    expect(screen.queryByRole("link", { name: /sign in again/i })).toBeNull();
+    const again = screen.getByRole("button", { name: REAUTH_RENEW.CTA });
+    expect(again).toHaveAttribute("type", "button");
+
+    // The click itself opens the sign-in window, severed from this page.
+    await user.click(again);
+    expect(open).toHaveBeenCalledWith("about:blank", "wardyn-reauth", expect.any(String));
+    expect(popup.opener).toBeNull();
+    expect(popup.location.href).toBe("/auth/login");
+
+    // The renewal strip stands in the banner's place while it waits…
+    const waiting = await screen.findByText(REAUTH_DIALOG.WAITING);
+    expect(document.getElementById(RENEW_STRIP_SLOT)).toContainElement(waiting);
+    expect(screen.queryByText(/session is expiring soon/i)).toBeNull();
+
+    // …and Cancel closes the window and brings the banner back.
+    await user.click(screen.getByRole("button", { name: REAUTH_RENEW.CANCEL }));
+    expect(await screen.findByText(/session is expiring soon/i)).toBeInTheDocument();
+    expect(screen.queryByText(REAUTH_DIALOG.WAITING)).toBeNull();
+    expect(popup.close).toHaveBeenCalled();
   });
 
   it("stays silent while the session has plenty of time left", async () => {
@@ -426,6 +462,7 @@ describe("MobileNav (below-md nav fallback)", () => {
     for (const label of [
       "Runs",
       "Approvals",
+      "People",
       "Workspaces",
       "Policies",
       "Governance",
@@ -511,6 +548,7 @@ describe("SidebarNav (member role)", () => {
     const labels = [
       "Runs",
       "Approvals",
+      "People",
       "Workspaces",
       "Policies",
       "Governance",
@@ -572,6 +610,8 @@ describe("SidebarNav (member role)", () => {
             trustDomain: "example.test",
             identityProvider: "spiffe",
             principal: "",
+            identityRevision: 0,
+            authGeneration: 0,
             email: "",
             name: "",
             method: "",
@@ -579,6 +619,7 @@ describe("SidebarNav (member role)", () => {
             identityResolved: false,
             operator: true,
             securityOperator: true,
+            userViewSuperAdmin: false,
             role: "admin",
             sessionExpiresAt: null,
             memberLocalDirRoot: null,
@@ -616,11 +657,11 @@ describe("SidebarNav — per view (M-2)", () => {
     return { sheet, labels };
   }
 
-  it("an admin's Admin view: the eyebrow, the eleven items, then Setup and Settings", async () => {
+  it("an admin's Admin view: the eyebrow, the fourteen items, then Setup and Settings", async () => {
     const { sheet, labels } = await open("admin");
     expect(within(sheet).getByText("Admin view", { selector: ".label-eyebrow" })).toBeInTheDocument();
     expect(labels).toEqual([
-      "Runs", "Approvals", "Workspaces", "Policies", "Governance", "Permissions", "Credentials", "User types",
+      "Runs", "Approvals", "People", "Runners", "Workspaces", "Policies", "Templates", "Governance", "Permissions", "Credentials", "User types",
       "Secrets", "Audit", "Recordings", "Setup", "Settings",
     ]);
     expect(within(sheet).getByRole("link", { name: /^Runs/ })).toHaveAttribute("href", "/admin/runs");
@@ -628,19 +669,60 @@ describe("SidebarNav — per view (M-2)", () => {
 
   it("a security admin's Admin view: Credentials, User types and Drives join; Secrets, Recordings, Setup and Settings do not", async () => {
     const { labels } = await open("security_admin");
-    expect(labels).toEqual(["Runs", "Approvals", "Workspaces", "Policies", "Governance", "Permissions", "Credentials", "User types", "Drives", "Audit"]);
+    expect(labels).toEqual(["Runs", "Approvals", "People", "Runners", "Workspaces", "Policies", "Templates", "Governance", "Permissions", "Credentials", "User types", "Drives", "Audit"]);
   });
 
-  it("a user: no eyebrow, three items, then Getting started and Your account", async () => {
+  it("Templates (0.9): after Runs in the User view, after Policies in the Admin view, both admin tiers", async () => {
+    const member = await open("user");
+    expect(member.labels.slice(0, 2)).toEqual(["Runs", "Templates"]);
+    expect(within(member.sheet).getByRole("link", { name: /^Templates/ })).toHaveAttribute("href", "/templates");
+    cleanup();
+    for (const role of ["admin", "security_admin"] as const) {
+      const { sheet, labels } = await open(role);
+      expect(labels.indexOf("Templates")).toBe(labels.indexOf("Policies") + 1);
+      expect(within(sheet).getByRole("link", { name: /^Templates/ })).toHaveAttribute("href", "/admin/templates");
+      cleanup();
+    }
+  });
+
+  it("People (ppl-p2): right after Approvals for the super admin and a security admin; not for a member or an admin in the User view", async () => {
+    for (const role of ["admin", "security_admin"] as const) {
+      const { sheet, labels } = await open(role);
+      expect(labels.slice(0, 3)).toEqual(["Runs", "Approvals", "People"]);
+      expect(within(sheet).getByRole("link", { name: /^People/ })).toHaveAttribute("href", "/admin/people");
+      cleanup();
+    }
+    const member = await open("user");
+    expect(within(member.sheet).queryByRole("link", { name: /^People/ })).toBeNull();
+    cleanup();
+    const userView = await open("admin", true);
+    expect(within(userView.sheet).queryByRole("link", { name: /^People/ })).toBeNull();
+  });
+
+  it("Runners (0.9): right after People for both admin tiers; not for a member or an admin in the User view", async () => {
+    for (const role of ["admin", "security_admin"] as const) {
+      const { sheet, labels } = await open(role);
+      expect(labels.indexOf("Runners")).toBe(labels.indexOf("People") + 1);
+      expect(within(sheet).getByRole("link", { name: /^Runners/ })).toHaveAttribute("href", "/admin/runners");
+      cleanup();
+    }
+    const member = await open("user");
+    expect(within(member.sheet).queryByRole("link", { name: /^Runners/ })).toBeNull();
+    cleanup();
+    const userView = await open("admin", true);
+    expect(within(userView.sheet).queryByRole("link", { name: /^Runners/ })).toBeNull();
+  });
+
+  it("a user: no eyebrow, four items, then Getting started and Your account", async () => {
     const { sheet, labels } = await open("user");
     expect(within(sheet).queryByText("Admin view", { selector: ".label-eyebrow" })).toBeNull();
-    expect(labels).toEqual(["Runs", "Approvals", "Workspaces", "Getting started", "Your account"]);
+    expect(labels).toEqual(["Runs", "Templates", "Approvals", "Workspaces", "Getting started", "Your account"]);
     expect(within(sheet).queryByRole("group", { name: "Console view" })).toBeNull();
   });
 
   it("an admin in the User view gets the user's nav, and the switch tops the sheet", async () => {
     const { sheet, labels } = await open("user", true);
-    expect(labels).toEqual(["Runs", "Approvals", "Workspaces", "Getting started", "Your account"]);
+    expect(labels).toEqual(["Runs", "Templates", "Approvals", "Workspaces", "Getting started", "Your account"]);
     const group = within(sheet).getByRole("group", { name: "Console view" });
     expect(within(group).getByRole("button", { name: "User view" })).toHaveAttribute("aria-pressed", "true");
   });

@@ -8,6 +8,7 @@ import (
 	"crypto/rsa"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -104,6 +105,80 @@ func TestVerifySubjectToken(t *testing.T) {
 			if sess.Sub != "person-sub" || sess.Email != "person@corp.example" || sess.Role == "" || sess.UserType == "" ||
 				len(sess.Groups) != 1 || sess.Groups[0] != "portal-users" || sess.IssuedAt.IsZero() || sess.Expiry.IsZero() {
 				t.Fatalf("admitted session = %+v, want the person with a derived role, type and canonical groups", sess)
+			}
+		})
+	}
+}
+
+// TestVerifySubjectTokenEntraPortalToken: on Entra a token issued to the portal
+// carries a sub pairwise to the portal's own registration, so the exchange acts
+// for the principal the person's own sign-in bound to the token's tenant and
+// object id, or for a person set up by that object id. A token whose identity
+// has no such principal is refused. A token for Wardyn and every other issuer
+// keep their sub.
+func TestVerifySubjectTokenEntraPortalToken(t *testing.T) {
+	const unbound = "subject_token_unbound"
+	portalToken := func(c map[string]any) {
+		c["aud"], c["sub"] = testPortalClient, "portal-pairwise"
+		delete(c, "azp")
+	}
+	for _, tc := range []struct {
+		name     string
+		notEntra bool
+		keying   bool
+		edit     func(map[string]any)
+		gate     *fakeGate
+		wantSub  string
+		want     string
+	}{
+		// Unchanged behaviour.
+		{name: "a token for Wardyn keeps its sub", edit: func(map[string]any) {},
+			gate: &fakeGate{bound: map[string]string{keyObject: "signed-in-sub"}}, wantSub: "person-sub"},
+		{name: "another issuer keeps the portal token's sub", notEntra: true, edit: portalToken,
+			gate: &fakeGate{bound: map[string]string{keyObject: "signed-in-sub"}}, wantSub: "portal-pairwise"},
+		{name: "a person set up by object id who never signed in", keying: true, edit: portalToken,
+			gate: &fakeGate{}, wantSub: keyPerson},
+		{name: "a person set up by object id who has signed in", keying: true, edit: portalToken,
+			gate: &fakeGate{bound: map[string]string{keyObject: keyPerson}}, wantSub: keyPerson},
+		{name: "a deactivated identity", edit: portalToken,
+			gate: &fakeGate{refused: true, bound: map[string]string{keyObject: "signed-in-sub"}}, want: writoidc.DenialIdentityDeactivated},
+		// The principal comes from the identity's binding.
+		{name: "the principal the person's sign-in bound", edit: portalToken,
+			gate: &fakeGate{bound: map[string]string{keyObject: "signed-in-sub"}}, wantSub: "signed-in-sub"},
+		{name: "the binding outranks an object-id person", keying: true, edit: portalToken,
+			gate: &fakeGate{bound: map[string]string{keyObject: "signed-in-sub"}}, wantSub: "signed-in-sub"},
+		{name: "the bound principal is deactivated", edit: portalToken,
+			gate: &fakeGate{deactivated: map[string]bool{"signed-in-sub": true}, bound: map[string]string{keyObject: "signed-in-sub"}},
+			want: writoidc.DenialIdentityDeactivated},
+		{name: "no sign-in has bound the identity", edit: portalToken, gate: &fakeGate{}, want: unbound},
+		{name: "no identity gate", edit: portalToken, want: unbound},
+		{name: "no object id", edit: func(c map[string]any) { portalToken(c); delete(c, "oid") },
+			gate: &fakeGate{bound: map[string]string{"": "signed-in-sub"}}, want: unbound},
+		{name: "no tenant", edit: func(c map[string]any) { portalToken(c); delete(c, "tid") },
+			gate: &fakeGate{bound: map[string]string{keyObject: "signed-in-sub"}}, want: unbound},
+		{name: "the binding cannot be read", edit: portalToken,
+			gate: &fakeGate{boundErr: errors.New("pg down")}, want: "role_check_unavailable"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			env := newIdPEnv(t)
+			auth := env.newRoleMappingAuth(t, nil, writoidc.RoleUser, nil, nil, func(cfg *writoidc.Config) {
+				if tc.gate != nil {
+					cfg.Identities = tc.gate
+				}
+			})
+			if !tc.notEntra {
+				writoidc.SetEntraForTest(auth)
+			}
+			if tc.keying {
+				auth.AttachPersonKeying(&fakeKeying{issuer: env.httpSrv.URL})
+			}
+			c := env.subjectClaims()
+			c["tid"], c["oid"] = keyTenant, keyObject
+			tc.edit(c)
+			r := httptest.NewRequest("POST", "/api/v1/token", nil)
+			sess, denied := auth.VerifySubjectToken(r, env.sign(t, c), testPortalClient, nil)
+			if denied != tc.want || sess.Sub != tc.wantSub {
+				t.Fatalf("exchange = (%q, %q), want (%q, %q)", sess.Sub, denied, tc.wantSub, tc.want)
 			}
 		})
 	}

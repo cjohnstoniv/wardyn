@@ -85,11 +85,13 @@ func TestPG_BootRepairsAChainTriggerBoundToAForeignFunction(t *testing.T) {
 	}
 
 	// And behaviourally: the row is stored as submitted, and chained.
-	var actor, outcome, rowHash string
-	if err := pool.QueryRow(ctx, `INSERT INTO audit_events (id, actor_type, actor, action, outcome)
-		VALUES (gen_random_uuid(), 'human', 'real@example.com', 'test.impostor.chain', 'denied')
-		RETURNING actor, outcome, COALESCE(row_hash, '')`).Scan(&actor, &outcome, &rowHash); err != nil {
+	var seq int64
+	if err := pool.QueryRow(ctx, `SELECT seq FROM audit_append(gen_random_uuid(), now(), NULL, 'human', 'real@example.com', 'test.impostor.chain', '', 'denied', '', NULL)`).Scan(&seq); err != nil {
 		t.Fatalf("append after the restore: %v", err)
+	}
+	var actor, outcome, rowHash string
+	if err := pool.QueryRow(ctx, `SELECT actor, outcome, COALESCE(row_hash, '') FROM audit_events WHERE seq = $1`, seq).Scan(&actor, &outcome, &rowHash); err != nil {
+		t.Fatalf("read back the appended row: %v", err)
 	}
 	if actor != "real@example.com" || outcome != "denied" {
 		t.Errorf("stored actor/outcome = %q/%q, want real@example.com/denied — the impostor is still rewriting rows", actor, outcome)

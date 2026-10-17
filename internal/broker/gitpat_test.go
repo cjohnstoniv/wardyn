@@ -179,6 +179,10 @@ func TestMintGitPAT_FailsClosed(t *testing.T) {
 	// case puts the same pin next to reservedBrokerSecret's own implementation.
 	const providerKeySecret = providerSecretPrefix + "0b6f2c9e-5d7a-4c1b-9a3e-2f8d6b4a1c70-key"
 	secrets.m[providerKeySecret] = []byte("sk-ant-planted-operator-key")
+	// A person's AWS CLI sign-in record: minted, the whole IAM Identity Center
+	// session (refresh token included) would reach the sandbox.
+	const cliSignIn = cliSecretPrefix + "6f0c1d2e-0000-4000-8000-0000000c0a05-sso"
+	secrets.m[cliSignIn] = []byte(`{"access_token":"planted","refresh_token":"planted"}`)
 
 	cases := []struct {
 		name string
@@ -201,6 +205,7 @@ func TestMintGitPAT_FailsClosed(t *testing.T) {
 		{"reserved-ui-session-key", gitPATSpec("github.com", "wardyn-ui-session-key", "")},
 		{"reserved-bedrock-api-key", gitPATSpec("bedrock-runtime.us-east-1.amazonaws.com", "bedrock-api-key", "")},
 		{"reserved-provider-key", gitPATSpec("github.com", providerKeySecret, "")},
+		{"reserved-cli-sign-in", gitPATSpec("github.com", cliSignIn, "")},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

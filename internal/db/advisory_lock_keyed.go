@@ -38,6 +38,60 @@ const SecretRowLockClass int32 = 0x57534543 // ASCII "WSEC"
 // inserts serialize, so the per-run cap it counts is the cap it enforces.
 const PushPathListLockClass int32 = 0x57505054 // ASCII "WPPT"
 
+// RunOutputLockClass is the classid of the TRANSACTION-scoped two-argument
+// lock store.PG's run_outputs writers, readers and erasure take, keyed to one
+// run: an erasure's tombstone and a writer's tombstone check are serialized, so
+// no writer commits a row the erasure has already ruled out. A leaf: taken last
+// inside the one transaction and never held while taking another lock, so it
+// sits outside LockOrder.
+const RunOutputLockClass int32 = 0x57524F55 // ASCII "WROU"
+
+// RecordingLockClass serializes recording fence checks and commits against
+// erasure, keyed to the run's hashtext. A hash collision only serializes two
+// runs; the durable tombstone always names the complete run identity.
+const RecordingLockClass int32 = 0x57524344 // ASCII "WRCD"
+
+// RunCapLockClass is the classid of the TRANSACTION-scoped two-argument lock
+// store.PG.CreateRunUnderCap takes (second key 0): one capped run insert at a
+// time across replicas, so the count it checks is the cap it enforces.
+const RunCapLockClass int32 = 0x57525243 // ASCII "WRRC"
+
+// GovernanceGraphLockClass is the classid of the TRANSACTION-scoped two-argument lock
+// store.PG.WriteGovernanceProfile and DeleteGovernanceProfile take (second key 0): one write to the
+// governance profile graph at a time, so the cycle and depth checks they make are the ones the
+// stored graph keeps.
+const GovernanceGraphLockClass int32 = 0x57474750 // ASCII "WGGP"
+
+// GovernanceAssignmentLockClass is the classid of the TRANSACTION-scoped two-argument lock keyed to one
+// governance assignment's natural key (hashtext of subject_type and subject). The assignment upsert and
+// the approval of a held assignment change both take it, so a create that was absent when it was
+// proposed cannot be overwritten by an upsert that landed in between.
+const GovernanceAssignmentLockClass int32 = 0x57474153 // ASCII "WGAS"
+
+// GovernanceTargetLockClass is the classid of the TRANSACTION-scoped two-argument lock keyed to one
+// target of a held governance change (hashtext of the kind and its natural key), for the kinds whose
+// row may be absent: a capability grant, a restriction, the enforcement map, a role mapping. The direct
+// write and the approval of a held change to that target both take it, so a write that landed between
+// the approval's staleness check and its own write cannot be overwritten.
+const GovernanceTargetLockClass int32 = 0x57474754 // ASCII "WGGT"
+
+// KeyDomainAssignmentLockClass is the classid of the TRANSACTION-scoped two-argument lock (second key
+// 0) every key-domain assignment write takes, the direct write and the approval of a held one alike:
+// one write at a time, so the membership check a set makes (two groups of one person in different
+// domains) sees every assignment written before it, including another group's.
+const KeyDomainAssignmentLockClass int32 = 0x574B4441 // ASCII "WKDA"
+
+// RevocationOrderLockClass is the classid of the two-argument advisory lock (second key 0) that orders
+// a credential's issue against a revocation cut. A cut holds it exclusively, from before its sequence
+// value is drawn until it commits; an issuer takes it shared while it reads the sequence, so the value
+// read never sits below a cut that commits afterwards.
+const RevocationOrderLockClass int32 = 0x57525351 // ASCII "WRSQ"
+
+// MemberDriveLockClass is the classid of the TRANSACTION-scoped two-argument lock (second key: one
+// owner's subject folded with crc32) store.CreateMemberDrive takes around its per-person count and
+// insert, so two creates by one person cannot both pass the count.
+const MemberDriveLockClass int32 = 0x574D4452 // ASCII "WMDR"
+
 // LoginSupersedeLockWait is the TOTAL budget one caller spends trying to take
 // a keyed lock before being REFUSED (retry) rather than let through unlocked;
 // only ErrAdvisoryLockNoCapacity proceeds unlocked. Matches
@@ -46,9 +100,10 @@ const PushPathListLockClass int32 = 0x57505054 // ASCII "WPPT"
 var LoginSupersedeLockWait = 5 * time.Second
 
 // ErrAdvisoryLockNoCapacity is AdvisoryLockKeyed's one STRUCTURAL refusal: the
-// pool can't spare advisoryLockFreeConnsNeeded connections (every call, on a
-// pool at the documented floor of 2). The caller proceeds unlocked and audits
-// it; every other error is a wait or a database fault, and refuses.
+// pool can't spare advisoryLockFreeConnsNeeded connections (every call at
+// pool_max_conns=1; transiently on a busy larger pool). The caller proceeds
+// unlocked and audits it; every other error is a wait or a database fault, and
+// refuses.
 var ErrAdvisoryLockNoCapacity = errors.New("db: pool cannot spare a connection for an advisory lock")
 
 // advisoryLockAcquireWait bounds the POOL ACQUIRE specifically: Acquire on an
@@ -60,7 +115,10 @@ const advisoryLockAcquireWait = 250 * time.Millisecond
 // advisoryLockFreeConnsNeeded: connections the pool must have spare before a
 // keyed lock is taken at all — ONE for the hold, one more for the guarded
 // work (which needs the pool again while the hold is live). Without this
-// check the lock self-deadlocks at the documented minimum pool size (2).
+// check a hold that takes the pool's last free connection leaves the guarded
+// work waiting on the pool: forever at pool_max_conns=1, a self-deadlock, and
+// at the documented minimum of 4 (docs/ENV.md, WARDYN_PG_DSN) for as long as
+// the other three stay out.
 // A racy snapshot, acceptable only because advisoryLockGate caps this process
 // at one hold and advisoryLockAcquireWait bounds any other race to 250ms.
 const advisoryLockFreeConnsNeeded = 2

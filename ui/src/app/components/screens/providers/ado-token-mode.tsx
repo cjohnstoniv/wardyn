@@ -18,6 +18,7 @@ import { ADO_PAT } from "../../../lib/ado-pat-copy";
 import { adoCapName } from "../../../lib/ado-access-copy";
 import { adoTokenMode, formatClock, orgCheckView, patDaysOk, patHoursOk } from "../../../lib/ado-pat-display";
 import { useAdoOrgCheck } from "../../../lib/hooks/use-ado-org-check";
+import { useAdoPatRefusal } from "../../../lib/hooks/use-ado-pat-refusal";
 import type { ADOOrgCheck } from "../../../lib/types/ado-pat";
 import { usePrincipal } from "../../wardyn/operator-context";
 import { Button } from "../../ui/button";
@@ -178,6 +179,10 @@ export function AdoTokenMode({
   const pick = (m: Mode) => set({ token_mode: m === "bearer" ? undefined : m });
 
   const view = check ? orgCheckView(check) : null;
+  // The banner's person: the admin when their own check was refused, else the
+  // person the server reports as refused on this row in the last seven days.
+  const refused = useAdoPatRefusal(row.id, operator);
+  const blockedPerson = view?.blocked ? person : mode === "minted_pat" ? refused?.person : undefined;
   // Entra sign-in while the app still holds the token permissions: known from
   // the last check, or from the server refusing this very Save.
   const bearerBlocked = mode === "bearer" && (view?.permissions === "granted" || refusal?.endsWith(ADO_PAT.BEARER_WITH_TOKEN_PERMS));
@@ -186,9 +191,9 @@ export function AdoTokenMode({
   return (
     <div data-testid="ado-token-mode">
       <h4 className="text-sm font-medium text-foreground">{ADO_PAT.SECTION_TITLE}</h4>
-      {view?.blocked && (
+      {blockedPerson && (
         <Alert>
-          <span>{ADO_PAT.POLICY_BANNER(person)}</span>
+          <span>{ADO_PAT.POLICY_BANNER(blockedPerson)}</span>
           {operator && mode !== "bearer" && (
             <div className="mt-2">
               <Button size="sm" variant="outline" onClick={() => pick("bearer")}>

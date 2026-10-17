@@ -28,7 +28,9 @@ name: Publish wardynd image
 # HEAD under that old tag (acceptable: 0.4.4 is main's lineage). Manually
 # dispatching this workflow AGAINST a v0.4.5+ tag ref still works too
 # (github.ref_type reads "tag" exactly as a push would) — it is simply no
-# longer the AUTOMATIC path for one.
+# longer the AUTOMATIC path for one. ci.yml has no push run on release/**
+# (#1461), so a dispatch on a tag that exists only on release/X.Y finds no push
+# run and skips; that fails closed.
 #
 # Deliberately its OWN workflow file, not a job on ci.yml: ci.yml's push
 # trigger only ever matched branches (main/master), never tags, and widening
@@ -87,9 +89,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
-          # Only the triggering branch's runs: a release fast-forwards the same
-          # commit onto release/X.Y, whose run may still be going. Empty on a
-          # dispatch against a tag ref, which counts every branch's runs.
+          # Only the triggering branch's runs, so a run of the same commit on
+          # another branch (feature/**, master) never decides main's :latest.
+          # ci.yml no longer runs on release/** pushes (#1461): a release is
+          # judged by tree in release.yml, not here. Empty on a dispatch against
+          # a tag ref, which counts every branch's runs.
           BRANCH: ${{ github.event.workflow_run.head_branch || (github.ref_type == 'branch' && github.ref_name) || '' }}
         run: |
           rc=0
@@ -106,6 +110,8 @@ jobs:
     if: needs.gate.outputs.green == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    env:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
     steps:
       # The commit CI passed on, not the branch tip: under workflow_run,
       # github.sha is main's tip at the time this run started.
@@ -118,6 +124,12 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Log in to Docker Hub (skipped when the secret is absent, e.g. a fork)
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        if: env.DOCKERHUB_USERNAME != ''
+        with:
+          username: ${{ env.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
       # Tags: always a short-sha; "latest" added on main; the bare semver
       # (v-prefix stripped, matching Chart.yaml's appVersion) added on a
       # vX.Y.Z tag. Hand-rolled in a few lines rather than pulling in

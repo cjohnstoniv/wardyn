@@ -31,7 +31,7 @@ func TestNewLocal_RefusesUnderFIPSOnly(t *testing.T) {
 		if err == nil {
 			t.Fatalf("NewLocal derived %s under fips140=only", l.ID())
 		}
-		if !strings.Contains(err.Error(), "WARDYN_SECRET_STORE=vaultkv") {
+		if !strings.Contains(err.Error(), "WARDYN_KEK=transit") {
 			t.Fatalf("the refusal does not name the FIPS-only way out: %v", err)
 		}
 	}

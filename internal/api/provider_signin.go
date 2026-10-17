@@ -16,6 +16,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"slices"
 	"strings"
@@ -23,6 +24,8 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/authz"
+	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -55,11 +58,17 @@ type loginTarget struct {
 	scope    awsSSOScope
 	provider *types.ModelProvider
 	model    string // signInModel's, on the provider door
+	// cliComponent is the AWS CLI org row a sign-in through its own door is
+	// for (cli_aws_signin.go); the capture lands under that row's id.
+	cliComponent string
 }
 
-// stampProvider adds the provider half of harness.login.start (the stamp an
-// upload binds to): nothing on the legacy door.
+// stampProvider adds the provider or CLI row half of harness.login.start (the
+// stamp an upload binds to).
 func (t loginTarget) stampProvider(stamp map[string]any) {
+	if t.cliComponent != "" {
+		stamp["cli_component_id"], stamp["sso_region"] = t.cliComponent, t.region
+	}
 	if t.provider == nil {
 		return
 	}
@@ -110,13 +119,16 @@ func reauthScopeForRun(sc types.SiteConfig, run types.AgentRun, owner string) (a
 
 // storeProviderSignIn stores an AWS provider sign-in only while its provider
 // is still the one the sign-in was launched for: same UID and kind, same
-// address (rule 8's, digested), region, portal and pin. Under siteConfigMu,
+// address (rule 8's, digested), region, portal and pin. Under the site-config lock,
 // which rule 8's purge also holds, so a purge can never land between the check
 // and the write and leave a session behind for an old address. changed=true:
 // refused, nothing stored.
 func (s *Server) storeProviderSignIn(ctx context.Context, stamp loginRunStamp, scope awsSSOScope, blob awsSSOBlob) (bool, error) {
-	s.siteConfigMu.Lock()
-	defer s.siteConfigMu.Unlock()
+	ctx, unlock, err := s.lock(ctx, db.SiteConfigLockClass)
+	if err != nil {
+		return false, err
+	}
+	defer unlock()
 	sc, err := s.cfg.Store.GetSiteConfig(ctx)
 	if err != nil {
 		return false, fmt.Errorf("read model providers: %w", err)
@@ -235,7 +247,7 @@ func (s *Server) handleProviderSignIn(w http.ResponseWriter, r *http.Request) {
 	run, dispatch, err := s.launchHarnessLoginRun(r.Context(), actor, hl, t)
 	if err != nil {
 		if errors.Is(err, errRecordCeilingLimit) {
-			writeErrorReason(w, http.StatusForbidden, reasonRecordCeilingLimit, strings.TrimPrefix(err.Error(), errRecordCeilingLimit.Error()+": "))
+			writeErrorReasonPolicy(w, http.StatusForbidden, reasonRecordCeilingLimit, strings.TrimPrefix(err.Error(), errRecordCeilingLimit.Error()+": "), recordCeilingRef(err))
 			return
 		}
 		if errors.Is(err, errSignInBusy) {
@@ -273,6 +285,10 @@ func (s *Server) handleProviderSignInCapture(w http.ResponseWriter, r *http.Requ
 	if owner == "" {
 		return
 	}
+	r, ok := s.beginRequestWrite(w, r, owner)
+	if !ok {
+		return
+	}
 	var body providerSignInCapture
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<10)).Decode(&body); err != nil {
 		writeErrorReason(w, http.StatusBadRequest, reasonProviderSignInCaptureBodyInvalid, mpsCaptureBody)
@@ -284,10 +300,13 @@ func (s *Server) handleProviderSignInCapture(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	token := strings.TrimSpace(body.Token)
-	// Under siteConfigMu, like the key door: the UID read here is still the
+	// Under the site-config lock, like the key door: the UID read here is still the
 	// provider's when the write lands, since rule 8's purge holds it too.
-	s.siteConfigMu.Lock()
-	defer s.siteConfigMu.Unlock()
+	r, unlock, ok := s.lockDoor(w, r, db.SiteConfigLockClass)
+	if !ok {
+		return
+	}
+	defer unlock()
 	sc, err := s.cfg.Store.GetSiteConfig(r.Context())
 	if err != nil {
 		writeErrorReason(w, http.StatusServiceUnavailable, reasonProviderSignInConfigUnreadable, mpsUnreadable)
@@ -314,14 +333,19 @@ func (s *Server) handleProviderSignInCapture(w http.ResponseWriter, r *http.Requ
 	}
 	name := providerSecretName(p.UID, providerOAuthPart)
 	raw, _ := json.Marshal(managedCredBlob{Token: token, CapturedAt: s.cfg.Now().UTC(), SourceRunID: runID.String()})
-	if err := s.cfg.Secrets.For(owner).Put(r.Context(), name, raw); err != nil {
+	// Masked for the sign-in run's own capture only, not process-wide: the
+	// bytes are the caller's choice (the prefix guard is shape, not proof), and
+	// the sink masks the token for every run it is injected into. Recorded
+	// before it is stored, so a token that cannot be masked is never kept.
+	if err := s.maskInjected(runID, []byte(token)); err != nil {
+		slog.WarnContext(r.Context(), "wardynd: a pasted sign-in token could not be recorded for masking", slog.Any("err", err))
+		writeErrorReason(w, authz.EffectUnavailable.Status(), string(authz.ReasonMaskStateUnavailable), maskStateSentence)
+		return
+	}
+	if err := s.putOwned(r.Context(), owner, func(ctx context.Context) error { return s.cfg.Secrets.For(owner).Put(ctx, name, raw) }); err != nil {
 		writeServerError(w, r, "store model provider sign-in", err)
 		return
 	}
-	// Masked for the sign-in run's own capture only, not process-wide: the
-	// bytes are the caller's choice (the prefix guard is shape, not proof), and
-	// the sink masks the token for every run it is injected into.
-	s.cfg.MaskRegistry.Add(runID, []byte(token))
 	s.recordAudit(r.Context(), s.auditEvent(&runID, actorTypeFromRequest(r), principalFromRequest(r),
 		"harness.credential.capture", name, "success", mustJSON(map[string]any{
 			"provider": hl.provider, "source": "paste", "owner": owner,

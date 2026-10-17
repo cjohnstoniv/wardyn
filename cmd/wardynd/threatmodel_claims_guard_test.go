@@ -49,7 +49,7 @@ var (
 	capKindsDecl  = regexp.MustCompile(`(?m)^var capabilityKinds = \[\]string\{([^}]*)\}`)
 	capKindConst  = regexp.MustCompile(`(?m)^\t(cap[A-Za-z]+) = "([a-z_]+)"`)
 	closedKindsRe = regexp.MustCompile(`(?m)^(One|Two|Three|Four|Five|Six|Seven|Eight|Nine|Ten) closed kinds`)
-	// docs/OPERATIONS.md's "**The ten kinds**" heading and its wildcard sentence.
+	// docs/operations/capabilities.md's "**The ten kinds**" heading and its wildcard sentence.
 	opsKindsHeadRe     = regexp.MustCompile(`\*\*The ([a-z]+) kinds\*\*`)
 	opsKindsWildcardRe = regexp.MustCompile("`\\*` as a value matches everything of that kind, spelled the same way for all\\s+([a-z]+)\\.")
 )
@@ -93,11 +93,11 @@ func TestThreatModelDocCapabilityKindsMatchCode(t *testing.T) {
 			t.Errorf("capability kind %q ships in capabilityKinds but is named nowhere in threatmodel/THREAT-MODEL.md", k)
 		}
 	}
-	// OPERATIONS' capability table states the count twice, in words.
-	ops := readRepoFile(t, "docs/OPERATIONS.md")
+	// The capability table states the count twice, in words.
+	ops := readRepoFile(t, "docs/operations/capabilities.md")
 	for _, re := range []*regexp.Regexp{opsKindsHeadRe, opsKindsWildcardRe} {
 		if got := re.FindStringSubmatch(ops); got == nil || !strings.EqualFold(got[1], want) {
-			t.Errorf("docs/OPERATIONS.md %s: got %q, want %q — internal/api/capabilities.go ships %d kinds", re, got, want, len(kinds))
+			t.Errorf("docs/operations/capabilities.md %s: got %q, want %q — internal/api/capabilities.go ships %d kinds", re, got, want, len(kinds))
 		}
 	}
 	// The §4 attack row states the same number in words; it drifted separately.
@@ -674,11 +674,14 @@ func TestAgentThreatModelDocResourceCaps(t *testing.T) {
 	}
 	lifecycle := readRepoFile(t, "internal/lifecycle/lifecycle.go")
 	def := readRepoFile(t, "examples/policies/default.json")
+	m := regexp.MustCompile(`"auto_stop_after_sec":\s*(-?\d+)`).FindStringSubmatch(def)
+	if m == nil {
+		t.Fatal("examples/policies/default.json no longer sets auto_stop_after_sec; update row 14 and this guard")
+	}
 	if strings.Contains(lifecycle, "if run.PolicyAutoStopAfterSec <= 0 {") &&
-		strings.Contains(def, `"auto_stop_after_sec": 0`) &&
-		strings.Contains(doc, "run lifetime is bounded") {
-		t.Error("AGENT-THREAT-MODEL.md row 14 says run lifetime is bounded; the reaper skips every run whose " +
-			"policy sets auto_stop_after_sec <= 0, and the shipped default policy sets 0")
+		!strings.Contains(doc, "the shipped default policy sets it to `"+m[1]+"`") {
+		t.Errorf("AGENT-THREAT-MODEL.md row 14 must say the shipped default policy sets auto_stop_after_sec "+
+			"to `%s` (examples/policies/default.json)", m[1])
 	}
 }
 

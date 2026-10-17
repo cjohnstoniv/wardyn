@@ -51,6 +51,15 @@ type harnessDef struct {
 	// NoManagedAuth marks the BYOA row: Wardyn wires no model credential at
 	// all and the image authenticates however it likes.
 	NoManagedAuth bool
+
+	// PublishedCLIImage: Wardyn publishes a convention image that carries this
+	// harness's CLI, so it is installed with no operator image (harnessInstalled).
+	PublishedCLIImage bool
+
+	// ApprovalHold: Wardyn can hold this harness's tool calls for approval when
+	// it starts the harness on an autonomous run (an external tool-approval
+	// contract).
+	ApprovalHold bool
 }
 
 // Tool-impossibility copy canon, verbatim from the Integrations screen mock
@@ -79,7 +88,7 @@ var harnessCatalog = []harnessDef{
 		// names it in WARDYN_AGENT_IMAGES, which is consulted FIRST and is keyed
 		// by agent name — so this changes nothing for them. See loginImageKey
 		// below for the one lane that must not follow this re-point.
-		ID: "claude-code", Display: "Claude Code", ImageKey: "base",
+		ID: "claude-code", Display: "Claude Code", ImageKey: "base", ApprovalHold: true,
 		Gateway: &llmProvider{host: "api.anthropic.com", header: "x-api-key", format: "%s", secret: "anthropic-api-key"},
 		Login: &harnessLogin{
 			provider: "anthropic",
@@ -109,10 +118,12 @@ var harnessCatalog = []harnessDef{
 			"bedrock_sso":     "",
 			"bedrock_bearer":  "",
 			"custom_endpoint": "",
+			// Which route this harness may use is the row's (validateProviderAzure), not the catalog's.
+			"azure_foundry": "",
 		},
 	},
 	{
-		ID: "codex-cli", Display: "Codex CLI", ImageKey: "codex-cli",
+		ID: "codex-cli", Display: "Codex CLI", ImageKey: "codex-cli", PublishedCLIImage: true,
 		Gateway: &llmProvider{host: "api.openai.com", header: "Authorization", format: "Bearer %s", secret: "openai-api-key"},
 		// No container-login convention yet (v2 seam: ~/.codex/auth.json capture
 		// + a chatgpt.com sink — see the harnessLogin type doc in harnesscred.go).
@@ -124,6 +135,7 @@ var harnessCatalog = []harnessDef{
 			"bedrock_sso":            reasonXBedrockCodex,
 			"bedrock_bearer":         reasonXBedrockCodex,
 			"custom_endpoint":        "",
+			"azure_foundry":          "",
 		},
 	},
 	{

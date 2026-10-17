@@ -18,10 +18,10 @@
 # auto-download of a newer toolchain — the corporate / air-gapped posture — so a Go
 # older than a repo's `go` directive does not degrade, it FAILS: "go.mod requires
 # go >= 1.26 (running go 1.23.5; GOTOOLCHAIN=local)". Keep this at or above the
-# `toolchain` line of the repos you build (this digest is go1.27; wardyn itself
-# pins toolchain go1.26.6). Bump the pin rather than relaxing GOTOOLCHAIN.
-FROM golang:1.27@sha256:4013ae0f9e7994f8535c58c811f8f863fbed38b72e0d51e6592156f758d66146 AS goroot
-FROM rust:1.98.0-slim-bookworm@sha256:1469a27c125cb5a3aebfa4f4e4665d935b02fb72cc093b2c974b3d740e43f157 AS rustroot
+# `toolchain` line of the repos you build (this digest is go1.27.2; wardyn itself
+# pins toolchain go1.26.9). Bump the pin rather than relaxing GOTOOLCHAIN.
+FROM golang:1.27.2@sha256:5bc7f572bbaa98885a3a1fd9c0aa76b59e3e14e8628bfc316bbfd0c701e4818c AS goroot
+FROM rust:1.98.1-slim-trixie@sha256:4cd829461bd5c4d511c32e269da9cb8929223b666519d8004e35fc8d1d771ab7 AS rustroot
 
 # Not digest-pinned: this is a locally-built image tag (produced by
 # deploy/images/claude-code/Dockerfile), not a registry image — it has no
@@ -32,7 +32,8 @@ FROM wardyn/agent-claude-code:local
 # scripts/check-image-pins.sh keeps it out). The licences label extends the
 # inherited base expression with what THIS stage adds: Go (BSD-3-Clause),
 # Rust (MIT OR Apache-2.0), CPython (PSF-2.0), Temurin JDK (GPL-2.0 WITH
-# Classpath-exception-2.0), Maven (Apache-2.0), build-essential (GPL).
+# Classpath-exception-2.0), Maven (Apache-2.0), build-essential (GPL), the
+# Azure CLI (MIT).
 LABEL org.opencontainers.image.title="agent-full" \
       org.opencontainers.image.description="Wardyn agent image: claude-code plus full language toolchains (local build only)" \
       org.opencontainers.image.licenses="Apache-2.0 AND GPL-3.0-or-later AND BSD-3-Clause AND MIT AND PSF-2.0 AND GPL-2.0-only WITH Classpath-exception-2.0 AND LicenseRef-Anthropic-Terms" \
@@ -87,10 +88,45 @@ RUN if [ -n "$NPM_REGISTRY" ]; then npm config set registry "$NPM_REGISTRY"; fi;
 # JDK 21 (Temurin) + Maven, for jsoup (needs 21) and JVM projects generally.
 RUN install -d /etc/apt/keyrings \
     && wget -qO - https://packages.adoptium.net/artifactory/api/gpg/key/public | gpg --dearmor -o /etc/apt/keyrings/adoptium.gpg \
-    && echo "deb [signed-by=/etc/apt/keyrings/adoptium.gpg] https://packages.adoptium.net/artifactory/deb bookworm main" > /etc/apt/sources.list.d/adoptium.list \
+    && echo "deb [signed-by=/etc/apt/keyrings/adoptium.gpg] https://packages.adoptium.net/artifactory/deb trixie main" > /etc/apt/sources.list.d/adoptium.list \
     && apt-get update && apt-get install -y --no-install-recommends temurin-21-jdk maven \
     && rm -rf /var/lib/apt/lists/*
 ENV JAVA_HOME=/usr/lib/jvm/temurin-21-jdk-amd64
+
+# ── Azure CLI (az) (the Azure CLI component, cli.kind azure) ─────────────────
+# From Microsoft's apt repository. The repository's signing key is checked by
+# FINGERPRINT (Microsoft (Release signing), key id EB3E94ADBE1229CF) rather than
+# by a digest of the key file, which changes whenever Microsoft re-exports the
+# key; a key that is not that one, or a file carrying a second key, fails the
+# build. signed-by makes the key vouch for this repository alone, and the
+# version is pinned: a bump moves AZURE_CLI_VERSION here and in every other
+# image that carries this block (scripts/test-image-recipes.py fails when the
+# copies drift). The suite is bookworm on this trixie base: Microsoft publishes
+# azure-cli for bookworm and for no later Debian release, and the package
+# carries its own Python, so it installs and runs here unchanged. gnupg and
+# wget are removed again unless the image already had them. az gets no Azure
+# credential here or at run time: a run with an Azure CLI component gets a
+# profile and an inert token cache, and wardyn-proxy adds the token to each
+# request it lets through.
+ARG AZURE_CLI_VERSION=2.91.0
+RUN set -eu; \
+    had_gpg=1; command -v gpg >/dev/null || had_gpg=0; \
+    had_wget=1; command -v wget >/dev/null || had_wget=0; \
+    apt-get update; apt-get install -y --no-install-recommends ca-certificates gnupg wget; \
+    install -d /etc/apt/keyrings; export GNUPGHOME=/tmp/az-gnupg; install -d -m 0700 "$GNUPGHOME"; \
+    wget -qO /tmp/microsoft.asc https://packages.microsoft.com/keys/microsoft.asc; \
+    keys="$(gpg --show-keys --with-colons /tmp/microsoft.asc)"; \
+    [ "$(printf '%s\n' "$keys" | grep -c '^pub:')" = 1 ] || { echo "Microsoft's package signing key file does not hold exactly one key" >&2; exit 1; }; \
+    fpr="$(printf '%s\n' "$keys" | awk -F: '$1 == "fpr" { print $10; exit }')"; \
+    [ "$fpr" = "BC528686B50D79E339D3721CEB3E94ADBE1229CF" ] || { echo "Microsoft's package signing key is not the pinned one: $fpr" >&2; exit 1; }; \
+    gpg --dearmor -o /etc/apt/keyrings/microsoft.gpg /tmp/microsoft.asc; \
+    rm -rf /tmp/microsoft.asc "$GNUPGHOME"; \
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/microsoft.gpg] https://packages.microsoft.com/repos/azure-cli/ bookworm main" > /etc/apt/sources.list.d/azure-cli.list; \
+    apt-get update; apt-get install -y --no-install-recommends "azure-cli=${AZURE_CLI_VERSION}-1~bookworm"; \
+    [ "$had_gpg" = 1 ] || apt-get purge -y --auto-remove gnupg; \
+    [ "$had_wget" = 1 ] || apt-get purge -y --auto-remove wget; \
+    rm -rf /var/lib/apt/lists/*; \
+    command -v az
 
 # Rust (from the rustroot stage, into a world-writable shared location so the
 # uid-1000 agent can build; the base image runs as USER agent with no root exec to

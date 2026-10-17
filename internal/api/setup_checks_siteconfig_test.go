@@ -11,7 +11,7 @@ import (
 
 // statusCheck returns the row siteConfigStatusChecks emits for id, if any.
 func statusCheck(sc types.SiteConfig, id string) (SetupCheck, bool) {
-	for _, c := range siteConfigStatusChecks(nil, sc, nil) {
+	for _, c := range siteConfigStatusChecks(nil, sc, nil, nil) {
 		if c.ID == id {
 			return c, true
 		}

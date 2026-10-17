@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/coreos/go-oidc/v3/oidc/oidctest"
 
@@ -54,6 +55,7 @@ func defaultRoleBootFlags(issuerURL, defaultRole string) *bootFlags {
 	oidcInternalIss, oidcClientID, oidcClientSecret := "", "test-client", ""
 	oidcRedirectURL := "http://localhost/auth/callback"
 	oidcEmailDomains, oidcRoleMap := "", ""
+	oidcRequireEmailVerified := false
 	oidcExtraScopes := ""
 	oidcOperatorEmails := "ops@example.com"
 	allowOIDCNoOperatorList, localMode, memberMode, ssoOnly := false, false, false, false
@@ -61,36 +63,40 @@ func defaultRoleBootFlags(issuerURL, defaultRole string) *bootFlags {
 	envbuild, scanAIAdvisor := false, false
 	sshListen, uiListen := "", ""
 	adminToken := ""
+	var roleStampTTL, oidcSessionTTL time.Duration
 	controlURL := "http://127.0.0.1:8080" // loopback: no internal CA to mint
 	basePath := ""
 	return &bootFlags{
-		basePath:                &basePath,
-		recordingSel:            &recordingSel,
-		recordingDir:            &recordingDir,
-		oidcIssuer:              &issuerURL,
-		oidcInternalIss:         &oidcInternalIss,
-		oidcClientID:            &oidcClientID,
-		oidcClientSecret:        &oidcClientSecret,
-		oidcRedirectURL:         &oidcRedirectURL,
-		oidcEmailDomains:        &oidcEmailDomains,
-		oidcExtraScopes:         &oidcExtraScopes,
-		oidcOperatorEmails:      &oidcOperatorEmails,
-		allowOIDCNoOperatorList: &allowOIDCNoOperatorList,
-		oidcRoleMap:             &oidcRoleMap,
-		oidcDefaultRole:         &defaultRole,
-		adminToken:              &adminToken,
-		localMode:               &localMode,
-		memberMode:              &memberMode,
-		ssoOnly:                 &ssoOnly,
-		dirProvider:             &dirProvider,
-		dirTenant:               &dirTenant,
-		dirClientID:             &dirClientID,
-		dirSecret:               &dirSecret,
-		envbuild:                &envbuild,
-		scanAIAdvisor:           &scanAIAdvisor,
-		sshListen:               &sshListen,
-		uiListen:                &uiListen,
-		controlURL:              &controlURL,
+		basePath:                 &basePath,
+		recordingSel:             &recordingSel,
+		recordingDir:             &recordingDir,
+		oidcIssuer:               &issuerURL,
+		oidcInternalIss:          &oidcInternalIss,
+		oidcClientID:             &oidcClientID,
+		oidcClientSecret:         &oidcClientSecret,
+		oidcRedirectURL:          &oidcRedirectURL,
+		oidcEmailDomains:         &oidcEmailDomains,
+		oidcRequireEmailVerified: &oidcRequireEmailVerified,
+		oidcExtraScopes:          &oidcExtraScopes,
+		oidcOperatorEmails:       &oidcOperatorEmails,
+		allowOIDCNoOperatorList:  &allowOIDCNoOperatorList,
+		oidcRoleMap:              &oidcRoleMap,
+		oidcDefaultRole:          &defaultRole,
+		adminToken:               &adminToken,
+		localMode:                &localMode,
+		memberMode:               &memberMode,
+		ssoOnly:                  &ssoOnly,
+		dirProvider:              &dirProvider,
+		dirTenant:                &dirTenant,
+		dirClientID:              &dirClientID,
+		dirSecret:                &dirSecret,
+		envbuild:                 &envbuild,
+		scanAIAdvisor:            &scanAIAdvisor,
+		sshListen:                &sshListen,
+		uiListen:                 &uiListen,
+		controlURL:               &controlURL,
+		roleStampTTL:             &roleStampTTL,
+		oidcSessionTTL:           &oidcSessionTTL,
 	}
 }
 

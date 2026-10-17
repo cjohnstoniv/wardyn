@@ -200,18 +200,6 @@ func withHumanIdentity(ctx context.Context, sub, email, role, userType string, g
 	return withOIDCGroups(ctx, groups)
 }
 
-// errorBody is the uniform JSON error envelope.
-type errorBody struct {
-	Error  string `json:"error"`
-	Reason string `json:"reason,omitempty"` // machine-readable refusal class; the SDK exposes it as APIError.Reason; coverage phased in under #204
-	// Provider and Kind (#532) name the model provider a run.create/Review 422
-	// is ABOUT, so the console can open the door of that provider instead of
-	// guessing from the roster. Present only on a model-provider refusal whose
-	// provider is known — never on an unrelated 4xx.
-	Provider string `json:"provider,omitempty"`
-	Kind     string `json:"kind,omitempty"`
-}
-
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
@@ -395,6 +383,12 @@ func (s *Server) humanOrAdminAuth(next http.Handler) http.Handler {
 					return
 				}
 			}
+			// The attribution override never names a mechanism principal (the admin token, a device, a portal,
+			// a service identity, a person's audit subject): it is dropped and the configured seat answers.
+			// "local:" names stay: they are the seat's own family, and the dev override's documented use.
+			if h := localPrincipalOverride(r); h != "" && s.isReservedPrincipal(h) && !strings.HasPrefix(strings.ToLower(h), "local:") {
+				r.Header.Del("X-Wardyn-Principal")
+			}
 			next.ServeHTTP(w, r.WithContext(withLocalPrincipal(r.Context(), op)))
 		})
 	}
@@ -460,7 +454,7 @@ func (s *Server) humanOrAdminAuth(next http.Handler) http.Handler {
 			// The display name rides along for /me only — outside
 			// withHumanIdentity on purpose: the token lane, which shares that
 			// function, has no name to publish and must not grow a fake one.
-			ctx = withOIDCName(ctx, oidc.NameFromContext(r.Context()))
+			ctx = withOIDCObjectID(withOIDCName(ctx, oidc.NameFromContext(r.Context())), oidc.ObjectIDFromContext(r.Context()))
 			// The session expiry rides along so /me can warn ahead of it —
 			// There is no refresh, so the alternative is a silent 401
 			// that wipes mid-work console state back to the sign-in gate.
@@ -924,9 +918,9 @@ func (s *Server) internalAuth(next http.Handler) http.Handler {
 			writeErrorReason(w, http.StatusUnauthorized, reasonInvalidRunToken, "invalid run token")
 			return
 		}
-		// Claims first, then LIVENESS — see refuseTerminalRun.
+		// Claims first, then LIVENESS (refuseTerminalRun), then the relay binding on the run that read.
 		r = r.WithContext(contextWithClaims(r.Context(), claims))
-		if !s.refuseTerminalRun(w, r, claims) {
+		if run, ok := s.refuseTerminalRun(w, r, claims); !ok || s.refuseRelayBinding(w, r, claims, run) {
 			return
 		}
 		next.ServeHTTP(w, r)

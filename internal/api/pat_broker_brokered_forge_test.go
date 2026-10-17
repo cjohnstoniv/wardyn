@@ -36,17 +36,19 @@ func TestBrokeredForgePATIsWithheldFromBothHalvesOfDispatch(t *testing.T) {
 	const otherForge = "gitlab.corp.io"
 
 	fr := &fakeRunner{}
-	srv, _, _, run := dispatchTeardownFixture(t, fr, types.RunPending)
+	srv, st, _, run := dispatchTeardownFixture(t, fr, types.RunPending)
 	run.Task = "" // composition only: no agent exec, no completion watcher
+	winning := map[string]string{
+		brokeredForge: uuid.NewString(),
+		otherForge:    uuid.NewString(),
+	}
+	st.grants = patRowsFor(run.ID, winning)
 	srv.dispatchRun(context.Background(), run, ceilingForDispatch(governanceCeiling{}, adoEntraUngraded(), bedrockCredUngraded()), dispatchParams{
 		RunToken: "run-token", Image: "wardyn/claude-code:latest",
 		// A github_token grant for a repo on the brokered forge is what makes the
 		// run brokered for it (the same map confineGitBrokerEgress keys on).
-		GitGrants: map[string]uuid.UUID{"org/repo": uuid.New()},
-		GitPATGrants: map[string]string{
-			brokeredForge: uuid.NewString(),
-			otherForge:    uuid.NewString(),
-		},
+		GitGrants:    map[string]uuid.UUID{"org/repo": uuid.New()},
+		GitPATGrants: winning,
 	})
 	spec := fr.lastSpec
 

@@ -406,6 +406,12 @@ func (runTypeStore) GetUserType(ctx context.Context, id string) (types.UserType,
 	return meTypeStore{}.GetUserType(ctx, id)
 }
 
+// GetSiteConfig answers the empty document: GET /runs/{id} reads the site's
+// policy_help for a run under no profile.
+func (runTypeStore) GetSiteConfig(context.Context) (types.SiteConfig, error) {
+	return types.SiteConfig{}, nil
+}
+
 // meTypeStore answers /me's reads for a session on a custom type.
 type meTypeStore struct{ rbacStore }
 

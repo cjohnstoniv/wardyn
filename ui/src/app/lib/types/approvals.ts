@@ -69,6 +69,13 @@ export interface ApprovalRequest {
   // a DECIDED row.
   held?: boolean;
   held_until?: string;
+  // escalation_tier / sla_due_at (notify-e4): where a PENDING approval sits on
+  // its notification schedule, projected at response time from the outbox and
+  // never stored. escalation_tier is the highest tier already due and is absent
+  // at tier 0 (the first notice); sla_due_at is when the next tier is due and
+  // is absent when none is left. Both are absent on a DECIDED row.
+  escalation_tier?: number;
+  sla_due_at?: string;
 }
 
 // canDecideApproval mirrors internal/api/approvals.go's decide() exactly: an

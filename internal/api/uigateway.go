@@ -21,7 +21,7 @@
 // The listener has exactly ONE authentication mechanism and never falls
 // through to the console's session cookie or admin bearer:
 //
-//	POST /runs/{id}/attach/ticket  (existing, owner-or-admin, single-use, 30s)
+//	POST /runs/{id}/attach/ticket  (existing, run owner, single-use, 30s)
 //	  → POST <ui-origin>/__wardyn/bind (console fetch; binds the ticket to
 //	    this browser, uigateway_bind.go)
 //	  → POST <ui-origin>/__wardyn/enter (form: run, app, ticket; or the GET form)
@@ -89,7 +89,7 @@ const (
 	// concurrent socat execs — per run. Browsers open ~6 connections per
 	// origin, so this is that plus headroom; it is a resource-exhaustion bound
 	// (each connection is a live exec in the sandbox), the sibling of
-	// maxSSHSessionsPerRun.
+	// the SSH per-run channel cap.
 	maxUIConnsPerRun = 8
 	// uiIdleConnTimeout closes a pooled relay connection after this long idle,
 	// so a closed browser tab stops holding relay capacity. It closes the exec's
@@ -226,8 +226,9 @@ func (s *Server) UIGatewayHandler() http.Handler {
 //
 // Both consume the single-use attach ticket (the SAME one the web terminal
 // uses — no second ticket type), then RE-CHECK everything the ticket cannot
-// prove on its own against freshly-loaded state: owner-or-admin for THIS run
-// (the ticket's stamped role/principal, as handleAttachWS does), the run still
+// prove on its own against freshly-loaded state: the owner of THIS run, or a
+// super admin on one with no personal owner (the ticket's stamped
+// role/principal, as handleAttachWS does), the run still
 // RUNNING with a sandbox, and the app actually declared in the run's EFFECTIVE
 // policy. Only then does a cookie exist. uiEnterCommon holds that one path;
 // this function only extracts the three fields from the right place and picks
@@ -237,7 +238,7 @@ func (s *Server) UIGatewayHandler() http.Handler {
 // CSRF, in two halves. The ticket stops a page that does not hold a
 // freshly-minted, still-valid ticket for THIS run from forging a session for
 // someone ELSE's run — it is single-use, ~30s-TTL, bound to one run and one
-// principal, and mintable only by an already-authenticated owner-or-admin call
+// principal, and mintable only by an already-authenticated run-owner call
 // to POST /runs/{id}/attach/ticket (behind the console's own CSRF guard).
 // csrf.go (this package) says explicitly that its same-origin guard does not,
 // and is not meant to, cover this listener.
@@ -286,8 +287,7 @@ func (s *Server) uiEnterCommon(w http.ResponseWriter, r *http.Request, runRaw, a
 	// the run's own origin never sees — and would put one run's cookie on
 	// another run's origin. Refuse instead.
 	if want := s.uiRunOrigin(runID); want != "" && !strings.EqualFold(r.Host, want) {
-		s.auditUI(&runID, types.ActorHuman, "unknown", "ui.authorize", app, "denied",
-			map[string]any{"reason": "wrong host for run", "host": r.Host})
+		s.auditUIRefusedBounded(runID, app, map[string]any{"reason": "wrong host for run", "host": r.Host})
 		writeErrorReason(w, http.StatusForbidden, reasonUIGatewayWrongHost, "This run's UI apps are served on a different host")
 		return
 	}
@@ -296,12 +296,11 @@ func (s *Server) uiEnterCommon(w http.ResponseWriter, r *http.Request, runRaw, a
 	// reaches the store or spends a ticket. The refusal is the bad-ticket one,
 	// byte for byte; only the audit reason says which it was.
 	if !s.uiTicketBound(w, r, ticket) {
-		s.auditUI(&runID, types.ActorHuman, "unknown", "ui.authorize", app, "denied",
-			map[string]any{"reason": "ticket not bound to this browser"})
+		s.auditUIRefusedBounded(runID, app, map[string]any{"reason": "ticket not bound to this browser"})
 		writeErrorReason(w, http.StatusForbidden, reasonUIGatewayTicketInvalid, "invalid, expired, or already-used attach ticket")
 		return
 	}
-	ta, ok, err := consumeAttachTicket(r.Context(), s.cfg.Store, ticket, runID, s.cfg.Now())
+	ta, v, err := s.redeemAttachTicket(r.Context(), ticket, runID)
 	if err != nil {
 		// A store failure is not a bad ticket (attach_ticket.go's own rule):
 		// say so, log it, and never leak the database error to a caller who has
@@ -310,10 +309,8 @@ func (s *Server) uiEnterCommon(w http.ResponseWriter, r *http.Request, runRaw, a
 		writeErrorReason(w, http.StatusInternalServerError, reasonUIGatewayTicketLookupFailed, "attach ticket lookup failed")
 		return
 	}
-	if !ok {
-		s.auditUI(&runID, types.ActorHuman, "unknown", "ui.authorize", app, "denied",
-			map[string]any{"reason": "invalid, expired, or already-used ticket"})
-		writeErrorReason(w, http.StatusForbidden, reasonUIGatewayTicketInvalid, "invalid, expired, or already-used attach ticket")
+	if v != verdictOK {
+		s.refuseUITicket(w, runID, app, ta, v)
 		return
 	}
 
@@ -325,17 +322,30 @@ func (s *Server) uiEnterCommon(w http.ResponseWriter, r *http.Request, runRaw, a
 		writeErrorReason(w, http.StatusForbidden, reasonUIGatewayTicketRunMismatch, "attach ticket does not authorize this run")
 		return
 	}
-	// Owner-or-admin, re-checked against the just-loaded run: this lane never
+	// The run's owner, or a super admin on a run with no personal owner
+	// (mayEnterRun), re-checked against the just-loaded run: this lane never
 	// runs humanOrAdminAuth, so the ticket's stamped role/principal is the only
 	// authorization signal, exactly as in handleAttachWS.
 	superAdmin := ta.role == oidc.RoleAdmin
-	if !superAdmin && run.CreatedBy != ta.principal {
+	if !s.mayEnterRunOrSponsor(r.Context(), run, ta.principal, superAdmin, ta.authorizedAt) {
+		if superAdmin {
+			s.refuseRunOwnerOnly(w, r.WithContext(withTicketActor(r.Context(), ta)), run)
+			return
+		}
 		s.auditUI(&runID, types.ActorHuman, ta.principal, "ui.authorize", app, "denied",
 			ta.withVia(map[string]any{"reason": "not the run owner"}))
 		writeErrorReason(w, http.StatusForbidden, reasonUIGatewayTicketRunMismatch, "attach ticket does not authorize this run")
 		return
 	}
-	if !superAdmin && s.refuseUIAppsDenied(w, r.WithContext(withTicketActor(r.Context(), ta)), run) {
+	// After the ownership check (a foreign caller learns nothing), before any cookie.
+	if rf := backgroundOnlyRefusal(run, "web application gateway"); rf != nil {
+		s.uiRefuseBackground(w, r, rf, runID, app, ta)
+		return
+	}
+	// superAdmin is true past this point only on the admin's own run or an
+	// operator-owned one, so the governance exemption below cannot reach a
+	// person's run.
+	if (!superAdmin || !s.adminDoorExempt(run)) && s.refuseUIAppsDenied(w, r.WithContext(withTicketActor(r.Context(), ta)), run) {
 		return
 	}
 	if run.State != types.RunRunning || run.SandboxRef == "" {
@@ -370,11 +380,12 @@ func (s *Server) uiEnterCommon(w http.ResponseWriter, r *http.Request, runRaw, a
 		return
 	}
 
-	now, ttl := s.cfg.Now(), s.uiSessionTTL()
+	now := s.cfg.Now()
+	expires := ta.sessionExpiry(now, s.uiSessionTTL())
 	sess := uiSession{
 		Run: runID, App: declared.Name, Port: declared.Port,
-		Principal: ta.principal, Role: ta.role,
-		Expires: now.Add(ttl).Unix(), IssuedAt: now.Unix(), Via: ta.via,
+		Principal: ta.principal, Role: ta.role, Email: ta.email,
+		Expires: expires.Unix(), IssuedAt: now.Unix(), AuthorizedAt: ta.authorizedAt.Unix(), RevSeq: ta.revSeq, Via: ta.via, Service: sponsoredService(run),
 	}
 	http.SetCookie(w, &http.Cookie{
 		Name:     uiCookieName,
@@ -383,10 +394,10 @@ func (s *Server) uiEnterCommon(w http.ResponseWriter, r *http.Request, runRaw, a
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
 		Secure:   s.cfg.OIDCSecureCookies,
-		Expires:  now.Add(ttl),
+		Expires:  expires,
 	})
 	s.auditUI(&runID, types.ActorHuman, ta.principal, "ui.authorize", declared.Name, "success",
-		ta.withVia(map[string]any{"app": declared.Name, "port": declared.Port}))
+		ta.withVia(withSponsorEntry(run, map[string]any{"app": declared.Name, "port": declared.Port})))
 	http.Redirect(w, r, s.uiBasePath()+uiRelayPrefix(runID, declared.Name)+declared.PathOrRoot(), redirectStatus)
 }
 
@@ -756,6 +767,7 @@ func (s *Server) uiDial(ctx context.Context, _, addr string) (net.Conn, error) {
 	if de := s.uiSessionStillAuthorized(ctx, sess, run); de != nil {
 		return nil, uiFail(ctx, de.status, de.reason, de.msg)
 	}
+	sess.SandboxRef = run.SandboxRef
 	s.markUIReasserted(sess, s.cfg.Now())
 	// A paused run is thawed before the execs below (run_pause.go).
 	if err := s.thawForExec(ctx, run, types.ActorHuman, sess.Principal, "presence"); err != nil {

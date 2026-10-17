@@ -8,6 +8,7 @@ import (
 	"log/slog"
 
 	"github.com/cjohnstoniv/wardyn/internal/types"
+	"github.com/google/uuid"
 )
 
 // The run launch, split at the run row.
@@ -43,10 +44,42 @@ type createRunLaunch struct {
 	ceiling       dispatchCeiling
 	gw            grantWiring
 	wsRefs        []types.Workspace
-	driveMount    *types.DriveMount
+	driveMounts   []types.DriveMount
+	memberDrives  map[uuid.UUID]string
 	ephemeralDirs []string
-	runToken      string
-	created       types.AgentRun
+	// startFolder is the run's one working directory (stepWorkspaces): "" keeps
+	// the sandbox's own choice.
+	startFolder string
+	runToken    string
+	created     types.AgentRun
+	// comps is the component gate's decision; dispatch takes its own half of it.
+	comps runComponents
+	// overridden: the run's person edited the New Run cards (policy_source.overrides_diff).
+	overridden bool
+	// pushSets are the run's push rules per SCM entry (pushRuleSetsFor).
+	pushSets []types.PushRuleSet
+	// harnessRules are the run's tool rules per included harness (harnessToolRulesFor).
+	harnessRules []types.HarnessToolRules
+	// harnesses is the run's harness set as create authorised it, in tools[]
+	// order, each with the model provider it was granted (the run_harnesses rows).
+	harnesses []types.RunHarness
+	// mainDrive is the main drive the fold decided (stepMainDrive); dispatch writes its size and
+	// treats it as soft unless the run's policy wrote it.
+	mainDrive *mainDriveDecision
+}
+
+// launch is what both doors hand finishCreateRunLaunch for a run the fold admitted: create, and the pool
+// queue's start replaying the fold. Built in one place from the fold, so the two cannot launch different
+// runs. spec is the fold's spec with the run's egress unioned in; created is the run row as started.
+func (f *runFold) launch(req createRunRequest, spec types.RunPolicySpec, ceiling governanceCeiling, gw grantWiring,
+	runToken string, created types.AgentRun) createRunLaunch {
+	spec, harnessRules := applyHarnessToolRules(spec, req.Tools, toolLaneDefault(req))
+	return createRunLaunch{
+		req: req, spec: spec, ceiling: ceilingForDispatch(ceiling, f.adoGrade, f.bedrockGrade), gw: gw,
+		wsRefs: f.wsRefs, driveMounts: f.driveMounts, memberDrives: memberDriveOwners(f.drives), ephemeralDirs: f.ephemeralDirs, startFolder: f.startFolder,
+		runToken: runToken, created: created, comps: f.comps, overridden: f.source.overridden(), pushSets: f.pushSets,
+		harnessRules: harnessRules, harnesses: f.harnesses, mainDrive: f.mainDrive.decision(),
+	}
 }
 
 // DRAFT (M2 canon pending) — the run's failure_hint when the detached launch
@@ -84,7 +117,7 @@ func (s *Server) finishCreateRunLaunch(ctx context.Context, l createRunLaunch) {
 	// Resolve the sandbox image (BYOI wrap > devcontainer build > workspace
 	// profile > convention image) and persist it for provenance. A failed
 	// BYOI/devcontainer build has already marked the run FAILED.
-	image, failed := s.resolveCreateRunImage(ctx, l.req, runID, l.wsRefs)
+	image, failed := s.resolveCreateRunImage(ctx, l.req, l.created, l.wsRefs)
 	if failed {
 		return
 	}
@@ -110,18 +143,26 @@ func (s *Server) finishCreateRunLaunch(ctx context.Context, l createRunLaunch) {
 			SeedAutoTools:      l.req.SeedAutoTools,
 			ToolApprovals:      l.req.ToolApprovals,
 			EphemeralDirs:      l.ephemeralDirs,
+			ExtraEnv:           startFolderEnv(l.startFolder),
 			Toolchains:         runToolchainNeeds(l.wsRefs),
 			// The member's own persistent storage, already resolved and narrowed
-			// at create (seedRequestDrive) — nil unless this run asked for it.
+			// at create (stepDrive) — empty unless this run asked for it.
 			// Carried rather than re-resolved for the reason the ceiling is:
 			// resolution keys on the caller's OIDC claims, which the run row does
 			// not hold. See user_drives_run.go's own note.
-			Drive: l.driveMount,
+			Drives:       l.driveMounts,
+			MemberDrives: l.memberDrives,
 			// The zero posture unless this run attaches a MEMBER-OWNED workspace, in
 			// which case the driver re-checks that member's own binds against these
 			// roots immediately before ContainerCreate (userMountPosture,
 			// workspace_refs.go).
-			UserMounts: s.userMountPosture(l.wsRefs),
+			UserMounts:       s.userMountPosture(l.wsRefs),
+			Components:       l.comps.dispatchWith(l.gw.githubAPI),
+			PolicyOverridden: l.overridden,
+			PushRuleSets:     l.pushSets,
+			HarnessToolRules: l.harnessRules,
+			Harnesses:        l.harnesses,
+			MainDrive:        l.mainDrive,
 		})
 	}
 }

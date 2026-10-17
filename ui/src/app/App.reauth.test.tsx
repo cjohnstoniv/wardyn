@@ -13,11 +13,12 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { toast } from "sonner";
 import App from "./App";
-import { SESSION_ENDED_REASON, wfetch } from "./lib/api/core";
+import { SESSION_ENDED_REASON, setToken, wfetch } from "./lib/api/core";
 import { REAUTH_BAR, REAUTH_DIALOG, REAUTH_EXTRA } from "./lib/reauth-copy";
 import { PROVIDERS_EXTRA } from "./lib/workspace-providers-copy";
 import { SHELL } from "./components/wardyn/copy";
 import { UNSAVED } from "./lib/unsaved-copy";
+import { setField } from "../test/set-field";
 
 const mockState = vi.hoisted(() => ({ claim: true }));
 
@@ -145,7 +146,7 @@ async function lapseMidPage(path = "/runs") {
       <App />
     </MemoryRouter>,
   );
-  await user.type(await screen.findByLabelText("Note"), "hello");
+  setField(await screen.findByLabelText("Note"), "hello");
   daemon.dead = true;
   await user.click(screen.getByRole("button", { name: "Save note" }));
   await screen.findByRole("dialog");
@@ -154,7 +155,7 @@ async function lapseMidPage(path = "/runs") {
 async function signInWithToken() {
   daemon.dead = false;
   const dialog = screen.getByRole("dialog");
-  await user.type(within(dialog).getByLabelText("Admin token"), "good-token");
+  setField(within(dialog).getByLabelText("Admin token"), "good-token");
   await user.click(within(dialog).getByRole("button", { name: REAUTH_BAR.CTA }));
 }
 
@@ -242,6 +243,20 @@ describe("App — a session that ends mid-page (#483)", () => {
     expect(assign).not.toHaveBeenCalled();
   });
 
+  it("a role-change acknowledgement cannot confirm a token change that happened after its identity read", async () => {
+    await lapseMidPage("/admin/providers");
+    daemon.me = { ...ME, role: "user", operator: false, security_operator: false };
+    await signInWithToken();
+    const dialog = screen.getByRole("dialog");
+    await within(dialog).findByText(REAUTH_DIALOG.ROLE_CHANGED_BODY);
+    daemon.me = { ...daemon.me, principal: "someone-else" };
+    act(() => setToken("another-current-token"));
+    await user.click(within(dialog).getByRole("button", { name: REAUTH_EXTRA.GO_TO_RUNS }));
+    await waitFor(() => expect(assign).toHaveBeenCalledWith("/runs"));
+    expect(screen.queryByLabelText("Note")).toBeNull();
+    expect(count("PUT /api/v1/stub-save")).toBe(1);
+  });
+
   it("the same person signing back in: the shell takes the whole /me the dialog read", async () => {
     await lapseMidPage();
     // Hidden from the accessibility tree while the dialog is up.
@@ -326,7 +341,7 @@ describe("App — a session that ends mid-page (#483)", () => {
         <App />
       </MemoryRouter>,
     );
-    await user.type(await screen.findByLabelText("Note"), "hello");
+    setField(await screen.findByLabelText("Note"), "hello");
     daemon.dead = true;
     await user.click(screen.getByRole("button", { name: "Grade note" }));
     await screen.findByRole("dialog");
@@ -360,7 +375,7 @@ describe("App — a session that ends mid-page (#483)", () => {
     await lapseMidPage();
     const dialog = screen.getByRole("dialog");
     daemon.down = true;
-    await user.type(within(dialog).getByLabelText("Admin token"), "good-token");
+    setField(within(dialog).getByLabelText("Admin token"), "good-token");
     await user.click(within(dialog).getByRole("button", { name: REAUTH_BAR.CTA }));
     expect(await within(dialog).findByText(REAUTH_DIALOG.UNREACHABLE)).toBeInTheDocument();
     expect(screen.getByLabelText("Note")).toHaveValue("hello");

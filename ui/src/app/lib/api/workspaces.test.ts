@@ -5,6 +5,8 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { workspaces } from "./workspaces";
+import { setup } from "./setup";
+import type { SetupStatus } from "../types";
 import type { Workspace } from "../types";
 import { aheadByHours } from "../test-clock";
 
@@ -17,9 +19,12 @@ describe("workspace client methods", () => {
   beforeEach(() => {
     fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
+    // The launch calls read the deployment's start deadlines first; no status = the floor deadline.
+    vi.spyOn(setup, "getSetupStatus").mockResolvedValue({ runner: {} } as SetupStatus);
   });
   afterEach(() => {
     vi.unstubAllGlobals();
+    vi.restoreAllMocks();
   });
 
   const ws: Workspace = {
@@ -253,5 +258,19 @@ describe("workspace client methods", () => {
   it("deleteWorkspace preserves a refusal instead of treating it as absent", async () => {
     fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ error: "workspace has live runs" }), { status: 409 }));
     await expect(workspaces.deleteWorkspace("ws-1")).rejects.toMatchObject({ status: 409, message: "workspace has live runs" });
+  });
+
+  it.each([
+    ["recordTask", () => workspaces.recordTask("ws-1", "build")],
+    ["scanWorkspace", () => workspaces.scanWorkspace("ws-1")],
+  ] as const)("%s waits past the capacity wait the deployment reports", async (_name, call) => {
+    // Defaults: 3 min start + 15 min capacity wait, so a full cluster holds CreateSandbox for 18 min.
+    vi.spyOn(setup, "getSetupStatus").mockResolvedValue({
+      runner: { sandbox_start: { start_timeout_seconds: 180, capacity_wait_seconds: 900 } },
+    } as SetupStatus);
+    const timeout = vi.spyOn(AbortSignal, "timeout");
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({}), { status: 202 }));
+    await call();
+    expect(timeout).toHaveBeenCalledWith(1_080_000 + 90_000);
   });
 });

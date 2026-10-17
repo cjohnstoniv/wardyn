@@ -23,6 +23,42 @@ Source: `ui/src/app/components/wardyn/copy/terminal.ts`.
 Render sites: the title-bar strip and the grid's `aria-description`, both in
 `ui/src/app/components/attach-terminal.tsx`.
 
+## Copy strings
+
+M11, approved 2026-10-03 (term-t3b). Source:
+`ui/src/app/components/wardyn/copy/terminal.ts`, `TERMINAL_COPY`. `(mac)` and
+`(pc)` name the platform: macOS reads Option and Cmd, every other platform
+Shift and Ctrl. Counts take the singular when `n` is 1 (`1 character`,
+`1 line break`, `1 invisible character`).
+
+| Constant | Value |
+|---|---|
+| `NATIVE_CHORD(pc)` | `Shift+drag` |
+| `NATIVE_CHORD(mac)` | `Option+drag` |
+| `SELECT_HINT(chord)` | `{chord} selects for right-click Copy` |
+| `OFFER_TITLE` | `Copy selection` |
+| `OFFER_SIZE(n)` | `{n} characters` |
+| `OFFER_BREAKS(n)` | `{n} line breaks` |
+| `OFFER_INVISIBLE(n)` | `{n} invisible characters` |
+| `OFFER_EXPIRES(s)` | `Closes in {s}s` |
+| `OFFER_KEYS(pc)` | `Ctrl+C copies` |
+| `OFFER_KEYS(mac)` | `Cmd+C copies` |
+| `COPY` | `Copy` |
+| `DISMISS` | `Dismiss` |
+| `COPIED` | `Copied` |
+| `WRITE_FAILED` | `The browser refused the clipboard write. Nothing was copied.` |
+| `BLOCKED` | `Copy blocked. The terminal sent different text than you selected, so nothing was copied.` |
+
+Render sites, all in `ui/src/app/components/`: the selection hint in the
+`attach-terminal.tsx` title bar (from `lg` up; always in the grid's
+`aria-description`), and, in the blocked notice, `SELECT_HINT` with a full
+stop as its second line; the offer card and the blocked notice in
+`attach-terminal-copy-offer.tsx`. `COPIED` is the success toast after Copy.
+
+Preview glyphs (D2) are literals: `↵` at a line end, `→` for a tab, and
+`⟨U+XXXX⟩` in the warning colour for each control, format (Unicode Cf) or
+U+FEFF code point. The text is never truncated.
+
 ## Decisions
 
 **Q133-1 — the advertised chord is Ctrl+Shift+Backspace.**
@@ -52,3 +88,23 @@ The keydown decision is a pure function, `decideKey` in
 layout "shape" in `attach-terminal-keys.test.ts` (US/DE/FR/ES). It returns
 one of `"escape" | "newline" | "paste" | "pty"`; `attach-terminal.tsx` only
 wires the result into xterm's `attachCustomKeyEventHandler`.
+
+## Terminal renderer strings
+
+M11, approved 2026-10-03 (term-t10). Source:
+`ui/src/app/components/wardyn/copy/terminal.ts`, `TERMINAL_RENDERER`. The
+renderer menu (`MonitorCog`, before Redraw) and the fell-back strip render in
+`attach-terminal-renderer-menu.tsx`. The choice is stored in this browser only.
+
+| Constant | Value |
+|---|---|
+| `LABEL` | `Terminal renderer` |
+| `AUTO` | `Auto` |
+| `AUTO_HINT` | `GPU when this browser supports it, otherwise Compatible.` |
+| `GPU` | `GPU` |
+| `GPU_HINT` | `Faster with heavy output. Falls back to Compatible if the GPU stops.` |
+| `GPU_UNAVAILABLE` | `Not available in this browser.` |
+| `COMPATIBLE` | `Compatible` |
+| `COMPATIBLE_HINT` | `Draws with the page. Use it if text looks wrong or the terminal goes blank.` |
+| `FOOTER(active)` | `In use: {active}. Saved in this browser only.` |
+| `FELL_BACK` | `The GPU renderer stopped, so this terminal switched to Compatible. The session is unaffected.` |

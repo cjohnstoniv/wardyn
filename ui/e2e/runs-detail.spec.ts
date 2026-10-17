@@ -3,8 +3,9 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { test, expect, gotoConsole, navTo } from "./fixtures";
-import { RUN } from "../src/app/components/wardyn/copy";
+import { test, expect, ADMIN_TOKEN, gotoConsole, navTo, newRunHeading } from "./fixtures";
+import { NR_REVIEW } from "../src/app/components/wardyn/copy/new-run/review";
+import { RUN, RUN_SIGN_IN } from "../src/app/components/wardyn/copy";
 import { LOGIN_SANDBOX_NOTE } from "../src/app/components/screens/run-detail/login-sandbox-note";
 import { STATES } from "../src/app/components/wardyn/states";
 import type { Page } from "@playwright/test";
@@ -33,8 +34,8 @@ test.describe("Run detail (/runs/:id)", () => {
     // none` (this file's default), which #214's shell banner now reads as
     // no-barrier on EVERY page; its extra row pushes the terminal pane below
     // this test's <=300px above-the-fold bound. Spliced to a settled host
-    // with a barrier, the same fix new-run.spec.ts's own 1280x650 rail test
-    // already uses for the identical shape.
+    // with a barrier, the same splice the specs with a short viewport use
+    // for the identical shape.
     await page.route("**/api/v1/setup/status*", async (route) => {
       const response = await route.fetch();
       const json = await response.json();
@@ -88,6 +89,42 @@ test.describe("Run detail (/runs/:id)", () => {
     await expect(killBtn).toBeEnabled();
   });
 
+  // #1483: the route changed from run A to run B but the screen did not
+  // remount, so A's late answer replaced B's page while the URL still said B,
+  // and the Kill dialog named A while sending B. Moves between runs go through
+  // the router (a popstate), not a full load.
+  test("moving from run A to run B: A's late answer never renders on B, and Kill names B", async ({ page }) => {
+    const list = (await (await page.request.get("api/v1/runs?limit=1000", { headers: { Authorization: `Bearer ${ADMIN_TOKEN}` } })).json()) as { id: string; task: string }[];
+    const a = list.find((r) => r.task === "e2e fixture 2")!;
+    const b = list.find((r) => r.task === "e2e fixture 1")!;
+    expect(a && b).toBeTruthy();
+    // A answers slowly: its page is still loading when the router moves to B.
+    await page.route(`**/api/v1/runs/${a.id}`, async (route) => {
+      if (route.request().method() !== "GET") return route.fallback();
+      await new Promise((r) => setTimeout(r, 2500));
+      await route.continue();
+    });
+    // Only move once A's request is actually in flight: the router moving
+    // before the page mounted A would test nothing.
+    const requestedA = page.waitForRequest((r) => r.method() === "GET" && r.url().endsWith(`/api/v1/runs/${a.id}`));
+    await page.goto(`runs/${a.id}`);
+    await requestedA;
+    await page.evaluate((to) => {
+      window.history.pushState({}, "", to);
+      window.dispatchEvent(new PopStateEvent("popstate"));
+    }, page.url().replace(a.id, b.id));
+    const headingB = page.getByRole("heading", { name: "e2e fixture 1", level: 1 });
+    await expect(headingB).toBeVisible();
+    // Wait out A's answer, then B must still be what the page shows.
+    await page.waitForTimeout(3200);
+    await expect(headingB).toBeVisible();
+    await expect(page.getByRole("heading", { name: "e2e fixture 2", level: 1 })).toHaveCount(0);
+    await page.getByRole("button", { name: "Kill", exact: true }).click();
+    const dialog = page.getByRole("alertdialog");
+    await expect(dialog).toContainText(`Kill ${b.id}?`);
+    await dialog.getByRole("button", { name: "Cancel" }).click();
+  });
+
   test("detail of a COMPLETED run renders and has a disabled Kill button", async ({ page }) => {
     await openRuns(page);
     await page.getByText("e2e fixture 4").click();
@@ -118,17 +155,19 @@ test.describe("Run detail (/runs/:id)", () => {
     await expect(page.getByRole("button", { name: "Kill", exact: true })).toBeDisabled();
 
     await cloneBtn.click();
-    await expect(page).toHaveURL(/\/runs\/new$/);
-    await expect(page.getByRole("heading", { name: "New run" })).toBeVisible();
-    await expect(page.getByLabel("Task")).toHaveValue("e2e fixture 4");
+    // A clone opens New Run on Review, with the run's setup already in the draft (title and description
+    // are not cloned).
+    await expect(page).toHaveURL(/\/runs\/new\?again=[0-9a-f-]{8,}&step=review$/);
+    await expect(newRunHeading(page, NR_REVIEW.TITLE)).toBeVisible();
+    // The draft as the document the server will be sent: the YAML view is the whole of it.
+    await page.getByRole("group", { name: NR_REVIEW.VIEW_ARIA }).getByRole("button", { name: NR_REVIEW.VIEW_YAML }).click();
+    const doc = page.locator("pre code");
+    await expect(doc).toContainText("e2e fixture 4");
     // review C-02: an AUDIT-derived field (never on the run row itself) —
     // proves the clone actually reads fixture 4's run.create row, not just
-    // the row, which carries no tool_approvals at all.
-    await expect(
-      page
-        .getByRole("radiogroup", { name: "Tool approvals" })
-        .getByRole("radio", { name: /Hold in Wardyn/ }),
-    ).toHaveAttribute("aria-checked", "true");
+    // the row, which carries no tool_approvals at all. A held tool call is
+    // the harness's default effect "hold" (or the older tool_approvals).
+    await expect(doc).toContainText(/(default_effect|tool_approvals): hold/);
   });
 
   // #1197 D2 (design.md §4): the Runs-list kebab (Kill, Clone, Open) is gone
@@ -352,6 +391,80 @@ test.describe("Run detail — a login sandbox says what it is", () => {
     await expect(note).not.toContainText("Sign in from Getting Started");
     await expect(note).not.toContainText("closes itself when it is done");
     await expect(note).not.toContainText("already running in this box");
+  });
+
+  // M-F #1908: the waiting sign-in strip against a live page. The daemon runs
+  // `-runner none`, so a login run cannot be RUNNING for real; fixture 6 is
+  // spliced into the caller's own running login run, and the sign-in answers
+  // are the page's only input, so the reads can be counted and changed.
+  test("the waiting sign-in strip: identical answers are silent, a focus return reads at once, a changed code updates, and it leaves when not waiting", async ({
+    page,
+  }) => {
+    const me = await (await page.request.get("/api/v1/me", { headers: { Authorization: `Bearer ${ADMIN_TOKEN}` } })).json();
+    await openRuns(page);
+    await page.route("**/api/v1/runs/*", async (route) => {
+      if (route.request().method() !== "GET") return route.fallback();
+      const response = await route.fetch();
+      const json = await response.json();
+      if (json.task === "e2e fixture 6") {
+        json.task = "harness login";
+        json.agent = "aws-sso";
+        json.state = "RUNNING";
+        json.created_by = me.principal;
+      }
+      await route.fulfill({ response, json });
+    });
+    let reads = 0;
+    let answer: Record<string, string> = {
+      state: "waiting",
+      user_code: "ABCD-EFGH",
+      verification_url: "https://device.example.com/activate",
+    };
+    await page.route("**/api/v1/runs/*/sign-in", async (route) => {
+      reads += 1;
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(answer) });
+    });
+
+    await page.getByText("e2e fixture 6").click();
+    const strip = page.getByTestId("run-sign-in-strip");
+    await expect(strip).toBeVisible({ timeout: 15_000 });
+    await expect(strip).toContainText(RUN_SIGN_IN.TITLE);
+    await expect(strip.getByLabel(RUN_SIGN_IN.CODE_LABEL)).toHaveText("ABCD-EFGH");
+    await expect(strip).toContainText("Opens device.example.com");
+    await expect(strip.getByRole("link", { name: RUN_SIGN_IN.OPEN })).toHaveAttribute("rel", "noopener noreferrer");
+
+    // Window focus reads straight away, and the same answer changes nothing.
+    const before = reads;
+    await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+    await expect.poll(() => reads).toBeGreaterThan(before);
+    await expect(strip.getByLabel(RUN_SIGN_IN.CODE_LABEL)).toHaveText("ABCD-EFGH");
+    expect(await page.evaluate(() => document.activeElement?.tagName)).not.toBe("A");
+
+    // A new code and link replace the old ones.
+    answer = { state: "waiting", user_code: "WXYZ-1234", verification_url: "https://other.example.com/go" };
+    await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+    await expect(strip.getByLabel(RUN_SIGN_IN.CODE_LABEL)).toHaveText("WXYZ-1234");
+    await expect(strip).toContainText("Opens other.example.com");
+
+    // Not waiting any more: the strip goes and the closing line stays.
+    answer = { state: "not_waiting" };
+    await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+    await expect(strip).toHaveCount(0);
+    await expect(page.getByText(RUN_SIGN_IN.NO_LONGER)).toBeVisible();
+  });
+
+  // M-F #1906: a finished run's Overview notice offers its one action as an
+  // information-coloured link, and it still switches to the Recording tab.
+  test("a finished run's Recording notice link is information-coloured and opens the Recording tab", async ({ page }) => {
+    await openRuns(page);
+    await page.getByText("e2e fixture 4").click();
+    await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{8,}/);
+    const link = page.getByRole("button", { name: "Open the Recording tab →" });
+    await expect(link).toBeVisible();
+    await expect(link).toHaveClass(/text-info/);
+    await expect(link).not.toHaveClass(/text-primary/);
+    await link.click();
+    await expect(page.getByRole("tab", { name: "Recording" })).toHaveAttribute("aria-selected", "true");
   });
 
   // U-2 (W6 blind lens): the state gate, with the agent held constant. A login

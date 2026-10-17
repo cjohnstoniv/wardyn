@@ -5,8 +5,8 @@
 # Seeded test backend for the Playwright UI e2e suite (task #8).
 #
 # Boots a fast, hermetic control plane — real wardynd + real Postgres + the `none`
-# runner (no agent containers) — serving the BUILT embedded UI (ui/dist), seeded
-# with deterministic fixtures via the public API + a fixed admin token. This is
+# runner (no agent containers) — serving the BUILT embedded UI (ui/dist-e2e), seeded
+# with deterministic fixtures via the public API + a per-up admin token. This is
 # the default Playwright gate target (NOT the full docker-compose stack), so PR
 # runs are fast and reproducible. The nightly job runs Playwright against the
 # real compose stack instead (see .github/workflows/nightly.yml).
@@ -16,16 +16,17 @@
 #   scripts/e2e-backend.sh down     # stop wardynd, drop the e2e DB contents
 #   scripts/e2e-backend.sh seed     # (re)seed fixtures into a running backend
 #   scripts/e2e-backend.sh wait     # block until /healthz is ready
+#   scripts/e2e-backend.sh token    # print this instance's token for a test client
 #
 # Env (this file's own reads only — WARDYN_E2E_PG_HOSTPORT and the rest of
 # docs/ENV.md's Test/internal-only e2e table are wrapper knobs run-ui-e2e.sh /
 # screenshots.sh convert INTO WARDYN_E2E_DSN before this script ever runs;
 # F063):
 #   WARDYN_E2E_DSN           Postgres DSN     (default: dockerized wardyn-test-pg :55432/wardyn_e2e)
-#   WARDYN_E2E_TOKEN         admin bearer token (default: wardyn-e2e-token)
-#   WARDYN_E2E_ADDR          listen address   (default: :8088)
-#   WARDYN_E2E_UI_ADDR       UI-sandbox gateway listen address (default: :8089) — must differ from WARDYN_E2E_ADDR
-#   WARDYN_E2E_INTERNAL_ADDR proxy-facing internal TLS listen address (default: :8443) — wardynd binds
+#   WARDYN_E2E_TOKEN         admin bearer token (default: mint a fresh one per `up`)
+#   WARDYN_E2E_ADDR          listen address   (default: 127.0.0.1:8088)
+#   WARDYN_E2E_UI_ADDR       UI-sandbox gateway listen address (default: 127.0.0.1:8089) — must differ from WARDYN_E2E_ADDR
+#   WARDYN_E2E_INTERNAL_ADDR proxy-facing internal TLS listen address (default: 127.0.0.1:8443) — wardynd binds
 #                            this whenever -control-plane-url is https (the default), regardless of
 #                            ADDR/UI_ADDR; a caller running more than one instance on one host (the
 #                            per-screen fanout, run-ui-e2e.sh's lanes) must give each its own
@@ -33,22 +34,27 @@
 #   WARDYN_E2E_PG_DBNAME     e2e database name (default: wardyn_e2e)
 #   WARDYN_E2E_AGE_KEY       pinned age identity (default: unset, mint a fresh one per `up`)
 #   WARDYN_E2E_SKIP_BUILD    1 reuses the built .e2e-bin/wardynd instead of rebuilding it
-#   WARDYN_E2E_NO_UI_BUILD   1 reuses the existing ui/dist instead of rebuilding it
+#   WARDYN_E2E_NO_UI_BUILD   1 reuses the existing ui/dist-e2e instead of rebuilding it
 #   WARDYN_E2E_BASE_PATH     serve under this WARDYN_BASE_PATH (e.g. /wardyn) behind test/basepathproxy
-#   WARDYN_E2E_PROXY_ADDR    that proxy's listen address (default: :8090); only with WARDYN_E2E_BASE_PATH
+#   WARDYN_E2E_PROXY_ADDR    that proxy's listen address (default: 127.0.0.1:8090); only with WARDYN_E2E_BASE_PATH
+#   WARDYN_E2E_TMUX_BUILD    1 also builds .e2e-bin/wardynd-tmux (-tags e2etmux: the test-only local-tmux runner)
+#   WARDYN_E2E_TMUX          1 serves that binary with -runner docker, so the production attach endpoint
+#                            drives a REAL tmux (throwaway socket, deploy/images/common/tmux.conf) and the
+#                            seeded RUNNING fixture is attachable. A missing tmux or binary fails `up`; it never skips
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${REPO_ROOT}"
 WARDYN_LOG_TAG="[e2e]"
 source "${REPO_ROOT}/scripts/lib/common.sh"
+source "${REPO_ROOT}/scripts/lib/e2e-network.sh"
 
 # Provision + exec wardyn-test-pg on the same daemon as up.sh pg (dual-daemon boxes).
 wardyn_pick_docker_host
 
 DSN="${WARDYN_E2E_DSN:-postgres://wardyn:wardyn@localhost:55432/wardyn_e2e?sslmode=disable}"
-TOKEN="${WARDYN_E2E_TOKEN:-wardyn-e2e-token}"
-ADDR="${WARDYN_E2E_ADDR:-:8088}"
+TOKEN="${WARDYN_E2E_TOKEN:-}"
+ADDR="$(e2e_listen_addr "${WARDYN_E2E_ADDR:-127.0.0.1:8088}")"
 # Age identity for wardynd's secret store. MINTED PER `up` (cmd_up, via
 # `wardynd -gen-age-key` — the same mint scripts/up.sh + scripts/setup.sh use)
 # rather than hard-coded: a committed key is published the moment it is pushed,
@@ -63,7 +69,7 @@ AGE_KEY="${WARDYN_E2E_AGE_KEY:-}"
 # enabled states against a real /healthz instead of a stubbed one; it must
 # differ from ADDR or wardynd refuses to boot. The per-screen fanout gives
 # each instance its own ports, so override this alongside WARDYN_E2E_ADDR.
-UI_ADDR="${WARDYN_E2E_UI_ADDR:-:8089}"
+UI_ADDR="$(e2e_listen_addr "${WARDYN_E2E_UI_ADDR:-127.0.0.1:8089}")"
 # wardynd's proxy-facing internal TLS listener (-internal-listen /
 # WARDYN_INTERNAL_LISTEN, cmd/wardynd/boot_flags.go): it runs whenever
 # -control-plane-url is https, which is the daemon's own default, so it binds
@@ -71,28 +77,26 @@ UI_ADDR="${WARDYN_E2E_UI_ADDR:-:8089}"
 # override ADDR/UI_ADDR already get, or two isolated instances on one host
 # (the per-screen fanout, run-ui-e2e.sh's lanes) both fight over the fixed
 # :8443 default and the second one's `up` dies on the bind.
-INTERNAL_ADDR="${WARDYN_E2E_INTERNAL_ADDR:-:8443}"
+INTERNAL_ADDR="$(e2e_listen_addr "${WARDYN_E2E_INTERNAL_ADDR:-127.0.0.1:8443}")"
 PG_CONTAINER="${WARDYN_E2E_PG_CONTAINER:-wardyn-test-pg}"
 PG_DBNAME="${WARDYN_E2E_PG_DBNAME:-wardyn_e2e}"
-# Derive the URL port by splitting on the LAST colon, so every documented ADDR
-# shape yields a valid URL: ':8088' -> 8088, '0.0.0.0:9000' -> 9000, 'host:80'
-# -> 80. (The old ${ADDR#*:} stripped through the FIRST colon and never inserted
-# the ':' separator for non-':PORT' shapes, e.g. 'http://localhost9000'.)
-BASE_URL="http://localhost:${ADDR##*:}"
+BASE_URL="$(e2e_base_url "${ADDR}")"
 # Base-path mode (#1154): wardynd serves under WARDYN_BASE_PATH, so every call
 # this script makes to it carries the prefix, and test/basepathproxy fronts it
 # the way an operator's reverse proxy would. Empty = the default, unchanged.
 BASE_PATH="${WARDYN_E2E_BASE_PATH:-}"
-PROXY_ADDR="${WARDYN_E2E_PROXY_ADDR:-:8090}"
+PROXY_ADDR="$(e2e_listen_addr "${WARDYN_E2E_PROXY_ADDR:-127.0.0.1:8090}")"
 DAEMON_URL="${BASE_URL}${BASE_PATH}"
 BIN_DIR="${REPO_ROOT}/.e2e-bin"
 # PID/log keyed by listen port so multiple isolated instances (the per-screen e2e
 # fanout: own port + own DB each) never kill or clobber each other.
-_PORT="${ADDR#*:}"
+_PORT="${ADDR##*:}"
 PID_FILE="${BIN_DIR}/wardynd-${_PORT}.pid"
 LOG_FILE="${BIN_DIR}/wardynd-${_PORT}.log"
 PROXY_PID_FILE="${BIN_DIR}/basepathproxy-${_PORT}.pid"
 PROXY_LOG_FILE="${BIN_DIR}/basepathproxy-${_PORT}.log"
+TMUX_SOCK_FILE="${BIN_DIR}/tmux-${_PORT}.sock"
+TOKEN_FILE="${BIN_DIR}/token-${_PORT}"
 
 # log() uses WARDYN_LOG_TAG="[e2e]" set before sourcing common.sh above.
 die()  { printf '\033[1;31m[e2e:err]\033[0m %s\n' "$*" >&2; exit 1; }
@@ -121,19 +125,23 @@ cmd_build() {
   log "Building wardynd (none runner; no -tags docker needed) + wardyn CLI"
   go build -o "${BIN_DIR}/wardynd" ./cmd/wardynd
   go build -o "${BIN_DIR}/wardyn"  ./cmd/wardyn
+  if [[ "${WARDYN_E2E_TMUX_BUILD:-0}" == "1" ]]; then
+    log "Building wardynd-tmux (-tags e2etmux: test-only local-tmux runner)"
+    go build -tags e2etmux -o "${BIN_DIR}/wardynd-tmux" ./cmd/wardynd
+  fi
   if [[ -n "${BASE_PATH}" ]]; then
     go build -o "${BIN_DIR}/basepathproxy" ./test/basepathproxy
   fi
   # Always rebuild the UI bundle on a non-skip build so the served app reflects
-  # the current ui/src (reusing a stale ui/dist silently serves old UI — a real
+  # the current ui/src (reusing a stale ui/dist-e2e silently serves old UI — a real
   # footgun when iterating on the composer). Set WARDYN_E2E_NO_UI_BUILD=1 to reuse
   # an existing dist deliberately.
-  if [[ "${WARDYN_E2E_NO_UI_BUILD:-0}" == "1" && -d "${REPO_ROOT}/ui/dist" ]]; then
+  if [[ "${WARDYN_E2E_NO_UI_BUILD:-0}" == "1" && -d "${REPO_ROOT}/ui/dist-e2e" ]]; then
     # Guard (X2-F17): WARDYN_E2E_NO_UI_BUILD=1 skips the rebuild unconditionally,
     # so a dist built before the last edit to anything Vite actually reads is
     # served silently — exactly the footgun the comment above names. Refuse
     # when any file under ui/ (besides dist/, node_modules/, and Playwright's
-    # own test-results/) is newer than ui/dist itself: Vite's real inputs are
+    # own test-results/) is newer than ui/dist-e2e itself: Vite's real inputs are
     # not just ui/src — ui/index.html is the build ENTRY, and ui/public,
     # ui/package.json + pnpm-lock.yaml, ui/vite.config.ts, ui/tsconfig*.json
     # all change what a build produces. emptyOutDir (vite.config.ts) empties
@@ -141,15 +149,15 @@ cmd_build() {
     # mtime is a build stamp.
     # ponytail: whole-tree mtime, not a content hash — a touch with no content
     # change false-positives; rebuild once (unset the knob) to clear it.
-    stale_src="$(find "${REPO_ROOT}/ui" -path '*/node_modules' -prune -o -path '*/dist' -prune \
-      -o -path '*/test-results' -prune -o -type f -newer "${REPO_ROOT}/ui/dist" -print -quit)"
+    stale_src="$(find "${REPO_ROOT}/ui" -path '*/node_modules' -prune -o -path '*/dist' -prune -o -path '*/dist-e2e' -prune \
+      -o -path '*/test-results' -prune -o -type f -newer "${REPO_ROOT}/ui/dist-e2e" -print -quit)"
     if [[ -n "${stale_src}" ]]; then
-      die "ui/dist is stale: ${stale_src#${REPO_ROOT}/} was modified after the last ui/dist build, but WARDYN_E2E_NO_UI_BUILD=1 is reusing it — unset WARDYN_E2E_NO_UI_BUILD or rebuild with 'cd ui && pnpm build'"
+      die "ui/dist-e2e is stale: ${stale_src#${REPO_ROOT}/} was modified after the last ui/dist-e2e build, but WARDYN_E2E_NO_UI_BUILD=1 is reusing it — unset WARDYN_E2E_NO_UI_BUILD or rebuild with 'cd ui && pnpm build --mode e2e --outDir dist-e2e'"
     fi
-    log "Reusing existing ui/dist (WARDYN_E2E_NO_UI_BUILD=1)"
+    log "Reusing existing ui/dist-e2e (WARDYN_E2E_NO_UI_BUILD=1)"
   else
-    log "Building UI bundle (ui/dist)"
-    ( cd ui && pnpm install --frozen-lockfile && pnpm build )
+    log "Building UI bundle (ui/dist-e2e)"
+    ( cd ui && pnpm install --frozen-lockfile && pnpm build --mode e2e --outDir dist-e2e )
   fi
 }
 
@@ -163,6 +171,10 @@ cmd_wait() {
 }
 
 cmd_up() {
+  if [[ "${WARDYN_E2E_TMUX:-0}" == "1" ]]; then
+    e2e_require_loopback "${ADDR}" "${UI_ADDR}" "${INTERNAL_ADDR}"
+    [[ -z "${BASE_PATH}" ]] || e2e_require_loopback "${PROXY_ADDR}"
+  fi
   mkdir -p "${BIN_DIR}"
   # Parsed up front (not just "a few lines later") so BOTH fail-closed messages
   # below can report the port this run is actually configured for — F062: the
@@ -212,11 +224,15 @@ cmd_up() {
     [[ -n "${AGE_KEY}" ]] || die "wardynd -gen-age-key produced no key"
   fi
   cmd_down_quiet
+  [[ -n "${TOKEN}" ]] || TOKEN="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
+  local token_tmp
+  token_tmp="$(mktemp "${TOKEN_FILE}.XXXXXX")"
+  printf '%s\n' "${TOKEN}" > "${token_tmp}"
+  mv -f "${token_tmp}" "${TOKEN_FILE}"
   # Fresh schema each up so seeded fixtures are deterministic (wardynd re-migrates
   # and re-stores its keys under this boot's AGE_KEY).
   log "Resetting ${PG_DBNAME} schema for deterministic fixtures"
   psql_e2e -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public;" >/dev/null 2>&1 || true
-  log "Starting wardynd (runner=none) on ${ADDR} → ${BASE_URL}, DB ${PG_DBNAME}"
   # WARDYN_RUNNER_TARGET: -runner none resolves the target "none", which no user
   # drive backend can name, so without it the API refuses EVERY drive with a 400
   # and the drives screen has nothing to exercise. Registration only — this
@@ -224,15 +240,31 @@ cmd_up() {
   if [[ -n "${BASE_PATH}" ]]; then
     export WARDYN_BASE_PATH="${BASE_PATH}"
   fi
+  local daemon_bin="${BIN_DIR}/wardynd" runner_sel=none
+  if [[ "${WARDYN_E2E_TMUX:-0}" == "1" ]]; then
+    command -v tmux >/dev/null 2>&1 || die "WARDYN_E2E_TMUX=1 needs a real tmux (>= 3.2) on PATH; the real-tmux specs fail without it, they never skip"
+    [[ -x "${BIN_DIR}/wardynd-tmux" ]] || die "WARDYN_E2E_TMUX=1 needs ${BIN_DIR}/wardynd-tmux (build with WARDYN_E2E_TMUX_BUILD=1)"
+    daemon_bin="${BIN_DIR}/wardynd-tmux" runner_sel=docker
+    # A throwaway tmux server per backend, killed by cmd_down_quiet.
+    export WARDYN_E2E_TMUX_SOCKET="wardyn-e2e-${_PORT}-${RANDOM}${RANDOM}"
+    export WARDYN_E2E_TMUX_CONF="${WARDYN_E2E_TMUX_CONF:-${REPO_ROOT}/deploy/images/common/tmux.conf}"
+    echo "${WARDYN_E2E_TMUX_SOCKET}" > "${TMUX_SOCK_FILE}"
+  fi
+  # The compose stack's Claude Code image: New Run refuses a harness no image
+  # carries (harness_not_installed), and its default draft is Claude Code. Neither
+  # runner here pulls it.
+  local agent_images='{"claude-code":"wardyn/agent-claude-code:local"}'
+  agent_images="${WARDYN_AGENT_IMAGES:-${agent_images}}"
+  log "Starting wardynd (runner=${runner_sel}) on ${ADDR} → ${BASE_URL}, DB ${PG_DBNAME}"
   WARDYN_PG_DSN="${DSN}" WARDYN_ADMIN_TOKEN="${TOKEN}" WARDYN_AGE_KEY="${AGE_KEY}" \
-    WARDYN_RUNNER_TARGET=docker \
-    "${BIN_DIR}/wardynd" \
-      -runner none \
+    WARDYN_RUNNER_TARGET=docker WARDYN_AGENT_IMAGES="${agent_images}" \
+    "${daemon_bin}" \
+      -runner "${runner_sel}" \
       -listen "${ADDR}" \
       -ui-sandbox-listen "${UI_ADDR}" \
-      -ui-sandbox-advertise "http://localhost:${UI_ADDR##*:}" \
+      -ui-sandbox-advertise "$(e2e_base_url "${UI_ADDR}")" \
       -internal-listen "${INTERNAL_ADDR}" \
-      -ui-dir "${REPO_ROOT}/ui/dist" \
+      -ui-dir "${REPO_ROOT}/ui/dist-e2e" \
       -default-policy "${REPO_ROOT}/examples/policies/demo.json" \
       >"${LOG_FILE}" 2>&1 &
   echo $! > "${PID_FILE}"
@@ -242,18 +274,23 @@ cmd_up() {
       >"${PROXY_LOG_FILE}" 2>&1 &
     echo $! > "${PROXY_PID_FILE}"
     log "Waiting for the base-path proxy on ${PROXY_ADDR}"
-    wait_healthy "http://localhost:${PROXY_ADDR##*:}${BASE_PATH}" 40 0.25 || die "basepathproxy did not answer (log: ${PROXY_LOG_FILE})"
+    wait_healthy "$(e2e_base_url "${PROXY_ADDR}")${BASE_PATH}" 40 0.25 || die "basepathproxy did not answer (log: ${PROXY_LOG_FILE})"
   fi
   cmd_seed
   log "Seeded backend ready:"
   log "  URL:   ${DAEMON_URL}"
   if [[ -n "${BASE_PATH}" ]]; then
-    log "  proxy: http://localhost:${PROXY_ADDR##*:}${BASE_PATH}/"
+    log "  proxy: $(e2e_base_url "${PROXY_ADDR}")${BASE_PATH}/"
   fi
   log "  logs:  ${LOG_FILE}"
 }
 
 cmd_down_quiet() {
+  rm -f "${TOKEN_FILE}"
+  if [[ -f "${TMUX_SOCK_FILE}" ]]; then
+    tmux -L "$(cat "${TMUX_SOCK_FILE}")" kill-server >/dev/null 2>&1 || true
+    rm -f "${TMUX_SOCK_FILE}"
+  fi
   if [[ -f "${PROXY_PID_FILE}" ]]; then
     kill "$(cat "${PROXY_PID_FILE}")" >/dev/null 2>&1 || true
     rm -f "${PROXY_PID_FILE}"
@@ -294,21 +331,42 @@ cmd_down() {
   psql_e2e -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public;" >/dev/null 2>&1 || true
 }
 
+cmd_token() {
+  [[ -s "${TOKEN_FILE}" ]] || die "no token for ${ADDR}; start this instance with up first"
+  cat "${TOKEN_FILE}"
+}
+
 # Deterministic fixtures. Created via the API (correct shapes), then diversified
 # into every RunState / ApprovalState via SQL so the UI renders the full matrix —
 # crucially COMPLETED, the state that previously crashed the console.
 cmd_seed() {
+  TOKEN="$(cmd_token)"
   log "Seeding deterministic fixtures via API + SQL"
-  # Match fixtures.ts's synthetic per-person tokens; never persist the bearer.
-  psql_e2e -v ON_ERROR_STOP=1 >/dev/null <<'SQL'
+  # Match fixtures.ts's per-person derivation without passing the bearer to psql.
+  local token_hashes member_hash security_hash security2_hash
+  token_hashes="$(printf '%s' "${TOKEN}" | python3 -c '
+import hashlib, sys
+admin = sys.stdin.read()
+for principal in ("e2e-member", "e2e-security-admin", "e2e-security-admin-2"):
+    token = "wdn_" + hashlib.sha256(f"{admin}:{principal}".encode()).hexdigest()
+    print(hashlib.sha256(token.encode()).hexdigest(), end=" ")
+')"
+  read -r member_hash security_hash security2_hash <<< "${token_hashes}"
+  psql_e2e -v ON_ERROR_STOP=1 -v member_hash="${member_hash}" \
+    -v security_hash="${security_hash}" -v security2_hash="${security2_hash}" >/dev/null <<'SQL'
 INSERT INTO api_tokens (id, principal, email, role, user_type, groups, groups_truncated, name, token_sha256)
 VALUES
   ('69800000-0000-4000-8000-000000000001', 'e2e-member', 'member@e2e.wardyn.invalid',
    'user', 'standard', '[]', false, 'e2e member',
-   encode(sha256(convert_to('wdn_' || repeat('1', 64), 'UTF8')), 'hex')),
+   :'member_hash'),
   ('69800000-0000-4000-8000-000000000002', 'e2e-security-admin', 'security-admin@e2e.wardyn.invalid',
    'security_admin', 'standard', '[]', false, 'e2e security admin',
-   encode(sha256(convert_to('wdn_' || repeat('2', 64), 'UTF8')), 'hex'))
+   :'security_hash'),
+  -- The second human of the governance four-eyes spec: its own principal AND its own mailbox, since the
+  -- server counts one mailbox as one human.
+  ('69800000-0000-4000-8000-000000000003', 'e2e-security-admin-2', 'security-admin-2@e2e.wardyn.invalid',
+   'security_admin', 'standard', '[]', false, 'e2e security admin 2',
+   :'security2_hash')
 ON CONFLICT (id) DO NOTHING;
 SQL
   # The fixture install is ONBOARDED. The suite's specs exercise the console,
@@ -393,10 +451,13 @@ SQL
   # dispatch would write it. Attached to the RUNNING fixture rather than a new
   # run on purpose: the lane is owner-and-RUNNING-only, and the seeded run
   # count is load-bearing for other specs (runs, recording).
+  # The real-tmux harness attaches to the RUNNING fixture, which needs a sandbox ref.
+  if [[ "${WARDYN_E2E_TMUX:-0}" == "1" ]]; then
+    psql_e2e -c "UPDATE agent_runs SET sandbox_ref = 'e2e-tmux' WHERE task = 'e2e fixture 2'" >/dev/null || die "could not give the RUNNING fixture a sandbox ref"
+  fi
   psql_e2e >/dev/null 2>&1 <<'SQL' || true
-INSERT INTO audit_events (id, time, run_id, actor_type, actor, action, target, outcome, data)
-SELECT gen_random_uuid(), now(), id, 'system', 'wardynd', 'run.policy.resolve', id::text, 'success',
-       '{"allowed_domains":[],"first_use_approval":"always_deny","min_confinement_class":"CC1","ui_apps":[{"name":"vscode","port":8080,"path":"/"}]}'::jsonb
+SELECT audit_append(gen_random_uuid(), now(), id, 'system', 'wardynd', 'run.policy.resolve', id::text, 'success', '',
+       '{"allowed_domains":[],"first_use_approval":"always_deny","min_confinement_class":"CC1","ui_apps":[{"name":"vscode","port":8080,"path":"/"}]}'::jsonb)
 FROM agent_runs WHERE task = 'e2e fixture 2';
 SQL
   # review R-03: fixture 6 (FAILED, rn=7 above) is runs-detail.spec.ts's "worst
@@ -411,9 +472,8 @@ UPDATE agent_runs
    SET repo = 'github.com/acme-widgets/payments-platform-monorepo',
        workspace_path = '/home/agent/work/payments-platform-monorepo/services/billing'
  WHERE task = 'e2e fixture 6';
-INSERT INTO audit_events (id, time, run_id, actor_type, actor, action, target, outcome, data)
-SELECT gen_random_uuid(), now(), id, 'system', 'wardynd', 'run.complete', id::text, 'failure',
-       '{"exit_code":137}'::jsonb
+SELECT audit_append(gen_random_uuid(), now(), id, 'system', 'wardynd', 'run.complete', id::text, 'failure', '',
+       '{"exit_code":137}'::jsonb)
 FROM agent_runs WHERE task = 'e2e fixture 6';
 -- review R-13/R-14: a PENDING approval was seeded here in the previous
 -- round for width headroom, then dropped again — measuring the header's
@@ -435,5 +495,6 @@ case "${1:-up}" in
   seed)  cmd_seed ;;
   wait)  cmd_wait ;;
   build) cmd_build ;;
-  *) die "usage: $0 {up|down|seed|wait|build}" ;;
+  token) cmd_token ;;
+  *) die "usage: $0 {up|down|seed|wait|build|token}" ;;
 esac

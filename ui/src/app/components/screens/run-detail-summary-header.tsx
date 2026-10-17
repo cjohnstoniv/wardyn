@@ -11,7 +11,7 @@
 // every fact this bar carries fits in one row's width down at `lg` (1024px).
 import * as React from "react";
 import { Link } from "react-router-dom";
-import { Check, Clock, Link as LinkIcon, Pencil, RotateCcw, ShieldAlert, Skull, TerminalSquare } from "lucide-react";
+import { Check, Clock, Laptop, Link as LinkIcon, Pencil, RotateCcw, ShieldAlert, Skull, TerminalSquare } from "lucide-react";
 import type { RunDetail } from "../../lib/types";
 import { runHeadline } from "../../lib/types";
 import { Button } from "../ui/button";
@@ -22,15 +22,17 @@ import { RUN, RUN_COCKPIT } from "../wardyn/copy";
 import { waitingAdoConsent, waitingReauth } from "../../lib/reauth-waiting-copy";
 import { BarrierStrengthStrip } from "../wardyn/barrier-strength-strip";
 import { KillRunDialog } from "../wardyn/kill-run-dialog";
-import { useOperator, usePrincipal } from "../wardyn/operator-context";
+import { useOperator, useOperatorResolved, usePrincipal } from "../wardyn/operator-context";
+import { mayEnterRunOrUnknown } from "../../lib/run-entry";
 import { RUN_FACTS } from "../wardyn/copy/door";
+import { RUN_PLACEMENT, runnerLabel } from "../wardyn/copy/runners";
 import {
   isTerminalStatusReason,
   PENDING_NO_DETAIL,
   statusDetailChip,
   statusDetailSentence,
 } from "./run-status-detail";
-import { titleFromTask } from "./new-run/wizard-types";
+import { titleFromTask } from "../../lib/run-title";
 
 
 // Exported for the failure block (run-detail/failure-block.tsx), which states
@@ -79,6 +81,7 @@ export function SummaryHeader({
   onCopyLink,
   linkCopied = false,
   onKill,
+  canKillAgain,
   onClone,
   onRename,
 }: {
@@ -111,7 +114,10 @@ export function SummaryHeader({
   // row it lived in.
   onCopyLink?: () => void;
   linkCopied?: boolean;
-  onKill: () => void;
+  onKill: (runId: string) => void;
+  // A KILLED run whose trail does not prove the teardown (#1487): Kill stays
+  // enabled so the person can run the cascade again.
+  canKillAgain?: boolean;
   // "Start a run like this one", for EVERY terminal run — the failure block
   // only renders it for a run that ended badly (3 of the 5 terminal states),
   // so it belongs here instead. Optional so the header stays renderable
@@ -131,18 +137,17 @@ export function SummaryHeader({
   // an editable input without pushing Kill off-screen (review round 2, D2).
   const [renaming, setRenaming] = React.useState(false);
   const [draftTitle, setDraftTitle] = React.useState("");
-  // Claim "attachable" only under the SAME owner-or-admin predicate
-  // AttachTerminal itself gates the connect on (attach-terminal.tsx: `!operator
-  // && !owned`) — otherwise a member sees this chip promise attachability and
-  // then gets a red "requires the admin role" error the instant they open
-  // the terminal below it (OverviewTab renders <AttachTerminal> whenever
-  // `attachable`).
+  // Claim "attachable" only under the SAME entry rule AttachTerminal itself
+  // gates the connect on (lib/run-entry.ts) — otherwise a viewer sees this chip
+  // promise attachability and then gets a refusal the instant they open the
+  // terminal below it (OverviewTab renders <AttachTerminal> whenever
+  // `attachable`). #1476: the run's person, or an admin on a run no person owns.
   const operator = useOperator();
   const principal = usePrincipal();
   const owned = !!run.created_by && run.created_by === principal;
-  const canAttach = operator || owned;
+  const canAttach = mayEnterRunOrUnknown(run, principal, operator, useOperatorResolved());
   const elapsed = useElapsed(run.created_at, run.updated_at, terminal);
-  const shortId = run.id.replace(/^run_/, "");
+  const shortId = run.id.replace(/^run_/, "").slice(0, 8);
   // "" whenever there is nothing to say. The SERVER has already blanked
   // status_detail for every run that is not STARTING (PENDING included —
   // projectStatusDetail's `default` branch in runs_status_detail.go blanks it
@@ -248,7 +253,7 @@ export function SummaryHeader({
           the "Failed"/exit chips rather than pushing them over). Putting the
           same floor on the wrapping div is what makes the row actually
           RESERVE the space instead of just letting repo bleed into it. */}
-      <div className="flex min-w-[90px] shrink items-baseline gap-2">
+      <div className="flex min-w-[90px] shrink items-baseline gap-2 overflow-hidden 2xl:min-w-[200px]">
         <span className="min-w-[90px] max-w-[140px] truncate font-mono text-xs text-foreground 2xl:max-w-[180px]" title={run.repo}>
           {run.repo}
         </span>
@@ -365,6 +370,14 @@ export function SummaryHeader({
       <div className="flex shrink-0 items-center gap-2">
         {run.model_provider_id && <RunProviderChip run={run} />}
         <ConfinementChip value={run.confinement_class} />
+        {/* 0.9 (M-RN-3 RS3): where a LOCAL run is. Neutral, and absent for a remote run, whose default
+            place needs no chip (RN-Q14), so an ordinary run's header is what it was. */}
+        {run.placement === "local" && (
+          <Chip tone="neutral" className="gap-1">
+            <Laptop className="size-3" aria-hidden />
+            {RUN_PLACEMENT.CHIP(runnerLabel(run))}
+          </Chip>
+        )}
         {/* run.autonomy_level (#97) freezes the level resolveRunAutonomy
             capped this run at, at create time. Empty for a run under no
             profile, a profile with no rubric, or one created before this
@@ -482,7 +495,7 @@ export function SummaryHeader({
           // explicit shrink-0 so it is never the thing degrading away when the
           // group above it runs out of room.
           className="h-7 shrink-0 text-danger hover:text-danger"
-          disabled={terminal}
+          disabled={terminal && !canKillAgain}
           onClick={() => setConfirmId(run.id)}
         >
           <Skull className="size-4" /> Kill
@@ -494,6 +507,17 @@ export function SummaryHeader({
         />
       </div>
     </div>
+    {/* #1234: how a portal-launched run got here, one thin muted line directly
+        under the bar (launched-via-1234-packet.html). Not a chip: the bar is
+        already at its xl width floor, and a sentence reads better than a chip
+        for a provenance fact. Absent for a self-launched run, so the page is
+        what it was. The server names the portal (a revoked one keeps its name);
+        when it cannot, the line still says a portal did it. */}
+    {run.created_via && (
+      <p data-testid="run-launched-via" className="break-words border-b border-border bg-card px-4 py-1 text-xs text-muted-foreground">
+        {run.created_via_name ? RUN_FACTS.LAUNCHED_VIA(run.created_via_name) : RUN_FACTS.LAUNCHED_VIA_FALLBACK}
+      </p>
+    )}
     {/* Rename's edit row (#1197 L2 review round 2, D2): a FULL-WIDTH row
         under the bar, outside its overflow-hidden xl:flex-nowrap flex
         row — matching the mock's own layout (packet:742, the heading's own

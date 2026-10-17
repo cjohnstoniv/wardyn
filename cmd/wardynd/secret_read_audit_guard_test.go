@@ -27,13 +27,14 @@ package main
 // function that calls SiteAudited must itself record a "secret.read". Audited
 // also refuses an unmarked Get at run time; this guard finds it before then.
 //
-// Two reads never go through Get: the pg store's bulk readers, ConvertV0 (the
-// boot conversion) and Migrate (`wardynd -migrate-secrets`), open values
-// directly and their callers record each read. Their calls are held to the same
+// Three reads never go through Get: the pg store's bulk readers, ConvertV0 (the
+// boot conversion), Migrate (`wardynd -migrate-secrets`) and CheckRows
+// (`wardynd -recovery-rehearse`), open values directly; the first two's callers
+// record each read, and the rehearsal's verdict row counts them. Their calls are held to the same
 // rule as a Get: the context must be marked. And inside the pg store, every
 // function that can reach a value-opening primitive (a local envelope's
 // kek.Open, a legacy row's age.Decrypt, or the external store's Get, vaultkv's
-// and azurekv's included) must be reached only from Get or those two bulk readers, so a new
+// and azurekv's included) must be reached only from Get or those bulk readers, so a new
 // way to open a value fails here until it is classified. Reconcile is not a
 // read: it calls the external store's Check and Walk, which read metadata only.
 //
@@ -76,6 +77,7 @@ const (
 var guardBulkReaders = map[string]bool{
 	guardPGStore + ".ConvertV0": true,
 	guardPGStore + ".Migrate":   true,
+	guardPGStore + ".CheckRows": true,
 }
 
 // guardValueOpeners are the primitives that turn a stored row into its value.
@@ -91,6 +93,7 @@ var guardPGReadEntries = map[string]bool{
 	guardPGStore + ".Get":       true,
 	guardPGStore + ".ConvertV0": true,
 	guardPGStore + ".Migrate":   true,
+	guardPGStore + ".CheckRows": true,
 }
 
 // guardExternalStores are the store-mode backends. Their Get is External.Get,
@@ -100,6 +103,21 @@ var guardExternalStores = []string{
 	guardStorePkg + "/vaultkv",
 	guardStorePkg + "/azurekv",
 }
+
+// guardCtxFromFirstArg are the api server's cross-replica lock helpers
+// (internal/api/locks.go): each returns, as its first result, the context it was
+// given with the lock's hold on it (cancelled if the lock is lost), and nothing
+// else (beginCredentialWrite and beginAWSSSORenewal are the same shape: the context they were given plus an erase fence). Like a context.With* call, its result is marked exactly when its first
+// argument is, so a Get that receives it is classified by the argument. A new
+// helper of that shape is listed here; one that returns any other context is not.
+var guardCtxFromFirstArg = func() map[string]bool {
+	m := map[string]bool{}
+	for _, name := range []string{"lock", "tryLock", "lockRunOp", "tryLockRunOp", "lockAWSSSOOwner",
+		"tryLockAWSSSOOwner", "lockAWSSSORenewal", "lockADOSignIn", "lockADOSignInRedeem", "beginCredentialWrite", "beginAWSSSORenewal"} {
+		m["(*"+guardModPath+"/internal/api.Server)."+name] = true
+	}
+	return m
+}()
 
 type listedPkg struct {
 	ImportPath, Dir, Export string
@@ -286,6 +304,8 @@ func (c *ctxScope) class(e ast.Expr, seen map[types.Object]bool) int {
 		case k == guardWithPurpose || k == guardSiteAudited:
 			return ctxMarked
 		case strings.HasPrefix(k, "context.") && len(a.Args) > 0:
+			return c.class(a.Args[0], seen)
+		case guardCtxFromFirstArg[k] && len(a.Args) > 0:
 			return c.class(a.Args[0], seen)
 		}
 	case *ast.Ident:

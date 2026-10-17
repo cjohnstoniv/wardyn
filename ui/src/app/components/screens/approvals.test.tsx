@@ -137,6 +137,7 @@ let mockCaps: MeCapabilities = {
   enforcement: {},
   session_groups: [],
   groups_snapshot_stale: false,
+  kinds_version: 1,
 };
 vi.mock("../../lib/api/permissions", () => ({
   permissions: { getMyCapabilities: () => Promise.resolve(mockCaps) },
@@ -423,7 +424,7 @@ describe("ApprovalsScreen — egress host not granted (member)", () => {
     mockPendingEmpty = false;
     denyMock.mockReset();
     approveMock.mockReset();
-    mockCaps = { grants: [], enforcement: {}, session_groups: [], groups_snapshot_stale: false };
+    mockCaps = { grants: [], enforcement: {}, session_groups: [], groups_snapshot_stale: false, kinds_version: 1 };
   });
 
   function renderMember() {

@@ -8,6 +8,7 @@ package docker
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -24,6 +25,13 @@ import (
 
 // Config configures the Docker driver.
 type Config struct {
+	// RunnerID, set only by wardyn-runnerd, is the self-hosted runner this
+	// driver serves. The orphan sweep removes only sandboxes labelled with it,
+	// so an empty id never sweeps a runner's sandboxes.
+	RunnerID string
+	// RunnerStateDir enables a private per-run audit spool mounted only into
+	// the proxy. Set only by the registered runner daemon's local composition.
+	RunnerStateDir string
 	// ProxyImage is the OCI image for the wardyn-proxy sidecar. For v0 it may
 	// be a minimal image with the locally-built wardyn-proxy binary
 	// bind-mounted in via ProxyBinaryHostPath.
@@ -76,6 +84,14 @@ type Config struct {
 	// DriveProbeImage is the OCI image ProbeDrive runs its short-lived
 	// readability check in. Empty uses defaultDriveProbeImage (busybox-class).
 	DriveProbeImage string
+	// ControlPlaneRelay, set only by wardyn-runnerd, makes sure the runner's
+	// local relay listens for a run's control-plane URL and returns the address
+	// the relay is reachable at from a container: "host-gateway" or a unicast,
+	// non-loopback IP (a VM engine whose host-gateway does not reach this host).
+	// The PROXY's hosts map both that URL's hostname and host.docker.internal to
+	// the target, so the proxy's control-plane clamp covers one address, and an
+	// IP-literal URL (which no hosts entry can remap) refuses the create.
+	ControlPlaneRelay func(controlPlaneURL *url.URL) (target string, err error)
 }
 
 // RecordingMountTarget is where RecordingMount appears inside the agent
@@ -148,6 +164,11 @@ type Driver struct {
 	// io.Writer); every agent Exec on the ref tees its output there, the BYOI
 	// selftest included. Dropped at teardown.
 	execOutputs sync.Map
+
+	// engArch caches the engine's normalised architecture (guarded by mu).
+	engArch string
+	// archVerdicts caches, per foreign image architecture, a conclusive archVerdictKind.
+	archVerdicts sync.Map
 }
 
 // pendingAgent is the fully-built agent-container config CreateSandbox defers
@@ -189,6 +210,7 @@ var _ substrate.Substrate = (*Driver)(nil)
 var _ runner.SandboxEnder = (*Driver)(nil)
 var _ runner.ProxyStopper = (*Driver)(nil)
 var _ runner.Freezer = (*Driver)(nil)
+var _ runner.ActivitySampler = (*Driver)(nil)
 
 // New constructs a Driver against the host Docker daemon. API-version
 // negotiation with the server is on by default in the moby v29 client.
@@ -199,7 +221,7 @@ func New(cfg Config) (*Driver, error) {
 	if err != nil {
 		return nil, fmt.Errorf("docker: new client: %w", err)
 	}
-	d := newWithClient(cli, cfg)
+	d := newWithClient(newEngineClient(cli), cfg)
 	d.proxySettle = proxyStartSettle
 	return d, nil
 }
@@ -264,7 +286,7 @@ func (d *Driver) ensureImage(ctx context.Context, ref string, onPulling func()) 
 		return err
 	}
 	if present {
-		return nil
+		return d.checkImageArch(ctx, ref)
 	}
 	if onPulling != nil {
 		onPulling()
@@ -274,7 +296,7 @@ func (d *Driver) ensureImage(ctx context.Context, ref string, onPulling func()) 
 	if err := dockerutil.PullImage(ctx, d.cli, ref, "docker"); err != nil {
 		return pullFailure(ref, err)
 	}
-	return nil
+	return d.checkImageArch(ctx, ref)
 }
 
 // ImagePresent implements runner.ImageChecker: exported imagePresent, so a

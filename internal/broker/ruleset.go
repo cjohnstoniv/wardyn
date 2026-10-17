@@ -6,6 +6,7 @@ package broker
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -24,17 +25,28 @@ import (
 const refNamespaceGlob = "refs/heads/wardyn/**/*"
 
 // Ref-confinement probes for VerifyRefRuleset. GitHub's "rules for a branch"
-// endpoint answers for a branch NAME whether or not it exists, so both probes
-// are pure reads that create nothing.
+// endpoint answers for a branch NAME whether or not it exists, so every probe
+// is a pure read that creates nothing.
 //
-// refProbeOutside is deliberately synthetic: an unenumerable name returns
-// rules only when ref_name.include is genuinely broad. refProbeInside sits
-// two segments deep inside the run namespace, checking that ref_name.exclude
-// actually took at the depth runs push to.
+// The outside probes are deliberately synthetic: an unenumerable name returns
+// rules only when ref_name.include is genuinely broad. There are three, at one,
+// two and three components, because "*" never crosses "/": an include of
+// refs/heads/* covers only the first, and an exclude of refs/heads/*/* opens
+// only the second. refProbeInside sits two segments deep inside the
+// run namespace, checking that ref_name.exclude actually took at the depth runs
+// push to.
+//
+// ponytail: three sampled names, not a glob evaluator; a ruleset whose patterns
+// leave some other name open (a deeper exclude, say) can still pass.
 const (
-	refProbeOutside = "probe-wardyn-ref-confinement"
-	refProbeInside  = "wardyn/00000000-0000-0000-0000-000000000000/probe"
+	refProbeOutside       = "probe-wardyn-ref-confinement"
+	refProbeOutsideTwo    = "probe-wardyn-ref-confinement/nested"
+	refProbeOutsideNested = "probe-wardyn-ref-confinement/nested/probe"
+	refProbeInside        = "wardyn/00000000-0000-0000-0000-000000000000/probe"
 )
+
+// refProbesOutside are the outside names every one of which must carry all three rules.
+var refProbesOutside = []string{refProbeOutside, refProbeOutsideTwo, refProbeOutsideNested}
 
 // refRevokeTimeout bounds the best-effort hand-back of the probe token. Short:
 // nothing waits on it and its failure changes no verdict.
@@ -52,16 +64,17 @@ const refRevokeTimeout = 3 * time.Second
 // proxy; the parser does not.
 //
 // Three kinds of read decide it:
-//   - OUTSIDE the namespace, "creation", "update" AND "deletion" must be in
-//     force (deletion counts: a leaked token could otherwise still
-//     `git push --delete origin main`).
-//   - Every ruleset backing those rules must report current_user_can_bypass
+//   - At EACH sampled name outside the namespace, "creation", "update" AND
+//     "deletion" must be in force (deletion counts: a leaked token could
+//     otherwise still `git push --delete origin main`).
+//   - Every ruleset backing those rules, at any sample, must report current_user_can_bypass
 //     == "never"; any other value means the caller is exempt from the very
 //     rule the confinement rests on, which looks like confinement but isn't.
 //   - INSIDE the namespace neither "creation" nor "update" may be in force,
 //     or the ruleset would refuse the run's own pushes.
 //
-// Limits, stated because the caller grades security on this answer: the
+// Limits, stated because the caller grades security on this answer: it samples
+// named branches and does not prove every include or exclude pattern; the
 // bypass field's behavior for a GitHub App token is unconfirmed, so an absent
 // field or any read error is graded "unknown", never "unconfined". Covers
 // BRANCHES via RULESETS only — refs/tags/* stays open to a leaked token, and
@@ -97,16 +110,24 @@ func (m *githubMinter) VerifyRefRuleset(ctx context.Context, repo string) (bool,
 		_, _ = c.Apps.RevokeInstallationToken(rctx)
 	}()
 
-	outside, err := readRefRules(ctx, c, owner, name, refProbeOutside)
-	if err != nil {
-		return false, "", err
+	var rulesets []int64
+	for _, probe := range refProbesOutside {
+		outside, err := readRefRules(ctx, c, owner, name, probe)
+		if err != nil {
+			return false, "", err
+		}
+		if missing := missingRules(outside); missing != "" {
+			return false, fmt.Sprintf(
+				"%s: GitHub reports no %s rule in force at refs/heads/%s, outside %s, so a minted token that escapes the proxy can still push there.",
+				repo, missing, probe, refNamespaceGlob), nil
+		}
+		for _, id := range outside.rulesets {
+			if !slices.Contains(rulesets, id) {
+				rulesets = append(rulesets, id)
+			}
+		}
 	}
-	if missing := missingRules(outside); missing != "" {
-		return false, fmt.Sprintf(
-			"%s: GitHub reports no %s rule in force outside %s, so a minted token that escapes the proxy can still push there.",
-			repo, missing, refNamespaceGlob), nil
-	}
-	if bypassers, err := bypassableRulesets(ctx, c, owner, name, outside.rulesets); err != nil {
+	if bypassers, err := bypassableRulesets(ctx, c, owner, name, rulesets); err != nil {
 		return false, "", err
 	} else if len(bypassers) > 0 {
 		return false, fmt.Sprintf(
@@ -124,8 +145,9 @@ func (m *githubMinter) VerifyRefRuleset(ctx context.Context, repo string) (bool,
 			repo, refProbeInside, refNamespaceGlob), nil
 	}
 	return true, fmt.Sprintf(
-		"%s: creation, update and deletion are restricted outside %s, nothing is in force at refs/heads/%s inside it, and every ruleset behind those rules reports current_user_can_bypass \"never\". Branches only — a branch ruleset does not bound refs/tags/*, so a leaked token can still create, move or delete tags.",
-		repo, refNamespaceGlob, refProbeInside), nil
+		"%s: at the sampled branches refs/heads/%s, refs/heads/%s and refs/heads/%s outside %s, creation, update and deletion are restricted, nothing is in force at refs/heads/%s inside it, and every ruleset behind those rules reports current_user_can_bypass \"never\". "+
+			"This checks those named branches, not every name the ruleset's patterns could leave open. Branches only — a branch ruleset does not bound refs/tags/*, so a leaked token can still create, move or delete tags.",
+		repo, refProbeOutside, refProbeOutsideTwo, refProbeOutsideNested, refNamespaceGlob, refProbeInside), nil
 }
 
 // refRuleState is what one rules/branches read tells the verifier: which of

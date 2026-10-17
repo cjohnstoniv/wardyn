@@ -4,7 +4,6 @@
 package api
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"log/slog"
@@ -97,7 +96,7 @@ func TestMeWithholdsAnUnbindableDrive(t *testing.T) {
 		root, st := newShare(t)
 		srv, _ := driveShareServer(st, []string{root})
 
-		var buf bytes.Buffer
+		var buf lockedBuffer
 		prev := slog.Default()
 		slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})))
 		t.Cleanup(func() { slog.SetDefault(prev) })

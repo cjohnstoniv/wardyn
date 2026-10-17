@@ -1,0 +1,5 @@
+# The must-link rule in scripts/check-doc-links.sh applies to these docs.
+RELEASING.md
+ROADMAP.md
+docs/DEMO-SCRIPT.md
+docs/LIVE-TESTS.md

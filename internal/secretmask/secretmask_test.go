@@ -7,7 +7,9 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"io"
+	"slices"
 	"testing"
 	"time"
 
@@ -39,7 +41,7 @@ func TestRegistry_AddGlobal_AppearsInAllSnapshots(t *testing.T) {
 	runA, runB := uuid.New(), uuid.New()
 	global := []byte("global-secret-val")
 
-	r.AddGlobal("", "test-credential", time.Now(), global)
+	r.AddGlobal(0, "", "test-credential", time.Now(), global)
 	r.Add(runA, []byte("per-run-secret-a"))
 
 	snapA := r.Snapshot(runA)
@@ -63,9 +65,9 @@ func TestRegistry_AddGlobal_Idempotent(t *testing.T) {
 	global := []byte("global-secret-val")
 
 	// Per-run call sites re-add the same blob on every dispatch/preflight.
-	r.AddGlobal("", "test-credential", time.Now(), global)
-	r.AddGlobal("", "test-credential", time.Now(), bytes.Clone(global))
-	r.AddGlobal("", "test-credential", time.Now(), global)
+	r.AddGlobal(0, "", "test-credential", time.Now(), global)
+	r.AddGlobal(0, "", "test-credential", time.Now(), bytes.Clone(global))
+	r.AddGlobal(0, "", "test-credential", time.Now(), global)
 
 	if snap := r.Snapshot(uuid.New()); len(snap) != 1 {
 		t.Fatalf("Snapshot len = %d, want 1 (duplicate globals collapsed)", len(snap))
@@ -76,9 +78,9 @@ func TestRegistry_MinLen_Floor(t *testing.T) {
 	r := secretmask.NewRegistry()
 	runID := uuid.New()
 
-	r.Add(runID, []byte("short"))                                  // 5 bytes < MinLen(8) — should be ignored
-	r.AddGlobal("", "test-credential", time.Now(), []byte("tiny")) // 4 bytes < MinLen(8) — should be ignored
-	r.Add(runID, []byte("exactlen"))                               // exactly 8 bytes — should be kept
+	r.Add(runID, []byte("short"))                                     // 5 bytes < MinLen(8) — should be ignored
+	r.AddGlobal(0, "", "test-credential", time.Now(), []byte("tiny")) // 4 bytes < MinLen(8) — should be ignored
+	r.Add(runID, []byte("exactlen"))                                  // exactly 8 bytes — should be kept
 
 	snap := r.Snapshot(runID)
 	if len(snap) != 1 {
@@ -108,7 +110,7 @@ func TestRegistry_NilSafe(t *testing.T) {
 
 	// None of these should panic.
 	r.Add(runID, []byte("someverylongsecret"))
-	r.AddGlobal("", "test-credential", time.Now(), []byte("globalverylongsecret"))
+	r.AddGlobal(0, "", "test-credential", time.Now(), []byte("globalverylongsecret"))
 	snap := r.Snapshot(runID)
 	if snap != nil {
 		t.Fatalf("nil Registry Snapshot should return nil, got %v", snap)
@@ -511,5 +513,53 @@ func TestJSONEscapedVariants(t *testing.T) {
 	plain := secretmask.JSONEscapedVariants([][]byte{[]byte("plainASCIItoken")})
 	if len(plain) != 1 {
 		t.Fatalf("plain ASCII secret should add no variant, got %d entries", len(plain))
+	}
+}
+
+// The originals come back first, in order and with their duplicates; each
+// distinct escaped form is added once, whichever secret or encoder mode
+// produced it; a form that is already an original, and a string no encoder
+// changes, add nothing. The caller's slice is left as it was.
+func TestJSONEscapedVariants_DedupKeepsOriginalsAndOrder(t *testing.T) {
+	nl := []byte("line1\nline2-secret")        // both modes escape it alike
+	html := []byte("a<b>&c-secret-value")      // only the HTML-escaping mode changes it
+	plain := []byte("plainASCIItoken")         // no mode changes it
+	nlEsc := []byte(`line1\nline2-secret`)     // an original that is nl's escaped form
+	longer := []byte("a<b>&c-secret-value<x>") // html is its prefix
+	in := [][]byte{nl, plain, html, nl, nlEsc, longer}
+	before := slices.Clone(in)
+
+	got := secretmask.JSONEscapedVariants(in)
+	want := [][]byte{nl, plain, html, nl, nlEsc, longer,
+		[]byte(`a\u003cb\u003e\u0026c-secret-value`),
+		[]byte(`line1\\nline2-secret`),
+		[]byte(`a\u003cb\u003e\u0026c-secret-value\u003cx\u003e`),
+	}
+	if !slices.EqualFunc(got, want, bytes.Equal) {
+		t.Fatalf("variants = %q\nwant       %q", got, want)
+	}
+	if !slices.EqualFunc(in, before, bytes.Equal) {
+		t.Fatalf("the caller's snapshot changed: %q", in)
+	}
+}
+
+// The de-dup is a set lookup, not a scan of everything built so far: the
+// corpus holds every person's global values, so its cost must follow the
+// corpus size. Scanning the output for each variant searches about 4n*n
+// entries over n secrets; the whole expansion may search no more than it
+// returns.
+func TestJSONEscapedVariants_CostFollowsCorpusSize(t *testing.T) {
+	const n = 500
+	snap := make([][]byte, n)
+	for i := range snap {
+		snap[i] = fmt.Appendf(nil, "secret-%06d\n<tail>", i) // two distinct variants each
+	}
+	scanned := secretmask.CountScanned(t)
+	got := secretmask.JSONEscapedVariants(snap)
+	if len(got) != 3*n {
+		t.Fatalf("%d secrets gave %d entries, want %d", n, len(got), 3*n)
+	}
+	if *scanned > len(got) {
+		t.Fatalf("expanding %d secrets searched %d entries for duplicates, want at most %d: the de-dup is scanning its own output", n, *scanned, len(got))
 	}
 }

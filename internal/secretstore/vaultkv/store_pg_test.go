@@ -22,6 +22,7 @@ import (
 
 	"filippo.io/age"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/multitracer"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/cjohnstoniv/wardyn/internal/db"
@@ -998,21 +999,28 @@ func TestMigrate_ToLocalSkipsARemovalTheRowWasRepointedAt(t *testing.T) {
 
 	putDone := make(chan error, 1)
 	migDone := make(chan error, 1)
+	cfg := pool.Config()
+	tracer := &migrationCommitBarrier{after: func() {
+		go func() { putDone <- view.Put(ctx, "k", []byte("second")) }()
+		waitOnRowLock(t, pool)
+	}}
+	// multitracer.New keeps a nil tracer and calls it; the base is nil unless WARDYN_TEST_POOL_GUARD=1.
+	if base := cfg.ConnConfig.Tracer; base != nil {
+		cfg.ConnConfig.Tracer = multitracer.New(base, tracer)
+	} else {
+		cfg.ConnConfig.Tracer = tracer
+	}
+	migratingPool, err := pgxpool.NewWithConfig(ctx, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(migratingPool.Close)
+	migrating := storeMode(t, migratingPool, b, id)
 	go func() {
-		// onRead runs inside the migrator's first transaction: queue the Put
-		// on the row's lock behind it, so it lands right after the flip commits.
-		_, err := st.Migrate(ctx, secretstorepg.MigrateLocal, func(string, string) {
-			go func() { putDone <- view.Put(ctx, "k", []byte("second")) }()
-			for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
-				var n int
-				_ = pool.QueryRow(ctx, `SELECT count(*) FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND wait_event='advisory'`).Scan(&n)
-				if n > 0 {
-					return
-				}
-			}
-		})
+		_, err := migrating.Migrate(ctx, secretstorepg.MigrateLocal, func(string, string) {})
 		migDone <- err
 	}()
+
 	select {
 	case <-b.entered:
 	case <-time.After(10 * time.Second):
@@ -1129,4 +1137,49 @@ func drift(t *testing.T, s *secretstorepg.Store) int {
 func TestVaultKV_PurgeConformance(t *testing.T) {
 	s := storeMode(t, throwawayDB(t), newFakeStore(t, newFakeVault(t)), nil)
 	secretstoretest.RunPurgeConformance(t, func(*testing.T) secretstore.Store { return s }, func(t *testing.T) int { return drift(t, s) })
+}
+
+// A guarded Put in store mode (the compare-and-set a refresh's final write runs
+// under) checks the row's revision under the row lock BEFORE the value goes to
+// Vault: a holder that lost its lock neither replaces the newer value there nor
+// moves the row.
+func TestStoreMode_GuardedPutRefusesBeforeTheStoreIsWritten(t *testing.T) {
+	pool := throwawayDB(t)
+	f := newFakeVault(t)
+	s := storeMode(t, pool, newFakeStore(t, f), nil)
+	ctx := t.Context()
+	view := s.For("alice")
+
+	if err := view.Put(ctx, "tok", []byte("one")); err != nil {
+		t.Fatal(err)
+	}
+	rev, err := s.For("alice").(secretstore.Revisioned).Revision(ctx, "tok")
+	if err != nil || rev == "" {
+		t.Fatalf("revision = %q, %v", rev, err)
+	}
+	if err := view.Put(ctx, "tok", []byte("two")); err != nil { // another holder wrote
+		t.Fatal(err)
+	}
+	f.mu.Lock()
+	before := len(f.calls)
+	f.mu.Unlock()
+	if err := view.Put(secretstore.WithIfRevision(ctx, rev), "tok", []byte("stale")); !errors.Is(err, secretstore.ErrRevisionChanged) {
+		t.Fatalf("guarded Put of a row that changed = %v, want ErrRevisionChanged", err)
+	}
+	f.mu.Lock()
+	after := append([]string(nil), f.calls[before:]...)
+	f.mu.Unlock()
+	for _, c := range after {
+		if strings.HasPrefix(c, "POST ") || strings.HasPrefix(c, "DELETE ") {
+			t.Fatalf("a refused guarded Put reached Vault: %v", after)
+		}
+	}
+	got, err := view.Get(secretstore.WithPurpose(ctx, secretstore.PurposeStatus), "tok")
+	if err != nil || string(got) != "two" {
+		t.Fatalf("stored = %q, %v; want the newer value", got, err)
+	}
+	cur, _ := s.For("alice").(secretstore.Revisioned).Revision(ctx, "tok")
+	if err := view.Put(secretstore.WithIfRevision(ctx, cur), "tok", []byte("three")); err != nil {
+		t.Fatalf("guarded Put of the row as read: %v", err)
+	}
 }

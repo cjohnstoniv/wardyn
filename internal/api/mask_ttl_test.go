@@ -206,7 +206,7 @@ func TestAWSSSORefresh_ProviderMaskKeyDoesNotClobberAnotherProvider(t *testing.T
 	// their own, and an access token expiring far in the future.
 	otherAccess, otherRefresh, otherSecret := "other-access-token-12345678901", "other-refresh-token-12345678901", "other-client-secret-12345678901"
 	otherExpiry := awsSSOTestFixedNow.Add(24 * time.Hour)
-	reg.AddGlobalUntil(otherScope.rowOwner(), otherScope.ssoSecret(), awsSSOTestFixedNow, otherExpiry,
+	reg.AddGlobalUntil(0, otherScope.rowOwner(), otherScope.ssoSecret(), awsSSOTestFixedNow, otherExpiry,
 		[]byte(otherAccess), []byte(otherRefresh), []byte(otherSecret))
 
 	// An expired provider-scoped blob due for renewal.

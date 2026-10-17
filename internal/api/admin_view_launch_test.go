@@ -29,6 +29,7 @@ func TestAdminViewLaunchRefused(t *testing.T) {
 	}{
 		{"/api/v1/runs", http.StatusCreated},
 		{"/api/v1/runs/preflight", http.StatusOK},
+		{"/api/v1/runs/policy-preview", http.StatusOK},
 	} {
 		t.Run(door.path, func(t *testing.T) {
 			for _, role := range []string{oidc.RoleAdmin, oidc.RoleSecurityAdmin} {

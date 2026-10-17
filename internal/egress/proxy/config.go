@@ -19,6 +19,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/hoptls"
 	"github.com/cjohnstoniv/wardyn/internal/ipguard"
+	"github.com/cjohnstoniv/wardyn/internal/policyref"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -58,6 +59,8 @@ type Config struct {
 	Listen string `json:"listen,omitempty"`
 	// DecisionBufferSize caps the async decision-log buffer (default 1024).
 	DecisionBufferSize int `json:"decision_buffer_size,omitempty"`
+	// DecisionSpoolDir is the runner-owned proxy-only volume, absent on org substrates.
+	DecisionSpoolDir string `json:"decision_spool_dir,omitempty"`
 	// MITMCACertPEM / MITMCAKeyPEM are the OPTIONAL TLS-MITM certificate authority
 	// (PEM). When both are set AND content inspection is enabled, the proxy
 	// TLS-terminates opaque CONNECT tunnels to known LLM hosts (Anthropic/OpenAI)
@@ -96,11 +99,19 @@ type Config struct {
 	// server-side and injects the credential itself. The PAT never reaches the
 	// sandbox.
 	//
-	// Per-HOST rather than per-repo, deliberately: unlike a GitHub App
-	// installation token, a PAT carries whatever scope the operator issued it
-	// with and Wardyn cannot narrow it — so a per-repo key here would imply a
-	// confinement the credential does not have. Empty => the route always 403s.
+	// Keyed per HOST, with the grant's own scope beside it: a PAT carries whatever
+	// scope the operator issued it with and Wardyn cannot narrow the credential,
+	// but it can narrow the RUN. A narrowed grant's repos and read-only axes are
+	// enforced here, before any mint (pat_scope.go). Empty => the route always 403s.
 	PATGrants map[string]PATGrant `json:"pat_grants,omitempty"`
+	// BrokeredPATGrantIDs is every git_pat grant id of the run while the PAT
+	// broker is on. handleBrokerMint refuses a sandbox-supplied mint naming one:
+	// PATGrants is keyed per host and narrowed (a shadowed, vetoed or withheld
+	// grant is absent from it), but each of those is still a stored PAT this
+	// run's token could mint raw through the relay. Empty with the broker off.
+	// An older proxy image refuses this key at start (strict decode), so the
+	// proxy image is upgraded with wardynd.
+	BrokeredPATGrantIDs []uuid.UUID `json:"brokered_pat_grant_ids,omitempty"`
 	// ADOGrant is the run's per-person Azure DevOps grant, which drives the
 	// REST gate (ado_gate.go, ado_grants.go). Nil == the gate is off. ONE grant
 	// per sidecar: the gate is keyed by host, and every organisation shares
@@ -108,6 +119,16 @@ type Config struct {
 	// organisation pin. LoadConfigBytes still reads the older ado_grants list,
 	// and refuses one with more than one entry.
 	ADOGrant *ADOGrantConfig `json:"ado_grant,omitempty"`
+	// AzureGates are the run's azure_foundry route gates, one per row (azure_gate.go). Empty == off.
+	// Omitempty and set only for a run with such a row: an older proxy refuses a key it does not know.
+	AzureGates []AzureGateConfig `json:"azure_gates,omitempty"`
+	// GitHubAPI is the run's GitHub CLI grant, which drives the api.github.com
+	// door (github_api.go). Nil == off. Omitempty for the reason AzureGates is.
+	GitHubAPI *GitHubAPIGrant `json:"github_api,omitempty"`
+	// AzureARM is the run's Azure CLI grant, which drives the
+	// management.azure.com door (azure_arm_door.go). Nil == off. Omitempty for the
+	// reason AzureGates is.
+	AzureARM *AzureARMGrant `json:"azure_arm,omitempty"`
 	// MITMLLM reports whether TLS-MITM of the BUILT-IN LLM hosts (Anthropic/OpenAI)
 	// is actually intended for this run — i.e. subscription credential injection OR
 	// intercept_tls content inspection. Dispatch also mints the per-run CA for
@@ -144,8 +165,9 @@ type Config struct {
 	// NO_PROXY the sandbox already honours internally. This sidecar vets the
 	// name on the upstream branch too (egressTarget): an endpoint that resolves
 	// into blocked space is denied HERE (builtin:private-ip), and one that does
-	// not is handed to a corporate forward proxy that will not CONNECT to an
-	// internal address; either way the bypass is what moves the dial local.
+	// not is handed to the corporate forward proxy, whose own routing decides
+	// whether it can be reached. An entry is for a host this sidecar can itself
+	// resolve and reach; either way the bypass is what moves the dial local.
 	//
 	// It is a ROUTING list only: a bypassed dial falls through to the same
 	// unconditional private/reserved-IP guard an unproxied dial does, so it
@@ -179,6 +201,13 @@ type Config struct {
 	// (the default) => every brokered LLM route dials the vendor host,
 	// byte-identical to today.
 	LLMUpstreams map[string]string `json:"llm_upstreams,omitempty"`
+	// LLMChannelHosts maps a model host to the vendor whose request schema the
+	// content scanner reads on it (api.anthropic.com or api.openai.com): an
+	// azure_foundry endpoint, which speaks one of the two dialects, or a Claude
+	// subscription provider's route-through host, which speaks Anthropic's. It feeds
+	// host classification only, never LLMUpstreams' reverse lookup (llm_channel_hosts.go).
+	// Control-plane-authored; omitempty because an older proxy refuses a key it does not know.
+	LLMChannelHosts map[string]string `json:"llm_channel_hosts,omitempty"`
 	// LLMUnavailableDetail is what the brokered-LLM 404 says about WHY no
 	// credential is behind this run's LLM route, composed by the control plane at
 	// dispatch (internal/api's llmUnavailableDetail) because only it knows the
@@ -194,6 +223,79 @@ type Config struct {
 	// make (push_hold.go). Control-plane-authored at dispatch; false (the
 	// default) holds.
 	Unattended bool `json:"unattended,omitempty"`
+	// Attribution names the policy that governs this run, for the refusals the
+	// policy decided (refusal_attribution.go). Control-plane-authored at dispatch
+	// for a run under a governance profile, or any run when the site sets
+	// policy_help; nil otherwise. LoadConfigBytes re-projects it, so what the
+	// proxy writes into a header is never a value policyref.Project refused. An
+	// older proxy image refuses this key at start (strict decode), so the proxy
+	// image is upgraded before wardynd.
+	Attribution *policyref.Ref `json:"attribution,omitempty"`
+	// PushRuleSets are the push content rules per SCM entry (provider host and
+	// organisation): the git route applies the set of the entry that owns the
+	// remote (types.PushRulesForRemote), and a remote whose entry has no set has
+	// no content rules. They are the product after the ceiling, so a config that
+	// carries them carries NO Policy.PushRules: the dispatch plan fans the
+	// policy's block out to one set per entry it brings, and LoadConfigBytes
+	// refuses both together, so a run is on one regime or the other and a reader
+	// can never take the wrong block first. Control-plane authored; nothing sets
+	// it until the git route reads it.
+	PushRuleSets []types.PushRuleSet `json:"push_rule_sets,omitempty"`
+	// PushRuleBase is the run's push rules as the ceiling left them: what an
+	// entry with no set of its own is held to (a PAT or an App reaches more than
+	// the entries the run brought). A set only ever adds to it. Carried beside
+	// PushRuleSets and never beside Policy.PushRules.
+	PushRuleBase *types.PushRulesSpec `json:"push_rule_base,omitempty"`
+	// HarnessToolRules are the tool rules per included harness, also the product
+	// after the ceiling, and likewise exclusive of Policy.ToolRules. The approval
+	// route evaluates the set of the harness that raised the call
+	// (types.ToolEffectForHarness) and never another's; a harness with no entry
+	// is held for a human. The harness id comes from the proxy's own binding of
+	// the caller, never from the request body (types.HarnessToolRules). Control-plane
+	// authored; nothing sets it until the approval route reads it.
+	HarnessToolRules []types.HarnessToolRules `json:"harness_tool_rules,omitempty"`
+	// HarnessCredentials are the SHA-256 digests of the per-harness credentials the
+	// approval route reads the caller's harness from (a Bearer token the harness's
+	// wardyn-toolgate sends). Digests only: the plaintext never enters this config,
+	// a log or an audit row. A call with no credential, or one that matches none, has
+	// no harness and is held for a human.
+	HarnessCredentials []types.HarnessCredential `json:"harness_credentials,omitempty"`
+	// ViaOrgRoutes are the destinations of this run's via_org grants (design 0.9 §7.3), on a runner's
+	// proxy only: a request for one is forwarded to the organisation, which injects the credential.
+	// Each names its grant and destination host, never the rule or a secret name.
+	ViaOrgRoutes []ViaOrgRoute `json:"via_org_routes,omitempty"`
+	// MCPServers are the run's remote MCP servers. The broker route
+	// (mcp_broker.go) is the only path to each: none is in the allowlist, a
+	// direct request to one is refused while it is attached, and its header
+	// credential is the broker's alone, never an Injection rule.
+	MCPServers []MCPServerConfig `json:"mcp_servers,omitempty"`
+	// MCPBindings bind each harness's MCP token, by SHA-256 digest, to the
+	// servers turned on for it. Digests only: the token is in that harness's
+	// configuration, never here.
+	MCPBindings []MCPBinding `json:"mcp_bindings,omitempty"`
+}
+
+// MCPServerConfig is one remote MCP server on the broker route.
+type MCPServerConfig struct {
+	// Key is the server's name in /wardyn/mcp/<token>/<key> and in its tools'
+	// names, mcp__<key>__<tool>.
+	Key string `json:"key"`
+	// URL is the https address the broker re-originates to.
+	URL string `json:"url"`
+	// GrantID is the api_key grant of the server's header credential; nil when
+	// the server takes none.
+	GrantID *uuid.UUID `json:"grant_id,omitempty"`
+	// Ordinal is the component's run_components ordinal (built-ins have no
+	// row), which a revive reads its row by.
+	Ordinal int `json:"ordinal"`
+}
+
+// MCPBinding is one harness's MCP token, as its digest, and the servers it may
+// reach.
+type MCPBinding struct {
+	Harness string   `json:"harness"`
+	SHA256  string   `json:"sha256"`
+	Servers []string `json:"servers"`
 }
 
 const (
@@ -258,9 +360,36 @@ func LoadConfigBytes(b []byte) (*Config, error) {
 	case len(raw.LegacyADOGrants) == 1:
 		c.ADOGrant = &raw.LegacyADOGrants[0]
 	}
+	if err := validPATGrants(c.PATGrants); err != nil {
+		return nil, err
+	}
+	for _, r := range c.ViaOrgRoutes {
+		if r.GrantID == uuid.Nil || r.Host == "" {
+			return nil, fmt.Errorf("config: via_org_routes entry needs a grant_id and a host")
+		}
+	}
+	if c.PushRuleBase != nil && (len(c.PushRuleSets) == 0 || c.Policy.PushRules != nil) {
+		return nil, fmt.Errorf("config: push_rule_base is carried with push_rule_sets and never with policy.push_rules")
+	}
+	if len(c.PushRuleSets) > 0 && c.Policy.PushRules != nil {
+		return nil, fmt.Errorf("config: push_rule_sets and policy.push_rules are both set; rules are carried one way or the other")
+	}
+	if len(c.HarnessToolRules) > 0 && len(c.Policy.ToolRules) > 0 {
+		return nil, fmt.Errorf("config: harness_tool_rules and policy.tool_rules are both set; rules are carried one way or the other")
+	}
+	if err := types.ValidatePushRuleSets(c.PushRuleSets); err != nil {
+		return nil, fmt.Errorf("config: %w", err)
+	}
+	if err := types.ValidateHarnessToolRules(c.HarnessToolRules); err != nil {
+		return nil, fmt.Errorf("config: %w", err)
+	}
+	if err := types.ValidateHarnessCredentials(c.HarnessCredentials); err != nil {
+		return nil, fmt.Errorf("config: %w", err)
+	}
 	if err := c.applyDefaultsAndValidate(); err != nil {
 		return nil, err
 	}
+	c.Attribution = reprojectAttribution(c.Attribution)
 	return &c, nil
 }
 
@@ -348,7 +477,8 @@ func (c *Config) applyDefaultsAndValidate() error {
 				continue
 			}
 			if !noProxyRulesCoverHost(rules, h) {
-				slog.Warn("wardyn-proxy: upstream proxy is configured with an AWS SSO injection host not covered by any upstream_proxy_no_proxy entry — every SSO call on this host will CONNECT through the corporate upstream",
+				slog.Warn("wardyn-proxy: upstream proxy is configured with an AWS SSO injection host not covered by any upstream_proxy_no_proxy entry — every SSO call on this host will CONNECT through the corporate upstream; "+
+					"a bypass entry helps only if wardyn-proxy itself (not the sandbox) can resolve and reach the host; if neither hop can, the estate needs a route, not a configuration change",
 					slog.String("host", inj.Host))
 			}
 		}
@@ -377,12 +507,11 @@ func (c *Config) applyDefaultsAndValidate() error {
 			}
 		}
 	}
-	// An Azure DevOps grant is enforced by the REST gate, which runs only on a
-	// connection the proxy terminates. Without the MITM CA nothing terminates,
-	// and the covered hosts would degrade to a credential-less tunnel no gate
-	// sees — so a config carrying ado_grant without the CA is refused at boot.
-	if c.ADOGrant != nil && (c.MITMCACertPEM == "" || c.MITMCAKeyPEM == "") {
-		return fmt.Errorf("config: ado_grant requires mitm_ca_cert_pem and mitm_ca_key_pem — the Azure DevOps gate runs only on a terminated connection")
+	if err := c.validateTerminatedGates(); err != nil {
+		return err
+	}
+	if err := c.validateMCP(); err != nil {
+		return err
 	}
 	// Parse-check (but do not retain a compiled form) each configured LLM
 	// gateway base URL: api.ValidateLLMGateways already fail-fast-checked these
@@ -394,13 +523,57 @@ func (c *Config) applyDefaultsAndValidate() error {
 			return fmt.Errorf("config: llm_upstreams[%q]: %w", vendor, err)
 		}
 	}
-	return nil
+	return c.validateChannelHosts()
+}
+
+// validateTerminatedGates checks the gates that run only on a connection the proxy terminates. An
+// Azure DevOps grant is enforced by the REST gate; without the MITM CA nothing terminates, and the
+// covered hosts would degrade to a credential-less tunnel no gate sees — so a config carrying ado_grant
+// without the CA is refused at boot. The Azure route gate has the same rule and its own checks.
+func (c *Config) validateTerminatedGates() error {
+	if c.ADOGrant != nil && (c.MITMCACertPEM == "" || c.MITMCAKeyPEM == "") {
+		return fmt.Errorf("config: ado_grant requires mitm_ca_cert_pem and mitm_ca_key_pem — the Azure DevOps gate runs only on a terminated connection")
+	}
+	for host, g := range c.PATGrants {
+		if g.API && (c.MITMCACertPEM == "" || c.MITMCAKeyPEM == "") {
+			return fmt.Errorf("config: pat_grants[%q] sets api and requires mitm_ca_cert_pem and mitm_ca_key_pem — the forge API door runs only on a terminated connection", host)
+		}
+	}
+	if c.GitHubAPI != nil && (c.MITMCACertPEM == "" || c.MITMCAKeyPEM == "") {
+		return fmt.Errorf("config: github_api requires mitm_ca_cert_pem and mitm_ca_key_pem — the GitHub CLI door runs only on a terminated connection")
+	}
+	if err := c.validateAzureARM(); err != nil {
+		return err
+	}
+	return c.validateAzureGates()
 }
 
 // PATGrant is one host's git_pat brokering: which grant to mint from, and the
 // git username that host expects alongside the PAT (Azure DevOps wants "pat",
 // GitLab wants "oauth2", and an operator may override either).
+//
+// The narrowing fields carry the grant's scope for the run, not for the PAT:
+// the credential keeps whatever reach its issuer gave it, and the broker refuses
+// a request outside this scope before it mints. Dispatch sets them only for a
+// narrowed grant, so an unnarrowed grant renders exactly as it did before and
+// meets an older proxy image unchanged.
+//
+//	Repos   nil = every repository the PAT reaches; an empty list = none
+//	Access  "read" refuses a push; "" is write
+//	Forge   the path table Repos is read with; "" is generic
+//	API     the forge API door (read by the API gate, not by git)
 type PATGrant struct {
 	GrantID  uuid.UUID `json:"grant_id"`
 	Username string    `json:"username,omitempty"`
+	Repos    *[]string `json:"repos,omitempty"`
+	Access   string    `json:"access,omitempty"`
+	Forge    string    `json:"forge,omitempty"`
+	API      bool      `json:"api,omitempty"`
+}
+
+// controlPlaneEndpoint joins the control-plane base URL and an internal API
+// path. ControlPlaneURL may end in '/', which boot validation accepts; the
+// internal listener does not clean paths, so "//api/..." would match no route.
+func controlPlaneEndpoint(base, path string) string {
+	return strings.TrimRight(base, "/") + path
 }

@@ -22,9 +22,6 @@ THRESHOLD=1000
 # path -> frozen cap (lines at 2026-07-16 + headroom). Shrinking is always fine.
 declare -A ALLOWLIST=(
   ["./internal/workspacescan/detect.go"]=1340 # 1244 at freeze
-  # driver.go came OFF this list 2026-09-21: split by seam (driver_exec.go /
-  # driver_network.go) instead of raising its frozen cap for open PR headroom —
-  # it is gated at the plain 1000-line threshold like any other file now.
   ["./internal/api/workspace_run.go"]=1180 # 1092 at freeze
   ["./internal/api/setup.go"]=1120         # 1028 at freeze
   # The build-plumbing shell was unpoliced until 2026-07-29 and the three biggest
@@ -34,16 +31,9 @@ declare -A ALLOWLIST=(
   ["./scripts/up.sh"]=990         # 918 at freeze
   ["./scripts/setup.sh"]=890      # 828 at freeze
   ["./scripts/test-drive.sh"]=870 # 806 at freeze
-  # compose.go and store.go were decomposed below 1000 in R4 (llmcred.go /
-  # pagination.go splits) and came OFF this list — they are gated at the plain
-  # 1000-line threshold like any other file now.
-  # The v0.5.0 k8s/cloud merge grew four pre-existing, cohesive files past 1000
-  # (the k8s runner substrate + envbuild wiring, and the new-run wizard's k8s
-  # runner flavor + its tests). Caps frozen at +~8% so they stop growing; split
+  # The v0.5.0 k8s/cloud merge grew builder.go past 1000; it is the only file of
+  # that merge still over. Its cap is frozen at +~8% so it stops growing; split
   # by seam when next substantially touched.
-  # workspaces.go was the first of them to hit its cap and got split by seam
-  # (workspace_requirements.go / workspace_envcode.go) rather than re-justified —
-  # at 800 lines it came OFF this list and is gated at the plain threshold now.
   ["./internal/envbuild/builder.go"]=1100 # 1020 at v0.5 merge
 )
 

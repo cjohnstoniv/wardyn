@@ -4,14 +4,9 @@
 package api
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
-	"errors"
-	"io"
 	"net/http"
 	"strconv"
-	"sync"
 	"time"
 
 	"github.com/coder/websocket"
@@ -19,9 +14,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
-	"github.com/cjohnstoniv/wardyn/internal/recording"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
-	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -52,6 +45,16 @@ func (s *Server) attachKeepaliveEvery() time.Duration {
 // attachWriteTimeout bounds a single server->client frame write so a stuck
 // client socket cannot wedge the read pump forever.
 const attachWriteTimeout = 30 * time.Second
+
+// attachPauseLimit is how long a client may leave output paused before the pump
+// asks it for a pong (an unanswered ping ends the pump): attachWriteTimeout
+// unless THIS server was built with an override (Server.pauseLimit, tests only).
+func (s *Server) attachPauseLimit() time.Duration {
+	if s.pauseLimit > 0 {
+		return s.pauseLimit
+	}
+	return attachWriteTimeout
+}
 
 // attachPingInterval is the liveness probe cadence for an otherwise-idle
 // attach socket.
@@ -100,12 +103,13 @@ func (s *Server) attachPingEvery() time.Duration {
 // still bounding what one socket can make the daemon buffer.
 const attachReadLimit = 1 << 20
 
-// resizeMsg is the only control message the client may send out-of-band on the
-// PTY stream: a window-size change. Everything else on the client->server
+// resizeMsg is the control message the client may send out-of-band on the PTY
+// stream: a window-size change, or a pause or resume (Type only) for output flow
+// control. Everything else on the client->server
 // direction is raw PTY input (binary frames). Resize is sent as a TEXT frame so
 // it is unambiguously distinct from binary keystroke bytes.
 type resizeMsg struct {
-	Type string `json:"type"` // "resize"
+	Type string `json:"type"` // "resize", "pause" or "resume"
 	Cols uint16 `json:"cols"`
 	Rows uint16 `json:"rows"`
 }
@@ -213,27 +217,9 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Ticket lane authorization: ticketOrHumanAuth's ?ticket= branch
-	// runs neither humanOrAdminAuth nor requireOperator, so the ticket's OWN
-	// stamped role/principal (captured at MINT time — see attach_ticket.go) is
-	// the only authorization signal left. owner-or-admin, re-checked here
-	// against the just-loaded run — belt-and-suspenders alongside
-	// ticketOrHumanAuth's own run-id binding check, using the run row this
-	// handler already needs for its state/sandbox checks below (no extra
-	// store call). The fall-through (cookie) lane is unaffected: reaching this
-	// handler via it already proves admin (requireOperator gates it).
-	if ta, tok := ticketActorFromContext(ctx); tok {
-		superAdmin := ta.role == oidc.RoleAdmin
-		if !superAdmin && run.CreatedBy != ta.principal {
-			s.auditAttachDenied(r, id, ta.principal, "attach ticket does not authorize this run")
-			writeErrorReason(w, http.StatusForbidden, reasonAttachTicketNotYourRun, "attach ticket does not authorize this run")
-			return
-		}
-		// The fall-through lane is operator-only, and a super admin's ticket
-		// is exempt the same way.
-		if !superAdmin && s.refuseInteractiveAttach(w, r, run) {
-			return
-		}
+	// Entry authorization (#1476): the owner rule, on both lanes.
+	if s.refuseAttachEntry(w, r, run) || s.refuseBackgroundOnly(w, r, run, "terminal") {
+		return
 	}
 
 	// Fail closed before upgrading: only a RUNNING run with a live sandbox ref
@@ -252,15 +238,27 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 		writeErrorReason(w, http.StatusConflict, reasonAttachNoSandbox, "run has no sandbox; cannot attach")
 		return
 	}
+	// Door 2 of five (mask_manifest.go): the terminal's recorded tail is masked
+	// against the run's corpus, which this server must be able to prove whole.
+	if s.refuseUncovered(w, r, run.ID, "runs.attach") {
+		return
+	}
 
-	// Initial PTY size from optional query params (?cols=&rows=); the client may
-	// also resize later via a control message. Defaults (0) let the driver pick.
+	// Initial PTY size from optional query params (?cols=&rows=). The browser
+	// sends its real grid here, so the writer's exec starts at the size it will
+	// keep and nothing resizes the shared tmux window after registration.
 	opts := runner.AttachOptions{
 		Cols: parseUint16(r.URL.Query().Get("cols")),
 		Rows: parseUint16(r.URL.Query().Get("rows")),
 	}
 
 	principalType, principal := actorFromRequest(r)
+
+	releaseSlot := s.webAttachSlot(ctx, w, run, principalType, principal) // the per-run session cap
+	if releaseSlot == nil {
+		return
+	}
+	defer releaseSlot()
 
 	// A paused run is thawed before the exec: the daemon refuses one into a
 	// paused container (run_pause.go).
@@ -285,33 +283,36 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 	// killing the connection (see attachReadLimit).
 	c.SetReadLimit(attachReadLimit)
 
-	// Open the interactive shell inside the sandbox. On failure, close the socket
-	// cleanly with a policy-violation status and audit the failed attach.
-	// Size-less attach, same rule as the SSH lane: geometry is applied via
-	// Resize AFTER holder registration decides who the writer is. Passing
-	// ?cols=&rows= into ExecCreate here was the web half of the observer-
-	// clamps-holder bug — no shipped client sends them, but the endpoint is
-	// public and the guard belongs at the chokepoint.
-	sess, err := s.cfg.Runner.Attach(ctx, run.SandboxRef, runner.AttachOptions{})
-	if err != nil {
-		s.recordAudit(ctx, s.auditEvent(&id, principalType, principal, "session.attach",
-			id.String(), "failure", mustJSON(map[string]any{"error": err.Error()})))
-		_ = c.Close(websocket.StatusInternalError, "attach failed")
-		return
+	// The audit rows this handler writes outlive the request: the WebSocket layer
+	// cancels r.Context() the instant the socket closes, which is exactly when
+	// the attach outcome and the detach are recorded. Daemon-lifetime BaseCtx
+	// (background fallback) carries them, with the portal a delegated ticket was
+	// minted through (#1142).
+	finishCtx := s.cfg.BaseCtx
+	if finishCtx == nil {
+		finishCtx = context.Background()
 	}
-	defer sess.Close() // tears down ONLY the exec stream, never the sandbox.
+	var via *types.DelegationVia
+	if v, ok := audit.DelegationFrom(ctx); ok {
+		via = &v
+		finishCtx = audit.WithDelegation(finishCtx, v)
+	}
 
-	s.recordAudit(ctx, s.auditEvent(&id, principalType, principal, "session.attach",
-		id.String(), "success", mustJSON(map[string]any{
-			"sandbox_ref": run.SandboxRef, "cols": opts.Cols, "rows": opts.Rows,
-		})))
+	// pumpCtx ends the whole connection: the pump, the exec being opened, the
+	// keepalive and the mask-fence watcher all hang off it.
+	pumpCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
 
 	// Holder registry (attach_holder.go). Attach is a SHARED tmux session: a
 	// fresh Runner.Attach per client lands on the SAME persistent session, so
 	// without this two clients silently compete for one PTY and neither can see
 	// the other. Name the holder; admit a second client READ-ONLY (its input is
-	// dropped server-side in attachPump — never by asking the client to
-	// refrain); make displacing the holder an audited act (handleAttachTakeover).
+	// dropped server-side — never by asking the client to refrain); make
+	// displacing the holder an audited act (handleAttachTakeover).
+	//
+	// Registration comes BEFORE the exec exists (attach_exec.go): who writes
+	// decides the attach options, so an observer's tmux client is created with
+	// ignore-size and never resizes the writer's window.
 	//
 	// modeMu orders THIS socket's attach-mode frames. The library permits
 	// concurrent writes, but not concurrent truth: the opening frame below and
@@ -320,46 +321,24 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 	// already made it the writer greys out a terminal it is allowed to type
 	// into. Both sends take this mutex and read the mode live inside it, so
 	// whichever lands second is the one that is still true.
-	var modeMu sync.Mutex
-	var via *types.DelegationVia
-	if v, ok := audit.DelegationFrom(ctx); ok {
-		via = &v
-	}
+	wa := &webAttach{s: s, c: c, run: run, principalType: principalType, principal: principal,
+		finishCtx: finishCtx, pumpCtx: pumpCtx, cancel: cancel}
 	holder := &attachHolder{
-		principal: principal,
-		actorType: principalType,
-		since:     s.cfg.Now().UTC(),
-		source:    attachSourceWeb,
-		onInput:   func() { _ = s.markPresent(ctx, id, principalType, principal, "presence") },
-		cols:      opts.Cols,
-		rows:      opts.Rows,
-		via:       via,
-		// Promotion: the SAME socket is told it may now type. attach-terminal
-		// .tsx already implements the read_only true->false transition (it
-		// force-refits, because a promoted observer inherits the departed
-		// writer's tmux geometry, and focuses the terminal); this is the frame
-		// it was written against.
-		notify: func(readOnly bool, h *attachHolder) {
-			modeMu.Lock()
-			defer modeMu.Unlock()
-			_ = writeAttachMode(ctx, c, readOnly, h)
-		},
-		displace: func(reason string) {
-			// Close, do NOT cancel: c.Read honours pumpCtx by tearing the
-			// connection down abruptly, and an abruptly-killed socket delivers no
-			// close frame — the displaced UI would see a bare drop and take its
-			// bounded-reconnect path, landing straight back on top of the new
-			// holder. c.Close writes the 1008 + reason frame FIRST, and that frame
-			// is the entire signal the UI distinguishes "taken over" by.
-			//
-			// On its own goroutine because Close performs the close HANDSHAKE: it
-			// waits for the peer's echo (5s cap) and for the pump goroutines to
-			// exit (15s cap), and the take-over HTTP request must not block on the
-			// displaced client's teardown. Those caps are also the backstop — the
-			// socket dies even if the peer never answers.
-			go func() { _ = c.Close(websocket.StatusPolicyViolation, reason) }()
-		},
+		sandboxRef: run.SandboxRef,
+		principal:  principal,
+		actorType:  principalType,
+		since:      s.cfg.Now().UTC(),
+		source:     attachSourceWeb,
+		onInput:    func() { _ = s.markPresent(ctx, id, principalType, principal, "presence") },
+		cols:       opts.Cols,
+		rows:       opts.Rows,
+		via:        via,
+		notify:     wa.notify,
+		displace:   wa.displace,
+		ping:       c.Ping,
 	}
+	holder.lastOutput.Store(time.Now().UnixNano())
+	wa.holder = holder
 	readOnly, releaseHolder := s.registerAttachHolder(id, holder)
 	// Deferred as the crash backstop, NOT the release point (see the explicit
 	// call right after attachPump returns, below): a panicking pump would
@@ -367,13 +346,27 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 	// "held" forever, curable only by a restart. release is idempotent and
 	// identity-checked (attach_holder.go), so running it twice is safe.
 	defer releaseAttach(releaseHolder)
-	if !readOnly && opts.Cols > 0 {
-		// We are the registered writer — apply the client's requested geometry.
-		_ = sess.Resize(ctx, opts.Cols, opts.Rows)
+	if readOnly {
+		// Possibly behind its own dead earlier tab: see attach_stale.go.
+		go s.probeStaleWriter(pumpCtx, id, holder)
 	}
+	// Tears down ONLY the exec stream, never the sandbox. Runs before the
+	// release above, so a holder never outlives its exec.
+	defer func() { _ = holder.mux.Close() }()
+
+	// The first of two session.attach rows: the holder is registered and its exec
+	// is being opened. The audit log is append-only and hash-chained, so the
+	// outcome is a second row, never an update; this one exists before any
+	// take-over can be audited against it.
+	s.recordStreamAudit(finishCtx, run.SandboxRef, s.auditEvent(&id, principalType, principal, "session.attach",
+		id.String(), "success", mustJSON(withSponsorEntry(run, map[string]any{
+			"sandbox_ref": run.SandboxRef, "cols": opts.Cols, "rows": opts.Rows,
+			"state": "attaching", "read_only": readOnly,
+		}))))
+
 	// An observer KEEPS its holder object: holder.writable is the read-only
 	// marker now (attach_holder.go), and nulling it here is exactly what left a
-	// promoted observer with nothing to flip. attachPump still drops its input
+	// promoted observer with nothing to flip. The pump still drops its input
 	// and its resizes — both gate on canWrite.
 	//
 	// Tell the client which mode it got, ALWAYS (read_only=false included) — see
@@ -382,9 +375,9 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 	// pump's own writer. A write failure here means the socket is already gone;
 	// the pump below ends on its own, so there is nothing to do about it beyond
 	// not pretending it succeeded.
-	modeMu.Lock()
+	wa.modeMu.Lock()
 	_ = writeAttachMode(ctx, c, !holder.canWrite(), s.attachHolderFor(id))
-	modeMu.Unlock()
+	wa.modeMu.Unlock()
 
 	// Provenance: record this interactive session as a replayable
 	// asciicast so the human-in-sandbox is in the audit trail. We tee the server
@@ -406,21 +399,24 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 	sessionID := uuid.New().String()
 	castTee, finishRecording := s.newSessionRecorder(run, sessionID, opts)
 
-	// A keepalive ping bumps updated_at while attached. We run it on a context
-	// derived from the request so it stops when the handler returns.
-	pumpCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
-
 	// Touch immediately so an attach that arrives just before a reap tick still
-	// resets the idle clock.
+	// resets the idle clock. The keepalive ping then bumps updated_at while
+	// attached, on a context that stops when the handler returns.
 	_ = s.cfg.Store.TouchRun(pumpCtx, id)
 	go s.attachKeepalive(pumpCtx, id)
+	// Started before the exec is opened, so a fence ends an attach in flight too. The credential that
+	// opened this socket is checked again while it is open (attachEnders, attach_authority.go).
+	endedFromOutside := s.attachEnders(pumpCtx, r, id, c, holder, cancel)
 
 	// Bidirectional pump. closeReason is filled by whichever side ends first.
 	// castTee (may be nil when no RecordingStore is wired) receives a copy of the
-	// masked PTY output for the asciicast. holder is nil for a read-only observer.
-	closeReason := s.attachPump(pumpCtx, c, sess, castTee, holder)
+	// masked PTY output for the asciicast.
+	closeReason := s.attachPump(pumpCtx, c, id, holder, castTee, wa.open)
 	cancel()
+	closeReason = endedFromOutside(closeReason)
+	if wa.failed.Load() {
+		closeReason = "attach failed"
+	}
 
 	// Free the slot HERE, before the recording persist + the session.detach
 	// audit below — not after them, which is where the deferred call above
@@ -451,36 +447,23 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 
 	// Persist the recording (best-effort) and emit session.recording.write when one was
 	// actually written. finishRecording is a no-op when recording is disabled.
-	// Use the daemon-lifetime BaseCtx (not the request ctx, which is typically
-	// cancelled the instant the WebSocket closes) so the provenance write + audit
-	// are not lost to a cancelled context at detach time.
-	finishCtx := s.cfg.BaseCtx
-	if finishCtx == nil {
-		finishCtx = context.Background()
-	}
-	if via, ok := audit.DelegationFrom(ctx); ok {
-		finishCtx = audit.WithDelegation(finishCtx, via) // the close rows name the portal too (#1142)
-	}
+	// finishCtx is the daemon-lifetime context, so the provenance write + audit
+	// are not lost to a cancelled request context at detach time.
 	finishRecording(finishCtx, principalType, principal)
 
-	// session.detach on close (always emitted, even on error pumps).
-	//
-	// The request ctx cannot be used here: the WebSocket layer cancels it the
-	// instant the socket closes — exactly when detach happens — which would
-	// routinely drop the detach audit (a hole in the attribution trail).
-	// Record it on finishCtx (the daemon-lifetime BaseCtx /
-	// background fallback computed above), so the close event is durably written
-	// even though the request context is already cancelled.
+	// session.detach on close (always emitted, even on error pumps), on finishCtx
+	// for the reason given where it is computed.
 	// read_only rides along so the trail distinguishes the human who was DRIVING
 	// this terminal from the one who was watching over their shoulder — the pair
 	// is otherwise indistinguishable after the fact. It is the LIVE flag, not
 	// the mode this socket connected with: an observer promoted mid-session
 	// ends as a writer, and recording its connect-time mode would say the human
 	// who was driving had only been watching.
-	s.recordAudit(finishCtx, s.auditEvent(&id, principalType, principal, "session.detach",
+	s.recordStreamAudit(finishCtx, run.SandboxRef, s.auditEvent(&id, principalType, principal, "session.detach",
 		id.String(), "success", mustJSON(map[string]any{"reason": closeReason, "read_only": !holder.writable.Load()})))
 
 	// Best-effort clean close; the deferred CloseNow is the fail-closed backstop.
+	// A failed attach was already closed with its own status (failAttach).
 	_ = c.Close(websocket.StatusNormalClosure, "")
 }
 
@@ -502,420 +485,6 @@ func (s *Server) attachKeepalive(ctx context.Context, id uuid.UUID) {
 	}
 }
 
-// attachPump runs the two halves of the PTY relay and returns a short reason for
-// the side that ended first. It launches Session.Read -> client in a goroutine
-// and runs client -> Session.Write (plus resize control) on the caller's
-// goroutine. When either half ends it cancels the shared context so the other
-// half unblocks and the function returns.
-//
-// castTee, when non-nil, receives a copy of EVERY chunk of PTY output (after it
-// is written to the client) for the session recording. It is the masked
-// asciicast sink. A castTee write error never affects the live session — the
-// recording is best-effort provenance, not part of the data path.
-//
-// holder is this client's registry entry; canWrite (attach_holder.go) is what
-// says whether it may drive the PTY right now — false for an observer, true
-// from the instant one is promoted in place, on the same object. Both
-// client->server directions are dropped while it is false:
-//
-//   - binary frames (keystrokes), because two clients typing into one shared
-//     tmux session is the exact interleaving this registry exists to prevent;
-//   - resize control frames, because tmux sizes a shared session to its SMALLEST
-//     client, so an observer's window would clamp the holder's terminal — that
-//     clamp is precisely the symptom the UI's Redraw button was invented to mop
-//     up (see refit in attach-terminal.tsx).
-//
-// Dropping happens HERE, server-side, and never by asking the client to refrain
-// from sending: the client is the one component we do not control. A read-only
-// client still learns its mode from the attach-mode control frame the handler
-// sent on open, so it can grey out its input rather than type into a void.
-func (s *Server) attachPump(ctx context.Context, c *websocket.Conn, sess runner.Session, castTee io.Writer, holder *attachHolder) string {
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-
-	reasonCh := make(chan string, 3)
-
-	// Liveness probe (attachPingInterval): a silent PTY produces no
-	// server->client Write for attachWriteTimeout to bound, so without this a
-	// dead peer holds its slot until the daemon restarts. Runs for every
-	// attach (holder or read-only observer) — cheap, and an observer's dead
-	// socket is worth reaping too.
-	go func() {
-		every := s.attachPingEvery()
-		t := time.NewTicker(every)
-		defer t.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-t.C:
-				pctx, pcancel := context.WithTimeout(ctx, every)
-				err := c.Ping(pctx)
-				pcancel()
-				if err != nil {
-					select {
-					case reasonCh <- "ping timeout":
-					default:
-					}
-					cancel()
-					return
-				}
-			}
-		}
-	}()
-
-	// Session.Read -> client (binary PTY frames). The blocking sess.Read is run
-	// on its own goroutine; cancelling ctx (via the writer half ending) closes
-	// the session in the deferred sess.Close of the handler, which unblocks Read
-	// with an error, so this goroutine exits.
-	go func() {
-		buf := make([]byte, attachReadBuf)
-		for {
-			n, rerr := sess.Read(buf)
-			if n > 0 {
-				wctx, wcancel := context.WithTimeout(ctx, attachWriteTimeout)
-				werr := c.Write(wctx, websocket.MessageBinary, buf[:n])
-				wcancel()
-				if werr != nil {
-					reasonCh <- "client write failed"
-					cancel()
-					return
-				}
-				// Tee the output into the session recording (best-effort: a
-				// recording write error must not break the live terminal).
-				if castTee != nil {
-					_, _ = castTee.Write(buf[:n])
-				}
-			}
-			if rerr != nil {
-				if errors.Is(rerr, io.EOF) {
-					reasonCh <- "shell exited"
-					// A real close handshake BEFORE cancelling ctx (#1112): the
-					// client->server goroutine below is blocked in c.Read(ctx) on
-					// the SAME ctx this func cancels just below, and coder/websocket
-					// arms that Read call to forcibly tear down the raw connection
-					// (c.close(), no close frame) the instant ctx is Done —
-					// cancelling first would race that teardown and the client
-					// would see a bare EOF ("failed to read frame header: EOF")
-					// instead of a clean detach. c.Close writes the close frame,
-					// then blocks briefly for the peer's echo before tearing the
-					// connection down itself, so a normal shell exit reaches the
-					// client as an actual StatusNormalClosure. Best-effort: if the
-					// peer is already gone, this is a no-op and cancel() below
-					// still reaps the goroutines.
-					_ = c.Close(websocket.StatusNormalClosure, "shell exited")
-				} else {
-					reasonCh <- "session read error"
-				}
-				cancel()
-				return
-			}
-		}
-	}()
-
-	// client -> Session.Write, with TEXT frames decoded as resize control.
-	go func() {
-		for {
-			typ, data, rerr := c.Read(ctx)
-			if rerr != nil {
-				if websocket.CloseStatus(rerr) != -1 {
-					reasonCh <- "client closed"
-				} else {
-					reasonCh <- "client read error"
-				}
-				cancel()
-				return
-			}
-			switch typ {
-			case websocket.MessageText:
-				// Control channel: only resize is understood. An unparseable or
-				// unknown control message is ignored (it is never injected into
-				// the PTY, so it cannot smuggle keystrokes).
-				var msg resizeMsg
-				if json.Unmarshal(data, &msg) == nil && msg.Type == "resize" && holder.canWrite() {
-					_ = sess.Resize(ctx, msg.Cols, msg.Rows)
-					// Keep the registry's geometry LIVE: the handshake ?cols=&rows=
-					// is stale the moment the operator drags their window, and
-					// GET /runs/{id}/attach-holder reporting a stale size with
-					// confidence is worse than reporting none.
-					holder.setSize(msg.Cols, msg.Rows)
-				}
-			case websocket.MessageBinary:
-				// Raw PTY input (keystrokes) — dropped entirely for a read-only
-				// observer (writable false), and cut short MID-FRAME the moment a
-				// take-over evicts this holder: writeGated re-tests authority per
-				// chunk, so a 1 MiB paste in flight when the eviction lands stops
-				// there instead of finishing into the new holder's session.
-				if werr := holder.writeGated(sess, data); werr != nil {
-					reasonCh <- "session write failed"
-					cancel()
-					return
-				}
-			}
-		}
-	}()
-
-	<-ctx.Done()
-	// Drain a reason if one is available; otherwise the parent ctx was cancelled.
-	select {
-	case reason := <-reasonCh:
-		return reason
-	default:
-		return "context cancelled"
-	}
-}
-
-// runIsUnrecordable reports whether a run's terminal must never be persisted as
-// an asciicast, because the run exists precisely to display a live credential.
-//
-// The managed-harness login run shells out to `claude setup-token`, which PRINTS
-// a ~1-year Anthropic OAuth token to the PTY. Recording it would write that
-// credential verbatim into a replayable artifact that long outlives the run —
-// and no masking can prevent it (the token is unknown to wardynd until the
-// operator pastes it back, by which point the cast already holds it). Dropping
-// the cast costs no provenance: harness.login.start and session.attach still
-// record who attached, when, and why.
-func runIsUnrecordable(run types.AgentRun) bool {
-	return run.Task == harnessLoginTask
-}
-
-// newSessionRecorder builds the interactive-session recording pipeline and
-// returns (tee, finish):
-//
-//   - tee is the io.Writer the attach pump feeds PTY OUTPUT into. It is the
-//     front of: liveMaskWriter (re-snapshotting secret masking with a retained
-//     cross-write tail) -> CastWriter (asciicast v2) -> an in-memory buffer. When
-//     no RecordingStore is configured tee is nil and finish is a no-op, so attach
-//     works unchanged in headless/no-store mode.
-//   - finish flushes the masker tail and persists the buffered asciicast to the
-//     RecordingStore under a per-run+session key (so it never clobbers the batch
-//     run's cast or a concurrent attach), then emits a session.recording.write audit
-//     event. It is best-effort: a persist failure is audited as a failure but
-//     never fails the detach.
-//
-// Security: the recording is masked against the MaskRegistry (invariant 1: no
-// verbatim secret leakage into the recording). Unlike the agent UPLOAD path
-// (which snapshots once at run end, after every mint is registered), an attach
-// is live, so the masker RE-SNAPSHOTS the registry on each write to catch a
-// credential minted mid-session. When MaskRegistry is nil it is a safe
-// pass-through (documented residual unchanged).
-//
-// Not-recorded runs: a run whose terminal exists to PRINT a credential is never
-// recorded at all — see runIsUnrecordable. Masking cannot protect those: the
-// registry only masks values it already holds, and such a token is unknown to
-// wardynd until the operator pastes it back, which is strictly AFTER the bytes
-// would have landed in the cast. The gate lives here, not at the call site, so
-// a future second caller cannot miss it.
-// maxSessionCastBytes bounds the asciicast a LIVE attach buffers in the daemon's
-// heap. The cast is held in memory for the whole session and written once at
-// close, so without a bound a single long, chatty terminal grows unopposed
-// inside a control plane deployed with a 512Mi limit — and, worse, the store
-// then REJECTED the result wholesale at its own 64 MiB cap
-// (internal/recording/pgstore.go), so the session's entire evidence was thrown
-// away at exactly the moment it was meant to be persisted.
-//
-// Well under the store cap, so a recorded session is never lost to that reject.
-//
-// ponytail: past the cap the recording keeps its HEAD and drops the rest —
-// smallest thing that keeps a valid, replayable artifact plus an honest
-// truncated:true in the session.recording.write audit. A ring buffer that keeps the
-// TAIL instead is the upgrade path if operators ask for the end of long
-// sessions; a streaming sink is the one after that.
-const maxSessionCastBytes = 8 << 20
-
-// capBuffer is the bounded sink under a session CastWriter. CastWriter emits one
-// complete JSON line per Write, so refusing a write WHOLE (never partially)
-// leaves the buffer line-aligned and the cast well-formed. A dropped write is
-// reported as accepted: the recording is best-effort provenance and must never
-// break the live terminal.
-//
-// Not independently locked: every write reaches it through liveMaskWriter.Write
-// and every read through finishRecording, both under that writer's mutex.
-type capBuffer struct {
-	buf       bytes.Buffer
-	truncated bool
-}
-
-func (b *capBuffer) Write(p []byte) (int, error) {
-	if b.truncated || b.buf.Len()+len(p) > maxSessionCastBytes {
-		b.truncated = true
-		return len(p), nil
-	}
-	return b.buf.Write(p)
-}
-
-func (s *Server) newSessionRecorder(run types.AgentRun, sessionID string, opts runner.AttachOptions) (io.Writer, func(ctx context.Context, principalType types.ActorType, principal string)) {
-	noop := func(context.Context, types.ActorType, string) {}
-	if s.cfg.RecordingStore == nil || runIsUnrecordable(run) {
-		return nil, noop
-	}
-	runID := run.ID
-
-	buf := &capBuffer{}
-	cast := recording.NewCastWriter(buf, int(opts.Cols), int(opts.Rows), s.cfg.Now().UTC())
-
-	// Mask the OUTPUT before it lands in the cast, RE-SNAPSHOTTING the registry on
-	// every write so a credential minted MID-SESSION (after attach start) is masked
-	// too, AND retaining a cross-write tail (the trailing bytes that form an
-	// in-progress secret) so a secret whose verbatim bytes straddle two adjacent
-	// ~32 KiB PTY chunks is reassembled and masked (FIX #12) — the same
-	// split-secret defense the brokered-upload path's MaskingWriter provides. The
-	// per-run secret set is tiny so per-write masking is cheap. A nil registry /
-	// empty snapshot is a pass-through (the asciicast is still well-formed).
-	mw := &liveMaskWriter{reg: s.cfg.MaskRegistry, runID: runID, dst: cast}
-
-	finish := func(ctx context.Context, principalType types.ActorType, principal string) {
-		// Take the masker lock across (a) flushing the retained tail
-		// into the cast and (b) reading the recording buffer, so a secret sitting in
-		// the tail at session end is still masked (not dropped or leaked) and the
-		// buffer is never read while the attach Read pump is mid-write. mw.mu is the
-		// single mutex serialising the whole mask -> cast -> buf advance, so the read
-		// below cannot race a concurrent Write from the pump goroutine.
-		mw.mu.Lock()
-		mw.flushLocked()
-		had := cast.HadOutput()
-		// Copy under the lock; the pump may keep appending after we release it.
-		snap := append([]byte(nil), buf.buf.Bytes()...)
-		truncated := buf.truncated
-		mw.mu.Unlock()
-
-		// Skip persisting a header-only (no output) cast: an attach that produced
-		// no terminal output is not worth an empty replay artifact.
-		if !had {
-			return
-		}
-
-		key := recording.CastKey(runID.String(), sessionID)
-		err := s.cfg.RecordingStore.SaveCastNamed(ctx, runID.String(), sessionID, bytes.NewReader(snap))
-		outcome := "success"
-		data := map[string]any{"session": sessionID, "key": key, "bytes": len(snap)}
-		if truncated {
-			// Say so in the trail rather than let a short cast pass for a whole one.
-			data["truncated"] = true
-			data["limit_bytes"] = maxSessionCastBytes
-		}
-		if err != nil {
-			outcome = "failure"
-			data["error"] = err.Error()
-		}
-		s.recordAudit(ctx, s.auditEvent(&runID, principalType, principal, "session.recording.write",
-			key, outcome, mustJSON(data)))
-	}
-
-	return mw, finish
-}
-
-// liveMaskWriter masks PTY output before it lands in the interactive-session
-// cast. It combines two properties the persisted recording needs (invariant 1):
-//
-//   - RE-SNAPSHOT: it re-reads the per-run secret set on every write, so a
-//     credential minted MID-SESSION (e.g. the broker mints a token while a human
-//     is attached) is masked, not only secrets registered at attach start. The
-//     sibling upload path (recording.go) can snapshot once because it runs at run
-//     END; an attach is live, so it must re-snapshot.
-//   - TAIL RETENTION (FIX #12): it withholds the trailing bytes that form a strict
-//     prefix of a registered secret (see pendingTailLen) and prepends them to the
-//     next chunk before masking, so a secret whose verbatim bytes straddle two
-//     adjacent PTY writes is reassembled and masked rather than written through
-//     unmasked. This provides the same split-secret defense as
-//     secretmask.MaskingWriter; that writer cannot be reused directly because it
-//     binds a fixed Masker, whereas an attach must re-snapshot (see above). The
-//     strict-prefix tail is tighter than MaskingWriter's blanket (maxLen-1) tail:
-//     it never withholds already-safe output, so there is no added latency.
-//
-// mu serialises Write against the tail flush + buffer read in finishRecording, so
-// the attach Read pump (writer) and detach (reader/flush) never race the shared
-// tail or recording buffer (FIX #13). A nil registry is a pass-through.
-type liveMaskWriter struct {
-	mu    sync.Mutex
-	reg   *secretmask.Registry
-	runID uuid.UUID
-	dst   io.Writer
-	tail  []byte // withheld (already-masked) bytes carried to the next write
-}
-
-func (w *liveMaskWriter) Write(p []byte) (int, error) {
-	if len(p) == 0 {
-		return 0, nil
-	}
-	w.mu.Lock()
-	defer w.mu.Unlock()
-
-	// One CACHED masker per registry generation, not NewMasker(Snapshot(...)) per
-	// chunk: the pair cloned every secret twice and sorted the whole set on every
-	// PTY write, which is why a 32 KiB chunk went from 29.8us at one secret to
-	// 1.51ms at 1024. Masker.Secrets is the same corpus the snapshot was,
-	// longest-first, so pendingTailLen below reads it off the cached masker
-	// instead of taking a second snapshot of the unchanged set.
-	masker := w.reg.Masker(w.runID)
-	snap := masker.Secrets()
-	// Prepend the withheld tail so a secret straddling the previous/this write is
-	// reassembled before masking. Re-masking already-masked tail bytes is a no-op
-	// (the placeholder contains no secret).
-	buf := append(w.tail, p...) //nolint:gocritic // intentional tail+chunk join
-	masked := masker.Mask(buf)
-
-	// Withhold only the trailing bytes that are a genuine in-progress secret (a
-	// strict prefix of some registered secret) so a secret split across this write
-	// and the next is reassembled and masked. Unlike a blind (maxLen-1) tail, this
-	// forwards everything else immediately: no latency and no withholding of
-	// already-safe output.
-	tailLen := pendingTailLen(masked, snap)
-	forward := masked[:len(masked)-tailLen]
-	// Copy the retained tail off the shared backing array before it is reused.
-	w.tail = append([]byte(nil), masked[len(masked)-tailLen:]...)
-
-	if len(forward) > 0 {
-		if _, err := w.dst.Write(forward); err != nil {
-			return 0, err
-		}
-	}
-	return len(p), nil
-}
-
-// flushLocked emits any withheld tail (re-masked) so the trailing bytes held back
-// as a possible in-progress secret are not dropped from the cast at session end.
-// A dangling tail is only ever a strict (incomplete) secret prefix — a full
-// secret would have matched and been replaced during Write — so flushing it does
-// not leak a secret. The caller MUST hold w.mu.
-func (w *liveMaskWriter) flushLocked() {
-	if len(w.tail) == 0 {
-		return
-	}
-	masked := w.reg.Masker(w.runID).Mask(w.tail)
-	w.tail = nil
-	_, _ = w.dst.Write(masked)
-}
-
-// pendingTailLen returns how many trailing bytes of masked must be withheld
-// because they form a strict prefix of some registered secret and could complete
-// into a full secret on the next write. Returns 0 when no trailing bytes are
-// mid-secret, so a chunk with no dangling partial is flushed immediately. Only
-// secrets of at least secretmask.MinLen bytes are considered (the set NewMasker
-// actually masks). O(secrets × maxLen) per write; the per-run secret set is tiny.
-func pendingTailLen(masked []byte, secrets [][]byte) int {
-	best := 0
-	for _, s := range secrets {
-		if len(s) < secretmask.MinLen {
-			continue
-		}
-		// Longest k in [best+1, min(len(s)-1, len(masked))] with the last k bytes of
-		// masked equal to the first k bytes of s. k < len(s) keeps it a STRICT prefix
-		// (a full match was already replaced by Mask, so it never remains here).
-		maxK := len(s) - 1
-		if maxK > len(masked) {
-			maxK = len(masked)
-		}
-		for k := maxK; k > best; k-- {
-			if bytes.Equal(masked[len(masked)-k:], s[:k]) {
-				best = k
-				break
-			}
-		}
-	}
-	return best
-}
-
 // parseUint16 parses a decimal string to a uint16, returning 0 on any error
 // (the driver then picks a default window size).
 func parseUint16(s string) uint16 {
@@ -927,4 +496,48 @@ func parseUint16(s string) uint16 {
 		return 0
 	}
 	return uint16(n)
+}
+
+// refuseAttachEntry is handleAttachWS's entry authorization (#1476): true when
+// it has answered. The run's owner, or a super admin on a run with no personal
+// owner (mayEnterRun), or on the ticket lane the sponsor of a service identity's
+// run (mayEnterRunOrSponsor); neither lane may skip it.
+//
+// Ticket lane: ticketOrHumanAuth's ?ticket= branch runs neither
+// humanOrAdminAuth nor requireOperator, so the ticket's OWN stamped
+// role/principal (captured at MINT time — see attach_ticket.go) is the only
+// signal left, re-checked here against the just-loaded run. An admin stamp
+// that fails the rule gets the 403 naming why; a member stamp keeps its own.
+// superAdmin is true past this block only on the admin's own run or an
+// operator-owned one, so the deny_interactive exemption cannot reach a
+// person's run.
+func (s *Server) refuseAttachEntry(w http.ResponseWriter, r *http.Request, run types.AgentRun) bool {
+	id := run.ID
+	if ta, tok := ticketActorFromContext(r.Context()); tok {
+		superAdmin := ta.role == oidc.RoleAdmin
+		// The sponsor arm: still the sponsor of the active identity since the ticket's authority time. A
+		// sponsor's ticket is member-stamped, so the door below always runs, a super admin sponsor included.
+		if !s.mayEnterRunOrSponsor(r.Context(), run, ta.principal, superAdmin, ta.authorizedAt) {
+			if superAdmin {
+				s.auditAttachRefused(r, id, ta.principal, "ticket", runOwnerOnlyReason, ta.via)
+				s.refuseRunOwnerOnly(w, r, run)
+				return true
+			}
+			s.auditAttachDenied(r, id, ta.principal, "attach ticket does not authorize this run")
+			writeErrorReason(w, http.StatusForbidden, reasonAttachTicketNotYourRun, "attach ticket does not authorize this run")
+			return true
+		}
+		// The fall-through lane is operator-only, and a super admin's ticket
+		// is exempt the same way.
+		return (!superAdmin || !s.adminDoorExempt(run)) && s.refuseInteractiveAttach(w, r, run)
+	}
+	if !mayEnterRun(run, principalFromRequest(r), s.isOperator(r.Context())) {
+		// The cookie lane: requireOperator and the origin check keep members
+		// out of it, and the owner rule keeps a super admin out of a person's
+		// run, which that gate alone no longer does.
+		s.auditAttachRefused(r, id, principalFromRequest(r), "cookie", runOwnerOnlyReason, nil)
+		s.refuseRunOwnerOnly(w, r, run)
+		return true
+	}
+	return s.refuseNoTicketAttach(w, r, run)
 }

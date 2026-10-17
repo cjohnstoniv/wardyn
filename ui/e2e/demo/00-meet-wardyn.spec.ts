@@ -78,12 +78,24 @@ import {
 } from "./overlay";
 import { apiHeaders, BEAT_SHORT, pollScreen, silentCard } from "./demos";
 import { APPROVAL_APPEARS, decide } from "./funnel";
+import {
+  addRepository,
+  chooseShape,
+  confirmLaunchButton,
+  launchRunButton,
+  NEW_RUN_HEADING,
+  nextStep,
+  openNameDialog,
+  runTitleField,
+  startGuided,
+} from "./new-run";
 import { bootRun, REPLAY_OVER, RUN_BOOTS, RUN_OVER, waitUnlessGone } from "./runs";
 import { sweepStaleState } from "./sweep";
 // stage.ts is the rig: importing it registers this file's beforeAll/afterAll
 // (one browser, one context, one recorded page), and every beat reads the page
 // out of stage() inside a test body rather than closing over a module binding.
 import { stage } from "./stage";
+import { NR_TOOLS } from "../../src/app/components/wardyn/copy/new-run/tools";
 
 test.skip(!process.env.WARDYN_DEMO, "demo recording — run via `make record-demo` (exports WARDYN_DEMO=1)");
 
@@ -117,8 +129,20 @@ const WORKSPACE_PATH =
  */
 const WORKSPACE = WORKSPACE_PATH.replace(/\/+$/, "").split("/").pop()!;
 
-/** Act 2's run. Title is the only required field on the Terminal lane. */
+/** Act 2's run, named in the Name dialog at launch. */
 const RUN_TITLE = "Meet Wardyn";
+
+/** The Tools step's two sentences for first_use_approval: deny_with_review (the decider is you, or an admin). */
+const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const DENY_WITH_REVIEW = new RegExp(
+  `${escapeRe(NR_TOOLS.NET_POLICY_DENY_REVIEW_YOU)}|${escapeRe(NR_TOOLS.NET_POLICY_DENY_REVIEW_ADMIN)}`,
+);
+
+/** Files step: the main drive needs a size, and an untouched prefill is not one. */
+async function sizeMainDrive(page: Page): Promise<void> {
+  const size = page.locator("#nr-main-drive-size");
+  if ((await size.count()) > 0 && (await size.inputValue()) === "") await size.fill("10");
+}
 
 /** Act 3's secret. Neutral on purpose: a provider-shaped name participates in
  *  model-credential resolution on this stack, and a canary under one can be
@@ -465,51 +489,66 @@ test("V00 act 2 — a run, and a knock at the door", async () => {
 
   await act(page, page.getByRole("button", { name: "New run" }), "Start a run against it."); // C18
   await expect(page).toHaveURL(/\/runs\/new/, { timeout: 30_000 });
+  await startGuided(page);
 
-  // Fill BEFORE ringing: a ring that lands before the fill sits on an empty box
-  // for its whole visible span — .fill() is instant, so "ring then fill" never
-  // actually shows content inside it (S3: point at content).
-  const titleBox = page.getByLabel("Title");
-  await titleBox.fill(RUN_TITLE);
-  await spotlight(page, titleBox);
-  await caption(page, "A title."); // C19
-  await beat(page, BEAT_SHORT);
-  await spotlight(page, null);
-
-  // Terminal, not the agent: this episode is keyless, and a shell is all a curl
-  // needs. Seg renders role=radio buttons whose accessible name is the FULL
-  // option label, so prefix-match it. The startup field it reveals is left
-  // BLANK — the run comes up idle with a shell, which is what act 2 and act 3
-  // type into, and it is why Title is the only required field on this lane.
-  await act(page, page.getByRole("radio", { name: /^Terminal/ }), "A plain command window. No AI agent, and no key to any AI service."); // C20
+  // The Environment sandbox is the plain command window, not the agent: this
+  // episode is keyless, and a shell is all a curl needs. Shape's cards are
+  // buttons named by the card's title, which is how shapeCard finds it. An environment starts no harness, so the run comes up
+  // idle with a shell, which is what act 2 and act 3 type into.
+  await chooseShape(page, "environment", "A plain command window. No AI agent, and no key to any AI service."); // C20
   await caption(page, "The rules don't care who's typing — a person or an agent gets the same answer."); // C21
   await beat(page, PACE.read);
 
-  // The workspace trigger has NO accessible name (the Agent select beside it is
-  // labelled, this one was never wired up), so it is addressed by its
-  // placeholder text — an honest workaround for a real a11y gap.
-  await act(page, page.getByRole("combobox").filter({ hasText: "Ephemeral scratch" }), "Our workspace."); // C22
-  await act(page, page.getByRole("option", { name: new RegExp(WORKSPACE, "i") }).first());
+  // Run and Harnesses are walked on their shipped defaults: nothing to choose
+  // for a keyless shell, and that is the beat.
+  await nextStep(page, NEW_RUN_HEADING.harnesses);
+  await nextStep(page, NEW_RUN_HEADING.files);
+
+  // OPEN: the workspace `meet-wardyn` is a local directory, and Files lists only
+  // repository sources, never local-directory workspaces. This addresses it as
+  // the repository the approved flow would give it, added through the Add dialog.
+  await addRepository(page, WORKSPACE, "Our workspace."); // C22
+  await sizeMainDrive(page);
+  await nextStep(page, NEW_RUN_HEADING.tools);
 
   // EVERYTHING ELSE IS LEFT ALONE, and that is the beat: the shipped defaults.
-  // Asserted straight off the JSON textarea rather than a radio's aria-checked,
-  // because a changed default would make the approval below never fire while
-  // the take still went green.
-  const spec = page.getByLabel("Spec (JSON)");
-  await expect(spec, "the default first_use_approval is no longer deny_with_review").toHaveValue(
-    /"first_use_approval": "deny_with_review"/,
-  );
-  await centerInFrame(spec);
-  await spotlight(page, spec);
+  // Asserted off the Tools step's "What this run can reach" totals, which state
+  // the effective first_use_approval in words, because a changed default would
+  // make the approval below never fire while the take still went green.
+  // OPEN: the guided flow has no policy document on screen; its sentence for
+  // deny_with_review stands in for the old `first_use_approval` field read.
+  const reach = page.getByRole("region", { name: NR_TOOLS.TOTALS_ARIA });
+  await expect(reach, "the default first_use_approval is no longer deny_with_review").toContainText(DENY_WITH_REVIEW, {
+    timeout: 60_000,
+  });
+  await centerInFrame(reach);
+  await spotlight(page, reach);
   await caption(page, "The default rules for a run: any host nobody listed is refused."); // C23a
   await beat(page, PACE.read);
   await caption(page, "And every refusal is raised for a person to decide."); // C23b
   await beat(page, PACE.read);
   await spotlight(page, null);
 
+  await nextStep(page, NEW_RUN_HEADING.review);
+  await expect(launchRunButton(page)).toBeEnabled({ timeout: 60_000 });
+  await openNameDialog(page);
+
+  // Fill BEFORE ringing: a ring that lands before the fill sits on an empty box
+  // for its whole visible span — .fill() is instant, so "ring then fill" never
+  // actually shows content inside it (S3: point at content).
+  // OPEN: C19 ("A title.") was spoken first, over the old form's Title field.
+  // The title is now typed in the Name dialog, after Review, so the line moves
+  // here and the order of the spoken lines changes (C18, C20-C23b, C19).
+  const titleBox = runTitleField(page);
+  await titleBox.fill(RUN_TITLE);
+  await spotlight(page, titleBox);
+  await caption(page, "A title."); // C19
+  await beat(page, BEAT_SHORT);
+  await spotlight(page, null);
+
   // SILENT launch, and silent through the boot: nothing is spoken until there
   // is something to decide (and nothing may be spoken inside an ffwd span).
-  await act(page, page.getByRole("button", { name: "Launch run" }));
+  await act(page, confirmLaunchButton(page));
   runUrl = await bootRun(page, "the run never came up as an attached terminal");
 
   await typeInTerminal(page, REACH);

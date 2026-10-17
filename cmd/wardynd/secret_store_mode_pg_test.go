@@ -24,7 +24,9 @@ import (
 	"testing"
 
 	"filippo.io/age"
+	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	secretstorepg "github.com/cjohnstoniv/wardyn/internal/secretstore/pg"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore/vaultkv"
@@ -114,6 +116,46 @@ func TestBuildSecretStore_StoreModeRefusesWhileLocalRowsRemain(t *testing.T) {
 	_, err = buildSecretStore(t.Context(), pool, "", nil, vaultkv.Name, storeClients{ext: &memExternal{vals: map[string][]byte{}}}, &capturingRecorder{})
 	if err == nil || !strings.Contains(err.Error(), "-migrate-secrets") {
 		t.Fatalf("store-mode boot over a local row with no age key = %v; want a refusal naming -migrate-secrets", err)
+	}
+}
+
+// An external store holds credential values but wraps no key: with neither an
+// age key nor a key service, the per-person masking keys have nothing to be
+// wrapped under, so serving refuses at boot instead of dropping credentials
+// from runs. With an age key the same store boots and seals a masking value.
+func TestBuildMaskManifests_RefusesExternalStoreWithoutWrappingRoot(t *testing.T) {
+	pool := envelopeDB(t)
+	ctx := t.Context()
+	ext := &memExternal{vals: map[string][]byte{}}
+	bare, err := buildSecretStore(ctx, pool, "", nil, vaultkv.Name, storeClients{ext: ext}, &capturingRecorder{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, err = buildMaskManifests(ctx, pool, bare, secretmask.NewRegistry(), &maskScope{})
+	if err == nil || !strings.Contains(err.Error(), "refusing to start") || !strings.Contains(err.Error(), "WARDYN_AGE_KEY") ||
+		!strings.Contains(err.Error(), "WARDYN_KEK") {
+		t.Fatalf("external store with no wrapping key = %v; want a boot refusal naming WARDYN_AGE_KEY and WARDYN_KEK", err)
+	}
+
+	id, _ := age.GenerateX25519Identity()
+	keyed, err := buildSecretStore(ctx, pool, id.String(), nil, vaultkv.Name, storeClients{ext: ext}, &capturingRecorder{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, _, err := buildMaskManifests(ctx, pool, keyed, secretmask.NewRegistry(), &maskScope{})
+	if err != nil {
+		t.Fatalf("external store with an age key: %v", err)
+	}
+	run := uuid.New()
+	if _, err := pool.Exec(ctx, `INSERT INTO agent_runs(id, created_by, agent, repo, confinement_class, state, spiffe_id, runner_target)
+		VALUES($1, 'alice', 'claude-code', 'https://example.invalid/repo', 'CC2', 'STARTING', 'spiffe://test/run', 'docker')`, run); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Start(ctx, run, "alice"); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Append(ctx, run, []byte("synthetic-masked-value")); err != nil {
+		t.Fatalf("sealing a masking value under the age key: %v", err)
 	}
 }
 

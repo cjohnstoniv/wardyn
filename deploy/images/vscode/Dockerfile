@@ -44,21 +44,50 @@ USER root
 # the equivalent bar: a version bump means re-downloading the new tarball,
 # recomputing its sha256, and updating both entries below; a mismatch fails
 # the build closed, never silently).
-ARG CODE_SERVER_VERSION=4.133.0
+ARG CODE_SERVER_VERSION=4.139.1
 ARG TARGETARCH
+# shell-quote inside code-server, replaced with the fixed release. code-server
+# 4.139.1 and the newest release (4.140.0) both bundle shell-quote 1.10.0 in
+# lib/vscode/node_modules (CVE-2026-102422, CRITICAL; fixed in 1.11.0), so a
+# code-server bump cannot clear it. The module is plain JavaScript with no
+# dependencies and no install script, so the registry tarball unpacked in
+# place of the bundled copy is the whole install: no npm at build time. Its
+# sha256 is computed from the registry tarball at build-pin time, like the
+# sums above (that tarball's sha512 matched the integrity the registry
+# publishes). It happens in the same RUN as the code-server install, so no
+# image layer carries 1.10.0. The lines refuse any bundled version other than
+# 1.10.0: a changed bundle requires re-inspecting both the module and the
+# embedded-code tracking below before removing the replacement.
+# The bundled @devcontainers/cli also inlines its own copy; #1904 and the
+# parent README track it separately. Replacing this module does not fix it.
+ARG SHELL_QUOTE_VERSION=1.11.0
+ARG SHELL_QUOTE_SHA256=028be526afacb2bf5c6c008a95d5435b5d205135f68bb48afd0bb947610393f1
 RUN set -eu; \
 	case "${TARGETARCH:-$(dpkg --print-architecture)}" in \
-		amd64) plat=amd64; sum=a4e0f8f8c76e7de8e7424289f74e507af4c97bfe104c3e8ee272b8cc7b46c6f1;; \
-		arm64) plat=arm64; sum=d999d8b0256e5537f3b62e6c09f624220026e19107a04a876c0cef62d1c71147;; \
+		amd64) plat=amd64; sum=53029be6c5781b7bca49b815fcc9a2a3fc111813ad8c9965b2c0f0d2985a0674;; \
+		arm64) plat=arm64; sum=0edb4b60d9c4744b2dd14b0911e3c2e6dd8c6f3c13bd58bda23ae744e59e7df1;; \
 		*) echo "unsupported arch '${TARGETARCH:-unknown}' for code-server" >&2; exit 1;; \
 	esac; \
+	printf '%s' "$sum" | grep -zExq '[0123456789abcdefABCDEF]{64}'; \
 	url="https://github.com/coder/code-server/releases/download/v${CODE_SERVER_VERSION}/code-server-${CODE_SERVER_VERSION}-linux-${plat}.tar.gz"; \
 	curl -fsSL "$url" -o /tmp/code-server.tar.gz; \
-	echo "$sum  /tmp/code-server.tar.gz" | sha256sum -c -; \
+	echo "$sum  /tmp/code-server.tar.gz" | sha256sum --strict -c -; \
 	mkdir -p /usr/local/lib/code-server; \
 	tar -xzf /tmp/code-server.tar.gz -C /usr/local/lib/code-server --strip-components=1; \
 	rm -f /tmp/code-server.tar.gz; \
-	echo "installed code-server ${CODE_SERVER_VERSION} (${plat}), checksum-verified"
+	echo "installed code-server ${CODE_SERVER_VERSION} (${plat}), checksum-verified"; \
+	sq=/usr/local/lib/code-server/lib/vscode/node_modules/shell-quote; \
+	grep -q '"version": "1.10.0"' "$sq/package.json" || { \
+		echo "code-server ${CODE_SERVER_VERSION} does not bundle shell-quote 1.10.0 at $sq: review the shell-quote replacement and #1904" >&2; exit 1; }; \
+	printf '%s' "$SHELL_QUOTE_SHA256" | grep -zExq '[0123456789abcdefABCDEF]{64}'; \
+	curl -fsSL "https://registry.npmjs.org/shell-quote/-/shell-quote-${SHELL_QUOTE_VERSION}.tgz" -o /tmp/shell-quote.tgz; \
+	echo "${SHELL_QUOTE_SHA256}  /tmp/shell-quote.tgz" | sha256sum --strict -c -; \
+	rm -rf "$sq"; \
+	mkdir -m 0755 "$sq"; \
+	tar -xzf /tmp/shell-quote.tgz -C "$sq" --strip-components=1 --no-same-owner; \
+	rm -f /tmp/shell-quote.tgz; \
+	grep -q "\"version\": \"${SHELL_QUOTE_VERSION}\"" "$sq/package.json"; \
+	echo "replaced shell-quote 1.10.0 with ${SHELL_QUOTE_VERSION} in code-server, checksum-verified"
 
 # The launcher convention (deploy/images/README.md, docs/POLICIES.md
 # `ui_apps[].name`): an app declared `"name": "vscode"` is started by exec'ing

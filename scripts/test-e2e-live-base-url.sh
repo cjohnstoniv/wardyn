@@ -23,6 +23,8 @@
 set -uo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+. "${REPO_ROOT}/scripts/lib/common.sh"
+. "${REPO_ROOT}/scripts/lib/e2e-network.sh"
 RUN_E2E_SH="${REPO_ROOT}/scripts/run-ui-e2e.sh"
 
 fail() { echo "test-e2e-live-base-url: FAIL: $*" >&2; exit 1; }
@@ -43,9 +45,9 @@ eval "${preamble}
 # auto-picked port that is never actually bound in LIVE mode).
 LIVE_BASE_URL="http://localhost:8280"
 NUM_LANES=1
-LANE_ADDR=(":54321")
-LANE_UI_ADDR=(":54322")
-LANE_INTERNAL_ADDR=(":54323")
+LANE_ADDR=("127.0.0.1:54321")
+LANE_UI_ADDR=("127.0.0.1:54322")
+LANE_INTERNAL_ADDR=("127.0.0.1:54323")
 LANE_DB=("wardyn_e2e_test")
 PG_HOSTPORT="localhost:55432"
 # Mirrors the real script: LIVE mode exports WARDYN_E2E_BASE_URL from

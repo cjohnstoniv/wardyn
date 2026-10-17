@@ -51,7 +51,16 @@ func LoadPolicySpec(path string) (types.RunPolicySpec, error) {
 
 // validatePolicySpec enforces the minimal structural invariants a policy must
 // satisfy before any run can be scheduled against it.
-func validatePolicySpec(spec types.RunPolicySpec) error {
+func validatePolicySpec(spec types.RunPolicySpec) error { return validatePolicySpecMode(spec, true) }
+
+// validatePolicySpecLenient is validatePolicySpec for a spec built from stored
+// grant specs (record-mode synthesis): a git_pat scope is read leniently there,
+// as every read is, so a stored row with a stray key still loads.
+func validatePolicySpecLenient(spec types.RunPolicySpec) error {
+	return validatePolicySpecMode(spec, false)
+}
+
+func validatePolicySpecMode(spec types.RunPolicySpec, strict bool) error {
 	if spec.MinConfinementClass == "" {
 		return fmt.Errorf("min_confinement_class is required")
 	}
@@ -104,11 +113,17 @@ func validatePolicySpec(spec types.RunPolicySpec) error {
 		}
 	}
 	for i, g := range spec.EligibleGrants {
-		if err := validateEligibleGrant(i, g); err != nil {
+		if err := validateEligibleGrantMode(i, g, strict); err != nil {
 			return err
 		}
 	}
 	if err := validateGrantLaneExclusivity(spec.EligibleGrants); err != nil {
+		return err
+	}
+	if err := validatePATNarrowedDuplicates(spec.EligibleGrants); err != nil {
+		return err
+	}
+	if err := validatePATNarrowingSSHConflict(spec.EligibleGrants); err != nil {
 		return err
 	}
 	if err := validatePolicyWorkspaces(spec); err != nil {
@@ -123,7 +138,28 @@ func validatePolicySpec(spec types.RunPolicySpec) error {
 	if err := validatePushRules(spec.PushRules); err != nil {
 		return err
 	}
+	if err := validateResources(spec.Resources); err != nil {
+		return err
+	}
 	return validateADOCapabilities(spec.AzureDevOpsCapabilities)
+}
+
+// validateResources refuses a negative size. Zero means "the deployment's default" and every positive
+// size is the clamp's to cap, so a negative is the one value with no reading: it would otherwise
+// reach a cgroup limit as garbage.
+func validateResources(r *types.ResourceLimits) error {
+	if r == nil {
+		return nil
+	}
+	for _, f := range []struct {
+		name string
+		v    int
+	}{{"cpu_millis", r.CPUMillis}, {"memory_mib", r.MemoryMiB}, {"pids_limit", r.PidsLimit}, {"disk_mib", r.DiskMiB}} {
+		if f.v < 0 {
+			return fmt.Errorf("resources.%s: %d is not a size — use 0 for the deployment default", f.name, f.v)
+		}
+	}
+	return nil
 }
 
 // errADOCapabilityUnknown marks validatePolicySpec's refusal of an
@@ -151,6 +187,9 @@ func validateADOCapabilities(caps []adoscope.Capability) error {
 func specRefusalReason(err error, bucket string) string {
 	if errors.Is(err, errADOCapabilityUnknown) {
 		return reasonADOCapabilityUnknown
+	}
+	if errors.Is(err, errPATNarrowingSSHConflict) {
+		return reasonGitPATNarrowingSSHConflict
 	}
 	return bucket
 }
@@ -363,6 +402,7 @@ const (
 	maxPushRulesPathBytes      = 256
 	maxPushRulesInspectPackMiB = 64
 	maxPushRulesHoldSeconds    = 600
+	maxPushRulesFileSizeMiB    = 1024
 )
 
 // validatePushRules enforces push_rules' structural invariants at write time.
@@ -388,6 +428,12 @@ func validatePushRules(pr *types.PushRulesSpec) error {
 	}
 	if pr.HoldSeconds < 0 || pr.HoldSeconds > maxPushRulesHoldSeconds {
 		return fmt.Errorf("push_rules.hold_seconds must be between 0 and %d, got %d", maxPushRulesHoldSeconds, pr.HoldSeconds)
+	}
+	if pr.MaxFileSizeMiB < 0 || pr.MaxFileSizeMiB > maxPushRulesFileSizeMiB {
+		return fmt.Errorf("push_rules.max_file_size_mib must be between 0 and %d, got %d", maxPushRulesFileSizeMiB, pr.MaxFileSizeMiB)
+	}
+	if pr.DenyNewExecutables {
+		return errors.New("push_rules.deny_new_executables is not supported yet")
 	}
 	return nil
 }
@@ -441,9 +487,15 @@ func validInjectionFormat(format string) error {
 // eligible_grants entry (extracted from validatePolicySpec to keep each
 // function under the gocyclo gate; behavior is identical).
 func validateEligibleGrant(i int, g types.GrantSpec) error {
+	return validateEligibleGrantMode(i, g, true)
+}
+
+// validateEligibleGrantMode is validateEligibleGrant with the git_pat scope
+// decode chosen: strict for a write, lenient for record-mode synthesis.
+func validateEligibleGrantMode(i int, g types.GrantSpec, strict bool) error {
 	switch g.Kind {
 	case types.GrantGitHubToken, types.GrantCloudSTS, types.GrantAPIKey, types.GrantGitPAT,
-		types.GrantSSHKey, types.GrantEnvSecret:
+		types.GrantSSHKey, types.GrantEnvSecret, types.GrantFileSecret:
 	default:
 		return fmt.Errorf("eligible_grants[%d]: unknown kind %q", i, g.Kind)
 	}
@@ -494,6 +546,14 @@ func validateEligibleGrant(i int, g types.GrantSpec) error {
 		if sinkReservedSecret(rule.SecretName) {
 			return fmt.Errorf("eligible_grants[%d]: api_key references reserved secret name %q", i, rule.SecretName)
 		}
+		// `shared` pins the sink's read to the OPERATOR's namespace, which is
+		// the component gate's to decide for an org component's provided
+		// secret and nobody's to author: a policy setting it would hand the
+		// run an operator credential by name. Here, in the arm the strict and
+		// the lenient (recorded) decodes share, so every authored door refuses it.
+		if apiKeyScopeShared(g.Scope) {
+			return fmt.Errorf("eligible_grants[%d]: api_key scope sets shared: shared is set by Wardyn for an org component, never authored", i)
+		}
 		if !egress.ValidHeaderName(rule.Header) {
 			return fmt.Errorf("eligible_grants[%d]: api_key header %q is not a valid HTTP header name", i, rule.Header)
 		}
@@ -512,28 +572,10 @@ func validateEligibleGrant(i int, g types.GrantSpec) error {
 			return fmt.Errorf("eligible_grants[%d]: api_key %w", i, err)
 		}
 	}
-	// A git_pat grant returns the stored PAT value to the git credential
-	// helper (unlike api_key, whose value never leaves the broker). Require
-	// host + secret_name and reject a reserved platform-internal secret at
-	// WRITE time — fail closed so a policy can never exfiltrate
-	// wardyn-signing-key/session-key as a git password. The broker sink
-	// (mintGitPAT) enforces the same invariant defense-in-depth.
-	//
-	// nameSinkReservedSecret, not sinkReservedSecret (#1048): this kind returns
-	// the raw value into the sandbox, same as env_secret/llm_inspection below,
-	// so it needs the WIDER guard that also refuses a wardyn-provider-*-key
-	// name — sinkReservedSecret alone let one through at write time (the
-	// broker's own reservedBrokerSecret still refused it at mint, so nothing
-	// leaked, but the run failed at clone time with no 400 up front). api_key
-	// stays on the narrower sinkReservedSecret above: the provider arm
-	// legitimately names a -key there.
+	// A git_pat grant's scope is checked by validatePATGrantScope (git_pat_scope.go).
 	if g.Kind == types.GrantGitPAT {
-		_, secretName, _, derr := gitPATScopeFields(g.Scope)
-		if derr != nil {
-			return fmt.Errorf("eligible_grants[%d]: git_pat scope invalid: %w", i, derr)
-		}
-		if nameSinkReservedSecret(secretName) {
-			return fmt.Errorf("eligible_grants[%d]: git_pat references reserved secret name %q", i, secretName)
+		if err := validatePATGrantScope(i, g, strict); err != nil {
+			return err
 		}
 	}
 	// An ssh_key grant materializes a RESIDENT private key (see GrantSSHKey).
@@ -581,6 +623,30 @@ func validateEligibleGrant(i int, g types.GrantSpec) error {
 			return fmt.Errorf("eligible_grants[%d]: env_secret cannot require approval — it is resolved at dispatch, "+
 				"not minted, so there is no mint for an approval to gate", i)
 		}
+	}
+	if g.Kind == types.GrantFileSecret {
+		return validateFileSecretScope(i, g)
+	}
+	return nil
+}
+
+// validateFileSecretScope is the file_secret arm of validateEligibleGrantMode,
+// env_secret's rules for the same reasons: a file name the dispatch sink
+// writes into a fixed directory (fileSecretScopeFields), a secret name that is
+// never a reserved platform-internal one (the wider guard — the value lands in
+// the sandbox), and no requires_approval, since nothing is minted for an
+// approval to gate. resolveFileSecretGrants re-checks the first two.
+func validateFileSecretScope(i int, g types.GrantSpec) error {
+	_, secretName, err := fileSecretScopeFields(g.Scope)
+	if err != nil {
+		return fmt.Errorf("eligible_grants[%d]: file_secret scope invalid: %w", i, err)
+	}
+	if nameSinkReservedSecret(secretName) {
+		return fmt.Errorf("eligible_grants[%d]: file_secret references reserved secret name %q", i, secretName)
+	}
+	if g.RequiresApproval {
+		return fmt.Errorf("eligible_grants[%d]: file_secret cannot require approval — it is resolved at dispatch, "+
+			"not minted, so there is no mint for an approval to gate", i)
 	}
 	return nil
 }
@@ -652,10 +718,11 @@ func validateGrantLaneExclusivity(grants []types.GrantSpec) error {
 				"drop the ssh_key grant to keep the brokered, branch-confined lane, or drop the github_token grant to push with your own "+
 				"key, unbrokered and unbound", i, host)
 		case types.GrantGitPAT:
-			host, _, _, derr := gitPATScopeFields(g.Scope)
-			if derr != nil || !brokeredForgeHost(host) {
+			pat, derr := types.DecodeGitPATScope(g.Scope)
+			if derr != nil || !brokeredForgeHost(pat.Host) {
 				continue
 			}
+			host := pat.Host
 			return fmt.Errorf("eligible_grants[%d]: this policy declares BOTH a github_token grant and a git_pat grant for %q — "+
 				"a brokered forge is single-lane: the git-broker route is its only route by name, so every push it carries is parsed and "+
 				"confined to refs/heads/wardyn/<run-id>/, while a git_pat puts a resident token in the sandbox whose pushes are an opaque "+
@@ -712,6 +779,14 @@ func validatePolicyWorkspaces(spec types.RunPolicySpec) error {
 		seenTargets[wm.Target] = true
 	}
 	for i, wr := range spec.WorkspaceRepos {
+		// The locator, ref and an explicit target flow into the clone record and git's
+		// argv (repoFieldSafe), checked here whether or not a target is named; a
+		// mount path is not one of them and may carry a space.
+		for _, f := range []struct{ name, value string }{{"repo", wr.Repo}, {"ref", wr.Ref}, {"target", wr.Target}} {
+			if !repoFieldSafe(f.value) {
+				return fmt.Errorf("workspace_repos[%d]: "+repoField400Charset, i, f.name)
+			}
+		}
 		if wr.Target == "" {
 			// No explicit dest: the default (~/work/<name> convention) is derived
 			// by a LATER wave (WARDYN_REPOS); nothing to collide-check here yet.

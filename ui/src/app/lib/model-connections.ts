@@ -12,16 +12,9 @@
 // EAGER graph (its own file header explains why it avoids copy imports), and
 // this page is reached only through the lazy Settings/Account chunk.
 //
-// NOT wired here, on purpose:
-//  - C9b ("removed by an address change") — SetupProviderAccess carries only
-//    `not_configured`, the same state a credential that was never stored
-//    grades to; there is no field distinguishing the two. Its canon sentence
-//    is left unwired rather than invented.
-//  - C11 (the admin-token caller) — that principal never mounts the Member
-//    view at all (model-access-context.tsx's own comment), so this page never
-//    sees it.
 import { absoluteTime, relativeTime, shortDate } from "./format";
 import { harnessDisplayNames } from "./model-access";
+import { modelConnectionCause } from "./model-connection-cause";
 import type { SetupModelProvider, SetupProviderAccess, SetupStatus } from "./types";
 import { AGENTS } from "./workspace-providers-copy";
 import { CONNECTIONS } from "../components/wardyn/copy/door";
@@ -133,7 +126,13 @@ function connectionMeta(access: SetupProviderAccess): Pick<ConnectionRowCopy, "m
  *  kind- or state-specific, so it is computed once here rather than repeated
  *  at every one of connectionRowCopyByKind's return points. */
 export function connectionRowCopy(status: SetupStatus | null | undefined, row: ConnectionRow): ConnectionRowCopy {
-  return { ...connectionRowCopyByKind(status, row), ...connectionMeta(row.access) };
+  const copy = { ...connectionRowCopyByKind(status, row), ...connectionMeta(row.access) };
+  const cause = modelConnectionCause(row.provider, row.access);
+  if (!cause) return copy;
+  return {
+    ...copy, line: cause.line, button: cause.button ?? copy.button,
+    chip: row.access.cause === "store_unreadable" ? { label: CONNECTIONS.COULD_NOT_CHECK, tone: "neutral" } : copy.chip,
+  };
 }
 
 function connectionRowCopyByKind(
@@ -147,7 +146,7 @@ function connectionRowCopyByKind(
   if (provider.kind === "bedrock_sso") {
     switch (access.state) {
       case "live":
-        return { chip: { label: CONNECTIONS.SIGNED_IN, tone: "success" }, forLine, line: "", title: "" };
+        return { chip: { label: CONNECTIONS.SIGNED_IN, tone: "success" }, forLine, line: "", title: "", button: CONNECTIONS.SIGN_IN_AGAIN };
       case "expiring": {
         // A clock time, not a relative offset (packet MP-D draws "Sign in
         // again before 17:30") — the same absoluteTime convention
@@ -185,7 +184,7 @@ function connectionRowCopyByKind(
   if (provider.kind === "anthropic_subscription") {
     switch (access.state) {
       case "live":
-        return { chip: { label: CONNECTIONS.SIGNED_IN, tone: "success" }, forLine, line: "", title: "" };
+        return { chip: { label: CONNECTIONS.SIGNED_IN, tone: "success" }, forLine, line: "", title: "", button: CONNECTIONS.SIGN_IN_AGAIN };
       case "expiring":
         return {
           chip: { label: CONNECTIONS.EXPIRING, tone: "warning" },

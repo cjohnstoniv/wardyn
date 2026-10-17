@@ -107,6 +107,8 @@ func (p *Proxy) handleLocalRoute(w http.ResponseWriter, r *http.Request) {
 		p.handleGitBroker(w, r)
 	case strings.HasPrefix(path, routePATBroker):
 		p.handlePATBroker(w, r)
+	case strings.HasPrefix(path, routeMCPBroker):
+		p.handleMCPBroker(w, r)
 	default:
 		http.Error(w, "unknown brokered route", http.StatusNotFound)
 	}
@@ -120,6 +122,13 @@ func (p *Proxy) handleLocalRoute(w http.ResponseWriter, r *http.Request) {
 // (see isBrokeredGitGrant) — that route mints the GitHub App installation
 // token server-side, so handing the same token to the sandbox would defeat
 // the per-repo allowlist and burn the broker's one (single-use) mint.
+//
+// So is every git_pat grant id of the run while the PAT broker is on (see
+// isBrokeredPATGrant): /wardyn/git/ mints that PAT proxy-side, so a raw mint of
+// the same grant would put it in the sandbox. The set is every git_pat row, not
+// PATGrants' per-host map, which a same-host shadow, a vetoed lane or a withheld
+// forge leaves without that grant. The broker's own mint goes to the control
+// plane directly and never passes through here.
 func (p *Proxy) handleBrokerMint(w http.ResponseWriter, r *http.Request) {
 	body, err := io.ReadAll(io.LimitReader(r.Body, maxBrokeredBody))
 	if err != nil {
@@ -130,6 +139,13 @@ func (p *Proxy) handleBrokerMint(w http.ResponseWriter, r *http.Request) {
 		p.emitLocalDecision(r, egress.Deny, ruleSourceMint, nil)
 		http.Error(w, "wardyn: this grant is brokered on "+routeGitBroker+
 			"; the GitHub App installation token is minted proxy-side and never enters the sandbox",
+			http.StatusForbidden)
+		return
+	}
+	if p.isBrokeredPATGrant(body) {
+		p.emitLocalDecision(r, egress.Deny, ruleSourceMint, nil)
+		http.Error(w, "wardyn: this grant is brokered on "+routePATBroker+
+			"; the PAT is minted proxy-side and never enters the sandbox",
 			http.StatusForbidden)
 		return
 	}
@@ -415,7 +431,7 @@ func (p *Proxy) forwardToControlPlane(ctx context.Context, method, path string, 
 // reqOf builds the egress.Request every handler-side emitter records.
 // Paired with decisionLog (policy.go), which wraps it into a DecisionLog.
 func (p *Proxy) reqOf(r *http.Request, host string, port int) egress.Request {
-	return egress.Request{
+	return egress.Request{AuditReservation: spoolTicket(r.Context()),
 		RunID:  p.runID,
 		Host:   host,
 		Port:   port,

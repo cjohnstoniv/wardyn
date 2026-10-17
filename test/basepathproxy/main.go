@@ -25,7 +25,7 @@ import (
 const neighbourBody = "basepathproxy: outside the base path (a neighbouring application)"
 
 func main() {
-	listen := flag.String("listen", ":8090", "address to listen on")
+	listen := flag.String("listen", "127.0.0.1:8090", "address to listen on")
 	target := flag.String("target", "http://127.0.0.1:8088", "wardynd's console listener")
 	prefix := flag.String("prefix", "/wardyn", "the WARDYN_BASE_PATH wardynd serves under")
 	flag.Parse()

@@ -51,7 +51,7 @@ var errDriveUnmountable = errors.New("drive_unmountable")
 //
 // It is a sentinel rather than a third read of provider.Disabled because the
 // switch was already read in three places and asked at only two of them: the
-// launch door (seedRequestDrive) and the admin write boundary
+// launch door (seedRequestDrives) and the admin write boundary
 // (userDriveWriteRefusal). GET /me shipped an affirmative allocation — name,
 // size, writable, home_name, and an empty user_drive_unavailable — and POST
 // /drives/preview answered 200 with the same, for a mount the create path
@@ -173,7 +173,7 @@ const (
 func writeDriveError(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
 	case errors.Is(err, errDrivesDisabled):
-		// The same bytes the launch door refuses with (seedRequestDrive composes
+		// The same bytes the launch door refuses with (seedRequestDrives composes
 		// driveRefusedBackendMsg over driveDisabledMsg), not a paraphrase: an
 		// admin previewing why a member cannot mount a drive reads the sentence
 		// that member reads. 422, never a 403 — nobody was denied by a profile.
@@ -252,7 +252,7 @@ func (s *Server) resolveUserDrive(ctx context.Context, profileMaxDriveMiB int) (
 // driveWithUnusableGroups is step 3: the caller's group identity cannot be
 // evaluated, so resolve on their user subjects and type alone and let
 // selectByTier's one stale rule decide whether that answer is trustworthy
-// (target runs.drive, matching denyUserDrive, the other refusal this seam
+// (target runs.drive, matching userDriveDoorRefusal, the other refusal this seam
 // writes). The drive preview enters here too.
 func (s *Server) driveWithUnusableGroups(ctx context.Context, users []string, userType string, ceiling driveSizeCeiling) (*types.ResolvedDrive, error) {
 	type pick struct {
@@ -294,7 +294,7 @@ func (s *Server) driveWithUnusableGroups(ctx context.Context, users []string, us
 //
 // Set by the display callers, never by a middleware, so the default is
 // "enforcing" and a new enforcement seam cannot silently inherit the
-// suppression: seedRequestDrive, the launch and preflight paths and every other
+// suppression: seedRequestDrives, the launch and preflight paths and every other
 // caller reach the deciding sites unmarked and keep recording. There are two
 // display callers — GET /me, and POST /drives/preview, whose handler doc has
 // always said it is "still not audited" and whose steps reach both deciding

@@ -19,12 +19,13 @@ export default defineConfig({
     // Exclude Playwright e2e specs (they run under @playwright/test, not vitest).
     exclude: ["e2e/**", "node_modules/**"],
     reporters: ["default", ["junit", { outputFile: "../test/reports/ui/junit.xml" }]],
-    // Explicit, not a behavior change: 5000ms is vitest's own hard-coded
-    // default. Pinning it here documents the budget so a suite like
-    // setup-screen.test.tsx that genuinely needs more (its own per-describe
-    // { timeout: 20_000 }, which always overrides this) reads as a deliberate
-    // exception rather than an accident.
-    testTimeout: 5000,
+    // 5000ms (vitest's own default) on a developer machine, so a slow test
+    // shows up locally. A shared hosted runner is slower than that machine, so
+    // under CI (the CI environment variable, which GitHub Actions sets) the
+    // budget is 15000ms: a test that passes locally is not failed by a slow
+    // runner. A per-describe { timeout: 20_000 } (setup-screen.test.tsx and
+    // others) always overrides this.
+    testTimeout: process.env.CI ? 15_000 : 5000,
     coverage: {
       provider: "v8",
       reportsDirectory: "../test/reports/ui/coverage",

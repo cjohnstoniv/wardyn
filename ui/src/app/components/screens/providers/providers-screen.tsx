@@ -46,7 +46,7 @@ import { Chip, OperatorOnlyHint } from "../../wardyn/primitives";
 import { SavedElsewhereBanner } from "../../wardyn/saved-elsewhere-banner";
 import { EmptyState, TableSkeleton, loadFailStatus } from "../../wardyn/states";
 import { useOperator } from "../../wardyn/operator-context";
-import { Segmented } from "../permissions";
+import { Segmented } from "../../wardyn/segmented";
 import { AgentsTab } from "./agents-tab";
 import { gitRowInvalid } from "./display";
 import { GitTab } from "./git-tab";

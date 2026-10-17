@@ -101,7 +101,7 @@ func specJSON(t *testing.T, s types.RunPolicySpec) string {
 // ceiling already enforced.
 func TestClamp_ClampedSpecDoesNotAliasTheProposal(t *testing.T) {
 	proposed, ceiling := aliasProposal(t), aliasCeiling(t)
-	got, _ := Clamp(proposed, ceiling, 0)
+	got, _ := Clamp(proposed, ceiling, types.GovernanceLimits{})
 
 	// Nothing may be narrowed here, or the pass-through paths this test exists
 	// to cover were never taken.
@@ -123,9 +123,9 @@ func TestClamp_ClampedSpecDoesNotAliasTheProposal(t *testing.T) {
 	}
 
 	// Direction 2: mutate the RESULT, the caller's proposal must not move.
-	fresh, _ := Clamp(aliasProposal(t), ceiling, 0)
+	fresh, _ := Clamp(aliasProposal(t), ceiling, types.GovernanceLimits{})
 	proposed2 := aliasProposal(t)
-	got2, _ := Clamp(proposed2, ceiling, 0)
+	got2, _ := Clamp(proposed2, ceiling, types.GovernanceLimits{})
 	beforeProposal := specJSON(t, proposed2)
 	widenInPlace(t, &got2)
 	if after := specJSON(t, proposed2); after != beforeProposal {
@@ -140,7 +140,7 @@ func TestClamp_ClampedSpecDoesNotAliasTheProposal(t *testing.T) {
 	// The documented incident: an append into SHARED spare capacity. Both sides
 	// carry len 2 of a cap-4 array, so an aliased pair writes index 2 twice.
 	proposed3 := aliasProposal(t)
-	got3, _ := Clamp(proposed3, ceiling, 0)
+	got3, _ := Clamp(proposed3, ceiling, types.GovernanceLimits{})
 	proposed3.AllowedDomains = append(proposed3.AllowedDomains, "from-the-proposal.example.com")
 	got3.AllowedDomains = append(got3.AllowedDomains, "from-the-clamp.example.com")
 	if proposed3.AllowedDomains[2] != "from-the-proposal.example.com" {
@@ -163,7 +163,7 @@ func TestClamp_InheritedLLMInspectionDoesNotAliasTheCeiling(t *testing.T) {
 		WorkspaceSecretNames: []string{"prod-db-password"},
 		ClassifiedMarkers:    []string{"WARDYN-CONFIDENTIAL"},
 	}
-	got, _ := Clamp(aliasProposal(t), ceiling, 0)
+	got, _ := Clamp(aliasProposal(t), ceiling, types.GovernanceLimits{})
 	if got.LLMInspection == nil {
 		t.Fatal("expected llm_inspection inherited from the ceiling")
 	}

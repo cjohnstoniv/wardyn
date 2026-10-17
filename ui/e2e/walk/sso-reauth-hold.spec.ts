@@ -74,6 +74,7 @@ import {
   WALK_PROVIDER,
   WALK_PROVIDER_NAME,
   dexSignIn,
+  launchFromReview,
   makeMemberActionable,
   me,
   modelAccess,
@@ -81,7 +82,10 @@ import {
   runIDFromURL,
   seen,
   signInThroughPane,
+  viewLaunchedRun,
+  walkNewRunToReview,
 } from "./helpers";
+import { termText } from "../terminal-text";
 
 test.skip(process.env.WARDYN_TEST_K8S !== "1", "live cluster walk: set WARDYN_TEST_K8S=1 (scripts/kind-sso-walk.sh)");
 test.describe.configure({ mode: "serial" });
@@ -290,19 +294,19 @@ const STRIP_EXPIRED = CONNECTIONS.C6_LINE(WALK_PROVIDER_NAME);
  *  ONE bare Enter clears it. */
 async function startInteractiveRun(page: Page, title: string): Promise<{ id: string; screen: ReturnType<Page["locator"]> }> {
   await page.goto("/runs/new");
-  await page.getByRole("combobox", { name: "Title" }).fill(title);
-  await page.getByRole("radio", { name: /^Interactive/ }).click();
-  await page.getByRole("button", { name: /^Launch/ }).click();
+  await walkNewRunToReview(page, { mode: "interactive", startsWithRun: true });
+  await launchFromReview(page, title);
+  await viewLaunchedRun(page);
 
   const screen = page.locator(".xterm-screen").first();
   await expect(screen).toBeVisible({ timeout: SANDBOX_UP });
   await expect
-    .poll(async () => (await screen.innerText({ timeout: 1_000 }).catch(() => "")), { timeout: SANDBOX_UP })
+    .poll(async () => (await termText(screen).catch(() => "")), { timeout: SANDBOX_UP })
     .toContain("Accessing workspace:");
   await screen.click();
   await page.keyboard.press("Enter");
   await expect
-    .poll(async () => (await screen.innerText({ timeout: 1_000 }).catch(() => "")), { timeout: 120_000 })
+    .poll(async () => (await termText(screen).catch(() => "")), { timeout: 120_000 })
     .toContain("Amazon Bedrock");
   return { id: runIDFromURL(page), screen };
 }
@@ -562,7 +566,7 @@ test("J (launch door, spent session): a session retired at the portal is refused
   // (the 0.7.6 field report's likeliest shape — walk-2 reproduced it: an
   // expired session whose refresh token AWS had retired was told "launched"
   // and failed on its page), so the same lever now
-  // yields a 422 before any run exists, carrying the class the New Run rail
+  // yields a 422 before any run exists, carrying the class New Run
   // answers by opening the dialog itself. The run-page door of 0.7.6 stays for
   // a session that lapses between the click and the sandbox — not forceable.
   await dexSignIn(page, MEMBER_EMAIL);
@@ -573,29 +577,27 @@ test("J (launch door, spent session): a session retired at the portal is refused
     await waitUntil(page, T + 2.2 * MINUTE, "the launch renews inside awsSSORefreshSkew (10 min) of a 12-minute token");
 
     await page.goto("/runs/new");
-    await page.getByRole("combobox", { name: "Title" }).fill("a run whose credential cannot be renewed");
-    await page.getByRole("radio", { name: /^Autonomous/ }).click();
-    await page.locator("#nr-task").fill("Reply with the single word: ready.");
+    await walkNewRunToReview(page, { task: "Reply with the single word: ready." });
     // At the click the server still grades the session live (the spent mark is
     // written by the renewal the click itself performs), so nothing on the
     // console could have warned: the server's answer is what opens the door.
     expect((await modelAccess(page)).state, "nothing to warn about before the click").toBe("live");
     const clickedAt = new Date().toISOString();
-    await page.getByRole("button", { name: /^Launch/ }).click();
+    const naming = await launchFromReview(page, "a run whose credential cannot be renewed");
 
     // The refusal is where the person is: the dialog, over New Run, with the
-    // renewal's own sentence under the rail — and no navigation, because there
-    // is no run.
+    // renewal's own sentence in the Name dialog beneath it — and no navigation,
+    // because there is no run.
     await expect(page.getByRole("heading", { name: MODEL_ACCESS_BANNER.DIALOG_TITLE })).toBeVisible({ timeout: 2 * MINUTE });
     await expect(page.getByTestId("harness-login-pane")).toBeVisible({ timeout: 60_000 });
-    await expect(page.getByText(/can no longer be renewed/)).toBeVisible();
-    await expect(page).toHaveURL(/\/runs\/new/);
+    await expect(naming.getByText(/can no longer be renewed/)).toBeVisible();
+    await expect(page).toHaveURL(/\/runs\/new\?step=review$/);
 
     // Escape: nothing launched, the page never left, and the server's grade has
     // caught up with what the click learned.
     await page.keyboard.press("Escape");
     await expect(page.getByTestId("harness-login-pane")).toHaveCount(0);
-    await expect(page).toHaveURL(/\/runs\/new$/);
+    await expect(page).toHaveURL(/\/runs\/new\?step=review$/);
     await expect.poll(async () => (await modelAccess(page)).state, { timeout: 60_000 }).toBe("expired_signin");
     const mine = (await page.evaluate(async () => {
       const r = await fetch("/api/v1/runs?limit=1000", { credentials: "include" });

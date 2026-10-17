@@ -28,7 +28,7 @@ import (
 // name statically and cannot see one read through a loop variable.
 func hasRunsListFilterParams(q url.Values) bool {
 	return q.Has("view") || q.Has("owner") || q.Has("status") ||
-		q.Has("ended_within") || q.Has("include_killed") || q.Has("workspace") || q.Has("q")
+		q.Has("ended_within") || q.Has("include_killed") || q.Has("no_end") || q.Has("workspace") || q.Has("q")
 }
 
 // maxRunsListQueryLen bounds ?q=: it is parameterised (store_runs_filtered.go
@@ -119,6 +119,9 @@ func (s *Server) parseRunsListParams(w http.ResponseWriter, r *http.Request, pri
 	if owner == "me" {
 		resolvedOwner = principal
 	}
+	// A person's own list, view=user included (the console always sends a view), carries the runs of the
+	// service identities they currently sponsor (design §8). A portal's delegated token gets none.
+	withSponsored := resolvedOwner != "" && !delegatedRequest(r.Context())
 
 	var statuses []string
 	seenStatus := map[string]bool{}
@@ -160,6 +163,16 @@ func (s *Server) parseRunsListParams(w http.ResponseWriter, r *http.Request, pri
 		return parsedRunsListParams{}, false
 	}
 
+	noEnd := false
+	switch q.Get("no_end") {
+	case "", "0":
+	case "1":
+		noEnd = true
+	default:
+		writeErrorReason(w, http.StatusBadRequest, reasonInvalidNoEndParam, "invalid no_end")
+		return parsedRunsListParams{}, false
+	}
+
 	searchQuery := q.Get("q")
 	if len(searchQuery) > maxRunsListQueryLen {
 		writeErrorReason(w, http.StatusBadRequest, reasonRunsSearchQueryTooLong, "q is too long")
@@ -170,9 +183,11 @@ func (s *Server) parseRunsListParams(w http.ResponseWriter, r *http.Request, pri
 		view: view,
 		filter: store.RunFilter{
 			Owner:         resolvedOwner,
+			WithSponsored: withSponsored,
 			Statuses:      statuses,
 			EndedWithin:   endedWithin,
 			IncludeKilled: includeKilled,
+			NoEnd:         noEnd,
 			Workspace:     q.Get("workspace"),
 			Query:         searchQuery,
 		},
@@ -229,6 +244,7 @@ func (s *Server) handleListRunsFiltered(w http.ResponseWriter, r *http.Request, 
 		}
 		s.projectRecordingMeta(r, needs)
 		s.projectStatusDetailFor(r, needs)
+		s.projectRunnerFacts(r, needs)
 		w.Header().Set("X-Wardyn-Hidden-Older", "0")
 		w.Header().Set("X-Wardyn-Hidden-Killed", "0")
 		windowed, truncated := pageWindow(needs, page.Offset, page.Limit)
@@ -264,6 +280,7 @@ func (s *Server) handleListRunsFiltered(w http.ResponseWriter, r *http.Request, 
 		}
 		s.projectRecordingMeta(r, runs)
 		s.projectStatusDetailFor(r, runs)
+		s.projectRunnerFacts(r, runs)
 		return runs, nil
 	}, nil)
 }

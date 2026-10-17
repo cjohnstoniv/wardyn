@@ -4,6 +4,7 @@
 package api
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"strings"
@@ -11,15 +12,20 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // revokeSessionsRequest is POST /api/v1/sessions/revoke's body: exactly one
 // of Sub (revoke a single principal's sessions) or All (revoke every
-// principal's sessions) must be set — see handleRevokeSessions.
+// principal's sessions) must be set — see handleRevokeSessions. SessionsOnly
+// narrows a Sub revoke to a session-only cut: no API token is revoked, no SSH
+// key is deleted, and both keep authenticating.
 type revokeSessionsRequest struct {
-	Sub string `json:"sub"`
-	All bool   `json:"all"`
+	Sub          string `json:"sub"`
+	All          bool   `json:"all"`
+	SessionsOnly bool   `json:"sessions_only"`
 }
 
 // handleRevokeSessions is the admin surface for "revoke a human now" — the
@@ -94,6 +100,12 @@ type revokeSessionsRequest struct {
 // API tokens and SSH keys are the reason the All arm is an incident
 // lever rather than a routine one: unlike sessions they do not self-heal, and
 // every automation credential must be re-minted and SSH key re-registered.
+// A sub request may set "sessions_only": a session-only cut
+// (oidc.CutSessions), for the routine "sign this person out" that must not cost
+// them their automation credentials. Browser sessions end; API tokens and SSH
+// keys keep authenticating, because their owner check (epoch -1) does not read
+// the cut. The audit row is the same, with both counts 0.
+//
 // Pinned by TestSecurityAdminRevokesSuperAdmin; stated for operators in
 // docs/OPERATIONS.md's security-admin section.
 func (s *Server) handleRevokeSessions(w http.ResponseWriter, r *http.Request) {
@@ -106,35 +118,46 @@ func (s *Server) handleRevokeSessions(w http.ResponseWriter, r *http.Request) {
 		writeErrorReason(w, http.StatusBadRequest, reasonSessionsRevokeParamInvalid, `body must set exactly one of "sub" or "all"`)
 		return
 	}
+	if body.SessionsOnly && body.All {
+		writeErrorReason(w, http.StatusBadRequest, reasonSessionsRevokeParamInvalid, `"sessions_only" applies to "sub", not "all"`)
+		return
+	}
 	scope, target := "sub", body.Sub
+	actorCtx := withRequestActor(r)
+	var res personRevocation
 	var err error
 	if body.All {
 		scope, target = "all", "*"
-		err = s.cfg.SessionRevocations.RevokeAll(r.Context())
+		if err = s.cfg.SessionRevocations.RevokeAll(r.Context()); err != nil {
+			writeServerError(w, r, "revoke sessions", err)
+			return
+		}
+		res, err = s.revokeCredentials(actorCtx, "")
+	} else if body.SessionsOnly {
+		if err = oidc.CutSessions(r.Context(), s.cfg.SessionRevocations, body.Sub); err != nil {
+			writeServerError(w, r, "revoke sessions", err)
+			return
+		}
 	} else {
-		err = s.cfg.SessionRevocations.RevokeSub(r.Context(), body.Sub)
+		res, err = s.revokePersonCredentials(actorCtx, body.Sub)
+		if !res.Stamped {
+			writeServerError(w, r, "revoke sessions", err)
+			return
+		}
+		// The route has always refused on an unresolved key owner, once the
+		// cutoff has committed; only the request-free callers read it as zero keys.
+		if res.KeyUnresolved {
+			err = errors.Join(err, errors.New(res.Refusal))
+		}
 	}
-	if err != nil {
-		writeServerError(w, r, "revoke sessions", err)
-		return
-	}
-
-	// Each credential lane still runs if the other fails. The cutoff has already
-	// committed, so the audit records the completed work before returning failure.
-	tokens, tokenErr := s.revokeAPITokensFor(r, body.Sub)
-	keys, keyPrincipal, refusal, keyReason, keyErr := s.deleteSSHKeysFor(r, body.Sub)
-	// SSH keys have no email column. Preserve the named cutoff for sessions and
-	// tokens, and stamp the resolved subject to catch registrations the DELETE missed.
-	if body.Sub != "" && keyPrincipal != "" && keyPrincipal != body.Sub {
-		keyErr = errors.Join(keyErr, s.cfg.SessionRevocations.RevokeSub(r.Context(), keyPrincipal))
-	}
-	if refusal != "" {
-		keyErr = errors.New(refusal)
-	}
-	err = errors.Join(tokenErr, keyErr)
+	refusal, keyReason := res.Refusal, res.KeyReason
+	tokens, keys := res.Tokens, res.Keys
 	data := map[string]any{"scope": scope, "tokens_revoked": tokens, "ssh_keys_deleted": keys}
 	if !body.All {
 		data["sub"] = body.Sub
+	}
+	if body.SessionsOnly {
+		data["sessions_only"] = true
 	}
 	outcome := "success"
 	if err != nil {
@@ -155,6 +178,109 @@ func (s *Server) handleRevokeSessions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// personRevocation is what one revokePersonCredentials (or the revoke-all
+// sweep) did. Stamped says the session cutoff committed; Refusal and KeyReason
+// are the SSH key owner resolver's answer, and KeyUnresolved marks the refusal
+// that names a person with nothing on this deployment.
+type personRevocation struct {
+	Tokens, Keys  int
+	Stamped       bool
+	Refusal       string
+	KeyReason     string
+	KeyUnresolved bool
+	// KeyPrincipal is the principal the SSH key owner resolver named, which is the subject when the
+	// caller named an email.
+	KeyPrincipal string
+}
+
+// revokePersonCredentials is the credential sequence POST /sessions/revoke runs
+// for one person, callable without a request: the session cutoff, then the
+// person's API tokens, then their SSH keys, then the cutoff again under the
+// principal the keys resolved to, and the runs they have waiting in a queue. Audit rows name the actor withActor attached
+// to ctx.
+//
+// An empty principal is refused and changes nothing: the helpers below read ""
+// as everyone, and that lever stays in handleRevokeSessions. An unresolved key
+// owner is zero keys and success; an ambiguous one is a failure.
+func (s *Server) revokePersonCredentials(ctx context.Context, principal string) (personRevocation, error) {
+	if principal == "" {
+		return personRevocation{}, errors.New("revoke person credentials: principal required")
+	}
+	// Without an attached actor the audit rows would fall back to the admin
+	// token, misattributing a request-free caller in the append-only audit.
+	if _, ok := ctx.Value(auditActorCtxKey{}).(auditActor); !ok {
+		return personRevocation{}, errors.New("revoke person credentials: audit actor required")
+	}
+	if err := s.cfg.SessionRevocations.RevokeSub(ctx, principal); err != nil {
+		return personRevocation{}, err
+	}
+	res, err := s.revokeCredentials(ctx, principal)
+	res.Stamped = true
+	// A sponsor is stored by subject, so an email-form revoke sweeps under the subject the key resolver found too.
+	n, serr := s.revokeSponsoredTokens(ctx, principal)
+	res.Tokens += n
+	// A run waiting in a pool's queue holds the person's authority as of its launch; it goes with the rest.
+	_, qerr := s.cancelQueuedRunsOf(ctx, principal, queueCancelSessionRevoked)
+	if res.KeyPrincipal != "" && res.KeyPrincipal != principal {
+		n, kerr := s.revokeSponsoredTokens(ctx, res.KeyPrincipal)
+		res.Tokens += n
+		_, kqerr := s.cancelQueuedRunsOf(ctx, res.KeyPrincipal, queueCancelSessionRevoked)
+		serr = errors.Join(serr, kerr, kqerr)
+	}
+	return res, errors.Join(err, serr, qerr)
+}
+
+// revokeSponsoredTokens revokes every live token of each non-retired service identity principal sponsors
+// (#1508). Those tokens already stop at authentication once the session cutoff is stamped, because a service
+// token is honoured only while its sponsor's session is live; the sweep makes GET /tokens show them revoked.
+// A retired identity's tokens were revoked with it.
+func (s *Server) revokeSponsoredTokens(ctx context.Context, principal string) (int, error) {
+	ss, ok := s.cfg.Store.(store.ServiceIdentityStore)
+	if !ok {
+		return 0, nil
+	}
+	identities, err := ss.ListServiceIdentities(ctx, principal, store.Page{})
+	if err != nil {
+		return 0, err
+	}
+	var n int
+	var errs []error
+	for _, si := range identities {
+		if si.RetiredAt != nil {
+			continue
+		}
+		revoked, err := s.revokeAPITokensFor(ctx, si.Principal())
+		n += revoked
+		errs = append(errs, err)
+	}
+	return n, errors.Join(errs...)
+}
+
+// revokeCredentials sweeps tokens and keys for principal ("" is everyone). Each
+// lane still runs if the other fails. The cutoff has already committed, so the
+// audit records the completed work before returning failure.
+func (s *Server) revokeCredentials(ctx context.Context, principal string) (personRevocation, error) {
+	var res personRevocation
+	var tokenErr error
+	res.Tokens, tokenErr = s.revokeAPITokensFor(ctx, principal)
+	var keyPrincipal string
+	var keyErr error
+	res.Keys, keyPrincipal, res.Refusal, res.KeyReason, keyErr = s.deleteSSHKeysFor(ctx, principal, true)
+	res.KeyPrincipal = keyPrincipal
+	// SSH keys have no email column. Preserve the named cutoff for sessions and
+	// tokens, and stamp the resolved subject to catch registrations the DELETE missed.
+	if principal != "" && keyPrincipal != "" && keyPrincipal != principal {
+		keyErr = errors.Join(keyErr, s.cfg.SessionRevocations.RevokeSub(ctx, keyPrincipal))
+	}
+	if res.Refusal != "" {
+		res.KeyUnresolved = res.KeyReason == reasonOwnerUnresolved
+		if !res.KeyUnresolved {
+			keyErr = errors.New(res.Refusal)
+		}
+	}
+	return res, errors.Join(tokenErr, keyErr)
 }
 
 // revokeAPITokensFor revokes every unrevoked API token owned by principal, or
@@ -180,53 +306,43 @@ func (s *Server) handleRevokeSessions(w http.ResponseWriter, r *http.Request) {
 // `t.RevokedAt == nil` loop is the proof), so a target with nothing but revoked
 // rows would otherwise suppress the email arm too.
 //
-// Cost: one extra ListAPITokens call in the sub-form case, buying correctness
-// on the identity-straddling shape this lever exists to cover.
+// Cost: one indexed read (store.APITokensByIdentityLister) covers both forms, so a group
+// removal's per-member sweep no longer reads the whole table; a store without it scans.
 //
-// The sweep is not the only closure. api_tokens still has no expiry, but
+// The sweep is not the only closure. A token may carry an expiry, but most carry none, and
 // apiTokenAuth now compares each row's created_at against the SAME cutoff this
 // handler stamps, so a mint whose INSERT commits after this snapshot is taken —
 // unreachable by this sweep forever, since nothing ever re-listed — stops
 // authenticating anyway. The sweep is what makes GET /api/v1/tokens SHOW the
 // row revoked; the read-side check is what makes the lever true.
-func (s *Server) revokeAPITokensFor(r *http.Request, principal string) (int, error) {
-	ctx := r.Context()
+func (s *Server) revokeAPITokensFor(ctx context.Context, principal string) (int, error) {
+	return s.revokeAPITokensMatching(ctx, principal, nil)
+}
+
+// revokeAPITokensMatching is revokeAPITokensFor narrowed to the tokens match accepts; a nil match accepts
+// every token. A group removal passes the one that reads the token's group snapshot.
+func (s *Server) revokeAPITokensMatching(ctx context.Context, principal string, match func(types.APIToken) bool) (int, error) {
 	var (
 		toks []types.APIToken
 		err  error
 	)
-	if principal == "" {
+	switch lister, indexed := s.cfg.Store.(store.APITokensByIdentityLister); {
+	case principal == "":
 		toks, err = s.cfg.Store.ListAPITokens(ctx)
-	} else {
-		toks, err = s.cfg.Store.ListAPITokensByPrincipal(ctx, principal)
+	case indexed:
+		// Both identities in one indexed read, matching email as the session cut does (PG lower()); the scan
+		// below returns the same rows except for non-ASCII case pairs, where strings.EqualFold can differ.
+		toks, err = lister.ListAPITokensByIdentity(ctx, principal)
+	default:
+		toks, err = s.listAPITokensByIdentityScan(ctx, principal)
 	}
 	if err != nil {
 		return 0, err
 	}
-	if principal != "" {
-		// The caller may have named either identity, so BOTH are matched, every
-		// time. Case-insensitively on email, exactly as IsSessionRevoked's email
-		// arm does, so the two halves of one revoke cannot disagree about who
-		// was named.
-		all, aerr := s.cfg.Store.ListAPITokens(ctx)
-		if aerr != nil {
-			return 0, aerr
-		}
-		seen := make(map[uuid.UUID]bool, len(toks))
-		for _, t := range toks {
-			seen[t.ID] = true
-		}
-		for _, t := range all {
-			if t.Email != "" && strings.EqualFold(t.Email, principal) && !seen[t.ID] {
-				seen[t.ID] = true
-				toks = append(toks, t)
-			}
-		}
-	}
 	now := time.Now().UTC()
 	n := 0
 	for _, t := range toks {
-		if t.RevokedAt != nil {
+		if t.RevokedAt != nil || (match != nil && !match(t)) {
 			continue
 		}
 		revoked, err := s.cfg.Store.RevokeAPIToken(ctx, t.ID, "", now)
@@ -242,10 +358,67 @@ func (s *Server) revokeAPITokensFor(r *http.Request, principal string) (int, err
 		// Same action and same two keys as the single-token door
 		// (handleRevokeAPIToken), plus the scope that says this was a sweep, so
 		// one query answers the question across both doors.
-		s.recordAudit(ctx, s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
+		actorType, actor := auditActorFromContext(ctx)
+		s.recordAudit(ctx, s.auditEvent(nil, actorType, actor,
 			"token.revoke", revoked.ID.String(), "success", mustJSON(map[string]any{
 				"principal": revoked.Principal, "name": revoked.Name, "scope": "sweep"})))
 		n++
 	}
 	return n, nil
+}
+
+// listAPITokensByIdentityScan is the store-agnostic form of store.APITokensByIdentityLister. The caller may
+// have named either identity, so BOTH are matched, every time: principal exactly, email case-insensitively,
+// exactly as IsSessionRevoked's email arm does, so the two halves of one revoke cannot disagree about who
+// was named.
+func (s *Server) listAPITokensByIdentityScan(ctx context.Context, principal string) ([]types.APIToken, error) {
+	toks, err := s.cfg.Store.ListAPITokensByPrincipal(ctx, principal)
+	if err != nil {
+		return nil, err
+	}
+	all, err := s.cfg.Store.ListAPITokens(ctx)
+	if err != nil {
+		return nil, err
+	}
+	seen := make(map[uuid.UUID]bool, len(toks))
+	for _, t := range toks {
+		seen[t.ID] = true
+	}
+	for _, t := range all {
+		if t.Email != "" && strings.EqualFold(t.Email, principal) && !seen[t.ID] {
+			seen[t.ID] = true
+			toks = append(toks, t)
+		}
+	}
+	return toks, nil
+}
+
+// handleLogout terminates the human session. FIX #6: it is mounted as
+// POST /api/v1/auth/logout inside the humanOrAdminAuth group so the UI's existing
+// POST actually kills the session (the old code only had a root GET /auth/logout,
+// which the POST never reached — 404 — leaving the HttpOnly OIDC cookie valid).
+//
+//   - OIDC session mode: delegate to the OIDC LogoutHandler, which clears the
+//     HttpOnly wardyn_session cookie, cuts the person's browser sessions
+//     server-side so a copy of the cookie stops working (and redirects to "/").
+//   - Admin-token / local mode (OIDC not configured): there is NO server-side
+//     session to kill — the client just drops its local bearer token. Return 204
+//     (no content). The nil-OIDC guard is REQUIRED so this never panics in
+//     local/token mode.
+func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
+	if s.cfg.OIDC != nil {
+		// Clears the HttpOnly session cookie and, for a live session, cuts the person's browser sessions;
+		// the cut is audited like the session-only cut an admin makes (handleRevokeSessions).
+		sub, err := s.cfg.OIDC.SignOut(w, r)
+		if sub != "" {
+			outcome, data := "success", map[string]any{"scope": "sub", "sub": sub, "tokens_revoked": 0, "ssh_keys_deleted": 0, "sessions_only": true}
+			if err != nil {
+				outcome, data["error"] = "failure", err.Error()
+			}
+			s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
+				"session.revoke", sub, outcome, mustJSON(data)))
+		}
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }

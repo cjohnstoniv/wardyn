@@ -9,8 +9,9 @@
 // token store, and one 401 handler across the whole client. Split out of the
 // former monolithic lib/api.ts so unused domains tree-shake per route chunk.
 import { lsGet, lsSet, ssGet, ssSet } from "../storage";
-import { CC_ORDER, type ConfinementClass } from "../types";
+import { CC_ORDER, type ConfinementClass, type GovernanceChange } from "../types";
 import { apiURL } from "../base-path";
+import type { PolicyRef } from "./health";
 
 const TOKEN_KEY = "wardyn_admin_token";
 
@@ -26,6 +27,25 @@ export interface Refused {
   save?: string;
 }
 let _unauthorized: ((refused: Refused) => void) | null = null;
+let authGeneration = 0;
+const authListeners = new Set<() => void>();
+
+/** Invalidate session reads after an auth event this tab can observe. */
+export function notifyAuthChange(): void {
+  authGeneration++;
+  for (const listener of authListeners) listener();
+}
+
+/** Subscribe to observable auth changes without replacing another consumer. */
+export function onAuthChange(fn: () => void): () => void {
+  authListeners.add(fn);
+  return () => { authListeners.delete(fn); };
+}
+
+/** The generation an identity or request was read under. */
+export function getAuthGeneration(): number {
+  return authGeneration;
+}
 
 // #483: while the console is signed out mid-page — the dialog or the
 // read-only bar — no write leaves this tab. Whoever holds a session by then
@@ -36,6 +56,9 @@ let _unauthorized: ((refused: Refused) => void) | null = null;
 let _signedOutHold = false;
 export function setSignedOutHold(on: boolean): void {
   _signedOutHold = on;
+}
+export function isSignedOutHold(): boolean {
+  return _signedOutHold;
 }
 
 /** RequestInit plus `save`: the owning screen's id when this request is that
@@ -84,18 +107,18 @@ export function getToken(): string | null {
 // restart); default (false) uses sessionStorage. Either way the OTHER store is
 // cleared so the token lives in exactly one place. token=null clears both.
 export function setToken(token: string | null, remember = false): void {
+  const previous = getToken();
   if (!token) {
     ssSet(TOKEN_KEY, null);
     lsSet(TOKEN_KEY, null);
-    return;
-  }
-  if (remember) {
+  } else if (remember) {
     lsSet(TOKEN_KEY, token);
     ssSet(TOKEN_KEY, null);
   } else {
     ssSet(TOKEN_KEY, token);
     lsSet(TOKEN_KEY, null);
   }
+  if (getToken() !== previous) notifyAuthChange();
 }
 
 export function onUnauthorized(fn: (refused: Refused) => void): void {
@@ -127,13 +150,33 @@ export class HttpError extends Error {
   provider: string;
   /** The refused provider's kind (#532, #535), "" when the body names none. */
   kind: string;
-  constructor(status: number, message: string, reason = "", org = "", provider = "", kind = "") {
+  /** The included tool (tools[].id) a run refusal is about, "" when the body
+   *  names none: New Run attaches the blocker to that harness. */
+  tool: string;
+  /** The policy a governance refusal came from and how to ask for a change
+   *  (the envelope's `policy`, internal/policyref.Ref). Absent when the body
+   *  carries none, which is every refusal that is not a policy decision. */
+  policy?: PolicyRef;
+  /** A refusal's Retry-After, set by the one caller that retries on it (previewRunPolicy). */
+  declare retryAfter?: string;
+  constructor(
+    status: number,
+    message: string,
+    reason = "",
+    org = "",
+    provider = "",
+    kind = "",
+    policy?: PolicyRef,
+    tool = "",
+  ) {
     super(message);
     this.status = status;
     this.reason = reason;
     this.org = org;
     this.provider = provider;
     this.kind = kind;
+    this.tool = tool;
+    if (policy) this.policy = policy;
     this.name = "HttpError";
   }
 }
@@ -163,21 +206,38 @@ export const ccRank = (cc: string): number => CC_ORDER.indexOf(cc as Confinement
 // timeoutMs.
 export const WFETCH_TIMEOUT_MS = 60_000;
 
-// LAUNCH_DEADLINE_MS — the deadline for a console call that brings a SANDBOX up.
+// LAUNCH_DEADLINE_MS — the floor of the deadline for a console call that brings a SANDBOX up.
 //
 // The default above bounds a hang; it is not a latency budget, and for these
 // calls it was being spent as one. POST /runs is synchronous through
-// CreateSandbox (runs.go), which on k8s waits canaryWaitTimeout (3 min,
-// canary.go) ON TOP of a cold image pull — a server-side worst case that
-// legitimately exceeds 60s, at which point the console reports the daemon
-// unreachable over a launch that is working fine and drops the run id it was
-// about to be handed. Five minutes covers the substrate's own ceiling with room
-// to spare; a longer deadline cannot break a call that already works today.
+// CreateSandbox (runs.go), which on k8s waits the sandbox start timeout on top
+// of a cold image pull — a server-side worst case that legitimately exceeds
+// 60s, at which point the console reports the daemon unreachable over a launch
+// that is working fine and drops the run id it was about to be handed. Five
+// minutes covers the default start timeout (WARDYN_SANDBOX_START_TIMEOUT, 3 min)
+// with room to spare. It does NOT cover a run waiting for room: the capacity
+// wait (WARDYN_SANDBOX_CAPACITY_WAIT, 15 min default) holds CreateSandbox far
+// longer, so a call that waits on it passes launchDeadlineMs(sandbox_start)
+// instead, which follows the deployment's real deadlines.
 //
 // The sign-in launch is NOT on this list: POST /model-providers/{id}/sign-in answers
 // before dispatch now (internal/api/harnesscred_launch.go), so it is a fast
 // call again and the default bound is the right one for it.
 export const LAUNCH_DEADLINE_MS = 300_000;
+
+// How long past the server's own start budget a launch call waits before the console gives up.
+export const LAUNCH_SLACK_MS = 90_000;
+
+// launchDeadlineMs is the deadline for a launch call that blocks on CreateSandbox: never
+// shorter than LAUNCH_DEADLINE_MS, and past the real start budget plus slack where the
+// deployment reports one (a full cluster waits up to start timeout + capacity wait, from
+// /setup/status runner.sandbox_start; the run page's startOverdueMs reads the same two numbers).
+export function launchDeadlineMs(
+  sandboxStart: { start_timeout_seconds: number; capacity_wait_seconds: number } | null | undefined,
+): number {
+  if (!sandboxStart) return LAUNCH_DEADLINE_MS;
+  return Math.max(LAUNCH_DEADLINE_MS, (sandboxStart.start_timeout_seconds + sandboxStart.capacity_wait_seconds) * 1000 + LAUNCH_SLACK_MS);
+}
 
 // TIMEOUT_STATUS: no HTTP response ever happened, so there is no status to
 // report. Callers that branch on `e.status === 401` are unaffected, and the
@@ -236,6 +296,7 @@ export async function wfetch(
   headers.set("Accept", headers.get("Accept") ?? "application/json");
 
   let res: Response;
+  const generation = authGeneration;
   try {
     res = await fetch(apiURL(path), {
       ...init,
@@ -255,9 +316,15 @@ export async function wfetch(
       throw new HttpError(TIMEOUT_STATUS, TIMEOUT_MESSAGE);
     }
     throw e;
+  } finally {
+    if (method === "POST" && (endsSession || path === "/me/view")) notifyAuthChange();
   }
 
   if (res.status === 401) {
+    await drainBody(res);
+    // Reconciliation can invalidate /me before its 401 reaches the shell.
+    // A refused write still belongs to its caller, even after an auth change.
+    const stale = path === "/me" && method === "GET" && (generation !== authGeneration || init.signal?.aborted);
     // A REAL 401 means the bearer THIS REQUEST sent was rejected
     // (expired/revoked/foreign admin token) — leaving it stored would replay
     // the same rejected credential on every request from here to sign-in.
@@ -273,23 +340,50 @@ export async function wfetch(
     // the FRESH read would wipe that newer, perfectly valid credential out
     // from under the request that just set it. Only a 401 whose storage
     // STILL holds the exact token it was sent with is the real rejection.
-    if (token && getToken() === token) setToken(null);
-    // The 401 body is thrown over, never handed to a caller — drain it here or
-    // the rejected request stays open on its connection (see drainBody).
-    await drainBody(res);
-    _unauthorized?.(refused);
+    if (!stale) {
+      if (token && getToken() === token) setToken(null);
+      _unauthorized?.(refused);
+    }
     throw new HttpError(401, "Unauthorized");
   }
   if (res.status === 403) _forbidden?.();
   return res;
 }
 
+// Thrown by asJson for a 202 whose body carries `pending_change`: a covered governance write that was held
+// for a second human, not saved. It is an error on purpose, so no write site, present or later, can read a
+// held change as a save: each one catches it and shows the submitted-for-approval state.
+export class PendingChangeError extends Error {
+  change: GovernanceChange;
+  constructor(change: GovernanceChange) {
+    super("Submitted for approval");
+    this.name = "PendingChangeError";
+    this.change = change;
+  }
+}
+
 export async function asJson<T>(res: Response): Promise<T> {
   if (!res.ok) {
-    const { message, reason, org, provider, kind } = await errEnvelope(res);
-    throw new HttpError(res.status, message, reason, org, provider, kind);
+    const { message, reason, org, provider, kind, policy, tool } = await errEnvelope(res);
+    throw new HttpError(res.status, message, reason, org, provider, kind, policy, tool);
   }
-  return (await res.json()) as T;
+  const body = await res.json();
+  if (res.status === 202 && body && typeof body === "object" && (body as { pending_change?: unknown }).pending_change) {
+    throw new PendingChangeError((body as { pending_change: GovernanceChange }).pending_change);
+  }
+  return body as T;
+}
+
+// A route that answers 2xx with no body (a DELETE's 204): a refusal throws the same HttpError asJson
+// does, reason included, so the console can match on it instead of on the text.
+export async function asNoContent(res: Response): Promise<void> {
+  if (!res.ok) await asJson<never>(res);
+}
+
+// The delete routes answer 204 and read no body, so a held delete's 202 would pass for success. This is
+// asJson's 202 rule for them.
+export async function throwIfPending(res: Response): Promise<void> {
+  if (res.status === 202) await asJson<unknown>(res);
 }
 
 // The ONE parser for the control plane's `{"error":"<human message>"}` envelope:
@@ -314,10 +408,32 @@ function isRawBodyDisplayable(body: string): boolean {
   return body.length <= RAW_BODY_MAX_CHARS && !/^\s*</.test(body);
 }
 
-type ErrEnvelope = { message: string; reason: string; org: string; provider: string; kind: string };
+type ErrEnvelope = {
+  message: string;
+  reason: string;
+  org: string;
+  provider: string;
+  kind: string;
+  policy?: PolicyRef;
+  tool: string;
+};
+
+// The envelope's `policy` object, kept only when it is an object naming its
+// source; every contact field is kept only when it is a string.
+function policyField(v: unknown): PolicyRef | undefined {
+  if (!v || typeof v !== "object") return undefined;
+  const o = v as Record<string, unknown>;
+  if (typeof o.source !== "string" || !o.source) return undefined;
+  const ref: PolicyRef = { source: o.source };
+  for (const k of ["name", "owner", "email", "request_url", "request_text"] as const) {
+    const x = o[k];
+    if (typeof x === "string" && x) ref[k] = x;
+  }
+  return ref;
+}
 
 export async function errEnvelope(res: Response): Promise<ErrEnvelope> {
-  const bare = (message: string): ErrEnvelope => ({ message, reason: "", org: "", provider: "", kind: "" });
+  const bare = (message: string): ErrEnvelope => ({ message, reason: "", org: "", provider: "", kind: "", tool: "" });
   const field = (v: unknown) => (typeof v === "string" ? v : "");
   try {
     const body = await res.text();
@@ -329,6 +445,8 @@ export async function errEnvelope(res: Response): Promise<ErrEnvelope> {
         org?: unknown;
         provider?: unknown;
         kind?: unknown;
+        policy?: unknown;
+        tool?: unknown;
       };
       if (typeof j.error === "string" && j.error) {
         return {
@@ -337,6 +455,8 @@ export async function errEnvelope(res: Response): Promise<ErrEnvelope> {
           org: field(j.org),
           provider: field(j.provider),
           kind: field(j.kind),
+          policy: policyField(j.policy),
+          tool: field(j.tool),
         };
       }
     } catch {

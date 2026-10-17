@@ -10,9 +10,14 @@
 package api
 
 import (
+	"context"
+	"log/slog"
 	"net/http"
 
+	"github.com/google/uuid"
+
 	"github.com/cjohnstoniv/wardyn/internal/approval"
+	"github.com/cjohnstoniv/wardyn/internal/notify"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -36,13 +41,43 @@ func (s *Server) projectHolds(rows []types.ApprovalRequest) {
 	}
 }
 
+// projectEscalations sets EscalationTier/SLADueAt on every PENDING row from the notification outbox,
+// in one batched read over the page. It describes notifications only, so a read failure or a backend
+// without the capability leaves the fields unset rather than failing the list. Skipped when
+// notifications are off, so rows left by an earlier config never show.
+func (s *Server) projectEscalations(ctx context.Context, rows []types.ApprovalRequest) {
+	rd, ok := s.cfg.Approvals.(store.ApprovalNotifyReader)
+	if !ok || !notify.Enabled() {
+		return
+	}
+	var ids []uuid.UUID
+	for i := range rows {
+		if rows[i].State == types.ApprovalPending {
+			ids = append(ids, rows[i].ID)
+		}
+	}
+	if len(ids) == 0 {
+		return
+	}
+	esc, err := rd.ApprovalEscalations(ctx, ids, s.cfg.Now())
+	if err != nil {
+		slog.WarnContext(ctx, "approvals: escalation projection failed", slog.Any("error", err))
+		return
+	}
+	for i := range rows {
+		if e, ok := esc[rows[i].ID]; ok && rows[i].State == types.ApprovalPending {
+			rows[i].EscalationTier, rows[i].SLADueAt = e.Tier, e.NextAt
+		}
+	}
+}
+
 // withHoldProjection and withHoldProjectionAll wrap handleListApprovals' own
 // page/fetch-all closures so every PENDING row they return carries
-// Held/HeldUntil before servePage serializes it — the ONE projection point
+// Held/HeldUntil (and the escalation fields) before servePage serializes it — the ONE projection point
 // for every public GET /approvals read (handleListApprovals's four
 // pageFn/allFn call sites, approvals.go). A nil pageFn (no DB-paged
 // capability on this backend) stays nil, matching servePage's own fallback.
-func (s *Server) withHoldProjection(fn func(store.Page) ([]types.ApprovalRequest, error)) func(store.Page) ([]types.ApprovalRequest, error) {
+func (s *Server) withHoldProjection(r *http.Request, fn func(store.Page) ([]types.ApprovalRequest, error)) func(store.Page) ([]types.ApprovalRequest, error) {
 	if fn == nil {
 		return nil
 	}
@@ -52,17 +87,19 @@ func (s *Server) withHoldProjection(fn func(store.Page) ([]types.ApprovalRequest
 			return nil, err
 		}
 		s.projectHolds(rows)
+		s.projectEscalations(r.Context(), rows)
 		return rows, nil
 	}
 }
 
-func (s *Server) withHoldProjectionAll(fn func() ([]types.ApprovalRequest, error)) func() ([]types.ApprovalRequest, error) {
+func (s *Server) withHoldProjectionAll(r *http.Request, fn func() ([]types.ApprovalRequest, error)) func() ([]types.ApprovalRequest, error) {
 	return func() ([]types.ApprovalRequest, error) {
 		rows, err := fn()
 		if err != nil {
 			return nil, err
 		}
 		s.projectHolds(rows)
+		s.projectEscalations(r.Context(), rows)
 		return rows, nil
 	}
 }
@@ -139,14 +176,14 @@ func (s *Server) decidableKindAndOwner(r *http.Request, ap types.ApprovalRequest
 }
 
 // secondHumanAllows mirrors requireSecondHuman's verdict, given ap/run
-// already in hand (no re-fetch, no response write): only egress_domain is
-// governed, off by default (envEgressSecondHuman), the admin-token
-// break-glass always passes, LocalMode can never satisfy it (both operands
+// already in hand (no re-fetch, no response write): only the kinds
+// secondHumanGate maps to a switch are governed, each off by default, the
+// admin-token break-glass always passes, LocalMode can never satisfy it (both operands
 // of "a second human decided" are client-supplied there — see
 // requireSecondHuman's own doc), and otherwise it refuses only when the
-// asking principal IS the run's own creator.
+// asking principal IS the run's own creator, or sponsors the service identity that created it.
 func (s *Server) secondHumanAllows(r *http.Request, ap types.ApprovalRequest, run types.AgentRun) bool {
-	if !envEnabled(envEgressSecondHuman) || ap.Kind != types.ApprovalEgressDomain {
+	if _, on := secondHumanGate(ap); !on {
 		return true
 	}
 	actorType, principal := actorFromRequest(r)
@@ -156,5 +193,6 @@ func (s *Server) secondHumanAllows(r *http.Request, ap types.ApprovalRequest, ru
 	if s.cfg.LocalMode {
 		return false // requireSecondHuman's unconditional 503: unenforceable here
 	}
-	return run.CreatedBy == "" || run.CreatedBy != principal
+	authored, err := s.runAuthoredBy(r.Context(), run, principal)
+	return err == nil && !authored
 }

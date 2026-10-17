@@ -316,12 +316,14 @@ func TestDispatchHonoursTheGitPATBrokerFlag(t *testing.T) {
 	dispatch := func(t *testing.T, disabled bool) runner.SandboxSpec {
 		t.Helper()
 		fr := &fakeRunner{}
-		srv, _, _, run := dispatchTeardownFixture(t, fr, types.RunPending)
+		srv, st, _, run := dispatchTeardownFixture(t, fr, types.RunPending)
 		srv.cfg.DisableGitPATBroker = disabled
 		run.Task = "" // composition only: no agent exec, no completion watcher
+		winning := map[string]string{host: uuid.NewString()}
+		st.grants = patRowsFor(run.ID, winning)
 		srv.dispatchRun(context.Background(), run, ceilingForDispatch(governanceCeiling{}, adoEntraUngraded(), bedrockCredUngraded()), dispatchParams{
 			RunToken: "run-token", Image: "wardyn/claude-code:latest",
-			GitPATGrants: map[string]string{host: uuid.NewString()},
+			GitPATGrants: winning,
 		})
 		return fr.lastSpec
 	}

@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/adoscope"
+	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -102,7 +103,11 @@ func (s *Server) handleADODisconnect(w http.ResponseWriter, r *http.Request) {
 	// A token created while this runs revokes itself (adoSignInEnds).
 	// end runs even on a panic, or the person's mints would self-revoke until restart.
 	removed, err := func() (bool, error) {
-		defer s.adoSignInEnds.begin(subject, adoPATRevokeDisconnect)()
+		finish, berr := s.beginADOSignInEnd(ctx, subject, adoPATRevokeDisconnect)
+		if berr != nil {
+			return false, berr
+		}
+		defer finish()
 		s.revokeOwnerRunPATs(ctx, subject, adoPATRevokeDisconnect)
 		return s.forgetADOSignIn(ctx, subject, rowID)
 	}()
@@ -111,6 +116,10 @@ func (s *Server) handleADODisconnect(w http.ResponseWriter, r *http.Request) {
 		data["error"], outcome = err.Error(), "failure"
 	}
 	s.recordAudit(ctx, s.auditEvent(nil, types.ActorHuman, subject, adoPATAuditDisconnect, rowID, outcome, mustJSON(data)))
+	if db.LockRefused(err) {
+		writeLockRefused(w, r, err)
+		return
+	}
 	if err != nil {
 		writeServerError(w, r, "forget the Azure DevOps sign-in", err)
 		return
@@ -118,8 +127,9 @@ func (s *Server) handleADODisconnect(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// adoDisconnectRow is the per-user Azure DevOps row the caller may use, the
-// same selection /me/scm-access makes; ok=false when there is none.
+// adoDisconnectRow is the Entra sign-in row the caller may use; ok=false when
+// there is none. An own-token row is never it: its stored token is deleted on
+// its own route, and choosing it would forget the wrong secret.
 func (s *Server) adoDisconnectRow(ctx context.Context) (string, bool, error) {
 	if s.cfg.Store == nil {
 		return "", false, nil
@@ -132,6 +142,7 @@ func (s *Server) adoDisconnectRow(ctx context.Context) (string, bool, error) {
 	if err != nil {
 		return "", false, err
 	}
+	all = slices.DeleteFunc(all, func(pr perUserADORow) bool { return isADOOwnTokenRow(pr.row) })
 	rows := capVisible(ctx, s, capWorkspaceProvider, all, func(pr perUserADORow) string { return pr.row.ID })
 	if len(rows) == 0 {
 		return "", false, nil
@@ -142,7 +153,7 @@ func (s *Server) adoDisconnectRow(ctx context.Context) (string, bool, error) {
 // forgetADOSignIn deletes owner's stored sign-in for rowID and drops any
 // access token held for them. removed reports whether one was stored.
 func (s *Server) forgetADOSignIn(ctx context.Context, owner, rowID string) (removed bool, err error) {
-	err = s.eraseADOSignIn(owner, rowID, func() error {
+	err = s.eraseADOSignIn(ctx, owner, rowID, func(ctx context.Context) error {
 		if s.cfg.Secrets == nil {
 			return nil
 		}
@@ -164,28 +175,32 @@ func (s *Server) forgetADOSignIn(ctx context.Context, owner, rowID string) (remo
 // under the redemption lock for rowID, and forgets the access tokens cached
 // for owner before releasing it. A redemption in flight either finishes first
 // (and del deletes its rotated refresh token, the forget its cached token) or
-// starts after, reads the store under the lock and finds nothing. rowID ""
-// takes no lock: no sign-in row is configured, so none can be redeemed.
-func (s *Server) eraseADOSignIn(owner, rowID string, del func() error) error {
-	if rowID != "" {
-		unlock := s.adoEntra.lock(owner, rowID)
-		defer unlock()
+// starts after, reads the store under the lock and finds nothing. The lock is
+// taken even when rowID is "" (no sign-in row configured): the key is then
+// merely unshared, and every caller takes it in the same place in the order
+// (see eraseLocked).
+func (s *Server) eraseADOSignIn(ctx context.Context, owner, rowID string, del func(ctx context.Context) error) error {
+	ctx, unlock, err := s.lockADOSignIn(ctx, owner, rowID)
+	if err != nil {
+		return err
 	}
+	defer unlock()
 	defer s.adoEntraTokens.forget(owner) // runs before the unlock
-	return del()
+	return del(ctx)
 }
 
 // adoSignInRowID is the row this deployment's Azure DevOps sign-in redeems
-// for, "" when none is configured or the configuration cannot be read.
-func (s *Server) adoSignInRowID(ctx context.Context) string {
+// for: "" with no error when none is configured, and an error when the
+// configuration cannot be read, which an erase must not proceed past.
+func (s *Server) adoSignInRowID(ctx context.Context) (string, error) {
 	if s.cfg.ADOEntra == nil {
-		return ""
+		return "", nil
 	}
 	cfg, found, err := s.cfg.ADOEntra(ctx)
 	if err != nil || !found {
-		return ""
+		return "", err
 	}
-	return cfg.RowID
+	return cfg.RowID, nil
 }
 
 // adoSignInEnds counts, per person, the disconnects and erases of their
@@ -195,8 +210,9 @@ func (s *Server) adoSignInRowID(ctx context.Context) string {
 // checks it after it records: a count that moved, or an end still running,
 // means the token was created across an end, and the mint revokes it itself.
 //
-// In memory, per process: on a deployment with more than one replica a mint
-// on another replica keeps this gap, bounded by the token's valid_to.
+// The count is in Postgres (ado_signin_ends) when the store keeps one, so a mint on any
+// replica sees an end begun on any other; adoSignInEnds is the in-process count of a store
+// without it.
 type adoSignInEnds struct {
 	mu sync.Mutex
 	m  map[string]*adoSignInEnd

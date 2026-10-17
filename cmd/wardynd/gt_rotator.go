@@ -96,10 +96,10 @@ const groundtruthRotatorLockBackoff = 30 * time.Second
 // tryLock is a seam so this stays unit-testable without Postgres, mirroring
 // lifecycle.Config.TickLock's func-typed style; wardynd wires
 // groundtruthRotatorLock(pool) (adapters.go), which calls
-// db.TryAdvisoryLock(ctx, pool, db.GroundTruthRotatorLockKey). Unlike the
-// reaper's TickLock (try/release every tick), this acquires ONCE and holds
-// the connection for the process lifetime — the accepted cost of
-// acquire-once.
+// db.TryAdvisoryLockDedicated(ctx, pool, db.GroundTruthRotatorLockKey). Unlike
+// the reaper's TickLock (try/release every tick), this acquires ONCE and holds
+// its own connection, outside the pool, for the process lifetime — the
+// accepted cost of acquire-once.
 func runGroundtruthTokenRotatorLeader(ctx context.Context, tryLock func(context.Context) (release func(), ok bool, err error), m gtMinter, path string) {
 	// Non-leader outcomes are logged on TRANSITION only: this loop retries every
 	// 30s forever, so an unconditional line is 2,880/day/replica in the ordinary

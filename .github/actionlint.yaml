@@ -1,0 +1,5 @@
+# Runner labels actionlint's built-in list does not know yet. ubuntu-26.04 is
+# GitHub-hosted (Docker 29, containerd image store); mirror-selftest.yml runs on it.
+self-hosted-runner:
+  labels:
+    - ubuntu-26.04

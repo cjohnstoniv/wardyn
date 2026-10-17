@@ -12,8 +12,8 @@
 // via page.route (real attention/scope combinations aren't worth a live seed
 // script), so this file needs its own copy of that helper rather than
 // importing runs-landing.spec.ts's private one.
-import { test, expect, gotoConsole } from "./fixtures";
-import type { Page } from "@playwright/test";
+import { test, expect, ADMIN_TOKEN, gotoConsole, sql } from "./fixtures";
+import type { Page, Route } from "@playwright/test";
 import { runsViewSaved } from "../src/app/components/wardyn/copy/runs-landing";
 
 const RUNS_LIST_RE = /\/api\/v1\/runs(\?.*)?$/;
@@ -222,3 +222,65 @@ test.describe("Runs Admin view — sections, Everyone/Mine, saved views, Group b
     await expect(page.getByRole("heading", { name: "Ended today" })).toHaveCount(0);
   });
 });
+
+// #1476: interactive entry (a terminal, a UI app, SSH, a take-over) is the run's
+// owner's alone. A super admin keeps Kill, Approve and Policy on someone else's
+// run and loses the shell: the page says who may enter, offers no terminal or
+// Attach card, and the daemon refuses a ticket with 403 run_owner_only. A run no
+// person owns (the operator's own) stays enterable. Real backend: a run made as
+// the admin token, then handed to a person with SQL.
+test.describe("Entry to another person's run (#1476)", () => {
+  const auth = { Authorization: `Bearer ${ADMIN_TOKEN}` };
+
+  async function seedRun(page: Page, task: string, over: { owner?: string; operatorOwned: boolean }): Promise<string> {
+    const res = await page.request.post("/api/v1/runs", {
+      headers: auth,
+      data: { agent: "claude-code", repo: "acme/widgets", task },
+    });
+    expect(res.status(), await res.text()).toBe(201);
+    const id = sql(`SELECT id FROM agent_runs WHERE task = '${task}' ORDER BY created_at DESC LIMIT 1`);
+    const owner = over.owner ? `, created_by = '${over.owner}'` : "";
+    sql(`UPDATE agent_runs SET state = 'RUNNING', interactive = true, operator_owned = ${over.operatorOwned}${owner} WHERE id = '${id}'`);
+    return id;
+  }
+
+  test("a super admin on a person's run: the owner line, no terminal or Attach card, Kill stays, and a ticket is refused", async ({ page }) => {
+    const id = await seedRun(page, `entry foreign ${Date.now()}`, { owner: "priya@e2e.wardyn.invalid", operatorOwned: false });
+    await page.goto(`runs/${id}`);
+    await expect(page.getByText("Only priya@e2e.wardyn.invalid can open this run's terminal, apps and SSH.")).toBeVisible();
+    await expect(page.getByText(/Watch the captured session/)).toBeVisible();
+    await expect(page.getByText("Attach from your terminal")).toHaveCount(0);
+    await expect(page.getByText("Interactive — attachable")).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Kill", exact: true })).toBeEnabled();
+    // The server says the same, with a 403 and a reason (not a 404: the admin can see the run).
+    const ticket = await page.request.post(`/api/v1/runs/${id}/attach/ticket`, { headers: auth });
+    expect(ticket.status()).toBe(403);
+    expect((await ticket.json()).reason).toBe("run_owner_only");
+  });
+
+  // #1888: with recording known to be off the link leads to a recording that
+  // cannot exist, so the sentence stands alone.
+  test("with recording off, the owner line on a person's run has no Watch link", async ({ page }) => {
+    // Cache-and-serve: a round trip per /healthz poll raced teardown disposing the response.
+    let cached: Record<string, unknown> | undefined;
+    await page.route("**/healthz", async (route: Route) => {
+      cached ??= (await (await route.fetch()).json()) as Record<string, unknown>;
+      const components = { ...(cached.components as Record<string, unknown>), recording: { selected: "none", source: "disabled" } };
+      await route.fulfill({ json: { ...cached, components } });
+    });
+    const id = await seedRun(page, `entry no recording ${Date.now()}`, { owner: "priya@e2e.wardyn.invalid", operatorOwned: false });
+    await page.goto(`runs/${id}`);
+    await expect(page.getByText("Only priya@e2e.wardyn.invalid can open this run's terminal, apps and SSH.")).toBeVisible();
+    await expect(page.getByText(/Watch the captured session/)).toHaveCount(0);
+  });
+
+  test("a super admin keeps entry to a run no person owns: no owner line, the Attach card shows", async ({ page }) => {
+    const id = await seedRun(page, `entry operator ${Date.now()}`, { operatorOwned: true });
+    await page.goto(`runs/${id}`);
+    await expect(page.getByText("Attach from your terminal")).toBeVisible();
+    await expect(page.getByText(/can open this run's terminal, apps and SSH/)).toHaveCount(0);
+    const ticket = await page.request.post(`/api/v1/runs/${id}/attach/ticket`, { headers: auth });
+    expect(ticket.status()).toBe(200);
+  });
+});
+

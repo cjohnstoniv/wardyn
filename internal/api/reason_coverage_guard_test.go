@@ -60,15 +60,22 @@ type bareWriteErrorEntry struct {
 }
 
 var bareWriteErrorAllowlist = map[string]bareWriteErrorEntry{
-	// run_model_provider.go's own two sites (both inside
-	// enforceRunModelProvider, hence the same key): "a transient store
+	// The same two provider sites, split between selection authorization and
+	// credential liveness: "a transient store
 	// failure is no door" (multi-provider §5.8) — the site config read and
 	// the credential read both answer with the sentence alone, deliberately.
 	// TestProviderJoin_DoorsEveryKind pins BOTH "provider-unreadable" and
 	// "block-unreadable" reason-less; TestRunModelProviderDoors' "a
 	// credential that cannot be read refuses with the sentence alone" case
 	// pins the second.
-	"run_model_provider.go:Server.enforceRunModelProvider": {2, "both 5xx (StatusServiceUnavailable): a transient store failure is no door (multi-provider §5.8); TestProviderJoin_DoorsEveryKind and TestRunModelProviderDoors pin both reason-less"},
+	"run_provider_authorization.go:Server.chooseRunModelProvider": {1, "moved provider-block-unreadable 503; same reason-less contract pinned by TestProviderJoin_DoorsEveryKind"},
+	"run_model_provider.go:Server.enforceChosenModelProvider":     {1, "credential-unreadable 503: a transient store failure is no door (multi-provider §5.8); TestProviderJoin_DoorsEveryKind and TestRunModelProviderDoors pin it reason-less"},
+	// handleRecordWorkspace's two: the record door's answers for the same unreadable
+	// provider block and unreadable credential as enforceRunModelProvider's two
+	// sites above — the bare 503 sentences, byte-equal to create's.
+	// TestRecordDoorAnswersTheProviderRefusalAsCreateDoes pins both against the
+	// create door's body.
+	"record.go:Server.handleRecordWorkspace": {2, "5xx (StatusServiceUnavailable): the create door's reason-less unreadable-provider-block sentence (mpRunUnreadable); TestRecordDoorAnswersTheProviderRefusalAsCreateDoes pins the two byte-equal"},
 	// driveBindFailure.write's own bare arm: f.reason=="" is the
 	// runner-capabilities-unreadable 503 (driveBindFailureHere); f.silent is
 	// either of driveShareBindFailure's two ctx.Err()!=nil arms, which DO
@@ -124,6 +131,10 @@ func findBareWriteErrorCalls(fset *token.FileSet, name string, file *ast.File, s
 			isBareWriteError := false
 			if fn, ok := call.Fun.(*ast.Ident); ok && fn.Name == "writeError" && len(call.Args) == 3 {
 				isBareWriteError = true
+			} else if fn, ok := call.Fun.(*ast.Ident); ok && fn.Name == "runError" && len(call.Args) == 3 {
+				if reason, ok := call.Args[1].(*ast.BasicLit); ok && reason.Value == `""` {
+					isBareWriteError = true
+				}
 			} else if isHTTPDotError(call) {
 				isBareWriteError = true
 			}
@@ -136,6 +147,9 @@ func findBareWriteErrorCalls(fset *token.FileSet, name string, file *ast.File, s
 			// http.Error's status is its THIRD argument, writeError's SECOND —
 			// check whichever this call actually is.
 			statusArg := call.Args[1]
+			if fn, ok := call.Fun.(*ast.Ident); ok && fn.Name == "runError" {
+				statusArg = call.Args[0]
+			}
 			if isHTTPDotError(call) {
 				statusArg = call.Args[2]
 			}
@@ -256,6 +270,7 @@ var bareErrorBodyAllowlist = map[string]bareWriteErrorEntry{
 var reasonConstOutsideReasonFilesAllowlist = map[string]string{
 	"runs_create_requirements.go:reasonRequirementModelHost":        "the audit data.reason of a run.requirement.skip entry, never an errorBody reason",
 	"runs_create_requirements.go:reasonRequirementModelHostUnknown": "the audit data.reason of a run.requirement.skip entry, never an errorBody reason",
+	"person_erasure.go:reasonIdentityDirectoryUnreadable":           "the audit data.reason of a person.erasure or credential.erase failure; the response is writeServerError's 500, never an errorBody reason",
 }
 
 // findBareErrorBodyLiterals walks file for an errorBody{...} composite
@@ -477,6 +492,11 @@ func findReasonUses(fset *token.FileSet, name string, file *ast.File, src []byte
 			case *ast.CallExpr:
 				if fn, ok := n.Fun.(*ast.Ident); ok && fn.Name == "writeErrorReason" && len(n.Args) == 4 {
 					use(n.Args[2], n)
+				}
+				if fn, ok := n.Fun.(*ast.Ident); ok && fn.Name == "runError" && len(n.Args) == 3 {
+					if reason, empty := n.Args[1].(*ast.BasicLit); !empty || reason.Value != `""` {
+						use(n.Args[1], n)
+					}
 				}
 			case *ast.CompositeLit:
 				if id, ok := n.Type.(*ast.Ident); ok && id.Name == "errorBody" {

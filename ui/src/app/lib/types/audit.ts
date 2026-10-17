@@ -33,6 +33,65 @@ export interface AuditEvent {
   device_id?: string;
 }
 
+// A sealed audit field whose person was erased reads this string on the wire
+// (internal/audit/seal.go's ErasedValue), in the feed and in every export.
+export const ERASED_VALUE = "[erased]";
+
+/** The names of an event's fields that were erased on request: `target`, and
+ *  every leaf of `data` (at any depth) that carries the erased value. */
+export function erasedFieldNames(e: AuditEvent): string[] {
+  const out: string[] = [];
+  if (e.target === ERASED_VALUE) out.push("target");
+  const walk = (v: unknown, key: string) => {
+    if (v === ERASED_VALUE) out.push(key);
+    else if (v && typeof v === "object") {
+      for (const [k, child] of Object.entries(v as Record<string, unknown>)) walk(child, k);
+    }
+  };
+  for (const [k, v] of Object.entries(e.data ?? {})) walk(v, k);
+  return out;
+}
+
+// Audit retention (internal/types/audit_retention.go): GET /audit/retention
+// and POST /audit/retention/drop, security tier only.
+export interface AuditRetentionPolicy {
+  days: number;
+  /** What the drop applies now; 0 is forever. */
+  effective_days: number;
+  /** Set together, for a decrease that has not taken effect yet. */
+  pending_days?: number;
+  pending_effective_at?: string;
+}
+
+export interface AuditRetentionPartition {
+  name: string;
+  /** Absent for the legacy partition, which starts at the beginning of the log. */
+  lo?: string;
+  hi?: string;
+  rows: number;
+  state: "closed" | "open" | "future";
+  /** The server's answer: would a drop take this partition now. Never computed in the browser. */
+  eligible: boolean;
+  /** When not eligible, the reason a drop would refuse with (an audit_retention_* wire reason). */
+  refusal?: string;
+}
+
+export interface AuditRetentionStatus {
+  policy: AuditRetentionPolicy;
+  cutover: string;
+  partitions: AuditRetentionPartition[];
+  months_ahead: number;
+}
+
+export interface AuditRetentionDrop {
+  partition: string;
+  rows: number;
+  seq_lo: number;
+  seq_hi: number;
+  digest: string;
+  event_seq: number;
+}
+
 // Tool-rule decisions
 // tool_rules lets a policy answer a tool call without waking anyone
 // (internal/egress/proxy/tool_rules.go). An `allow` or a `deny` creates NO
@@ -72,6 +131,19 @@ export function toolRuleDecision(e: AuditEvent): RuleDecision | null {
   return effect ? { effect, source } : null;
 }
 
+// NETWORK_FAULT_SOURCES are the egress.deny rows that are not a refusal: the
+// proxy let the connection through its guards and the network then failed it
+// (the dial never completed, or the tunnel died after it opened).
+const NETWORK_FAULT_SOURCES = new Set(["builtin:dial-failed", "builtin:tunnel-failed"]);
+
+// isNetworkFault reports whether an egress.deny row records a connection that
+// failed rather than one Wardyn refused. Keyed on rule_source, never on label
+// text, so a copy change cannot silently turn a fault back into a denial.
+export function isNetworkFault(e: AuditEvent): boolean {
+  const source = e.data?.rule_source;
+  return e.action === "egress.deny" && typeof source === "string" && NETWORK_FAULT_SOURCES.has(source);
+}
+
 // rule_source console labels (6a): ruleSourceLabel and RuleSourceLabel moved
 // to wardyn/audit-decision.tsx (bundle-split fix, #181) — unlike
 // toolRuleDecision above, RuleSourceChip (audit-decision.tsx) is its ONLY
@@ -91,13 +163,15 @@ export interface CredentialGrant {
   minted_at?: string;
   expires_at?: string;
   jti?: string;
+  /** The host the grant's scope names (git_pat, ssh_key); absent for other kinds. */
+  host?: string;
 }
 
 export interface EgressDecision {
   id: string;
   time: string;
   domain: string;
-  decision: "allow" | "deny" | "pending";
+  decision: "allow" | "deny" | "pending" | "failed";
   bytes?: number;
   // B3: the approval an `egress.hold` row raised (the audit row's own
   // data.approval_id — docs/AUDIT-ACTIONS.md). Absent on allow/deny rows and on
@@ -119,7 +193,7 @@ export interface EgressDecision {
 export type RunEndingKind =
   | "image" // run.build failed: the sandbox image could not be built, so nothing ran
   | "selftest" // run.selftest failed CLOSED: the wrapped image was refused before any task
-  | "killed" // an operator killed it
+  | "killed" // an operator killed it (see RunEnding.evidence for what the trail proves)
   | "auto_stop" // the idle reaper stopped it — the policy working, not a fault
   // the dispatch-time model-credential refusal (0.7.6 Finding 3): the declared
   // model-access lane could not carry this run. The SERVER's sentence is the
@@ -127,6 +201,12 @@ export type RunEndingKind =
   // only addition is the sign-in itself, where a sign-in this viewer can
   // complete would repair it.
   | "credential"
+  // run.create/failure stamped reason "sandbox_create": the runner could not
+  // create the sandbox, so nothing ran.
+  | "sandbox_create"
+  // run.exec/failure stamped reason "agent_start": the sandbox exists but the
+  // agent process could not be started in it.
+  | "agent_start"
   | "unknown";
 
 export interface RunEnding {
@@ -149,4 +229,10 @@ export interface RunEnding {
    * #532). A provider run's door is keyed by this alone (#543).
    */
   provider?: string;
+  /**
+   * For `killed`: what the trail proves about the kill (#1487). The LATEST
+   * run.kill row decides — success is `confirmed`, any other outcome is
+   * `partial` (a teardown step failed), and no row at all is `unknown`.
+   */
+  evidence?: "confirmed" | "partial" | "unknown";
 }

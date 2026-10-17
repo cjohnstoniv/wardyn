@@ -56,6 +56,14 @@ export const APPROVAL = {
   HOST_WIDE_NOTE: "This covers the host, not one port — an approval here answers every port on it.",
 } as const;
 
+// Approval escalation chips (notify-e4, packet M6 S2, approved 2026-10-03):
+// pending cards only. Level counts from 1; tier 0 (the first notice) shows no chip.
+export const APPROVAL_ESCALATION = {
+  ESCALATED: (n: number) => `Escalated · level ${n}`,
+  ESCALATES: (rel: string) => `Escalates ${rel}`,
+  ESCALATED_TITLE: "Sent to the next contacts on the list your admin set.",
+} as const;
+
 // Egress-approval decision scopes — egress_domain only. Canon strings from
 // egress-scopes-PHASE0-COPY.md (the sign-off artifact; the mock/copy spec is
 // UI source of truth in this repo — do not paraphrase these). Consumed by the

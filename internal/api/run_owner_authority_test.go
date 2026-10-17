@@ -659,9 +659,13 @@ func ownerSessionAs(t *testing.T) *http.Cookie {
 // fails here until it is classified, and a run recording every recoverable id
 // yields exactly the re-checked kinds.
 func TestPersistedDoorsClassifyEveryKind(t *testing.T) {
-	rechecked := []string{capAgent, capWorkspace, capWorkspaceProvider, capModelProvider, capPolicy}
+	// capComponent and capFeature are read back from the run's component
+	// snapshot, not the run row: an organisation's component by its id, and a
+	// component the owner defined by the one feature value that is a launch
+	// door, custom_component (ssh_key and api_token gate no launch).
+	rechecked := []string{capAgent, capWorkspace, capWorkspaceProvider, capModelProvider, capPolicy, capComponent, capFeature}
 	unrecoverable := []string{capImage}
-	notALaunchDoor := []string{capEgressHost, capSecret, capFeature}
+	notALaunchDoor := []string{capEgressHost, capSecret}
 	for _, kind := range capabilityKinds {
 		n := 0
 		for _, set := range [][]string{rechecked, unrecoverable, notALaunchDoor} {
@@ -677,15 +681,28 @@ func TestPersistedDoorsClassifyEveryKind(t *testing.T) {
 	policyID := uuid.New()
 	run := types.AgentRun{Agent: "claude-code", WorkspaceIDs: []uuid.UUID{uuid.New()},
 		ModelProviderID: "private-provider", PolicyID: &policyID}
+	orgComponent := uuid.New()
+	comps := []types.RunComponent{{ComponentID: &orgComponent}, {SelfDefined: true, Erased: true}}
 	var got []string
-	for _, d := range persistedLaunchDoors(run, []types.GitProvider{{ID: capProviderRowID, Kind: "github"}}) {
+	for _, d := range persistedLaunchDoors(run, []types.GitProvider{{ID: capProviderRowID, Kind: "github"}}, comps) {
 		got = append(got, d.kind)
+		if d.kind == capFeature && d.value != featureCustomComponent {
+			t.Errorf("the feature door asks about %q, want only %q", d.value, featureCustomComponent)
+		}
+		if reason := capabilityLostReason(d.kind); reason == reasonOwnerCapabilityUnknown {
+			t.Errorf("a closed %s door has no reason of its own", d.kind)
+		}
 	}
 	if !slices.Equal(slices.Sorted(slices.Values(got)), slices.Sorted(slices.Values(rechecked))) {
 		t.Errorf("persistedLaunchDoors kinds = %v, want exactly %v", got, rechecked)
 	}
-	if got := persistedLaunchDoors(types.AgentRun{Agent: "claude-code"}, nil); slices.ContainsFunc(got, func(d door) bool { return d.kind == capModelProvider || d.kind == capPolicy }) {
-		t.Errorf("a legacy row (no model provider, no policy) yields %v; want no model_provider or policy door", got)
+	if capabilityLostReason(capComponent) != reasonOwnerCapabilityComponent || capabilityLostReason(capFeature) != reasonOwnerCapabilityComponent {
+		t.Errorf("a closed component door answers %q / %q, want %q for both", capabilityLostReason(capComponent), capabilityLostReason(capFeature), reasonOwnerCapabilityComponent)
+	}
+	if got := persistedLaunchDoors(types.AgentRun{Agent: "claude-code"}, nil, nil); slices.ContainsFunc(got, func(d door) bool {
+		return d.kind == capModelProvider || d.kind == capPolicy || d.kind == capComponent || d.kind == capFeature
+	}) {
+		t.Errorf("a legacy row (no model provider, no policy, no components) yields %v; want none of those doors", got)
 	}
 }
 

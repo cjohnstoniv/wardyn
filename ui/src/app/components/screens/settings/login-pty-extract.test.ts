@@ -9,7 +9,10 @@
 // entry — see scripts/check-file-size.sh and AGENTS.md §1) once the pane's
 // own test file grew past the cap.
 import { describe, it, expect } from "vitest";
+import { existsSync, readFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import { extractSetupToken, extractAuthUrl, extractDeviceVerificationUrl, extractFailSentence } from "./login-pty-extract";
+import { deviceCodeOf } from "./signin-progress";
 
 // A realistic setup-token body: sk-ant-oat<2 digits>-<long url-safe blob>.
 const TOKEN = "sk-ant-oat01-" + "A".repeat(60) + "-_" + "b3".repeat(10);
@@ -179,4 +182,34 @@ describe("extractFailSentence", () => {
     const noisy = "\u001b[31mx\u001b[0m".repeat(400);
     expect(extractFailSentence(`${MARKER} ${noisy}\n`, MARKER)).toBe("x".repeat(300));
   });
+});
+
+// The cases the server's pane parser (internal/api/run_sign_in.go) reads too,
+// read by path the way wire-parity.test.ts reads Go-side files. Each states the
+// server's answer and this extractor's result: where the server says waiting,
+// both name the same link and code.
+describe("extractDeviceVerificationUrl on the shared sign-in pane cases", () => {
+  const root = (() => {
+    let dir = resolve(process.cwd());
+    for (let i = 0; i < 8 && !existsSync(join(dir, "go.mod")); i++) dir = dirname(dir);
+    return dir;
+  })();
+  const { cases } = JSON.parse(readFileSync(join(root, "internal/api/testdata/sign_in_pane_fixtures.json"), "utf8")) as {
+    cases: { name: string; pane: string; go: { state: string; verification_url?: string; user_code?: string }; ts: string | null }[];
+  };
+
+  it("reads the waiting, completed, failed and two-attempts cases", () => {
+    expect(cases.length).toBeGreaterThanOrEqual(4);
+  });
+
+  for (const c of cases) {
+    it(c.name, () => {
+      const got = extractDeviceVerificationUrl(c.pane);
+      expect(got).toBe(c.ts);
+      if (c.go.state === "waiting") {
+        expect(got).toBe(c.go.verification_url);
+        expect(deviceCodeOf(got ?? "")).toBe(c.go.user_code);
+      }
+    });
+  }
 });

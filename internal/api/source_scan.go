@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
 
@@ -78,7 +79,7 @@ func (s *Server) handleScanSource(w http.ResponseWriter, r *http.Request) {
 			writeErrorReason(w, http.StatusServiceUnavailable, reasonSourceScanNoRunner, "no runner configured to launch a governed scan run")
 			return
 		}
-		run, lerr := s.launchSourceScanRun(r.Context(), actor, src)
+		run, lerr := s.launchSourceScanRun(r.Context(), actor, src, nil)
 		if errors.Is(lerr, store.ErrConflict) {
 			writeErrorReason(w, http.StatusConflict, reasonSourceScanAlreadyRunning, "a scan is already running for this source")
 			return
@@ -86,7 +87,7 @@ func (s *Server) handleScanSource(w http.ResponseWriter, r *http.Request) {
 		// Provider admission refused the clone: the policy answer, not a daemon
 		// fault — 422/403 with the same sentence every request door writes, never
 		// the 500 below.
-		if s.writeAdmissionLaunchRefusal(w, r, lerr) {
+		if s.writeScanLaunchRefusal(w, r, lerr) {
 			s.recordAudit(r.Context(), s.auditEvent(nil, actorType, actor,
 				"source.scan", id.String(), "failure", mustJSON(map[string]any{"detail": lerr.Error()})))
 			return
@@ -107,6 +108,16 @@ func (s *Server) handleScanSource(w http.ResponseWriter, r *http.Request) {
 	default:
 		writeErrorReason(w, http.StatusUnprocessableEntity, reasonSourceScanUnsupportedKind, "source kind has nothing to scan")
 	}
+}
+
+// writeScanLaunchRefusal answers the two policy refusals a scan launch can end
+// in, the provider admission and the placement denial, and reports whether it did.
+func (s *Server) writeScanLaunchRefusal(w http.ResponseWriter, r *http.Request, err error) bool {
+	var denied *placementDeniedError
+	if errors.As(err, &denied) {
+		return denied.refusal.write(s, w, r)
+	}
+	return s.writeAdmissionLaunchRefusal(w, r, err)
 }
 
 // seedSourceRequirements derives the requirement rows a scan DISCOVERS for
@@ -179,7 +190,11 @@ func (s *Server) scanLocalDirSource(ctx context.Context, src types.Source) (prof
 // run carries SourceID as its trusted linkage (never WorkspaceID — this run
 // belongs to the library entry, not to any one aggregate attaching it), and
 // the upload lands via handleUploadScanResult's source lane.
-func (s *Server) launchSourceScanRun(ctx context.Context, actor string, src types.Source) (types.AgentRun, error) {
+//
+// ws is the workspace the scan was asked for, nil at the library door (operator-only). The clone
+// host is bounded by the ceiling resolved below: for a member-owned workspace with its approved
+// egress (boundCloneHosts), at the library door by the ceiling alone.
+func (s *Server) launchSourceScanRun(ctx context.Context, actor string, src types.Source, ws *types.Workspace) (types.AgentRun, error) {
 	url := repoCloneURL(src.Locator)
 	if url == "" {
 		return types.AgentRun{}, fmt.Errorf("repo %q has no derivable clone URL", src.Locator)
@@ -227,6 +242,11 @@ func (s *Server) launchSourceScanRun(ctx context.Context, actor string, src type
 	dc, ceiling, cerr := s.resolveDispatchCeiling(ctx)
 	if cerr != nil {
 		return types.AgentRun{}, release(cerr)
+	}
+	// A scan run is a remote sandbox created FOR the acting member over their
+	// source, so a profile denying remote placement closes this door too.
+	if ref := s.placementDeniedRefusal(ctx, types.PlacementRemote, ceiling); ref != nil {
+		return types.AgentRun{}, release(&placementDeniedError{ref})
 	}
 	// Strongest advertised at or above the floor, not the bare floor: dispatching
 	// at the bare floor unconditionally would have a gVisor/Kata host running
@@ -278,9 +298,19 @@ func (s *Server) launchSourceScanRun(ctx context.Context, actor string, src type
 	// for a deny to subtract from. If a per-source deny is ever wanted, it
 	// belongs on Source itself (mirroring DeniedEgress), not borrowed from an
 	// attaching workspace.
+	// A library source has no owner and no approved egress, and a member's workspace write can have
+	// pointed it anywhere, so at the library door (ws nil) the ceiling alone is authority.
+	clone, dropped := hostsWithinLiteralTrust(scanEgressDomains(url), ceiling.Spec.AllowedDomains)
+	if ws != nil {
+		clone, dropped = boundCloneHosts(scanEgressDomains(url), *ws, ceiling.Spec.AllowedDomains)
+	}
+	for _, h := range dropped {
+		// No response field carries a warning from this lane: the scan then fails as a refused clone.
+		slog.WarnContext(ctx, "wardynd: "+cloneHostDropWarning(h, "source", src.Name), slog.String("run_id", runID.String()))
+	}
 	scanPolicy := types.RunPolicySpec{
 		MinConfinementClass: cc,
-		AllowedDomains:      scanEgressDomains(url),
+		AllowedDomains:      clone,
 		AutoStopAfterSec:    scanIdleCapSec,
 	}
 	return s.dispatchAndSettle(ctx, created, dc, dispatchParams{
@@ -404,7 +434,7 @@ func (s *Server) scanAttachedSources(w http.ResponseWriter, r *http.Request, ws 
 				writeErrorReason(w, http.StatusServiceUnavailable, reasonSourceScanNoRunner, "no runner configured to launch a governed scan run")
 				return
 			}
-			run, lerr := s.launchSourceScanRun(r.Context(), actor, src)
+			run, lerr := s.launchSourceScanRun(r.Context(), actor, src, &ws)
 			if errors.Is(lerr, store.ErrConflict) {
 				continue // raced another claim — that run covers it
 			}
@@ -412,7 +442,7 @@ func (s *Server) scanAttachedSources(w http.ResponseWriter, r *http.Request, ws 
 			// answering, so the fan-out stops with the admission status rather than
 			// a 500 (the workspace door above refuses first; this covers a source
 			// narrowed between that check and this launch).
-			if s.writeAdmissionLaunchRefusal(w, r, lerr) {
+			if s.writeScanLaunchRefusal(w, r, lerr) {
 				partialAudit(id, lerr.Error())
 				return
 			}

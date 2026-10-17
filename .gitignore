@@ -1,6 +1,7 @@
 # Binaries
 bin/
 dist/
+dist-e2e/
 *.exe
 *.exe~
 *.dll
@@ -46,6 +47,7 @@ docker-compose.override.yml
 
 # compiled binaries at repo root
 /wardyn
+/cmd/wardyn/wardyn
 /wardynd
 /wardyn-proxy
 /wardyn-rec
@@ -143,6 +145,9 @@ ds-bundle/
 # #618's "What this type gets" frozen strings (user types packet A; the packet
 # stays local). user-types-copy.test.ts parses it.
 !/docs/design/user-types-canon.md
+# New Run's frozen-strings table (the owner-approved mock and prototypes stay local).
+# new-run-copy.test.ts parses it.
+!/docs/design/new-run-canon.md
 # #491's mock packet (owner-approved 2026-09-25) — the default-role-admin
 # warning proposal that widens #484's ssoRBACCheck.
 !/docs/design/491-default-admin-mock/
@@ -157,6 +162,8 @@ ds-bundle/
 # 0.8/ ships for the same reason: the 0.8 issues and ROADMAP.md's v0.8 row both
 # link to the design document, so it has to be in the repo they link from.
 !/docs/design/0.8/
+# 0.9/ ships for the same reason: the 0.9.0 issues and ROADMAP.md's v0.9 row link to it.
+!/docs/design/0.9/
 # unsaved-guard-canon.md is the same shape as hybrid-0.8.md: a published canon
 # doc for a shipped feature (#460), not a mock round with its own mock/ dir.
 !/docs/design/unsaved-guard-canon.md

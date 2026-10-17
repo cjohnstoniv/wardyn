@@ -18,6 +18,7 @@ package api
 // distinct revive-refusal cause; a few call sites answer the SAME cause two
 // ways (the runner substrate cannot revive at all) and share one on purpose.
 const (
+	reasonPolicyPreviewRateLimited    = "policy_preview_rate_limited"
 	reasonReviveLocalModeNotOwner     = "local_mode_not_owner"          // local mode mints for the run's own owner; nobody else may revive it — the SAME literal this refusal's own audit row already carried
 	reasonReviveUnsupportedDeployment = "revive_unsupported_deployment" // this deployment's store has no RunReviver, or configures no runner at all
 	// reasonReviveUnsupportedRunner covers three arms that all answer the
@@ -37,10 +38,11 @@ const (
 	reasonReviveProxyKeptCurrent            = "revive_proxy_kept_current"             // the old proxy was never touched; a still-live run keeps it after a failed replace
 	reasonReviveProxyReplaceFailedLost      = "revive_proxy_replace_failed_lost"      // the proxy could not be replaced, so the run has no egress and is lost again
 	reasonReviveAgentStartFailedLost        = "revive_agent_start_failed_lost"        // the agent could not be started behind the new proxy, so the run is lost again
+	reasonReviveRecoveryUnresolved          = "revive_recovery_unresolved"            // the revive failed and the run could not be recorded as lost; its proxy is stopped and a sweep recovers it
 	reasonReviveSubstrateUnreadable         = "revive_substrate_unreadable"           // the run's substrate could not answer whether it can replace a proxy
 	reasonReviveConfigNotStored             = "revive_config_not_stored"              // no proxy config is stored for this run (it predates this release, or none is kept)
 	reasonReviveConfigUnreadable            = "revive_config_unreadable"              // the stored proxy config could not be read
-	reasonReviveConfigDoesNotLoad           = "revive_config_does_not_load"           // the stored proxy config failed to parse or validate
+	reasonReviveConfigDoesNotLoad           = "revive_config_does_not_load"           // the stored proxy config, or the one the revive would start the new proxy with, failed to parse or validate
 	reasonReviveNotRunning                  = "revive_not_running"                    // the run is not in the RUNNING state, or has no sandbox
 	reasonReviveEndedFilesGone              = "revive_ended_files_gone"               // the run ended and its files are no longer kept
 	reasonRevivePastEnd                     = "revive_past_end"                       // the run has passed its scheduled end; extend it first
@@ -51,9 +53,11 @@ const (
 	reasonReviveAgentStatusUnreadable       = "revive_agent_status_unreadable"        // the run's agent status could not be probed
 	reasonReviveConfigRunMismatch           = "revive_config_run_mismatch"            // the stored proxy config names a different run than the one being revived
 	reasonReviveCeilingDeniesGitBroker      = "revive_ceiling_denies_git_broker"      // the owner's current governance profile now denies GitHub, which the run's git broker needs
-	reasonReviveOwnerAuthorityUnreadable    = "revive_owner_authority_unreadable"     // the owner's launch-door or model-credential re-check could not be completed
+	reasonReviveCeilingDeniesAzureCLI       = "revive_ceiling_denies_azure_cli"       // the owner's current governance profile now denies Azure Resource Manager, which the run's Azure CLI door needs
+	reasonReviveOwnerAuthorityUnreadable    = "revive_owner_authority_unreadable"     // the owner's launch-door or model-credential re-check, or the read of the run's git_pat grants for its brokered set, could not be completed
 	reasonReviveAdminRestartCountInvalid    = "revive_admin_restart_count_invalid"    // run_ids named none, or more than the bulk maximum
 	reasonReviveProxyWindowStoreUnavailable = "revive_proxy_window_store_unavailable" // this store cannot list run proxy releases
+	reasonRunCapacityStoreUnavailable       = "run_capacity_store_unavailable"        // this store cannot report fleet capacity
 )
 
 // ownerRefusal's own reason values (run_owner_authority.go): a revive's and a
@@ -65,7 +69,7 @@ const (
 	reasonOwnerProfileUnreadable = "profile_unreadable" // the owner's captured governance profile could not be read back
 	reasonOwnerProfileGone       = "profile_gone"       // the governance profile captured at launch no longer exists
 	// reasonOwnerCapability* names the launch door persistedLaunchDoors found
-	// closed: the SAME five capability kinds capabilities.go's own cap* consts
+	// closed: the SAME six capability kinds capabilities.go's own cap* consts
 	// enumerate, so the reason names the kind rather than repeating a run's
 	// specific agent/workspace/policy id (never on the wire).
 	reasonOwnerCapabilityAgent             = "capability_agent"
@@ -73,13 +77,15 @@ const (
 	reasonOwnerCapabilityModelProvider     = "capability_model_provider"
 	reasonOwnerCapabilityPolicy            = "capability_policy"
 	reasonOwnerCapabilityWorkspaceProvider = "capability_workspace_provider"
+	reasonOwnerCapabilityComponent         = "capability_component"
 	// reasonOwnerCapabilityUnknown is defensive only: capabilityLostReason's
-	// (run_owner_authority.go) fallback for a capability kind outside the five
+	// (run_owner_authority.go) fallback for a capability kind outside the six
 	// above, which persistedLaunchDoors cannot produce today.
 	reasonOwnerCapabilityUnknown     = "capability_unknown"
 	reasonOwnerModelCredentialErased = "model_credential_erased" // the secret this run's proxy would inject no longer exists
 	reasonOwnerModelProviderDisabled = "model_provider_disabled" // the integration supplying this run's credential, or the run's model provider, was turned off
 	reasonOwnerModelProviderGone     = "model_provider_gone"     // the model provider that authored this run's credential was deleted (or re-created under a new UID)
+	reasonOwnerComponentGone         = "component_gone"          // an organisation's component this run was launched with has since been deleted
 	// reasonOwnerUnverifiable is extendRefusal's own bucket (run_owner_authority.go):
 	// three arms (proxy config unreadable, config does not load, capability
 	// re-check itself failed) that all answer the identical client-facing fact —
@@ -93,6 +99,7 @@ const (
 	reasonRunWaitBudgetNotANumber    = "run_wait_budget_not_a_number"   // wait_budget_sec was present but null
 	reasonRunEndWaitAlreadyFinished  = "run_end_wait_already_finished"  // the run is already in a terminal state
 	reasonRunEndWaitFilesGone        = "run_end_wait_files_gone"        // the run ended and its files are no longer kept
+	reasonRunEndWaitMaxLifetime      = "run_end_wait_max_lifetime"      // the run has reached its maximum lifetime and is being ended, so its end and wait cannot move
 	reasonRunEndWaitStoreUnavailable = "run_end_wait_store_unavailable" // this store cannot change a run's end
 	// reasonRunLimitsGateDenied is planRunEndWait's own shared cause: the
 	// user_changes_limits gate refused this change, for any of the 4 fields
@@ -102,6 +109,14 @@ const (
 	reasonRunEndMustBeFuture    = "run_end_must_be_future"     // ends_at is not after now
 	reasonRunWaitBudgetTooSmall = "run_wait_budget_too_small"  // wait_budget_sec is below 1
 	reasonRunEndWaitChanged     = "run_end_wait_changed"       // the run changed while the PATCH was being decided
+)
+
+// POST /runs (run_end_create.go): the create-time end. The No end refusals reuse
+// run_end_no_end_not_allowed and run_limits_gate_denied above.
+const (
+	reasonRunEndConflictingFields = "run_end_conflicting_fields" // both ends_after_sec and no_end were set
+	reasonRunEndAfterTooSmall     = "run_end_after_too_small"    // ends_after_sec is below 1
+	reasonRunEndAfterTooLarge     = "run_end_after_too_large"    // ends_after_sec is past 2147483647
 )
 
 // notFoundIf's (helpers.go) own reasons: one per resource kind its ~27
@@ -199,6 +214,7 @@ const (
 	reasonRunInspectTerminal              = "run_inspect_terminal"                // the run has finished; its sandbox is gone
 	reasonRunInspectNoSandbox             = "run_inspect_no_sandbox"              // the run never dispatched (or recorded no sandbox ref)
 	reasonRunInspectPaused                = "run_inspect_paused"                  // the run is paused
+	reasonRunInspectAgentStopped          = "run_inspect_agent_stopped"           // the run is kept with its agent stopped; there is no running sandbox to read
 	reasonRunInspectExecStreamUnsupported = "run_inspect_exec_stream_unsupported" // the runner does not support exec streaming
 	reasonRunResourcesReadFailed          = "run_resources_read_failed"           // the sandbox resource usage script failed
 	reasonRunFilesNoExecSession           = "run_files_no_exec_session"           // the runner returned no exec session
@@ -207,10 +223,18 @@ const (
 // GET /runs/{id}/output (run_output.go).
 const (
 	reasonRunOutputTailInvalid = "run_output_tail_invalid" // ?tail= is not a positive number of bytes
-	reasonRunOutputInteractive = "run_output_interactive"  // the run is interactive; only a task_mode=exec run keeps its output
+	reasonRunOutputInteractive = "run_output_interactive"  // the run is interactive and has no pane snapshot to serve
 	reasonRunOutputOff         = "run_output_off"          // WARDYN_EXEC_OUTPUT_TAIL=off
-	reasonRunOutputNotKept     = "run_output_not_kept"     // no tail is held for the run (not exec, or started before a restart)
-	reasonRunOutputExpired     = "run_output_expired"      // the tail outlived WARDYN_EXEC_OUTPUT_TAIL_TTL
+	reasonRunOutputNotKept     = "run_output_not_kept"     // no output is kept for the run (one never captured, or one still being captured)
+	reasonRunOutputExpired     = "run_output_expired"      // the tail outlived WARDYN_EXEC_OUTPUT_TAIL_TTL, or the run ended past WARDYN_RUN_OUTPUT_RETENTION_DAYS
+	reasonRunOutputErased      = "run_output_erased"       // the run's output was erased (404)
+	reasonRunOutputNotCaptured = "run_output_not_captured" // the runner cannot capture a run's output (Kubernetes under the recorder); the recording has it
+)
+
+// GET /runs/{id}/sign-in (run_sign_in.go).
+const (
+	reasonRunSignInNotAWS     = "run_sign_in_not_aws"    // the run is not an AWS sign-in run
+	reasonRunSignInUnreadable = "run_sign_in_unreadable" // the pane, or the capture's audit row, could not be read in time
 )
 
 // POST /runs/{id}/resume (run_pause.go).
@@ -251,6 +275,7 @@ const (
 	reasonRunRenewStoreUnavailable            = "run_renew_store_unavailable" // no store configured to verify the run is still alive
 	reasonRunRenewReadFailed                  = "run_renew_read_failed"       // reading the run for the renew gate failed
 	reasonRunRenewStampFailed                 = "run_renew_stamp_failed"      // stamping the run's token-renewed marker failed
+	reasonRunRenewLeaseBusy                   = "run_renew_lease_busy"        // the run's runner lease is being sent by another holder; retry
 	// reasonInternalLivenessReadFailed is refuseTerminalRun's own 503
 	// (internal_live_run.go) — the shared /internal/* liveness gate every
 	// sidecar door runs through.
@@ -470,16 +495,26 @@ const (
 	reasonUserTypeDeleteConflict    = "user_type_delete_conflict"      // something started naming it between the read and the delete
 )
 
+// /api/v1/key-domains (key_domains.go). The unknown-domain and ambiguous-
+// membership refusals are authz reasons (authz.ReasonKeyDomainUnknown,
+// authz.ReasonKeyDomainAmbiguous).
+const (
+	reasonKeyDomainRequestInvalid     = "key_domain_request_invalid"      // the subject type, subject or body fails validation
+	reasonKeyDomainAssignmentNotFound = "key_domain_assignment_not_found" // a delete named an assignment that is not there
+	reasonKeyDomainsStoreUnavailable  = "key_domains_store_unavailable"   // no Postgres-backed key-domain service is wired
+)
+
 // POST /runs/{id}/attach (attach.go): the interactive WebSocket door.
 const (
-	reasonAttachNoRunner         = "attach_no_runner"           // this deployment configures no runner
-	reasonAttachTicketNotYourRun = "attach_ticket_not_your_run" // the ticket's stamped principal is not this run's owner
-	reasonAttachNotRunning       = "attach_not_running"         // the run is not in the RUNNING state
-	reasonAttachRunKept          = "attach_run_kept"            // the run is kept (ended/lost); its agent is stopped
-	reasonAttachNoSandbox        = "attach_no_sandbox"          // the run has no sandbox ref
-	reasonAttachResumeFailed     = "attach_resume_failed"       // thawing a paused run for the attach failed
-	reasonAttachTicketMintFailed = "attach_ticket_mint_failed"  // mintAttachTicket failed
-	reasonAttachTakeoverNoHolder = "attach_takeover_no_holder"  // nobody is currently attached to this run
+	reasonAttachNoRunner          = "attach_no_runner"           // this deployment configures no runner
+	reasonAttachTicketNotYourRun  = "attach_ticket_not_your_run" // the ticket's stamped principal is not this run's owner
+	reasonAttachNotRunning        = "attach_not_running"         // the run is not in the RUNNING state
+	reasonAttachRunKept           = "attach_run_kept"            // the run is kept (ended/lost); its agent is stopped
+	reasonAttachNoSandbox         = "attach_no_sandbox"          // the run has no sandbox ref
+	reasonAttachResumeFailed      = "attach_resume_failed"       // thawing a paused run for the attach failed
+	reasonAttachTicketMintFailed  = "attach_ticket_mint_failed"  // mintAttachTicket failed
+	reasonAttachTakeoverNoHolder  = "attach_takeover_no_holder"  // nobody is currently attached to this run
+	reasonAttachSessionCapReached = "attach_session_cap_reached" // this run already has the maximum number of live terminal sessions on this replica
 )
 
 // /api/v1/admin/presets (presets.go): validatePresetRequest's whole check is
@@ -510,12 +545,21 @@ const (
 const (
 	reasonAuditInvalidRunID                = "audit_invalid_run_id"
 	reasonAuditExportStoreUnavailable      = "audit_export_store_unavailable"
+	reasonAuditExportReadFailed            = "audit_export_read_failed"
+	reasonAuditScopeUnavailable            = "audit_scope_unavailable"
 	reasonAuditChainVerifyStoreUnavailable = "audit_chain_verify_store_unavailable"
 	reasonAuditChainVerifyBusy             = "audit_chain_verify_busy"
 	reasonAuditChainSweepFailed            = "audit_chain_sweep_failed"
 	reasonAuditInvalidTimestampParam       = "audit_invalid_timestamp_param"
 	reasonAuditInvalidActorType            = "audit_invalid_actor_type"
 	reasonAuditInvalidOrigin               = "audit_invalid_origin"
+	reasonAuditInvalidExportForm           = "audit_invalid_export_form"
+	reasonAuditPartitionNotFound           = "audit_partition_not_found"
+	reasonAuditPartitionOpen               = "audit_partition_open"
+	reasonAuditRetentionStoreUnavailable   = "audit_retention_store_unavailable"
+	reasonAuditRetentionReadFailed         = "audit_retention_read_failed"
+	reasonAuditRetentionBodyInvalid        = "audit_retention_body_invalid"
+	reasonAuditRetentionDropFailed         = "audit_retention_drop_failed"
 )
 
 // POST /api/v1/sources/{id}/scan and the admin bulk scan (source_scan.go).
@@ -573,6 +617,20 @@ const (
 	ReasonADOPATNeedsConsoleApp = "ado_pat_needs_console_app"
 )
 
+// GET /model-providers-entra/signin and the callback it shares with the Azure
+// DevOps sign-in (azure_foundry_entra.go): the per-row door of the Azure
+// Foundry capture. The callback answers a refusal the person can act on as a
+// redirect with a fixed code (the vocabulary of the Azure DevOps callback plus
+// row_changed) and an attack-shaped one in band.
+const (
+	reasonAzureSignInUnconfigured     = "azure_sign_in_unconfigured"     // no console Entra sign-in is configured
+	reasonAzureSignInUnknownRow       = "azure_sign_in_unknown_row"      // the uid is not an azure_foundry provider
+	reasonAzureSignInNoSession        = "azure_sign_in_no_session"       // no session subject to bind the capture to
+	reasonAzureCallbackCookiesInvalid = "azure_callback_cookies_invalid" // the one-time nonce or verifier cookie is missing, or the stamped row is malformed
+	reasonAzureCallbackMissingCode    = "azure_callback_missing_code"    // the authority redirected back with no code
+	reasonHostNotEndpoint             = "host_not_endpoint"              // the requested host is not the Azure provider's own endpoint
+)
+
 // POST /workspace-providers/git/{id}/org-check (ado_pat_orgcheck.go).
 const (
 	reasonADOOrgCheckUnknownRow   = "ado_org_check_unknown_row"  // no such row, or not the row that creates tokens (D-6)
@@ -590,6 +648,7 @@ const (
 	reasonADOOwnPATRejected         = "ado_own_pat_rejected"          // Azure DevOps did not accept the token for the organisation
 	reasonADOOwnPATIdentityMismatch = "ado_own_pat_identity_mismatch" // the token belongs to another account (never named)
 	reasonADOOwnPATCheckUnavailable = "ado_own_pat_check_unavailable" // Azure DevOps could not be asked; nothing is known
+	reasonADOOwnPATRequestRefused   = "ado_own_pat_request_refused"   // Azure DevOps answered 400: it refused the request, not the token
 )
 
 // The own-token arm of the Azure DevOps injection resolve
@@ -661,6 +720,18 @@ const (
 	reasonDirectorySearchFailed        = "directory_search_failed"
 )
 
+// POST /api/v1/runs/preflight (preflight.go): an authorised caller at the
+// per-person rate limit, so not an authz.denied reason and not audited.
+const reasonPreflightRateLimited = "preflight_rate_limited"
+
+// GET /api/v1/workspaces/{id}/branches (workspace_branches.go). It also answers
+// reasonWorkspaceRepoUnknown (reasons.go) for a repository the workspace does not carry.
+const reasonBranchListRateLimited = "branch_list_rate_limited"
+
+// POST /api/v1/runs and POST /api/v1/runs/preflight (run_fit.go): the runs namespace's
+// ResourceQuota cannot hold this run. A 422 before the mint, not audited, like run_quota.
+const reasonNamespaceQuotaExceeded = "namespace_quota_exceeded"
+
 // /api/v1/base-images (base_images.go).
 const (
 	reasonBaseImageWriteInvalid = "base_image_write_invalid" // validateBaseImageWrite's own bucket
@@ -672,6 +743,29 @@ const (
 const (
 	reasonCredentialErasePrincipalRequired = "credential_erase_principal_required"
 	reasonCredentialEraseOperatorNamespace = "credential_erase_operator_namespace"
+	// The Azure DevOps sign-in's configuration could not be read, so the erase
+	// could not take the sign-in's lock and refused (#1478).
+	reasonCredentialEraseSignInConfigUnreadable = "credential_erase_signin_config_unreadable"
+)
+
+// /me/secrets and /shared-secrets (secrets_explicit.go): the caller has no personal namespace to name
+// (the admin token, local mode, a device or a delegated portal), so 403.
+const reasonSecretPersonalNeedsPerson = "secret_personal_needs_person"
+
+// A write of a stored credential that began before an erase of its owner (writeServerError):
+// 409, nothing saved, a new attempt lands.
+const reasonCredentialErasedDuringWrite = "credential_erased_during_write"
+
+// POST /people/{principal}/erasure (person_erasure.go).
+const (
+	// scopes is not a non-empty list of known scope names.
+	reasonErasureScopeUnknown = "erasure_scope_unknown"
+	// The person named is the caller, and a scope other than credentials was asked for.
+	reasonErasureSelfRefused = "erasure_self_refused"
+	// The principal names the operator namespace, which is no person's.
+	reasonErasureOperatorNamespace = "erasure_operator_namespace"
+	// A scope failed part way: the body names what is done and what is left.
+	reasonErasureIncomplete = "erasure_incomplete"
 )
 
 // GET /permissions/explain (capabilities_explain.go).
@@ -684,6 +778,7 @@ const reasonCredentialInventoryNoMeta = "credential_inventory_no_meta"
 const (
 	reasonRecordingStoreUnavailable = "recording_store_unavailable"
 	reasonRecordingTooLarge         = "recording_too_large"
+	reasonRecordingErased           = "recording_erased"
 	reasonRecordingInvalidPart      = "recording_invalid_part" // {part} is not canonical decimal >= 2 (handleUploadRecordingPart)
 	// reasonRecordingPartLimit is recording.upload's ONLY name for a part
 	// above types.RecordingMaxParts — the wire reason AND the nested
@@ -748,6 +843,8 @@ const (
 	brandReasonLinkShape  = "invalid_link"
 	brandReasonLogoSize   = "logo_too_large"
 	brandReasonLogo       = "invalid_logo"
+	// brandReasonLogoFromFile: remove_logo on a logo the site config delivers (#1215).
+	brandReasonLogoFromFile = "logo_from_site_config"
 )
 
 // The CSRF guard's own refusal (csrf.go, http.go's local-mode arm, attach.go):
@@ -771,4 +868,121 @@ const (
 	uiDeniedReasonNotAuthorized         = "not_authorized"
 	uiDeniedReasonRevoked               = "revoked"
 	uiDeniedReasonRevocationUnavailable = "revocation_unavailable"
+	// A session opened through a portal ends with that portal's grant (#1475):
+	// the portal was revoked or the grant expired, or the store could not say.
+	uiDeniedReasonDelegationEnded       = "delegation_ended"
+	uiDeniedReasonDelegationUnavailable = "delegation_unavailable"
+)
+
+// reasonLockUnavailable: a cross-replica lock the request needs could not be
+// taken (held elsewhere past its wait, the lock pool full, the database not
+// answering). Nothing was done; the request is safe to retry (locks.go).
+const reasonLockUnavailable = "lock_unavailable"
+
+// The governance four-eyes lane (WARDYN_GOVERNANCE_SECOND_HUMAN; governance_change_gate.go,
+// governance_changes.go).
+const (
+	reasonGovernanceSecondHumanLocalMode = "governance_second_human_local_mode" // WARDYN_GOVERNANCE_SECOND_HUMAN cannot be enforced with nobody authenticated (local mode)
+	reasonGovernanceChangePending        = "governance_change_pending"          // a live change already holds this target
+	reasonGovernanceChangeStale          = "governance_change_stale"            // the target, or the deployment default, changed since the proposal
+	reasonGovernanceChangeNotPending     = "governance_change_not_pending"      // the change was already applied, rejected, expired or marked stale
+	reasonGovernanceChangeNotFound       = "governance_change_not_found"        // a /governance/changes route named no change, or one of a kind the caller may not see
+	reasonGovernanceChangeStateInvalid   = "governance_change_state_invalid"    // ?state= is not one of the five change states
+)
+
+// reasonIdentityDeactivated: a run, API token, SSH key or stored credential was refused because its
+// owner's identity is deactivated or was suspended since the caller was admitted (leaver
+// deprovisioning). One sentence, so a suspension reads like a cut session.
+const reasonIdentityDeactivated = "identity_deactivated"
+
+// applyRunComponents' own refusals (components_run.go): the component gate at
+// POST /runs, its Review and the policy preview. Who may attach a component is
+// not here — that is authz's capability_component / capability_feature.
+const (
+	reasonComponentRefInvalid              = "component_ref_invalid"              // components[] is malformed: too many entries, an entry naming both or neither of id and inline, or one component twice
+	reasonComponentStoreUnavailable        = "component_store_unavailable"        // this deployment's store cannot record components
+	reasonComponentDefinitionInvalid       = "component_definition_invalid"       // the component's definition breaks a rule: a host, a delivery, a name Wardyn manages, a model provider's variable
+	reasonComponentSecretNotOwned          = "component_secret_not_owned"         // a secret the component delivers is not one the caller holds in their own namespace
+	reasonComponentSecretMissing           = "component_secret_missing"           // a secret the organisation provides for the component has not been stored
+	reasonComponentHostDenied              = "component_host_denied"              // a host of the component is on a deny list, or is not one the caller's egress_host rows allow
+	reasonComponentHostServesModel         = "component_host_serves_model"        // a host of the component serves a model on this deployment
+	reasonComponentHostCollision           = "component_host_collision"           // a header delivery names a host that already carries a credential on the run
+	reasonComponentResidentDeliveryDenied  = "component_resident_delivery_denied" // the organisation turned off env and file delivery (components.deny_resident_delivery)
+	reasonComponentCLIAWSInjectOff         = "component_cli_aws_inject_off"       // an AWS CLI row while WARDYN_AWS_SSO_PROXY_INJECT is off, which would put the SSO token in the sandbox
+	reasonComponentCLISignInRequired       = "component_cli_sign_in_required"     // the caller has not signed in for an AWS or Azure CLI row the run attaches
+	reasonComponentCLIAzureNoEntra         = "component_cli_azure_no_entra"       // an Azure CLI row on a deployment whose console does not sign people in with Microsoft Entra
+	reasonComponentCLIAWSWithBedrockSignIn = "component_cli_aws_bedrock_sign_in"  // an AWS CLI row on a run whose model comes through an AWS sign-in: one AWS profile per sandbox
+	reasonCLINoGitHubRepo                  = "cli_no_github_repo"                 // a GitHub CLI row is attached, and the run has no GitHub repository on the App lane for it to act on
+)
+
+// The AWS CLI row's sign-in door (POST /components/{id}/sign-in) and its
+// capture (cli_aws_signin.go).
+const (
+	reasonCLISignInNotAWS         = "cli_sign_in_not_aws"         // the component is not an AWS CLI row
+	reasonCLISignInPreviewBlocked = "cli_sign_in_preview_blocked" // a previewing admin cannot capture into the previewed identity
+	reasonCLISignInCaptureChanged = "cli_sign_in_capture_changed" // the row was removed or re-pinned while its sign-in was open
+	reasonCLISignInNotAzure       = "cli_sign_in_not_azure"       // GET /components-entra/signin: the component is not an Azure CLI row
+)
+
+// A built-in Git provider component's own refusals; its repositories meet the
+// workspace doors' reasons (workspace_repo_not_admitted, capability_workspace_provider).
+const (
+	reasonComponentBuiltinLaneOff            = "component_builtin_lane_off"             // the GitHub provider row that admits a repository has the GitHub App lane off
+	reasonComponentBuiltinAccessAboveCeiling = "component_builtin_access_above_ceiling" // the caller's ceiling does not allow the asked access to GitHub repositories
+)
+
+// reasonCredentialHostCollision: two of a run's credentials are bound to one
+// host, and the proxy carries one per host. The three run doors answer it as a
+// 422 for any run (credentialHostRefusal), and dispatch records it on a failed
+// run's run.create row when the collision only appears there
+// (settleCredentialHosts). component_host_collision is the same rule for a
+// component's own header.
+const reasonCredentialHostCollision = "credential_host_collision"
+
+// The component routes' own reasons (components_routes.go): a person's saved
+// components under /me/components and the organisation's under /components. The
+// definition, shared-secret and store-unavailable refusals they also answer are
+// the gate's, declared above.
+const (
+	reasonComponentCapReached   = "component_cap_reached"   // the person, or the organisation, is at the saved-component limit
+	reasonComponentNameConflict = "component_name_conflict" // another component of this owner already has the name (or, for an org id, the id)
+	reasonComponentNotFound     = "component_not_found"     // no such component of this owner's; another person's and an absent id answer alike
+)
+
+// Runner registration request and deployment refusals. Token and claim refusals
+// retain the shared placement enum values.
+const (
+	reasonRunnerRegistrationUnavailable = "runner_registration_unavailable"
+	reasonRemoteRunnerNotFound          = "remote_runner_not_found" // no remote-hosted runner has that id (the operators' /remote-runners routes)
+	reasonRunnerRegistrationRateLimited = "runner_registration_rate_limited"
+	reasonRunnerRegistrationInvalid     = "runner_registration_invalid"
+	reasonRunnerOwnerInvalid            = "runner_owner_invalid"
+	reasonRunnerKeyAlreadyRegistered    = "runner_key_already_registered"
+	reasonRunnerLimitsRequired          = "runner_limits_required" // a registration that declares no limits, or limits that are not valid
+)
+
+// The runners management routes (runner_inventory.go).
+const (
+	reasonRunnerNotFound         = "runner_not_found"
+	reasonRunnerTokenNotFound    = "runner_token_not_found"
+	reasonRunnerFilterInvalid    = "runner_filter_invalid"
+	reasonRunnerSessionRequired  = "runner_session_required"
+	reasonRunnersOrgURLInvalid   = "runners_org_url_invalid"
+	reasonRunnersEnabledRequired = "runners_enabled_required"
+	reasonRunnerLimitsInvalid    = "runner_limits_invalid"
+)
+
+// Runner route admission fails closed on absent or unreadable configuration.
+const (
+	reasonRunnersDisabled          = "runners_disabled"
+	reasonRunnersConfigUnavailable = "runners_config_unavailable"
+	reasonRunnerStreamUnavailable  = "runner_stream_unavailable"
+	reasonRunnerStreamRateLimited  = "runner_stream_rate_limited"
+	// reasonRunnerRevokeReasonInvalid: an owner's revoke names a reason other than not_mine.
+	reasonRunnerRevokeReasonInvalid = "runner_revoke_reason_invalid"
+)
+
+// GET /runs/{id}/launch-intent (launch_intent.go).
+const (
+	reasonLaunchIntentNotFound = "launch_intent_not_found" // the run kept no setup, or the caller may not see it
 )

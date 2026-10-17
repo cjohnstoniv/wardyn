@@ -34,9 +34,19 @@ type DelegateStore interface {
 	RevokeDelegate(ctx context.Context, id uuid.UUID, now time.Time) (types.Delegate, error)
 	MintDelegatedToken(ctx context.Context, t types.DelegatedToken, raw string, now time.Time) (types.DelegatedToken, error)
 	GetDelegatedTokenByRaw(ctx context.Context, raw string, now time.Time) (types.DelegatedToken, error)
+	GetDelegatedTokenByID(ctx context.Context, id uuid.UUID, now time.Time) (types.DelegatedToken, error)
 }
 
 var _ DelegateStore = PG{}
+
+// DelegateReader reads one portal by id whatever its state, so the pool queue's start can tell a
+// portal that was revoked while a run waited from one that still stands. Separate from DelegateStore
+// for the same reason that interface is optional: a test double that implements one need not the other.
+type DelegateReader interface {
+	GetDelegateByID(ctx context.Context, id uuid.UUID) (types.Delegate, error)
+}
+
+var _ DelegateReader = PG{}
 
 const delegateCols = `id, name, idp_client_id, scope_group, credential_sha256, registered_by, created_at, last_used_at, revoked_at`
 
@@ -75,6 +85,12 @@ func (s PG) GetDelegateByRaw(ctx context.Context, raw string) (types.Delegate, e
 	return scanDelegate(s.Pool.QueryRow(ctx, q, hashToken(raw)))
 }
 
+// GetDelegateByID returns the portal with id, revoked or not (ErrNotFound only for an id that was
+// never registered). The authenticating reads above filter revoked rows; this one exists to see them.
+func (s PG) GetDelegateByID(ctx context.Context, id uuid.UUID) (types.Delegate, error) {
+	return scanDelegate(s.Pool.QueryRow(ctx, `SELECT `+delegateCols+` FROM delegates WHERE id = $1`, id))
+}
+
 // ListDelegates returns every portal, newest first, including revoked —
 // admins need to see that a retired portal is retired.
 func (s PG) ListDelegates(ctx context.Context) ([]types.Delegate, error) {
@@ -94,13 +110,13 @@ func (s PG) RevokeDelegate(ctx context.Context, id uuid.UUID, now time.Time) (ty
 	return scanDelegate(s.Pool.QueryRow(ctx, q, id, now))
 }
 
-const delegatedTokenCols = `t.id, t.delegate_id, t.principal, t.email, t.user_type, t.groups, t.groups_truncated, t.created_at, t.expires_at`
+const delegatedTokenCols = `t.id, t.delegate_id, t.principal, t.email, t.user_type, t.groups, t.groups_truncated, t.created_at, t.expires_at, t.rev_seq`
 
 func scanDelegatedToken(row pgx.Row) (types.DelegatedToken, error) {
 	var t types.DelegatedToken
 	var groups []byte
 	err := row.Scan(&t.ID, &t.DelegateID, &t.Principal, &t.Email, &t.UserType, &groups, &t.GroupsTruncated,
-		&t.CreatedAt, &t.ExpiresAt)
+		&t.CreatedAt, &t.ExpiresAt, &t.RevSeq)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return types.DelegatedToken{}, ErrNotFound
 	}
@@ -128,15 +144,19 @@ func (s PG) MintDelegatedToken(ctx context.Context, t types.DelegatedToken, raw 
 	if err != nil {
 		return types.DelegatedToken{}, err
 	}
-	age := db.AppClockAgeMicros(t.CreatedAt, now)
-	q := `
+	anchor, err := db.CaptureAppClock(ctx, s.Pool, s.now)
+	if err != nil {
+		return types.DelegatedToken{}, err
+	}
+	createdAt := anchor.Translate(t.CreatedAt)
+	const q = `
 		WITH swept AS (DELETE FROM delegated_tokens WHERE expires_at <= $11),
 		     touched AS (UPDATE delegates SET last_used_at = $11 WHERE id = $2)
-		INSERT INTO delegated_tokens AS t (id, delegate_id, token_sha256, principal, email, user_type, groups, groups_truncated, created_at, expires_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,` + db.AppClockAgeSQL("$9") + `,$10)
+		INSERT INTO delegated_tokens AS t (id, delegate_id, token_sha256, principal, email, user_type, groups, groups_truncated, created_at, expires_at, rev_seq)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$12)
 		RETURNING ` + delegatedTokenCols
 	return scanDelegatedToken(s.Pool.QueryRow(ctx, q, t.ID, t.DelegateID, hashToken(raw), t.Principal, t.Email,
-		t.UserType, groups, t.GroupsTruncated, age, t.ExpiresAt, now))
+		t.UserType, groups, t.GroupsTruncated, createdAt, t.ExpiresAt, now, t.RevSeq))
 }
 
 // GetDelegatedTokenByRaw is the delegated lane's auth lookup: the token must
@@ -148,4 +168,16 @@ func (s PG) GetDelegatedTokenByRaw(ctx context.Context, raw string, now time.Tim
 		FROM delegated_tokens t JOIN delegates d ON d.id = t.delegate_id
 		WHERE t.token_sha256 = $1 AND t.expires_at > $2 AND d.revoked_at IS NULL`
 	return scanDelegatedToken(s.Pool.QueryRow(ctx, q, hashToken(raw), now))
+}
+
+// GetDelegatedTokenByID is GetDelegatedTokenByRaw by the grant's id: live while
+// unexpired at now AND its portal still registered. A UI session opened through
+// a portal re-asks it, so the session ends with the grant (#1475). Expired rows
+// are swept on any mint, so ErrNotFound means ended.
+func (s PG) GetDelegatedTokenByID(ctx context.Context, id uuid.UUID, now time.Time) (types.DelegatedToken, error) {
+	const q = `
+		SELECT ` + delegatedTokenCols + `
+		FROM delegated_tokens t JOIN delegates d ON d.id = t.delegate_id
+		WHERE t.id = $1 AND t.expires_at > $2 AND d.revoked_at IS NULL`
+	return scanDelegatedToken(s.Pool.QueryRow(ctx, q, id, now))
 }

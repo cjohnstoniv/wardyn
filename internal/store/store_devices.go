@@ -351,16 +351,17 @@ func (s PG) IngestDeviceAudit(ctx context.Context, deviceID uuid.UUID, peer stri
 		return DeviceIngestResult{}, fmt.Errorf("store: lock audit chain (waited up to %s; another transaction that inserted into audit_events may still be open): %w",
 			db.AuditChainLockTimeout, err)
 	}
-	const insertQ = `INSERT INTO audit_events (` + auditCols + `) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`
+	const insertQ = `SELECT seq FROM audit_append($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`
 	for _, r := range toIngest {
 		data, err := mergeDeviceOrigin(deviceID, r)
 		if err != nil {
 			return DeviceIngestResult{}, fmt.Errorf("store: merge device origin: %w", err)
 		}
-		if _, err := tx.Exec(ctx, insertQ,
+		var appended int64
+		if err := tx.QueryRow(ctx, insertQ,
 			r.ID, r.Time, r.RunID, string(r.ActorType), FederatedActor(deviceID, r.Actor), r.Action,
 			CapAuditTarget(r.Target), r.Outcome, peer, data,
-		); err != nil {
+		).Scan(&appended); err != nil {
 			return DeviceIngestResult{}, fmt.Errorf("store: insert federated audit event: %w", err)
 		}
 	}

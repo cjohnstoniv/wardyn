@@ -105,6 +105,15 @@ test.beforeAll(async ({ browser: fixtureBrowser, playwright }) => {
       /* ignore */
     }
   });
+  // The demo drives a production bundle (no __wardynTerm registry): terminal text is read
+  // from the DOM, which only the Compatible renderer fills.
+  await page.addInitScript(() => {
+    try {
+      localStorage.setItem("wardyn.terminal.renderer", "compatible");
+    } catch {
+      /* ignore */
+    }
+  });
   await installOverlay(page);
   await placeWindowInFrame();
 });

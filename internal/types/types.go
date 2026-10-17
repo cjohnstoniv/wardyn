@@ -52,6 +52,9 @@ var ConfinementClassNames = map[ConfinementClass]string{
 type RunState string
 
 const (
+	// RunQueued is a launch waiting for a slot in a capped runner pool: non-terminal, before PENDING,
+	// and holding nothing (no identity, no sandbox, no slot).
+	RunQueued   RunState = "QUEUED"
 	RunPending  RunState = "PENDING"
 	RunStarting RunState = "STARTING"
 	RunRunning  RunState = "RUNNING"
@@ -78,7 +81,22 @@ func (s RunState) IsTerminal() bool {
 // NonTerminalRunStates is IsTerminal's complement, for the active-run quota query. POSITIVE, never
 // `NOT IN (terminal)`: a forgotten member only undercounts here, but a negation would wedge capped
 // accounts at their limit forever. Pinned against IsTerminal by test.
-var NonTerminalRunStates = []RunState{RunPending, RunStarting, RunRunning, RunWaiting}
+var NonTerminalRunStates = []RunState{RunQueued, RunPending, RunStarting, RunRunning, RunWaiting}
+
+// SlotHoldingRunStates is NonTerminalRunStates minus RunQueued: the states whose runs hold a pool,
+// deployment or host slot, and the only ones a sandbox reaper may age. A waiting run holds nothing.
+var SlotHoldingRunStates = []RunState{RunPending, RunStarting, RunRunning, RunWaiting}
+
+// RunQueue is what a QUEUED run says about its wait: the pool, when it joined, when its wait ends,
+// how many runs are ahead of it in that pool (a count, never whose) and the wait reason token
+// (runner_pool_at_capacity, runner_pool_no_runner_free or runner_pool_runners_at_capacity).
+type RunQueue struct {
+	PoolID     uuid.UUID `json:"pool_id"`
+	QueuedAt   time.Time `json:"queued_at"`
+	DeadlineAt time.Time `json:"deadline_at"`
+	Position   int       `json:"position"`
+	Reason     string    `json:"reason"`
+}
 
 // PauseReason says why a run's agent is frozen (AgentRun.PausedReason).
 type PauseReason string
@@ -95,6 +113,8 @@ const (
 	ActorHuman  ActorType = "human"
 	ActorAgent  ActorType = "agent"
 	ActorSystem ActorType = "system"
+	// ActorService is a service identity (#1508): actor "service:<name>", with its sponsor on every row.
+	ActorService ActorType = "service"
 )
 
 // AgentRun is one governed execution of a coding agent on behalf of a human, with its own identity
@@ -114,12 +134,53 @@ type AgentRun struct {
 	PolicyID         *uuid.UUID       `json:"policy_id,omitempty"`
 	ConfinementClass ConfinementClass `json:"confinement_class"`
 	State            RunState         `json:"state"`
-	SPIFFEID         string           `json:"spiffe_id"`     // spiffe://<trust-domain>/agent-run/<id>
+	SPIFFEID         string           `json:"spiffe_id"`     // spiffe://<trust-domain>/agent-run/<id>; empty while QUEUED, written when the run starts
 	RunnerTarget     string           `json:"runner_target"` // "docker"
-	SandboxRef       string           `json:"sandbox_ref,omitempty"`
-	Image            string           `json:"image,omitempty"` // resolved sandbox image, kept for provenance; empty for legacy rows
+	// Placement is where the sandbox lives (OD-8): remote (the organisation's own
+	// executor), local (a runner the person registered), or empty for a run from
+	// before 0.9 and for one whose placement nothing has recorded yet. ALWAYS on
+	// the wire — a run has a placement even when the value is the empty one.
+	Placement Placement `json:"placement"`
+	// PlacementFilled records that a placement was RESOLVED for this run rather
+	// than asked for by name, so an incident review can tell "the person chose
+	// local" from "local was the only eligible placement".
+	PlacementFilled bool `json:"placement_filled,omitempty"`
+	// RunnerID names the runner a local run landed on. NULL for a remote run and
+	// for every run from before 0.9; omitted on the wire when NULL, never "".
+	RunnerID *uuid.UUID `json:"runner_id,omitempty"`
+	// RunnerName, RunnerOnline and RunnerLastSeenAt are read-side facts about that runner, projected on
+	// the run routes and never stored. A remote-hosted runner's name is projected on the run read alone;
+	// all three are absent when the runner could not be read. The name is the runner's current one, which equals the name at create: a runner is never
+	// renamed and a claimed row is never deleted, so a revoked runner's run keeps it. RunnerOnline is
+	// this process's live view, so a pointer: absent is unknown. false is a fact on a single replica (also
+	// when the hub cannot be asked); under WARDYN_HA it is never sent, because a replica that does not hold
+	// the runner's session cannot tell offline from connected elsewhere.
+	RunnerName       string     `json:"runner_name,omitempty"`
+	RunnerOnline     *bool      `json:"runner_online,omitempty"`
+	RunnerLastSeenAt *time.Time `json:"runner_last_seen_at,omitempty"`
+	// EvidenceSource says who can attest this run's evidence (OD-8): substrate or
+	// runner_asserted, empty for a legacy or unresolved record. Not
+	// `confinement_source`, which says who CHOSE the class.
+	EvidenceSource RunEvidenceSource `json:"evidence_source,omitempty"`
+	// RunnerPoolID is the runner pool the run was admitted into, and the next three fields say how
+	// (all written once at create). A pool is a label for a choice and never admission: the run
+	// goes to the exact runner recorded in RunnerID (a self-hosted runner) or RunnerPoolExecutor (a
+	// remote-hosted runner's id), whatever the pool or anyone's defaults say later. Nil for a run from
+	// before pools and for a server-originated run that names none; RunnerPoolSelection is then empty.
+	RunnerPoolID        *uuid.UUID          `json:"runner_pool_id,omitempty"`
+	RunnerPoolRevision  int64               `json:"runner_pool_revision,omitempty"`
+	RunnerPoolSelection RunnerPoolSelection `json:"runner_pool_selection,omitempty"`
+	RunnerPoolExecutor  string              `json:"remote_runner_id,omitempty"`
+	// Reserved is what the run holds on its runner while it holds a sandbox there (0174): the CPU and
+	// memory it was given and its main drive, written once at insert and summed as the runner's In use.
+	Reserved   RunnerAmounts `json:"-"`
+	SandboxRef string        `json:"sandbox_ref,omitempty"`
+	Image      string        `json:"image,omitempty"` // resolved sandbox image, kept for provenance; empty for legacy rows
 	// Interactive marks a human-driven run: sandbox comes up RUNNING, no task exec'd, no completion watcher.
 	Interactive bool `json:"interactive"`
+	// Experience is the canonical run mode chosen at launch (0.9 New Run), frozen at create and never re-derived. Empty for a run from an older client or before 0.9;
+	// BackgroundOnly is the one predicate every interactive door reads. It is not Interactive, which is the legacy execution flag.
+	Experience RunExperience `json:"experience,omitempty"`
 	// WorkspacePath is the run's primary host directory, denormalized so the control plane can warn (never block) a second run on it.
 	WorkspacePath string `json:"workspace_path,omitempty"`
 	// WorkspaceID marks a governed scan run: the driver runs wardyn-scan instead of the agent, trusted (not sandbox input) to persist the profile.
@@ -131,13 +192,20 @@ type AgentRun struct {
 	AutoStopAfterSec int    `json:"auto_stop_after_sec,omitempty"`
 	AgentExecID      string `json:"agent_exec_id,omitempty"` // docker exec id, so the crash reconciler can check agent liveness across a wardynd restart
 	FailureHint      string `json:"failure_hint,omitempty"`  // operator-facing reason a run FAILED before the agent started; display-only
-	// StatusDetail is what the substrate says this run awaits while STARTING; blanked on leaving STARTING except a TERMINAL failure reason (kept for postmortem).
+	// StatusDetail is what the substrate says this run awaits while STARTING, and a lifetime end reason ("lifetime: end_reached", "lifetime: max_lifetime_reached") on a run KILLED at its end or its maximum; blanked on leaving STARTING except a TERMINAL failure reason or a lifetime end reason (kept for postmortem).
 	StatusDetail string `json:"status_detail,omitempty"`
 	StatusReason string `json:"status_reason,omitempty"` // reason token parsed out of StatusDetail, derived at read, never stored
 	// AutonomyLevel freezes the level resolved at create, not the profile/posture that produced it (that's on the audit row).
 	AutonomyLevel AutonomyLevel `json:"autonomy_level,omitempty"`
-	EndsAt        *time.Time    `json:"ends_at"`                   // run's lease end, captured once at create from RunLimits, never re-resolved
-	WaitBudgetSec int           `json:"wait_budget_sec,omitempty"` // how long an approval this run raises stays open; 0 = deployment default alone applies
+	// AdmittedAt is when a queued run was promoted out of the queue; written by promotion only, so nil for a run that never waited.
+	AdmittedAt *time.Time `json:"admitted_at,omitempty"`
+	// Queue is a waiting run's place in its pool's queue, derived at read from the queue row and never stored on the run; absent once the run leaves QUEUED.
+	Queue  *RunQueue  `json:"queue,omitempty"`
+	EndsAt *time.Time `json:"ends_at"` // run's lease end, captured once at create from RunLimits, never re-resolved
+	// LifetimeCapAt is the latest end the pool and the deployment allow, measured from launch (created_at plus the lowest of their maximums); absent when neither bounds the lifetime or for a run from before this column. LifetimeCapSource names which one bound it (pool or deployment) and stays off the wire.
+	LifetimeCapAt     *time.Time  `json:"lifetime_cap_at,omitempty"`
+	LifetimeCapSource LimitSource `json:"-"`
+	WaitBudgetSec     int         `json:"wait_budget_sec,omitempty"` // how long an approval this run raises stays open; 0 = deployment default alone applies
 	// RunLimits are the owner's profile limits as they stood at create; later clamps use these captured bounds, never the profile's current ones.
 	RunLimits           RunLimits  `json:"run_limits"`
 	GovernanceProfileID *uuid.UUID `json:"governance_profile_id,omitempty"`
@@ -153,13 +221,13 @@ type AgentRun struct {
 	// PausedAt/PausedReason mark a run frozen with nobody present; keeps state/memory/files/proxy until activity or resume. Not contained — kill still works.
 	PausedAt     *time.Time  `json:"paused_at,omitempty"`
 	PausedReason PauseReason `json:"paused_reason,omitempty"`
-	ActiveAt     *time.Time  `json:"active_at,omitempty"` // presence clock: last human input/egress decision/proxied bytes; keepalives never move it; nil reads as CreatedAt
+	ActiveAt     *time.Time  `json:"active_at,omitempty"` // presence clock: last human input/egress decision/proxied bytes, or a resume; keepalives never move it; nil reads as CreatedAt
 	// ModelProviderID freezes the provider id at create; the kind is deliberately NOT frozen (can change later) and lives only on the run.create audit snapshot.
 	ModelProviderID string `json:"model_provider_id,omitempty"`
 	UserType        string `json:"user_type,omitempty"` // creator's resolved user type, frozen at create
 	Preset          string `json:"preset,omitempty"`    // launch preset this run was expanded from; empty for an explicit-spec run
 	PresetVersion   int    `json:"preset_version,omitempty"`
-	OperatorOwned   bool   `json:"-"` // mirrors identity.Claims.OperatorOwned so dispatch/revive re-mint read what create decided
+	OperatorOwned   bool   `json:"operator_owned,omitempty"` // mirrors identity.Claims.OperatorOwned so dispatch/revive re-mint read what create decided; the console reads it for the no-personal-owner entry carve-out
 	// CreatedVia is the registered portal this run was launched through on the person's behalf; nil when self-launched. The owner is still the person.
 	CreatedVia *uuid.UUID `json:"created_via,omitempty"`
 	// HasRecording/RecordingBytes/RecordingDurationSec are derived, never stored, projected only with ?include=recording_meta; HasRecording is the only "no recording" signal.
@@ -168,6 +236,16 @@ type AgentRun struct {
 	RecordingDurationSec float64       `json:"recording_duration_sec,omitempty"`
 	DiskMiB              int           `json:"disk_mib,omitempty"`  // effective ephemeral disk cap MiB; 0 = no cap resolved
 	Attention            *RunAttention `json:"attention,omitempty"` // what this live run awaits and who can clear it; derived, only on view-opted-in read paths
+
+	// HumanAuthor is the principal accountable for the run at create, written once: the service identity's sponsor
+	// at launch for a service identity's run, unchanged by a later sponsor change, and CreatedBy for any other run. A
+	// record of accountability, not proof that a person was present. Empty for a run from before it was recorded.
+	// Read by the second-human rules only.
+	HumanAuthor string `json:"-"`
+	// LaunchIntent is the setup kept for Run again (a kind Run document), written in the run row's own
+	// transaction when set. Never on the wire and never read back onto a listed run: the creator reads it by
+	// run id. On a created run it is set only when the store kept it.
+	LaunchIntent json.RawMessage `json:"-"`
 }
 
 // GrantKind enumerates broker-mintable credential kinds.
@@ -187,6 +265,11 @@ const (
 	// Unlike every other kind: NOT BROKERED (no mint/approval/TTL/JTI); RESIDENT FOR THE WHOLE RUN (readable via /proc/self/environ as the agent uid);
 	// NO REVOCATION (killing the run doesn't un-disclose it). ADMIN-ONLY by default — see threatmodel/THREAT-MODEL.md §5.1a.
 	GrantEnvSecret GrantKind = "env_secret"
+	// GrantFileSecret places a stored secret in a FILE inside the sandbox at dispatch — the third DOCUMENTED EXCEPTION to the no-resident-secret invariant.
+	// Like GrantEnvSecret: NOT BROKERED (no mint/approval/TTL/JTI), RESIDENT FOR THE WHOLE RUN, NO REVOCATION (killing the run doesn't un-disclose it).
+	// The path is fixed, runner.ComponentSecretDir plus the scope's file name, never authored. ADMIN-ONLY by default for a policy author, under the same
+	// switch as GrantEnvSecret; a person's OWN secret reaches a run this way through a custom component, under the component permission.
+	GrantFileSecret GrantKind = "file_secret"
 )
 
 // GrantSpec is a credential scope description. The broker enforces the invariant: a minted
@@ -194,7 +277,8 @@ const (
 type GrantSpec struct {
 	Kind GrantKind `json:"kind"`
 	// Scope is kind-specific: {repos,permissions} for github_token; {host,header} for api_key;
-	// {host,secret_name,username?} for git_pat; {host,key_secret_ref,username?,known_hosts_secret_ref?} for ssh_key.
+	// {host,secret_name,username?} for git_pat; {host,key_secret_ref,username?,known_hosts_secret_ref?} for ssh_key;
+	// {name,secret_name} for env_secret; {file,secret_name} for file_secret.
 	Scope json.RawMessage `json:"scope"`
 	// TTL of the minted credential. Max (and default) 1h.
 	TTLSeconds int `json:"ttl_seconds,omitempty"`
@@ -211,6 +295,8 @@ type CredentialGrant struct {
 	RunID     uuid.UUID `json:"run_id"`
 	CreatedAt time.Time `json:"created_at"`
 	Spec      GrantSpec `json:"spec"`
+	// Delivery is how the grant reached a local run; empty for a remote run and for one from before 0.9.
+	Delivery GrantDelivery `json:"delivery,omitempty"`
 }
 
 // ResolvedInjection is the wire contract of GET /api/v1/internal/injection/{grantID}: header name
@@ -348,6 +434,11 @@ type ApprovalRequest struct {
 	ExpiresAt *time.Time `json:"expires_at,omitempty"`
 	Held      bool       `json:"held,omitempty"` // Held/HeldUntil project approval.Hold(this, now) at response time, never stored; both zero on a DECIDED row
 	HeldUntil *time.Time `json:"held_until,omitempty"`
+	// EscalationTier is the highest notification tier whose due time has passed, and SLADueAt is the
+	// next tier's due time. Both are projected from approval_notifications at response time on PENDING
+	// rows only, never stored; tier 0 (the first notice) and "no later tier" leave them zero.
+	EscalationTier int16      `json:"escalation_tier,omitempty"`
+	SLADueAt       *time.Time `json:"sla_due_at,omitempty"`
 }
 
 // ApprovalDecision is what a human (or the sweeper, for a stale-PENDING expiry) is deciding,
@@ -412,6 +503,10 @@ type SSHPublicKey struct {
 	RoleCheckedAt *time.Time `json:"role_checked_at,omitempty"`
 	Capped        bool       `json:"capped"`
 	CreatedAt     time.Time  `json:"created_at"`
+	// RevSeq is the revocation sequence read when the key was registered; migration 0176 gave the keys
+	// that existed their order once. 0 only for a key written by a replica that predates it, which a
+	// revocation cutoff orders on CreatedAt. Never on the wire.
+	RevSeq int64 `json:"-"`
 }
 
 // APIToken is a per-user, long-lived bearer credential a human mints for scripts/CI, replacing
@@ -436,8 +531,21 @@ type APIToken struct {
 	CreatedAt       time.Time  `json:"created_at"`
 	LastUsedAt      *time.Time `json:"last_used_at,omitempty"`
 	RevokedAt       *time.Time `json:"revoked_at,omitempty"`
-	MintedBy        string     `json:"minted_by,omitempty"` // admin who minted this for its owner; empty when the owner minted it
-	Token           string     `json:"token,omitempty"`     // plaintext, create response ONLY
+	ExpiresAt       *time.Time `json:"expires_at,omitempty"` // nil = never expires; an expired token authenticates nothing
+	MintedBy        string     `json:"minted_by,omitempty"`  // admin who minted this for its owner; empty when the owner minted it
+	// Disposition is where an admin-minted token stands, derived at read (#1508); empty on any other token.
+	Disposition TokenDisposition `json:"disposition,omitempty"`
+	// ServiceIdentity names the service identity an admin linked this token to, set with Disposition on
+	// a token that has a move row (#1508); empty on any other token.
+	ServiceIdentity string `json:"service_identity,omitempty"`
+	Token           string `json:"token,omitempty"` // plaintext, create response ONLY
+	// IdentityStampedAt is when Role and Groups were last stamped: at mint, then at each sign-in of
+	// the owner. Nil reads as stale under WARDYN_ROLE_STAMP_TTL. Never on the wire.
+	IdentityStampedAt *time.Time `json:"-"`
+	// RevSeq is the revocation sequence read when the token was minted; migration 0176 gave the tokens
+	// that existed their order once. 0 only for a token written by a replica that predates it, which a
+	// revocation cutoff orders on CreatedAt. Never on the wire.
+	RevSeq int64 `json:"-"`
 }
 
 // Person is an identity an admin created or confirmed before its first sign-in, keyed by the
@@ -452,6 +560,33 @@ type Person struct {
 	CreatedBy       string     `json:"created_by"`
 	CreatedAt       time.Time  `json:"created_at"`
 	FirstSignedInAt *time.Time `json:"first_signed_in_at,omitempty"`
+}
+
+// PersonSummary is one row of GET /people: a person this deployment knows, with the counts behind
+// the leaver actions. ActiveSessions is 0 or 1: sessions are stateless cookies, so it says whether
+// the last sign-in could still hold a live one, not how many cookies are out. Role is the role the
+// person's email and last verified groups derive: "denied" when sign-in would refuse them, "unknown"
+// when that sign-in's groups were truncated, and empty when sign-in is not SSO.
+type PersonSummary struct {
+	Principal       string     `json:"principal"`
+	Email           string     `json:"email,omitempty"`
+	IssuerKind      string     `json:"issuer_kind"`
+	PreCreated      bool       `json:"pre_created"`
+	FirstSignedInAt *time.Time `json:"first_signed_in_at,omitempty"`
+	LastSignedInAt  *time.Time `json:"last_signed_in_at,omitempty"`
+	DeactivatedAt   *time.Time `json:"deactivated_at,omitempty"`
+	Role            string     `json:"role,omitempty"`
+	ActiveSessions  int        `json:"active_sessions"`
+	APITokens       int        `json:"api_tokens"`
+	SSHKeys         int        `json:"ssh_keys"`
+	Credentials     int        `json:"credentials"`
+	ActiveRuns      int        `json:"active_runs"`
+}
+
+// PersonList is one page of GET /people. NextCursor is empty on the last page.
+type PersonList struct {
+	People     []PersonSummary `json:"people"`
+	NextCursor string          `json:"next_cursor,omitempty"`
 }
 
 // RecordingMaxParts bounds how many parts one run's session recording may be

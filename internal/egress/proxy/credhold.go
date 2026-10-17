@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
@@ -372,7 +373,7 @@ type httpApprovalReader struct {
 
 func (a httpApprovalReader) readApproval(ctx context.Context, id uuid.UUID) (types.ApprovalState, int, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
-		a.base+"/api/v1/internal/approvals/"+id.String(), nil)
+		controlPlaneEndpoint(a.base, "/api/v1/internal/approvals/"+id.String()), nil)
 	if err != nil {
 		return "", 0, err
 	}
@@ -443,6 +444,7 @@ func (p *Proxy) httpErrorAWSAware(w http.ResponseWriter, host, plainMsg string, 
 		if withStage {
 			msg = p.causeSentence(err)
 		}
+		slog.Warn("proxy error returned to the sandbox", "msg", plainMsg, "status", status, "err", msg)
 		writeAWSSDKError(w, status, errType, msg)
 		return
 	}

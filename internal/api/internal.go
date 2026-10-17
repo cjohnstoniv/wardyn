@@ -79,8 +79,8 @@ func (s *Server) handlePostDecision(w http.ResponseWriter, r *http.Request) {
 	if dl.Repeat > 0 {
 		fields["repeat"] = dl.Repeat
 	}
-	// Cause/Via ride a dial-shaped refusal only (egress.DecisionLog's own doc
-	// comments) — absent on every ordinary decision, same as repeat above.
+	// Cause/Via ride a dial- or tunnel-shaped failure only (egress.DecisionLog's
+	// own doc comments) — absent on every ordinary decision, same as repeat above.
 	if dl.Cause != "" {
 		fields["cause"] = dl.Cause
 	}
@@ -99,15 +99,13 @@ func (s *Server) handlePostDecision(w http.ResponseWriter, r *http.Request) {
 	ev.SourceIP = r.RemoteAddr
 	s.recordAudit(r.Context(), ev)
 	// wardyn_egress_denies_total is exposed as "denied by policy", and it
-	// is the only egress counter Wardyn has. A builtin:dial-failed (a flaky
-	// upstream, on a request policy ALLOWED) and the synthetic
-	// egress:dropped-decisions-<n> audit-fidelity summary both arrive here as
-	// egress.Deny; counting them would page operators for policy denials that
-	// never happened and make the true deny rate unreadable off the series. Both
-	// still record their egress.deny AUDIT row unchanged — only the counter is
-	// scoped. See isPolicyDeny (metrics.go): llm_routes.go's gatewayTarget GUARD
-	// refusal has its own rule_source, so it counts here like any other guard
-	// denial.
+	// is the only egress counter Wardyn has. Some rows arrive here as
+	// egress.Deny without being a denial by policy; isPolicyDeny (metrics.go)
+	// lists every one and says why. Counting them would page operators for
+	// policy denials that never happened and make the true deny rate unreadable
+	// off the series. Each still records its egress.deny AUDIT row unchanged —
+	// only the counter is scoped. llm_routes.go's gatewayTarget GUARD refusal
+	// has its own rule_source, so it counts here like any other guard denial.
 	if dl.Decision == egress.Deny && isPolicyDeny(dl.RuleSource) {
 		s.metrics.egressDenied()
 	}
@@ -123,61 +121,14 @@ func (s *Server) handlePostDecision(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusAccepted, nil)
 }
 
-// maxAuditFindings bounds how many per-finding records one llm.scan.* audit
-// event embeds. finding_count stays the honest total, so truncation costs
-// detail, never the signal — and one pathological scan cannot turn an
-// append-only row (fanned to every SIEM sink) into a megabyte.
-const maxAuditFindings = 100
-
-// recordLLMScanAudit records a CONTENT-FREE llm.scan.* audit event for an
-// outbound content-inspection pass. The Data payload carries detector names,
-// field paths, offsets, counts and MASKED samples only — never the matched
-// bytes and never a reversible hash (the audit log is append-only and fans to
-// every SIEM sink, so it must not become a durable copy of a secret).
+// recordLLMScanAudit shares the content-free payload and finding cap with
+// runner replay; no matched bytes or reversible hashes enter either path.
 func (s *Server) recordLLMScanAudit(ctx context.Context, runID uuid.UUID, actor, sourceIP string, sc *egress.ScanSummary, host string) {
 	if sc == nil {
 		return
 	}
-	findings := sc.Findings
-	if len(findings) > maxAuditFindings {
-		findings = findings[:maxAuditFindings]
-	}
-	outcome := "success"
-	switch sc.Action {
-	case "block":
-		outcome = "denied"
-	case "fail":
-		outcome = "failure"
-	}
-	// finding_count is the number of findings the scan PRODUCED before the cap
-	// truncated the list, which the proxy counts as it produces them and
-	// sends as findings_total: the proxy caps how many findings it REPORTS, so
-	// len(sc.Findings) is the reported count, and an audit row that states it as
-	// the finding count makes a truncated scan indistinguishable from one that
-	// found exactly the cap. findings_capped / findings_past_cap carry the
-	// truncation itself, and findings_past_cap is an UPPER bound on what was
-	// pushed out (block mode's severity keep-backs are counted past the cap and
-	// still reported), which is why finding_count is not derived from it.
-	findingCount := len(sc.Findings)
-	if sc.FindingsTotal > findingCount {
-		findingCount = sc.FindingsTotal
-	}
-	data, _ := json.Marshal(map[string]any{
-		"host":              host,
-		"channel":           sc.Channel,
-		"mode":              sc.Mode,
-		"coverage":          sc.Coverage,
-		"scanned":           sc.Scanned,
-		"skipped":           sc.Skipped,
-		"skip_reason":       sc.SkipReason,
-		"finding_count":     findingCount,
-		"findings_reported": len(sc.Findings),
-		"findings_capped":   sc.FindingsCapped,
-		"findings_past_cap": sc.FindingsPastCap,
-		"findings":          findings,
-	})
-	ev := s.auditEvent(&runID, types.ActorAgent, actor,
-		"llm.scan."+sc.Action, host, outcome, data)
+	action, outcome, data := egress.ScanAudit(sc, host)
+	ev := s.auditEvent(&runID, types.ActorAgent, actor, action, host, outcome, data)
 	ev.SourceIP = sourceIP
 	s.recordAudit(ctx, ev)
 }
@@ -533,6 +484,7 @@ func (s *Server) handleInternalGetApproval(w http.ResponseWriter, r *http.Reques
 	// The same repair for an Azure DevOps consent or sign-in request: the
 	// person's new sign-in is the resolution (injection_ado_signin.go).
 	ap = s.reconcileADOReauthOnRead(r.Context(), ap)
+	ap = s.reconcileAzureReauthOnRead(r.Context(), ap)
 	writeJSON(w, http.StatusOK, ap)
 }
 

@@ -254,7 +254,7 @@ func TestOwnerOnlyGrant_LegacyADOGrantWithOwnToken(t *testing.T) {
 	if _, err := e.h.srv.cfg.Store.PutSiteConfig(ctx, sc); err != nil {
 		t.Fatalf("PutSiteConfig: %v", err)
 	}
-	if w := e.createRun(t, "bob", legacy); w.Code != http.StatusUnprocessableEntity || !strings.Contains(w.Body.String(), "has not added their own Azure DevOps token") {
+	if w := e.createRun(t, "bob", legacy); w.Code != http.StatusUnprocessableEntity || !strings.Contains(w.Body.String(), "has no Azure DevOps token available in Wardyn") {
 		t.Fatalf("no own token + legacy grant: create = %d %s, want 422 naming the missing token", w.Code, w.Body.String())
 	}
 	raw, _ := json.Marshal(adoOwnPATBlob{Token: "alice-own", Org: "acme", ExpiresOn: time.Now().AddDate(0, 0, 5)})
@@ -401,7 +401,15 @@ func TestOwnerOnlyInjectionSink_NeverServesTheOperatorRow(t *testing.T) {
 			Injection: &egress.InjectionRule{Host: "api.vendor.example", Header: "x-api-key", SecretName: "vendor-key", Format: "%s"},
 			OwnerOnly: ownerOnly,
 		}
-		return do(t, h.srv, http.MethodGet, "/api/v1/internal/injection/"+uuid.NewString(), recordedRunToken(t, h, runs[who], subs[who]), "")
+		// One of the run's own grant rows: the sink refuses a grant the run's
+		// list does not hold.
+		spec := apiKeyGrantSpec("api.vendor.example", "vendor-key")
+		spec.OwnerOnly = ownerOnly
+		g, err := h.srv.cfg.Store.CreateGrant(context.Background(), types.CredentialGrant{ID: uuid.New(), RunID: runs[who], Spec: spec})
+		if err != nil {
+			t.Fatalf("seed the run's grant: %v", err)
+		}
+		return do(t, h.srv, http.MethodGet, "/api/v1/internal/injection/"+g.ID.String(), recordedRunToken(t, h, runs[who], subs[who]), "")
 	}
 	served := func(w *httptest.ResponseRecorder) string {
 		t.Helper()

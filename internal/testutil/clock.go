@@ -1,7 +1,7 @@
 // Copyright 2025 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// Package testutil holds small, dependency-free helpers shared by Go tests
+// Package testutil holds small helpers shared by Go tests
 // across packages. It is imported only from *_test.go files, never from
 // production code.
 package testutil

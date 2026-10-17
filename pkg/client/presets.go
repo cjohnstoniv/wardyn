@@ -41,7 +41,7 @@ type PresetRequest struct {
 }
 
 // PresetsDocument is GET /api/v1/presets's body and ApplyPresets's
-// parameter: `wardyn preset get` prints it and `wardyn preset apply` reads it
+// parameter: `wardyn preset get` prints it and `wardyn preset set` reads it
 // back.
 type PresetsDocument struct {
 	Presets []Preset `json:"presets"`
@@ -80,7 +80,7 @@ func (c *Client) DeletePreset(ctx context.Context, name string) error {
 // ApplyPresets upserts every preset doc names, by name, over PUT
 // /api/v1/presets/{name}, and returns a fresh ListPresets. Nothing doc omits
 // is touched and nothing is deleted, and an unchanged preset keeps its
-// version, so `wardyn preset get > f && wardyn preset apply f` is a no-op.
+// version, so `wardyn preset get > f && wardyn preset set f` is a no-op.
 func (c *Client) ApplyPresets(ctx context.Context, doc PresetsDocument) (PresetsDocument, error) {
 	for _, p := range doc.Presets {
 		req := PresetRequest{Description: p.Description, UserTypes: p.UserTypes, Request: p.Request}

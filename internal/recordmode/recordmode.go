@@ -185,9 +185,27 @@ func Capture(events []types.AuditEvent, confined bool, kernel KernelWindow) Obse
 // captureEgress folds one egress.* decision into the per-host aggregate and, for an OPEN recording
 // only, records an anomaly for a deny — a deny during a CONFINED replay is the containment proof
 // working as intended, not an anomaly.
+//
+// A network-fault row (builtin:dial-failed, builtin:tunnel-failed) is skipped entirely: the host's
+// policy ALLOWED it and the network lost the connection, so counting it as a deny would both fail
+// a CleanReplay that caught nothing and raise an open-recording anomaly for a blip — and the
+// synthesized allowlist would then name a host the run never actually reached. Same predicate the
+// deny counter and observed-egress promotion read (egress.IsNetworkFault), so one source cannot be
+// a denial to one consumer and not another.
 func captureEgress(ev types.AuditEvent, domains map[string]*domainAgg, anomalies map[string]bool, confined bool) {
 	var d egressData
 	_ = json.Unmarshal(ev.Data, &d) // best-effort: a malformed body still has Target
+
+	// Before the host is even resolved: a network-fault row says the policy
+	// allowed this destination and the network lost it, so it must leave no
+	// trace. Counting it would fail a CleanReplay that caught nothing and raise
+	// an anomaly for a blip, and a CONNECT whose dial never completed leaves no
+	// allow row to carry the host — an aggregate built from the fault alone
+	// would then be synthesized as "observed but never allowed", naming a host
+	// the run never reached.
+	if ev.Action == actionEgressDeny && egress.IsNetworkFault(strings.TrimSpace(d.RuleSource)) {
+		return
+	}
 
 	host := strings.ToLower(strings.TrimSpace(d.Host))
 	if host == "" {
@@ -395,6 +413,14 @@ func Synthesize(obs Observations, runGrants []types.CredentialGrant, run types.A
 			warnings = append(warnings, fmt.Sprintf("minted grant %s injects a subscription OAuth sentinel; omitted from eligible_grants (a stored profile must not carry a live subscription credential)", id))
 			continue
 		}
+		// A `shared` grant is an organisation component's: the component gate
+		// sets the mark and the policy validator refuses it when authored, so a
+		// profile carrying one could be neither saved nor launched. The
+		// component is what a later run attaches to get the grant again.
+		if grantIsShared(gs) {
+			warnings = append(warnings, fmt.Sprintf("minted grant %s was added by an organisation's component; omitted from eligible_grants (attach the component at launch to use it again)", id))
+			continue
+		}
 		spec.EligibleGrants = append(spec.EligibleGrants, gs)
 		if gs.Kind == types.GrantGitHubToken {
 			warnings = append(warnings, fmt.Sprintf("eligible grant %s (github_token) carries scope permissions %s; confirm they intersect the least-privilege need", id, githubPermSummary(gs.Scope)))
@@ -497,6 +523,15 @@ func sortedUUIDs(set map[uuid.UUID]bool) []uuid.UUID {
 	return slices.SortedFunc(maps.Keys(set), func(a, b uuid.UUID) int {
 		return strings.Compare(a.String(), b.String())
 	})
+}
+
+// grantIsShared reports whether a grant's scope carries the `shared` mark the
+// component gate sets for an organisation's provided secret.
+func grantIsShared(gs types.GrantSpec) bool {
+	var scope struct {
+		Shared bool `json:"shared"`
+	}
+	return json.Unmarshal(gs.Scope, &scope) == nil && scope.Shared
 }
 
 // grantNamesOAuthSentinel reports whether an api_key grant's scope names one of the SENTINEL secret

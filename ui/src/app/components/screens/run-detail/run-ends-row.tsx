@@ -49,6 +49,20 @@ export function weekdayClock(iso: string): string {
   return `${weekday} ${clock}`;
 }
 
+// How the Ended banner names kept_until. The default grace is exactly 7 days, so
+// weekday + clock alone repeats the moment the run ended and reads as already
+// past. By whole days away: under 6 is weekday + clock, 6 to 13 adds the
+// packet's " next week", and 14 or more is a full local date with the clock.
+export function keptUntilText(iso: string, now: number = Date.now()): string {
+  const days = Math.round((Date.parse(iso) - now) / DAY_MS);
+  if (days < 6) return weekdayClock(iso);
+  if (days < 14) return `${weekdayClock(iso)} next week`;
+  const d = new Date(iso);
+  const date = d.toLocaleDateString(undefined, { day: "numeric", month: "short" });
+  const clock = d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+  return `${date} ${clock}`;
+}
+
 export function RunEndsRow({ run, onChanged }: { run: RunDetail; onChanged: () => void }) {
   const [changeOpen, setChangeOpen] = React.useState(false);
   const [busy, setBusy] = React.useState(false);
@@ -73,7 +87,9 @@ export function RunEndsRow({ run, onChanged }: { run: RunDetail; onChanged: () =
   // (kept, no network) and every terminal state get the lifetime banner's own
   // Ended/Lost treatment instead (run-lifetime-banner.tsx) — showing both
   // would tell two different stories about the same run.
-  if (isTerminalRunState(run.state) || run.lost_at) return null;
+  // A QUEUED run has no end yet because it has not started (its start writes one), so "No end" would be
+  // false and "Set an end" is refused; the row waits for the start.
+  if (isTerminalRunState(run.state) || run.lost_at || run.state === "QUEUED") return null;
 
   const canAct = operator || run.created_by === principal;
   const limits = run.run_limits;
@@ -93,7 +109,9 @@ export function RunEndsRow({ run, onChanged }: { run: RunDetail; onChanged: () =
     setBusy(true);
     try {
       const res = await runsApi.setRunEndAndWait(run.id, { endsAt });
-      if (res.capped.includes("ends_at") && res.latest_end) {
+      if (res.capped.includes("ends_at") && res.ends_cap_loosened) {
+        toast.warning(RL.ENDS_CAPPED_LOOSENED);
+      } else if (res.capped.includes("ends_at") && res.latest_end) {
         toast.warning(RL.endsCapped(Math.ceil((Date.parse(res.latest_end) - Date.now()) / DAY_MS)));
       }
       onChanged();

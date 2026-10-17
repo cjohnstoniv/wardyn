@@ -91,6 +91,36 @@ func TestProviderAccess_KeyKinds_OwnNamespaceOnly(t *testing.T) {
 	}
 }
 
+// TestProviderAccess_AzureFoundry grades an azure_foundry row from the
+// person's own sealed -entra part: never by the -key part, never by another
+// person's, and a part whose renewal recorded an end reads expired_signin.
+func TestProviderAccess_AzureFoundry(t *testing.T) {
+	h, sec := newSecretsHarness(t)
+	p := paKeyProvider("foundry", types.ModelProviderAzureFoundry)
+	ctx := context.Background()
+
+	_ = sec.For(paOwner).Put(ctx, providerSecretName(p.UID, providerKeyPart), []byte("a-key-part-must-not-grade-it"))
+	_ = sec.For("bob@example.com").Put(ctx, providerSecretName(p.UID, providerEntraPart), []byte(`{"refresh_token":"bobs"}`))
+	got := h.srv.providerAccessFor(ctx, p, paOwner)
+	if got.State != modelAccessNotConfigured || got.Action != providerAccessSignInAzure {
+		t.Fatalf("no own -entra part: got %+v, want not_configured with the sign-in action", got)
+	}
+
+	_ = sec.For(paOwner).Put(ctx, providerSecretName(p.UID, providerEntraPart), []byte(`{"refresh_token":"r","source":"sign_in"}`))
+	if got = h.srv.providerAccessFor(ctx, p, paOwner); got.State != modelAccessLive || got.Action != "" {
+		t.Fatalf("own -entra part: got %+v, want live", got)
+	}
+
+	ended, _ := json.Marshal(adoEntraBlob{RefreshToken: "r", DeadAt: time.Now().Add(-time.Hour).UTC(), DeadReason: ADOEntraFailureInteractionRequired})
+	_ = sec.For(paOwner).Put(ctx, providerSecretName(p.UID, providerEntraPart), ended)
+	if got = h.srv.providerAccessFor(ctx, p, paOwner); got.State != modelAccessExpiredSignin || got.Action != providerAccessAzureEndedAction {
+		t.Fatalf("an ended sign-in: got %+v, want expired_signin", got)
+	}
+	if n := providerCredentialNoun(types.ModelProviderAzureFoundry); n != "Azure sign-in" {
+		t.Errorf("noun = %q", n)
+	}
+}
+
 // TestProviderAccess_AnthropicSubscription walks not_configured -> live ->
 // expiring (harnessTokenAging, a conservative age heuristic) for a
 // per-person Claude sign-in.
@@ -283,7 +313,7 @@ func TestProviderAccessCheck_RowPerState(t *testing.T) {
 		{modelAccessLive, "", "ok", "Your token for this provider is connected; runs on it use your own credential.", ""},
 		{modelAccessExpiring, "Sign in again before x", "warn", "Your token for this provider may stop working soon; runs on it fail once it does.", "Sign in again before x"},
 		{modelAccessExpiredSignin, "Sign in to AWS", "warn", "Your token for this provider can no longer be used, so runs on it are refused until you sign in again.", "Sign in to AWS"},
-		{modelAccessNotConfigured, providerAccessAddTokenAction, "warn", "You have not connected your token for this provider yet, so runs on it are refused until you do.", providerAccessAddTokenAction},
+		{modelAccessNotConfigured, providerAccessAddTokenAction, "warn", "No token is available for this provider, so runs on it are refused until you connect one.", providerAccessAddTokenAction},
 		{modelAccessNotApplicable, "", "info", providerAccessMechanismDetail, bedrockMechanismFix},
 	} {
 		got := providerAccessCheck(p, SetupProviderAccess{Provider: p.ID, State: tc.state, Action: tc.action}, true)
@@ -373,7 +403,7 @@ func TestSetupStatusProviderAccess(t *testing.T) {
 	if got := status(t, "sub-alice").ProviderAccess; len(got) != 1 || got[0] != (SetupProviderAccess{Provider: "anthropic", State: modelAccessLive}) {
 		t.Errorf("alice, own key stored: provider_access = %+v, want [anthropic live]", got)
 	}
-	want := SetupProviderAccess{Provider: "anthropic", State: modelAccessNotConfigured, Action: providerAccessAddKeyAction}
+	want := SetupProviderAccess{Provider: "anthropic", State: modelAccessNotConfigured, Action: providerAccessAddKeyAction, Cause: "never_connected"}
 	if got := status(t, "sub-bob").ProviderAccess; len(got) != 1 || got[0] != want {
 		t.Errorf("bob, only alice's key stored: provider_access = %+v, want [%+v]", got, want)
 	}
@@ -509,5 +539,18 @@ func TestSetupProviderAccess_SourceRunIDSurvivesAuditFailure(t *testing.T) {
 	}
 	if row == nil || row.State != modelAccessLive || row.SourceRunID != runID.String() {
 		t.Fatalf("provider_access for %s = %+v; want live, naming the sign-in run %s", p.ID, row, runID)
+	}
+}
+
+// #1489: a credential that is not there looks the same whether it was never
+// added, deleted when an admin changed the provider's address, or unreadable
+// for a moment, so the console's two cause-neutral sentences say only that none
+// is available. The launch refusal's fragments read the same way.
+func TestModelCredentialUnavailableWording(t *testing.T) {
+	if got := fmt.Sprintf(providerAccessMissingDetail, "key"); got != "No key is available for this provider, so runs on it are refused until you connect one." {
+		t.Errorf("setup check sentence = %q", got)
+	}
+	if mpRunNoKey != "no key is available for it" || mpRunNoToken != "no token is available for it" {
+		t.Errorf("launch refusal fragments = %q / %q", mpRunNoKey, mpRunNoToken)
 	}
 }

@@ -167,6 +167,7 @@ describe("AuditScreen", { timeout: 15_000 }, () => {
       state: "RUNNING",
       spiffe_id: "spiffe://x",
       runner_target: "docker",
+      placement: "",
     };
     getRunMock.mockRejectedValueOnce(new Error("500")).mockResolvedValueOnce(runRecord);
 
@@ -286,6 +287,61 @@ describe("AuditScreen", { timeout: 15_000 }, () => {
     expect(screen.queryByText("source.scan")).not.toBeInTheDocument();
   });
 
+  // credential.revoke ends a run's own credentials and touches no stored
+  // sign-in; rows written before `scope` existed are the ones that misled, so
+  // the sentence applies to the action, with or without the field.
+  it("reads credential.revoke as the end of the run's own credentials, with or without scope", async () => {
+    listAuditMock.mockResolvedValue([
+      ev({ id: "r1", action: "credential.revoke", target: "spiffe://wardyn/run/1", data: { jti: "a", scope: "run_credentials" } }),
+      ev({ id: "r2", action: "credential.revoke", target: "spiffe://wardyn/run/2", data: { jti: "b" } }),
+    ]);
+    renderScreen();
+
+    const sentence = "Recorded the end of this run's own credentials. The person's sign-in is not affected.";
+    expect(await screen.findAllByText(sentence)).toHaveLength(2);
+    expect(screen.queryByText(/revoked a credential/i)).not.toBeInTheDocument();
+  });
+
+  it("reads credential.expired.delete by its reason, and an unknown reason as the raw line", async () => {
+    listAuditMock.mockResolvedValue([
+      ev({ id: "x1", action: "credential.expired.delete", target: "s1", data: { reason: "invalid_grant" } }),
+      ev({ id: "x2", action: "credential.expired.delete", target: "s2", data: { reason: "invalid_grant", after_lost_reply: true } }),
+      ev({ id: "x3", action: "credential.expired.delete", target: "s3", data: { reason: "expired" } }),
+      ev({ id: "x4", action: "credential.expired.delete", target: "s4", data: { reason: "something_else" } }),
+    ]);
+    renderScreen();
+
+    expect(await screen.findByText("Removed a stored sign-in the provider refused")).toBeInTheDocument();
+    expect(
+      screen.getByText("Removed a stored sign-in: the provider may have accepted a renewal whose reply was lost"),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Removed a stored sign-in that had expired")).toBeInTheDocument();
+    expect(screen.getByText("credential.expired.delete — s4")).toBeInTheDocument();
+  });
+
+  // A failure row is a deletion that did not happen: the store refused it, or
+  // the sweep's own scan failed (that row names no sign-in). It never says
+  // "Removed".
+  it("reads a failed credential.expired.delete as not removed, by its reason", async () => {
+    const error = "store: 403 permission denied";
+    listAuditMock.mockResolvedValue([
+      ev({ id: "f1", action: "credential.expired.delete", outcome: "failure", target: "s1", data: { reason: "expired", error } }),
+      ev({ id: "f2", action: "credential.expired.delete", outcome: "failure", target: "s2", data: { reason: "invalid_grant", error } }),
+      ev({ id: "f3", action: "credential.expired.delete", outcome: "failure", target: "s3", data: { reason: "invalid_grant", after_lost_reply: true, error } }),
+      ev({ id: "f4", action: "credential.expired.delete", outcome: "failure", target: "", data: { reason: "expired", error: "scan: connection reset" } }),
+      ev({ id: "f5", action: "credential.expired.delete", outcome: "failure", target: "s5", data: { reason: "something_else" } }),
+    ]);
+    renderScreen();
+
+    expect(await screen.findAllByText("Could not remove a stored sign-in that had expired")).toHaveLength(2);
+    expect(screen.getByText("Could not remove a stored sign-in the provider refused")).toBeInTheDocument();
+    expect(
+      screen.getByText("Could not remove a stored sign-in after a renewal whose reply may have been lost"),
+    ).toBeInTheDocument();
+    expect(screen.getByText("credential.expired.delete — s5")).toBeInTheDocument();
+    expect(screen.queryAllByText(/^Removed a stored sign-in/)).toHaveLength(0);
+  });
+
   // #1020: no Go code emits these four, so they carry no verb row and render
   // as the raw action, like any action the table does not know.
   it("has no verb rows for actions the server never emits", async () => {
@@ -332,12 +388,15 @@ describe("AuditScreen", { timeout: 15_000 }, () => {
       ev({ id: "e7", action: "run.requirement.inject", target: "corp-anthropic" }),
       ev({ id: "e8", action: "run.bedrock.configure", target: "run-1" }),
       ev({ id: "e9", action: "run.subscription.inject", target: "run-1" }),
+      ev({ id: "e10", action: "ssh.sync.transfer", target: "run-1" }),
     ]);
     renderScreen();
 
     expect(await screen.findByText(/An ssh authentication attempt against a run's terminal/)).toBeInTheDocument();
     expect(screen.getByText(/Ran a command over the run's ssh channel/)).toBeInTheDocument();
     expect(screen.getByText(/An sftp session against the run's sandbox/)).toBeInTheDocument();
+    expect(screen.getByText(/A wardyn sync session against the run's sandbox/)).toBeInTheDocument();
+    expect(screen.queryByText("ssh.sync.transfer")).not.toBeInTheDocument();
     expect(screen.getByText(/An ssh port forward into the run's sandbox/)).toBeInTheDocument();
     expect(screen.getByText(/Applied a workspace's required egress to the run — ws-1/)).toBeInTheDocument();
     expect(
@@ -351,6 +410,27 @@ describe("AuditScreen", { timeout: 15_000 }, () => {
     expect(screen.queryByText("ssh.authenticate")).not.toBeInTheDocument();
     expect(screen.queryByText("run.requirement.allow")).not.toBeInTheDocument();
     expect(screen.queryByText("run.subscription.inject")).not.toBeInTheDocument();
+  });
+
+  // The two dispatch-time resolve rows every run writes — the effective policy
+  // and the corporate upstream proxy — rendered as raw dotted names, which is
+  // the exact sentence an operator reads when asking "what did this run
+  // actually run under".
+  it("renders prose for the dispatch-time policy and upstream-proxy resolve rows", async () => {
+    listAuditMock.mockResolvedValue([
+      ev({ id: "e1", action: "run.policy.resolve", target: "run-1", data: { allowed_domains: ["example.test"] } }),
+      ev({ id: "e2", action: "run.upstream_proxy.resolve", target: "run-1", data: { in_effect: true } }),
+      ev({ id: "e3", action: "run.upstream_proxy.resolve", target: "run-2", outcome: "failure", data: { in_effect: false, reason: "unresolvable" } }),
+    ]);
+    renderScreen();
+
+    expect(await screen.findByText(/Resolved the policy this run was given/)).toBeInTheDocument();
+    // A failure row reads the same sentence as a success one: the outcome
+    // chip carries the difference, and a proxy that did not resolve left the
+    // run on direct egress rather than refusing it.
+    expect(screen.getAllByText(/Checked the corporate proxy setting for the run's egress/)).toHaveLength(2);
+    expect(screen.queryByText("run.policy.resolve")).not.toBeInTheDocument();
+    expect(screen.queryByText("run.upstream_proxy.resolve")).not.toBeInTheDocument();
   });
 
   // run.subscription.inject is a credential event (the subscription
@@ -617,6 +697,54 @@ describe("AuditScreen", { timeout: 15_000 }, () => {
     expect(screen.getByText("policy:tool-deny")).toBeInTheDocument();
     expect(screen.queryByText("Refused by the built-in guard")).not.toBeInTheDocument();
   });
+
+  // A connection Wardyn allowed and the network then failed rides an egress.deny
+  // row, but it is not a refusal: the sentence and the outcome cell say "failed".
+  // A policy deny beside it keeps "Denied" and the danger tone.
+  it("reads a tunnel-failed row as Failed, and a policy deny still as Denied", async () => {
+    listAuditMock.mockResolvedValue([
+      ev({
+        id: "fault",
+        action: "egress.deny",
+        outcome: "denied",
+        target: "flaky.example.com:443",
+        data: { rule_source: "builtin:tunnel-failed" },
+      }),
+      ev({
+        id: "refused",
+        action: "egress.deny",
+        outcome: "denied",
+        target: "evil.example.com:443",
+        data: { rule_source: "policy:denied" },
+      }),
+    ]);
+    renderScreen();
+
+    expect(await screen.findByText("Failed egress to flaky.example.com:443")).toBeInTheDocument();
+    expect(screen.queryByText("Denied egress to flaky.example.com:443")).not.toBeInTheDocument();
+    expect(screen.getByText("Denied egress to evil.example.com:443")).toBeInTheDocument();
+
+    const failed = screen.getByText("failed");
+    expect(failed).toHaveClass("text-warning");
+    expect(failed).not.toHaveClass("text-danger");
+    expect(screen.getByText("deny")).toHaveClass("text-danger");
+  });
+
+  // #1878: jsdom has no layout, so the guard is the class that gives the
+  // sentence its floor; e2e/audit.spec.ts measures the box.
+  it("keeps a minimum width on the sentence beside a long cause, so the chip and cause shrink first", async () => {
+    listAuditMock.mockResolvedValue([
+      ev({
+        id: "fault",
+        action: "egress.deny",
+        outcome: "denied",
+        target: "flaky.example.com:443",
+        data: { rule_source: "builtin:tunnel-failed", cause: "connection reset ".repeat(40) },
+      }),
+    ]);
+    renderScreen();
+    expect(await screen.findByText("Failed egress to flaky.example.com:443")).toHaveClass("min-w-[10rem]");
+  });
 });
 
 // R4-F132: the live-tail deliberately swallows a failed tick to keep the last
@@ -632,6 +760,28 @@ describe("AuditScreen — the liveness chip stops claiming a feed that stopped a
     healthMock.mockReset().mockResolvedValue({});
   });
   afterEach(() => vi.useRealTimers());
+
+  // Mock packet M4 (approved 2026-10-03), surface D: a field whose key was
+  // destroyed reads Erased, muted, with the explanation as its title.
+  it("renders an erased target and an erased data field as Erased, never the wire value", async () => {
+    listAuditMock.mockResolvedValue([
+      ev({
+        id: "e1",
+        action: "person.create",
+        actor_type: "human",
+        actor: "sec@corp.example",
+        target: "[erased]",
+        data: { email: "[erased]", note: "kept" },
+      }),
+    ]);
+    renderScreen();
+    expect(await screen.findByText("person.create — Erased")).toBeInTheDocument();
+    const field = screen.getByText("email: Erased");
+    expect(field).toHaveAttribute("title", "Erased on request. The event and its place in the log remain.");
+    expect(field).toHaveClass("text-muted-foreground");
+    expect(screen.queryByText(/\[erased\]/)).toBeNull();
+    expect(screen.queryByText(/note:/)).toBeNull();
+  });
 
   it("drops the chip once a poll stops answering, and brings it back when the feed recovers", async () => {
     // Fake timers BEFORE the render: usePoll's setInterval has to be the fake

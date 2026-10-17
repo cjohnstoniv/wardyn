@@ -60,7 +60,7 @@ export interface Me {
   // present only for method:"sso". Absent for local/token auth, which has no
   // session to expire.
   session_expires_at?: string;
-  // M3 — presentational label of this member's WARDYN_MEMBER_WORKSPACE_ROOTS
+  // M3 — presentational label of this member's WARDYN_USER_WORKSPACE_ROOTS
   // /_MAP constraint (e.g. "/home/agent-projects"). null/absent when no root
   // applies (member-role-desktop.md §DECISIONS O1). Never a value to trust —
   // AddWorkspaceDialog shows it as a hint; ValidateUserMountSource enforces.
@@ -90,6 +90,13 @@ export interface Me {
   // ceilings apply. Absent on a pre-0.8 daemon, which reads the same as "the
   // plain view" — and the plain view is exactly what such a daemon is in.
   user_view_no_credential?: boolean;
+  // Whether the person INSIDE the user view is stamped a super admin (admin,
+  // not security_admin) — internal/api/me.go's user_view_super_admin (#1335).
+  // Every tier field above is clamped in the view, so this is the one bit that
+  // says whether /admin/setup would open for them; it gates only the "Set up a
+  // barrier" link. Present only inside the view for an admin or security_admin;
+  // absent (reads false) for everyone else and on an older daemon.
+  user_view_super_admin?: boolean;
   // Whether the preview is worth offering here (0.7.5): true only where the
   // org's model-access agent row gives each person their OWN AWS sign-in. Under
   // a `shared` row the posture hides nothing, so its banner would claim a state
@@ -136,6 +143,23 @@ export interface Me {
   // change and is not wired yet — the card falls back to offering nothing,
   // which is what it already did for all four states.
   user_drive_unavailable?: string;
+  // Who to ask for a change to the policy that bounds this caller
+  // (internal/api/me.go's governance_contact, internal/policyref.Ref): the leaf
+  // profile's published contact, or {source: "deployment"} when the deployment
+  // binds them. null for an operator and whenever the ceiling could not be
+  // resolved; absent on a pre-0.8.6 daemon.
+  governance_contact?: PolicyRef | null;
+}
+
+// internal/policyref.Ref — the member-safe reference a refusal, /me and a run
+// carry: which policy bound the person and how to ask for a change.
+export interface PolicyRef {
+  source: string;
+  name?: string;
+  owner?: string;
+  email?: string;
+  request_url?: string;
+  request_text?: string;
 }
 
 // Result of a real throwaway-sandbox probe (test-proxy / test-redirect) —
@@ -351,7 +375,11 @@ export const health = {
     // unset) or an older daemon — both must read as "no pane", never a
     // false-enabled guess. advertise_addr / host_key_fingerprint are both
     // non-secret (see docs/SSH.md) — the fingerprint is public by design.
-    ssh?: { enabled?: boolean; advertise_addr?: string; host_key_fingerprint?: string };
+    // proxy_command is the operator's advisory ssh ProxyCommand
+    // (WARDYN_SSH_PROXY_COMMAND, for an estate that only lets 443 in); absent
+    // when unset. The daemon never runs it, and the console shows it only
+    // after applying the daemon's own boot rules (lib/ssh-proxy-command.ts).
+    ssh?: { enabled?: boolean; advertise_addr?: string; host_key_fingerprint?: string; proxy_command?: string };
     // UI-sandbox gateway discovery (run-detail's "UI apps" lane): absent when
     // the gateway is off (WARDYN_UI_SANDBOX_LISTEN unset) or an older daemon —
     // both read as "no lane", never a false-enabled guess. enter_url_template

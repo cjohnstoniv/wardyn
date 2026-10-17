@@ -66,7 +66,7 @@ func AuditDDLBypassRoutes(ctx context.Context, pool *pgxpool.Pool) ([]string, er
 		       COALESCE(bool_or(pg_has_role(current_user, c.relowner, 'MEMBER')), false),
 		       COALESCE(bool_or(has_table_privilege(current_user, c.oid, 'TRIGGER')), false)
 		FROM pg_class c
-		WHERE c.relname = 'audit_events' AND c.relkind = 'r'`,
+		WHERE c.relname = 'audit_events' AND c.relkind IN ('r', 'p')`,
 	).Scan(&found, &superuser, &owner, &trigger)
 	if err != nil {
 		return nil, fmt.Errorf("db: check audit ddl protection: %w", err)

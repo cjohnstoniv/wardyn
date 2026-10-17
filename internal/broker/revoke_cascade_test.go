@@ -77,6 +77,17 @@ func TestRevokeRun_AutoMintedGrant_EmitsRevokeAudit(t *testing.T) {
 	if got := revokeNoteFor(t, au, minted.JTI); got == "" {
 		t.Fatal("the revoke row carries no note")
 	}
+	// The row says it records the end of the run's own credentials, so a reader
+	// does not take it for the end of a person's stored sign-in.
+	var d struct {
+		Scope string `json:"scope"`
+	}
+	if err := json.Unmarshal(rows[0].Data, &d); err != nil {
+		t.Fatalf("decode revoke data: %v", err)
+	}
+	if d.Scope != "run_credentials" {
+		t.Fatalf("credential.revoke scope = %q, want run_credentials", d.Scope)
+	}
 }
 
 // TestRevokeRun_LeasedGitPAT_EmitsOneRevokePerMint is the second half:

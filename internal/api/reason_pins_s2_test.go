@@ -89,7 +89,7 @@ func TestCreateAPIToken_FromAPIToken_ReasonLiteral(t *testing.T) {
 }
 
 // personMintFakeStore is a minimal in-memory store.PersonStore, so
-// TestMintPersonAPIToken_NoSignIn_ReasonLiteral runs with no Postgres.
+// TestMintPersonAPIToken_Removed_ReasonLiteral runs with no Postgres.
 type personMintFakeStore struct {
 	store.Store
 	mu     sync.Mutex
@@ -121,14 +121,10 @@ func (s *personMintFakeStore) MarkPersonSignedIn(context.Context, string, time.T
 	return nil
 }
 
-// TestMintPersonAPIToken_NoSignIn_ReasonLiteral (#656 slice 2 review round
-// F3) pins handleMintPersonAPIToken at the HTTP level: the handler, not just
-// the personMintRefusal helper (already pinned by TestPersonMintRefusal_DerivationArms),
-// writes the refusal's reason to the wire. Drives POST
-// /people/{principal}/tokens through the real router with a person whose
-// email matches no role-mapping row and no default role, the "no_sign_in"
-// arm.
-func TestMintPersonAPIToken_NoSignIn_ReasonLiteral(t *testing.T) {
+// TestMintPersonAPIToken_Removed_ReasonLiteral pins the LITERAL wire reason
+// handleMintPersonAPIToken writes (#1477): the route refuses every caller, so
+// even a person with no derivable sign-in answers person_token_mint_removed.
+func TestMintPersonAPIToken_Removed_ReasonLiteral(t *testing.T) {
 	h := newHarness(t)
 	cfg := baseTestConfig(h, &personMintFakeStore{people: map[string]types.Person{
 		"pat-sub": {Principal: "pat-sub", Email: "pat@corp.example"},
@@ -138,10 +134,10 @@ func TestMintPersonAPIToken_NoSignIn_ReasonLiteral(t *testing.T) {
 	admin := accessSession(t, "root", "admin@corp.example", oidc.RoleAdmin, []string{})
 
 	w := doSSO(t, srv, http.MethodPost, "/api/v1/people/pat-sub/tokens", admin, `{"name":"ci"}`)
-	if w.Code != http.StatusConflict {
-		t.Fatalf("mint for a person with no derivable sign-in: status = %d, want 409; body=%s", w.Code, w.Body.String())
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("mint for a person: status = %d, want 403; body=%s", w.Code, w.Body.String())
 	}
-	if got := errorReason(w); got != "no_sign_in" {
-		t.Errorf("reason = %q, want the literal \"no_sign_in\"; body=%s", got, w.Body.String())
+	if got := errorReason(w); got != "person_token_mint_removed" {
+		t.Errorf("reason = %q, want the literal \"person_token_mint_removed\"; body=%s", got, w.Body.String())
 	}
 }

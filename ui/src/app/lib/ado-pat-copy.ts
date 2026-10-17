@@ -154,8 +154,22 @@ export const ADO_PAT = {
   OWN_CHIP_EXPIRING: (days: number) => `Expires in ${days} days`,
   OWN_CHIP_EXPIRED: "Expired",
   OWN_EXPIRING_LINE: (org: string, date: string) => `Your token for ${org} expires on ${date}.`,
+  OWN_CHIP_REFUSED: "Refused",
+  OWN_REFUSED_LINE: (date: string, expiry: string) => `Azure DevOps refused this token on ${date}, before it expires on ${expiry}. Replace it.`,
   OWN_REPLACE: "Replace token",
   OWN_EXPIRED_BODY: "Your runs can't reach Azure DevOps until you add a new token.",
+  // #1488 — Remove from Wardyn (console-085-packet, approved 2026-10-01). The
+  // runs line is the owner's replacement for the packet's, which overclaimed: a
+  // run already using the token keeps its cached copy for up to 10 minutes.
+  OWN_REMOVE: "Remove from Wardyn",
+  OWN_REMOVE_TITLE: (org: string) => `Remove your token for ${org}?`,
+  OWN_REMOVE_BODY:
+    "This deletes Wardyn's copy of your token. It does not revoke the token in Azure DevOps, so revoke it there too.",
+  OWN_REMOVE_RUNS: "Runs already using it keep it for up to 10 minutes; revoke it in Azure DevOps to stop them now.",
+  OWN_REMOVE_CANCEL: "Cancel",
+  OWN_REMOVE_PENDING: "Removing…",
+  OWN_REMOVED_TOAST: (org: string) => `Your token for ${org} was removed from Wardyn. It isn't revoked in Azure DevOps.`,
+  OWN_REMOVE_FAILED_TOAST: (org: string) => `Couldn't remove your token for ${org}. It's still stored in Wardyn. Try again.`,
   OWN_SERVER_TITLE: "Azure DevOps Server",
   OWN_SERVER_NOTE: "Git only. Azure DevOps Server has no Entra sign-in.",
 
@@ -167,3 +181,17 @@ export const ADO_PAT = {
   CONVERTED_CEILING: (names: string) => `Read-only, carried over from the retired token: ${names}.`,
   CONVERTED_SAVE_ON: "Save and turn on",
 } as const;
+
+// Getting started's chip row prefixes every Azure DevOps chip with the
+// connection's name, so a person's own token reads in Settings' chip words after
+// it (the approved own-token chip packet). One helper over OWN_CHIP_* and
+// CHIP_CONNECTED: rewording a word there reaches both screens.
+export function gettingStartedOwnChip(kind: "connected" | "expiring" | "refused" | "expired", days = 0): string {
+  const word = {
+    connected: ADO_PAT.CHIP_CONNECTED,
+    expiring: ADO_PAT.OWN_CHIP_EXPIRING(days),
+    refused: ADO_PAT.OWN_CHIP_REFUSED,
+    expired: ADO_PAT.OWN_CHIP_EXPIRED,
+  }[kind];
+  return `Azure DevOps · ${word}`;
+}

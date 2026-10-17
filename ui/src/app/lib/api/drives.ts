@@ -44,6 +44,9 @@ export interface UserDrive {
   host_root?: string;
   storage_class?: string;
   home_template: HomeTemplate;
+  // types.DriveObjectScheme: which half of a minted object name carries the
+  // drive. Server-owned; on the wire so a GET and a round-tripped PUT agree.
+  object_scheme?: "slug" | "id";
   size_mib?: number;
   writable?: boolean;
   reclaim: DriveReclaim;
@@ -147,6 +150,8 @@ interface UserDriveGrantInput {
   subject_type: CapabilitySubjectType;
   subject: string;
   drive_id: string;
+  /** Allocates the drive beside the subject's others instead of replacing them. */
+  additional?: boolean;
   priority: number;
   size_mib_override?: number;
   writable_override?: boolean;

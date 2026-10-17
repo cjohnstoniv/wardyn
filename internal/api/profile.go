@@ -132,8 +132,8 @@ func (s *Server) handleSynthesizeProfile(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	ceiling := widenCeilingRepoAllowlist(base.Spec, synthGitHubRepos(synth))
-	clamped, clampWarns := composer.Clamp(synth, ceiling, base.Limits.MaxEphemeralDiskMiB)
-	if verr := validatePolicySpec(clamped); verr != nil {
+	clamped, clampWarns := composer.Clamp(synth, ceiling, base.Limits)
+	if verr := validatePolicySpecLenient(clamped); verr != nil {
 		writeErrorReason(w, http.StatusUnprocessableEntity, reasonSynthesizedProfileInvalid, "synthesized profile invalid: "+verr.Error())
 		return
 	}
@@ -148,6 +148,11 @@ func (s *Server) handleSynthesizeProfile(w http.ResponseWriter, r *http.Request)
 	// profile is self-consistent (a run weaker than its policy floor is 422'd).
 	var confWarn string
 	runInput.ConfinementClass, confWarn = composer.ClampRunConfinement(runInput.ConfinementClass, clamped.MinConfinementClass)
+	baseline, ok := s.baselineOr500(w, r)
+	if !ok {
+		return
+	}
+	runInput.Baseline = baseline
 	items := composer.Grade(runInput, clamped)
 	overall := composer.OverallLevel(items)
 

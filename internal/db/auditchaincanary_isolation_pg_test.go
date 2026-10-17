@@ -127,8 +127,7 @@ func TestPG_BootCanaryRunsAtReadCommittedWhateverTheServerDefaultIs(t *testing.T
 	if err != nil {
 		t.Fatalf("begin control tx: %v", err)
 	}
-	if _, err := tx.Exec(ctx, `INSERT INTO audit_events (id, actor_type, actor, action, outcome)
-		VALUES (gen_random_uuid(), 'system', 'iso-witness', 'test.canary.control', 'success')`); err != nil {
+	if _, err := tx.Exec(ctx, `SELECT audit_append(gen_random_uuid(), now(), NULL, 'system', 'iso-witness', 'test.canary.control', '', 'success', '', NULL)`); err != nil {
 		tx.Rollback(context.Background()) //nolint:errcheck
 		t.Fatalf("control insert: %v", err)
 	}

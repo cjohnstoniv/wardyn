@@ -368,7 +368,7 @@ func TestOwnSecretNeverFallsBackToOperator(t *testing.T) {
 // a key still resolvable at the injection sink.
 func TestProviderSecretNamesReserved(t *testing.T) {
 	const uid = "0b6f2c9e-5d7a-4c1b-9a3e-2f8d6b4a1c70"
-	for _, part := range []string{providerKeyPart, providerOAuthPart, providerSSOPart} {
+	for _, part := range []string{providerKeyPart, providerOAuthPart, providerSSOPart, providerEntraPart} {
 		name := providerSecretName(uid, part)
 		if !secretsAPIReserved(name) {
 			t.Errorf("%s is writable through the generic secrets API", name)
@@ -514,13 +514,13 @@ func TestModelProviderPurgeForgetsMaskedSignIns(t *testing.T) {
 			t.Fatal(err)
 		}
 		values := []string{owner + "-sso-access-token-0001", owner + "-sso-refresh-token-0001", owner + "-sso-client-secret-0001"}
-		reg.MergeGlobalUntil(owner, sso, now.Add(time.Hour), []byte(values[0]), []byte(values[1]), []byte(values[2]))
+		reg.MergeGlobalUntil(0, owner, sso, now.Add(time.Hour), []byte(values[0]), []byte(values[1]), []byte(values[2]))
 		purged = append(purged, values...)
 	}
 	if err := mem.For("alice").Put(ctx, key, []byte("sk-ant-alice-kept-0001")); err != nil {
 		t.Fatal(err)
 	}
-	reg.AddGlobal("alice", key, now, []byte("sk-ant-alice-kept-0001"))
+	reg.AddGlobal(0, "alice", key, now, []byte("sk-ant-alice-kept-0001"))
 
 	raw, _ := json.Marshal(normalizeModelProviders(providerBlock(keyProvider("anthropic", "claude-code"))))
 	if w := do(t, srv, http.MethodPut, "/api/v1/model-providers", adminToken, string(raw)); w.Code != http.StatusOK {

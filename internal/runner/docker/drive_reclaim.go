@@ -17,6 +17,16 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
+var (
+	_ runner.DriveReclaimer        = (*Driver)(nil)
+	_ runner.DriveLifecycleChecker = (*Driver)(nil)
+)
+
+// CanManageDrives implements runner.DriveLifecycleChecker. Volume create and
+// remove need nothing beyond the daemon access the driver already holds, so the
+// answer is yes exactly when the driver is a DriveReclaimer (asserted above).
+func (d *Driver) CanManageDrives(context.Context) error { return nil }
+
 // ReclaimDrive implements runner.DriveReclaimer: the ONE call in this package that destroys
 // a member's data, and the only caller of VolumeRemove.
 //

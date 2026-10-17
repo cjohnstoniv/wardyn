@@ -11,18 +11,11 @@ import "time"
 // carry a timestamp AFTER the cutoff and survive it.
 //
 // Fix: stamp the app value as an ELAPSED TIME (measured at request admission, not INSERT)
-// rendered against the database's own now():
+// translated against a received database clock anchor:
 //
-//	created_at = now() - <the request's age>
+//	created_at = anchor.DatabaseAt - <age sampled after receipt>
 //
 // The same arithmetic, reversed, compares an app-stamped iat against a database-stamped cutoff.
-
-// AppClockAgeSQL renders an app-measured age, in MICROSECONDS, as an interval to subtract from
-// the database's own clock. Microseconds as a bigint (not a float or pgx interval) matches
-// timestamptz's own resolution exactly.
-func AppClockAgeSQL(placeholder string) string {
-	return "now() - (" + placeholder + "::bigint * interval '1 microsecond')"
-}
 
 // maxAppClockAge bounds AppClockAgeMicros: unbounded, a zero time (e.g. a session cookie minted
 // before the `iat` claim existed) reports an age of ~2025 years, overflowing the interval. A

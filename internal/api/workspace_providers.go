@@ -21,7 +21,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"net/url"
 	"slices"
 	"strings"
 	"sync"
@@ -30,6 +29,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/cjohnstoniv/wardyn/internal/adoscope"
+	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/hostrules"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -42,6 +42,7 @@ import (
 const (
 	providers400BaseURL     = "base_urls[%d]: must be an https URL with a host and no credentials, query or fragment"
 	providers400HostKind    = "base_urls[%d]: %q is not a %s host"
+	providers400HostTwoKind = "row %d: host %q is already on a %s row; a host may appear on rows of one kind only"
 	providers400Lane        = "lanes: %q is not available for %s (%s)"
 	providers400DiskOrder   = "storage.ephemeral: default_disk_mib may not exceed max_disk_mib"
 	providers400DupID       = "id %q is not unique"
@@ -265,11 +266,33 @@ func validateWorkspaceProviders(p *types.WorkspaceProviders, refuseSSHPathScope 
 		if err := validateProviderEntra(i, row); err != nil {
 			return err
 		}
+		if err := validateGitHubAppInstallURL(i, row); err != nil {
+			return err
+		}
 	}
 	if err := validateOneEntraRow(p.Git); err != nil {
 		return err
 	}
+	if err := validateHostOneKind(p.Git); err != nil {
+		return err
+	}
 	return validateStorageProviders(p.Storage)
+}
+
+// validateHostOneKind refuses one host (keyed by its secret-name slug) on rows of
+// two kinds (#1450): a host is one forge. Disabled rows count toward it too.
+func validateHostOneKind(rows []types.GitProvider) error {
+	kindOf := map[string]types.GitProviderKind{}
+	for i, row := range rows {
+		for _, raw := range row.BaseURLs {
+			host := canonicalProviderHost(strings.ToLower(hostrules.HostOf(raw)))
+			if first, ok := kindOf[slugHost(host)]; ok && first != row.Kind {
+				return fmt.Errorf(providers400HostTwoKind, i, host, string(first))
+			}
+			kindOf[slugHost(host)] = row.Kind
+		}
+	}
+	return nil
 }
 
 // validateProviderLanes refuses a lane the row's own addresses can never carry.
@@ -376,173 +399,13 @@ func validateStorageProviders(st *types.StorageProviders) error {
 			return fmt.Errorf("%s", providers400DiskOrder)
 		}
 	}
-	if d := st.UserDrive; d != nil && d.MaxSizeMiB < 0 {
-		return fmt.Errorf(providers400Negative, "storage.user_drive.max_size_mib", d.MaxSizeMiB)
+	if d := st.UserDrive; d != nil {
+		if d.MaxSizeMiB < 0 {
+			return fmt.Errorf(providers400Negative, "storage.user_drive.max_size_mib", d.MaxSizeMiB)
+		}
+		return validateMemberDrivePolicy(d.MemberCreate, d.MaxSizeMiB)
 	}
 	return nil
-}
-
-// cloneTarget is a clone URL reduced to the three facts the match rule compares.
-// SSH is its own shape because an SSH clone URL carries no comparable path
-// (git@ssh.dev.azure.com:v3/org/... is not /org/...), so org-path scoping is
-// host-level only for SSH in v1 — a documented ceiling, not an oversight.
-type cloneTarget struct {
-	scheme string
-	host   string
-	path   string
-	ssh    bool
-}
-
-// parseCloneTarget reduces a DERIVED clone URL (repoCloneURL's output, never a
-// raw slug) to a cloneTarget. ok=false for anything it cannot read — including
-// the empty string repoCloneURL returns for a transport that already failed
-// closed — so an unreadable target is REFUSED rather than admitted by accident.
-//
-// The port is deliberately not part of the comparison: hostrules.HostOf discards
-// it and so does the egress allowlist, so treating it as a scoping boundary here
-// would claim a narrowing the rest of the system does not implement.
-func parseCloneTarget(cloneURL string, adoServerHosts []string) (cloneTarget, bool) {
-	raw := strings.TrimSpace(cloneURL)
-	if raw == "" {
-		return cloneTarget{}, false
-	}
-	// The traversal guard, before either form is read: a path the server and the
-	// sandbox's git read differently is not a target this function can reduce
-	// honestly, so it is UNREADABLE and therefore refused — with the same
-	// operator/member sentences every other unreadable target earns. See
-	// repoLocatorPathSafe (runs_scm.go) for why no spelling of pathAdmits
-	// survives one.
-	if !repoLocatorPathSafe(raw, adoServerHosts) {
-		return cloneTarget{}, false
-	}
-	// sshCloneHost answers only for ssh:// and scp-form strings (it refuses
-	// anything else carrying a scheme), so an https clone URL falls through.
-	if host, ok := sshCloneHost(raw); ok {
-		return cloneTarget{scheme: "ssh", host: host, ssh: true}, true
-	}
-	u, err := url.Parse(raw)
-	if err != nil || u.Hostname() == "" {
-		return cloneTarget{}, false
-	}
-	scheme := strings.ToLower(u.Scheme)
-	if scheme != "http" && scheme != "https" {
-		return cloneTarget{}, false
-	}
-	return cloneTarget{
-		scheme: scheme,
-		host:   strings.ToLower(u.Hostname()),
-		path:   strings.TrimSuffix(u.Path, "/"),
-	}, true
-}
-
-// canonicalProviderHost folds the ssh.<host> alias onto its primary so one
-// stored base URL admits (and CLAIMS) both clone forms — the same fold
-// canonicalSSHKeySecret applies to the secret name.
-func canonicalProviderHost(host string) string {
-	return strings.TrimPrefix(host, "ssh.")
-}
-
-// hostsMatch compares a clone target's host with a provider base URL's host.
-// For an SSH target the ssh.<host> alias matches in either direction; for an
-// https target the host must be equal (case already folded by both sides).
-func hostsMatch(t cloneTarget, baseHost string) bool {
-	if t.host == baseHost {
-		return true
-	}
-	return t.ssh && canonicalProviderHost(t.host) == canonicalProviderHost(baseHost)
-}
-
-// pathAdmits reports whether a clone path is inside a base URL's path: equal, or
-// extending it AT A "/" BOUNDARY. The boundary is the whole point — without it a
-// base URL of /acme would admit /acme-evil/repo.
-//
-// Case handling is the CALLER's (rowAdmits, via foldsPathCase): github.com
-// treats /Acme and /acme as one org, so both sides are folded there; every other
-// host is compared as written, which refuses a case the admin did not name
-// rather than admitting one they did not.
-func pathAdmits(clonePath, basePath string) bool {
-	if basePath == "" || basePath == "/" {
-		return true
-	}
-	return clonePath == basePath || strings.HasPrefix(clonePath, basePath+"/")
-}
-
-// rowAdmits reports whether one provider row's base URLs admit a clone target.
-func rowAdmits(row types.GitProvider, t cloneTarget) bool {
-	for _, raw := range row.BaseURLs {
-		u, err := url.Parse(raw)
-		if err != nil || u.Hostname() == "" {
-			continue
-		}
-		baseHost := strings.ToLower(u.Hostname())
-		if !hostsMatch(t, baseHost) {
-			continue
-		}
-		if t.ssh {
-			return true // host-level only for SSH, see cloneTarget
-		}
-		if strings.ToLower(u.Scheme) != t.scheme {
-			continue
-		}
-		clonePath, basePath := t.path, strings.TrimSuffix(u.Path, "/")
-		if foldsPathCase(baseHost) {
-			clonePath, basePath = strings.ToLower(clonePath), strings.ToLower(basePath)
-		}
-		if pathAdmits(clonePath, basePath) {
-			return true
-		}
-	}
-	return false
-}
-
-// sshAdmittedAbovePath reports whether a row admitted an SSH target ONLY because
-// SSH scoping is host-level: the target is SSH and every base URL of this row
-// that matches its host carries an org path. That is the documented ceiling
-// (see cloneTarget) and it is REAL — `https://github.com/acme` admits
-// `git@github.com:other-org/x.git` — so the callers say it out loud rather than
-// letting a path-scoped row look narrower than it is.
-func sshAdmittedAbovePath(row types.GitProvider, t cloneTarget) bool {
-	if !t.ssh {
-		return false
-	}
-	for _, raw := range row.BaseURLs {
-		u, err := url.Parse(raw)
-		if err != nil || u.Hostname() == "" {
-			continue
-		}
-		if hostsMatch(t, strings.ToLower(u.Hostname())) && strings.Trim(u.Path, "/") == "" {
-			return false // this row bounds the whole host anyway; nothing was widened
-		}
-	}
-	return rowAdmits(row, t)
-}
-
-// rowClaimsHost reports whether one row CLAIMS a host — the precedence question,
-// which is separate from whether it admits a given path.
-//
-// By HOST, and kind-wide on the two well-known hosts, because a kind cannot be
-// derived for a self-hosted forge. Without this, the documented MDM content
-// scm_hosts: ["github.com"] would admit github.com/other/* past a provider
-// limited to https://github.com/acme, making org-path scoping vacuous on exactly
-// the fleets this feature is for.
-func rowClaimsHost(row types.GitProvider, t cloneTarget) bool {
-	host := canonicalProviderHost(t.host)
-	switch row.Kind {
-	case types.GitProviderGitHub:
-		if host == "github.com" {
-			return true
-		}
-	case types.GitProviderAzureDevOps:
-		if adoEgressDomains(host) != nil {
-			return true
-		}
-	}
-	for _, raw := range row.BaseURLs {
-		if h := hostrules.HostOf(raw); h != "" && hostsMatch(t, h) {
-			return true
-		}
-	}
-	return false
 }
 
 // providerVerdict is admitRepoURL's full answer. providerFor is the thin
@@ -784,13 +647,16 @@ func (s *Server) handlePutWorkspaceProviders(w http.ResponseWriter, r *http.Requ
 		writeErrorReason(w, http.StatusBadRequest, reasonWorkspaceProvidersInvalid, "invalid workspace providers: "+err.Error())
 		return
 	}
-	// SEAM-1: serializes this read-modify-write against the site config's other
-	// writers (handlePutSiteConfig and the two integration handlers), which read
-	// and rewrite the SAME singleton document — see handlePutIntegration's
-	// SEAM-1 comment for why an unguarded RMW here silently erases a concurrent
-	// one.
-	s.siteConfigMu.Lock()
-	defer s.siteConfigMu.Unlock()
+	if err := s.validateMemberDriveTarget(block); err != nil {
+		writeErrorReason(w, http.StatusBadRequest, reasonWorkspaceProvidersInvalid, "invalid workspace providers: "+err.Error())
+		return
+	}
+	// SEAM-1: the site-config lock (locks.go) serializes this RMW with the document's other writers.
+	r, unlock, ok := s.lockDoor(w, r, db.SiteConfigLockClass)
+	if !ok {
+		return
+	}
+	defer unlock()
 	ctx := r.Context()
 	existing, err := s.cfg.Store.GetSiteConfig(ctx)
 	if err != nil {
@@ -813,9 +679,9 @@ func (s *Server) handlePutWorkspaceProviders(w http.ResponseWriter, r *http.Requ
 		writeServerError(w, r, "count sources this block refuses", err)
 		return
 	}
-	// EffectiveScmHosts is projected on read and never stored — a value that
-	// rode in on a GET-spread body would otherwise be persisted into the JSONB.
-	candidate.EffectiveScmHosts = nil
+	// EffectiveScmHosts and WithheldScmHosts are projected on read and never
+	// stored — a value on a GET-spread body would otherwise reach the JSONB.
+	candidate.EffectiveScmHosts, candidate.WithheldScmHosts = nil, nil
 	saved, err := s.cfg.Store.PutSiteConfig(ctx, candidate)
 	if err != nil {
 		writeServerError(w, r, "put site config", err)
@@ -850,6 +716,7 @@ func (s *Server) handlePutWorkspaceProviders(w http.ResponseWriter, r *http.Requ
 // narrowing or opening applied by MDM is unreviewable without them.
 func workspaceProviderAuditData(block types.WorkspaceProviders, refused int) map[string]any {
 	kinds, lanes, urls, disabled := []string{}, []string{}, []string{}, []string{}
+	resident, residentSandbox := residentOptInRows(block)
 	for _, row := range block.Git {
 		if !slices.Contains(kinds, string(row.Kind)) {
 			kinds = append(kinds, string(row.Kind))
@@ -871,8 +738,24 @@ func workspaceProviderAuditData(block types.WorkspaceProviders, refused int) map
 	return map[string]any{
 		"git_count": len(block.Git), "kinds": kinds, "base_urls": urls,
 		"lanes": lanes, "disabled": disabled,
+		"runner_resident": resident, "runner_resident_sandbox": residentSandbox,
 		"sources_no_longer_admitted": refused,
 	}
+}
+
+// residentOptInRows names the rows opted in to runner_resident, and to its
+// sandbox delivery: both provider doors audit them.
+func residentOptInRows(block types.WorkspaceProviders) (resident, sandbox []string) {
+	resident, sandbox = []string{}, []string{}
+	for _, row := range block.Git {
+		if row.Entra != nil && row.Entra.RunnerResident {
+			resident = append(resident, row.ID)
+		}
+		if row.Entra != nil && row.Entra.RunnerResidentSandbox {
+			sandbox = append(sandbox, row.ID)
+		}
+	}
+	return resident, sandbox
 }
 
 // enabledGitProviderCount is site_config.write's count of ENABLED rows — the
@@ -940,30 +823,7 @@ const capProvider403 = "you are not granted this deployment's %s provider — as
 // derived clone URL is computed HERE, once, so no call site can compare a bare
 // <org>/<name> against a base URL and miss.
 func (s *Server) denyUserWorkspaceProviders(w http.ResponseWriter, r *http.Request, target string, repos ...string) bool {
-	if len(repos) == 0 || s.cfg.Store == nil || s.isOperator(r.Context()) {
-		return false
-	}
-	sc, err := s.cfg.Store.GetSiteConfig(r.Context())
-	if err != nil {
-		writeServerError(w, r, "get site config", err)
-		return true
-	}
-	if !providersConfigured(sc) {
-		return false // legacy open mode — byte-identical to 0.7.1
-	}
-	seen := map[string]bool{}
-	for _, repo := range repos {
-		row := admitRepoURL(sc, repoCloneURL(repo)).Provider
-		if row.ID == "" || seen[row.ID] {
-			continue
-		}
-		seen[row.ID] = true
-		if s.denyUserCapability(w, r, capWorkspaceProvider, row.ID, target,
-			fmt.Sprintf(capProvider403, row.Kind)) {
-			return true
-		}
-	}
-	return false
+	return s.workspaceProvidersRefusal(r, target, repos...).write(s, w, r)
 }
 
 // repoSourceLocators is the raw repo source of every repo entry in sources —

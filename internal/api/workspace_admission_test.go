@@ -20,6 +20,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
+	"github.com/cjohnstoniv/wardyn/internal/placement"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -397,7 +398,7 @@ func TestAdmissionAtTheScanLauncher(t *testing.T) {
 		h := newHarness(t)
 		srv := New(baseTestConfig(h, &admitSourcesStore{siteConfig: sc}))
 		_, err := srv.launchSourceScanRun(context.Background(), "admin",
-			types.Source{ID: uuid.New(), Kind: types.SourceRepo, Locator: locator})
+			types.Source{ID: uuid.New(), Kind: types.SourceRepo, Locator: locator}, nil)
 		return err
 	}
 
@@ -616,7 +617,7 @@ func TestProviderLaneVetoAtTheThreeGrantArms(t *testing.T) {
 			st.siteConfig = tc.sc
 			runID := uuid.New()
 			gw, ok := srv.persistRunGrants(context.Background(), httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/api/v1/runs", nil), runID, time.Now().UTC(),
-				types.RunPolicySpec{EligibleGrants: []types.GrantSpec{tc.grant}})
+				types.RunPolicySpec{EligibleGrants: []types.GrantSpec{tc.grant}}, types.PlacementRemote, placement.DeliveryPolicy{})
 			if !ok {
 				t.Fatal("persistRunGrants failed")
 			}
@@ -663,7 +664,7 @@ func TestProviderLaneVetoPermitsWhatTheRowPermits(t *testing.T) {
 			srv, st, _ := govEscapeFixture(t, &capStore{})
 			st.siteConfig = tc.sc
 			gw, ok := srv.persistRunGrants(context.Background(), httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/api/v1/runs", nil), uuid.New(), time.Now().UTC(),
-				types.RunPolicySpec{EligibleGrants: []types.GrantSpec{{Kind: types.GrantGitPAT, Scope: scope}}})
+				types.RunPolicySpec{EligibleGrants: []types.GrantSpec{{Kind: types.GrantGitPAT, Scope: scope}}}, types.PlacementRemote, placement.DeliveryPolicy{})
 			if !ok {
 				t.Fatal("persistRunGrants failed")
 			}
@@ -757,7 +758,7 @@ func TestLaneVetoAsksTheROWThatAdmitted(t *testing.T) {
 					WorkspaceRepos: []types.WorkspaceRepo{{Repo: admitOnRow}},
 					EligibleGrants: []types.GrantSpec{{Kind: types.GrantGitPAT,
 						Scope: mustJSON(map[string]any{"host": "github.com", "secret_name": "gh-pat"})}},
-				})
+				}, types.PlacementRemote, placement.DeliveryPolicy{})
 			if !ok {
 				t.Fatal("persistRunGrants failed")
 			}
@@ -779,7 +780,7 @@ func TestLaneVetoAsksTheROWThatAdmitted(t *testing.T) {
 				WorkspaceRepos: []types.WorkspaceRepo{{Repo: admitOnRow}},
 				EligibleGrants: []types.GrantSpec{{Kind: types.GrantGitPAT,
 					Scope: mustJSON(map[string]any{"host": "github.com", "secret_name": "gh-pat"})}},
-			})
+			}, types.PlacementRemote, placement.DeliveryPolicy{})
 		if !ok {
 			t.Fatal("persistRunGrants failed")
 		}
@@ -817,7 +818,7 @@ func TestLaneVetoAsksTheROWThatAdmitted(t *testing.T) {
 		st.siteConfig = sc
 		gw, ok := srv.persistRunGrants(context.Background(), httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/api/v1/runs", nil), uuid.New(), time.Now().UTC(),
 			types.RunPolicySpec{EligibleGrants: []types.GrantSpec{{Kind: types.GrantGitPAT,
-				Scope: mustJSON(map[string]any{"host": "github.com", "secret_name": "gh-pat"})}}})
+				Scope: mustJSON(map[string]any{"host": "github.com", "secret_name": "gh-pat"})}}}, types.PlacementRemote, placement.DeliveryPolicy{})
 		if !ok {
 			t.Fatal("persistRunGrants failed")
 		}
@@ -939,7 +940,7 @@ func TestLegacyHostAdmissionIsAuditedAtEveryDoor(t *testing.T) {
 		st := &admitSourcesStore{siteConfig: admitLegacySite()}
 		srv := New(baseTestConfig(h, st))
 		_, err := srv.launchSourceScanRun(context.Background(), "admin",
-			types.Source{ID: uuid.New(), Kind: types.SourceRepo, Locator: admitUnclaimed})
+			types.Source{ID: uuid.New(), Kind: types.SourceRepo, Locator: admitUnclaimed}, nil)
 		if !errors.Is(err, errAdmitFixtureReached) {
 			t.Fatalf("err = %v, want the launch to reach the fence claim", err)
 		}
@@ -1059,6 +1060,28 @@ func TestAdmittedProjectionAbsentInLegacyOpenMode(t *testing.T) {
 
 	for _, path := range []string{"/api/v1/workspaces", "/api/v1/workspaces/" + id.String()} {
 		got := doSSO(t, srv, http.MethodGet, path, admin, "").Body.String()
+		if strings.Contains(got, `"admitted"`) {
+			t.Errorf("%s = %s, must carry no admitted key in legacy open mode", path, got)
+		}
+	}
+}
+
+// TestCloneTargetProjectedInLegacyOpenMode: where a clone lands needs no
+// provider row, so both reads carry it with no provider configured. New Run's
+// Files step offers it as the repository's mount path; without it a person on
+// a stock install would have to type one.
+func TestCloneTargetProjectedInLegacyOpenMode(t *testing.T) {
+	srv, st, _ := ownerHarness(t, runner.UserMountPolicy{})
+	admin := admitAdminSession(t)
+	id := st.put(types.Workspace{Sources: []types.WorkspaceSource{
+		{Type: types.WorkspaceSourceTypeRepo, Source: "octocat/Hello-World"},
+	}})
+
+	for _, path := range []string{"/api/v1/workspaces", "/api/v1/workspaces/" + id.String()} {
+		got := doSSO(t, srv, http.MethodGet, path, admin, "").Body.String()
+		if !strings.Contains(got, `"clone_target":"/home/agent/work/Hello-World"`) {
+			t.Errorf("%s = %s, want the default clone target in legacy open mode", path, got)
+		}
 		if strings.Contains(got, `"admitted"`) {
 			t.Errorf("%s = %s, must carry no admitted key in legacy open mode", path, got)
 		}

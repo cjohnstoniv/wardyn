@@ -7,9 +7,11 @@ import (
 	"bytes"
 	"cmp"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -73,6 +75,70 @@ func (s *Server) recordingReader(r *http.Request, run types.AgentRun) bool {
 // beyond the cap cause http.MaxBytesReader to error, which we surface as 413.
 const maxRecordingUploadBytes = 64 << 20 // 64 MiB
 
+// recordingUploadReadWindow bounds how long an upload's body may take to
+// arrive once the store has admitted its save, so a slow or stalled client
+// holds a save slot for at most this long. It stays below the proxy's 130 s
+// control-plane call timeout: an upload admitted within the store's 65 s
+// admission wait still answers in 65 + 60 = 125 s, before its proxy gives up.
+// 60 s carries a 32 MiB part (where wardyn-rec cuts one) at about 4.5 Mbit/s
+// and a 64 MiB upload at about 9 Mbit/s. A body still arriving then fails as
+// any read error does: nothing is stored. A var so tests can shorten it.
+var recordingUploadReadWindow = 60 * time.Second
+
+// readWindow arms the connection's read deadline at the body's first Read. The
+// store reads only once it has admitted the save, so queue time is not charged.
+type readWindow struct {
+	io.ReadCloser
+	rc    *http.ResponseController
+	armed bool
+}
+
+func (b *readWindow) Read(p []byte) (int, error) {
+	if !b.armed {
+		b.armed = true
+		if err := b.rc.SetReadDeadline(time.Now().Add(recordingUploadReadWindow)); err != nil {
+			return 0, err
+		}
+	}
+	return b.ReadCloser.Read(p)
+}
+
+// storeUpload masks and stores one upload body as part of runID's cast. A
+// connection that cannot take a read deadline is refused, never read without one.
+func (s *Server) storeUpload(w http.ResponseWriter, r *http.Request, run types.AgentRun, runID uuid.UUID, part int) error {
+	rc := http.NewResponseController(w)
+	if err := rc.SetReadDeadline(time.Time{}); err != nil {
+		return fmt.Errorf("recording upload: connection takes no read deadline: %w", err)
+	}
+
+	// Cap the upload before masking; the reader preserves MaxBytesError so an
+	// over-cap upload remains a 413 rather than a successful truncated cast.
+	limited := http.MaxBytesReader(w, &readWindow{ReadCloser: r.Body, rc: rc}, maxRecordingUploadBytes)
+
+	// PRIMARY masking point: read the upload body through a MaskingWriter so
+	// verbatim secret values are replaced with "<secret-hidden>" before the bytes
+	// reach the RecordingStore. A nil MaskRegistry is a safe no-op (pass-through).
+	//
+	// Honest residual: only verbatim byte-identical occurrences are masked.
+	// base64-encoded, hex-encoded, or model-narrated representations of secrets
+	// are NOT caught. This is intentional — masking catches the most likely
+	// accidental leakage vector (token printed to stdout/asciicast).
+	//
+	// Read only on the store's demand: an early storage failure must not leave
+	// an independent goroutine blocked reading the request body.
+	body := buildGuardedMaskingBody(limited, s.cfg.MaskRegistry, runID, s.maskGuard(runID))
+	// One person's uploads queue behind each other before they queue with
+	// everyone else's; a run with no person owner queues as itself.
+	ctx := r.Context()
+	if run.CreatedBy != "" && !run.OperatorOwned {
+		ctx = recording.WithAdmissionGroup(ctx, "owner:"+run.CreatedBy)
+	}
+	if part == 1 {
+		return s.cfg.RecordingStore.SaveCast(ctx, runID.String(), body)
+	}
+	return s.cfg.RecordingStore.SaveCastNamed(ctx, runID.String(), recording.PartSuffix(part), body)
+}
+
 // handleUploadRecording accepts a PUT /api/v1/internal/recordings/{runID} from
 // wardyn-rec running inside the agent container. The caller must hold a valid
 // run token (enforced by internalAuth). The run ID in the path must match the
@@ -102,6 +168,16 @@ func (s *Server) handleUploadRecordingPart(w http.ResponseWriter, r *http.Reques
 	s.saveRecording(w, r, part)
 }
 
+// labelRecordingEvidence marks a recording.upload row as self-reported when the
+// run's evidence comes from a self-hosted runner: the cast was produced on a
+// developer-administered host. A substrate run's row is left as it was.
+func labelRecordingEvidence(run types.AgentRun, fields map[string]any) map[string]any {
+	if run.EvidenceSource == types.RunEvidenceRunnerAsserted {
+		fields["evidence_source"] = types.RunEvidenceRunnerAsserted
+	}
+	return fields
+}
+
 func (s *Server) saveRecording(w http.ResponseWriter, r *http.Request, part int) {
 	// Cross-run guard: the caller must hold the run's OWN token — prevent a
 	// token from run A uploading a recording under run B.
@@ -114,36 +190,31 @@ func (s *Server) saveRecording(w http.ResponseWriter, r *http.Request, part int)
 		writeErrorReason(w, http.StatusNotImplemented, reasonRecordingStoreUnavailable, "recording store not configured")
 		return
 	}
+	// Door 1 of five (mask_manifest.go): a run whose masking corpus this server
+	// cannot prove complete is refused, not passed through. Before the part
+	// limit so an uncovered run's refusal never depends on what it uploads.
+	if s.refuseUncoveredAgent(w, r, claims, "recordings.upload") {
+		return
+	}
+	var run types.AgentRun
+	if s.cfg.Store != nil {
+		var err error
+		if run, err = s.cfg.Store.GetRun(r.Context(), claims.RunID); err != nil {
+			writeServerError(w, r, "load run", err)
+			return
+		}
+	}
 	if part > types.RecordingMaxParts {
 		runID := claims.RunID
 		s.recordAudit(r.Context(), s.auditEvent(&runID, types.ActorAgent, claims.SPIFFEID, "recording.upload",
-			runID.String(), "failure", mustJSON(map[string]any{"part": part, "reason": reasonRecordingPartLimit})))
+			runID.String(), "failure", mustJSON(labelRecordingEvidence(run, map[string]any{"part": part, "reason": reasonRecordingPartLimit}))))
 		writeErrorReason(w, http.StatusRequestEntityTooLarge, reasonRecordingPartLimit, "recording exceeds its part limit")
 		return
 	}
 
-	// Cap the upload before masking; the reader preserves MaxBytesError so an
-	// over-cap upload remains a 413 rather than a successful truncated cast.
-	limited := http.MaxBytesReader(w, r.Body, maxRecordingUploadBytes)
-
-	// PRIMARY masking point: read the upload body through a MaskingWriter so
-	// verbatim secret values are replaced with "<secret-hidden>" before the bytes
-	// reach the RecordingStore. A nil MaskRegistry is a safe no-op (pass-through).
-	//
-	// Honest residual: only verbatim byte-identical occurrences are masked.
-	// base64-encoded, hex-encoded, or model-narrated representations of secrets
-	// are NOT caught. This is intentional — masking catches the most likely
-	// accidental leakage vector (token printed to stdout/asciicast).
-	//
-	// Read only on the store's demand: an early storage failure must not leave
-	// an independent goroutine blocked reading the request body.
-	body := buildMaskingBody(limited, s.cfg.MaskRegistry, claims.RunID)
-
-	var saveErr error
-	if part == 1 {
-		saveErr = s.cfg.RecordingStore.SaveCast(r.Context(), claims.RunID.String(), body)
-	} else {
-		saveErr = s.cfg.RecordingStore.SaveCastNamed(r.Context(), claims.RunID.String(), recording.PartSuffix(part), body)
+	saveErr := s.storeUpload(w, r, run, claims.RunID, part)
+	if saveErr == nil {
+		saveErr = s.uploadedRecordingOutput(r.Context(), claims.RunID)
 	}
 
 	// Audit BOTH outcomes, like every sibling recording lane: a full store or
@@ -158,7 +229,11 @@ func (s *Server) saveRecording(w http.ResponseWriter, r *http.Request, part int)
 	if saveErr != nil {
 		outcome = "failure"
 		fields["error"] = saveErr.Error()
+		if errors.Is(saveErr, recording.ErrErased) {
+			fields["reason"] = reasonRecordingErased
+		}
 	}
+	labelRecordingEvidence(run, fields)
 	var data []byte
 	if len(fields) > 0 {
 		data = mustJSON(fields)
@@ -173,11 +248,21 @@ func (s *Server) saveRecording(w http.ResponseWriter, r *http.Request, part int)
 		data,
 	))
 
+	if errors.Is(saveErr, errMaskUncovered) {
+		// The run was fenced or lost its manifest mid-upload: nothing past
+		// that point was masked against a corpus proven whole.
+		s.refuseAgent(w, r, claims, "recordings.upload")
+		return
+	}
 	if saveErr != nil {
 		// An over-cap upload surfaces as *http.MaxBytesError through the masker.
 		var maxErr *http.MaxBytesError
 		if errors.As(saveErr, &maxErr) {
 			writeErrorReason(w, http.StatusRequestEntityTooLarge, reasonRecordingTooLarge, "recording exceeds size limit")
+			return
+		}
+		if errors.Is(saveErr, recording.ErrErased) {
+			writeErrorReason(w, http.StatusGone, reasonRecordingErased, "recordings for this run have been erased")
 			return
 		}
 		writeServerError(w, r, "save recording", saveErr)
@@ -188,11 +273,18 @@ func (s *Server) saveRecording(w http.ResponseWriter, r *http.Request, part int)
 }
 
 func buildMaskingBody(src io.Reader, reg *secretmask.Registry, runID uuid.UUID) io.Reader {
+	return buildGuardedMaskingBody(src, reg, runID, nil)
+}
+
+// buildGuardedMaskingBody is buildMaskingBody whose reader also ends with
+// errMaskUncovered when guard (non-nil) turns false: the run was fenced while
+// its upload was in flight, and the rest of it is not read.
+func buildGuardedMaskingBody(src io.Reader, reg *secretmask.Registry, runID uuid.UUID, guard func() bool) io.Reader {
 	if reg == nil {
 		return src
 	}
 	snap := reg.Snapshot(runID)
-	if len(snap) == 0 {
+	if len(snap) == 0 && guard == nil {
 		return src
 	}
 	// The upload body is asciicast JSON: asciinema (which wardyn-rec execs)
@@ -209,7 +301,7 @@ func buildMaskingBody(src io.Reader, reg *secretmask.Registry, runID uuid.UUID) 
 	// caught — the `"],[t,"o","` event framing breaks the verbatim byte run,
 	// which no per-value match closes.
 	snap = secretmask.JSONEscapedVariants(snap)
-	r := &recordingMaskReader{src: src}
+	r := &recordingMaskReader{src: src, guard: guard}
 	r.masker = secretmask.NewMaskingWriter(&r.output, secretmask.NewMasker(snap))
 	return r
 }
@@ -220,6 +312,7 @@ type recordingMaskReader struct {
 	masker *secretmask.MaskingWriter
 	chunk  [32 << 10]byte
 	err    error
+	guard  func() bool // nil, or false once the run is no longer covered
 }
 
 func (r *recordingMaskReader) Read(p []byte) (int, error) {
@@ -227,6 +320,10 @@ func (r *recordingMaskReader) Read(p []byte) (int, error) {
 		return 0, nil
 	}
 	for r.output.Len() == 0 && r.err == nil {
+		if r.guard != nil && !r.guard() {
+			r.err = errMaskUncovered
+			return 0, r.err
+		}
 		n, readErr := r.src.Read(r.chunk[:])
 		_, maskErr := r.masker.Write(r.chunk[:n])
 		r.err = cmp.Or(maskErr, readErr)

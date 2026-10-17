@@ -12,7 +12,7 @@
 #     C3   docs/VERIFY.md's verification commands stay parameterised on
 #          $WARDYN_VERSION, never a hard-coded release number.
 #     C6   RELEASING.md's required-status-checks `contexts` cover `notices`
-#          and every cell of ci.yml's `trivy` matrix (F121).
+#          and every one of ci.yml's `trivy (<image>)` jobs (F121).
 #     C7   ENV.md/VERIFY.md/THREAT-MODEL/OPERATIONS.md each match the code or
 #          compose file they describe (F081/F091/F155).
 #     C8a  docs/ci/github-actions.yml and azure-pipelines.yml pin the wardyn
@@ -21,6 +21,8 @@
 #          job).
 #     C8c  docs/OPERATIONS.md's migrator/app-role rationale names every
 #          migration that needs pre-existing-object ownership (F034).
+#     C8h  the newest CHANGELOG split-role upgrade bullet names every table a
+#          migration since the last release creates (R2-0008/R2-0079).
 #     C9   every fenced "helm install wardyn" recipe across the front-door
 #          docs carries an age-key source and, with k8s.enabled=true, a
 #          runs-namespace choice (X1a-F1/X1c-F1).
@@ -91,18 +93,18 @@ RELEASING="${ROOT}/RELEASING.md"
 CI_YML="${ROOT}/.github/workflows/ci.yml"
 contexts="$(awk '/"contexts": \[/{f=1} f{print} f&&/\]/{exit}' "${RELEASING}")"
 [ -n "${contexts}" ] || fail "RELEASING.md no longer carries a required_status_checks \"contexts\" array — the one place the merge gate is written down (F121)"
-trivy_cells="$(awk '/^  trivy:/{f=1} f&&/^  [a-z]/&&!/^  trivy:/{f=0} f' "${CI_YML}" \
-               | grep -oE '^[[:space:]]+- name: [a-z0-9-]+$' | awk '{print $3}' | sort -u || true)"
-[ -n "${trivy_cells}" ] || fail "could not derive ci.yml's trivy matrix — this guard would compare against an empty list"
+trivy_cells="$(grep -oE '^[[:space:]]+name: trivy \([a-z0-9-]+\)$' "${CI_YML}" \
+               | sed -E 's/.*\(([a-z0-9-]+)\)$/\1/' | sort -u || true)"
+[ -n "${trivy_cells}" ] || fail "could not derive ci.yml's trivy jobs — this guard would compare against an empty list"
 for want in notices; do
-  printf '%s' "${contexts}" | grep -qF "\"${want}\"" \
+  grep -qF "\"${want}\"" <<<"${contexts}" \
     || fail "RELEASING.md's required contexts omit '${want}' — the copyleft / unreviewed-dependency gate merges red (F121)"
 done
 for cell in ${trivy_cells}; do
-  printf '%s' "${contexts}" | grep -qF "\"trivy (${cell})\"" \
-    || fail "RELEASING.md's required contexts omit 'trivy (${cell})' — ci.yml scans that image and branch protection would let it merge red. A matrix job reports one context per cell (F121)"
+  grep -qF "\"trivy (${cell})\"" <<<"${contexts}" \
+    || fail "RELEASING.md's required contexts omit 'trivy (${cell})' — ci.yml scans that image and branch protection would let it merge red. Each trivy job reports its own context (F121)"
 done
-pass "C6 RELEASING.md's required contexts cover notices + every ci.yml trivy matrix cell"
+pass "C6 RELEASING.md's required contexts cover notices + every ci.yml trivy job"
 
 # ── C7: three doc claims, each checked against the thing it describes ──────
 COMPOSE_YAML="${ROOT}/deploy/compose/docker-compose.yaml"
@@ -124,9 +126,9 @@ pg_pw="$(awk '/^  postgres:/{f=1} f&&/^  [a-z]/&&!/^  postgres:/{f=0} f&&/POSTGR
 [ -n "${pg_pw}" ] || fail "could not read POSTGRES_PASSWORD out of ${COMPOSE_YAML}"
 second_user="$(awk '/^## Second user, same host/{f=1;next} f&&/^## /{f=0} f' "${ROOT}/docs/OPERATIONS.md")"
 [ -n "${second_user}" ] || fail "docs/OPERATIONS.md has no 'Second user, same host' section — C7's F155 half is pointing at nothing"
-printf '%s' "${second_user}" | grep -qF "${pg_pw}" \
+grep -qF "${pg_pw}" <<<"${second_user}" \
   || fail "docs/OPERATIONS.md's 'Second user, same host' recipe never mentions that Postgres publishes on loopback with the PUBLISHED literal password '${pg_pw}' — the second person psql's straight past every admin/member control the section is about (F155)"
-printf '%s' "${second_user}" | grep -qi 'registry' \
+grep -qi 'registry' <<<"${second_user}" \
   || fail "docs/OPERATIONS.md's 'Second user, same host' recipe never mentions the unauthenticated loopback registry — any local user can push a layer a later envbuild run executes (F155)"
 pass "C7 ENV.md/VERIFY.md/THREAT-MODEL/OPERATIONS.md match the code they describe"
 
@@ -182,10 +184,84 @@ for f in "${MIGDIR}"/00[5-9]*.sql "${MIGDIR}"/0[1-9]*.sql; do
   # replaces a function an earlier release created — no ownership needed.
   grep -i 'CREATE OR REPLACE FUNCTION' "${f}" | grep -viq 'FUNCTION pg_temp\.' && hazard=yes
   [ "${hazard}" = yes ] || continue
-  printf '%s' "${ops_para}" | grep -qF "\`${num}\`" \
+  grep -qF "\`${num}\`" <<<"${ops_para}" \
     || fail "migration ${num} ALTERs a table an earlier release created (or replaces a function it created), so it needs the migrator to OWN that object — and docs/OPERATIONS.md's migrator/app-role rationale never names it. That enumeration is the whole justification for the one-way role split (F034)"
 done
 pass "C8c the migrator rationale names every ownership-requiring migration on the upgrade path"
+
+# ── C8h: the split-role upgrade note grants every table this release creates ─
+#
+# R2-0008 / R2-0079: an app role that does not get new tables through ALTER
+# DEFAULT PRIVILEGES needs each table a release's migrations create granted by
+# hand, and the CHANGELOG's split-role bullet is that list. Twice it missed
+# tables, and wardynd then failed at boot or on the first write. Derived: every
+# table a migration numbered UNRELEASED_FROM or later creates is named in the
+# newest CHANGELOG section that carries a "Split-role installs" bullet. When a
+# release is cut, set UNRELEASED_FROM to the first migration after it; the next
+# release's tables then go in a new bullet under its own heading.
+UNRELEASED_FROM=0179 # v0.9.1 ships migrations up to 0178
+split_note="$(awk '
+  /^## \[/ { if (found) exit }
+  /^- Split-role installs/ { found = 1; on = 1; print; next }
+  on && (/^- / || /^#/ || /^$/) { on = 0 }
+  on { print }
+' "${ROOT}/CHANGELOG.md")"
+[ -n "${split_note}" ] || fail "CHANGELOG.md carries no \"Split-role installs\" bullet — re-anchor this guard (C8h)"
+checked=0
+for f in "${MIGDIR}"/[0-9][0-9][0-9][0-9]_*.sql; do
+  num="$(basename "${f}" | cut -c1-4)"
+  [ "$((10#${num}))" -ge "$((10#${UNRELEASED_FROM}))" ] || continue
+  while read -r tbl; do
+    [ -n "${tbl}" ] || continue
+    checked=$((checked + 1))
+    grep -qF "\`${tbl}\`" <<<"${split_note}" \
+      || fail "migration ${num} creates table ${tbl}, and the newest CHANGELOG \"Split-role installs\" bullet does not grant it: a split-role install that follows the note cannot use the table (C8h). Name it there with its grant; after a release cut, start a new bullet and move UNRELEASED_FROM"
+  done <<< "$(grep -ioE 'CREATE TABLE (IF NOT EXISTS )?[a-z_]+' "${f}" | awk '{print tolower($NF)}' | sort -u || true)"
+done
+pass "C8h the split-role upgrade note grants all ${checked} tables created since migration ${UNRELEASED_FROM}"
+
+# ── C8h (verbs): the note grants every VERB the code uses on a table it names ─
+#
+# FR-0158, the third miss of this class: the note named person_invitations (so
+# the table-name check above passed) under SELECT, INSERT, UPDATE, while the
+# SCIM purge DELETEs from it, and a split-role install that followed the note
+# could never finish a leaver purge. Derived: for each table the note grants,
+# the verbs it grants it (the "SELECT, ... on" group the name sits in) must
+# cover every verb that non-test Go SQL uses on it. A verb is read off one SQL
+# string literal: DELETE FROM t; UPDATE t SET; INSERT INTO t ... DO UPDATE; a
+# FROM t with FOR [NO KEY] UPDATE. A statement assembled from several literals
+# is judged per literal, so this is a floor, not a proof.
+verb_report="$(cd "${ROOT}" && printf '%s\n' "${split_note}" | tr '\n' ' ' | perl -e '
+  my $note = <STDIN>; $note =~ s/\.\s+Without\b.*//s;       # the grant sentence only
+  my (%has, $verbs);
+  while ($note =~ /`?(SELECT(?:, [A-Z]+)*)`?\s+on\b|`([a-z][a-z_]*)`/g) {
+    if (defined $1) { $verbs = $1; next }
+    $has{$2} = $verbs if defined $verbs;
+  }
+  my @files = grep { !/_test\.go$/ } split /\n/, `find internal cmd -name "*.go" -not -path "*/testdata/*"`;
+  my %need;
+  for my $f (@files) {
+    open my $h, "<", $f or next; local $/; my $src = <$h>; close $h;
+    while ($src =~ /`([^`]*)`|"((?:[^"\\\n]|\\.)*)"/g) {
+      my $l = defined $1 ? $1 : $2;
+      for my $t (keys %has) {
+        $need{$t}{DELETE} ||= $f if $l =~ /\bDELETE\s+FROM\s+$t\b/i;
+        $need{$t}{UPDATE} ||= $f if $l =~ /\bUPDATE\s+$t\s+SET\b/i
+          || ($l =~ /\bINSERT\s+INTO\s+$t\b/i && $l =~ /\bDO\s+UPDATE\b/i)
+          || ($l =~ /\bFROM\s+$t\b/i && $l =~ /\bFOR\s+(NO\s+KEY\s+)?UPDATE\b/i);
+        $need{$t}{INSERT} ||= $f if $l =~ /\bINSERT\s+INTO\s+$t\b/i;
+      }
+    }
+  }
+  for my $t (sort keys %need) { for my $v (sort keys %{$need{$t}}) {
+    print "$t needs $v ($need{$t}{$v}) but the note grants it only: $has{$t}\n" unless $has{$t} =~ /\b$v\b/;
+  } }
+')"
+[ -z "${verb_report}" ] || {
+  printf '%s\n' "${verb_report}" >&2
+  fail "the newest CHANGELOG \"Split-role installs\" bullet grants a table fewer verbs than non-test SQL uses on it: a split-role install that follows the note fails at that statement (C8h verbs). Move the table to a group that carries the verb"
+}
+pass "C8h the split-role upgrade note grants every verb the code uses on the tables it names"
 
 # ── C9: every "helm install wardyn" recipe carries its render-time refusals ─
 #
@@ -194,12 +270,12 @@ pass "C8c the migrator rationale names every ownership-requiring migration on th
 # default, so templates/secret.yaml `fail`s any install that doesn't wire an
 # age identity; a k8s.enabled=true install with no runs-namespace choice
 # `fail`s at templates/rbac.yaml; and a k8s.enabled=true install with no
-# CC2/CC3 RuntimeClass pin and no default-policy override `fail`s at
-# templates/deployment.yaml (deploy-scripts' B12b-F7 guard — D-1, v0.7.4
-# review). Nothing caught any of this, because a fenced shell recipe is prose
+# k8s.proxyImage `fail`s at templates/deployment.yaml. (The CC2/CC3 pin
+# refusal, B12b-F7, retired in 0.7.8 when the policy floor moved to CC1.)
+# Nothing caught any of this, because a fenced shell recipe is prose
 # to every other guard here. Extracts every fenced ```sh/```bash block across
 # the front-door docs that pastes a `helm install`/`helm upgrade --install
-# wardyn` command and checks it against all three render-time refusals.
+# wardyn` command and checks it against the render-time refusals.
 # Ceiling: text-only (does not actually `helm template` the block) — an
 # elided `...` placeholder snippet is excluded, not validated.
 helm_recipe_docs="README.md docs/VERIFY.md .claude/skills/wardyn-k8s-setup/SKILL.md deploy/helm/wardyn/README.md"
@@ -226,12 +302,14 @@ for relpath in ${helm_recipe_docs}; do
     if grep -qE 'k8s\.enabled=true' "${b}"; then
       grep -qE 'k8s\.(runsNamespace|allowRunsInReleaseNamespace)' "${b}" \
         || fail "${relpath} has a fenced k8s.enabled=true 'helm install wardyn' block with no runs-namespace choice (k8s.runsNamespace or k8s.allowRunsInReleaseNamespace) — templates/rbac.yaml fails this render (C9): $(head -1 "${b}")"
+      grep -qE 'k8s\.proxyImage' "${b}" \
+        || fail "${relpath} has a fenced k8s.enabled=true 'helm install wardyn' block with no k8s.proxyImage — templates/deployment.yaml refuses to render k8s.enabled without one (C9): $(head -1 "${b}")"
     fi
   done
 done
 rm -f "${WORK}"/c9-block-*
 [ "${n_blocks}" -ge 3 ] || fail "found only ${n_blocks} fenced 'helm install wardyn' blocks across the front-door docs — this guard would check nothing (C9)"
-pass "C9 every fenced 'helm install wardyn' block carries an age-key source and, with k8s.enabled=true, a runs-namespace choice and a CC2/CC3 pin or default-policy override"
+pass "C9 every fenced 'helm install wardyn' block carries an age-key source and, with k8s.enabled=true, a runs-namespace choice and a k8s.proxyImage"
 
 # ── R-02: the chart's Role grants every "list" verb the k8s driver issues ───
 #
@@ -256,8 +334,10 @@ rbac="${ROOT}/deploy/helm/wardyn/templates/rbac.yaml"
 # not a verb wardynd ever issues (and granting pvc:list would be wrong).
 k8s_files="$(find "${k8s_src}" -maxdepth 1 -name '*.go' ! -name '*_test.go' | sort)"
 [ -n "${k8s_files}" ] || fail "no non-test .go files under internal/runner/k8s — this guard would check nothing (R-02)"
+# Namespaced accessors only (they take the namespace): a cluster-scoped list such as Nodes() is
+# the ClusterRole's to grant, never this Role's.
 # shellcheck disable=SC2086
-grep -hoE '(CoreV1|NetworkingV1|RbacV1)\(\)\.[A-Za-z]+\([^)]*\)\.List\(' ${k8s_files} \
+grep -hoE '(CoreV1|NetworkingV1|RbacV1)\(\)\.[A-Za-z]+\([^)]+\)\.List\(' ${k8s_files} \
   | sed -E 's/.*\(\)\.([A-Za-z]+)\(.*/\1/' | sort -u > "${WORK}/k8s-list-kinds"
 [ -s "${WORK}/k8s-list-kinds" ] || fail "no .List( call found in internal/runner/k8s — this guard would check nothing (R-02)"
 # The Role's rules only (not the cluster-scoped ClusterRole): granting a verb

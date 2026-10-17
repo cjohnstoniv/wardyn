@@ -91,6 +91,10 @@ const (
 	// is deliberately among them: Entra's own Conditional Access baseline
 	// recommends blocking it, and it cannot be bound to a browser session.
 	ErrUnsupportedGrantType = "unsupported_grant_type"
+	// AADSTSMultipleResources is Entra's refusal of a scope string that names
+	// more than one resource (AADSTS700022): one token is for one resource, so
+	// one request cannot ask for two.
+	AADSTSMultipleResources = "AADSTS700022"
 	// ErrUnsupportedResponseType is any response_type but `code`. The implicit
 	// and hybrid flows are not modelled because the capture must never use one.
 	ErrUnsupportedResponseType = "unsupported_response_type"
@@ -137,6 +141,11 @@ type refreshGrant struct {
 type Identity struct {
 	Username string
 	Subject  string
+	// Groups are the values of the id_token's `groups` claim, as the tenant would send them.
+	Groups []string
+	// GroupsOverage replaces the claim with Entra's distributed-claim pointer, the token a person in too
+	// many groups gets.
+	GroupsOverage bool
 }
 
 // IssuedToken is what an OnIssue hook is told about each access token minted:
@@ -193,6 +202,12 @@ type Server struct {
 	invalidGrant        bool
 	// omitIDToken answers the code grant without an id_token (SetOmitIDToken).
 	omitIDToken bool
+	// omitRefreshToken answers the code grant without a refresh_token
+	// (SetOmitRefreshToken).
+	omitRefreshToken bool
+	// answerScope, when set, replaces the granted scope every token response
+	// reports (SetAnswerScope).
+	answerScope []string
 
 	codes   map[string]codeGrant
 	access  map[string][]string
@@ -381,6 +396,20 @@ func (s *Server) SetInvalidGrant(v bool) { s.set(func() { s.invalidGrant = v }) 
 // party must refuse rather than sign anyone in on.
 func (s *Server) SetOmitIDToken(v bool) { s.set(func() { s.omitIDToken = v }) }
 
+// SetOmitRefreshToken makes the authorization_code grant answer 200 with an
+// access token but no refresh_token: a sign-in that granted no offline access,
+// which leaves a relying party nothing to store and nothing to renew.
+func (s *Server) SetOmitRefreshToken(v bool) { s.set(func() { s.omitRefreshToken = v }) }
+
+// SetAnswerScope makes every token response report exactly these scopes as
+// granted, whatever was requested: an authority that answers a `.default`
+// request with permissions of another resource, which a capture must read as
+// unusable rather than assume it got what it asked for. No arguments restores
+// the normal answer.
+func (s *Server) SetAnswerScope(scopes ...string) {
+	s.set(func() { s.answerScope = slices.Clone(scopes) })
+}
+
 func (s *Server) set(f func()) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -521,9 +550,19 @@ func (s *Server) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 		redirectError(w, r, redirectURI, state, ErrInvalidRequest, "scope is required")
 		return
 	}
+	if multipleResources(requested) {
+		redirectError(w, r, redirectURI, state, ErrInvalidRequest, multipleResourcesDescription)
+		return
+	}
 	if consentRequired {
 		redirectError(w, r, redirectURI, state, ErrConsentRequired,
 			AADSTSConsentRequired+": the user or administrator has not consented to use the application")
+		return
+	}
+	requested, bad, ok := expandDefault(requested, consented)
+	if !ok {
+		redirectError(w, r, redirectURI, state, ErrConsentRequired,
+			AADSTSConsentRequired+": the user or administrator has not consented to use the application with scope "+bad)
 		return
 	}
 	if bad, ok := firstUnconsented(requested, consented); !ok {
@@ -675,9 +714,9 @@ func (s *Server) tokenFromCode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.mu.Lock()
-	withIDToken := !s.omitIDToken
+	withIDToken, withRefresh := !s.omitIDToken, !s.omitRefreshToken
 	s.mu.Unlock()
-	s.issueTokens(w, grant.scopes, grant.scopes, grant.nonce, withIDToken, grant.who)
+	s.issueTokens(w, grant.scopes, grant.scopes, grant.nonce, withIDToken, withRefresh, grant.who)
 }
 
 // tokenFromRefresh redeems a refresh token, and is where the two properties the
@@ -721,14 +760,30 @@ func (s *Server) tokenFromRefresh(w http.ResponseWriter, r *http.Request) {
 	}
 
 	consented := slices.Clone(grant.scopes)
+	granted := consented
 	if requested := splitScope(r.Form.Get("scope")); len(requested) > 0 {
-		if bad, ok := firstUnconsented(requested, consented); !ok {
+		if multipleResources(requested) {
+			writeTokenError(w, http.StatusBadRequest, ErrInvalidRequest, multipleResourcesDescription)
+			return
+		}
+		expanded, bad, ok := expandDefault(requested, consented)
+		if !ok {
 			writeTokenError(w, http.StatusBadRequest, ErrConsentRequired,
 				AADSTSConsentRequired+": the user or administrator has not consented to use the application with scope "+bad)
 			return
 		}
-		// And then the requested subset is DISCARDED, which is the whole of
-		// F-LIVE-1: the token that comes back carries everything consented.
+		if bad, ok := firstUnconsented(expanded, consented); !ok {
+			writeTokenError(w, http.StatusBadRequest, ErrConsentRequired,
+				AADSTSConsentRequired+": the user or administrator has not consented to use the application with scope "+bad)
+			return
+		}
+		// A `.default` request is answered with the permissions it expands to
+		// for that one resource. Any other requested subset is DISCARDED, which
+		// is the whole of F-LIVE-1: the token that comes back carries everything
+		// consented.
+		if slices.ContainsFunc(requested, isDefaultScope) {
+			granted = expanded
+		}
 	}
 
 	// Retire the presented token BEFORE the new pair is minted, so there is no
@@ -737,7 +792,7 @@ func (s *Server) tokenFromRefresh(w http.ResponseWriter, r *http.Request) {
 	s.refresh[presented].retired = true
 	s.mu.Unlock()
 
-	s.issueTokens(w, consented, consented, "", false, grant.who)
+	s.issueTokens(w, granted, consented, "", false, true, grant.who)
 }
 
 // issueTokens mints the access/refresh/id triple and answers with the GRANTED
@@ -748,14 +803,20 @@ func (s *Server) tokenFromRefresh(w http.ResponseWriter, r *http.Request) {
 //
 // withIDToken is false on a refresh: the real service only returns an id_token
 // when `openid` is in the request, and a control-plane renewal has no use for
-// one — the identity was bound once, at capture.
-func (s *Server) issueTokens(w http.ResponseWriter, granted, consented []string, nonce string, withIDToken bool, who *Identity) {
+// one — the identity was bound once, at capture. withRefresh is false only
+// when SetOmitRefreshToken asks for a grant with no offline access.
+func (s *Server) issueTokens(w http.ResponseWriter, granted, consented []string, nonce string, withIDToken, withRefresh bool, who *Identity) {
 	access := "fake-entra-access-" + randHex(16)
 	refresh := "fake-entra-refresh-" + randHex(16)
 
 	s.mu.Lock()
+	if s.answerScope != nil {
+		granted = slices.Clone(s.answerScope)
+	}
 	s.access[access] = slices.Clone(granted)
-	s.refresh[refresh] = &refreshGrant{scopes: slices.Clone(consented), who: who}
+	if withRefresh {
+		s.refresh[refresh] = &refreshGrant{scopes: slices.Clone(consented), who: who}
+	}
 	onIssue, subject := s.onIssue, s.subject
 	s.mu.Unlock()
 	if who != nil {
@@ -770,11 +831,13 @@ func (s *Server) issueTokens(w http.ResponseWriter, granted, consented []string,
 		"expires_in":     int(accessTokenTTL.Seconds()),
 		"ext_expires_in": int(accessTokenTTL.Seconds()),
 		"access_token":   access,
-		"refresh_token":  refresh,
 		// THE GRANTED SET, which is not the requested one: a client must read
 		// what it was given rather than assume it got what it asked for, and on
 		// this service those differ whenever a caller asks for a subset.
 		"scope": strings.Join(granted, " "),
+	}
+	if withRefresh {
+		body["refresh_token"] = refresh
 	}
 	if withIDToken {
 		idToken, err := s.signIDToken(nonce, who)
@@ -823,13 +886,22 @@ func (s *Server) signIDToken(nonce string, who *Identity) (string, error) {
 		"ver":                "2.0",
 		"name":               "Fake Person",
 		"preferred_username": "fake.person@example.invalid",
-		"oid":                "00000000-1111-2222-3333-444444444444",
+		"oid":                objectID(who),
 	}
 	if who != nil {
 		claims["sub"] = who.Subject
 		claims["preferred_username"] = who.Username
 		claims["email"] = who.Username
 		claims["name"] = who.Username
+		if who.Groups != nil {
+			claims["groups"] = who.Groups
+		}
+		if who.GroupsOverage {
+			claims["_claim_names"] = map[string]string{"groups": "src1"}
+			claims["_claim_sources"] = map[string]any{"src1": map[string]string{
+				"endpoint": "https://graph.microsoft.com/v1.0/users/" + who.Subject + "/getMemberObjects",
+			}}
+		}
 	}
 	if nonce != "" {
 		claims["nonce"] = nonce

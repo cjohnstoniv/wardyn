@@ -184,7 +184,7 @@ export function AddWorkspaceDialog({
               // selection must not ride along into a clamped local_dir submit
               // and 400 against a control the caller can no longer even see.
               // (ValidateUserMount refuses a writable member mount outright
-              // unless WARDYN_MEMBER_WRITABLE_ROOTS is set.)
+              // unless WARDYN_USER_WRITABLE_ROOTS is set.)
               writable: memberClamped ? undefined : writable || undefined,
             }
           : { type: "ephemeral", target, writable: writable || undefined };

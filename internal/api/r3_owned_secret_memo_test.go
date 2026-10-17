@@ -6,7 +6,9 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -92,26 +94,43 @@ func (c *countingSecretStore) For(owner string) secretstore.Store {
 	return &cp
 }
 
-// r3MemberPreflightBody builds a member inline_policy carrying n api_key grants,
-// each naming the member's OWN model key paired with the model-provider host the
-// policy already allows — the 6c own-key arm, which is the arm that calls
-// ownsSecret.
-func r3MemberPreflightBody(t *testing.T, n int) string {
+// r3GrantScope is the scope of the i-th grant: the member's OWN secret, bound
+// for a host of its own. Each grant gets its own host because a run carries
+// one credential per host (credentialHostRefusal): the same grant repeated n
+// times is refused at the door, and a refused request stops before the later
+// phases whose reads this law is also about.
+func r3GrantScope(t *testing.T, i int) json.RawMessage {
+	t.Helper()
+	scope, err := json.Marshal(map[string]string{
+		"host": fmt.Sprintf("svc%d.corp.example", i), "secret_name": "alice-model-key", "header": "X-Api-Key",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return scope
+}
+
+// r3Grants is n api_key grants, each naming the member's own secret for its
+// own host. The deployment lists the same pairings, which is what lets a
+// member's inline policy keep them (filterUserGrants).
+func r3Grants(t *testing.T, n int) []types.GrantSpec {
 	t.Helper()
 	grants := make([]types.GrantSpec, 0, n)
 	for i := 0; i < n; i++ {
-		scope, err := json.Marshal(map[string]string{
-			"host": "api.anthropic.com", "secret_name": "alice-model-key", "header": "X-Api-Key",
-		})
-		if err != nil {
-			t.Fatal(err)
-		}
-		grants = append(grants, types.GrantSpec{Kind: types.GrantAPIKey, Scope: scope})
+		grants = append(grants, types.GrantSpec{Kind: types.GrantAPIKey, Scope: r3GrantScope(t, i)})
 	}
+	return grants
+}
+
+// r3MemberPreflightBody builds a member inline_policy carrying those n grants
+// — every one a name the operator does not hold, so each is one the pipeline
+// has to ask the member's own namespace about.
+func r3MemberPreflightBody(t *testing.T, n int) string {
+	t.Helper()
 	spec := types.RunPolicySpec{
 		MinConfinementClass: types.CC2,
-		AllowedDomains:      []string{"api.anthropic.com"},
-		EligibleGrants:      grants,
+		AllowedDomains:      []string{"api.anthropic.com", "*.corp.example"},
+		EligibleGrants:      r3Grants(t, n),
 	}
 	body, err := json.Marshal(map[string]any{"agent": "claude-code", "task": "t", "inline_policy": spec})
 	if err != nil {
@@ -133,7 +152,9 @@ func r3MemberPreflightBody(t *testing.T, n int) string {
 // moved lists.
 //
 // The assertion is CONSTANCY, not a budget: the owner-scoped read count must not
-// depend on len(EligibleGrants) at all.
+// depend on len(EligibleGrants) at all. Every n is a request the door ADMITS,
+// with all n grants kept, so the count covers the whole door and not only the
+// phases ahead of a refusal.
 func TestOwnedSecretReadsAreFlatInCallerInput(t *testing.T) {
 	run := func(t *testing.T, n int) (int64, int) {
 		t.Helper()
@@ -142,11 +163,8 @@ func TestOwnedSecretReadsAreFlatInCallerInput(t *testing.T) {
 		cfg.OIDC = &oidc.Authenticator{}
 		cfg.DefaultPolicy = types.RunPolicySpec{
 			MinConfinementClass: types.CC2,
-			AllowedDomains:      []string{"api.anthropic.com"},
-			EligibleGrants: []types.GrantSpec{{
-				Kind:  types.GrantAPIKey,
-				Scope: json.RawMessage(`{"host":"api.anthropic.com","secret_name":"operator-key","header":"X-Api-Key"}`),
-			}},
+			AllowedDomains:      []string{"api.anthropic.com", "*.corp.example"},
+			EligibleGrants:      r3Grants(t, n),
 		}
 		sec := newCountingSecretStore(nil, map[string][]string{
 			"sub-gov-bob": {"alice-model-key"},
@@ -158,10 +176,22 @@ func TestOwnedSecretReadsAreFlatInCallerInput(t *testing.T) {
 		if w.Code != http.StatusOK {
 			t.Fatalf("n=%d: preflight = %d, want 200; body=%s", n, w.Code, w.Body.String())
 		}
+		// The grants were kept, not dropped on the way: a request that lost
+		// them would read the same at every n for the wrong reason.
+		body := w.Body.String()
+		if dropped := strings.Count(body, "dropped api_key grant"); dropped != 0 || !strings.Contains(body, `"secret:alice-model-key"`) {
+			if len(body) > 2000 {
+				body = body[:2000]
+			}
+			t.Fatalf("n=%d: the member pipeline dropped %d of the grants, or Review lists no row for their secret: %s", n, dropped, body)
+		}
 		return sec.ownerList.Load(), w.Code
 	}
 
 	base, _ := run(t, 1)
+	if base == 0 {
+		t.Fatal("n=1 made no owner-scoped read: the fixture no longer reaches a site that asks whose the secret is")
+	}
 	for _, n := range []int{10, 200, 2000} {
 		got, _ := run(t, n)
 		if got != base {

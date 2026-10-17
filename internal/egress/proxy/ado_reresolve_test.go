@@ -588,6 +588,11 @@ func TestADOReresolve_GitAdvertisementHeals(t *testing.T) {
 			if strings.Count(log, logGitReresolved) != 1 || strings.Contains(log, ":upstream-") {
 				t.Errorf("decision log: want one %s and no refusal row: %s", logGitReresolved, log)
 			}
+			for _, line := range strings.Split(log, "\n") {
+				if strings.Contains(line, logGitReresolved) && !strings.Contains(line, `"via":"direct"`) {
+					t.Errorf("the re-resolved allow does not name its hop: %s", line)
+				}
+			}
 			noCredentialBytes(t, map[string]string{"decision log": log, "slog": h.logs.String()}, old, adoPAT{value: h.bearer})
 		})
 	}

@@ -48,6 +48,7 @@ the id is a single local file rather than a value threaded through the config.
 ```bash
 cd ui && pnpm build && cd ..                                   # 1
 cp "$(ls -S ui/dist/assets/index-*.css | head -1)" ui/dist/ds-styles.css   # 2
+cp ui/dist/assets/*.woff* ui/dist/                            # preserve CSS-relative font URLs
 bash scripts/design-sync-apply-overrides.sh                    # 3
 node .ds-sync/resync.mjs --config .design-sync/config.json \
   --node-modules ui/node_modules --out ./ds-bundle             # 4
@@ -56,7 +57,8 @@ node .ds-sync/resync.mjs --config .design-sync/config.json \
 1. The design system ships the **compiled** stylesheet. Skipping the build ships the
    previous one.
 2. Vite content-hashes its CSS, so it is copied to a stable name the config can point at.
-   A missing `cssEntry` only warns, and the result is an unstyled bundle.
+   Its relative font URLs also need the built fonts beside that copy. A missing
+   `cssEntry` only warns, and the result is an unstyled bundle.
 3. Wardyn is dark-first, and the theme class is applied after paint, so card templates
    capture light unless patched. `.ds-sync/` is restaged often and is not tracked, so
    this is re-applied every time rather than kept as an edit. It is idempotent, it

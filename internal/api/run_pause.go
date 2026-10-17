@@ -58,26 +58,81 @@ const (
 	// It is far below pauseDelayFloor, so a run stamped within it is never a
 	// pause candidate.
 	presenceStampEvery = 60 * time.Second
-	// idleSamplesPerTick bounds the CPU reads one sweep makes; the candidates
-	// are taken round-robin, so every idle run is read in turn.
+	// idleSamplesPerTick bounds the CPU reads one sweep makes on a substrate
+	// that charges a read per run; the candidates, the pause's and the
+	// auto-stop's together, are taken round-robin, so every one is read in turn.
 	idleSamplesPerTick = 4
 	// idleQuietCorePercent is the CPU use, as a percent of one core, below
-	// which an idle run counts as quiet. The reading includes the sampling
-	// script's own few milliseconds.
+	// which a run counts as quiet: the one threshold the idle pause and the
+	// auto-stop's CPU signal (run_activity.go) share.
 	idleQuietCorePercent = 10.0
 )
 
 // pauseClocks is the process-local state the pause keeps: the two stamp
-// debounces and the idle round-robin cursor. Presence and agent activity are
-// debounced apart, so an agent stamp never swallows the stamp that tells a
-// person's keystroke the run is paused.
+// debounces, the failed-thaw backoffs and the idle round-robin cursor. Presence
+// and agent activity are debounced apart, so an agent stamp never swallows the
+// stamp that tells a person's keystroke the run is paused.
 type pauseClocks struct {
-	mu       sync.Mutex
-	presence map[uuid.UUID]time.Time
-	activity map[uuid.UUID]time.Time
-	cursor   uuid.UUID
-	probes   map[uuid.UUID]*probeState
-	diskRoot map[uuid.UUID]diskRootSample
+	mu        sync.Mutex
+	presence  map[uuid.UUID]time.Time
+	activity  map[uuid.UUID]time.Time
+	thawRetry map[uuid.UUID]thawBackoff
+	cursor    uuid.UUID
+	probes    map[uuid.UUID]*probeState
+	diskRoot  map[uuid.UUID]diskRootSample
+}
+
+// thawRetryFloor is the first wait before an input retries a thaw that failed;
+// each failure after it doubles the wait, up to presenceStampEvery.
+const thawRetryFloor = time.Second
+
+// thawBackoff is one run whose thaw failed: next is the earliest an input
+// retries it, wait the interval that failure set.
+type thawBackoff struct {
+	next time.Time
+	wait time.Duration
+}
+
+// thawGate reports whether a failed thaw of id is outstanding, and whether its
+// backoff still holds at now. A backoff that has come due is reserved for the
+// caller before it is reported, so concurrent inputs at that moment make one
+// attempt between them, not one each.
+func (c *pauseClocks) thawGate(id uuid.UUID, now time.Time) (pending, hold bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	b, ok := c.thawRetry[id]
+	if !ok {
+		return false, false
+	}
+	if now.Before(b.next) {
+		return true, true
+	}
+	b.next = now.Add(b.wait)
+	c.thawRetry[id] = b
+	return true, false
+}
+
+// thawFailed notes a failed thaw (or a failed read of the paused run) of id and
+// sets when the next input retries it. now is read after the attempt, so a thaw
+// slower than its wait still holds the next input for a full wait.
+func (c *pauseClocks) thawFailed(id uuid.UUID, now time.Time) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.thawRetry == nil || len(c.thawRetry) >= 4096 {
+		c.thawRetry = map[uuid.UUID]thawBackoff{}
+	}
+	wait := thawRetryFloor
+	if b, ok := c.thawRetry[id]; ok {
+		wait = min(b.wait*2, presenceStampEvery)
+	}
+	c.thawRetry[id] = thawBackoff{next: now.Add(wait), wait: wait}
+}
+
+// thawDone forgets id's failed thaw: it was thawed, or found not paused.
+func (c *pauseClocks) thawDone(id uuid.UUID) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.thawRetry, id)
 }
 
 // probeState is one run's tally of Wardyn's own disk walks in flight and idle
@@ -101,20 +156,30 @@ const runDiskRootTTL = time.Minute
 // probeWait is how often beginSample looks for the walks it is waiting out.
 const probeWait = 10 * time.Millisecond
 
-// beginWalk reports whether run id's disk walk may start: not while an idle
-// sample is under way. A true return must be paired with endWalk.
-func (c *pauseClocks) beginWalk(id uuid.UUID) bool {
+// beginWalk tallies one Sandbox-widget read of run id and reports whether it
+// may walk a disk tree: not while an idle sample is under way. The read is
+// counted either way, so a sample that opens after it waits it out. Always
+// paired with endWalk.
+func (c *pauseClocks) beginWalk(id uuid.UUID) (mayWalk bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	p := c.probe(id)
-	if p.samples > 0 {
-		return false
-	}
 	p.walks++
-	return true
+	return p.samples == 0
 }
 
-func (c *pauseClocks) endWalk(id uuid.UUID) {
+// abandonedWalkGrace is how long a read whose request ended (a closed tab, the
+// exec deadline) stays tallied: its `timeout 2 du` may still be running in the
+// sandbox, so the sample waits that out too.
+var abandonedWalkGrace = 2 * time.Second
+
+// endWalk ends a read beginWalk counted. abandoned is true when the request
+// ended before the read did.
+func (c *pauseClocks) endWalk(id uuid.UUID, abandoned bool) {
+	if abandoned {
+		time.AfterFunc(abandonedWalkGrace, func() { c.endWalk(id, false) })
+		return
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	p := c.probe(id)
@@ -233,13 +298,21 @@ func (s *Server) markPresent(ctx context.Context, runID uuid.UUID, actorType typ
 }
 
 // stampPresence is markPresent, reporting whether it resumed the run.
+//
+// The stamp debounce keeps a healthy run to one write a window. It never
+// swallows a thaw that is owed: a thaw that failed (or a read of the paused run
+// that failed) is retried by the next input once its short backoff has passed,
+// and reports its failure each time, so a person typing into a frozen agent is
+// not left waiting out the whole window. An input inside the backoff does
+// nothing and reports nothing; thawForExec still thaws directly then.
 func (s *Server) stampPresence(ctx context.Context, runID uuid.UUID, actorType types.ActorType, principal, reason string) (bool, error) {
 	pauser, ok := s.cfg.Store.(store.RunPauser)
 	if !ok {
 		return false, nil
 	}
 	now := s.cfg.Now()
-	if !s.pause.stampDue(true, runID, now) {
+	pending, hold := s.pause.thawGate(runID, now)
+	if hold || (!pending && !s.pause.stampDue(true, runID, now)) {
 		return false, nil
 	}
 	paused, err := pauser.StampRunActive(ctx, runID)
@@ -250,19 +323,45 @@ func (s *Server) stampPresence(ctx context.Context, runID uuid.UUID, actorType t
 	}
 	s.pause.stamped(true, runID, now)
 	if !paused {
+		s.pause.thawDone(runID)
 		return false, nil
 	}
+	// The resume holds the run's operation lock like the pause does (pauseRun), so a stale
+	// leader's freeze cannot land between its thaw and its clear. A held lock is a pause, a
+	// resume or a person's thaw in flight: skip, and let the next input retry past its backoff.
+	ctx, unlock, ok := s.tryLockRunOp(ctx, runID)
+	if !ok {
+		s.pause.thawFailed(runID, s.cfg.Now())
+		return false, nil
+	}
+	defer unlock()
 	run, err := s.cfg.Store.GetRun(ctx, runID)
+	if err == nil {
+		err = s.resumeRun(ctx, pauser, run, actorType, principal, reason)
+	}
 	if err != nil {
+		s.pause.thawFailed(runID, s.cfg.Now())
 		return false, err
 	}
-	return true, s.resumeRun(ctx, pauser, run, actorType, principal, reason)
+	s.pause.thawDone(runID)
+	return true, nil
 }
 
 // thawForExec is markPresent for a path about to exec into the sandbox, given
 // the run it just read: a paused run is thawed whatever the stamp debounce
 // says, because the daemon refuses an exec into a paused container.
+//
+// The thaw takes the run's operation lock, as a pause does (pauseRun), so a
+// person's thaw never lands inside a pause's freeze, mark or compensation. Its
+// callers are request doors that hold no other lock. Every other resume takes
+// it too: the sign-in resolvers, which hold a sign-in lock the run lock must
+// precede (db.LockOrder), hand their run ids back and resume after releasing it.
 func (s *Server) thawForExec(ctx context.Context, run types.AgentRun, actorType types.ActorType, principal, reason string) error {
+	ctx, unlock, err := s.lockRunOp(ctx, run.ID)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	if resumed, err := s.stampPresence(ctx, run.ID, actorType, principal, reason); err != nil || resumed {
 		return err
 	}
@@ -327,16 +426,55 @@ func agentActivityDecision(ruleSource string) bool {
 // request closed without one (the expiry sweeper). It resumes an idle pause
 // too: a request raised by traffic in flight when the run froze is still the
 // agent's to answer.
+//
+// It takes the run's operation lock, as every pause and resume does, so it
+// must not be called with a sign-in lock held (db.ErrLockOrder): a resolver
+// under one returns the run id and its caller passes it to approvalsClosed
+// once the lock is released.
 func (s *Server) approvalClosed(ctx context.Context, runID uuid.UUID) {
 	pauser, ok := s.cfg.Store.(store.RunPauser)
 	if !ok {
 		return
 	}
+	// Most runs are not paused: read before taking a lock connection.
+	if run, err := s.cfg.Store.GetRun(ctx, runID); err != nil || run.PausedAt == nil {
+		return
+	}
+	ctx, unlock, err := s.lockRunOp(ctx, runID)
+	if err != nil {
+		slog.WarnContext(ctx, "wardynd: could not take a run's lock to resume it after its request closed",
+			slog.String("run_id", runID.String()), slog.Any("err", err))
+		return
+	}
+	defer unlock()
 	run, err := s.cfg.Store.GetRun(ctx, runID)
 	if err != nil || run.PausedAt == nil {
 		return
 	}
 	if open, err := pauser.RunHasOpenRequest(ctx, runID); err != nil || open {
+		return
+	}
+	_ = s.resumeRun(ctx, pauser, run, types.ActorSystem, "wardynd", "request_closed")
+}
+
+// approvalsClosed is approvalClosed for the run ids a resolver collected while it held a sign-in lock.
+func (s *Server) approvalsClosed(ctx context.Context, runIDs []uuid.UUID) {
+	for _, id := range runIDs {
+		s.approvalClosed(ctx, id)
+	}
+}
+
+// resumeWaitingRun is the sweep's backstop resume of a waiting pause whose requests have all closed. It
+// takes the run's lock without waiting, as the sweep's pause does, and decides on the row it reads under
+// it: the candidate listing may be older than a pause or resume that has since settled.
+func (s *Server) resumeWaitingRun(ctx context.Context, pauser store.RunPauser, runID uuid.UUID) {
+	ctx, unlock, ok := s.tryLockRunOp(ctx, runID)
+	if !ok {
+		return
+	}
+	defer unlock()
+	run, err := s.cfg.Store.GetRun(ctx, runID)
+	if err != nil || run.PausedAt == nil || run.PausedReason != types.PauseWaiting {
 		return
 	}
 	_ = s.resumeRun(ctx, pauser, run, types.ActorSystem, "wardynd", "request_closed")
@@ -349,8 +487,9 @@ var errResumedSandboxGone = errors.New("the run's sandbox is not running")
 
 // resumeRun thaws a paused run, re-reads its sandbox's status, then clears its
 // pause. Thawing first means a failure leaves the run marked paused, so the
-// next keystroke, Resume or sweep tries again; clearing first could leave a
-// frozen agent nobody knows about. The re-read keeps a vanished sandbox from
+// next input (after its short backoff), Resume or exec tries again, and the
+// sweep too for a waiting pause with no request open; clearing first could
+// leave a frozen agent nobody knows about. The re-read keeps a vanished sandbox from
 // reading as a resumed run: its pause stays until the watcher or the
 // reconciler settles the run.
 func (s *Server) resumeRun(ctx context.Context, pauser store.RunPauser, run types.AgentRun,
@@ -392,16 +531,25 @@ func (s *Server) thawedSandboxRunning(ctx context.Context, ref string) error {
 	return nil
 }
 
-// sweepRunPauses is one pass of the pause over every live run: pause the ones
-// nobody is at, and resume a waiting one whose requests have all closed. Every
-// write is a conditional UPDATE, so each replica can run it on its own tick.
+// sweepRunPauses is one pass of the pause over every live run: settle the ones
+// a pause compensation left unsettled (settlePauses), pause the ones nobody is
+// at, and resume a waiting one whose requests have all closed. Every
+// write is a conditional UPDATE. With a SweeperLease only the elected leader
+// sweeps, its context ends when the lease is lost, and its epoch fences each
+// pause (pauseRun).
 func (s *Server) sweepRunPauses(ctx context.Context) error {
 	pauser, ok := s.cfg.Store.(store.RunPauser)
 	if !ok || s.cfg.Runner == nil {
 		return nil
 	}
-	if _, ok := s.cfg.Runner.(runner.Freezer); !ok {
+	_, canFreeze := s.cfg.Runner.(runner.Freezer)
+	ctx, end, ok := s.beginLeaderSweep(ctx)
+	if !ok {
 		return nil
+	}
+	defer end()
+	if canFreeze {
+		s.settlePauses(ctx, s.cfg.Runner.(runner.Freezer))
 	}
 	cands, now, err := pauser.ListPauseCandidates(ctx)
 	if err != nil {
@@ -413,6 +561,7 @@ func (s *Server) sweepRunPauses(ctx context.Context) error {
 	var (
 		freeze  map[types.ConfinementClass]bool
 		idle    []types.AgentRun
+		stop    []types.AgentRun
 		capsErr error
 	)
 	freezable := func(class types.ConfinementClass) bool {
@@ -427,12 +576,19 @@ func (s *Server) sweepRunPauses(ctx context.Context) error {
 	}
 	for _, c := range cands {
 		run := c.Run
+		if autoStopCandidate(run, now) {
+			s.activity.noteAutoStop()
+			stop = append(stop, run)
+		}
+		if !canFreeze {
+			continue
+		}
 		if run.PausedAt != nil {
 			// Only a waiting pause is the backstop's: an idle pause is marked
 			// with no request open, so no open request is the state it paused
 			// in, not a reason to wake.
 			if run.PausedReason == types.PauseWaiting && !c.OpenRequest {
-				_ = s.resumeRun(ctx, pauser, run, types.ActorSystem, "wardynd", "request_closed")
+				s.resumeWaitingRun(ctx, pauser, run.ID)
 			}
 			continue
 		}
@@ -446,12 +602,36 @@ func (s *Server) sweepRunPauses(ctx context.Context) error {
 			idle = append(idle, run)
 		}
 	}
-	for _, run := range s.nextIdleSamples(idle) {
-		if s.runCPUQuiet(ctx, run) {
+	s.actOnCPU(ctx, pauser, now, idle, stop)
+	return nil
+}
+
+// actOnCPU reads the CPU of every run the sweep has a use for, once, and acts
+// on the reading twice: a quiet pause candidate is paused, and a busy
+// auto-stop candidate has its idle clock bumped. One reading and one threshold
+// (idleQuietCorePercent) feed both, so a run is never paused as quiet and kept
+// from the reaper as busy. A run with no reading is left alone, which is the
+// pause's rule too: a run is never paused on a reading nobody took.
+func (s *Server) actOnCPU(ctx context.Context, pauser store.RunPauser, now time.Time, idle, stop []types.AgentRun) {
+	runs := slices.CompactFunc(slices.SortedFunc(slices.Values(slices.Concat(idle, stop)), func(a, b types.AgentRun) int {
+		return strings.Compare(a.ID.String(), b.ID.String())
+	}), func(a, b types.AgentRun) bool { return a.ID == b.ID })
+	if smp, ok := s.cfg.Runner.(runner.ActivitySampler); ok && !smp.BatchSample() {
+		runs = s.nextIdleSamples(runs)
+	}
+	readings := s.sampleRunCPU(ctx, runs)
+	for _, run := range idle {
+		if pct, ok := readings[run.ID]; ok && pct < idleQuietCorePercent {
 			s.pauseRun(ctx, pauser, run, types.PauseIdle, now.Sub(activeSince(run)))
 		}
 	}
-	return nil
+	for _, run := range stop {
+		if pct, ok := readings[run.ID]; ok && pct >= idleQuietCorePercent {
+			// TouchRun refuses a terminal run in SQL, so a run that ended since
+			// the listing is not given a longer life by this reading.
+			_ = s.cfg.Store.TouchRun(ctx, run.ID)
+		}
+	}
 }
 
 // activeSince is when anything last happened in run: its presence clock, or
@@ -487,45 +667,34 @@ func (s *Server) nextIdleSamples(runs []types.AgentRun) []types.AgentRun {
 	return out
 }
 
-// runCPUQuiet reads run's CPU use through the cgroup exec idiom
-// (run_resources.go) and reports whether it is below idleQuietCorePercent of
-// one core. Anything it cannot read counts as busy: a run is never paused on a
-// reading nobody took.
-func (s *Server) runCPUQuiet(ctx context.Context, run types.AgentRun) bool {
-	// Wardyn's own disk walk (an open run page's Sandbox widget) is CPU in this
-	// window too, and the cgroup cannot tell it from the agent's. So the window
-	// is claimed first: in-flight walks finish before it opens, and none starts
-	// inside it. Not claimed in time reads as busy, like any reading not taken.
-	claim, stop := context.WithTimeout(ctx, runResourcesExecTimeout)
-	ok := s.pause.beginSample(claim, run.ID)
-	stop()
-	if !ok {
-		return false
-	}
-	defer s.pause.endSample(run.ID)
-	ctx, cancel := context.WithTimeout(ctx, runResourcesExecTimeout)
-	defer cancel()
-	// Only the cpu keys are read here; `filesystem` picks the script's disk
-	// arm that is one statfs, never the 2-second walk the others can take.
-	kv, err := s.execRunResourcesScript(ctx, run, types.StorageEnforcementFilesystem)
-	if err != nil {
-		return false
-	}
-	u1, ok1 := kvInt64(kv, "cpu_usage_usec_1")
-	u2, ok2 := kvInt64(kv, "cpu_usage_usec_2")
-	p1, ok3 := kvFloat64(kv, "uptime_1")
-	p2, ok4 := kvFloat64(kv, "uptime_2")
-	if !ok1 || !ok2 || !ok3 || !ok4 || p2 <= p1 || u2 < u1 {
-		return false
-	}
-	return float64(u2-u1)/((p2-p1)*1e6)*100 < idleQuietCorePercent
-}
-
 // pauseRun freezes run, then marks it paused. Freezing first and marking with a
 // compare on the presence clock means a keystroke, or the request closing,
 // between the sweep's read and the mark wins: the mark fails and the agent is
 // thawed again.
+//
+// Under a SweeperLease a stale leader can run this beside the current one (a
+// failover releases the lock under the old leader), so a failed mark is not
+// proof that nobody holds the pause: the other leader's mark may be what won
+// the compare, and thawing then undoes it while the run reads as paused. The
+// compensation therefore re-reads the run and leaves a paused run frozen. The
+// epoch fences the two steps that start a pause: a leader that has been
+// superseded neither freezes nor marks.
+//
+// The epoch cannot fence the compensation's read-then-thaw: a current leader's
+// whole pause can commit between a stale leader's read and its thaw. The run's
+// operation lock serializes freeze, mark and compensation across replicas, so a
+// pause that finds it held is skipped and retried by the next sweep; the
+// compensation proves it still holds that lock around its thaw (undoFreeze).
 func (s *Server) pauseRun(ctx context.Context, pauser store.RunPauser, run types.AgentRun, reason types.PauseReason, quiet time.Duration) {
+	if !s.leaseCurrent(ctx) {
+		return
+	}
+	pass := ctx
+	ctx, unlock, ok := s.tryLockRunOp(ctx, run.ID)
+	if !ok {
+		return
+	}
+	defer unlock()
 	f := s.cfg.Runner.(runner.Freezer)
 	if err := f.FreezeSandbox(ctx, run.SandboxRef); err != nil {
 		if !errors.Is(err, runner.ErrFreezeUnsupported) {
@@ -534,7 +703,10 @@ func (s *Server) pauseRun(ctx context.Context, pauser store.RunPauser, run types
 		}
 		return
 	}
-	applied, err := pauser.MarkRunPaused(ctx, run.ID, reason, run.ActiveAt)
+	applied, err := false, error(nil)
+	if s.leaseCurrent(ctx) {
+		applied, err = pauser.MarkRunPaused(ctx, run.ID, reason, run.ActiveAt)
+	}
 	if err == nil && applied {
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.pause",
 			run.ID.String(), "success", mustJSON(map[string]any{
@@ -545,12 +717,11 @@ func (s *Server) pauseRun(ctx context.Context, pauser store.RunPauser, run types
 		s.revokeRunPATs(ctx, run.ID, adoPATRevokePause)
 		return
 	}
-	if terr := f.ThawSandbox(ctx, run.SandboxRef); terr != nil {
-		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.pause",
-			run.ID.String(), "failure", mustJSON(map[string]any{
-				"reason": reason, "thaw_error": terr.Error(),
-			})))
-	}
+	// The compensation outlives a lease lost mid-pass: a freeze must not be
+	// left behind because the sweep's context ended between freeze and thaw.
+	cctx, cancel := context.WithTimeout(context.WithoutCancel(pass), pauseCompensateTimeout)
+	defer cancel()
+	s.undoFreeze(cctx, ctx, f, run, reason)
 }
 
 // handleResumeRun serves POST /runs/{id}/resume: the person presses Resume.

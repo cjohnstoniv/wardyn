@@ -4,10 +4,12 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -22,6 +24,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/test/entrafake"
 )
 
@@ -42,6 +45,9 @@ type adoFixture struct {
 	audit *memAudit
 	fake  *entrafake.Server
 	cfg   ADOEntraConfig
+	// beforeCallback, when set, runs between the sign-in leg and the callback:
+	// the window in which a ceiling can narrow under a person mid-sign-in.
+	beforeCallback func()
 }
 
 func newADOFixture(t *testing.T) *adoFixture {
@@ -130,6 +136,9 @@ func (f *adoFixture) capture(t *testing.T, subject string) *httptest.ResponseRec
 	q := follow(t, authURL)
 	if q.Get("code") == "" {
 		t.Fatalf("the authority issued no code: %v", q)
+	}
+	if f.beforeCallback != nil {
+		f.beforeCallback()
 	}
 	return f.callback(t, subject, q, cookies)
 }
@@ -946,4 +955,244 @@ func TestADOCapture_StoreErrorRowCarriesNoErrorText(t *testing.T) {
 		})
 		check(t, f)
 	})
+}
+
+// narrowCeiling is the ceiling of a row an admin narrowed between a person's
+// sign-in and its callback: one capability nothing the person consented to.
+func (f *adoFixture) narrowCeiling() {
+	f.cfg.Scopes = []string{"499b84ac-1321-427f-aa17-267ca6975798/vso.serviceendpoint_manage"}
+}
+
+// unusableGrant is each way the callback reaches adoCaptureScopes' refusal
+// (ado_entra.go, reasonADOCallbackUnusableGrant): nothing to store or renew
+// without a refresh token, and nothing a run could use with no granted scope
+// inside the row's ceiling.
+var unusableGrant = []struct {
+	name    string
+	breakIt func(*adoFixture)
+}{
+	{"the ceiling narrowed between sign-in and callback", func(f *adoFixture) { f.beforeCallback = f.narrowCeiling }},
+	{"the token response carries no refresh token", func(f *adoFixture) { f.fake.SetOmitRefreshToken(true) }},
+}
+
+// unusableRig is a fixture for the unusable_grant cases: a first sign-in has
+// nothing held and no request, a re-capture has a held sign-in and the
+// person's pending sign-in request.
+type unusableRig struct {
+	*adoFixture
+	held    []byte // the stored blob's bytes, nil when nothing is stored
+	pending uuid.UUID
+	request func(uuid.UUID) types.ApprovalRequest
+	at      func(time.Time)
+}
+
+func newUnusableRig(t *testing.T, recapture bool) *unusableRig {
+	t.Helper()
+	if !recapture {
+		return &unusableRig{adoFixture: newADOFixture(t)}
+	}
+	sf := newADOSignInFixture(t)
+	// The held sign-in dies mid-run, which raises the person's request.
+	sf.fake.SetInvalidGrant(true)
+	sf.at(time.Now().Add(time.Minute))
+	rig := &unusableRig{adoFixture: sf.adoFixture, pending: pendingID(t, sf.resolveQ(t, ""), reauthPendingState),
+		request: sf.row, at: sf.at}
+	sf.fake.SetInvalidGrant(false)
+	rig.held = rig.storedRaw(t, rig.fake.Subject())
+	return rig
+}
+
+// storedRaw is owner's stored sign-in bytes as written, nil when none is stored.
+func (f *adoFixture) storedRaw(t *testing.T, owner string) []byte {
+	t.Helper()
+	raw, err := f.srv.cfg.Secrets.For(owner).Get(context.Background(), adoEntraSecretName(f.cfg.RowID))
+	if err != nil {
+		return nil
+	}
+	return raw
+}
+
+// TestADOCapture_UnusableGrantStoresNothingAndResolvesNothing pins the
+// unusable_grant arm (#1327) for both of its triggers, on a first sign-in and
+// on a re-capture: the redirect, the one failure row and what that row omits,
+// the sign-in held and the person's pending request. The control runs the same
+// flow with the ceiling unchanged. That the held refresh token stays masked is
+// pinned beside the other failed re-captures
+// (TestADOCapture_AFailedRecaptureKeepsTheHeldTokenMasked).
+func TestADOCapture_UnusableGrantStoresNothingAndResolvesNothing(t *testing.T) {
+	const wantLocation = adoSignInErrorPath + reasonADOCallbackUnusableGrant
+	for _, trigger := range unusableGrant {
+		for _, recapture := range []bool{false, true} {
+			name := trigger.name + ", first sign-in"
+			if recapture {
+				name = trigger.name + ", re-capture"
+			}
+			t.Run(name, func(t *testing.T) {
+				f := newUnusableRig(t, recapture)
+				subject := f.fake.Subject()
+				f.audit.rows = nil
+				ceiling := slices.Clone(f.cfg.Scopes)
+				trigger.breakIt(f.adoFixture)
+
+				w := f.capture(t, subject)
+				if w.Code != http.StatusFound || w.Header().Get("Location") != f.srv.cfg.BasePath+wantLocation {
+					t.Fatalf("callback = %d Location %q, want a 302 to %q", w.Code, w.Header().Get("Location"), wantLocation)
+				}
+				if got := f.storedRaw(t, subject); !bytes.Equal(got, f.held) {
+					t.Errorf("the stored sign-in changed: %d bytes, was %d", len(got), len(f.held))
+				}
+				if rows := f.audit.find(adoSignInCapturedAction); len(rows) != 1 {
+					t.Fatalf("%s rows = %d, want exactly one", adoSignInCapturedAction, len(rows))
+				} else {
+					var data map[string]any
+					if err := json.Unmarshal(rows[0].Data, &data); err != nil {
+						t.Fatal(err)
+					}
+					want := map[string]any{"provider": adoEntraProviderPrefix, "reason": reasonADOCallbackUnusableGrant,
+						"tenant_id": f.cfg.TenantID, "client_id": f.cfg.ClientID}
+					if rows[0].Outcome != "failure" || !maps.Equal(data, want) {
+						t.Errorf("failure row = %s %v, want a failure carrying exactly %v", rows[0].Outcome, data, want)
+					}
+					for _, leak := range append([]string{"fake-entra-"}, ceiling...) {
+						if strings.Contains(string(rows[0].Data), leak) {
+							t.Errorf("the failure row carries %q: %s", leak, rows[0].Data)
+						}
+					}
+				}
+				if recapture {
+					if st := f.request(f.pending).State; st != types.ApprovalPending {
+						t.Errorf("the person's sign-in request is %s, want PENDING — nothing was captured to resolve it", st)
+					}
+				}
+			})
+		}
+	}
+
+	t.Run("control: the ceiling unchanged lands on the done path", func(t *testing.T) {
+		f := newUnusableRig(t, true)
+		f.audit.rows = nil
+		f.at(time.Now().Add(2 * time.Minute))
+		w := f.capture(t, f.fake.Subject())
+		if w.Code != http.StatusFound || w.Header().Get("Location") != f.srv.cfg.BasePath+adoSignInDonePath {
+			t.Fatalf("callback = %d Location %q, want a 302 to %q", w.Code, w.Header().Get("Location"), adoSignInDonePath)
+		}
+		if st := f.request(f.pending).State; st != types.ApprovalApproved {
+			t.Errorf("the sign-in request is %s, want APPROVED by the capture", st)
+		}
+	})
+}
+
+// TestADOCapture_UnusableGrantWritesNoPATConnectRow: on a minted_pat row a
+// stored sign-in writes an ado_pat.connect row; a refused one must not. A
+// minted_pat row's ceiling is exactly the two token permissions, so only the
+// missing refresh token reaches the refusal there — a narrowed ceiling is an
+// invalid row the callback refuses first.
+func TestADOCapture_UnusableGrantWritesNoPATConnectRow(t *testing.T) {
+	mf := newMintFixture(t)
+	mf.fake.SetOmitRefreshToken(true)
+	w := mf.capture(t, mf.subject)
+	if w.Code != http.StatusFound || w.Header().Get("Location") != mf.srv.cfg.BasePath+adoSignInErrorPath+reasonADOCallbackUnusableGrant {
+		t.Fatalf("callback = %d Location %q, want the unusable_grant redirect", w.Code, w.Header().Get("Location"))
+	}
+	if rows := mf.audit.find(adoPATAuditConnect); len(rows) != 0 {
+		t.Errorf("%d %s rows written for a sign-in that stored nothing", len(rows), adoPATAuditConnect)
+	}
+	if _, found := mf.stored(t, mf.subject); found {
+		t.Error("a sign-in with no refresh token was stored")
+	}
+
+	mf.fake.SetOmitRefreshToken(false)
+	if w := mf.capture(t, mf.subject); w.Header().Get("Location") != mf.srv.cfg.BasePath+adoSignInDonePath {
+		t.Fatalf("control: Location %q, want the done path", w.Header().Get("Location"))
+	}
+	if rows := mf.audit.find(adoPATAuditConnect); len(rows) != 1 {
+		t.Errorf("control: %d %s rows, want one — the absence above would otherwise prove nothing", len(rows), adoPATAuditConnect)
+	}
+}
+
+// adoPersonStore is the person lookup a sign-in's Entra principal needs, with
+// no Postgres: people by exact principal, and nothing else owned by anyone.
+type adoPersonStore struct {
+	*personMintFakeStore
+}
+
+func (adoPersonStore) ListAPITokensByPrincipal(context.Context, string) ([]types.APIToken, error) {
+	return nil, nil
+}
+func (adoPersonStore) ListSSHKeysByPrincipal(context.Context, string) ([]types.SSHPublicKey, error) {
+	return nil, nil
+}
+func (adoPersonStore) ListWorkspaces(context.Context) ([]types.Workspace, error) { return nil, nil }
+
+// withPreCreatedEntraPerson makes the fixture's console person the one an admin
+// set up by object id, keyed by the token's own issuer, and returns the
+// principal such a person signs in as.
+func (f *adoFixture) withPreCreatedEntraPerson(tid, oid string) string {
+	principal := "entra:" + tid + ":" + oid
+	f.srv.cfg.Store = adoPersonStore{&personMintFakeStore{people: map[string]types.Person{
+		principal: {Principal: principal, Issuer: f.fake.Issuer(), TenantID: tid, ObjectID: oid},
+	}}}
+	return principal
+}
+
+// The fake's signed token carries this object id.
+const adoFakeObjectID = "00000000-1111-2222-3333-444444444444"
+
+// A person pre-created by tenant and object id signs in to the console as
+// entra:<tid>:<oid>, not as their pairwise sub; their Connect still binds, since
+// the callback resolves the token through the same exact key.
+func TestADOSignIn_PreCreatedEntraPersonCanConnect(t *testing.T) {
+	f := newADOFixture(t)
+	person := f.withPreCreatedEntraPerson(f.fake.TenantID(), adoFakeObjectID)
+	w := f.capture(t, person)
+	if got := w.Header().Get("Location"); strings.Contains(got, adoSignInErrorPath) {
+		t.Fatalf("callback redirected to the error path %q, want the sign-in stored", got)
+	}
+	if _, stored := f.stored(t, person); !stored {
+		t.Fatal("the pre-created person's sign-in was not stored under their principal")
+	}
+}
+
+// The resolution is exact: a pre-created person keyed by another object id, by
+// another issuer, or a session claiming an arbitrary entra: principal, is
+// refused with identity_binding and stores nothing.
+func TestADOSignIn_PreCreatedEntraPersonBindingIsExact(t *testing.T) {
+	const otherOID = "99999999-8888-7777-6666-555555555555"
+	const otherTID = "ffffffff-eeee-dddd-cccc-bbbbbbbbbbbb"
+	for _, tc := range []struct {
+		name    string
+		session func(f *adoFixture) string
+	}{
+		{"another object id", func(f *adoFixture) string {
+			return f.withPreCreatedEntraPerson(f.fake.TenantID(), otherOID)
+		}},
+		{"another tenant", func(f *adoFixture) string {
+			f.withPreCreatedEntraPerson(f.fake.TenantID(), adoFakeObjectID)
+			return "entra:" + otherTID + ":" + adoFakeObjectID
+		}},
+		{"an entra: principal no person is keyed by", func(f *adoFixture) string {
+			f.srv.cfg.Store = adoPersonStore{&personMintFakeStore{people: map[string]types.Person{}}}
+			return "entra:" + f.fake.TenantID() + ":" + adoFakeObjectID
+		}},
+		{"another issuer", func(f *adoFixture) string {
+			p := f.withPreCreatedEntraPerson(f.fake.TenantID(), adoFakeObjectID)
+			ps := f.srv.cfg.Store.(adoPersonStore)
+			row := ps.people[p]
+			row.Issuer = "https://login.microsoftonline.com/" + f.fake.TenantID() + "/v2.0"
+			ps.people[p] = row
+			return p
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newADOFixture(t)
+			session := tc.session(f)
+			w := f.capture(t, session)
+			if got := w.Header().Get("Location"); !strings.HasSuffix(got, adoSignInErrorPath+reasonADOCallbackIdentityBinding) {
+				t.Fatalf("callback Location = %q, want the identity_binding error path", got)
+			}
+			if _, stored := f.stored(t, session); stored {
+				t.Error("a refused callback stored a sign-in")
+			}
+		})
+	}
 }

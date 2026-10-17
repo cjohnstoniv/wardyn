@@ -38,8 +38,9 @@ that loop around it.
 - **Every pull request gets the same three reviews again**, against the issue
   it claims to close, plus code-review agents that read the change itself.
   Rounds continue until no finding would ship a defect.
-- **Every release gets two independent reviews**, one by Anthropic's Claude
-  Fable and one by OpenAI's GPT-6 Astra, and is verified before it's published.
+- **Every release gets two independent reviews**, one by Anthropic's strongest
+  Claude model and one by a second Claude session with fresh context, and is
+  verified before it's published.
 
 ## If you find a problem
 

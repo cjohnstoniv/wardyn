@@ -242,7 +242,7 @@ admin to sign in again.") — no shared sign-in exists in 0.8 (D3).
 | Key | Owner | String |
 |---|---|---|
 | refusal | #532 (design §2.6) | This run's model provider is {name}, and {state} — {remedy} Wardyn does not substitute a different model provider. |
-| state | #532 | you are not signed in to AWS for it · you are not signed in to Claude for it · you have not added your key for it · you have not added your token for it · it is turned off · it is not available to {harness} · you are not granted it |
+| state | #532 | you are not signed in to AWS for it · you are not signed in to Claude for it · no key is available for it · no token is available for it · it is turned off · it is not available to {harness} · you are not granted it |
 | state + remedy, not the owner | #532 (packet E) | it runs on {owner}'s own credential — only they can reconnect it. |
 | remedy | #532 | connect it from Getting started in the console, or from the banner the console shows on every page. · choose another model provider, or ask your admin. |
 | 400s | `internal/api/model_providers.go` (shipped) | the `mp400*` constants; E6 draws `mp400BaseURL`, `mp400Path`, `mp400Model` |

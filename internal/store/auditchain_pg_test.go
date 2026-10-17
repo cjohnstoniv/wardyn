@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/cjohnstoniv/wardyn/internal/store"
@@ -202,5 +203,49 @@ func TestPG_AuditChain_DetectsTamperedMiddleRow(t *testing.T) {
 	}
 	if !again.OK {
 		t.Fatalf("chain still broken after restoring the row: seq=%d %s", again.BrokenSeq, again.Reason)
+	}
+}
+
+// TestPG_VerifyAuditChain_TailDeletionSurvivesAppend: a row removed from the newest end must stay
+// detectable after the next ordinary append. The new row chains from the recorded high-water hash, which
+// no retained row carries, so the walk breaks at the new row instead of the deletion vanishing.
+func TestPG_VerifyAuditChain_TailDeletionSurvivesAppend(t *testing.T) {
+	pool := runsPGPoolIsolated(t)
+	requireTriggerBypass(t, pool)
+	hwHash := func() string {
+		return scalar[string](t, pool, `SELECT COALESCE(hw_row_hash, '') FROM audit_partition_meta`)
+	}
+
+	appendChained(t, pool, "tail-test-1")
+	head := appendChained(t, pool, "tail-test-2")
+	if st := sweep(t, pool); !st.OK {
+		t.Fatalf("an untouched chain does not verify: %+v", st)
+	}
+	if got := hwHash(); got != head.RowHash {
+		t.Fatalf("hw_row_hash = %q after an append, want the new row's hash %q", got, head.RowHash)
+	}
+
+	triggersOff(t, pool, func(tx pgx.Tx) error {
+		_, err := tx.Exec(context.Background(), `DELETE FROM audit_events WHERE id = $1`, head.ID)
+		return err
+	})
+	if st := sweep(t, pool); st.OK {
+		t.Fatalf("verify after removing the newest row: %+v, want a truncated-tail break", st)
+	}
+
+	after := appendChained(t, pool, "tail-test-after")
+	if after.PrevHash != head.RowHash {
+		t.Errorf("the append after the deletion chains to %q, want the removed row's hash %q (the recorded head)",
+			after.PrevHash, head.RowHash)
+	}
+	st := sweep(t, pool)
+	if st.OK {
+		t.Fatalf("an ordinary append cleared the evidence of a removed tail row: %+v", st)
+	}
+	if want := auditSeq(t, pool, after.ID); st.BrokenSeq != want {
+		t.Errorf("BrokenSeq = %d, want the appended row's seq %d", st.BrokenSeq, want)
+	}
+	if got := hwHash(); got != after.RowHash {
+		t.Errorf("hw_row_hash = %q, want the appended row's hash %q", got, after.RowHash)
 	}
 }

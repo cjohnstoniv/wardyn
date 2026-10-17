@@ -20,14 +20,20 @@ import { relativeTime, getErrorMessage } from "../../../lib/format";
 import { runs as runsApi } from "../../../lib/api/runs";
 import { OpenInUserView, runPath, useConsoleMode } from "../../wardyn/console-view";
 import { ownerLabel } from "../../wardyn/copy/console-view";
-import { usePrincipal } from "../../wardyn/operator-context";
+import { useOperator, usePrincipal } from "../../wardyn/operator-context";
 import { Button } from "../../ui/button";
 import { cn } from "../../ui/utils";
 import { repoLabel, rowHeadline } from "./board-groups";
 import { glyphKindFor, RowGlyph } from "./row-glyph";
-import { rowPresentation } from "./runs-model";
+import { rowPresentation, waitingSignInPresentation } from "./runs-model";
+import { mayReadSignIn } from "../run-detail/sign-in-run";
 import { RUNS_ROW_ACTION } from "../../wardyn/copy/runs-landing";
 import { REVIVE, REVIVING, revivePolicy } from "../../wardyn/copy/run-lifetime";
+import { RUNNER_OFFLINE_WORD, runnerLabel, runOnChip } from "../../../lib/nav-copy";
+
+// Lazy: the read loop is for the rare sign-in row, so it stays out of the entry
+// chunk. The gate (sign-in-run) is eager, and decides whether this loads at all.
+const RowSignInProbe = React.lazy(() => import("../run-detail/row-sign-in-probe"));
 
 function formatDuration(startIso: string, endIso: string): string {
   const mins = Math.max(0, Math.round((Date.parse(endIso) - Date.parse(startIso)) / 60000));
@@ -39,6 +45,12 @@ function formatDuration(startIso: string, endIso: string): string {
 
 function metaLine(run: AgentRun, adminView: boolean, own: boolean): string {
   const parts: string[] = [repoLabel(run).text];
+  // 0.9 (M-RN-3 RS8): a local run names its computer, and says so while it is offline, in neutral words in
+  // the meta line; the row's hue, word and action are rowPresentation's and unchanged.
+  if (run.placement === "local") {
+    parts.push(runOnChip(runnerLabel(run)));
+    if (run.runner_online === false) parts.push(RUNNER_OFFLINE_WORD);
+  }
   if (adminView) parts.push(ownerLabel(run.created_by, own));
   // A lease-ended run (lost_reason "ended") has no ended_at — its
   // own end time is lost_at (runs-model.ts's endedAtMs makes the same
@@ -59,7 +71,13 @@ export function RunRow({ run }: { run: AgentRun }) {
   const adminView = view === "admin";
   const principal = usePrincipal();
   const own = !!principal && run.created_by === principal;
-  const p = rowPresentation(run, adminView);
+  // M2 D4: the one row read, for this viewer's own RUNNING sign-in runs only. An
+  // attention row or a lease-ended run already says what it needs to. A failed
+  // read draws nothing.
+  const operator = useOperator();
+  const eligible = mayReadSignIn(run, principal, operator) && !run.attention && run.lost_reason !== "ended";
+  const [waitingSignIn, setWaitingSignIn] = React.useState(false);
+  const p = eligible && waitingSignIn ? waitingSignInPresentation() : rowPresentation(run, adminView);
   const glyph = glyphKindFor(p.hue, p.word, run.state);
   const title = rowHeadline(run);
   const href = runPath(view, run.id);
@@ -159,6 +177,11 @@ export function RunRow({ run }: { run: AgentRun }) {
           </Button>
         )}
       </div>
+      {eligible && (
+        <React.Suspense fallback={null}>
+          <RowSignInProbe runId={run.id} createdAt={run.created_at} onChange={setWaitingSignIn} />
+        </React.Suspense>
+      )}
     </div>
   );
 }

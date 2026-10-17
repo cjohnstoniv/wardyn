@@ -32,7 +32,7 @@
 # Prereqs: the dockerized Postgres "wardyn-test-pg" on :55432 (override with
 # WARDYN_E2E_PG_HOSTPORT + WARDYN_E2E_PG_CONTAINER on a shared box where that
 # port/name is taken — see docs/ENV.md's Test/internal-only e2e table, F063)
-# and a built ui/dist + .e2e-bin/wardynd (this script builds them once unless
+# and a built ui/dist-e2e + .e2e-bin/wardynd (this script builds them once unless
 # WARDYN_E2E_SKIP_BUILD=1 / WARDYN_E2E_NO_UI_BUILD=1). Also `jq`, which reads
 # Playwright's JSON report for the zero-executed check below — the script aborts
 # up front without it rather than judge a spec on a report it cannot parse.
@@ -40,11 +40,22 @@
 # Usage:  scripts/run-ui-e2e.sh                 # all specs, 1 lane locally / 3 in CI
 #         scripts/run-ui-e2e.sh runs secrets    # only runs.spec.ts + secrets.spec.ts (single lane)
 #         WARDYN_E2E_LANES=3 scripts/run-ui-e2e.sh   # all specs, 3 lanes (local override)
+#         WARDYN_E2E_SHARD=1/2 scripts/run-ui-e2e.sh # every other spec, starting with the first
 #
 # WARDYN_E2E_ALLOW_ALL_SKIPPED: space-separated spec basenames (no extension,
 # e.g. "drives ssh") allowed to report zero executed tests without failing the
 # gate — see the zero-executed check below. Empty by default: a spec every one
 # of whose tests skipped is a red flag until named here on purpose.
+#
+# Flaky tests (X2-F10, #1461 R3): a test that passed only after a Playwright
+# retry is a defect and fails the gate — unless it is listed in
+# ui/e2e/quarantine.txt (issue, owner, expiry <= 14 days; format in that file),
+# in which case it passes with a warning (::warning under $CI). The quarantine
+# file is validated before any backend starts: a malformed or expired entry
+# exits 1 here. Every flake, quarantined or not, is written to
+# test/reports/e2e/flaky.tsv, which is created empty when nothing flaked and
+# appended to by every later call in the same checkout (#1880), so a second call
+# cannot hide the first one's flakes from the notify-flaky job.
 set -uo pipefail
 
 command -v jq >/dev/null 2>&1 || { echo "run-ui-e2e.sh: jq is required (used to read Playwright's JSON report)" >&2; exit 1; }
@@ -52,31 +63,32 @@ command -v jq >/dev/null 2>&1 || { echo "run-ui-e2e.sh: jq is required (used to 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${REPO_ROOT}"
 
-# One daemon everywhere (same rule as setup/up/e2e-backend): export the picked
-# DOCKER_HOST here so the Playwright child processes (approvals.spec.ts shells
-# out to `docker exec wardyn-test-pg`) hit the daemon e2e-backend.sh provisions
-# on — not the default one.
 WARDYN_LOG_TAG="[e2e-ui]"
 . "${REPO_ROOT}/scripts/lib/common.sh"
-wardyn_pick_docker_host
+. "${REPO_ROOT}/scripts/lib/e2e-quarantine.sh"
+. "${REPO_ROOT}/scripts/lib/e2e-network.sh"
+
+# An expired or malformed quarantine entry fails the run before anything boots.
+quarantine_validate ui/e2e/quarantine.txt "$(date -u +%F)" >&2 || exit 1
 
 # Two default invocations on one host — two worktrees, two lanes, a developer
 # box and CI at once — used to fight over the same fixed :8088/:8089/:8443 and
 # the same "wardyn_e2e" database name (#210, #469). Auto-pick when the caller
-# has not pinned one; an explicit WARDYN_E2E_ADDR/WARDYN_E2E_UI_ADDR/
-# WARDYN_E2E_INTERNAL_ADDR/WARDYN_E2E_PG_DBNAME is still honored verbatim,
-# exactly as before.
+# has not pinned one. Explicit hosts and database names survive; port-only
+# listener overrides bind to loopback too.
 if [[ -z "${WARDYN_E2E_ADDR:-}" ]]; then
-  WARDYN_E2E_ADDR=":$(pick_free_port)"
+  WARDYN_E2E_ADDR="127.0.0.1:$(pick_free_port)"
 fi
+WARDYN_E2E_ADDR="$(e2e_listen_addr "${WARDYN_E2E_ADDR}")"
 if [[ -z "${WARDYN_E2E_UI_ADDR:-}" ]]; then
   ui_port="$(pick_free_port)"
   # wardynd refuses to boot with UI_ADDR == ADDR (e2e-backend.sh's own
   # comment); pick_free_port's bind-then-close race makes that collision rare
   # but not impossible, so reroll once rather than fail the whole run over it.
-  [[ ":${ui_port}" == "${WARDYN_E2E_ADDR}" ]] && ui_port="$(pick_free_port)"
-  WARDYN_E2E_UI_ADDR=":${ui_port}"
+  [[ "${ui_port}" == "${WARDYN_E2E_ADDR##*:}" ]] && ui_port="$(pick_free_port)"
+  WARDYN_E2E_UI_ADDR="127.0.0.1:${ui_port}"
 fi
+WARDYN_E2E_UI_ADDR="$(e2e_listen_addr "${WARDYN_E2E_UI_ADDR}")"
 if [[ -z "${WARDYN_E2E_INTERNAL_ADDR:-}" ]]; then
   # wardynd's proxy-facing internal TLS listener (-internal-listen) binds
   # unconditionally whenever -control-plane-url is https, which is the
@@ -85,9 +97,10 @@ if [[ -z "${WARDYN_E2E_INTERNAL_ADDR:-}" ]]; then
   # worktree, a second lane below) dies with "address already in use" the
   # moment it tries to boot.
   internal_port="$(pick_free_port)"
-  [[ ":${internal_port}" == "${WARDYN_E2E_ADDR}" || ":${internal_port}" == "${WARDYN_E2E_UI_ADDR}" ]] && internal_port="$(pick_free_port)"
-  WARDYN_E2E_INTERNAL_ADDR=":${internal_port}"
+  [[ "${internal_port}" == "${WARDYN_E2E_ADDR##*:}" || "${internal_port}" == "${WARDYN_E2E_UI_ADDR##*:}" ]] && internal_port="$(pick_free_port)"
+  WARDYN_E2E_INTERNAL_ADDR="127.0.0.1:${internal_port}"
 fi
+WARDYN_E2E_INTERNAL_ADDR="$(e2e_listen_addr "${WARDYN_E2E_INTERNAL_ADDR}")"
 export WARDYN_E2E_ADDR WARDYN_E2E_UI_ADDR WARDYN_E2E_INTERNAL_ADDR
 db_autonamed=""
 if [[ -z "${WARDYN_E2E_PG_DBNAME:-}" ]]; then
@@ -98,8 +111,9 @@ if [[ -z "${WARDYN_E2E_PG_DBNAME:-}" ]]; then
   db_autonamed=1
 fi
 
-PORT="${WARDYN_E2E_ADDR}"; PORT="${PORT#*:}"
 DB="${WARDYN_E2E_PG_DBNAME}"
+# A token read back for Playwright must not become the next up's override.
+TEST_TOKEN="${WARDYN_E2E_TOKEN:-}"
 # Overridable PG host:port (the default may be held by a foreign container on a
 # shared box); the database name stays coupled to WARDYN_E2E_PG_DBNAME. The
 # seed/reset path (e2e-backend.sh) still goes through `docker exec
@@ -108,11 +122,10 @@ DB="${WARDYN_E2E_PG_DBNAME}"
 # would silently serve one database while seeding another, so e2e-backend.sh's
 # cmd_up fails loudly on that mismatch before touching anything.
 PG_HOSTPORT="${WARDYN_E2E_PG_HOSTPORT:-localhost:55432}"
-export WARDYN_E2E_ADDR=":${PORT}"
 export WARDYN_E2E_DSN="postgres://wardyn:wardyn@${PG_HOSTPORT}/${DB}?sslmode=disable"
 export WARDYN_E2E_PG_DBNAME="${DB}"
 export WARDYN_E2E_PG_CONTAINER="${WARDYN_E2E_PG_CONTAINER:-wardyn-test-pg}"
-export WARDYN_E2E_BASE_URL="http://localhost:${PORT}"
+export WARDYN_E2E_BASE_URL="$(e2e_base_url "${WARDYN_E2E_ADDR}")"
 
 # Base-path mode (WARDYN_E2E_BASE_PATH, e.g. /wardyn): e2e-backend.sh serves the
 # backend under that WARDYN_BASE_PATH behind test/basepathproxy, and Playwright
@@ -122,10 +135,11 @@ export WARDYN_E2E_BASE_URL="http://localhost:${PORT}"
 # Unset, nothing below changes.
 if [[ -n "${WARDYN_E2E_BASE_PATH:-}" ]]; then
   if [[ -z "${WARDYN_E2E_PROXY_ADDR:-}" ]]; then
-    WARDYN_E2E_PROXY_ADDR=":$(pick_free_port)"
+    WARDYN_E2E_PROXY_ADDR="127.0.0.1:$(pick_free_port)"
   fi
+  WARDYN_E2E_PROXY_ADDR="$(e2e_listen_addr "${WARDYN_E2E_PROXY_ADDR}")"
   export WARDYN_E2E_PROXY_ADDR
-  export WARDYN_E2E_BASE_URL="http://localhost:${WARDYN_E2E_PROXY_ADDR##*:}${WARDYN_E2E_BASE_PATH}/"
+  export WARDYN_E2E_BASE_URL="$(e2e_base_url "${WARDYN_E2E_PROXY_ADDR}")${WARDYN_E2E_BASE_PATH}/"
   log "base-path mode: backend under ${WARDYN_E2E_BASE_PATH}, browsed through ${WARDYN_E2E_BASE_URL}"
 fi
 
@@ -147,15 +161,6 @@ if [[ -n "${LIVE_BASE_URL}" ]]; then
   log "LIVE mode: specs run against ${LIVE_BASE_URL} (no hermetic backend, no re-seed)"
 fi
 
-# Build the backend + UI once; subsequent per-spec `up` calls (in every lane)
-# reuse them (each `up` also creates its own ${DB} if it does not exist — see
-# e2e-backend.sh cmd_up).
-if [[ -z "${LIVE_BASE_URL}" ]]; then
-  log "Building backend + UI bundle once"
-  ./scripts/e2e-backend.sh build || { echo "build failed"; exit 1; }
-  export WARDYN_E2E_SKIP_BUILD=1
-fi
-
 # Spec selection: args map to e2e/<arg>.spec.ts; default = all *.spec.ts.
 spec_dir="ui/e2e"
 [[ -n "${LIVE_BASE_URL}" ]] && spec_dir="ui/e2e/walk"
@@ -164,6 +169,25 @@ if [[ $# -gt 0 ]]; then
   for a in "$@"; do specs+=("${spec_dir}/${a}.spec.ts"); done
 else
   for f in "${spec_dir}"/*.spec.ts; do specs+=("$f"); done
+fi
+
+# WARDYN_E2E_SHARD=i/n splits the DEFAULT invocation across n runners (ci.yml's
+# ui-e2e runs two): this one keeps every n-th spec of the byte-sorted list,
+# starting at the i-th, so every spec lands in exactly one shard whatever the
+# runner's locale. Nothing else changes: the same lanes, the same fresh seed per
+# spec. A shard left with no spec fails rather than pass having run nothing.
+if [[ -n "${WARDYN_E2E_SHARD:-}" && $# -eq 0 && -z "${LIVE_BASE_URL}" ]]; then
+  [[ ${WARDYN_E2E_SHARD} =~ ^([0-9]+)/([0-9]+)$ ]] || { echo "run-ui-e2e.sh: WARDYN_E2E_SHARD must be i/n, got '${WARDYN_E2E_SHARD}'" >&2; exit 1; }
+  shard_i=${BASH_REMATCH[1]} shard_n=${BASH_REMATCH[2]}
+  (( shard_i >= 1 && shard_i <= shard_n )) || { echo "run-ui-e2e.sh: WARDYN_E2E_SHARD needs 1 <= i <= n, got '${WARDYN_E2E_SHARD}'" >&2; exit 1; }
+  mapfile -t specs < <(printf '%s\n' "${specs[@]}" | LC_ALL=C sort)
+  kept=()
+  for k in "${!specs[@]}"; do
+    (( k % shard_n == shard_i - 1 )) && kept+=("${specs[k]}")
+  done
+  [[ ${#kept[@]} -gt 0 ]] || { echo "run-ui-e2e.sh: shard ${WARDYN_E2E_SHARD} holds no spec" >&2; exit 1; }
+  log "shard ${WARDYN_E2E_SHARD}: ${#kept[@]} of ${#specs[@]} specs"
+  specs=("${kept[@]}")
 fi
 
 allow_all_skipped=" ${WARDYN_E2E_ALLOW_ALL_SKIPPED:-} "
@@ -198,13 +222,47 @@ NUM_LANES="${WARDYN_E2E_LANES:-${default_lanes}}"
 LANE_ADDR=("${WARDYN_E2E_ADDR}")
 LANE_UI_ADDR=("${WARDYN_E2E_UI_ADDR}")
 LANE_INTERNAL_ADDR=("${WARDYN_E2E_INTERNAL_ADDR}")
+LANE_PROXY_ADDR=("${WARDYN_E2E_PROXY_ADDR:-}")
 LANE_DB=("${DB}")
 for ((i = 1; i < NUM_LANES; i++)); do
-  LANE_ADDR+=(":$(pick_free_port)")
-  LANE_UI_ADDR+=(":$(pick_free_port)")
-  LANE_INTERNAL_ADDR+=(":$(pick_free_port)")
+  LANE_ADDR+=("127.0.0.1:$(pick_free_port)")
+  LANE_UI_ADDR+=("127.0.0.1:$(pick_free_port)")
+  LANE_INTERNAL_ADDR+=("127.0.0.1:$(pick_free_port)")
+  [[ -z "${WARDYN_E2E_BASE_PATH:-}" ]] || LANE_PROXY_ADDR+=("127.0.0.1:$(pick_free_port)")
   LANE_DB+=("${DB}_lane${i}")
 done
+
+# A selected tmux spec may be claimed by any lane. Refuse before builds,
+# backend retries or cleanup traps can reset a database for an unsafe request.
+# Inspect the final shard, so a non-tmux-only selection keeps explicit hosts.
+if [[ -z "${LIVE_BASE_URL}" ]]; then
+  needs_tmux_build=0
+  for spec in "${specs[@]}"; do
+    [[ "${spec##*/}" == cockpit-terminal-tmux-*.spec.ts ]] && needs_tmux_build=1
+  done
+  if [[ ${needs_tmux_build} -eq 1 ]]; then
+    export WARDYN_E2E_TMUX_BUILD=1
+    for ((i = 0; i < NUM_LANES; i++)); do
+      e2e_require_loopback "${LANE_ADDR[i]}" "${LANE_UI_ADDR[i]}" "${LANE_INTERNAL_ADDR[i]}" || exit 1
+      if [[ -n "${WARDYN_E2E_BASE_PATH:-}" ]]; then
+        e2e_require_loopback "${LANE_PROXY_ADDR[i]}" || exit 1
+      fi
+    done
+  fi
+fi
+
+# One daemon everywhere (same rule as setup/up/e2e-backend): export the picked
+# DOCKER_HOST here so the Playwright child processes (approvals.spec.ts shells
+# out to `docker exec wardyn-test-pg`) hit the daemon e2e-backend.sh provisions
+# on — not the default one.
+wardyn_pick_docker_host
+
+# Each lane's per-spec up reuses this build and creates its own database.
+if [[ -z "${LIVE_BASE_URL}" ]]; then
+  log "Building backend + UI bundle once"
+  ./scripts/e2e-backend.sh build || { echo "build failed"; exit 1; }
+  export WARDYN_E2E_SKIP_BUILD=1
+fi
 
 # Scratch for this run: one directory per spec, created by the lane that
 # claims it (mkdir is atomic, so two lanes never run the same spec) and
@@ -227,7 +285,13 @@ run_lane() {
   # above (LIVE_BASE_URL); LANE_ADDR[0] there is only the unused, auto-picked
   # port reserved for a hermetic backend that never boots, so overwriting it
   # here sent every walk spec to a random local port nothing listens on.
-  [[ -n "${LIVE_BASE_URL}" ]] || export WARDYN_E2E_BASE_URL="http://localhost:${LANE_ADDR[lane]#*:}"
+  if [[ -z "${LIVE_BASE_URL}" ]]; then
+    export WARDYN_E2E_BASE_URL="$(e2e_base_url "${WARDYN_E2E_ADDR}")"
+    if [[ -n "${WARDYN_E2E_BASE_PATH:-}" ]]; then
+      export WARDYN_E2E_PROXY_ADDR="${LANE_PROXY_ADDR[lane]}"
+      export WARDYN_E2E_BASE_URL="$(e2e_base_url "${WARDYN_E2E_PROXY_ADDR}")${WARDYN_E2E_BASE_PATH}/"
+    fi
+  fi
   if [[ -n "${label}" ]]; then
     log() { printf '\033[1;34m[e2e-ui:%s]\033[0m %s\n' "${label}" "$*"; }
   fi
@@ -247,10 +311,12 @@ run_lane() {
 
   local spec base spec_rel spec_ok spec_name verdict
   local stats_expected stats_unexpected stats_flaky stats_skipped executed total
+  local flaky_new flaky_quarantined flaky_tsv
   for spec in "${specs[@]}"; do
     base="$(basename "${spec}")"
     mkdir "${work}/${base}" 2>/dev/null || continue
     spec_name="${base%.spec.ts}"
+    if [[ "${spec_name}" == cockpit-terminal-tmux-* ]]; then export WARDYN_E2E_TMUX=1; else unset WARDYN_E2E_TMUX; fi
     # Playwright is run from ui/, so its argument is the spec path with the "ui/"
     # prefix dropped — "e2e/foo.spec.ts", or "e2e/walk/foo.spec.ts" in LIVE mode.
     spec_rel="${spec#ui/}"
@@ -259,20 +325,25 @@ run_lane() {
     # genuine spec failure — the run reported "<spec> failed" with nothing to read.
     if [[ -n "${LIVE_BASE_URL}" ]]; then
       : # the external Wardyn owns its own lifecycle; nothing to seed or reset
-    elif ! ./scripts/e2e-backend.sh up >"${up_log}" 2>&1; then
+    elif ! WARDYN_E2E_TOKEN="${TEST_TOKEN}" ./scripts/e2e-backend.sh up >"${up_log}" 2>&1; then
       log "backend up failed for ${base} — retrying once"
       tail -20 "${up_log}" >&2 || true
       ./scripts/e2e-backend.sh down >/dev/null 2>&1 || true
-      if ! ./scripts/e2e-backend.sh up >"${up_log}" 2>&1; then
+      if ! WARDYN_E2E_TOKEN="${TEST_TOKEN}" ./scripts/e2e-backend.sh up >"${up_log}" 2>&1; then
         log "backend up failed for ${base} (twice) — this is the backend, not the spec"
         tail -30 "${up_log}" >&2 || true
-        echo "fail 0 0" > "${work}/${base}/result"
+        echo "fail 0 0 0" > "${work}/${base}/result"
         continue
       fi
     fi
     if [[ -n "${LIVE_BASE_URL}" ]]; then
       log "running ${base} against ${LIVE_BASE_URL}"
     else
+      if ! WARDYN_E2E_TOKEN="$(./scripts/e2e-backend.sh token)"; then
+        echo "fail 0 0 0" > "${work}/${base}/result"
+        continue
+      fi
+      export WARDYN_E2E_TOKEN
       log "running ${base} against a fresh backend"
     fi
     rm -f "${results_json}"
@@ -301,14 +372,24 @@ run_lane() {
     total=$((executed + stats_skipped))
     # stats_flaky counts tests that only passed after Playwright retried them —
     # folded into `executed` above (so a flaky run still counts as spec_ok=1 and
-    # never fails the gate), and until now never surfaced anywhere else. A flaky
-    # test IS a defect (X2-F10): print it per spec and fail the whole gate on any
-    # nonzero total, the same way a genuine failure does. Nonzero only where
-    # retries are enabled — playwright.config.ts's `retries: process.env.CI ? 2
-    # : 0` means stats_flaky is structurally 0 on an uncustomized dev box; this
-    # check has teeth in CI (and anywhere else CI=1 is set).
-    if [[ ${stats_flaky} -gt 0 ]]; then
-      log "${base}: ${stats_flaky} flaky test(s) (passed only after a Playwright retry)"
+    # never fails the gate on its own). A flaky test IS a defect (X2-F10): each
+    # one is classified against ui/e2e/quarantine.txt, and every NEW (unlisted)
+    # one fails the whole gate below, the same way a genuine failure does. Nonzero
+    # only where retries are enabled — playwright.config.ts's `retries:
+    # process.env.CI ? 2 : 0` means it is structurally 0 on an uncustomized dev
+    # box; this check has teeth in CI (and anywhere else CI=1 is set).
+    flaky_tsv="${work}/${base}/flaky.tsv"
+    quarantine_classify "${results_json}" "${base}" ui/e2e/quarantine.txt > "${flaky_tsv}"
+    flaky_new=$(awk -F'\t' '$3 == "new"' "${flaky_tsv}" | wc -l)
+    flaky_quarantined=$(awk -F'\t' '$3 == "quarantined"' "${flaky_tsv}" | wc -l)
+    # Fail closed: Playwright counted more flaky tests than the report walk
+    # classified (an unexpected report shape) — the unaccounted ones are new.
+    if [[ ${stats_flaky} -gt $((flaky_new + flaky_quarantined)) ]]; then
+      flaky_new=$((stats_flaky - flaky_quarantined))
+    fi
+    stats_flaky=${flaky_new}
+    if [[ ${stats_flaky} -gt 0 || ${flaky_quarantined} -gt 0 ]]; then
+      log "${base}: ${stats_flaky} flaky test(s) (passed only after a Playwright retry), ${flaky_quarantined} quarantined"
     fi
 
     verdict=fail
@@ -325,7 +406,7 @@ run_lane() {
         verdict=zero
       fi
     fi
-    echo "${verdict} ${stats_skipped} ${stats_flaky}" > "${work}/${base}/result"
+    echo "${verdict} ${stats_skipped} ${stats_flaky} ${flaky_quarantined}" > "${work}/${base}/result"
   done
 
   [[ -n "${LIVE_BASE_URL}" ]] || ./scripts/e2e-backend.sh down >/dev/null 2>&1 || true
@@ -402,13 +483,39 @@ done
 wait
 trap - INT TERM
 
-pass=0; fail=0; failed_specs=(); skipped_total=0; zero_executed_specs=(); flaky_total=0
+pass=0; fail=0; failed_specs=(); skipped_total=0; zero_executed_specs=(); flaky_total=0; quarantined_total=0
+# Every flake of the run, quarantined or not — created empty when none flaked,
+# and APPENDED to, never truncated: one checkout runs this script more than once
+# (ci.yml's ui-e2e runs a shard, then the governance four-eyes step as a second
+# call in the same workspace), and truncating on the second call left the
+# shard's own flakes out of the file notify-flaky reads, so a flake the shard saw
+# was never filed (#1880).
+flaky_report="${REPO_ROOT}/test/reports/e2e/flaky.tsv"
+mkdir -p "$(dirname "${flaky_report}")"
+[[ -e "${flaky_report}" ]] || : > "${flaky_report}"
 for spec in "${specs[@]}"; do
   base="$(basename "${spec}")"
-  verdict=none; stats_skipped=0; stats_flaky=0
-  [[ -s "${work}/${base}/result" ]] && read -r verdict stats_skipped stats_flaky < "${work}/${base}/result"
+  verdict=none; stats_skipped=0; stats_flaky=0; stats_quarantined=0
+  [[ -s "${work}/${base}/result" ]] && read -r verdict stats_skipped stats_flaky stats_quarantined < "${work}/${base}/result"
   skipped_total=$((skipped_total + stats_skipped))
   flaky_total=$((flaky_total + stats_flaky))
+  quarantined_total=$((quarantined_total + stats_quarantined))
+  if [[ -s "${work}/${base}/flaky.tsv" ]]; then
+    cat "${work}/${base}/flaky.tsv" >> "${flaky_report}"
+    # Quarantined flakes pass with a warning, naming the entry that excuses them.
+    while IFS=$'\t' read -r q_spec q_title q_verdict; do
+      [[ "${q_verdict}" == quarantined ]] || continue
+      q_meta="$(Q_SPEC="${q_spec}" Q_TITLE="${q_title}" awk -F' [|] ' '
+        function trim(v) { gsub(/^[ \t]+|[ \t]+$/, "", v); return v }
+        NF == 5 && (trim($1) "") == ENVIRON["Q_SPEC"] "" && (trim($2) "") == ENVIRON["Q_TITLE"] "" {
+          print trim($3) ", " trim($4) ", until " trim($5); exit }' ui/e2e/quarantine.txt)"
+      if [[ -n "${CI:-}" ]]; then
+        echo "::warning title=Quarantined flaky test::${q_spec} › ${q_title} (${q_meta})"
+      else
+        log "quarantined flaky test: ${q_spec} › ${q_title} (${q_meta})"
+      fi
+    done < "${work}/${base}/flaky.tsv"
+  fi
   case "${verdict}" in
     pass) pass=$((pass+1)) ;;
     zero) fail=$((fail+1)); failed_specs+=("${base}"); zero_executed_specs+=("${base}") ;;
@@ -418,7 +525,7 @@ for spec in "${specs[@]}"; do
 done
 
 echo
-log "UI e2e summary: ${pass} spec file(s) passed, ${fail} failed, ${skipped_total} test(s) skipped, ${flaky_total} test(s) flaky"
+log "UI e2e summary: ${pass} spec file(s) passed, ${fail} failed, ${skipped_total} test(s) skipped, ${flaky_total} test(s) flaky (${quarantined_total} quarantined)"
 if [[ ${#zero_executed_specs[@]} -gt 0 ]]; then
   log "zero executed (all skipped, not allowlisted): ${zero_executed_specs[*]}"
 fi

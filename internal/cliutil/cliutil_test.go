@@ -13,6 +13,20 @@ import (
 	"time"
 )
 
+func TestRemovedEnvLeftovers(t *testing.T) {
+	got := RemovedEnvLeftovers([]string{
+		"PATH=/bin", "WARDYN_MEMBER_WRITABLE_DENY=/srv/a", "WARDYN_MEMBER_MODE=", "WARDYN_USER_DESKTOP=true",
+		"WARDYN_ALLOW_MEMBER_ENV_SECRET=true",
+	})
+	want := []string{"WARDYN_ALLOW_MEMBER_ENV_SECRET (use WARDYN_ALLOW_USER_ENV_SECRET)", "WARDYN_MEMBER_WRITABLE_DENY (use WARDYN_USER_WRITABLE_DENY)"}
+	if !slices.Equal(got, want) {
+		t.Errorf("RemovedEnvLeftovers = %q, want %q", got, want)
+	}
+	if got := RemovedEnvLeftovers([]string{"WARDYN_USER_WRITABLE_DENY=/srv/a"}); len(got) != 0 {
+		t.Errorf("a current name was listed: %q", got)
+	}
+}
+
 func TestEnvOr(t *testing.T) {
 	t.Setenv("CLIUTIL_TEST_VAR", "")
 	if got := EnvOr("CLIUTIL_TEST_VAR", "def"); got != "def" {
@@ -21,31 +35,6 @@ func TestEnvOr(t *testing.T) {
 	t.Setenv("CLIUTIL_TEST_VAR", "set")
 	if got := EnvOr("CLIUTIL_TEST_VAR", "def"); got != "set" {
 		t.Errorf("EnvOr(set) = %q, want the env value", got)
-	}
-}
-
-func TestEnvAlias(t *testing.T) {
-	for _, c := range []struct {
-		name, newV, oldV, wantNew string
-		wantAliased, wantIgnored  bool
-	}{
-		{name: "old set, new unset: copies old into new", oldV: "value", wantNew: "value", wantAliased: true},
-		{name: "both set, same value: new kept, nothing to report", newV: "v", oldV: "v", wantNew: "v"},
-		{name: "both set, different values: new wins, old reported ignored", newV: "new-value", oldV: "old-value", wantNew: "new-value", wantIgnored: true},
-		{name: "new set, old unset: no-op", newV: "new-value", wantNew: "new-value"},
-		{name: "neither set: no-op", wantNew: ""},
-	} {
-		t.Run(c.name, func(t *testing.T) {
-			t.Setenv("CLIUTIL_NEW", c.newV)
-			t.Setenv("CLIUTIL_OLD", c.oldV)
-			aliased, ignored := EnvAlias("CLIUTIL_NEW", "CLIUTIL_OLD")
-			if got := os.Getenv("CLIUTIL_NEW"); got != c.wantNew {
-				t.Errorf("CLIUTIL_NEW = %q, want %q", got, c.wantNew)
-			}
-			if aliased != c.wantAliased || ignored != c.wantIgnored {
-				t.Errorf("EnvAlias = (aliased %v, ignored %v), want (%v, %v)", aliased, ignored, c.wantAliased, c.wantIgnored)
-			}
-		})
 	}
 }
 

@@ -47,7 +47,9 @@ async function mockModelAccess(
     if (!cached) {
       const body = (await (await route.fetch()).json()) as Record<string, unknown>;
       body.model_providers = [BEDROCK];
-      body.provider_access = [{ provider: BEDROCK.id, ...access }];
+      // As the server sends it: every not_configured row with no other cause is marked never_connected.
+      const cause = access.state === "not_configured" ? { cause: "never_connected" } : {};
+      body.provider_access = [{ provider: BEDROCK.id, ...cause, ...access }];
       cached = body;
     }
     await route.fulfill({ json: cached! });
@@ -91,7 +93,7 @@ test.describe("the model-access strip", () => {
   });
 
   // "NOT an error — it is the first-run state". A member who
-  // never launches an agent must be able to set it aside; the rail and Getting
+  // never launches an agent must be able to set it aside; New Run's step 5 and Getting
   // Started keep saying it.
   test("'Not now' clears the first-run strip for this session", async ({ page }) => {
     await mockMemberRole(page);

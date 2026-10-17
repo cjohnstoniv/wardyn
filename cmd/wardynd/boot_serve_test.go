@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/api"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 )
 
 // fakeSweepImageBuilder implements api.ImageBuilder and the optional
@@ -18,14 +19,14 @@ import (
 // (unexported there, so this package needs its own).
 type fakeSweepImageBuilder struct{ swept int }
 
-func (*fakeSweepImageBuilder) BuildDevcontainer(context.Context, string, string, string, io.Writer) (string, error) {
-	return "", nil
+func (*fakeSweepImageBuilder) BuildDevcontainer(context.Context, string, string, string, io.Writer) (api.BuiltImage, error) {
+	return api.BuiltImage{}, nil
 }
-func (*fakeSweepImageBuilder) BuildFromDevcontainerFiles(context.Context, map[string]string, string, io.Writer) (string, error) {
-	return "", nil
+func (*fakeSweepImageBuilder) BuildFromDevcontainerFiles(context.Context, map[string]string, string, io.Writer) (api.BuiltImage, error) {
+	return api.BuiltImage{}, nil
 }
-func (*fakeSweepImageBuilder) FinalizeBase(context.Context, string, string, io.Writer) (string, error) {
-	return "", nil
+func (*fakeSweepImageBuilder) FinalizeBase(context.Context, string, string, io.Writer, bool) (api.BuiltImage, error) {
+	return api.BuiltImage{}, nil
 }
 func (f *fakeSweepImageBuilder) SweepOrphanedBuilds(context.Context) error {
 	f.swept++
@@ -45,8 +46,9 @@ func TestStartBackgroundWorkers_ReconcilesBootIndependentOfRunner(t *testing.T) 
 	srv := api.New(api.Config{ImageBuilder: fb, RunnerTarget: "none"})
 
 	zeroDur := time.Duration(0)
-	zeroInt := 0
+	zeroInt, persistOff := 0, false
 	f := &bootFlags{
+		runOutputPersist: &persistOff,
 		// Every OTHER background worker stays off so this test only needs
 		// run + srv: no runner (asserted below), no autostop, no groundtruth
 		// rotator (env unset), no approval sweeper, no recording sweeper.
@@ -57,7 +59,7 @@ func TestStartBackgroundWorkers_ReconcilesBootIndependentOfRunner(t *testing.T) 
 	}
 	t.Setenv("WARDYN_GROUNDTRUTH_TOKEN_FILE", "")
 
-	startBackgroundWorkers(context.Background(), f, srv, nil /* run */, nil, nil, nil, nil, nil)
+	startBackgroundWorkers(context.Background(), f, srv, nil /* run */, nil, store.PG{}, nil, nil, nil, nil, nil, nil)
 
 	if fb.swept != 1 {
 		t.Errorf("SweepOrphanedBuilds called %d times, want 1 — startBackgroundWorkers with a nil runner must still run ReconcileOnBoot's runner-independent envbuild orphan sweep", fb.swept)

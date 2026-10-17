@@ -4,9 +4,12 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"log/slog"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/google/uuid"
@@ -142,5 +145,53 @@ func TestBootHybrid_CosmeticOrgURLEditKeepsTheCredential(t *testing.T) {
 	}
 	if e, _ := org.seen(); len(e) != 1 {
 		t.Fatalf("a cosmetic edit re-enrolled: %v", e)
+	}
+}
+
+// lockedLog is a log sink the forwarder goroutine writes while the test reads.
+type lockedLog struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (l *lockedLog) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.buf.Write(p)
+}
+
+func (l *lockedLog) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.buf.String()
+}
+
+// TestBootHybrid_WarnsEnrolmentIsDeprecated pins the 0.9 deprecation: a daemon
+// booted with WARDYN_ORG_URL logs that enrolment is removed in 1.0 and names
+// client mode; one without it logs nothing.
+func TestBootHybrid_WarnsEnrolmentIsDeprecated(t *testing.T) {
+	var logs lockedLog
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	if _, err := bootHybrid(context.Background(), context.Background(), "", "", unlocked(hybridSecrets{}), nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if logs.String() != "" {
+		t.Fatalf("no org URL logged: %s", logs.String())
+	}
+
+	org := &hybridOrg{}
+	ctx, hj := newHybridJoin(t)
+	fwd, err := bootHybrid(context.Background(), ctx, org.serve(t).URL, "wde_first", unlocked(hybridSecrets{}), &hybridStore{}, &hybridRecorder{})
+	hj.add(fwd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"level=WARN", "WARDYN_ORG_URL", "removed in 1.0", "client-mode runner"} {
+		if !strings.Contains(logs.String(), want) {
+			t.Errorf("deprecation log missing %q: %s", want, logs.String())
+		}
 	}
 }

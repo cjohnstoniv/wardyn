@@ -91,3 +91,56 @@ test.describe("Your account — no admin cards for a member", () => {
     }
   });
 });
+
+// notify-e4 (packet M6 S3): the read-only Approval notifications card. The e2e
+// backend has no WARDYN_APPROVAL_NOTIFY, so the configured case stubs the
+// status read; the unconfigured case is the real backend's own answer.
+test.describe("Admin Settings — Approval notifications (notify-e4)", () => {
+  test("unconfigured, the card says Not set up and names the setting", async ({ page }) => {
+    await gotoConsole(page, "admin");
+    await navToRoute(page, "/admin/settings");
+    const card = page
+      .locator("section")
+      .filter({ has: page.getByRole("heading", { name: /^Approval notifications/ }) });
+    await expect(card.getByText("Not set up")).toBeVisible();
+    await expandCard(page, "Approval notifications");
+    await expect(card.getByText("WARDYN_APPROVAL_NOTIFY")).toBeVisible();
+    await expect(card.getByRole("table")).toHaveCount(0);
+  });
+
+  test("with channels, it shows each one's health and no buttons", async ({ page }) => {
+    const ago = (ms: number) => new Date(Date.now() - ms).toISOString();
+    await page.route("**/api/v1/approval-notify/status", (route) =>
+      route.fulfill({
+        json: {
+          channels: [
+            { id: "sec-oncall", type: "slack", destination_host: "hooks.slack.com", last_success_at: ago(4 * 60_000), failed_last_hour: 0 },
+            {
+              id: "platform", type: "webhook", destination_host: "hooks.example.com",
+              last_error: "http_status:503", last_error_at: ago(6 * 60_000), failed_last_hour: 4,
+            },
+          ],
+        },
+      }),
+    );
+    await gotoConsole(page, "admin");
+    await navToRoute(page, "/admin/settings");
+    const card = page
+      .locator("section")
+      .filter({ has: page.getByRole("heading", { name: /^Approval notifications/ }) });
+    await expect(card.getByText("2 channels · 1 failed in the last hour")).toBeVisible();
+    await expandCard(page, "Approval notifications");
+
+    const good = card.getByRole("row").filter({ hasText: "sec-oncall" });
+    await expect(good.getByText("Slack", { exact: true })).toBeVisible();
+    await expect(good.getByText("hooks.slack.com")).toBeVisible();
+    await expect(good.getByText("4m ago")).toBeVisible();
+    await expect(good.getByText("None", { exact: true })).toBeVisible();
+    const bad = card.getByRole("row").filter({ hasText: "platform" });
+    await expect(bad.getByText("Never", { exact: true })).toBeVisible();
+    await expect(bad.getByText("http_status:503")).toBeVisible();
+    await expect(bad.getByText("6m ago")).toBeVisible();
+    await expect(card.getByText("approval.notify.failed")).toBeVisible();
+    await expect(card.getByRole("button")).toHaveCount(1); // the card's own expand toggle only
+  });
+});

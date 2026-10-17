@@ -28,6 +28,8 @@ func TestClassifyWithheldBodyAsksOnlyWhereTheBodyDecides(t *testing.T) {
 		withheld(http.MethodPost, "dev.azure.com", "/acme/proj/_apis/git/repositories/app/reverts"),
 		withheld(http.MethodPost, "dev.azure.com", "/acme/_apis/wit/$batch"),
 		withheld(http.MethodOptions, "dev.azure.com", "/acme/_apis"),
+		withheld(http.MethodPost, "pkgs.dev.azure.com", "/acme/proj/_apis/packaging/feeds/f/nuget/packagesbatch"),
+		withheld(http.MethodPost, "pkgs.dev.azure.com", "/acme/proj/_apis/packaging/feeds/f/npm/recyclebin/packagesbatch"),
 	}
 	for _, req := range needsBody {
 		if _, err := Classify(req); !errors.Is(err, ErrNeedsBody) {

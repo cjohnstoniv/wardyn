@@ -50,7 +50,7 @@ func TestListCmdsWarnOnTruncation(t *testing.T) {
 		body any
 	}{
 		{"run list", []string{"run", "list"}, []types.AgentRun{{ID: uuid.New(), State: types.RunRunning}}},
-		{"approvals list", []string{"approvals", "list"}, []types.ApprovalRequest{{ID: uuid.New(), RunID: uuid.New(), Kind: types.ApprovalEgressDomain}}},
+		{"approvals list", []string{"approval", "list"}, []types.ApprovalRequest{{ID: uuid.New(), RunID: uuid.New(), Kind: types.ApprovalEgressDomain}}},
 		// The two the first pass skipped. Both were named in this finding's own
 		// blast radius and both still reproduced it verbatim on the FIXED
 		// binary: rows, exit 0, EMPTY stderr, no marker in --json — which is

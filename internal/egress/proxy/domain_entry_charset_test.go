@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/cjohnstoniv/wardyn/internal/egress/domainmatch"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -34,12 +35,12 @@ func TestDomainEntryDotsAndCharset(t *testing.T) {
 			}
 		}
 		for _, d := range []string{"example.com.", "example.com..."} {
-			if exact, _, _ := classifyDomain(d); exact != "example.com" {
-				t.Errorf("classifyDomain(%q) exact = %q, want example.com", d, exact)
+			if exact, _, _ := domainmatch.Classify(d); exact != "example.com" {
+				t.Errorf("Classify(%q) exact = %q, want example.com", d, exact)
 			}
 		}
-		if _, wild, _ := classifyDomain("*.example.com.."); wild != ".example.com" {
-			t.Errorf(`classifyDomain("*.example.com..") wild = %q, want ".example.com"`, wild)
+		if _, wild, _ := domainmatch.Classify("*.example.com.."); wild != ".example.com" {
+			t.Errorf(`Classify("*.example.com..") wild = %q, want ".example.com"`, wild)
 		}
 	})
 
@@ -87,4 +88,57 @@ func TestDomainEntryDotsAndCharset(t *testing.T) {
 			}
 		}
 	})
+}
+
+// TestPortQualifiedDottedEntryMatches: the same dots on a ":port" entry. Every
+// write gate accepts the entry, so it must compile to a key the request side
+// derives: the deny refuses, the allow grants, each on its own port only.
+func TestPortQualifiedDottedEntryMatches(t *testing.T) {
+	for _, d := range []string{"*.example.com.:443", "example.com..:443"} {
+		if err := ValidDomainEntry(d); err != nil {
+			t.Fatalf("ValidDomainEntry(%q) = %v, want nil", d, err)
+		}
+	}
+	deny := CompilePolicy(types.RunPolicySpec{
+		AllowAllEgress: true,
+		DeniedDomains:  []string{"*.example.com.:443", "example.com..:443"},
+	})
+	for _, h := range []string{"api.example.com", "example.com"} {
+		if got := deny.evalHost(h, 443); got != hostDeny {
+			t.Errorf("evalHost(%s, 443) = %q, want %q", h, got, hostDeny)
+		}
+		if got := deny.evalHost(h, 80); got != hostAllow {
+			t.Errorf("evalHost(%s, 80) = %q, want %q: the entry names port 443 only", h, got, hostAllow)
+		}
+	}
+	allow := CompilePolicy(types.RunPolicySpec{AllowedDomains: []string{"*.example.com.:443", "example.com..:443"}})
+	for _, h := range []string{"api.example.com", "example.com"} {
+		if got := allow.evalHost(h, 443); got != hostAllow {
+			t.Errorf("evalHost(%s, 443) = %q, want %q", h, got, hostAllow)
+		}
+		if got := allow.evalHost(h, 80); got != hostUnknown {
+			t.Errorf("evalHost(%s, 80) = %q, want %q", h, got, hostUnknown)
+		}
+	}
+}
+
+// TestPortQualifiedEntryVerdictsUnchanged pins the port-qualified spellings that
+// already matched: same verdict on the named port and on another one.
+func TestPortQualifiedEntryVerdictsUnchanged(t *testing.T) {
+	entries := []string{"*.example.com:443", "example.com:443", "example.com.:443", "*.example.com..", "example.com..."}
+	deny := CompilePolicy(types.RunPolicySpec{AllowAllEgress: true, DeniedDomains: entries})
+	allow := CompilePolicy(types.RunPolicySpec{AllowedDomains: entries})
+	for _, h := range []string{"api.example.com", "example.com"} {
+		for _, port := range []int{443, 80} {
+			if got := deny.evalHost(h, port); got != hostDeny {
+				t.Errorf("deny evalHost(%s, %d) = %q, want %q", h, port, got, hostDeny)
+			}
+			if got := allow.evalHost(h, port); got != hostAllow {
+				t.Errorf("allow evalHost(%s, %d) = %q, want %q", h, port, got, hostAllow)
+			}
+		}
+	}
+	if got := deny.evalHost("other.com", 443); got != hostAllow {
+		t.Errorf("deny evalHost(other.com) = %q, want %q", got, hostAllow)
+	}
 }

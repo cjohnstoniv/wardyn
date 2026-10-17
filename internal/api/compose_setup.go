@@ -40,8 +40,11 @@ type SetupItem struct {
 	// bind-mounted into the sandbox, e.g. the Claude subscription mount), or
 	// "brokered_mint" (a github_token/git_pat grant — the broker mints/resolves
 	// a value and hands it directly to the in-sandbox git-credential helper at
-	// task time, internal.go handleInternalMint). Empty when not applicable
-	// (workspace/egress/backend rows carry no single credential).
+	// task time, internal.go handleInternalMint), "resident_env" (an env_secret
+	// grant — the value is in the sandbox environment for the whole run), or
+	// "resident_file" (a file_secret grant — the value is a file in the sandbox
+	// for the whole run). Empty when not applicable (workspace/egress/backend
+	// rows carry no single credential).
 	Residency string `json:"residency,omitempty"`
 }
 
@@ -57,9 +60,15 @@ type SetupItem struct {
 // not here — this stays a fast, pure read of already-stored state, no live
 // probe and no new injection surface.
 type SetupFix struct {
-	Action      string `json:"action"` // "add_secret" | "scan_workspace" | "none"
+	Action      string `json:"action"` // "add_secret" | "scan_workspace" | "sign_in" | "choose_model_provider" | "none"
 	SecretName  string `json:"secret_name,omitempty"`
 	WorkspaceID string `json:"workspace_id,omitempty"` // ID, not source — api.scanWorkspace takes an id
+	// sign_in: what to sign in to (model_provider, azure_cli or aws_cli) and its
+	// id (a model provider's id, or a component's).
+	Target string `json:"target,omitempty"`
+	ID     string `json:"id,omitempty"`
+	// choose_model_provider: the included harness (tools[].id) that has none.
+	Tool string `json:"tool,omitempty"`
 }
 
 // deriveSetupItems computes the composed run's setup checklist from the FINAL
@@ -68,6 +77,18 @@ type SetupFix struct {
 // (runComposePipeline). Non-blocking: items never gate the proposal, they only
 // inform the review panel.
 func (s *Server) deriveSetupItems(ctx context.Context, owner string, run composer.RunInput, spec types.RunPolicySpec, presentSecrets map[string]bool, llmAccess *composeLLMAccess) []SetupItem {
+	// applyWorkspaces (compose.go) now puts EVERY git repo, the primary included,
+	// into spec.WorkspaceRepos — so referencedWorkspaces alone resolves it; no
+	// separate run.Repo-keyed lookup needed here.
+	return s.deriveRunSetupItems(ctx, owner, run, spec, presentSecrets, llmAccess, s.referencedWorkspaces(ctx, spec))
+}
+
+// deriveRunSetupItems is deriveSetupItems over the workspaces a run attaches
+// (runFold.wsRefs), so Review names the workspace each requirement row comes
+// from, a workspace with no mount or repo of its own included.
+func (s *Server) deriveRunSetupItems(ctx context.Context, owner string, run composer.RunInput, spec types.RunPolicySpec,
+	presentSecrets map[string]bool, llmAccess *composeLLMAccess, workspaces []types.Workspace,
+) []SetupItem {
 	var items []SetupItem
 
 	if it, ok := s.setupBackendItem(ctx, run, spec); ok {
@@ -78,11 +99,6 @@ func (s *Server) deriveSetupItems(ctx context.Context, owner string, run compose
 	}
 	items = append(items, setupSecretItems(spec, presentSecrets)...)
 
-	// applyWorkspaces (compose.go) now puts EVERY git repo, the primary included,
-	// into spec.WorkspaceRepos — so referencedWorkspaces alone resolves it; no
-	// separate run.Repo-keyed lookup needed here. One derivation, shared with
-	// the real create-run path's own wsRefs (runs.go).
-	workspaces := s.referencedWorkspaces(ctx, spec)
 	items = append(items, setupWorkspaceItems(workspaces)...)
 	items = append(items, setupWorkspaceSecretItems(workspaces, presentSecrets)...)
 	items = append(items, s.setupWorkspaceIntegrationItems(ctx, owner, workspaces, presentSecrets)...)
@@ -154,7 +170,7 @@ func (s *Server) setupLLMAccessItem(agent string, llmAccess *composeLLMAccess, s
 	return it, true
 }
 
-// setupSecretItems walks the FINAL spec's api_key/git_pat grants — the SAME
+// setupSecretItems walks the FINAL spec's stored-secret grants — the SAME
 // scope-decode validateInlineSecretRefs uses (injectionRuleFromScope,
 // inline_policy.go) — against presentSecrets (s.presentSecretNames), so this can
 // never disagree with the H1 422 check that gates create-run. One row per
@@ -183,21 +199,56 @@ func setupSecretItems(spec types.RunPolicySpec, presentSecrets map[string]bool) 
 	for _, g := range spec.EligibleGrants {
 		switch g.Kind {
 		case types.GrantAPIKey:
-			if rule, err := injectionRuleFromScope(g.Scope); err == nil {
-				// api_key: the value is resolved proxy-side (injection.go) and never
-				// reaches the sandbox.
-				add(rule.SecretName, "an api_key grant ("+rule.Host+")", "proxy_injected")
+			rule, err := injectionRuleFromScope(g.Scope)
+			if err != nil {
+				continue
 			}
+			if apiKeyScopeShared(g.Scope) {
+				items = append(items, setupSharedSecretItem(rule.Host, presentSecrets[rule.SecretName]))
+				continue
+			}
+			// api_key: the value is resolved proxy-side (injection.go) and never
+			// reaches the sandbox.
+			add(rule.SecretName, "an api_key grant ("+rule.Host+")", "proxy_injected")
 		case types.GrantGitPAT:
-			if host, name, _, err := gitPATScopeFields(g.Scope); err == nil {
+			if sc, err := types.DecodeGitPATScope(g.Scope); err == nil {
 				// git_pat's residency belongs to the repo_credential row (the grant
 				// that actually gets minted/delivered) — this row only answers
 				// whether the secret exists, so it carries no residency of its own.
-				add(name, "a git_pat grant ("+host+")", "")
+				add(sc.SecretName, "a git_pat grant ("+sc.Host+")", "")
+			}
+		case types.GrantEnvSecret:
+			if name, secretName, err := envSecretScopeFields(g.Scope); err == nil {
+				add(secretName, "an env_secret grant ("+name+")", "resident_env")
+			}
+		case types.GrantFileSecret:
+			if file, secretName, err := fileSecretScopeFields(g.Scope); err == nil {
+				add(secretName, "a file_secret grant ("+file+")", "resident_file")
 			}
 		}
 	}
 	return items
+}
+
+// setupSharedSecretItem is the row for a `shared` api_key grant: a credential
+// the organisation provides through one of its components. The secret's NAME
+// is the operator's and no member-facing row carries it — not in the id, the
+// label or a fix — so the row is keyed by the host it is presented to, which a
+// person granted the component may see. There is nothing for them to add:
+// only an admin can store it.
+//
+// A shared grant is only ever authored by the component gate, which refuses a
+// run whose operator has not stored the secret before any row is derived, so
+// the status read from the caller's presence map is the operator's answer.
+func setupSharedSecretItem(host string, present bool) SetupItem {
+	status := "missing"
+	if present {
+		status = "satisfied"
+	}
+	return SetupItem{
+		Kind: "secret", ID: "secret:provided:" + host, Label: "Provided by your admin",
+		RequiredBy: "an api_key grant (" + host + ")", Status: status, Residency: "proxy_injected",
+	}
 }
 
 // setupWorkspaceItems maps each referenced workspace (referencedWorkspaces —
@@ -392,10 +443,11 @@ func setupRepoCredentialItems(spec types.RunPolicySpec, presentSecrets map[strin
 				Residency:  "brokered_mint",
 			})
 		case types.GrantGitPAT:
-			host, name, _, err := gitPATScopeFields(g.Scope)
+			pat, err := types.DecodeGitPATScope(g.Scope)
 			if err != nil {
 				continue
 			}
+			host, name := pat.Host, pat.SecretName
 			status := "missing"
 			var fix *SetupFix
 			if presentSecrets[name] {

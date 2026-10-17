@@ -13,6 +13,7 @@ import userEvent from "@testing-library/user-event";
 import type { GitProvider } from "../../../lib/api/providers";
 import { ADO_ENTRA_EDITOR as E, PROVIDERS } from "../../../lib/workspace-providers-copy";
 import { PERM } from "../../../lib/permissions-copy";
+import { GIT_PAT_SCOPE } from "../../wardyn/copy";
 import { GitTab } from "./git-tab";
 import { ADO_PAT } from "../../../lib/ado-pat-copy";
 
@@ -119,6 +120,17 @@ describe("GitTab", () => {
         "The simplest lane — stored once; a per-run helper hands it to git inside the sandbox at clone time.",
       ),
     ).toBeInTheDocument();
+    expect(within(row).getByText(GIT_PAT_SCOPE.BROKER_OFF_NARROWING)).toBeInTheDocument();
+  });
+
+  it("states the narrowing refusal only when the broker is off", () => {
+    render(
+      <Harness
+        initial={[{ id: "github", kind: "github", base_urls: ["https://github.com/acme"] }]}
+        patBrokerEnabled={true}
+      />,
+    );
+    expect(screen.queryByText(GIT_PAT_SCOPE.BROKER_OFF_NARROWING)).not.toBeInTheDocument();
   });
 
   it("an absent row (Azure DevOps) shows the ROW_ABSENT_HINT and an Add provider button", () => {

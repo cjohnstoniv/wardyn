@@ -26,9 +26,8 @@ type memberBoundStore struct {
 	store.Store
 	profile *types.GovernanceProfile
 	policy  types.RunPolicy
-	// site is the org storage block the PREVIEW arm now reads
-	// (boundEphemeralDisk): zero means no default_disk_mib and no max_disk_mib,
-	// which is every test here that is not about the size.
+	// site is the org storage block (limitSources reads it for the main drive): zero means no
+	// default_disk_mib and no max_disk_mib, which is every test here that is not about the size.
 	site types.SiteConfig
 }
 

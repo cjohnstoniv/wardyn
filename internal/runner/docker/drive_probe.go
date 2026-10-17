@@ -47,6 +47,9 @@ func (d *Driver) ProbeDrive(ctx context.Context, drive types.DriveMount) (runner
 	if !present {
 		return runner.DriveProbe{}, fmt.Errorf("docker: probe drive: image %q not present locally (PrewarmImages pulls it in the background)", image)
 	}
+	if err := d.checkImageArch(ctx, image); err != nil {
+		return runner.DriveProbe{}, fmt.Errorf("docker: probe drive: %w", err)
+	}
 
 	created, err := d.cli.ContainerCreate(ctx, client.ContainerCreateOptions{
 		Name: "wardyn-drive-probe-" + uuid.New().String(),
@@ -67,7 +70,7 @@ func (d *Driver) ProbeDrive(ctx context.Context, drive types.DriveMount) (runner
 			SecurityOpt:    []string{"no-new-privileges"},
 			ReadonlyRootfs: true,
 			AutoRemove:     false, // removed explicitly below
-			Resources:      proxyResources(),
+			Resources:      proxyResources(false),
 			Mounts: []mount.Mount{{
 				Type:     mount.TypeBind,
 				Source:   drive.ObjectName,

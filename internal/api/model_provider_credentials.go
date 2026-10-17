@@ -21,6 +21,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/cjohnstoniv/wardyn/internal/authz"
+	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -28,7 +29,7 @@ import (
 
 // providerSecretPrefix starts every per-person model-provider credential name:
 // wardyn-provider-<uid>-key for a typed key or token, -oauth for a Claude
-// sign-in, -sso for an AWS sign-in. Keyed by the provider's server-minted UID,
+// sign-in, -sso for an AWS sign-in, -entra for an Azure Entra sign-in. Keyed by the provider's server-minted UID,
 // never its admin-chosen ID, so a provider deleted and re-added under the same
 // ID starts with nobody's credential.
 const providerSecretPrefix = types.ModelProviderSecretPrefix
@@ -37,23 +38,41 @@ const (
 	providerKeyPart   = "key"
 	providerOAuthPart = "oauth"
 	providerSSOPart   = "sso"
+	// providerEntraPart is an azure_foundry sign-in: the person's Entra refresh token for the row's audience.
+	providerEntraPart = "entra"
 )
 
 // providerSecretParts are every part a person's credential for one provider
 // may be stored under.
-var providerSecretParts = []string{providerKeyPart, providerOAuthPart, providerSSOPart}
+var providerSecretParts = []string{providerKeyPart, providerOAuthPart, providerSSOPart, providerEntraPart}
 
 func providerSecretName(uid, part string) string { return providerSecretPrefix + uid + "-" + part }
 
 // providerSignInSecret reports whether name is a per-person sign-in capture
-// (-oauth, -sso). Those are reserved at every sink and API (reservedSecret): a
+// (-oauth, -sso, -entra). Those are reserved at every sink and API (reservedSecret): a
 // sign-in blob is never a header value, so no grant may name one. A -key is
 // not: the injection sink resolves it by name from the namespace a grant
 // snapshots, so it is reserved only at the generic secrets API and the broker.
 func providerSignInSecret(name string) bool {
 	return strings.HasPrefix(name, providerSecretPrefix) &&
-		(strings.HasSuffix(name, "-"+providerOAuthPart) || strings.HasSuffix(name, "-"+providerSSOPart))
+		(strings.HasSuffix(name, "-"+providerOAuthPart) || strings.HasSuffix(name, "-"+providerSSOPart) ||
+			strings.HasSuffix(name, "-"+providerEntraPart))
 }
+
+// cliSecretPrefix starts every person's CLI sign-in capture:
+// wardyn-cli-<component id>-sso for an AWS CLI row, -entra for an Azure one.
+// Keyed by the org row's server-minted id, so a row deleted and re-added
+// starts with nobody's sign-in.
+const cliSecretPrefix = types.CLISecretPrefix
+
+func cliSecretName(componentID, part string) string {
+	return cliSecretPrefix + componentID + "-" + part
+}
+
+// cliSignInSecret reports whether name is in the CLI sign-in namespace, any
+// part. Reserved at every sink and API beside providerSignInSecret: the proxy
+// injects a capture through its own grant, and no other grant may name one.
+func cliSignInSecret(name string) bool { return strings.HasPrefix(name, cliSecretPrefix) }
 
 // providerTypedKinds are the kinds whose credential each person types (a key or
 // a token) — the only ones PUT /model-providers/{id}/credential accepts. The two
@@ -148,7 +167,7 @@ func (s *Server) credentialOwner(w http.ResponseWriter, r *http.Request) string 
 // is answered as a PUT would be answered on availability, or DELETE would tell
 // a restricted provider from an unknown id (D-6). A provider the caller cannot
 // see, or one whose credential is a sign-in, is refused here. The caller holds
-// siteConfigMu, so the UID read here is still the provider's when the write
+// the site-config lock, so the UID read here is still the provider's when the write
 // lands — rule 8's purge runs under the same lock.
 func (s *Server) providerForCredential(w http.ResponseWriter, r *http.Request, owner string, granted bool) (types.ModelProvider, bool) {
 	id := chi.URLParam(r, "id")
@@ -206,6 +225,10 @@ func (s *Server) handlePutProviderCredential(w http.ResponseWriter, r *http.Requ
 	if owner == "" {
 		return
 	}
+	r, ok := s.beginRequestWrite(w, r, owner)
+	if !ok {
+		return
+	}
 	var body putSecretRequest
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxJSONBody)).Decode(&body); err != nil {
 		writeErrorReason(w, http.StatusBadRequest, reasonModelProviderCredentialBodyInvalid, mpcBody)
@@ -222,13 +245,18 @@ func (s *Server) handlePutProviderCredential(w http.ResponseWriter, r *http.Requ
 		writeErrorReason(w, http.StatusBadRequest, reasonModelProviderCredentialTooShort, fmt.Sprintf(mpcTooShort, secretmask.MinLen))
 		return
 	}
-	s.siteConfigMu.Lock()
-	defer s.siteConfigMu.Unlock()
+	r, unlock, locked := s.lockDoor(w, r, db.SiteConfigLockClass)
+	if !locked {
+		return
+	}
+	defer unlock()
 	p, ok := s.providerForCredential(w, r, owner, true)
 	if !ok {
 		return
 	}
-	if err := s.cfg.Secrets.For(owner).Put(r.Context(), providerSecretName(p.UID, providerKeyPart), []byte(value)); err != nil {
+	if err := s.putOwned(r.Context(), owner, func(ctx context.Context) error {
+		return s.cfg.Secrets.For(owner).Put(ctx, providerSecretName(p.UID, providerKeyPart), []byte(value))
+	}); err != nil {
 		if errors.Is(err, secretstore.ErrUnavailable) {
 			// loggedMsg keeps the daemon's own record of a sealed/unreachable
 			// store on save (review finding F7) — writeServerError's log line,
@@ -253,8 +281,11 @@ func (s *Server) handleDeleteProviderCredential(w http.ResponseWriter, r *http.R
 	if owner == "" {
 		return
 	}
-	s.siteConfigMu.Lock()
-	defer s.siteConfigMu.Unlock()
+	r, unlock, locked := s.lockDoor(w, r, db.SiteConfigLockClass)
+	if !locked {
+		return
+	}
+	defer unlock()
 	p, ok := s.providerForCredential(w, r, owner, false)
 	if !ok {
 		return
@@ -295,12 +326,9 @@ func invalidatedProviderUIDs(before, after *types.ModelProviders) []string {
 // purgeProviderCredentials deletes, in every namespace, each person's
 // credential for every provider invalidatedProviderUIDs names, and returns how
 // many it removed. Both write doors call it BEFORE saving the block, under
-// siteConfigMu: a purge that fails refuses the write, so a credential given
+// the site-config lock: a purge that fails refuses the write, so a credential given
 // for one destination never follows the provider to a new one. A failed save
 // after it leaves people to add their credential again — the closed side.
-// Each deleted row's process-wide mask copies are retired as well, keyed by
-// the holders read first: a sign-in's refresh token and client secret carry
-// no expiry, so nothing else would let them go before a restart.
 func (s *Server) purgeProviderCredentials(ctx context.Context, before, after *types.ModelProviders) (int, error) {
 	uids := invalidatedProviderUIDs(before, after)
 	if len(uids) == 0 || s.cfg.Secrets == nil {
@@ -312,17 +340,31 @@ func (s *Server) purgeProviderCredentials(ctx context.Context, before, after *ty
 			names = append(names, providerSecretName(uid, part))
 		}
 	}
+	n, err := s.deleteCredentialsEverywhere(secretstore.WithProviderInvalidations(ctx, s.providerInvalidations(before, after)), names)
+	if err != nil {
+		return n, fmt.Errorf("purge model provider credentials: %w", err)
+	}
+	return n, nil
+}
+
+// deleteCredentialsEverywhere deletes names from every namespace and retires
+// each deleted row's process-wide mask copies, keyed by the holders read
+// first: a sign-in's refresh token and client secret carry no expiry, so
+// nothing else would let them go before a restart.
+func (s *Server) deleteCredentialsEverywhere(ctx context.Context, names []string) (int, error) {
 	holders, err := s.cfg.Secrets.Holders(ctx, names)
 	if err != nil {
-		return 0, fmt.Errorf("purge model provider credentials: %w", err)
+		return 0, err
 	}
 	n, err := s.cfg.Secrets.DeleteEverywhere(ctx, names)
 	if err != nil {
-		return 0, fmt.Errorf("purge model provider credentials: %w", err)
+		return 0, err
 	}
 	for name, owners := range holders {
 		for _, owner := range owners {
-			s.cfg.MaskRegistry.EvictGlobal(owner, name, s.cfg.Now())
+			if err := s.cfg.MaskRegistry.EvictGlobal(owner, name, s.cfg.Now()); err != nil {
+				return n, fmt.Errorf("the masked copy of one could not be evicted: %w", err)
+			}
 		}
 	}
 	return n, nil

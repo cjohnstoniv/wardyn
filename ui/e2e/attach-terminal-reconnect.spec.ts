@@ -174,10 +174,13 @@ test.describe("Attach terminal — reconnect budget (#216)", () => {
     await page.goto(`/runs/${runId}`);
 
     // 1 initial + MAX_RECONNECT_ATTEMPTS (4) reconnects = 5 sockets to drop
-    // before the budget is spent — see the walk test's own note.
+    // before the budget is spent — see the walk test's own note, including why
+    // the poll needs room past expect's 5s default (the 4th reconnect's backoff).
     for (let socketIndex = 0; socketIndex <= 4; socketIndex++) {
       await expect
-        .poll(() => page.evaluate(() => (window as unknown as { __wsCount: () => number }).__wsCount()))
+        .poll(() => page.evaluate(() => (window as unknown as { __wsCount: () => number }).__wsCount()), {
+          timeout: 15_000,
+        })
         .toBeGreaterThan(socketIndex);
       await page.evaluate(
         (i) => (window as unknown as { __wsDrop: (i: number, c: number, r?: string) => void }).__wsDrop(i, 1006, ""),

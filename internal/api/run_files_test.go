@@ -45,7 +45,7 @@ func (s runFilesStore) GetRun(_ context.Context, id uuid.UUID) (types.AgentRun, 
 // newRunFilesHarness wires a Server around ONE running run and the shared
 // sshFakeRunner (whose execFn is exactly the ExecStream behaviour this test
 // wants — see its doc in sshgateway_test.go).
-func newRunFilesHarness(execFn func(spec runner.ExecSpec) (*runner.ExecSession, error)) (*Server, *sshFakeRunner, *recRecorder, types.AgentRun) {
+func newRunFilesHarness(t *testing.T, execFn func(spec runner.ExecSpec) (*runner.ExecSession, error)) (*Server, *sshFakeRunner, *recRecorder, types.AgentRun) {
 	run := types.AgentRun{
 		ID:         uuid.New(),
 		CreatedBy:  "sub-owner@corp.example",
@@ -54,7 +54,7 @@ func newRunFilesHarness(execFn func(spec runner.ExecSpec) (*runner.ExecSession, 
 	}
 	fr := &sshFakeRunner{execFn: execFn}
 	audit := &recRecorder{}
-	srv := New(Config{Store: runFilesStore{run: run}, Runner: fr, Audit: audit})
+	srv := New(Config{BaseCtx: testBaseCtx(t), Store: runFilesStore{run: run}, Runner: fr, Audit: audit})
 	return srv, fr, audit, run
 }
 
@@ -119,7 +119,7 @@ func TestRunFiles_JoinsNumstatAndStatus(t *testing.T) {
 		"?? scratch.txt",
 		"",
 	}, "\n")
-	srv, fr, audit, run := newRunFilesHarness(func(runner.ExecSpec) (*runner.ExecSession, error) {
+	srv, fr, audit, run := newRunFilesHarness(t, func(runner.ExecSpec) (*runner.ExecSession, error) {
 		return fakeExecSession(stdout, "", 0), nil
 	})
 
@@ -165,7 +165,7 @@ func TestRunFiles_JoinsNumstatAndStatus(t *testing.T) {
 // nothing — it must come back binary:true with the count fields ABSENT.
 func TestRunFiles_BinaryIsNotZeroZero(t *testing.T) {
 	stdout := "path=/home/agent/work\n" + runFilesSeparator + "\n-\t-\tdocs/logo.png\n" + runFilesSeparator + "\nA  docs/logo.png\n"
-	srv, _, _, run := newRunFilesHarness(func(runner.ExecSpec) (*runner.ExecSession, error) {
+	srv, _, _, run := newRunFilesHarness(t, func(runner.ExecSpec) (*runner.ExecSession, error) {
 		return fakeExecSession(stdout, "", 0), nil
 	})
 
@@ -190,7 +190,7 @@ func TestRunFiles_BinaryIsNotZeroZero(t *testing.T) {
 func TestRunFiles_NotAGitWorkTree(t *testing.T) {
 	// The script still prints the directory it looked in before exiting 3 —
 	// that is the whole point of reporting Path (see below).
-	srv, _, audit, run := newRunFilesHarness(func(runner.ExecSpec) (*runner.ExecSession, error) {
+	srv, _, audit, run := newRunFilesHarness(t, func(runner.ExecSpec) (*runner.ExecSession, error) {
 		return fakeExecSession("path=/srv/custom-target\n", "fatal: not a git repository\n", 3), nil
 	})
 
@@ -235,7 +235,7 @@ func TestRunFiles_NoRunnerReasonIsPinned(t *testing.T) {
 // asked this question at all — 501 naming the reason, plus the one audit row
 // (this IS a failure).
 func TestRunFiles_ExecStreamUnsupported(t *testing.T) {
-	srv, _, audit, run := newRunFilesHarness(nil) // nil execFn => ErrExecStreamUnsupported
+	srv, _, audit, run := newRunFilesHarness(t, nil) // nil execFn => ErrExecStreamUnsupported
 
 	w := doRunFiles(srv, run.ID, nil)
 	if w.Code != http.StatusNotImplemented {
@@ -254,7 +254,7 @@ func TestRunFiles_ExecStreamUnsupported(t *testing.T) {
 // sandbox is never touched.
 func TestRunFiles_ForeignRun404(t *testing.T) {
 	execCalled := false
-	srv, _, _, run := newRunFilesHarness(func(runner.ExecSpec) (*runner.ExecSession, error) {
+	srv, _, _, run := newRunFilesHarness(t, func(runner.ExecSpec) (*runner.ExecSession, error) {
 		execCalled = true
 		return fakeExecSession("", "", 0), nil
 	})
@@ -284,7 +284,7 @@ func TestRunFiles_CapSetsTruncated(t *testing.T) {
 	for i := 0; i < rows; i++ {
 		fmt.Fprintf(&b, "1\t1\tfile%04d.go\n", i)
 	}
-	srv, _, _, run := newRunFilesHarness(func(runner.ExecSpec) (*runner.ExecSession, error) {
+	srv, _, _, run := newRunFilesHarness(t, func(runner.ExecSpec) (*runner.ExecSession, error) {
 		return fakeExecSession(b.String(), "", 0), nil
 	})
 
@@ -306,7 +306,7 @@ func TestRunFiles_CapSetsTruncated(t *testing.T) {
 func TestRunFiles_StderrDrainedConcurrently(t *testing.T) {
 	stdout := "path=/home/agent/work\n" + runFilesSeparator + "\n4\t0\tnotes.md\n" + runFilesSeparator + "\n M notes.md\n"
 	stderr := strings.Repeat("warning: this stderr is written first and nobody buffered it\n", 200)
-	srv, _, _, run := newRunFilesHarness(func(runner.ExecSpec) (*runner.ExecSession, error) {
+	srv, _, _, run := newRunFilesHarness(t, func(runner.ExecSpec) (*runner.ExecSession, error) {
 		return fakeExecSession(stdout, stderr, 0), nil
 	})
 
@@ -421,13 +421,88 @@ func TestRunFiles_SandboxGoneBeforeStateFlips(t *testing.T) {
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
-			srv, _, audit, run := newRunFilesHarness(execFn)
+			logs := captureSlog(t)
+			srv, _, audit, run := newRunFilesHarness(t, execFn)
 			w := doRunFiles(srv, run.ID, nil)
 			if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), reasonRunInspectTerminal) {
 				t.Fatalf("status = %d body %s, want 409 %s", w.Code, w.Body.String(), reasonRunInspectTerminal)
 			}
+			wantGoneLogged(t, logs, run.ID)
 			if len(audit.events) != 0 {
 				t.Errorf("audit = %+v, want none for a sandbox that is simply gone", audit.events)
+			}
+		})
+	}
+}
+
+// agentStoppedStore is runFilesStore that also answers the persisted agent stop.
+type agentStoppedStore struct {
+	runFilesStore
+	stopped bool
+}
+
+func (s agentStoppedStore) RunAgentStopped(context.Context, uuid.UUID) (bool, error) {
+	return s.stopped, nil
+}
+
+// TestRunInspect_KeptAgentStopped: a kept run whose agent is stopped answers the Files and Resources
+// reads with a structured 409 and no failure row, however often the console polls; an outage run still
+// inside its lease keeps its agent and is read; an ordinary exec failure is still audited.
+func TestRunInspect_KeptAgentStopped(t *testing.T) {
+	now := time.Now()
+	past, future, lostAt := now.Add(-time.Minute), now.Add(time.Hour), now.Add(-time.Hour)
+	for _, tc := range []struct {
+		name    string
+		reason  types.LostReason
+		endsAt  *time.Time
+		stopped bool
+		execErr error
+		want    int
+		audited bool
+	}{
+		{"ended", types.LostEnded, &future, false, nil, http.StatusConflict, false},
+		{"reboot", types.LostReboot, nil, false, nil, http.StatusConflict, false},
+		{"outage whose agent was stopped, then extended", types.LostOutage, &future, true, nil, http.StatusConflict, false},
+		{"outage past its end, stop not yet recorded", types.LostOutage, &past, false, nil, http.StatusConflict, false},
+		{"outage inside its lease", types.LostOutage, &future, false, nil, http.StatusOK, false},
+		{"live run, ordinary exec failure", "", nil, false, errors.New("exec: boom"), http.StatusInternalServerError, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			run := types.AgentRun{ID: uuid.New(), CreatedBy: "sub-owner@corp.example", State: types.RunRunning,
+				SandboxRef: "sandbox-abc", LostReason: tc.reason, EndsAt: tc.endsAt}
+			if tc.reason != "" {
+				run.LostAt = &lostAt
+			}
+			execs := 0
+			fr := &sshFakeRunner{execFn: func(runner.ExecSpec) (*runner.ExecSession, error) {
+				execs++
+				if tc.execErr != nil {
+					return nil, tc.execErr
+				}
+				return fakeExecSession("path=/home/agent/work\n", "", 3), nil
+			}}
+			audit := &recRecorder{}
+			srv := New(Config{BaseCtx: testBaseCtx(t), Store: agentStoppedStore{runFilesStore{run: run}, tc.stopped}, Runner: fr, Audit: audit})
+
+			w := doRunFiles(srv, run.ID, nil)
+			if w.Code != tc.want {
+				t.Fatalf("files status = %d (%s), want %d", w.Code, w.Body.String(), tc.want)
+			}
+			if tc.want == http.StatusConflict {
+				if !strings.Contains(w.Body.String(), reasonRunInspectAgentStopped) || execs != 0 {
+					t.Errorf("files body %s with %d execs, want reason %s and no exec", w.Body.String(), execs, reasonRunInspectAgentStopped)
+				}
+				rr := httptest.NewRecorder()
+				rq := httptest.NewRequest(http.MethodGet, "/api/v1/runs/"+run.ID.String()+"/resources", nil)
+				rctx := chi.NewRouteContext()
+				rctx.URLParams.Add("id", run.ID.String())
+				srv.handleRunResources(rr, rq.WithContext(context.WithValue(rq.Context(), chi.RouteCtxKey, rctx)))
+				if rr.Code != http.StatusConflict || !strings.Contains(rr.Body.String(), reasonRunInspectAgentStopped) || execs != 0 {
+					t.Errorf("resources = %d %s with %d execs, want 409 %s and no exec", rr.Code, rr.Body.String(), execs, reasonRunInspectAgentStopped)
+				}
+			}
+			if got := len(audit.events) > 0; got != tc.audited {
+				t.Errorf("audit events = %+v, want audited=%v", audit.events, tc.audited)
 			}
 		})
 	}

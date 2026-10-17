@@ -711,7 +711,7 @@ func TestMintedPAT_ConcurrentResolvesCreateOneToken(t *testing.T) {
 
 // No token value reaches a row, an audit row or a log line.
 func TestMintedPAT_NoTokenInRowsLogsOrAudit(t *testing.T) {
-	var logs syncBuffer
+	var logs lockedBuffer
 	prev := slog.Default()
 	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
 	t.Cleanup(func() { slog.SetDefault(prev) })
@@ -754,24 +754,6 @@ func TestADORunPATValidTo(t *testing.T) {
 			t.Errorf("%s: validTo = %v, want %v", name, got, tc.want)
 		}
 	}
-}
-
-// syncBuffer is a bytes.Buffer safe for the log handler's writers.
-type syncBuffer struct {
-	mu sync.Mutex
-	b  strings.Builder
-}
-
-func (b *syncBuffer) Write(p []byte) (int, error) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.b.Write(p)
-}
-
-func (b *syncBuffer) String() string {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.b.String()
 }
 
 // The lane end to end through the real token API client (vsspsPATClient)
@@ -880,5 +862,27 @@ func TestMintedPAT_SweepKeepsAnExpiredRowsLastError(t *testing.T) {
 	last := fx.st.marks[len(fx.st.marks)-1]
 	if last.reason != adoPATRevokeExpired || last.lastError != live[0].LastError {
 		t.Fatalf("closed with %+v, want reason %q keeping error %q", last, adoPATRevokeExpired, live[0].LastError)
+	}
+}
+
+// A run PAT Azure DevOps cannot revoke yet is the run PAT sweep's to retry: the run's revoke cascade
+// records it and still finishes, so the runner exit tail is not run again on every sweep for it.
+func TestMintedPAT_APendingRevokeLeavesTheCascadeDone(t *testing.T) {
+	fx := newADOPATFixture(t)
+	fx.ok(t, "dev.azure.com", nil)
+	fx.pats.revokeErr = &adoPATError{Status: http.StatusServiceUnavailable}
+	if err := fx.srv.revokeRunCascade(context.Background(), fx.run.ID); err != nil {
+		t.Fatalf("the cascade with only a run PAT revoke pending = %v, want it done", err)
+	}
+	if len(fx.st.unrevoked(t)) == 0 {
+		t.Fatal("the run PAT was marked revoked though Azure DevOps refused; the case is not exercised")
+	}
+	found := false
+	for _, ev := range fx.audit.find("run.revoke") {
+		var d map[string]any
+		found = found || (json.Unmarshal(ev.Data, &d) == nil && d["pat_revoke_pending"] != nil)
+	}
+	if !found {
+		t.Error("no run.revoke row records the pending run PAT revoke")
 	}
 }

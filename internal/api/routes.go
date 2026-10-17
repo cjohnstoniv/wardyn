@@ -56,6 +56,9 @@ func (s *Server) routes() chi.Router {
 		r.Get("/auth/callback", s.cfg.OIDC.CallbackHandlerWithDenials(s.isReservedPrincipal, s.auditSignInDenied))
 	}
 
+	// SCIM Users (scim_users.go): its own bearer, outside /api/v1 and every human gate.
+	s.mountSCIMRoutes(r)
+
 	r.Route("/api/v1", func(r chi.Router) {
 		// Public admin-gated surface.
 		r.Group(func(r chi.Router) {
@@ -91,7 +94,8 @@ func (s *Server) routes() chi.Router {
 			//   mountPermissionRoutes  (this file)  securityOps
 			//   mountAccountRoutes     (this file)  securityOps
 			//   adminRoutes            (this file)  one per group, plus
-			//       mountUserTypeRoutes (user_types.go) securityOps
+			//       mountUserTypeRoutes (user_types.go) securityOps, and
+			//       mountKeyDomainRoutes (key_domains.go) securityOps
 			//   mountLibraryRoutes     (sources.go) operatorOnly (+ member reads on r)
 			//   mountSetupMutationRoutes            operatorOnly
 			//   mountAccessRoutes      (access.go)  operatorOnly
@@ -193,12 +197,17 @@ func (s *Server) routes() chi.Router {
 			// Dry-run of the create-run resolution + gating: same resolveRunPolicy
 			// chokepoint (real 4xx errors), the enforced confinement class, and the
 			// deterministic setup checklist — mints/persists/dispatches nothing. The
-			// manual wizard fires it on the Review step (advisory, non-gating).
+			// New Run fires it on its own as the body settles. Advisory on the server: it never
+			// refuses a launch itself, but the console holds Launch over a refusal this
+			// endpoint gave for the exact same body less than 60 seconds ago.
 			r.Post("/runs/preflight", s.handlePreflightRun)
+			r.Post("/runs/policy-preview", s.handlePolicyPreview)
 			r.Get("/runs", s.handleListRuns)
 			r.Get("/runs/{id}", s.handleGetRun)
 			r.Get("/runs/{id}/events", s.handleRunEvents) // same gate as GET /runs/{id}
 			r.Get("/runs/{id}/output", s.handleRunOutput) // same gate as GET /runs/{id}
+			// A waiting sign-in's device code: the owner only (getRunForEntry, run_sign_in.go).
+			r.Get("/runs/{id}/sign-in", s.handleRunSignIn)
 			s.mountRunLeaseRoutes(r)
 			r.Get("/runs/{id}/grants", s.handleListGrants)
 			r.Get("/runs/{id}/policy", s.handleGetRunPolicy) // owner or admin; not on the delegation list
@@ -221,7 +230,9 @@ func (s *Server) routes() chi.Router {
 			r.Get("/runs/{id}/attach-holder", s.handleAttachHolder)
 			// The one WRITE in that set: displacing whoever currently holds the
 			// run's tmux PTY. Audited (session.takeover, actor + previous holder)
-			// because it takes a live session away from another human.
+			// because it takes a live session away from another human. The run's
+			// OWNER only, or a super admin on a run with no personal owner
+			// (mayEnterRun); any other super admin gets 403 run_owner_only.
 			r.Post("/runs/{id}/attach/takeover", s.handleAttachTakeover)
 
 			// Single-use WS attach tickets: browsers cannot put the admin
@@ -229,12 +240,14 @@ func (s *Server) routes() chi.Router {
 			// (through THIS authenticated group) and presents the returned
 			// 30s ticket as ?ticket= on the attach WS below.
 			//
-			// OWNER-OR-ADMIN rather than operator-only: the ticket
-			// mints a live interactive PTY inside a RUNNING sandbox — injected
+			// The run's OWNER rather than operator-only: the ticket mints a live
+			// interactive PTY (or UI session) inside a RUNNING sandbox — injected
 			// keystrokes and whatever the agent's injected credentials left on
-			// screen — which is strictly more than "launch a run", but a member
-			// may still hold one for a run THEY created (handleAttachTicket's
-			// getRunAuthorized gate; a foreign run 404s, no existence oracle).
+			// screen — which is strictly more than "launch a run", and a member may
+			// hold one for a run THEY created (handleAttachTicket's getRunAuthorized
+			// gate; a foreign run 404s, no existence oracle). A super admin gets one
+			// only for a run with no personal owner (mayEnterRun); on a person's run
+			// they get 403 run_owner_only (#1476).
 			r.Post("/runs/{id}/attach-ticket", s.handleAttachTicket)
 			// The three lines above are each issue #658's pre-0.8 alias; their
 			// 0.8 names (mounted alongside, same handlers, kept one minor —
@@ -264,12 +277,19 @@ func (s *Server) routes() chi.Router {
 			// Tamper-evidence sweep over the audit hash chain (migration 0047),
 			// plus the sandbox sweep — one on each tier, hence two routers.
 			s.adminRoutes(operatorOnly, securityOps)
+			s.mountRunnerRevokeRoutes(r, securityOps)             // runner_revoke.go: the security tier, or the runner's own owner
+			s.mountRunnerPoolRoutes(r, operatorOnly, securityOps) // runner_pools.go: 501 until the pool storage lands
+			s.mountRunnerInventoryRoutes(r, operatorOnly, securityOps)
+			s.mountTemplateRoutes(r, operatorOnly)
 			r.Get("/me", s.handleMe)
 			// #1197: the shell's two nav badges in one small object, replacing
 			// the two 1000-row reads App.tsx used to poll. classMember, scoped to
 			// the caller's own view exactly as GET /runs?view= and GET /approvals
 			// are (handleMeAttention's own doc).
 			r.Get("/me/attention", s.handleMeAttention)
+			// The drive catalogue New Run attaches from: only the caller's own
+			// grants, no host path (user_drives_catalogue.go).
+			r.Get("/me/drives", s.handleListMeDrives)
 			// Own effective capability set — member-safe (classMember): every
 			// route AROUND this one on /permissions below is operator-only, but
 			// a member reading only their OWN grants (ListCapabilityGrantsFor,
@@ -427,6 +447,9 @@ func (s *Server) routes() chi.Router {
 			// Least-privilege telemetry: egress hosts runs using this workspace
 			// were denied — promotion candidates (see handleObservedEgress).
 			r.Get("/workspaces/{id}/observed-egress", s.handleObservedEgress)
+			// New Run's branch picker: launch tier (mayLaunchWorkspace), uniform 404,
+			// per-person limiter; see workspace_branches.go.
+			r.Get("/workspaces/{id}/branches", s.handleListWorkspaceBranches)
 			// Record Mode: launch one task's OPEN recording sandbox (learn what
 			// the task actually uses; see handleRecordWorkspace), then promote
 			// the observed-allowed hosts into ApprovedEgress (operator one-click).
@@ -436,7 +459,7 @@ func (s *Server) routes() chi.Router {
 			// varies with whether the id exists — owning a workspace does not
 			// let a member disown it.
 			operatorOnly.Post("/workspaces/{id}/reassign", s.handleReassignWorkspace)
-			operatorOnly.Post("/workspaces/{id}/record", s.handleRecordWorkspace)
+			operatorOnly.Post("/workspaces/{id}/record", s.handleRecordGoverned)
 			securityOps.Post("/workspaces/{id}/record/{task}/promote-egress", s.handlePromoteRecordEgress)
 			// Committable env-as-code (devcontainer.json/AGENTS.md) from the
 			// scanned profile. GET re-generates it any time (repo workspaces have
@@ -445,7 +468,8 @@ func (s *Server) routes() chi.Router {
 			r.Get("/workspaces/{id}/env-as-code", s.handleGetEnvAsCode)
 			operatorOnly.Post("/workspaces/{id}/env-as-code/write", s.handleWriteEnvAsCode)
 
-			s.mountSecretRoutes(r, securityOps)
+			s.mountSecretRoutes(r, operatorOnly, securityOps)
+			s.mountComponentRoutes(r, operatorOnly) // components_routes.go: saved components, the caller's and the organisation's
 
 			// Site config: the operator-wide, admin-authored baseline every run
 			// inherits (upstream proxy secret ref, per-ecosystem artifact-registry
@@ -594,7 +618,7 @@ func (s *Server) routes() chi.Router {
 			// nothing to arrange.
 			// …and POST /drives/{id}/reclaim with them: mountUserDriveFamily
 			// (user_drives_reclaim.go) joins the family's two halves.
-			s.mountUserDriveFamily(operatorOnly, securityOps)
+			s.mountUserDriveFamily(r, operatorOnly, securityOps)
 
 			// Recording replay: GET /api/v1/runs/{id}/recording/{id}. Owner-or-admin:
 			// recordingAuthorizer is the SAME ownership rule
@@ -634,6 +658,8 @@ func (s *Server) routes() chi.Router {
 		// Hybrid enrolment: anonymous enrol, the wdd_ device routes and the admin
 		// device routes, each in its own group — see mountDeviceRoutes.
 		s.mountDeviceRoutes(r)
+		s.mountRunnerRegistrationRoutes(r)
+		s.mountRunnerStreamRoutes(r)
 		s.mountDelegationRoutes(r) // a portal acting for a person (delegation*.go, #1142)
 		s.mountBrandingRoutes(r)   // console branding: anonymous reads, SUPER writes (branding.go)
 	})
@@ -664,8 +690,11 @@ func (s *Server) mountRunLeaseRoutes(r chi.Router) {
 	// run state, unlike the lease PATCH above — see run_title.go's own doc
 	// comment for why this stays a separate route.
 	r.Patch("/runs/{id}/title", s.handleSetRunTitle)
+	// The setup the run was launched with, for Run again: OWNER ONLY like the
+	// title (ownsRun, no admin bypass), any run state (launch_intent.go).
+	r.Get("/runs/{id}/launch-intent", s.handleGetLaunchIntent)
 	r.Post("/runs/{id}/kill", s.handleKillRun)
-	r.Post("/runs/{id}/revive", s.handleReviveRun) // owner or super admin (run_revive.go)
+	r.Post("/runs/{id}/revive", s.handleReviveRun) // owner or super admin (run_revive.go); they open no shell, so #1476 leaves them
 }
 
 // mountAccountRoutes registers the caller's own account surfaces — per-user
@@ -692,13 +721,19 @@ func (s *Server) mountAccountRoutes(r chi.Router, securityOps chi.Router) {
 	r.Delete("/me/tokens/{id}", s.handleRevokeAPIToken)
 	securityOps.Get("/tokens", s.handleListAllAPITokens)
 	securityOps.Delete("/tokens/{id}", s.handleAdminRevokeAPIToken)
-	securityOps.Delete("/people/{principal}/ssh-keys", s.handleAdminDeleteSSHKeys)
+	securityOps.Post("/tokens/{id}/move", s.handleMoveAPIToken)
+	securityOps.With(s.refuseSubjectPrincipalParam).Delete("/people/{principal}/ssh-keys", s.handleAdminDeleteSSHKeys)
 	s.mountPeopleRoutes(securityOps)
+	s.mountInvitationRoutes(r, securityOps)
+	s.mountServiceIdentityRoutes(r, securityOps)
+	s.mountSCIMStatusRoute(securityOps)
 	// Run-detail widget layout: per-user, per-preset, server-synced so a
 	// layout survives a new machine (localStorage would not). Scoped to
 	// the caller's OWN principal at the store, exactly like the ssh-keys
 	// block above — never a principal taken from the body.
 	r.Get("/me/run-layout", s.handleGetRunLayout)
+	// The caller's own kept launch setups, newest first (launch_intent.go).
+	r.Get("/me/launch-intents", s.handleListLaunchIntents)
 	r.Put("/me/run-layout", s.handlePutRunLayout)
 	// Per-user Azure DevOps sign-in (ado_entra.go): two browser doors that
 	// capture ONE PERSON'S Azure DevOps refresh token. It belongs in this
@@ -737,14 +772,15 @@ func (s *Server) mountAccountRoutes(r chi.Router, securityOps chi.Router) {
 // it only removes reach, and returns no credential material; so is the
 // inventory of who holds one for which model provider, its offboarding
 // companion (design K5-A), which returns metadata only.
-func (s *Server) mountSecretRoutes(r, securityOps chi.Router) {
+func (s *Server) mountSecretRoutes(r, operatorOnly, securityOps chi.Router) {
 	if s.cfg.Secrets == nil {
 		return
 	}
 	r.Put("/secrets/{name}", s.handlePutSecret)
 	r.Delete("/secrets/{name}", s.handleDeleteSecret)
 	r.Get("/secrets", s.handleListSecrets)
-	securityOps.Delete("/people/{principal}/credentials", s.handleErasePersonCredentials)
+	s.mountExplicitSecretRoutes(r, operatorOnly)
+	securityOps.With(s.refuseSubjectPrincipalParam).Delete("/people/{principal}/credentials", s.handleErasePersonCredentials)
 	securityOps.Get("/model-providers/credentials", s.handleCredentialInventory)
 }
 
@@ -776,6 +812,10 @@ func (s *Server) mountPermissionRoutes(securityOps chi.Router) {
 	// Explain (K4) reads this same table at a NAMED subject rather than the
 	// caller's own: still securityOps, never wider.
 	securityOps.Get("/permissions/explain", s.handleExplainCapabilities)
+	securityOps.Get("/governance/egress-baseline", s.handleGetEgressBaseline)
+	securityOps.Put("/governance/egress-baseline", s.handlePutEgressBaseline)
+	securityOps.Get("/governance/credential-delivery", s.handleGetCredentialDelivery)
+	securityOps.Put("/governance/credential-delivery", s.handlePutCredentialDelivery)
 }
 
 // adminRoutes registers the two admin-gated maintenance routes — one per tier,
@@ -795,10 +835,20 @@ func (s *Server) adminRoutes(operatorOnly chi.Router, securityOps chi.Router) {
 	// whole-fleet audit VOLUME is the same disclosure that keeps /metrics
 	// gated. Operator-INVOKED by design: wardynd never verifies at boot.
 	securityOps.Get("/audit/chain/verify", s.handleVerifyAuditChain)
+	// Fleet capacity (runs_capacity.go): configured reservations summed from the run rows.
+	// securityOps because it reconstructs nothing GET /runs?view=admin does not already show
+	// that tier; fleet volume stays off members. No exec and no runner call.
+	securityOps.Get("/admin/runs/capacity", s.handleRunCapacity)
+	// Retention (migration 0123): the policy and every partition's eligibility, and the attested drop.
+	s.mountAuditRetentionRoutes(securityOps)
 	// User types (migration 0071_user_types): defining a type is the same
 	// security-tier duty as authoring a governance profile; deciding who IS a
 	// type stays on the operatorOnly /access routes.
 	s.mountUserTypeRoutes(securityOps)
+	// Key domains (migration 0121): which declared domain a person's next
+	// principal-key generation is wrapped under.
+	s.mountKeyDomainRoutes(securityOps)
+	s.mountApprovalNotifyRoutes(securityOps)
 	// Sandbox sweep. SUPER, and the reason matters because an operator deciding
 	// who to trust with RoleSecurityAdmin reads exactly these lines: the sweep
 	// drives the RUNNER — Status then StopSandbox — across every run in the
@@ -828,6 +878,9 @@ func (s *Server) adminRoutes(operatorOnly chi.Router, securityOps chi.Router) {
 	// listing reads the whole fleet.
 	operatorOnly.Get("/admin/runs/proxy-window", s.handleAdminProxyWindow)
 	operatorOnly.Post("/admin/runs/restart", s.handleAdminRestartRuns)
+	// Entra app re-registration remedy (identity_unbind.go). SUPER: it re-opens a
+	// person's identity row to a different sign-in principal.
+	operatorOnly.Post("/admin/identities/{id}/unbind", s.handleUnbindIdentity)
 }
 
 // mountInternalRoutes is the internal sidecar surface: every route here is
@@ -843,6 +896,9 @@ func (s *Server) mountInternalRoutes(r chi.Router) {
 	// raised instead of leaving it PENDING for the sweep.
 	r.Post("/internal/approvals/{id}/expire", s.handleInternalExpireApproval)
 	r.Post("/internal/credentials/mint", s.handleInternalMint)
+	// via_org egress (design 0.9 §7.3): a local run's request for a via_org
+	// destination, served by the organisation; via_org.go.
+	s.mountViaOrgRoute(r)
 
 	// Token renew: POST /api/v1/internal/token/renew
 	// The per-run proxy re-issues its own (short-TTL) run token before it

@@ -6,6 +6,9 @@
 import type { Page } from "@playwright/test";
 import { test, expect, gotoConsole, mockMemberRole, navToRoute } from "./fixtures";
 import { ADO } from "../src/app/lib/ado-entra-copy";
+import { ADO_PAT } from "../src/app/lib/ado-pat-copy";
+import { formatDay } from "../src/app/lib/ado-pat-display";
+import { aheadByHours } from "../src/app/lib/test-clock";
 
 // The Azure DevOps chip on Getting started (#386) — the hermetic e2e backend
 // runs no Entra tenant, so every state is forced by intercepting
@@ -67,6 +70,30 @@ test.describe("Getting started — the Azure DevOps chip (mocked /setup/status.s
     await expect(page.getByText(ADO.ACCESS_SHARED_EXPIRED)).toBeVisible();
     await expect(page.getByText(ADO.ACCESS_SHARED_EXPIRED_ACTION)).toBeVisible();
     await expect(page.getByRole("button", { name: ADO.CONNECT_ADO })).toHaveCount(0);
+  });
+
+  // The own-token chip packet: a refused own token is red and offers Replace token,
+  // which opens the add-token dialog, never the Entra sign-in popup.
+  test("a refused own token: danger chip, the refusal line, and Replace token opens the add-token dialog", async ({ page }) => {
+    const expiresOn = aheadByHours(20 * 24).slice(0, 10);
+    const refusedAt = aheadByHours(-48);
+    await mockScmAccess(page, {
+      state: "live",
+      source: "own",
+      token_mode: "own_pat",
+      org: "https://dev.azure.com/wardyn-live-test",
+      max_days: 30,
+      expires_on: expiresOn,
+      refused_at: refusedAt,
+    });
+    await gotoConsole(page);
+    await navToRoute(page, "/setup");
+    await expect(page.getByText("Azure DevOps · Refused")).toBeVisible();
+    await expect(page.getByText(ADO.ACCESS_SHARED_LIVE)).toHaveCount(0);
+    await expect(page.getByText(ADO_PAT.OWN_REFUSED_LINE(formatDay(refusedAt), formatDay(expiresOn)))).toBeVisible();
+    await expect(page.getByRole("button", { name: ADO.CONNECT_ADO })).toHaveCount(0);
+    await page.getByRole("button", { name: ADO_PAT.OWN_REPLACE }).click();
+    await expect(page.getByRole("dialog", { name: ADO_PAT.OWN_DIALOG_TITLE })).toBeVisible();
   });
 
   test("Connect Azure DevOps opens the connect popup (the daemon's own redirect door)", async ({ page, context }) => {

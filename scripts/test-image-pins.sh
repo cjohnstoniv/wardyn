@@ -16,11 +16,14 @@
 # Daemon-free, network-free: it runs the real gate against a throwaway tree.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=lib/common.sh
+source "$ROOT/scripts/lib/common.sh"
 
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
-mkdir -p "$TMP/scripts"
+mkdir -p "$TMP/scripts/lib"
 cp "$ROOT/scripts/check-image-pins.sh" "$TMP/scripts/"
+cp "$ROOT/scripts/lib/common.sh" "$ROOT/scripts/lib/image_downloads.py" "$TMP/scripts/lib/"
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
 
@@ -83,11 +86,10 @@ EOF
 # ci.yml scans wardynd and nothing else.
 cat > "$TMP/.github/workflows/ci.yml" <<'EOF'
 jobs:
-  trivy:
-    strategy:
-      matrix:
-        include:
-          - name: wardynd
+  trivy-wardynd:
+    name: trivy (wardynd)
+    env:
+      TRIVY_IMAGE: wardynd
   notices:
     runs-on: ubuntu-latest
 EOF
@@ -108,7 +110,7 @@ write_release_wf '          '
 out="$(gate_says || true)"
 case "$out" in
   *"published by"*"never scanned"*"agent-unscanned"*) ;;
-  *) fail "an image published but absent from ci.yml's trivy matrix must be NAMED at the canonical indent. Got: $(printf '%s' "$out" | tr '\n' ' ')" ;;
+  *) fail "an image published but absent from ci.yml's trivy jobs must be NAMED at the canonical indent. Got: $(printf '%s' "$out" | tr '\n' ' ')" ;;
 esac
 echo "ok  unscanned published image is named at the 10-space indent"
 
@@ -117,7 +119,7 @@ write_release_wf '      '
 out="$(gate_says || true)"
 case "$out" in
   *"published by"*"never scanned"*"agent-unscanned"*) ;;
-  *) fail "the scan-coverage cross-check went BLIND at a 6-space indent — a published image was never compared against the trivy matrix (F214). Got: $(printf '%s' "$out" | tr '\n' ' ')" ;;
+  *) fail "the scan-coverage cross-check went BLIND at a 6-space indent — a published image was never compared against the trivy jobs (F214). Got: $(printf '%s' "$out" | tr '\n' ' ')" ;;
 esac
 echo "ok  unscanned published image is named at a non-canonical indent"
 
@@ -135,6 +137,23 @@ case "$out" in
 esac
 echo "ok  an unparseable published-image list fails loudly"
 
+# 6a. a trivy job named for one image and scanning another: the required
+#     `trivy (wardynd)` check would be green for an image nothing scanned.
+write_release_wf '          '
+cat > "$TMP/.github/workflows/ci.yml" <<'EOF'
+jobs:
+  trivy-wardynd:
+    name: trivy (wardynd)
+    env:
+      TRIVY_IMAGE: agent-unscanned
+EOF
+out="$(gate_says || true)"
+case "$out" in
+  *"named for one image and scans another"*"trivy (wardynd) scans agent-unscanned"*) ;;
+  *) fail "a trivy job whose name and TRIVY_IMAGE disagree must be named. Got: $(printf '%s' "$out" | tr '\n' ' ')" ;;
+esac
+echo "ok  a trivy job named for one image and scanning another fails"
+
 # ── #357: the GPL offer's hand-listed websockify entry tracks the Dockerfile ─
 #
 # The gate reads MANUAL_ENTRIES' websockify row out of gpl-source-offer.sh and
@@ -144,7 +163,8 @@ echo "ok  an unparseable published-image list fails loudly"
 mkdir -p "$TMP/deploy/images/novnc"
 cat > "$TMP/deploy/images/novnc/Dockerfile" <<'EOF'
 ARG WEBSOCKIFY_VERSION=0.13.0
-RUN curl -fsSL "https://github.com/novnc/websockify/archive/refs/tags/v${WEBSOCKIFY_VERSION}.tar.gz" -o /tmp/websockify.tar.gz
+RUN curl -fsSL "https://github.com/novnc/websockify/archive/refs/tags/v${WEBSOCKIFY_VERSION}.tar.gz" -o /tmp/websockify.tar.gz \
+ && echo "b6413e364efd04f3c92ec8c17747e3c4adc20157c2ef1c5d019a26d944a46df8  /tmp/websockify.tar.gz" | sha256sum -c -
 EOF
 write_manual_entry() { # the whole MANUAL_ENTRIES row
   printf 'MANUAL_ENTRIES=(\n  "%s"\n)\n' "$1" > "$TMP/scripts/gpl-source-offer.sh"
@@ -187,5 +207,18 @@ case "$out" in
   *) fail "an unparseable websockify entry must fail loudly. Got: $(printf '%s' "$out" | tr '\n' ' ')" ;;
 esac
 echo "ok  an unparseable websockify entry fails loudly"
+
+cat > "$TMP/Dockerfile" <<'EOF'
+RUN set -e; curl -fsSL https://example.invalid/unchecked -o /tmp/unchecked
+EOF
+out="$(gate_says || true)"
+case "$out" in
+  *"/tmp/unchecked"*"same-file checksum"*) ;;
+  *) fail "the image-pin gate must call the download guard. Got: $out" ;;
+esac
+echo "ok  unchecked curl fails through the image-pin gate"
+python3 "$ROOT/scripts/test-image-downloads.py"
+python3 "$ROOT/scripts/test-image-download-safety.py"
+python3 "$ROOT/scripts/test-image-recipes.py"
 
 echo "test-image-pins: PASS"

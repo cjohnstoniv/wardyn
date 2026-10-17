@@ -9,7 +9,7 @@
 // boolean LimitRows and the save/cancel/error plumbing through the whole
 // screen; this file mounts the editor directly so the number rows don't need
 // a profiles table around them.
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -54,7 +54,7 @@ const GREENFIELD: GovernanceProfile = {
 
 function renderEditor(profile: GovernanceProfile | null = GREENFIELD) {
   const onSaved = vi.fn();
-  render(<ProfileEditor profile={profile} disabled={false} onCancel={vi.fn()} onSaved={onSaved} />);
+  render(<ProfileEditor profile={profile} disabled={false} onCancel={vi.fn()} onSaved={onSaved} onSubmitted={vi.fn()} />);
   return { onSaved };
 }
 
@@ -158,6 +158,15 @@ describe("ProfileEditor — the seven run-limit rows", () => {
     getSetupStatusMock.mockResolvedValue(baseStatus());
     gradePolicyMock.mockReset();
     gradePolicyMock.mockResolvedValue({ overall_risk: "medium", risk_assessment: [] });
+  });
+
+  // #1486: the duration row's real control is an <Input> inside a flex div, so
+  // Field's cloned aria-describedby landed on the div, not the input.
+  it("a duration row's input is described by its hint", () => {
+    renderEditor();
+    expect(within(screen.getByTestId("governance-limit-max-end")).getByRole("spinbutton")).toHaveAccessibleDescription(
+      RL.MAX_END_HINT,
+    );
   });
 
   it("renders every label and hint", () => {
@@ -322,7 +331,7 @@ describe("ProfileEditor — the autonomy rubric round-trips", () => {
 });
 
 // #1200 §3a — "Allowed barriers": one radio over the SAME min_confinement_class
-// field the JSON spec authors, so the two controls can never disagree.
+// field the policy source authors, so the two controls can never disagree.
 describe("ProfileEditor — Allowed barriers (T-7)", () => {
   beforeEach(() => {
     getSetupStatusMock.mockReset();
@@ -343,7 +352,7 @@ describe("ProfileEditor — Allowed barriers (T-7)", () => {
     expect(screen.getByRole("button", { name: "Wall", pressed: true })).toBeInTheDocument();
   });
 
-  it("picking Vault writes CC3 into the same spec the JSON textarea shows, and saves it", async () => {
+  it("picking Vault writes CC3 into the same source the editor shows, and saves it", async () => {
     updateProfileMock.mockResolvedValue({ profile: GREENFIELD, warnings: [] });
     renderEditor();
 
@@ -352,9 +361,12 @@ describe("ProfileEditor — Allowed barriers (T-7)", () => {
     expect(
       screen.getByText("Only Vault is allowed under this profile — every run is forced onto it."),
     ).toBeInTheDocument();
-    // The JSON textarea (PolicyPanel) reflects the same write.
-    expect((screen.getByLabelText("Spec (JSON)") as HTMLTextAreaElement).value).toContain(
-      '"min_confinement_class": "CC3"',
+    // The read view says so in the console's words, and the source (YAML, behind
+    // "Edit policy") carries the same write.
+    expect(screen.getByText("Minimum").nextElementSibling).toHaveTextContent("Vault");
+    await userEvent.click(screen.getByRole("button", { name: "Edit policy" }));
+    expect((screen.getByLabelText(/^Spec \(YAML\)/) as HTMLTextAreaElement).value).toContain(
+      "min_confinement_class: CC3",
     );
 
     await userEvent.click(screen.getByRole("button", { name: GOV.SAVE }));
@@ -364,11 +376,126 @@ describe("ProfileEditor — Allowed barriers (T-7)", () => {
     );
   });
 
-  it("disables the control while the JSON is unparseable, rather than silently no-oping a click", async () => {
+  it("disables the control while the source is unparseable, rather than silently no-oping a click", async () => {
     renderEditor();
     await waitFor(() => expect(getSetupStatusMock).toHaveBeenCalled());
-    const textarea = screen.getByLabelText("Spec (JSON)");
+    await userEvent.click(screen.getByRole("button", { name: "Edit policy" }));
+    const textarea = screen.getByLabelText(/^Spec \(YAML\)/);
     fireEvent.change(textarea, { target: { value: "{ not json" } });
     expect(screen.getByRole("button", { name: "Vault" })).toBeDisabled();
+  });
+
+  // #1921: the ceiling reads first; editing is a step, and an invalid source is never saved.
+  it("opens the ceiling as a read view, edits it as YAML, and returns to the button that opened it", async () => {
+    renderEditor();
+    expect(screen.getByRole("button", { name: "Summary", pressed: true })).toBeInTheDocument();
+    expect(screen.queryByRole("textbox", { name: /^Spec/ })).toBeNull();
+
+    await userEvent.click(screen.getByRole("button", { name: "Edit policy" }));
+    const textarea = screen.getByLabelText(/^Spec \(YAML\)/);
+    await waitFor(() => expect(textarea).toHaveFocus());
+    expect(screen.getByText("Editing")).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Done editing" }));
+    expect(screen.queryByLabelText(/^Spec \(YAML\)/)).toBeNull();
+    await waitFor(() => expect(screen.getByRole("button", { name: "Edit policy" })).toHaveFocus());
+  });
+
+  it("holds Save while the ceiling does not parse, and sends nothing", async () => {
+    updateProfileMock.mockReset();
+    renderEditor();
+    await userEvent.click(screen.getByRole("button", { name: "Edit policy" }));
+    fireEvent.change(screen.getByLabelText(/^Spec \(YAML\)/), { target: { value: "a: [" } });
+    expect(screen.getByRole("button", { name: GOV.SAVE })).toBeDisabled();
+    await userEvent.click(screen.getByRole("button", { name: "Done editing" }));
+    // Out of the editor the read view still says the source is not valid.
+    expect(screen.getByText("The policy spec isn't valid YAML or JSON.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: GOV.SAVE })).toBeDisabled();
+    expect(updateProfileMock).not.toHaveBeenCalled();
+  });
+});
+
+// deny-f4 (mock packet M3 S5): the four access-request fields.
+// Each case renders the whole editor (policy panel, limit and run-limit rows,
+// rubric); that is about 1 s on a dev box and several times that on a loaded CI
+// runner, so this block gets an explicit budget instead of the 5 s default.
+describe("ProfileEditor — the Access requests section", { timeout: 20_000 }, () => {
+  beforeEach(() => {
+    getSetupStatusMock.mockReset();
+    getSetupStatusMock.mockResolvedValue(baseStatus());
+    gradePolicyMock.mockReset();
+    gradePolicyMock.mockResolvedValue({ overall_risk: "medium", risk_assessment: [] });
+    createProfileMock.mockReset();
+    updateProfileMock.mockReset();
+    updateProfileMock.mockResolvedValue({ profile: GREENFIELD, warnings: [] });
+  });
+
+  const WITH_CONTACT: GovernanceProfile = {
+    ...GREENFIELD,
+    contact: { owner: "Platform Security", email: "access@example.com", request_url: "https://example.com/access", request_text: "Include the run id." },
+  };
+
+  it("shows the stored contact under M3's labels", () => {
+    renderEditor(WITH_CONTACT);
+    expect(screen.getByText(GOV.CONTACT_TITLE)).toBeInTheDocument();
+    expect(screen.getByText(GOV.CONTACT_LEAD)).toBeInTheDocument();
+    expect(screen.getByLabelText(GOV.CONTACT_OWNER)).toHaveValue("Platform Security");
+    expect(screen.getByLabelText(GOV.CONTACT_EMAIL)).toHaveValue("access@example.com");
+    expect(screen.getByLabelText(GOV.CONTACT_URL)).toHaveValue("https://example.com/access");
+    expect(screen.getByLabelText(GOV.CONTACT_TEXT)).toHaveValue("Include the run id.");
+  });
+
+  it("describes the request link by its scheme hint", () => {
+    renderEditor(GREENFIELD);
+    expect(screen.getByLabelText(GOV.CONTACT_URL)).toHaveAccessibleDescription(expect.stringContaining("An https: page"));
+  });
+
+  it("saves the four fields as typed, trimmed", async () => {
+    renderEditor(GREENFIELD);
+    const user = userEvent.setup();
+    // Set in one act, not typed key by key: every keystroke re-renders the
+    // whole editor, which is what pushed this past the test timeout on a
+    // loaded CI runner.
+    act(() => {
+      fireEvent.change(screen.getByLabelText(GOV.CONTACT_OWNER), { target: { value: "  Platform Security " } });
+      fireEvent.change(screen.getByLabelText(GOV.CONTACT_URL), { target: { value: "https://example.com/access" } });
+    });
+    await user.click(screen.getByRole("button", { name: GOV.SAVE }));
+    await waitFor(() => expect(updateProfileMock).toHaveBeenCalledTimes(1));
+    expect(updateProfileMock.mock.calls[0][1].contact).toEqual({
+      owner: "Platform Security",
+      request_url: "https://example.com/access",
+    });
+  });
+
+  it("refuses a javascript: request link client-side, before the server sees it", async () => {
+    renderEditor(GREENFIELD);
+    const user = userEvent.setup();
+    fireEvent.change(screen.getByLabelText(GOV.CONTACT_URL), { target: { value: "javascript:alert(1)" } });
+    await user.click(screen.getByRole("button", { name: GOV.SAVE }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Use an https: link or a single mailto: address, with nothing after it.");
+    expect(updateProfileMock).not.toHaveBeenCalled();
+    expect(createProfileMock).not.toHaveBeenCalled();
+  });
+
+  it("clears a stored contact with null when every field is emptied, and omits it when there was none", async () => {
+    renderEditor(WITH_CONTACT);
+    const user = userEvent.setup();
+    // Emptied in one act, so the heavy editor re-renders once, not four times.
+    act(() => {
+      for (const label of [GOV.CONTACT_OWNER, GOV.CONTACT_EMAIL, GOV.CONTACT_URL, GOV.CONTACT_TEXT]) {
+        fireEvent.change(screen.getByLabelText(label), { target: { value: "" } });
+      }
+    });
+    await user.click(screen.getByRole("button", { name: GOV.SAVE }));
+    await waitFor(() => expect(updateProfileMock).toHaveBeenCalledTimes(1));
+    expect(updateProfileMock.mock.calls[0][1].contact).toBeNull();
+  });
+
+  it("leaves contact off the request for a profile that never had one", async () => {
+    renderEditor(GREENFIELD);
+    await userEvent.setup().click(screen.getByRole("button", { name: GOV.SAVE }));
+    await waitFor(() => expect(updateProfileMock).toHaveBeenCalledTimes(1));
+    expect(updateProfileMock.mock.calls[0][1]).not.toHaveProperty("contact");
   });
 });

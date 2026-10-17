@@ -14,13 +14,15 @@ import (
 	"time"
 
 	gooidc "github.com/coreos/go-oidc/v3/oidc"
+	"github.com/google/uuid"
 )
 
 // CallbackHandler handles the IdP redirect. It:
 //  1. Verifies the state parameter against the state cookie (CSRF).
 //  2. Exchanges the code for tokens using PKCE.
 //  3. Verifies the ID token signature, issuer, audience, expiry, and nonce.
-//  4. Optionally checks email domain (fail closed when AllowedEmailDomains is set).
+//  4. Optionally checks email_verified and the email domain (fail closed when
+//     AllowedEmailDomains is set; email_verified alone when RequireEmailVerified is on).
 //  5. Derives the session's role from the roles/groups/email claims (see
 //     Config.RoleMap / deriveRole); denies the login if nothing matches and no
 //     DefaultRole is configured.
@@ -180,6 +182,16 @@ func (a *Authenticator) CallbackHandler(w http.ResponseWriter, r *http.Request) 
 // the generic authErrorSignInRefused, since nothing the user can do clears it.
 const DenialReservedPrincipal = "reserved_principal"
 
+// The email policy refusals reported to onDenied (#155): the same codes the
+// browser sees as auth_error and a portal's token exchange records as its
+// refusal reason. Literals, equal to authErrorEmailVerifiedAbsent,
+// authErrorEmailUnverified and authErrorEmailDomain.
+const (
+	DenialEmailVerifiedAbsent = "email_verified_absent"
+	DenialEmailUnverified     = "email_unverified"
+	DenialEmailDomain         = "email_domain"
+)
+
 // CallbackHandlerWithDenials is CallbackHandler with a reserved-subject check
 // (DenialReservedPrincipal) and sign-in denials (including
 // DenialUserTypeAmbiguous, DenialUserTypeUnknown) reported to onDenied so
@@ -223,6 +235,7 @@ func (a *Authenticator) callback(w http.ResponseWriter, r *http.Request, reserve
 	if a.httpClient != nil {
 		exchangeCtx = gooidc.ClientContext(exchangeCtx, a.httpClient)
 	}
+	grantGeneration, captureGrant := a.loginGrantGeneration(r.Context())
 	// A transient IdP hiccup (5xx, timeout) gets tokenExchangeRetries
 	// short-backoff attempts. A permanent rejection (bad secret, expired/
 	// replayed code) is never retried — the code is single-use, so resending
@@ -260,7 +273,18 @@ func (a *Authenticator) callback(w http.ResponseWriter, r *http.Request, reserve
 		return
 	}
 	sess, denied := a.admit(r, idToken.Subject, cc, reserved, onDenied)
+	var epoch int64
+	if denied == "" {
+		// Before the identity is issued: a cut made from here on, an unbind included, ends this session.
+		sess.RevocationSeq, denied = a.issueRevocationSeq(r)
+	}
+	if denied == "" {
+		epoch, denied = a.issueIdentity(r, a.loginFacts(sess, cc), onDenied)
+	}
 	if denied != "" {
+		if denied == DenialIdentityDeactivated {
+			denied = authErrorSignInRefused // the page never says the identity is deactivated
+		}
 		// A denied login must not leave a pre-existing session cookie still valid.
 		a.clearCookie(w, sessionCookieName)
 		a.redirectAuthError(w, r, denied)
@@ -269,21 +293,28 @@ func (a *Authenticator) callback(w http.ResponseWriter, r *http.Request, reserve
 
 	// OnLogin fires once the login is approved but before the session cookie
 	// is written. Best-effort: nil is a no-op; the integrator's callback is
-	// responsible for not letting a backend hiccup fail the login. groups/
-	// groupsTruncated are the same values the session below carries.
+	// responsible for not letting a backend hiccup fail the login. The role,
+	// user type and groups are the same values the session below carries.
 	if a.cfg.OnLogin != nil {
-		a.cfg.OnLogin(r.Context(), sess.Sub, sess.Role, sess.UserType, sess.Groups, sess.GroupsTruncated)
+		a.cfg.OnLogin(r.Context(), a.loginFacts(sess, cc))
 	}
 	// The login-grant sink runs here for the same reason as OnLogin: a
 	// refused login never yields a downstream credential, and a credential
 	// that fails to store must not cost this person the session they just
-	// earned (login_grant.go). The session itself carries no token.
-	a.captureLoginGrant(r.Context(), sess.Sub, token)
+	// earned (login_grant.go). The session itself carries no token. The sink
+	// learns the epoch the login was issued under, so a capture that a
+	// suspension overtook stores nothing.
+	if captureGrant {
+		a.captureLoginGrant(WithAuthorityEpoch(r.Context(), epoch), sess.Sub, token, grantGeneration)
+	}
 
 	// (6) Create a Wardyn session.
+	sess.AuthorityEpoch = epoch
 	sess.Expiry = idToken.Expiry
 	sess.IssuedAt = time.Now().UTC() // The cutoff SessionRevocations compares against.
-	if sess.Expiry.IsZero() {
+	if a.cfg.SessionTTL > 0 {
+		sess.Expiry = sess.IssuedAt.Add(a.cfg.SessionTTL) // WARDYN_OIDC_SESSION_TTL replaces the ID token's expiry.
+	} else if sess.Expiry.IsZero() {
 		sess.Expiry = time.Now().UTC().Add(time.Hour)
 	}
 	cookie, err := a.encodeSession(sess)
@@ -294,6 +325,39 @@ func (a *Authenticator) callback(w http.ResponseWriter, r *http.Request, reserve
 	a.RecordAttach(r, sess)
 	http.SetCookie(w, cookie)
 	http.Redirect(w, r, a.cfg.BasePath+"/", http.StatusFound)
+}
+
+// loginFacts is what an admitted sign-in hands OnLogin. Only an Entra token carrying a well-formed
+// object id and a tenant is keyed by them; any other sign-in leaves both empty.
+func (a *Authenticator) loginFacts(sess Session, cc callbackClaims) LoginFacts {
+	f := LoginFacts{
+		Sub: sess.Sub, Role: sess.Role, UserType: sess.UserType,
+		Groups: sess.Groups, GroupsTruncated: sess.GroupsTruncated,
+		Issuer: cc.issuer, Email: cc.email,
+	}
+	if f.Issuer == "" {
+		f.Issuer = a.cfg.IssuerURL
+	}
+	if a.entra && cc.tid != "" && sess.ObjectID != "" {
+		f.TenantID, f.ObjectID = cc.tid, sess.ObjectID
+	}
+	return f
+}
+
+// emailVerifiedEnv names the setting that put the email_verified gate in force,
+// for the refusal's log line.
+func (a *Authenticator) emailVerifiedEnv() string {
+	if len(a.cfg.AllowedEmailDomains) > 0 {
+		return "WARDYN_OIDC_EMAIL_DOMAINS"
+	}
+	return "WARDYN_OIDC_REQUIRE_EMAIL_VERIFIED"
+}
+
+// deny reports a refusal to onDenied when one is wired.
+func deny(onDenied func(*http.Request, string), r *http.Request, reason string) {
+	if onDenied != nil {
+		onDenied(r, reason)
+	}
 }
 
 // admit is the sign-in decision over a verified token's claims — reserved
@@ -320,8 +384,13 @@ func (a *Authenticator) admit(r *http.Request, sub string, cc callbackClaims, re
 	if denied != "" {
 		return Session{}, denied
 	}
-	// (4) Domain check — fail closed.
-	if len(a.cfg.AllowedEmailDomains) > 0 {
+	// A deactivated identity is refused on every issuer, before any derivation reads the token.
+	if denied = a.admitIdentity(r, a.identityRef(sub, cc), onDenied); denied != "" {
+		return Session{}, denied
+	}
+	// (4) email_verified and domain checks — fail closed. The verified gate
+	// applies under a domain allowlist or WARDYN_OIDC_REQUIRE_EMAIL_VERIFIED.
+	if len(a.cfg.AllowedEmailDomains) > 0 || a.cfg.RequireEmailVerified {
 		switch {
 		case cc.emailVerified == nil:
 			// Distinct from "false": the IdP said nothing about verification
@@ -331,14 +400,19 @@ func (a *Authenticator) admit(r *http.Request, sub string, cc callbackClaims, re
 			// WARDYN_OIDC_ROLE_MAP (App Roles) is the better answer for an
 			// IdP that never sends this claim.
 			slog.Warn("oidc: login denied — the id_token carries no email_verified claim",
-				"issuer", a.cfg.IssuerURL, "claim", "email_verified", "env", "WARDYN_OIDC_EMAIL_DOMAINS")
+				"issuer", a.cfg.IssuerURL, "claim", "email_verified", "env", a.emailVerifiedEnv())
+			deny(onDenied, r, DenialEmailVerifiedAbsent)
 			return Session{}, authErrorEmailVerifiedAbsent
 		case !*cc.emailVerified:
+			slog.Warn("oidc: login denied — the id_token says email_verified=false",
+				"issuer", a.cfg.IssuerURL, "claim", "email_verified", "env", a.emailVerifiedEnv())
+			deny(onDenied, r, DenialEmailUnverified)
 			return Session{}, authErrorEmailUnverified
 		}
-		if !emailDomainAllowed(cc.email, a.cfg.AllowedEmailDomains) {
-			return Session{}, authErrorEmailDomain
-		}
+	}
+	if len(a.cfg.AllowedEmailDomains) > 0 && !emailDomainAllowed(cc.email, a.cfg.AllowedEmailDomains) {
+		deny(onDenied, r, DenialEmailDomain)
+		return Session{}, authErrorEmailDomain
 	}
 
 	// (5) Role derivation — deriveLogin. A refusal names its auth_error code.
@@ -395,6 +469,13 @@ func (a *Authenticator) admit(r *http.Request, sub string, cc callbackClaims, re
 	if sub != subj.Sub {
 		sess.attached = &subj
 	}
+	// Only an Entra token's oid is an object id, and only a well-formed one is
+	// kept: the cookie carries one short field, never a claim of any length.
+	if a.entra {
+		if id, err := uuid.Parse(cc.oid); err == nil {
+			sess.ObjectID = id.String()
+		}
+	}
 	return sess, ""
 }
 
@@ -436,14 +517,24 @@ func (a *Authenticator) deriveLogin(r *http.Request, sub string, cc callbackClai
 	}
 	d := deriveRole(cc.roles, cc.groups, cc.email, roleMap, a.cfg.LegacyAdminEmails, a.cfg.DefaultRole, userTypes)
 	if !d.OK() {
-		if d.Denial != DenialNoRole {
+		if d.Denial == DenialNoRole {
+			slog.Warn("oidc: login denied: no role-map value matched and no default role is set",
+				"sub", sub, "reason", d.Denial)
+		} else {
 			slog.Warn("oidc: login denied over the user type the role map names",
 				"sub", sub, "reason", d.Denial, "tied_user_types", d.Tied, "unknown_user_types", d.Unknown)
-			if onUserTypeDenied != nil {
-				onUserTypeDenied(r, d.Denial)
-			}
+		}
+		if onUserTypeDenied != nil {
+			onUserTypeDenied(r, d.Denial)
 		}
 		return d, d.Denial
+	}
+	// A type is settled by matches, so like the role it cannot rest on a claim the token did not
+	// answer: refused with the overage code when such a claim could change it.
+	if unanswerableChangesUserType(claimsOverage(cc.claimNames) || len(cc.unreadable) > 0, d, cc.email, roleMap, userTypes) {
+		slog.Warn("oidc: login denied — the IdP omitted a claim, or sent it in a shape this build cannot decode, that a role-map row naming a user type is keyed on, so the user type cannot be settled",
+			"sub", sub, "user_type", d.UserType, "claim_names", claimNamesKeys(cc.claimNames), "unreadable_claims", cc.unreadable)
+		return Derivation{}, authErrorClaimsOverage
 	}
 	if len(d.Tied) > 0 || len(d.Unknown) > 0 {
 		slog.Warn("oidc: admin sign-in put on the standard user type; the types the role map names for it tie or don't exist",

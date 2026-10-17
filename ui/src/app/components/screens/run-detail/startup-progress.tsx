@@ -8,9 +8,10 @@
 // lives in run-status-detail.ts's runStartupView; this owns the two pieces of
 // client memory it needs (a clock, and whether a build was seen) and draws it.
 import * as React from "react";
-import type { AgentRun } from "../../../lib/types";
+import type { AgentRun, SetupStatus } from "../../../lib/types";
 import { ProgressSteps } from "../../wardyn/progress-steps";
-import { runStartupView, STATUS_REASON_BUILDING, type StartupLastStep } from "../run-status-detail";
+import { setup as setupApi } from "../../../lib/api/setup";
+import { runStartupView, startOverdueMs, STATUS_REASON_BUILDING, type StartupLastStep } from "../run-status-detail";
 
 // Fast enough that the 60 s hint and the overdue bounds land within a second
 // of their deadline, without waiting for the next 4 s run poll.
@@ -43,7 +44,27 @@ export function StartupProgress({
     if (buildingNow) sawBuilding.current.saw = true;
   }, [buildingNow, run.id]);
 
-  const view = runStartupView(run, now, { lastStep, sawBuilding: sawNow || buildingNow });
+  // The deployment's real start deadlines, once, while a start is on screen: a run waiting for room
+  // is not overdue at the default 4.5 minutes when the deployment lets it wait longer.
+  const [sandboxStart, setSandboxStart] = React.useState<SetupStatus["runner"]["sandbox_start"]>();
+  const starting = run.state === "STARTING";
+  React.useEffect(() => {
+    if (!starting) return;
+    let live = true;
+    setupApi
+      .getSetupStatus()
+      .then((s) => live && setSandboxStart(s.runner?.sandbox_start))
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [starting]);
+
+  const view = runStartupView(run, now, {
+    lastStep,
+    sawBuilding: sawNow || buildingNow,
+    startOverdueMs: startOverdueMs(sandboxStart),
+  });
   if (!view) return null;
   return (
     // The hero frame is dark in both themes (terminal-notice.tsx); `dark`

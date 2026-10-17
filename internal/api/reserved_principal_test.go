@@ -27,6 +27,7 @@ var reservedVariants = []string{
 	"admin-token", "Admin-Token", " ADMIN-TOKEN ", "admin-toKen",
 	"local:operator", "LOCAL:alice", "ops-seat", "Ops-Seat",
 	"device:laptop", "Device:0f0e",
+	"subject:0f0e", "SUBJECT:0F0E", " Subject:x ",
 }
 
 // TestIsReservedPrincipal pins the set, its folds, and that a person's
@@ -39,7 +40,7 @@ func TestIsReservedPrincipal(t *testing.T) {
 		}
 	}
 	for _, p := range []string{"", "alice@example.com", "sub-123", "admin-token-2", "x-admin-token",
-		"devices:laptop", "localhost", "ops-seat-2"} {
+		"devices:laptop", "localhost", "ops-seat-2", "subjects:x", "x-subject:y"} {
 		if srv.isReservedPrincipal(p) {
 			t.Errorf("isReservedPrincipal(%q) = true, want false", p)
 		}

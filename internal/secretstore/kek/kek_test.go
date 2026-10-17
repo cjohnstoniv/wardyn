@@ -9,6 +9,7 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"encoding/hex"
+	"errors"
 	"strings"
 	"testing"
 
@@ -248,6 +249,38 @@ func TestLocalKEK_RefusesAnyOtherBinding(t *testing.T) {
 	}
 }
 
+// A wrap that does not authenticate under the local key for its row (corrupted, moved, or made under
+// another key) is kek.ErrCorrupt: the one local answer that proves the row's bytes are wrong. A bind
+// this process built wrong is not.
+func TestLocalKEK_AWrapThatDoesNotAuthenticateIsErrCorrupt(t *testing.T) {
+	ctx := context.Background()
+	a, _ := newLocal("ikm-a", "rcpt-a", "local:", localInfo)
+	b, _ := newLocal("ikm-b", "rcpt-b", "local:", localInfo)
+	wrapped, err := a.Wrap(ctx, seq(0x40, DEKSize), Bind("alice", "k"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	flipped := append([]byte(nil), wrapped...)
+	flipped[len(flipped)-1] ^= 1
+	for label, c := range map[string]struct {
+		k    *Local
+		w    []byte
+		bind map[string]string
+	}{
+		"a flipped byte": {a, flipped, Bind("alice", "k")},
+		"another row":    {a, wrapped, Bind("bob", "k")},
+		"another key":    {b, wrapped, Bind("alice", "k")},
+		"a short wrap":   {a, wrapped[:5], Bind("alice", "k")},
+	} {
+		if _, err := c.k.Unwrap(ctx, c.w, c.bind); !errors.Is(err, ErrCorrupt) {
+			t.Errorf("%s: Unwrap = %v; want ErrCorrupt", label, err)
+		}
+	}
+	if _, err := a.Unwrap(ctx, wrapped, map[string]string{BindName: "k"}); err == nil || errors.Is(err, ErrCorrupt) {
+		t.Errorf("a bind without an owner: Unwrap = %v; want a refusal that is not ErrCorrupt", err)
+	}
+}
+
 // TestSeal_NeverRepeatsANonce: the same key and plaintext sealed many times
 // must never produce the same nonce. A repeat under one AES-GCM key leaks the
 // XOR of two plaintexts and the authentication key.
@@ -265,4 +298,54 @@ func TestSeal_NeverRepeatsANonce(t *testing.T) {
 		}
 		seen[n] = true
 	}
+}
+
+// A principal-key wrap binds its own labelled AAD; the data-key AAD is
+// unchanged, a mixed or partial bind is refused, and no field moves between
+// the two shapes.
+func TestWrapAAD_PrincipalKeyBind(t *testing.T) {
+	got, err := WrapAAD(PrincipalBind("alice", "cred", 3, "default"), "k1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := Encode("wardyn/pk-wrap/v1", "alice", "cred", "3", "default", "k1"); !bytes.Equal(got, want) {
+		t.Fatalf("principal AAD = %x, want %x", got, want)
+	}
+	row, err := WrapAAD(Bind("alice", "cred"), "k1")
+	if err != nil || !bytes.Equal(row, Encode("wardyn/kek/v1", "alice", "cred", "k1")) {
+		t.Fatalf("data-key AAD = (%x, %v), want the unchanged encoding", row, err)
+	}
+	for _, other := range [][]byte{
+		mustAAD(t, PrincipalBind("bob", "cred", 3, "default")),
+		mustAAD(t, PrincipalBind("alice", "audit-seal", 3, "default")),
+		mustAAD(t, PrincipalBind("alice", "cred", 4, "default")),
+		mustAAD(t, PrincipalBind("alice", "cred", 3, "other")),
+		row,
+	} {
+		if bytes.Equal(got, other) {
+			t.Fatal("two different bindings share an AAD")
+		}
+	}
+	mixed := PrincipalBind("alice", "cred", 3, "default")
+	mixed[BindName] = "cred"
+	for name, bind := range map[string]map[string]string{
+		"a principal bind with a row name":    mixed,
+		"a bind with a purpose only":          {BindOwner: "alice", BindPurpose: "cred"},
+		"a principal bind with no owner":      {BindPurpose: "cred", BindVersion: "1", BindDomain: "default"},
+		"a principal bind with no domain":     {BindOwner: "alice", BindPurpose: "cred", BindVersion: "1"},
+		"a data-key bind with a version only": {BindOwner: "alice", BindName: "n", BindVersion: "1"},
+	} {
+		if _, err := WrapAAD(bind, "k1"); err == nil {
+			t.Errorf("WrapAAD accepted %s", name)
+		}
+	}
+}
+
+func mustAAD(t *testing.T, bind map[string]string) []byte {
+	t.Helper()
+	aad, err := WrapAAD(bind, "k1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return aad
 }

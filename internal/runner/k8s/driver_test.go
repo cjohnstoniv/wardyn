@@ -180,3 +180,19 @@ func mustCreateRuntimeClass(t *testing.T, cs kubernetes.Interface, name, handler
 		t.Fatalf("create RuntimeClass %q: %v", name, err)
 	}
 }
+
+// TestClasses_ExecOutputUncapturedUnderTheRecorder: under the recorder the
+// exec's container log is empty, so the substrate says it cannot capture an
+// exec's output; with recordings off it captures the log and says nothing.
+func TestClasses_ExecOutputUncapturedUnderTheRecorder(t *testing.T) {
+	for _, record := range []bool{true, false} {
+		d, _ := newTestDriver(t, Config{Record: record})
+		cls, err := d.Classes(context.Background())
+		if err != nil {
+			t.Fatalf("Record=%v: Classes: %v", record, err)
+		}
+		if cls.ExecOutputUncaptured != record {
+			t.Errorf("Record=%v: ExecOutputUncaptured = %v, want %v", record, cls.ExecOutputUncaptured, record)
+		}
+	}
+}

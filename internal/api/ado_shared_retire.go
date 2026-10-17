@@ -120,7 +120,7 @@ func adoGrantHost(sc types.SiteConfig, host string) bool {
 // refused here, with the dispatch refusal's reason, rather than started into a
 // proxy that cannot boot. Legacy open mode has no rows, so nothing is dropped
 // there. A refusal comes back as a 422 status; any other error is a 500.
-func (s *Server) adoGitGrants(ctx context.Context, subject string, needed []neededSecret, spec types.RunPolicySpec) ([]neededSecret, int, error) {
+func (s *Server) adoGitGrants(ctx context.Context, subject string, needed []neededSecret, spec types.RunPolicySpec, credentials bool) ([]neededSecret, int, error) {
 	var sc types.SiteConfig
 	kept := needed[:0]
 	for _, n := range needed {
@@ -134,8 +134,10 @@ func (s *Server) adoGitGrants(ctx context.Context, subject string, needed []need
 			if adoGrantHost(sc, n.host) {
 				rows := laneRowsForGrantHost(sc, n.host, repoLocatorsOf(spec.WorkspaceRepos))
 				if providersConfigured(sc) && adoRowsTakeOwnToken(rows, n.host) {
-					if code, err := s.requireADOOwnToken(ctx, subject, rows); err != nil {
-						return nil, code, err
+					if credentials {
+						if code, err := s.requireADOOwnToken(ctx, subject, rows); err != nil {
+							return nil, code, err
+						}
 					}
 					continue
 				}

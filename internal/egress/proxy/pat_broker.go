@@ -9,10 +9,11 @@ package proxy
 // proxy terminates the request, mints server-side, and sets Basic auth on
 // the outbound leg — the sandbox never holds the credential.
 //
-// This makes the credential NON-RESIDENT, not least-privilege: a PAT carries
-// whatever scope the operator issued it with and Wardyn can't narrow it, so
-// the allowlist here is per-HOST (a per-repo key would imply a confinement
-// the credential doesn't have).
+// This makes the credential NON-RESIDENT, and the RUN narrowable, not the PAT:
+// a PAT carries whatever scope the operator issued it with and Wardyn can't
+// narrow it. The allowlist is per-HOST, and a narrowed grant adds a repository
+// set and a read-only axis that this route enforces before it mints
+// (pat_scope.go), so a run reaches only what its grant names.
 
 import (
 	"cmp"
@@ -30,8 +31,10 @@ import (
 const routePATBroker = "/wardyn/git/"
 
 const (
-	ruleSourcePAT       = "brokered:git-pat"
-	ruleSourcePATDenied = "brokered:git-pat:denied"
+	ruleSourcePAT         = "brokered:git-pat"
+	ruleSourcePATDenied   = "brokered:git-pat:denied"
+	ruleSourcePATRepo     = "brokered:git-pat:repo"
+	ruleSourcePATReadOnly = "brokered:git-pat:read-only"
 )
 
 // parsePATBrokerPath splits /wardyn/git/<host>/<rest> into a lower-cased host
@@ -78,11 +81,19 @@ func patForwardSafe(rest, rawQuery string) bool {
 		}
 	}
 	for _, seg := range strings.Split(rest, "/") {
-		if seg == "." || seg == ".." {
+		if isDotSegment(seg) {
 			return false
 		}
 	}
 	return true
+}
+
+// isDotSegment reports whether a decoded path segment is "." or "..", reading
+// it up to its first ";": some servers drop ";" path parameters before they
+// resolve dot-segments.
+func isDotSegment(seg string) bool {
+	s, _, _ := strings.Cut(seg, ";")
+	return s == "." || s == ".."
 }
 
 // handlePATBroker serves /wardyn/git/<host>/<rest> for a git_pat-granted host.
@@ -99,7 +110,7 @@ func (p *Proxy) handlePATBroker(w http.ResponseWriter, r *http.Request) {
 	ado, adoLane := p.adoGitGrant(host)
 	if !granted && !adoLane {
 		p.emitPATDecision(r, host, egress.Deny, ruleSourcePATDenied)
-		http.Error(w, "host not granted to this run", http.StatusForbidden)
+		p.denyAttributed(w, "host not granted to this run", http.StatusForbidden)
 		return
 	}
 	// Same smart-HTTP surface the GitHub lane admits: refs discovery and the
@@ -122,6 +133,12 @@ func (p *Proxy) handlePATBroker(w http.ResponseWriter, r *http.Request) {
 	// (pat_broker_entra.go).
 	if adoLane {
 		p.serveADOGit(w, r, host, rest, verb, ado)
+		return
+	}
+	// The grant's own narrowing, past the hand-off (an Azure DevOps host may have
+	// no grant here) and before anything can spend the credential: the push rules
+	// below may read the forge or hold for review, and patToken mints.
+	if !p.patScopeAllows(w, r, host, rest, verb, grant) {
 		return
 	}
 
@@ -150,9 +167,10 @@ func (p *Proxy) handlePATBroker(w http.ResponseWriter, r *http.Request) {
 	// operator may never have enabled would make the policy enforce nothing.
 	// A refused push is never forwarded.
 	if verb == "git-receive-pack" {
+		rules, entryErr := p.rulesForRemote(host, rest)
 		body, release, ok := p.applyPushRules(w, r, reqBody, slog.String("host", host),
 			func(ruleSource string) { p.emitPATDecision(r, host, egress.Deny, ruleSource) },
-			p.patForge(host, rest, grant), patPushTarget(host, rest, grant))
+			p.patForge(host, rest, grant), patPushTarget(host, rest, grant), rules, entryErr)
 		defer release()
 		if !ok {
 			return
@@ -237,7 +255,7 @@ func (p *Proxy) forwardBrokeredGit(w http.ResponseWriter, r *http.Request, host,
 		p.failUpstream(w, err, &egress.DecisionLog{Request: p.reqOf(r, host, 443)}, host, "git upstream error")
 		return nil, false
 	}
-	p.emitPATDecision(r, host, egress.Allow, allowSrc)
+	p.emitDialledAllow(decisionLog(p.reqOf(r, host, 443), egress.Allow, allowSrc), host)
 	return resp, true
 }
 
@@ -263,6 +281,6 @@ func (p *Proxy) patToken(ctx context.Context, g PATGrant) (token, username strin
 	// raw token AND the base64(username+":"+tok) SetBasicAuth puts on the
 	// wire) before it can reach any output stream. registerBasicAuthCredential
 	// (inject.go) is the one definition.
-	registerBasicAuthCredential(username, tok)
+	registerBasicAuthCredential(p.maskKey, username, tok)
 	return tok, username, nil
 }

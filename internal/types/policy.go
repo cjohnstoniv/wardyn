@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/adoscope"
+	"github.com/cjohnstoniv/wardyn/internal/ghscope"
 )
 
 // policy.go carries the RUN POLICY seam — RunPolicy plus every shape its spec is made of: the
@@ -204,11 +205,17 @@ type RunPolicySpec struct {
 	// run naming anything outside it, and the resolver re-checks the live ceiling on every request.
 	// Empty/absent keeps the row's default_profile. Inert for a run not on that lane.
 	AzureDevOpsCapabilities []adoscope.Capability `json:"azure_devops_capabilities,omitempty"`
+	// GitHubCapabilities is AzureDevOpsCapabilities' GitHub twin, with the same meaning: THIS
+	// run's GitHub capabilities in place of the GitHub provider row's default_profile, chosen only
+	// within the row's capability_ceiling. Empty/absent keeps the row's default_profile. Nothing
+	// reads it yet — the row block and the lanes that honour it land after this field — so today
+	// it is stored, narrowed and compared, and inert at dispatch.
+	GitHubCapabilities []ghscope.Capability `json:"github_capabilities,omitempty"`
 }
 
 // PushRulesSpec declares content rules for a run's brokered git pushes — the counterpart to
 // GitPushAnyBranch's branch confinement: WHAT a push may touch, not WHERE it may land.
-// DenyNewExecutables and MaxFileSizeMiB are reserved for later. A closed struct, deliberately not
+// A closed struct, deliberately not
 // a free-form rules map: an open map evades the strict-field JSON decoder and the doc-census test,
 // so a typo'd key would silently do nothing instead of failing at write time. This type stores and
 // validates; how DenyPathSegments entries MATCH is the git broker's
@@ -231,6 +238,15 @@ type PushRulesSpec struct {
 	// HoldSeconds is how long a held push waits for that decision before it
 	// is refused. 0/absent means 120; bounded 0..600 by validatePolicySpec.
 	HoldSeconds int `json:"hold_seconds,omitempty"`
+	// DenyNewExecutables is reserved: the broker cannot yet tell a newly added executable from an
+	// edit to an existing one, so validation refuses it when true rather than store a rule nothing
+	// enforces, and IsSet does not count it, so a stored true never makes the broker inspect for
+	// a rule it cannot apply.
+	DenyNewExecutables bool `json:"deny_new_executables,omitempty"`
+	// MaxFileSizeMiB refuses a push that introduces a file larger than this many MiB, or one whose
+	// size the pack does not carry and the forge cannot show unchanged. 0/absent is off; bounded
+	// 0..1024 by validatePolicySpec.
+	MaxFileSizeMiB int `json:"max_file_size_mib,omitempty"`
 }
 
 // IsSet reports whether this spec carries an actual rule — NOT a bare != nil. An all-zero-but-non-nil
@@ -238,7 +254,8 @@ type PushRulesSpec struct {
 // read exactly like an absent one wherever consulted (composer's clamp/risk grade, the broker's
 // advertisement/enforcement) — one method so those readers can't drift.
 func (s *PushRulesSpec) IsSet() bool {
-	return s != nil && (len(s.DenyPaths) > 0 || len(s.RequireReviewPaths) > 0 || s.MaxInspectPackMiB > 0)
+	return s != nil && (len(s.DenyPaths) > 0 || len(s.RequireReviewPaths) > 0 || s.MaxInspectPackMiB > 0 ||
+		s.MaxFileSizeMiB > 0)
 }
 
 // DenyPathSegments is the one reading of a push_rules.deny_paths entry, shared by write-time
@@ -319,6 +336,7 @@ func (s RunPolicySpec) Clone() RunPolicySpec {
 	out.UIApps = append([]UIApp(nil), s.UIApps...)
 	out.ToolRules = append([]ToolRule(nil), s.ToolRules...)
 	out.AzureDevOpsCapabilities = append([]adoscope.Capability(nil), s.AzureDevOpsCapabilities...)
+	out.GitHubCapabilities = append([]ghscope.Capability(nil), s.GitHubCapabilities...)
 	if s.LLMInspection != nil {
 		li := *s.LLMInspection
 		// Deep-copy the nested slice fields too, or this "clone" still aliases

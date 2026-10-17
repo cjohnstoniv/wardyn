@@ -43,7 +43,7 @@ import (
 //
 // DRAFT (M2 canon pending)
 const (
-	adoOwnPATNotAddedRefusal = "The person who launched this run has not added their own Azure DevOps token — add it under Settings, then relaunch"
+	adoOwnPATNotAddedRefusal = "The person who launched this run has no Azure DevOps token available in Wardyn — add it under Settings, then relaunch"
 	adoOwnPATExpiredRefusal  = "The Azure DevOps token behind this run has reached the expiry its owner entered — add a new token under Settings, then relaunch"
 	adoOwnPATOtherOrgRefusal = "The Azure DevOps token its owner added is for a different organisation than this run's — add one for this organisation, then relaunch"
 )
@@ -179,11 +179,19 @@ func (s *Server) resolveADOOwnPATInjection(w http.ResponseWriter, r *http.Reques
 		}
 	}
 
+	// The proxy re-resolves with stale_jti only after Azure DevOps refused the
+	// credential it held (egress/proxy/ado_refusal.go): with the expiry still
+	// ahead, stamp it once, if Azure DevOps confirms it rejects the token. The run is not stopped: injection carries on.
+	if r.URL.Query().Get("stale_jti") != "" && blob.RefusedAt == nil {
+		if identityURL, _, ok := adoOwnPATTarget(row); ok {
+			s.stampADOOwnPATRefused(ctx, claims, snapshot, blob, identityURL)
+		}
+	}
+
 	value := adoOwnPATHeaderValue(blob.Token)
-	if s.cfg.MaskRegistry != nil {
-		s.cfg.MaskRegistry.Add(claims.RunID, []byte(blob.Token))
-		s.cfg.MaskRegistry.Add(claims.RunID, []byte(base64.StdEncoding.EncodeToString([]byte(":"+blob.Token))))
-		s.cfg.MaskRegistry.Add(claims.RunID, []byte(value))
+	if s.refuseUnmasked(w, r, claims, "injection.resolve", []byte(blob.Token),
+		[]byte(base64.StdEncoding.EncodeToString([]byte(":"+blob.Token))), []byte(value)) {
+		return true
 	}
 	data := map[string]any{
 		"purpose": "proxy-injection-ado", "grant_id": grantID, "jti": minted.JTI,

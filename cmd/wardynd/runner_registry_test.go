@@ -12,12 +12,10 @@
 package main
 
 import (
-	"errors"
 	"strings"
 	"testing"
 
 	"github.com/cjohnstoniv/wardyn/internal/recording"
-	"github.com/cjohnstoniv/wardyn/internal/runner/substrate"
 )
 
 // rrFlags is the minimum bootFlags buildRunnerFromFlags and componentsInfo
@@ -60,23 +58,15 @@ func TestBuildRunnerFromFlags_UnknownFailsClosed(t *testing.T) {
 	}
 }
 
-// TestBuildRunnerFromFlags_RecordFollowsRecordingStore is the #1113
-// boot-level pin: WARDYN_RECORDING_STORE (*f.recordingSel) must reach the
-// substrate's registration Deps.Record — the boundary a driver's register.go
-// reads to build its own Config.Record (internal/runner/k8s and
-// internal/runner/docker's buildConfig, each pinned separately by their own
-// register_test.go). A spy substrate captures the Deps buildRunnerFromFlags
-// actually passes, so this test needs no live cluster or daemon and holds
-// tag-free.
-func TestBuildRunnerFromFlags_RecordFollowsRecordingStore(t *testing.T) {
-	const spyName = "recordspy-1113"
-	spyErr := errors.New("recordspy: refuses to construct (captures Deps only)")
-	var got substrate.Deps
-	substrate.Register(spyName, func(d substrate.Deps) (substrate.Substrate, error) {
-		got = d
-		return nil, spyErr
-	})
-
+// TestSubstrateDeps_RecordFollowsRecordingStore is the #1113 boot-level pin:
+// WARDYN_RECORDING_STORE (*f.recordingSel) must reach the substrate's
+// registration Deps.Record — the boundary a driver's register.go reads to build
+// its own Config.Record (internal/runner/k8s and internal/runner/docker's
+// buildConfig, each pinned separately by their own register_test.go). It reads
+// the Deps buildRunnerFromFlags hands substrate.New straight from
+// substrateDeps, so it registers nothing in the process-global registry and
+// holds tag-free under -count>1.
+func TestSubstrateDeps_RecordFollowsRecordingStore(t *testing.T) {
 	for _, tt := range []struct {
 		store string
 		want  bool
@@ -86,13 +76,10 @@ func TestBuildRunnerFromFlags_RecordFollowsRecordingStore(t *testing.T) {
 		{"fs", true},
 	} {
 		store := tt.store
-		f := rrFlags(spyName)
+		f := rrFlags("docker")
 		f.recordingSel = &store
-		if _, _, err := buildRunnerFromFlags(f, nil, nil); !errors.Is(err, spyErr) {
-			t.Fatalf("recording store %q: buildRunnerFromFlags error = %v, want the spy's refusal (proves the spy was actually reached)", store, err)
-		}
-		if got.Record != tt.want {
-			t.Errorf("recording store %q: Deps.Record = %v, want %v", store, got.Record, tt.want)
+		if got := substrateDeps(f, nil, nil).Record; got != tt.want {
+			t.Errorf("recording store %q: Deps.Record = %v, want %v", store, got, tt.want)
 		}
 	}
 }

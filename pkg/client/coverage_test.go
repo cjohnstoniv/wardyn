@@ -38,6 +38,7 @@ var (
 	_ map[string]client.ArtifactOverride
 	_ []client.EgressRedirect
 	_ client.ModelProviders
+	_ client.ModelProvidersRead
 	_ client.ModelProvider
 	_ client.ModelProviderKind
 	_ client.ProviderAuth
@@ -46,10 +47,16 @@ var (
 	_ client.ApprovalScope
 	_ client.DecisionOpts
 	_ []client.SSHPublicKey
+	_ client.PersonList
+	_ client.PersonSummary
 	_ client.RunFiles
 	_ client.RunOutput
+	_ client.RunSignIn
 	_ client.RunPolicyView
 	_ []client.Device
+	_ []client.RunnerView
+	_ client.RunnerSettings
+	_ []client.RunnerRegistrationToken
 	_ client.DeviceEnrolmentToken
 	_ client.DrivesDocument
 	_ client.UserDrive
@@ -62,12 +69,41 @@ var (
 	_ client.PresetsDocument
 	_ client.Preset
 	_ client.PresetRequest
+	_ client.TemplateList
+	_ client.TemplateSummary
+	_ client.Template
+	_ client.TemplateSaveRequest
+	_ client.TemplateImportRequest
+	_ client.TemplateImportResult
+	_ client.TemplateDiagnostic
+	_ client.TemplateDocument
+	_ client.TemplateIntent
+	_ client.TemplateCopyRequest
+	_ client.TemplateGroupAdmins
+	_ client.TemplateScope
+	_ client.TemplateGroupAdmin
+	_ client.ComponentConfigSchema
+	_ client.ComponentConfigValues
 	_ client.GovernanceDocument
 	_ client.GovernanceProfile
 	_ client.GovernanceAssignment
 	_ client.GovernanceLimits
 	_ client.AutonomyRubric
 	_ client.AutonomyLevel
+	_ []client.Invitation
+	_ client.InvitationState
+	_ []client.ServiceIdentity
+	_ client.ServiceIdentityState
+	_ []client.APIToken
+	_ client.TokenDisposition
+	_ client.TokenMoved
+	_ client.TokenMove
+	_ client.CreateInvitationRequest
+	_ client.ClaimInvitationRequest
+	_ client.CreateServiceIdentityRequest
+	_ client.UpdateServiceIdentityRequest
+	_ client.MintServiceTokenRequest
+	_ client.MoveTokenRequest
 )
 
 // routeFamilies lists EVERY exported *client.Client method under the family
@@ -76,24 +112,34 @@ var (
 // parity in both directions.
 func routeFamilies() map[string][]string {
 	return map[string][]string{
-		"runs":        {"CreateRun", "Preflight", "GetRun", "ListGrants", "ListGrantsPage", "KillRun", "SynthesizeProfile", "GetRecording", "RunFiles", "RunEvents", "RunOutput", "GetRunPolicy"},
-		"runs.list":   {"ListRuns", "ListRunsPage"},
-		"approvals":   {"ListApprovals", "ListApprovalsPage", "Approve", "Deny"},
-		"policies":    {"CreatePolicy", "GetPolicy", "GetDefaultPolicy", "ListPolicies", "ListPoliciesPage", "UpdatePolicy", "DeletePolicy"},
-		"workspaces":  {"CreateWorkspace", "GetWorkspace", "ListWorkspaces", "ListWorkspacesPage", "UpdateWorkspace", "DeleteWorkspace", "ScanWorkspace", "RecordWorkspaceTask"},
-		"sources":     {"ListSources", "CreateSource", "GetSource", "ScanSource", "DeleteSource"},
-		"audit":       {"AuditEvents", "AuditEventsPage", "RecentAuditEvents"},
-		"secrets":     {"ListSecrets", "ListSecretsPage", "ListSecretsScoped", "ListSecretsScopedPage", "SetSecret", "DeleteSecret"},
-		"site-config": {"GetSiteConfig", "PutSiteConfig"},
-		"drives":      {"GetDrives", "ApplyDrives"},
-		"presets":     {"ListPresets", "GetPreset", "PutPreset", "DeletePreset", "ApplyPresets"},
-		"governance":  {"GetGovernance", "ApplyGovernance"},
-		"setup":       {"SetupStatus"},
-		"identity":    {"Me"},
-		"health":      {"Healthz"},
-		"sessions":    {"RevokeSessions"},
-		"ssh-keys":    {"ListSSHKeys", "ListSSHKeysPage", "AddSSHKey", "DeleteSSHKey"},
-		"devices":     {"MintDeviceEnrolmentToken", "ListDeviceEnrolmentTokens", "RevokeDeviceEnrolmentToken", "ListDevices", "RevokeDevice"},
+		"runs":            {"CreateRun", "Preflight", "GetRun", "ListGrants", "ListGrantsPage", "KillRun", "SynthesizeProfile", "GetRecording", "RunFiles", "RunEvents", "RunOutput", "RunSignIn", "GetRunPolicy"},
+		"runs.list":       {"ListRuns", "ListRunsPage"},
+		"approvals":       {"ListApprovals", "ListApprovalsPage", "Approve", "Deny"},
+		"policies":        {"CreatePolicy", "GetPolicy", "GetDefaultPolicy", "ListPolicies", "ListPoliciesPage", "UpdatePolicy", "DeletePolicy"},
+		"workspaces":      {"CreateWorkspace", "GetWorkspace", "ListWorkspaces", "ListWorkspacesPage", "UpdateWorkspace", "DeleteWorkspace", "ScanWorkspace", "RecordWorkspaceTask", "GetWorkspaceBuild", "BuildWorkspace"},
+		"sources":         {"ListSources", "CreateSource", "GetSource", "ScanSource", "DeleteSource"},
+		"audit":           {"AuditEvents", "AuditEventsPage", "RecentAuditEvents", "ExportAuditPartition", "AuditRetention", "DropAuditPartition"},
+		"secrets":         {"ListSecrets", "ListSecretsPage", "ListSecretsScoped", "ListSecretsScopedPage", "SetSecret", "DeleteSecret", "ListMySecrets", "ListMySecretsPage", "SetMySecret", "DeleteMySecret", "ListSharedSecrets", "ListSharedSecretsPage", "SetSharedSecret", "DeleteSharedSecret"},
+		"site-config":     {"GetSiteConfig", "PutSiteConfig", "PutSiteConfigResult"},
+		"drives":          {"GetDrives", "ApplyDrives", "ApplyDrivesResult", "ListMemberDrives", "DeleteMemberDrive", "CreateMyDrive", "DeleteMyDrive"},
+		"templates":       {"ListTemplates", "GetTemplate", "SaveTemplate", "DeleteTemplate", "CopyTemplate", "ImportTemplate", "ListTemplateGroupAdmins", "GrantTemplateGroupAdmin", "RevokeTemplateGroupAdmin"},
+		"presets":         {"ListPresets", "GetPreset", "PutPreset", "DeletePreset", "ApplyPresets"},
+		"governance":      {"GetGovernance", "ApplyGovernance", "ApplyGovernanceResult", "PlanGovernance"},
+		"gov.changes":     {"ListGovernanceChanges", "GetGovernanceChange", "ApproveGovernanceChange", "RejectGovernanceChange"},
+		"setup":           {"SetupStatus"},
+		"identity":        {"Me"},
+		"health":          {"Healthz"},
+		"sessions":        {"RevokeSessions"},
+		"ssh-keys":        {"ListSSHKeys", "ListSSHKeysPage", "AddSSHKey", "DeleteSSHKey"},
+		"people":          {"ListPeople", "ErasePerson"},
+		"invitations":     {"CreateInvitation", "ListInvitations", "ListPersonInvitations", "ListPersonInvitationsPage", "ListMyInvitations", "RevokeInvitation", "ClaimInvitation"},
+		"service-ids":     {"CreateServiceIdentity", "ListServiceIdentities", "ListServiceIdentitiesPage", "GetServiceIdentity", "UpdateServiceIdentity", "RetireServiceIdentity", "ListMyServiceIdentities", "MintServiceToken", "ListServiceTokens", "ListServiceTokensPage", "RevokeServiceToken", "MoveToken"},
+		"components":      {"MyComponents", "SaveMyComponent", "UpdateMyComponent", "DeleteMyComponent", "ListComponents", "PutComponent", "DeleteComponent"},
+		"runners":         {"MintRunnerToken", "RegisterRunner", "ClaimRunner", "ListRunners", "ListRunnersPage", "GetRunner", "ListMyRunners", "GetMyRunner", "SetMyRunnerLimits", "ListRunnerTokens", "ListRunnerTokensPage", "RevokeRunnerToken", "GetRunnerSettings", "SetRunnersEnabled"},
+		"runner-pools":    {"ListRunnerPools", "ListRunnerPoolsFor", "ListMyRunnerPools", "GetRunnerPool", "CreateRunnerPool", "UpdateRunnerPool", "DeleteRunnerPool", "CreateMyRunnerPool", "UpdateMyRunnerPool", "DeleteMyRunnerPool", "AddMyRunnerToPool", "RemoveMyRunnerFromPool", "GetOrgRunnerPoolDefaults", "SetOrgRunnerPoolDefaults", "GetMyRunnerPoolDefaults", "SetMyRunnerPoolDefaults", "ClearMyRunnerPoolDefaults", "AddRunnerPoolRemoteRunner", "RemoveRunnerPoolRemoteRunner", "AddMyPoolRemoteRunner", "RemoveMyPoolRemoteRunner", "ListRunnerPoolMembers", "GetRunnerPoolUsePolicy", "SetRunnerPoolUsePolicy", "ClearRunnerPoolUsePolicy"},
+		"remote-runners":  {"ListRemoteRunners", "GetRemoteRunner", "UpdateRemoteRunner", "SetRemoteRunnerPeoplePolicy", "ClearRemoteRunnerPeoplePolicy", "ListMyRemoteRunners"},
+		"devices":         {"MintDeviceEnrolmentToken", "ListDeviceEnrolmentTokens", "RevokeDeviceEnrolmentToken", "ListDevices", "RevokeDevice"},
+		"model-providers": {"GetModelProviders"},
 	}
 }
 

@@ -8,7 +8,6 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
-	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -24,6 +23,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/contentscan"
 	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/hoptls"
+	"github.com/cjohnstoniv/wardyn/internal/policyref"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -103,13 +103,30 @@ type Proxy struct {
 	// trust for the /wardyn/gh/ route — a repo absent here is 403. Empty/nil ==
 	// no repo brokered (the route always 403s). See git_broker.go.
 	gitGrants map[string]uuid.UUID
+	// viaOrgRoutes are the destinations forwarded to the organisation (via_org.go).
+	viaOrgRoutes []ViaOrgRoute
+	// maskKey files the secrets this proxy learns in procRegistry: uuid.Nil in a
+	// sidecar, a ViaOrgEngine's own key at the organisation (procMaskFor).
+	maskKey uuid.UUID
 	// patGrants is the per-run git_pat broker allowlist: lowercased host -> the
 	// grant to mint from. Empty/nil == no host brokered (the route always 403s),
 	// which is also what a deployment with the lane switched off looks like.
 	patGrants map[string]PATGrant
+	// brokeredPATGrantIDs is every git_pat grant id of the run while the PAT
+	// broker is on; the mint relay refuses a body naming one (isBrokeredPATGrant).
+	brokeredPATGrantIDs []uuid.UUID
 	// adoGrants answers the run's Azure DevOps grant per host for the REST gate
 	// (ado_gate.go). Nil == no host gated.
 	adoGrants adoGrantsByHost
+	// azure is the run's Azure route gates (azure_gate.go). Nil == no host gated.
+	azure *azureGates
+	// patAPI is the run's git_pat grants with api: true, by host (pat_api.go): each host's
+	// connection on 443 is terminated and every request judged by its forge's operation table.
+	patAPI map[string]PATGrant
+	// ghAPI is the run's GitHub CLI door (github_api.go). Nil == no door.
+	ghAPI *GitHubAPIGrant
+	// arm is the run's Azure CLI door (azure_arm_door.go). Nil == no door.
+	arm *azureARMDoor
 	// gitTokens caches minted installation tokens per grant so a single clone
 	// (info/refs + git-upload-pack) does not re-mint — mandatory for single-use
 	// approval-gated grants. Guarded by gitTokMu; each entry single-flights its
@@ -203,11 +220,30 @@ type Proxy struct {
 	llmUnavailableDetail string
 	// pushHolds is the held-push state (push_hold.go).
 	pushHolds pushHolds
+	// attribution is Options.Attribution: the policy named in a policy-decided
+	// refusal, nil when there is none to name.
+	attribution *policyref.Ref
+	// pushSets are the push content rules per SCM entry (Config.PushRuleSets);
+	// empty means the run is on the older run-wide regime (policy.pushRules).
+	pushSets []types.PushRuleSet
+	// pushBase is Config.PushRuleBase compiled: the rules of an entry with no set.
+	pushBase *pushRuleSet
+	// harnessRules and harnessCreds are Config.HarnessToolRules and
+	// Config.HarnessCredentials, the per-harness regime of the approval route
+	// (tool_rules.go); empty means the older run-wide policy.ToolRules.
+	harnessRules []types.HarnessToolRules
+	harnessCreds []types.HarnessCredential
+	// mcp is the run's MCP servers and harness bindings (mcp_broker.go); nil
+	// for a run with none.
+	mcp *mcpBroker
 	// gatewayVendor is the REVERSE of llmUpstreams (gateway host -> vendor
 	// public host), feeding isLLMHost/channelForHost so gateway traffic is
 	// recognised as LLM traffic (coverage/classification only — the SSRF vet
 	// for the gateway host lives in gatewayTarget, not here).
 	gatewayVendor map[string]string
+	// channelHosts is host -> vendor for the hosts classified as model hosts without being gateways
+	// (llm_channel_hosts.go).
+	channelHosts map[string]string
 
 	now func() time.Time
 }
@@ -257,8 +293,16 @@ type Options struct {
 	// See Config.PATGrants and pat_broker.go for why it is per-host rather than
 	// per-repo.
 	PATGrants map[string]PATGrant
+	// BrokeredPATGrantIDs backs isBrokeredPATGrant. See Config.BrokeredPATGrantIDs.
+	BrokeredPATGrantIDs []uuid.UUID
 	// ADOGrants backs the Azure DevOps REST gate (ado_gate.go). Nil == off.
 	ADOGrants adoGrantsByHost
+	// AzureGates backs the Azure route gate (azure_gate.go). Empty == off.
+	AzureGates []AzureGateConfig
+	// GitHubAPI backs the GitHub CLI door (github_api.go). Nil == off.
+	GitHubAPI *GitHubAPIGrant
+	// AzureARM backs the Azure CLI door (azure_arm_door.go). Nil == off.
+	AzureARM *AzureARMGrant
 	// ControlPlaneURL and RunToken back the local brokered routes. The run
 	// token is injected only toward the control plane and never reaches the
 	// sandbox or any LLM upstream.
@@ -296,15 +340,22 @@ type Options struct {
 	// gateway base URL (Config.LLMUpstreams, forwarded verbatim). Empty == every
 	// brokered LLM route dials the vendor host. See Proxy.llmUpstreams.
 	LLMUpstreams map[string]string
+	// LLMChannelHosts is Config.LLMChannelHosts, forwarded verbatim.
+	LLMChannelHosts map[string]string
 	// LLMUnavailableDetail is the control-plane's reason the brokered-LLM 404
 	// gives when no credential is behind the route (Config.LLMUnavailableDetail,
 	// forwarded verbatim). Empty == the generic route sentence. See llm404Detail.
 	LLMUnavailableDetail string
 	// Unattended is Config.Unattended: a review-path push is refused, not held.
 	Unattended bool
+	// Attribution is Config.Attribution, already re-projected by LoadConfigBytes.
+	Attribution *policyref.Ref
+
 	// Dial overrides the connection dialer (tests). Production leaves it nil
 	// and a net.Dialer is used.
 	Dial func(ctx context.Context, network, addr string) (net.Conn, error)
+	// ViaOrgRoutes are a runner proxy's via_org destinations (via_org.go).
+	ViaOrgRoutes []ViaOrgRoute
 	// TLSClientConfig is the EGRESS transport's TLS config. Production sets it
 	// from Config.TrustedCAPEM (system roots plus the operator's corporate CA
 	// bundle — see NewServer); nil means system roots alone. Tests use it to
@@ -320,25 +371,6 @@ type Options struct {
 // request context so the transport dials it directly instead of re-resolving
 // the hostname (TOCTOU / DNS-rebinding guard).
 type vettedIPKey struct{}
-
-// parseInternalHostCIDRs parses a SiteConfig.InternalHosts entry's CIDR
-// list, failing the WHOLE entry (ok=false) the moment one fails to parse —
-// never returning a partial list. liftInternalHost treats zero CIDRs as "no
-// CIDRs declared" and lifts the FULL liftable set for the suffix, so
-// silently dropping only the one bad CIDR out of several would widen an
-// entry meant to be narrow into that full-set default, the opposite of what
-// a parse failure should do.
-func parseInternalHostCIDRs(raw []string) (cidrs []*net.IPNet, ok bool) {
-	cidrs = make([]*net.IPNet, 0, len(raw))
-	for _, c := range raw {
-		_, n, err := net.ParseCIDR(c)
-		if err != nil {
-			return nil, false
-		}
-		cidrs = append(cidrs, n)
-	}
-	return cidrs, true
-}
 
 func newProxy(opts Options) *Proxy {
 	dial := opts.Dial
@@ -377,23 +409,7 @@ func newProxy(opts Options) *Proxy {
 			patGrants[k] = g
 		}
 	}
-	// Compile each declared internal host: lowercase + trim the suffix (same
-	// normalization VetHost applies to the request host, so the comparison in
-	// liftInternalHost is exact), parse its CIDRs (already validated at
-	// site-config write time and at proxy Config load) via
-	// parseInternalHostCIDRs, which drops the WHOLE entry on a parse failure.
-	internalHosts := make([]internalHostRule, 0, len(opts.InternalHosts))
-	for _, h := range opts.InternalHosts {
-		suffix := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(h.HostSuffix)), ".")
-		if suffix == "" {
-			continue
-		}
-		cidrs, ok := parseInternalHostCIDRs(h.CIDRs)
-		if !ok {
-			continue
-		}
-		internalHosts = append(internalHosts, internalHostRule{suffix: suffix, cidrs: cidrs})
-	}
+	internalHosts := compileInternalHosts(opts.InternalHosts)
 	// Compile the LLM-gateway table + its reverse lookup. LLMUpstreams is
 	// already validated (api.ValidateLLMGateways at boot, applyDefaultsAndValidate
 	// at config load) — a parse failure here just drops that one entry (falls
@@ -417,6 +433,9 @@ func newProxy(opts Options) *Proxy {
 		llmUpstreams[vendor] = llmUpstream{host: host, port: port, prefix: strings.TrimSuffix(u.Path, "/")}
 		gatewayVendor[host] = vendor
 	}
+	// A git_pat grant with api: true terminates its own host on 443 and nothing else, so the
+	// forge API is reached only through the door. An entry the operator already authored keeps its own scope.
+	patAPI := newPATAPIGrants(patGrants, mitmHosts, mitmPorts)
 	p := &Proxy{
 		runID:                opts.RunID,
 		policy:               opts.Policy,
@@ -433,12 +452,17 @@ func newProxy(opts Options) *Proxy {
 		mitmLLM:              opts.MITMLLM,
 		gitGrants:            gitGrants,
 		patGrants:            patGrants,
+		brokeredPATGrantIDs:  opts.BrokeredPATGrantIDs,
 		adoGrants:            opts.ADOGrants,
+		azure:                newAzureGates(opts.AzureGates),
+		patAPI:               patAPI,
+		ghAPI:                newGitHubAPIDoor(opts.GitHubAPI, mitmHosts, mitmPorts),
+		arm:                  newAzureARMDoor(opts.AzureARM, mitmHosts, mitmPorts),
 		gitTokens:            make(map[uuid.UUID]*gitTokEntry),
-		controlPlaneURL:      strings.TrimRight(opts.ControlPlaneURL, "/"),
+		controlPlaneURL:      controlPlaneEndpoint(opts.ControlPlaneURL, ""),
 		runToken:             opts.RunToken,
 		upstream:             opts.Upstream,
-		topologyRe:           topologyPatterns(strings.TrimRight(opts.ControlPlaneURL, "/"), opts.Upstream),
+		topologyRe:           topologyPatterns(controlPlaneEndpoint(opts.ControlPlaneURL, ""), opts.Upstream),
 		noProxy:              compileNoProxy(opts.UpstreamNoProxy),
 		internalHosts:        internalHosts,
 		localSubnets:         opts.LocalSubnets,
@@ -447,9 +471,12 @@ func newProxy(opts Options) *Proxy {
 		llmUpstreams:         llmUpstreams,
 		llmUnavailableDetail: opts.LLMUnavailableDetail,
 		pushHolds:            pushHolds{unattended: opts.Unattended},
+		attribution:          opts.Attribution,
 		gatewayVendor:        gatewayVendor,
+		channelHosts:         compileChannelHosts(opts.LLMChannelHosts),
 		dial:                 dial,
 		now:                  now,
+		viaOrgRoutes:         opts.ViaOrgRoutes,
 	}
 
 	// directDial dials the vetted IP carried on the request context and never
@@ -560,6 +587,18 @@ func newProxy(opts Options) *Proxy {
 // route. This makes the run token unreachable by anything the sandbox can
 // route through the forward proxy.
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// A via_org destination is the organisation's to decide: no spool row, no
+	// hold and no decision here (design 0.9 §7.3).
+	if route, authority, ok := p.viaOrgRouteFor(r); ok {
+		p.serveViaOrg(w, r, route, authority)
+		return
+	}
+	var release func()
+	r, release = p.admitSpoolHTTP(w, r)
+	if r == nil {
+		return
+	}
+	defer release()
 	if r.Method == http.MethodConnect {
 		p.handleConnect(w, r)
 		return
@@ -597,12 +636,13 @@ func splitHostPort(hostport string, defaultPort int) (host string, port int) {
 // ("ip:port") when allowed.
 func (p *Proxy) evaluate(ctx context.Context, host string, port int, method string, path string) (egress.Decision, string, *egress.DecisionLog) {
 	req := egress.Request{
-		RunID:  p.runID,
-		Host:   host,
-		Port:   port,
-		Method: strings.ToUpper(method),
-		Path:   path,
-		Time:   p.now(),
+		AuditReservation: spoolTicket(ctx),
+		RunID:            p.runID,
+		Host:             host,
+		Port:             port,
+		Method:           strings.ToUpper(method),
+		Path:             path,
+		Time:             p.now(),
 	}
 
 	// 0. Unconditional literal-IP guard, before policy and before first-use
@@ -611,6 +651,11 @@ func (p *Proxy) evaluate(ctx context.Context, host string, port int, method stri
 	trustedLiteralIP, denied := p.literalIPGuard(req, host, port)
 	if denied != nil {
 		return egress.Deny, "", denied
+	}
+	// An attached MCP server's host is the broker's alone, above every allow.
+	if p.mcp.mcpDirectOrigin(host) {
+		log := decisionLog(req, egress.Deny, ruleSourceMCPDirect)
+		return egress.Deny, "", &log
 	}
 
 	// 1. Policy host verdict (deny beats allow, default-deny) — delegated to the
@@ -705,6 +750,11 @@ func (p *Proxy) evaluate(ctx context.Context, host string, port int, method stri
 		}
 	case egress.VerdictAllow:
 		// fall through.
+	default:
+		// A verdict the proxy does not recognise is as unevaluatable as an
+		// error: fail closed under the same rule source.
+		log := decisionLog(req, egress.Deny, "policy:evaluator-error")
+		return egress.Deny, "", &log
 	}
 
 	// 4. IP vetting (unconditional private/loopback/link-local/metadata deny).
@@ -745,6 +795,12 @@ func (p *Proxy) evaluate(ctx context.Context, host string, port int, method stri
 		// fault. Both still fail closed — only the attribution differs.
 		if errors.Is(terr, errHostUnresolved) {
 			log := decisionLog(req, egress.Deny, "builtin:resolve-failed")
+			// With an upstream configured, only a BYPASSED name is resolved
+			// here to be dialled: say the upstream was skipped, or the row
+			// reads as if the corp proxy could not find the name.
+			if p.upstream != nil {
+				log.Via, log.Cause = viaDirect, resolveBypassedCause
+			}
 			return egress.Deny, "", &log
 		}
 		log := decisionLog(req, egress.Deny, "builtin:private-ip")
@@ -834,7 +890,8 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	// Never a blind tunnel to an Azure DevOps grant host (refuseADOTunnel).
-	if p.refuseADOTunnel(w, r, host, port) {
+	if p.refuseADOTunnel(w, r, host, port) || p.refuseAzureTunnel(w, r, host, port) || p.refusePATAPITunnel(w, r, host, port) ||
+		p.refuseGitHubAPITunnel(w, r, host, port) || p.refuseAzureARMTunnel(w, r, host, port) {
 		return
 	}
 
@@ -894,10 +951,10 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 	}
 	// Tunnel dial succeeded: NOW record the allow.
 	if log != nil {
-		p.sink.emit(*log)
+		p.emitDialledAllow(*log, host)
 	}
 
-	clientConn, _, err := hj.Hijack()
+	clientConn, brw, err := hj.Hijack()
 	if err != nil {
 		_ = upstream.Close()
 		return
@@ -907,49 +964,15 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 		_ = clientConn.Close()
 		return
 	}
-	tunnel(p.countActivity(clientConn), upstream)
-}
-
-// tunnel pipes bytes in both directions until EITHER side finishes, then closes
-// both connections — the standard CONNECT-proxy shape.
-//
-// Why the first finisher closes and not both: waiting (wg.Wait()) for
-// BOTH io.Copy calls before closing anything would let either direction pin
-// the tunnel forever. When the sandbox side goes away the client->upstream
-// copy returns and half-closes the upstream write side, but the
-// upstream->client copy stays blocked in Read until the upstream sends or
-// closes. An upstream that never does — an attacker-controlled allowed host, a
-// hung TLS endpoint, a dropped FIN — would pin that goroutine, its 32 KiB copy
-// buffer, the hijacked client socket and the upstream socket FOREVER: the
-// listener's IdleTimeout (server.go) does not apply to a hijacked connection,
-// and nothing else deadlines or caps an opaque tunnel (the inner MITM server
-// has ReadHeaderTimeout/ReadTimeout/IdleTimeout, mitm.go — this lane has
-// none of its own). A prompt-injected process in the sandbox could open and
-// abandon tunnels in a loop, measured at 2 goroutines + both sockets retained
-// per tunnel, inside a sidecar sized at 256 MiB.
-//
-// Closing on the first finisher bounds that to the lifetime of whichever
-// direction ends first, and costs nothing a CONNECT tunnel relies on: the
-// half-close below still fires first, so a peer that is merely done SENDING
-// sees EOF exactly as before, and a TLS session (every real user of this lane)
-// is over for both directions once either endpoint is gone. The second copy
-// goroutine returns as soon as Close unblocks its Read; done is buffered so it
-// can never block on a receiver that has already left.
-func tunnel(a, b net.Conn) {
-	done := make(chan struct{}, 2)
-	cp := func(dst, src net.Conn) {
-		_, _ = io.Copy(dst, src)
-		// Half-close the write side if supported so the peer sees EOF.
-		if cw, ok := dst.(interface{ CloseWrite() error }); ok {
-			_ = cw.CloseWrite()
-		}
-		done <- struct{}{}
-	}
-	go cp(a, b)
-	go cp(b, a)
-	<-done
-	_ = a.Close()
-	_ = b.Close()
+	// Read the client leg through the hijack's OWN buffered reader: a client that
+	// writes its CONNECT and the first bytes of the tunnel in one write (a TLS
+	// ClientHello behind the CONNECT headers) has those bytes already in that
+	// buffer, and reading clientConn directly drops them — the origin would
+	// never see the client's opening flight. Same readerConn the MITM lane uses
+	// for the same reason.
+	watch := newTunnelWatch(upstream)
+	first, err := tunnel(p.countActivity(&readerConn{Conn: clientConn, r: brw.Reader}), watch)
+	p.tunnelEnded(log, host, watch, first, err)
 }
 
 // writeApprovalPending returns the first-use 403 body the sandbox client sees.
@@ -962,39 +985,4 @@ func writeApprovalPending(w http.ResponseWriter, log *egress.DecisionLog) {
 	}
 	// {"wardyn":"approval-pending","approval_id":...}
 	_, _ = fmt.Fprintf(w, `{"wardyn":"approval-pending","approval_id":%q}`, id)
-}
-
-// hopByHopHeaders are stripped before forwarding (RFC 7230 §6.1).
-var hopByHopHeaders = []string{
-	"Connection",
-	"Proxy-Connection",
-	"Keep-Alive",
-	"Proxy-Authenticate",
-	"Proxy-Authorization",
-	"Te",
-	"Trailer",
-	"Transfer-Encoding",
-	"Upgrade",
-}
-
-func removeHopByHop(h http.Header) {
-	// Headers named in Connection are also hop-by-hop.
-	for _, name := range h.Values("Connection") {
-		for _, tok := range strings.Split(name, ",") {
-			if t := strings.TrimSpace(tok); t != "" {
-				h.Del(t)
-			}
-		}
-	}
-	for _, hh := range hopByHopHeaders {
-		h.Del(hh)
-	}
-}
-
-func copyHeader(dst, src http.Header) {
-	for k, vs := range src {
-		for _, v := range vs {
-			dst.Add(k, v)
-		}
-	}
 }

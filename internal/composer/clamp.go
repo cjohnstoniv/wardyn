@@ -4,6 +4,7 @@
 package composer
 
 import (
+	"cmp"
 	"encoding/json"
 	"fmt"
 	"net/url"
@@ -11,7 +12,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/runner/sizing"
+	"github.com/cjohnstoniv/wardyn/internal/runnerpool"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -49,10 +51,29 @@ func EffectiveConfinementFloor(policyMin, floor, cap types.ConfinementClass) typ
 // The returned spec owns its memory (see cloneProposal): it shares no backing array or pointee with
 // either argument, so a later mutation of either side can never move an already-enforced ceiling.
 //
-// maxEphemeralDiskMiB is the acting principal's GovernanceLimits.MaxEphemeralDiskMiB (0 = unlimited).
-// It's applied via CapDiskMiB, shared with dispatch's own ephemeral-disk clamp so preview and the
-// actual run agree, and only clamps a non-zero request since 0 means unbounded scratch.
-func Clamp(proposed, ceiling types.RunPolicySpec, maxEphemeralDiskMiB int) (types.RunPolicySpec, []string) {
+// limits is the acting principal's GovernanceLimits; only its size caps (MaxCPUMillis, MaxMemoryMiB,
+// MaxEphemeralDiskMiB; 0 = unlimited) are read here. Disk is applied via CapDiskMiB, shared with
+// dispatch's own ephemeral-disk clamp so preview and the actual run agree, and only clamps a non-zero
+// request since 0 means unbounded scratch. CPU and memory fold into the resource ceiling below.
+func Clamp(proposed, ceiling types.RunPolicySpec, limits types.GovernanceLimits) (types.RunPolicySpec, []string) {
+	var size types.ResourceLimits
+	if r := ceiling.Resources; r != nil {
+		size = types.ResourceLimits{CPUMillis: r.CPUMillis, MemoryMiB: r.MemoryMiB}
+	}
+	return clamp(proposed, ceiling, limits, size, MemberDefault(types.ResourceLimits{}, ceiling.Resources), true)
+}
+
+// ClampMember is Clamp for a governed member's own run policy. CPU and memory are bounded by the
+// member cap from size, the profile's AUTHORED size (a resolved ceiling carries the deployment's size
+// where its profile sets none, #1949), and memberDefault, the member's size before any ask (from the
+// deployment's own default, which Clamp alone cannot see). A cut of either is not warned here: the
+// run's placement step applies the ask within every limit and says exactly when it was cut, so the
+// warning and the run's resources_applied agree.
+func ClampMember(proposed, ceiling types.RunPolicySpec, limits types.GovernanceLimits, size, memberDefault types.ResourceLimits) (types.RunPolicySpec, []string) {
+	return clamp(proposed, ceiling, limits, size, memberDefault, false)
+}
+
+func clamp(proposed, ceiling types.RunPolicySpec, limits types.GovernanceLimits, size, untouched types.ResourceLimits, warnSize bool) (types.RunPolicySpec, []string) {
 	out := cloneProposal(proposed)
 	var warns []string
 
@@ -69,6 +90,10 @@ func Clamp(proposed, ceiling types.RunPolicySpec, maxEphemeralDiskMiB int) (type
 
 	// Allowed domains: intersect to the ceiling's allowlist unless it allows all. An empty ceiling
 	// allowlist means default-deny — don't skip this block when empty, or the strictest posture leaks.
+	// Under an allow-all ceiling the proposal's entries are kept as authored. An exact entry still
+	// carries what allow-all never gives (the proxy's trust of a private-range literal address), and
+	// that is bounded by the member path before it calls here (internal/api's
+	// dropUncoveredPrivateLiterals), not by this function.
 	if !ceiling.AllowAllEgress {
 		allowed := toSet(ceiling.AllowedDomains)
 		kept, dropped := partition(out.AllowedDomains, func(d string) bool { return allowed[strings.ToLower(strings.TrimSpace(d))] })
@@ -116,60 +141,13 @@ func Clamp(proposed, ceiling types.RunPolicySpec, maxEphemeralDiskMiB int) (type
 		out.LLMInspection = nil
 	}
 
-	// Allowed methods: empty means "all" here (unlike AllowedDomains' default-deny), so an empty
-	// proposal must adopt the ceiling's restriction rather than silently allowing any method.
-	if len(ceiling.AllowedMethods) > 0 {
-		if len(out.AllowedMethods) == 0 {
-			warns = append(warns, fmt.Sprintf("allowed_methods restricted to operator's: %s", strings.Join(ceiling.AllowedMethods, ",")))
-			out.AllowedMethods = append([]string(nil), ceiling.AllowedMethods...)
-		} else {
-			allowed := toSet(ceiling.AllowedMethods)
-			kept, dropped := partition(out.AllowedMethods, func(m string) bool { return allowed[strings.ToLower(strings.TrimSpace(m))] })
-			if len(dropped) > 0 {
-				warns = append(warns, fmt.Sprintf("dropped %d method(s) not in operator allowlist: %s", len(dropped), strings.Join(dropped, ",")))
-				out.AllowedMethods = kept
-			}
-		}
-	}
+	warns = clampMethods(&out, ceiling, warns)
 
 	out.UIApps = clampUIApps(out.UIApps, ceiling.UIApps, &warns)
 
 	out.EligibleGrants = clampGrants(out.EligibleGrants, ceiling, &warns)
 
-	// Resources: cap each set field at the ceiling's; an unset ceiling is not "no opinion" (Clamp is the
-	// operator-ceiling authority for every caller), so fall back to CreateSandbox's own platform defaults
-	// (runner.Default{CPUMillis,MemoryMiB,PidsLimit}) rather than leave it unbounded. DiskMiB has no such
-	// default and stays skip-when-both-unset.
-	effCeilingResources := ceiling.Resources
-	if effCeilingResources == nil {
-		effCeilingResources = &types.ResourceLimits{
-			CPUMillis: int(runner.DefaultCPUMillis),
-			MemoryMiB: int(runner.DefaultMemoryMiB),
-			PidsLimit: int(runner.DefaultPidsLimit),
-		}
-	}
-	{
-		before := out.Resources
-		cr := types.ResourceLimits{}
-		if before != nil {
-			cr = *before
-		}
-		capField := func(proposed *int, ceil int) {
-			if ceil > 0 && (*proposed <= 0 || *proposed > ceil) {
-				*proposed = ceil
-			}
-		}
-		capField(&cr.CPUMillis, effCeilingResources.CPUMillis)
-		capField(&cr.MemoryMiB, effCeilingResources.MemoryMiB)
-		capField(&cr.PidsLimit, effCeilingResources.PidsLimit)
-		capField(&cr.DiskMiB, effCeilingResources.DiskMiB)
-		// Governance limit folded into the same warning; bounds a non-zero request only (see CapDiskMiB).
-		cr.DiskMiB = CapDiskMiB(cr.DiskMiB, maxEphemeralDiskMiB)
-		if before == nil || cr != *before {
-			warns = append(warns, WarnResourcesCapped)
-			out.Resources = &cr
-		}
-	}
+	warns = clampResources(&out, ceiling, limits, size, untouched, warnSize, warns)
 
 	// Auto-stop: cap at the ceiling's positive maximum. 0 (platform default) and negative (never reap —
 	// most permissive) both rank more permissive than an explicit cap and are capped the same way. When
@@ -191,14 +169,83 @@ func Clamp(proposed, ceiling types.RunPolicySpec, maxEphemeralDiskMiB int) (type
 	return out, warns
 }
 
+// clampResources is Clamp's resource step, split out to keep Clamp readable.
+// size is the ceiling's own CPU and memory the member cap reads and untouched the member default it
+// starts from; warnSize says whether a cut of either joins the warning.
+func clampResources(out *types.RunPolicySpec, ceiling types.RunPolicySpec, limits types.GovernanceLimits, size, untouched types.ResourceLimits, warnSize bool, warns []string) []string {
+	// Resources: an unset ceiling is not "no opinion" (Clamp is the operator-ceiling authority for every
+	// caller), so it stands at sizing.EffectiveLimits() (the deployment's configured default, else
+	// sizing.Default{CPUMillis,MemoryMiB,PidsLimit}) rather than leave a field unbounded. CPU and
+	// memory are bounded by the member cap (runnerpool.MemberCap, #1949) from the member's default
+	// size, the rule preflight and dispatch also apply; an unset field is filled from the ceiling's
+	// size, never above that cap. DiskMiB has no such default and stays skip-when-both-unset.
+	eff := sizing.EffectiveLimits()
+	var own types.ResourceLimits
+	pids := int(eff.PidsLimit)
+	if ceiling.Resources != nil {
+		own, pids = *ceiling.Resources, ceiling.Resources.PidsLimit
+	}
+	effCeilingResources := &types.ResourceLimits{
+		CPUMillis: runnerpool.MemberCap(size.CPUMillis, limits.MaxCPUMillis, untouched.CPUMillis),
+		MemoryMiB: runnerpool.MemberCap(size.MemoryMiB, limits.MaxMemoryMiB, untouched.MemoryMiB),
+		PidsLimit: pids,
+		DiskMiB:   own.DiskMiB,
+	}
+	fill := types.ResourceLimits{
+		CPUMillis: min(cmp.Or(own.CPUMillis, int(eff.CPUMillis)), effCeilingResources.CPUMillis),
+		MemoryMiB: min(cmp.Or(own.MemoryMiB, int(eff.MemoryMiB)), effCeilingResources.MemoryMiB),
+	}
+	{
+		before := out.Resources
+		cr := types.ResourceLimits{}
+		if before != nil {
+			cr = *before
+		}
+		// An unset (<=0) field is FILLED from the ceiling silently: the policy
+		// asked for no particular size, so nothing it asked for was cut. Only a
+		// positive request above the cap is cut, and only a cut warns.
+		capField := func(proposed *int, ceil, fill int) (cut bool) {
+			if ceil <= 0 {
+				return false
+			}
+			switch {
+			case *proposed > ceil:
+				*proposed, cut = ceil, true
+			case *proposed <= 0:
+				*proposed = fill
+			}
+			return cut
+		}
+		cpu := capField(&cr.CPUMillis, effCeilingResources.CPUMillis, fill.CPUMillis)
+		mem := capField(&cr.MemoryMiB, effCeilingResources.MemoryMiB, fill.MemoryMiB)
+		exceeded := warnSize && (cpu || mem)
+		exceeded = capField(&cr.PidsLimit, effCeilingResources.PidsLimit, effCeilingResources.PidsLimit) || exceeded
+		exceeded = capField(&cr.DiskMiB, effCeilingResources.DiskMiB, effCeilingResources.DiskMiB) || exceeded
+		// Governance limit folded into the same warning; bounds a non-zero request only (see CapDiskMiB).
+		if capped := CapDiskMiB(cr.DiskMiB, limits.MaxEphemeralDiskMiB); capped != cr.DiskMiB {
+			cr.DiskMiB, exceeded = capped, true
+		}
+		if before == nil || cr != *before {
+			out.Resources = &cr
+		}
+		if exceeded {
+			warns = append(warns, WarnResourcesCapped)
+		}
+	}
+	return warns
+}
+
 // clampPushRules only narrows push_rules: a silent ceiling passes the proposal through unclamped;
 // when the ceiling sets one, an unset proposal inherits it wholesale, a set proposal gets the
-// ceiling's deny_paths unioned in (see unionPaths) and max_inspect_pack_mib capped.
+// ceiling's deny_paths unioned in (see unionPaths), max_inspect_pack_mib and max_file_size_mib capped
+// (a proposal can neither raise a ceiling's limit nor turn it off with 0), and deny_new_executables kept on.
 //
 // IsSet treats an all-zero-but-non-nil PushRulesSpec (push_rules: {} on the wire) as "no opinion"
 // like nil, so an empty ceiling doesn't get inherited wholesale and false-warn.
 func clampPushRules(out *types.RunPolicySpec, ceiling types.RunPolicySpec, warns []string) []string {
-	if !ceiling.PushRules.IsSet() {
+	// deny_new_executables is not in IsSet (nothing enforces it yet) but a ceiling's true must
+	// still reach the merged spec, so a proposal can never switch it off.
+	if !ceiling.PushRules.IsSet() && (ceiling.PushRules == nil || !ceiling.PushRules.DenyNewExecutables) {
 		return warns
 	}
 	if out.PushRules == nil {
@@ -220,6 +267,11 @@ func clampPushRules(out *types.RunPolicySpec, ceiling types.RunPolicySpec, warns
 		warns = append(warns, fmt.Sprintf("push_rules.max_inspect_pack_mib capped to operator maximum %d", ceil))
 		merged.MaxInspectPackMiB = ceil
 	}
+	if ceil := ceiling.PushRules.MaxFileSizeMiB; ceil > 0 && (merged.MaxFileSizeMiB <= 0 || merged.MaxFileSizeMiB > ceil) {
+		warns = append(warns, fmt.Sprintf("push_rules.max_file_size_mib capped to operator maximum %d", ceil))
+		merged.MaxFileSizeMiB = ceil
+	}
+	merged.DenyNewExecutables = merged.DenyNewExecutables || ceiling.PushRules.DenyNewExecutables
 	if ceil := ceiling.PushRules.HoldSeconds; ceil > 0 && (merged.HoldSeconds <= 0 || merged.HoldSeconds > ceil) {
 		merged.HoldSeconds = ceil // the shorter of two authored holds, silently: it widens nothing
 	}
@@ -281,6 +333,7 @@ func cloneProposal(s types.RunPolicySpec) types.RunPolicySpec {
 		out.LLMInspection = &li
 	}
 	out.AzureDevOpsCapabilities = slices.Clone(s.AzureDevOpsCapabilities)
+	out.GitHubCapabilities = slices.Clone(s.GitHubCapabilities)
 	if s.PushRules != nil {
 		pr := *s.PushRules
 		pr.DenyPaths = slices.Clone(s.PushRules.DenyPaths)
@@ -349,6 +402,57 @@ func CapDiskMiB(disk, ceil int) int {
 	return disk
 }
 
+// MemberDefault is a governed member's size before anything asks for one: the deployment's own
+// default size (its default policy's, else the platform's; a zero field of deployment is
+// sizing.EffectiveLimits'), lowered per field to the ceiling's own size where it sets one. It is the
+// untouched size runnerpool.MemberCap starts from when no admin-authored policy names one, so the
+// member cap is never raised past a ceiling below the default (a resolved ceiling carries the
+// deployment's own size where its profile sets none).
+func MemberDefault(deployment types.ResourceLimits, ceiling *types.ResourceLimits) types.ResourceLimits {
+	eff := sizing.EffectiveLimits()
+	out := types.ResourceLimits{CPUMillis: cmp.Or(deployment.CPUMillis, int(eff.CPUMillis)), MemoryMiB: cmp.Or(deployment.MemoryMiB, int(eff.MemoryMiB))}
+	if ceiling != nil {
+		if ceiling.CPUMillis > 0 {
+			out.CPUMillis = min(out.CPUMillis, ceiling.CPUMillis)
+		}
+		if ceiling.MemoryMiB > 0 {
+			out.MemoryMiB = min(out.MemoryMiB, ceiling.MemoryMiB)
+		}
+	}
+	return out
+}
+
+// CapResources bounds a run's CPU and memory by the profile's maximums and reports whether it
+// changed anything. It is the resource-only half of Clamp, for the member launch that carries no
+// policy (its spec is the profile's own ceiling, which Clamp must not process because it drops
+// workspace mounts), and dispatch's re-assertion of the same bound. Each maximum is the member cap
+// with no ceiling size (runnerpool.MemberCap): the maximum, never below floor, the member default
+// (MemberDefault), so it never cuts what preflight said a run gets (#1949); a zero floor field leaves
+// the maximum as it is. A zero field of r is the platform default (sizing.EffectiveLimits), the size
+// the runner gives it. Returns a FRESH block, never an in-place write, so one shared spec cannot
+// re-size every later run that reads it.
+func CapResources(r *types.ResourceLimits, limits types.GovernanceLimits, floor types.ResourceLimits) (*types.ResourceLimits, bool) {
+	if limits.MaxCPUMillis <= 0 && limits.MaxMemoryMiB <= 0 {
+		return r, false
+	}
+	var out types.ResourceLimits
+	if r != nil {
+		out = *r
+	}
+	eff := sizing.EffectiveLimits()
+	bound := func(field *int, profileMax, floor, def int) {
+		if c := runnerpool.MemberCap(0, profileMax, floor); profileMax > 0 && cmp.Or(*field, def) > c {
+			*field = c
+		}
+	}
+	bound(&out.CPUMillis, limits.MaxCPUMillis, floor.CPUMillis, int(eff.CPUMillis))
+	bound(&out.MemoryMiB, limits.MaxMemoryMiB, floor.MemoryMiB, int(eff.MemoryMiB))
+	if r == nil || (out.CPUMillis == r.CPUMillis && out.MemoryMiB == r.MemoryMiB) {
+		return r, false
+	}
+	return &out, true
+}
+
 func ClampRunConfinement(runClass string, floor types.ConfinementClass) (string, string) {
 	if fr := confinementRank(floor); fr > 0 && confinementRank(types.ConfinementClass(runClass)) < fr {
 		return string(floor), fmt.Sprintf("run confinement raised from %q to policy floor %q", runClass, floor)
@@ -357,7 +461,7 @@ func ClampRunConfinement(runClass string, floor types.ConfinementClass) (string,
 }
 
 // normalizeClampTTL resolves a TTL to actual mint seconds: 0 and negative both mean "broker maximum",
-// matching internal/api's normalizeGrantTTLSeconds so the two sides stay comparable — testing `==0`
+// matching GrantWithin (the write-time comparator) so the two sides stay comparable — testing `==0`
 // alone would let ttl_seconds=-1 pass a 300s ceiling that the write-time comparator refuses.
 func normalizeClampTTL(ttl int) int {
 	if ttl <= 0 || ttl > maxGrantTTLSeconds {
@@ -393,7 +497,7 @@ func CeilingGrantsCovering(g types.GrantSpec, ceiling []types.GrantSpec) []types
 }
 
 // grantDominatedBy reports whether ceiling grant cg bounds g on every axis a clamp can narrow, the
-// same three questions governanceGrantWithinCeiling asks — if one dominates, the clamp returns g unchanged.
+// same questions GrantWithin asks — if one dominates, the clamp returns g unchanged.
 func grantDominatedBy(g, cg types.GrantSpec) bool {
 	if cg.RequiresApproval && !g.RequiresApproval {
 		return false
@@ -402,6 +506,9 @@ func grantDominatedBy(g, cg types.GrantSpec) bool {
 		return false
 	}
 	if g.Kind == types.GrantGitHubToken && GitHubScopeWithin(g.Scope, cg.Scope) != nil {
+		return false
+	}
+	if g.Kind == types.GrantGitPAT && PATScopeWithin(g.Scope, cg.Scope) != nil {
 		return false
 	}
 	return true
@@ -447,6 +554,17 @@ func clampGrants(grants []types.GrantSpec, ceiling types.RunPolicySpec, warns *[
 			}
 			*warns = append(*warns, dedupeStrings(scopeWarns)...)
 		}
+		// git_pat: the same meet over repos/access/api/forge. An empty repos intersection drops the grant;
+		// it is never kept as an unnarrowed one.
+		if g.Kind == types.GrantGitPAT {
+			var scopeWarns []string
+			scope, keep := PATScopeMeet(g.Scope, grantScopes(bounds), &scopeWarns)
+			*warns = append(*warns, dedupeStrings(scopeWarns)...)
+			if !keep {
+				continue
+			}
+			g.Scope = scope
+		}
 		// TTL cap: the strictest bound; a ceiling TTL <=0 bounds nothing, leaving the broker maximum.
 		max := maxGrantTTLSeconds
 		for _, cg := range bounds {
@@ -471,6 +589,15 @@ func clampGrants(grants []types.GrantSpec, ceiling types.RunPolicySpec, warns *[
 			g.OwnerOnly = true
 		}
 		out = append(out, g)
+	}
+	return out
+}
+
+// grantScopes lists each grant's scope, in order.
+func grantScopes(grants []types.GrantSpec) []json.RawMessage {
+	out := make([]json.RawMessage, len(grants))
+	for i, g := range grants {
+		out[i] = g.Scope
 	}
 	return out
 }
@@ -617,6 +744,27 @@ func union(a, b []string) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// clampMethods bounds allowed_methods by a ceiling that names some. Empty means "all" here (unlike
+// AllowedDomains' default-deny), and the proxy drops a blank entry, so whenever nothing it would read
+// is left (no proposal, a proposal sharing no method with the ceiling, or only blank entries) the
+// result is the ceiling's own list, never one that allows any method.
+func clampMethods(out *types.RunPolicySpec, ceiling types.RunPolicySpec, warns []string) []string {
+	if len(ceiling.AllowedMethods) == 0 {
+		return warns
+	}
+	allowed := toSet(ceiling.AllowedMethods)
+	kept, dropped := partition(out.AllowedMethods, func(m string) bool { return allowed[strings.ToLower(strings.TrimSpace(m))] })
+	if len(dropped) > 0 {
+		warns = append(warns, fmt.Sprintf("dropped %d method(s) not in operator allowlist: %s", len(dropped), strings.Join(dropped, ",")))
+		out.AllowedMethods = kept
+	}
+	if len(normMethods(out.AllowedMethods)) == 0 {
+		warns = append(warns, fmt.Sprintf("allowed_methods restricted to operator's: %s", strings.Join(ceiling.AllowedMethods, ",")))
+		out.AllowedMethods = append([]string(nil), ceiling.AllowedMethods...)
+	}
+	return warns
 }
 
 // clampOperatorSwitches forces off boolean controls only an operator may widen: allow-all egress and

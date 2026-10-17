@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/google/uuid"
@@ -213,7 +214,7 @@ func runGovernanceGet(t *testing.T, url string) (stdout string, err error) {
 	return out.String(), err
 }
 
-// runGovernanceApply marshals doc to a temp file, runs `governance apply` on
+// runGovernanceApply marshals doc to a temp file, runs `governance set` on
 // it (with --prune when asked), and returns what it printed and any error.
 func runGovernanceApply(t *testing.T, url string, doc sdk.GovernanceDocument, prune bool) (stdout string, err error) {
 	t.Helper()
@@ -225,7 +226,7 @@ func runGovernanceApply(t *testing.T, url string, doc sdk.GovernanceDocument, pr
 	if werr := os.WriteFile(path, b, 0o600); werr != nil {
 		t.Fatalf("write doc: %v", werr)
 	}
-	args := []string{"governance", "apply", path, "--url", url, "--token", "tok"}
+	args := []string{"governance", "set", path, "--url", url, "--token", "tok"}
 	if prune {
 		args = append(args, "--prune")
 	}
@@ -285,9 +286,9 @@ func bootstrapGovernance(t *testing.T, url string) map[string]uuid.UUID {
 }
 
 // TestGovernanceApply_GetApplyRoundTripIsANoOp is #1108's stated acceptance:
-// `wardyn governance get > f && wardyn governance apply f` changes nothing —
+// `wardyn governance get > f && wardyn governance set f` changes nothing —
 // ZERO writes, ZERO audit rows, on a populated install. Stricter than drive
-// apply's own round-trip test (which only checks the state ends up the same):
+// set's own round-trip test (which only checks the state ends up the same):
 // the real server audits every successful profile/assignment write
 // unconditionally, so an apply that blindly re-PUTs/re-POSTs unchanged rows
 // would pass a state-equality check while still spamming the audit log.
@@ -407,7 +408,7 @@ func TestGovernanceApply_EmptyInstallReproducesState(t *testing.T) {
 }
 
 // TestGovernanceApply_RejectsUnknownField pins the same strict-decode
-// contract drive apply and site-config set both take: each upserts exactly
+// contract drive set and site-config set both take: each upserts exactly
 // what the file states, so a typo'd key must be a parse error, not a silently
 // dropped field.
 func TestGovernanceApply_RejectsUnknownField(t *testing.T) {
@@ -420,7 +421,7 @@ func TestGovernanceApply_RejectsUnknownField(t *testing.T) {
 		t.Fatalf("write doc: %v", err)
 	}
 	root := rootCmd()
-	root.SetArgs([]string{"governance", "apply", path, "--url", srv.URL, "--token", "tok"})
+	root.SetArgs([]string{"governance", "set", path, "--url", srv.URL, "--token", "tok"})
 	root.SetOut(&strings.Builder{})
 	root.SetErr(&strings.Builder{})
 	err := root.Execute()
@@ -477,5 +478,86 @@ func TestGovernanceApply_Prune(t *testing.T) {
 		if p.Name != "eng-default" {
 			t.Errorf("prune left an unexpected profile %q", p.Name)
 		}
+	}
+}
+
+// countingServer fails the test on nothing by itself; it only counts requests
+// of any method, so a test can assert that a refused input made none.
+func countingServer(t *testing.T) (*httptest.Server, func() []string) {
+	t.Helper()
+	var mu sync.Mutex
+	var seen []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		seen = append(seen, r.Method+" "+r.URL.Path)
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	t.Cleanup(srv.Close)
+	return srv, func() []string {
+		mu.Lock()
+		defer mu.Unlock()
+		return append([]string(nil), seen...)
+	}
+}
+
+// TestOperatorGovernanceTrailingDocumentPrunes is #1491's reproduction,
+// flipped. `{}` followed by the real document used to be read as "the desired
+// state is empty", and --prune then deleted every profile and assignment. The
+// input is now refused before ANY request, a read included.
+func TestOperatorGovernanceTrailingDocumentPrunes(t *testing.T) {
+	p := sdk.GovernanceProfile{ID: uuid.New(), Name: "retain-this"}
+	a := sdk.GovernanceAssignment{ID: uuid.New(), SubjectType: "all", Subject: "*", ProfileID: p.ID}
+	desired, err := json.Marshal(sdk.GovernanceDocument{Profiles: []sdk.GovernanceProfile{p}, Assignments: []sdk.GovernanceAssignment{a}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, in := range map[string]string{
+		"second document":      "{}\n" + string(desired),
+		"trailing junk":        string(desired) + "\n}garbage",
+		"trailing second null": string(desired) + "\nnull",
+	} {
+		t.Run(name, func(t *testing.T) {
+			srv, seen := countingServer(t)
+			_, err := operatorCommand(t, srv.URL, in, "governance", "set", "-", "--prune")
+			if err == nil || !strings.Contains(err.Error(), "exactly one document") {
+				t.Fatalf("err = %v, want the exactly-one-document refusal", err)
+			}
+			if got := seen(); len(got) != 0 {
+				t.Errorf("requests were made before the input was refused: %q", got)
+			}
+		})
+	}
+}
+
+// Negatives: a lone `{}` with --prune still prunes (the documented empty
+// semantics); null and empty input are refused with no request.
+func TestOperatorGovernanceSingleDocumentStillApplies(t *testing.T) {
+	fake := newFakeGovernanceServer()
+	p := sdk.GovernanceProfile{ID: uuid.New(), Name: "retain-this"}
+	fake.profiles[p.ID] = p
+	srv := httptest.NewServer(fake.handler())
+	t.Cleanup(srv.Close)
+	if _, err := operatorCommand(t, srv.URL, "{}\n\n", "governance", "set", "-", "--prune"); err != nil {
+		t.Fatalf("a lone {} with --prune: %v", err)
+	}
+	if len(fake.profiles) != 0 {
+		t.Errorf("a lone {} with --prune did not prune: %v", fake.profiles)
+	}
+}
+
+func TestOperatorGovernanceRefusesNullAndEmpty(t *testing.T) {
+	for name, in := range map[string]string{"null": "null", "empty": "", "whitespace": " \n\t"} {
+		t.Run(name, func(t *testing.T) {
+			srv, seen := countingServer(t)
+			_, err := operatorCommand(t, srv.URL, in, "governance", "set", "-", "--prune")
+			if err == nil {
+				t.Fatal("input was accepted")
+			}
+			if got := seen(); len(got) != 0 {
+				t.Errorf("requests were made: %q", got)
+			}
+		})
 	}
 }

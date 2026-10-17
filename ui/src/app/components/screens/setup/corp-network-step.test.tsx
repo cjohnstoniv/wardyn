@@ -23,6 +23,7 @@ import {
 import type { CorpNetworkState } from "./steps";
 import { baseStatus } from "../../../lib/test-fixtures";
 import { SITE } from "../../wardyn/copy";
+import { setField } from "../../../../test/set-field";
 
 const testProxyMock = vi.fn();
 const testRedirectMock = vi.fn();
@@ -359,7 +360,7 @@ describe("Egress redirection — rows, network-only chip, the From combobox", ()
     // + the always-present AddRedirectForm below it) — the edit form's is the
     // one with the stable id the component ships (corp-network-egress.tsx).
     const tokenInput = container.querySelector<HTMLInputElement>("#eg-edit-token")!;
-    await user.type(tokenInput, "artifactory-token");
+    setField(tokenInput, "artifactory-token");
     await user.click(screen.getByRole("button", { name: /^save$/i }));
 
     await waitFor(() =>
@@ -397,7 +398,7 @@ describe("Egress redirection — rows, network-only chip, the From combobox", ()
     // "https://pypi.org/simple" is already a well-known suggestion (not
     // "novel"), so it's picked from the list rather than typed as custom.
     await user.click(await screen.findByText("https://pypi.org/simple"));
-    await user.type(screen.getByPlaceholderText(/artifactory\.corp\.internal/i), "https://mirror.corp.internal/pypi");
+    setField(screen.getByPlaceholderText(/artifactory\.corp\.internal/i), "https://mirror.corp.internal/pypi");
 
     expect(screen.getByRole("button", { name: /\+ add redirect/i })).toBeDisabled();
     expect(screen.getByText(/already exists for this from/i)).toBeInTheDocument();
@@ -411,9 +412,9 @@ describe("Egress redirection — rows, network-only chip, the From combobox", ()
     renderEgress();
     await user.click(screen.getByRole("tab", { name: /egress redirection/i }));
     await user.click(screen.getByRole("combobox"));
-    await user.type(screen.getByPlaceholderText(/https:\/\/…, host, or IP/i), "https://a-new-host.example.com");
+    setField(screen.getByPlaceholderText(/https:\/\/…, host, or IP/i), "https://a-new-host.example.com");
     await user.click(await screen.findByText("use as typed"));
-    await user.type(screen.getByPlaceholderText(/artifactory\.corp\.internal/i), "https://mirror.corp.internal/new");
+    setField(screen.getByPlaceholderText(/artifactory\.corp\.internal/i), "https://mirror.corp.internal/new");
 
     expect(screen.getByRole("button", { name: /\+ add redirect/i })).toBeEnabled();
     expect(screen.queryByText(/already exists for this from/i)).not.toBeInTheDocument();
@@ -434,9 +435,9 @@ describe("Egress redirection — rows, network-only chip, the From combobox", ()
     // Existing redirect is "https://pypi.org/simple" (lowercase) — typed
     // here with an upper-case authority, which is "novel" to the suggestion
     // list (exact-string match), so it goes through "use as typed".
-    await user.type(screen.getByPlaceholderText(/https:\/\/…, host, or IP/i), "https://PyPI.org/simple");
+    setField(screen.getByPlaceholderText(/https:\/\/…, host, or IP/i), "https://PyPI.org/simple");
     await user.click(await screen.findByText("use as typed"));
-    await user.type(screen.getByPlaceholderText(/artifactory\.corp\.internal/i), "https://mirror.corp.internal/pypi");
+    setField(screen.getByPlaceholderText(/artifactory\.corp\.internal/i), "https://mirror.corp.internal/pypi");
 
     expect(screen.getByRole("button", { name: /\+ add redirect/i })).toBeDisabled();
     expect(screen.getByText(/already exists for this from/i)).toBeInTheDocument();
@@ -451,9 +452,9 @@ describe("Egress redirection — rows, network-only chip, the From combobox", ()
     renderEgress();
     await user.click(screen.getByRole("tab", { name: /egress redirection/i }));
     await user.click(screen.getByRole("combobox"));
-    await user.type(screen.getByPlaceholderText(/https:\/\/…, host, or IP/i), "https://pypi.org/Simple");
+    setField(screen.getByPlaceholderText(/https:\/\/…, host, or IP/i), "https://pypi.org/Simple");
     await user.click(await screen.findByText("use as typed"));
-    await user.type(screen.getByPlaceholderText(/artifactory\.corp\.internal/i), "https://mirror.corp.internal/pypi2");
+    setField(screen.getByPlaceholderText(/artifactory\.corp\.internal/i), "https://mirror.corp.internal/pypi2");
 
     expect(screen.getByRole("button", { name: /\+ add redirect/i })).toBeEnabled();
     expect(screen.queryByText(/already exists for this from/i)).not.toBeInTheDocument();
@@ -479,10 +480,10 @@ describe("Egress redirection — rows, network-only chip, the From combobox", ()
     await user.click(screen.getByRole("tab", { name: /egress redirection/i }));
     await user.click(screen.getByRole("combobox"));
 
-    await user.type(screen.getByPlaceholderText(/https:\/\/…, host, or IP/i), "telemetry.vendor-sdk.io");
+    setField(screen.getByPlaceholderText(/https:\/\/…, host, or IP/i), "telemetry.vendor-sdk.io");
     await user.click(await screen.findByText("use as typed"));
 
-    await user.type(screen.getByPlaceholderText(/artifactory\.corp\.internal/i), "10.40.2.11:8443");
+    setField(screen.getByPlaceholderText(/artifactory\.corp\.internal/i), "10.40.2.11:8443");
     await user.click(screen.getByRole("button", { name: /\+ add redirect/i }));
 
     await waitFor(() =>
@@ -505,7 +506,7 @@ describe("Egress redirection — rows, network-only chip, the From combobox", ()
     await user.click(screen.getByRole("tab", { name: /egress redirection/i }));
     await user.click(screen.getByRole("combobox"));
     await user.click(await screen.findByText("https://registry.npmjs.org"));
-    await user.type(screen.getByPlaceholderText(/artifactory\.corp\.internal/i), "https://artifactory.corp.internal/api/npm/npm-remote");
+    setField(screen.getByPlaceholderText(/artifactory\.corp\.internal/i), "https://artifactory.corp.internal/api/npm/npm-remote");
     await user.click(screen.getByRole("button", { name: /\+ add redirect/i }));
     await waitFor(() =>
       expect(saveSiteConfig).toHaveBeenCalledWith(
@@ -530,7 +531,7 @@ describe("Egress redirection — rows, network-only chip, the From combobox", ()
       await user.click(screen.getByRole("tab", { name: /egress redirection/i }));
       await user.click(screen.getByRole("combobox"));
       await user.click(await screen.findByText("https://registry.npmjs.org"));
-      await user.type(screen.getByPlaceholderText(/artifactory\.corp\.internal/i), "https://artifactory.corp.internal/api/npm/npm-remote");
+      setField(screen.getByPlaceholderText(/artifactory\.corp\.internal/i), "https://artifactory.corp.internal/api/npm/npm-remote");
       await user.click(screen.getByRole("button", { name: /\+ add redirect/i }));
       await waitFor(() => expect(saveSiteConfig).toHaveBeenCalled());
       await waitFor(() => expect(toastSuccessMock).toHaveBeenCalledWith(expect.any(String), { description: SITE.SAVE_NOTE }));

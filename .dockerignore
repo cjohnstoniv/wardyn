@@ -2,6 +2,7 @@
 # and local artifacts must never be copied into image builds — the Dockerfiles
 # install/build them cleanly inside their own stages.
 ui/node_modules
+ui/dist-e2e
 # ui/dist is intentionally NOT ignored: Dockerfile.wardynd's UI_STAGE=ui-prebuilt
 # stage COPYs a host-built ui/dist for corp mirrors that can't fetch pnpm. The
 # default UI_STAGE=ui-build stage rebuilds /ui/dist from source anyway (its own

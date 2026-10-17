@@ -50,7 +50,16 @@ func (s *Server) refuse(w http.ResponseWriter, r *http.Request, d authz.Decision
 	if d.WireReason != "" {
 		wireReason = d.WireReason
 	}
-	writeErrorReason(w, ref.Effect.Status(), string(wireReason), cmp.Or(d.Sentence, ref.Sentence))
+	// The policy rides only a refusal that is what it says. A decision with a
+	// WireReason is lying on purpose (Hidden-effect, byte-identical to a missing
+	// resource), and an EffectHidden one must never tell a prober the resource
+	// exists, so neither carries it.
+	policy := d.Policy
+	if d.WireReason != "" || ref.Effect == authz.EffectHidden {
+		policy = nil
+	}
+	// The tool rides as itself: it is the request's own tools[].id.
+	writeJSON(w, ref.Effect.Status(), errorBody{Error: cmp.Or(d.Sentence, ref.Sentence), Reason: string(wireReason), Policy: policy, Tool: d.Detail["tool"]})
 	if ref.Audit {
 		s.recordRefusal(r.Context(), r, d)
 	}
@@ -83,6 +92,9 @@ func (s *Server) recordRefusal(ctx context.Context, r *http.Request, d authz.Dec
 	}
 	method, _ := ctx.Value(requestMethodKey{}).(string)
 	actor, subject := types.ActorHuman, oidcHumanFromContext(ctx)
+	if _, _, isService := serviceIdentityFromContext(ctx); isService {
+		actor = serviceActorType // a service's published human is its own principal, not a person
+	}
 	if r != nil {
 		actor, subject, method = actorTypeFromRequest(r), principalFromRequest(r), r.Method
 	}

@@ -12,8 +12,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -22,10 +24,6 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
-
-// sftpServerPath is the sandbox binary the sftp subsystem execs — the
-// documented BYOI image contract (docs/SSH.md).
-const sftpServerPath = "/usr/lib/openssh/sftp-server"
 
 // sshDisplaceGrace is how long a displaced SSH client gets to accept the
 // take-over reason on its stderr before the pump is cancelled anyway (see the
@@ -197,10 +195,11 @@ func drainExecStderr(channel ssh.Channel, sess *runner.ExecSession) {
 // for the interactive shell path.
 //
 // Returns the exit code (1 when Wait is absent or errors — clampExitCode's
-// same fold) and the total bytes copied Stdout->channel: what ssh.sftp.transfer's and
-// ssh.forward's "bytes" audit field means — the direction that matters for a
-// download/forward is what came OUT of the sandbox.
-func (s *Server) sshBridgeExecSession(ctx context.Context, runID uuid.UUID, principal string, channel ssh.Channel, sess *runner.ExecSession, sendExit bool) (exitCode int, bytesOut int64) {
+// same fold) and the bytes copied each way: bytesOut is Stdout->channel, what
+// ssh.sftp.transfer's and ssh.forward's "bytes" audit field means — the
+// direction that matters for a download/forward is what came OUT of the
+// sandbox — and bytesIn is channel->Stdin, what the sandbox received.
+func (s *Server) sshBridgeExecSession(ctx context.Context, runID uuid.UUID, principal string, channel ssh.Channel, sess *runner.ExecSession, sendExit bool) (exitCode int, bytesIn, bytesOut int64) {
 	defer channel.Close()
 	drainExecStderr(channel, sess)
 
@@ -222,11 +221,14 @@ func (s *Server) sshBridgeExecSession(ctx context.Context, runID uuid.UUID, prin
 	_ = s.cfg.Store.TouchRun(keepCtx, runID)
 	go s.attachKeepalive(keepCtx, runID)
 
+	var in atomic.Int64
 	if sess.Stdin != nil {
 		go func() {
 			// Bytes a person sends are presence (run_pause.go).
-			in := presenceReader{r: channel, mark: func() { _ = s.markPresent(ctx, runID, types.ActorHuman, principal, "presence") }}
-			_, _ = io.Copy(sess.Stdin, in)
+			src := presenceReader{r: channel, mark: func() { _ = s.markPresent(ctx, runID, types.ActorHuman, principal, "presence") }}
+			// Counted as written to the sandbox, off this goroutine: it may still
+			// be mid-copy when Stdout ends, so the total is read atomically.
+			_, _ = io.Copy(countingWriter{w: sess.Stdin, n: &in}, src)
 			_ = sess.Stdin.Close() // half-close only: Stdout/Stderr may still be flowing
 		}()
 	}
@@ -247,7 +249,86 @@ func (s *Server) sshBridgeExecSession(ctx context.Context, runID uuid.UUID, prin
 	if sess.Close != nil {
 		_ = sess.Close()
 	}
-	return exitCode, bytesOut
+	return exitCode, in.Load(), bytesOut
+}
+
+// countingWriter adds each successful write's size to n.
+type countingWriter struct {
+	w io.Writer
+	n *atomic.Int64
+}
+
+func (c countingWriter) Write(p []byte) (int, error) {
+	k, err := c.w.Write(p)
+	c.n.Add(int64(k))
+	return k, err
+}
+
+// sshSessionGate is one "session" channel's dispatch state: whether a
+// shell/exec/subsystem already started, and the budget slot it holds.
+type sshSessionGate struct {
+	s          *Server
+	ctx        context.Context
+	runID      uuid.UUID
+	principal  string
+	slot       *sshChannelSlot
+	channel    ssh.Channel
+	started    bool
+	capAudited bool
+}
+
+// mayDispatch refuses (and replies false to) a second dispatch, and — when
+// shared is set — one a sync-only channel (admitted past the shared cap, see
+// sshOpenSlot) may not make: that one is audited once, answered with the cap
+// text and closed, which frees the sync slot it was holding.
+func (g *sshSessionGate) mayDispatch(req *ssh.Request, shared bool) bool {
+	if g.started {
+		_ = req.Reply(false, nil)
+		return false
+	}
+	if shared && g.slot.sync {
+		if !g.capAudited {
+			g.capAudited = true
+			g.s.sshAuditChannelRejected(g.ctx, g.runID, g.principal, "session", sshCapReasonChannels, g.s.cfg.SSHMaxSessionsPerRun)
+		}
+		_ = req.Reply(false, nil)
+		sendChannelError(g.channel, fmt.Sprintf("too many concurrent SSH channels for this run (max %d)", g.s.cfg.SSHMaxSessionsPerRun))
+		return false
+	}
+	return true
+}
+
+// subsystemBridge validates a subsystem request and returns the bridge to run,
+// or nil after replying false. wardyn-sync moves the channel onto a sync slot.
+func (g *sshSessionGate) subsystemBridge(req *ssh.Request, channel ssh.Channel, syncEnv map[string]string) func() {
+	s, ctx, runID, principal := g.s, g.ctx, g.runID, g.principal
+	var m sshSubsystemMsg
+	if err := ssh.Unmarshal(req.Payload, &m); err != nil {
+		_ = req.Reply(false, nil)
+		return nil
+	}
+	switch m.Subsystem {
+	case "sftp":
+		if g.mayDispatch(req, true) {
+			return func() { s.bridgeSSHSFTP(ctx, runID, principal, channel) }
+		}
+	case sshSyncSubsystem:
+		if !g.mayDispatch(req, false) {
+			return nil
+		}
+		if !g.slot.toSync() {
+			if !g.capAudited {
+				g.capAudited = true
+				s.sshAuditChannelRejected(ctx, runID, principal, "session", sshCapReasonSync, maxSSHSyncSessionsPerRun)
+			}
+			_ = req.Reply(false, nil)
+			return nil
+		}
+		return func() { s.bridgeSSHSync(ctx, runID, principal, channel, syncEnv) }
+	default:
+		_ = req.Reply(false, nil)
+	}
+	return nil
 }
 
 // handleSSHSessionChannel owns ONE "session" channel for its whole lifetime:
@@ -257,7 +338,7 @@ func (s *Server) sshBridgeExecSession(ctx context.Context, runID uuid.UUID, prin
 // mirroring a real sshd's one-exec-per-channel rule — to its own bridge
 // goroutine while continuing to serve window-change concurrently (a live PTY
 // resize must keep working after the shell starts).
-func (s *Server) handleSSHSessionChannel(ctx context.Context, runID uuid.UUID, principal string, newCh ssh.NewChannel) {
+func (s *Server) handleSSHSessionChannel(ctx context.Context, runID uuid.UUID, principal string, newCh ssh.NewChannel, slot *sshChannelSlot) {
 	channel, reqs, err := newCh.Accept()
 	if err != nil {
 		return
@@ -277,18 +358,21 @@ func (s *Server) handleSSHSessionChannel(ctx context.Context, runID uuid.UUID, p
 	defer channel.Close()
 
 	var cols, rows uint16
-	started := false
 	// "Latest wins": window-change events coalesce onto a 1-slot buffered
 	// channel so a burst of resizes never blocks this request loop — only the
 	// most recent size matters anyway.
 	resizeCh := make(chan sshWindowChangeMsg, 1)
 	var env []string
+	// syncEnv holds the wardyn-sync-only env names. Kept apart from env so they
+	// can never reach an exec or shell: only a wardyn-sync dispatch reads them.
+	syncEnv := map[string]string{}
 	var bridgeDone chan struct{}
+	gate := &sshSessionGate{s: s, ctx: chCtx, runID: runID, principal: principal, slot: slot, channel: channel}
 
 	for req := range reqs {
 		switch req.Type {
 		case "pty-req":
-			if started {
+			if gate.started {
 				_ = req.Reply(false, nil)
 				continue
 			}
@@ -306,8 +390,13 @@ func (s *Server) handleSSHSessionChannel(ctx context.Context, runID uuid.UUID, p
 			// again) and len(env) < sshMaxEnvVars (an unbounded client could
 			// otherwise grow this slice forever pre-dispatch).
 			var m sshEnvMsg
-			if !started && len(env) < sshMaxEnvVars && ssh.Unmarshal(req.Payload, &m) == nil && sshEnvAllowed(m.Name) {
-				env = append(env, m.Name+"="+m.Value)
+			if !gate.started && ssh.Unmarshal(req.Payload, &m) == nil {
+				switch {
+				case sshSyncEnvName(m.Name):
+					syncEnv[m.Name] = m.Value
+				case len(env) < sshMaxEnvVars && sshEnvAllowed(m.Name):
+					env = append(env, m.Name+"="+m.Value)
+				}
 			}
 			_ = req.Reply(true, nil)
 
@@ -331,11 +420,10 @@ func (s *Server) handleSSHSessionChannel(ctx context.Context, runID uuid.UUID, p
 			}
 
 		case "shell":
-			if started {
-				_ = req.Reply(false, nil)
+			if !gate.mayDispatch(req, true) {
 				continue
 			}
-			started = true
+			gate.started = true
 			_ = req.Reply(true, nil)
 			bridgeDone = make(chan struct{})
 			sshGo(func() {
@@ -344,8 +432,7 @@ func (s *Server) handleSSHSessionChannel(ctx context.Context, runID uuid.UUID, p
 			})
 
 		case "exec":
-			if started {
-				_ = req.Reply(false, nil)
+			if !gate.mayDispatch(req, true) {
 				continue
 			}
 			var m sshExecReqMsg
@@ -353,7 +440,7 @@ func (s *Server) handleSSHSessionChannel(ctx context.Context, runID uuid.UUID, p
 				_ = req.Reply(false, nil)
 				continue
 			}
-			started = true
+			gate.started = true
 			_ = req.Reply(true, nil)
 			bridgeDone = make(chan struct{})
 			command := m.Command
@@ -363,21 +450,16 @@ func (s *Server) handleSSHSessionChannel(ctx context.Context, runID uuid.UUID, p
 			})
 
 		case "subsystem":
-			if started {
-				_ = req.Reply(false, nil)
+			bridge := gate.subsystemBridge(req, channel, syncEnv)
+			if bridge == nil {
 				continue
 			}
-			var m sshSubsystemMsg
-			if err := ssh.Unmarshal(req.Payload, &m); err != nil || m.Subsystem != "sftp" {
-				_ = req.Reply(false, nil)
-				continue
-			}
-			started = true
+			gate.started = true
 			_ = req.Reply(true, nil)
 			bridgeDone = make(chan struct{})
 			sshGo(func() {
 				defer close(bridgeDone)
-				s.bridgeSSHSFTP(chCtx, runID, principal, channel)
+				bridge()
 			})
 
 		default:
@@ -420,44 +502,44 @@ func (s *Server) bridgeSSHShell(ctx context.Context, runID uuid.UUID, principal 
 		sendChannelError(channel, msg)
 		return
 	}
-	// Do NOT seed the exec's console size while somebody else holds the PTY.
-	// tmux clamps a shared window to the SMALLEST attached client, and the
-	// driver passes AttachOptions straight into ExecCreateOptions.ConsoleSize —
-	// so an OBSERVER connecting from an 80x24 terminal shrank the holder's
-	// window the moment it attached, exactly once. sshShellPump already drops an
-	// observer's later resize frames for this reason; the initial attach was the
-	// one path that still got through.
-	//
-	// Geometry is decided AFTER registration, never at exec-create: the old
-	// advisory pre-check ("is someone holding?") raced in the arrive direction —
-	// two clients could both read nil and the loser's ExecCreate still clamped
-	// the winner's tmux window. Open with no size; the writer applies its real
-	// geometry via Resize once the registry has actually made it the writer.
-	opts := runner.AttachOptions{}
-	sess, err := s.cfg.Runner.Attach(ctx, run.SandboxRef, opts)
-	if err != nil {
-		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorHuman, principal, "session.attach",
-			runID.String(), "failure", mustJSON(map[string]any{"transport": "ssh", "error": err.Error()})))
-		sendChannelError(channel, "attach failed: "+err.Error())
+	// Door 4 of five (mask_manifest.go): the shell's recorded tail is masked
+	// against the run's corpus, which this server must be able to prove whole.
+	if !s.maskCovered(ctx, runID) {
+		s.auditUncovered(ctx, runID, types.ActorHuman, principal, "ssh.shell")
+		sendChannelError(channel, "wardyn: this server cannot prove this run's secrets are masked right now; the shell is refused")
 		return
 	}
-	defer sess.Close() // tears down ONLY the exec stream, never the sandbox.
-
-	s.recordAudit(ctx, s.auditEvent(&runID, types.ActorHuman, principal, "session.attach",
-		runID.String(), "success", mustJSON(map[string]any{"transport": "ssh", "cols": cols, "rows": rows})))
+	// The web lane's per-run session cap, shared with it (attach_slots.go): reserved before the
+	// recorder is built, held until finishRecording below has returned.
+	releaseSlot, ok := s.reserveAttachSlot(runID)
+	if !ok {
+		s.auditAttachSessionCap(ctx, run, types.ActorHuman, principal, map[string]any{"transport": "ssh"})
+		sendChannelError(channel, "wardyn: "+attachSessionCapMsg)
+		return
+	}
+	defer releaseSlot()
 
 	// See attach.go's newSessionRecorder doc for the full masking/limitations
 	// story (verbatim-only masking, output-direction-only, buffered-in-memory)
 	// — reused as-is; the "ssh-" prefix is the only thing distinguishing this
 	// call from the web terminal's.
 	sessionID := "ssh-" + uuid.New().String()
-	// The recorder gets the CLIENT's real geometry for its cast header even
-	// though the exec opened size-less — the header describes the viewer's
-	// terminal, not the exec-create parameters.
+	// The recorder gets the CLIENT's real geometry for its cast header.
 	castTee, finishRecording := s.newSessionRecorder(run, sessionID, runner.AttachOptions{Cols: cols, Rows: rows})
 
+	// pumpCtx ends the whole bridge: the exec being opened, the pump, the
+	// keepalive and the mask-fence watcher all hang off it.
 	pumpCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
+
+	// Use BaseCtx (daemon-lifetime), not ctx (the connection's, cancelled the
+	// instant it closes — exactly when the outcome and the detach are recorded)
+	// — see attach.go's identical FINDING comment on why the request/connection
+	// ctx drops these writes.
+	finishCtx := s.cfg.BaseCtx
+	if finishCtx == nil {
+		finishCtx = context.Background()
+	}
 
 	// THE SAME holder registry the web terminal uses (attach_holder.go), with
 	// source "ssh". Not optional: a CLI holder over the gateway is attached to
@@ -465,29 +547,46 @@ func (s *Server) bridgeSSHShell(ctx context.Context, runID uuid.UUID, principal 
 	// the browser confidently report "nobody is attached" while somebody is
 	// typing — and would let the run page silently start competing for the PTY,
 	// which is the whole failure this registry exists to end.
-	holder := &attachHolder{
-		principal: principal,
-		actorType: types.ActorHuman,
-		since:     s.cfg.Now().UTC(),
-		source:    attachSourceSSH,
-		onInput:   func() { _ = s.markPresent(ctx, runID, types.ActorHuman, principal, "presence") },
-		cols:      cols,
-		rows:      rows,
+	//
+	// Registration comes BEFORE the exec exists (attach_exec.go), the same order
+	// as the web lane: the role decides the attach options. A writer opens at the
+	// pty-req size; an observer opens with tmux's ignore-size flag at the
+	// writer's size, so it never resizes the writer's window. The old advisory
+	// pre-check ("is someone holding?") raced in the arrive direction — two
+	// clients could both read nil and the loser's exec still clamped the
+	// winner's tmux window.
+	var holder *attachHolder
+	holder = &attachHolder{
+		sandboxRef: run.SandboxRef,
+		principal:  principal,
+		actorType:  types.ActorHuman,
+		since:      s.cfg.Now().UTC(),
+		source:     attachSourceSSH,
+		onInput:    func() { _ = s.markPresent(ctx, runID, types.ActorHuman, principal, "presence") },
+		cols:       cols,
+		rows:       rows,
 		// Promotion: this channel just became the writer without reconnecting.
-		// The RESIZE is the act and the line is a courtesy, so the resize goes
-		// first — channel.Stderr() is the unbounded write that stranded the
-		// displace path (no context, no deadline, blocked on the peer's
-		// window), and a courtesy that can park forever must never sit in
-		// front of the one call that matters. An observer never resized the
-		// shared tmux window (that would clamp the writer's terminal), so the
-		// geometry it inherits is the departed writer's until it re-applies
-		// its own.
+		// Its exec is still the observer's, so a writer exec is opened at its own
+		// size first (the RESIZE is the act), and the line is a courtesy after
+		// it: channel.Stderr() is the unbounded write that stranded the displace
+		// path (no context, no deadline, blocked on the peer's window), and a
+		// courtesy that can park forever must never sit in front of the one call
+		// that matters. A writer-resize notice (readOnly=true) has nothing to
+		// say on this lane: the observer's PTY already follows the writer.
 		notify: func(readOnly bool, h *attachHolder) {
 			if readOnly {
 				return
 			}
-			if wcols, wrows := h.size(); wcols > 0 {
-				_ = sess.Resize(ctx, wcols, wrows)
+			if err := s.establishExec(pumpCtx, run, holder); err != nil {
+				if errors.Is(err, errAttachCancelled) {
+					return // evicted or gone meanwhile: its channel is closing by other means
+				}
+				slog.WarnContext(pumpCtx, "wardynd: promoted ssh attach could not open a writer exec", "run_id", runID, "err", err)
+				s.recordStreamAudit(finishCtx, run.SandboxRef, s.auditEvent(&runID, types.ActorHuman, principal, "session.attach",
+					runID.String(), "failure", mustJSON(map[string]any{"transport": "ssh", "state": "attaching", "error": err.Error(), "promotion": true})))
+				_, _ = fmt.Fprintln(channel.Stderr(), "wardyn: could not take over this terminal: "+err.Error())
+				cancel()
+				return
 			}
 			_, _ = fmt.Fprintln(channel.Stderr(), "wardyn: you now hold this terminal")
 		},
@@ -518,19 +617,23 @@ func (s *Server) bridgeSSHShell(ctx context.Context, runID uuid.UUID, principal 
 		},
 	}
 	readOnly, releaseHolder := s.registerAttachHolder(runID, holder)
-	if !readOnly && cols > 0 {
-		// We are the registered writer — apply the real geometry now.
-		// Best-effort: a failure costs a correct window size, not the session.
-		_ = sess.Resize(ctx, cols, rows)
-	}
 	// Deferred for the same reason as the web lane's: a panicking pump must
 	// never strand a phantom holder (see registerAttachHolder). releaseAttach
 	// also delivers the promotion this release may cause, on its own goroutine.
 	defer releaseAttach(releaseHolder)
+	// Tears down ONLY the exec stream, never the sandbox.
+	defer func() { _ = holder.mux.Close() }()
+
+	// The first of two session.attach rows (see handleAttachWS): registered, exec
+	// not yet open.
+	s.recordStreamAudit(finishCtx, run.SandboxRef, s.auditEvent(&runID, types.ActorHuman, principal, "session.attach",
+		runID.String(), "success", mustJSON(map[string]any{
+			"transport": "ssh", "cols": cols, "rows": rows, "state": "attaching", "read_only": readOnly,
+		})))
 	if readOnly {
 		// The holder object STAYS (holder.writable is the observer marker now);
-		// sshShellPump drops this client's keystrokes and window-changes while
-		// canWrite is false, and the same object flips on promotion.
+		// sshShellPump drops this client's keystrokes while canWrite is false, and
+		// the same object flips on promotion.
 		msg := "wardyn: read-only — another client holds this terminal"
 		if cur := s.attachHolderFor(runID); cur != nil {
 			msg = "wardyn: read-only — " + cur.principal + " (" + cur.source + ") holds this terminal; take it over from the run page"
@@ -538,24 +641,42 @@ func (s *Server) bridgeSSHShell(ctx context.Context, runID uuid.UUID, principal 
 		_, _ = fmt.Fprintln(channel.Stderr(), msg)
 	}
 
-	_ = s.cfg.Store.TouchRun(pumpCtx, runID)
-	go s.attachKeepalive(pumpCtx, runID)
+	// Started before the exec is opened, so a fence ends an attach in flight too.
+	maskFenced := s.endSSHOnMaskFence(pumpCtx, runID, channel, cancel)
 
-	closeReason := s.sshShellPump(pumpCtx, channel, sess, castTee, resizeCh, holder)
+	var closeReason string
+	attachErr := s.establishExec(pumpCtx, run, holder)
+	if attachErr != nil {
+		s.recordStreamAudit(finishCtx, run.SandboxRef, s.auditEvent(&runID, types.ActorHuman, principal, "session.attach",
+			runID.String(), "failure", mustJSON(map[string]any{"transport": "ssh", "state": "attaching", "error": attachErr.Error()})))
+		if !errors.Is(attachErr, errAttachCancelled) {
+			sendChannelError(channel, "attach failed: "+attachErr.Error())
+		}
+		closeReason = "attach failed"
+	} else {
+		s.recordStreamAudit(finishCtx, run.SandboxRef, s.auditEvent(&runID, types.ActorHuman, principal, "session.attach",
+			runID.String(), "success", mustJSON(map[string]any{
+				"transport": "ssh", "state": "ready", "read_only": !holder.writable.Load(),
+			})))
+		_ = s.cfg.Store.TouchRun(pumpCtx, runID)
+		go s.attachKeepalive(pumpCtx, runID)
+		closeReason = s.sshShellPump(pumpCtx, runID, channel, castTee, resizeCh, holder)
+	}
 	cancel()
+	if maskFenced() {
+		closeReason = maskFencedReason
+	}
 
-	// Use BaseCtx (daemon-lifetime), not ctx (the connection's, cancelled the
-	// instant it closes — exactly when this runs) — see attach.go's identical
-	// FINDING comment on why the request/connection ctx drops this write.
-	finishCtx := s.cfg.BaseCtx
 	finishRecording(finishCtx, types.ActorHuman, principal)
 
 	// read_only is the LIVE flag (see attach.go's twin): a channel that
 	// arrived as an observer and was promoted mid-session detaches as a writer.
-	s.recordAudit(finishCtx, s.auditEvent(&runID, types.ActorHuman, principal, "session.detach",
+	s.recordStreamAudit(finishCtx, run.SandboxRef, s.auditEvent(&runID, types.ActorHuman, principal, "session.detach",
 		runID.String(), "success", mustJSON(map[string]any{"transport": "ssh", "reason": closeReason, "read_only": !holder.writable.Load()})))
 
-	sendExitStatus(channel, 0)
+	if attachErr == nil {
+		sendExitStatus(channel, 0)
+	}
 }
 
 // sshShellPump mirrors attach.go's attachPump over an ssh.Channel instead of
@@ -567,101 +688,155 @@ func (s *Server) bridgeSSHShell(ctx context.Context, runID uuid.UUID, principal 
 //
 // holder mirrors attachPump's: this channel's registry entry, whose canWrite
 // says whether it may drive the PTY right now. A read-only observer's
-// keystrokes and window-changes are both dropped here, server-side (an
-// observer's window would otherwise clamp the holder's terminal — tmux sizes a
-// shared session to its smallest client). The channel
-// is still READ from while read-only, because that read is how this pump learns
-// the client hung up.
-func (s *Server) sshShellPump(ctx context.Context, channel ssh.Channel, sess runner.Session, castTee io.Writer, resizeCh <-chan sshWindowChangeMsg, holder *attachHolder) string {
+// keystrokes are dropped here, server-side, and its window-change is kept as
+// its own geometry (for its promotion) without ever reaching the shared tmux
+// window: tmux sizes a shared window to its latest client, which is why an
+// observer attaches with ignore-size and follows the writer's size instead. The
+// channel is still READ from while read-only, because that read is how this
+// pump learns the client hung up.
+func (s *Server) sshShellPump(ctx context.Context, runID uuid.UUID, channel ssh.Channel, castTee io.Writer, resizeCh <-chan sshWindowChangeMsg, holder *attachHolder) string {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	reasonCh := make(chan string, 2)
-
-	// Session -> channel (+ cast tee).
-	go func() {
-		buf := make([]byte, attachReadBuf)
-		for {
-			n, rerr := sess.Read(buf)
-			if n > 0 {
-				if _, werr := channel.Write(buf[:n]); werr != nil {
-					reasonCh <- "client write failed"
-					cancel()
-					return
-				}
-				if castTee != nil {
-					_, _ = castTee.Write(buf[:n])
-				}
-			}
-			if rerr != nil {
-				if errors.Is(rerr, io.EOF) {
-					reasonCh <- "shell exited"
-				} else {
-					reasonCh <- "session read error"
-				}
-				cancel()
-				return
-			}
-		}
-	}()
-
-	// channel -> Session (keystrokes).
-	go func() {
-		buf := make([]byte, attachReadBuf)
-		for {
-			n, rerr := channel.Read(buf)
-			if n > 0 {
-				// Same eviction-aware write path as the web pump — one gate for
-				// both transports (attach_holder.go writeGated).
-				if werr := holder.writeGated(sess, buf[:n]); werr != nil {
-					reasonCh <- "session write failed"
-					cancel()
-					return
-				}
-			}
-			if rerr != nil {
-				reasonCh <- "client closed"
-				cancel()
-				return
-			}
-		}
-	}()
-
-	// Resize.
-	go func() {
-		for {
-			select {
-			case m, ok := <-resizeCh:
-				if !ok {
-					return
-				}
-				// canWrite, not `holder == nil`: an observer never resizes the
-				// holder's shared tmux window, and neither does a holder whose
-				// authority a take-over already revoked. Gating on nil alone let
-				// an EVICTED ssh client keep resizing the window under the new
-				// holder until its channel died — the web twin (attach.go's
-				// resize branch) has always gated on canWrite; this was the
-				// asymmetry.
-				if !holder.canWrite() {
-					continue
-				}
-				cols, rows := uint16(m.Columns), uint16(m.Rows)
-				_ = sess.Resize(ctx, cols, rows)
-				// Keep the registry's geometry LIVE — the pty-req value is stale
-				// the moment the operator resizes their terminal.
-				holder.setSize(cols, rows)
-			case <-ctx.Done():
-				return
-			}
-		}
-	}()
+	p := &sshPumpState{
+		s: s, ctx: ctx, cancel: cancel, runID: runID, channel: channel, castTee: castTee, holder: holder,
+		// The holder's mux follows its current exec, so a promotion's re-attach
+		// replaces the exec under these goroutines.
+		sess:     &holder.mux,
+		reasonC:  make(chan string, 2),
+		resizeCh: resizeCh,
+	}
+	go p.output()
+	go p.input()
+	go p.resize()
 
 	<-ctx.Done()
 	select {
-	case reason := <-reasonCh:
+	case reason := <-p.reasonC:
 		return reason
 	default:
 		return "context cancelled"
 	}
+}
+
+// sshPumpState is one SSH shell's relay: the goroutines sshShellPump starts,
+// and what they share.
+type sshPumpState struct {
+	s        *Server
+	ctx      context.Context
+	cancel   context.CancelFunc
+	runID    uuid.UUID
+	channel  ssh.Channel
+	castTee  io.Writer
+	holder   *attachHolder
+	sess     runner.Session
+	reasonC  chan string
+	resizeCh <-chan sshWindowChangeMsg
+}
+
+func (p *sshPumpState) end(reason string) {
+	select {
+	case p.reasonC <- reason:
+	default:
+	}
+	p.cancel()
+}
+
+// output is Session -> channel (+ cast tee).
+func (p *sshPumpState) output() {
+	buf := make([]byte, attachReadBuf)
+	for {
+		n, rerr := p.sess.Read(buf)
+		if n > 0 {
+			if _, werr := p.channel.Write(buf[:n]); werr != nil {
+				p.end("client write failed")
+				return
+			}
+			if p.castTee != nil {
+				_, _ = p.castTee.Write(buf[:n])
+			}
+		}
+		if rerr != nil {
+			if errors.Is(rerr, io.EOF) {
+				p.end("shell exited")
+			} else {
+				p.end("session read error")
+			}
+			return
+		}
+	}
+}
+
+// input is channel -> Session (keystrokes).
+func (p *sshPumpState) input() {
+	buf := make([]byte, attachReadBuf)
+	for {
+		n, rerr := p.channel.Read(buf)
+		if n > 0 {
+			// Held while a promotion replaces the exec: nothing is written until
+			// it matches the role, and writeGated re-tests authority.
+			if !p.holder.ready.wait(p.ctx) {
+				return
+			}
+			// Same eviction-aware write path as the web pump — one gate for both
+			// transports (attach_holder.go writeGated).
+			if werr := p.holder.writeGated(p.sess, buf[:n]); werr != nil {
+				p.end("session write failed")
+				return
+			}
+		}
+		if rerr != nil {
+			p.end("client closed")
+			return
+		}
+	}
+}
+
+// resize applies window-changes.
+func (p *sshPumpState) resize() {
+	for {
+		select {
+		case m, ok := <-p.resizeCh:
+			if !ok {
+				return
+			}
+			if !p.applyResize(uint16(m.Columns), uint16(m.Rows)) {
+				return
+			}
+		case <-p.ctx.Done():
+			return
+		}
+	}
+}
+
+// applyResize handles one window-change and reports false when the pump ended.
+func (p *sshPumpState) applyResize(cols, rows uint16) bool {
+	if cols == 0 || rows == 0 {
+		return true
+	}
+	// Keep the registry's geometry LIVE — the pty-req value is stale the moment
+	// the operator resizes their terminal. For an observer it is its OWN
+	// geometry, which its promotion opens a writer exec at.
+	p.holder.setSize(cols, rows)
+	// canWrite, not `holder == nil`: an observer's size never reaches the shared
+	// tmux window, and neither does a holder whose authority a take-over already
+	// revoked. Gating on nil alone let an EVICTED ssh client keep resizing the
+	// window under the new holder until its channel died — the web twin
+	// (attach_pump.go's reader) gates on canWrite too.
+	if !p.holder.canWrite() {
+		return true
+	}
+	if !p.holder.ready.wait(p.ctx) {
+		return false
+	}
+	if !p.holder.canWrite() {
+		return true
+	}
+	if err := p.sess.Resize(p.ctx, cols, rows); err != nil {
+		slog.WarnContext(p.ctx, "wardynd: ssh attach resize failed", "run_id", p.runID, "err", err)
+		return true
+	}
+	p.s.fanoutWriterResize(p.ctx, p.runID, p.holder, cols, rows)
+	return true
 }
 
 // bridgeSSHExec runs command through /bin/sh -c inside the sandbox via
@@ -685,12 +860,12 @@ func (s *Server) bridgeSSHExec(ctx context.Context, runID uuid.UUID, principal s
 		Env:  env,
 	})
 	if err != nil {
-		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorHuman, principal, "ssh.exec",
+		s.recordStreamAudit(ctx, run.SandboxRef, s.auditEvent(&runID, types.ActorHuman, principal, "ssh.exec",
 			runID.String(), "failure", mustJSON(map[string]any{"argv": command, "error": err.Error()})))
 		sendChannelError(channel, sshExecStreamErrorMessage(err))
 		return
 	}
-	exit, _ := s.sshBridgeExecSession(ctx, runID, principal, channel, sess, true)
+	exit, _, _ := s.sshBridgeExecSession(ctx, runID, principal, channel, sess, true)
 	// Every trailing write in this file that follows
 	// sshBridgeExecSession (here, bridgeSSHSFTP, handleSSHDirectTCPIP) must
 	// run on s.cfg.BaseCtx, never ctx — handleSSHConn's connCtx, cancelled the
@@ -706,38 +881,8 @@ func (s *Server) bridgeSSHExec(ctx context.Context, runID uuid.UUID, principal s
 	// session.detach write above / attach.go's identical seam: use
 	// s.cfg.BaseCtx (daemon-lifetime) for a write that must outlive the
 	// connection it is reporting the end of.
-	s.recordAudit(s.cfg.BaseCtx, s.auditEvent(&runID, types.ActorHuman, principal, "ssh.exec",
+	s.recordStreamAudit(s.cfg.BaseCtx, run.SandboxRef, s.auditEvent(&runID, types.ActorHuman, principal, "ssh.exec",
 		runID.String(), "success", mustJSON(map[string]any{"argv": command, "exit": exit})))
-}
-
-// bridgeSSHSFTP runs the sandbox's own sftp-server as the subsystem's backing
-// process — no SFTP protocol reimplementation. A BYOI image without the
-// binary surfaces as a clean channel error naming the image contract (never
-// a hang): ErrExecStreamUnsupported maps to the shared honest message every
-// primitive here uses, and any other ExecStream launch failure names the
-// missing path directly.
-func (s *Server) bridgeSSHSFTP(ctx context.Context, runID uuid.UUID, principal string, channel ssh.Channel) {
-	run, msg := s.sshFreshRun(ctx, runID, principal)
-	if msg != "" {
-		sendChannelError(channel, msg)
-		return
-	}
-	sess, err := s.cfg.Runner.ExecStream(ctx, run.SandboxRef, runner.ExecSpec{Argv: []string{sftpServerPath, "-e"}})
-	if err != nil {
-		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorHuman, principal, "ssh.sftp.transfer",
-			runID.String(), "failure", mustJSON(map[string]any{"error": err.Error()})))
-		reason := sshExecStreamErrorMessage(err)
-		if !errors.Is(err, runner.ErrExecStreamUnsupported) {
-			reason = "sftp unavailable: the sandbox image has no " + sftpServerPath + " (" + err.Error() + ")"
-		}
-		sendChannelError(channel, reason)
-		return
-	}
-	_, bytesOut := s.sshBridgeExecSession(ctx, runID, principal, channel, sess, true)
-	// BaseCtx, not ctx — see bridgeSSHExec's identical trailing-write FINDING
-	// comment above (same shape, same connection-teardown race, same fix).
-	s.recordAudit(s.cfg.BaseCtx, s.auditEvent(&runID, types.ActorHuman, principal, "ssh.sftp.transfer",
-		runID.String(), "success", mustJSON(map[string]any{"bytes": bytesOut})))
 }
 
 // handleSSHDirectTCPIP implements `-L` local forwarding: ExecStream of `socat
@@ -773,7 +918,7 @@ func (s *Server) handleSSHDirectTCPIP(ctx context.Context, runID uuid.UUID, prin
 		Argv: []string{"socat", "-", fmt.Sprintf("TCP:127.0.0.1:%d", m.DestPort)},
 	})
 	if err != nil {
-		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorHuman, principal, "ssh.forward",
+		s.recordStreamAudit(ctx, run.SandboxRef, s.auditEvent(&runID, types.ActorHuman, principal, "ssh.forward",
 			fmt.Sprintf("127.0.0.1:%d", m.DestPort), "failure",
 			mustJSON(map[string]any{"port": m.DestPort, "error": err.Error()})))
 		_ = newCh.Reject(ssh.ConnectionFailed, sshExecStreamErrorMessage(err))
@@ -790,13 +935,13 @@ func (s *Server) handleSSHDirectTCPIP(ctx context.Context, runID uuid.UUID, prin
 	defer channel.Close()
 	go ssh.DiscardRequests(reqs)
 
-	_, bytesOut := s.sshBridgeExecSession(ctx, runID, principal, channel, sess, false)
+	_, _, bytesOut := s.sshBridgeExecSession(ctx, runID, principal, channel, sess, false)
 	// BaseCtx, not ctx — see bridgeSSHExec's identical trailing-write FINDING
 	// comment (same shape, same connection-teardown race, same fix). THIS is
 	// the exact call the live e2e's -L forward step caught losing its
 	// ssh.forward row to a killed session (scripts/run-e2e-ssh.sh, step 5's
 	// comment); TestSSHGateway_ForwardAuditSurvivesKill pins it.
-	s.recordAudit(s.cfg.BaseCtx, s.auditEvent(&runID, types.ActorHuman, principal, "ssh.forward",
+	s.recordStreamAudit(s.cfg.BaseCtx, run.SandboxRef, s.auditEvent(&runID, types.ActorHuman, principal, "ssh.forward",
 		fmt.Sprintf("127.0.0.1:%d", m.DestPort), "success",
 		mustJSON(map[string]any{"port": m.DestPort, "bytes": bytesOut})))
 }

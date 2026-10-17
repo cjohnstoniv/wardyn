@@ -5,63 +5,26 @@
 
 import { describe, it, expect } from "vitest";
 import { baseStatus } from "../../lib/test-fixtures";
-import { T } from "../integrations";
-import { aiServerId, deriveIntegrations } from "./integrations";
+import { deriveIntegrations } from "./integrations";
 import type { SiteConfig } from "../types";
-
-// The Add dialog resolves which wire row to adopt/PUT via this helper,
-// BEFORE its first reload can hand it a derived IntegrationRow of its own —
-// pinned here as the single source of truth deriveAiRows' own serverId
-// values are drawn from, so the two can't drift apart.
-describe("aiServerId", () => {
-  it("matches deriveAiRows' own serverId for every type that has one", () => {
-    expect(aiServerId("anthropic_api_key")).toBe("anthropic_api_key");
-    expect(aiServerId("anthropic_subscription", true)).toBe("anthropic_subscription:resident_host");
-    expect(aiServerId("anthropic_subscription", false)).toBe("anthropic_subscription:managed");
-    expect(aiServerId("bedrock")).toBe("bedrock");
-    expect(aiServerId("openai_api_key")).toBe("openai_api_key");
-  });
-
-  // Every AiType now maps to a server id. azure_openai has neither a
-  // site-config field nor a SetupCheck id — it was removed in 0.5.
-});
 
 describe("deriveIntegrations — empty inputs", () => {
   it("derives nothing when nothing is configured", () => {
     const data = deriveIntegrations(baseStatus(), null, []);
-    expect(data.ai).toHaveLength(0);
     expect(data.scm).toHaveLength(0);
   });
 });
 
-describe("deriveIntegrations — AI providers", () => {
-  it("anthropic-api-key -> a row whose Codex chip is the muted, verbatim-reason fact and Claude Code/Wardyn features carry '· default'", () => {
-    const status = baseStatus({ secrets: { present: ["anthropic-api-key"], github_app: false } });
-    const [row] = deriveIntegrations(status, null, ["anthropic-api-key"]).ai;
-    expect(row.typeLabel).toBe("anthropic · api key");
-    expect(row.residency).toBe("proxy_injected");
-    const codex = row.chips.find((c) => c.label === "Codex CLI · n/a")!;
-    expect(codex.muted).toBe(true);
-    expect(codex.tooltip).toBe(T.X_KEY_CODEX);
-    expect(row.chips.find((c) => c.label === "Claude Code · default")).toBeTruthy();
-    expect(row.chips.find((c) => c.label === "Wardyn features · default")).toBeTruthy();
-    expect(row.secretNames).toEqual(["anthropic-api-key"]);
-  });
-
-  // Azure OpenAI is gone as a model provider. It only ever powered Wardyn's own
-  // features (the AI Run Composer, deleted), and harness.go is explicit that
-  // neither agent tool can be pointed at an Azure deployment — so a row for it
-  // was a connected-looking credential wired to nothing.
-  it("azure_openai no longer derives a row, even with its conventional secret stored", () => {
-    const rows = deriveIntegrations(baseStatus(), null, ["azure-openai-key"]).ai;
-    expect(rows).toHaveLength(0);
-  });
-
-  // The stored secret is NOT deleted by this — an operator's existing key stays
-  // in the secret store, inert, and is still visible/removable on /secrets.
-  it("an azure key alongside a real provider leaves the real one untouched", () => {
-    const rows = deriveIntegrations(baseStatus(), null, ["azure-openai-key", "anthropic-api-key"]).ai;
-    expect(rows.map((r) => r.aiType)).toEqual(["anthropic_api_key"]);
+// The retired model-key lanes: an operator Anthropic/OpenAI key (or an Azure
+// key) left in the secret store is inert — a model credential comes only from a
+// model provider (#548) — so it derives no row at all, and the derivation
+// carries no AI half to put one in.
+describe("deriveIntegrations — no AI rows", () => {
+  it("stale model-key secrets derive nothing, and the result has no `ai` key", () => {
+    const names = ["anthropic-api-key", "openai-api-key", "azure-openai-key"];
+    const data = deriveIntegrations(baseStatus({ secrets: { present: names, github_app: false } }), null, names);
+    expect(Object.keys(data)).toEqual(["scm"]);
+    expect(data.scm).toHaveLength(0);
   });
 });
 
@@ -160,8 +123,8 @@ describe("deriveIntegrations — network topology is not an integration", () => 
       ],
     };
     const data = deriveIntegrations(baseStatus(), siteConfig, []);
-    expect([...data.ai, ...data.scm]).toHaveLength(0);
-    expect(Object.keys(data).sort()).toEqual(["ai", "scm"]);
+    expect(data.scm).toHaveLength(0);
+    expect(Object.keys(data)).toEqual(["scm"]);
   });
 
   it("the legacy artifact_overrides map derives nothing either", () => {
@@ -169,7 +132,7 @@ describe("deriveIntegrations — network topology is not an integration", () => 
       artifact_overrides: { npm: { base_url: "https://artifactory.corp.internal/api/npm/npm-remote" } },
     };
     const data = deriveIntegrations(baseStatus(), siteConfig, []);
-    expect([...data.ai, ...data.scm]).toHaveLength(0);
+    expect(data.scm).toHaveLength(0);
   });
 });
 

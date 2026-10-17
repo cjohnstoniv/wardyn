@@ -78,6 +78,9 @@ func wireWorkspaceSource(run *types.AgentRun, policy *types.RunPolicySpec, ws ty
 				return nil, nil, fmt.Errorf("%w: workspace %s source target: %v", errWorkspaceSourceTarget, ws.ID, verr)
 			}
 		}
+		if src.Type == types.WorkspaceSourceTypeRepo && !repoFieldSafe(src.Target) {
+			return nil, nil, fmt.Errorf("%w: workspace %s source target: "+repoField400Charset, errWorkspaceSourceTarget, ws.ID, "target")
+		}
 		switch src.Type {
 		case types.WorkspaceSourceTypeRepo:
 			if run.Repo == "" {
@@ -484,7 +487,9 @@ func outcomeBool(ok bool) string {
 
 // mintedSecretNames resolves minted grant ids to operator-meaningful names for
 // the "proven used" render: an api_key grant's secret_name, otherwise the grant
-// kind. Deduped, sorted (stable render), never values.
+// kind. Deduped, sorted (stable render), never values. A `shared` grant is
+// shown by its kind: the result is read by the workspace's owner, and what an
+// organisation's secret is called is the operator's.
 func (s *Server) mintedSecretNames(ctx context.Context, runID uuid.UUID, minted []uuid.UUID) []string {
 	if len(minted) == 0 {
 		return nil
@@ -504,7 +509,7 @@ func (s *Server) mintedSecretNames(ctx context.Context, runID uuid.UUID, minted 
 			continue
 		}
 		name := string(spec.Kind)
-		if spec.Kind == types.GrantAPIKey {
+		if spec.Kind == types.GrantAPIKey && !apiKeyScopeShared(spec.Scope) {
 			var scope struct {
 				SecretName string `json:"secret_name"`
 			}

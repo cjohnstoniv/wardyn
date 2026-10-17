@@ -30,8 +30,23 @@ const (
 	mpBRPortal      = "your AWS sign-in is for a different AWS access portal than the one it names"
 	mpBRRenewing    = "renewing your AWS sign-in did not complete, because AWS did not answer the token request"
 	mpBRRemedyRetry = "your sign-in is still good; launch again in a moment."
-	mpBRReadFailed  = "Wardyn couldn't read your AWS credential for model provider %s just now — nothing was started. Try again in a moment."
+	// awsSSORefreshRefusedSentence's case: %s is the AWS code and its description.
+	mpBRRefused = "AWS refused to renew your AWS sign-in (AWS answered %s)"
+	// The two 503s of a create-time renewal (awsSSORefreshStoreUnwritableSentence,
+	// awsSSORefreshPersistFailedSentence): no run row exists for either.
+	mpBRStoreUnwritable = "Wardyn's secret store did not accept a write, so your AWS sign-in was not renewed"
+	mpBRPersistFailed   = "your AWS sign-in was renewed but could not be saved, so it must be signed in again"
+	mpBRReadFailed      = "Wardyn couldn't read your AWS credential for model provider %s just now — nothing was started. Try again in a moment."
+	mpBRMaskFailed      = "Wardyn couldn't record your AWS credential for model provider %s for masking just now — nothing was started. Try again in a moment."
+	// Review's one note on an expired but renewable session (renewAtLaunch).
+	mpBRRenewAtLaunch = "Your AWS session for model provider %s has expired; your sign-in will be renewed at launch."
 )
+
+// providerUnavailable is a liveness error that is a 503 with its own sentence,
+// rather than providerReadFailed's: a transient store failure, no door.
+type providerUnavailable struct{ msg string }
+
+func (e providerUnavailable) Error() string { return e.msg }
 
 // awsScope is the credential scope of a chosen Bedrock provider: always the
 // run owner's own namespace, under the provider's UID-keyed names.
@@ -87,9 +102,10 @@ func sameStartURL(a, b string) bool {
 // refresh allows (dispatch alone: a dry run never spends a one-use refresh
 // token, and an expired-but-renewable session reads live there). A refusal a
 // fresh sign-in or a stored key repairs — no key, not signed in, a session for
-// another pinned account/role or another access portal — is a credential one
-// (connectDenial); an install with no store, the admin token, a provider with
-// no region or model, and a renewal AWS did not answer are not. A store
+// another pinned account/role or another access portal, a renewal AWS refused —
+// is a credential one (connectDenial); an install with no store, the admin
+// token, a provider with no region or model, and a renewal AWS did not answer
+// are not. A store
 // failure is returned, never read as "not connected".
 func (s *Server) providerBedrockRefusal(ctx context.Context, p types.ModelProvider, agent, owner string, refresh bool) (awsSSOBlob, providerDenial, error) {
 	refuse := func(d providerDenial) (awsSSOBlob, providerDenial, error) { return awsSSOBlob{}, d, nil }
@@ -113,6 +129,10 @@ func (s *Server) providerBedrockRefusal(ctx context.Context, p types.ModelProvid
 		}
 		return awsSSOBlob{}, providerDenial{}, nil
 	}
+	var baseline awsSSORenewalBaseline
+	if refresh && createRenewal(ctx) {
+		baseline = s.readAWSSORenewalBaseline(ctx, scope)
+	}
 	blob, found, err := s.readAWSSSOBlob(ctx, scope)
 	if err != nil {
 		return awsSSOBlob{}, providerDenial{}, err
@@ -129,13 +149,26 @@ func (s *Server) providerBedrockRefusal(ctx context.Context, p types.ModelProvid
 		return refuse(connectDenial(p.ID, mpBRPortal))
 	}
 	if refresh {
+		rctx := context.WithValue(ctx, awsSSORenewalBaselineKey{scope}, baseline)
 		var failure string
-		if blob, failure = s.refreshAWSSSOBlob(ctx, scope, blob); failure != "" {
-			if failure == awsSSORefreshSpentSentence {
+		if blob, failure = s.refreshAWSSSOBlob(rctx, scope, blob); failure != "" {
+			switch failure {
+			case awsSSORefreshSpentSentence:
 				return refuse(connectDenial(p.ID, mpBRNotSignedIn))
+			case awsSSORefreshStoreUnwritableSentence:
+				return awsSSOBlob{}, providerDenial{}, providerUnavailable{fmt.Sprintf(mpRunRefusal, p.ID, mpBRStoreUnwritable, mpBRRemedyRetry)}
+			case awsSSORefreshPersistFailedSentence:
+				return awsSSOBlob{}, providerDenial{}, providerUnavailable{fmt.Sprintf(mpRunRefusal, p.ID, mpBRPersistFailed, mpRunRemedySignIn)}
+			}
+			if detail, refused := strings.CutPrefix(failure, awsSSORefreshRefusedSentence); refused {
+				return refuse(connectDenial(p.ID, fmt.Sprintf(mpBRRefused, detail)))
 			}
 			return refuse(stateDenial(p.ID, mpBRRenewing, mpBRRemedyRetry))
 		}
+	}
+	// A session whose last renewal AWS refused reads the same at Review as at dispatch.
+	if detail, refused := s.awsSSORefusedFor(blob); refused && blob.expired(s.cfg.Now()) {
+		return refuse(connectDenial(p.ID, fmt.Sprintf(mpBRRefused, detail)))
 	}
 	if now := s.cfg.Now(); blob.expired(now) && (refresh || !blob.renewable(now)) {
 		return refuse(connectDenial(p.ID, mpBRNotSignedIn))
@@ -184,7 +217,7 @@ func (s *Server) providerBedrockTransport(ctx context.Context, run types.AgentRu
 		env[envBedrockBearer] = "wardyn-proxy-injected"
 		auth = bedrockAuth{env: env, egressHosts: hosts, bearer: true}
 	} else {
-		auth = s.bedrockSSOAuth(blob, c.awsScope(), env, hosts)
+		auth = s.bedrockSSOAuth(ctx, run.ID, blob, c.awsScope(), env, hosts)
 	}
 	auth.ready, auth.region, auth.model = true, b.Region, model
 	auth.runtimeHost, auth.runtimePort = providerBedrockRuntimeHost(mp), redirectPort(b.BaseURL)

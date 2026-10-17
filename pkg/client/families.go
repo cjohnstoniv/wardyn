@@ -9,8 +9,10 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"reflect"
+	"slices"
 	"strconv"
+	"strings"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -114,6 +116,38 @@ func (c *Client) ScanWorkspace(ctx context.Context, id uuid.UUID) (json.RawMessa
 	return out, err
 }
 
+// WorkspaceBuild is one workspace's image-build view (GET/POST /api/v1/workspaces/{id}/build). Record is
+// present only while the workspace's build record is current; Reproducible false reads "not reproducible".
+type WorkspaceBuild struct {
+	State        string      `json:"state"`
+	Image        string      `json:"image,omitempty"`
+	Detail       string      `json:"detail,omitempty"`
+	StartedAt    *time.Time  `json:"started_at,omitempty"`
+	Log          []string    `json:"log,omitempty"`
+	Record       *ImageBuild `json:"record,omitempty"`
+	RecordSHA256 string      `json:"record_sha256,omitempty"`
+	Reproducible *bool       `json:"reproducible,omitempty"`
+}
+
+// GetWorkspaceBuild reads a workspace's image-build state. GET /api/v1/workspaces/{id}/build.
+func (c *Client) GetWorkspaceBuild(ctx context.Context, id uuid.UUID) (WorkspaceBuild, error) {
+	var out WorkspaceBuild
+	err := c.do(ctx, http.MethodGet, "/api/v1/workspaces/"+id.String()+"/build", nil, &out)
+	return out, err
+}
+
+// BuildWorkspace starts the workspace's image build (202 while it runs, 200 when there is nothing to do);
+// refresh rebuilds from fresh inputs even when an image is kept. POST /api/v1/workspaces/{id}/build.
+func (c *Client) BuildWorkspace(ctx context.Context, id uuid.UUID, refresh bool) (WorkspaceBuild, error) {
+	var body any // nil sends no body; a typed nil would send "null"
+	if refresh {
+		body = map[string]bool{"refresh": true}
+	}
+	var out WorkspaceBuild
+	err := c.do(ctx, http.MethodPost, "/api/v1/workspaces/"+id.String()+"/build", body, &out)
+	return out, err
+}
+
 // ── Sources (tier 1: the shared library) ────────────────────────────────────
 
 // SourceRequest is the body for POST /api/v1/sources — one repo/dir configured
@@ -213,17 +247,122 @@ func (c *Client) GetSiteConfig(ctx context.Context) (types.SiteConfig, error) {
 // ever stored (PLATFORM-API-5). Stripped here, once, so no caller has to
 // remember to (mirrors ui/src/app/lib/api/health.ts's identical fix on the
 // TS side).
+//
+// Runners is stripped the same way: runners.enabled has its own audited super-admin
+// route (SetRunnersEnabled), and the server refuses a document that names a value
+// other than the stored one, which a captured baseline applied after a reset, or a
+// managed file re-applied on every boot, would otherwise be.
+//
+// The egress baseline is NOT stripped: a body that changes it is refused 400
+// site_config_egress_via_own_route, because only PUT /governance/egress-baseline may change it.
+// PutSiteConfigResult is the one that drops the baseline, for restoring a captured document.
 func (c *Client) PutSiteConfig(ctx context.Context, cfg types.SiteConfig) (
 	out types.SiteConfig, danglingSecretRefs []string, onboardingMarkIgnored bool, err error,
 ) {
 	cfg.Integrations = nil
-	var resp struct {
-		types.SiteConfig
-		DanglingSecretRefs           []string `json:"dangling_secret_refs,omitempty"`
-		OnboardingCompletedAtIgnored bool     `json:"onboarding_completed_at_ignored,omitempty"`
+	cfg.Runners = nil
+	var res SiteConfigPutResult
+	err = c.do(ctx, http.MethodPut, "/api/v1/site-config", cfg, &res)
+	return res.SiteConfig, res.DanglingSecretRefs, res.OnboardingCompletedAtIgnored, err
+}
+
+// SiteConfigPutResult is PUT /site-config's answer: the stored document plus
+// the write's advisory signals. A field is added here rather than a return
+// value to PutSiteConfig, whose signature is public.
+type SiteConfigPutResult struct {
+	types.SiteConfig
+	DanglingSecretRefs           []string `json:"dangling_secret_refs,omitempty"`
+	OnboardingCompletedAtIgnored bool     `json:"onboarding_completed_at_ignored,omitempty"`
+	// BrandingLogoPending (#1215): branding.logo_path was valid but not attached,
+	// because the console has no branding record yet. Apply again after saving
+	// the Branding card.
+	BrandingLogoPending bool `json:"branding_logo_pending,omitempty"`
+	// EgressBaselineIgnored is set by the SDK, not the server: the document named an egress baseline
+	// (egress.baseline_hosts, or a baseline mark on an internal host) that differs from the stored
+	// one, and PutSiteConfigResult did not send it. A document that names no egress block is never
+	// reported (an older file is silent about the baseline). Only PUT /governance/egress-baseline writes it.
+	EgressBaselineIgnored bool `json:"-"`
+	// ModelProviderWarnings are advisories on the model_providers block, such as an azure_foundry
+	// endpoint that resolves to a private address no internal_hosts entry covers.
+	ModelProviderWarnings []string `json:"model_provider_warnings,omitempty"`
+}
+
+// PutSiteConfigResult is PutSiteConfig with every advisory signal, including
+// the ones added after its signature was fixed. PUT /api/v1/site-config.
+//
+// The egress baseline is stripped the way Integrations is: egress and the baseline mark on each
+// internal_hosts entry are sent as nothing, and the server carries the stored ones forward. It
+// refuses a body that changes the baseline (only PUT /governance/egress-baseline may), so a
+// document captured before a reset, or before the security tier moved the baseline, would
+// otherwise be refused whole. The server's refusal stays for PutSiteConfig and every other caller;
+// EgressBaselineIgnored reports a baseline in cfg that the stored one does not match.
+func (c *Client) PutSiteConfigResult(ctx context.Context, cfg types.SiteConfig) (SiteConfigPutResult, error) {
+	sent := cfg
+	cfg.Integrations = nil
+	cfg.Runners = nil
+	cfg.Egress = nil
+	cfg.InternalHosts = slices.Clone(cfg.InternalHosts)
+	for i := range cfg.InternalHosts {
+		cfg.InternalHosts[i].Baseline = false
 	}
-	err = c.do(ctx, http.MethodPut, "/api/v1/site-config", cfg, &resp)
-	return resp.SiteConfig, resp.DanglingSecretRefs, resp.OnboardingCompletedAtIgnored, err
+	var resp SiteConfigPutResult
+	err := c.do(ctx, http.MethodPut, "/api/v1/site-config", cfg, &resp)
+	if err == nil {
+		resp.EgressBaselineIgnored = baselineAsserted(sent, resp.SiteConfig)
+	}
+	return resp, err
+}
+
+// baselineAsserted reports whether sent asserts an egress baseline that stored does not hold: an egress
+// block whose hosts differ, or a baseline mark on a suffix stored has not marked. A document silent
+// about the baseline (no egress block, no marks), as a pre-0.9 file is, asserts nothing.
+func baselineAsserted(sent, stored types.SiteConfig) bool {
+	hosts := func(sc types.SiteConfig) []string {
+		if sc.Egress == nil {
+			return nil
+		}
+		return normalizedHosts(sc.Egress.BaselineHosts)
+	}
+	if sent.Egress != nil && !slices.Equal(hosts(sent), hosts(stored)) {
+		return true
+	}
+	marked := map[string]bool{}
+	for _, h := range stored.InternalHosts {
+		if h.Baseline {
+			marked[normalizedHost(h.HostSuffix)] = true
+		}
+	}
+	for _, h := range sent.InternalHosts {
+		if h.Baseline && !marked[normalizedHost(h.HostSuffix)] {
+			return true
+		}
+	}
+	return false
+}
+
+// normalizedHost lowercases a host name and drops a trailing dot, as the server does before comparing.
+func normalizedHost(h string) string {
+	return strings.TrimSuffix(strings.ToLower(strings.TrimSpace(h)), ".")
+}
+
+// normalizedHosts is the sorted, de-duplicated set of normalizedHost over list.
+func normalizedHosts(list []string) []string {
+	out := make([]string, len(list))
+	for i, h := range list {
+		out[i] = normalizedHost(h)
+	}
+	slices.Sort(out)
+	return slices.Compact(out)
+}
+
+// GetModelProviders returns the org's model-provider records with, per provider id, how many people
+// hold a credential of their own for it. Admin only. Counts and configuration, never a credential
+// value; the writes and the per-provider sign-in and credential doors stay unwrapped (the console
+// owns them). GET /api/v1/model-providers.
+func (c *Client) GetModelProviders(ctx context.Context) (ModelProvidersRead, error) {
+	var out ModelProvidersRead
+	err := c.do(ctx, http.MethodGet, "/api/v1/model-providers", nil, &out)
+	return out, err
 }
 
 // SetupStatus returns the first-run setup checklist as raw JSON (the response is
@@ -276,6 +415,44 @@ type DeviceEnrolmentTokenRequest struct {
 func (c *Client) MintDeviceEnrolmentToken(ctx context.Context, name string) (DeviceEnrolmentToken, error) {
 	var out DeviceEnrolmentToken
 	err := c.do(ctx, http.MethodPost, "/api/v1/admin/devices/enrolment-tokens", DeviceEnrolmentTokenRequest{Name: name}, &out)
+	return out, err
+}
+
+// PeopleListOpts narrows and pages ListPeople. The zero value is the first page of everyone.
+type PeopleListOpts struct {
+	// Limit is the page size: 50 when zero, at most 200.
+	Limit int
+	// Cursor is the NextCursor of the previous page.
+	Cursor string
+	// Query keeps people whose principal or email starts with it.
+	Query string
+	// State is "active" or "deactivated"; empty keeps both.
+	State string
+}
+
+// ListPeople returns one page of the people this deployment knows: everyone who has signed in and
+// everyone pre-created, each with their role, sign-in state and the counts behind the leaver
+// actions (admin or security_admin). Pass a page's NextCursor back as PeopleListOpts.Cursor until
+// it is empty. GET /api/v1/people.
+func (c *Client) ListPeople(ctx context.Context, opts ...PeopleListOpts) (PersonList, error) {
+	q := url.Values{}
+	if len(opts) > 0 {
+		o := opts[0]
+		if o.Limit > 0 {
+			q.Set("limit", strconv.Itoa(o.Limit))
+		}
+		for k, v := range map[string]string{"cursor": o.Cursor, "q": o.Query, "state": o.State} {
+			if v != "" {
+				q.Set(k, v)
+			}
+		}
+	}
+	path := "/api/v1/people"
+	if len(q) > 0 {
+		path += "?" + q.Encode()
+	}
+	var out PersonList
+	err := c.do(ctx, http.MethodGet, path, nil, &out)
 	return out, err
 }
 
@@ -351,6 +528,31 @@ func (c *Client) DeleteSSHKey(ctx context.Context, fp string) error {
 	return c.do(ctx, http.MethodDelete, "/api/v1/me/ssh-keys/"+url.PathEscape(fp), nil, nil)
 }
 
+// ErasePersonResult is what POST /api/v1/people/{principal}/erasure answers once
+// every scope asked for is erased.
+type ErasePersonResult struct {
+	// Person is the principal the name resolved to.
+	Person string `json:"person"`
+	// Scopes are the scopes erased, in the order they ran.
+	Scopes []string `json:"scopes"`
+	// Outcome is each scope's result: "done".
+	Outcome map[string]string `json:"outcome"`
+	// Detail is each scope's counts.
+	Detail map[string]any `json:"detail"`
+}
+
+// ErasePerson erases one person's retained records by scope (mask_copies,
+// run_outputs, recordings, run_tasks, components, audit_personal_fields,
+// credentials) in one audited act. principal is the person's subject (or an email the deployment
+// knows them by) and is percent-encoded here. A scope that fails part way is a
+// 500 whose reason is erasure_incomplete: retry with the same scopes. Security
+// tier. POST /api/v1/people/{principal}/erasure.
+func (c *Client) ErasePerson(ctx context.Context, principal string, scopes []string) (ErasePersonResult, error) {
+	var out ErasePersonResult
+	err := c.do(ctx, http.MethodPost, "/api/v1/people/"+url.PathEscape(principal)+"/erasure", map[string]any{"scopes": scopes}, &out)
+	return out, err
+}
+
 // RunFileStat is one changed file in a RunFiles listing.
 type RunFileStat struct {
 	Path string `json:"path"`
@@ -384,19 +586,34 @@ func (c *Client) RunFiles(ctx context.Context, runID uuid.UUID) (RunFiles, error
 	return out, err
 }
 
-// RunOutput is GET /runs/{id}/output's body: the end of a task_mode=exec run's
+// RunOutput is GET /runs/{id}/output's body: the end of a non-interactive run's
 // combined stdout/stderr.
 type RunOutput struct {
 	Output string `json:"output"`
 	// Truncated: Output does not start at the run's first byte.
 	Truncated bool `json:"truncated"`
-	// Complete: the run has finished; bytes it printed in its last moments can
-	// land a moment later, so read once more after Complete if the end matters.
+	// Complete: this capture attempt is final. A later recording upload can
+	// improve a finalized recording result; Incomplete remains true for that source.
 	Complete bool `json:"complete"`
+	// Source is "stdout", "pane_snapshot", or "recording". The latter two
+	// retain the recording's owner-or-operator privacy gate.
+	Source string `json:"source"`
+	// Incomplete: bytes may be missing (a copy did not end in time or failed, or
+	// a byte arrived after the capture was sealed).
+	Incomplete bool `json:"incomplete"`
+	// CaptureGap: a capture was lost or could not be recovered. Output may
+	// retain partial stdout chunks that were already masked and persisted.
+	CaptureGap bool `json:"capture_gap"`
+	// MaskScope is "run" when the capture was masked against the run's complete
+	// manifest throughout, "globals_only" when it was not; empty when this
+	// deployment keeps no manifests.
+	MaskScope string `json:"mask_scope,omitempty"`
+	// CapturedAt is when the final row was written; nil while the run is live.
+	CapturedAt *time.Time `json:"captured_at,omitempty"`
 }
 
-// RunOutput reads the last tail bytes of a task_mode=exec run's output
-// (owner-or-admin); tail <= 0 asks for all the server keeps (8 KiB). 409 for
+// RunOutput reads the last tail bytes of a non-interactive run's output
+// (owner-or-admin); tail <= 0 asks for all the server keeps (WARDYN_RUN_OUTPUT_TAIL_BYTES, 64 KiB by default). 409 for
 // an interactive run, when none is kept, or when it is off; 410 once it has
 // expired. Each refusal carries a run_output_* reason.
 func (c *Client) RunOutput(ctx context.Context, runID uuid.UUID, tail int) (RunOutput, error) {
@@ -443,13 +660,18 @@ type DriveRequest struct {
 }
 
 // DriveGrantRequest is the POST /drives/grants body — one allocation of a
-// drive to a subject, upserted by the natural key (subject_type, subject): a
-// second POST for the same subject repoints its single row rather than
-// accumulating another one.
+// drive to a subject. It REPLACES the subject's allocation: the subject ends
+// with exactly this drive, and an existing allocation is repointed (200), so a
+// second POST for the same subject moves them to the new drive. With
+// Additional the drive is allocated BESIDE the subject's others, keyed on
+// (subject_type, subject, drive_id).
 type DriveGrantRequest struct {
 	SubjectType CapabilitySubjectType `json:"subject_type"`
 	Subject     string                `json:"subject"`
 	DriveID     uuid.UUID             `json:"drive_id"`
+	// Additional allocates this drive beside the subject's other drives
+	// instead of replacing them (0.9: a run may attach several drives).
+	Additional bool `json:"additional,omitempty"`
 	// Priority breaks ties within a tier (higher wins) when a subject's
 	// membership qualifies it for more than one group-tier grant. It does not
 	// cross tiers (user beats group beats all).
@@ -521,16 +743,33 @@ func (c *Client) GetDrives(ctx context.Context) (DrivesDocument, error) {
 	}
 }
 
-// ApplyDrives upserts every drive and grant doc names, over the existing
+// DrivesApplyResult is ApplyDrivesResult's answer.
+type DrivesApplyResult struct {
+	Document DrivesDocument `json:"document"`
+	// Steps are the writes issued, in order, with their outcome.
+	Steps []ApplyStep `json:"steps,omitempty"`
+}
+
+// ApplyDrives is ApplyDrivesResult's document, with the same error on a failed
+// write (and no document).
+func (c *Client) ApplyDrives(ctx context.Context, doc DrivesDocument) (DrivesDocument, error) {
+	res, err := c.ApplyDrivesResult(ctx, doc)
+	if err != nil {
+		return DrivesDocument{}, err
+	}
+	return res.Document, nil
+}
+
+// ApplyDrivesResult upserts every drive and grant doc names, over the existing
 // POST /drives, PUT /drives/{id} and POST /drives/grants routes — there is no
 // bulk-write route, and none is added. A drive is routed by the id doc
 // carries: one already issued by GetDrives (non-nil) is REPLACED in place
 // (PUT), a zero id is CREATED (POST) — which is what makes `wardyn drive get
-// > f && wardyn drive apply f` a no-op: the ids `get` wrote back are exactly
-// what route the re-`apply` to an update of the same rows, not a second copy
-// under a fresh name. A grant carries no id of its own; every one is POSTed,
-// and the server's own (subject_type, subject) upsert repoints an existing
-// allocation rather than duplicating it.
+// > f && wardyn drive set f` a no-op: the ids `get` wrote back are exactly
+// what route the re-`set` to an update of the same rows, not a second copy
+// under a fresh name. A grant carries no id of its own; every one is POSTed
+// with Additional, so it upserts the one (subject_type, subject, drive_id)
+// allocation it names and never replaces a subject's other drives.
 //
 // Nothing doc omits is touched and nothing is deleted — neither POST nor PUT
 // can express that, and this function does not attempt it by other means.
@@ -539,7 +778,10 @@ func (c *Client) GetDrives(ctx context.Context) (DrivesDocument, error) {
 // what was actually persisted. On success, the returned document is a fresh
 // GetDrives — the authoritative post-write state, including the derived
 // fields (grant counts, deployment facts) a write response cannot carry.
-func (c *Client) ApplyDrives(ctx context.Context, doc DrivesDocument) (DrivesDocument, error) {
+// On a failed write the result holds the steps so far, the failed one included,
+// alongside the error; ApplyDrives is this without the steps.
+func (c *Client) ApplyDrivesResult(ctx context.Context, doc DrivesDocument) (DrivesApplyResult, error) {
+	var res DrivesApplyResult
 	for i, d := range doc.Drives {
 		req := DriveRequest{
 			Name: d.Name, Backend: d.Backend, HostRoot: d.HostRoot,
@@ -548,13 +790,20 @@ func (c *Client) ApplyDrives(ctx context.Context, doc DrivesDocument) (DrivesDoc
 		}
 		var saved UserDrive
 		var err error
+		step := ApplyStep{Kind: "drive", Op: "create", Name: d.Name}
 		if d.ID == uuid.Nil {
 			err = c.do(ctx, http.MethodPost, "/api/v1/drives", req, &saved)
 		} else {
 			err = c.do(ctx, http.MethodPut, "/api/v1/drives/"+d.ID.String(), req, &saved)
+			id := d.ID
+			step.Op, step.ID = "update", &id
 		}
 		if err != nil {
-			return DrivesDocument{}, fmt.Errorf("apply drive %q: %w", d.Name, err)
+			err = fmt.Errorf("apply drive %q: %w", d.Name, err)
+		}
+		res.Steps = append(res.Steps, step.withOutcome(false, err))
+		if err != nil {
+			return res, err
 		}
 		doc.Drives[i].UserDrive = saved
 	}
@@ -572,222 +821,24 @@ func (c *Client) ApplyDrives(ctx context.Context, doc DrivesDocument) (DrivesDoc
 			// different from what GetDrives just reported.
 			HomeOverride: &g.HomeOverride,
 			Enabled:      &g.Enabled,
+			// Additional: the document's grants are added beside one another;
+			// replacing would leave a subject only the last of its drives.
+			Additional: true,
 		}
 		var saved UserDriveGrant
-		if err := c.do(ctx, http.MethodPost, "/api/v1/drives/grants", req, &saved); err != nil {
-			return DrivesDocument{}, fmt.Errorf("apply drive grant (%s %q on drive %s): %w", g.SubjectType, g.Subject, g.DriveID, err)
+		err := c.do(ctx, http.MethodPost, "/api/v1/drives/grants", req, &saved)
+		if err != nil {
+			err = fmt.Errorf("apply drive grant (%s %q on drive %s): %w", g.SubjectType, g.Subject, g.DriveID, err)
+		}
+		driveID := g.DriveID
+		step := ApplyStep{Kind: "drive_grant", Op: "upsert", SubjectType: g.SubjectType, Subject: g.Subject, ID: &driveID}
+		res.Steps = append(res.Steps, step.withOutcome(false, err))
+		if err != nil {
+			return res, err
 		}
 		doc.Grants[i] = saved
 	}
-	return c.GetDrives(ctx)
-}
-
-// ── Governance (migration 0052) ─────────────────────────────────────────────
-
-// GovernanceProfileRequest is the POST /governance/profiles / PUT
-// /governance/profiles/{id} body — one named ceiling. ID/CreatedAt/UpdatedAt/
-// CreatedBy are never accepted from the wire, matching DriveRequest: the id
-// comes from the path (an update) or the server (a create), and provenance is
-// always server-assigned.
-type GovernanceProfileRequest struct {
-	Name    string           `json:"name"`
-	Ceiling RunPolicySpec    `json:"ceiling"`
-	Limits  GovernanceLimits `json:"limits"`
-}
-
-// GovernanceProfileResponse is a profile write's body: the saved profile plus
-// any omission warnings the write raised (a ceiling grant the deployment no
-// longer provisions — see internal/api/governance.go's reintersect note).
-type GovernanceProfileResponse struct {
-	Profile  GovernanceProfile `json:"profile"`
-	Warnings []string          `json:"warnings,omitempty"`
-}
-
-// GovernanceAssignmentRequest is POST /governance/assignments's body. There is
-// no PUT for an assignment: the natural key (subject_type, subject) upserts,
-// repointing an existing binding rather than accumulating a second one, the
-// same shape DriveGrantRequest already takes for a drive allocation.
-type GovernanceAssignmentRequest struct {
-	SubjectType CapabilitySubjectType `json:"subject_type"`
-	Subject     string                `json:"subject"`
-	ProfileID   uuid.UUID             `json:"profile_id"`
-	Priority    int                   `json:"priority"`
-}
-
-// GovernanceDocument is GET /governance's body and ApplyGovernance's
-// parameter: every profile plus every assignment. `wardyn governance get`
-// prints this verbatim; ApplyGovernance strict-decodes it back.
-type GovernanceDocument struct {
-	Profiles    []GovernanceProfile    `json:"profiles"`
-	Assignments []GovernanceAssignment `json:"assignments"`
-}
-
-// GetGovernance returns every governance profile and assignment. GET
-// /api/v1/governance.
-func (c *Client) GetGovernance(ctx context.Context) (GovernanceDocument, error) {
-	var out GovernanceDocument
-	err := c.do(ctx, http.MethodGet, "/api/v1/governance", nil, &out)
-	return out, err
-}
-
-// governanceAssignmentKey is the natural key ApplyGovernance and
-// handleUpsertGovernanceAssignment both upsert an assignment by.
-func governanceAssignmentKey(subjectType CapabilitySubjectType, subject string) string {
-	return string(subjectType) + "\x00" + subject
-}
-
-// governanceProfileUnchanged reports whether writing p over existing would
-// change nothing observable — the check ApplyGovernance runs before every
-// profile write so a `get | apply` round trip on an unchanged install issues
-// ZERO writes and records ZERO audit rows, rather than re-asserting every
-// profile's content on every apply (#1108's stated no-op contract; stricter
-// than ApplyDrives, which always re-PUTs/re-POSTs).
-func governanceProfileUnchanged(existing, p GovernanceProfile) bool {
-	return reflect.DeepEqual(existing.Ceiling, p.Ceiling) && reflect.DeepEqual(existing.Limits, p.Limits)
-}
-
-// ApplyGovernance upserts every profile and assignment doc names, over the
-// existing POST /governance/profiles, PUT /governance/profiles/{id} and POST
-// /governance/assignments routes — there is no bulk-write route, and none is
-// added.
-//
-// A PROFILE is routed BY NAME, not by id — the divergence from ApplyDrives,
-// and the reason is Name's role server-side: it is the UNIQUE human handle an
-// admin actually authors and assigns by (governance.go's own words), while a
-// drive's id is what GetDrives/ApplyDrives round-trip on. Upserting by id
-// would make a hand-maintained, version-controlled governance.json (written
-// once, with no ids, and re-applied against the same install repeatedly) fail
-// its second apply with a 409 name conflict — the exact "config lives in git
-// next to the rest of the install" workflow #1108 exists for. So ApplyGovernance
-// reads the CURRENT state first, and: a doc profile whose Name matches an
-// existing one is PUT to that existing row's real id (rename is therefore not
-// expressible through apply — Name IS the identity a file's entries are
-// matched against); a Name with no existing match is POSTed fresh. Either way,
-// a profile whose Ceiling and Limits are BYTE-IDENTICAL to what is already
-// stored is skipped entirely (governanceProfileUnchanged) — the no-op
-// contract's other half, since the server audits every profile write
-// unconditionally.
-//
-// An ASSIGNMENT carries no id on write (server-assigned, same as
-// DriveGrantRequest), and is upserted purely by its own natural key
-// (subject_type, subject) — skipped, the same way, when the existing row
-// already names the same profile at the same priority. Its ProfileID is
-// resolved against the SAME apply's own profile list before being sent: an id
-// in doc.Assignments naming one of doc.Profiles's ORIGINAL (pre-write) ids is
-// translated to that profile's real post-write id, so a document produced by
-// GetGovernance against a POPULATED install reproduces both profiles and
-// assignments when applied to an EMPTY one, even though the empty install
-// mints entirely new profile ids. An assignment whose ProfileID names no
-// profile in this same doc is sent exactly as given, trusting it as an
-// already-real id on the target (the case for an assignments-only file, or one
-// applied twice against the SAME install).
-//
-// prune, when true, additionally DELETES every server-side profile or
-// assignment doc does not name (assignments first, since a profile still
-// referenced by a to-be-pruned assignment fails the FK restrict). Without it —
-// the default — nothing present server-side but absent from doc is touched,
-// matching drive apply's own "nothing the file omits is touched" rule.
-//
-// Every write's saved row replaces the caller's copy of doc in place, so a
-// partial failure (returned as the second value) leaves doc's earlier entries
-// holding what was actually persisted. On success, the returned document is a
-// fresh GetGovernance — the authoritative post-write state.
-func (c *Client) ApplyGovernance(ctx context.Context, doc GovernanceDocument, prune bool) (GovernanceDocument, error) {
-	current, err := c.GetGovernance(ctx)
-	if err != nil {
-		return GovernanceDocument{}, fmt.Errorf("read current governance state: %w", err)
-	}
-	profileByName := make(map[string]GovernanceProfile, len(current.Profiles))
-	for _, p := range current.Profiles {
-		profileByName[p.Name] = p
-	}
-	assignmentByKey := make(map[string]GovernanceAssignment, len(current.Assignments))
-	for _, a := range current.Assignments {
-		assignmentByKey[governanceAssignmentKey(a.SubjectType, a.Subject)] = a
-	}
-
-	// fileIDToName/nameToRealID translate an assignment's ProfileID from
-	// "whatever id this SAME file's profile entry carried" to "the id that
-	// profile actually holds on THIS server" — see the doc comment above.
-	fileIDToName := make(map[uuid.UUID]string, len(doc.Profiles))
-	nameToRealID := make(map[string]uuid.UUID, len(doc.Profiles))
-
-	for i, p := range doc.Profiles {
-		saved := p
-		if existing, ok := profileByName[p.Name]; ok && governanceProfileUnchanged(existing, p) {
-			saved = existing
-		} else {
-			req := GovernanceProfileRequest{Name: p.Name, Ceiling: p.Ceiling, Limits: p.Limits}
-			var resp GovernanceProfileResponse
-			var werr error
-			if ok {
-				werr = c.do(ctx, http.MethodPut, "/api/v1/governance/profiles/"+existing.ID.String(), req, &resp)
-			} else {
-				werr = c.do(ctx, http.MethodPost, "/api/v1/governance/profiles", req, &resp)
-			}
-			if werr != nil {
-				return GovernanceDocument{}, fmt.Errorf("apply governance profile %q: %w", p.Name, werr)
-			}
-			saved = resp.Profile
-		}
-		doc.Profiles[i] = saved
-		if p.ID != uuid.Nil {
-			fileIDToName[p.ID] = p.Name
-		}
-		nameToRealID[p.Name] = saved.ID
-	}
-
-	for i, a := range doc.Assignments {
-		if name, ok := fileIDToName[a.ProfileID]; ok {
-			if real, ok := nameToRealID[name]; ok {
-				a.ProfileID = real
-			}
-		}
-		key := governanceAssignmentKey(a.SubjectType, a.Subject)
-		if existing, ok := assignmentByKey[key]; ok &&
-			existing.ProfileID == a.ProfileID && existing.Priority == a.Priority {
-			doc.Assignments[i] = existing
-			continue
-		}
-		req := GovernanceAssignmentRequest{
-			SubjectType: a.SubjectType, Subject: a.Subject,
-			ProfileID: a.ProfileID, Priority: a.Priority,
-		}
-		var saved GovernanceAssignment
-		if err := c.do(ctx, http.MethodPost, "/api/v1/governance/assignments", req, &saved); err != nil {
-			return GovernanceDocument{}, fmt.Errorf("apply governance assignment (%s %q): %w", a.SubjectType, a.Subject, err)
-		}
-		doc.Assignments[i] = saved
-	}
-
-	if prune {
-		keepAssignment := make(map[string]bool, len(doc.Assignments))
-		for _, a := range doc.Assignments {
-			keepAssignment[governanceAssignmentKey(a.SubjectType, a.Subject)] = true
-		}
-		// Assignments before profiles: a profile doc drops still fails the FK
-		// restrict while a stale assignment of it survives.
-		for _, a := range current.Assignments {
-			if keepAssignment[governanceAssignmentKey(a.SubjectType, a.Subject)] {
-				continue
-			}
-			if err := c.do(ctx, http.MethodDelete, "/api/v1/governance/assignments/"+a.ID.String(), nil, nil); err != nil {
-				return GovernanceDocument{}, fmt.Errorf("prune governance assignment (%s %q): %w", a.SubjectType, a.Subject, err)
-			}
-		}
-		keepProfile := make(map[string]bool, len(doc.Profiles))
-		for _, p := range doc.Profiles {
-			keepProfile[p.Name] = true
-		}
-		for _, p := range current.Profiles {
-			if keepProfile[p.Name] {
-				continue
-			}
-			if err := c.do(ctx, http.MethodDelete, "/api/v1/governance/profiles/"+p.ID.String(), nil, nil); err != nil {
-				return GovernanceDocument{}, fmt.Errorf("prune governance profile %q: %w", p.Name, err)
-			}
-		}
-	}
-
-	return c.GetGovernance(ctx)
+	var err error
+	res.Document, err = c.GetDrives(ctx)
+	return res, err
 }

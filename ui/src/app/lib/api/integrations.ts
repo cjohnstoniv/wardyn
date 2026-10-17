@@ -5,15 +5,15 @@
 
 // Integrations — GET /api/v1/integrations exists (server.go registers it,
 // returning the same effective-integration-plus-capabilities rows
-// SetupStatus.integrations carries). This module still derives the two
-// LEGACY categories (AI provider, SCM host) client-side from setup status +
+// SetupStatus.integrations carries). This module still derives the
+// LEGACY SCM-host category client-side from setup status +
 // site config + secret names instead of reading that endpoint directly,
 // exactly the discipline lib/scm-provider.ts already established for the SCM
 // Provider step (a "provider row" there is not a backend entity either):
 // the wire row is a flat credential record with no posture (captured/aging/
 // reconnect-soon), no per-lane breakdown (ssh vs. pat vs. app), and no
 // capability CHIPS — only the raw matrix — none of which the server derives
-// for these two categories the way `deriveAiRows`/`deriveScmRows` below do.
+// for this category the way `deriveScmRows` below does.
 // The eight GENERIC categories have no such legacy derivation (see
 // genericIntegrations further down) and read the wire row as-is. No invented
 // server concepts: every field on IntegrationRow traces back to a real
@@ -23,8 +23,7 @@
 // should replace with a real field/endpoint (GitHub ref-confinement,
 // per-integration "default" persistence, an Azure endpoint URL, workspace
 // pin-counts for the blast radius).
-import type { BedrockLane, IntegrationCategory, ResidencyKind } from "../integrations";
-import { AI_TYPES, BEDROCK_LANE_META, SUBSCRIPTION_LANE_META, type AiType } from "../integrations";
+import type { IntegrationCategory, ResidencyKind } from "../integrations";
 import { deriveProviders, LANE_META, patLaneMeta, slugHost, type Lane } from "../scm-provider";
 import type { SetupStatus, SiteConfig } from "../types";
 import { setup as setupApi } from "./setup";
@@ -36,8 +35,6 @@ export type { IntegrationCategory };
 export interface RowChip {
   label: string;
   tone: "info" | "success" | "warning" | "neutral";
-  /** Impossible-as-fact chip: 60%-opacity, tooltip carries the verbatim reason. */
-  muted?: boolean;
   tooltip?: string;
 }
 
@@ -48,29 +45,24 @@ export type Posture =
   | { kind: "captured"; ageLabel: string }
   | { kind: "reconnect_soon" }
   | { kind: "session_expires"; when: string }
-  | { kind: "region_model_unset" }
   | { kind: "gh_verdict"; verdict: "ref_confined" | "unconfined" | "unknown"; checkedLabel: string };
 
 export interface IntegrationRow {
   id: string;
   /** The SERVER-side integration id this row corresponds to — stored, or
    *  adoptable via POST /integrations/{serverId}/adopt. Client row ids are a
-   *  display namespace ("ai:…"); contracts must name THIS one. Absent when the
+   *  display namespace ("scm:…"); contracts must name THIS one. Absent when the
    *  row has no server-side identity to adopt. */
   serverId?: string;
   category: IntegrationCategory;
   name: string;
-  /** Mono sub-line under the name, e.g. "anthropic · api key" or a host. */
+  /** Mono sub-line under the name, e.g. a host. */
   typeLabel: string;
   chips: RowChip[];
   residency: ResidencyKind;
   posture: Posture;
   /** Secret name(s) this row is backed by — rotate/delete act on these. */
   secretNames: string[];
-  aiType?: AiType;
-  /** anthropic_subscription only: which of the two lanes this row is. */
-  hostCli?: boolean;
-  bedrockLane?: BedrockLane;
   /** status.checks ids relevant to this row, rendered verbatim via CheckRow. */
   checkIds: string[];
   /** True only for the GitHub App row — the one row with a live check. */
@@ -79,122 +71,7 @@ export interface IntegrationRow {
 }
 
 export interface IntegrationsData {
-  ai: IntegrationRow[];
   scm: IntegrationRow[];
-}
-
-// AI providers
-
-const AI_TYPE_LABEL: Record<string, string> = {
-  anthropic_api_key: "anthropic · api key",
-  bedrock: "aws · bedrock",
-  openai_api_key: "openai · api key",
-};
-
-// The default Name a newly-added row of this type gets (the Add dialog's
-// editable Name field default, and what a freshly-derived row is called until
-// the operator renames it) — ONE naming function so the dialog's preview can
-// never drift from what deriveAiRows above actually produces.
-export function aiRowName(type: AiType, hostCli?: boolean): string {
-  switch (type) {
-    case "anthropic_api_key":
-      return "Anthropic (API key)";
-    case "anthropic_subscription":
-      return hostCli ? "Claude subscription (host CLI)" : "Claude subscription (managed)";
-    case "bedrock":
-      return "AWS Bedrock";
-    case "openai_api_key":
-      return "OpenAI (API key)";
-  }
-}
-
-// The server-side adoptable id for a legacy AI row of this type/lane — the
-// SAME ids deriveAiRows below stamps as serverId, factored out so a caller
-// that hasn't loaded a derived row yet (the Add dialog, before its first
-// reload) can still resolve which wire row to adopt/PUT. Every AiType maps
-// to a server-side id.
-export function aiServerId(type: AiType, hostCli?: boolean): string | undefined {
-  switch (type) {
-    case "anthropic_api_key":
-      return "anthropic_api_key";
-    case "anthropic_subscription":
-      return hostCli ? "anthropic_subscription:resident_host" : "anthropic_subscription:managed";
-    case "bedrock":
-      return "bedrock";
-    case "openai_api_key":
-      return "openai_api_key";
-  }
-}
-
-// The compact chip list a list row shows: ON rows (capChip, `· default` where the type's
-// static matrix marks one), impossible rows (factChip, muted, the verbatim
-// reason as tooltip, labeled "· n/a" so the state reads without the tooltip)
-// and OFF-but-fixable rows (muted, labeled "· off" — a `note` with no `fact`
-// means it's not an impossibility, just not on for this instance; the
-// anthropic_subscription hostCli lane's Wardyn-features row is the one CAPS
-// entry shaped this way today). A row that is neither on, a fact, nor noted
-// is a true nothing-to-say OFF and stays omitted, matching the mock.
-export function capabilityChips(type: AiType, hostCli?: boolean): RowChip[] {
-  return AI_TYPES[type].capabilityPreview(hostCli)
-    .filter((r) => r.on || r.fact || r.note)
-    .map((r) =>
-      r.fact
-        ? { label: `${r.label} · n/a`, tone: "neutral", muted: true, tooltip: r.fact }
-        : r.on
-          ? { label: r.def ? `${r.label} · default` : r.label, tone: "info" }
-          : { label: `${r.label} · off`, tone: "neutral", muted: true, tooltip: r.note },
-    );
-}
-
-export function aiResidency(type: AiType, hostCli: boolean | undefined, lane: BedrockLane | undefined): ResidencyKind {
-  if (type === "anthropic_subscription") return SUBSCRIPTION_LANE_META[hostCli ? "resident_host" : "managed"].residency;
-  if (type === "bedrock") return lane ? BEDROCK_LANE_META[lane].residency : "varies";
-  return "proxy_injected"; // anthropic_api_key / openai_api_key
-}
-
-function deriveAiRows(present: string[]): IntegrationRow[] {
-  const rows: IntegrationRow[] = [];
-  if (present.includes("anthropic-api-key")) {
-    rows.push({
-      id: "ai:anthropic_api_key",
-      serverId: aiServerId("anthropic_api_key"),
-      category: "ai_provider",
-      name: aiRowName("anthropic_api_key"),
-      typeLabel: AI_TYPE_LABEL.anthropic_api_key,
-      chips: capabilityChips("anthropic_api_key"),
-      residency: aiResidency("anthropic_api_key", undefined, undefined),
-      posture: { kind: "configured" },
-      secretNames: ["anthropic-api-key"],
-      aiType: "anthropic_api_key",
-      checkIds: ["llm_provider"],
-    });
-  }
-
-  if (present.includes("openai-api-key")) {
-    rows.push({
-      id: "ai:openai_api_key",
-      serverId: aiServerId("openai_api_key"),
-      category: "ai_provider",
-      name: aiRowName("openai_api_key"),
-      typeLabel: AI_TYPE_LABEL.openai_api_key,
-      chips: capabilityChips("openai_api_key"),
-      residency: aiResidency("openai_api_key", undefined, undefined),
-      posture: { kind: "configured" },
-      secretNames: ["openai-api-key"],
-      aiType: "openai_api_key",
-      checkIds: ["llm_provider"],
-    });
-  }
-
-  // Azure OpenAI is deliberately NOT derived. Its only capability was powering
-  // Wardyn's own features — the AI Run Composer — which no longer exists, and
-  // harness.go states the rest outright: "Neither agent tool can be pointed at
-  // an Azure OpenAI deployment." A row for it would be a connected-looking
-  // credential wired to nothing. An `azure-openai-key` left in the secret store
-  // from an earlier release stays there, untouched and inert; it simply stops
-  // rendering as a model provider.
-
-  return rows;
 }
 
 // SCM hosts
@@ -297,7 +174,6 @@ function deriveScmRows(status: SetupStatus, siteConfig: SiteConfig | null, prese
 export function deriveIntegrations(status: SetupStatus, siteConfig: SiteConfig | null, secretNames: string[]): IntegrationsData {
   const present = secretNames.length ? secretNames : status.secrets.present;
   return {
-    ai: deriveAiRows(present),
     scm: deriveScmRows(status, siteConfig, present),
   };
 }
@@ -319,5 +195,6 @@ export const integrationsApi = {
 };
 
 // Generic integration kinds are no longer a kind Wardyn accepts — there is no
-// /integrations catalog page or Add dialog. What remains above is the AI/SCM
-// derivation that lib/readiness.ts and settings/connection-cards.tsx read.
+// /integrations catalog page or Add dialog. What remains above is the SCM
+// derivation. The model-key rows it once carried are gone: a model credential
+// comes only from a model provider (#548), read from SetupStatus.model_providers.

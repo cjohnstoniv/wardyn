@@ -37,6 +37,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -187,6 +188,9 @@ func (a approvalStore) GetApproval(ctx context.Context, id uuid.UUID) (types.App
 func (a approvalStore) ListApprovals(ctx context.Context, st types.ApprovalState) ([]types.ApprovalRequest, error) {
 	return store.NewPG(a.pool).ListApprovals(ctx, st)
 }
+func (a approvalStore) ListPendingApprovalsForRuns(ctx context.Context, runIDs []uuid.UUID) ([]types.ApprovalRequest, error) {
+	return store.NewPG(a.pool).ListPendingApprovalsForRuns(ctx, runIDs)
+}
 func (a approvalStore) DecideApproval(ctx context.Context, id uuid.UUID, decision types.ApprovalDecision) (types.ApprovalRequest, error) {
 	return store.NewPG(a.pool).DecideApproval(ctx, id, decision)
 }
@@ -270,6 +274,14 @@ func newFakeRunner() *fakeRunner {
 func (f *fakeRunner) releaseWait() { close(f.gate) }
 
 func (f *fakeRunner) Name() string { return "fake" }
+
+// Measure implements runner.Measurer, as the Docker and Kubernetes substrates do: the stand-in says what
+// it has, so the boot step proposes its limits. A runner that measures nothing gets none and takes no
+// run. The size is the largest whose proposal the limits allow (a thousand runs at once), so runs left
+// by earlier tests in a shared database never fill it.
+func (f *fakeRunner) Measure(context.Context) (types.RunnerAmounts, error) {
+	return types.RunnerAmounts{CPUMillis: 2 * types.RunnerPoolCPUMillisMax, MemoryMiB: 2 * types.RunnerPoolMemoryMiBMax, DiskMiB: 2 * types.RunnerPoolDiskMiBMax}, nil
+}
 
 func (f *fakeRunner) Capabilities(context.Context) (runner.Capabilities, error) {
 	return runner.Capabilities{
@@ -458,6 +470,10 @@ func newHarness(t *testing.T, opts harnessOpts) *harness {
 	}
 
 	apiSrv := api.New(cfg)
+	// The boot step wardynd runs before it serves: the remote-provided pool of the configured executors.
+	if err := apiSrv.BootstrapRunnerPools(ctx); err != nil {
+		t.Fatalf("bootstrap runner pools: %v", err)
+	}
 	ts := httptest.NewServer(apiSrv.Handler())
 	t.Cleanup(ts.Close)
 
@@ -475,6 +491,23 @@ func newHarness(t *testing.T, opts harnessOpts) *harness {
 		gh:      gh,
 		runner:  opts.withRunner,
 	}
+}
+
+// securityAdminClient inserts an api_tokens row for a security admin with its own principal and email
+// and returns an SDK client that presents that token: a person, not the shared admin token, so the
+// server treats its writes as one human's and applies four-eyes rules to them. The row is minted
+// through the same store write the per-user token route uses.
+func (h *harness) securityAdminClient(principal, email string) *client.Client {
+	h.t.Helper()
+	raw := "wdn_" + strings.ReplaceAll(uuid.NewString(), "-", "")
+	complete := false
+	if _, err := store.NewPG(h.pool).CreateAPIToken(context.Background(), types.APIToken{
+		ID: uuid.New(), Principal: principal, Email: email, Role: "security_admin", UserType: types.UserTypeStandard,
+		Name: "apie2e " + principal, GroupsTruncated: &complete,
+	}, raw); err != nil {
+		h.t.Fatalf("insert security_admin token for %s: %v", principal, err)
+	}
+	return client.New(h.srv.URL, raw)
 }
 
 // newCleanupCtx returns a context cancelled at test cleanup. The completion

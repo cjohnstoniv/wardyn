@@ -18,7 +18,7 @@ vi.mock("../screens/settings/harness-login-pane", () => ({
 
 import { providerStripLine } from "./model-access-banner";
 import { MODEL_ACCESS_BANNER } from "./model-access-copy";
-import { BANNER } from "./copy/door";
+import { BANNER, CONNECTIONS } from "./copy/door";
 import { AGENTS } from "../../lib/workspace-providers-copy";
 import { providerAttention } from "../../lib/model-access";
 import { aheadByHours } from "../../lib/test-clock";
@@ -85,14 +85,14 @@ describe("B1–B5: one provider needs the person", () => {
     expect(screen.getAllByText(AGENTS.SIGN_IN_AWS)).toHaveLength(1);
   });
 
-  it("B4: a default token not added, for both agents it serves; a key reads 'key'", async () => {
+  it("B4: a default token not available, for both agents it serves; a key reads 'key'", async () => {
     const { unmount } = strip(providerStatus([{ provider: gateway, defaultFor: ["claude-code", "codex-cli"] }]));
     expect(screen.getByText(BANNER.B4("Claude Code and Codex CLI", "Corp gateway", true))).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Add your token" }));
     expect(await screen.findByRole("dialog", { name: "Add your token for Corp gateway" })).toBeInTheDocument();
     unmount();
     strip(providerStatus([{ provider: anthropicKey, defaultFor: ["claude-code"] }]));
-    expect(screen.getByText("Claude Code runs use Anthropic API key, and you haven't added your key.")).toBeInTheDocument();
+    expect(screen.getByText("Claude Code runs use Anthropic API key, and no key is available.")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Add your key" })).toBeInTheDocument();
   });
 
@@ -140,5 +140,44 @@ describe("providerStripLine — the kind/state table", () => {
     expect(
       providerStripLine({ provider: bedrock, state: "expiring", deadline: "", action: "", defaultFor: [] }, ""),
     ).toBeNull();
+  });
+});
+
+
+describe("provider strip connection causes", () => {
+  it.each([bedrock, claude, gateway, anthropicKey])("store read failure for $kind offers only re-check", async (provider) => {
+    const status = providerStatus([{ provider, defaultFor: ["claude-code"] }]);
+    status.provider_access![0].cause = "store_unreadable";
+    const refresh = vi.fn();
+    render(<WithDoor status={status} path="/runs" operator={false} onRefresh={refresh} />);
+    expect(screen.getByText(CONNECTIONS.STORE_UNREADABLE)).toBeInTheDocument();
+    expect(screen.queryByText(/not signed in|no key is available/i)).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: CONNECTIONS.RECHECK }));
+    expect(refresh).toHaveBeenCalledOnce();
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it.each(["destination_changed", "kind_changed"])("%s carries the cause through the attention row", (cause) => {
+    const status = providerStatus([{ provider: gateway, defaultFor: ["claude-code"] }]);
+    Object.assign(status.provider_access![0], { cause, new_destination: "new.example" });
+    strip(status);
+    const line = cause === "destination_changed" ? CONNECTIONS.DESTINATION_CHANGED("new.example") : CONNECTIONS.KIND_CHANGED("new.example");
+    expect(screen.getByText(line)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: CONNECTIONS.REVIEW_RECONNECT })).toBeInTheDocument();
+  });
+
+  // The server marks every first-run row never_connected; the strip must still say which harness needs the person.
+  it.each([
+    { provider: bedrock, sentence: BANNER.B1("Claude Code", bedrock.name), button: AGENTS.SIGN_IN_AWS },
+    { provider: claude, sentence: BANNER.B5("Claude Code"), button: CONNECTIONS.SIGN_IN_CLAUDE },
+    { provider: gateway, sentence: BANNER.B4("Claude Code", gateway.name, true), button: CONNECTIONS.ADD_TOKEN },
+    { provider: anthropicKey, sentence: BANNER.B4("Claude Code", anthropicKey.name, false), button: CONNECTIONS.ADD_KEY },
+  ])("never_connected keeps the first-run line for $provider.kind", ({ provider, sentence, button }) => {
+    const status = providerStatus([{ provider, defaultFor: ["claude-code"] }]);
+    status.provider_access![0].cause = "never_connected";
+    strip(status);
+    expect(screen.getByText(sentence)).toBeInTheDocument();
+    expect(screen.queryByText(CONNECTIONS.NEVER_CONNECTED(provider.host, provider.name))).toBeNull();
+    expect(screen.getByRole("button", { name: button })).toBeInTheDocument();
   });
 });

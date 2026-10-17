@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -47,14 +48,34 @@ const probeName = "wardyn-kek-probe"
 // writer move a wrapped data key between rows, so boot refuses it (fail
 // closed, K6). The token is kept alive until ctx ends.
 func NewTransit(ctx context.Context, cfg Config, mount, key string) (*Transit, error) {
+	return newTransit(ctx, cfg, mount, key, "WARDYN_VAULT_TRANSIT_KEY", "WARDYN_VAULT_ROLE")
+}
+
+// NewPlatformTransit is NewTransit for the key that wraps the boot keys
+// (WARDYN_VAULT_TRANSIT_KEY_PLATFORM); cfg.Role is WARDYN_VAULT_ROLE_PLATFORM.
+// It differs only in the setting its refusals name.
+func NewPlatformTransit(ctx context.Context, cfg Config, mount, key string) (*Transit, error) {
+	return newTransit(ctx, cfg, mount, key, "WARDYN_VAULT_TRANSIT_KEY_PLATFORM", "WARDYN_VAULT_ROLE_PLATFORM")
+}
+
+// NewDomainTransit is NewTransit for the key of one key domain
+// (WARDYN_KEY_DOMAINS_FILE); cfg.Role is the domain's own role, or the
+// credential role when the domain names none. It differs only in the setting
+// its refusals name.
+func NewDomainTransit(ctx context.Context, cfg Config, mount, key, domain string) (*Transit, error) {
+	where := fmt.Sprintf("key domain %q in WARDYN_KEY_DOMAINS_FILE", domain)
+	return newTransit(ctx, cfg, mount, key, where+" transit key", where+" transit role")
+}
+
+func newTransit(ctx context.Context, cfg Config, mount, key, keySetting, roleSetting string) (*Transit, error) {
 	if err := validSegments(mount); err != nil {
 		return nil, fmt.Errorf("WARDYN_VAULT_TRANSIT_MOUNT: %w", err)
 	}
 	if err := validSegments(key); err != nil || strings.Contains(key, "/") {
-		return nil, fmt.Errorf("WARDYN_VAULT_TRANSIT_KEY %q must be one path segment of letters, digits, \".\", \"_\" and \"-\"", key)
+		return nil, fmt.Errorf("%s %q must be one path segment of letters, digits, \".\", \"_\" and \"-\"", keySetting, key)
 	}
 	if cfg.Auth == AuthKubernetes && cfg.Role == "" {
-		return nil, fmt.Errorf("WARDYN_VAULT_ROLE is required with WARDYN_VAULT_AUTH=%s", AuthKubernetes)
+		return nil, fmt.Errorf("%s is required with WARDYN_VAULT_AUTH=%s", roleSetting, AuthKubernetes)
 	}
 	c, err := newClient(cfg)
 	if err != nil {
@@ -63,7 +84,7 @@ func NewTransit(ctx context.Context, cfg Config, mount, key string) (*Transit, e
 	if err := c.login(ctx); err != nil {
 		return nil, fmt.Errorf("vault at %s: %w", c.base.Host, err)
 	}
-	t := &Transit{c: c, mount: mount, key: key, id: "transit:" + mount + "/" + key}
+	t := &Transit{c: c, mount: mount, key: key, id: kek.TransitIDPrefix + mount + "/" + key}
 	if err := t.selfTest(ctx); err != nil {
 		return nil, fmt.Errorf("vault transit key %s at %s: %w", t.id, c.base.Host, err)
 	}
@@ -132,12 +153,13 @@ func (t *Transit) Wrap(ctx context.Context, dek []byte, bind map[string]string) 
 	return w, nil
 }
 
-// Unwrap implements kek.KEK. A wrap moved to another row, made under another
-// key, or under a version min_decryption_version has retired is a definitive
-// refusal; only an unreachable Vault is transient.
+// Unwrap implements kek.KEK. A wrap that is not a Transit ciphertext, moved to
+// another row, made under another key, or under a version min_decryption_version
+// has retired is a definitive refusal (kek.ErrRefused); only an unreachable Vault
+// is transient.
 func (t *Transit) Unwrap(ctx context.Context, wrapped []byte, bind map[string]string) ([]byte, error) {
 	if _, err := t.WrapVersion(wrapped); err != nil {
-		return nil, fmt.Errorf("transit KEK %s: the row holds %w", t.id, err)
+		return nil, fmt.Errorf("transit KEK %s: %w: the row holds %w", t.id, kek.ErrRefused, err)
 	}
 	aad, err := kek.WrapAAD(bind, t.id)
 	if err != nil {
@@ -164,44 +186,60 @@ func (t *Transit) Unwrap(ctx context.Context, wrapped []byte, bind map[string]st
 // post calls <mount>/<op>/<key>. An unreachable Vault stays transient
 // (secretstore.ErrUnavailable); any answer Vault gives with an error status —
 // 400 for a deleted key or a wrap that does not authenticate, 403, 404 — is
-// kek.ErrService, carrying Vault's status and message.
+// kek.ErrService, carrying Vault's status and message. Any other 400 from a
+// decrypt is also kek.ErrRefused: Vault's "too old", "invalid ciphertext" and
+// "message authentication failed" cannot tell a corrupted row from a retired
+// version or another Vault with this mount and key name (the id names no cluster).
 func (t *Transit) post(ctx context.Context, op string, in map[string]string, out any) error {
 	path := t.mount + "/" + op + "/" + t.key
 	status, err := t.c.call(ctx, http.MethodPost, path, in, out)
 	if errors.Is(err, secretstore.ErrUnavailable) {
 		return fmt.Errorf("transit KEK %s: %w", t.id, err)
 	}
+	if s := statusOf(err); s == http.StatusNotFound || (s == http.StatusBadRequest && vaultSays(err, "encryption key not found")) {
+		return fmt.Errorf("transit KEK %s: %w: %w: %w", t.id, kek.ErrService, kek.ErrKeyMissing, err)
+	}
+	if op == "decrypt" && statusOf(err) == http.StatusBadRequest {
+		return fmt.Errorf("transit KEK %s: %w: %w: %w", t.id, kek.ErrService, kek.ErrRefused, err)
+	}
 	if err != nil {
 		return fmt.Errorf("transit KEK %s: %w: %w", t.id, kek.ErrService, err)
 	}
 	if status == http.StatusNotFound {
-		return fmt.Errorf("transit KEK %s: vault POST %s: 404 (no such mount or key)", t.id, path)
+		return fmt.Errorf("transit KEK %s: %w: %w: vault POST %s: 404 (no such mount or key)", t.id, kek.ErrService, kek.ErrKeyMissing, path)
 	}
 	return nil
 }
 
+func vaultSays(err error, msg string) bool {
+	var ve *vaultError
+	return errors.As(err, &ve) && slices.ContainsFunc(ve.msgs, func(m string) bool { return strings.Contains(m, msg) })
+}
+
 // WrapVersion implements kek.Versioned: the N of a "vault:vN:…" ciphertext.
-func (t *Transit) WrapVersion(wrapped []byte) (int, error) {
+// Vault always wraps at the latest version, so no row is ever ahead of
+// LatestVersion and equality is all -rewrap needs.
+func (t *Transit) WrapVersion(wrapped []byte) (string, error) {
 	rest, ok := strings.CutPrefix(string(wrapped), "vault:v")
 	if ok {
 		num, _, found := strings.Cut(rest, ":")
 		if n, err := strconv.Atoi(num); found && err == nil && n > 0 {
-			return n, nil
+			return strconv.Itoa(n), nil
 		}
 	}
-	return 0, errors.New("no Transit ciphertext (want vault:v<N>:…)")
+	return "", errors.New("no Transit ciphertext (want vault:v<N>:…)")
 }
 
 // LatestVersion implements kek.Versioned. It wraps a probe data key, which
 // Vault always does under the latest version: no read on keys/ is needed.
-func (t *Transit) LatestVersion(ctx context.Context) (int, error) {
+func (t *Transit) LatestVersion(ctx context.Context) (string, error) {
 	dek := make([]byte, kek.DEKSize)
 	if _, err := rand.Read(dek); err != nil {
-		return 0, err
+		return "", err
 	}
 	w, err := t.Wrap(ctx, dek, kek.Bind("", probeName))
 	if err != nil {
-		return 0, err
+		return "", err
 	}
 	return t.WrapVersion(w)
 }

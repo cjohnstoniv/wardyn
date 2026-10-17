@@ -3,54 +3,40 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// F8-ui-types-mirror probe: pins runWireBody's wire-forwarding to the Go DTO
-// (sibling of ui/src/app/lib/api/runs.wire.test.ts; imports `./runs` and
-// `./core` relative to this directory).
+// F8-ui-types-mirror probe: pins intentToWire's wire-forwarding to the Go DTO
+// (imports `./runs` and `./core` relative to this directory).
 //
-// Run (from the repo root, no PG needed — fetch is stubbed):
+// Run (from the repo root, no PG needed - fetch is stubbed):
 //   cd ui && pnpm vitest run src/app/lib/api/runs.wire.fields.test.ts
 //
 // What it pins, in three layers:
-//   A. runWireBody (runs.ts:70-116) forwards every field of the Go DTO
-//      pkg/client.CreateRunRequest (runs_create.go) that the console can
-//      set, on both createRun and preflightRun, and omits the key when the
-//      input has no value for it. runs.wire.test.ts:42-64 covers only
-//      workspaces[] and integration_id; the eleven other forwarded fields
-//      have no assertion anywhere else.
-//   B. The whitelist's deliberate drops are pinned too (devcontainer_repo /
-//      devcontainer_ref are CLI-only and not forwarded), so a change in
-//      either direction is a visible test change, never a silent one.
-//   C. Source parity, from the TS side — the counterpart of Go's
+//   A. The three request doors send the body intentToWire built, byte for byte,
+//      to the route the Go router registers.
+//   B. Source parity, from the TS side - the counterpart of Go's
 //      TestTerminalRunStates_UIParity (internal/types/terminal_parity_test.go):
-//      every JSON tag on the Go CreateRunRequest is either forwarded by
-//      runWireBody or on the explicit UI-never-sends list; every key the TS
-//      AgentRun interface (types/runs.ts:57-122) declares is a JSON tag on Go's
-//      types.AgentRun (types.go:129-212) or on handleGetRun's wrapper
-//      (runs_policy.go:172-175). A Go rename (e.g. failure_hint -> failure_reason)
-//      fails here instead of as a runtime `undefined` the console renders as "—".
-//      The Go side is read from source with the same regex discipline the Go
-//      parity test uses; the repo root is found by walking up to go.mod so the
-//      file works from ui/ (vitest's cwd) or anywhere under it.
+//      every JSON tag on the Go CreateRunRequest is carried by intentToWire, sent
+//      by the Name dialog, or excluded by the template field registry (so the
+//      never-sends list is empty); every key the TS AgentRun interface
+//      (types/runs.ts) declares is a JSON tag on Go's types.AgentRun or on
+//      handleGetRun's wrapper (runs_policy.go). A Go rename (e.g. failure_hint
+//      -> failure_reason) fails here instead of as a runtime `undefined` the
+//      console renders as "-". The Go side is read from source with the same
+//      regex discipline the Go parity test uses; the repo root is found by
+//      walking up to go.mod so the file works from ui/ (vitest's cwd) or
+//      anywhere under it.
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { runs } from "./runs";
-import type { RunPolicySpec } from "../types";
+import { TEMPLATE_REQUEST_FIELDS } from "../template-fields";
+import { intentToWire, POLICY_CARRIER } from "../../components/screens/new-run-flow/draft/intent-to-wire";
+import type { RunIntent } from "../../components/screens/new-run-flow/draft/run-intent";
 
-// The body type createRun/preflightRun accept (RunWireInput is not exported).
-type WireInput = Parameters<typeof runs.createRun>[0];
-
-// A minimal VALID RunPolicySpec (its three required keys) with the floor set.
-const policyWithFloor = (floor: string): RunPolicySpec =>
-  ({ min_confinement_class: floor, allowed_domains: ["api.anthropic.com"], first_use_approval: "always_deny" }) as unknown as RunPolicySpec;
-
-// Shared fetch stub — same shape as runs.wire.test.ts:19-30.
+// Shared fetch stub.
 let fetchMock: ReturnType<typeof vi.fn>;
 beforeEach(() => {
-  // A FRESH Response per call: a Response body can only be read once, and the
-  // byte-identical-bodies case below calls fetch twice inside one test
-  // (mockResolvedValue would hand it the same, already-consumed instance).
+  // A FRESH Response per call: a Response body can only be read once.
   fetchMock = vi.fn().mockImplementation(async () =>
     new Response(JSON.stringify({ id: "run_1" }), {
       status: 200,
@@ -61,180 +47,46 @@ beforeEach(() => {
 });
 afterEach(() => vi.unstubAllGlobals());
 
-const sentBody = (): Record<string, unknown> =>
-  JSON.parse(String(fetchMock.mock.calls[0][1]?.body ?? "{}"));
-const sentPath = (): string => String(fetchMock.mock.calls[0][0]);
+// Go DTO JSON tags the console never sends. Emptied at the cutover: a tag the
+// intent cannot carry is excluded in the template field registry, with a reason.
+const UI_NEVER_SENDS = new Set<string>();
 
-// Every field the console can put on the wire, with a NON-default value.
-// One entry per Go DTO field the UI forwards (CreateRunRequest ∩ runWireBody).
-const fullInput: WireInput & { workspaces: NonNullable<WireInput["workspaces"]> } = {
-  agent: "claude-code",
-  repo: "acme/payments",
-  task: "do the thing",
-  title: "Refund flow",
-  description: "ticket 4412",
-  policy_id: "11111111-1111-1111-1111-111111111111",
-  confinement_class: "CC2" as const,
-  interactive: true,
-  inline_policy: policyWithFloor("CC1"),
-  image: "ghcr.io/acme/dev:1",
-  task_mode: "exec" as const,
-  interactive_start: "agent" as const,
-  seed_auto_tools: true,
-  tool_approvals: "hold" as const,
-  workspaces: [{ workspace_id: "ws-1", enabled_optional: ["egress:api.stripe.com"], read_only: true }],
-  workspace_id: "22222222-2222-2222-2222-222222222222",
-  integration_id: "anthropic_api_key",
-  // The member's drive request (D5): forwarded verbatim by runWireBody — a
-  // path never rides here, only {enabled, read_only}.
-  drive: { enabled: true, read_only: false },
-};
+// One workspace entry with every key the Go WorkspaceSelection declares.
+const workspaceEntry = { workspace_id: "ws-1", enabled_optional: ["egress:api.stripe.com"], read_only: true, target: "/sandbox/work", repos: [{ repo: "acme/web", ref: "main" }] };
 
-// The wire keys runWireBody is expected to emit for fullInput, and the exact
-// value each carries. Note the clamp: confinement_class CC2 vs floor CC1 is
-// already >= floor, so it passes through unchanged (runs.ts:82-85).
-const expectedWire: Record<string, unknown> = {
-  agent: "claude-code",
-  repo: "acme/payments",
-  task: "do the thing",
-  title: "Refund flow",
-  description: "ticket 4412",
-  policy_id: "11111111-1111-1111-1111-111111111111",
-  confinement_class: "CC2",
-  interactive: true,
-  inline_policy: fullInput.inline_policy,
-  image: "ghcr.io/acme/dev:1",
-  task_mode: "exec",
-  interactive_start: "agent",
-  seed_auto_tools: true,
-  tool_approvals: "hold",
-  workspaces: fullInput.workspaces,
-  workspace_id: "22222222-2222-2222-2222-222222222222",
-  integration_id: "anthropic_api_key",
-  // The member's drive request (D5): forwarded verbatim by runWireBody — a
-  // path never rides here, only {enabled, read_only}.
-  drive: { enabled: true, read_only: false },
-};
+// An intent that sets every field the registry carries, with a value the
+// serializer only has to pass through. inline_policy travels as policy_overlay.
+function sampleIntent(): RunIntent {
+  const intent: Record<string, unknown> = {};
+  for (const r of TEMPLATE_REQUEST_FIELDS) if (!r.excluded && !r.pending) intent[r.name] = r.name === "inline_policy" ? {} : 1;
+  return intent as RunIntent;
+}
 
-// Go DTO JSON tags the console NEVER sends (CLI-only — cmd/wardyn/commands.go:96-103).
-// If the whitelist starts forwarding one of these, or the Go DTO drops one,
-// this list must change in the same commit. model_provider is CLI/API-only
-// until the New Run rail's provider picker lands (multi-provider MP-23), which
-// moves it into runWireBody. preset/preset_version are the launcher API's
-// (#1143); the console sends the explicit spec and has no preset UI.
-const UI_NEVER_SENDS = new Set(["devcontainer_repo", "devcontainer_ref", "model_provider", "preset", "preset_version"]);
+// A. The three request doors send the serializer's body untouched.
+describe("the request doors send the body intentToWire built", () => {
+  const { body } = intentToWire({ shape: "agent_task", workspaces: [workspaceEntry], resources: { disk_mib: 1 } }, { title: "Refund flow", description: "" });
+  const sent = () => ({ path: String(fetchMock.mock.calls[0][0]), body: String(fetchMock.mock.calls[0][1]?.body) });
 
-// ui_apps used to sit on this set as a TS AgentRun key with no Go AgentRun
-// json tag (handleGetRun's anonymous wrapper struct, runs_policy.go:172-175,
-// GET /runs/{id} only) — it now lives on RunDetail instead (see the RunDetail
-// test below), so AgentRun itself needs no wrapper-key exclusion.
-
-// A. Every forwarded field reaches both doors with the value the caller set.
-describe("runWireBody — every console-settable DTO field reaches the wire", () => {
-  // ticket: F8
-  for (const door of ["createRun", "preflightRun"] as const) {
-    it(`${door}: forwards all ${Object.keys(expectedWire).length} fields verbatim`, async () => {
-      await runs[door](fullInput);
-      const body = sentBody();
-      // Exact key set — an extra key would be a strict-decode 400 on the Go
-      // side (helpers.go:391-398); a missing key is the silent-drop class.
-      expect(Object.keys(body).sort()).toEqual(Object.keys(expectedWire).sort());
-      for (const [k, v] of Object.entries(expectedWire)) {
-        expect(body[k], `field ${k} on ${door}`).toEqual(v);
-      }
-      expect(sentPath()).toBe(door === "createRun" ? "/api/v1/runs" : "/api/v1/runs/preflight");
-    });
-  }
-
-  it("createRun and preflightRun send byte-identical bodies for the same input", async () => {
-    await runs.createRun(fullInput);
-    const a = String(fetchMock.mock.calls[0][1]?.body);
-    fetchMock.mockClear();
-    await runs.preflightRun(fullInput);
-    const b = String(fetchMock.mock.calls[0][1]?.body);
-    expect(a).toBe(b);
+  it.each([
+    ["createRunWire", "/api/v1/runs"],
+    ["preflightRunWire", "/api/v1/runs/preflight"],
+    ["previewRunPolicyWire", "/api/v1/runs/policy-preview"],
+  ] as const)("%s posts the body byte for byte to %s", async (door, path) => {
+    await runs[door](body);
+    expect(sent()).toEqual({ path, body: JSON.stringify(body) });
+    expect(fetchMock.mock.calls[0][1]?.method).toBe("POST");
   });
 
-  // Per-field omission: an ABSENT choice must be an absent key, never
-  // "", false, or null — pkg/client/dto_parity_test.go pins the same rule
-  // from the Go side ("a minimal request must put only the always-sent keys
-  // on the wire").
-  const optionalKeys = Object.keys(expectedWire).filter((k) => !["agent", "repo", "task"].includes(k));
-  for (const k of optionalKeys) {
-    it(`omits ${k} when the input does not set it`, async () => {
-      const input: Record<string, unknown> = { ...fullInput };
-      delete input[k];
-      // policy_id and inline_policy are XOR on the server; dropping one is legal.
-      await runs.createRun(input as unknown as WireInput);
-      expect(k in sentBody(), `${k} must be absent, not empty`).toBe(false);
-    });
-  }
-
-  it("falsy scalars are omitted (interactive:false, seed_auto_tools:false, empty strings)", async () => {
-    const falsy: WireInput = {
-      agent: "claude-code",
-      repo: "",
-      task: "",
-      title: "",
-      description: "",
-      interactive: false,
-      seed_auto_tools: false,
-      image: "",
-      task_mode: undefined,
-      integration_id: "",
-      workspaces: [],
-    };
-    await runs.createRun(falsy);
-    const body = sentBody();
-    // repo/task are ALWAYS-sent keys (runs.ts:71-75) — JSON.stringify keeps "".
-    expect(Object.keys(body).sort()).toEqual(["agent", "repo", "task"]);
+  it("calls the registered policy-preview route", () => {
+    const routes = readFileSync(join(repoRoot(), "internal/api/routes.go"), "utf8");
+    expect(/r\.Post\("([^"]+)", s\.handlePolicyPreview\)/.exec(routes)?.[1]).toBe("/runs/policy-preview");
   });
 
-  it("workspaces[].read_only:false is forwarded as false (Go *bool no-op), not dropped", async () => {
-    await runs.createRun({
-      agent: "claude-code",
-      repo: "r",
-      task: "t",
-      workspaces: [{ workspace_id: "ws-1", read_only: false }],
-    });
-    expect(sentBody().workspaces).toEqual([{ workspace_id: "ws-1", read_only: false }]);
-  });
-});
-
-// B. The confinement clamp (runs.ts:82-85 + core.ts:66) — pinned exactly,
-//    including the two edge cases below (H3a, H3b).
-describe("runWireBody — confinement_class clamp against inline_policy.min_confinement_class", () => {
-  const base: WireInput = { agent: "claude-code", repo: "r", task: "t" };
-
-  it("raises a requested class UP to the inline floor", async () => {
-    await runs.createRun({ ...base, confinement_class: "CC1", inline_policy: policyWithFloor("CC3") });
-    expect(sentBody().confinement_class).toBe("CC3");
-  });
-
-  it("leaves a class at or above the floor alone", async () => {
-    await runs.createRun({ ...base, confinement_class: "CC3", inline_policy: policyWithFloor("CC2") });
-    expect(sentBody().confinement_class).toBe("CC3");
-  });
-
-  it("does not clamp against a policy_id run (no inline floor is visible client-side)", async () => {
-    await runs.createRun({ ...base, confinement_class: "CC1", policy_id: "11111111-1111-1111-1111-111111111111" });
-    expect(sentBody().confinement_class).toBe("CC1");
-  });
-
-  // H3: an unrecognised class ranks 0 (core.ts:66), so it is silently
-  // replaced by the floor instead of reaching the server's 400
-  // (runs.go:40-49). This pins today's behaviour so a fix (or a regression)
-  // is visible; the assertion is on what the code does, not on what is ideal.
-  it("an unrecognised requested class is replaced by the floor (server 400 is masked)", async () => {
-    // ticket: H3a
-    await runs.createRun({ ...base, confinement_class: "cc2" as never, inline_policy: policyWithFloor("CC2") });
-    expect(sentBody().confinement_class).toBe("CC2");
-  });
-
-  it("an unrecognised FLOOR disables the clamp entirely", async () => {
-    // ticket: H3b
-    await runs.createRun({ ...base, confinement_class: "CC1", inline_policy: policyWithFloor("vault") });
-    expect(sentBody().confinement_class).toBe("CC1");
+  it("preserves Retry-After on a preview refusal for the bounded preview scheduler", async () => {
+    fetchMock.mockResolvedValue(new Response(JSON.stringify({ error: "limited" }), { status: 429, headers: { "Retry-After": "3" } }));
+    await expect(runs.previewRunPolicyWire(body)).rejects.toMatchObject({ status: 429, message: "limited", retryAfter: "3" });
+    fetchMock.mockResolvedValue(new Response(JSON.stringify({ error: "limited" }), { status: 429 }));
+    await expect(runs.previewRunPolicyWire(body)).rejects.toMatchObject({ status: 429, retryAfter: undefined });
   });
 });
 
@@ -282,37 +134,46 @@ describe("source parity — Go wire tags vs the TS mirror", () => {
   const root = repoRoot();
   // CreateRunRequest and WorkspaceSelection live in runs_create.go; read the
   // package's two DTO files together so a later move within pkg/client is not a false red.
-  const clientGo = ["client.go", "runs_create.go"].map((f) => readFileSync(join(root, "pkg/client", f), "utf8")).join("\n");
+  const clientGo = ["client.go", "runs_create.go", "runs_new_run.go", "runs_mode.go"].map((f) => readFileSync(join(root, "pkg/client", f), "utf8")).join("\n");
   const typesGo = readFileSync(join(root, "internal/types/types.go"), "utf8");
   const runsTs = readFileSync(join(root, "ui/src/app/lib/types/runs.ts"), "utf8");
+  const runCreateTs = readFileSync(join(root, "ui/src/app/lib/types/run-create.ts"), "utf8");
 
-  it("every CreateRunRequest json tag is forwarded by runWireBody or on the UI-never-sends list", async () => {
+  it("every CreateRunRequest json tag is carried by intentToWire, sent by the Name dialog, or excluded by the registry", () => {
     const goTags = goJSONTags(clientGo, "CreateRunRequest");
     expect(goTags.length).toBeGreaterThanOrEqual(17); // stale-regex guard (Go test does the same)
-    await runs.createRun(fullInput);
-    const wireKeys = new Set(Object.keys(sentBody()));
-    const missing = goTags.filter((t) => !wireKeys.has(t) && !UI_NEVER_SENDS.has(t));
+    const { body, unsupported } = intentToWire(sampleIntent(), { title: "t", description: "d" });
+    expect(unsupported, "a carried registry row the serializer cannot send").toEqual([]);
+    // inline_policy is the document's name for the overlay; it travels as policy_overlay.
+    const carried = TEMPLATE_REQUEST_FIELDS.filter((r) => !r.excluded && !r.pending).map((r) => r.name);
+    for (const name of carried) expect(body, name).toHaveProperty(name === "inline_policy" ? POLICY_CARRIER : name);
+    const accounted = new Set([...carried, ...TEMPLATE_REQUEST_FIELDS.filter((r) => r.excluded).map((r) => r.name)]);
+    const missing = goTags.filter((t) => !accounted.has(t) && !UI_NEVER_SENDS.has(t));
     expect(
       missing,
-      "Go DTO fields the console can never send — add them to runWireBody (runs.ts:70-116) " +
-        "and fullInput above, or to UI_NEVER_SENDS with a reason",
+      "Go DTO fields the console can never send: add a registry row (internal/api/template_fields.go) " +
+        "that carries or excludes them, and regenerate the golden",
     ).toEqual([]);
-    // …and the reverse: nothing on UI_NEVER_SENDS has quietly been removed from Go.
-    for (const t of UI_NEVER_SENDS) {
-      expect(goTags, `UI_NEVER_SENDS names ${t}, which is no longer a Go DTO field`).toContain(t);
-    }
+    for (const t of UI_NEVER_SENDS) expect(goTags, `UI_NEVER_SENDS names ${t}, which is no longer a Go DTO field`).toContain(t);
   });
 
-  it("every key runWireBody emits is a CreateRunRequest json tag (a stray key is a strict-decode 400)", async () => {
+  it("every key intentToWire emits is a CreateRunRequest json tag (a stray key is a strict-decode 400)", () => {
     const goTags = new Set(goJSONTags(clientGo, "CreateRunRequest"));
-    await runs.createRun(fullInput);
-    const stray = Object.keys(sentBody()).filter((k) => !goTags.has(k));
+    const stray = Object.keys(intentToWire(sampleIntent(), { title: "t", description: "d" }).body).filter((k) => !goTags.has(k));
     expect(stray, "keys the server will reject with 400 'unknown field' (helpers.go:393)").toEqual([]);
+  });
+
+  it("every RunResources json tag reaches the wire when set alone (a disk-only block is not dropped)", () => {
+    for (const tag of goJSONTags(clientGo, "RunResources")) {
+      const { body, unsupported } = intentToWire({ resources: { [tag]: 1 } });
+      expect(unsupported).toEqual([]);
+      expect(body.resources, `resources.${tag} is dropped by intentToWire`).toEqual({ [tag]: 1 });
+    }
   });
 
   it("WorkspaceSelection: the TS wire entry's keys are exactly Go's json tags", () => {
     const goTags = goJSONTags(clientGo, "WorkspaceSelection").sort();
-    const sent = Object.keys(fullInput.workspaces[0]).sort();
+    const sent = Object.keys(workspaceEntry).sort();
     expect(sent).toEqual(goTags);
   });
 
@@ -337,16 +198,62 @@ describe("source parity — Go wire tags vs the TS mirror", () => {
     expect(omitted).toEqual([]);
   });
 
-  it("RunDetail adds exactly ui_apps, user_type_name and the model provider's name and deleted flag over AgentRun — " +
+  it("RunDetail adds exactly ui_apps, user_type_name, the model provider's name and deleted flag, the launching portal's name, the pool's name, the ended run's kept_until, the run's policy and its open sync sessions over AgentRun — " +
     "the fields only GET /runs/{id} sends (handleGetRun's anonymous wrapper struct, runs_policy.go)", () => {
     const runDetailOwnKeys = tsInterfaceKeys(runsTs, "RunDetail");
-    expect(runDetailOwnKeys).toEqual(["ui_apps", "user_type_name", "model_provider_name", "model_provider_deleted"]);
+    expect(runDetailOwnKeys).toEqual([
+      "ui_apps",
+      "user_type_name",
+      "model_provider_name",
+      "model_provider_deleted",
+      "created_via_name",
+      "runner_pool_name",
+      "kept_until",
+      "policy",
+      "sync",
+    ]);
   });
 
-  it("CreateRunInput (the wizard-facing type) declares no key the Go DTO lacks", () => {
+  it("RunSync and RunSyncOpen's keys are exactly runSyncView's and runSyncOpen's json tags (GET /runs/{id} sync.open, sshgateway_sync.go)", () => {
+    const syncGo = readFileSync(join(root, "internal/api/sshgateway_sync.go"), "utf8");
+    expect(tsInterfaceKeys(runsTs, "RunSync").sort()).toEqual(goJSONTags(syncGo, "runSyncView").sort());
+    expect(tsInterfaceKeys(runsTs, "RunSyncOpen").sort()).toEqual(goJSONTags(syncGo, "runSyncOpen").sort());
+  });
+
+  it("RunEndWaitResult's keys are exactly runEndWaitResponse's json tags (PATCH /runs/{id}, run_end_wait.go)", () => {
+    const endWaitGo = readFileSync(join(root, "internal/api/run_end_wait.go"), "utf8");
+    expect(tsInterfaceKeys(runsTs, "RunEndWaitResult").sort()).toEqual(goJSONTags(endWaitGo, "runEndWaitResponse").sort());
+  });
+
+  it("CreateRunInput (the request type RunIntent is built on) declares no key the Go DTO lacks", () => {
     const goTags = new Set(goJSONTags(clientGo, "CreateRunRequest"));
-    const tsKeys = tsInterfaceKeys(runsTs, "CreateRunInput");
+    const tsKeys = tsInterfaceKeys(runCreateTs, "CreateRunInput");
     expect(tsKeys.filter((k) => !goTags.has(k))).toEqual([]);
+  });
+
+  // components[] (#1914): the New Run access rows send it, built from a mirrored
+  // type rather than a guess. The element is the SDK's ComponentRef, an
+  // alias of types.ComponentRef, and its keys are exactly the Go tags.
+  it("CreateRunRequest.components is []ComponentRef, and the TS ComponentRef keys are exactly its Go tags", () => {
+    expect(clientGo).toMatch(/Components\s+\[\]ComponentRef\s+`json:"components,omitempty"`/);
+    const typesGoSrc = readFileSync(join(root, "pkg/client/types.go"), "utf8");
+    expect(typesGoSrc).toMatch(/ComponentRef\s*=\s*types\.ComponentRef/);
+    const refGo = goJSONTags(readFileSync(join(root, "internal/types/component.go"), "utf8"), "ComponentRef");
+    expect(refGo.sort()).toEqual(["access", "builtin", "id", "inline", "mcp_harnesses", "name", "org", "repos"]);
+    const componentsTs = readFileSync(join(root, "ui/src/app/lib/types/components.ts"), "utf8");
+    expect(tsInterfaceKeys(componentsTs, "ComponentRef").sort()).toEqual(refGo);
+  });
+
+  it("the console's response types carry the component facts both dry-run doors return", () => {
+    const preflightGo = readFileSync(join(root, "internal/api/preflight.go"), "utf8");
+    const previewGo = readFileSync(join(root, "internal/api/policy_preview_facts.go"), "utf8");
+    for (const src of [preflightGo, previewGo]) expect(src).toMatch(/Components\s+\[\]componentFact\s+`json:"components,omitempty"`/);
+    const previewTs = readFileSync(join(root, "ui/src/app/lib/types/policy-preview.ts"), "utf8");
+    const preflightTs = readFileSync(join(root, "ui/src/app/lib/types/preflight.ts"), "utf8");
+    expect(tsInterfaceKeys(preflightTs, "PreflightResult")).toContain("components");
+    expect(tsInterfaceKeys(previewTs, "PolicyPreviewResult")).toContain("components");
+    expect(preflightTs).toMatch(/components\?: ComponentFact\[\];/);
+    expect(previewTs).toMatch(/components\?: ComponentFact\[\];/);
   });
 });
 
@@ -418,6 +325,19 @@ describe("source parity — five more flat structs", () => {
     expect(new Set(goTags)).toEqual(new Set(tsKeys));
   });
 
+  it("SiteConfig.components is the ComponentSettings block, and every Go tag of it is mirrored", () => {
+    expect(siteConfigGo).toMatch(/Components\s+\*ComponentSettings\s+`json:"components,omitempty"`/);
+    expect(siteTs).toMatch(/components\?: ComponentSettings;/);
+    const goTags = goJSONTags(siteConfigGo, "ComponentSettings");
+    expect(goTags.length).toBe(3);
+    expect(new Set(tsInterfaceKeys(siteTs, "ComponentSettings"))).toEqual(new Set(goTags));
+  });
+
+  it("RunPolicySpec.github_capabilities is mirrored beside azure_devops_capabilities", () => {
+    expect(goJSONTags(policyGo, "RunPolicySpec")).toContain("github_capabilities");
+    expect(tsInterfaceKeys(policyTs, "RunPolicySpec")).toEqual(expect.arrayContaining(["azure_devops_capabilities", "github_capabilities"]));
+  });
+
   it("every Go AuditEvent tag is mirrored on the TS interface (prev_hash/row_hash closed)", () => {
     const goTags = goJSONTags(typesGoFull, "AuditEvent");
     expect(goTags.length).toBeGreaterThanOrEqual(10);
@@ -452,9 +372,9 @@ describe("source parity — autonomy wire types (#510-F8)", () => {
   const governanceGo = readFileSync(join(root, "internal/types/governance.go"), "utf8");
   const governanceTs = readFileSync(join(root, "ui/src/app/lib/api/governance.ts"), "utf8");
 
-  it("AutonomyRubric: full parity — the nine closed fields", () => {
+  it("AutonomyRubric: full parity — the nine level caps and the guardrail lock", () => {
     const goTags = goJSONTags(governanceGo, "AutonomyRubric");
-    expect(goTags.length).toBe(9);
+    expect(goTags.length).toBe(10);
     const tsKeys = tsInterfaceKeys(governanceTs, "AutonomyRubric");
     expect(new Set(tsKeys)).toEqual(new Set(goTags));
   });

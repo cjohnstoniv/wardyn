@@ -2,11 +2,9 @@
 
 # Monitoring
 
-`GET /metrics` (admin bearer required, next to the unauthenticated
-`/healthz`) serves Prometheus text exposition, stdlib-only, no client
-library. `/healthz` stays the liveness/component surface; `/metrics` is the
-trend surface. Audit sinks (`WARDYN_AUDIT_SINKS`, [ENV.md](../ENV.md)) are
-the event stream for SIEMs — metrics carry no per-run detail.
+- `GET /metrics` (admin bearer required, next to the unauthenticated `/healthz`) serves Prometheus text exposition, stdlib-only, no client library.
+- `/healthz` stays the liveness/component surface; `/metrics` is the trend surface.
+- Audit sinks (`WARDYN_AUDIT_SINKS`, [ENV.md](../ENV.md)) are the event stream for SIEMs — metrics carry no per-run detail.
 
 ```mermaid
 flowchart LR
@@ -21,62 +19,98 @@ flowchart LR
 
 ## Counters and gauges
 
-| Name | What it counts |
-| --- | --- |
-| Runs by terminal state, approval decisions by outcome, egress denies, credential mints, sandbox launch-latency sum/count | The base counters — every one only moves on success, so two gauges sit beside them: a dead store and an idle cluster otherwise scrape identically |
-| `wardyn_store_up` | Gauge, 1 when Postgres answers the same bounded ping `/readyz` makes. A *ping*, not proof of work: a reachable pool can still fail individual queries |
-| `wardyn_audit_spool_lines` | Gauge. Audit events waiting in the local JSONL fallback spool. A value that never returns to 0 means the drain loop isn't working; mid-drain it can read lower than the file's line count |
-| `wardyn_audit_spool_quarantined_total` | Events the store permanently refused, moved aside by the drain. Non-zero means the trail is missing those events even though the spool drained |
-| `wardyn_audit_spool_torn_total` | Spool lines dropped as unparseable — a torn tail from an ENOSPC or a partial write. Distinct from a store refusal: these never reach the quarantine count, since they never parsed far enough to be replayed |
-| `wardyn_audit_sink_drops_total{sink}` | Events an off-box SIEM sink dropped (buffer overflow or retry exhaustion), even though Postgres — the primary — still got the row. Non-zero means SIEM-side loss only |
-| `wardyn_drive_refusals_total{reason}` | Runs refused their user drive, by reason — a signal for the drive-claim allocator, not the audit pipeline |
-| `wardyn_sso_refresh_total{outcome}` | Control-plane AWS SSO `CreateToken` renewal attempts (`awssso_refresh.go`), by `success`/`spent`/`transport_error`/`unavailable` — the same distinction the `harness.credential.refresh` audit row's `spent` field and expiry check already make, graphable without grepping the audit trail |
-| `wardyn_groundtruth_observed_total`, `wardyn_groundtruth_dropped_total`, `wardyn_groundtruth_dropped_unmapped_total`, `wardyn_groundtruth_observed_by_kind_total{kind=…}` | The eBPF ground-truth sensor's cumulative counts. Only here — they used to ride the anonymous `/healthz`, which handed the fleet's kernel-event volume to anyone who could reach the port. `/healthz` now publishes the VERDICT only (`state`, `last_heartbeat`, `reason`, `missing_kinds`), and the reason sentence still names the unmapped-drop count for an operator reading a broken correlation. Omitted entirely when no sensor has ever beaten |
-| `wardyn_auth_failed_suppressed_total` | `auth.fail` audit rows the rate limiter dropped. The trail is capped at roughly one row per second, so past a small burst it stops describing the volume it is bounding — **a credential-stuffing run reads quieter than a handful of typos**. **Alert on this series, not the audit row count**: flat rows with this climbing is the attack |
-| `wardyn_auth_store_errors_total` | Requests an authentication lane couldn't decide because its store read failed and answered `500` — no audit row exists for these (no authenticated principal to attribute one to) |
+| Name | What it counts | Detail |
+| --- | --- | --- |
+| Runs by terminal state, approval decisions by outcome, egress denies, credential mints, sandbox launch-latency sum/count | The base counters — every one only moves on success, so two gauges sit beside them: a dead store and an idle cluster otherwise scrape identically | |
+| `wardyn_store_up` | Gauge, 1 when Postgres answers the same bounded ping `/readyz` makes. A *ping*, not proof of work: a reachable pool can still fail individual queries | |
+| `wardyn_runner_up` | Gauge, per replica: 1 when this replica's last probe of the sandbox runner's substrate succeeded, 0 when it did not. Absent with no runner configured. **Not part of `/readyz`** | The `substrate_health` row of `/setup/status` says which way it failed. |
+| ↳ | One read-only call (Kubernetes: a namespaced pod list of limit 1, which the chart's Role already grants; Docker: a daemon ping), cached for 5 seconds and bounded by a 3-second deadline | |
+| `wardyn_sweep_last_tick_seconds{sweep,result}` | Gauge, Unix seconds. `result="attempt"` is when the sweep last started a tick, `result="success"` when it last finished one without error | The record is shared by every replica, so a follower reports the leader's ticks. See [Substrate and sweep health](#substrate-and-sweep-health) |
+| ↳ | A sweep that has not ticked yet has no sample, and a sweep that is not running on this install (see below) has no series | |
+| `wardyn_audit_spool_lines` | Gauge. Audit events waiting in the local JSONL fallback spool. A value that never returns to 0 means the drain loop isn't working; mid-drain it can read lower than the file's line count | |
+| `wardyn_audit_spool_quarantined_total` | Events the store permanently refused, moved aside by the drain. Non-zero means the trail is missing those events even though the spool drained | |
+| `wardyn_audit_spool_torn_total` | Spool lines dropped as unparseable — a torn tail from an ENOSPC or a partial write. Distinct from a store refusal: these never reach the quarantine count, since they never parsed far enough to be replayed | |
+| `wardyn_audit_sink_drops_total{sink}` | Events an off-box SIEM sink dropped (buffer overflow or retry exhaustion), even though Postgres — the primary — still got the row. Non-zero means SIEM-side loss only | |
+| `wardyn_audit_delivery_lag{destination}` | Gauge. Audit rows recorded but not yet acknowledged by the collector (head seq minus acknowledged seq, never below 0). Only present with `"delivery": "acknowledged"` on the webhook sink; read from Postgres, so any replica reports it | Rising lag with the collector healthy means the loop is stopped: check `wardyn_audit_delivery_halted` and the leader's log |
+| `wardyn_audit_delivery_oldest_undelivered_age_seconds{destination}` | Gauge. Age of the oldest audit row the collector has not acknowledged; 0 when caught up | |
+| `wardyn_audit_delivery_last_ack_timestamp_seconds{destination}` | Gauge, Unix seconds of the collector's last acceptance (HTTP 2xx); 0 if it never accepted | |
+| `wardyn_audit_delivery_halted{destination}` | Gauge. 1 when the collector answered a terminal 4xx (not 408 or 429) and delivery is halted until wardynd restarts or another replica takes over delivery | The checkpoint's `last_error` holds the status, never the token |
+| `wardyn_audit_delivery_resets_total{destination}` | Counter. Times retention or a table reset removed the row at the checkpoint and delivery resent from the oldest retained row. Each one is also an `audit.delivery.reset` audit row | Non-zero means the collector may have missed events; see [Acknowledged delivery](../ENV.md#acknowledged-delivery-delivery-acknowledged) |
+| `wardyn_approval_notify_failed_total{channel}` | Approval notifications that went dead on a channel: five failed sends, a non-retryable response, or still unsent an hour after they came due | Each also writes an `approval.notify.failed` audit row carrying an error class, never a URL. Only present while `WARDYN_APPROVAL_NOTIFY` is set, one series per configured channel; per replica |
+| `wardyn_approval_notify_suppressed_total{channel}` | Approval raises that created no notification because the run already had 25 tier-0 outbox rows in the last hour. The approval itself still exists and shows in the console. Only present while `WARDYN_APPROVAL_NOTIFY` is set; per replica. See [Approval notifications](../OPERATIONS.md#approval-notifications) | |
+| `wardyn_runs_active{state}`, `wardyn_runs_unschedulable`, `wardyn_runs_cpu_millis_held{runner}`, `wardyn_runs_memory_mib_held{runner}`, `wardyn_runs_oldest_active_seconds` | Gauges. The fleet from a 15-second snapshot per replica, shared by concurrent scrapes, with no owner label. Every replica computes the same values, so aggregate with `max()` across replicas, never `sum()` | If the snapshot cannot be refreshed the families are omitted from that scrape, never written as zero (read `wardyn_store_up`). |
+| ↳ | Held figures are summed per runner kind, never across kinds: the basis is requests for `k8s` and caps for `docker` | They are configured reservations, not observed use; a run recorded before reservations were stored adds to no sum. |
+| `wardyn_drive_refusals_total{reason}` | Runs refused their user drive, by reason — a signal for the drive-claim allocator, not the audit pipeline | |
+| `wardyn_runner_pool_queue_depth{pool_id}`, `wardyn_runner_pool_slots_used{pool_id}` | Gauges. Runs waiting in each runner pool's queue and runs holding a slot there, from a 15-second snapshot; aggregate with `max()` across replicas, never `sum()` | The label is the pool's id, never its name or an owner. |
+| `wardyn_runner_pool_queue_wait_seconds{outcome}` | Histogram. How long runs waited in a pool's queue, by how they left it: `started`, `timeout`, `cancelled` or `refused` | |
+| `wardyn_sso_refresh_total{outcome}` | Control-plane AWS SSO `CreateToken` renewal attempts (`awssso_refresh.go`), by `success`/`spent`/`transport_error`/`unavailable` — the same distinction the `harness.credential.refresh` audit row's `spent` field and expiry check already make, graphable without grepping the audit trail | |
+| `wardyn_groundtruth_observed_total`, `wardyn_groundtruth_dropped_total`, `wardyn_groundtruth_dropped_unmapped_total`, `wardyn_groundtruth_observed_by_kind_total{kind=…}` | The eBPF ground-truth sensor's cumulative counts. Only here — they used to ride the anonymous `/healthz`, which handed the fleet's kernel-event volume to anyone who could reach the port. Omitted entirely when no sensor has ever beaten | `/healthz` now publishes the VERDICT only (`state`, `last_heartbeat`, `reason`, `missing_kinds`), and the reason sentence still names the unmapped-drop count for an operator reading a broken correlation. |
+| `wardyn_auth_failed_suppressed_total` | Audit rows the rate limiter dropped: `auth.fail` and unattributed SSH or ticket refusals. The trail is capped near one row a second, so it stops describing the volume — **a credential-stuffing run reads quieter than a handful of typos** | **Alert on this series, not the audit row count**: flat rows with this climbing is the attack |
+| `wardyn_auth_store_errors_total` | Requests an authentication lane couldn't decide because its store read failed and answered `500` — no audit row exists for these (no authenticated principal to attribute one to) | |
 
-`wardyn_sso_refresh_total{outcome="spent"}` increments ONCE per refresh token AWS
-retires, at the `CreateToken` call that discovers it (the
-`invalid_grant`/`expired_token`/`invalid_client`/`unauthorized_client`
-codes). Every later dispatch on that same token exits at an earlier,
-UNCOUNTED short-circuit — the in-memory dead-mark check, before
-`CreateToken` is ever called again. So the series reads "how many
-distinct sessions AWS retired," not "how many times people hit a dead
-one." A climbing `transport_error`/`unavailable` series is the SSO-OIDC
-endpoint itself in trouble.
+- `wardyn_sso_refresh_total{outcome="spent"}` increments ONCE per refresh token AWS retires, at the `CreateToken` call that discovers it (the `invalid_grant`/`expired_token`/`invalid_client`/`unauthorized_client` codes).
+- Every later dispatch on that same token exits at an earlier, UNCOUNTED short-circuit — the in-memory dead-mark check, before `CreateToken` is ever called again.
+- So the series reads "how many distinct sessions AWS retired," not "how many times people hit a dead one."
+- A climbing `transport_error`/`unavailable` series is the SSO-OIDC endpoint itself in trouble.
+
+## Substrate and sweep health
+
+- `/readyz` answers for the store only, and stays that way. The chart's readinessProbe reads it.
+- A substrate fault that pulled every replica out of the Service would take the console down with them, and the console is the one place the fault is visible.
+- A broken substrate and a stalled sweep show instead on two gauges and on one `/setup/status` row, `substrate_health`, which an operator sees and a member does not.
+
+| Row state | Cause | Meaning |
+| --- | --- | --- |
+| `fail` | `runner_unreachable` | The substrate does not answer from this replica: no reply, a transport error, or the probe's deadline |
+| `fail` | `runner_auth` | The substrate refused the control plane: an expired or revoked token (unauthorized), or a missing grant such as a deleted RoleBinding (forbidden) |
+| `warn` | `sweep_stale` | A sweep this install runs has gone three of its own intervals without a success |
+
+- The row never blocks the console, and its detail names only the classified state and the stale sweeps, never the text of a substrate error.
+- Each background sweep records when it last tried and last finished cleanly.
+- A tick that returns an error moves `attempt` but not `success`, and a tick that panics leaves `success` where it was.
+
+These are the sweeps, with the interval each ticks at:
+
+| `sweep` | Interval | Runs when |
+| --- | --- | --- |
+| `idle_reaper` | `WARDYN_AUTOSTOP_INTERVAL`, default 1m | A runner exists and the interval is above 0 |
+| `terminal_sandbox` | 5m | A runner exists |
+| `approval_expiry` | `WARDYN_APPROVAL_EXPIRY_INTERVAL`, default 10m | The interval is above 0 |
+| `run_secret` | 15m | Always, on every replica |
+| `credential_expiry` | 24h | Always |
+| `recording_retention` | 1h | The recording store can sweep and `WARDYN_RECORDING_RETENTION_DAYS` is above 0 (default 0, off) |
+| `run_watcher` | 1m | A runner exists, on every replica |
+| `orphaned_build` | 30m | The image builder can sweep orphaned builds |
+| `run_output` | 1h | `WARDYN_RUN_OUTPUT_PERSIST` is on (the default): deletes run output past `WARDYN_RUN_OUTPUT_RETENTION_DAYS` and resolves abandoned pending rows. Runs on the sweeper leader; with persistence off the retention delete still runs but is not reported |
+| `run_queue` | 10s | Always: ends waiting runs past their wait, fails promoted runs whose start died, and promotes for every pool with waiting runs. Runs on the sweeper leader |
+
+- Every replica registers every sweep whose condition holds on the install, whichever replica holds the sweeper lock, so a follower notices a leader that stopped ticking.
+- A sweep whose condition does not hold has no series and can never be stale.
+- A sweep with no success on record warns only once three of its intervals have passed since this process started.
+
+Alert on:
+
+- `wardyn_runner_up == 0` on any replica. Each replica probes for itself, so one replica with a bad token or a network fault shows alone.
+- `time() - wardyn_sweep_last_tick_seconds{result="success"}` exceeding the sweep's interval from the table, with margin for one missed tick.
+- The console row warns at three intervals. A sweep with no `success` sample has not finished a tick yet, so alert on `absent` only after its first three intervals.
 
 ## Why two counters exist beside `wardyn_store_up`
 
 `wardyn_store_up` cannot answer for either loss:
 
-- It scrapes `1` throughout an outage that is 500ing every
-  token-authenticated request. That's worse than no signal, because it
-  argues against the operator's own evidence.
-- `wardyn_auth_failed_suppressed_total` and `wardyn_auth_store_errors_total`
-  cover the authentication lane specifically — a failure there otherwise
-  leaves no trace at all. Both the public lane and the INTERNAL lane (the
-  sandbox's run token and the host sensor's token) feed the same rate
-  limiter and the same suppressed-count counter. A process inside a
-  sandbox brute-forcing run tokens is therefore visible on this series,
-  without being able to flood the append-only log. The `auth.fail` row's
-  actor (`wardyn/adminAuth` vs `wardyn/internalAuth` /
-  `wardyn/internalAuthGroundtruth` / `wardyn/internalApproval`) is what
-  tells the two incidents apart.
-
-Read `wardyn_store_up` as reachability, and the two counters above as
-whether the work is actually succeeding. Scrape with any Prometheus
-`authorization` config carrying the admin token.
+- It scrapes `1` throughout an outage that is 500ing every token-authenticated request. That's worse than no signal, because it argues against the operator's own evidence.
+- `wardyn_auth_failed_suppressed_total` and `wardyn_auth_store_errors_total` cover the authentication lane specifically — a failure there otherwise leaves no trace at all.
+- Both the public lane and the INTERNAL lane (the sandbox's run token and the host sensor's token) feed the same rate limiter and the same suppressed-count counter.
+- A process inside a sandbox brute-forcing run tokens is therefore visible on this series, without being able to flood the append-only log.
+- The `auth.fail` row's actor (`wardyn/adminAuth` vs `wardyn/internalAuth` / `wardyn/internalAuthGroundtruth` / `wardyn/internalApproval`) is what tells the two incidents apart.
+- Read `wardyn_store_up` as reachability, and the two counters above as whether the work is actually succeeding.
+- Scrape with any Prometheus `authorization` config carrying the admin token.
 
 ## Kubernetes: the scrape must clear the NetworkPolicy
 
-The Helm chart renders a default-deny policy whose only ingress peer is
-*this namespace*. A Prometheus in a `monitoring` namespace is denied before
-it reaches `/metrics` — a scrape a NetworkPolicy dropped looks exactly like
-a target that is down.
-
-`networkPolicy.ingress.from` opens it, but that value **REPLACES** the
-same-namespace default rather than adding to it, so list every peer that
-must reach wardynd:
+- The Helm chart renders a default-deny policy whose only ingress peer is *this namespace*.
+- A Prometheus in a `monitoring` namespace is denied before it reaches `/metrics` — a scrape a NetworkPolicy dropped looks exactly like a target that is down.
+- `networkPolicy.ingress.from` opens it, but that value **REPLACES** the same-namespace default rather than adding to it, so list every peer that must reach wardynd:
 
 ```yaml
 networkPolicy:
@@ -88,18 +122,42 @@ networkPolicy:
           matchLabels: {kubernetes.io/metadata.name: monitoring}
 ```
 
-`deploy/helm/wardyn/ci/all-on-values.yaml` carries exactly that pair, beside
-the `prometheus.io/scrape` pod annotation it advertises.
+[`deploy/helm/wardyn/ci/all-on-values.yaml`](../../deploy/helm/wardyn/ci/all-on-values.yaml) carries exactly that pair, beside the `prometheus.io/scrape` pod annotation it advertises.
+
+## Scraping without a credential: the dedicated listener
+
+For a scraper that sends no bearer token, such as a stock Prometheus reading `prometheus.io/*` pod annotations, set `WARDYN_METRICS_LISTEN` (flag `-metrics-listen`, e.g. `:9464`; [ENV.md](../ENV.md)). It is off by default.
+
+- **What it serves:** `GET /metrics` in plain HTTP with **no credential**, the same body the gated route answers. Every other method and path is a `404`.
+- **Where it may bind:** boot refuses an address equal to `WARDYN_LISTEN`, `WARDYN_INTERNAL_LISTEN`, `WARDYN_SSH_LISTEN` or `WARDYN_UI_SANDBOX_LISTEN`. A bind failure, including an occupied port or malformed address, also refuses boot before background workers and optional gateways start.
+- **The console route:** `/metrics` on the console port keeps its operator gate either way, and the chart's ServiceMonitor keeps using it.
+- **What a reader learns:** fleet and capacity counts, approval decisions, credential-mint and sign-in-renewal outcomes, and your approval-notification channel ids as labels. No label carries a person, a run id or a secret.
+- [`threatmodel/THREAT-MODEL.md`](../../threatmodel/THREAT-MODEL.md) ("The unauthenticated metrics listener") lists every label and its source.
+
+On Kubernetes, set `metrics.listener.enabled=true` in the Helm chart (default port `9464`). The chart then renders:
+
+- a container port named `metrics` that is **not** on the Service;
+- the `prometheus.io/scrape`, `prometheus.io/port` and `prometheus.io/path` pod annotations, where an operator's own `podAnnotations` key wins;
+- its own NetworkPolicy ingress rule, admitting pods in the release namespace that are not run pods. `metrics.listener.from` replaces that peer, which a Prometheus in another namespace needs:
+
+```yaml
+metrics:
+  listener:
+    enabled: true
+    from:
+      - namespaceSelector:
+          matchLabels: {kubernetes.io/metadata.name: monitoring}
+        podSelector:
+          matchLabels: {app.kubernetes.io/name: prometheus}
+```
+
+> [!WARNING]
+> With `networkPolicy.enabled=false` there is no rule at all, and the port is open to the whole pod network.
 
 ## No core dumps, no attaching
 
-wardynd and wardyn-proxy hold credentials in memory, so each sets
-`RLIMIT_CORE` to 0 and marks itself non-dumpable (`PR_SET_DUMPABLE` 0) as
-its first act.
+wardynd and wardyn-proxy hold credentials in memory, so each sets `RLIMIT_CORE` to 0 and marks itself non-dumpable (`PR_SET_DUMPABLE` 0) as its first act.
 
-- A crash writes no core file, and a `core_pattern` handler receives
-  nothing.
-- A process of the same user can no longer `strace -p` or attach delve or
-  gdb to it, or read its `/proc/<pid>/environ` or `/proc/<pid>/mem`.
-
-This is intentional and not configurable.
+- A crash writes no core file, and a `core_pattern` handler receives nothing.
+- A process of the same user can no longer `strace -p` or attach delve or gdb to it, or read its `/proc/<pid>/environ` or `/proc/<pid>/mem`.
+- This is intentional and not configurable.

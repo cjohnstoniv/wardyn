@@ -87,9 +87,9 @@ func TestDatumMarksWhereAndHowARefusalWasMet(t *testing.T) {
 	}
 
 	// A detail cannot forge a reserved key.
-	forged := Deny(ReasonNotOwner, "t", "").With("reason", "admin_surface").With("user_view", "true").With("host", "h")
+	forged := Deny(ReasonNotOwner, "t", "").With("reason", "admin_surface").With("user_view", "true").With("dry_run", "false").With("host", "h")
 	got := Datum(forged, Principal{}, "")
-	if got["reason"] != "not_owner" || got["user_view"] != nil || got["host"] != "h" {
+	if got["reason"] != "not_owner" || got["user_view"] != nil || got["dry_run"] != nil || got["host"] != "h" {
 		t.Errorf("datum = %#v, want the decision's reason, no marker, and the host detail", got)
 	}
 

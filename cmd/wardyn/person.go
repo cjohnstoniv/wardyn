@@ -1,0 +1,69 @@
+// Copyright 2025 The Wardyn Authors
+// SPDX-License-Identifier: Apache-2.0
+
+package main
+
+import (
+	"encoding/json"
+	"fmt"
+	"strings"
+
+	"github.com/spf13/cobra"
+)
+
+// personCmd returns `wardyn person`: acts on a person's records that need the
+// security tier.
+func personCmd(client clientFn) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "person",
+		Short: "Erase a person's retained records or invite them to create a token (security tier)",
+	}
+	cmd.AddCommand(personEraseCmd(client), personInviteCmd(client), personInvitationsCmd(client))
+	return subcommandGroup(cmd)
+}
+
+// personEraseCmd is POST /people/{principal}/erasure.
+func personEraseCmd(client clientFn) *cobra.Command {
+	var scopes []string
+	var asJSON bool
+	cmd := &cobra.Command{
+		Use:   "erase <principal>",
+		Short: "Erase one person's retained records by scope",
+		Long: `Erase one person's retained records, scope by scope, in one audited act.
+
+--scope names what to erase, and may be repeated or comma-separated:
+
+  mask_copies            the masking manifests of their runs, after their live consumers are fenced
+  run_outputs            the stored output of those runs
+  recordings             their session recordings (nothing deletes one unless you ask)
+  run_tasks              the task text of the runs they created
+  components             the components they saved and the content of each run's snapshot of one they defined; the snapshot row stays
+  run_setups             their own run templates and revisions, their group template grants, and their name on shared templates
+  runner_pools           their own user pools (deleted; their runners stay)
+  member_drives          their own drives (deleted with their files; a drive a run holds fails the scope)
+  audit_personal_fields  their sealed audit fields (the key is destroyed; the chain still verifies)
+  credentials            their stored credentials and the key they sit under
+
+The scopes always run in the order above. The command exits non-zero unless every
+scope finished; a failure names the scopes left, and running it again with the same
+scopes finishes them. You cannot erase yourself except --scope credentials.`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if len(scopes) == 0 {
+				return fmt.Errorf("pass --scope with at least one scope to erase")
+			}
+			res, err := client().ErasePerson(cmd.Context(), args[0], scopes)
+			if err != nil {
+				return err
+			}
+			if asJSON {
+				return json.NewEncoder(cmd.OutOrStdout()).Encode(res)
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "erased %s for %s\n", strings.Join(res.Scopes, ", "), res.Person)
+			return nil
+		},
+	}
+	cmd.Flags().StringSliceVar(&scopes, "scope", nil, "scope to erase (repeatable): mask_copies, run_outputs, recordings, run_tasks, components, run_setups, runner_pools, member_drives, audit_personal_fields, credentials")
+	cmd.Flags().BoolVar(&asJSON, "json", false, "print the result as JSON")
+	return cmd
+}

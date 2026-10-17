@@ -4,9 +4,11 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/netip"
 	"os"
 	"os/exec"
 	"regexp"
@@ -27,6 +29,7 @@ type sshHealthz struct {
 	Enabled            bool   `json:"enabled"`
 	AdvertiseAddr      string `json:"advertise_addr"`
 	HostKeyFingerprint string `json:"host_key_fingerprint"`
+	ProxyCommand       string `json:"proxy_command"`
 }
 
 // sshCmd returns the cobra command for `wardyn run ssh <run-id>`. It is a
@@ -37,6 +40,7 @@ func sshCmd(client clientFn) *cobra.Command {
 	var doPrint bool
 	var doConfig bool
 	var doJSON bool
+	var advertisedProxy bool
 	cmd := &cobra.Command{
 		Use:   "ssh <run-id>",
 		Short: "Connect to a running sandbox over the SSH gateway",
@@ -48,6 +52,11 @@ token needed) and execs the local ssh(1) binary. --print emits the command
 instead of running it; --config emits an ssh_config Host block; --json emits
 the target (host, port, username, host key fingerprint) for a script or an
 external tool that dials the sandbox itself.
+
+When the deployment advertises a ProxyCommand (WARDYN_SSH_PROXY_COMMAND, for
+a gateway reached through a TLS-terminating listener on 443), all three
+outputs carry it. Connecting runs that command on this computer, so it needs
+--advertised-proxy; without the flag the command is shown and nothing runs.
 `,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -60,14 +69,79 @@ external tool that dials the sandbox itself.
 			if modes > 1 {
 				return errors.New("ssh: --print, --config and --json are mutually exclusive")
 			}
-			return runSSH(cmd, client(), args[0], doPrint, doConfig, doJSON)
+			return runSSH(cmd, client(), args[0], sshModes{doPrint, doConfig, doJSON, advertisedProxy})
 		},
 	}
 	cmd.Flags().BoolVar(&doPrint, "print", false, "print the ssh command instead of running it")
 	cmd.Flags().BoolVar(&doConfig, "config", false, "print an ssh_config Host block instead of running it")
-	cmd.Flags().BoolVar(&doJSON, "json", false, "print the SSH target as JSON instead of connecting (host, port, username, host_key_fingerprint, command)")
+	cmd.Flags().BoolVar(&doJSON, "json", false, "print the SSH target as JSON instead of connecting (host, port, username, host_key_fingerprint, proxy_command, command)")
+	cmd.Flags().BoolVar(&advertisedProxy, "advertised-proxy", false, "connect through the ProxyCommand this deployment advertises (it runs on this computer)")
 	return cmd
 }
+
+// sshGateway is where the gateway is reached, as /healthz advertises it.
+type sshGateway struct {
+	host, port, fingerprint, proxy string
+}
+
+// resolveSSHGateway reads GET /healthz and returns the advertised gateway,
+// refusing a gateway that is off, advertises no address, or publishes a
+// ProxyCommand that breaks out of a quoted one-liner. Shared by `run ssh` and
+// `sync`, so both reach the gateway the same way.
+func resolveSSHGateway(ctx context.Context, c *sdk.Client) (sshGateway, error) {
+	raw, err := c.Healthz(ctx)
+	if err != nil {
+		return sshGateway{}, err
+	}
+	var health struct {
+		SSH *sshHealthz `json:"ssh"`
+	}
+	if err := json.Unmarshal(raw, &health); err != nil {
+		return sshGateway{}, fmt.Errorf("decode /healthz: %w", err)
+	}
+	if health.SSH == nil || !health.SSH.Enabled {
+		return sshGateway{}, errors.New("ssh: gateway is off on this deployment (an operator enables it by setting WARDYN_SSH_LISTEN and WARDYN_SSH_ADVERTISE where wardynd starts)")
+	}
+	host, port := splitHostPort(health.SSH.AdvertiseAddr)
+	// The gateway is up but publishes no reachable address (WARDYN_SSH_ADVERTISE
+	// unset — /healthz carries it verbatim). Without this check, the command
+	// would build "ssh <run>@ -p" and hand ssh(1) an empty hostname, so the
+	// operator would see ssh's own resolver error for a Wardyn misconfiguration.
+	if host == "" {
+		return sshGateway{}, errors.New("ssh: the gateway is enabled but advertises no address — set WARDYN_SSH_ADVERTISE (the externally-reachable host[:port], e.g. \"wardyn.example.com:2222\") where wardynd runs")
+	}
+	if err := checkGatewayAddr(host, port); err != nil {
+		return sshGateway{}, err
+	}
+	proxy := health.SSH.ProxyCommand
+	// The daemon refuses these at boot; a skewed or hostile one could still
+	// publish a value that breaks out of the quoted one-liner or the config line.
+	if err := cliutil.CheckSSHProxyCommand(proxy); err != nil {
+		return sshGateway{}, fmt.Errorf("ssh: this deployment advertises a ProxyCommand that %v, so it is not shown or run; ask your operator", err)
+	}
+	return sshGateway{host: host, port: port, fingerprint: health.SSH.HostKeyFingerprint, proxy: proxy}, nil
+}
+
+// checkGatewayAddr refuses an advertised address that is not a DNS name or IP
+// literal with a numeric port. The value is spliced into an ssh_config line, a
+// pasted shell line and a ProxyCommand's %h and %p, so anything else (a
+// newline, a $(...), a quote) would run or inject something.
+func checkGatewayAddr(host, port string) error {
+	if a, err := netip.ParseAddr(host); err != nil || a.Zone() != "" {
+		if len(host) > 253 || !gatewayDNSName.MatchString(host) {
+			return fmt.Errorf("ssh: the gateway advertises the host %q, which is not a DNS name or an IP address, so it is not used; ask your operator", host)
+		}
+	}
+	if port != "" {
+		n, err := strconv.Atoi(port)
+		if err != nil || n < 1 || n > 65535 || strings.Trim(port, "0123456789") != "" {
+			return fmt.Errorf("ssh: the gateway advertises the port %q, which is not a number from 1 to 65535, so it is not used; ask your operator", port)
+		}
+	}
+	return nil
+}
+
+var gatewayDNSName = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$`)
 
 // sshTarget is `wardyn run ssh --json`'s output: everything an external tool needs
 // to dial a sandbox over the gateway. Port is always populated (22 when the
@@ -78,10 +152,17 @@ type sshTarget struct {
 	Port               int    `json:"port"`
 	Username           string `json:"username"`
 	HostKeyFingerprint string `json:"host_key_fingerprint,omitempty"`
+	ProxyCommand       string `json:"proxy_command,omitempty"`
 	Command            string `json:"command"`
 }
 
-func runSSH(cmd *cobra.Command, c *sdk.Client, runID string, doPrint, doConfig, doJSON bool) error {
+// sshModes is the command's flags: at most one of print, config and json, and
+// advertisedProxy, the consent to run a server-supplied ProxyCommand.
+type sshModes struct {
+	print, config, json, advertisedProxy bool
+}
+
+func runSSH(cmd *cobra.Command, c *sdk.Client, runID string, m sshModes) error {
 	// The run id is ARGV: it is spliced into ssh(1)'s "<run-id>@<host>"
 	// argument, into the ssh_config User/Host block --config emits, and into
 	// the command string --print/--json hand an operator to paste. Unvalidated,
@@ -97,35 +178,25 @@ func runSSH(cmd *cobra.Command, c *sdk.Client, runID string, doPrint, doConfig, 
 	if _, err := parseID("run", runID); err != nil {
 		return err
 	}
-	raw, err := c.Healthz(cmd.Context())
+	gw, err := resolveSSHGateway(cmd.Context(), c)
 	if err != nil {
 		return err
 	}
-	var health struct {
-		SSH *sshHealthz `json:"ssh"`
-	}
-	if err := json.Unmarshal(raw, &health); err != nil {
-		return fmt.Errorf("decode /healthz: %w", err)
-	}
-	if health.SSH == nil || !health.SSH.Enabled {
-		return errors.New("ssh: gateway is off on this deployment (an operator enables it by setting WARDYN_SSH_LISTEN and WARDYN_SSH_ADVERTISE where wardynd starts)")
-	}
-
-	host, port := splitHostPort(health.SSH.AdvertiseAddr)
-	// The gateway is up but publishes no reachable address (WARDYN_SSH_ADVERTISE
-	// unset — /healthz carries it verbatim). Without this check, the command
-	// would build "ssh <run>@ -p" and hand ssh(1) an empty hostname, so the
-	// operator would see ssh's own resolver error for a Wardyn misconfiguration.
-	if host == "" {
-		return errors.New("ssh: the gateway is enabled but advertises no address — set WARDYN_SSH_ADVERTISE (the externally-reachable host[:port], e.g. \"wardyn.example.com:2222\") where wardynd runs")
-	}
+	host, port, proxy := gw.host, gw.port, gw.proxy
 	target := fmt.Sprintf("%s@%s", runID, host)
 	args := []string{target}
+	printed := "ssh "
+	if proxy != "" {
+		args = append([]string{"-o", "ProxyCommand=" + proxy}, args...)
+		printed += "-o ProxyCommand='" + proxy + "' "
+	}
+	printed += target
 	if port != "" {
 		args = append(args, "-p", port)
+		printed += " -p " + port
 	}
 
-	if doConfig {
+	if m.config {
 		shortID := shortRunID(runID)
 		configPort := port
 		if configPort == "" {
@@ -133,15 +204,18 @@ func runSSH(cmd *cobra.Command, c *sdk.Client, runID string, doPrint, doConfig, 
 		}
 		fmt.Fprintf(cmd.OutOrStdout(), "Host wardyn-%s\n  HostName %s\n  Port %s\n  User %s\n",
 			shortID, host, configPort, runID)
+		if proxy != "" {
+			fmt.Fprintf(cmd.OutOrStdout(), "  ProxyCommand %s\n", proxy)
+		}
 		return nil
 	}
 
-	if doPrint {
-		fmt.Fprintln(cmd.OutOrStdout(), "ssh "+strings.Join(args, " "))
+	if m.print {
+		fmt.Fprintln(cmd.OutOrStdout(), printed)
 		return nil
 	}
 
-	if doJSON {
+	if m.json {
 		portNum := 22
 		if port != "" {
 			n, err := strconv.Atoi(port)
@@ -153,9 +227,15 @@ func runSSH(cmd *cobra.Command, c *sdk.Client, runID string, doPrint, doConfig, 
 		enc := json.NewEncoder(cmd.OutOrStdout())
 		return enc.Encode(sshTarget{
 			Host: host, Port: portNum, Username: runID,
-			HostKeyFingerprint: health.SSH.HostKeyFingerprint,
-			Command:            "ssh " + strings.Join(args, " "),
+			HostKeyFingerprint: gw.fingerprint,
+			ProxyCommand:       proxy,
+			Command:            printed,
 		})
+	}
+
+	if proxy != "" && !m.advertisedProxy {
+		return fmt.Errorf("ssh: this deployment advertises a ProxyCommand, which ssh would run on this computer:\n  %s\n"+
+			"run again with --advertised-proxy to connect through it, or use --print or --config to copy it", proxy)
 	}
 
 	sub := exec.CommandContext(cmd.Context(), "ssh", args...)

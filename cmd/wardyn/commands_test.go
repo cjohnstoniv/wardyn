@@ -4,8 +4,10 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -16,6 +18,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -775,7 +778,7 @@ func TestApproveCmd_PostsApproveWithReason(t *testing.T) {
 	})
 
 	apID := uuid.New()
-	err := execCmd(t, "approve", apID.String(), "--url", srv.URL, "--token", "tok", "--reason", "ok by me")
+	err := execCmd(t, "approval", "approve", apID.String(), "--url", srv.URL, "--token", "tok", "--reason", "ok by me")
 	if err != nil {
 		t.Fatalf("approve returned error: %v", err)
 	}
@@ -797,7 +800,7 @@ func TestDenyCmd_PostsDeny(t *testing.T) {
 	})
 
 	apID := uuid.New()
-	if err := execCmd(t, "deny", apID.String(), "--url", srv.URL, "--token", "tok"); err != nil {
+	if err := execCmd(t, "approval", "deny", apID.String(), "--url", srv.URL, "--token", "tok"); err != nil {
 		t.Fatalf("deny returned error: %v", err)
 	}
 	got := srv.last()
@@ -807,14 +810,14 @@ func TestDenyCmd_PostsDeny(t *testing.T) {
 	}
 }
 
-// TestApprovalsListCmd_RunFlagReachesServer pins that `approvals list --run`
+// TestApprovalsListCmd_RunFlagReachesServer pins that `approval list --run`
 // actually uses the server's ?run_id= filter
 // instead of silently discarding it.
 func TestApprovalsListCmd_RunFlagReachesServer(t *testing.T) {
 	srv := newCmdServer(t, http.StatusOK, []types.ApprovalRequest{})
 	runID := uuid.New()
-	if err := execCmd(t, "approvals", "list", "--run", runID.String(), "--url", srv.URL, "--token", "tok"); err != nil {
-		t.Fatalf("approvals list returned error: %v", err)
+	if err := execCmd(t, "approval", "list", "--run", runID.String(), "--url", srv.URL, "--token", "tok"); err != nil {
+		t.Fatalf("approval list returned error: %v", err)
 	}
 	q, err := url.ParseQuery(srv.last().query)
 	if err != nil {
@@ -837,11 +840,11 @@ func TestApprovalsListCmd_PrintsHostAndHoldHint(t *testing.T) {
 	}})
 	gotBuf := &strings.Builder{}
 	root := rootCmd()
-	root.SetArgs([]string{"approvals", "list", "--url", srv.URL, "--token", "tok"})
+	root.SetArgs([]string{"approval", "list", "--url", srv.URL, "--token", "tok"})
 	root.SetOut(gotBuf)
 	root.SetErr(&strings.Builder{})
 	if err := root.Execute(); err != nil {
-		t.Fatalf("approvals list returned error: %v", err)
+		t.Fatalf("approval list returned error: %v", err)
 	}
 	got := gotBuf.String()
 	if !strings.Contains(got, "pkg.example.com") {
@@ -855,7 +858,7 @@ func TestApprovalsListCmd_PrintsHostAndHoldHint(t *testing.T) {
 // TestApprovalsGetCmd_RequiresRunFlag: `approvals get` has no server-side
 // get-by-id endpoint to fall back on, so --run is mandatory, not optional.
 func TestApprovalsGetCmd_RequiresRunFlag(t *testing.T) {
-	if err := execCmd(t, "approvals", "get", uuid.New().String(), "--token", "tok"); err == nil {
+	if err := execCmd(t, "approval", "get", uuid.New().String(), "--token", "tok"); err == nil {
 		t.Error("expected error when --run is missing, got nil")
 	}
 }
@@ -873,7 +876,7 @@ func TestApprovalsGetCmd_FindsByIDWithinRun(t *testing.T) {
 	})
 	out := &strings.Builder{}
 	root := rootCmd()
-	root.SetArgs([]string{"approvals", "get", wantID.String(), "--run", runID.String(), "--url", srv.URL, "--token", "tok"})
+	root.SetArgs([]string{"approval", "get", wantID.String(), "--run", runID.String(), "--url", srv.URL, "--token", "tok"})
 	root.SetOut(out)
 	root.SetErr(&strings.Builder{})
 	if err := root.Execute(); err != nil {
@@ -898,7 +901,7 @@ func TestApprovalsGetCmd_NotFound(t *testing.T) {
 	srv := newCmdServer(t, http.StatusOK, []types.ApprovalRequest{
 		{ID: uuid.New(), RunID: uuid.New(), State: types.ApprovalPending},
 	})
-	err := execCmd(t, "approvals", "get", uuid.New().String(), "--run", uuid.New().String(),
+	err := execCmd(t, "approval", "get", uuid.New().String(), "--run", uuid.New().String(),
 		"--url", srv.URL, "--token", "tok")
 	if err == nil {
 		t.Error("expected error for an approval id not found in --run, got nil")
@@ -907,7 +910,7 @@ func TestApprovalsGetCmd_NotFound(t *testing.T) {
 
 // approve/deny take exactly one positional arg.
 func TestApproveCmd_RequiresExactlyOneArg(t *testing.T) {
-	if err := execCmd(t, "approve", "--token", "tok"); err == nil {
+	if err := execCmd(t, "approval", "approve", "--token", "tok"); err == nil {
 		t.Error("expected error when approval id is missing, got nil")
 	}
 }
@@ -923,7 +926,7 @@ func TestApproveCmd_WithScopeAndUntil(t *testing.T) {
 
 	apID := uuid.New()
 	before := time.Now()
-	err := execCmd(t, "approve", apID.String(), "--url", srv.URL, "--token", "tok",
+	err := execCmd(t, "approval", "approve", apID.String(), "--url", srv.URL, "--token", "tok",
 		"--scope", "until", "--until", "2h")
 	if err != nil {
 		t.Fatalf("approve returned error: %v", err)
@@ -950,7 +953,7 @@ func TestApproveCmd_WithScopeOnly(t *testing.T) {
 		ID: uuid.New(), State: types.ApprovalApproved,
 	})
 
-	if err := execCmd(t, "approve", uuid.New().String(), "--url", srv.URL, "--token", "tok",
+	if err := execCmd(t, "approval", "approve", uuid.New().String(), "--url", srv.URL, "--token", "tok",
 		"--scope", "once"); err != nil {
 		t.Fatalf("approve returned error: %v", err)
 	}
@@ -1125,7 +1128,7 @@ func TestAuditCmd_TruncatedPageWarnsOnStderr(t *testing.T) {
 }
 
 // --------------------------------------------------------------------------
-// logTail (`wardyn logs`)
+// logTail (`wardyn run logs`)
 // --------------------------------------------------------------------------
 
 // TestLogTail_Filter_DedupesSameSecondBoundary is the real bug this type
@@ -1209,13 +1212,13 @@ func TestLogsCmd_FollowStopsAtTerminalState(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	out, err := runCmdWithTimeout(t, func(root *cobra.Command) {
-		root.SetArgs([]string{"logs", runID.String(), "--interval", "1ms", "--url", srv.URL, "--token", "tok"})
+		root.SetArgs([]string{"run", "logs", runID.String(), "--interval", "1ms", "--url", srv.URL, "--token", "tok"})
 	})
 	if err != nil {
-		t.Fatalf("logs returned error: %v", err)
+		t.Fatalf("run logs returned error: %v", err)
 	}
 	if !strings.Contains(out, "run.dispatch") {
-		t.Errorf("logs output = %q, want it to contain the dispatched event", out)
+		t.Errorf("run logs output = %q, want it to contain the dispatched event", out)
 	}
 	if got := strings.Count(out, "run.dispatch"); got != 1 {
 		t.Errorf("run.dispatch printed %d times, want exactly 1 (no duplicate re-poll)", got)
@@ -1240,14 +1243,14 @@ func TestLogsCmd_UnknownRunErrorsInsteadOfHanging(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	if _, err := runCmdWithTimeout(t, func(root *cobra.Command) {
-		root.SetArgs([]string{"logs", uuid.New().String(), "--interval", "1ms", "--url", srv.URL, "--token", "tok"})
+		root.SetArgs([]string{"run", "logs", uuid.New().String(), "--interval", "1ms", "--url", srv.URL, "--token", "tok"})
 	}); err == nil {
-		t.Fatal("logs returned nil for an unknown run id, want the GetRun 404 propagated")
+		t.Fatal("run logs returned nil for an unknown run id, want the GetRun 404 propagated")
 	}
 }
 
 // runCmdWithTimeout builds rootCmd(), lets configure set its args/flags, and
-// executes it with output captured (logsCmd writes via cmd.OutOrStdout()).
+// executes it with output captured (runLogsCmd writes via cmd.OutOrStdout()).
 // It doubles as the timeout backstop for a follow loop that fails to exit.
 func runCmdWithTimeout(t *testing.T, configure func(root *cobra.Command)) (string, error) {
 	t.Helper()
@@ -1759,7 +1762,7 @@ func TestRecordSynthesizeCmd_JSON(t *testing.T) {
 }
 
 // --------------------------------------------------------------------------
-// approvals list (surfaces the client's listApprovals; approve/deny decide one)
+// approval list (surfaces the client's listApprovals; approve/deny decide one)
 // --------------------------------------------------------------------------
 
 func TestApprovalsListCmd(t *testing.T) {
@@ -1767,8 +1770,8 @@ func TestApprovalsListCmd(t *testing.T) {
 		{ID: uuid.New(), RunID: uuid.New(), State: types.ApprovalPending},
 	})
 
-	if err := execCmd(t, "approvals", "list", "--state", "PENDING", "--url", srv.URL, "--token", "tok"); err != nil {
-		t.Fatalf("approvals list returned error: %v", err)
+	if err := execCmd(t, "approval", "list", "--state", "PENDING", "--url", srv.URL, "--token", "tok"); err != nil {
+		t.Fatalf("approval list returned error: %v", err)
 	}
 	got := srv.last()
 	if got.method != http.MethodGet || got.path != "/api/v1/approvals" {
@@ -1784,8 +1787,8 @@ func TestApprovalsListCmd_JSON(t *testing.T) {
 		{ID: uuid.New(), RunID: uuid.New(), State: types.ApprovalPending},
 	})
 
-	if err := execCmd(t, "approvals", "list", "--json", "--url", srv.URL, "--token", "tok"); err != nil {
-		t.Fatalf("approvals list --json returned error: %v", err)
+	if err := execCmd(t, "approval", "list", "--json", "--url", srv.URL, "--token", "tok"); err != nil {
+		t.Fatalf("approval list --json returned error: %v", err)
 	}
 	got := srv.last()
 	if got.method != http.MethodGet || got.path != "/api/v1/approvals" {
@@ -1927,7 +1930,7 @@ func TestListCmds_PrintFullActionableIDs(t *testing.T) {
 		{"run list", []types.AgentRun{{ID: runID, Agent: "claude-code"}},
 			[]string{"run", "list"}, runID, nil},
 		{"approvals list", []types.ApprovalRequest{{ID: apprID, RunID: apprRun, State: types.ApprovalPending}},
-			[]string{"approvals", "list"}, apprID, &apprRun},
+			[]string{"approval", "list"}, apprID, &apprRun},
 		{"policy list", []types.RunPolicy{{ID: polID, Name: "p"}},
 			[]string{"policy", "list"}, polID, nil},
 	} {
@@ -2064,7 +2067,7 @@ func TestApprovalsGetCmd_PagesPastTheFirstPage(t *testing.T) {
 
 	out := &strings.Builder{}
 	root := rootCmd()
-	root.SetArgs([]string{"approvals", "get", wantID.String(), "--run", runID.String(), "--url", srv.URL, "--token", "tok"})
+	root.SetArgs([]string{"approval", "get", wantID.String(), "--run", runID.String(), "--url", srv.URL, "--token", "tok"})
 	root.SetOut(out)
 	root.SetErr(&strings.Builder{})
 	if err := root.Execute(); err != nil {
@@ -2078,7 +2081,7 @@ func TestApprovalsGetCmd_PagesPastTheFirstPage(t *testing.T) {
 	}
 }
 
-// TestLogsCmd_NonFollowUnknownRunErrors: `logs --follow=false` checks the run
+// TestLogsCmd_NonFollowUnknownRunErrors: `run logs --follow=false` checks the run
 // with GetRun first, like follow mode, because the audit endpoint answers 200
 // [] for an id that does not exist — skipping the check would print nothing
 // and exit 0 for a typo'd run id. An unknown or unauthorized id is an error in
@@ -2096,9 +2099,9 @@ func TestLogsCmd_NonFollowUnknownRunErrors(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	if _, err := runCmdWithTimeout(t, func(root *cobra.Command) {
-		root.SetArgs([]string{"logs", uuid.New().String(), "--follow=false", "--url", srv.URL, "--token", "tok"})
+		root.SetArgs([]string{"run", "logs", uuid.New().String(), "--follow=false", "--url", srv.URL, "--token", "tok"})
 	}); err == nil {
-		t.Fatal("logs --follow=false returned nil for an unknown run id, want the GetRun 404 propagated")
+		t.Fatal("run logs --follow=false returned nil for an unknown run id, want the GetRun 404 propagated")
 	}
 }
 
@@ -2133,13 +2136,13 @@ func TestLogsCmd_NonFollowFollowsTruncatedPages(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	out, err := runCmdWithTimeout(t, func(root *cobra.Command) {
-		root.SetArgs([]string{"logs", runID.String(), "--follow=false", "--url", srv.URL, "--token", "tok"})
+		root.SetArgs([]string{"run", "logs", runID.String(), "--follow=false", "--url", srv.URL, "--token", "tok"})
 	})
 	if err != nil {
-		t.Fatalf("logs returned error: %v", err)
+		t.Fatalf("run logs returned error: %v", err)
 	}
 	if !strings.Contains(out, "run.dispatch") || !strings.Contains(out, "run.complete") {
-		t.Errorf("logs output = %q, want both the truncated page and the one after it", out)
+		t.Errorf("run logs output = %q, want both the truncated page and the one after it", out)
 	}
 }
 
@@ -2174,13 +2177,13 @@ func TestLogsCmd_FollowDrainsAuditsAfterTerminal(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	out, err := runCmdWithTimeout(t, func(root *cobra.Command) {
-		root.SetArgs([]string{"logs", runID.String(), "--interval", "1ms", "--url", srv.URL, "--token", "tok"})
+		root.SetArgs([]string{"run", "logs", runID.String(), "--interval", "1ms", "--url", srv.URL, "--token", "tok"})
 	})
 	if err != nil {
-		t.Fatalf("logs returned error: %v", err)
+		t.Fatalf("run logs returned error: %v", err)
 	}
 	if !strings.Contains(out, "run.complete") {
-		t.Errorf("logs output = %q, want the completion line written after the state flip", out)
+		t.Errorf("run logs output = %q, want the completion line written after the state flip", out)
 	}
 }
 
@@ -2330,7 +2333,7 @@ func TestUnknownSubcommandUnderEveryGroupIsAnError(t *testing.T) {
 	}
 	walk(rootCmd(), nil)
 
-	// The ten groups the finding named, plus `approvals` (the same shape, missed
+	// The ten groups the finding named, plus `approval` (the same shape, missed
 	// by the finding) and `run` (which already held the contract) and the root.
 	if len(groups) < 13 {
 		t.Fatalf("walked %d grouping commands (%v) — the CLI has at least 13, so this guard is grading almost nothing", len(groups), groups)
@@ -2370,7 +2373,7 @@ func TestUnknownSubcommandUnderEveryGroupIsAnError(t *testing.T) {
 // help on stdout and exits 0. That is the half of the contract subcommandGroup
 // must not break — the compat note covers the typo path only.
 func TestBareGroupStillPrintsHelpAndSucceeds(t *testing.T) {
-	for _, group := range []string{"setup", "policy", "secret", "workspace", "record", "sessions", "device", "source", "ssh-key", "site-config", "drive", "preset", "approvals"} {
+	for _, group := range []string{"setup", "policy", "secret", "workspace", "record", "session", "device", "source", "ssh-key", "site-config", "drive", "preset", "approval"} {
 		t.Run(group, func(t *testing.T) {
 			root := rootCmd()
 			var out, errOut strings.Builder
@@ -2475,7 +2478,7 @@ func TestRunAttachAndSSHAreReachable(t *testing.T) {
 }
 
 // --------------------------------------------------------------------------
-// #206: `wardyn sessions list`
+// #206: `wardyn session list`
 // --------------------------------------------------------------------------
 
 func TestSessionsListCmd(t *testing.T) {
@@ -2488,11 +2491,11 @@ func TestSessionsListCmd(t *testing.T) {
 
 	root := rootCmd()
 	out := &strings.Builder{}
-	root.SetArgs([]string{"sessions", "list", "--url", srv.URL, "--token", "tok"})
+	root.SetArgs([]string{"session", "list", "--url", srv.URL, "--token", "tok"})
 	root.SetOut(out)
 	root.SetErr(&strings.Builder{})
 	if err := root.Execute(); err != nil {
-		t.Fatalf("sessions list returned error: %v", err)
+		t.Fatalf("session list returned error: %v", err)
 	}
 	got := srv.last()
 	if got.method != http.MethodGet || got.path != "/api/v1/tokens" {
@@ -2521,11 +2524,11 @@ func TestSessionsListCmd_JSON(t *testing.T) {
 
 	root := rootCmd()
 	out := &strings.Builder{}
-	root.SetArgs([]string{"sessions", "list", "--json", "--url", srv.URL, "--token", "tok"})
+	root.SetArgs([]string{"session", "list", "--json", "--url", srv.URL, "--token", "tok"})
 	root.SetOut(out)
 	root.SetErr(&strings.Builder{})
 	if err := root.Execute(); err != nil {
-		t.Fatalf("sessions list --json returned error: %v", err)
+		t.Fatalf("session list --json returned error: %v", err)
 	}
 	var toks []types.APIToken
 	if err := json.Unmarshal([]byte(out.String()), &toks); err != nil {
@@ -2542,12 +2545,158 @@ func TestSessionsListCmd_JSON(t *testing.T) {
 func TestSessionsListCmd_APIError(t *testing.T) {
 	srv := newCmdServer(t, http.StatusForbidden, map[string]string{"error": "forbidden"})
 
-	err := execCmd(t, "sessions", "list", "--url", srv.URL, "--token", "tok")
+	err := execCmd(t, "session", "list", "--url", srv.URL, "--token", "tok")
 	var ae *sdk.APIError
 	if !errors.As(err, &ae) {
 		t.Fatalf("err = %v, want *sdk.APIError", err)
 	}
 	if ae.Status != http.StatusForbidden {
 		t.Errorf("Status = %d, want 403", ae.Status)
+	}
+}
+
+// --------------------------------------------------------------------------
+// #1492: --timeout bounds the requests, not just the gaps between them
+// --------------------------------------------------------------------------
+
+// timedRunServer answers GET /runs/{id} after getDelay with the given state,
+// and the audit reads after auditDelay. Every request is counted.
+func timedRunServer(t *testing.T, runID uuid.UUID, state types.RunState, getDelay, auditDelay time.Duration, audit []types.AuditEvent) (*httptest.Server, *atomic.Int32) {
+	t.Helper()
+	var n atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.HasPrefix(r.URL.Path, "/api/v1/audit"):
+			time.Sleep(auditDelay)
+			_ = json.NewEncoder(w).Encode(audit)
+		case strings.HasSuffix(r.URL.Path, "/files"):
+			_, _ = w.Write([]byte(`{"vcs":"none","path":"/workspace"}`))
+		default:
+			time.Sleep(getDelay)
+			_ = json.NewEncoder(w).Encode(types.AgentRun{ID: runID, State: state})
+		}
+	}))
+	t.Cleanup(srv.Close)
+	return srv, &n
+}
+
+// TestOperatorWaitTimeoutDoesNotBoundRequests is #1492's reproduction,
+// flipped: a read that outlasts --timeout used to be waited for in full, and
+// a run that was done when it returned was reported as success after the
+// budget. Both wait paths now exit 124 at the budget.
+func TestOperatorWaitTimeoutDoesNotBoundRequests(t *testing.T) {
+	const timeout = 100 * time.Millisecond
+	for _, ready := range []bool{false, true} {
+		t.Run(fmt.Sprint("ready=", ready), func(t *testing.T) {
+			id := uuid.New()
+			state := types.RunCompleted
+			if ready {
+				state = types.RunRunning
+			}
+			srv, _ := timedRunServer(t, id, state, 500*time.Millisecond, 0, nil)
+			c := &sdk.Client{BaseURL: srv.URL, HTTPClient: &http.Client{Timeout: 5 * time.Second}}
+			start := time.Now()
+			var err error
+			if ready {
+				_, err = waitForRunReady(context.Background(), io.Discard, c, id, timeout, false)
+			} else {
+				err = waitForRun(context.Background(), io.Discard, c, id, timeout)
+			}
+			elapsed := time.Since(start)
+			if code := exitCodeOf(err); code != 124 {
+				t.Fatalf("exit = %d (err=%v), want 124: a response after the deadline must not be accepted", code, err)
+			}
+			if elapsed > timeout+50*time.Millisecond {
+				t.Errorf("elapsed = %v, want under %v: the request must be cut at the deadline", elapsed, timeout+50*time.Millisecond)
+			}
+		})
+	}
+}
+
+// A run that is FAILED inside the budget but whose audit read is cut off by
+// the deadline must still fail: never exit 0, and the code is the documented
+// fallback 1.
+func TestWaitForRun_FailedWithCutAuditReadIsNeverZero(t *testing.T) {
+	setWaitPollInterval(t, time.Millisecond)
+	id := uuid.New()
+	srv, _ := timedRunServer(t, id, types.RunFailed, 0, 2*time.Second, nil)
+	c := &sdk.Client{BaseURL: srv.URL, HTTPClient: &http.Client{Timeout: 5 * time.Second}}
+	err := waitForRun(context.Background(), io.Discard, c, id, 150*time.Millisecond)
+	if code := exitCodeOf(err); code != 1 {
+		t.Fatalf("exit = %d (err=%v), want 1: FAILED with an unreadable exit code is never 0", code, err)
+	}
+}
+
+// An in-budget FAILED reports run.complete's own exit code.
+func TestWaitForRun_InBudgetFailedReportsTheTaskCode(t *testing.T) {
+	setWaitPollInterval(t, time.Millisecond)
+	id := uuid.New()
+	srv, _ := timedRunServer(t, id, types.RunFailed, 0, 0, []types.AuditEvent{
+		{Action: "run.complete", Data: json.RawMessage(`{"exit_code":7}`)},
+	})
+	c := &sdk.Client{BaseURL: srv.URL, HTTPClient: &http.Client{Timeout: 5 * time.Second}}
+	err := waitForRun(context.Background(), io.Discard, c, id, 5*time.Second)
+	if code := exitCodeOf(err); code != 7 {
+		t.Fatalf("exit = %d (err=%v), want 7", code, err)
+	}
+}
+
+// --timeout <= 0 exits 124 with no request, on every wait path (a clean
+// break: it used to mean "poll once, then time out").
+func TestWait_NonPositiveTimeoutExits124WithNoRequest(t *testing.T) {
+	for _, timeout := range []string{"0", "-1s"} {
+		for _, args := range [][]string{
+			{"run", "--agent", "claude-code", "--wait", "--timeout", timeout},
+			{"run", "wait-ready", uuid.New().String(), "--timeout", timeout},
+		} {
+			t.Run(strings.Join(args, " "), func(t *testing.T) {
+				srv, n := timedRunServer(t, uuid.New(), types.RunCompleted, 0, 0, nil)
+				_, err := operatorCommand(t, srv.URL, "", args...)
+				if code := exitCodeOf(err); code != 124 {
+					t.Fatalf("exit = %d (err=%v), want 124", code, err)
+				}
+				if got := n.Load(); got != 0 {
+					t.Errorf("%d request(s) made for a non-positive timeout", got)
+				}
+			})
+		}
+	}
+}
+
+// An external cancel is a cancel, not a timeout.
+func TestWaitForRun_ParentCancelIsNotATimeout(t *testing.T) {
+	id := uuid.New()
+	srv, _ := timedRunServer(t, id, types.RunRunning, 0, 0, nil)
+	c := &sdk.Client{BaseURL: srv.URL, HTTPClient: &http.Client{Timeout: 5 * time.Second}}
+	ctx, cancel := context.WithCancel(context.Background())
+	time.AfterFunc(50*time.Millisecond, cancel)
+	err := waitForRun(ctx, io.Discard, c, id, 10*time.Second)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled", err)
+	}
+	if code := exitCodeOf(err); code == 124 {
+		t.Fatalf("an external cancel reported as a timeout (124)")
+	}
+}
+
+// Negative: transient poll errors inside the budget are still tolerated.
+func TestWaitForRun_TransientErrorsStillTolerated(t *testing.T) {
+	setWaitPollInterval(t, time.Millisecond)
+	id := uuid.New()
+	var polls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if polls.Add(1) <= 3 {
+			w.WriteHeader(http.StatusBadGateway)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(types.AgentRun{ID: id, State: types.RunCompleted})
+	}))
+	t.Cleanup(srv.Close)
+	c := &sdk.Client{BaseURL: srv.URL, HTTPClient: &http.Client{Timeout: 5 * time.Second}}
+	if err := waitForRun(context.Background(), io.Discard, c, id, 5*time.Second); err != nil {
+		t.Fatalf("err = %v, want success after transient 502s", err)
 	}
 }

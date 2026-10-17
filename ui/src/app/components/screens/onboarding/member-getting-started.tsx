@@ -43,7 +43,9 @@ import { connectionRows, connectionsSummary } from "../../../lib/model-connectio
 import { CONNECTIONS } from "../../wardyn/copy/door";
 import { ADO } from "../../../lib/ado-entra-copy";
 import { useAdoConnect } from "../../../lib/hooks/use-ado-connect";
-import { scmAccessCause, scmAccessChip, scmAccessNeedsConnect } from "../../../lib/scm-access-display";
+import { ADO_PAT } from "../../../lib/ado-pat-copy";
+import { scmAccessCause, scmAccessChip, scmAccessNeedsConnect, scmOwnTokenAction } from "../../../lib/scm-access-display";
+import { AdoOwnTokenDialog } from "../settings/ado-own-token-dialog";
 import { CC_META } from "../../wardyn/cc-meta";
 import { strongestAvailable } from "../../wardyn/default-confinement";
 import { TierPicker, allowedFromFloor, visibleTiers } from "../../wardyn/tier-picker";
@@ -240,7 +242,13 @@ export function MemberGettingStarted() {
 
   // #386: the Azure DevOps chip + its fallback connect control — the same
   // popup-driven flow the New Run rail's launch door uses.
-  const scmChip = status?.scm_access ? scmAccessChip(status.scm_access.state, status.scm_access.source, status.scm_access.cause) : null;
+  const scmChip = status?.scm_access
+    ? scmAccessChip(status.scm_access.state, status.scm_access.source, status.scm_access.cause, status.scm_access)
+    : null;
+  // A person's own token: its line and button are Settings' own-token card's,
+  // and the button opens the same add-token dialog, not a sign-in.
+  const ownToken = status?.scm_access ? scmOwnTokenAction(status.scm_access) : null;
+  const [tokenDialog, setTokenDialog] = React.useState(false);
   const { connecting: adoConnecting, connect: adoConnect, connectFallback: adoConnectFallback, blockedUrl: adoBlockedUrl } = useAdoConnect();
   const handleAdoConnect = async () => {
     if (await adoConnect()) setRetryTick((n) => n + 1);
@@ -373,7 +381,7 @@ export function MemberGettingStarted() {
                   states only (§2.2/§7.5); `live` (every source) and
                   `shared_expired` render neither line nor button here, the
                   common case spending nothing (§0.1). */}
-              {scmAccessNeedsConnect(status?.scm_access?.state) && status?.scm_access && (
+              {!ownToken && scmAccessNeedsConnect(status?.scm_access?.state) && status?.scm_access && (
                 <>
                   <p className="mt-2 text-sm text-warning">{scmAccessCause(status.scm_access.cause)}</p>
                   {/* A blocked organisation, a missing client secret and an expired own
@@ -406,6 +414,24 @@ export function MemberGettingStarted() {
                       </a>
                     </p>
                   )}
+                </>
+              )}
+              {ownToken && status?.scm_access && (
+                <>
+                  {ownToken.line && (
+                    <p className={`mt-2 text-sm ${scmChip?.tone === "danger" ? "text-danger" : "text-warning"}`}>{ownToken.line}</p>
+                  )}
+                  <Button size="sm" variant="outline" className="mt-3" onClick={() => setTokenDialog(true)}>
+                    {ownToken.button === "add" ? ADO_PAT.OWN_ADD_CTA : ADO_PAT.OWN_REPLACE}
+                  </Button>
+                  <AdoOwnTokenDialog
+                    open={tokenDialog}
+                    onOpenChange={setTokenDialog}
+                    address={status.scm_access.org ?? ""}
+                    days={status.scm_access.max_days ?? 30}
+                    scopes={status.scm_access.token_scopes}
+                    onStored={() => setRetryTick((n) => n + 1)}
+                  />
                 </>
               )}
               {status?.scm_access?.state === "shared_expired" && (

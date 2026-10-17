@@ -11,7 +11,7 @@
 #
 # Build from the REPO ROOT:
 #   docker build -f test/awsssofake/cmd/Dockerfile -t wardyn/awsssofake:local .
-FROM golang:1.27-alpine@sha256:4c9fe60190a2a3350ddc51de80d0224b8a6698d12bdfc999fee45ea9d6c46dbc AS builder
+FROM golang:1.27.2-alpine@sha256:85dc1069ac644ea3c527b177303a406eb3358192816cd7f9e5848eb658851673 AS builder
 ENV GOTOOLCHAIN=local
 WORKDIR /build
 COPY go.mod go.sum ./

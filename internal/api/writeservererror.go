@@ -10,8 +10,17 @@ import (
 	"net/http"
 
 	"github.com/cjohnstoniv/wardyn/internal/authz"
+	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/hostcapacity"
+	"github.com/cjohnstoniv/wardyn/internal/secretstore"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 )
+
+const identityDeactivatedMsg = "this account's access has been removed — sign in again, or ask your Wardyn admin"
+
+const credentialErasedDuringWriteMsg = "this person's stored credentials were erased while this was being saved, so nothing was saved — connect again to store it"
+
+const runCapMsg = "this deployment is at its limit of concurrent runs (WARDYN_MAX_CONCURRENT_RUNS) — wait for one to finish, or ask an admin to stop one"
 
 // writeServerError is writeError's 5xx twin: it LOGS the underlying error and
 // writes only msg to the caller.
@@ -45,7 +54,31 @@ func writeServerError(w http.ResponseWriter, r *http.Request, msg string, err er
 		writeErrorReason(w, http.StatusServiceUnavailable, reasonOrgRevoked, orgRevokedMsg)
 		return
 	}
+	// A write for a deactivated or stale-epoch owner (the owner guard) is a refusal about the
+	// caller, not a fault, and gives no sentence that tells a suspension apart from a cut session.
+	if errors.Is(err, store.ErrIdentityDeactivated) {
+		writeErrorReason(w, http.StatusForbidden, reasonIdentityDeactivated, identityDeactivatedMsg)
+		return
+	}
+	// The deployment run cap is a quota like the per-principal one: 422, no audit
+	// (POST /runs refuses before its identity mint, refuseRunCapFull).
+	if errors.Is(err, store.ErrRunCapReached) {
+		writeErrorReason(w, http.StatusUnprocessableEntity, string(authz.ReasonRunQuota), runCapMsg)
+		return
+	}
 	if writeHostCapacityRefusal(w, r, err) {
+		return
+	}
+	// A lock, or the guarded credential write's connection (putOwned), that could not
+	// be taken in time is a retry, not a fault: 503 with a Retry-After.
+	if db.LockRefused(err) {
+		writeLockRefused(w, r, err)
+		return
+	}
+	// A credential write that began before an erase of its owner is refused, not a fault: the
+	// person's credentials were erased meanwhile, so nothing was saved and a new attempt lands.
+	if errors.Is(err, secretstore.ErrGenerationChanged) {
+		writeErrorReason(w, http.StatusConflict, reasonCredentialErasedDuringWrite, credentialErasedDuringWriteMsg)
 		return
 	}
 	if errors.Is(err, errUserTypeUnknown) {

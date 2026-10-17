@@ -20,6 +20,7 @@ import (
 	"golang.org/x/oauth2"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -34,7 +35,8 @@ const (
 // fake through the split-horizon issuer rewrite, so the REAL sign-in callback
 // runs against the real person store. signIn sets the next id_token the fake
 // token endpoint returns. OnLogin does what cmd/wardynd's refreshLoginStamps
-// does with the api-token and person stamps.
+// does with the api-token and person stamps. shape adjusts the authenticator's
+// config before it is built (an identity gate, a revocation store).
 type entraPeoplePG struct {
 	peoplePG
 	issuer string
@@ -42,7 +44,7 @@ type entraPeoplePG struct {
 	signIn func(sub, tid, oid string)
 }
 
-func newEntraPeoplePG(t *testing.T) entraPeoplePG {
+func newEntraPeoplePG(t *testing.T, shape ...func(peoplePG, *oidc.Config)) entraPeoplePG {
 	t.Helper()
 	e := newPeoplePG(t)
 	priv, err := rsa.GenerateKey(rand.Reader, 2048)
@@ -64,22 +66,26 @@ func newEntraPeoplePG(t *testing.T) entraPeoplePG {
 	t.Cleanup(srv.Close)
 
 	st := e.st
-	auth, err := oidc.New(context.WithValue(context.Background(), oauth2.HTTPClient, srv.Client()), oidc.Config{
+	cfg := oidc.Config{
 		IssuerURL: issuer, InternalIssuerURL: srv.URL + prefix,
 		ClientID: "wardyn-client", ClientSecret: "secret", RedirectURL: "http://localhost/auth/callback",
 		RoleMap: map[string]string{
 			"root@corp.example": oidc.RoleAdmin, "sec@corp.example": oidc.RoleSecurityAdmin,
 		},
 		DefaultRole: oidc.RoleUser,
-		OnLogin: func(ctx context.Context, sub, role, userType string, groups []string, truncated bool) {
-			if err := st.RefreshAPITokenIdentity(ctx, sub, role, userType, groups, truncated); err != nil {
+		OnLogin: func(ctx context.Context, f oidc.LoginFacts) {
+			if err := st.RefreshAPITokenIdentity(ctx, f.Sub, f.Role, f.UserType, f.Groups, f.GroupsTruncated); err != nil {
 				t.Error(err)
 			}
-			if err := st.MarkPersonSignedIn(ctx, sub, time.Now().UTC()); err != nil {
+			if err := st.MarkPersonSignedIn(ctx, f.Sub, time.Now().UTC()); err != nil {
 				t.Error(err)
 			}
 		},
-	}, accessTestHMACKey)
+	}
+	for _, f := range shape {
+		f(e, &cfg)
+	}
+	auth, err := oidc.New(context.WithValue(context.Background(), oauth2.HTTPClient, srv.Client()), cfg, accessTestHMACKey)
 	if err != nil {
 		t.Fatalf("oidc.New against the Entra-issuer fake: %v", err)
 	}
@@ -150,7 +156,7 @@ func TestPeopleEntra_AttachesOnlyOnExactObjectID(t *testing.T) {
 		p.Principal != entraPerson || p.Issuer != e.issuer || p.TenantID != entraTenant || p.ObjectID != entraObject {
 		t.Fatalf("create by object id: %d %s, want 201 keyed %s under %s", w.Code, w.Body.String(), entraPerson, e.issuer)
 	}
-	tok := decodeToken(t, e.mintFor(t, e.sec, entraPerson))
+	tok := e.seedLegacyToken(t, entraPerson, oidc.RoleUser, "sec")
 	untouched := func(when string) {
 		t.Helper()
 		got, err := e.st.GetPerson(ctx, entraPerson)
@@ -268,8 +274,8 @@ func TestPeopleEntra_CreateRules(t *testing.T) {
 	if _, sess := e.callback(t); sess == nil || len(e.auditRows("person.attach")) != 0 {
 		t.Errorf("tid and oid equal, issuer not: session %v, attaches %d; want its own sub, none", sess, len(e.auditRows("person.attach")))
 	}
-	if w := e.mintFor(t, e.sec, "entra:"+entraTenant+":9a8b7c6d-5e4f-3a2b-1c0d-000000000000"); w.Code != http.StatusNotFound {
-		t.Errorf("mint for an object id with no person: %d, want 404", w.Code)
+	if w := e.mintFor(t, e.sec, "entra:"+entraTenant+":9a8b7c6d-5e4f-3a2b-1c0d-000000000000"); w.Code != http.StatusForbidden || errorReason(w) != "person_token_mint_removed" {
+		t.Errorf("mint for an object id with no person: %d %s, want 403 person_token_mint_removed", w.Code, w.Body.String())
 	}
 
 	plain := newPeoplePG(t)
@@ -293,11 +299,11 @@ func TestPeopleEntra_KnownSubKeepsItsPrincipal(t *testing.T) {
 		// check its second session must pass.
 		known func(t *testing.T, e entraPeoplePG, first *http.Cookie) func(second *http.Cookie) bool
 	}{
-		{"confirmed by sub, with a minted token", func(t *testing.T, e entraPeoplePG, _ *http.Cookie) func(*http.Cookie) bool {
+		{"confirmed by sub, with a legacy minted token", func(t *testing.T, e entraPeoplePG, _ *http.Cookie) func(*http.Cookie) bool {
 			if w := e.createPerson(t, e.sec, "pairwise-a", ""); w.Code != http.StatusCreated {
 				t.Fatalf("confirm by sub: %d %s", w.Code, w.Body.String())
 			}
-			tok := decodeToken(t, e.mintFor(t, e.sec, "pairwise-a"))
+			tok := e.seedLegacyToken(t, "pairwise-a", oidc.RoleUser, "sec")
 			return func(second *http.Cookie) bool { return e.seesToken(t, second, tok.ID.String()) }
 		}},
 		{"confirmed by sub only", func(t *testing.T, e entraPeoplePG, _ *http.Cookie) func(*http.Cookie) bool {
@@ -350,6 +356,17 @@ func TestPeopleEntra_KnownSubKeepsItsPrincipal(t *testing.T) {
 			}
 			return func(second *http.Cookie) bool {
 				return doSSO(t, e.h.srv, http.MethodGet, "/api/v1/runs/"+run.ID.String(), second, "").Code == http.StatusOK
+			}
+		}},
+		{"a prior sign-in's identity row only", func(t *testing.T, e entraPeoplePG, _ *http.Cookie) func(*http.Cookie) bool {
+			// What the sign-in gate records at the first sign-in: the identity bound to the sub.
+			if _, err := e.st.UpsertLoginIdentity(context.Background(), store.LoginIdentity{
+				Principal: "pairwise-a", Issuer: e.issuer, TenantID: entraTenant, ObjectID: entraObject, Email: personEmail,
+			}, time.Now().UTC()); err != nil {
+				t.Fatal(err)
+			}
+			return func(second *http.Cookie) bool {
+				return decodeToken(t, doSSO(t, e.h.srv, http.MethodPost, "/api/v1/me/tokens", second, `{"name":"who"}`)).Principal == "pairwise-a"
 			}
 		}},
 	} {
@@ -414,5 +431,131 @@ func TestPeopleEntra_ExchangeRecordsAttachOnlyWhenAdmitted(t *testing.T) {
 	}
 	if code := exchange("portal-users"); code != http.StatusOK || len(e.auditRows("person.attach")) != 1 {
 		t.Fatalf("admitted exchange: %d, %d person.attach rows; want 200 and one", code, len(e.auditRows("person.attach")))
+	}
+}
+
+// TestPeopleEntra_LateCookieAfterSuspendIsRefused: someone known only by a
+// prior sign-in under their pairwise sub is then set up by object id, and
+// signs in again while a suspension lands between the callback's identity
+// issuance and its cookie. The cookie is still the sub's, so it carries the
+// epoch of the identity the suspension bumped, and it is refused.
+func TestPeopleEntra_LateCookieAfterSuspendIsRefused(t *testing.T) {
+	var afterLogin func()
+	var rev *pgTestRevocations
+	e := newEntraPeoplePG(t, func(p peoplePG, c *oidc.Config) {
+		rev = &pgTestRevocations{pool: p.pool, st: p.st}
+		c.Identities, c.Revocations = NewIdentityGate(p.st), rev
+		onLogin := c.OnLogin
+		c.OnLogin = func(ctx context.Context, f oidc.LoginFacts) {
+			onLogin(ctx, f)
+			if afterLogin != nil {
+				afterLogin()
+			}
+		}
+	})
+	e.h.srv.cfg.SessionRevocations = rev
+	e.h.srv.router = e.h.srv.routes()
+	ctx := context.Background()
+
+	e.signIn("pairwise-a", entraTenant, entraObject)
+	if _, c := e.callback(t); c == nil {
+		t.Fatal("first sign-in refused")
+	}
+	if w := e.createEntraPerson(t, `{"tenant_id":"`+entraTenant+`","object_id":"`+entraObject+`"}`); w.Code != http.StatusCreated {
+		t.Fatalf("object-id create: %d %s", w.Code, w.Body.String())
+	}
+	cfg := e.h.srv.cfg
+	cfg.SCIM = &SCIMConfig{Token: scimEnvToken, Issuer: e.issuer, Tenant: entraTenant}
+	other := New(cfg)
+	afterLogin = func() {
+		afterLogin = nil
+		bound, err := e.st.GetIdentityByObject(ctx, e.issuer, entraTenant, entraObject)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := other.suspendIdentity(ctx, e.st, bound.ID, "primary"); err != nil {
+			t.Fatal(err)
+		}
+		// The cookie's issued-at lands after the cutoff, so only the epoch can refuse it.
+		time.Sleep(1100 * time.Millisecond)
+	}
+	e.signIn("pairwise-a", entraTenant, entraObject)
+	_, late := e.callback(t)
+	if late == nil {
+		t.Fatal("the late sign-in was refused before its cookie; the race did not happen")
+	}
+	if afterLogin != nil {
+		t.Fatal("the suspension did not run inside the sign-in")
+	}
+	bound, err := e.st.GetIdentityByObject(ctx, e.issuer, entraTenant, entraObject)
+	if err != nil || bound.Principal != "pairwise-a" || bound.DeactivatedAt == nil {
+		t.Fatalf("identity = %+v (%v), want bound to pairwise-a and deactivated", bound, err)
+	}
+	if w := doSSO(t, e.h.srv, http.MethodGet, "/api/v1/me/tokens", late, ""); w.Code != http.StatusUnauthorized {
+		t.Fatalf("late cookie GET /me/tokens = %d %s, want 401", w.Code, w.Body.String())
+	}
+}
+
+// entraPortalExchange registers a portal for group "portal-users" and returns an exchange that
+// presents a token Entra issued to that portal (aud is the portal, sub pairwise to its registration)
+// for the person entraObject names, carrying group. It answers the status and the exchange's last
+// delegation.exchange row.
+func (e entraPeoplePG) entraPortalExchange(t *testing.T) func(group string) (int, types.AuditEvent) {
+	t.Helper()
+	w := doSSO(t, e.h.srv, http.MethodPost, "/api/v1/admin/delegates", e.super,
+		`{"name":"front end","idp_client_id":"`+delegPortalClient+`","group":"portal-users"}`)
+	var d types.Delegate
+	if w.Code != http.StatusCreated || json.Unmarshal(w.Body.Bytes(), &d) != nil {
+		t.Fatalf("register portal: %d %s", w.Code, w.Body.String())
+	}
+	return func(group string) (int, types.AuditEvent) {
+		subject := e.sign(map[string]any{
+			"iss": e.issuer, "sub": "portal-pairwise", "aud": delegPortalClient,
+			"email": personEmail, "groups": []string{group}, "tid": entraTenant, "oid": entraObject,
+			"iat": time.Now().Unix(), "exp": time.Now().Add(5 * time.Minute).Unix(),
+		})
+		form := url.Values{"grant_type": {grantTypeTokenExchange}, "subject_token": {subject}, "subject_token_type": {tokenTypeIDToken}}
+		r := httptest.NewRequest(http.MethodPost, "/api/v1/token", strings.NewReader(form.Encode()))
+		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		r.SetBasicAuth(d.ID.String(), d.Credential)
+		w := httptest.NewRecorder()
+		panicFails(t, e.h.srv.Handler()).ServeHTTP(w, r)
+		rows := e.auditRows("delegation.exchange")
+		if len(rows) == 0 {
+			t.Fatalf("exchange %d wrote no delegation.exchange row", w.Code)
+		}
+		return w.Code, rows[len(rows)-1]
+	}
+}
+
+// TestPeopleEntra_PortalTokenOutsideGroupIsRefused: a token Entra issued to the portal, for a person
+// who has signed in, is still refused outside the portal's group and mints nothing.
+func TestPeopleEntra_PortalTokenOutsideGroupIsRefused(t *testing.T) {
+	e := newEntraPeoplePG(t, func(p peoplePG, c *oidc.Config) { c.Identities = NewIdentityGate(p.st) })
+	e.signIn("wardyn-pairwise", entraTenant, entraObject)
+	if _, c := e.callback(t); c == nil {
+		t.Fatal("sign-in refused")
+	}
+	exchange := e.entraPortalExchange(t)
+	if code, ev := exchange("eng"); code != http.StatusForbidden || ev.Outcome != "denied" {
+		t.Fatalf("exchange outside the portal's group = %d %+v, want 403 denied", code, ev)
+	}
+}
+
+// TestPeopleEntra_PortalTokenActsAsTheSignedInPerson: a token Entra issued to the portal carries a sub
+// pairwise to the portal's registration. The exchange acts for the principal the person's own sign-in
+// bound to the token's tenant and object id, and is refused while no sign-in has bound it.
+func TestPeopleEntra_PortalTokenActsAsTheSignedInPerson(t *testing.T) {
+	e := newEntraPeoplePG(t, func(p peoplePG, c *oidc.Config) { c.Identities = NewIdentityGate(p.st) })
+	exchange := e.entraPortalExchange(t)
+	if code, ev := exchange("portal-users"); code != http.StatusBadRequest || !strings.Contains(string(ev.Data), `"subject_token_unbound"`) {
+		t.Fatalf("exchange before any sign-in = %d %s, want 400 subject_token_unbound", code, ev.Data)
+	}
+	e.signIn("wardyn-pairwise", entraTenant, entraObject)
+	if _, c := e.callback(t); c == nil {
+		t.Fatal("sign-in refused")
+	}
+	if code, ev := exchange("portal-users"); code != http.StatusOK || ev.Target != "wardyn-pairwise" {
+		t.Fatalf("exchange after sign-in = %d, target %q; want 200 for wardyn-pairwise", code, ev.Target)
 	}
 }

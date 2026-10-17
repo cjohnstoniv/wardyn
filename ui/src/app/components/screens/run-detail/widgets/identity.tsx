@@ -15,17 +15,45 @@
 // it is the answer to "what was this agent actually allowed to do", and the
 // rest of the page never states it.
 import { Fingerprint } from "lucide-react";
-import type { RunDetail } from "../../../../lib/types";
+import type { AuditEvent, RunDetail } from "../../../../lib/types";
 import { absoluteTime } from "../../../../lib/format";
 import { CopyButton } from "../../../wardyn/copy-button";
+import { RUN_PLACEMENT, runnerLabel } from "../../../wardyn/copy/runners";
+import { usePrincipal } from "../../../wardyn/operator-context";
 import { WidgetCard } from "../../../wardyn/primitives";
 import { IDENTITY_POLICY_VIEW } from "../policy-tab-copy";
+import { SyncRows } from "./identity-sync";
 
-export function IdentityWidget({ run, onGoPolicy }: { run: RunDetail; onGoPolicy: () => void }) {
+export function IdentityWidget({
+  run,
+  audit = [],
+  onGoPolicy,
+  onGoAudit = () => {},
+}: {
+  run: RunDetail;
+  /** The run's audit rows, for the Sync rows. */
+  audit?: AuditEvent[];
+  onGoPolicy: () => void;
+  onGoAudit?: () => void;
+}) {
   // UT-7a: "Ran as {type}" reads the name GET /runs/{id} resolved server-side
   // (RunDetail.user_type_name). Nothing renders for a run with no type or a
   // type since deleted — never the raw id.
   const ranAs = run.user_type_name;
+  const principal = usePrincipal();
+  // Where the run runs: local names the computer, remote says so. A run with no recorded placement (from
+  // before 0.9, or on a deployment that places nothing) has no such row. The runner and pool rows name where
+  // it went, by id when no name is known.
+  const local = run.placement === "local";
+  const runsOn = local
+    ? principal && run.created_by === principal
+      ? RUN_PLACEMENT.MINE(runnerLabel(run))
+      : RUN_PLACEMENT.OTHERS(runnerLabel(run), run.created_by)
+    : run.placement === "remote"
+      ? RUN_PLACEMENT.REMOTE
+      : null;
+  const runner = run.runner_name || run.runner_id || run.remote_runner_id || run.runner_target;
+  const pool = run.runner_pool_name || run.runner_pool_id;
 
   return (
     <WidgetCard title="Identity" Icon={Fingerprint} grow>
@@ -96,8 +124,36 @@ export function IdentityWidget({ run, onGoPolicy }: { run: RunDetail; onGoPolicy
           </button>
         </dd>
 
-        <dt className="text-muted-foreground">Runner</dt>
-        <dd className="min-w-0 truncate text-right font-mono text-foreground">{run.runner_target}</dd>
+        {runsOn && (
+          <>
+            <dt className="text-muted-foreground">{RUN_PLACEMENT.LABEL}</dt>
+            <dd className="min-w-0 text-right text-foreground">
+              <div className="truncate">{runsOn}</div>
+              {run.placement_filled && <div className="text-muted-foreground">{RUN_PLACEMENT.FILLED}</div>}
+            </dd>
+          </>
+        )}
+
+        <dt className="text-muted-foreground">{RUN_PLACEMENT.RUNNER}</dt>
+        <dd className="min-w-0 truncate text-right font-mono text-foreground" title={run.runner_id ?? run.remote_runner_id}>
+          {runner}
+        </dd>
+
+        {pool && (
+          <>
+            <dt className="text-muted-foreground">{RUN_PLACEMENT.POOL}</dt>
+            <dd className="min-w-0 truncate text-right text-foreground" title={run.runner_pool_id}>
+              {pool}
+            </dd>
+          </>
+        )}
+
+        {local && run.evidence_source === "runner_asserted" && (
+          <>
+            <dt className="text-muted-foreground">{RUN_PLACEMENT.EVIDENCE}</dt>
+            <dd className="min-w-0 truncate text-right text-foreground">{RUN_PLACEMENT.REPORTED_BY(runnerLabel(run))}</dd>
+          </>
+        )}
 
         {run.sandbox_ref && (
           <>
@@ -119,7 +175,12 @@ export function IdentityWidget({ run, onGoPolicy }: { run: RunDetail; onGoPolicy
             <dd className="min-w-0 truncate text-right text-foreground">{ranAs}</dd>
           </>
         )}
+
+        <SyncRows run={run} audit={audit} onGoAudit={onGoAudit} />
       </dl>
+      {local && run.evidence_source === "runner_asserted" && (
+        <p className="mt-2 text-meta leading-snug text-muted-foreground">{RUN_PLACEMENT.REPORTED_NOTE(runnerLabel(run))}</p>
+      )}
     </WidgetCard>
   );
 }

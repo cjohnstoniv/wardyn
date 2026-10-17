@@ -9,7 +9,7 @@
 // no server route yet: their paths and shapes are this console's assumption,
 // spliced at the route in the e2e specs, and a daemon without them fails like
 // any missing route, leaving the card that asked as it was.
-import type { ADOOrgCheck, ADOOwnTokenBody, ADORunToken } from "../types/ado-pat";
+import type { ADOOrgCheck, ADOOwnTokenBody, ADOPATRefusal, ADORunToken } from "../types/ado-pat";
 import { asJson, errText, HttpError, wfetch } from "./core";
 
 // The reasons an own-token store answers with (internal/api reasons_routes.go,
@@ -48,6 +48,14 @@ export const adoPat = {
     return asJson<ADOOrgCheck>(res);
   },
 
+  // GET /api/v1/workspace-providers/git/{id}/ado-pat-refusal: the newest launch
+  // in the last seven days refused on the organisation's token-creation policy,
+  // or null (204) when there is none. Admin only.
+  async refusal(rowId: string): Promise<ADOPATRefusal | null> {
+    const res = await wfetch(`/workspace-providers/git/${encodeURIComponent(rowId)}/ado-pat-refusal`, { method: "GET" });
+    return res.status === 204 ? null : asJson<ADOPATRefusal>(res);
+  },
+
   // DELETE /api/v1/scm/azure-devops/connection (no server route yet): forgets
   // this person's stored sign-in and revokes the tokens of their runs in
   // progress. 204.
@@ -61,6 +69,17 @@ export const adoPat = {
   async runTokens(runId: string): Promise<ADORunToken[]> {
     const res = await wfetch(`/runs/${encodeURIComponent(runId)}/ado-tokens`, { method: "GET" });
     return asJson<ADORunToken[]>(res);
+  },
+
+  // DELETE /api/v1/me/scm/azure-devops/token?org=<address> (#1479): deletes the
+  // CALLER'S OWN stored token for that organisation, and nothing else. The
+  // request carries no token and no subject: the signed-in person is the
+  // subject. 204 on success (a stale card whose token is already gone is a
+  // success too); any other answer, including a 404 from a daemon without the
+  // route, is an HttpError and never a removal that did not happen.
+  async removeOwnToken(org: string): Promise<void> {
+    const res = await wfetch(`/me/scm/azure-devops/token?org=${encodeURIComponent(org)}`, { method: "DELETE" });
+    if (!res.ok) throw new HttpError(res.status, await errText(res));
   },
 
   // PUT /api/v1/me/scm/azure-devops/token: checks the pasted token belongs to

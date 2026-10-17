@@ -12,6 +12,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/coreos/go-oidc/v3/oidc/oidctest"
 
@@ -779,45 +780,50 @@ func ssoOnlyBootFlags(issuerURL, adminToken string, ssoOnly bool) *bootFlags {
 	oidcRedirectURL := "http://localhost/auth/callback"
 	oidcEmailDomains, oidcRoleMap, oidcDefaultRole := "", "", ""
 	oidcExtraScopes := ""
+	oidcRequireEmailVerified := false
 	oidcOperatorEmails := "ops@example.com"
 	allowOIDCNoOperatorList, localMode, memberMode := false, false, false
 	dirProvider, dirTenant, dirClientID, dirSecret := "", "", "", ""
 	envbuild, scanAIAdvisor := false, false
 	sshListen, uiListen := "", ""
+	var roleStampTTL, oidcSessionTTL time.Duration
 	controlURL := "http://127.0.0.1:8080" // loopback: no internal CA to mint
 	basePath := ""
 	return &bootFlags{
-		basePath:                &basePath,
-		recordingSel:            &recordingSel,
-		recordingDir:            &recordingDir,
-		oidcIssuer:              &issuerURL,
-		oidcInternalIss:         &oidcInternalIss,
-		oidcClientID:            &oidcClientID,
-		oidcClientSecret:        &oidcClientSecret,
-		oidcRedirectURL:         &oidcRedirectURL,
-		oidcEmailDomains:        &oidcEmailDomains,
-		oidcExtraScopes:         &oidcExtraScopes,
-		oidcOperatorEmails:      &oidcOperatorEmails,
-		allowOIDCNoOperatorList: &allowOIDCNoOperatorList,
-		oidcRoleMap:             &oidcRoleMap,
-		oidcDefaultRole:         &oidcDefaultRole,
-		adminToken:              &adminToken,
-		localMode:               &localMode,
-		memberMode:              &memberMode,
-		ssoOnly:                 &ssoOnly,
+		basePath:                 &basePath,
+		recordingSel:             &recordingSel,
+		recordingDir:             &recordingDir,
+		oidcIssuer:               &issuerURL,
+		oidcInternalIss:          &oidcInternalIss,
+		oidcClientID:             &oidcClientID,
+		oidcClientSecret:         &oidcClientSecret,
+		oidcRedirectURL:          &oidcRedirectURL,
+		oidcEmailDomains:         &oidcEmailDomains,
+		oidcRequireEmailVerified: &oidcRequireEmailVerified,
+		oidcExtraScopes:          &oidcExtraScopes,
+		oidcOperatorEmails:       &oidcOperatorEmails,
+		allowOIDCNoOperatorList:  &allowOIDCNoOperatorList,
+		oidcRoleMap:              &oidcRoleMap,
+		oidcDefaultRole:          &oidcDefaultRole,
+		adminToken:               &adminToken,
+		localMode:                &localMode,
+		memberMode:               &memberMode,
+		ssoOnly:                  &ssoOnly,
 		// Read only past validateSSOOnlyPosture, on the path this test's
 		// "boots clean" case takes all the way to the function's return —
 		// every one of them off/empty so that path is a no-op, not a panic
 		// on a nil pointer this test never meant to exercise.
-		dirProvider:   &dirProvider,
-		dirTenant:     &dirTenant,
-		dirClientID:   &dirClientID,
-		dirSecret:     &dirSecret,
-		envbuild:      &envbuild,
-		scanAIAdvisor: &scanAIAdvisor,
-		sshListen:     &sshListen,
-		uiListen:      &uiListen,
-		controlURL:    &controlURL,
+		dirProvider:    &dirProvider,
+		dirTenant:      &dirTenant,
+		dirClientID:    &dirClientID,
+		dirSecret:      &dirSecret,
+		envbuild:       &envbuild,
+		scanAIAdvisor:  &scanAIAdvisor,
+		sshListen:      &sshListen,
+		uiListen:       &uiListen,
+		controlURL:     &controlURL,
+		roleStampTTL:   &roleStampTTL,
+		oidcSessionTTL: &oidcSessionTTL,
 	}
 }
 

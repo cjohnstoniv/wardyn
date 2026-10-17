@@ -6,8 +6,11 @@
 // moves dispatch and the terminal paths already make (casRunState, the
 // dispatcher's OnWaiting, the idle reaper's call into this package). The feed
 // is an in-memory ring per run — resumable with Last-Event-ID within the
-// daemon's lifetime, no table behind it — which is correct for the same reason
-// attachHolders is: replicas>1 is refused by construction (deployment.yaml).
+// daemon's lifetime, no table behind it. Each replica announces the events it
+// emits to the others over NOTIFY (live_bus.go), so a reader on any replica
+// follows a run another dispatches; a notice is a hint, and the keepalive
+// re-read of the store ends a stream whose notice was lost. Event ids count
+// within one replica's ring, so a Last-Event-ID is not portable across replicas.
 package api
 
 import (
@@ -63,6 +66,17 @@ type runEventHub struct {
 	beat, hold time.Duration
 	// streams counts each principal's open streams (maxRunEventStreams).
 	streams map[runEventStreamer]int
+	// publish, when set, sends the events this replica itself emits to the others
+	// (live_bus.go). Events taken from another replica are appended with append, not emit.
+	publish func(runID uuid.UUID, evs []client.RunEvent)
+}
+
+// emit appends evs to runID's ring and tells the other replicas.
+func (h *runEventHub) emit(runID uuid.UUID, evs ...client.RunEvent) {
+	h.append(runID, evs...)
+	if h.publish != nil {
+		h.publish(runID, evs)
+	}
 }
 
 // runEventStreamer is who a stream counts against: the actor type with the
@@ -153,14 +167,14 @@ func (h *runEventHub) moved(runID uuid.UUID, from, to types.RunState) {
 	case from.IsTerminal():
 		return
 	case to == types.RunStarting:
-		h.append(runID, client.RunEvent{Type: client.RunEventProvisioning})
+		h.emit(runID, client.RunEvent{Type: client.RunEventProvisioning})
 	case to == types.RunRunning && from == types.RunStarting:
-		h.append(runID, client.RunEvent{Type: client.RunEventReady})
+		h.emit(runID, client.RunEvent{Type: client.RunEventReady})
 	case to == types.RunFailed:
-		h.append(runID, client.RunEvent{Type: client.RunEventFailed, Reason: failedPhase(from)},
+		h.emit(runID, client.RunEvent{Type: client.RunEventFailed, Reason: failedPhase(from)},
 			client.RunEvent{Type: client.RunEventEnded, State: to})
 	case to.IsTerminal():
-		h.append(runID, client.RunEvent{Type: client.RunEventEnded, State: to})
+		h.emit(runID, client.RunEvent{Type: client.RunEventEnded, State: to})
 	}
 }
 
@@ -169,7 +183,7 @@ func (h *runEventHub) moved(runID uuid.UUID, from, to types.RunState) {
 // substrate's error text, and this feed carries no log content.
 func failedPhase(from types.RunState) string {
 	switch from {
-	case types.RunPending:
+	case types.RunQueued, types.RunPending:
 		return client.RunFailedNotStarted
 	case types.RunStarting:
 		return client.RunFailedStartFailed
@@ -180,7 +194,7 @@ func failedPhase(from types.RunState) string {
 
 // idleStopped records the idle reaper's RUNNING->STOPPED win.
 func (h *runEventHub) idleStopped(runID uuid.UUID) {
-	h.append(runID, client.RunEvent{Type: client.RunEventIdleStopped},
+	h.emit(runID, client.RunEvent{Type: client.RunEventIdleStopped},
 		client.RunEvent{Type: client.RunEventEnded, State: types.RunStopped})
 }
 
@@ -192,10 +206,14 @@ func (h *runEventHub) onWaiting(runID uuid.UUID, next func(string)) func(string)
 		if statusDetailReason(detail) == "Pulling" {
 			h.mu.Lock()
 			r := h.ringLocked(runID)
-			if len(r.events) > 0 && r.events[len(r.events)-1].Type == client.RunEventProvisioning {
+			pulling := len(r.events) > 0 && r.events[len(r.events)-1].Type == client.RunEventProvisioning
+			if pulling {
 				h.appendLocked(runID, r, client.RunEvent{Type: client.RunEventPulling})
 			}
 			h.mu.Unlock()
+			if pulling && h.publish != nil {
+				h.publish(runID, []client.RunEvent{{Type: client.RunEventPulling}})
+			}
 		}
 		if next != nil {
 			next(detail)
@@ -249,8 +267,8 @@ func (h *runEventHub) since(runID uuid.UUID, after uint64) ([]client.RunEvent, <
 	return append([]client.RunEvent(nil), evs...), r.wake, r.ended()
 }
 
-// handleRunEvents serves GET /api/v1/runs/{id}/events. Owner-or-admin
-// (getRunAuthorized): a caller who cannot read the run gets the same 404
+// handleRunEvents serves GET /api/v1/runs/{id}/events. Owner, admin or a service
+// identity's sponsor (ownsRunOrSponsorOrAdmin): a caller who cannot read the run gets the same 404
 // GET /runs/{id} answers. A portal's delegated token reads its person's runs
 // (delegationAllowed). One principal holds at most maxRunEventStreams at a
 // time; the next is refused 422 event_stream_cap. The stream ends after the
@@ -260,7 +278,7 @@ func (s *Server) handleRunEvents(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	run, ok := s.getRunAuthorized(w, r, id)
+	run, ok := s.getRunAuthorizedBy(w, r, id, s.ownsRunOrSponsorOrAdmin)
 	if !ok {
 		return
 	}
@@ -329,19 +347,28 @@ func (s *Server) handleRunEvents(w http.ResponseWriter, r *http.Request) {
 // openedAt. Authentication ran once, when the stream opened; this cuts a
 // revoked session off at the next keepalive instead of at the hold. An
 // unanswerable check ends the stream too — the reconnect re-authenticates.
-// The admin token is not a session, so nothing revokes it here.
+// The admin token is not a session, so nothing revokes it here. A service
+// identity's stream ends when the identity is suspended or retired, its sponsor
+// changed after the stream opened, or its sponsor's session is no longer live.
 func (s *Server) sessionRevokedSince(r *http.Request, principal string, openedAt time.Time) bool {
+	if name, sponsor, isService := serviceIdentityFromContext(r.Context()); isService {
+		return s.serviceEndedSince(r, name, sponsor, openedAt)
+	}
 	if s.cfg.SessionRevocations == nil {
 		return false
 	}
 	// The admin token authenticated as the system with no device behind it; a
-	// device keeps the check (a revoke-all still ends its stream).
+	// device keeps the check (a revoke-all still ends its stream). Not a service
+	// identity, whose actor can read as the system under D8's fallback form and
+	// returned above.
 	if actorType, _ := actorFromRequest(r); actorType == types.ActorSystem {
 		if _, isDevice := deviceFromContext(r.Context()); !isDevice {
 			return false
 		}
 	}
-	revoked, err := s.cfg.SessionRevocations.IsSessionRevoked(r.Context(), principal, oidcEmailFromContext(r.Context()), openedAt)
+	// A stream an API token or a delegated token admitted is checked as that token is (epoch -1): a
+	// revoke or a deactivated identity ends it, a browser-only cut (sign-out) does not.
+	revoked, err := s.admittedRevoked(r.Context(), principal, openedAt)
 	return err != nil || revoked
 }
 

@@ -13,7 +13,7 @@
 // screen) — and "What this type gets" is a computed grid, not a form field.
 import * as React from "react";
 import { Loader2 } from "lucide-react";
-import { HttpError } from "../../../lib/api/core";
+import { HttpError, PendingChangeError } from "../../../lib/api/core";
 import { userTypes as api } from "../../../lib/api/user-types";
 import type { GovernanceSnapshot } from "../../../lib/api/governance";
 import { getErrorMessage } from "../../../lib/format";
@@ -48,6 +48,7 @@ export function UserTypeEditor({
   governance,
   onCancel,
   onSaved,
+  onSubmitted,
 }: {
   /** The type being edited, or null for a new one. */
   type: UserType | null;
@@ -58,6 +59,8 @@ export function UserTypeEditor({
   governance: GovernanceSnapshot | null;
   onCancel: () => void;
   onSaved: () => void;
+  /** The write was held for a second person (202): nothing is saved yet. */
+  onSubmitted: () => void;
 }) {
   const [name, setName] = React.useState(type?.name ?? "");
   const [description, setDescription] = React.useState(type?.description ?? "");
@@ -85,6 +88,10 @@ export function UserTypeEditor({
       }
       onSaved();
     } catch (e) {
+      if (e instanceof PendingChangeError) {
+        onSubmitted();
+        return;
+      }
       setError(e instanceof HttpError ? e.message : getErrorMessage(e));
     } finally {
       setSaving(false);

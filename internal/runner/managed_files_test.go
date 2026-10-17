@@ -114,3 +114,85 @@ func TestManagedFileDirIsNoMountTarget(t *testing.T) {
 		}
 	}
 }
+
+// A delivered secret has the opposite contract to a ceiling, so the two never
+// trade places: an agent-owned file in ManagedFileDir would be a settings
+// ceiling its own subject can chmod and rewrite, and a root-owned one in
+// ComponentSecretDir would be a secret either unreadable by the agent or
+// readable by every uid. The mode is fixed for the same reason.
+func TestValidateManagedFiles_AgentOwnedOnlyInSecretDir(t *testing.T) {
+	secret := func(name string) ManagedFile {
+		return ManagedFile{Path: ComponentSecretDir + "/" + name, Mode: ComponentSecretFileMode, AgentOwned: true, Content: []byte("v")}
+	}
+	const (
+		swapped = "an agent-owned file is a delivered secret"
+		outside = "must sit directly in"
+	)
+	cases := []struct {
+		name  string
+		files []ManagedFile
+		want  string // substring of the refusal; "" means accept
+	}{
+		{name: "a delivered secret", files: []ManagedFile{secret("api-token")}},
+		{name: "beside a ceiling", files: []ManagedFile{{Path: ManagedFileDir + "/managed-settings.json"}, secret("api-token")}},
+		{name: "agent-owned in the ceiling directory", files: []ManagedFile{{Path: ManagedFileDir + "/managed-settings.json", Mode: ComponentSecretFileMode, AgentOwned: true}}, want: swapped},
+		{name: "root-owned in the secret directory", files: []ManagedFile{{Path: ComponentSecretDir + "/api-token", Mode: ComponentSecretFileMode}}, want: swapped},
+		{name: "root-owned and world-readable in the secret directory", files: []ManagedFile{{Path: ComponentSecretDir + "/api-token"}}, want: swapped},
+		{name: "agent-owned anywhere else", files: []ManagedFile{{Path: "/tmp/x", Mode: ComponentSecretFileMode, AgentOwned: true}}, want: outside},
+		{name: "group-readable", files: []ManagedFile{{Path: ComponentSecretDir + "/api-token", Mode: 0o440, AgentOwned: true}}, want: "mode 0400 and no other"},
+		{name: "world-readable", files: []ManagedFile{{Path: ComponentSecretDir + "/api-token", Mode: 0o444, AgentOwned: true}}, want: "mode 0400 and no other"},
+		{name: "unset mode", files: []ManagedFile{{Path: ComponentSecretDir + "/api-token", AgentOwned: true}}, want: "mode 0400 and no other"},
+		{name: "owner-writable", files: []ManagedFile{{Path: ComponentSecretDir + "/api-token", Mode: 0o600, AgentOwned: true}}, want: "mode 0400 and no other"},
+		// The fixed directory is the whole of where a secret may land.
+		{name: "traversal out of the secret directory", files: []ManagedFile{secret("../../../etc/shadow")}, want: "must be clean"},
+		{name: "a subdirectory of it", files: []ManagedFile{secret("sub/api-token")}, want: outside},
+		{name: "its parent", files: []ManagedFile{{Path: "/run/wardyn/api-token", Mode: ComponentSecretFileMode, AgentOwned: true}}, want: outside},
+		{name: "a sibling sharing the prefix", files: []ManagedFile{{Path: ComponentSecretDir + "s/api-token", Mode: ComponentSecretFileMode, AgentOwned: true}}, want: outside},
+		{name: "the directory itself", files: []ManagedFile{{Path: ComponentSecretDir, Mode: ComponentSecretFileMode, AgentOwned: true}}, want: outside},
+		{name: "a trailing separator", files: []ManagedFile{secret("api-token/")}, want: "must be clean"},
+		{name: "a dot segment", files: []ManagedFile{secret("./api-token")}, want: "must be clean"},
+		{name: "the same file twice", files: []ManagedFile{secret("api-token"), secret("api-token")}, want: "duplicate path"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := ValidateManagedFiles(tc.files)
+			switch {
+			case tc.want == "" && err != nil:
+				t.Fatalf("ValidateManagedFiles = %v, want accepted", err)
+			case tc.want != "" && err == nil:
+				t.Fatalf("ValidateManagedFiles accepted %+v, want a refusal containing %q", tc.files, tc.want)
+			case tc.want != "" && !strings.Contains(err.Error(), tc.want):
+				t.Fatalf("ValidateManagedFiles = %v, want a refusal containing %q", err, tc.want)
+			}
+		})
+	}
+}
+
+// A refusal names the path and never the content: the content of an
+// agent-owned file is a credential, and this error reaches a run's failure hint.
+func TestValidateManagedFilesRefusalNeverCarriesContent(t *testing.T) {
+	const value = "file-secret-value-0001"
+	for _, f := range []ManagedFile{
+		{Path: "/tmp/x", Mode: ComponentSecretFileMode, AgentOwned: true, Content: []byte(value)},
+		{Path: ComponentSecretDir + "/api-token", Mode: 0o444, AgentOwned: true, Content: []byte(value)},
+		{Path: ComponentSecretDir + "/api-token", Mode: ComponentSecretFileMode, AgentOwned: true, Content: append([]byte(value), make([]byte, ManagedFilesMaxBytes)...)},
+	} {
+		err := ValidateManagedFiles([]ManagedFile{f})
+		if err == nil {
+			t.Fatalf("ValidateManagedFiles accepted %q at mode %04o", f.Path, f.Mode)
+		}
+		if strings.Contains(err.Error(), value) {
+			t.Errorf("the refusal carries the file's content: %v", err)
+		}
+	}
+}
+
+// No mount may land on ComponentSecretDir, above it, or inside it: a bind
+// there is a host directory the delivery would write a credential into.
+func TestComponentSecretDirIsNoMountTarget(t *testing.T) {
+	for _, tgt := range []string{"/run", "/run/wardyn", ComponentSecretDir, ComponentSecretDir + "/x"} {
+		if ValidateTarget(tgt) == nil {
+			t.Errorf("ValidateTarget(%q) accepted a mount target that covers %s", tgt, ComponentSecretDir)
+		}
+	}
+}

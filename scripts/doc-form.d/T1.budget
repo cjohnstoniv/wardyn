@@ -1,0 +1,40 @@
+# Prose-word budget (scripts/doc-form.sh): path=N. N is the measured prose words of the shared file after the
+# merged threat-model rewrites: the base count (48923) plus 284 (sections 0-3, 4 and 6-8: cell-expansion headings
+# and summary cells) plus 44 (residuals 1-40) less 8 (residuals 41-63: restated subjects, less the joiners turned
+# into full stops) plus 27 (the alt text of the barrier-strengths figure in section 7), so growth fails.
+# 49282 adds 12 (section 4.1: the SSH shell's refusal named beside the 503 the other doors answer).
+# 49289 adds 7 (section 4.1 and the section 5 parts after the residuals: four cell-expansion headings and
+# 28 words of summary cells, plus 3 restated-subject words, less 28 dashes turned into full stops or lists).
+# 52032 adds 2743 (run components, 0.8.9, new and corrected text): residual 64 (1695); section 5.1a: two
+# resident-table rows (148), the env_secret switch name and component delivery (137), the file_secret
+# paragraph (161), the never-resident list (85), the echo paragraph (172), the table's intro bullets (54), the
+# preview's component facts (30), the TLS-MITM scope (39), the scanQueueWait citation (2); section 4.2
+# component literals (45); section 4.3 the custom_component value (40) and its default (38); section 4.1
+# the proxy's own registry (28); residual 2 (22); residual 20 (37); the section 4 table cell (5) and
+# capability-kind count (3); section 8 the registry wording (2).
+# threatmodel/THREAT-MODEL.md 52270 after F-1511-1510 (erase fence + who a name is).
+# 52063 adds 31 (residual 65: the runner endpoint's shared pre-auth bucket behind an ingress).
+# threatmodel/THREAT-MODEL.md 52303 measured after R2-runner-2 merge.
+# threatmodel/THREAT-MODEL.md 52431 after the via_org B6 bullet (H12, train 10).
+# threatmodel/THREAT-MODEL.md 52492 measured after train 10 F-1508-author merge.
+# threatmodel/THREAT-MODEL.md 52620 adds 128 (0.9 DS1-S2a, train 12): the per-harness credential same-uid residual.
+# threatmodel/THREAT-MODEL.md 57529 adds 4909 over 52620: 0.9 final docs pass, measured: the runner host boundary and residuals 66-84 (egress baseline, multi-workspace runs, sync, client mode, service identities, launch intents, harness sets, the pool queue, run templates, branch listing, member-visible facts), the GitHub CLI, AWS CLI, MCP and built-in GitHub component lanes, the organisation default barrier, the build record, tool-gate routing and interactive tool rules, less three trims.
+# threatmodel/THREAT-MODEL.md 58394 adds 865 over 57529: 0.9 final docs pass 2, measured: residuals 85-87 (runner limits, the Azure CLI lane and what it leaves open), the spool owner rule and the organisation default barrier's reason.
+# threatmodel/THREAT-MODEL.md 58433 adds 39 over 58394: 0.9 final docs pass 3, measured: the default-disk source runner, Entra's sign-in log, and attributed lifetimes.
+# threatmodel/THREAT-MODEL.md 58443 adds 10 over 58433: docs fix, measured: a policy's own * rule stays in force on a routed run.
+# threatmodel/THREAT-MODEL.md 58477 adds 34 (FR-0148: the SSH audit rate bound).
+# threatmodel/THREAT-MODEL.md 58484 adds 7 (the per-key bound on SSH refusal rows that name a registered key).
+# threatmodel/THREAT-MODEL.md 52622 adds 2 over 52620 (0.9 RS-1): an updated branch counts only at the forge's tip.
+# threatmodel/THREAT-MODEL.md 58486 adds 2 over 58484 (0.9 RS-1, after merging batch-090-local); measured at merge.
+# threatmodel/THREAT-MODEL.md 52641 adds 21 (section 5.1a): a subscription route-through host is inspected as the Anthropic schema.
+# threatmodel/THREAT-MODEL.md 58505 adds 21 over 58484 (0.9 RS-10, after merging lane/090-RS-9); measured at merge.
+# threatmodel/THREAT-MODEL.md 58507 adds 2 over 58505 (0.9 RS-10, after merging lane/090-RS-1); measured at merge.
+# threatmodel/THREAT-MODEL.md 58974 adds 467 over 58507 (0.9 release text for the fix sets merged at release); measured.
+# threatmodel/THREAT-MODEL.md 59012 adds 38 over 58974 (0.9.1 L2): the --relay-listen loopback residual under #71; measured.
+# threatmodel/THREAT-MODEL.md 59040 adds 28 over 59012 (0.9.1 L8), measured: service_attach and self_host_runner in the feature values.
+# threatmodel/THREAT-MODEL.md 59154 adds 114 over 59040 (0.9.1 L9): the VM-engine relay bind, target clamp and probe container under #71; measured.
+# threatmodel/THREAT-MODEL.md 59180 adds 26 over 59154 (0.9.1 L9): the veth bind trust class; measured.
+# threatmodel/THREAT-MODEL.md 59204 adds 24 over 59180 (0.9.1 L9): findRelay and relay.use in the probe bullet; measured.
+# threatmodel/THREAT-MODEL.md 59263 adds 59 over 59204 (0.9.1 L11/L12): the runner's arch report and the arch probe; measured.
+# threatmodel/THREAT-MODEL.md 59296 adds 33 (0.9.2): internal_hosts in #69 and #72.
+threatmodel/THREAT-MODEL.md=59296

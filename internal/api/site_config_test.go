@@ -938,3 +938,21 @@ func TestHandlePutSiteConfig_AuditDatumCarriesTopologyNotSecrets(t *testing.T) {
 		t.Errorf("datum internal_hosts = %v, want [svc.cluster.local]", hosts)
 	}
 }
+
+// TestHandlePutSiteConfig_HostOnRowsOfOneKindOnly pins #1450 at the site-config
+// door, the twin of TestPutWorkspaceProviders_HostOnRowsOfOneKindOnly.
+func TestHandlePutSiteConfig_HostOnRowsOfOneKindOnly(t *testing.T) {
+	fake := &fakeProvidersStore{fakeSiteConfigStore: &fakeSiteConfigStore{}}
+	srv, _ := newProvidersHarness(t, fake)
+	want := fmt.Sprintf(providers400HostTwoKind, 1, "git.corp.example", "github")
+	w := do(t, srv, http.MethodPut, "/api/v1/site-config", adminToken,
+		`{"workspace_providers":`+providersOnHostTwoKinds+`}`)
+	if w.Code != http.StatusBadRequest || !strings.Contains(decodedError(t, w), want) {
+		t.Fatalf("two kinds = %d %s, want 400 carrying %q", w.Code, w.Body.String(), want)
+	}
+	w = do(t, srv, http.MethodPut, "/api/v1/site-config", adminToken,
+		`{"workspace_providers":`+providersOnHostOneKind+`}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("one kind = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+}

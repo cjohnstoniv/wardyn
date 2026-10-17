@@ -21,6 +21,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/cjohnstoniv/wardyn/internal/store"
+	"github.com/cjohnstoniv/wardyn/internal/testutil"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -1031,11 +1032,7 @@ func hasGroupTierDriveGrantsWithNoGroupRow(t *testing.T, pool *pgxpool.Pool, st 
 	t.Helper()
 	ctx := context.Background()
 
-	conn, err := pool.Acquire(ctx)
-	if err != nil {
-		t.Fatalf("acquire a connection for the group-tier window: %v", err)
-	}
-	defer conn.Release()
+	conn := testutil.PGConn(t, pool)
 
 	if _, err := conn.Exec(ctx, `SELECT pg_advisory_lock($1)`, driveGroupTierWindowLockKey); err != nil {
 		t.Fatalf("take the group-tier window lock: %v", err)

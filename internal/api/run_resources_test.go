@@ -5,8 +5,10 @@ package api
 
 import (
 	"encoding/json"
+	"log/slog"
 	"math"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -462,16 +464,54 @@ func TestRunResources_SandboxGoneBeforeStateFlips(t *testing.T) {
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
+			logs := captureSlog(t)
 			srv, ast, h := newResourcesHarness(t, execFn)
 			id := seedResourcesRun(ast, "alice")
 			w := do(t, srv, http.MethodGet, "/api/v1/runs/"+id.String()+"/resources", adminToken, "")
 			if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), reasonRunInspectTerminal) {
 				t.Fatalf("code = %d body %s, want 409 %s", w.Code, w.Body.String(), reasonRunInspectTerminal)
 			}
+			wantGoneLogged(t, logs, id)
 			if n := len(h.audit.events); n != 0 {
 				t.Errorf("wrote %d audit events for a gone sandbox", n)
 			}
 		})
+	}
+}
+
+// captureSlog routes the default logger into the returned buffer for the test.
+func captureSlog(t *testing.T) *lockedBuffer {
+	t.Helper()
+	var logs lockedBuffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	return &logs
+}
+
+// wantGoneLogged: the sandbox-gone path leaves one info line naming the run and
+// its state, so a misclassification that persists is not silent.
+func wantGoneLogged(t *testing.T, logs *lockedBuffer, id uuid.UUID) {
+	t.Helper()
+	got := logs.String()
+	if strings.Count(got, "run inspect: sandbox gone") != 1 || !strings.Contains(got, "run="+id.String()) || !strings.Contains(got, "state=RUNNING") {
+		t.Errorf("log = %q, want one %q line for run %s in state RUNNING", got, "run inspect: sandbox gone", id)
+	}
+}
+
+// TestWriteRunInspectGone_Sentences pins the 409 sentence for both shapes: a run
+// whose state has not flipped is finishing, not finished.
+func TestWriteRunInspectGone_Sentences(t *testing.T) {
+	for state, want := range map[types.RunState]string{
+		types.RunRunning:   "the sandbox is gone; the run is finishing (state=RUNNING)",
+		types.RunCompleted: "run has finished; its sandbox is gone (state=COMPLETED)",
+	} {
+		w := httptest.NewRecorder()
+		writeRunInspectGone(w, types.AgentRun{State: state})
+		var body struct{ Error string }
+		if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil || w.Code != http.StatusConflict || body.Error != want {
+			t.Errorf("state %s: %d %s (err %v), want 409 with %q", state, w.Code, w.Body.String(), err, want)
+		}
 	}
 }
 

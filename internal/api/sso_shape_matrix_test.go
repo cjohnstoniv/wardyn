@@ -178,12 +178,18 @@ func probeOwnerRoute(t *testing.T, srv *Server, method, pattern string, rc class
 		if adminCode != http.StatusNotFound {
 			t.Errorf("admin on a foreign tierOwnerOnly entity: %d, want 404 (no admin bypass at all)", adminCode)
 		}
+	} else if rc.ownerTier == tierEntry {
+		// Interactive entry (#1476): the super admin is refused with a 403
+		// naming why, not the 404 of a missing run.
+		if adminCode != http.StatusForbidden {
+			t.Errorf("admin on a foreign tierEntry entity: %d, want 403 run_owner_only", adminCode)
+		}
 	} else if !reached(adminCode) {
 		t.Errorf("admin on a foreign entity: %d, want the handler's own answer", adminCode)
 	}
 	code := on(cast.sec)
 	switch rc.ownerTier {
-	case tierSuper:
+	case tierSuper, tierEntry:
 		if code != http.StatusNotFound {
 			t.Errorf("security_admin on a foreign tierSuper entity: %d, want 404", code)
 		}
@@ -199,6 +205,9 @@ func probeOwnerRoute(t *testing.T, srv *Server, method, pattern string, rc class
 }
 
 func seedOwnedBy(ast *authzStore, aap *authzApprovals, rs *recording.FSStore, e routeEntity, owner string) uuid.UUID {
+	if e == entityComponent {
+		return ast.seedComponent(owner)
+	}
 	id := uuid.New()
 	ast.mu.Lock()
 	if e == entityWorkspace {
@@ -209,7 +218,10 @@ func seedOwnedBy(ast *authzStore, aap *authzApprovals, rs *recording.FSStore, e 
 		ast.mu.Unlock()
 		return id
 	}
-	ast.runs[id] = types.AgentRun{ID: id, CreatedBy: owner, State: types.RunRunning, Agent: "claude-code"}
+	// With a launch intent, so GET /runs/{id}/launch-intent answers the owner from the handler, not its
+	// no-intent 404.
+	ast.runs[id] = types.AgentRun{ID: id, CreatedBy: owner, State: types.RunRunning, Agent: "claude-code",
+		LaunchIntent: json.RawMessage(`{"api_version":"wardyn/v1","kind":"Run","intent":{"agent":"claude-code","task":"t"}}`)}
 	ast.mu.Unlock()
 	_ = rs.SaveCast(context.Background(), id.String(), strings.NewReader(`{"version":2}`+"\n"))
 	if e == entityApproval {

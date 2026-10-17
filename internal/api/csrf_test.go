@@ -376,7 +376,7 @@ func TestCSRFGuard_EveryMutatingRouteIsFenced(t *testing.T) {
 			// No credential is consulted, so there is no ambient authority to
 			// forge — the CSRF question does not arise.
 			continue
-		case classInternal, classDevice, classPortal:
+		case classInternal, classDevice, classPortal, classSCIM:
 			// Run-token / ground-truth / device BEARER credentials: no cookie,
 			// exempt by construction exactly as the admin bearer is.
 			continue

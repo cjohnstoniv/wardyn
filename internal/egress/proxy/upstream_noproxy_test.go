@@ -96,7 +96,7 @@ func TestNoProxy_BypassedHostDialsDirect_OthersStillUpstream(t *testing.T) {
 		"mirror.corp.internal": ips("93.184.216.34"),
 		"api.example.com":      ips("93.184.216.34"),
 	}}
-	p, _ := newNoProxyProxy(t,
+	p, buf := newNoProxyProxy(t,
 		types.RunPolicySpec{AllowedDomains: []string{"mirror.corp.internal", "api.example.com"}},
 		res, []string{".corp.internal"}, nil, mustUpstream(t, f.addr()), d)
 
@@ -104,6 +104,9 @@ func TestNoProxy_BypassedHostDialsDirect_OthersStillUpstream(t *testing.T) {
 	p.ServeHTTP(rec, mustProxyReq(t, http.MethodGet, "http://mirror.corp.internal/"))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("bypassed host status = %d, want 200 (it must reach the direct server)", rec.Code)
+	}
+	if got := lastDecision(t, buf); got.Decision != egress.Allow || got.Via != viaDirect {
+		t.Errorf("bypassed host row = %s via %q, want an allow via %q", got.Decision, got.Via, viaDirect)
 	}
 	if got := atomic.LoadInt32(&f.accepts); got != 0 {
 		t.Fatalf("bypassed host went through the corp proxy (accepts=%d) — the bypass did not reach the dial", got)
@@ -121,6 +124,29 @@ func TestNoProxy_BypassedHostDialsDirect_OthersStillUpstream(t *testing.T) {
 	}
 	if gotConnect, _ := f.snapshot(); gotConnect != "CONNECT api.example.com:80" {
 		t.Fatalf("corp proxy saw %q, want CONNECT api.example.com:80", gotConnect)
+	}
+}
+
+// TestNoProxy_BypassedHostThatDoesNotResolveSaysTheUpstreamWasSkipped: with an
+// upstream configured, a resolve-failed row otherwise reads as if the corp
+// proxy could not find the name. Only a bypassed name is resolved here to be
+// dialled, so the row says so and names the hop.
+func TestNoProxy_BypassedHostThatDoesNotResolveSaysTheUpstreamWasSkipped(t *testing.T) {
+	f := startFakeUpstream(t)
+	d := &routingDialer{upstreamAddr: f.addr(), directAddr: "127.0.0.1:1"}
+	p, buf := newNoProxyProxy(t,
+		types.RunPolicySpec{AllowedDomains: []string{"mirror.corp.internal"}},
+		fakeResolver{m: map[string][]net.IP{}}, []string{".corp.internal"}, nil, mustUpstream(t, f.addr()), d)
+
+	rec := httptest.NewRecorder()
+	p.ServeHTTP(rec, mustProxyReq(t, http.MethodGet, "http://mirror.corp.internal/"))
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403", rec.Code)
+	}
+	got := lastDecision(t, buf)
+	if got.RuleSource != "builtin:resolve-failed" || got.Via != viaDirect || got.Cause != resolveBypassedCause {
+		t.Errorf("row = %s via %q cause %q, want builtin:resolve-failed via %q with the bypass sentence",
+			got.RuleSource, got.Via, got.Cause, viaDirect)
 	}
 }
 

@@ -36,7 +36,7 @@ import { AGENTS, PROVIDERS, PROVIDERS_EXTRA } from "../../../lib/workspace-provi
 import { Button } from "../../ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../ui/select";
 import { AvailabilityControl } from "../../wardyn/availability-control";
-import { Field, Switch } from "../../wardyn/form-primitives";
+import { Field, fieldHintId, Switch } from "../../wardyn/form-primitives";
 import { Chip, OperatorOnlyHint } from "../../wardyn/primitives";
 import { SavedElsewhereBanner } from "../../wardyn/saved-elsewhere-banner";
 import { EmptyState, TableSkeleton } from "../../wardyn/states";
@@ -154,7 +154,7 @@ function DefaultProviderField({
         disabled={!operator}
         onValueChange={(v) => onUpdate({ ...row, default_provider: v })}
       >
-        <SelectTrigger id={id} aria-label={`${AGENTS.FIELD_DEFAULT_PROVIDER} — ${harness.display}`}>
+        <SelectTrigger id={id} aria-describedby={fieldHintId(id)} aria-label={`${AGENTS.FIELD_DEFAULT_PROVIDER} — ${harness.display}`}>
           <SelectValue placeholder={RAIL_PROVIDER.PLACEHOLDER} />
         </SelectTrigger>
         <SelectContent>

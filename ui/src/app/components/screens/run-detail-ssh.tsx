@@ -33,9 +33,13 @@ import { health as healthApi } from "../../lib/api/health";
 import { runs as runsApi } from "../../lib/api/runs";
 import { sshKeys as sshKeysApi } from "../../lib/api/ssh-keys";
 import { Button } from "../ui/button";
+import { basePath } from "../../lib/base-path";
+import { proxyCommandIsSafe } from "../../lib/ssh-proxy-command";
+import { entryErrorMessage, mayEnterRunOrUnknown } from "../../lib/run-entry";
 import { CodeBlock, Mono } from "../wardyn/code-block";
-import { UI_APPS_LANE, UI_APPS_LAUNCHER_MISSING_PREFIX } from "../wardyn/copy";
-import { useOperator, usePrincipal } from "../wardyn/operator-context";
+import { RUN_SSH, UI_APPS_LANE, UI_APPS_LAUNCHER_MISSING_PREFIX } from "../wardyn/copy";
+import { RUN_SYNC } from "../wardyn/copy/runners";
+import { useOperator, useOperatorResolved, usePrincipal } from "../wardyn/operator-context";
 import { WidgetCard } from "../wardyn/primitives";
 import { cn } from "../ui/utils";
 
@@ -44,15 +48,19 @@ import { cn } from "../ui/utils";
 export function ConnectSSHCard({ run }: { run: RunDetail }) {
   const principal = usePrincipal();
   const operator = useOperator();
-  // Owner OR admin: the same two-armed gate every lane's server handler uses.
-  // Both hooks run unconditionally — `||` on a hook CALL would reorder them.
-  const mayAttach = (!!principal && run.created_by === principal) || operator;
+  const resolved = useOperatorResolved();
+  // The entry rule (lib/run-entry.ts, #1476): the run's person, or an admin on
+  // a run no person owns. Both hooks run unconditionally — `||` on a hook CALL
+  // would reorder them. False hides the card (Q1): it has no control that could
+  // work, and the pane already says why.
+  const mayAttach = mayEnterRunOrUnknown(run, principal, operator, resolved);
   const running = run.state === "RUNNING";
 
   const [ssh, setSSH] = React.useState<{
     enabled?: boolean;
     advertise_addr?: string;
     host_key_fingerprint?: string;
+    proxy_command?: string;
   } | null>(null);
   // null = not loaded yet (treated as "assume keys exist" below, so a human
   // who HAS keys never sees the no-keys lead-in flash before the real answer
@@ -123,12 +131,21 @@ export function ConnectSSHCard({ run }: { run: RunDetail }) {
   const [host, port] = splitHostPort(ssh?.advertise_addr ?? "");
   const shortId = run.id.replace(/^run_/, "").slice(0, 8);
   const portFlag = port ? ` -p ${port}` : "";
-  const command = `ssh ${run.id}@${host || "…"}${portFlag}`;
+  // A proxy command that fails the daemon's own rules is never drawn into a
+  // shell line or an ssh_config line: the card falls back to the plain form and
+  // says why (088-mock S1 D5).
+  const advertisedProxy = ssh?.proxy_command ?? "";
+  const proxyRefused = advertisedProxy !== "" && !proxyCommandIsSafe(advertisedProxy);
+  const proxy = proxyRefused ? "" : advertisedProxy;
+  const proxyFlag = proxy ? `-o ProxyCommand='${proxy}' ` : "";
+  // Byte-identical to `wardyn run ssh --print` (cmd/wardyn/ssh.go).
+  const command = `ssh ${proxyFlag}${run.id}@${host || "…"}${portFlag}`;
   const sshConfig = [
     `Host wardyn-${shortId}`,
     `  HostName ${host || "…"}`,
     `  Port ${port || "22"}`,
     `  User ${run.id}`,
+    ...(proxy ? [`  ProxyCommand ${proxy}`] : []),
   ].join("\n");
   const hasKeys = keys === null || keys.length > 0;
   const sshOn = !!ssh?.enabled;
@@ -185,7 +202,7 @@ export function ConnectSSHCard({ run }: { run: RunDetail }) {
         throw new Error("This deployment's UI-sandbox gateway published no enter URL for the console to use.");
       }
     } catch (err) {
-      setAppError({ app: app.name, message: err instanceof Error ? err.message : String(err) });
+      setAppError({ app: app.name, message: entryErrorMessage(err, (e) => (e instanceof Error ? e.message : String(e))) });
     } finally {
       setOpeningApp(null);
     }
@@ -193,10 +210,13 @@ export function ConnectSSHCard({ run }: { run: RunDetail }) {
 
   // The console already knows the address it is served from, so the env line is
   // this deployment's real URL rather than a placeholder the operator has to
-  // translate. Omitted when it matches the CLI's own default.
-  const origin = typeof window !== "undefined" ? window.location.origin : "";
-  const cliEnv = origin && origin !== "http://localhost:8080" ? `WARDYN_URL=${origin} ` : "";
+  // translate. Omitted when it matches the CLI's own default. The base path
+  // rides along: the API is served beneath it, and a bare origin would aim
+  // the CLI's bearer token at whatever else owns the host root.
+  const wardynURL = typeof window !== "undefined" ? window.location.origin + basePath() : "";
+  const cliEnv = wardynURL && wardynURL !== "http://localhost:8080" ? `WARDYN_URL=${wardynURL} ` : "";
   const cliCommand = `${cliEnv}wardyn run attach ${run.id}`;
+  const syncLane = sshOn && run.placement !== "local" && !!run.agent_exec_id;
 
   return (
     // The body scrolls, not the tile: the canvas tile clips (overflow-hidden), so
@@ -225,7 +245,7 @@ export function ConnectSSHCard({ run }: { run: RunDetail }) {
         <Mono className="text-foreground">WARDYN_ADMIN_TOKEN</Mono>, same as this page's own terminal. Ctrl-C or
         closing the session detaches.
       </p>
-      <CodeBlock text={cliCommand} />
+      <CodeBlock text={cliCommand} copyLabel={RUN_SSH.COPY_CLI} />
       <p className="mt-1.5 text-meta leading-relaxed text-muted-foreground">
         Started with <Mono className="text-foreground">make setup</Mono>? The binary is at{" "}
         <Mono className="text-foreground">./bin/wardyn</Mono> in the repo.
@@ -257,19 +277,48 @@ export function ConnectSSHCard({ run }: { run: RunDetail }) {
         </div>
       )}
 
+      {sshOn && proxyRefused && (
+        <div className="mb-3 rounded-lg border border-warning/30 bg-warning-subtle px-3 py-2.5">
+          <p className="text-meta leading-relaxed text-muted-foreground">{RUN_SSH.PROXY_REFUSED}</p>
+        </div>
+      )}
+
       {sshOn && (
       <div className={cn("mt-2", !hasKeys && "opacity-50")}>
-        <CodeBlock text={command} />
-        <p className="mt-1.5 text-meta leading-relaxed text-muted-foreground">
-          Or skip retyping it: <Mono className="text-foreground">wardyn run ssh {run.id}</Mono>
-        </p>
+        {proxy ? (
+          <>
+            <p className="mb-1.5 text-meta leading-relaxed text-muted-foreground">{RUN_SSH.PROXY_NOTE}</p>
+            <CodeBlock text={sshConfig} copyLabel={RUN_SSH.COPY_CONFIG} />
+            <p className="mt-1.5 text-meta leading-relaxed text-muted-foreground">
+              {monoTokens(RUN_SSH.CONFIG_USE(`wardyn-${shortId}`), "~/.ssh/config", `ssh wardyn-${shortId}`)}
+            </p>
+            <p className="mt-1.5 text-meta leading-relaxed text-muted-foreground">
+              {monoTokens(RUN_SSH.CLI_PROXY(run.id), `wardyn run ssh --advertised-proxy ${run.id}`)}
+            </p>
+            <p className="text-meta leading-relaxed text-muted-foreground">{RUN_SSH.CLI_PROXY_WHY}</p>
 
-        <details className="mt-2.5">
-          <summary className="cursor-pointer text-xs text-muted-foreground hover:text-foreground">
-            ssh config
-          </summary>
-          <CodeBlock text={sshConfig} className="mt-1.5" />
-        </details>
+            <details className="mt-2.5">
+              <summary className="cursor-pointer text-xs text-muted-foreground hover:text-foreground">
+                {RUN_SSH.ONE_LINE}
+              </summary>
+              <CodeBlock text={command} copyLabel={RUN_SSH.COPY_COMMAND} className="mt-1.5" />
+            </details>
+          </>
+        ) : (
+          <>
+            <CodeBlock text={command} copyLabel={RUN_SSH.COPY_COMMAND} />
+            <p className="mt-1.5 text-meta leading-relaxed text-muted-foreground">
+              Or skip retyping it: <Mono className="text-foreground">wardyn run ssh {run.id}</Mono>
+            </p>
+
+            <details className="mt-2.5">
+              <summary className="cursor-pointer text-xs text-muted-foreground hover:text-foreground">
+                ssh config
+              </summary>
+              <CodeBlock text={sshConfig} copyLabel={RUN_SSH.COPY_CONFIG} className="mt-1.5" />
+            </details>
+          </>
+        )}
 
         {ssh.host_key_fingerprint && (
           <div className="mt-2.5 text-meta">
@@ -301,6 +350,18 @@ export function ConnectSSHCard({ run }: { run: RunDetail }) {
         <Link to="/account" className="mt-3 inline-block text-xs font-medium text-primary hover:underline">
           Manage SSH keys
         </Link>
+      )}
+
+      {/* RS2 (M-RN-3): the Sync lane rides the SSH gateway's sftp channel, so it needs SSH on and a
+          sandbox with exec; a local run's disk link is the bind through its runner. */}
+      {syncLane && (
+        <div className="mt-4 border-t border-border pt-3">
+          <p className="text-xs font-medium text-foreground">{RUN_SYNC.LANE_TITLE}</p>
+          <p className="mt-0.5 mb-1.5 text-meta leading-relaxed text-muted-foreground">
+            {monoTokens(RUN_SYNC.LANE_BODY, "--pull", "wardyn sync")}
+          </p>
+          <CodeBlock text={`${cliEnv}${RUN_SYNC.LANE_COMMAND(run.id)}`} copyLabel={RUN_SYNC.COPY} />
+        </div>
       )}
 
       {/* UI apps lane LAST: the mock's S3 (docs/design/ui-sandboxes-mock/index.html)

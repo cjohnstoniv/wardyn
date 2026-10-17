@@ -17,6 +17,7 @@ vi.mock("@xterm/xterm", () => {
     cols = 80;
     rows = 24;
     resize() {}
+    unicode = { activeVersion: "6" };
     loadAddon() {}
     open() {}
     write() {}
@@ -28,6 +29,8 @@ vi.mock("@xterm/xterm", () => {
     onBinary() {
       return { dispose() {} };
     }
+    modes = { mouseTrackingMode: "none" };
+    attachCustomWheelEventHandler() {}
     attachCustomKeyEventHandler() {}
     dispose() {}
   }
@@ -42,8 +45,6 @@ vi.mock("@xterm/addon-fit", () => ({
   },
 }));
 vi.mock("@xterm/xterm/css/xterm.css", () => ({}));
-vi.mock("@fontsource/jetbrains-mono/latin-400.css", () => ({}));
-vi.mock("@fontsource/jetbrains-mono/latin-ext-400.css", () => ({}));
 // No admin token: an operator on a cookie session takes the cookie lane, the
 // one that opens the socket directly.
 vi.mock("../lib/api/core", async (importOriginal) => ({
@@ -81,8 +82,14 @@ function reauthAt(phase: ReauthPhase): Reauth {
   const noop = () => {};
   return {
     phase,
+    signedOut: phase === "dialog" || phase === "bar",
+    renewal: null,
+    watch: null,
     writeDropped: null,
     setPhase: noop,
+    setWatch: noop,
+    startRenew: noop,
+    endRenew: noop,
     reloadAs: noop,
     clearWriteDropped: noop,
     writeDroppedClaimed: () => false,
@@ -97,7 +104,7 @@ beforeEach(() => {
   FakeWebSocket.instances = [];
   vi.stubGlobal("WebSocket", FakeWebSocket as unknown as typeof WebSocket);
   if (!("fonts" in document)) {
-    Object.defineProperty(document, "fonts", { configurable: true, value: { ready: Promise.resolve() } });
+    Object.defineProperty(document, "fonts", { configurable: true, value: { ready: Promise.resolve(), load: () => Promise.resolve([]) } });
   }
   vi.stubGlobal(
     "ResizeObserver",
@@ -132,5 +139,13 @@ describe("AttachTerminal — signed out mid-page (#483)", () => {
     rerender(at("none", <AttachTerminal runId="run_1" />));
     expect(FakeWebSocket.instances).toHaveLength(2);
     expect(FakeWebSocket.instances[1].closed).toBe(false);
+  });
+
+  it("keeps a live socket through a renewal from the expiry banner: nobody is signed out", () => {
+    const { rerender } = render(at("none", <AttachTerminal runId="run_1" />));
+    const live = FakeWebSocket.instances[0];
+    rerender(at("renew", <AttachTerminal runId="run_1" />));
+    expect(live.closed).toBe(false);
+    expect(FakeWebSocket.instances).toHaveLength(1);
   });
 });

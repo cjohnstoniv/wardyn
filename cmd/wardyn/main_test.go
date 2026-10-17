@@ -175,8 +175,8 @@ func TestWarnPlaintextToken(t *testing.T) {
 
 // The whole status taxonomy in one table, so no class falls through to 1.
 // pkg/client mints an *sdk.APIError for every non-2xx (client.go: `StatusCode
-// < 200 || > 299`), 3xx included — nothing follows redirects — so an
-// interposed proxy's 302 must not land on the catch-all 1, the code docs/CI.md
+// < 200 || > 299`), 3xx included — the CLI's client returns a redirect rather
+// than following it (noRedirect) — so an interposed proxy's 302 must not land on the catch-all 1, the code docs/CI.md
 // reserves for a FAILED run's own task exit code. Every typed API error is a
 // request-level failure and must classify as 2/3/4.
 func TestExitCodeFor_EveryStatusClass(t *testing.T) {

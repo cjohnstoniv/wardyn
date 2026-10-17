@@ -17,6 +17,7 @@ import {
   pushRulesWarnNonGithub,
   PushRulesSection,
 } from "./policy-push-rules";
+import { setField } from "../../../test/set-field";
 
 const BASE: RunPolicySpec = {
   allowed_domains: [],
@@ -232,11 +233,11 @@ describe("PushRulesSection — the row editor (#57, PR-1)", () => {
     render(<Harness initial={BASE} />);
     await user.click(within(reviewSection()).getByRole("button", { name: "Add path" }));
     const row = screen.getByLabelText("Hold for review path 1");
-    await user.type(row, "deploy/../etc");
+    setField(row, "deploy/../etc");
     expect(screen.getByRole("alert")).toHaveTextContent(/path segment/);
 
     await user.clear(row);
-    await user.type(row, "deploy/**");
+    setField(row, "deploy/**");
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
@@ -244,7 +245,7 @@ describe("PushRulesSection — the row editor (#57, PR-1)", () => {
     let current: RunPolicySpec = BASE;
     render(<Harness initial={BASE} capture={(next) => (current = next)} />);
     await user.click(within(denySection()).getByRole("button", { name: "Add path" }));
-    await user.type(screen.getByLabelText("Deny path 1"), ".github/workflows/**");
+    setField(screen.getByLabelText("Deny path 1"), ".github/workflows/**");
     expect(current.push_rules).toEqual({ deny_paths: [".github/workflows/**"] });
   });
 
@@ -288,7 +289,7 @@ describe("PushRulesSection — the row editor (#57, PR-1)", () => {
       />,
     );
     const ceiling = screen.getByLabelText("Inspection ceiling (MiB)");
-    await user.type(ceiling, "48");
+    setField(ceiling, "48");
     expect(current.push_rules?.max_inspect_pack_mib).toBe(48);
 
     // Clearing it back to blank drops the key entirely (0 IS "use the default").
@@ -482,12 +483,12 @@ describe("PushRulesSection — the row editor (#57, PR-1)", () => {
     expect(Object.keys(current)).not.toContain("push_rules");
 
     // Whitespace-only text does not promote it either.
-    await user.type(screen.getByLabelText("Deny path 1"), "   ");
+    setField(screen.getByLabelText("Deny path 1"), "   ");
     expect(Object.keys(current)).not.toContain("push_rules");
 
     // Real text does.
     await user.clear(screen.getByLabelText("Deny path 1"));
-    await user.type(screen.getByLabelText("Deny path 1"), ".github/workflows/**");
+    setField(screen.getByLabelText("Deny path 1"), ".github/workflows/**");
     expect(current.push_rules).toEqual({ deny_paths: [".github/workflows/**"] });
   });
 

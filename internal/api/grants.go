@@ -5,6 +5,7 @@ package api
 
 import (
 	"net/http"
+	"slices"
 
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -18,6 +19,10 @@ import (
 //
 // Auth/error conventions mirror GET /runs/{id}: an invalid id is 400, an unknown
 // run is 404 (the run must exist first), and a store error is 500.
+//
+// A `shared` grant's scope is served to the run's owner without the name of
+// the organisation's secret it reads, as their audit read of the same scope is
+// (auditRowsFor); the security tier reads it whole.
 func (s *Server) handleListGrants(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	id, ok := parseIDParam(w, r, "id", "run")
@@ -38,11 +43,22 @@ func (s *Server) handleListGrants(w http.ResponseWriter, r *http.Request) {
 	// WHERE run_id=$1 (ListGrantsByRun), so an absent implementation falls
 	// back safely to the full fetch + in-Go window (servePage's allFn) rather
 	// than needing a fail-closed guard the way RunsByCreatorPager does.
+	whole := s.isSecurityOperator(ctx)
+	served := func(grants []types.CredentialGrant, err error) ([]types.CredentialGrant, error) {
+		if whole {
+			return grants, err
+		}
+		out := slices.Clone(grants) // the store's rows are not edited
+		for i := range out {
+			out[i].Spec.Scope = withoutSharedSecretRefs(out[i].Spec.Scope)
+		}
+		return out, err
+	}
 	var pageFn func(store.Page) ([]types.CredentialGrant, error)
 	if pg, ok := s.cfg.Store.(store.GrantsByRunPager); ok {
-		pageFn = func(p store.Page) ([]types.CredentialGrant, error) { return pg.ListGrantsByRunPage(ctx, id, p) }
+		pageFn = func(p store.Page) ([]types.CredentialGrant, error) { return served(pg.ListGrantsByRunPage(ctx, id, p)) }
 	}
 	servePage(w, r, page, pageFn, func() ([]types.CredentialGrant, error) {
-		return s.cfg.Store.ListGrantsByRun(ctx, id)
+		return served(s.cfg.Store.ListGrantsByRun(ctx, id))
 	})
 }

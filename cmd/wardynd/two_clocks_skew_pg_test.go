@@ -302,3 +302,8 @@ func TestPG_AFastClockStampsARunsUpdatedAtOnTheDatabaseClock(t *testing.T) {
 			"something other than the row's own age", age)
 	}
 }
+
+func (s *recordingStopper) StopRunMaxAge(_ context.Context, runID uuid.UUID, _ time.Time) (lifecycle.StopOutcome, error) {
+	s.stopped = append(s.stopped, runID)
+	return lifecycle.StopOutcome{Applied: true}, nil
+}

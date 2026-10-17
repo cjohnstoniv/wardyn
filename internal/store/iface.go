@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -80,7 +81,9 @@ type Store interface {
 	SetWorkspaceRecordResult(ctx context.Context, id uuid.UUID, taskKey string, result json.RawMessage, onlyIfStatus string) (types.Workspace, bool, error)
 	ClaimWorkspaceActiveRun(ctx context.Context, id, runID uuid.UUID, expected *uuid.UUID) (types.Workspace, bool, error)
 	ClearWorkspaceActiveRun(ctx context.Context, id, runID uuid.UUID) (bool, error)
-	SetWorkspaceBuiltImage(ctx context.Context, id uuid.UUID, imageRef, builtHash string) (types.Workspace, error)
+	// SetWorkspaceBuiltImage writes image_ref, built_profile_hash and the build record by one compare-and-swap
+	// on observedRef; applied=false means another build moved image_ref first.
+	SetWorkspaceBuiltImage(ctx context.Context, id uuid.UUID, observedRef, imageRef, builtHash string, rec *types.ImageBuild) (applied bool, err error)
 	// SetWorkspaceImportState advances the scan pipeline. FENCED: applies only while the import-step
 	// slot still holds expectedActive; applied=false means the caller must re-read, not retry blindly.
 	SetWorkspaceImportState(ctx context.Context, id uuid.UUID, status types.WorkspaceStatus, activeRunID *uuid.UUID, expectedActive *uuid.UUID) (types.Workspace, bool, error)
@@ -167,8 +170,8 @@ type Store interface {
 	// third auth branch on every authenticated route.
 	//
 	// CreateAPIToken/GetAPITokenByRaw hash the plaintext token internally — the raw value never
-	// reaches SQL. GetAPITokenByRaw returns ErrNotFound for unknown, mismatched AND revoked tokens
-	// alike, so it's not an existence oracle. RevokeAPIToken is principal-scoped when non-empty
+	// reaches SQL. GetAPITokenByRaw returns ErrNotFound for unknown, mismatched, revoked AND expired
+	// tokens alike, so it's not an existence oracle. RevokeAPIToken is principal-scoped when non-empty
 	// (self-service; someone else's id is ErrNotFound) and revokes ANY token when empty (admin).
 	// TouchAPIToken is best effort — its error must never fail a request.
 	CreateAPIToken(ctx context.Context, t types.APIToken, raw string) (types.APIToken, error)
@@ -225,6 +228,8 @@ type Store interface {
 	GetUserType(ctx context.Context, id string) (types.UserType, error)
 	CreateUserType(ctx context.Context, t types.UserType) (types.UserType, error)
 	UpdateUserType(ctx context.Context, t types.UserType) (types.UserType, error)
+	// UpdateUserTypeMetadata is UpdateUserType without the priority column.
+	UpdateUserTypeMetadata(ctx context.Context, t types.UserType) (types.UserType, error)
 	UserTypeReferences(ctx context.Context, id string) (int, error)
 	// UserTypeTokenStamps counts the unrevoked API tokens stamped with the type.
 	UserTypeTokenStamps(ctx context.Context, id string) (int, error)
@@ -247,8 +252,18 @@ type Store interface {
 	// DeleteGovernanceProfile returns ErrConflict when the profile is still ASSIGNED — the ON DELETE
 	// RESTRICT, so deleting a profile can never silently widen its members.
 	UpsertGovernanceProfile(ctx context.Context, p types.GovernanceProfile) (types.GovernanceProfile, error)
+	// WriteGovernanceProfile is the graph-aware write: one transaction under the profile-graph
+	// lock, where build decides the stored row from every profile as that transaction reads them
+	// (migration 0125: a profile may be composed on another). DeleteGovernanceProfile also
+	// returns *ErrProfileHasChildren when another profile composes on the row.
+	WriteGovernanceProfile(ctx context.Context, id uuid.UUID, build GovernanceProfileBuild) (types.GovernanceProfile, error)
 	DeleteGovernanceProfile(ctx context.Context, id uuid.UUID) error
+	// ListGovernanceProfiles and GetGovernanceProfileChain return RAW rows: a composed row
+	// carries no authority of its own. Only internal/api/governance_compose.go calls them for
+	// authority (a source guard fails any other caller); GetGovernanceProfileChain is one
+	// statement, leaf first, bounded at depth 3, and ErrNotFound when the leaf is gone.
 	ListGovernanceProfiles(ctx context.Context) ([]types.GovernanceProfile, error)
+	GetGovernanceProfileChain(ctx context.Context, id uuid.UUID) ([]types.GovernanceProfile, error)
 	// UpsertGovernanceAssignment keys on the natural UNIQUE (subject_type,
 	// subject): re-assigning a subject REPOINTS its one row, returning the
 	// EXISTING row's id on a conflict. ErrNotFound when profile_id names no
@@ -256,6 +271,15 @@ type Store interface {
 	UpsertGovernanceAssignment(ctx context.Context, a types.GovernanceAssignment) (types.GovernanceAssignment, error)
 	DeleteGovernanceAssignment(ctx context.Context, id uuid.UUID) error
 	ListGovernanceAssignments(ctx context.Context) ([]types.GovernanceAssignment, error)
+	// Governance changes (migration 0126): a governance write held for a second human. Part of
+	// this interface, not an optional seam, because a store without them would let a covered write
+	// through unreviewed. See governance_changes.go for each one's contract.
+	ProposeGovernanceChange(ctx context.Context, ch types.GovernanceChange, ttl time.Duration) (types.GovernanceChange, []ExpiredGovernanceChange, error)
+	ListGovernanceChanges(ctx context.Context, state string) ([]types.GovernanceChange, error)
+	GetGovernanceChange(ctx context.Context, id uuid.UUID) (types.GovernanceChange, error)
+	DecideGovernanceChange(ctx context.Context, id uuid.UUID, d GovernanceDecision, fn GovernanceDecideFunc) (types.GovernanceChange, error)
+	// DryRunGovernance runs fn on a transaction that is always rolled back.
+	DryRunGovernance(ctx context.Context, fn func(q Querier) error) error
 	// ResolveGovernanceProfile returns THE ONE profile that applies to a caller — user > group >
 	// user_type > all, sub over email within the user tier, then priority DESC and name ASC — as a
 	// single indexed read whose ORDER BY is the whole precedence rule. ErrNotFound means "no
@@ -291,14 +315,15 @@ type Store interface {
 	// ListUserDrives returns every drive by name WITH its grant count — what makes the console's
 	// delete affordance honest, since a drive with grants answers 409.
 	ListUserDrives(ctx context.Context) ([]types.UserDriveListItem, error)
-	// UpsertUserDriveGrant keys on the natural UNIQUE (subject_type, subject): re-allocating a
-	// subject REPOINTS its one row, returning the EXISTING row's id on a conflict. ErrNotFound when
+	// UpsertUserDriveGrant keys on the natural UNIQUE (subject_type, subject, drive_id): writing a
+	// subject's grant on a drive again updates that row, returning the EXISTING row's id on a
+	// conflict; another drive is another row. ErrNotFound when
 	// drive_id names no drive (FK). ErrConflict when ANOTHER subject already holds this drive with
 	// the same home_override — a directory name is one person's, and on a managed drive an override
 	// is the last way left to point two people at one object Wardyn creates.
 	//
 	// homeOverrideStated is the REQUEST's tri-state, not the row's: false means the caller never
-	// mentioned home_override, and a repoint that never mentioned it must not CLEAR one (see the
+	// mentioned home_override, and an update that never mentioned it must not CLEAR one (see the
 	// guard in PG's statement) — that same ErrConflict, distinguished from the uniqueness one purely
 	// by this argument (a stated override disables the re-home guard; an unstated one is empty).
 	UpsertUserDriveGrant(ctx context.Context, g types.UserDriveGrant, homeOverrideStated bool) (types.UserDriveGrant, error)
@@ -335,9 +360,13 @@ type PG struct {
 	// Now is THE APP CLOCK, letting a test run one that disagrees with the
 	// database's. Nil means time.Now. Every stamp this store writes belongs on
 	// the DATABASE's clock; the app clock only measures an ELAPSED TIME (a
-	// difference of two readings, carrying no skew) that a statement then
-	// subtracts from the database's own now(). See db.AppClockAgeSQL.
+	// difference of two readings, carrying no skew) measured after a successful DB-clock read. See db.CaptureAppClock.
 	Now func() time.Time
+
+	// SIEM, when set, receives the audit rows this store writes in its own transaction (the retention
+	// policy change, the partition drop, the reauth resolve), which no recorder chain sees. Nil sends them
+	// nowhere.
+	SIEM audit.Sink
 }
 
 // now reads the app clock. BOTH readings that make an age must come from here.
@@ -353,3 +382,153 @@ func NewPG(pool *pgxpool.Pool) PG { return PG{Pool: pool} }
 
 // Compile-time assertion: PG satisfies Store.
 var _ Store = PG{}
+
+// ComponentStore persists custom components (migration 0136_components) and the snapshot of the
+// ones a run launched with (migration 0137_run_components); bodies in store_components.go.
+// Optional like RunLayoutStore, so the doubles that implement Store need not grow: callers
+// type-assert. A caller that finds it absent must REFUSE a request that names a component,
+// never drop the component and carry on.
+//
+// Owner "" is the organisation's rows; any other owner is one person's principal. Every read and
+// write of a component is scoped to an owner, so another person's row answers exactly as an absent one.
+type ComponentStore interface {
+	// CreateComponent inserts c at version 1 under the id the CALLER chose, and never replaces a
+	// row: ErrConflict when the id exists or the owner already has a component of that name. The
+	// caller choosing the id is what lets it record who may use an org component before the row
+	// exists, so no reader can find the row first. Timestamps are the database's.
+	CreateComponent(ctx context.Context, c types.Component) (types.Component, error)
+	// UpdateComponent replaces the name and definition of the row with c's id AND owner and moves
+	// its version by one. ErrNotFound when that owner has no such row; ErrConflict on a name the
+	// owner already uses.
+	UpdateComponent(ctx context.Context, c types.Component) (types.Component, error)
+	// DeleteComponent removes owner's row and returns it, or ErrNotFound. Snapshots of it on
+	// runs already launched are kept.
+	DeleteComponent(ctx context.Context, id uuid.UUID, owner string) (types.Component, error)
+	GetComponent(ctx context.Context, id uuid.UUID, owner string) (types.Component, error)
+	// ListComponents returns owner's rows by name.
+	ListComponents(ctx context.Context, owner string) ([]types.Component, error)
+	// ListComponentsByIDs returns the rows among ids that are the organisation's or owner's own.
+	// An id it does not return is absent or another person's; the two are not told apart.
+	ListComponentsByIDs(ctx context.Context, owner string, ids []uuid.UUID) ([]types.Component, error)
+	CountComponents(ctx context.Context, owner string) (int, error)
+	// PutRunComponents writes run runID's snapshot, once, in one transaction; each row's position
+	// in comps is its ordinal, and its RunID, Ordinal and Erased fields are not read. ErrNotFound
+	// when the run does not exist; ErrConflict when it already has a snapshot, which is never
+	// replaced — its rows are the run's authorization record. An empty comps is refused: a run
+	// launched without components writes no snapshot, so the caller does not call this.
+	PutRunComponents(ctx context.Context, runID uuid.UUID, comps []types.RunComponent) error
+	// ListRunComponents returns a run's snapshot in request order, erased rows included (Erased,
+	// with only SelfDefined left beside the key); empty for a run launched without components.
+	// It is what revive re-checks: an org row (SelfDefined false) needs its ComponentID's grant,
+	// any SelfDefined row the custom-component feature.
+	ListRunComponents(ctx context.Context, runID uuid.UUID) ([]types.RunComponent, error)
+	// DeleteComponentsByOwner and EraseRunComponentsByOwner are a person's erasure. The first
+	// deletes the components they saved. The second clears the descriptive content of the
+	// snapshot rows of what they defined, across every run, and KEEPS each row as that run's
+	// authorization tombstone. Each returns how many rows it changed and refuses owner "" — the
+	// organisation's rows are no person's.
+	DeleteComponentsByOwner(ctx context.Context, owner string) (int, error)
+	EraseRunComponentsByOwner(ctx context.Context, owner string) (int, error)
+	// EraseRunComponentsOfRun clears, on run runID only, what EraseRunComponentsByOwner clears:
+	// a create that finds a saved component gone after its snapshot write leaves no content
+	// behind. It returns how many rows it changed and refuses owner "".
+	EraseRunComponentsOfRun(ctx context.Context, runID uuid.UUID, owner string) (int, error)
+}
+
+// Compile-time assertion: PG satisfies ComponentStore.
+var _ ComponentStore = PG{}
+
+// RunHarnessStore persists the harnesses a run was launched with and the model
+// provider each was granted (migration run_harnesses). The rows are the run's
+// authorisation tombstone; they hold configuration ids only, so erasure never
+// clears them.
+type RunHarnessStore interface {
+	// PutRunHarnesses writes run runID's rows, once, in one transaction; each row's position in
+	// hs is its ordinal. ErrNotFound when the run does not exist; ErrConflict when the run
+	// already has rows, a harness repeats, or more than one row starts. An empty hs is refused: a
+	// run launched without harnesses writes nothing, so the caller does not call this.
+	PutRunHarnesses(ctx context.Context, runID uuid.UUID, hs []types.RunHarness) error
+	// ListRunHarnesses returns a run's rows in request order; empty for a run launched without
+	// any.
+	ListRunHarnesses(ctx context.Context, runID uuid.UUID) ([]types.RunHarness, error)
+}
+
+// Compile-time assertion: PG satisfies RunHarnessStore.
+var _ RunHarnessStore = PG{}
+
+// MemberDriveStore persists member drives: a person's own user_drives row,
+// owned by its owner_subject, with no grant rows. Bodies in member_drives.go.
+// Optional like RunnerStore: callers type-assert.
+type MemberDriveStore interface {
+	// CreateMemberDrive inserts d for d.OwnerSubject (non-empty) unless the owner
+	// already holds limit rows: ErrMemberDriveLimit, or ErrMemberDriveNameTaken
+	// when the owner has a drive whose name folds to the same slug.
+	CreateMemberDrive(ctx context.Context, d types.UserDrive, limit int) (types.UserDrive, error)
+	// ListMemberDrivesOf returns owner's drives, tombstoned ones included.
+	ListMemberDrivesOf(ctx context.Context, owner string) ([]types.UserDrive, error)
+	// GetMemberDriveOf returns drive id only if owner owns it, else ErrNotFound.
+	GetMemberDriveOf(ctx context.Context, owner string, id uuid.UUID) (types.UserDrive, error)
+	// BeginMemberDriveDelete tombstones owner's drive and returns the tombstone:
+	// ErrNotFound when not owned, ErrMemberDriveBusy while another delete holds it.
+	BeginMemberDriveDelete(ctx context.Context, owner string, id uuid.UUID) (types.UserDrive, time.Time, error)
+	// BeginMemberDriveDeleteAdmin is BeginMemberDriveDelete for any owner's drive.
+	BeginMemberDriveDeleteAdmin(ctx context.Context, id uuid.UUID) (types.UserDrive, time.Time, error)
+	// AbortMemberDriveDelete clears only the tombstone started names.
+	AbortMemberDriveDelete(ctx context.Context, id uuid.UUID, started time.Time) error
+	// FinishMemberDriveDelete removes the row only while it carries started.
+	FinishMemberDriveDelete(ctx context.Context, id uuid.UUID, started time.Time) error
+	// ListMemberDrives returns one page of every person's drives and the total.
+	ListMemberDrives(ctx context.Context, p Page) ([]types.UserDrive, int, error)
+}
+
+// Compile-time assertion: PG satisfies MemberDriveStore.
+var _ MemberDriveStore = PG{}
+
+// TemplateStore persists run templates (migration 0165_run_templates); bodies in
+// store_run_templates.go. Optional like ComponentStore: callers type-assert, and a
+// caller that finds it absent answers 501 templates_unavailable rather than
+// pretending to store anything.
+//
+// The store does not authorise: the API checks types.TemplateAuthorize first. What
+// the store holds for it is what must sit in the write's own transaction: a group
+// write's grant re-read (TemplateGrantCheck, FOR SHARE), the audience limit counted
+// under a named lock, and the revision compare-and-set.
+type TemplateStore interface {
+	// ListTemplatesVisible returns the current revision of every organisation
+	// template, of person's own, and of the groups' templates, by name.
+	ListTemplatesVisible(ctx context.Context, person string, groups []string) ([]types.RunTemplate, error)
+	// GetTemplate returns the current revision; ErrNotFound when absent.
+	GetTemplate(ctx context.Context, id uuid.UUID) (types.RunTemplate, error)
+	// GetTemplateRevision returns one saved revision, with that revision's own
+	// saver and time as UpdatedBy and UpdatedAt; ErrNotFound when the template or
+	// that revision is absent.
+	GetTemplateRevision(ctx context.Context, id uuid.UUID, revision int) (types.RunTemplate, error)
+	// CreateTemplate inserts t at revision 1 under the id the caller chose.
+	// *TemplateLimitError when the audience is full, ErrTemplateNameTaken on a
+	// name the audience already uses, ErrTemplateGrantGone when grant finds no row.
+	CreateTemplate(ctx context.Context, t types.RunTemplate, grant *TemplateGrantCheck) (types.RunTemplate, error)
+	// UpdateTemplate saves t's name, description and document as the next
+	// revision when the row is at expected; *TemplateRevisionConflictError (and
+	// nothing written) otherwise. ErrNotFound, ErrTemplateNameTaken and
+	// ErrTemplateGrantGone as for create.
+	UpdateTemplate(ctx context.Context, t types.RunTemplate, expected int, grant *TemplateGrantCheck) (types.RunTemplate, error)
+	// DeleteTemplate removes the template and every revision, and returns the
+	// row it removed (without a document).
+	DeleteTemplate(ctx context.Context, id uuid.UUID, grant *TemplateGrantCheck) (types.RunTemplate, error)
+	// The group-management grants. Put stores the grant as given, which the
+	// caller has made canonical, and a non-empty Label as the group's label.
+	ListTemplateGroupAdmins(ctx context.Context) ([]types.TemplateGroupAdmin, error)
+	PutTemplateGroupAdmin(ctx context.Context, g types.TemplateGroupAdmin) (types.TemplateGroupAdmin, error)
+	DeleteTemplateGroupAdmin(ctx context.Context, group, person string) (bool, error)
+	// TemplateGroupAdminGroups lists the groups any of persons holds a grant on.
+	TemplateGroupAdminGroups(ctx context.Context, persons []string) ([]string, error)
+	// TemplateGroupLabels returns the labels of those of groups that have one.
+	TemplateGroupLabels(ctx context.Context, groups []string) (map[string]string, error)
+	// EraseRunSetupsOf is the run_setups erasure scope: person's own templates
+	// (with their revisions) and grants go, and their name is blanked wherever
+	// it is the author of a shared template, a revision or a grant.
+	EraseRunSetupsOf(ctx context.Context, person string) (RunSetupsErased, error)
+}
+
+// Compile-time assertion: PG satisfies TemplateStore.
+var _ TemplateStore = PG{}

@@ -18,7 +18,7 @@ import (
 
 func TestFSStore_ReadsStayWithinRoot(t *testing.T) {
 	for _, relative := range []bool{false, true} {
-		for _, key := range []string{"run", "run~session"} {
+		for _, key := range []string{"0a000000-0000-4000-8000-000000000006", "0a000000-0000-4000-8000-000000000006~session"} {
 			name := "absolute/" + key
 			if relative {
 				name = "relative/" + key
@@ -53,7 +53,7 @@ func TestFSStore_ReadsStayWithinRoot(t *testing.T) {
 					t.Errorf("StatAndTail must refuse the path without returning bytes: tail=%q, err=%v", tail, err)
 				}
 				res := httptest.NewRecorder()
-				req := httptest.NewRequest(http.MethodGet, "/api/v1/runs/run/recording/"+key, nil)
+				req := httptest.NewRequest(http.MethodGet, "/api/v1/runs/0a000000-0000-4000-8000-000000000006/recording/"+key, nil)
 				newTestRouter(store).ServeHTTP(res, req)
 				if res.Code != http.StatusInternalServerError || strings.Contains(res.Body.String(), fixture) {
 					t.Errorf("replay must fail closed: status=%d body=%q", res.Code, res.Body.String())

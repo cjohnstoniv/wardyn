@@ -10,22 +10,21 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // the closed kind set
 //
-// Nine kinds, and this slice is the ONLY place the set is written down —
+// Ten kinds, and this slice is the ONLY place the set is written down —
 // migration 0042 deliberately puts no CHECK on capability_grants.capability, so
-// a tenth kind is a constant here plus its enforcement call site, with no DDL.
+// an eleventh kind is a constant here plus its enforcement call site, with no DDL.
 // A retired kind's stored rows (0.8 retired "integration") are inert: no door
 // asks about the kind any more, and the write boundary refuses new ones.
 // The console's own list (ui/src/app/lib/permissions-copy.ts CAPABILITY_KINDS)
 // mirrors these ids and must not drift.
 //
-// Eight of the nine NARROW what a member may already do; capImage WIDENS (a
+// Nine of the ten NARROW what a member may already do; capImage WIDENS (a
 // member cannot name a custom image at all today). Both directions resolve
 // through the one resolver below (capBatch.decide) — the difference is the
 // kind's row in capKinds.
@@ -101,10 +100,13 @@ const (
 	// (enforceRunModelProvider).
 	capModelProvider = "model_provider"
 	// capFeature NARROWS: it bounds whether a person may MINT a personal
-	// credential at all. Two values, a closed set (featureValues), plus `*`:
-	// featureSSHKey gates POST /me/ssh-keys and featureAPIToken gates POST
-	// /me/tokens, one check at each mint door (the token door also keeps
-	// member mode's 409; the SSH door stores a capped key instead, #564).
+	// credential at all, or define a component of their own, or enter the runs of
+	// a service identity they sponsor. Four values, a closed set
+	// (featureValues), plus `*`: featureSSHKey gates POST
+	// /me/ssh-keys and featureAPIToken gates POST /me/tokens, one check at each
+	// mint door (the token door also keeps member mode's 409; the SSH door
+	// stores a capped key instead, #564); featureCustomComponent is
+	// componentAttachRefusal's; featureServiceAttach is sponsorMayEnter's.
 	//
 	// Narrowing, on capAgent's rule: every signed-in person could already add a
 	// key and mint a token, so the unenforced default stays ALLOWED and an
@@ -131,87 +133,83 @@ const (
 	// extension (run_owner_authority.go), so a withdrawn selection also ends the
 	// run's lease.
 	capPolicy = "policy"
+	// capComponent NARROWS: it bounds which ORG component (a components row an
+	// admin wrote, owner '') a person may attach to their own run. Values are
+	// the row's uuid (canonical string), plus `*`. Asked at
+	// componentAttachRefusal; a person-defined component is featureCustomComponent's
+	// question instead, never this kind's.
+	//
+	// Narrowing on capAgent's rule, but the row it names did not exist before
+	// an admin wrote it, so "nobody until granted" is not a default of the
+	// kind: the component's create writes a capability_restrictions row for its
+	// id first, and a restricted value admits only an allow naming it (decide's
+	// steps 3 and 5) — a wildcard allow lists nobody. An id with no restriction
+	// row is allowed while the kind is unenforced, exactly like every other
+	// narrowing kind.
+	//
+	// It gates the CHOICE, never the content: the component's hosts and
+	// secrets are still bounded by the component gate.
+	capComponent = "component"
 )
 
 // The closed value set of capFeature. canonicalGrantValue refuses any other
 // value, so a misspelt row can never sit in the table protecting nothing.
+//
+// featureCustomComponent gates DEFINING a component of one's own — inline on
+// a run, saved, or attached from one's own saved row. Narrowing, so it is ON
+// for everyone until a deny row turns it off: unlike the other values it is a
+// power nobody had before it shipped, and the owner chose on-by-default
+// knowingly — the one value that sets aside "an upgrade with no configuration
+// changes nothing". On a deployment that already ENFORCES capFeature it is
+// off for anyone no allow row (the value itself, or `*`) covers, by decide's
+// step 7.
 const (
-	featureSSHKey   = "ssh_key"
-	featureAPIToken = "api_token"
+	featureSSHKey          = "ssh_key"
+	featureAPIToken        = "api_token"
+	featureCustomComponent = "custom_component"
+	// featureServiceAttach: "may enter the runs of service identities I sponsor". The value is
+	// restricted by migration 0167, so it is off for everyone until a grant names it, a `*` allow
+	// included. Asked only by sponsorMayEnter, with the operator step off.
+	featureServiceAttach = "service_attach"
+	// featureSelfHostRunner: "may mint a registration token for a runner of my own" (POST
+	// /me/runners/tokens). Restricted by migration 0178 on the same terms as service_attach: nobody
+	// until an allow names it, an `all` allow included. Runners and claims that already exist are untouched.
+	featureSelfHostRunner = "self_host_runner"
 )
 
-var featureValues = []string{featureSSHKey, featureAPIToken}
+var featureValues = []string{featureSSHKey, featureAPIToken, featureCustomComponent, featureServiceAttach, featureSelfHostRunner}
 
 // capabilityKinds is the closed set, in the order the admin surface shows them.
-var capabilityKinds = []string{capEgressHost, capSecret, capWorkspace, capImage, capAgent, capWorkspaceProvider, capModelProvider, capFeature, capPolicy}
+var capabilityKinds = []string{capEgressHost, capSecret, capWorkspace, capImage, capAgent, capWorkspaceProvider, capModelProvider, capFeature, capPolicy, capComponent}
 
 // capKindsVersion numbers the kind table, and GET /me/capabilities returns it so
 // a client holding a copy of the set (the console's CAPABILITY_KINDS) can tell
 // its copy is stale. Monotonic: a change to capKinds — a kind added or retired,
 // or a row's direction changed — bumps it by one and it never goes down.
 // TestCapKindsVersionPinsTheTable fails on a table change that forgets to.
-const capKindsVersion = 4
+const capKindsVersion = 5
 
-// validCapabilityKind reports whether kind is one of the nine. The API write
+// validCapabilityKind reports whether kind is one of the ten. The API write
 // boundary uses it in place of the CHECK the schema deliberately does not have.
 func validCapabilityKind(kind string) bool { return slices.Contains(capabilityKinds, kind) }
 
-// capWildcard matches every value of its kind. Spelled the same for all nine so
+// capWildcard matches every value of its kind. Spelled the same for all ten so
 // an admin does not have to learn a per-kind syntax for "all of them".
 const capWildcard = "*"
 
 // resolution
 
-// canonicalUserSubject canonicalizes ONE human identity — an IdP `sub` or an
-// email claim — into the exact string a `user` subject row is matched by. It is
-// the user half of oidc.CanonicalGroupSubject, and it is used by BOTH sides of
-// the match: the caller's own subject list (capabilitySubjects, just below) and
-// every surface that writes a `user` subject (validateCapabilityGrant,
-// validateGovernanceAssignment, the governance preview's claim normalizer).
-// One function, so what a caller can BE is exactly what an admin can WRITE.
-//
-// The ASCII guard runs on the raw value, before the fold, and the order is the
-// security property — the same ordering CanonicalGroupSubject, ParseRoleMap and
-// deriveRole already use, for the same reason. strings.ToLower does UNICODE
-// case mapping: KELVIN SIGN U+212A folds to ASCII 'k' and U+0130 folds to ASCII
-// 'i'. Folding first therefore let a crafted email claim "Kim@Korp.com"
-// resolve to "kim@korp.com" — the exact string another human's capability
-// grants, governance assignment and drive allocation are written against, since
-// every one of those columns is matched by `subject = ANY($1::text[])` exact
-// equality. A plain ToLower is the whole rule only for an ASCII subject — not
-// for one that isn't.
-//
-// A NON-ASCII identity is kept VERBATIM rather than dropped, and that is where
-// this differs from the group rule — deliberately. A group subject is matched
-// against a STORED login-time snapshot that can only carry printable ASCII, so
-// a non-ASCII group name is a row nobody can ever match and the write boundary
-// refuses it. A user subject is the caller's OWN identity, recomputed per
-// request from claims the IdP chooses: dropping it would silently discard a
-// DENY written against a human whose directory hands out non-ASCII subjects,
-// and refusing it at the write boundary would make that human ungovernable.
-// Verbatim is safe in the only direction that matters — a string that is never
-// folded can only ever equal itself, so it inherits nobody's grants — and
-// because both sides call this function, a subject that can be written is
-// exactly a subject that can be matched.
-//
-// Trimmed on both arms: an untrimmed sub arm would let a claim with a trailing
-// space resolve to a subject no write boundary (which trims) could ever produce.
-func canonicalUserSubject(s string) string {
-	s = strings.TrimSpace(s)
-	if !oidc.ASCIIOnly(s) {
-		return s
-	}
-	return strings.ToLower(s)
-}
-
 // capabilitySubjects returns the grant subjects that describe the caller on
 // ctx: their user identities and their group snapshot.
 //
-// users carries BOTH the lowercased OIDC sub and the email, because an admin
-// writing a grant knows one or the other and should not have to guess which one
-// this IdP made authoritative. Matching either is a deliberate widening of who
-// a `user` row hits — and it is safe in the direction that matters, since a
-// DENY written against either identity also hits.
+// users carries BOTH the OIDC sub and the email, each through
+// types.CanonicalUserSubject — the same rule every `user`-subject write
+// boundary applies, so what a caller can BE is exactly what an admin can WRITE.
+// Both are offered because an admin writing a grant knows one or the other and
+// should not have to guess which one this IdP made authoritative. Matching
+// either is a deliberate widening of who a `user` row hits — and it is safe in
+// the direction that matters, since a DENY written against either identity also
+// hits.
 //
 // groups is nil for a pre-0.6 cookie (the snapshot predates the field) and
 // empty when the IdP sent nothing usable. stale reports that the group half is
@@ -229,10 +227,10 @@ func canonicalUserSubject(s string) string {
 // more is strictly safer. It is the rows that are MISSING that stale is for
 // (capScan's unresolvable-deny check).
 func capabilitySubjects(ctx context.Context) (users, groups []string, stale bool) {
-	if sub := canonicalUserSubject(oidcHumanFromContext(ctx)); sub != "" {
+	if sub := types.CanonicalUserSubject(oidcHumanFromContext(ctx)); sub != "" {
 		users = append(users, sub)
 	}
-	if email := canonicalUserSubject(oidcEmailFromContext(ctx)); email != "" && !slices.Contains(users, email) {
+	if email := types.CanonicalUserSubject(oidcEmailFromContext(ctx)); email != "" && !slices.Contains(users, email) {
 		users = append(users, email)
 	}
 	groups = oidcGroupsFromContext(ctx)
@@ -293,6 +291,7 @@ var capKinds = map[string]capKind{
 	capModelProvider:     {direction: capNarrowing, restrictable: true, gatesAdminPins: true, reason: authz.ReasonCapabilityModelProvider},
 	capFeature:           {direction: capNarrowing, restrictable: true, reason: authz.ReasonCapabilityFeature},
 	capPolicy:            {direction: capNarrowing, restrictable: true, reason: authz.ReasonCapabilityPolicy},
+	capComponent:         {direction: capNarrowing, restrictable: true, reason: authz.ReasonCapabilityComponent},
 }
 
 // the wrappers
@@ -330,10 +329,22 @@ var capKinds = map[string]capKind{
 // give them). See the three-tier doctrine on internal/auth/oidc's
 // RoleSecurityAdmin. A pinning test asserts it.
 func (s *Server) capAllowed(ctx context.Context, kind, value string) (bool, error) {
-	if s.cfg.Store == nil && validCapabilityKind(kind) && !s.isOperator(ctx) {
+	if s.cfg.Store == nil && validCapabilityKind(kind) && !s.runUngoverned(ctx) {
 		return false, fmt.Errorf("api: capability %q cannot be resolved: no store configured", kind)
 	}
 	return s.capSeamAllowed(ctx, kind, value)
+}
+
+// capAllowedAsMember is capAllowed with decide's operator step off: a super admin, the admin token and
+// local mode are bounded by the grants like a member. It exists for service_attach alone (F6: a super
+// admin sponsor needs the grant too), and answers a deployment with no Store as an error, never as allowed.
+func (s *Server) capAllowedAsMember(ctx context.Context, kind, value string) (bool, error) {
+	if s.cfg.Store == nil {
+		return false, fmt.Errorf("api: capability %q cannot be resolved: no store configured", kind)
+	}
+	b := s.newCapBatch(ctx)
+	b.operator = false
+	return b.allowed(ctx, kind, value)
 }
 
 // capGranted asks the WIDENING question of `kind`, whatever its row says: does
@@ -516,7 +527,7 @@ type capBatch struct {
 // newCapBatch snapshots the store-free inputs decide needs before it ever
 // reads: the operator bit and the nil-Store bit.
 func (s *Server) newCapBatch(ctx context.Context) *capBatch {
-	return &capBatch{s: s, noStore: s.cfg.Store == nil, operator: s.isOperator(ctx)}
+	return &capBatch{s: s, noStore: s.cfg.Store == nil, operator: s.runUngoverned(ctx)}
 }
 
 // capBatchKey carries one resolution's batch: the ownedSecretMemo pattern, a

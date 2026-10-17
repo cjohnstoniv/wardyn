@@ -38,6 +38,9 @@ func main() {
 		if hint := dialHint(err); hint != "" {
 			fmt.Fprintln(os.Stderr, "wardyn:", hint)
 		}
+		if hint := policyHint(err); hint != "" {
+			fmt.Fprintln(os.Stderr, "wardyn:", hint)
+		}
 		os.Exit(exitCodeFor(err))
 	}
 }
@@ -68,6 +71,24 @@ func dialHint(err error) string {
 	return ""
 }
 
+// noRedirect hands a 3xx back to the caller instead of following it. A followed
+// redirect turns a write into a GET of wherever Location points (so it "succeeds"
+// against a login page) and replays the body and bearer there.
+func noRedirect(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+
+// noRedirectClient backs the raw requests when the SDK client carries no
+// HTTPClient of its own (the CLI always sets one). A client the caller did
+// supply is used as it is: its redirect policy is theirs.
+var noRedirectClient = &http.Client{CheckRedirect: noRedirect}
+
+// rawHTTPClient is the client for a request the SDK has no method for.
+func rawHTTPClient(c *sdk.Client) *http.Client {
+	if c.HTTPClient != nil {
+		return c.HTTPClient
+	}
+	return noRedirectClient
+}
+
 // exitCodeFor maps an error to a process exit code CI can branch on. A run
 // outcome from --wait (*exitError) wins — it already encodes the agent/lifecycle
 // result. Otherwise a typed API error maps by status class (auth=2, server=4,
@@ -87,11 +108,12 @@ func exitCodeFor(err error) int {
 			return 4
 		default:
 			// pkg/client mints an *sdk.APIError for EVERY non-2xx status, 3xx
-			// included (nothing sets CheckRedirect, so a redirect from an
-			// interposed proxy is never followed). All of them are failures of
-			// the CLI-to-control-plane request itself, so they classify with
-			// the 4xx class — never on the catch-all 1, which docs/CI.md
-			// reserves for a FAILED run's own task exit code.
+			// included (the CLI's client returns a redirect instead of
+			// following it, so one from an interposed proxy surfaces here).
+			// All of them are failures of the CLI-to-control-plane request
+			// itself, so they classify with the 4xx class — never on the
+			// catch-all 1, which docs/CI.md reserves for a FAILED run's own
+			// task exit code.
 			return 3
 		}
 	}
@@ -176,30 +198,34 @@ func rootCmd() *cobra.Command {
 	// server can't wedge a single request forever; the shared client reuses one
 	// connection pool across those polls.
 	client := func() *sdk.Client {
-		return &sdk.Client{BaseURL: serverURL, Token: token, HTTPClient: &http.Client{Timeout: 30 * time.Second}}
+		return &sdk.Client{BaseURL: serverURL, Token: token, HTTPClient: &http.Client{Timeout: 30 * time.Second, CheckRedirect: noRedirect}}
 	}
 
 	root.AddCommand(
 		runCmd(client),
-		approvalsCmd(client),
-		approvalDecisionCmd(client, "approve", "Approve a pending approval request", (*sdk.Client).Approve),
-		approvalDecisionCmd(client, "deny", "Deny a pending approval request", (*sdk.Client).Deny),
+		approvalCmd(client),
 		auditCmd(client),
-		logsCmd(client),
 		policyCmd(client),
 		workspaceCmd(client),
 		sourceCmd(client),
 		driveCmd(client),
 		secretCmd(client),
 		sshKeyCmd(client),
+		syncCmd(client),
 		recordCmd(client),
 		setupCmd(client),
 		siteConfigCmd(client),
-		driveCmd(client),
 		presetCmd(client),
+		templateCmd(client),
 		governanceCmd(client),
-		sessionsCmd(client),
+		sessionCmd(client),
+		peopleCmd(client),
+		personCmd(client),
+		invitationCmd(client),
+		serviceIdentityCmd(client),
+		tokenCmd(client),
 		deviceCmd(client),
+		runnerCmd(client),
 		supportBundleCmd(client),
 	)
 	return root

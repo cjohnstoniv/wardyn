@@ -15,6 +15,10 @@ type RunLeaseConfig struct {
 	// ended keeps its files (stopped, no network) before it is torn down. 0
 	// tears a run down at its end.
 	EndedRunGrace time.Duration
+	// RunMaxAge mirrors WARDYN_RUN_MAX_AGE: the deployment's maximum run lifetime,
+	// a lifetime source for every new run's end and lifetime_cap_at (#1319). 0 is
+	// off.
+	RunMaxAge time.Duration
 }
 
 // runLeaseState is the run lease's part of Server, embedded so its fields read

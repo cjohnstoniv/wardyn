@@ -72,6 +72,14 @@ export interface MeIdentity {
   // no provider above it). Never "harden" this default to false either.
   securityOperator: boolean;
 
+  // Whether the person inside the User view is STAMPED a super admin (GET
+  // /api/v1/me's `user_view_super_admin`, #1335). `operator` is clamped to
+  // false in the view, so it cannot say whether /admin/setup would open for
+  // them; this can. Default FALSE — fail CLOSED, unlike the tier defaults above:
+  // it only gates an offered link, and an unresolved /me, a failed fetch or an
+  // unwrapped test must not offer a route the server may refuse.
+  userViewSuperAdmin: boolean;
+
   // The signed-in principal (GET /api/v1/me's `principal`), for UX that
   // needs to compare "is this MY run/resource" (e.g. the run-detail
   // "Connect via SSH" card, owner-only like the gateway itself). Default
@@ -81,8 +89,12 @@ export interface MeIdentity {
   // three-case rationale as `operator` above (unresolved /me, a failed
   // fetch, an unwrapped test).
   principal: string;
+  /** Advances for every confirmed identity read, even when the principal is unchanged. */
+  identityRevision: number;
+  /** Auth generation captured by that read; old identities cannot send a draft. */
+  authGeneration: number;
 
-  // M3 — presentational label of the WARDYN_MEMBER_WORKSPACE_ROOTS/_MAP
+  // M3 — presentational label of the WARDYN_USER_WORKSPACE_ROOTS/_MAP
   // constraint that applies to this signed-in member (GET /me's
   // `member_local_dir_root`), e.g. "/home/agent-projects" (bare — the
   // "under " word comes from permissions-copy.ts's ROOT_HINT template, not
@@ -199,7 +211,10 @@ const DEFAULT_ME_IDENTITY: MeIdentity = {
   operator: true,
   operatorResolved: true,
   securityOperator: true,
+  userViewSuperAdmin: false,
   principal: "",
+  identityRevision: 0,
+  authGeneration: 0,
   memberLocalDirRoot: null,
   userDrive: NO_USER_DRIVE,
   userType: null,
@@ -213,7 +228,10 @@ export function OperatorProvider({
   operator,
   operatorResolved = true,
   securityOperator = true,
+  userViewSuperAdmin = false,
   principal = "",
+  identityRevision = 0,
+  authGeneration = 0,
   memberLocalDirRoot = null,
   userDrive = null,
   userDriveDeniedByProfile = "",
@@ -232,7 +250,12 @@ export function OperatorProvider({
   // `operator` keeps today's fail-open behavior rather than silently becoming
   // the restricted case.
   securityOperator?: boolean;
+  /** GET /me's `user_view_super_admin` — see MeIdentity.userViewSuperAdmin.
+   *  Optional, defaulting false (fail closed). */
+  userViewSuperAdmin?: boolean;
   principal?: string;
+  identityRevision?: number;
+  authGeneration?: number;
   memberLocalDirRoot?: string | null;
   userDrive?: MeUserDrive | null;
   userDriveDeniedByProfile?: string;
@@ -271,14 +294,17 @@ export function OperatorProvider({
       operator,
       operatorResolved,
       securityOperator,
+      userViewSuperAdmin,
       principal,
+      identityRevision,
+      authGeneration,
       memberLocalDirRoot,
       userDrive: drive,
       userType,
       confinementPosture,
       demoVideoBaseUrl,
     }),
-    [operator, operatorResolved, securityOperator, principal, memberLocalDirRoot, drive, userType, confinementPosture, demoVideoBaseUrl],
+    [operator, operatorResolved, securityOperator, userViewSuperAdmin, principal, identityRevision, authGeneration, memberLocalDirRoot, drive, userType, confinementPosture, demoVideoBaseUrl],
   );
   return <MeIdentityContext.Provider value={identity}>{children}</MeIdentityContext.Provider>;
 }
@@ -333,6 +359,12 @@ export function useOperatorResolved(): boolean {
 // exactly — see internal/api/http.go.
 export function useSecurityOperator(): boolean {
   return React.useContext(MeIdentityContext).securityOperator;
+}
+
+// Whether the person in the User view is stamped a super admin — see
+// MeIdentity.userViewSuperAdmin above.
+export function useUserViewSuperAdmin(): boolean {
+  return React.useContext(MeIdentityContext).userViewSuperAdmin;
 }
 
 // The signed-in principal — see MeIdentity.principal above.
@@ -430,4 +462,10 @@ export function useConfinementPosture(): ConfinementPosture {
 // The operator-run demo mirror — see MeIdentity.demoVideoBaseUrl above.
 export function useDemoVideoBaseUrl(): string | undefined {
   return React.useContext(MeIdentityContext).demoVideoBaseUrl;
+}
+
+/** The confirmed identity boundary for a draft that can issue requests. Handed over as read:
+ *  its consumers are lazy and shape it there (useDraftIdentity), off the entry chunk. */
+export function useRequestIdentity(): Pick<MeIdentity, "principal" | "operatorResolved" | "identityRevision" | "authGeneration"> {
+  return React.useContext(MeIdentityContext);
 }

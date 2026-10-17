@@ -130,10 +130,13 @@ func buildRunMounts(policy types.RunPolicySpec, member userMountPosture) []runne
 func (s *Server) resolveRunUpstreamProxy(ctx context.Context, runID uuid.UUID, siteCfg types.SiteConfig, siteCfgErr error) string {
 	if siteCfgErr != nil {
 		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.upstream_proxy.resolve",
-			runID.String(), "failure", mustJSON(map[string]any{"reason": "site-config-read-error"})))
+			runID.String(), "failure", mustJSON(map[string]any{"in_effect": false, "reason": "site-config-read-error"})))
 		return ""
 	}
 	if siteCfg.UpstreamProxyURL == "" && siteCfg.UpstreamProxySecretRef == "" {
+		// Recorded too, so "no upstream configured" is told apart from "the event is missing".
+		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.upstream_proxy.resolve",
+			runID.String(), "success", mustJSON(map[string]any{"in_effect": false, "reason": "not-configured"})))
 		return ""
 	}
 	var getSecret func(context.Context, string) ([]byte, error)
@@ -160,10 +163,12 @@ func (s *Server) resolveRunUpstreamProxy(ctx context.Context, runID uuid.UUID, s
 	resolved, failReason := resolveUpstreamProxyURL(ctx, siteCfg.UpstreamProxyURL, siteCfg.UpstreamProxySecretRef, getSecret)
 	if failReason != "" {
 		detail["reason"] = failReason
+		detail["in_effect"] = false
 		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.upstream_proxy.resolve",
 			runID.String(), "failure", mustJSON(detail)))
 		return ""
 	}
+	detail["in_effect"] = resolved != ""
 	s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.upstream_proxy.resolve",
 		runID.String(), "success", mustJSON(detail)))
 	return resolved
@@ -183,7 +188,7 @@ const envAllowAgentTelemetry = "WARDYN_ALLOW_AGENT_TELEMETRY"
 
 // envToggles names every switch this package reads with envEnabled.
 // TestEnvTogglesListEveryEnvEnabledRead fails when a call site is missing here.
-var envToggles = []string{envEgressSecondHuman, envAllowMemberEnvSecret, envAllowAgentTelemetry}
+var envToggles = []string{envEgressSecondHuman, envCapabilitySecondHuman, envGovernanceSecondHuman, envAllowMemberEnvSecret, envAllowAgentTelemetry, envGitPATAPIBitbucketServer}
 
 // ValidateEnvToggles reads each envToggles switch once, so a value that is
 // neither truthy nor falsey exits 2 at boot, in every auth mode, rather than
@@ -276,9 +281,8 @@ func buildBaseSandboxEnv(run types.AgentRun, proxyURL string, needs *toolchainNe
 	// the approval queue shows only task-relevant egress. An operator who WANTS
 	// agent telemetry sets WARDYN_ALLOW_AGENT_TELEMETRY (1/true/yes/on) to omit
 	// these; default-unset keeps the suppression on.
-	if !envEnabled(envAllowAgentTelemetry) {
-		env["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] = "1"
-		env["DISABLE_TELEMETRY"] = "1"
+	for name, value := range agentTelemetryEnv() {
+		env[name] = value
 	}
 	// Toolchain-fidelity env — REQUIREMENTS-DRIVEN, never platform-wide: a
 	// workspace run gets exactly what its scans detected (needs), and only a
@@ -429,6 +433,7 @@ func applyDispatchModeEnv(sandboxEnv map[string]string, run types.AgentRun, p di
 	if run.AutonomyLevel != "" {
 		sandboxEnv["WARDYN_AUTONOMY_LEVEL"] = string(run.AutonomyLevel)
 	}
+	applyHarnessSetEnv(sandboxEnv, p.Harnesses)
 	if p.FirstGitHubGrantID != nil {
 		sandboxEnv["WARDYN_GITHUB_GRANT_ID"] = p.FirstGitHubGrantID.String()
 	}
@@ -505,16 +510,24 @@ func addGitBrokerHosts(sandboxEnv map[string]string, entries ...string) {
 // branch here changes control flow. See buildRepoRecords for the validation
 // (repoFieldSafe, allowed-prefix targets, dedup) it relies on.
 func applyRepoCloneEnv(sandboxEnv map[string]string, run types.AgentRun, policy types.RunPolicySpec) {
+	// The drop sentences are create's to surface (they ride the 201); here the
+	// slog.Warn inside buildRepoRecords is the whole record.
+	repos, _ := buildRepoRecords(run.Repo, policy.WorkspaceRepos)
+	if repos != "" {
+		sandboxEnv["WARDYN_REPOS"] = repos
+	}
+	// The legacy single-repo pair stays for every run that clones something. When
+	// every record was dropped while one names the run's repo, agent-run's legacy
+	// fallback would clone it at the default target and ref in the dropped
+	// record's place, so the pair is withheld.
+	if repos == "" && legacyRepoNamed(run.Repo, policy.WorkspaceRepos) {
+		return
+	}
 	if slug := strings.TrimSpace(run.Repo); slug != "" && repoFieldSafe(slug) {
 		sandboxEnv["WARDYN_REPO_SLUG"] = slug
 		if url := repoCloneURL(slug); url != "" {
 			sandboxEnv["WARDYN_REPO_URL"] = url
 		}
-	}
-	// The drop sentences are create's to surface (they ride the 201); here the
-	// slog.Warn inside buildRepoRecords is the whole record.
-	if repos, _ := buildRepoRecords(run.Repo, policy.WorkspaceRepos); repos != "" {
-		sandboxEnv["WARDYN_REPOS"] = repos
 	}
 }
 
@@ -565,13 +578,14 @@ func splitSecretEnv(sandboxEnv map[string]string, keys []string) map[string]stri
 	return secretEnv
 }
 
-// applyUserDriveEnv announces the mounted USER DRIVE to the sandbox as
-// "<target>:ro" or "<target>:rw" — the one in-sandbox signal that a run has
-// persistent storage and whether it may write to it. No-op for the runs that
-// carry no drive, which is most of them.
+// applyUserDriveEnv announces the drive mounted at /home/agent/drive to the
+// sandbox as "<target>:ro" or "<target>:rw" — the one in-sandbox signal that a
+// run has that persistent storage and whether it may write to it. No-op for the
+// runs that carry no drive there, which is most of them; the other drives are
+// at their own paths under /home/agent/drives and /home/agent/shared.
 //
 // It is an ANNOUNCEMENT, never the mechanism: the mount itself is made by the
-// driver from SandboxSpec.Drive, so an agent that ignores this variable still
+// driver from SandboxSpec.Drives, so an agent that ignores this variable still
 // gets the drive, and one that fabricates it still gets nothing. That split is
 // what lets it be non-secret env (invariant 1) beside WARDYN_EPHEMERAL_DIRS —
 // and it is why the value names the in-container target and the mode and
@@ -583,15 +597,16 @@ func splitSecretEnv(sandboxEnv map[string]string, keys []string) map[string]stri
 // mount reads as everywhere else a human sees one (`docker inspect`, `mount`,
 // the console's own chip), and a variable an agent is expected to print in a
 // startup banner should not need a translation table.
-func applyUserDriveEnv(sandboxEnv map[string]string, drive *types.DriveMount) {
-	if drive == nil {
-		return
+func applyUserDriveEnv(sandboxEnv map[string]string, drives []types.DriveMount) {
+	for _, drive := range drives {
+		if drive.Target == runner.DriveTarget {
+			sandboxEnv["WARDYN_USER_DRIVE"] = drive.Target + ":" + driveAuditMode(drive.ReadOnly)
+		}
 	}
-	sandboxEnv["WARDYN_USER_DRIVE"] = drive.Target + ":" + driveAuditMode(drive.ReadOnly)
 }
 
-// auditDriveMount records run.drive.mount: dispatch attached a member's user
-// drive to this sandbox. Silent when no drive was attached — an audit action
+// auditDriveMount records run.drive.mount, one row per drive dispatch attached
+// to this sandbox, in the run's order. Silent when no drive was attached — an audit action
 // that fires on every run is noise an operator learns to skip past.
 //
 // Called AFTER CreateSandbox has returned, never beside the spec assembly: the
@@ -634,23 +649,26 @@ func applyUserDriveEnv(sandboxEnv map[string]string, drive *types.DriveMount) {
 // cannot read back the object it was allocated. `enforcement` is what actually
 // binds the drive's bytes (types.StorageEnforcement), logged beside the mount so
 // a size read back in a later dispute carries its caveat instead of reading as a
-// promise. Five fields, matching docs/AUDIT-ACTIONS.md exactly.
+// promise. `drive_id` and the in-sandbox `target` say which drive went where
+// when a run attaches several. Seven fields, matching docs/AUDIT-ACTIONS.md.
 //
 // The nil test lives HERE rather than at the assembly site for a mechanical
 // reason worth stating: dispatchRun sits at its gocyclo ceiling, so one more
 // branch there is a lint failure. It belongs with the payload anyway.
-func (s *Server) auditDriveMount(ctx context.Context, runID uuid.UUID, drive *types.DriveMount) {
-	if drive == nil {
-		return
+func (s *Server) auditDriveMount(ctx context.Context, runID uuid.UUID, drives []types.DriveMount) {
+	for i := range drives {
+		drive := &drives[i]
+		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.drive.mount",
+			driveAuditTarget(drive), "success", mustJSON(map[string]any{
+				"backend":     drive.Backend,
+				"drive":       drive.HomeName,
+				"drive_id":    drive.DriveID,
+				"enforcement": drive.Enforcement,
+				"mode":        driveAuditMode(drive.ReadOnly),
+				"object":      driveAuditTarget(drive),
+				"target":      drive.Target,
+			})))
 	}
-	s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.drive.mount",
-		driveAuditTarget(drive), "success", mustJSON(map[string]any{
-			"backend":     drive.Backend,
-			"drive":       drive.HomeName,
-			"enforcement": drive.Enforcement,
-			"mode":        driveAuditMode(drive.ReadOnly),
-			"object":      driveAuditTarget(drive),
-		})))
 }
 
 // driveAuditTarget is what run.drive.mount's Target names, and it differs by
@@ -703,4 +721,67 @@ func driveAuditMode(readOnly bool) string {
 		return "ro"
 	}
 	return "rw"
+}
+
+// recordSandboxRef publishes the run's sandbox ref, with one retry: the write is idempotent and the
+// failure it usually sees is a transient connection blip. The ref on the run's row is the only handle a
+// kill, a sweep or another replica has to the sandbox, so a caller never starts a run whose ref was lost.
+func (s *Server) recordSandboxRef(ctx context.Context, runID uuid.UUID, ref string) error {
+	err := s.cfg.Store.SetSandboxRef(ctx, runID, ref)
+	if err != nil {
+		err = s.cfg.Store.SetSandboxRef(ctx, runID, ref)
+	}
+	return err
+}
+
+// abortUnrecordedSandbox ends a dispatch whose sandbox ref could not be recorded, while this dispatch
+// still knows the ref: it stops the sandbox, then fails the run from STARTING, which leaves a kill that
+// won in the meantime as it stands. Its own row states the lost write and nothing about containment: a
+// stop that failed (stopSandboxOrAudit), a state write that failed (failAndRevoke) and a revocation that
+// failed (revokeRunCascade) are each their own row. Bounded as the kill cascade is.
+func (s *Server) abortUnrecordedSandbox(ctx context.Context, runID uuid.UUID, ref string, cause error) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), killCascadeTimeout)
+	defer cancel()
+	slog.ErrorContext(ctx, "wardynd: SetSandboxRef failed; stopping the sandbox and failing the run",
+		slog.String("run_id", runID.String()), slog.String("sandbox_ref", ref), slog.Any("err", cause))
+	s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.create",
+		runID.String(), "failure", mustJSON(map[string]any{"sandbox_ref": ref, "set_sandbox_ref_error": cause.Error()})))
+	s.stopSandboxOrAudit(ctx, runID, ref, "run.create")
+	s.failAndRevoke(ctx, runID, types.RunStarting,
+		"the sandbox was created but its reference could not be persisted, so the run could not be tracked")
+}
+
+// auditLostStart records a dispatch whose STARTING->RUNNING write did not apply: the run was killed or
+// stopped mid-dispatch, or the store failed (cause). The note states only what was observed: whether
+// the teardown actually happened is stopSandboxOrAudit's to report, never this event's to assert.
+func (s *Server) auditLostStart(ctx context.Context, runID uuid.UUID, ref string, cause error) {
+	data := map[string]any{
+		"sandbox_ref": ref,
+		"note":        "run left STARTING by a concurrent kill/stop during CreateSandbox; dispatch aborted",
+	}
+	if cause != nil {
+		data["error"] = cause.Error()
+	}
+	s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.dispatch",
+		runID.String(), "failure", mustJSON(data)))
+}
+
+// applyHarnessSetEnv names the run's harness set for the image's launcher:
+// WARDYN_HARNESSES, the ids in set order, and WARDYN_START_HARNESS, the one that
+// starts with the run ("" when none does). Non-secret, and absent for a run
+// launched without the set, which an older image reads exactly as before.
+func applyHarnessSetEnv(sandboxEnv map[string]string, harnesses []types.RunHarness) {
+	if len(harnesses) == 0 {
+		return
+	}
+	ids := make([]string, 0, len(harnesses))
+	start := ""
+	for _, h := range harnesses {
+		ids = append(ids, h.Harness)
+		if h.Starts {
+			start = h.Harness
+		}
+	}
+	sandboxEnv["WARDYN_HARNESSES"] = strings.Join(ids, " ")
+	sandboxEnv["WARDYN_START_HARNESS"] = start
 }

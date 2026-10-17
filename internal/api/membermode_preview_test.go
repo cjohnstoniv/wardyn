@@ -132,9 +132,9 @@ func previewSetupStatus(t *testing.T, srv *Server, cookie *http.Cookie) SetupPro
 }
 
 // specSSOPayload is the generated ~/.aws bundle as the dispatched sandbox would
-// receive it. It rides SecretEnv (dispatch's splitSecretEnv MOVES credential-
-// bearing keys out of Env), so a test that read Env alone would report "absent"
-// for every run and pin nothing.
+// receive it. It rides SecretEnv with proxy-inject off (dispatch's splitSecretEnv
+// MOVES credential-bearing keys out of Env) and Env with it on, so a test that
+// read one map alone would report "absent" for some runs and pin nothing.
 func specSSOPayload(spec runner.SandboxSpec) string {
 	if v := spec.SecretEnv[awsSSOConfigEnvVar]; v != "" {
 		return v

@@ -136,9 +136,9 @@ func (s *Server) handleAddSSHKey(w http.ResponseWriter, r *http.Request) {
 	// comes first — never instantly, and never without one of those two.
 	//
 	// Deliberately isOperator, and a security admin's key stamps member. This
-	// field means exactly "reaches runs its holder does not own"
-	// (sshgateway.go's == oidc.RoleAdmin check), not the registering session's
-	// tier — the asymmetry the three-tier model exists to express
+	// field means exactly "reaches an operator-owned run its holder does not own"
+	// (sshgateway.go's == oidc.RoleAdmin check, and since #1476 only a run with
+	// no personal owner), not the registering session's tier — the asymmetry the three-tier model exists to express
 	// (internal/auth/oidc's RoleSecurityAdmin). A ladder here would put an
 	// interactive shell in every developer's sandbox.
 	//
@@ -154,8 +154,13 @@ func (s *Server) handleAddSSHKey(w http.ResponseWriter, r *http.Request) {
 	}
 	// The admission stamp also closes an INSERT that races this last check:
 	// SSH auth and new channels compare it against the same session cutoff.
+	issue, err := s.mintIssue(r.Context(), principal, authorizedAt)
+	if err != nil {
+		writeServerError(w, r, "add ssh key", err)
+		return
+	}
 	if s.cfg.SessionRevocations != nil {
-		revoked, err := s.cfg.SessionRevocations.IsSessionRevoked(r.Context(), principal, oidcEmailFromContext(r.Context()), authorizedAt)
+		revoked, err := s.admittedRevoked(r.Context(), principal, authorizedAt)
 		if err != nil {
 			writeServerError(w, r, "add ssh key", err)
 			return
@@ -178,8 +183,9 @@ func (s *Server) handleAddSSHKey(w http.ResponseWriter, r *http.Request) {
 		RoleCheckedAt: &authorizedAt,
 		Capped:        capped,
 		CreatedAt:     authorizedAt,
+		RevSeq:        issue.Seq,
 	}
-	added, err := s.cfg.Store.AddSSHKey(r.Context(), k)
+	added, err := s.cfg.Store.AddSSHKey(guardOwner(r.Context(), principal), k)
 	if errors.Is(err, store.ErrConflict) {
 		// Generic on purpose: the fingerprint PK is GLOBAL (correct — a key
 		// must map to exactly one principal), so this 409 can legitimately

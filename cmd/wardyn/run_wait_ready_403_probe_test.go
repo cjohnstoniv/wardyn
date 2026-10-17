@@ -213,8 +213,8 @@ func TestWaitReady_RedirectFailsFast(t *testing.T) {
 	t.Cleanup(func() { waitPollInterval = prev })
 
 	runID := uuid.New()
-	// No Location header: the SDK's http.Client has nothing to follow, so the
-	// 302 surfaces as an *sdk.APIError exactly as an operator's proxy would.
+	// The SDK's default client never follows a redirect, so the 302 surfaces
+	// as an *sdk.APIError exactly as an operator's proxy would.
 	srv, counts := countingReadyServer(t, runID, http.StatusFound, ``)
 	c := &sdk.Client{BaseURL: srv.URL}
 

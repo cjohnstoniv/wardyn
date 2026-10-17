@@ -204,7 +204,12 @@ func artifactBaseURLs(sc types.SiteConfig) map[string]string {
 // preDomains is the run's PRE-substitution allowlist: injection + TLS-MITM only
 // when the run reaches a public host the redirect fronts (artifactRedirectApplies,
 // as substituteArtifactEgress), so no run gets the token on a host it never named.
-func (s *Server) planArtifactRedirect(ctx context.Context, run types.AgentRun, sc types.SiteConfig, preDomains []string) artifactRedirectPlan {
+//
+// laneHosts is the hosts the per-person Azure DevOps lane credentials on this
+// run, nil when it does not resolve. A redirect whose target is one of them is
+// applied without its token (laneCarriesHost): the lane carries that host's
+// credential, and a host carries one.
+func (s *Server) planArtifactRedirect(ctx context.Context, run types.AgentRun, sc types.SiteConfig, preDomains, laneHosts []string) artifactRedirectPlan {
 	var plan artifactRedirectPlan
 	if len(sc.EgressRedirects) == 0 {
 		return plan
@@ -266,6 +271,14 @@ func (s *Server) planArtifactRedirect(ctx context.Context, run types.AgentRun, s
 				})))
 			continue
 		}
+		if laneCarriesHost(laneHosts, host) {
+			s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.artifact.redirect",
+				run.ID.String(), "warn", mustJSON(map[string]any{
+					"ecosystem": r.Ecosystem, "host": host,
+					"detail": "the per-person Azure DevOps lane carries this host's credential; redirect applied without token injection",
+				})))
+			continue
+		}
 		// The redirect's REAL port travels with the host into
 		// plan.mitmHosts (below) so the proxy's TLS-MITM allowlist — and the dial
 		// it performs once it has decrypted the tunnel — are scoped to the mirror
@@ -298,10 +311,10 @@ func (s *Server) planArtifactRedirect(ctx context.Context, run types.AgentRun, s
 			"secret_name": tok.secretName,
 			"require_tls": !redirectIsCleartext(r.To),
 		})
-		if _, gerr := s.cfg.Store.CreateGrant(ctx, types.CredentialGrant{
+		if _, gerr := s.createDispatchGrant(ctx, run, types.CredentialGrant{
 			ID: grantID, RunID: run.ID, CreatedAt: s.cfg.Now().UTC(),
 			Spec: types.GrantSpec{Kind: types.GrantAPIKey, Scope: scope, TTLSeconds: 3600},
-		}); gerr != nil {
+		}, true); gerr != nil {
 			s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.artifact.redirect",
 				run.ID.String(), "failure", mustJSON(map[string]any{
 					"ecosystem": r.Ecosystem, "host": host, "error": gerr.Error(),

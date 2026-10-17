@@ -1,0 +1,2 @@
+# The must-link rule in scripts/check-doc-links.sh applies to these docs (the whole shared page: it is clean).
+docs/OPERATIONS.md

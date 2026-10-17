@@ -65,6 +65,10 @@ func serverJSONTags(t *testing.T, relPath, typeName string) []string {
 		}
 		found = true
 		for _, fld := range st.Fields.List {
+			// encoding/json never writes an unexported field, so it is not on the wire.
+			if len(fld.Names) > 0 && !fld.Names[0].IsExported() {
+				continue
+			}
 			if fld.Tag == nil {
 				tags = append(tags, "<no tag>")
 				continue
@@ -107,11 +111,18 @@ func TestResponseDTOs_MatchTheServersWireTags(t *testing.T) {
 		{"RunFiles", "internal/api/run_files.go", "runFilesResponse", client.RunFiles{}},
 		{"RunFileStat", "internal/api/run_files.go", "runFileStat", client.RunFileStat{}},
 		{"RunOutput", "internal/api/run_output.go", "runOutputResponse", client.RunOutput{}},
+		{"RunSignIn", "internal/api/run_sign_in.go", "runSignInResponse", client.RunSignIn{}},
 		{"DrivesDocument", "internal/api/user_drives.go", "userDrivesResponse", client.DrivesDocument{}},
 		{"RunPolicyView", "internal/api/run_policy_view.go", "runPolicyResponse", client.RunPolicyView{}},
 		{"RunPolicySource", "internal/api/run_policy_view.go", "runPolicySource", client.RunPolicySource{}},
 		{"RunPolicyChange", "internal/api/run_policy_view.go", "runPolicyChange", client.RunPolicyChange{}},
 		{"StoredPolicyNow", "internal/api/run_policy_view.go", "storedPolicyNow", client.StoredPolicyNow{}},
+		{"ProvenanceEntry", "internal/api/run_fold_provenance.go", "provenanceRow", client.ProvenanceEntry{}},
+		{"ProvenanceSource", "internal/api/run_fold_provenance.go", "provSource", client.ProvenanceSource{}},
+		{"ComponentFact", "internal/api/components_facts.go", "componentFact", client.ComponentFact{}},
+		{"ComponentSecretFact", "internal/api/components_facts.go", "componentSecretFact", client.ComponentSecretFact{}},
+		{"AccessFacts", "internal/api/run_access_facts.go", "accessBlock", client.AccessFacts{}},
+		{"WorkspaceBuild", "internal/api/workspace_build.go", "buildResponse", client.WorkspaceBuild{}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			want := serverJSONTags(t, tc.file, tc.server)

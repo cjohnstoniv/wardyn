@@ -45,7 +45,8 @@ vi.mock("../../../lib/api/permissions", async () => {
 // The grid's value names are explain-grid.test.tsx's; here every value is raw.
 vi.mock("./explain-names", () => ({ useValueNames: () => () => null }));
 
-import { HttpError } from "../../../lib/api/core";
+import { HttpError, PendingChangeError } from "../../../lib/api/core";
+import { CHANGES } from "../../../lib/governance-copy";
 import { aheadByHours } from "../../../lib/test-clock";
 import type { UserType } from "../../../lib/types";
 import { GOVERNANCE as GOV } from "../../../lib/governance-copy";
@@ -330,5 +331,50 @@ describe("UserTypesScreen — forbidden", () => {
     render(<UserTypesScreen />);
     expect(await screen.findByText(SECURITY_ONLY_REASON)).toBeInTheDocument();
     expect(screen.queryByText(UT.FETCH_FAILED_TITLE)).not.toBeInTheDocument();
+  });
+});
+
+// 0.8.6 four-eyes: a priority change the server holds for a second person (202) is "submitted", never saved.
+describe("UserTypesScreen — a 202 is submitted, never saved", () => {
+  const held = () =>
+    new PendingChangeError({
+      id: "c1",
+      target_kind: "user_type_priority",
+      op: "update",
+      target_key: "portfolio-manager",
+      state: "pending",
+      proposed_by: "ana",
+      proposed_at: aheadByHours(-1),
+      expires_at: aheadByHours(20),
+      diff: { changed: ["priority"] },
+    });
+
+  it("an edit held for approval closes the editor, reads the list again and shows the note", async () => {
+    const t = type();
+    renderScreen([STANDARD, t]);
+    await screen.findByText(t.name);
+    updateUserTypeMock.mockRejectedValue(held());
+    listUserTypesMock.mockClear();
+
+    await userEvent.click(screen.getByRole("button", { name: `${UT.EDIT} ${t.name}` }));
+    await userEvent.clear(screen.getByLabelText(UT.FIELD_PRIORITY));
+    await userEvent.type(screen.getByLabelText(UT.FIELD_PRIORITY), "50");
+    await userEvent.click(screen.getByRole("button", { name: UT.SAVE }));
+
+    expect(await screen.findByText(CHANGES.SUBMITTED_TITLE)).toBeInTheDocument();
+    expect(screen.queryByTestId("user-type-editor")).not.toBeInTheDocument();
+    expect(listUserTypesMock).toHaveBeenCalled();
+  });
+
+  it("a delete held for approval closes the dialog and shows the note, not an error", async () => {
+    const t = type();
+    renderScreen([t]);
+    await screen.findByText(t.name);
+    await userEvent.click(screen.getByRole("button", { name: `${UT.DELETE} ${t.name}` }));
+    deleteUserTypeMock.mockRejectedValue(held());
+    await userEvent.click(screen.getAllByRole("button", { name: UT.DELETE }).at(-1)!);
+
+    expect(await screen.findByText(CHANGES.SUBMITTED_TITLE)).toBeInTheDocument();
+    expect(screen.queryByRole("alertdialog")).toBeNull();
   });
 });

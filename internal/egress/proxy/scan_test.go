@@ -142,6 +142,9 @@ func TestLLMScanAlertForwardsBodyAndAudits(t *testing.T) {
 	if d.Decision != egress.Allow || d.RuleSource != ruleSourceLLM {
 		t.Fatalf("decision = %+v, want brokered:llm allow", d)
 	}
+	if d.Via != viaDirect {
+		t.Errorf("via = %q, want %q: the allow followed a forward dial", d.Via, viaDirect)
+	}
 	if d.Scan == nil || d.Scan.Action != "alert" || !d.Scan.Scanned {
 		t.Fatalf("scan summary = %+v, want scanned alert", d.Scan)
 	}

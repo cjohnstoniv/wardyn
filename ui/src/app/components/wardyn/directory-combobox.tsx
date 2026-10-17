@@ -62,6 +62,7 @@ export function DirectoryCombobox({
   onChange,
   kind = "any",
   disabled,
+  "aria-describedby": describedBy,
 }: {
   /** Ties the control to a <Field htmlFor>. */
   id?: string;
@@ -72,6 +73,8 @@ export function DirectoryCombobox({
   /** Which class of subject the field holds; a kind-less field takes "any". */
   kind?: DirectorySearchKind;
   disabled?: boolean;
+  /** Field clones this onto its child; the wrapper forwards it to the input. */
+  "aria-describedby"?: string;
 }) {
   const [status, setStatus] = React.useState<Status>(QUIET);
   const [absent, setAbsent] = React.useState(false);
@@ -128,6 +131,7 @@ export function DirectoryCombobox({
       <Input
         id={id}
         aria-label={label}
+        aria-describedby={describedBy}
         value={value}
         // Typing invalidates a pick: the field no longer holds that group's id,
         // so the chip explaining it must go with it.

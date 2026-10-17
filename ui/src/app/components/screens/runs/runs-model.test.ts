@@ -5,7 +5,7 @@
 
 import { describe, it, expect } from "vitest";
 import type { AgentRun, RunState } from "../../../lib/types";
-import { rowPresentation, sectionRuns, isTopQuiet, nonAttentionRuns } from "./runs-model";
+import { rowPresentation, sectionRuns, isTopQuiet, nonAttentionRuns, isLiveRunState } from "./runs-model";
 import { glyphKindFor } from "./row-glyph";
 
 // Relative to the moment the suite runs, not a literal date (scripts/
@@ -25,6 +25,7 @@ const run = (over: Partial<AgentRun> = {}): AgentRun => ({
   state: "RUNNING" as RunState,
   spiffe_id: "spiffe://x",
   runner_target: "docker",
+  placement: "",
   ...over,
 });
 
@@ -237,20 +238,25 @@ describe("glyphKindFor — the shape half of the colour/glyph rule", () => {
 });
 
 describe("sectionRuns — need, then time (H-1/H-6)", () => {
+  // Calendar buckets need same-day fixtures even when the suite starts just
+  // after midnight. Other suites still use the real clock for lifetime tests.
+  const localNoon = new Date(NOW);
+  localNoon.setHours(12, 0, 0, 0);
+  const sectionNow = localNoon.getTime();
   it("splits decide / running / ended-today / earlier-this-week", () => {
     const decideRun = run({ id: "d1", attention: { kind: "approval", by: "you", pending: 1 } });
     const runningRun = run({ id: "r1", state: "RUNNING" });
     const endedTodayRun = run({
       id: "e1",
       state: "COMPLETED",
-      ended_at: new Date(NOW - 60_000).toISOString(),
+      ended_at: new Date(sectionNow - 60_000).toISOString(),
     });
     const earlierRun = run({
       id: "e2",
       state: "COMPLETED",
-      ended_at: new Date(NOW - 2 * 24 * 3600_000).toISOString(),
+      ended_at: new Date(sectionNow - 2 * 24 * 3600_000).toISOString(),
     });
-    const s = sectionRuns([decideRun, runningRun, endedTodayRun, earlierRun], NOW);
+    const s = sectionRuns([decideRun, runningRun, endedTodayRun, earlierRun], sectionNow);
     expect(s.decide.map((r) => r.id)).toEqual(["d1"]);
     expect(s.running.map((r) => r.id)).toEqual(["r1"]);
     expect(s.endedToday.map((r) => r.id)).toEqual(["e1"]);
@@ -262,14 +268,14 @@ describe("sectionRuns — need, then time (H-1/H-6)", () => {
     const monthRun = run({
       id: "m1",
       state: "COMPLETED",
-      ended_at: new Date(NOW - 10 * 24 * 3600_000).toISOString(),
+      ended_at: new Date(sectionNow - 10 * 24 * 3600_000).toISOString(),
     });
     const oldRun = run({
       id: "o1",
       state: "COMPLETED",
-      ended_at: new Date(NOW - 40 * 24 * 3600_000).toISOString(),
+      ended_at: new Date(sectionNow - 40 * 24 * 3600_000).toISOString(),
     });
-    const s = sectionRuns([monthRun, oldRun], NOW);
+    const s = sectionRuns([monthRun, oldRun], sectionNow);
     expect(s.older).toEqual([
       { label: "Earlier this month", runs: [monthRun] },
       { label: "Older", runs: [oldRun] },
@@ -278,7 +284,7 @@ describe("sectionRuns — need, then time (H-1/H-6)", () => {
 
   it("a run needing an admin (by!=you) is NOT in decide — it stays in running, amber", () => {
     const r = run({ state: "RUNNING", attention: { kind: "approval", by: "admin", pending: 1 } });
-    const s = sectionRuns([r], NOW);
+    const s = sectionRuns([r], sectionNow);
     expect(s.decide).toEqual([]);
     expect(s.running.map((x) => x.id)).toEqual(["run-1"]);
   });
@@ -286,7 +292,7 @@ describe("sectionRuns — need, then time (H-1/H-6)", () => {
   it("by=owner (reauth/ado_consent/lost, Admin view only) lands in waitingOwner, not decide or running", () => {
     const reauth = run({ id: "w1", state: "RUNNING", attention: { kind: "reauth", by: "owner", pending: 1 } });
     const lost = run({ id: "w2", state: "RUNNING", attention: { kind: "lost", by: "owner", pending: 0 } });
-    const s = sectionRuns([reauth, lost], NOW);
+    const s = sectionRuns([reauth, lost], sectionNow);
     expect(s.waitingOwner.map((r) => r.id)).toEqual(["w1", "w2"]);
     expect(s.decide).toEqual([]);
     expect(s.running).toEqual([]);
@@ -300,9 +306,9 @@ describe("sectionRuns — need, then time (H-1/H-6)", () => {
       id: "le1",
       state: "RUNNING",
       lost_reason: "ended",
-      lost_at: new Date(NOW - 60_000).toISOString(),
+      lost_at: new Date(sectionNow - 60_000).toISOString(),
     });
-    const s = sectionRuns([r], NOW);
+    const s = sectionRuns([r], sectionNow);
     expect(s.running).toEqual([]);
     expect(s.endedToday.map((x) => x.id)).toEqual(["le1"]);
   });
@@ -340,5 +346,27 @@ describe("isTopQuiet", () => {
   it("false when only an owner's sign-in is waiting (#1197 L4 H-3) — that is not quiet either", () => {
     const s = sectionRuns([run({ state: "RUNNING", attention: { kind: "reauth", by: "owner", pending: 1 } })], NOW);
     expect(isTopQuiet(s)).toBe(false);
+  });
+});
+
+describe("isLiveRunState — a waiting run is live", () => {
+  it("counts QUEUED with the other non-terminal states and no terminal one", () => {
+    for (const s of ["QUEUED", "PENDING", "STARTING", "RUNNING", "WAITING_FOR_CONFIRMATION"]) expect(isLiveRunState(s as RunState), s).toBe(true);
+    for (const s of ["COMPLETED", "STOPPED", "ARCHIVED", "FAILED", "KILLED"]) expect(isLiveRunState(s as RunState), s).toBe(false);
+  });
+});
+
+// 0.9 (M-RN-3 RS8): a run on a person's computer is named in the row's meta line only. Its hue, word and action
+// are what they are for any run in that state, whether its computer is online, offline or unknown.
+describe("rowPresentation — a local run is presented as any other (RS8)", () => {
+  const local = (over: Partial<AgentRun>) => run({ placement: "local", runner_id: "11111111-2222-3333-4444-555555555555", runner_name: "laptop-7", ...over });
+
+  it.each([true, false, undefined])("a running local run reads the same with runner_online=%s", (online) => {
+    expect(rowPresentation(local({ runner_online: online }), false)).toEqual(rowPresentation(run(), false));
+  });
+
+  it("a lost local run keeps the lost word and action", () => {
+    const attention = { kind: "lost", by: "you", pending: 0 } as const;
+    expect(rowPresentation(local({ runner_online: false, attention }), false)).toEqual(rowPresentation(run({ attention }), false));
   });
 });

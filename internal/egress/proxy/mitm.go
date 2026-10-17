@@ -19,6 +19,7 @@ import (
 	"math/big"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -162,7 +163,7 @@ func (a *certAuthority) leafFor(host string) (*tls.Certificate, error) {
 // isMITMHost reports whether host is an upstream the proxy will TLS-MITM.
 //
 // TRUST BOUNDARY (read before widening): TLS-MITM lets the proxy read plaintext and swap the
-// credential header. Permitted for exactly three reasons:
+// credential header. Permitted for exactly four reasons:
 //  1. built-in LLM hosts (Anthropic/OpenAI) — subscription-OAuth / content-inspection. Bedrock is
 //     excluded: its client-side SigV4 auth would be invalidated by terminate-and-reforward.
 //  2. operator-configured corp artifact hosts (p.mitmHosts, compiled at dispatch from site-config
@@ -172,12 +173,20 @@ func (a *certAuthority) leafFor(host string) (*tls.Certificate, error) {
 //     Rides p.mitmHosts with #2, bounded the same way, so the SSO token is set as
 //     x-amz-sso_bearer_token instead of written into the sandbox. Bedrock's data plane stays excluded
 //     per #1.
+//  4. a header host of a component attached to the run, authored at DISPATCH from the component gate's
+//     decision (never sandbox/agent, and never a request body taken verbatim): the run's OWNER attached
+//     the component under a permission an admin can withdraw, and chose the host. Rides p.mitmHosts
+//     as "host:443" — the host's standard TLS port and no other — paired with the injection rule for
+//     the secret the component delivers there: the owner's own, or one the organisation provides.
 //
 // #2/#3's surface is bounded on every axis: admin-authored only (never sandbox/agent/request); exact
 // hostname, never wildcard/suffix; exact port when the entry names one (mitmPorts), so a non-443
 // mirror can't be dialed at the wrong port via hostname match alone; paired with an injection rule for
 // the operator's own token; CA key stays in proxy memory. Cost: for those hosts the proxy sees
 // plaintext, same as for LLM hosts — the operator trusts their own proxy with their own registry.
+// #4 is bounded the same way except for who chose the host: an admin for an organisation's component,
+// the run's owner for one they defined. A model's host is never one (the gate refuses it), so #4
+// cannot reach #1's traffic.
 func (p *Proxy) isMITMHost(host string) bool {
 	h := strings.TrimSuffix(strings.ToLower(host), ".")
 	if h == anthropicHost || h == openaiHost {
@@ -229,6 +238,8 @@ func (p *Proxy) channelForHost(host string) contentscan.Channel {
 	h := strings.TrimSuffix(strings.ToLower(host), ".")
 	if vendor, ok := p.gatewayVendor[h]; ok {
 		h = vendor
+	} else if vendor, ok := p.channelHosts[h]; ok {
+		h = vendor
 	}
 	switch h {
 	case openaiHost:
@@ -268,6 +279,48 @@ type readerConn struct {
 
 func (c *readerConn) Read(p []byte) (int, error) { return c.r.Read(p) }
 
+// CloseWrite keeps tunnel's half-close reaching the wrapped connection. The
+// embedded net.Conn does not carry it, and a hijacked socket does have it.
+func (c *readerConn) CloseWrite() error {
+	if cw, ok := c.Conn.(interface{ CloseWrite() error }); ok {
+		return cw.CloseWrite()
+	}
+	return nil
+}
+
+// spokeConn notes whether the client has sent a byte. Handshake reads on one goroutine, and
+// mitmConnect reads it on that goroutine afterwards, so the flag needs no lock.
+type spokeConn struct {
+	net.Conn
+	spoke bool
+}
+
+func (c *spokeConn) Read(p []byte) (int, error) {
+	n, err := c.Conn.Read(p)
+	if n > 0 {
+		c.spoke = true
+	}
+	return n, err
+}
+
+// emitVetFailed writes the deny for an inner request whose upstream could not be vetted, with the
+// masked, topology-redacted reason and the hop class.
+func (p *Proxy) emitVetFailed(r *http.Request, host string, port int, ruleSource string, err error) {
+	if p.sink == nil {
+		return
+	}
+	dl := decisionLog(p.reqOf(r, host, port), egress.Deny, ruleSource)
+	dl.Cause = p.dialFailureCause(err)
+	dl.Via = p.viaHop(host)
+	p.sink.emit(dl)
+}
+
+// clientHandshakeCause is the Cause of the row a client whose TLS handshake with the terminating
+// proxy failed leaves behind: the stage, then the error masked and topology-redacted.
+func (p *Proxy) clientHandshakeCause(err error) string {
+	return "client tls handshake (sandbox to wardyn-proxy): " + p.dialFailureCause(err)
+}
+
 func (p *Proxy) mitmConnect(w http.ResponseWriter, r *http.Request, host string, port int) {
 	hj, ok := w.(http.Hijacker)
 	if !ok {
@@ -291,7 +344,8 @@ func (p *Proxy) mitmConnect(w http.ResponseWriter, r *http.Request, host string,
 	//
 	// Every read goes through the hijack's own buffered reader, so nothing already sent is lost —
 	// the peek below can put its byte back.
-	buffered := p.countActivity(&readerConn{Conn: clientConn, r: brw.Reader})
+	spoke := &spokeConn{Conn: &readerConn{Conn: clientConn, r: brw.Reader}}
+	buffered := p.countActivity(spoke)
 	// Order matters: a TLS entry must never reach the peek — peeking waits for a byte the client
 	// hasn't sent, while a TLS client waits for the server to go first.
 	served := net.Conn(buffered)
@@ -305,6 +359,14 @@ func (p *Proxy) mitmConnect(w http.ResponseWriter, r *http.Request, host string,
 			},
 		})
 		if err := tlsConn.Handshake(); err != nil {
+			// The CONNECT's allow stands: the tunnel opened. A client that never sent a byte (a
+			// browser-style preconnect, closed unused) is no failure and leaves no row.
+			if spoke.spoke && p.sink != nil {
+				dl := decisionLog(p.reqOf(r, host, port), egress.Deny, ruleSourceTunnelFailed)
+				dl.Cause = p.clientHandshakeCause(err)
+				dl.Via = p.viaHop(host)
+				p.sink.emit(dl)
+			}
 			_ = clientConn.Close()
 			return
 		}
@@ -348,6 +410,26 @@ func rearmBodyDeadline(w http.ResponseWriter) {
 // port is the REAL CONNECT port — the dial below must use it, not assume 443, or the operator's
 // credential reaches whatever answers at the wrong port.
 func (p *Proxy) serveMITMRequest(w http.ResponseWriter, r *http.Request, host string, port int) {
+	// A via_org destination: the inner request's own Host goes to the
+	// organisation, which refuses one that is not the grant's destination.
+	if route, ok := p.viaOrgRouteForHost(host); ok {
+		authority := r.Host
+		if authority == "" {
+			authority = net.JoinHostPort(host, strconv.Itoa(port))
+		}
+		p.forwardViaOrg(w, r, route, authority)
+		return
+	}
+	var release func()
+	r, release = p.admitSpoolHTTP(w, r)
+	if r == nil {
+		return
+	}
+	defer release()
+	p.serveAdmittedMITMRequest(w, r, host, port)
+}
+
+func (p *Proxy) serveAdmittedMITMRequest(w http.ResponseWriter, r *http.Request, host string, port int) {
 	// allowed_methods applies to inner requests too, not just the opening CONNECT: the sandbox
 	// chooses each one, so the method restriction must be re-applied per request. The APPROVAL half
 	// stays per-CONNECT (docs/POLICIES.md "'One connection' is the honest word") since re-approving
@@ -363,6 +445,11 @@ func (p *Proxy) serveMITMRequest(w http.ResponseWriter, r *http.Request, host st
 		return
 	}
 
+	// An API door's host is served by its door alone: judged, minted, forwarded.
+	if p.serveAPIDoor(w, r, host, port) {
+		return
+	}
+
 	rest := strings.TrimPrefix(r.URL.Path, "/")
 	channel := p.channelForHost(host)
 	// Decision-log source: distinguishes LLM inspection/injection from corp
@@ -371,9 +458,16 @@ func (p *Proxy) serveMITMRequest(w http.ResponseWriter, r *http.Request, host st
 	if !p.isLLMHost(host) {
 		mitmSource = ruleSourceArtifactMITM
 	}
-	if mitmSource = p.gateADO(w, r, host, port, mitmSource); mitmSource == "" {
+	mitmSource, nsOff := p.gateADO(w, r, host, port, mitmSource)
+	if mitmSource == "" {
 		return
 	}
+	// The Azure gate runs before the injector resolves, so a refused request never redeems the token.
+	mitmSource, releaseAzure, ok := p.gateAzure(w, r, host, port, mitmSource)
+	if !ok {
+		return
+	}
+	defer releaseAzure()
 	rearmBodyDeadline(w) // the gate may have held the request (awaitADOCapability)
 
 	// Dial target: through the corp proxy (by hostname) when configured — egressDial chains
@@ -381,7 +475,7 @@ func (p *Proxy) serveMITMRequest(w http.ResponseWriter, r *http.Request, host st
 	// for this hop; see dialThroughUpstream).
 	target, _, terr := p.egressTarget(host, port)
 	if terr != nil {
-		p.emitLLMDecision(r, host, port, egress.Deny, mitmSource, nil)
+		p.emitVetFailed(r, host, port, mitmSource, terr)
 		// AWS lane: modelled, valid-JSON error body — MITM-terminated sibling of
 		// llm_routes.go's vet-failed site.
 		p.httpErrorAWSAware(w, host, "llm upstream vet failed", terr, false, http.StatusInternalServerError, "InternalServerException")
@@ -428,6 +522,10 @@ func (p *Proxy) serveMITMRequest(w http.ResponseWriter, r *http.Request, host st
 			// SECURITY: client gone via its own cancellation was never refused — writing a 401/deny
 			// here would log an expiry that didn't happen. The hold itself continues (it belongs to
 			// the workflow), so the owner's sign-in still lands for whoever is left.
+			return
+		}
+		if p.isAzureLane(host) {
+			p.refuseAzureCredential(w, r, host, port, ierr)
 			return
 		}
 		if p.isADOLane(host) {
@@ -488,7 +586,7 @@ func (p *Proxy) serveMITMRequest(w http.ResponseWriter, r *http.Request, host st
 	}
 	// Forwards over the pinned transport; DialContext dials the vetted target from
 	// the request context, so the host is never re-resolved.
-	p.forwardInspectedLLM(w, r, host, port, rest, target, injectHdr, ownedHeader, mitmSource, bodyReader, scanSummary)
+	p.forwardInspectedLLM(w, r, host, port, rest, target, injectHdr, ownedHeader, mitmSource, nsOff, bodyReader, scanSummary)
 }
 
 // oneConnListener hands a single already-accepted conn to http.Server.Serve and

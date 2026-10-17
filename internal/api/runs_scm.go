@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/url"
+	"slices"
 	"strings"
 	"unicode"
 
@@ -234,6 +235,63 @@ func repoCloneURL(slug string) string {
 	return ""
 }
 
+// caseInsensitiveForge reports whether cloneURL is on a forge known to match
+// repository paths without regard to case: GitHub and Azure DevOps Services.
+func caseInsensitiveForge(cloneURL string) bool {
+	t, ok := parseCloneTarget(cloneURL, nil)
+	if !ok {
+		return false
+	}
+	host := canonicalProviderHost(t.host)
+	return host == "github.com" || host == "dev.azure.com" || strings.HasSuffix(host, ".visualstudio.com")
+}
+
+// repoCloneTarget is where r clones inside the sandbox: its own target, else
+// /home/agent/work/<its directory name>. ok is false for a repo with no clone
+// URL. buildRepoRecords, a workspace read's clone_target and the run's
+// attachments all derive the path here, so the one Review shows is the one the
+// clone takes.
+func repoCloneTarget(r types.WorkspaceRepo) (string, bool) {
+	_, _, dest, ok := repoCloneSpec(r.Repo, r.Target)
+	// A target or ref that cannot ride the clone record is a clone buildRepoRecords drops.
+	return dest, ok && repoFieldSafe(dest) && repoFieldSafe(strings.TrimSpace(r.Ref))
+}
+
+// repoCloneSpec is the clone slug, URL and destination of one repo locator.
+// A FULL github URL — any spelling the control plane accepts: http://,
+// trailing slash, .git suffix, :port, mixed case — collapses to the one shape
+// agent-run's url.<broker>.insteadOf rewrite prefix-matches
+// ("https://github.com/<org>/<repo>"); any other spelling would dial github.com
+// directly, a route a brokered run does not have. A BARE slug is already this
+// shape and is left untouched, casing included. Deliberate side effect: the key
+// is lowercased, so a full URL's default dest is lowercased too
+// (~/work/hello-world). That is what lets buildRepoRecords' dest dedup SEE two
+// spellings of one repo as one; resolve_workdir finds the repo by scanning for
+// .git, never by name.
+func repoCloneSpec(slug, dest string) (key, url, target string, ok bool) {
+	const workRoot = "/home/agent/work"
+	slug = strings.TrimSpace(slug)
+	if slug == "" || !repoFieldSafe(slug) {
+		return "", "", "", false
+	}
+	if url = repoCloneURL(slug); url == "" {
+		return "", "", "", false
+	}
+	if strings.Contains(slug, "://") {
+		if key := gitBrokerKeyFromSlug(slug); key != "" {
+			slug, url = key, "https://github.com/"+key+".git"
+		}
+	}
+	if dest == "" {
+		name := repoDirName(strings.TrimSuffix(url[strings.LastIndex(url, "/")+1:], ".git"))
+		if name == "" {
+			name = "repo"
+		}
+		dest = workRoot + "/" + name
+	}
+	return slug, url, dest, true
+}
+
 // buildRepoRecords assembles the WARDYN_REPOS env value: newline-delimited,
 // tab-separated <url>\t<dest>\t<slug>\t<ref> records the agent-run entrypoint
 // iterates to clone each repo: the legacy run.Repo first (default dest, no
@@ -247,49 +305,30 @@ func repoCloneURL(slug string) string {
 // taken directory. Run create appends them to the 201's warnings[]; dispatch
 // discards them (the run already exists; the slog.Warn is the record there).
 func buildRepoRecords(legacyRepo string, repos []types.WorkspaceRepo) (string, []string) {
-	const workRoot = "/home/agent/work"
 	seenDest := map[string]string{} // dest -> the slug that took it
 	var warnings []string
 	var b strings.Builder
 	add := func(slug, dest, ref string) {
-		slug = strings.TrimSpace(slug)
-		if slug == "" || !repoFieldSafe(slug) {
-			return
-		}
 		ref = strings.TrimSpace(ref)
 		if ref != "" && !repoFieldSafe(ref) {
+			slog.Warn("wardynd: repo ref is not a safe clone field; dropping the repo",
+				slog.String("slug", slug), slog.String("err", fmt.Sprintf(repoField400Charset, "ref")))
 			return
 		}
-		url := repoCloneURL(slug)
-		if url == "" {
+		if t := strings.TrimSpace(slug); t != "" && !repoFieldSafe(t) {
+			slog.Warn("wardynd: repo locator is not a safe clone field; dropping the repo",
+				slog.String("err", fmt.Sprintf(repoField400Charset, "repo")))
 			return
 		}
-		// A FULL github URL — any spelling the control plane accepts: http://,
-		// trailing slash, .git suffix, :port, mixed case — collapses to the one
-		// shape agent-run's url.<broker>.insteadOf rewrite prefix-matches
-		// ("https://github.com/<org>/<repo>"); any other spelling would dial
-		// github.com directly, a route a brokered run does not have. A BARE slug is
-		// already this shape and is left untouched, casing included.
-		// Deliberate side effect: the key is lowercased, so a full URL's default
-		// dest is lowercased too (~/work/hello-world). That is what lets the dest
-		// dedup below SEE two spellings of one repo as one; resolve_workdir finds
-		// the repo by scanning for .git, never by name.
-		if strings.Contains(slug, "://") {
-			if key := gitBrokerKeyFromSlug(slug); key != "" {
-				slug, url = key, "https://github.com/"+key+".git"
-			}
+		slug, url, dest, ok := repoCloneSpec(slug, dest)
+		if !ok {
+			return
 		}
-		if dest == "" {
-			name := repoDirName(strings.TrimSuffix(url[strings.LastIndex(url, "/")+1:], ".git"))
-			if name == "" {
-				name = "repo"
-			}
-			dest = workRoot + "/" + name
-		}
+		terr := runner.ValidateAuthoredTarget(dest)
 		if !repoFieldSafe(dest) {
-			return
+			terr = fmt.Errorf(repoField400Charset, "target")
 		}
-		if terr := runner.ValidateAuthoredTarget(dest); terr != nil {
+		if terr != nil {
 			// Loud, for the same reason the dest-collision skip below is, and one
 			// the write door cannot cover: the reserved-target rule sits on POST
 			// /policies only (validatePolicySpec → 400), and resolvePolicy hands
@@ -339,11 +378,30 @@ func buildRepoRecords(legacyRepo string, repos []types.WorkspaceRepo) (string, [
 		b.WriteByte('\t')
 		b.WriteString(ref)
 	}
-	add(legacyRepo, "", "") // legacy single repo → default dest, no ref
+	// The legacy single repo → default dest, no ref; skipped when it names one
+	// of the workspace repos (a workspace launch labels the run with its first
+	// repo), so that repo clones once, at its own target and ref. On a forge
+	// whose paths are case-insensitive a label differing only in case is that
+	// repo too; elsewhere case makes a different repository.
+	if _, _, _, ok := repoCloneSpec(legacyRepo, ""); ok && !legacyRepoNamed(legacyRepo, repos) {
+		add(legacyRepo, "", "")
+	}
 	for _, wr := range repos {
 		add(wr.Repo, wr.Target, wr.Ref)
 	}
 	return b.String(), warnings
+}
+
+// legacyRepoNamed reports whether a structured workspace repo names the run's
+// own repo, so that record's target and ref govern its clone. On a forge whose
+// paths are case-insensitive a label differing only in case is that repo too;
+// elsewhere case makes a different repository.
+func legacyRepoNamed(legacyRepo string, repos []types.WorkspaceRepo) bool {
+	key, url, _, ok := repoCloneSpec(legacyRepo, "")
+	return ok && slices.ContainsFunc(repos, func(wr types.WorkspaceRepo) bool {
+		k, _, _, _ := repoCloneSpec(wr.Repo, "")
+		return k == key || caseInsensitiveForge(url) && strings.EqualFold(k, key)
+	})
 }
 
 // injectionRuleFromScope decodes an api_key grant scope into its proxy-side
@@ -374,12 +432,20 @@ func injectionRuleFromScope(scope json.RawMessage) (egress.InjectionRule, error)
 		// rule — an injection rule is a host/header/format binding and has no
 		// business carrying identity.
 		Snapshot json.RawMessage `json:"snapshot"`
+		// Shared is DECLARED for the same reason and read the same way: from
+		// the grant, by apiKeyScopeShared, never carried onto the rule. Only
+		// the component gate authors it (an org component's operator-provided
+		// secret); validateEligibleGrantMode refuses it in any authored policy.
+		Shared bool `json:"shared"`
 		// PinPath/PinQuery narrow WHICH requests to Host may carry the
 		// credential. Unlike Snapshot they ARE the rule's business — they
 		// describe the request, not the identity — so they are carried through
 		// to the sidecar. Absent on every scope but the captured-AWS-SSO one.
 		PinPath  string            `json:"pin_path"`
 		PinQuery map[string]string `json:"pin_query"`
+		// PinRoutes is the method-and-path set form of the pin (the Azure
+		// route gate's rule); see egress.InjectionRule.PinRoutes.
+		PinRoutes []egress.PinRoute `json:"pin_routes"`
 	}
 	dec := json.NewDecoder(bytes.NewReader(scope))
 	dec.DisallowUnknownFields()
@@ -389,6 +455,13 @@ func injectionRuleFromScope(scope json.RawMessage) (egress.InjectionRule, error)
 	if sc.Host == "" || sc.SecretName == "" {
 		return egress.InjectionRule{}, errors.New("api_key scope requires host and secret_name")
 	}
+	// A route with no method or a relative path would never match: refuse it here rather than
+	// ship a rule that withholds the credential from every request.
+	for _, rt := range sc.PinRoutes {
+		if rt.Method == "" || rt.Method != strings.ToUpper(rt.Method) || !strings.HasPrefix(rt.Path, "/") {
+			return egress.InjectionRule{}, fmt.Errorf("api_key scope pin_routes entry %q %q needs an upper-case method and an absolute path", rt.Method, rt.Path)
+		}
+	}
 	if sc.Header == "" {
 		sc.Header = "Authorization"
 	}
@@ -397,8 +470,34 @@ func injectionRuleFromScope(scope json.RawMessage) (egress.InjectionRule, error)
 	}
 	return egress.InjectionRule{
 		Host: sc.Host, Header: sc.Header, SecretName: sc.SecretName, Format: sc.Format,
-		RequireTLS: sc.RequireTLS, PinPath: sc.PinPath, PinQuery: sc.PinQuery,
+		RequireTLS: sc.RequireTLS, PinPath: sc.PinPath, PinQuery: sc.PinQuery, PinRoutes: sc.PinRoutes,
 	}, nil
+}
+
+// apiKeyScopeShared reports whether an api_key grant scope sets `shared`: the
+// one reader of a field injectionRuleFromScope accepts and throws away. A
+// lenient one-field decode, so it answers for any scope shape; an undecodable
+// scope is not shared (the strict decode refuses it on its own).
+func apiKeyScopeShared(scope json.RawMessage) bool {
+	var sc struct {
+		Shared bool `json:"shared"`
+	}
+	return json.Unmarshal(scope, &sc) == nil && sc.Shared
+}
+
+// injectionGrantRead is the namespace the injection sink reads an api_key
+// grant's stored secret from, and whether that read is own-row-only
+// (secretstore.GrantRead). A `shared` grant — an org component's provided
+// secret — reads the OPERATOR's row and only it, whoever owns the run and
+// whatever they hold under the same name; every other grant is
+// grantReadOwner's rule, unchanged. It reads the scope and nothing else, so a
+// shared grant still takes the sink's one value read and the tail after it
+// (format, mask registration, audit, expiry) like every other grant.
+func injectionGrantRead(scope json.RawMessage, subject string, ownerOnly, operatorOwned bool) (owner string, ownRowOnly bool) {
+	if apiKeyScopeShared(scope) {
+		return "", true
+	}
+	return grantReadOwner(subject, ownerOnly, operatorOwned), ownerOnly
 }
 
 // githubScopeRepos decodes a github_token grant scope {"repos":[...]} and returns
@@ -420,25 +519,6 @@ func githubScopeRepos(scope json.RawMessage) []string {
 		}
 	}
 	return out
-}
-
-// gitPATScopeFields decodes a git_pat grant scope {host, secret_name, username?}.
-// host and secret_name are REQUIRED (fail closed); mirrors the broker's
-// gitPATScope shape. Used by policy validation, inline-secret checks, compose
-// grounding, and the sandbox env wiring so all agree on the scope contract.
-func gitPATScopeFields(scope json.RawMessage) (host, secretName, username string, err error) {
-	var sc struct {
-		Host       string `json:"host"`
-		SecretName string `json:"secret_name"`
-		Username   string `json:"username"`
-	}
-	if err = json.Unmarshal(scope, &sc); err != nil {
-		return "", "", "", err
-	}
-	if sc.Host == "" || sc.SecretName == "" {
-		return "", "", "", errors.New("git_pat scope requires host and secret_name")
-	}
-	return sc.Host, sc.SecretName, sc.Username, nil
 }
 
 // sshKeyScopeFields decodes an ssh_key grant scope
@@ -499,6 +579,53 @@ func envSecretScopeFields(scope json.RawMessage) (name, secretName string, err e
 		return "", "", fmt.Errorf("env_secret secret_name %q is not a valid secret name", sc.SecretName)
 	}
 	return sc.Name, sc.SecretName, nil
+}
+
+// fileSecretScopeFields decodes a file_secret grant scope {file, secret_name}.
+// Both are REQUIRED (fail closed). file is the NAME the stored secret_name's
+// value is delivered under at dispatch, in runner.ComponentSecretDir
+// (resolveFileSecretGrants) — a name, never a path, so the grammar has no
+// separator and cannot start with a dot: no traversal, no hidden file, no
+// "." or "..". Strict, unlike envSecretScopeFields: the kind is new, nothing
+// shipped carries another key, and a "path" or "mode" an author expected to
+// be honoured must be refused rather than silently ignored.
+func fileSecretScopeFields(scope json.RawMessage) (file, secretName string, err error) {
+	var sc struct {
+		File       string `json:"file"`
+		SecretName string `json:"secret_name"`
+	}
+	dec := json.NewDecoder(bytes.NewReader(scope))
+	dec.DisallowUnknownFields()
+	if err = dec.Decode(&sc); err != nil {
+		return "", "", err
+	}
+	if sc.File == "" || sc.SecretName == "" {
+		return "", "", errors.New("file_secret scope requires file and secret_name")
+	}
+	if !validFileSecretName(sc.File) {
+		return "", "", fmt.Errorf("file_secret file %q must match [a-z0-9][a-z0-9_.-]{0,62}: a file name, not a path", sc.File)
+	}
+	if !secretNameRE.MatchString(sc.SecretName) {
+		return "", "", fmt.Errorf("file_secret secret_name %q is not a valid secret name", sc.SecretName)
+	}
+	return sc.File, sc.SecretName, nil
+}
+
+// validFileSecretName is the file token grammar, [a-z0-9][a-z0-9_.-]{0,62},
+// hand-rolled for the reason validEnvVarName is.
+func validFileSecretName(s string) bool {
+	if s == "" || len(s) > 63 {
+		return false
+	}
+	for i, c := range s {
+		switch {
+		case c >= 'a' && c <= 'z', c >= '0' && c <= '9':
+		case i > 0 && (c == '_' || c == '.' || c == '-'):
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // validEnvVarName reports whether s is a POSIX-portable, upper-case environment

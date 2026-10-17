@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"testing"
 
@@ -120,5 +121,46 @@ func TestAuditMemberScope_QueryAndExportAgree(t *testing.T) {
 				t.Errorf("query and export disagree: /audit %d events, /audit/export %d", len(got), len(lines))
 			}
 		})
+	}
+}
+
+// runReadFailStore is an auditScopeStore whose ownership read fails with a
+// store error that is not ErrNotFound.
+type runReadFailStore struct{ auditScopeStore }
+
+func (*runReadFailStore) GetRun(context.Context, uuid.UUID) (types.AgentRun, error) {
+	return types.AgentRun{}, errors.New("injected database outage")
+}
+
+// A member's ownership check that cannot be answered is an error, not "not
+// yours": collapsing it into the empty 200 would present an outage as a run
+// with no events. A not-found run and someone else's run keep the identical
+// empty 200 (no existence oracle); only the unanswerable read is a 503, and
+// on both doors.
+func TestAuditMemberScope_StoreErrorIs503NotEmpty(t *testing.T) {
+	h := newHarness(t)
+	run := uuid.New()
+	member := ssoSession(t, auditMemberSub, "member@corp.example", oidc.RoleUser)
+	mk := func(st store.Store) *Server {
+		cfg := baseTestConfig(h, st)
+		cfg.OIDC = &oidc.Authenticator{}
+		return New(cfg)
+	}
+	failing := mk(&runReadFailStore{})
+	for _, path := range []string{"/api/v1/audit", "/api/v1/audit/export"} {
+		w := doSSO(t, failing, http.MethodGet, path+"?run_id="+run.String(), member, "")
+		if w.Code != http.StatusServiceUnavailable {
+			t.Fatalf("%s with a failing ownership read: code = %d, want 503 (body=%s)", path, w.Code, w.Body.String())
+		}
+		var eb struct{ Reason string }
+		if err := json.Unmarshal(w.Body.Bytes(), &eb); err != nil || eb.Reason != reasonAuditScopeUnavailable {
+			t.Errorf("%s: body = %s, want reason %q", path, w.Body.String(), reasonAuditScopeUnavailable)
+		}
+	}
+	healthy := mk(&auditScopeStore{runs: map[uuid.UUID]types.AgentRun{}})
+	for _, path := range []string{"/api/v1/audit", "/api/v1/audit/export"} {
+		if w := doSSO(t, healthy, http.MethodGet, path+"?run_id="+run.String(), member, ""); w.Code != http.StatusOK {
+			t.Errorf("%s for an unknown run: code = %d, want the empty 200", path, w.Code)
+		}
 	}
 }

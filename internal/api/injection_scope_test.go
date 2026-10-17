@@ -57,3 +57,43 @@ func TestInjectionRuleFromScopeRefusesAMisspelledKey(t *testing.T) {
 		t.Fatalf("the four-key scope Wardyn authors must still decode: %v", err)
 	}
 }
+
+// TestInjectionRuleFromScopeRoundTripsThePinRoutes: the method-and-path set the Azure route gate's rule
+// carries survives the strict decode into the rule the sidecar is configured from, admits exactly its
+// pairs, and a malformed pair is refused at the write boundary rather than shipped as a rule that
+// withholds the credential from everything.
+func TestInjectionRuleFromScopeRoundTripsThePinRoutes(t *testing.T) {
+	rule, err := injectionRuleFromScope([]byte(`{"host":"h.test","secret_name":"k","require_tls":true,
+		"pin_routes":[{"method":"POST","path":"/anthropic/v1/messages"},{"method":"POST","path":"/anthropic/v1/messages/count_tokens"}]}`))
+	if err != nil {
+		t.Fatalf("injectionRuleFromScope: %v", err)
+	}
+	if !rule.Pinned() || len(rule.PinRoutes) != 2 {
+		t.Fatalf("rule = %+v, want a two-route pin", rule)
+	}
+	for _, c := range []struct {
+		method, path string
+		want         bool
+	}{
+		{"POST", "/anthropic/v1/messages", true},
+		{"POST", "/anthropic/v1/messages/count_tokens", true},
+		{"GET", "/anthropic/v1/messages", false},
+		{"POST", "/anthropic/v1/messages/", false},
+		{"POST", "/anthropic/v1/messages/batches", false},
+		{"POST", "/openai/files", false},
+	} {
+		if got := rule.AllowsInjection(c.method, c.path, "beta=true"); got != c.want {
+			t.Errorf("AllowsInjection(%s %s) = %v, want %v", c.method, c.path, got, c.want)
+		}
+	}
+	for _, bad := range []string{
+		`{"method":"","path":"/x"}`, `{"method":"post","path":"/x"}`, `{"method":"POST","path":"x"}`, `{"method":"POST","path":""}`,
+	} {
+		if _, err := injectionRuleFromScope([]byte(`{"host":"h.test","secret_name":"k","pin_routes":[` + bad + `]}`)); err == nil {
+			t.Errorf("pin_routes entry %s decoded without error", bad)
+		}
+	}
+	if _, err := injectionRuleFromScope([]byte(`{"host":"h.test","secret_name":"k","pin_routes":[{"method":"POST","path":"/x","extra":1}]}`)); err == nil {
+		t.Error("a pin_routes entry with an unknown key decoded without error")
+	}
+}

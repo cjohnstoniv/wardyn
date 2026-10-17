@@ -5,9 +5,13 @@ package api
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -273,6 +277,130 @@ func TestHandleMe_PublishesNameAndEmailBesidePrincipal(t *testing.T) {
 			if !ok || got != "" {
 				t.Errorf("%s = %#v, want the empty string (present, empty)", key, body[key])
 			}
+		}
+	})
+}
+
+// #1335: /me's user_view_super_admin is the ONE new bit the console needs to
+// decide whether the user view may offer the link to the admin-only recap.
+// It reads the role STAMPED on the signed cookie (every other role field is
+// clamped), and it must never be true for anyone but a stamped admin inside
+// the view.
+func TestHandleMe_UserViewSuperAdmin(t *testing.T) {
+	const key = "user_view_super_admin"
+	cases := []struct {
+		name    string
+		role    string
+		inView  bool
+		want    any // true, false, or nil for "key absent"
+		clamped bool
+	}{
+		{"stamped admin in the view", oidc.RoleAdmin, true, true, true},
+		{"stamped security admin in the view", oidc.RoleSecurityAdmin, true, false, true},
+		{"stamped admin outside the view", oidc.RoleAdmin, false, nil, false},
+		{"stamped security admin outside the view", oidc.RoleSecurityAdmin, false, nil, false},
+		{"real user", oidc.RoleUser, false, nil, false},
+		{"hand-built user cookie carrying the view flag", oidc.RoleUser, true, nil, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, _ := memberModeServer(t)
+			body := meBody(t, srv, memberModeSSOSession(t, "sub-usa-1", "usa@corp.example", tc.role, tc.inView))
+			got, present := body[key]
+			if tc.want == nil {
+				if present {
+					t.Fatalf("%s = %v, want the key absent", key, got)
+				}
+			} else if got != tc.want {
+				t.Fatalf("%s = %v (present=%v), want %v", key, got, present, tc.want)
+			}
+			if tc.clamped {
+				// The clamped fields stay clamped: this bit is additive.
+				if body["role"] != oidc.RoleUser || body["operator"] != false || body["security_operator"] != false {
+					t.Errorf("clamped fields = role:%v operator:%v security_operator:%v, want user/false/false",
+						body["role"], body["operator"], body["security_operator"])
+				}
+			}
+		})
+	}
+
+	t.Run("a non-super-admin never gets true", func(t *testing.T) {
+		for _, role := range []string{oidc.RoleSecurityAdmin, oidc.RoleUser} {
+			for _, inView := range []bool{true, false} {
+				srv, _ := memberModeServer(t)
+				body := meBody(t, srv, memberModeSSOSession(t, "sub-usa-2", "usa2@corp.example", role, inView))
+				if body[key] == true {
+					t.Errorf("role %q inView=%v: %s = true", role, inView, key)
+				}
+			}
+		}
+	})
+
+	t.Run("the request cannot ask for it", func(t *testing.T) {
+		srv, _ := memberModeServer(t)
+		r := httptest.NewRequest(http.MethodGet, "/api/v1/me?"+key+"=true", nil)
+		r.Header.Set("X-"+key, "true")
+		r.AddCookie(memberModeSSOSession(t, "sub-usa-3", "usa3@corp.example", oidc.RoleSecurityAdmin, false))
+		w := httptest.NewRecorder()
+		panicFails(t, srv.Handler()).ServeHTTP(w, r)
+		if w.Code != http.StatusOK {
+			t.Fatalf("GET /me = %d: %s", w.Code, w.Body.String())
+		}
+		var body map[string]any
+		if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+			t.Fatal(err)
+		}
+		if _, present := body[key]; present {
+			t.Errorf("%s present for a security admin outside the view: %v", key, body[key])
+		}
+	})
+
+	t.Run("a hand-built cookie signed with another key is refused", func(t *testing.T) {
+		srv, _ := memberModeServer(t)
+		payload, err := json.Marshal(oidc.Session{
+			V: oidc.SessionCodecVersion, Sub: "sub-usa-4", Role: oidc.RoleAdmin, UserType: "standard",
+			MemberMode: true, Expiry: time.Now().UTC().Add(time.Hour),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		mac := hmac.New(sha256.New, []byte("not the session key"))
+		mac.Write(payload)
+		forged := &http.Cookie{
+			Name:  "wardyn_session",
+			Value: base64.RawURLEncoding.EncodeToString(payload) + "." + base64.RawURLEncoding.EncodeToString(mac.Sum(nil)),
+		}
+		w := doSSO(t, srv, http.MethodGet, "/api/v1/me", forged, "")
+		if w.Code != http.StatusUnauthorized {
+			t.Fatalf("forged cookie: GET /me = %d, want 401: %s", w.Code, w.Body.String())
+		}
+		if strings.Contains(w.Body.String(), key) {
+			t.Errorf("forged-cookie body carries %s: %s", key, w.Body.String())
+		}
+	})
+
+	t.Run("admin token and local mode have no stamped role", func(t *testing.T) {
+		srv, _ := memberModeServer(t)
+		w := do(t, srv, http.MethodGet, "/api/v1/me", adminToken, "")
+		if w.Code != http.StatusOK {
+			t.Fatalf("token GET /me = %d: %s", w.Code, w.Body.String())
+		}
+		if strings.Contains(w.Body.String(), key) {
+			t.Errorf("admin-token /me carries %s: %s", key, w.Body.String())
+		}
+
+		lsrv, _ := memberModeServer(t)
+		cfg := lsrv.cfg
+		cfg.OIDC = nil
+		cfg.LocalMode = true
+		cfg.LocalOperator = "local:test"
+		cfg.LocalLoopback = true
+		w = do(t, New(cfg), http.MethodGet, "/api/v1/me", "", "")
+		if w.Code != http.StatusOK {
+			t.Fatalf("local GET /me = %d: %s", w.Code, w.Body.String())
+		}
+		if strings.Contains(w.Body.String(), key) {
+			t.Errorf("local-mode /me carries %s: %s", key, w.Body.String())
 		}
 	})
 }

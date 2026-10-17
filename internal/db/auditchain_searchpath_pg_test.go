@@ -108,9 +108,8 @@ func TestPG_ChainTriggerWorksOutsideThePublicSchema(t *testing.T) {
 
 	append1 := func(action string) (rowHash, prevHash string) {
 		t.Helper()
-		err := pool.QueryRow(ctx, `INSERT INTO audit_events (id, actor_type, actor, action, outcome)
-			VALUES (gen_random_uuid(), 'system', 'searchpath-probe', $1, 'success')
-			RETURNING COALESCE(row_hash, ''), COALESCE(prev_hash, '')`, action).Scan(&rowHash, &prevHash)
+		err := pool.QueryRow(ctx, `SELECT COALESCE(row_hash, ''), COALESCE(prev_hash, '')
+			FROM audit_append(gen_random_uuid(), now(), NULL, 'system', 'searchpath-probe', $1, '', 'success', '', NULL)`, action).Scan(&rowHash, &prevHash)
 		if err != nil {
 			t.Fatalf("INSERT into audit_events in schema %s: %v\n"+
 				"the chain trigger runs SECURITY DEFINER; a search_path pinned to a schema the migrations did NOT "+
@@ -162,17 +161,28 @@ func TestPG_ChainTriggerIgnoresAShadowingTempTable(t *testing.T) {
 	}
 	// Guarantee the real chain has a head, so "prev_hash is the real head" is
 	// not satisfiable by an empty table.
-	if _, err := conn.Exec(ctx, `INSERT INTO `+qualified+` (id, actor_type, actor, action, outcome)
-		VALUES (gen_random_uuid(), 'system', 'searchpath-probe', 'test.searchpath.seed', 'success')`); err != nil {
+	if _, err := conn.Exec(ctx, `SELECT audit_append(gen_random_uuid(), now(), NULL, 'system', 'searchpath-probe', 'test.searchpath.seed', '', 'success', '', NULL)`); err != nil {
 		t.Fatalf("seed the real chain: %v", err)
 	}
 
 	forged := "dead" + strings.Repeat("beef", 15) // 64 hex chars, the shape of a row_hash
+	// Shadow EVERY relation the append path reads or writes: the audit table, the high-water row
+	// (its hw_row_hash is what verify compares the newest row against) and the anchors.
 	if _, err := conn.Exec(ctx, `CREATE TEMP TABLE audit_events (seq bigint, row_hash text)`); err != nil {
 		t.Fatalf("create shadowing temp table: %v", err)
 	}
 	if _, err := conn.Exec(ctx, `INSERT INTO pg_temp.audit_events VALUES (1, $1)`, forged); err != nil {
 		t.Fatalf("seed shadowing temp table: %v", err)
+	}
+	if _, err := conn.Exec(ctx, `CREATE TEMP TABLE audit_partition_meta
+		(singleton boolean, cutover timestamptz, hw_seq bigint, hw_recorded_at timestamptz, hw_row_hash text, manifest jsonb)`); err != nil {
+		t.Fatalf("create shadowing meta table: %v", err)
+	}
+	if _, err := conn.Exec(ctx, `INSERT INTO pg_temp.audit_partition_meta VALUES (true, '-infinity', 0, '-infinity', $1, '[]')`, forged); err != nil {
+		t.Fatalf("seed shadowing meta table: %v", err)
+	}
+	if _, err := conn.Exec(ctx, `CREATE TEMP TABLE audit_chain_anchors (kind text)`); err != nil {
+		t.Fatalf("create shadowing anchors table: %v", err)
 	}
 	// The definer reads as the function's OWNER; a real attacker holding only
 	// INSERT+SELECT grants the owner access to their own temp table, so the
@@ -181,8 +191,10 @@ func TestPG_ChainTriggerIgnoresAShadowingTempTable(t *testing.T) {
 	if err := conn.QueryRow(ctx, `SELECT pg_get_userbyid(proowner) FROM pg_proc WHERE proname = 'audit_events_chain'`).Scan(&owner); err != nil {
 		t.Fatalf("read chain function owner: %v", err)
 	}
-	if _, err := conn.Exec(ctx, `GRANT SELECT ON pg_temp.audit_events TO `+pgx.Identifier{owner}.Sanitize()); err != nil {
-		t.Fatalf("grant on shadowing temp table: %v", err)
+	for _, shadow := range []string{"audit_events", "audit_partition_meta", "audit_chain_anchors"} {
+		if _, err := conn.Exec(ctx, `GRANT SELECT, INSERT, UPDATE ON pg_temp.`+shadow+` TO `+pgx.Identifier{owner}.Sanitize()); err != nil {
+			t.Fatalf("grant on shadowing temp table %s: %v", shadow, err)
+		}
 	}
 
 	tx, err := conn.Begin(ctx)
@@ -205,10 +217,16 @@ func TestPG_ChainTriggerIgnoresAShadowingTempTable(t *testing.T) {
 	}
 
 	var gotPrev string
-	if err := tx.QueryRow(ctx, `INSERT INTO `+qualified+` (id, actor_type, actor, action, outcome)
-		VALUES (gen_random_uuid(), 'system', 'searchpath-probe', 'test.searchpath.tempshadow', 'success')
-		RETURNING COALESCE(prev_hash, '')`).Scan(&gotPrev); err != nil {
-		t.Fatalf("INSERT into %s with a shadowing temp table present: %v", qualified, err)
+	if err := tx.QueryRow(ctx, `SELECT COALESCE(prev_hash, '')
+		FROM audit_append(gen_random_uuid(), now(), NULL, 'system', 'searchpath-probe', 'test.searchpath.tempshadow', '', 'success', '', NULL)`).Scan(&gotPrev); err != nil {
+		t.Fatalf("audit_append with shadowing temp tables present: %v", err)
+	}
+	var shadowTouched int
+	if err := tx.QueryRow(ctx, `SELECT count(*) FROM pg_temp.audit_events`).Scan(&shadowTouched); err != nil {
+		t.Fatalf("count the shadow: %v", err)
+	}
+	if shadowTouched != 1 {
+		t.Fatalf("the shadowing temp table holds %d rows after the append, want the 1 the test planted: the definer wrote into the CALLER's table", shadowTouched)
 	}
 	if gotPrev == forged {
 		t.Fatalf("the chain trigger read its head from the CALLER's temp table: prev_hash = %q, the value the caller planted.\n"+
@@ -257,18 +275,16 @@ func TestPG_ReplayingTheTriggerMigrationsIsIdempotent(t *testing.T) {
 	// The replay must leave a WORKING chain, not merely exit zero: the trigger
 	// attached, firing, and still linking rows.
 	var firstHash string
-	if err := pool.QueryRow(ctx, `INSERT INTO audit_events (id, actor_type, actor, action, outcome)
-		VALUES (gen_random_uuid(), 'system', 'replay-probe', 'test.replay.1', 'success')
-		RETURNING COALESCE(row_hash, '')`).Scan(&firstHash); err != nil {
+	if err := pool.QueryRow(ctx, `SELECT COALESCE(row_hash, '')
+		FROM audit_append(gen_random_uuid(), now(), NULL, 'system', 'replay-probe', 'test.replay.1', '', 'success', '', NULL)`).Scan(&firstHash); err != nil {
 		t.Fatalf("append after replay in %s: %v", schema, err)
 	}
 	if firstHash == "" {
 		t.Fatal("a row appended after the replay carries no row_hash; the restored trigger is not chaining")
 	}
 	var secondPrev string
-	if err := pool.QueryRow(ctx, `INSERT INTO audit_events (id, actor_type, actor, action, outcome)
-		VALUES (gen_random_uuid(), 'system', 'replay-probe', 'test.replay.2', 'success')
-		RETURNING COALESCE(prev_hash, '')`).Scan(&secondPrev); err != nil {
+	if err := pool.QueryRow(ctx, `SELECT COALESCE(prev_hash, '')
+		FROM audit_append(gen_random_uuid(), now(), NULL, 'system', 'replay-probe', 'test.replay.2', '', 'success', '', NULL)`).Scan(&secondPrev); err != nil {
 		t.Fatalf("second append after replay: %v", err)
 	}
 	if secondPrev != firstHash {

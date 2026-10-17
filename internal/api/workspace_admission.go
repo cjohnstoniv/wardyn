@@ -125,27 +125,7 @@ func admissionRefusalStatus(operator bool) int {
 // derived clone URL is computed inside, once, so no call site can compare a
 // bare <org>/<name> against a base URL and miss.
 func (s *Server) admitRepoSources(w http.ResponseWriter, r *http.Request, repos ...string) bool {
-	repos = presentRepos(repos)
-	if len(repos) == 0 || s.cfg.Store == nil {
-		return false
-	}
-	sc, err := s.cfg.Store.GetSiteConfig(r.Context())
-	if err != nil {
-		writeServerError(w, r, "get site config", err)
-		return true
-	}
-	if !providersConfigured(sc) {
-		return false // legacy open mode — byte-identical to 0.7.1
-	}
-	operator := s.isOperator(r.Context())
-	for _, repo := range repos {
-		if msg := admissionRefusal(sc, repo, operator); msg != "" {
-			writeErrorReason(w, admissionRefusalStatus(operator), reasonWorkspaceRepoNotAdmitted, msg)
-			return true
-		}
-	}
-	s.auditLegacyHostAdmissions(r.Context(), sc, repos)
-	return false
+	return s.repoAdmissionRefusal(r, repos...).write(s, w, r)
 }
 
 // admitLauncherRepo is admitRepoSources for a SERVER-SIDE launcher, which holds
@@ -166,7 +146,7 @@ func (s *Server) admitLauncherRepo(ctx context.Context, repos ...string) error {
 	if !providersConfigured(sc) {
 		return nil
 	}
-	operator := s.isOperator(ctx)
+	operator := s.runUngoverned(ctx)
 	for _, repo := range repos {
 		if msg := admissionRefusal(sc, repo, operator); msg != "" {
 			return fmt.Errorf("%w: %s", errRepoNotAdmitted, msg)
@@ -184,7 +164,7 @@ func (s *Server) writeAdmissionLaunchRefusal(w http.ResponseWriter, r *http.Requ
 	if !errors.Is(err, errRepoNotAdmitted) {
 		return false
 	}
-	writeErrorReason(w, admissionRefusalStatus(s.isOperator(r.Context())), reasonWorkspaceRepoNotAdmitted,
+	writeErrorReason(w, admissionRefusalStatus(s.runUngoverned(r.Context())), reasonWorkspaceRepoNotAdmitted,
 		strings.TrimPrefix(err.Error(), errRepoNotAdmitted.Error()+": "))
 	return true
 }
@@ -520,24 +500,39 @@ func (s *Server) laneVetoed(ctx context.Context, runID uuid.UUID,
 
 // laneVetoedBy is laneVetoed with the per-row permission question supplied, for
 // the one lane whose answer also depends on the host asked about (the pat lane
-// on Azure DevOps Services, see laneVetoedForGrantHost).
+// on Azure DevOps Services, see grantHostVetoRow).
 func (s *Server) laneVetoedBy(ctx context.Context, runID uuid.UUID,
 	lane types.GitLane, grant types.GrantKind, rows []types.GitProvider,
 	allowed func(types.GitProvider, types.GitLane) bool) (string, bool) {
+	decided, vetoed := laneVetoRow(rows, lane, allowed)
+	if !vetoed {
+		return "", false
+	}
+	return s.recordLaneVeto(ctx, runID, lane, grant, decided), true
+}
+
+// laneVetoRow is laneVetoedBy's decision without its audit row: the row that
+// decided, when every row in rows turns the lane off.
+func laneVetoRow(rows []types.GitProvider, lane types.GitLane, allowed func(types.GitProvider, types.GitLane) bool) (types.GitProvider, bool) {
 	if len(rows) == 0 || slices.ContainsFunc(rows, func(row types.GitProvider) bool {
 		return allowed(row, lane)
 	}) {
-		return "", false
+		return types.GitProvider{}, false
 	}
-	decided := rows[0] // every row in the list vetoed; they agree on the kind
+	return rows[0], true // every row in the list vetoed; they agree on the kind
+}
+
+// recordLaneVeto audits a lane decided's row turned off and returns the 201's
+// warning for it.
+func (s *Server) recordLaneVeto(ctx context.Context, runID uuid.UUID, lane types.GitLane, grant types.GrantKind, decided types.GitProvider) string {
 	s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.provider.veto",
 		string(decided.Kind), "failure", mustJSON(map[string]any{
 			"lane": string(lane), "grant": string(grant), "kind": string(decided.Kind),
 		})))
-	if s.isOperator(ctx) {
-		return fmt.Sprintf(admitLaneDroppedOperator, lane, decided.Kind, decided.ID, grant), true
+	if s.runUngoverned(ctx) {
+		return fmt.Sprintf(admitLaneDroppedOperator, lane, decided.Kind, decided.ID, grant)
 	}
-	return fmt.Sprintf(admitLaneDropped, lane, decided.Kind, grant), true
+	return fmt.Sprintf(admitLaneDropped, lane, decided.Kind, grant)
 }
 
 // laneVetoedForRepo is laneVetoed decided by the row that ADMITTED the
@@ -550,26 +545,27 @@ func (s *Server) laneVetoedForRepo(ctx context.Context, sc types.SiteConfig, run
 	return s.laneVetoed(ctx, runID, lane, grant, admittingRows(sc, cloneURL))
 }
 
-// laneVetoedForGrantHost is laneVetoed for a grant whose scope names only a HOST
-// (git_pat, ssh_key). It still prefers the admitting row wherever it can: the
-// deciders are the rows that admitted THIS RUN's own repositories on that host,
-// and only a run that declares none there falls back to the union of the rows
-// claiming it.
-func (s *Server) laneVetoedForGrantHost(ctx context.Context, sc types.SiteConfig, runID uuid.UUID,
-	lane types.GitLane, grant types.GrantKind, host string, repos []string) (string, bool) {
+// grantHostVetoRow is laneVetoRow for a grant whose scope names only a HOST
+// (git_pat, ssh_key, and the github_token's github.com): the row that turns the
+// lane off, decided from the site config, the host and the run's repositories
+// alone (gitGrantLaneDrop). It still prefers the admitting row wherever it can:
+// the deciders are the rows that admitted THIS RUN's own repositories on that
+// host, and only a run that declares none there falls back to the union of the
+// rows claiming it.
+func grantHostVetoRow(sc types.SiteConfig, lane types.GitLane, host string, repos []string) (types.GitProvider, bool) {
 	if !providersConfigured(sc) {
-		return "", false
+		return types.GitProvider{}, false
 	}
 	rows := laneRowsForGrantHost(sc, host, repos)
 	if lane == types.GitLanePAT && adoServicesHost(host) {
 		// Azure DevOps Services has no token lane (#1429): a row of mixed
 		// addresses can keep its pat lane for its Server address, but never for
 		// a Services one.
-		return s.laneVetoedBy(ctx, runID, lane, grant, rows, func(row types.GitProvider, l types.GitLane) bool {
+		return laneVetoRow(rows, lane, func(row types.GitProvider, l types.GitLane) bool {
 			return row.Kind != types.GitProviderAzureDevOps && laneAllowed(row, l)
 		})
 	}
-	return s.laneVetoed(ctx, runID, lane, grant, rows)
+	return laneVetoRow(rows, lane, laneAllowed)
 }
 
 // laneRowsForGrantHost picks the rows that decide a host-scoped grant's lane:
@@ -654,9 +650,11 @@ func (s *Server) laneVetoedForLauncher(ctx context.Context, runID uuid.UUID,
 }
 
 // admissionStamper is the per-request projection that fills WorkspaceSource's
-// server-owned `admitted` flag, or nil in legacy open mode — where the key is
-// ABSENT from every response, which is what keeps an upgraded install's
-// workspace documents byte-identical.
+// server-owned `admitted` flag and `clone_target`. In legacy open mode it
+// fills `clone_target` alone: `admitted` stays ABSENT from every response
+// there, which is what keeps an upgraded install's provider reading as it was,
+// while where a clone lands is a fact of the locator and needs no provider row
+// (New Run's Files step shows it as the mount path).
 //
 // Fed by the server, never mirrored by the console: the match rule has exactly
 // one spelling (admitRepoURL) and the UI already mirrors only the host union.
@@ -667,16 +665,23 @@ func (s *Server) admissionStamper(ctx context.Context) func(types.Workspace) typ
 	}
 	sc, err := s.cfg.Store.GetSiteConfig(ctx)
 	if err != nil || !providersConfigured(sc) {
-		return nil
+		return func(ws types.Workspace) types.Workspace { return stampSources(nil, ws) }
 	}
 	return func(ws types.Workspace) types.Workspace { return stampSourceAdmission(sc, ws) }
 }
 
-// stampSourceAdmission sets `admitted` on every REPO source of one workspace.
+// stampSourceAdmission sets `admitted` and `clone_target` on every REPO source
+// of one workspace.
+func stampSourceAdmission(sc types.SiteConfig, ws types.Workspace) types.Workspace {
+	return stampSources(&sc, ws)
+}
+
+// stampSources sets `clone_target` on every REPO source of one workspace, and
+// `admitted` too when sc is given.
 // local_dir and ephemeral sources are left alone: they clone nothing, and a
 // flag on them would invite the console to render a provider state for a
 // directory.
-func stampSourceAdmission(sc types.SiteConfig, ws types.Workspace) types.Workspace {
+func stampSources(sc *types.SiteConfig, ws types.Workspace) types.Workspace {
 	// Clone before mutating, redactWorkspaceForRead's rule and for its reason:
 	// the store's row shares its slices with everything else that read it in
 	// this request.
@@ -685,8 +690,11 @@ func stampSourceAdmission(sc types.SiteConfig, ws types.Workspace) types.Workspa
 		if ws.Sources[i].Type != types.WorkspaceSourceTypeRepo {
 			continue
 		}
-		_, admitted := providerFor(sc, repoCloneURL(ws.Sources[i].Source))
-		ws.Sources[i].Admitted = &admitted
+		if sc != nil {
+			_, admitted := providerFor(*sc, repoCloneURL(ws.Sources[i].Source))
+			ws.Sources[i].Admitted = &admitted
+		}
+		ws.Sources[i].CloneTarget, _ = repoCloneTarget(types.WorkspaceRepo{Repo: ws.Sources[i].Source, Target: ws.Sources[i].Target})
 	}
 	return ws
 }

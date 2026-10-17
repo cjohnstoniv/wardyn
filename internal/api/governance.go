@@ -15,6 +15,7 @@
 package api
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -27,6 +28,8 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/authz"
+	"github.com/cjohnstoniv/wardyn/internal/composer"
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -58,6 +61,7 @@ func (s *Server) mountGovernanceRoutes(operatorOnly chi.Router) {
 	operatorOnly.Post("/governance/assignments", s.handleUpsertGovernanceAssignment)
 	operatorOnly.Delete("/governance/assignments/{id}", s.handleDeleteGovernanceAssignment)
 	operatorOnly.Post("/governance/preview", s.handlePreviewGovernanceProfile)
+	s.mountGovernanceChangeRoutes(operatorOnly)
 }
 
 // GET /governance
@@ -69,14 +73,14 @@ func (s *Server) mountGovernanceRoutes(operatorOnly chi.Router) {
 // profile it points at, and nesting profiles under assignments would duplicate
 // a ceiling per binding while hiding an unassigned profile entirely.
 type governanceResponse struct {
-	Profiles    []types.GovernanceProfile    `json:"profiles"`
+	Profiles    []governanceProfileView      `json:"profiles"`
 	Assignments []types.GovernanceAssignment `json:"assignments"`
 }
 
 // handleGetGovernance returns the whole governance picture. operatorOnly
 // (routes.go).
 func (s *Server) handleGetGovernance(w http.ResponseWriter, r *http.Request) {
-	profiles, err := s.cfg.Store.ListGovernanceProfiles(r.Context())
+	resolved, err := s.resolveAllProfiles(r.Context())
 	if err != nil {
 		writeServerError(w, r, "list governance profiles", err)
 		return
@@ -90,72 +94,18 @@ func (s *Server) handleGetGovernance(w http.ResponseWriter, r *http.Request) {
 	// stored-policy read path: validatePolicySpec already refuses a WRITE that
 	// puts a raw llm_inspection secret VALUE in a spec, so a stored ceiling
 	// should never carry one — but a read path must never re-expose it if that
-	// invariant is ever broken by a migration or a direct DB edit.
-	for i := range profiles {
-		profiles[i].Ceiling = redactSpecForRead(profiles[i].Ceiling, true)
+	// invariant is ever broken by a migration or a direct DB edit. newProfileView
+	// redacts the effective ceiling the same way.
+	profiles := make([]governanceProfileView, len(resolved))
+	for i, p := range resolved {
+		profiles[i] = newProfileView(p.Row, p.Resolved, p.Err)
 	}
 	writeJSON(w, http.StatusOK, governanceResponse{Profiles: profiles, Assignments: assignments})
 }
 
-// profile writes
-
-// governanceProfileRequest is the POST/PUT body. ID/CreatedAt/UpdatedAt/
-// CreatedBy are never accepted from the wire: the id comes from the path (PUT)
-// or the server (POST), and provenance is always server-assigned — the same
-// rule grantWriteRequest states for capability grants.
-type governanceProfileRequest struct {
-	Name    string                 `json:"name"`
-	Ceiling types.RunPolicySpec    `json:"ceiling"`
-	Limits  types.GovernanceLimits `json:"limits"`
-}
-
-// governanceProfileResponse carries the saved profile plus any OMISSION
-// warnings. Warnings are advisory by design and never a refusal: a profile is
-// authored from scratch, so "the deployment default carries a denied domain you
-// did not" is information an author needs, not an error — and refusing would
-// make the deployment default a floor the profile could not go under, which is
-// the composition semantics this feature deliberately does not have.
-type governanceProfileResponse struct {
-	Profile  types.GovernanceProfile `json:"profile"`
-	Warnings []string                `json:"warnings,omitempty"`
-}
-
-// decodeGovernanceProfileRequest decodes, normalizes and validates a profile
-// write body, returning a human-readable message the caller surfaces as 400.
-//
-// Three gates, in order: strict decoding (an unknown field is a typo that must
-// not silently widen behaviour — the LoadPolicySpec discipline); a real name
-// (it is the UNIQUE handle and the resolver's tie-break, so blank is not a
-// profile); and validatePolicySpec over the ceiling, which is the SAME
-// validation a stored run_policies spec gets — a governance ceiling is a
-// RunPolicySpec and must never be held to a weaker standard than a policy that
-// merely gets clamped against one.
-func decodeGovernanceProfileRequest(w http.ResponseWriter, r *http.Request) (governanceProfileRequest, string) {
-	var req governanceProfileRequest
-	if msg := decodeStrictMsg(w, r, &req); msg != "" {
-		return governanceProfileRequest{}, msg
-	}
-	req.Name = strings.TrimSpace(req.Name)
-	if req.Name == "" {
-		return governanceProfileRequest{}, "name is required"
-	}
-	if len(req.Name) > maxGovernanceProfileNameLen || !controlCharFree(req.Name) {
-		return governanceProfileRequest{}, "name is invalid"
-	}
-	if err := validatePolicySpec(req.Ceiling); err != nil {
-		return governanceProfileRequest{}, "invalid ceiling: " + err.Error()
-	}
-	// The limits get their own write boundary, matching the sibling ORG block's
-	// identical shape (validateStorageProviders, providers400Negative). Nothing downstream
-	// mis-enforces a negative — every reader treats <= 0 as unlimited — but this is
-	// the door the console's own nonNegativeInt does not cover, and a stored -5
-	// renders on the profile editor as a cap that binds nothing. 0 stays
-	// unlimited/unset on all three.
-	if msg := governanceLimitsRefusal(req.Limits); msg != "" {
-		return governanceProfileRequest{}, msg
-	}
-	return req, ""
-}
+// governanceRefusedAllPlacements is the frozen sentence (GOVERNANCE.REFUSED_ALL_PLACEMENTS) the
+// profile writer answers 400 with when deny_placements lists both placements.
+const governanceRefusedAllPlacements = "deny_placements: a profile can't deny every placement — the people it binds could run nothing"
 
 // governanceLimitsRefusal is the negative-value boundary on GovernanceLimits, or
 // "" when every number is writable. It is the profile's half of
@@ -176,11 +126,25 @@ func governanceLimitsRefusal(l types.GovernanceLimits) string {
 		return fmt.Sprintf("limits.max_concurrent_runs: %d is not a count of runs — use 0 for unlimited",
 			l.MaxConcurrentRuns)
 	}
+	if l.MaxCPUMillis < 0 {
+		return fmt.Sprintf(providers400Negative, "limits.max_cpu_millis", l.MaxCPUMillis)
+	}
+	if l.MaxMemoryMiB < 0 {
+		return fmt.Sprintf(providers400Negative, "limits.max_memory_mib", l.MaxMemoryMiB)
+	}
 	if l.MaxEphemeralDiskMiB < 0 {
 		return fmt.Sprintf(providers400Negative, "limits.max_ephemeral_disk_mib", l.MaxEphemeralDiskMiB)
 	}
 	if l.MaxDriveSizeMiB < 0 {
 		return fmt.Sprintf(providers400Negative, "limits.max_drive_size_mib", l.MaxDriveSizeMiB)
+	}
+	for _, p := range l.DenyPlacements {
+		if !p.Valid() {
+			return fmt.Sprintf("limits.deny_placements: %q is not a placement — use remote or local", p)
+		}
+	}
+	if types.DeniesEveryPlacement(l.DenyPlacements) {
+		return governanceRefusedAllPlacements
 	}
 	if l.AutonomyRubric != nil {
 		if err := l.AutonomyRubric.Validate(); err != nil {
@@ -188,109 +152,6 @@ func governanceLimitsRefusal(l types.GovernanceLimits) string {
 		}
 	}
 	return runLimitsRefusal(l.RunLimits)
-}
-
-// writeGovernanceProfile is the shared body of POST and PUT: bound the eligible
-// grants, persist, audit, and answer with the saved row plus omission warnings.
-// id is the row to write (a fresh one for POST, the path's for PUT) and status
-// the success code.
-func (s *Server) writeGovernanceProfile(w http.ResponseWriter, r *http.Request, id uuid.UUID, status int) {
-	req, msg := decodeGovernanceProfileRequest(w, r)
-	if msg != "" {
-		writeErrorReason(w, http.StatusBadRequest, reasonGovernanceProfileRequestInvalid, msg)
-		return
-	}
-	// The structural bound (governance_grantbound.go). A profile may narrow the
-	// deployment's credential eligibility; it may never mint eligibility the
-	// deployer never provisioned. Refused at write, and re-checked at resolve
-	// time because Config.DefaultPolicy is env-borne and a redeploy that drops
-	// a pairing must not leave old profiles serving it.
-	if err := governanceGrantsWithinCeiling(req.Ceiling.EligibleGrants, s.cfg.DefaultPolicy.EligibleGrants); err != nil {
-		writeErrorReason(w, http.StatusBadRequest, reasonGovernanceCeilingInvalid, "invalid ceiling: "+err.Error())
-		return
-	}
-	p := types.GovernanceProfile{
-		ID:        id,
-		Name:      req.Name,
-		Ceiling:   req.Ceiling,
-		Limits:    req.Limits,
-		CreatedBy: principalFromRequest(r),
-	}
-	saved, err := s.cfg.Store.UpsertGovernanceProfile(r.Context(), p)
-	if errors.Is(err, store.ErrConflict) {
-		writeErrorReason(w, http.StatusConflict, reasonGovernanceProfileNameConflict,
-			fmt.Sprintf("a governance profile named %q already exists", req.Name))
-		return
-	}
-	if err != nil {
-		writeServerError(w, r, "write governance profile", err)
-		return
-	}
-	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
-		"governance.profile.write", saved.ID.String(), "success", mustJSON(map[string]any{
-			"name":                  saved.Name,
-			"min_confinement_class": saved.Ceiling.MinConfinementClass,
-			"allow_all_egress":      saved.Ceiling.AllowAllEgress,
-			"limits":                saved.Limits,
-		})))
-	writeJSON(w, status, governanceProfileResponse{
-		Profile:  saved,
-		Warnings: governanceOmissionWarnings(saved.Ceiling, s.cfg.DefaultPolicy),
-	})
-}
-
-// handleCreateGovernanceProfile mints a fresh id and writes a new profile
-// (201). A name another profile already holds is a caller-fixable 409, never a
-// raw driver error. operatorOnly (routes.go).
-func (s *Server) handleCreateGovernanceProfile(w http.ResponseWriter, r *http.Request) {
-	s.writeGovernanceProfile(w, r, uuid.New(), http.StatusCreated)
-}
-
-// handleUpdateGovernanceProfile replaces the profile at {id} (200), rename
-// included — renaming has to work, because ON DELETE RESTRICT makes
-// delete-and-recreate impossible for a profile that is actually assigned. A PUT
-// naming an id no row holds creates it there, which is what PUT means and what
-// UpsertGovernanceProfile's single statement does without an existence read.
-// operatorOnly (routes.go).
-func (s *Server) handleUpdateGovernanceProfile(w http.ResponseWriter, r *http.Request) {
-	id, ok := parseIDParam(w, r, "id", "governance profile")
-	if !ok {
-		return
-	}
-	s.writeGovernanceProfile(w, r, id, http.StatusOK)
-}
-
-// handleDeleteGovernanceProfile removes a profile (204), or 409 when it is
-// still ASSIGNED.
-//
-// The 409 is the whole point of the FK's ON DELETE RESTRICT: cascading the
-// assignments away would move every member of this profile back to the
-// deployment ceiling — a silent WIDENING, with no audit line saying so and
-// nothing for an admin to notice. Refusing makes the widening a deliberate,
-// separately-audited act (delete the assignments first). operatorOnly
-// (routes.go).
-func (s *Server) handleDeleteGovernanceProfile(w http.ResponseWriter, r *http.Request) {
-	id, ok := parseIDParam(w, r, "id", "governance profile")
-	if !ok {
-		return
-	}
-	err := s.cfg.Store.DeleteGovernanceProfile(r.Context(), id)
-	if notFoundIf(w, err, "governance profile", reasonGovernanceProfileNotFoundByID) {
-		return
-	}
-	if errors.Is(err, store.ErrConflict) {
-		writeErrorReason(w, http.StatusConflict, reasonGovernanceProfileInUse,
-			"this governance profile is still assigned — delete its assignments first "+
-				"(deleting it while assigned would silently widen everyone it bounds back to the deployment ceiling)")
-		return
-	}
-	if err != nil {
-		writeServerError(w, r, "delete governance profile", err)
-		return
-	}
-	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
-		"governance.profile.delete", id.String(), "success", nil))
-	w.WriteHeader(http.StatusNoContent)
 }
 
 // assignment writes
@@ -308,7 +169,7 @@ type governanceAssignmentRequest struct {
 // validateGovernanceAssignment normalizes a in place and validates it, applying
 // the SAME field hygiene validateCapabilityGrant applies to a capability grant
 // subject — trim, length, no control characters, and for a GROUP subject the
-// shared oidc.CanonicalGroupSubject the login-time snapshot itself uses —
+// shared types.CanonicalGroupSubject the login-time snapshot itself uses —
 // because these two tables are written against the identical subject vocabulary
 // and are resolved through the identical capabilitySubjects call. A subject
 // normalized one way here and another way there is a row that silently never
@@ -333,14 +194,14 @@ func validateGovernanceAssignment(a *types.GovernanceAssignment) error {
 		return fmt.Errorf("subject: required for subject_type %q", a.SubjectType)
 	}
 	if a.SubjectType == types.CapabilitySubjectGroup {
-		// The group half of that hygiene is oidc.CanonicalGroupSubject, not a
+		// The group half of that hygiene is types.CanonicalGroupSubject, not a
 		// lowercase — see validateCapabilityGrant. A group-tier assignment is
 		// the sharper case of the two: HasGroupTierAssignments counts the dead
 		// row as "a group tier exists", so a subject no snapshot can carry both
 		// fails to wall the member it names AND refuses every caller with an
 		// unanswerable snapshot on account of an assignment that could never
 		// have applied to them.
-		subject, ok := oidc.CanonicalGroupSubject(a.Subject)
+		subject, ok := types.CanonicalGroupSubject(a.Subject)
 		if !ok {
 			return fmt.Errorf("subject: must be printable ASCII — a group subject is matched against the login-time group snapshot, which carries printable ASCII only, so this value can never match anyone")
 		}
@@ -352,12 +213,12 @@ func validateGovernanceAssignment(a *types.GovernanceAssignment) error {
 			return fmt.Errorf("subject: %q is not a user type id", a.Subject)
 		}
 	} else {
-		// The USER half is canonicalUserSubject for the same guard-before-fold
+		// The USER half is types.CanonicalUserSubject for the same guard-before-fold
 		// reason (capabilities.go): a bare ToLower folds U+212A onto ASCII 'k'
 		// and U+0130 onto 'i', so a crafted spelling of a real human's address
 		// was stored as THAT human's subject — an assignment binding someone
 		// else's ceiling to them.
-		a.Subject = canonicalUserSubject(a.Subject)
+		a.Subject = types.CanonicalUserSubject(a.Subject)
 	}
 	if len(a.Subject) > maxCapabilityGrantFieldLen || !controlCharFree(a.Subject) {
 		return fmt.Errorf("subject: invalid")
@@ -373,6 +234,10 @@ func validateGovernanceAssignment(a *types.GovernanceAssignment) error {
 // returns the EXISTING row's id on a conflict, never the candidate's).
 // operatorOnly (routes.go).
 func (s *Server) handleUpsertGovernanceAssignment(w http.ResponseWriter, r *http.Request) {
+	mode, ok := s.governanceWriteMode(w, r)
+	if !ok {
+		return
+	}
 	var req governanceAssignmentRequest
 	if !decodeStrict(w, r, &req) {
 		return
@@ -392,6 +257,12 @@ func (s *Server) handleUpsertGovernanceAssignment(w http.ResponseWriter, r *http
 	}
 	a.ID = uuid.New()
 	a.CreatedBy = principalFromRequest(r)
+	if mode == govQueue {
+		// Every assignment change is held: a repoint can widen its subjects, and nothing here is
+		// proven narrowing.
+		s.holdAssignmentUpsert(w, r, a)
+		return
+	}
 	saved, err := s.cfg.Store.UpsertGovernanceAssignment(r.Context(), a)
 	// ErrNotFound here is the FK refusing an unknown profile_id — a 404 naming
 	// the profile, not a 500, and not a silent no-op.
@@ -407,12 +278,10 @@ func (s *Server) handleUpsertGovernanceAssignment(w http.ResponseWriter, r *http
 		status = http.StatusOK
 	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
-		"governance.assignment.write", saved.ID.String(), "success", mustJSON(map[string]any{
-			"subject_type": saved.SubjectType,
-			"subject":      saved.Subject,
-			"profile_id":   saved.ProfileID,
-			"priority":     saved.Priority,
-		})))
+		"governance.assignment.write", saved.ID.String(), "success", mustJSON(assignmentWriteAuditData(saved))))
+	if mode == govBypass {
+		s.recordGovernanceBypass(r, govKindAssignment, saved.ID.String(), "success", nil)
+	}
 	writeJSON(w, status, saved)
 }
 
@@ -421,8 +290,17 @@ func (s *Server) handleUpsertGovernanceAssignment(w http.ResponseWriter, r *http
 // deployment ceiling, which is why it is audited on its own line rather than
 // riding a profile delete. operatorOnly (routes.go).
 func (s *Server) handleDeleteGovernanceAssignment(w http.ResponseWriter, r *http.Request) {
+	mode, ok := s.governanceWriteMode(w, r)
+	if !ok {
+		return
+	}
 	id, ok := parseIDParam(w, r, "id", "governance assignment")
 	if !ok {
+		return
+	}
+	if mode == govQueue {
+		// Deleting an assignment widens its subjects back to the deployment ceiling: never exempt.
+		s.holdAssignmentDelete(w, r, id)
 		return
 	}
 	err := s.cfg.Store.DeleteGovernanceAssignment(r.Context(), id)
@@ -435,6 +313,9 @@ func (s *Server) handleDeleteGovernanceAssignment(w http.ResponseWriter, r *http
 	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
 		"governance.assignment.delete", id.String(), "success", nil))
+	if mode == govBypass {
+		s.recordGovernanceBypass(r, govKindAssignment, id.String(), "success", nil)
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -531,8 +412,8 @@ func (s *Server) handlePreviewGovernanceProfile(w http.ResponseWriter, r *http.R
 		writeErrorReason(w, http.StatusBadRequest, reasonGovernancePreviewClaimsInvalid, msg)
 		return
 	}
-	p, tier, err := s.cfg.Store.ResolveGovernanceProfile(r.Context(), users, groups, strings.TrimSpace(req.UserType))
-	if errors.Is(err, store.ErrNotFound) || (err == nil && p == nil) {
+	id, name, tier, err := s.assignedProfileIdentity(r.Context(), users, groups, strings.TrimSpace(req.UserType))
+	if errors.Is(err, store.ErrNotFound) {
 		writeJSON(w, http.StatusOK, governancePreviewResponse{})
 		return
 	}
@@ -541,7 +422,7 @@ func (s *Server) handlePreviewGovernanceProfile(w http.ResponseWriter, r *http.R
 		return
 	}
 	writeJSON(w, http.StatusOK, governancePreviewResponse{
-		ProfileID: p.ID, ProfileName: p.Name, MatchedTier: tier,
+		ProfileID: id, ProfileName: name, MatchedTier: tier,
 	})
 }
 
@@ -560,16 +441,16 @@ func (s *Server) handlePreviewGovernanceProfile(w http.ResponseWriter, r *http.R
 // a UNICODE fold, so U+212A becomes ASCII 'k' and U+0130 becomes 'i', and a
 // preview claim typed in either spelling would answer for a DIFFERENT human's
 // row than the run resolves. Both halves therefore ask the match surface's own
-// canonicalizer — users through canonicalUserSubject (capabilities.go, the same
-// function capabilitySubjects and the two write boundaries use), groups through
-// normalizeGovernancePreviewGroups below (oidc.CanonicalGroupSubject).
+// canonicalizer — users through types.CanonicalUserSubject (the same function
+// capabilitySubjects and the two write boundaries use), groups through
+// normalizeGovernancePreviewGroups below (types.CanonicalGroupSubject).
 func normalizeGovernancePreviewClaims(in []string, field string) ([]string, string) {
 	if len(in) > maxGovernancePreviewClaims {
 		return nil, fmt.Sprintf("%s: at most %d claims", field, maxGovernancePreviewClaims)
 	}
 	out := make([]string, 0, len(in))
 	for _, v := range in {
-		if c := canonicalUserSubject(v); c != "" && !slices.Contains(out, c) {
+		if c := types.CanonicalUserSubject(v); c != "" && !slices.Contains(out, c) {
 			out = append(out, c)
 		}
 	}
@@ -606,7 +487,7 @@ func normalizeGovernancePreviewGroups(in []string) ([]string, string) {
 	}
 	out := make([]string, 0, len(in))
 	for _, v := range in {
-		c, ok := oidc.CanonicalGroupSubject(v)
+		c, ok := types.CanonicalGroupSubject(v)
 		if !ok {
 			continue // no login snapshot can carry it; enforcement drops it too
 		}
@@ -629,8 +510,12 @@ func normalizeGovernancePreviewGroups(in []string) ([]string, string) {
 type governanceCeiling struct {
 	Spec     types.RunPolicySpec
 	Limits   types.GovernanceLimits
-	Profile  *types.GovernanceProfile
+	Profile  *ResolvedProfile
 	Warnings []string
+	// MemberDefault is a governed member's size before any ask (composer.MemberDefault from the
+	// deployment's own size, lowered by this ceiling), set when the ceiling is resolved. Read it
+	// through memberSize.
+	MemberDefault types.ResourceLimits
 	// Operator is true when this principal is not clamped (isOperator: the
 	// admin view, the admin token, local mode). The zero value is the clamped
 	// member, so a ceiling built without asking stays bounded. Dispatch reads it
@@ -680,6 +565,10 @@ func writeCeilingError(w http.ResponseWriter, r *http.Request, err error) {
 		writeErrorReason(w, http.StatusForbidden, reasonGroupsSnapshotStale, groupsSnapshotStaleMsg)
 		return
 	}
+	if u, ok := isOverlayUnsatisfiable(err); ok {
+		writeErrorReason(w, http.StatusForbidden, reasonGovernanceOverlayUnsatisfiable, u.Error())
+		return
+	}
 	writeServerError(w, r, "resolve governance ceiling", err)
 }
 
@@ -703,6 +592,10 @@ func writeCeilingErrorPrefixed(w http.ResponseWriter, r *http.Request, prefix st
 		writeErrorReason(w, http.StatusForbidden, reasonGroupsSnapshotStale, groupsSnapshotStaleMsg)
 		return
 	}
+	if u, ok := isOverlayUnsatisfiable(err); ok {
+		writeErrorReason(w, http.StatusForbidden, reasonGovernanceOverlayUnsatisfiable, u.Error())
+		return
+	}
 	writeServerError(w, r, strings.TrimRight(prefix, ": "), err)
 }
 
@@ -711,7 +604,7 @@ func writeCeilingErrorPrefixed(w http.ResponseWriter, r *http.Request, prefix st
 // One mapping, so a resolver failure cannot answer 403 at one site and 500 at
 // the next for the same cause.
 func ceilingErrorStatus(err error) int {
-	if errors.Is(err, errGroupsSnapshotStale) || errors.Is(err, errUserTypeUnknown) {
+	if _, unsat := isOverlayUnsatisfiable(err); unsat || errors.Is(err, errGroupsSnapshotStale) || errors.Is(err, errUserTypeUnknown) {
 		return http.StatusForbidden
 	}
 	return http.StatusInternalServerError
@@ -792,8 +685,8 @@ func (s *Server) effectiveCeiling(ctx context.Context) (governanceCeiling, error
 // order its doc comment describes. Split out so the memo above wraps it exactly
 // once and no call site can reach the raw resolve by accident.
 func (s *Server) resolveEffectiveCeiling(ctx context.Context) (governanceCeiling, error) {
-	deployment := governanceCeiling{Spec: s.cfg.DefaultPolicy.Clone()}
-	if s.isOperator(ctx) {
+	deployment := governanceCeiling{Spec: s.cfg.DefaultPolicy.Clone(), MemberDefault: s.memberDefaultFor(s.cfg.DefaultPolicy.Resources)}
+	if s.runUngoverned(ctx) {
 		deployment.Operator = true
 		return deployment, nil
 	}
@@ -821,8 +714,8 @@ func (s *Server) resolveEffectiveCeiling(ctx context.Context) (governanceCeiling
 		return s.ceilingWithUnusableGroups(ctx, subj.users, subj.userType, deployment)
 	}
 
-	p, _, err := s.cfg.Store.ResolveGovernanceProfile(ctx, subj.users, subj.groups, subj.userType)
-	return s.ceilingFromProfile(p, err, deployment)
+	p, _, err := s.resolveAssignedProfile(ctx, subj.users, subj.groups, subj.userType)
+	return s.ceilingFromProfile(ctx, p, err, deployment)
 }
 
 // ceilingWithUnusableGroups is effectiveCeiling's step 4: the caller's group
@@ -831,18 +724,18 @@ func (s *Server) resolveEffectiveCeiling(ctx context.Context) (governanceCeiling
 // trustworthy (target governance.ceiling). The drive preview enters here too.
 func (s *Server) ceilingWithUnusableGroups(ctx context.Context, users []string, userType string, deployment governanceCeiling) (governanceCeiling, error) {
 	p, _, err := selectByTier(ctx, s, authz.Deny(authz.ReasonGroupsSnapshotStale, "governance.ceiling", ""),
-		func() (*types.GovernanceProfile, types.CapabilitySubjectType, error) {
-			return s.cfg.Store.ResolveGovernanceProfile(ctx, users, nil, userType)
+		func() (*ResolvedProfile, types.CapabilitySubjectType, error) {
+			return s.resolveAssignedProfile(ctx, users, nil, userType)
 		}, s.cfg.Store.HasGroupTierAssignments)
 	if errors.Is(err, errGroupsSnapshotStale) {
 		return governanceCeiling{}, err
 	}
-	return s.ceilingFromProfile(p, err, deployment)
+	return s.ceilingFromProfile(ctx, p, err, deployment)
 }
 
 // ceilingFromProfile turns one resolver answer into a ceiling: ErrNotFound (or
-// a nil profile) is the deployment's, anything else is the profile's — cloned,
-// and re-intersected against the deployment's eligible grants.
+// a nil profile) is the deployment's, anything else is the profile's, already composed from its
+// chain (governance_compose.go) with its grants re-intersected at every step.
 //
 // Order matters and it is the whole function. The REAL-ERROR check runs FIRST,
 // ahead of the nil-profile one, because a failed resolve also returns a nil
@@ -852,18 +745,79 @@ func (s *Server) ceilingWithUnusableGroups(ctx context.Context, users []string, 
 // convenience guard. The nil check that follows is still worth having: it makes
 // a store answering (nil, "", nil) mean the absent-row doctrine rather than a
 // dereference, so no caller has to have checked on its behalf.
-func (s *Server) ceilingFromProfile(p *types.GovernanceProfile, err error, deployment governanceCeiling) (governanceCeiling, error) {
+//
+// A composition nothing satisfies is the explicit deny-all state: it is refused with the authz
+// reason governance_overlay_unsatisfiable and audited here, once per resolve, unless the read only
+// displays a state. It is never read as the deployment's ceiling or as either side of the meet.
+func (s *Server) ceilingFromProfile(ctx context.Context, p *ResolvedProfile, err error, deployment governanceCeiling) (governanceCeiling, error) {
+	if u, ok := isOverlayUnsatisfiable(err); ok {
+		if !isDisplayRead(ctx) {
+			s.recordRefusal(ctx, nil, authz.Deny(authz.ReasonGovernanceOverlayUnsatisfiable, "governance.ceiling", u.Error()))
+		}
+		return governanceCeiling{}, err
+	}
 	if err != nil && !errors.Is(err, store.ErrNotFound) {
 		return governanceCeiling{}, fmt.Errorf("api: resolve governance profile: %w", err)
 	}
 	if p == nil {
 		return deployment, nil
 	}
-	spec := p.Ceiling.Clone()
-	kept, warns := reintersectGovernanceGrants(spec.EligibleGrants, s.cfg.DefaultPolicy.EligibleGrants, p.Name)
-	spec.EligibleGrants = kept
-	warns = append(warns, droppedPushRulesWarning(spec, s.cfg.DefaultPolicy, p.Name)...)
-	return governanceCeiling{Spec: spec, Limits: p.Limits, Profile: p, Warnings: warns}, nil
+	return governanceCeiling{Spec: p.Ceiling.Clone(), Limits: p.Limits, Profile: p, Warnings: p.Warnings,
+		MemberDefault: s.memberDefaultFor(p.Ceiling.Resources)}, nil
+}
+
+// authoredSize is the ceiling policy's own CPU and memory as the member cap reads it (#1949): a
+// profile's AUTHORED size, zero where it inherited the deployment's, so a maximum with no size of its
+// own is the size; any other ceiling (the deployment's, an operator's) inherits nothing, so its spec
+// is its own.
+func (c governanceCeiling) authoredSize() types.ResourceLimits {
+	if c.Profile != nil {
+		return c.Profile.AuthoredResources
+	}
+	if r := c.Spec.Resources; r != nil {
+		return types.ResourceLimits{CPUMillis: r.CPUMillis, MemoryMiB: r.MemoryMiB}
+	}
+	return types.ResourceLimits{}
+}
+
+// memberDefaultFor is the member default under a ceiling of this size: the deployment's own size
+// (inheritDeploymentResources), lowered by the ceiling.
+func (s *Server) memberDefaultFor(ceiling *types.ResourceLimits) types.ResourceLimits {
+	d := s.inheritDeploymentResources(nil)
+	return composer.MemberDefault(types.ResourceLimits{CPUMillis: d.CPUMillis, MemoryMiB: d.MemoryMiB}, ceiling)
+}
+
+// memberSize is the member default the member cap starts from. A ceiling that was not resolved (a
+// hand-built one) carries none and falls back to the platform default lowered by its own size.
+func (c governanceCeiling) memberSize() types.ResourceLimits {
+	if c.MemberDefault.CPUMillis > 0 && c.MemberDefault.MemoryMiB > 0 {
+		return c.MemberDefault
+	}
+	return composer.MemberDefault(types.ResourceLimits{}, c.Spec.Resources)
+}
+
+// inheritDeploymentResources fills what a profile's ceiling leaves unset (no resources block, or a
+// zero field) from the deployment: DefaultPolicy.Resources, else runner.EffectiveLimits(), the same
+// order the runners and composer.Clamp fall back in. Without it an omitted size fell through to
+// the compiled-in platform default, which could be larger than the deployment's own. A set
+// field is the profile's own and stays. DiskMiB has no platform default, so it inherits only
+// DefaultPolicy's.
+func (s *Server) inheritDeploymentResources(r *types.ResourceLimits) *types.ResourceLimits {
+	eff := runner.EffectiveLimits()
+	out := types.ResourceLimits{CPUMillis: int(eff.CPUMillis), MemoryMiB: int(eff.MemoryMiB), PidsLimit: int(eff.PidsLimit)}
+	if d := s.cfg.DefaultPolicy.Resources; d != nil {
+		out.CPUMillis = cmp.Or(d.CPUMillis, out.CPUMillis)
+		out.MemoryMiB = cmp.Or(d.MemoryMiB, out.MemoryMiB)
+		out.PidsLimit = cmp.Or(d.PidsLimit, out.PidsLimit)
+		out.DiskMiB = d.DiskMiB
+	}
+	if r != nil {
+		out.CPUMillis = cmp.Or(r.CPUMillis, out.CPUMillis)
+		out.MemoryMiB = cmp.Or(r.MemoryMiB, out.MemoryMiB)
+		out.PidsLimit = cmp.Or(r.PidsLimit, out.PidsLimit)
+		out.DiskMiB = cmp.Or(r.DiskMiB, out.DiskMiB)
+	}
+	return &out
 }
 
 // droppedPushRulesWarning is ceilingFromProfile's push_rules mirror of

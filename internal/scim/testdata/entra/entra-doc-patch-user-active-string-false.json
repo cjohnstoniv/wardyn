@@ -1,0 +1,16 @@
+{
+  "source": "https://learn.microsoft.com/en-us/entra/identity/app-provisioning/application-provisioning-config-problem-scim-compatibility",
+  "captured": false,
+  "body": {
+    "schemas": [
+      "urn:ietf:params:scim:api:messages:2.0:PatchOp"
+    ],
+    "Operations": [
+      {
+        "op": "Replace",
+        "path": "active",
+        "value": "False"
+      }
+    ]
+  }
+}

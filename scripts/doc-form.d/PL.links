@@ -1,0 +1,6 @@
+# The must-link rule in scripts/check-doc-links.sh applies to these docs.
+docs/PLUGGABILITY.md
+docs/VERIFY.md
+docs/EXPORT.md
+docs/RECORDING-ROOT-READ.md
+docs/adoption/README.md

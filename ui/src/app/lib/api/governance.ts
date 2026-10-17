@@ -12,13 +12,25 @@
 // holding four interfaces nothing else imports is a file to keep in sync for no
 // reader. Move them to lib/types/governance.ts the day a second domain needs
 // them.
-import type { CapabilitySubjectType, ConfinementClass, RunPolicySpec } from "../types";
-import { asJson, errText, HttpError, unwrapList, wfetch } from "./core";
+import type {
+  CapabilitySubjectType,
+  ConfinementClass,
+  GovernanceChange,
+  PolicyContact,
+  PushRulesSpec,
+  ResourceLimits,
+  RunPolicySpec,
+} from "../types";
+import type { PlacementValue } from "../types/new-run-contract";
+import { USER_TYPE_STANDARD } from "../types/user-types";
+import { asJson, errEnvelope, errText, HttpError, throwIfPending, unwrapList, wfetch } from "./core";
 
 // types.GovernanceLimits. ALL are `omitempty` on the wire, so an unrestricted
 // profile arrives with the keys absent — optional here for the same reason,
 // and `!!limits.deny_x` is how every read is written.
 export interface GovernanceLimits extends RunLimits {
+  // Default deny; runner-reported confinement does not grant platform attestation.
+  local_self_defined_components?: boolean;
   deny_task_mode_exec?: boolean;
   deny_interactive?: boolean;
   // types.GovernanceLimits.DenyUIApps (#1391). The editor has no row for it
@@ -29,8 +41,22 @@ export interface GovernanceLimits extends RunLimits {
   // user drive even when one is allocated to the person; denyUserDrive's 403
   // is what enforces it, and this is only what the editor authors.
   deny_user_drive?: boolean;
+  // types.GovernanceLimits.DenyMemberDrives — refuses creating a member drive
+  // under this profile, on top of the org's storage.user_drive.member_create.
+  // False/absent inherits the org switch. The limits editor has no row for it
+  // yet and saves the stored value back unchanged; composing a profile moves it
+  // into the overlay through LIMIT_FIELDS (profile-overlay.tsx).
+  deny_member_drives?: boolean;
+  // types.GovernanceLimits.DenyPlacements (0.9, #114) — the placements a run
+  // under this profile may not take. A deny list: absent means every placement
+  // is permitted. The server refuses a profile denying both.
+  deny_placements?: PlacementValue[];
   // 0/absent is unlimited (R4/F032). The editor's LimitNumberRow writes this.
   max_concurrent_runs?: number;
+  // types.GovernanceLimits.MaxCPUMillis / MaxMemoryMiB — the sandbox CPU and
+  // memory ceilings. 0/absent is unlimited. A CLAMP, like the disk one below.
+  max_cpu_millis?: number;
+  max_memory_mib?: number;
   // types.GovernanceLimits.MaxEphemeralDiskMiB (0.7.2) — the ephemeral scratch
   // ceiling. 0/absent is unlimited. A CLAMP, not a refusal: a run asking for
   // more is capped at dispatch and warned, never 403'd.
@@ -65,9 +91,10 @@ export interface RunLimits {
 // stay internal; the console renders plain labels (#93), not spelled here yet.
 export type AutonomyLevel = "L0" | "L1" | "L2" | "L3";
 
-// types.AutonomyRubric — nine closed fields, three egress postures, three
-// secret postures, three confinement classes, each absent (caps nothing) or
-// one of the four levels. See internal/types/governance.go for what each
+// types.AutonomyRubric — nine closed level fields (three egress postures, three
+// secret postures, three confinement classes), each absent (caps nothing) or
+// one of the four levels, and one boolean, agent_guardrail_locks, that caps no
+// level. See internal/types/governance.go for what each
 // posture means.
 export interface AutonomyRubric {
   egress_open?: AutonomyLevel;
@@ -79,13 +106,15 @@ export interface AutonomyRubric {
   confinement_cc1?: AutonomyLevel;
   confinement_cc2?: AutonomyLevel;
   confinement_cc3?: AutonomyLevel;
+  // Selects the locked L2 managed-settings document for an L2 run; caps no level and is not a row.
+  agent_guardrail_locks?: boolean;
 }
 
-// One of AutonomyRubric's nine own field names — what internal/composer/
+// One of AutonomyRubric's nine level-capping field names — what internal/composer/
 // autonomy.go's applicableAutonomyCaps names a cap by, and what
 // AutonomyResolution.BoundBy (below) carries. keyof, not a hand-typed union,
 // so the two can never drift apart.
-export type AutonomyRubricRowKey = keyof AutonomyRubric;
+export type AutonomyRubricRowKey = Exclude<keyof AutonomyRubric, "agent_guardrail_locks">;
 
 // applicableAutonomyCaps' own fixed field order (internal/composer/
 // autonomy.go) — egress, then secrets, then confinement — the order
@@ -124,6 +153,11 @@ export interface AutonomyPosture {
   confinement: ConfinementClass;
 }
 
+// What bound_by can name: a rubric row, or the organisation's cap on runs that
+// carry a component the launcher defined (Go componentAutonomyCause,
+// internal/api/runs_autonomy_components.go; wire-parity pins the spelling).
+export type AutonomyBoundKey = AutonomyRubricRowKey | "custom_component";
+
 // types.AutonomyResolution (0.8 #97/#93) — what resolveRunAutonomy decided for
 // one run: the level, the posture that produced it, and every rubric row that
 // bound the result.
@@ -137,10 +171,37 @@ export interface AutonomyPosture {
 export interface AutonomyResolution {
   level: AutonomyLevel;
   posture: AutonomyPosture;
-  bound_by?: AutonomyRubricRowKey[];
+  bound_by?: AutonomyBoundKey[];
 }
 
-// types.GovernanceProfile — one named, assignable ceiling.
+// types.CeilingOverlay (0.8.6) — the part of a RunPolicySpec a composed profile narrows. Every member
+// is optional because PRESENCE is the meaning: absent inherits the base, present (even an empty list) is
+// a value. allowed_methods and azure_devops_capabilities may not be empty (an empty list reads as
+// "everything"; the server refuses it). resources and push_rules are narrowed per field.
+export type CeilingOverlay = Partial<Omit<RunPolicySpec, "resources" | "push_rules">> & {
+  resources?: ResourceLimits;
+  push_rules?: PushRulesSpec;
+};
+
+// types.LimitsOverlay (0.8.6) — CeilingOverlay's counterpart for GovernanceLimits, run-limit fields
+// flat on the object as they are on `limits`.
+export type LimitsOverlay = GovernanceLimits;
+
+// governanceEffective (0.8.6) — what a profile resolves to once composed from its chain. On a
+// standalone profile it is the stored ceiling and limits as resolved. ADMIN surfaces only: `warnings`
+// and `error` carry base-level detail (a base's name) that never reaches a member. `error` is set, and
+// ceiling and limits empty, when the chain cannot be composed.
+export interface GovernanceEffective {
+  ceiling: RunPolicySpec;
+  limits: GovernanceLimits;
+  warnings?: string[];
+  error?: string;
+}
+
+// types.GovernanceProfile — one named, assignable ceiling. A composed profile (overlay set) stores
+// `ceiling: {}` and `limits: {}` and states its policy as base_profile_id (absent: the deployment
+// default) plus overlay and overlay_limits; `effective` is what binds. A write that omits
+// base_profile_id, overlay or overlay_limits keeps the stored value and null clears it.
 export interface GovernanceProfile {
   id: string;
   name: string;
@@ -149,6 +210,12 @@ export interface GovernanceProfile {
   created_at: string;
   updated_at: string;
   created_by?: string;
+  contact?: PolicyContact;
+  base_profile_id?: string;
+  overlay?: CeilingOverlay;
+  overlay_limits?: LimitsOverlay;
+  // governanceProfileView.Effective: on GET /governance and the write responses.
+  effective?: GovernanceEffective;
 }
 
 // types.GovernanceAssignment — one subject bound to one profile.
@@ -174,6 +241,13 @@ export interface GovernanceProfileInput {
   name: string;
   ceiling: RunPolicySpec;
   limits: GovernanceLimits;
+  // Omitted keeps the stored contact; null clears it (internal/api: a PUT that
+  // omits `contact` keeps it, `null` or `{}` clears it).
+  contact?: PolicyContact | null;
+  // Composition (0.8.6): absent keeps the stored value on a PUT, null clears it.
+  base_profile_id?: string | null;
+  overlay?: CeilingOverlay | null;
+  overlay_limits?: LimitsOverlay | null;
 }
 
 // governanceProfileResponse: the saved row plus the OMISSION warnings the
@@ -207,6 +281,9 @@ export interface GovernanceAssignmentInput {
 export interface GovernancePreviewInput {
   user_subjects: string[];
   groups: string[];
+  // The ordinary human type id both previews send. An empty value means "no type tier" to the
+  // server, which is not what a signed-in person's run is given.
+  user_type: string;
 }
 
 // One kind-LESS claims textarea onto the two typed wire lists both previews
@@ -229,6 +306,7 @@ export function previewClaims(claims: string): GovernancePreviewInput {
   return {
     user_subjects: [...lines].sort((a, b) => Number(a.includes("@")) - Number(b.includes("@"))),
     groups: lines,
+    user_type: USER_TYPE_STANDARD,
   };
 }
 
@@ -297,8 +375,10 @@ export const governance = {
   // "already gone" — the row is absent either way, which is what was asked for.
   async deleteProfile(id: string): Promise<void> {
     const res = await wfetch(`/governance/profiles/${encodeURIComponent(id)}`, { method: "DELETE" });
+    await throwIfPending(res);
     if (!res.ok && res.status !== 404) {
-      throw new HttpError(res.status, await errText(res));
+      const { message, reason } = await errEnvelope(res);
+      throw new HttpError(res.status, message, reason);
     }
   },
 
@@ -315,6 +395,7 @@ export const governance = {
   // way to widen a principal back to the deployment ceiling.
   async deleteAssignment(id: string): Promise<void> {
     const res = await wfetch(`/governance/assignments/${encodeURIComponent(id)}`, { method: "DELETE" });
+    await throwIfPending(res);
     if (!res.ok && res.status !== 404) {
       throw new HttpError(res.status, await errText(res));
     }
@@ -332,6 +413,31 @@ export const governance = {
   async previewGovernance(input: GovernancePreviewInput): Promise<GovernancePreview> {
     const res = await wfetch("/governance/preview", { method: "POST", body: JSON.stringify(input) });
     return asJson<GovernancePreview>(res);
+  },
+
+  // GET /api/v1/governance/changes -> the pending changes (the server's default state), newest first. A
+  // change of a kind the caller may not approve is not listed.
+  async listChanges(): Promise<GovernanceChange[]> {
+    const res = await wfetch("/governance/changes", { method: "GET" });
+    return unwrapList<GovernanceChange>(await asJson<GovernanceChange[] | null>(res));
+  },
+
+  // POST /api/v1/governance/changes/{id}/approve -> 200 the change, applied. The server judges who may
+  // approve (another human, with the authority to make that write): a 403 or 409 reaches the caller as an
+  // HttpError whose message is its own sentence.
+  async approveChange(id: string): Promise<GovernanceChange> {
+    const res = await wfetch(`/governance/changes/${encodeURIComponent(id)}/approve`, { method: "POST" });
+    return asJson<GovernanceChange>(res);
+  },
+
+  // POST /api/v1/governance/changes/{id}/reject -> 200 the change, rejected. The reason is optional and is
+  // kept on the change and in the audit trail; the proposer may reject their own change.
+  async rejectChange(id: string, reason: string): Promise<GovernanceChange> {
+    const res = await wfetch(`/governance/changes/${encodeURIComponent(id)}/reject`, {
+      method: "POST",
+      body: JSON.stringify(reason ? { reason } : {}),
+    });
+    return asJson<GovernanceChange>(res);
   },
 };
 

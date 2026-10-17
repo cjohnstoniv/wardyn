@@ -49,7 +49,7 @@ Wardyn is distributed through four channels:
 | channel | what it is |
 |---|---|
 | **Source** | this git repository |
-| **Container images** | `ghcr.io/cjohnstoniv/{wardynd,wardyn-proxy,agent-base,agent-codex-cli,agent-aws-sso,agent-vscode,agent-novnc}` |
+| **Container images** | `ghcr.io/cjohnstoniv/{wardynd,wardynd-fips,wardyn-proxy,agent-base,agent-codex-cli,agent-aws-sso,agent-vscode,agent-novnc}` |
 | **CLI binaries** | `wardyn-{linux,darwin}-{amd64,arm64}`, attached to each GitHub release |
 | **Helm chart** | pushed to `oci://ghcr.io/cjohnstoniv/charts` on release; also installable straight from this repo |
 
@@ -66,6 +66,10 @@ matrix. What such a build then downloads from a vendor — Anthropic's Claude
 Code, a JDK — arrives under **that vendor's** terms, direct from that vendor
 to you. Wardyn neither relicenses it nor conveys it; the Dockerfile is a
 recipe, not a distribution.
+
+The `harnesses` image (Claude Code and Codex in one sandbox, `make
+agent-image-harnesses`) is a local build only, for the same reason: it layers on
+`claude-code`.
 
 **Wardyn's own code and all of its dependencies are permissively licensed.** Every
 Go module compiled into the shipped binaries and every npm package bundled into

@@ -5,6 +5,7 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"net/http"
 	"strings"
 	"time"
@@ -80,9 +81,10 @@ func providerStoreReadRefusal(name string, err error) (status int, reason, body 
 // generic arm below takes.
 //
 // It trusts the provider record, never the grant, for where the key goes: the
-// provider is re-read by UID on every resolve and must still be the run's
-// choice, on, serving its agent and of a kind with a key; the host, header and
-// format it derives must equal the grant's. Every miss fails closed.
+// provider is re-read by UID on every resolve and must still be the one the
+// run was launched with for the grant's harness (sinkHarnessProvider), on,
+// serving that harness and of a kind with a key; the host, header and format
+// it derives must equal the grant's. Every miss fails closed.
 func (s *Server) resolveProviderKeyInjection(w http.ResponseWriter, r *http.Request,
 	claims *identity.Claims, minted broker.Minted, grantID uuid.UUID,
 ) bool {
@@ -116,11 +118,15 @@ func (s *Server) resolveProviderKeyInjection(w http.ResponseWriter, r *http.Requ
 	if err != nil {
 		return fail(http.StatusServiceUnavailable, "providers_unreadable", providerKeyRecordUnreadable)
 	}
-	p, found := modelProviderByID(sc.ModelProviders, run.ModelProviderID)
-	if !found || p.UID != rec.ProviderUID || p.Disabled || !p.Serves(run.Agent) {
+	harness, providerID, launched, err := s.sinkHarnessProvider(ctx, run, rec.Harness)
+	if err != nil {
+		return fail(http.StatusServiceUnavailable, "run_unreadable", providerKeyRecordUnreadable)
+	}
+	p, found := modelProviderByID(sc.ModelProviders, providerID)
+	if !launched || !found || p.UID != rec.ProviderUID || p.Disabled || !p.Serves(harness) {
 		return fail(http.StatusForbidden, "provider_changed", providerKeyChanged)
 	}
-	host, header, format, ok := providerKeyDestination(p, run.Agent)
+	host, header, format, ok := providerKeyDestination(p, harness)
 	if !ok || !hostEqual(minted.Injection.Host, host) ||
 		minted.Injection.Header != header || minted.Injection.Format != format {
 		return fail(http.StatusForbidden, "provider_changed", providerKeyChanged)
@@ -133,11 +139,8 @@ func (s *Server) resolveProviderKeyInjection(w http.ResponseWriter, r *http.Requ
 		return fail(http.StatusFailedDependency, "own_key_absent", providerKeyAbsent)
 	}
 	formatted := formatInjectionValue(format, secret)
-	if s.cfg.MaskRegistry != nil {
-		s.cfg.MaskRegistry.Add(claims.RunID, secret)
-		if formatted != string(secret) {
-			s.cfg.MaskRegistry.Add(claims.RunID, []byte(formatted))
-		}
+	if s.refuseUnmasked(w, r, claims, "injection.resolve", secret, []byte(formatted)) {
+		return true
 	}
 	s.recordAudit(ctx, s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
 		"secret.read", name, "success", mustJSON(withStoreRow(map[string]any{
@@ -150,4 +153,26 @@ func (s *Server) resolveProviderKeyInjection(w http.ResponseWriter, r *http.Requ
 		ExpiresAt: time.Now().Add(providerKeyRecheck).UnixMilli(),
 	})
 	return true
+}
+
+// sinkHarnessProvider is the harness a provider-authored grant serves and the
+// model provider id the run was launched with for it: the run row's own for its
+// agent (and for a grant naming no harness, authored before the harness set),
+// a run_harnesses row's for any other harness of its set. launched=false is a
+// harness the run was not launched with, or one granted no provider: the grant
+// serves nothing. err is a harness set that could not be read.
+func (s *Server) sinkHarnessProvider(ctx context.Context, run types.AgentRun, harness string) (h, providerID string, launched bool, err error) {
+	if harness == "" || harness == run.Agent {
+		return run.Agent, run.ModelProviderID, true, nil
+	}
+	pairs, err := s.runHarnessPairs(ctx, run)
+	if err != nil {
+		return "", "", false, err
+	}
+	for _, p := range pairs {
+		if p.Harness == harness && p.ModelProviderID != "" {
+			return p.Harness, p.ModelProviderID, true, nil
+		}
+	}
+	return harness, "", false, nil
 }

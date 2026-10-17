@@ -18,7 +18,7 @@
 //     -run-token (or WARDYN_RUN_TOKEN env). Used when the
 //     control plane is reachable from the agent container.
 //     An asciinema cast goes up in parts while it records
-//     (tail.go); a .log goes up whole at exit.
+//     (tail.go); a .log goes up in one request at exit.
 //
 // -upload-url takes precedence. The control plane's launcher (RecorderArgv,
 // internal/runner/sandbox.go) never passes both: when an upload URL is offered
@@ -34,6 +34,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"flag"
 	"fmt"
@@ -47,6 +48,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/cjohnstoniv/wardyn/internal/recording"
 )
 
 // uploadDialTimeout/uploadClientTimeout bound how long a finished task can be
@@ -126,6 +129,9 @@ func run(args []string) error {
 		// using syscall.Exec (which never returns), we run asciinema as a
 		// child when delivery options are set so we can upload afterwards.
 		cast := castFile(*castDir, *runID)
+		if err := removeStaleRecording(cast); err != nil {
+			return err
+		}
 		if *outDir == "" && *uploadURL == "" {
 			// No delivery: original fast-path — exec asciinema directly.
 			return execAsciinema(path, cast, agentArgv)
@@ -142,7 +148,7 @@ func run(args []string) error {
 	}
 
 	// Fallback: plain log capture. A .log has no header to re-prefix, so it
-	// uploads whole at exit rather than in parts.
+	// uploads in one PUT at exit rather than in parts (uploadLog).
 	log := logFile(*castDir, *runID)
 	exitCode, err := recordToLog(log, agentArgv)
 	if err != nil {
@@ -150,7 +156,7 @@ func run(args []string) error {
 	}
 	var upload func() error
 	if *uploadURL != "" {
-		upload = func() error { return uploadCast(log, *uploadURL, *runToken) }
+		upload = func() error { return uploadLog(log, *uploadURL, *runToken) }
 	}
 	return deliverAndExit(log, *outDir, upload, exitCode)
 }
@@ -175,6 +181,22 @@ func deliverAndExit(srcPath, outDir string, upload func() error, exitCode int) e
 
 func castFile(dir, runID string) string { return filepath.Join(dir, runID+".cast") }
 func logFile(dir, runID string) string  { return filepath.Join(dir, runID+".log") }
+
+// removeStaleRecording deletes the cast and exit sidecar a previous wardyn-rec
+// call under the same run id left behind. A wrapped image runs two recorded
+// Execs in one sandbox (the selftest, then the task): asciinema refuses to
+// record over the selftest's non-empty cast and exits without running the
+// task, and the selftest's exit file would then be read back as the task's
+// code. An absent file is fine; any other failure refuses, and it runs before
+// the tail uploader so nothing is uploaded from a cast this call did not make.
+func removeStaleRecording(cast string) error {
+	for _, p := range []string{cast, agentExitFile(cast)} {
+		if err := os.Remove(p); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("remove stale recording file: %w", err)
+		}
+	}
+	return nil
+}
 
 // execAsciinema replaces the current process with asciinema (no return on
 // success). Used when no post-recording delivery is needed.
@@ -207,12 +229,14 @@ func runAsciinema(asciinemaPath, cast string, agentArgv []string) (int, error) {
 	cmd.Stderr = os.Stderr
 	runErr := cmd.Run()
 	// Prefer the sidecar exit code (the agent's true $?) when the trailer wrote
-	// it — this is the load-bearing value, not asciinema's own.
+	// it — this is the load-bearing value, not asciinema's own. run removes any
+	// earlier call's sidecar first, so a file found here is this call's.
 	if code, ok := readAgentExitFile(cast); ok {
 		return code, nil
 	}
-	// No sidecar (e.g. the shell died before the trailer ran): fall back to
-	// asciinema's exit code, which at least catches a hard recorder failure.
+	// No fresh sidecar (e.g. the shell died before the trailer ran, or asciinema
+	// refused to start): return asciinema's own exit code, which at least
+	// catches a hard recorder failure.
 	if runErr != nil {
 		var exitErr *exec.ExitError
 		if errors.As(runErr, &exitErr) {
@@ -305,25 +329,17 @@ func deliver(srcPath, outDir string, upload func() error) error {
 	return nil
 }
 
-// copyToDir copies srcPath into dstDir, keeping only the base filename.
 func copyToDir(srcPath, dstDir string) error {
-	if err := os.MkdirAll(dstDir, 0o750); err != nil {
-		return fmt.Errorf("mkdir: %w", err)
+	store, err := recording.NewFSStore(dstDir)
+	if err != nil {
+		return err
 	}
-	dst := filepath.Join(dstDir, filepath.Base(srcPath))
 	src, err := os.Open(srcPath)
 	if err != nil {
 		return fmt.Errorf("open src: %w", err)
 	}
 	defer src.Close()
-
-	f, err := os.Create(dst)
-	if err != nil {
-		return fmt.Errorf("create dst: %w", err)
-	}
-	defer f.Close()
-	_, err = io.Copy(f, src)
-	return err
+	return store.SaveRecordingFile(context.Background(), filepath.Base(srcPath), src)
 }
 
 // uploadCast PUTs the recording file to uploadURL with Bearer auth. The server
@@ -345,15 +361,55 @@ func uploadCast(srcPath, uploadURL, runToken string) error {
 	return putCast(data, uploadURL, runToken)
 }
 
+// maxLogUploadBytes is the control plane's single-PUT body cap
+// (maxRecordingUploadBytes, internal/api/recording.go): a log up to it uploads
+// complete, a longer one cannot be accepted at all.
+const maxLogUploadBytes = 64 << 20
+
+// logMarkerReserve is the room kept under the cap for the truncation marker.
+const logMarkerReserve = 512
+
+// uploadLog PUTs a plain .log in one request, streaming it from the file so a
+// large log is never held in memory. A log within the server's cap goes up
+// complete. A longer one, which the server would refuse whole, goes up as a
+// bounded prefix followed by a marker saying it is cut; the file itself is
+// untouched, so the local and out-dir copies stay complete.
+func uploadLog(srcPath, uploadURL, runToken string) error {
+	f, err := os.Open(srcPath)
+	if err != nil {
+		return fmt.Errorf("open log: %w", err)
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return fmt.Errorf("stat log: %w", err)
+	}
+	size := info.Size()
+	if size <= maxLogUploadBytes {
+		return putBody(io.NewSectionReader(f, 0, size), size, uploadURL, runToken)
+	}
+	keep := int64(maxLogUploadBytes - logMarkerReserve)
+	marker := fmt.Sprintf("\n[wardyn-rec: log truncated: the first %d of %d bytes were uploaded; the rest was not]\n", keep, size)
+	return putBody(io.MultiReader(io.NewSectionReader(f, 0, keep), strings.NewReader(marker)),
+		keep+int64(len(marker)), uploadURL, runToken)
+}
+
 // putCast is uploadCast's request, shared with the tail uploader's parts.
 func putCast(data []byte, uploadURL, runToken string) error {
+	return putBody(bytes.NewReader(data), int64(len(data)), uploadURL, runToken)
+}
+
+// putBody PUTs n bytes from body. The length is declared, so the request is
+// never chunked, and the client deadline scales with it (uploadTimeout).
+func putBody(body io.Reader, n int64, uploadURL, runToken string) error {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.DialContext = (&net.Dialer{Timeout: uploadDialTimeout}).DialContext
-	client := &http.Client{Timeout: uploadTimeout(len(data)), Transport: transport}
-	req, err := http.NewRequest(http.MethodPut, uploadURL, bytes.NewReader(data))
+	client := &http.Client{Timeout: uploadTimeout(int(n)), Transport: transport}
+	req, err := http.NewRequest(http.MethodPut, uploadURL, body)
 	if err != nil {
 		return fmt.Errorf("build request: %w", err)
 	}
+	req.ContentLength = n
 	req.Header.Set("Content-Type", "application/x-asciicast")
 	if runToken != "" {
 		req.Header.Set("Authorization", "Bearer "+runToken)
@@ -365,8 +421,8 @@ func putCast(data []byte, uploadURL, runToken string) error {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return fmt.Errorf("server returned %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return fmt.Errorf("server returned %d: %s", resp.StatusCode, strings.TrimSpace(string(b)))
 	}
 	return nil
 }

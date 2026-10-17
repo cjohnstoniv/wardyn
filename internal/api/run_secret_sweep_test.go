@@ -52,7 +52,7 @@ func TestSweepRunSecrets(t *testing.T) {
 	cfg.MaskRegistry = reg
 	srv := New(cfg)
 
-	if n := srv.SweepRunSecrets(context.Background()); n != 1 {
+	if n, _ := srv.SweepRunSecrets(context.Background()); n != 1 {
 		t.Fatalf("evicted = %d, want 1 (only the cold terminal run)", n)
 	}
 	if snap := reg.Snapshot(cold.ID); len(snap) != 0 {
@@ -66,7 +66,7 @@ func TestSweepRunSecrets(t *testing.T) {
 	}
 
 	// Idempotent: a second pass finds nothing left to evict.
-	if n := srv.SweepRunSecrets(context.Background()); n != 0 {
+	if n, _ := srv.SweepRunSecrets(context.Background()); n != 0 {
 		t.Errorf("second sweep evicted = %d, want 0", n)
 	}
 }
@@ -76,7 +76,7 @@ func TestSweepRunSecrets(t *testing.T) {
 func TestSweepRunSecrets_NoRegistry(t *testing.T) {
 	h := newHarness(t)
 	srv := New(baseTestConfig(h, &sweepStore{runs: []types.AgentRun{agedRun(types.RunCompleted, 2*RunSecretGrace)}}))
-	if n := srv.SweepRunSecrets(context.Background()); n != 0 {
+	if n, _ := srv.SweepRunSecrets(context.Background()); n != 0 {
 		t.Fatalf("evicted = %d, want 0 with no registry", n)
 	}
 }

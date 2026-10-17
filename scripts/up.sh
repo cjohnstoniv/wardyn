@@ -38,6 +38,8 @@ ENV_FILE="${REPO_ROOT}/deploy/compose/.env"
 ENV_EXAMPLE="${REPO_ROOT}/deploy/compose/.env.example"
 
 . "${REPO_ROOT}/scripts/lib/common.sh"
+# shellcheck source=scripts/lib/runner-limits.sh
+. "${REPO_ROOT}/scripts/lib/runner-limits.sh"
 # reset / reset-all machinery — split into its own sourced sibling to keep
 # this file under the file-size gate (scripts/check-file-size.sh); see
 # scripts/up-reset.sh for why it's safe to source before REPO_ROOT's other
@@ -211,7 +213,7 @@ host_goarch() {
 # binary out of one of those images and executes it ON THE HOST.
 IMAGES_ORIGIN=built
 
-# cosign_verify REF — 0 verified, 1 verification FAILED, 2 cosign not installed.
+# cosign_verify REF VERSION — 0 verified, 1 verification FAILED, 2 cosign not installed.
 # Both halves, because they answer different questions: the signature says who
 # built the image, the CycloneDX attestation says what is inside it (VERIFY.md
 # s2 makes exactly this point). A caller that treats 2 as 0 is back to
@@ -220,17 +222,19 @@ IMAGES_ORIGIN=built
 # The identity + issuer are the same two values docs/VERIFY.md s1/s2 tell an
 # operator to paste, and they live INSIDE the function so extracting it
 # (scripts/test-up-probes.sh C4) yields something that actually runs.
-# Keyless: the check is "built by THIS repo's release workflow, from a tag",
-# not "signed by a key someone holds".
+# Keyless: the check is "built by THIS repo's release workflow, at the tag being
+# installed", not "signed by a key someone holds" and not "signed at some tag":
+# the identity is exact (no regexp), so another release's signature is refused.
 cosign_verify() {
   command -v cosign >/dev/null 2>&1 || return 2
-  COSIGN_ID_RE='^https://github\.com/cjohnstoniv/wardyn/\.github/workflows/release\.yml@refs/tags/v.*$'
+  [ -n "${2:-}" ] || return 1 # no version to bind the signer to: refuse, never fall back to "any tag"
+  COSIGN_ID="https://github.com/cjohnstoniv/wardyn/.github/workflows/release.yml@refs/tags/v${2}"
   COSIGN_ISSUER='https://token.actions.githubusercontent.com'
   cosign verify \
-    --certificate-identity-regexp "${COSIGN_ID_RE}" \
+    --certificate-identity "${COSIGN_ID}" \
     --certificate-oidc-issuer "${COSIGN_ISSUER}" "$1" >/dev/null 2>&1 || return 1
   cosign verify-attestation --type cyclonedx \
-    --certificate-identity-regexp "${COSIGN_ID_RE}" \
+    --certificate-identity "${COSIGN_ID}" \
     --certificate-oidc-issuer "${COSIGN_ISSUER}" "$1" >/dev/null 2>&1 || return 1
   return 0
 }
@@ -546,7 +550,7 @@ cmd_up() {
           # VERIFY BEFORE USE. A pull by tag proves nothing; this is docs/VERIFY.md
           # s1+s2 run for you when cosign is here. rc 2 = no cosign, which is not a
           # failed check but an ABSENT one — keep the images, downgrade the claim.
-          _cv=0; cosign_verify "$remote" || _cv=$?
+          _cv=0; cosign_verify "$remote" "$ver" || _cv=$?
           if [ "${_cv}" = 1 ]; then
             warn "cosign could NOT verify ${remote} against this repo's release workflow — refusing it and building from source instead (docs/VERIFY.md s1)."
             pulled_all=false
@@ -704,6 +708,14 @@ cmd_up() {
     [ -n "${_cid}" ] || _cid=$(compose ps -q wardynd 2>/dev/null || true)
   done
   log "wardynd is healthy"
+
+  # The server's Docker runner takes no run until it has limits, and the server sets them at boot only when
+  # it measured every amount; in a container it cannot see the disk (scripts/lib/runner-limits.sh).
+  # shellcheck disable=SC2317 # called by wardyn_ensure_runner_limits
+  wardyn() { compose exec -T -e WARDYN_URL=http://localhost:8080 wardynd /usr/local/bin/wardyn "$@"; }
+  wardyn_ensure_runner_limits \
+    || die "the server's runner has no limits, so no run can start — set WARDYN_SETUP_RUNNER_DISK_GB and run make setup again, or set them by hand (docs/operations/runner-pools.md#a-remote-hosted-runners-limits)"
+  unset -f wardyn
 
   # W1-S1-3: the pick above ran BEFORE wardynd existed — host_llm_key_present can
   # only see THIS process's env (*_API_KEY), never a

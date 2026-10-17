@@ -62,15 +62,18 @@ func (s PG) ListLapsedTokenRuns(ctx context.Context, life time.Duration) ([]type
 
 // MarkRunLost — see RunLoser.
 func (s PG) MarkRunLost(ctx context.Context, id uuid.UUID, reason types.LostReason, now time.Time, tokenLife time.Duration) (bool, error) {
-	tag, err := s.Pool.Exec(ctx, `
-		UPDATE agent_runs SET lost_at=$2, lost_reason=$3,
-			paused_at=CASE WHEN $3=$6 THEN NULL ELSE paused_at END,
-			paused_reason=CASE WHEN $3=$6 THEN '' ELSE paused_reason END
-		WHERE id=$1 AND state=$4 AND lost_at IS NULL
-		  AND ($5::interval = interval '0' OR token_renewed_at < now() - $5::interval)`,
+	tag, err := s.Pool.Exec(ctx, markRunLostSQL,
 		id, now, string(reason), string(types.RunRunning), tokenLife.String(), string(types.LostReboot))
 	if err != nil {
 		return false, fmt.Errorf("store: mark run lost: %w", err)
 	}
 	return tag.RowsAffected() > 0, nil
 }
+
+// Shared by the authenticated runner loss claim and the existing loss sweeper.
+const markRunLostSQL = `
+		UPDATE agent_runs SET lost_at=$2, lost_reason=$3,
+			paused_at=CASE WHEN $3=$6 THEN NULL ELSE paused_at END,
+			paused_reason=CASE WHEN $3=$6 THEN '' ELSE paused_reason END
+		WHERE id=$1 AND state=$4 AND lost_at IS NULL
+		  AND ($5::interval = interval '0' OR token_renewed_at < now() - $5::interval)`

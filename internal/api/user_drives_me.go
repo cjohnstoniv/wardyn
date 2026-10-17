@@ -47,7 +47,7 @@ type meUserDrive struct {
 // quiet is right: /me is a display read whose other fields the console needs to
 // render the shell at all, so a store hiccup must degrade the drive chip rather
 // than 500 the whole endpoint and log the human out of their own console. The
-// ENFORCEMENT path (seedRequestDrive) makes the opposite choice for the same
+// ENFORCEMENT path (seedRequestDrives) makes the opposite choice for the same
 // error, and must: mounting nothing where an admin allocated something is a
 // data loss, while showing nothing for a moment is a refresh.
 // A bare nil is not enough of an answer. Three distinct states the launch path
@@ -168,14 +168,14 @@ func (s *Server) resolveMeUserDrive(r *http.Request) (*meUserDrive, string) {
 // resolver's token in me.go, which closes that for the population where the
 // drive resolve also fails and changes nothing for this one.
 //
-// It reads driveDoorProfile — the SAME predicate denyUserDrive enforces with,
+// It reads driveDoorProfile — the SAME predicate userDriveDoorRefusal enforces with,
 // whose keying (operator exempt, unassigned member has no door) is documented
 // there. A ceiling that cannot be resolved reports "" for resolveMeUserDrive's
 // own reason — /me is a display read, and the ENFORCEMENT path answers the same
 // failure with a refusal. The operator short-circuit stays HERE too, ahead of
 // the resolve: a display read must not cost an operator a ceiling round-trip.
 func (s *Server) userDriveDeniedByProfile(r *http.Request) (name, unresolved string) {
-	if s.isOperator(r.Context()) {
+	if s.runUngoverned(r.Context()) {
 		return "", ""
 	}
 	// A display read, for the reason resolveMeUserDrive states: this is the

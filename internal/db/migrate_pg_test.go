@@ -30,6 +30,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/cjohnstoniv/wardyn/internal/testutil"
 )
 
 // pgPool connects to the live Postgres named by WARDYN_TEST_PG and runs Migrate()
@@ -90,10 +92,11 @@ func isConcurrentMigrateRace(err error) bool {
 // package shares. Mirrors throwawayDatabase
 // (internal/store/store_workspace_migration_pg_test.go) — this package can't
 // import that test-only helper across packages, so this is its minimum local
-// twin, for the one test here that mutates a live trigger on the audit table
-// (#1301: TestMigrateRestoresADisabledChainTrigger disabling the chain
-// trigger on the SHARED database left a trap for any whole-chain verifier
-// that later ran against it, even though this test itself always restored it).
+// twin. Every test here that mutates a trigger on the audit table, or rewrites
+// the shared schema_migrations table, uses it (#1301, #1318): disabling the
+// chain trigger on the SHARED database left a trap for any whole-chain
+// verifier that later ran against it, even though the test itself always
+// restored it.
 func pgPoolIsolated(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 	dsn := os.Getenv("WARDYN_TEST_PG")
@@ -215,11 +218,8 @@ func TestMigrateAdvisoryLockSerializesBoots(t *testing.T) {
 	pool := pgPool(t) // fully migrated; a lone Migrate() here is a clean no-op
 	ctx := context.Background()
 
-	holder, err := pool.Acquire(ctx)
-	if err != nil {
-		t.Fatalf("acquire holder conn: %v", err)
-	}
-	defer holder.Release()
+	holder := testutil.PGConn(t, pool)
+	defer func() { _ = holder.Close(ctx) }()
 	if _, err := holder.Exec(ctx, `SELECT pg_advisory_lock($1)`, migrateAdvisoryLockKey); err != nil {
 		t.Fatalf("hold migration advisory lock: %v", err)
 	}
@@ -292,8 +292,7 @@ func insertAuditEvent(t *testing.T, pool *pgxpool.Pool) uuid.UUID {
 	t.Helper()
 	id := uuid.New()
 	if _, err := pool.Exec(context.Background(), `
-		INSERT INTO audit_events (id, actor_type, actor, action, outcome)
-		VALUES ($1, 'system', 'tester', 'test.seed', 'success')`,
+		SELECT audit_append($1, now(), NULL, 'system', 'tester', 'test.seed', '', 'success', '', NULL)`,
 		id); err != nil {
 		t.Fatalf("seed audit_events row: %v", err)
 	}
@@ -415,7 +414,7 @@ func TestMigrateRestoresADisabledChainTrigger(t *testing.T) {
 // schema), so replaying it at boot to fix one trigger is a bigger blast radius
 // than refusing — but the process must not continue silently either.
 func TestMigrateRefusesWithoutTheAppendOnlyTrigger(t *testing.T) {
-	pool := pgPool(t)
+	pool := pgPoolIsolated(t)
 	ctx := context.Background()
 	const name = "audit_events_no_update"
 	if _, err := pool.Exec(ctx, `ALTER TABLE audit_events DISABLE TRIGGER `+name); err != nil {
@@ -423,7 +422,7 @@ func TestMigrateRefusesWithoutTheAppendOnlyTrigger(t *testing.T) {
 	}
 	t.Cleanup(func() {
 		if _, err := pool.Exec(ctx, `ALTER TABLE audit_events ENABLE TRIGGER `+name); err != nil {
-			t.Errorf("re-enable %s: %v — the shared audit_events table is left writable", name, err)
+			t.Errorf("re-enable %s: %v — the throwaway database's audit_events is left writable", name, err)
 		}
 	})
 	err := Migrate(ctx, pool)
@@ -461,7 +460,7 @@ func auditTriggerState(t *testing.T, pool *pgxpool.Pool, name string) string {
 // ensureAuditTriggers: the chain trigger's arm restores, the append-only arm
 // refuses.
 func TestMigrateLeavesAnAlwaysTriggerAlone(t *testing.T) {
-	pool := pgPool(t)
+	pool := pgPoolIsolated(t)
 	ctx := context.Background()
 	for _, name := range append([]string{auditChainTrigger}, auditAppendOnlyTriggers...) {
 		t.Run(name, func(t *testing.T) {
@@ -534,7 +533,7 @@ func unapplyMigrations(t *testing.T, pool *pgxpool.Pool, names []string) {
 // logged — and the boot check that follows read the resulting 'O' as the normal
 // shipped state. docs/OPERATIONS.md promises this never happens.
 func TestMigrateKeepsAnAlwaysTriggerAcrossAnUpgrade(t *testing.T) {
-	pool := pgPool(t)
+	pool := pgPoolIsolated(t)
 	ctx := context.Background()
 	pending := chainTriggerMigrations(t)
 

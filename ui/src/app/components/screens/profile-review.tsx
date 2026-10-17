@@ -45,7 +45,8 @@ import {
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Label } from "../ui/label";
-import { Mono, YamlBlock } from "../wardyn/code-block";
+import { Mono } from "../wardyn/code-block";
+import { YamlBlock } from "../wardyn/yaml-block";
 import { Chip, ConfinementChip, OperatorOnlyHint, RiskBadge } from "../wardyn/primitives";
 import { useOperator } from "../wardyn/operator-context";
 import { ErrorState, TableSkeleton } from "../wardyn/states";

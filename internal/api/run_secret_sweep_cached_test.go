@@ -23,7 +23,7 @@ func TestSweepRunSecrets_EvictsCacheOnlyRuns(t *testing.T) {
 	live := agedRun(types.RunRunning, 2*RunSecretGrace)
 
 	reg := secretmask.NewRegistry()
-	reg.AddGlobal("", "test-credential", time.Now(), []byte("a-process-global-secret"))
+	reg.AddGlobal(0, "", "test-credential", time.Now(), []byte("a-process-global-secret"))
 	// Neither run ever registered a per-run secret. Asking for a Masker is all
 	// it takes to cache one.
 	_ = reg.Masker(cold.ID)
@@ -33,11 +33,11 @@ func TestSweepRunSecrets_EvictsCacheOnlyRuns(t *testing.T) {
 	cfg.MaskRegistry = reg
 	srv := New(cfg)
 
-	if n := srv.SweepRunSecrets(context.Background()); n != 1 {
+	if n, _ := srv.SweepRunSecrets(context.Background()); n != 1 {
 		t.Fatalf("evicted = %d, want 1 (the cold terminal run's cached Masker)", n)
 	}
 	// Idempotent, and the live run's entry is untouched.
-	if n := srv.SweepRunSecrets(context.Background()); n != 0 {
+	if n, _ := srv.SweepRunSecrets(context.Background()); n != 0 {
 		t.Errorf("second sweep evicted = %d, want 0", n)
 	}
 }

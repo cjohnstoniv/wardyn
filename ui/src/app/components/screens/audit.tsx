@@ -19,7 +19,7 @@ import {
   CircleX,
 } from "lucide-react";
 import type { AuditEvent, ActorType, AgentRun } from "../../lib/types";
-import { runHeadline } from "../../lib/types";
+import { ERASED_VALUE, isNetworkFault, runHeadline } from "../../lib/types";
 import { AUDIT } from "./audit-copy";
 import { audit as api } from "../../lib/api/audit";
 import { LIST_LIMIT } from "../../lib/api/core";
@@ -46,8 +46,11 @@ import {
 } from "../wardyn/primitives";
 import { Mono } from "../wardyn/code-block";
 import { EmptyState, ErrorState, TableSkeleton, TruncatedNote } from "../wardyn/states";
-import { AuditDecision, RuleSourceChip, toolRuleDecision } from "../wardyn/audit-decision";
+import { AuditDecision, ErasedFields, RuleSourceChip, toolRuleDecision } from "../wardyn/audit-decision";
 import { PageHeader } from "../wardyn/page-header";
+import { Tabs, TabsList, TabsTrigger } from "../ui/tabs";
+import { RETENTION } from "../wardyn/copy/audit-retention";
+import { AuditRetention } from "./audit-retention";
 import { cn } from "../ui/utils";
 import { useSecurityOperator } from "../wardyn/operator-context";
 import { runPath, useConsoleMode, type ConsoleView } from "../wardyn/console-view";
@@ -141,13 +144,18 @@ const ACTION_VERB: Record<string, string> = {
   "run.revoke": "revoked the run's identity",
   "run.autostop": "auto-stopped the idle run",
   "run.reconcile": "reconciled run state",
+  // The EFFECTIVE policy the sandbox was actually given, recorded after every
+  // widening phase, so this is what the proxy enforces, not what was asked for.
+  "run.policy.resolve": "resolved the policy this run was given",
+  // The operator's corporate upstream proxy, resolved per dispatch. A failure
+  // row means the run went out with direct egress, not that the run was refused.
+  "run.upstream_proxy.resolve": "checked the corporate proxy setting for the run's egress",
   "run.workspace.collide": "detected a workspace directory collision",
   "run.requirement.allow": "applied a workspace's required egress to the run",
   "run.requirement.grant": "granted a workspace's required secret to the run",
   "run.requirement.inject": "applied a workspace's required integration to the run",
   "run.record.synthesize": "synthesized a least-privilege profile from the recording",
   "credential.mint": "minted a credential",
-  "credential.revoke": "revoked a credential",
   "identity.mint": "minted a workload identity",
   "identity.revoke": "revoked a workload identity",
   "run.bedrock.configure": "configured Bedrock model access for the run",
@@ -173,6 +181,8 @@ const ACTION_VERB: Record<string, string> = {
   "ssh.authenticate": "an ssh authentication attempt against a run's terminal",
   "ssh.exec": "ran a command over the run's ssh channel",
   "ssh.sftp.transfer": "an sftp session against the run's sandbox",
+  // pending H11-P2: recommended text until the owner answers; the packet names no label for wardyn sync's own row.
+  "ssh.sync.transfer": "a wardyn sync session against the run's sandbox",
   "ssh.forward": "an ssh port forward into the run's sandbox",
   "kernel.process.exec": "observed a process exec",
   "kernel.network.connect": "observed a network connect",
@@ -199,14 +209,35 @@ function capitalize(s: string): string {
 // llm.scan.* are dynamic families (the suffix is the decision/scan outcome), so
 // they're handled directly rather than enumerated in ACTION_VERB.
 function describeEvent(e: AuditEvent): string {
+  // An erased target reads as erased, never as the sentinel (surface D).
+  if (e.target === ERASED_VALUE) e = { ...e, target: AUDIT.ERASED };
   if (e.action.startsWith("egress.")) {
     const decision = e.action.slice("egress.".length);
-    const verb =
-      decision === "allow" ? "Allowed egress to" : decision === "deny" ? "Denied egress to" : "Deferred egress to";
+    const verb = isNetworkFault(e)
+      ? "Failed egress to"
+      : decision === "allow"
+        ? "Allowed egress to"
+        : decision === "deny"
+          ? "Denied egress to"
+          : "Deferred egress to";
     return `${verb} ${e.target || "an unknown host"}`;
   }
   if (e.action.startsWith("llm.scan.")) {
     return `LLM content scan (${e.action.slice("llm.scan.".length)}) for ${e.target || "an unknown host"}`;
+  }
+  if (e.action === "credential.revoke") return AUDIT.REVOKE_RUN_CREDENTIALS;
+  // "Removed" only on a row whose deletion happened; a failure row says what
+  // was not removed. Any other outcome reads as the raw line.
+  if (e.action === "credential.expired.delete" && (e.outcome === "success" || e.outcome === "failure")) {
+    const ok = e.outcome === "success";
+    const reason = e.data?.reason;
+    if (reason === "invalid_grant") {
+      if (e.data?.after_lost_reply === true) {
+        return ok ? AUDIT.EXPIRED_DELETE_LOST_REPLY : AUDIT.EXPIRED_DELETE_LOST_REPLY_FAILED;
+      }
+      return ok ? AUDIT.EXPIRED_DELETE_REFUSED : AUDIT.EXPIRED_DELETE_REFUSED_FAILED;
+    }
+    if (reason === "expired") return ok ? AUDIT.EXPIRED_DELETE_EXPIRED : AUDIT.EXPIRED_DELETE_EXPIRED_FAILED;
   }
   const verb = ACTION_VERB[e.action];
   if (verb) return e.target ? `${capitalize(verb)} — ${e.target}` : capitalize(verb);
@@ -277,6 +308,10 @@ export function AuditScreen() {
     (id: string) => setSearchParams(id ? { run_id: id } : {}, { replace: true }),
     [setSearchParams],
   );
+  // The Retention tab (mock packet M4) is the security tier's; everyone else
+  // has the feed alone.
+  const [tab, setTab] = React.useState<"events" | "retention">("events");
+  const showRetention = securityOperator && tab === "retention";
   const [kindFilter, setKindFilter] = React.useState<EventKind | "all">("all");
   const [actorFilter, setActorFilter] = React.useState<ActorType | "all">("all");
   const [groundTruth, setGroundTruth] = React.useState<{ state?: string; reason?: string }>();
@@ -337,7 +372,7 @@ export function AuditScreen() {
         setPollStale(true);
       });
   }, [fetchEvents]);
-  usePoll(tick, AUDIT_POLL_MS, status !== "ready");
+  usePoll(tick, AUDIT_POLL_MS, status !== "ready" || showRetention);
 
   // Monotonic guard: the runFilter effect below and a manual Retry can each
   // start a fetch, and either can still be in flight when the other starts
@@ -429,6 +464,19 @@ export function AuditScreen() {
         description="Append-only. Every egress decision, credential broker, approval, and enforcement action — across every run."
       />
 
+      {securityOperator && (
+        <Tabs value={tab} onValueChange={(v) => setTab(v as "events" | "retention")} className="mb-4">
+          <TabsList>
+            <TabsTrigger value="events">{RETENTION.TAB_EVENTS}</TabsTrigger>
+            <TabsTrigger value="retention">{RETENTION.TAB}</TabsTrigger>
+          </TabsList>
+        </Tabs>
+      )}
+
+      {showRetention ? (
+        <AuditRetention />
+      ) : (
+      <>
       <div className="mb-4 flex flex-wrap items-center gap-3">
         <div className="relative w-full max-w-sm">
           <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
@@ -578,6 +626,8 @@ export function AuditScreen() {
           ))}
         </div>
       )}
+      </>
+      )}
 
     </div>
   );
@@ -659,7 +709,10 @@ function EventOutcome({ e }: { e: AuditEvent }) {
     return <Chip tone="danger" className="border-danger bg-danger text-danger-foreground">Killed</Chip>;
   }
   if (e.action.startsWith("egress.")) {
-    const decision = e.action.slice("egress.".length);
+    // A network-fault deny prints "failed", not "deny": the connection was
+    // allowed and then broke. It takes the warning tone (a fault to look at, not
+    // a refusal), the same tone a held request uses.
+    const decision = isNetworkFault(e) ? "failed" : e.action.slice("egress.".length);
     const tone =
       decision === "allow" ? "text-success" : decision === "deny" ? "text-danger" : "text-warning";
     return <span className={cn("font-mono text-xs font-semibold", tone)}>{decision}</span>;
@@ -734,10 +787,11 @@ function EventRow({ event, onDrill }: { event: AuditEvent; onDrill: (runId: stri
         <AuditDecision event={event} className="flex min-w-0 flex-1 items-center gap-2 text-sm" />
       ) : (
         <span className="flex min-w-0 flex-1 items-center gap-2">
-          <span className="min-w-0 flex-1 truncate text-sm text-foreground" title={describeEvent(event)}>
+          <span className="min-w-[10rem] flex-1 truncate text-sm text-foreground" title={describeEvent(event)}>
             {describeEvent(event)}
           </span>
           <RuleSourceChip event={event} />
+          <ErasedFields event={event} className="shrink-0 text-xs" />
         </span>
       )}
       {event.run_id && (

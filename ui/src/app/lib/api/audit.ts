@@ -5,12 +5,21 @@
 
 // Audit log + the egress projection derived from audit events (the backend has
 // no /egress endpoint — egress decisions are read off audit rows).
-import type { AuditEvent, EgressDecision, Outcome, RunEnding, RunEndingKind, RunState } from "../types";
+import type {
+  AuditEvent,
+  AuditRetentionDrop,
+  AuditRetentionStatus,
+  EgressDecision,
+  Outcome,
+  RunEnding,
+  RunEndingKind,
+  RunState,
+} from "../types";
 // The tool-rule decision lives with the audit shapes it reads (lib/types/audit.ts)
 // so both the egress projection below and wardyn/audit-decision.tsx take it from
 // one place — lib/api must not import from components/.
-import { toolRuleDecision } from "../types";
-import { asJson, num, str, unwrapList, wfetch, withLimit } from "./core";
+import { isNetworkFault, toolRuleDecision } from "../types";
+import { asJson, errEnvelope, HttpError, num, str, unwrapList, wfetch, withLimit } from "./core";
 
 // The SOLE named table of pre-0.8 audit action names Wardyn's OWN readers of
 // PERSISTED rows still accept (owner ruling, 2026-09-25, #1062 — the TS twin
@@ -37,12 +46,25 @@ export function canonicalAuditAction(a: string): string {
   return LEGACY_AUDIT_ACTIONS[a] ?? a;
 }
 
+// An egress row replayed from a runner's offline spool (0.9, M-RN-3 RS7): the decision was made on the
+// runner while it was disconnected, so its own time is `observed_at` (spooled_at), not the arrival time the
+// chain records; and a `builtin:spool-full` denial is the runner refusing because its offline log was full
+// (spool_full), not a policy decision. Both are absent on every other row.
+// A run ending, with the one fact a runner's revocation adds: the runner was revoked, and was connected or
+// not when it happened (the run.kill row's runner_online). Absent on every other ending.
+export type RunEndingFacts = RunEnding & { runnerRevoked?: { online: boolean } };
+
+export type SpooledEgressDecision = EgressDecision & { spooled_at?: string; spool_full?: boolean };
+
+// The rule_source of the refusal a runner records when its offline log is full (internal/runnerspool).
+const SPOOL_FULL_RULE = "builtin:spool-full";
+
 // Project egress.allow / egress.deny / egress.hold audit events into
 // the EgressDecision shape the run-detail screen renders. Exported so callers
 // that already hold a run's audit events can derive egress WITHOUT a second
 // /audit round-trip.
-export function egressFromAudit(events: AuditEvent[]): EgressDecision[] {
-  const map: Record<string, "allow" | "deny" | "pending"> = {
+export function egressFromAudit(events: AuditEvent[]): SpooledEgressDecision[] {
+  const map: Record<string, EgressDecision["decision"]> = {
     "egress.allow": "allow",
     "egress.deny": "deny",
     "egress.hold": "pending",
@@ -64,12 +86,16 @@ export function egressFromAudit(events: AuditEvent[]): EgressDecision[] {
         id: e.id,
         time: e.time,
         domain,
-        decision: map[action],
+        // A dial-failed / tunnel-failed row is an egress.deny on the wire but a
+        // network fault, not a refusal: it reads "failed".
+        decision: isNetworkFault(e) ? "failed" : map[action],
         bytes: num(d.bytes),
         // B3: only egress.hold stamps one (docs/AUDIT-ACTIONS.md); str()
         // answers undefined for the other two actions and for an older trail.
         approval_id: str(d.approval_id),
-      } satisfies EgressDecision;
+        ...(d.spooled === true && str(d.observed_at) ? { spooled_at: str(d.observed_at) } : {}),
+        ...(str(d.rule_source) === SPOOL_FULL_RULE ? { spool_full: true } : {}),
+      } satisfies SpooledEgressDecision;
     });
 }
 
@@ -196,14 +222,25 @@ const FAILED_CAUSE: Record<string, RunEndingKind> = {
 // sentence.
 const CREDENTIAL_REASON = "model_credential";
 
+// The reasons dispatch stamps on the sandbox-create and agent-start failure
+// rows (internal/api/runs_dispatch.go). Matched exactly, never by message text:
+// a provider refusal also writes run.create/failure and must stay unclassified.
+const SANDBOX_CREATE_REASON = "sandbox_create";
+const AGENT_START_REASON = "agent_start";
+
 /** The FIRST event matching `pick` — the root cause, not the last symptom. */
 function firstEvent(events: AuditEvent[], pick: (e: AuditEvent) => boolean): AuditEvent | undefined {
   return events.find(pick);
 }
 
-/** The LAST event matching `pick` — the most recent attempt, not the first. */
-function lastEvent(events: AuditEvent[], pick: (e: AuditEvent) => boolean): AuditEvent | undefined {
-  return events.filter(pick).pop();
+/** The newest event matching `pick` by timestamp; a tie goes to the later row. */
+function latestEvent(events: AuditEvent[], pick: (e: AuditEvent) => boolean): AuditEvent | undefined {
+  let best: AuditEvent | undefined;
+  for (const e of events) {
+    if (!pick(e)) continue;
+    if (!best || Date.parse(e.time) >= Date.parse(best.time) || Number.isNaN(Date.parse(best.time))) best = e;
+  }
+  return best;
 }
 
 // Why a run ended badly, from the trail the run page already holds. The console
@@ -217,7 +254,7 @@ function lastEvent(events: AuditEvent[], pick: (e: AuditEvent) => boolean): Audi
 // someone stopped on purpose is not a failure and gets no block at all).
 // Returns undefined for every state that ended fine — the block must not
 // appear on a run that completed.
-export function runEndingFromAudit(state: RunState, events: AuditEvent[]): RunEnding | undefined {
+export function runEndingFromAudit(state: RunState, events: AuditEvent[]): RunEndingFacts | undefined {
   const from = (kind: RunEndingKind, e: AuditEvent | undefined, action: string): RunEnding => ({
     kind,
     action: e?.action ?? action,
@@ -227,14 +264,33 @@ export function runEndingFromAudit(state: RunState, events: AuditEvent[]): RunEn
     detail: str(e?.data?.error) ?? str(e?.data?.reason) ?? str(e?.data?.detail),
   });
   if (state === "KILLED") {
-    // The kill event carries WHO and WHEN. The LAST one, not the first: the
+    // The kill event carries WHO and WHEN. The LATEST one by its own timestamp,
+    // not the first and not "whichever the fetch happened to list last": the
     // server exempts an already-KILLED run from the terminal guard precisely so
     // a kill whose teardown failed can be retried (runs_lifecycle.go), so the
-    // most recent attempt — not the first — is this run's containment truth. A
-    // KILLED run with no run.kill row at all (an older trail, or one truncated
-    // by the 1000-row cap) still gets the block: the state alone is the fact,
-    // only the attribution is missing.
-    return from("killed", lastEvent(events, (e) => e.action === "run.kill"), "run.kill");
+    // most recent attempt is this run's containment truth. What the trail
+    // PROVES is `evidence` (#1487): a success row confirms the teardown, any
+    // other outcome says a step failed, and NO row (an older trail, or one
+    // truncated by the 1000-row cap) proves nothing — the state alone is the
+    // fact, and the block says so rather than inventing who or how.
+    const kill = latestEvent(events, (e) => e.action === "run.kill");
+    // A runner's revocation kills the runs on it (internal/api/runner_revoke.go) and writes the reason and
+    // whether the runner was connected at the time. That is not an operator's kill: there is no killer to name.
+    if (kill && str(kill.data?.reason) === "runner_revoked") {
+      return {
+        kind: "killed",
+        action: kill.action,
+        outcome: kill.outcome,
+        actor: kill.actor,
+        time: kill.time,
+        evidence: kill.outcome === "success" ? "confirmed" : "partial",
+        runnerRevoked: { online: kill.data?.runner_online === true },
+      };
+    }
+    return {
+      ...from("killed", kill, "run.kill"),
+      evidence: !kill ? "unknown" : kill.outcome === "success" ? "confirmed" : "partial",
+    };
   }
   if (state === "STOPPED") {
     const stop = firstEvent(events, (e) => e.action === "run.autostop");
@@ -242,7 +298,7 @@ export function runEndingFromAudit(state: RunState, events: AuditEvent[]): RunEn
   }
   if (state !== "FAILED") return undefined;
   // fail_closed:false is a WARN-ONLY selftest — an interactive BYOI run runs it
-  // for the warning and carries on (runs_dispatch.go's byoiSelftest(…, false)).
+  // for the warning and carries on (runs_dispatch_byoi.go's byoiSelftest(…, false)).
   // Its run.selftest/failure row is not why a run that later failed for its own
   // reason failed, and "refused before any task ran" would be a false diagnosis
   // of a run that ran. Only an explicit false disqualifies a row: the key is
@@ -272,8 +328,24 @@ export function runEndingFromAudit(state: RunState, events: AuditEvent[]): RunEn
       ...(str(credential.data?.provider) ? { provider: str(credential.data?.provider) } : {}),
     };
   }
+  const dispatch = firstEvent(
+    events,
+    (e) =>
+      e.outcome === "failure" &&
+      ((e.action === "run.create" && str(e.data?.reason) === SANDBOX_CREATE_REASON) ||
+        (e.action === "run.exec" && str(e.data?.reason) === AGENT_START_REASON)),
+  );
+  if (dispatch) {
+    return from(dispatch.action === "run.create" ? "sandbox_create" : "agent_start", dispatch, dispatch.action);
+  }
   return { kind: "unknown", action: "" };
 }
+
+// A partition export streams every row of it: far past the default 60s bound
+// for the legacy partition of a long-lived install.
+const EXPORT_DEADLINE_MS = 600_000;
+
+export type PartitionExportForm = "readable" | "raw";
 
 export type AuditListFilter = { action?: string; actionPrefix?: string };
 
@@ -296,5 +368,35 @@ export const audit = {
     const qs = params.toString() ? `?${params.toString()}` : "";
     const res = await wfetch(withLimit(`/audit${qs}`), { method: "GET" });
     return unwrapList<AuditEvent>(await asJson<unknown>(res));
+  },
+  // GET /api/v1/audit/retention (security tier): the policy, the cutover, the
+  // partitions with the server's own eligibility, and the months ahead.
+  async getRetention(): Promise<AuditRetentionStatus> {
+    return asJson<AuditRetentionStatus>(await wfetch("/audit/retention", { method: "GET" }));
+  },
+
+  // POST /api/v1/audit/retention/drop. A refusal is a 409 whose `reason` is
+  // the rule that refused (audit_retention_*); the HttpError carries it.
+  async dropPartition(partition: string, digest: string): Promise<AuditRetentionDrop> {
+    const res = await wfetch("/audit/retention/drop", {
+      method: "POST",
+      body: JSON.stringify({ partition, digest }),
+    });
+    return asJson<AuditRetentionDrop>(res);
+  },
+
+  // GET /api/v1/audit/export?partition=&form=: one closed partition as NDJSON,
+  // manifest first and the digest fold in the footer.
+  async exportPartition(partition: string, form: PartitionExportForm): Promise<Blob> {
+    const res = await wfetch(
+      `/audit/export?partition=${encodeURIComponent(partition)}&form=${form}`,
+      { method: "GET", headers: { Accept: "application/x-ndjson" } },
+      EXPORT_DEADLINE_MS,
+    );
+    if (!res.ok) {
+      const { message, reason } = await errEnvelope(res);
+      throw new HttpError(res.status, message, reason);
+    }
+    return res.blob();
   },
 };

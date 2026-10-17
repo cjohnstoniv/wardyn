@@ -228,6 +228,12 @@ func TestKillRun_FailAndRevokeRace_SingleRevocation(t *testing.T) {
 // SetSandboxRef is a no-op, so its GetRun always returns an empty ref and kill's
 // KillSandbox is dead code). refSet/killGate are the optional coordination for
 // the deterministic interleave test — nil in the genuine-race test.
+// ListGrantsByRun reports no grants; dispatch reads the list for the run's
+// git_pat ids (brokeredPATGrantIDs).
+func (s *raceDispatchStore) ListGrantsByRun(context.Context, uuid.UUID) ([]types.CredentialGrant, error) {
+	return nil, nil
+}
+
 type raceDispatchStore struct {
 	store.Store
 	mu    sync.Mutex

@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -85,7 +84,7 @@ func TestDriveGrantGroupSubjectSharesTheSnapshotRule(t *testing.T) {
 			// BYTE-FOR-BYTE what a login would put in the snapshot — the
 			// property that makes the resolver's exact-equality matching sound,
 			// and the one a second hand-written normalizer breaks.
-			if canon, ok := oidc.CanonicalGroupSubject(tc.subject); !ok || canon != saved.Subject {
+			if canon, ok := types.CanonicalGroupSubject(tc.subject); !ok || canon != saved.Subject {
 				t.Fatalf("stored %q but the snapshot normalizer answers (%q, %v) — the surfaces have drifted",
 					saved.Subject, canon, ok)
 			}

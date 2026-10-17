@@ -6,9 +6,13 @@
 package envbuild
 
 import (
+	"archive/tar"
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/binary"
+	"encoding/hex"
+	"encoding/json"
 	"io"
 	"iter"
 	"strconv"
@@ -48,14 +52,23 @@ type fakeEnvbuilderDocker struct {
 	// daemon reports them from ImageInspect. Refs absent here inspect clean.
 	onBuild map[string][]string
 
+	// repoDigests maps image ref -> the RepoDigests a real daemon reports for it from ImageInspect.
+	repoDigests map[string][]string
+
 	// inspected records the refs passed to ImageInspect, in order.
 	inspected []string
+
+	// lastDockerfile is the Dockerfile of the last ImageBuild context.
+	lastDockerfile string
+	// noAuxID, when true, makes ImageBuild's stream carry no {"aux":{"ID":...}} message.
+	noAuxID bool
 
 	// exitCode is the exit code that ContainerWait returns. 0 = success.
 	exitCode int64
 
 	// Track call counts for assertions.
 	pullCalled bool
+	pullErr    error // when set, ImagePull fails with it
 	// pulledRefs records every ref passed to ImagePull, so a test can assert which
 	// image was pulled rather than only that some pull happened.
 	pulledRefs   []string
@@ -93,6 +106,9 @@ type fakeEnvbuilderDocker struct {
 	lastCapDrop []string
 	// lastLabels records cfg.Labels given to ContainerCreate.
 	lastLabels map[string]string
+	// createWarnings is returned as ContainerCreateResult.Warnings, the way a
+	// daemon reports a requested limit it discarded.
+	createWarnings []string
 
 	// listItems is what ContainerList returns — a test seeds it to simulate
 	// containers left over from a prior process (the orphan-sweep scenario).
@@ -115,6 +131,21 @@ type fakeEnvbuilderDocker struct {
 	// here to model the daemon failing to answer, which is a different question
 	// from "the image is absent" and has to stay one.
 	inspectErrs map[string]error
+
+	// remoteDigests maps a ref to the digest DistributionInspect answers; a ref absent here is not found,
+	// and remoteErrs overrides that with any other error (the registry unreachable).
+	remoteDigests map[string]string
+	remoteErrs    map[string]error
+	remoteAsked   []string
+
+	// pinFiles maps an output image ref to the pin file a never-started container made from it serves;
+	// an image absent here has no such file. pinReadImages and pinReadConfig record what created the
+	// pin-read container (the one with the placeholder command), pinReadHost its host config.
+	pinFiles       map[string][]byte
+	pinReadImages  []string
+	pinReadConfig  *container.Config
+	pinReadHost    *container.HostConfig
+	pinContainerOf map[string]string // container ID -> image it was created from
 }
 
 func newFakeEnvbuilderDocker() *fakeEnvbuilderDocker {
@@ -182,6 +213,10 @@ func (f *fakeEnvbuilderDocker) ImagePull(_ context.Context, ref string, _ client
 	f.mu.Lock()
 	f.pullCalled = true
 	f.pulledRefs = append(f.pulledRefs, ref)
+	if f.pullErr != nil {
+		f.mu.Unlock()
+		return nil, f.pullErr
+	}
 	if f.imagesPresent == nil {
 		f.imagesPresent = map[string]bool{}
 	}
@@ -218,7 +253,7 @@ func (f *fakeEnvbuilderDocker) ImageInspect(_ context.Context, imageID string, _
 		}
 	}
 	return client.ImageInspectResult{
-		InspectResponse: image.InspectResponse{ID: imageID, Config: cfg},
+		InspectResponse: image.InspectResponse{ID: imageID, Config: cfg, RepoDigests: f.repoDigests[imageID]},
 	}, nil
 }
 
@@ -240,9 +275,17 @@ func (f *fakeEnvbuilderDocker) ImageBuild(_ context.Context, buildContext io.Rea
 		}
 	}
 	f.mu.Unlock()
-	// Drain the context so the caller's tar writer isn't left dangling.
-	_, _ = io.Copy(io.Discard, buildContext)
-	body := `{"stream":"Step 1/3 : FROM base\n"}` + "\n" + `{"stream":"Successfully built deadbeef\n"}` + "\n"
+	// Read the whole context so the caller's tar writer isn't left dangling, and keep its Dockerfile.
+	dockerfile := tarEntry(buildContext, "Dockerfile")
+	f.mu.Lock()
+	f.lastDockerfile = dockerfile
+	noAuxID := f.noAuxID
+	f.mu.Unlock()
+	body := `{"stream":"Step 1/3 : FROM base\n"}` + "\n"
+	if !noAuxID && len(options.Tags) > 0 {
+		body += `{"aux":{"ID":` + strconv.Quote(fakeImageID(options.Tags[0])) + `}}` + "\n"
+	}
+	body += `{"stream":"Successfully built deadbeef\n"}` + "\n"
 	if buildErr != "" {
 		body = `{"error":` + strconv.Quote(buildErr) + `}` + "\n"
 	}
@@ -253,6 +296,16 @@ func (f *fakeEnvbuilderDocker) ContainerCreate(_ context.Context, opts client.Co
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.createCalled++
+	if opts.Config != nil && len(opts.Config.Cmd) == 1 && opts.Config.Cmd[0] == "/wardyn-pin-read" {
+		id := "fake-pin-container-" + strconv.Itoa(len(f.pinReadImages))
+		f.pinReadImages = append(f.pinReadImages, opts.Config.Image)
+		f.pinReadConfig, f.pinReadHost = opts.Config, opts.HostConfig
+		if f.pinContainerOf == nil {
+			f.pinContainerOf = map[string]string{}
+		}
+		f.pinContainerOf[id] = opts.Config.Image
+		return client.ContainerCreateResult{ID: id}, nil
+	}
 	if opts.Config != nil {
 		f.lastEnv = opts.Config.Env
 		f.lastLabels = opts.Config.Labels
@@ -265,7 +318,7 @@ func (f *fakeEnvbuilderDocker) ContainerCreate(_ context.Context, opts client.Co
 		f.lastCapAdd = opts.HostConfig.CapAdd
 		f.lastCapDrop = opts.HostConfig.CapDrop
 	}
-	return client.ContainerCreateResult{ID: "fake-build-container"}, nil
+	return client.ContainerCreateResult{ID: "fake-build-container", Warnings: append([]string(nil), f.createWarnings...)}, nil
 }
 
 // CopyToContainer records the staged build-context tar (drained so callers'
@@ -278,6 +331,42 @@ func (f *fakeEnvbuilderDocker) CopyToContainer(_ context.Context, containerID st
 	}
 	f.copiedTo = append(f.copiedTo, containerID)
 	return client.CopyToContainerResult{}, nil
+}
+
+// DistributionInspect answers from remoteDigests, the way a registry does: an unknown ref is not found.
+func (f *fakeEnvbuilderDocker) DistributionInspect(_ context.Context, ref string, _ client.DistributionInspectOptions) (client.DistributionInspectResult, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.remoteAsked = append(f.remoteAsked, ref)
+	if err, ok := f.remoteErrs[ref]; ok {
+		return client.DistributionInspectResult{}, err
+	}
+	d, ok := f.remoteDigests[ref]
+	if !ok {
+		return client.DistributionInspectResult{}, errdefs.ErrNotFound
+	}
+	var out client.DistributionInspectResult
+	if err := json.Unmarshal([]byte(`{"Descriptor":{"digest":`+strconv.Quote(d)+`}}`), &out.DistributionInspect); err != nil {
+		return client.DistributionInspectResult{}, err
+	}
+	return out, nil
+}
+
+// CopyFromContainer serves pinFiles[image] as the one-entry tar a real daemon returns for a file, and
+// not-found for an image without it.
+func (f *fakeEnvbuilderDocker) CopyFromContainer(_ context.Context, containerID string, opts client.CopyFromContainerOptions) (client.CopyFromContainerResult, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	payload, ok := f.pinFiles[f.pinContainerOf[containerID]]
+	if !ok || opts.SourcePath != pinFilePath {
+		return client.CopyFromContainerResult{}, errdefs.ErrNotFound
+	}
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	_ = tw.WriteHeader(&tar.Header{Name: "claude-code", Mode: 0o644, Size: int64(len(payload))})
+	_, _ = tw.Write(payload)
+	_ = tw.Close()
+	return client.CopyFromContainerResult{Content: io.NopCloser(&buf)}, nil
 }
 
 func (f *fakeEnvbuilderDocker) ContainerStart(_ context.Context, _ string, _ client.ContainerStartOptions) (client.ContainerStartResult, error) {
@@ -362,4 +451,28 @@ func (f *fakeEnvbuilderDocker) ContainerList(_ context.Context, options client.C
 	f.lastListFilters = options.Filters
 	f.lastListAll = options.All
 	return client.ContainerListResult{Items: f.listItems}, nil
+}
+
+// fakeImageID is the deterministic image ID the fake's build stream reports for a tag.
+func fakeImageID(tag string) string {
+	sum := sha256.Sum256([]byte(tag))
+	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
+// tarEntry returns the named entry of a tar stream ("" when absent), draining the rest.
+func tarEntry(r io.Reader, name string) string {
+	var found string
+	tr := tar.NewReader(r)
+	for {
+		h, err := tr.Next()
+		if err != nil {
+			break
+		}
+		b, _ := io.ReadAll(tr)
+		if h.Name == name {
+			found = string(b)
+		}
+	}
+	_, _ = io.Copy(io.Discard, r)
+	return found
 }

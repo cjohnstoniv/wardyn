@@ -21,6 +21,7 @@ import (
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/system"
 
+	"github.com/cjohnstoniv/wardyn/internal/dockerutil"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -29,7 +30,6 @@ import (
 // its own PID (fork-bomb guard) and memory cap, independent of the agent's larger spec-driven caps.
 const (
 	proxyPidsLimit int64 = 128
-	proxyMemoryMiB int64 = 256
 )
 
 // Docker runtime names probed from `docker info`. SECURITY (invariant 5): a class is claimed only
@@ -135,12 +135,7 @@ func classToRuntime(class types.ConfinementClass, info system.Info) (runtimeName
 // Docker-compat API); the create-time discard warning is authoritative on both engines (verified).
 // Mirrors classToRuntime's fail-closed contract (invariant 5).
 func verifyCapsEnforced(createWarnings []string) error {
-	var discarded []string
-	for _, w := range createWarnings {
-		if strings.Contains(strings.ToLower(w), "discard") {
-			discarded = append(discarded, strings.TrimSpace(w))
-		}
-	}
+	discarded := dockerutil.DiscardedLimits(createWarnings)
 	if len(discarded) == 0 {
 		return nil
 	}
@@ -334,14 +329,14 @@ func kvmDeviceGID() string {
 	return ""
 }
 
-// orgDefaultDiskNotEnforceable: the host was handed the ORG's default disk size, not a policy's own
-// request, and cannot keep it — the run goes UNCAPPED instead of failing closed (see
-// runner.Resources.DiskMiBFilled for why that asymmetry is the point).
+// softDiskNotEnforceable: no policy wrote this disk size (a request or a default did), and the host
+// cannot keep it — the run goes UNCAPPED instead of failing closed (see runner.Resources.DiskMiBSoft
+// for why that asymmetry is the point).
 //
 // DRAFT (M2 canon pending)
-const orgDefaultDiskNotEnforceable = "wardyn/docker: org default not enforceable on this host — " +
-	"storage.ephemeral.default_disk_mib was filled in for this run and overlay2 over non-xfs cannot carry the quota, " +
-	"so the run proceeds WITHOUT a disk cap rather than failing closed (a policy's own disk_mib still fails closed here); " +
+const softDiskNotEnforceable = "wardyn/docker: disk size not enforceable on this host — " +
+	"a requested or default size was set for this run and overlay2 over non-xfs cannot carry the quota, " +
+	"so the run proceeds WITHOUT a disk cap rather than failing closed (a size the run's policy writes still fails closed here); " +
 	"enforcement: none, matching /setup/status"
 
 // applyDiskQuota sets the per-container writable-storage cap (StorageOpt "size") when DiskMiB>0 (0
@@ -351,9 +346,9 @@ const orgDefaultDiskNotEnforceable = "wardyn/docker: org default not enforceable
 //   - Driver TAKES a size opt but the backing filesystem can't carry the quota (overlay2 on
 //     non-xfs): the opt goes on anyway and the daemon refuses it, fails closed rather than running
 //     with a cap the host never applied — warned FIRST, naming xfs.
-//   - SAME HOST, but the size was FILLED IN from the org's default_disk_mib (res.DiskMiBFilled):
-//     runs uncapped with a warning instead — nobody asked this run for a cap, and fail-closed here
-//     would brick every request-less desktop run (overlay2/ext4) the day an admin sets a default.
+//   - SAME HOST, but no policy wrote the size (res.DiskMiBSoft: a request or a default):
+//     runs uncapped with a warning instead — nobody's policy promised this run a cap, and fail-closed
+//     here would brick every request-less desktop run (overlay2/ext4) the day a cap is set.
 //   - Driver can't take a size opt at all (vfs, fuse-overlayfs, ...): warn and proceed uncapped
 //     rather than hard-break — never silently claim an unenforceable control, but don't punish a run
 //     for the operator's storage-driver choice. docs/POLICIES.md's disk_mib row states this; k8s behaves the same.
@@ -367,8 +362,8 @@ func applyDiskQuota(hc *container.HostConfig, res runner.Resources, info system.
 	switch {
 	case storageDriverSupportsQuota(info):
 		// Enforced.
-	case storageDriverTakesSizeOpt(info.Driver) && res.DiskMiBFilled:
-		slog.Warn(orgDefaultDiskNotEnforceable,
+	case storageDriverTakesSizeOpt(info.Driver) && res.DiskMiBSoft:
+		slog.Warn(softDiskNotEnforceable,
 			slog.Int64("disk_mib", res.DiskMiB),
 			slog.String("storage_driver", info.Driver),
 			slog.String("backing_filesystem", strings.ToLower(driverStatusValue(info, "Backing Filesystem"))),
@@ -468,12 +463,14 @@ func hostSupportsAppArmor(info system.Info) bool {
 }
 
 // proxyResources is the proxy sidecar's cgroup envelope: a tight PID cap (fork-bomb guard) and
-// memory cap (MemorySwap pinned so swap can't double it). CPU is unconstrained — latency-path and
-// already PID/memory bounded.
-func proxyResources() container.Resources {
-	memBytes := proxyMemoryMiB * 1024 * 1024
+// memory/CPU cap (MemorySwap pinned so swap can't double it), the same runner.ProxyLimits envelope
+// the k8s substrate applies.
+func proxyResources(azure bool) container.Resources {
+	cpuMillis, memMiB := runner.ProxyLimitsFor(azure)
+	memBytes := memMiB * 1024 * 1024
 	pids := proxyPidsLimit
 	return container.Resources{
+		NanoCPUs:   cpuMillis * 1_000_000,
 		Memory:     memBytes,
 		MemorySwap: memBytes,
 		PidsLimit:  &pids,
@@ -492,14 +489,8 @@ func proxyResources() container.Resources {
 // DiskMiB is handled separately via StorageOpt (applyDiskQuota): a HostConfig field, not a cgroup
 // Resources field, and backend-gated.
 func resourcesFromSpec(res runner.Resources) container.Resources {
-	cpuMillis := res.CPUMillis
-	if cpuMillis <= 0 {
-		cpuMillis = runner.DefaultCPUMillis
-	}
-	memMiB := res.MemoryMiB
-	if memMiB <= 0 {
-		memMiB = runner.DefaultMemoryMiB
-	}
+	sz := runner.EffectiveResources(res)
+	cpuMillis, memMiB := sz.AgentCPULimitMillis, sz.AgentMemoryLimitMiB
 	pids := res.PidsLimit
 	if pids <= 0 {
 		pids = runner.DefaultPidsLimit

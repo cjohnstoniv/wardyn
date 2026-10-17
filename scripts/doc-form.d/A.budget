@@ -1,0 +1,161 @@
+# Prose must not grow beyond the base count (38796 at a084eb2b5) plus cell-expansion headings and summaries: 19 headings (19 words) and 19 summary cells (485 words, emit-site citations included); the rest of the page is 38793 (itemised in lane-reports/docs/A-worker.md).
+# docs/AUDIT-ACTIONS.md 39609 adds 312 over 39297 (per row, from the diff): 24 (the grammar exceptions: the four Azure DevOps token rows), 0 ("Ten" becomes "Nineteen"), 32 (`run.create` names `components` and `self_added_reach`), 41 (`run.artifact.redirect` on the Azure DevOps lane), 53 (`run.policy.resolve`), 30 (`credential.mint`) and 29 (`run.injection.drop`): what a run-scoped read leaves out of a shared component grant, 24 (`run.egress.add` kind `component`), 2 (`session.takeover` fields), 34 (`secret.read` for a shared grant), 21 (`approval.decide` fields), 22 (`capability.availability.write` for components).
+# docs/AUDIT-ACTIONS.md 39655 adds 46 (0.9 SSH lane): the ssh.sync.transfer row, the bytes_in/bytes_out fields on ssh.sftp.transfer, and the sync cap on ssh.channel.reject.
+# docs/AUDIT-ACTIONS.md 39656 adds 1 (0.9 C-H): the verb `claim`, for `runner.claim`.
+# docs/AUDIT-ACTIONS.md 39610 adds 85 for the egress baseline: the `governance.egress_baseline.write` row and the propose row's covered-write list (the count after the merge with the SSH lane's rows and another lane's trims).
+# docs/AUDIT-ACTIONS.md 39611 measured after the B-P1 merge (B-P1 egress baseline rows, the SSH rows and the C-H verb).
+# docs/AUDIT-ACTIONS.md 39761 adds 106 over 39655 (0.9 G-sec-2, #1818): 104 (the `identity.unbind` row), 2 (the `unbind` verb in the Grammar list).
+# docs/AUDIT-ACTIONS.md 39770: Measured after combining baseline, SSH, claim and the reviewed unbind row/verb.
+# docs/AUDIT-ACTIONS.md 39782 adds 12 (SSH sync client): explicit sandbox-relative byte directions on both transfer rows.
+# G-1423 r1: docs/AUDIT-ACTIONS.md 39957 adds 19 over 39938 for the audit-only delegation_scope source.
+# docs/AUDIT-ACTIONS.md 40133 measured after G-1423 merge.
+# docs/AUDIT-ACTIONS.md=40006 adds 68 (0.9 F-1513): the audit.delivery.reset row (#1513).
+# docs/AUDIT-ACTIONS.md 40203 measured after F-1513 merge.
+# docs/AUDIT-ACTIONS.md 40237 adds 34 (0.9 G-sec-rest): the exec.relay and partition_dropped rows (#1976, #1978), and audit_retention_actor_reserved in the authz.denied reason list.
+# docs/AUDIT-ACTIONS.md 40391 measured after F-1514 de.
+# docs/AUDIT-ACTIONS.md 40495 measured after F-1514 merge.
+# docs/AUDIT-ACTIONS.md 40502 measured after H3 merge.
+# docs/AUDIT-ACTIONS.md 40943 measured after A-L3 (overrides_diff on run.create policy_source).
+# docs/AUDIT-ACTIONS.md 40918 measured after H10-pools merge.
+# H6 erased-row quarantine adds 40 measured audit-reference words: the runner.inventory.hold row (asserted-subject cap); combined total 40958.
+# docs/AUDIT-ACTIONS.md 41145 measured after F-1511-1510 merge.
+# 0.9 G-seal-target (#1828): docs/AUDIT-ACTIONS.md 41243 adds 285 over 40958 for the "target, under WARDYN_AUDIT_SEAL=full" paragraph of Sealed fields: the closed list, the actions left clear, the SIEM note and the refused typed subject.
+# docs/AUDIT-ACTIONS.md 41430 measured after G-seal-target merge.
+# 0.9 H5 (#1959): docs/AUDIT-ACTIONS.md 41534 adds 104 for the "Relayed internal calls" paragraph (data.relay and the relay refusal reasons).
+# docs/AUDIT-ACTIONS.md 40996 adds 78 over 40918 (0.9 F-1508 C1): the three invitation rows, `invitation` on `token.create` and `reason` on `token.revoke`.
+# docs/AUDIT-ACTIONS.md 41612 measured after F-1508 C1 merge.
+# docs/AUDIT-ACTIONS.md 40937 adds 19 over 40918 (0.9 H10-pools-b): the limits and limits_before data columns of the pool create and update rows.
+# docs/AUDIT-ACTIONS.md 41631 measured after H10-pools-b merge.
+# docs/AUDIT-ACTIONS.md 41147 adds 2 over 41145 (0.9 F-588 M1): awskms in the two secret.rewrap key-service lists.
+# docs/AUDIT-ACTIONS.md 41633 measured after F-588 M1 merge.
+# 0.9 H12 (#1964): docs/AUDIT-ACTIONS.md 41727 adds 94 over 41633 for the credential.delivery.write row, `delivery` on run.create and the via_org refusals under "Relayed internal calls".
+# docs/AUDIT-ACTIONS.md 41191 measured after F-1511-scim (person.deprovision refusal outcomes).
+# docs/AUDIT-ACTIONS.md 41679 measured after F-1511-scim merge.
+# docs/AUDIT-ACTIONS.md 41646 adds 13 (0.9 R2-audit-2): a device-forwarded row's target and sealed fields read as sent.
+# docs/AUDIT-ACTIONS.md 41692 measured after R2-audit-2 merge.
+# docs/AUDIT-ACTIONS.md 41757 adds 124 over 41633 (0.9 F-1508 C2): the four service_identity rows, `service_scope` in the authz.denied vocabulary and the two auth.fail reasons.
+# docs/AUDIT-ACTIONS.md 41938 measured after D-1319 S2 (lifetime kill).
+# docs/AUDIT-ACTIONS.md 41816 measured after train 5 merge.
+# docs/AUDIT-ACTIONS.md 41816 adds 74 (0.9 H13): the runner.posture.record and runner.resident.erase rows.
+# docs/AUDIT-ACTIONS.md 41849 adds 33 over 41816 (0.9 F-1516 B3): the run.build fields for the build record (image_id, reason, resolved, record, record_sha256, cache_hit, cache_warn, source) and the record sentence.
+# docs/AUDIT-ACTIONS.md 41854 adds 5 over 41849 (0.9 F-1516 B3 fix round): the record hash detects an edit only on a row without cache_warn.
+# docs/AUDIT-ACTIONS.md 41717 measured after the A-L3 merge.
+# docs/AUDIT-ACTIONS.md 41841 measured after scripts/doc-form.d/A.budget.
+# docs/AUDIT-ACTIONS.md 41788 adds 31 over 41757 (0.9 F-1508 C3): the token.update row.
+# docs/AUDIT-ACTIONS.md 41872 measured after merge.
+# docs/AUDIT-ACTIONS.md 41994 measured after merge.
+# docs/AUDIT-ACTIONS.md 42088 measured after the 0.9.0 batch merge.
+# docs/AUDIT-ACTIONS.md 42139 measured after the F-1508-author merge (human_author; four-eyes on service-identity create and sponsor change).
+# docs/AUDIT-ACTIONS.md 42233 measured after train 10 F-1508-author merge.
+# docs/AUDIT-ACTIONS.md 42030 measured after the F-1516 B1+B3 merge.
+# docs/AUDIT-ACTIONS.md 42271 measured after train 10 F-1516 B1+B3 merge.
+# docs/AUDIT-ACTIONS.md 42345 measured after H13 merge-prep.
+# docs/AUDIT-ACTIONS.md 42374 measured after train 12 DS1-S2a merge.
+# docs/AUDIT-ACTIONS.md 42434 adds 60 over 42374 (0.9 DS1-S1b): run.create's harnesses and image_source keys, and what agent means on a run-mode run.
+# docs/AUDIT-ACTIONS.md 42039 adds 45 over 41994 (0.9 DS3-S5): the workspace.branches.list row.
+# docs/AUDIT-ACTIONS.md 42421 measured after train 13: DS3-S5 merge.
+# DS2-S3: docs/AUDIT-ACTIONS.md 42237 adds 243 over 41994: the five template rows (template.create/update/delete, template_group_admin.grant/revoke), run_setups on person.erasure, templates_erased and run setups on person.deprovision.
+# docs/AUDIT-ACTIONS.md 42664 measured after train 13: DS2-S3 merge.
+# docs/AUDIT-ACTIONS.md 42448 measured after H13 merge-prep 2.
+# docs/AUDIT-ACTIONS.md 42738 measured after train 14: H13 merge.
+# docs/AUDIT-ACTIONS.md 42798 measured after merge batch/090 into DS1-S1b.
+# docs/AUDIT-ACTIONS.md 42313 adds 42 over 42271 (0.9 B-limits): `resources_applied` on run.create.
+# docs/AUDIT-ACTIONS.md 42840 measured after B-limits merge (train 18).
+# docs/AUDIT-ACTIONS.md 42861 adds 21 over 42840 (0.9 local-enable): the run.create pool binding fields D-117 writes, and the sandbox-ref emit site citation.
+# docs/AUDIT-ACTIONS.md 42899 adds 38 over 42861 (0.9 local-enable fix-r2): run.dispatch `reason`, placement_denied at revive and dispatch.
+# 0.9 DS3-S2 fix r1: docs/AUDIT-ACTIONS.md 42844 adds 4 over 42840 for disk_mib_basis and disk_mib_default_source on run.policy.resolve.
+# docs/AUDIT-ACTIONS.md 43030 adds 190 over 42840 (0.9 Q-b): the run.queue.start and run.queue.expire rows and the run.create row's queue citation.
+# docs/AUDIT-ACTIONS.md 43045 adds 15 (0.9 Q-b, New Run delta change 3): resources_applied on run.queue.start.
+# docs/AUDIT-ACTIONS.md 43047 adds 2 (0.9 Q-b fix-r3): resources_applied and via in the run.queue.start fields.
+# docs/AUDIT-ACTIONS.md 43347 measured after Q-b.
+# docs/AUDIT-ACTIONS.md 43393 measured after DS2-S2.
+# docs/AUDIT-ACTIONS.md 43485 measured after measured after TA-3 (train 23).
+# docs/AUDIT-ACTIONS.md 43157 adds 17 over 43140 (0.9 F-1516 B4): the run.build `difference` field of a failed rebuild from a record.
+# docs/AUDIT-ACTIONS.md 43502 measured after measured after F-1516 B4 (train 25).
+# docs/AUDIT-ACTIONS.md 43489 measured after measured after merge batch into DS3-S2.
+# docs/AUDIT-ACTIONS.md 43506 measured after DS3-S2 merge into batch: main-drive disk default sources.
+# docs/AUDIT-ACTIONS.md 43867 adds 361 over 43506 (0.9 train 26): TA-4 MCP broker rows, F-1508 C4 sponsor entry marks, merged after their lanes measured separately.
+# docs/AUDIT-ACTIONS.md 43926 measured after local-enable merge.
+# docs/AUDIT-ACTIONS.md 43570 adds 85 (0.9 H14-api): person-owned Self-Hosted pools (owner on the pool rows, the runner_pools erasure scope).
+# docs/AUDIT-ACTIONS.md 44011 measured after H14-api merge into batch: person-owned Self-Hosted pools.
+# docs/AUDIT-ACTIONS.md 44034 adds 23 (H15): the runner.update row and runner.enrol's max_runs.
+# docs/AUDIT-ACTIONS.md 44100 adds 89 over 44011 (0.9 B-org-barrier): `confinement_default` on `run.create`, `confinement_class` and `confinement_default` on `run.queue.start`, and the default barrier in `runner_pool.default.set`.
+# docs/AUDIT-ACTIONS.md 44287 adds 187 over 44100 (0.9 RP-1): runner pool rows in scope and runner-kind words, the remote_runner.create/update/people_policy rows.
+# docs/AUDIT-ACTIONS.md 44100 adds 89 over 44011 (0.9 B-org-barrier): `confinement_default` on `run.create`, `confinement_class` and `confinement_default` on `run.queue.start`, and the default barrier in `runner_pool.default.set`.
+# docs/AUDIT-ACTIONS.md 44160 adds 60 over 44100 (0.9 F-1516 B5): the workspace.image.refresh row.
+# docs/AUDIT-ACTIONS.md 44124 adds 24 over 44100 (0.9 B-org-barrier-fu): `confinement_default_raised` on `run.queue.start`.
+# docs/AUDIT-ACTIONS.md 44188 measured after B-org-barrier-fu: confinement_default_raised on run.queue.start.
+# docs/AUDIT-ACTIONS.md 44517 adds 417 over 44100 (0.9 F-1508-M3): the service identity section, sponsor sealing and the sponsor-entry fields.
+# docs/AUDIT-ACTIONS.md 44609 measured after F-1508-M3: service identities, invitations and token move docs.
+# docs/AUDIT-ACTIONS.md 44034 adds 23 (H15): the runner.update row and runner.enrol's max_runs.
+# docs/AUDIT-ACTIONS.md 44119 measured after merging batch into H15: B-org-barrier + H15 combined.
+# docs/AUDIT-ACTIONS.md 44632 measured after H15: runner Runs at once (runner.update, max_runs, runner_at_capacity).
+# docs/AUDIT-ACTIONS.md 44798 measured after RP-1: organization and user pools, remote-hosted runners.
+# docs/AUDIT-ACTIONS.md 44823 adds 191 over 44632 (G-090-cleanup slice F, docs rows that contradict the code): measured; the lead re-measures at merge.
+# docs/AUDIT-ACTIONS.md 44989 measured after G-090-cleanup slice F: docs rows that contradicted the code.
+# docs/AUDIT-ACTIONS.md 45092 adds 103 over 44989: 0.9 final docs pass, measured: the launch-intent fields on run.create and person.erasure, and the queued kill on run.kill.
+# docs/AUDIT-ACTIONS.md 45344 adds 355 over 44989 (the Azure CLI component): measured at merge.
+# docs/AUDIT-ACTIONS.md 45069 adds 80 over 44989 (0.9 RP-3): runner limits in runner.enrol/update, remote_runner.create/update and run.create `reserved`.
+# docs/AUDIT-ACTIONS.md 45424 measured at merge: the Azure CLI component and runner limits together.
+# docs/AUDIT-ACTIONS.md 45424 measured after merging the runner limits lane (adds 80: runner limits in runner.enrol/update, remote_runner.create/update and run.create `reserved`) with the Azure CLI component (adds 355), both over 44989.
+# docs/AUDIT-ACTIONS.md 45531 measured at merge: runner limits, the dispatch verbs' refusal and the self-hosted pool console together.
+# docs/AUDIT-ACTIONS.md 45083 adds 14 over 45069 (0.9 RP-4): run.queue.start says when a launch waits (the pool's Runs at once, or its runners' limits) and who offers a raised barrier.
+# docs/AUDIT-ACTIONS.md 45438 measured after merging the runner limits and pool words lanes (80 and 14, above) over the Azure CLI component's 45344.
+# docs/AUDIT-ACTIONS.md 45545 measured at merge: the runner and pool words pass over runner limits and the pool console.
+# docs/AUDIT-ACTIONS.md 45648 measured at merge: the final docs pass over the runner limits, pool words and Azure CLI lanes.
+# docs/AUDIT-ACTIONS.md 45687 adds 39 over 45648: run.kill says what a sweep recovery records for a run on a self-hosted runner (`sandbox_stop` queued or runner_revoked).
+# docs/AUDIT-ACTIONS.md 45702 measured at merge: the run.create row names the failed-stop fields.
+# docs/AUDIT-ACTIONS.md 45800 adds 98 (FR-0150: the rate bound on unattributed SSH and ticket refusal rows).
+# docs/AUDIT-ACTIONS.md 45807 adds 7 (the per-key bound on SSH refusal rows that name a registered key).
+# docs/AUDIT-ACTIONS.md 45838 adds 31 (the refused session.attach row at the per-run session cap).
+# docs/AUDIT-ACTIONS.md 45840 measured at merge: the terminal session cap's own bullet and the session.attach max field.
+# docs/AUDIT-ACTIONS.md 41847 measured after merging batch/090 into S-revseq (its sign-out sentence and citation in the `session.revoke` row).
+# docs/AUDIT-ACTIONS.md 45020 measured after merging the batch into S-revseq (31 over 44989: the same sign-out sentence and citation).
+# docs/AUDIT-ACTIONS.md 45375 measured after merging the batch into S-revseq (31 over 45344: the same sign-out sentence and citation).
+# docs/AUDIT-ACTIONS.md 45576 adds 31 over 45545 (0.9 S-revseq, after merging batch-090-local); measured at merge.
+# docs/AUDIT-ACTIONS.md 45871 adds 31 over 45840 (0.9 S-revseq, after merging batch-090-local); measured at merge.
+# docs/AUDIT-ACTIONS.md 44127 measured after merging S-revseq into S-clockstep.
+# docs/AUDIT-ACTIONS.md 41929 adds 57 over 41872 (0.9 RS-7): the purge's unproved refusal on person.deprovision, the also_named definition, and the unproved exception to the person.erasure retry.
+# docs/AUDIT-ACTIONS.md 45042 measured after merging the batch into RS-7 (59 over 44983: the same three rows).
+# docs/AUDIT-ACTIONS.md 45073 measured after merging S-clockstep into RS-7 (the batch at 44983, 31 and 59).
+# docs/AUDIT-ACTIONS.md 45432 measured after merging S-clockstep into RS-7 (57 over its 45375: the same three rows).
+# docs/AUDIT-ACTIONS.md 45633 adds 57 over 45576 (0.9 RS-7, after merging lane/090-S-clockstep); measured at merge.
+# docs/AUDIT-ACTIONS.md 45928 adds 57 over 45871 (0.9 RS-7, after merging lane/090-S-clockstep); measured at merge.
+# docs/AUDIT-ACTIONS.md 45648 measured at merge: the final docs pass over the runner limits, pool words and Azure CLI lanes.
+# docs/AUDIT-ACTIONS.md 45736 measured after merging the batch into the lane (88 over its 45648: the lane's sign-out, purge and erasure rows).
+# docs/AUDIT-ACTIONS.md 45942 adds 14 over 45928 (0.9 RS-12, after merging lane/090-RS-11); measured at merge.
+# docs/AUDIT-ACTIONS.md 45601 adds 169 over 45432 (0.9 member drives): the member drive rows; measured after merging RS-7 into DS4-M5.
+# docs/AUDIT-ACTIONS.md 45802 adds 169 over 45633 (0.9 DS4-M5, after merging lane/090-RS-7); measured at merge.
+# docs/AUDIT-ACTIONS.md 46111 adds 169 over 45942 (0.9 DS4-M5, after merging lane/090-RS-12); measured at merge.
+# docs/AUDIT-ACTIONS.md 45694 adds 93 over 45601 (0.9 member drives, erasure): the member_drives scope and the purge's drive fields; measured after merging DS4-M5 into DS4-M6.
+# docs/AUDIT-ACTIONS.md 45895 adds 93 over 45802 (0.9 DS4-M6, after merging lane/090-DS4-M5); measured at merge.
+# docs/AUDIT-ACTIONS.md 46204 adds 93 over 46111 (0.9 DS4-M6, after merging lane/090-DS4-M5); measured at merge.
+# docs/AUDIT-ACTIONS.md 45802 measured after merging the Files-step seam lane (RP-3 and RP-4 runner words) into E6b-pdc over the member drives chain's 45601.
+# docs/AUDIT-ACTIONS.md 46204 adds 93 over 46111 (0.9 E6b-pdc, after merging lane/090-DS4-M8); measured at merge.
+# docs/AUDIT-ACTIONS.md 46379 adds 175 over 46204 (0.9.1 L8), measured: 36 for the run.create placement and pool fields (L7), the rest the AWS SSO refusal fields code and description, the refused reauth reason and the me.runners.tokens target.
+docs/AUDIT-ACTIONS.md=46389 share=8
+# docs/AUDIT-ACTIONS.md 39938 adds 1 (0.9 H7): the `placement_component_self_defined` reason in the authz.denied vocabulary.
+# 0.9 H10 r1: docs/AUDIT-ACTIONS.md 40113 adds 65 over 40048 for the token-revoke join, the off semantics and the pending connect/disconnect rows.
+# 0.9 H10: docs/AUDIT-ACTIONS.md 40048 adds 111 over 39937 for runner.token.revoke, runners.enabled.set, runner.connect and runner.disconnect.
+# docs/AUDIT-ACTIONS.md 40112 measured after merging H10 into batch.
+# docs/AUDIT-ACTIONS.md 40210 measured after merging F-1513 with H3 (the runner.revoke row and the wired connect, disconnect and switch rows).
+# Runner registration and owner claims add 99 measured audit-reference words; combined total39881.
+# Runner relay metadata adds 56 measured audit-reference words; combined total39937.
+# docs/AUDIT-ACTIONS.md 39967 adds 29 (0.9 S-revseq): the sign-out sentence and citation in the `session.revoke` row.
+# docs/AUDIT-ACTIONS.md 39950 adds 12 (0.9 G-sec-rest, #1976): the `exec.relay` target and the never-started run that writes no finalize row.
+# docs/AUDIT-ACTIONS.md 39969 adds 19 (0.9 G-sec-rest, #1978): the `partition_dropped` row names the admin-token drop as a `system` actor that is still attested.
+# docs/AUDIT-ACTIONS.md 40194 adds 256 over 39938 (0.9 F-1514e): the `recovery.rehearse.begin` and `recovery.rehearse` rows, including the interrupted-begin reading, and the `begin` and `rehearse` verbs in the Grammar list.
+
+# Combined runner transport and batch audit text measures39892; paragraph-share cap retained.
+# docs/AUDIT-ACTIONS.md 39949 adds 57 (0.9 runner revoke): the runner.revoke row and the runner_revoked sentence on run.kill.
+# Runner pools (H10) add 416 measured audit-reference words on top of the batch; combined total 40549.
+# Runner pools add 247 measured audit-reference words: eleven rows (pool, executor, own-runner, use-policy and default actions); combined total 40184.
+# Runner pool review round 1 adds 131 measured audit-reference words: the held executor attach, the pool delete's dropped members and cleared default, and change_id and proposed_by on the held rows; combined total 40315.
+# Runner pool review round 2 adds 38 measured audit-reference words: the held executor detach on the detach row; combined total 40353.
+# docs/AUDIT-ACTIONS.md 40019 adds 81 (0.9 F-1511-1510): the `scope` field and the explicit-route citations on secret.write and secret.delete, and `write_fence` on credential.erase.
+# docs/AUDIT-ACTIONS.md 40094 adds 75 (0.9 F-1511-1510 r1): reserved_principal on person.erasure and credential.erase, the identity-directory resolution and the self check's name set.
+# docs/AUDIT-ACTIONS.md 40126 adds 32 (0.9 F-1511-1510 r4): credential.erase erases the subject and the entra form.
+# docs/AUDIT-ACTIONS.md 42097 adds 103 over 41994 (0.9 DS1-S2a r1): the run.toolgate_credential.write row, recording a withheld tool-approval credential and its reason.
+# docs/AUDIT-ACTIONS.md 42932 adds 92 over 42840 (0.9 TA-3 r1): run.agent_policy.write is also written for an interactive claude-code run whose tool rules name a tool, and its tool_rules field.
+# docs/AUDIT-ACTIONS.md 45662 adds 14 over 45648, measured: a member's private-range workspace clone host.
+# docs/AUDIT-ACTIONS.md 46389 adds 10 over 46379, measured (0.9.1 L7 r1): run.create placement fields name 0.9 pooled rows and 0.9.1 every successful POST /runs row.

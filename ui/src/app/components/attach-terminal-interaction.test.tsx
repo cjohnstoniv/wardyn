@@ -26,6 +26,7 @@ vi.mock("@xterm/xterm", () => {
       this.cols = cols;
       this.rows = rows;
     }
+    unicode = { activeVersion: "6" };
     loadAddon() {}
     open() {}
     write() {}
@@ -44,6 +45,8 @@ vi.mock("@xterm/xterm", () => {
     // F144: captured, not swallowed. The escape chord is bound through this
     // hook, so a no-op mock would make the keyboard-trap fix untestable — and
     // untestable is how it got filed in the first place.
+    modes = { mouseTrackingMode: "none" };
+    attachCustomWheelEventHandler() {}
     attachCustomKeyEventHandler(fn: (e: KeyboardEvent) => boolean) {
       keyHandler = fn;
     }
@@ -61,8 +64,6 @@ vi.mock("@xterm/addon-fit", () => {
   return { FitAddon };
 });
 vi.mock("@xterm/xterm/css/xterm.css", () => ({}));
-vi.mock("@fontsource/jetbrains-mono/latin-400.css", () => ({}));
-vi.mock("@fontsource/jetbrains-mono/latin-ext-400.css", () => ({}));
 // Force SSO mode (no admin token) so the component actually opens a WebSocket.
 vi.mock("../lib/api/core", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../lib/api/core")>()),
@@ -143,7 +144,7 @@ function stubTerminalEnv() {
   FakeWebSocket.instances = [];
   vi.stubGlobal("WebSocket", FakeWebSocket as unknown as typeof WebSocket);
   if (!("fonts" in document)) {
-    Object.defineProperty(document, "fonts", { configurable: true, value: { ready: Promise.resolve() } });
+    Object.defineProperty(document, "fonts", { configurable: true, value: { ready: Promise.resolve(), load: () => Promise.resolve([]) } });
   }
   vi.stubGlobal(
     "ResizeObserver",
@@ -277,7 +278,7 @@ describe("AttachTerminal — the keyboard trap has an advertised exit", () => {
     expect(screen.getByText(TERMINAL.ESCAPE_CHORD_HINT)).toBeInTheDocument();
     // …and on the grid itself, for the reader who never sees the title bar.
     expect(
-      container.querySelector(`[aria-description="${TERMINAL.ESCAPE_CHORD_HINT}"]`),
+      container.querySelector(`[aria-description^="${TERMINAL.ESCAPE_CHORD_HINT}"]`),
     ).not.toBeNull();
   });
 
@@ -341,7 +342,7 @@ describe("AttachTerminal — focus", () => {
     // the F144 test above uses) — it is NOT the inner `.xterm-screen` xterm
     // itself would focus, which is exactly the gap this fix closes: a click
     // that never reaches that inner element must still focus the terminal.
-    const el = container.querySelector(`[aria-description="${TERMINAL.ESCAPE_CHORD_HINT}"]`);
+    const el = container.querySelector(`[aria-description^="${TERMINAL.ESCAPE_CHORD_HINT}"]`);
     expect(el).not.toBeNull();
     fireEvent.mouseDown(el!);
 

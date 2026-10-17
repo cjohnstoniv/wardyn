@@ -142,6 +142,8 @@ var PlatformNames = map[string]bool{
 	"wardyn-internal-ca":    true,
 	// Seals each run's stored proxy config (cmd/wardynd's loadOrCreateRunConfigKey).
 	"wardyn-run-config-key": true,
+	// Holds audit rows whose subject key could not be had (internal/audit/seal.go).
+	"wardyn-audit-pending-key": true,
 	// The hybrid laptop's org device credential (cmd/wardynd's bootHybrid).
 	"wardyn-org-device-credential": true,
 }
@@ -173,6 +175,10 @@ type DeleteReport struct {
 	Store           string
 	Purged          bool
 	RecoverableDays int
+	// PrincipalKey marks a row sealed under its owner's principal key
+	// (enc_version 3): deleting it is a crypto-erasure only once that key is
+	// destroyed (EraseOwner does, after the rows).
+	PrincipalKey bool
 }
 
 type deleteReportKey struct{}
@@ -246,6 +252,25 @@ type EraseReport struct {
 	Store           string
 	Purged          bool
 	RecoverableDays int
+	// CryptoErased is how many of Count were sealed under the person's
+	// principal key and are unreadable now that the key is destroyed. The rest
+	// of Count (v1 rows, rows written with principal keys off, external pointer
+	// rows) were only deleted, which holds to the backup horizon.
+	CryptoErased int
+	// Fenced says the erase advanced the owner's erase generation first, so a
+	// write that began earlier is refused wherever it runs. False means the
+	// store keeps none (Generational) and the caller's locks alone held back a
+	// writer in this process.
+	Fenced bool
+}
+
+// CredentialKeyDestroyer is a store that seals credentials under per-person
+// keys (the pg store). EraseOwner calls it once an owner's rows are gone.
+type CredentialKeyDestroyer interface {
+	// DestroyCredentialKey destroys every generation of owner's credential key
+	// and returns the generations it destroyed (none when there was no live
+	// key). Idempotent.
+	DestroyCredentialKey(ctx context.Context, owner string) ([]int, error)
 }
 
 // ErrOperatorNamespace refuses an erase of the operator namespace (""): it
@@ -255,20 +280,43 @@ var ErrOperatorNamespace = errors.New("secretstore: the operator namespace is no
 
 // EraseOwner deletes every credential in owner's own namespace. Each Delete
 // removes the external value before the row, so a failure keeps the row and a
-// retry resumes. It never reports success with a row left behind: every
+// retry resumes. When the store seals credentials under per-person keys
+// (CredentialKeyDestroyer) it then destroys the owner's key and reports the
+// rows that were under it as crypto-erased. It never reports success with a row left behind: every
 // failure is returned, and a namespace not empty afterwards (a write racing
 // the erase) is an error naming how many remain.
+//
+// A store that keeps an erase generation (Generational) has it advanced before
+// anything is listed: a fenced write (BeginWrite) that began earlier is
+// refused, and one already past its check has landed by the time the advance
+// returns, so the list sees it. It is advanced again once the rows are
+// deleted, because a writer that began between the first advance and a delete
+// read a value the erase is about to remove, and its Put would otherwise write
+// it back under a generation that still matches. That holds across processes. The re-list is the
+// backstop for an unfenced writer, and for a store with no generation the
+// caller's locks (internal/api, handleErasePersonCredentials) are all that
+// serialise the writers in this process; Fenced says which of the two held.
 func EraseOwner(ctx context.Context, st Store, owner string) (EraseReport, error) {
 	rep := EraseReport{Purged: true}
 	if owner == "" {
 		return rep, ErrOperatorNamespace
 	}
 	view := st.For(owner)
+	if g, ok := view.(Generational); ok {
+		_, err := g.AdvanceGeneration(ctx)
+		switch {
+		case err == nil:
+			rep.Fenced = true
+		case !errors.Is(err, ErrNoGeneration):
+			return rep, fmt.Errorf("fence writes to %q: %w", owner, err)
+		}
+	}
 	names, err := view.List(ctx)
 	if err != nil {
 		return rep, fmt.Errorf("list %q: %w", owner, err)
 	}
 	var errs []error
+	underKey := 0
 	for _, n := range names {
 		dctx, dr := WithDeleteReport(ctx)
 		if err := view.Delete(dctx, n); err != nil {
@@ -276,10 +324,23 @@ func EraseOwner(ctx context.Context, st Store, owner string) (EraseReport, error
 			continue
 		}
 		rep.Count++
+		if dr.PrincipalKey {
+			underKey++
+		}
 		if dr.Store != "" {
 			rep.Store = dr.Store
 			rep.Purged = rep.Purged && dr.Purged
 			rep.RecoverableDays = max(rep.RecoverableDays, dr.RecoverableDays)
+		}
+	}
+	if g, ok := view.(Generational); ok && rep.Fenced && len(errs) == 0 {
+		// A writer may have begun after the first advance and read a
+		// credential the loop above then deleted; its Put would write it back
+		// with a generation that still matches. The second advance refuses
+		// that Put, and waits for one already past its check, so the re-list
+		// below sees it.
+		if _, err := g.AdvanceGeneration(ctx); err != nil {
+			errs = append(errs, fmt.Errorf("fence writes to %q after the delete: %w", owner, err))
 		}
 	}
 	if len(errs) == 0 {
@@ -289,6 +350,18 @@ func EraseOwner(ctx context.Context, st Store, owner string) (EraseReport, error
 			errs = append(errs, fmt.Errorf("re-list %q: %w", owner, err))
 		case len(left) > 0:
 			errs = append(errs, fmt.Errorf("%d credentials of %q were written while the erase ran; erase again", len(left), owner))
+		}
+	}
+	if d, ok := st.(CredentialKeyDestroyer); ok && len(errs) == 0 {
+		if _, err := d.DestroyCredentialKey(ctx, owner); err != nil {
+			errs = append(errs, fmt.Errorf("destroy the credential key of %q (its rows are deleted; erase again to retry): %w", owner, err))
+		} else {
+			rep.CryptoErased = underKey
+		}
+	}
+	if history, ok := view.(ProviderChangeStore); ok && len(errs) == 0 {
+		if err := history.DeleteProviderChanges(ctx); err != nil {
+			errs = append(errs, fmt.Errorf("erase provider history of %q: %w", owner, err))
 		}
 	}
 	return rep, errors.Join(errs...)

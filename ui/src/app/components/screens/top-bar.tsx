@@ -15,6 +15,7 @@ import { WardynWordmark } from "../wardyn/logo";
 import { BrandSlot } from "../wardyn/branding-context";
 import { Chip } from "../wardyn/primitives";
 import { NO_BARRIER } from "../wardyn/copy";
+import { TIER } from "../wardyn/copy";
 import { useTheme } from "../wardyn/theme-provider";
 import { useGuardedNavClick } from "../../lib/use-unsaved-guard";
 import { Button } from "../ui/button";
@@ -53,6 +54,7 @@ export function TopBar({
   attentionCount,
   onNewRun,
   noBarrier,
+  tier,
 }: {
   onSignOut: () => void;
   meta: ShellMeta;
@@ -62,6 +64,8 @@ export function TopBar({
   /** #214 — see AppShell's own doc. Renders only in the User view, beside
    *  New run itself (which the Admin view never offers either). */
   noBarrier?: boolean;
+  /** SetupStatus.tier; absent until setup status lands (nothing is guessed). */
+  tier?: keyof typeof TIER.LABEL;
 }) {
   // What the header calls "you": the IdP's display name, else the session
   // email, else the principal itself (an admin token or local mode has
@@ -100,6 +104,12 @@ export function TopBar({
           preselectType={meta.userViewPreselectType}
           userTypes={meta.userViewTypes}
         />
+      )}
+
+      {tier === "local-only" && (
+        <Chip tone="neutral" className="hidden sm:inline-flex" srLabel={TIER.LABEL["local-only"]}>
+          {TIER.CHIP}
+        </Chip>
       )}
 
       {/* Shown ONLY when non-default. A default install is always
@@ -148,11 +158,12 @@ export function TopBar({
                 itself stays reachable, since disabling it would hide this
                 explanation behind the one control that carries it.
                 #1328 review round 2, R2-1 — gated the same way as the shell
-                banner (app-shell.tsx's own doc): only an operator or a
-                session-user can reach NO_BARRIER.ADMIN_ROUTE at all, so
-                anyone else sees no link here (New run itself stays the only
-                control). */}
-            {noBarrier && (meta.operator || access === "session-user") && (
+                banner (app-shell.tsx's own doc): only an operator or a super
+                admin in the User view (#1335) can reach
+                NO_BARRIER.ADMIN_ROUTE at all, so anyone else — a security
+                admin in the User view included — sees no link here (New run
+                itself stays the only control). */}
+            {noBarrier && (meta.operator || (access === "session-user" && meta.userViewSuperAdmin)) && (
               <Link
                 to={NO_BARRIER.ADMIN_ROUTE}
                 className="hidden text-xs font-medium text-info hover:underline sm:inline"
@@ -226,6 +237,11 @@ export function TopBar({
                       ? "local mode — no login on this install"
                       : ""}
               </div>
+              {tier && TIER.LABEL[tier] && (
+                <div className="text-meta text-muted-foreground">
+                  {TIER.MENU_PREFIX}: {TIER.LABEL[tier]}
+                </div>
+              )}
             </DropdownMenuLabel>
             {/* Slimmed to identity and Sign out (packet M-A): Getting started,
                 Setup, Settings and Your account live in the sidebar, the view

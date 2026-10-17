@@ -262,10 +262,7 @@ services:
       # mount REFUSED (unset = "members may not mount host directories"), which
       # is the one power m' exists to add. Defaults here are docs/ENV.md's own:
       # member mode off, and every root list unset = fail closed. Every default
-      # is EMPTY, never "false": wardynd reads empty as unset, and a non-empty
-      # new name would win over an envelope still setting the deprecated
-      # WARDYN_MEMBER_MODE=true, booting that laptop with member mode off and no
-      # WARN (`make compose-config` renders exactly that envelope).
+      # is EMPTY, never "false": wardynd reads empty as unset.
       #
       # The roots are HOST paths and this wardynd resolves symlinks in its OWN
       # process, so the tree has to be visible inside this container too — same
@@ -296,11 +293,9 @@ services:
       WARDYN_USER_WORKSPACE_ROOTS_MAP: "${WARDYN_USER_WORKSPACE_ROOTS_MAP:-}"
       WARDYN_USER_WRITABLE_ROOTS: "${WARDYN_USER_WRITABLE_ROOTS:-}"
       WARDYN_USER_WRITABLE_DENY: "${WARDYN_USER_WRITABLE_DENY:-}"
-      # Deprecated names (UT-5, user-types-design.md rev 4 §6; removed in 0.9):
-      # forwarded too, unset by default, so a shell or .env still exporting the
-      # WARDYN_MEMBER_* spelling keeps working — wardynd's own boot-time alias
-      # (cmd/wardynd/boot_flags.go's resolveDeprecatedEnvAliases) picks whichever
-      # one is set and WARNs when it is the deprecated one.
+      # Removed in 0.9 and read by nothing but wardynd's boot refusal (refuseRemovedEnv):
+      # forwarded, empty by default, only so a leftover in .env or an MDM envelope
+      # reaches wardynd and stops the boot instead of being dropped here.
       WARDYN_MEMBER_MODE: "${WARDYN_MEMBER_MODE:-}"
       WARDYN_MEMBER_WORKSPACE_ROOTS: "${WARDYN_MEMBER_WORKSPACE_ROOTS:-}"
       WARDYN_MEMBER_WORKSPACE_ROOTS_MAP: "${WARDYN_MEMBER_WORKSPACE_ROOTS_MAP:-}"
@@ -319,6 +314,9 @@ services:
       # keeps single-human approval; local mode REFUSES it (see docs/ENV.md), so
       # the compose stack must set WARDYN_LOCAL_MODE=false to use it.
       WARDYN_EGRESS_SECOND_HUMAN: "${WARDYN_EGRESS_SECOND_HUMAN:-}"
+      # The same four-eyes rule for Azure DevOps capability escalations. Same
+      # default (unset = off) and the same local-mode refusal.
+      WARDYN_CAPABILITY_SECOND_HUMAN: "${WARDYN_CAPABILITY_SECOND_HUMAN:-}"
       WARDYN_PROXY_IMAGE: "${WARDYN_PROXY_IMAGE:-wardyn/wardyn-proxy:local}"
       # internal/runner.ProxySidecarEnvKnobs copies these from wardynd's
       # OWN process env into every proxy sidecar it creates (docker Env / k8s
@@ -422,6 +420,8 @@ services:
       # key. Never bake a real key into a committed file.
       WARDYN_AGE_KEY: "${WARDYN_AGE_KEY:-}"
       WARDYN_AUDIT_SINKS: '${WARDYN_AUDIT_SINKS:-{"file":{"path":"/data/audit/audit.log","max_bytes":10485760,"keep":3}}}'
+      # Approval notification config JSON (docs/ENV.md). Empty = off: no outbox rows, no worker.
+      WARDYN_APPROVAL_NOTIFY: "${WARDYN_APPROVAL_NOTIFY:-}"
       # Audit fallback spool (C1): a Postgres write that fails is fsync'd here
       # instead of silently lost (internal/api/auditspool.go). Lands in the
       # same `audit` volume the file sink above uses (mounted at /data/audit
@@ -456,6 +456,9 @@ services:
       # is the loud failure; the 8080 hard-code was the silent one.
       WARDYN_OIDC_REDIRECT_URL: "${WARDYN_OIDC_REDIRECT_URL:-http://localhost:${WARDYN_UP_PORT:-8080}/auth/callback}"
       WARDYN_OIDC_EMAIL_DOMAINS: "${WARDYN_OIDC_EMAIL_DOMAINS:-wardyn.local}"
+      # Refuse a sign-in whose id_token lacks email_verified=true (an absent claim
+      # counts as unverified). Empty = off; see docs/ENV.md.
+      WARDYN_OIDC_REQUIRE_EMAIL_VERIFIED: "${WARDYN_OIDC_REQUIRE_EMAIL_VERIFIED:-}"
       # Operator allowlist of the minimal viewer/operator gate. EMPTY by default
       # = every authenticated human is an operator (unchanged). Set it to a
       # comma-separated list of full addresses and every other signed-in human
@@ -501,6 +504,9 @@ services:
       # latter.
       WARDYN_SSH_LISTEN: "${WARDYN_SSH_LISTEN:-}"
       WARDYN_SSH_ADVERTISE: "${WARDYN_SSH_ADVERTISE:-}"
+      # Optional ProxyCommand the card and `wardyn run ssh` show (docs/SSH.md,
+      # "SSH on a 443-only estate"); advisory copy, wardynd never runs it.
+      WARDYN_SSH_PROXY_COMMAND: "${WARDYN_SSH_PROXY_COMMAND:-}"
       # UI-sandbox gateway (docs/UI-SANDBOXES.md), same off-by-default shape:
       # empty WARDYN_UI_SANDBOX_LISTEN means no listener and no relay cookie
       # key, whatever the port mapping above publishes. Turn it on with
@@ -518,6 +524,9 @@ services:
       WARDYN_UI_SANDBOX_ADVERTISE: "${WARDYN_UI_SANDBOX_ADVERTISE:-}"
       # Agent image overrides: map agent-name -> OCI image ref. The demo tags
       # are produced by `make agent-images` or `docker compose --profile build-only build`.
+      # A key joining harness ids with "+" declares an image carrying all of them, e.g.
+      #   WARDYN_AGENT_IMAGES='{"claude-code+codex-cli":"wardyn/agent-harnesses:local"}'
+      # (local build only: `make agent-image-harnesses`; deploy/images/README.md).
       WARDYN_AGENT_IMAGES: "${WARDYN_AGENT_IMAGES:-{\"base\":\"wardyn/agent-base:local\",\"claude-code\":\"wardyn/agent-claude-code:local\",\"codex-cli\":\"wardyn/agent-codex-cli:local\",\"aws-sso\":\"wardyn/agent-aws-sso:local\"}}"
     volumes:
       # Daemon trust: see the loud note at the top of this file.

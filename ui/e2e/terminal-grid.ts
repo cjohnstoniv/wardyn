@@ -1,0 +1,87 @@
+/**
+ * Copyright 2025 The Wardyn Authors
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+// Pointer helpers for the terminal copy specs: the user's drag, double-click
+// and triple-click over xterm's grid, addressed by cell.
+import { expect, type Locator, type Page } from "@playwright/test";
+import { termRows } from "./terminal-text";
+
+export interface Grid {
+  cols: number;
+  rows: number;
+}
+
+/** The grid xterm reports in the header ("120×40"). */
+export async function readGrid(page: Page): Promise<Grid> {
+  const text = await page.getByTestId("run-terminal-pane").getByText(/^\d+×\d+$/).first().innerText();
+  const [cols, rows] = text.split("×").map(Number);
+  return { cols, rows };
+}
+
+/** The header's grid text and the screen's box: what a cell's point is computed from. */
+async function layout(page: Page, screen: Locator): Promise<string> {
+  return `${await page.getByTestId("run-terminal-pane").getByText(/^\d+×\d+$/).first().innerText()} ${JSON.stringify(await screen.boundingBox())}`;
+}
+
+// The web font swaps in after first paint and refits the grid (the header
+// re-wraps too), so a cell read before that lands is a different cell by the
+// time a drag arrives. Hold until the grid and the screen's box have not moved
+// for 600 ms, and return the grid as it settled.
+export async function settledGrid(page: Page, screen: Locator): Promise<Grid> {
+  let last = "";
+  let steady = 0;
+  await expect
+    .poll(
+      async () => {
+        const now = await layout(page, screen);
+        steady = now === last ? steady + 1 : 0;
+        last = now;
+        return steady;
+      },
+      { intervals: [100] },
+    )
+    .toBeGreaterThanOrEqual(6);
+  return readGrid(page);
+}
+
+/** The viewport point at the centre of cell (col, row) of the screen. */
+export async function cellPoint(screen: Locator, grid: Grid, col: number, row: number) {
+  const box = (await screen.boundingBox())!;
+  return {
+    x: box.x + ((col + 0.5) * box.width) / grid.cols,
+    y: box.y + ((row + 0.5) * box.height) / grid.rows,
+  };
+}
+
+/** The row index, on the visible screen, of the first row whose text matches. */
+export async function rowOf(screen: Locator, re: RegExp): Promise<number> {
+  const i = (await termRows(screen)).findIndex((r) => re.test(r));
+  if (i < 0) throw new Error(`no screen row matches ${re}`);
+  return i;
+}
+
+export async function dragCells(page: Page, screen: Locator, from: [number, number], to: [number, number]) {
+  const grid = await settledGrid(page, screen);
+  const before = await layout(page, screen);
+  const a = await cellPoint(screen, grid, from[0], from[1]);
+  const b = await cellPoint(screen, grid, to[0], to[1]);
+  await page.mouse.move(a.x, a.y);
+  await page.mouse.down();
+  await page.mouse.move((a.x + b.x) / 2, (a.y + b.y) / 2, { steps: 3 });
+  await page.mouse.move(b.x, b.y, { steps: 3 });
+  const after = await layout(page, screen);
+  if (after !== before) {
+    await page.mouse.up();
+    throw new Error(`the terminal layout moved during the drag: ${before} -> ${after}`);
+  }
+  // Not re-checked after the release: the copy offer or notice renders then and may resize the panel.
+  await page.mouse.up();
+}
+
+export async function clickCell(page: Page, screen: Locator, at: [number, number], clickCount: 2 | 3) {
+  const grid = await settledGrid(page, screen);
+  const p = await cellPoint(screen, grid, at[0], at[1]);
+  await page.mouse.click(p.x, p.y, { clickCount });
+}

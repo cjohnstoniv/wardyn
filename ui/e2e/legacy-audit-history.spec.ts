@@ -36,25 +36,21 @@ test.describe("Run detail — historical recording and held-egress rows survive 
     // them off the SEPARATE action_prefix=session.recording fetch, which
     // never competes with the filler for cap room at all.
     sql(
-      `INSERT INTO audit_events (id, time, run_id, actor_type, actor, action, target, outcome, data)
-       SELECT gen_random_uuid(), now(), '${runId}', 'system', 'proxy',
-              'egress.pending', 'held.example.com:443', 'success', '{"domain":"held.example.com"}'::jsonb`,
+      `SELECT audit_append(gen_random_uuid(), now(), '${runId}', 'system', 'proxy',
+              'egress.pending', 'held.example.com:443', 'success', '', '{"domain":"held.example.com"}'::jsonb)`,
     );
     sql(
-      `INSERT INTO audit_events (id, time, run_id, actor_type, actor, action, target, outcome, data)
-       SELECT gen_random_uuid(), now() - (n + 60 || ' seconds')::interval, '${runId}', 'agent', 'agent',
-              'egress.allow', 'filler.example.com:443', 'success', '{}'::jsonb
+      `SELECT audit_append(gen_random_uuid(), now() - (n + 60 || ' seconds')::interval, '${runId}', 'agent', 'agent',
+              'egress.allow', 'filler.example.com:443', 'success', '', '{}'::jsonb)
        FROM generate_series(1, 1001) AS n`,
     );
     sql(
-      `INSERT INTO audit_events (id, time, run_id, actor_type, actor, action, target, outcome, data)
-       SELECT gen_random_uuid(), now() - interval '30 seconds', '${runId}', 'human', 'alice',
-              'session.recording', '${runId}~e2e-session-old', 'success', '{}'::jsonb`,
+      `SELECT audit_append(gen_random_uuid(), now() - interval '30 seconds', '${runId}', 'human', 'alice',
+              'session.recording', '${runId}~e2e-session-old', 'success', '', '{}'::jsonb)`,
     );
     sql(
-      `INSERT INTO audit_events (id, time, run_id, actor_type, actor, action, target, outcome, data)
-       SELECT gen_random_uuid(), now(), '${runId}', 'human', 'bob',
-              'session.recording.write', '${runId}~e2e-session-new', 'success', '{}'::jsonb`,
+      `SELECT audit_append(gen_random_uuid(), now(), '${runId}', 'human', 'bob',
+              'session.recording.write', '${runId}~e2e-session-new', 'success', '', '{}'::jsonb)`,
     );
   });
 

@@ -424,3 +424,97 @@ func TestRunSSH_SignalKilledChildNeverReturnsANegativeExitCode(t *testing.T) {
 		t.Errorf("exitCodeFor(signal-killed ssh) = %d, want >= 0 (never a negative process exit code)", code)
 	}
 }
+
+// --------------------------------------------------------------------------
+// An advertised ProxyCommand (WARDYN_SSH_PROXY_COMMAND): every output carries
+// it, and connecting runs it only with --advertised-proxy.
+// --------------------------------------------------------------------------
+
+const testProxyCommand = "openssl s_client -quiet -verify_return_error -verify_hostname %h -connect %h:443 -servername %h"
+
+const proxyHealthz = `{"ssh":{"enabled":true,"advertise_addr":"ssh.example.com:2222","host_key_fingerprint":"SHA256:x","proxy_command":"` + testProxyCommand + `"}}`
+
+// runSSHWith runs `wardyn run ssh` against body with extra args and returns stdout.
+func runSSHWith(t *testing.T, body string, extra ...string) (string, error) {
+	t.Helper()
+	srv := fakeHealthzServer(t, body)
+	defer srv.Close()
+	cmd := sshCmd(func() *sdk.Client { return &sdk.Client{BaseURL: srv.URL} })
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetContext(context.Background())
+	cmd.SetArgs(append([]string{testRunID}, extra...))
+	cmd.SilenceUsage = true
+	err := cmd.Execute()
+	return out.String(), err
+}
+
+func TestRunSSH_ProxyCommandPrintConfigJSON(t *testing.T) {
+	wantCmd := "ssh -o ProxyCommand='" + testProxyCommand + "' " + testRunID + "@ssh.example.com -p 2222"
+	out, err := runSSHWith(t, proxyHealthz, "--print")
+	if err != nil || out != wantCmd+"\n" {
+		t.Fatalf("--print = %q (%v), want %q", out, err, wantCmd)
+	}
+
+	out, err = runSSHWith(t, proxyHealthz, "--config")
+	wantConfig := "Host wardyn-a1b2c3d4\n  HostName ssh.example.com\n  Port 2222\n  User " + testRunID +
+		"\n  ProxyCommand " + testProxyCommand + "\n"
+	if err != nil || out != wantConfig {
+		t.Fatalf("--config =\n%q (%v)\nwant\n%q", out, err, wantConfig)
+	}
+
+	got, err := runSSHJSON(t, proxyHealthz, testRunID)
+	if err != nil {
+		t.Fatalf("--json: %v", err)
+	}
+	if got.ProxyCommand != testProxyCommand || got.Command != wantCmd {
+		t.Fatalf("--json = %+v, want proxy_command %q and command %q", got, testProxyCommand, wantCmd)
+	}
+}
+
+func TestRunSSH_ProxyCommandExecNeedsTheFlag(t *testing.T) {
+	argsFile := filepath.Join(t.TempDir(), "args")
+	fakeBinOnPath(t, "ssh", "#!/bin/sh\nprintf '%s\\n' \"$@\" > "+argsFile+"\n")
+
+	_, err := runSSHWith(t, proxyHealthz)
+	if err == nil {
+		t.Fatal("want a refusal without --advertised-proxy")
+	}
+	if code := exitCodeFor(err); code == 0 {
+		t.Errorf("exit code = 0, want non-zero")
+	}
+	for _, part := range []string{testProxyCommand, "--advertised-proxy"} {
+		if !strings.Contains(err.Error(), part) {
+			t.Errorf("refusal %q does not show %q", err, part)
+		}
+	}
+	if _, statErr := os.Stat(argsFile); statErr == nil {
+		t.Fatal("ssh ran without --advertised-proxy")
+	}
+
+	if _, err := runSSHWith(t, proxyHealthz, "--advertised-proxy"); err != nil {
+		t.Fatalf("with --advertised-proxy: %v", err)
+	}
+	raw, err := os.ReadFile(argsFile)
+	if err != nil {
+		t.Fatalf("ssh did not run with --advertised-proxy: %v", err)
+	}
+	want := "-o\nProxyCommand=" + testProxyCommand + "\n" + testRunID + "@ssh.example.com\n-p\n2222\n"
+	if string(raw) != want {
+		t.Errorf("ssh argv =\n%q\nwant\n%q", raw, want)
+	}
+}
+
+// A daemon that skipped the boot refusal (a skewed version) still cannot hand
+// the CLI a value that breaks out of the quoted one-liner or the config line.
+func TestRunSSH_RefusesAProxyCommandTheDaemonWouldRefuse(t *testing.T) {
+	for _, bad := range []string{`nc '%h' 443`, `nc %h 443\nLocalCommand id`, `nc %h 443\u001b`, strings.Repeat("a", 513)} {
+		body := `{"ssh":{"enabled":true,"advertise_addr":"ssh.example.com:2222","proxy_command":"` + bad + `"}}`
+		for _, mode := range []string{"--print", "--config", "--json", "--advertised-proxy"} {
+			out, err := runSSHWith(t, body, mode)
+			if err == nil || !strings.Contains(err.Error(), "ProxyCommand") || out != "" {
+				t.Errorf("%s with %q: out=%q err=%v, want a refusal and no output", mode, bad, out, err)
+			}
+		}
+	}
+}

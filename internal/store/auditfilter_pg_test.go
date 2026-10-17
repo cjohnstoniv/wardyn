@@ -73,12 +73,14 @@ func TestPG_AuditFilterSQLAgreesWithGo(t *testing.T) {
 		for _, u := range []time.Time{{}, until} {
 			for _, action := range []string{"", "run.kill"} {
 				for _, prefix := range []string{"", "credential.", "run_"} {
-					for _, actor := range []string{"", "alice@corp.example"} {
+					// ActorAlt is the subject a sealed row stores for the person: any
+					// other stored actor stands in for it here.
+					for _, who := range [][2]string{{"", ""}, {"alice@corp.example", ""}, {"alice@corp.example", "bob@corp.example"}} {
 						for _, at := range []types.ActorType{"", types.ActorHuman} {
 							for _, outcome := range []string{"", "failure"} {
 								filters = append(filters, store.AuditFilter{
 									Since: s, Until: u, Action: action, ActionPrefix: prefix,
-									Actor: actor, ActorType: at, Outcome: outcome,
+									Actor: who[0], ActorAlt: who[1], ActorType: at, Outcome: outcome,
 								})
 							}
 						}
@@ -148,4 +150,52 @@ func eventIDs(evs []types.AuditEvent) []string {
 		out = append(out, ev.ID.String())
 	}
 	return out
+}
+
+// DataContains is `data @> $n::jsonb` on the server and dataContains in Go; both
+// must pick the same rows, including when newer rows of the same action differ.
+func TestPG_AuditFilterDataContainsAgreesWithGo(t *testing.T) {
+	pool := throwawayDatabase(t)
+	ctx := context.Background()
+	if err := db.Migrate(ctx, pool); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	pg := store.NewPG(pool)
+	base := time.Now().UTC().Truncate(time.Second)
+	datas := []string{
+		`{"refusal":"ado_pat_policy_blocked","provider_row":"r1","owner":"a"}`,
+		`{"refusal":"ado_pat_policy_blocked","provider_row":"r2","owner":"a"}`,
+		`{"refusal":"ado_pat_lifespan_policy","provider_row":"r1","owner":"a"}`,
+		`{"refusal":"ado_pat_policy_blocked","provider_row":"r1","nested":{"k":[1,2]}}`,
+		`{"provider_row":"r1"}`,
+		`null`,
+	}
+	for i, d := range datas {
+		ev := types.AuditEvent{
+			ID: uuid.New(), Time: base.Add(time.Duration(i) * time.Minute), ActorType: types.ActorSystem,
+			Actor: "wardynd", Action: "ado_pat.mint.denied", Outcome: "failure", Data: []byte(d),
+		}
+		if err := store.InsertAuditEvent(ctx, pool, &ev); err != nil {
+			t.Fatalf("seed %d: %v", i, err)
+		}
+	}
+	recent, err := pg.QueryRecentAuditEvents(ctx, 0)
+	if err != nil || len(recent) != len(datas) {
+		t.Fatalf("unfiltered feed: %d events, err %v", len(recent), err)
+	}
+	wants := map[string]int{
+		`{"refusal":"ado_pat_policy_blocked","provider_row":"r1"}`: 2,
+		`{"refusal":"ado_pat_policy_blocked"}`:                     3,
+		`{"provider_row":"r1"}`:                                    4,
+		`{"nested":{"k":[2]}}`:                                     1,
+		`{"refusal":"nope"}`:                                       0,
+	}
+	for want, n := range wants {
+		f := store.AuditFilter{Action: "ado_pat.mint.denied", DataContains: want}
+		goIDs := eventIDs(f.Keep(recent))
+		sqlIDs := pagedIDs(t, pg, nil, f)
+		if !slices.Equal(sqlIDs, goIDs) || len(sqlIDs) != n {
+			t.Errorf("DataContains %s: SQL %d ids, Go %d ids, want %d (and equal)", want, len(sqlIDs), len(goIDs), n)
+		}
+	}
 }

@@ -62,13 +62,17 @@ export const CHANGE_HEADING = {
   limitsOther: (person: string) => `Narrowed to fit the limits set for ${person}`, // S-14b
   workspace: "Added for the workspace", // S-15
   source_control: "Added so the run can reach its code", // S-16
+  component: "Added for an attached component",
   git_broker: "Routed through Wardyn's GitHub connection", // S-17
   model_access: "Added so the agent can reach its model", // S-18
   mirror: "Switched to your organization's package mirror", // S-19
   profile: (name: string) => `Limited by the ${name} governance profile`, // S-20
   restart: (date: string) => `Blocked when the run was restarted on ${date}`, // S-21
   org_disk: "Disk size set from your organization's default", // S-22
+  pool_disk: "Disk size set from this pool's default", // DRAFT (M2 canon pending)
   launch: "Set by Wardyn when the run started", // S-23
+  // DRAFT (canon pending owner approval): the policy_overlay cause, the policy keys the run's setup laid onto the default.
+  overlay: "Set by the policy you chose for this run",
 } as const;
 
 export type PlainCause = Exclude<RunPolicyCause, "limits" | "profile" | "restart">;

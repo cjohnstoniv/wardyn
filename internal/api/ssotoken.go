@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/authz"
+	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -139,7 +140,7 @@ func (s *Server) handleUploadSSOToken(w http.ResponseWriter, r *http.Request) {
 		// A sign-in that names no provider (launched before the conversion), or
 		// whose stamp names no owner or another one, is refused.
 		msg := ssoTokenUnstampedScopeRefusal
-		if stamp.ModelProviderUID != "" {
+		if stamp.ModelProviderUID != "" || stamp.CLIComponentID != "" {
 			msg = mpsCaptureNotOwner
 		}
 		s.refuseCapture(w, r, claims, http.StatusConflict, reasonCaptureUnstampedScope, msg, nil)
@@ -160,6 +161,11 @@ func (s *Server) handleUploadSSOToken(w http.ResponseWriter, r *http.Request) {
 	// would be the only place in the tree that did, which is how a deadlock gets
 	// written. Refuses exactly as the launch's does when the lock cannot be
 	// taken: nothing is stored, and the person signs in again.
+	// The resume of a run a resolved request held takes the run's lock, which must precede the AWS owner
+	// lock taken below (db.LockOrder): it runs after both are released.
+	var resolved []uuid.UUID
+	reqCtx := r.Context()
+	defer func() { s.approvalsClosed(reqCtx, resolved) }()
 	releaseLoginLock, lerr := s.lockLoginSupersede(r.Context(), run.CreatedBy, claims.RunID)
 	if lerr != nil {
 		s.refuseCapture(w, r, claims, http.StatusServiceUnavailable, reasonCaptureSignInBusy, signInBusyRefusal, &scope)
@@ -176,7 +182,13 @@ func (s *Server) handleUploadSSOToken(w http.ResponseWriter, r *http.Request) {
 	// upload racing a dispatch-time renewal of the same credential is serialised
 	// too, and two different people's uploads still never wait on each other.
 	// Held through the store so the check and the write are one critical section.
-	unlock := s.lockAWSSSOOwner(scope.owner)
+	lctx, unlock, lerr := s.lockAWSSSOOwner(r.Context(), scope.owner)
+	if lerr != nil {
+		slog.WarnContext(r.Context(), "wardynd: could not take the AWS SSO credential lock; refusing the capture", slog.Any("err", lerr))
+		s.refuseCapture(w, r, claims, http.StatusServiceUnavailable, reasonLockUnavailable, lockUnavailableMsg, &scope)
+		return
+	}
+	r = r.WithContext(lctx)
 	defer unlock()
 
 	// Once only. Even a correctly-bound blob must not be replaceable: the login
@@ -199,6 +211,27 @@ func (s *Server) handleUploadSSOToken(w http.ResponseWriter, r *http.Request) {
 	} else if found && prev.SourceRunID == claims.RunID.String() {
 		s.refuseCapture(w, r, claims, http.StatusConflict, reasonCaptureAlreadyCaptured,
 			"this login run has already captured an aws sso credential", &scope)
+		return
+	}
+
+	// Mask the captured token values out of THIS run's PTY capture/decision log.
+	// PER-RUN, not AddGlobal: these bytes are sandbox input — the guards
+	// above bind WHOSE IdP and WHICH run, never what the token itself contains —
+	// and secretmask's global corpus is applied to every run's output AND, via
+	// cmd/wardynd's maskingRecorder, to the Data/Target of every persisted audit
+	// event including run-less rows (Snapshot(uuid.Nil)), while Evict clears
+	// per-run entries only. Registering sandbox-chosen bytes there let a process
+	// inside the vendor login image pick strings that redact every operator's
+	// logs — "connection refused", an IP:port — for the life of the daemon.
+	// The credential itself loses NOTHING: bedrockSSOAuth merges the stored
+	// blob's access/refresh/client-secret into the global corpus on every
+	// dispatch that actually selects this credential, so the global registration
+	// follows the SERVER's decision to use the credential rather than the
+	// sandbox's decision to name a string. Add is nil-safe.
+	//
+	// Before the store: a capture whose values cannot be put on record for
+	// masking is refused, and a refused capture must leave nothing stored.
+	if s.refuseUnmasked(w, r, claims, "credential.capture", []byte(blob.AccessToken), []byte(blob.RefreshToken)) {
 		return
 	}
 
@@ -234,9 +267,22 @@ func (s *Server) handleUploadSSOToken(w http.ResponseWriter, r *http.Request) {
 	blob.SourceRunID = claims.RunID.String()
 
 	// A provider sign-in lands only while that provider is still the one it
-	// was launched for (storeProviderSignIn).
-	if changed, err := s.storeProviderSignIn(r.Context(), stamp, scope, blob); changed {
-		s.refuseCapture(w, r, claims, http.StatusConflict, reasonCaptureProviderChanged, mpsCaptureChanged, &scope)
+	// was launched for (storeProviderSignIn), and a CLI row's while that row is
+	// (storeCLISignIn).
+	changedReason, changedMsg := reasonCaptureProviderChanged, mpsCaptureChanged
+	var changed bool
+	if scope.cli != "" {
+		changedReason, changedMsg = reasonCLISignInCaptureChanged, cliSignInCaptureChange
+		changed, err = s.storeCLISignIn(r.Context(), stamp, scope, blob)
+	} else {
+		changed, err = s.storeProviderSignIn(r.Context(), stamp, scope, blob)
+	}
+	if changed {
+		s.refuseCapture(w, r, claims, http.StatusConflict, changedReason, changedMsg, &scope)
+		return
+	} else if db.LockRefused(err) {
+		w.Header().Set("Retry-After", "5")
+		s.refuseCapture(w, r, claims, http.StatusServiceUnavailable, reasonLockUnavailable, lockUnavailableMsg, &scope)
 		return
 	} else if err != nil {
 		// Audited like every other refusal on this route: the provenance is
@@ -248,25 +294,6 @@ func (s *Server) handleUploadSSOToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Mask the captured token values out of THIS run's PTY capture/decision log.
-	// PER-RUN, not AddGlobal: these bytes are sandbox input — the guards
-	// above bind WHOSE IdP and WHICH run, never what the token itself contains —
-	// and secretmask's global corpus is applied to every run's output AND, via
-	// cmd/wardynd's maskingRecorder, to the Data/Target of every persisted audit
-	// event including run-less rows (Snapshot(uuid.Nil)), while Evict clears
-	// per-run entries only. Registering sandbox-chosen bytes there let a process
-	// inside the vendor login image pick strings that redact every operator's
-	// logs — "connection refused", an IP:port — for the life of the daemon.
-	// The credential itself loses NOTHING: bedrockSSOAuth merges the stored
-	// blob's access/refresh/client-secret into the global corpus on every
-	// dispatch that actually selects this credential, so the global registration
-	// follows the SERVER's decision to use the credential rather than the
-	// sandbox's decision to name a string. Add is nil-safe.
-	s.cfg.MaskRegistry.Add(claims.RunID, []byte(blob.AccessToken))
-	if blob.RefreshToken != "" {
-		s.cfg.MaskRegistry.Add(claims.RunID, []byte(blob.RefreshToken))
-	}
-
 	// owner + credential_source say WHOSE credential landed, and
 	// model_provider for which provider: "who signed in" is the first question
 	// after an incident.
@@ -275,8 +302,12 @@ func (s *Server) handleUploadSSOToken(w http.ResponseWriter, r *http.Request) {
 		"owner": scope.owner, "credential_source": awsSSOCredentialSourceLabel(scope),
 		"model_provider": stamp.ModelProvider,
 	}
-	s.recordAudit(r.Context(), s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
-		"harness.credential.capture", scope.ssoSecret(), "success", mustJSON(captured)))
+	if scope.cli != "" {
+		s.auditCLICapture(r, claims.RunID, claims.SPIFFEID, scope, "success", "")
+	} else {
+		s.recordAudit(r.Context(), s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
+			"harness.credential.capture", scope.ssoSecret(), "success", mustJSON(captured)))
+	}
 
 	// A sign-in answers any held run. Every PENDING credential_reauth
 	// this capture satisfies moves to APPROVED, so the sidecar holding that run's
@@ -289,7 +320,7 @@ func (s *Server) handleUploadSSOToken(w http.ResponseWriter, r *http.Request) {
 	// stored, and an unresolved row is repaired by the idempotent
 	// reconcile-on-read rather than by asking the person to sign in twice.
 	if live, rerr := s.cfg.Store.GetRun(r.Context(), claims.RunID); rerr == nil {
-		s.resolvePendingReauth(r.Context(), scope, claims.Sub, live)
+		resolved = s.resolvePendingReauth(r.Context(), scope, claims.Sub, live)
 	}
 	w.WriteHeader(http.StatusNoContent)
 	s.killSignInRunAfterCapture(r.Context(), claims.RunID, scope.owner)
@@ -470,8 +501,14 @@ func (b awsSSOBlob) missingFields() []string {
 // run it is. ok=false refuses: a stamp that names no provider (a sign-in
 // launched before the conversion), or no owner, or another one.
 func loginRunScope(stamp loginRunStamp, subject string) (awsSSOScope, bool) {
-	if stamp.ModelProviderUID == "" || stamp.Owner == "" || stamp.Owner != subject {
+	if stamp.Owner == "" || stamp.Owner != subject {
 		return awsSSOScope{}, false
 	}
-	return awsSSOScope{perUser: true, owner: stamp.Owner, provider: stamp.ModelProviderUID}, true
+	switch {
+	case stamp.CLIComponentID != "":
+		return cliAWSScope(stamp.CLIComponentID, stamp.Owner), true
+	case stamp.ModelProviderUID != "":
+		return awsSSOScope{perUser: true, owner: stamp.Owner, provider: stamp.ModelProviderUID}, true
+	}
+	return awsSSOScope{}, false
 }

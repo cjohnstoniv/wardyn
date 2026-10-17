@@ -8,17 +8,31 @@
 // assertion reads its expected string from the copy modules (INVENTORY/ERASE,
 // wardyn/copy/credentials.ts).
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 
 const listInventoryMock = vi.fn();
 const eraseMock = vi.fn();
+const listMintedMock = vi.fn();
+const revokeTokenMock = vi.fn();
 vi.mock("../../lib/api/credentials", () => ({
   credentials: {
     listInventory: (...a: unknown[]) => listInventoryMock(...a),
     erase: (...a: unknown[]) => eraseMock(...a),
+    listAdminMintedTokens: (...a: unknown[]) => listMintedMock(...a),
+    revokeToken: (...a: unknown[]) => revokeTokenMock(...a),
   },
+}));
+// The key-domain card has its own spec (credentials-key-domains.test.tsx); here it is absent (501).
+const listKeyDomainsMock = vi.fn();
+vi.mock("../../lib/api/key-domains", () => ({
+  keyDomains: { list: (...a: unknown[]) => listKeyDomainsMock(...a) },
+}));
+const toastSuccess = vi.fn();
+const toastError = vi.fn();
+vi.mock("sonner", () => ({
+  toast: { success: (...a: unknown[]) => toastSuccess(...a), error: (...a: unknown[]) => toastError(...a) },
 }));
 
 import { HttpError } from "../../lib/api/core";
@@ -26,8 +40,9 @@ import type { CredentialInventory } from "../../lib/api/credentials";
 import type { SetupStatus } from "../../lib/types";
 import { OperatorProvider } from "../wardyn/operator-context";
 import { ModelAccessProvider } from "../wardyn/model-access-context";
-import { INVENTORY, ERASE } from "../wardyn/copy/credentials";
+import { INVENTORY, ERASE, MINTED, KEY_DOMAINS } from "../wardyn/copy/credentials";
 import { CredentialsScreen } from "./credentials";
+import { aheadByHours } from "../../lib/test-clock";
 
 function renderScreen(opts: { status?: SetupStatus | null; operator?: boolean; securityOperator?: boolean } = {}) {
   const { status = null, operator = true, securityOperator = true } = opts;
@@ -61,6 +76,13 @@ const aliceRow = {
 beforeEach(() => {
   listInventoryMock.mockReset();
   eraseMock.mockReset();
+  listMintedMock.mockReset();
+  listMintedMock.mockResolvedValue([]);
+  listKeyDomainsMock.mockReset();
+  listKeyDomainsMock.mockRejectedValue(new HttpError(501, "key domains require the Postgres store backend"));
+  revokeTokenMock.mockReset();
+  toastSuccess.mockReset();
+  toastError.mockReset();
 });
 
 describe("the inventory", () => {
@@ -117,6 +139,38 @@ describe("the inventory", () => {
     expect(screen.getByText("Corp gateway")).toBeInTheDocument();
     expect(screen.getByText("Bedrock (prod)")).toBeInTheDocument();
     expect(screen.getAllByRole("button", { name: INVENTORY.ERASE_ROW })).toHaveLength(1);
+  });
+
+  it("no Key domain column on a deployment without the key-domain service", async () => {
+    listInventoryMock.mockResolvedValue(inventory([aliceRow], { "corp-gw": 1 }));
+    renderScreen();
+    await screen.findByText("alice@corp.example");
+    // The key-domain card shows its title until its own read answers "no such service", a tick after the rows.
+    await waitFor(() => {
+      expect(screen.queryByRole("columnheader", { name: INVENTORY.COL_DOMAIN })).toBeNull();
+      expect(screen.queryByText(KEY_DOMAINS.TITLE)).toBeNull();
+    });
+  });
+
+  it("the Key domain column says where each person's next key is made, and why (M5 S3)", async () => {
+    const rows = [
+      { ...aliceRow, key_domain: "finance", key_domain_source: "group" as const, key_domain_group: "eng-finance" },
+      { ...aliceRow, person: "sub-bob", email: "bob@corp.example", key_domain: "default", key_domain_source: "default" as const },
+      { ...aliceRow, person: "sub-cat", email: "cat@corp.example", key_domain: "research", key_domain_source: "user" as const },
+      { ...aliceRow, person: "sub-dan", email: "dan@corp.example", key_domain: "finance", key_domain_source: "all" as const },
+      { ...aliceRow, person: "sub-eve", email: "eve@corp.example", key_domain_source: "conflict" as const },
+    ];
+    listInventoryMock.mockResolvedValue(inventory(rows, { "corp-gw": 5 }));
+    renderScreen();
+    await screen.findByText("alice@corp.example");
+    expect(screen.getByRole("columnheader", { name: INVENTORY.COL_DOMAIN })).toBeInTheDocument();
+    const cell = (email: string) => screen.getByText(email).closest("tr")!;
+    expect(cell("alice@corp.example")).toHaveTextContent(`finance · ${KEY_DOMAINS.SOURCE_GROUP("eng-finance")}`);
+    expect(cell("bob@corp.example")).toHaveTextContent(`default · ${KEY_DOMAINS.SOURCE_DEFAULT}`);
+    expect(cell("cat@corp.example")).toHaveTextContent(`research · ${KEY_DOMAINS.SOURCE_USER}`);
+    expect(cell("dan@corp.example")).toHaveTextContent(`finance · ${KEY_DOMAINS.SOURCE_ALL}`);
+    const chip = within(cell("eve@corp.example")).getByLabelText(KEY_DOMAINS.CONFLICT);
+    expect(chip).toHaveAttribute("title", KEY_DOMAINS.CONFLICT);
   });
 
   it("a zero-credential provider chip falls back to the raw id when no row named it", async () => {
@@ -239,5 +293,155 @@ describe("erasing someone not listed (design F-5)", () => {
     await userEvent.click(screen.getByRole("button", { name: ERASE.CONFIRM }));
     expect(await screen.findByRole("alert")).toHaveTextContent(msg);
     expect(screen.getByRole("button", { name: ERASE.CONFIRM })).toBeInTheDocument();
+  });
+});
+
+// #1477: no one can create a token that acts as another person, so the console
+// shows what an admin already created — metadata only, with Revoke — under the
+// inventory. Strings are console-085-packet's, character for character.
+describe("tokens an admin created for someone else (#1477)", () => {
+  const dana = { id: "t-1", principal: "sub-dana", email: "dana@acme.io", name: "ci", minted_by: "sam@acme.io", created_at: aheadByHours(-300), last_used_at: aheadByHours(-48) };
+  const lee = { id: "t-2", principal: "sub-lee", email: "lee@acme.io", name: "nightly", minted_by: "sam@acme.io", created_at: aheadByHours(-700) };
+  const bare = { id: "t-3", principal: "sub-kim", name: "deploy", minted_by: "kim@acme.io", created_at: aheadByHours(-900) };
+
+  async function section() {
+    return (await screen.findByRole("heading", { name: "Tokens an admin created for someone else" })).closest("section")!;
+  }
+
+  it("canon strings", () => {
+    expect(MINTED.TITLE).toBe("Tokens an admin created for someone else");
+    expect(MINTED.CHIP(3)).toBe("3 still work");
+    expect(MINTED.COUNT(3)).toBe(
+      "3 tokens were created by an admin for another person. They keep working until revoked. Values are never shown.",
+    );
+    expect(MINTED.NOTE).toBe("No one can create a token that acts as another person. They sign in and create their own.");
+    expect(MINTED.EMPTY).toBe("No admin has created a token for someone else.");
+    expect([MINTED.COL_PERSON, MINTED.COL_TOKEN, MINTED.COL_CREATED_BY, MINTED.COL_ADDED, MINTED.COL_LAST_USED]).toEqual([
+      "Person",
+      "Token",
+      "Created by",
+      "Added",
+      "Last used",
+    ]);
+    expect(MINTED.NEVER).toBe("Never");
+    expect(MINTED.REVOKE).toBe("Revoke");
+    expect(MINTED.REVOKE_TITLE("ci", "dana@acme.io")).toBe("Revoke ci for dana@acme.io?");
+    expect(MINTED.REVOKE_BODY("dana@acme.io")).toBe("It stops working now. dana@acme.io can create their own after signing in.");
+    expect([MINTED.REVOKE_CANCEL, MINTED.REVOKE_CONFIRM, MINTED.REVOKED_TOAST]).toEqual(["Cancel", "Revoke token", "Token revoked."]);
+  });
+
+  it("lists each token with its person, name, minter and times, a count, the note and a Revoke per row", async () => {
+    listInventoryMock.mockResolvedValue(inventory([aliceRow], { "corp-gw": 1 }));
+    listMintedMock.mockResolvedValue([dana, lee, bare]);
+    renderScreen();
+    const sec = within(await section());
+    await sec.findByText("dana@acme.io");
+    expect(sec.getByText("3 still work")).toBeInTheDocument();
+    expect(sec.getByText(MINTED.COUNT(3))).toBeInTheDocument();
+    expect(sec.getByText(MINTED.NOTE)).toBeInTheDocument();
+    for (const h of ["Person", "Token", "Created by", "Added", "Last used"]) {
+      expect(sec.getByRole("columnheader", { name: h })).toBeInTheDocument();
+    }
+    const row = sec.getByText("dana@acme.io").closest("tr")!;
+    expect(within(row).getByText("ci")).toBeInTheDocument();
+    expect(within(row).getByText("sam@acme.io")).toBeInTheDocument();
+    // A person with no known email reads as their principal; a token never used reads Never.
+    expect(sec.getByText("sub-kim")).toBeInTheDocument();
+    expect(within(sec.getByText("lee@acme.io").closest("tr")!).getByText("Never")).toBeInTheDocument();
+    expect(sec.getAllByRole("button", { name: "Revoke" })).toHaveLength(3);
+    // The request is the inventory filter, and never a value.
+    expect(listMintedMock).toHaveBeenCalledTimes(1);
+    expect(document.body.textContent).not.toMatch(/wdn_/);
+  });
+
+  it("one token reads in the singular", async () => {
+    listMintedMock.mockResolvedValue([dana]);
+    listInventoryMock.mockResolvedValue(inventory([aliceRow], { "corp-gw": 1 }));
+    renderScreen();
+    const sec = within(await section());
+    expect(await sec.findByText("1 still works")).toBeInTheDocument();
+    expect(sec.getByText(MINTED.COUNT(1))).toBeInTheDocument();
+  });
+
+  it("nothing to list: the empty line and the note, with no table", async () => {
+    listInventoryMock.mockResolvedValue(inventory([aliceRow], { "corp-gw": 1 }));
+    renderScreen();
+    const sec = within(await section());
+    expect(await sec.findByText("No admin has created a token for someone else.")).toBeInTheDocument();
+    expect(sec.getByText(MINTED.NOTE)).toBeInTheDocument();
+    expect(sec.queryByRole("table")).toBeNull();
+    expect(sec.queryByText(/still work/)).toBeNull();
+  });
+
+  it("Revoke asks first, in the approved words, then revokes that token and reloads", async () => {
+    listInventoryMock.mockResolvedValue(inventory([aliceRow], { "corp-gw": 1 }));
+    listMintedMock.mockResolvedValueOnce([dana, lee]).mockResolvedValue([lee]);
+    revokeTokenMock.mockResolvedValue(undefined);
+    renderScreen();
+    const sec = within(await section());
+    await userEvent.click(within((await sec.findByText("dana@acme.io")).closest("tr")!).getByRole("button", { name: "Revoke" }));
+    const dialog = await screen.findByRole("alertdialog");
+    expect(within(dialog).getByText("Revoke ci for dana@acme.io?")).toBeInTheDocument();
+    expect(within(dialog).getByText("It stops working now. dana@acme.io can create their own after signing in.")).toBeInTheDocument();
+    expect(revokeTokenMock).not.toHaveBeenCalled();
+    await userEvent.click(within(dialog).getByRole("button", { name: "Revoke token" }));
+    await waitFor(() => expect(revokeTokenMock).toHaveBeenCalledWith("t-1"));
+    await waitFor(() => expect(toastSuccess).toHaveBeenCalledWith("Token revoked."));
+    await waitFor(() => expect(sec.queryByText("dana@acme.io")).toBeNull());
+    expect(sec.getByText("lee@acme.io")).toBeInTheDocument();
+    expect(revokeTokenMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("Cancel revokes nothing", async () => {
+    listInventoryMock.mockResolvedValue(inventory([aliceRow], { "corp-gw": 1 }));
+    listMintedMock.mockResolvedValue([dana]);
+    renderScreen();
+    const sec = within(await section());
+    await userEvent.click(await sec.findByRole("button", { name: "Revoke" }));
+    await userEvent.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Cancel" }));
+    expect(revokeTokenMock).not.toHaveBeenCalled();
+    expect(sec.getByText("dana@acme.io")).toBeInTheDocument();
+  });
+
+  it("a failed revoke says why and leaves the token listed", async () => {
+    listInventoryMock.mockResolvedValue(inventory([aliceRow], { "corp-gw": 1 }));
+    listMintedMock.mockResolvedValue([dana]);
+    revokeTokenMock.mockRejectedValue(new HttpError(500, "boom"));
+    renderScreen();
+    const sec = within(await section());
+    await userEvent.click(await sec.findByRole("button", { name: "Revoke" }));
+    await userEvent.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Revoke token" }));
+    await waitFor(() => expect(toastError).toHaveBeenCalled());
+    expect(toastSuccess).not.toHaveBeenCalled();
+    expect(sec.getByText("dana@acme.io")).toBeInTheDocument();
+  });
+
+  it("a failed read of the list has its own error state and Retry, and does not take the inventory down", async () => {
+    listInventoryMock.mockResolvedValue(inventory([aliceRow], { "corp-gw": 1 }));
+    listMintedMock.mockRejectedValueOnce(new HttpError(500, "boom")).mockResolvedValue([dana]);
+    renderScreen();
+    expect(await screen.findByText("alice@corp.example")).toBeInTheDocument();
+    const sec = within(await section());
+    await userEvent.click(await sec.findByRole("button", { name: "Retry" }));
+    expect(await sec.findByText("dana@acme.io")).toBeInTheDocument();
+  });
+});
+
+// Review nit: the admin-minted list is another admin-only read, so it mounts only
+// once the screen has resolved as allowed — never during the load, and never for
+// a caller the inventory has just refused.
+describe("the admin-minted tokens list waits for the screen to be allowed", () => {
+  it("is not requested for a caller the inventory refuses", async () => {
+    listInventoryMock.mockRejectedValue(new HttpError(403, "forbidden"));
+    renderScreen();
+    await screen.findByText(/admin/i);
+    expect(listMintedMock).not.toHaveBeenCalled();
+  });
+
+  it("is not requested while the inventory is still loading", async () => {
+    listInventoryMock.mockReturnValue(new Promise(() => {}));
+    renderScreen();
+    await screen.findByText("Stored credentials");
+    expect(listMintedMock).not.toHaveBeenCalled();
   });
 });

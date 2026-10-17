@@ -105,7 +105,9 @@ func newMDFixture(t *testing.T, kind types.ApprovalKind, scope json.RawMessage, 
 	return &mdFixture{srv: srv, ap: ap, run: ast.runs[runID]}
 }
 
-func (f *mdFixture) path(verb string) string { return "/api/v1/approvals/" + f.ap.ID.String() + "/" + verb }
+func (f *mdFixture) path(verb string) string {
+	return "/api/v1/approvals/" + f.ap.ID.String() + "/" + verb
+}
 
 // mdCase is one row of TestMayDecideAgreesWithDecide's matrix.
 type mdCase struct {
@@ -252,6 +254,45 @@ func TestMayDecideAgreesWithDecide(t *testing.T) {
 				ctx := context.Background() // no verified human at all -> actorFromRequest's admin-token fallback
 				return f, ctx, func(verb string) *httptest.ResponseRecorder {
 					return do(t, f.srv, http.MethodPost, f.path(verb), adminToken, `{"reason":"t"}`)
+				}
+			},
+		},
+		{
+			name:  "capability four-eyes ON: mayDecide and POST agree for a member on their OWN Azure DevOps escalation",
+			verbs: []string{"deny"},
+			build: func(t *testing.T) (*mdFixture, context.Context, func(string) *httptest.ResponseRecorder) {
+				t.Setenv(envCapabilitySecondHuman, "1")
+				f := newMDFixture(t, types.ApprovalToolCall, adoScope, &grantID, memberSub, nil, nil)
+				sess := ssoSession(t, memberSub, "member@corp.example", oidc.RoleUser)
+				ctx := withOIDCRole(withOIDCEmail(withOIDCHuman(context.Background(), memberSub), "member@corp.example"), oidc.RoleUser)
+				return f, ctx, func(verb string) *httptest.ResponseRecorder {
+					return doSSO(t, f.srv, http.MethodPost, f.path(verb), sess, `{"reason":"t"}`)
+				}
+			},
+		},
+		{
+			name:  "capability four-eyes ON: mayDecide and POST agree for a different security admin on an Azure DevOps escalation",
+			verbs: []string{"deny"},
+			build: func(t *testing.T) (*mdFixture, context.Context, func(string) *httptest.ResponseRecorder) {
+				t.Setenv(envCapabilitySecondHuman, "1")
+				f := newMDFixture(t, types.ApprovalToolCall, adoScope, &grantID, memberSub, nil, nil)
+				sess := ssoSession(t, adminSub, "admin@corp.example", oidc.RoleSecurityAdmin)
+				ctx := withOIDCRole(withOIDCEmail(withOIDCHuman(context.Background(), adminSub), "admin@corp.example"), oidc.RoleSecurityAdmin)
+				return f, ctx, func(verb string) *httptest.ResponseRecorder {
+					return doSSO(t, f.srv, http.MethodPost, f.path(verb), sess, `{"reason":"t"}`)
+				}
+			},
+		},
+		{
+			name:  "capability four-eyes ON, local mode: mayDecide and POST agree for an Azure DevOps escalation",
+			verbs: []string{"deny"},
+			build: func(t *testing.T) (*mdFixture, context.Context, func(string) *httptest.ResponseRecorder) {
+				t.Setenv(envCapabilitySecondHuman, "1")
+				f := newMDFixture(t, types.ApprovalToolCall, adoScope, &grantID, "local:alice", nil, nil,
+					func(c *Config) { c.LocalMode = true; c.LocalOperator = "local:alice" })
+				ctx := withLocalPrincipal(context.Background(), "local:alice")
+				return f, ctx, func(verb string) *httptest.ResponseRecorder {
+					return do(t, f.srv, http.MethodPost, f.path(verb), "", `{"reason":"t"}`)
 				}
 			},
 		},

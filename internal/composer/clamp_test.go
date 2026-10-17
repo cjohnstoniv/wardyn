@@ -6,6 +6,7 @@ package composer
 import (
 	"encoding/json"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 
@@ -38,7 +39,7 @@ func mustJSON(t *testing.T, v any) json.RawMessage {
 
 func TestClamp_RaisesConfinementToOperatorFloor(t *testing.T) {
 	// Proposal wants CC1 (weaker); operator floor is CC2.
-	got, warns := Clamp(types.RunPolicySpec{MinConfinementClass: types.CC1}, operatorCeiling(t), 0)
+	got, warns := Clamp(types.RunPolicySpec{MinConfinementClass: types.CC1}, operatorCeiling(t), types.GovernanceLimits{})
 	if got.MinConfinementClass != types.CC2 {
 		t.Errorf("confinement = %s, want CC2 (raised to floor)", got.MinConfinementClass)
 	}
@@ -46,7 +47,7 @@ func TestClamp_RaisesConfinementToOperatorFloor(t *testing.T) {
 		t.Errorf("expected a confinement-raise warning, got %v", warns)
 	}
 	// A STRONGER proposal (CC3) is left alone.
-	got, _ = Clamp(types.RunPolicySpec{MinConfinementClass: types.CC3}, operatorCeiling(t), 0)
+	got, _ = Clamp(types.RunPolicySpec{MinConfinementClass: types.CC3}, operatorCeiling(t), types.GovernanceLimits{})
 	if got.MinConfinementClass != types.CC3 {
 		t.Errorf("CC3 should be preserved, got %s", got.MinConfinementClass)
 	}
@@ -93,7 +94,7 @@ func TestEffectiveConfinementFloor_FlowsThroughClampWarning(t *testing.T) {
 	ceiling := operatorCeiling(t) // policy min CC2
 	// Per-run floor CC3, host can enforce CC3 → effective floor CC3.
 	ceiling.MinConfinementClass = EffectiveConfinementFloor(ceiling.MinConfinementClass, types.CC3, types.CC3)
-	got, warns := Clamp(types.RunPolicySpec{MinConfinementClass: types.CC1}, ceiling, 0)
+	got, warns := Clamp(types.RunPolicySpec{MinConfinementClass: types.CC1}, ceiling, types.GovernanceLimits{})
 	if got.MinConfinementClass != types.CC3 {
 		t.Errorf("confinement = %s, want CC3 (raised to the per-run floor)", got.MinConfinementClass)
 	}
@@ -103,7 +104,7 @@ func TestEffectiveConfinementFloor_FlowsThroughClampWarning(t *testing.T) {
 	// A proposal STRONGER than the floor: the floor is a no-op and must not warn.
 	weaker := operatorCeiling(t)
 	weaker.MinConfinementClass = EffectiveConfinementFloor(types.CC1, types.CC2, types.CC3) // effective floor CC2
-	if _, warns := Clamp(types.RunPolicySpec{MinConfinementClass: types.CC3}, weaker, 0); hasWarn(warns, "confinement raised") {
+	if _, warns := Clamp(types.RunPolicySpec{MinConfinementClass: types.CC3}, weaker, types.GovernanceLimits{}); hasWarn(warns, "confinement raised") {
 		t.Errorf("a floor weaker than the proposal must not warn, got %v", warns)
 	}
 }
@@ -113,7 +114,7 @@ func TestEffectiveConfinementFloor_FlowsThroughClampWarning(t *testing.T) {
 // (>= floor), or handleCreateRun would 422 the composed run (invariant 5).
 func TestClampRunConfinement_RaisesRunToPolicyFloor(t *testing.T) {
 	// The policy the proposal carried, clamped to the operator floor (CC2).
-	clamped, _ := Clamp(types.RunPolicySpec{MinConfinementClass: types.CC1}, operatorCeiling(t), 0)
+	clamped, _ := Clamp(types.RunPolicySpec{MinConfinementClass: types.CC1}, operatorCeiling(t), types.GovernanceLimits{})
 
 	// Run advertised CC1 — weaker than the clamped floor. Must be raised to CC2.
 	got, warn := ClampRunConfinement("CC1", clamped.MinConfinementClass)
@@ -134,7 +135,7 @@ func TestClampRunConfinement_RaisesRunToPolicyFloor(t *testing.T) {
 }
 
 func TestClamp_ForcesAllowAllEgressOff(t *testing.T) {
-	got, warns := Clamp(types.RunPolicySpec{AllowAllEgress: true}, operatorCeiling(t), 0)
+	got, warns := Clamp(types.RunPolicySpec{AllowAllEgress: true}, operatorCeiling(t), types.GovernanceLimits{})
 	if got.AllowAllEgress {
 		t.Errorf("allow_all_egress must be forced off when operator forbids it")
 	}
@@ -144,7 +145,7 @@ func TestClamp_ForcesAllowAllEgressOff(t *testing.T) {
 }
 
 func TestClamp_ForcesGitPushAnyBranchOff(t *testing.T) {
-	got, warns := Clamp(types.RunPolicySpec{GitPushAnyBranch: true}, operatorCeiling(t), 0)
+	got, warns := Clamp(types.RunPolicySpec{GitPushAnyBranch: true}, operatorCeiling(t), types.GovernanceLimits{})
 	if got.GitPushAnyBranch {
 		t.Errorf("git_push_any_branch must be forced off when the operator ceiling keeps confinement on")
 	}
@@ -153,7 +154,7 @@ func TestClamp_ForcesGitPushAnyBranchOff(t *testing.T) {
 	}
 	ceiling := operatorCeiling(t)
 	ceiling.GitPushAnyBranch = true
-	got, warns = Clamp(types.RunPolicySpec{GitPushAnyBranch: true}, ceiling, 0)
+	got, warns = Clamp(types.RunPolicySpec{GitPushAnyBranch: true}, ceiling, types.GovernanceLimits{})
 	if !got.GitPushAnyBranch {
 		t.Errorf("git_push_any_branch must survive when the ceiling allows it")
 	}
@@ -165,7 +166,7 @@ func TestClamp_ForcesGitPushAnyBranchOff(t *testing.T) {
 func TestClamp_IntersectsAllowedDomainsToCeiling(t *testing.T) {
 	got, warns := Clamp(types.RunPolicySpec{
 		AllowedDomains: []string{"api.anthropic.com", "evil.example.com"},
-	}, operatorCeiling(t), 0)
+	}, operatorCeiling(t), types.GovernanceLimits{})
 	for _, d := range got.AllowedDomains {
 		if strings.Contains(d, "evil") {
 			t.Errorf("evil.example.com should have been dropped, got %v", got.AllowedDomains)
@@ -184,7 +185,7 @@ func TestClamp_IntersectsAllowedDomainsToCeiling(t *testing.T) {
 // clampGrants fails closed on an empty ceiling.
 func TestClamp_DenyAllCeilingClampsAllowedDomainsToEmpty(t *testing.T) {
 	ceiling := types.RunPolicySpec{AllowAllEgress: false, AllowedDomains: []string{}}
-	got, warns := Clamp(types.RunPolicySpec{AllowedDomains: []string{"exfil.example"}}, ceiling, 0)
+	got, warns := Clamp(types.RunPolicySpec{AllowedDomains: []string{"exfil.example"}}, ceiling, types.GovernanceLimits{})
 	if len(got.AllowedDomains) != 0 {
 		t.Errorf("deny-all ceiling must clamp AllowedDomains to empty, got %v", got.AllowedDomains)
 	}
@@ -198,7 +199,7 @@ func TestClamp_DenyAllCeilingClampsAllowedDomainsToEmpty(t *testing.T) {
 // case changed behavior).
 func TestClamp_NonEmptyCeilingStillIntersects(t *testing.T) {
 	ceiling := types.RunPolicySpec{AllowAllEgress: false, AllowedDomains: []string{"api.github.com"}}
-	got, warns := Clamp(types.RunPolicySpec{AllowedDomains: []string{"api.github.com", "exfil.example"}}, ceiling, 0)
+	got, warns := Clamp(types.RunPolicySpec{AllowedDomains: []string{"api.github.com", "exfil.example"}}, ceiling, types.GovernanceLimits{})
 	if len(got.AllowedDomains) != 1 || got.AllowedDomains[0] != "api.github.com" {
 		t.Errorf("expected only api.github.com kept, got %v", got.AllowedDomains)
 	}
@@ -210,7 +211,7 @@ func TestClamp_NonEmptyCeilingStillIntersects(t *testing.T) {
 func TestClamp_DropsGrantKindNotInCeiling(t *testing.T) {
 	got, warns := Clamp(types.RunPolicySpec{EligibleGrants: []types.GrantSpec{
 		{Kind: types.GrantCloudSTS, RequiresApproval: false},
-	}}, operatorCeiling(t), 0)
+	}}, operatorCeiling(t), types.GovernanceLimits{})
 	if len(got.EligibleGrants) != 0 {
 		t.Errorf("cloud_sts (not in ceiling) should be dropped, got %v", got.EligibleGrants)
 	}
@@ -226,7 +227,7 @@ func TestClamp_GitHubPermsIntersectedDownAndApprovalForced(t *testing.T) {
 			"repos":       []string{"acme/widgets", "acme/secret-repo"},
 			"permissions": map[string]string{"contents": "write", "pull_requests": "write"},
 		})},
-	}}, operatorCeiling(t), 0)
+	}}, operatorCeiling(t), types.GovernanceLimits{})
 	if len(got.EligibleGrants) != 1 {
 		t.Fatalf("expected the github grant kept (clamped), got %d", len(got.EligibleGrants))
 	}
@@ -262,7 +263,7 @@ func TestClamp_DropsWorkspaceMountsAlways(t *testing.T) {
 	rw := false
 	got, warns := Clamp(types.RunPolicySpec{WorkspaceMounts: []types.WorkspaceMount{
 		{Source: "/etc", Target: "/work", ReadOnly: &rw},
-	}}, operatorCeiling(t), 0)
+	}}, operatorCeiling(t), types.GovernanceLimits{})
 	if len(got.WorkspaceMounts) != 0 {
 		t.Errorf("composer-proposed workspace mounts must always be dropped, got %v", got.WorkspaceMounts)
 	}
@@ -275,7 +276,7 @@ func TestClamp_CapsGrantTTL(t *testing.T) {
 	got, warns := Clamp(types.RunPolicySpec{EligibleGrants: []types.GrantSpec{
 		{Kind: types.GrantGitHubToken, RequiresApproval: true, TTLSeconds: 999999,
 			Scope: mustJSON(t, map[string]any{"repos": []string{"acme/widgets"}, "permissions": map[string]string{"contents": "read"}})},
-	}}, operatorCeiling(t), 0)
+	}}, operatorCeiling(t), types.GovernanceLimits{})
 	if got.EligibleGrants[0].TTLSeconds > maxGrantTTLSeconds {
 		t.Errorf("TTL must be capped to %d, got %d", maxGrantTTLSeconds, got.EligibleGrants[0].TTLSeconds)
 	}
@@ -302,7 +303,7 @@ func TestClamp_AttackerMaxedProposalCannotExceedCeilingOrLowerRisk(t *testing.T)
 			{Kind: types.GrantCloudSTS, RequiresApproval: false},
 		},
 	}
-	clamped, warns := Clamp(hostile, ceiling, 0)
+	clamped, warns := Clamp(hostile, ceiling, types.GovernanceLimits{})
 	if clamped.AllowAllEgress {
 		t.Errorf("allow-all must be clamped off")
 	}
@@ -356,7 +357,7 @@ func TestClamp_FirstUseApprovalTakesStricter(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			ceiling := operatorCeiling(t)
 			ceiling.FirstUseApproval = tc.ceiling
-			got, warns := Clamp(types.RunPolicySpec{FirstUseApproval: tc.proposed}, ceiling, 0)
+			got, warns := Clamp(types.RunPolicySpec{FirstUseApproval: tc.proposed}, ceiling, types.GovernanceLimits{})
 			if got.FirstUseApproval != tc.want {
 				t.Errorf("first_use_approval = %q, want %q", got.FirstUseApproval, tc.want)
 			}
@@ -376,7 +377,7 @@ func TestClamp_LLMInspectionInheritsCeiling(t *testing.T) {
 	ceiling.LLMInspection = &types.LLMInspectionSpec{Mode: "block", DetectSecrets: true}
 
 	// Proposal omits it entirely.
-	got, warns := Clamp(types.RunPolicySpec{}, ceiling, 0)
+	got, warns := Clamp(types.RunPolicySpec{}, ceiling, types.GovernanceLimits{})
 	if got.LLMInspection == nil || got.LLMInspection.Mode != "block" {
 		t.Errorf("llm_inspection = %+v, want the ceiling's block mode", got.LLMInspection)
 	}
@@ -385,13 +386,13 @@ func TestClamp_LLMInspectionInheritsCeiling(t *testing.T) {
 	}
 
 	// Proposal sets a WEAKER mode — still overridden to the ceiling's.
-	got, _ = Clamp(types.RunPolicySpec{LLMInspection: &types.LLMInspectionSpec{Mode: "alert"}}, ceiling, 0)
+	got, _ = Clamp(types.RunPolicySpec{LLMInspection: &types.LLMInspectionSpec{Mode: "alert"}}, ceiling, types.GovernanceLimits{})
 	if got.LLMInspection.Mode != "block" {
 		t.Errorf("weaker proposed mode survived clamp: got %q, want block", got.LLMInspection.Mode)
 	}
 
 	// No ceiling opinion: proposal is left alone (including nil).
-	got, warns = Clamp(types.RunPolicySpec{}, operatorCeiling(t), 0)
+	got, warns = Clamp(types.RunPolicySpec{}, operatorCeiling(t), types.GovernanceLimits{})
 	if got.LLMInspection != nil {
 		t.Errorf("llm_inspection = %+v, want nil (ceiling sets none)", got.LLMInspection)
 	}
@@ -418,7 +419,7 @@ func TestClamp_LLMInspectionInheritUnionsSidecarHostIntoAllowedDomains(t *testin
 	}
 
 	// Bare proposal — mentions neither the sidecar host nor any egress at all.
-	got, _ := Clamp(types.RunPolicySpec{AllowedDomains: []string{"api.anthropic.com"}}, ceiling, 0)
+	got, _ := Clamp(types.RunPolicySpec{AllowedDomains: []string{"api.anthropic.com"}}, ceiling, types.GovernanceLimits{})
 	if got.LLMInspection == nil || got.LLMInspection.DetectorSidecarURL != ceiling.LLMInspection.DetectorSidecarURL {
 		t.Fatalf("llm_inspection = %+v, want the ceiling's sidecar config inherited", got.LLMInspection)
 	}
@@ -461,7 +462,7 @@ func TestClamp_LLMInspectionDroppedUnderNilCeiling(t *testing.T) {
 		DetectorSidecarURL: "http://attacker.example.com/exfil",
 		InterceptTLS:       true,
 	}}
-	got, warns := Clamp(hostile, ceiling, 0)
+	got, warns := Clamp(hostile, ceiling, types.GovernanceLimits{})
 	if got.LLMInspection != nil {
 		t.Errorf("llm_inspection = %+v, want nil — a nil-ceiling must be the FLOOR for this field, not a pass-through", got.LLMInspection)
 	}
@@ -484,7 +485,7 @@ func TestClamp_LLMInspectionCopyRedactsSecretValues(t *testing.T) {
 		WorkspaceSecretNames:  []string{"prod-db-password"},
 		WorkspaceSecretValues: []string{"hunter2-this-must-never-leak"},
 	}
-	got, _ := Clamp(types.RunPolicySpec{}, ceiling, 0)
+	got, _ := Clamp(types.RunPolicySpec{}, ceiling, types.GovernanceLimits{})
 	if got.LLMInspection == nil {
 		t.Fatal("expected llm_inspection inherited from the ceiling")
 	}
@@ -531,7 +532,7 @@ func TestClamp_GitHubEmptyCeilingRepoListDeniesAll(t *testing.T) {
 			"repos": []string{"attacker-org/private-repo"}, "permissions": map[string]string{"contents": "read"},
 		})},
 	}}
-	clamped, warns := Clamp(hostile, ceiling, 0)
+	clamped, warns := Clamp(hostile, ceiling, types.GovernanceLimits{})
 	if len(clamped.EligibleGrants) != 1 {
 		t.Fatalf("expected the github_token grant kept (clamped by scope, not dropped by kind), got %d", len(clamped.EligibleGrants))
 	}
@@ -573,7 +574,7 @@ func TestClamp_AllowedMethods(t *testing.T) {
 	ceiling.AllowedMethods = []string{"GET", "POST"}
 
 	// Empty proposal adopts the ceiling's list outright.
-	got, warns := Clamp(types.RunPolicySpec{}, ceiling, 0)
+	got, warns := Clamp(types.RunPolicySpec{}, ceiling, types.GovernanceLimits{})
 	if strings.Join(got.AllowedMethods, ",") != "GET,POST" {
 		t.Errorf("allowed_methods = %v, want the ceiling's [GET POST]", got.AllowedMethods)
 	}
@@ -582,7 +583,7 @@ func TestClamp_AllowedMethods(t *testing.T) {
 	}
 
 	// Non-empty proposal intersects down (DELETE is outside the ceiling).
-	got, warns = Clamp(types.RunPolicySpec{AllowedMethods: []string{"GET", "DELETE"}}, ceiling, 0)
+	got, warns = Clamp(types.RunPolicySpec{AllowedMethods: []string{"GET", "DELETE"}}, ceiling, types.GovernanceLimits{})
 	if len(got.AllowedMethods) != 1 || got.AllowedMethods[0] != "GET" {
 		t.Errorf("allowed_methods = %v, want [GET]", got.AllowedMethods)
 	}
@@ -591,12 +592,75 @@ func TestClamp_AllowedMethods(t *testing.T) {
 	}
 
 	// No ceiling opinion: an empty proposal stays empty (means "all" — a no-op).
-	got, warns = Clamp(types.RunPolicySpec{}, operatorCeiling(t), 0)
+	got, warns = Clamp(types.RunPolicySpec{}, operatorCeiling(t), types.GovernanceLimits{})
 	if len(got.AllowedMethods) != 0 {
 		t.Errorf("allowed_methods = %v, want empty (no ceiling opinion)", got.AllowedMethods)
 	}
 	if hasWarn(warns, "allowed_methods") {
 		t.Errorf("unexpected allowed_methods warning with no ceiling opinion: %v", warns)
+	}
+
+	// A proposal that leaves nothing the proxy would read (it trims, upper-cases and drops blanks, and
+	// reads an empty set as every method) takes the ceiling's list, as the empty proposal does.
+	blankCeiling := operatorCeiling(t)
+	blankCeiling.AllowedMethods = []string{"GET", " "}
+	for _, tc := range []struct {
+		name     string
+		ceiling  types.RunPolicySpec
+		proposed []string
+		dropped  string
+	}{
+		{"disjoint", ceiling, []string{"DELETE", "put"}, "dropped 2 method"},
+		{"unknown token", ceiling, []string{"FROB"}, "dropped 1 method"},
+		{"blank proposal entries", ceiling, []string{"", "  "}, "dropped 2 method"},
+		{"a blank entry the ceiling also holds", blankCeiling, []string{" "}, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, warns := Clamp(types.RunPolicySpec{AllowedMethods: tc.proposed}, tc.ceiling, types.GovernanceLimits{})
+			if !slices.Equal(got.AllowedMethods, tc.ceiling.AllowedMethods) || len(normMethods(got.AllowedMethods)) == 0 {
+				t.Fatalf("allowed_methods = %q, want the ceiling's %q", got.AllowedMethods, tc.ceiling.AllowedMethods)
+			}
+			if !hasWarn(warns, "allowed_methods restricted") || (tc.dropped != "" && !hasWarn(warns, tc.dropped)) {
+				t.Errorf("warnings = %v, want the restriction named (and %q)", warns, tc.dropped)
+			}
+			got.AllowedMethods[0] = "DELETE"
+			if tc.ceiling.AllowedMethods[0] != "GET" {
+				t.Error("the result shares the ceiling's list")
+			}
+		})
+	}
+}
+
+// TestClamp_AllowedMethodsOverlapAndSilentCeiling pins the two readings a change to the method clamp
+// must leave alone: a proposal that shares a method with the ceiling keeps the shared ones as authored,
+// and a ceiling that names no method leaves the proposal untouched.
+func TestClamp_AllowedMethodsOverlapAndSilentCeiling(t *testing.T) {
+	restricted := operatorCeiling(t)
+	restricted.AllowedMethods = []string{"GET", "POST"}
+	for _, tc := range []struct {
+		name           string
+		ceiling        types.RunPolicySpec
+		proposed, want []string
+		warn           string
+	}{
+		{"one shared method", restricted, []string{"GET", "DELETE"}, []string{"GET"}, "dropped 1 method"},
+		{"shared methods as authored", restricted, []string{" post ", "get"}, []string{" post ", "get"}, ""},
+		{"the whole ceiling", restricted, []string{"GET", "POST"}, []string{"GET", "POST"}, ""},
+		{"silent ceiling, a proposal", operatorCeiling(t), []string{"DELETE"}, []string{"DELETE"}, ""},
+		{"silent ceiling, no proposal", operatorCeiling(t), nil, nil, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, warns := Clamp(types.RunPolicySpec{AllowedMethods: tc.proposed}, tc.ceiling, types.GovernanceLimits{})
+			if !slices.Equal(got.AllowedMethods, tc.want) {
+				t.Errorf("allowed_methods = %q, want %q", got.AllowedMethods, tc.want)
+			}
+			if tc.warn == "" && hasWarn(warns, "method") {
+				t.Errorf("unexpected method warning: %v", warns)
+			}
+			if tc.warn != "" && !hasWarn(warns, tc.warn) {
+				t.Errorf("warnings = %v, want one holding %q", warns, tc.warn)
+			}
+		})
 	}
 }
 
@@ -616,7 +680,7 @@ func TestClamp_UIApps(t *testing.T) {
 	ceiling.UIApps = []types.UIApp{code}
 
 	// A proposal naming the ceiling's app survives, path and all.
-	got, warns := Clamp(types.RunPolicySpec{UIApps: []types.UIApp{{Name: "code", Port: 8080, Path: "/ide"}}}, ceiling, 0)
+	got, warns := Clamp(types.RunPolicySpec{UIApps: []types.UIApp{{Name: "code", Port: 8080, Path: "/ide"}}}, ceiling, types.GovernanceLimits{})
 	if len(got.UIApps) != 1 || got.UIApps[0].Path != "/ide" {
 		t.Errorf("ui_apps = %+v, want the ceiling-declared app kept with its own landing path", got.UIApps)
 	}
@@ -625,7 +689,7 @@ func TestClamp_UIApps(t *testing.T) {
 	}
 
 	// An app the ceiling never declared is dropped...
-	got, warns = Clamp(types.RunPolicySpec{UIApps: []types.UIApp{code, {Name: "shell", Port: 9999}}}, ceiling, 0)
+	got, warns = Clamp(types.RunPolicySpec{UIApps: []types.UIApp{code, {Name: "shell", Port: 9999}}}, ceiling, types.GovernanceLimits{})
 	if len(got.UIApps) != 1 || got.UIApps[0].Name != "code" {
 		t.Errorf("ui_apps = %+v, want only the ceiling's app", got.UIApps)
 	}
@@ -636,7 +700,7 @@ func TestClamp_UIApps(t *testing.T) {
 	// ...and so is the ceiling's own NAME pointed at a different port. Matching on
 	// the name alone would let a proposal borrow a blessed app's name and have the
 	// gateway relay any port in the sandbox — the widening this clamp exists for.
-	got, _ = Clamp(types.RunPolicySpec{UIApps: []types.UIApp{{Name: "code", Port: 9999}}}, ceiling, 0)
+	got, _ = Clamp(types.RunPolicySpec{UIApps: []types.UIApp{{Name: "code", Port: 9999}}}, ceiling, types.GovernanceLimits{})
 	if len(got.UIApps) != 0 {
 		t.Errorf("ui_apps = %+v — a ceiling app's NAME on a different port was relayed", got.UIApps)
 	}
@@ -644,7 +708,7 @@ func TestClamp_UIApps(t *testing.T) {
 	// A SILENT ceiling is no opinion: the proposal is left exactly as authored, so
 	// a profile that says nothing about ui_apps does not break every run that
 	// declares one (the DefaultPolicy-ceiling member, i.e. every member today).
-	got, warns = Clamp(types.RunPolicySpec{UIApps: []types.UIApp{{Name: "shell", Port: 9999}}}, operatorCeiling(t), 0)
+	got, warns = Clamp(types.RunPolicySpec{UIApps: []types.UIApp{{Name: "shell", Port: 9999}}}, operatorCeiling(t), types.GovernanceLimits{})
 	if len(got.UIApps) != 1 || got.UIApps[0].Name != "shell" {
 		t.Errorf("ui_apps = %+v, want untouched under a ceiling with no opinion", got.UIApps)
 	}
@@ -654,50 +718,54 @@ func TestClamp_UIApps(t *testing.T) {
 
 	// An EMPTY proposal never adopts — the anti-case that separates this field
 	// from allowed_methods above.
-	if got, _ = Clamp(types.RunPolicySpec{}, ceiling, 0); len(got.UIApps) != 0 {
+	if got, _ = Clamp(types.RunPolicySpec{}, ceiling, types.GovernanceLimits{}); len(got.UIApps) != 0 {
 		t.Errorf("ui_apps = %+v — an empty proposal ADOPTED the ceiling's apps; empty means `no UI apps`, not `all of them`", got.UIApps)
 	}
 }
 
 // TestClamp_Resources is HIGH-2: each field caps at the ceiling's when the
 // ceiling sets one; an unset (<=0) proposed field is the PERMISSIVE state here
-// (filled in by the driver's own default later) and is capped down exactly like
-// an explicit value that exceeds the ceiling.
+// (filled in by the driver's own default later) and is set to the ceiling exactly
+// like an explicit value that exceeds it. Only the explicit request was cut, so
+// only it warns: a fill is the normal case for a policy that names no sizes.
 func TestClamp_Resources(t *testing.T) {
 	ceiling := operatorCeiling(t)
 	ceiling.Resources = &types.ResourceLimits{CPUMillis: 2000, MemoryMiB: 4096}
 
 	// Proposal omits Resources entirely: adopts the ceiling's caps.
-	got, warns := Clamp(types.RunPolicySpec{}, ceiling, 0)
+	got, warns := Clamp(types.RunPolicySpec{}, ceiling, types.GovernanceLimits{})
 	if got.Resources == nil || got.Resources.CPUMillis != 2000 || got.Resources.MemoryMiB != 4096 {
 		t.Errorf("resources = %+v, want the ceiling's caps", got.Resources)
 	}
-	if !hasWarn(warns, "resources capped") {
-		t.Errorf("expected a resources warning, got %v", warns)
+	if hasWarn(warns, "resources capped") {
+		t.Errorf("a policy that names no sizes was warned as capped: %v", warns)
 	}
 
 	// Proposal exceeds the ceiling on one field, stays under on another, and
-	// leaves PidsLimit unset (0) — only CPUMillis should move.
-	got, _ = Clamp(types.RunPolicySpec{Resources: &types.ResourceLimits{CPUMillis: 8000, MemoryMiB: 1024}}, ceiling, 0)
+	// leaves PidsLimit unset (0) — only CPUMillis should move, and that warns.
+	got, warns = Clamp(types.RunPolicySpec{Resources: &types.ResourceLimits{CPUMillis: 8000, MemoryMiB: 1024}}, ceiling, types.GovernanceLimits{})
 	if got.Resources.CPUMillis != 2000 {
 		t.Errorf("CPUMillis = %d, want capped to 2000", got.Resources.CPUMillis)
 	}
 	if got.Resources.MemoryMiB != 1024 {
 		t.Errorf("MemoryMiB = %d, want the proposal's own 1024 (already under the cap)", got.Resources.MemoryMiB)
 	}
+	if !hasWarn(warns, "resources capped") {
+		t.Errorf("an explicit CPU request above the ceiling was cut without a warning: %v", warns)
+	}
 
 	// No ceiling opinion: falls back to the platform defaults —
 	// the SAME conservative caps CreateSandbox itself applies when a
 	// Resources field is zero — never left uncapped.
-	got, warns = Clamp(types.RunPolicySpec{}, operatorCeiling(t), 0)
+	got, warns = Clamp(types.RunPolicySpec{}, operatorCeiling(t), types.GovernanceLimits{})
 	if got.Resources == nil ||
 		got.Resources.CPUMillis != int(runner.DefaultCPUMillis) ||
 		got.Resources.MemoryMiB != int(runner.DefaultMemoryMiB) ||
 		got.Resources.PidsLimit != int(runner.DefaultPidsLimit) {
 		t.Errorf("resources = %+v, want the platform defaults (no ceiling opinion must not mean uncapped)", got.Resources)
 	}
-	if !hasWarn(warns, "resources capped") {
-		t.Errorf("expected a resources warning falling back to platform defaults, got %v", warns)
+	if hasWarn(warns, "resources capped") {
+		t.Errorf("falling back to the platform defaults is not a cap: %v", warns)
 	}
 }
 
@@ -722,7 +790,7 @@ func TestClamp_AutoStopAfterSec(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got, warns := Clamp(types.RunPolicySpec{AutoStopAfterSec: tc.proposed}, ceiling, 0)
+			got, warns := Clamp(types.RunPolicySpec{AutoStopAfterSec: tc.proposed}, ceiling, types.GovernanceLimits{})
 			if got.AutoStopAfterSec != tc.want {
 				t.Errorf("auto_stop_after_sec = %d, want %d", got.AutoStopAfterSec, tc.want)
 			}
@@ -733,7 +801,7 @@ func TestClamp_AutoStopAfterSec(t *testing.T) {
 	}
 	// No ceiling opinion (0): a POSITIVE proposal is left alone (nothing to
 	// cap it against).
-	got, warns := Clamp(types.RunPolicySpec{AutoStopAfterSec: 1800}, operatorCeiling(t), 0)
+	got, warns := Clamp(types.RunPolicySpec{AutoStopAfterSec: 1800}, operatorCeiling(t), types.GovernanceLimits{})
 	if got.AutoStopAfterSec != 1800 {
 		t.Errorf("auto_stop_after_sec = %d, want 1800 preserved (no ceiling opinion)", got.AutoStopAfterSec)
 	}
@@ -753,7 +821,7 @@ func TestClamp_AutoStopAfterSec(t *testing.T) {
 	// outcome invariant directly: under a ceiling with no positive maximum,
 	// neither an omitted nor a negative auto_stop leaves the run reapable.
 	for _, proposed := range []int{-1, 0} {
-		got, warns = Clamp(types.RunPolicySpec{AutoStopAfterSec: proposed}, operatorCeiling(t), 0)
+		got, warns = Clamp(types.RunPolicySpec{AutoStopAfterSec: proposed}, operatorCeiling(t), types.GovernanceLimits{})
 		if got.AutoStopAfterSec != proposed {
 			t.Errorf("auto_stop_after_sec = %d, want %d preserved — a ceiling with no positive maximum has no opinion to enforce", got.AutoStopAfterSec, proposed)
 		}
@@ -782,7 +850,7 @@ func TestClamp_ToolRulesNeverWiden(t *testing.T) {
 		{Tool: "*", Effect: types.ToolAllow},       // widens the ceiling's implicit hold: raised
 		{Tool: "Bash", Effect: types.ToolDeny},     // narrows: kept
 		{Tool: "WebFetch", Effect: types.ToolHold}, // weaker than the ceiling's deny: raised
-	}}, ceiling, 0)
+	}}, ceiling, types.GovernanceLimits{})
 	want := map[string]types.ToolEffect{"*": types.ToolHold, "Bash": types.ToolDeny, "WebFetch": types.ToolDeny}
 	if len(got.ToolRules) != len(want) {
 		t.Fatalf("clamped rules = %v, want one per tool in %v", got.ToolRules, want)
@@ -803,7 +871,7 @@ func TestClamp_ToolRulesNeverWiden(t *testing.T) {
 
 	// A proposal with no rules inherits the ceiling's, so an operator deny
 	// still applies to a member run that never mentioned the tool.
-	got, warns = Clamp(types.RunPolicySpec{}, ceiling, 0)
+	got, warns = Clamp(types.RunPolicySpec{}, ceiling, types.GovernanceLimits{})
 	if len(got.ToolRules) != 1 || got.ToolRules[0] != ceiling.ToolRules[0] {
 		t.Errorf("silent proposal must carry the ceiling's rules, got %v", got.ToolRules)
 	}
@@ -813,7 +881,7 @@ func TestClamp_ToolRulesNeverWiden(t *testing.T) {
 
 	// A ceiling that allows a tool lets the proposal allow it too.
 	ceiling.ToolRules = []types.ToolRule{{Tool: "*", Effect: types.ToolAllow}}
-	got, _ = Clamp(types.RunPolicySpec{ToolRules: []types.ToolRule{{Tool: "Read", Effect: types.ToolAllow}}}, ceiling, 0)
+	got, _ = Clamp(types.RunPolicySpec{ToolRules: []types.ToolRule{{Tool: "Read", Effect: types.ToolAllow}}}, ceiling, types.GovernanceLimits{})
 	for _, r := range got.ToolRules {
 		if r.Tool == "Read" && r.Effect != types.ToolAllow {
 			t.Errorf("Read should stay allow under an allow-all ceiling, got %s", r.Effect)
@@ -827,7 +895,7 @@ func TestClamp_ToolRulesNeverWiden(t *testing.T) {
 func TestClamp_ForcesOwnerOnlyOnFromTheCeiling(t *testing.T) {
 	scope := mustJSON(t, map[string]any{"host": "dev.azure.com", "secret_name": "ado-pat"})
 	ceiling := types.RunPolicySpec{EligibleGrants: []types.GrantSpec{{Kind: types.GrantGitPAT, Scope: scope, OwnerOnly: true}}}
-	got, _ := Clamp(types.RunPolicySpec{EligibleGrants: []types.GrantSpec{{Kind: types.GrantGitPAT, Scope: scope}}}, ceiling, 0)
+	got, _ := Clamp(types.RunPolicySpec{EligibleGrants: []types.GrantSpec{{Kind: types.GrantGitPAT, Scope: scope}}}, ceiling, types.GovernanceLimits{})
 	if len(got.EligibleGrants) != 1 || !got.EligibleGrants[0].OwnerOnly {
 		t.Fatalf("clamped grants = %+v, want the pairing kept with owner_only forced on", got.EligibleGrants)
 	}

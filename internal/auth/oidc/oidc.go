@@ -37,6 +37,8 @@ import (
 
 	gooidc "github.com/coreos/go-oidc/v3/oidc"
 	"golang.org/x/oauth2"
+
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // Config holds the OIDC client configuration. All fields except
@@ -61,6 +63,10 @@ type Config struct {
 	// one of the listed values case-insensitively, AND requires email_verified=true. Entra tokens
 	// typically omit email_verified, fail-closing every Entra login — prefer Entra App Roles instead.
 	AllowedEmailDomains []string
+	// RequireEmailVerified (WARDYN_OIDC_REQUIRE_EMAIL_VERIFIED, default false) applies the same
+	// email_verified gate AllowedEmailDomains implies, without a domain list: an ID token with no
+	// email_verified claim counts as unverified and is refused, false is refused, true passes.
+	RequireEmailVerified bool
 	// ExtraScopes is WARDYN_OIDC_EXTRA_SCOPES (CSV), appended to the fixed "openid profile email"
 	// request. Validated at boot against discovery scopes_supported, so an unadvertised scope
 	// refuses boot by name instead of locking every human out at login with invalid_scope.
@@ -92,9 +98,47 @@ type Config struct {
 	// denies the login. nil means only "standard" exists.
 	UserTypes UserTypeSource
 
-	// OnLogin, when set, is called synchronously after an APPROVED login with the derived role/user
-	// type and group snapshot. A failure inside it must never fail the login; nil is a no-op.
-	OnLogin func(ctx context.Context, sub, role, userType string, groups []string, groupsTruncated bool)
+	// RoleStampTTL is WARDYN_ROLE_STAMP_TTL: the oldest a session's role stamp may be, measured from
+	// the session's IssuedAt (the cookie's role is fixed then; only a sign-in changes it). An older
+	// session is rejected as "role_stamp_stale" and its owner signs in again. A cookie without an
+	// IssuedAt is older than any TTL. Zero is off. A session also ends at Expiry (the ID token's
+	// expiry, or SessionTTL from sign-in when that is set), so this only matters when it is shorter.
+	RoleStampTTL time.Duration
+
+	// SessionTTL is WARDYN_OIDC_SESSION_TTL: when set, a console session lasts this long from
+	// sign-in instead of ending at the ID token's expiry. Zero (the default) keeps the ID token's
+	// expiry. Boot refuses more than 24 hours. Nothing re-checks the identity provider during a
+	// session, so a longer session should be paired with RoleStampTTL.
+	SessionTTL time.Duration
+
+	// OnLogin, when set, is called synchronously after an APPROVED login with what that login
+	// established (LoginFacts). A failure inside it must never fail the login; nil is a no-op.
+	OnLogin func(ctx context.Context, facts LoginFacts)
+
+	// Identities, when set, is the per-identity gate (identity_gate.go): admission refuses a
+	// deactivated identity on every issuer, issuance records the identity row and stamps the
+	// session with its authority epoch, and a Revocations that implements IdentityRevocations
+	// refuses a cookie whose epoch a later suspension passed. nil is no gate.
+	Identities IdentityGate
+}
+
+// LoginFacts is what an approved sign-in established, handed to Config.OnLogin: who signed in as
+// whom, under which issuer, and the role, user type and group snapshot derived for the session.
+type LoginFacts struct {
+	// Sub is the principal the session carries.
+	Sub      string
+	Role     string
+	UserType string
+	Groups   []string
+	// GroupsTruncated reports Groups is a partial snapshot.
+	GroupsTruncated bool
+	// Issuer is the verified token's issuer.
+	Issuer string
+	// TenantID and ObjectID are Entra ID's tenant and object id, set together and only on an Entra
+	// sign-in whose token carries both; empty for every other issuer.
+	TenantID, ObjectID string
+	// Email is the token's email claim as sent, possibly empty.
+	Email string
 }
 
 // SessionRevocations is the store the revoke-a-human-now admin action reads and writes. Scoped to
@@ -125,15 +169,29 @@ type Session struct {
 	Email string `json:"email"`
 	// Name is the IdP's display-name claim, for the console header ONLY — gates nothing, keys
 	// nothing, never logged. omitempty: an absent key falls back to email (fail-safe).
-	Name   string    `json:"name,omitempty"`
-	Role   string    `json:"role"`
-	Expiry time.Time `json:"expiry"`
+	Name string `json:"name,omitempty"`
+	// ObjectID is the Entra object id (`oid`) the ID token named, stamped only on an Entra sign-in.
+	// It is an identity INPUT (ObjectIDFromContext: an own Azure DevOps token is bound to the person
+	// by it), never logged and never echoed. omitempty: a cookie without it is still a session and
+	// the reader falls back to the person row or the email, so its absence is never a refusal.
+	ObjectID string    `json:"oid,omitempty"`
+	Role     string    `json:"role"`
+	Expiry   time.Time `json:"expiry"`
 	// UserType is stamped beside the tier at sign-in; everyone carries "standard" until the role
 	// map names custom ones.
 	UserType string `json:"ut"`
 	// IssuedAt is when CallbackHandler minted this cookie, compared against a revoke cutoff by
 	// IsSessionRevoked. omitempty: an absent key decodes to the zero time either way.
 	IssuedAt time.Time `json:"iat,omitempty"`
+	// AuthorityEpoch is the identity's authority epoch when this cookie was minted (Config.Identities).
+	// A suspension raises the epoch, so a cookie minted before it is refused at its next request, and
+	// stays refused after a reactivation. omitempty: a cookie without it is epoch 0.
+	AuthorityEpoch int64 `json:"ae,omitempty"`
+	// RevocationSeq is the revocation sequence read just before the sign-in's identity was admitted
+	// (RevocationOrder). A revocation cut with a greater sequence ends this session, whatever the
+	// clock says. omitempty: a cookie without it was issued by a replica that predates it and is
+	// compared on IssuedAt, as before.
+	RevocationSeq int64 `json:"rseq,omitempty"`
 	// Groups is the LOGIN-TIME SNAPSHOT of the human's group identity (normalized union of the ID
 	// token's "roles"/"groups" claims), against which a `group`-subject grant matches. Nothing
 	// refreshes it — a group added at the IdP reaches Wardyn on the next login. NO omitempty,
@@ -178,7 +236,7 @@ type Authenticator struct {
 	oauth2     oauth2.Config
 	verifier   *gooidc.IDTokenVerifier
 	hmacKey    []byte
-	httpClient *http.Client // nil means http.DefaultClient; stored for test injection
+	httpClient *http.Client // the token-exchange client: any injected transport, bounded by idpHTTPTimeout
 
 	subjectVerifier *gooidc.IDTokenVerifier // any audience: VerifySubjectToken checks it
 
@@ -342,7 +400,16 @@ func New(ctx context.Context, cfg Config, hmacKey []byte) (*Authenticator, error
 	// The ID-token key set uses a JWKS-TOLERANT client so one unparseable entry skips instead of
 	// failing the whole document and locking every human out. VerifierContext (not Verifier) is only
 	// so the key set gets its own HTTP client, using background context since it outlives this call.
-	keySetCtx := gooidc.ClientContext(context.Background(), newTolerantJWKSClient(httpClient))
+	// The token exchange and the key set share one client bounded by idpHTTPTimeout (discovery above
+	// is bounded by the caller's ctx). A copy, so the caller's transport and settings survive.
+	idpClient := &http.Client{}
+	if httpClient != nil {
+		*idpClient = *httpClient
+	}
+	if idpClient.Timeout == 0 {
+		idpClient.Timeout = idpHTTPTimeout
+	}
+	keySetCtx := gooidc.ClientContext(context.Background(), newTolerantJWKSClient(idpClient))
 	verifier := provider.VerifierContext(keySetCtx, &gooidc.Config{ClientID: cfg.ClientID})
 
 	return &Authenticator{
@@ -351,7 +418,7 @@ func New(ctx context.Context, cfg Config, hmacKey []byte) (*Authenticator, error
 		verifier:               verifier,
 		subjectVerifier:        provider.VerifierContext(keySetCtx, &gooidc.Config{SkipClientIDCheck: true}),
 		hmacKey:                hmacKey,
-		httpClient:             httpClient,
+		httpClient:             idpClient,
 		groupsScopeUnrequested: groupsScopeUnrequested,
 		entra:                  isEntraIssuer(cfg.IssuerURL),
 	}, nil
@@ -427,10 +494,42 @@ func (a *Authenticator) startLogin(w http.ResponseWriter, r *http.Request, widen
 	http.Redirect(w, r, authURL, http.StatusFound)
 }
 
-// LogoutHandler clears the Wardyn session cookie and redirects to the console root.
+// LogoutHandler is SignOut for a route that has no use for its outcome.
 func (a *Authenticator) LogoutHandler(w http.ResponseWriter, r *http.Request) {
+	a.SignOut(w, r)
+}
+
+// SignOut clears the Wardyn session cookie, cuts the signer's browser sessions server-side so a copy of the
+// cookie stops working too, and redirects to the console root. It returns the sub it cut or tried to cut
+// ("" when it cut nobody) and the cut's error.
+//
+// The cut is the one sign-out everywhere writes (CutSessions): it ends every browser session of the person,
+// not only this one, and leaves their API tokens and SSH keys alone. It is written only for a request that
+// Middleware accepted as that same live session (PrincipalFromContext names the cookie's sub): a cookie that
+// merely verifies is not enough, since an expired, revoked or role-stale copy still carries a valid
+// signature, and a request that also presents a bearer credential skips the rejected-cookie answer. Such a
+// cookie is cleared and redirected like any other, and cuts nobody.
+//
+// A cut that cannot be written answers 503, with the cookie already cleared, so the caller does not read an
+// unconfirmed sign-out as a confirmed one.
+//
+// The sign-in state, nonce, PKCE and widened-login cookies are cleared too, so a login this browser started
+// before signing out (a popup still at the identity provider) fails its callback's state check afterwards.
+func (a *Authenticator) SignOut(w http.ResponseWriter, r *http.Request) (cutSub string, err error) {
 	a.clearSessionCookie(w)
+	for _, name := range []string{stateCookieName, nonceCookieName, pkceCookieName, widenedCookieName} {
+		a.clearCookie(w, name)
+	}
+	if sess, derr := a.decodeSession(r); derr == nil && a.cfg.Revocations != nil && PrincipalFromContext(r.Context()) == sess.Sub {
+		if err = CutSessions(r.Context(), a.cfg.Revocations, sess.Sub); err != nil {
+			slog.Error("oidc: sign-out could not cut the session server-side", "error", err)
+			http.Error(w, "sign-out could not be confirmed on the server", http.StatusServiceUnavailable)
+			return sess.Sub, err
+		}
+		cutSub = sess.Sub
+	}
 	http.Redirect(w, r, a.cfg.BasePath+"/", http.StatusFound)
+	return cutSub, nil
 }
 
 // Middleware sets HumanPrincipal on the context for a valid session cookie, or falls through to
@@ -442,15 +541,27 @@ func (a *Authenticator) Middleware(next http.Handler) http.Handler {
 		sess, err := a.decodeSession(r)
 		if err == nil {
 			if time.Now().UTC().Before(sess.Expiry) {
+				// A role stamp older than the TTL is not trusted: the role in the cookie is as old as
+				// IssuedAt, and a demotion made only at the IdP reaches it by a new sign-in.
+				if ttl := a.cfg.RoleStampTTL; ttl > 0 && (sess.IssuedAt.IsZero() || time.Now().UTC().Sub(sess.IssuedAt) > ttl) {
+					a.clearSessionCookie(w)
+					next.ServeHTTP(w, r.WithContext(withSessionRejected(r.Context(), SessionRoleStampStale)))
+					return
+				}
 				// A revoked session must stop working on its VERY NEXT request, not linger until Expiry.
 				if a.cfg.Revocations != nil {
-					revoked, rerr := a.cfg.Revocations.IsSessionRevoked(r.Context(), sess.Sub, sess.Email, sess.IssuedAt)
+					status, rerr := CheckSession(r.Context(), a.cfg.Revocations, sess.Sub, sess.Email, Issue{At: sess.IssuedAt, Seq: sess.RevocationSeq}, sess.AuthorityEpoch)
 					if rerr != nil {
 						// Fail CLOSED: a store error must never look like "not revoked" on a security gate.
 						next.ServeHTTP(w, r.WithContext(withSessionRejected(r.Context(), "session_revocation_unavailable")))
 						return
 					}
-					if revoked {
+					if status == SessionDeactivated {
+						a.clearSessionCookie(w)
+						next.ServeHTTP(w, r.WithContext(withSessionRejected(r.Context(), "identity_deactivated")))
+						return
+					}
+					if status != SessionLive {
 						a.clearSessionCookie(w)
 						next.ServeHTTP(w, r.WithContext(withSessionRejected(r.Context(), "revoked_session")))
 						return
@@ -488,7 +599,7 @@ func randomToken() string {
 // allowed domains (case-insensitive). Fail closed on empty/malformed addresses.
 //
 // SECURITY: the ASCII guard runs on the RAW domain, BEFORE the fold (same order emailInList,
-// deriveRole, ParseRoleMap and CanonicalGroupSubject use): strings.ToLower does Unicode case
+// deriveRole, ParseRoleMap and types.CanonicalGroupSubject use): strings.ToLower does Unicode case
 // MAPPING, not an ASCII fold (KELVIN SIGN U+212A maps to 'k'), so lowering first would let a domain "Korp.com" fold onto
 // operator's ASCII entry on an id_token the attacker's own tenant signed; refusing a non-ASCII
 // domain before the fold costs a real login nothing and closes the escalation.
@@ -499,7 +610,7 @@ func emailDomainAllowed(email string, allowed []string) bool {
 	}
 	raw := email[at+1:]
 	// Also makes "user@" (no domain) fail closed rather than match an empty allowlist entry.
-	if raw == "" || !printableASCII(raw) {
+	if raw == "" || !types.PrintableASCII(raw) {
 		return false
 	}
 	domain := strings.ToLower(raw)
@@ -549,6 +660,11 @@ const (
 	tokenExchangeRetries = 3
 	tokenExchangeBackoff = 250 * time.Millisecond
 )
+
+// idpHTTPTimeout bounds each token-exchange and JWKS request to the IdP, so an endpoint that accepts
+// the connection but never answers fails as a timeout (and the exchange retries) instead of holding
+// the callback, or the shared key refresh, open indefinitely. A var only so tests can shorten it.
+var idpHTTPTimeout = 10 * time.Second
 
 // retryExchange calls oauth2.Config.Exchange, retrying up to tokenExchangeRetries times only when
 // isTransientOIDCErr judges the failure retriable; invalid_grant and other non-transient errors
@@ -614,16 +730,18 @@ var ErrInvalidSession = errors.New("oidc: invalid session cookie")
 
 // ─── split-horizon issuer rewrite transport ──────────────────────────────────
 
-// rewriteTransport rewrites the authority of every outbound request from the public issuer to the
-// internal one, so wardynd reaches the IdP internally while the browser uses the public host.
+// rewriteTransport rewrites the scheme and authority of every outbound request from the public
+// issuer to the internal one, so wardynd reaches the IdP internally while the browser uses the
+// public host.
 type rewriteTransport struct {
 	fromHost string // public authority, e.g. "localhost:5556"
 	toHost   string // internal authority, e.g. "dex:5556"
+	toScheme string // internal scheme, e.g. "http" behind an https public issuer
 	base     http.RoundTripper
 }
 
-// newRewriteTransport builds a rewriteTransport from two base URLs. The schemes
-// are ignored (only the authority is matched/rewritten). base may be nil.
+// newRewriteTransport builds a rewriteTransport from two base URLs. Requests are matched on the
+// public authority only; a match takes the internal URL's scheme and authority. base may be nil.
 func newRewriteTransport(publicURL, internalURL string, baseClient *http.Client) (*rewriteTransport, error) {
 	pu, err := url.Parse(publicURL)
 	if err != nil || pu.Host == "" {
@@ -640,13 +758,14 @@ func newRewriteTransport(publicURL, internalURL string, baseClient *http.Client)
 	if base == nil {
 		base = http.DefaultTransport
 	}
-	return &rewriteTransport{fromHost: pu.Host, toHost: iu.Host, base: base}, nil
+	return &rewriteTransport{fromHost: pu.Host, toHost: iu.Host, toScheme: iu.Scheme, base: base}, nil
 }
 
 func (t *rewriteTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if req.URL.Host == t.fromHost {
 		// Clone so we never mutate the caller's request.
 		r2 := req.Clone(req.Context())
+		r2.URL.Scheme = t.toScheme
 		r2.URL.Host = t.toHost
 		r2.Host = t.toHost
 		return t.base.RoundTrip(r2)

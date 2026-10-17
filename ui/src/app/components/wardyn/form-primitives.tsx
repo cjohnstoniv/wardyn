@@ -17,6 +17,13 @@ import { cn } from "../ui/utils";
 import { Label } from "../ui/label";
 
 // A labelled form field with optional helper/hint text.
+/** The id Field gives its hint paragraph. A caller whose real control is not
+ *  Field's direct child (a wrapper div, a Select root) points the control's
+ *  aria-describedby here itself. Only valid while the Field renders a hint. */
+export function fieldHintId(htmlFor: string): string {
+  return `${htmlFor}-hint`;
+}
+
 export function Field({
   label,
   htmlFor,
@@ -34,12 +41,13 @@ export function Field({
   children: React.ReactNode;
   className?: string;
 }) {
-  // U-11: an auto hint id + aria-describedby on the control, wired here once
-  // so every Field caller benefits (was visual-only — a screen-reader user
-  // had no association between a hint and its control). Only when there is
-  // both an id to key it by and a hint to point at; only for a SINGLE
-  // element child, the shape every real caller passes.
-  const hintId = htmlFor && hint ? `${htmlFor}-hint` : undefined;
+  // U-11: an auto hint id + aria-describedby on the child, wired here once.
+  // Only when there is both an id to key it by and a hint to point at; only
+  // for a SINGLE element child. That reaches the control only when the child
+  // IS the control and forwards the prop (an Input, DirectoryCombobox): a
+  // wrapper div or a Select root drops it, so such a caller sets
+  // aria-describedby={fieldHintId(id)} on the real control itself (#1486).
+  const hintId = htmlFor && hint ? fieldHintId(htmlFor) : undefined;
   const control =
     hintId && React.isValidElement<{ "aria-describedby"?: string }>(children)
       ? React.cloneElement(children, {

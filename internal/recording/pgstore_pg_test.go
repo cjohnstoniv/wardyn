@@ -172,3 +172,9 @@ func TestPGStore_SizeCap(t *testing.T) {
 		t.Fatalf("OpenCast after a rejected oversized save = %v, want ErrNotFound (no partial row)", err)
 	}
 }
+
+// DeleteRun is what a person's erasure reaches recordings through: the run's
+// casts go on every replica, another run's stay, and a repeat is harmless.
+func TestPGStoreDeleteRun(t *testing.T) {
+	deleteRunContract(t, recording.NewPGStore(pgPool(t)))
+}

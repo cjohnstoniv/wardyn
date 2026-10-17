@@ -12,6 +12,9 @@ package store_test
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
 	"testing"
 	"time"
 
@@ -96,5 +99,93 @@ func TestPG_AttachTicket_MintSweepsExpired(t *testing.T) {
 	}
 	if _, ok, err := st.ConsumeAttachTicket(ctx, live, now); !ok || err != nil {
 		t.Errorf("the mint's own ticket was swept: ok=%v err=%v", ok, err)
+	}
+}
+
+// The ticket carries the authority it was admitted under (migration 0106):
+// the admission time and the verified email round-trip, an empty email reads
+// back empty, and a row written without them (an older binary) reads a ZERO
+// authority time, which redemption refuses.
+func TestPG_AttachTicket_AuthorityRoundTrip(t *testing.T) {
+	pool := runsPGPool(t)
+	st := store.NewPG(pool)
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Microsecond)
+
+	tok := uuid.NewString()
+	admitted := now.Add(-2 * time.Second)
+	if err := st.MintAttachTicket(ctx, tok, store.AttachTicket{
+		RunID: uuid.New(), ActorType: types.ActorHuman, Principal: "alice",
+		AuthorizedAt: admitted, Email: "alice@corp.example",
+	}, now, now.Add(30*time.Second)); err != nil {
+		t.Fatalf("mint: %v", err)
+	}
+	got, ok, err := st.ConsumeAttachTicket(ctx, tok, now)
+	if err != nil || !ok {
+		t.Fatalf("consume: ok=%v err=%v", ok, err)
+	}
+	if !got.AuthorizedAt.Equal(admitted) || got.Email != "alice@corp.example" {
+		t.Fatalf("authority lost in the round trip: %+v, want authorized_at %s and the email", got, admitted)
+	}
+
+	// The admin-token and local lanes carry no email: "" is a value, not a miss.
+	tok = uuid.NewString()
+	if err := st.MintAttachTicket(ctx, tok, store.AttachTicket{
+		RunID: uuid.New(), ActorType: types.ActorSystem, Principal: "admin-token", AuthorizedAt: admitted,
+	}, now, now.Add(30*time.Second)); err != nil {
+		t.Fatalf("mint: %v", err)
+	}
+	got, ok, err = st.ConsumeAttachTicket(ctx, tok, now)
+	if err != nil || !ok || got.Email != "" || got.AuthorizedAt.IsZero() {
+		t.Fatalf("empty-email ticket: %+v ok=%v err=%v", got, ok, err)
+	}
+
+	// A row an older binary wrote: no authority columns at all.
+	tok = uuid.NewString()
+	sum := sha256.Sum256([]byte(tok))
+	if _, err := pool.Exec(ctx, `INSERT INTO attach_tickets (token_sha256, run_id, actor_type, principal, role, expires_at)
+		VALUES ($1, $2, 'human', 'legacy', 'user', $3)`, hex.EncodeToString(sum[:]), uuid.New(), now.Add(30*time.Second)); err != nil {
+		t.Fatalf("insert legacy row: %v", err)
+	}
+	got, ok, err = st.ConsumeAttachTicket(ctx, tok, now)
+	if err != nil || !ok {
+		t.Fatalf("consume legacy row: ok=%v err=%v", ok, err)
+	}
+	if !got.AuthorizedAt.IsZero() || got.Email != "" {
+		t.Fatalf("a row with NULL authority columns read %+v, want the zero time and no email", got)
+	}
+}
+
+// GetDelegatedTokenByID is the by-grant-id twin of GetDelegatedTokenByRaw: live
+// while unexpired and its portal registered, ErrNotFound otherwise.
+func TestPG_GetDelegatedTokenByID(t *testing.T) {
+	st := store.NewPG(runsPGPool(t))
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	d, err := st.CreateDelegate(ctx, types.Delegate{ID: uuid.New(), Name: "portal-" + uuid.NewString()[:8], IdPClientID: "client-" + uuid.NewString()[:8], Group: "g"}, "wdp_"+uuid.NewString())
+	if err != nil {
+		t.Fatalf("create delegate: %v", err)
+	}
+	grant := types.DelegatedToken{ID: uuid.New(), DelegateID: d.ID, Principal: "alice", CreatedAt: now, ExpiresAt: now.Add(10 * time.Minute)}
+	if _, err := st.MintDelegatedToken(ctx, grant, "wdg_"+uuid.NewString(), now); err != nil {
+		t.Fatalf("mint: %v", err)
+	}
+
+	got, err := st.GetDelegatedTokenByID(ctx, grant.ID, now)
+	if err != nil || got.ID != grant.ID || got.DelegateID != d.ID {
+		t.Fatalf("live grant: %+v err=%v", got, err)
+	}
+	if _, err := st.GetDelegatedTokenByID(ctx, grant.ID, now.Add(11*time.Minute)); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("expired grant: err=%v, want ErrNotFound", err)
+	}
+	if _, err := st.GetDelegatedTokenByID(ctx, uuid.New(), now); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("unknown grant: err=%v, want ErrNotFound", err)
+	}
+	if _, err := st.RevokeDelegate(ctx, d.ID, now); err != nil {
+		t.Fatalf("revoke: %v", err)
+	}
+	if _, err := st.GetDelegatedTokenByID(ctx, grant.ID, now); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("grant of a revoked portal: err=%v, want ErrNotFound", err)
 	}
 }

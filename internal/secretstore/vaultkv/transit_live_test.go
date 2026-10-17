@@ -85,8 +85,8 @@ path "%[1]s/decrypt/rsa" { capabilities = ["update"] }
 		}
 		a.must(http.MethodPost, mount+"/keys/wardyn/rotate", nil)
 		n, err := tr.LatestVersion(ctx)
-		if err != nil || n != 2 {
-			t.Fatalf("LatestVersion after a rotation = (%d, %v), want 2", n, err)
+		if err != nil || n != "2" {
+			t.Fatalf("LatestVersion after a rotation = (%q, %v), want 2", n, err)
 		}
 		if _, err := tr.Unwrap(ctx, w1, kek.Bind("", "k")); err != nil {
 			t.Fatalf("a v1 wrap after the rotation: %v", err)
@@ -142,14 +142,14 @@ path "%[1]s/decrypt/rsa" { capabilities = ["update"] }
 			t.Fatal(err)
 		}
 		if res, err := secretstorepg.RewrapKeys(ctx, keys(pool, id, tr, true)); err != nil || res.Rewrapped != 2 || res.KeyVersion != latest {
-			t.Fatalf("RewrapKeys onto Transit = (%+v, %v), want 2 rows at v%d", res, err, latest)
+			t.Fatalf("RewrapKeys onto Transit = (%+v, %v), want 2 rows at v%s", res, err, latest)
 		}
 		a.must(http.MethodPost, mount+"/keys/wardyn/rotate", nil)
 		res, err := secretstorepg.RewrapKeys(ctx, keys(pool, nil, tr, true))
-		if err != nil || res.Rewrapped != 2 || res.KeyVersion != latest+1 {
-			t.Fatalf("RewrapKeys after a rotation = (%+v, %v), want 2 rows at v%d", res, err, latest+1)
+		if err != nil || res.Rewrapped != 2 || res.KeyVersion == latest {
+			t.Fatalf("RewrapKeys after a rotation = (%+v, %v), want 2 rows past v%s", res, err, latest)
 		}
-		a.must(http.MethodPost, mount+"/keys/wardyn/config", map[string]any{"min_decryption_version": res.KeyVersion})
+		a.must(http.MethodPost, mount+"/keys/wardyn/config", map[string]any{"min_decryption_version": minDecryption(t, res.KeyVersion)})
 		for _, n := range []string{"a", "b"} {
 			if v, err := pgStore(t, pool, nil, tr, true).Get(ctx, n); err != nil || string(v) != "v-"+n {
 				t.Fatalf("Get(%s) with the older versions retired = (%q, %v)", n, v, err)

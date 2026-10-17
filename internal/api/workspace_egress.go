@@ -4,12 +4,17 @@
 package api
 
 import (
+	"encoding/json"
+	"fmt"
 	"net"
 	"net/http"
 	neturl "net/url"
+	"slices"
 	"strconv"
 	"strings"
 
+	"github.com/cjohnstoniv/wardyn/internal/egress"
+	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/hostrules"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -159,7 +164,7 @@ func substituteArtifactEgress(domains []string, sc types.SiteConfig) []string {
 		for _, h := range pub {
 			dropHost[strings.ToLower(h)] = true
 		}
-		// Port-qualified, never bare: a bare entry matches EVERY port (classifyDomain
+		// Port-qualified, never bare: a bare entry matches EVERY port (domainmatch.Classify
 		// gives it port 0, and Policy.AllowsLiteralIP answers true from allowedExact
 		// first), so a bare To of https://10.40.2.11:8443/ would trust :22 and :5432
 		// too. planArtifactRedirect's MITM/token half derives the port from the same
@@ -267,11 +272,14 @@ func workspaceSuggestedEgress(workspaces []types.Workspace) []string {
 // that needs one surfaces as an observed-egress denial the operator can
 // promote. ALLOW-only by return shape: the one caller (workspace_run.go) reads
 // ws.DeniedEgress directly for the deny side.
+// trusted is the launching principal's ceiling allowlist: a member-owned workspace's private-range
+// clone host is bounded by it (runCloneEgress), on the learning session's allow-all policy too.
 // A method, so it MUST apply the operator_set provenance gate on s.cfg
 // (egressProvenanceAllowed): otherwise a scan_seeded host, derived from
 // UNTRUSTED repo content, would be auto-allowed on every confined replay.
-func (s *Server) confinedEgressDomains(ws types.Workspace) []string {
-	base := &types.RunPolicySpec{AllowedDomains: workspaceCloneEgress(ws)}
+func (s *Server) confinedEgressDomains(ws types.Workspace, trusted []string) []string {
+	clone, _ := runCloneEgress(ws, trusted)
+	base := &types.RunPolicySpec{AllowedDomains: clone}
 	unionWorkspaceEgress(base, []types.Workspace{ws})
 	// The verify loop's approvals land as REQUIRED egress: rows in the folded
 	// contract (workspace overlay ∪ attached sources) — the replay must honor
@@ -314,9 +322,9 @@ func (s *Server) egressProvenanceAllowed(req types.WorkspaceRequirement) bool {
 // that field is only populated for a single-source workspace, so reading it
 // silently dropped the clone host of every non-GitHub repo past the first —
 // and a confined replay would then deny the clone it was launched to prove.
-// GitHub sources contribute nothing here by design (they route through the
-// broker, which is on-segment, not an egress host), which is exactly why the
-// gap stayed invisible.
+// GitHub HTTPS sources contribute nothing here: brokered clones use the
+// on-segment broker; custom direct clones use unionDirectGitHubEgress so their
+// derived hosts still pass the caller's domain bounds.
 func workspaceCloneEgress(ws types.Workspace) []string {
 	var hosts []string
 	seen := map[string]struct{}{}
@@ -330,6 +338,57 @@ func workspaceCloneEgress(ws types.Workspace) []string {
 		}
 	}
 	return hosts
+}
+
+// runCloneEgress is workspaceCloneEgress for a run: the clone hosts the run may add for ws, and the
+// ones it may not. A member-owned workspace's clone host is the member's own entry, and the proxy
+// trusts a private-range literal named by an exact entry past its address guard, so such a host is
+// kept only where independently trusted exact authority already covers it: trusted (the run's
+// ceiling allowlist) and the workspace's operator-written ApprovedEgress, checked with
+// proxy.Policy.ExceedsLiteralTrust. A derived host is bare (every port), so an authority for one port
+// does not cover it. An operator-owned workspace's hosts, names and public literals are kept as they
+// are. Applied wherever a run unions clone hosts (deriveRunEgress, the preview, the autonomy
+// posture), since nothing clamps the derived union after it.
+func runCloneEgress(ws types.Workspace, trusted []string) (kept, dropped []string) {
+	return boundCloneHosts(workspaceCloneEgress(ws), ws, trusted)
+}
+
+// boundCloneHosts is runCloneEgress's rule for clone hosts already derived from ws's repositories,
+// for the door that clones one of them (a scan run).
+func boundCloneHosts(hosts []string, ws types.Workspace, trusted []string) (kept, dropped []string) {
+	if ws.OwnedBy == "" {
+		return hosts, nil
+	}
+	return hostsWithinLiteralTrust(hosts, append(slices.Clone(trusted), ws.ApprovedEgress...))
+}
+
+// hostsWithinLiteralTrust splits derived clone hosts by whether authority's exact entries already
+// cover the private-range literal trust each would carry (proxy.Policy.ExceedsLiteralTrust). A host
+// that carries none (a name, a public literal) is always kept.
+func hostsWithinLiteralTrust(hosts, authority []string) (kept, dropped []string) {
+	compiled := proxy.CompilePolicy(types.RunPolicySpec{AllowedDomains: authority})
+	for _, h := range hosts {
+		if compiled.ExceedsLiteralTrust(h) {
+			dropped = append(dropped, h)
+			continue
+		}
+		kept = append(kept, h)
+	}
+	return kept, dropped
+}
+
+// cloneHostDropWarning is the sentence for a clone host a bound dropped, naming where an admin can
+// allow it. A workspace's approved egress takes dotted hosts only (hostrules.ValidApprovedHost), so
+// an IPv6 literal, like any host of a library source, can be listed only in the ceiling.
+func cloneHostDropWarning(host, kind, name string) string {
+	remedy := "allow it in the workspace's approved egress"
+	switch {
+	case kind == "source":
+		remedy = "list it in the deployment ceiling's allowed_domains"
+	case strings.Contains(host, ":"):
+		remedy = "list it in the ceiling's allowed_domains"
+	}
+	return fmt.Sprintf("dropped clone host %q of %s %q: a private address not in operator allowlist; %s", host, kind, name, remedy)
 }
 
 // scanEgressDomains returns the egress allowlist a scan/verify run needs to clone
@@ -466,6 +525,13 @@ func (s *Server) handleObservedEgress(w http.ResponseWriter, r *http.Request) {
 			if host == "" || skip[host] || !hostrules.ValidApprovedHost(host) {
 				continue
 			}
+			// Policy allowed these hosts and the network lost the connection:
+			// promoting one into an allow-list would fix nothing. The same
+			// predicate the deny counter reads (egress.IsNetworkFault), so a
+			// network fault is never a denial to one consumer and one to another.
+			if egress.IsNetworkFault(auditRuleSource(ev)) {
+				continue
+			}
 			denied[host] = struct{}{}
 		}
 	}
@@ -494,4 +560,13 @@ func runUsesWorkspace(run types.AgentRun, ws types.Workspace) bool {
 		}
 	}
 	return false
+}
+
+// auditRuleSource reads the rule_source an egress decision row recorded.
+func auditRuleSource(ev types.AuditEvent) string {
+	var d struct {
+		RuleSource string `json:"rule_source"`
+	}
+	_ = json.Unmarshal(ev.Data, &d)
+	return d.RuleSource
 }

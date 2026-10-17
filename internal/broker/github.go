@@ -51,9 +51,8 @@ type githubMinter struct {
 }
 
 // githubClientTimeout bounds the WHOLE mint, not each hop: MintInstallationToken
-// runs inside mint()'s transaction, holding the grant row lock and a pooled
-// Postgres connection, so a blackholed api.github.com would otherwise pin
-// both. Applied twice — as the http.Client Timeout (per round trip) and as
+// runs while mint() prepares the credential, so a blackholed api.github.com
+// would otherwise hold the mint unbounded. Applied twice — as the http.Client Timeout (per round trip) and as
 // the derived ctx (per mint) — so a tighter caller deadline still wins.
 const githubClientTimeout = 15 * time.Second
 
@@ -209,6 +208,110 @@ func (m *githubMinter) Revoke(ctx context.Context, token string) error {
 	return nil
 }
 
+// ErrGitHubRefused marks a GitHub answer that refused the App (401, 403, 404
+// or 422): not installed on the repository, missing the permission, or no
+// such repository.
+var ErrGitHubRefused = errors.New("broker: github refused the app")
+
+// ListBranches lists repo's ("owner/name") branches: at most limit names, the
+// default branch, and whether more exist.
+//
+// It mints its own token outside mint(), like VerifyRefRuleset: one
+// repository, contents:read (what a private repository's branch list needs),
+// and nothing else. GitHub fixes an installation token's life at ~1h and it
+// cannot be shortened, so the token is handed back once read; that revoke is
+// best effort, and a failed one leaves the token live until GitHub expires it.
+// The token never leaves this function.
+func (m *githubMinter) ListBranches(ctx context.Context, repo string, limit int) ([]string, string, bool, error) {
+	owner, names, err := splitRepos([]string{repo})
+	if err != nil {
+		return nil, "", false, err
+	}
+	tok, _, err := m.MintInstallationToken(ctx, []string{repo}, map[string]string{"contents": "read"}, defaultMaxTTL)
+	if err != nil {
+		return nil, "", false, githubRefusal(err)
+	}
+	defer func() { _ = m.Revoke(ctx, tok) }()
+	ctx, cancel := context.WithTimeout(ctx, m.timeout())
+	defer cancel()
+	opts := []gh.ClientOptionsFunc{gh.WithAuthToken(tok), gh.WithTimeout(m.timeout())}
+	if m.baseURL != "" {
+		opts = append(opts, gh.WithURLs(&m.baseURL, nil))
+	}
+	c, err := gh.NewClient(opts...)
+	if err != nil {
+		return nil, "", false, fmt.Errorf("broker: build github client: %w", err)
+	}
+	r, _, err := c.Repositories.Get(ctx, owner, names[0])
+	if err != nil {
+		return nil, "", false, githubRefusal(err)
+	}
+	var out []string
+	lo := &gh.BranchListOptions{ListOptions: gh.ListOptions{PerPage: 100}}
+	for {
+		page, resp, err := c.Repositories.ListBranches(ctx, owner, names[0], lo)
+		if err != nil {
+			return nil, "", false, githubRefusal(err)
+		}
+		for _, b := range page {
+			out = append(out, b.GetName())
+		}
+		if len(out) >= limit {
+			return out[:limit], r.GetDefaultBranch(), len(out) > limit || resp.NextPage != 0, nil
+		}
+		if resp.NextPage == 0 {
+			return out, r.GetDefaultBranch(), false, nil
+		}
+		lo.Page = resp.NextPage
+	}
+}
+
+// InstallationPermissions reads the App's own grant on the installation that
+// covers repo, through the App-authenticated client: GitHub reports it on the
+// installation itself.
+func (m *githubMinter) InstallationPermissions(ctx context.Context, repo string) (map[string]string, error) {
+	owner, names, err := splitRepos([]string{repo})
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithTimeout(ctx, m.timeout())
+	defer cancel()
+	client, err := m.client(ctx)
+	if err != nil {
+		return nil, err
+	}
+	instID, err := m.installationID(ctx, client, owner, names[0])
+	if err != nil {
+		return nil, err
+	}
+	inst, _, err := client.Apps.GetInstallation(ctx, instID)
+	if err != nil {
+		return nil, githubRefusal(fmt.Errorf("broker: read installation for %s: %w", owner, err))
+	}
+	b, err := json.Marshal(inst.GetPermissions())
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]string{}
+	if err := json.Unmarshal(b, &out); err != nil {
+		return nil, fmt.Errorf("broker: decode installation permissions: %w", err)
+	}
+	return out, nil
+}
+
+// githubRefusal wraps err in ErrGitHubRefused when GitHub itself answered it
+// with a refusal status; any other error passes through unchanged.
+func githubRefusal(err error) error {
+	var ghErr *gh.ErrorResponse
+	if errors.As(err, &ghErr) && ghErr.Response != nil {
+		switch ghErr.Response.StatusCode {
+		case http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound, http.StatusUnprocessableEntity:
+			return fmt.Errorf("%w: %w", ErrGitHubRefused, err)
+		}
+	}
+	return err
+}
+
 // installationID resolves (and caches) the installation id for owner via the
 // repository installation lookup.
 func (m *githubMinter) installationID(ctx context.Context, client *gh.Client, owner, repo string) (int64, error) {
@@ -225,7 +328,7 @@ func (m *githubMinter) installationID(ctx context.Context, client *gh.Client, ow
 	}
 	id := inst.GetID()
 	if id == 0 {
-		return 0, fmt.Errorf("broker: no installation for %s", owner)
+		return 0, fmt.Errorf("%w: broker: no installation for %s", ErrGitHubRefused, owner)
 	}
 	m.mu.Lock()
 	m.installByOrg[owner] = id
@@ -284,6 +387,9 @@ func ValidateGitHubScopeShape(scope json.RawMessage) error {
 	var sc githubScope
 	if err := json.Unmarshal(scope, &sc); err != nil {
 		return fmt.Errorf("broker: decode github scope: %w", err)
+	}
+	if sc.API || len(sc.Capabilities) > 0 {
+		return errors.New("broker: api and capabilities are set only by the GitHub CLI component, never by a policy")
 	}
 	if _, _, err := splitRepos(sc.Repos); err != nil {
 		return err

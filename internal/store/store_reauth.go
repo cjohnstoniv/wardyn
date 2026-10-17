@@ -42,14 +42,17 @@ func (s PG) ResolveReauthApproval(ctx context.Context, id uuid.UUID, decision ty
 	defer tx.Rollback(ctx) //nolint:errcheck // best-effort on the failure path
 
 	decidedAt := s.now()
-	age := db.AppClockAgeMicros(decidedAt, s.now())
-	q := `
+	anchor, err := db.CaptureAppClock(ctx, tx, s.now)
+	if err != nil {
+		return types.ApprovalRequest{}, err
+	}
+	const q = `
 		UPDATE approvals
-		SET state=$1, decided_at=` + db.AppClockAgeSQL("$2") + `, decided_by=$3, reason=$4
+		SET state=$1, decided_at=$2, decided_by=$3, reason=$4
 		WHERE id=$5 AND state='PENDING' AND kind='credential_reauth'
 		RETURNING ` + approvalCols
 	ap, err := scanApproval(tx.QueryRow(ctx, q,
-		string(decision.State), age, decision.DecidedBy, decision.Reason, id,
+		string(decision.State), anchor.Translate(decidedAt), decision.DecidedBy, decision.Reason, id,
 	))
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
@@ -59,20 +62,25 @@ func (s PG) ResolveReauthApproval(ctx context.Context, id uuid.UUID, decision ty
 		return types.ApprovalRequest{}, fmt.Errorf("store: resolve reauth approval: %w", err)
 	}
 
-	if err := insertAuditEventTx(ctx, tx, &ev); err != nil {
+	if err := InsertAuditEventTx(ctx, tx, &ev); err != nil {
 		return types.ApprovalRequest{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return types.ApprovalRequest{}, fmt.Errorf("store: commit reauth resolve: %w", err)
 	}
+	// The row is written past every recorder chain, so the sinks get it here, with the hashes
+	// InsertAuditEventTx filled in.
+	if s.SIEM != nil {
+		_ = s.SIEM.Emit(context.WithoutCancel(ctx), ev)
+	}
 	return ap, nil
 }
 
-// insertAuditEventTx is InsertAuditEvent's body on a caller-supplied
+// InsertAuditEventTx is InsertAuditEvent's body on a caller-supplied
 // transaction: the same target cap, pinned lock-wait bound and advisory lock
 // on the chain, so a row written this way links exactly as every other row
 // does.
-func insertAuditEventTx(ctx context.Context, tx pgx.Tx, ev *types.AuditEvent) error {
+func InsertAuditEventTx(ctx context.Context, tx pgx.Tx, ev *types.AuditEvent) error {
 	ev.Target = CapAuditTarget(ev.Target)
 	dataJSON, err := json.Marshal(ev.Data)
 	if err != nil {
@@ -85,10 +93,8 @@ func insertAuditEventTx(ctx context.Context, tx pgx.Tx, ev *types.AuditEvent) er
 		return fmt.Errorf("store: lock audit chain (waited up to %s): %w", db.AuditChainLockTimeout, err)
 	}
 	const q = `
-		INSERT INTO audit_events
-			(` + auditCols + `)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
-		RETURNING COALESCE(prev_hash,''), COALESCE(row_hash,'')`
+		SELECT COALESCE(prev_hash,''), COALESCE(row_hash,'')
+		FROM audit_append($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`
 	if err := tx.QueryRow(ctx, q,
 		ev.ID, ev.Time, ev.RunID, string(ev.ActorType), ev.Actor, ev.Action,
 		ev.Target, ev.Outcome, ev.SourceIP, dataJSON,

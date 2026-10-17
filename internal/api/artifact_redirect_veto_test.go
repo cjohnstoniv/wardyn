@@ -51,7 +51,7 @@ func TestPlanArtifactRedirect_ToGatewayRefused(t *testing.T) {
 		},
 	}
 	run := types.AgentRun{ID: uuid.New()}
-	plan := s.planArtifactRedirect(context.Background(), run, sc, []string{"registry.example.com"})
+	plan := s.planArtifactRedirect(context.Background(), run, sc, []string{"registry.example.com"}, nil)
 	if len(plan.injections) != 0 {
 		t.Fatalf("a redirect To the gateway must not author an injection, got %+v", plan.injections)
 	}
@@ -70,7 +70,7 @@ func TestPlanArtifactRedirect_ToPublicProviderRefused(t *testing.T) {
 		{From: "registry.example.com", To: "api.anthropic.com", TokenSecretRef: "corp-token"},
 	}}
 	run := types.AgentRun{ID: uuid.New()}
-	plan := s.planArtifactRedirect(context.Background(), run, sc, []string{"registry.example.com"})
+	plan := s.planArtifactRedirect(context.Background(), run, sc, []string{"registry.example.com"}, nil)
 	if len(plan.injections) != 0 {
 		t.Fatalf("a redirect To api.anthropic.com must not author an injection, got %+v", plan.injections)
 	}
@@ -118,7 +118,7 @@ func TestPlanArtifactRedirect_ToBedrockHostRefused(t *testing.T) {
 				}}}
 			}
 			run := types.AgentRun{ID: uuid.New()}
-			plan := s.planArtifactRedirect(context.Background(), run, sc, []string{"registry.example.com"})
+			plan := s.planArtifactRedirect(context.Background(), run, sc, []string{"registry.example.com"}, nil)
 			if tc.refused {
 				if len(plan.injections) != 0 {
 					t.Fatalf("a redirect To %q must not author an injection, got %+v", tc.to, plan.injections)
@@ -145,7 +145,7 @@ func TestPlanArtifactRedirect_UnrelatedToStillPlans(t *testing.T) {
 		{From: "registry.npmjs.org", To: "artifactory.corp", TokenSecretRef: "corp-token", Ecosystem: "npm"},
 	}}
 	run := types.AgentRun{ID: uuid.New()}
-	plan := s.planArtifactRedirect(context.Background(), run, sc, []string{"registry.npmjs.org"})
+	plan := s.planArtifactRedirect(context.Background(), run, sc, []string{"registry.npmjs.org"}, nil)
 	if len(plan.injections) != 1 {
 		t.Fatalf("an unrelated redirect must still plan an injection, got %+v", plan.injections)
 	}

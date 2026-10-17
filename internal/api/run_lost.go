@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/cjohnstoniv/wardyn/internal/identity"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -43,7 +44,7 @@ import (
 // renewGiveUpAfter, which mirrors the embedded provider's 1 h tokenTTL); the
 // five minutes cover the stamp landing a moment after the mint and a small
 // clock difference between the database and the minting replica.
-const runTokenLapseAfter = time.Hour + 5*time.Minute
+const runTokenLapseAfter = identity.RunTokenLapseAfter
 
 // sweepLapsedRunTokens is the boot and sweep check: every RUNNING run whose
 // token lapsed is marked lost (outage) with its proxy stopped, or torn down.
@@ -61,7 +62,7 @@ func (s *Server) sweepLapsedRunTokens(ctx context.Context) error {
 		func() {
 			ctx, cancel := context.WithTimeout(ctx, reconcileFinalizeTimeout)
 			defer cancel()
-			if s.loseRun(ctx, loser, leaser, run, types.LostOutage, types.RunFailed, runTokenLapseAfter, s.cfg.Now()) {
+			if s.loseRun(ctx, loser, leaser, run, types.LostOutage, types.RunFailed, runTokenLapseAfter, s.cfg.Now()) != loseNotKeepable {
 				return
 			}
 			s.reconcileFinalize(ctx, run.ID, types.RunFailed, run.SandboxRef,
@@ -70,6 +71,10 @@ func (s *Server) sweepLapsedRunTokens(ctx context.Context) error {
 	}
 	return nil
 }
+
+// keepRebootedRunTimeout bounds keepRebootedRun while it holds the run's lock.
+// A variable only so a test can shorten it.
+var keepRebootedRunTimeout = reconcileFinalizeTimeout
 
 // keepRebootedRun is the watcher's side: an agent it observed terminal whose
 // container still exists (the probe carries an exit code; a gone container
@@ -83,6 +88,17 @@ func (s *Server) keepRebootedRun(ctx context.Context, run types.AgentRun, st run
 	if _, busy := s.reviving.Load(run.ID); busy {
 		return true
 	}
+	// The same ownership, for the instant between a revive's mark and its
+	// lock, and for a lease pass mid-stop: skip, and the next sweep decides.
+	ctx, unlock, locked := s.tryLockRunOp(ctx, run.ID)
+	if !locked {
+		return true
+	}
+	defer unlock()
+	// The lock must not outlive a wedged daemon: the stop below is bounded as
+	// the lapsed-token sweep's is, or a revive of this run would wait for it.
+	ctx, cancel := context.WithTimeout(ctx, keepRebootedRunTimeout)
+	defer cancel()
 	loser, ok := s.cfg.Store.(store.RunLoser)
 	leaser, lok := s.cfg.Store.(store.RunLeaser)
 	if !ok || !lok || st.ExitCode == nil {
@@ -92,44 +108,64 @@ func (s *Server) keepRebootedRun(ctx context.Context, run types.AgentRun, st run
 	if *st.ExitCode == 0 {
 		terminal = types.RunCompleted
 	}
-	return s.loseRun(ctx, loser, leaser, run, types.LostReboot, terminal, 0, s.cfg.Now())
+	return s.loseRun(ctx, loser, leaser, run, types.LostReboot, terminal, 0, s.cfg.Now()) != loseNotKeepable
 }
 
-// loseRun marks run lost for reason and stops its proxy. false means the run
-// cannot be kept, and the caller's fail-closed arm applies. true means it is
-// taken care of: kept (with its containment unresolved when the stop failed),
-// torn down (as terminal) because its substrate cannot keep a sandbox, or left
-// alone because the claim did not land (another replica took
-// it, a renew landed, or it went terminal) or could not be written (the next
-// pass retries). tokenLife > 0 also requires the run's token to be lapsed by
-// that much still (MarkRunLost), so the sweep's mark loses to a renew. at is
-// the mark's time: now, except for an ended run put back to ended, whose files
-// grace stays counted from when it first ended.
-func (s *Server) loseRun(ctx context.Context, loser store.RunLoser, leaser store.RunLeaser, run types.AgentRun, reason types.LostReason, terminal types.RunState, tokenLife time.Duration, at time.Time) bool {
+// loseOutcome is what loseRun did.
+type loseOutcome int
+
+const (
+	// loseNotKeepable: the run cannot be kept, and the caller's fail-closed arm
+	// applies.
+	loseNotKeepable loseOutcome = iota
+	// loseApplied: the lost mark landed and the run is kept (with its
+	// containment unresolved when the stop failed), or torn down because its
+	// substrate cannot keep a sandbox.
+	loseApplied
+	// loseNotApplied: the claim did not land (another replica took it, a renew
+	// landed, or the run went terminal), so the run is left alone.
+	loseNotApplied
+	// loseWriteFailed: the mark could not be written, so nothing was
+	// persisted and nothing was contained. The next pass retries.
+	loseWriteFailed
+)
+
+// loseRun marks run lost for reason and stops its proxy. loseNotKeepable means
+// the run cannot be kept, and the caller's fail-closed arm applies. Every other
+// outcome is the run taken care of or left alone (see loseOutcome); a caller
+// that tells a person what became of the run reads loseWriteFailed apart from
+// loseApplied, so it never says "lost" about a mark that was not written.
+// tokenLife > 0 also requires the run's token to be lapsed by that much still
+// (MarkRunLost), so the sweep's mark loses to a renew. at is the mark's time:
+// now, except for an ended run put back to ended, whose files grace stays
+// counted from when it first ended.
+func (s *Server) loseRun(ctx context.Context, loser store.RunLoser, leaser store.RunLeaser, run types.AgentRun, reason types.LostReason, terminal types.RunState, tokenLife time.Duration, at time.Time) loseOutcome {
 	now := s.cfg.Now()
 	if !s.lostRunKeepable(run, now) {
-		return false
+		return loseNotKeepable
 	}
 	applied, err := loser.MarkRunLost(ctx, run.ID, reason, at, tokenLife)
 	if err != nil {
 		slog.WarnContext(ctx, "wardynd: marking a run lost failed",
 			slog.String("run_id", run.ID.String()), slog.Any("err", err))
-		return true
+		return loseWriteFailed
 	}
 	if !applied {
-		return true
+		return loseNotApplied
 	}
 	run.LostAt, run.LostReason = &at, reason
 	s.cancelRunApprovals(ctx, run.ID)
 	s.revokeRunBroker(ctx, run.ID)
 	s.leaseEnded.Store(run.ID, struct{}{})
 	data, outcome := map[string]any{"reason": string(reason)}, "success"
-	if err := s.stopLostSandbox(ctx, run, now); err != nil {
+	if err := s.stopLostSandbox(ctx, run, now); errors.Is(err, runner.ErrPendingOnRunner) {
+		data["containment"] = "pending_runner"
+	} else if err != nil {
 		data["lost_error"] = err.Error()
 		if errors.Is(err, runner.ErrEndUnsupported) {
 			data["kept"] = false
 			s.stopKeptRun(ctx, leaser, run, terminal, "run.lost", data)
-			return true
+			return loseApplied
 		}
 		// Any other failure leaves containment unconfirmed, and a teardown
 		// on the same failing daemon would only lose the files (#1060): the
@@ -143,13 +179,13 @@ func (s *Server) loseRun(ctx context.Context, loser store.RunLoser, leaser store
 	}
 	s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.lost",
 		run.ID.String(), outcome, mustJSON(data)))
-	return true
+	return loseApplied
 }
 
-// lostRunKeepable: an interactive RUNNING run with a sandbox, not already
-// kept, whose lease or ended-run grace is still live.
+// lostRunKeepable preserves local headless agents as well as interactive
+// sandboxes. Runner lifecycle evidence finalizes a kept headless agent later.
 func (s *Server) lostRunKeepable(run types.AgentRun, now time.Time) bool {
-	if run.State != types.RunRunning || !run.Interactive || run.SandboxRef == "" || runIsKept(run) {
+	if run.State != types.RunRunning || (!run.Interactive && run.Placement != types.PlacementLocal) || run.SandboxRef == "" || runIsKept(run) {
 		return false
 	}
 	return run.EndsAt == nil || now.Before(run.EndsAt.Add(s.cfg.EndedRunGrace))
@@ -187,7 +223,9 @@ func (s *Server) endedKept(run types.AgentRun, now time.Time) *store.EndedKept {
 
 // stopLostSandbox stops a lost run's proxy. An outage run inside its lease
 // keeps its agent running; any other lost run (a reboot, or an outage past
-// its end) has its agent stopped as at the end.
+// its end) has its agent stopped as at the end. An outage run's stopped agent
+// is recorded (store.RunLeaser.MarkRunAgentStopped), so extending the run
+// later does not make it hold a slot again.
 func (s *Server) stopLostSandbox(ctx context.Context, run types.AgentRun, now time.Time) error {
 	if run.LostReason == types.LostOutage && (run.EndsAt == nil || now.Before(*run.EndsAt)) {
 		stopper, ok := s.cfg.Runner.(runner.ProxyStopper)
@@ -196,5 +234,14 @@ func (s *Server) stopLostSandbox(ctx context.Context, run types.AgentRun, now ti
 		}
 		return stopper.StopProxy(ctx, run.SandboxRef)
 	}
-	return s.endSandbox(ctx, run)
+	err := s.endSandbox(ctx, run)
+	if leaser, ok := s.cfg.Store.(store.RunLeaser); ok && err == nil && run.LostReason == types.LostOutage && run.LostAt != nil {
+		// A failed write only leaves the run counted; the lease sweep re-asserts
+		// this stop every pass and retries it.
+		if merr := leaser.MarkRunAgentStopped(ctx, run.ID, *run.LostAt); merr != nil {
+			slog.WarnContext(ctx, "wardynd: recording a kept run's stopped agent failed",
+				slog.String("run_id", run.ID.String()), slog.Any("err", merr))
+		}
+	}
+	return err
 }

@@ -1,0 +1,3 @@
+# kind	path	key	words	reason
+sentence	threatmodel/THREAT-MODEL.md	7da7ff69ff5a734f5893026a4d381004b955af6a	36	section 5.1a, "Optional, off-by-default inspection of outbound LLM prompts ...": one clause and its purpose, no clause joiner
+table	threatmodel/THREAT-MODEL.md	| Exception | What lands in the sandbox | Why it can't be proxy-injected | Bounds (and their limits) |	PLAN §4.4 (T1 spec): the 5.1a resident-secret exceptions table is kept row for row and cell for cell (only its file references became links); read by cmd/wardynd/threatmodel_claims_guard_test.go and cmd/wardyn-git-helper/residual_doc_test.go

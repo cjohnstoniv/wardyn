@@ -1,0 +1,6 @@
+# Asserted against every cap in scripts/doc-form.sh (strict tier).
+docs/PLUGGABILITY.md
+docs/VERIFY.md
+docs/EXPORT.md
+docs/RECORDING-ROOT-READ.md
+docs/adoption/README.md

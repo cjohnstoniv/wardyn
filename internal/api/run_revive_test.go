@@ -14,6 +14,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/armscope"
 	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/hoptls"
@@ -35,6 +36,13 @@ type reviveStore struct {
 	cfg     []byte
 	key     []byte
 	dropped bool
+	// capFull is store.PG's deployment cap already full: the claim of a revive
+	// that starts an agent, which would take a slot, answers ErrRunCapReached.
+	capFull bool
+	// selfCounted is the run itself still reading as holding a slot (a kept
+	// outage run whose agent stopped can); CountNonTerminalRuns counts it
+	// unless except names it.
+	selfCounted bool
 }
 
 var _ store.RunProxyConfigs = (*reviveStore)(nil)
@@ -68,9 +76,12 @@ func (s *reviveStore) DeleteRunProxyConfig(context.Context, uuid.UUID) error {
 
 func (s *reviveStore) PurgeTerminalRunProxyConfigs(context.Context) (int64, error) { return 0, nil }
 
-func (s *reviveStore) MarkRunRevived(_ context.Context, _ uuid.UUID, from types.LostReason, ended *store.EndedKept) (bool, error) {
+func (s *reviveStore) MarkRunRevived(_ context.Context, _ uuid.UUID, from types.LostReason, ended *store.EndedKept, limit int, startsAgent bool) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if limit > 0 && s.capFull && startsAgent {
+		return false, store.ErrRunCapReached
+	}
 	if s.state != types.RunRunning || (s.run.LostAt != nil) != (from != "") || s.run.LostReason != from {
 		return false, nil
 	}
@@ -111,6 +122,19 @@ func (s *reviveStore) GetRun(ctx context.Context, id uuid.UUID) (types.AgentRun,
 
 func (s *reviveStore) ListGovernanceProfiles(context.Context) ([]types.GovernanceProfile, error) {
 	return s.profiles, nil
+}
+
+// CountNonTerminalRuns: the deployment's one other run fills the cap when capFull;
+// the run itself counts when selfCounted, unless except names it.
+func (s *reviveStore) CountNonTerminalRuns(_ context.Context, except uuid.UUID) (int, error) {
+	n := 0
+	if s.capFull {
+		n++
+	}
+	if s.selfCounted && except != s.run.ID {
+		n++
+	}
+	return n, nil
 }
 
 // reviveRunner is lostRunner that can replace a proxy; replaced is every
@@ -656,5 +680,212 @@ func TestReviveRun_AgentStatusProbeErrorRefuses(t *testing.T) {
 	}
 	if lostAt, _ := f.st.lost(); lostAt == nil {
 		t.Error("a refused revive cleared the lost mark")
+	}
+}
+
+// TestRevive_RescopesAStoredAllowlistFromItsGrantRow: a run dispatched under 0.8.5 stored its git_pat
+// allowlist without the narrowing, which that release ignored on the grant row. The revived proxy carries
+// the row's repos and access as dispatch would, and a grant whose row is gone revives as stored.
+func TestRevive_RescopesAStoredAllowlistFromItsGrantRow(t *testing.T) {
+	t.Run("the row's narrowing reaches the new proxy", func(t *testing.T) {
+		f := newReviveFixture(t)
+		cfg, err := proxy.LoadConfigBytes(f.rs.cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		g := cfg.PATGrants["git.example"]
+		if g.Access != "" || g.Repos != nil {
+			t.Fatalf("fixture: the stored allowlist is already narrowed: %+v", g)
+		}
+		row := patGrantRow(g.GrantID, f.run.ID, "git.example")
+		row.Spec.Scope = mustJSON(types.GitPATScope{Host: "git.example", SecretName: "pat-git.example",
+			Repos: types.PATRepoSet("team/app"), Access: types.PATAccessRead})
+		f.rs.credGrants = []types.CredentialGrant{row}
+		if code := f.revive(t); code != http.StatusOK {
+			t.Fatalf("revive = %d, want 200", code)
+		}
+		got := f.newConfig(t).PATGrants["git.example"]
+		if got.Access != types.PATAccessRead || got.Repos == nil || !slices.Equal(*got.Repos, []string{"team/app"}) {
+			t.Fatalf("the revived allowlist = %+v, want the row's repos and read access", got)
+		}
+	})
+	t.Run("a grant whose row is gone revives as stored", func(t *testing.T) {
+		f := newReviveFixture(t)
+		f.rs.credGrants = []types.CredentialGrant{patGrantRow(uuid.New(), f.run.ID, "git.example")}
+		if code := f.revive(t); code != http.StatusOK {
+			t.Fatalf("revive = %d, want 200", code)
+		}
+		if got := f.newConfig(t).PATGrants["git.example"]; got.Access != "" || got.Repos != nil {
+			t.Fatalf("the revived allowlist = %+v, want it as stored", got)
+		}
+	})
+}
+
+// TestRevive_NarrowedPATRefusedWhenBrokerOff: a revive re-asks dispatch's
+// narrowing refusals. A run whose git_pat grant is narrowed, revived after the
+// PAT broker was turned off, would keep the narrowed lane and lose the raw-mint
+// refusal, so the PAT would reach the sandbox unnarrowed. It is refused instead,
+// audited, with the proxy untouched. An unnarrowed grant revives broker-off as
+// before (raw mint is that mode's point), and broker-on keeps the refusal set.
+func TestRevive_NarrowedPATRefusedWhenBrokerOff(t *testing.T) {
+	narrowed := func(t *testing.T, f *reviveFixture) uuid.UUID {
+		t.Helper()
+		cfg, err := proxy.LoadConfigBytes(f.rs.cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		g := cfg.PATGrants["git.example"]
+		g.Access, g.Repos = types.PATAccessRead, types.PATRepoSet("team/app")
+		cfg.PATGrants["git.example"] = g
+		cfg.BrokeredPATGrantIDs = append(cfg.BrokeredPATGrantIDs, g.GrantID)
+		if f.rs.cfg, err = json.Marshal(cfg); err != nil {
+			t.Fatal(err)
+		}
+		row := patGrantRow(g.GrantID, f.run.ID, "git.example")
+		row.Spec.Scope = mustJSON(types.GitPATScope{Host: "git.example", SecretName: "pat-git.example", Repos: g.Repos, Access: g.Access})
+		f.rs.credGrants = []types.CredentialGrant{row}
+		return g.GrantID
+	}
+
+	t.Run("broker off refuses a narrowed grant", func(t *testing.T) {
+		f := newReviveFixture(t)
+		narrowed(t, f)
+		f.srv.cfg.DisableGitPATBroker = true
+		w := do(t, f.srv, http.MethodPost, "/api/v1/runs/"+f.run.ID.String()+"/revive", adminToken, "")
+		if w.Code != http.StatusConflict {
+			t.Fatalf("revive = %d, want 409 (body %s)", w.Code, w.Body.String())
+		}
+		var body struct {
+			Reason string `json:"reason"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil || body.Reason != "git_pat_narrowing_needs_broker" {
+			t.Fatalf("reason = %q (err %v), want git_pat_narrowing_needs_broker", body.Reason, err)
+		}
+		if len(f.rr.replaced) != 0 {
+			t.Fatalf("ReplaceProxy calls = %d, want none", len(f.rr.replaced))
+		}
+		if lostAt, _ := f.st.lost(); lostAt == nil {
+			t.Error("a refused revive cleared the lost mark")
+		}
+		ev := f.audit.eventsFor(f.run.ID, "run.revive")
+		if len(ev) != 1 || ev[0].Outcome != "failure" || leaseAuditData(t, ev[0])["reason"] != "git_pat_narrowing_needs_broker" {
+			t.Fatalf("run.revive events = %+v, want one failure naming the reason", ev)
+		}
+	})
+
+	t.Run("broker on keeps the narrowed grant in the refusal set", func(t *testing.T) {
+		f := newReviveFixture(t)
+		id := narrowed(t, f)
+		if code := f.revive(t); code != http.StatusOK {
+			t.Fatalf("revive = %d, want 200", code)
+		}
+		if got := f.newConfig(t).BrokeredPATGrantIDs; !slices.Contains(got, id) {
+			t.Fatalf("BrokeredPATGrantIDs = %v, want it to hold %s", got, id)
+		}
+	})
+
+	t.Run("broker off revives an unnarrowed grant", func(t *testing.T) {
+		f := newReviveFixture(t)
+		f.srv.cfg.DisableGitPATBroker = true
+		f.rs.credGrants = []types.CredentialGrant{patGrantRow(uuid.New(), f.run.ID, "git.example")}
+		if code := f.revive(t); code != http.StatusOK {
+			t.Fatalf("revive = %d, want 200", code)
+		}
+		if got := f.newConfig(t).BrokeredPATGrantIDs; len(got) != 0 {
+			t.Fatalf("BrokeredPATGrantIDs = %v with the broker off, want none", got)
+		}
+	})
+}
+
+// TestReviveRun_AzureCLIDoorUnderAResourceManagerDeny: a remote run with the
+// Azure CLI door whose owner's profile now denies Resource Manager is refused
+// before its claim, with its proxy and its stored config as they were. Dropping
+// the credential and keeping the door gave it a proxy that exits at config
+// load, so a run with no egress at all. The same run under an unchanged profile
+// revives with its door, and a run dispatched under the deny (no door, the lane's
+// hosts closed) revives with the deny and with no entry for the Entra host.
+func TestReviveRun_AzureCLIDoorUnderAResourceManagerDeny(t *testing.T) {
+	arm, login := armscope.Host+":443", proxy.AzureLoginHost+":443"
+	cases := map[string]struct {
+		door, deny, live bool
+		code             int
+	}{
+		"the profile is unchanged":                  {door: true, code: http.StatusOK},
+		"the profile now denies Resource Manager":   {door: true, deny: true, code: http.StatusConflict},
+		"it does on a live run too":                 {door: true, deny: true, live: true, code: http.StatusConflict},
+		"the profile already denied it at dispatch": {deny: true, code: http.StatusOK},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			f := newReviveFixture(t)
+			f.st.run.Placement = types.PlacementRemote
+			pc := runner.ProxyConfig{RunToken: "old-token", ControlPlaneURL: "http://127.0.0.1:8081", MITMCACertPEM: "ca-cert", MITMCAKeyPEM: "ca-key",
+				Policy: types.RunPolicySpec{AllowedDomains: []string{"api.anthropic.com"}}}
+			if tc.door {
+				pc.Policy.AllowedDomains = append(pc.Policy.AllowedDomains, arm, login)
+				pc.AzureARM = &proxy.AzureARMGrant{TenantID: "tenant-1", Subscriptions: []string{azCLISubA}}
+				pc.Injection = []runner.InjectionGrant{{GrantID: uuid.New(), Rule: egress.InjectionRule{Host: armscope.Host, Header: "Authorization",
+					Format: "Bearer %s", SecretName: cliSecretName(uuid.NewString(), providerEntraPart), RequireTLS: true}}}
+			} else if tc.deny {
+				pc.Policy.DeniedDomains = []string{armscope.Host}
+			}
+			stored, err := runner.BuildProxyConfig(f.run.ID, pc, runner.ProxyListenPort)
+			if err != nil {
+				t.Fatal(err)
+			}
+			f.rs.cfg = stored
+			if tc.deny {
+				f.rs.profiles[0].Ceiling.DeniedDomains = append(f.rs.profiles[0].Ceiling.DeniedDomains, armscope.Host)
+			}
+			if tc.live {
+				f.st.run.LostAt, f.st.run.LostReason = nil, ""
+			}
+			w := do(t, f.srv, http.MethodPost, "/api/v1/runs/"+f.run.ID.String()+"/revive", adminToken, "")
+			if w.Code != tc.code {
+				t.Fatalf("revive: code %d (%s), want %d", w.Code, w.Body.String(), tc.code)
+			}
+			if tc.code != http.StatusOK {
+				if got := errorReason(w); got != "revive_ceiling_denies_azure_cli" {
+					t.Errorf("reason = %q, want the literal %q", got, "revive_ceiling_denies_azure_cli")
+				}
+				if lostAt, _ := f.st.lost(); len(f.rr.replaced) != 0 || (lostAt == nil) != tc.live || string(f.rs.cfg) != string(stored) {
+					t.Errorf("replaced %d, lost_at %v, stored config changed %v; want the proxy, the run and its stored config as they were",
+						len(f.rr.replaced), lostAt, string(f.rs.cfg) != string(stored))
+				}
+				return
+			}
+			cfg := f.newConfig(t) // loads: the door has its one credential, or there is no door
+			rules := 0
+			for _, in := range cfg.Injection {
+				if hostEqual(in.Host, armscope.Host) {
+					rules++
+				}
+			}
+			if (cfg.AzureARM != nil) != tc.door || (rules == 1) != tc.door {
+				t.Errorf("door %+v, Resource Manager rules %d; want door=%v with its one credential", cfg.AzureARM, rules, tc.door)
+			}
+			if tc.deny != ceilingDenies(cfg.Policy.DeniedDomains, armscope.Host) {
+				t.Errorf("denied domains = %v; want Resource Manager denied = %v", cfg.Policy.DeniedDomains, tc.deny)
+			}
+			if want := pc.Policy.AllowedDomains; !slices.Equal(cfg.Policy.AllowedDomains, want) {
+				t.Errorf("allowed domains = %v, want %v: a revive opens no host", cfg.Policy.AllowedDomains, want)
+			}
+		})
+	}
+}
+
+// TestReviveRun_AConfigTheProxyWouldRefuseIsRefusedBeforeTheClaim: the revive
+// loads the config it is about to hand the new proxy. One the proxy would exit
+// on (here the deployment's trusted CA, which the revive writes into it) is
+// refused while the run still has what it had, never after its proxy is gone.
+func TestReviveRun_AConfigTheProxyWouldRefuseIsRefusedBeforeTheClaim(t *testing.T) {
+	f := newReviveFixture(t)
+	f.srv.cfg.TrustedCAPEM = "not a certificate"
+	w := do(t, f.srv, http.MethodPost, "/api/v1/runs/"+f.run.ID.String()+"/revive", adminToken, "")
+	if w.Code != http.StatusConflict || errorReason(w) != "revive_config_does_not_load" {
+		t.Fatalf("revive: %d %s, want 409 revive_config_does_not_load", w.Code, w.Body.String())
+	}
+	if lostAt, _ := f.st.lost(); len(f.rr.replaced) != 0 || lostAt == nil {
+		t.Errorf("replaced %d, lost_at %v; want no proxy replaced and the run still lost", len(f.rr.replaced), lostAt)
 	}
 }

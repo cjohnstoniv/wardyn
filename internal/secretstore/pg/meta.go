@@ -57,8 +57,11 @@ func (s *Store) metadata(ctx context.Context, names []string, everyone bool) ([]
 		var store string
 		err := r.Scan(&m.Owner, &m.Name, &version, &store, &m.AddedAt, &m.LastUsedAt, &m.ExpiresAt)
 		m.Store = "pg"
-		if version == extVersion {
+		switch version {
+		case extVersion:
 			m.Store = store
+		case pkVersion: // kek_id "pk:v<n>" names a principal key, not a store
+			m.PrincipalKey = true
 		}
 		return m, err
 	})

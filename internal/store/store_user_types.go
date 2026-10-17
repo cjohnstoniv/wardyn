@@ -18,36 +18,53 @@ import (
 
 const userTypeCols = `id, name, description, priority, built_in, created_at, updated_at, created_by`
 
-// userTypeRowRefs counts the subject rows naming user type $1 (capability
-// grants, governance assignments, drive grants); shared by UserTypeReferences
-// and DeleteUserType so the 409 count and the delete predicate cannot disagree.
+// userTypeRowRefs counts the rows naming user type $1 (capability grants,
+// governance assignments, drive grants, service identities not retired); shared
+// by UserTypeReferences and DeleteUserType so the 409 count and the delete
+// predicate cannot disagree.
 const userTypeRowRefs = `(
 	(SELECT count(*) FROM capability_grants      WHERE subject_type = 'user_type' AND subject = $1) +
 	(SELECT count(*) FROM governance_assignments WHERE subject_type = 'user_type' AND subject = $1) +
-	(SELECT count(*) FROM user_drive_grants      WHERE subject_type = 'user_type' AND subject = $1))`
+	(SELECT count(*) FROM user_drive_grants      WHERE subject_type = 'user_type' AND subject = $1) +
+	(SELECT count(*) FROM service_identities     WHERE user_type = $1 AND retired_at IS NULL))`
 
 // userTypeRowRefsExist is userTypeRowRefs' boolean twin: CreateUserType uses
 // it to refuse recreating an id that an orphaned subject row still names.
 const userTypeRowRefsExist = `(
 	EXISTS (SELECT 1 FROM capability_grants      WHERE subject_type = 'user_type' AND subject = $1) OR
 	EXISTS (SELECT 1 FROM governance_assignments WHERE subject_type = 'user_type' AND subject = $1) OR
-	EXISTS (SELECT 1 FROM user_drive_grants      WHERE subject_type = 'user_type' AND subject = $1))`
+	EXISTS (SELECT 1 FROM user_drive_grants      WHERE subject_type = 'user_type' AND subject = $1) OR
+	EXISTS (SELECT 1 FROM service_identities     WHERE user_type = $1 AND retired_at IS NULL))`
 
-// userTypeTokenStamps counts the unrevoked API tokens stamped with user type
+// userTypeWriteLock serialises the writes that name or remove user type $1 without a foreign key:
+// CreateServiceIdentity takes it before reading the type, DeleteUserType before its DELETE, so each
+// statement after it sees the other's committed row.
+const userTypeWriteLock = `SELECT pg_advisory_xact_lock(hashtextextended('user_types:' || $1, 0))`
+
+// userTypeTokenStamps counts the live (unrevoked, unexpired) API tokens stamped with user type
 // $1. A snapshot column with no foreign key, so this count is what holds the type.
-const userTypeTokenStamps = `(SELECT count(*) FROM api_tokens WHERE user_type = $1 AND revoked_at IS NULL)`
+const userTypeTokenStamps = `(SELECT count(*) FROM api_tokens WHERE user_type = $1 AND ` + apiTokenLive + `)`
 
 // ListUserTypes returns every type: the built-in first, then by priority
 // (highest first) and name.
 func (s PG) ListUserTypes(ctx context.Context) ([]types.UserType, error) {
-	const q = `SELECT ` + userTypeCols + ` FROM user_types ORDER BY built_in DESC, priority DESC, name`
-	return collect(ctx, s.Pool, "list", "user types", q, nil, scanUserType)
+	return ListUserTypesQ(ctx, s.Pool)
+}
+
+// ListUserTypesQ is ListUserTypes on q.
+func ListUserTypesQ(ctx context.Context, q Querier) ([]types.UserType, error) {
+	const stmt = `SELECT ` + userTypeCols + ` FROM user_types ORDER BY built_in DESC, priority DESC, name`
+	return collect(ctx, q, "list", "user types", stmt, nil, scanUserType)
 }
 
 // GetUserType returns one type by id, or ErrNotFound.
 func (s PG) GetUserType(ctx context.Context, id string) (types.UserType, error) {
-	const q = `SELECT ` + userTypeCols + ` FROM user_types WHERE id = $1`
-	return scanUserType(s.Pool.QueryRow(ctx, q, id))
+	return GetUserTypeQ(ctx, s.Pool, id, false)
+}
+
+// GetUserTypeQ is GetUserType on q; forUpdate locks the row for the transaction.
+func GetUserTypeQ(ctx context.Context, q Querier, id string, forUpdate bool) (types.UserType, error) {
+	return scanUserType(q.QueryRow(ctx, `SELECT `+userTypeCols+` FROM user_types WHERE id = $1`+lockSuffix(forUpdate), id))
 }
 
 // CreateUserType inserts a custom type (built_in is never set here).
@@ -71,17 +88,36 @@ func (s PG) CreateUserType(ctx context.Context, t types.UserType) (types.UserTyp
 // UpdateUserType rewrites a type's name, description and priority; id and
 // built_in never change. ErrNotFound when missing, ErrConflict on name clash.
 func (s PG) UpdateUserType(ctx context.Context, t types.UserType) (types.UserType, error) {
-	const q = `
+	return UpdateUserTypeQ(ctx, s.Pool, t)
+}
+
+// UpdateUserTypeQ is UpdateUserType's statement on q. A held governance change applies through it
+// inside the decision transaction.
+func UpdateUserTypeQ(ctx context.Context, q Querier, t types.UserType) (types.UserType, error) {
+	const stmt = `
 		UPDATE user_types
 		SET name = $2, description = $3, priority = $4, updated_at = now()
 		WHERE id = $1
 		RETURNING ` + userTypeCols
-	out, err := scanUserType(s.Pool.QueryRow(ctx, q, t.ID, t.Name, t.Description, t.Priority))
+	out, err := scanUserType(q.QueryRow(ctx, stmt, t.ID, t.Name, t.Description, t.Priority))
 	return out, uniqueConflict(err)
 }
 
-// UserTypeReferences counts the capability-grant, governance-assignment and
-// drive-grant rows that name the type as their subject.
+// UpdateUserTypeMetadata rewrites a type's name and description and never its priority, so an edit
+// that was judged metadata-only cannot overwrite a priority change approved after it was read.
+// ErrNotFound when missing, ErrConflict on name clash.
+func (s PG) UpdateUserTypeMetadata(ctx context.Context, t types.UserType) (types.UserType, error) {
+	const stmt = `
+		UPDATE user_types
+		SET name = $2, description = $3, updated_at = now()
+		WHERE id = $1
+		RETURNING ` + userTypeCols
+	out, err := scanUserType(s.Pool.QueryRow(ctx, stmt, t.ID, t.Name, t.Description))
+	return out, uniqueConflict(err)
+}
+
+// UserTypeReferences counts the capability-grant, governance-assignment,
+// drive-grant and unretired service-identity rows that name the type.
 func (s PG) UserTypeReferences(ctx context.Context, id string) (int, error) {
 	var n int
 	if err := s.Pool.QueryRow(ctx, `SELECT `+userTypeRowRefs, id).Scan(&n); err != nil {
@@ -103,9 +139,18 @@ func (s PG) UserTypeTokenStamps(ctx context.Context, id string) (int, error) {
 // no row has the id; ErrConflict when it is built in, still referenced, or
 // held by a foreign key (role_mappings.user_type is ON DELETE RESTRICT). The
 // reference check rides the DELETE itself, so a row written between the
-// caller's check and this statement still refuses.
+// caller's check and this statement still refuses; a service identity created
+// concurrently is ordered by userTypeWriteLock.
 func (s PG) DeleteUserType(ctx context.Context, id string) error {
-	tag, err := s.Pool.Exec(ctx,
+	tx, err := s.Pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
+	if err != nil {
+		return fmt.Errorf("store: delete user type: %w", err)
+	}
+	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	if _, err := tx.Exec(ctx, userTypeWriteLock, id); err != nil {
+		return fmt.Errorf("store: delete user type: %w", err)
+	}
+	tag, err := tx.Exec(ctx,
 		`DELETE FROM user_types WHERE id = $1 AND NOT built_in AND `+userTypeRowRefs+` = 0 AND `+userTypeTokenStamps+` = 0`, id)
 	if err != nil {
 		var pgErr *pgconn.PgError
@@ -115,10 +160,13 @@ func (s PG) DeleteUserType(ctx context.Context, id string) error {
 		return fmt.Errorf("store: delete user type: %w", err)
 	}
 	if tag.RowsAffected() == 1 {
+		if err := tx.Commit(ctx); err != nil {
+			return fmt.Errorf("store: delete user type: %w", err)
+		}
 		return nil
 	}
 	var exists bool
-	if err := s.Pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM user_types WHERE id = $1)`, id).Scan(&exists); err != nil {
+	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM user_types WHERE id = $1)`, id).Scan(&exists); err != nil {
 		return fmt.Errorf("store: delete user type: %w", err)
 	}
 	if exists {

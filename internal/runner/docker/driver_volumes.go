@@ -8,10 +8,16 @@ package docker
 import (
 	"context"
 	"fmt"
+	"time"
 
+	"github.com/google/uuid"
+
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/mount"
 	"github.com/moby/moby/api/types/volume"
 	"github.com/moby/moby/client"
 
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -22,8 +28,10 @@ import (
 // deny and no host-root ceiling to escape; host_path runs that deny matrix
 // instead (driver_mounts.go). Ownership is the image's job: a named volume
 // mounted over an image directory inherits its uid/gid via Docker's copy-up,
-// so every agent image pre-creates /home/agent/drive owned by agent — wardynd
-// never chowns or runs a privileged helper.
+// so every agent image pre-creates /home/agent/drive owned by agent. A volume
+// at a derived path the image has no directory for is seeded through that same
+// directory first (seedDriveVolume) — wardynd never chowns or runs a
+// privileged helper.
 
 const (
 	// driveVolumeDriver: LOCAL, ALWAYS, never operator-configurable. SECURITY:
@@ -143,6 +151,71 @@ func driveVolumeAdoptable(v volume.Volume, name string, drive *types.DriveMount)
 			"resolved the same object name %q for this one — adopting it would hand this member another person's storage; "+
 			"give this drive a home template that names one directory per person (%s), or set a home_override for this principal",
 			name, labelDriveSubject, drive.HomeName, types.HomeTemplateHash)
+	}
+	return nil
+}
+
+// driveSeedPrefix starts the name of the container seedDriveVolume creates;
+// driveSeedName completes it with the run, so concurrent runs on one volume
+// never contend for a name, and teardown can remove one a crash left behind.
+const driveSeedPrefix = "wardyn-drive-seed-"
+
+func driveSeedName(runID uuid.UUID) string { return driveSeedPrefix + runID.String() }
+
+// componentDriveSeed labels the seed container (wardynLabels), so the orphan
+// sweep (sweepDriveSeeds) finds one a crash left behind.
+const componentDriveSeed = "drive-seed"
+
+// driveSeedRemoveTimeout bounds the seed's last removal, which runs even when
+// the create's context has ended: a seed left behind holds the volume.
+const driveSeedRemoveTimeout = 30 * time.Second
+
+// seedDriveVolume gives a managed volume mounted below runner.DrivesRoot the
+// ownership the legacy drive gets. Docker copies an image directory's owner and
+// contents onto an EMPTY volume mounted over it, and every agent image
+// pre-creates runner.DriveTarget owned by the agent, but no image has a
+// directory at a derived path, so a fresh volume there would start root-owned
+// and unwritable by the agent.
+//
+// So the volume is mounted once at runner.DriveTarget in a container that is
+// created and removed, never started, with no network: the copy happens at
+// create, nothing in the image runs, nothing is chowned, and a volume that
+// already holds data is left as it is (Docker copies into an empty volume
+// only). One run seeds its drives one at a time under its own name, so two
+// runs on one volume never collide; two copies into one empty volume write the
+// same directory.
+func (d *Driver) seedDriveVolume(ctx context.Context, runID uuid.UUID, image string, drive *types.DriveMount) error {
+	name := driveSeedName(runID)
+	remove := func(ctx context.Context) error {
+		if _, err := d.cli.ContainerRemove(ctx, name, client.ContainerRemoveOptions{Force: true}); err != nil && !isNotFound(err) {
+			return fmt.Errorf("docker: seed user drive volume %q: remove: %w", drive.ObjectName, err)
+		}
+		return nil
+	}
+	if err := remove(ctx); err != nil {
+		return err
+	}
+	// A runner's own label lets its orphan sweep tell its seeds from another's.
+	extra := map[string]string{labelDrive: drive.DriveID.String()}
+	if d.cfg.RunnerID != "" {
+		extra[runner.LabelRunnerID] = d.cfg.RunnerID
+	}
+	_, err := d.cli.ContainerCreate(ctx, client.ContainerCreateOptions{
+		Name: name,
+		Config: &container.Config{Image: image, Cmd: []string{"true"}, NetworkDisabled: true,
+			Labels: wardynLabels(runID, componentDriveSeed, extra)},
+		HostConfig: &container.HostConfig{
+			NetworkMode: "none",
+			Mounts:      []mount.Mount{{Type: mount.TypeVolume, Source: drive.ObjectName, Target: runner.DriveTarget}},
+		},
+	})
+	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), driveSeedRemoveTimeout)
+	defer cancel()
+	if rerr := remove(rctx); err == nil {
+		err = rerr
+	}
+	if err != nil {
+		return fmt.Errorf("docker: seed user drive volume %q: %w", drive.ObjectName, err)
 	}
 	return nil
 }

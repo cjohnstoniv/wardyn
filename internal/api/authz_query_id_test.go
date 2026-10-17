@@ -86,9 +86,20 @@ var queryIDMatrix = map[string]queryIDRoute{
 		entity: entityPrincipal, readers: []string{"handlePutSecret"},
 		pinnedBy: "TestPutSecret_OwnerParamIsRefused",
 	},
+	// The explicit routes (#1510) name their namespace themselves and refuse ?owner= outright.
+	"PUT /api/v1/me/secrets/{name}?owner": {
+		entity: entityPrincipal, readers: []string{"refuseExplicitOwnerParam"},
+		pinnedBy: "TestExplicitSecrets_NobodyWritesAnotherPersonsNamespace",
+	},
 	"DELETE /api/v1/secrets/{name}?owner": {
-		entity: entityPrincipal, readers: []string{"secretOwnerParam", "handleDeleteSecret"},
+		entity: entityPrincipal, readers: []string{"secretOwnerParam", "deleteSecretFrom"},
 		foreign: 403, pinnedBy: "TestListSecrets_AdminOwnerParam_Member403",
+	},
+	// The unused registration-token list is the security tier's: a member naming ?owner= (or
+	// anything) on it gets a constant 403 before the filter is read.
+	"GET /api/v1/runners/tokens?owner": {
+		entity: entityPrincipal, readers: []string{"handleListRunnerTokens"},
+		foreign: 403, pinnedBy: "TestRunnerTokensSecurityAdminRevokesButCannotMint",
 	},
 	// Internal (run token): the named approval is looked up among the CALLING
 	// run's approvals only, so another run's id is a mismatch, never a spend.
@@ -118,18 +129,30 @@ var queryIDMatrix = map[string]queryIDRoute{
 // function is NOT covered here — it needs its own queryIDMatrix row.
 var queryParamNotAnID = map[string]string{
 	"limit":                     "page window (parseListPage)",
-	"org":                       "DELETE /me/scm/azure-devops/token: the address of a row the caller may use (adoOwnPATRowFor); it removes the caller's own token only",
+	"runner_pool_id":            "GET /me/drives: an organisation runner pool the caller's own drive catalogue is checked against; a pool the caller may not use answers exactly as one that does not exist (pool_checked false), and no principal's entity is selected",
+	"run_type":                  "GET /runner-pools: background or interactive, the kind of run the caller's own pool list is judged for; it names no entity",
+	"filter":                    "GET /scim/v2/Users and GET /scim/v2/Groups (SCIM bearer only, never a member): the identity provider's own userName, externalId or emails.value eq filter (displayName or externalId for Groups); the routes admit no human credential at all (classSCIM)",
+	"org":                       "DELETE /me/scm/azure-devops/token: the address of Azure DevOps rows on which the caller's own token is removed (adoOwnPATRowFor, and every row on that address for DELETE); it removes the caller's own token only",
 	"organisation":              "the Azure DevOps organisation an admin-only org check runs against; it must be one the row itself serves (rowServesOrganisation)",
 	"offset":                    "page window (parseListPage)",
+	"cursor":                    "GET /people (security tier): the opaque last-principal marker of the previous page of a listing that tier already reads whole; it picks where the page starts and widens nothing",
+	"uid":                       "GET /model-providers-entra/signin: the azure_foundry provider row the sign-in is for, a deployment record and not a principal's entity; the capture is bound to the caller's own session subject and stored in their own namespace whatever the row, and a uid that is not an azure_foundry row is refused",
+	"component":                 "GET /components-entra/signin: the organisation's Azure CLI component the sign-in is for, a deployment record and not a principal's entity; a row the caller may not attach answers as the run doors answer it, and the capture is bound to the caller's own session subject and stored in their own namespace",
+	"minted_for_others":         "GET /tokens (security tier): a boolean filter over the deployment-wide token list, which that tier already reads whole",
+	"include_revoked":           "GET /tokens?minted_for_others=true (security tier): adds the revoked rows of the deployment-wide token list, which that tier already reads whole",
 	"state":                     "approval state filter on an already-scoped listing; the ADO callback's signed OAuth state",
 	"since":                     "audit time filter; narrows an already-scoped feed",
 	"until":                     "audit time filter; narrows an already-scoped feed",
 	"action":                    "audit action filter; narrows an already-scoped feed",
+	"reason":                    "DELETE /me/runners/{id}: the label of the caller's revoke of their own runner (only not_mine is accepted); it names no entity",
 	"action_prefix":             "audit action filter; narrows an already-scoped feed",
 	"actor":                     "audit principal filter; ANDed inside auditScope, so a member's own-run feed only narrows",
+	"target":                    "audit principal filter on the target column; ANDed inside auditScope, so a member's own-run feed only narrows",
 	"actor_type":                "audit filter; narrows an already-scoped feed",
 	"outcome":                   "audit filter; narrows an already-scoped feed",
 	"origin":                    "audit filter, enum device|organisation (parseAuditFilter 400s anything else); narrows an already-scoped feed",
+	"partition":                 "GET /audit/export (security tier): the name of one audit partition. Not a principal's entity: a session below the security tier gets the empty export before the value is read, so it names nothing a member can reach",
+	"form":                      "GET /audit/export?partition=: readable|raw projection of that partition (the same security-tier gate)",
 	"force":                     "operator confirmation flag",
 	"confirm":                   "operator confirmation flag",
 	"acknowledge_access_change": "operator confirmation flag",
@@ -165,6 +188,7 @@ var queryParamNotAnID = map[string]string{
 	"status":         "run list state filter (active|ended|failed|killed|needs), a closed enum; narrows an already-scoped listing",
 	"ended_within":   "run list end-time window filter, a closed enum; narrows an already-scoped listing, never widens it",
 	"include_killed": "run list visibility flag (killedVisibleFor's 24h default); narrows/widens within an already-scoped listing",
+	"no_end":         "run list filter for live runs with no end; narrows an already-scoped listing, never widens it",
 	"workspace":      "run list exact-match filter (COALESCE(NULLIF(repo,''), workspace_path)); narrows an already-scoped listing, never widens it",
 	"subject_type":   "Explain grid (security tier route): the grant subject kind asked about",
 	"subject":        "Explain grid (security tier route): the grant subject asked about, over the table that tier already reads whole",

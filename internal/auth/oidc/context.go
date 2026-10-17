@@ -16,14 +16,63 @@ import (
 // was rejected, for the integrator's auth-failure audit emit.
 type sessionRejectedCtxKey struct{}
 
+// SessionRoleStampStale is the rejection reason for a session whose role stamp is older than
+// Config.RoleStampTTL.
+const SessionRoleStampStale = "role_stamp_stale"
+
 func withSessionRejected(ctx context.Context, reason string) context.Context {
 	return context.WithValue(ctx, sessionRejectedCtxKey{}, reason)
 }
 
+// WithSessionRejected is how another credential lane (an API token whose owner is deactivated)
+// hands the reason it refused to the same auth.fail emit a rejected cookie reaches.
+func WithSessionRejected(ctx context.Context, reason string) context.Context {
+	return withSessionRejected(ctx, reason)
+}
+
+type authorityEpochCtxKey struct{}
+
+// WithAuthorityEpoch carries the authority epoch a sign-in was issued under to the login-grant sink.
+func WithAuthorityEpoch(ctx context.Context, epoch int64) context.Context {
+	return context.WithValue(ctx, authorityEpochCtxKey{}, epoch)
+}
+
+// AuthorityEpochFromContext is the authority epoch of the verified session cookie (Middleware) or
+// of the sign-in being issued (WithAuthorityEpoch); false when neither put one on ctx, as on the
+// API-token and admin-token lanes.
+func AuthorityEpochFromContext(ctx context.Context) (int64, bool) {
+	e, ok := ctx.Value(authorityEpochCtxKey{}).(int64)
+	return e, ok
+}
+
+type revocationSeqCtxKey struct{}
+
+type revocationStamp struct {
+	sub string
+	seq int64
+}
+
+// WithRevocationSeq carries the revocation sequence the credential admitting this request recorded at issue,
+// with the principal it was issued to.
+func WithRevocationSeq(ctx context.Context, sub string, seq int64) context.Context {
+	return context.WithValue(ctx, revocationSeqCtxKey{}, revocationStamp{sub: sub, seq: seq})
+}
+
+// RevocationSeqFor is that sequence when the admitting credential was issued to sub, and 0 otherwise: a
+// credential's sequence says nothing about another person's cuts, and 0 means "compare on time".
+func RevocationSeqFor(ctx context.Context, sub string) int64 {
+	st, _ := ctx.Value(revocationSeqCtxKey{}).(revocationStamp)
+	if st.sub == "" || st.sub != sub {
+		return 0
+	}
+	return st.seq
+}
+
 // SessionRejectedFromContext returns why Middleware rejected a presented
 // session cookie: "invalid_session", "expired_session", "revoked_session",
-// or "session_revocation_unavailable" (fail-closed) when Revocations is
-// wired; "" when no cookie was presented or it decoded fine.
+// "identity_deactivated" (the identity was deactivated, or a suspension passed
+// the cookie's authority epoch), "role_stamp_stale" when RoleStampTTL is set, or "session_revocation_unavailable"
+// (fail-closed) when Revocations is wired; "" when no cookie was presented or it decoded fine.
 func SessionRejectedFromContext(ctx context.Context) string {
 	reason, _ := ctx.Value(sessionRejectedCtxKey{}).(string)
 	return reason
@@ -51,6 +100,15 @@ func EmailFromContext(ctx context.Context) string {
 func NameFromContext(ctx context.Context) string {
 	n, _ := ctx.Value(nameCtxKey{}).(string)
 	return n
+}
+
+// ObjectIDFromContext returns the Entra object id the session was signed in
+// with, or "" when there is none: a non-Entra issuer, or a session written
+// before the field existed. Identity input only — never log it or put it in a
+// response or an audit row.
+func ObjectIDFromContext(ctx context.Context) string {
+	o, _ := ctx.Value(objectIDCtxKey{}).(string)
+	return o
 }
 
 // RoleFromContext returns the EFFECTIVE Wardyn role, or "" when there is no
@@ -112,6 +170,15 @@ func ExpiryFromContext(ctx context.Context) time.Time {
 	return t
 }
 
+type issuedAtCtxKey struct{}
+
+// IssuedAtFromContext returns when the verified session was signed in (its role-stamp time), or the zero
+// time when absent.
+func IssuedAtFromContext(ctx context.Context) time.Time {
+	t, _ := ctx.Value(issuedAtCtxKey{}).(time.Time)
+	return t
+}
+
 // GroupsFromContext returns the login-time group snapshot — the subjects a
 // `group` capability grant matches.
 //
@@ -163,8 +230,11 @@ func contextWithPrincipal(ctx context.Context, sess Session) context.Context {
 	ctx = context.WithValue(ctx, principalCtxKey{}, sess.Sub)
 	ctx = context.WithValue(ctx, emailCtxKey{}, sess.Email)
 	ctx = context.WithValue(ctx, nameCtxKey{}, sess.Name)
+	ctx = context.WithValue(ctx, objectIDCtxKey{}, sess.ObjectID)
 	ctx = context.WithValue(ctx, groupsCtxKey{}, sess.Groups)
 	ctx = context.WithValue(ctx, groupsTruncatedCtxKey{}, sess.GroupsTruncated)
+	ctx = WithAuthorityEpoch(ctx, sess.AuthorityEpoch)
+	ctx = WithRevocationSeq(ctx, sess.Sub, sess.RevocationSeq)
 	// THE MEMBER-MODE CLAMP — the only place it's applied. This is the sole
 	// read of sess.Role in the product, so clamping here clamps everything
 	// downstream by construction. DOWNWARD ONLY: sess.Role is never
@@ -184,6 +254,7 @@ func contextWithPrincipal(ctx context.Context, sess Session) context.Context {
 	// ANDed with the mode, not copied: a cookie hand-built with "mmnc" alone
 	// is inert. Identity (sess.Sub) is untouched by both.
 	ctx = context.WithValue(ctx, memberPreviewNoCredCtxKey{}, sess.MemberMode && sess.MemberModeNoCredential)
+	ctx = context.WithValue(ctx, issuedAtCtxKey{}, sess.IssuedAt)
 	return context.WithValue(ctx, expiryCtxKey{}, sess.Expiry)
 }
 
@@ -195,6 +266,9 @@ type emailCtxKey struct{}
 
 // nameCtxKey — see NameFromContext.
 type nameCtxKey struct{}
+
+// objectIDCtxKey — see ObjectIDFromContext.
+type objectIDCtxKey struct{}
 
 // roleCtxKey — see RoleFromContext.
 type roleCtxKey struct{}

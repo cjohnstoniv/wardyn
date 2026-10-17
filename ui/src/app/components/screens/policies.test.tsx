@@ -3,8 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor, fireEvent } from "@testing-library/react";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { render, screen, waitFor, fireEvent, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { RunPolicy } from "../../lib/types";
 import { aheadByHours } from "../../lib/test-clock";
@@ -18,13 +18,15 @@ import { aheadByHours } from "../../lib/test-clock";
 
 const listPoliciesMock = vi.fn();
 const createPolicyMock = vi.fn();
+const updatePolicyMock = vi.fn();
+const getDefaultPolicyMock = vi.fn<() => Promise<unknown>>(() => Promise.reject(new Error("not mocked")));
 vi.mock("../../lib/api/policies", () => ({
   policies: {
     listPolicies: () => listPoliciesMock(),
     createPolicy: (...a: unknown[]) => createPolicyMock(...a),
-    updatePolicy: vi.fn(),
+    updatePolicy: (...a: unknown[]) => updatePolicyMock(...a),
     deletePolicy: vi.fn(),
-    getDefaultPolicy: vi.fn().mockRejectedValue(new Error("not mocked")),
+    getDefaultPolicy: () => getDefaultPolicyMock(),
   },
 }));
 
@@ -34,7 +36,15 @@ vi.mock("../../lib/api/runs", () => ({
   runs: { gradePolicy: () => Promise.resolve({ risk_assessment: [], overall_risk: "low" }) },
 }));
 
+// New policy asks the setup status which model providers the deployment has; a
+// rejection (the default here) leaves the editor on the stock starter.
+const getSetupStatusMock = vi.fn<() => Promise<unknown>>(() => Promise.reject(new Error("not mocked")));
+vi.mock("../../lib/api/setup", () => ({
+  setup: { getSetupStatus: () => getSetupStatusMock() },
+}));
+
 import { PoliciesScreen } from "./policies";
+import { toYaml } from "../wardyn/yaml-block";
 
 function policy(over: Partial<RunPolicy> = {}): RunPolicy {
   return {
@@ -175,5 +185,133 @@ describe("PoliciesScreen — the policy editor can't be dismissed by accident on
     fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape", code: "Escape" });
 
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  });
+});
+
+describe("PoliciesScreen: New policy follows the deployment's model providers", () => {
+  const BEDROCK_HOST = "bedrock-runtime.us-east-1.amazonaws.com";
+
+  beforeEach(() => {
+    listPoliciesMock.mockReset();
+    listPoliciesMock.mockResolvedValue([]);
+    getSetupStatusMock.mockReset();
+    getSetupStatusMock.mockResolvedValue({
+      model_providers: [{ id: "p1", kind: "bedrock_sso", host: BEDROCK_HOST, harnesses: ["claude-code"] }],
+    });
+  });
+
+  afterEach(() => getSetupStatusMock.mockReset());
+
+  it("re-seeds an untouched spec onto the Bedrock host and leaves the editor clean", async () => {
+    render(<PoliciesScreen />);
+    await screen.findByText(/no policies yet/i);
+    await userEvent.click(screen.getByRole("button", { name: /new policy/i }));
+    await screen.findByText(/Model hosts follow/);
+
+    const spec = screen.getByRole("dialog").querySelector("textarea") as HTMLTextAreaElement;
+    await waitFor(() => expect(spec.value).toContain(BEDROCK_HOST));
+    expect(spec.value).not.toContain("api.anthropic.com");
+
+    // Untouched means not dirty: Escape closes the dialog.
+    fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape", code: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  });
+
+  it("a slow /setup/status that settles after New policy was closed never rewrites a later Edit", async () => {
+    let settle!: (v: unknown) => void;
+    getSetupStatusMock.mockReset();
+    getSetupStatusMock.mockReturnValueOnce(new Promise((r) => (settle = r)));
+    getSetupStatusMock.mockResolvedValue({ model_providers: [] });
+    listPoliciesMock.mockResolvedValue([policy()]);
+    render(<PoliciesScreen />);
+    await screen.findByText("payments-strict");
+    await userEvent.click(screen.getAllByRole("button", { name: /new policy/i })[0]);
+    await screen.findByRole("dialog");
+    fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape", code: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+
+    await userEvent.click(screen.getByRole("button", { name: /policy actions/i }));
+    await userEvent.click(await screen.findByRole("menuitem", { name: /^edit/i }));
+    const spec = (await screen.findByRole("dialog")).querySelector("textarea") as HTMLTextAreaElement;
+    expect(spec.value).toContain("deny_with_review");
+
+    settle({ model_providers: [{ id: "p1", kind: "bedrock_sso", host: BEDROCK_HOST, harnesses: ["claude-code"] }] });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(spec.value).toContain("deny_with_review");
+    expect(spec.value).not.toContain(BEDROCK_HOST);
+  });
+});
+
+// #1921: one read-only policy document, and a source editor that opens in YAML.
+describe("PoliciesScreen — reading a policy never writes it", () => {
+  beforeEach(() => {
+    listPoliciesMock.mockReset();
+    listPoliciesMock.mockResolvedValue([policy()]);
+    createPolicyMock.mockReset();
+    updatePolicyMock.mockReset();
+    getDefaultPolicyMock.mockReset();
+    getDefaultPolicyMock.mockResolvedValue({ allowed_domains: ["mirror.example"], min_confinement_class: "CC2" });
+  });
+
+  it("the selected policy and the default open on Summary, switch views, and cause no policy write", async () => {
+    const user = userEvent.setup();
+    render(<PoliciesScreen />);
+    fireEvent.click(await screen.findByText("payments-strict"));
+    const sheet = await screen.findByRole("dialog");
+    fireEvent.click(within(sheet).getByText("View raw JSON"));
+    expect(within(sheet).getByRole("button", { name: "Summary" })).toHaveAttribute("aria-pressed", "true");
+    expect(within(sheet).getByText("Allowed hosts").nextElementSibling).toHaveTextContent("api.anthropic.com");
+    for (const name of ["YAML", "JSON", "Summary"]) await user.click(within(sheet).getByRole("button", { name }));
+    fireEvent.keyDown(sheet, { key: "Escape", code: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+
+    fireEvent.click(await screen.findByText(/^Default \(ceiling\) policy/));
+    expect(await screen.findByText("mirror.example")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "YAML" }));
+
+    expect(updatePolicyMock).not.toHaveBeenCalled();
+    expect(createPolicyMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("PoliciesScreen — the editor opens in YAML and saves what it parses to", () => {
+  beforeEach(() => {
+    listPoliciesMock.mockReset();
+    listPoliciesMock.mockResolvedValue([policy()]);
+    createPolicyMock.mockReset();
+    updatePolicyMock.mockReset();
+    updatePolicyMock.mockResolvedValue(policy());
+    getDefaultPolicyMock.mockReset();
+    getDefaultPolicyMock.mockRejectedValue(new Error("not mocked"));
+  });
+
+  const openEdit = async () => {
+    render(<PoliciesScreen />);
+    await screen.findByText("payments-strict");
+    await userEvent.click(screen.getByRole("button", { name: /policy actions/i }));
+    await userEvent.click(await screen.findByRole("menuitem", { name: /^edit/i }));
+    return (await screen.findByLabelText(/^Spec \(YAML\)/)) as HTMLTextAreaElement;
+  };
+
+  it("seeds the stored policy as YAML and sends the parsed object, not the text", async () => {
+    const box = await openEdit();
+    expect(box.value).toBe(`${toYaml(policy().spec)}\n`);
+    fireEvent.change(box, { target: { value: "# tightened\nallowed_domains: []\nmin_confinement_class: CC3\n" } });
+    await userEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    await waitFor(() => expect(updatePolicyMock).toHaveBeenCalledTimes(1));
+    expect(updatePolicyMock).toHaveBeenCalledWith("pol-1", "payments-strict", {
+      allowed_domains: [],
+      min_confinement_class: "CC3",
+    });
+  });
+
+  it("an invalid source cannot be saved: nothing is sent, least of all the last valid policy", async () => {
+    const box = await openEdit();
+    fireEvent.change(box, { target: { value: "a: [" } });
+    expect(screen.getByText(/^Invalid YAML — /)).toBeInTheDocument();
+    const save = screen.getByRole("button", { name: "Save changes" });
+    expect(save).toBeDisabled();
+    fireEvent.click(save);
+    expect(updatePolicyMock).not.toHaveBeenCalled();
   });
 });

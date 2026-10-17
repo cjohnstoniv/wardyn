@@ -29,7 +29,7 @@ func r3bWalledRun(t *testing.T, profile string, deny []string) ([]types.AuditEve
 
 	gc := governanceCeiling{Spec: types.RunPolicySpec{DeniedDomains: deny}}
 	if profile != "" {
-		gc.Profile = &types.GovernanceProfile{Name: profile}
+		gc.Profile = &ResolvedProfile{Name: profile}
 	}
 	srv.dispatchRun(context.Background(), run, ceilingForDispatch(gc, adoEntraUngraded(), bedrockCredUngraded()), dispatchParams{
 		RunToken: "run-token", Image: "wardyn/claude-code:latest",

@@ -13,6 +13,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -133,7 +134,7 @@ func (p *Proxy) handleGitBroker(w http.ResponseWriter, r *http.Request) {
 	grantID, granted := p.gitGrants[orgRepo]
 	if !granted {
 		p.emitGitDecision(r, egress.Deny, ruleSourceGit)
-		http.Error(w, "repository not granted to this run", http.StatusForbidden)
+		p.denyAttributed(w, "repository not granted to this run", http.StatusForbidden)
 		return
 	}
 	if !validGitRest(r.Method, rest, r.URL.Query().Get("service")) {
@@ -168,9 +169,10 @@ func (p *Proxy) handleGitBroker(w http.ResponseWriter, r *http.Request) {
 	if isPush {
 		forge := &forgeRepo{p: p, repo: orgRepo,
 			token: func(ctx context.Context) (string, error) { return p.gitToken(ctx, grantID) }}
+		rules, entryErr := p.rulesForRemote(githubHost, orgRepo)
 		body, release, ok := p.applyPushRules(w, r, reqBody, slog.String("repo", orgRepo),
 			func(ruleSource string) { p.emitGitDecision(r, egress.Deny, ruleSource) }, forge,
-			appPushTarget(orgRepo, grantID))
+			appPushTarget(orgRepo, grantID), rules, entryErr)
 		defer release()
 		if !ok {
 			return
@@ -234,7 +236,7 @@ func (p *Proxy) handleGitBroker(w http.ResponseWriter, r *http.Request) {
 		p.failUpstream(w, err, &egress.DecisionLog{Request: p.reqOf(r, githubHost, 443)}, githubHost, "git upstream error")
 		return
 	}
-	p.emitGitDecision(r, egress.Allow, allowSrc)
+	p.emitDialledAllow(decisionLog(p.reqOf(r, githubHost, 443), egress.Allow, allowSrc), githubHost)
 	defer func() { _ = resp.Body.Close() }()
 
 	if noThin {
@@ -258,7 +260,7 @@ func (p *Proxy) handleGitBroker(w http.ResponseWriter, r *http.Request) {
 // it preserves today's error behavior for legitimate callers without opening a
 // hole. Fail-closed here would only convert a control-plane 400 into a proxy 403.
 func (p *Proxy) isBrokeredGitGrant(body []byte) bool {
-	if len(p.gitGrants) == 0 {
+	if len(p.gitGrants) == 0 && p.ghAPI == nil {
 		return false
 	}
 	var req struct {
@@ -272,7 +274,27 @@ func (p *Proxy) isBrokeredGitGrant(body []byte) bool {
 			return true
 		}
 	}
-	return false
+	// The GitHub CLI's grants mint the same App's tokens, with wider permissions.
+	return p.ghAPI.holds(req.GrantID)
+}
+
+// isBrokeredPATGrant reports whether a sandbox-supplied mint body names one of
+// THIS run's git_pat grants while the PAT broker is on: the guard that keeps a
+// stored PAT out of the sandbox through the raw mint relay. It decodes exactly
+// as isBrokeredGitGrant does and fails open on an undecodable body for the same
+// reason. handlePATBroker's own mint bypasses this (brokeredToken ->
+// forwardToControlPlane directly).
+func (p *Proxy) isBrokeredPATGrant(body []byte) bool {
+	if len(p.brokeredPATGrantIDs) == 0 {
+		return false
+	}
+	var req struct {
+		GrantID uuid.UUID `json:"grant_id"`
+	}
+	if err := json.NewDecoder(bytes.NewReader(body)).Decode(&req); err != nil || req.GrantID == uuid.Nil {
+		return false
+	}
+	return slices.Contains(p.brokeredPATGrantIDs, req.GrantID)
 }
 
 // gitToken returns a cached (or freshly minted) installation token for grantID.
@@ -332,7 +354,7 @@ func (p *Proxy) brokeredToken(ctx context.Context, grantID uuid.UUID, wireUser f
 	// usernames, and masking the wrong rendering (the mint's, rather than what
 	// actually goes on the wire) would leave the real one in cleartext.
 	// Residual: only verbatim bytes of those renderings are caught.
-	registerBasicAuthCredential(wireUser(user), tok)
+	registerBasicAuthCredential(p.maskKey, wireUser(user), tok)
 	e.token, e.username, e.expiresAt = tok, user, expMs
 	return tok, user, nil
 }
@@ -589,7 +611,7 @@ func (p *Proxy) confinePush(w http.ResponseWriter, r *http.Request, subject slog
 		// on the paths that show server messages, and always shows the 403).
 		// A sideband report-status would read better but means claiming
 		// "unpack ok" for a pack we never forwarded.
-		http.Error(w, "wardyn: "+err.Error()+
+		p.denyAttributed(w, "wardyn: "+err.Error()+
 			"\nthis run may push only to "+prefix+"*", http.StatusForbidden)
 		return nil, false
 	}
@@ -710,7 +732,7 @@ func readReceivePackCommands(body io.Reader, prefix string) ([]byte, error) {
 			return nil, fmt.Errorf("unreadable pkt-line length: %w", err)
 		}
 		buf.Write(hdr)
-		n, err := strconv.ParseUint(string(hdr), 16, 32)
+		n, err := strconv.ParseUint(string(hdr), 16, 16)
 		if err != nil {
 			return nil, fmt.Errorf("malformed pkt-line length %q", hdr)
 		}

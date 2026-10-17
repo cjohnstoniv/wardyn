@@ -3,10 +3,12 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// Exactly two rule families: react-hooks (a hook that silently closes over a
-// stale value) and @typescript-eslint/no-floating-promises (a promise nobody
-// awaits or .catch()es surfaces as an unhandled rejection). Widening to a full
-// `recommended` set is a separate decision.
+// Exactly three rule families: react-hooks (a hook that silently closes over a
+// stale value), @typescript-eslint/no-floating-promises (a promise nobody
+// awaits or .catch()es surfaces as an unhandled rejection), and, on unit test
+// files only, a ban on `user.type` (one re-render per keystroke; use setField
+// from src/test/set-field.ts). Widening to a full `recommended` set is a
+// separate decision.
 import tseslint from "typescript-eslint";
 import reactHooks from "eslint-plugin-react-hooks";
 import globals from "globals";
@@ -47,6 +49,22 @@ export default tseslint.config(
       "react-hooks/rules-of-hooks": "error",
       "react-hooks/exhaustive-deps": "error",
       "@typescript-eslint/no-floating-promises": "error",
+    },
+  },
+  {
+    // Unit tests: set a field's value in one step with setField
+    // (src/test/set-field.ts). `user.type` types one character at a time and
+    // re-renders a controlled form after each. Scoped to the test globs, so the
+    // Playwright specs and application code are unaffected.
+    files: ["src/**/*.test.{ts,tsx}"],
+    rules: {
+      "no-restricted-syntax": [
+        "error",
+        {
+          selector: "CallExpression[callee.object.name='user'][callee.property.name='type']",
+          message: "Use setField from src/test/set-field.ts instead of user.type.",
+        },
+      ],
     },
   },
   {

@@ -11,7 +11,7 @@
 // under a block, and Remove on a row written for this type.
 import * as React from "react";
 import { AlertTriangle, Loader2 } from "lucide-react";
-import { HttpError } from "../../../lib/api/core";
+import { HttpError, PendingChangeError } from "../../../lib/api/core";
 import { permissions as api, type ExplainRow, type ExplainState } from "../../../lib/api/permissions";
 import { AVAILABILITY } from "../../../lib/availability-copy";
 import { getErrorMessage } from "../../../lib/format";
@@ -35,6 +35,7 @@ import { cn } from "../../ui/utils";
 import { Mono } from "../../wardyn/code-block";
 import { Chip } from "../../wardyn/primitives";
 import { Note } from "../governance/display";
+import { SubmittedNote } from "../governance/submitted-note";
 import { AddGrantForm } from "../permissions";
 import { useValueNames } from "./explain-names";
 
@@ -71,6 +72,8 @@ export function ExplainGrid({ subject, name, disabled }: { subject: string; name
   const [toRemove, setToRemove] = React.useState<CapabilityGrant | null>(null);
   const [busy, setBusy] = React.useState(false);
   const [removeError, setRemoveError] = React.useState<string | null>(null);
+  // A remove the server held for a second person (202): the grant is still there.
+  const [submitted, setSubmitted] = React.useState(false);
   // G-7: which family's Add dialog is open, fixed to this subject and kind.
   const [addKind, setAddKind] = React.useState<CapabilityKind | null>(null);
   const typeName = useUserTypeName();
@@ -103,10 +106,16 @@ export function ExplainGrid({ subject, name, disabled }: { subject: string; name
   const remove = async (g: CapabilityGrant) => {
     setBusy(true);
     setRemoveError(null);
+    setSubmitted(false);
     try {
       await api.deleteGrant(g.id);
       load();
     } catch (e) {
+      if (e instanceof PendingChangeError) {
+        setSubmitted(true);
+        load();
+        return;
+      }
       setRemoveError(e instanceof HttpError ? e.message : getErrorMessage(e));
     } finally {
       setToRemove(null);
@@ -240,6 +249,7 @@ export function ExplainGrid({ subject, name, disabled }: { subject: string; name
           {removeError}
         </Note>
       )}
+      {submitted && <SubmittedNote />}
 
       {/* G-7: Permissions' own "Add a grant" dialog, Who and Capability fixed
           to this type and family. */}

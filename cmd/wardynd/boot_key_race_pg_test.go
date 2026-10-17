@@ -4,7 +4,7 @@
 package main
 
 // Postgres-backed test for the first-boot race in loadOrCreateSecret (#754):
-// two -allow-multi-instance replicas booting at once against an empty store
+// two WARDYN_HA replicas booting at once against an empty store
 // must end on ONE stored key, not each on its own.
 //
 // Guarded by WARDYN_TEST_PG: skipped cleanly when unset, must PASS when set.

@@ -384,6 +384,7 @@ func TestPG_ConcurrentMint_ExactlyOnceWins(t *testing.T) {
 		t.Fatalf("revoked = %d, want %d (= minter calls %d - the one winner): every discarded token must be handed back",
 			gh.Revoked, gh.Calls-1, gh.Calls)
 	}
+	t.Logf("external calls=%d, returned credentials=%d, discarded credentials revoked=%d", gh.Calls, wins, gh.Revoked)
 }
 
 // TestPG_ConcurrentMint_AutoApprovalGrant_Independent is a control alongside the
@@ -552,6 +553,7 @@ func TestPG_ConcurrentMintOnApproval_ExactlyOnce(t *testing.T) {
 		t.Fatalf("revoked = %d, want %d (= minter calls %d - the one winner): every discarded token must be handed back",
 			gh.Revoked, gh.Calls-1, gh.Calls)
 	}
+	t.Logf("external calls=%d, returned credentials=%d, discarded credentials revoked=%d", gh.Calls, wins, gh.Revoked)
 }
 
 // TestPG_ExpiredApproval_ReRaisesPending runs the real SQL (the fake-DB twin

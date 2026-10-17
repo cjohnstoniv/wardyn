@@ -8,13 +8,15 @@
 // The AWS door's title, toast and cleanup note are reused from
 // MODEL_ACCESS_BANNER, and its button from AGENTS.SIGN_IN_AWS.
 
+import { SIGN_IN_AGAIN } from "../../../lib/session-renew-copy";
+
 // The shell strip under a provider block (B1–B8). B9 is the server's sentence.
 export const BANNER = {
   B1: (harness: string, name: string) => `${harness} runs use ${name}, and you are not signed in to AWS.`,
   B3: (name: string, when: string) => `Your AWS sign-in for ${name} lapses ${when}.`,
   // Drawn for a token; "a key reads the same with 'key'".
   B4: (harness: string, name: string, token: boolean) =>
-    `${harness} runs use ${name}, and you haven't added your ${token ? "token" : "key"}.`,
+    `${harness} runs use ${name}, and no ${token ? "token" : "key"} is available.`,
   B5: (harness: string) => `${harness} runs use your Claude subscription, and you're not signed in to Claude.`,
   B8: (n: number) => `${n} of your model connections need you.`,
   REVIEW: "Review",
@@ -22,17 +24,22 @@ export const BANNER = {
 
 // The Your-model-connections strings the strip and the doors share (packet MP-D).
 export const CONNECTIONS = {
+  COULD_NOT_CHECK: "Could not check",
+  RECHECK: "Re-check",
+  REVIEW_RECONNECT: "Review and reconnect",
+  NEVER_CONNECTED: (host: string, name: string) => `No connection is stored for ${name}. Destination: ${host}.`,
+  DESTINATION_CHANGED: (host: string) =>
+    `Your connection was removed because an admin changed this provider’s destination. Review ${host}, then connect again.`,
+  KIND_CHANGED: (host: string) =>
+    `Your connection was removed because an admin changed this provider’s connection method. Review ${host}, then connect again.`,
+  STORE_UNREADABLE: "Could not check your connection. Your credential may still be stored. Wait a moment, then re-check.",
   C6_LINE: (name: string) => `Your AWS sign-in for ${name} no longer works.`,
   SIGN_IN_CLAUDE: "Sign in to Claude",
+  // A stored sign-in's door, always offered: a session AWS refuses to renew
+  // still reads as signed in until a run is refused.
+  SIGN_IN_AGAIN,
   ADD_KEY: "Add your key",
   ADD_TOKEN: "Add your token",
-  // §5.4's own page (packet MP-D, states C3-C10) — the page every person,
-  // admins included, connects their own credential from. Not wired here: C9b
-  // (a token removed by an admin's address change) and C11 (the admin-token
-  // caller, which never mounts this page — model-access-context.tsx's own
-  // comment). SetupProviderAccess carries no signal distinguishing "removed"
-  // from "never stored", so C9b's own sentence is left unwired rather than
-  // invented — see #541's report.
   TITLE: "Your model connections",
   LEDE: "Connect the model providers your admin set up. Your runs use your own sign-in or key.",
   FOR: (harnesses: string) => `For ${harnesses}`,
@@ -44,8 +51,8 @@ export const CONNECTIONS = {
   EXPIRING: "Expiring",
   EXPIRING_LINE: (when: string) => `Sign in again before ${when}`,
   SIGNED_OUT: "Signed out",
-  NO_KEY: "No key added",
-  NO_TOKEN: "No token added",
+  NO_KEY: "No key available",
+  NO_TOKEN: "No token available",
   KEY_GOES_TO: (host: string) => `Your key goes to ${host}`,
   // vendor is fixed to "Anthropic" at every call site (packet MP-D's own
   // wording) — the packet's own report flags this as questionable on a row
@@ -68,8 +75,13 @@ export const CONNECTIONS = {
 
 // The run's model provider in the run header (#543, decision 5). A provider
 // deleted since the run chose it keeps its chip, marked removed.
+// LAUNCHED_VIA (#1234) is the line under the header bar for a run a registered
+// portal launched on its owner's behalf; the fallback is for a portal whose
+// name the server could not give.
 export const RUN_FACTS = {
   PROVIDER: (name: string, removed: boolean) => `Model provider · ${name}${removed ? " (removed)" : ""}`,
+  LAUNCHED_VIA: (name: string) => `Launched via ${name}`,
+  LAUNCHED_VIA_FALLBACK: "Launched via a portal",
 } as const;
 
 export const DOOR = {

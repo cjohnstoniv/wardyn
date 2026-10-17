@@ -23,7 +23,7 @@
 // The closed set, in the order the admin screen renders them. Mirrors the Go
 // slice in internal/api/capabilities.go — a new kind is a Go constant plus a
 // row here, no DDL.
-export const CAPABILITY_KINDS = ["egress_host", "secret", "workspace", "image", "agent", "workspace_provider", "model_provider", "feature", "policy"] as const;
+export const CAPABILITY_KINDS = ["egress_host", "secret", "workspace", "image", "agent", "workspace_provider", "model_provider", "feature", "policy", "component"] as const;
 export type CapabilityKind = (typeof CAPABILITY_KINDS)[number];
 
 // Whether granting this kind takes power away from members ("narrows" — the
@@ -134,7 +134,7 @@ export const KIND: Record<CapabilityKind, KindCopy> = {
     label: "SSH keys and API tokens",
     blurb: "Whether a member may add an SSH key or mint an API token.",
     valueLabel: "Feature",
-    valueHint: "ssh_key or api_token. Use * for both.",
+    valueHint: "ssh_key, api_token or custom_component. Use * for those three. self_host_runner and service_attach are never covered by *: name them.",
     unenforced: "Members can add SSH keys and mint API tokens.",
     enforced:
       "A member can only add SSH keys or mint API tokens when granted. Keys and tokens they already have keep working until removed or revoked.",
@@ -151,9 +151,36 @@ export const KIND: Record<CapabilityKind, KindCopy> = {
       "A member can only select policies granted to them. A run naming another one is refused at launch, with the reason. A run with no policy is never refused for it.",
     direction: "narrows",
   },
+  // Org components (0.8.9). Every org component is "Available to: nobody" from
+  // its create, so an allow must name its id — a * allow reaches none of them.
+  // Draft wording until the component catalog's mock round settles it.
+  component: {
+    label: "Components",
+    blurb: "Which org components a member may add to a run of their own.",
+    valueLabel: "Component",
+    valueHint: "The component's id. An allow must name one; use * only to deny every component.",
+    unenforced:
+      "Members can add an org component once it is available to them. A new one is available to nobody until you add people.",
+    enforced: "A member can only add org components granted to them by id. A run naming another one is refused at launch.",
+    direction: "narrows",
+  },
 };
 
 // Admin surface
+
+// The Permissions row for the `self_host_runner` feature value (POST /me/runners/tokens). Restricted by
+// migration 0178, so it is off until an allow names it: the switch is the one `all` allow row.
+export const SELF_HOST = {
+  LABEL: "Self-hosted runners",
+  BLURB: "Whether a person may register a runner of their own, on their own machine.",
+  EVERYONE_CHIP: "Granted to everyone",
+  BY_GRANT_CHIP: "By grant only",
+  EVERYONE: "Everyone signed in may mint a registration token for a runner of their own. Turn this off to stop new self-hosted runners for everyone but those named below.",
+  BY_GRANT:
+    "Nobody may register a runner of their own until you grant self_host_runner, to a person or group below or to everyone with this switch. Runners already registered keep working. Admins are never asked.",
+  SWITCH: "Allow everyone to register their own runner",
+  FAILED: "Failed to save the rule",
+} as const;
 
 export const PERM = {
   TITLE: "Permissions",
@@ -327,7 +354,7 @@ export const DENIED = {
 };
 
 // M3 — member local_dir onboarding (AddWorkspaceDialog), root-constrained per
-// WARDYN_MEMBER_WORKSPACE_ROOTS/_MAP (member-role-desktop.md). Presentational
+// WARDYN_USER_WORKSPACE_ROOTS/_MAP (member-role-desktop.md). Presentational
 // only: enforcement is ValidateUserMountSource at bind time, same
 // non-authoritative-hint relationship DENIED above has to server-side
 // requireOperator.

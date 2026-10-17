@@ -5,6 +5,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -330,4 +331,31 @@ func TestWaitReady_UnknownVCS_ReadyWithoutGit_WaitsWithIt(t *testing.T) {
 			t.Fatalf("exit=%d err=%v, want 124 naming vcs \"unknown\"", code, err)
 		}
 	})
+}
+
+// #1492: the deadline also cuts the workspace read. A /files read that
+// outlasts --timeout is a 124 at the budget, never a "permanent" workspace
+// error and never a late readiness.
+func TestWaitReady_TimeoutCutsTheFilesRead(t *testing.T) {
+	fastPoll(t)
+	id := uuid.New()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if strings.HasSuffix(r.URL.Path, "/files") {
+			time.Sleep(500 * time.Millisecond)
+			_, _ = w.Write([]byte(`{"vcs":"none","path":"/workspace"}`))
+			return
+		}
+		_ = json.NewEncoder(w).Encode(types.AgentRun{ID: id, State: types.RunRunning})
+	}))
+	t.Cleanup(srv.Close)
+	c := &sdk.Client{BaseURL: srv.URL, HTTPClient: &http.Client{Timeout: 5 * time.Second}}
+	start := time.Now()
+	_, err := waitForRunReady(context.Background(), io.Discard, c, id, 100*time.Millisecond, false)
+	if code := exitCodeOf(err); code != 124 {
+		t.Fatalf("exit = %d (err=%v), want 124", code, err)
+	}
+	if elapsed := time.Since(start); elapsed > 150*time.Millisecond {
+		t.Errorf("elapsed = %v, want the read cut at the 100ms budget", elapsed)
+	}
 }

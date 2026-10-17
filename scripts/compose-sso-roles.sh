@@ -145,7 +145,7 @@ EOF
   esac
   envfile "${base}" "test/sso-roles/${shape}.env" "${SCRATCH}/${PROJECT}.env"
   # The effective role config, for the record (no secrets in these keys).
-  grep -E '^WARDYN_(MEMBER_MODE|OIDC_ROLE_MAP|OIDC_DEFAULT_ROLE|OIDC_OPERATOR_EMAILS|LOCAL_MODE)=' \
+  grep -E '^WARDYN_(USER_DESKTOP|OIDC_ROLE_MAP|OIDC_DEFAULT_ROLE|OIDC_OPERATOR_EMAILS|LOCAL_MODE)=' \
     "${SCRATCH}/${PROJECT}.env" >"${EVIDENCE_DIR}/${shape}-role-config.env"
 
   log "${shape}: bringing up ${PROJECT} (postgres + dex + wardynd) on :${UP_PORT}"

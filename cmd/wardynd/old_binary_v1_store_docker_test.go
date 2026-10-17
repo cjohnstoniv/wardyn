@@ -29,6 +29,11 @@ const (
 	// ciphertext holds no newline byte, or "unexpected intro:" and quotes the
 	// bytes before the first one — which it is depends on the random nonce.
 	oldBinaryRefusal = `load secret "wardyn-signing-key": pg secretstore: decrypt wardyn-signing-key: age decrypt: failed to read header: parsing age header:`
+	// oldBinaryAuditRefusal is where it stops first since 0.8.6's audit
+	// conversion (0111): its boot canary inserts into audit_events directly,
+	// and the converted chain trigger admits rows only from audit_append().
+	oldBinaryAuditRefusal = `migrate: db: the audit chain canary could not append a row`
+	auditAppendOnly       = `audit_events: rows are appended only through audit_append()`
 )
 
 func dockerCLI(t *testing.T, args ...string) string {
@@ -43,9 +48,10 @@ func dockerCLI(t *testing.T, args ...string) string {
 // TestPG_OldBinaryAgainstV1Store: an operator who rolls back to 0.7.11 over a
 // database this version converted gets a boot that FAILS CLOSED — the old
 // binary reads no row, mints nothing over the boot keys, and exits — and the
-// line it fails with is the one docs/OPERATIONS.md tells them means "restore
-// the pre-upgrade dump", not "your age key is wrong". The old binary cannot
-// name the envelope itself; the runbook is where that line is explained.
+// line it fails with is one docs/OPERATIONS.md tells them means "restore the
+// pre-upgrade dump". Over a database this version migrated, the audit
+// conversion stops it first, at its audit canary; the envelope v1 refusal is
+// what a database 0.7.12 to 0.8.5 converted shows, and the runbook keeps both.
 //
 // Self-contained on the default docker daemon: its own postgres:17 and the
 // published 0.7.11 image on a private network, so it needs no host networking.
@@ -95,15 +101,14 @@ func TestPG_OldBinaryAgainstV1Store(t *testing.T) {
 	_, fatal, _ := strings.Cut(string(out), "ERROR wardynd: fatal err=")
 	fatal, _, _ = strings.Cut(fatal, "\n")
 	msg, err := strconv.Unquote(fatal)
-	tail, ok := strings.CutPrefix(msg, oldBinaryRefusal)
-	if err != nil || !ok || (tail != " file is empty" && !strings.HasPrefix(tail, " unexpected intro: ")) {
-		t.Errorf("0.7.11 wardynd did not fail with %q:\n%s", oldBinaryRefusal, out)
+	if err != nil || !strings.HasPrefix(msg, oldBinaryAuditRefusal) || !strings.Contains(msg, auditAppendOnly) {
+		t.Errorf("0.7.11 wardynd did not fail with %q ... %q:\n%s", oldBinaryAuditRefusal, auditAppendOnly, out)
 	}
 	ops, err := os.ReadFile("../../docs/OPERATIONS.md")
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{oldBinaryRefusal, "`file is empty`", "`unexpected intro: \"…\"`"} {
+	for _, want := range []string{oldBinaryRefusal, "`file is empty`", "`unexpected intro: \"…\"`", oldBinaryAuditRefusal, auditAppendOnly} {
 		if !strings.Contains(string(ops), want) {
 			t.Errorf("docs/OPERATIONS.md does not carry %q; an operator who rolls back reads the refusal as a wrong age key", want)
 		}

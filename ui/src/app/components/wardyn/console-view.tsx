@@ -7,6 +7,7 @@ import * as React from "react";
 import { Navigate, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { Button } from "../ui/button";
 import { health } from "../../lib/api/health";
+import { notifyAuthChange } from "../../lib/api/core";
 import { useRoleResolved } from "./operator-context";
 import { releaseUnloadGuard } from "../../lib/use-unsaved-guard";
 import { appURL } from "../../lib/base-path";
@@ -65,7 +66,7 @@ export function useViewAccess(): ViewAccess {
 // The User-view pages the rules act on (§2.3). Every other user-side path was
 // a pre-split route; M-1b deleted them, so it now falls to the ordinary
 // catch-all like any other unmatched path.
-const TWIN = /^\/(runs(\/(?!new$)[^/]+)?|approvals|workspaces(\/[^/]+)?|secrets)$/;
+const TWIN = /^\/(runs(\/(?!new$)[^/]+)?|approvals|workspaces(\/[^/]+)?|secrets|templates)$/;
 const USER_ONLY = /^\/(runs\/new|account|setup)$/;
 
 export type ViewVerdict =
@@ -163,6 +164,8 @@ export async function switchView(to: ConsoleView, target: string, noCredential =
   } catch (e) {
     releaseUnloadGuard(false);
     switching = false;
+    // Headers can invalidate auth before the body settles; deferred confirmations may now resume.
+    notifyAuthChange();
     throw e;
   }
   viewChannel()?.postMessage(to);

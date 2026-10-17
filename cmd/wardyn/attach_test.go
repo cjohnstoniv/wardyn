@@ -1194,3 +1194,75 @@ func TestAttach_SeveredConnectionIsNotACleanDetach(t *testing.T) {
 		t.Errorf("stdout = %q, want no PTY output leaked", stdoutGot)
 	}
 }
+
+// A 3xx from the mint is the control plane's (or its proxy's) decisive
+// answer, not "inconclusive": falling back to a bare dial would send the
+// configured bearer to the same interposed hop, and following the redirect
+// would send it wherever Location points (#1490). Neither may happen.
+func TestRunAttach_MintRedirectIsDecisive(t *testing.T) {
+	for _, status := range []int{http.StatusFound, http.StatusTemporaryRedirect} {
+		target := newRedirectTarget(t)
+		var dials int32
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == http.MethodPost {
+				http.Redirect(w, r, target.URL+"/login", status)
+				return
+			}
+			atomic.AddInt32(&dials, 1)
+			w.WriteHeader(http.StatusNotFound)
+		}))
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		err := runAttach(ctx, &sdk.Client{BaseURL: srv.URL, Token: "admin-bearer-token"}, "run-1")
+		cancel()
+		srv.Close()
+		var ae *sdk.APIError
+		if !errors.As(err, &ae) || ae.Status != status {
+			t.Fatalf("status %d: err = %v, want *sdk.APIError with that status", status, err)
+		}
+		if got := atomic.LoadInt32(&dials); got != 0 {
+			t.Errorf("status %d: fell back to a bare dial (%d)", status, got)
+		}
+		if hits := target.seen(); len(hits) != 0 {
+			t.Errorf("status %d: the redirect target was visited: %q", status, hits)
+		}
+	}
+}
+
+// The WebSocket handshake never follows a redirect either: coder/websocket
+// would otherwise replay the Authorization header at the Location.
+func TestRunAttach_DialRedirectIsNotFollowed(t *testing.T) {
+	target := newRedirectTarget(t)
+	srv := httptest.NewServer(withMintOK(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL+"/steal", http.StatusFound)
+	}))
+	defer srv.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	err := runAttach(ctx, &sdk.Client{BaseURL: srv.URL, Token: "admin-bearer-token"}, "run-1")
+	var ae *sdk.APIError
+	if !errors.As(err, &ae) || ae.Status != http.StatusFound {
+		t.Fatalf("err = %v, want *sdk.APIError 302", err)
+	}
+	if hits := target.seen(); len(hits) != 0 {
+		t.Errorf("the dial followed the redirect: %q", hits)
+	}
+}
+
+// The raw (non-SDK-method) requests fall back to the SDK's no-redirect
+// default when the client carries no HTTPClient, never http.DefaultClient.
+func TestRawRequestsWithNilHTTPClientDoNotFollowRedirects(t *testing.T) {
+	target := newRedirectTarget(t)
+	srv := redirectingServer(t, http.StatusTemporaryRedirect, target.URL+"/steal")
+	c := &sdk.Client{BaseURL: srv.URL, Token: "tok"}
+	ctx := context.Background()
+
+	if _, err := listAllAPITokens(ctx, c); err == nil {
+		t.Error("listAllAPITokens followed a redirect")
+	}
+	if _, err := postDriveReclaim(ctx, c, [16]byte{1}, []byte(`{"subject":"s"}`)); err == nil {
+		t.Error("postDriveReclaim followed a redirect")
+	}
+	if hits := target.seen(); len(hits) != 0 {
+		t.Errorf("a raw request followed a redirect: %q", hits)
+	}
+}

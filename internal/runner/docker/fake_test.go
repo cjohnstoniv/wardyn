@@ -9,6 +9,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -24,6 +25,7 @@ import (
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/image"
 	"github.com/moby/moby/api/types/jsonstream"
+	"github.com/moby/moby/api/types/mount"
 	"github.com/moby/moby/api/types/network"
 	"github.com/moby/moby/api/types/system"
 	"github.com/moby/moby/api/types/volume"
@@ -49,6 +51,10 @@ func (fakePullResponse) JSONMessages(context.Context) iter.Seq2[jsonstream.Messa
 }
 func (fakePullResponse) Wait(context.Context) error { return nil }
 
+// fakeJoinedNetIP is the address ContainerInspect reports on a network a
+// container joined through NetworkConnect.
+const fakeJoinedNetIP = "172.30.0.9"
+
 // createdContainer records a ContainerCreate call for assertions.
 type createdContainer struct {
 	name string
@@ -71,8 +77,13 @@ type fakeDocker struct {
 	mu sync.Mutex
 
 	info system.Info
+	// pingErr is what Ping answers; pingBlock makes it wait for ctx instead.
+	pingErr   error
+	pingBlock bool
 
 	images map[string]bool // ref -> present
+	// imageArch is the architecture ImageInspect reports per ref; absent = "" (unknown).
+	imageArch map[string]string
 
 	networks map[string]client.NetworkCreateOptions // name -> opts (id == name here)
 	// subnets is each network's IPv4 subnet: the one its create asked for, or
@@ -85,6 +96,10 @@ type fakeDocker struct {
 	onNetworkCreate func(name string, opts client.NetworkCreateOptions)
 
 	containers map[string]*createdContainer // id (== name) -> record
+
+	// stats is the canned ContainerStats body per container id; statsCalls records every read's options.
+	stats      map[string]container.StatsResponse
+	statsCalls []client.ContainerStatsOptions
 
 	// stdin is what was written to each container's stdin through
 	// ContainerAttach (the proxy's config, #1176), by container id; attached
@@ -115,9 +130,18 @@ type fakeDocker struct {
 	// 0755 directory), and passwd is /etc/passwd's content ("" : absent).
 	etcDir *tar.Header
 	passwd string
+	// runDir is the /run entry CopyFromContainer reports (nil: absent, as in
+	// an image that ships no /run).
+	runDir *tar.Header
+	// imageVolumes is each image's VOLUME declarations: merged into a created
+	// container's Config.Volumes and reported in its Mounts, as the daemon
+	// does when it backs each with an anonymous volume.
+	imageVolumes map[string][]string
 
 	// failpoints
 	failCreateContainer string   // name prefix that should fail on create
+	failStartContainer  string   // name prefix that should fail on start (after a good create)
+	failStartMsg        string   // that failure's text; "" is "boom: start <name>"
 	failImagePull       bool     // ImagePull returns an error (image absent + unpullable)
 	createWarnings      []string // Warnings the ContainerCreate response carries (e.g. a discarded resource limit)
 	// createIDOverride, when set, is returned as ContainerCreate's ID instead of
@@ -135,15 +159,26 @@ type fakeDocker struct {
 	// than after it, which is the whole value of the report. Called without
 	// f.mu held.
 	onPull func(ref string)
-	// execInspectErrs / waitErrs make the next N ExecInspect / ContainerWait
+	// execInspectErrs / waitErrs make the next N ExecInspectRaw / ContainerWait
 	// probes fail with a transient (non-not-found) error, modelling a daemon blip.
 	execInspectErrs int
 	waitErrs        int
 	// execExitCode is reported once execInspectErrs is exhausted; when
-	// execExited is true ExecInspect reports the process as finished.
+	// execExited is true ExecInspectRaw reports the process as finished.
 	execExitCode int
 	execExited   bool
-	// execGone is an exec id ExecInspect reports as not-found (the authoritative
+	// execUnstarted makes the next N ExecInspectRaw probes report an exec the
+	// daemon has created but not started: not running, a null exit code, no pid.
+	execUnstarted int
+	// execStartRefused reports a start the daemon refused (binary missing, not
+	// executable): finished with execExitCode and no pid.
+	execStartRefused bool
+	// execPIDZeroedOnExit models Podman's Docker-compatible API, which zeroes
+	// an exec's pid when it exits (and always sends an exit code).
+	execPIDZeroedOnExit bool
+	// execInspects counts the exec inspects served.
+	execInspects int
+	// execGone is an exec id ExecInspectRaw reports as not-found (the authoritative
 	// "it is really gone", as opposed to the transient execInspectErrs blip).
 	execGone string
 
@@ -208,6 +243,19 @@ type fakeDocker struct {
 	// bind mount, so a ProbeDrive test scripts the answer this way instead.
 	// Zero (readable) unless a test overrides it.
 	probeExitCode int64
+	// archProbeExit and archProbeLog script the arch probe container's exit code and log;
+	// archProbeRunning leaves it running, so its wait never returns.
+	archProbeExit    int64
+	archProbeLog     string
+	archProbeRunning bool
+	// failLogs makes ContainerLogs fail, as a log driver that keeps no logs does.
+	failLogs bool
+
+	// waitHangs makes ContainerWait answer nothing until the caller's ctx ends, and
+	// pullKeepsNothing makes ImagePull succeed without storing the image (the daemon
+	// dropping an in-stream pull error); both script ProbeRelay's failure shapes.
+	waitHangs        bool
+	pullKeepsNothing bool
 
 	// exitAfterInspects, keyed by container name, makes ContainerInspect report
 	// Running for that many calls and then flip the container to exited(1) on
@@ -223,6 +271,7 @@ type fakeDocker struct {
 	exitAfterInspects map[string]int
 	inspectCounts     map[string]int
 	logs              map[string][]byte
+	logOpts           []client.ContainerLogsOptions // every ContainerLogs call's options, in order
 
 	// startedAtOverride, keyed by container name, overrides ContainerStart's
 	// default (real, current-time) StartedAt for that container — used to
@@ -251,6 +300,7 @@ func newFakeDocker() *fakeDocker {
 	return &fakeDocker{
 		info:       infoWithRuntimes(),
 		images:     map[string]bool{},
+		imageArch:  map[string]string{},
 		networks:   map[string]client.NetworkCreateOptions{},
 		subnets:    map[string]netip.Prefix{},
 		containers: map[string]*createdContainer{},
@@ -306,6 +356,16 @@ func (f *fakeDocker) Info(ctx context.Context, _ client.InfoOptions) (client.Sys
 	return client.SystemInfoResult{Info: f.info}, nil
 }
 
+// Ping answers pingErr: a test sets it to make the daemon refuse, or hang until
+// its ctx ends when pingBlock is set.
+func (f *fakeDocker) Ping(ctx context.Context, _ client.PingOptions) (client.PingResult, error) {
+	if f.pingBlock {
+		<-ctx.Done()
+		return client.PingResult{}, ctx.Err()
+	}
+	return client.PingResult{}, f.pingErr
+}
+
 func (f *fakeDocker) ImageList(ctx context.Context, _ client.ImageListOptions) (client.ImageListResult, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -328,7 +388,9 @@ func (f *fakeDocker) ImagePull(ctx context.Context, ref string, _ client.ImagePu
 	if f.failImagePull {
 		return nil, fmt.Errorf("registry: denied")
 	}
-	f.images[ref] = true
+	if !f.pullKeepsNothing {
+		f.images[ref] = true
+	}
 	return fakePullResponse{io.NopCloser(strings.NewReader(`{"status":"pulled"}`))}, nil
 }
 
@@ -336,7 +398,7 @@ func (f *fakeDocker) ImageInspect(ctx context.Context, imageID string, _ ...clie
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.images[imageID] {
-		return client.ImageInspectResult{InspectResponse: image.InspectResponse{ID: imageID}}, nil
+		return client.ImageInspectResult{InspectResponse: image.InspectResponse{ID: imageID, Architecture: f.imageArch[imageID]}}, nil
 	}
 	return client.ImageInspectResult{}, fakeNotFound{msg: "no such image: " + imageID}
 }
@@ -492,6 +554,17 @@ func (f *fakeDocker) ContainerCreate(ctx context.Context, opts client.ContainerC
 		merged.User = u
 		cfg = &merged
 	}
+	if vols := f.imageVolumes[cfg.Image]; len(vols) > 0 {
+		merged := *cfg
+		merged.Volumes = maps.Clone(cfg.Volumes)
+		if merged.Volumes == nil {
+			merged.Volumes = map[string]struct{}{}
+		}
+		for _, v := range vols {
+			merged.Volumes[v] = struct{}{}
+		}
+		cfg = &merged
+	}
 	c := &createdContainer{
 		name:  name,
 		cfg:   cfg,
@@ -565,6 +638,8 @@ func (f *fakeDocker) CopyFromContainer(ctx context.Context, id string, opts clie
 			hdr = f.etcDir
 		}
 		_ = tw.WriteHeader(hdr)
+	case opts.SourcePath == "/run" && f.runDir != nil:
+		_ = tw.WriteHeader(f.runDir)
 	case opts.SourcePath == "/etc/passwd" && f.passwd != "":
 		_ = tw.WriteHeader(&tar.Header{Name: "passwd", Typeflag: tar.TypeReg, Mode: 0o644, Size: int64(len(f.passwd))})
 		_, _ = tw.Write([]byte(f.passwd))
@@ -582,7 +657,25 @@ func (f *fakeDocker) ContainerStart(ctx context.Context, id string, _ client.Con
 	if c == nil {
 		return client.ContainerStartResult{}, fakeNotFound{msg: "no such container: " + id}
 	}
-	if strings.HasPrefix(c.name, "wardyn-drive-probe-") {
+	if f.failStartContainer != "" && strings.HasPrefix(c.name, f.failStartContainer) {
+		if f.failStartMsg != "" {
+			return client.ContainerStartResult{}, errors.New(f.failStartMsg)
+		}
+		return client.ContainerStartResult{}, fmt.Errorf("boom: start %s", c.name)
+	}
+	if strings.HasPrefix(c.name, archProbeNamePrefix) {
+		// The arch probe starts the image's own entrypoint: model it as still running, or as
+		// exited with the scripted code and log (a real exec-format failure is 255).
+		if f.archProbeRunning {
+			c.state = &container.State{Status: "running", Running: true}
+		} else {
+			c.state = &container.State{Status: "exited", ExitCode: int(f.archProbeExit)}
+			if f.logs == nil {
+				f.logs = map[string][]byte{}
+			}
+			f.logs[id] = muxFrame(2, f.archProbeLog)
+		}
+	} else if strings.HasPrefix(c.name, "wardyn-drive-probe-") || strings.HasPrefix(c.name, "wardyn-relay-probe-") {
 		// No real command interpreter here to run the probe's `test -r/-x`
 		// against a bind mount — model it as already exited with the
 		// scripted code, the same "immediate" shape a real one-shot process
@@ -629,24 +722,39 @@ func (f *fakeDocker) ContainerInspect(ctx context.Context, id string, _ client.C
 	// to pin it in the agent's /etc/hosts). Gateway is left empty; the real
 	// gatewayless-L0 assertion runs against a real docker client (network_test).
 	nets := map[string]*network.EndpointSettings{}
-	addNet := func(name string) {
+	// A network joined later (the proxy's control-plane-facing one) gets an
+	// address of its own, so a test can tell the two endpoints apart.
+	addNet := func(name, ip string) {
 		if name == "" || name == "none" || name == "host" || name == "bridge" || name == "default" {
 			return
 		}
 		if _, ok := nets[name]; !ok {
-			nets[name] = &network.EndpointSettings{IPAddress: netip.MustParseAddr("10.88.0.2"), NetworkID: name}
+			nets[name] = &network.EndpointSettings{IPAddress: netip.MustParseAddr(ip), NetworkID: name}
 		}
 	}
 	if c.host != nil {
-		addNet(string(c.host.NetworkMode))
+		addNet(string(c.host.NetworkMode), "10.88.0.2")
 	}
 	if c.net != nil {
 		for name := range c.net.EndpointsConfig {
-			addNet(name)
+			addNet(name, "10.88.0.2")
 		}
 	}
 	for _, n := range c.connectedTo {
-		addNet(n)
+		addNet(n, fakeJoinedNetIP)
+	}
+	// Mounts: an anonymous volume per declared volume, then the run's own
+	// mounts, as the daemon reports them.
+	var mounts []container.MountPoint
+	if c.cfg != nil {
+		for _, v := range slices.Sorted(maps.Keys(c.cfg.Volumes)) {
+			mounts = append(mounts, container.MountPoint{Type: mount.TypeVolume, Destination: v})
+		}
+	}
+	if c.host != nil {
+		for _, m := range c.host.Mounts {
+			mounts = append(mounts, container.MountPoint{Type: m.Type, Source: m.Source, Destination: m.Target})
+		}
 	}
 	return client.ContainerInspectResult{Container: container.InspectResponse{
 		// Real Docker reports the name with a leading slash; mirror that so
@@ -657,6 +765,7 @@ func (f *fakeDocker) ContainerInspect(ctx context.Context, id string, _ client.C
 		State:           c.state,
 		Config:          c.cfg,
 		HostConfig:      c.host,
+		Mounts:          mounts,
 		NetworkSettings: &container.NetworkSettings{Networks: nets},
 	}}, nil
 }
@@ -664,9 +773,13 @@ func (f *fakeDocker) ContainerInspect(ctx context.Context, id string, _ client.C
 // ContainerLogs answers f.logs[id] verbatim (a test scripts it pre-framed with
 // muxFrame when the reader under test demuxes it, as startProxy's exit watch
 // does). Options are ignored: no fake here models Tail/Follow/Since filtering.
-func (f *fakeDocker) ContainerLogs(ctx context.Context, id string, _ client.ContainerLogsOptions) (client.ContainerLogsResult, error) {
+func (f *fakeDocker) ContainerLogs(ctx context.Context, id string, opts client.ContainerLogsOptions) (client.ContainerLogsResult, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.logOpts = append(f.logOpts, opts)
+	if f.failLogs {
+		return nil, errors.New("configured logging driver does not support reading")
+	}
 	if f.containers[id] == nil {
 		return nil, fakeNotFound{msg: "no such container: " + id}
 	}
@@ -693,6 +806,24 @@ func (f *fakeDocker) ContainerKill(ctx context.Context, id string, _ client.Cont
 	}
 	c.state = &container.State{Status: "exited", ExitCode: 137}
 	return client.ContainerKillResult{}, nil
+}
+
+// ContainerStats serves a canned reading from f.stats (by id); a container the fake does not hold is a
+// 404, one with no entry is a daemon error. statsCalls counts the reads.
+func (f *fakeDocker) ContainerStats(_ context.Context, id string, opts client.ContainerStatsOptions) (client.ContainerStatsResult, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.statsCalls = append(f.statsCalls, opts)
+	c := f.containers[id]
+	if c == nil || c.removed {
+		return client.ContainerStatsResult{}, fakeNotFound{msg: "no such container: " + id}
+	}
+	st, ok := f.stats[id]
+	if !ok {
+		return client.ContainerStatsResult{}, errors.New("stats unavailable")
+	}
+	b, _ := json.Marshal(st)
+	return client.ContainerStatsResult{Body: io.NopCloser(bytes.NewReader(b))}, nil
 }
 
 // ContainerPause / ContainerUnpause mirror the real daemon's redundant-state
@@ -751,6 +882,10 @@ func (f *fakeDocker) ContainerWait(ctx context.Context, id string, _ client.Cont
 	statusCh := make(chan container.WaitResponse, 1)
 	errCh := make(chan error, 1)
 	f.mu.Lock()
+	if f.waitHangs {
+		f.mu.Unlock()
+		return client.ContainerWaitResult{Result: statusCh, Error: errCh}
+	}
 	if f.waitErrs > 0 {
 		f.waitErrs--
 		f.mu.Unlock()
@@ -762,6 +897,9 @@ func (f *fakeDocker) ContainerWait(ctx context.Context, id string, _ client.Cont
 	f.mu.Unlock()
 	if !ok || c == nil || c.removed {
 		errCh <- fakeNotFound{msg: "no such container: " + id}
+		return client.ContainerWaitResult{Result: statusCh, Error: errCh}
+	}
+	if c.state != nil && c.state.Running && strings.HasPrefix(c.name, archProbeNamePrefix) {
 		return client.ContainerWaitResult{Result: statusCh, Error: errCh}
 	}
 	var code int64
@@ -801,18 +939,34 @@ func (f *fakeDocker) ExecStart(ctx context.Context, execID string, opts client.E
 	return client.ExecStartResult{}, nil
 }
 
-func (f *fakeDocker) ExecInspect(ctx context.Context, execID string, _ client.ExecInspectOptions) (client.ExecInspectResult, error) {
+func (f *fakeDocker) ExecInspectRaw(ctx context.Context, execID string) (execInspect, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.execInspects++
 	if f.execGone != "" && execID == f.execGone {
-		return client.ExecInspectResult{}, fakeNotFound{msg: "no such exec: " + execID}
+		return execInspect{}, fakeNotFound{msg: "no such exec: " + execID}
 	}
 	if f.execInspectErrs > 0 {
 		f.execInspectErrs--
 		// A daemon blip: NOT a not-found (the exec still exists).
-		return client.ExecInspectResult{}, fmt.Errorf("Cannot connect to the Docker daemon: EOF")
+		return execInspect{}, fmt.Errorf("Cannot connect to the Docker daemon: EOF")
 	}
-	return client.ExecInspectResult{ID: execID, Running: !f.execExited, ExitCode: f.execExitCode}, nil
+	if f.execUnstarted > 0 {
+		f.execUnstarted--
+		return execInspect{}, nil
+	}
+	code := f.execExitCode
+	if f.execStartRefused {
+		return execInspect{ExitCode: &code}, nil
+	}
+	if !f.execExited {
+		return execInspect{Running: true, Pid: 4242}, nil
+	}
+	if f.execPIDZeroedOnExit {
+		return execInspect{ExitCode: &code}, nil
+	}
+	// Docker keeps a started exec's pid after it exits.
+	return execInspect{ExitCode: &code, Pid: 4242}, nil
 }
 
 func (f *fakeDocker) ExecResize(ctx context.Context, execID string, opts client.ExecResizeOptions) (client.ExecResizeResult, error) {

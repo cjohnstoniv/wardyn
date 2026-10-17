@@ -96,11 +96,11 @@ describe("connectionRowCopy — bedrock_sso (C3-C7)", () => {
     expect(copy.button).toBe(AGENTS.SIGN_IN_AWS);
   });
 
-  it("C4 live: Signed in, no button, no line", () => {
+  it("C4 live: Signed in, no line, and Sign in again (a stored session AWS refuses to renew still reads live)", () => {
     const copy = connectionRowCopy(baseStatus(), row({ provider: MODEL_PROVIDERS.bedrock.id, state: "live" }));
     expect(copy.chip).toEqual({ label: CONNECTIONS.SIGNED_IN, tone: "success" });
     expect(copy.line).toBe("");
-    expect(copy.button).toBeUndefined();
+    expect(copy.button).toBe(CONNECTIONS.SIGN_IN_AGAIN);
   });
 
   // A CLOCK TIME (packet MP-D draws "Sign in again before 17:30"), pinned as a
@@ -202,7 +202,7 @@ describe("connectionRowCopy — Claude subscription (C10)", () => {
   it("live: Signed in — C4's chip, reused (§5.4 draws no separate live chip for Claude)", () => {
     const copy = connectionRowCopy(baseStatus(), row({ provider: MODEL_PROVIDERS.claude.id, state: "live" }));
     expect(copy.chip).toEqual({ label: CONNECTIONS.SIGNED_IN, tone: "success" });
-    expect(copy.button).toBeUndefined();
+    expect(copy.button).toBe(CONNECTIONS.SIGN_IN_AGAIN);
   });
 
   it("aging (expiring): Expiring, the fixed 11-months sentence, Sign in to Claude", () => {

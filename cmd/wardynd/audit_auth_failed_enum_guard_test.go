@@ -211,6 +211,15 @@ func TestAuthFailedReasonEnumIsDocumented(t *testing.T) {
 		t.Fatalf("found %d withSessionRejected reasons; oidc.Middleware stamps 4 — the walk stopped enumerating", rejections)
 	}
 
+	// The sign-in callback's email policy refusals (#155) reach auth.fail only
+	// through internal/api/signin_denied.go; a removed emit would otherwise
+	// leave the documented reasons green with nothing writing them.
+	for _, want := range []string{"email_verified_absent", "email_unverified", "email_domain"} {
+		if !reasons[want] {
+			t.Errorf("auth.fail reason %q is no longer emitted by the sign-in callback's denial sink", want)
+		}
+	}
+
 	row := auditDocRowFor(t, root, "auth.fail")
 	for reason := range reasons {
 		if !strings.Contains(row, "`"+reason+"`") {

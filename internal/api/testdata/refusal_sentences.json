@@ -1,6 +1,11 @@
 [
   {
     "reason": "admin_surface",
+    "target": "\"drive.grant.\" + field",
+    "sentence": "field + \": only a super admin may \" + \"set an allocation's directory name or make it more writable than its drive; allocate with the drive's own posture or read-only\""
+  },
+  {
+    "reason": "admin_surface",
     "target": "\"workspaces.llm_cred\"",
     "sentence": "\"llm_cred is operator-only — an admin binds a workspace's model/harness credential \" + \"(PUT /workspaces/{id}/llm-cred); create your workspace without it and ask for the binding\""
   },
@@ -35,6 +40,51 @@
     "sentence": "\"run not found\""
   },
   {
+    "reason": "attach_ticket_foreign_run",
+    "target": "run.ID.String()",
+    "sentence": "\"run not found\""
+  },
+  {
+    "reason": "audit_export_partition_filter",
+    "target": "\"audit.export\"",
+    "sentence": "\"a partition export covers the whole partition; remove the other filter parameters\""
+  },
+  {
+    "reason": "audit_retention_actor_reserved",
+    "target": "\"audit.retention\"",
+    "sentence": "`the actor name \"wardynd\" is reserved for the retention sweeper`"
+  },
+  {
+    "reason": "audit_retention_digest_mismatch",
+    "target": "\"audit.retention\"",
+    "sentence": "\"the digest does not match the partition's own; export it again and recompute it\""
+  },
+  {
+    "reason": "audit_retention_inside_window",
+    "target": "\"audit.retention\"",
+    "sentence": "\"the partition is inside the retention window (or retention is set to forever)\""
+  },
+  {
+    "reason": "audit_retention_live_run",
+    "target": "\"audit.retention\"",
+    "sentence": "\"the partition holds audit rows of a run that is still live\""
+  },
+  {
+    "reason": "audit_retention_not_closed",
+    "target": "\"audit.retention\"",
+    "sentence": "\"the partition can still receive rows, so it cannot be dropped\""
+  },
+  {
+    "reason": "audit_retention_not_oldest",
+    "target": "\"audit.retention\"",
+    "sentence": "\"only the oldest audit partition can be dropped\""
+  },
+  {
+    "reason": "authz.Reason(placement.ReasonRelayRouteRefused)",
+    "target": "r.URL.Path",
+    "sentence": "(audit only)"
+  },
+  {
     "reason": "byoi_user",
     "target": "\"runs.image\"",
     "sentence": "\"a custom devcontainer repo (devcontainer_repo) is operator-only; launch with the agent's convention image or an onboarded workspace's base image\""
@@ -55,6 +105,21 @@
     "sentence": "\"you are not granted agent \" + req.Agent + \" — ask an admin to grant it, or launch one you hold\""
   },
   {
+    "reason": "capKinds[capAgent].reason",
+    "target": "\"runs.tools\"",
+    "sentence": "\"you are not granted agent \" + h.Harness + \" — ask an admin to grant it, or remove it from the run\""
+  },
+  {
+    "reason": "capKinds[capComponent].reason",
+    "target": "\"runs.component\"",
+    "sentence": "componentUnavailableRefusal"
+  },
+  {
+    "reason": "capKinds[capFeature].reason",
+    "target": "\"me.runners.tokens\"",
+    "sentence": "runnerSelfHostRefusal"
+  },
+  {
     "reason": "capKinds[capFeature].reason",
     "target": "\"me.ssh_keys\"",
     "sentence": "sshKeyFeatureRefusal"
@@ -63,6 +128,11 @@
     "reason": "capKinds[capFeature].reason",
     "target": "\"me.tokens\"",
     "sentence": "apiTokenFeatureRefusal"
+  },
+  {
+    "reason": "capKinds[capFeature].reason",
+    "target": "\"runs.component\"",
+    "sentence": "\"Custom components aren't turned on for you. Ask your admin.\""
   },
   {
     "reason": "capKinds[capPolicy].reason",
@@ -90,9 +160,24 @@
     "sentence": "msg"
   },
   {
+    "reason": "capability_component",
+    "target": "\"runs.component\"",
+    "sentence": "componentUnavailableRefusal"
+  },
+  {
+    "reason": "capability_component",
+    "target": "\"runs.component\"",
+    "sentence": "componentUnavailableRefusal"
+  },
+  {
     "reason": "capability_egress_host",
     "target": "id.String()",
     "sentence": "\"you are not granted egress host \" + host + \" — an admin decides this one, or can grant it to you\""
+  },
+  {
+    "reason": "capability_feature",
+    "target": "run.ID.String()",
+    "sentence": "\"run not found\""
   },
   {
     "reason": "capability_model_provider",
@@ -115,6 +200,16 @@
     "sentence": "\"you are not granted workspace \" + refused.wsID + \" — ask an admin for access, or launch without a workspace\""
   },
   {
+    "reason": "capability_workspace",
+    "target": "ws.ID.String()",
+    "sentence": "\"workspace not found\""
+  },
+  {
+    "reason": "delegation_scope",
+    "target": "id.String()",
+    "sentence": "(audit only)"
+  },
+  {
     "reason": "delegation_scope",
     "target": "r.URL.Path",
     "sentence": "delegationRefusal"
@@ -123,6 +218,26 @@
     "reason": "delegation_scope",
     "target": "r.URL.Path",
     "sentence": "delegationRefusal"
+  },
+  {
+    "reason": "drive_not_found",
+    "target": "\"drives.member.delete\"",
+    "sentence": "msg"
+  },
+  {
+    "reason": "drive_not_found",
+    "target": "\"runs.drive\"",
+    "sentence": "(audit only)"
+  },
+  {
+    "reason": "drive_not_in_pool",
+    "target": "\"runs.drive\"",
+    "sentence": "msg"
+  },
+  {
+    "reason": "drive_target_conflict",
+    "target": "\"runs.drive\"",
+    "sentence": "msg"
   },
   {
     "reason": "event_stream_cap",
@@ -130,9 +245,19 @@
     "sentence": "fmt.Sprintf(\"too many open event streams (max %d) — close one and retry\", maxRunEventStreams)"
   },
   {
+    "reason": "governance_overlay_unsatisfiable",
+    "target": "\"governance.ceiling\"",
+    "sentence": "u.Error()"
+  },
+  {
+    "reason": "governance_overlay_unsatisfiable",
+    "target": "target",
+    "sentence": "u.Error()"
+  },
+  {
     "reason": "governance_profile",
-    "target": "\"runs.agent\"",
-    "sentence": "fmt.Sprintf(\"%s is not supported under your governance profile %q at this run's posture: it permits autonomy level %s (bound by %s), which routes an \" + \"unattended run's tool calls to a Wardyn approval, and this agent has no external tool-approval contract. Launch a different agent, or launch interactively.\", autonomyAgentLabel(req.Agent), name, level, bound)"
+    "target": "\"drives.member.create\"",
+    "sentence": "msg"
   },
   {
     "reason": "governance_profile",
@@ -142,7 +267,7 @@
   {
     "reason": "governance_profile",
     "target": "\"runs.attach\"",
-    "sentence": "fmt.Sprintf(\"attaching is not allowed under the governance profile %q this run was launched under: it denies interactive sessions.\", name)"
+    "sentence": "fmt.Sprintf(\"attaching is not allowed under the governance profile %q this run was launched under: it denies interactive sessions.\", p.Name)"
   },
   {
     "reason": "governance_profile",
@@ -156,23 +281,13 @@
   },
   {
     "reason": "governance_profile",
-    "target": "\"runs.interactive\"",
-    "sentence": "fmt.Sprintf(\"unattended runs are not allowed by your governance profile %q at this run's posture: it permits autonomy level %s (bound by %s), \" + \"which requires a human at the pane. Launch with `--interactive`, or narrow the run's egress, secrets or confinement.\", name, level, bound)"
-  },
-  {
-    "reason": "governance_profile",
     "target": "\"runs.interactive_start\"",
     "sentence": "fmt.Sprintf(\"a shell startup command is not allowed by your governance profile %q — with `interactive_start` unset or `shell` the task runs as a shell command at sandbox boot, before anyone attaches, unattended the way exec does. Launch with `interactive_start=agent`, or without a task.\", name)"
   },
   {
     "reason": "governance_profile",
-    "target": "\"runs.interactive_start\"",
-    "sentence": "fmt.Sprintf(\"a startup command is not allowed by your governance profile %q at this run's posture: it permits autonomy level %s (bound by %s), \" + \"and with `interactive_start` unset or `shell` an interactive run's task runs as a shell command at sandbox boot, before anyone attaches — \" + \"what `task_mode=exec` does. Launch with `interactive_start=agent` to hand the task to the agent as its first prompt, or without a task.\", name, level, bound)"
-  },
-  {
-    "reason": "governance_profile",
-    "target": "\"runs.seed_auto_tools\"",
-    "sentence": "fmt.Sprintf(\"`seed_auto_tools` is not allowed by your governance profile %q at this run's posture: it permits autonomy level %s (bound by %s), \" + \"and the pre-attach seed runs before any human is at the pane. Launch without it.\", name, level, bound)"
+    "target": "\"runs.placement\"",
+    "sentence": "placementDeniedMsg(p, ceiling.Profile.Name)"
   },
   {
     "reason": "governance_profile",
@@ -182,12 +297,12 @@
   {
     "reason": "governance_profile",
     "target": "\"runs.task_mode\"",
-    "sentence": "fmt.Sprintf(\"`task_mode=exec` is not allowed by your governance profile %q at this run's posture: it permits autonomy level %s (bound by %s), \" + \"and an exec run carries no agent and no tool approvals, so nothing supervises it. Launch with an agent instead.\", name, level, bound)"
+    "sentence": "fmt.Sprintf(\"`task_mode=exec` is not allowed by your governance profile %q — an exec run carries no agent and no tool approvals, so nothing supervises it. Launch with an agent instead.\", name)"
   },
   {
     "reason": "governance_profile",
-    "target": "\"runs.task_mode\"",
-    "sentence": "fmt.Sprintf(\"`task_mode=exec` is not allowed by your governance profile %q — an exec run carries no agent and no tool approvals, so nothing supervises it. Launch with an agent instead.\", name)"
+    "target": "\"runs.tools\"",
+    "sentence": "fmt.Sprintf(\"A harness your command can start is not allowed under your governance profile %q: its tool rules hold or deny, and nothing can pause a harness a command starts. Remove the harness, or choose an interactive environment.\", name)"
   },
   {
     "reason": "governance_profile",
@@ -205,14 +320,59 @@
     "sentence": "(audit only)"
   },
   {
+    "reason": "groups_snapshot_stale",
+    "target": "\"runs.drive\"",
+    "sentence": "(audit only)"
+  },
+  {
+    "reason": "key_domain_ambiguous_membership",
+    "target": "keyDomainTarget(c)",
+    "sentence": "fmt.Sprintf(\"%d people last signed in with a group list that was cut short, as a Microsoft Entra group overage does, and have no assignment of their own, so once any group is assigned their next key would be refused: %s. \" + \"Assign each of them to one domain as a user first. Nothing was changed.\", n, who)"
+  },
+  {
+    "reason": "key_domain_ambiguous_membership",
+    "target": "keyDomainTarget(c)",
+    "sentence": "fmt.Sprintf(\"%d people last signed in with this group and another group assigned to a different domain, and have no assignment of their own, so their next key would be refused. \" + \"Assign each of them to one domain as a user first, or give both groups the same domain. Nothing was changed.\", n)"
+  },
+  {
+    "reason": "key_domain_ambiguous_membership",
+    "target": "keyDomainTarget(c)",
+    "sentence": "fmt.Sprintf(\"%s last signed in with a group list that was cut short, as a Microsoft Entra group overage does, and a group is assigned, so without their own assignment their next key would be refused. \" + \"Assign them to another domain instead of deleting it. Nothing was changed.\", c.Subject)"
+  },
+  {
+    "reason": "key_domain_ambiguous_membership",
+    "target": "keyDomainTarget(c)",
+    "sentence": "fmt.Sprintf(\"%s last signed in with groups assigned to different domains, so without their own assignment their next key would be refused. \" + \"Assign them to another domain instead of deleting it, or give the groups the same domain. Nothing was changed.\", c.Subject)"
+  },
+  {
+    "reason": "key_domain_unknown",
+    "target": "keyDomainTarget(c)",
+    "sentence": "fmt.Sprintf(\"The key domain %q is not declared in the deployment's key domains file, so nothing was changed. Declared: %s.\", c.Domain, declaredKeyDomains(svc))"
+  },
+  {
+    "reason": "kind.approver.reason",
+    "target": "govChangeTarget",
+    "sentence": "(audit only)"
+  },
+  {
+    "reason": "mask_state_unavailable",
+    "target": "door",
+    "sentence": "maskStateSentence"
+  },
+  {
+    "reason": "model_provider_unavailable",
+    "target": "\"runs.model_provider\"",
+    "sentence": "choice.refusal"
+  },
+  {
+    "reason": "model_provider_unavailable",
+    "target": "\"runs.model_provider\"",
+    "sentence": "d.msg"
+  },
+  {
     "reason": "model_provider_unavailable",
     "target": "\"runs.model_provider\"",
     "sentence": "msg"
-  },
-  {
-    "reason": "model_provider_unavailable (credential: d.credential)",
-    "target": "choice.provider.ID",
-    "sentence": "d.msg"
   },
   {
     "reason": "model_provider_unavailable (credential: false)",
@@ -221,8 +381,13 @@
   },
   {
     "reason": "model_provider_unavailable (credential: false)",
-    "target": "choice.providerID",
-    "sentence": "choice.refusal"
+    "target": "choice.provider.ID",
+    "sentence": "fmt.Sprintf(mpRunModelEnvSecret, secretName, name)"
+  },
+  {
+    "reason": "not_owner",
+    "target": "id.String()",
+    "sentence": "(audit only)"
   },
   {
     "reason": "not_owner",
@@ -245,9 +410,34 @@
     "sentence": "\"workspace not found\""
   },
   {
+    "reason": "not_owner",
+    "target": "ws.ID.String()",
+    "sentence": "\"workspace not found\""
+  },
+  {
+    "reason": "placement_component_self_defined",
+    "target": "\"runs.placement\"",
+    "sentence": "\"local_self_defined_components is not permitted by the profile\""
+  },
+  {
     "reason": "reason",
     "target": "r.URL.Path",
     "sentence": "(audit only)"
+  },
+  {
+    "reason": "recording_governed",
+    "target": "\"workspaces.record\"",
+    "sentence": "recordingGovernedRefusal"
+  },
+  {
+    "reason": "role_stamp_stale",
+    "target": "\"api_token\"",
+    "sentence": "\"this token's role is out of date: its owner must sign in again to refresh it\" (registry)"
+  },
+  {
+    "reason": "run_owner_only",
+    "target": "run.ID.String()",
+    "sentence": "\"only the person who started this run can open it interactively\" (registry)"
   },
   {
     "reason": "run_quota",
@@ -256,8 +446,23 @@
   },
   {
     "reason": "second_human_required",
+    "target": "govChangeTarget",
+    "sentence": "envGovernanceSecondHuman + \" is set: a second human must approve this — you proposed it, so someone else approves it (you may reject it)\""
+  },
+  {
+    "reason": "second_human_required",
     "target": "id.String()",
-    "sentence": "envEgressSecondHuman + \" is set: a second human must decide this — you created this run, so someone else approves or denies its egress\""
+    "sentence": "sw + \" is set: a second human must decide this — you created this run, so someone else approves or denies its Azure DevOps access\""
+  },
+  {
+    "reason": "second_human_required",
+    "target": "id.String()",
+    "sentence": "sw + \" is set: a second human must decide this — you created this run, so someone else approves or denies its egress\""
+  },
+  {
+    "reason": "second_human_required",
+    "target": "id.String()",
+    "sentence": "sw + \" is set: this run has no recorded human author, so no decision on it can be verified as a second human's\""
   },
   {
     "reason": "security_admin_surface",
@@ -270,9 +475,44 @@
     "sentence": "\"requires admin role\" (registry)"
   },
   {
+    "reason": "service_scope",
+    "target": "r.URL.Path",
+    "sentence": "serviceScopeRefusal"
+  },
+  {
+    "reason": "src.reason",
+    "target": "\"runs.agent\"",
+    "sentence": "fmt.Sprintf(\"%s is not supported under %s at this run's posture: it permits autonomy level %s (bound by %s), which routes an \" + \"unattended run's tool calls to a Wardyn approval, and this agent has no external tool-approval contract. Launch a different agent, or launch interactively.\", autonomyAgentLabel(req.Agent), src.phrase, level, bound)"
+  },
+  {
+    "reason": "src.reason",
+    "target": "\"runs.interactive\"",
+    "sentence": "fmt.Sprintf(\"unattended runs are not allowed by %s at this run's posture: it permits autonomy level %s (bound by %s), \" + \"which requires a human at the pane. Launch with `--interactive`, or narrow the run's egress, secrets or confinement.\", src.phrase, level, bound)"
+  },
+  {
+    "reason": "src.reason",
+    "target": "\"runs.interactive_start\"",
+    "sentence": "fmt.Sprintf(\"a startup command is not allowed by %s at this run's posture: it permits autonomy level %s (bound by %s), \" + \"and with `interactive_start` unset or `shell` an interactive run's task runs as a shell command at sandbox boot, before anyone attaches — \" + \"what `task_mode=exec` does. Launch with `interactive_start=agent` to hand the task to the agent as its first prompt, or without a task.\", src.phrase, level, bound)"
+  },
+  {
+    "reason": "src.reason",
+    "target": "\"runs.seed_auto_tools\"",
+    "sentence": "fmt.Sprintf(\"`seed_auto_tools` is not allowed by %s at this run's posture: it permits autonomy level %s (bound by %s), \" + \"and the pre-attach seed runs before any human is at the pane. Launch without it.\", src.phrase, level, bound)"
+  },
+  {
+    "reason": "src.reason",
+    "target": "\"runs.task_mode\"",
+    "sentence": "fmt.Sprintf(\"`task_mode=exec` is not allowed by %s at this run's posture: it permits autonomy level %s (bound by %s), \" + \"and an exec run carries no agent and no tool approvals, so nothing supervises it. Launch with an agent instead.\", src.phrase, level, bound)"
+  },
+  {
     "reason": "user_type_unknown",
     "target": "\"user_type\"",
     "sentence": "userTypeUnknownMsg"
+  },
+  {
+    "reason": "user_view_preview",
+    "target": "r.URL.Path",
+    "sentence": "userViewPreviewRefusal(viewed, stamped)"
   },
   {
     "reason": "user_view_type_deleted",

@@ -29,8 +29,12 @@ vi.mock("../../../lib/api/setup", () => ({
 }));
 
 const getSiteConfigMock = vi.fn();
+const getSiteConfigSnapshotMock = vi.fn();
 vi.mock("../../../lib/api/health", () => ({
-  health: { getSiteConfig: (...a: unknown[]) => getSiteConfigMock(...a) },
+  health: {
+    getSiteConfig: (...a: unknown[]) => getSiteConfigMock(...a),
+    getSiteConfigSnapshot: (...a: unknown[]) => getSiteConfigSnapshotMock(...a),
+  },
 }));
 
 const getDrivesMock = vi.fn();
@@ -50,6 +54,16 @@ vi.mock("../../../lib/api/ssh-keys", () => ({
     addKey: vi.fn(),
     deleteKey: vi.fn(),
   },
+}));
+
+const getApprovalNotifyStatusMock = vi.fn();
+vi.mock("../../../lib/api/approval-notify", () => ({
+  approvalNotify: { getStatus: (...a: unknown[]) => getApprovalNotifyStatusMock(...a) },
+}));
+
+const getScimStatusMock = vi.fn();
+vi.mock("../../../lib/api/scim", () => ({
+  scim: { getStatus: () => getScimStatusMock() },
 }));
 
 vi.mock("../../../lib/api/secrets", () => ({
@@ -74,6 +88,8 @@ import { AdminSettingsScreen } from "./admin-settings-screen";
 import { baseStatus } from "../../../lib/test-fixtures";
 import { MODEL_PROVIDERS } from "../../../lib/model-providers-copy";
 import { ADMIN_SSH_KEYS } from "./admin-ssh-keys-card";
+import { APPROVAL_NOTIFY } from "../../wardyn/copy/approval-notify";
+import { SCIM } from "../../../lib/scim-copy";
 import { SETTINGS_SUPER_ONLY, VIEW_REFUSAL } from "../../wardyn/copy/console-view";
 import { OperatorProvider } from "../../wardyn/operator-context";
 import { expandCard, startsWith } from "../../../lib/test-dom";
@@ -91,6 +107,7 @@ function renderScreen(operator = true, operatorResolved = true) {
 beforeEach(() => {
   getSetupStatusMock.mockReset().mockResolvedValue(baseStatus());
   getSiteConfigMock.mockReset().mockResolvedValue({});
+  getSiteConfigSnapshotMock.mockReset().mockResolvedValue({ siteConfig: {}, etag: null });
   getDrivesMock
     .mockReset()
     .mockResolvedValue({
@@ -102,10 +119,20 @@ beforeEach(() => {
   getWorkspaceProvidersMock.mockReset().mockResolvedValue({ providers: {}, etag: null });
   getModelProvidersMock.mockReset().mockResolvedValue({ providers: {}, connected: {}, etag: null });
   listKeysMock.mockReset().mockResolvedValue([]);
+  getApprovalNotifyStatusMock.mockReset().mockResolvedValue({ channels: [] });
+  getScimStatusMock.mockReset().mockResolvedValue({
+    configured: false,
+    last_token_slot: "",
+    purge_after_seconds: 0,
+    keep_workspaces: false,
+    deactivated: [],
+    pending: [],
+    drives: [],
+  });
 });
 
 describe("AdminSettingsScreen", () => {
-  it("draws Host, Model providers, Providers, User drives, Admin SSH keys — in that order", async () => {
+  it("draws Host, Model providers, Providers, Custom components, User drives, Admin SSH keys, Approval notifications, SCIM provisioning — in that order", async () => {
     renderScreen();
     await screen.findByTestId("user-drives-card");
     const html = document.body.innerHTML;
@@ -113,29 +140,38 @@ describe("AdminSettingsScreen", () => {
       "Host",
       MODEL_PROVIDERS.TITLE,
       "Workspace providers",
+      "Custom components",
       "User drives",
       ADMIN_SSH_KEYS.TITLE,
+      APPROVAL_NOTIFY.TITLE,
+      SCIM.TITLE,
     ].map((label) => html.indexOf(`>${label}<`));
     for (const p of positions) expect(p).toBeGreaterThan(-1);
     expect(positions).toEqual([...positions].sort((a, b) => a - b));
   });
 
-  // M-5 (#636): Admin SSH keys (S-1) is the sixth and now LAST card — the
-  // mock draws it after User drives (§1a). The pre-M-5 "drives is the fifth
-  // and last card" invariant (user-drives-prompt.md §6) is superseded for
-  // THIS page by the packet's own layout; Your account has no Drives card at
-  // all, so there is nothing left for that rule to protect there either.
-  it("draws Admin SSH keys LAST, after User drives", async () => {
+  // M-5 (#636): Admin SSH keys (S-1) is drawn after User drives (§1a). notify-e4
+  // (packet M6 S3) adds Approval notifications directly after it, and 0.8.6 scim-a7
+  // (M5) puts SCIM provisioning after that, the LAST card. Your account has no Drives
+  // card at all, so there is nothing left for the old "drives is the last card" rule
+  // to protect there.
+  it("draws Admin SSH keys, then Approval notifications, then SCIM provisioning LAST", async () => {
     renderScreen();
-    const heading = await screen.findByRole("heading", { name: startsWith(ADMIN_SSH_KEYS.TITLE) });
+    const heading = await screen.findByRole("heading", { name: startsWith(APPROVAL_NOTIFY.TITLE) });
     const card = heading.closest("section")!;
-    expect(card.parentElement?.lastElementChild).toBe(card);
+    const sshCard = (await screen.findByRole("heading", { name: startsWith(ADMIN_SSH_KEYS.TITLE) })).closest("section")!;
     const drivesCard = await screen.findByTestId("user-drives-card");
-    // Host, Branding, Model providers (list), Providers, User drives, Admin
-    // SSH keys.
-    expect(card.parentElement?.children).toHaveLength(6);
-    // User drives sits directly before it.
-    expect(card.previousElementSibling).toBe(drivesCard);
+    const scimCard = await screen.findByTestId("scim-card");
+    // Host, Branding, Model providers (list), Providers, Custom components, User drives,
+    // Admin SSH keys, Approval notifications, SCIM.
+    expect(card.parentElement?.children).toHaveLength(9);
+    expect(card.parentElement?.lastElementChild).toBe(scimCard);
+    expect(scimCard.previousElementSibling).toBe(card);
+    expect(card.previousElementSibling).toBe(sshCard);
+    expect(sshCard.previousElementSibling).toBe(drivesCard);
+    // Custom components sits between the providers and the drives (0.8.9).
+    const componentsCard = await screen.findByTestId("components-settings-card");
+    expect(componentsCard.nextElementSibling).toBe(drivesCard);
   });
 
   // The retired Model provider card is replaced by the Model providers list;

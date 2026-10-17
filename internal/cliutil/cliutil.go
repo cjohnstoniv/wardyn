@@ -10,6 +10,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -27,29 +28,38 @@ func envFatal(env, val, want string) {
 	exit(2)
 }
 
+// removedEnv maps each variable 0.9 stopped reading to the one that replaced it. Nothing reads a removed
+// name, so a leftover is a setting silently lost; wardynd refuses boot on one and `wardyn setup status
+// --pre-upgrade` reports it.
+var removedEnv = map[string]string{
+	"WARDYN_MEMBER_MODE":                "WARDYN_USER_DESKTOP",
+	"WARDYN_MEMBER_WORKSPACE_ROOTS":     "WARDYN_USER_WORKSPACE_ROOTS",
+	"WARDYN_MEMBER_WORKSPACE_ROOTS_MAP": "WARDYN_USER_WORKSPACE_ROOTS_MAP",
+	"WARDYN_MEMBER_WRITABLE_ROOTS":      "WARDYN_USER_WRITABLE_ROOTS",
+	"WARDYN_MEMBER_WRITABLE_DENY":       "WARDYN_USER_WRITABLE_DENY",
+	"WARDYN_ALLOW_MEMBER_ENV_SECRET":    "WARDYN_ALLOW_USER_ENV_SECRET",
+}
+
+// RemovedEnvLeftovers lists, sorted, each removed variable environ (os.Environ's shape) still sets to a
+// non-empty value as "NAME (use REPLACEMENT)". Empty counts as unset, as compose forwards unset names.
+func RemovedEnvLeftovers(environ []string) []string {
+	var out []string
+	for _, kv := range environ {
+		name, value, _ := strings.Cut(kv, "=")
+		if repl, ok := removedEnv[name]; ok && value != "" {
+			out = append(out, name+" (use "+repl+")")
+		}
+	}
+	slices.Sort(out)
+	return out
+}
+
 // EnvOr returns the env var if set and non-empty, else def.
 func EnvOr(key, def string) string {
 	if v, ok := os.LookupEnv(key); ok && v != "" {
 		return v
 	}
 	return def
-}
-
-// EnvAlias lets a deprecated env var name go on working for one deprecation window while a new name takes
-// over. Empty counts as unset for both. If newEnv is unset and oldEnv set, copies oldEnv into newEnv and
-// reports aliased. If both are set, newEnv wins; a differing value reports ignored, since a dropped old
-// value can be a longer deny list the operator still believes is in force. Must run before ANY flag parse
-// or other read of either name.
-func EnvAlias(newEnv, oldEnv string) (aliased, ignored bool) {
-	oldV := os.Getenv(oldEnv)
-	if oldV == "" {
-		return false, false
-	}
-	if newV := os.Getenv(newEnv); newV != "" {
-		return false, newV != oldV
-	}
-	os.Setenv(newEnv, oldV) //nolint:errcheck // this process's own env; Setenv cannot fail here
-	return true, false
 }
 
 // FlagEnv defines a string flag whose default is overridden by an env var. Unset/empty keeps the default;

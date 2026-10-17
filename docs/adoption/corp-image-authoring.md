@@ -110,20 +110,24 @@ onboarding. Opt-in per agent; the npm default is unchanged for OSS builds.
 drives BOTH install paths (npm takes it as the version specifier; the native
 path passes a bare semver through as a release id). A released image has to be
 reproducible — a floating `stable`/`latest` means two builds of the same git tag
-ship different agents. Pass `CLAUDE_CODE_VERSION=stable` explicitly if you
-deliberately want the channel; the Dockerfile still resolves it on the native
-path, and npm has a `stable` dist-tag of its own.
+ship different agents. Channel overrides such as `CLAUDE_CODE_VERSION=stable`
+remain available with npm or a host-staged native binary. Native downloads
+refuse channels: select an exact version and pin its manifest instead.
 
 **claude-code** (`CLAUDE_INSTALL=native`): installs the native `claude` binary,
-checksum-verified against the release manifest, from the official
+checksum-verified against a SHA256-pinned release manifest, from the official
 `https://downloads.claude.ai/claude-code-releases` surface — the **only** host this
 path contacts (allowlist it in the proxy; the corp CA above covers its TLS):
 
 ```
-make agent-images-core CLAUDE_INSTALL=native                               # the pinned default
-make agent-images-core CLAUDE_INSTALL=native CLAUDE_CODE_VERSION=2.1.215   # a different pin
-make agent-images-core CLAUDE_INSTALL=native CLAUDE_CODE_VERSION=stable    # opt back into the channel
+make agent-images-core CLAUDE_INSTALL=native  # the pinned default
+make agent-images-core CLAUDE_INSTALL=native CLAUDE_CODE_VERSION=<version> CLAUDE_MANIFEST_SHA256=<sha256>
 ```
+
+For an alternate version, obtain `manifest.json` from the official release
+URL on a trusted host, review it and compute its SHA256. The build checks
+that pin before reading the binary checksum from the manifest. Omitting the
+pin for an alternate version, or supplying a mismatched pin, fails the build.
 
 For a fully **offline / strict-allowlist** mirror that can't reach
 `downloads.claude.ai` from the build either, stage the binary on a host that can,
@@ -211,3 +215,19 @@ interactive run's boot pane. On the DEFAULT interactive run there is no seed, so
 descendant of `agent-run`, and only the image `ENV` reaches it. The `:-` defaults
 are there so an operator who deliberately wants one of these can set it to `0` on
 the run.
+
+## Multi-arch images
+
+Every image Wardyn publishes is a `linux/amd64` + `linux/arm64` index (`platforms:` in [`release.yml`](../../.github/workflows/release.yml)). A run's image ref is resolved by whichever computer runs it, so one ref must work on an ARM laptop and an x86 cluster.
+
+- Keep every ref in [`WARDYN_AGENT_IMAGES`](../ENV.md) (and every image you build from our bases) a multi-arch index with both platforms.
+- Pin an index by its **index digest** (`repo@sha256:…` from `docker buildx imagetools inspect <ref>`), never by a child-manifest digest.
+- A multi-arch index that lacks a platform fails at pull on that architecture (`no matching manifest for linux/arm64/v8`). A single-architecture image pulls anywhere and fails only when it starts on the other architecture, unless the engine emulates it. A laptop runner starts such an image once to check and refuses it, naming the image, when it cannot run (`image_arch`).
+- If your mirror publishes one architecture per tag, name both: `{"base": "<mirror>/agent-base:<tag>", "base@arm64": "<mirror>/agent-base:<tag>-arm64"}` in `WARDYN_AGENT_IMAGES`. A run on an `arm64` runner uses the `@arm64` entry; every other run uses the plain one. Set the proxy the same way with `WARDYN_PROXY_IMAGE_ARM64` (and `_AMD64`); a runner is handed the one for its architecture when it registers.
+- Build and push both platforms in one command, then check the index lists both:
+
+```sh
+docker buildx build --platform linux/amd64,linux/arm64 -f deploy/images/claude-code/Dockerfile \
+  -t <your-registry>/agent-claude-code:<tag> --push .
+docker buildx imagetools inspect <your-registry>/agent-claude-code:<tag>
+```

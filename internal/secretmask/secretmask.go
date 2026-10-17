@@ -14,10 +14,18 @@
 // SECURITY (fail-closed): a recovered masker panic replaces the affected
 // chunk with the placeholder instead of forwarding it verbatim — this layer
 // must never emit raw, unmasked input bytes on a crash.
+//
+// SHARED CORPUS: wardynd gives its Registry a Backend (package maskstore) that
+// commits every registration to Postgres before it returns, so every replica
+// masks the same corpus and a restart loses none of it. The maps below are then
+// that process's cache. A consumer calls Fresh before it masks a chunk and fails
+// closed when it cannot prove the cache current. The egress proxy's own Registry
+// has no Backend and is process-local.
 package secretmask
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"slices"
@@ -44,7 +52,7 @@ type Registry struct {
 	mu     sync.RWMutex
 	perRun map[uuid.UUID][][]byte // run id -> set of secret values
 	// globals is every process-wide value masked right now, on every run: the
-	// union of current and retired, rebuilt by reflatten whenever either changes.
+	// union of current, retired and rows, rebuilt by reflatten whenever one changes.
 	globals [][]byte
 	// current holds each credential's live values by (owner, name), so a
 	// refreshed or deleted credential's old values can be let go instead of
@@ -54,6 +62,11 @@ type Registry struct {
 	// SweepGlobals drops them: masking fails open, and an event quoting the old
 	// value can still arrive after the credential moved on.
 	retired []retiredValue
+	// rows holds what a Backend committed, one entry per committed row. Two rows
+	// can carry the same bytes (a row's identity includes its key generation),
+	// so each ends on its own lifetime and the value stays masked until the last
+	// row holding it is swept or dropped.
+	rows map[uuid.UUID]globalRow
 
 	// gen bumps on every mutation that CHANGES the corpus (a de-duplicated Add
 	// is not a change). It is the cache key below: a Masker built at generation
@@ -64,6 +77,10 @@ type Registry struct {
 	// consumers do that per event, so this avoids re-deriving an unchanged set
 	// thousands of times per run. Evict drops a run's entry with its secrets.
 	cached map[uuid.UUID]*runMaskers
+
+	// backend, when set, is the committed corpus every replica shares (see
+	// Backend). The maps above are then this process's cache of it.
+	backend Backend
 }
 
 type globalKey struct{ owner, name string }
@@ -81,6 +98,15 @@ type retiredValue struct {
 	at    time.Time
 }
 
+// globalRow is one committed row's hold on a credential value: current, with
+// until as a globalValue's, while retiredAt is zero; retired at retiredAt after.
+type globalRow struct {
+	key       globalKey
+	value     []byte
+	until     time.Time
+	retiredAt time.Time
+}
+
 // runMaskers is one run's derived masking state at a single registry generation.
 // variant (the JSONEscapedVariants expansion the audit recorder needs) is built
 // lazily: it triples the set and is documented O(n^2), and the PTY lane never
@@ -94,24 +120,54 @@ type runMaskers struct {
 
 // NewRegistry returns an empty, ready-to-use Registry.
 func NewRegistry() *Registry {
-	return &Registry{perRun: make(map[uuid.UUID][][]byte), cached: map[uuid.UUID]*runMaskers{}, current: map[globalKey][]globalValue{}}
+	return &Registry{perRun: make(map[uuid.UUID][][]byte), cached: map[uuid.UUID]*runMaskers{}, current: map[globalKey][]globalValue{}, rows: map[uuid.UUID]globalRow{}}
 }
 
 // Add registers value as a secret for runID. Values shorter than MinLen are
 // ignored. The value is copied so the caller may reuse the backing array.
 // Never logs the secret value.
-func (r *Registry) Add(runID uuid.UUID, value []byte) {
+//
+// With a Backend the value is committed to it before Add returns, and an error
+// means it is NOT on record: the caller must not hand the credential out.
+func (r *Registry) Add(runID uuid.UUID, value []byte) error {
+	if r == nil || len(value) < MinLen {
+		return nil
+	}
+	// Re-registering a value the run already has is a no-op: masking is
+	// exact-match over a set, so a duplicate could never mask anything new. A
+	// value that is only in the global set is NOT known: a global is let go
+	// when its credential is replaced or deleted, and a run that was handed
+	// the value before then still holds it. There is deliberately no CAP
+	// here: dropping a registered secret past a ceiling would fail OPEN and
+	// emit it unmasked, the one thing this package exists to prevent.
+	r.mu.RLock()
+	known := containsSlice(r.perRun[runID], value)
+	b := r.backend
+	r.mu.RUnlock()
+	if known {
+		return nil
+	}
+	// Commit first, cache second: a failed commit must leave the value unknown
+	// here, or the retry would see it as known and never persist it.
+	if b != nil {
+		if err := b.PutRun(runID, value); err != nil {
+			return err
+		}
+	}
+	r.AddLocal(runID, value)
+	return nil
+}
+
+// AddLocal is Add into this process's cache only, for a value that is already
+// committed elsewhere (a masking manifest's renderings, a row another replica
+// wrote). It never fails.
+func (r *Registry) AddLocal(runID uuid.UUID, value []byte) {
 	if r == nil || len(value) < MinLen {
 		return
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	// Re-registering an already-known value (per-run or global) is a no-op:
-	// masking is exact-match over a set, so a duplicate could never mask
-	// anything new. There is deliberately no CAP here: dropping a registered
-	// secret past a ceiling would fail OPEN and emit it unmasked, the one
-	// thing this package exists to prevent.
-	if containsSlice(r.perRun[runID], value) || containsSlice(r.globals, value) {
+	if containsSlice(r.perRun[runID], value) {
 		return
 	}
 	r.perRun[runID] = append(r.perRun[runID], bytes.Clone(value))
@@ -121,36 +177,64 @@ func (r *Registry) Add(runID uuid.UUID, value []byte) {
 // AddGlobal registers values as the CURRENT values of one credential (owner,
 // name), masked process-wide on every run; a value left out of this call is
 // retired (not dropped — SweepGlobals drops it later, keyed off now).
-// Repeats and values shorter than MinLen are ignored.
-func (r *Registry) AddGlobal(owner, name string, now time.Time, values ...[]byte) {
-	r.setGlobal(owner, name, now, false, time.Time{}, nil, values)
+// Repeats and values shorter than MinLen are ignored. generation must be the
+// GlobalGeneration snapshot from before obtaining the credential.
+func (r *Registry) AddGlobal(generation int64, owner, name string, now time.Time, values ...[]byte) error {
+	return r.setGlobal(generation, owner, name, now, false, time.Time{}, nil, values)
 }
 
 // AddGlobalUntil is AddGlobal for a credential with one expiring value (a
 // short-lived access token): it is let go once SweepGlobals sees until past
 // its grace, even if nothing replaces it. Lasting values carry no expiry.
-func (r *Registry) AddGlobalUntil(owner, name string, now, until time.Time, expiring []byte, lasting ...[]byte) {
-	r.setGlobal(owner, name, now, false, until, expiring, lasting)
+func (r *Registry) AddGlobalUntil(generation int64, owner, name string, now, until time.Time, expiring []byte, lasting ...[]byte) error {
+	return r.setGlobal(generation, owner, name, now, false, until, expiring, lasting)
 }
 
 // MergeGlobal is AddGlobal that retires nothing — for a caller holding a
 // possibly-stale read of the credential, which must not retire values a
 // concurrent refresh just made current.
-func (r *Registry) MergeGlobal(owner, name string, values ...[]byte) {
-	r.setGlobal(owner, name, time.Time{}, true, time.Time{}, nil, values)
+func (r *Registry) MergeGlobal(generation int64, owner, name string, values ...[]byte) error {
+	return r.setGlobal(generation, owner, name, time.Time{}, true, time.Time{}, nil, values)
 }
 
 // MergeGlobalUntil is MergeGlobal with AddGlobalUntil's expiring value. An
 // expiring value already current keeps the later of its two expiries.
-func (r *Registry) MergeGlobalUntil(owner, name string, until time.Time, expiring []byte, lasting ...[]byte) {
-	r.setGlobal(owner, name, time.Time{}, true, until, expiring, lasting)
+func (r *Registry) MergeGlobalUntil(generation int64, owner, name string, until time.Time, expiring []byte, lasting ...[]byte) error {
+	return r.setGlobal(generation, owner, name, time.Time{}, true, until, expiring, lasting)
 }
 
-// setGlobal's now is unused on a merge, which retires nothing.
-func (r *Registry) setGlobal(owner, name string, now time.Time, merge bool, until time.Time, expiring []byte, lasting [][]byte) {
+// setGlobal's now is unused on a merge, which retires nothing. With a Backend
+// the change is committed and read back first; an error refuses credential use.
+func (r *Registry) setGlobal(generation int64, owner, name string, now time.Time, merge bool, until time.Time, expiring []byte, lasting [][]byte) error {
 	if r == nil {
-		return
+		return nil
 	}
+	r.mu.RLock()
+	b := r.backend
+	r.mu.RUnlock()
+	if b != nil && owner != "" {
+		var puts []GlobalPut
+		if len(expiring) >= MinLen {
+			puts = append(puts, GlobalPut{Value: expiring, Until: until})
+		}
+		for _, v := range lasting {
+			if len(v) >= MinLen {
+				puts = append(puts, GlobalPut{Value: v})
+			}
+		}
+		if len(puts) == 0 {
+			return nil
+		}
+		// The backend applies its committed read; a second, unversioned cache
+		// write here could restore a value erased while PutGlobal returned.
+		return b.PutGlobal(generation, owner, name, puts, merge, now)
+	}
+	r.setGlobalLocal(owner, name, now, merge, until, expiring, lasting)
+	return nil
+}
+
+// setGlobalLocal is setGlobal into this process's cache only.
+func (r *Registry) setGlobalLocal(owner, name string, now time.Time, merge bool, until time.Time, expiring []byte, lasting [][]byte) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	k := globalKey{owner, name}
@@ -205,15 +289,55 @@ func containsValue(set []globalValue, v []byte) bool {
 
 // EvictGlobal retires every current value of the credential (owner, name): the
 // credential was deleted. The values stay masked until SweepGlobals drops them.
-// Idempotent. now is read as on AddGlobal.
-func (r *Registry) EvictGlobal(owner, name string, now time.Time) {
+// Idempotent. now is read as on AddGlobal. With a Backend the committed rows
+// are tombstoned first, and an error means they are still there.
+func (r *Registry) EvictGlobal(owner, name string, now time.Time) error {
 	if r == nil {
-		return
+		return nil
+	}
+	r.mu.RLock()
+	b := r.backend
+	r.mu.RUnlock()
+	if b != nil {
+		if err := b.EvictGlobal(owner, name, now); err != nil {
+			return err
+		}
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.retireLocked(globalKey{owner, name}, nil, now)
+	k := globalKey{owner, name}
+	r.retireLocked(k, nil, now)
+	r.retireRowsLocked(func(g globalKey) bool { return g == k }, now)
 	r.reflattenLocked()
+	return nil
+}
+
+// RetireOwnerGlobals retires every current credential value of owner, as
+// EvictGlobal does for one credential: the values stay masked until
+// SweepGlobals drops them. Idempotent. With a Backend the committed rows are
+// retired first, and an error means they are still current.
+func (r *Registry) RetireOwnerGlobals(ctx context.Context, owner string, now time.Time) error {
+	if r == nil {
+		return nil
+	}
+	r.mu.RLock()
+	b := r.backend
+	r.mu.RUnlock()
+	if b != nil {
+		if err := b.RetireOwnerGlobals(ctx, owner, now); err != nil {
+			return err
+		}
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for k := range r.current {
+		if k.owner == owner {
+			r.retireLocked(k, nil, now)
+		}
+	}
+	r.retireRowsLocked(func(g globalKey) bool { return g.owner == owner }, now)
+	r.reflattenLocked()
+	return nil
 }
 
 // SweepGlobals drops the values retired before cutoff, and the current values
@@ -239,6 +363,16 @@ func (r *Registry) SweepGlobals(cutoff time.Time) int {
 			r.current[k] = vs
 		}
 	}
+	for id, row := range r.rows {
+		at := row.retiredAt
+		if at.IsZero() {
+			at = row.until
+		}
+		if !at.IsZero() && at.Before(cutoff) {
+			delete(r.rows, id)
+			dropped++
+		}
+	}
 	r.reflattenLocked()
 	return dropped
 }
@@ -260,7 +394,21 @@ func (r *Registry) retireLocked(k globalKey, keep []globalValue, now time.Time) 
 	delete(r.current, k)
 }
 
-// reflattenLocked rebuilds globals from current and retired, and bumps gen only
+// retireRowsLocked retires the current committed rows of the credentials match
+// selects, each as retireLocked retires a value. The caller holds r.mu.
+func (r *Registry) retireRowsLocked(match func(globalKey) bool, now time.Time) {
+	for id, row := range r.rows {
+		if match(row.key) && row.retiredAt.IsZero() {
+			row.retiredAt = now
+			if row.until.After(now) {
+				row.retiredAt = row.until
+			}
+			r.rows[id] = row
+		}
+	}
+}
+
+// reflattenLocked rebuilds globals from current, retired and rows, and bumps gen only
 // when the masked set changed: retiring a value masks exactly what it did
 // before, so it must not invalidate every run's cached Masker. The caller
 // holds r.mu.
@@ -280,6 +428,9 @@ func (r *Registry) reflattenLocked() {
 	}
 	for _, rv := range r.retired {
 		add(rv.value)
+	}
+	for _, row := range r.rows {
+		add(row.value)
 	}
 	if len(out) == len(r.globals) && !slices.ContainsFunc(r.globals, func(v []byte) bool { return !seen[string(v)] }) {
 		return
@@ -304,7 +455,9 @@ func (r *Registry) Snapshot(runID uuid.UUID) [][]byte {
 		out = append(out, bytes.Clone(v))
 	}
 	for _, v := range globals {
-		out = append(out, bytes.Clone(v))
+		if !containsSlice(perRun, v) { // a value the run also holds is in the set once
+			out = append(out, bytes.Clone(v))
+		}
 	}
 	return out
 }
@@ -334,7 +487,7 @@ func (r *Registry) Masker(runID uuid.UUID) Masker {
 // JSONEscapedVariants, the set the audit recorder needs since ev.Data is JSON
 // and a secret bearing a newline or quote lands there escaped. Cached on the
 // same generation as Masker, built lazily since the expansion triples the
-// set and is O(n^2), so the PTY lane never pays for it.
+// set, so the PTY lane never pays for it.
 func (r *Registry) JSONVariantMasker(runID uuid.UUID) Masker {
 	if r == nil {
 		return Masker{}
@@ -378,13 +531,17 @@ func (r *Registry) snapshotLocked(runID uuid.UUID) [][]byte {
 		out = append(out, bytes.Clone(v))
 	}
 	for _, v := range globals {
-		out = append(out, bytes.Clone(v))
+		if !containsSlice(perRun, v) { // a value the run also holds is in the set once
+			out = append(out, bytes.Clone(v))
+		}
 	}
 	return out
 }
 
-// Evict removes all per-run secrets for runID (process-global secrets
-// unaffected). Idempotent.
+// Evict removes all per-run secrets for runID from this process's cache
+// (process-global secrets unaffected). Idempotent. It touches no committed row:
+// with a Backend those are the retention pass's (PurgeRuns), so one replica's
+// sweep never strips another's corpus.
 //
 // The production caller evicts LATE, a grace period after the run goes
 // terminal: masking sites Snapshot lazily at use time, and the audit
@@ -441,16 +598,27 @@ func (r *Registry) RunIDs() []uuid.UUID {
 // (asciinema). No variant for a secret with no JSON-special bytes;
 // duplicates dropped.
 //
-// ponytail: O(n²) de-dup over the snapshot (a handful of secrets per run);
-// switch to a set only if a run ever registers thousands.
+// The de-dup is a set seeded from the originals, not a scan of the output: a
+// run's corpus carries every person's global values, so it grows with the
+// organisation, not the run.
 func JSONEscapedVariants(snap [][]byte) [][]byte {
 	out := make([][]byte, len(snap), len(snap)*3)
 	copy(out, snap)
+	seen := make(map[string]struct{}, len(snap)*3)
+	for _, s := range snap {
+		seen[string(s)] = struct{}{}
+	}
 	for _, s := range snap {
 		for _, escapeHTML := range [...]bool{false, true} {
-			if esc, ok := jsonStringEscape(s, escapeHTML); ok && !containsSlice(out, esc) {
-				out = append(out, esc)
+			esc, ok := jsonStringEscape(s, escapeHTML)
+			if !ok {
+				continue
 			}
+			if _, dup := seen[string(esc)]; dup {
+				continue
+			}
+			seen[string(esc)] = struct{}{}
+			out = append(out, esc)
 		}
 	}
 	return out
@@ -474,7 +642,15 @@ func jsonStringEscape(s []byte, escapeHTML bool) ([]byte, bool) {
 	return bytes.Clone(b[1 : len(b)-1]), true // strip surrounding quotes
 }
 
+// scanned, when a test points it somewhere, adds up the sizes of the sets
+// containsSlice is asked to search: how a test shows a caller does not scan a
+// set once per element. Nil outside tests.
+var scanned *int
+
 func containsSlice(set [][]byte, v []byte) bool {
+	if scanned != nil {
+		*scanned += len(set)
+	}
 	for _, s := range set {
 		if bytes.Equal(s, v) {
 			return true

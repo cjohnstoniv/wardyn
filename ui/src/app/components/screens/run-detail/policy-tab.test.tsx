@@ -19,10 +19,12 @@ vi.mock("../../../lib/api/runs", () => ({
   runs: { getPolicy: (...a: unknown[]) => getPolicyMock(...a) },
 }));
 
-import { toYaml } from "../../wardyn/code-block";
+import { aheadByHours } from "../../../lib/test-clock";
+import { toYaml } from "../../wardyn/yaml-block";
 import { OperatorProvider } from "../../wardyn/operator-context";
 import { PolicyTab } from "./policy-tab";
 import { CHANGE_HEADING, POLICY_TAB } from "./policy-tab-copy";
+import { GIT_PAT_SCOPE } from "../../wardyn/copy";
 
 const RUN = {
   id: "run-1",
@@ -235,6 +237,7 @@ describe("PolicyTab — changes grouped by cause", () => {
         changes: [
           change({ cause: "workspace", field: "allowed_domains", added: ["registry.npmjs.org"] }),
           change({ cause: "source_control", field: "allowed_domains", added: ["ghes.acme.example:443"] }),
+          change({ cause: "component", field: "allowed_domains", added: ["org-api.acme.example"] }),
           change({ cause: "model_access", field: "allowed_domains", added: ["llm-gateway.acme.example:443"] }),
           change({
             cause: "mirror",
@@ -251,6 +254,7 @@ describe("PolicyTab — changes grouped by cause", () => {
     for (const h of [
       "Added for the workspace",
       "Added so the run can reach its code",
+      "Added for an attached component",
       "Added so the agent can reach its model",
       "Switched to your organization's package mirror",
       "Routed through Wardyn's GitHub connection",
@@ -295,6 +299,13 @@ describe("PolicyTab — changes grouped by cause", () => {
     show(view({ changes: [change({ cause: "org_disk", field: "resources.disk_mib", added: ["20480"] })] }));
     await ready();
     const g = screen.getByRole("heading", { name: "Disk size set from your organization's default" }).parentElement!;
+    expect(within(g).getByText("20480 MiB").parentElement).not.toHaveTextContent("Added at start");
+  });
+
+  it("disk size from a pool's default reads as the pool's, with no chip", async () => {
+    show(view({ changes: [change({ cause: "pool_disk", field: "resources.disk_mib", added: ["20480"] })] }));
+    await ready();
+    const g = screen.getByRole("heading", { name: "Disk size set from this pool's default" }).parentElement!;
     expect(within(g).getByText("20480 MiB").parentElement).not.toHaveTextContent("Added at start");
   });
 
@@ -376,8 +387,24 @@ describe("PolicyTab — changes grouped by cause", () => {
     show(view({ changes: [change({ cause: "workspace", field: "allowed_domains", added: ["registry.npmjs.org"] })] }));
     await ready();
     const row = rowValue("Network", "Allowed hosts");
-    expect(within(row).getByText("registry.npmjs.org").parentElement).toHaveTextContent("Added at start");
-    expect(within(row).getByText("api.anthropic.com").parentElement).not.toHaveTextContent("Added at start");
+    expect(within(row).getByText("registry.npmjs.org").closest("li")).toHaveTextContent("Added at start");
+    expect(within(row).getByText("api.anthropic.com").closest("li")).not.toHaveTextContent("Added at start");
+  });
+
+  it("lists a host launch removed among the allowed hosts, marked Removed at start", async () => {
+    show(
+      view({
+        changes: [
+          change({ cause: "mirror", field: "allowed_domains", removed: ["pypi.org"] }),
+          // A restart's removal happened later: it is not a change made at start.
+          change({ cause: "restart", field: "allowed_domains", removed: ["paste.example"], at: aheadByHours(-24) }),
+        ],
+      }),
+    );
+    await ready();
+    const row = rowValue("Network", "Allowed hosts");
+    expect(within(row).getByText("pypi.org").closest("li")).toHaveTextContent("Removed at start");
+    expect(within(row).queryByText("paste.example")).toBeNull();
   });
 });
 
@@ -398,32 +425,35 @@ describe("PolicyTab — the Summary", () => {
     expect(rowValue("Network", "Allowed hosts")).toHaveTextContent("api.anthropic.comregistry.npmjs.org");
     expect(rowValue("Network", "Blocked hosts")).toHaveTextContent("corp.example");
     expect(rowValue("Network", "Any other host")).toHaveTextContent("Refused, then sent for approval");
-    expect(rowValue("Network", "Request types")).toHaveTextContent("All");
     expect(rowValue("Barrier", "Minimum")).toHaveTextContent("Wall");
     expect(rowValue("Barrier", "This run used")).toHaveTextContent("Wall");
     expect(rowValue("Credentials", "GitHub access")).toHaveTextContent("acme/payments-api");
     const pat = rowValue("Credentials", "Git access token");
     expect(pat).toHaveTextContent("dev.azure.com");
     expect(pat).toHaveTextContent("Needs approval");
-    expect(rowValue("Files and code", "Folders from the host")).toHaveTextContent("/srv/shared→/home/agent/work/sharedRead-only");
-    expect(rowValue("Files and code", "Repositories")).toHaveTextContent("acme/payments-api → work/payments-api");
-    expect(rowValue("Tools and pushes", "Tool rules")).toHaveTextContent(
-      "2 rules · Bash held, WebFetch denied. Anything else is held.",
+    expect(rowValue("Files and code", "Folders from the host")).toHaveTextContent(
+      "/home/agent/work/shared ← /srv/shared · Read-only",
     );
-    expect(rowValue("Tools and pushes", "Pushes")).toHaveTextContent("Only this run's own branch");
+    expect(rowValue("Files and code", "Repositories")).toHaveTextContent("acme/payments-api → work/payments-api");
+    // One title, each rule listed beneath it.
+    expect(within(rowValue("Tools and pushes", "Tool rules")).getAllByRole("listitem").map((li) => li.textContent)).toEqual([
+      "Bash — held",
+      "WebFetch — denied",
+    ]);
     expect(rowValue("Tools and pushes", "Deny")).toHaveTextContent(".github/workflows/**");
-    expect(rowValue("Tools and pushes", "Hold for review")).toHaveTextContent("None");
-    expect(rowValue("Apps", "UI apps")).toHaveTextContent("None declared");
     expect(rowValue("Limits", "CPU")).toHaveTextContent("2 CPU");
     expect(rowValue("Limits", "Memory")).toHaveTextContent("4096 MiB");
-    expect(rowValue("Limits", "Processes")).toHaveTextContent("Standard limit");
     expect(rowValue("Limits", "Disk")).toHaveTextContent("10240 MiB");
-    expect(rowValue("Limits", "When idle")).toHaveTextContent("Auto-stop: 60 min idle");
-    expect(rowValue("Traffic checks", "Traffic checks")).toHaveTextContent("Off");
+    expect(rowValue("Limits", "When idle")).toHaveTextContent("Stops after 60 minutes");
+    // A key the policy does not set has no row: no "None" or "Standard limit" filler.
+    for (const label of ["Request types", "Hold for review", "Pushes", "Processes", "Traffic checks", "UI apps"]) {
+      expect(screen.queryByText(label)).not.toBeInTheDocument();
+    }
+    expect(screen.queryByRole("heading", { name: "Apps" })).not.toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Azure DevOps access" })).not.toBeInTheDocument();
   });
 
-  it("describes allow-all in block-list terms, and an empty policy as None / Standard limit", async () => {
+  it("describes allow-all in block-list terms, and draws no rows for what the policy does not set", async () => {
     show(
       view({
         spec: {
@@ -436,18 +466,24 @@ describe("PolicyTab — the Summary", () => {
       }),
     );
     await ready();
-    expect(rowValue("Network", "Allowed hosts")).toHaveTextContent("Can reach almost any site (except a block-list).");
-    expect(rowValue("Network", "Blocked hosts")).toHaveTextContent("None");
+    expect(rowValue("Network", "Allowed hosts")).toHaveTextContent("Allow-all egress (block-list only)");
     expect(rowValue("Network", "Any other host")).toHaveTextContent("Refused");
     expect(rowValue("Network", "Request types")).toHaveTextContent("GET, POST");
     expect(rowValue("Barrier", "Minimum")).toHaveTextContent("Fence");
-    expect(rowValue("Credentials", "Credentials")).toHaveTextContent("None");
-    expect(rowValue("Files and code", "Folders from the host")).toHaveTextContent("None");
-    expect(rowValue("Files and code", "Repositories")).toHaveTextContent("None");
-    expect(rowValue("Tools and pushes", "Tool rules")).toHaveTextContent("None");
-    expect(rowValue("Limits", "CPU")).toHaveTextContent("Standard limit");
-    expect(rowValue("Limits", "Disk")).toHaveTextContent("Standard limit");
-    expect(rowValue("Limits", "When idle")).toHaveTextContent("Runs until stopped");
+    expect(screen.queryByText("Blocked hosts")).not.toBeInTheDocument();
+    for (const title of ["Credentials", "Files and code", "Tools and pushes", "Apps", "Limits"]) {
+      expect(screen.queryByRole("heading", { name: title })).not.toBeInTheDocument();
+    }
+    expect(screen.queryByText("None")).not.toBeInTheDocument();
+    expect(screen.queryByText("Standard limit")).not.toBeInTheDocument();
+  });
+
+  it("This run used is the run's actual barrier, not the policy's minimum", async () => {
+    show(view(), { run: { ...RUN, confinement_class: "CC3" } as RunDetail });
+    await ready();
+    expect(rowValue("Barrier", "Minimum")).toHaveTextContent("Wall");
+    expect(rowValue("Barrier", "This run used")).toHaveTextContent("Vault");
+    expect(screen.queryByText("This run requests")).not.toBeInTheDocument();
   });
 
   it("says how long a held connection waits, and shows apps, refs, any-branch pushes and traffic checks On", async () => {
@@ -469,7 +505,40 @@ describe("PolicyTab — the Summary", () => {
     expect(rowValue("Tools and pushes", "Pushes")).toHaveTextContent("Any branch");
     expect(rowValue("Apps", "UI apps")).toHaveTextContent("vscode → localhost:8080/");
     expect(rowValue("Files and code", "Repositories")).toHaveTextContent("acme/api at main → work/api");
-    expect(rowValue("Traffic checks", "Traffic checks")).toHaveTextContent("On");
+    expect(rowValue("Network", "Traffic checks")).toHaveTextContent("On");
+  });
+
+  it("shows a git access token's narrowing: host, chips, and the repositories or every repository", async () => {
+    const grants = [
+      {
+        kind: "git_pat",
+        scope: { host: "gitlab.example.com", secret_name: "s", forge: "gitlab", repos: ["group/app", "group/libs/*"], access: "read", api: true },
+        requires_approval: false,
+      },
+      { kind: "git_pat", scope: { host: "git.example.com", secret_name: "t" }, requires_approval: false },
+      { kind: "git_pat", scope: { host: "none.example.com", secret_name: "u", repos: [] }, requires_approval: false },
+    ];
+    show(view({ spec: { ...SPEC, eligible_grants: grants } }));
+    await ready();
+    // One "Git access token" title; each grant is its host line, then what it is narrowed to.
+    expect(within(sectionFor("Credentials")).getAllByText("Git access token")).toHaveLength(1);
+    const rows = within(rowValue("Credentials", "Git access token")).getAllByRole("listitem");
+    expect(rows).toHaveLength(6);
+
+    expect(rows[0]).toHaveTextContent("gitlab.example.com");
+    expect(within(rows[0]).getByText("Read-only")).toBeInTheDocument();
+    expect(within(rows[0]).getByText(GIT_PAT_SCOPE.RUN_API)).toBeInTheDocument();
+    expect(rows[1]).toHaveTextContent("group/app, group/libs/*");
+    expect(rows[1]).not.toHaveTextContent(GIT_PAT_SCOPE.RUN_REPOS_ALL);
+    expect(within(rows[0]).getByText("Read-only").closest("[title]")).toHaveAttribute("title", GIT_PAT_SCOPE.HONESTY_TOKEN);
+
+    expect(rows[2]).toHaveTextContent("git.example.com");
+    expect(rows[3]).toHaveTextContent(GIT_PAT_SCOPE.RUN_REPOS_ALL);
+    expect(within(rows[2]).queryByText("Read-only")).not.toBeInTheDocument();
+    expect(within(rows[2]).queryByText(GIT_PAT_SCOPE.RUN_API)).not.toBeInTheDocument();
+
+    expect(rows[4]).toHaveTextContent("none.example.com");
+    expect(rows[5]).toHaveTextContent(GIT_PAT_SCOPE.REPOS_NONE);
   });
 
   it("shows Azure DevOps access only when the policy set capabilities", async () => {
@@ -488,7 +557,8 @@ describe("PolicyTab — hidden values", () => {
   it("a member sees Hidden, with the reason on hover, in place of the folder source", async () => {
     show(view({ spec: redactedSpec, redacted: true }));
     await ready();
-    const hidden = within(sectionFor("Files and code")).getByText("Hidden");
+    const hidden = within(sectionFor("Files and code")).getByRole("note", { name: "Hidden. Only admins can see this." });
+    expect(hidden).toHaveTextContent("Hidden");
     expect(hidden).toHaveAttribute("title", "Only admins can see this.");
     expect(sectionFor("Files and code")).not.toHaveTextContent("<redacted>");
     expect(sectionFor("Files and code")).toHaveTextContent("/home/agent/work/shared");
@@ -504,7 +574,7 @@ describe("PolicyTab — hidden values", () => {
     show(view());
     await ready();
     expect(within(sectionFor("Files and code")).queryByText("Hidden")).not.toBeInTheDocument();
-    expect(within(sectionFor("Files and code")).getByText("/srv/shared")).toBeInTheDocument();
+    expect(within(sectionFor("Files and code")).getByText(/← \/srv\/shared/)).toBeInTheDocument();
   });
 
   it("S-33 sits above the YAML only when values are hidden", async () => {
@@ -541,6 +611,19 @@ describe("PolicyTab — Summary / YAML switch and Copy YAML", () => {
     expect(lines.join("\n")).toBe(toYaml(SPEC));
     await user.click(screen.getByRole("button", { name: "Summary" }));
     expect(screen.getByRole("heading", { name: "Network", level: 4 })).toBeInTheDocument();
+  });
+
+  it("the JSON view shows the same policy, with its own copy, and S-33 above it when values are hidden", async () => {
+    const user = userEvent.setup();
+    show(view({ redacted: true }));
+    await ready();
+    await user.click(screen.getByRole("button", { name: "JSON" }));
+    expect(screen.getByRole("button", { name: "JSON" })).toHaveAttribute("aria-pressed", "true");
+    const lines = Array.from(document.querySelectorAll("pre code > div"), (d) => d.textContent);
+    expect(lines.join("\n")).toBe(JSON.stringify(SPEC, null, 2));
+    expect(screen.getByRole("button", { name: "Copy JSON" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Copy YAML" })).not.toBeInTheDocument();
+    expect(screen.getByText(POLICY_TAB.redacted)).toBeInTheDocument();
   });
 
   it("Copy YAML writes exactly toYaml(spec), from either view, and confirms it", async () => {

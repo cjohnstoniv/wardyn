@@ -30,11 +30,39 @@ type Deps struct {
 	// (design §2.3).
 	KEK       kek.KEK
 	KEKWrites bool
-	External  External
+	// PlatformKEK is a second key service (Vault Transit under its own key and
+	// Vault role), or nil. It opens boot keys (Kind "platform") and nothing
+	// else. With PlatformKEKWrites it also wraps every boot key, whatever wraps
+	// every other row, and no other key opens a boot key outside `wardynd
+	// -rewrap`: a token that reaches KEK's key never reaches a boot key's wrap.
+	// Read-only, it lets `wardynd -rewrap` move the boot keys off it.
+	PlatformKEK       kek.KEK
+	PlatformKEKWrites bool
+	// AdoptBootKeys is `wardynd -rewrap -rewrap-adopt-boot-keys`, and only
+	// `-rewrap` reads it: the operator attests that no boot key has yet been
+	// adopted onto the platform key, so a boot key under another key (the
+	// credential key service, the age key) may be moved onto it. Without it
+	// `-rewrap` opens a boot key only under the key a boot opens it under.
+	AdoptBootKeys bool
+	External      External
+	// PrincipalKeys is WARDYN_PRINCIPAL_KEYS=on: a Put of a person's credential
+	// seals its data key under that person's principal key (enc_version 3)
+	// instead of the root KEK. Boot keys and the operator namespace never do,
+	// and in store mode a Put is unaffected.
+	PrincipalKeys bool
+	// KeyDomains are the key domains WARDYN_KEY_DOMAINS_FILE declares, each
+	// proven at boot: the KEK a principal key in that domain is wrapped and
+	// opened under. Nil declares none, and every principal key is in the
+	// default domain (the credential KEK).
+	KeyDomains KeyDomains
 	// ExternalTimeout is WARDYN_SECRET_STORE_TIMEOUT, the bound on each call
 	// to External (0: its 5s default); a store-mode write is bounded at 6x it.
 	ExternalTimeout time.Duration
 }
+
+// KeyDomains maps each declared key domain to its KEK. Never holds "default",
+// which is the credential KEK.
+type KeyDomains map[string]kek.KEK
 
 // Constructor builds a Store from Deps.
 type Constructor func(Deps) (Store, error)

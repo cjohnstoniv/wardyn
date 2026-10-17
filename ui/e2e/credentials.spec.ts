@@ -124,6 +124,60 @@ test.describe("Stored credentials (Admin view)", () => {
     expect(body.credentials.some((c) => c.person === person.subject)).toBe(false);
   });
 
+  // Key custody (M5 S2/S3): a security admin sees the declared domains (the e2e backend declares
+  // none, so only default), assigns everyone to a domain, sees the Key domain column say so, and
+  // removes the assignment. A refused write keeps its dialog open with the server's sentence.
+  test("a security admin manages key-domain assignments and sees each person's key domain", async ({ page }) => {
+    await putModelProviders(page.request, [
+      {
+        id: "corp-gateway",
+        name: "Corp gateway",
+        kind: "custom_endpoint",
+        base_url: "https://gateway.corp.example",
+        harnesses: [{ harness: "claude-code", path: "/anthropic" }],
+      },
+    ]);
+    const person = seedPerson();
+    const put = await page.request.put("/api/v1/model-providers/corp-gateway/credential", {
+      headers: person.auth,
+      data: { value: "e2e-key-domain-token-0123456789" },
+    });
+    expect(put.status(), await put.text()).toBe(204);
+
+    await asRealSecurityAdmin(page);
+    await openCredentials(page);
+    const card = page.locator("section").filter({ has: page.getByRole("heading", { name: "Key domains", exact: true }) });
+    await expect(card).toBeVisible();
+    await expect(card.getByRole("row").filter({ hasText: "default" }).first()).toContainText("Proven");
+
+    // Nothing assigned: the person's next key is in default.
+    const personRow = page.getByRole("row").filter({ hasText: person.email });
+    await expect(personRow).toContainText("default · default");
+
+    // A domain the file does not declare is not offered; assign everyone to default.
+    await card.getByRole("button", { name: "Assign a domain" }).click();
+    const dialog = page.getByRole("dialog");
+    await expect(dialog.getByLabel("Domain").locator("option")).toHaveText(["default"]);
+    await dialog.getByRole("radio", { name: "Everyone" }).check();
+    await dialog.getByRole("button", { name: "Assign a domain" }).click();
+    await expect(dialog).toHaveCount(0);
+    const assignmentRow = card.getByRole("row").filter({ hasText: "everyone" });
+    await expect(assignmentRow).toContainText("default");
+    await expect(card.getByText("Submitted for approval")).toHaveCount(0);
+
+    // The column now says why.
+    await page.reload();
+    await expect(page.getByRole("row").filter({ hasText: person.email })).toContainText("default · everyone");
+
+    await card.getByRole("row").filter({ hasText: "everyone" }).getByRole("button", { name: "Remove" }).click();
+    const confirm = page.getByRole("alertdialog");
+    await expect(confirm).toContainText('Remove the domain assignment for "everyone"?');
+    await confirm.getByRole("button", { name: "Remove" }).click();
+    await expect(card.getByRole("row").filter({ hasText: "everyone" })).toHaveCount(0);
+    await page.reload();
+    await expect(page.getByRole("row").filter({ hasText: person.email })).toContainText("default · default");
+  });
+
   test("erasing by email reaches someone not on the list, and refuses an unknown address", async ({ page }) => {
     await putModelProviders(page.request, [
       {
@@ -171,3 +225,70 @@ test.describe("Stored credentials (Admin view)", () => {
     await expect(page.getByText(/This page is part of the admin view/i)).toBeVisible();
   });
 });
+
+// #1477: no one can create a token that acts as another person (the mint route
+// is refused), so the console lists the admin-created tokens that already exist
+// — metadata only — and revokes them. Real backend: legacy rows are seeded the
+// way an older release left them (a minter that is not the owner), and the list
+// and the revoke are the daemon's own GET /tokens?minted_for_others=true and
+// DELETE /tokens/{id}.
+test.describe("Tokens an admin created for someone else (Admin view, #1477)", () => {
+  function seedMinted(name: string, minter: string): { email: string; id: string } {
+    const sfx = randomBytes(4).toString("hex");
+    const email = `minted-${sfx}@e2e.wardyn.invalid`;
+    const id = sql(
+      `INSERT INTO api_tokens (id, principal, email, role, user_type, groups, groups_truncated, name, token_sha256, created_at, minted_by)
+       VALUES (gen_random_uuid(), 'e2e-minted-${sfx}', '${email}', 'user', 'standard', '[]'::jsonb, false, '${name}', '${createHash("sha256").update(sfx).digest("hex")}', now(), '${minter}')
+       RETURNING id`,
+    )
+      .split("\n")[0]
+      .trim();
+    return { email, id };
+  }
+
+  test("nothing to list: the empty line and the rule", async ({ page }) => {
+    await openCredentials(page);
+    const section = page.getByRole("region", { name: "Tokens an admin created for someone else" });
+    await expect(section.getByText("No admin has created a token for someone else.")).toBeVisible();
+    await expect(
+      section.getByText("No one can create a token that acts as another person. They sign in and create their own."),
+    ).toBeVisible();
+    await expect(section.getByRole("table")).toHaveCount(0);
+  });
+
+  test("lists a legacy token without its value, and Revoke asks first, then ends it", async ({ page }) => {
+    const t = seedMinted("ci-e2e", "e2e-admin@e2e.wardyn.invalid");
+    await openCredentials(page);
+    const section = page.getByRole("region", { name: "Tokens an admin created for someone else" });
+    const row = section.getByRole("row").filter({ hasText: t.email });
+    await expect(row).toBeVisible();
+    await expect(row).toContainText("ci-e2e");
+    await expect(row).toContainText("e2e-admin@e2e.wardyn.invalid");
+    await expect(section.getByText("1 still works")).toBeVisible();
+    await expect(page.locator("body")).not.toContainText("wdn_");
+
+    await row.getByRole("button", { name: "Revoke" }).click();
+    const dialog = page.getByRole("alertdialog");
+    await expect(dialog.getByText(`Revoke ci-e2e for ${t.email}?`)).toBeVisible();
+    await expect(dialog.getByText(`It stops working now. ${t.email} can create their own after signing in.`)).toBeVisible();
+    expect(sql(`SELECT revoked_at IS NULL FROM api_tokens WHERE id = '${t.id}'`)).toBe("t");
+    await dialog.getByRole("button", { name: "Revoke token" }).click();
+    await expect(page.getByText("Token revoked.")).toBeVisible();
+    await expect(section.getByText("No admin has created a token for someone else.")).toBeVisible();
+    expect(sql(`SELECT revoked_at IS NULL FROM api_tokens WHERE id = '${t.id}'`)).toBe("f");
+  });
+
+  test("a self-minted token is never listed as admin-created", async ({ page }) => {
+    const sfx = randomBytes(4).toString("hex");
+    const email = `selfmint-${sfx}@e2e.wardyn.invalid`;
+    sql(
+      `INSERT INTO api_tokens (id, principal, email, role, user_type, groups, groups_truncated, name, token_sha256, created_at)
+       VALUES (gen_random_uuid(), 'e2e-self-${sfx}', '${email}', 'user', 'standard', '[]'::jsonb, false, 'mine', '${createHash("sha256").update(`self${sfx}`).digest("hex")}', now())`,
+    );
+    await openCredentials(page);
+    const section = page.getByRole("region", { name: "Tokens an admin created for someone else" });
+    await expect(section.getByText("No admin has created a token for someone else.")).toBeVisible();
+    await expect(section.getByText(email)).toHaveCount(0);
+  });
+});
+

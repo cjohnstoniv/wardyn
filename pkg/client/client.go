@@ -16,27 +16,61 @@
 //
 //   - runs (/api/v1/runs):               CreateRun, Preflight, GetRun, ListRuns, ListRunsPage,
 //     ListGrants, ListGrantsPage, KillRun, SynthesizeProfile, GetRecording, RunFiles, RunEvents, RunOutput,
-//     GetRunPolicy
+//     RunSignIn, GetRunPolicy
 //   - approvals (/api/v1/approvals):     ListApprovals, ListApprovalsPage, Approve, Deny
 //   - policies (/api/v1/policies):       CreatePolicy, GetPolicy, GetDefaultPolicy, ListPolicies,
 //     ListPoliciesPage, UpdatePolicy, DeletePolicy
 //   - workspaces (/api/v1/workspaces):   CreateWorkspace, GetWorkspace, ListWorkspaces,
-//     ListWorkspacesPage, UpdateWorkspace, DeleteWorkspace, ScanWorkspace, RecordWorkspaceTask
+//     ListWorkspacesPage, UpdateWorkspace, DeleteWorkspace, ScanWorkspace, RecordWorkspaceTask,
+//     GetWorkspaceBuild, BuildWorkspace
 //   - sources (/api/v1/sources):         ListSources, CreateSource, GetSource, ScanSource, DeleteSource
-//   - audit (/api/v1/audit):             AuditEvents, AuditEventsPage, RecentAuditEvents
+//   - audit (/api/v1/audit):             AuditEvents, AuditEventsPage, RecentAuditEvents,
+//     ExportAuditPartition, AuditRetention, DropAuditPartition
 //   - secrets (/api/v1/secrets):         ListSecrets, ListSecretsPage, ListSecretsScoped,
-//     ListSecretsScopedPage, SetSecret, DeleteSecret
-//   - site-config (/api/v1/site-config): GetSiteConfig, PutSiteConfig
-//   - drives (/api/v1/drives):           GetDrives, ApplyDrives
+//     ListSecretsScopedPage, SetSecret, DeleteSecret, ListMySecrets, ListMySecretsPage,
+//     SetMySecret, DeleteMySecret
+//   - shared-secrets (/api/v1/shared-secrets): ListSharedSecrets, ListSharedSecretsPage,
+//     SetSharedSecret, DeleteSharedSecret
+//   - site-config (/api/v1/site-config): GetSiteConfig, PutSiteConfig, PutSiteConfigResult
+//   - model-providers (/api/v1/model-providers): GetModelProviders — the read only (admin); the PUT and the per-provider
+//     sign-in and credential doors are NOT wrapped
+//   - drives (/api/v1/drives):           GetDrives, ApplyDrives, ApplyDrivesResult, and people's own
+//     drives: ListMemberDrives, DeleteMemberDrive (/api/v1/drives/member, super admin) and the caller's
+//     CreateMyDrive, DeleteMyDrive (/api/v1/me/drives)
 //   - presets (/api/v1/presets):         ListPresets, GetPreset, PutPreset, DeletePreset, ApplyPresets
-//   - governance (/api/v1/governance):   GetGovernance, ApplyGovernance
+//   - templates (/api/v1/templates):     ListTemplates, GetTemplate, SaveTemplate, DeleteTemplate, CopyTemplate,
+//     ImportTemplate — and, on /api/v1/admin/template-group-admins, ListTemplateGroupAdmins, GrantTemplateGroupAdmin,
+//     RevokeTemplateGroupAdmin. The server answers 501 templates_unavailable until the template store lands
+//   - governance (/api/v1/governance):   GetGovernance, PlanGovernance, ApplyGovernance, ApplyGovernanceResult
+//   - governance changes (/api/v1/governance/changes): ListGovernanceChanges, GetGovernanceChange,
+//     ApproveGovernanceChange, RejectGovernanceChange
 //   - setup (/api/v1/setup):             SetupStatus, ConnectManagedSubscription, DisconnectManagedSubscription
 //   - identity (/api/v1/me):             Me — and, on the same prefix, ListSSHKeys/
 //     ListSSHKeysPage/AddSSHKey/DeleteSSHKey (/api/v1/me/ssh-keys). The rest of
 //     /api/v1/me is NOT wrapped: see below.
 //   - health (/healthz):                 Healthz
 //   - sessions (/api/v1/sessions):       RevokeSessions
+//   - runners (/api/v1/runners, /api/v1/me/runners): MintRunnerToken, RegisterRunner, ClaimRunner,
+//     ListRunners, ListRunnersPage, GetRunner, ListMyRunners, GetMyRunner, SetMyRunnerLimits, ListRunnerTokens,
+//     ListRunnerTokensPage, RevokeRunnerToken, GetRunnerSettings, SetRunnersEnabled
+//   - runner pools (/api/v1/runner-pools, /api/v1/runner-pool-defaults; /api/v1/me/runner-pools, /api/v1/me/runner-pool-defaults):
+//     ListRunnerPools, ListRunnerPoolsFor, ListMyRunnerPools, GetRunnerPool, CreateRunnerPool, UpdateRunnerPool, DeleteRunnerPool, CreateMyRunnerPool, UpdateMyRunnerPool, DeleteMyRunnerPool, AddMyRunnerToPool,
+//     RemoveMyRunnerFromPool, GetOrgRunnerPoolDefaults, SetOrgRunnerPoolDefaults, GetMyRunnerPoolDefaults,
+//     SetMyRunnerPoolDefaults, ClearMyRunnerPoolDefaults, AddRunnerPoolRemoteRunner, RemoveRunnerPoolRemoteRunner,
+//     AddMyPoolRemoteRunner, RemoveMyPoolRemoteRunner, ListRunnerPoolMembers, GetRunnerPoolUsePolicy, SetRunnerPoolUsePolicy,
+//     ClearRunnerPoolUsePolicy
+//   - remote-hosted runners (/api/v1/remote-runners, /api/v1/me/remote-runners): ListRemoteRunners, GetRemoteRunner,
+//     UpdateRemoteRunner, SetRemoteRunnerPeoplePolicy, ClearRemoteRunnerPeoplePolicy, ListMyRemoteRunners
 //   - devices (/api/v1/admin/devices):   MintDeviceEnrolmentToken, ListDeviceEnrolmentTokens, RevokeDeviceEnrolmentToken, ListDevices, RevokeDevice
+//   - people (/api/v1/people):           ListPeople, and ErasePerson (a person's retained records, by scope, 0.8.6); the other writes below stay unwrapped
+//   - invitations (/api/v1/invitations, /api/v1/people/{principal}/invitations, /api/v1/me/invitations): CreateInvitation, ListInvitations,
+//     ListPersonInvitations, ListPersonInvitationsPage, ListMyInvitations, RevokeInvitation, ClaimInvitation (a signed-in session only)
+//   - service identities (/api/v1/service-identities, /api/v1/me/service-identities): CreateServiceIdentity, ListServiceIdentities,
+//     ListServiceIdentitiesPage, GetServiceIdentity, UpdateServiceIdentity, RetireServiceIdentity, ListMyServiceIdentities, and the
+//     sponsor's token routes MintServiceToken (a signed-in session only), ListServiceTokens, ListServiceTokensPage, RevokeServiceToken;
+//     with MoveToken (POST /api/v1/tokens/{id}/move)
+//   - components (/api/v1/components):   ListComponents, PutComponent, DeleteComponent (the organisation's, admin) — and, on
+//     /api/v1/me/components, the caller's own: MyComponents, SaveMyComponent, UpdateMyComponent, DeleteMyComponent
 //
 // NOT covered — drive these with the CLI or raw HTTP. This half is a CENSUS of
 // every registered route family the SDK does not wrap, not a list of
@@ -45,18 +79,21 @@
 // list of what it wraps and what it does not" was exact about neither.
 //
 //   - /api/v1/user-types     — the org's user types (0.8)
+//   - /api/v1/key-domains    — which declared key domain wraps a person's next principal key (0.8.6). Security tier
+//   - /api/v1/approval-notify — each approval notification channel's delivery health (0.8.6).
+//     Security tier, and read by the console's Settings card rather than by tooling
 //   - /api/v1/permissions    — capability grants and per-kind enforcement (0.7)
 //   - /api/v1/access         — directory search and group->role mappings (0.7)
-//   - /api/v1/tokens         — admin-tier API tokens (0.7); /api/v1/me/tokens is the
+//   - /api/v1/tokens         — admin-tier API tokens (0.7), but for MoveToken (0.9); /api/v1/me/tokens is the
 //     self-service half, also unwrapped
-//   - /api/v1/people         — erasing a person's stored credentials (0.8, offboarding)
+//   - /api/v1/people         — the writes: creating a person, erasing their stored credentials (0.8, offboarding); its invitations are wrapped above
+//   - /api/v1/scim           — the Settings SCIM card's read-only status (0.8.6); the SCIM server itself is /scim/v2
 //   - /api/v1/workspace-providers — the org's git-provider policy (allowed base
 //     URLs, credential lanes) and storage ceilings (0.7.2). Admin-only, and
 //     authored through the console's providers page rather than by tooling
 //   - /api/v1/agent-providers — the org's agent roster: which coding agents this
 //     deployment offers, each one's model-access lane, and whether that
 //     credential is shared or per-person (0.7.2). Admin-only, same page
-//   - /api/v1/model-providers — the org's model-provider records (0.8). Admin-only
 //   - /api/v1/integrations   — integration definitions (0.7)
 //   - /api/v1/base-images    — the base-image library (0.7)
 //   - /api/v1/admin          — operator maintenance (the sandbox sweep; devices is wrapped)
@@ -64,7 +101,7 @@
 //   - /api/v1/internal       — the AGENT-facing plane (mint, decisions, groundtruth,
 //     scan-results, token renew). Deliberately unwrapped: it is the sandbox's
 //     surface, not an operator's.
-//   - /api/v1/me             — beyond Me and ssh-keys: capabilities, run-layout, tokens
+//   - /api/v1/me             — beyond Me, ssh-keys and components: capabilities, run-layout, tokens
 //   - /api/v1/auth, /auth/login, /auth/callback — the browser SSO leg, plus the
 //     harness-login device flow. A redirect dance, not an API call.
 //   - /api/v1/scm            — the per-user Azure DevOps sign-in (0.7.10): a
@@ -72,8 +109,17 @@
 //     reason the SSO leg above is — it is a browser redirect dance whose whole
 //     point is a human at a keyboard consenting, and it binds to a browser
 //     session an SDK caller does not have.
+//   - /api/v1/model-providers-entra — the per-row Azure Foundry sign-in door (0.8.6):
+//     a browser redirect dance whose callback is the /api/v1/scm one above.
+//     Unwrapped for the same reason.
+//   - /api/v1/components-entra — the Azure CLI component's sign-in door: the
+//     same redirect dance and the same callback. Unwrapped for the same reason.
 //   - the attach lane under /api/v1/runs/{id} — attach, attach/ticket,
 //     attach/holder, attach/takeover, resources. A WebSocket and its ticket.
+//   - /scim/v2/Users, /scim/v2/Users/{id}, /scim/v2/Groups, /scim/v2/Groups/{id} — the
+//     identity provider's SCIM connector (0.8.6): suspend and reactivate a person, and
+//     remove one from a group. Authenticated by its own bearer
+//     (WARDYN_SCIM_TOKEN), never by an operator's credential, so no SDK caller holds it.
 //   - /api/v1/branding       — console branding (#1125): the sign-in page's anonymous
 //     read and logo, and the Admin view Branding card's save; a console surface
 //   - /metrics, /readyz      — the operator's scrape and readiness probes
@@ -166,8 +212,8 @@ func appendListOpts(path string, opts []ListOpts) string {
 }
 
 // Client is the Wardyn SDK client. Construct it with New or by filling the
-// fields directly. BaseURL and Token are required; HTTPClient defaults to
-// http.DefaultClient when nil.
+// fields directly. BaseURL and Token are required; HTTPClient defaults to a
+// client that never follows a redirect when nil.
 //
 // All methods accept a context; the context controls cancellation and deadline
 // for the underlying HTTP call.
@@ -179,7 +225,12 @@ type Client struct {
 	// Token is the admin bearer token configured in wardynd (AdminToken).
 	Token string
 
-	// HTTPClient, when non-nil, is used instead of http.DefaultClient.
+	// HTTPClient, when non-nil, is used instead of the default client, and its
+	// redirect policy is YOURS: the default returns a 3xx as an *APIError
+	// rather than following it, but a client you supply is used as it is.
+	// Following a redirect can replay a request body (a secret value) and the
+	// Authorization bearer at wherever Location points, so a caller who sets
+	// this should set a CheckRedirect func that returns http.ErrUseLastResponse.
 	HTTPClient *http.Client
 
 	// Principal, when non-empty, is sent as the X-Wardyn-Principal header — a
@@ -195,69 +246,6 @@ type Client struct {
 // New returns a Client configured with baseURL and token.
 func New(baseURL, token string) *Client {
 	return &Client{BaseURL: baseURL, Token: token}
-}
-
-// GetRun fetches a single AgentRun by its UUID.
-// Returns 404/APIError when the run does not exist.
-func (c *Client) GetRun(ctx context.Context, id uuid.UUID) (types.AgentRun, error) {
-	var out types.AgentRun
-	err := c.do(ctx, http.MethodGet, "/api/v1/runs/"+id.String(), nil, &out)
-	return out, err
-}
-
-// ListRunsPage is ListRuns plus the server's X-Wardyn-Truncated signal:
-// truncated=true means a further page exists and this one is not the whole
-// list. See the package doc's "# Pagination" for why every list family answers
-// this and not just the audit trail.
-func (c *Client) ListRunsPage(ctx context.Context, opts ...ListOpts) (runs []types.AgentRun, truncated bool, err error) {
-	var hdr http.Header
-	err = c.do(ctx, http.MethodGet, appendListOpts("/api/v1/runs", opts), nil, &runs, &hdr)
-	return runs, hdr.Get("X-Wardyn-Truncated") == "true", err
-}
-
-// ListRuns returns runs in reverse creation order. Pass a ListOpts to page.
-// Prefer ListRunsPage, which also returns the server's truncation signal — this
-// form cannot tell "this is everything" from "this is page 1 of more".
-func (c *Client) ListRuns(ctx context.Context, opts ...ListOpts) ([]types.AgentRun, error) {
-	runs, _, err := c.ListRunsPage(ctx, opts...)
-	return runs, err
-}
-
-// ListGrantsPage is ListGrants plus the server's X-Wardyn-Truncated signal:
-// truncated=true means a further page exists and this one is not the whole
-// list. See the package doc's "# Pagination".
-// Returns 404/APIError when the run does not exist.
-func (c *Client) ListGrantsPage(ctx context.Context, runID uuid.UUID, opts ...ListOpts) (grants []types.CredentialGrant, truncated bool, err error) {
-	var hdr http.Header
-	err = c.do(ctx, http.MethodGet, appendListOpts("/api/v1/runs/"+runID.String()+"/grants", opts), nil, &grants, &hdr)
-	return grants, hdr.Get("X-Wardyn-Truncated") == "true", err
-}
-
-// ListGrants returns the credential-grant eligibility records for a run.
-// These are eligibility records (what the run MAY request), not issued
-// credentials — some may never be minted. Pass a ListOpts to page; prefer
-// ListGrantsPage, which also returns the server's truncation signal.
-// Returns 404/APIError when the run does not exist.
-func (c *Client) ListGrants(ctx context.Context, runID uuid.UUID, opts ...ListOpts) ([]types.CredentialGrant, error) {
-	grants, _, err := c.ListGrantsPage(ctx, runID, opts...)
-	return grants, err
-}
-
-// KillRunResponse is the body returned by POST /api/v1/runs/{id}/kill.
-type KillRunResponse struct {
-	ID    uuid.UUID      `json:"id"`
-	State types.RunState `json:"state"`
-}
-
-// KillRun initiates the kill sequence for a run: durable state transition
-// (compare-and-swap to KILLED) first, then sandbox teardown, identity
-// revocation, and credential revocation.
-// Returns 202/Accepted with the final state on success.
-// Returns 404/APIError when the run does not exist.
-func (c *Client) KillRun(ctx context.Context, id uuid.UUID) (KillRunResponse, error) {
-	var out KillRunResponse
-	err := c.do(ctx, http.MethodPost, "/api/v1/runs/"+id.String()+"/kill", nil, &out)
-	return out, err
 }
 
 // ListApprovals returns approval requests filtered by state and (optionally)
@@ -489,60 +477,65 @@ func (c *Client) DeleteSecret(ctx context.Context, name string) error {
 	return c.do(ctx, http.MethodDelete, path, nil, nil)
 }
 
-// ProfileResult is the decoded POST /api/v1/runs/{id}/profile/synthesize reply (Recording
-// Mode): the synthesized least-privilege sandbox profile plus the observations
-// it was built from. Only the fields callers render/save are modeled — the full
-// server response (profileResponse) additionally carries a per-item risk
-// breakdown the SDK does not surface.
-type ProfileResult struct {
-	Proposed struct {
-		InlinePolicy RunPolicySpec `json:"inline_policy"`
-	} `json:"proposed"`
-	OverallRisk  string `json:"overall_risk"`
-	Observations struct {
-		Domains []struct {
-			Host    string   `json:"host"`
-			Methods []string `json:"methods"`
-		} `json:"domains"`
-		Anomalies []string `json:"anomalies"`
-	} `json:"observations"`
-	Warnings []string `json:"warnings"`
+// ListMySecretsPage lists the names in the caller's OWN namespace, whatever their role (never
+// values; reserved platform keys excluded): GET /api/v1/me/secrets, which responds {"names":[...]}.
+// truncated=true means a further page exists. It needs a signed-in person (403
+// secret_personal_needs_person for the admin token).
+func (c *Client) ListMySecretsPage(ctx context.Context, opts ...ListOpts) (names []string, truncated bool, err error) {
+	return c.listNamespacePage(ctx, "/api/v1/me/secrets", opts)
 }
 
-// SynthesizeProfile runs Recording Mode synthesis for a run: from its already-
-// captured audit / egress / ground-truth events the server proposes a tightened,
-// reusable RunPolicy ("sandbox profile"). ADVISORY and READ-ONLY — it mints
-// nothing and persists no policy (save the proposal via CreatePolicy).
-// POST /api/v1/runs/{id}/profile/synthesize (renamed from /profile in 0.8 —
-// docs/sdk.md "Renamed in 0.8" — the old path still answers, as a chi alias,
-// for one minor). Returns 404 when the run does not exist.
-func (c *Client) SynthesizeProfile(ctx context.Context, runID uuid.UUID) (ProfileResult, error) {
-	var out ProfileResult
-	err := c.do(ctx, http.MethodPost, "/api/v1/runs/"+runID.String()+"/profile/synthesize", nil, &out)
-	return out, err
+// ListMySecrets is ListMySecretsPage without the truncation signal.
+func (c *Client) ListMySecrets(ctx context.Context, opts ...ListOpts) ([]string, error) {
+	names, _, err := c.ListMySecretsPage(ctx, opts...)
+	return names, err
 }
 
-// RecordTaskResult is the decoded POST /api/v1/workspaces/{id}/record reply: the
-// launched open-egress recording run plus the resolved session key/mode.
-type RecordTaskResult struct {
-	RecordRunID string   `json:"record_run_id"`
-	TaskKey     string   `json:"task_key"`
-	Mode        string   `json:"mode"`
-	Detail      string   `json:"detail"`
-	Warnings    []string `json:"warnings"`
+// ListSharedSecretsPage lists the names of the shared service secrets (never values; reserved
+// platform keys excluded): GET /api/v1/shared-secrets, which responds {"names":[...]}. Operator tier
+// only (403 otherwise). truncated=true means a further page exists.
+func (c *Client) ListSharedSecretsPage(ctx context.Context, opts ...ListOpts) (names []string, truncated bool, err error) {
+	return c.listNamespacePage(ctx, "/api/v1/shared-secrets", opts)
 }
 
-// RecordWorkspaceTask launches a named open (allow-all egress) recording session
-// for a workspace via the import pipeline — the operator attaches, does the real
-// activity, and stops the run to capture what it actually used.
-// POST /api/v1/workspaces/{id}/record with body {"task_key": name}. Returns 202
-// with the launched run; 503 when no runner is wired; 409 while another import
-// step is live.
-func (c *Client) RecordWorkspaceTask(ctx context.Context, wsID uuid.UUID, taskKey string) (RecordTaskResult, error) {
-	var out RecordTaskResult
-	err := c.do(ctx, http.MethodPost, "/api/v1/workspaces/"+wsID.String()+"/record",
-		map[string]string{"task_key": taskKey}, &out)
-	return out, err
+// ListSharedSecrets is ListSharedSecretsPage without the truncation signal.
+func (c *Client) ListSharedSecrets(ctx context.Context, opts ...ListOpts) ([]string, error) {
+	names, _, err := c.ListSharedSecretsPage(ctx, opts...)
+	return names, err
+}
+
+func (c *Client) listNamespacePage(ctx context.Context, path string, opts []ListOpts) (names []string, truncated bool, err error) {
+	var out struct {
+		Names []string `json:"names"`
+	}
+	var hdr http.Header
+	if err = c.do(ctx, http.MethodGet, appendListOpts(path, opts), nil, &out, &hdr); err != nil {
+		return nil, false, err
+	}
+	return out.Names, hdr.Get("X-Wardyn-Truncated") == "true", nil
+}
+
+// SetMySecret stores the caller's OWN secret, whatever their role: PUT /api/v1/me/secrets/{name}.
+// Unlike SetSecret, where an admin's write lands in the shared namespace, this never does. It needs a
+// signed-in person (403 secret_personal_needs_person for the admin token).
+func (c *Client) SetMySecret(ctx context.Context, name, value string) error {
+	return c.do(ctx, http.MethodPut, "/api/v1/me/secrets/"+url.PathEscape(name), map[string]string{"value": value}, nil)
+}
+
+// DeleteMySecret removes the caller's own secret. DELETE /api/v1/me/secrets/{name}.
+func (c *Client) DeleteMySecret(ctx context.Context, name string) error {
+	return c.do(ctx, http.MethodDelete, "/api/v1/me/secrets/"+url.PathEscape(name), nil, nil)
+}
+
+// SetSharedSecret stores a shared service secret in the operator namespace every person's run may
+// fall back to: PUT /api/v1/shared-secrets/{name}. Operator tier only (403 otherwise).
+func (c *Client) SetSharedSecret(ctx context.Context, name, value string) error {
+	return c.do(ctx, http.MethodPut, "/api/v1/shared-secrets/"+url.PathEscape(name), map[string]string{"value": value}, nil)
+}
+
+// DeleteSharedSecret removes a shared service secret. DELETE /api/v1/shared-secrets/{name}.
+func (c *Client) DeleteSharedSecret(ctx context.Context, name string) error {
+	return c.do(ctx, http.MethodDelete, "/api/v1/shared-secrets/"+url.PathEscape(name), nil, nil)
 }
 
 // maxErrBody caps an ERROR response body for diagnostic display so a hostile or
@@ -550,6 +543,10 @@ func (c *Client) RecordWorkspaceTask(ctx context.Context, wsID uuid.UUID, taskKe
 // bodies ONLY — applying it to success bodies truncated any response > 2 KiB and
 // broke JSON decoding (the original finding).
 const maxErrBody = 2048
+
+// maxPendingErrBody bounds the error body doPending reads: a 409 governance_change_pending carries
+// the held change, payload and diff included, which can pass maxErrBody.
+const maxPendingErrBody = 1 << 20
 
 // newRequest builds an authenticated request against the control plane. Every
 // method routes through it, so the auth/principal headers have ONE owner (the
@@ -579,11 +576,20 @@ func (c *Client) newRequest(ctx context.Context, method, path string, body io.Re
 	return req, nil
 }
 
+// noRedirect returns the 3xx itself instead of following it. Following would
+// turn a write into a GET of wherever Location points (so the call "succeeds"
+// against a login page) and replay the body and bearer there.
+func noRedirect(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+
+// defaultHTTPClient is used when Client.HTTPClient is nil. It is a package-level
+// client of its own: http.DefaultClient is process-global and is never mutated.
+var defaultHTTPClient = &http.Client{CheckRedirect: noRedirect}
+
 func (c *Client) httpClient() *http.Client {
 	if c.HTTPClient != nil {
 		return c.HTTPClient
 	}
-	return http.DefaultClient
+	return defaultHTTPClient
 }
 
 // streamTransport bounds everything up to and INCLUDING the response headers
@@ -621,87 +627,56 @@ func (c *Client) streamClient() *http.Client {
 	return &cp
 }
 
-// castKeySep separates the run id from a session suffix in a composite cast
-// key — a deliberate copy of internal/recording's unexported castSep, not an
-// import of it: pkg/client is docs/sdk.md's "one non-stdlib dependency"
-// (uuid), and internal/recording (chi, pgx) is a whole-module-graph import
-// for two lines of string-joining logic no external consumer should pay for.
-const castKeySep = "~"
-
-// castKey mirrors internal/recording.CastKey (see its own doc comment) — same
-// rule, kept in sync by hand, not imported (see castKeySep above).
-func castKey(runID, suffix string) string {
-	if suffix == "" {
-		return runID
-	}
-	return runID + castKeySep + suffix
-}
-
-// GetRecording streams a run's terminal recording as raw asciicast bytes (the
-// .cast a player consumes). The caller MUST Close the returned reader.
-// GET /api/v1/runs/{id}/recording/{key} — the id really does appear twice: the
-// route is mounted per-run and its handler takes the recording's own CAST KEY,
-// which defaults to the bare run id (a batch run's single recording) when
-// session is omitted — existing zero-arg callers are unaffected. An
-// INTERACTIVE run can carry multiple recordings, one per attach session, each
-// keyed "<runID>~<session>" (castKey above, mirroring internal/recording's own
-// doc comment); pass that session id as the optional session argument to fetch
-// one of those instead of the run's own bare-id cast. At most one value is
-// meaningful; variadic only to keep it optional without a second method name.
-// Returns 404/APIError when the run/session has no recording.
-func (c *Client) GetRecording(ctx context.Context, runID uuid.UUID, session ...string) (io.ReadCloser, error) {
-	suffix := ""
-	if len(session) > 0 {
-		suffix = session[0]
-	}
-	key := castKey(runID.String(), suffix)
-	path := "/api/v1/runs/" + runID.String() + "/recording/" + url.PathEscape(key)
-	req, err := c.newRequest(ctx, http.MethodGet, path, nil, false)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Accept", "application/x-asciicast")
-	resp, err := c.streamClient().Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("http: %w", err)
-	}
-	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		defer resp.Body.Close()
-		raw, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrBody))
-		return nil, NewAPIError(resp.StatusCode, raw)
-	}
-	return resp.Body, nil
-}
-
 // do executes one HTTP request against the control plane.
 //
 // body (if non-nil) is JSON-encoded as the request body.
 // out (if non-nil) is JSON-decoded from a 2xx response body.
 // Any non-2xx response is returned as *APIError.
+// A 202 whose body carries a pending_change (a governance write held for a
+// second approver) is returned as *PendingApprovalError and never decoded into
+// out: the write has NOT been applied, and out would otherwise read as a
+// zero-value success.
 // headerOut, if a non-nil *http.Header is passed (at most one — variadic only
 // to keep this optional for every existing zero-arg call site), receives the
 // raw response header on return, success or error alike — the sole mechanism
 // AuditEventsPage uses to surface X-Wardyn-Truncated to a caller.
 func (c *Client) do(ctx context.Context, method, path string, body, out any, headerOut ...*http.Header) error {
+	pending, err := c.doPending(ctx, method, path, body, out, headerOut...)
+	if err != nil {
+		return err
+	}
+	if pending != nil {
+		return &PendingApprovalError{Changes: []GovernanceChange{*pending}}
+	}
+	return nil
+}
+
+// doPending is do for a caller that handles a pending change itself: it returns
+// the pending change (out untouched) when the server answered 202 with a
+// pending_change body, or a 409 governance_change_pending carrying the held
+// change, and (nil, nil) for every other success. Detection keys
+// on the body's pending_change field, never on the 202 alone: KillRun,
+// RecordWorkspaceTask and the scan routes also answer 202 and decode into out.
+func (c *Client) doPending(ctx context.Context, method, path string, body, out any, headerOut ...*http.Header) (*GovernanceChange, error) {
 	// Encode the request body.
 	var reqBody io.Reader
 	if body != nil {
 		b, err := json.Marshal(body)
 		if err != nil {
-			return fmt.Errorf("marshal request body: %w", err)
+			return nil, fmt.Errorf("marshal request body: %w", err)
 		}
 		reqBody = bytes.NewReader(b)
 	}
 
 	req, err := c.newRequest(ctx, method, path, reqBody, body != nil)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	req.Header.Set("Accept", "application/json")
 
 	resp, err := c.httpClient().Do(req)
 	if err != nil {
-		return fmt.Errorf("http: %w", err)
+		return nil, fmt.Errorf("http: %w", err)
 	}
 	defer resp.Body.Close()
 	if len(headerOut) > 0 && headerOut[0] != nil {
@@ -709,18 +684,55 @@ func (c *Client) do(ctx context.Context, method, path string, body, out any, hea
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		raw, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrBody))
-		return NewAPIError(resp.StatusCode, raw)
+		// Read past maxErrBody so a held change's body parses whole; Body is capped after.
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, maxPendingErrBody))
+		apiErr := NewAPIError(resp.StatusCode, raw)
+		if len(apiErr.Body) > maxErrBody {
+			apiErr.Body = apiErr.Body[:maxErrBody]
+		}
+		// A 409 governance_change_pending that says the held change is this very proposal is
+		// still-pending, the same result the first proposal got, so a repeat apply carries on. A
+		// different held change stays the refusal: the proposal itself was never stored.
+		if resp.StatusCode == http.StatusConflict && apiErr.Reason == "governance_change_pending" {
+			var env struct {
+				PendingChange        *GovernanceChange `json:"pending_change"`
+				PendingChangeMatches bool              `json:"pending_change_matches"`
+			}
+			if json.Unmarshal(raw, &env) == nil && env.PendingChange != nil && env.PendingChangeMatches {
+				return env.PendingChange, nil
+			}
+		}
+		return nil, apiErr
 	}
 
 	// Success path: decode the FULL body (no 2 KiB cap). Streaming via
 	// json.NewDecoder avoids buffering the whole body up front; an empty body
 	// (e.g. 204) leaves out untouched and returns nil. io.EOF is the normal
 	// "no body" signal and is not an error here.
+	var src io.Reader = resp.Body
+	if resp.StatusCode == http.StatusAccepted {
+		// Only a 202 can be a pending change, and the probe needs the whole
+		// body, so this one status is buffered; its bodies are small.
+		raw, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return nil, fmt.Errorf("read response: %w", err)
+		}
+		var probe struct {
+			PendingChange json.RawMessage `json:"pending_change"`
+		}
+		if json.Unmarshal(raw, &probe) == nil && len(probe.PendingChange) > 0 && string(probe.PendingChange) != "null" {
+			var change GovernanceChange
+			if err := json.Unmarshal(probe.PendingChange, &change); err != nil {
+				return nil, fmt.Errorf("decode pending change: %w", err)
+			}
+			return &change, nil
+		}
+		src = bytes.NewReader(raw)
+	}
 	if out != nil {
-		if err := json.NewDecoder(resp.Body).Decode(out); err != nil && err != io.EOF {
-			return fmt.Errorf("decode response: %w", err)
+		if err := json.NewDecoder(src).Decode(out); err != nil && err != io.EOF {
+			return nil, fmt.Errorf("decode response: %w", err)
 		}
 	}
-	return nil
+	return nil, nil
 }

@@ -6,7 +6,6 @@ package main
 import (
 	"context"
 	"crypto/ed25519"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"maps"
@@ -16,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/cjohnstoniv/wardyn/internal/api"
@@ -31,6 +31,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/runner/substrate"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
+	"github.com/cjohnstoniv/wardyn/internal/secretstore/keydomain"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/internal/workspacescan"
@@ -98,6 +99,10 @@ func connectAndMigrate(rootCtx context.Context, dsn, migrateDSN string, connectT
 		// refusal rules: a chain that demonstrably does not chain refuses the
 		// boot; a canary that could not RUN (chain lock busy, statement
 		// cancelled) reports at ERROR and lets it continue.
+		if aerr := verifyAuditAppendPosture(connectCtx, rootCtx, pool); aerr != nil {
+			pool.Close()
+			return nil, aerr
+		}
 		if cerr := db.AuditChainCanary(connectCtx, pool); cerr != nil {
 			pool.Close()
 			return nil, fmt.Errorf("verify the audit chain on the app role: %w", cerr)
@@ -128,7 +133,44 @@ func connectAndMigrate(rootCtx context.Context, dsn, migrateDSN string, connectT
 		return nil, fmt.Errorf("migrate: %w", err)
 	}
 	slog.InfoContext(rootCtx, "wardynd: NOTICE single-DSN mode — wardynd's DB role owns audit_events, so DROP TRIGGER / ALTER TABLE ... DISABLE TRIGGER / DROP TABLE bypass the append-only guard. Set WARDYN_PG_MIGRATE_DSN to a separate owner/migrator role (wardynd then connects as a non-owner app role) for DDL protection.")
+	if aerr := verifyAuditAppendPosture(connectCtx, rootCtx, pool); aerr != nil {
+		pool.Close()
+		return nil, aerr
+	}
 	return pool, nil
+}
+
+// verifyAuditAppendPosture is the boot check for the one write path audit_events has had since 0111.
+// Every audit row is appended by the database function audit_append, so a serving role that cannot
+// EXECUTE it would start clean and then lose every audit write to the spool and refuse every
+// credential mint: that refuses the boot, naming the GRANT. The other two findings are postures to
+// report, not defects to refuse over: a role that can still INSERT directly (always true of the
+// owner, so of every single-DSN install), and an audit function any role may execute.
+func verifyAuditAppendPosture(connectCtx, rootCtx context.Context, pool *pgxpool.Pool) error {
+	p, err := db.AuditAppendPostureOf(connectCtx, pool)
+	if err != nil {
+		return fmt.Errorf("verify the audit append privileges: %w", err)
+	}
+	if !p.CanAppend {
+		return fmt.Errorf("the app role %q (the role in WARDYN_PG_DSN) cannot EXECUTE audit_append, the only function that appends to audit_events, so no "+
+			"audit row could be written and every credential mint would be refused; as the migrator/owner role run: "+
+			"GRANT EXECUTE ON FUNCTION audit_append(uuid, timestamptz, uuid, text, text, text, text, text, text, jsonb), "+
+			"audit_ensure_partitions(integer), audit_partition_digest(text), audit_retention_drop(text, text, text, text), "+
+			"audit_retention_set_policy(integer), audit_retention_partitions(text, boolean), audit_retention_window() TO %s "+
+			"(and ALTER DEFAULT PRIVILEGES ... GRANT EXECUTE ON FUNCTIONS TO %s "+
+			"so later releases' functions are callable too)", p.Role, pgx.Identifier{p.Role}.Sanitize(), pgx.Identifier{p.Role}.Sanitize())
+	}
+	if p.DirectInsert {
+		slog.InfoContext(rootCtx, "wardynd: NOTICE app role can INSERT directly into audit_events (it owns the table, or holds INSERT). "+
+			"The chain trigger refuses a row audit_append did not allocate, which binds a well-behaved or mistaken writer, not a hostile owner; "+
+			"to take direct INSERT away use WARDYN_PG_MIGRATE_DSN with a non-owner app role that holds SELECT on audit_events and EXECUTE on audit_append.",
+			slog.String("role", p.Role))
+	}
+	if len(p.PublicExecute) > 0 {
+		slog.WarnContext(rootCtx, "wardynd: every database role may EXECUTE an audit function (the PUBLIC default); fix with REVOKE ALL ON FUNCTION <name> FROM PUBLIC for each function named here, then GRANT EXECUTE to the app role",
+			slog.Any("functions", p.PublicExecute))
+	}
+	return nil
 }
 
 // warnAllowUnknownMigrations is the #1050 follow-up: WARN whenever the
@@ -148,8 +190,10 @@ func warnAllowUnknownMigrations(allow bool) {
 }
 
 // buildAuditChain assembles the audit recorder chain:
-// audit.DelegationRecorder → maskingRecorder → spoolingRecorder →
-// (fanoutRecorder →) store.Recorder.
+// audit.DelegationRecorder → audit.DryRunRecorder → (audit.DenialCoalescer →)
+// maskingRecorder → sealingRecorder → spoolingRecorder → (fanoutRecorder →) store.Recorder.
+// The coalescer is wired only when the caller passes one (serve): the rewrap,
+// rekey and migrate_secrets commands run no preflight.
 //
 // The Postgres store is the source of truth. When audit sinks are configured,
 // every persisted event ALSO fans out to file/webhook/syslog; the store write is
@@ -161,24 +205,41 @@ func warnAllowUnknownMigrations(allow bool) {
 // log-only, never blocking startup. Extracted verbatim from run(); the returned
 // *sinks.Fanout (nil when unconfigured) must be Closed on shutdown.
 //
+// Sealing sits below masking and above the spool (WARDYN_AUDIT_SEAL): the row
+// hash, the spool, the store and every sink see a personal field only as
+// ciphertext. seal is armed with its keys once the secret store exists.
+//
 // It also returns the *api.AuditSpool and the RAW store.Recorder so the API
 // server can start the background drain that replays spooled events back into the
 // store once it recovers. The drain MUST target the raw store recorder —
 // NOT the returned masking/spooling chain — or a replay that hit a still-down
 // store would re-spool (and re-enter the spool lock) instead of retrying later.
-func buildAuditChain(rootCtx context.Context, sinksJSON, spoolPath, source string, pool *pgxpool.Pool, maskReg *secretmask.Registry) (audit.Recorder, *sinks.Fanout, *api.AuditSpool, audit.Recorder, error) {
+// That recorder is wrapped in sealingRecorder's replay mode, which re-seals the
+// rows that waited under the pending key before the store sees them, and sends
+// each of those rows to the sinks once the store has it (it never reached them
+// while it waited).
+// serveChain is what only the serving boot adds to the chain; the maintenance
+// modes (rewrap, rekey, migrate_secrets) pass none.
+type serveChain struct {
+	scope   *maskScope             // labels rows of runs whose mask manifest this process does not hold
+	denials *audit.DenialCoalescer // summarises repeated refused dry runs
+}
+
+func buildAuditChain(rootCtx context.Context, sinksJSON, spoolPath, source string, pool *pgxpool.Pool, maskReg *secretmask.Registry, seal *auditSealSource, serve ...serveChain) (audit.Recorder, *sinks.Fanout, *api.AuditSpool, audit.Recorder, error) {
 	// #10 WARDYN_AUDIT_SOURCE: set once, before any sink is constructed/starts
 	// emitting — see sinks.Source's doc comment. A no-op (empty) is
 	// byte-identical to before this field existed.
 	sinks.Source = strings.TrimSpace(source)
 	storeRec := store.Recorder{Pool: pool}
 	var auditRec audit.Recorder = storeRec
+	var resealed audit.Recorder // nil without sinks: the drain's store write is all there is
 	fan, ferr := buildAuditFanout(rootCtx, sinksJSON)
 	if ferr != nil {
 		return nil, nil, nil, nil, ferr
 	}
 	if fan != nil {
 		auditRec = fanoutRecorder{primary: storeRec, fanout: fan}
+		resealed = landedRecorder{primary: storeRec, fanout: fan}
 		slog.Info("wardynd: audit fanout enabled")
 	}
 	var auditFallback *api.AuditSpool
@@ -194,10 +255,40 @@ func buildAuditChain(rootCtx context.Context, sinksJSON, spoolPath, source strin
 			slog.Info("wardynd: audit fallback spool", slog.String("path", spoolPath))
 		}
 	}
-	masked := maskingRecorder{inner: spoolingRecorder{inner: auditRec, spool: auditFallback}, reg: maskReg}
+	sealed := sealingRecorder{inner: spoolingRecorder{inner: auditRec, spool: auditFallback}, src: seal, spool: auditFallback}
+	masked := maskingRecorder{inner: sealed, reg: maskReg}
+	var coalescer *audit.DenialCoalescer
+	if len(serve) > 0 {
+		masked.scope = serve[0].scope // the serving boot's; maintenance modes label nothing
+		coalescer = serve[0].denials
+	}
 	// Outermost: a row any writer records under a portal's delegated request
-	// names the portal (data.via, #1142) before it is masked, spooled or stored.
-	return audit.DelegationRecorder{Inner: masked}, fan, auditFallback, storeRec, nil
+	// names the portal (data.via, #1142), and one recorded under a preflight
+	// request says it was a dry run (data.dry_run), before it is masked, sealed,
+	// spooled or stored. The coalescer sits above masking so its summary rows are
+	// masked like any other.
+	var head audit.Recorder = masked
+	if coalescer != nil {
+		coalescer.Inner = masked
+		head = coalescer
+	}
+	return audit.DelegationRecorder{Inner: audit.DryRunRecorder{Inner: head}}, fan, auditFallback, sealingRecorder{inner: storeRec, src: seal, replay: true, resealed: resealed}, nil
+}
+
+// substrateDeps is the registration Deps every substrate constructor receives,
+// split out of buildRunnerFromFlags so a test can pin it (Record in particular)
+// without registering a spy substrate in the process-global registry.
+func substrateDeps(f *bootFlags, confRuntimes map[types.ConfinementClass]string, driveHostRoots []string) substrate.Deps {
+	return substrate.Deps{
+		ProxyImage:          *f.proxyImage,
+		DriveProbeImage:     *f.driveProbeImage,
+		ConfinementRuntimes: confRuntimes,
+		UserDriveHostRoots:  driveHostRoots,
+		// #1113: follow the resolved recording-store selection (WARDYN_RECORDING_STORE)
+		// rather than letting the substrate hardcode Record — "off" must mean no
+		// wardyn-rec wrap and no brokered:recording upload attempt, on every substrate.
+		Record: substrate.RecordEnabled(*f.recordingSel),
+	}
 }
 
 // buildRunnerFromFlags resolves the optional sandbox runner: "none" (nil runner,
@@ -248,16 +339,7 @@ func buildRunnerFromFlags(f *bootFlags, refs orchestrator.RefStore, driveHostRoo
 		}
 		return nil, "none", nil
 	}
-	sub, err := substrate.New(*f.runnerSel, substrate.Deps{
-		ProxyImage:          *f.proxyImage,
-		DriveProbeImage:     *f.driveProbeImage,
-		ConfinementRuntimes: confRuntimes,
-		UserDriveHostRoots:  driveHostRoots,
-		// #1113: follow the resolved recording-store selection (WARDYN_RECORDING_STORE)
-		// rather than letting the substrate hardcode Record — "off" must mean no
-		// wardyn-rec wrap and no brokered:recording upload attempt, on every substrate.
-		Record: substrate.RecordEnabled(*f.recordingSel),
-	})
+	sub, err := substrate.New(*f.runnerSel, substrateDeps(f, confRuntimes, driveHostRoots))
 	if err != nil {
 		// Discriminate WHY substrate.New failed before printing the
 		// same headline for both. A typo'd -runner or a substrate not compiled
@@ -387,17 +469,20 @@ func buildOptionalFeatures(rootCtx, bootCtx context.Context, f *bootFlags, pool 
 		// background ctx per its doc), so an unreachable/stalled IdP must fail
 		// boot loudly inside the boot budget instead of hanging wardynd forever.
 		authn, err := oidc.New(bootCtx, oidc.Config{
-			IssuerURL:           *f.oidcIssuer,
-			InternalIssuerURL:   *f.oidcInternalIss,
-			ClientID:            *f.oidcClientID,
-			ClientSecret:        *f.oidcClientSecret,
-			RedirectURL:         *f.oidcRedirectURL,
-			BasePath:            *f.basePath,
-			AllowedEmailDomains: splitCSV(*f.oidcEmailDomains),
-			ExtraScopes:         splitCSV(*f.oidcExtraScopes),
-			SecureCookies:       secureCookies,
-			RoleMap:             roleMap,
-			DefaultRole:         defaultRole,
+			IssuerURL:            *f.oidcIssuer,
+			InternalIssuerURL:    *f.oidcInternalIss,
+			ClientID:             *f.oidcClientID,
+			ClientSecret:         *f.oidcClientSecret,
+			RedirectURL:          *f.oidcRedirectURL,
+			BasePath:             *f.basePath,
+			AllowedEmailDomains:  splitCSV(*f.oidcEmailDomains),
+			RequireEmailVerified: *f.oidcRequireEmailVerified,
+			ExtraScopes:          splitCSV(*f.oidcExtraScopes),
+			SecureCookies:        secureCookies,
+			RoleStampTTL:         *f.roleStampTTL,
+			SessionTTL:           *f.oidcSessionTTL,
+			RoleMap:              roleMap,
+			DefaultRole:          defaultRole,
 			// Legacy source: a 0.4.5 deployment's WARDYN_OIDC_OPERATOR_EMAILS
 			// keeps working as an admin allowlist with zero re-configuration
 			// once it adopts WARDYN_OIDC_ROLE_MAP (see deriveRole).
@@ -421,14 +506,23 @@ func buildOptionalFeatures(rootCtx, bootCtx context.Context, f *bootFlags, pool 
 			// re-stamps role+role_checked_at on every ssh_public_keys row this
 			// principal owns — the bounded-stale re-check sshAuth's admin-override
 			// path reads (WARDYN_SSH_ROLE_TTL) — and role+user_type+groups+
-			// groups_truncated on every api_tokens row they hold. store.NewPG(pool) is a cheap value
+			// groups_truncated and identity_stamped_at (the age WARDYN_ROLE_STAMP_TTL reads, moved in
+			// that one UPDATE) on every api_tokens row they hold. store.NewPG(pool) is a cheap value
 			// wrapper (constructed the same way elsewhere in this file), not a
 			// connection of its own. Best-effort: a store hiccup here logs and
 			// the login still succeeds — see oidc.Config.OnLogin's own doc for
 			// why that contract lives on the callback side, not here.
-			OnLogin: func(ctx context.Context, sub, role, userType string, groups []string, groupsTruncated bool) {
-				refreshLoginStamps(ctx, store.NewPG(pool), sub, role, userType, groups, groupsTruncated, time.Now().UTC())
+			OnLogin: func(ctx context.Context, f oidc.LoginFacts) {
+				refreshLoginStamps(ctx, store.NewPG(pool), f.Sub, f.Role, f.UserType, f.Groups, f.GroupsTruncated, time.Now().UTC())
+				// The groups of this verified login are what a key-domain
+				// group assignment reads for the person's next principal key.
+				stampLoginGroups(ctx, pool, f.Sub, f.Groups, f.GroupsTruncated)
 			},
+			// The leaver gate: every issuer's sign-in is refused for a deactivated identity, and
+			// issuance records the identity row (migration 0113) and stamps the session's authority
+			// epoch. Unlike OnLogin it fails the sign-in closed, so a database outage now denies
+			// sign-ins, as an unreadable role-mapping store already does.
+			Identities: api.NewIdentityGate(store.NewPG(pool)),
 		}, sessKey)
 		if err != nil {
 			return of, fmt.Errorf("oidc: %w", err)
@@ -439,7 +533,7 @@ func buildOptionalFeatures(rootCtx, bootCtx context.Context, f *bootFlags, pool 
 		// the log never overstates OR understates what the deployment enforces.
 		// Log only the COUNT — the list itself is not disclosed.
 		if ops := splitCSV(*f.oidcOperatorEmails); len(ops) > 0 {
-			slog.Info("wardynd: NOTE a first-class packaged team deployment (SAML/SCIM, per-user tokens) does not exist yet, but admin/member RBAC does. "+
+			slog.Info("wardynd: NOTE a first-class packaged team deployment (SAML, SCIM provisioning of joiners) does not exist yet, but admin/member RBAC and SCIM leaver deprovisioning do. "+
 				"WARDYN_OIDC_OPERATOR_EMAILS is set: signed-in humans outside that list are MEMBERS (unless a WARDYN_OIDC_ROLE_MAP entry raises them to admin) — owner-scoped: they launch/kill runs and "+
 				"read their OWN runs/approvals/audit (a foreign resource is a 404), but get 403 on configuring the deployment ("+
 				"policy, workspace, site-config writes), on secret writes/deletes, and on admin-only credential/tool_call approvals (a member may still "+
@@ -450,11 +544,11 @@ func buildOptionalFeatures(rootCtx, bootCtx context.Context, f *bootFlags, pool 
 			// that lets users self-assert email lets them claim an operator's
 			// address. Warn, don't fail: failing would break the additive
 			// unset-changes-nothing guarantee for the domains knob.
-			if len(splitCSV(*f.oidcEmailDomains)) == 0 {
-				slog.Warn("wardynd: WARDYN_OIDC_OPERATOR_EMAILS is set but WARDYN_OIDC_EMAIL_DOMAINS is not — email_verified is NOT enforced, so operator status rides an unverified IdP claim; set the domains list too")
+			if len(splitCSV(*f.oidcEmailDomains)) == 0 && !*f.oidcRequireEmailVerified {
+				slog.Warn("wardynd: WARDYN_OIDC_OPERATOR_EMAILS is set but neither WARDYN_OIDC_EMAIL_DOMAINS nor WARDYN_OIDC_REQUIRE_EMAIL_VERIFIED is — email_verified is NOT enforced, so operator status rides an unverified IdP claim; set the domains list or the require flag too")
 			}
 		} else {
-			slog.Warn("wardynd: NOTE a first-class packaged team deployment (SAML/SCIM, per-user tokens) does not exist yet; " +
+			slog.Warn("wardynd: NOTE a first-class packaged team deployment (SAML, SCIM provisioning of joiners) does not exist yet; " +
 				"the console offers the 'Sign in with SSO' link and WARDYN_OIDC_OPERATOR_EMAILS is unset, so — absent a WARDYN_OIDC_ROLE_MAP — every SSO human would have the same power as the admin token — " +
 				"boot continues past this ONLY with WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST set (set the operator list instead to make everyone else a member)")
 		}
@@ -582,15 +676,16 @@ func warnRoleMapPosture(roleMap map[string]string, f *bootFlags, defaultRole str
 		if len(splitCSV(*f.oidcOperatorEmails)) > 0 {
 			slog.Warn("wardynd: no WARDYN_OIDC_ROLE_MAP set — roles come only from the WARDYN_OIDC_OPERATOR_EMAILS allowlist (listed = admin, everyone else = user); set a role map to derive admin/user from SSO roles/groups instead")
 		}
-	} else if len(splitCSV(*f.oidcEmailDomains)) == 0 {
+	} else if len(splitCSV(*f.oidcEmailDomains)) == 0 && !*f.oidcRequireEmailVerified {
 		// Same warning shape as the WARDYN_OIDC_OPERATOR_EMAILS one above
 		// (~:270), fired independently since either var can be set without
 		// the other: an email-keyed WARDYN_OIDC_ROLE_MAP entry is a SECOND
 		// email-keyed privilege source riding an unverified IdP claim —
-		// email_verified is enforced only when the domains list is set.
+		// email_verified is enforced only when the domains list is set or
+		// WARDYN_OIDC_REQUIRE_EMAIL_VERIFIED is on.
 		for k := range roleMap {
 			if strings.Contains(k, "@") {
-				slog.Warn("wardynd: WARDYN_OIDC_ROLE_MAP has an email-keyed entry but WARDYN_OIDC_EMAIL_DOMAINS is not set — email_verified is NOT enforced, so that role assignment rides an unverified IdP claim; prefer roles/groups keys (IdP-signed), or set the domains list too")
+				slog.Warn("wardynd: WARDYN_OIDC_ROLE_MAP has an email-keyed entry but neither WARDYN_OIDC_EMAIL_DOMAINS nor WARDYN_OIDC_REQUIRE_EMAIL_VERIFIED is set — email_verified is NOT enforced, so that role assignment rides an unverified IdP claim; prefer roles/groups keys (IdP-signed), or set the domains list or the require flag too")
 				break
 			}
 		}
@@ -672,17 +767,12 @@ func validDefaultRole(role string) bool {
 	return oidc.ValidMappingTarget(role) && role != oidc.RoleSecurityAdmin
 }
 
-// parseDefaultRole validates WARDYN_OIDC_DEFAULT_ROLE, accepting the pre-0.8
-// "member" as the user tier with the boot WARN until 0.9.
+// parseDefaultRole validates WARDYN_OIDC_DEFAULT_ROLE.
 func parseDefaultRole(raw string) (string, error) {
 	role := strings.TrimSpace(raw)
-	if role == oidc.LegacyRoleMember {
-		slog.Warn(oidc.LegacyRoleMemberWarning("WARDYN_OIDC_DEFAULT_ROLE", ""))
-		role = oidc.RoleUser
-	}
 	if role != "" && !validDefaultRole(role) {
-		return "", fmt.Errorf("invalid WARDYN_OIDC_DEFAULT_ROLE %q: want %q, %q or a user type id (%q is a MAPPED tier only — name the App Role, group or email that should hold it in WARDYN_OIDC_ROLE_MAP; it is refused as a fallthrough default)",
-			role, oidc.RoleAdmin, oidc.RoleUser, oidc.RoleSecurityAdmin)
+		return "", fmt.Errorf("invalid WARDYN_OIDC_DEFAULT_ROLE %q: want %q, %q or a user type id (%q is a MAPPED tier only — name the App Role, group or email that should hold it in WARDYN_OIDC_ROLE_MAP; it is refused as a fallthrough default)%s",
+			role, oidc.RoleAdmin, oidc.RoleUser, oidc.RoleSecurityAdmin, oidc.RemovedRoleHint(role))
 	}
 	return role, nil
 }
@@ -835,6 +925,16 @@ func refreshLoginStamps(ctx context.Context, st loginStampStore, sub, role, user
 	}
 }
 
+// stampLoginGroups records the groups a verified login carried, which a key
+// domain's group assignment reads (migration 0121). Best-effort, like
+// refreshLoginStamps: a hiccup logs and the login still succeeds, leaving the
+// person's earlier groups in force until their next sign-in.
+func stampLoginGroups(ctx context.Context, pool *pgxpool.Pool, sub string, groups []string, truncated bool) {
+	if err := keydomain.NewService(pool, nil).RecordLoginGroups(ctx, sub, groups, truncated); err != nil {
+		slog.Warn("wardynd: recording a login's groups for key-domain membership failed", slog.String("err", err.Error()))
+	}
+}
+
 // validateOIDCRedirectURL refuses a WARDYN_OIDC_REDIRECT_URL whose host the
 // CSRF guard cannot read. Fail CLOSED at boot: every alternative (warn and
 // continue, or accept and discover it later) trades one loud line here for a
@@ -851,20 +951,4 @@ func validateOIDCRedirectURL(raw string) error {
 		return fmt.Errorf("invalid WARDYN_OIDC_REDIRECT_URL %q: want an absolute URL with a scheme and host, e.g. https://wardyn.example.com/auth/callback — its HOST is also the second origin the console's CSRF guard accepts as same-origin, so a value without one refuses every console write behind a TLS-terminating ingress", raw)
 	}
 	return nil
-}
-
-// parseAgentImages decodes WARDYN_AGENT_IMAGES (a JSON object mapping agent
-// name to OCI image ref) and logs what it took. Empty is not an error: it
-// means "use the ghcr convention for every agent". A malformed value fails
-// closed at boot rather than silently falling back to the convention.
-func parseAgentImages(raw string) (map[string]string, error) {
-	if raw == "" {
-		return nil, nil
-	}
-	var images map[string]string
-	if err := json.Unmarshal([]byte(raw), &images); err != nil {
-		return nil, fmt.Errorf("parse WARDYN_AGENT_IMAGES: %w", err)
-	}
-	slog.Info("wardynd: agent image overrides", slog.Any("images", images))
-	return images, nil
 }

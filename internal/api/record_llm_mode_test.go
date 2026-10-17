@@ -23,6 +23,13 @@ import (
 // state — so dispatchRun runs its FULL body (through resolveLLMInjections) and
 // this test can observe what launchRecordRun ultimately persists as the
 // session's llm_mode/model, not just its pre-dispatch guess.
+// ListGrantsByRun is the grants dispatch wrote, which brokeredPATGrantIDs reads.
+func (s *recordLLMModeStore) ListGrantsByRun(context.Context, uuid.UUID) ([]types.CredentialGrant, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]types.CredentialGrant(nil), s.grants...), nil
+}
+
 type recordLLMModeStore struct {
 	store.Store
 	mu      sync.Mutex
@@ -73,10 +80,8 @@ func (s *recordLLMModeStore) SetSandboxRef(_ context.Context, id uuid.UUID, ref 
 }
 func (s *recordLLMModeStore) SetRunAgentExecID(context.Context, uuid.UUID, string) error { return nil }
 func (s *recordLLMModeStore) SetRunDiskMiB(context.Context, uuid.UUID, int) error        { return nil }
-func (s *recordLLMModeStore) SetWorkspaceBuiltImage(_ context.Context, _ uuid.UUID, imageRef, hash string) (types.Workspace, error) {
-	ws := s.ws
-	ws.ImageRef, ws.BuiltProfileHash = imageRef, hash
-	return ws, nil
+func (s *recordLLMModeStore) SetWorkspaceBuiltImage(context.Context, uuid.UUID, string, string, string, *types.ImageBuild) (bool, error) {
+	return true, nil
 }
 func (s *recordLLMModeStore) GetSiteConfig(context.Context) (types.SiteConfig, error) {
 	return s.sc, nil
