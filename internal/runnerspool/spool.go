@@ -49,6 +49,8 @@ type Record struct {
 	DropEnd  uint64             `json:"drop_end,omitempty"`
 }
 
+// digest hashes the record as this release encodes it, so a row a later release wrote with a field this one
+// does not know fails ValidHash after a rollback. A new field changes what older runners can replay.
 func (r Record) digest() string {
 	r.Hash = ""
 	b, _ := json.Marshal(r)
