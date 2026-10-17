@@ -129,6 +129,18 @@ test.describe("Templates: filters and rows", () => {
     await expect(names(page)).toHaveText([PLATFORM_BASELINE.name, ORG_BASELINE.name]);
   });
 
+  test("a sign-in that cannot confirm the person's groups says so over the list, and says nothing otherwise", async ({ page }) => {
+    await stubCatalogue(page, { rows: CATALOGUE, publish: { ...ME_ONLY, groups_unverified: true } });
+    await openTemplates(page);
+    await expect(page.getByText(T.GROUPS_UNVERIFIED)).toBeVisible();
+    await expect(names(page)).toHaveText(CATALOGUE.map((r) => r.name));
+    await page.unrouteAll({ behavior: "ignoreErrors" });
+    await stubCatalogue(page, { rows: CATALOGUE, publish: ME_ONLY });
+    await page.reload();
+    await expect(names(page)).toHaveText(CATALOGUE.map((r) => r.name));
+    await expect(page.getByText(T.GROUPS_UNVERIFIED)).toHaveCount(0);
+  });
+
   test("one teal action: Use is an outline button and the Only me chip is neutral (DR-0057)", async ({ page }) => {
     await stubCatalogue(page, { rows: CATALOGUE, publish: ME_ONLY });
     await openTemplates(page);
