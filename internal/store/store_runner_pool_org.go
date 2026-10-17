@@ -89,3 +89,11 @@ func (s PG) RemoveOrgRunnerFromPool(ctx context.Context, id, runnerID uuid.UUID)
 		DELETE FROM runner_pool_members m USING runners r
 		WHERE m.pool_id = $1 AND m.runner_id = $2 AND r.id = m.runner_id AND r.owner_kind = 'org'`, runnerID)
 }
+
+// ListOrgRunnerPoolRunners is an organization pool's organization runners, newest first, in any state, so
+// a revoked one can be seen and tidied away with RemoveOrgRunnerFromPool.
+func (s PG) ListOrgRunnerPoolRunners(ctx context.Context, poolID uuid.UUID) ([]types.Runner, error) {
+	return collect(ctx, s.Pool, "list", "organization pool runners", `SELECT `+prefixedRunnerCols+`
+		FROM runner_pool_members m JOIN runners r ON r.id = m.runner_id
+		WHERE m.pool_id = $1 AND r.owner_kind = 'org' ORDER BY r.created_at DESC, r.id`, []any{poolID}, scanRunner)
+}

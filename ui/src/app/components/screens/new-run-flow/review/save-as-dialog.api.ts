@@ -23,7 +23,7 @@ export class TemplateSaveError extends HttpError {
 export type SaveTemplate = (req: TemplateSaveRequest) => Promise<Template>;
 
 export const saveTemplate: SaveTemplate = async (req) => {
-  const res = await wfetch("/templates", { method: "POST", body: JSON.stringify(req) });
+  const res = await wfetch("/templates", { method: "POST", asPerson: true, body: JSON.stringify(req) });
   if (res.ok) return (await res.json()) as Template;
   let body: Partial<{ error: string; reason: string; diagnostics: TemplateDiagnostic[] }> = {};
   try {

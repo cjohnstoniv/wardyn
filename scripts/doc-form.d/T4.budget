@@ -27,5 +27,7 @@
 # threatmodel/THREAT-MODEL.md 60624 adds 1308 over 59316 (0.9.3 FIN-E), measured: the audit-chain, AWS KMS, erasure, runner, recovery rehearsal and unbind residuals.
 # threatmodel/THREAT-MODEL.md 59420 = 59316 + 104, measured: the runner door, admin read and harness-uid sentences.
 # threatmodel/THREAT-MODEL.md 60728 = 60624 + 104, measured: at the FIN-C2 merge into the final train (both sides' sentences).
-# threatmodel/THREAT-MODEL.md 61041 adds 313 (0.9.3 K3b): residual #91, Kubernetes node loss.
-threatmodel/THREAT-MODEL.md=61041 share=20
+# threatmodel/THREAT-MODEL.md 62948 adds 2220, measured: the 0.9.3 runner sweep (B13 organisation runner, trust class, resident delivery, recording, runner CA, CLI doors under a ceiling; residuals 89-90), corrected after review for NetworkPolicy defaults, the sandbox CA, erase closure and trust bypass.
+# threatmodel/THREAT-MODEL.md 63065 adds 117 over 62948, measured: the cloud-SSO model credential's deliberate exemption from the CC3 floor (0.9.3 ASK-6).
+# threatmodel/THREAT-MODEL.md 63093 adds 28 over 63065, measured: the cloud-SSO exemption bullets narrowed to what the code does (0.9.3 ASK-6 review).
+threatmodel/THREAT-MODEL.md=63093 share=20

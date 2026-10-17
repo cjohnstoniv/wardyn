@@ -114,6 +114,8 @@ func TestRunnerPoolMethodsHitTheirRoutes(t *testing.T) {
 		{"DELETE", "/api/v1/me/runner-pools/" + pool.String(), func() error { return c.DeleteMyRunnerPool(ctx, pool) }},
 		{"PUT", "/api/v1/me/runner-pools/" + pool.String() + "/runners/" + runner.String(), func() error { _, err := c.AddMyRunnerToPool(ctx, pool, runner); return err }},
 		{"DELETE", "/api/v1/me/runner-pools/" + pool.String() + "/runners/" + runner.String(), func() error { return c.RemoveMyRunnerFromPool(ctx, pool, runner) }},
+		{"PUT", "/api/v1/runner-pools/" + pool.String() + "/runners/" + runner.String(), func() error { _, err := c.AddRunnerPoolRunner(ctx, pool, runner); return err }},
+		{"DELETE", "/api/v1/runner-pools/" + pool.String() + "/runners/" + runner.String(), func() error { return c.RemoveRunnerPoolRunner(ctx, pool, runner) }},
 		{"GET", "/api/v1/runner-pool-defaults", func() error { _, err := c.GetOrgRunnerPoolDefaults(ctx); return err }},
 		{"PUT", "/api/v1/runner-pool-defaults", func() error { _, err := c.SetOrgRunnerPoolDefaults(ctx, client.RunnerPoolDefaults{}); return err }},
 		{"GET", "/api/v1/me/runner-pool-defaults", func() error { _, err := c.GetMyRunnerPoolDefaults(ctx); return err }},

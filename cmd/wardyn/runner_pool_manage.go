@@ -5,6 +5,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -21,7 +22,7 @@ import (
 // your own: `create` makes one, and `update` and `delete` reach it through your own routes. An
 // organization pool is the organization's: `create --scope organization`, and `update` or `delete` on
 // one, need an admin. <pool> is a pool id or its exact name; <runner> a runner id or name, a self-hosted
-// runner of yours or a remote-hosted runner.
+// runner of yours, an organization runner (an admin, into an organization pool) or a remote-hosted runner.
 //
 //	wardyn runner pool create --name Laptop [--scope user|organization] [--runner <runner>]... [--limits-file limits.json]
 //	wardyn runner pool show <pool>
@@ -43,7 +44,7 @@ func runnerPoolManageCmds(client clientFn) []*cobra.Command {
 // admin) or into your own user pool when it is available to people's pools. Whether each may join is the
 // server's to say; its sentence is printed.
 func runnerPoolMemberCmd(client clientFn, add bool) *cobra.Command {
-	use, short := "add <pool> <runner>...", "Put runners in a pool: your self-hosted runners and available remote-hosted runners in your user pool, or (an admin) remote-hosted runners in an organization pool"
+	use, short := "add <pool> <runner>...", "Put runners in a pool: your self-hosted runners and available remote-hosted runners in your user pool, or (an admin) remote-hosted runners and organization runners in an organization pool"
 	if !add {
 		use, short = "remove <pool> <runner>...", "Take runners out of a pool"
 	}
@@ -82,8 +83,8 @@ func makePoolDefault(cmd *cobra.Command, c *sdk.Client, pool sdk.RunnerPool) err
 	return err
 }
 
-// poolMembers adds or removes each runner, through the organization's routes for a remote-hosted runner
-// in an organization pool and through your own otherwise, and says what is now true. Every runner is
+// poolMembers adds or removes each runner, through the organization's routes for a remote-hosted or
+// organization runner in an organization pool and through your own otherwise, and says what is now true. Every runner is
 // read, and an unclaimed one refused, before the first write; one already in the pool is said so and not
 // added again. With several runners, each one the server refuses is said on its own line after the ones
 // that went through, and the command fails; a lone runner's refusal is returned as it is. fresh says
@@ -97,6 +98,19 @@ func poolMembers(cmd *cobra.Command, c *sdk.Client, pool sdk.RunnerPool, runnerA
 		}
 		return c.ListRemoteRunners(ctx)
 	}
+	var orgs func() ([]sdk.RunnerView, error)
+	if !mine {
+		var cached []sdk.RunnerView
+		var read bool
+		orgs = func() ([]sdk.RunnerView, error) {
+			var err error
+			if !read {
+				cached, err = orgRunners(cmd, c)
+				read = err == nil
+			}
+			return cached, err
+		}
+	}
 	var members []sdk.RunnerPoolMemberView
 	if !fresh {
 		var err error
@@ -109,7 +123,7 @@ func poolMembers(cmd *cobra.Command, c *sdk.Client, pool sdk.RunnerPool, runnerA
 		var ref runnerRef
 		var err error
 		if add {
-			ref, err = resolveRunner(cmd, c, arg, remotes)
+			ref, err = resolveRunner(cmd, c, arg, remotes, orgs)
 		} else {
 			ref, err = resolveMember(pool, members, arg)
 		}
@@ -136,22 +150,7 @@ func poolMembers(cmd *cobra.Command, c *sdk.Client, pool sdk.RunnerPool, runnerA
 			}
 			continue
 		}
-		var err error
-		switch {
-		case ref.self != nil && add:
-			_, err = c.AddMyRunnerToPool(ctx, pool.ID, *ref.self)
-		case ref.self != nil:
-			err = c.RemoveMyRunnerFromPool(ctx, pool.ID, *ref.self)
-		case add && mine:
-			_, err = c.AddMyPoolRemoteRunner(ctx, pool.ID, ref.remote)
-		case add:
-			_, err = c.AddRunnerPoolRemoteRunner(ctx, pool.ID, ref.remote)
-		case mine:
-			err = c.RemoveMyPoolRemoteRunner(ctx, pool.ID, ref.remote)
-		default:
-			err = c.RemoveRunnerPoolRemoteRunner(ctx, pool.ID, ref.remote)
-		}
-		held, err := heldForApproval(cmd, err)
+		held, err := heldForApproval(cmd, writePoolMember(ctx, c, pool.ID, ref, add, mine))
 		if err != nil && len(refs) == 1 {
 			return err
 		}
@@ -168,19 +167,8 @@ func poolMembers(cmd *cobra.Command, c *sdk.Client, pool sdk.RunnerPool, runnerA
 		}
 		done = append(done, label)
 	}
-	if len(done) > 0 {
-		var err error
-		switch {
-		case add:
-			_, err = fmt.Fprintf(cmd.OutOrStdout(), "%s added to %s\n", joinAnd(done), pool.Name)
-		case len(done) > 1:
-			_, err = fmt.Fprintf(cmd.OutOrStdout(), "%s are no longer in %s\n", joinAnd(done), pool.Name)
-		default:
-			_, err = fmt.Fprintf(cmd.OutOrStdout(), "%s is no longer in %s\n", done[0], pool.Name)
-		}
-		if err != nil {
-			return err
-		}
+	if err := reportPoolMembers(cmd, pool.Name, done, add); err != nil {
+		return err
 	}
 	for _, line := range failed {
 		if _, err := fmt.Fprintln(cmd.OutOrStdout(), line); err != nil {
@@ -191,6 +179,46 @@ func poolMembers(cmd *cobra.Command, c *sdk.Client, pool sdk.RunnerPool, runnerA
 		return fmt.Errorf("%d of %d runners failed; the lines above say which", len(failed), len(refs))
 	}
 	return nil
+}
+
+// writePoolMember adds ref to pool or takes it out, through your own routes for a pool of yours or
+// one of your runners, and through the organization's otherwise (always, for an organization runner).
+func writePoolMember(ctx context.Context, c *sdk.Client, poolID uuid.UUID, ref runnerRef, add, mine bool) error {
+	var err error
+	switch {
+	case ref.org != nil && add:
+		_, err = c.AddRunnerPoolRunner(ctx, poolID, *ref.org)
+	case ref.org != nil:
+		err = c.RemoveRunnerPoolRunner(ctx, poolID, *ref.org)
+	case ref.self != nil && add:
+		_, err = c.AddMyRunnerToPool(ctx, poolID, *ref.self)
+	case ref.self != nil:
+		err = c.RemoveMyRunnerFromPool(ctx, poolID, *ref.self)
+	case add && mine:
+		_, err = c.AddMyPoolRemoteRunner(ctx, poolID, ref.remote)
+	case add:
+		_, err = c.AddRunnerPoolRemoteRunner(ctx, poolID, ref.remote)
+	case mine:
+		err = c.RemoveMyPoolRemoteRunner(ctx, poolID, ref.remote)
+	default:
+		err = c.RemoveRunnerPoolRemoteRunner(ctx, poolID, ref.remote)
+	}
+	return err
+}
+
+// reportPoolMembers says which runners went in or came out of pool; it says nothing when none did.
+func reportPoolMembers(cmd *cobra.Command, pool string, done []string, add bool) error {
+	var err error
+	switch {
+	case len(done) == 0:
+	case add:
+		_, err = fmt.Fprintf(cmd.OutOrStdout(), "%s added to %s\n", joinAnd(done), pool)
+	case len(done) > 1:
+		_, err = fmt.Fprintf(cmd.OutOrStdout(), "%s are no longer in %s\n", joinAnd(done), pool)
+	default:
+		_, err = fmt.Fprintf(cmd.OutOrStdout(), "%s is no longer in %s\n", done[0], pool)
+	}
+	return err
 }
 
 // poolMemberFailure is the line for one runner the server refused, with the server's own words.
@@ -239,7 +267,7 @@ func runnerPoolCreateCmd(client clientFn) *cobra.Command {
 			return poolMembers(cmd, c, p, runners, true, true)
 		}}
 	cmd.Flags().StringVar(&name, "name", "", "the pool's name, 1 to 64 characters")
-	cmd.Flags().StringVar(&scope, "scope", string(sdk.RunnerPoolUser), "user (your own) or organization (an admin's; remote-hosted runners only)")
+	cmd.Flags().StringVar(&scope, "scope", string(sdk.RunnerPoolUser), "user (your own) or organization (an admin's; remote-hosted runners and organization runners)")
 	cmd.Flags().StringArrayVar(&runners, "runner", nil, "a runner to put in the new pool, by id or name (repeatable)")
 	cmd.Flags().BoolVar(&asJSON, "json", false, "emit raw JSON")
 	lf.register(cmd, "own")

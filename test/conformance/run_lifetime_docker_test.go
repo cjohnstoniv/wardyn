@@ -133,6 +133,10 @@ func TestRunLifetimeDocker(t *testing.T) {
 		t.Helper()
 		spec := runLifetimeSpec("busybox:latest", class)
 		spec.ProxyConfig.MITMCACertPEM = "test-mitm-ca-" + spec.RunID.String()
+		// A revive loads the new config before it replaces the proxy, so the config carries what every
+		// real one does.
+		spec.ProxyConfig.RunToken = "conformance-run-token"
+		spec.ProxyConfig.ControlPlaneURL = "http://127.0.0.1:1"
 		sb, err := r.CreateSandbox(context.Background(), spec)
 		if err != nil {
 			t.Fatalf("CreateSandbox: %v", err)

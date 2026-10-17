@@ -56,7 +56,7 @@
 //     ClaimOrgRunner, SetRunnerTrust
 //   - runner pools (/api/v1/runner-pools, /api/v1/runner-pool-defaults; /api/v1/me/runner-pools, /api/v1/me/runner-pool-defaults):
 //     ListRunnerPools, ListRunnerPoolsFor, ListMyRunnerPools, GetRunnerPool, CreateRunnerPool, UpdateRunnerPool, DeleteRunnerPool, CreateMyRunnerPool, UpdateMyRunnerPool, DeleteMyRunnerPool, OwnRunnerPool, AddMyRunnerToPool,
-//     RemoveMyRunnerFromPool, GetOrgRunnerPoolDefaults, SetOrgRunnerPoolDefaults, GetMyRunnerPoolDefaults,
+//     RemoveMyRunnerFromPool, AddRunnerPoolRunner, RemoveRunnerPoolRunner, GetOrgRunnerPoolDefaults, SetOrgRunnerPoolDefaults, GetMyRunnerPoolDefaults,
 //     SetMyRunnerPoolDefaults, ClearMyRunnerPoolDefaults, AddRunnerPoolRemoteRunner, RemoveRunnerPoolRemoteRunner,
 //     AddMyPoolRemoteRunner, RemoveMyPoolRemoteRunner, ListRunnerPoolMembers, GetRunnerPoolUsePolicy, SetRunnerPoolUsePolicy,
 //     ClearRunnerPoolUsePolicy

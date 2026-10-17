@@ -50,6 +50,7 @@ vi.mock("./pools/pools-tab", () => ({
     <div data-testid="pools-tab">
       open:{openPoolId ?? "none"}
       <button onClick={() => onOpenRunner("remote_hosted", "shared-docker")}>member shared-docker</button>
+      <button onClick={() => onOpenRunner("self_hosted", "r-cluster")}>member cluster-a</button>
     </div>
   ),
 }));
@@ -670,6 +671,17 @@ describe("Admin -> Runners tabs", () => {
     expect(await screen.findByTestId("pools-tab")).toHaveTextContent("open:p-laptop");
     await user.click(screen.getByRole("button", { name: "member shared-docker" }));
     expect(await screen.findByRole("dialog")).toHaveTextContent("Set up in");
+  });
+
+  it("an organization pool's organization runner opens its runner, found in the admin list beside people's", async () => {
+    const cluster = runner({ id: "r-cluster", name: "cluster-a", owner: "", owner_kind: "org", trust_class: "org_cluster", machine_name: "node-1.corp.example.com", pools: [] });
+    listMock.mockResolvedValue([LAPTOP, cluster]);
+    const user = userEvent.setup();
+    renderScreen({ at: "/admin/runners?tab=pools" });
+    await user.click(await screen.findByRole("button", { name: "member cluster-a" }));
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog).toHaveTextContent("cluster-a");
+    expect(dialog).toHaveTextContent("node-1.corp.example.com");
   });
 
   it("Back from a runner opened out of a pool returns to that pool (FR-0122)", async () => {

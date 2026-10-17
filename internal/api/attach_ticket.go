@@ -216,8 +216,8 @@ func (s *Server) handleAttachTicket(w http.ResponseWriter, r *http.Request) {
 	// also checked here, where the refusal can carry its reason; the WebSocket upgrade enforces them
 	// again, since slots can fill between the ticket and the upgrade.
 	at, principal := actorFromRequest(r)
-	if s.attachSlotsFull(run, principal) {
-		writeErrorReason(w, http.StatusServiceUnavailable, reasonAttachSessionCapReached, attachSessionCapMsg)
+	if refused := s.attachSlotsFull(run, principal); refused != "" {
+		writeErrorReason(w, http.StatusServiceUnavailable, reasonAttachSessionCapReached, refused)
 		return
 	}
 	// DELIBERATELY isOperator — this role field means exactly "reaches runs its
@@ -270,7 +270,8 @@ func (s *Server) handleAttachTicket(w http.ResponseWriter, r *http.Request) {
 // service identity that created run AND holds service_attach, asked with the operator step off so a super
 // admin needs the grant too (F6). refused is true when it answered: a store failure is a 500; a sponsor
 // without the grant, or no longer entitled, gets the foreign-run 404 with an authz.denied row of reason
-// capability_feature. A caller who is not the sponsor gets neither (ok and refused false).
+// capability_feature, or sponsor_not_entitled when the sponsorship is not, or no longer, in effect. A
+// caller who is not the sponsor gets neither (ok and refused false).
 func (s *Server) sponsorMayEnter(w http.ResponseWriter, r *http.Request, run types.AgentRun, authorizedAt time.Time) (ok, refused bool) {
 	if !s.sponsorsRun(r, run) {
 		return false, false
@@ -280,7 +281,7 @@ func (s *Server) sponsorMayEnter(w http.ResponseWriter, r *http.Request, run typ
 		writeServerError(w, r, "mint attach ticket", err)
 		return false, true
 	}
-	d := authz.Deny(authz.ReasonAttachTicketForeignRun, run.ID.String(), "run not found").OnRun(run.ID)
+	d := authz.Deny(authz.ReasonSponsorNotEntitled, run.ID.String(), "run not found").OnRun(run.ID)
 	if still {
 		allowed, err := s.capAllowedAsMember(r.Context(), capFeature, featureServiceAttach)
 		if err != nil {

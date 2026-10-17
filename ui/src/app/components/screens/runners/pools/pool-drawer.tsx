@@ -14,7 +14,7 @@ import { HttpError } from "../../../../lib/api/core";
 import { runnerPools } from "../../../../lib/api/runner-pools";
 import { absoluteTime, getErrorMessage, shortDate } from "../../../../lib/format";
 import type { RunnerKind, RunnerPool, RunnerPoolMemberView } from "../../../../lib/types/runner-pools";
-import { POOL_DIALOG, POOL_DRAWER, POOLS, RES, RUNNER_V6 } from "../../../wardyn/copy/runner-pools";
+import { POOL_DIALOG, POOL_DRAWER, POOLS, RES, RUNNER_KIND, RUNNER_V6 } from "../../../wardyn/copy/runner-pools";
 import { RUNNER } from "../../../wardyn/copy/runners";
 import { Mono } from "../../../wardyn/code-block";
 import { useOperator } from "../../../wardyn/operator-context";
@@ -57,7 +57,7 @@ function MemberCard({ m, onOpen }: { m: RunnerPoolMemberView; onOpen?: (kind: Ru
         <button type="button" className="text-info underline-offset-4 hover:underline" onClick={() => onOpen?.(m.kind, m.id)}>
           {m.name}
         </button>
-        <KindChip kind={m.kind} />
+        {m.runner?.owner_kind === "org" ? <Chip>{RUNNER_KIND.ORG}</Chip> : <KindChip kind={m.kind} />}
         <Chip dot>{m.online ? RUNNER.ONLINE : RUNNER.OFFLINE}</Chip>
       </div>
       <div className={meta}>{m.kind === "self_hosted" ? <MachineLine machine={m.runner?.machine_name} /> : POOL_DRAWER.MEMBER_MACHINE_NA}</div>

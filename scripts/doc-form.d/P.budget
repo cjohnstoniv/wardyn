@@ -23,6 +23,8 @@
 # docs/POLICIES.md 18362 = 18332 + 30, measured: a deny of any GitHub-family host also withholds the GitHub CLI door.
 # docs/POLICIES.md 18317 adds 6 over 18311: the approval scope also carries the hold seconds (0.9.3 FIN-B2).
 # docs/POLICIES.md 18368, measured at the second decided-rows merge into the final train (both sides' sentences).
-docs/POLICIES.md=18368 share=12
+# docs/POLICIES.md 18380 = 18368 + 12, measured: a GitHub CLI row is refused, not withheld, under a profile that blocks GitHub.
+# docs/POLICIES.md 18382 adds 2 over 18380, measured: the run policy is under spec (0.9.3 ASK-6 review).
+docs/POLICIES.md=18382 share=12
 examples/policies/README.md=1349 share=5
 # docs/POLICIES.md 18013 adds 40 over 17973, measured: a member's private-range workspace clone host.
