@@ -287,6 +287,12 @@ export function ReauthLayer({ onResumed }: { onResumed: (me: Me) => void }) {
   if (reauth.phase === "none") lapseOpenedAt.current = 0;
   else if (lapseOpenedAt.current === 0) lapseOpenedAt.current = Date.now();
   const elsewhere = lapseOpenedAt.current > 0 && heardSignOut > lapseOpenedAt.current - ELSEWHERE_WINDOW_MS;
+  // A sign-out heard before or during a lapse explains that lapse only: when it ends, it is forgotten.
+  const lastPhase = React.useRef(reauth.phase);
+  React.useEffect(() => {
+    if (lastPhase.current !== "none" && reauth.phase === "none") setHeardSignOut(0);
+    lastPhase.current = reauth.phase;
+  }, [reauth.phase]);
 
   React.useEffect(() => {
     if (!quiet) return;

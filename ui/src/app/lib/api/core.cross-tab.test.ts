@@ -106,16 +106,18 @@ it("a write held for the check is refused, unsent, when the check ends in the si
   expect(unauthorized).toHaveBeenCalledExactlyOnceWith({ write: true, save: "note" });
 });
 
-it("a check that never answers frees the write at the bound", async () => {
+it("a check that never answers refuses the write at the bound, unsent: the draft is kept and the prompt opens", async () => {
   stops.push(listenForOtherTabs());
   fromAnotherTab();
   vi.advanceTimersByTime(COALESCE_MS + 1);
-  const write = wfetch("/stub-save", { method: "PUT", body: "{}" });
+  const write = wfetch("/stub-save", { method: "PUT", body: "{}", save: "note" });
+  const refused = expect(write).rejects.toMatchObject({ status: 401 });
   await vi.advanceTimersByTimeAsync(IDENTITY_CHECK_WAIT_MS - 100);
-  expect(fetchMock).not.toHaveBeenCalled();
+  expect(unauthorized).not.toHaveBeenCalled();
   await vi.advanceTimersByTimeAsync(200);
-  await write;
-  expect(fetchMock).toHaveBeenCalledTimes(1);
+  await refused;
+  expect(fetchMock).not.toHaveBeenCalled();
+  expect(unauthorized).toHaveBeenCalledExactlyOnceWith({ write: true, save: "note" });
 });
 
 it("the logout is the one write the hold does not wait for", async () => {

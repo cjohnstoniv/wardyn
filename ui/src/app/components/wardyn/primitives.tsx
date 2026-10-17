@@ -466,8 +466,9 @@ function agentMetaFor(agent: string): AgentMeta {
   if (key.startsWith("claude")) return agentMeta.claude_code;
   if (key.startsWith("codex")) return agentMeta.codex;
   if (key.startsWith("cursor")) return agentMeta.cursor;
-  // Unknown agent — render the first two chars on a neutral chip.
-  return { label: agent, initials: agent.slice(0, 2).toUpperCase(), badge: "bg-muted text-muted-foreground" };
+  // Unknown agent — the shared generic mark on a neutral chip, the same one New Run's Already included
+  // gives a harness it has no designed mark for (catalogue-pending.ts HARNESS_MARK_OTHER).
+  return { label: agent, initials: "AG", badge: "bg-muted text-muted-foreground" };
 }
 
 // An agent id's display name, or null for one this console doesn't know.

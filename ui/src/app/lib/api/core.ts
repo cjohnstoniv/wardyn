@@ -45,11 +45,12 @@ export function notifyAuthChange(kind: AuthEventKind = "changed"): void {
 
 // DR-0007: after another tab's auth event the account behind this tab's cookie may be someone else's,
 // and nothing here has asked yet. Until the shell's identity check answers, a write waits rather than
-// leave under a draft's old owner. The wait is bounded, so a check that never answers (the daemon
-// down) cannot freeze the page: past it a write goes, as it would have before this existed.
+// leave under a draft's old owner. The wait is bounded, and the bound fails closed: a check that has not
+// answered by then (the daemon down or slow) refuses the write unsent, as a lapsed session does, so the
+// sign-in prompt opens and the draft stays on screen. A write never leaves unchecked.
 export const IDENTITY_CHECK_WAIT_MS = 4000;
 let identityCheckUntil = 0;
-let identityCheckWaiters: Array<() => void> = [];
+let identityCheckWaiters: Array<(settled: boolean) => void> = [];
 
 /** Hold this tab's writes until the next identity check settles (or the bound passes). */
 export function holdWritesForIdentityCheck(): void {
@@ -61,16 +62,16 @@ export function identityCheckSettled(): void {
   identityCheckUntil = 0;
   const waiting = identityCheckWaiters;
   identityCheckWaiters = [];
-  for (const resume of waiting) resume();
+  for (const resume of waiting) resume(true);
 }
 
-/** Null when nothing is held, so an ordinary write does not wait a tick. */
-function writesMayLeave(): Promise<void> | null {
+/** Null when nothing is held, so an ordinary write does not wait a tick. Resolves false at the bound. */
+function writesMayLeave(): Promise<boolean> | null {
   const remaining = identityCheckUntil - Date.now();
   if (remaining <= 0) return null;
-  return new Promise<void>((resume) => {
+  return new Promise<boolean>((resume) => {
     identityCheckWaiters.push(resume);
-    setTimeout(resume, remaining);
+    setTimeout(() => resume(false), remaining);
   });
 }
 
@@ -330,9 +331,13 @@ export async function wfetch(
 ): Promise<Response> {
   const method = (init.method ?? "GET").toUpperCase();
   const refused: Refused = { write: method !== "GET" && method !== "HEAD", save };
-  if (refused.write && !endsSession) {
+  // Already refused by the signed-out hold: no waiting on a check that cannot change that.
+  if (refused.write && !endsSession && !_signedOutHold) {
     const held = writesMayLeave();
-    if (held) await held;
+    if (held && !(await held)) {
+      _unauthorized?.(refused);
+      throw new HttpError(401, "Unauthorized");
+    }
   }
   if (refused.write && _signedOutHold && !endsSession) {
     _unauthorized?.(refused);

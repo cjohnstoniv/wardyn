@@ -62,8 +62,9 @@ export function useSessionPoll(accept: (me: Me) => boolean) {
     void readSession(controller.signal).then((session) => {
       if (started !== generation.current) return;
       receive(session);
-      // Whoever answered has been measured and acted on, so a write held for this check may go (or be refused).
-      identityCheckSettled();
+      // A write held for this check goes (or is refused) once /me has said who is signed in, or that no one
+      // is. An error is not an answer: it leaves the write to the hold's bound, which refuses it.
+      if (session !== "unreachable") identityCheckSettled();
     }).finally(() => {
       inFlight.current = null;
       if (pending.current) tickRef.current?.();

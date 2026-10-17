@@ -13,7 +13,7 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { toast } from "sonner";
 import App from "./App";
-import { identityCheckSettled, SESSION_ENDED_REASON, setToken, wfetch } from "./lib/api/core";
+import { IDENTITY_CHECK_WAIT_MS, identityCheckSettled, SESSION_ENDED_REASON, setToken, wfetch } from "./lib/api/core";
 import { REAUTH_BAR, REAUTH_DIALOG, REAUTH_EXTRA } from "./lib/reauth-copy";
 import { PROVIDERS_EXTRA } from "./lib/workspace-providers-copy";
 import { SHELL } from "./components/wardyn/copy";
@@ -572,6 +572,22 @@ describe("App — the other tabs of this browser (DR-0020)", () => {
     expect(count("PUT /api/v1/stub-save")).toBe(0);
   });
 
+  it("a sign-out heard in an earlier lapse is forgotten once that lapse ends", async () => {
+    await mountWithDraft();
+    daemon.dead = true;
+    await fromAnotherTab("signed_out");
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByText(REAUTH_EXTRA.SIGNED_OUT_ELSEWHERE)).toBeInTheDocument();
+    await signInWithToken();
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    // This tab's own session ends a moment later: that is not the other tab's sign-out.
+    daemon.dead = true;
+    await user.click(screen.getByRole("button", { name: "Save note" }));
+    const again = await screen.findByRole("dialog");
+    expect(within(again).queryByText(REAUTH_EXTRA.SIGNED_OUT_ELSEWHERE)).toBeNull();
+    expect(within(again).getByText(REAUTH_DIALOG.BODY)).toBeInTheDocument();
+  });
+
   it("a lapse that was not another tab's sign-out keeps the ordinary sentence", async () => {
     await lapseMidPage();
     expect(within(screen.getByRole("dialog")).queryByText(REAUTH_EXTRA.SIGNED_OUT_ELSEWHERE)).toBeNull();
@@ -603,6 +619,35 @@ describe("App — the other tabs of this browser (DR-0020)", () => {
     daemon.me = { ...ME, principal: "someone-else" };
     await fromAnotherTab("changed");
     await waitFor(() => expect(assign).toHaveBeenCalledWith("/runs"));
+  });
+
+  it("a Save pressed while the identity check is out sends nothing as the person who just signed in", async () => {
+    await mountWithDraft();
+    let answer!: (r: Response) => void;
+    heldMe = new Promise<Response>((r) => (answer = r));
+    daemon.me = { ...ME, principal: "someone-else" };
+    await fromAnotherTab("changed");
+    await user.click(screen.getByRole("button", { name: "Save note" }));
+    expect(count("PUT /api/v1/stub-save")).toBe(0);
+    answer(json(200, daemon.me));
+    await waitFor(() => expect(assign).toHaveBeenCalledWith("/runs"));
+    await act(async () => {
+      vi.advanceTimersByTime(500);
+    });
+    expect(count("PUT /api/v1/stub-save")).toBe(0);
+  });
+
+  it("a check that never answers refuses the Save at the bound and asks to sign in, draft kept", async () => {
+    await mountWithDraft();
+    daemon.meFails = true;
+    await fromAnotherTab("changed");
+    await user.click(screen.getByRole("button", { name: "Save note" }));
+    await act(async () => {
+      vi.advanceTimersByTime(IDENTITY_CHECK_WAIT_MS + 100);
+    });
+    await screen.findByRole("dialog");
+    expect(count("PUT /api/v1/stub-save")).toBe(0);
+    expect(screen.getByLabelText("Note")).toHaveValue("hello");
   });
 
   it("a tab on the sign-in screen enters the console when another tab signed in", async () => {
