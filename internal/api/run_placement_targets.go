@@ -78,8 +78,12 @@ func poolOwner(ctx context.Context) string {
 // own. A class no executor and no runner of the deployment enforces at all is left to the confinement
 // step, whose sentence is the long-standing one for it; only a class SOME target enforces is held
 // against each candidate here.
-func (s *Server) placementDemand(ctx context.Context, in placementInput) placementDemand {
-	d := placementDemand{floor: in.floor, reqCC: in.reqCC, reqCCOK: in.reqCCOK, baseline: in.baseline, fits: s.runnerFits(ctx)}
+func (s *Server) placementDemand(ctx context.Context, in placementInput) (placementDemand, *runRefusal) {
+	fits, err := s.runnerFits(ctx)
+	if err != nil {
+		return placementDemand{}, runServerError("read runner limits", err)
+	}
+	d := placementDemand{floor: in.floor, reqCC: in.reqCC, reqCCOK: in.reqCCOK, baseline: in.baseline, fits: fits}
 	advertised := s.advertisedConfinement(ctx, *in.req)
 	// The org default barrier is left out ("") on purpose: it is chosen only from the advertised set,
 	// so it never changes whether the resulting class is enforced.
@@ -87,7 +91,7 @@ func (s *Server) placementDemand(ctx context.Context, in placementInput) placeme
 		(enforced != "" && !slices.Contains(advertised, enforced)) {
 		d.reqCCOK = false
 	}
-	return d
+	return d, nil
 }
 
 // poolTargets is the resolved pool's candidate set of both kinds, each candidate with its own facts,

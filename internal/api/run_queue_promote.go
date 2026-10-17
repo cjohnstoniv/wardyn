@@ -36,7 +36,7 @@ func (s *Server) promoteQueue(ctx context.Context, poolID uuid.UUID, bound time.
 	}
 	// The pass judges other people's runs, so it works on the daemon's own context: a caller's identity
 	// on ctx must never reach it.
-	pctx, cancel := context.WithTimeout(context.WithoutCancel(s.cfg.BaseCtx), bound)
+	pctx, cancel := context.WithTimeout(inheritQueuePass(context.WithoutCancel(s.cfg.BaseCtx), ctx), bound)
 	defer cancel()
 	promoted, held, err := qs.PromoteRunQueue(pctx, store.PromotePass{
 		PoolID: poolID, DeploymentCap: s.cfg.MaxConcurrentRuns, ScanLimit: queueScanLimit, WatcherOwner: watcherOwner,
@@ -77,7 +77,7 @@ func (s *Server) queueAdmit(ctx context.Context, pool types.RunnerPool, e store.
 	}
 	var auth queueAuthority
 	_ = json.Unmarshal(e.Authority, &auth) //nolint:errcheck // an unreadable authority fails the start's own checks
-	room, err := s.queueRunnerFree(auth.context(ctx), pool, launch)
+	room, err := s.queueRunnerFree(withQueueOwner(auth.context(ctx), e.Owner, e.Authority), pool, launch)
 	if err != nil {
 		return store.QueueVerdict{}, err
 	}
@@ -121,7 +121,7 @@ func (s *Server) queueRunnerFree(ctx context.Context, pool types.RunnerPool, lau
 	var req createRunRequest
 	_ = json.Unmarshal(launch.Request, &req) //nolint:errcheck // an unreadable request pins no runner
 	out := queueRoom{pinned: req.RunnerID != ""}
-	rows, refusal := s.permittedPools(ctx, ps, true)
+	rows, refusal := s.queuePermittedPools(ctx, ps)
 	if refusal != nil {
 		if refusal.err != nil && !errors.Is(refusal.err, errUserTypeUnknown) {
 			return out, fmt.Errorf("read the owner's pools: %w", refusal.err)
@@ -137,7 +137,7 @@ func (s *Server) queueRunnerFree(ctx context.Context, pool types.RunnerPool, lau
 	// on each (placementDemand.refusal: online, the barrier the run was queued at, limits declared). A
 	// ceiling that cannot be read denies nothing here: the start judges the run against it again.
 	in := placementInput{req: &req, reqCC: launch.Barrier, reqCCOK: launch.Barrier != "", drives: launch.Drives, noLocal: launch.NoLocal}
-	if ceiling, err := s.effectiveCeiling(ctx); err == nil {
+	if ceiling, err := s.queueCeiling(ctx); err == nil {
 		in.ceiling = ceiling
 	}
 	targets, refusal := s.poolTargets(ctx, &req, ps, row)
@@ -153,7 +153,11 @@ func (s *Server) queueRunnerFree(ctx context.Context, pool types.RunnerPool, lau
 	// Room is read here without a lock, by each runner's declared limits and In use, for the size the
 	// run would start with on that runner; the promotion holds that size to it again under the runner
 	// rows' locks, the person's own runners first.
-	demand := placementDemand{reqCC: in.reqCC, reqCCOK: in.reqCCOK, fits: s.runnerFits(ctx)}
+	fits, err := s.runnerFits(ctx)
+	if err != nil {
+		return out, err
+	}
+	demand := placementDemand{reqCC: in.reqCC, reqCCOK: in.reqCCOK, fits: fits}
 	out.needs = map[string]types.RunnerAmounts{}
 	online := false
 	for _, t := range slices.Concat(kinds[types.PlacementLocal], kinds[types.PlacementRemote]) {
@@ -212,6 +216,7 @@ func (s *Server) promoteWaitingPools(ctx context.Context) {
 	if !ok {
 		return
 	}
+	ctx = withQueuePass(ctx)
 	pools, err := qs.QueuePoolIDs(ctx)
 	if err != nil {
 		slog.WarnContext(ctx, "wardynd: list pools with waiting runs", slog.Any("err", err))
