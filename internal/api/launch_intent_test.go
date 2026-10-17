@@ -208,10 +208,10 @@ func TestLaunchIntentOwnerOnly(t *testing.T) {
 	}
 }
 
-// DR-0121 (lead ruling 2026-10-12 ~05:25Z: the refusal stays at every door, no
-// setup item): Run again and a shared template both name an added secret the
-// caller does not hold. Preview, preflight and create refuse it with one
-// sentence; nothing relaxes create's check for a body that came from a document.
+// Run again and a shared template both name an added secret the caller does not
+// hold. Preview and create refuse it with one sentence, and nothing relaxes
+// create's check for a body that came from a document; Review lists the secret
+// as a setup item to add instead.
 func TestReplay_AddSecretsNeedsSetup(t *testing.T) {
 	srv, _ := ovMemberFixture(t)
 	cookie := ovCookie(t)
@@ -224,7 +224,7 @@ func TestReplay_AddSecretsNeedsSetup(t *testing.T) {
 
 	sameRefusal := func(name string, c *http.Cookie) {
 		var sentence string
-		for _, door := range []string{previewDoor, preflightDoor, "/api/v1/runs"} {
+		for _, door := range []string{previewDoor, "/api/v1/runs"} {
 			w := doSSO(t, srv, http.MethodPost, door, c, replay)
 			if w.Code != http.StatusUnprocessableEntity || errorReason(w) != reasonOverrideRefused {
 				t.Errorf("%s at %s = %d %s, want 422 %s", name, door, w.Code, w.Body.String(), reasonOverrideRefused)
@@ -240,6 +240,11 @@ func TestReplay_AddSecretsNeedsSetup(t *testing.T) {
 		}
 	}
 	sameRefusal("a shared template's second member", other)
+	var pf preflightResponse
+	if w := doSSO(t, srv, http.MethodPost, preflightDoor, other, replay); w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &pf) != nil ||
+		!slices.ContainsFunc(pf.SetupItems, func(it SetupItem) bool { return it.ID == "secret:my-key" && it.Status == "missing" }) {
+		t.Errorf("Review of a shared template for a member without the secret = %d %s, want 200 listing secret:my-key as missing", w.Code, w.Body.String())
+	}
 	memSecretsMu.Lock()
 	delete(srv.cfg.Secrets.(*memSecrets).owned[govMemberSub], "my-key")
 	memSecretsMu.Unlock()
