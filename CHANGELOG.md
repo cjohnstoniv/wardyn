@@ -8,6 +8,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+### Fixed
+
+- A policy apply is audited only once the launch passes every step, and a recording upload for a run that no longer exists answers 404.
+
 ## [0.9.3-rc.3] — 2026-10-17
 
 Organisation runners and resident credentials: an organisation can run sandboxes on its own runner in a Kubernetes
