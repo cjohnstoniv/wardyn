@@ -322,6 +322,7 @@ func (g *sshSessionGate) subsystemBridge(req *ssh.Request, channel ssh.Channel, 
 				s.sshAuditChannelRejected(ctx, runID, principal, "session", sshCapReasonSync, maxSSHSyncSessionsPerRun)
 			}
 			_ = req.Reply(false, nil)
+			sendChannelError(channel, fmt.Sprintf("wardyn: this run already has %d sync sessions (the most it allows); wait for one to end", maxSSHSyncSessionsPerRun))
 			return nil
 		}
 		return func() { s.bridgeSSHSync(ctx, runID, principal, channel, syncEnv) }

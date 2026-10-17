@@ -658,3 +658,34 @@ func TestSCIMCovAnAmbiguousEmailLeavesOnlyTheBoundForms(t *testing.T) {
 		t.Errorf("forms = %+v (%v), want only the object-id form and an %s refusal", forms, err, reasonOwnerAmbiguous)
 	}
 }
+
+// The sweep of an unbound leaver's email deletes the keys under that exact name and never resolves the
+// address, so an address two token principals hold neither stops the sweep nor reaches either one's keys.
+func TestSCIMCovSweepOfAnUnboundEmailDeletesByTheExactNameWhenTwoPrincipalsHoldIt(t *testing.T) {
+	st := newSCIMCovStore()
+	ident := st.addIdentity(store.PrincipalIdentity{
+		Issuer: scimCovIssuer, TenantID: scimCovTenant, ObjectID: scimCovOID, EmailLower: "pat@corp.example",
+	})
+	st.emailSubs["pat@corp.example"] = []string{"sub-one", "sub-two"}
+	st.keys = append(st.keys,
+		types.SSHPublicKey{Fingerprint: "fp-one", Principal: "sub-one"},
+		types.SSHPublicKey{Fingerprint: "fp-two", Principal: "sub-two"})
+	e := newSCIMCovEnv(t, st)
+	ctx := withActor(context.Background(), types.ActorSystem, scimActor)
+
+	forms := leaverForms{targets: []string{"pat@corp.example"}}
+	res, err := e.srv.sweepTarget(ctx, "pat@corp.example", forms, ident)
+	if err != nil || res.Keys != 0 || res.Refusal != "" {
+		t.Fatalf("sweep = %+v, %v; want no error and no refusal", res, err)
+	}
+	if !slices.Equal(st.deletedKeys, []string{"pat@corp.example"}) {
+		t.Errorf("keys deleted for %v, want the address's exact name alone", st.deletedKeys)
+	}
+	var left []string
+	for _, k := range st.keys {
+		left = append(left, k.Fingerprint)
+	}
+	if !slices.Equal(left, []string{"fp-one", "fp-two"}) {
+		t.Errorf("keys left = %v, want only the two principals' own", left)
+	}
+}

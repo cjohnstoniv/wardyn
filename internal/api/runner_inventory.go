@@ -207,18 +207,6 @@ func (s *Server) handleGetRunner(w http.ResponseWriter, r *http.Request) {
 // owner learns it happened.
 const myRunnerRevokedShown = 7 * 24 * time.Hour
 
-// myRunnerHidden reports a row the owner's own list leaves out: another person's, a lapsed unclaimed
-// one, and a revoked one unless someone other than the owner revoked it within myRunnerRevokedShown.
-func myRunnerHidden(row types.Runner, owner string, now time.Time) bool {
-	if row.Owner != owner || runnerLapsed(row, now) {
-		return true
-	}
-	if row.State != types.RunnerRevoked {
-		return false
-	}
-	return row.RevokedAt == nil || row.RevokedBy == owner || row.RevokedAt.Before(now.Add(-myRunnerRevokedShown))
-}
-
 // handleListMyRunners is GET /api/v1/me/runners: the caller's own unclaimed and claimed runners, and
 // any a different person revoked in the last week.
 func (s *Server) handleListMyRunners(w http.ResponseWriter, r *http.Request) {
@@ -233,13 +221,11 @@ func (s *Server) handleListMyRunners(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	rows, err := rs.ListRunnersByOwner(r.Context(), owner)
+	rows, err := rs.ListVisibleRunnersByOwner(r.Context(), owner, s.cfg.Now().UTC(), myRunnerRevokedShown)
 	if err != nil {
 		writeServerError(w, r, "list my runners", err)
 		return
 	}
-	now := s.cfg.Now().UTC()
-	rows = slices.DeleteFunc(rows, func(row types.Runner) bool { return myRunnerHidden(row, owner, now) })
 	if views, ok := s.runnerViews(w, r, rs, rows, false); ok {
 		writeJSON(w, http.StatusOK, views)
 	}

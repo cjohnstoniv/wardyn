@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -279,5 +280,49 @@ func TestPG_CredentialGrants_DeliveryRoundTripAndCheck(t *testing.T) {
 	var d string
 	if err := pool.QueryRow(ctx, `SELECT delivery FROM credential_grants WHERE id=$1`, id).Scan(&d); err != nil || d != "" {
 		t.Fatalf("legacy grant delivery = %q, %v", d, err)
+	}
+}
+
+// The owner's own list leaves out a lapsed unclaimed runner and a revoked one unless someone else revoked it
+// within the window, in the query itself: the same rows the console's list showed when the filter ran after
+// the read.
+func TestPG_Runners_ListVisibleByOwnerFiltersInTheQuery(t *testing.T) {
+	pool := runsPGPool(t)
+	ctx := context.Background()
+	st := store.NewPG(pool)
+	owner := "owner-" + uuid.NewString()
+	now := time.Now().UTC()
+	mk := func(owner string) types.Runner {
+		r, err := st.CreateRunner(ctx, newRunner(owner))
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM runners WHERE id = $1`, r.ID) })
+		return r
+	}
+	fresh, lapsed, byOwner, bySomeone, stale, other := mk(owner), mk(owner), mk(owner), mk(owner), mk(owner), mk("someone-else")
+	if _, err := pool.Exec(ctx, `UPDATE runners SET created_at = $2 WHERE id = $1`, lapsed.ID, now.Add(-types.RunnerUnclaimedTTL-time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		r  types.Runner
+		by string
+		at time.Time
+	}{{byOwner, owner, now}, {bySomeone, "admin", now.Add(-time.Hour)}, {stale, "admin", now.Add(-8 * 24 * time.Hour)}} {
+		if _, err := st.RevokeRunner(ctx, c.r.ID, c.at, c.by, "not_mine"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := st.ListVisibleRunnersByOwner(ctx, owner, now, 7*24*time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ids []uuid.UUID
+	for _, r := range got {
+		ids = append(ids, r.ID)
+	}
+	if len(ids) != 2 || !slices.Contains(ids, fresh.ID) || !slices.Contains(ids, bySomeone.ID) {
+		t.Errorf("visible = %v, want only the fresh runner %s and the one someone else revoked %s (not lapsed %s, owner-revoked %s, stale %s, other's %s)",
+			ids, fresh.ID, bySomeone.ID, lapsed.ID, byOwner.ID, stale.ID, other.ID)
 	}
 }
