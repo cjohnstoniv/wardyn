@@ -141,13 +141,15 @@ describe("Effective policy card", () => {
     const view = render(<EffectivePolicyCard draft={draftOf(BASE)} pre={{ ...SCENARIO_PREFLIGHT.member, access: mixed } as never} preview={null} />);
     expect(document.querySelector("[data-policy-row=tools]")).toHaveTextContent(`claude-code: ${NR_REVIEW.POLICY_AUTOMATIC} · codex-cli: ${NR_TOOLS.EFFECT_DENY}`);
     view.unmount();
-    const same = withDefaults(["claude-code", "hold"], ["codex-cli", "hold"]) as never;
+    const source = { kind: "policy", name: "Team policy" };
+    const held = (harness: string) => ({ ...harnessDefault(harness, "hold"), default: { ...CLAUDE_UNGATED.default, effective: "hold", source } });
+    const same = { ...SCENARIO_ACCESS.member, harnesses: [held("claude-code"), held("codex-cli")] } as never;
     render(<EffectivePolicyCard draft={draftOf(BASE)} pre={{ ...SCENARIO_PREFLIGHT.member, access: same } as never} preview={null} />);
     const tools = document.querySelector("[data-policy-row=tools]") as HTMLElement;
     expect(tools).toHaveTextContent(NR_REVIEW.POLICY_HOLD);
     expect(tools).not.toHaveTextContent("claude-code:");
     expect(tools).not.toHaveTextContent("Claude Code:");
-    expect(tools).toHaveTextContent(CLAUDE_UNGATED.default.source.name);
+    expect(tools).toHaveTextContent("Team policy");
   });
 
   it.each([[["pypi.org"], NR_REVIEW.POLICY_HOST_ONE], [["pypi.org", "registry.npmjs.org"], NR_REVIEW.POLICY_HOSTS(2)]])(
