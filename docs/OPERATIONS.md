@@ -1384,7 +1384,14 @@ erases one person's retained records by explicit scope, in one audited act
      its emails name two different people, the suspension refuses until an admin resolves it.
    - `userName` and `emails` may change (renames are accepted as a projection update and the old values are kept as
      removal aliases); `externalId` may not change on a bound identity.
-5. Check a test user: suspend them from the provisioning job, then confirm a `scim.user.deactivate` row and a
+5. If you provision groups, map each group's `externalId` to the value the sign-in's groups claim carries for it: the
+   group's object id.
+   - A SCIM group removal revokes a person's API tokens only when the token's login-time group snapshot holds that
+     `externalId` (compared in lower case).
+   - If the app emits group names instead of object ids, no token matches: the removal cuts the person's browser
+     sessions only, their API tokens keep the removed group's grants until the next sign-in or
+     `WARDYN_ROLE_STAMP_TTL`, and `scim.group.member_remove` reports `tokens_revoked: 0`.
+6. Check a test user: suspend them from the provisioning job, then confirm a `scim.user.deactivate` row and a
    `person.deprovision` row in the audit log ([AUDIT-ACTIONS.md](AUDIT-ACTIONS.md)).
 
 #### What a purge removes
@@ -1479,7 +1486,8 @@ lose access now, do not wait for it:
     - A SCIM group removal stops the same way before it cuts a session or revokes a token. It stays pending with the
       reason, listed on the SCIM status card, and a retry finishes it once the person's emails name one principal.
 - **Role changes that are not SCIM group removals** at the identity provider still lag until the person signs in
-  again.
+  again. A group removal also lags for API tokens when the sign-in's groups claim carries names, not the object ids
+  the group's `externalId` holds ("Turn it on", step 5): it then cuts sessions only.
 - **No identity-provider logout.** Signing out at the identity provider does not end a Wardyn session: Wardyn has no front- or back-channel logout, and SCIM deprovisioning is a separate revocation, not the propagation of an IdP logout. A person's own sign-out ends their console sessions only (`session.revoke` with `sessions_only`, [AUDIT-ACTIONS](AUDIT-ACTIONS.md)).
 - **Long-lived connections.** A suspension kills every live run, which ends its attach and SSH sessions. Other
   console streams end at their next authentication check or reconnect.
