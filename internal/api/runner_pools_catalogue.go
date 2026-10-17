@@ -73,7 +73,10 @@ func (s *Server) poolList(r *http.Request, ps store.RunnerPoolStore, rows []stor
 		}
 	}
 	in.slots = s.slotCounts(ctx, usable)
-	in.fits = s.runnerFits(ctx)
+	var fitErr error
+	if in.fits, fitErr = s.runnerFits(ctx); fitErr != nil {
+		return client.RunnerPoolList{}, runServerError("read runner limits", fitErr)
+	}
 	for _, row := range rows {
 		if !subj.permits(row, owner) {
 			// Listed for a manager only: they may manage it (or, another person's user pool, oversee
@@ -130,10 +133,23 @@ func (s *Server) catalogueEntry(r *http.Request, in *poolListInput, row store.Ru
 		}
 	}
 	targets := st.own
-	if row.Pool.Scope == types.RunnerPoolOrganization && st.availability == client.RunnerPoolAvailable {
+	if st.availability == client.RunnerPoolAvailable {
 		// Only through the inspector's facts, never a lone driver's own probe.
 		if _, ok := s.targetInspector(); ok {
-			targets, _ = executorTargets(row, s.configuredExecutors(), func(e string) (runner.TargetFacts, bool) { return in.executorFacts(ctx, s, e) })
+			read := func(e string) (runner.TargetFacts, bool) { return in.executorFacts(ctx, s, e) }
+			switch {
+			case row.Pool.Scope == types.RunnerPoolOrganization:
+				targets, _ = executorTargets(row, s.configuredExecutors(), read)
+			case !slices.Contains(in.denied, types.PlacementRemote):
+				// A user pool also offers its remote-hosted members whose people policy admits the
+				// person, as launch does (poolTargets), so its barriers read the same.
+				admitted, refusal := s.admittedRemoteMembers(ctx, row)
+				if refusal != nil {
+					return client.RunnerPoolCatalogueEntry{}, refusal
+				}
+				remote, _ := executorTargets(admitted, s.configuredExecutors(), read)
+				targets = append(slices.Clone(st.own), remote...)
+			}
 		}
 	}
 	e.MainDrive = s.poolMainDriveFor(row, st.own, func(x string) (runner.TargetFacts, bool) { return in.executorFacts(ctx, s, x) })

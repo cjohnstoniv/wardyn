@@ -254,10 +254,11 @@ func baseOrBuild(dc *genDevcontainer, baseRef string, pins *Pins) map[string]str
 //
 // artifactBases maps an artifact ecosystem to the operator's corporate
 // registry base URL (URL-ONLY, never a token), already skipping NETWORK-ONLY
-// rows; pass nil when no redirect is configured.
+// rows; pass nil when no redirect is configured. goSumDBOff is the go mirror's opt-out of
+// checksum-database verification.
 //
 // baseRef is the workspace's own resolved base-image ref, or "" — see baseOrBuild.
-func EmitEnvAsCode(p WorkspaceProfile, artifactBases map[string]string, baseRef string) (map[string]string, error) {
+func EmitEnvAsCode(p WorkspaceProfile, artifactBases map[string]string, goSumDBOff bool, baseRef string) (map[string]string, error) {
 	var dc genDevcontainer
 	extra := baseOrBuild(&dc, baseRef, nil)
 	if features := featuresFor(p.Languages); len(features) > 0 {
@@ -270,7 +271,7 @@ func EmitEnvAsCode(p WorkspaceProfile, artifactBases map[string]string, baseRef 
 	}
 	// go rides containerEnv (GOPROXY/GOSUMDB); other ecosystems emit their own
 	// config files, merged into the return below.
-	artifactFiles, artifactEnv := hostrules.EmitArtifactConfig(artifactBases)
+	artifactFiles, artifactEnv := hostrules.EmitArtifactConfig(artifactBases, goSumDBOff)
 	for k, v := range artifactEnv {
 		if dc.ContainerEnv == nil {
 			dc.ContainerEnv = map[string]string{}

@@ -13,6 +13,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/composer"
 	"github.com/cjohnstoniv/wardyn/internal/setup"
 	"github.com/cjohnstoniv/wardyn/internal/types"
+	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
 
 // SetupItem is a per-requirement readiness verdict for a composed run, computed
@@ -184,17 +185,7 @@ func setupSecretItems(spec types.RunPolicySpec, presentSecrets map[string]bool) 
 			return
 		}
 		seen[name] = true
-		status := "missing"
-		var fix *SetupFix
-		if presentSecrets[name] {
-			status = "satisfied"
-		} else {
-			fix = &SetupFix{Action: "add_secret", SecretName: name}
-		}
-		items = append(items, SetupItem{
-			Kind: "secret", ID: "secret:" + name, Label: "Secret: " + name,
-			RequiredBy: requiredBy, Status: status, Fix: fix, Residency: residency,
-		})
+		items = append(items, secretSetupItem(name, requiredBy, residency, presentSecrets[name]))
 	}
 	for _, g := range spec.EligibleGrants {
 		switch g.Kind {
@@ -225,6 +216,35 @@ func setupSecretItems(spec types.RunPolicySpec, presentSecrets map[string]bool) 
 			if file, secretName, err := fileSecretScopeFields(g.Scope); err == nil {
 				add(secretName, "a file_secret grant ("+file+")", "resident_file")
 			}
+		}
+	}
+	return items
+}
+
+// secretSetupItem is the checklist row for one stored secret a run needs: satisfied when the person's
+// namespace holds it, else missing with the add_secret fix.
+func secretSetupItem(name, requiredBy, residency string, present bool) SetupItem {
+	status := "missing"
+	var fix *SetupFix
+	if present {
+		status = "satisfied"
+	} else {
+		fix = &SetupFix{Action: "add_secret", SecretName: name}
+	}
+	return SetupItem{
+		Kind: "secret", ID: "secret:" + name, Label: "Secret: " + name,
+		RequiredBy: requiredBy, Status: status, Fix: fix, Residency: residency,
+	}
+}
+
+// overrideSecretItems are the missing rows for the secrets the person's New Run edits add and they
+// have not stored, so Review lists what create would refuse. A secret the checklist already names is
+// not listed twice.
+func overrideSecretItems(items []SetupItem, missing []client.SecretOverride) []SetupItem {
+	for _, sec := range missing {
+		it := secretSetupItem(sec.SecretName, "an api_key grant ("+strings.ToLower(sec.Host)+")", "proxy_injected", false)
+		if !slices.ContainsFunc(items, func(x SetupItem) bool { return x.ID == it.ID }) {
+			items = append(items, it)
 		}
 	}
 	return items

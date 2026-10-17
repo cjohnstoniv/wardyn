@@ -290,6 +290,28 @@ type RunnerKilledRun struct {
 	From types.RunState
 }
 
+// EraseRunnerAttributionOf clears person as the revoker of every runner and as the minter of every
+// registration token minted for someone else, and returns how many rows that changed. A token a person
+// minted for themselves keeps minted_by = owner: that equality is how a self-minted runner is told apart
+// from one an admin minted. Idempotent: a row already cleared matches nothing.
+func (s PG) EraseRunnerAttributionOf(ctx context.Context, person string) (int, error) {
+	if person == "" {
+		return 0, errors.New("store: erase runner attribution: a person is required")
+	}
+	n := 0
+	for _, stmt := range []string{
+		`UPDATE runners SET revoked_by = '' WHERE revoked_by = $1`,
+		`UPDATE runner_registration_tokens SET minted_by = '' WHERE minted_by = $1 AND owner <> $1`,
+	} {
+		tag, err := s.Pool.Exec(ctx, stmt, person)
+		if err != nil {
+			return 0, fmt.Errorf("store: erase runner attribution: %w", err)
+		}
+		n += int(tag.RowsAffected())
+	}
+	return n, nil
+}
+
 // RevokeRunner revokes a runner in one transaction: the runner row with who
 // revoked it and why, every run holding a slot on it ended KILLED, and every
 // unsettled pending action of it settled 'revoked'. A QUEUED run holds no slot

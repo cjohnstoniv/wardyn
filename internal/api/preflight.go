@@ -361,6 +361,9 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	}
 
 	items := s.deriveRunSetupItems(ctx, s.secretOwnerFromRequest(r), runInput, spec, f.present, llmAccess, f.wsRefs)
+	if e := f.source.edits; e != nil {
+		items = overrideSecretItems(items, e.missingSecrets)
+	}
 
 	// credentialConfinementAdvisory (#150): the SAME shared helper the create
 	// path calls (appendCredentialConfinementAdvisory, runs_create.go), off the

@@ -416,3 +416,33 @@ func TestDryDoorsCarryTheCallersOwnRunnersInEachPool(t *testing.T) {
 		}
 	}
 }
+
+// A person's pool that holds only a remote-hosted runner the people policy admits them to is listed with
+// that runner's barriers, as a launch into it would offer them; a policy that no longer admits them
+// leaves the pool with none.
+func TestPoolListUserPoolOffersItsAdmittedRemoteMembersBarriers(t *testing.T) {
+	e := newPlacementEnv(t)
+	pool := e.createOwnPool(e.person, "Remote only")
+	e.setPeople("alpha", everyonePeople)
+	if w := e.call(e.person, http.MethodPut, myRemotePath(pool.ID, "alpha"), ""); w.Code != http.StatusCreated {
+		t.Fatalf("add alpha = %d %s", w.Code, w.Body)
+	}
+	available := func() []client.BarrierOption {
+		list, _ := e.list(e.person, "")
+		got := entryOf(t, list, pool.ID)
+		var out []client.BarrierOption
+		for _, o := range got.BarrierOptions {
+			if o.Available {
+				out = append(out, o)
+			}
+		}
+		return out
+	}
+	if len(available()) == 0 {
+		t.Fatal("a pool holding an admitted remote-hosted runner offers no barrier")
+	}
+	e.setPeople("alpha", "")
+	if got := available(); len(got) != 0 {
+		t.Fatalf("a runner the policy no longer admits still offers barriers: %+v", got)
+	}
+}

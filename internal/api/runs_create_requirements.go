@@ -7,6 +7,8 @@ import (
 	"context"
 	"slices"
 
+	"github.com/google/uuid"
+
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
@@ -220,7 +222,7 @@ func (s *Server) applyWorkspaceRequirementsFor(ctx context.Context, present map[
 					pinned := true
 					narrow = &pinned
 				}
-				for _, i := range applyWriteNarrowing(spec, name, enabled, narrow, enabled || slices.ContainsFunc(attached, func(a types.Workspace) bool { return a.ID == ws.ID })) {
+				for _, i := range applyWriteNarrowing(spec, name, enabled, narrow, enabled || slices.ContainsFunc(attached, func(a types.Workspace) bool { return a.ID == ws.ID }), writeGrantedElsewhere(attached, selections, name, ws.ID)) {
 					suppliers[i] = append(suppliers[i], ws)
 				}
 			}
@@ -295,6 +297,21 @@ func readOnlyPinned(attached []types.Workspace, selections map[string]client.Wor
 	return false
 }
 
+// writeGrantedElsewhere reports whether an attached workspace other than except holds a write:<path>
+// row the run grants: required, or enabled by that workspace's own selection.
+func writeGrantedElsewhere(attached []types.Workspace, selections map[string]client.WorkspaceSelection, path string, except uuid.UUID) bool {
+	key := "write:" + path
+	for _, a := range attached {
+		if a.ID == except {
+			continue
+		}
+		if req, ok := effectiveRequirements(a)[key]; ok && (req.Level == "required" || slices.Contains(selections[a.ID.String()].EnabledOptional, key)) {
+			return true
+		}
+	}
+	return false
+}
+
 // applyWriteNarrowing resolves ONE write:<path> requirement's effective mount
 // writability onto every spec.WorkspaceMounts entry whose Source is path (a
 // no-op when path isn't actually mounted this run — e.g. a multi-source
@@ -312,10 +329,15 @@ func readOnlyPinned(attached []types.Workspace, selections map[string]client.Wor
 // required or enabled. A workspace that is only in the run because it stores
 // the same directory (referencedWorkspacesIn) and whose row is not enabled
 // neither grants a write nor removes one another workspace granted.
-func applyWriteNarrowing(spec *types.RunPolicySpec, path string, grantedDefault bool, narrow *bool, mayNarrow bool) []int {
-	granted := grantedDefault
-	if narrow != nil && *narrow {
-		granted = false
+//
+// A row that grants nothing and carries no explicit read_only also leaves the mount alone when
+// another attached workspace's row grants it (grantedElsewhere), so the answer does not depend on the
+// order workspaces fold in: only a read_only the run asked for takes a granted write away.
+func applyWriteNarrowing(spec *types.RunPolicySpec, path string, grantedDefault bool, narrow *bool, mayNarrow, grantedElsewhere bool) []int {
+	explicit := narrow != nil && *narrow
+	granted := grantedDefault && !explicit
+	if !granted && !explicit && grantedElsewhere {
+		return nil
 	}
 	var writable []int
 	for i := range spec.WorkspaceMounts {

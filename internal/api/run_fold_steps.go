@@ -4,6 +4,7 @@
 package api
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -49,7 +50,14 @@ func (s *Server) stepPolicy(f *runFold, rec *foldRecorder) bool {
 		return true
 	}
 	var ok bool
-	f.spec, f.policyID, f.policyWarns, f.source, ok = s.resolveRunPolicy(ctx, f.w, f.r, f.req, f.mode == foldPreflight)
+	// A promoted run's start replays the fold its create already ran, which wrote the policy audit rows
+	// once: the replay writes none, as a dry door writes none.
+	dry := f.promoted
+	if f.mode == foldPreflight {
+		ctx = context.WithValue(ctx, reviewDoorKey{}, true)
+		dry = true
+	}
+	f.spec, f.policyID, f.policyWarns, f.source, ok = s.resolveRunPolicy(ctx, f.w, f.r, f.req, dry)
 	if ok {
 		recordPolicySource(rec, f.source, f.spec)
 	}

@@ -158,7 +158,10 @@
 # docs/AUDIT-ACTIONS.md 47229 = 47174 + 55 (RV4a), measured at the wave-B merge.
 # docs/AUDIT-ACTIONS.md 46407 adds 13 over 46394, measured (0.9.3 UIM merge of UIa): the run.create resources_applied pids_limit wording measures 18 words, not the 5 recorded above.
 # docs/AUDIT-ACTIONS.md 47250 = 47229 + 21 (UIM), measured at the wave-B merge.
-docs/AUDIT-ACTIONS.md=47250 share=8
+# docs/AUDIT-ACTIONS.md 46470 adds 81 over 46389, measured: the direct deletes record what they removed and the go checksum opt-out on site_config.write.
+# docs/AUDIT-ACTIONS.md 46485 adds 15 over 46470, measured: the per-principal attach cap on operator-owned and service identity runs.
+# docs/AUDIT-ACTIONS.md 47362 = 47250 + 112 (RV4f), measured at the wave-B merge.
+docs/AUDIT-ACTIONS.md=47362 share=8
 # docs/AUDIT-ACTIONS.md 39938 adds 1 (0.9 H7): the `placement_component_self_defined` reason in the authz.denied vocabulary.
 # 0.9 H10 r1: docs/AUDIT-ACTIONS.md 40113 adds 65 over 40048 for the token-revoke join, the off semantics and the pending connect/disconnect rows.
 # 0.9 H10: docs/AUDIT-ACTIONS.md 40048 adds 111 over 39937 for runner.token.revoke, runners.enabled.set, runner.connect and runner.disconnect.

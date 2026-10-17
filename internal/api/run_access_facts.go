@@ -14,6 +14,8 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/agentpolicy"
 	"github.com/cjohnstoniv/wardyn/internal/armscope"
+	"github.com/cjohnstoniv/wardyn/internal/egress"
+	"github.com/cjohnstoniv/wardyn/internal/egress/domainmatch"
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/ghscope"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -264,7 +266,8 @@ func (b *accessBuilder) addRow(row client.AccessRow) {
 func (b *accessBuilder) addHost(host, via, rowID string) {
 	h, ok := b.hosts[host]
 	if !ok {
-		h = &client.AccessHost{Host: host, Via: via, Rows: []string{}}
+		_, _, port := domainmatch.Classify(host)
+		h = &client.AccessHost{Host: host, Port: port, Via: via, Rows: []string{}}
 		b.hosts[host] = h
 		b.order = append(b.order, host)
 	}
@@ -749,10 +752,24 @@ func accessHostSource(prov []provenanceRow, policy policySourceRecord, host stri
 // mode: a request under a review mode, refused otherwise — clamped when the
 // ceiling took the person's own entry away.
 func accessHostVerdict(h client.AccessHost, spec types.RunPolicySpec, clamped bool) (verdict, reason string) {
+	denied, listed := ceilingDenies(spec.DeniedDomains, h.Host), specAllowsHost(spec, h.Host)
+	if h.Port > 0 {
+		// A spelled port is judged by the proxy's own matcher: an entry for another port neither
+		// denies nor allows it, and a bare entry covers every port.
+		denied, listed = false, false
+		bare, _, _ := domainmatch.Classify(h.Host)
+		switch v, _ := proxy.NewBuiltinEvaluator(types.RunPolicySpec{AllowedDomains: spec.AllowedDomains, DeniedDomains: spec.DeniedDomains}).
+			EvaluateHost(context.Background(), egress.Request{Host: bare, Port: h.Port}); v {
+		case egress.VerdictDeny:
+			denied = true
+		case egress.VerdictAllow:
+			listed = true
+		}
+	}
 	switch {
-	case ceilingDenies(spec.DeniedDomains, h.Host):
+	case denied:
 		return verdictNotAllowed, hostReasonDeniedList
-	case h.Via != viaEgress || spec.AllowAllEgress || specAllowsHost(spec, h.Host):
+	case h.Via != viaEgress || spec.AllowAllEgress || listed:
 		return verdictAllowed, ""
 	case spec.FirstUseApproval.RaisesApproval():
 		return verdictNeedsApproval, ""

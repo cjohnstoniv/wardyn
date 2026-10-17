@@ -286,3 +286,38 @@ func TestWorkspaceCloneHost_ScanRunIsBounded(t *testing.T) {
 		})
 	}
 }
+
+// TestWorkspaceCloneHost_AnOperatorRunningAMembersWorkspaceIsBoundedByTheCeiling: the bound follows who
+// owns the workspace, not who launches it. An operator (the admin token) running a member-owned
+// workspace does not get the private clone host the deployment ceiling does not list, however the
+// ceiling is spelled.
+func TestWorkspaceCloneHost_AnOperatorRunningAMembersWorkspaceIsBoundedByTheCeiling(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		ceiling []string
+		want    bool
+	}{
+		{"the ceiling does not list the address", nil, false},
+		{"a ceiling entry for one port", []string{"10.0.0.5:8443"}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, st, _ := govEscapeFixture(t, &capStore{})
+			srv.cfg.DefaultPolicy.AllowAllEgress = true
+			srv.cfg.DefaultPolicy.AllowedDomains = append(slices.Clone(srv.cfg.DefaultPolicy.AllowedDomains), tc.ceiling...)
+			ws := cloneLiteralWorkspace(govMemberSub)
+			st.workspaces = []types.Workspace{ws}
+			body := `{"agent":"claude-code","task":"t","inline_policy":{"min_confinement_class":"CC2"},"workspaces":[{"workspace_id":"` + ws.ID.String() + `"}]}`
+			for _, door := range []string{previewDoor, preflightDoor} {
+				w := do(t, srv, http.MethodPost, door, adminToken, body)
+				if w.Code != http.StatusOK {
+					t.Fatalf("%s = %d: %s", door, w.Code, w.Body)
+				}
+				if slices.ContainsFunc(provRows(t, w), func(r provenanceRow) bool {
+					return r.Field == fieldAllowed && r.Value == "10.0.0.5"
+				}) != tc.want {
+					t.Errorf("%s: allowed 10.0.0.5 = %v, want %v: %s", door, !tc.want, tc.want, w.Body)
+				}
+			}
+		})
+	}
+}

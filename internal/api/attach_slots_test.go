@@ -37,7 +37,7 @@ func attachSlotsHeld(s *Server, runID uuid.UUID) int {
 
 func TestAttachSlots_SimultaneousContendersAtTheCapReleaseAndRetry(t *testing.T) {
 	s := &Server{}
-	run := uuid.New()
+	run := types.AgentRun{ID: uuid.New(), CreatedBy: "alice@example.com"} // a personal run: the run cap alone
 	start := make(chan struct{})
 	type result struct {
 		release func()
@@ -47,7 +47,7 @@ func TestAttachSlots_SimultaneousContendersAtTheCapReleaseAndRetry(t *testing.T)
 	for range 2 * maxAttachSessionsPerRun {
 		go func() {
 			<-start
-			release, ok := s.reserveAttachSlot(run)
+			release, ok := s.reserveAttachSlot(run, "alice@example.com")
 			results <- result{release, ok}
 		}()
 	}
@@ -58,27 +58,27 @@ func TestAttachSlots_SimultaneousContendersAtTheCapReleaseAndRetry(t *testing.T)
 			held = append(held, r.release)
 		}
 	}
-	if len(held) != maxAttachSessionsPerRun || attachSlotsHeld(s, run) != maxAttachSessionsPerRun {
-		t.Fatalf("%d contenders won (%d counted), want exactly %d", len(held), attachSlotsHeld(s, run), maxAttachSessionsPerRun)
+	if len(held) != maxAttachSessionsPerRun || attachSlotsHeld(s, run.ID) != maxAttachSessionsPerRun {
+		t.Fatalf("%d contenders won (%d counted), want exactly %d", len(held), attachSlotsHeld(s, run.ID), maxAttachSessionsPerRun)
 	}
-	if _, ok := s.reserveAttachSlot(uuid.New()); !ok {
+	if _, ok := s.reserveAttachSlot(types.AgentRun{ID: uuid.New()}, "alice@example.com"); !ok {
 		t.Fatal("another run was refused: the cap is per run")
 	}
 
 	held[0]()
 	held[0]() // idempotent: a second call frees nothing more
-	release, ok := s.reserveAttachSlot(run)
+	release, ok := s.reserveAttachSlot(run, "alice@example.com")
 	if !ok {
 		t.Fatal("a retry after a release was refused")
 	}
-	if _, ok := s.reserveAttachSlot(run); ok {
+	if _, ok := s.reserveAttachSlot(run, "alice@example.com"); ok {
 		t.Fatal("a release called twice freed two slots")
 	}
 	release()
 	for _, r := range held[1:] {
 		r()
 	}
-	if n := attachSlotsHeld(s, run); n != 0 {
+	if n := attachSlotsHeld(s, run.ID); n != 0 {
 		t.Fatalf("%d slots still counted after every release", n)
 	}
 }
@@ -126,10 +126,16 @@ func attachSlotsTestServer(t *testing.T) (*Server, *holderTestRunner, *sshTestRe
 	return srv, fr, audit, run, ts, returned
 }
 
-// dialAttachRefused dials one attach more and returns the HTTP status it was refused with.
+// dialAttachRefused dials one attach more as holderSecond and returns the HTTP status it was refused with.
 func dialAttachRefused(t *testing.T, ts *httptest.Server, srv *Server, runID uuid.UUID) int {
 	t.Helper()
-	tok, err := mintAttachTicket(context.Background(), srv.cfg.Store, runID, types.ActorHuman, holderSecond, oidc.RoleAdmin, oidc.Issue{At: time.Now()})
+	return dialAttachRefusedAs(t, ts, srv, runID, holderSecond)
+}
+
+// dialAttachRefusedAs is dialAttachRefused for any principal.
+func dialAttachRefusedAs(t *testing.T, ts *httptest.Server, srv *Server, runID uuid.UUID, principal string) int {
+	t.Helper()
+	tok, err := mintAttachTicket(context.Background(), srv.cfg.Store, runID, types.ActorHuman, principal, oidc.RoleAdmin, oidc.Issue{At: time.Now()})
 	if err != nil {
 		t.Fatalf("mint ticket: %v", err)
 	}
@@ -306,7 +312,7 @@ func TestAttachSlots_TicketMintNamesTheCap(t *testing.T) {
 
 	var releases []func()
 	for range maxAttachSessionsPerRun {
-		release, ok := srv.reserveAttachSlot(run)
+		release, ok := srv.reserveAttachSlot(types.AgentRun{ID: run}, "alice")
 		if !ok {
 			t.Fatal("a slot below the cap was refused")
 		}
@@ -322,5 +328,70 @@ func TestAttachSlots_TicketMintNamesTheCap(t *testing.T) {
 	releases[0]()
 	if w := mint(); w.Code != http.StatusOK {
 		t.Errorf("mint below the cap = %d %s, want 200", w.Code, w.Body)
+	}
+}
+
+// TestAttachSlots_OnePrincipalCannotFillARunMorePrincipalsCanEnter: on an operator-owned run one
+// principal stops at seven of the eight sessions and is refused the eighth like a full run, so another
+// principal still gets in; the run cap holds for everyone. A personal run admits only its owner's own
+// principal, so it keeps the run cap alone.
+func TestAttachSlots_OnePrincipalCannotFillARunMorePrincipalsCanEnter(t *testing.T) {
+	srv, fr, audit, run, ts, _ := attachSlotsTestServer(t)
+	for i := range maxAttachSessionsPerPrincipal {
+		readAttachMode(t, dialAttach(t, ts, srv, run.ID, holderSecond, ""))
+		waitForSession(t, fr, i)
+	}
+	if code := dialAttachRefusedAs(t, ts, srv, run.ID, holderSecond); code != http.StatusServiceUnavailable {
+		t.Fatalf("the principal's eighth attach was refused with %d, want 503", code)
+	}
+	if got := capRefusals(audit); len(got) != 1 {
+		t.Fatalf("cap refusals audited = %v, want one, in the run cap's shape", got)
+	}
+	readAttachMode(t, dialAttach(t, ts, srv, run.ID, holderOwner, ""))
+	waitForSession(t, fr, maxAttachSessionsPerPrincipal)
+	if code := dialAttachRefusedAs(t, ts, srv, run.ID, holderOwner); code != http.StatusServiceUnavailable {
+		t.Fatalf("a ninth attach was refused with %d, want 503", code)
+	}
+	if n := attachSlotsHeld(srv, run.ID); n != maxAttachSessionsPerRun {
+		t.Fatalf("%d slots counted, want %d", n, maxAttachSessionsPerRun)
+	}
+}
+
+func TestAttachSlots_APersonalRunKeepsTheRunCapAlone(t *testing.T) {
+	srv, fr, _, run, ts, _ := attachSlotsTestServer(t)
+	holderPersonOwned(srv.cfg.Store.(*touchCountingStore), run.ID)
+	for i := range maxAttachSessionsPerRun {
+		readAttachMode(t, dialAttach(t, ts, srv, run.ID, holderOwner, ""))
+		waitForSession(t, fr, i)
+	}
+	if code := dialAttachRefusedAs(t, ts, srv, run.ID, holderOwner); code != http.StatusServiceUnavailable {
+		t.Fatalf("the ninth attach was refused with %d, want 503", code)
+	}
+}
+
+// TestAttachSlots_ASponsorsServiceRunIsPerPrincipalToo: a service identity's run is entered by its
+// sponsors, so it takes the per-principal cap; a release gives the principal's slot back.
+func TestAttachSlots_ASponsorsServiceRunIsPerPrincipalToo(t *testing.T) {
+	s := &Server{}
+	run := types.AgentRun{ID: uuid.New(), CreatedBy: types.ServicePrincipalPrefix + "ci"}
+	var held []func()
+	for range maxAttachSessionsPerPrincipal {
+		release, ok := s.reserveAttachSlot(run, "alice@example.com")
+		if !ok {
+			t.Fatal("a principal was refused below its cap")
+		}
+		held = append(held, release)
+	}
+	if _, ok := s.reserveAttachSlot(run, "alice@example.com"); ok {
+		t.Fatal("a principal took the whole run")
+	}
+	other, ok := s.reserveAttachSlot(run, "bob@example.com")
+	if !ok {
+		t.Fatal("another principal was locked out")
+	}
+	other()
+	held[0]()
+	if _, ok := s.reserveAttachSlot(run, "alice@example.com"); !ok {
+		t.Fatal("a release did not give the principal's slot back")
 	}
 }

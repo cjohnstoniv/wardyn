@@ -480,6 +480,47 @@ func TestApplyWorkspaceRequirements_ReadOnlySelectionPinsThePath(t *testing.T) {
 	}
 }
 
+// TestApplyWorkspaceRequirements_AWriteRowThatGrantsNothingLeavesAGrantedMountWritable: two attached
+// workspaces hold the same directory, one granting write and one carrying an Optional row the run did
+// not enable. The mount is writable in either fold order; only a read_only the run asked for narrows it.
+func TestApplyWorkspaceRequirements_AWriteRowThatGrantsNothingLeavesAGrantedMountWritable(t *testing.T) {
+	const path = "/srv/app"
+	row := func(level string) map[string]types.WorkspaceRequirement {
+		return map[string]types.WorkspaceRequirement{"write:" + path: {Level: level, Provenance: "operator_set"}}
+	}
+	grants := types.Workspace{ID: uuid.New(), Requirements: row("required")}
+	idle := types.Workspace{ID: uuid.New(), Requirements: row("optional")}
+	st := newOwnerStore()
+	st.put(types.Workspace{ID: grants.ID, Sources: []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeLocalDir, Path: path}}})
+	srv := New(Config{Store: st})
+	yes := true
+	for _, tc := range []struct {
+		name     string
+		order    []types.Workspace
+		sel      map[string]client.WorkspaceSelection
+		readOnly bool
+	}{
+		{"granting first", []types.Workspace{grants, idle}, nil, false},
+		{"granting last", []types.Workspace{idle, grants}, nil, false},
+		{"the run asked for read_only on the idle row", []types.Workspace{grants, idle},
+			map[string]client.WorkspaceSelection{idle.ID.String(): {WorkspaceID: idle.ID.String(), ReadOnly: &yes}}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ro := true
+			spec := &types.RunPolicySpec{WorkspaceMounts: []types.WorkspaceMount{{Source: path, Target: "/home/agent/work", ReadOnly: &ro}}}
+			attached := []types.Workspace{grants, idle}
+			for _, ws := range tc.order {
+				if _, refusal := srv.applyWorkspaceRequirementsFor(context.Background(), nil, spec, "claude-code", []types.Workspace{ws}, attached, tc.sel); refusal != nil {
+					t.Fatalf("refused: %v", refusal)
+				}
+			}
+			if got := spec.WorkspaceMounts[0].ReadOnlyOrDefault(); got != tc.readOnly {
+				t.Errorf("read-only = %v, want %v", got, tc.readOnly)
+			}
+		})
+	}
+}
+
 // preflight/launch agreement
 
 // TestWorkspaceRequirements_PreflightLaunchAgreement: Review and launch must

@@ -399,6 +399,16 @@ func assignmentWriteAuditData(saved types.GovernanceAssignment) map[string]any {
 	}
 }
 
+// readDeleteAudit reads, with the readers a held delete uses, the row a direct delete is about to
+// remove and returns the fields its audit row carries: the delete alone would name only an id.
+func (s *Server) readDeleteAudit(ctx context.Context, read func(q store.Querier) (map[string]any, error)) (data map[string]any, err error) {
+	err = s.cfg.Store.DryRunGovernance(ctx, func(q store.Querier) (err error) {
+		data, err = read(q)
+		return err
+	})
+	return data, err
+}
+
 type assignmentProfileView struct {
 	ID      uuid.UUID              `json:"id"`
 	Name    string                 `json:"name"`

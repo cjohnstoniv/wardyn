@@ -166,7 +166,10 @@ func (s *Server) resolvePlacement(ctx context.Context, in placementInput) (runPl
 	// start. When no runner of any kind has room, the run waits in the pool's queue, whatever the pool's
 	// own cap (every pool can queue).
 	capped := row.Pool.Limits != nil && row.Pool.Limits.MaxConcurrentRuns != nil
-	demand := s.placementDemand(ctx, f)
+	demand, refusal := s.placementDemand(ctx, f)
+	if refusal != nil {
+		return runPlacement{}, refusal
+	}
 	demand.holdRunnerCapacity = !capped && !f.promoted
 	if demand.requireRecording, refusal = s.poolRecordingDemand(org, row.Pool); refusal != nil {
 		return runPlacement{}, refusal

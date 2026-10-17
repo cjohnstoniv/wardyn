@@ -158,11 +158,24 @@ func TestOverrides_SecretAddUsesOnlyTheCallersOwnSecret(t *testing.T) {
 		t.Errorf("the caller's own secret is not granted by the person: %+v\n%s", rows, w.Body.String())
 	}
 	for _, other := range []string{"theirs", govCorpSecret, "nobody-has-this"} {
-		for _, door := range []string{previewDoor, preflightDoor, "/api/v1/runs"} {
+		for _, door := range []string{previewDoor, "/api/v1/runs"} {
 			w := doSSO(t, srv, http.MethodPost, door, cookie, add(other))
 			if w.Code != http.StatusUnprocessableEntity || errorReason(w) != reasonOverrideRefused {
 				t.Errorf("%s with %q = %d %s, want 422 %s", door, other, w.Code, w.Body.String(), reasonOverrideRefused)
 			}
+		}
+		// Review answers the same names with the step to take, the row a secret the run needs and the
+		// person has not stored gets anywhere else, and the same name, held by someone else or nobody,
+		// reads the same.
+		w := doSSO(t, srv, http.MethodPost, preflightDoor, cookie, add(other))
+		var pf preflightResponse
+		if err := json.Unmarshal(w.Body.Bytes(), &pf); err != nil || w.Code != http.StatusOK {
+			t.Fatalf("%s with %q = %d %s, want 200", preflightDoor, other, w.Code, w.Body.String())
+		}
+		i := slices.IndexFunc(pf.SetupItems, func(it SetupItem) bool { return it.ID == "secret:"+other })
+		if i < 0 || pf.SetupItems[i].Status != "missing" || pf.SetupItems[i].Fix == nil || pf.SetupItems[i].Fix.Action != "add_secret" ||
+			pf.SetupItems[i].Fix.SecretName != other {
+			t.Errorf("%s with %q: setup items = %+v, want a missing secret row with the add_secret fix", preflightDoor, other, pf.SetupItems)
 		}
 	}
 }

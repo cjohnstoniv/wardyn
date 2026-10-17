@@ -435,7 +435,14 @@ func (s *Server) handleDeleteCapabilityGrant(w http.ResponseWriter, r *http.Requ
 		s.holdGrantDelete(w, r, id)
 		return
 	}
-	if err := s.cfg.Store.DeleteCapabilityGrant(r.Context(), id); err != nil {
+	data, err := s.readDeleteAudit(r.Context(), func(q store.Querier) (map[string]any, error) {
+		row, err := store.GetCapabilityGrantQ(r.Context(), q, id, false)
+		return grantAuditData(row), err
+	})
+	if err == nil {
+		err = s.cfg.Store.DeleteCapabilityGrant(r.Context(), id)
+	}
+	if err != nil {
 		if notFoundIf(w, err, "capability grant", reasonCapabilityGrantNotFound) {
 			return
 		}
@@ -443,7 +450,7 @@ func (s *Server) handleDeleteCapabilityGrant(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
-		"capability.grant.delete", id.String(), "success", nil))
+		"capability.grant.delete", id.String(), "success", mustJSON(data)))
 	if mode == govBypass {
 		s.recordGovernanceBypass(r, govKindGrant, id.String(), "success", nil)
 	}

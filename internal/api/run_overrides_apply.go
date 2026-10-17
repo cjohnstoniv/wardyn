@@ -37,7 +37,14 @@ type overrideEdits struct {
 	setFirstUse, setAllowAll bool
 	prevFirstUse             types.FirstUseMode
 	prevAllowAll             bool
+	// missingSecrets are the added secrets the person does not hold, which Review (and only Review)
+	// reports as setup items instead of refusing: the refusal is create's.
+	missingSecrets []client.SecretOverride
 }
+
+// reviewDoorKey marks a fold that is Review's: the person is still choosing, so a secret they have not
+// stored yet is a step to take, not a refusal.
+type reviewDoorKey struct{}
 
 // agent is the applied agent block, made on first use.
 func (e *overrideEdits) agent() *client.AgentOverrides {
@@ -260,6 +267,10 @@ func applyRunEgressOverrides(spec *types.RunPolicySpec, eg client.RunEgressOverr
 func (s *Server) applySecretOverrides(ctx context.Context, r *http.Request, spec *types.RunPolicySpec, a client.AgentOverrides, e *overrideEdits) *runRefusal {
 	for i, sec := range a.AddSecrets {
 		if !s.ownsSecretMemoized(ctx, s.secretOwnerFromRequest(r), sec.SecretName) {
+			if ctx.Value(reviewDoorKey{}) != nil {
+				e.missingSecrets = append(e.missingSecrets, sec)
+				continue
+			}
 			return runError(http.StatusUnprocessableEntity, reasonOverrideRefused, fmt.Sprintf(
 				"overrides.agent.add_secrets[%d]: %s is not one of your stored secrets. Add it to your secrets first.", i, sec.SecretName))
 		}

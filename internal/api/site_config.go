@@ -288,6 +288,9 @@ func validateSiteConfig(cfg types.SiteConfig) error {
 		if red.Ecosystem != "" && !validArtifactEcosystems[red.Ecosystem] {
 			return fmt.Errorf("egress_redirects[%d]: unknown ecosystem %q", i, red.Ecosystem)
 		}
+		if red.GoChecksumDBOff && red.Ecosystem != "go" {
+			return fmt.Errorf("egress_redirects[%d]: go_checksum_db_off applies to the go ecosystem only", i)
+		}
 		if red.TokenSecretRef != "" && !validSecretRef(red.TokenSecretRef) {
 			return fmt.Errorf("egress_redirects[%d]: invalid or reserved token_secret_ref %q", i, red.TokenSecretRef)
 		}
@@ -367,6 +370,19 @@ func auditEgressRedirectPairs(redirects []types.EgressRedirect) ([]string, bool)
 		return pairs[:maxAuditEgressRedirectPairs], true
 	}
 	return pairs, false
+}
+
+// goChecksumDBOffHosts is the sorted `to` of every go redirect that turns checksum-database
+// verification off, for site_config.write's datum and the setup warning.
+func goChecksumDBOffHosts(redirects []types.EgressRedirect) []string {
+	var out []string
+	for _, red := range redirects {
+		if red.Ecosystem == "go" && red.GoChecksumDBOff {
+			out = append(out, red.To)
+		}
+	}
+	slices.Sort(out)
+	return out
 }
 
 // foldLegacyArtifactOverrides folds a legacy request body's ArtifactOverrides
@@ -829,6 +845,9 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 	auditComponentSettings(datum, saved.Components, present["components"])
 	if redirectsTruncated {
 		datum["egress_redirects_truncated"] = true
+	}
+	if hosts := goChecksumDBOffHosts(saved.EgressRedirects); len(hosts) > 0 {
+		datum["go_checksum_db_off"] = hosts
 	}
 	auditSiteBranding(datum, present["branding"], saved.Branding, siteLogo, logoErr != nil, logoPending)
 	auditProviderBlocks(datum, saved, invalidated)
