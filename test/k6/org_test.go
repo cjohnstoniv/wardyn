@@ -312,6 +312,8 @@ func (o *orgEnv) decisions(t *testing.T, id string) map[string][]string {
 
 // audit is the org's audit rows for a run.
 type auditRow struct {
+	Time    time.Time       `json:"time"`
+	Actor   string          `json:"actor"`
 	Action  string          `json:"action"`
 	Target  string          `json:"target"`
 	Outcome string          `json:"outcome"`
@@ -328,6 +330,22 @@ func (o *orgEnv) audit(t *testing.T, runID string) []auditRow {
 }
 
 // waitAudit waits for an audit row of the run that match accepts.
+// dumpRun logs what a failed case needs to say why: the run's state and failure hint, every audit row
+// for it, its pods, and its proxy's log.
+func (o *orgEnv) dumpRun(t *testing.T, id string) {
+	r := o.run(t, id)
+	t.Logf("run %s: state %s, failure hint %q, sandbox_ref %q", id, r.State, r.FailureHint, r.SandboxRef)
+	for _, a := range o.audit(t, id) {
+		t.Logf("audit %s %s %s %s %s %s", a.Time.UTC().Format(time.RFC3339), a.Action, a.Outcome, a.Actor, a.Target, a.Data)
+	}
+	pods, _ := exec.Command("kubectl", "--kubeconfig", o.adminKC, "-n", o.runsNS, "get", "pods", "-o", "wide").CombinedOutput()
+	t.Logf("pods in %s:\n%s", o.runsNS, pods)
+	logs, _ := exec.Command("kubectl", "--kubeconfig", o.adminKC, "-n", o.runsNS, "logs", "wardyn-proxy-"+id, "-c", "wardyn-proxy", "--timestamps").CombinedOutput()
+	t.Logf("proxy log (tail):\n%s", tail(string(logs), 6000))
+	rd, _ := exec.Command("kubectl", "--kubeconfig", o.adminKC, "-n", o.ownNS, "logs", "deployment/"+o.deploy, "-c", "runnerd", "--timestamps").CombinedOutput()
+	t.Logf("runnerd log (tail):\n%s", tail(string(rd), 6000))
+}
+
 func (o *orgEnv) waitAudit(t *testing.T, runID string, within time.Duration, what string, match func(auditRow) bool) auditRow {
 	t.Helper()
 	deadline := time.Now().Add(within)
@@ -710,6 +728,11 @@ func caseOrgSelfLapse(t *testing.T, o *orgEnv) {
 		t.Fatalf("self-lapse setup: %+v", o.lapse)
 	}
 	id := o.lapse.id
+	t.Cleanup(func() {
+		if t.Failed() {
+			o.dumpRun(t, id)
+		}
+	})
 	row := o.waitAudit(t, id, time.Until(o.lapse.marked.Add(14*time.Minute)), "a refused renew", func(r auditRow) bool {
 		return r.Action == "identity.renew" && r.Outcome == "denied"
 	})

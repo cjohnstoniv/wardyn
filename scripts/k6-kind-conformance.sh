@@ -27,7 +27,8 @@
 # Usage: WARDYN_TEST_K8S=1 scripts/k6-kind-conformance.sh   (needs docker, kind, kubectl, helm,
 # go, openssl, jq, curl). The suites run in a docker:cli container on the kind network, with the docker
 # socket for their node-level steps. K6_NODE_IMAGES overrides the node images; K6_CALICO_VERSION the
-# Calico pin. K6_KEEP=1 (development only) leaves the last cluster, its images and the work directory
+# Calico pin. K6_ORG_RUN (development only) narrows the org suite's -test.run;
+# K6_KEEP=1 (development only) leaves the last cluster, its images and the work directory
 # up and prints how to remove them; K6_SKIP_INPROC=1 skips TestK6.
 set -euo pipefail
 
@@ -506,7 +507,7 @@ EOF
   }
   if [ "$hub" = PASS ]; then
     log "[$VERSION] org cases (TestK6Org, against the org and the live runnerd)"
-    suite org '^TestK6Org$'
+    suite org "${K6_ORG_RUN:-^TestK6Org\$}"
   fi
 
   # runnerd stops here: TestK6 drives the same runner identity in process under its token.
