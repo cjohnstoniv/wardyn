@@ -6,6 +6,7 @@
 import type { Page } from "@playwright/test";
 import { test, expect, gotoConsole } from "./fixtures";
 import { POOL_DRAWER, RUNNER_TRUST } from "../src/app/components/wardyn/copy/runner-pools";
+import { aheadByHours } from "../src/app/lib/test-clock";
 
 // Admin -> Runners trust class (0.9.3, owner mock item 3, Q5). The harness has no registered runner, so the
 // runner routes are answered here with a person's runner and an organization's; what is pinned is the
@@ -19,8 +20,8 @@ function view(over: Record<string, unknown>) {
     online: true,
     key_fingerprint: "SHA256:fp",
     key_fingerprint_abbreviated: false,
-    created_at: "2026-10-10T10:00:00Z",
-    claimed_at: "2026-10-10T11:00:00Z",
+    created_at: aheadByHours(-7 * 24),
+    claimed_at: aheadByHours(-7 * 24 + 1),
     kind: "self_hosted",
     limits: null,
     usage: { online: true, in_use: none, available: none, disk_capped: true },
@@ -30,7 +31,7 @@ function view(over: Record<string, unknown>) {
 }
 const PERSON_ID = "00000000-0000-4000-8000-0000000000a1";
 const PERSON = view({ id: PERSON_ID, name: "dana-laptop", owner: "dana@example.com", owner_kind: "person", trust_class: "personal" });
-const ORG = view({ id: "00000000-0000-4000-8000-0000000000b2", name: "eks-prod-runners", owner_kind: "org", trust_class: "org_cluster", trust_set_by: "sam@example.com", trust_set_at: "2026-10-14T10:00:00Z" });
+const ORG = view({ id: "00000000-0000-4000-8000-0000000000b2", name: "eks-prod-runners", owner_kind: "org", trust_class: "org_cluster", trust_set_by: "sam@example.com", trust_set_at: aheadByHours(-3 * 24) });
 
 // answer: what PUT trust gives back; the list follows a 200 so the re-read shows the new class.
 async function mockRunners(page: Page, answer: "applied" | "held") {
