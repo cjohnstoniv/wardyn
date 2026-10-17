@@ -34,7 +34,6 @@ import { readMainDrive, repoRows, useFilesPreflight } from "./files-seams";
 import { FilesSummary, summaryText } from "./files-summary";
 import { FilesGroup } from "./kind-visuals";
 import { lifecycleOf, MainDriveSection, useMainDriveSize } from "./main-drive-section";
-import { storedSizeWords } from "./size-words";
 import { MountMap } from "./mount-map";
 import { cleanSubfolder, StartingFolder, SUBFOLDER_ID } from "./starting-folder";
 
@@ -168,9 +167,8 @@ export function FilesStep({ go, createUserDrive }: NewRunScreenProps & Pick<AddD
     ...(sub.bad ? [{ ...issue("files", "starts_here_required"), focus: SUBFOLDER_ID }] : []),
   ];
   const keptNote = life.kind === "deleted" ? NR_FILES.NO_EXTRA_DELETED : life.kind === "kept" ? NR_FILES.NO_EXTRA_KEPT(life.grace) : undefined;
-  const sizeMib = size.mib;
   // No size is no number: the summary asks for one, and the map names the drive alone.
-  const sizeText = sizeMib === undefined ? undefined : storedSizeWords(sizeMib, draft.guided.mainDriveText);
+  const sizeText = size.words;
   const settled = noExtra || (items.length > 0 && !!start);
   const empty = !noExtra && items.length === 0;
 

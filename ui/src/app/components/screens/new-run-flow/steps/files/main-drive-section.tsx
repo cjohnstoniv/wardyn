@@ -148,6 +148,9 @@ export function useMainDriveSize(view: MainDriveView) {
     unit,
     mib,
     missing: mib === undefined,
+    // The size in words for the summary and the mount map: exact once stored; while it is being typed, the typed
+    // text in its own unit, so "500" in MiB never reads "0.5 GiB" before blur.
+    words: mib === undefined ? undefined : dirty ? (unit === "MiB" ? NR_SHARED.MIB(text) : NR_SHARED.GIB(text)) : sizeWords(mib),
     note: draft.guided.mainDriveClampNote,
     // The exact stored size, whenever the field's text does not say it.
     exact: !dirty && committed !== undefined && parseSize(text, unit) !== committed ? committed : undefined,

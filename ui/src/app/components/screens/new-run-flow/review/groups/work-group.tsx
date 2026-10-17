@@ -9,7 +9,7 @@ import { NR_REVIEW } from "../../../../wardyn/copy/new-run/review";
 import { NR_SHARED } from "../../../../wardyn/copy/new-run/shared";
 import type { RunAttachment } from "../../../../../lib/types/new-run-contract";
 import { mainDriveMiB } from "../../lenses/files-lens";
-import { storedSizeWords } from "../../steps/files/size-words";
+import { sizeWords } from "../../steps/files/size-words";
 import { readMainDrive, type FilesPreflight } from "../../steps/files/files-seams";
 import { summaryText } from "../../steps/files/files-summary";
 import { lifecycleOf, lifecycleText } from "../../steps/files/main-drive-section";
@@ -45,7 +45,7 @@ export function WorkGroup({ draft, pre, preview, docRows, go }: GroupProps) {
   const count = pre?.attachments ? attachments.length : (intent.workspaces?.length ?? 0) + (intent.drive?.enabled ? 1 : 0) + (intent.drives?.length ?? 0);
   // The server's applied size when it sized one (0 means none); the request until it answers.
   const mib = pre?.main_drive?.applied_mib || mainDriveMiB(intent);
-  const size = mib === undefined ? undefined : storedSizeWords(mib, draft.guided.mainDriveText);
+  const size = mib === undefined ? undefined : sizeWords(mib);
   // The same preflight answer the Files step reads: the run's pool says what its runners do with the size.
   const drive = readMainDrive(pre as FilesPreflight | null, intent.experience);
   const enforcement = drive.facts && ENFORCEMENT[drive.facts.enforcement];

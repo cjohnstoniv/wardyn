@@ -14,9 +14,9 @@ const limits = (diskMib: number) => {
 const drive = (mib: number) => limitCells(limits(mib), undefined).find((c) => c.key === "drive")?.value;
 
 describe("the pool's main drive limit (DR-0160)", () => {
-  it("reads GiB with one decimal from 0.1 GiB up, rounded down, and whole MiB below it", () => {
-    expect(drive(5000)).toBe("4.8 GiB");
-    expect(drive(1000)).toBe("0.9 GiB");
+  it("reads GiB only for a whole tenth of a GiB, else whole MiB", () => {
+    expect(drive(5000)).toBe("5000 MiB");
+    expect(drive(1000)).toBe("1000 MiB");
     expect(drive(10240)).toBe("10 GiB");
     expect(drive(64)).toBe("64 MiB");
   });
