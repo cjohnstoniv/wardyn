@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { PendingChangeError } from "../../../lib/api/core";
 import { absoluteTime } from "../../../lib/format";
+import { aheadByHours } from "../../../lib/test-clock";
 import type { GovernanceChange } from "../../../lib/types";
 import type { RunContainment, RunContainmentPending } from "../../../lib/types/run-containment";
 import { OperatorProvider } from "../../wardyn/operator-context";
@@ -16,6 +17,9 @@ import { ContainmentPending } from "./containment-pending";
 const recordNode = vi.fn();
 vi.mock("../../../lib/api/runners", () => ({ runners: { recordNode: (...a: unknown[]) => recordNode(...a), runContainment: vi.fn() } }));
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
+
+const SINCE = aheadByHours(-1);
+const BOUND = aheadByHours(1);
 
 const tuple = {
   run_id: "run-1",
@@ -34,8 +38,8 @@ function pending(over: Partial<RunContainmentPending> = {}): RunContainment {
   return {
     pending: {
       kind: "pending_delete",
-      since: "2026-10-17T10:00:00Z",
-      bound_until: "2026-10-17T11:00:00Z",
+      since: SINCE,
+      bound_until: BOUND,
       bound_passed: false,
       name_reused: false,
       no_causal_association: false,
@@ -61,7 +65,7 @@ afterEach(() => recordNode.mockReset());
 describe("ContainmentPending", () => {
   it("says the egress bound while it holds, and termination unknown once it passed", () => {
     show(pending());
-    expect(screen.getByTestId("run-containment-line")).toHaveTextContent(C.pendingTitle(absoluteTime("2026-10-17T11:00:00Z")));
+    expect(screen.getByTestId("run-containment-line")).toHaveTextContent(C.pendingTitle(absoluteTime(BOUND)));
     expect(screen.getByText(C.PENDING_BODY)).toBeInTheDocument();
   });
 
@@ -107,7 +111,7 @@ describe("ContainmentPending", () => {
     expect(machines).toHaveTextContent(C.pod("proxy", "uid-proxy-1"));
     expect(machines).toHaveTextContent(C.holder(C.HOLDER_CAUSAL, "uid-n1"));
     expect(machines).toHaveTextContent(C.machine("m1", "s1"));
-    expect(form).toHaveTextContent(C.markedAt(absoluteTime("2026-10-17T10:00:00Z")));
+    expect(form).toHaveTextContent(C.markedAt(absoluteTime(SINCE)));
   });
 
   it("sends the record with the tuple it showed", async () => {
@@ -132,8 +136,8 @@ describe("ContainmentPending", () => {
   it("lists the records and what the runner answered", () => {
     show({
       records: [
-        { id: "r2", attestation: "node_powered_off", source: "other", source_id: "t-2", state: "refused", reason: "a Node still holds n1", created_at: "2026-10-17T10:30:00Z" },
-        { id: "r1", attestation: "node_powered_off", source: "other", source_id: "t-1", state: "accepted", created_at: "2026-10-17T10:10:00Z" },
+        { id: "r2", attestation: "node_powered_off", source: "other", source_id: "t-2", state: "refused", reason: "a Node still holds n1", created_at: aheadByHours(-0.5) },
+        { id: "r1", attestation: "node_powered_off", source: "other", source_id: "t-1", state: "accepted", created_at: aheadByHours(-0.8) },
       ],
     });
     const rows = screen.getAllByTestId("run-node-record");

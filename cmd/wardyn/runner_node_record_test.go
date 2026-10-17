@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -21,7 +22,7 @@ func TestRunnerNodeRecordCommand(t *testing.T) {
 	tuple := json.RawMessage(`{"run_id":"` + runID.String() + `","pods":[{"component":"proxy","uid":"uid-proxy-1","node_name":"n1"}]}`)
 	// One body serves both calls: the containment read and the record's answer.
 	srv := newCmdServer(t, http.StatusOK, map[string]any{
-		"pending": map[string]any{"kind": "pending_delete", "since": "2026-10-17T10:00:00Z", "bound_until": "2026-10-17T11:00:00Z", "tuple": tuple},
+		"pending": map[string]any{"kind": "pending_delete", "since": time.Now().Add(-time.Hour), "bound_until": time.Now().Add(time.Hour), "tuple": tuple},
 		"records": []any{}, "id": recID, "attestation": "node_powered_off", "state": "sent",
 	})
 	args := []string{"runner", "node-record", runID.String(), "--attestation", "node_powered_off", "--source", "provider_console", "--source-id", "i-0abc123", "--url", srv.URL, "--token", "t"}
