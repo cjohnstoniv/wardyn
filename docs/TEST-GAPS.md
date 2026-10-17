@@ -189,3 +189,6 @@ have unit, Postgres or kind coverage, but not on this hardware.
   the published images, which needs registry credentials.
 - **Vault Agent secret files** (#720): a Helm install with `secretFiles.enabled=true` on a cluster running Vault
   Agent.
+- **The proxy NetworkPolicy's cluster-DNS peer** (0.9.3): proven against the fake Kubernetes clientset only, not against a
+  network plugin that selects pods by identity (Cilium, Calico eBPF). On a kind cluster running Cilium, apply the
+  generated proxy NetworkPolicy and run `kubectl exec <proxy-pod> -- nslookup kubernetes.default`; it must resolve.
