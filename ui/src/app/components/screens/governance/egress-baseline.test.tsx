@@ -6,7 +6,7 @@
 // Governance -> Baseline hosts: the stored declaration is what the editor shows, a save sends one host per
 // line with the ETag it read, and the server's refusal and a held write read as they do on Runner credentials.
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 
@@ -19,6 +19,7 @@ vi.mock("../../../lib/api/egress-baseline", () => ({
 import { setField } from "../../../../test/set-field";
 import { HttpError, PendingChangeError } from "../../../lib/api/core";
 import { BASELINE, CHANGES } from "../../../lib/governance-copy";
+import { PROVIDERS } from "../../../lib/workspace-providers-copy";
 import type { GovernanceChange } from "../../../lib/types";
 import { EgressBaselineTab } from "./egress-baseline";
 
@@ -79,5 +80,27 @@ describe("EgressBaselineTab", () => {
     expect(await screen.findByText(CHANGES.SUBMITTED_TITLE)).toBeInTheDocument();
     expect(screen.queryByText(BASELINE.SAVED)).toBeNull();
     expect(onSubmitted).toHaveBeenCalledTimes(1);
+  });
+
+  it("a 412 reloads the stored hosts and their ETag, keeps the refused draft in the banner, and never shows the raw sentence", async () => {
+    const RAW = "If-Match does not match the current egress baseline — GET /governance/egress-baseline again and retry";
+    getMock
+      .mockResolvedValueOnce(stored)
+      .mockResolvedValue({ baseline_hosts: ["theirs.corp.example"], internal_host_suffixes: [], etag: '"theirs"' });
+    putMock.mockRejectedValueOnce(new HttpError(412, RAW));
+    const user = userEvent.setup();
+    renderTab();
+    setField(await screen.findByLabelText(BASELINE.HOSTS_LABEL), "mine.corp.example");
+    await user.click(screen.getByRole("button", { name: BASELINE.SAVE }));
+    expect(await screen.findByText(PROVIDERS.SAVED_ELSEWHERE_TITLE)).toBeInTheDocument();
+    expect(screen.getByText(/mine\.corp\.example/)).toBeInTheDocument();
+    expect(screen.queryByText(RAW)).toBeNull();
+    expect(screen.queryByText(BASELINE.REFUSED_TITLE)).toBeNull();
+    await waitFor(() => expect(screen.getByLabelText(BASELINE.HOSTS_LABEL)).toHaveValue("theirs.corp.example"));
+    // The next Save is against the reloaded ETag, not the refused one.
+    setField(screen.getByLabelText(BASELINE.HOSTS_LABEL), "theirs.corp.example\nmine.corp.example");
+    await user.click(screen.getByRole("button", { name: BASELINE.SAVE }));
+    await waitFor(() => expect(putMock).toHaveBeenCalledTimes(2));
+    expect(putMock.mock.calls.map((c) => c[1])).toEqual(['"e1"', '"theirs"']);
   });
 });

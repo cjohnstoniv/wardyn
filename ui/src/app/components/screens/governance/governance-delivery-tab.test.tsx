@@ -69,6 +69,15 @@ describe("GovernanceScreen — the Runner credentials tab", () => {
     expect(screen.queryByRole("tab", { name: DELIVERY.TAB })).toBeNull();
     expect(screen.getByRole("tab", { name: GOV.PROFILES_TITLE })).toHaveAttribute("aria-selected", "true");
     expect(deliveryGetMock).not.toHaveBeenCalled();
+    expect(screen.queryByRole("tab", { name: BASELINE.TAB })).toBeNull();
+  });
+
+  it("Baseline hosts is security-operator only too: a typed URL falls back to Profiles", async () => {
+    renderAt("/?tab=egress-baseline", false);
+    await screen.findByText(GREENFIELD.name);
+    expect(screen.queryByRole("tab", { name: BASELINE.TAB })).toBeNull();
+    expect(screen.queryByText(BASELINE.LEAD)).toBeNull();
+    expect(screen.getByRole("tab", { name: GOV.PROFILES_TITLE })).toHaveAttribute("aria-selected", "true");
   });
 
   it("opens the editor, reads the policy only then, and Save is the screen's one default", async () => {
