@@ -293,7 +293,8 @@ func localRunnerRuntime(ctx context.Context, identity runneridentity.Identity, s
 			retErr = errors.Join(retErr, manager.Close())
 		}
 	}()
-	resident, err := runneragent.NewResident(runneragent.Keystore{Set: keystore.Set, Get: keystore.Get, Delete: keystore.Delete}, stateDir)
+	ks := keystore.For(identity.RunnerID.String())
+	resident, err := runneragent.NewResident(runneragent.Keystore{Set: ks.Set, Get: ks.Get, Delete: ks.Delete, DeleteAll: ks.DeleteAll, Precheck: ks.Precheck}, stateDir, manager.AdmitResident, time.Now)
 	if err != nil {
 		return runnerRuntime{}, err
 	}
@@ -326,7 +327,10 @@ func localRunnerRuntime(ctx context.Context, identity runneridentity.Identity, s
 			return runnerwire.Refuse("unsupported runner stream")
 		},
 		Clock: manager.Clock, Pending: manager.Pending, StatePages: manager.StatePages,
-		BeforeReady: manager.BeforeReady, Lease: manager.Lease, Revoked: manager.Revoked, Offline: manager.Offline,
+		BeforeReady: manager.BeforeReady, Lease: manager.Lease, Offline: manager.Offline,
+		// manager.Revoked has released the manager's lock before the resident
+		// erase runs (lock order: Resident, then Manager).
+		Revoked: func(ctx context.Context) error { return errors.Join(manager.Revoked(ctx), resident.EraseAll(ctx)) },
 		Replay: func(ctx context.Context, peer *runnerwire.Peer) error {
 			support, err := sub.Classes(ctx)
 			if err != nil {
@@ -360,7 +364,14 @@ func localRunnerRuntime(ctx context.Context, identity runneridentity.Identity, s
 		},
 	}
 	run := func(ctx context.Context) error {
-		go resident.SweepExpired(ctx, time.Minute)
+		go func() {
+			if manager.IsRevoked() {
+				if err := resident.EraseAll(ctx); err != nil {
+					slog.WarnContext(ctx, "runner resident erase after revocation will retry on the sweep", "error", err)
+				}
+			}
+			resident.SweepExpired(ctx, time.Minute)
+		}()
 		return manager.Run(ctx)
 	}
 	return runnerRuntime{hooks: hooks, run: run, close: func() error { return errors.Join(manager.Close(), relay.Close()) }}, nil

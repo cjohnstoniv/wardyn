@@ -159,6 +159,9 @@ type EraseResidentArgs struct {
 type ResidentErase struct {
 	GrantID uuid.UUID `json:"grant_id"`
 	Outcome string    `json:"outcome"`
+	// ReportID is the erasure's stable identity: a report resent after a lost
+	// acknowledgement carries the same one. Set only on an erased outcome.
+	ReportID uuid.UUID `json:"report_id,omitzero"`
 }
 
 // ResidentErase outcomes.
