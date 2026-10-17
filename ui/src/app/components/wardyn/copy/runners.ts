@@ -76,6 +76,7 @@ export const RUNNERS = {
 } as const;
 
 export const RUNNER = {
+  CANCEL: "Cancel",
   // D-UI-a's placement words, reused byte for byte (NEW_RUN_FLOW.PLACEMENT.ONLINE / OFFLINE_WORD).
   ONLINE: "Online",
   OFFLINE: RUNNER_OFFLINE_WORD,

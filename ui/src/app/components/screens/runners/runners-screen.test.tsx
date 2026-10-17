@@ -8,7 +8,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, useNavigate } from "react-router-dom";
 import type { RemoteRunnerView } from "../../../lib/types/runner-pools";
 import type { RunnerRegistrationToken, RunnerView } from "../../../lib/types/runners";
 
@@ -147,12 +147,20 @@ const OLD = runner({ id: "r-old", name: "old-box", state: "revoked", online: fal
 
 const TOKEN: RunnerRegistrationToken = { id: "t1", owner: "dan@example.com", minted_by: "admin@corp.example", created_at: aheadByHours(-1), expires_at: aheadByHours(48) };
 
+const history = { back: () => {} };
+function Back() {
+  const navigate = useNavigate();
+  history.back = () => navigate(-1);
+  return null;
+}
+
 function renderScreen(opts: { operator?: boolean; at?: string } = {}) {
   const { operator = true, at = "/admin/runners" } = opts;
   return render(
     <MemoryRouter initialEntries={[at]}>
       <OperatorProvider operator={operator} securityOperator operatorResolved principal="admin@corp.example">
         <RunnersScreen />
+        <Back />
       </OperatorProvider>
     </MemoryRouter>,
   );
@@ -638,6 +646,18 @@ describe("Admin -> Runners tabs", () => {
     expect(await screen.findByTestId("pools-tab")).toHaveTextContent("open:p-laptop");
     await user.click(screen.getByRole("button", { name: "member shared-docker" }));
     expect(await screen.findByRole("dialog")).toHaveTextContent("Set up in");
+  });
+
+  it("Back from a runner opened out of a pool returns to that pool (FR-0122)", async () => {
+    remoteListMock.mockResolvedValue([SHARED]);
+    const user = userEvent.setup();
+    renderScreen({ at: "/admin/runners?tab=pools&pool=p-laptop" });
+    expect(await screen.findByTestId("pools-tab")).toHaveTextContent("open:p-laptop");
+    await user.click(screen.getByRole("button", { name: "member shared-docker" }));
+    expect(await screen.findByRole("dialog")).toHaveTextContent("Set up in");
+    expect(screen.queryByTestId("pools-tab")).toBeNull();
+    act(() => history.back());
+    expect(await screen.findByTestId("pools-tab")).toHaveTextContent("open:p-laptop");
   });
 });
 

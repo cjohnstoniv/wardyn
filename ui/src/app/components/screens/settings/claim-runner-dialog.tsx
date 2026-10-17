@@ -86,10 +86,12 @@ export function ClaimRunnerDialog({
     }
     toast.success(MY_RUNNER.CLAIMED_TOAST(shown.name));
     // The claim stands from here on: a pool step that fails closes the dialog and says where to finish it.
+    let joined = false;
     try {
-      if (pool.trim()) await putInPool(shown.id, pool.trim(), makeDefault);
+      if (pool.trim()) await putInPool(shown.id, pool.trim(), makeDefault, () => { joined = true; });
     } catch (err) {
-      toast.error(MY_RUNNER.CLAIM_POOL_FAILED(shown.name, pool.trim(), getErrorMessage(err)));
+      // Once the runner is in the pool, a failure is the default step's: it must not say the runner is not in the pool.
+      toast.error(joined ? getErrorMessage(err) : MY_RUNNER.CLAIM_POOL_FAILED(shown.name, pool.trim(), getErrorMessage(err)));
     } finally {
       onOpenChange(false);
       onClaimed();
@@ -162,7 +164,7 @@ export function ClaimRunnerDialog({
           )}
           <DialogFooter>
             <Button type="button" variant="ghost" disabled={busy} onClick={() => onOpenChange(false)}>
-              Cancel
+              {RUNNER.CANCEL}
             </Button>
             <Button type="submit" disabled={busy || fingerprint.trim() === ""}>
               {busy && <Loader2 className="size-3.5 animate-spin" />}
@@ -181,8 +183,9 @@ const ownPools = (list: RunnerPoolList) => list.pools.filter((p) => p.scope === 
 /** Puts a runner just claimed into the person's own pool of that name, made first when they have none by it.
  * The pools are read again here, not taken from the suggestions: those may still be loading or have failed to
  * load, and a pool must not be made over one that exists. */
-async function putInPool(runnerId: string, name: string, makeDefault: boolean) {
+async function putInPool(runnerId: string, name: string, makeDefault: boolean, onJoined: () => void) {
   const poolId = ownPools(await runnerPools.listMine()).find((p) => p.name.toLowerCase() === name.toLowerCase())?.id ?? (await runnerPools.createMine({ name })).id;
   await runnerPools.addMyRunner(poolId, runnerId);
+  onJoined();
   if (makeDefault) await runnerPools.setMyDefaults({ ...(await runnerPools.myDefaults()), pool_id: poolId });
 }

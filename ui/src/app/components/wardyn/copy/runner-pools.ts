@@ -52,6 +52,8 @@ export const RUNNER_V6 = {
   SEARCH_PLACEHOLDER: "Name, machine or owner",
   LIST_LABEL: "Runners",
   LAST_SEEN: (when: string) => `Last seen ${when}`,
+  /** What Last seen reads while the runner is online. */
+  LAST_SEEN_NOW: "now",
   MACHINE: "Machine",
   OWNER: "Owner",
   POOLS: "Pools",

@@ -658,7 +658,7 @@ describe("My runner card: the start command and the claim into a pool", () => {
     expect(screen.getByText(VM_HINT)).toBeInTheDocument();
   });
 
-  const claimWithPool = async (user: ReturnType<typeof userEvent.setup>, pool: string, makeDefault: boolean) => {
+  const claimWithPool = async (user: ReturnType<typeof userEvent.setup>, pool: string, makeDefault: boolean, beforeClaim?: () => void) => {
     listMineMock.mockResolvedValue([WAITING]);
     claimMock.mockResolvedValue({ runner_id: "r-mbp", fingerprint: FULL, state: "claimed", org_url_sha256: "" });
     pools.addMyRunner.mockResolvedValue({});
@@ -673,6 +673,7 @@ describe("My runner card: the start command and the claim into a pool", () => {
     setField(within(dialog).getByRole("textbox", { name: /Fingerprint from your computer/ }), FULL);
     setField(within(dialog).getByRole("combobox", { name: /Put it in a pool/ }), pool);
     if (makeDefault) await user.click(box);
+    beforeClaim?.();
     await user.click(within(dialog).getByRole("button", { name: "Claim runner" }));
   };
 
@@ -725,5 +726,15 @@ describe("My runner card: the start command and the claim into a pool", () => {
     await claimWithPool(user, "Desk", false);
     await waitFor(() => expect(toast.error).toHaveBeenCalledWith(expect.stringContaining("mbp-ben is claimed but isn't in Desk. Add it from My pools.")));
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  });
+
+  it("a default that fails after the runner joined the pool does not say the runner is not in the pool (DR-0210)", async () => {
+    vi.mocked(toast.error).mockClear();
+    pools.createMine.mockResolvedValue(POOL("p-new", "Desk"));
+    const user = userEvent.setup();
+    await claimWithPool(user, "Desk", true, () => pools.setMyDefaults.mockRejectedValueOnce(new HttpError(500, "Defaults could not be saved.", "internal")));
+    await waitFor(() => expect(pools.addMyRunner).toHaveBeenCalledWith("p-new", "r-mbp"));
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith("Defaults could not be saved."));
+    expect(toast.error).not.toHaveBeenCalledWith(expect.stringContaining("isn't in Desk"));
   });
 });
