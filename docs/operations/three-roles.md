@@ -221,7 +221,7 @@ Stated honestly: profiles narrow by omission — a profile that omits secret gra
     - `baseline_hosts` are exact hostnames.
     - `internal_host_suffixes` mark existing `internal_hosts` entries, each covering that suffix and every host under it.
   - Nothing is declared by default, and `internal_hosts` is never folded in on its own, so an upgrade grades every run as before.
-  - A declared host lowers the grade of every `api_key` to it. A Bedrock provider's credential is graded as an `api_key` to its data-plane host, so declaring that host covers it too: there is no Bedrock exception either way.
+  - A declared host lowers the grade of every `api_key` to it. A Bedrock provider's credential is graded as an `api_key` to the host its requests go to: its base URL's host when one is set, else the regional data-plane host. Declaring that host covers it too: there is no Bedrock exception either way.
   - Entries must be exact hostnames, with no wildcard, scheme, port, path or IP address, and a suffix may not be a public suffix such as `co.uk`: either would vouch for hosts nobody named.
   - The write is a security-admin governance write, held for a second human under `WARDYN_GOVERNANCE_SECOND_HUMAN`. It takes `If-Match` (a stale ETag is a 412) and is audited as `governance.egress_baseline.write`.
 - **What the rubric can see here, at profile-write time.**
@@ -230,12 +230,13 @@ Stated honestly: profiles narrow by omission — a profile that omits secret gra
   - For example, on a deployment with one Bedrock provider and a substrate that offers only CC1:
 
     ```text
-    on this deployment a run under this profile on one of its model providers grades egress sealed, reviewed or open; secrets powerful; and confinement CC1 — so only egress_open, egress_reviewed, egress_sealed, secrets_powerful and confinement_cc1 can cap it, and secrets_baseline, secrets_none, confinement_cc2 and confinement_cc3 cap nothing here
+    on this deployment a run under this profile grades egress sealed, reviewed or open; secrets none, baseline or powerful; and confinement CC1 — so only egress_open, egress_reviewed, egress_sealed, secrets_powerful, secrets_baseline, secrets_none and confinement_cc1 can cap it, and confinement_cc2 and confinement_cc3 cap nothing here; a run on one of its model providers always grades secrets powerful
     ```
 
   - It claims only what the deployment forces on every run, so a row it calls inert really is.
     - Confinement: the classes the deployment's executor offers at or above the profile's floor. With self-hosted runners on, or an executor that cannot answer, every class counts.
-    - Secrets, for runs on a model provider: the grade of the weakest provider's credential.
+    - Secrets: the weakest model credential any launchable harness folds. A harness no enabled provider serves, and Your own tools, fold none, so `secrets_none` can bind on any deployment that offers one.
+    - A run on a model provider is also named on its own, when its provider's credential forces a higher grade.
     - Egress: always from `sealed` up, because a run can narrow its allowlist.
 ## When everyone is an admin, and what a refused person is told
 
