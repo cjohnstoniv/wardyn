@@ -435,6 +435,7 @@ export const governance = {
   async rejectChange(id: string, reason: string): Promise<GovernanceChange> {
     const res = await wfetch(`/governance/changes/${encodeURIComponent(id)}/reject`, {
       method: "POST",
+      asPerson: true,
       body: JSON.stringify(reason ? { reason } : {}),
     });
     return asJson<GovernanceChange>(res);

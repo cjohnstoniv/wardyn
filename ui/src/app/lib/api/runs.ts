@@ -353,6 +353,7 @@ export const runs = {
   async setTitle(id: string, title: string): Promise<{ id: string; title: string }> {
     const res = await wfetch(`/runs/${encodeURIComponent(id)}/title`, {
       method: "PATCH",
+      asPerson: true,
       body: JSON.stringify({ title }),
     });
     if (!res.ok) throw new HttpError(res.status, await errText(res));
@@ -380,7 +381,7 @@ export const runs = {
     const body: Record<string, unknown> = {};
     if ("endsAt" in change) body.ends_at = change.endsAt;
     if (change.waitBudgetSec != null) body.wait_budget_sec = change.waitBudgetSec;
-    const res = await wfetch(`/runs/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(body) });
+    const res = await wfetch(`/runs/${encodeURIComponent(id)}`, { method: "PATCH", asPerson: true, body: JSON.stringify(body) });
     if (!res.ok) throw new HttpError(res.status, await errText(res));
     return asJson<RunEndWaitResult>(res);
   },
