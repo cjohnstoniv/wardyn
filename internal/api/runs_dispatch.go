@@ -797,7 +797,7 @@ func (s *Server) startAgentOrIdle(ctx context.Context, run types.AgentRun, ref, 
 
 	if interactive {
 		if byoi {
-			s.byoiSelftest(ctx, run, ref, false /* warn-only */)
+			s.byoiSelftest(ctx, run, ref, execution, false /* warn-only */)
 		}
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.interactive.start",
 			run.ID.String(), "success", mustJSON(map[string]any{
@@ -818,7 +818,7 @@ func (s *Server) startAgentOrIdle(ctx context.Context, run types.AgentRun, ref, 
 			if s.byoiExecLessRefused(ctx, run, ref) {
 				return
 			}
-			if !s.byoiSelftest(ctx, run, ref, true /* fail-closed */) {
+			if !s.byoiSelftest(ctx, run, ref, execution, true /* fail-closed */) {
 				s.stopSandboxOrAudit(ctx, run.ID, ref, "run.selftest")
 				s.failAndRevoke(ctx, run.ID, types.RunRunning,
 					"the BYOI image failed its agent-run --selftest (missing shell/harness binary, or a nonzero selftest exit)")

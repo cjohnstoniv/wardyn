@@ -431,6 +431,18 @@ var ErrReviveUnsupported = errors.New("runner: this substrate cannot replace a s
 // removed, the old proxy and did not start the new one.
 var ErrProxyReplaceFailed = errors.New("runner: the old proxy may be gone and the new one did not start")
 
+// Selftester is an OPTIONAL Runner capability: run a BYOI image's contract
+// check (agent-run --selftest) in a runner's sandbox as an execution of its
+// own, and return its exit code. It never becomes the sandbox's agent exec:
+// its output and exit stay off the run, and it spends no task generation.
+type Selftester interface {
+	Selftest(ctx context.Context, ref string) (int, error)
+}
+
+// ErrSelftestUnsupported is Selftester's answer from a router whose substrate
+// for ref has no selftest of its own.
+var ErrSelftestUnsupported = errors.New("runner: this substrate has no BYOI selftest of its own")
+
 // SandboxStarter is an OPTIONAL Runner capability: start a kept sandbox's
 // stopped agent again (revive after a reboot). Files survive; the main
 // process re-runs from the start. Never starts the proxy itself: the caller

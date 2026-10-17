@@ -41,6 +41,9 @@ const (
 	MethodSweep           = "sweep_orphans"
 	MethodDeliverResident = "deliver_resident"
 	MethodEraseResident   = "erase_resident"
+	// MethodSelftest runs a BYOI image's contract check on a runner that
+	// advertises Caps.BYOISelftest: never an Exec, so it spends no generation.
+	MethodSelftest = "byoi_selftest"
 )
 
 // CreateSandboxArgs carries the spec minus OnWaiting and ExecOutput (both are
@@ -66,6 +69,18 @@ type ExecArgs struct {
 	ExecutionGeneration uuid.UUID `json:"execution_generation"`
 	Ref                 string    `json:"ref"`
 	Argv                []string  `json:"argv"`
+}
+
+// SelftestArgs carries no argv: the runner execs only its own selftest. The
+// generation is the task's issued, unattempted one, which the call must match
+// and never spends.
+type SelftestArgs struct {
+	ExecutionGeneration uuid.UUID `json:"execution_generation"`
+	Ref                 string    `json:"ref"`
+}
+
+type SelftestResult struct {
+	ExitCode int `json:"exit_code"`
 }
 
 type ExecResult struct {

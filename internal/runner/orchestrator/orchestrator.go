@@ -759,6 +759,20 @@ func (o *Orchestrator) EnsureProxyImage(ctx context.Context) error {
 	return nil
 }
 
+// Selftest forwards a BYOI selftest to ref's substrate when it runs one of its
+// own (runner.Selftester).
+func (o *Orchestrator) Selftest(ctx context.Context, ref string) (int, error) {
+	s, err := o.subForRef(ctx, ref)
+	if err != nil {
+		return 0, err
+	}
+	st, ok := s.(runner.Selftester)
+	if !ok {
+		return 0, runner.ErrSelftestUnsupported
+	}
+	return st.Selftest(ctx, ref)
+}
+
 // StartSandbox forwards a kept agent's restart to ref's substrate when it can
 // start one again (runner.SandboxStarter). The route is kept.
 func (o *Orchestrator) StartSandbox(ctx context.Context, ref string) error {

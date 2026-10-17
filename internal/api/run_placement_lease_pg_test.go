@@ -55,6 +55,8 @@ type runnerLeaseFixture struct {
 	key     ed25519.PrivateKey
 	// execs counts the Exec frames that reached the runner.
 	execs atomic.Int32
+	// oldRunner makes the runner one from before the BYOI selftest call, from its next session on.
+	oldRunner atomic.Bool
 	// disconnect ends the current session.
 	disconnect context.CancelFunc
 	h          *harness
@@ -159,7 +161,8 @@ func newRunnerLeaseFixture(t *testing.T) *runnerLeaseFixture {
 	dispatcher, err := runneragent.New(runneragent.Config{RunnerID: id.String(), Substrate: f.sub, HoldsSandbox: m.HoldsSandbox,
 		BeforeCreate: m.BeforeCreate, Created: m.Created, CreateFailed: m.CreateFailed,
 		BeforeRefCall: m.BeforeRefCall, AfterRefCall: m.AfterRefCall, MutationFinished: m.MutationFinished, ExecutionResult: m.ExecutionResult,
-		Streams: streams.Call, Output: streams.Output, BindOutput: streams.BindOutput, ForgetOutput: streams.ForgetOutput})
+		CheckSelftest: m.CheckSelftest,
+		Streams:       streams.Call, Output: streams.Output, BindOutput: streams.BindOutput, ForgetOutput: streams.ForgetOutput})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -168,6 +171,9 @@ func newRunnerLeaseFixture(t *testing.T) *runnerLeaseFixture {
 		Call: func(ctx context.Context, peer *runnerwire.Peer, id uint32, method string, args json.RawMessage) (any, error) {
 			if method == runnerwire.MethodExec {
 				f.execs.Add(1)
+			}
+			if method == runnerwire.MethodSelftest && f.oldRunner.Load() {
+				return nil, runnerwire.Refuse("unknown runner method") // what an older dispatcher answers
 			}
 			return dispatcher.Call(ctx, peer, id, method, args)
 		},
@@ -190,7 +196,7 @@ func newRunnerLeaseFixture(t *testing.T) *runnerLeaseFixture {
 			if err != nil {
 				return err
 			}
-			data, err := runnerwire.Marshal(runnerwire.Caps{Support: support, Version: "test"})
+			data, err := runnerwire.Marshal(runnerwire.Caps{Support: support, Version: "test", BYOISelftest: dispatcher.Selftests() && !f.oldRunner.Load()})
 			if err != nil {
 				return err
 			}

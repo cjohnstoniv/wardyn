@@ -108,6 +108,9 @@ type Caps struct {
 	// Arch is the Docker engine's CPU architecture ("amd64" or "arm64"), stored as the runner's arch;
 	// omitted when the engine could not be asked.
 	Arch string `json:"arch,omitempty"`
+	// BYOISelftest says the runner serves MethodSelftest; absent (an older
+	// runner) refuses a BYOI task run rather than skip its check.
+	BYOISelftest bool `json:"byoi_selftest,omitempty"`
 }
 
 // Waiting is the `waiting` event's data.
