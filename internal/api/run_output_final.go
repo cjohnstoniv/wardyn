@@ -280,7 +280,7 @@ func (s *Server) prepareRunOutput(ctx context.Context, runID uuid.UUID, graceful
 	case runIsUnrecordable(run), hasTail:
 	case s.recordingOutputEnabled(ctx, run):
 		s.finalizeRecordingOutput(ctx, st, run)
-	case s.execOutputUncaptured(ctx):
+	case s.execOutputUncaptured(ctx, run):
 	default:
 		s.recoverRunOutput(ctx, st, run, "no_tail")
 	}

@@ -551,6 +551,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - Recording store seam — `pg` (Postgres-backed, visible to every replica), `fs` (legacy per-pod on-disk store) or `off` (no recording, no replay) (flag `-recording-store`).
 - Recording is **on** with the default `pg`: every PTY asciicast is persisted into the control-plane database, and `WARDYN_RECORDING_RETENTION_DAYS` defaults to keep-forever.
 - **The off switch is `WARDYN_RECORDING_STORE=off`** (what the Helm chart ships when `persistence.enabled=false`).
+- Turning a store on moves the output of runs on this deployment's Kubernetes runner from `source` `stdout` to `recording`, since the session recorder leaves no stdout to keep; a laptop run on Docker keeps `stdout` (OPERATIONS.md "Run output").
 - An EMPTY env value keeps the compiled default here as everywhere (0.7), so the pre-0.7.1 recipe `fs` + `WARDYN_RECORDING_DIR=""` disables nothing — it kept `./data/recordings` and crash-looped the stock chart on its read-only root FS.
 
 ### `WARDYN_RECORDING_RETENTION_DAYS`

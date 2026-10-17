@@ -251,6 +251,9 @@ fmt.Println(out.Output, out.Truncated, out.Complete, out.Source)
 - `source` is `stdout` for direct command output,
   `pane_snapshot` for an interactive run's last screen, or `recording` for recovered
   asciicast output.
+  The runner that served the run decides between `stdout` and `recording`:
+  only a recorded run on a Kubernetes runner under the session recorder reads `recording`
+  (OPERATIONS.md "Run output").
   The latter two retain the recording's owner-or-operator privacy
   gate, even after recording is disabled.
   A portal's delegated token reads `stdout` output only; for the other two

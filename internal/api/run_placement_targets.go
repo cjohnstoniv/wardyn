@@ -343,5 +343,5 @@ func (s *Server) executorFacts(ctx context.Context, executor string) (runner.Tar
 	}
 	_, keeps := s.cfg.Runner.(runner.SandboxEnder)
 	return runner.TargetFacts{Classes: caps.ConfinementClasses, EphemeralDiskEnforcement: caps.EphemeralDiskEnforcement,
-		KeepsEnded: keeps, UserDrives: caps.UserDrives, Records: caps.SessionRecording}, true
+		KeepsEnded: keeps, UserDrives: caps.UserDrives, Records: caps.SessionRecording, ExecOutputUncaptured: caps.ExecOutputUncaptured}, true
 }

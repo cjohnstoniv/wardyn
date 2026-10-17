@@ -70,5 +70,7 @@
 # docs/ENV.md 38704 adds 135 over 38569, measured: the Entra hour under WARDYN_OIDC_SESSION_TTL, the pointer to the sliding shape, and the activity and expiry headers under the renewal and idle settings (0.9.3 console session lifetime).
 # docs/ENV.md 38722 adds 18 over 38704, counted from the diff: a renewal sets the expiry from the request, and the proxy hint for Sec-Fetch-Site (0.9.3 console session lifetime, review).
 # docs/ENV.md 39200 = 38722 + 478, measured: merge of the AWS SSO renewal settings beside the session-lifetime rows.
-docs/ENV.md=39200 share=5
+# docs/ENV.md 39236 = 39200 + 36, measured: merge of the run output source rows; the lane's lines land unchanged.
+docs/ENV.md=39236 share=5
 # docs/ENV.md 39047 adds 478 over 38569: mid-run AWS SSO renewal (the renewer, the four WARDYN_AWS_SSO_REFRESH_* variables, the refresh row trigger).
+# docs/ENV.md 38607 adds 38 over 38569, measured: where a run's output comes from: the runner that served it, and a recording store moving remote Kubernetes runs' output to the recording source.
