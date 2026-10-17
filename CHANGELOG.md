@@ -16,6 +16,13 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 - "Discard mine and reload" on the Providers and Agents screens and the model provider editor now also re-reads who you are signed in as and reloads the page when another tab switched the session to someone else, so the page no longer keeps refusing every save as the previous person.
 - The run page's "Not recorded by the runner" note no longer claims the organization's sessions are recorded now.
+- A forward-lane request the egress audit cannot record (a full decision spool, or a record too large) now carries
+  `X-Wardyn-Reason` on its plain-text refusal, as the other refusal shapes do.
+- A runner's reconnect reads only the runs its leftover objects name, not every run in the organisation. Its decision
+  sink refuses a session whose spool lock does not free within 10 s instead of stalling every other run's session.
+- A clone failure that points at a declined Azure DevOps credential names the repository whose clone failed.
+- A kill a runner deferred is asked again once that runner completes its next inventory, and the run's fence lifts when
+  the runner confirms it; before, the deferred answer stayed the run's last word until someone killed the run again.
 
 ## [0.9.3-rc.3] — 2026-10-17
 

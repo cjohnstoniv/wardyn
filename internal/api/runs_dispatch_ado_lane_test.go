@@ -190,7 +190,7 @@ func TestDispatch_ADOGradeParityForTheRunsRepo(t *testing.T) {
 }
 
 // T20 (shell): agent-run's clone failure line points at the decline when
-// dispatch set WARDYN_ADO_LANE_DECLINED, and says nothing of it otherwise.
+// dispatch set WARDYN_ADO_LANE_DECLINED, naming the repository, and says nothing of it otherwise.
 func TestAgentRunCloneFailureNamesTheADODecline(t *testing.T) {
 	lib, err := filepath.Abs("../../deploy/images/common/agent-run-lib.sh")
 	if err != nil {
@@ -203,7 +203,7 @@ func TestAgentRunCloneFailureNamesTheADODecline(t *testing.T) {
 		if err != nil {
 			t.Fatalf("clone_one: %v\n%s", err, out)
 		}
-		hint := "this run was not given an Azure DevOps credential (row_not_admitted); the run's Credentials panel and 'wardyn run get run-1' say why"
+		hint := "cloning file:///nonexistent: this run was not given an Azure DevOps credential (row_not_admitted); the run's Credentials panel and 'wardyn run get run-1' say why"
 		if got := strings.Contains(string(out), hint); got != (code != "") || !strings.Contains(string(out), "clone FAILED") {
 			t.Errorf("code %q: hint shown = %v, output:\n%s", code, got, out)
 		}

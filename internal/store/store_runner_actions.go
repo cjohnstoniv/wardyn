@@ -410,6 +410,15 @@ func (s PG) recordRunnerActionReceiptTx(ctx context.Context, tx pgx.Tx, a types.
 			return err
 		}
 	}
+	// A kill's success settles the deferred kills of its own obligation, the links
+	// ReissueDeferredRunKills chained to it; a fresh kill has an obligation of its
+	// own and settles none.
+	if a.Outcome == types.RunnerActionSuccess && a.Kind == types.RunnerActionKill {
+		if _, err := tx.Exec(ctx, `UPDATE runner_pending_actions SET settled_at = clock_timestamp(), settlement = 'chain', settled_by = $2
+			WHERE obligation_id = $1 AND id <> $2 AND kind = 'kill' AND settled_at IS NULL AND outcome = 'deferred'`, a.ObligationID, a.ID); err != nil {
+			return fmt.Errorf("store: settle deferred kills: %w", err)
+		}
+	}
 	if err := settleRetirementResultTx(ctx, tx, a, a.Outcome); err != nil {
 		return err
 	}
@@ -426,4 +435,84 @@ func (s PG) recordRunnerActionReceiptTx(ctx context.Context, tx pgx.Tx, a types.
 		return s.RecordRunnerContainmentTx(ctx, tx, proof, prepare)
 	}
 	return nil
+}
+
+// ReissueDeferredRunKills is ReissueDeferredAssertedRunnerActions for a run's own
+// kill: a deferred receipt is final for its action, so the kill continues in one
+// successor per completed inventory of the runner's previous session, with the
+// identical binding and obligation, until a success settles the chain. It returns
+// how many successors it queued. Conservatively, it queues none for:
+//   - a retirement's kill, whose retirement bounds its own successors;
+//   - a run that no longer carries the kill's binding (its ref cleared, its
+//     generation or owner moved on): the runner's receipt would be refused;
+//   - a run with an open kill already, which is the one the runner will answer;
+//   - a successor the runner refused: nothing in its refusal says a further kill
+//     would be taken, so the deferred link stays the run's last word, as before.
+func (s PG) ReissueDeferredRunKills(ctx context.Context, runnerID uuid.UUID, sessionID string) (int, error) {
+	tx, err := beginRunnerActionTx(ctx, s)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback(context.WithoutCancel(ctx)) //nolint:errcheck // a no-op after Commit
+	var claimed bool
+	err = tx.QueryRow(ctx, `SELECT true FROM runners WHERE id = $1 AND state = 'claimed' AND revoked_at IS NULL FOR SHARE`, runnerID).Scan(&claimed)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, ErrRunnerExecutionRefused
+	}
+	if err != nil {
+		return 0, err
+	}
+	var completed bool
+	err = tx.QueryRow(ctx, `SELECT complete FROM runner_inventories WHERE runner_id = $1 AND session_id::text <> $2`, runnerID, sessionID).Scan(&completed)
+	if errors.Is(err, pgx.ErrNoRows) || (err == nil && !completed) {
+		return 0, tx.Commit(ctx)
+	}
+	if err != nil {
+		return 0, err
+	}
+	tips, err := collect(ctx, tx, "list", "deferred run kills", `SELECT `+actionCols+` FROM runner_pending_actions a
+		WHERE runner_id = $1 AND subject = 'run' AND binding_version = 1 AND kind = 'kill' AND outcome = 'deferred'
+		AND settled_at IS NULL AND NOT superseded
+		AND NOT EXISTS (SELECT 1 FROM runner_retirements r WHERE r.obligation_id = a.obligation_id)
+		ORDER BY queue_seq LIMIT $2`, []any{runnerID, runnerActionPageLimit}, scanAction)
+	if err != nil {
+		return 0, err
+	}
+	queued := 0
+	for _, tip := range tips {
+		// The shared order: runner, run, then the action.
+		owner, run, generation, err := lockRunnerActionRun(ctx, tx, runnerID, tip.RunID)
+		if errors.Is(err, ErrNotFound) || errors.Is(err, ErrRunnerActionRefused) {
+			continue
+		}
+		if err != nil {
+			return 0, err
+		}
+		if owner != tip.Owner || run.SandboxRef != tip.Ref || generation != tip.Generation {
+			continue
+		}
+		var skip bool
+		if err := tx.QueryRow(ctx, `SELECT a.superseded OR a.settled_at IS NOT NULL OR EXISTS (SELECT 1 FROM runner_pending_actions o
+			WHERE o.run_id = a.run_id AND o.kind = 'kill' AND o.applied_at IS NULL AND o.settled_at IS NULL)
+			FROM runner_pending_actions a WHERE a.id = $1 FOR UPDATE OF a`, tip.ID).Scan(&skip); err != nil {
+			return 0, err
+		}
+		if skip {
+			continue
+		}
+		if _, err := tx.Exec(ctx, `UPDATE runner_pending_actions SET superseded = true WHERE id = $1`, tip.ID); err != nil {
+			return 0, fmt.Errorf("store: supersede deferred kill: %w", err)
+		}
+		var gen *uuid.UUID
+		if tip.Generation != uuid.Nil {
+			gen = &tip.Generation
+		}
+		if _, err := tx.Exec(ctx, `INSERT INTO runner_pending_actions (id, runner_id, run_id, kind, ref, binding_version, owner,
+			execution_generation, obligation_id, supersedes) VALUES ($1, $2, $3, 'kill', $4, 1, $5, $6, $7, $8)`,
+			uuid.New(), runnerID, tip.RunID, tip.Ref, tip.Owner, gen, tip.ObligationID, tip.ID); err != nil {
+			return 0, fmt.Errorf("store: queue kill successor: %w", err)
+		}
+		queued++
+	}
+	return queued, tx.Commit(ctx)
 }

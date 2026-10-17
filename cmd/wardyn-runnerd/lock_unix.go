@@ -10,7 +10,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"syscall"
+
+	"golang.org/x/sys/unix"
 )
 
 // lockSingleInstance takes an exclusive lock on serve.lock in the runner state directory for the life of
@@ -21,9 +22,9 @@ func lockSingleInstance(stateDir string) (func(), error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+	if err := unix.Flock(int(f.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != nil {
 		_ = f.Close()
-		if errors.Is(err, syscall.EWOULDBLOCK) {
+		if errors.Is(err, unix.EWOULDBLOCK) {
 			return nil, fmt.Errorf("another wardyn-runnerd serve is already running for %s: stop it first (a setup-installed and a package-installed agent must not both run)", stateDir)
 		}
 		return nil, err

@@ -273,7 +273,8 @@ func (p *Proxy) revokeGitHubAPIToken(ctx context.Context, grantID uuid.UUID, tok
 }
 
 // boundedEgressTarget is egressTarget given up at ctx's end: its name lookup takes no context, so a stuck
-// resolver would otherwise hold the shutdown past the revoke budget. The lookup finishes on its own.
+// resolver would otherwise hold the shutdown past the revoke budget. A lookup given up on keeps its
+// goroutine until the resolver returns; the proxy is stopping, so that goroutine ends with it.
 func (p *Proxy) boundedEgressTarget(ctx context.Context, host string, port int) (string, error) {
 	type answer struct {
 		target string

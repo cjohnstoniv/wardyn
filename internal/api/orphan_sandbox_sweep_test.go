@@ -19,10 +19,23 @@ import (
 // hasLease is false, exactly the single-process demo path.
 type sandboxOrphanStore struct {
 	store.Store
-	runs []types.AgentRun
+	runs      []types.AgentRun
+	listCalls int
 }
 
-func (s *sandboxOrphanStore) ListRuns(context.Context) ([]types.AgentRun, error) { return s.runs, nil }
+func (s *sandboxOrphanStore) ListRuns(context.Context) ([]types.AgentRun, error) {
+	s.listCalls++
+	return s.runs, nil
+}
+
+func (s *sandboxOrphanStore) GetRun(_ context.Context, id uuid.UUID) (types.AgentRun, error) {
+	for _, r := range s.runs {
+		if r.ID == id {
+			return r, nil
+		}
+	}
+	return types.AgentRun{}, store.ErrNotFound
+}
 
 // sandboxOrphanRunner models the substrate side: `live` are the run ids with a
 // labeled container still alive; SweepOrphanedSandboxes asks isOrphan about each
@@ -99,7 +112,8 @@ func (r *orphanMinAge) SweepOrphanedSandboxes(ctx context.Context, minAge time.D
 }
 
 // TestRunnerOrphanSweepOnReady: a runner's READY sweeps, with no age gate, its terminal and row-less
-// runs (a create that died with runnerd), never a live run nor a ref-less run still in flight.
+// runs (a create that died with runnerd), never a live run nor a ref-less run still in flight. It
+// reads each candidate's row, never the whole run table, so a reconnect costs only its own objects.
 func TestRunnerOrphanSweepOnReady(t *testing.T) {
 	h := newHarness(t)
 	failed, live, inflight, missing := uuid.New(), uuid.New(), uuid.New(), uuid.New()
@@ -115,7 +129,7 @@ func TestRunnerOrphanSweepOnReady(t *testing.T) {
 	for _, id := range rn.tornDown {
 		swept[id] = true
 	}
-	if rn.minAge != 0 || !swept[failed] || !swept[missing] || swept[live] || swept[inflight] {
-		t.Fatalf("minAge=%v swept=%v", rn.minAge, rn.tornDown)
+	if rn.minAge != 0 || !swept[failed] || !swept[missing] || swept[live] || swept[inflight] || st.listCalls != 0 {
+		t.Fatalf("minAge=%v swept=%v listCalls=%d", rn.minAge, rn.tornDown, st.listCalls)
 	}
 }
