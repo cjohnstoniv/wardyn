@@ -34,11 +34,13 @@ func (s *Server) mountRunnerRegistrationRoutes(r chi.Router) {
 //	POST /runners/{id}/claim-org   claim it, under a human session
 //	PUT  /runners/{id}             set an org runner's limits (runner_limits.go)
 //	PUT  /runners/{id}/trust       change a runner's trust class (runner_registration_trust.go)
+//	POST /runs/{id}/node-record    release a run its Kubernetes runner holds as containment pending (run_containment.go)
 func (s *Server) mountOrgRunnerRoutes(securityOps chi.Router) {
 	securityOps.Post("/runners/org-tokens", s.handleRunnerOrgToken)
 	securityOps.Post("/runners/{id}/claim-org", s.handleRunnerClaimOrg)
 	securityOps.Put("/runners/{id}", s.handleUpdateOrgRunner)
 	securityOps.Put("/runners/{id}/trust", s.handlePutRunnerTrust)
+	securityOps.Post("/runs/{id}/node-record", s.handlePostRunNodeRecord)
 }
 
 func (s *Server) runnerRegistrationStore(w http.ResponseWriter) (store.RunnerRegistrationStore, bool) {

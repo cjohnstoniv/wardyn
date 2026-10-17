@@ -240,6 +240,7 @@ var docTierRows = []struct{ route, token string }{
 	{"POST /api/v1/runners/org-tokens", "`POST /runners/org-tokens` and `POST /runners/{id}/claim-org`"},
 	{"POST /api/v1/runners/{id}/claim-org", "`POST /runners/org-tokens` and `POST /runners/{id}/claim-org`"},
 	{"PUT /api/v1/runners/{id}/trust", "`PUT /runners/{id}/trust`"},
+	{"POST /api/v1/runs/{id}/node-record", "`POST /runs/{id}/node-record`"},
 	{"PUT /api/v1/runners/{id}", "`PUT /runners/{id}`"},
 	{"GET /api/v1/runners", "`GET /runners` and `GET /runners/{id}`"},
 	{"GET /api/v1/runners/{id}", "`GET /runners` and `GET /runners/{id}`"},

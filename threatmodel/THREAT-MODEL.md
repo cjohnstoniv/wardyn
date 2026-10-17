@@ -2714,6 +2714,13 @@ hiding them would repeat the failure mode we are designed to avoid.
     - The tree digest includes the permission bits with setuid, setgid and sticky, so stage and restore with modes preserved.
     - Other sealed blobs (masking manifests, sealed audit fields, sealed proxy configs) are reached through keys the rehearsal proves but are not opened. The verdict does not look for target rows the manifest does not describe.
 
+91. **A Kubernetes run whose node is lost stays held with termination unknown, and a reused node name releases it only on two people's word [0.9.3].** ([`internal/api/run_containment.go`](../internal/api/run_containment.go), [`internal/runner/k8s/stop_proxy.go`](../internal/runner/k8s/stop_proxy.go).)
+    - A pod's delete can stay pending on a lost or partitioned node, or behind a finalizer or an admission webhook. Its proxy can then keep serving its agent's cached-policy egress. The runner's relay fence refuses the proxy's connections, and the organisation refuses `identity.renew` for the run (`run_containment_pending`), so its egress ends at most 60 minutes after the last renew that succeeded before the fence.
+    - A force delete, a missing pod or a deleted Node object is not proof that anything stopped. Without terminal evidence from the same execution, or an infrastructure fence, the run stays held as containment pending: it keeps its lease, its NetworkPolicies and its runner's offline record, for as long as the node stays partitioned. Run detail shows "Containment pending; egress bounded until T", then "Egress bound passed; termination unknown".
+    - A security operator can release it with a node record: "node powered off", or "no prior holder" for a run the runner could not tie to one machine. runnerd decides each record against its own acceptance list; the organisation adds the two-person rule. A record is only as true as the people who make it, and two people who collude defeat it.
+    - Reusing a node name for another machine while a run's pods or holds remain is unsupported. runnerd records a reuse it sees before release, and then only a "node powered off" record made by two people releases the run. A reuse that none of its lists samples before release is not caught, and a holder acting on a stale snapshot can start the pod after release, with the runs namespace's ambient egress and no renewable identity.
+    - Owner acceptance is the K1 design's question #7. Listing the residual here is not acceptance.
+
 ### The injected call is pinned on the wire (security INFO-1 / W6-S F3) — SHIPPED, not deferred
 
 - Residual #46 above named what the proxy injects; this narrows WHICH requests it injects onto.

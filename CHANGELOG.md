@@ -15,12 +15,24 @@ and does not yet follow semantic versioning (interfaces are not stable).
   (migration `0182_runner_resident_runs`), `runner_output_watermarks` and `runner_retirements` (migration
   `0183_runner_retirements`). Without them a runner cannot be handed a
   `runner_resident` credential, and a finished runner run's output is never retired.
+- The same installs: grant the app role `SELECT, INSERT, UPDATE, DELETE` on `run_containment_pending` and
+  `SELECT, INSERT, UPDATE` on `run_node_records` (migration `0189_run_containment_pending`). Without them a
+  Kubernetes runner's state page is refused while it holds a run as containment pending.
 
 ### Added
 
 - `wardyn runner revoke <runner>` revokes one of your own runners by id or name, the command-line twin of My runner.
 - `wardyn-runnerd register --trusted-ca-file` makes the registration call trust a corporate CA beside the system
   roots; the Kubernetes chart passes it to its register container when `trustedCA.configMap` is set.
+- A run a Kubernetes runner deleted but cannot prove stopped shows on run detail as "Containment pending; egress
+  bounded until T", then "Egress bound passed; termination unknown". The run keeps its lease hold, its proxy's token
+  renewal is refused (`run_containment_pending`), and a security operator can release it with a node record ("node
+  powered off" or "no prior holder") from run detail or `wardyn runner node-record`; a run whose node name was
+  reused, or that the runner could not tie to one machine, needs two people. Migration `0189_run_containment_pending`
+  adds `run_containment_pending` and `run_node_records` and lets a `stop_proxy` action carry a node record instead
+  of an outage loss.
+- A Kubernetes run whose proxy was given an address still fenced for an earlier run fails at start with
+  `relay_ip_fenced`.
 
 ### Fixed
 

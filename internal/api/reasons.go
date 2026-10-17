@@ -536,3 +536,13 @@ const (
 	reasonTemplateLimitReached       = "template_limit_reached"        // the audience already holds the most templates it may
 	reasonTemplatePolicyFieldRefused = "template_policy_field_refused" // a policy holds only run-wide network, credential and access-rule keys
 )
+
+// Kubernetes runner node-loss containment (run_containment.go; design K1 §3.1): a run its runner deleted
+// but cannot prove stopped, and the security operator's node record that releases it.
+const (
+	reasonRunContainmentPending = "run_containment_pending" // identity.renew: the run's runner holds it as containment pending
+	reasonRelayIPFenced         = "relay_ip_fenced"         // the run failed at start: its proxy pod was given an IP still fenced for another run
+	reasonNodeRecordInvalid     = "node_record_invalid"     // POST /runs/{id}/node-record: the body is not a whole record
+	reasonNodeRecordRefused     = "node_record_refused"     // the run is not held pending, its record changed, or the attestation does not fit it
+	reasonNodeRecordHumanOnly   = "node_record_human_only"  // the admin token, or local mode, which cannot show who the people were
+)

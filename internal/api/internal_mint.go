@@ -385,6 +385,17 @@ func (s *Server) handleInternalTokenRenew(w http.ResponseWriter, r *http.Request
 		writeErrorReason(w, http.StatusForbidden, string(authz.ReasonRunKept), "run is lost")
 		return
 	}
+	// A run its Kubernetes runner holds as containment pending has a relay fence the runner keeps; this
+	// is the second layer behind it (design K1 §3.1 R4-M1), so a read that fails refuses too.
+	if pending, perr := s.runContainmentPending(r.Context(), run); pending || perr != nil {
+		if perr != nil {
+			writeErrorReason(w, http.StatusServiceUnavailable, reasonRunRenewReadFailed, loggedMsg(r.Context(), "read run containment", perr))
+			return
+		}
+		s.auditRenewDenied(r, claims, reasonRunContainmentPending)
+		writeErrorReason(w, http.StatusForbidden, reasonRunContainmentPending, "run is containment pending: its runner deleted it and is waiting for proof that it stopped")
+		return
+	}
 
 	// A service run renews under its identity's current sponsor, not the one its first token named.
 	sponsor := claims.Sponsor

@@ -41,4 +41,5 @@
 # threatmodel/THREAT-MODEL.md 60624 adds 1308 over 59316 (0.9.3 FIN-E), measured: the audit-chain, AWS KMS, erasure, runner, recovery rehearsal and unbind residuals.
 # threatmodel/THREAT-MODEL.md 59420 = 59316 + 104, measured: the runner door, admin read and harness-uid sentences.
 # threatmodel/THREAT-MODEL.md 60728 = 60624 + 104, measured: at the FIN-C2 merge into the final train (both sides' sentences).
-threatmodel/THREAT-MODEL.md=60728
+# threatmodel/THREAT-MODEL.md 61041 adds 313 (0.9.3 K3b): residual #91, Kubernetes node loss.
+threatmodel/THREAT-MODEL.md=61041

@@ -226,6 +226,7 @@ func (s *Server) routes() chi.Router {
 			// change no run state.
 			r.Get("/runs/{id}/files", s.handleRunFiles)
 			r.Get("/runs/{id}/resources", s.handleRunResources)
+			r.Get("/runs/{id}/containment", s.handleGetRunContainment) // same gate as GET /runs/{id}
 			r.Get("/runs/{id}/attach-holder", s.handleAttachHolder)
 			// The one WRITE in that set: displacing whoever currently holds the
 			// run's tmux PTY. Audited (session.takeover, actor + previous holder)

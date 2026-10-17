@@ -63,6 +63,10 @@ func decodeRunnerActionProof(a *types.RunnerPendingAction, raw []byte) error {
 	}
 	var dst any
 	switch a.Kind {
+	case types.RunnerActionStopProxy:
+		// A stop_proxy's proof is the node record it carries; the runner decodes it strictly.
+		a.NodeRecord = append(json.RawMessage(nil), raw...)
+		return nil
 	case types.RunnerActionRecoverMutation, types.RunnerActionRecoverContainment:
 		a.Recovery = new(types.RunnerMutationFailure)
 		dst = a.Recovery
@@ -92,7 +96,8 @@ func sameRunnerAction(a, b types.RunnerPendingAction) bool {
 	lost := (a.LostAt == nil) == (b.LostAt == nil) && (a.LostAt == nil || a.LostAt.Equal(*b.LostAt))
 	return a.Bound && b.Bound && a.Asserted == b.Asserted && a.RunnerID == b.RunnerID && a.RunID == b.RunID && a.Kind == b.Kind &&
 		a.Ref == b.Ref && a.Owner == b.Owner && a.Generation == b.Generation && lost &&
-		equalPtr(a.Recovery, b.Recovery) && equalPtr(a.Quarantine, b.Quarantine) && equalPtr(a.Retirement, b.Retirement)
+		equalPtr(a.Recovery, b.Recovery) && equalPtr(a.Quarantine, b.Quarantine) && equalPtr(a.Retirement, b.Retirement) &&
+		SameJSON(a.NodeRecord, b.NodeRecord)
 }
 
 // lockRunnerActionRun takes the shared order runner FOR SHARE → run FOR UPDATE
@@ -285,15 +290,37 @@ func (s PG) RunHasPendingRunnerAction(ctx context.Context, runID uuid.UUID) (boo
 	return has, nil
 }
 
+// recordRunnerActionOutcomeTx writes what the first receipt of a leaves, inside its transaction: the
+// refusal or apply audit row, the answer to the node record it carries, and its retirement settlement.
+func recordRunnerActionOutcomeTx(ctx context.Context, tx pgx.Tx, a types.RunnerPendingAction, runID *uuid.UUID, outcome, reason string, observedAt time.Time,
+	prepare func(context.Context, types.AuditEvent) (types.AuditEvent, error)) error {
+	switch outcome {
+	case types.RunnerActionRefused:
+		if err := recordRunnerActionRefusalTx(ctx, tx, a, runID, reason, prepare); err != nil {
+			return err
+		}
+	case types.RunnerActionSuccess:
+		if err := recordRunnerActionApplyTx(ctx, tx, a, runID, observedAt, prepare); err != nil {
+			return err
+		}
+	}
+	if err := settleRunNodeRecordTx(ctx, tx, a, outcome, reason); err != nil {
+		return err
+	}
+	return settleRetirementResultTx(ctx, tx, a, outcome)
+}
+
 // RunHeldContainedOnRunner reports whether the run's runner holds it contained: a kill, end, stop_proxy
-// or quarantine was queued for it and no later recover_containment succeeded. Such a runner refuses any
-// lease for the run, and a refused lease ends its session.
+// or quarantine was queued for it and no later recover_containment succeeded, or the runner reported it
+// containment pending (design K1 §3.1 Q2). Such a runner refuses any lease for the run, and a refused
+// lease ends its session.
 func (s PG) RunHeldContainedOnRunner(ctx context.Context, runID uuid.UUID) (bool, error) {
 	var held bool
 	err := s.Pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM runner_pending_actions c WHERE c.run_id = $1
 		AND c.kind IN ('kill', 'end', 'stop_proxy', 'quarantine_run')
 		AND NOT EXISTS (SELECT 1 FROM runner_pending_actions r WHERE r.run_id = c.run_id AND r.kind = 'recover_containment'
-			AND r.outcome = 'success' AND r.queued_at > c.queued_at))`, runID).Scan(&held)
+			AND r.outcome = 'success' AND r.queued_at > c.queued_at))
+		OR EXISTS (SELECT 1 FROM run_containment_pending WHERE run_id = $1)`, runID).Scan(&held)
 	if err != nil {
 		return false, fmt.Errorf("store: check runner containment: %w", err)
 	}
@@ -366,17 +393,7 @@ func (s PG) RecordRunnerActionResult(ctx context.Context, runnerID, runID, actio
 	if err != nil {
 		return types.RunnerPendingAction{}, false, err
 	}
-	if outcome == types.RunnerActionRefused {
-		if err := recordRunnerActionRefusalTx(ctx, tx, a, &runID, reason, prepare); err != nil {
-			return types.RunnerPendingAction{}, false, err
-		}
-	}
-	if outcome == types.RunnerActionSuccess {
-		if err := recordRunnerActionApplyTx(ctx, tx, a, &runID, observedAt, prepare); err != nil {
-			return types.RunnerPendingAction{}, false, err
-		}
-	}
-	if err := settleRetirementResultTx(ctx, tx, a, outcome); err != nil {
+	if err := recordRunnerActionOutcomeTx(ctx, tx, a, &runID, outcome, reason, observedAt, prepare); err != nil {
 		return types.RunnerPendingAction{}, false, err
 	}
 	// A run that has since left the kept loss (killed, ended) has its own

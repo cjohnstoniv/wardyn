@@ -13,6 +13,10 @@ read.
 - Three of the reasons below are NOT member denials at all.
   - 0.7.4 added a RUN-TOKEN tier (`run_terminal`, `run_not_found`; 0.8 adds `run_kept`), raised by `internalAuth`'s liveness gate against a sandbox sidecar's own run token rather than against a person.
   - They live in this table because the action, the shape and the `reason` field are the same one an operator greps; the `actor_type` (`agent`) is what tells them apart.
+- The reasons of a Kubernetes runner's node-loss containment (0.9.3) are not `authz.denied` reasons, so they have no row below.
+  - `run_containment_pending` (`403`): token renewal refuses a run its runner deleted but cannot yet prove stopped. It is written on the `identity.renew` row, beside the runner's own relay fence, which is what bounds the run's egress.
+  - `node_record_invalid` (`400`), `node_record_refused` (`409`) and `node_record_human_only` (`403`) refuse a security operator's node record (`POST /runs/{id}/node-record`): a body that is not a whole record; the run is not held, the runner's record changed since the form was loaded, the attestation does not fit the run, or another stop waits for its runner; or the admin token, or local mode where two people are needed. The runner's own refusal of an accepted record is `runner.action.refuse`.
+  - `relay_ip_fenced` is not a refusal of a person: it is the `reason` on the `run.create` failure row of a run the runner stopped at start, because its proxy pod was given an IP the runner still fences for an earlier run.
 - One FIELD rides beside the reason since 0.7.4: `user_view: true`.
   - (Renamed in 0.8 from `member_mode` — see [Renamed in 0.8](../OPERATIONS.md#renamed-in-08); pre-0.8 rows keep `member_mode`.)
   - It is on every ADMIN-TIER `403` below — the two `requireOperator` / `requireSecurityOperator` chokepoints and the in-handler refusals that raise the same two reasons — when the refused caller is an admin exercising [the User view](member-mode.md).
