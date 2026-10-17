@@ -21,6 +21,7 @@ import { SCENARIO_PREFLIGHT } from "../src/app/lib/new-run-fixtures/scenarios/pr
 import { SCENARIO_ACCESS, SETUP_ITEMS } from "../src/app/lib/new-run-fixtures/scenarios/tools";
 import { CLAUDE_ATTENDED, CLAUDE_UNGATED, MCP_DOCS, withFacts } from "../src/app/lib/new-run-fixtures/scenarios/tools-harness";
 import { MY_COMPONENTS } from "../src/app/components/wardyn/copy/components";
+import { MY_COMPONENTS as CATALOGUE, ORG_LINEAR } from "../src/app/lib/new-run-fixtures/scenarios/catalogue";
 
 const RUN_ID = "d4444444-4444-4444-8444-444444444444";
 const DOCUMENT = "api_version: wardyn/v1\nkind: Run\nintent:\n  shape: application\n  experience: background\n  workload:\n    kind: command\n    command: npm test\n  no_repositories_or_drives: true\n";
@@ -148,6 +149,18 @@ async function openToolsFor(page: Page, intentLines: string[], access: object) {
   await expect(page.getByRole("heading", { name: NR_TOOLS.TITLE })).toBeVisible();
 }
 const card = (page: Page, name: string) => page.getByRole("region", { name, exact: true });
+
+test.describe("New Run, step 5: one teal action", () => {
+  test("a catalogue card's Add is an outline button; Review run is the one teal action (DR-0057)", async ({ page }) => {
+    await stub(page, false);
+    await page.route("**/api/v1/me/components", (route) => (route.request().method() === "GET" ? route.fulfill({ json: CATALOGUE }) : route.fallback()));
+    await openTools(page);
+    const add = page.getByRole("button", { name: `${NR_TOOLS.CARD_ADD} ${ORG_LINEAR.name}`, exact: true });
+    await expect(add).toBeVisible();
+    await expect(add).not.toHaveClass(/bg-primary/);
+    await expect(page.getByRole("button", { name: NR_TOOLS.REVIEW_RUN, exact: true })).toHaveClass(/bg-primary/);
+  });
+});
 
 test.describe("New Run, step 5: the harness card", () => {
   test("a harness that is only available is not labelled as starting with the run (DR-0230)", async ({ page }) => {
