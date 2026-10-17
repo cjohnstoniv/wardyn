@@ -97,6 +97,8 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `AGAIN_NOTE` | pending (W-01) | Settings are rechecked now. Short-lived credentials are issued fresh; standing approvals still apply. |
 | `EMPTY_TEMPLATES` | pending (W-23) | No saved templates yet. |
 | `EMPTY_AGAIN` | pending (W-23) | No previous runs to start again. |
+| `TEMPLATES_LOADING` | deviation (lead wording 2026-10-17, FUG-L771) | Loading saved templates… |
+| `AGAIN_LOADING` | deviation (lead wording 2026-10-17, FUG-L771) | Loading previous runs… |
 | `AGENT_TITLE` | mock | Agent task |
 | `AGENT_BODY` | mock | A one-time coding task, driven by you or running autonomously. |
 | `AGENT_SUB` | mock | Interactive · Autonomous · Repeat / schedule coming soon |
@@ -488,6 +490,7 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `CODEX_HOLD_TIP` | mock | Codex CLI can't pause a tool call for approval. |
 | `CODEX_NOTE` | pending (W-32) | Codex CLI can't pause a tool call for approval, and Wardyn can't block its own tools. Rules for its MCP tools are enforced by the proxy. |
 | `RULES_LABEL` | mock | Tool rules |
+| `ROW_LOCKED` | deviation (lead wording 2026-10-17, FUG-L771) | Set by your organisation's policy |
 | `ADD_RULE` | mock | Add a tool rule |
 | `MCP_FOR_HARNESS` | mock | MCP servers for this harness |
 | `MCP_FOLLOWS` | mock | Calls to an MCP server follow this harness's tool rules, as `mcp__<server>__<tool>`. |
@@ -794,6 +797,8 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `CANCEL_SAVE` | mock | Cancel |
 | `CONFIRM_TEMPLATE` | mock | Save template |
 | `CONFIRM_POLICY` | mock | Save policy |
+| `NOTHING_PICKED` | deviation (lead wording 2026-10-17, FUG-L771) | Choose at least one part to include. |
+| `OWN_DRIVES_LEFT_OUT` | deviation (DS-2, FUG-L771) | Your own drives are left out of shared templates. |
 | `SAVED(kind)` | mock | {kind} saved without changing the draft. |
 | `NAME_TAKEN` | server | reason template_name_taken (Go owns the sentence) |
 | `LIMIT_REACHED` | server | reason template_limit_reached (Go owns the sentence) |

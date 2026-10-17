@@ -604,7 +604,7 @@ func (a *Authenticator) Middleware(next http.Handler) http.Handler {
 				}
 				// Valid session: stash the principal and continue.
 				sess = a.touchSession(w, r, sess)
-				ctx := contextWithPrincipal(r.Context(), sess)
+				ctx := a.withPrincipal(r.Context(), sess)
 				next.ServeHTTP(w, r.WithContext(ctx))
 				return
 			}

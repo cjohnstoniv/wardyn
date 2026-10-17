@@ -110,3 +110,16 @@ record_cold_pull_duration() {
   echo "aws-sso cold pull duration: ${dur}s (${pulling_ts} -> ${pulled_ts}) — evidence only, does not fail the walk" \
     | tee -a "${EVIDENCE_DIR}/images.txt"
 }
+
+# One manifest row per walk image: the host's and the kind node's image id, and whether they agree.
+manifest_images() {
+  local first=1
+  for img in "${WARDYND_IMAGE}" "${PROXY_IMAGE}" "${AGENT_IMAGE}" "${AWS_SSO_IMAGE}" "${FAKE_IMAGE}"; do
+    local h n
+    h="$(host_digest "${img}")"; n="$(node_ref_for "${img}")"
+    [[ ${first} -eq 1 ]] || printf ','
+    first=0
+    jq -cn --arg i "${img}" --arg h "${h}" --arg n "${n}" \
+      '{image:$i, host_id:$h, node_id:$n, agree:($h==$n and $h!="")}'
+  done
+}

@@ -916,8 +916,14 @@ func TestPG_GovernanceChanges_RenameSeesAnAssignmentApprovedWhileItWaits(t *test
 		return p.Name
 	}
 
-	// The approval of ops -> zulu, frozen before its commit, holding the locks the decision takes.
-	tx, err := e.pool.Begin(ctx)
+	// The approval of ops -> zulu, frozen before its commit, holding the locks the decision takes. The
+	// hold is on a pool of its own: this goroutine probes e.pool while it holds them (WARDYN_TEST_POOL_GUARD).
+	holdPool, err := pgxpool.New(ctx, e.pool.Config().ConnString())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer holdPool.Close()
+	tx, err := holdPool.Begin(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -980,7 +986,14 @@ func TestPG_GovernanceChanges_AssignmentWritesWaitForTheProfileGraph(t *testing.
 		"a delete": func() error { return e.pg.DeleteGovernanceAssignment(ctx, seeded.ID) },
 	} {
 		t.Run(name, func(t *testing.T) {
-			tx, err := e.pool.Begin(ctx)
+			// The hold is on a pool of its own: this goroutine probes e.pool while it holds the graph
+			// lock (WARDYN_TEST_POOL_GUARD).
+			holdPool, err := pgxpool.New(ctx, e.pool.Config().ConnString())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer holdPool.Close()
+			tx, err := holdPool.Begin(ctx)
 			if err != nil {
 				t.Fatal(err)
 			}

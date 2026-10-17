@@ -11,6 +11,8 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -196,7 +198,8 @@ func (s *Server) endRunQueuedForRevokedRunner(ctx context.Context, runID uuid.UU
 // endQueuedRunsOfRevokedRunners is the queue sweep's retry of endQueuedRunsPinnedTo, from the durable
 // state alone: it ends each waiting run whose launch names a revoked runner. A revoke whose own pass
 // failed for a run, or never ran because the server stopped after the revoke committed, so converges
-// within a tick, with nobody revoking again. A run that still cannot be ended is tried at the next tick.
+// within a tick, with nobody revoking again. A run that still cannot be ended is tried again later,
+// each wait longer than the last (revokedEndRetry).
 func (s *Server) endQueuedRunsOfRevokedRunners(ctx context.Context) error {
 	qs, _ := s.queueStore()
 	entries, err := qs.QueueEntriesOfRevokedRunners(ctx, queueRevokedScanLimit)
@@ -204,12 +207,76 @@ func (s *Server) endQueuedRunsOfRevokedRunners(ctx context.Context) error {
 		slog.WarnContext(ctx, "wardynd: list waiting runs of revoked runners", slog.Any("err", err))
 		return fmt.Errorf("list waiting runs of revoked runners: %w", err)
 	}
+	now := s.cfg.Now()
+	due := s.revokedEndRetry.due(entries, now)
 	for _, e := range entries {
-		if _, err := s.endRunQueuedForRevokedRunner(ctx, e.RunID); err != nil {
-			slog.WarnContext(ctx, "wardynd: end a run waiting for a revoked runner", slog.String("run_id", e.RunID.String()), slog.Any("err", err))
+		if !due[e.RunID] {
+			continue
 		}
+		if _, err := s.endRunQueuedForRevokedRunner(ctx, e.RunID); err != nil {
+			wait := s.revokedEndRetry.failed(e.RunID, now)
+			slog.WarnContext(ctx, "wardynd: end a run waiting for a revoked runner", slog.String("run_id", e.RunID.String()),
+				slog.Duration("retry_in", wait), slog.Any("err", err))
+			continue
+		}
+		s.revokedEndRetry.forget(e.RunID)
 	}
 	return nil
+}
+
+// revokedEndRetry spaces out the sweep's retries of a waiting run it could not end: the next try is
+// revokedEndFirstWait later, and each failure doubles the wait up to revokedEndMaxWait, so a run that
+// stays unendable is not tried and logged on every tick. The zero value is ready to use.
+type revokedEndRetry struct {
+	mu   sync.Mutex
+	runs map[uuid.UUID]revokedEndWait
+}
+
+type revokedEndWait struct {
+	next time.Time
+	wait time.Duration
+}
+
+const (
+	revokedEndFirstWait = 30 * time.Second
+	revokedEndMaxWait   = 10 * time.Minute
+)
+
+// due reports which of this tick's entries may be tried now, and forgets a run no longer listed.
+func (b *revokedEndRetry) due(entries []store.RunQueueEntry, now time.Time) map[uuid.UUID]bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	out := make(map[uuid.UUID]bool, len(entries))
+	kept := make(map[uuid.UUID]revokedEndWait, len(b.runs))
+	for _, e := range entries {
+		w, waiting := b.runs[e.RunID]
+		out[e.RunID] = !waiting || !now.Before(w.next)
+		if waiting {
+			kept[e.RunID] = w
+		}
+	}
+	b.runs = kept
+	return out
+}
+
+// failed records a failed try of run and returns how long until the next.
+func (b *revokedEndRetry) failed(run uuid.UUID, now time.Time) time.Duration {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	w := b.runs[run]
+	w.wait = min(max(2*w.wait, revokedEndFirstWait), revokedEndMaxWait)
+	w.next = now.Add(w.wait)
+	if b.runs == nil {
+		b.runs = map[uuid.UUID]revokedEndWait{}
+	}
+	b.runs[run] = w
+	return w.wait
+}
+
+func (b *revokedEndRetry) forget(run uuid.UUID) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	delete(b.runs, run)
 }
 
 // queueRevokedScanLimit bounds one tick's work list of runs waiting for revoked runners.

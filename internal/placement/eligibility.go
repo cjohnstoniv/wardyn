@@ -9,7 +9,9 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
+	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -203,10 +205,7 @@ func classifyCredential(entries entrySource, path string, origin CredentialOrigi
 				if r := ResidentAdmits(origin, p, path); r != nil {
 					return r
 				}
-				if st == StructGrantKind {
-					leaf = reflect.Value{} // grant eligibility names a scope, never a value
-				}
-				return residentValueRefusal(path, leaf)
+				return residentValueRefusal(path, row.Delivery, st == StructGrantKind, leaf)
 			}
 			return refuse(ReasonPlacementCredential, path, fmt.Sprintf("%s credential is unavailable on a local runner of trust class %s (delivery %s has no implemented authority)", row.Delivery, trustName(p.Trust), mode))
 		default:
@@ -245,22 +244,29 @@ func ResidentAdmits(origin CredentialOrigin, p LocalPlan, path string) *Refusal 
 
 // residentValueRefusal keeps an admitted runner_resident value off every
 // channel but DeliverResident: the dispatched leaf must already be its
-// placeholder. An intent (Azure DevOps) and a grant's eligibility record have
-// no dispatched value to replace, so they stay refused until the org's deliver
-// step authors one; classifyCredential therefore never admits a resident grant
-// record, whatever the caller (via_org admission included) concludes from nil.
-func residentValueRefusal(path string, leaf reflect.Value) *Refusal {
-	if !leaf.IsValid() {
+// placeholder. A grant's eligibility record names a scope, never a value, and is
+// admitted for a class whose resident delivery is built (residentBuilt): the
+// org's deliver step authors that grant's placeholder at dispatch. A record, a
+// placeholder or an intent (Azure DevOps) of any other class stays refused, so
+// classifyCredential never admits an unbuilt class, whatever the caller (via_org
+// admission included) concludes from nil.
+func residentValueRefusal(path, class string, record bool, leaf reflect.Value) *Refusal {
+	switch {
+	case !residentBuilt[class]:
 		return refuse(ReasonPlacementCredential, path, "runner_resident delivery of this credential is not built yet")
-	}
-	if !residentPlaceholderLeaf(leaf) {
+	case record:
+		return nil
+	case !leaf.IsValid():
+		return refuse(ReasonPlacementCredential, path, "runner_resident delivery of this credential is not built yet")
+	case !residentPlaceholderLeaf(leaf):
 		return refuse(ReasonPlacementCredential, path, "a runner_resident value is dispatched only as its placeholder, never inline")
 	}
 	return nil
 }
 
 // residentPlaceholderLeaf reports whether v is a placeholder: a string, a byte
-// slice, or a managed file whose Content is one.
+// slice, a managed file whose Content is one, or a resident mint whose Token is
+// one.
 func residentPlaceholderLeaf(v reflect.Value) bool {
 	for v.Kind() == reflect.Pointer && !v.IsNil() {
 		v = v.Elem()
@@ -274,6 +280,9 @@ func residentPlaceholderLeaf(v reflect.Value) bool {
 		return ok
 	case v.Kind() == reflect.Struct && v.Type() == reflect.TypeFor[runner.ManagedFile]():
 		return residentPlaceholderLeaf(v.FieldByName("Content"))
+	case v.Kind() == reflect.Struct && v.Type() == reflect.TypeFor[proxy.ResidentMint]():
+		// A mint the runner answers carries the cap it is refused at.
+		return !v.FieldByName("ExpiresAt").Interface().(time.Time).IsZero() && residentPlaceholderLeaf(v.FieldByName("Token"))
 	}
 	return false
 }

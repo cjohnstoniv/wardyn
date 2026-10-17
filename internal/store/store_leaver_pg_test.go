@@ -225,6 +225,38 @@ func TestPG_SuspendIdentity_WritesPendingJobsWithTheCutoff(t *testing.T) {
 	}
 }
 
+// Pending leavers are listed with the fewest failed attempts first: an older leaver whose step keeps
+// failing does not take the batch ahead of a newer one no step has tried yet.
+func TestPG_PendingLeavers_FewestFailedAttemptsFirst(t *testing.T) {
+	st := store.NewPG(runsPGPoolIsolated(t))
+	ctx := context.Background()
+	step := store.JobKey{Step: "sweep", Target: "x"}
+	suspend := func(principal, email string) store.PrincipalIdentity {
+		row := signedIn(t, st, principal, email, "")
+		if _, err := st.SuspendIdentity(ctx, store.SuspendPlan{IdentityID: row.ID, Principal: principal, Principals: []string{principal}, PendingJobs: []store.JobKey{step}}); err != nil {
+			t.Fatal(err)
+		}
+		return row
+	}
+	older := suspend("sub-older", "older@corp.example")
+	newer := suspend("sub-newer", "newer@corp.example")
+	if _, err := st.Pool.Exec(ctx, `UPDATE principal_identities SET created_at = now() - interval '1 hour' WHERE id = $1`, older.ID); err != nil {
+		t.Fatal(err)
+	}
+	for range 3 {
+		if err := st.FailDeprovisionJob(ctx, older.ID, store.JobKindSuspend, step, errors.New("held")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	pending, err := st.PendingLeavers(ctx, 0, 1)
+	if err != nil || len(pending) != 1 || pending[0].ID != newer.ID {
+		t.Fatalf("first pending leaver = %+v (%v), want the newer one no step has tried", pending, err)
+	}
+	if all, err := st.PendingLeavers(ctx, 0, 10); err != nil || len(all) != 2 || all[1].ID != older.ID {
+		t.Fatalf("pending leavers = %+v (%v), want the retried one listed after", all, err)
+	}
+}
+
 // The owner guard: the insert writers refuse a deactivated or past-epoch owner inside their own
 // transaction, admit the current epoch, a caller with no epoch and a principal with no row, and a
 // guard never reaches another person.

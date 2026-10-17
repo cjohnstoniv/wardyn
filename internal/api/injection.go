@@ -256,7 +256,7 @@ func (s *Server) handleInternalInjection(w http.ResponseWriter, r *http.Request)
 	})
 }
 
-// DRAFT (M2 canon pending) — the sink's answers when a stored secret cannot be
+// The sink's answers when a stored secret cannot be
 // read and its name is not the run's own to know. The proxy relays the body
 // into the sandbox. sinkSharedSecretRefused is for the secret an organisation
 // provides for its component. sinkSecretMissingUnnamed and

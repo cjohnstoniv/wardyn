@@ -35,9 +35,8 @@ import (
 
 // agent400 / agent422 — the refusal bodies this file writes.
 //
-// DRAFT (M2 canon pending): every string here is provisional until the owner's
-// canon sitting freezes it. They are constants, and the tests assert THROUGH the
-// constants, so the post-sitting swap is a one-file diff with no test churn.
+// Every string here is frozen as shipped. They are constants, and the tests assert THROUGH the
+// constants, so a wording change is a one-file diff with no test churn.
 const (
 	agent400Unknown = "agents: %q names no agent this deployment can run — a catalog id or a WARDYN_AGENT_IMAGES key"
 	agent400DupID   = "agents: id %q is not unique"

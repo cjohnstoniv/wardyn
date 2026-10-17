@@ -28,7 +28,7 @@ const REPO_ROW: AccessRow = {
   hosts: [], credentials: ["git_provider:github:app:cred"], source: { kind: "workspace" },
 };
 const REPO_CREDENTIAL: AccessCredential = {
-  id: "git_provider:github:app:cred", row: REPO_ROW.id, kind: "github_app", owner: "org_app", delivery: "git_broker", after_end: "gone",
+  id: "git_provider:github:app:cred", row: REPO_ROW.id, kind: "github_app", owner: "org_app", label: "Your organisation's GitHub App", delivery: "git_broker", after_end: "gone",
 };
 const DRIVE_ROW: AccessRow = { id: "drive:main", kind: "drive", from: "drive", name: "Your drive", status: "ready", hosts: [], credentials: [], source: { kind: "workspace" } };
 const COMMAND_ROW: AccessRow = { id: "command", kind: "command", from: "command", name: "npm test", status: "ready", hosts: ["registry.npmjs.org"], credentials: [], source: { kind: "policy" } };

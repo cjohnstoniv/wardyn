@@ -54,6 +54,8 @@ type scimCovStore struct {
 	failures      []store.DeprovisionFailure
 	grantsDeleted int64
 	assignDeleted int64
+	poolsNarrowed int64
+	poolsEmptied  int64
 
 	// fails is how many more calls of a method fail (negative: every call); failErr is what they answer.
 	fails   map[string]int
@@ -673,14 +675,14 @@ func (s *scimCovStore) PendingLeavers(_ context.Context, idleFor time.Duration, 
 	return slices.Clone(s.pending), nil
 }
 
-func (s *scimCovStore) DeleteUserSubjectRows(_ context.Context, _ uuid.UUID, principals, emails []string) (int64, int64, int64, error) {
+func (s *scimCovStore) DeleteUserSubjectRows(_ context.Context, _ uuid.UUID, principals, emails []string) (store.UserSubjectRowsDeleted, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.deleteRows = append(s.deleteRows, slices.Concat(principals, emails))
 	if err := s.enter("DeleteUserSubjectRows"); err != nil {
-		return 0, 0, 0, err
+		return store.UserSubjectRowsDeleted{}, err
 	}
-	return s.grantsDeleted, s.assignDeleted, 0, nil
+	return store.UserSubjectRowsDeleted{Grants: s.grantsDeleted, Assignments: s.assignDeleted, PoolsNarrowed: s.poolsNarrowed, PoolsEmptied: s.poolsEmptied}, nil
 }
 
 // HeldEmails: no other principal holds an address in this fake.

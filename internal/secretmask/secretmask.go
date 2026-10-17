@@ -446,20 +446,8 @@ func (r *Registry) Snapshot(runID uuid.UUID) [][]byte {
 		return nil
 	}
 	r.mu.RLock()
-	perRun := r.perRun[runID]
-	globals := r.globals
-	r.mu.RUnlock()
-
-	out := make([][]byte, 0, len(perRun)+len(globals))
-	for _, v := range perRun {
-		out = append(out, bytes.Clone(v))
-	}
-	for _, v := range globals {
-		if !containsSlice(perRun, v) { // a value the run also holds is in the set once
-			out = append(out, bytes.Clone(v))
-		}
-	}
-	return out
+	defer r.mu.RUnlock()
+	return r.snapshotLocked(runID)
 }
 
 // Masker returns a Masker over runID's combined corpus (per-run + global),
@@ -524,14 +512,18 @@ func (r *Registry) rebuild(runID uuid.UUID, withVariant bool) *runMaskers {
 }
 
 // snapshotLocked is Snapshot's body without the lock. The caller holds r.mu.
+// A value the run also holds is in the set once; the run's values are indexed,
+// so the cost follows the corpus size, not globals times run values.
 func (r *Registry) snapshotLocked(runID uuid.UUID) [][]byte {
 	perRun, globals := r.perRun[runID], r.globals
 	out := make([][]byte, 0, len(perRun)+len(globals))
+	held := make(map[string]struct{}, len(perRun))
 	for _, v := range perRun {
 		out = append(out, bytes.Clone(v))
+		held[string(v)] = struct{}{}
 	}
 	for _, v := range globals {
-		if !containsSlice(perRun, v) { // a value the run also holds is in the set once
+		if _, dup := held[string(v)]; !dup {
 			out = append(out, bytes.Clone(v))
 		}
 	}

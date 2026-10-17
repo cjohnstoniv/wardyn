@@ -65,7 +65,9 @@ func (p *Proxy) attributeRefusal(w http.ResponseWriter) string {
 	if request != "" {
 		w.Header().Set(egressHeaderPolicyRequest, request)
 	}
-	who := "this deployment's default policy"
+	// "policy", not "default policy": a run attributed to the deployment may have started from a
+	// stored policy, which the proxy does not know.
+	who := "this deployment's policy"
 	if ref.Source == policyref.SourceProfile {
 		who = "a governance profile"
 		if ref.Name != "" {

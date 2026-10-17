@@ -30,6 +30,8 @@ export interface SettingDraft {
 
 export interface ComponentDraft {
   name: string;
+  // The admin editor's one line for the card; the New Run custom-component form has none.
+  description?: string;
   // One host per line.
   hosts: string;
   secrets: SecretDraft[];
@@ -54,9 +56,10 @@ export const blankSecret = (): SecretDraft => ({
 export const blankSetting = (): SettingDraft => ({ key: nextKey++, name: "", value: "" });
 
 export function draftOf(c: Component | null): ComponentDraft {
-  if (!c) return { name: "", hosts: "", secrets: [], settings: [] };
+  if (!c) return { name: "", description: "", hosts: "", secrets: [], settings: [] };
   return {
     name: c.name,
+    description: c.definition.description ?? "",
     hosts: c.definition.hosts.join("\n"),
     secrets: (c.definition.secrets ?? []).map((s) => ({
       ...blankSecret(),
@@ -112,9 +115,11 @@ export function requestOf(d: ComponentDraft): ComponentRequest {
   const hosts = hostLines(d.hosts);
   const choices = headerHostChoices(hosts);
   const config = Object.fromEntries(d.settings.filter((s) => s.name.trim()).map((s) => [s.name.trim(), s.value]));
+  const description = d.description?.trim() ?? "";
   return {
     name: d.name.trim(),
     definition: {
+      ...(description ? { description } : {}),
       hosts,
       ...(d.secrets.length > 0 && { secrets: d.secrets.map((s) => secretOf(s, choices)) }),
       ...(Object.keys(config).length > 0 && { config }),

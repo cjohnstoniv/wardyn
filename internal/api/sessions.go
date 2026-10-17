@@ -122,6 +122,10 @@ func (s *Server) handleRevokeSessions(w http.ResponseWriter, r *http.Request) {
 		writeErrorReason(w, http.StatusBadRequest, reasonSessionsRevokeParamInvalid, `"sessions_only" applies to "sub", not "all"`)
 		return
 	}
+	if isSubjectName(body.Sub) {
+		writeErrorReason(w, http.StatusUnprocessableEntity, reasonReservedPrincipal, "sub: "+subjectNameReservedMsg)
+		return
+	}
 	scope, target := "sub", body.Sub
 	actorCtx := withRequestActor(r)
 	var res personRevocation
@@ -225,15 +229,24 @@ func (s *Server) revokePersonCredentialsBy(ctx context.Context, principal string
 	}
 	res, err := s.revokeCredentials(ctx, principal, resolveKeys)
 	res.Stamped = true
-	// A sponsor is stored by subject, so an email-form revoke sweeps under the subject the key resolver found too.
+	// A sponsor is stored by subject, so an email-form revoke sweeps under the subject the email names too:
+	// resolved through the directory, since the key resolver keeps an email that owns keys itself.
 	n, serr := s.revokeSponsoredTokens(ctx, principal)
 	res.Tokens += n
 	// A run waiting in a pool's queue holds the person's authority as of its launch; it goes with the rest.
 	_, qerr := s.cancelQueuedRunsOf(ctx, principal, queueCancelSessionRevoked)
-	if res.KeyPrincipal != "" && res.KeyPrincipal != principal {
-		n, kerr := s.revokeSponsoredTokens(ctx, res.KeyPrincipal)
+	subject := res.KeyPrincipal
+	if resolveKeys && strings.Contains(principal, "@") {
+		named, _, refusal, rerr := s.resolveSecretOwner(ctx, principal)
+		if rerr == nil && refusal == "" {
+			subject = named
+		}
+		serr = errors.Join(serr, rerr)
+	}
+	if subject != "" && subject != principal {
+		n, kerr := s.revokeSponsoredTokens(ctx, subject)
 		res.Tokens += n
-		_, kqerr := s.cancelQueuedRunsOf(ctx, res.KeyPrincipal, queueCancelSessionRevoked)
+		_, kqerr := s.cancelQueuedRunsOf(ctx, subject, queueCancelSessionRevoked)
 		serr = errors.Join(serr, kerr, kqerr)
 	}
 	return res, errors.Join(err, serr, qerr)

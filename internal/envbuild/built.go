@@ -51,19 +51,27 @@ func (b *Builder) RemoteDigest(ctx context.Context, ref string) (string, error) 
 	return res.Descriptor.Digest.String(), nil
 }
 
-// repoDigestFor returns the first entry of repoDigests ("repo@sha256:…") whose repository is
-// baseRef's, or "" when none is: a local-only image has no digest, and a ref that does not parse
-// matches nothing.
+// repoDigestFor returns the entry of repoDigests ("repo@sha256:…") whose repository is baseRef's:
+// the one carrying baseRef's own digest when baseRef is pinned and the image lists it, else the first.
+// "" when none is: a local-only image has no digest, and a ref that does not parse matches nothing.
 func repoDigestFor(baseRef string, repoDigests []string) string {
 	want, err := reference.ParseNormalizedNamed(baseRef)
 	if err != nil {
 		return ""
 	}
+	pin, pinned := want.(reference.Digested)
+	first := ""
 	for _, entry := range repoDigests {
 		got, err := reference.ParseNormalizedNamed(entry)
-		if err == nil && got.Name() == want.Name() && strings.Contains(entry, "@") {
+		if err != nil || got.Name() != want.Name() || !strings.Contains(entry, "@") {
+			continue
+		}
+		if d, ok := got.(reference.Digested); pinned && ok && d.Digest() == pin.Digest() {
 			return entry
 		}
+		if first == "" {
+			first = entry
+		}
 	}
-	return ""
+	return first
 }

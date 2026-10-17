@@ -110,23 +110,22 @@ func TestDispatch_ResidentEnvSecretValuesReachTheRunner(t *testing.T) {
 	}
 }
 
-// The placement_credential refusal of a runner_resident grant record is not
-// lifted for any class yet (RR-d and RR-e lift it per class): a whole
-// dispatch of a run with a resident env_secret reads the value for delivery,
-// then the classify refuses the run before the lease, and nothing reaches the
-// runner.
-func TestDispatch_ResidentEnvSecretStillRefusedAtClassify(t *testing.T) {
-	f := newResidentFix(t, nil, residentEnvPolicy)
+// A classify refusal at dispatch comes before the lease: a whole dispatch of a
+// run with a resident env_secret, under a policy whose posture requirement the
+// runner does not report, reads the value for delivery, then the classify
+// refuses the run, nothing reaches the runner and no obligation opens.
+func TestDispatch_ResidentEnvSecretRefusedAtClassifyBeforeTheLease(t *testing.T) {
+	f := newResidentFix(t, nil, `{"classes":{"env_secret":{"mode":"runner_resident","require_posture":{"disk_encrypted":true}}}}`)
 	f.srv.cfg.RunConfigKey = make([]byte, kek.DEKSize)
+	f.reportCaps(t, true)
 	ctx := t.Context()
 	run := f.startingRun(t, func(r *types.AgentRun) { r.State = types.RunPending })
 	g := f.envGrant(t, run, "A_TOKEN", "a-secret", "a-value", types.GrantDeliveryResident)
 	f.srv.dispatchRun(ctx, run, ceilingForDispatch(governanceCeiling{}, adoEntraUngraded(), bedrockCredUngraded()),
 		dispatchParams{RunToken: "run-token", Image: "wardyn/claude-code:latest", Policy: policyOf(g)})
 	f.srv.WaitBackground()
-	got := f.dispatchRefusal(t, run.ID)
-	if got["reason"] != string(placement.ReasonPlacementCredential) || !strings.HasPrefix(got["field"], "ProxyConfig.Policy.EligibleGrants") {
-		t.Fatalf("refusal = %v, want placement_credential on the resident grant record", got)
+	if got := f.dispatchRefusal(t, run.ID); got["reason"] != string(placement.ReasonRunnerPostureUnmet) {
+		t.Fatalf("refusal = %v, want runner_posture_unmet", got)
 	}
 	read := false
 	for _, ev := range syncAuditRows(f.audit, "secret.read") {
@@ -136,7 +135,7 @@ func TestDispatch_ResidentEnvSecretStillRefusedAtClassify(t *testing.T) {
 		t.Fatal("dispatch did not read the resident value through the runner-resident read")
 	}
 	if delivered, _ := f.side.calls(); len(delivered) != 0 {
-		t.Fatalf("delivered %+v before the classify refusal was lifted", delivered)
+		t.Fatalf("delivered %+v despite the classify refusal", delivered)
 	}
 	if exists, _, _, _, _ := f.obligation(t, run.ID); exists {
 		t.Fatal("an obligation was opened for a run the classify refused")

@@ -35,7 +35,7 @@ export function AgainPicker({ selectedRunId, onPick }: { selectedRunId?: string;
         }}
       >
         <SelectTrigger id="nr-previous-run" aria-busy={loaded.status === "loading"} className="w-full bg-card dark:bg-card">
-          <SelectValue />
+          <SelectValue placeholder={loaded.status === "loading" ? NR_SHAPE.AGAIN_LOADING : undefined} />
         </SelectTrigger>
         <SelectContent>
           {intents.map((i) => (

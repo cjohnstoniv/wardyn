@@ -36,8 +36,8 @@ type runTarget struct {
 	owner string // the workspace it is shown under (its id), or "drive"
 	name  string // the owner's NAME, as a refusal and Review show it
 	// carriers are the owner ids the target belongs to: the workspace that
-	// seeded it, or every one of the run's workspaces that carries a source the
-	// policy names. The owner is always one of them.
+	// seeded it or the one the onboarding gate held it to, and every other of the
+	// run's workspaces that carries the same source. The owner is always one of them.
 	carriers []string
 	target   string
 	driveID  string // a drives[] entry's id
@@ -66,17 +66,10 @@ func runTargets(spec types.RunPolicySpec, wsRefs []types.Workspace, index worksp
 	// belongs to every one of the run's workspaces that carries it. Every mount
 	// and repo of a run passed that gate, so one always does; an unowned one is
 	// still its own owner, never everyone's.
-	policyOwned := func(local bool, source, fallback string) runTarget {
-		gate, ok := index.repo[source]
-		if local {
-			gate, ok = index.localDir[source]
-		}
-		if !ok {
-			return runTarget{owner: "source:" + source, name: fallback, carriers: []string{"source:" + source}}
-		}
-		t := runTarget{owner: gate.ID.String(), name: gate.Name, carriers: []string{gate.ID.String()}}
+	carriedBy := func(owner types.Workspace, local bool, source string) runTarget {
+		t := runTarget{owner: owner.ID.String(), name: owner.Name, carriers: []string{owner.ID.String()}}
 		for _, ws := range wsRefs {
-			if ws.ID != gate.ID && slices.ContainsFunc(ws.Sources, func(src types.WorkspaceSource) bool {
+			if ws.ID != owner.ID && slices.ContainsFunc(ws.Sources, func(src types.WorkspaceSource) bool {
 				return local && src.Type == types.WorkspaceSourceTypeLocalDir && src.Path == source ||
 					!local && src.Type == types.WorkspaceSourceTypeRepo && src.Source == source
 			}) {
@@ -85,10 +78,20 @@ func runTargets(spec types.RunPolicySpec, wsRefs []types.Workspace, index worksp
 		}
 		return t
 	}
-	// The entries the seed prepended belong to the workspace that seeded them.
+	policyOwned := func(local bool, source, fallback string) runTarget {
+		gate, ok := index.repo[source]
+		if local {
+			gate, ok = index.localDir[source]
+		}
+		if !ok {
+			return runTarget{owner: "source:" + source, name: fallback, carriers: []string{"source:" + source}}
+		}
+		return carriedBy(gate, local, source)
+	}
+	// The entries the seed prepended are shown under the workspace that seeded them.
 	owned := func(owners []types.Workspace, i int, local bool, source, fallback string) runTarget {
 		if i < len(owners) {
-			return runTarget{owner: owners[i].ID.String(), name: owners[i].Name, carriers: []string{owners[i].ID.String()}}
+			return carriedBy(owners[i], local, source)
 		}
 		return policyOwned(local, source, fallback)
 	}

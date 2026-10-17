@@ -543,7 +543,7 @@ Two layers, in this order:
 | `Injection` (operator namespace or `shared` component) | `operator` | Per OD-12 (`via_org`, `runner_resident` or refuse) |
 | `Injection` (person's model-provider key, own Claude sign-in) | `own` | Allowed |
 | `Injection` (captured AWS SSO, `credential_source` `per_user`) | `own` | Allowed: the person's own sign-in |
-| `Injection` (captured AWS SSO `shared`, Bedrock bearer) | `brokered` | Per OD-12 ([§7.2](#72-per-kind-bounds)) |
+| `Injection` (captured AWS SSO `shared`) | `brokered` | Per OD-12 ([§7.2](#72-per-kind-bounds)) |
 | `GitGrants` (GitHub App installation token) | `brokered` | `via_org` or refuse |
 | `PATGrants` (`per_user` stored PAT) | `own` | Allowed |
 | `PATGrants` (`shared` `CredentialSource`) | `operator` | `via_org` (broker-route shape) or refuse |

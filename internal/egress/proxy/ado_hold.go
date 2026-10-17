@@ -33,8 +33,6 @@ import (
 )
 
 // The sentences a sandbox reads when an escalation ends without an approval.
-//
-// DRAFT (M2 canon pending)
 const (
 	adoHoldDeniedRefusal = "Wardyn held this Azure DevOps request while a person was asked to approve more access, " +
 		"and it was not approved."
@@ -49,8 +47,6 @@ const (
 
 // The sentences a sandbox reads when its Azure DevOps credential could not be
 // renewed: a sign-in hold that ended without a sign-in, or any other failure.
-//
-// DRAFT (M2 canon pending)
 const (
 	adoSignInTimedOutRefusal = "Wardyn held this Azure DevOps request while its owner was asked to sign in to Azure " +
 		"DevOps again, and nobody signed in before the hold expired. Nothing was substituted; retry once they have signed in."
@@ -214,7 +210,7 @@ func adoControlPlaneRefusal(err error, fallback string) string {
 func (i *injector) grantIDFor(host string) (uuid.UUID, bool) {
 	i.mu.Lock()
 	defer i.mu.Unlock()
-	e, ok := i.byHost[strings.ToLower(strings.TrimSuffix(host, "."))]
+	e, ok := i.byHost[hostKey(host)]
 	if !ok {
 		return uuid.Nil, false
 	}
@@ -229,7 +225,7 @@ func (i *injector) installResolved(host string, resolved types.ResolvedInjection
 		return
 	}
 	i.mu.Lock()
-	e, ok := i.byHost[strings.ToLower(strings.TrimSuffix(host, "."))]
+	e, ok := i.byHost[hostKey(host)]
 	i.mu.Unlock()
 	if !ok {
 		return

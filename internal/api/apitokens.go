@@ -304,7 +304,7 @@ func (s *Server) handleCreateAPIToken(w http.ResponseWriter, r *http.Request) {
 	if !decodeStrict(w, r, &req) {
 		return
 	}
-	sub, ok := s.mintGuards(w, r)
+	sub, ok := s.mintGuards(w, r, "me.tokens")
 	if !ok {
 		return
 	}
@@ -331,9 +331,10 @@ func (s *Server) handleCreateAPIToken(w http.ResponseWriter, r *http.Request) {
 
 // mintGuards is the first half of the mint core that POST /me/tokens and an invitation's claim share:
 // the checks on WHO is asking, each refusal byte-identical across the two doors. It returns the
-// verified human the token would belong to. Every caller stamps authorizedAt before reading its body,
+// verified human the token would belong to. target is the door's name on a capability_feature
+// denial, so the audit row says which door refused. Every caller stamps authorizedAt before reading its body,
 // and asks for the lifetime, name and cap only after this passes.
-func (s *Server) mintGuards(w http.ResponseWriter, r *http.Request) (string, bool) {
+func (s *Server) mintGuards(w http.ResponseWriter, r *http.Request, target string) (string, bool) {
 	ctx := r.Context()
 	sub := oidcHumanFromContext(ctx)
 	if sub == "" {
@@ -363,7 +364,7 @@ func (s *Server) mintGuards(w http.ResponseWriter, r *http.Request) (string, boo
 		return "", false
 	}
 	// May this person mint a token at all (capFeature).
-	if s.denyUserCapability(w, r, capFeature, featureAPIToken, "me.tokens", apiTokenFeatureRefusal) {
+	if s.denyUserCapability(w, r, capFeature, featureAPIToken, target, apiTokenFeatureRefusal) {
 		return "", false
 	}
 	return sub, true

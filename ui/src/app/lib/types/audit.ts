@@ -231,8 +231,10 @@ export interface RunEnding {
   provider?: string;
   /**
    * For `killed`: what the trail proves about the kill (#1487). The LATEST
-   * run.kill row decides — success is `confirmed`, any other outcome is
-   * `partial` (a teardown step failed), and no row at all is `unknown`.
+   * run.kill row decides — success is `confirmed`, a success whose sandbox stop
+   * was queued for an offline runner (`data.sandbox_stop` "queued") is `queued`,
+   * any other outcome is `partial` (a teardown step failed), and no row at all
+   * is `unknown`.
    */
-  evidence?: "confirmed" | "partial" | "unknown";
+  evidence?: "confirmed" | "queued" | "partial" | "unknown";
 }

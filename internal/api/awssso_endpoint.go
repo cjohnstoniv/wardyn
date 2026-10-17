@@ -22,8 +22,6 @@ import (
 // bedrock.base_url (the Bedrock DATA PLANE, a real PrivateLink posture) nor the
 // global AWS_ENDPOINT_URL, which re-points every AWS service.
 
-// DRAFT (M2 canon pending)
-
 const (
 	// AWSSSOEndpointOverrideRefusal is the BOOT REFUSAL when the override is set
 	// without the acknowledgement. It names both vars because the operator

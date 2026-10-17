@@ -1046,6 +1046,7 @@ func TestH2ResendClassNeverEchoesPeerText(t *testing.T) {
 		err  error
 		want string
 	}{
+		//lint:ignore SA1019 the error h2Fallback's deprecated http2.Transport returns on a GOAWAY (see h2ResendClass)
 		"goaway":  {fmt.Errorf("resend: %w", http2.GoAwayError{ErrCode: http2.ErrCodeEnhanceYourCalm, DebugData: peerText}), "GOAWAY ENHANCE_YOUR_CALM"},
 		"stream":  {http2.StreamError{StreamID: 1, Code: http2.ErrCodeRefusedStream, Cause: errors.New(peerText)}, "REFUSED_STREAM"},
 		"timeout": {fmt.Errorf("resend: %w", context.DeadlineExceeded), "timeout"},

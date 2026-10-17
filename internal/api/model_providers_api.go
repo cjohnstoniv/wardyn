@@ -21,7 +21,6 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// DRAFT (M2 canon pending).
 const (
 	mp412Stale        = "model providers changed since you loaded them — reload and retry"
 	mp400StillDefault = "model_providers: %q is the default for %q — choose another default first"

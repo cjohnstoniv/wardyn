@@ -175,11 +175,12 @@ func assertRefusalAudited(t *testing.T, rec *recRecorder, host string) {
 }
 
 // A second token-bearing redirect to a host already carrying one, on another port,
-// gets no injection of its own and the plan says so; the same port is silent.
+// gets no injection of its own and the plan says so in a denied row (the audit table stores only
+// success, failure and denied); the same port is silent.
 func TestPlanArtifactRedirect_SecondPortOfATokenHostIsAudited(t *testing.T) {
 	for _, tc := range []struct {
 		name, second string
-		wantWarn     bool
+		wantRow      bool
 	}{{"another port", "mirror.corp.example:8443", true}, {"the same port", "mirror.corp.example", false}} {
 		t.Run(tc.name, func(t *testing.T) {
 			s, rec := newVetoRedirectServer("corp-token")
@@ -191,14 +192,14 @@ func TestPlanArtifactRedirect_SecondPortOfATokenHostIsAudited(t *testing.T) {
 			if len(plan.injections) != 1 {
 				t.Fatalf("injections = %d, want the first redirect's alone", len(plan.injections))
 			}
-			var warns int
+			var denied int
 			for _, ev := range rec.events {
-				if ev.Action == "run.artifact.redirect" && ev.Outcome == "warn" {
-					warns++
+				if ev.Action == "run.artifact.redirect" && ev.Outcome == "denied" {
+					denied++
 				}
 			}
-			if (warns == 1) != tc.wantWarn || warns > 1 {
-				t.Errorf("warn rows = %d, want a row=%v", warns, tc.wantWarn)
+			if (denied == 1) != tc.wantRow || denied > 1 {
+				t.Errorf("denied rows = %d, want a row=%v", denied, tc.wantRow)
 			}
 		})
 	}

@@ -6,6 +6,7 @@ package api
 import (
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -57,6 +58,9 @@ func validatePATGrantScope(i int, g types.GrantSpec, strict bool) error {
 	if nameSinkReservedSecret(sc.SecretName) {
 		return fmt.Errorf("eligible_grants[%d]: git_pat references reserved secret name %q", i, sc.SecretName)
 	}
+	if strict && !validGitPATHost(sc.Host) {
+		return fmt.Errorf("eligible_grants[%d]: git_pat host %q must be a hostname, with no port, scheme or path", i, sc.Host)
+	}
 	if strict && sc.API && sc.Forge == types.PATForgeBitbucketServer && !patAPIBitbucketOn() {
 		return fmt.Errorf("eligible_grants[%d]: git_pat scope %s", i, errPATAPIBitbucketOff)
 	}
@@ -66,6 +70,28 @@ func validatePATGrantScope(i int, g types.GrantSpec, strict bool) error {
 			"and that lane does not read those fields", i, sc.Host)
 	}
 	return nil
+}
+
+// validGitPATHost reports whether host is a DNS hostname: labels of letters,
+// digits and inner hyphens, 1-63 bytes each, 253 in all, with an optional
+// trailing dot. A port, a scheme or a path is refused at write, so the proxy's
+// per-host key and every Azure DevOps host check see the host alone.
+func validGitPATHost(host string) bool {
+	host = strings.TrimSuffix(host, ".")
+	if host == "" || len(host) > 253 {
+		return false
+	}
+	for _, label := range strings.Split(host, ".") {
+		if label == "" || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
+			return false
+		}
+		for _, c := range label {
+			if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '-') {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // validatePATNarrowedDuplicates refuses two git_pat grants for one host in one

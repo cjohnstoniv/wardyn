@@ -134,7 +134,7 @@ describe("startWaitVerdict", () => {
     ).toBe("slow");
   });
 
-  // The two new sentences are the lane's DRAFT copy; pinned so a reword is a
+  // The two new sentences are the lane's copy; pinned so a reword is a
   // deliberate act with a canon row behind it.
   it("carries the two sentences the new gradings need", () => {
     expect(LOGIN_SANDBOX_SLOW_START).toContain("Wardyn can read the sign-in sandbox, it just isn't up yet");

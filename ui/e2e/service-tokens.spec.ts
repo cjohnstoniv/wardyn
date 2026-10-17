@@ -60,12 +60,14 @@ test.describe("Admin > Credentials: the State column (#1508)", () => {
     await expect(rowOf("gone")).toHaveCount(0);
     await expect(section).toContainText("Invite the owner with wardyn person invite, or move the token with wardyn token move. The console does neither.");
 
+    // R1-0004: an expired row stays out until the toggle adds it, like a revoked one.
+    await expect(rowOf("lapsed")).toHaveCount(0);
+
+    await section.getByRole("checkbox", { name: "Also show revoked and expired tokens" }).click();
     // FUG-L260: past its expiry and never revoked, so there is nothing left to decide.
     await expect(rowOf("lapsed")).toContainText("Expired");
     await expect(rowOf("lapsed")).toContainText("No longer works. Nothing to decide.");
     await expect(rowOf("lapsed")).not.toContainText("Needs a decision");
-
-    await section.getByRole("checkbox", { name: "Also show revoked tokens" }).click();
     await expect(rowOf("hour")).toContainText("Revoked 1 hour ago");
     await expect(rowOf("hour")).not.toContainText("60 minutes");
     await expect(rowOf("gone")).toContainText("Revoked");
@@ -78,7 +80,7 @@ test.describe("Admin > Credentials: the State column (#1508)", () => {
       await new Promise((resolve) => setTimeout(resolve, 1500));
       await route.fallback();
     });
-    const toggle = section.getByRole("checkbox", { name: "Also show revoked tokens" });
+    const toggle = section.getByRole("checkbox", { name: "Also show revoked and expired tokens" });
     await toggle.click(); // off
     await expect(rowOf("gone")).toHaveCount(0);
     await toggle.click(); // on: its read is the slow one

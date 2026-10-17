@@ -361,6 +361,15 @@ func (s *Server) handlePutComponent(w http.ResponseWriter, r *http.Request) {
 		saveRefusal(w, reason, msg)
 		return
 	}
+	if c.Definition.MCP != nil {
+		// The key check and the save run under one organisation-wide lock, so two saves of servers whose
+		// names give the same key cannot both pass the check.
+		var unlockKey func()
+		if r, unlockKey, ok = s.lockDoor(w, r, db.ComponentKeyLockClass, orgMCPKeyLockPart); !ok {
+			return
+		}
+		defer unlockKey()
+	}
 	if !orgMCPKeyFree(w, r, cs, c) {
 		return
 	}

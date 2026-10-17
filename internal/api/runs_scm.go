@@ -55,7 +55,7 @@ func repoFieldSafe(s string) bool {
 	return gitremote.FieldSafe(s)
 }
 
-// repoField400Charset — DRAFT (M2 canon pending). The write-door refusal for a
+// repoField400Charset — The write-door refusal for a
 // repo-shaped field carrying a control character or whitespace — the charset
 // repoFieldSafe guards, because every one of these values flows verbatim into
 // an in-sandbox `git clone`/`git checkout` argument. %s is the field name, so
@@ -65,7 +65,7 @@ func repoFieldSafe(s string) bool {
 // it.
 const repoField400Charset = "%s must not contain control characters or whitespace"
 
-// repo400LocatorShape — DRAFT (M2 canon pending). The write-door refusal for a
+// repo400LocatorShape — The write-door refusal for a
 // locator repoLocatorPathSafe rejects. It is a 400 ("you wrote this wrong"), not
 // an admission 422/403: a dot-segment or percent-encoded repository address is
 // never a legitimate one on any provider, in legacy open mode included, so the
@@ -75,7 +75,7 @@ const repoField400Charset = "%s must not contain control characters or whitespac
 const repo400LocatorShape = "%s is not a repository address — a repository address carries " +
 	`no percent-escapes, no backslash, and no "", "." or ".." path segment`
 
-// repo400LocatorUnreadable — DRAFT (M2 canon pending). repo400LocatorShape's
+// repo400LocatorUnreadable — repo400LocatorShape's
 // sentence when the address fails only because the site configuration, which
 // lists the Azure DevOps Server hosts, could not be read (#724).
 const repo400LocatorUnreadable = "%s could not be checked: the site configuration, which lists this " +

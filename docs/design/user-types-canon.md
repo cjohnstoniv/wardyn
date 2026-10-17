@@ -73,6 +73,7 @@ compares it with its namespace in both directions.
 | `ALL_IMAGES` | the `image` kind's `*` row | Images |
 | `SSH_KEYS` | the `feature` value `ssh_key` | SSH keys |
 | `API_TOKENS` | the `feature` value `api_token` | API tokens |
+| `SERVICE_ATTACH` | the `feature` value `service_attach` | Entering a service's runs |
 | `SSH_AND_TOKENS` | the `feature` kind's `*` row | SSH keys · API tokens |
 | `ALL_EGRESS_HOSTS` | the `egress_host` kind's `*` row | All egress hosts |
 | `ALL_SECRETS` | the `secret` kind's `*` row | All secrets |

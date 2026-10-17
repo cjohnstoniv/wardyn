@@ -229,8 +229,8 @@ func (s *Server) killRunAtLifetime(ctx context.Context, run types.AgentRun, reas
 	extra := map[string]any{"reason": string(reason), "ends_at": run.EndsAt, "lifetime_cap_at": run.LifetimeCapAt}
 	if run.LifetimeCapSource != "" {
 		// The same labels run.create writes (design §7); the stored source is a
-		// token, so a pool reads "your pool" until the run carries its pool's name.
-		extra["source"] = endSourceLabel(run.LifetimeCapSource, "")
+		// token, so the pool's name is read from the pool the run was admitted into.
+		extra["source"] = endSourceLabel(run.LifetimeCapSource, s.runPoolName(ctx, run))
 	}
 	s.killTeardownTail(ctx, run, types.ActorSystem, "wardynd", extra, true)
 }

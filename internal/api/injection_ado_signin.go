@@ -47,7 +47,6 @@ const (
 	adoSignInReason    = "signin"
 )
 
-// DRAFT (M2 canon pending)
 const (
 	adoSignInRaisedNote = "This run's Azure DevOps sign-in can no longer be renewed — the request is held while its " +
 		"owner signs in to Azure DevOps again, and resumes when the sign-in lands; nothing is substituted"

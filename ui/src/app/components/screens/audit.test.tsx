@@ -302,6 +302,17 @@ describe("AuditScreen", { timeout: 15_000 }, () => {
     expect(screen.queryByText(/revoked a credential/i)).not.toBeInTheDocument();
   });
 
+  it("reads a cache-hit run.build row as a reused image, and a build as built", async () => {
+    listAuditMock.mockResolvedValue([
+      ev({ id: "b1", action: "run.build", target: "ws-hit", data: { cache_hit: true } }),
+      ev({ id: "b2", action: "run.build", target: "ws-miss", data: { cache_hit: false } }),
+    ]);
+    renderScreen();
+
+    expect(await screen.findByText("Reused the cached sandbox image — ws-hit")).toBeInTheDocument();
+    expect(screen.getByText("Built the sandbox image — ws-miss")).toBeInTheDocument();
+  });
+
   it("reads credential.expired.delete by its reason, and an unknown reason as the raw line", async () => {
     listAuditMock.mockResolvedValue([
       ev({ id: "x1", action: "credential.expired.delete", target: "s1", data: { reason: "invalid_grant" } }),

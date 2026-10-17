@@ -15,6 +15,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
+	"github.com/cjohnstoniv/wardyn/internal/ghscope"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -100,6 +101,9 @@ type componentAdmission struct {
 	awsCLI bool
 	// azureCLI: an Azure CLI row was admitted already.
 	azureCLI bool
+	// githubCLI: a GitHub CLI row was admitted already, and its door's host is
+	// in bounds.credentialed.
+	githubCLI bool
 	// harnesses are the request's included harness ids, which an MCP
 	// component's server may be turned on for.
 	harnesses []string
@@ -418,6 +422,18 @@ func (s *Server) componentHostsBounded(r *http.Request, adm *componentAdmission,
 				fmt.Sprintf("secrets[%d].delivery.host: %q already has a credential on this run, and a host carries only one", si, sec.Delivery.Host),
 				"delivers a credential to a host that already has one on this run.")
 		}
+		adm.bounds.credentialed = append(adm.bounds.credentialed, d)
+	}
+	// A GitHub CLI row credentials its door's host. Every GitHub CLI row of the
+	// run shares that one door, so only the first adds the host.
+	if cli := def.CLI; cli != nil && cli.Kind == types.CLIKindGitHub && !adm.githubCLI {
+		d, err := types.ParseDestination(ghscope.APIHost)
+		if err != nil || adm.bounds.collides(d) {
+			return componentRefused(c, i, reasonComponentHostCollision,
+				fmt.Sprintf("cli: the GitHub CLI credentials %q, which already has a credential on this run, and a host carries only one", ghscope.APIHost),
+				"credentials a host that already has one on this run.")
+		}
+		adm.githubCLI = true
 		adm.bounds.credentialed = append(adm.bounds.credentialed, d)
 	}
 	return nil

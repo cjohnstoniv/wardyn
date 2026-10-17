@@ -56,10 +56,10 @@ Reused, not reinvented: `APPROVAL.CANCELLED_BODY`, `VIEWER_APPROVAL_BLOCKS_NOTE`
 (primitives.tsx) every approval kind already uses — there is no separate
 `RUN_STATE.WAITING`-style constant for this kind.
 
-### DRAFT — pending owner approval (packet 7b)
+### Frozen as shipped — packet 7b
 
-Not yet frozen. Marked `DRAFT` at each definition site (`copy/push.ts`,
-`lib/types/audit.ts`) until the owner signs off.
+Frozen as shipped, with no marker at the definition sites (`copy/push.ts`,
+`wardyn/audit-decision.tsx`).
 
 | key | string |
 |---|---|

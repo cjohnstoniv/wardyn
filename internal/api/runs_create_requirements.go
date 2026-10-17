@@ -62,7 +62,7 @@ func resolveWorkspaceSelections(req createRunRequest) map[string]client.Workspac
 	return out
 }
 
-// applyWorkspaceRequirements folds each referenced workspace's requirements
+// applyWorkspaceRequirementsFor folds each referenced workspace's requirements
 // contract (types.Workspace.Requirements) into the run's RESOLVED policy — the
 // per-workspace analogue of unionWorkspaceEgress/applyWorkspaceCreds, kept as
 // its OWN function and never inlined into either of those: a reviewer
@@ -114,20 +114,17 @@ func resolveWorkspaceSelections(req createRunRequest) map[string]client.Workspac
 // folded here are the run's own attached ones: the record door's one workspace.
 // A workspace that is only in the run because it stores the same directory, and
 // whose write row is not enabled, leaves the mount alone (applyWriteNarrowing).
-func (s *Server) applyWorkspaceRequirements(ctx context.Context, spec *types.RunPolicySpec, agent string, wsRefs []types.Workspace, selections map[string]client.WorkspaceSelection) ([]requirementAuditEntry, *sourceRefusal) {
-	return s.applyWorkspaceRequirementsFor(ctx, nil, spec, agent, wsRefs, wsRefs, selections)
-}
-
-// applyWorkspaceRequirementsFor is applyWorkspaceRequirements with the
-// CALLER's presence map. A request handler passes the owner-scoped map it
-// already computed (presentSecretNamesFor with secretOwnerFromRequest), so a
-// workspace's integration requirement resolves a member's own key exactly as
-// their run will; nil means the operator namespace, computed lazily — the
-// record route and every existing test keep that. attached is every workspace
-// the request names, which a door that folds one workspace at a time passes
-// whole: a write row's mount is held to the owners among them
-// (requirementWriteRefusal).
-func (s *Server) applyWorkspaceRequirementsFor(ctx context.Context, present map[string]bool, spec *types.RunPolicySpec, agent string, wsRefs, attached []types.Workspace, selections map[string]client.WorkspaceSelection) ([]requirementAuditEntry, *sourceRefusal) {
+//
+// present is the CALLER's presence map. A request handler passes the
+// owner-scoped map it already computed (presentSecretNamesFor with
+// secretOwnerFromRequest), so a workspace's integration requirement resolves a
+// member's own key exactly as their run will; nil means the operator
+// namespace, computed lazily — the record route and every existing test keep
+// that. attached is every workspace the request names, which a door that folds
+// one workspace at a time passes whole: a write row's mount is held to the
+// owners among them (requirementWriteRefusal). bound caps the egress rows a
+// requirement may add; every production door passes one.
+func (s *Server) applyWorkspaceRequirementsFor(ctx context.Context, present map[string]bool, spec *types.RunPolicySpec, agent string, wsRefs, attached []types.Workspace, selections map[string]client.WorkspaceSelection, bound *egressBound) ([]requirementAuditEntry, *sourceRefusal) {
 	var events []requirementAuditEntry
 	// The member mount gate ran on these mounts as they stand now. One a
 	// write: row below makes writable meets it again before this returns.
@@ -174,7 +171,7 @@ func (s *Server) applyWorkspaceRequirementsFor(ctx context.Context, present map[
 				// content) is skipped; only an operator's DIRECT declaration
 				// auto-adds. The predicate is shared with the confined-replay
 				// path — see egressProvenanceAllowed in workspace_egress.go.
-				if !s.egressProvenanceAllowed(req) {
+				if !s.egressProvenanceAllowed(req) || !bound.admits(req, name, ws) {
 					continue
 				}
 				addedEgress = append(addedEgress, unionAllowedDomains(spec, []string{name})...)
