@@ -39,6 +39,7 @@ export const RUNNER_KIND = {
   SELF: "Self-hosted",
   REMOTE: "Remote-hosted",
   REMOTE_LOWER: "remote-hosted",
+  ORG: "Organization",
   NOT_CONFIGURED: "Not set up",
 } as const;
 
@@ -146,7 +147,7 @@ export const LIMITS_DIALOG = {
 export const POOLS = {
   LEAD: "A pool is a named choice for where a run goes. Its limits come from its runners, and it can narrow them, never widen them.",
   ORG_TITLE: "Organization pools",
-  ORG_LEDE: "Pools your organization provides, made of remote-hosted runners only. Choosing one grants nobody a runner, a credential or a drive.",
+  ORG_LEDE: "Pools your organization provides, made of remote-hosted runners and the organization's own runners. Choosing one grants nobody a runner, a credential or a drive.",
   ORG_CLI: "Organization pools are created on the command line:",
   ORG_CLI_COMMAND: "wardyn runner pool create --scope organization --runner <runner>",
   ORG_CLI_EDIT: "You edit them here.",
@@ -258,12 +259,12 @@ export const POOL_DRAWER = {
   ERR_SUBJECT_EMPTY: "Name a person, group or role to add.",
   ERR_SUBJECT_TWICE: (kind: string, subject: string) => `${kind} "${subject}" is listed twice`,
   MEMBERS: "Members",
-  MEMBERS_ORG: "Remote-hosted runners",
+  MEMBERS_ORG: "Remote-hosted and organization runners",
   MEMBERS_USER: "Runners of its owner and remote-hosted runners made available",
-  MEMBERS_ORG_BODY: "The remote-hosted runners this pool runs on, not people's computers. Add or remove them with wardyn runner pool add and remove.",
+  MEMBERS_ORG_BODY: "The remote-hosted runners and the organization's own runners this pool runs on, not people's computers. Add or remove them with wardyn runner pool add and remove.",
   MEMBERS_USER_BODY: (owner: string) =>
     `The runners ${owner} chose for this pool. A run goes to one of ${owner}'s own runners with room first, then to a remote-hosted runner.`,
-  ORG_ONLY: "Organization pools take remote-hosted runners only. A self-hosted runner can join its owner's user pools.",
+  ORG_ONLY: "Organization pools take remote-hosted runners and the organization's own runners. A person's self-hosted runner can join its owner's user pools.",
   MEMBERS_NONE: "None yet. Only its owner chooses runners.",
   MEMBER_MACHINE: (machine: string) => `Machine: ${machine}`,
   MEMBER_MACHINE_NA: "Machine: not applicable (remote-hosted)",

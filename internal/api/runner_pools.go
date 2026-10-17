@@ -20,7 +20,7 @@ import (
 
 // The runner pool routes (0.9). A pool is a label for a choice and never authority: choosing one grants
 // no runner, credential, drive or confinement class. Organization pools are the organisation's and hold
-// remote-hosted runners only; each user pool is one person's own, holding that person's claimed
+// remote-hosted runners and the organization's own runners; each user pool is one person's own, holding that person's claimed
 // self-hosted runners and the remote-hosted runners whose people policy admits them.
 //
 //	catalogue reads, own user pools and their runners,          member (the caller's own data only)

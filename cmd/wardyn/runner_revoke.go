@@ -20,7 +20,7 @@ func runnerRevokeCmd(client clientFn) *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			c := client()
-			ref, err := resolveRunner(cmd, c, args[0], func() ([]sdk.RemoteRunnerView, error) { return nil, nil })
+			ref, err := resolveRunner(cmd, c, args[0], func() ([]sdk.RemoteRunnerView, error) { return nil, nil }, nil)
 			if err != nil {
 				return err
 			}
