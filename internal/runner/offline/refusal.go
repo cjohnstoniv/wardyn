@@ -48,9 +48,10 @@ func fitRefusalReason(r *runnerwire.ActionResult) {
 		if err != nil || len(b) <= runnerwire.MaxActionResultBytes || r.Reason == "" {
 			break
 		}
-		// Each byte cut shrinks the encoding by at least one byte.
-		over := min(len(b)-runnerwire.MaxActionResultBytes, len(r.Reason))
-		r.Reason = strings.ToValidUTF8(r.Reason[:len(r.Reason)-over], "")
+		// A byte cut shrinks the encoding by one to six bytes; cutting over/6 never
+		// overshoots, so an escape-heavy reason keeps its head.
+		cut := min(max((len(b)-runnerwire.MaxActionResultBytes)/6, 1), len(r.Reason))
+		r.Reason = strings.ToValidUTF8(r.Reason[:len(r.Reason)-cut], "")
 	}
 	if r.Reason == "" {
 		r.Reason = "refused"
