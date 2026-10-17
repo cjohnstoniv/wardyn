@@ -125,6 +125,9 @@ type Proxy struct {
 	patAPI map[string]PATGrant
 	// ghAPI is the run's GitHub CLI door (github_api.go). Nil == no door.
 	ghAPI *GitHubAPIGrant
+	// ghAPIStopped is set when shutdown starts handing the door's tokens back; the door mints and
+	// forwards nothing after it.
+	ghAPIStopped atomic.Bool
 	// arm is the run's Azure CLI door (azure_arm_door.go). Nil == no door.
 	arm *azureARMDoor
 	// gitTokens caches minted installation tokens per grant so a single clone

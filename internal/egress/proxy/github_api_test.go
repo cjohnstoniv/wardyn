@@ -28,16 +28,20 @@ const ghCLIToken = "ghs_cli_minted"
 // TLS server: it answers every mint with ghCLIToken and records every other
 // request.
 type ghUpstream struct {
-	srv   *httptest.Server
-	mu    sync.Mutex
-	mints int
-	seen  []string // "METHOD path auth"
+	srv    *httptest.Server
+	mu     sync.Mutex
+	mints  int
+	seen   []string // "METHOD path auth"
+	onMint func()   // runs when a mint request arrives, before the upstream records it
 }
 
 func newGHUpstream(t *testing.T) *ghUpstream {
 	t.Helper()
 	u := &ghUpstream{}
 	u.srv = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v1/internal/credentials/mint" && u.onMint != nil {
+			u.onMint()
+		}
 		u.mu.Lock()
 		defer u.mu.Unlock()
 		if r.URL.Path == "/api/v1/internal/credentials/mint" {
@@ -216,6 +220,23 @@ func TestGitHubAPI_MintRelayAndShutdownRevoke(t *testing.T) {
 	_, seen := up.counts()
 	if want := "DELETE /installation/token token " + ghCLIToken; len(seen) != 2 || seen[1] != want {
 		t.Fatalf("seen %q, want the request then %q", seen, want)
+	}
+}
+
+// A mint that is still in flight when the shutdown revoke runs is skipped by it, so the request that
+// minted it hands the token back itself and forwards nothing; a request after that mints nothing.
+func TestGitHubAPI_MintInFlightAtShutdownIsHandedBack(t *testing.T) {
+	up := newGHUpstream(t)
+	p, _ := newGHProxy(t, up)
+	up.onMint = func() { p.revokeGitHubAPITokens(t.Context()) }
+	p.serveMITMRequest(httptest.NewRecorder(), ghTunnelRequest(t, http.MethodGet, "/repos/acme/app/issues"), ghscope.APIHost, 443)
+	mints, seen := up.counts()
+	if want := "DELETE /installation/token token " + ghCLIToken; mints != 1 || len(seen) != 1 || seen[0] != want {
+		t.Fatalf("mints %d seen %q, want one mint handed straight back as %q and nothing forwarded", mints, seen, want)
+	}
+	p.serveMITMRequest(httptest.NewRecorder(), ghTunnelRequest(t, http.MethodGet, "/repos/acme/app/issues"), ghscope.APIHost, 443)
+	if mints2, seen2 := up.counts(); mints2 != 1 || len(seen2) != 1 {
+		t.Fatalf("after shutdown began: mints %d seen %q, want nothing more", mints2, seen2)
 	}
 }
 
