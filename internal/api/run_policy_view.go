@@ -62,6 +62,9 @@ type policySourceRecord struct {
 	edits *overrideEdits
 	// overlaid stays in memory: Spec with the overlay laid on, before the clamp.
 	overlaid *types.RunPolicySpec
+	// applyAudits stays in memory: the policy.*.apply rows a create writes once the run's row is
+	// inserted (recordPolicyApplyAudits), so a refusal before that leaves no row for a run that never began.
+	applyAudits []types.AuditEvent
 }
 
 // newPolicySourceRecord is the one place a starting policy becomes an audit
