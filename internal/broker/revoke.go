@@ -51,7 +51,7 @@ func (b *Broker) RevokeRun(ctx context.Context, runID uuid.UUID) error {
 	if err != nil {
 		return err
 	}
-	actor := spiffeForRun(runID)
+	actor := spiffeForRun(b.trustDomain, runID)
 	for _, mc := range minted {
 		d := map[string]any{
 			"jti":   mc.JTI,

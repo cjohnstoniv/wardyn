@@ -137,7 +137,14 @@ func pullRequestContent(method string, req Request, t ContentTarget, sub string)
 	if err := decodeUnique(body, &pr); err != nil {
 		return t, err
 	}
-	if strings.EqualFold(pr.Status, "completed") || pr.AutoCompleteSetBy != nil {
+	// A closed list: the spellings known not to complete a pull request stay non-writes, and any
+	// other (completed, or one this code has never seen) is opaque.
+	switch strings.ToLower(pr.Status) {
+	case "", "active", "abandoned", "notset":
+	default:
+		t.Write = ContentOpaque
+	}
+	if pr.AutoCompleteSetBy != nil {
 		t.Write = ContentOpaque
 	}
 	return t, nil

@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	neturl "net/url"
 	"os"
 	"regexp"
@@ -43,10 +44,27 @@ func LoadPolicySpec(path string) (types.RunPolicySpec, error) {
 	if err := dec.Decode(&spec); err != nil {
 		return types.RunPolicySpec{}, fmt.Errorf("api: parse policy %s: %w", path, err)
 	}
+	clampStoredFileSize(&spec, "the policy file "+path)
 	if err := validatePolicySpec(spec); err != nil {
 		return types.RunPolicySpec{}, fmt.Errorf("api: invalid policy %s: %w", path, err)
 	}
 	return spec, nil
+}
+
+// clampStoredFileSize lowers a push_rules.max_file_size_mib saved before the write-time bound was
+// 32 MiB to that bound, with a log line, instead of refusing the policy: gitpack refuses every larger
+// object whatever the setting, so the lowered value enforces exactly what the old one did. It copies
+// push_rules before editing, so a caller holding the original is never surprised.
+func clampStoredFileSize(spec *types.RunPolicySpec, source string) {
+	pr := spec.PushRules
+	if pr == nil || pr.MaxFileSizeMiB <= maxPushRulesFileSizeMiB {
+		return
+	}
+	slog.Warn("wardynd: push_rules.max_file_size_mib is above the most a pack can carry; using the maximum",
+		slog.String("source", source), slog.Int("stored_mib", pr.MaxFileSizeMiB), slog.Int("used_mib", maxPushRulesFileSizeMiB))
+	cp := *pr
+	cp.MaxFileSizeMiB = maxPushRulesFileSizeMiB
+	spec.PushRules = &cp
 }
 
 // validatePolicySpec enforces the minimal structural invariants a policy must
@@ -111,6 +129,9 @@ func validatePolicySpecMode(spec types.RunPolicySpec, strict bool) error {
 		if err := proxy.ValidDomainEntry(d); err != nil {
 			return fmt.Errorf("denied_domains[%d]: %w", i, err)
 		}
+	}
+	if err := validateAllowedMethods(spec.AllowedMethods); err != nil {
+		return err
 	}
 	for i, g := range spec.EligibleGrants {
 		if err := validateEligibleGrantMode(i, g, strict); err != nil {
@@ -396,13 +417,15 @@ func validateUIAppPath(p string) error {
 // bounded, and keeps a hand-authored policy from asking the broker's pack
 // inspector to read an unbounded pack. Clamp only ever LOWERS this
 // scalar (never a union), so it cannot suffer the same post-clamp overshoot.
+// maxPushRulesFileSizeMiB is gitpack's own per-object ceiling (maxObjectBytes, 32 MiB): it refuses
+// every larger object before the configured limit is read, so a larger setting could never take effect.
 // maxPushRulesHoldSeconds is the proxy's own hold ceiling (maxHoldTimeout in
 // internal/egress/proxy): a longer value would be clamped there anyway.
 const (
 	maxPushRulesPathBytes      = 256
 	maxPushRulesInspectPackMiB = 64
 	maxPushRulesHoldSeconds    = 600
-	maxPushRulesFileSizeMiB    = 1024
+	maxPushRulesFileSizeMiB    = 32
 )
 
 // validatePushRules enforces push_rules' structural invariants at write time.
@@ -429,7 +452,10 @@ func validatePushRules(pr *types.PushRulesSpec) error {
 	if pr.HoldSeconds < 0 || pr.HoldSeconds > maxPushRulesHoldSeconds {
 		return fmt.Errorf("push_rules.hold_seconds must be between 0 and %d, got %d", maxPushRulesHoldSeconds, pr.HoldSeconds)
 	}
-	if pr.MaxFileSizeMiB < 0 || pr.MaxFileSizeMiB > maxPushRulesFileSizeMiB {
+	if pr.MaxFileSizeMiB > maxPushRulesFileSizeMiB {
+		return fmt.Errorf("push_rules.max_file_size_mib is %d, but the most a pack can carry is %d MiB; use %d or less", pr.MaxFileSizeMiB, maxPushRulesFileSizeMiB, maxPushRulesFileSizeMiB)
+	}
+	if pr.MaxFileSizeMiB < 0 {
 		return fmt.Errorf("push_rules.max_file_size_mib must be between 0 and %d, got %d", maxPushRulesFileSizeMiB, pr.MaxFileSizeMiB)
 	}
 	if pr.DenyNewExecutables {
@@ -729,6 +755,17 @@ func validateGrantLaneExclusivity(grants []types.GrantSpec) error {
 				"CONNECT tunnel no parser can read — and a GitHub PAT is usually a user PAT, wider than the repo-scoped installation token. "+
 				"Choose one: drop the git_pat grant to keep the brokered, branch-confined lane, or drop the github_token grant to push with "+
 				"your own PAT, unbrokered and unbound. A git_pat for a non-brokered host (dev.azure.com, gitlab.com, GHES) is unaffected", i, host)
+		}
+	}
+	return nil
+}
+
+// validateAllowedMethods refuses a blank entry: it reads as a method restriction
+// and names no method, so the list would be stored and enforce nothing.
+func validateAllowedMethods(methods []string) error {
+	for i, m := range methods {
+		if strings.TrimSpace(m) == "" {
+			return fmt.Errorf("allowed_methods[%d]: must not be blank", i)
 		}
 	}
 	return nil

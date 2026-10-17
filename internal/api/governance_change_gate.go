@@ -243,8 +243,8 @@ func (s *Server) proposeGovernanceChange(w http.ResponseWriter, r *http.Request,
 			Error: "a change to this target is already waiting for approval: " + pending.ID.String()}
 		// The held change rides in the refusal, with whether it is this proposal, so a repeat apply
 		// of the same write reports it as pending. A read that fails or finds it gone leaves the
-		// plain refusal.
-		if held, gerr := s.cfg.Store.GetGovernanceChange(r.Context(), pending.ID); gerr == nil && held.State == types.GovernanceChangePending {
+		// plain refusal, as does a held change the caller's role may not read.
+		if held, gerr := s.cfg.Store.GetGovernanceChange(r.Context(), pending.ID); gerr == nil && held.State == types.GovernanceChangePending && s.canSeeGovernanceChange(r, held) {
 			matches := held.Op == p.op && samePayload(held.Payload, payload)
 			body.PendingChange, body.PendingChangeMatches = &held, &matches
 		}

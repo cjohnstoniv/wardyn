@@ -234,7 +234,7 @@ func (l *leaseCovLeases) ReserveAttachLease(_ context.Context, run, from uuid.UU
 		return store.AttachLease{}, uuid.Nil, false, err
 	}
 	cur, held := l.rows[run]
-	if !held || !cur.ExpiresAt.After(l.now) || (from != uuid.Nil && cur.HolderID != from) {
+	if !held || !cur.ExpiresAt.After(l.now) || cur.Source == attachLeaseReservedSource || (from != uuid.Nil && cur.HolderID != from) {
 		return store.AttachLease{}, uuid.Nil, false, nil
 	}
 	l.seq++

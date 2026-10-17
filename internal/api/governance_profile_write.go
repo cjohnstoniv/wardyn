@@ -357,6 +357,11 @@ func (s *Server) buildGovernanceProfile(createdBy string, id uuid.UUID, req gove
 	p := types.GovernanceProfile{
 		ID: id, Name: req.Name, CreatedBy: createdBy, Contact: req.contact, ContactSet: req.contactSet,
 	}
+	// UNIQUE(name) is judged here too, so a held create or rename is refused at proposal
+	// and not left pending to fail at every approval.
+	if slices.ContainsFunc(all, func(x types.GovernanceProfile) bool { return x.ID != id && x.Name == req.Name }) {
+		return p, nil, writeRefusal(http.StatusConflict, reasonGovernanceProfileNameConflict, "a governance profile named %q already exists", req.Name)
+	}
 	base, overlay, limits := composedFrom(all, id, req.comp)
 	switch {
 	case overlay == nil && base != nil:

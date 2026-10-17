@@ -91,7 +91,7 @@ func (s *Server) markInertGrants(r *http.Request, grants []types.CapabilityGrant
 	if len(inert) > 0 {
 		slog.WarnContext(r.Context(), "api: capability grants stored before the per-kind value rule can never match anything",
 			"grants", len(grants), "inert", len(inert), "values", strings.Join(inert, ", "),
-			"remedy", "re-save each row through POST /api/v1/permissions/grants — the write boundary canonicalizes it into the form the resolver compares, or refuses it by name")
+			"remedy", "re-save each row through POST /api/v1/permissions/grants — the write boundary canonicalizes it into the form the resolver compares, or refuses it by name — then delete the old row through DELETE /api/v1/permissions/grants/{id}, which the re-save leaves in place")
 	}
 	if len(retired) > 0 {
 		slog.WarnContext(r.Context(), "api: capability grants of a retired kind can never match anything",

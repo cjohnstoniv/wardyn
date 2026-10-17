@@ -228,7 +228,7 @@ export interface PushRulesSpec {
   hold_seconds?: number;
   // Not supported yet: the server refuses true at write time.
   deny_new_executables?: boolean;
-  // Refuses a push introducing a file over this many MiB; 0/absent = off, max 1024.
+  // Refuses a push introducing a file over this many MiB; 0/absent = off, max 32 (the most a pack can carry is 32 MiB).
   max_file_size_mib?: number;
 }
 

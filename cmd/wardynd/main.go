@@ -303,7 +303,7 @@ func run() error {
 	// otherwise github_token grants fail closed at mint with a clear error.
 	// The broker shares maskedRec so its credential.* events fan out to SIEM.
 	gh := buildGitHubMinter(secrets)
-	brk := broker.New(broker.NewPgxStore(pool), secrets, maskedRec, idp, gh).WithMaskRegistry(maskReg)
+	brk := broker.New(broker.NewPgxStore(pool), secrets, maskedRec, idp, gh).WithMaskRegistry(maskReg).WithTrustDomain(*f.trustDomain)
 	// D29: the credential.mint SUCCESS event is written in-tx (durable/atomic) and
 	// fanned to SIEM post-commit via this sink — so keep SIEM continuity without
 	// double-writing the primary store. Guarded: a typed-nil Fanout would be a

@@ -92,6 +92,18 @@ func presetView(p types.LaunchPreset) (client.Preset, error) {
 	return out, nil
 }
 
+// presetForRead is presetView with the redaction every policy read applies to the
+// stored inline_policy, for the two reads a member reaches. Launch and the write
+// answers keep the unredacted view.
+func (s *Server) presetForRead(r *http.Request, p types.LaunchPreset) (client.Preset, error) {
+	v, err := presetView(p)
+	if err == nil && v.Request.InlinePolicy != nil {
+		spec := redactSpecForRead(*v.Request.InlinePolicy, s.isSecurityOperator(r.Context()))
+		v.Request.InlinePolicy = &spec
+	}
+	return v, err
+}
+
 func (s *Server) handleListPresets(w http.ResponseWriter, r *http.Request) {
 	list, err := s.cfg.Store.ListLaunchPresets(r.Context())
 	if err != nil {
@@ -103,7 +115,7 @@ func (s *Server) handleListPresets(w http.ResponseWriter, r *http.Request) {
 		if !s.presetOpenTo(r, p) {
 			continue
 		}
-		v, err := presetView(p)
+		v, err := s.presetForRead(r, p)
 		if err != nil {
 			writeServerError(w, r, "decode preset", err)
 			return
@@ -126,7 +138,7 @@ func (s *Server) handleGetPreset(w http.ResponseWriter, r *http.Request) {
 		writeServerError(w, r, "get preset", err)
 		return
 	}
-	v, err := presetView(p)
+	v, err := s.presetForRead(r, p)
 	if err != nil {
 		writeServerError(w, r, "decode preset", err)
 		return

@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -191,18 +192,19 @@ func (s *Server) endRunQueuedForRevokedRunner(ctx context.Context, runID uuid.UU
 // state alone: it ends each waiting run whose launch names a revoked runner. A revoke whose own pass
 // failed for a run, or never ran because the server stopped after the revoke committed, so converges
 // within a tick, with nobody revoking again. A run that still cannot be ended is tried at the next tick.
-func (s *Server) endQueuedRunsOfRevokedRunners(ctx context.Context) {
+func (s *Server) endQueuedRunsOfRevokedRunners(ctx context.Context) error {
 	qs, _ := s.queueStore()
 	entries, err := qs.QueueEntriesOfRevokedRunners(ctx, queueRevokedScanLimit)
 	if err != nil {
 		slog.WarnContext(ctx, "wardynd: list waiting runs of revoked runners", slog.Any("err", err))
-		return
+		return fmt.Errorf("list waiting runs of revoked runners: %w", err)
 	}
 	for _, e := range entries {
 		if _, err := s.endRunQueuedForRevokedRunner(ctx, e.RunID); err != nil {
 			slog.WarnContext(ctx, "wardynd: end a run waiting for a revoked runner", slog.String("run_id", e.RunID.String()), slog.Any("err", err))
 		}
 	}
+	return nil
 }
 
 // queueRevokedScanLimit bounds one tick's work list of runs waiting for revoked runners.

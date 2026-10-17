@@ -168,6 +168,9 @@ func TestPG_AttachLeases(t *testing.T) {
 	if _, _, found, _ := pg.ReserveAttachLease(ctx, run, b, "admin", "B", time.Minute); found {
 		t.Error("a take-over named a holder that no longer holds the lease and still replaced the lease")
 	}
+	if _, _, found, _ := pg.ReserveAttachLease(ctx, run, uuid.Nil, "other", "B", time.Minute); found {
+		t.Error("a second take-over replaced the first taker's reservation and named it the displaced holder")
+	}
 	taker := uuid.New()
 	if ok, err := pg.AcquireAttachLease(ctx, store.AttachLease{RunID: run, HolderID: taker, Replica: "B", Principal: "admin", Source: "web", Since: time.Now().UTC()}, uuid.Nil, time.Minute); err != nil || !ok {
 		t.Fatalf("the taker's client could not take its reservation: ok=%v err=%v", ok, err)

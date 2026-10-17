@@ -159,3 +159,17 @@ func TestPackCeiling_BlobContentIsNotRetained(t *testing.T) {
 		t.Errorf("the Result keeps %d bytes live: the blobs' content outlived the parse", retained)
 	}
 }
+
+// An object past the per-object ceiling is the documented "too large" refusal
+// (ErrTooLarge, a 413 at the proxy), not an uninspectable pack.
+func TestPackCeiling_ObjectBytesIsTooLarge(t *testing.T) {
+	pack := []byte("PACK")
+	pack = binary.BigEndian.AppendUint32(pack, 2)
+	pack = binary.BigEndian.AppendUint32(pack, 1)
+	pack = append(pack, objHeader(objBlob, maxObjectBytes+1)...)
+	sum := sha1.Sum(pack)
+	cmd := strings.Repeat("0", 40) + " " + strings.Repeat("1", 40) + " refs/heads/main"
+	if _, err := Inspect(append(commandSection("report-status", cmd), append(pack, sum[:]...)...)); !errors.Is(err, ErrTooLarge) {
+		t.Errorf("err = %v, want ErrTooLarge", err)
+	}
+}
