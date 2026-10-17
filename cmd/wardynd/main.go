@@ -502,6 +502,7 @@ func run() error {
 		SecretStoreExternal:       storesExternally(secrets),
 		SecretKeyService:          keyService(secrets),
 		SecretKeyServiceStaticKey: keyServiceStaticKey(secrets),
+		SecretKeyServiceNodeRole:  keyServiceNodeRole(secrets),
 		KEKRequired:               *f.vault.kekRequired,
 		SecretLocalRows:           localRowsCounter(secrets),
 		PlatformKeySeparate:       platformKeySeparate(f, keyService(secrets) != ""),

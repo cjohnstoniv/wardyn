@@ -120,7 +120,7 @@ func newKEK(cfg KEKConfig) (*KEK, error) {
 	if err != nil {
 		return nil, err
 	}
-	if wrapURL.Scheme != signURL.Scheme || !strings.EqualFold(wrapURL.Host, signURL.Host) {
+	if !sameOrigin(wrapURL, signURL) {
 		return nil, fmt.Errorf("%s is in %s, %s in %s; both keys must be in the same vault", sigSetting, signURL.Host, keySetting, wrapURL.Host)
 	}
 	if wrapName == signName {

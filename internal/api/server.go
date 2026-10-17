@@ -496,6 +496,8 @@ type Config struct {
 	SecretKeyService string
 	// SecretKeyServiceStaticKey: the key service is reached with a long-lived credential (an AWS IAM user's access key); /setup/status shows kek_service_static_key.
 	SecretKeyServiceStaticKey bool
+	// SecretKeyServiceNodeRole: the key service is reached with the EC2 node's instance role; /setup/status words kek_service_static_key for it.
+	SecretKeyServiceNodeRole bool
 	// KEKRequired: WARDYN_KEK_REQUIRED; /setup/status shows kek_required_unmet while neither a key service nor an external store holds the credentials.
 	KEKRequired bool
 	// SecretLocalRows counts the stored credential rows and principal keys still wrapped by the local key (nil: the store keeps no such count); with KEKRequired and a key service, /setup/status shows kek_local_rows while it is above zero.

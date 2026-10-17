@@ -140,7 +140,9 @@
 # docs/AUDIT-ACTIONS.md 46424 adds 13 over 46411 (0.9.3 E r1), measured: a device-forwarded row carries the peer as data.device_origin.proxy_peer.
 # docs/AUDIT-ACTIONS.md 46433 adds 9 (0.9.3 lane E r2 docs): proxy_peer inside device_origin.
 # docs/AUDIT-ACTIONS.md 46592 = 46532 + 60 (E), measured at the wave-A merge.
-docs/AUDIT-ACTIONS.md=46592 share=8
+# docs/AUDIT-ACTIONS.md 46398 adds 9 over 46389, measured (0.9.3 RV2 r2): an Entra token redeemed for a branch listing is recorded as ado-refresh.
+# docs/AUDIT-ACTIONS.md 46617 = 46592 + 25 (RV2), measured at the wave-A merge.
+docs/AUDIT-ACTIONS.md=46617 share=8
 # docs/AUDIT-ACTIONS.md 39938 adds 1 (0.9 H7): the `placement_component_self_defined` reason in the authz.denied vocabulary.
 # 0.9 H10 r1: docs/AUDIT-ACTIONS.md 40113 adds 65 over 40048 for the token-revoke join, the off semantics and the pending connect/disconnect rows.
 # 0.9 H10: docs/AUDIT-ACTIONS.md 40048 adds 111 over 39937 for runner.token.revoke, runners.enabled.set, runner.connect and runner.disconnect.

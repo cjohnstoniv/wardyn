@@ -28,6 +28,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws/arn"
 	awshttp "github.com/aws/aws-sdk-go-v2/aws/transport/http"
 	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/credentials/ec2rolecreds"
 	"github.com/aws/aws-sdk-go-v2/service/kms"
 	kmstypes "github.com/aws/aws-sdk-go-v2/service/kms/types"
 	"github.com/aws/smithy-go"
@@ -77,12 +78,13 @@ type Config struct {
 // KMS rotation is transparent (a ciphertext names its backing key), so the
 // KEK is not kek.Versioned.
 type KEK struct {
-	client  *kms.Client
-	arn     string
-	id      string
-	region  string
-	static  bool
-	timeout time.Duration
+	client   *kms.Client
+	arn      string
+	id       string
+	region   string
+	static   bool
+	nodeRole bool
+	timeout  time.Duration
 }
 
 var _ kek.KEK = (*KEK)(nil)
@@ -129,7 +131,8 @@ func NewKEK(ctx context.Context, cfg Config) (*KEK, error) {
 			}
 		}),
 		arn: cfg.KeyARN, id: kek.AWSKMSIDPrefix + cfg.KeyARN, region: a.Region, timeout: timeout,
-		static: strings.HasPrefix(creds.AccessKeyID, "AKIA"),
+		static:   strings.HasPrefix(creds.AccessKeyID, "AKIA"),
+		nodeRole: creds.Source == ec2rolecreds.ProviderName,
 	}
 	if err := k.selfTest(ctx); err != nil {
 		return nil, fmt.Errorf("AWS KMS KEK %s: %w", k.id, err)
@@ -224,6 +227,10 @@ func (k *KEK) Describe() string { return "AWS KMS in " + k.region }
 // StaticKey reports whether the credentials the default chain gave at boot
 // are a long-lived IAM user access key (AKIA...), not a role's temporary ones.
 func (k *KEK) StaticKey() bool { return k.static }
+
+// NodeRole reports whether those credentials are the EC2 node's instance role,
+// shared by every pod on the node, not a pod's own role (IRSA, Pod Identity).
+func (k *KEK) NodeRole() bool { return k.nodeRole }
 
 // encryptionContext binds a wrap to its row by a hash of AAD_kek.
 func (k *KEK) encryptionContext(bind map[string]string) (map[string]string, error) {

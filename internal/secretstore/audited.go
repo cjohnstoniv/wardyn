@@ -33,6 +33,7 @@ const (
 	PurposeRehearse     Purpose = "rehearse"
 	PurposeSSORefresh   Purpose = "sso-refresh"
 	PurposeADORefresh   Purpose = "ado-refresh"
+	PurposeBranchList   Purpose = "branch-list"
 	PurposeStatus       Purpose = "status"
 
 	// PurposeUnmarked is recorded, as a failure, for a Get whose caller set no
@@ -312,6 +313,15 @@ func (a *audited) KeyService() string {
 func (a *audited) KeyServiceStaticKey() bool {
 	if d, ok := a.inner.(interface{ KeyServiceStaticKey() bool }); ok {
 		return d.KeyServiceStaticKey()
+	}
+	return false
+}
+
+// KeyServiceNodeRole forwards whether the key service is reached with the
+// node's instance role; false when the wrapped store does not say.
+func (a *audited) KeyServiceNodeRole() bool {
+	if d, ok := a.inner.(interface{ KeyServiceNodeRole() bool }); ok {
+		return d.KeyServiceNodeRole()
 	}
 	return false
 }

@@ -302,6 +302,14 @@ func (s *Store) KeyServiceStaticKey() bool {
 	return ok && s.serviceWrites && !s.writeExt && d.StaticKey()
 }
 
+// KeyServiceNodeRole reports whether the key service that wraps every write is
+// reached with the EC2 node's instance role, shared by every pod on the node:
+// metadata for the same setup row, never a value.
+func (s *Store) KeyServiceNodeRole() bool {
+	d, ok := s.service.(interface{ NodeRole() bool })
+	return ok && s.serviceWrites && !s.writeExt && d.NodeRole()
+}
+
 // For returns a view scoped to owner — see secretstore.Store.For's doc
 // comment for the fallback/isolation contract. A shallow copy: owner is the
 // only field that differs, so every view over the same *pgxpool.Pool sees

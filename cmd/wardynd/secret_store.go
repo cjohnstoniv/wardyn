@@ -773,6 +773,15 @@ func keyServiceStaticKey(s secretstore.Store) bool {
 	return false
 }
 
+// keyServiceNodeRole reports whether the key service wrapping every write is
+// reached with the node's instance role (the same setup row).
+func keyServiceNodeRole(s secretstore.Store) bool {
+	if d, ok := s.(interface{ KeyServiceNodeRole() bool }); ok {
+		return d.KeyServiceNodeRole()
+	}
+	return false
+}
+
 // secretsDurable reports whether stored secrets survive a restart: a supplied
 // age key, store mode or a key service, where no local key holds anything.
 func secretsDurable(ageKey string, s secretstore.Store) bool {

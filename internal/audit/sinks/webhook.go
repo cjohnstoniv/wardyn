@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -375,6 +376,8 @@ func postNDJSON(ctx context.Context, client *http.Client, cfg WebhookConfig, bod
 	if err != nil {
 		return 0, 0, fmt.Errorf("http post: %w", withoutURL(err))
 	}
+	// Read what a small reply carries before closing, so HTTP/1.1 keep-alive reuses the connection.
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10))
 	_ = resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return resp.StatusCode, parseRetryAfter(resp.Header.Get("Retry-After")),
