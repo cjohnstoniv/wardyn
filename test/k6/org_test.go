@@ -713,6 +713,15 @@ func (o *orgEnv) lapseSetup(t *testing.T) {
 		id := o.liveUntil(t, parent, nil)
 		o.lapse.id = id
 		o.waitAudit(t, id, 2*time.Minute, "a successful renew", func(r auditRow) bool { return r.Action == "identity.renew" && r.Outcome == "success" })
+		// The control: the agent's allowed egress works before the fault, so its refusal after the
+		// lapse is the lapse's doing.
+		deadline := time.Now().Add(90 * time.Second)
+		for got := o.connect(t, id, "example.com:443"); got != "status 200"; got = o.connect(t, id, "example.com:443") {
+			if time.Now().After(deadline) {
+				t.Fatalf("control example.com:443 = %q, want status 200 (proxy not serving)", got)
+			}
+			time.Sleep(3 * time.Second)
+		}
 		o.kubectl(t, "-n", o.orgNS, "exec", "deploy/postgres", "--", "psql", "-U", "wardyn", "-d", "wardyn", "-qtAc",
 			"UPDATE agent_runs SET state = 'FAILED', sandbox_ref = '' WHERE id = '"+id+"'")
 		o.lapse.marked = time.Now()
@@ -723,8 +732,9 @@ func (o *orgEnv) lapseSetup(t *testing.T) {
 }
 
 // caseOrgSelfLapse: a permanent renew refusal, end to end. The renew is refused through the
-// relay (403 run_terminal), the proxy lapses, sends its lapsed frame on runnerd's sink, and the sandbox
-// is torn down.
+// relay (403 run_terminal), the proxy lapses, sends its lapsed frame on runnerd's sink, runnerd deletes
+// the proxy pod, and the agent's allowed egress is refused. runnerd stops only the proxy, never the
+// agent or its files (offline.Manager.CheckLapses); the agent pod ends with the org's teardown.
 func caseOrgSelfLapse(t *testing.T, o *orgEnv) {
 	if o.lapse == nil || o.lapse.err != "" || o.lapse.id == "" {
 		t.Fatalf("self-lapse setup: %+v", o.lapse)
@@ -750,8 +760,13 @@ func caseOrgSelfLapse(t *testing.T, o *orgEnv) {
 		}
 		time.Sleep(2 * time.Second)
 	}
-	o.kubectl(t, "-n", o.runsNS, "wait", "--for=delete", "pod/wardyn-agent-"+id, "pod/wardyn-proxy-"+id, "--timeout=300s")
-	note(t, "proxy logged the permanent refusal and lapsed; runnerd tore the sandbox down %s after the mark", time.Since(o.lapse.marked).Round(time.Second))
+	o.kubectl(t, "-n", o.runsNS, "wait", "--for=delete", "pod/wardyn-proxy-"+id, "--timeout=300s")
+	if got := o.connect(t, id, "example.com:443"); got == "status 200" {
+		t.Fatalf("agent still reaches example.com:443 after the lapse: %q", got)
+	} else {
+		note(t, "proxy logged the permanent refusal and lapsed; runnerd deleted the proxy pod %s after the mark; agent egress now %q",
+			time.Since(o.lapse.marked).Round(time.Second), tail(got, 200))
+	}
 }
 
 // caseOrgSweepRollback: a run whose sandbox creation the org gave up on (runnerd went away mid-create)
