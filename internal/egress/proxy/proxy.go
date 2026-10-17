@@ -969,6 +969,7 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 		_ = upstream.Close()
 		return
 	}
+	defer p.trackTunnel(clientConn)()
 	if _, err := clientConn.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n")); err != nil {
 		_ = upstream.Close()
 		_ = clientConn.Close()

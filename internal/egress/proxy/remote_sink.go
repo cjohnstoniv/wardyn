@@ -207,6 +207,8 @@ type remoteSink struct {
 	refused      uint64
 	draining     bool
 	drainStarted bool
+	lapsePending bool
+	tunnels      map[net.Conn]struct{}
 	stopped      bool // drained replied: no further records
 	drained      *SinkFrame
 	lapsed       *SinkFrame
@@ -234,20 +236,39 @@ func newRemoteSink(runID uuid.UUID, c DecisionSinkConfig) (*remoteSink, error) {
 	return s, nil
 }
 
-// creditLocked reports whether one more credit unit carrying need bytes fits
-// the grant: sequences assigned plus reservations held stay within Through,
-// and bytes since Base plus held bytes within Bytes.
-func (s *remoteSink) creditLocked(need int64) bool {
-	return s.haveGrant && !s.draining && !s.stopped && !s.closed &&
-		s.lastSeq+int64(len(s.res)) < s.through && s.sinceBase+s.heldBytes+need <= s.bytes
+// fitsLocked reports whether one more credit unit carrying need bytes fits
+// the held grant: sequences assigned plus reservations held stay within
+// Through, and bytes since Base plus held bytes within Bytes. The grant
+// outlives a session end (design Q5, §6.2): runnerd never re-issues it lower.
+func (s *remoteSink) fitsLocked(need int64) bool {
+	return s.haveGrant && s.lastSeq+int64(len(s.res)) < s.through && s.sinceBase+s.heldBytes+need <= s.bytes
 }
 
-func (s *remoteSink) reserve(need int64) (uuid.UUID, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if !s.creditLocked(need) {
+// countRefusalLocked counts a want-of-credit refusal for Drops only when the
+// spool is genuinely full: a grant is held, exhausted, on a live session.
+// No grant yet, a disconnect, a drain, a stop or a close refuses uncounted.
+func (s *remoteSink) countRefusalLocked() {
+	if s.haveGrant && s.live && !s.draining && !s.stopped && !s.closed {
 		s.refused++
 		s.cond.Broadcast()
+	}
+}
+
+// reserve holds credit for one admitted request, waiting until ctx ends for
+// credit to return (a request finishing, or a regrant) rather than refusing
+// on the first miss.
+func (s *remoteSink) reserve(ctx context.Context, need int64) (uuid.UUID, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	stop := context.AfterFunc(ctx, func() { s.mu.Lock(); s.cond.Broadcast(); s.mu.Unlock() })
+	defer stop()
+	for !s.draining && !s.stopped && !s.closed && !s.fitsLocked(need) && ctx.Err() == nil {
+		s.cond.Wait()
+	}
+	if s.draining || s.stopped || s.closed || !s.fitsLocked(need) {
+		if !s.draining && !s.stopped && !s.closed {
+			s.countRefusalLocked()
+		}
 		return uuid.Nil, runnerspool.ErrFull
 	}
 	id := uuid.New()
@@ -287,9 +308,11 @@ func (s *remoteSink) emit(log egress.DecisionLog) {
 		Activity: admitted && log.RuleSource != ruleSourceApprovals && log.RuleSource != "credential:reauth-timeout"})
 	switch {
 	case err != nil || merr != nil || s.closed || s.stopped:
-		s.refused++
-	case !admitted && !s.creditLocked(int64(len(body))):
-		s.refused++
+		// Never counted: an admitted record here is already in the drained
+		// reply's consumed (the exact loss), and nothing else is a full spool.
+		slog.Warn("wardyn-proxy: decision not sent to the runner sink", slog.Bool("admitted", admitted))
+	case !admitted && !s.fitsLocked(int64(len(body))):
+		s.countRefusalLocked()
 	default:
 		s.lastSeq++
 		s.sinceBase += int64(len(body))
@@ -298,13 +321,60 @@ func (s *remoteSink) emit(log egress.DecisionLog) {
 	s.cond.Broadcast()
 }
 
-// lapse queues the lapsed frame; Shutdown's close then flushes it.
+// beginDrainLocked starts the one drain: stop reserving, close open tunnels so
+// their final decisions are emitted, then answer drained (§3.2 item 5).
+func (s *remoteSink) beginDrainLocked() {
+	s.draining = true
+	if !s.drainStarted {
+		s.drainStarted = true
+		go s.drain()
+	}
+	s.cond.Broadcast()
+}
+
+// lapse drains exactly as a drain frame does, then queues lapsed after the
+// drained reply, so runnerd settles the exact loss rather than the upper bound.
 func (s *remoteSink) lapse(reason string) {
 	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.lapsePending = true
+	s.beginDrainLocked()
+	for s.drained == nil && !s.closed {
+		s.cond.Wait()
+	}
 	s.lapsed = &SinkFrame{T: FrameLapsed, Reason: reason}
-	s.draining = true
+	s.lapsePending = false
 	s.cond.Broadcast()
-	s.mu.Unlock()
+}
+
+// track registers an open tunnel's client connection so a drain can close it;
+// one opened after the drain began is closed at once. The returned func
+// unregisters it once the tunnel's final decision has been emitted.
+func (s *remoteSink) track(c net.Conn) func() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.draining || s.stopped || s.closed {
+		_ = c.Close()
+	}
+	if s.tunnels == nil {
+		s.tunnels = map[net.Conn]struct{}{}
+	}
+	s.tunnels[c] = struct{}{}
+	return func() {
+		s.mu.Lock()
+		delete(s.tunnels, c)
+		s.cond.Broadcast()
+		s.mu.Unlock()
+	}
+}
+
+// trackTunnel is the Proxy's hook at each hijack: a no-op unless decisions go
+// to a runner sink (k8s runners).
+func (p *Proxy) trackTunnel(c net.Conn) func() {
+	if p.sink == nil || p.sink.remote == nil {
+		return func() {}
+	}
+	return p.sink.remote.track(c)
 }
 
 // close flushes the unacked tail (and a queued lapsed frame) until ctx ends,
@@ -313,7 +383,7 @@ func (s *remoteSink) close(ctx context.Context) error {
 	s.mu.Lock()
 	s.draining = true
 	stop := context.AfterFunc(ctx, func() { s.mu.Lock(); s.cond.Broadcast(); s.mu.Unlock() })
-	for ctx.Err() == nil && (len(s.buf) > 0 || s.lapsed != nil) {
+	for ctx.Err() == nil && (len(s.buf) > 0 || s.lapsePending || s.lapsed != nil) {
 		s.cond.Wait()
 	}
 	stop()
@@ -322,6 +392,7 @@ func (s *remoteSink) close(ctx context.Context) error {
 	if s.conn != nil {
 		s.conn.Close()
 	}
+	s.haveGrant = false
 	s.cond.Broadcast()
 	s.mu.Unlock()
 	if unacked > 0 {
@@ -342,7 +413,7 @@ func (s *remoteSink) run() {
 			slog.Warn("wardyn-proxy: decision sink session ended", slog.Any("err", err))
 		}
 		s.mu.Lock()
-		s.live, s.haveGrant, s.conn = false, false, nil
+		s.live, s.conn = false, nil // the grant outlives the session (H1)
 		s.cond.Broadcast()
 		s.mu.Unlock()
 		time.Sleep(s.retry)
@@ -424,10 +495,7 @@ func (s *remoteSink) read(conn net.Conn) error {
 			}
 			s.cond.Broadcast()
 		case FrameDrain:
-			if !s.drainStarted {
-				s.draining, s.drainStarted = true, true
-				go s.drain()
-			}
+			s.beginDrainLocked()
 		default:
 			s.mu.Unlock()
 			return fmt.Errorf("decision sink: unexpected frame %q", f.T)
@@ -436,14 +504,18 @@ func (s *remoteSink) read(conn net.Conn) error {
 	}
 }
 
-// drain stops reserving, gives in-flight requests up to drainFor to emit their
-// final decisions, then answers drained with the last sequence and the credit
-// consumed; reservations still held are the exact loss.
+// drain closes the open tunnels, gives in-flight requests and closing tunnels
+// up to drainFor to emit their final decisions, then answers drained with the
+// last sequence and the credit consumed; reservations still held are the
+// exact loss.
 func (s *remoteSink) drain() {
-	deadline := time.Now().Add(s.drainFor)
 	s.mu.Lock()
+	for c := range s.tunnels {
+		_ = c.Close()
+	}
+	deadline := time.Now().Add(s.drainFor)
 	timer := time.AfterFunc(s.drainFor, func() { s.mu.Lock(); s.cond.Broadcast(); s.mu.Unlock() })
-	for len(s.res) > 0 && time.Now().Before(deadline) && !s.closed {
+	for (len(s.res) > 0 || len(s.tunnels) > 0) && time.Now().Before(deadline) && !s.closed {
 		s.cond.Wait()
 	}
 	timer.Stop()

@@ -26,13 +26,21 @@ import (
 )
 
 func newRegisterCommand() *cobra.Command {
-	var org, tokenFile, stateDir, name, sub string
+	var org, tokenFile, stateDir, name, sub, arch string
 	var ifUnregistered bool
 	var flags registerLimits
 	cmd := &cobra.Command{Use: "register", Short: "Register this host with its limits; its owner must then verify and claim it", Args: cobra.NoArgs}
 	cmd.RunE = func(cmd *cobra.Command, _ []string) error {
 		if sub != "docker" && sub != "k8s" {
 			return fmt.Errorf("--substrate %q: want docker or k8s", sub)
+		}
+		if sub == "docker" && arch != "" {
+			return fmt.Errorf("--arch (%s) applies only to --substrate=k8s: a Docker runner reports its engine's", archEnv)
+		}
+		if sub == "k8s" {
+			if err := checkArch(arch); err != nil {
+				return err
+			}
 		}
 		if ifUnregistered {
 			// The chart's init container runs on every pod start: a saved identity for this
@@ -49,7 +57,7 @@ func newRegisterCommand() *cobra.Command {
 				return nil
 			}
 		}
-		done, err := registerRunner(cmd, registerArgs{org: org, tokenFile: tokenFile, stateDir: stateDir, name: name, limits: &flags, noMeasure: sub == "k8s"})
+		done, err := registerRunner(cmd, registerArgs{org: org, tokenFile: tokenFile, stateDir: stateDir, name: name, limits: &flags, noMeasure: sub == "k8s", arch: arch})
 		if err != nil {
 			return err
 		}
@@ -65,6 +73,7 @@ func newRegisterCommand() *cobra.Command {
 	cmd.Flags().StringVar(&stateDir, "state-dir", "", "private runner state directory (defaults to the user configuration directory)")
 	cmd.Flags().StringVar(&name, "name", "", "runner name (defaults to the host name)")
 	cmd.Flags().StringVar(&sub, "substrate", "docker", "where this runner's runs execute: docker or k8s (k8s measures nothing: give every total as a flag)")
+	cmd.Flags().StringVar(&arch, "arch", os.Getenv(archEnv), "k8s, required: the sandbox node architecture this runner reports, amd64 or arm64")
 	cmd.Flags().BoolVar(&ifUnregistered, "if-unregistered", false, "do nothing when this state directory already holds an identity for --org")
 	flags.register(cmd)
 	_ = cmd.MarkFlagRequired("org")
@@ -112,6 +121,8 @@ type registerArgs struct {
 	proxyImage string
 	// noMeasure (k8s): no engine to measure or ask, so every total comes from a flag.
 	noMeasure bool
+	// arch (k8s) is --arch, reported in place of the engine's.
+	arch string
 }
 
 // registeredRunner is what a registration left on this host and with the organisation.
@@ -176,8 +187,8 @@ func registerRunner(cmd *cobra.Command, a registerArgs) (registeredRunner, error
 	client.HTTPClient = &http.Client{Timeout: 30 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error {
 		return errors.New("runner registration does not follow redirects")
 	}}
-	arch := ""
-	if !a.noMeasure {
+	arch := a.arch
+	if arch == "" && !a.noMeasure {
 		arch = engineArch(cmd.Context())
 	}
 	registered, err := client.RegisterRunner(cmd.Context(), sdk.RunnerRegisterRequest{Token: token, PublicKey: key.Public().(ed25519.PublicKey), Name: name, Limits: &limits, MachineName: machine, Arch: arch})

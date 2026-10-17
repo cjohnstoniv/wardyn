@@ -77,11 +77,14 @@ type sinkSession struct {
 	conn     net.Conn
 	gen      uint64
 	instance string
-	gmu      sync.Mutex // grant and epoch: the pump and Tick both regrant
+	gmu      sync.Mutex // grant, epoch, bytesSince: the pump and Tick both regrant
 	grant    runnerspool.Grant
-	epoch    uuid.UUID
-	wmu      sync.Mutex
-	drainCh  chan runnerspool.Drained
+	// bytesSince is the record-body bytes committed above grant.Base, the
+	// same bytes the proxy counts against grant.Bytes.
+	bytesSince int64
+	epoch      uuid.UUID
+	wmu        sync.Mutex
+	drainCh    chan runnerspool.Drained
 }
 
 func (ss *sinkSession) send(f proxy.SinkFrame) error {
@@ -341,7 +344,11 @@ func (s *spoolSink) pump(ctx context.Context, ss *sinkSession) error {
 			if err := ss.send(proxy.SinkFrame{T: proxy.FrameAck, Seq: f.Seq, Disposition: string(disp)}); err != nil {
 				return err
 			}
-			if err := s.regrant(ctx, ss, f.Seq); err != nil {
+			var added int64
+			if fresh {
+				added = int64(len(f.Body))
+			}
+			if err := s.regrant(ctx, ss, f.Seq, added); err != nil {
 				return err
 			}
 		case proxy.FrameRefused:
@@ -372,12 +379,14 @@ func (s *spoolSink) pump(ctx context.Context, ss *sinkSession) error {
 }
 
 // regrant persists fresh credit (and the current activity epoch) before
-// sending it: after a record (seq > 0) only once half the grant is used, from
-// Tick (seq 0) whenever the credit or the epoch changed.
-func (s *spoolSink) regrant(ctx context.Context, ss *sinkSession, seq int64) error {
+// sending it: after a record (seq > 0, carrying body bytes) once half the
+// grant's records or half its bytes are used, from Tick (seq 0) whenever the
+// credit or the epoch changed.
+func (s *spoolSink) regrant(ctx context.Context, ss *sinkSession, seq, body int64) error {
 	ss.gmu.Lock()
 	defer ss.gmu.Unlock()
-	if seq > 0 && ss.grant.Through-seq >= runnerspool.GrantRecords/2 {
+	ss.bytesSince += body
+	if seq > 0 && ss.grant.Through-seq >= runnerspool.GrantRecords/2 && 2*ss.bytesSince < ss.grant.Bytes {
 		return nil
 	}
 	epoch := runneractivity.Capture(s.opts.ActivityDir(ss.run.id))
@@ -387,6 +396,9 @@ func (s *spoolSink) regrant(ctx context.Context, ss *sinkSession, seq int64) err
 	}
 	if !changed && epoch == ss.epoch {
 		return nil
+	}
+	if changed {
+		ss.bytesSince = 0 // the new grant's Base is the committed producer seq
 	}
 	ss.grant, ss.epoch = g, epoch
 	return ss.send(grantFrame(g, epoch))
@@ -483,7 +495,7 @@ func (s *spoolSink) Tick(ctx context.Context) {
 		ss := r.sess
 		s.mu.Unlock()
 		if ss != nil {
-			if err := s.regrant(ctx, ss, 0); err != nil {
+			if err := s.regrant(ctx, ss, 0, 0); err != nil {
 				ss.conn.Close()
 			}
 		}

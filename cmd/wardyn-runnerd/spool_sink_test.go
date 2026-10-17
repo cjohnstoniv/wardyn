@@ -12,6 +12,7 @@ import (
 	"errors"
 	"net"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -324,4 +325,35 @@ func must[T any](v T, err error) T {
 		panic(err)
 	}
 	return v
+}
+
+// TestSpoolSinkRegrantsAtHalfByteCredit (H2): large records use half the byte
+// credit long before half the record credit; runnerd regrants then, not only
+// on the record count or Tick.
+func TestSpoolSinkRegrantsAtHalfByteCredit(t *testing.T) {
+	h := newSinkHarness(t)
+	c := h.dial(h.key, inst)
+	acc := mustRead(t, c, proxy.FrameAccept)
+	g := mustRead(t, c, proxy.FrameGrant)
+	if g.Bytes != runnerspool.GrantBytes {
+		t.Fatalf("grant bytes %d, want %d", g.Bytes, runnerspool.GrantBytes)
+	}
+	path := strings.Repeat("a", 950_000)
+	var sent int64
+	for seq := int64(1); ; seq++ {
+		body, _ := json.Marshal(proxy.RecordBody{Admitted: true, Decision: egress.DecisionLog{
+			Request: egress.Request{RunID: h.id, Host: "example.test", Path: path}, Decision: egress.Allow, RuleSource: "policy:allowed"}})
+		if err := proxy.WriteSinkFrame(c, proxy.SinkFrame{T: proxy.FrameRecord, Gen: acc.Gen, Seq: seq, Body: body}); err != nil {
+			t.Fatal(err)
+		}
+		sent += int64(len(body))
+		mustRead(t, c, proxy.FrameAck)
+		if 2*sent >= g.Bytes {
+			ng := mustRead(t, c, proxy.FrameGrant)
+			if ng.Base != seq {
+				t.Fatalf("regrant base %d, want %d", ng.Base, seq)
+			}
+			return
+		}
+	}
 }

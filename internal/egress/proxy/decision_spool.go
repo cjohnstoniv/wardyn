@@ -95,7 +95,7 @@ func (p *Proxy) spoolReservationBytes(r *http.Request) int64 {
 // slot and then forward requests whose final decision has nowhere to land.
 func (s *decisionSink) reserve(ctx context.Context, need int64) (uuid.UUID, error) {
 	if s.remote != nil {
-		return s.remote.reserve(need)
+		return s.remote.reserve(ctx, need)
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()

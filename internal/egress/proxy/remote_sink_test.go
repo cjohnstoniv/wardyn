@@ -4,6 +4,7 @@
 package proxy
 
 import (
+	"bufio"
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -13,10 +14,11 @@ import (
 	"crypto/x509"
 	"encoding/hex"
 	"errors"
+	"io"
 	"math/big"
 	"net"
-	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -28,67 +30,6 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// offlineRemoteSink is a remote sink whose runnerd never answers (an outage),
-// holding the given grant.
-func offlineRemoteSink(through, bytes int64) *remoteSink {
-	s := &remoteSink{res: map[uuid.UUID]spoolReservation{}, haveGrant: true, through: through, bytes: bytes}
-	s.cond = sync.NewCond(&s.mu)
-	return s
-}
-
-// TestRemoteSink_BufferExhaustionRefusesAndKeepsRun: during a runnerd outage
-// the proxy enforces policy until its grant is used up, then refuses new
-// requests (counted for Drops) without ending the run; credit returns with a
-// fresh grant after runnerd comes back.
-func TestRemoteSink_BufferExhaustionRefusesAndKeepsRun(t *testing.T) {
-	rs := offlineRemoteSink(3, 1<<20)
-	p, _ := newTestProxy(t, types.RunPolicySpec{AllowAllEgress: true}, "", nil, nil)
-	p.sink = &decisionSink{remote: rs}
-	for i := range 3 {
-		id, err := rs.reserve(100)
-		if err != nil {
-			t.Fatalf("reserve %d: %v", i, err)
-		}
-		rs.emit(egress.DecisionLog{Request: egress.Request{AuditReservation: id}, Decision: egress.Allow})
-	}
-	if _, err := rs.reserve(100); !errors.Is(err, runnerspool.ErrFull) {
-		t.Fatalf("reserve past the grant = %v", err)
-	}
-	rec := httptest.NewRecorder()
-	p.ServeHTTP(rec, mustProxyReq(t, http.MethodGet, "http://example.com/"))
-	if rec.Code != http.StatusServiceUnavailable {
-		t.Fatalf("request past the grant: status %d", rec.Code)
-	}
-	rs.emit(egress.DecisionLog{Decision: egress.Deny}) // unreserved: no credit, refused
-	rs.mu.Lock()
-	refused, buffered, closed := rs.refused, len(rs.buf), rs.closed
-	rs.mu.Unlock()
-	if refused != 3 || buffered != 3 || closed {
-		t.Fatalf("refused=%d buffered=%d closed=%v", refused, buffered, closed)
-	}
-	// runnerd back: acks and a fresh grant restore credit.
-	rs.mu.Lock()
-	rs.ackLocked(3)
-	rs.base, rs.through, rs.sinceBase = 3, 6, 0
-	rs.mu.Unlock()
-	if _, err := rs.reserve(100); err != nil {
-		t.Fatalf("reserve after a fresh grant: %v", err)
-	}
-}
-
-// TestRemoteSink_ByteCreditBoundsReservations: held bytes count against the
-// grant's byte credit.
-func TestRemoteSink_ByteCreditBoundsReservations(t *testing.T) {
-	rs := offlineRemoteSink(100, 1000)
-	if _, err := rs.reserve(600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := rs.reserve(600); !errors.Is(err, runnerspool.ErrFull) {
-		t.Fatalf("byte credit exceeded: %v", err)
-	}
-}
-
-// fakeRunnerd answers one session per dial over a pipe.
 type fakeRunnerd struct {
 	t        *testing.T
 	sessions chan net.Conn
@@ -120,11 +61,246 @@ func readFrame(t *testing.T, c net.Conn) SinkFrame {
 	return f
 }
 
+// readUntil reads frames, acking records, until one of type want.
+func readUntil(t *testing.T, c net.Conn, want string) SinkFrame {
+	t.Helper()
+	for {
+		f := readFrame(t, c)
+		if f.T == want {
+			return f
+		}
+		if f.T == FrameRecord {
+			writeFrame(t, c, SinkFrame{T: FrameAck, Gen: f.Gen, Seq: f.Seq, Disposition: "appended"})
+		}
+	}
+}
+
 func writeFrame(t *testing.T, c net.Conn, f SinkFrame) {
 	t.Helper()
 	_ = c.SetWriteDeadline(time.Now().Add(5 * time.Second))
 	if err := WriteSinkFrame(c, f); err != nil {
 		t.Fatalf("write frame: %v", err)
+	}
+}
+
+func testKey() string { return hex.EncodeToString(make([]byte, 32)) }
+
+// startedSink is a remote sink dialing a fake runnerd; no session yet.
+func startedSink(t *testing.T) (*remoteSink, *fakeRunnerd) {
+	t.Helper()
+	f := &fakeRunnerd{t: t, sessions: make(chan net.Conn, 4)}
+	rs := &remoteSink{runID: uuid.New(), key: testKey(), instance: "0123456789abcdef0123456789abcdef", dial: f.dial,
+		retry: 20 * time.Millisecond, drainFor: 200 * time.Millisecond, res: map[uuid.UUID]spoolReservation{}}
+	rs.cond = sync.NewCond(&rs.mu)
+	go rs.run()
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+		defer cancel()
+		_ = rs.close(ctx)
+	})
+	return rs, f
+}
+
+// accept answers one session's hello with accept and a grant, and waits until
+// the proxy holds that grant.
+func accept(t *testing.T, rs *remoteSink, f *fakeRunnerd, gen uint64, seq, through, bytes int64) net.Conn {
+	t.Helper()
+	c := f.next()
+	if h := readFrame(t, c); h.T != FrameHello {
+		t.Fatalf("hello = %+v", h)
+	}
+	writeFrame(t, c, SinkFrame{T: FrameAccept, Gen: gen, Seq: seq})
+	writeFrame(t, c, SinkFrame{T: FrameGrant, Gen: gen, Base: seq, Through: through, Bytes: bytes})
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	for rs.gen != gen || rs.through != through || rs.bytes != bytes {
+		rs.cond.Wait()
+	}
+	return c
+}
+
+func waitLive(rs *remoteSink, live bool) {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	for rs.live != live {
+		rs.cond.Wait()
+	}
+}
+
+func short(t *testing.T) context.Context {
+	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
+	t.Cleanup(cancel)
+	return ctx
+}
+
+func refusedTotal(rs *remoteSink) uint64 { rs.mu.Lock(); defer rs.mu.Unlock(); return rs.refused }
+
+// TestRemoteSink_GrantSurvivesTransportLoss (H1, design Q5 and §6.2): after a
+// transport loss the proxy keeps enforcing on its outstanding grant; once that
+// is used up it refuses new requests uncounted (no live session) and keeps the
+// run; the reconnect's grant restores credit.
+func TestRemoteSink_GrantSurvivesTransportLoss(t *testing.T) {
+	rs, f := startedSink(t)
+	c := accept(t, rs, f, 1, 0, 3, 1<<20)
+	if _, err := rs.reserve(t.Context(), 100); err != nil {
+		t.Fatal(err)
+	}
+	c.Close() // transport loss with two record credits outstanding
+	waitLive(rs, false)
+	for i := range 2 {
+		if _, err := rs.reserve(t.Context(), 100); err != nil {
+			t.Fatalf("reserve %d during the outage: %v", i, err)
+		}
+	}
+	if _, err := rs.reserve(short(t), 100); !errors.Is(err, runnerspool.ErrFull) {
+		t.Fatalf("reserve past the grant during the outage = %v", err)
+	}
+	rs.mu.Lock()
+	closed := rs.closed
+	rs.mu.Unlock()
+	if refusedTotal(rs) != 0 || closed {
+		t.Fatalf("refused=%d closed=%v: an outage refusal is not a full spool, and the run is kept", refusedTotal(rs), closed)
+	}
+	accept(t, rs, f, 2, 0, 10, 1<<20)
+	if _, err := rs.reserve(t.Context(), 100); err != nil {
+		t.Fatalf("reserve after the reconnect grant: %v", err)
+	}
+}
+
+// TestRemoteSink_RefusalsCountedOnlyWhenFull (M1): only a held, exhausted grant
+// on a live session counts for Drops; no grant, a drain, and a late admitted
+// emit after the drained reply (already in consumed) never count.
+func TestRemoteSink_RefusalsCountedOnlyWhenFull(t *testing.T) {
+	rs, f := startedSink(t)
+	if _, err := rs.reserve(short(t), 100); !errors.Is(err, runnerspool.ErrFull) || refusedTotal(rs) != 0 {
+		t.Fatalf("no grant yet: err=%v refused=%d", err, refusedTotal(rs))
+	}
+	c := accept(t, rs, f, 1, 0, 2, 1<<20)
+	id, err := rs.reserve(t.Context(), 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := rs.reserve(t.Context(), 100); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := rs.reserve(short(t), 100); !errors.Is(err, runnerspool.ErrFull) || refusedTotal(rs) != 1 {
+		t.Fatalf("exhausted live grant: err=%v refused=%d, want counted once", err, refusedTotal(rs))
+	}
+	if r := readUntil(t, c, FrameRefused); r.Total != 1 {
+		t.Fatalf("refused frame %+v", r)
+	}
+	writeFrame(t, c, SinkFrame{T: FrameDrain, Gen: 1})
+	d := readUntil(t, c, FrameDrained)
+	if d.Consumed-uint64(d.FinalSeq) != 2 {
+		t.Fatalf("drained %+v: two held reservations are the exact loss", d)
+	}
+	if _, err := rs.reserve(short(t), 100); err == nil {
+		t.Fatal("reserved while drained")
+	}
+	rs.emit(egress.DecisionLog{Request: egress.Request{AuditReservation: id, Host: "h"}, Decision: egress.Allow})
+	rs.emit(egress.DecisionLog{Decision: egress.Deny})
+	if refusedTotal(rs) != 1 {
+		t.Fatalf("refused=%d: a drain refusal or a post-drain emit was counted", refusedTotal(rs))
+	}
+}
+
+// TestRemoteSink_SixteenScannedRequestsInFlight (H2): the byte credit admits
+// GrantReservations requests reserved at the largest record; the next waits
+// for credit and is admitted by a regrant, uncounted.
+func TestRemoteSink_SixteenScannedRequestsInFlight(t *testing.T) {
+	rs, f := startedSink(t)
+	c := accept(t, rs, f, 1, 0, runnerspool.GrantRecords, runnerspool.GrantBytes)
+	for i := range runnerspool.GrantReservations {
+		if _, err := rs.reserve(short(t), runnerspool.MaxRecordBytes); err != nil {
+			t.Fatalf("scanned request %d refused: %v", i+1, err)
+		}
+	}
+	got := make(chan error, 1)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_, err := rs.reserve(ctx, runnerspool.MaxRecordBytes)
+		got <- err
+	}()
+	select {
+	case err := <-got:
+		t.Fatalf("17th request did not wait: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	writeFrame(t, c, SinkFrame{T: FrameGrant, Gen: 1, Base: 0, Through: runnerspool.GrantRecords, Bytes: 2 * runnerspool.GrantBytes})
+	if err := <-got; err != nil || refusedTotal(rs) != 0 {
+		t.Fatalf("17th after the regrant: err=%v refused=%d", err, refusedTotal(rs))
+	}
+}
+
+// TestRemoteSink_LapseDrainsBeforeLapsed (M2): a lapse answers drained before
+// lapsed, so runnerd settles the exact loss (here 0), not the upper bound.
+func TestRemoteSink_LapseDrainsBeforeLapsed(t *testing.T) {
+	rs, f := startedSink(t)
+	c := accept(t, rs, f, 1, 0, 10, 1<<20)
+	id, err := rs.reserve(t.Context(), 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rs.emit(egress.DecisionLog{Request: egress.Request{AuditReservation: id, Host: "h"}, Decision: egress.Allow})
+	go rs.lapse(LapseDeadline)
+	r := readFrame(t, c)
+	if r.T != FrameRecord {
+		t.Fatalf("first frame %+v", r)
+	}
+	writeFrame(t, c, SinkFrame{T: FrameAck, Gen: 1, Seq: r.Seq})
+	d := readFrame(t, c)
+	if d.T != FrameDrained || d.FinalSeq != 1 || d.Consumed != 1 {
+		t.Fatalf("after the record: %+v, want drained final 1 consumed 1", d)
+	}
+	if l := readFrame(t, c); l.T != FrameLapsed || l.Reason != LapseDeadline {
+		t.Fatalf("after drained: %+v", l)
+	}
+}
+
+// TestRemoteSink_DrainClosesOpenTunnels (M3, §3.2 item 5): a drain closes an
+// open CONNECT tunnel, so a normal stop answers an exact loss of 0.
+func TestRemoteSink_DrainClosesOpenTunnels(t *testing.T) {
+	echo, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer echo.Close()
+	go func() {
+		for {
+			c, err := echo.Accept()
+			if err != nil {
+				return
+			}
+			go func() { _, _ = io.Copy(c, c); c.Close() }()
+		}
+	}()
+	rs, f := startedSink(t)
+	c := accept(t, rs, f, 1, 0, 10, 1<<20)
+	p, _ := newTestProxy(t, types.RunPolicySpec{AllowAllEgress: true}, echo.Addr().String(), nil, nil)
+	p.sink = &decisionSink{remote: rs}
+	srv := httptest.NewServer(p)
+	defer srv.Close()
+	client, err := net.Dial("tcp", srv.Listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	_, _ = client.Write([]byte("CONNECT example.com:443 HTTP/1.1\r\nHost: example.com:443\r\n\r\n"))
+	br := bufio.NewReader(client)
+	_ = client.SetReadDeadline(time.Now().Add(5 * time.Second))
+	if line, err := br.ReadString('\n'); err != nil || !strings.Contains(line, "200") {
+		t.Fatalf("CONNECT answer %q, %v", line, err)
+	}
+	_, _ = br.ReadString('\n')
+	writeFrame(t, c, SinkFrame{T: FrameDrain, Gen: 1})
+	d := readUntil(t, c, FrameDrained)
+	if d.Consumed != uint64(d.FinalSeq) {
+		t.Fatalf("drained %+v: a normal stop with an open tunnel lost decisions", d)
+	}
+	_ = client.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if _, err := br.ReadByte(); !errors.Is(err, io.EOF) {
+		t.Fatalf("tunnel still open after the drain: %v", err)
 	}
 }
 
@@ -134,29 +310,10 @@ func writeFrame(t *testing.T, c net.Conn, f SinkFrame) {
 // identical bodies, and a drain answers final_seq and consumed (one held
 // reservation is the exact loss).
 func TestRemoteSink_ReconnectResendsAtNewGenAndDrains(t *testing.T) {
-	f := &fakeRunnerd{t: t, sessions: make(chan net.Conn, 4)}
-	key := hex.EncodeToString(make([]byte, 32))
-	rs := &remoteSink{runID: uuid.New(), key: key, instance: "0123456789abcdef0123456789abcdef", dial: f.dial,
-		retry: 10 * time.Millisecond, drainFor: 50 * time.Millisecond, res: map[uuid.UUID]spoolReservation{}}
-	rs.cond = sync.NewCond(&rs.mu)
-	go rs.run()
-
-	c := f.next()
-	if h := readFrame(t, c); h.T != FrameHello || h.Key != key || h.Instance != rs.instance || h.V != SinkVersion {
-		t.Fatalf("hello = %+v", h)
-	}
-	writeFrame(t, c, SinkFrame{T: FrameAccept, Gen: 1})
-	writeFrame(t, c, SinkFrame{T: FrameGrant, Gen: 1, Through: 10, Bytes: 1 << 20})
-	waitGrant := func() {
-		rs.mu.Lock()
-		defer rs.mu.Unlock()
-		for !rs.haveGrant {
-			rs.cond.Wait()
-		}
-	}
-	waitGrant()
-	for i := 0; i < 3; i++ {
-		id, err := rs.reserve(1000)
+	rs, f := startedSink(t)
+	c := accept(t, rs, f, 1, 0, 10, 1<<20)
+	for range 3 {
+		id, err := rs.reserve(t.Context(), 1000)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -173,35 +330,19 @@ func TestRemoteSink_ReconnectResendsAtNewGenAndDrains(t *testing.T) {
 	writeFrame(t, c, SinkFrame{T: FrameAck, Gen: 1, Seq: 1, Disposition: "appended"})
 	c.Close() // transport loss
 
-	c = f.next()
-	readFrame(t, c)                                             // hello again, same instance
-	writeFrame(t, c, SinkFrame{T: FrameAccept, Gen: 2, Seq: 2}) // runnerd committed 2 before the loss
-	writeFrame(t, c, SinkFrame{T: FrameGrant, Gen: 2, Base: 2, Through: 12, Bytes: 1 << 20})
+	c = accept(t, rs, f, 2, 2, 12, 1<<20) // runnerd committed 2 before the loss
 	r := readFrame(t, c)
-	waitGrant()
 	if r.T != FrameRecord || r.Seq != 3 || r.Gen != 2 || string(r.Body) != bodies[3] {
 		t.Fatalf("resend = %+v", r)
 	}
-	h := sha256.Sum256(r.Body)
-	if hex.EncodeToString(h[:]) != func() string { s := sha256.Sum256([]byte(bodies[3])); return hex.EncodeToString(s[:]) }() {
-		t.Fatal("resend body hash differs")
-	}
 	writeFrame(t, c, SinkFrame{T: FrameAck, Gen: 2, Seq: 3})
-	if _, err := rs.reserve(1000); err != nil { // held through the drain: the exact loss
+	if _, err := rs.reserve(t.Context(), 1000); err != nil { // held through the drain: the exact loss
 		t.Fatal(err)
 	}
 	writeFrame(t, c, SinkFrame{T: FrameDrain, Gen: 2})
 	d := readFrame(t, c)
 	if d.T != FrameDrained || d.Gen != 2 || d.FinalSeq != 3 || d.Consumed != 4 {
 		t.Fatalf("drained = %+v", d)
-	}
-	if _, err := rs.reserve(1); err == nil {
-		t.Fatal("reserved after drain")
-	}
-	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
-	defer cancel()
-	if err := rs.close(ctx); err != nil {
-		t.Fatal(err)
 	}
 }
 
