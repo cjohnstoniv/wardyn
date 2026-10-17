@@ -58,7 +58,10 @@ type AccessMCP struct {
 // allowed, needs_approval or not_allowed; Reason (not_allowed only) is clamped,
 // denied_list, capability or always_deny.
 type AccessHost struct {
-	Host    string           `json:"host"`
+	Host string `json:"host"`
+	// Port is the port the host is spelled with, absent when it names none. A spelled port is matched
+	// as the proxy matches one: an allow or deny entry for another port does not cover it.
+	Port    int              `json:"port,omitempty"`
 	Via     string           `json:"via"`
 	Rows    []string         `json:"rows"`
 	Verdict string           `json:"verdict"`

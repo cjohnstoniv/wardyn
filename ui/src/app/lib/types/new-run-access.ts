@@ -51,6 +51,8 @@ export interface AccessRow {
 
 export interface AccessHost {
   host: string;
+  // The port the host is spelled with; absent when it names none.
+  port?: number;
   via: AccessVia;
   // The rows that bring it, or ["policy"] when no row does.
   rows: string[];

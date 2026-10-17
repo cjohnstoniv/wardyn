@@ -17,6 +17,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/adoscope"
+	"github.com/cjohnstoniv/wardyn/internal/egress/domainmatch"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
@@ -192,6 +193,23 @@ func TestAccessHostVerdict(t *testing.T) {
 		{"listed.example", viaEgress, nil, false, verdictAllowed, ""},
 		{"a.wild.example", viaEgress, nil, false, verdictAllowed, ""},
 		{"ssh.github.com:443", viaEgress, nil, false, verdictAllowed, ""},
+		// A spelled port is matched as the proxy matches it: another port is neither allowed nor denied by an entry.
+		{"ssh.github.com:2222", viaEgress, nil, false, verdictNotAllowed, hostReasonAlwaysDeny},
+		{"listed.example:8443", viaEgress, nil, false, verdictAllowed, ""},
+		{"a.wild.example:8443", viaEgress, nil, false, verdictAllowed, ""},
+		{"blocked.example:8443", viaEgress, nil, false, verdictNotAllowed, hostReasonDeniedList},
+		{"blocked.example:8443", viaEgress, func(s types.RunPolicySpec) types.RunPolicySpec {
+			s.AllowAllEgress, s.DeniedDomains = true, []string{"blocked.example:443"}
+			return s
+		}, false, verdictAllowed, ""},
+		{"blocked.example:443", viaEgress, func(s types.RunPolicySpec) types.RunPolicySpec {
+			s.AllowAllEgress, s.DeniedDomains = true, []string{"blocked.example:443"}
+			return s
+		}, false, verdictNotAllowed, hostReasonDeniedList},
+		{"a.wild.example:8443", viaEgress, func(s types.RunPolicySpec) types.RunPolicySpec {
+			s.AllowedDomains = []string{"*.wild.example:443"}
+			return s
+		}, false, verdictNotAllowed, hostReasonAlwaysDeny},
 		{"blocked.example", viaModelLane, nil, false, verdictNotAllowed, hostReasonDeniedList},
 		{"api.provider.example", viaModelLane, nil, false, verdictAllowed, ""},
 		{"other.example", viaEgress, nil, false, verdictNotAllowed, hostReasonAlwaysDeny},
@@ -203,7 +221,8 @@ func TestAccessHostVerdict(t *testing.T) {
 		if tc.spec != nil {
 			sp = tc.spec(spec.Clone())
 		}
-		v, r := accessHostVerdict(client.AccessHost{Host: tc.host, Via: tc.via}, sp, tc.clamped)
+		_, _, port := domainmatch.Classify(tc.host)
+		v, r := accessHostVerdict(client.AccessHost{Host: tc.host, Port: port, Via: tc.via}, sp, tc.clamped)
 		if v != tc.verdict || r != tc.reason {
 			t.Errorf("%s via %s (clamped %v) = %s/%s, want %s/%s", tc.host, tc.via, tc.clamped, v, r, tc.verdict, tc.reason)
 		}
