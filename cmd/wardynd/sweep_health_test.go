@@ -122,6 +122,7 @@ func TestSweepHealth_DefaultInstallRegistersItsSweepsAtDefaultIntervals(t *testi
 		sweephealth.OrphanedBuild:    30 * time.Minute,
 		sweephealth.RunOutput:        time.Minute,
 		sweephealth.RunQueue:         10 * time.Second,
+		sweephealth.AWSSSORenewal:    time.Minute,
 	}
 	got := map[string]time.Duration{}
 	for _, s := range tr.Registered() {
@@ -216,12 +217,13 @@ func TestSweepHealth_RegistrationDoesNotDependOnTheLock(t *testing.T) {
 	}
 }
 
-// failingSweeps stands in for the five sweeps of this package, each with a
+// failingSweeps stands in for the sweeps of this package, each with a
 // dependency that fails.
 type failingSweeps struct{ err error }
 
 func (f failingSweeps) SweepRunSecrets(context.Context) (int, error)         { return 0, f.err }
 func (f failingSweeps) SweepExpiredCredentials(context.Context) (int, error) { return 0, f.err }
+func (f failingSweeps) RenewAWSSSOCredentials(context.Context) (int, error)  { return 0, f.err }
 func (f failingSweeps) Sweep(time.Duration) (int, error)                     { return 0, f.err }
 func (f failingSweeps) SweepTerminalSandboxesPage(context.Context, store.Page) (int, int, error) {
 	return 0, 0, f.err
@@ -237,6 +239,9 @@ func TestSweepers_ErroringTickIsAnAttemptNotASuccess(t *testing.T) {
 		},
 		sweephealth.CredentialExpiry: func(ctx context.Context, tr *sweephealth.Tracker, f failingSweeps) {
 			runCredentialSweeper(ctx, f, time.Millisecond, tr)
+		},
+		sweephealth.AWSSSORenewal: func(ctx context.Context, tr *sweephealth.Tracker, f failingSweeps) {
+			runAWSSSORenewer(ctx, f, time.Millisecond, tr)
 		},
 		sweephealth.RecordingRetention: func(ctx context.Context, tr *sweephealth.Tracker, f failingSweeps) {
 			runRecordingSweeper(ctx, f, nil, time.Millisecond, time.Hour, tr)

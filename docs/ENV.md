@@ -277,6 +277,10 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_GOVERN_ADMIN_RUNS_EXEMPT` | CSV | (unset) | the lanes left ungoverned under `WARDYN_GOVERN_ADMIN_RUNS`; the only value is `recording` (flag `-govern-admin-runs-exempt`). [Details](#wardyn_govern_admin_runs_exempt) |
 | `WARDYN_AWS_SSO_ENDPOINT_OVERRIDE` | string (URL) | (unset) | **TEST ONLY.** Re-points **both** AWS IAM Identity Center services at this base URL (flag `-aws-sso-endpoint-override`; `ValidateAWSSSOEndpointOverride`, [`internal/api/awssso_endpoint.go`](../internal/api/awssso_endpoint.go)); **REFUSED unless `WARDYN_ALLOW_TEST_ENDPOINTS=true`**. [Details](#wardyn_aws_sso_endpoint_override) |
 | `WARDYN_AWS_SSO_PROXY_INJECT` | enum | `on` | whether a captured AWS SSO session is injected **proxy-side** or written into the sandbox (flag `-aws-sso-proxy-inject`); on a private-endpoint estate whose corporate proxy is also TLS-intercepting, the MITM re-origination fails closed unless `WARDYN_TRUSTED_CA_FILE` is ALSO staged. [Details](#wardyn_aws_sso_proxy_inject) |
+| `WARDYN_AWS_SSO_REFRESH_SKEW` | duration | `10m` | how long before a captured AWS SSO session's access token expires Wardyn renews it, at dispatch and for a live run (flag `-aws-sso-refresh-skew`); `5m` to `30m`. [Details](#wardyn_aws_sso_refresh_skew) |
+| `WARDYN_AWS_SSO_REFRESH_SERVE_FLOOR` | duration | `2m` | the validity an AWS SSO access token must keep to be served while another renewal of it is in flight (flag `-aws-sso-refresh-serve-floor`); `30s` to `10m`, below the skew. [Details](#wardyn_aws_sso_refresh_serve_floor) |
+| `WARDYN_AWS_SSO_REFRESH_RETRY_DELAY` | duration | `400ms` | the pause before an AWS SSO renewal's one retry after a throttle or a network failure (flag `-aws-sso-refresh-retry-delay`); `100ms` to `10s`. [Details](#wardyn_aws_sso_refresh_retry_delay) |
+| `WARDYN_AWS_SSO_REFRESH_TIMEOUT` | duration | `10s` | the bound on one AWS SSO token request (flag `-aws-sso-refresh-timeout`); `2s` to `1m`. [Details](#wardyn_aws_sso_refresh_timeout) |
 | `WARDYN_ALLOW_TEST_ENDPOINTS` | bool | `false` | override: acknowledge that this deployment is a **test** deployment (flag `-allow-test-endpoints`); it unlocks exactly two things, one being `WARDYN_AWS_SSO_ENDPOINT_OVERRIDE` (`resolveAWSSSOEndpointOverride`, [`cmd/wardynd/boot_flags.go`](../cmd/wardynd/boot_flags.go)). [Details](#wardyn_allow_test_endpoints) |
 | `WARDYN_RECORDING_MOUNT` | string | (unset) | recording mount override read on the docker runner path (`runner_docker.go`) |
 | `WARDYN_SSH_LISTEN` | string | daemon: (unset); **one-line install and desktop envelope: `:2222`** | SSH gateway listen address, e.g. `:2222` (flag `-ssh-listen`). **Empty = off = no listener, no new surface** — the host key is not even generated/persisted unless this is set (`buildOptionalFeatures`, [`cmd/wardynd/boot_deps.go`](../cmd/wardynd/boot_deps.go)). [Details](#wardyn_ssh_listen) |
@@ -1477,6 +1481,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - `on` (the default): the sandbox's SSO token cache holds an inert placeholder.
 - The real access token is set on the wire as `x-amz-sso_bearer_token` at the run's own `portal.sso.<region>` host (TLS-MITM, paired injection grant).
 - And a session that lapses **mid-run HOLDS** the sandbox's next `GetRoleCredentials` call while its owner signs in again (`WARDYN_CREDENTIAL_REAUTH_TIMEOUT`, below) instead of failing the run.
+- A live run's session is renewed before it lapses (`WARDYN_AWS_SSO_REFRESH_SKEW`, below). So the hold is for a session that could not be renewed: its refresh token was refused or is gone, or AWS failed until it expired.
 - `off`: the pre-0.7.6 behaviour — the token is written into the sandbox, no `portal.sso` MITM, no hold, no sign-in requests.
   - A `bedrock_sso` run cannot be placed on a person's own runner with it off: it is refused at Review, preflight and create (`placement_credential`).
 - An AWS CLI component has no `off` lane: with the switch off, every run door refuses it (`component_cli_aws_inject_off`), and so does dispatch.
@@ -1489,6 +1494,35 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - **Corporate-proxy stopgap:** on a private-endpoint estate whose corporate proxy is also TLS-intercepting, the MITM re-origination fails closed exactly like every other dial failure (`builtin:dial-failed`, no detail).
 - Unless `WARDYN_TRUSTED_CA_FILE` below is ALSO staged onto the `wardyn-proxy` sidecar.
 - Flipping this switch `off` is the sanctioned stopgap while that is sorted out, at the cost of the sandbox residency this switch exists to avoid — see [docs/adoption/aws-sso-mitm-upstream-proxy.md](adoption/aws-sso-mitm-upstream-proxy.md).
+
+### `WARDYN_AWS_SSO_REFRESH_SKEW`
+
+- How long before a captured AWS SSO session's access token expires Wardyn renews it, with the stored refresh token (flag `-aws-sso-refresh-skew`, default `10m`).
+- It applies at dispatch and at create, to the proxy's resolve for a live run, and to the AWS SSO renewer.
+- A session AWS refused to renew reads `expiring` on the model-access grade inside the same window.
+- The renewer runs on the sweeper leader every minute. It renews a live run's session inside this window while the token still works, so a quiet run never reaches the sign-in hold for a session a renewal could keep.
+- A live run is pending, starting, running or waiting, and not paused, lost or revoked. The broker would still mint its grant, and its provider or AWS CLI row is unchanged since dispatch.
+- Each renewal takes the person's cross-replica lock and writes one `harness.credential.refresh` row, with `trigger: renewer` when the renewer made it.
+- A renewal that fails is retried on the next pass while the token is valid. A refresh token AWS refused or retired is not retried; the run's next request holds for a sign-in as before.
+- `5m` to `30m`; a value outside refuses boot. A skew near the token's own lifetime would renew on every pass.
+
+### `WARDYN_AWS_SSO_REFRESH_SERVE_FLOOR`
+
+- The validity an AWS SSO access token must keep to be served while another replica's renewal of it is in flight (flag `-aws-sso-refresh-serve-floor`, default `2m`).
+- Below it, a caller waits for that renewal instead of handing a run a token that lapses under it.
+- `30s` to `10m`, and below `WARDYN_AWS_SSO_REFRESH_SKEW`; anything else refuses boot.
+
+### `WARDYN_AWS_SSO_REFRESH_RETRY_DELAY`
+
+- The pause before an AWS SSO renewal's one retry after a throttle or a network failure (flag `-aws-sso-refresh-retry-delay`, default `400ms`).
+- A refused or retired refresh token is never retried.
+- `100ms` to `10s`; anything else refuses boot.
+
+### `WARDYN_AWS_SSO_REFRESH_TIMEOUT`
+
+- The bound on one AWS SSO `CreateToken` request (flag `-aws-sso-refresh-timeout`, default `10s`).
+- A create waiting on another replica's renewal waits twice this plus the retry delay and one second.
+- `2s` to `1m`; anything else refuses boot.
 
 ### `WARDYN_ALLOW_TEST_ENDPOINTS`
 

@@ -135,8 +135,8 @@ func (s *Server) handleErasePersonCredentials(w http.ResponseWriter, r *http.Req
 //
 //  1. lockAWSSSOOwner(owner): an AWS SSO renewal in flight finishes and
 //     persists first, then is erased with the rest. The erase waits at most the
-//     renewal's own bound, 2 x awsSSORefreshTimeout plus its retry delay, about
-//     21 seconds.
+//     renewal's own bound, 2 x its CreateToken timeout plus its retry delay,
+//     about 21 seconds at the defaults (AWSSSORefreshTuning).
 //  2. The Entra redemption lock (inside eraseADOSignIn), taken even when no
 //     sign-in row is configured, so the order never depends on configuration.
 //  3. adoOwnPATWriteMu, innermost, held only around EraseOwner (the deletes

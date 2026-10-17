@@ -457,6 +457,9 @@ func validateBootPosture(f *bootFlags, posture tlsPosture) error {
 	if err := validateOIDCSessionTTL(*f.oidcSessionTTL); err != nil {
 		return err
 	}
+	if err := f.ssoRefresh.validate(); err != nil {
+		return err
+	}
 	if err := f.sessionLife.validate(); err != nil {
 		return err
 	}

@@ -363,6 +363,9 @@ type Config struct {
 	// downgrade. See runs_dispatch_sso_inject.go for the default and docs/ENV.md
 	// for the operator-facing contract.
 	AWSSSOProxyInject bool
+	// AWSSSORefresh is the operator's tuning of the AWS SSO renewal; a zero
+	// field keeps its default (AWSSSORefreshTuning, awssso_refresh.go).
+	AWSSSORefresh AWSSSORefreshTuning
 	// Secrets is the at-rest secret store. It backs the admin secret-management
 	// endpoints (PUT/DELETE/list — values are NEVER readable via the API) and
 	// the internal injection-resolve endpoint the proxy calls at startup. Nil
@@ -888,6 +891,8 @@ type Server struct {
 	// and passes Review until its own dispatch is refused and re-marks it.
 	// Bounded by awsSSORefusedMax.
 	ssoRefreshRefused map[string]string
+	// ssoRenew is the background renewer's per-credential schedule (awssso_renewer.go).
+	ssoRenew awsSSORenewSchedule
 	// adoEntraTokens reuses a minted Azure DevOps access token across the
 	// per-host grants of one run (injection_ado.go), so a sidecar's boot does
 	// not rotate one person's refresh token once per host.

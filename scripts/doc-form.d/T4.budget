@@ -30,4 +30,4 @@
 # threatmodel/THREAT-MODEL.md 62948 adds 2220, measured: the 0.9.3 runner sweep (B13 organisation runner, trust class, resident delivery, recording, runner CA, CLI doors under a ceiling; residuals 89-90), corrected after review for NetworkPolicy defaults, the sandbox CA, erase closure and trust bypass.
 # threatmodel/THREAT-MODEL.md 63065 adds 117 over 62948, measured: the cloud-SSO model credential's deliberate exemption from the CC3 floor (0.9.3 ASK-6).
 # threatmodel/THREAT-MODEL.md 63093 adds 28 over 63065, measured: the cloud-SSO exemption bullets narrowed to what the code does (0.9.3 ASK-6 review).
-threatmodel/THREAT-MODEL.md=63093 share=20
+threatmodel/THREAT-MODEL.md=63123 share=20

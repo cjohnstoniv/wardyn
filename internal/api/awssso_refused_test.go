@@ -288,13 +288,13 @@ func TestAWSSSOCredentialState_RefusedInsideTheSkewIsExpiring(t *testing.T) {
 	now := awsSSOTestFixedNow
 	b := awsSSOBlob{RefreshToken: "rt", ClientID: "cid", ClientSecret: "csec",
 		ExpiresAt: now.Add(5 * time.Minute), RegistrationExpiresAt: now.Add(90 * 24 * time.Hour)}
-	if got := awsSSOCredentialState(b, true, false, true, now); got != modelAccessExpiring {
+	if got := awsSSOCredentialState(b, true, false, true, now, awsSSORefreshSkew); got != modelAccessExpiring {
 		t.Errorf("refused inside the skew = %q, want expiring", got)
 	}
-	if got := modelAccessDeadline(b, true, false, true, now); got != b.ExpiresAt.UTC().Format(time.RFC3339) {
+	if got := modelAccessDeadline(b, true, false, true, now, awsSSORefreshSkew); got != b.ExpiresAt.UTC().Format(time.RFC3339) {
 		t.Errorf("refused deadline = %q, want the access token's own expiry", got)
 	}
-	if got := awsSSOCredentialState(b, true, false, false, now); got != modelAccessLive {
+	if got := awsSSOCredentialState(b, true, false, false, now, awsSSORefreshSkew); got != modelAccessLive {
 		t.Errorf("the same blob unrefused = %q, want live", got)
 	}
 }

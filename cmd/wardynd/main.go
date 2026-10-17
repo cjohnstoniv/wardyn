@@ -462,6 +462,7 @@ func run() error {
 		AWSSSOEndpointOverride:   awsSSOEndpointOverride,
 		AllowTestEndpoints:       *f.allowTestEndpoints,
 		AWSSSOProxyInject:        api.ResolveAWSSSOProxyInject(*f.awsSSOProxyInject),
+		AWSSSORefresh:            f.ssoRefresh.tuning(),
 		HarnessLoginCPUMillis:    *f.harnessLoginCPUMillis,
 		HarnessLoginMemoryMiB:    *f.harnessLoginMemoryMiB,
 		ProxyURL:                 *f.proxyURL,

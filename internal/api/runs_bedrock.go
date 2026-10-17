@@ -407,7 +407,7 @@ func awsSSOLoginConfigFileContents(startURL, region string) string {
 // The SDK loads a cache without those three fine: it validates accessToken and
 // expiresAt on load, and the registration fields matter only to its OWN refresh
 // attempt. aws-sdk-js-v3 makes that attempt within 5 minutes of expiry, which
-// awsSSORefreshSkew (10 min) keeps a freshly dispatched run out of; botocore
+// awsSSORefreshSkew (10 min by default) keeps a freshly dispatched run out of; botocore
 // uses a 15-minute window but does not throw on their absence — it loads such a
 // cache at 50 minutes and at 3 minutes of remaining validity alike (verified
 // against botocore 1.43.93) and raises only once the token has EXPIRED. A run
