@@ -1,6 +1,6 @@
 # 0.9.3 Kubernetes-backed runner: the shipped design
 
-Status: **Draft.** Trimmed from the K1 design (rev 15) to the decisions 0.9.3 ships, with the questions the build settled. Operators read [Organisation runners in a Kubernetes cluster](../../operations/k8s-runners.md); this note is why it is shaped that way.
+Status: **Draft.** Trimmed from the design's rev 15 to the decisions 0.9.3 ships, with the questions the build settled. Operators read [Organisation runners in a Kubernetes cluster](../../operations/k8s-runners.md); this note is why it is shaped that way.
 
 <!-- K7-VERIFY: checked against prep/093-final 841dbea50 and the K6 kind run (both kubelets green); the one open item is the org-side containment handling, marked below. -->
 
@@ -31,7 +31,7 @@ Status: **Draft.** Trimmed from the K1 design (rev 15) to the decisions 0.9.3 sh
 | Re-key | None in 0.9.3: new token, fresh volume, revoke |
 
 - Every `runners.owner` equality on the runner-session path accepts an empty owner only when `owner_kind = org` and the row is claimed and unrevoked.
-- The registration token links to the runner (`runners.registration_token_id`, added by K3a) so the claim can compare claimer and minter by principal or case-folded email.
+- The registration token links to the runner (`runners.registration_token_id`, added with the organisation-runner claim) so the claim can compare claimer and minter by principal or case-folded email.
 - The trust class is `org_cluster` from the insert, because the coupling CHECK forces it. The claim stamps the writer and the time.
 
 
@@ -40,7 +40,7 @@ Status: **Draft.** Trimmed from the K1 design (rev 15) to the decisions 0.9.3 sh
 - The set is `personal` < `managed_device` < `org_cluster`. `org_cluster` holds if and only if `owner_kind = org` (a database CHECK).
 - Only `PUT /api/v1/runners/{id}/trust {trust_class, reason}` changes it afterwards: security-operator tier, the governance-change path, audited `runner.trust.write {before, after}`.
 - No self-upgrade: the registration request is strict-decoded, and capabilities and posture never feed the column. Reflection and PG tests pin it.
-- Delivery policy (K4): `by_trust.<class>.classes.<credential class>` falls back to the global row for every class, then to `refuse`. A plan is judged per trust class among the eligible candidates, highest first. Resident delivery and revive re-judge against the bound runner's current trust and refuse `runner_trust_changed` on any difference.
+- Delivery policy: `by_trust.<class>.classes.<credential class>` falls back to the global row for every class, then to `refuse`. A plan is judged per trust class among the eligible candidates, highest first. Resident delivery and revive re-judge against the bound runner's current trust and refuse `runner_trust_changed` on any difference.
 - The CC3 floor and cluster-only trusted-output runs are unchanged.
 
 
@@ -111,7 +111,7 @@ A deleted API object does not prove a process stopped. NotFound is never evidenc
 | Pending states | `contained_agent_only` and `contained_pending_delete`; reported as `ContainmentPending`, never plain containment; NetworkPolicies held until evidence |
 
 - Name reuse is detected from the before, after, anchor and closing lists. A reuse latches a generation; only the two-person record releases such a run.
-- The unbound-pod arm (a pod deleted before it was bound) ships enabled. K6's bind and delete race, serial and overlapping with both winning orders, passed on the 1.31 floor and on 1.35.
+- The unbound-pod arm (a pod deleted before it was bound) ships enabled. The kind conformance run's bind and delete race, serial and overlapping with both winning orders, passed on the 1.31 floor and on 1.35.
 - Operational threat model: this guards against honest failure, not against a holder of a node's kubelet credentials. Two kubelets under one Node name are unsupported.
 
 <!-- K7-VERIFY: in prep/093-final 841dbea50 the org side of this table is absent: no `ContainmentPending` handling, no "node powered off" form or route, no `relay_ip_fenced` run-lost reason. runnerd's side is shipped. -->
@@ -134,7 +134,7 @@ A deleted API object does not prove a process stopped. NotFound is never evidenc
 | Question | Resolution |
 |---|---|
 | No decision sink at create | The create is refused; a failing sink refuses boot |
-| Unbound arm switch | Enabled in code with no switch; K6's race gate decides whether it stays |
+| Unbound arm switch | Enabled in code with no switch; the kind conformance run's race gate decides whether it stays |
 | Tier 2 offered | Only for a container with no anchored baseline or no terminated ID |
 | Node record transport | `PendingAction.NodeRecord` on a `stop_proxy` action |
 | Node list fails before a create | The create is refused |
@@ -156,7 +156,7 @@ A deleted API object does not prove a process stopped. NotFound is never evidenc
 | R6 | Decision loss is exact after a drain and at most 5,000 records after an abnormal end |
 | R7 | A trust downgrade does not pull values already delivered |
 | R8 | One architecture per runner |
-| R9 | `ipBlock` semantics and enforcement for a pod marked for deletion depend on the CNI; the K6 probe records kind's behaviour |
+| R9 | `ipBlock` semantics and enforcement for a pod marked for deletion depend on the CNI; the kind probe records kind's behaviour |
 | R10 | A proxy that lapses or exits ends its run, with no revive |
 | R11 | A pod that cannot be confirmed stopped may serve cached-policy egress until its proxy deadline; the run waits in termination unknown |
 | R12 | Clusters that rewrite pod-to-ClusterIP source addresses are unsupported |

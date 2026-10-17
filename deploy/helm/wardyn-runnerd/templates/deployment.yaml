@@ -23,7 +23,7 @@ metadata:
   labels:
     {{- include "runnerd.labels" . | nindent 4 }}
 spec:
-  # One writer: Recreate plus daemon.lock on the volume. Never raise replicas.
+  # One writer: Recreate plus serve.lock on the volume. Never raise replicas.
   replicas: 1
   strategy:
     type: Recreate

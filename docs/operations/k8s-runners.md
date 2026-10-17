@@ -55,6 +55,7 @@
 4. Write `values.yaml`. The chart refuses to render without `org`, `runsNamespace`, `sandbox.arch` and `registration.existingSecret`.
 
    ```yaml
+   fullnameOverride: wardyn-runner
    org: https://wardyn.example.com
    runsNamespace: wardyn-runs
    sandbox:
@@ -86,7 +87,7 @@
    ```
 
 7. A second security operator, signed in as themselves (an API token cannot claim), finds the runner with `wardyn runner list --all` and claims it with `wardyn runner claim-org <runner-id> --fingerprint <fingerprint>` (`POST /api/v1/runners/{id}/claim-org`). An unclaimed runner expires after 24 hours.
-8. An admin adds the runner to an organisation pool with `PUT /api/v1/runner-pools/{pool}/runners/{runner}`. `wardyn runner pool add` does not take organisation runners, and a runner serves one pool only.
+8. An admin adds the runner to an organisation pool with `PUT /api/v1/runner-pools/{pool}/runners/{runner}` (`DELETE` on the same path removes it). `wardyn runner pool add` puts only remote-hosted runners in an organisation pool, not an organisation runner, and a runner serves one pool only.
 9. Confirm in *Admin → Runners* that the runner is Online, reports its architecture and shows the trust class "Organization cluster". Runnerd boots only on an `enforced` canary verdict, so a running pod has passed it.
 10. Delete the registration Secret. The chart mounts it optional, so restarts keep working.
 
@@ -139,9 +140,9 @@
 
 | Object | Rule |
 |---|---|
-| Deployment | One replica, `Recreate`. Never raise the replicas: `daemon.lock` keeps one writer |
+| Deployment | One replica, `Recreate`. Never raise the replicas: `serve.lock` keeps one writer |
 | RBAC, runs namespace | The control-plane chart's sandbox Role plus `pods: patch` (for the stop-proof finalizer). No `services`, no `watch` |
-| RBAC, runner namespace | `secrets: create, get, delete` |
+| RBAC, runner namespace | `secrets: create, get, delete, deletecollection` |
 | RBAC, cluster | `runtimeclasses: get` and `nodes: list` only |
 | Agent pod policy | Egress only to its proxy |
 | Proxy pod policy | Egress as before, plus runnerd on the relay and sink ports |
@@ -250,7 +251,7 @@ A run on a lost node is fenced at the relay before its first delete. Both pods s
 
 ### Revoked and gone
 
-A revoked runner whose runnerd never returns leaves objects behind. Admin → Runners shows the label-scoped commands. In this order:
+A revoked runner whose runnerd never returns leaves objects behind. Select them in the runs namespace by the labels runnerd stamps, `wardyn.managed=true,wardyn.runner-id=<runner-id>`. In this order:
 
 1. For each run whose node is confirmed healthy or powered off, remove only `wardyn.dev/stop-proof` from its pods, with a JSON patch that carries a `test` op.
 2. Confirm those pods are gone (NotFound, not merely Terminating).
@@ -275,13 +276,13 @@ A revoked runner whose runnerd never returns leaves objects behind. Admin → Ru
 
 - Do not point `upstream_proxy` at an address inside the cluster. Runnerd does not refuse it at boot.
 
-## What K6 proves
+## What the kind conformance run proves
 
 `scripts/k6-kind-conformance.sh` (`WARDYN_TEST_K8S=1`) is the proof.
 
 - It builds a kind cluster of one control plane and two workers on Calico, and installs this chart with its rendered Role against a fake organisation.
 - It runs [`test/k6`](../../test/k6/k6_test.go) under runnerd's own ServiceAccount token, never cluster-admin.
-- It runs on the 1.31 floor (`kindest/node:v1.31.4`) and on `kindest/node:v1.35.0`. Both passed the 19 cases below on the 0.9.3 tree.
+- It runs on the 1.31 floor (`kindest/node:v1.31.4`) and on `kindest/node:v1.35.0`. Both passed all 19 cases on the 0.9.3 tree; the table groups those with an operator-visible result.
 
 | Case | What it shows |
 |---|---|
