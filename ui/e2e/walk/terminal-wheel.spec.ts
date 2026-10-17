@@ -15,16 +15,18 @@
  * Needs a live cluster whose sandbox image carries the lane's tmux.conf.
  *
  * Self-skips without WARDYN_TEST_K8S=1, same as every other file here.
+ * Signs in through Dex, or from a stored session (WARDYN_WALK_STORAGE_STATE) on an estate without Dex.
  */
 
 import { expect, test } from "@playwright/test";
-import { MEMBER_EMAIL, SANDBOX_UP, dexSignIn, launchFromReview, viewLaunchedRun, walkNewRunToReview } from "./helpers";
+import { ENTRA_STORAGE_STATE, MEMBER_EMAIL, SANDBOX_UP, launchFromReview, viewLaunchedRun, walkNewRunToReview, walkSignIn } from "./helpers";
 import { termText } from "../terminal-text";
 
 test.skip(process.env.WARDYN_TEST_K8S !== "1", "live cluster walk: set WARDYN_TEST_K8S=1");
+test.use({ storageState: ENTRA_STORAGE_STATE });
 
 test("the wheel scrolls tmux history and does not recall bash history", async ({ page }) => {
-  await dexSignIn(page, MEMBER_EMAIL);
+  await walkSignIn(page, MEMBER_EMAIL);
   await page.goto("/runs/new");
   // An Environment sandbox is the terminal: interactive, no agent.
   await walkNewRunToReview(page, { shape: "environment" });
