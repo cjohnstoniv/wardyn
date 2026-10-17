@@ -22,7 +22,7 @@ type reasserted struct {
 
 // reassertProxyCeiling is reassertCeilingDenies over a rendered proxy config:
 // it unions the ceiling's denies into the frozen policy and drops every
-// injection, brokered PAT host and MITM host the ceiling denies. It never
+// injection, MCP server, brokered PAT host and MITM host the ceiling denies. It never
 // re-resolves the policy and never widens it.
 //
 // One lane cannot be dropped here. Dispatch withholds the git broker by
@@ -60,6 +60,24 @@ func reassertProxyCeiling(run types.AgentRun, cfg *proxy.Config, c ownerCeiling)
 		}
 		return false
 	})
+	// An MCP server keeps its header credential on its broker entry, not in Injection, so the drop
+	// above never sees it. A server on a host the ceiling now denies goes, as dispatch drops one whose
+	// injection the ceiling took (dispatchMCP), and so do the harness bindings that name it.
+	gone := map[string]bool{}
+	cfg.MCPServers = slices.DeleteFunc(cfg.MCPServers, func(sv proxy.MCPServerConfig) bool {
+		d, err := types.MCPURLDestination(sv.URL)
+		if err == nil && !ceilingDenies(c.deny, d.Host) {
+			return false
+		}
+		gone[sv.Key] = true
+		if sv.GrantID != nil {
+			re.droppedInjection = append(re.droppedInjection, d.Host)
+		}
+		return true
+	})
+	for i := range cfg.MCPBindings {
+		cfg.MCPBindings[i].Servers = slices.DeleteFunc(cfg.MCPBindings[i].Servers, func(k string) bool { return gone[k] })
+	}
 	for host := range cfg.PATGrants {
 		if ceilingDenies(c.deny, host) {
 			re.droppedLane = append(re.droppedLane, host)

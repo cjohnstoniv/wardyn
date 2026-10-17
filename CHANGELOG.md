@@ -24,6 +24,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- A run with a GitHub CLI row is refused when your organisation's profile blocks GitHub, the way the built-in GitHub
+  component already was; it used to start and lose the CLI without a word.
+- A terminal refused at the per-person session cap on an operator-owned or service identity's run now names that cap
+  (seven per person) instead of the run's eight.
 - The Kubernetes chart keeps runnerd's state in a directory below its volume, which runnerd accepts as private; the
   volume's own root was refused as not mode 0700.
 - A proxy whose `upstream_proxy_url` is an address inside `hard_deny` is refused at boot.
