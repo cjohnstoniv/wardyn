@@ -598,6 +598,7 @@ start.
 | `runner_not_found` / `runner_token_not_found` | No such runner or unused token for this caller; another person's runner, and an unclaimed runner past its wait, answer as an absent id. |
 | `runner_filter_invalid` | `state` is not `active`, `revoked` or `all`. |
 | `runner_limits_invalid` | `400`: `limits` is missing or not a valid set (runs at once 1 to 64, at least one CPU, disk in whole GiB, no per-run amount past its total); `422`: a total past what the runner last reported. |
+| `runner_trust_invalid` | `PUT /runners/{id}/trust`: `400`, `trust_class` is not `personal`, `managed_device` or `org_cluster`, or `reason` is missing; `409`, the runner is not claimed yet; `422`, a class its owner kind cannot hold (`org_cluster` is an organization runner's class and only its). |
 | `runner_limits_required` | `422`: a registration that declares no limits, or limits that are not a valid set. Register with this release's `wardyn-runnerd`. |
 | `runner_session_required` | `/me/runners` needs the person's own session; administrative and delegated credentials own no runner. |
 | `runners_enabled_required` | `PUT /runners/settings` needs `enabled`: true or false. |

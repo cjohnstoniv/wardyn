@@ -3854,6 +3854,7 @@ image digests in `wardyn.env`, not a re-run of anything
 - `0176` (`0176_revocation_order`) adds `seq` to `oidc_session_revocations` (`0049`'s table) and `oidc_session_cuts` (`0128`'s table) and `rev_seq` to `api_tokens` (`0045`'s table), `ssh_public_keys` (`0033`'s table), `attach_tickets` (`0026`'s table) and `delegated_tokens` (`0094`'s table), beside its new `oidc_revocation_seq` sequence, and creates the `oidc_revocation_stamp` and `oidc_revocation_position` functions, which run as the migrator.
 - `0177` (`0177_member_drives`) adds `user_drives.owner_subject` and `delete_started_at` (`0054`'s table) and replaces the table's name uniqueness with per-owner indexes and two checks.
 - `0180` (`0180_run_recording`) adds `recording` to `runner_pools` and `runner_pool_org_defaults` (`0152`'s tables) and `not_recorded` to `agent_runs` (`0001`'s table).
+- `0181` (`0181_runner_org_trust`) adds `owner_kind`, `trust_class`, `trust_set_by`, `trust_set_at` and `registration_token_id` to `runners` (`0139`'s table) and `owner_kind`, `minted_by_kind`, `minted_by_email` and `break_glass` to `runner_registration_tokens` (`0142`'s table), with checks that an org row has no owner and that `org_cluster` is the trust class of an org runner and only of one; existing rows become `person` and `personal`.
 - `0085` is named for its `CREATE OR REPLACE FUNCTION push_content_paths_immutable()`,
   but it is not an instance of the hazard: it creates that function and the
   `push_content_paths` table in the same file, so the migrator owns both from the start.

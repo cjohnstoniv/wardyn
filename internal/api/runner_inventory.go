@@ -65,10 +65,10 @@ func (s *Server) runnerView(row types.Runner, used types.RunnerTally, admin bool
 		ClaimedAt: row.ClaimedAt, LastSeenAt: row.LastSeenAt, RevokedAt: row.RevokedAt,
 		RevokedBy: row.RevokedBy, RevokeReason: row.RevokeReason,
 		PostureSource: row.PostureSource, Kind: types.RunnerKindSelfHosted, Limits: row.Limits, Usage: s.selfHostedUsage(row, used),
-		MachineName: row.MachineName, Arch: row.Arch,
+		MachineName: row.MachineName, Arch: row.Arch, OwnerKind: row.OwnerKind, TrustClass: row.TrustClass,
 	}
 	if admin {
-		v.Owner = row.Owner
+		v.Owner, v.TrustSetBy, v.TrustSetAt = row.Owner, row.TrustSetBy, row.TrustSetAt
 	} else if row.State == types.RunnerUnclaimed {
 		v.KeyFingerprint, v.KeyFingerprintAbbreviated = abbreviateFingerprint(row.KeyFingerprint)
 	}

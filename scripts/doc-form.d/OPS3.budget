@@ -46,7 +46,10 @@ docs/operations/who-gets-in.md=1507 share=35
 # docs/operations/admin-only-writes.md 3471 adds 27 over 3444 (0.9.3 RV4b R2-0057): the /governance/egress-baseline tier row; measured.
 # docs/operations/admin-only-writes.md 3490 = 3463 + 27 (RV4b), measured at the wave-A merge.
 # docs/operations/admin-only-writes.md 3541 = 3490 + 51 (RV4c), measured at the wave-A merge.
-docs/operations/admin-only-writes.md=3541 share=35
+# docs/operations/admin-only-writes.md 3509 adds 65 over 3444, measured (0.9.3 K3a): the org runner mint and claim row and the trust write row.
+# docs/operations/admin-only-writes.md 3533 adds 24 over 3509, measured (0.9.3 K3-rest): the org runner limits row.
+# docs/operations/admin-only-writes.md 3630 = 3541 + 89 (K3a), measured at the wave-A merge.
+docs/operations/admin-only-writes.md=3630 share=35
 # docs/operations/three-roles.md 4024 measured after G-090-cleanup slice F: docs rows that contradicted the code.
 # docs/operations/three-roles.md 4063 adds 39 over 4024: 0.9 final docs pass 3, measured: a profile maximum never cuts below an untouched run's size.
 # docs/operations/three-roles.md 4194 adds 21 over 4173, measured (0.9.3 ADO): GET /governance is the read; the profile routes answer 405 to GET.

@@ -125,7 +125,9 @@
 # docs/sdk.md 18199 = 18155 + 44 (RV3D), measured at the wave-A merge.
 # docs/sdk.md 17760 adds 91 over 17669 (0.9.3 C): runner_recording_off, recording_store_off and recording_off, measured.
 # docs/sdk.md 18199 = 18199 + 0 (K2), measured at the wave-A merge.
-docs/sdk.md=18199 share=21
+# docs/sdk.md 17708 adds 39 over 17669, measured (0.9.3 K3a): the runner_trust_invalid reason row.
+# docs/sdk.md 18238 = 18199 + 39 (K3a), measured at the wave-A merge.
+docs/sdk.md=18238 share=21
 # Runner admission adds 10 measured words for the two default-off/config-read refusal reasons.
 # Registration adds 65 measured words for five request/setup reasons and two shared placement refusals.
 # Combined runner registration, baseline and identity changes: measured docs/sdk.md 12463 prose words.
