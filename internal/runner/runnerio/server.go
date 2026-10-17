@@ -68,7 +68,7 @@ func New(sub substrate.Substrate, runnerID, stateDir string) (*Server, error) {
 		return nil, err
 	}
 	for _, f := range files {
-		if strings.HasPrefix(f.Name(), releasedPrefix) || strings.HasPrefix(f.Name(), erasingPrefix) {
+		if strings.HasPrefix(f.Name(), releasedPrefix) {
 			if err := os.RemoveAll(filepath.Join(dir, f.Name())); err != nil {
 				return nil, err
 			}

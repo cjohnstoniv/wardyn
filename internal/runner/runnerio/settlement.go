@@ -65,18 +65,5 @@ func (s *Server) EraseOutput(id uuid.UUID) error {
 		b.notify()
 		b.mu.Unlock()
 	}
-	// Rename first so a crash during the delete leaves a hidden directory the next start sweeps, never a
-	// half-deleted output that would be read back as a run's.
-	dir := filepath.Join(s.dir, id.String())
-	tomb := filepath.Join(s.dir, erasingPrefix+id.String())
-	if err := os.Rename(dir, tomb); err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return os.RemoveAll(tomb)
-		}
-		return err
-	}
-	return os.RemoveAll(tomb)
+	return os.RemoveAll(filepath.Join(s.dir, id.String()))
 }
-
-// erasingPrefix hides an erased run's output while it is deleted.
-const erasingPrefix = ".erasing-"
