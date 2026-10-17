@@ -101,11 +101,10 @@ func startedSink(t *testing.T) (*remoteSink, *fakeRunnerd) {
 	return rs, f
 }
 
-// accept answers one session's hello with accept and a grant, and waits until
+// accept answers a session's hello with accept and a grant, and waits until
 // the proxy holds that grant.
-func accept(t *testing.T, rs *remoteSink, f *fakeRunnerd, gen uint64, seq, through, bytes int64) net.Conn {
+func accept(t *testing.T, rs *remoteSink, c net.Conn, gen uint64, seq, through, bytes int64) net.Conn {
 	t.Helper()
-	c := f.next()
 	if h := readFrame(t, c); h.T != FrameHello {
 		t.Fatalf("hello = %+v", h)
 	}
@@ -119,14 +118,6 @@ func accept(t *testing.T, rs *remoteSink, f *fakeRunnerd, gen uint64, seq, throu
 	return c
 }
 
-func waitLive(rs *remoteSink, live bool) {
-	rs.mu.Lock()
-	defer rs.mu.Unlock()
-	for rs.live != live {
-		rs.cond.Wait()
-	}
-}
-
 func short(t *testing.T) context.Context {
 	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
 	t.Cleanup(cancel)
@@ -135,20 +126,23 @@ func short(t *testing.T) context.Context {
 
 func refusedTotal(rs *remoteSink) uint64 { rs.mu.Lock(); defer rs.mu.Unlock(); return rs.refused }
 
-// TestRemoteSink_GrantSurvivesTransportLoss (H1, design Q5 and §6.2): after a
-// transport loss the proxy keeps enforcing on its outstanding grant; once that
-// is used up it refuses new requests uncounted (no live session) and keeps the
-// run; the reconnect's grant restores credit.
+// TestRemoteSink_GrantSurvivesTransportLoss (H1, M4, design Q5 and §6.2):
+// after a transport loss the proxy keeps enforcing on its outstanding grant;
+// once that is used up it refuses new requests, counted (a held, exhausted
+// grant) and forwarded on the reconnect, and keeps the run; the reconnect's
+// grant restores credit.
 func TestRemoteSink_GrantSurvivesTransportLoss(t *testing.T) {
 	rs, f := startedSink(t)
-	c := accept(t, rs, f, 1, 0, 3, 1<<20)
+	c := accept(t, rs, f.next(), 1, 0, 3, 1<<20)
 	if _, err := rs.reserve(t.Context(), 100); err != nil {
 		t.Fatal(err)
 	}
 	c.Close() // transport loss with two record credits outstanding
-	waitLive(rs, false)
+	// The redial is pending (its hello unanswered): the session end is fully
+	// processed and runnerd is unreachable.
+	next := f.next()
 	for i := range 2 {
-		if _, err := rs.reserve(t.Context(), 100); err != nil {
+		if _, err := rs.reserve(short(t), 100); err != nil {
 			t.Fatalf("reserve %d during the outage: %v", i, err)
 		}
 	}
@@ -158,10 +152,13 @@ func TestRemoteSink_GrantSurvivesTransportLoss(t *testing.T) {
 	rs.mu.Lock()
 	closed := rs.closed
 	rs.mu.Unlock()
-	if refusedTotal(rs) != 0 || closed {
-		t.Fatalf("refused=%d closed=%v: an outage refusal is not a full spool, and the run is kept", refusedTotal(rs), closed)
+	if refusedTotal(rs) != 1 || closed {
+		t.Fatalf("refused=%d closed=%v: an outage refusal past the held grant counts once, and the run is kept", refusedTotal(rs), closed)
 	}
-	accept(t, rs, f, 2, 0, 10, 1<<20)
+	next = accept(t, rs, next, 2, 0, 10, 1<<20)
+	if r := readUntil(t, next, FrameRefused); r.Total != 1 || r.Gen != 2 {
+		t.Fatalf("refused total after the reconnect = %+v", r)
+	}
 	if _, err := rs.reserve(t.Context(), 100); err != nil {
 		t.Fatalf("reserve after the reconnect grant: %v", err)
 	}
@@ -175,7 +172,7 @@ func TestRemoteSink_RefusalsCountedOnlyWhenFull(t *testing.T) {
 	if _, err := rs.reserve(short(t), 100); !errors.Is(err, runnerspool.ErrFull) || refusedTotal(rs) != 0 {
 		t.Fatalf("no grant yet: err=%v refused=%d", err, refusedTotal(rs))
 	}
-	c := accept(t, rs, f, 1, 0, 2, 1<<20)
+	c := accept(t, rs, f.next(), 1, 0, 2, 1<<20)
 	id, err := rs.reserve(t.Context(), 100)
 	if err != nil {
 		t.Fatal(err)
@@ -204,12 +201,31 @@ func TestRemoteSink_RefusalsCountedOnlyWhenFull(t *testing.T) {
 	}
 }
 
+// TestRemoteSink_CancelledAdmissionUncounted (M5): a client that cancels its
+// admission against an exhausted grant is not a Drop; a deadline that expires
+// on the exhausted grant is.
+func TestRemoteSink_CancelledAdmissionUncounted(t *testing.T) {
+	rs, f := startedSink(t)
+	accept(t, rs, f.next(), 1, 0, 1, 1<<20)
+	if _, err := rs.reserve(t.Context(), 100); err != nil {
+		t.Fatal(err)
+	}
+	gone, cancel := context.WithCancel(t.Context())
+	cancel()
+	if _, err := rs.reserve(gone, 100); !errors.Is(err, context.Canceled) || refusedTotal(rs) != 0 {
+		t.Fatalf("cancelled admission: err=%v refused=%d, want Canceled uncounted", err, refusedTotal(rs))
+	}
+	if _, err := rs.reserve(short(t), 100); !errors.Is(err, runnerspool.ErrFull) || refusedTotal(rs) != 1 {
+		t.Fatalf("expired admission on an exhausted grant: err=%v refused=%d, want ErrFull counted", err, refusedTotal(rs))
+	}
+}
+
 // TestRemoteSink_SixteenScannedRequestsInFlight (H2): the byte credit admits
 // GrantReservations requests reserved at the largest record; the next waits
 // for credit and is admitted by a regrant, uncounted.
 func TestRemoteSink_SixteenScannedRequestsInFlight(t *testing.T) {
 	rs, f := startedSink(t)
-	c := accept(t, rs, f, 1, 0, runnerspool.GrantRecords, runnerspool.GrantBytes)
+	c := accept(t, rs, f.next(), 1, 0, runnerspool.GrantRecords, runnerspool.GrantBytes)
 	for i := range runnerspool.GrantReservations {
 		if _, err := rs.reserve(short(t), runnerspool.MaxRecordBytes); err != nil {
 			t.Fatalf("scanned request %d refused: %v", i+1, err)
@@ -237,7 +253,7 @@ func TestRemoteSink_SixteenScannedRequestsInFlight(t *testing.T) {
 // lapsed, so runnerd settles the exact loss (here 0), not the upper bound.
 func TestRemoteSink_LapseDrainsBeforeLapsed(t *testing.T) {
 	rs, f := startedSink(t)
-	c := accept(t, rs, f, 1, 0, 10, 1<<20)
+	c := accept(t, rs, f.next(), 1, 0, 10, 1<<20)
 	id, err := rs.reserve(t.Context(), 100)
 	if err != nil {
 		t.Fatal(err)
@@ -276,7 +292,7 @@ func TestRemoteSink_DrainClosesOpenTunnels(t *testing.T) {
 		}
 	}()
 	rs, f := startedSink(t)
-	c := accept(t, rs, f, 1, 0, 10, 1<<20)
+	c := accept(t, rs, f.next(), 1, 0, 10, 1<<20)
 	p, _ := newTestProxy(t, types.RunPolicySpec{AllowAllEgress: true}, echo.Addr().String(), nil, nil)
 	p.sink = &decisionSink{remote: rs}
 	srv := httptest.NewServer(p)
@@ -311,7 +327,7 @@ func TestRemoteSink_DrainClosesOpenTunnels(t *testing.T) {
 // reservation is the exact loss).
 func TestRemoteSink_ReconnectResendsAtNewGenAndDrains(t *testing.T) {
 	rs, f := startedSink(t)
-	c := accept(t, rs, f, 1, 0, 10, 1<<20)
+	c := accept(t, rs, f.next(), 1, 0, 10, 1<<20)
 	for range 3 {
 		id, err := rs.reserve(t.Context(), 1000)
 		if err != nil {
@@ -330,7 +346,7 @@ func TestRemoteSink_ReconnectResendsAtNewGenAndDrains(t *testing.T) {
 	writeFrame(t, c, SinkFrame{T: FrameAck, Gen: 1, Seq: 1, Disposition: "appended"})
 	c.Close() // transport loss
 
-	c = accept(t, rs, f, 2, 2, 12, 1<<20) // runnerd committed 2 before the loss
+	c = accept(t, rs, f.next(), 2, 2, 12, 1<<20) // runnerd committed 2 before the loss
 	r := readFrame(t, c)
 	if r.T != FrameRecord || r.Seq != 3 || r.Gen != 2 || string(r.Body) != bodies[3] {
 		t.Fatalf("resend = %+v", r)
