@@ -178,11 +178,13 @@ for f in "${MIGDIR}"/00[5-9]*.sql "${MIGDIR}"/0[1-9]*.sql; do
   hazard=no
   while read -r tbl; do
     [ -n "${tbl}" ] || continue
-    printf '%s\n' "${old_tables}" | grep -qx "${tbl}" && hazard=yes
+    grep -qx "${tbl}" <<<"${old_tables}" && hazard=yes
   done <<< "$(grep -ioE '^[[:space:]]*ALTER TABLE [a-z_]+' "${f}" | awk '{print tolower($NF)}' | sort -u || true)"
   # A pg_temp.* helper lives only in the migrator's own session, so it never
   # replaces a function an earlier release created — no ownership needed.
-  grep -i 'CREATE OR REPLACE FUNCTION' "${f}" | grep -viq 'FUNCTION pg_temp\.' && hazard=yes
+  # Capture, then match (C8h's reason below): no `grep | grep -q` under pipefail.
+  _fns="$(grep -i 'CREATE OR REPLACE FUNCTION' "${f}" || true)"
+  [ -n "${_fns}" ] && grep -viq 'FUNCTION pg_temp\.' <<<"${_fns}" && hazard=yes
   [ "${hazard}" = yes ] || continue
   grep -qF "\`${num}\`" <<<"${ops_para}" \
     || fail "migration ${num} ALTERs a table an earlier release created (or replaces a function it created), so it needs the migrator to OWN that object — and docs/OPERATIONS.md's migrator/app-role rationale never names it. That enumeration is the whole justification for the one-way role split (F034)"

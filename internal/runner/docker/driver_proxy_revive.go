@@ -129,6 +129,7 @@ func (d *Driver) startProxy(ctx context.Context, runID uuid.UUID, labels map[str
 		}
 		host.ExtraHosts = []string{"host.docker.internal:" + target, name + ":" + target}
 	}
+	host.ExtraHosts = append(host.ExtraHosts, d.cfg.TestProxyExtraHosts...) // empty outside tests (New)
 	cfgJSON, err := withTrustedCA(cfgJSON, d.cfg.TrustedCAPEM)
 	if err != nil {
 		return "", err
@@ -411,7 +412,7 @@ func (d *Driver) StartSandbox(ctx context.Context, ref string) error {
 	if _, err := d.cli.ContainerStart(ctx, ref, client.ContainerStartOptions{}); err != nil {
 		return fmt.Errorf("docker: start agent: %w", err)
 	}
-	if d.cfg.Record {
+	if d.recordsAgent(ctx, ref) {
 		d.prepareRecordingDirs(ctx, ref)
 	}
 	return nil

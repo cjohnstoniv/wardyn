@@ -45,6 +45,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"net/http"
 	"slices"
 	"strings"
 	"time"
@@ -267,39 +268,131 @@ func adoPolicyPastCeiling(outside []adoscope.Capability) string {
 		"administrator allows on this provider. Ask an admin to widen the ceiling, or pick a different saved policy."
 }
 
-// resolveADOEntraRun decides whether THIS run is on the per-person Azure DevOps
-// lane, from the provider rows that admitted its own repositories.
+// adoLaneDecline is why a run whose repositories name an Azure DevOps provider
+// row is not on the per-person lane: a closed set of codes, each with one
+// sentence (adoLaneDeclineClauses). "" is no decline: the lane is on, or the run
+// names no Azure DevOps repository at all and there is nothing to report.
+type adoLaneDecline string
+
+const (
+	adoDeclineNoPerson             adoLaneDecline = "no_person"
+	adoDeclineRowNotAdmitted       adoLaneDecline = "row_not_admitted"
+	adoDeclineLaneNotAllowed       adoLaneDecline = "lane_not_allowed"
+	adoDeclineCredentialSource     adoLaneDecline = "credential_source"
+	adoDeclineOrgUnparsed          adoLaneDecline = "org_unparsed"
+	adoDeclineServerAddress        adoLaneDecline = "server_address"
+	adoDeclineCrossRepoConflict    adoLaneDecline = "cross_repo_conflict"
+	adoDeclineSiteConfigUnreadable adoLaneDecline = "site_config_unreadable"
+)
+
+// adoLaneDeclinePrefix and adoLaneDeclineClauses are the decline sentence,
+// "This run was not given an Azure DevOps credential: <reason>.", kept here in
+// one place on the server: the run's audit row and the three doors' warnings
+// carry it verbatim, and the console's copy (ui/src/app/lib/ado-pat-copy.ts,
+// ADO_PAT.LANE_DECLINED) renders the same characters from the reason code. None
+// names a row id, an address or a connection state.
+const adoLaneDeclinePrefix = "This run was not given an Azure DevOps credential: "
+
+var adoLaneDeclineClauses = map[adoLaneDecline]string{
+	adoDeclineNoPerson:             "no signed-in person started it",
+	adoDeclineRowNotAdmitted:       "no Azure DevOps provider admits its repository",
+	adoDeclineLaneNotAllowed:       "its Azure DevOps provider does not allow the per-person lane",
+	adoDeclineCredentialSource:     "its Azure DevOps provider does not use each person's own credential",
+	adoDeclineOrgUnparsed:          "its repository address names no organisation",
+	adoDeclineServerAddress:        "its repository is not under the provider's Azure DevOps Server address",
+	adoDeclineCrossRepoConflict:    "its repositories span more than one Azure DevOps organisation",
+	adoDeclineSiteConfigUnreadable: "the provider settings could not be read",
+}
+
+// sentence is the decline's one sentence, "" for no decline.
+func (d adoLaneDecline) sentence() string {
+	if d == "" {
+		return ""
+	}
+	return adoLaneDeclinePrefix + adoLaneDeclineClauses[d] + "."
+}
+
+// adoLaneOwner is the person the per-person lane may act as, or "" when the
+// run's creator cannot hold a connection: the admin token and local mode
+// (operatorOwned), a service identity and a device. Only a signed-in person
+// captures one (handleADOSignIn, handlePutADOOwnPAT).
+func adoLaneOwner(subject string, operatorOwned bool) string {
+	s := strings.ToLower(strings.TrimSpace(subject))
+	if operatorOwned || s == "" || isServicePrincipal(s) || strings.HasPrefix(s, "device:") {
+		return ""
+	}
+	return subject
+}
+
+// adoLaneOwnerOf is adoLaneOwner at a door: the subject create records as the
+// run's creator, and whether create records the run as operator-owned.
+func adoLaneOwnerOf(r *http.Request) string {
+	return adoLaneOwner(runIdentitySubject(r.Context(), principalFromRequest(r)), operatorOwnedRequest(r.Context()))
+}
+
+// adoLaneOwnerOfRun is adoLaneOwner for a stored run, at dispatch and placement.
+func adoLaneOwnerOfRun(ctx context.Context, run types.AgentRun) string {
+	return adoLaneOwner(runIdentitySubject(ctx, run.CreatedBy), run.OperatorOwned)
+}
+
+// adoServiceCaller reports a service identity's request. It holds no Azure
+// DevOps connection, so run launch, preflight and preview leave out the
+// person's connection gate and fact for it, and the lane declines as no_person
+// instead. Every other caller of the gate keeps it.
+func adoServiceCaller(ctx context.Context) bool {
+	return isServicePrincipal(oidcHumanFromContext(ctx))
+}
+
+// resolveADOEntraLane decides whether THIS run is on the per-person Azure DevOps
+// lane, from the provider rows that admitted its own repositories: the
+// workspace repositories ws and the run's own repository repo (req.Repo at a
+// door, dispatchParams.ADOLaneRepo at dispatch). Never devcontainer_repo, which
+// the server clones and the sandbox never sees. owner is adoLaneOwner's answer.
 //
 // THE ROW THAT ADMITTED IS THE ROW THAT DECIDES — providerFor, the same
 // predicate every other lane gate asks — so a second row on the same host
 // cannot answer for a repository it did not admit.
 //
-// Every arm below declines rather than refuses, and that is deliberate: this
-// runs on EVERY dispatch on every deployment, the overwhelming majority of
-// which have no Azure DevOps row at all. A run that resolves to nothing here is
-// a run with no Azure DevOps credential, which is what it had before this lane
-// existed. The one thing it never does is author a credential for a
-// configuration it is not sure about:
+// Every arm declines rather than refuses: this runs on EVERY dispatch on every
+// deployment, most of which have no Azure DevOps row at all. A run that
+// resolves to nothing here has no Azure DevOps credential, which is what it had
+// before this lane existed. A decline is reported (the second result) only for
+// a run whose inputs a present azure_devops row admits or claims; a run that
+// names none, legacy open mode and an unclaimed scm_hosts host (a legacy-PAT
+// deployment) report nothing, so a run holding a git_pat or ssh_key grant is
+// never told it has no credential. The one thing it never does is author a
+// credential for a configuration it is not sure about:
 //
 //   - CREDENTIAL SOURCE MUST BE per_user. The stored credential is one person's
-//     captured sign-in, read out of that person's own secret namespace
-//     (readADOEntraBlob refuses an empty owner outright), so there is no such
-//     thing as a shared one. A row whose lanes name entra but whose credential
-//     source is the default `shared` is a configuration this lane cannot serve,
-//     and serving it from whoever happens to have signed in would be the
-//     substitution the whole lane exists to refuse.
+//     captured sign-in, read out of that person's own secret namespace, so
+//     there is no such thing as a shared one.
 //   - TWO ORGANISATIONS IN ONE RUN AUTHOR NOTHING. The organisation pin is the
 //     only thing standing between this credential and every other organisation
 //     in the tenant (an Entra token carries no organisation claim), so a run
 //     spanning two of them would need two pins and gets neither.
-func resolveADOEntraRun(sc types.SiteConfig, repos []string, owner string) (adoEntraRun, bool) {
-	if owner == "" {
-		return adoEntraRun{}, false
-	}
+//
+// One resolved repository is enough: another Azure DevOps repository that
+// declines on its own (an SSH address beside an https one) leaves the lane on,
+// with no code.
+func resolveADOEntraLane(sc types.SiteConfig, ws []types.WorkspaceRepo, repo, owner string) (adoEntraRun, adoLaneDecline) {
+	var first adoLaneDecline
 	var out adoEntraRun
-	for _, repo := range repos {
-		cand, ok := adoEntraRunForRepo(sc, repo, owner)
-		if !ok {
+	named := false
+	for _, r := range presentRepos(append(repoLocatorsOf(ws), repo)) {
+		cand, why, isADO := adoEntraLaneForRepo(sc, r, owner)
+		if !isADO {
+			continue
+		}
+		if !named {
+			named = true
+			if owner == "" {
+				return adoEntraRun{}, adoDeclineNoPerson
+			}
+		}
+		if why != "" {
+			if first == "" {
+				first = why
+			}
 			continue
 		}
 		if out.rowID == "" {
@@ -307,31 +400,68 @@ func resolveADOEntraRun(sc types.SiteConfig, repos []string, owner string) (adoE
 			continue
 		}
 		if out.rowID != cand.rowID || out.org != cand.org {
-			return adoEntraRun{}, false
+			return adoEntraRun{}, adoDeclineCrossRepoConflict
 		}
 	}
-	return out, out.rowID != ""
+	if out.rowID != "" {
+		return out, ""
+	}
+	return adoEntraRun{}, first
 }
 
-// adoEntraRunForRepo is resolveADOEntraRun's per-repository half.
+// resolveADOEntraRun is resolveADOEntraLane's on/off view, for a caller that
+// has nowhere to say why.
+func resolveADOEntraRun(sc types.SiteConfig, ws []types.WorkspaceRepo, repo, owner string) (adoEntraRun, bool) {
+	a, _ := resolveADOEntraLane(sc, ws, repo, owner)
+	return a, a.rowID != ""
+}
+
+// namesADOServicesRepo reports whether a lane input is on an Azure DevOps
+// Services host, for the one decline that cannot read a provider row: dispatch
+// could not read the site config.
+func namesADOServicesRepo(ws []types.WorkspaceRepo, repo string) bool {
+	for _, r := range presentRepos(append(repoLocatorsOf(ws), repo)) {
+		if t, ok := parseCloneTarget(r, nil); ok && adoServicesHost(canonicalProviderHost(t.host)) {
+			return true
+		}
+	}
+	return false
+}
+
+// adoEntraRunForRepo is the on/off view of one repository's lane, for the
+// display callers that ask per repository.
 func adoEntraRunForRepo(sc types.SiteConfig, repo, owner string) (adoEntraRun, bool) {
-	row, admitted := providerFor(sc, repo)
-	if admitted && !row.Disabled && isADOServerOwnPATRow(row) {
-		return adoServerRunForRepo(row, repo, owner)
+	a, why, isADO := adoEntraLaneForRepo(sc, repo, owner)
+	return a, isADO && why == ""
+}
+
+// adoEntraLaneForRepo is resolveADOEntraLane's per-repository half: the lane,
+// or why not, and whether a present azure_devops row admits or claims repo at
+// all (isADO=false: not this lane's to report).
+func adoEntraLaneForRepo(sc types.SiteConfig, repo, owner string) (adoEntraRun, adoLaneDecline, bool) {
+	v := admitRepoURL(sc, repo)
+	row := v.Provider
+	if row.ID == "" || row.Kind != types.GitProviderAzureDevOps {
+		return adoEntraRun{}, "", false
+	}
+	if v.Admitted && !row.Disabled && isADOServerOwnPATRow(row) {
+		a, ok := adoServerRunForRepo(row, repo, owner)
+		if !ok {
+			return adoEntraRun{}, adoDeclineServerAddress, true
+		}
+		return a, "", true
 	}
 	switch {
-	case !admitted || row.ID == "" || row.Disabled:
-		return adoEntraRun{}, false
-	case row.Kind != types.GitProviderAzureDevOps:
-		return adoEntraRun{}, false
+	case !v.Admitted || row.Disabled:
+		return adoEntraRun{}, adoDeclineRowNotAdmitted, true
 	case !laneAllowed(row, types.GitLaneEntra) || row.Entra == nil:
-		return adoEntraRun{}, false
+		return adoEntraRun{}, adoDeclineLaneNotAllowed, true
 	case row.CredentialSource != types.CredentialSourcePerUser:
-		return adoEntraRun{}, false
+		return adoEntraRun{}, adoDeclineCredentialSource, true
 	}
 	org, ok := adoOrganisationOf(repo)
 	if !ok {
-		return adoEntraRun{}, false
+		return adoEntraRun{}, adoDeclineOrgUnparsed, true
 	}
 	return adoEntraRun{
 		rowID: row.ID, org: org, owner: owner,
@@ -339,7 +469,7 @@ func adoEntraRunForRepo(sc types.SiteConfig, repo, owner string) (adoEntraRun, b
 		tokenMode: cmpTokenMode(row.Entra.TokenMode), credentialSource: row.CredentialSource,
 		caps: row.Entra.Profile(), ceiling: slices.Clone(row.Entra.CapabilityCeiling),
 		patHours: row.Entra.PATHours(), residentOptIn: row.Entra.RunnerResident,
-	}, true
+	}, "", true
 }
 
 // adoOrganisationOf pulls the Azure DevOps ORGANISATION out of a clone URL, in
@@ -780,4 +910,47 @@ func (s *Server) refuseADOEntraDispatch(ctx context.Context, run types.AgentRun,
 			"error": "azure devops entra inject: " + reason, "reason": reason, "detail": detail,
 		})))
 	return false
+}
+
+// adoLaneDeclinedEnv names the decline code in the sandbox (non-secret, a closed
+// enum), so agent-run's clone failure line can point at the reason.
+const adoLaneDeclinedEnv = "WARDYN_ADO_LANE_DECLINED"
+
+// adoDeclineAuditEvent is the run.ado_lane.skip row for a run the lane declined.
+// Outcome denied: the run went ahead without a credential it would have had
+// (run.requirement.skip's meaning), never failure, which `wardyn run get` reads
+// as the run's failure reason.
+func adoDeclineAuditEvent(runID uuid.UUID, why adoLaneDecline, now time.Time) types.AuditEvent {
+	return types.AuditEvent{
+		ID: uuid.New(), Time: now, RunID: &runID, ActorType: types.ActorSystem, Actor: "wardynd",
+		Action: "run.ado_lane.skip", Target: runID.String(), Outcome: "denied",
+		Data: mustJSON(map[string]any{"reason": string(why), "detail": why.sentence()}),
+	}
+}
+
+// decideADOLane is dispatch's per-person Azure DevOps lane decision: resolved from
+// site config when it read, a site_config_unreadable decline for a run on an
+// Azure DevOps Services host when it did not, and announced either way.
+func (s *Server) decideADOLane(ctx context.Context, run types.AgentRun, siteCfg types.SiteConfig, siteCfgErr error,
+	ws []types.WorkspaceRepo, repo string, sandboxEnv map[string]string) adoEntraRun {
+	var adoRun adoEntraRun
+	var adoDecline adoLaneDecline
+	switch {
+	case siteCfgErr == nil:
+		adoRun, adoDecline = resolveADOEntraLane(siteCfg, ws, repo, adoLaneOwnerOfRun(ctx, run))
+	case namesADOServicesRepo(ws, repo):
+		adoDecline = adoDeclineSiteConfigUnreadable
+	}
+	s.announceADODecline(ctx, run, adoDecline, sandboxEnv)
+	return adoRun
+}
+
+// announceADODecline makes dispatch's decline visible: one run.ado_lane.skip
+// row and the sandbox env code. A no-op for no decline.
+func (s *Server) announceADODecline(ctx context.Context, run types.AgentRun, why adoLaneDecline, sandboxEnv map[string]string) {
+	if why == "" {
+		return
+	}
+	sandboxEnv[adoLaneDeclinedEnv] = string(why)
+	s.recordAudit(ctx, adoDeclineAuditEvent(run.ID, why, s.cfg.Now().UTC()))
 }

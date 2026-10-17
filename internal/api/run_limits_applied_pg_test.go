@@ -51,7 +51,7 @@ func (e *placementEnv) sizedPool(name string, cpu types.RunnerPoolAmount) types.
 			Lifetime: &types.RunnerPoolDuration{DefaultSec: 3600, MaxSec: 7200}},
 		Barriers: []types.ConfinementClass{types.CC1, types.CC2, types.CC3},
 	}
-	out, err := e.pg.UpdateRunnerPool(context.Background(), p.ID, e.revision(p.ID), nil, nil, &limits)
+	out, err := e.pg.UpdateRunnerPool(context.Background(), p.ID, e.revision(p.ID), nil, nil, &limits, nil)
 	if err != nil {
 		e.t.Fatalf("set pool limits: %v", err)
 	}

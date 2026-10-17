@@ -299,6 +299,9 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	if f.adoNarrowed != "" {
 		clampWarnings = append(clampWarnings, f.adoNarrowed)
 	}
+	if f.adoDecline != "" {
+		clampWarnings = append(clampWarnings, f.adoDecline.sentence())
+	}
 
 	// The RunInput deriveSetupItems keys off — the scalar create-run fields, with
 	// the ENFORCED class so the backend row probes the class this run will really
@@ -389,7 +392,9 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	// workspace-resolved together, the same two sets requestRepoProviderRefusals
 	// and seedAndAdmitWorkspace each gate at launch.
 	runRepos := append([]string{req.Repo, req.DevcontainerRepo}, repoLocatorsOf(spec.WorkspaceRepos)...)
-	resp.GitCredential = s.gitCredentialFactForRepos(ctx, oidcHumanFromContext(ctx), runRepos)
+	if !adoServiceCaller(ctx) {
+		resp.GitCredential = s.gitCredentialFactForRepos(ctx, oidcHumanFromContext(ctx), runRepos)
+	}
 	resp.Components = componentFacts(componentFactInputs{
 		req: f.req, spec: f.spec, harnesses: f.harnesses, comps: f.comps, baseline: f.baseline, scmSite: f.scmSite,
 		ceiling: f.ceiling, mpChoice: f.mpChoice, pushSets: f.pushSets, autonomy: f.autonomy,

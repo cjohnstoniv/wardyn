@@ -151,9 +151,14 @@ export interface RunnerPool {
   state: RunnerPoolState;
   revision: number;
   limits?: RunnerPoolLimits;
+  /** Whether the pool requires its runs recorded; absent is preferred. */
+  recording?: RecordingRequirement;
   created_at: string;
   updated_at: string;
 }
+
+/** Go: types.RecordingRequirement. The stricter of the organisation's and the pool's applies. */
+export type RecordingRequirement = "preferred" | "required";
 
 /** Go: types.RunnerPoolMember. Exactly one of runner_id (self_hosted) and remote_runner_id (remote_hosted) is set. */
 export interface RunnerPoolMember {
@@ -172,6 +177,8 @@ export interface RunnerPoolDefaults {
   pool_id?: string;
   /** The organisation's default barrier; a person's own document never carries one (the server refuses it). */
   barrier?: ConfinementClass;
+  /** The organisation's alone, like barrier: whether every run must be recorded. */
+  recording?: RecordingRequirement;
 }
 
 /** Go: types.ResolvedRunnerPool. A label for the choice, never admission. */
@@ -324,12 +331,14 @@ export interface RunnerPoolList {
 export interface CreateRunnerPoolRequest {
   name: string;
   limits?: RunnerPoolLimits;
+  recording?: RecordingRequirement;
 }
 
 /** Go: client.CreateMyRunnerPoolRequest: a user pool of the caller's own. */
 export interface CreateMyRunnerPoolRequest {
   name: string;
   limits?: RunnerPoolLimits;
+  recording?: RecordingRequirement;
 }
 
 /** The state an update may put a pool in (Go: client.RunnerPoolSwitch); deleting is the DELETE route alone. */
@@ -341,6 +350,7 @@ export interface UpdateRunnerPoolRequest {
   name?: string;
   state?: RunnerPoolSwitch;
   limits?: RunnerPoolLimits;
+  recording?: RecordingRequirement;
 }
 
 /** Go: types.RemoteRunnerPoolRef. One live pool a remote-hosted runner is in; owner only on the operators' reads. */

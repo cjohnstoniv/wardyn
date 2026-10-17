@@ -48,13 +48,6 @@ async function signInInDialog(page: Page): Promise<void> {
   await dialog.getByRole("button", { name: REAUTH_BAR.CTA, exact: true }).click();
 }
 
-// The /me splices below make a real round trip per request, and the layer keeps
-// reading /me while it waits, so a read can still be in flight when a test
-// ends; without this it fails as "apiResponse.json: Response has been disposed".
-test.afterEach(async ({ page }) => {
-  await page.unrouteAll({ behavior: "ignoreErrors" });
-});
-
 test.describe("signed out mid-page: sign in again in place (#483)", () => {
   test("the dialog opens over the page, and after signing in the typed draft is still there", async ({ page }) => {
     const { puts } = await saveIntoAnExpiredSession(page);
@@ -141,8 +134,15 @@ async function draftUnderAnExpiringSession(page: Page): Promise<{ answer: (over:
     },
   };
 }
+// A read that lands while the reload replaces the document loses its context mid-evaluate: that is a
+// new document, the answer polled for (#2054). Only that error; any other still fails.
 const sameDocument = (page: Page) =>
-  page.evaluate(() => (window as unknown as { beforeRenew?: boolean }).beforeRenew ?? false);
+  page
+    .evaluate(() => (window as unknown as { beforeRenew?: boolean }).beforeRenew ?? false)
+    .catch((e: unknown) => {
+      if (e instanceof Error && /Execution context was destroyed/.test(e.message)) return false;
+      throw e;
+    });
 
 test.describe("the expiry banner: sign in again in place", () => {
   test("the same person signing in keeps the tab and the draft, and the expiry moved", async ({ page }) => {

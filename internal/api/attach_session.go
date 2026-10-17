@@ -105,6 +105,8 @@ func (b *capBuffer) Write(p []byte) (int, error) {
 
 func (s *Server) newSessionRecorder(run types.AgentRun, sessionID string, opts runner.AttachOptions) (io.Writer, func(ctx context.Context, principalType types.ActorType, principal string)) {
 	noop := func(context.Context, types.ActorType, string) {}
+	// A run marked not_recorded is still recorded here: the mark is about the runner's own terminal
+	// session, and the organisation records the console and SSH sessions it opens (hybrid-laptops.md).
 	if s.cfg.RecordingStore == nil || runIsUnrecordable(run) {
 		return nil, noop
 	}

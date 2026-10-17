@@ -181,10 +181,11 @@ export function PoolsTab({
   const [defaultsError, setDefaultsError] = React.useState("");
 
   // Both the row button and the sheet write the default. A refusal throws; each caller shows the server's sentence.
+  // Every field this tab does not edit (the barrier, recording) is sent back as read.
   const setDefault = React.useCallback(
     async (poolId: string | null) => {
       const current = await runnerPools.orgDefaults();
-      await runnerPools.setOrgDefaults(current.barrier ? { pool_id: poolId ?? undefined, barrier: current.barrier } : { pool_id: poolId ?? undefined });
+      await runnerPools.setOrgDefaults({ ...current, pool_id: poolId ?? undefined });
       const name = entries.find((x) => x.pool.id === poolId)?.pool.name ?? "";
       toast.success(poolId ? POOLS.DEFAULT_MADE(name) : POOLS.DEFAULT_CLEARED);
       reload();

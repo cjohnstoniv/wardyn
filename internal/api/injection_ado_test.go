@@ -48,7 +48,7 @@ func newADOResolveFixture(t *testing.T) *adoResolveFixture {
 	f.srv.cfg.Store = st
 
 	rf := &adoResolveFixture{adoFixture: f, st: st, runID: uuid.New(), subject: subject}
-	ado, ok := resolveADOEntraRun(st.site, []string{adoTestRepo}, subject)
+	ado, ok := resolveADOEntraRun(st.site, nil, adoTestRepo, subject)
 	if !ok {
 		t.Fatal("fixture resolved no lane")
 	}

@@ -181,6 +181,13 @@ export const RUN_PLACEMENT = {
     `${name} is a computer its owner administers, so this run's barrier, egress decisions made on ${name}, recording, output and exit code are as ${name} reported them.`,
 } as const;
 
+/** Pending a mock round: the run's not_recorded, on the Identity card. */
+export const RUN_RECORDING = {
+  LABEL: "Recording",
+  org_off: "Not recorded; the organization kept no recordings when it started.",
+  runner_declined: "Not recorded by the runner; organization sessions are recorded.",
+} as const;
+
 export const RUN_SYNC = {
   LABEL: "Sync",
   NONE: "Nothing synced yet.",

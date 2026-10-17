@@ -5,6 +5,10 @@ package store
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"sync/atomic"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -45,9 +49,31 @@ type Recorder struct {
 	Pool *pgxpool.Pool
 }
 
+// ErrAuditOutcome is Record's refusal of an outcome the audit table cannot store.
+var ErrAuditOutcome = errors.New("audit outcome is not success, failure or denied")
+
+// refusedAuditOutcomes counts Record's refusals (wardyn_audit_outcome_refused_total).
+var refusedAuditOutcomes atomic.Uint64
+
+// RefusedAuditOutcomes is how many rows Record refused for their outcome since start.
+func RefusedAuditOutcomes() uint64 { return refusedAuditOutcomes.Load() }
+
 // Record appends ev to the append-only audit_events table. The chain hash
 // InsertAuditEvent fills in is dropped here since ev is taken by value; a
 // caller that wants the head hash calls InsertAuditEvent directly with &ev.
+//
+// An outcome outside success, failure and denied is refused here, loudly (an
+// error log naming the action and outcome, and a counter), rather than left to
+// the table's CHECK, which a spooled retry would only meet again. It is a
+// backstop: each producer's tests pin the outcomes it writes.
 func (rec Recorder) Record(ctx context.Context, ev types.AuditEvent) error {
+	switch ev.Outcome {
+	case "success", "failure", "denied":
+	default:
+		refusedAuditOutcomes.Add(1)
+		slog.ErrorContext(ctx, "store: audit row refused: its outcome is not one the audit table stores",
+			slog.String("action", ev.Action), slog.String("outcome", ev.Outcome))
+		return fmt.Errorf("%w: action %q outcome %q", ErrAuditOutcome, ev.Action, ev.Outcome)
+	}
 	return InsertAuditEvent(ctx, rec.Pool, &ev)
 }

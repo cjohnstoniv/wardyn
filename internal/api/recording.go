@@ -186,8 +186,10 @@ func (s *Server) saveRecording(w http.ResponseWriter, r *http.Request, part int)
 		return
 	}
 
+	// An organisation with recording off still serves the route, behind internalAuth and the relay
+	// binding, so a runner that records anyway is told why its upload has nowhere to go.
 	if s.cfg.RecordingStore == nil {
-		writeErrorReason(w, http.StatusNotImplemented, reasonRecordingStoreUnavailable, "recording store not configured")
+		writeErrorReason(w, http.StatusConflict, reasonRecordingOff, "this organisation keeps no session recordings")
 		return
 	}
 	// Door 1 of five (mask_manifest.go): a run whose masking corpus this server
@@ -212,8 +214,17 @@ func (s *Server) saveRecording(w http.ResponseWriter, r *http.Request, part int)
 		return
 	}
 
+	if s.refuseDeclinedUpload(w, run) {
+		runID := claims.RunID
+		s.recordAudit(r.Context(), s.auditEvent(&runID, types.ActorAgent, claims.SPIFFEID, "recording.upload",
+			runID.String(), "failure", mustJSON(labelRecordingEvidence(run, map[string]any{"part": part, "reason": reasonRecordingOff}))))
+		return
+	}
+
 	saveErr := s.storeUpload(w, r, run, claims.RunID, part)
+	cleared := false
 	if saveErr == nil {
+		cleared = s.clearDeclinedOnUpload(r.Context(), run)
 		saveErr = s.uploadedRecordingOutput(r.Context(), claims.RunID)
 	}
 
@@ -225,6 +236,9 @@ func (s *Server) saveRecording(w http.ResponseWriter, r *http.Request, part int)
 	fields := map[string]any{}
 	if part > 1 {
 		fields["part"] = part
+	}
+	if cleared {
+		fields["not_recorded_cleared"] = types.NotRecordedRunnerDeclined
 	}
 	if saveErr != nil {
 		outcome = "failure"

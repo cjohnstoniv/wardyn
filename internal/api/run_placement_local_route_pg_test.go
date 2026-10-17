@@ -271,7 +271,7 @@ func TestEffectiveLimitsIncludePlacedRunner(t *testing.T) {
 		e.stream(id, types.CC1, types.CC2, types.CC3)
 	}
 	narrow := types.RunnerPoolLimits{Background: &types.RunnerPoolBackgroundLimits{MemoryMiB: &types.RunnerPoolAmount{Default: 1024, Cap: 6144}}}
-	if _, err := e.pg.UpdateRunnerPool(context.Background(), laptops.ID, e.revision(laptops.ID), nil, nil, &narrow); err != nil {
+	if _, err := e.pg.UpdateRunnerPool(context.Background(), laptops.ID, e.revision(laptops.ID), nil, nil, &narrow, nil); err != nil {
 		t.Fatal(err)
 	}
 	e.assignSizedProfile("eight", &types.ResourceLimits{CPUMillis: 8000, MemoryMiB: 16384}, types.GovernanceLimits{})

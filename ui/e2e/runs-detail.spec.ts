@@ -9,6 +9,7 @@ import { RUN, RUN_SIGN_IN } from "../src/app/components/wardyn/copy";
 import { LOGIN_SANDBOX_NOTE } from "../src/app/components/screens/run-detail/login-sandbox-note";
 import { STATES } from "../src/app/components/wardyn/states";
 import { RUN_SYNC } from "../src/app/components/wardyn/copy/runners";
+import { ADO_PAT } from "../src/app/lib/ado-pat-copy";
 import type { Page } from "@playwright/test";
 
 // Split out of runs.spec.ts (#209): the addressable /runs/:id detail hub's
@@ -613,3 +614,49 @@ test.describe("Run detail: the Sync rows of a live remote run", () => {
   });
 });
 
+// T19 (ADO lane): a run that names an Azure DevOps repository but was not
+// given the per-person credential carries a run.ado_lane.skip audit row, and
+// its Credentials panel shows that row's sentence under the Azure DevOps
+// heading. The row is spliced into the daemon's own /audit answer; an
+// unspliced run shows nothing of it.
+test.describe("Run detail — the Azure DevOps decline", () => {
+  const detail =
+    "This run was not given an Azure DevOps credential: no Azure DevOps provider admits its repository.";
+
+  test("a run the Azure DevOps lane declined says why in its Credentials panel", async ({ page }) => {
+    await openRuns(page);
+    await page.route("**/api/v1/audit*", async (route) => {
+      const res = await route.fetch();
+      const rows = (await res.json()) as Array<Record<string, unknown>>;
+      const runId = new URL(route.request().url()).searchParams.get("run_id") ?? "";
+      rows.push({
+        id: "e2e-ado-lane-skip",
+        time: new Date().toISOString(),
+        run_id: runId,
+        actor_type: "system",
+        actor: "wardynd",
+        action: "run.ado_lane.skip",
+        target: runId,
+        outcome: "denied",
+        data: { reason: "row_not_admitted", detail },
+      });
+      await route.fulfill({ response: res, json: rows });
+    });
+
+    await page.getByText("e2e fixture 4").click();
+    await expect(page.getByRole("heading", { name: "e2e fixture 4", level: 1 })).toBeVisible();
+    const block = page.getByTestId("ado-lane-declined");
+    await expect(block).toBeVisible();
+    await expect(block.getByRole("heading", { name: ADO_PAT.RUN_TOKEN_TITLE })).toBeVisible();
+    await expect(block.getByRole("alert")).toHaveText(detail);
+    await page.unroute("**/api/v1/audit*");
+  });
+
+  test("an ordinary run's Credentials panel says nothing of the Azure DevOps lane", async ({ page }) => {
+    await openRuns(page);
+    await page.getByText("e2e fixture 4").click();
+    await expect(page.getByRole("heading", { name: "e2e fixture 4", level: 1 })).toBeVisible();
+    await expect(page.getByText("Credentials", { exact: true }).first()).toBeVisible();
+    await expect(page.getByTestId("ado-lane-declined")).toHaveCount(0);
+  });
+});

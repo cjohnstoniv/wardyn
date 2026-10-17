@@ -474,11 +474,15 @@ func (s *Server) stepRunEnd(f *runFold, rec *foldRecorder) bool {
 	return !refusal.write(s, f.w, f.r)
 }
 
-// stepADOStanding bounds a member's Azure DevOps list (#1384); the narrowing is
-// said out loud at every door. A list that leaves nothing standing is
-// dispatch's refusal at create, which the dry doors answer before the click.
+// stepADOStanding resolves the run's Azure DevOps lane once, from the inputs
+// create grades and dispatch resolves with, and bounds a member's Azure DevOps
+// list (#1384); the narrowing and a decline (f.adoDecline) are said out loud at
+// every door. A list that leaves nothing standing is dispatch's refusal at
+// create, which the dry doors answer before the click.
 func (s *Server) stepADOStanding(f *runFold, rec *foldRecorder) bool {
-	narrowed, dropped, none := s.adoStandingAtDoor(f.r, f.spec, f.scmSite, f.ceiling)
+	var lane adoEntraRun
+	lane, f.adoDecline = resolveADOEntraLane(f.scmSite, f.spec.WorkspaceRepos, f.req.Repo, adoLaneOwnerOf(f.r))
+	narrowed, dropped, none := adoStandingAtDoor(f.spec, lane, f.ceiling)
 	if f.mode != foldCreate {
 		if none {
 			writeErrorReason(f.w, http.StatusUnprocessableEntity, reasonADOCapabilitiesNonePermitted, adoNonePermitted(f.spec.AzureDevOpsCapabilities))

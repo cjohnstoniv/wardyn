@@ -482,8 +482,13 @@ func (s *Server) revivePATNarrowing(ctx context.Context, run types.AgentRun, cfg
 		return reviveRefused(http.StatusServiceUnavailable, reasonReviveOwnerAuthorityUnreadable,
 			"re-check the run's git_pat narrowing: read site config: "+err.Error())
 	}
-	adoRun, adoOn := resolveADOEntraRun(site, repoLocatorsOf(cfg.Policy.WorkspaceRepos), runIdentitySubject(ctx, run.CreatedBy))
-	env := patNarrowingEnvOf(!s.cfg.DisableGitPATBroker, cfg.GitGrants, site, adoRun, adoOn)
+	// The lane's hosts are the ones dispatch stored on the grant, which the
+	// revived proxy carries: no repository is re-resolved, so revive cannot
+	// disagree with dispatch about the lane.
+	env := patNarrowingEnvOf(!s.cfg.DisableGitPATBroker, cfg.GitGrants, site, adoEntraRun{}, false)
+	if cfg.ADOGrant != nil {
+		env.adoHosts = slices.Clone(cfg.ADOGrant.Hosts)
+	}
 	reason, detail := patNarrowingRefusal(patGrantSpecs(grants), env)
 	if reason == "" {
 		return nil

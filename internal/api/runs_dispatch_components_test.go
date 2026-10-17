@@ -455,7 +455,7 @@ func TestDispatch_ComponentHostCollisionReusesTheGatesSet(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			policy := types.RunPolicySpec{EligibleGrants: tc.grants}
-			_, found := componentHostCollision(componentDispatch{HeaderHosts: tc.headers}, tc.site, policy, "sub-owner", nil)
+			_, found := componentHostCollision(componentDispatch{HeaderHosts: tc.headers}, tc.site, policy, "", "sub-owner", nil)
 			if found != tc.collide {
 				t.Fatalf("collision = %v, want %v", found, tc.collide)
 			}
@@ -543,10 +543,10 @@ func TestDispatch_ALaneRunLeavesARedirectOntoALaneHostWithoutItsToken(t *testing
 		!slices.ContainsFunc(pc.Policy.AllowedDomains, func(d string) bool { return hostEqual(egressEntryHost(d), feedHost) }) {
 		t.Errorf("allowed domains = %v, want the public registry swapped for the feed host", pc.Policy.AllowedDomains)
 	}
-	ev := findAudit(events, run.ID, "run.artifact.redirect", "warn")
+	ev := findAudit(events, run.ID, "run.artifact.redirect", "denied")
 	if ev == nil || !strings.Contains(string(ev.Data), "the per-person Azure DevOps lane carries this host's credential") ||
 		!strings.Contains(string(ev.Data), "redirect applied without token injection") {
-		t.Errorf("run.artifact.redirect warn = %v, want the row that says the lane carries the host", ev)
+		t.Errorf("run.artifact.redirect denied = %v, want the row that says the lane carries the host", ev)
 	}
 	if ok := findAudit(events, run.ID, "run.artifact.redirect", "success"); ok != nil {
 		t.Errorf("a token injection was audited for the redirect: %s", ok.Data)
@@ -567,7 +567,7 @@ func TestDispatch_ARunOffTheLaneKeepsTheRedirectsToken(t *testing.T) {
 	if len(pc.MITMHosts) != 1 || componentMITMHost(pc.MITMHosts[0]) != "pkgs.dev.azure.com" {
 		t.Errorf("MITMHosts = %v, want the feed host", pc.MITMHosts)
 	}
-	if findAudit(events, run.ID, "run.artifact.redirect", "success") == nil || findAudit(events, run.ID, "run.artifact.redirect", "warn") != nil {
+	if findAudit(events, run.ID, "run.artifact.redirect", "success") == nil || findAudit(events, run.ID, "run.artifact.redirect", "denied") != nil {
 		t.Error("want the redirect's token injection audited as a success, and no lane row")
 	}
 }
