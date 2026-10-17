@@ -13,7 +13,7 @@ import (
 )
 
 // UpgradeOrigin is what this deployment recorded about the release it ran before current (migration
-// 0192). Recorded is false when current has no row yet.
+// 0190). Recorded is false when current has no row yet.
 type UpgradeOrigin struct {
 	Recorded bool
 	// Previous is the release booted before current, from its row; "" when current is the first

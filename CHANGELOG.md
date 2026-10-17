@@ -15,7 +15,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   (migration `0182_runner_resident_runs`), `runner_output_watermarks` and `runner_retirements` (migration
   `0183_runner_retirements`). Without them a runner cannot be handed a
   `runner_resident` credential, and a finished runner run's output is never retired. Grant it `SELECT` on
-  `deployment_versions` (migration `0192_deployment_versions`), or setup status leaves out the defaults an upgrade changed.
+  `deployment_versions` (migration `0190_deployment_versions`), or setup status leaves out the defaults an upgrade changed.
 - Upgrading from before 0.9.1, migration `0178_self_host_runner_restriction` now keeps self-hosting open whenever a
   runner is claimed, including one whose registration token an admin minted. A database that already applied it is
   not asked again: if people who are not admins are refused `403 capability_feature` on `POST /me/runners/tokens`,
@@ -26,8 +26,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 - Setup status names, for admins, the defaults an upgrade changed that reach this deployment's own configuration
   ("Defaults changed by this upgrade"), each with what to set for the old behaviour. wardynd records each release it
-  boots (migration `0192_deployment_versions`).
-- Setup status warns admins when `self_host_runner` is restricted, runners are claimed and no permission names it, so
+  boots (migration `0190_deployment_versions`).
+- Setup status warns admins when `self_host_runner` is restricted, runners people own are claimed and no permission names it, so
   only admins can mint runner tokens; it gives the grant to write.
 - `wardyn runner revoke <runner>` revokes one of your own runners by id or name, the command-line twin of My runner.
 - `wardyn runner pool add` and `remove` put an organization runner in an organization pool and take it out, by name or id (an admin; a runner serves one pool).

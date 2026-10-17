@@ -15,7 +15,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// The boot record (migration 0192): the newest migration read before migrating is "" on a fresh
+// The boot record (migration 0190): the newest migration read before migrating is "" on a fresh
 // database; a release's row keeps the oldest prior migration any of its boots read; the release booted
 // before is the previous row; and a first record also reads the newest run started under another release.
 func TestPG_DeploymentVersions_RecordAndOrigin(t *testing.T) {

@@ -26,7 +26,7 @@ func NewestAppliedMigration(ctx context.Context, db migrationExecutor) (string, 
 	return newest, nil
 }
 
-// RecordDeploymentVersion records that this deployment booted version (migration 0192), once per
+// RecordDeploymentVersion records that this deployment booted version (migration 0190), once per
 // release. priorMigration is NewestAppliedMigration read before this boot migrated. Two servers of
 // one release starting together each read it before the other finished migrating or after, so the
 // stored value is the older of the two: the one read before the release first migrated.
