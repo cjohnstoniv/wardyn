@@ -163,6 +163,43 @@ describe("the change drawer", () => {
     expect(within(dialog).getByText(note)).toBeInTheDocument();
   });
 
+  // The owner-approved mock (2026-10-17, 4a): the notes sit between the diff and the reason, one per line.
+  it("puts the notes between the diff and the reason, one per line", async () => {
+    const notes = ["first note", "second note"];
+    renderTab([change({ diff: { ...change().diff, notes } })]);
+    await userEvent.click(screen.getByRole("button", { name: "Profile · Edit" }));
+    const dialog = await screen.findByRole("dialog");
+    const follows = (a: Element, b: Element) => Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+    const diffHeader = within(dialog).getByText(CHANGES.DIFF_FIELD);
+    const heading = within(dialog).getByText(GOVERNANCE.OMISSION_TITLE);
+    const reason = within(dialog).getByText(CHANGES.REASON_LABEL);
+    expect(follows(diffHeader, heading)).toBe(true);
+    expect(follows(heading, within(dialog).getByText(notes[0]))).toBe(true);
+    expect(follows(within(dialog).getByText(notes[1]), reason)).toBe(true);
+    expect(follows(within(dialog).getByText(notes[0]), within(dialog).getByText(notes[1]))).toBe(true);
+  });
+
+  it("on an assignment, puts the notes after the profile it assigns and before the reason", async () => {
+    const notes = ["first note"];
+    renderTab([
+      change({
+        target_kind: "governance_assignment",
+        op: "upsert",
+        diff: {
+          after: { subject_type: "group", subject: "g", profile_id: "p9", priority: 0, profile: { id: "p9", name: "Embedded profile", ceiling: {}, limits: {} } },
+          changed: ["profile_id"],
+          notes,
+        },
+      }),
+    ]);
+    await userEvent.click(screen.getByRole("button", { name: "Assignment · Set" }));
+    const dialog = await screen.findByRole("dialog");
+    const follows = (a: Element, b: Element) => Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+    const assigned = within(dialog).getByText(CHANGES.ASSIGNED_PROFILE);
+    expect(follows(assigned, within(dialog).getByText(GOVERNANCE.OMISSION_TITLE))).toBe(true);
+    expect(follows(within(dialog).getByText(notes[0]), within(dialog).getByText(CHANGES.REASON_LABEL))).toBe(true);
+  });
+
   it("shows no notes heading for a change that carries none", async () => {
     renderTab([change()]);
     await userEvent.click(screen.getByRole("button", { name: "Profile · Edit" }));

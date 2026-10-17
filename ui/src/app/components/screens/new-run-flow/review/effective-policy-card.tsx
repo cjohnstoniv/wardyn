@@ -12,13 +12,17 @@ import { PUSH } from "../../../wardyn/copy/push";
 import type { PolicyPreviewResult } from "../../../../lib/types/policy-preview";
 import type { NewRunDraft } from "../draft/run-intent";
 import { BarrierChip } from "./barrier-chip";
+import { harnessName, loadRoster } from "../steps/harnesses/roster";
+import { useLoaded } from "../steps/shape/use-loaded";
 import { changedRows, policyRows } from "./policy-rows";
 import type { ReviewPreflight } from "./review-seams";
 
 export function EffectivePolicyCard({ draft, pre, preview }: { draft: NewRunDraft; pre: ReviewPreflight | null; preview: PolicyPreviewResult | null }) {
   const [onlyChanged, setOnlyChanged] = React.useState(false);
   const changed = changedRows(draft.intent, draft.base);
-  const all = policyRows(draft, pre, preview);
+  // The harness names the Tools group shows: the roster's display name, the id until it answers.
+  const roster = useLoaded(loadRoster);
+  const all = policyRows(draft, pre, preview, (id) => (roster.status === "ready" ? harnessName(roster.value, id) : id));
   const rows = onlyChanged ? all.filter((r) => changed.has(r.id)) : all;
   // Only a review rule holds a push; a deny rule refuses it attended or not, so the note needs one.
   const unattendedPush = draft.intent.experience === "background" && !!preview?.spec.push_rules?.require_review_paths?.length;

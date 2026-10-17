@@ -10,15 +10,14 @@
 import { NR_LAUNCH } from "../../../wardyn/copy/new-run/launch";
 import { NR_SHARED } from "../../../wardyn/copy/new-run/shared";
 import { shortTime } from "../../../../lib/format";
+import { ordinal } from "../../../../lib/ordinal";
 import { RUN_WAIT, RUN_WAIT_REASON } from "../../../../lib/runner-pool-refusals";
 import type { AgentRun, RunQueue } from "../../../../lib/types/runs";
 
 /** A run as the Launched screen reads it: AgentRun plus the warnings a create answers with. */
 export type LaunchedRun = AgentRun & { warnings?: string[] };
 
-const SUFFIX: Record<string, string> = { one: "st", two: "nd", few: "rd", other: "th" };
-const ORDINALS = new Intl.PluralRules("en-US", { type: "ordinal" });
-export const ordinal = (n: number): string => `${n}${SUFFIX[ORDINALS.select(n)]}`;
+export { ordinal };
 
 /** The place in line the person is told: the wire counts the runs ahead, so the run itself is one more. */
 export const placeInLine = (queue: RunQueue): string => NR_LAUNCH.IN_LINE(ordinal(queue.position + 1));

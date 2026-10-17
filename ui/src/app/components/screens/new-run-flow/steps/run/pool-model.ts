@@ -16,7 +16,7 @@ import { NR_RUN } from "../../../../wardyn/copy/new-run/run";
 import { NR_SHARED } from "../../../../wardyn/copy/new-run/shared";
 import type { BarrierOption } from "../../../../wardyn/barrier-compare-table";
 import type { RunIntent } from "../../draft/run-intent";
-import { mibToGibText } from "../../lenses/files-lens";
+import { sizeWords } from "../files/size-words";
 import { cpuText, lifetimeText, memoryText } from "../../review/format";
 
 /** Pools the caller may see: a row they may only manage (runner_pool_not_found) is not a choice. */
@@ -111,7 +111,7 @@ export function limitCells(limits: EffectiveRunLimits, allowance: PersonAllowanc
     cell("cpu", NR_RUN.LIMIT_CPU, limits.cpu_millis, cpuText),
     cell("memory", NR_RUN.LIMIT_MEMORY, limits.memory_mib, memoryText),
     cell("lifetime", NR_RUN.LIMIT_LIFETIME, limits.lifetime_sec, lifetimeText),
-    cell("drive", NR_RUN.LIMIT_MAIN_DRIVE, limits.disk_mib, (mib) => NR_SHARED.GIB(mibToGibText(mib, "floor")), NR_RUN.LIMIT_EXTRA_DRIVES),
+    cell("drive", NR_RUN.LIMIT_MAIN_DRIVE, limits.disk_mib, sizeWords, NR_RUN.LIMIT_EXTRA_DRIVES),
   ];
 }
 

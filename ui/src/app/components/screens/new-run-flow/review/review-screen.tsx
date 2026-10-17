@@ -149,7 +149,7 @@ export function ReviewScreen({ location, go, onLaunch, ownDriveIds }: ReviewScre
         end: !open && !issues.length && <Button type="button" variant="outline" onClick={checkAgain}>{NR_REVIEW.CHECK_AGAIN}</Button>,
       }}
     >
-      <Notices poolName={pool} slots={pre?.runner_pool_slots} applied={pre?.resources_applied} askedByYou={changedFromOrigin(draft, ["resources"])} warnings={pre?.warnings} />
+      <Notices poolName={pool} slots={pre?.runner_pool_slots} applied={pre?.resources_applied} askedByYou={changedFromOrigin(draft, ["resources"])} warnings={pre?.warnings} diskCut={!!pre?.main_drive?.clamped_by && pre.main_drive.clamped_by !== "policy"} />
       <BlockerList blockers={blockers} go={(loc: NewRunLocation) => go(loc)} />
       {view === "pretty" ? (
         <div className="grid items-start gap-3.5 lg:grid-cols-[minmax(0,1.7fr)_minmax(280px,0.8fr)]">

@@ -103,7 +103,7 @@ test.describe("Runs landing — lost and lease-ended rows (F1, design.md:158)", 
 // evidence is the audit read; a read that fails is no evidence, so the banner makes no on-time or late claim then, but
 // it keeps its title and Revive / Extend / End run, which are the only way to act on the run.
 test.describe("Run detail — the local lost-run banner", () => {
-  async function openLostLocalRun(page: Page, audit: "fail" | "empty") {
+  async function openLostLocalRun(page: Page, audit: "fail" | "empty", online: boolean | "unreported" = true) {
     await page.route("**/api/v1/setup/status*", async (route) => {
       const response = await route.fetch();
       const json = await response.json();
@@ -119,7 +119,7 @@ test.describe("Run detail — the local lost-run banner", () => {
           placement: "local",
           lost_reason: "outage",
           lost_at: new Date(Date.now() - 3_600_000).toISOString(),
-          runner_online: true,
+          runner_online: online === "unreported" ? undefined : online,
           runner_name: "laptop-7",
         });
       }
@@ -149,5 +149,16 @@ test.describe("Run detail — the local lost-run banner", () => {
     await expect(banner.getByRole("button", { name: "End run" })).toBeVisible();
     await expect(banner).not.toContainText("reports its runner stopped this run's network");
     await expect(banner).not.toContainText("was still on when it came back");
+  });
+
+  // FR-0114: with several server replicas the one asked may not know whether the runner is connected.
+  test("a runner connection the server does not report says it cannot tell and keeps Revive and Extend", async ({ page }) => {
+    await openLostLocalRun(page, "empty", "unreported");
+    const banner = page.getByTestId("run-lifetime-local-unknown");
+    await expect(banner).toContainText("Wardyn can't tell from here whether laptop-7 is connected");
+    await expect(banner).not.toContainText("offline for over an hour");
+    await expect(banner.getByRole("button", { name: "Revive" })).toBeVisible();
+    await expect(banner.getByRole("button", { name: "Extend" })).toBeVisible();
+    await expect(banner.getByRole("button", { name: "End run" })).toBeVisible();
   });
 });

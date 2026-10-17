@@ -671,7 +671,7 @@ type grantChecker interface {
 type createRunResponse struct {
 	types.AgentRun
 	Warnings []string `json:"warnings,omitempty"`
-	// ResourcesApplied is the CPU and memory the run asked for and got (stepResources).
+	// ResourcesApplied is the CPU, memory and PIDs the run asked for and got (stepResources).
 	ResourcesApplied *client.AppliedResources `json:"resources_applied,omitempty"`
 }
 

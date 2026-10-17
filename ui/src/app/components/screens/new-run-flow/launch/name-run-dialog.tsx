@@ -33,26 +33,25 @@ import type { RunIntent } from "../draft/run-intent";
 import { useDraftIdentity, useIntentChecks } from "../draft/use-intent-checks";
 import { useNewRunDispatch, useNewRunDraft } from "../new-run-route";
 import { BarrierChip } from "../review/barrier-chip";
-import { cpuNumber, lifetimeText } from "../review/format";
+import { cpuNumber, resolvedLifetime, resolvedLifetimeText } from "../review/format";
 import type { ReviewPreflight } from "../review/review-seams";
 import { AdoLaunchDialog } from "./ado-launch-dialog";
-import { useLaunchRun } from "./use-launch-run";
+import { useLaunchRun, type PendingLaunch } from "./use-launch-run";
 
 // Only the manual check runs here: nothing is asked again while the person types.
 const MANUAL_ONLY = { local: false, backendArm: false, modelArm: false };
 
 /**
  * pool · CPU · lifetime, from what the server just answered; a part it did not give is left out.
- * The lifetime is the ask held to the answer's cap, or the answer's default when nothing was asked.
+ * The lifetime is the resolved end: no end when asked for and allowed, else the ask held to the answer's cap,
+ * or the answer's default when nothing was asked.
  */
 export function summaryLine(pre: ReviewPreflight, intent: RunIntent): string {
   const pool = pre.runner_pool?.name;
   const cpuMillis = pre.resources_applied?.cpu_millis.applied;
   const lifetimeLimit = pre.limits?.lifetime_sec;
-  const wanted = intent.ends_after_sec ?? (lifetimeLimit?.default.unlimited ? undefined : lifetimeLimit?.default.value);
-  const seconds = wanted === undefined || !lifetimeLimit || lifetimeLimit.cap.unlimited ? wanted : Math.min(wanted, lifetimeLimit.cap.value);
   const cpu = cpuMillis === undefined ? undefined : cpuNumber(cpuMillis);
-  const lifetime = !lifetimeLimit || seconds === undefined ? undefined : lifetimeText(seconds);
+  const lifetime = lifetimeLimit ? resolvedLifetimeText(resolvedLifetime(intent, pre.limits)) : undefined;
   if (pool && cpu !== undefined && lifetime !== undefined) return NR_LAUNCH.SUMMARY(pool, cpu, lifetime);
   const parts = [pool, cpu === undefined ? undefined : NR_SHARED.CPU(cpu), lifetime].filter((p): p is string => !!p);
   return parts.length ? parts.reduce((all, part) => NR_SHARED.JOIN(all, part)) : "";
@@ -63,9 +62,11 @@ export interface NameRunDialogProps {
   onOpenChange: (open: boolean) => void;
   /** The create answered 2xx: the caller moves to the Launched screen. */
   onCreated: (created: CreateRunResult) => void;
+  /** The create in flight, held by the dialog's owner so that closing and reopening cannot start a second. */
+  pending?: PendingLaunch;
 }
 
-export function NameRunDialog({ open, onOpenChange, onCreated }: NameRunDialogProps) {
+export function NameRunDialog({ open, onOpenChange, onCreated, pending }: NameRunDialogProps) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
@@ -75,13 +76,13 @@ export function NameRunDialog({ open, onOpenChange, onCreated }: NameRunDialogPr
           (e.currentTarget as HTMLElement).querySelector<HTMLInputElement>("#name-run-title")?.focus();
         }}
       >
-        <NameRunForm onOpenChange={onOpenChange} onCreated={onCreated} />
+        <NameRunForm onOpenChange={onOpenChange} onCreated={onCreated} pending={pending} />
       </DialogContent>
     </Dialog>
   );
 }
 
-function NameRunForm({ onOpenChange, onCreated }: Pick<NameRunDialogProps, "onOpenChange" | "onCreated">) {
+function NameRunForm({ onOpenChange, onCreated, pending }: Pick<NameRunDialogProps, "onOpenChange" | "onCreated" | "pending">) {
   const draft = useNewRunDraft();
   const dispatch = useNewRunDispatch();
   const identity = useDraftIdentity();
@@ -125,7 +126,7 @@ function NameRunForm({ onOpenChange, onCreated }: Pick<NameRunDialogProps, "onOp
     }
     void modelDoor.refresh();
   };
-  const create = useLaunchRun(identity, onCreated, refused);
+  const create = useLaunchRun(identity, onCreated, refused, pending);
 
   const pre = checks.preflightIsCurrent ? (checks.preflightResult as ReviewPreflight | null) : null;
   const answered = pre !== null;

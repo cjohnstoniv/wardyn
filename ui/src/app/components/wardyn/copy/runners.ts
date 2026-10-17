@@ -210,6 +210,9 @@ export const LOCAL_RUN = {
   LAPSE_TITLE: (name: string) => `${name} has been offline for over an hour`,
   LAPSE_BODY: (name: string, when: string) =>
     `Its runner stops this run's network on its own after an hour offline, and keeps the agent and files. Wardyn last heard from ${name} at ${when}, so it can't confirm that yet.`,
+  UNKNOWN_TITLE: (name: string) => `Wardyn can't tell from here whether ${name} is connected`,
+  UNKNOWN_BODY: (name: string, when: string) =>
+    `Wardyn last heard from ${name} at ${when}, and this server can't say whether it is online now. After an hour offline its runner stops this run's network on its own and keeps the agent and files. If you revive it while ${name} is out of reach, Wardyn says so.`,
   REVIVE_WHEN_BACK: (name: string) => `You can revive it once ${name} is back online.`,
   STOPPED_TITLE: "This run's network was stopped",
   STOPPED_BODY: (name: string) =>

@@ -53,6 +53,8 @@ export interface GuidedFacts {
   /** The pool's default the field was filled with, while the person has not changed it. */
   mainDriveFill?: string;
   mainDriveClampNote?: string;
+  /** The unit the size field is in: GiB, or whole MiB for a size under 0.1 GiB. Absent means GiB. */
+  mainDriveUnit?: "GiB" | "MiB";
   /** Free-text ref per `${workspaceId}/${repo}` while the branch list is unavailable. */
   refText: Record<string, string>;
 }

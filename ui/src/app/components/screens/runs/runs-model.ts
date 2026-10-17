@@ -22,7 +22,7 @@ import { RUN_WAIT } from "../../wardyn/copy/run-wait";
 import { RUNS_ROW_WORD } from "../../wardyn/copy/runs-landing";
 import { endsWarningStage, endsWarningWord } from "../../wardyn/copy/run-lifetime";
 import { statusDetailSentence } from "../run-status-detail";
-import { placeInLine } from "../new-run-flow/launch/launched-model";
+import { ordinal } from "../../../lib/ordinal";
 
 export type RowHue = "blue" | "amber" | "red" | "grey";
 export type RowAction = "review" | "sign-in" | "revive" | null;
@@ -151,7 +151,7 @@ export function rowPresentation(run: AgentRun, adminView: boolean): RowPresentat
       return {
         hue: "blue",
         word: RUNS_ROW_WORD.QUEUED,
-        subword: run.queue ? placeInLine(run.queue) : undefined,
+        subword: run.queue ? RUNS_ROW_WORD.IN_LINE(ordinal(run.queue.position + 1)) : undefined,
         action: null,
         needsYou: false,
       };

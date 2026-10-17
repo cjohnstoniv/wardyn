@@ -87,11 +87,14 @@ type MainDriveApplied struct {
 	Soft bool `json:"soft"`
 }
 
-// AppliedResources is what a run's CPU and memory asked for and what it gets,
-// on preflight, the policy preview, the 201 and the run.create audit row.
+// AppliedResources is what a run's CPU, memory and process limit asked for and
+// what it gets, on preflight, the policy preview, the 201 and the run.create audit row.
 type AppliedResources struct {
 	CPUMillis AppliedAmount `json:"cpu_millis"`
 	MemoryMiB AppliedAmount `json:"memory_mib"`
+	// PidsLimit is the process limit: the run's policy asked, the ceiling bounded. Absent on a
+	// row written before the field existed. Source is governance or deployment, when Capped.
+	PidsLimit *AppliedAmount `json:"pids_limit,omitempty"`
 }
 
 // AppliedAmount is one field of AppliedResources. Source names the limit that

@@ -59,9 +59,13 @@ export interface CustomComponentDialogProps {
   onAttach?: (ref: ComponentRef) => void;
   /** A save landed. */
   onSaved?: (saved: ComponentSaved) => void;
+  /** Run context: the form to open on, carried over from the short form, instead of a blank one. */
+  initialDraft?: ComponentDraft;
+  /** Run context: the keep choice to open on, carried over with `initialDraft`. */
+  initialKeep?: Keep;
 }
 
-type Keep = "run" | "save";
+export type Keep = "run" | "save";
 
 const settingId = (s: { key: number }, field: "name" | "value") => `ccd-set-${s.key}-${field}`;
 
@@ -91,9 +95,11 @@ export function CustomComponentDialog({
   onClose,
   onAttach,
   onSaved,
+  initialDraft,
+  initialKeep,
 }: CustomComponentDialogProps) {
-  const [draft, setDraft] = React.useState<ComponentDraft>(() => draftOf(component ?? null));
-  const [keep, setKeep] = React.useState<Keep>(context === "run" ? "run" : "save");
+  const [draft, setDraft] = React.useState<ComponentDraft>(() => initialDraft ?? draftOf(component ?? null));
+  const [keep, setKeep] = React.useState<Keep>(initialKeep ?? (context === "run" ? "run" : "save"));
   const [errors, setErrors] = React.useState<FormErrors>({});
   const [saving, setSaving] = React.useState(false);
   const [saved, setSaved] = React.useState<ComponentSaved | null>(null);
