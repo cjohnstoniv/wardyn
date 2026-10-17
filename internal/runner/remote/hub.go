@@ -109,7 +109,7 @@ func (h *Hub) Serve(ctx context.Context, conn runnerwire.Conn, id uuid.UUID) err
 	}
 	row, err := h.cfg.Lookup(ctx, id)
 	if err != nil || row.ID != id {
-		return runnerwire.ErrAuth
+		return fmt.Errorf("%w: no registered runner by that id, or it could not be read: %s", runnerwire.ErrAuth, readCause(err))
 	}
 	auth, err := runnerwire.AuthenticateRunner(ctx, conn, row, h.cfg.OrgURL)
 	if err != nil {
@@ -122,10 +122,10 @@ func (h *Hub) Serve(ctx context.Context, conn runnerwire.Conn, id uuid.UUID) err
 	}
 	current, err := h.cfg.Lookup(ctx, id)
 	if err != nil || current.ID != id || string(current.PublicKey) != string(row.PublicKey) || current.OrgURLSHA256 != row.OrgURLSHA256 {
-		return runnerwire.ErrAuth
+		return fmt.Errorf("%w: the registration changed or could not be read while the runner authenticated: %s", runnerwire.ErrAuth, readCause(err))
 	}
 	if current.ClaimExpired(time.Now()) {
-		return runnerwire.ErrAuth
+		return fmt.Errorf("%w: the runner's claim has lapsed", runnerwire.ErrAuth)
 	}
 	if current.State == types.RunnerRevoked {
 		_ = runnerwire.WriteControl(ctx, conn, runnerwire.TypeRevoked, runnerwire.Reason{Reason: "runner_revoked"})
@@ -165,6 +165,15 @@ func (h *Hub) Serve(ctx context.Context, conn runnerwire.Conn, id uuid.UUID) err
 	a.Substrate.requireExecutionGeneration = true
 	a.Substrate.mu.Unlock()
 	return h.serveClaimed(ctx, conn, current, auth, a)
+}
+
+// readCause says why a registration read refused: the read's own error, or that the row read no longer
+// matches.
+func readCause(err error) string {
+	if err == nil {
+		return "the stored row no longer matches"
+	}
+	return err.Error()
 }
 
 func (h *Hub) lockSession(id uuid.UUID) (*hubSession, error) {
@@ -275,7 +284,7 @@ func (h *Hub) start(ctx context.Context, conn runnerwire.Conn, row types.Runner,
 	current, err := h.cfg.Lookup(ctx, id)
 	if err != nil || current.ID != id || current.State != types.RunnerClaimed ||
 		string(current.PublicKey) != string(row.PublicKey) || current.OrgURLSHA256 != row.OrgURLSHA256 {
-		return nil, runnerwire.ErrAuth
+		return nil, fmt.Errorf("%w: the runner was released, revoked or re-registered while it was being admitted: %s", runnerwire.ErrAuth, readCause(err))
 	}
 	if s.peer != nil && s.peer.Online() {
 		return nil, errors.New("runner already has an active connection")
