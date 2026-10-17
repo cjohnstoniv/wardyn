@@ -321,7 +321,9 @@ func (g *sshSessionGate) subsystemBridge(req *ssh.Request, channel ssh.Channel, 
 				g.capAudited = true
 				s.sshAuditChannelRejected(ctx, runID, principal, "session", sshCapReasonSync, maxSSHSyncSessionsPerRun)
 			}
-			_ = req.Reply(false, nil)
+			// Acked, then ended with the reason and exit 1, as a refused directory is (sshgateway_sync.go): the
+			// client stops on a false reply before it reads the channel's stderr.
+			_ = req.Reply(true, nil)
 			sendChannelError(channel, fmt.Sprintf("wardyn: this run already has %d sync sessions (the most it allows); wait for one to end", maxSSHSyncSessionsPerRun))
 			return nil
 		}

@@ -300,8 +300,15 @@ func TestPG_Runners_ListVisibleByOwnerFiltersInTheQuery(t *testing.T) {
 		t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM runners WHERE id = $1`, r.ID) })
 		return r
 	}
-	fresh, lapsed, byOwner, bySomeone, stale, other := mk(owner), mk(owner), mk(owner), mk(owner), mk(owner), mk("someone-else")
+	fresh, lapsed, byOwner, bySomeone, stale, oldClaimed, other := mk(owner), mk(owner), mk(owner), mk(owner), mk(owner), mk(owner), mk("someone-else")
 	if _, err := pool.Exec(ctx, `UPDATE runners SET created_at = $2 WHERE id = $1`, lapsed.ID, now.Add(-types.RunnerUnclaimedTTL-time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	// Only an unclaimed runner lapses: a claimed one older than the wait stays on the list.
+	if _, err := st.ClaimRunner(ctx, oldClaimed.ID, owner, oldClaimed.KeyFingerprint, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE runners SET created_at = $2 WHERE id = $1`, oldClaimed.ID, now.Add(-types.RunnerUnclaimedTTL-time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 	for _, c := range []struct {
@@ -321,8 +328,8 @@ func TestPG_Runners_ListVisibleByOwnerFiltersInTheQuery(t *testing.T) {
 	for _, r := range got {
 		ids = append(ids, r.ID)
 	}
-	if len(ids) != 2 || !slices.Contains(ids, fresh.ID) || !slices.Contains(ids, bySomeone.ID) {
-		t.Errorf("visible = %v, want only the fresh runner %s and the one someone else revoked %s (not lapsed %s, owner-revoked %s, stale %s, other's %s)",
-			ids, fresh.ID, bySomeone.ID, lapsed.ID, byOwner.ID, stale.ID, other.ID)
+	if len(ids) != 3 || !slices.Contains(ids, fresh.ID) || !slices.Contains(ids, bySomeone.ID) || !slices.Contains(ids, oldClaimed.ID) {
+		t.Errorf("visible = %v, want only the fresh runner %s, the one someone else revoked %s and the old claimed %s (not lapsed %s, owner-revoked %s, stale %s, other's %s)",
+			ids, fresh.ID, bySomeone.ID, oldClaimed.ID, lapsed.ID, byOwner.ID, stale.ID, other.ID)
 	}
 }
