@@ -214,3 +214,34 @@ func baseRunnableAgentRun(t *testing.T) string {
 	}
 	return dst
 }
+
+// agent-base's exec task runs in the run's accepted starting folder, not wherever the launcher
+// put it; with no starting folder (the setup connectivity probe) it runs untouched.
+func TestAgentBaseExecTaskRunsInTheStartingFolder(t *testing.T) {
+	script := baseRunnableAgentRun(t)
+	home := t.TempDir()
+	start, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	launch := t.TempDir()
+	run := func(startFolder string) string {
+		t.Helper()
+		cmd := exec.Command("bash", script, "pwd -P")
+		cmd.Dir = launch
+		cmd.Env = append(os.Environ(), "HOME="+home, "WARDYN_TASK_MODE=exec", "WARDYN_START_FOLDER="+startFolder,
+			"WARDYN_REPOS=", "WARDYN_REPO_URL=", "WARDYN_MITM_CA_PEM=", "WARDYN_GITHUB_GRANT_ID=")
+		out, err := cmd.Output()
+		if err != nil {
+			t.Fatalf("agent-run exec task: %v", err)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	if got := run(start); got != start {
+		t.Errorf("exec task ran in %q, want the starting folder %q", got, start)
+	}
+	wantLaunch, _ := filepath.EvalSymlinks(launch)
+	if got := run(""); got != wantLaunch {
+		t.Errorf("exec task with no starting folder ran in %q, want the launch directory %q", got, wantLaunch)
+	}
+}

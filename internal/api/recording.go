@@ -113,7 +113,10 @@ func (s *Server) storeUpload(w http.ResponseWriter, r *http.Request, run types.A
 	}
 
 	// Cap the upload before masking; the reader preserves MaxBytesError so an
-	// over-cap upload remains a 413 rather than a successful truncated cast.
+	// over-cap upload remains a 413 rather than a successful truncated cast. That holds for a cast. A plain
+	// log is cut at the masked limit with the server's marker and answered 2xx, and when masking lengthens it
+	// so the masked output reaches the limit before the raw stream passes the upload cap, the raw overrun is
+	// never read and the cut log is stored all the same.
 	limited := http.MaxBytesReader(w, &readWindow{ReadCloser: r.Body, rc: rc}, maxRecordingUploadBytes)
 
 	// PRIMARY masking point: read the upload body through a MaskingWriter so
@@ -344,7 +347,8 @@ type recordingMaskReader struct {
 }
 
 // maskCutMarker is the line a log cut at limit masked bytes ends with. It is not wardyn-rec's cut marker, which
-// says the sender cut the log; this one says the server did.
+// says the sender cut the log; this one says the server did. A log wardyn-rec already cut that then passes the
+// limit ends with this marker alone: its own marker, and the original size it carried, are dropped with the rest.
 func maskCutMarker(limit int) string {
 	return fmt.Sprintf("\n[wardyn: log truncated: the masked log passed the %d byte limit; the rest was dropped]\n", limit)
 }
