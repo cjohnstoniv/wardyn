@@ -405,7 +405,7 @@ func TestLaunchRecordRun_UnassignedPrincipalIsUnchanged(t *testing.T) {
 }
 
 // TestApplySandboxSize_CutsARunThatSetNoSize: a policy with no resources block runs at the platform default,
-// so dispatch cuts it to a profile maximum below that default instead of leaving it uncapped (DR-0215).
+// so a profile maximum below that default also bounds a run that set no size.
 func TestApplySandboxSize_CutsARunThatSetNoSize(t *testing.T) {
 	t.Cleanup(func() { runner.SetDefaultLimits(0, 0) })
 	runner.SetDefaultLimits(2000, 4096)
