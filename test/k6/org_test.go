@@ -608,6 +608,11 @@ func caseOrgRestart(t *testing.T, o *orgEnv) {
 	ws := o.workers(t)
 	o.sched(t, ws[len(ws)-1]) // the boot canary and run B go to the worker whose kubelet runs
 	b := o.live(t, nil)
+	t.Cleanup(func() {
+		if t.Failed() {
+			o.dumpRun(t, b)
+		}
+	})
 	if got := o.connect(t, b, "example.com:443"); got != "status 200" {
 		t.Fatalf("run B control before the restart: %q", got)
 	}
