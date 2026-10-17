@@ -165,7 +165,10 @@ func (s *Server) admitRunner(_ context.Context, rn types.Runner) (remote.Admissi
 		},
 		Event:    func(ctx context.Context, ev runnerwire.Event) error { return s.EventFromRunner(ctx, id, ev) },
 		Activity: func(ctx context.Context, runID uuid.UUID) error { return s.ActivityFromRunner(ctx, id, runID) },
-		Ready:    func() { go s.releaseRunnerLeases(s.cfg.BaseCtx, id) },
+		Ready: func() {
+			go s.releaseRunnerLeases(s.cfg.BaseCtx, id)
+			s.startResidentErase(id)
+		},
 	}, nil
 }
 

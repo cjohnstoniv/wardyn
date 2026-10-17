@@ -188,7 +188,7 @@ func classifyCredential(entries entrySource, path string, origin CredentialOrigi
 				return nil
 			}
 			if mode == ModeRunnerResident && row.Rule == RuleDelivery {
-				if r := residentRefusal(p, path, origin, row.Delivery); r != nil {
+				if r := ResidentAdmits(origin, p, path); r != nil {
 					return r
 				}
 				if st == StructGrantKind {
@@ -204,20 +204,28 @@ func classifyCredential(entries entrySource, path string, origin CredentialOrigi
 	return refuse(ReasonPlacementCredential, path, "credential variant has no permitted local rule")
 }
 
-// residentRefusal is the runner_resident gate (OD-12, design §7.4, Q7): the
-// class may be resident, an Azure DevOps connection opted in, the run has no
-// blast-radius floor (a runner-asserted class never satisfies one for a value
-// the runner holds), and the runner's posture meets the class's requirement.
-func residentRefusal(p LocalPlan, path string, origin CredentialOrigin, class string) *Refusal {
+// ResidentAdmits is the runner_resident gate (OD-12, design §7.4, Q7) for a
+// credential of origin, whose delivery class is origin.Delivery: the class is
+// delivered runner_resident under p's policy and may be, an Azure DevOps
+// connection opted in, the run has no blast-radius floor (a runner-asserted
+// class never satisfies one for a value the runner holds), and the runner's
+// posture meets the class's requirement. LocalEligibility applies it at create,
+// dispatch and revive; the org's delivery applies it again to each value,
+// against the policy and posture of that moment. path names the refused field.
+func ResidentAdmits(origin CredentialOrigin, p LocalPlan, path string) *Refusal {
+	class := origin.Delivery
+	cp := p.Delivery.For(class)
 	switch {
 	case !slices.Contains(classModes[class], ModeRunnerResident):
 		return refuse(ReasonPlacementCredential, path, class+" credential is never runner_resident")
+	case cp.Mode != ModeRunnerResident:
+		return refuse(ReasonPlacementCredential, path, class+" credential is not delivered runner_resident under the current delivery policy")
 	case class == ClassADOMintedPAT && !origin.ResidentOptIn:
 		return refuse(ReasonPlacementCredential, path, "the Azure DevOps connection has not opted in to runner_resident")
 	case p.ConfinementFloor != "":
 		return refuse(ReasonRunnerPostureUnmet, path, "confinement_class: a runner-asserted class never meets the "+string(p.ConfinementFloor)+" floor for a runner_resident credential")
 	}
-	if field := PostureUnmet(p.Delivery.For(class).RequirePosture, p.Posture); field != "" {
+	if field := PostureUnmet(cp.RequirePosture, p.Posture); field != "" {
 		return refuse(ReasonRunnerPostureUnmet, path, field+": the runner's reported posture does not meet "+class+"'s requirement")
 	}
 	return nil
