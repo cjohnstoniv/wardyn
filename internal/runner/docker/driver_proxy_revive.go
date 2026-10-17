@@ -22,6 +22,7 @@ import (
 	"github.com/moby/moby/api/types/network"
 	"github.com/moby/moby/client"
 
+	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 )
 
@@ -370,6 +371,11 @@ func (d *Driver) ReplaceProxy(ctx context.Context, ref string, cfgJSON []byte) e
 	}
 	if err := json.Unmarshal(cfgJSON, &cp); err != nil {
 		return fmt.Errorf("docker: replace proxy: config: %w", err)
+	}
+	// A config the new proxy would refuse at load must not cost the running one: load it here, before anything is
+	// removed. This error is not ErrProxyReplaceFailed, so the revive keeps the old proxy.
+	if _, err := proxy.LoadConfigBytes(cfgJSON); err != nil {
+		return fmt.Errorf("docker: replace proxy: the new config does not load: %w", err)
 	}
 	agent, err := d.cli.ContainerInspect(ctx, ref, client.ContainerInspectOptions{})
 	if err != nil {

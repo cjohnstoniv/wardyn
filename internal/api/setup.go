@@ -322,9 +322,16 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 		if chk, ok := s.runnerLimitsRow(ctx); ok {
 			checks = append(checks, chk)
 		}
+		// recording: whether session recording is on, and how to turn it on. Never Blocking.
+		checks = append(checks, s.recordingRows()...)
 		// runner_arch_images: image keys with no image for a registered runner's architecture. Never Blocking.
 		if chk, ok := s.runnerArchImagesRow(ctx); ok {
 			checks = append(checks, chk)
+		}
+		// self_host_runner_grant and defaults_changed: what an upgrade changed on this deployment's own
+		// configuration. Never Blocking. Both need the site config; a failed read leaves them out.
+		if siteCfgOK {
+			checks = append(checks, s.upgradeChecks(ctx, siteCfg)...)
 		}
 		// High availability rows: present only while WARDYN_HA is on, and read
 		// Postgres, so they share this operator-only gate.

@@ -149,18 +149,13 @@ func TestResolvePrecedence(t *testing.T) {
 		{name: "a person's default beats the organisation's", personal: pd(remoteB), org: org, pool: &remoteB, sel: types.RunnerPoolSelectedPersonal},
 		{name: "a person's own user pool default beats the organisation's", personal: pd(selfC), org: org, pool: &selfC, sel: types.RunnerPoolSelectedPersonal},
 		{name: "explicit pool beats both", choice: Choice{PoolID: idp(remoteB)}, personal: pd(remoteA), org: org, pool: &remoteB, sel: types.RunnerPoolSelectedExplicit},
-		{name: "a placement the default pool serves keeps it", choice: Choice{Placement: types.PlacementLocal}, personal: pd(selfC), org: org, pool: &selfC, sel: types.RunnerPoolSelectedPersonal},
-		{name: "a placement the default pool has no runner for is refused, never switched to another pool", choice: Choice{Placement: types.PlacementLocal}, org: org, reason: ReasonMemberMismatch, msg: KindMismatchMsg("A")},
 		{name: "a refused personal default never falls through to the organisation's", personal: pd(gone), org: org, reason: ReasonDefaultUnavailable, source: types.RunnerPoolSelectedPersonal, msg: DefaultUnavailablePersonalMsg()},
 		{name: "a disabled personal default is refused", personal: pd(selfOff), org: org, reason: ReasonDefaultUnavailable, source: types.RunnerPoolSelectedPersonal, msg: DefaultUnavailablePersonalMsg()},
 		{name: "an unknown organisation default is refused", org: types.RunnerPoolDefaults{PoolID: &uuid.UUID{1}}, reason: ReasonDefaultUnavailable, source: types.RunnerPoolSelectedOrg, msg: DefaultUnavailableOrgMsg()},
 		{name: "no default at all asks for a choice", reason: ReasonRequired, msg: RequiredMsg()},
-		{name: "a placement alone does not choose a pool", choice: Choice{Placement: types.PlacementRemote}, reason: ReasonRequired, msg: RequiredMsg()},
 		{name: "an inaccessible explicit pool is not found", choice: Choice{PoolID: &uuid.UUID{9}}, org: org, reason: ReasonNotFound, msg: NotFoundMsg()},
 		{name: "a deleted explicit pool is not found", choice: Choice{PoolID: idp(gone)}, org: org, reason: ReasonNotFound, msg: NotFoundMsg()},
 		{name: "a disabled explicit pool is unavailable", choice: Choice{PoolID: idp(selfOff)}, org: org, reason: ReasonUnavailable, msg: UnavailableMsg("Off")},
-		{name: "an explicit pool with no runner of the asked placement is a mismatch", choice: Choice{PoolID: idp(selfC), Placement: types.PlacementRemote}, org: org, reason: ReasonMemberMismatch, msg: KindMismatchMsg("C")},
-		{name: "a garbage placement is invalid", choice: Choice{Placement: "cloud"}, org: org, reason: ReasonInvalid, msg: InvalidMsg()},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -183,7 +178,7 @@ func TestResolvePrecedence(t *testing.T) {
 
 func TestResolveNeverPicksTheOnlyOrFirstPool(t *testing.T) {
 	only := pool("Only", types.RunnerPoolOrganization, types.RunnerPoolActive)
-	if got, refusal := Resolve([]types.RunnerPool{only}, Choice{Placement: types.PlacementRemote}, types.RunnerPoolDefaults{}, types.RunnerPoolDefaults{}); refusal == nil || refusal.Reason != ReasonRequired {
+	if got, refusal := Resolve([]types.RunnerPool{only}, Choice{}, types.RunnerPoolDefaults{}, types.RunnerPoolDefaults{}); refusal == nil || refusal.Reason != ReasonRequired {
 		t.Fatalf("a sole pool was chosen for a request with no default: %+v", got)
 	}
 }

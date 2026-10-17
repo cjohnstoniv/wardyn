@@ -41,6 +41,25 @@ func validRunnerActionResult(runnerID, runID, actionID uuid.UUID, outcome, reaso
 // subject, which has no run row. The run itself is left as it was.
 func recordRunnerActionRefusalTx(ctx context.Context, tx pgx.Tx, a types.RunnerPendingAction, runID *uuid.UUID, reason string,
 	prepare func(context.Context, types.AuditEvent) (types.AuditEvent, error)) error {
+	return recordRunnerActionAuditTx(ctx, tx, a, runID, "runner.action.refuse", "failure", map[string]any{"action": a.Kind, "run_id": a.RunID, "reason": reason}, prepare)
+}
+
+// recordRunnerActionApplyTx writes runner.action.apply for the first success
+// receipt of a, inside the receipt's transaction: the runner says it applied
+// the action (for a kill, that the run is contained), at observedAt by its clock.
+// A stop_proxy writes none: its success is late containment's own record, or
+// deliberately none for a run that left its kept loss.
+func recordRunnerActionApplyTx(ctx context.Context, tx pgx.Tx, a types.RunnerPendingAction, runID *uuid.UUID, observedAt time.Time,
+	prepare func(context.Context, types.AuditEvent) (types.AuditEvent, error)) error {
+	if a.Kind == types.RunnerActionStopProxy {
+		return nil
+	}
+	return recordRunnerActionAuditTx(ctx, tx, a, runID, "runner.action.apply", "success", map[string]any{"action": a.Kind, "run_id": a.RunID, "observed_at": observedAt}, prepare)
+}
+
+// recordRunnerActionAuditTx writes one runner.action.* row for a, actor the runner, target the action.
+func recordRunnerActionAuditTx(ctx context.Context, tx pgx.Tx, a types.RunnerPendingAction, runID *uuid.UUID, action, outcome string, fields map[string]any,
+	prepare func(context.Context, types.AuditEvent) (types.AuditEvent, error)) error {
 	if _, err := tx.Exec(ctx, db.AuditChainLockTimeoutSQL()); err != nil {
 		return err
 	}
@@ -48,12 +67,12 @@ func recordRunnerActionRefusalTx(ctx context.Context, tx pgx.Tx, a types.RunnerP
 	if err := tx.QueryRow(ctx, `SELECT clock_timestamp()`).Scan(&arrival); err != nil {
 		return err
 	}
-	data, err := json.Marshal(map[string]any{"action": a.Kind, "run_id": a.RunID, "reason": reason})
+	data, err := json.Marshal(fields)
 	if err != nil {
 		return err
 	}
 	ev, err := prepare(ctx, types.AuditEvent{ID: uuid.New(), RunID: runID, Time: arrival, ActorType: types.ActorSystem, Actor: "runner:" + a.RunnerID.String(),
-		Action: "runner.action.refuse", Target: a.ID.String(), Outcome: "failure", Data: data})
+		Action: action, Target: a.ID.String(), Outcome: outcome, Data: data})
 	if err != nil {
 		return err
 	}

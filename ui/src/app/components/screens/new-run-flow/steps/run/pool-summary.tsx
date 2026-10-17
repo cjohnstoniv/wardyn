@@ -28,7 +28,7 @@ const Value = ({ children }: { children: ReactNode }) => <strong className="text
 const Sub = ({ children }: { children: ReactNode }) => <small className="text-[10px] leading-[1.4] text-muted-foreground">{children}</small>;
 
 /** A count against a maximum, as text and a thin bar; with no maximum, text only (and no meter role). */
-function Usage({ label, used, max, valueText, personal }: { label: string; used: number; max?: number; valueText: string; personal?: boolean }) {
+function Usage({ label, ariaLabel, used, max, valueText, personal }: { label: string; ariaLabel: string; used: number; max?: number; valueText: string; personal?: boolean }) {
   return (
     <>
       <Label>{label}</Label>
@@ -36,7 +36,7 @@ function Usage({ label, used, max, valueText, personal }: { label: string; used:
       {max !== undefined && (
         <span
           role="meter"
-          aria-label={label}
+          aria-label={ariaLabel}
           aria-valuemin={0}
           aria-valuemax={max}
           aria-valuenow={Math.min(Math.max(used, 0), max)}
@@ -55,12 +55,12 @@ function Capacity({ slots }: { slots: PoolSlots }) {
     <Metric>
       {slots.max === undefined ? (
         <>
-          <Usage label={NR_RUN.CAPACITY_LABEL} used={slots.used} valueText={NR_RUN.RUNNING_ONLY(slots.used)} />
+          <Usage label={NR_RUN.CAPACITY_LABEL} ariaLabel={NR_RUN.CAPACITY_ARIA} used={slots.used} valueText={NR_RUN.RUNNING_ONLY(slots.used)} />
           <Sub>{NR_RUN.POOL_LIMIT_FROM_RUNNERS}</Sub>
         </>
       ) : (
         <>
-          <Usage label={NR_RUN.CAPACITY_LABEL} used={slots.used} max={slots.max} valueText={NR_RUN.USED_OF_MAX(slots.used, slots.max)} />
+          <Usage label={NR_RUN.CAPACITY_LABEL} ariaLabel={NR_RUN.CAPACITY_ARIA} used={slots.used} max={slots.max} valueText={NR_RUN.USED_OF_MAX(slots.used, slots.max)} />
           <Sub>{NR_RUN.MAX_RUNS(slots.max)}</Sub>
         </>
       )}
@@ -74,12 +74,12 @@ function Allowance({ allowance }: { allowance: PersonAllowance }) {
     <Metric>
       {allowance.max === undefined ? (
         <>
-          <Usage label={NR_RUN.ALLOWANCE_LABEL} used={allowance.active} valueText={NR_RUN.RUNNING_ONLY(allowance.active)} personal />
+          <Usage label={NR_RUN.ALLOWANCE_LABEL} ariaLabel={NR_RUN.ALLOWANCE_ARIA} used={allowance.active} valueText={NR_RUN.RUNNING_ONLY(allowance.active)} personal />
           <Sub>{NR_RUN.NO_PERSONAL_LIMIT}</Sub>
         </>
       ) : (
         <>
-          <Usage label={NR_RUN.ALLOWANCE_LABEL} used={allowance.active} max={allowance.max} valueText={NR_RUN.ALLOWANCE_USED(allowance.active, allowance.max)} personal />
+          <Usage label={NR_RUN.ALLOWANCE_LABEL} ariaLabel={NR_RUN.ALLOWANCE_ARIA} used={allowance.active} max={allowance.max} valueText={NR_RUN.ALLOWANCE_USED(allowance.active, allowance.max)} personal />
           <Sub>{includes}</Sub>
         </>
       )}

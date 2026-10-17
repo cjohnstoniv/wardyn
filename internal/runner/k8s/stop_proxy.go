@@ -32,8 +32,9 @@ import (
 var (
 	errRunnerNetPolOverride = errors.New("k8s: a runner boots only on an enforced NetworkPolicy canary verdict: WARDYN_K8S_ALLOW_UNENFORCED_NETPOL and WARDYN_K8S_ACK_AMBIENT_DEFAULT_DENY are refused " +
 		"(for an ambient platform default-deny, use a runs namespace that deny does not cover)")
-	// errRelayIPFenced: a new proxy pod reported an IP a fenced run still holds (Fable L5).
-	errRelayIPFenced = errors.New("relay_ip_fenced: the proxy pod's IP is still fenced for another run whose termination is unknown")
+	// errRelayIPFenced: a new proxy pod reported an IP a fenced run still holds. It wraps the
+	// runner.ErrRelayIPFenced sentinel, so it crosses the wire as its own code.
+	errRelayIPFenced = fmt.Errorf("the proxy pod's IP is still fenced for another run whose termination is unknown: %w", runner.ErrRelayIPFenced)
 	// errDecisionSinkUnwired: runner mode has no decision sink to hand the proxy.
 	errDecisionSinkUnwired = errors.New("k8s: this runner has no decision sink for the proxy's decisions; refusing to create a sandbox")
 	// errTerminationUnknown: no arm of completion evidence holds yet.
@@ -132,9 +133,13 @@ func (d *Driver) NoteValidatedLapse(runID uuid.UUID) error {
 }
 
 // ensureFence persists the run's relay fence, once, then applies it in the relay. It runs before
-// runnerd's first delete of either pod, on every containment path (R4-M1).
+// runnerd's first delete of either pod, on every containment path (R4-M1). The run's lock is held
+// from the save through the relay call, so a witness save and its release cannot fall between them
+// and leave a recycled IP refused.
 func (d *Driver) ensureFence(runID uuid.UUID) error {
-	ev, err := d.mutate(runID, func(ev *runEvidence) (bool, error) {
+	unlock := d.runLock(runID)
+	defer unlock()
+	ev, err := d.mutateLocked(runID, func(ev *runEvidence) (bool, error) {
 		if ev.Fence != nil {
 			return false, nil
 		}
@@ -411,18 +416,22 @@ func (d *Driver) checkOnce(ctx context.Context, runID uuid.UUID, component, name
 		return false, fmt.Errorf("%w: %s: %s", errTerminationUnknown, name, v.why)
 	}
 	w := newWitness(runID, pe, pod, v, post, ev.Record, d.now().UTC())
-	saved, err := d.mutate(runID, func(ev *runEvidence) (bool, error) {
+	unlock := d.runLock(runID)
+	saved, err := d.mutateLocked(runID, func(ev *runEvidence) (bool, error) {
 		ev.Pods[component].Witness = w
 		return true, nil
 	})
 	if err != nil {
+		unlock()
 		// A failed witness save stops the sequence: the patch never follows it (Codex R8).
 		return false, err
 	}
 	if component == componentProxy && saved.Fence != nil && d.cfg.Unfence != nil {
-		// The proxy's termination is now known, so its IP may go to another run's proxy.
+		// The proxy's termination is now known, so its IP may go to another run's proxy. The lock is
+		// held through the release (see ensureFence).
 		d.cfg.Unfence(runID, saved.Fence.ProxyIP)
 	}
+	unlock()
 	return d.removeFinalizer(ctx, runID, component, pod)
 }
 
@@ -597,28 +606,44 @@ func (d *Driver) AcceptNodeRecord(ctx context.Context, ref string, rec runner.No
 	return err
 }
 
-// distinctHumanApprovers counts a node record's approvers as humans, or refuses an admin token. Two
-// approvers sharing a principal or an email are one human; a shared key counts once even when the
-// other key differs or is missing.
+// distinctHumanApprovers counts a node record's approvers as humans, or refuses an admin token or an
+// approver with no principal. Approvers linked by a shared principal or a shared email are one human,
+// and the link carries across approvers: A and B sharing an email, B and C sharing a principal, make
+// A, B and C one human whatever their order.
 func distinctHumanApprovers(approvers []runner.NodeRecordApprover) (int, error) {
-	humans := 0
-	principals, emails := map[string]bool{}, map[string]bool{}
+	parent := map[string]string{}
+	find := func(x string) string {
+		for parent[x] != x {
+			parent[x] = parent[parent[x]]
+			x = parent[x]
+		}
+		return x
+	}
+	emailOwner := map[string]string{}
 	for _, a := range approvers {
 		if !a.Human {
 			return 0, refuseRecord("an admin token cannot make a node record")
 		}
 		p, e := strings.ToLower(strings.TrimSpace(a.Principal)), strings.ToLower(strings.TrimSpace(a.Email))
-		if p == "" && e == "" {
+		if p == "" {
+			return 0, refuseRecord("an approver with no principal cannot make a node record")
+		}
+		if _, ok := parent[p]; !ok {
+			parent[p] = p
+		}
+		if e == "" {
 			continue
 		}
-		if !(p != "" && principals[p]) && !(e != "" && emails[e]) {
+		if owner, ok := emailOwner[e]; ok {
+			parent[find(p)] = find(owner)
+		} else {
+			emailOwner[e] = p
+		}
+	}
+	humans := 0
+	for p := range parent {
+		if find(p) == p {
 			humans++
-		}
-		if p != "" {
-			principals[p] = true
-		}
-		if e != "" {
-			emails[e] = true
 		}
 	}
 	return humans, nil

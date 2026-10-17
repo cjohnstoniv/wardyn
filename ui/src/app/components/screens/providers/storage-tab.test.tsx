@@ -14,6 +14,7 @@ import { MemoryRouter } from "react-router-dom";
 import type { StorageProviders } from "../../../lib/api/providers";
 import { MEMBER_DRIVES, PROVIDERS } from "../../../lib/workspace-providers-copy";
 import { DRIVES } from "../../../lib/user-drives-copy";
+import { NR_FILES } from "../../wardyn/copy/new-run/files";
 import { OperatorProvider } from "../../wardyn/operator-context";
 import { StorageTab } from "./storage-tab";
 
@@ -26,10 +27,12 @@ vi.mock("../../../lib/api/drives", async () => {
 function Harness({
   initial,
   enforcement,
+  kubernetes,
   onStorage,
 }: {
   initial: StorageProviders;
   enforcement?: "filesystem" | "none" | "eviction";
+  kubernetes?: boolean;
   onStorage?: (s: StorageProviders) => void;
 }) {
   const [storage, setStorage] = React.useState(initial);
@@ -37,7 +40,7 @@ function Harness({
   return (
     <MemoryRouter>
       <OperatorProvider operator>
-        <StorageTab storage={storage} onChange={setStorage} enforcement={enforcement} operator />
+        <StorageTab storage={storage} onChange={setStorage} enforcement={enforcement} kubernetes={kubernetes} operator />
       </OperatorProvider>
     </MemoryRouter>
   );
@@ -162,6 +165,46 @@ describe("StorageTab", () => {
       expect(screen.getByRole("switch", { name: MEMBER_DRIVES.FIELD_ENABLED })).toBeDisabled();
       expect(screen.getByLabelText(MEMBER_DRIVES.FIELD_MAX)).toBeDisabled();
       expect(screen.getByLabelText(MEMBER_DRIVES.FIELD_MAX)).toHaveValue(3);
+    });
+  });
+
+  // On Kubernetes the server refuses an enabled member-drive switch with no size,
+  // so the tab has to carry one; on Docker it refuses a size, so the tab hides it.
+  describe("member drive size", () => {
+    it("is hidden on Docker, where the server refuses a size", () => {
+      render(<Harness initial={{}} enforcement="filesystem" kubernetes={false} />);
+      expect(screen.queryByLabelText(MEMBER_DRIVES.FIELD_SIZE)).not.toBeInTheDocument();
+    });
+
+    it("on Kubernetes a fresh state saves once enabled with a size: the switch seeds the count, the field writes size_mib", async () => {
+      let latest: StorageProviders = {};
+      render(<Harness initial={{}} enforcement="eviction" kubernetes onStorage={(s) => (latest = s)} />);
+      const size = screen.getByLabelText(MEMBER_DRIVES.FIELD_SIZE);
+      expect(screen.getByText(MEMBER_DRIVES.SIZE_HINT)).toBeInTheDocument();
+      expect(size).toBeDisabled();
+      await userEvent.click(screen.getByRole("switch", { name: MEMBER_DRIVES.FIELD_ENABLED }));
+      expect(size).toBeEnabled();
+      fireEvent.change(size, { target: { value: "2" } });
+      expect(latest.user_drive?.member_create).toEqual({ enabled: true, max_per_person: 1, size_mib: 2048 });
+      expect(screen.queryByText(/^Exactly /)).not.toBeInTheDocument();
+    });
+
+    it("shows a stored size in GiB, whole MiB under 0.1 GiB, and the exact MiB when the text does not say it", () => {
+      const { unmount } = render(<Harness initial={{ user_drive: { member_create: { enabled: true, max_per_person: 1, size_mib: 1000 } } }} kubernetes />);
+      expect(screen.getByLabelText(MEMBER_DRIVES.FIELD_SIZE)).toHaveValue(1);
+      expect(screen.getByText(NR_FILES.SIZE_EXACT(1000))).toBeInTheDocument();
+      unmount();
+      render(<Harness initial={{ user_drive: { member_create: { enabled: true, max_per_person: 1, size_mib: 50 } } }} kubernetes />);
+      expect(screen.getByLabelText(MEMBER_DRIVES.FIELD_SIZE)).toHaveValue(50);
+      expect(screen.getByText("MiB")).toBeInTheDocument();
+      expect(screen.queryByText(/^Exactly /)).not.toBeInTheDocument();
+    });
+
+    it("clearing the field drops size_mib instead of writing zero", () => {
+      let latest: StorageProviders = {};
+      render(<Harness initial={{ user_drive: { member_create: { enabled: true, max_per_person: 1, size_mib: 2048 } } }} kubernetes onStorage={(s) => (latest = s)} />);
+      fireEvent.change(screen.getByLabelText(MEMBER_DRIVES.FIELD_SIZE), { target: { value: "" } });
+      expect(latest.user_drive?.member_create?.size_mib).toBeUndefined();
     });
   });
 });

@@ -8,13 +8,279 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+Organisation runners and resident credentials: an organisation can run sandboxes on its own runner in a Kubernetes
+cluster that the control plane never dials into. A laptop runner can now hold four credential classes in its OS
+keystore for a run. A security operator sets each runner's trust class, and macOS fleets install runners from a
+package and an MDM profile. This section lists the changes since 0.9.3-rc.2; read it with the rc.1 and rc.2 notes
+below.
+
+<!-- lead: verify the summary's scope claims once K6, K7 and SPOOL have merged. -->
+
+### Defaults changed by this upgrade
+
+Setup status lists the ones that reach your deployment ("Defaults changed by this upgrade", admins only), each with
+what to set for the old behaviour.
+
+- **Recording defaults to `preferred`.** A run that a non-recording laptop runner takes goes ahead unrecorded and says
+  why (`runner_declined`), where a runner older than 0.9.3 recorded it regardless. It reaches deployments with claimed
+  self-hosted runners and a recording store. For the old behaviour, set `"recording": "required"` with
+  `PUT /api/v1/runner-pool-defaults`, beside the stored `pool_id` and `barrier` (read them first with `GET`: a write
+  that leaves `barrier` out clears it). A run only a non-recording runner could take is then refused instead of
+  running unrecorded.
+- **A laptop runner records a run only when its organisation keeps recordings.** With `WARDYN_RECORDING_STORE=off`,
+  runs are marked `org_off` and nothing is uploaded, where before the runner recorded and its upload failed. It reaches
+  deployments with claimed self-hosted runners and the recording store off. For the old behaviour, turn the
+  recording store on (`pg` or `fs`); `wardyn-runnerd serve --recording-store` stays the runner's ceiling.
+
 ### Before you upgrade
 
+- Migration `0181_runner_org_trust` adds `owner_kind`, `trust_class`, `trust_set_by`, `trust_set_at` and
+  `registration_token_id` to `runners`, and `owner_kind`, `minted_by_kind`, `minted_by_email` and `break_glass` to
+  `runner_registration_tokens`. Existing runners become `person` and `personal`.
+- Migration `0182_runner_resident_runs` adds the `runner_resident_runs` table. Migration `0183_runner_retirements` adds
+  the `runner_output_watermarks` and `runner_retirements` tables, `runners.retire_capable` and
+  `runner_execution_exits.receipt_only`, and lets a `runner_pending_actions` settlement be `abandoned`.
+- Migration `0184_run_runner_trust_class` adds `agent_runs.runner_trust_class`. Local runs already on a runner become
+  `personal`.
+- Migration `0185_runner_pool_org_default_revision` adds `runner_pool_org_defaults.revision`. A `PUT` of the
+  organisation's pool default that names a revision that has moved on is refused `409` `runner_pool_stale`. One that
+  names no revision writes as before.
+- Migration `0186_purge_attribution_backfill` reopens two steps of every purge finished before it, once, so a person
+  purged earlier is also cleared as a runner's revoker and as the minter of a token made for someone else. Their
+  `person.deprovision` row is not written again.
+- Migration `0187_runner_subject_run_proof_unasserted` replaces the subject check on `runner_pending_actions`: a
+  quarantine bound to a real run can no longer carry an `asserted` proof. Rows written before it are left as they are.
+- Migration `0188_run_renewed_token_jtis` adds `agent_runs.token_jti` and `agent_runs.token_prev_jti`, the two tokens a
+  run's proxy last held across a renewal, which a revive now revokes.
 - Split-role installs (`WARDYN_PG_MIGRATE_DSN` set) whose app role does not pick up new tables through the
   `ALTER DEFAULT PRIVILEGES` step in Operations: grant the app role `SELECT, INSERT, UPDATE` on `runner_resident_runs`
   (migration `0182_runner_resident_runs`), `runner_output_watermarks` and `runner_retirements` (migration
   `0183_runner_retirements`). Without them a runner cannot be handed a
-  `runner_resident` credential, and a finished runner run's output is never retired.
+  `runner_resident` credential, and a finished runner run's output is never retired. Grant it `SELECT, INSERT, UPDATE,
+  DELETE` on `run_containment_pending` and `SELECT, INSERT, UPDATE` on `run_node_records` (migration
+  `0189_run_containment_pending`), or a Kubernetes runner's state page is refused while it holds a run as containment
+  pending. Grant it `SELECT` on `deployment_versions` (migration `0190_deployment_versions`), or setup status leaves out
+  the defaults an upgrade changed.
+- Upgrading from before 0.9.1, migration `0178_self_host_runner_restriction` now keeps self-hosting open whenever a
+  runner is claimed, including one whose registration token an admin minted. A database that already applied it is
+  not asked again: if people who are not admins are refused `403 capability_feature` on `POST /me/runners/tokens`,
+  write `POST /api/v1/permissions/grants` with
+  `{"subject_type": "all", "capability": "feature", "value": "self_host_runner", "effect": "allow"}`.
+- A repository URL with a user name, password or token before its http(s) host is now refused (`400`
+  `repo_url_credentials`). Workspaces, library sources, policies, presets and templates stored with one now fail
+  closed at launch and scan, and must be edited to the plain URL with the credential in a `git_pat` grant. Azure
+  DevOps' Clone-button form `https://<org>@dev.azure.com/<org>/...`, `git@host:path` and `ssh://user@host` addresses
+  are unaffected; an `ssh://` URL carrying a password is refused too.
+- `wardynd` now refuses to start when the default policy file has a `git_pat` host with a port or an IPv6 literal. The
+  message names the fix. A policy write refuses the same host.
+- An existing `go` redirect now keeps Go's checksum database on: `GOSUMDB` is
+  `sum.golang.org <to>/sumdb/sum.golang.org`. A mirror that does not proxy `/sumdb/` fails its runs' module downloads
+  until the redirect sets `go_checksum_db_off`.
+- A policy's `max_file_size_mib` is bounded at 32, the most a git pack can carry. A stored policy above it is enforced
+  at 32, and its next save is refused until the value is lowered.
+- A run, or a save of `recording: required` (a pool, or the organisation's defaults), is refused `422`
+  `recording_store_off` when the organisation keeps no session recordings and recording is required.
+- A kill whose teardown is incomplete still answers `500`, now with reason `internal_error`, and its `errors` field is
+  an array of the failed step names instead of an object of step and error text. The text is in the `run.revoke`
+  audit row; retry the kill.
+- The console's draft saves, the providers Saves among them, can now be refused `412` (`site_config_stale`) before
+  anything is written. Reload and retry. Writes without the console's header (the CLI, scripts) are unaffected.
+- A runner older than 0.9.3 is refused a run that needs a resident credential (`placement_credential`) and is not
+  asked to retire a finished run's output. Upgrade runners after the organisation.
+- A runner's state file can now hold compacted retired runs, so a runner moved back to an earlier version refuses it
+  after any retirement; downgrading a runner below this release is not supported.
+- A run queued before the upgrade whose MCP server takes an organisation credential can still start on your own
+  runner; its MCP calls then fail. End it and launch again.
+- A port-qualified entry in a ceiling's allowed domains no longer covers a bare host derived for the same name; list
+  the bare host as well.
+- The component configuration schema no longer has a `string_list` field kind. A schema that uses it is refused.
+
+### Added
+
+- **Organisation runners in Kubernetes.** `wardyn-runnerd serve --substrate k8s` places each run as an agent pod and a
+  proxy pod in a dedicated runs namespace and dials the organisation outbound only. The `wardyn-runnerd` image is
+  published with each release; install its chart from `deploy/helm/wardyn-runnerd` in the release's source tree. Boot refuses a kubelet below 1.31
+  (`kubelet_below_floor`) and starts only when an egress canary proves NetworkPolicy is enforced. One release serves
+  one architecture (`WARDYN_RUNNERD_ARCH`).
+- A security operator mints an organisation runner's token (`wardyn runner org-token mint`) and claims the runner by
+  its fingerprint (`wardyn runner claim-org`); under four-eyes the claimer must differ from the minter. An organisation
+  runner has no owner and takes runs only through an organisation runner pool.
+- Every runner has a trust class: `personal`, `managed_device`, or `org_cluster` for an organisation runner. A security
+  operator changes it with `PUT /runners/{id}/trust`, `wardyn runner trust` or Admin → Runners, held for a second
+  person under `WARDYN_GOVERNANCE_SECOND_HUMAN` and audited as `runner.trust.write`. Credential delivery can differ by
+  class (`by_trust`), and a revive on a runner whose class changed is refused `409` `runner_trust_changed`.
+- The operator guide for organisation runners, docs/operations/k8s-runners.md, with a design note and a setup skill.
+  <!-- pending merge: K7 -->
+- A kind conformance suite runs the Kubernetes runner against kubelets 1.31 and 1.35. <!-- pending merge: K6 -->
+- A laptop runner now holds `env_secret`, `file_secret`, `ssh_key` and `git_pat_helper` values set to
+  `runner_resident` in its OS keystore for the run, and deletes each at run end (`runner.resident.erase`). A refusal is
+  `runner_posture_unmet` when the confinement floor or the runner's posture misses the requirement, otherwise
+  `placement_credential`. Erasure on a computer the developer controls is best-effort. See
+  docs/operations/hybrid-laptops.md.
+- Every release carries `wardyn-runnerd.pkg`, a universal macOS installer, and a managed-preferences profile template
+  (`deploy/runner/macos/wardyn-runnerd.mobileconfig`). `serve` reads the profile's keys as flag defaults. The package
+  is unsigned until the release workflow has the Apple Developer ID secrets.
+- `wardyn-runnerd serve --upstream-proxy` (`WARDYN_UPSTREAM_PROXY`) chains every run's egress through the laptop's own
+  corporate proxy. `setup --no-service` registers and prints the command to run the runner without installing a
+  service. A local docker context is carried into the service as `DOCKER_HOST`; a TCP, SSH or TLS context is refused.
+- `WARDYN_TRUSTED_PROXIES` (Helm `trustedProxies`) names the reverse proxies whose `X-Forwarded-For` gives the client
+  address, so each runner and registration gets its own rate-limit bucket behind a shared ingress. The proxy peer is
+  kept in audit as `data.proxy_peer`.
+- Console session lifetime settings, each off by default: `WARDYN_OIDC_SESSION_RENEW_CAP`,
+  `WARDYN_OIDC_SESSION_IDLE_TIMEOUT`, `WARDYN_OIDC_SILENT_REAUTH`, `WARDYN_OIDC_LOGIN_HINT` and
+  `WARDYN_OIDC_BROWSER_SESSION_COOKIE`. See docs/ENV.md.
+- An Interactive run is idle-stopped on its pool's idle stop when its policy sets none. The New Run pool list says
+  whether a run starts now or waits, and `GET /runner-pools` rows carry each pool's state, revision and limits.
+- Console: Admin → Runners shows and edits the trust class; sign-out, sign-in and a mode switch in one tab reach the
+  others; a restart of older runs shows its progress; My pools has its own card when runners are off; the user type
+  can be chosen in the governance and drive previews; a component can carry a one-line description.
+- `resources_applied` reports the process limit, and New Run says when a run's process limit was cut.
+- An agent-task template can leave its prompt for use time. A permission allow for a feature this version does not
+  know can be staged; it grants nothing.
+- `wardyn runner revoke <runner>` revokes one of your own runners by id or name, the command-line twin of My runner.
+- `wardyn runner pool add` and `remove` put an organization runner in an organization pool and take it out, by name or id (an admin; a runner serves one pool).
+- `wardyn-runnerd register --trusted-ca-file` makes the registration call trust a corporate CA beside the system
+  roots; the Kubernetes chart passes it to its register container when `trustedCA.configMap` is set.
+- Security admins can set who may use a remote-hosted runner.
+- A run a Kubernetes runner deleted but cannot prove stopped shows on run detail as "Containment pending; egress
+  bounded until T", then "Egress bound passed; termination unknown". The run keeps its lease hold, its proxy's token
+  renewal is refused (`run_containment_pending`), and a security operator can release it with a node record ("node
+  powered off" or "no prior holder") from run detail or `wardyn runner node-record`; a run whose node name was
+  reused, or that the runner could not tie to one machine, needs two people. Migration `0189_run_containment_pending`
+  adds `run_containment_pending` and `run_node_records` and lets a `stop_proxy` action carry a node record instead
+  of an outage loss.
+- A Kubernetes run whose proxy was given an address still fenced for an earlier run fails at start with
+  `relay_ip_fenced`.
+- Governance has a Baseline hosts tab, the console for `PUT /governance/egress-baseline`: the hosts the autonomy
+  rubric and the risk grade treat as baseline beside the built-in public set. A run whose allowlist holds only such
+  hosts does not grade egress `open`, and an `api_key` to one, a Bedrock provider's credential included, grades
+  secrets `baseline`, not `powerful`. Nothing is declared by default, so grading changes only when someone adds a host.
+- A governance profile write whose rubric sets any row now says what the rubric can see on this deployment: the
+  egress, secrets and confinement grades a run under it can get, and which rows can cap a run and which cap nothing.
+- Setup status names, for admins, the defaults an upgrade changed that reach this deployment's own configuration
+  ("Defaults changed by this upgrade"), each with what to set for the old behaviour. wardynd records each release it
+  boots (migration `0190_deployment_versions`).
+- Setup status shows a "Session recording" row for admins: whether recording is on and which store, and when it is off, why and how to turn it on (`env.WARDYN_RECORDING_STORE=pg` or `persistence.enabled=true`). The chart's default records nothing.
+- Setup status warns admins when `self_host_runner` is restricted, runners people own are claimed and no permission names it, so
+  only admins can mint runner tokens; it gives the grant to write.
+
+### Changed
+
+- An unpinned laptop runner takes the proxy image the organisation answers at every connect, so an upgraded
+  organisation's image reaches it without a reinstall. `setup --proxy-image` pins one.
+- On a person's own runner, a run is refused `placement_credential` when its MCP server takes a credential the
+  organisation shares, or when a harness uses a model provider routed through a gateway.
+- On a run several people can enter, one person can hold at most seven of its eight sessions. A personal run keeps the
+  run cap alone.
+- The runner stream adds a global handshake bucket and a cap of 256 handshakes in progress; every refusal is `429`
+  `runner_stream_rate_limited`, naming the limit.
+- A person can mint at most ten runner registration tokens an hour; the eleventh is answered 429 with reason
+  `runner_token_rate_limited`. Minting also deletes that person's expired, unused tokens.
+- The internal credential mint answers a revoked run, an unapproved grant, a missing ref ruleset and an unsupported
+  grant kind each under its own reason: `grant_run_revoked`, `grant_not_approved`, `grant_ref_ruleset_required`,
+  `grant_kind_unsupported`. `wardyn-git-helper` prints the server's sentence.
+- A deny of any GitHub host also withholds the GitHub CLI door, and a withheld Azure CLI door takes its hosts with it.
+
+### Fixed
+
+- Laptop runners: setup writes the resolved engine every time and `DOCKER_HOST` outranks `DOCKER_CONTEXT`; a pull fails
+  on a registry error inside the stream; the service unit lands where the user manager looks, uninstall finds it under
+  a custom `XDG_CONFIG_HOME`, and a refused authentication names its cause. A runner revoke waits at most 5 s for its
+  lock and answers `lock_unavailable` to retry. A trusted-CA file over 1 MiB is refused without being read.
+  A macOS service setup removes the environment file an earlier `--no-service` run left, so a later `--no-service`
+  run no longer reads its old pins back, and a trusted-CA path holding a line break is refused. A proxy image set in a
+  macOS managed profile is a pin, as the flag is, even when it carries a release tag.
+- Placement and the queue: a promotion never starts a run past its wait, a failed runner-limit read is retryable, a run
+  with no size block is capped below the default, a `policy_overlay` size is the run's ask, and a revoked runner's
+  queued run that cannot be ended backs off. The pool doors answer `503` when a runner that might take the run cannot
+  report.
+- Audit, erasure and leavers: a person named in audit data is sealed beside the target, mask copies are erased under
+  every name a person is known by, a leaver purge counts the pools it narrows, and direct governance deletes record
+  what they removed. `WARDYN_RUN_OUTPUT_RETENTION_DAYS` is bounded.
+- Egress: a gateway is matched by address in any spelling, a spelled port is judged as the proxy matches it, an IPv6
+  literal is bracketed in the git broker's `Host` header, a GitHub CLI token minted during shutdown is handed back, and
+  a workspace's egress requirement rows are held to the launching ceiling on replay as on launch. A proxy whose
+  `upstream_proxy_url` is an address inside `hard_deny` is refused at boot.
+- Azure DevOps: a default-profile narrowing now applies to the repository a selected workspace adds, at create,
+  preflight and preview, and a package recycle-bin restore needs the manage capability.
+- Policies, templates and governance: a governance write refuses at proposal what it would fail at approval, composed
+  profiles that no longer compose are named at boot, a member's policy read lists no `llm_inspection` secret names, and
+  a GitHub push remote with no owner and repository is refused. A run with a GitHub CLI row is refused when your
+  organisation's profile blocks GitHub, the way the built-in GitHub component already was; it used to start and lose
+  the CLI without a word. A node record's approvers that chain into one person (a shared email and a shared
+  principal) count as one, in any order, and an approver with no principal is refused.
+- Audit: the `run.ceiling.reassert` row carries its `note` only when it added a denied host or withheld a credential
+  lane or injection host; a row that did none of those no longer reads as a report of action taken.
+- Console: QUEUED runs read as Queued; a lost run keeps Revive and Extend; drive sizes under 0.1 GiB read in MiB; a
+  stale save shows the saved-elsewhere banner; Review gives each blocker its own sentence; approval reasons are bounded
+  at 512 characters in the console and the CLI; lapsed minted tokens read Expired.
+- CLI: the derived `--wait` queue limit is halved for a `--timeout` under 2 minutes, and `runner-limits` lists ids.
+  `wardyn runner remote list --ids --json` is refused instead of ignoring `--json`, and `wardyn runner trust` names
+  only `personal` and `managed_device` as settable.
+- Kubernetes: the proxy's NetworkPolicy DNS rule also admits the cluster DNS pods (`k8s-app=kube-dns` in
+  `kube-system`), so a network plugin that selects pods by identity can match it; the address range and the
+  cloud-metadata exclusion are unchanged. The chart keeps runnerd's state in a directory below its volume, which
+  runnerd accepts as private; the volume's own root was refused as not mode 0700. A hung exec is bounded, a placement no node allows fails fast and ignores node churn, the quota check
+  also counts a run's Secret and NetworkPolicies, and on an organisation runner a sandbox stop after a proxy stop
+  keeps the released IP released.
+- Recording: saves are durable and chunked, an upload's outcome row survives a client that hangs up, and a masked
+  plain log is cut at the store cap with the cut marked.
+- Runner links: the organisation's relay listener speaks HTTP/1.1 only and holds at most 128 relay streams per runner,
+  so one runner cannot fill its own session. A link no longer stalls when a peer opens many streams the runner
+  refuses, and a handler panic ends that one link instead of the runner process. A runner that cannot open one run's
+  spool still replays the other runs' evidence, and a quarantine that lands mid-replay stops that run's remaining
+  backlog; a retired run no longer publishes activity every second. `wardyn-rec` forwards SIGTERM and SIGHUP to the
+  recorder, so a terminated recording is still delivered. A runner whose unclaimed registration lapsed, or whose
+  registration changed while it connected, is told so in the runner log (`registration_lapsed`) instead of seeing a
+  bare refusal; the sentence is sent only after the runner proved its key. Switching runners off now ends a runner
+  session that was admitted while the switch was being turned off, and a revoke, switching runners off or
+  deactivating the owner ends an admission that was stalled on a dead link instead of waiting out its timeouts.
+- Runner recovery: a runner that met a control-plane restart no longer stays offline, looping on `containment-only
+  identity refuses this action`. The end the restart queues for a run the runner keeps only for containment is refused
+  with a receipt, which closes it, so the runner reconnects with its local state untouched. A computer registered
+  again (Docker runtime) stops the proxies of the earlier registration's runs at its first start and moves that
+  registration's `offline/`, `spools/` and `output/` into `previous/` in the state directory, instead of refusing them
+  at every start; decisions still spooled there are kept, not delivered. `setup` on a computer that is already
+  registered says the token it was given was not used.
+  <!-- pending merge: SPOOL -->
+- A refused sandbox create no longer leaves its output sink registered, and an adopted run registers its sink before
+  the runner is asked for its output.
+- An organization pool's member list (`GET /runner-pools/{id}/members`, the console's pool sheet) now shows the
+  organization runners it holds, which it left out.
+- Revive loads the new proxy's configuration before removing the old proxy, relayed streams survive one failed run
+  read, a run started with your own tools starts no CLI, and an egress hold is reported for as long as the proxy
+  holds it.
+- Console: Providers sizes a member drive on Kubernetes and saves it, the New Run footer shows no stale all-clear,
+  Templates says when group membership could not be checked, and the terminal says when a run is at its session cap. A terminal refused at the
+  per-person session cap on an operator-owned or service identity's run now names that cap (seven per person) instead
+  of the run's eight.
+
+### Security
+
+- Anonymous runner admission is bounded per replica, and a forwarded address is read only from a trusted proxy.
+- `wardyn run ssh` refuses a plain-HTTP server that is not loopback before it sends any request.
+- `internal_hosts` refuses a range inside a cloud metadata endpoint, and the model gateway guard refuses those
+  addresses.
+- Repository URLs carrying credentials are refused and redacted from more reads (see Before you upgrade).
+- A revive revokes the tokens the replaced proxy renewed.
+- Hardened policy grading and the Azure Resource Manager and Azure DevOps path checks. The Azure Resource Manager door
+  also refuses a request that carries any of thirteen path-override headers (`X-Original-URL`, `X-Rewrite-Path`,
+  `X-Forwarded-Prefix`, `X-Override-URL` and their variants, in any case and with hyphens or underscores), as it
+  already refused the method-override headers.
+- Hardened directory-sync leaver handling and secret masking in logs and recordings.
+- Hardened the custom-image self-test on runners, the runner keystore, and how a run's MCP harness choice is stored.
+- Hardened member drive deletion, console session expiry, runner stream ownership and proxy host matching.
+- Hardened certificate errors for configured gateways.
+
+### Corrections to earlier notes
+
+- A webhook audit sink whose `flush_interval` or `retry_base_delay` is zero or negative refuses to boot in
+  best-effort mode too, not only when the sink is required.
+- `wardyn runner remote propose` can suggest up to 1024 runs at once, but registration accepts at most 64.
+- Owner-claimed runner registration shipped in 0.9.0 without a note: `POST /runners/register`, `/runners/tokens`,
+  `/me/runners/tokens`, `/me/runners/{id}/claim`, `WARDYN_RUNNER_ORG_URL` and migration `0142_runner_registration`.
+- A disk maximum set with no default becomes the soft default.
+- Host capacity and the run cap count only this deployment's own substrates.
 
 ## [0.9.3-rc.2] — 2026-10-17
 

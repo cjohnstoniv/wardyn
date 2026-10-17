@@ -384,7 +384,7 @@ func (c *client) fromIMDS(ctx context.Context) (string, time.Duration, error) {
 // tokenCall sends a token request with the same retries as a vault call. An
 // error names the endpoint's error code and description, never the request.
 func (c *client) tokenCall(ctx context.Context, hc *http.Client, build func(context.Context) (*http.Request, error), out *tokenResp) error {
-	status, raw, _, err := c.send(ctx, hc, "token", build)
+	status, raw, _, _, err := c.send(ctx, hc, "token", build)
 	if err != nil {
 		return err
 	}
@@ -401,16 +401,17 @@ func firstLine(s string) string {
 }
 
 // send makes one request, retrying a transient answer (429, 5xx, network)
-// with backoff, honouring Retry-After up to 10 s. It returns the last answer:
-// a transport failure is the only error.
-func (c *client) send(ctx context.Context, hc *http.Client, op string, build func(context.Context) (*http.Request, error)) (int, []byte, http.Header, error) {
+// with backoff, honouring Retry-After up to 10 s. It returns the last answer
+// and whether it came from a retry (an earlier attempt may have landed): a
+// transport failure is the only error.
+func (c *client) send(ctx context.Context, hc *http.Client, op string, build func(context.Context) (*http.Request, error)) (int, []byte, http.Header, bool, error) {
 	for attempt := 0; ; attempt++ {
 		status, raw, hdr, err := c.sendOnce(ctx, hc, build)
 		if (err == nil && !transient(status)) || attempt == retries {
 			if err != nil {
-				return 0, nil, nil, &kvError{op: op, cause: err}
+				return 0, nil, nil, attempt > 0, &kvError{op: op, cause: err}
 			}
-			return status, raw, hdr, nil
+			return status, raw, hdr, attempt > 0, nil
 		}
 		wait := c.backoff << attempt
 		if s, perr := strconv.Atoi(hdr.Get("Retry-After")); perr == nil && s > 0 {
@@ -419,9 +420,9 @@ func (c *client) send(ctx context.Context, hc *http.Client, op string, build fun
 		select {
 		case <-ctx.Done():
 			if err == nil {
-				return status, raw, hdr, nil
+				return status, raw, hdr, attempt > 0, nil
 			}
-			return 0, nil, nil, &kvError{op: op, cause: err}
+			return 0, nil, nil, attempt > 0, &kvError{op: op, cause: err}
 		case <-time.After(wait):
 		}
 	}
@@ -451,27 +452,37 @@ func (c *client) sendOnce(ctx context.Context, hc *http.Client, build func(conte
 // nil error for 2xx and 404, which callers interpret; every other answer is a
 // *kvError. A 401 fetches a new token (bounded) and retries once.
 func (c *client) call(ctx context.Context, method, path string, in, out any) (int, error) {
+	status, _, err := c.callRetried(ctx, method, path, in, out)
+	return status, err
+}
+
+// callRetried is call that also reports whether the answer followed a retry
+// of the same request: an earlier attempt may have landed unseen, so a 404 to
+// a DELETE can mean "my first attempt already deleted it".
+func (c *client) callRetried(ctx context.Context, method, path string, in, out any) (int, bool, error) {
 	u, err := c.url(path)
 	if err != nil {
-		return 0, err
+		return 0, false, err
 	}
 	var body []byte
 	if in != nil {
 		if body, err = json.Marshal(in); err != nil {
-			return 0, fmt.Errorf("key vault %s: encode: %w", method, err)
+			return 0, false, fmt.Errorf("key vault %s: encode: %w", method, err)
 		}
 	}
 	op := method + " " + u.Path
-	status, raw, used, err := c.authed(ctx, method, u.String(), op, body)
+	status, raw, used, retried, err := c.authed(ctx, method, u.String(), op, body)
 	if err == nil && status == http.StatusUnauthorized && c.forceRefresh(ctx, used) {
-		status, raw, _, err = c.authed(ctx, method, u.String(), op, body)
+		var again bool
+		status, raw, _, again, err = c.authed(ctx, method, u.String(), op, body)
+		retried = retried || again
 	}
 	if err != nil {
-		return 0, err
+		return 0, retried, err
 	}
 	switch {
 	case status == http.StatusNotFound:
-		return status, nil
+		return status, retried, nil
 	case status/100 != 2:
 		var e struct {
 			Error struct {
@@ -480,22 +491,22 @@ func (c *client) call(ctx context.Context, method, path string, in, out any) (in
 			} `json:"error"`
 		}
 		_ = json.Unmarshal(raw, &e)
-		return status, &kvError{op: op, status: status, code: e.Error.Code, msg: firstLine(e.Error.Message)}
+		return status, retried, &kvError{op: op, status: status, code: e.Error.Code, msg: firstLine(e.Error.Message)}
 	}
 	if out != nil && len(raw) > 0 {
 		if err := json.Unmarshal(raw, out); err != nil {
-			return status, fmt.Errorf("key vault %s: decode: %w", op, err)
+			return status, retried, fmt.Errorf("key vault %s: decode: %w", op, err)
 		}
 	}
-	return status, nil
+	return status, retried, nil
 }
 
-func (c *client) authed(ctx context.Context, method, u, op string, body []byte) (int, []byte, string, error) {
+func (c *client) authed(ctx context.Context, method, u, op string, body []byte) (int, []byte, string, bool, error) {
 	tok, err := c.accessToken(ctx)
 	if err != nil {
-		return 0, nil, "", err
+		return 0, nil, "", false, err
 	}
-	status, raw, _, err := c.send(ctx, c.http, op, func(ctx context.Context) (*http.Request, error) {
+	status, raw, _, retried, err := c.send(ctx, c.http, op, func(ctx context.Context) (*http.Request, error) {
 		var r io.Reader
 		if body != nil {
 			r = bytes.NewReader(body)
@@ -510,7 +521,7 @@ func (c *client) authed(ctx context.Context, method, u, op string, body []byte) 
 		req.Header.Set("Authorization", "Bearer "+tok)
 		return req, nil
 	})
-	return status, raw, tok, err
+	return status, raw, tok, retried, err
 }
 
 // sameOrigin reports whether u names the same origin as base: the same scheme,

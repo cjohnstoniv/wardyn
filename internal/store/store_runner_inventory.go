@@ -83,6 +83,8 @@ type RunnerInventoryResult struct {
 	// AssertedCapHeld reports a page that met a new asserted subject past
 	// the runner's cap: nothing was queued and the runner stays not-ready.
 	AssertedCapHeld bool
+	// Containment lists the page's containment-pending transitions, audited after it commits.
+	Containment []RunContainmentEvent
 }
 
 // BeginRunnerInventory captures original candidates before fresh PENDING/STATE.
@@ -179,9 +181,12 @@ func (s PG) IntakeRunnerStatePage(ctx context.Context, runnerID uuid.UUID, sessi
 		return out, err
 	}
 	for _, row := range page.Runs {
-		needs, capped, err := s.intakeRunnerStateRow(ctx, tx, runnerID, row)
+		needs, capped, ev, err := s.intakeRunnerStateRow(ctx, tx, runnerID, row)
 		if err != nil {
 			return out, err
+		}
+		if ev != nil {
+			out.Containment = append(out.Containment, *ev)
 		}
 		out.NeedsReconciliation = out.NeedsReconciliation || needs
 		out.AssertedCapHeld = out.AssertedCapHeld || capped
@@ -201,46 +206,54 @@ func (s PG) IntakeRunnerStatePage(ctx context.Context, runnerID uuid.UUID, sessi
 	return out, tx.Commit(ctx)
 }
 
-func (s PG) intakeRunnerStateRow(ctx context.Context, tx pgx.Tx, runnerID uuid.UUID, row runnerwire.RunState) (needs, capped bool, err error) {
+func (s PG) intakeRunnerStateRow(ctx context.Context, tx pgx.Tx, runnerID uuid.UUID, row runnerwire.RunState) (needs, capped bool, ev *RunContainmentEvent, err error) {
 	if row.SpoolDepth < 0 || row.SpoolDrops < 0 {
-		return false, false, ErrRunnerExecutionRefused
+		return false, false, nil, ErrRunnerExecutionRefused
 	}
 	assertion, err := json.Marshal(row)
 	if err != nil {
-		return false, false, err
+		return false, false, nil, err
 	}
 	containment, needsLoss, err := s.reconcileRunnerStateRowTx(ctx, tx, runnerID, row)
 	if errors.Is(err, ErrNotFound) {
 		// No org row: contain the asserted subject per run, so one erased run
 		// never refuses the page for the runner's other runs.
 		if needs, capped, err = assertedSubjectTx(ctx, tx, runnerID, row); err != nil {
-			return false, false, err
+			return false, false, nil, err
 		}
 		_, err = tx.Exec(ctx, `INSERT INTO runner_inventory_observations(runner_id,run_id,assertion) VALUES($1,$2,$3)`, runnerID, row.RunID, assertion)
-		return needs, capped, err
+		return needs, capped, nil, err
 	}
 	if err != nil {
-		return false, false, err
+		return false, false, nil, err
+	}
+	if ev, err = syncRunContainmentPendingTx(ctx, tx, runnerID, row); err != nil {
+		return false, false, nil, err
+	}
+	if row.ContainmentPending != nil {
+		// The runner already holds this run contained, fenced and pending completion evidence; a
+		// stop_proxy for its outage loss could not complete and would only hold its queue.
+		containment = nil
 	}
 	var proof []byte
 	if containment != nil {
 		proof, err = json.Marshal(containment)
 		if err != nil {
-			return false, false, err
+			return false, false, nil, err
 		}
 		// The stop_proxy commits with the page, so a refused Final always
 		// leaves it durable for the next fresh PENDING.
 		lostAt := containment.LostAt
 		if _, _, err = queueRunnerActionTx(ctx, tx, types.RunnerPendingAction{ID: uuid.New(), RunnerID: runnerID, RunID: row.RunID,
 			Kind: types.RunnerActionStopProxy, Ref: containment.Ref, Generation: containment.Generation, LostAt: &lostAt}); err != nil {
-			return false, false, err
+			return false, false, nil, err
 		}
 	}
 	if _, err = tx.Exec(ctx, `INSERT INTO runner_inventory_observations(runner_id,run_id,assertion,containment,needs_loss) VALUES($1,$2,$3,$4,$5)`, runnerID, row.RunID, assertion, proof, needsLoss); err != nil {
-		return false, false, err
+		return false, false, nil, err
 	}
 	_, err = tx.Exec(ctx, `UPDATE runner_inventory_candidates SET seen=true WHERE runner_id=$1 AND run_id=$2`, runnerID, row.RunID)
-	return needsLoss || containment != nil, false, err
+	return needsLoss || containment != nil, false, ev, err
 }
 
 const inventoryOmissionsSQL = `SELECT EXISTS (

@@ -94,6 +94,11 @@ const ENDING_COPY: Partial<Record<RunEndingKind, EndingCopy>> = {
       "Fix that, then start a new run — the policy and workspace are unchanged.",
     ],
   },
+  relay_ip_fenced: {
+    happened: () =>
+      "The runner stopped this run before it opened: its proxy was given a network address the runner still holds for an earlier run it is waiting to confirm stopped. There is no exit code because nothing ran.",
+    todo: ["Start the run again. The policy and workspace are unchanged."],
+  },
   agent_start: {
     happened: () =>
       "The sandbox was created, but the agent could not be started in it, so no task ran. There is no exit code because nothing ran.",
@@ -288,7 +293,7 @@ export function RunFailureBlock({
   const ending = runEndingFromAudit(run.state, audit);
   const door = useModelAccessDoor();
   const credential = ending?.kind === "credential";
-  const dispatchFailure = ending?.kind === "sandbox_create" || ending?.kind === "agent_start";
+  const dispatchFailure = ending?.kind === "sandbox_create" || ending?.kind === "agent_start" || ending?.kind === "relay_ip_fenced";
   // The context's status can be up to five minutes old, and a just-refused run
   // is exactly when the credential's state changed — so read it again, ONCE per
   // mount (the trail arrives after the first paint, so this fires when the

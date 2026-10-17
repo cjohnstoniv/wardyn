@@ -514,10 +514,10 @@ func (s *Server) bridgeSSHShell(ctx context.Context, runID uuid.UUID, principal 
 	}
 	// The web lane's per-run session cap, shared with it (attach_slots.go): reserved before the
 	// recorder is built, held until finishRecording below has returned.
-	releaseSlot, ok := s.reserveAttachSlot(run, principal)
-	if !ok {
-		s.auditAttachSessionCap(ctx, run, types.ActorHuman, principal, map[string]any{"transport": "ssh"})
-		sendChannelError(channel, "wardyn: "+attachSessionCapMsg)
+	releaseSlot, refused := s.reserveAttachSlotOrSay(run, principal)
+	if refused != "" {
+		s.auditAttachSessionCap(ctx, run, types.ActorHuman, principal, refused, map[string]any{"transport": "ssh"})
+		sendChannelError(channel, "wardyn: "+refused)
 		return
 	}
 	defer releaseSlot()

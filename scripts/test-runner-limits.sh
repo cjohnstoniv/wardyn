@@ -28,20 +28,21 @@ dir="$(mktemp -d)"; trap 'rm -rf "$dir"' EXIT
 calls="${dir}/calls"; err="${dir}/err"
 
 # What the fake server says: the runners with no limits, and whether the runner reports its free disk.
-unset_runners="" other_runners="" reports_disk=0 reports_size=1 set_rc=0 noisy=0 race=0
+unset_runners="" other_runners="" reports_disk=0 reports_size=1 set_rc=0 noisy=0 race=0 revoked=0
 # The proposal the fake CLI prints: half of the free disk it was handed, everything else fixed.
 proposal() { echo "--max-runs 4 --total-cpu 4 --total-memory 8 --total-disk $(($1 / 2)) --per-run-cpu 1 --per-run-memory 2 --per-run-disk $(($1 / 8))"; }
 wardyn() {
   echo "$*" >>"${calls}"
   case "$*" in
     "runner remote list --no-limits --ids") echo ${unset_runners} ${other_runners} | tr ' ' '\n' | grep . || true ;;
+    "runner remote list --ids") { [ "${revoked}" = 1 ] || echo docker; echo ${other_runners} | tr ' ' '\n' | grep . || true; } ;;
     "runner remote list --no-limits --set-up-here --ids") echo ${unset_runners} | tr ' ' '\n' | grep . || true ;;
     "runner remote propose docker"*)
       if [ "${reports_size}" = 0 ]; then echo "wardyn: the runner reports no CPU or memory to propose from: set its limits with \`wardyn runner set\`" >&2; return 1; fi
       [ "${noisy}" = 1 ] && echo "wardyn: notice: this server is older than the CLI" >&2
       case "$*" in *--free-disk*) proposal "${!#}"; return ;; esac
       if [ "${reports_disk}" = 1 ]; then proposal 400; else echo "wardyn: the runner does not report its free disk: pass --free-disk" >&2; return 1; fi ;;
-    "runner set docker --if-unset "*) [ "${race}" = 1 ] && unset_runners=""; return "${set_rc}" ;;
+    "runner set docker --if-unset "*) { [ "${race}" = 1 ] || [ "${revoked}" = 1 ]; } && unset_runners=""; return "${set_rc}" ;;
     *) fail "the helper ran an unexpected command: wardyn $*" ;;
   esac
 }
@@ -133,6 +134,12 @@ set_rc=0
 set_rc=1 race=1
 if [ "$(WARDYN_SETUP_RUNNER_LIMITS="${walk}" run)" != 0 ] || ! grep -q "set meanwhile" "${err}" || grep -q "takes no run until" "${err}"; then fail "losing the --if-unset race was reported as a failure or as unset: $(cat "${err}")"; fi
 set_rc=0 race=0 unset_runners=docker
+
+# 7a2) A set that fails because the runner was removed from the server in between is not reported as
+# limits someone else set.
+set_rc=1 revoked=1
+if [ "$(WARDYN_SETUP_RUNNER_LIMITS="${walk}" run)" != 0 ] || ! grep -q "removed from the server meanwhile" "${err}" || grep -q "set meanwhile" "${err}"; then fail "a runner removed during the set was reported as limits set by someone else: $(cat "${err}")"; fi
+set_rc=0 revoked=0 unset_runners=docker
 
 # 7b) The given flags split into words but never into file names, and the caller's own glob setting
 # survives the call.

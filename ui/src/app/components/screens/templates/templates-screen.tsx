@@ -213,6 +213,8 @@ export function TemplatesScreen() {
         />
       </div>
 
+      {data?.publish.groups_unverified && <Notice tone="warning">{T.GROUPS_UNVERIFIED}</Notice>}
+
       <section aria-label={T.LIST_ARIA} className="overflow-hidden rounded-xl border border-border bg-card">
         {body}
       </section>

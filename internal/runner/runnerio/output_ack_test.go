@@ -142,9 +142,12 @@ func TestOutputAckedCreatePathKeepsEveryByte(t *testing.T) {
 	if err := waitFor(t, "acked drain", drain(t, server, id, want)); err != nil {
 		t.Fatal(err)
 	}
+	// Each 64 KiB part is written, and each ACK recorded, through fsync, so how long the transfer
+	// takes is the host's disk and CPU, not the property under test: the bound on the org's end of
+	// it is a hang guard, as waitFor's is, and not the 10 s that bounds the create call.
 	select {
 	case <-capture.done:
-	case <-ctx.Done():
+	case <-time.After(time.Minute):
 		t.Fatal("org output never completed")
 	}
 	if capture.err != nil || !bytes.Equal(capture.Bytes(), want) {

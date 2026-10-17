@@ -1034,6 +1034,10 @@ func TestPreflightAnswersCreatesRequestRefusals(t *testing.T) {
 	for _, tc := range []struct{ name, body, reason string }{
 		{"no agent", `{"task":"t","confinement_class":"CC2"}`, reasonAgentRequired},
 		{"a server-reserved task", `{"agent":"claude-code","task":"workspace record","confinement_class":"CC2"}`, reasonRunTaskReserved},
+		{"an unknown task_mode", `{"agent":"claude-code","task":"t","confinement_class":"CC2","task_mode":"bogus"}`, reasonTaskModeUnknown},
+		{"an unknown interactive_start", `{"agent":"claude-code","task":"t","confinement_class":"CC2","interactive_start":"bogus"}`, reasonInteractiveStartUnknown},
+		{"an unknown tool_approvals", `{"agent":"claude-code","task":"t","confinement_class":"CC2","tool_approvals":"bogus"}`, reasonToolApprovalsUnknown},
+		{"hold on codex-cli", `{"agent":"codex-cli","task":"t","confinement_class":"CC2","tool_approvals":"hold"}`, reasonToolApprovalsHoldUnsupportedAgent},
 		{"hold on an interactive run", `{"agent":"claude-code","task":"t","interactive":true,"confinement_class":"CC2","tool_approvals":"hold"}`, reasonToolApprovalsHoldInteractiveConflict},
 		{"hold on a run with no task", `{"agent":"claude-code","confinement_class":"CC2","tool_approvals":"hold"}`, reasonToolApprovalsHoldInteractiveConflict},
 	} {

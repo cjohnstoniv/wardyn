@@ -726,7 +726,7 @@ func (s *Server) killRunCascade(ctx context.Context, run types.AgentRun, killerT
 	if !applied {
 		return false, nil, nil
 	}
-	killData := s.killTeardownTail(ctx, run, killerType, killer, extra, false)
+	killData := s.killTeardownTail(ctx, run, killerType, killer, extra, true)
 	return true, killData, nil
 }
 
@@ -817,9 +817,10 @@ func (s *Server) claimKillTransition(ctx context.Context, run types.AgentRun) (b
 // killTeardownTail takes one more choice from its caller: queuedOK
 // says a sandbox kill queued for an offline runner (runner.ErrPendingOnRunner)
 // is a clean teardown, applied when the runner reconnects, rather than a failed
-// step. A person's kill keeps reading it as a failure to retry; the lifetime kill
-// (killRunAtLifetime) has no person to retry it, and its run is already KILLED
-// at the org, so it records the sandbox stop as queued instead.
+// step. A person's kill and the lifetime kill record the sandbox stop as queued:
+// a retry would only find the same queued action, the run's identity is revoked
+// here, and the runner's receipt is audited as runner.action.apply (contained) or
+// runner.action.refuse. The login supersede still reads it as a failure.
 func (s *Server) killTeardownTail(ctx context.Context, run types.AgentRun, killerType types.ActorType, killer string, extra map[string]any, queuedOK bool) map[string]any {
 	id := run.ID
 	if run.State == types.RunQueued {

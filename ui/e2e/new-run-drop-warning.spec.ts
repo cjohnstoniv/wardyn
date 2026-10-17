@@ -5,7 +5,7 @@
 
 // New Run, Review (FUG-L749 N3): a host the ceiling dropped from the run's allowed list is said in one
 // plain sentence, not the server's operator words. The preflight is stubbed from the scenario fixtures
-// with the server's own two drop warnings; every other warning stays as it came.
+// with the server's own three drop warnings; every other warning stays as it came.
 import type { Page } from "@playwright/test";
 import { test, expect, gotoConsole, navToRoute } from "./fixtures";
 import { NR_DOCUMENT } from "../src/app/components/wardyn/copy/new-run/document";
@@ -14,13 +14,13 @@ import { NR_START } from "../src/app/components/wardyn/copy/new-run/start";
 import { SCENARIO_HARNESSES, SCENARIO_HARNESS_SETS } from "../src/app/lib/new-run-fixtures/scenarios/harnesses";
 import { SCENARIO_POOLS } from "../src/app/lib/new-run-fixtures/scenarios/pools";
 import { SCENARIO_PREFLIGHT } from "../src/app/lib/new-run-fixtures/scenarios/preflight";
-import { DROPPED_HOSTS } from "../src/app/components/screens/new-run-flow/review/drop-warnings";
 
 const DOCUMENT = "api_version: wardyn/v1\nkind: Run\nintent:\n  shape: environment\n  experience: interactive\n  no_repositories_or_drives: true\n";
 const SERVER_WARNINGS = [
   "dropped 2 egress domain(s) not in operator allowlist: pastebin.com,files.example.test",
   'dropped private address entry "10.0.0.5": not in operator allowlist, and allow_all_egress does not cover a private address',
   'confinement raised from "CC1" to operator minimum "CC2"',
+  `dropped clone host "10.0.0.9" of workspace "app": a private address not in operator allowlist; allow it in the workspace's approved egress`,
 ];
 
 async function openReviewWith(page: Page, warnings: string[]) {
@@ -54,8 +54,9 @@ async function openReviewWith(page: Page, warnings: string[]) {
 test.describe("New Run, Review: a host the ceiling dropped", () => {
   test("is said in the ceiling's words, and another server warning is left as it came", async ({ page }) => {
     await openReviewWith(page, SERVER_WARNINGS);
-    await expect(page.getByText(DROPPED_HOSTS.MANY("pastebin.com and files.example.test"), { exact: true })).toBeVisible();
-    await expect(page.getByText(DROPPED_HOSTS.ONE("10.0.0.5"), { exact: true })).toBeVisible();
+    await expect(page.getByText(NR_REVIEW.DROPPED_HOSTS_MANY("pastebin.com and files.example.test"), { exact: true })).toBeVisible();
+    await expect(page.getByText(NR_REVIEW.DROPPED_HOST_ONE("10.0.0.5"), { exact: true })).toBeVisible();
+    await expect(page.getByText(NR_REVIEW.DROPPED_HOST_ONE("10.0.0.9"), { exact: true })).toBeVisible();
     await expect(page.getByText(SERVER_WARNINGS[2], { exact: true })).toBeVisible();
     await expect(page.getByText("not in operator allowlist")).toHaveCount(0);
   });

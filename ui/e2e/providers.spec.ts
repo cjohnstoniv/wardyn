@@ -650,6 +650,65 @@ test.describe("providers — how people connect to Azure DevOps (#1428)", () => 
     await resetProviders(page);
   });
 
+  test("a minted-token row can allow tokens on a person's own runner, and the sandbox choice needs that first", async ({ page }) => {
+    const minted = {
+      id: "azure_devops",
+      kind: "azure_devops",
+      base_urls: ["https://dev.azure.com/wardyn-e2e"],
+      lanes: ["entra"],
+      credential_source: "per_user",
+      entra: { tenant_id: ADO_TENANT, client_id: ADO_CLIENT, token_mode: "minted_pat", capability_ceiling: ["project_read", "code_read"], default_profile: ["code_read"] },
+    };
+    let sent: { git: Record<string, unknown>[] } | null = null;
+    await spliceProviders(page, minted, (body) => {
+      sent = body;
+      return { status: 200, json: { git: body.git, sources_no_longer_admitted: 0 } };
+    });
+    await gotoProviders(page);
+    const row = page.getByTestId("provider-row-azure_devops");
+    const runner = row.getByRole("switch", { name: ADO_ENTRA_EDITOR.RUNNER_TOGGLE });
+    const sandbox = row.getByRole("switch", { name: ADO_ENTRA_EDITOR.SANDBOX_TOGGLE });
+    await expect(sandbox).toBeDisabled();
+    await runner.click();
+    await sandbox.click();
+    await saveProviders(page);
+    expect((sent!.git[0].entra as Record<string, unknown>)).toEqual(expect.objectContaining({ runner_resident: true, runner_resident_sandbox: true }));
+
+    // Turning the runner choice off takes the sandbox choice with it.
+    await runner.click();
+    await expect(sandbox).toBeDisabled();
+    await page.getByRole("button", { name: PROVIDERS.SAVE_CTA }).click();
+    await expect.poll(() => (sent!.git[0].entra as Record<string, unknown>).runner_resident).toBeFalsy();
+    expect((sent!.git[0].entra as Record<string, unknown>).runner_resident_sandbox).toBeFalsy();
+
+    // A person-owned token row has neither choice.
+    await row.getByRole("radio", { name: ADO_PAT.MODE_OWN }).check();
+    await expect(runner).toHaveCount(0);
+  });
+
+  test("turning the runner and sandbox switches on and off again leaves Providers clean", async ({ page }) => {
+    const minted = {
+      id: "azure_devops",
+      kind: "azure_devops",
+      base_urls: ["https://dev.azure.com/wardyn-e2e"],
+      lanes: ["entra"],
+      credential_source: "per_user",
+      entra: { tenant_id: ADO_TENANT, client_id: ADO_CLIENT, token_mode: "minted_pat", capability_ceiling: ["project_read", "code_read"], default_profile: ["code_read"] },
+    };
+    await spliceProviders(page, minted, (body) => ({ status: 200, json: { git: body.git, sources_no_longer_admitted: 0 } }));
+    await gotoProviders(page);
+    const row = page.getByTestId("provider-row-azure_devops");
+    const runner = row.getByRole("switch", { name: ADO_ENTRA_EDITOR.RUNNER_TOGGLE });
+    const sandbox = row.getByRole("switch", { name: ADO_ENTRA_EDITOR.SANDBOX_TOGGLE });
+    await runner.click();
+    await sandbox.click();
+    await expect(page.getByTestId("unsaved-marker")).toBeVisible();
+    await sandbox.click();
+    await runner.click();
+    await expect(sandbox).toBeDisabled();
+    await expect(page.getByTestId("unsaved-marker")).toHaveCount(0);
+  });
+
   test("the token choice: setup note, the organisation check, a lifespan refusal, the blocked banner, and a refused Save", async ({ page }) => {
     const minted = {
       id: "azure_devops",

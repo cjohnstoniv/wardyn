@@ -2,6 +2,8 @@
 {{- $fullname := include "runnerd.fullname" . -}}
 {{- $tag := include "runnerd.tag" . -}}
 {{- $stateDir := "/var/lib/wardyn-runnerd" -}}
+{{- /* runnerd refuses a state directory that is not 0700, and the volume's own root is group-writable (fsGroup): it keeps its state one level down. */ -}}
+{{- $stateSub := printf "%s/state" $stateDir -}}
 {{- $placement := dict -}}
 {{- range $key := list "nodeSelector" "tolerations" "affinity" "priorityClassName" "podAnnotations" "podLabels" -}}
 {{- with index $.Values.k8s.sandbox $key }}{{- $_ := set $placement $key . -}}{{- end -}}
@@ -61,9 +63,12 @@ spec:
             - --if-unregistered
             - {{ printf "--org=%s" .Values.org | quote }}
             - --token-file=/etc/wardyn/registration/token
-            - --state-dir={{ $stateDir }}
+            - --state-dir={{ $stateSub }}
             - --name={{ $fullname }}
             - {{ printf "--arch=%s" .Values.sandbox.arch | quote }}
+            {{- if .Values.trustedCA.configMap }}
+            - --trusted-ca-file=/etc/wardyn/trusted-ca/ca.pem
+            {{- end }}
             {{- range $flag, $key := dict "max-runs" "maxRuns" "total-cpu" "totalCPU" "total-memory" "totalMemory" "total-disk" "totalDisk" "per-run-cpu" "perRunCPU" "per-run-memory" "perRunMemory" "per-run-disk" "perRunDisk" }}
             {{- with index $.Values.limits $key }}
             - {{ printf "--%s=%v" $flag . | quote }}
@@ -84,6 +89,11 @@ spec:
               readOnly: true
             - name: tmp
               mountPath: /tmp
+            {{- if .Values.trustedCA.configMap }}
+            - name: trusted-ca
+              mountPath: /etc/wardyn/trusted-ca
+              readOnly: true
+            {{- end }}
       containers:
         - name: runnerd
           image: "{{ .Values.image.repository }}:{{ $tag }}"
@@ -92,7 +102,7 @@ spec:
             - serve
             - --substrate=k8s
             - {{ printf "--org=%s" .Values.org | quote }}
-            - --state-dir={{ $stateDir }}
+            - --state-dir={{ $stateSub }}
             - {{ printf "--runs-namespace=%s" .Values.runsNamespace | quote }}
             - {{ printf "--relay-service=%s.%s.svc.%s" $fullname .Release.Namespace .Values.clusterDomain | quote }}
             - --relay-listen=$(POD_IP)

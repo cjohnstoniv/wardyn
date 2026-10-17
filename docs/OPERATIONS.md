@@ -103,6 +103,7 @@ copy is permanent.
   `wardyn run sign-in <run-id>` (below).
 
 - **Recording-on Kubernetes output.**
+  - **The Helm chart's default records nothing** until you set `env.WARDYN_RECORDING_STORE=pg` or turn on `persistence`; `wardyn setup status` shows it in the "Session recording" row.
   - The session recorder writes no task stdout to the container log.
   - With output persistence and recording enabled, terminal noninteractive runs recover the available asciicast output
     payloads into a masked tail with `source: "recording"`.
@@ -237,6 +238,7 @@ copy is permanent.
       - An exec agent's terminal is a hijacked stream that dockerd does not log and that cannot be re-attached after
         the process that held it died, so the run ends with a `capture_gap` row.
   - A sandbox that is already gone, and a runner that cannot read output back, also give a `capture_gap` row.
+  - A runner that already discarded the start of the output gives the rest: the row opens with a line naming the missing bytes and is incomplete.
   - **A run with no complete masking manifest gets a capture gap, and nothing is read.**
     - That is every run with no manifest (a run dispatched before 0.8.6, including runs that are alive across the
       upgrade) and any whose manifest is incomplete.
@@ -1253,6 +1255,8 @@ erases one person's retained records by explicit scope, in one audited act
   - A request decoded before the erase whose insert begins after it commits keeps its intent, as its run row keeps its task.
   - Migration `0171_run_launch_intents` adds the table; a split-role install grants the app role `SELECT, INSERT, DELETE` on it.
 
+- An erasure that names more than one of `run_tasks`, `components` and `run_setups` deletes the launch intents in the first of those steps; the others report `launch_intents: 0`.
+
 - **A credential write that began before the erase never lands behind it.**
   - The `credentials` scope advances the person's erase generation before it lists anything and again after the deletes, so a write that began between the two is refused as well.
   - Every write of a stored credential reads that generation when it begins and is refused if it has moved: `409` `credential_erased_during_write`, nothing saved.
@@ -2257,6 +2261,7 @@ It is dropped there with an audited reason (`unloadable-upstream-url`, a
 - Every sandbox image bakes `corp-ca.pem` at build (`install_mitm_ca`, "[Corporate TLS-inspection root](#corporate-tls-inspection-root)" below), but the `wardyn-proxy` image carries a corporate CA only if one was staged at its own build.
 - Otherwise it trusts one only through `WARDYN_TRUSTED_CA_FILE` ([ENV.md](ENV.md)).
 - Unset, the re-origination's re-dial fails `x509: certificate signed by unknown authority`, filed as the same bare `builtin:dial-failed` as every other dial failure in this section.
+- The sandbox's error text and the decision row's cause drop the issuing CA's name, and a name-constraint refusal's names, for every host, so an unknown-authority failure does not say which CA is missing; the proxy's own log keeps the masked text.
 
 **Reading the audit rows for this lane.**
 Three things in a run's audit trail say which hop its connections took and why one died, and the proxy's log adds a fourth.
@@ -3516,6 +3521,8 @@ Moved, with the sections that followed it here, to [secrets-and-keys.md](operati
 - A plain `http://` OIDC issuer under TLS refuses boot. A mesh that encrypts the internal issuer may set `WARDYN_OIDC_INTERNAL_ISSUER_PLAINTEXT=mesh`; the public issuer has no opt-out.
 - A remote-hosted runner whose limits the upgraded server cannot measure takes no run until they are set: `wardyn runner remote list --no-limits`, then `wardyn runner remote propose <id>` and `wardyn runner set <id>` ([runner pools](operations/runner-pools.md#a-remote-hosted-runners-limits)). `make setup` does this for its own stack.
 - After an upgrade, setup status shows a "Runner limits" warning, for operators only, while any runner has none. `wardyn runner list --all --no-limits` and `wardyn runner remote list --no-limits` list the runners without limits.
+- After an upgrade, setup status (`wardyn setup status`, and the console's setup review) shows "Defaults changed by this upgrade", for operators only: each default a release since the one this deployment last ran changed that reaches this deployment's own configuration, with what to set for the old behaviour. wardynd records each release it boots in `deployment_versions` (migration `0190_deployment_versions`), and the list stays until the next upgrade. The CHANGELOG's section of the same name lists every such change in general.
+- Self-hosting a runner needs the `self_host_runner` permission since 0.9.1. An estate that took 0.9.1's migration while its only claimed runners were ones an admin minted started closed. Setup status then shows a "Self-hosted runner tokens" warning, and the grant for everyone is `POST /api/v1/permissions/grants` with `{"subject_type": "all", "capability": "feature", "value": "self_host_runner", "effect": "allow"}` ([capabilities](operations/capabilities.md#self_host_runner)).
 - If `wardyn runner remote propose` says the runner reports no CPU or memory, the message names the read that failed: grant the node read with `k8s.readNodes=true`, or create a ResourceQuota in the runs namespace that sets `requests.cpu`, `requests.memory` and `requests.ephemeral-storage`, then propose again.
 - An existing `go` redirect now keeps Go's checksum database on: `GOSUMDB` is `sum.golang.org <to>/sumdb/sum.golang.org`, so a mirror that does not proxy `/sumdb/` fails its runs' module downloads until the redirect sets `go_checksum_db_off` (see the `go` redirect notes under Corporate network egress).
 - First run `wardyn setup status --pre-upgrade`. It reads this shell's environment: load the Compose or desktop env file (`set -a; . FILE; set +a`), or give a chart's values as `--role-map` and `--default-role`. Exit 0 is clean, 1 leftovers. It checks the first two breaks only, a `member` role and a `MEMBER` variable spelling; check the issuer URL yourself.
@@ -3888,6 +3895,8 @@ image digests in `wardyn.env`, not a re-run of anything
 - `0183` (`0183_runner_retirements`) adds `runners.retire_capable` (`0139`'s table), `runner_execution_exits.receipt_only` (`0148`'s table) and replaces the `settlement` check on `runner_pending_actions` (`0139`'s table) so it admits `abandoned`, beside its new `runner_output_watermarks` and `runner_retirements` tables. A split migrator and app role install grants the app role `SELECT, INSERT, UPDATE` on both new tables, and on `runner_resident_runs` (`0182_runner_resident_runs`).
 - `0184` (`0184_run_runner_trust_class`) adds `runner_trust_class` to `agent_runs`: the trust class a local run's credential plan was admitted at, which a revive holds its runner to; local runs already bound to a runner become `personal`.
 - `0185` (`0185_runner_pool_org_default_revision`) adds `runner_pool_org_defaults.revision` (`0152`'s table), which starts at 1 and rises by one on every write of the organisation's runner-pool defaults.
+- `0188` (`0188_run_renewed_token_jtis`) adds `token_jti` and `token_prev_jti` to `agent_runs` (`0001`'s table): the ids of the two tokens a run's proxy last held across a renewal, which a revive revokes.
+- `0189` (`0189_run_containment_pending`) replaces the `binding` check on `runner_pending_actions` (`0139`'s table) so a `stop_proxy` may carry a node record in place of an outage loss, beside its new `run_containment_pending` and `run_node_records` tables.
 - `0085` is named for its `CREATE OR REPLACE FUNCTION push_content_paths_immutable()`,
   but it is not an instance of the hazard: it creates that function and the
   `push_content_paths` table in the same file, so the migrator owns both from the start.

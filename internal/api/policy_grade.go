@@ -36,15 +36,19 @@ type gradePolicyResponse struct {
 // live safety meter while a spec is still being edited, before it is ever
 // saved or attached to a run. Member-accessible (mirrors /runs/preflight): a
 // member may see the risk of a spec they cannot necessarily save.
-// validatePolicySpec runs FIRST, with the same 400-naming-the-field contract
+// The spec is validated FIRST, with the same 400-naming-the-field contract
 // /policies' save path uses — grading a spec invalid enough to reject at write
-// time would tell a lie about it.
+// time would tell a lie about it. The grade reads no filesystem (mount sources
+// are judged by spelling, validatePolicySpecUnresolved), so its error text
+// cannot tell a member whether a path exists on the control-plane host or where
+// a symlink there points; the save door still refuses a source that resolves
+// into a denied path.
 func (s *Server) handleGradePolicy(w http.ResponseWriter, r *http.Request) {
 	var req gradePolicyRequest
 	if !decodeStrict(w, r, &req) {
 		return
 	}
-	if err := validatePolicySpec(req.Spec); err != nil {
+	if err := validatePolicySpecUnresolved(req.Spec); err != nil {
 		writeErrorReason(w, http.StatusBadRequest, specRefusalReason(err, reasonPolicyGradeSpecInvalid), "invalid policy spec: "+err.Error())
 		return
 	}

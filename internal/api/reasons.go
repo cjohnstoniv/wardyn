@@ -345,7 +345,7 @@ const (
 	reasonInvitationTargetInvalid    = "invitation_target_invalid"     // the principal is not a subject, or is reserved, or is a service: principal
 	reasonInvitationTargetUnknown    = "invitation_target_unknown"     // no person row and no bound identity has that principal
 	reasonInvitationReplacesInvalid  = "invitation_replaces_invalid"   // replaces_token_id is not a live admin-minted token of the target
-	reasonInvitationTTLInvalid       = "invitation_ttl_invalid"        // expires_in_seconds is outside 1 s to 14 d, or token_ttl_seconds is negative
+	reasonInvitationTTLInvalid       = "invitation_ttl_invalid"        // expires_in_seconds is outside 1 s to 14 d, or token_ttl_seconds is negative or over 100 years
 	reasonInvitationCapReached       = "invitation_cap_reached"        // the target already has the maximum pending invitations
 	reasonInvitationNotFound         = "invitation_not_found"          // no invitation by that id that this caller may act on
 	reasonInvitationNotPending       = "invitation_not_pending"        // the invitation was claimed, revoked or expired
@@ -535,4 +535,14 @@ const (
 	reasonTemplateNameTaken          = "template_name_taken"           // another template of the same audience already uses the name (case-insensitive)
 	reasonTemplateLimitReached       = "template_limit_reached"        // the audience already holds the most templates it may
 	reasonTemplatePolicyFieldRefused = "template_policy_field_refused" // a policy holds only run-wide network, credential and access-rule keys
+)
+
+// Kubernetes runner node-loss containment (run_containment.go): a run its runner deleted
+// but cannot prove stopped, and the security operator's node record that releases it.
+const (
+	reasonRunContainmentPending = "run_containment_pending" // identity.renew: the run's runner holds it as containment pending
+	reasonRelayIPFenced         = "relay_ip_fenced"         // the run failed at start: its proxy pod was given an IP still fenced for another run
+	reasonNodeRecordInvalid     = "node_record_invalid"     // POST /runs/{id}/node-record: the body is not a whole record
+	reasonNodeRecordRefused     = "node_record_refused"     // the run is not held pending, its record changed, or the attestation does not fit it
+	reasonNodeRecordHumanOnly   = "node_record_human_only"  // the admin token, or local mode, which cannot show who the people were
 )

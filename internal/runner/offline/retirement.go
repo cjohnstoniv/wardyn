@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"maps"
 	"path/filepath"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
@@ -88,6 +89,33 @@ func (m *Manager) retireRun(ctx context.Context, a runnerwire.PendingAction, r l
 		slog.WarnContext(ctx, "runner kept a retired run's output", "run_id", a.RunID, "error", err)
 	}
 	return result, nil
+}
+
+// compactRetired shrinks a retired run, once the org has acknowledged its retirement receipt, to an
+// identity tombstone, and drops the run's applied actions. The org sends none of them again, and the
+// tombstone alone still refuses the run's id to every later create and action. Until that
+// acknowledgement the full record stays, so a replayed receipt gets its saved answer.
+func (m *Manager) compactRetired(id uuid.UUID) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	r, ok := m.state.Runs[id]
+	if !ok || !r.Retired || r.Tombstone {
+		return nil
+	}
+	dropped := map[uuid.UUID]appliedAction{}
+	for aid, a := range m.state.Actions {
+		if a.Action.RunID == id {
+			dropped[aid] = a
+			delete(m.state.Actions, aid)
+		}
+	}
+	m.state.Runs[id] = localRun{RunID: id, Ref: r.Ref, Lease: runnerwire.Lease{RunID: id}, Retired: true, Tombstone: true}
+	if err := m.save(); err != nil {
+		m.state.Runs[id] = r
+		maps.Copy(m.state.Actions, dropped)
+		return err
+	}
+	return nil
 }
 
 // ReleaseSettledOutput sets the hook that deletes a retired run's output. The

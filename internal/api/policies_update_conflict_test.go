@@ -22,6 +22,14 @@ type renameConflictPolicyStore struct {
 	notFound bool
 }
 
+// GetPolicy is the read an update's audit row records the old policy from.
+func (s renameConflictPolicyStore) GetPolicy(_ context.Context, id uuid.UUID) (types.RunPolicy, error) {
+	if s.notFound {
+		return types.RunPolicy{}, store.ErrNotFound
+	}
+	return types.RunPolicy{ID: id, Name: "before"}, nil
+}
+
 func (s renameConflictPolicyStore) UpdatePolicy(context.Context, uuid.UUID, string, types.RunPolicySpec) (types.RunPolicy, error) {
 	if s.notFound {
 		return types.RunPolicy{}, store.ErrNotFound

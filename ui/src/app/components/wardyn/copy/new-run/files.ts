@@ -21,7 +21,6 @@ export const NR_FILES = {
   CLAMP_PROFILE: (size: string | number, profile: string | number) => `Clamped to ${size} by ${profile}.`,
   /** pending W-11: the recommended text until the owner answers. */
   CLAMP_SERVER: (size: string | number) => `Clamped to ${size} by this server.`,
-  /** pending W-11: the recommended text until the owner answers. */
   CLAMP_POLICY: (size: string | number) => `Clamped to ${size} by this run's policy.`,
   /** pending W-11: the recommended text until the owner answers. */
   CLAMP_ORG: (size: string | number) => `Clamped to ${size} by your organisation's limits.`,

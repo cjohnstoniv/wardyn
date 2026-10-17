@@ -110,6 +110,9 @@ func TestRedactErrHidesChainNames(t *testing.T) {
 		{"name constraint, wrapped", fmt.Errorf("dial: %w", nameConstrained(t)), []string{"gw.secret.internal"}, "dial: ", true},
 		{"unconstrained name", x509.CertificateInvalidError{Reason: x509.UnconstrainedName, Detail: "gw.secret.internal"},
 			[]string{"gw.secret.internal"}, "leaf contains unknown or unconstrained name", true},
+		// An error flattened to text still loses the detail, by its prefix.
+		{"name constraint, flattened", errors.New("dial: " + nameConstrained(t).Error()),
+			[]string{"gw.secret.internal", "permitted.corp.internal"}, "not authorized to sign for this name", true},
 		// A reason that prints no name is left as it was.
 		{"expired", x509.CertificateInvalidError{Reason: x509.Expired, Detail: "current time is after notAfter"},
 			nil, "current time is after notAfter", false},

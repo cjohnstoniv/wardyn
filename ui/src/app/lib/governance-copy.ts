@@ -379,6 +379,22 @@ export const DELIVERY = {
   OS_MIN_INVALID: "Use a version such as 15.0 or 10.0.22631.",
 } as const;
 
+// Governance -> Baseline hosts (egress_baseline.go): the hosts the autonomy rubric and the risk grade treat
+// as baseline, beside the built-in public set. Rendered by components/screens/governance/egress-baseline.tsx.
+export const BASELINE = {
+  TAB: "Baseline hosts",
+  LEAD: "Hosts your organisation vouches for. Wardyn grades a run's egress and its API keys against a built-in list of public model, code and package hosts, plus the hosts here: allowlisting only these doesn't make a run's egress open, and an API key sent to one of them isn't a powerful secret. Nothing is listed until you add it, so grading doesn't change on its own.",
+  HOSTS_LABEL: "Exact hosts",
+  HOSTS_HINT: "One hostname per line, for example llm.corp.example. No wildcards, ports or IP addresses.",
+  SUFFIXES_LABEL: "Internal host suffixes",
+  SUFFIXES_HINT: "One per line. Each must already be an internal host in site config; it covers that host and every host under it.",
+  SAVE: "Save",
+  SAVED: "Saved. New runs are graded with these hosts; runs already going keep the level they started with.",
+  REFUSED_TITLE: "This can't be saved as written",
+  FETCH_FAILED_TITLE: "Couldn't load the baseline hosts",
+  FETCH_FAILED_BODY: "Something went wrong reaching the server. The hosts already saved still apply — this page just can't show them right now.",
+} as const;
+
 // 0.8.6 four-eyes on governance writes (mock packet M3, S2-S4) — the Changes tab, its drawer and the
 // submitted-for-approval note shown at every covered write site. Approved strings; the console adds none
 // of its own. The server's own sentence on a refused decision renders verbatim under DECIDE_REFUSED_TITLE.
@@ -406,6 +422,7 @@ export const CHANGES = {
     remote_runner_people_policy: "Available to people's pools",
     service_identity: "Service identity",
     runner_trust: "Runner trust class",
+    run_node_record: "Node record",
     local_credential_delivery: DELIVERY.CHANGE_KIND,
   } as Record<string, string>,
   // By op. An op this console predates shows its raw name.

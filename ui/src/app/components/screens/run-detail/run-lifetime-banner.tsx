@@ -18,6 +18,7 @@ import type { ApprovalRequest, RunDetail } from "../../../lib/types";
 import { isTerminalRunState } from "../../../lib/types";
 import { audit as auditApi } from "../../../lib/api/audit";
 import { runs as runsApi } from "../../../lib/api/runs";
+import { waitEnded } from "../../../lib/api/core";
 import { absoluteTime, getErrorMessage } from "../../../lib/format";
 import { useOperator, usePrincipal } from "../../wardyn/operator-context";
 import { Button } from "../../ui/button";
@@ -84,10 +85,13 @@ export function RunLifetimeBanner({
   run,
   pending,
   onChanged,
+  containmentPending = false,
 }: {
   run: RunDetail;
   pending: ApprovalRequest[];
   onChanged: () => void;
+  /** The runner holds the run as containment pending: its proxy is not proven stopped, so no stopped sentence. */
+  containmentPending?: boolean;
 }) {
   const [action, setAction] = React.useState<Action>(null);
   const [dismissed, setDismissed] = React.useState(false);
@@ -114,7 +118,8 @@ export function RunLifetimeBanner({
       if (res.denied_added.length > 0) toast.info(RL.revivePolicy(res.denied_added.length));
       onChanged();
     } catch (err) {
-      toast.error("Couldn't revive this run", { description: getErrorMessage(err) });
+      if (waitEnded(err)) toast.info(RL.REVIVE_STILL_STARTING);
+      else toast.error("Couldn't revive this run", { description: getErrorMessage(err) });
     } finally {
       setAction(null);
     }
@@ -211,7 +216,7 @@ export function RunLifetimeBanner({
               ? LOCAL_RUN.UNKNOWN_BODY(runner, seen)
               : offline
                 ? LOCAL_RUN.LAPSE_BODY(runner, seen)
-                : stoppedLate === "failed"
+                : stoppedLate === "failed" || containmentPending
                   ? undefined
                   : stoppedLate
                     ? LOCAL_RUN.STOPPED_LATE(runner)

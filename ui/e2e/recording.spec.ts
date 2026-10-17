@@ -52,7 +52,7 @@ async function openRecordings(page: Page): Promise<void> {
 // task title) so a test can assert WHICH run a later fetch named.
 async function mockRecordingMeta(
   page: Page,
-  patch: Record<string, { bytes: number; durationSec: number }>,
+  patch: Record<string, { bytes: number; durationSec: number; evidence?: string }>,
   ids: Record<string, string> = {},
 ): Promise<void> {
   await page.route(RUNS_LIST_GLOB, async (route: Route) => {
@@ -66,6 +66,7 @@ async function mockRecordingMeta(
         run.has_recording = true;
         run.recording_bytes = meta.bytes;
         run.recording_duration_sec = meta.durationSec;
+        if (meta.evidence) run.evidence_source = meta.evidence;
         ids[run.task] = run.id;
       } else {
         run.has_recording = false;
@@ -252,6 +253,24 @@ test.describe("Recordings library", () => {
     expect(ids["e2e fixture 4"], "the list splice recorded fixture 4's id").toBeTruthy();
     expect(probedIds[0]).toContain(ids["e2e fixture 4"]);
     expect(probedIds[0]).not.toContain(ids["e2e fixture 7"]);
+  });
+
+  test("a recording the runner reported says so in the replay, and one the organisation made does not", async ({ page }) => {
+    await page.route(RECORDING_GLOB, (route) => route.fulfill({ status: 200, contentType: "text/plain", body: CAST }));
+    await mockRecordingMeta(page, {
+      "e2e fixture 4": { bytes: 512, durationSec: 3, evidence: "runner_asserted" },
+      "e2e fixture 7": { bytes: 512, durationSec: 3, evidence: "substrate" },
+    });
+    await openRecordings(page);
+
+    await page.getByText("e2e fixture 4").click();
+    await expect(page.getByRole("dialog").getByText("Reported by this runner")).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+
+    await page.getByText("e2e fixture 7").click();
+    await expect(page.getByRole("dialog")).toBeVisible();
+    await expect(page.getByText("Reported by this runner")).toHaveCount(0);
   });
 
   test("a getRecording() failure at play time surfaces its own error with Retry", async ({ page }) => {

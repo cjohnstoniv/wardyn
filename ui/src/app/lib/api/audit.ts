@@ -227,6 +227,7 @@ const CREDENTIAL_REASON = "model_credential";
 // a provider refusal also writes run.create/failure and must stay unclassified.
 const SANDBOX_CREATE_REASON = "sandbox_create";
 const AGENT_START_REASON = "agent_start";
+const RELAY_IP_FENCED_REASON = "relay_ip_fenced";
 
 /** The FIRST event matching `pick` — the root cause, not the last symptom. */
 function firstEvent(events: AuditEvent[], pick: (e: AuditEvent) => boolean): AuditEvent | undefined {
@@ -339,11 +340,13 @@ export function runEndingFromAudit(state: RunState, events: AuditEvent[]): RunEn
     events,
     (e) =>
       e.outcome === "failure" &&
-      ((e.action === "run.create" && str(e.data?.reason) === SANDBOX_CREATE_REASON) ||
+      ((e.action === "run.create" && (str(e.data?.reason) === SANDBOX_CREATE_REASON || str(e.data?.reason) === RELAY_IP_FENCED_REASON)) ||
         (e.action === "run.exec" && str(e.data?.reason) === AGENT_START_REASON)),
   );
   if (dispatch) {
-    return from(dispatch.action === "run.create" ? "sandbox_create" : "agent_start", dispatch, dispatch.action);
+    const kind =
+      dispatch.action === "run.exec" ? "agent_start" : str(dispatch.data?.reason) === RELAY_IP_FENCED_REASON ? "relay_ip_fenced" : "sandbox_create";
+    return from(kind, dispatch, dispatch.action);
   }
   return { kind: "unknown", action: "" };
 }
@@ -387,6 +390,7 @@ export const audit = {
   async dropPartition(partition: string, digest: string): Promise<AuditRetentionDrop> {
     const res = await wfetch("/audit/retention/drop", {
       method: "POST",
+      asPerson: true,
       body: JSON.stringify({ partition, digest }),
     });
     return asJson<AuditRetentionDrop>(res);

@@ -34,11 +34,13 @@ func (s *Server) mountRunnerRegistrationRoutes(r chi.Router) {
 //	POST /runners/{id}/claim-org   claim it, under a human session
 //	PUT  /runners/{id}             set an org runner's limits (runner_limits.go)
 //	PUT  /runners/{id}/trust       change a runner's trust class (runner_registration_trust.go)
+//	POST /runs/{id}/node-record    release a run its Kubernetes runner holds as containment pending (run_containment.go)
 func (s *Server) mountOrgRunnerRoutes(securityOps chi.Router) {
 	securityOps.Post("/runners/org-tokens", s.handleRunnerOrgToken)
 	securityOps.Post("/runners/{id}/claim-org", s.handleRunnerClaimOrg)
 	securityOps.Put("/runners/{id}", s.handleUpdateOrgRunner)
 	securityOps.Put("/runners/{id}/trust", s.handlePutRunnerTrust)
+	securityOps.Post("/runs/{id}/node-record", s.handlePostRunNodeRecord)
 }
 
 func (s *Server) runnerRegistrationStore(w http.ResponseWriter) (store.RunnerRegistrationStore, bool) {
@@ -76,6 +78,11 @@ func (s *Server) handleRunnerTokenSelf(w http.ResponseWriter, r *http.Request) {
 	}
 	owner, ok := s.runnerPersonalOwner(w, r)
 	if !ok {
+		return
+	}
+	if !s.runnerTokenLimiter.allow(owner, s.cfg.Now().UTC()) {
+		w.Header().Set("Retry-After", "360")
+		writeErrorReason(w, http.StatusTooManyRequests, reasonRunnerTokenRateLimited, "too many runner registration tokens; retry later")
 		return
 	}
 	// An operator is exempt even with WARDYN_GOVERN_ADMIN_RUNS on: the admin mint (POST /runners/tokens)

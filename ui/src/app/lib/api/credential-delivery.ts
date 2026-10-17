@@ -25,7 +25,7 @@ export const credentialDelivery = {
   // `etag` (the last GET's or PUT's; none sends no If-Match).
   async put(policy: DeliveryPolicy, etag?: string | null): Promise<CredentialDeliverySnapshot> {
     const res = await wfetch("/governance/credential-delivery", {
-      method: "PUT",
+      method: "PUT", asPerson: true,
       headers: etag ? { "If-Match": etag } : {},
       body: JSON.stringify(policy),
     });

@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"html"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -413,6 +414,11 @@ func (h setupHost) startLaunchAgent(ctx context.Context, plan setupPlan, out io.
 		}
 	}
 	if err := writeAtomic(p.plistFile, 0o644, func(w io.Writer) error { _, err := io.WriteString(w, renderLaunchAgent(plan)); return err }); err != nil {
+		return err
+	}
+	// The environment file an earlier --no-service wrote is stale once a LaunchAgent exists: delete the
+	// plist later and a --no-service rerun would read its old pins back.
+	if err := os.Remove(p.noServiceEnvFile()); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return err
 	}
 	domain := fmt.Sprintf("gui/%d", h.uid)

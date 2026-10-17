@@ -381,3 +381,26 @@ func TestFinalizeBase_ForcePullPullsAPresentBase(t *testing.T) {
 		t.Fatal("the wrap ran after the forced pull failed")
 	}
 }
+
+// A refresh pulls the base again, so a base that exists only on this host fails it; the failure must not
+// tell the operator to pre-pull what has no registry copy, and a plain build keeps that hint.
+func TestFinalizeBase_RefreshOfALocalOnlyBaseSaysSo(t *testing.T) {
+	const ref = "local/dev:1"
+	f := newFakeEnvbuilderDocker()
+	f.imagesPresent[ref] = true
+	f.pullErr = errors.New("pull access denied")
+	b := newWithClient(f, "envbuilder:test", "")
+	b.ToolsDir = toolsDirWithRequired(t)
+
+	_, err := b.FinalizeBase(context.Background(), ref, "wardyn-byoi/run-r:latest", nil, true)
+	if err == nil || strings.Contains(err.Error(), "docker pull") || !strings.Contains(err.Error(), "only on this host") {
+		t.Fatalf("refresh of a local-only base = %v, want the local-only sentence and no pre-pull hint", err)
+	}
+	f2 := newFakeEnvbuilderDocker()
+	f2.pullErr = errors.New("pull access denied")
+	b2 := newWithClient(f2, "envbuilder:test", "")
+	b2.ToolsDir = toolsDirWithRequired(t)
+	if _, err := b2.FinalizeBase(context.Background(), ref, "wardyn-byoi/run-p:latest", nil, false); err == nil || !strings.Contains(err.Error(), "pre-pull a private image") {
+		t.Fatalf("plain build of an absent base = %v, want the pre-pull hint", err)
+	}
+}

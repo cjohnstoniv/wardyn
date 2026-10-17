@@ -57,7 +57,7 @@ export const modelProviders = {
     const headers: Record<string, string> = {};
     if (etag) headers["If-Match"] = etag;
     const res = await wfetch("/model-providers", {
-      method: "PUT",
+      method: "PUT", asPerson: true,
       headers,
       body: JSON.stringify(next),
     });

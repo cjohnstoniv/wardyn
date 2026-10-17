@@ -101,6 +101,28 @@ func TestPG_PersonErasure_PrincipalForName(t *testing.T) {
 	}
 }
 
+// Two issuers can carry one Entra object: the entra form then names no single person and comes back
+// as typed, so the audit sealer never keys one person's rows under the other's principal.
+func TestPG_PersonErasure_PrincipalForNameKeepsAnEntraNameTwoIssuersShare(t *testing.T) {
+	pool := runsPGPoolIsolated(t)
+	st := store.NewPG(pool)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	oid := uuid.NewString()
+	typed := "entra:" + idTenant + ":" + oid
+	for _, in := range []store.LoginIdentity{
+		{Principal: typed, Issuer: idIssuer, TenantID: idTenant, ObjectID: oid, Email: "one@corp.example"},
+		{Principal: "second-issuer-sub", Issuer: "https://other.example", TenantID: idTenant, ObjectID: oid, Email: "two@corp.example"},
+	} {
+		if _, err := st.UpsertLoginIdentity(ctx, in, now); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got, err := st.PrincipalForName(ctx, typed); err != nil || got != typed {
+		t.Fatalf("PrincipalForName(%q) = %q, %v, want it back as typed", typed, got, err)
+	}
+}
+
 // The identity directory names who a typed value is, for a person with no token
 // or workspace: an exact principal, the entra form, an email in any case (from a
 // sign-in alias or a pre-created person); two people sharing an email are both

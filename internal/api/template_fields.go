@@ -284,7 +284,7 @@ var templateNestedCarried = map[string]string{
 	"CLIAzure":            "subscriptions access",
 	"CLIGitHub":           "capabilities",
 	"ComponentCLI":        "kind azure aws github",
-	"ComponentDefinition": "hosts secrets config cli mcp",
+	"ComponentDefinition": "description hosts secrets config cli mcp",
 	"ComponentDelivery":   "mode host header format plain_http var file",
 	"ComponentMCP":        "url transport",
 	"ComponentRef":        "id inline name builtin org repos access mcp_harnesses",

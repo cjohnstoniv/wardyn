@@ -1,7 +1,9 @@
 # Prose-word budgets (scripts/doc-form.sh): path=N share=S. N is the base prose words, so growth fails.
 # docs/operations/integrations.md 2683 adds 74 over 2609: 0.9 final docs pass 2, measured: signing in for an AWS or Azure CLI component.
-docs/operations/integrations.md=2683 share=30
-docs/operations/launch-presets.md=390 share=35
+# docs/operations/integrations.md 2753 adds 70: Azure Activity Log attribution and the ARM-only scope line (0.9.3 FIN-B2).
+docs/operations/integrations.md=2753 share=30
+# docs/operations/launch-presets.md 432 adds 42: the preset-version-restarts-on-recreate line (0.9.3 FIN-B2).
+docs/operations/launch-presets.md=432 share=35
 docs/operations/console-branding.md=943 share=35
 # docs/operations/hybrid-laptops.md 597 adds 48: the page now leads with the client-mode claim flow and offline table; legacy enrolment is condensed under it.
 # 622 adds 25: the Azure DevOps bullet below "Where each thing lives" (#475).
@@ -51,5 +53,7 @@ docs/operations/console-branding.md=943 share=35
 # docs/operations/hybrid-laptops.md 3765 adds 18 over 3747 (0.9.3 RR-de review), measured: the run end in the keystore cap and the older-runner refusal.
 # docs/operations/hybrid-laptops.md 3538 adds 99 over 3439 (0.9.3 FIN-E), measured: the posture-on-record notes and the proxy-image skew note.
 # docs/operations/hybrid-laptops.md 3864, measured at the FIN-E2 merge into the final train (both sides' sentences).
-# docs/operations/hybrid-laptops.md 3882 adds 18 over 3864 (0.9.3 K7): the line pointing at the organisation runner in a cluster, measured.
-docs/operations/hybrid-laptops.md=3882 share=35
+# docs/operations/hybrid-laptops.md 3926 adds 62, measured: runner trust classes (with the required --reason) and by_trust in Resident credentials and posture.
+# docs/operations/hybrid-laptops.md 4022 adds 96 over 3926, measured: the control-plane restart and re-registration rows in Offline and revocation.
+# docs/operations/hybrid-laptops.md 4040 = 4022 + 18, measured: the line pointing at the organisation runner in a cluster.
+docs/operations/hybrid-laptops.md=4040 share=35

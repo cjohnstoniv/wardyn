@@ -184,7 +184,19 @@ func ValidateMount(m Mount) error {
 // ValidateMount, extracted so a surface that only vets a reusable host path
 // can run the same deny-list without inventing a placeholder target. Source
 // half ONLY: any surface that actually BINDS the path must call ValidateMount.
+// It reads the host filesystem to resolve symlinks; a surface that must not
+// (a grading preview) calls ValidateMountSourceLexical.
 func ValidateMountSource(src string) error {
+	if err := ValidateMountSourceLexical(src); err != nil {
+		return err
+	}
+	return denySourceSymlink(src)
+}
+
+// ValidateMountSourceLexical is ValidateMountSource's string-only half: the
+// source is not empty, absolute and clean, and not on the deny-list. It touches
+// no file, so what it answers never depends on what exists on this host.
+func ValidateMountSourceLexical(src string) error {
 	if src == "" {
 		return fmt.Errorf("mount source is empty")
 	}
@@ -196,9 +208,11 @@ func ValidateMountSource(src string) error {
 		// traversal segment can never slip past the prefix checks below.
 		return fmt.Errorf("mount source %q must be a cleaned path (got non-canonical form)", src)
 	}
-	if err := deniedSource(src); err != nil {
-		return err
-	}
+	return deniedSource(src)
+}
+
+// denySourceSymlink is ValidateMountSource's filesystem half.
+func denySourceSymlink(src string) error {
 	// SECURITY-CRITICAL symlink hardening: the checks above are LEXICAL only.
 	// The daemon resolves symlinks SOURCE-SIDE, so a lexically clean, un-denied
 	// source that IS (or traverses) a symlink to /, /etc, or a docker.sock dir

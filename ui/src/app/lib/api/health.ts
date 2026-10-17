@@ -260,7 +260,7 @@ export const health = {
     const body: Record<string, unknown> = { ...cfg };
     for (const k of SERVER_OWNED_SITE_CONFIG_KEYS) delete body[k];
     const res = await wfetch("/site-config", {
-      method: "PUT",
+      method: "PUT", asPerson: true,
       ...(etag ? { headers: { "If-Match": etag } } : {}),
       body: JSON.stringify(body),
     });

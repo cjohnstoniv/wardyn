@@ -225,6 +225,22 @@ func TestService_UndeclaredDomainFailsClosed(t *testing.T) {
 	}
 }
 
+// Undeclared lists each domain the assignments name that the file lost, with
+// how many assignments name it; a declared domain and the default are not listed.
+func TestService_UndeclaredListsTheAssignmentsTheFileLost(t *testing.T) {
+	pool := subjectkeytest.ThrowawayDB(t)
+	before := keydomain.NewService(pool, []string{"a", "b"})
+	set(t, before, "user", "gina", "a")
+	set(t, before, "user", "hal", "a")
+	set(t, before, "group", "eng", "b")
+	set(t, before, "user", "ivy", keydomain.Default)
+	after := keydomain.NewService(pool, []string{"b"})
+	got, err := after.Undeclared(t.Context())
+	if want := []keydomain.UndeclaredDomain{{Domain: "a", Assignments: 2}}; err != nil || !slices.Equal(got, want) {
+		t.Fatalf("Undeclared = (%v, %v), want %v", got, err, want)
+	}
+}
+
 func TestService_ListUsageDelete(t *testing.T) {
 	pool := subjectkeytest.ThrowawayDB(t)
 	s := keydomain.NewService(pool, []string{"b", "a"})

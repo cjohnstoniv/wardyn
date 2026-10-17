@@ -93,7 +93,7 @@ type MeDrive struct {
 	// caller's top-ranked grant.
 	Legacy bool `json:"legacy"`
 	// UnavailableReason is why a run cannot attach this drive now: paused,
-	// unmountable or not_in_pool. "" when it can.
+	// unmountable, placement_denied or not_in_pool. "" when it can.
 	UnavailableReason string `json:"unavailable_reason,omitempty"`
 	// Owned is true for a drive the caller created (POST /me/drives). Only an
 	// owned drive takes DELETE /me/drives/{id}.

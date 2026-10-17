@@ -123,6 +123,7 @@ export const NR_REVIEW = {
   POLICY_FILES: "Files and code",
   POLICY_TOOLS: "Tools and pushes",
   POLICY_HOLD: "Hold for approval",
+  POLICY_ACCEPTS_EDITS: "Claude Code accepts file edits without asking. Every other tool asks first.",
   POLICY_AUTOMATIC: "Run automatically",
   /** One harness's default when the included harnesses default differently. */
   POLICY_TOOLS_OF: (harness: string | number, effect: string | number) => `${harness}: ${effect}`,
@@ -134,4 +135,6 @@ export const NR_REVIEW = {
   SAVE_TEMPLATE: "Save as template",
   SAVE_POLICY: "Save as policy",
   LAUNCH_RUN: "Launch run",
+  DROPPED_HOST_ONE: (host: string | number) => `This run can't reach ${host}: your organisation doesn't allow it. Ask your admin to allow it.`,
+  DROPPED_HOSTS_MANY: (hosts: string | number) => `This run can't reach ${hosts}: your organisation doesn't allow them. Ask your admin to allow them.`,
 } as const;

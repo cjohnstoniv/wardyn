@@ -280,6 +280,9 @@ func (s *Server) holdProfileWrite(w http.ResponseWriter, r *http.Request, id uui
 		p.notes = governanceOmissionWarnings(row.Ceiling, s.cfg.DefaultPolicy, row.Limits)
 	}
 	p.notes = append(p.notes, h.res.AdminWarnings...)
+	if posture := s.rubricPostureAdvisory(r.Context(), h.res); posture != "" {
+		p.notes = append(p.notes, posture)
+	}
 	s.proposeGovernanceChange(w, r, p)
 }
 

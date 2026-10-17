@@ -112,7 +112,7 @@ var (
 // parity in both directions.
 func routeFamilies() map[string][]string {
 	return map[string][]string{
-		"runs":            {"CreateRun", "Preflight", "GetRun", "ListGrants", "ListGrantsPage", "KillRun", "SynthesizeProfile", "GetRecording", "RunFiles", "RunEvents", "RunOutput", "RunSignIn", "GetRunPolicy"},
+		"runs":            {"CreateRun", "Preflight", "GetRun", "ListGrants", "ListGrantsPage", "KillRun", "SynthesizeProfile", "GetRecording", "RunFiles", "RunEvents", "RunOutput", "RunSignIn", "GetRunPolicy", "RunContainment", "RecordRunNode"},
 		"runs.list":       {"ListRuns", "ListRunsPage"},
 		"approvals":       {"ListApprovals", "ListApprovalsPage", "Approve", "Deny"},
 		"policies":        {"CreatePolicy", "GetPolicy", "GetDefaultPolicy", "ListPolicies", "ListPoliciesPage", "UpdatePolicy", "DeletePolicy"},
@@ -135,8 +135,8 @@ func routeFamilies() map[string][]string {
 		"invitations":     {"CreateInvitation", "ListInvitations", "ListPersonInvitations", "ListPersonInvitationsPage", "ListMyInvitations", "RevokeInvitation", "ClaimInvitation"},
 		"service-ids":     {"CreateServiceIdentity", "ListServiceIdentities", "ListServiceIdentitiesPage", "GetServiceIdentity", "UpdateServiceIdentity", "RetireServiceIdentity", "ListMyServiceIdentities", "MintServiceToken", "ListServiceTokens", "ListServiceTokensPage", "RevokeServiceToken", "MoveToken"},
 		"components":      {"MyComponents", "SaveMyComponent", "UpdateMyComponent", "DeleteMyComponent", "ListComponents", "PutComponent", "DeleteComponent"},
-		"runners":         {"MintRunnerToken", "RegisterRunner", "ClaimRunner", "ListRunners", "ListRunnersPage", "GetRunner", "ListMyRunners", "GetMyRunner", "SetMyRunnerLimits", "ListRunnerTokens", "ListRunnerTokensPage", "RevokeRunnerToken", "GetRunnerSettings", "SetRunnersEnabled", "MintOrgRunnerToken", "ClaimOrgRunner", "SetRunnerTrust"},
-		"runner-pools":    {"ListRunnerPools", "ListRunnerPoolsFor", "ListMyRunnerPools", "GetRunnerPool", "CreateRunnerPool", "UpdateRunnerPool", "DeleteRunnerPool", "CreateMyRunnerPool", "UpdateMyRunnerPool", "DeleteMyRunnerPool", "OwnRunnerPool", "AddMyRunnerToPool", "RemoveMyRunnerFromPool", "GetOrgRunnerPoolDefaults", "SetOrgRunnerPoolDefaults", "GetMyRunnerPoolDefaults", "SetMyRunnerPoolDefaults", "ClearMyRunnerPoolDefaults", "AddRunnerPoolRemoteRunner", "RemoveRunnerPoolRemoteRunner", "AddMyPoolRemoteRunner", "RemoveMyPoolRemoteRunner", "ListRunnerPoolMembers", "GetRunnerPoolUsePolicy", "SetRunnerPoolUsePolicy", "ClearRunnerPoolUsePolicy"},
+		"runners":         {"MintRunnerToken", "RegisterRunner", "ClaimRunner", "ListRunners", "ListRunnersPage", "GetRunner", "ListMyRunners", "GetMyRunner", "SetMyRunnerLimits", "ListRunnerTokens", "ListRunnerTokensPage", "RevokeMyRunner", "RevokeRunnerToken", "GetRunnerSettings", "SetRunnersEnabled", "MintOrgRunnerToken", "ClaimOrgRunner", "SetRunnerTrust"},
+		"runner-pools":    {"ListRunnerPools", "ListRunnerPoolsFor", "ListMyRunnerPools", "GetRunnerPool", "CreateRunnerPool", "UpdateRunnerPool", "DeleteRunnerPool", "CreateMyRunnerPool", "UpdateMyRunnerPool", "DeleteMyRunnerPool", "OwnRunnerPool", "AddMyRunnerToPool", "RemoveMyRunnerFromPool", "AddRunnerPoolRunner", "RemoveRunnerPoolRunner", "GetOrgRunnerPoolDefaults", "SetOrgRunnerPoolDefaults", "GetMyRunnerPoolDefaults", "SetMyRunnerPoolDefaults", "ClearMyRunnerPoolDefaults", "AddRunnerPoolRemoteRunner", "RemoveRunnerPoolRemoteRunner", "AddMyPoolRemoteRunner", "RemoveMyPoolRemoteRunner", "ListRunnerPoolMembers", "GetRunnerPoolUsePolicy", "SetRunnerPoolUsePolicy", "ClearRunnerPoolUsePolicy"},
 		"remote-runners":  {"ListRemoteRunners", "GetRemoteRunner", "UpdateRemoteRunner", "SetRemoteRunnerPeoplePolicy", "ClearRemoteRunnerPeoplePolicy", "ListMyRemoteRunners"},
 		"devices":         {"MintDeviceEnrolmentToken", "ListDeviceEnrolmentTokens", "RevokeDeviceEnrolmentToken", "ListDevices", "RevokeDevice"},
 		"model-providers": {"GetModelProviders"},

@@ -60,9 +60,12 @@ import (
 // turns db.Migrate's refusal of a database a newer wardynd migrated into a WARN.
 func connectAndMigrate(rootCtx context.Context, dsn, migrateDSN string, connectTimeout, migrateTimeout time.Duration, allowUnknownMigrations bool) (*pgxpool.Pool, error) {
 	warnAllowUnknownMigrations(allowUnknownMigrations)
-	migrate := db.Migrate
+	apply := db.Migrate
 	if allowUnknownMigrations {
-		migrate = db.MigrateAllowingUnknown
+		apply = db.MigrateAllowingUnknown
+	}
+	migrate := func(ctx context.Context, p *pgxpool.Pool) error {
+		return migrateRecordingVersion(ctx, p, func() error { return apply(ctx, p) })
 	}
 	connectCtx, cancelConnect := context.WithTimeout(rootCtx, connectTimeout)
 	defer cancelConnect()

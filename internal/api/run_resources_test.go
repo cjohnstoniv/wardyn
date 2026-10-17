@@ -560,3 +560,39 @@ func TestRunResources_RootWalkIsCached(t *testing.T) {
 		})
 	}
 }
+
+// A sandbox with a CPU cap reads its usage against the cap, not the host's cores: 100000usec of CPU over
+// 200000usec of wall time is half a core, which is 25% of a two-core cap on a 16-core host.
+func TestParseRunResourcesKV_CPUPercentIsOfTheCgroupCap(t *testing.T) {
+	base := map[string]string{
+		"nproc":            "16",
+		"cpu_usage_usec_1": "1000000",
+		"cpu_usage_usec_2": "1100000",
+		"uptime_1":         "10.00",
+		"uptime_2":         "10.20",
+	}
+	with := func(cpuMax string) *float64 {
+		kv := map[string]string{}
+		for k, v := range base {
+			kv[k] = v
+		}
+		if cpuMax != "" {
+			kv["cpu_max"] = cpuMax
+		}
+		return parseRunResourcesKV(kv).CPUPercent
+	}
+	for _, c := range []struct {
+		name, cpuMax string
+		want         float64
+	}{
+		{"a two-core cap", "200000 100000", 25},
+		{"uncapped falls back to the host's cores", "max 100000", 3.125},
+		{"no cpu.max falls back to the host's cores", "", 3.125},
+		{"an unreadable cap falls back to the host's cores", "bogus", 3.125},
+	} {
+		got := with(c.cpuMax)
+		if got == nil || math.Abs(*got-c.want) > 0.001 {
+			t.Errorf("%s: CPUPercent = %v, want ~%v", c.name, got, c.want)
+		}
+	}
+}

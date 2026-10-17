@@ -58,6 +58,7 @@ literal_dates() {
 declare -A ALLOWLIST=(
   ["cmd/wardyn-aws-sso/main_test.go"]=2
   ["cmd/wardyn/commands_test.go"]=6
+  ["cmd/wardyn/runner_limits_test.go"]=2 # display only: runner list prints LastSeenAt as given, never compared to the clock
   ["cmd/wardyn/drive_test.go"]=1 # passthrough only: the member drive list's created_at, never compared to the clock
   ["cmd/wardyn/people_test.go"]=3 # display only: personDay formats LastSignedInAt, never compared to the clock
   ["cmd/wardyn/policyio_test.go"]=2
@@ -73,6 +74,7 @@ declare -A ALLOWLIST=(
   # table renders in the packet's own wording ("3 Oct 2026", "Oct 2026"), asserted as literal
   # strings so the canon wording is pinned. Nothing compares them against the clock.
   ["ui/src/app/components/screens/audit-retention.test.tsx"]=13
+  ["ui/src/app/components/screens/runners/remote-runner-drawer.test.tsx"]=2 # passthrough only: the runner fixture's created_at and updated_at, never compared to the clock
   ["internal/api/access_test.go"]=1
   ["internal/api/ado_entra_test.go"]=1
   ["internal/api/auth_failed_coalesce_test.go"]=1

@@ -146,6 +146,8 @@ func (s *FSStore) saveFile(ctx context.Context, key, ext string, r io.Reader, in
 	}
 	defer root.Remove(tmpName)
 	defer tmp.Close()
+	// No size cap here, unlike the database store: the masked-log cut the upload handler applies
+	// (maskCutMarker) is what bounds a plain log, and a cast the handler never cuts is stored whole.
 	if _, err := io.Copy(tmp, contextReader{ctx, r}); err != nil {
 		return err
 	}
@@ -213,8 +215,15 @@ func copyRecordingFile(ctx context.Context, root *os.Root, name string, src *os.
 		return err
 	}
 	_, err = io.Copy(dst, contextReader{ctx, src})
+	// The caller acknowledges the recording once this returns, so the bytes are durable first, as in the rename path.
+	if err == nil {
+		err = syncFile(dst)
+	}
 	return errors.Join(err, dst.Close())
 }
+
+// syncFile is the file fsync copyRecordingFile makes before it returns; a variable so a test can see it ran.
+var syncFile = func(f *os.File) error { return f.Sync() }
 
 // Sweep unlinks every cast (and wardyn-rec's .log fallback, and orphaned atomic-write temp file) directly
 // under root whose mtime is older than olderThan, returning the count

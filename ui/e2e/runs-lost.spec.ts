@@ -79,6 +79,35 @@ test.describe("Runs landing — lost and lease-ended rows (F1, design.md:158)", 
     await expect(page.getByTestId("run-row").filter({ hasText: "e2e lost run" }).getByText("Running")).toBeVisible();
   });
 
+  // A revive on a runner can outlast the console's 60s wait (the server allows it 3 minutes): the wait ending
+  // is not a failure, so the toast says the runner is still working and no error toast invites a second click.
+  test("a revive the console stopped waiting for says the runner is still starting the run", async ({ page }) => {
+    const lostId = "lost-run-slow";
+    // The console's 60s wait, shortened for the one call made after the flag is set, so the test need not wait a minute.
+    await page.addInitScript(() => {
+      const w = window as unknown as { __shortWait?: boolean };
+      const timeout = AbortSignal.timeout.bind(AbortSignal);
+      AbortSignal.timeout = (ms: number) => {
+        if (!w.__shortWait || ms < 60_000) return timeout(ms);
+        w.__shortWait = false;
+        return timeout(300);
+      };
+    });
+    await mockMutableRunsList(page, [baseRun(lostId, "e2e slow revive", { attention: { kind: "lost", by: "you", pending: 0 } })]);
+    await page.route(`**/api/v1/runs/${lostId}/revive`, () => {
+      /* the runner has not answered */
+    });
+
+    await gotoConsole(page);
+    const row = page.getByTestId("run-row").filter({ hasText: "e2e slow revive" });
+    await expect(row).toBeVisible();
+    await page.evaluate(() => ((window as unknown as { __shortWait?: boolean }).__shortWait = true));
+    await row.getByRole("button", { name: "Revive" }).click();
+    await expect(page.getByText("The runner is still starting this run. Check back in a minute.")).toBeVisible();
+    await expect(page.getByText("Couldn't revive this run")).toHaveCount(0);
+    await expect(row.getByRole("button", { name: "Revive" })).toBeVisible();
+  });
+
   test("a lease-ended run is grey under Ended, never in Needs you, with no Revive button", async ({ page }) => {
     const endedId = "ended-run-1";
     await mockMutableRunsList(page, [

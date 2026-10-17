@@ -35,7 +35,9 @@ export function unavailableReason(row: SetupHarnessTool, chosen: readonly string
   if (row.enabled === false) return NR_HARNESSES.NOT_ENABLED;
   if (row.installed === false) return NR_HARNESSES.NOT_INSTALLED(row.display);
   if (row.providers_ungranted) return NR_HARNESSES.NO_PROVIDER(row.display);
-  if (chosen.length > 0 && !roster.sets.some((s) => carriesAll(s, [...chosen, row.id]))) {
+  // "Your own tools" brings no CLI, so the server leaves it out of the set it looks for (harnessCLIs).
+  const needs = [...chosen, row.id].filter((id) => id !== "none");
+  if (chosen.length > 0 && needs.length > 1 && !roster.sets.some((s) => carriesAll(s, needs))) {
     return NR_HARNESSES.NO_COMBINATION(chosen.map((id) => harnessName(roster, id)).join(", "), row.display);
   }
   return undefined;

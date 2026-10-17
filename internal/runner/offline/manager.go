@@ -267,7 +267,7 @@ func (m *Manager) Lease(ctx context.Context, l runnerwire.Lease) error {
 		d.endsLeft = old.endsLeft - m.since(old.receipt)
 	}
 	m.deadlines[l.RunID] = d
-	if r, ok := m.state.Runs[l.RunID]; ok {
+	if r, ok := m.state.Runs[l.RunID]; ok && !r.Tombstone {
 		r.Lease = l
 		m.state.Runs[l.RunID] = r
 		return m.save()
@@ -639,6 +639,11 @@ func (m *Manager) ProxyExited(runID uuid.UUID, evidence string) error {
 func (m *Manager) holdPending(id uuid.UUID, p *runner.ContainmentPendingError) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	return m.holdPendingLocked(id, p)
+}
+
+// holdPendingLocked is holdPending with m.mu held.
+func (m *Manager) holdPendingLocked(id uuid.UUID, p *runner.ContainmentPendingError) error {
 	r, ok := m.state.Runs[id]
 	if !ok {
 		return nil

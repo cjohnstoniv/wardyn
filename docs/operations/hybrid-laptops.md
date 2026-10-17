@@ -47,6 +47,8 @@
 
 - `via_org` does not carry an MCP server's header credential: a run whose MCP server uses one the organisation shares is refused on your runner (`placement_credential`).
 - An admin can set a credential class to `runner_resident` with a `require_posture` (`mdm_managed`, `disk_encrypted`, `os_min`).
+- A claimed laptop runner's trust class is `personal`. A security operator can mark it `managed_device` (`wardyn runner trust <runner-id> managed_device --reason "<why>"`, held for a second person under four-eyes); the runner itself never sets it.
+- The delivery policy's `by_trust` sets a class's mode for one trust class, so `runner_resident` can be limited to `managed_device` runners. `via_org` is never set per trust class.
 - The runner reports its posture when it connects and again when it changes. A root-owned posture file from your MDM wins over the runner's own probe: `/etc/wardyn/posture.json` on Linux and `/Library/Application Support/Wardyn/posture.json` on macOS.
 - A runner keeps a delivered value in the OS keystore for the run (Secret Service; on macOS the Keychain, written over stdin) and deletes it at run end, reporting each delete (`runner.resident.erase`). On a computer whose root user is the developer, erasure is best-effort, never promised. A runner with no keystore refuses (`runner_keystore_unavailable`).
 - **When the keystore copy goes.** The cap is the earliest of the run's lifetime cap, the run's end and 24 hours after delivery.
@@ -228,6 +230,8 @@ The bundle is read when `serve` starts; a bad file stops it and is named.
 | Link drops mid-run | Nothing is torn down; the proxy enforces its cached policy and spools decisions. A full spool holds a request up to 10 s, then answers a retryable `503` naming the runner's link |
 | Link down past the lapse (about 1h5m) | The runner stops the proxy itself and keeps the agent and files |
 | The runner process restarts | Its runs stop reaching the network until each is revived. This is fail-closed |
+| The control plane restarts, or answers `503` while it starts | The runner reconnects on its own once the organisation answers, and live runs keep running. A teardown queued for a run it keeps only for containment is refused, so it cannot hold the connection. Nothing needs resetting |
+| The computer is registered again under a new identity | At first start `serve` stops the old registration's run proxies, then moves `offline/`, `spools/` and `output/` into `previous/` (Docker; spooled decisions are kept, not delivered). If one cannot be stopped, it exits naming the fix and retries next start |
 | Revoked by the owner or a security operator | The org ends that runner's unfinished runs `KILLED` and runs the kill cascade; the runner stops every governed proxy |
 
 "Offline" and "ungoverned" are never the same thing: an offline runner is still governed and runs nothing new.

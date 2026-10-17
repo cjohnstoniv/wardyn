@@ -11,9 +11,11 @@ import (
 	"net/http/httptest"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -403,5 +405,33 @@ func TestRun_StaleRemovalFailureRefuses(t *testing.T) {
 	}
 	if _, err := os.Stat(marker); err == nil {
 		t.Fatal("task ran despite the removal failure")
+	}
+}
+
+// A SIGTERM aimed at wardyn-rec (here sent by the child to its parent) reaches the child, so the run ends and its
+// cast can be delivered instead of wardyn-rec dying with the child still recording.
+func TestRunAsciinemaForwardsTermination(t *testing.T) {
+	dir := t.TempDir()
+	fake := filepath.Join(dir, "asciinema")
+	if err := os.WriteFile(fake, []byte("#!/bin/sh\nkill -TERM $PPID\nexec sleep 30\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// The test process absorbs the signal itself, so a missing forward fails the wait below rather than
+	// killing the test binary.
+	absorb := make(chan os.Signal, 1)
+	signal.Notify(absorb, syscall.SIGTERM)
+	defer signal.Stop(absorb)
+	done := make(chan error, 1)
+	go func() {
+		_, err := runAsciinema(fake, filepath.Join(dir, "r.cast"), []string{"true"})
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("runAsciinema: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the child was still recording 10 s after SIGTERM: it was not forwarded")
 	}
 }

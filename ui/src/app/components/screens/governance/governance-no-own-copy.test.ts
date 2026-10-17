@@ -21,5 +21,6 @@ describe("Governance components render no copy of their own", () => {
     "assignments.tsx",
     "display.tsx",
     "runner-credentials.tsx",
+    "egress-baseline.tsx",
   ]);
 });

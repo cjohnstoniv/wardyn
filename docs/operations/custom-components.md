@@ -39,6 +39,11 @@ What an admin controls on a component row, and what a launch leaves behind on th
 - With no cap set, a run with a self-defined component is only marked: `run.create` carries `self_added_reach`.
 - The refusal is `component_autonomy` ([Every denial that isn't a 404](denials.md#every-denial-that-isnt-a-404)).
 
+**The credential confinement floor on a CC1-only estate.**
+
+- A captured cloud-SSO model credential is deliberately outside the `CC3` floor: it is delivered at dispatch, after the class is resolved, so the run launches with a warning (`credentialConfinementAdvisory` in [`internal/api/runs_create_confinement.go`](../../internal/api/runs_create_confinement.go)).
+- A CC1-only estate (no gVisor or Kata RuntimeClass) depends on that for every run on its cloud-SSO model lane. Narrowing it makes those runs unlaunchable until a `CC3` substrate exists, so a change to credential confinement floors is estate-wide, not a tightening ([threat model, residual 66](../../threatmodel/THREAT-MODEL.md)).
+
 **Who may attach one.**
 
 - The `component` capability narrows which organisation component a person may attach (`value` is its uuid).

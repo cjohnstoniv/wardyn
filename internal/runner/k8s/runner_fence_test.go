@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/google/uuid"
@@ -203,6 +204,60 @@ func TestRunnerApproversDedupeOnEitherKey(t *testing.T) {
 				t.Fatalf("AcceptNodeRecord: %v", err)
 			}
 		})
+	}
+}
+
+// TestRunnerApproversLinkAcrossOrder: three listings that chain into one human (A and B share an
+// email, B and C share a principal) are one approver whatever their order, and an approver with no
+// principal is refused.
+func TestRunnerApproversLinkAcrossOrder(t *testing.T) {
+	a := runner.NodeRecordApprover{Principal: "p1", Email: "e1@example.com", Human: true}
+	b := runner.NodeRecordApprover{Principal: "p2", Email: "e1@example.com", Human: true}
+	c := runner.NodeRecordApprover{Principal: "p2", Email: "e2@example.com", Human: true}
+	for name, order := range map[string][]runner.NodeRecordApprover{"abc": {a, b, c}, "acb": {a, c, b}, "cab": {c, a, b}} {
+		if n, err := distinctHumanApprovers(order); err != nil || n != 1 {
+			t.Errorf("%s: %d humans, %v; want 1", name, n, err)
+		}
+	}
+	other := runner.NodeRecordApprover{Principal: "p3", Email: "e3@example.com", Human: true}
+	if n, err := distinctHumanApprovers([]runner.NodeRecordApprover{a, c, b, other}); err != nil || n != 2 {
+		t.Errorf("a chain plus a stranger: %d humans, %v; want 2", n, err)
+	}
+	if _, err := distinctHumanApprovers([]runner.NodeRecordApprover{a, {Email: "e9@example.com", Human: true}}); err == nil {
+		t.Error("an approver with no principal was counted")
+	}
+}
+
+// TestRunnerFenceAndReleaseHoldTheRunLock: the relay is told to refuse a proxy IP, and to release
+// it, only while the run's lock is held, so the two cannot interleave around the evidence saves.
+func TestRunnerFenceAndReleaseHoldTheRunLock(t *testing.T) {
+	ctx := context.Background()
+	h := newRunnerHarness(t)
+	f := fenceSet{}
+	f.wire(h)
+	held := func() bool {
+		v, ok := h.d.runLocks.Load(h.runID)
+		if !ok {
+			return false
+		}
+		mu := v.(*sync.Mutex)
+		if mu.TryLock() {
+			mu.Unlock()
+			return false
+		}
+		return true
+	}
+	var fenceHeld, unfenceHeld bool
+	fence, unfence := h.d.cfg.Fence, h.d.cfg.Unfence
+	h.d.cfg.Fence = func(id uuid.UUID, ip string) { fenceHeld = held(); fence(id, ip) }
+	h.d.cfg.Unfence = func(id uuid.UUID, ip string) { unfenceHeld = held(); unfence(id, ip) }
+	h.boundProxy(t)
+	h.onDelete = func(p *corev1.Pod) { terminate(p, "containerd://p1") }
+	if err := h.d.StopProxy(ctx, agentPodName(h.runID)); err != nil {
+		t.Fatal(err)
+	}
+	if !fenceHeld || !unfenceHeld {
+		t.Fatalf("the relay was called without the run lock: fence held %v, release held %v", fenceHeld, unfenceHeld)
 	}
 }
 

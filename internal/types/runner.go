@@ -224,6 +224,9 @@ type RunnerPendingAction struct {
 	Asserted bool `json:"-"`
 	// ObligationID is the chain a deferred action's successors continue.
 	ObligationID uuid.UUID `json:"-"`
+	// NodeRecord, on a stop_proxy only, is the encoded runner.NodeRecord the action carries to the
+	// runner instead of an outage loss: such an action has no LostAt.
+	NodeRecord json.RawMessage `json:"-"`
 }
 
 // Runner action outcomes an action_result may carry. A deferred receipt is

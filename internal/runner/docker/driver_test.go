@@ -134,7 +134,7 @@ func testSpec() runner.SandboxSpec {
 		Image:            "busybox:latest",
 		ConfinementClass: types.CC1,
 		Env:              map[string]string{"FOO": "bar"},
-		ProxyConfig:      runner.ProxyConfig{RunToken: "tok", ControlPlaneURL: "http://cp:8080"},
+		ProxyConfig:      runner.ProxyConfig{RunToken: "tok", ControlPlaneURL: "http://127.0.0.1:8080"},
 		Resources:        runner.Resources{CPUMillis: 1000, MemoryMiB: 256},
 	}
 }
@@ -320,7 +320,7 @@ func TestCreateSandbox_TopologyPreservesL0(t *testing.T) {
 	if pcfg.RunToken != "tok" {
 		t.Errorf("proxy config run_token = %q, want tok", pcfg.RunToken)
 	}
-	if pcfg.ControlPlaneURL != "http://cp:8080" {
+	if pcfg.ControlPlaneURL != "http://127.0.0.1:8080" {
 		t.Errorf("proxy config control_plane_url = %q", pcfg.ControlPlaneURL)
 	}
 	if pcfg.Policy == nil {
