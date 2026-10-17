@@ -88,3 +88,12 @@ it("follows the session expiry the server names, so a renewal moves the banner's
   act(() => noteSessionExpiry(renewed.toISOString()));
   expect(result.current[0].sessionExpiresAt?.getTime()).toBe(renewed.getTime());
 });
+
+it("a /me body never moves the deadline back past an expiry a header already named", async () => {
+  const named = new Date(Date.now() + 7_200_000);
+  noteSessionExpiry(named.toISOString());
+  vi.mocked(health.whoami).mockResolvedValue({ ...me, session_expires_at: new Date(Date.now() + 120_000).toISOString() });
+  const { result } = renderHook(useMeta);
+  await waitFor(() => expect(result.current[0].identityResolved).toBe(true));
+  expect(result.current[0].sessionExpiresAt?.getTime()).toBe(named.getTime());
+});

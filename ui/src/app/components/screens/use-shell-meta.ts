@@ -146,8 +146,10 @@ function identityFromMe(me: Me | null) {
     userViewSuperAdmin: me?.user_view_super_admin ?? false,
     role: me?.role ?? "admin",
     // F3-F11: a bad string parses to an Invalid Date, not null — guard
-    // NaN here so useSessionExpiry never has to.
-    sessionExpiresAt: validExpiry(me?.session_expires_at),
+    // NaN here so useSessionExpiry never has to. An expiry the server named
+    // in a header wins: it came with this /me or a later answer, and a body
+    // parsed after a renewal would otherwise move the deadline back.
+    sessionExpiresAt: me ? (namedExpiry() ?? validExpiry(me.session_expires_at)) : null,
     memberLocalDirRoot: me?.member_local_dir_root ?? null,
     userDrive: me?.user_drive ?? null,
     userDriveDeniedByProfile: me?.user_drive_denied_by_profile ?? "",
@@ -235,14 +237,15 @@ export function useMeta(): [ShellMeta, () => void, (me: Me) => void] {
   }, [attempt]);
   // While the server renews sessions it names the expiry on every answer: follow it, so a renewal
   // moves the expiry banner's deadline instead of the banner warning about a session still live.
-  React.useEffect(
-    () =>
-      onSessionExpiry(() => {
-        const at = sessionExpiry();
-        if (at !== null) setMeta((m) => ({ ...m, sessionExpiresAt: new Date(at) }));
-      }),
-    [],
-  );
+  // An answer before this mount may already have named one, so start from it.
+  React.useEffect(() => {
+    const follow = () => {
+      const at = namedExpiry();
+      if (at !== null) setMeta((m) => ({ ...m, sessionExpiresAt: at }));
+    };
+    follow();
+    return onSessionExpiry(follow);
+  }, []);
   // The same person signed back in over the page: take the whole identity
   // from the /me the dialog read, rather than re-asking — a failed re-ask
   // would settle as an unknown identity and blank the page it just kept.
@@ -259,4 +262,10 @@ function validExpiry(iso: string | null | undefined): Date | null {
   if (!iso) return null;
   const d = new Date(iso);
   return Number.isNaN(d.getTime()) ? null : d;
+}
+
+/** The session expiry the server last named in X-Wardyn-Session-Expires; null while it names none. */
+function namedExpiry(): Date | null {
+  const at = sessionExpiry();
+  return at === null ? null : new Date(at);
 }

@@ -111,7 +111,7 @@ A console session is a signed cookie: nothing re-contacts the identity provider 
 | Sliding | `WARDYN_OIDC_SESSION_RENEW_CAP` and `WARDYN_OIDC_SESSION_IDLE_TIMEOUT`, for example `12h` and `30m` | after the idle time with no use, and never later than the cap after sign-in |
 
 - Use is a write the console makes, or a request within a minute of the person's own keyboard, pointer or wheel input; a tab left open with nobody at it is not use.
-- A renewal extends a session by its original length once it is past half of it.
+- A renewal, made once a session is past half its original length, sets its expiry to that length from the request.
   - So keep the idle timeout at most half that length (`WARDYN_OIDC_SESSION_TTL`, or the ID token's lifetime when it is unset), or a session can expire inside its idle time.
 - Boot refuses a session TTL or a renewal cap above `24h`.
 - Revocation and sign-out end a session at once in every shape: renewal never moves the sign-in time they are measured from.

@@ -1576,8 +1576,9 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - Off by default; the owner chooses a default after measuring real Entra sessions.
 - Console activity is a request the browser marks `Sec-Fetch-Site: same-origin` that is a write (any method but `GET`, `HEAD` and `OPTIONS`) or carries `X-Wardyn-Activity: 1`.
   - The console sends that header only within a minute of the person's own keyboard, pointer or wheel input, so reading and typing in a terminal count, and background polls never do.
+  - If sessions never renew behind a proxy, check that it passes `Sec-Fetch-Site` to wardynd unchanged.
 - While it is on, every answer to a live session names its expiry in `X-Wardyn-Session-Expires`, so the console's expiry warning and open terminals follow a renewal.
-- A session past half its length is extended by that length, up to sign-in plus this cap, and never past the `WARDYN_ROLE_STAMP_TTL` deadline.
+- A session past half its length is renewed to that length from the request, up to sign-in plus this cap, and never past the `WARDYN_ROLE_STAMP_TTL` deadline.
 - Renewal moves only the expiry: revocation, suspension and sign-out end a renewed cookie exactly as before.
 - Boot refuses a negative value or one above `24h`.
 
