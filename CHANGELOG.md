@@ -8,6 +8,26 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+### Added
+
+- `wardyn-runnerd register --trusted-ca-file` makes the registration call trust a corporate CA beside the system
+  roots; the Kubernetes chart passes it to its register container when `trustedCA.configMap` is set.
+
+### Fixed
+
+- The Kubernetes chart keeps runnerd's state in a directory below its volume, which runnerd accepts as private; the
+  volume's own root was refused as not mode 0700.
+- A proxy whose `upstream_proxy_url` is an address inside `hard_deny` is refused at boot.
+- A node record's approvers that chain into one person (a shared email and a shared principal) count as one, in any
+  order, and an approver with no principal is refused.
+- A macOS service setup removes the environment file an earlier `--no-service` run left, so a later `--no-service`
+  run no longer reads its old pins back; a trusted-CA path holding a line break is refused.
+- A proxy image set in a macOS managed profile is a pin, as the flag is, even when it carries a release tag.
+- Migration `0187_runner_subject_run_proof_unasserted`: a quarantine bound to a real run can no longer carry an
+  `asserted` proof. Rows written before it are left as they are.
+- `wardyn runner remote list --ids --json` is refused instead of ignoring `--json`; `wardyn runner trust` names only
+  `personal` and `managed_device` as settable.
+
 ## [0.9.3-rc.2] — 2026-10-17
 
 Laptop runners, second candidate: session recordings follow the organisation, an Azure DevOps credential follows the
