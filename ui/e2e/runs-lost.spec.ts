@@ -100,7 +100,8 @@ test.describe("Runs landing — lost and lease-ended rows (F1, design.md:158)", 
 });
 
 // DR-0261: a local run its runner lost contact with says its network was stopped on time only on evidence. The
-// evidence is the audit read; a read that fails is no evidence, so the banner makes no stopped claim then.
+// evidence is the audit read; a read that fails is no evidence, so the banner makes no on-time or late claim then, but
+// it keeps its title and Revive / Extend / End run, which are the only way to act on the run.
 test.describe("Run detail — the local lost-run banner", () => {
   async function openLostLocalRun(page: Page, audit: "fail" | "empty") {
     await page.route("**/api/v1/setup/status*", async (route) => {
@@ -139,9 +140,14 @@ test.describe("Run detail — the local lost-run banner", () => {
     await expect(page.getByTestId("run-lifetime-local-stopped")).toContainText("This run's network was stopped");
   });
 
-  test("with the late-stop read failing, it makes no claim that the network was stopped", async ({ page }) => {
+  test("with the late-stop read failing, it keeps the actions and makes no claim about when the network was stopped", async ({ page }) => {
     await openLostLocalRun(page, "fail");
-    await expect(page.getByTestId("run-lifetime-local-stopped")).toHaveCount(0);
-    await expect(page.getByText("This run's network was stopped")).toHaveCount(0);
+    const banner = page.getByTestId("run-lifetime-local-stopped");
+    await expect(banner).toContainText("This run's network was stopped");
+    await expect(banner.getByRole("button", { name: "Revive" })).toBeVisible();
+    await expect(banner.getByRole("button", { name: "Extend" })).toBeVisible();
+    await expect(banner.getByRole("button", { name: "End run" })).toBeVisible();
+    await expect(banner).not.toContainText("reports its runner stopped this run's network");
+    await expect(banner).not.toContainText("was still on when it came back");
   });
 });

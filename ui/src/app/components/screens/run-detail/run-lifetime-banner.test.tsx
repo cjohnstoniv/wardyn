@@ -482,14 +482,17 @@ describe("RunLifetimeBanner: a local run (RS4)", () => {
     await screen.findByTestId("run-lifetime-local-stopped");
   });
 
-  // DR-0261: a read that failed is not evidence of an on-time stop.
-  it("a failed read makes no stopped claim at all, neither on time nor late", async () => {
+  // DR-0261: a read that failed is not evidence of an on-time stop, but it must not take the actions away either.
+  it("a failed read keeps the title and Revive, Extend and End run, and claims neither on time nor late", async () => {
     listAuditMock.mockRejectedValue(new Error("audit down"));
-    const { container } = renderBanner(lost());
-    await waitFor(() => expect(listAuditMock).toHaveBeenCalled());
-    await new Promise((r) => setTimeout(r, 0));
-    expect(container).toBeEmptyDOMElement();
+    renderBanner(lost());
+    const banner = await screen.findByTestId("run-lifetime-local-stopped");
+    expect(banner).toHaveTextContent("This run's network was stopped");
+    expect(screen.getByRole("button", { name: "Revive" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Extend" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "End run" })).toBeInTheDocument();
     expect(screen.queryByText(/reports its runner stopped this run's network/)).toBeNull();
+    expect(screen.queryByText(/was still on when it came back/)).toBeNull();
   });
 
   it("a late-stop row from an earlier loss of this run does not make this loss late", async () => {
