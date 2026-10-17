@@ -295,7 +295,7 @@ func (s *Server) confinedEgressDomains(ws types.Workspace, trusted []string) []s
 		if !s.egressProvenanceAllowed(req) {
 			continue
 		}
-		if typ, host, ok := types.SplitRequirementKey(key); ok && typ == "egress" {
+		if typ, host, ok := types.SplitRequirementKey(key); ok && typ == "egress" && (&egressBound{trusted: trusted}).admits(req, host, ws) {
 			unionAllowedDomains(base, []string{host})
 		}
 	}
@@ -362,6 +362,21 @@ func boundCloneHosts(hosts []string, ws types.Workspace, trusted []string) (kept
 	return hostsWithinLiteralTrust(hosts, append(slices.Clone(trusted), ws.ApprovedEgress...))
 }
 
+// egressBound is the ceiling allowlist a run's workspace requirement rows are held to; nil holds none.
+type egressBound struct{ trusted []string }
+
+// admits reports whether a requirement row's egress host may widen the run. An operator_set row always
+// may. Any other row (reachable only with the operator-set gate off) is repository content: a host that
+// would carry a private-range literal trust is admitted only where the ceiling or the workspace's
+// operator-written approved egress already covers it, as for a member's clone host.
+func (b *egressBound) admits(req types.WorkspaceRequirement, host string, ws types.Workspace) bool {
+	if b == nil || req.Provenance == "operator_set" {
+		return true
+	}
+	kept, _ := hostsWithinLiteralTrust([]string{host}, append(slices.Clone(b.trusted), ws.ApprovedEgress...))
+	return len(kept) == 1
+}
+
 // hostsWithinLiteralTrust splits derived clone hosts by whether authority's exact entries already
 // cover the private-range literal trust each would carry (proxy.Policy.ExceedsLiteralTrust). A host
 // that carries none (a name, a public literal) is always kept.
@@ -384,7 +399,7 @@ func cloneHostDropWarning(host, kind, name string) string {
 	remedy := "allow it in the workspace's approved egress"
 	switch {
 	case kind == "source":
-		remedy = "list it in the deployment ceiling's allowed_domains"
+		remedy = "list it in the allowed_domains of the launching operator's ceiling"
 	case strings.Contains(host, ":"):
 		remedy = "list it in the ceiling's allowed_domains"
 	}

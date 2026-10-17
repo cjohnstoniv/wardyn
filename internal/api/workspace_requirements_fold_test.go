@@ -431,7 +431,7 @@ func TestApplyWorkspaceRequirements_WriteHeldToMemberWritableRoots(t *testing.T)
 			folded := supplier(tc.folded, tc.level)
 			sel := map[string]client.WorkspaceSelection{folded.ID.String(): {WorkspaceID: folded.ID.String(), EnabledOptional: []string{"write:" + project}}}
 
-			_, refusal := srv.applyWorkspaceRequirementsFor(context.Background(), nil, spec, "claude-code", []types.Workspace{folded}, tc.attached, sel)
+			_, refusal := srv.applyWorkspaceRequirementsFor(context.Background(), nil, spec, "claude-code", []types.Workspace{folded}, tc.attached, sel, nil)
 
 			if tc.wantReason == "" {
 				if refusal != nil || spec.WorkspaceMounts[0].ReadOnlyOrDefault() {
@@ -470,7 +470,7 @@ func TestApplyWorkspaceRequirements_ReadOnlySelectionPinsThePath(t *testing.T) {
 		}
 		attached := []types.Workspace{operator}
 		for _, ws := range []types.Workspace{operator, member} { // the fold step's order: attached, then referenced
-			if _, refusal := srv.applyWorkspaceRequirementsFor(context.Background(), nil, spec, "claude-code", []types.Workspace{ws}, attached, sel); refusal != nil {
+			if _, refusal := srv.applyWorkspaceRequirementsFor(context.Background(), nil, spec, "claude-code", []types.Workspace{ws}, attached, sel, nil); refusal != nil {
 				t.Fatalf("pinned=%v: refused: %v", pinned, refusal)
 			}
 		}
@@ -510,7 +510,7 @@ func TestApplyWorkspaceRequirements_AWriteRowThatGrantsNothingLeavesAGrantedMoun
 			spec := &types.RunPolicySpec{WorkspaceMounts: []types.WorkspaceMount{{Source: path, Target: "/home/agent/work", ReadOnly: &ro}}}
 			attached := []types.Workspace{grants, idle}
 			for _, ws := range tc.order {
-				if _, refusal := srv.applyWorkspaceRequirementsFor(context.Background(), nil, spec, "claude-code", []types.Workspace{ws}, attached, tc.sel); refusal != nil {
+				if _, refusal := srv.applyWorkspaceRequirementsFor(context.Background(), nil, spec, "claude-code", []types.Workspace{ws}, attached, tc.sel, nil); refusal != nil {
 					t.Fatalf("refused: %v", refusal)
 				}
 			}

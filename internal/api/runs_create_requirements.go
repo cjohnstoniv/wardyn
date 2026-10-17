@@ -115,7 +115,7 @@ func resolveWorkspaceSelections(req createRunRequest) map[string]client.Workspac
 // A workspace that is only in the run because it stores the same directory, and
 // whose write row is not enabled, leaves the mount alone (applyWriteNarrowing).
 func (s *Server) applyWorkspaceRequirements(ctx context.Context, spec *types.RunPolicySpec, agent string, wsRefs []types.Workspace, selections map[string]client.WorkspaceSelection) ([]requirementAuditEntry, *sourceRefusal) {
-	return s.applyWorkspaceRequirementsFor(ctx, nil, spec, agent, wsRefs, wsRefs, selections)
+	return s.applyWorkspaceRequirementsFor(ctx, nil, spec, agent, wsRefs, wsRefs, selections, nil)
 }
 
 // applyWorkspaceRequirementsFor is applyWorkspaceRequirements with the
@@ -127,7 +127,7 @@ func (s *Server) applyWorkspaceRequirements(ctx context.Context, spec *types.Run
 // the request names, which a door that folds one workspace at a time passes
 // whole: a write row's mount is held to the owners among them
 // (requirementWriteRefusal).
-func (s *Server) applyWorkspaceRequirementsFor(ctx context.Context, present map[string]bool, spec *types.RunPolicySpec, agent string, wsRefs, attached []types.Workspace, selections map[string]client.WorkspaceSelection) ([]requirementAuditEntry, *sourceRefusal) {
+func (s *Server) applyWorkspaceRequirementsFor(ctx context.Context, present map[string]bool, spec *types.RunPolicySpec, agent string, wsRefs, attached []types.Workspace, selections map[string]client.WorkspaceSelection, bound *egressBound) ([]requirementAuditEntry, *sourceRefusal) {
 	var events []requirementAuditEntry
 	// The member mount gate ran on these mounts as they stand now. One a
 	// write: row below makes writable meets it again before this returns.
@@ -174,7 +174,7 @@ func (s *Server) applyWorkspaceRequirementsFor(ctx context.Context, present map[
 				// content) is skipped; only an operator's DIRECT declaration
 				// auto-adds. The predicate is shared with the confined-replay
 				// path — see egressProvenanceAllowed in workspace_egress.go.
-				if !s.egressProvenanceAllowed(req) {
+				if !s.egressProvenanceAllowed(req) || !bound.admits(req, name, ws) {
 					continue
 				}
 				addedEgress = append(addedEgress, unionAllowedDomains(spec, []string{name})...)
