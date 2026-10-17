@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -376,5 +377,48 @@ func TestRegisterSavesTheProxyImageTheOrganisationNamed(t *testing.T) {
 	}
 	if raw, _ := os.ReadFile(filepath.Join(state, "runner.json")); strings.Contains(string(raw), "proxy_image") {
 		t.Errorf("runner.json carries proxy_image for the release image: %s", raw)
+	}
+}
+
+// --trusted-ca-file makes the registration call trust a corporate CA beside the system roots; without it
+// a server signed by that CA is refused. A bundle that cannot be read is refused before a request.
+func TestRegisterTrustsTheNamedCABundle(t *testing.T) {
+	var org string
+	called := false
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		var req types.RunnerRegisterRequest
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(types.RunnerRegistration{RunnerID: uuid.New(), Fingerprint: runnerwire.Fingerprint(req.PublicKey), State: types.RunnerUnclaimed, OrgURLSHA256: federation.OrgURLSHA256(org), Limits: req.Limits})
+	}))
+	defer srv.Close()
+	org = srv.URL
+	root := t.TempDir()
+	tokenFile := filepath.Join(root, "token")
+	if err := os.WriteFile(tokenFile, []byte("wdr_"+strings.Repeat("c", 64)), 0600); err != nil {
+		t.Fatal(err)
+	}
+	bundle := filepath.Join(root, "ca.pem")
+	pemBytes := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: srv.Certificate().Raw})
+	if err := os.WriteFile(bundle, pemBytes, 0600); err != nil {
+		t.Fatal(err)
+	}
+	k8s := []string{"--substrate=k8s", "--arch=amd64", "--max-runs=2", "--total-cpu=4", "--total-memory=8", "--total-disk=50", "--per-run-cpu=2", "--per-run-memory=4", "--per-run-disk=25"}
+	run := func(state string, extra ...string) error {
+		cmd := newRegisterCommand()
+		cmd.SetOut(&strings.Builder{})
+		cmd.SetIn(strings.NewReader(""))
+		cmd.SetArgs(append(append([]string{"--org", org, "--token-file", tokenFile, "--state-dir", filepath.Join(root, state)}, k8s...), extra...))
+		return cmd.Execute()
+	}
+	if err := run("plain"); err == nil || called {
+		t.Fatalf("a server signed by an unknown CA was trusted: called=%v err=%v", called, err)
+	}
+	if err := run("bad", "--trusted-ca-file", filepath.Join(root, "missing.pem")); err == nil || called {
+		t.Fatalf("an unreadable bundle was accepted: called=%v err=%v", called, err)
+	}
+	if err := run("good", "--trusted-ca-file", bundle); err != nil || !called {
+		t.Fatalf("a server signed by the named CA was refused: called=%v err=%v", called, err)
 	}
 }

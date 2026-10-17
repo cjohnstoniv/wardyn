@@ -17,6 +17,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"slices"
 	"sync"
 	"sync/atomic"
 
@@ -27,6 +28,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/identity"
 	"github.com/cjohnstoniv/wardyn/internal/placement"
+	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -73,7 +75,31 @@ func relayRunner(ctx context.Context) (uuid.UUID, bool) {
 type relayedConn struct {
 	net.Conn
 	runner uuid.UUID
+	hold   *relayHold // returns the runner's relay slot on Close; nil when uncounted
 }
+
+// relayHold gives one relay slot back, once.
+type relayHold struct {
+	once    sync.Once
+	release func()
+}
+
+func (h *relayHold) drop() { h.once.Do(h.release) }
+
+func (c relayedConn) Close() error {
+	if c.hold != nil {
+		c.hold.drop()
+	}
+	return c.Conn.Close()
+}
+
+// maxRelayPerRunner bounds the relay streams one runner may hold open at once. A runner session
+// carries at most runnerwire.MaxStreams streams, and the relay shares them with the org's own
+// calls and output streams, so a runner whose local clients stall relays must not be able to
+// fill the session and cut itself off from the org.
+const maxRelayPerRunner = runnerwire.MaxStreams / 2
+
+var errRelayRunnerCap = errors.New("relay stream cap for this runner reached")
 
 // relayConnContext is the relay server's ConnContext: every request on the
 // connection carries its runner, for the binding and for data.relay on every
@@ -97,6 +123,7 @@ type relayListener struct {
 	closed  chan struct{}
 	stop    sync.Once
 	serving atomic.Bool
+	held    sync.Map // runner uuid.UUID -> *atomic.Int32: its open relay streams
 }
 
 // relayBacklog bounds the relay streams waiting for Accept; past it a stream
@@ -124,6 +151,22 @@ func (l *relayListener) offer(c net.Conn) error {
 	default:
 		return errors.New("relay backlog full")
 	}
+}
+
+// offerFor offers c as runner id's relay stream, refusing it past maxRelayPerRunner open ones.
+func (l *relayListener) offerFor(id uuid.UUID, c net.Conn) error {
+	v, _ := l.held.LoadOrStore(id, new(atomic.Int32))
+	n := v.(*atomic.Int32)
+	if n.Add(1) > maxRelayPerRunner {
+		n.Add(-1)
+		return errRelayRunnerCap
+	}
+	rc := relayedConn{Conn: c, runner: id, hold: &relayHold{release: func() { n.Add(-1) }}}
+	if err := l.offer(rc); err != nil {
+		rc.hold.drop()
+		return err
+	}
+	return nil
 }
 
 func (l *relayListener) Accept() (net.Conn, error) {
@@ -155,11 +198,26 @@ func (s *Server) acceptRelay(runnerID string, c net.Conn) error {
 	if err != nil {
 		return err
 	}
-	if err := s.runnerStreams.relay.offer(relayedConn{Conn: c, runner: id}); err != nil {
+	if err := s.runnerStreams.relay.offerFor(id, c); err != nil {
 		slog.Warn("wardynd: refused a runner's relay stream", slog.String("runner_id", runnerID), slog.Any("err", err))
 		return err
 	}
 	return nil
+}
+
+// newRelayHTTPServer is the relay's HTTP server. It speaks HTTP/1.1 only: an h2 connection
+// multiplexes requests over the one relay stream, and the per-connection runner tag and the
+// per-runner stream cap assume one request at a time per stream.
+func newRelayHTTPServer(h http.Handler, tlsCfg *tls.Config) *http.Server {
+	cfg := tlsCfg.Clone()
+	cfg.NextProtos = slices.DeleteFunc(slices.Clone(cfg.NextProtos), func(p string) bool { return p == "h2" })
+	return &http.Server{
+		Handler:        h,
+		TLSConfig:      cfg,
+		TLSNextProto:   map[string]func(*http.Server, *tls.Conn, http.Handler){},
+		ConnContext:    relayConnContext,
+		MaxHeaderBytes: 1 << 20,
+	}
 }
 
 // ServeRelay serves the relay listener with tlsCfg, the internal listener's
@@ -169,12 +227,7 @@ func (s *Server) acceptRelay(runnerID string, c net.Conn) error {
 func (s *Server) ServeRelay(tlsCfg *tls.Config) *http.Server {
 	l := &s.runnerStreams.relay
 	l.start()
-	srv := &http.Server{
-		Handler:        s.relayRoutes(s.router),
-		TLSConfig:      tlsCfg.Clone(),
-		ConnContext:    relayConnContext,
-		MaxHeaderBytes: 1 << 20,
-	}
+	srv := newRelayHTTPServer(s.relayRoutes(s.router), tlsCfg)
 	go func() {
 		defer l.Close()
 		if err := srv.ServeTLS(l, "", ""); err != nil && !errors.Is(err, http.ErrServerClosed) {

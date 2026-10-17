@@ -197,10 +197,12 @@ func (s *Substrate) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) 
 	if err := s.refuseResident(spec.RunID, spec); err != nil {
 		return runner.Sandbox{}, err
 	}
+	var registered *outputSink
 	if spec.ExecOutput != nil {
 		s.mu.Lock()
 		if s.outputs[spec.RunID] == nil {
-			s.outputs[spec.RunID] = &outputSink{writer: spec.ExecOutput}
+			registered = &outputSink{writer: spec.ExecOutput}
+			s.outputs[spec.RunID] = registered
 		}
 		s.mu.Unlock()
 	}
@@ -217,9 +219,25 @@ func (s *Substrate) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) 
 	if err != nil {
 		// A lost reply cannot tell whether the runner created the sandbox. Keep
 		// the output cursor for a retry or reconnect instead of dropping its tail.
+		// A refusal the runner itself answered created nothing, so its sink goes.
+		if registered != nil && refusedCreate(err) {
+			s.mu.Lock()
+			if s.outputs[spec.RunID] == registered {
+				delete(s.outputs, spec.RunID)
+			}
+			s.mu.Unlock()
+		}
 		return runner.Sandbox{}, err
 	}
 	return res.Sandbox, nil
+}
+
+// refusedCreate is whether err is the runner's own reply declining the create (refused, or an image of
+// the wrong architecture), as opposed to a dropped link or an internal failure after which it may
+// have created the sandbox.
+func refusedCreate(err error) bool {
+	var re *runnerwire.Error
+	return errors.As(err, &re) && (re.Code == runnerwire.CodeRefused || re.Code == runnerwire.CodeImageArch)
 }
 
 // checkClass refuses a class the runner did not advertise, before anything is sent.
@@ -390,7 +408,8 @@ func (s *Substrate) ProbeDrive(ctx context.Context, mount types.DriveMount) (run
 	return res, err
 }
 
-// RecoverOutput reads the runner-side output buffer into w.
+// RecoverOutput reads the runner-side output buffer into w. For a live run adopted after a restart the
+// sink is registered before the runner is asked, so the OPEN the runner sends at connect finds it.
 func (s *Substrate) RecoverOutput(ctx context.Context, ref string, w io.Writer) error {
 	if err := s.own(ref); err != nil {
 		return err
@@ -400,28 +419,55 @@ func (s *Substrate) RecoverOutput(ctx context.Context, ref string, w io.Writer) 
 	if err != nil {
 		return err
 	}
+	var adopted *outputSink
+	id, adopting := runner.OutputRun(ctx)
+	if adopting {
+		s.mu.Lock()
+		if s.outputs[id] == nil {
+			adopted = &outputSink{writer: w}
+			s.outputs[id] = adopted
+		}
+		s.mu.Unlock()
+	}
+	drop := func() {
+		if adopted == nil {
+			return
+		}
+		s.mu.Lock()
+		if s.outputs[id] == adopted {
+			delete(s.outputs, id)
+		}
+		s.mu.Unlock()
+	}
+	gapper, canGap := w.(runner.OutputGapMarker)
 	var res runnerwire.RecoverResult
-	if err := sess.Call(ctx, runnerwire.MethodRecoverOutput, runnerwire.RefArgs{Ref: ref}, &res); err != nil {
+	if err := sess.Call(ctx, runnerwire.MethodRecoverOutput, runnerwire.RecoverOutputArgs{Ref: ref, Gap: canGap}, &res); err != nil {
+		drop()
 		return err
 	}
 	if res.Unrecoverable {
+		drop()
 		return runner.ErrOutputUnrecoverable
 	}
 	st, err := sess.TakeStream(res.Stream)
 	if err != nil {
+		drop()
 		return err
 	}
-	if id, ok := runner.OutputRun(ctx); ok {
-		s.mu.Lock()
-		if s.outputs[id] == nil {
-			// A live run adopted after a restart: ACK what w accepts, as
-			// receiveOutput does, and let the runner's next OPEN resume into w.
-			sink := &outputSink{writer: w}
-			s.outputs[id] = sink
-			s.mu.Unlock()
-			return s.receiveOutput(id, sink, st, 0)
-		}
-		s.mu.Unlock()
+	if res.Gap < 0 || (res.Gap > 0 && !canGap) {
+		_ = st.Close()
+		drop()
+		return runner.ErrOutputUnrecoverable
+	}
+	if res.Gap > 0 {
+		gapper.OutputGap(res.Gap)
+	}
+	if adopted != nil {
+		// ACK what w accepts, as receiveOutput does, and let the runner's next OPEN resume into w.
+		adopted.mu.Lock()
+		adopted.offset = res.Gap
+		adopted.mu.Unlock()
+		return s.receiveOutput(id, adopted, st, res.Gap)
 	}
 	defer st.Close()
 	// The copy ends with the caller's ctx: a runner that never ends its side must not keep this

@@ -224,14 +224,24 @@ func tlsConfig(caFile string) (*tls.Config, error) {
 // with the status for 2xx and for a GET 404 ("nothing there"); a write/DELETE
 // 404 is an error, since that means no engine is mounted at the path.
 func (c *client) call(ctx context.Context, method, path string, in, out any) (int, error) {
-	status, err := c.retrying(ctx, method, path, in, out, true)
+	status, _, err := c.callRetried(ctx, method, path, in, out)
+	return status, err
+}
+
+// callRetried is call that also reports whether the answer followed a retry of
+// the same request: an earlier attempt may have landed unseen, so a write's
+// check-and-set mismatch can mean "my first attempt already went through".
+func (c *client) callRetried(ctx context.Context, method, path string, in, out any) (int, bool, error) {
+	status, retried, err := c.retrying(ctx, method, path, in, out, true)
 	if s := statusOf(err); s == http.StatusForbidden || s == http.StatusUnauthorized {
 		if aerr := c.relogin(ctx); aerr != nil {
-			return status, fmt.Errorf("%w (re-authenticating after it failed too: %v)", err, aerr)
+			return status, retried, fmt.Errorf("%w (re-authenticating after it failed too: %v)", err, aerr)
 		}
-		status, err = c.retrying(ctx, method, path, in, out, true)
+		var again bool
+		status, again, err = c.retrying(ctx, method, path, in, out, true)
+		retried = retried || again
 	}
-	return status, err
+	return status, retried, err
 }
 
 // relogin logs in again at most once per reloginEvery. Inside the window the
@@ -247,17 +257,17 @@ func (c *client) relogin(ctx context.Context) error {
 	return c.login(ctx)
 }
 
-func (c *client) retrying(ctx context.Context, method, path string, in, out any, authed bool) (int, error) {
+func (c *client) retrying(ctx context.Context, method, path string, in, out any, authed bool) (int, bool, error) {
 	var err error
 	status := 0
 	for attempt := 0; ; attempt++ {
 		status, err = c.once(ctx, method, path, in, out, authed)
 		if err == nil || !transient(statusOf(err)) || attempt == retries {
-			return status, err
+			return status, attempt > 0, err
 		}
 		select {
 		case <-ctx.Done():
-			return status, err
+			return status, attempt > 0, err
 		case <-time.After(c.backoff << attempt):
 		}
 	}
@@ -339,7 +349,7 @@ func (c *client) login(ctx context.Context) error {
 			return err
 		}
 		var r authResp
-		if _, err := c.retrying(ctx, http.MethodPost, "auth/"+c.authMount+"/login",
+		if _, _, err := c.retrying(ctx, http.MethodPost, "auth/"+c.authMount+"/login",
 			map[string]string{"role": c.role, "jwt": jwt}, &r, false); err != nil {
 			return fmt.Errorf("vault kubernetes login (role %q): %w", c.role, err)
 		}
@@ -360,7 +370,7 @@ func (c *client) login(ctx context.Context) error {
 				Renewable bool `json:"renewable"`
 			} `json:"data"`
 		}
-		if _, err := c.retrying(ctx, http.MethodGet, "auth/token/lookup-self", nil, &r, true); err != nil {
+		if _, _, err := c.retrying(ctx, http.MethodGet, "auth/token/lookup-self", nil, &r, true); err != nil {
 			return fmt.Errorf("vault token from WARDYN_VAULT_TOKEN_FILE: %w", err)
 		}
 		c.setToken(tok, r.Data.TTL, r.Data.Renewable)
@@ -408,7 +418,7 @@ func (c *client) renew(ctx context.Context) error {
 	c.mu.Unlock()
 	if renewable {
 		var r authResp
-		_, err := c.retrying(ctx, http.MethodPost, "auth/token/renew-self", map[string]any{}, &r, true)
+		_, _, err := c.retrying(ctx, http.MethodPost, "auth/token/renew-self", map[string]any{}, &r, true)
 		if err == nil && r.Auth.LeaseDuration > 0 {
 			c.mu.Lock()
 			c.ttl = time.Duration(r.Auth.LeaseDuration) * time.Second

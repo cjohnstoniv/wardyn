@@ -1140,6 +1140,46 @@ func TestSetupKeepsTheLaunchAgentsPinsOverAStaleNoServiceEnvironment(t *testing.
 	}
 }
 
+// A macOS service setup removes the environment file an earlier --no-service wrote, so deleting the plist
+// later and running --no-service again does not read the old pins back.
+func TestSetupLaunchAgentRemovesTheStaleNoServiceEnvironment(t *testing.T) {
+	f := newSetupFixture(t, "darwin")
+	p, _ := f.host.paths()
+	if _, err := f.run(setupOptions{tokenFile: f.tokenFile, noService: true, proxyImage: "ghcr.io/example/proxy:x"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.run(setupOptions{proxyImage: "ghcr.io/example/proxy:z"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(p.noServiceEnvFile()); !os.IsNotExist(err) {
+		t.Fatalf("the LaunchAgent setup left the --no-service environment file: %v", err)
+	}
+	if err := os.Remove(p.plistFile); err != nil {
+		t.Fatal(err)
+	}
+	f.flagless = true
+	if _, err := f.run(setupOptions{noService: true}); err != nil {
+		t.Fatal(err)
+	}
+	if env := f.read(p.noServiceEnvFile()); strings.Contains(env, "proxy:x") || strings.Contains(env, "proxy:z") {
+		t.Errorf("--no-service after the plist went read old pins back:\n%s", env)
+	}
+}
+
+// A path that holds a line break cannot be written to the environment file --no-service reads back, so
+// setup refuses it on every platform.
+func TestSetupRefusesATrustedCAPathWithALineBreak(t *testing.T) {
+	for _, goos := range []string{"linux", "darwin"} {
+		t.Run(goos, func(t *testing.T) {
+			f := newSetupFixture(t, goos)
+			ca := writeFile(t, filepath.Join(t.TempDir(), "ca\n.pem"), testCAPEM(t, "x"))
+			if _, err := f.run(setupOptions{tokenFile: f.tokenFile, noService: true, trustedCAFile: ca}); err == nil || !strings.Contains(err.Error(), "unsupported characters") {
+				t.Fatalf("a CA path with a line break: %v", err)
+			}
+		})
+	}
+}
+
 // --no-service is refused, before a token is spent, while a service for this runner is installed: running
 // both would be two processes with one identity.
 func TestSetupNoServiceRefusesWhileAServiceIsInstalled(t *testing.T) {

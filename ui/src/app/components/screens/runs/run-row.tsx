@@ -18,6 +18,7 @@ import { toast } from "sonner";
 import type { AgentRun } from "../../../lib/types";
 import { relativeTime, getErrorMessage } from "../../../lib/format";
 import { runs as runsApi } from "../../../lib/api/runs";
+import { waitEnded } from "../../../lib/api/core";
 import { OpenInUserView, runPath, useConsoleMode } from "../../wardyn/console-view";
 import { ownerLabel } from "../../wardyn/copy/console-view";
 import { useOperator, usePrincipal } from "../../wardyn/operator-context";
@@ -28,7 +29,7 @@ import { glyphKindFor, RowGlyph } from "./row-glyph";
 import { rowPresentation, waitingSignInPresentation } from "./runs-model";
 import { mayReadSignIn } from "../run-detail/sign-in-run";
 import { RUNS_ROW_ACTION } from "../../wardyn/copy/runs-landing";
-import { REVIVE, REVIVING, revivePolicy } from "../../wardyn/copy/run-lifetime";
+import { REVIVE, REVIVE_STILL_STARTING, REVIVING, revivePolicy } from "../../wardyn/copy/run-lifetime";
 import { RUNNER_OFFLINE_WORD, runnerLabel, runOnChip } from "../../../lib/nav-copy";
 
 // Lazy: the read loop is for the rare sign-in row, so it stays out of the entry
@@ -96,7 +97,8 @@ export function RunRow({ run }: { run: AgentRun }) {
       const res = await runsApi.reviveRun(run.id);
       if (res.denied_added.length > 0) toast.info(revivePolicy(res.denied_added.length));
     } catch (err) {
-      toast.error("Couldn't revive this run", { description: getErrorMessage(err) });
+      if (waitEnded(err)) toast.info(REVIVE_STILL_STARTING);
+      else toast.error("Couldn't revive this run", { description: getErrorMessage(err) });
     } finally {
       setReviving(false);
     }

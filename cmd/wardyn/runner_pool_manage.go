@@ -85,7 +85,9 @@ func makePoolDefault(cmd *cobra.Command, c *sdk.Client, pool sdk.RunnerPool) err
 // poolMembers adds or removes each runner, through the organization's routes for a remote-hosted runner
 // in an organization pool and through your own otherwise, and says what is now true. Every runner is
 // read, and an unclaimed one refused, before the first write; one already in the pool is said so and not
-// added again. fresh says the pool was just made, so there is nothing to read.
+// added again. With several runners, each one the server refuses is said on its own line after the ones
+// that went through, and the command fails; a lone runner's refusal is returned as it is. fresh says
+// the pool was just made, so there is nothing to read.
 func poolMembers(cmd *cobra.Command, c *sdk.Client, pool sdk.RunnerPool, runnerArgs []string, add, fresh bool) error {
 	ctx := cmd.Context()
 	mine := pool.Scope == sdk.RunnerPoolUser
@@ -126,7 +128,7 @@ func poolMembers(cmd *cobra.Command, c *sdk.Client, pool sdk.RunnerPool, runnerA
 			}
 		}
 	}
-	var done []string
+	var done, failed []string
 	for _, ref := range refs {
 		if add && ref.in(members) {
 			if _, err := fmt.Fprintf(cmd.OutOrStdout(), "%s is already in %s\n", ref.name, pool.Name); err != nil {
@@ -150,31 +152,53 @@ func poolMembers(cmd *cobra.Command, c *sdk.Client, pool sdk.RunnerPool, runnerA
 			err = c.RemoveRunnerPoolRemoteRunner(ctx, pool.ID, ref.remote)
 		}
 		held, err := heldForApproval(cmd, err)
-		if err != nil {
+		if err != nil && len(refs) == 1 {
 			return err
+		}
+		if err != nil {
+			failed = append(failed, poolMemberFailure(ref.name, pool.Name, add, err))
+			continue
 		}
 		if held {
 			continue
 		}
 		label := ref.name
-		if mine {
+		if add && mine {
 			label += " (" + ref.kind() + ")"
 		}
 		done = append(done, label)
 	}
-	if len(done) == 0 {
-		return nil
+	if len(done) > 0 {
+		var err error
+		switch {
+		case add:
+			_, err = fmt.Fprintf(cmd.OutOrStdout(), "%s added to %s\n", joinAnd(done), pool.Name)
+		case len(done) > 1:
+			_, err = fmt.Fprintf(cmd.OutOrStdout(), "%s are no longer in %s\n", joinAnd(done), pool.Name)
+		default:
+			_, err = fmt.Fprintf(cmd.OutOrStdout(), "%s is no longer in %s\n", done[0], pool.Name)
+		}
+		if err != nil {
+			return err
+		}
 	}
+	for _, line := range failed {
+		if _, err := fmt.Fprintln(cmd.OutOrStdout(), line); err != nil {
+			return err
+		}
+	}
+	if len(failed) > 0 {
+		return fmt.Errorf("%d of %d runners failed; the lines above say which", len(failed), len(refs))
+	}
+	return nil
+}
+
+// poolMemberFailure is the line for one runner the server refused, with the server's own words.
+func poolMemberFailure(runner, pool string, add bool, err error) string {
 	if add {
-		_, err := fmt.Fprintf(cmd.OutOrStdout(), "%s added to %s\n", joinAnd(done), pool.Name)
-		return err
+		return fmt.Sprintf("%s was not added to %s: %v", runner, pool, err)
 	}
-	verb := "is"
-	if len(done) > 1 {
-		verb = "are"
-	}
-	_, err := fmt.Fprintf(cmd.OutOrStdout(), "%s %s no longer in %s\n", joinAnd(done), verb, pool.Name)
-	return err
+	return fmt.Sprintf("%s was not taken out of %s: %v", runner, pool, err)
 }
 
 func runnerPoolCreateCmd(client clientFn) *cobra.Command {

@@ -4,11 +4,13 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"io"
 	"strings"
+	"time"
 
 	sdk "github.com/cjohnstoniv/wardyn/pkg/client"
 )
@@ -38,19 +40,23 @@ func resourceCells(l *sdk.RunnerLimits, u sdk.RunnerUsage) [4]string {
 // your own user pools.
 func printOwnRunners(w io.Writer, own []sdk.RunnerView, remote []sdk.RemoteRunnerView) error {
 	tw := newTab(w)
-	fmt.Fprintln(tw, "NAME\tKIND\tSTATE\tRUNS\t"+resourceHeads)
-	row := func(name, kind, state string, c [4]string) {
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", name, kind, state, strings.Join(c[:], "\t"))
+	fmt.Fprintln(tw, "ID\tNAME\tMACHINE\tARCH\tKIND\tSTATE\tLAST SEEN\tFINGERPRINT\tRUNS\t"+resourceHeads)
+	row := func(id, name, machine, arch, kind, state, lastSeen, fingerprint string, c [4]string) {
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", id, name, machine, arch, kind, state, lastSeen, fingerprint, strings.Join(c[:], "\t"))
 	}
 	for _, r := range own {
-		row(r.Name, "self-hosted", runnerStateWord(r), resourceCells(r.Limits, r.Usage))
+		lastSeen := "never"
+		if r.LastSeenAt != nil {
+			lastSeen = r.LastSeenAt.Format(time.RFC3339)
+		}
+		row(r.ID.String(), r.Name, cmp.Or(r.MachineName, "-"), cmp.Or(r.Arch, "-"), "self-hosted", runnerStateWord(r), lastSeen, r.KeyFingerprint, resourceCells(r.Limits, r.Usage))
 	}
 	for _, rr := range remote {
 		state := "offline"
 		if rr.Online {
 			state = "online"
 		}
-		row(rr.Name, "remote-hosted", state, resourceCells(rr.Limits, rr.Usage))
+		row(rr.ID, rr.Name, "-", "-", "remote-hosted", state, "-", "-", resourceCells(rr.Limits, rr.Usage))
 	}
 	return tw.Flush()
 }

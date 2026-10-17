@@ -173,6 +173,12 @@ func TestPG_RunnerAssertedRowsAreBoundAndImmutable(t *testing.T) {
 			t.Errorf("%s: accepted", name)
 		}
 	}
+	// A quarantine bound to a real run never carries the asserted flag.
+	if _, err := pool.Exec(ctx, `INSERT INTO runner_pending_actions (id, runner_id, run_id, subject, kind, ref, binding_version, owner, proof)
+		VALUES ($1,$2,$3,'run','quarantine_run',$4,1,'o',$5)`, uuid.New(), rn.ID, run.ID, ref,
+		`{"id":"`+uuid.NewString()+`","generation":"`+uuid.Nil.String()+`","asserted":true}`); err == nil {
+		t.Error("a run-bound quarantine with an asserted proof accepted")
+	}
 	id := uuid.New()
 	if _, err := pool.Exec(ctx, `INSERT INTO runner_pending_actions (id, runner_id, subject, asserted_run_id, kind, ref, binding_version, owner, applied_at, outcome, observed_at)
 		VALUES ($1,$2,'asserted',$3,'kill',$4,1,'',now(),'deferred',now())`, id, rn.ID, asserted, ref); err != nil {

@@ -57,7 +57,7 @@ func runnerOrgCmds(client clientFn) []*cobra.Command {
 		}
 		class := types.RunnerTrustClass(args[1])
 		if !class.Valid() {
-			return errors.New("the trust class is personal, managed_device or org_cluster")
+			return errors.New("the trust class is personal or managed_device (an organization's runner is always org_cluster)")
 		}
 		view, err := client().SetRunnerTrust(cmd.Context(), id, class, reason)
 		if held, err := heldForApproval(cmd, err); held || err != nil {

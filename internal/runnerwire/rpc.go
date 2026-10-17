@@ -146,11 +146,21 @@ type SweepResult struct {
 	Removed    int         `json:"removed"`
 }
 
+// RecoverOutputArgs are recover_output's arguments. Gap says the org takes a copy whose first bytes
+// the runner has already discarded; without it (an older org) such a copy is Unrecoverable.
+type RecoverOutputArgs struct {
+	Ref string `json:"ref"`
+	Gap bool   `json:"gap,omitempty"`
+}
+
 // RecoverResult names the `output` stream a recover_output call opened; the
-// runner sets Unrecoverable instead when it holds no copy.
+// runner sets Unrecoverable instead when it holds no copy. Gap is the offset
+// the stream starts at when the runner had already discarded the bytes before
+// it; it is set only when the call asked for Gap.
 type RecoverResult struct {
 	Stream        uint32 `json:"stream,omitempty"`
 	Unrecoverable bool   `json:"unrecoverable,omitempty"`
+	Gap           int64  `json:"gap,omitempty"`
 }
 
 // DeliverResidentArgs is the runner-only call that hands one runner_resident

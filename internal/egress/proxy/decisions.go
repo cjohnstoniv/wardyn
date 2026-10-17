@@ -47,6 +47,8 @@ type decisionSink struct {
 	wg     sync.WaitGroup
 	mu     sync.Mutex
 	closed bool
+	// appending counts admitted records whose append runs without mu (emitLocal); close waits for them.
+	appending sync.WaitGroup
 
 	// outMu serialises writes to out: a single Write over PIPE_BUF is not
 	// atomic at the OS level, so concurrent mirror() calls could interleave
@@ -253,9 +255,10 @@ func (s *decisionSink) close(ctx context.Context) error {
 		return s.remote.close(ctx)
 	}
 	if s.local != nil {
-		err := errors.Join(s.local.Close(), s.writerLock.Close())
+		// An admitted record's append runs without s.mu (emitLocal); closed is set, so none starts now.
 		s.mu.Unlock()
-		return err
+		s.appending.Wait()
+		return errors.Join(s.local.Close(), s.writerLock.Close())
 	}
 	close(s.ch)
 	s.mu.Unlock()

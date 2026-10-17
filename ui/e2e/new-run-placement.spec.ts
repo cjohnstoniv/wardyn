@@ -22,9 +22,9 @@ import { NR_SHARED } from "../src/app/components/wardyn/copy/new-run/shared";
 import { NR_START } from "../src/app/components/wardyn/copy/new-run/start";
 import { NR_TOOLS } from "../src/app/components/wardyn/copy/new-run/tools";
 import { SCENARIO_HARNESSES, SCENARIO_HARNESS_SETS } from "../src/app/lib/new-run-fixtures/scenarios/harnesses";
-import { SCENARIO_POOLS } from "../src/app/lib/new-run-fixtures/scenarios/pools";
+import { SCENARIO_POOLS, effectiveLimits } from "../src/app/lib/new-run-fixtures/scenarios/pools";
 import { SCENARIO_PREFLIGHT } from "../src/app/lib/new-run-fixtures/scenarios/preflight";
-import { POOL_OFFLINE, RUN_WAIT, RUN_WAIT_REASON } from "../src/app/lib/runner-pool-refusals";
+import { POOL_OFFLINE, RUNNER_POOL_REFUSAL, RUN_WAIT, RUN_WAIT_REASON } from "../src/app/lib/runner-pool-refusals";
 
 const RUN_ID = "c3333333-3333-4333-8333-333333333333";
 const FULL = SCENARIO_PREFLIGHT.full;
@@ -207,5 +207,35 @@ test.describe("New Run, placement: the pool a person picks", () => {
     await nameAndLaunch(page, "picked pool");
     expect(JSON.parse(seen.create[0])).toMatchObject({ runner_pool_id: LAPTOPS.id });
     expect(JSON.parse(seen.preflight.at(-1)!)).toMatchObject({ runner_pool_id: LAPTOPS.id });
+  });
+  test("a limit the deployment bounds says it is set by this server, and the meters carry their canon names", async ({ page }) => {
+    await stub(page, { preflight: SCENARIO_PREFLIGHT.member });
+    const bounded = { ...SHARED, limits: [effectiveLimits("background"), effectiveLimits("interactive", { memory_mib: { default: { value: 1024 }, cap: { value: 4096 }, cap_source: "deployment" } })] };
+    await page.route("**/api/v1/runner-pools*", (route) =>
+      route.fulfill({ json: { pools: [bounded], allowance: { active: 1, max: 5 }, default: { pool_id: SHARED.id, selection: "organisation_default" } } }),
+    );
+    await gotoConsole(page);
+    await navToRoute(page, "/runs/new");
+    await page.getByRole("button", { name: NR_START.GUIDED_FOOT }).click();
+    await press(page, NR_SHAPE.ENV_TITLE);
+    await expect(page.locator('[data-limit="memory"]').getByText(NR_RUN.SET_BY_SERVER)).toBeVisible();
+    await expect(page.getByRole("meter", { name: NR_RUN.CAPACITY_ARIA })).toBeVisible();
+    await expect(page.getByRole("meter", { name: NR_RUN.ALLOWANCE_ARIA })).toBeVisible();
+  });
+
+  test("a chosen pool the list no longer holds says so on the Run step", async ({ page }) => {
+    await stub(page, { preflight: SCENARIO_PREFLIGHT.member });
+    await gotoConsole(page);
+    await navToRoute(page, "/runs/new");
+    await page.getByRole("button", { name: NR_START.GUIDED_FOOT }).click();
+    await press(page, NR_SHAPE.ENV_TITLE);
+    await page.getByRole("combobox", { name: NR_RUN.POOL_LABEL }).selectOption({ label: NR_RUN.POOL_OPTION_REASON(LAPTOPS.name, NR_RUN.FIT_STARTS_NOW) });
+    await press(page, NR_SHARED.CONTINUE_TO(NR_SHARED.STEP_HARNESSES));
+    // The pool is gone from the list when the person comes back.
+    await page.route("**/api/v1/runner-pools*", (route) =>
+      route.fulfill({ json: { pools: [SHARED], default: { pool_id: SHARED.id, selection: "organisation_default" } } }),
+    );
+    await press(page, NR_SHARED.BACK);
+    await expect(page.getByText(RUNNER_POOL_REFUSAL.NOT_FOUND())).toBeVisible();
   });
 });

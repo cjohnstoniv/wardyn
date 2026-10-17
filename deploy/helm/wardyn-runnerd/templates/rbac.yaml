@@ -67,7 +67,7 @@ subjects:
     name: {{ include "runnerd.fullname" . }}
     namespace: {{ .Release.Namespace }}
 ---
-{{/* The release namespace holds nothing but runnerd, so these secret verbs reach only its own. */}}
+{{/* The release namespace holds runnerd and what Helm keeps for the release (its release and image-pull secrets); these verbs reach every secret there, so nothing else of value belongs in it. */}}
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:

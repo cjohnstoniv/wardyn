@@ -141,6 +141,7 @@ export const LOST_OUTAGE =
 export const LOST_K8S = "The node it ran on restarted. Files on your drive are kept; the rest is gone.";
 export const REVIVE = "Revive";
 export const REVIVING = "Reviving… (about a minute)";
+export const REVIVE_STILL_STARTING = "The runner is still starting this run. Check back in a minute.";
 export function revivePolicy(hostsBlocked: number): string {
   return `Policy updated at revive: ${hostsBlocked} host${hostsBlocked === 1 ? "" : "s"} now blocked.`;
 }

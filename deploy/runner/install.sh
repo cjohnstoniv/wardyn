@@ -70,7 +70,7 @@ uninstall() {
   rm -f "$data_dir/bin/wardyn-runnerd"
   echo "Removed the wardyn-runnerd service and binary."
   echo "Kept the runner identity in: $identity_dir"
-  echo "To revoke this runner, use My runner in the Wardyn console."
+  echo "To revoke this runner, run: wardyn runner revoke <runner id or name>   (or use My runner in the Wardyn console)."
 }
 
 if [ "$UNINSTALL" = 1 ]; then

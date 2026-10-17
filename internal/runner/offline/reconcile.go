@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"path/filepath"
 	"slices"
@@ -35,6 +36,12 @@ func (m *Manager) Pending(ctx context.Context, peer *runnerwire.Peer, actions []
 		}
 		if err := peer.EventAck(ctx, runnerwire.Event{Kind: runnerwire.EventActionResult, RunID: &a.RunID, Data: b}); err != nil {
 			return err
+		}
+		if a.Kind == types.RunnerActionRetire && result.Outcome == "success" {
+			// The org holds the receipt now. A failed compaction keeps the full record, as before.
+			if err := m.compactRetired(a.RunID); err != nil {
+				slog.WarnContext(ctx, "runner kept a retired run's full record", "run_id", a.RunID, "error", err)
+			}
 		}
 	}
 	return nil
@@ -221,6 +228,9 @@ func (m *Manager) runIDs() []uuid.UUID {
 	return ids
 }
 
+// errReplayHeld ends one run's spool replay when the run was quarantined or retired while it ran.
+var errReplayHeld = errors.New("offline: the run was quarantined or retired during its spool replay")
+
 // Replay uses only the authenticated runner peer; expired run tokens are never
 // involved. Spool ACKs and durable exit results survive reconnect and restart.
 func (m *Manager) Replay(ctx context.Context, peer *runnerwire.Peer) error {
@@ -233,6 +243,9 @@ func (m *Manager) Replay(ctx context.Context, peer *runnerwire.Peer) error {
 	if revoked {
 		return runnerwire.ErrRevoked
 	}
+	// A spool that will not open is that run's own fault: the other runs' evidence is still sent, and
+	// the error is returned last, so this runner does not come ready with a spool it never replayed.
+	var unopened []error
 	for _, id := range ids {
 		m.mu.Lock()
 		quarantined := m.state.Runs[id].Quarantine != nil || m.state.Runs[id].Retired
@@ -242,9 +255,18 @@ func (m *Manager) Replay(ctx context.Context, peer *runnerwire.Peer) error {
 		}
 		spool, err := runnerspool.Open(filepath.Join(m.dir, "spools", id.String()), id)
 		if err != nil {
-			return err
+			unopened = append(unopened, fmt.Errorf("open the spool of run %s: %w", id, err))
+			continue
 		}
 		err = spool.Replay(ctx, func(ctx context.Context, rows []runnerspool.Record) error {
+			// A quarantine or retirement that lands mid-replay stops the rest of this run's backlog, as
+			// one that landed before the replay began does.
+			m.mu.Lock()
+			held := m.state.Runs[id].Quarantine != nil || m.state.Runs[id].Retired
+			m.mu.Unlock()
+			if held {
+				return errReplayHeld
+			}
 			evs := make([]runnerwire.Event, len(rows))
 			for i, row := range rows {
 				b, err := row.Marshal()
@@ -256,6 +278,13 @@ func (m *Manager) Replay(ctx context.Context, peer *runnerwire.Peer) error {
 			return peer.EventsAck(ctx, evs)
 		})
 		closeErr := spool.Close()
+		if errors.Is(err, errReplayHeld) {
+			// Held mid-replay: like a run held before it began, its exit is not sent either.
+			if closeErr != nil {
+				return closeErr
+			}
+			continue
+		}
 		if err := errors.Join(err, closeErr); err != nil {
 			return err
 		}
@@ -288,5 +317,5 @@ func (m *Manager) Replay(ctx context.Context, peer *runnerwire.Peer) error {
 			return err
 		}
 	}
-	return nil
+	return errors.Join(unopened...)
 }

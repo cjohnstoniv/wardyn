@@ -37,7 +37,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from "../ui/dialog";
-import { AgentBadge, ConfinementChip, RunStateBadge } from "../wardyn/primitives";
+import { AgentBadge, Chip, ConfinementChip, RunStateBadge } from "../wardyn/primitives";
+import { RUNNER } from "../wardyn/copy/runners";
 import { Mono } from "../wardyn/code-block";
 import { EmptyState, ErrorState } from "../wardyn/states";
 import { runPath, useConsoleMode } from "../wardyn/console-view";
@@ -397,6 +398,8 @@ export function RecordingScreen() {
                 <AgentBadge agent={playing.agent} />
                 <ConfinementChip value={playing.confinement_class} />
                 <Mono>{playing.repo}</Mono>
+                {/* A runner's own recording: the same words run detail's Evidence row uses. */}
+                {playing.evidence_source === "runner_asserted" && <Chip tone="warning">{RUNNER.REPORTED}</Chip>}
               </DialogDescription>
             </DialogHeader>
             {playError ? (

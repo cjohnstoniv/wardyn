@@ -47,6 +47,9 @@ type localRun struct {
 	// OutputCapture records that the create handed the sandbox an output
 	// writer; a retirement that says the run had no output is refused when set.
 	OutputCapture bool `json:"output_capture,omitempty"`
+	// Tombstone marks a retired run the org acknowledged retiring, compacted to its identity
+	// (compactRetired): only RunID, Ref, Lease.RunID and Retired remain.
+	Tombstone bool `json:"tombstone,omitempty"`
 }
 
 // proxyExit is one ProxyExited obligation and the evidence that recorded it.
@@ -89,7 +92,8 @@ func (m *Manager) load() error {
 		return errors.New("unsafe runner lifecycle state")
 	}
 	dec := json.NewDecoder(io.LimitReader(f, stateLimit+1))
-	dec.DisallowUnknownFields()
+	// Unknown keys are ignored (from 0.9.3 on) so a state file a later runner wrote still loads after a
+	// rollback. The size, mode, symlink, trailing-data and identity checks still refuse.
 	if err := dec.Decode(&m.state); err != nil {
 		return err
 	}

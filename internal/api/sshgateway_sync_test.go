@@ -568,7 +568,9 @@ func TestExecSFTPServerNamesTheLaunchFailure(t *testing.T) {
 		want, absent string
 	}{
 		{"runner offline", fmt.Errorf("%w: substrate x", runner.ErrRunnerOffline), "is offline", "image"},
+		{"runner offline, said once", fmt.Errorf("%w: substrate x", runner.ErrRunnerOffline), "is offline", runner.ErrRunnerOffline.Error()},
 		{"sandbox gone", fmt.Errorf("exec create: %w", runner.ErrSandboxGone), "sandbox is gone", "image"},
+		{"sandbox gone, said once", fmt.Errorf("exec create: %w", runner.ErrSandboxGone), "sandbox is gone", runner.ErrSandboxGone.Error()},
 		{"unsupported", runner.ErrExecStreamUnsupported, "does not support", "image"},
 		{"anything else", errors.New("exec create failed"), "image has no " + sftpServerPath, "offline"},
 	} {

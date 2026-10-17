@@ -306,8 +306,8 @@ that ceiling down; each run receives only the minimal subset its task needs.
     the guest runs as root, so the mode bounds nothing.
   - Readers: any process running as uid 1000 in the sandbox, attach and exec shells included (the
     file or `/proc/<pid>/environ`), and every process the harness starts. Such a process can send
-    the credential and be decided by the started harness's rules. Accepted for 0.9.0; uid isolation
-    is a later follow-up.
+    the credential and be decided by the started harness's rules. Accepted: the tool gate is
+    cooperative, so a uid boundary around the credential would not stop a process that skips the gate.
 - **A harness started by hand (0.9)** holds no credential. Its calls are decided as calls from no harness, by the strictest of the run's rule sets (`strictestToolEffect`), so it never borrows the started harness's looser rules.
 - **Posture routing (0.9):** a background Claude Code run whose resolved policy holds or denies a tool, or whose launcher set a tool rule or default, is routed through this gate.
   - The routed lane is never looser than the ungated run it replaces: tools nobody names keep running unless the policy's own `*` rule holds or denies them, and a run already on the gated lane keeps its hold default.
@@ -408,6 +408,8 @@ that ceiling down; each run receives only the minimal subset its task needs.
 - **[0.9, client mode]** A runner, `wardyn-runnerd`, dials out to the organisation and runs its owner's locally placed runs on the laptop's Docker ([design §2.3](../docs/design/0.9/PLAN.md#23-trust-boundaries)).
 - The organisation stays the only scheduler, ceiling resolver, credential broker and audit writer. A runner never creates a run, grants, approves or mints.
 - **The developer is root on that host.** B1, B2 and L0 hold between the sandbox and the laptop proxy, so they and every other control bind the **agent**, never the developer (residual #69).
+- A background task placed on a runner is closed at the organisation's doors (terminal, SSH, exec, attach, web apps, desktop: `AgentRun.BackgroundOnly`). The developer can still open its sandbox from the host's own Docker, so no runner claims to deny that and none is asked to.
+- An admin who may read a run's detail also reads a runner-placed sandbox's file names and resource counts, through a fixed read-only command the runner runs. Entering its terminal stays the run owner's alone.
 
 | Crossing | Guard | Residual |
 |---|---|---|
@@ -2635,7 +2637,7 @@ hiding them would repeat the failure mode we are designed to avoid.
 
 80. **Several harnesses in one sandbox share every model credential and one uid [0.9].**
     - The proxy injects each included harness's model credential by destination host. Any process in the sandbox, a harness or a command, can therefore use each one, and the run's egress includes every harness's provider hosts.
-    - Harnesses share the agent uid. A per-harness tool-approval credential stops only body claims and honest cross-attribution (B3); per-harness uid isolation is a later follow-up.
+    - Harnesses share the agent uid. A per-harness tool-approval credential stops only body claims and honest cross-attribution (B3). Per-harness uids are not planned: the gate is cooperative, so they would not stop a process that skips it.
     - Create and dispatch refuse two different providers that share an injection host, an AWS sign-in's portal host included, and a second Azure Foundry provider (`harness_providers_conflict`).
     - An AWS sign-in is admitted only on the primary harness. Elsewhere it is refused at create and at dispatch, never launched without a credential.
     - The `run_harnesses` rows hold harness and provider ids only. Renew, revive and a queued start re-check each harness's agent and model-provider doors against them.

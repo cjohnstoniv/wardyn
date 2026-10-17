@@ -12,6 +12,7 @@ import (
 	"io"
 	"time"
 
+	"github.com/cjohnstoniv/wardyn/internal/placement"
 	"github.com/cjohnstoniv/wardyn/internal/runner/remote"
 	"github.com/cjohnstoniv/wardyn/internal/runner/substrate"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
@@ -135,7 +136,12 @@ func (s *Server) queueRunnerTeardown(ctx context.Context, runnerID uuid.UUID, ki
 	if !ok {
 		return store.ErrRunnerActionRefused
 	}
-	_, _, err := st.QueueRunnerTeardown(ctx, runnerID, kind, ref)
+	a, queued, err := st.QueueRunnerTeardown(ctx, runnerID, kind, ref)
+	if err == nil && queued {
+		// The action waits for the runner; its receipt is runner.action.apply or runner.action.refuse.
+		s.recordAudit(ctx, s.auditEvent(&a.RunID, types.ActorSystem, "wardynd", placement.ActionRunnerActionRequest,
+			a.ID.String(), "success", mustJSON(map[string]any{"action": a.Kind, "runner_id": runnerID})))
+	}
 	return err
 }
 

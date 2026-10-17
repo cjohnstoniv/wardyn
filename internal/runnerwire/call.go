@@ -206,7 +206,7 @@ func (p *Peer) onReply(f Frame) error {
 func (p *Peer) resetParked(ids []uint32) {
 	for _, sid := range ids {
 		if s, err := p.TakeStream(sid); err == nil {
-			_ = s.Reset(ResetCancelled)
+			_ = s.resetQueued(ResetCancelled)
 		}
 	}
 }
@@ -245,7 +245,10 @@ func (p *Peer) onCall(f Frame) error {
 		if p.cfg.OnCall == nil {
 			err = fmt.Errorf("no call handler for %q", c.Method)
 		} else {
-			res, err = p.cfg.OnCall(ctx, f.Stream, c.Method, c.Args)
+			err = guarded(func() (herr error) {
+				res, herr = p.cfg.OnCall(ctx, f.Stream, c.Method, c.Args)
+				return herr
+			})
 		}
 		var rep Reply
 		if err != nil {
