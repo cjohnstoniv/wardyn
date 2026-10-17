@@ -8,6 +8,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+## [0.9.3-rc.2] — 2026-10-17
+
 Laptop runners, second candidate: session recordings follow the organisation, an Azure DevOps credential follows the
 run's own repository, and a dropped runner link no longer stops a run's egress.
 

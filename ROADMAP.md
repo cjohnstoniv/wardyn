@@ -44,6 +44,7 @@
 | **v0.9.1** | Self-hosted runners on people's own computers: an AWS SSO run starts on a laptop runner, wardyn-runnerd works with Docker Desktop, and setup is one command. Also a self_host_runner permission and a run page that says where a run ran | **Shipped (pre-alpha)** — `v0.9.1`, 2026-10-14 (see [CHANGELOG.md](CHANGELOG.md)) |
 | **v0.9.2** | Laptop runners on private-endpoint estates: a self-hosted runner now receives the organisation's internal_hosts | **Shipped (pre-alpha)** — `v0.9.2`, 2026-10-16 (see [CHANGELOG.md](CHANGELOG.md)) |
 | **v0.9.3-rc.1** | rc.1: laptop runners in a locked-down enterprise: a corporate CA bundle, errors an SDK can read, disk on VM engines, and images for both architectures. | **Shipped (pre-alpha)** — `v0.9.3-rc.1`, 2026-10-16 (see [CHANGELOG.md](CHANGELOG.md)) |
+| **v0.9.3-rc.2** | rc.2: session recordings follow the organisation, the Azure DevOps credential follows the run's own repository, and a dropped runner link no longer stops a run's egress. | **Shipped (pre-alpha)** — `v0.9.3-rc.2`, 2026-10-17 (see [CHANGELOG.md](CHANGELOG.md)) |
 
 ## Shipped detail
 
