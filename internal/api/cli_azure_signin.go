@@ -155,6 +155,8 @@ func (s *Server) componentAzureCLIAdmitted(r *http.Request, adm *componentAdmiss
 		return nil
 	case !s.credentialPerson(adm.caller):
 		return own(fmt.Sprintf("components[%d]: %s", i, azureCLINotPersonRefusal))
+	case isServicePrincipal(adm.caller):
+		return own(fmt.Sprintf("components[%d]: %s", i, azureCLIServiceIdentityRefusal))
 	}
 	return own(fmt.Sprintf(azureCLISignInRequired, i, c.snapshot.Name))
 }
