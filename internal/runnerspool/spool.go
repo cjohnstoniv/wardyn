@@ -71,6 +71,54 @@ type manifest struct {
 	Drops    uint64        `json:"drops"`
 	Reported uint64        `json:"reported"`
 	Overflow *Record       `json:"overflow,omitempty"`
+	// The remote-sink fields below are written only by runnerd's sink (k8s
+	// runners); a spool the proxy writes directly never carries them.
+	Producer    *Producer    `json:"producer,omitempty"`
+	Grant       *Grant       `json:"grant,omitempty"`
+	Gen         uint64       `json:"gen,omitempty"`
+	PendingLoss *PendingLoss `json:"pending_loss,omitempty"`
+}
+
+// Disposition is the one durable outcome of a producer sequence.
+type Disposition string
+
+const (
+	Appended Disposition = "appended"
+	Refused  Disposition = "refused"
+	Lost     Disposition = "lost"
+)
+
+// LossBasis says whether a pending loss count is exact or an upper bound.
+type LossBasis string
+
+const (
+	LossExact      LossBasis = "exact"
+	LossUpperBound LossBasis = "upper_bound"
+)
+
+// Producer is the remote proxy's durable position: the last sequence with a
+// disposition, its body hash, and the refusal total already counted in Drops.
+type Producer struct {
+	Instance    string      `json:"instance"`
+	Seq         int64       `json:"seq"`
+	Hash        string      `json:"hash,omitempty"`
+	Disposition Disposition `json:"disposition,omitempty"`
+	Refused     uint64      `json:"refused,omitempty"`
+}
+
+// Grant is write-ahead credit: sequences Base+1..Through carrying at most Bytes
+// of record bodies. Its liability is Through - Producer.Seq.
+type Grant struct {
+	Gen     uint64 `json:"gen"`
+	Base    int64  `json:"base"`
+	Through int64  `json:"through"`
+	Bytes   int64  `json:"bytes"`
+}
+
+// PendingLoss is settled loss not yet emitted as a builtin:spool-lost row.
+type PendingLoss struct {
+	Count uint64    `json:"count"`
+	Basis LossBasis `json:"basis"`
 }
 
 // Spool is safe across goroutines and independently opened proxy/daemon handles.

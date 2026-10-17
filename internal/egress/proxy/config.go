@@ -61,6 +61,16 @@ type Config struct {
 	DecisionBufferSize int `json:"decision_buffer_size,omitempty"`
 	// DecisionSpoolDir is the runner-owned proxy-only volume, absent on org substrates.
 	DecisionSpoolDir string `json:"decision_spool_dir,omitempty"`
+	// SelfLapse (k8s runners only) closes the proxy until its first renew and
+	// ends it, terminally, at the last successful renew's send time plus
+	// RunTokenTTL. Set exactly when DecisionSink is.
+	SelfLapse bool `json:"self_lapse,omitempty"`
+	// DecisionSink (k8s runners only) streams decisions to runnerd, the only
+	// spool writer, instead of a shared DecisionSpoolDir.
+	DecisionSink *DecisionSinkConfig `json:"decision_sink,omitempty"`
+	// HardDeny (k8s runners only) refuses in-cluster names and addresses before
+	// the InternalHosts lift, for agent egress.
+	HardDeny *HardDenyConfig `json:"hard_deny,omitempty"`
 	// MITMCACertPEM / MITMCAKeyPEM are the OPTIONAL TLS-MITM certificate authority
 	// (PEM). When both are set AND content inspection is enabled, the proxy
 	// TLS-terminates opaque CONNECT tunnels to known LLM hosts (Anthropic/OpenAI)
@@ -524,6 +534,23 @@ func (c *Config) applyDefaultsAndValidate() error {
 		}
 	}
 	return c.validateChannelHosts()
+}
+
+// DecisionSinkConfig reaches runnerd's decision sink: URL is tls://host:port,
+// SPKISHA256 the hex SHA-256 of the sink certificate's SubjectPublicKeyInfo
+// (the only trust), Key the run's 32-byte key in hex.
+type DecisionSinkConfig struct {
+	URL        string `json:"url"`
+	SPKISHA256 string `json:"spki_sha256"`
+	Key        string `json:"key"`
+}
+
+// HardDenyConfig is the in-cluster deny set: DNS suffixes, exact names or IP
+// literals, and CIDRs. IPs and CIDRs match the literal and every resolved address.
+type HardDenyConfig struct {
+	Suffixes []string `json:"suffixes,omitempty"`
+	Hosts    []string `json:"hosts,omitempty"`
+	CIDRs    []string `json:"cidrs,omitempty"`
 }
 
 // validateTerminatedGates checks the gates that run only on a connection the proxy terminates. An
