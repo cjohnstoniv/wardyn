@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/placement"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 const credentialDeliveryPath = "/api/v1/governance/credential-delivery"
@@ -69,8 +70,8 @@ func TestCredentialDeliveryWrite_HeldValidatedAudited(t *testing.T) {
 	}
 	e.approve(held.ID)
 	got := stored()
-	if got.For(placement.ClassAPIKey).Mode != placement.ModeViaOrg || got.For(placement.ClassGitHubToken).Mode != placement.ModeViaOrg ||
-		got.For(placement.ClassEnvSecret).Mode != placement.ModeRefuse {
+	if got.ForTrust(placement.ClassAPIKey, types.RunnerTrustPersonal).Mode != placement.ModeViaOrg || got.ForTrust(placement.ClassGitHubToken, types.RunnerTrustPersonal).Mode != placement.ModeViaOrg ||
+		got.ForTrust(placement.ClassEnvSecret, types.RunnerTrustPersonal).Mode != placement.ModeRefuse {
 		t.Fatalf("stored policy after approval = %+v", got)
 	}
 	rows := e.audits(placement.ActionCredentialDeliveryWrite)
@@ -83,14 +84,14 @@ func TestCredentialDeliveryWrite_HeldValidatedAudited(t *testing.T) {
 		ProposedBy string                   `json:"proposed_by"`
 	}
 	if err := json.Unmarshal(rows[0].Data, &d); err != nil || len(d.Before.Classes) != 0 ||
-		d.After.For(placement.ClassAPIKey).Mode != placement.ModeViaOrg || d.ProposedBy != govSubAlice {
+		d.After.ForTrust(placement.ClassAPIKey, types.RunnerTrustPersonal).Mode != placement.ModeViaOrg || d.ProposedBy != govSubAlice {
 		t.Errorf("audit data = %s (%v), want before {} and after the approved policy", rows[0].Data, err)
 	}
 	var doc struct {
 		Policy placement.DeliveryPolicy `json:"policy"`
 	}
 	if w := e.call(e.carol, http.MethodGet, credentialDeliveryPath, ""); w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &doc) != nil ||
-		doc.Policy.For(placement.ClassGitHubToken).Mode != placement.ModeViaOrg {
+		doc.Policy.ForTrust(placement.ClassGitHubToken, types.RunnerTrustPersonal).Mode != placement.ModeViaOrg {
 		t.Errorf("GET = %d %s, want the stored policy", w.Code, w.Body)
 	}
 
@@ -102,7 +103,7 @@ func TestCredentialDeliveryWrite_HeldValidatedAudited(t *testing.T) {
 	if w := e.call(e.bob, http.MethodPost, approvePath(stale.ID), ""); w.Code == http.StatusOK {
 		t.Fatalf("approving a stale change = %d, want a refusal", w.Code)
 	}
-	if got := stored(); got.For(placement.ClassAPIKey).Mode != placement.ModeRefuse || got.For(placement.ClassGitHubToken).Mode != placement.ModeRefuse {
+	if got := stored(); got.ForTrust(placement.ClassAPIKey, types.RunnerTrustPersonal).Mode != placement.ModeRefuse || got.ForTrust(placement.ClassGitHubToken, types.RunnerTrustPersonal).Mode != placement.ModeRefuse {
 		t.Errorf("stored after a stale approval = %+v", got)
 	}
 }

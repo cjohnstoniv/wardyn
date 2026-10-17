@@ -9,7 +9,6 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/composer"
-	"github.com/cjohnstoniv/wardyn/internal/placement"
 	"github.com/cjohnstoniv/wardyn/internal/runnerpool"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/pkg/client"
@@ -101,9 +100,9 @@ type runFold struct {
 	harnesses      []types.RunHarness
 	image          *client.ImageFact
 	harnessChoices []harnessChoice
-	// localDelivery is the credential delivery policy a local run was judged on (stepLocalEligibility);
-	// create persists its grants by the same policy, never a second read.
-	localDelivery placement.DeliveryPolicy
+	// localDelivery is the credential delivery policy and trust class a local run was judged at
+	// (stepLocalEligibility); create persists its grants by the same judgement, never a second read.
+	localDelivery localJudgement
 }
 
 // runFoldStep is one gate or fold of the shared sequence. run writes its own

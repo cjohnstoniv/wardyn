@@ -30,7 +30,7 @@ type runnerFit struct {
 }
 
 // runnerFits is every runner the caller's runs could be placed on, by target id: the caller's own
-// self-hosted runners and every remote-hosted runner. A store that cannot say, or a read that fails,
+// self-hosted runners, the organization's own runners and every remote-hosted runner. A store that cannot say, or a read that fails,
 // answers none, so every candidate is then refused as declaring no limits: a runner is never taken
 // as unlimited.
 func (s *Server) runnerFits(ctx context.Context) map[string]runnerFit {
@@ -48,6 +48,20 @@ func (s *Server) runnerFits(ctx context.Context) map[string]runnerFit {
 				return map[string]runnerFit{}
 			}
 			for _, r := range runners {
+				ids = append(ids, r.ID)
+				out[r.ID.String()] = runnerFit{limits: r.Limits}
+			}
+		}
+	}
+	// The organization's own runners, which an organization pool offers (orgRunnerTargets).
+	if rr, ok := s.cfg.Store.(store.RunnerStore); ok {
+		runners, err := rr.ListRunners(ctx)
+		if err != nil {
+			slog.WarnContext(ctx, "wardynd: read organization runner limits; no organization runner is a candidate", slog.Any("err", err))
+			return map[string]runnerFit{}
+		}
+		for _, r := range runners {
+			if r.OwnerKind == types.RunnerOwnerOrg && r.State == types.RunnerClaimed {
 				ids = append(ids, r.ID)
 				out[r.ID.String()] = runnerFit{limits: r.Limits}
 			}

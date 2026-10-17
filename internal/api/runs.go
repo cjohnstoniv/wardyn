@@ -15,7 +15,6 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/cjohnstoniv/wardyn/internal/placement"
 	"github.com/cjohnstoniv/wardyn/internal/runnerpool"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -399,7 +398,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 // Create and the pool queue's start wire a run the same way. A grant write failure has already
 // answered 500 (ok is false).
 func (s *Server) wireRunGrants(ctx context.Context, w http.ResponseWriter, r *http.Request, run types.AgentRun, now time.Time, spec types.RunPolicySpec,
-	req createRunRequest, comps runComponents, delivery placement.DeliveryPolicy,
+	req createRunRequest, comps runComponents, delivery localJudgement,
 ) (grantWiring, []string, bool) {
 	gw, ok := s.persistRunGrants(ctx, w, r, run.ID, now, spec, run.Placement, delivery)
 	// The git broker's repositories, then the GitHub CLI's grants over them.

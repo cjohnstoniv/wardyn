@@ -86,6 +86,7 @@ func TestADOResident_OptInIsPerConnection(t *testing.T) {
 			CredentialIntents: []placement.CredentialIntent{{Field: "ProxyConfig.ADOGrant[" + a.rowID + "]", Origin: (&Server{}).localADOOrigin(context.Background(), "alice", a)}},
 			Delivery:          placement.DeliveryPolicy{Classes: map[string]placement.ClassPolicy{placement.ClassADOMintedPAT: {Mode: placement.ModeRunnerResident}}},
 			Posture:           &types.RunnerPosture{OS: "linux"},
+			Trust:             types.RunnerTrustPersonal,
 		})
 		return r
 	}

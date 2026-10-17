@@ -65,6 +65,7 @@ export const PLACEMENT_REASONS = [
   "runner_token_invalid",
   "runner_claim_mismatch",
   "runner_posture_unmet",
+  "runner_trust_changed",
   "runner_keystore_unavailable",
   "runner_action_pending",
   "runner_recording_off",

@@ -53,6 +53,9 @@ type LocalPlan struct {
 	// Posture is the candidate runner's stored, self-reported posture; nil when
 	// it never reported one.
 	Posture *types.RunnerPosture
+	// Trust is the candidate runner's stored trust class, which Delivery is read
+	// at (DeliveryPolicy.ForTrust); "" (unknown) refuses every class but via_org.
+	Trust types.RunnerTrustClass
 	// ConfinementFloor is the run's blast-radius floor
 	// (composer.RequiredConfinementFloor); "" when there is none.
 	ConfinementFloor types.ConfinementClass
@@ -112,6 +115,14 @@ func LocalEligibility(p LocalPlan) (runner.SandboxSpec, *Refusal) {
 
 func indexed(path string, i int) string { return path + "[" + strconv.Itoa(i) + "]" }
 
+// trustName is a trust class as a refusal names it.
+func trustName(t types.RunnerTrustClass) string {
+	if !t.Valid() {
+		return "unknown"
+	}
+	return string(t)
+}
+
 // viaOrgAdmits is the via_org gate (OD-12, design §7.2-§7.3): a row of the
 // via_org shape whose class the stored policy delivers via_org, and whose class
 // may be. Every other configured mode still refuses here until its delivery is built.
@@ -120,11 +131,12 @@ func viaOrgAdmits(row Entry, mode Mode) bool {
 }
 
 // ViaOrgGrant reports whether an org-held grant of origin is delivered via_org
-// under policy: the same table rows and gate LocalEligibility applies to it.
-func ViaOrgGrant(origin CredentialOrigin, policy DeliveryPolicy) bool {
+// under policy on a runner of trust class trust: the same table rows and gate
+// LocalEligibility applies to it.
+func ViaOrgGrant(origin CredentialOrigin, policy DeliveryPolicy, trust types.RunnerTrustClass) bool {
 	return origin.Class != ClassOwn && origin.Class != "" &&
-		classifyCredential(Entries, "ProxyConfig.Policy.EligibleGrants", origin, LocalPlan{Delivery: policy}, reflect.Value{}) == nil &&
-		policy.For(origin.Delivery).Mode == ModeViaOrg
+		classifyCredential(Entries, "ProxyConfig.Policy.EligibleGrants", origin, LocalPlan{Delivery: policy, Trust: trust}, reflect.Value{}) == nil &&
+		policy.ForTrust(origin.Delivery, trust).Mode == ModeViaOrg
 }
 
 // viaOrgPath reports whether the admitted credential at path is delivered
@@ -132,7 +144,7 @@ func ViaOrgGrant(origin CredentialOrigin, policy DeliveryPolicy) bool {
 // and via_org is the only admission of an org-held class.
 func viaOrgPath(p LocalPlan, path string) bool {
 	o, ok := p.Origins[path]
-	return ok && o.Class != ClassOwn && o.Class != "" && p.Delivery.For(o.Delivery).Mode == ModeViaOrg
+	return ok && o.Class != ClassOwn && o.Class != "" && p.Delivery.ForTrust(o.Delivery, p.Trust).Mode == ModeViaOrg
 }
 
 // matchingRows are the rows of the origin's class, the rows naming its exact
@@ -183,7 +195,7 @@ func classifyCredential(entries entrySource, path string, origin CredentialOrigi
 			}
 			return nil
 		case RuleDelivery, RuleViaOrgRefuse, RuleNotConfigured:
-			mode := p.Delivery.For(row.Delivery).Mode
+			mode := p.Delivery.ForTrust(row.Delivery, p.Trust).Mode
 			if viaOrgAdmits(row, mode) {
 				return nil
 			}
@@ -196,7 +208,7 @@ func classifyCredential(entries entrySource, path string, origin CredentialOrigi
 				}
 				return residentValueRefusal(path, leaf)
 			}
-			return refuse(ReasonPlacementCredential, path, fmt.Sprintf("%s credential is unavailable on a local runner (delivery %s has no implemented authority)", row.Delivery, mode))
+			return refuse(ReasonPlacementCredential, path, fmt.Sprintf("%s credential is unavailable on a local runner of trust class %s (delivery %s has no implemented authority)", row.Delivery, trustName(p.Trust), mode))
 		default:
 			return refuse(ReasonPlacementCredential, path, "credential row has a rule this server does not implement")
 		}
@@ -214,7 +226,7 @@ func classifyCredential(entries entrySource, path string, origin CredentialOrigi
 // against the policy and posture of that moment. path names the refused field.
 func ResidentAdmits(origin CredentialOrigin, p LocalPlan, path string) *Refusal {
 	class := origin.Delivery
-	cp := p.Delivery.For(class)
+	cp := p.Delivery.ForTrust(class, p.Trust)
 	switch {
 	case !slices.Contains(classModes[class], ModeRunnerResident):
 		return refuse(ReasonPlacementCredential, path, class+" credential is never runner_resident")

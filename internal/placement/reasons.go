@@ -27,6 +27,7 @@ const (
 	ReasonRunnerTokenInvalid           Reason = "runner_token_invalid"
 	ReasonRunnerClaimMismatch          Reason = "runner_claim_mismatch"
 	ReasonRunnerPostureUnmet           Reason = "runner_posture_unmet"
+	ReasonRunnerTrustChanged           Reason = "runner_trust_changed"
 	ReasonRunnerKeystoreUnavailable    Reason = "runner_keystore_unavailable"
 	ReasonRunnerActionPending          Reason = "runner_action_pending"
 	// ReasonRunnerRecordingOff: the organisation or the pool requires recording, and no runner that
@@ -64,6 +65,7 @@ var reasonStatus = map[Reason]int{
 	ReasonRunnerTokenInvalid:           http.StatusUnauthorized,
 	ReasonRunnerClaimMismatch:          http.StatusForbidden,
 	ReasonRunnerPostureUnmet:           http.StatusUnprocessableEntity,
+	ReasonRunnerTrustChanged:           http.StatusConflict,
 	ReasonRunnerKeystoreUnavailable:    http.StatusUnprocessableEntity,
 	ReasonRunnerActionPending:          http.StatusConflict,
 	ReasonRunnerRecordingOff:           http.StatusUnprocessableEntity,

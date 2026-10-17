@@ -621,7 +621,7 @@ func (s PG) AddOwnRunnerToPool(ctx context.Context, id, runnerID uuid.UUID, owne
 		err = q.QueryRow(ctx, `
 			INSERT INTO runner_pool_members (pool_id, runner_id)
 			SELECT p.id, r.id FROM runner_pools p, runners r
-			WHERE p.id = $1 AND r.id = $2 AND p.owner = $3 AND r.owner = $3 AND r.state = 'claimed' AND r.org_url_sha256 = $4
+			WHERE p.id = $1 AND r.id = $2 AND p.owner = $3 AND r.owner = $3 AND r.owner_kind = 'person' AND r.state = 'claimed' AND r.org_url_sha256 = $4
 			ON CONFLICT DO NOTHING RETURNING pool_id, kind, added_at`, id, runnerID, owner, orgURLSHA256).Scan(&m.PoolID, &m.Kind, &m.AddedAt)
 		if err == nil {
 			added = true

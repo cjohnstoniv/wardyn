@@ -23,13 +23,34 @@ func OwnRunnerCandidates(principal string, members []types.RunnerPoolMember, run
 	}
 	owned := map[uuid.UUID]bool{}
 	for _, r := range runners {
-		if r.Owner == principal && r.State == types.RunnerClaimed {
+		if r.Owner == principal && r.OwnerKind != types.RunnerOwnerOrg && r.State == types.RunnerClaimed {
 			owned[r.ID] = true
 		}
 	}
 	var out []uuid.UUID
 	for _, m := range members {
 		if m.RunnerID != nil && owned[*m.RunnerID] && !slices.Contains(out, *m.RunnerID) {
+			out = append(out, *m.RunnerID)
+		}
+	}
+	slices.SortFunc(out, func(a, b uuid.UUID) int { return slices.Compare(a[:], b[:]) })
+	return out
+}
+
+// OrgRunnerCandidates is how an organization pool yields its own registered runners: the claimed
+// members the organization owns (owner_kind org, no owner), in a stable order. A person's runner is
+// never one, whatever pool lists it. Admission facts are checked afresh by the caller, as for
+// OwnRunnerCandidates.
+func OrgRunnerCandidates(members []types.RunnerPoolMember, runners []types.Runner) []uuid.UUID {
+	org := map[uuid.UUID]bool{}
+	for _, r := range runners {
+		if r.OwnerKind == types.RunnerOwnerOrg && r.Owner == "" && r.State == types.RunnerClaimed {
+			org[r.ID] = true
+		}
+	}
+	var out []uuid.UUID
+	for _, m := range members {
+		if m.RunnerID != nil && org[*m.RunnerID] && !slices.Contains(out, *m.RunnerID) {
 			out = append(out, *m.RunnerID)
 		}
 	}
