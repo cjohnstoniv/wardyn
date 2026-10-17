@@ -66,6 +66,7 @@ derives its role.
   - It names a **base**, which is another profile (`base_profile_id`) or, when that is null, the deployment default, and an **overlay** (`overlay`, plus `overlay_limits` for the limits) that can only narrow that base.
   - The ceiling that binds is `ApplyOverlay(effective(base), overlay)`, computed whenever authority is read and never stored, so a change to a base reaches every profile built on it.
   - A composed row's own `ceiling` and `limits` columns are `{}`, and the API adds a read-only `effective: {ceiling, limits}` beside them.
+  - In `GET /api/v1/governance` a composed profile's own `ceiling` holds only what it stores, so read the resolved answer under `effective.ceiling`.
 - *Authoring.*
   - A profile names at most one base.
   - A chain is at most three profiles deep, counting the profile itself (a baseline, a division and a team), and a chain cannot loop.

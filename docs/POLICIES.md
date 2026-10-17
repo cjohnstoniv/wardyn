@@ -10,7 +10,7 @@
 
 - The policy a run *started from* and the one it *got* differ.
 - Launch adds workspace and source-control hosts, routes GitHub through the git-broker, applies the governance profile's walls and the org's disk size, and clamps a member's policy to their limits.
-- `GET /api/v1/runs/{id}/policy` and `wardyn run policy <run-id>` return the resolved policy as a `RunPolicySpec` document, where it started from, what changed and why, and whether a saved policy has since been edited (see [OPERATIONS.md](OPERATIONS.md#the-policy-a-run-got) and [sdk.md](sdk.md)).
+- `GET /api/v1/runs/{id}/policy` and `wardyn run policy <run-id>` return the resolved policy, under `spec` as a `RunPolicySpec` document, where it started from, what changed and why, and whether a saved policy has since been edited (see [OPERATIONS.md](OPERATIONS.md#the-policy-a-run-got) and [sdk.md](sdk.md)).
 - The CLI prints YAML behind `#` comment lines, so `wardyn run policy <id> > p.yaml` is a policy file.
 - Reuse is scoped: the document always strict-decodes as a policy, and it passes `validatePolicySpec` for a security or super admin.
 - For them `wardyn run --policy-file p.yaml` runs it again as is, as long as the run's allowlist, with what launch added, still fits the per-policy domain cap.

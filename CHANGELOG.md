@@ -25,6 +25,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- The Kubernetes proxy's NetworkPolicy DNS rule also admits the cluster DNS pods (`k8s-app=kube-dns` in `kube-system`),
+  so a network plugin that selects pods by identity can match it. The address range and the cloud-metadata exclusion
+  are unchanged.
+- The `run.ceiling.reassert` audit row carries its `note` only when it added a denied host or withheld a credential lane
+  or injection host; a row that did none of those no longer reads as a report of action taken.
 - A run with a GitHub CLI row is refused when your organisation's profile blocks GitHub, the way the built-in GitHub
   component already was; it used to start and lose the CLI without a word.
 - A terminal refused at the per-person session cap on an operator-owned or service identity's run now names that cap

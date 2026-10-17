@@ -533,22 +533,21 @@ func (s *Server) reassertCeilingDenies(ctx context.Context, run types.AgentRun,
 	// other way: nothing about the dispatch changes, so this row is the ONLY
 	// evidence of which walls the run stood inside.
 	//
-	// The long sentence describes what enforcement did, so it is written only when
-	// a host was denied or a credential lane or host was withheld; otherwise the
-	// row says the profile applied and did neither. The lists marshal as [], never
-	// null, for readers that decode them into []string.
-	note := "the acting principal's governance profile applies to this run; it denied no host and withheld no credential lane"
-	if len(c.deny) > 0 || len(added) > 0 || len(droppedInjection) > 0 || len(droppedLane) > 0 {
-		note = "the acting principal's governance profile denies these hosts; the denies are unioned into the run policy " +
-			"(deny beats allow and allow_all_egress at the proxy) and every credential lane that reaches a denied host is withheld — " +
-			"the brokered git/PAT routes mint proxy-side and never consult denied_domains, so dropping the lane is the only thing that binds them"
-	}
+	// The note describes what enforcement did, so it is written only when a host
+	// was added to the denies or a credential lane or host was withheld; a row
+	// that did neither carries no note, because one in the indicative reads as a
+	// report of action taken. The lists marshal as [], never null, for readers
+	// that decode them into []string.
 	data := map[string]any{
 		"profile":                 c.profile,
 		"denied_added":            nonNilStrings(added),
 		"dropped_injection_hosts": nonNilStrings(droppedInjection),
 		"dropped_broker_lanes":    nonNilStrings(droppedLane),
-		"note":                    note,
+	}
+	if len(added) > 0 || len(droppedInjection) > 0 || len(droppedLane) > 0 {
+		data["note"] = "the acting principal's governance profile denies these hosts; the denies are unioned into the run policy " +
+			"(deny beats allow and allow_all_egress at the proxy) and every credential lane that reaches a denied host is withheld — " +
+			"the brokered git/PAT routes mint proxy-side and never consult denied_domains, so dropping the lane is the only thing that binds them"
 	}
 	// The SIZE half of the profile, present only when the profile sets one — so a
 	// profile that sets no size adds no size fields to the row. applyEphemeralDisk

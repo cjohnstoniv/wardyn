@@ -152,7 +152,7 @@ _ = created
 `GetRunPolicy` returns `GET /api/v1/runs/{id}/policy`: the resolved policy, where
 it started, and what launch changed. It is readable by whoever may read the run
 (anyone else gets the same `404` as `GET /runs/{id}`); a portal's delegated token
-is refused `403` `delegation_scope`.
+is refused `403` `delegation_scope`. The policy itself is under `spec`, not at the top level of the response.
 
 ```go
 v, err := c.GetRunPolicy(ctx, created.ID)
@@ -957,7 +957,7 @@ applied until a different approver approves it. The SDK never reads that body as
   make, as a `GovernancePlan`, and writes nothing: one `GET /api/v1/governance`, no write request.
   Its matching rules are `ApplyGovernance`'s. A plan is a snapshot: the server can change before an
   apply runs.
-- `GET /governance` returns every profile and every assignment. `/governance/profiles` and `/governance/profiles/{id}` take writes only, so a `GET` on either answers `405`.
+- `GET /governance` returns every profile and every assignment; a composed profile's own `ceiling` holds only what it stores, so read the resolved one under `effective.ceiling`. `/governance/profiles` and `/governance/profiles/{id}` take writes only, so a `GET` on either answers `405`.
 - `GovernanceApplyResult.Steps` lists the writes an apply issued, in order, each `applied`, `pending`
   or `failed`. On a failed write `ApplyGovernanceResult` returns the steps so far with the error.
 - `ApplyDrivesResult` is `ApplyDrives` with the same steps, as `DrivesApplyResult.Steps`; `ApplyDrives`
