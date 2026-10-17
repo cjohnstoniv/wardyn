@@ -533,7 +533,16 @@ func newProxy(opts Options) *Proxy {
 			TLSClientConfig:       opts.TLSClientConfig,
 		}
 	}
-	p.transport = mkTransport(egressDial)
+	// A plain-HTTP forward dials through p.transport itself, so a failure before the connection
+	// opened is marked as connecting here, like handshakeOver does for TLS: dialStage otherwise reads
+	// any error that is not a net dial error as one on an open connection.
+	p.transport = mkTransport(func(ctx context.Context, network, addr string) (net.Conn, error) {
+		c, err := egressDial(ctx, network, addr)
+		if err != nil {
+			return nil, &connectStageError{err}
+		}
+		return c, nil
+	})
 	p.offerHTTP2(egressDial, opts.TLSClientConfig)
 	p.controlTransport = mkTransport(directDial)
 	if opts.ControlTLS == nil {

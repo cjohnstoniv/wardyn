@@ -110,6 +110,14 @@ for gone in .config/systemd/user/wardyn-runnerd.service .config/wardyn/runnerd.e
   [ ! -e "$H/$gone" ] || fail "uninstall left $gone"
 done
 [ -e "$H/.config/wardyn/runner/runner.json" ] || fail "uninstall removed the runner identity"
+grep -qF "Kept the runner identity in: $H/.config/wardyn/runner" <<<"$OUT" || fail "uninstall did not name the default identity directory: $OUT"
+
+# The identity setup kept under a custom XDG_CONFIG_HOME is the one the message names.
+X="$WORK/home-xdgid"
+mkdir -p "$X/.config/wardyn"
+printf 'WARDYN_RUNNER_STATE_DIR=%s\n' "$X/xdg/wardyn/runner" >"$X/.config/wardyn/runnerd.env"
+run_install xdgid --uninstall
+[ "$RC" -eq 0 ] && grep -qF "Kept the runner identity in: $X/xdg/wardyn/runner" <<<"$OUT" || fail "uninstall did not name the identity directory from runnerd.env (rc=$RC): $OUT"
 
 # A unit setup put under a custom XDG_CONFIG_HOME, because the user manager searches it, goes too.
 X="$WORK/home-xdg"
