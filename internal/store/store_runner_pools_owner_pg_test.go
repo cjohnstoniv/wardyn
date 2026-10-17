@@ -5,6 +5,7 @@ package store_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -121,6 +122,32 @@ func TestPG_DeleteRunnerPoolsByOwnerWaitsForCreates(t *testing.T) {
 	deleted, err := pg.DeleteRunnerPoolsByOwner(ctx, "sub-leaver")
 	if err != nil || len(deleted) != 1 {
 		t.Fatalf("erasure after the lock = %d deletions, %v", len(deleted), err)
+	}
+}
+
+// A person's erasure also deletes their stored preferences, in the same transaction as their pools, and
+// leaves everyone else's.
+func TestPG_DeleteRunnerPoolsByOwnerDeletesThePersonsPreferences(t *testing.T) {
+	pool := runsPGPoolIsolated(t)
+	pg := store.NewPG(pool)
+	ctx := context.Background()
+	ownPool(t, pg, "sub-leaver", "Laptop")
+	for _, who := range []string{"sub-leaver", "sub-stays"} {
+		for _, key := range []string{"user_view_type", "runner_pool_default.v2"} {
+			if err := pg.PutPrincipalPref(ctx, who, key, json.RawMessage(`{"x":1}`)); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if _, err := pg.DeleteRunnerPoolsByOwner(ctx, "sub-leaver"); err != nil {
+		t.Fatal(err)
+	}
+	var gone, kept int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FILTER (WHERE principal = 'sub-leaver'), count(*) FILTER (WHERE principal = 'sub-stays') FROM principal_prefs`).Scan(&gone, &kept); err != nil {
+		t.Fatal(err)
+	}
+	if gone != 0 || kept != 2 {
+		t.Errorf("after the erasure: %d of the person's preference rows left, %d of another's; want 0 and 2", gone, kept)
 	}
 }
 

@@ -375,7 +375,8 @@ func deleteRunnerPoolQ(ctx context.Context, q Querier, id uuid.UUID) (RunnerPool
 // DeleteRunnerPoolsByOwner is a person's erasure of their pools: each live pool owner holds is deleted
 // as DeleteRunnerPool deletes one, and then every pool of theirs, the tombstones included, forgets them
 // (owner and created_by cleared). It holds the lock every create takes, so a pool the person creates
-// meanwhile is either deleted here or made after it. Returns the deletions, in pool id order.
+// meanwhile is either deleted here or made after it. The person's stored preferences are deleted in the
+// same transaction. Returns the deletions, in pool id order.
 func (s PG) DeleteRunnerPoolsByOwner(ctx context.Context, owner string) ([]RunnerPoolDeletion, error) {
 	var out []RunnerPoolDeletion
 	err := s.inTx(ctx, func(q Querier) error {
@@ -399,7 +400,11 @@ func (s PG) DeleteRunnerPoolsByOwner(ctx context.Context, owner string) ([]Runne
 			}
 			out = append(out, d)
 		}
-		_, err = q.Exec(ctx, `UPDATE runner_pools SET owner = NULL, created_by = '' WHERE owner = $1 AND state = 'deleted'`, owner)
+		if _, err = q.Exec(ctx, `UPDATE runner_pools SET owner = NULL, created_by = '' WHERE owner = $1 AND state = 'deleted'`, owner); err != nil {
+			return err
+		}
+		// The person's stored preferences (their default pool among them) go with their pools.
+		_, err = q.Exec(ctx, `DELETE FROM principal_prefs WHERE principal = $1`, owner)
 		return err
 	})
 	return out, err
