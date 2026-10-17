@@ -176,6 +176,8 @@ type orgRun struct {
 	State      string `json:"state"`
 	RunnerID   string `json:"runner_id"`
 	SandboxRef string `json:"sandbox_ref"`
+	// FailureHint is the org's reason a run FAILED before its agent started.
+	FailureHint string `json:"failure_hint"`
 }
 
 // launch starts a run whose agent runs task (a shell line, see the harness's agent-run) on the org
@@ -223,7 +225,7 @@ func (o *orgEnv) waitState(t *testing.T, id string, within time.Duration, states
 			}
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("run %s: state %s, want one of %v within %s", id, r.State, states, within)
+			t.Fatalf("run %s: state %s (%s), want one of %v within %s", id, r.State, r.FailureHint, states, within)
 		}
 		time.Sleep(2 * time.Second)
 	}
@@ -303,6 +305,8 @@ func (o *orgEnv) decisions(t *testing.T, id string) map[string][]string {
 
 // audit is the org's audit rows for a run.
 type auditRow struct {
+	Time    time.Time       `json:"time"`
+	Actor   string          `json:"actor"`
 	Action  string          `json:"action"`
 	Target  string          `json:"target"`
 	Outcome string          `json:"outcome"`
@@ -319,6 +323,22 @@ func (o *orgEnv) audit(t *testing.T, runID string) []auditRow {
 }
 
 // waitAudit waits for an audit row of the run that match accepts.
+// dumpRun logs what a failed case needs to say why: the run's state and failure hint, every audit row
+// for it, its pods, and its proxy's log.
+func (o *orgEnv) dumpRun(t *testing.T, id string) {
+	r := o.run(t, id)
+	t.Logf("run %s: state %s, failure hint %q, sandbox_ref %q", id, r.State, r.FailureHint, r.SandboxRef)
+	for _, a := range o.audit(t, id) {
+		t.Logf("audit %s %s %s %s %s %s", a.Time.UTC().Format(time.RFC3339), a.Action, a.Outcome, a.Actor, a.Target, a.Data)
+	}
+	pods, _ := exec.Command("kubectl", "--kubeconfig", o.adminKC, "-n", o.runsNS, "get", "pods", "-o", "wide").CombinedOutput()
+	t.Logf("pods in %s:\n%s", o.runsNS, pods)
+	logs, _ := exec.Command("kubectl", "--kubeconfig", o.adminKC, "-n", o.runsNS, "logs", "wardyn-proxy-"+id, "-c", "wardyn-proxy", "--timestamps").CombinedOutput()
+	t.Logf("proxy log (tail):\n%s", tail(string(logs), 6000))
+	rd, _ := exec.Command("kubectl", "--kubeconfig", o.adminKC, "-n", o.ownNS, "logs", "deployment/"+o.deploy, "-c", "runnerd", "--timestamps").CombinedOutput()
+	t.Logf("runnerd log (tail):\n%s", tail(string(rd), 6000))
+}
+
 func (o *orgEnv) waitAudit(t *testing.T, runID string, within time.Duration, what string, match func(auditRow) bool) auditRow {
 	t.Helper()
 	deadline := time.Now().Add(within)
@@ -446,7 +466,7 @@ func (o *orgEnv) probeIn(t *testing.T, nodeName, pid string, args ...string) *ex
 
 // --- cases ---------------------------------------------------------------------------------------
 
-// caseOrgWalk is the §8 walk: a run whose env secret the delivery policy hands only to org_cluster
+// caseOrgWalk: a run whose env secret the delivery policy hands only to org_cluster
 // runners (by_trust, runner_resident) lands on the org runner and its agent gets the value; the same run
 // on the person's own runner (trust personal) is refused, naming the trust class.
 func caseOrgWalk(t *testing.T, o *orgEnv) {
@@ -533,7 +553,7 @@ func caseOrgHardDeny(t *testing.T, o *orgEnv) {
 	note(t, "%d in-cluster targets allowed by policy, each refused 403 and logged deny; control example.com 200", len(targets))
 }
 
-// caseOrgFence is §8 R4-M1 "Fence": a long-lived connection from the proxy's address through the relay
+// caseOrgFence: a long-lived connection from the proxy's address through the relay
 // (HTTP/2 when the org offers it, as the proxy's renew and activity clients use) is cut when the run is
 // fenced, and a new one from that address is refused. The node's kubelet is stopped first, so the proxy
 // pod lives on past its delete and only the relay's fence can cut it.
@@ -569,7 +589,7 @@ func caseOrgFence(t *testing.T, o *orgEnv) {
 	note(t, "%s; connection cut %s after the kill (%s); %s; proxy pod still Running on %s (kubelet stopped)", proto, after, cut, redial, nodeName)
 }
 
-// caseOrgRestart is §8 R4-M1 "After a restart the fence is replayed before Online" plus the sink
+// caseOrgRestart: after a runnerd restart the fence is replayed before the runner is online, plus the sink
 // re-registration: runnerd restarts while fence-live-http2's proxy still lives; once the org sees it
 // online again, a connection from the fenced address is still refused, and a run started before the
 // restart on the other worker still lands its decisions at the org (its proxy's sink reconnected).
@@ -581,6 +601,11 @@ func caseOrgRestart(t *testing.T, o *orgEnv) {
 	ws := o.workers(t)
 	o.sched(t, ws[len(ws)-1]) // the boot canary and run B go to the worker whose kubelet runs
 	b := o.live(t, nil)
+	t.Cleanup(func() {
+		if t.Failed() {
+			o.dumpRun(t, b)
+		}
+	})
 	if got := o.connect(t, b, "example.com:443"); got != "status 200" {
 		t.Fatalf("run B control before the restart: %q", got)
 	}
@@ -602,9 +627,10 @@ func caseOrgRestart(t *testing.T, o *orgEnv) {
 	}
 	note(t, "fenced address after the restart: %s", strings.TrimSpace(string(out)))
 
-	// §8 P2: the restart reaches READY within the budget while one run's containment is pending.
+	// The restart reaches READY within the budget while one run's containment is pending: one held run
+	// never takes the whole runner offline.
 	if err := o.waitOnline(3 * time.Minute); err != nil {
-		t.Errorf("runner not online at the org 3 min after the restart, with run %s's containment pending on a node whose kubelet is stopped (§8 P2 wants READY within the budget): %v", f.id, err)
+		t.Errorf("runner not online at the org 3 min after the restart, with run %s's containment pending on a node whose kubelet is stopped (one held run must not keep the runner from READY): %v", f.id, err)
 	}
 	kubelet(t, f.node, true)
 	o.kubectl(t, "-n", o.runsNS, "wait", "--for=delete", "pod/wardyn-proxy-"+f.id, "--timeout=300s")
@@ -644,7 +670,7 @@ func (o *orgEnv) waitOnline(within time.Duration) error {
 	return fmt.Errorf("still offline after %s", within)
 }
 
-// caseOrgKeystoreRevoke is the §8 checklist item: revoking the runner deletes its keystore Secrets.
+// caseOrgKeystoreRevoke: revoking the runner deletes its keystore Secrets.
 // It runs last: the org runner is revoked.
 func caseOrgKeystoreRevoke(t *testing.T, o *orgEnv) {
 	// Its own live resident run (walk-trust-placement set the delivery policy and the secret): the walk's
@@ -672,7 +698,9 @@ func caseOrgKeystoreRevoke(t *testing.T, o *orgEnv) {
 // lapseSetup starts self-lapse-end-to-end early, since its proof waits out one renew interval: a live
 // run renews through the relay once, then its row is made terminal in the org's database (the fault: the
 // org ends a run without the stop reaching runnerd), so its next renew (10 min +-1 after a success) is
-// refused permanently.
+// refused permanently. The row is written as a finalize that believed its stop succeeded leaves it,
+// sandbox_ref cleared: with the ref kept, wardynd's terminal-sandbox sweep (every 5 min) retries the
+// stop and tears the sandbox down before that renew.
 func (o *orgEnv) lapseSetup(t *testing.T) {
 	o.lapse = &lapseRun{}
 	parent := t
@@ -683,8 +711,17 @@ func (o *orgEnv) lapseSetup(t *testing.T) {
 		id := o.liveUntil(t, parent, nil)
 		o.lapse.id = id
 		o.waitAudit(t, id, 2*time.Minute, "a successful renew", func(r auditRow) bool { return r.Action == "identity.renew" && r.Outcome == "success" })
+		// The control: the agent's allowed egress works before the fault, so its refusal after the
+		// lapse is the lapse's doing.
+		deadline := time.Now().Add(90 * time.Second)
+		for got := o.connect(t, id, "example.com:443"); got != "status 200"; got = o.connect(t, id, "example.com:443") {
+			if time.Now().After(deadline) {
+				t.Fatalf("control example.com:443 = %q, want status 200 (proxy not serving)", got)
+			}
+			time.Sleep(3 * time.Second)
+		}
 		o.kubectl(t, "-n", o.orgNS, "exec", "deploy/postgres", "--", "psql", "-U", "wardyn", "-d", "wardyn", "-qtAc",
-			"UPDATE agent_runs SET state = 'FAILED' WHERE id = '"+id+"'")
+			"UPDATE agent_runs SET state = 'FAILED', sandbox_ref = '' WHERE id = '"+id+"'")
 		o.lapse.marked = time.Now()
 	})
 	if !ok {
@@ -692,14 +729,20 @@ func (o *orgEnv) lapseSetup(t *testing.T) {
 	}
 }
 
-// caseOrgSelfLapse is §8 self-lapse "Permanent refusal" end to end: the renew is refused through the
-// relay (403 run_terminal), the proxy lapses, sends its lapsed frame on runnerd's sink, and the sandbox
-// is torn down.
+// caseOrgSelfLapse: a permanent renew refusal, end to end. The renew is refused through the
+// relay (403 run_terminal), the proxy lapses, sends its lapsed frame on runnerd's sink, runnerd deletes
+// the proxy pod, and the agent's allowed egress is refused. runnerd stops only the proxy, never the
+// agent or its files (offline.Manager.CheckLapses); the agent pod ends with the org's teardown.
 func caseOrgSelfLapse(t *testing.T, o *orgEnv) {
 	if o.lapse == nil || o.lapse.err != "" || o.lapse.id == "" {
 		t.Fatalf("self-lapse setup: %+v", o.lapse)
 	}
 	id := o.lapse.id
+	t.Cleanup(func() {
+		if t.Failed() {
+			o.dumpRun(t, id)
+		}
+	})
 	row := o.waitAudit(t, id, time.Until(o.lapse.marked.Add(14*time.Minute)), "a refused renew", func(r auditRow) bool {
 		return r.Action == "identity.renew" && r.Outcome == "denied"
 	})
@@ -715,8 +758,13 @@ func caseOrgSelfLapse(t *testing.T, o *orgEnv) {
 		}
 		time.Sleep(2 * time.Second)
 	}
-	o.kubectl(t, "-n", o.runsNS, "wait", "--for=delete", "pod/wardyn-agent-"+id, "pod/wardyn-proxy-"+id, "--timeout=300s")
-	note(t, "proxy logged the permanent refusal and lapsed; runnerd tore the sandbox down %s after the mark", time.Since(o.lapse.marked).Round(time.Second))
+	o.kubectl(t, "-n", o.runsNS, "wait", "--for=delete", "pod/wardyn-proxy-"+id, "--timeout=300s")
+	if got := o.connect(t, id, "example.com:443"); got == "status 200" {
+		t.Fatalf("agent still reaches example.com:443 after the lapse: %q", got)
+	} else {
+		note(t, "proxy logged the permanent refusal and lapsed; runnerd deleted the proxy pod %s after the mark; agent egress now %q",
+			time.Since(o.lapse.marked).Round(time.Second), tail(got, 200))
+	}
 }
 
 // caseOrgSweepRollback: a run whose sandbox creation the org gave up on (runnerd went away mid-create)
@@ -807,11 +855,13 @@ func TestK6Org(t *testing.T) {
 			_ = exec.Command("docker", "exec", n, "systemctl", "start", "kubelet").Run()
 		}
 	})
-	o.lapseSetup(t)
 	kase("walk-trust-placement", caseOrgWalk)
 	kase("hard-deny-from-agent", caseOrgHardDeny)
 	kase("fence-live-http2", caseOrgFence)
 	kase("restart-fence-replay-reregister-sinks", caseOrgRestart)
+	// After every runnerd restart but the sweep case's: a READY sweeps the runs the org holds terminal,
+	// and the lapse run is one, so a restart inside its renew window would reclaim it before the refusal.
+	o.lapseSetup(t)
 	kase("self-lapse-end-to-end", caseOrgSelfLapse)
 	kase("org-triggered-sweep-rollback", caseOrgSweepRollback)
 	kase("keystore-deleted-on-revoke", caseOrgKeystoreRevoke) // last: revokes the org runner

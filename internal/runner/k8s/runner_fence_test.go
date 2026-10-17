@@ -289,7 +289,7 @@ func (h *runnerHarness) boundAgent(t *testing.T) {
 
 // TestRunnerHeldTeardownIsTyped: a runner-mode teardown (a kill) whose pods have no completion
 // evidence past both delete bounds answers the typed ContainmentPendingError, so the manager holds
-// that run and the runner's session still reaches READY (§8 P2), and keeps the NetworkPolicies.
+// that run and the runner's session still reaches READY, and keeps the NetworkPolicies.
 func TestRunnerHeldTeardownIsTyped(t *testing.T) {
 	ctx := context.Background()
 	h := newRunnerHarness(t)
