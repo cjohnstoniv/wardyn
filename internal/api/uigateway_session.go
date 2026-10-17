@@ -114,7 +114,10 @@ type uiSession struct {
 	// redemption time: a redemption after a revoke would renew the authority the
 	// revoke cancelled. Absent (a cookie from before 0.8.5) is refused. Email is
 	// the verified identity's, for a revoke that names it.
-	AuthorizedAt int64  `json:"t"`
+	AuthorizedAt int64 `json:"t"`
+	// AuthorizedNs is the nanoseconds past AuthorizedAt's second, so the sponsor check compares the
+	// authority time at the precision sponsor_since is stored at; the revoke cutoff keeps the seconds.
+	AuthorizedNs int64  `json:"tn,omitempty"`
 	Email        string `json:"m,omitempty"`
 	// RevSeq is the revocation sequence the entry ticket recorded: a cut with a greater one ends this
 	// session whatever the clock says. Absent, the session is ordered on AuthorizedAt.
@@ -296,7 +299,7 @@ func (s *Server) uiSessionStillAuthorized(ctx context.Context, sess uiSession, r
 				http.StatusServiceUnavailable, uiSessionUnverifiableMsg)
 		}
 	}
-	if !s.mayEnterRunOrSponsor(ctx, run, sess.Principal, sess.Role == oidc.RoleAdmin, time.Unix(sess.AuthorizedAt, 0).UTC()) {
+	if !s.mayEnterRunOrSponsor(ctx, run, sess.Principal, sess.Role == oidc.RoleAdmin, time.Unix(sess.AuthorizedAt, sess.AuthorizedNs).UTC()) {
 		return s.uiDenyReassert(sess, uiDeniedReasonNotAuthorized,
 			http.StatusForbidden, uiSessionNoLongerAuthorizedMsg)
 	}
