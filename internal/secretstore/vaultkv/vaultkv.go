@@ -339,9 +339,14 @@ func casMismatch(err error) bool {
 // version as a check-and-set mismatch. It reads the metadata, never the value.
 // The version must be the current one, and Vault must say it was created no
 // earlier than the write began: an older version is another writer's, and a
-// missing or unreadable time, or a Vault clock behind this one's, fails closed.
+// missing or unreadable time fails closed. The two clocks can disagree either
+// way. A Vault clock behind this one's fails closed: this write's own version
+// reads as older than the write and is refused. A Vault clock ahead of this
+// one's widens the window by the skew: a version another writer made up to
+// that much before the write began still reads as no earlier, and is taken.
 // It cannot tell this write's version from one another writer made after the
-// write began; that writer's value is accepted as this write's.
+// write began (or, with Vault ahead, within the skew before it); that writer's
+// value is accepted as this write's.
 func (s *Store) landed(ctx context.Context, rel string, want int, began time.Time) bool {
 	m, found, err := s.metadata(ctx, rel)
 	if err != nil || !found || m.CurrentVersion != want {
