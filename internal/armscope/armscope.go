@@ -213,9 +213,13 @@ func segments(rawPath string) ([]string, error) {
 
 // dotLookalike reports whether seg has no letter or digit and holds a dot or a
 // non-ASCII character: a fullwidth dot, ".." with a zero-width character or
-// "..+" is a dot segment to a layer that folds or strips it.
+// "..+" is a dot segment to a layer that folds or strips it. The invisible
+// fillers Unicode files under letters (the Hangul fillers, among others) are
+// not letters here: they draw nothing, and a layer that strips them leaves a dot.
 func dotLookalike(seg string) bool {
-	if strings.IndexFunc(seg, func(r rune) bool { return unicode.IsLetter(r) || unicode.IsDigit(r) }) >= 0 {
+	if strings.IndexFunc(seg, func(r rune) bool {
+		return (unicode.IsLetter(r) || unicode.IsDigit(r)) && !unicode.Is(unicode.Other_Default_Ignorable_Code_Point, r)
+	}) >= 0 {
 		return false
 	}
 	return strings.IndexFunc(seg, func(r rune) bool { return r == '.' || r > unicode.MaxASCII }) >= 0

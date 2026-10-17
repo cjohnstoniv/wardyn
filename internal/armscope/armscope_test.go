@@ -101,6 +101,8 @@ func TestARMScope_UnreadableIsRefused(t *testing.T) {
 		base + "/%2E%2E/" + other, base + "/rg%0a", base + "/rg%7f", base + "/%20rg", base + "/rg.",
 		// A dot or lookalike with no letter or digit: fullwidth dots, ".." with a zero-width character, "..+".
 		base + "/%EF%BC%8E%EF%BC%8E/" + other, base + "/..%E2%80%8B/" + other, base + "/..+/" + other, base + "/%E2%80%A4/" + other,
+		// The invisible fillers Unicode counts as letters, alone and after dots.
+		base + "/%E3%85%A4/" + other, base + "/..%E3%85%A4/" + other, base + "/%EF%BE%A0/" + other, base + "/%E1%85%9F%E1%85%A0/" + other,
 	} {
 		if err := scope(true).Admit(http.MethodGet, path, nil); !errors.Is(err, ErrUnreadable) {
 			t.Errorf("GET %q = %v, want ErrUnreadable", path, err)
@@ -158,6 +160,8 @@ func TestARMScope_SemicolonTable(t *testing.T) {
 		base + "/..;/x", base + "/.;/x", base + "/..%3B/x", base + "/.%3b/x", base + "/..;x=1/x", base + "/...;/x",
 		base + "/%2e%2e;/x", base + "/%2E;/x", base + "/%2e%2e%3b/x", base + "/..%253b/x",
 		base + "/%E2%80%A4;/x", base + "/%EF%BC%8E%EF%BC%8E;/x", base + "/..%E2%80%8B;/x",
+		// The invisible fillers Unicode counts as letters: Hangul Filler, Halfwidth Hangul Filler, U+115F, U+1160.
+		base + "/..%E3%85%A4;/x", base + "/..%EF%BE%A0;/x", base + "/..%E1%85%9F;/x", base + "/..%E1%85%A0;/x", base + "/%E3%85%A4;x",
 		// A blank or dot-ended head, and a second layer of encoding after a real name.
 		base + "/resourceGroups/%20;x", base + "/resourceGroups/x.;y", base + "/resourceGroups/rg%253Bx",
 		// Nothing before the semicolon.
