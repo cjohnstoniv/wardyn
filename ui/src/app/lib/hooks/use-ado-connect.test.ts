@@ -77,6 +77,58 @@ describe("useAdoConnect", () => {
     expect(result.current.connecting).toBe(false);
   });
 
+  // DR-0270: an own-token row reads live with no sign-in at all, and sits beside the single sign-in row for
+  // another organisation. It must not finish a sign-in it did not do.
+  describe("which live row finishes the sign-in", () => {
+    const run = async (rows: unknown[], match?: { org?: string; kind?: string }) => {
+      const popup = fakePopup();
+      vi.spyOn(window, "open").mockReturnValue(popup as unknown as Window);
+      getMineMock.mockResolvedValue(rows);
+      const { result } = renderHook(() => useAdoConnect());
+      let resolved: boolean | null | undefined;
+      act(() => {
+        void result.current.connect(match).then((ok) => {
+          resolved = ok;
+        });
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1500);
+      });
+      return { resolved, popup, result };
+    };
+    const ownB = { state: "live", token_mode: "own_pat", org: "https://dev.azure.com/org-b", kind: "azure_devops" };
+    const pendingA = { state: "expired_signin", org: "https://dev.azure.com/org-a", kind: "azure_devops" };
+    const liveA = { state: "live", source: "separate", org: "https://dev.azure.com/org-a", kind: "azure_devops" };
+
+    it("a live own-token row for B beside an unfinished sign-in for A does not complete, and leaves the popup open", async () => {
+      const { resolved, popup, result } = await run([ownB, pendingA], { org: "https://dev.azure.com/org-a" });
+      expect(resolved).toBeUndefined();
+      expect(popup.close).not.toHaveBeenCalled();
+      expect(result.current.connecting).toBe(true);
+    });
+
+    it("an own-token row never completes a sign-in, even when no org is named", async () => {
+      const { resolved, popup } = await run([ownB]);
+      expect(resolved).toBeUndefined();
+      expect(popup.close).not.toHaveBeenCalled();
+    });
+
+    it("the live sign-in row for A completes it, whatever sits beside it", async () => {
+      const { resolved, popup } = await run([ownB, liveA], { org: "https://dev.azure.com/org-a" });
+      expect(resolved).toBe(true);
+      expect(popup.close).toHaveBeenCalled();
+    });
+
+    it("a live sign-in row for another organisation does not complete a named one", async () => {
+      const { resolved } = await run([liveA], { org: "https://dev.azure.com/org-c" });
+      expect(resolved).toBeUndefined();
+    });
+
+    it("a named kind must match too", async () => {
+      expect((await run([liveA], { kind: "other_kind" })).resolved).toBeUndefined();
+    });
+  });
+
   it("resolves false when the popup closes before connecting", async () => {
     const popup = fakePopup();
     vi.spyOn(window, "open").mockReturnValue(popup as unknown as Window);

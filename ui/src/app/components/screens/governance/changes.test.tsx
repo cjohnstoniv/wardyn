@@ -30,7 +30,7 @@ vi.mock("../../../lib/api/governance", async () => {
 });
 
 import { HttpError } from "../../../lib/api/core";
-import { CHANGES, DELIVERY } from "../../../lib/governance-copy";
+import { CHANGES, DELIVERY, GOVERNANCE } from "../../../lib/governance-copy";
 import type { GovernanceChange } from "../../../lib/types";
 import { OperatorProvider } from "../../wardyn/operator-context";
 import { aheadByHours } from "../../../lib/test-clock";
@@ -127,6 +127,22 @@ describe("the change drawer", () => {
     expect(within(dialog).getByText(CHANGES.DIFF_FULL)).toBeInTheDocument();
     expect(within(dialog).getByText(CHANGES.REASON_LABEL)).toBeInTheDocument();
     expect(within(dialog).getByText(CHANGES.REASON_HINT)).toBeInTheDocument();
+  });
+
+  it("shows the notes the server kept with the change, for the person approving", async () => {
+    const note = "this profile omits 3 denied domain(s) the deployment default denies (a, b, c) — members under it are NOT walled from them";
+    renderTab([change({ diff: { ...change().diff, notes: [note] } })]);
+    await userEvent.click(screen.getByRole("button", { name: "Profile · Edit" }));
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByText(GOVERNANCE.OMISSION_TITLE)).toBeInTheDocument();
+    expect(within(dialog).getByText(note)).toBeInTheDocument();
+  });
+
+  it("shows no notes heading for a change that carries none", async () => {
+    renderTab([change()]);
+    await userEvent.click(screen.getByRole("button", { name: "Profile · Edit" }));
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).queryByText(GOVERNANCE.OMISSION_TITLE)).toBeNull();
   });
 
   it("shows an absent side as Not set", async () => {

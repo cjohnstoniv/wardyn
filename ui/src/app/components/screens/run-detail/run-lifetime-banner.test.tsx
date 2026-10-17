@@ -424,7 +424,9 @@ describe("RunLifetimeBanner: a local run (RS4)", () => {
       runner_last_seen_at: new Date(NOW - 3_600_000).toISOString(),
       ...o,
     });
-  const lost = (o: Partial<RunDetail> = {}) => local({ lost_reason: "outage", lost_at: new Date(NOW - 60_000).toISOString(), ...o });
+  const LOST_AT = new Date(NOW - 60_000).toISOString();
+  const lost = (o: Partial<RunDetail> = {}) => local({ lost_reason: "outage", lost_at: LOST_AT, ...o });
+  const lateRow = (lostAt: string) => ({ id: "a1", action: "run.containment.reassert", data: { containment: "late", lost_at: lostAt } });
 
   it("RS4a: a running run on an offline computer says it goes on there, with no buttons", () => {
     renderBanner(local({ runner_online: false }));
@@ -465,23 +467,64 @@ describe("RunLifetimeBanner: a local run (RS4)", () => {
   });
 
   it("RS4d: a late-stop row says Wardyn had the runner stop the network when it came back", async () => {
-    listAuditMock.mockResolvedValue([{ id: "a1", action: "run.containment.reassert", data: { containment: "late" } }]);
+    listAuditMock.mockResolvedValue([lateRow(LOST_AT)]);
     renderBanner(lost());
     expect(await screen.findByText(/was still on when it came back, so Wardyn had its runner stop it then\./)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Revive" })).toBeInTheDocument();
   });
 
-  it("says nothing about the stop until the late-stop row has been read, and falls back to the unconfirmed sentence if it cannot be", async () => {
+  it("says nothing about the stop until the late-stop row has been read", async () => {
     let settle: (v: unknown) => void = () => {};
     listAuditMock.mockReturnValueOnce(new Promise((r) => (settle = r)));
-    const first = renderBanner(lost());
-    expect(first.container).toBeEmptyDOMElement();
+    const { container } = renderBanner(lost());
+    expect(container).toBeEmptyDOMElement();
     settle([]);
     await screen.findByTestId("run-lifetime-local-stopped");
-    first.unmount();
-    listAuditMock.mockRejectedValueOnce(new Error("audit down"));
+  });
+
+  // DR-0261: a read that failed is not evidence of an on-time stop, but it must not take the actions away either.
+  it("a failed read keeps the title and Revive, Extend and End run, and claims neither on time nor late", async () => {
+    listAuditMock.mockRejectedValue(new Error("audit down"));
     renderBanner(lost());
-    await waitFor(() => expect(screen.getByTestId("run-lifetime-local-stopped")).toBeInTheDocument());
+    const banner = await screen.findByTestId("run-lifetime-local-stopped");
+    expect(banner).toHaveTextContent("This run's network was stopped");
+    expect(screen.getByRole("button", { name: "Revive" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Extend" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "End run" })).toBeInTheDocument();
+    expect(screen.queryByText(/reports its runner stopped this run's network/)).toBeNull();
+    expect(screen.queryByText(/was still on when it came back/)).toBeNull();
+  });
+
+  it("a late-stop row from an earlier loss of this run does not make this loss late", async () => {
+    listAuditMock.mockResolvedValue([lateRow(new Date(NOW - 86_400_000).toISOString())]);
+    renderBanner(lost());
+    await screen.findByTestId("run-lifetime-local-stopped");
+    expect(screen.queryByText(/was still on when it came back/)).toBeNull();
+  });
+
+  it("a late-stop row that names no loss proves nothing", async () => {
+    listAuditMock.mockResolvedValue([{ id: "a1", action: "run.containment.reassert", data: { containment: "late" } }]);
+    renderBanner(lost());
+    await screen.findByTestId("run-lifetime-local-stopped");
+    expect(screen.queryByText(/was still on when it came back/)).toBeNull();
+  });
+
+  it("a new loss starts unknown again: the previous loss's answer is not shown while the next is read", async () => {
+    const NEXT = new Date(NOW - 30_000).toISOString();
+    listAuditMock.mockResolvedValueOnce([lateRow(LOST_AT)]);
+    const ui = (run: RunDetail) => (
+      <OperatorProvider operator principal={OWNER}>
+        <RunLifetimeBanner run={run} pending={[]} onChanged={() => {}} />
+      </OperatorProvider>
+    );
+    const { rerender, container } = render(ui(lost()));
+    expect(await screen.findByText(/was still on when it came back/)).toBeInTheDocument();
+    let settle: (v: unknown) => void = () => {};
+    listAuditMock.mockReturnValueOnce(new Promise((r) => (settle = r)));
+    rerender(ui(lost({ lost_at: NEXT })));
+    expect(container).toBeEmptyDOMElement();
+    settle([]);
+    await screen.findByTestId("run-lifetime-local-stopped");
     expect(screen.queryByText(/was still on when it came back/)).toBeNull();
   });
 

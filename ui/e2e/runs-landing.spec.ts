@@ -205,6 +205,23 @@ test.describe("Runs landing — page states (design.md §6 L3 row)", () => {
     await expect(page.getByText("Archived", { exact: true })).toBeVisible();
   });
 
+  // DR-0259: a QUEUED run had no row presentation, so the list printed the raw state in grey.
+  test("a QUEUED run reads Queued with its place in line, never the raw state", async ({ page }) => {
+    await mockRunsList(page, () => ({
+      runs: [
+        baseRun("q1", "Waiting for a slot", {
+          state: "QUEUED",
+          queue: { pool_id: "pool", queued_at: new Date().toISOString(), deadline_at: "", position: 2, reason: "runner_pool_at_capacity" },
+        }),
+      ],
+    }));
+    await gotoConsole(page);
+    await expect(page.getByText("Waiting for a slot")).toBeVisible();
+    await expect(page.getByText("Queued", { exact: true })).toBeVisible();
+    await expect(page.getByText("3rd in line")).toBeVisible();
+    await expect(page.getByText("QUEUED", { exact: true })).toHaveCount(0);
+  });
+
   test("'Earlier this week' expands, aria-expanded toggles, and focus stays on the toggle", async ({ page }) => {
     await mockRunsList(page, () => ({
       runs: [
