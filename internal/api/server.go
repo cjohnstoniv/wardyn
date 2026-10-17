@@ -17,6 +17,7 @@ import (
 	"crypto/ed25519"
 	"net"
 	"net/http/httputil"
+	"net/netip"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -518,6 +519,8 @@ type Config struct {
 	// for a directly-bound host-mode wardynd on 0.0.0.0: that would re-open the LAN
 	// no-auth exposure the peer gate closes. Default false; set by compose only.
 	LocalTrustForwarder bool
+	// TrustedProxies (WARDYN_TRUSTED_PROXIES) are the peers whose X-Forwarded-For names the client (realip.go).
+	TrustedProxies []netip.Prefix
 	// RequireOperatorSetEgress (WARDYN_REQUIRE_OPERATOR_SET_EGRESS, DEFAULT
 	// TRUE) makes applyWorkspaceRequirements apply the same provenance gate
 	// to a scan_seeded EGRESS requirement that the SECRET side has always applied
@@ -986,6 +989,7 @@ func (s *Server) recordAudit(ctx context.Context, ev types.AuditEvent) {
 	ev.Data = audit.StampRelay(ctx, ev.Data)
 	ev.Data = audit.StampDelegation(ctx, ev.Data) // delegation is recorded as delegation (#1142)
 	ev.Data = audit.StampSponsor(ctx, ev.Data)    // a service identity's row names its sponsor (#1508)
+	ev.Data = audit.StampProxyPeer(ctx, ev.SourceIP, ev.Data)
 	// Invariant 6, C1: the audit log is the system of record. A failed durable
 	// write is handled by the shared recorder chain (spoolingRecorder below
 	// maskingRecorder in cmd/wardynd), which masks, logs loudly, and spools the

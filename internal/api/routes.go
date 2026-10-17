@@ -25,9 +25,8 @@ func (s *Server) routes() chi.Router {
 	// audit source_ip (handlePostDecision / handleGroundtruthEvents). Trusting
 	// those headers would let any caller reaching the internal/groundtruth
 	// endpoints FORGE the source_ip in the audit log. We keep r.RemoteAddr as the
-	// real TCP peer instead. If Wardyn is ever fronted by a trusted reverse proxy,
-	// reintroduce X-Forwarded-For parsing ONLY behind an explicit allowlist of
-	// trusted proxy addresses.
+	// real TCP peer instead. Handler's trustedProxyClient reads X-Forwarded-For
+	// ONLY from a peer in the explicit WARDYN_TRUSTED_PROXIES allowlist.
 	r.Use(middleware.Recoverer)
 	r.Use(s.securityHeaders)
 

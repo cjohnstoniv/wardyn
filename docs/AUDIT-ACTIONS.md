@@ -59,6 +59,13 @@ pending runner action). On `/internal/via-org/{grantID}/…`: `delivery_not_via_
 `via_org_destination_refused` and `via_org_cap_exceeded` (`429`). The org-side
 `via_org` decision rows carry `data.relay` too.
 
+**Trusted proxies.** When `WARDYN_TRUSTED_PROXIES` lists a request's TCP peer, the
+row's `source_ip` is the client that proxy reported in `X-Forwarded-For`, and every
+row the request writes with a `source_ip` adds `data.proxy_peer`, the TCP peer
+Wardyn saw ([Trusted proxies](operations/hybrid-laptops.md#trusted-proxies)). A
+device-forwarded row carries it as `data.device_origin.proxy_peer`, so the device's
+claim still recomputes.
+
 ## Grammar
 
 - Every action is `<noun>[.<sub>].<verb>`: two or three dot-separated `snake_case` segments, the last an imperative verb from the list below — never a past tense (`capability.grant.create`, not `capability.grant.created`) and never a noun (`run.policy.resolve`, not `run.policy.effective`).
@@ -652,7 +659,7 @@ The organisation side of hybrid enrolment ([PLAN.md](design/0.8/PLAN.md), "Hybri
 | Marked in | How |
 |---|---|
 | `actor` | Its `actor` is `device:<id>/<claimed actor>` (`FederatedActor` in [internal/store/store_devices.go](../internal/store/store_devices.go)), so no filter or rule keyed on an organisation principal matches a laptop's claim to be that principal. |
-| `data.device_origin` | Its `data.device_origin` (`mergeDeviceOrigin`) holds the device id, its local seq, the hashes it claimed and the `actor` and `source_ip` it claimed. |
+| `data.device_origin` | Its `data.device_origin` (`mergeDeviceOrigin`) holds the device id, its local seq, the hashes it claimed and the `actor` and `source_ip` it claimed, plus `proxy_peer` when it came through a trusted proxy. |
 | `device_id` | And every audit read and the NDJSON export carry a top-level `device_id` on it (absent on the organisation's own rows), and filter on `?origin=device` or `?origin=organisation`. |
 
 - A row counts as forwarded only when the `actor` prefix and `data.device_origin.device_id` name the same device (`FederatedDeviceID`).

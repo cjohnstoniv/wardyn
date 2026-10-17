@@ -48,4 +48,6 @@
 # docs/ENV.md 37321 adds 57 over 37264 (0.9.3 A1 fix), measured: CA file delivery, WARDYN_PROXY_IMAGE_PINNED.
 # docs/ENV.md 37330 adds 9 (0.9.3 A1 fix): the CA mount path and the staged-PEM rule.
 # docs/ENV.md 37370 adds 40 over 37330, measured (0.9.3 ADO): the WARDYN_ADO_LANE_DECLINED row.
-docs/ENV.md=37370 share=5
+# docs/ENV.md 37156 adds 37 over 37119 (0.9.3 E), measured: the WARDYN_TRUSTED_PROXIES row, which the env-doc guard requires.
+# docs/ENV.md 37406 = 37370 + 36 (E), measured at the wave-A merge.
+docs/ENV.md=37406 share=5

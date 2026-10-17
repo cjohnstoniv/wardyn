@@ -9,6 +9,7 @@ import (
 	"crypto/rand"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -44,6 +45,7 @@ func (s limitRunnerStore) GetRunner(_ context.Context, id uuid.UUID) (types.Runn
 
 type streamLimitHarness struct {
 	url         string
+	srv         *Server
 	keys        map[uuid.UUID]ed25519.PrivateKey
 	handled     chan struct{}
 	configReads atomic.Int32
@@ -52,7 +54,7 @@ type streamLimitHarness struct {
 // newStreamLimitHarness serves n unclaimed runners, which a verified handshake
 // answers with AUTH_OK then GOAWAY, so no admission is involved. Every client
 // dials from the same loopback address and the limiter clock never advances.
-func newStreamLimitHarness(t *testing.T, ctx context.Context, n int) *streamLimitHarness {
+func newStreamLimitHarness(t *testing.T, ctx context.Context, n int, trusted ...netip.Prefix) *streamLimitHarness {
 	t.Helper()
 	h := &streamLimitHarness{keys: map[uuid.UUID]ed25519.PrivateKey{}, handled: make(chan struct{}, 64)}
 	rows := map[uuid.UUID]types.Runner{}
@@ -65,7 +67,7 @@ func newStreamLimitHarness(t *testing.T, ctx context.Context, n int) *streamLimi
 			State: types.RunnerUnclaimed, CreatedAt: time.Now()}
 		rows[row.ID], h.keys[row.ID] = row, key
 	}
-	s := New(Config{RunnerOrgURL: "https://org.example", BaseCtx: ctx, Now: func() time.Time { return time.Unix(100, 0) },
+	s := New(Config{RunnerOrgURL: "https://org.example", BaseCtx: ctx, Now: func() time.Time { return time.Unix(100, 0) }, TrustedProxies: trusted,
 		Store: limitRunnerStore{streamRunnerStore: streamRunnerStore{settings: &types.RunnerSettings{Enabled: true}}, rows: rows, configReads: &h.configReads}})
 	handler := panicFails(t, s.Handler())
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -73,7 +75,7 @@ func newStreamLimitHarness(t *testing.T, ctx context.Context, n int) *streamLimi
 		h.handled <- struct{}{}
 	}))
 	t.Cleanup(server.Close)
-	h.url = "ws" + strings.TrimPrefix(server.URL, "http")
+	h.url, h.srv = "ws"+strings.TrimPrefix(server.URL, "http"), s
 	return h
 }
 
@@ -82,7 +84,17 @@ func newStreamLimitHarness(t *testing.T, ctx context.Context, n int) *streamLimi
 // status (101 once upgraded) and the handshake result.
 func (h *streamLimitHarness) dial(t *testing.T, ctx context.Context, id uuid.UUID, key ed25519.PrivateKey) (int, error) {
 	t.Helper()
-	conn, resp, err := websocket.Dial(ctx, h.url+"/api/v1/runners/"+id.String()+"/stream", nil)
+	return h.dialFrom(t, ctx, id, key, "")
+}
+
+// dialFrom is dial with an X-Forwarded-For header, when xff is not empty.
+func (h *streamLimitHarness) dialFrom(t *testing.T, ctx context.Context, id uuid.UUID, key ed25519.PrivateKey, xff string) (int, error) {
+	t.Helper()
+	opts := &websocket.DialOptions{HTTPHeader: http.Header{}}
+	if xff != "" {
+		opts.HTTPHeader.Set("X-Forwarded-For", xff)
+	}
+	conn, resp, err := websocket.Dial(ctx, h.url+"/api/v1/runners/"+id.String()+"/stream", opts)
 	status := 0
 	if resp != nil {
 		status = resp.StatusCode

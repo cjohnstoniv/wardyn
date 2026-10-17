@@ -1660,7 +1660,7 @@ per run per hour (per replica).
 
 Moved to [hybrid-laptops.md](operations/hybrid-laptops.md#managed-laptops-client-mode-runners).
 
-- Behind a shared ingress, runners and anonymous callers share one rate-limit bucket per route, keyed on the TCP peer (no `X-Forwarded-For` is read).
+- Behind a shared ingress, runners and anonymous callers share one rate-limit bucket per route, keyed on the TCP peer unless `WARDYN_TRUSTED_PROXIES` lists it.
   - The routes are `/api/v1/runners/{id}/stream`, `/api/v1/runners/register` and `/api/v1/devices/enrol`.
   - Allow-list the networks your runners connect from on those paths, or give runners a dedicated ingress or hostname.
   - Details and the refusal reasons: [Behind a shared ingress](operations/hybrid-laptops.md#behind-a-shared-ingress).

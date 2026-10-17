@@ -250,7 +250,8 @@ func isMutatingMethod(m string) bool {
 // arrives from a non-loopback peer. This does NOT replace isLoopbackHost: browser
 // DNS-rebinding runs in the victim's own browser (loopback peer, attacker Host),
 // which the Host check catches. We deliberately do NOT install middleware.RealIP
-// (see server.go), so r.RemoteAddr is the real socket peer, never an X-Forwarded-For.
+// (see server.go), so r.RemoteAddr is the real socket peer, or the client a
+// WARDYN_TRUSTED_PROXIES peer reported (realip.go), never an unlisted caller's header.
 // A malformed/empty RemoteAddr fails closed (treated as non-loopback).
 func isLoopbackRemoteAddr(remoteAddr string) bool {
 	host := remoteAddr
