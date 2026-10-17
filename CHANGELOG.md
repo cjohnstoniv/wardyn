@@ -10,7 +10,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
-- A policy apply is audited only once the launch passes every step, and a recording upload for a run that no longer exists answers 404.
+- A policy apply is audited together with the run's creation, so a refused launch leaves no policy apply row, and a recording upload for a run that no longer exists answers 404.
 
 ## [0.9.3-rc.3] — 2026-10-17
 
