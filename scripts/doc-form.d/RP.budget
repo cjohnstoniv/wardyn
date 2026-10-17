@@ -2,4 +2,5 @@
 # docs/operations/runner-pools.md 1589 adds 140 over 1449: when each wait reason applies, and which runners a waiting run may start on and at what size.
 # docs/operations/runner-pools.md 1855 adds 266 over 1589 (setup sets the server runner's limits): a remote-hosted runner's limits: what setup sets and the admin step by hand; measured.
 # docs/operations/runner-pools.md 1867 adds 12 over 1855 (0.9.3 D), measured: run_type_missing.
-docs/operations/runner-pools.md=1867 share=35
+# docs/operations/runner-pools.md 1873 adds 6 (0.9.3 C2), measured: the defaults PUT keeps an omitted recording.
+docs/operations/runner-pools.md=1873 share=35

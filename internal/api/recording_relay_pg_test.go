@@ -15,6 +15,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/recording"
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 )
 
 // recordingRelayFixture is the binding fixture with its server rebuilt on rec
@@ -124,31 +125,85 @@ func TestRelay_RecordingOffStaysBehindAuth(t *testing.T) {
 	}
 }
 
-// TestRelay_UploadClearsRunnerDeclined: a run marked runner_declined (a runner older than per-run
-// recording) whose runner uploads a cast anyway is recorded after all: the stored upload clears the
-// mark, and its audit row says so.
-func TestRelay_UploadClearsRunnerDeclined(t *testing.T) {
+// declinedRelayFixture is the binding fixture with recording on, its run marked runner_declined, and
+// its runner's facts set to facts (nil: the facts cannot be read).
+func declinedRelayFixture(t *testing.T, facts *runner.TargetFacts) (*bindingFixture, recording.Store) {
+	t.Helper()
 	fs, err := recording.NewFSStore(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
 	b := recordingRelayFixture(t, fs)
+	known := map[string]runner.TargetFacts{}
+	if facts != nil {
+		known[b.rn.ID.String()] = *facts
+	}
+	cfg := b.srv.cfg
+	cfg.Runner = &poolRunner{fakeRunner: &fakeRunner{}, runnerFacts: known}
+	b.srv = New(cfg)
 	if _, err := b.pool.Exec(b.ctx, `UPDATE agent_runs SET evidence_source = 'runner_asserted', not_recorded = 'runner_declined' WHERE id = $1`, b.run.ID); err != nil {
 		t.Fatal(err)
 	}
-	path := "/api/v1/internal/recordings/" + b.run.ID.String()
-	if code, body := b.relayPut(t, b.rn.ID, b.run.ID, path, "{\"version\":2}\n"); code != http.StatusNoContent {
-		t.Fatalf("upload = %d %s", code, body)
-	}
+	return b, fs
+}
+
+func (b *bindingFixture) notRecorded(t *testing.T) string {
+	t.Helper()
 	var mark string
 	if err := b.pool.QueryRow(b.ctx, `SELECT not_recorded FROM agent_runs WHERE id = $1`, b.run.ID).Scan(&mark); err != nil {
 		t.Fatal(err)
 	}
-	if mark != "" {
+	return mark
+}
+
+// TestRelay_UploadClearsRunnerDeclined: a run marked runner_declined whose runner is older than
+// per-run recording and records by its own setting uploads a cast anyway: it is recorded after all,
+// so the stored upload clears the mark, and its audit row says so.
+func TestRelay_UploadClearsRunnerDeclined(t *testing.T) {
+	b, _ := declinedRelayFixture(t, &runner.TargetFacts{RecordsUnasked: true})
+	path := "/api/v1/internal/recordings/" + b.run.ID.String()
+	if code, body := b.relayPut(t, b.rn.ID, b.run.ID, path, "{\"version\":2}\n"); code != http.StatusNoContent {
+		t.Fatalf("upload = %d %s", code, body)
+	}
+	if mark := b.notRecorded(t); mark != "" {
 		t.Fatalf("not_recorded = %q after a stored cast, want cleared", mark)
 	}
 	ev, ok := relayAudit(b.srv, b.run.ID, "recording.upload")
 	if !ok || ev.Outcome != "success" || auditData(t, ev)["not_recorded_cleared"] != "runner_declined" {
 		t.Fatalf("recording.upload row = %+v, %v; want a success naming the cleared mark", ev, ok)
+	}
+}
+
+// TestRelay_DeclinedRunRefusesAnUpload: a runner that takes the per-run flag and declined (or does not
+// record at all, or whose facts cannot be read) wraps nothing in wardyn-rec, so an upload for its run
+// can only be the sandbox's own: it is refused 409 recording_off, nothing is stored, the mark stays and
+// the refusal is audited.
+func TestRelay_DeclinedRunRefusesAnUpload(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		facts *runner.TargetFacts
+	}{
+		{"takes the per-run flag", &runner.TargetFacts{}},
+		{"facts unknown", nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			b, fs := declinedRelayFixture(t, tc.facts)
+			path := "/api/v1/internal/recordings/" + b.run.ID.String()
+			code, body := b.relayPut(t, b.rn.ID, b.run.ID, path, "{\"version\":2}\n")
+			if code != http.StatusConflict || !strings.Contains(body, `"reason":"recording_off"`) {
+				t.Fatalf("upload = %d %s, want 409 recording_off", code, body)
+			}
+			if mark := b.notRecorded(t); mark != "runner_declined" {
+				t.Fatalf("not_recorded = %q after a refused upload, want runner_declined", mark)
+			}
+			if rc, err := fs.OpenCast(b.ctx, b.run.ID.String()); err == nil {
+				_ = rc.Close()
+				t.Fatal("a refused upload was stored")
+			}
+			ev, ok := relayAudit(b.srv, b.run.ID, "recording.upload")
+			if !ok || ev.Outcome != "failure" || auditData(t, ev)["reason"] != "recording_off" {
+				t.Fatalf("recording.upload row = %+v, %v; want a recording_off failure", ev, ok)
+			}
+		})
 	}
 }
