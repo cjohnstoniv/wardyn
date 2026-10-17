@@ -67,6 +67,33 @@ func TestHardDenyBeforeInternalHostsLift(t *testing.T) {
 	}
 }
 
+// TestHardDenyBeatsExactLiteralTrust: an exactly allow-listed private literal skips egressTarget (the
+// operator's literal trust), so the hard deny must refuse it before that trust: the relay ClusterIP or
+// runnerd's pod IP typed into allowed_domains stays unreachable. The control literal is still trusted.
+func TestHardDenyBeatsExactLiteralTrust(t *testing.T) {
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) }))
+	defer up.Close()
+	p, _ := newInternalHostsProxy(t,
+		types.RunPolicySpec{AllowedDomains: []string{"10.40.1.5", "10.40.1.9", "10.96.0.12"}},
+		fakeResolver{m: map[string][]net.IP{}}, nil, nil, nil, upstreamAddr(up))
+	hd, err := compileHardDeny(&HardDenyConfig{Suffixes: []string{"svc"}, Hosts: []string{"10.40.1.9"}, CIDRs: []string{"10.96.0.0/12"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.hardDeny = hd
+	for target, want := range map[string]int{
+		"http://10.40.1.5/":       http.StatusOK,        // control: an exact private literal is trusted
+		"http://10.40.1.9/":       http.StatusForbidden, // in hard_deny.hosts
+		"http://10.96.0.12:8443/": http.StatusForbidden, // inside a hard-deny CIDR
+	} {
+		rec := httptest.NewRecorder()
+		p.ServeHTTP(rec, mustProxyReq(t, http.MethodGet, target))
+		if rec.Code != want {
+			t.Errorf("%s: status %d, want %d", target, rec.Code, want)
+		}
+	}
+}
+
 // TestHardDenyAbsentLeavesGuardUnchanged: no hard_deny (Docker, server) keeps
 // today's lift.
 func TestHardDenyAbsentLeavesGuardUnchanged(t *testing.T) {
