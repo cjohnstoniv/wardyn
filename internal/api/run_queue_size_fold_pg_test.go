@@ -66,7 +66,7 @@ func TestPG_QueueSizesARunAsAFreshLaunchOnThatRunner(t *testing.T) {
 				if n > 0 {
 					limits.MaxConcurrentRuns = intp(n)
 				}
-				if _, err := e.pg.UpdateRunnerPool(ctx, pool.ID, e.revision(pool.ID), nil, nil, &limits); err != nil {
+				if _, err := e.pg.UpdateRunnerPool(ctx, pool.ID, e.revision(pool.ID), nil, nil, &limits, nil); err != nil {
 					t.Fatal(err)
 				}
 			}

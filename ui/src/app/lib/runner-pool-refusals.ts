@@ -67,6 +67,24 @@ export const RUNNER_CAPACITY = {
   RUNNER_LIMITS_UNSET: (name: string) => `No runner in ${name} has its limits set. Every runner needs limits before it can run anything.`,
 } as const;
 
+/**
+ * A run whose organisation or pool requires recording when no runner in the pool that could take it
+ * records (runnerpool.RunnerRecordingOffMsg): the create and preflight runner_recording_off.
+ */
+export const RUNNER_RECORDING = {
+  RUNNER_RECORDING_OFF: (name: string) =>
+    `Recording is required, and no runner in ${name} records runs. Choose another pool, or turn recording on for the runner.`,
+  /** runner_recording_off for a run with no pool (runnerpool.RunnerRecordingOffUnpooledMsg). */
+  RUNNER_RECORDING_OFF_UNPOOLED: () =>
+    "Recording is required, and the runner this run would use does not record runs. Turn recording on for the runner.",
+  /** recording_store_off at create and preflight (runnerpool.RecordingStoreOffMsg). */
+  RECORDING_STORE_OFF: () =>
+    "Recording is required, and this organisation keeps no session recordings. Turn on the organisation's recording store, or set recording to preferred.",
+  /** recording_store_off when saving a required setting (runnerpool.RecordingSaveStoreOffMsg). */
+  RECORDING_SAVE_STORE_OFF: () =>
+    "Recording cannot be required while this organisation keeps no session recordings. Turn on the organisation's recording store first.",
+} as const;
+
 /** How a sentence names runs of a type (types.RunnerPoolRunType.Plural). */
 export const RUN_TYPE_PLURAL = { background: "background tasks", interactive: "interactive environments" } as const;
 

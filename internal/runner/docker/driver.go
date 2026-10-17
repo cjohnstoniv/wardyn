@@ -270,6 +270,7 @@ func (d *Driver) Classes(ctx context.Context) (substrate.ClassSupport, error) {
 		StructuralEgress: c.StructuralEgress,
 		NetworkPolicy:    c.NetworkPolicy,
 		SessionRecording: c.SessionRecording,
+		RecordPerRun:     true, // each agent's labelRecord, within Config.Record (record.go)
 		// This substrate binds a member's drive — driveMount resolves it and
 		// ensureDriveVolume creates or adopts the named volume. True only
 		// while that path exists: declaring it without the mount previews

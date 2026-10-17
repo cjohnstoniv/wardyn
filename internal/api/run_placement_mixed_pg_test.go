@@ -306,7 +306,7 @@ func TestPG_SelfHostedRunsAreAlwaysTheirOwners(t *testing.T) {
 		Barriers: []types.ConfinementClass{types.CC1, types.CC2, types.CC3}, MaxConcurrentRuns: intp(1),
 	}
 	e.exec(`UPDATE agent_runs SET state = 'COMPLETED'`)
-	if _, err := e.pg.UpdateRunnerPool(context.Background(), pool.ID, e.revision(pool.ID), nil, nil, &limits); err != nil {
+	if _, err := e.pg.UpdateRunnerPool(context.Background(), pool.ID, e.revision(pool.ID), nil, nil, &limits, nil); err != nil {
 		t.Fatal(err)
 	}
 	occupant := e.occupy(pool)
@@ -333,7 +333,7 @@ func TestPG_PromotedRunKeepsItsOwnRunnersLastPlace(t *testing.T) {
 			Lifetime: &types.RunnerPoolDuration{DefaultSec: 3600, MaxSec: 7200}},
 		Barriers: []types.ConfinementClass{types.CC1, types.CC2, types.CC3}, MaxConcurrentRuns: intp(1),
 	}
-	if _, err := e.pg.UpdateRunnerPool(context.Background(), pool.ID, e.revision(pool.ID), nil, nil, &limits); err != nil {
+	if _, err := e.pg.UpdateRunnerPool(context.Background(), pool.ID, e.revision(pool.ID), nil, nil, &limits, nil); err != nil {
 		t.Fatal(err)
 	}
 	occupant := e.occupy(pool)

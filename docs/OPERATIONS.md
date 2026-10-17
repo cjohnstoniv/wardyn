@@ -3821,6 +3821,7 @@ image digests in `wardyn.env`, not a re-run of anything
 - `0174` (`0174_runner_limits`) adds the six limit columns (`total_cpu_millis`, `total_memory_mib`, `total_disk_mib`, `run_cpu_millis`, `run_memory_mib`, `run_disk_mib`) to `runners` (`0139`'s table) and to `remote_runners` (`0173`'s table), with `max_runs` on `remote_runners`, and `reserved_cpu_millis`, `reserved_memory_mib` and `reserved_disk_mib` to `agent_runs` (`0001`'s table), backfilled for runs holding a sandbox.
 - `0176` (`0176_revocation_order`) adds `seq` to `oidc_session_revocations` (`0049`'s table) and `oidc_session_cuts` (`0128`'s table) and `rev_seq` to `api_tokens` (`0045`'s table), `ssh_public_keys` (`0033`'s table), `attach_tickets` (`0026`'s table) and `delegated_tokens` (`0094`'s table), beside its new `oidc_revocation_seq` sequence, and creates the `oidc_revocation_stamp` and `oidc_revocation_position` functions, which run as the migrator.
 - `0177` (`0177_member_drives`) adds `user_drives.owner_subject` and `delete_started_at` (`0054`'s table) and replaces the table's name uniqueness with per-owner indexes and two checks.
+- `0180` (`0180_run_recording`) adds `recording` to `runner_pools` and `runner_pool_org_defaults` (`0152`'s tables) and `not_recorded` to `agent_runs` (`0001`'s table).
 - `0085` is named for its `CREATE OR REPLACE FUNCTION push_content_paths_immutable()`,
   but it is not an instance of the hazard: it creates that function and the
   `push_content_paths` table in the same file, so the migrator owns both from the start.

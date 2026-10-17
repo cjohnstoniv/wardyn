@@ -28,6 +28,9 @@ type TargetFacts struct {
 	KeepsEnded bool
 	// UserDrives: the target can bind a member's drive (Capabilities.UserDrives).
 	UserDrives bool
+	// Records: the target records a run its organisation asks it to (Capabilities.SessionRecording,
+	// and for a self-hosted runner one that takes the per-run SandboxSpec.Record).
+	Records bool
 }
 
 // TargetInspector answers per-target facts. The false answer means the facts are

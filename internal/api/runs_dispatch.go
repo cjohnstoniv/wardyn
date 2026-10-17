@@ -669,6 +669,9 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	if !s.sandboxCreateAdmitted(ctx, run, ceiling, siteCfg, &spec, orgConfigKeys, llm, p) {
 		return
 	}
+	if !s.applyRunRecording(ctx, &run, &spec) {
+		return
+	}
 	spec.ExecOutput = s.openExecOutput(run, p.Interactive)
 	// A run on a runner is leased first: its runner refuses a create no lease authorizes.
 	execution, err := s.leaseRunOnRunner(ctx, run)
