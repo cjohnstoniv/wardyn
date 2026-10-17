@@ -19,6 +19,8 @@ import type { Page } from "@playwright/test";
 // oldest seeded run to RUNNING and does not restore it — it deletes only the
 // approval row it inserts; nothing else in this file mutates state at all.
 test.describe.configure({ mode: "serial" });
+// Keep the first attempt's trace: the click-loss flake fails only there, and the config records a trace on retry only.
+test.use({ trace: "retain-on-first-failure" });
 
 // Open the Runs screen and wait for the seeded page to render. PENDING
 // fixture 0 is always live, so it always renders (as "Queued" now — #1197 D2

@@ -262,7 +262,8 @@ func TestRecoverRunOutput_EndlessLogIsCutAtTheBound(t *testing.T) {
 			shape(rr)
 			t.Cleanup(func() { close(rr.release) })
 			f, brk := recoveryFixture(t, rr)
-			f.srv.runOutputRecoverWaitOverride = 60 * time.Millisecond
+			// Room for the first read of "partial\n" to land before the deadline under load; the bound is 10s.
+			f.srv.runOutputRecoverWaitOverride = 500 * time.Millisecond
 			start := time.Now()
 			f.srv.reconcileFinalize(t.Context(), f.run.ID, types.RunFailed, "sbx-out", "reconciled exit")
 			if took := time.Since(start); took > 10*time.Second {
