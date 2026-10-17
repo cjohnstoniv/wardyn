@@ -295,6 +295,33 @@ func (m *Manager) BeforeCreate(ctx context.Context, spec runner.SandboxSpec) err
 	return nil
 }
 
+// AdmitResident binds a runner_resident delivery to a run this runner may still create: online, not
+// revoked, a live initial lease and no creation intent yet (the Lease and BeforeCreate predicates).
+// Lock order: Resident calls this while holding its own mutex, so Resident.mu is always taken before
+// m.mu. The manager never calls into Resident; the revoke hook runs Revoked, which has released m.mu,
+// and only then the resident erase.
+func (m *Manager) AdmitResident(runID uuid.UUID) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if !m.online || m.state.Revoked {
+		return runner.ErrRunnerOffline
+	}
+	if _, exists := m.state.Runs[runID]; exists {
+		return errors.New("runner resident delivery after the run's creation intent")
+	}
+	if _, ok := m.pending[runID]; !ok || m.expired(runID) {
+		return errors.New("runner resident delivery requires a live initial lease")
+	}
+	return nil
+}
+
+// IsRevoked reports the durable revocation latch.
+func (m *Manager) IsRevoked() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.state.Revoked
+}
+
 // liveRuns counts the runs whose sandbox this runner still holds: created or being created, not failed,
 // retired, quarantined, exited or stopped. It errs low, so the backstop to the control plane's count
 // never refuses a run the control plane rightly placed. m.mu must be held.
