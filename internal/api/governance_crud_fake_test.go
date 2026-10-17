@@ -378,8 +378,8 @@ func (s *composedUIAppsStore) GetGovernanceProfileChain(context.Context, uuid.UU
 
 // TestComposedUIAppsDenial_ReadSurfacesShowTheBasesListWithTheDenial pins what the two ceiling read
 // surfaces say about an overlay that empties ui_apps over a base that lists one: the base's list is
-// kept, and the denial is what narrows it (the admin view carries deny_ui_apps; a member's
-// /policies/default carries the list a run is clamped against).
+// kept, and the denial is what narrows it (the admin view carries the list with deny_ui_apps; a member's
+// /policies/default lists none, because a run under this ceiling gets none).
 func TestComposedUIAppsDenial_ReadSurfacesShowTheBasesListWithTheDenial(t *testing.T) {
 	docs := []types.UIApp{{Name: "docs", Port: 8000}}
 	base := types.GovernanceProfile{ID: uuid.New(), Name: "base", Ceiling: types.RunPolicySpec{
@@ -425,7 +425,7 @@ func TestComposedUIAppsDenial_ReadSurfacesShowTheBasesListWithTheDenial(t *testi
 	if err := json.Unmarshal(w.Body.Bytes(), &def); err != nil {
 		t.Fatal(err)
 	}
-	if def.GovernanceProfileName != "leaf" || !slices.Equal(def.UIApps, docs) {
-		t.Errorf("/policies/default = profile %q, ui_apps %+v; want the composed profile and the base's list", def.GovernanceProfileName, def.UIApps)
+	if def.GovernanceProfileName != "leaf" || len(def.UIApps) != 0 {
+		t.Errorf("/policies/default = profile %q, ui_apps %+v; want the composed profile and no UI apps, as the ceiling denies them", def.GovernanceProfileName, def.UIApps)
 	}
 }
