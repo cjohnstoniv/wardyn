@@ -353,8 +353,9 @@ func casePodIPReuse(t *testing.T, e *env) {
 		inconclusive(t, "normal-stop left no stopped proxy IP")
 	}
 	e.setSched(t, e.pin)
+	var missed []string
 	if !e.reuseIP(t, e.stoppedIP, false) {
-		inconclusive(t, fmt.Sprintf("no later proxy on %s received the stopped IP %s in 6 runs", e.pin, e.stoppedIP))
+		missed = append(missed, fmt.Sprintf("no later proxy on %s received the stopped IP %s in %d runs", e.pin, e.stoppedIP, reuseRuns))
 	}
 	// A pending run: a third party strips the proxy's finalizer and force-deletes it, so the object is
 	// gone without a witness. NotFound is not evidence, so the run stays pending and fenced.
@@ -381,16 +382,23 @@ func casePodIPReuse(t *testing.T, e *env) {
 		t.Fatalf("the pending run's IP %s is not refused", ip)
 	}
 	if !e.reuseIP(t, ip, true) {
-		note(t, "pending half inconclusive: no later proxy received the pending run's IP %s in 6 runs", ip)
+		missed = append(missed, fmt.Sprintf("no later proxy received the pending run's IP %s in %d runs", ip, reuseRuns))
+	}
+	if len(missed) > 0 {
+		inconclusive(t, strings.Join(missed, "; "))
 	}
 }
 
-// reuseIP creates runs on the pin node until a proxy receives ip (at most 6). With refused false
+// reuseRuns bounds reuseIP. The harness gives the runs namespace a 16-address Calico block and
+// each run takes two addresses, so the block wraps within 8 runs.
+const reuseRuns = 12
+
+// reuseIP creates runs on the pin node until a proxy receives ip (at most reuseRuns). With refused false
 // that run must start; with refused true it must fail with the relay fence. It reports whether
 // the IP came back at all.
 func (e *env) reuseIP(t *testing.T, ip string, refused bool) bool {
 	t.Helper()
-	for i := range 6 {
+	for i := range reuseRuns {
 		id := uuid.New()
 		e.cleanupRun(t, id)
 		_, err := e.main.CreateSandbox(bg, e.spec(id))
@@ -495,7 +503,9 @@ func caseBindDeleteSerial(t *testing.T, e *env) {
 }
 
 func caseBindDeleteOverlap(t *testing.T, e *env) {
-	deltas := []time.Duration{-200, -100, -50, -20, 0, 20, 50, 100, 200, 400}
+	// On the 1.31 floor the scheduler took over 400 ms to retry a pod after the uncordon, so the
+	// deltas reach 2.5 s.
+	deltas := []time.Duration{-100, 0, 100, 300, 600, 1000, 1500, 2500}
 	seen := map[string]int{}
 	for i := range overlapIterations {
 		if seen["delete-first"] > 0 && seen["bind-first"] > 0 && i >= 4 {

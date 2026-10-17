@@ -203,6 +203,15 @@ for image in $NODE_IMAGES; do
   kubectl create namespace "$OWN_NS" >/dev/null
   kubectl create namespace "$RUNS_NS" >/dev/null
   kubectl label namespace "$RUNS_NS" pod-security.kubernetes.io/enforce=restricted pod-security.kubernetes.io/enforce-version=latest >/dev/null
+  # A 16-address Calico pool for the runs namespace. Calico reuses a freed address only after the
+  # rest of its block, so pod-ip-reuse-after-stop needs a small block to see a stopped proxy's IP again.
+  kubectl apply -f - >/dev/null <<'POOL'
+apiVersion: crd.projectcalico.org/v1
+kind: IPPool
+metadata: {name: k6-runs}
+spec: {cidr: 10.250.0.0/28, blockSize: 28, ipipMode: Always, natOutgoing: true, nodeSelector: all()}
+POOL
+  kubectl annotate namespace "$RUNS_NS" 'cni.projectcalico.org/ipv4pools=["k6-runs"]' >/dev/null
   kubectl -n "$ORG_NS" create secret tls fake-org-tls --cert="$WORK/tls.crt" --key="$WORK/tls.key" >/dev/null
   kubectl -n "$ORG_NS" apply -f - >/dev/null <<EOF
 apiVersion: apps/v1
