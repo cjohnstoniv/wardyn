@@ -65,7 +65,7 @@ func productionRunnerHooks(ctx context.Context, identity runneridentity.Identity
 	relay := newLocalRelay(ctx)
 	// The decision sink before the runtime: its startup containment stops the runs' proxies, and one
 	// still running delivers what it holds while it stops only if the sink already listens.
-	sink, err := newDockerSink(ctx, stateDir)
+	sink, err := newDockerSink(ctx, stateDir, eng)
 	if err != nil {
 		return runnerRuntime{}, fmt.Errorf("decision sink did not start: %w", err)
 	}
@@ -521,8 +521,14 @@ func (a sinkAdapter) Drain(ctx context.Context, id uuid.UUID) error {
 	return err
 }
 
+// ProducerGone settles the run's producer. A run the sink no longer holds (sealed at retirement, its
+// spool erased, or retired before this restart) has nothing left to settle, so a later stop of it, such as
+// the orphan sweep removing a kept agent, still succeeds.
 func (a sinkAdapter) ProducerGone(ctx context.Context, id uuid.UUID) error {
 	_, err := a.s.ProducerGone(ctx, id)
+	if errors.Is(err, errSinkRunUnknown) {
+		return nil
+	}
 	return err
 }
 
@@ -546,8 +552,8 @@ type dockerSink struct {
 }
 
 // newDockerSink starts the sink, listening at once where it listened before a restart when that
-// address is still free.
-func newDockerSink(ctx context.Context, stateDir string) (*dockerSink, error) {
+// address is still free and one the relay may listen on (admitRelayBind): never every interface.
+func newDockerSink(ctx context.Context, stateDir string, eng dockerEngine) (*dockerSink, error) {
 	s, err := stateDirSink(stateDir, spoolSinkOptions{})
 	if err != nil {
 		return nil, err
@@ -558,7 +564,9 @@ func newDockerSink(ctx context.Context, stateDir string) (*dockerSink, error) {
 		return d, nil
 	}
 	if ap, perr := netip.ParseAddrPort(strings.TrimSpace(string(b))); perr == nil {
-		if _, lerr := d.listen(ap); lerr != nil {
+		if aerr := admitRelayBind(ap.Addr(), eng); aerr != nil {
+			slog.WarnContext(ctx, "decision sink: decision-sink.addr names an address the relay may not listen on, so the sink does not listen there; a run's proxy from before this restart cannot deliver what it holds, and its decisions are counted as lost", "address", ap.String(), "error", aerr)
+		} else if _, lerr := d.listen(ap); lerr != nil {
 			slog.WarnContext(ctx, "decision sink: cannot listen where it did before this restart, so a run's proxy from before it cannot deliver what it holds; its decisions are counted as lost", "address", ap.String(), "error", lerr)
 		}
 	}
