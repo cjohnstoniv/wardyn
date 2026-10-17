@@ -11,16 +11,15 @@ import { useNavigate } from "react-router-dom";
 import type { CreateRunResult } from "../../../../lib/types/run-create";
 import { useRequestIdentity } from "../../../wardyn/operator-context";
 import { newRunHref } from "../draft/new-run-url";
-import { useNewRunDraft, type LaunchedState, type NewRunScreenProps } from "../new-run-route";
+import { useNewRunDraft, useNewRunPendingLaunch, type LaunchedState, type NewRunScreenProps } from "../new-run-route";
 import { useDriveCatalogue } from "../steps/files/file-sources";
 import { ReviewScreen } from "../review/review-screen";
 import { NameRunDialog } from "./name-run-dialog";
-import { usePendingLaunch } from "./use-launch-run";
 
 export function ReviewWithLaunch(props: NewRunScreenProps) {
   const [naming, setNaming] = React.useState(false);
   const navigate = useNavigate();
-  const pending = usePendingLaunch();
+  const pending = useNewRunPendingLaunch();
   const { principal } = useRequestIdentity();
   const { catalogue } = useDriveCatalogue(useNewRunDraft().intent.runner_pool_id);
   // A catalogue still loading, or that failed, is unknown, not "no drives": pass nothing then.

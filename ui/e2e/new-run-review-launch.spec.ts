@@ -210,6 +210,37 @@ test.describe("New Run, Launch: the Name dialog and the Launched screen", () => 
     expect(seen.created).toHaveLength(0);
   });
 
+  test("leaving Review and coming back does not forget the create that is still out (DR-0269)", async ({ page }) => {
+    await stub(page, { preflight: CLEAR });
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    const posts: string[] = [];
+    await page.route("**/api/v1/runs", async (route) => {
+      if (route.request().method() !== "POST") return route.fallback();
+      posts.push(route.request().postData() ?? "");
+      await held;
+      return route.fulfill({ status: 201, json: { id: RUN_ID, state: "PENDING" } });
+    });
+    await openReview(page);
+    await openNameDialog(page);
+    await nameDialog(page).getByLabel(NR_LAUNCH.TITLE_LABEL).fill("held create");
+    await nameDialog(page).getByRole("button", { name: NR_LAUNCH.LAUNCH, exact: true }).click();
+    await expect.poll(() => posts.length).toBe(1);
+    await press(page, NR_LAUNCH.CANCEL);
+    await expect(nameDialog(page)).toHaveCount(0);
+
+    await page.goBack();
+    await expect(page.getByRole("heading", { name: NR_REVIEW.TITLE })).toHaveCount(0);
+    await press(page, NR_DOCUMENT.CONTINUE_REVIEW);
+    await expect(page.getByRole("heading", { name: NR_REVIEW.TITLE })).toBeVisible();
+    await launch(page).click();
+    await expect(nameDialog(page)).toBeVisible();
+    await expect(nameDialog(page).getByRole("button", { name: NR_LAUNCH.LAUNCH, exact: true })).toBeDisabled();
+    release();
+    await expect(page).toHaveURL(new RegExp(`\\?launched=${RUN_ID}$`));
+    expect(posts).toHaveLength(1);
+  });
+
   test("a create the check missed is shown inside the dialog, and the typed text stays", async ({ page }) => {
     await stub(page, { preflight: CLEAR });
     await page.route("**/api/v1/runs", (route) =>

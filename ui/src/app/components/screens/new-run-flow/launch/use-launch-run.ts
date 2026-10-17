@@ -18,8 +18,8 @@ import type { DraftIdentity } from "../draft/use-intent-checks";
 import type { CreateRunWire } from "../draft/intent-to-wire";
 
 /**
- * Whether a create is out. It is held by the owner of the dialog, not the form: Cancel unmounts the form with
- * the request still pending, and a form that began again would let a second Launch make a second run.
+ * Whether a create is out. It is held by the route, not the dialog or its form: Cancel unmounts the form with
+ * the request still pending, and a form that began again, or a Review that was left and came back to, would let a second Launch make a second run.
  */
 export interface PendingLaunch {
   inFlight: React.MutableRefObject<boolean>;

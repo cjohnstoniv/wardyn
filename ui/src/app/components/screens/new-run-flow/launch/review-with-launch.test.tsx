@@ -6,7 +6,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
+import { MemoryRouter, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import { runs } from "../../../../lib/api/runs";
 import { SCENARIO_PREFLIGHT } from "../../../../lib/new-run-fixtures/scenarios/preflight";
 import type { PreflightResult } from "../../../../lib/types/preflight";
@@ -24,9 +24,17 @@ const loaders: SeedLoaders = {
   template: async (): Promise<Seed> => ({ origin: { kind: "scratch" }, intent: INTENT }),
   again: async (): Promise<Seed> => ({ origin: { kind: "again", runId: RUN_ID, title: "before" }, intent: INTENT }),
 };
+const RunStepStub = () => <p>run step</p>;
 function Where() {
   const l = useLocation();
-  return <p data-testid="where">{l.pathname + l.search}</p>;
+  const navigate = useNavigate();
+  return (
+    <>
+      <p data-testid="where">{l.pathname + l.search}</p>
+      <button onClick={() => void navigate(`/runs/new?again=${RUN_ID}&step=run`)}>to run step</button>
+      <button onClick={() => void navigate(`/runs/new?again=${RUN_ID}&step=review`)}>to review</button>
+    </>
+  );
 }
 
 beforeEach(() => {
@@ -74,7 +82,7 @@ describe("Review launches through the Name dialog to Launched", () => {
             <Routes>
               <Route
                 path="/runs/new"
-                element={<><NewRunRoute loaders={loaders} screens={{ ...NEW_RUN_SCREENS, review: ReviewWithLaunch, launched: LaunchedScreen }} /><Where /></>}
+                element={<><NewRunRoute loaders={loaders} screens={{ ...NEW_RUN_SCREENS, review: ReviewWithLaunch, launched: LaunchedScreen, run: RunStepStub }} /><Where /></>}
               />
             </Routes>
           </OperatorProvider>
@@ -108,6 +116,30 @@ describe("Review launches through the Name dialog to Launched", () => {
       expect(runs.createRunWire).toHaveBeenCalledTimes(1);
 
       // The one run still lands where it always did.
+      finish({ id: RUN_ID, state: "PENDING", title: "once" });
+      expect(await screen.findByText(NR_LAUNCH.BADGE_STARTING)).toBeInTheDocument();
+      expect(runs.createRunWire).toHaveBeenCalledTimes(1);
+    });
+
+    it("leaving Review for a step and coming back does not forget the create that is still out", async () => {
+      let finish!: (r: unknown) => void;
+      vi.mocked(runs.createRunWire).mockImplementation(() => new Promise((resolve) => { finish = resolve; }) as never);
+      mount();
+      let box = await openDialog();
+      await userEvent.type(within(box).getByLabelText(NR_LAUNCH.TITLE_LABEL), "once");
+      await press(box);
+      await userEvent.click(within(box).getByRole("button", { name: NR_LAUNCH.CANCEL }));
+      await waitFor(() => expect(screen.queryByRole("dialog", { name: NR_LAUNCH.TITLE })).toBeNull());
+
+      // Another screen is another component: Review unmounts, and mounts again on the way back.
+      await userEvent.click(screen.getByRole("button", { name: "to run step" }));
+      await waitFor(() => expect(screen.queryByRole("button", { name: NR_REVIEW.LAUNCH_RUN })).toBeNull());
+      await userEvent.click(screen.getByRole("button", { name: "to review" }));
+
+      box = await openDialog();
+      expect(within(box).getByRole("button", { name: new RegExp(`^${NR_LAUNCH.LAUNCH}$`) })).toBeDisabled();
+      await press(box);
+      expect(runs.createRunWire).toHaveBeenCalledTimes(1);
       finish({ id: RUN_ID, state: "PENDING", title: "once" });
       expect(await screen.findByText(NR_LAUNCH.BADGE_STARTING)).toBeInTheDocument();
       expect(runs.createRunWire).toHaveBeenCalledTimes(1);
