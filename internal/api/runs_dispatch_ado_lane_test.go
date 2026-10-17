@@ -209,3 +209,38 @@ func TestAgentRunCloneFailureNamesTheADODecline(t *testing.T) {
 		}
 	}
 }
+
+// agent-run names the decline only under a clone whose host is one of the declining
+// repositories' hosts, when dispatch names them; a GitHub clone beside it stays quiet.
+func TestAgentRunCloneHintStaysOnTheDecliningHosts(t *testing.T) {
+	lib, err := filepath.Abs("../../deploy/images/common/agent-run-lib.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("bash", "-c", `source "$1"; clone_one file:///nonexistent "$2/x"`, "bash", lib, t.TempDir())
+	cmd.Env = append(os.Environ(), "WARDYN_ADO_LANE_DECLINED=row_not_admitted", "WARDYN_ADO_LANE_DECLINED_HOSTS=dev.azure.com", "WARDYN_RUN_ID=run-1", "GIT_TERMINAL_PROMPT=0")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("clone_one: %v\n%s", err, out)
+	}
+	if strings.Contains(string(out), "Azure DevOps credential") || !strings.Contains(string(out), "clone FAILED") {
+		t.Errorf("a clone off the declining hosts named the decline:\n%s", out)
+	}
+	for url, want := range map[string]bool{
+		"https://dev.azure.com/o/p/_git/r":     true,
+		"https://User@Dev.Azure.com:443/o/p/r": true,
+		"https://github.com/o/r":               false,
+		"git@github.com:o/r":                   false,
+		"file:///nonexistent":                  false,
+	} {
+		cmd := exec.Command("bash", "-c", `source "$1"; ado_lane_hint repo "$2"`, "bash", lib, url)
+		cmd.Env = append(os.Environ(), "WARDYN_ADO_LANE_DECLINED=row_not_admitted", "WARDYN_ADO_LANE_DECLINED_HOSTS=dev.azure.com ssh.dev.azure.com")
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("ado_lane_hint %s: %v\n%s", url, err, out)
+		}
+		if got := strings.Contains(string(out), "Azure DevOps credential"); got != want {
+			t.Errorf("%s: hint shown = %v, want %v", url, got, want)
+		}
+	}
+}

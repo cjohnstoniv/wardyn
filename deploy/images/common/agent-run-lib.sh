@@ -463,12 +463,32 @@ name_run_branch() {
 # clone is attempted only when the dest has no existing .git, so a
 # pre-populated / bind-mounted repo is never clobbered. Failure is a
 # governance signal, not fatal: log and continue.
+# url_host — the lower-cased host of a clone URL (scheme://[user@]host[:port]/…
+# or scp-like [user@]host:path); empty for a local path or file:// URL.
+url_host() {
+    local u="$1"
+    case "$u" in
+        file://*|/*|.*) return 0 ;;
+        *://*) u="${u#*://}"; u="${u%%/*}"; u="${u##*@}"; u="${u%%:*}" ;;
+        *:*) u="${u%%:*}"; u="${u##*@}" ;;
+        *) return 0 ;;
+    esac
+    printf '%s' "${u,,}"
+}
+
 # ado_lane_hint — after a failed clone, says when the run was not given the
 # per-person Azure DevOps credential (WARDYN_ADO_LANE_DECLINED, a closed code
 # dispatch sets) and where the reason is, naming the repository ($1) whose
-# clone failed. Silent when the variable is unset.
+# clone failed. Silent when the variable is unset, and silent for a URL ($2)
+# whose host is not one of the declining repositories' hosts
+# (WARDYN_ADO_LANE_DECLINED_HOSTS, space-separated) when dispatch names them.
 ado_lane_hint() {
     [[ -n "${WARDYN_ADO_LANE_DECLINED:-}" ]] || return 0
+    if [[ -n "${WARDYN_ADO_LANE_DECLINED_HOSTS:-}" ]]; then
+        local host
+        host="$(url_host "${2:-}")"
+        [[ " ${WARDYN_ADO_LANE_DECLINED_HOSTS} " == *" ${host} "* && -n "$host" ]] || return 0
+    fi
     echo "agent-run: cloning ${1}: this run was not given an Azure DevOps credential (${WARDYN_ADO_LANE_DECLINED}); the run's Credentials panel and 'wardyn run get ${WARDYN_RUN_ID:-<run-id>}' say why" >&2
 }
 
@@ -484,7 +504,7 @@ clone_one() {  # $1=url  $2=dest  $3=slug  $4=ref (optional: branch/tag/sha; "" 
             name_run_branch "$dest"
         else
             echo "agent-run: clone FAILED for ${dest} — the egress policy or credential broker may have blocked it (a governance signal); continuing" >&2
-            ado_lane_hint "${slug:-$url}"
+            ado_lane_hint "${slug:-$url}" "$url"
         fi
         return 0
     fi
@@ -506,7 +526,7 @@ clone_one() {  # $1=url  $2=dest  $3=slug  $4=ref (optional: branch/tag/sha; "" 
         name_run_branch "$dest"
     else
         echo "agent-run: clone FAILED for ${dest} @ ${ref} — the ref may not exist, or the egress policy/credential broker may have blocked it (a governance signal); continuing" >&2
-        ado_lane_hint "${slug:-$url}"
+        ado_lane_hint "${slug:-$url}" "$url"
     fi
 }
 
