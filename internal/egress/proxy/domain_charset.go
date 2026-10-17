@@ -15,8 +15,6 @@ import "net"
 // hostrules.ValidApprovedHost's suggestedHostRE already applies, and punycode
 // is itself LDH, so the spelling that works is the spelling that is accepted.
 
-// DRAFT (M2 canon pending)
-//
 // charsetWhy is the reason string ValidDomainEntry's error wraps — the sentence
 // the operator reads in the 422 when a policy write is refused. It is the ONE
 // new user-facing string this lane adds; tests assert through the constant.

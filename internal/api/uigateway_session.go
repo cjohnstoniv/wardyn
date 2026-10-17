@@ -43,8 +43,6 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// DRAFT (M2 canon pending)
-//
 // The two refusals a re-checked session can hit. Both are deliberately the
 // SAME sentence a stale cookie already gets ("open the app again from its run
 // page"), because the human's next action is identical and the difference —

@@ -176,7 +176,7 @@ func TestAgentProvidersPut(t *testing.T) {
 			t.Fatalf("stale If-Match = %d, want 412; body=%s", w.Code, w.Body.String())
 		}
 		if !strings.Contains(w.Body.String(), agent412Stale) {
-			t.Errorf("412 body = %s, want the DRAFT sentence", w.Body.String())
+			t.Errorf("412 body = %s, want the constant sentence", w.Body.String())
 		}
 	})
 
@@ -229,7 +229,7 @@ func TestAgentProvidersPut(t *testing.T) {
 		}
 	})
 
-	t.Run("an unwritable row is refused with the DRAFT constant", func(t *testing.T) {
+	t.Run("an unwritable row is refused with the constant", func(t *testing.T) {
 		w := do(t, srv, http.MethodPut, "/api/v1/agent-providers", adminToken, `{"agents":[{"id":"ghost"}]}`)
 		if w.Code != http.StatusBadRequest {
 			t.Fatalf("PUT = %d, want 400; body=%s", w.Code, w.Body.String())
@@ -406,7 +406,7 @@ func TestAgentRosterRefusesRunCreate(t *testing.T) {
 			t.Fatalf("create = %d, want 422; body=%s", w.Code, w.Body.String())
 		}
 		if !strings.Contains(w.Body.String(), agentNotEnabledTail) {
-			t.Errorf("422 body = %s, want the DRAFT sentence", w.Body.String())
+			t.Errorf("422 body = %s, want the constant sentence", w.Body.String())
 		}
 		// A member-facing refusal names the agent and NOTHING else.
 		if strings.Contains(w.Body.String(), "codex-cli") || strings.Contains(w.Body.String(), "openai") {
@@ -428,7 +428,7 @@ func TestAgentRosterRefusesRunCreate(t *testing.T) {
 			t.Fatalf("member create = %d, want 422; body=%s", w.Code, w.Body.String())
 		}
 		if !strings.Contains(w.Body.String(), agentNotEnabledTail) {
-			t.Errorf("422 body = %s, want the DRAFT sentence", w.Body.String())
+			t.Errorf("422 body = %s, want the constant sentence", w.Body.String())
 		}
 	})
 
@@ -554,7 +554,7 @@ func TestRecordDoorAnswersTheRosterRefusal(t *testing.T) {
 			w.Code, w.Body.String())
 	}
 	if !strings.Contains(w.Body.String(), agentNotEnabledTail) {
-		t.Errorf("422 body = %s, want the DRAFT sentence", w.Body.String())
+		t.Errorf("422 body = %s, want the constant sentence", w.Body.String())
 	}
 	// The internal sentinel is a Go-side marker, never a member-facing word.
 	if strings.Contains(w.Body.String(), errAgentNotEnabled.Error()) {

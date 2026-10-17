@@ -272,8 +272,6 @@ func llmInspectMITMEnabled(policy *types.RunPolicySpec) bool {
 // a sentence that named only SigV4 told an operator their bearer run was
 // refused for a reason that did not apply to it. It is a run failure hint AND
 // the quoted `error` value on the run.create failure row.
-//
-// DRAFT (M2 canon pending)
 const inspectableLLMRefusal = "require_inspectable_llm: the resolved LLM transport is opaque (Bedrock — both " +
 	"SigV4 and bearer, which Wardyn can decrypt but has no extractor for); choose an inspectable model provider"
 

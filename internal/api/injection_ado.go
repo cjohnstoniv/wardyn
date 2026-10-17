@@ -47,8 +47,6 @@ import (
 // The refusal bodies. Machine-facing (the caller is the proxy sidecar, which
 // fails its boot closed on any of them), but each names the one thing a person
 // reading the run's failure could do about it.
-//
-// DRAFT (M2 canon pending)
 const (
 	adoResolveScopeChangedRefusal = "This run's Azure DevOps credential is no longer the one it was dispatched with — " +
 		"the provider row changed while the run was working, and Wardyn will not resolve a different credential for a " +

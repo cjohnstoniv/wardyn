@@ -49,8 +49,6 @@ var ecosystemPublicURL = map[string]string{
 }
 
 // PUT /site-config refusal bodies.
-//
-// DRAFT (M2 canon pending)
 const (
 	// legacyArtifactOverridesUnknownEcosystemRefusal names the offending key
 	// directly, before the generic "invalid from \"\"" refusal two guards

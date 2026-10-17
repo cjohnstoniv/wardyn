@@ -310,7 +310,7 @@ func resolvedLaneHosts(ado adoEntraRun, on bool) []string {
 	return ado.laneHosts()
 }
 
-// DRAFT (M2 canon pending) — the three doors' refusal of a run whose policy
+// The three doors' refusal of a run whose policy
 // and deployment bind two credentials to one host. It names no host: either
 // credential may be one an admin configured.
 const credentialHostCollisionRefusal = "Two of this run's credentials are bound to the same host, and a host carries only one. " +

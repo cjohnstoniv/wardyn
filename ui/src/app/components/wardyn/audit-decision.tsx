@@ -108,9 +108,7 @@ export function ruleSourceLabel(source: string): RuleSourceLabel | null {
   // distinctly rather than falling into the generic "Brokered" label every
   // OTHER brokered:* source gets below.
   //
-  // DRAFT (canon pending owner approval, packet 7b) — review finding 4: these
-  // five labels are the packet-7b proposal, not yet owner-frozen the way the
-  // rest of this function's strings are.
+  // These five labels are frozen as shipped (held-push canon).
   if (source === "brokered:git:push-rules") return { label: "Push refused — a denied path", tone: "danger" };
   if (source === "brokered:git:push-held-unattended") {
     return { label: "Push refused — needs a review nobody can give", tone: "danger" };

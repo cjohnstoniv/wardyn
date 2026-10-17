@@ -37,8 +37,6 @@ import (
 // different principal, credential source, mechanism, account, role, region or
 // host. Everything below is that sentence, spelled out.
 
-// DRAFT (M2 canon pending)
-
 const (
 	// credentialReauthRaisedSentence is what the person is told when a run's
 	// captured AWS SSO session has lapsed mid-run and the request is being held.
@@ -72,12 +70,9 @@ const (
 	// credentialReauthApprovalsUnreadableBody are the three fail-closed 503s.
 	// Machine-facing (the caller is a sidecar), but named rather than inlined so
 	// every sentence this lane puts on a wire has one definition and a canon row.
-	credentialReauthRunUnreadableBody = "Could not read this run"
-	// DRAFT (M2 canon pending)
-	credentialReauthStoreErrorBody = "Could not read this run's AWS SSO credential"
-	// DRAFT (M2 canon pending)
+	credentialReauthRunUnreadableBody       = "Could not read this run"
+	credentialReauthStoreErrorBody          = "Could not read this run's AWS SSO credential"
 	credentialReauthApprovalsUnreadableBody = "Could not read this run's approvals"
-	// DRAFT (M2 canon pending)
 	// Fixed: the raise error wraps the approval store's own error (driver text,
 	// possibly), and the reader is the run's own sandbox — so the cause is
 	// logged, never answered (#173, #505).

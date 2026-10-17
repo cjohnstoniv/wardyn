@@ -25,14 +25,10 @@ import (
 // in-sandbox upload rather than a sizing of the real payload.
 const maxSSOTokenUploadBytes = 16 << 10 // 16 KiB
 
-// DRAFT (M2 canon pending)
-
 // ssoTokenUnstampedScopeRefusal answers a login run whose launch-time stamp
 // names no model provider: a sign-in launched before the model-provider
 // conversion, whose capture no provider could serve. Refused rather than
 // stored; the person signs in again from a provider's own door.
-//
-// DRAFT (M2 canon pending)
 const ssoTokenUnstampedScopeRefusal = "this sign-in started before Wardyn recorded which model provider it was for — " +
 	"start the sign-in again from Getting started"
 
@@ -43,8 +39,6 @@ const ssoTokenUnstampedScopeRefusal = "this sign-in started before Wardyn record
 // attempt won rather than blaming this one — CONDITIONALLY: after a
 // Cancel, or the pane's own post-capture kill, there is no newer sandbox to be
 // sent to, and a sentence that assumes one sends the reader looking for it.
-//
-// DRAFT (M2 canon pending)
 const ssoTokenRunKilledRefusal = "this sign-in sandbox was closed — a newer sign-in for you replaced it, " +
 	"or it was cancelled; if you started a newer sign-in, finish it there"
 

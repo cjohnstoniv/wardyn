@@ -31,7 +31,6 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/authz"
 )
 
-// DRAFT (M2 canon pending)
 const (
 	// userViewNoHumanRefusal is the 400 for the no-per-human-role lane: the
 	// admin token, local mode, and a deployment with no IdP configured at all.

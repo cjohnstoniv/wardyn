@@ -67,7 +67,7 @@ const (
 	azureCLIGrantTTLSec = 3600 // bounds the mint, never the hold: a re-resolve redeems afresh
 )
 
-// DRAFT (canon pending). Member-visible sentences of the arm.
+// Member-visible sentences of the arm.
 const (
 	azureCLISecondRowRefusal = "a run can attach one Azure CLI component; remove the second"
 	azureCLINoEntraRefusal   = "This run uses the Azure CLI, which signs you in through this deployment's Microsoft Entra console sign-in, " +
