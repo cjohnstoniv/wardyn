@@ -6,7 +6,9 @@ package offline
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -18,12 +20,14 @@ import (
 type observedSub struct {
 	*localSub
 	seen   map[uuid.UUID]runner.ProxyObservation
+	asked  []uuid.UUID
 	record func(runner.NodeRecord) error
 	got    *runner.NodeRecord
 }
 
 func (s *observedSub) ObserveProxies(_ context.Context, ids []uuid.UUID) (map[uuid.UUID]runner.ProxyObservation, error) {
 	out := map[uuid.UUID]runner.ProxyObservation{}
+	s.asked = append(s.asked[:0], ids...)
 	for _, id := range ids {
 		if o, ok := s.seen[id]; ok {
 			out[id] = o
@@ -213,7 +217,7 @@ func TestSubstrateTickRunsEachTick(t *testing.T) {
 }
 
 // TestSinkRunIDsSkipRetiredAndErased: startup re-registers the sink only for live evidence, never
-// for a retired or erased run whose spool is gone; the fence replay still sees all three.
+// for a retired or erased run whose spool is gone; the fence replay skips only the retired run.
 func TestSinkRunIDsSkipRetiredAndErased(t *testing.T) {
 	m, _, _, org := managerFixture(t)
 	live, retired, erased := createLocal(t, m, org), createLocal(t, m, org), createLocal(t, m, org)
@@ -233,7 +237,37 @@ func TestSinkRunIDsSkipRetiredAndErased(t *testing.T) {
 	if got := m.SinkRunIDs(); len(got) != 1 || got[0] != live {
 		t.Fatalf("sink runs %v, want only %v", got, live)
 	}
-	if got := m.EvidenceRunIDs(); len(got) != 3 {
+	if got := m.EvidenceRunIDs(); len(got) != 2 || slices.Contains(got, retired) {
 		t.Fatalf("fence runs %v", got)
+	}
+}
+
+// TestHeldRunsStayOnTheProxyTick: a run already holding an obligation, or stamped stopped, is still
+// passed to the substrate each tick (its name-reuse list and identity sampling), and an observation
+// of it records nothing new.
+func TestHeldRunsStayOnTheProxyTick(t *testing.T) {
+	m, sub, _, org := managerFixture(t)
+	obs := &observedSub{localSub: sub, seen: map[uuid.UUID]runner.ProxyObservation{}}
+	m.sub = obs
+	if err := m.SetOptions(Options{ProxySelfLapses: true}); err != nil {
+		t.Fatal(err)
+	}
+	held, stopped := createLocal(t, m, org), createLocal(t, m, org)
+	if err := m.ProxyExited(held, "failed"); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	r := m.state.Runs[stopped]
+	r.ProxyStoppedAt = &now
+	m.state.Runs[stopped] = r
+	obs.seen[held], obs.seen[stopped] = runner.ProxyNotFound, runner.ProxyNotFound
+	if err := m.ObserveProxies(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(obs.asked) != 2 || !slices.Contains(obs.asked, held) || !slices.Contains(obs.asked, stopped) {
+		t.Fatalf("asked %v", obs.asked)
+	}
+	if m.state.Runs[held].ProxyExited.Evidence != "failed" || m.state.Runs[stopped].ProxyExited != nil {
+		t.Fatalf("held %+v stopped %+v", m.state.Runs[held].ProxyExited, m.state.Runs[stopped].ProxyExited)
 	}
 }

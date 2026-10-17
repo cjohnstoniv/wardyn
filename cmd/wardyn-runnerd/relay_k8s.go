@@ -179,6 +179,20 @@ func (r *k8sRelay) Fence(run uuid.UUID, proxyIP string) {
 	}
 }
 
+// Unfence stops refusing run's recorded proxy IP; the run itself stays fenced. An IP since fenced
+// for another run keeps that run's refusal.
+func (r *k8sRelay) Unfence(run uuid.UUID, proxyIP string) {
+	ip, err := netip.ParseAddr(proxyIP)
+	if err != nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.fencedIPs[ip.Unmap()] == run {
+		delete(r.fencedIPs, ip.Unmap())
+	}
+}
+
 // IPFenced reports whether ip is a fenced run's recorded proxy IP.
 func (r *k8sRelay) IPFenced(ip string) bool {
 	a, err := netip.ParseAddr(ip)

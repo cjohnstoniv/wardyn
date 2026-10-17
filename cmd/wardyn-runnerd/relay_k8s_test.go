@@ -76,6 +76,32 @@ func TestK8sRelayAdmissionAndFence(t *testing.T) {
 	}
 }
 
+// TestK8sRelayFencedIPRefusedForAnotherRun: a fenced run's recorded IP is refused even when the
+// pod list now maps it to another run, until the fenced run's proxy has a witness (Unfence), and an
+// Unfence by a run that no longer holds the refusal releases nothing.
+func TestK8sRelayFencedIPRefusedForAnotherRun(t *testing.T) {
+	fencedRun, next := uuid.New(), uuid.New()
+	r := newK8sRelay(context.Background(), netip.MustParseAddr("10.244.0.12"), 8443, 443, "10.96.0.40")
+	r.lookup = func(context.Context, netip.Addr) (uuid.UUID, bool, error) { return next, true, nil }
+	r.mu.Lock()
+	r.peer = &runnerwire.Peer{}
+	r.mu.Unlock()
+	r.Fence(fencedRun, "10.244.1.7")
+	a, b := net.Pipe()
+	go r.forward(srcConn{a, "10.244.1.7"})
+	if !closed(t, b) {
+		t.Fatal("a fenced IP was admitted for another run")
+	}
+	r.Unfence(next, "10.244.1.7")
+	if !r.IPFenced("10.244.1.7") {
+		t.Fatal("an Unfence by another run released the refusal")
+	}
+	r.Unfence(fencedRun, "10.244.1.7")
+	if r.IPFenced("10.244.1.7") {
+		t.Fatal("the witnessed run's IP is still refused")
+	}
+}
+
 func TestK8sRelayEnsurePort(t *testing.T) {
 	r := newK8sRelay(context.Background(), netip.MustParseAddr("127.0.0.1"), 8443, 443, "10.96.0.40")
 	u, _ := url.Parse("https://wardynd.wardyn.svc:8443")
