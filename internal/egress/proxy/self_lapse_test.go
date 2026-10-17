@@ -6,6 +6,7 @@ package proxy
 import (
 	"context"
 	"encoding/json"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -202,5 +203,21 @@ func TestSelfLapse_FailuresRetryUntilDeadlineNeverGiveUp(t *testing.T) {
 	}
 	if !g.serving() || ts.Get() != "fresh" {
 		t.Fatalf("serving=%v token=%q after %d calls", g.serving(), ts.Get(), calls.Load())
+	}
+}
+
+type farClock struct{}
+
+func (farClock) Now() time.Duration { return math.MaxInt64 }
+
+// TestSelfLapse_FarFutureClockSaturates (L1): an unreadable clock's far-future
+// answer saturates the deadline instead of wrapping, and lapses at once.
+func TestSelfLapse_FarFutureClockSaturates(t *testing.T) {
+	g := newLapseGate(farClock{}, selfLapseTTL)
+	if g.deadline != math.MaxInt64 {
+		t.Fatalf("deadline %d, want saturated", int64(g.deadline))
+	}
+	if g.serving() || g.reason != LapseDeadline {
+		t.Fatalf("serving on a far-future clock (reason %q)", g.reason)
 	}
 }

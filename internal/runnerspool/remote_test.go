@@ -335,3 +335,23 @@ func TestRemoteLossRowFitsTheReserve(t *testing.T) {
 	}
 	_ = id
 }
+
+// TestRemoteCorruptSealedManifestIsRefused (L2): a sealed manifest carrying a
+// grant without a producer is refused as invalid, never a nil dereference.
+func TestRemoteCorruptSealedManifestIsRefused(t *testing.T) {
+	ctx := context.Background()
+	s, _, _ := testSpool(t)
+	if err := s.locked(ctx, func() error {
+		m, err := s.readManifest()
+		if err != nil {
+			return err
+		}
+		m.Sealed, m.Grant = true, &Grant{Through: 1}
+		return s.writeManifest(m)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Liability(ctx); err == nil {
+		t.Fatal("corrupt sealed manifest accepted")
+	}
+}
