@@ -47,7 +47,7 @@ func TestAttachSlots_SimultaneousContendersAtTheCapReleaseAndRetry(t *testing.T)
 	for range 2 * maxAttachSessionsPerRun {
 		go func() {
 			<-start
-			release, ok := s.reserveAttachSlot(run)
+			release, ok := s.reserveAttachSlot(run, true)
 			results <- result{release, ok}
 		}()
 	}
@@ -61,17 +61,17 @@ func TestAttachSlots_SimultaneousContendersAtTheCapReleaseAndRetry(t *testing.T)
 	if len(held) != maxAttachSessionsPerRun || attachSlotsHeld(s, run) != maxAttachSessionsPerRun {
 		t.Fatalf("%d contenders won (%d counted), want exactly %d", len(held), attachSlotsHeld(s, run), maxAttachSessionsPerRun)
 	}
-	if _, ok := s.reserveAttachSlot(uuid.New()); !ok {
+	if _, ok := s.reserveAttachSlot(uuid.New(), true); !ok {
 		t.Fatal("another run was refused: the cap is per run")
 	}
 
 	held[0]()
 	held[0]() // idempotent: a second call frees nothing more
-	release, ok := s.reserveAttachSlot(run)
+	release, ok := s.reserveAttachSlot(run, true)
 	if !ok {
 		t.Fatal("a retry after a release was refused")
 	}
-	if _, ok := s.reserveAttachSlot(run); ok {
+	if _, ok := s.reserveAttachSlot(run, true); ok {
 		t.Fatal("a release called twice freed two slots")
 	}
 	release()
@@ -285,5 +285,51 @@ func TestAttachSlots_AFailedSetupReleasesItsSlot(t *testing.T) {
 	srv.bridgeSSHShell(context.Background(), run.ID, holderOwner, ch, 80, 24, make(chan sshWindowChangeMsg))
 	if n := attachSlotsHeld(srv, run.ID); n != 0 {
 		t.Fatalf("%d slots counted after a failed ssh attach, want 0", n)
+	}
+}
+
+// TestAttachSlots_TheLastSlotIsTheOwners: observers stop one short of the cap, so a run full of
+// them still takes the owner's attach, and the owner then holds the cap.
+func TestAttachSlots_TheLastSlotIsTheOwners(t *testing.T) {
+	s := &Server{}
+	run := uuid.New()
+	for range maxAttachSessionsPerRun - 1 {
+		if _, ok := s.reserveAttachSlot(run, false); !ok {
+			t.Fatal("an observer was refused below the reserve")
+		}
+	}
+	if _, ok := s.reserveAttachSlot(run, false); ok {
+		t.Fatal("an observer took the owner's reserved slot")
+	}
+	release, ok := s.reserveAttachSlot(run, true)
+	if !ok {
+		t.Fatal("the owner was refused with only observers holding slots")
+	}
+	if _, ok := s.reserveAttachSlot(run, true); ok {
+		t.Fatalf("a %dth session was admitted", maxAttachSessionsPerRun+1)
+	}
+	release()
+}
+
+// TestAttachSlotOwner: the run's creator, a service identity's sponsor and anyone entering an
+// operator-owned run hold the reserved slot; another person on a personal run does not.
+func TestAttachSlotOwner(t *testing.T) {
+	personal := types.AgentRun{CreatedBy: "alice@example.com"}
+	for _, tc := range []struct {
+		name      string
+		run       types.AgentRun
+		principal string
+		want      bool
+	}{
+		{"the creator", personal, "alice@example.com", true},
+		{"another person on a personal run", personal, "bob@example.com", false},
+		{"no principal", personal, "", false},
+		{"a run with no creator", types.AgentRun{}, "", false},
+		{"anyone entering an operator-owned run", types.AgentRun{CreatedBy: "alice@example.com", OperatorOwned: true}, "bob@example.com", true},
+		{"a service identity's sponsor", types.AgentRun{CreatedBy: types.ServicePrincipalPrefix + "ci"}, "bob@example.com", true},
+	} {
+		if got := attachSlotOwner(tc.run, tc.principal); got != tc.want {
+			t.Errorf("%s: owner = %v, want %v", tc.name, got, tc.want)
+		}
 	}
 }
