@@ -18,7 +18,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// personalJudgement is a local plan judged at personal, every runner's class before 0180.
+// personalJudgement is a local plan judged at personal, every runner's class before 0181.
 func personalJudgement(p placement.DeliveryPolicy) localJudgement {
 	return localJudgement{policy: p, trust: types.RunnerTrustPersonal}
 }

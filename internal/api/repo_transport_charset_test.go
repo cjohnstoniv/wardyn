@@ -37,7 +37,7 @@ func TestRepoTransportCharset_PolicyWriteDoor(t *testing.T) {
 		{"a mount path with a space", types.RunPolicySpec{WorkspaceMounts: []types.WorkspaceMount{{Source: "/srv/dev/my work", Target: "/home/agent/my work"}}}, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			err := validatePolicyWorkspaces(tc.spec)
+			err := validatePolicyWorkspaces(tc.spec, true)
 			switch {
 			case tc.want == "" && err != nil:
 				t.Errorf("refused: %v", err)

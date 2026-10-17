@@ -44,9 +44,11 @@ func scanRunnerRegistrationToken(row pgx.Row) (types.RunnerRegistrationToken, er
 }
 
 // MintRunnerRegistrationToken never stores the raw bearer. An empty OwnerKind is person and an empty
-// MintedByKind human.
+// MintedByKind human. The same statement deletes the owner's expired, unspent tokens: redeem answers an
+// expired token and an unknown one alike, and nothing references the table.
 func (s PG) MintRunnerRegistrationToken(ctx context.Context, raw string, token types.RunnerRegistrationToken) (types.RunnerRegistrationToken, error) {
-	const q = `INSERT INTO runner_registration_tokens (id, owner, minted_by, token_sha256, org_url_sha256, created_at, expires_at,
+	const q = `WITH gone AS (DELETE FROM runner_registration_tokens WHERE owner = $2 AND consumed_at IS NULL AND expires_at < $6)
+ INSERT INTO runner_registration_tokens (id, owner, minted_by, token_sha256, org_url_sha256, created_at, expires_at,
  owner_kind, minted_by_kind, minted_by_email, break_glass)
  VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING ` + runnerRegistrationCols
 	out, err := scanRunnerRegistrationToken(s.Pool.QueryRow(ctx, q, token.ID, token.Owner, token.MintedBy, hashToken(raw), token.OrgURLSHA256, token.CreatedAt, token.ExpiresAt,

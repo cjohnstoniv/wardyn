@@ -429,6 +429,7 @@ func clearOrgDefaultSlotsQ(ctx context.Context, q Querier, id uuid.UUID, out *Ru
 	}
 	after := before
 	after.PoolID = nil
+	after.Revision++ // the UPDATE above bumped it
 	out.OrgDefaultsBefore, out.OrgDefaultsAfter = &before, &after
 	return nil
 }
@@ -769,8 +770,13 @@ func (s PG) PutRunnerPoolOrgDefaults(ctx context.Context, d types.RunnerPoolDefa
 				return err
 			}
 		}
+		// The first write ever has no row to lock, so two of them would each audit a zero before. A
+		// seed at revision 0 (what Get reports when nothing was written) gives them one to queue on.
+		if _, err := q.Exec(ctx, `INSERT INTO runner_pool_org_defaults (singleton, revision) VALUES (TRUE, 0) ON CONFLICT DO NOTHING`); err != nil {
+			return err
+		}
 		var err error
-		if before, err = scanOrgDefaults(q.QueryRow(ctx, `SELECT pool_id, barrier, recording, revision FROM runner_pool_org_defaults FOR UPDATE`)); err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		if before, err = scanOrgDefaults(q.QueryRow(ctx, `SELECT pool_id, barrier, recording, revision FROM runner_pool_org_defaults FOR UPDATE`)); err != nil {
 			return err
 		}
 		if d.Revision != 0 && d.Revision != before.Revision {

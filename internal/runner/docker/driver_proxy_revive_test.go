@@ -7,6 +7,7 @@ package docker
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/netip"
@@ -126,6 +127,37 @@ func TestReplaceProxy_FailsClosed(t *testing.T) {
 	}
 	if !old.removed {
 		t.Error("the retiring proxy must be gone before the new one is created")
+	}
+}
+
+// TestReplaceProxy_AConfigThatDoesNotLoadKeepsTheOldProxy: the new config is loaded before anything is removed,
+// so one the new proxy would refuse at start fails with a plain error (not ErrProxyReplaceFailed, which the revive
+// reads as the old proxy being gone) and the running proxy is never removed.
+func TestReplaceProxy_AConfigThatDoesNotLoadKeepsTheOldProxy(t *testing.T) {
+	f := newFakeDocker()
+	f.images["busybox:latest"] = true
+	d := newTestDriver(f)
+	ctx := context.Background()
+	sb, err := d.CreateSandbox(ctx, testSpec())
+	if err != nil {
+		t.Fatalf("CreateSandbox: %v", err)
+	}
+	old := f.containers[proxyContainerName(testSpec().RunID)]
+	var cfg map[string]any
+	if err := json.Unmarshal(renderedTestConfig(t, "fresh"), &cfg); err != nil {
+		t.Fatal(err)
+	}
+	cfg["no_such_setting"] = true
+	bad, err := json.Marshal(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = d.ReplaceProxy(ctx, sb.Ref, bad)
+	if err == nil || errors.Is(err, runner.ErrProxyReplaceFailed) || !strings.Contains(err.Error(), "the new config does not load") {
+		t.Fatalf("ReplaceProxy with an unloadable config = %v; want a plain error naming the config", err)
+	}
+	if old.removed {
+		t.Error("the running proxy was removed for a config that cannot load")
 	}
 }
 

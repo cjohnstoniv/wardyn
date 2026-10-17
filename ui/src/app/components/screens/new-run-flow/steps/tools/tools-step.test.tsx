@@ -20,6 +20,7 @@ import { NR_TOOLS } from "../../../../wardyn/copy/new-run/tools";
 import { NewRunDraftProvider, useNewRunDispatch, useNewRunDraft, type NewRunScreenProps } from "../../new-run-route";
 import type { RunIntent } from "../../draft/run-intent";
 import { checkFailureText } from "../../draft/use-intent-checks";
+import { HttpError } from "../../../../../lib/api/core";
 import { ToolsStep } from "./tools-step";
 
 const h = vi.hoisted(() => ({
@@ -198,6 +199,17 @@ describe("Tools and access step", () => {
     answer(undefined, false);
     render(tree());
     expect(screen.queryByText(NR_TOOLS.SETUP_ALL_SET)).toBeNull();
+  });
+
+  it("a first preview answered 429 says it was not checked yet, as a status and not an alert", async () => {
+    const retry = vi.fn().mockResolvedValue(undefined);
+    h.checks.preview = { result: undefined, current: false, error: new HttpError(429, "slow down"), busy: false, retry } as never;
+    show();
+    expect(screen.getByText(NR_TOOLS.NOT_CHECKED)).toHaveAttribute("role", "status");
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.queryByText(NR_TOOLS.SETUP_ALL_SET)).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: NR_REVIEW.CHECK_AGAIN }));
+    expect(retry).toHaveBeenCalledTimes(1);
   });
 
   it("a refused or failed preview shows the server's sentence and a way to ask again, never an all-clear", async () => {

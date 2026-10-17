@@ -80,7 +80,7 @@ func newSponsorEnv(t *testing.T) sponsorEnv {
 // clock by an anchor that moves it EARLIER by however long the app took to read its clock after the database
 // answered (a stall under load is tens of milliseconds, by design: toward revocation). A sponsorship written
 // a few milliseconds before the request is then "not yet" the sponsor's, the mint is refused as
-// attach_ticket_foreign_run, and a test asserting capability_feature flakes. Tests that exercise the grant
+// sponsor_not_entitled, and a test asserting capability_feature flakes. Tests that exercise the grant
 // switch, not the cutoff, age the sponsorship; the ones that exercise the cutoff do not call this until after.
 func ageSponsorships(t *testing.T, pool *pgxpool.Pool) {
 	t.Helper()
@@ -632,5 +632,23 @@ func TestServiceIdentity_SponsoredRunNeedsNoActionFromTheSponsor(t *testing.T) {
 		if a := s.attention(req, sponsored, pending, false); a == nil || a.Kind != c.kind || a.By != types.AttentionOwner {
 			t.Errorf("%s hold on a sponsored run: attention=%+v, want {%s owner}", c.name, a, c.kind)
 		}
+	}
+}
+
+// TestServiceIdentity_SponsorNotYetInEffectIsAuditedAsNotEntitled: a sponsor whose sponsorship began after the
+// request was authorized gets the foreign-run 404 on the wire, and the audit row says the sponsorship was not
+// in effect rather than looking like a probe of someone else's run.
+func TestServiceIdentity_SponsorNotYetInEffectIsAuditedAsNotEntitled(t *testing.T) {
+	e := newSponsorEnv(t)
+	e.grant(t, "user", "sponsor@corp.example", "allow", featureServiceAttach)
+	if _, err := e.pool.Exec(context.Background(), `UPDATE service_identities SET sponsor_since = now() + interval '1 hour'`); err != nil {
+		t.Fatalf("move the sponsorship into the future: %v", err)
+	}
+	run := e.seedRun(t, svcPrin, nil)
+	if w := e.mintTicket(t, e.sponsor, run); !refusedAsForeign(w) {
+		t.Fatalf("mint before the sponsorship is in effect: %d %s, want the foreign-run 404", w.Code, w.Body.String())
+	}
+	if got := e.denialReasons(run.ID); len(got) != 1 || got[0] != "sponsor_not_entitled" {
+		t.Errorf("authz.denied reasons = %v, want [sponsor_not_entitled]", got)
 	}
 }

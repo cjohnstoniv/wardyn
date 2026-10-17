@@ -185,6 +185,16 @@ test.describe("Admin Runners with a remote-hosted runner", () => {
     await expect(page.getByRole("dialog")).toContainText(POOL.name);
   });
 
+  test("the runner's people policy names the security tier that sets it", async ({ page }) => {
+    await stubRunners(page, () => RUNNER);
+    await gotoConsole(page, "admin");
+    await page.goto("/admin/runners");
+    await page.getByRole("button", { name: RUNNER.name, exact: true }).click();
+    const section = page.getByRole("dialog").locator("[data-available]");
+    await expect(section).toContainText("Security admin or admin");
+    await expect(section.getByRole("checkbox")).toBeEnabled();
+  });
+
   test("a stale save offers Reload, which re-reads the runner and saves on its new revision (FUG-L453)", async ({ page }) => {
     let live = RUNNER;
     await stubRunners(page, () => live);

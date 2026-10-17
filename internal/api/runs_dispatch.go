@@ -278,7 +278,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	if err != nil {
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.create",
 			run.ID.String(), "failure", mustJSON(map[string]any{"error": "list the run's grants: " + err.Error()})))
-		s.failAndRevoke(ctx, run.ID, types.RunStarting, "This run was not launched: its git_pat grants could not be read to keep their PATs out of the sandbox")
+		s.failAndRevoke(ctx, run.ID, types.RunStarting, "This run was not launched: its credential grants could not be read. Launch it again.")
 		return
 	}
 	p.PATAPI = patAPIDoor(grantRows)

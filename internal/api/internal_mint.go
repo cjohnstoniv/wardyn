@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -263,6 +264,14 @@ func (s *Server) writeMintError(w http.ResponseWriter, r *http.Request, err erro
 		writeErrorReason(w, http.StatusNotFound, reasonGrantNotFound, "grant not found")
 	case errors.Is(err, broker.ErrRequiresSPIRE):
 		writeErrorReason(w, http.StatusUnprocessableEntity, reasonGrantRequiresSPIRE, "grant requires the spire identity provider")
+	case errors.Is(err, broker.ErrRunRevoked):
+		writeErrorReason(w, http.StatusForbidden, reasonGrantRunRevoked, "this run's credentials were revoked, so no credential is minted for it")
+	case errors.Is(err, broker.ErrNotApproved):
+		writeErrorReason(w, http.StatusForbidden, reasonGrantNotApproved, "this credential's approval is not approved, so no credential is minted for it")
+	case errors.Is(err, broker.ErrRefRulesetRequired):
+		writeErrorReason(w, http.StatusForbidden, reasonGrantRefRulesetRequired, strings.TrimPrefix(err.Error(), "broker: "))
+	case errors.Is(err, broker.ErrUnknownGrantKind):
+		writeErrorReason(w, http.StatusNotImplemented, reasonGrantKindUnsupported, "this server cannot mint a credential of this grant's kind")
 	case errors.Is(err, broker.ErrScopeMismatch):
 		writeJSON(w, http.StatusConflict, map[string]any{"code": mintConflictScopeMismatch, "error": "requested scope does not match grant (no-widening)"})
 	case errors.Is(err, broker.ErrAlreadyMinted):
@@ -412,7 +421,7 @@ func (s *Server) handleInternalTokenRenew(w http.ResponseWriter, r *http.Request
 	// stamp is retryable, like a store blip on the read above; a run marked
 	// lost since that read is refused.
 	if loser, ok := s.cfg.Store.(store.RunLoser); ok {
-		stamped, serr := loser.StampRunTokenRenewed(r.Context(), claims.RunID)
+		stamped, serr := loser.StampRunTokenRenewed(r.Context(), claims.RunID, id.JTI, claims.JTI)
 		if serr != nil {
 			writeErrorReason(w, http.StatusServiceUnavailable, reasonRunRenewStampFailed, loggedMsg(r.Context(), "stamp run token renewed", serr))
 			return

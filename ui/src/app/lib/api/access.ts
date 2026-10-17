@@ -114,7 +114,7 @@ export const access = {
   // (lockout / stale-snapshot / email-refused) — the caller (access-panel.tsx)
   // classifies those three by exact string match.
   async upsertMapping(input: RoleMappingWriteInput): Promise<RoleMappingUpsert> {
-    const res = await wfetch("/access/mappings", { method: "POST", body: JSON.stringify(input) });
+    const res = await wfetch("/access/mappings", { method: "POST", asPerson: true, body: JSON.stringify(input) });
     if (!res.ok) await throwAccessWriteError(res);
     const created = res.status === 201;
     const body = await asJson<

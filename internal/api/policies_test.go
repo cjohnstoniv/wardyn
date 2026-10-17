@@ -361,3 +361,87 @@ func TestPolicyReadsRedactWorkspaceSecretNamesForMembers(t *testing.T) {
 		t.Errorf("redaction edited the source spec: %v", got)
 	}
 }
+
+// memPolicyStore keeps policies in a map: create, read, update and delete.
+type memPolicyStore struct {
+	store.Store
+	rows map[uuid.UUID]types.RunPolicy
+}
+
+func (m *memPolicyStore) CreatePolicy(_ context.Context, p types.RunPolicy) (types.RunPolicy, error) {
+	m.rows[p.ID] = p
+	return p, nil
+}
+
+func (m *memPolicyStore) GetPolicy(_ context.Context, id uuid.UUID) (types.RunPolicy, error) {
+	p, ok := m.rows[id]
+	if !ok {
+		return types.RunPolicy{}, store.ErrNotFound
+	}
+	return p, nil
+}
+
+func (m *memPolicyStore) UpdatePolicy(_ context.Context, id uuid.UUID, name string, spec types.RunPolicySpec) (types.RunPolicy, error) {
+	p, ok := m.rows[id]
+	if !ok {
+		return types.RunPolicy{}, store.ErrNotFound
+	}
+	p.Name, p.Spec = name, spec
+	m.rows[id] = p
+	return p, nil
+}
+
+func (m *memPolicyStore) DeletePolicy(_ context.Context, id uuid.UUID) error {
+	if _, ok := m.rows[id]; !ok {
+		return store.ErrNotFound
+	}
+	delete(m.rows, id)
+	return nil
+}
+
+// TestPolicyWrites_AuditRowsRecordTheSpec: create records the spec, update records the policy before and after,
+// and delete records what was removed, so the trail shows what a policy said before and after each write.
+func TestPolicyWrites_AuditRowsRecordTheSpec(t *testing.T) {
+	h := newHarness(t)
+	srv := New(baseTestConfig(h, &memPolicyStore{rows: map[uuid.UUID]types.RunPolicy{}}))
+	data := func(action string) map[string]json.RawMessage {
+		t.Helper()
+		var out map[string]json.RawMessage
+		if err := json.Unmarshal(lastAuditEvent(t, h.audit.snapshot(), action).Data, &out); err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+	w := do(t, srv, http.MethodPost, "/api/v1/policies", adminToken, `{"name":"prod","spec":{"min_confinement_class":"CC2","allowed_domains":["a.example.com"]}}`)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("create = %d %s", w.Code, w.Body.String())
+	}
+	var created types.RunPolicy
+	if err := json.Unmarshal(w.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+	if got := string(data("policy.create")["after"]); !strings.Contains(got, "a.example.com") {
+		t.Errorf("policy.create after = %s, want the stored spec", got)
+	}
+
+	w = do(t, srv, http.MethodPut, "/api/v1/policies/"+created.ID.String(), adminToken, `{"name":"prod2","spec":{"min_confinement_class":"CC2","allowed_domains":["b.example.com"]}}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("update = %d %s", w.Code, w.Body.String())
+	}
+	upd := data("policy.update")
+	if before, after := string(upd["before"]), string(upd["after"]); !strings.Contains(before, "a.example.com") || !strings.Contains(before, `"prod"`) ||
+		!strings.Contains(after, "b.example.com") || !strings.Contains(after, `"prod2"`) || strings.Contains(after, "a.example.com") {
+		t.Errorf("policy.update before = %s after = %s, want the old and the new name and spec", before, after)
+	}
+	if w := do(t, srv, http.MethodPut, "/api/v1/policies/"+uuid.NewString(), adminToken, `{"name":"x","spec":{"min_confinement_class":"CC2"}}`); w.Code != http.StatusNotFound {
+		t.Errorf("update of an unknown policy = %d, want 404", w.Code)
+	}
+
+	if w := do(t, srv, http.MethodDelete, "/api/v1/policies/"+created.ID.String(), adminToken, ""); w.Code != http.StatusNoContent {
+		t.Fatalf("delete = %d %s", w.Code, w.Body.String())
+	}
+	del := data("policy.delete")
+	if name, before := string(del["name"]), string(del["before"]); name != `"prod2"` || !strings.Contains(before, "b.example.com") {
+		t.Errorf("policy.delete name = %s before = %s, want the removed policy", name, before)
+	}
+}

@@ -390,7 +390,7 @@ func TestPG_RunnerLease_ExecutionGenerationEndToEnd(t *testing.T) {
 	if err := f.create(t, &control); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := f.st.StampRunTokenRenewed(f.ctx, run.ID); err != nil {
+	if _, err := f.st.StampRunTokenRenewed(f.ctx, run.ID, "", ""); err != nil {
 		t.Fatal(err)
 	}
 	if err := f.srv.renewRunnerLease(f.ctx, run, 0); err != nil {
@@ -603,7 +603,7 @@ func TestPG_RunnerLease_NewSessionReLeasesLiveRuns(t *testing.T) {
 	f.disconnect()
 	for deadline := time.Now().Add(5 * time.Second); f.srv.runnerEndpoint(f.rn.ID).link.Online() && time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
 	}
-	if _, err := f.st.StampRunTokenRenewed(f.ctx, run.ID); err != nil {
+	if _, err := f.st.StampRunTokenRenewed(f.ctx, run.ID, "", ""); err != nil {
 		t.Fatal(err)
 	}
 	if err := f.srv.renewRunnerLease(f.ctx, run, 0); !errors.Is(err, errRunnerNotReady) {

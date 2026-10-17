@@ -146,6 +146,19 @@ describe("main drive", () => {
     expect(screen.getByText(NR_FILES.CLAMP_SERVER("4 GiB"))).toBeInTheDocument();
   });
 
+  it("prefills a size the run's policy wrote, and clamps above it naming the policy", async () => {
+    checks.result = { ...filesPreflight(MAIN_DRIVE_FACTS.filesystem), main_drive: { applied_mib: 2048, basis: "policy", soft: false } };
+    show();
+    await screen.findByText(NR_FILES.UP_TO("2 GiB"));
+    expect(size()).toHaveValue(2);
+    await userEvent.clear(size());
+    await userEvent.type(size(), "9");
+    await userEvent.tab();
+    expect(size()).toHaveValue(2);
+    expect(screen.getByText("Clamped to 2 GiB by this run's policy.")).toBeInTheDocument();
+    expect(drawn().resources).toEqual({ disk_mib: 2048 });
+  });
+
   it("reads the cap and default from the run's own limits, never from a pool choice's", async () => {
     const pre = filesPreflight(MAIN_DRIVE_FACTS.filesystem);
     // A choice that also carries the pool's catalogue limits: the run's limits above it are what applies.

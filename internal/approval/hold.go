@@ -46,7 +46,20 @@ func Hold(ap types.ApprovalRequest, now time.Time) (held bool, until time.Time) 
 	if approvalMode(ap) != "wait_for_review" {
 		return false, time.Time{}
 	}
-	return boundedHold(ap.RequestedAt, now, types.HoldWindowEgress)
+	return boundedHold(ap.RequestedAt, now, egressHoldWindow(ap))
+}
+
+// egressHoldWindow is the hold the proxy stamped into requested_scope.hold_seconds when it is within the
+// proxy's own ceiling, else the default window (a row raised before the proxy stamped it).
+func egressHoldWindow(ap types.ApprovalRequest) time.Duration {
+	var sc struct {
+		HoldSeconds int `json:"hold_seconds"`
+	}
+	_ = json.Unmarshal(ap.RequestedScope, &sc)
+	if w := time.Duration(sc.HoldSeconds) * time.Second; sc.HoldSeconds >= 1 && w <= types.HoldWindowPush {
+		return w
+	}
+	return types.HoldWindowEgress
 }
 
 // approvalMode reads requested_scope.mode, or "" for a malformed/absent scope — the same

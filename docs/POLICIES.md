@@ -553,7 +553,7 @@ What the check does and does not settle:
 > **Every scope in that table is HOST-wide — on every port.**
 >
 > - The approval a human is shown carries a bare host and nothing else:
->   - `egressScope` in [`internal/egress/proxy/approvals.go`](../internal/egress/proxy/approvals.go) has a `host` and a `mode`, no port;
+>   - `egressScope` in [`internal/egress/proxy/approvals.go`](../internal/egress/proxy/approvals.go) has a `host`, a `mode` and `hold_seconds` (the wait the proxy resolved), no port;
 >   - the proxy's first-use cache is keyed on that same bare host;
 >   - and the durable `always` write goes through `hostrules.ValidApprovedHost`, which refuses a port by construction.
 > - So an approval raised by a CONNECT to `example.org:443` also releases `example.org:22`, `:5432` and every other port for whatever reach the scope names.

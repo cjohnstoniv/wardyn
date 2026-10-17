@@ -369,23 +369,22 @@ type ackedSink struct{ a *AckedWebhook }
 
 func (s ackedSink) Deliver(ctx context.Context, rows []types.FederatedAuditEvent) (int64, error) {
 	if p := s.a.benignAt; p.Seq != 0 {
-		s.a.benignAt = ackcursor.Pos{}
 		// The replacement batch is the read that gets delivered: if its first
 		// row past the checkpoint is not the very next seq, the benign verdict
 		// is stale and rows were lost after all, so count and report the reset.
 		// A retained row older than the checkpoint (retention drops time
 		// partitions, and seq order can cross them) is not a gap. A full batch
-		// of such rows holds no row past the checkpoint and cannot be judged.
+		// of such rows holds no row past the checkpoint and cannot be judged:
+		// the verdict is kept for the next batch.
 		i := slices.IndexFunc(rows, func(r types.FederatedAuditEvent) bool { return r.Seq > p.Seq })
-		stale := len(rows) < s.a.cursor.Batch
-		if i >= 0 {
-			stale = rows[i].Seq != p.Seq+1
-		}
-		if stale {
-			if err := s.a.st.SetAuditDeliveryCursor(ctx, AckedDestination, 0, ""); err != nil {
-				return 0, err
+		if i >= 0 || len(rows) < s.a.cursor.Batch {
+			s.a.benignAt = ackcursor.Pos{}
+			if i < 0 || rows[i].Seq != p.Seq+1 {
+				if err := s.a.st.SetAuditDeliveryCursor(ctx, AckedDestination, 0, ""); err != nil {
+					return 0, err
+				}
+				s.a.reportGap(ctx, p)
 			}
-			s.a.reportGap(ctx, p)
 		}
 	}
 	if len(rows) == 0 {

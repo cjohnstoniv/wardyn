@@ -387,7 +387,7 @@ export const governance = {
   // (200) rather than accumulating a second (201). The console reloads either
   // way, so the status is not surfaced.
   async upsertAssignment(input: GovernanceAssignmentInput): Promise<GovernanceAssignment> {
-    const res = await wfetch("/governance/assignments", { method: "POST", body: JSON.stringify(input) });
+    const res = await wfetch("/governance/assignments", { method: "POST", asPerson: true, body: JSON.stringify(input) });
     return asJson<GovernanceAssignment>(res);
   },
 
@@ -426,7 +426,7 @@ export const governance = {
   // approve (another human, with the authority to make that write): a 403 or 409 reaches the caller as an
   // HttpError whose message is its own sentence.
   async approveChange(id: string): Promise<GovernanceChange> {
-    const res = await wfetch(`/governance/changes/${encodeURIComponent(id)}/approve`, { method: "POST" });
+    const res = await wfetch(`/governance/changes/${encodeURIComponent(id)}/approve`, { method: "POST", asPerson: true });
     return asJson<GovernanceChange>(res);
   },
 
@@ -435,6 +435,7 @@ export const governance = {
   async rejectChange(id: string, reason: string): Promise<GovernanceChange> {
     const res = await wfetch(`/governance/changes/${encodeURIComponent(id)}/reject`, {
       method: "POST",
+      asPerson: true,
       body: JSON.stringify(reason ? { reason } : {}),
     });
     return asJson<GovernanceChange>(res);

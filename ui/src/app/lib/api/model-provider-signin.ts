@@ -43,7 +43,7 @@ export const modelProviderSignIn = {
   // setSecret).
   async captureSignIn(id: string, runId: string, token: string): Promise<void> {
     const res = await wfetch(`/model-providers/${encodeURIComponent(id)}/sign-in`, {
-      method: "PUT",
+      method: "PUT", asPerson: true,
       body: JSON.stringify({ run_id: runId, token }),
     });
     if (!res.ok) {

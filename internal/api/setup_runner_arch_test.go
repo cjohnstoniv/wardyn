@@ -97,3 +97,27 @@ func TestRunnerArchImagesCheckNamesTheSelectedImage(t *testing.T) {
 		t.Errorf("nil describer = %q", got)
 	}
 }
+
+// When every selected image is a multi-arch index the mirror-copy suspicion has nothing to stand on,
+// so the sentence is left out; one image that is not an index keeps it.
+func TestRunnerArchImagesCheckOmitsTheMirrorSentenceForIndexes(t *testing.T) {
+	const blame = "may have copied one platform only"
+	desc := map[string]string{
+		"m/a:1": "m/a@sha256:aa, a multi-arch index; platform linux/amd64",
+		"m/b:1": "m/b@sha256:bb, a multi-arch index; platform linux/amd64",
+		"m/c:1": "m/c@sha256:cc, a single-platform manifest; platform linux/amd64",
+	}
+	detail := func(images map[string]string) string {
+		chk, ok := runnerArchImagesCheck(map[string]int{"arm64": 1}, "amd64", images, nil, func(ref string) string { return desc[ref] })
+		if !ok {
+			t.Fatal("no row")
+		}
+		return chk.Detail
+	}
+	if d := detail(map[string]string{"a": "m/a:1", "b": "m/b:1"}); strings.Contains(d, blame) {
+		t.Errorf("an all-index row blames a mirror: %s", d)
+	}
+	if d := detail(map[string]string{"a": "m/a:1", "c": "m/c:1"}); !strings.Contains(d, blame) {
+		t.Errorf("a row with a single-platform image dropped the mirror sentence: %s", d)
+	}
+}

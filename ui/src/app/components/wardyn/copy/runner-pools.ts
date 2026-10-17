@@ -77,7 +77,6 @@ export const RUNNER_V6 = {
   EDIT_LIMITS: "Edit limits",
   EDIT_LIMITS_FOR: (name: string) => `Edit limits for ${name}`,
   AVAILABLE_TO_PEOPLE: "Available to people's pools",
-  SUPER_ADMIN: "Super admin",
   AVAILABLE_CHECK: "People can add this runner to their own user pools",
   AVAILABLE_HINT:
     "A person can then choose it in a pool of theirs. Their runs on it still follow their governance profile and this runner's limits. They never see another person's self-hosted runner.",

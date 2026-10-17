@@ -339,7 +339,7 @@ func (s *Server) handleCreatePolicy(w http.ResponseWriter, r *http.Request) {
 	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
 		"policy.create", id.String(), "success", mustJSON(map[string]any{
-			"name": created.Name, "min_confinement_class": created.Spec.MinConfinementClass,
+			"name": created.Name, "min_confinement_class": created.Spec.MinConfinementClass, "after": created.Spec,
 		})))
 	writeJSON(w, http.StatusCreated, client.PolicySaved{RunPolicy: created, Requirements: s.policyRequirements(r, req.Spec, needed)})
 }
@@ -365,6 +365,16 @@ func (s *Server) handleUpdatePolicy(w http.ResponseWriter, r *http.Request) {
 		writeErrorReason(w, http.StatusUnprocessableEntity, reasonPolicySecretRefsInvalid, "secret: "+err.Error())
 		return
 	}
+	// The audit row records the policy as it was and as it is: a spec names secrets, never their values
+	// (secretRefsOf). The read and the write are not one step; /policies writes are single-human.
+	prev, err := s.cfg.Store.GetPolicy(r.Context(), id)
+	if notFoundIf(w, err, "policy", reasonPolicyNotFound) {
+		return
+	}
+	if err != nil {
+		writeServerError(w, r, "read policy", err)
+		return
+	}
 	updated, err := s.cfg.Store.UpdatePolicy(r.Context(), id, req.Name, req.Spec)
 	if notFoundIf(w, err, "policy", reasonPolicyNotFound) {
 		return
@@ -385,6 +395,8 @@ func (s *Server) handleUpdatePolicy(w http.ResponseWriter, r *http.Request) {
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
 		"policy.update", id.String(), "success", mustJSON(map[string]any{
 			"name": updated.Name, "min_confinement_class": updated.Spec.MinConfinementClass,
+			"before": map[string]any{"name": prev.Name, "spec": prev.Spec},
+			"after":  map[string]any{"name": updated.Name, "spec": updated.Spec},
 		})))
 	writeJSON(w, http.StatusOK, client.PolicySaved{RunPolicy: updated, Requirements: s.policyRequirements(r, req.Spec, needed)})
 }
@@ -395,7 +407,15 @@ func (s *Server) handleDeletePolicy(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	err := s.cfg.Store.DeletePolicy(r.Context(), id)
+	prev, err := s.cfg.Store.GetPolicy(r.Context(), id)
+	if notFoundIf(w, err, "policy", reasonPolicyNotFound) {
+		return
+	}
+	if err != nil {
+		writeServerError(w, r, "read policy", err)
+		return
+	}
+	err = s.cfg.Store.DeletePolicy(r.Context(), id)
 	if notFoundIf(w, err, "policy", reasonPolicyNotFound) {
 		return
 	}
@@ -404,6 +424,6 @@ func (s *Server) handleDeletePolicy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
-		"policy.delete", id.String(), "success", nil))
+		"policy.delete", id.String(), "success", mustJSON(map[string]any{"name": prev.Name, "before": prev.Spec})))
 	w.WriteHeader(http.StatusNoContent)
 }

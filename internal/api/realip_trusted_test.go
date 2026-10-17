@@ -53,6 +53,10 @@ func TestTrustedProxyChainRule(t *testing.T) {
 		{"IPv6 loopback hop with a port", "10.0.0.5:1", []string{"[::1]:443"}, v4, ""},
 		{"unspecified hop", "10.0.0.5:1", []string{"0.0.0.0"}, v4, ""},
 		{"IPv6 unspecified hop", "10.0.0.5:1", []string{"::"}, v4, ""},
+		{"multicast hop", "10.0.0.5:1", []string{"224.0.0.1"}, v4, ""},
+		{"IPv6 multicast hop", "10.0.0.5:1", []string{"ff02::1"}, v4, ""},
+		{"broadcast hop", "10.0.0.5:1", []string{"255.255.255.255"}, v4, ""},
+		{"link-local hop is a client on the gateway's segment", "10.0.0.5:1", []string{"169.254.1.2"}, v4, "169.254.1.2"},
 		{"too many hops", "10.0.0.1:4000", []string{strings.Repeat("198.51.100.7,", maxForwardedHops) + "198.51.100.7"}, v4, ""},
 		{"too many bytes", "10.0.0.1:4000", []string{"198.51.100.7," + strings.Repeat(" ", maxForwardedBytes) + "198.51.100.8"}, v4, ""},
 	} {

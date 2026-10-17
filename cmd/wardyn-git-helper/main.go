@@ -706,6 +706,13 @@ func callMint(ctx context.Context, client *http.Client, proxyURL, grantID string
 		return "", "", "", fmt.Errorf("grant not found (404): check that the grant id is correct")
 
 	default:
+		// The server's own refusals carry {"error": "<sentence>"}; show it. A body without one keeps the raw text.
+		var refusal struct {
+			Error string `json:"error"`
+		}
+		if json.Unmarshal(respBody, &refusal) == nil && refusal.Error != "" {
+			return "", "", "", fmt.Errorf("mint refused (%d): %s", resp.StatusCode, refusal.Error)
+		}
 		return "", "", "", fmt.Errorf("unexpected mint status %d: %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
 	}
 }

@@ -193,7 +193,7 @@ func (s *Server) seedRequestWorkspace(ctx context.Context, spec *types.RunPolicy
 	// (opaque dispatch failure) — or a repo clone targets the EXACT path of a
 	// writable bind. Equal or nested targets across workspaces, defaults
 	// included, are the overlap check's, over every resolved target.
-	if verr := validatePolicyWorkspaces(*spec); verr != nil {
+	if verr := validatePolicyWorkspaces(*spec, true); verr != nil {
 		return workspaceSeed{}, seedErr(http.StatusUnprocessableEntity, reasonWorkspaceSeedPolicyConflict, fmt.Errorf("workspace %s conflicts with the policy: %w", ids[0], verr))
 	}
 	return seed, nil

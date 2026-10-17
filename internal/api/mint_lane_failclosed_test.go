@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -146,6 +147,45 @@ func TestInternalMintConflictCodesAreTheWireContract(t *testing.T) {
 				if resp[k] != want {
 					t.Errorf("%s = %v, want %v", k, resp[k], want)
 				}
+			}
+		})
+	}
+}
+
+// TestInternalMintRefusalsEachHaveTheirOwnReason: a broker refusal that is not a conflict answers with
+// its own status, reason and sentence, never the generic server error, and never a 422 (the git helper
+// reads every 422 as the SPIRE refusal).
+func TestInternalMintRefusalsEachHaveTheirOwnReason(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		err        error
+		wantStatus int
+		wantReason string
+		wantError  string
+	}{
+		{"run revoked", broker.ErrRunRevoked, http.StatusForbidden, "grant_run_revoked",
+			"this run's credentials were revoked, so no credential is minted for it"},
+		{"approval not approved", broker.ErrNotApproved, http.StatusForbidden, "grant_not_approved",
+			"this credential's approval is not approved, so no credential is minted for it"},
+		{"ref ruleset required", fmt.Errorf("%w: acme/api has no ruleset. Create the ruleset", broker.ErrRefRulesetRequired), http.StatusForbidden,
+			"grant_ref_ruleset_required", strings.TrimPrefix(fmt.Errorf("%w: acme/api has no ruleset. Create the ruleset", broker.ErrRefRulesetRequired).Error(), "broker: ")},
+		{"unknown kind", fmt.Errorf("%w: %q is delivered as a sandbox file", broker.ErrUnknownGrantKind, "ssh_key"), http.StatusNotImplemented,
+			"grant_kind_unsupported", "this server cannot mint a credential of this grant's kind"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t)
+			tok := h.mintRunToken(t, uuid.New())
+			h.broker.mintErr = tc.err
+			w := do(t, h.srv, http.MethodPost, "/api/v1/internal/credentials/mint", tok, `{"grant_id":"`+uuid.New().String()+`"}`)
+			if w.Code != tc.wantStatus {
+				t.Fatalf("status = %d, want %d; body=%s", w.Code, tc.wantStatus, w.Body.String())
+			}
+			var resp errorBody
+			if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+			if resp.Reason != tc.wantReason || resp.Error != tc.wantError {
+				t.Errorf("reason %q error %q, want %q %q", resp.Reason, resp.Error, tc.wantReason, tc.wantError)
 			}
 		})
 	}

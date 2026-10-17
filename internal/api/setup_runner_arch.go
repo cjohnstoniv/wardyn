@@ -89,12 +89,20 @@ func runnerArchImagesCheck(counts map[string]int, plainArch string, images map[s
 			noun = "runner"
 		}
 		var sel []string
+		allIndex := true
 		for _, key := range missing {
-			sel = append(sel, fmt.Sprintf("%s = %s: %s", key, images[key], describe(images[key])))
+			d := describe(images[key])
+			allIndex = allIndex && strings.Contains(d, "a multi-arch index")
+			sel = append(sel, fmt.Sprintf("%s = %s: %s", key, images[key], d))
+		}
+		// A mirror that copied one platform is no suspect when every selected image is a multi-arch index.
+		blame := " If the ref is a mirror copy, the mirror may have copied one platform only, or a platform pin may be at fault; neither is known from here."
+		if allIndex {
+			blame = ""
 		}
 		detail = append(detail, fmt.Sprintf("%d %s %s. These WARDYN_AGENT_IMAGES keys name no %s image: %s. "+
-			"A run on an %s runner uses the plain ref, which works only if it is a multi-arch image; a single-arch image runs under emulation, or is refused when the engine cannot emulate it. Selected images: %s. If the ref is a mirror copy, the mirror may have copied one platform only, or a platform pin may be at fault; neither is known from here.",
-			n, arch, noun, arch, strings.Join(missing, ", "), arch, strings.Join(sel, "; ")))
+			"A run on an %s runner uses the plain ref, which works only if it is a multi-arch image; a single-arch image runs under emulation, or is refused when the engine cannot emulate it. Selected images: %s.%s",
+			n, arch, noun, arch, strings.Join(missing, ", "), arch, strings.Join(sel, "; "), blame))
 		if fix == "" {
 			fix = fmt.Sprintf("Add %q: \"<%s ref>\" (the same ref if it is multi-arch; used by runs on a registered %s runner), then restart wardynd. ", missing[0]+"@"+arch, arch, arch) +
 				"If you built the image, build it multi-arch (docker buildx build --platform linux/amd64,linux/arm64); " +

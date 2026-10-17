@@ -18,7 +18,7 @@ import type { RunnerLimits } from "../../../lib/types/runners";
 import { POOL_DRAWER, RES, RUNNER_KIND, RUNNER_V6 } from "../../wardyn/copy/runner-pools";
 import { RUNNER } from "../../wardyn/copy/runners";
 import { Notice } from "../../wardyn/notice";
-import { useOperator } from "../../wardyn/operator-context";
+import { useOperator, useSecurityOperator } from "../../wardyn/operator-context";
 import { Chip } from "../../wardyn/primitives";
 import { Button } from "../../ui/button";
 import { Checkbox } from "../../ui/checkbox";
@@ -42,6 +42,8 @@ export function RemoteRunnerDrawer({
   onSaveLimits: (runner: RemoteRunnerView, limits: RunnerLimits) => Promise<unknown>;
 }) {
   const superAdmin = useOperator();
+  // Who may use a runner is a people policy, held for a second human like a pool's: the security tier's, not the super admin's.
+  const securityOperator = useSecurityOperator();
   const titleRef = React.useRef<HTMLSpanElement | null>(null);
   // The runner as the limits dialog opened on it: the save names that revision, not the one a later re-read
   // brought, so a change another admin made meanwhile is refused as stale instead of overwritten.
@@ -123,7 +125,7 @@ export function RemoteRunnerDrawer({
                 <Hint>{RUNNER_V6.SUPER_ADMIN_ONLY}</Hint>
               )}
             </Sec>
-            <Sec label={RUNNER_V6.AVAILABLE_TO_PEOPLE} meta={RUNNER_V6.SUPER_ADMIN} data-available>
+            <Sec label={RUNNER_V6.AVAILABLE_TO_PEOPLE} meta={POOL_DRAWER.WHO_ROLE} data-available>
               {held && (
                 <div className="mb-2">
                   <Notice tone="success" title={POOL_DRAWER.HELD} live>
@@ -134,7 +136,7 @@ export function RemoteRunnerDrawer({
               <label className="inline-flex items-center gap-2 text-body font-normal">
                 {/* A listed runner's people are kept on the command line: unchecking here would discard the list,
                     so the box only shows that it is available, and the line below says where the list changes. */}
-                <Checkbox checked={available} disabled={!superAdmin || busy || listed} onCheckedChange={(v) => void setAvailable(v === true)} />
+                <Checkbox checked={available} disabled={!securityOperator || busy || listed} onCheckedChange={(v) => void setAvailable(v === true)} />
                 {RUNNER_V6.AVAILABLE_CHECK}
               </label>
               <Hint>{RUNNER_V6.AVAILABLE_HINT}</Hint>

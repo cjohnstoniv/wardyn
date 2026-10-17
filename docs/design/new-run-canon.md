@@ -285,7 +285,7 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `CLAMP_POOL(size, pool)` | mock | Clamped to {size} by the {pool} pool. |
 | `CLAMP_PROFILE(size, profile)` | pending (W-11) | Clamped to {size} by {profile}. |
 | `CLAMP_SERVER(size)` | pending (W-11) | Clamped to {size} by this server. |
-| `CLAMP_POLICY(size)` | pending (W-11) | Clamped to {size} by this run's policy. |
+| `CLAMP_POLICY(size)` | deviation (approved 2026-10-17) | Clamped to {size} by this run's policy. |
 | `CLAMP_ORG(size)` | pending (W-11) | Clamped to {size} by your organisation's limits. |
 | `SIZE_EXACT(mib)` | mock | Exactly {mib} MiB |
 | `SIZE_ERROR` | mock | Set a size for the main drive. |
@@ -617,6 +617,7 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `TOKEN_LABEL` | mock | Token |
 | `TOKEN_CONFIRM` | mock | Save token |
 | `TOKEN_SAVED` | mock | Token saved. |
+| `NOT_CHECKED` | deviation (approved 2026-10-17) | Not checked yet — too many checks this minute. Check again in a moment. |
 | `STICKY_ONE` | mock | 1 item still needs setup |
 | `STICKY_MANY(n)` | mock | {n} items still need setup |
 | `STICKY_DONE` | mock | Everything is set up |
@@ -771,6 +772,8 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `SAVE_TEMPLATE` | mock | Save as template |
 | `SAVE_POLICY` | mock | Save as policy |
 | `LAUNCH_RUN` | mock | Launch run |
+| `DROPPED_HOST_ONE(host)` | deviation (approved 2026-10-17) | This run can't reach {host}: your organisation doesn't allow it. Ask your admin to allow it. |
+| `DROPPED_HOSTS_MANY(hosts)` | deviation (approved 2026-10-17) | This run can't reach {hosts}: your organisation doesn't allow them. Ask your admin to allow them. |
 | `POOL_FULL` | server | wait reason at_capacity, runnerpool WaitAtCapacityMsg (Go owns the sentence) |
 | `OFFLINE_BLOCKER` | server | reason runner_offline (Go owns the sentence) |
 

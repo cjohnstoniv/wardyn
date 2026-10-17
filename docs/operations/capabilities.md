@@ -30,6 +30,7 @@ the ADMIN pre-authorized.
 | | | | An org component's id is restricted ("Available to") from its create, so nobody may attach it until an allow row names it — a wildcard allow does not. |
 | | | | A component a person defines themselves is the `feature` value `custom_component`'s question, not this kind's |
 
+- A withdrawn `component` grant is asked again at the run's next launch, revive or extend. A run already running keeps the component until it ends; to cut it sooner, withdraw the component or stop the run.
 - `*` as a value matches everything of that kind, spelled the same way for all ten.
 - 0.8 retired one more, `integration`, with the AI integrations it bounded: a run's `integration_id` is refused with a `422` for everyone, so there is nothing left for it to gate.
 - Its stored grant rows are inert, and a new one is refused.

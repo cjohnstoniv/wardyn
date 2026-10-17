@@ -13,7 +13,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// OrgRunnerPoolStore keeps an organization's own registered runners (owner_kind org, migration 0180) in
+// OrgRunnerPoolStore keeps an organization's own registered runners (owner_kind org, migration 0181) in
 // its organization pools. A person's runner never joins an organization pool, and an org runner never a
 // user pool (AddOwnRunnerToPool compares a non-empty owner).
 type OrgRunnerPoolStore interface {

@@ -205,3 +205,14 @@ describe("edit", () => {
     expect(screen.queryByRole("button", { name: "Reload" })).toBeNull();
   });
 });
+
+describe("a pool that fails to load", () => {
+  it("offers Reload and Back, and Reload shows the form once the read succeeds", async () => {
+    getMock.mockRejectedValueOnce(new HttpError(500, "boom"));
+    renderAt("/account/pools/p-lap/edit", "mine");
+    expect(await screen.findByRole("alert")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "← Back to My runner" })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Reload" }));
+    expect(await screen.findByLabelText("Name")).toHaveValue("Laptop");
+  });
+});

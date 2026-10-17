@@ -275,7 +275,7 @@ export const drives = {
   // host root outside the roots, the denied prefix, the backend/runner
   // mismatch, `hash` on a share, and a zero size on a k8s_pvc claim.
   async createDrive(input: UserDriveInput): Promise<UserDrive> {
-    return asJson<UserDrive>(await wfetch("/drives", { method: "POST", body: JSON.stringify(input) }));
+    return asJson<UserDrive>(await wfetch("/drives", { method: "POST", asPerson: true, body: JSON.stringify(input) }));
   },
 
   // PUT /api/v1/drives/{id} -> 200. Rename included: ON DELETE RESTRICT makes
@@ -287,7 +287,7 @@ export const drives = {
   // — the one query param the guard reads (user_drives.go's driveRehomeConfirm).
   async updateDrive(id: string, input: UserDriveInput, confirmRehome = false): Promise<UserDrive> {
     const qs = confirmRehome ? "?confirm=rehome" : "";
-    const res = await wfetch(`/drives/${encodeURIComponent(id)}${qs}`, { method: "PUT", body: JSON.stringify(input) });
+    const res = await wfetch(`/drives/${encodeURIComponent(id)}${qs}`, { method: "PUT", asPerson: true, body: JSON.stringify(input) });
     return asJson<UserDrive>(res);
   },
 
@@ -306,7 +306,7 @@ export const drives = {
   // the existing row's id on conflict). The console renders ALLOC_REPLACED on
   // the 200, so the status is surfaced rather than swallowed.
   async upsertGrant(input: UserDriveGrantInput): Promise<{ grant: UserDriveGrant; replaced: boolean }> {
-    const res = await wfetch("/drives/grants", { method: "POST", body: JSON.stringify(input) });
+    const res = await wfetch("/drives/grants", { method: "POST", asPerson: true, body: JSON.stringify(input) });
     const replaced = res.status === 200;
     return { grant: await asJson<UserDriveGrant>(res), replaced };
   },

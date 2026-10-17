@@ -104,7 +104,9 @@ describe("Effective policy card", () => {
     const spec = { ...preview().spec, azure_devops_capabilities: ["code_read", "policy_admin"] };
     const view = render(<EffectivePolicyCard draft={draftOf(BASE)} pre={null} preview={preview({ spec })} />);
     const line = within(screen.getByRole("complementary", { name: NR_REVIEW.POLICY_TITLE })).getByTestId("ado-access-summary");
-    expect(line).toHaveTextContent(`${ADO_ACCESS.SUMMARY_PREFIX} ${adoCapName("code_read")} · ${adoCapName("policy_admin")}`);
+    // A labelled row like the rows above it, not a loose text-xs line.
+    expect(line).toHaveTextContent(`${ADO_ACCESS.SECTION_TITLE}${adoCapName("code_read")} · ${adoCapName("policy_admin")}`);
+    expect(line.querySelector(".label-eyebrow")).toHaveTextContent(ADO_ACCESS.SECTION_TITLE);
     expect(within(line).getByText(ADO_ENTRA_EDITOR.HIGH_RISK_BADGE)).toBeInTheDocument();
     view.rerender(<EffectivePolicyCard draft={draftOf(BASE)} pre={null} preview={preview()} />);
     expect(screen.queryByTestId("ado-access-summary")).not.toBeInTheDocument();
