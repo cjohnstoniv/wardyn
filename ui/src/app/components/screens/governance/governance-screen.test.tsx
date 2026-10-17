@@ -471,7 +471,7 @@ describe("GovernanceScreen — assignments and the resolved preview", () => {
     // The kind the segmented control names is the kind the search asked for.
     expect(directorySearchMock).toHaveBeenCalledWith("plat", "group");
 
-    await userEvent.click(screen.getByRole("combobox")); // the profile Select
+    await userEvent.click(screen.getByRole("combobox", { name: GOV.FIELD_PROFILE })); // the profile Select
     await userEvent.click(await screen.findByRole("option", { name: PLATFORM.name }));
     await userEvent.click(screen.getByRole("button", { name: GOV.ADD_CTA }));
 
@@ -978,7 +978,7 @@ describe("GovernanceScreen — a 202 is submitted, never saved", () => {
     await screen.findByText(GOV.ASSIGN_TITLE);
 
     await userEvent.type(screen.getByRole("textbox", { name: PERM.FIELD_WHO }), "g1");
-    await userEvent.click(screen.getByRole("combobox"));
+    await userEvent.click(screen.getByRole("combobox", { name: GOV.FIELD_PROFILE }));
     await userEvent.click(await screen.findByRole("option", { name: PLATFORM.name }));
     await userEvent.click(screen.getByRole("button", { name: GOV.ADD_CTA }));
 

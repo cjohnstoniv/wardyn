@@ -218,6 +218,7 @@ test.describe("New Run, Files: the main drive", () => {
     await expect(page.getByText(NR_FILES.SIZE_EXACT(1000))).toBeVisible();
 
     // Continue does not read the rounded 0.9 back as 922 MiB.
+    await noExtra(page).check();
     await next(page, NR_SHARED.STEP_TOOLS);
     await expect(page.getByRole("heading", { name: NR_TOOLS.TITLE })).toBeVisible();
     await expect.poll(() => last(sent).resources?.disk_mib).toBe(1000);

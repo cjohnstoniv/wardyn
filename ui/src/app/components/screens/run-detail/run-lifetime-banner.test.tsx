@@ -467,7 +467,7 @@ describe("RunLifetimeBanner: a local run (RS4)", () => {
     expect(banner).not.toHaveTextContent("has been offline for over an hour");
     expect(banner).not.toHaveTextContent("You can revive it once");
     expect(screen.getByRole("button", { name: "Revive" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Extend 1 day" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Extend" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "End run" })).toBeInTheDocument();
     expect(screen.queryByTestId("run-lifetime-local-lapse")).toBeNull();
   });

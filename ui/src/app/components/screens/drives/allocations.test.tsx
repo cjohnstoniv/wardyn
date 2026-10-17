@@ -228,7 +228,7 @@ describe("DrivesScreen — allocations", () => {
     await screen.findByText(DRIVES.ALLOC_TITLE);
 
     await userEvent.type(screen.getByRole("textbox", { name: PERM.FIELD_WHO }), "wardyn.platform");
-    await userEvent.click(screen.getByRole("combobox"));
+    await userEvent.click(screen.getByRole("combobox", { name: DRIVES.FIELD_DRIVE }));
     await userEvent.click(await screen.findByRole("option", { name: SCRATCH.name }));
     await userEvent.click(screen.getByRole("button", { name: DRIVES.ADD_CTA }));
 
@@ -364,7 +364,7 @@ describe("DrivesScreen — the allocation form's wire shapes", () => {
   const fill = async (who = "wardyn.platform") => {
     await screen.findByText(DRIVES.ALLOC_TITLE);
     await userEvent.type(screen.getByRole("textbox", { name: PERM.FIELD_WHO }), who);
-    await userEvent.click(screen.getByRole("combobox"));
+    await userEvent.click(screen.getByRole("combobox", { name: DRIVES.FIELD_DRIVE }));
     await userEvent.click(await screen.findByRole("option", { name: SCRATCH.name }));
   };
   const allocate = () => userEvent.click(screen.getByRole("button", { name: DRIVES.ADD_CTA }));

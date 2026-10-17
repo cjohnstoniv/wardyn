@@ -284,17 +284,17 @@ describe("a size under 0.1 GiB (DR-0160)", () => {
     show();
     await screen.findByText(NR_FILES.UP_TO("8 GiB"));
     await userEvent.clear(size());
-    await userEvent.type(size(), "0.1");
-    await userEvent.tab();
-    // 0.1 GiB is 102.4 MiB, stored as 102: below 0.1 GiB, so shown in MiB.
-    expect(drawn().resources).toEqual({ disk_mib: 102 });
-    expect(size()).toHaveValue(102);
-    await userEvent.clear(size());
     await userEvent.type(size(), "0.15");
     await userEvent.tab();
     expect(drawn().resources).toEqual({ disk_mib: 154 });
     expect(size()).toHaveValue(0.2);
     expect(exact()).toHaveTextContent(NR_FILES.SIZE_EXACT(154));
+    // 0.1 GiB is 102.4 MiB, stored as 102: below 0.1 GiB, so shown in MiB.
+    await userEvent.clear(size());
+    await userEvent.type(size(), "0.1");
+    await userEvent.tab();
+    expect(drawn().resources).toEqual({ disk_mib: 102 });
+    expect(size()).toHaveValue(102);
   });
 
   it("a cap of 1000 MiB reads in MiB, and Continue keeps the clamped 1000 MiB with its note and caption", async () => {
