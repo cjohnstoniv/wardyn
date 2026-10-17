@@ -8,6 +8,7 @@ import (
 	"cmp"
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"io"
 	"log/slog"
@@ -224,12 +225,34 @@ type h2MismatchError struct {
 func (e *h2MismatchError) Error() string {
 	msg := "upstream protocol mismatch: " + e.err.Error()
 	if e.h2Err != nil {
-		msg += "; HTTP/2 resend: " + e.h2Err.Error()
+		msg += "; HTTP/2 resend: " + h2ResendClass(e.h2Err)
 	}
 	return msg
 }
 
 func (e *h2MismatchError) Unwrap() error { return e.err }
+
+// h2ResendClass is a fixed word for why the HTTP/2 resend failed. The error's own text can carry the peer's
+// GOAWAY debug data, which the peer chose and the sandbox's run reads (CWE-117), so it is never printed.
+func h2ResendClass(err error) string {
+	var goAway http2.GoAwayError
+	var stream http2.StreamError
+	var conn http2.ConnectionError
+	var nerr net.Error
+	switch {
+	case errors.As(err, &goAway):
+		return "GOAWAY " + goAway.ErrCode.String()
+	case errors.As(err, &stream):
+		return stream.Code.String()
+	case errors.As(err, &conn):
+		return http2.ErrCode(conn).String()
+	case errors.As(err, &nerr) && nerr.Timeout():
+		return "timeout"
+	case errors.Is(err, io.EOF), errors.Is(err, io.ErrUnexpectedEOF):
+		return "connection closed"
+	}
+	return "failed"
+}
 
 // roundTripUpstream is the MITM/LLM and plain lanes' round trip. A host
 // already known to speak HTTP/2 unasked goes straight to the fallback
@@ -374,12 +397,19 @@ func h2MismatchSentence(e *h2MismatchError, h2Cause string) string {
 
 // upstreamProtocolMismatchCause runs h2MismatchSentence through the SAME
 // mask + topology-redaction pass every other Cause takes: the row is visible
-// to the run's own creator. The resend's error goes through redactErr first,
-// since it can be a certificate failure naming the gateway's chain.
+// to the run's own creator. The resend's failure is h2ResendClass's fixed word,
+// except a certificate failure, whose text goes through redactErr first since it
+// can name the gateway's chain.
 func (p *Proxy) upstreamProtocolMismatchCause(e *h2MismatchError) string {
 	var h2Cause string
 	if e.h2Err != nil {
-		h2Cause = p.redactErr(e.h2Err)
+		h2Cause = h2ResendClass(e.h2Err)
+		var hostname x509.HostnameError
+		var unknown x509.UnknownAuthorityError
+		var invalid x509.CertificateInvalidError
+		if errors.As(e.h2Err, &hostname) || errors.As(e.h2Err, &unknown) || errors.As(e.h2Err, &invalid) {
+			h2Cause = p.redactErr(e.h2Err)
+		}
 	}
 	masked := string(maskDecisionBytes([]byte(h2MismatchSentence(e, h2Cause))))
 	return p.redactTopology(masked)

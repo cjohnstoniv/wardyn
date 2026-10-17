@@ -4,6 +4,7 @@
 package api
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -11,6 +12,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -447,6 +449,8 @@ func TestAccessFacts_ADOSignInItemByCause(t *testing.T) {
 		row             types.GitProvider
 		source          func(context.Context) (ADOEntraConfig, bool, error)
 		blob            *adoEntraBlob
+		blobOwner       string // whose namespace holds blob; the caller's when empty
+		unlistable      bool   // the store cannot list: the preview cannot say, and Review is not asked
 		preview, review bool
 		cause           string // of Review's git_credential fact, when it names one
 	}{
@@ -454,6 +458,8 @@ func TestAccessFacts_ADOSignInItemByCause(t *testing.T) {
 		{name: "sign-in stored and live", row: entraRow, blob: blob(false)},
 		{name: "sign-in stored and ended", row: entraRow, blob: blob(true), cause: scmAccessCauseEnded},
 		{name: "own token, none added", row: ownPATTestRow()},
+		{name: "sign-in stored in another person's namespace", row: entraRow, blob: blob(false), blobOwner: "sub-other", preview: true, review: true},
+		{name: "store cannot list", row: entraRow, unlistable: true},
 		{name: "minted_pat without the console app", row: entraRow, source: console, cause: ReasonADOPATNeedsConsoleApp},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -465,12 +471,20 @@ func TestAccessFacts_ADOSignInItemByCause(t *testing.T) {
 			srv.cfg.DefaultPolicy = types.RunPolicySpec{MinConfinementClass: types.CC2, AllowedDomains: []string{"api.anthropic.com"},
 				FirstUseApproval: types.FirstUseDenyWithReview}
 			if tc.blob != nil {
-				if err := srv.storeADOEntraBlob(context.Background(), "sub-ado-op", scmTestRowID, *tc.blob); err != nil {
+				if err := srv.storeADOEntraBlob(context.Background(), cmp.Or(tc.blobOwner, "sub-ado-op"), scmTestRowID, *tc.blob); err != nil {
 					t.Fatal(err)
 				}
 			}
+			if tc.unlistable {
+				var armed atomic.Bool
+				armed.Store(true)
+				srv.cfg.Secrets = secretsFailingReads{Store: srv.cfg.Secrets, armed: &armed}
+			}
 			body := `{"agent":"claude-code","task":"access","repo":"` + scmTestADORepo + `"}`
 			for door, want := range map[string]bool{previewDoor: tc.preview, preflightDoor: tc.review} {
+				if tc.unlistable && door == preflightDoor {
+					continue
+				}
 				w := do(t, srv, http.MethodPost, door, adoOperatorToken(st), body)
 				access := decodeAccess(t, door, w).Access
 				i := slices.IndexFunc(access.Setup, func(it SetupItem) bool { return it.Kind == "repo_credential" })

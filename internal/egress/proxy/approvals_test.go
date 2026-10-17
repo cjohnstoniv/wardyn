@@ -104,6 +104,32 @@ func TestApprovalConcurrentFirstUseRaisesOnce(t *testing.T) {
 	}
 }
 
+// A raise the control plane refuses for good (the per-run approval cap, 429) is settled: the host is
+// answered apRefused with its own audit reason and is not POSTed again on the next request.
+func TestApprovalRefusedRaiseIsSettled(t *testing.T) {
+	var raises atomic.Int32
+	cp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raises.Add(1)
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	defer cp.Close()
+	ap := newApprovalClient(cp.URL, newTokenSource("tok"), uuid.New(), cp.Client())
+	for i := range 3 {
+		if got := ap.Resolve(context.Background(), "egress.test"); got.State != apRefused || got.ApprovalID != uuid.Nil {
+			t.Fatalf("request %d: %+v, want apRefused with no approval id", i, got)
+		}
+	}
+	if got := raises.Load(); got != 1 {
+		t.Fatalf("a refused raise was POSTed %d times, want 1", got)
+	}
+	if got := approvalPendingReason(apRefused); got != ruleSourceApprovalRefused {
+		t.Fatalf("reason = %q, want %q", got, ruleSourceApprovalRefused)
+	}
+	if got := ap.ResolveWait(context.Background(), "egress.test"); got.State != apRefused {
+		t.Fatalf("ResolveWait = %+v, want apRefused at once", got)
+	}
+}
+
 // TestApprovalFreshApprovedServedFromCache asserts the fast path: an approval
 // observed within approvalTTL is served from cache with no control-plane call.
 func TestApprovalFreshApprovedServedFromCache(t *testing.T) {

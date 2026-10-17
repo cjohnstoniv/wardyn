@@ -925,11 +925,18 @@ func refreshLoginStamps(ctx context.Context, st loginStampStore, sub, role, user
 	}
 }
 
+// loginGroupsWait bounds stampLoginGroups; a variable so a test can shorten it.
+var loginGroupsWait = 5 * time.Second
+
 // stampLoginGroups records the groups a verified login carried, which a key
 // domain's group assignment reads (migration 0121). Best-effort, like
 // refreshLoginStamps: a hiccup logs and the login still succeeds, leaving the
-// person's earlier groups in force until their next sign-in.
+// person's earlier groups in force until their next sign-in. The write waits
+// on the assignment lock for at most loginGroupsWait, so a slow assignment
+// write never holds a sign-in.
 func stampLoginGroups(ctx context.Context, pool *pgxpool.Pool, sub string, groups []string, truncated bool) {
+	ctx, cancel := context.WithTimeout(ctx, loginGroupsWait)
+	defer cancel()
 	if err := keydomain.NewService(pool, nil).RecordLoginGroups(ctx, sub, groups, truncated); err != nil {
 		slog.Warn("wardynd: recording a login's groups for key-domain membership failed", slog.String("err", err.Error()))
 	}

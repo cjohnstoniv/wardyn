@@ -75,6 +75,18 @@ func (f *runnerRegistrationFake) ListRunnersByOwner(_ context.Context, owner str
 	return out, nil
 }
 
+// ListVisibleRunnersByOwner applies the rules the store's query does: no lapsed unclaimed runner, and no
+// revoked one unless someone other than the owner revoked it within revokedShown.
+func (f *runnerRegistrationFake) ListVisibleRunnersByOwner(ctx context.Context, owner string, now time.Time, revokedShown time.Duration) ([]types.Runner, error) {
+	mine, _ := f.ListRunnersByOwner(ctx, owner)
+	return slices.DeleteFunc(mine, func(row types.Runner) bool {
+		if runnerLapsed(row, now) {
+			return true
+		}
+		return row.State == types.RunnerRevoked && (row.RevokedAt == nil || row.RevokedBy == owner || row.RevokedAt.Before(now.Add(-revokedShown)))
+	}), nil
+}
+
 func (f *runnerRegistrationFake) ListUnusedRunnerRegistrationTokensPage(_ context.Context, now time.Time, owner string, p store.Page) ([]types.RunnerRegistrationToken, error) {
 	f.lock.Lock()
 	defer f.lock.Unlock()

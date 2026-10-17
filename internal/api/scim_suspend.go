@@ -427,7 +427,10 @@ func (s *Server) sweepStep(ctx context.Context, st scimStore, id uuid.UUID, iden
 // person no row binds is known by nothing but their emails, so those run the full sequence.
 func (s *Server) sweepTarget(ctx context.Context, target string, forms leaverForms, ident store.PrincipalIdentity) (personRevocation, error) {
 	if ident.Principal == "" || !strings.Contains(target, "@") || slices.Contains(forms.bound, target) {
-		return s.revokePersonCredentials(ctx, target)
+		// A person no row binds is known by their emails, and the principals those name are already
+		// targets of their own: the keys under an email are the ones owned by that exact name, so an
+		// address two principals hold cannot stop the sweep.
+		return s.revokePersonCredentialsBy(ctx, target, ident.Principal != "" || !strings.Contains(target, "@"))
 	}
 	if !slices.Contains(forms.shared, strings.ToLower(target)) {
 		if err := s.cfg.SessionRevocations.RevokeSub(ctx, target); err != nil {

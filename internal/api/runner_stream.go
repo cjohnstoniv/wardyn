@@ -217,6 +217,8 @@ func (s *Server) runnerHub(st store.RunnerStore) *remote.Hub {
 		cfg.OrgURL, cfg.Lookup = s.cfg.RunnerOrgURL, st.GetRunner
 		cfg.Verified = func(ctx context.Context, id uuid.UUID) error {
 			if !s.runnerStreams.runners.allow(id.String(), s.cfg.Now()) {
+				// The runner sees only a closed socket; this line names the cause.
+				slog.WarnContext(ctx, "wardynd: runner stream reconnect refused by the per-runner rate limit", slog.String("runner_id", id.String()))
 				return errRunnerStreamRateLimited
 			}
 			if a, ok := ctx.Value(runnerAdmissionKey{}).(runnerAdmission); ok {

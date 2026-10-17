@@ -20,13 +20,14 @@ import (
 )
 
 func (s *Server) handleRunnerRegister(w http.ResponseWriter, r *http.Request) {
-	if !s.requireRunnersEnabled(w, r) {
-		return
-	}
 	now := s.cfg.Now().UTC()
+	// The limiter first: an anonymous caller is bounded before the site-config read.
 	if !s.registerLimiter.allow(peerKey(r.RemoteAddr), now) {
 		w.Header().Set("Retry-After", "10")
 		writeErrorReason(w, http.StatusTooManyRequests, reasonRunnerRegistrationRateLimited, "too many registration attempts; retry later")
+		return
+	}
+	if !s.requireRunnersEnabled(w, r) {
 		return
 	}
 	rs, ok := s.runnerRegistrationStore(w)
