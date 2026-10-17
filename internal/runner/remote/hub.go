@@ -488,20 +488,28 @@ func (h *Hub) ended(id uuid.UUID, s *hubSession, peer *runnerwire.Peer) {
 	})
 }
 
-// Close drops this replica's connections and timers at daemon shutdown.
+// Close drops this replica's connections and timers at daemon shutdown. A session that reported
+// Connected reports Disconnected here, each under a short bound, so the runner's disconnect is
+// recorded by this replica before it exits rather than never.
 func (h *Hub) Close() {
 	h.mu.Lock()
 	h.closed = true
 	sessions := h.sessions
 	h.sessions = map[uuid.UUID]*hubSession{}
 	h.mu.Unlock()
-	for _, s := range sessions {
+	for id, s := range sessions {
 		s.mu.Lock()
 		if s.timer != nil {
 			s.timer.Stop()
 		}
 		if s.link != nil {
 			s.link.Close()
+		}
+		if s.connected && h.cfg.Disconnected != nil {
+			ctx, cancel := context.WithTimeout(context.WithoutCancel(h.ctx), time.Second)
+			_ = h.cfg.Disconnected(ctx, id)
+			cancel()
+			s.connected = false
 		}
 		s.mu.Unlock()
 	}

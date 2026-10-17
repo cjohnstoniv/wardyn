@@ -36,9 +36,26 @@ func read(path string, owner uint32) types.RunnerPosture {
 	if f, err := fromMDMFile(path, owner); err == nil {
 		p.MDMManaged, p.DiskEncrypted, p.Evidence = f.MDMManaged, f.DiskEncrypted, types.PostureEvidenceMDMFile
 	} else if !errors.Is(err, os.ErrNotExist) {
-		slog.Warn("runner posture: the MDM posture file is ignored", "path", path, "error", err)
+		warnIgnored(path, err)
 	}
 	return p
+}
+
+// lastIgnored is the reason last logged for an unusable MDM file. The runner reads posture at every
+// connect and every 15 minutes, so the same reason is logged once, and again when it changes.
+var lastIgnored struct {
+	sync.Mutex
+	reason string
+}
+
+func warnIgnored(path string, err error) {
+	lastIgnored.Lock()
+	repeat := lastIgnored.reason == path+": "+err.Error()
+	lastIgnored.reason = path + ": " + err.Error()
+	lastIgnored.Unlock()
+	if !repeat {
+		slog.Warn("runner posture: the MDM posture file is ignored", "path", path, "error", err)
+	}
 }
 
 // mdmPosture is the file's closed shape.

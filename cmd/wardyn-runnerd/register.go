@@ -101,10 +101,23 @@ type registeredRunner struct {
 }
 
 // registerRunner measures this host, settles the limits, spends the token and saves the identity. A
-// refused limit or a missing token file returns before anything is spent.
+// refused limit or a missing token file returns before anything is spent, and before any question is asked.
 func registerRunner(cmd *cobra.Command, a registerArgs) (registeredRunner, error) {
 	org, tokenFile, stateDir, name := a.org, a.tokenFile, a.stateDir, a.name
 	if err := federation.CheckOrgURL(org); err != nil {
+		return registeredRunner{}, err
+	}
+	// The machine name is what the host calls itself, reported beside the display name; a host that
+	// cannot say registers without one.
+	machine, _ := os.Hostname()
+	if name == "" {
+		if machine == "" {
+			return registeredRunner{}, errors.New("this host reports no name: pass --name")
+		}
+		name = machine
+	}
+	token, err := readRegistrationToken(tokenFile)
+	if err != nil {
 		return registeredRunner{}, err
 	}
 	// The limits are measured and checked before anything is spent: a refused limit keeps the token.
@@ -113,6 +126,9 @@ func registerRunner(cmd *cobra.Command, a registerArgs) (registeredRunner, error
 		measured = types.RunnerAmounts{}
 	}
 	fmt.Fprintln(cmd.OutOrStdout(), reports(measured))
+	if err != nil {
+		fmt.Fprintf(cmd.OutOrStdout(), "measuring this computer failed: %v\n", err)
+	}
 	if in, out := cmd.InOrStdin(), cmd.OutOrStdout(); asksAt(in, out) {
 		if err := a.limits.ask(cmd, in, out, measured); err != nil {
 			return registeredRunner{}, err
@@ -128,19 +144,6 @@ func registerRunner(cmd *cobra.Command, a registerArgs) (registeredRunner, error
 		if err != nil {
 			return registeredRunner{}, err
 		}
-	}
-	// The machine name is what the host calls itself, reported beside the display name; a host that
-	// cannot say registers without one.
-	machine, _ := os.Hostname()
-	if name == "" {
-		if machine == "" {
-			return registeredRunner{}, errors.New("this host reports no name: pass --name")
-		}
-		name = machine
-	}
-	token, err := readRegistrationToken(tokenFile)
-	if err != nil {
-		return registeredRunner{}, err
 	}
 	key, err := runneridentity.Generate(stateDir)
 	if err != nil {

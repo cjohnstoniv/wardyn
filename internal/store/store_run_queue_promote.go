@@ -439,6 +439,7 @@ func (s PG) QueueEntriesOfRevokedRunners(ctx context.Context, limit int) ([]RunQ
 	return collect(ctx, s.Pool, "list", "run queue entries of revoked runners",
 		`SELECT `+runQueueCols+` FROM run_queue
 		  WHERE lower(launch->'request'->>'runner_id') IN (SELECT id::text FROM runners WHERE state = 'revoked')
+		    AND EXISTS (SELECT 1 FROM agent_runs r WHERE r.id = run_queue.run_id AND r.state = 'QUEUED')
 		  ORDER BY queued_at, run_id LIMIT $1`,
 		[]any{limit}, func(row pgx.Row) (RunQueueEntry, error) { return scanRunQueueEntry(row) })
 }

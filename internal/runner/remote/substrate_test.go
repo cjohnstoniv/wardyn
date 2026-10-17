@@ -595,3 +595,24 @@ func TestAdvertisedCapacityIsUnknownUntilBothSizesAreReported(t *testing.T) {
 		t.Fatalf("a reported capacity = %+v, want it advertised", f)
 	}
 }
+
+// A recovery copy from a runner that never ends its side stops with the caller's context, instead of
+// holding its goroutine and stream slot until the runner's copy ends.
+func TestRecoverOutputEndsWithTheCallersContext(t *testing.T) {
+	rig := runnertest.NewRig(t, rid)
+	sb, _ := create(t, rig, nil)
+	rig.Fake.RecoverHold = make(chan struct{})
+	t.Cleanup(func() { close(rig.Fake.RecoverHold) })
+	ctx, cancel := context.WithTimeout(ctxT(t), 300*time.Millisecond)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- rig.Sub.RecoverOutput(ctx, sb.Ref, io.Discard) }()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("RecoverOutput = %v, want the context's deadline", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("RecoverOutput outlived its context")
+	}
+}

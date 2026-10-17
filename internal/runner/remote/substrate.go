@@ -389,8 +389,14 @@ func (s *Substrate) RecoverOutput(ctx context.Context, ref string, w io.Writer) 
 		s.mu.Unlock()
 	}
 	defer st.Close()
+	// The copy ends with the caller's ctx: a runner that never ends its side must not keep this
+	// goroutine and the stream slot past the finaliser's deadline.
+	defer context.AfterFunc(ctx, func() { _ = st.Close() })()
 	_ = st.CloseWrite()
 	_, err = io.Copy(w, st)
+	if cerr := ctx.Err(); cerr != nil {
+		return cerr
+	}
 	return err
 }
 

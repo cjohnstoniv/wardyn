@@ -102,7 +102,10 @@ func (h setupHost) checkServiceManager(ctx context.Context, p setupPaths) error 
 	if h.goos != "linux" {
 		return nil
 	}
-	out, _ := h.run(ctx, "systemctl", "--user", "show", "-p", "UnitPath", "--value")
+	out, err := h.run(ctx, "systemctl", "--user", "show", "-p", "UnitPath", "--value")
+	if err != nil {
+		return fmt.Errorf("the systemd user manager did not answer (%w: %s), so setup cannot start the service: no token was spent", err, strings.TrimSpace(string(out)))
+	}
 	dir := filepath.Dir(p.unitFile)
 	if !strings.Contains(" "+strings.TrimSpace(string(out))+" ", " "+dir+" ") {
 		return fmt.Errorf("the systemd user manager does not search %s for units, so it could not find the service: no token was spent", dir)
@@ -181,7 +184,7 @@ func (h setupHost) startService(ctx context.Context, plan setupPlan, out io.Writ
 	if plan.dockerHost != "" {
 		env += "DOCKER_HOST=" + plan.dockerHost + "\n"
 	}
-	unit := strings.ReplaceAll(runnerunits.SystemdUnit, "__WARDYN_RUNNERD__", p.installed)
+	unit := strings.ReplaceAll(runnerunits.SystemdUnit, "__WARDYN_RUNNERD__", systemdQuote(p.installed))
 	for _, f := range []struct {
 		path, text string
 		mode       os.FileMode
@@ -204,6 +207,12 @@ func (h setupHost) startService(ctx context.Context, plan setupPlan, out io.Writ
 		fmt.Fprintf(out, "XDG_CONFIG_HOME is set here, so pass --state-dir %s to wardyn runner claim.\n", p.stateDir)
 	}
 	return nil
+}
+
+// systemdQuote renders s as one double-quoted systemd command-line word: a backslash or quote is
+// escaped, and % (specifier) and $ (variable) are doubled, so a path with a space or % stays one argument.
+func systemdQuote(s string) string {
+	return `"` + strings.NewReplacer(`\`, `\\`, `"`, `\"`, "%", "%%", "$", "$$").Replace(s) + `"`
 }
 
 // pinnedImage is the proxy image the service definition names, or "" when setup only derived this

@@ -64,7 +64,7 @@ func (f *execPerDrain) Exec(ctx context.Context, ref string, argv []string) (str
 
 func (f *execPerDrain) ExecTo(_ context.Context, ref string, argv []string, w io.Writer) (string, error) {
 	text, code := "task output\n", 0
-	if slices.Equal(argv, selftestArgvForTest) {
+	if slices.Equal(argv, runner.SelftestArgv()) {
 		text, code = "selftest output\n", f.exitSelftest
 	}
 	end := runner.BeginOutputDrain(w)
@@ -84,10 +84,6 @@ func (f *execPerDrain) Wait(_ context.Context, ref string) (int, error) {
 	defer f.mu.Unlock()
 	return f.exit[ref], nil
 }
-
-// selftestArgvForTest is what the org's BYOI dispatch execs before the task
-// (internal/api/runs_dispatch_byoi.go).
-var selftestArgvForTest = []string{"/usr/local/bin/agent-run", "--selftest"}
 
 // sealedOutput is the org's ExecOutput: it records the bytes and the EOF the
 // runner's output stream delivers.
@@ -184,7 +180,7 @@ func (o *sealedOutput) sealed(t *testing.T) (string, error) {
 func TestRemoteBYOISelftestLeavesTheRunOutputToTheTask(t *testing.T) {
 	sub := newExecPerDrain()
 	org, ref, out := remoteRun(t, sub, "wardyn-byoi/"+uuid.NewString()+":latest")
-	if code := execAndWait(t, org, ref, selftestArgvForTest); code != 0 {
+	if code := execAndWait(t, org, ref, runner.SelftestArgv()); code != 0 {
 		t.Fatalf("selftest exit = %d", code)
 	}
 	execAndWait(t, org, ref, []string{"/usr/local/bin/agent-run", "do the thing"})
@@ -205,7 +201,7 @@ func TestRemoteBYOIFailingSelftestStillAnswersItsExit(t *testing.T) {
 	sub := newExecPerDrain()
 	sub.exitSelftest = 3
 	org, ref, _ := remoteRun(t, sub, "wardyn-byoi/"+uuid.NewString()+":latest")
-	if code := execAndWait(t, org, ref, selftestArgvForTest); code != 3 {
+	if code := execAndWait(t, org, ref, runner.SelftestArgv()); code != 3 {
 		t.Fatalf("selftest exit = %d, want 3", code)
 	}
 }
@@ -213,13 +209,13 @@ func TestRemoteBYOIFailingSelftestStillAnswersItsExit(t *testing.T) {
 // A non-BYOI run is untouched: every exec, whatever its argv, is the run's
 // output, as before.
 func TestRemoteNonBYOIRunOutputUnchanged(t *testing.T) {
-	for _, argv := range [][]string{{"/usr/local/bin/agent-run", "do the thing"}, selftestArgvForTest} {
+	for _, argv := range [][]string{{"/usr/local/bin/agent-run", "do the thing"}, runner.SelftestArgv()} {
 		sub := newExecPerDrain()
 		org, ref, out := remoteRun(t, sub, "wardyn/agent:latest")
 		execAndWait(t, org, ref, argv)
 		got, err := out.sealed(t)
 		want := "task output\n"
-		if slices.Equal(argv, selftestArgvForTest) {
+		if slices.Equal(argv, runner.SelftestArgv()) {
 			want = "selftest output\n"
 		}
 		if got != want || err != nil {
@@ -233,8 +229,8 @@ func TestRemoteNonBYOIRunOutputUnchanged(t *testing.T) {
 func TestRemoteBYOITaskNamedSelftestIsTheRunOutput(t *testing.T) {
 	sub := newExecPerDrain()
 	org, ref, out := remoteRun(t, sub, "wardyn-byoi/"+uuid.NewString()+":latest")
-	execAndWait(t, org, ref, selftestArgvForTest)
-	execAndWait(t, org, ref, selftestArgvForTest)
+	execAndWait(t, org, ref, runner.SelftestArgv())
+	execAndWait(t, org, ref, runner.SelftestArgv())
 	got, err := out.sealed(t)
 	if got != "selftest output\n" || err != nil {
 		t.Fatalf("sealed output = %q, %v; want the task's output with a clean end", got, err)
@@ -252,5 +248,22 @@ func TestSelftestLogKeepsABoundedTail(t *testing.T) {
 	}
 	if len(l.tail) != selftestLogMax || !bytes.HasSuffix(l.tail, []byte("end")) {
 		t.Fatalf("kept %d bytes ending %q", len(l.tail), l.tail[len(l.tail)-3:])
+	}
+}
+
+// A BYOI sandbox stopped, killed or ended before its selftest leaves nothing awaiting it.
+func TestSelftestAwaitEndsWithTheSandbox(t *testing.T) {
+	for _, method := range []string{runnerwire.MethodStop, runnerwire.MethodKill, runnerwire.MethodEnd} {
+		d, err := newTestDispatcher(Config{RunnerID: uuid.NewString(), Substrate: newExecPerDrain(),
+			BeforeCreate: func(context.Context, runner.SandboxSpec) error { return nil },
+			Created:      func(context.Context, runner.SandboxSpec, string) error { return nil }})
+		if err != nil {
+			t.Fatal(err)
+		}
+		d.awaitSelftest("ref", "wardyn-byoi/x:latest")
+		_, _ = d.dispatchRef(context.Background(), method, "ref", refArgs{})
+		if _, awaited := d.selftests.Load("ref"); awaited {
+			t.Errorf("%s left the sandbox awaiting its selftest", method)
+		}
 	}
 }

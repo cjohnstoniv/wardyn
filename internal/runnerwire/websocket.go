@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -73,6 +74,9 @@ func StreamURL(orgURL, runnerID string) (string, error) {
 	return u.String(), nil
 }
 
+// refusalBodyLimit bounds how much of the organisation's refusal body is read for its reason code.
+const refusalBodyLimit = 4 << 10
+
 // DialWebSocket uses the HTTP transport's TLS roots and HTTPS_PROXY support.
 // Redirects are always refused, including when a caller supplies a client.
 func DialWebSocket(ctx context.Context, orgURL, runnerID string, client *http.Client) (*WebSocket, error) {
@@ -92,7 +96,7 @@ func DialWebSocket(ctx context.Context, orgURL, runnerID string, client *http.Cl
 			var body struct {
 				Reason string `json:"reason"`
 			}
-			_ = json.NewDecoder(resp.Body).Decode(&body)
+			_ = json.NewDecoder(io.LimitReader(resp.Body, refusalBodyLimit)).Decode(&body)
 			_ = resp.Body.Close()
 			if body.Reason != "" {
 				err = fmt.Errorf("%w (reason %s)", err, body.Reason)
