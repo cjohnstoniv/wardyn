@@ -191,8 +191,8 @@ func TestAgentProvidersPut(t *testing.T) {
 		if w.Code != http.StatusPreconditionFailed {
 			t.Fatalf("expected-principal mismatch = %d, want 412; body=%s", w.Code, w.Body.String())
 		}
-		if !strings.Contains(w.Body.String(), agent412Stale) || !strings.Contains(w.Body.String(), `"reason":"site_config_stale"`) {
-			t.Errorf("412 body = %s, want the existing stale sentence and reason", w.Body.String())
+		if !strings.Contains(w.Body.String(), expectedPrincipalMismatch) || !strings.Contains(w.Body.String(), `"reason":"site_config_stale"`) {
+			t.Errorf("412 body = %s, want the expected-principal sentence and the existing stale reason", w.Body.String())
 		}
 		if fake.putSeen != before {
 			t.Error("a refused Save reached the store")
@@ -354,6 +354,27 @@ func agentRosterFixture(t *testing.T, block *types.AgentProviders) *Server {
 	cfg.MaskRegistry = secretmask.NewRegistry()
 	cfg.DefaultPolicy = govDeployment()
 	return New(cfg)
+}
+
+func TestRunCreateRefusesADraftFromAnotherPerson(t *testing.T) {
+	srv := agentRosterFixture(t, nil)
+	body := `{"task":"echo hi","agent":"claude-code"}`
+	w := doWithHeaders(t, srv, http.MethodPost, "/api/v1/runs", adminToken, body,
+		map[string]string{expectedPrincipalHeader: "someone-else%40example.com"})
+	if w.Code != http.StatusPreconditionFailed || errorReason(w) != reasonSiteConfigStale ||
+		!strings.Contains(w.Body.String(), expectedPrincipalMismatch) {
+		t.Fatalf("launch under another person = %d, want 412 site_config_stale with the expected-principal sentence; body=%s", w.Code, w.Body.String())
+	}
+	w = doWithHeaders(t, srv, http.MethodPost, "/api/v1/runs", adminToken, body,
+		map[string]string{expectedPrincipalHeader: adminTokenPrincipal})
+	if w.Code == http.StatusPreconditionFailed {
+		t.Fatalf("launch under the signed-in person was refused: %s", w.Body.String())
+	}
+	// A read never carries the header's meaning.
+	if w = doWithHeaders(t, srv, http.MethodGet, "/api/v1/agent-providers", adminToken, "",
+		map[string]string{expectedPrincipalHeader: "someone-else"}); w.Code != http.StatusOK {
+		t.Errorf("GET with a foreign header = %d, want 200", w.Code)
+	}
 }
 
 // TestAgentRosterRefusesRunCreate is the enforcement half, and its FIRST half is

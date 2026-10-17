@@ -857,8 +857,8 @@ func TestWorkspaceProvidersPutRefusals(t *testing.T) {
 	w = doWithHeaders(t, srv, http.MethodPut, "/api/v1/workspace-providers", adminToken,
 		`{"git":[{"id":"gh","kind":"github","base_urls":["https://github.com/acme"]}]}`,
 		map[string]string{expectedPrincipalHeader: "someone-else%40example.com"})
-	if w.Code != http.StatusPreconditionFailed || !strings.Contains(w.Body.String(), providers412Stale) {
-		t.Fatalf("expected-principal mismatch = %d, want 412 with the stale sentence; body=%s", w.Code, w.Body.String())
+	if w.Code != http.StatusPreconditionFailed || !strings.Contains(w.Body.String(), expectedPrincipalMismatch) {
+		t.Fatalf("expected-principal mismatch = %d, want 412 with the expected-principal sentence; body=%s", w.Code, w.Body.String())
 	}
 	if fake.putSeen != before {
 		t.Error("a refused Save reached the store")

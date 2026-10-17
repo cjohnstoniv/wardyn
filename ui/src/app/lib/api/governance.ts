@@ -355,7 +355,7 @@ export const governance = {
   // refusing a profile that would MINT credential eligibility; every 4xx
   // surfaces as an HttpError carrying the server's own message.
   async createProfile(input: GovernanceProfileInput): Promise<GovernanceProfileWrite> {
-    return writeProfile(await wfetch("/governance/profiles", { method: "POST", body: JSON.stringify(input) }));
+    return writeProfile(await wfetch("/governance/profiles", { method: "POST", asPerson: true, body: JSON.stringify(input) }));
   },
 
   // PUT /api/v1/governance/profiles/{id} -> 200 {profile, warnings}. Rename
@@ -363,7 +363,7 @@ export const governance = {
   // assigned profile, so the update path has to carry the name.
   async updateProfile(id: string, input: GovernanceProfileInput): Promise<GovernanceProfileWrite> {
     return writeProfile(
-      await wfetch(`/governance/profiles/${encodeURIComponent(id)}`, { method: "PUT", body: JSON.stringify(input) }),
+      await wfetch(`/governance/profiles/${encodeURIComponent(id)}`, { method: "PUT", asPerson: true, body: JSON.stringify(input) }),
     );
   },
 

@@ -98,15 +98,15 @@ it("independent listeners dispose without disabling a replacement", () => {
   expect(second).toHaveBeenCalledTimes(2);
 });
 
-it("names the confirmed person on a screen's Save only (DR-0034)", async () => {
+it("names the confirmed person on an asPerson draft write only (DR-0034)", async () => {
   const sent = () => (fetchMock.mock.calls.at(-1)![1]!.headers as Headers).get("X-Wardyn-Expected-Principal");
   fetchMock.mockImplementation(async () => new Response("{}", { status: 200 }));
   setExpectedPrincipal("a@example.com");
-  await wfetch("/agent-providers", { method: "PUT", save: "agent-providers" });
+  await wfetch("/agent-providers", { method: "PUT", asPerson: true });
   expect(sent()).toBe("a%40example.com");
   await wfetch("/agent-providers", { method: "PUT" });
   expect(sent()).toBeNull();
   setExpectedPrincipal("");
-  await wfetch("/agent-providers", { method: "PUT", save: "agent-providers" });
+  await wfetch("/agent-providers", { method: "PUT", asPerson: true });
   expect(sent()).toBeNull();
 });

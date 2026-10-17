@@ -282,9 +282,6 @@ func (s *Server) handleGetAgentProviders(w http.ResponseWriter, r *http.Request)
 //
 //	PUT /api/v1/agent-providers
 func (s *Server) handlePutAgentProviders(w http.ResponseWriter, r *http.Request) {
-	if refuseExpectedPrincipalMismatch(w, r, agent412Stale) {
-		return
-	}
 	var body types.AgentProviders
 	if !decodeStrict(w, r, &body) {
 		return

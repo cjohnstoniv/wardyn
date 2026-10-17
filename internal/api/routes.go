@@ -62,7 +62,7 @@ func (s *Server) routes() chi.Router {
 	r.Route("/api/v1", func(r chi.Router) {
 		// Public admin-gated surface.
 		r.Group(func(r chi.Router) {
-			r.Use(s.humanOrAdminAuth)
+			r.Use(s.humanOrAdminAuth, s.expectedPrincipalGuard)
 			// operatorOnly and securityOps are the two gate values over this one
 			// authenticated group (chi's With is what Group is built from):
 			// operatorOnly is the super-admin role gate (requireOperator, which reads
