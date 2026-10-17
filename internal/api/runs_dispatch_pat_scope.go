@@ -232,8 +232,7 @@ func (s *Server) refusePATDispatch(ctx context.Context, run types.AgentRun, reas
 func (s *Server) patNarrowingAtDoor(r *http.Request, req createRunRequest, spec types.RunPolicySpec, site types.SiteConfig) (reason, detail string) {
 	env := patNarrowingEnv{brokerOn: !s.cfg.DisableGitPATBroker, site: site, bbsAPI: patAPIBitbucketOn()}
 	env.brokered = len(githubCLIRepos(req, spec, site)) > 0
-	if lane, on := resolveADOEntraRun(site, repoLocatorsOf(spec.WorkspaceRepos),
-		runIdentitySubject(r.Context(), principalFromRequest(r))); on {
+	if lane, on := resolveADOEntraRun(site, spec.WorkspaceRepos, req.Repo, adoLaneOwnerOf(r)); on {
 		env.adoHosts = lane.laneHosts()
 	}
 	return patNarrowingRefusal(spec.EligibleGrants, env)

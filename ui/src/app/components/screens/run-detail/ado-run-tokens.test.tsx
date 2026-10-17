@@ -8,6 +8,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import type { ADORunToken } from "../../../lib/types/ado-pat";
+import type { AuditEvent } from "../../../lib/types";
 import { ADO_PAT } from "../../../lib/ado-pat-copy";
 import { AdoRunTokens } from "./ado-run-tokens";
 import { CredentialsWidget } from "./widgets/credentials";
@@ -90,5 +91,49 @@ describe("AdoRunTokens", () => {
     runTokensMock.mockResolvedValue([tok()]);
     render(<CredentialsWidget grants={[]} audit={[]} ado={{ runId: "run-1", paused: false, live: false }} />);
     expect(await screen.findByTestId("ado-run-tokens")).toBeInTheDocument();
+  });
+});
+
+// T17: a run the per-person lane declined says why under "Azure DevOps", in the
+// server's own sentence; an ordinary run draws nothing of it.
+describe("CredentialsWidget — the Azure DevOps decline", () => {
+  const detail =
+    "This run was not given an Azure DevOps credential: no Azure DevOps provider admits its repository.";
+  const skip = {
+    id: "ev-1",
+    time: at(9, 0),
+    run_id: "run-1",
+    actor_type: "system",
+    actor: "wardynd",
+    action: "run.ado_lane.skip",
+    target: "run-1",
+    outcome: "denied",
+    data: { reason: "row_not_admitted", detail },
+  } as AuditEvent;
+
+  it("renders the decline's detail under the Azure DevOps heading", async () => {
+    runTokensMock.mockResolvedValue([]);
+    render(<CredentialsWidget grants={[]} audit={[skip]} />);
+    const block = screen.getByTestId("ado-lane-declined");
+    expect(block).toHaveTextContent(ADO_PAT.RUN_TOKEN_TITLE);
+    expect(screen.getByRole("alert")).toHaveTextContent(detail);
+  });
+
+  it("renders the approved sentence from the reason code, and the row's detail for a code it does not know", async () => {
+    runTokensMock.mockResolvedValue([]);
+    const known = { ...skip, data: { reason: "no_person", detail: "older server wording" } } as AuditEvent;
+    const { unmount } = render(<CredentialsWidget grants={[]} audit={[known]} />);
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      /^This run was not given an Azure DevOps credential: no signed-in person started it\.$/,
+    );
+    unmount();
+    const unknown = { ...skip, data: { reason: "a_new_code", detail: "newer server wording" } } as AuditEvent;
+    render(<CredentialsWidget grants={[]} audit={[unknown]} />);
+    expect(screen.getByRole("alert")).toHaveTextContent(/^newer server wording$/);
+  });
+
+  it("renders nothing of it for an ordinary run", () => {
+    render(<CredentialsWidget grants={[]} audit={[]} />);
+    expect(screen.queryByTestId("ado-lane-declined")).not.toBeInTheDocument();
   });
 });

@@ -86,7 +86,7 @@ func TestAdmissionCredentialHosts(t *testing.T) {
 			EligibleGrants: []types.GrantSpec{apiKeyOn("dev.azure.com")}}, site: adoSite(adoEntraTestRow()), hosts: 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			hosts := admissionCredentialHosts(tc.spec, tc.site, tc.subject)
+			hosts := admissionCredentialHosts(tc.spec, tc.site, "", tc.subject)
 			if len(hosts) != tc.hosts {
 				t.Errorf("hosts = %+v, want %d", hosts, tc.hosts)
 			}

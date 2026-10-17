@@ -338,6 +338,12 @@ A successful response contains `spec` (authorized, clamped, workspace-folded and
 - Mount host paths and grant secret references are redacted for every preview reader.
 - Warnings contain only count/structural messages and authorized ADO narrowing text; unsafe clamp messages are omitted.
 
+`ado_lane_declined` is a run-level result: the reason the per-person Azure DevOps credential would not be given to this run's sandbox.
+
+- It is decided by the resolver launch uses, over the run's workspace repositories and `repo`, for the same person. It never covers `devcontainer_repo`, which the server clones.
+- When it is absent, no structural decline was reported. That is not a promise the credential is given: inputs that name no Azure DevOps repository omit it, and a repository the credential cannot serve (an SSH address, say) is skipped while another serves it.
+- Launch decides again from the provider rows as they are then. The person's connection (`pending`: `credential_liveness`) and the row's capability ceiling are checked only at launch.
+
 - Repository locators retain their transport, meaningful port and full escaped path, with URL userinfo, query strings and fragments omitted.
 - Supported SSH aliases and scp forms use a normalized `ssh://` locator; the SSH-over-443 port is implicit.
 - A group shares all of its displayed facts: ADO profiles and ceilings are sorted capability sets, and differing sets produce separate groups even when the displayed `org` is identical.
@@ -941,6 +947,7 @@ applied until a different approver approves it. The SDK never reads that body as
   make, as a `GovernancePlan`, and writes nothing: one `GET /api/v1/governance`, no write request.
   Its matching rules are `ApplyGovernance`'s. A plan is a snapshot: the server can change before an
   apply runs.
+- `GET /governance` returns every profile and every assignment. `/governance/profiles` and `/governance/profiles/{id}` take writes only, so a `GET` on either answers `405`.
 - `GovernanceApplyResult.Steps` lists the writes an apply issued, in order, each `applied`, `pending`
   or `failed`. On a failed write `ApplyGovernanceResult` returns the steps so far with the error.
 - `ApplyDrivesResult` is `ApplyDrives` with the same steps, as `DrivesApplyResult.Steps`; `ApplyDrives`

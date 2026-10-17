@@ -337,7 +337,7 @@ func (s *Server) adoOverrideBase(ctx context.Context, r *http.Request, spec type
 	if err != nil {
 		return nil, runServerError("get site config", err)
 	}
-	lane, on := resolveADOEntraRun(site, presentRepos(append(repoLocatorsOf(spec.WorkspaceRepos), req.Repo)), runIdentitySubject(ctx, principalFromRequest(r)))
+	lane, on := resolveADOEntraRun(site, spec.WorkspaceRepos, req.Repo, adoLaneOwnerOf(r))
 	if !on {
 		return nil, runError(http.StatusUnprocessableEntity, reasonOverrideRefused,
 			"azure_devops.capabilities can only narrow Azure DevOps access this run has, and this run's repository resolves to no per-person Azure DevOps access.")

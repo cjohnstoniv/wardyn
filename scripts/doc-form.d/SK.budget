@@ -7,7 +7,8 @@ docs/operations/secrets-and-keys.md=10697 share=25
 # docs/operations/secrets-and-keys.md 10575 adds 40 (0.9 F-588 M2): the Helm bullet in 'Key service: AWS KMS' and the TestLive_AWSKMS bullet under 'Not verified live yet'.
 # docs/operations/monitoring.md 2035 adds 6 over 2029 (G-090-cleanup slice F, docs rows that contradict the code): measured; the lead re-measures at merge.
 # docs/operations/monitoring.md 2094 adds 59 over 2035: 0.9 final docs pass, measured: the three runner pool queue metric families.
-docs/operations/monitoring.md=2094 share=13
+# docs/operations/monitoring.md 2138 adds 44 over 2094, measured (0.9.3 ADO): wardyn_audit_outcome_refused_total.
+docs/operations/monitoring.md=2138 share=13
 # docs/operations/monitoring.md=2001 adds 158 (0.9 F-1513): the five wardyn_audit_delivery_* metric rows (#1513).
 # docs/operations/monitoring.md=2029 adds 28 (0.9 Q-b): the run_queue sweep row.
 # docs/operations/run-lifetime.md 2026 adds 19 over 2007: revive refusals name the Azure CLI case and say a refused live run keeps its access, measured.

@@ -97,7 +97,7 @@ func (s *Server) localResolvedPlan(ctx context.Context, run types.AgentRun, self
 	s.localPolicyGrantOrigins(ctx, owner, rows, &p)
 	s.localProxyGrantOrigins(ctx, owner, byID, &p)
 	s.localResidentOrigins(ctx, owner, rows, llm, &p)
-	ado, azure := localIdentityLanes(run, sc, spec, owner)
+	ado, azure := localIdentityLanes(ctx, run, sc, spec, owner)
 	s.localIdentityOrigins(ctx, owner, ado, azure, &p)
 	return p, s.localPlanFacts(ctx, &p, egressBaselineOf(sc), run.RunnerID)
 }
@@ -243,9 +243,11 @@ func (s *Server) localProxyGrantOrigins(ctx context.Context, owner string, byID 
 
 // localIdentityLanes is the Azure DevOps lane and the Azure Foundry lane a local run's identity
 // credentials are classified from, resolved from the run, its spec's repositories and the site
-// configuration the way dispatch resolves them (resolveADOEntraRun, providerLaneForRun).
-func localIdentityLanes(run types.AgentRun, sc types.SiteConfig, spec runner.SandboxSpec, owner string) (adoEntraRun, *providerAzureLane) {
-	ado, _ := resolveADOEntraRun(sc, repoLocatorsOf(spec.ProxyConfig.Policy.WorkspaceRepos), owner)
+// configuration the way dispatch resolves them (resolveADOEntraRun, providerLaneForRun). run.Repo
+// stands in for dispatch's ADOLaneRepo: it only classifies a grant dispatch already stored
+// (localIdentityOrigins), which a server-authored lane never has.
+func localIdentityLanes(ctx context.Context, run types.AgentRun, sc types.SiteConfig, spec runner.SandboxSpec, owner string) (adoEntraRun, *providerAzureLane) {
+	ado, _ := resolveADOEntraRun(sc, spec.ProxyConfig.Policy.WorkspaceRepos, run.Repo, adoLaneOwnerOfRun(ctx, run))
 	p, found := modelProviderByID(sc.ModelProviders, run.ModelProviderID)
 	if !found || p.Disabled || p.Kind != types.ModelProviderAzureFoundry {
 		return ado, nil
