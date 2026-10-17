@@ -384,8 +384,12 @@ func TestDriveUnavailableHere_Pool(t *testing.T) {
 		t.Errorf("unchecked pool = %q", got)
 	}
 	// A profile that denies remote-hosted runners leaves a drive nowhere to mount, in any pool.
-	if got := srv.driveUnavailableHere(ctx, d, remote, true, true); got != client.MeDriveUnavailableNotInPool {
+	// It says the profile, not the pool, and needs no pool to say it.
+	if got := srv.driveUnavailableHere(ctx, d, remote, true, true); got != client.MeDriveUnavailablePlacementDenied {
 		t.Errorf("remote-provided, remote denied = %q", got)
+	}
+	if got := srv.driveUnavailableHere(ctx, d, self, false, true); got != client.MeDriveUnavailablePlacementDenied {
+		t.Errorf("unchecked pool, remote denied = %q", got)
 	}
 }
 

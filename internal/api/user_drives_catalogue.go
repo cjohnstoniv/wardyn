@@ -127,7 +127,8 @@ func (s *Server) handleListMeDrives(w http.ResponseWriter, r *http.Request) {
 
 // meDrives lists the caller's catalogue rows, each with the first reason it
 // cannot be attached: paused, then unmountable (driveBindFailureHere, the
-// launch's own decision), then not_in_pool against the named pool.
+// launch's own decision), then placement_denied when the profile denies remote
+// runs, then not_in_pool against the named pool.
 func (s *Server) meDrives(ctx context.Context, poolID string) ([]client.MeDrive, bool, string) {
 	profileMaxDriveMiB, remoteDenied := 0, false
 	if ceiling, err := s.effectiveCeiling(ctx); err == nil {
@@ -167,7 +168,9 @@ func (s *Server) driveUnavailableHere(ctx context.Context, d reachableDrive, poo
 		return client.MeDriveUnavailablePaused
 	case d.resolved == nil || d.target() == "" || s.driveBindFailureHere(ctx, *d.resolved) != nil:
 		return client.MeDriveUnavailableUnmountable
-	case checked && (remoteDenied || driveNotInPool(pool, d.winner.Drive)):
+	case remoteDenied:
+		return client.MeDriveUnavailablePlacementDenied
+	case checked && driveNotInPool(pool, d.winner.Drive):
 		return client.MeDriveUnavailableNotInPool
 	}
 	return ""

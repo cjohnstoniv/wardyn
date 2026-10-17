@@ -11,7 +11,7 @@ import { asJson, errText, HttpError, unwrapList, wfetch } from "./core";
 
 export type MeDriveSection = "user" | "shared";
 export type MeDriveSource = "personal" | "team" | "organisation";
-export type MeDriveUnavailableReason = "paused" | "unmountable" | "not_in_pool";
+export type MeDriveUnavailableReason = "paused" | "unmountable" | "placement_denied" | "not_in_pool";
 
 /** One drive of the caller's catalogue (pkg/client.MeDrive). */
 export interface MeDrive {

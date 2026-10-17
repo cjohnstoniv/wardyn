@@ -13,6 +13,7 @@ import { myDrives, type MeDrive, type MeDriveCatalogue } from "../../../../../li
 import { MEMBER } from "../../../../../lib/governance-copy";
 import { DRIVE_MEMBER } from "../../../../../lib/user-drives-copy";
 import { NR_FILES } from "../../../../wardyn/copy/new-run/files";
+import { NR_RUN } from "../../../../wardyn/copy/new-run/run";
 
 const UNAVAILABLE_TEXT: Record<string, string | undefined> = {
   groups_snapshot_stale: MEMBER.DENIED_STALE_GROUPS,
@@ -24,6 +25,7 @@ const UNAVAILABLE_TEXT: Record<string, string | undefined> = {
 const DRIVE_REASON: Record<NonNullable<MeDrive["unavailable_reason"]>, string> = {
   paused: DRIVE_MEMBER.NR_PAUSED,
   unmountable: DRIVE_MEMBER.NR_UNAVAILABLE,
+  placement_denied: NR_RUN.REASON_NOT_ALLOWED_PROFILE,
   not_in_pool: NR_FILES.NOT_IN_POOL,
 };
 
