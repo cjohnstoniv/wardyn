@@ -97,7 +97,7 @@ func TestEgressBaselineRefusesAnythingButExactHostnames(t *testing.T) {
 	srv, fake, _ := egressBaselineServer(t, types.SiteConfig{InternalHosts: []types.InternalHost{{HostSuffix: "corp.example"}}})
 	secAdmin := ssoSession(t, "sub-s", "s@corp.example", oidc.RoleSecurityAdmin)
 	for _, bad := range []string{"*.corp.example", "https://llm.corp.example", "llm.corp.example:8443", "llm.corp.example/v1",
-		"10.1.2.3", "::1", "localhost", "", "llm.corp.example.", "a b.corp.example"} {
+		"10.1.2.3", "::1", "localhost", "", "llm.corp.example.", "a b.corp.example", "*", "com"} {
 		body, _ := json.Marshal(map[string]any{"baseline_hosts": []string{"ok.corp.example", bad}})
 		w := doSSO(t, srv, http.MethodPut, egressBaselinePath, secAdmin, string(body))
 		if w.Code != http.StatusBadRequest || errorReason(w) != reasonEgressBaselineInvalid {
@@ -106,7 +106,7 @@ func TestEgressBaselineRefusesAnythingButExactHostnames(t *testing.T) {
 	}
 	// A suffix is held to the same shape, must name a stored internal_hosts entry, and must not be a
 	// public suffix (it would mark every host under a registry-controlled name).
-	for _, bad := range []string{"*.corp.example", "corp.example:443", "10.1.2.3", "other.example", "co.uk", "github.io"} {
+	for _, bad := range []string{"*.corp.example", "corp.example:443", "10.1.2.3", "other.example", "co.uk", "github.io", "*", "com"} {
 		body, _ := json.Marshal(map[string]any{"internal_host_suffixes": []string{bad}})
 		w := doSSO(t, srv, http.MethodPut, egressBaselinePath, secAdmin, string(body))
 		if w.Code != http.StatusBadRequest || errorReason(w) != reasonEgressBaselineInvalid {
