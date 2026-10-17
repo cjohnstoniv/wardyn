@@ -189,3 +189,24 @@ func TestGatewayMembershipIgnoresIPSpelling(t *testing.T) {
 		t.Errorf("redactErr = %q, still lists the certificate's addresses", got)
 	}
 }
+
+// The classification and the route target use the same membership rule as the
+// error path: a gateway reached by another spelling of its address is still the
+// gateway (and so still gets the gateway vet, not the sandbox-target one).
+func TestGatewayIPSpellingIsOneHostForClassifyAndRoute(t *testing.T) {
+	p := newProxy(Options{RunID: uuid.New(), Policy: CompilePolicy(types.RunPolicySpec{}),
+		LLMUpstreams: map[string]string{anthropicHost: "https://[fd12:3456::7]:8443/a", openaiHost: "https://10.1.2.3:8443/a"}})
+	for _, h := range []string{"fd12:3456::7", "FD12:3456:0:0:0:0:0:7", "10.1.2.3", "::ffff:10.1.2.3"} {
+		if !p.isLLMHost(h) {
+			t.Errorf("isLLMHost(%q) = false, want the configured gateway", h)
+		}
+	}
+	if p.isLLMHost("10.1.2.4") || p.isLLMHost("::ffff:10.1.2.4") {
+		t.Error("isLLMHost matched an address that is no gateway's")
+	}
+	for _, h := range []string{"10.1.2.3", "::ffff:10.1.2.3"} {
+		if got, err := p.llmRouteTarget(h, 8443); err != nil || got != "10.1.2.3:8443" {
+			t.Errorf("llmRouteTarget(%q) = %q, %v; want the gateway vet to accept 10.1.2.3:8443", h, got, err)
+		}
+	}
+}

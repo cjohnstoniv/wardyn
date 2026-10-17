@@ -218,10 +218,10 @@ func (p *Proxy) proxyLLMRequest(w http.ResponseWriter, r *http.Request, host str
 // RFC1918/ULA/CGNAT — safe ONLY because that host was typed into the control
 // plane at boot. Applying it unconditionally would let a poisoned/split-horizon
 // resolver answering RFC1918 for a public vendor host get the brokered
-// credential delivered to it (DNS rebinding). A host not in p.gatewayVendor
-// takes egressTarget.
+// credential delivered to it (DNS rebinding). A host that is no configured
+// gateway's (gatewayVendorOf) takes egressTarget.
 func (p *Proxy) llmRouteTarget(host string, port int) (string, error) {
-	if _, isGateway := p.gatewayVendor[strings.TrimSuffix(strings.ToLower(host), ".")]; isGateway {
+	if _, isGateway := p.gatewayVendorOf(host); isGateway {
 		return p.gatewayTarget(host, port)
 	}
 	target, _, err := p.egressTarget(host, port)
