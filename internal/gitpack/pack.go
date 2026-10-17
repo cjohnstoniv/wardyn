@@ -87,7 +87,7 @@ var ErrUninspectable = errors.New("gitpack: the push cannot be inspected from it
 type MissingObjectError struct{ Refs []string }
 
 func (e *MissingObjectError) Error() string {
-	return fmt.Sprintf("%v: the request does not carry the object %s points to",
+	return fmt.Sprintf("%v: the request does not carry the object these refs point to: %s",
 		ErrUninspectable, strings.Join(e.Refs, ", "))
 }
 
