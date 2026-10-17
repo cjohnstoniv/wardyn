@@ -765,6 +765,7 @@ var setupCheckNeverBlocks = map[string]bool{
 	"agent_image":        true,
 	"runner_limits":      true,
 	"runner_arch_images": true,
+	"recording":          true,
 	"github_ref_ruleset": true, "platform_wsl": true, "platform_macos": true, "self_host_runner_grant": true, "defaults_changed": true,
 	// providerAccessCheck's llm_provider:<provider id>, as its test names it.
 	"llm_provider:corp-gateway": true,

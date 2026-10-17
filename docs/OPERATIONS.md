@@ -104,7 +104,6 @@ copy is permanent.
 
 - **Recording-on Kubernetes output.**
   - **The Helm chart's default records nothing** until you set `env.WARDYN_RECORDING_STORE=pg` or turn on `persistence`; `wardyn setup status` shows it in the "Session recording" row.
-  - Enabling a store moves remote Kubernetes runs' output reads to the recording source.
   - The session recorder writes no task stdout to the container log.
   - With output persistence and recording enabled, terminal noninteractive runs recover the available asciicast output
     payloads into a masked tail with `source: "recording"`.
