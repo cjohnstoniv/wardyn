@@ -107,7 +107,10 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: status.podIP
-            # Settings with no frozen flag yet; renamed when runnerd's flags settle.
+            # Settings runnerd reads from its environment (cmd/wardyn-runnerd/k8s_env.go); it refuses an
+            # unknown WARDYN_RUNNERD_* name, and TestChartSetsOnlyWhatRunnerdReads holds this list to its.
+            - name: WARDYN_RUNNERD_POD_SELECTOR
+              value: {{ include "runnerd.selectorLabels" . | fromYaml | toJson | quote }}
             - name: WARDYN_RUNNERD_RELAY_PORT
               value: {{ .Values.relay.targetPort | quote }}
             - name: WARDYN_RUNNERD_RELAY_SERVICE_PORT

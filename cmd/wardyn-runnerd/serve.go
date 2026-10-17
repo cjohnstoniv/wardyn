@@ -9,6 +9,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -29,6 +30,9 @@ type serveOptions struct {
 	// trustedCAFile is --trusted-ca-file; trustedCA is the bundle validated at startup, and
 	// trustedCAPath the file it was written to for sandboxes to mount (trustedCAAtStartup).
 	trustedCAFile, trustedCA, trustedCAPath string
+	// substrate is --substrate: docker (default) or k8s. The rest are k8s only (design K1 §3.3).
+	substrate, runsNamespace, relayService, arch string
+	maxPodLifetime                               time.Duration
 }
 
 func (o serveOptions) recordingEnabled() (bool, error) {
@@ -53,6 +57,9 @@ func newServeCommand(build runnerHooksBuilder) *cobra.Command {
 			if err != nil {
 				return err
 			}
+		}
+		if err := checkSubstrateFlags(opts.substrate, cmd.Flags().Changed); err != nil {
+			return err
 		}
 		var err error
 		stateDir, err = filepath.Abs(stateDir)
@@ -84,7 +91,11 @@ func newServeCommand(build runnerHooksBuilder) *cobra.Command {
 		if runtime.run == nil || runtime.close == nil {
 			return errors.New("runner containment runtime is unavailable")
 		}
-		client, err := runnerwire.NewClient(runnerwire.ClientConfig{OrgURL: org, RunnerID: identity.RunnerID.String(), PrivateKey: identity.PrivateKey, Hooks: runtime.hooks})
+		httpClient, err := orgHTTPClient(opts.trustedCA)
+		if err != nil {
+			return err
+		}
+		client, err := runnerwire.NewClient(runnerwire.ClientConfig{OrgURL: org, RunnerID: identity.RunnerID.String(), PrivateKey: identity.PrivateKey, Hooks: runtime.hooks, HTTPClient: httpClient})
 		if err != nil {
 			return err
 		}
@@ -98,6 +109,11 @@ func newServeCommand(build runnerHooksBuilder) *cobra.Command {
 	cmd.Flags().StringVar(&opts.network, "internal-network", cmp.Or(os.Getenv("WARDYN_INTERNAL_NETWORK"), "wardyn-internal"), "Docker bridge for proxy sidecars (created when missing)")
 	cmd.Flags().StringVar(&opts.trustedCAFile, "trusted-ca-file", os.Getenv("WARDYN_TRUSTED_CA_FILE"), "PEM bundle of extra roots (e.g. a TLS-inspecting corporate proxy's CA) every run's proxy and sandbox trust beside the system roots; 64 KiB at most. SSL_CERT_FILE and SSL_CERT_DIR are not read. Read at startup only")
 	cmd.Flags().StringVar(&opts.recording, "recording-store", cmp.Or(os.Getenv("WARDYN_RECORDING_STORE"), "pg"), "organisation recording mode: pg, fs or off (off disables local capture)")
+	cmd.Flags().StringVar(&opts.substrate, "substrate", "docker", "where runs execute: docker (this host's engine) or k8s (a runs namespace of the cluster runnerd runs in)")
+	cmd.Flags().StringVar(&opts.runsNamespace, "runs-namespace", "", "k8s: the dedicated namespace runs are created in; never runnerd's own")
+	cmd.Flags().StringVar(&opts.relayService, "relay-service", "", "k8s: the relay Service's DNS name (<name>.<namespace>.svc.<cluster domain>), which must resolve to exactly one ClusterIP")
+	cmd.Flags().StringVar(&opts.arch, "arch", "", "k8s: the sandbox node architecture, amd64 or arm64")
+	cmd.Flags().DurationVar(&opts.maxPodLifetime, "max-pod-lifetime", 0, "k8s: the most any run pod may live (activeDeadlineSeconds), e.g. 24h")
 	_ = cmd.MarkFlagRequired("org")
 	return cmd
 }

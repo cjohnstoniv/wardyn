@@ -26,11 +26,30 @@ import (
 )
 
 func newRegisterCommand() *cobra.Command {
-	var org, tokenFile, stateDir, name string
+	var org, tokenFile, stateDir, name, sub string
+	var ifUnregistered bool
 	var flags registerLimits
 	cmd := &cobra.Command{Use: "register", Short: "Register this host with its limits; its owner must then verify and claim it", Args: cobra.NoArgs}
 	cmd.RunE = func(cmd *cobra.Command, _ []string) error {
-		done, err := registerRunner(cmd, registerArgs{org: org, tokenFile: tokenFile, stateDir: stateDir, name: name, limits: &flags})
+		if sub != "docker" && sub != "k8s" {
+			return fmt.Errorf("--substrate %q: want docker or k8s", sub)
+		}
+		if ifUnregistered {
+			// The chart's init container runs on every pod start: a saved identity for this
+			// organisation means registration already happened, and no token is read or spent.
+			dir := stateDir
+			if dir == "" {
+				var err error
+				if dir, err = runneridentity.DefaultDir(); err != nil {
+					return err
+				}
+			}
+			if _, err := runneridentity.Load(dir, org); err == nil {
+				fmt.Fprintln(cmd.OutOrStdout(), "already registered; nothing to do")
+				return nil
+			}
+		}
+		done, err := registerRunner(cmd, registerArgs{org: org, tokenFile: tokenFile, stateDir: stateDir, name: name, limits: &flags, noMeasure: sub == "k8s"})
 		if err != nil {
 			return err
 		}
@@ -45,6 +64,8 @@ func newRegisterCommand() *cobra.Command {
 	cmd.Flags().StringVar(&tokenFile, "token-file", "", "file containing the single-use registration token")
 	cmd.Flags().StringVar(&stateDir, "state-dir", "", "private runner state directory (defaults to the user configuration directory)")
 	cmd.Flags().StringVar(&name, "name", "", "runner name (defaults to the host name)")
+	cmd.Flags().StringVar(&sub, "substrate", "docker", "where this runner's runs execute: docker or k8s (k8s measures nothing: give every total as a flag)")
+	cmd.Flags().BoolVar(&ifUnregistered, "if-unregistered", false, "do nothing when this state directory already holds an identity for --org")
 	flags.register(cmd)
 	_ = cmd.MarkFlagRequired("org")
 	_ = cmd.MarkFlagRequired("token-file")
@@ -89,6 +110,8 @@ type registerArgs struct {
 	limits                         *registerLimits
 	// proxyImage is the image that measures a VM-backed engine's disk; "" is the release image.
 	proxyImage string
+	// noMeasure (k8s): no engine to measure or ask, so every total comes from a flag.
+	noMeasure bool
 }
 
 // registeredRunner is what a registration left on this host and with the organisation.
@@ -108,12 +131,15 @@ func registerRunner(cmd *cobra.Command, a registerArgs) (registeredRunner, error
 		return registeredRunner{}, err
 	}
 	// The limits are measured and checked before anything is spent: a refused limit keeps the token.
-	measured, err := measureWithVMDisk(cmd.Context(), a.proxyImage)
-	if err != nil {
-		measured = types.RunnerAmounts{}
+	var measured types.RunnerAmounts
+	if !a.noMeasure {
+		var err error
+		if measured, err = measureWithVMDisk(cmd.Context(), a.proxyImage); err != nil {
+			measured = types.RunnerAmounts{}
+		}
+		fmt.Fprintln(cmd.OutOrStdout(), reports(measured))
 	}
-	fmt.Fprintln(cmd.OutOrStdout(), reports(measured))
-	if in, out := cmd.InOrStdin(), cmd.OutOrStdout(); asksAt(in, out) {
+	if in, out := cmd.InOrStdin(), cmd.OutOrStdout(); !a.noMeasure && asksAt(in, out) {
 		if err := a.limits.ask(cmd, in, out, measured); err != nil {
 			return registeredRunner{}, err
 		}
@@ -150,7 +176,10 @@ func registerRunner(cmd *cobra.Command, a registerArgs) (registeredRunner, error
 	client.HTTPClient = &http.Client{Timeout: 30 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error {
 		return errors.New("runner registration does not follow redirects")
 	}}
-	arch := engineArch(cmd.Context())
+	arch := ""
+	if !a.noMeasure {
+		arch = engineArch(cmd.Context())
+	}
 	registered, err := client.RegisterRunner(cmd.Context(), sdk.RunnerRegisterRequest{Token: token, PublicKey: key.Public().(ed25519.PublicKey), Name: name, Limits: &limits, MachineName: machine, Arch: arch})
 	if err != nil {
 		return registeredRunner{}, registrationFailure(err)
