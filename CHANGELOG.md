@@ -39,7 +39,7 @@ run's own repository, and a dropped runner link no longer stops a run's egress.
 - A run's own `repo` now gets the per-person Azure DevOps credential, as a workspace repository does. Before, only
   workspace repositories were considered, and a run that named its repository directly got none, silently.
 - A dropped link between a laptop runner and its organisation no longer stops the run's egress while the local
-  audit spool has room. A full spool holds a request up to 5 s, then refuses it with a retryable `503`
+  audit spool has room. A full spool holds a request up to 10 s, then refuses it with a retryable `503`
   (`Retry-After: 1`) that names the link when it is down.
 - A defaults write that leaves `recording` out keeps the stored setting.
 
