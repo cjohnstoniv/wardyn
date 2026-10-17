@@ -15,7 +15,7 @@ import (
 )
 
 // RunTrustStore keeps agent_runs.runner_trust_class: the trust class a local run's credential plan was
-// admitted at (migration 0181).
+// admitted at (migration 0184).
 type RunTrustStore interface {
 	SetRunRunnerTrustClass(ctx context.Context, runID uuid.UUID, class types.RunnerTrustClass) error
 	// RunRunnerTrustClass is "" for a run with none recorded; ErrNotFound for no such run.
