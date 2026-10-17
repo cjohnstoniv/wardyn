@@ -13,6 +13,7 @@ import (
 	"net"
 	"net/netip"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 
@@ -283,7 +284,7 @@ func (d *Driver) watchProxyExit(ctx context.Context, id string) error {
 			// checking the terminal state first keeps that true even if a
 			// future daemon/fake ever reported both transiently.
 			if st.ExitCode != 0 {
-				return fmt.Errorf("docker: proxy exited at config load (exit %d): %s", st.ExitCode, d.proxyExitLogTail(ctx, id))
+				return proxyConfigLoadError(st.ExitCode, d.proxyExitLogTail(ctx, id))
 			}
 			if st.Running && time.Since(proxySettleSince(st, watchStart)) >= d.proxySettle {
 				return nil
@@ -333,6 +334,22 @@ func (d *Driver) proxyExitLogTail(ctx context.Context, id string) string {
 	// the frame headers so the tail is clean text, not binary garbage.
 	_, _ = stdcopy.StdCopy(&buf, &buf, rc)
 	return strings.TrimSpace(buf.String())
+}
+
+// unknownConfigField finds the setting a proxy's strict config decode refused, as its log prints it
+// (`unknown field "x"`, or with the quotes escaped inside a log attribute).
+var unknownConfigField = regexp.MustCompile(`unknown field \\?"([^"\\]*)\\?"`)
+
+// proxyConfigLoadError names the cause of a proxy that exited at config load. A proxy image older
+// than this runner refuses the settings it does not know, so that refusal names its fix first; the
+// proxy's own output always follows.
+func proxyConfigLoadError(exitCode int, tail string) error {
+	if m := unknownConfigField.FindStringSubmatch(tail); m != nil {
+		return fmt.Errorf("docker: the proxy image is older than this runner (it refused setting %s): upgrade the organisation "+
+			"before its runners, or pin a proxy image at least as new as this runner; proxy exited at config load (exit %d): %s",
+			m[1], exitCode, tail)
+	}
+	return fmt.Errorf("docker: proxy exited at config load (exit %d): %s", exitCode, tail)
 }
 
 // EnsureProxyImage — see runner.ProxyReviver. ReplaceProxy also ensures the

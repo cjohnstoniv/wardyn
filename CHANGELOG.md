@@ -8,6 +8,12 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+### Changed
+
+- A run on a laptop runner whose proxy image is older than the runner now fails with the fix in its reason: the
+  error names the setting the proxy refused and says to upgrade the organisation before its runners, or to pin a proxy
+  image at least as new as the runner, followed by the proxy's own output.
+
 ## [0.9.3-rc.3] — 2026-10-17
 
 Organisation runners and resident credentials: an organisation can run sandboxes on its own runner in a Kubernetes
