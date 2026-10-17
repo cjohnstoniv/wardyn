@@ -58,6 +58,8 @@ import { Textarea } from "../../ui/textarea";
 import { useUserTypeName } from "../../../lib/use-user-types";
 import { DirectoryCombobox } from "../../wardyn/directory-combobox";
 import { Field } from "../../wardyn/form-primitives";
+import { PreviewUserTypeField, usePreviewUserTypes } from "../../wardyn/preview-user-type-field";
+import { USER_TYPE_STANDARD } from "../../../lib/types/user-types";
 import { Chip } from "../../wardyn/primitives";
 import { EmptyState } from "../../wardyn/states";
 import {
@@ -381,13 +383,15 @@ function ResolvedPreview({ snapshot }: { snapshot: GovernanceSnapshot }) {
   const [claims, setClaims] = React.useState("");
   const [busy, setBusy] = React.useState(false);
   const [result, setResult] = React.useState<{ answer: GovernancePreview } | { error: true } | null>(null);
+  const { userTypes, show: showUserType } = usePreviewUserTypes();
+  const [userType, setUserType] = React.useState(USER_TYPE_STANDARD);
 
   const run = async () => {
     setBusy(true);
     try {
       // The kind-less textarea onto the two wire lists — one implementation,
       // shared with the drives preview (lib/api/governance.ts's previewClaims).
-      setResult({ answer: await api.previewGovernance(previewClaims(claims)) });
+      setResult({ answer: await api.previewGovernance(previewClaims(claims, userType)) });
     } catch {
       setResult({ error: true });
     } finally {
@@ -402,21 +406,34 @@ function ResolvedPreview({ snapshot }: { snapshot: GovernanceSnapshot }) {
       <div className="mt-4 grid gap-4 md:grid-cols-[1fr_auto]">
         {/* The People step's own field and hint, verbatim: two labels for one
             accepted shape is how they drift apart (§7.3). */}
-        <Field label={PREVIEW.FIELD_CLAIMS} htmlFor="governance-preview-claims" hint={PREVIEW.FIELD_CLAIMS_HINT}>
-          <Textarea
-            id="governance-preview-claims"
-            value={claims}
-            // F4-F10 (Appendix A V8): `result` survived a claims edit, so the
-            // PREVIOUS group's resolved profile sat under new, unrun input as
-            // if it answered it.
-            onChange={(e) => {
-              setClaims(e.target.value);
-              setResult(null);
-            }}
-            className="font-mono"
-            rows={3}
-          />
-        </Field>
+        <div className="grid gap-4">
+          <Field label={PREVIEW.FIELD_CLAIMS} htmlFor="governance-preview-claims" hint={PREVIEW.FIELD_CLAIMS_HINT}>
+            <Textarea
+              id="governance-preview-claims"
+              value={claims}
+              // F4-F10 (Appendix A V8): `result` survived a claims edit, so the
+              // PREVIOUS group's resolved profile sat under new, unrun input as
+              // if it answered it.
+              onChange={(e) => {
+                setClaims(e.target.value);
+                setResult(null);
+              }}
+              className="font-mono"
+              rows={3}
+            />
+          </Field>
+          {showUserType && (
+            <PreviewUserTypeField
+              id="governance-preview-user-type"
+              value={userType}
+              userTypes={userTypes}
+              onChange={(id) => {
+                setUserType(id);
+                setResult(null);
+              }}
+            />
+          )}
+        </div>
         <div className="flex items-start">
           <Button variant="outline" onClick={run} disabled={busy || !claims.trim() || snapshot.profiles.length === 0}>
             {busy ? <Loader2 className="size-4 animate-spin" /> : null}
