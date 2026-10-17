@@ -48,13 +48,14 @@ export const NR_TEMPLATES = {
   USE: "Use",
   RENAME: "Rename",
   DELETE: "Delete",
-  /** pending W-24: the recommended text until the owner answers. */
-  PUBLISH: "Publish to organisation",
+  /** Lead wording 2026-10-17 (FR-0120): console canon spells it Organization. */
+  PUBLISH: "Publish to organization",
   /** Lead wording 2026-10-17 (FR-0120): the confirm that precedes Publish; its body is NR_SAVE.SHARED_DISCLOSURE. */
   PUBLISH_TITLE: (name: string | number) => `Publish ${name} to your organization?`,
   /** Lead wording 2026-10-17 (FR-0120): the success toast. */
   PUBLISHED: (name: string | number) => `${name} published to your organization.`,
-  WHY_ORG: "Published by your organisation. Only organisation admins can change it.",
+  /** Lead wording 2026-10-17 (FR-0120): spelling only. */
+  WHY_ORG: "Published by your organization. Only organization admins can change it.",
   WHY_GROUP: (scope: string | number) => `Published to ${scope}. Only its template managers can change it.`,
   EMPTY_TITLE: "No templates yet",
   EMPTY_BODY: "When you review a run, choose Save as template to start from the same setup next time.",

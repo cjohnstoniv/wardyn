@@ -243,6 +243,13 @@ describe("run document editor", () => {
     });
   });
 
+  it("holds Load example without a reason when the roster could not be read", async () => {
+    open({ loadHarnesses: async () => { throw new Error("setup is offline"); } });
+    await waitFor(() => expect(screen.getByRole("button", { name: C.LOAD_EXAMPLE })).toBeDisabled());
+    expect(screen.queryByText(C.NO_HARNESS)).toBeNull();
+    expect(screen.getByRole("button", { name: C.LOAD_EXAMPLE })).not.toHaveAttribute("aria-describedby");
+  });
+
   it("holds Load example when no harness is enabled", async () => {
     open({ loadHarnesses: async () => [{ ...ROSTER[0], enabled: false }] });
     await waitFor(() => expect(screen.getByRole("button", { name: C.LOAD_EXAMPLE })).toBeDisabled());

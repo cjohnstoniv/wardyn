@@ -234,7 +234,7 @@ describe("Templates screen: who can change a row", () => {
   });
 });
 
-describe("Templates screen: Publish to organisation (A9)", () => {
+describe("Templates screen: Publish to organization (A9)", () => {
   it("is offered in the Admin view on rows that are not already the organisation's", async () => {
     mount({ templates: [MINE, { ...ORG, writable: true }], publish: ADMIN }, "/admin/templates");
     await screen.findByText("Nightly tests");

@@ -474,7 +474,7 @@ test.describe("Start from a saved template and Run again", () => {
   });
 });
 
-test.describe("Templates: Publish to organisation (FR-0120)", () => {
+test.describe("Templates: Publish to organization (FR-0120)", () => {
   test("asks first with what a shared template shows, and publishes only on confirm, with a toast", async ({ page }) => {
     await stubCatalogue(page, { rows: CATALOGUE, publish: { org: true, groups: [], groups_unverified: false } });
     const copies: unknown[] = [];

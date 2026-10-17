@@ -5,7 +5,7 @@
 
 // The Templates screen: the saved starting points the caller can see, with Use, Rename and Delete where the
 // server says they may write (`writable`). The same screen serves the User view (/templates) and the Admin
-// view (/admin/templates); the Admin view adds Publish to organisation for an organisation administrator.
+// view (/admin/templates); the Admin view adds Publish to organization for an organization administrator.
 // Every sentence is a constant of copy/new-run/templates.ts, and the server's own sentence for a refusal.
 import * as React from "react";
 import { LayoutTemplate, SearchX } from "lucide-react";

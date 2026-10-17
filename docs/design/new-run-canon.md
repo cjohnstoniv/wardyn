@@ -872,10 +872,10 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `USE` | mock | Use |
 | `RENAME` | mock | Rename |
 | `DELETE` | mock | Delete |
-| `PUBLISH` | pending (W-24) | Publish to organisation |
+| `PUBLISH` | deviation (lead wording 2026-10-17, FR-0120) | Publish to organization |
 | `PUBLISH_TITLE(name)` | deviation (lead wording 2026-10-17, FR-0120) | Publish {name} to your organization? |
 | `PUBLISHED(name)` | deviation (lead wording 2026-10-17, FR-0120) | {name} published to your organization. |
-| `WHY_ORG` | mock | Published by your organisation. Only organisation admins can change it. |
+| `WHY_ORG` | deviation (lead wording 2026-10-17, FR-0120) | Published by your organization. Only organization admins can change it. |
 | `WHY_GROUP(scope)` | mock | Published to {scope}. Only its template managers can change it. |
 | `EMPTY_TITLE` | mock | No templates yet |
 | `EMPTY_BODY` | mock | When you review a run, choose Save as template to start from the same setup next time. |

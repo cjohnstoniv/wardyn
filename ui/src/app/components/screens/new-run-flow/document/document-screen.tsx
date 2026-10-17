@@ -59,7 +59,7 @@ export function DocumentScreen({ location, go, copy = NR_DOCUMENT, deps }: NewRu
   const [lines, setLines] = React.useState<string[]>([]);
   const [valid, setValid] = React.useState(false);
   const [busy, setBusy] = React.useState(false);
-  // undefined while the roster loads, null when it holds no enabled harness.
+  // undefined while the roster loads (or could not be read), null when it holds no enabled harness.
   const [harness, setHarness] = React.useState<string | null | undefined>(undefined);
   const check = React.useRef<{ id: number; abort?: AbortController }>({ id: 0 });
   const fileInput = React.useRef<HTMLInputElement>(null);
@@ -70,7 +70,8 @@ export function DocumentScreen({ location, go, copy = NR_DOCUMENT, deps }: NewRu
     let off = false;
     loadHarnesses().then(
       (roster) => !off && setHarness(roster.find((h) => h.enabled !== false)?.id ?? null),
-      () => !off && setHarness(null),
+      // A roster that could not be read says nothing about the harnesses: the button stays off with no reason given.
+      () => undefined,
     );
     return () => { off = true; };
   }, [loadHarnesses]);
