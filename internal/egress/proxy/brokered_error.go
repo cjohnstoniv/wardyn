@@ -179,26 +179,14 @@ func classifyUpstreamErr(err error) string {
 	if errors.As(err, &unknownAuth) || errors.As(err, &certInvalid) || errors.As(err, &hostname) {
 		return reasonTLSUntrusted
 	}
-	switch dialStage(err) {
-	case "tcp dial", "upstream proxy connect", "tls handshake":
-		return reasonUpstreamUnreachable
-	}
-	// A read or write that failed on an open connection, before the answer's
-	// headers (a reset while it was awaited), did connect: not "could not
-	// connect". An answer that broke after its headers never reaches here.
-	var connecting *connectStageError
-	if errors.As(err, &connecting) {
-		return reasonUpstreamUnreachable
-	}
-	var opErr *net.OpError
-	if errors.As(err, &opErr) && (opErr.Op == "read" || opErr.Op == "write") {
+	// A failure on an open connection, before the answer's headers (a reset
+	// while it was awaited), did connect: not "could not connect". The reason
+	// follows dialStage, so it and the Cause's stage never disagree. An answer
+	// that broke after its headers never reaches here.
+	if dialStage(err) == "after connect" {
 		return reasonUpstreamError
 	}
-	var netErr net.Error
-	if errors.As(err, &netErr) {
-		return reasonUpstreamUnreachable
-	}
-	return reasonUpstreamError
+	return reasonUpstreamUnreachable
 }
 
 // reasonStatus is the HTTP status a reason is answered with. A refusal that
