@@ -43,7 +43,9 @@ docs/operations/who-gets-in.md=1507 share=35
 # docs/operations/admin-only-writes.md 3418 adds 2 over 3416 (0.9 DS4-M6, after merging lane/090-DS4-M5); measured at merge.
 # docs/operations/admin-only-writes.md 3444 adds 26 over 3418 (0.9 release text for the fix sets merged at release); measured.
 # docs/operations/admin-only-writes.md 3463 adds 19 over 3444 (0.9.3 RV5), measured: serving-replica revoke scope, template 501 wording, user-type delete blocker.
-docs/operations/admin-only-writes.md=3463 share=35
+# docs/operations/admin-only-writes.md 3471 adds 27 over 3444 (0.9.3 RV4b R2-0057): the /governance/egress-baseline tier row; measured.
+# docs/operations/admin-only-writes.md 3490 = 3463 + 27 (RV4b), measured at the wave-A merge.
+docs/operations/admin-only-writes.md=3490 share=35
 # docs/operations/three-roles.md 4024 measured after G-090-cleanup slice F: docs rows that contradicted the code.
 # docs/operations/three-roles.md 4063 adds 39 over 4024: 0.9 final docs pass 3, measured: a profile maximum never cuts below an untouched run's size.
 # docs/operations/three-roles.md 4194 adds 21 over 4173, measured (0.9.3 ADO): GET /governance is the read; the profile routes answer 405 to GET.

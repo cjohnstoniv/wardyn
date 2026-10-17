@@ -105,6 +105,19 @@ func placementWireReasons(t *testing.T) []placement.Reason {
 			})
 		}
 	}
+	// The reason a classification row carries is the one its refusal publishes.
+	for _, f := range parse("../placement/classify.go") {
+		ast.Inspect(f, func(n ast.Node) bool {
+			if kv, ok := n.(*ast.KeyValueExpr); ok {
+				if key, ok := kv.Key.(*ast.Ident); ok && key.Name == "Reason" {
+					if val, ok := kv.Value.(*ast.Ident); ok {
+						note(val.Name)
+					}
+				}
+			}
+			return true
+		})
+	}
 	var out []placement.Reason
 	for reason := range used {
 		if !placementAuditOnlyReasons[reason] {

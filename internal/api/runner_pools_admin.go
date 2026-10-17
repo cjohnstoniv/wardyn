@@ -418,9 +418,10 @@ func (s *Server) handlePutOrgRunnerPoolDefaults(w http.ResponseWriter, r *http.R
 	if !ok || !checkDefaultPool(w, d, rows, true) {
 		return
 	}
-	before, err := ps.GetRunnerPoolOrgDefaults(r.Context())
-	if err == nil {
-		err = ps.PutRunnerPoolOrgDefaults(r.Context(), d, principalFromRequest(r))
+	before, err := ps.PutRunnerPoolOrgDefaults(r.Context(), d, principalFromRequest(r))
+	if errors.Is(err, store.ErrNotFound) {
+		writePoolNotFound(w)
+		return
 	}
 	if err != nil {
 		writeServerError(w, r, "write organisation runner pool defaults", err)

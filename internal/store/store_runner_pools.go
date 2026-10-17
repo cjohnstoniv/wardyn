@@ -51,7 +51,7 @@ type RunnerPoolStore interface {
 	DeleteRunnerPoolUsePolicy(ctx context.Context, id uuid.UUID) error
 
 	GetRunnerPoolOrgDefaults(ctx context.Context) (types.RunnerPoolDefaults, error)
-	PutRunnerPoolOrgDefaults(ctx context.Context, d types.RunnerPoolDefaults, by string) error
+	PutRunnerPoolOrgDefaults(ctx context.Context, d types.RunnerPoolDefaults, by string) (before types.RunnerPoolDefaults, err error)
 	BootstrapRunnerPools(ctx context.Context, executors []string, name string) (*types.RunnerPool, *types.RunnerPoolDefaults, error)
 }
 
@@ -747,15 +747,31 @@ func (s PG) GetRunnerPoolOrgDefaults(ctx context.Context) (types.RunnerPoolDefau
 	return d, err
 }
 
-// PutRunnerPoolOrgDefaults replaces the organisation's defaults. The caller has checked the pool; a
-// default only names one, and the resolver refuses a name that has since gone or been switched off.
-func (s PG) PutRunnerPoolOrgDefaults(ctx context.Context, d types.RunnerPoolDefaults, by string) error {
-	_, err := s.Pool.Exec(ctx, `
+// PutRunnerPoolOrgDefaults replaces the organisation's defaults and returns what they were, read in the
+// same transaction under a row lock so two concurrent writes each see the other's result as their
+// before. The caller has checked the pool's state; a default only names one, and the resolver refuses
+// a name that has since been switched off. A pool deleted between that check and this write is
+// ErrNotFound: the pool row is locked first, as a delete locks it before it clears the default.
+func (s PG) PutRunnerPoolOrgDefaults(ctx context.Context, d types.RunnerPoolDefaults, by string) (types.RunnerPoolDefaults, error) {
+	var before types.RunnerPoolDefaults
+	err := s.inTx(ctx, func(q Querier) error {
+		if d.PoolID != nil {
+			if _, err := livePoolForUpdate(ctx, q, *d.PoolID); err != nil {
+				return err
+			}
+		}
+		var err error
+		if before, err = scanOrgDefaults(q.QueryRow(ctx, `SELECT pool_id, barrier, recording FROM runner_pool_org_defaults FOR UPDATE`)); err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			return err
+		}
+		_, err = q.Exec(ctx, `
 		INSERT INTO runner_pool_org_defaults (pool_id, barrier, recording, updated_by) VALUES ($1,$2,$3,$4)
 		ON CONFLICT (singleton) DO UPDATE SET pool_id = EXCLUDED.pool_id, barrier = EXCLUDED.barrier,
 		       recording = EXCLUDED.recording, updated_by = EXCLUDED.updated_by, updated_at = now()`,
-		d.PoolID, string(d.Barrier), string(d.Recording), by)
-	return err
+			d.PoolID, string(d.Barrier), string(d.Recording), by)
+		return err
+	})
+	return before, err
 }
 
 // BootstrapRunnerPools is the one-time upgrade step: when this deployment has configured remote-hosted

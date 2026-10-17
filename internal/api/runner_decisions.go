@@ -10,6 +10,7 @@ import (
 	"errors"
 	"io"
 
+	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/runnerspool"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 	"github.com/cjohnstoniv/wardyn/internal/store"
@@ -42,6 +43,23 @@ func (s *Server) DecisionIngestFromRunner(ctx context.Context, runnerID uuid.UUI
 	if row.Decision.Request.RunID != *event.RunID {
 		return store.ErrRunnerSpoolRefused
 	}
-	_, err := target.IngestRunnerDecision(ctx, runnerID, row, s.cfg.RunnerAuditPrepare)
-	return err
+	first, err := target.IngestRunnerDecision(ctx, runnerID, row, s.cfg.RunnerAuditPrepare)
+	if err != nil || !first {
+		return err
+	}
+	// The post-audit hooks handlePostDecision runs, once per first-time row, so a spooled
+	// decision moves the same counters and run hint a direct one does. The idle clock is
+	// not touched: the spool is audit only.
+	d := row.Decision
+	if d.Scan != nil && d.Scan.Action == "bypass" {
+		return nil
+	}
+	if d.Decision == egress.Deny && row.Count == 0 && isPolicyDeny(d.RuleSource) {
+		s.metrics.egressDenied()
+	}
+	s.countReauthTimeout(d)
+	if d.UpstreamFault != "" {
+		s.noteBedrockDataPlaneFault(context.WithoutCancel(ctx), *event.RunID, d.UpstreamFault)
+	}
+	return nil
 }

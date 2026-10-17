@@ -202,6 +202,8 @@ var docTierRows = []struct{ route, token string }{
 	{"POST /api/v1/user-types", "the `/user-types` routes"},
 	{"PUT /api/v1/user-types/{id}", "the `/user-types` routes"},
 	{"DELETE /api/v1/user-types/{id}", "the `/user-types` routes"},
+	{"GET /api/v1/governance/egress-baseline", "the `/governance/egress-baseline` routes"},
+	{"PUT /api/v1/governance/egress-baseline", "the `/governance/egress-baseline` routes"},
 	{"GET /api/v1/key-domains", "the `/key-domains` routes"},
 	{"PUT /api/v1/key-domains/assignments/{subject_type}/{subject}", "the `/key-domains` routes"},
 	{"DELETE /api/v1/key-domains/assignments/{subject_type}/{subject}", "the `/key-domains` routes"},
@@ -271,11 +273,9 @@ var docTierRows = []struct{ route, token string }{
 //
 // Every other gated route the completeness check has surfaced is rowed in
 // docs/OPERATIONS.md and listed in docTierRows above. What stays here is
-// admitted debt: today the two egress-baseline routes, pending their
-// OPERATIONS.md row.
+// admitted debt: today the two credential-delivery routes, pending their
+// tier-table row.
 var docTierUndocumented = map[string]string{
-	"GET /api/v1/governance/egress-baseline": "0.9 B-P1: the tier-table row and the Egress baseline section are the docs pass's (the OPERATIONS.md prose budget is its to move)",
-	"PUT /api/v1/governance/egress-baseline": "0.9 B-P1: as the GET above",
 	// 0.9 H12 (#1964): the credential delivery policy's tier row is the docs pass's.
 	"GET /api/v1/governance/credential-delivery": "0.9 H12: the tier-table row is the docs pass's (the OPERATIONS.md prose budget is its to move)",
 	"PUT /api/v1/governance/credential-delivery": "0.9 H12: as the GET above",

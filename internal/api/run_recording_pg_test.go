@@ -68,7 +68,7 @@ func TestPG_RecordingRequired_RefusesARunnerThatDoesNotRecord(t *testing.T) {
 		t.Fatal(err)
 	}
 	org.Recording = types.RecordingRequired
-	if err := e.pg.PutRunnerPoolOrgDefaults(context.Background(), org, "admin"); err != nil {
+	if _, err := e.pg.PutRunnerPoolOrgDefaults(context.Background(), org, "admin"); err != nil {
 		t.Fatal(err)
 	}
 	refusedOff("organisation requires")
@@ -78,7 +78,7 @@ func TestPG_RecordingRequired_RefusesARunnerThatDoesNotRecord(t *testing.T) {
 	}
 
 	org.Recording = ""
-	if err := e.pg.PutRunnerPoolOrgDefaults(context.Background(), org, "admin"); err != nil {
+	if _, err := e.pg.PutRunnerPoolOrgDefaults(context.Background(), org, "admin"); err != nil {
 		t.Fatal(err)
 	}
 	e.setRecords(id, false)
@@ -146,7 +146,7 @@ func (e *placementEnv) requireRecording(rec types.RecordingRequirement) {
 		e.t.Fatal(err)
 	}
 	org.Recording = rec
-	if err := e.pg.PutRunnerPoolOrgDefaults(context.Background(), org, "admin"); err != nil {
+	if _, err := e.pg.PutRunnerPoolOrgDefaults(context.Background(), org, "admin"); err != nil {
 		e.t.Fatal(err)
 	}
 }

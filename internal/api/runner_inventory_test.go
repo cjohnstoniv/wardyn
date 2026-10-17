@@ -414,9 +414,9 @@ func TestRunnersSwitchRefusesAnOrgURLThatIsNotHTTPS(t *testing.T) {
 		{"https", "https://org.example.com", "https://wardynd.internal:8443", http.StatusOK},
 		{"loopback http for development", "http://127.0.0.1:8080", "https://wardynd.internal:8443", http.StatusOK},
 		{"unset control plane", "https://org.example.com", "", http.StatusConflict},
-		{"plain http", "http://org.example.com", "", http.StatusConflict},
-		{"unset", "", "", http.StatusConflict},
-		{"userinfo", "https://user:pw@org.example.com", "", http.StatusConflict},
+		{"plain http", "http://org.example.com", "https://wardynd.internal:8443", http.StatusConflict},
+		{"unset", "", "https://wardynd.internal:8443", http.StatusConflict},
+		{"userinfo", "https://user:pw@org.example.com", "https://wardynd.internal:8443", http.StatusConflict},
 		{"plain http control plane", "https://org.example.com", "http://wardynd.internal:8080", http.StatusConflict},
 		{"https control plane", "https://org.example.com", "https://wardynd.internal:8443", http.StatusOK},
 	} {

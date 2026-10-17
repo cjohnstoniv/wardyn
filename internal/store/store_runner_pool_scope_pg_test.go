@@ -92,3 +92,34 @@ func TestPG_AddRemoteRunnerToUserPoolHoldsThePolicyRevision(t *testing.T) {
 		t.Errorf("%d members (%v), want only the admitted add", n, err)
 	}
 }
+
+// The organisation default cannot name a pool that was deleted after the caller looked: the write
+// locks the pool first and refuses a deleted one, and writes nothing.
+func TestPG_OrgDefaultRefusesADeletedPool(t *testing.T) {
+	pool := runsPGPoolIsolated(t)
+	pg := store.NewPG(pool)
+	ctx := context.Background()
+	org, err := pg.CreateRunnerPool(ctx, types.RunnerPool{ID: uuid.New(), Name: "Builds", Scope: types.RunnerPoolOrganization}, "admin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pg.PutRunnerPoolOrgDefaults(ctx, types.RunnerPoolDefaults{PoolID: &org.ID}, "admin"); err != nil {
+		t.Fatalf("naming a live pool: %v", err)
+	}
+	// The write returns the defaults it replaced, read in its own transaction.
+	if before, err := pg.PutRunnerPoolOrgDefaults(ctx, types.RunnerPoolDefaults{PoolID: &org.ID, Barrier: types.CC2}, "admin"); err != nil || before.PoolID == nil || *before.PoolID != org.ID {
+		t.Fatalf("second write returned before=%+v err=%v, want the first write's pool", before, err)
+	}
+	if _, err := pg.DeleteRunnerPool(ctx, org.ID); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := pg.GetRunnerPoolOrgDefaults(ctx); got.PoolID != nil {
+		t.Fatalf("deleting the pool left the default naming it: %v", got.PoolID)
+	}
+	if _, err := pg.PutRunnerPoolOrgDefaults(ctx, types.RunnerPoolDefaults{PoolID: &org.ID}, "admin"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("naming a deleted pool = %v, want ErrNotFound", err)
+	}
+	if got, _ := pg.GetRunnerPoolOrgDefaults(ctx); got.PoolID != nil {
+		t.Errorf("the refused write named %v", got.PoolID)
+	}
+}
