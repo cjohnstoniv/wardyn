@@ -184,6 +184,29 @@ func TestAdminRoutesRefuseMemberDrives(t *testing.T) {
 	}
 }
 
+// TestMemberDriveDeleteWaitsOutAStartingRun: a run of the owner's still STARTING may have re-read the
+// drive before the tombstone and make its object after a reclaim, so the delete answers in use, keeps
+// the drive with the tombstone cleared and never reaches the substrate. Another person's STARTING run
+// does not hold it.
+func TestMemberDriveDeleteWaitsOutAStartingRun(t *testing.T) {
+	st := newMemberDriveStore()
+	d := seedMemberDrive(st, aliceSub, "Notes")
+	st.starting = map[string]bool{aliceSub: true}
+	rn := &memberDriveRunner{reclaimRunner: reclaimRunner{outcome: runner.DriveReclaimDeleted}}
+	srv, rec := memberDriveServer(st, rn, "docker")
+	wantReason(t, deleteMyDrive(srv, aliceSub, d.ID.String()), http.StatusConflict, reasonMemberDriveInUse)
+	if got, kept := st.drives[d.ID]; !kept || got.DeleteStartedAt != nil || len(rn.calls) != 0 {
+		t.Fatalf("kept = %v (tombstone %v), substrate calls = %d; want kept, tombstone cleared, no call", kept, got.DeleteStartedAt, len(rn.calls))
+	}
+	if data := driveAuditData(t, rec, "drive.member.delete"); data["outcome"] != "refused" {
+		t.Errorf("audit = %v, want outcome refused", data)
+	}
+	st.starting = map[string]bool{bobSub: true}
+	if w := deleteMyDrive(srv, aliceSub, d.ID.String()); w.Code != http.StatusNoContent || len(rn.calls) != 1 {
+		t.Fatalf("delete beside another person's starting run = %d (calls %d), want 204 after one reclaim: %s", w.Code, len(rn.calls), w.Body.String())
+	}
+}
+
 // TestAdminListAndDeleteMemberDrives: the super admin lists every person's
 // drive with its owner and object, and deletes one with by=admin.
 func TestAdminListAndDeleteMemberDrives(t *testing.T) {

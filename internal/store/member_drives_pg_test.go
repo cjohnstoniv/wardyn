@@ -234,3 +234,35 @@ func TestMemberDriveOwnerPredicates(t *testing.T) {
 		t.Errorf("ListMemberDrives = %d rows, total %d, %v; want alice's drive only", len(all), total, err)
 	}
 }
+
+// TestMemberDriveOwnerStarting: only a run of the owner's in STARTING answers true; a running one, an
+// ended one and another person's starting one do not. The owner compares in canonical form.
+func TestMemberDriveOwnerStarting(t *testing.T) {
+	st := store.NewPG(runsPGPoolIsolated(t))
+	ctx := context.Background()
+	run := func(createdBy string, state types.RunState) {
+		now := time.Now().UTC()
+		if _, err := st.CreateRun(ctx, types.AgentRun{ID: uuid.New(), CreatedAt: now, UpdatedAt: now, CreatedBy: createdBy,
+			Agent: "claude-code", ConfinementClass: types.CC2, State: state, RunnerTarget: "docker"}); err != nil {
+			t.Fatalf("create run: %v", err)
+		}
+	}
+	ask := func(owner string) bool {
+		t.Helper()
+		got, err := st.MemberDriveOwnerStarting(ctx, owner)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+	run("alice@example.com", types.RunRunning)
+	run("alice@example.com", types.RunFailed)
+	run("bob@example.com", types.RunStarting)
+	if ask("alice@example.com") {
+		t.Fatal("a running and a failed run read as starting")
+	}
+	run("Alice@Example.com", types.RunStarting)
+	if !ask("alice@example.com") {
+		t.Fatal("the owner's starting run was missed")
+	}
+}

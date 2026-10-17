@@ -375,6 +375,20 @@ func (s *Server) deleteMemberDrive(ctx context.Context, ms store.MemberDriveStor
 	case !ok || d.Backend.RunnerTarget() != s.cfg.RunnerTarget || !s.memberDrivesDeletable(sctx):
 		res.outcome, res.reason = driveReclaimOutcomeFailed, reasonMemberDriveDeleteUnavailable
 	default:
+		// Past the tombstone, a run of the owner's still STARTING may have re-read this drive before it
+		// (memberDrivesStillThere) and create the drive's object after the reclaim, so the drive counts
+		// as in use until that run leaves STARTING. A run that re-reads later meets the tombstone.
+		starting, serr := ms.MemberDriveOwnerStarting(sctx, d.OwnerSubject)
+		if serr != nil {
+			slog.WarnContext(ctx, "api: member drive delete could not read the owner's starting runs",
+				slog.String("drive_id", d.ID.String()), slog.String("error", serr.Error()))
+			res.outcome, res.reason = driveReclaimOutcomeFailed, reasonMemberDriveDeleteFailed
+			break
+		}
+		if starting {
+			res.outcome, res.reason = driveReclaimOutcomeRefused, reasonMemberDriveInUse
+			break
+		}
 		outcome, rerr := rc.ReclaimDrive(sctx, mount)
 		switch {
 		case rerr == nil:

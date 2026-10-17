@@ -139,6 +139,19 @@ func (s PG) BeginMemberDriveDelete(ctx context.Context, owner string, id uuid.UU
 	return s.beginMemberDriveDelete(ctx, owner, id)
 }
 
+// MemberDriveOwnerStarting reports whether owner has a run in STARTING, the state in which dispatch
+// re-reads a run's member drives and then creates its sandbox. The owner compares as
+// types.CanonicalUserSubject does, so it never misses the owner's own runs.
+func (s PG) MemberDriveOwnerStarting(ctx context.Context, owner string) (bool, error) {
+	var starting bool
+	err := s.Pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM agent_runs WHERE state = 'STARTING'
+		AND (btrim(created_by) = $1 OR lower(btrim(created_by)) = $1))`, owner).Scan(&starting)
+	if err != nil {
+		return false, fmt.Errorf("store: read the owner's starting runs: %w", err)
+	}
+	return starting, nil
+}
+
 // BeginMemberDriveDeleteAdmin is BeginMemberDriveDelete for any owner.
 func (s PG) BeginMemberDriveDeleteAdmin(ctx context.Context, id uuid.UUID) (types.UserDrive, time.Time, error) {
 	return s.beginMemberDriveDelete(ctx, "", id)
