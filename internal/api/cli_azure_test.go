@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"slices"
 	"strings"
 	"testing"
@@ -1086,5 +1087,67 @@ func TestAzureCLIPlanCloseWithheldReturnsTheDoorItDecided(t *testing.T) {
 	}
 	if len(policy.AllowedDomains) != 3 {
 		t.Errorf("an open door lost allowlist entries: %v", policy.AllowedDomains)
+	}
+}
+
+// A credentialed MCP server on the ARM host shares it with the Azure CLI door: the server takes its own
+// header credential off the injections and the door keeps the sign-in credential it was decided on.
+func TestAzureCLIDoorSurvivesAnMCPServerOnTheARMHost(t *testing.T) {
+	const id = "6f0c1d2e-0000-4000-8000-0000000c0a0b"
+	f := newComponentFixture(t)
+	f.srv.cfg.AzureCLIEntra = func(row string) ADOEntraConfig {
+		return ADOEntraConfig{RowID: row, TenantID: "tenant-1", ClientID: "console-app", RedirectURL: adoCallbackURL,
+			LoginClientID: "console-app", LoginTenantID: "tenant-1"}
+	}
+	ref := f.org(id, azCLIRowDef(types.ComponentAccessRead, azCLISubA))
+	blob := adoEntraBlob{RefreshToken: "r", Scopes: []string{azARMScope}, TenantID: "tenant-1", ClientID: "console-app",
+		Subject: capSub, CapturedAt: time.Now().UTC(), ExpiresAt: time.Now().Add(time.Hour).UTC()}
+	if err := f.srv.cfg.Secrets.For(capSub).Put(context.Background(), cliSecretName(id, providerEntraPart), mustJSON(blob)); err != nil {
+		t.Fatal(err)
+	}
+	mcp := map[string]any{"inline": map[string]any{"hosts": []string{armscope.Host},
+		"mcp":     map[string]any{"url": "https://" + armscope.Host + "/mcp", "transport": "http"},
+		"secrets": []map[string]any{headerSecret(compOwnSecret, armscope.Host)}}}
+	f.srv.cfg.AgentImages = composeAgentImages
+	body := map[string]any{"experience": "background", "workload": map[string]any{"kind": "agent_task", "agent": "claude-code", "task": "x"},
+		"no_repositories_or_drives": true, "tools": []map[string]any{{"id": "claude-code", "kind": "harness"}}, "components": []any{mcp, ref}}
+	if w := f.ask(t, componentDoors[0], body); w.Code != http.StatusCreated {
+		t.Fatalf("create = %d %s", w.Code, w.Body.String())
+	}
+	fr := f.srv.cfg.Runner.(*fakeRunner)
+	fr.waitForSandbox(t)
+	fr.mu.Lock()
+	pc := fr.lastSpec.ProxyConfig
+	fr.mu.Unlock()
+	if pc.AzureARM == nil {
+		t.Errorf("the door was lost with an MCP server on its host")
+	}
+	if len(pc.MCPServers) != 1 || pc.MCPServers[0].GrantID == nil {
+		t.Errorf("MCP servers = %+v, want one with its own grant", pc.MCPServers)
+	}
+	var arm int
+	for _, in := range pc.Injection {
+		if hostEqual(in.Rule.Host, armscope.Host) {
+			arm++
+			if !strings.Contains(in.Rule.SecretName, providerEntraPart) {
+				t.Errorf("the host's remaining injection is %q, want the door's Entra credential", in.Rule.SecretName)
+			}
+		}
+	}
+	if arm != 1 {
+		t.Errorf("%d injections on the ARM host, want the door's one", arm)
+	}
+}
+
+// Dispatch hands the proxy the door closeWithheld decided, not a second reading of the injections after
+// the MCP servers have taken theirs. No reachable run tells the two apart (a ceiling that withholds the
+// door drops every injection on the host, the MCP server's too), so the wiring is pinned at its source.
+func TestDispatchHandsTheProxyTheDecidedAzureDoor(t *testing.T) {
+	src, err := os.ReadFile("runs_dispatch.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(src), "AzureARM: azureARM,") || strings.Contains(string(src), "gateFor(") {
+		t.Error("runs_dispatch.go must pass the proxy the door closeWithheld returned, with no second gateFor reading")
 	}
 }
