@@ -486,6 +486,9 @@ type Config struct {
 	// and the recommended production default, for honest /healthz visibility. Nil
 	// => the components object is omitted.
 	Components map[string]ComponentInfo
+	// RecordingSelection is the WARDYN_RECORDING_STORE value (pg, fs or off). Components reports "none" when
+	// no store came up, which is the same for fs with no directory and for off; setup status tells them apart.
+	RecordingSelection string
 	// AgeKeyDurable: the age key was SUPPLIED (WARDYN_AGE_KEY), not generated at boot, or no local key holds anything (store
 	// mode, a key service). False, stored secrets are unreadable after a restart: /setup/status warns. Computed in cmd/wardynd.
 	AgeKeyDurable bool

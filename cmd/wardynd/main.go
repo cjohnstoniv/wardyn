@@ -491,6 +491,7 @@ func run() error {
 		AzureCLIEntra:            azureCLIEntraByRow(adoEntraLoginFromFlags(f)),
 		ADOLoginFacts:            adoLoginFactsFromFlags(f),
 		Components:               componentsInfo(f, runnerTarget, feats.recStore),
+		RecordingSelection:       *f.recordingSel,
 		ScanAIAdvisor:            feats.scanAdvisor,
 		RequireOperatorSetEgress: *f.requireOpSetEgress,
 		// "off" is the only value that disables it: a typo must not silently
