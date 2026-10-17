@@ -73,9 +73,9 @@ func (s *Server) recordMachineName(ctx context.Context, ms machineNameStore, run
 // handleUpdateMyRunner is PUT /api/v1/me/runners/{id}: a person declares their own runner's limits,
 // the whole set (Runs at once, the total and the per-run CPU, memory and disk). Only the owner may: the
 // machine is theirs and its limits only ever bound the owner's own runs, so administrators read them on
-// /runners and have no route that changes them. Another person's runner, a revoked one, a lapsed
-// unclaimed one and an absent id answer alike. Waiting runs are looked at again at once; a lowered
-// limit ends no run.
+// /runners and have no route that changes them. Another person's runner, an organization's, a revoked
+// one, a lapsed unclaimed one and an absent id answer alike. Waiting runs are looked at again at once; a
+// lowered limit ends no run.
 func (s *Server) handleUpdateMyRunner(w http.ResponseWriter, r *http.Request) {
 	if !s.requireRunnersEnabled(w, r) {
 		return
@@ -84,6 +84,21 @@ func (s *Server) handleUpdateMyRunner(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	s.updateRunnerLimits(w, r, types.RunnerOwnerPerson, owner, owner)
+}
+
+// handleUpdateOrgRunner is PUT /api/v1/runners/{id}: a security operator declares an organization's
+// runner's limits, which no person owns (chart values apply only at register). A person's runner stays
+// its owner's to change and answers here as not found, like a revoked, lapsed or absent one.
+func (s *Server) handleUpdateOrgRunner(w http.ResponseWriter, r *http.Request) {
+	if !s.requireRunnersEnabled(w, r) {
+		return
+	}
+	s.updateRunnerLimits(w, r, types.RunnerOwnerOrg, "", principalFromRequest(r))
+}
+
+// updateRunnerLimits writes the limits of the runner of kind owned by owner ("" for an org runner), as actor.
+func (s *Server) updateRunnerLimits(w http.ResponseWriter, r *http.Request, kind types.RunnerOwnerKind, owner, actor string) {
 	rs, ok := s.runnerInventoryStore(w)
 	if !ok {
 		return
@@ -105,7 +120,7 @@ func (s *Server) handleUpdateMyRunner(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	row, err := rs.GetRunner(r.Context(), id)
-	if err == nil && (row.Owner != owner || runnerLapsed(row, s.cfg.Now().UTC())) {
+	if err == nil && (row.Owner != owner || (row.OwnerKind == types.RunnerOwnerOrg) != (kind == types.RunnerOwnerOrg) || runnerLapsed(row, s.cfg.Now().UTC())) {
 		err = store.ErrNotFound
 	}
 	if err == nil {
@@ -126,10 +141,10 @@ func (s *Server) handleUpdateMyRunner(w http.ResponseWriter, r *http.Request) {
 		writeServerError(w, r, "update runner", err)
 		return
 	}
-	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), owner, placement.ActionRunnerUpdate, id.String(), "success",
+	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), actor, placement.ActionRunnerUpdate, id.String(), "success",
 		mustJSON(map[string]any{"limits": map[string]*types.RunnerLimits{"before": before, "after": row.Limits}})))
 	s.kickQueue()
-	if views, ok := s.runnerViews(w, r, rs, []types.Runner{row}, false); ok {
+	if views, ok := s.runnerViews(w, r, rs, []types.Runner{row}, kind == types.RunnerOwnerOrg); ok {
 		writeJSON(w, http.StatusOK, views[0])
 	}
 }

@@ -35,15 +35,15 @@ func TestMigration0180_RunnerOrgTrust(t *testing.T) {
 	}
 	rid, tid := "'"+runner.String()+"'", "'"+token.String()+"'"
 	refused := map[string]string{
-		"an unknown owner kind":           `UPDATE runners SET owner_kind = 'team' WHERE id = ` + rid,
-		"an org runner with an owner":     `UPDATE runners SET owner_kind = 'org', trust_class = 'org_cluster' WHERE id = ` + rid,
-		"an unknown trust class":          `UPDATE runners SET trust_class = 'trusted' WHERE id = ` + rid,
-		"org_cluster on a person's":       `UPDATE runners SET trust_class = 'org_cluster' WHERE id = ` + rid,
-		"an org runner not org_cluster":   `UPDATE runners SET owner = '', owner_kind = 'org', trust_class = 'managed_device' WHERE id = ` + rid,
-		"an org token with an owner":      `UPDATE runner_registration_tokens SET owner_kind = 'org' WHERE id = ` + tid,
-		"an unknown minter kind":          `UPDATE runner_registration_tokens SET minted_by_kind = 'robot' WHERE id = ` + tid,
-		"break-glass on a human's token":  `UPDATE runner_registration_tokens SET break_glass = true WHERE id = ` + tid,
-		"an unknown token owner kind":     `UPDATE runner_registration_tokens SET owner_kind = 'team' WHERE id = ` + tid,
+		"an unknown owner kind":            `UPDATE runners SET owner_kind = 'team' WHERE id = ` + rid,
+		"an org runner with an owner":      `UPDATE runners SET owner_kind = 'org', trust_class = 'org_cluster' WHERE id = ` + rid,
+		"an unknown trust class":           `UPDATE runners SET trust_class = 'trusted' WHERE id = ` + rid,
+		"org_cluster on a person's":        `UPDATE runners SET trust_class = 'org_cluster' WHERE id = ` + rid,
+		"an org runner not org_cluster":    `UPDATE runners SET owner = '', owner_kind = 'org', trust_class = 'managed_device' WHERE id = ` + rid,
+		"an org token with an owner":       `UPDATE runner_registration_tokens SET owner_kind = 'org' WHERE id = ` + tid,
+		"an unknown minter kind":           `UPDATE runner_registration_tokens SET minted_by_kind = 'robot' WHERE id = ` + tid,
+		"break-glass on a human's token":   `UPDATE runner_registration_tokens SET break_glass = true WHERE id = ` + tid,
+		"an unknown token owner kind":      `UPDATE runner_registration_tokens SET owner_kind = 'team' WHERE id = ` + tid,
 		"a person's runner as org_cluster": `UPDATE runners SET trust_class = 'org_cluster', owner_kind = 'person' WHERE id = ` + rid,
 	}
 	for what, stmt := range refused {

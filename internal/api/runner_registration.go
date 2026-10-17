@@ -32,10 +32,12 @@ func (s *Server) mountRunnerRegistrationRoutes(r chi.Router) {
 //
 //	POST /runners/org-tokens       mint a token for an org runner
 //	POST /runners/{id}/claim-org   claim it, under a human session
+//	PUT  /runners/{id}             set an org runner's limits (runner_limits.go)
 //	PUT  /runners/{id}/trust       change a runner's trust class (runner_registration_trust.go)
 func (s *Server) mountOrgRunnerRoutes(securityOps chi.Router) {
 	securityOps.Post("/runners/org-tokens", s.handleRunnerOrgToken)
 	securityOps.Post("/runners/{id}/claim-org", s.handleRunnerClaimOrg)
+	securityOps.Put("/runners/{id}", s.handleUpdateOrgRunner)
 	securityOps.Put("/runners/{id}/trust", s.handlePutRunnerTrust)
 }
 
@@ -168,9 +170,11 @@ func (s *Server) mintRunnerToken(w http.ResponseWriter, r *http.Request, seed ty
 	seed.ID, seed.MintedBy, seed.CreatedAt, seed.ExpiresAt = uuid.New(), principalFromRequest(r), now, now.Add(ttl)
 	seed.OrgURLSHA256 = federation.OrgURLSHA256(s.cfg.RunnerOrgURL)
 	seed.OwnerKind = cmp.Or(seed.OwnerKind, types.RunnerOwnerPerson)
-	seed.MintedByKind, seed.MintedByEmail = types.RunnerMintedByHuman, oidcEmailFromContext(r.Context())
+	seed.MintedByKind = types.RunnerMintedByHuman
 	if isAdminTokenCaller(r) {
-		seed.MintedByKind, seed.MintedByEmail = types.RunnerMintedByAdminToken, ""
+		seed.MintedByKind = types.RunnerMintedByAdminToken
+	} else if seed.OwnerKind == types.RunnerOwnerOrg {
+		seed.MintedByEmail = oidcEmailFromContext(r.Context()) // only the org claim's four-eyes check reads it
 	}
 	token, err := rs.MintRunnerRegistrationToken(r.Context(), raw, seed)
 	if err != nil {

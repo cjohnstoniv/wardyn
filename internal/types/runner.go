@@ -101,6 +101,15 @@ type Runner struct {
 	RegistrationTokenID *uuid.UUID `json:"-"`
 }
 
+// OwnerHeld reports whether the row names its owner the way its kind requires: a person's runner a
+// non-empty owner, an organization's runner none (runners_org_owner_empty).
+func (r Runner) OwnerHeld() bool {
+	if r.OwnerKind == RunnerOwnerOrg {
+		return r.Owner == ""
+	}
+	return r.Owner != ""
+}
+
 // RunnerOwnerKind says who owns a runner: one person, or the organization.
 type RunnerOwnerKind string
 
