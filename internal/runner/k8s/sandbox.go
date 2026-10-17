@@ -103,6 +103,39 @@ var proxyNonrootGID = int64(65532)
 func proxyConfigSecretPath() string { return proxyConfigSecretMountDir + "/" + proxyConfigFileName }
 func proxyConfigStagedPath() string { return proxyConfigStagedMountDir + "/" + proxyConfigFileName }
 
+// createPreflight is CreateSandbox's checks before it creates anything: the runtime class to run
+// under, and the class enforced.
+func (d *Driver) createPreflight(ctx context.Context, spec runner.SandboxSpec) (runtimeClassName, runtimeHandler string, enforced types.ConfinementClass, err error) {
+	if len(spec.Mounts) > 0 {
+		return "", "", "", fmt.Errorf("k8s: sandbox mounts are not supported (requested %d): %w", len(spec.Mounts), errMountsUnsupported)
+	}
+	if err := runner.ValidateManagedFiles(spec.ManagedFiles); err != nil {
+		return "", "", "", fmt.Errorf("k8s: %w", err)
+	}
+	if err := agentSecretsAllowDrive(spec.ManagedFiles, spec.Drives); err != nil {
+		return "", "", "", fmt.Errorf("k8s: %w", err)
+	}
+	if err := validateDriveSet(spec.Drives); err != nil {
+		return "", "", "", err
+	}
+	runtimeClassName, runtimeHandler, err = d.resolveRuntimeClassName(ctx, spec.ConfinementClass)
+	if err != nil {
+		return "", "", "", err
+	}
+	enforced = spec.ConfinementClass
+	if enforced == "" {
+		// Class-less floor for direct driver callers only (mirrors docker).
+		enforced = types.CC1
+	}
+	if d.cfg.ProxyImage == "" {
+		return "", "", "", errProxyImageUnset
+	}
+	if d.runnerMode() && d.cfg.Sink == nil {
+		return "", "", "", errDecisionSinkUnwired
+	}
+	return runtimeClassName, runtimeHandler, enforced, nil
+}
+
 // CreateSandbox provisions the run's Secret, NetworkPolicies, proxy pod, and
 // agent pod, in that order, fail-closed with full rollback on any error
 // (mirrors the docker driver's LIFO teardown-closure shape). Kept as one
@@ -114,32 +147,9 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	ns := d.cfg.Namespace
 
 	// (1) Preflight: fail closed BEFORE creating anything.
-	if len(spec.Mounts) > 0 {
-		return runner.Sandbox{}, fmt.Errorf("k8s: sandbox mounts are not supported (requested %d): %w", len(spec.Mounts), errMountsUnsupported)
-	}
-	if err := runner.ValidateManagedFiles(spec.ManagedFiles); err != nil {
-		return runner.Sandbox{}, fmt.Errorf("k8s: %w", err)
-	}
-	if err := agentSecretsAllowDrive(spec.ManagedFiles, spec.Drives); err != nil {
-		return runner.Sandbox{}, fmt.Errorf("k8s: %w", err)
-	}
-	if err := validateDriveSet(spec.Drives); err != nil {
-		return runner.Sandbox{}, err
-	}
-	runtimeClassName, runtimeHandler, err := d.resolveRuntimeClassName(ctx, spec.ConfinementClass)
+	runtimeClassName, runtimeHandler, enforced, err := d.createPreflight(ctx, spec)
 	if err != nil {
 		return runner.Sandbox{}, err
-	}
-	enforced := spec.ConfinementClass
-	if enforced == "" {
-		// Class-less floor for direct driver callers only (mirrors docker).
-		enforced = types.CC1
-	}
-	if d.cfg.ProxyImage == "" {
-		return runner.Sandbox{}, errProxyImageUnset
-	}
-	if d.runnerMode() && d.cfg.Sink == nil {
-		return runner.Sandbox{}, errDecisionSinkUnwired
 	}
 	defer d.brackets.Delete(proxyPodName(spec.RunID))
 	defer d.brackets.Delete(agentPodName(spec.RunID))

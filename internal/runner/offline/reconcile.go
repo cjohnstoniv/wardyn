@@ -39,6 +39,51 @@ func (m *Manager) Pending(ctx context.Context, peer *runnerwire.Peer, actions []
 	}
 	return nil
 }
+
+// replayedAction answers an action already applied: done with its saved result, or an error when the
+// org replays a different action under the same id. A retirement whose receipt was saved but whose
+// output release never ran (a crash between the two) releases it on the org's replay. Release is
+// idempotent and refuses unsettled output. m.mu is held.
+func (m *Manager) replayedAction(ctx context.Context, a runnerwire.PendingAction) (runnerwire.ActionResult, bool, error) {
+	old, ok := m.state.Actions[a.ID]
+	if !ok {
+		return runnerwire.ActionResult{}, false, nil
+	}
+	if !samePendingAction(old.Action, a) {
+		return runnerwire.ActionResult{}, false, errors.New("pending action identity changed")
+	}
+	if old.Result.Outcome == "" {
+		return runnerwire.ActionResult{}, false, nil
+	}
+	if r := m.state.Runs[a.RunID]; a.Kind == types.RunnerActionRetire && old.Result.Outcome == "success" && r.Retired && m.releaseOutput != nil {
+		if err := m.releaseOutput(a.RunID, r.Ref); err != nil {
+			slog.WarnContext(ctx, "runner kept a retired run's output", "run_id", a.RunID, "error", err)
+		}
+	}
+	return old.Result, true, m.save()
+}
+
+// acceptNodeRecord hands a security operator's node record to the substrate, an infrastructure fence
+// it checks against its own record before it can complete containment (design K1 §3.1 (b)). It runs
+// with m.mu unlocked; done means apply returns res and err now, and m.mu is then held again.
+func (m *Manager) acceptNodeRecord(ctx context.Context, a runnerwire.PendingAction, local string) (res runnerwire.ActionResult, done bool, err error) {
+	acc, ok := m.sub.(runner.NodeRecordAcceptor)
+	if !ok {
+		m.mu.Lock()
+		res, err = m.refuseAction(ctx, a, errors.New("this runner's substrate takes no node record"))
+		return res, true, err
+	}
+	if err = acc.AcceptNodeRecord(ctx, local, *a.NodeRecord); err != nil {
+		m.mu.Lock()
+		if errors.Is(err, runner.ErrNodeRecordRefused) {
+			res, err = m.refuseAction(ctx, a, err)
+			return res, true, err
+		}
+		return runnerwire.ActionResult{}, true, err
+	}
+	return runnerwire.ActionResult{}, false, nil
+}
+
 func (m *Manager) apply(ctx context.Context, a runnerwire.PendingAction) (runnerwire.ActionResult, error) {
 	m.actionMu.Lock()
 	defer m.actionMu.Unlock()
@@ -51,20 +96,8 @@ func (m *Manager) apply(ctx context.Context, a runnerwire.PendingAction) (runner
 	if err := m.ensureDurable(); err != nil {
 		return runnerwire.ActionResult{}, err
 	}
-	if old, ok := m.state.Actions[a.ID]; ok {
-		if !samePendingAction(old.Action, a) {
-			return runnerwire.ActionResult{}, errors.New("pending action identity changed")
-		}
-		if old.Result.Outcome != "" {
-			// A retirement whose receipt was saved but whose output release never ran (a crash between the
-			// two) releases it on the org's replay. Release is idempotent and refuses unsettled output.
-			if r := m.state.Runs[a.RunID]; a.Kind == types.RunnerActionRetire && old.Result.Outcome == "success" && r.Retired && m.releaseOutput != nil {
-				if err := m.releaseOutput(a.RunID, r.Ref); err != nil {
-					slog.WarnContext(ctx, "runner kept a retired run's output", "run_id", a.RunID, "error", err)
-				}
-			}
-			return old.Result, m.save()
-		}
+	if res, done, err := m.replayedAction(ctx, a); done || err != nil {
+		return res, err
 	}
 	r, err := m.pendingRun(a, proof)
 	if refused := (actionRefusal{}); errors.As(err, &refused) {
@@ -108,19 +141,8 @@ func (m *Manager) apply(ctx context.Context, a runnerwire.PendingAction) (runner
 		err = m.sub.KillSandbox(ctx, local)
 	case types.RunnerActionStopProxy:
 		if a.NodeRecord != nil {
-			// A security operator's node record: an infrastructure fence the substrate checks
-			// against its own record before it can complete containment (design K1 §3.1 (b)).
-			acc, ok := m.sub.(runner.NodeRecordAcceptor)
-			if !ok {
-				m.mu.Lock()
-				return m.refuseAction(ctx, a, errors.New("this runner's substrate takes no node record"))
-			}
-			if err = acc.AcceptNodeRecord(ctx, local, *a.NodeRecord); err != nil {
-				m.mu.Lock()
-				if errors.Is(err, runner.ErrNodeRecordRefused) {
-					return m.refuseAction(ctx, a, err)
-				}
-				return runnerwire.ActionResult{}, err
+			if res, done, err := m.acceptNodeRecord(ctx, a, local); done {
+				return res, err
 			}
 		}
 		err = m.stopper.StopProxy(ctx, local)

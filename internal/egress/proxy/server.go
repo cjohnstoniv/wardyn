@@ -84,6 +84,54 @@ func (h serverHooks) start(out *Server, p *Proxy, ts *tokenSource, cfg *Config, 
 	startRunTokenRenewer(out, p, ts, cfg, client, tune)
 }
 
+// egressTLSConfig is the egress trust set: the system roots plus pemBundle, nil (the default roots) when
+// pemBundle is empty.
+func egressTLSConfig(pemBundle string) (*tls.Config, error) {
+	if pemBundle == "" {
+		return nil, nil
+	}
+	pool, perr := x509.SystemCertPool()
+	if perr != nil || pool == nil {
+		pool = x509.NewCertPool()
+	}
+	if !pool.AppendCertsFromPEM([]byte(pemBundle)) {
+		return nil, fmt.Errorf("trusted ca: no valid PEM certificates in trusted_ca_pem")
+	}
+	return &tls.Config{RootCAs: pool}, nil
+}
+
+// controlPlaneClient returns the client every control-plane caller rides.
+//
+// SECURITY: the four control-plane clients below (sink, injector, approval
+// client, token renewer) all ride THIS client. A caller-supplied client
+// with no Transport rides http.DefaultTransport, which would ride
+// ProxyFromEnvironment instead of nil-ing Proxy out. With HTTP(S)_PROXY
+// visible to the sidecar, the run token, approvals, decisions and MINTED
+// CREDENTIAL VALUES would transit the corporate proxy and skip
+// resolveTrustedURL's pin.
+//
+// So the transport is owned UNCONDITIONALLY and Proxy is cleared
+// explicitly: Transport.Clone() PRESERVES the proxy function, so this
+// can't skip the clearing. A nil client is built here, never left to a
+// callee's fallback.
+func controlPlaneClient(client *http.Client, cpTLS *tls.Config) *http.Client {
+	if client == nil {
+		client = &http.Client{Timeout: controlPlaneCallTimeout}
+	}
+	if client.Transport == nil {
+		tr := http.DefaultTransport.(*http.Transport).Clone()
+		tr.Proxy = nil
+		// A COPY, not the shared pointer: this transport has HTTP/2 enabled,
+		// and enabling it prepends "h2" to the config's own NextProtos on
+		// first use — a shared config made the egress transport offer h2 (#359).
+		tr.TLSClientConfig = cpTLS.Clone()
+		c := *client
+		c.Transport = tr
+		client = &c
+	}
+	return client
+}
+
 func newServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.Writer, hooks serverHooks) (*Server, error) {
 	pol := CompilePolicy(cfg.Policy)
 	// Beside the compile, not inside it: CompilePolicy is a pure function with
@@ -122,47 +170,15 @@ func newServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 	// the internet, not between it and wardynd. Control-plane calls trust
 	// wardynd's internal CA and nothing else — an empty pin fails every
 	// handshake rather than falling back to the system roots.
-	var tlsCfg *tls.Config
-	if cfg.TrustedCAPEM != "" {
-		pool, perr := x509.SystemCertPool()
-		if perr != nil || pool == nil {
-			pool = x509.NewCertPool()
-		}
-		if !pool.AppendCertsFromPEM([]byte(cfg.TrustedCAPEM)) {
-			return nil, fmt.Errorf("trusted ca: no valid PEM certificates in trusted_ca_pem")
-		}
-		tlsCfg = &tls.Config{RootCAs: pool}
+	tlsCfg, err := egressTLSConfig(cfg.TrustedCAPEM)
+	if err != nil {
+		return nil, err
 	}
 	cpTLS, err := hoptls.ClientConfig(cfg.ControlPlaneCAPEM)
 	if err != nil {
 		return nil, err
 	}
-	// SECURITY: the four control-plane clients below (sink, injector, approval
-	// client, token renewer) all ride THIS client. A caller-supplied client
-	// with no Transport rides http.DefaultTransport, which would ride
-	// ProxyFromEnvironment instead of nil-ing Proxy out. With HTTP(S)_PROXY
-	// visible to the sidecar, the run token, approvals, decisions and MINTED
-	// CREDENTIAL VALUES would transit the corporate proxy and skip
-	// resolveTrustedURL's pin.
-	//
-	// So the transport is owned UNCONDITIONALLY and Proxy is cleared
-	// explicitly: Transport.Clone() PRESERVES the proxy function, so this
-	// can't skip the clearing. A nil client is built here, never left to a
-	// callee's fallback.
-	if client == nil {
-		client = &http.Client{Timeout: controlPlaneCallTimeout}
-	}
-	if client.Transport == nil {
-		tr := http.DefaultTransport.(*http.Transport).Clone()
-		tr.Proxy = nil
-		// A COPY, not the shared pointer: this transport has HTTP/2 enabled,
-		// and enabling it prepends "h2" to the config's own NextProtos on
-		// first use — a shared config made the egress transport offer h2 (#359).
-		tr.TLSClientConfig = cpTLS.Clone()
-		c := *client
-		c.Transport = tr
-		client = &c
-	}
+	client = controlPlaneClient(client, cpTLS)
 
 	sink, err := configuredDecisionSink(cfg, ts, client, stdout)
 	if err != nil {

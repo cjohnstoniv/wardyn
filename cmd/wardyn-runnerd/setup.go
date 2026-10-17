@@ -209,6 +209,22 @@ func checkedTrustedCAFile(given, kept, from string) (string, error) {
 	return abs, err
 }
 
+// checkServiceChoice checks the service setup will install, or with --no-service that none is installed
+// already for this runner.
+func (h setupHost) checkServiceChoice(ctx context.Context, noService bool, planPaths *setupPaths, paths setupPaths) error {
+	if !noService {
+		return h.checkServiceManager(ctx, planPaths)
+	}
+	if installed := paths.installedService(); installed != "" {
+		// Refused rather than disabled: --no-service promises to touch no service, and a unit left running beside
+		// the foreground command would be a second process with this one identity, which the organisation
+		// refuses.
+		return fmt.Errorf("a service is already installed for this runner (%s): running the runner by hand as well starts a second process with one identity. "+
+			"Stop and remove the service first (Linux: systemctl --user disable --now %s; macOS: launchctl bootout gui/%d/%s), then delete that file and run setup --no-service again; no token was spent", installed, serviceUnit, h.uid, serviceLabel)
+	}
+	return nil
+}
+
 // preflight validates every input and checks Docker, so that a refusal comes before the single-use
 // token is spent or any file is written.
 func (h setupHost) preflight(cmd *cobra.Command, o setupOptions) (setupPlan, error) {
@@ -274,15 +290,8 @@ func (h setupHost) preflight(cmd *cobra.Command, o setupOptions) (setupPlan, err
 			return setupPlan{}, fmt.Errorf("unsupported characters in a setting: %s", v)
 		}
 	}
-	if !o.noService {
-		if err := h.checkServiceManager(cmd.Context(), &plan.paths); err != nil {
-			return setupPlan{}, err
-		}
-	} else if installed := paths.installedService(); installed != "" {
-		// Refused rather than disabled: --no-service promises to touch no service, and a unit left running beside
-		// the foreground command would be a second process with this one identity, which the organisation
-		// refuses.
-		return setupPlan{}, fmt.Errorf("a service is already installed for this runner (%s): running the runner by hand as well starts a second process with one identity. Stop and remove the service first (Linux: systemctl --user disable --now %s; macOS: launchctl bootout gui/%d/%s), then delete that file and run setup --no-service again; no token was spent", installed, serviceUnit, h.uid, serviceLabel)
+	if err := h.checkServiceChoice(cmd.Context(), o.noService, &plan.paths, paths); err != nil {
+		return setupPlan{}, err
 	}
 	// Always, flags or not: serve runs the same check at every start, after the token is spent.
 	if plan.eng, err = h.engine(cmd.Context(), o.network, want); err != nil {

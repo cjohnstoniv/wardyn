@@ -485,7 +485,8 @@ func (d *Driver) checkRelayOutsideRunSubnet(ctx context.Context, runID uuid.UUID
 	}
 	for _, c := range insp.Network.IPAM.Config {
 		if c.Subnet.Contains(ip.Unmap()) {
-			return fmt.Errorf("docker: relay: this run's network %s was given the subnet %s, which contains the relay target %s, so the run's proxy would look for the relay on its own bridge. Move the engine's default-address-pools off %s, or point the runner's relay at an address outside %s (--relay-host-target)", name, c.Subnet, target, c.Subnet, c.Subnet)
+			return fmt.Errorf("docker: relay: this run's network %s was given the subnet %s, which contains the relay target %s, so the run's proxy would look for the relay on its own bridge. "+
+				"Move the engine's default-address-pools off %s, or point the runner's relay at an address outside %s (--relay-host-target)", name, c.Subnet, target, c.Subnet, c.Subnet)
 		}
 	}
 	return nil

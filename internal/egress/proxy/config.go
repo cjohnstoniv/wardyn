@@ -504,32 +504,14 @@ func (c *Config) applyDefaultsAndValidate() error {
 	// ipguard.Liftable" at write time (validateInternalHosts, internal/api), so
 	// a failure here means a config file authored outside that path. Fail
 	// closed rather than silently drop a malformed entry.
-	for i, h := range c.InternalHosts {
-		for j, cidr := range h.CIDRs {
-			prefix, err := netip.ParsePrefix(cidr)
-			if err != nil {
-				return fmt.Errorf("config: internal_hosts[%d].cidrs[%d]: %q: %w", i, j, cidr, err)
-			}
-			if !slices.ContainsFunc(ipguard.Liftable, func(l netip.Prefix) bool {
-				return l.Bits() <= prefix.Bits() && l.Contains(prefix.Addr())
-			}) {
-				return fmt.Errorf("config: internal_hosts[%d].cidrs[%d]: %q must lie inside RFC1918, fc00::/7 or 100.64.0.0/10", i, j, cidr)
-			}
-		}
+	if err := c.validateInternalHostCIDRs(); err != nil {
+		return err
 	}
 	if err := c.validateTerminatedGates(); err != nil {
 		return err
 	}
-	if c.SelfLapse != (c.DecisionSink != nil) {
-		return fmt.Errorf("config: self_lapse and decision_sink are set together (k8s runners), never one alone")
-	}
-	if c.DecisionSink != nil {
-		if c.DecisionSpoolDir != "" {
-			return fmt.Errorf("config: decision_sink and decision_spool_dir are exclusive")
-		}
-		if err := c.DecisionSink.validate(); err != nil {
-			return fmt.Errorf("config: %w", err)
-		}
+	if err := c.validateDecisionSink(); err != nil {
+		return err
 	}
 	if err := c.validateHardDeny(); err != nil {
 		return err
@@ -548,6 +530,41 @@ func (c *Config) applyDefaultsAndValidate() error {
 		}
 	}
 	return c.validateChannelHosts()
+}
+
+// validateInternalHostCIDRs parse-checks each internal host's CIDRs and that each lies inside
+// ipguard.Liftable.
+func (c *Config) validateInternalHostCIDRs() error {
+	for i, h := range c.InternalHosts {
+		for j, cidr := range h.CIDRs {
+			prefix, err := netip.ParsePrefix(cidr)
+			if err != nil {
+				return fmt.Errorf("config: internal_hosts[%d].cidrs[%d]: %q: %w", i, j, cidr, err)
+			}
+			if !slices.ContainsFunc(ipguard.Liftable, func(l netip.Prefix) bool {
+				return l.Bits() <= prefix.Bits() && l.Contains(prefix.Addr())
+			}) {
+				return fmt.Errorf("config: internal_hosts[%d].cidrs[%d]: %q must lie inside RFC1918, fc00::/7 or 100.64.0.0/10", i, j, cidr)
+			}
+		}
+	}
+	return nil
+}
+
+// validateDecisionSink checks self_lapse and decision_sink come together, and the sink without a spool.
+func (c *Config) validateDecisionSink() error {
+	if c.SelfLapse != (c.DecisionSink != nil) {
+		return fmt.Errorf("config: self_lapse and decision_sink are set together (k8s runners), never one alone")
+	}
+	if c.DecisionSink != nil {
+		if c.DecisionSpoolDir != "" {
+			return fmt.Errorf("config: decision_sink and decision_spool_dir are exclusive")
+		}
+		if err := c.DecisionSink.validate(); err != nil {
+			return fmt.Errorf("config: %w", err)
+		}
+	}
+	return nil
 }
 
 // DecisionSinkConfig reaches runnerd's decision sink: URL is tls://host:port,

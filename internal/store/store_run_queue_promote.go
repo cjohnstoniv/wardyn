@@ -293,21 +293,9 @@ func (s PG) promoteAdmitted(ctx context.Context, pass PromotePass, admitted []ad
 				}
 				return needs[e.RunID]
 			}
-			var bind *uuid.UUID
-			var remote, key string
-			var sized *types.RunnerAmounts
-			if len(a.runners)+len(a.remotes) > 0 {
-				if key = roomiest(a.keys(), rooms, needOn); key == "" {
-					continue
-				}
-				if n, ok := a.needs[key]; ok {
-					sized = &n
-				}
-				if id, err := uuid.Parse(key); err == nil {
-					bind = &id
-				} else {
-					remote = key
-				}
+			bind, remote, key, sized, fits := queuedRunPlace(a, rooms, needOn)
+			if !fits {
+				continue
 			}
 			run, ok, err := promoteQueuedRun(ctx, q, e.RunID, pass.WatcherOwner, bind, remote, sized)
 			if err != nil {
@@ -333,6 +321,27 @@ func (s PG) promoteAdmitted(ctx context.Context, pass PromotePass, admitted []ad
 		return nil
 	})
 	return promoted, err
+}
+
+// queuedRunPlace is the runner an admitted run is bound to: none when it names no runner, else the
+// roomiest of its runners (a self-hosted one as bind, a remote-hosted one as remote) with the size the
+// verdict gave it there. fits is false when it names runners and none has room.
+func queuedRunPlace(a admittedRun, rooms map[string]runnerRoom, needOn func(string) types.RunnerAmounts) (bind *uuid.UUID, remote, key string, sized *types.RunnerAmounts, fits bool) {
+	if len(a.runners)+len(a.remotes) == 0 {
+		return nil, "", "", nil, true
+	}
+	if key = roomiest(a.keys(), rooms, needOn); key == "" {
+		return nil, "", "", nil, false
+	}
+	if n, ok := a.needs[key]; ok {
+		sized = &n
+	}
+	if id, err := uuid.Parse(key); err == nil {
+		bind = &id
+	} else {
+		remote = key
+	}
+	return bind, remote, key, sized, true
 }
 
 // roomiest is the runner of keys that fits the run at the size it reserves there (need) with the most

@@ -252,10 +252,18 @@ func (s *Spool) readManifest() (manifest, error) {
 	if m.Sealed && (m.Last != m.Ack.Seq || m.Drops != m.Reported || m.Overflow != nil || !m.remoteSettled()) {
 		return manifest{}, errors.New("sealed spool has unsettled evidence")
 	}
-	if r := m.Overflow; r != nil && (r.Seq != 0 || !r.ValidHash() || r.SpoolID != m.SpoolID || r.Decision.Request.RunID != s.runID || r.Count == 0 || r.Count > m.Drops-m.Reported || r.DropEnd != m.Reported+r.Count || r.Decision.Decision != egress.Deny || r.Decision.RuleSource != "builtin:spool-full") {
+	if !m.validOverflow(s.runID) {
 		return m, errors.New("invalid spool overflow record")
 	}
 	return m, nil
+}
+
+// validOverflow reports whether the manifest's overflow record, when it has one, is the spool-full
+// deny for runID that accounts for the drops not yet reported.
+func (m manifest) validOverflow(runID uuid.UUID) bool {
+	r := m.Overflow
+	return r == nil || !(r.Seq != 0 || !r.ValidHash() || r.SpoolID != m.SpoolID || r.Decision.Request.RunID != runID || r.Count == 0 || r.Count > m.Drops-m.Reported ||
+		r.DropEnd != m.Reported+r.Count || r.Decision.Decision != egress.Deny || r.Decision.RuleSource != "builtin:spool-full")
 }
 
 func (s *Spool) writeManifest(m manifest) error { return s.writeJSON("state.json", m) }

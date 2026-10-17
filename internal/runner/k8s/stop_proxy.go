@@ -555,27 +555,9 @@ func (d *Driver) AcceptNodeRecord(ctx context.Context, ref string, rec runner.No
 	if rec.FourEyes || ev.noCausalAssociation() || len(ev.Reuse) > 0 {
 		need = 2
 	}
-	// Two approvers sharing a principal or an email are one human; a shared key counts once even
-	// when the other key differs or is missing.
-	humans := 0
-	principals, emails := map[string]bool{}, map[string]bool{}
-	for _, a := range rec.Approvers {
-		if !a.Human {
-			return refuseRecord("an admin token cannot make a node record")
-		}
-		p, e := strings.ToLower(strings.TrimSpace(a.Principal)), strings.ToLower(strings.TrimSpace(a.Email))
-		if p == "" && e == "" {
-			continue
-		}
-		if !(p != "" && principals[p]) && !(e != "" && emails[e]) {
-			humans++
-		}
-		if p != "" {
-			principals[p] = true
-		}
-		if e != "" {
-			emails[e] = true
-		}
+	humans, err := distinctHumanApprovers(rec.Approvers)
+	if err != nil {
+		return err
 	}
 	if humans < need {
 		return refuseRecord(fmt.Sprintf("this record needs %d distinct human approvers", need))
@@ -608,6 +590,33 @@ func (d *Driver) AcceptNodeRecord(ctx context.Context, ref string, rec runner.No
 		return true, nil
 	})
 	return err
+}
+
+// distinctHumanApprovers counts a node record's approvers as humans, or refuses an admin token. Two
+// approvers sharing a principal or an email are one human; a shared key counts once even when the
+// other key differs or is missing.
+func distinctHumanApprovers(approvers []runner.NodeRecordApprover) (int, error) {
+	humans := 0
+	principals, emails := map[string]bool{}, map[string]bool{}
+	for _, a := range approvers {
+		if !a.Human {
+			return 0, refuseRecord("an admin token cannot make a node record")
+		}
+		p, e := strings.ToLower(strings.TrimSpace(a.Principal)), strings.ToLower(strings.TrimSpace(a.Email))
+		if p == "" && e == "" {
+			continue
+		}
+		if !(p != "" && principals[p]) && !(e != "" && emails[e]) {
+			humans++
+		}
+		if p != "" {
+			principals[p] = true
+		}
+		if e != "" {
+			emails[e] = true
+		}
+	}
+	return humans, nil
 }
 
 // holderBound is precondition (ii): on a run that is not (u2) and has no latched ID, the post-bind

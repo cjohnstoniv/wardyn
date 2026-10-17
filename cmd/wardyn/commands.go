@@ -111,6 +111,27 @@ func interactiveLine(startup *sdk.RunStartup, id string) string {
 	return "  interactive: starts " + startup.Command + "; " + attach
 }
 
+// readRunPolicyFile reads --policy-file as the inline RunPolicySpec.
+func readRunPolicyFile(policyFile string) (types.RunPolicySpec, error) {
+	data, err := os.ReadFile(policyFile)
+	if err != nil {
+		return types.RunPolicySpec{}, fmt.Errorf("read --policy-file: %w", err)
+	}
+	// Accept JSON or YAML: bridge to canonical JSON, then unmarshal the
+	// same json-tagged spec the server validates.
+	if data, err = policyToJSON(data); err != nil {
+		return types.RunPolicySpec{}, fmt.Errorf("parse --policy-file %s: %w", policyFile, err)
+	}
+	// Strict decode (DisallowUnknownFields, shared with `policy set`/
+	// `policy render`): a misspelled spec field fails here, not as a
+	// silently-dropped setting the server never sees.
+	spec, err := decodeSpecStrict(data)
+	if err != nil {
+		return types.RunPolicySpec{}, fmt.Errorf("parse --policy-file %s: %w", policyFile, err)
+	}
+	return spec, nil
+}
+
 // runCmd is the single "run" noun: a bare invocation creates a run, and the
 // subcommands inspect, stop and export runs. "runs" stays as an alias so
 // `wardyn runs list` keeps working.
@@ -193,21 +214,9 @@ func runCmd(client clientFn) *cobra.Command {
 			// mutually exclusive with --policy; the server enforces that XOR — we
 			// only surface a clear parse error client-side.
 			if policyFile != "" {
-				data, err := os.ReadFile(policyFile)
+				spec, err := readRunPolicyFile(policyFile)
 				if err != nil {
-					return fmt.Errorf("read --policy-file: %w", err)
-				}
-				// Accept JSON or YAML: bridge to canonical JSON, then unmarshal the
-				// same json-tagged spec the server validates.
-				if data, err = policyToJSON(data); err != nil {
-					return fmt.Errorf("parse --policy-file %s: %w", policyFile, err)
-				}
-				// Strict decode (DisallowUnknownFields, shared with `policy set`/
-				// `policy render`): a misspelled spec field fails here, not as a
-				// silently-dropped setting the server never sees.
-				spec, err := decodeSpecStrict(data)
-				if err != nil {
-					return fmt.Errorf("parse --policy-file %s: %w", policyFile, err)
+					return err
 				}
 				body.InlinePolicy = &spec
 			}
@@ -271,7 +280,8 @@ func runCmd(client clientFn) *cobra.Command {
 	mode.bind(cmd.Flags())
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "resolve and check the run without launching it: prints the setup checklist and the confinement class that would be enforced")
 	cmd.Flags().BoolVar(&wait, "wait", false, "block until the run reaches a terminal state and exit with the run's outcome (COMPLETED=0, FAILED=agent exit code, KILLED/STOPPED=2, timeout=124)")
-	cmd.Flags().DurationVar(&maxWait, "max-wait", 0, "how long the run may wait for a free slot in a pool at its run limit (at least 1s; over 7 days is cut to 7). With --wait and no --max-wait the request carries --timeout minus 60s for a --timeout of 2m or more, and half of --timeout for a shorter one, so a run that waits too long should end queue_timeout (exit 1) before --timeout (exit 124); that is the limit asked of the server, not a guarantee")
+	cmd.Flags().DurationVar(&maxWait, "max-wait", 0, "how long the run may wait for a free slot in a pool at its run limit (at least 1s; over 7 days is cut to 7). "+
+		"With --wait and no --max-wait the request carries --timeout minus 60s for a --timeout of 2m or more, and half of --timeout for a shorter one, so a run that waits too long should end queue_timeout (exit 1) before --timeout (exit 124); that is the limit asked of the server, not a guarantee")
 	cmd.Flags().DurationVar(&timeout, "timeout", 30*time.Minute, "give up waiting after this long (with --wait; exit 124). Bounds the requests too, and does not stop the run: it keeps running, and holds its sandbox and credentials until it ends (kill it with 'wardyn run kill'). Must be positive")
 	cmd.Flags().BoolVar(&createJSON, "json", false, "emit the created run (or the --dry-run checklist) as JSON (progress goes to stderr)")
 

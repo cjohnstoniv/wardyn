@@ -92,7 +92,8 @@ func runnerArchImagesCheck(counts map[string]int, plainArch string, images map[s
 		for _, key := range missing {
 			sel = append(sel, fmt.Sprintf("%s = %s: %s", key, images[key], describe(images[key])))
 		}
-		detail = append(detail, fmt.Sprintf("%d %s %s. These WARDYN_AGENT_IMAGES keys name no %s image: %s. A run on an %s runner uses the plain ref, which works only if it is a multi-arch image; a single-arch image runs under emulation, or is refused when the engine cannot emulate it. Selected images: %s. If the ref is a mirror copy, the mirror may have copied one platform only, or a platform pin may be at fault; neither is known from here.",
+		detail = append(detail, fmt.Sprintf("%d %s %s. These WARDYN_AGENT_IMAGES keys name no %s image: %s. "+
+			"A run on an %s runner uses the plain ref, which works only if it is a multi-arch image; a single-arch image runs under emulation, or is refused when the engine cannot emulate it. Selected images: %s. If the ref is a mirror copy, the mirror may have copied one platform only, or a platform pin may be at fault; neither is known from here.",
 			n, arch, noun, arch, strings.Join(missing, ", "), arch, strings.Join(sel, "; ")))
 		if fix == "" {
 			fix = fmt.Sprintf("Add %q: \"<%s ref>\" (the same ref if it is multi-arch; used by runs on a registered %s runner), then restart wardynd. ", missing[0]+"@"+arch, arch, arch) +

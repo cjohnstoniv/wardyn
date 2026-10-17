@@ -153,6 +153,35 @@ func (s *Server) reviveFromRequest(r *http.Request, run types.AgentRun, startAge
 	return s.reviveRunProxy(r.Context(), run, actorType, actor, startAgent)
 }
 
+// reviveSupported is what reviveRunProxy needs from this deployment, and whether run's agent must be
+// started (rebooted), or the refusal that leaves the run as it was.
+func (s *Server) reviveSupported(ctx context.Context, run types.AgentRun, startAgent bool) (store.RunReviver, runner.ProxyReviver, runner.SandboxStarter, bool, *reviveError) {
+	reviver, ok := s.cfg.Store.(store.RunReviver)
+	if !ok || s.cfg.Runner == nil {
+		return nil, nil, nil, false, reviveRefused(http.StatusNotImplemented, reasonReviveUnsupportedDeployment, "this deployment cannot revive a run")
+	}
+	rv, ok := s.cfg.Runner.(runner.ProxyReviver)
+	if !ok {
+		return nil, nil, nil, false, reviveUnsupported()
+	}
+	if rerr := s.reviveEligible(run, startAgent); rerr != nil {
+		return nil, nil, nil, false, rerr
+	}
+	rebooted, rerr := s.reviveNeedsAgentStart(ctx, run)
+	if rerr != nil {
+		return nil, nil, nil, false, rerr
+	}
+	starter, canStart := s.cfg.Runner.(runner.SandboxStarter)
+	if rebooted && !canStart {
+		return nil, nil, nil, false, reviveUnsupported()
+	}
+	if rebooted && !startAgent {
+		return nil, nil, nil, false, reviveRefused(http.StatusConflict, reasonReviveBulkCannotStartAgent,
+			"run's agent is stopped and a bulk restart cannot start it; revive it from the run's page")
+	}
+	return reviver, rv, starter, rebooted, nil
+}
+
 // reviveRunProxy replaces run's proxy with its own config under a fresh token
 // and the owner's current denies, then, for a run lost to a reboot, starts its
 // agent. Every refusal before the claim leaves the run as it was, and so does
@@ -161,28 +190,9 @@ func (s *Server) reviveFromRequest(r *http.Request, run types.AgentRun, startAge
 // lost with its proxy and agent stopped, so it never runs without the proxy it
 // was promised.
 func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorType types.ActorType, actor string, startAgent bool) (reviveResult, *reviveError) {
-	reviver, ok := s.cfg.Store.(store.RunReviver)
-	if !ok || s.cfg.Runner == nil {
-		return reviveResult{}, reviveRefused(http.StatusNotImplemented, reasonReviveUnsupportedDeployment, "this deployment cannot revive a run")
-	}
-	rv, ok := s.cfg.Runner.(runner.ProxyReviver)
-	if !ok {
-		return reviveResult{}, reviveUnsupported()
-	}
-	if rerr := s.reviveEligible(run, startAgent); rerr != nil {
-		return reviveResult{}, rerr
-	}
-	rebooted, rerr := s.reviveNeedsAgentStart(ctx, run)
+	reviver, rv, starter, rebooted, rerr := s.reviveSupported(ctx, run, startAgent)
 	if rerr != nil {
 		return reviveResult{}, rerr
-	}
-	starter, canStart := s.cfg.Runner.(runner.SandboxStarter)
-	if rebooted && !canStart {
-		return reviveResult{}, reviveUnsupported()
-	}
-	if rebooted && !startAgent {
-		return reviveResult{}, reviveRefused(http.StatusConflict, reasonReviveBulkCannotStartAgent,
-			"run's agent is stopped and a bulk restart cannot start it; revive it from the run's page")
 	}
 	if rerr := s.markReviving(run); rerr != nil {
 		return reviveResult{}, rerr
