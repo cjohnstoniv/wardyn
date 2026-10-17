@@ -126,6 +126,7 @@ func k8sRunnerHooks(ctx context.Context, identity runneridentity.Identity, state
 		c.ControlPlaneRelay = relay.Ensure
 		c.RunnerdPeer = &k8s.RunnerdPeer{Namespace: ownNS, PodLabels: env.podSelector, RelayPort: env.relayPort, SinkPort: env.sink}
 		c.TrustedCAPEM = opts.trustedCA
+		c.Arch = opts.arch
 		c.MaxPodLifetime = opts.maxPodLifetime
 		c.Evidence = ev
 		c.Fence = relay.Fence

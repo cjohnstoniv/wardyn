@@ -48,4 +48,5 @@
 # docs/ENV.md 37321 adds 57 over 37264 (0.9.3 A1 fix), measured: CA file delivery, WARDYN_PROXY_IMAGE_PINNED.
 # docs/ENV.md 37330 adds 9 (0.9.3 A1 fix): the CA mount path and the staged-PEM rule.
 # docs/ENV.md 37476 adds 146 over 37330 (0.9.3 K2), measured: the seven WARDYN_RUNNERD_* rows a Kubernetes runner reads, which the env-doc guard requires.
-docs/ENV.md=37476 share=5
+# docs/ENV.md 37518 adds 42 over 37476 (0.9.3 K8), measured: the WARDYN_RUNNERD_ARCH row, which the env-doc guard requires.
+docs/ENV.md=37518 share=5

@@ -10,7 +10,11 @@ org: ""
 runsNamespace: ""
 
 sandbox:
-  # amd64 or arm64 (--arch). Merged into the sandbox node selector; a mixed cluster installs two releases.
+  # Required: amd64 or arm64 (register and serve --arch, WARDYN_RUNNERD_ARCH). Every run pod and the canary get
+  # nodeSelector kubernetes.io/arch=<arch> beside k8s.sandbox.nodeSelector's own keys, and the runner reports it
+  # as its arch. A k8s.sandbox.nodeSelector kubernetes.io/arch of another arch refuses boot.
+  # A mixed-arch cluster installs two releases, one per arch, each with its own release name, registration
+  # Secret and runs namespace.
   arch: ""
   # Upper bound on both pods' activeDeadlineSeconds (--max-pod-lifetime).
   maxPodLifetime: 168h
@@ -79,6 +83,7 @@ egress:
 k8s:
   imagePullSecret: ""
   sandbox:
+    # sandbox.arch joins these keys as kubernetes.io/arch; a key of another arch refuses boot.
     nodeSelector: {}
     tolerations: []
     affinity: {}

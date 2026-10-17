@@ -97,6 +97,21 @@ func checkPlacementKey(field, key string) error {
 	return nil
 }
 
+// withArch is the placement of a runner pinned to arch (design K1 §6.1): the operator's node selector
+// with corev1.LabelArchStable added, so every pod (and the canary) lands on a node of that arch. An
+// operator key of a different arch refuses boot rather than being overwritten.
+func (p Placement) withArch(arch string) (Placement, error) {
+	if v, ok := p.NodeSelector[corev1.LabelArchStable]; ok && v != arch {
+		return Placement{}, fmt.Errorf("k8s: WARDYN_K8S_SANDBOX_PLACEMENT nodeSelector %s=%s conflicts with --arch %s", corev1.LabelArchStable, v, arch)
+	}
+	p.NodeSelector = maps.Clone(p.NodeSelector)
+	if p.NodeSelector == nil {
+		p.NodeSelector = map[string]string{}
+	}
+	p.NodeSelector[corev1.LabelArchStable] = arch
+	return p, nil
+}
+
 // apply puts the placement on pod and (re)writes its labels: the operator's podLabels join extra, and
 // wardynLabels writes the reserved managed, run and component labels last. The one place every pod
 // the substrate creates takes its placement from.
