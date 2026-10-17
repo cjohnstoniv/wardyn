@@ -3874,6 +3874,7 @@ image digests in `wardyn.env`, not a re-run of anything
 - `0180` (`0180_run_recording`) adds `recording` to `runner_pools` and `runner_pool_org_defaults` (`0152`'s tables) and `not_recorded` to `agent_runs` (`0001`'s table).
 - `0181` (`0181_runner_org_trust`) adds `owner_kind`, `trust_class`, `trust_set_by`, `trust_set_at` and `registration_token_id` to `runners` (`0139`'s table) and `owner_kind`, `minted_by_kind`, `minted_by_email` and `break_glass` to `runner_registration_tokens` (`0142`'s table), with checks that an org row has no owner and that `org_cluster` is the trust class of an org runner and only of one; existing rows become `person` and `personal`.
 - `0184` (`0184_run_runner_trust_class`) adds `runner_trust_class` to `agent_runs`: the trust class a local run's credential plan was admitted at, which a revive holds its runner to; local runs already bound to a runner become `personal`.
+- `0188` (`0188_run_renewed_token_jtis`) adds `token_jti` and `token_prev_jti` to `agent_runs` (`0001`'s table): the ids of the two tokens a run's proxy last held across a renewal, which a revive revokes.
 - `0085` is named for its `CREATE OR REPLACE FUNCTION push_content_paths_immutable()`,
   but it is not an instance of the hazard: it creates that function and the
   `push_content_paths` table in the same file, so the migrator owns both from the start.
