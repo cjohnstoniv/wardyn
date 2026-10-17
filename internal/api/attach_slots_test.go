@@ -153,14 +153,14 @@ func dialAttachRefusedAs(t *testing.T, ts *httptest.Server, srv *Server, runID u
 }
 
 // capRefusals is the session.attach rows refused at the cap, and their data.
-func capRefusals(audit *sshTestRecorder) []map[string]any {
+func capRefusals(audit *sshTestRecorder, limit int) []map[string]any {
 	var out []map[string]any
 	for _, ev := range audit.snapshot() {
 		var d map[string]any
 		if ev.Action != "session.attach" || ev.Outcome != "failure" || json.Unmarshal(ev.Data, &d) != nil {
 			continue
 		}
-		if d["reason"] == reasonAttachSessionCapReached && d["state"] == "refused" && d["max"] == float64(maxAttachSessionsPerRun) {
+		if d["reason"] == reasonAttachSessionCapReached && d["state"] == "refused" && d["max"] == float64(limit) {
 			out = append(out, d)
 		}
 	}
@@ -197,7 +197,7 @@ func TestAttachSlots_TheNinthSessionIsRefusedBeforeItsExecOnBothLanes(t *testing
 	if n := fr.attachCount(); n != maxAttachSessionsPerRun {
 		t.Fatalf("Runner.Attach calls = %d, want %d: a refused session opened an exec", n, maxAttachSessionsPerRun)
 	}
-	got := capRefusals(audit)
+	got := capRefusals(audit, maxAttachSessionsPerRun)
 	if len(got) != 2 || got[0]["transport"] != nil || got[1]["transport"] != "ssh" {
 		t.Fatalf("cap refusals audited = %v, want the web one then the ssh one", got)
 	}
@@ -382,8 +382,8 @@ func TestAttachSlots_OnePrincipalCannotFillARunMorePrincipalsCanEnter(t *testing
 	if code := dialAttachRefusedAs(t, ts, srv, run.ID, holderSecond); code != http.StatusServiceUnavailable {
 		t.Fatalf("the principal's eighth attach was refused with %d, want 503", code)
 	}
-	if got := capRefusals(audit); len(got) != 1 {
-		t.Fatalf("cap refusals audited = %v, want one, in the run cap's shape", got)
+	if got := capRefusals(audit, maxAttachSessionsPerPrincipal); len(got) != 1 {
+		t.Fatalf("cap refusals audited = %v, want one, naming the person's cap", got)
 	}
 	readAttachMode(t, dialAttach(t, ts, srv, run.ID, holderOwner, ""))
 	waitForSession(t, fr, maxAttachSessionsPerPrincipal)
