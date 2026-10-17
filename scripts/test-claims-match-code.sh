@@ -209,6 +209,11 @@ split_note="$(awk '
   on { print }
 ' "${ROOT}/CHANGELOG.md")"
 [ -n "${split_note}" ] || fail "CHANGELOG.md carries no \"Split-role installs\" bullet — re-anchor this guard (C8h)"
+newest="$(basename "$(ls "${MIGDIR}"/[0-9][0-9][0-9][0-9]_*.sql | tail -1)" | cut -c1-4)"
+# Right after a release cut UNRELEASED_FROM is the next number and nothing is checked, which is correct; set any
+# higher it skips migrations that exist (or will be taken by the next lane), so the check would prove nothing.
+[ "$((10#${UNRELEASED_FROM}))" -le "$((10#${newest} + 1))" ] \
+  || fail "UNRELEASED_FROM ${UNRELEASED_FROM} is above the next migration number $((10#${newest} + 1)) (newest is ${newest}): the split-role check reads no migration it should (C8h). Set it to the first migration after the last release"
 checked=0
 for f in "${MIGDIR}"/[0-9][0-9][0-9][0-9]_*.sql; do
   num="$(basename "${f}" | cut -c1-4)"

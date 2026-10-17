@@ -26,8 +26,13 @@ RT_TMP=""
 trap 'rm -rf "$WORK" ${RT_TMP:+"$RT_TMP"}' EXIT
 
 bash -n "$INSTALL" || fail "install.sh has a syntax error"
+# Warnings and errors only: info and style findings differ between shellcheck releases and would turn a
+# hosted runner's upgrade red. CI always has it (hosted runners ship it), so a missing one there fails
+# rather than letting the check go quiet.
 if command -v shellcheck >/dev/null 2>&1; then
-  shellcheck "$INSTALL" || fail "shellcheck rejected install.sh"
+  shellcheck -S warning "$INSTALL" || fail "shellcheck rejected install.sh"
+elif [ -n "${CI:-}" ]; then
+  fail "shellcheck is not installed on this CI runner, so install.sh would go unchecked"
 fi
 
 plist_get() { python3 -I -c 'import plistlib,sys; d=plistlib.load(open(sys.argv[1],"rb")); print(eval(sys.argv[2]))' "$1" "$2"; }

@@ -46,3 +46,11 @@ host_runner_limits() {
   unset -f wardyn
   unset _hrl_url
 }
+
+# local_build_needed — true when ./bin/wardynd, ./bin/wardyn or the UI bundle is missing, or any
+# non-test Go source (or go.mod/go.sum) is newer than ./bin/wardyn. An old CLI left by an earlier
+# checkout lacks the flags setup.sh passes it, so a present binary is not enough.
+local_build_needed() {
+  [ ! -x ./bin/wardynd ] || [ ! -x ./bin/wardyn ] || [ ! -f ./ui/dist/index.html ] && return 0
+  [ -n "$(find cmd internal pkg go.mod go.sum -type f \( -name '*.go' -o -name go.mod -o -name go.sum \) ! -name '*_test.go' -newer ./bin/wardyn -print -quit 2>/dev/null)" ]
+}

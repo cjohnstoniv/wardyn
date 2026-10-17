@@ -276,8 +276,8 @@ say "  each person connects their own credential there (Claude subscription sign
 say "  an API key, or AWS Bedrock)."
 
 # Ensure the local binaries + UI are built (host mode serves ./bin/wardynd + ui/dist).
-if [ ! -x ./bin/wardynd ] || [ ! -f ./ui/dist/index.html ]; then
-  hd "Building wardynd + UI (first run)"
+if local_build_needed; then
+  hd "Building wardynd + UI (first run, or the sources changed)"
   # go.mod pins `toolchain go1.26.4`, so the default GOTOOLCHAIN=auto tries to
   # FETCH that toolchain — which a corporate proxy that blocks the public Go
   # proxy denies, even though the locally-installed Go already satisfies the

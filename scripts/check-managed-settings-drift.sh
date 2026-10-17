@@ -186,13 +186,16 @@ echo "ok: Claude Code $pin runs no repository hook under --dangerously-skip-perm
 # the session: the init event lists the session's tools before any model call, so this is offline too. A tool
 # the CLI does not list without the managed file proves nothing, so that control is required.
 tools_of() { # <settings dir or ""> -> the init event's tools array, as JSON text
-    local mount=()
+    local mount=() out
     [ -z "$1" ] || mount=(-v "$1:/etc/claude-code:ro")
-    docker run --rm --network none --user node --cap-drop ALL --security-opt no-new-privileges \
+    # T: marks a recognised init event with a tools array (an empty one is a valid answer: every tool
+    # denied); no such event means the run proved nothing, so it fails instead of reading as "no tools".
+    out="$(docker run --rm --network none --user node --cap-drop ALL --security-opt no-new-privileges \
         --read-only --tmpfs /tmp -v "$amd_exe:/usr/local/bin/claude:ro" ${mount[@]+"${mount[@]}"} \
         -e HOME=/tmp -e CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 "$image" \
         claude --print hi --output-format stream-json --verbose 2>"$tmp/stderr" \
-        | sed -nE 's/.*"subtype":"init".*"tools":\[([^]]*)\].*/\1/p' | head -1 || true
+        | sed -nE 's/.*"subtype":"init".*"tools":\[([^]]*)\].*/T:\1/p' | head -1 || true)"
+    case "$out" in T:*) echo "${out#T:}" ;; *) die "Claude Code $pin printed no init event with a tools array (settings: ${1:-none}) — the deny check would pass without evidence; stderr: $(head -c 400 "$tmp/stderr")" ;; esac
 }
 unfiled="$(tools_of "")"
 denied=0
