@@ -153,6 +153,35 @@ func (s *Server) reviveFromRequest(r *http.Request, run types.AgentRun, startAge
 	return s.reviveRunProxy(r.Context(), run, actorType, actor, startAgent)
 }
 
+// reviveSupported is what reviveRunProxy needs from this deployment, and whether run's agent must be
+// started (rebooted), or the refusal that leaves the run as it was.
+func (s *Server) reviveSupported(ctx context.Context, run types.AgentRun, startAgent bool) (store.RunReviver, runner.ProxyReviver, runner.SandboxStarter, bool, *reviveError) {
+	reviver, ok := s.cfg.Store.(store.RunReviver)
+	if !ok || s.cfg.Runner == nil {
+		return nil, nil, nil, false, reviveRefused(http.StatusNotImplemented, reasonReviveUnsupportedDeployment, "this deployment cannot revive a run")
+	}
+	rv, ok := s.cfg.Runner.(runner.ProxyReviver)
+	if !ok {
+		return nil, nil, nil, false, reviveUnsupported()
+	}
+	if rerr := s.reviveEligible(run, startAgent); rerr != nil {
+		return nil, nil, nil, false, rerr
+	}
+	rebooted, rerr := s.reviveNeedsAgentStart(ctx, run)
+	if rerr != nil {
+		return nil, nil, nil, false, rerr
+	}
+	starter, canStart := s.cfg.Runner.(runner.SandboxStarter)
+	if rebooted && !canStart {
+		return nil, nil, nil, false, reviveUnsupported()
+	}
+	if rebooted && !startAgent {
+		return nil, nil, nil, false, reviveRefused(http.StatusConflict, reasonReviveBulkCannotStartAgent,
+			"run's agent is stopped and a bulk restart cannot start it; revive it from the run's page")
+	}
+	return reviver, rv, starter, rebooted, nil
+}
+
 // reviveRunProxy replaces run's proxy with its own config under a fresh token
 // and the owner's current denies, then, for a run lost to a reboot, starts its
 // agent. Every refusal before the claim leaves the run as it was, and so does
@@ -161,28 +190,9 @@ func (s *Server) reviveFromRequest(r *http.Request, run types.AgentRun, startAge
 // lost with its proxy and agent stopped, so it never runs without the proxy it
 // was promised.
 func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorType types.ActorType, actor string, startAgent bool) (reviveResult, *reviveError) {
-	reviver, ok := s.cfg.Store.(store.RunReviver)
-	if !ok || s.cfg.Runner == nil {
-		return reviveResult{}, reviveRefused(http.StatusNotImplemented, reasonReviveUnsupportedDeployment, "this deployment cannot revive a run")
-	}
-	rv, ok := s.cfg.Runner.(runner.ProxyReviver)
-	if !ok {
-		return reviveResult{}, reviveUnsupported()
-	}
-	if rerr := s.reviveEligible(run, startAgent); rerr != nil {
-		return reviveResult{}, rerr
-	}
-	rebooted, rerr := s.reviveNeedsAgentStart(ctx, run)
+	reviver, rv, starter, rebooted, rerr := s.reviveSupported(ctx, run, startAgent)
 	if rerr != nil {
 		return reviveResult{}, rerr
-	}
-	starter, canStart := s.cfg.Runner.(runner.SandboxStarter)
-	if rebooted && !canStart {
-		return reviveResult{}, reviveUnsupported()
-	}
-	if rebooted && !startAgent {
-		return reviveResult{}, reviveRefused(http.StatusConflict, reasonReviveBulkCannotStartAgent,
-			"run's agent is stopped and a bulk restart cannot start it; revive it from the run's page")
 	}
 	if rerr := s.markReviving(run); rerr != nil {
 		return reviveResult{}, rerr
@@ -213,6 +223,10 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 	}
 	re, rerr := reassertProxyCeiling(run, cfg, c)
 	if rerr != nil {
+		if rerr.reason == reasonReviveCeilingDeniesGitBroker || rerr.reason == reasonReviveCeilingDeniesAzureCLI {
+			s.recordAudit(ctx, s.auditEvent(&run.ID, actorType, actor, "run.revive", run.ID.String(), "denied",
+				mustJSON(map[string]any{"subject": run.CreatedBy, "reason": rerr.reason})))
+		}
 		return reviveResult{}, rerr
 	}
 	if rerr := s.reviveOwnerRecheck(ctx, run, cfg, actorType, actor); rerr != nil {
@@ -361,7 +375,7 @@ func (s *Server) claimRevive(ctx context.Context, reviver store.RunReviver, run 
 			fmt.Sprintf("%s is at its limit, so this run cannot start there now. Try again when a run there finishes, or raise the runner's limits.", atMax.Runner))
 	}
 	if err != nil {
-		return reviveRefused(http.StatusServiceUnavailable, reasonReviveClaimFailed, "claim the run for revive: "+err.Error())
+		return reviveRefused(http.StatusServiceUnavailable, reasonReviveClaimFailed, loggedMsg(ctx, "claim the run for revive", err))
 	}
 	if !claimed {
 		return reviveRefused(http.StatusConflict, reasonReviveRunChanged, "the run changed while it was being revived (it ended, was lost or was revived); try again")
@@ -380,7 +394,7 @@ func (s *Server) reviveCapPrecheck(ctx context.Context, run types.AgentRun, star
 	}
 	n, err := c.CountNonTerminalRuns(ctx, run.ID)
 	if err != nil {
-		return reviveRefused(http.StatusServiceUnavailable, reasonReviveClaimFailed, "count active runs: "+err.Error())
+		return reviveRefused(http.StatusServiceUnavailable, reasonReviveClaimFailed, loggedMsg(ctx, "count active runs", err))
 	}
 	if n >= s.cfg.MaxConcurrentRuns {
 		return reviveRefused(http.StatusUnprocessableEntity, string(authz.ReasonRunQuota), runCapMsg)
@@ -482,8 +496,13 @@ func (s *Server) revivePATNarrowing(ctx context.Context, run types.AgentRun, cfg
 		return reviveRefused(http.StatusServiceUnavailable, reasonReviveOwnerAuthorityUnreadable,
 			"re-check the run's git_pat narrowing: read site config: "+err.Error())
 	}
-	adoRun, adoOn := resolveADOEntraRun(site, repoLocatorsOf(cfg.Policy.WorkspaceRepos), runIdentitySubject(ctx, run.CreatedBy))
-	env := patNarrowingEnvOf(!s.cfg.DisableGitPATBroker, cfg.GitGrants, site, adoRun, adoOn)
+	// The lane's hosts are the ones dispatch stored on the grant, which the
+	// revived proxy carries: no repository is re-resolved, so revive cannot
+	// disagree with dispatch about the lane.
+	env := patNarrowingEnvOf(!s.cfg.DisableGitPATBroker, cfg.GitGrants, site, adoEntraRun{}, false)
+	if cfg.ADOGrant != nil {
+		env.adoHosts = slices.Clone(cfg.ADOGrant.Hosts)
+	}
 	reason, detail := patNarrowingRefusal(patGrantSpecs(grants), env)
 	if reason == "" {
 		return nil
@@ -703,116 +722,6 @@ func reviveFrom(run types.AgentRun) string {
 		return "live"
 	}
 	return string(run.LostReason)
-}
-
-// reasserted is what reassertProxyCeiling changed.
-type reasserted struct {
-	added, droppedInjection, droppedLane []string
-}
-
-// reassertProxyCeiling is reassertCeilingDenies over a rendered proxy config:
-// it unions the ceiling's denies into the frozen policy and drops every
-// injection, brokered PAT host and MITM host the ceiling denies. It never
-// re-resolves the policy and never widens it.
-//
-// One lane cannot be dropped here. Dispatch withholds the git broker by
-// emptying its grants AND unsetting WARDYN_GITHUB_GRANT_ID in the sandbox, and
-// the proxy refuses the mint route for a brokered grant only while its grant
-// map is non-empty (isBrokeredGitGrant). A running agent's env cannot change,
-// so emptying the map would hand the sandbox a GitHub installation token on
-// request. A revive whose ceiling denies a broker-managed host is refused, and
-// so is one whose ceiling denies the host of the run's Azure CLI door.
-func reassertProxyCeiling(run types.AgentRun, cfg *proxy.Config, c ownerCeiling) (reasserted, *reviveError) {
-	if cfg.RunID != run.ID {
-		return reasserted{}, reviveRefused(http.StatusConflict, reasonReviveConfigRunMismatch, "the run's proxy config names another run")
-	}
-	var re reasserted
-	if len(c.deny) == 0 {
-		return re, nil
-	}
-	if len(cfg.GitGrants) > 0 && ceilingDeniesAny(c.deny, gitBrokerManagedHosts) {
-		return re, reviveRefused(http.StatusConflict, reasonReviveCeilingDeniesGitBroker,
-			"the owner's governance profile now denies GitHub, which this run's git broker needs; start a new run")
-	}
-	if rerr := azureCLIReviveRefusal(cfg, c.deny); rerr != nil {
-		return re, rerr
-	}
-	re.added = unionCeilingDenies(&cfg.Policy, c.deny)
-	cfg.Injection = slices.DeleteFunc(cfg.Injection, func(in proxy.InjectionConfig) bool {
-		if ceilingDenies(c.deny, in.Host) {
-			re.droppedInjection = append(re.droppedInjection, in.Host)
-			return true
-		}
-		return false
-	})
-	for host := range cfg.PATGrants {
-		if ceilingDenies(c.deny, host) {
-			re.droppedLane = append(re.droppedLane, host)
-			delete(cfg.PATGrants, host)
-		}
-	}
-	slices.Sort(re.droppedLane)
-	cfg.MITMHosts = slices.DeleteFunc(cfg.MITMHosts, func(h string) bool { return ceilingDenies(c.deny, h) })
-	return re, nil
-}
-
-// pruneUnpairedInterception drops every interception entry of a revived
-// config whose host no longer has an injection rule. Dispatch authors an
-// entry only beside the rule it exists for, and the strip and the ceiling
-// re-assertion above can take the rule away: left in place, the entry would
-// have the proxy terminate that host's TLS and set nothing. A vendor's own
-// model host is kept — the proxy decides those by the run's inspection
-// intent, not by this list.
-func (s *Server) pruneUnpairedInterception(cfg *proxy.Config) {
-	cfg.MITMHosts = slices.DeleteFunc(cfg.MITMHosts, func(entry string) bool {
-		host := interceptionEntryHost(entry)
-		return !s.isModelProviderHost(host) && !slices.ContainsFunc(cfg.Injection, func(in proxy.InjectionConfig) bool {
-			return hostEqual(in.Host, host)
-		})
-	})
-}
-
-// interceptionEntryHost is the bare host of one interception entry, read as
-// the proxy reads it: an optional scheme, then host and optional port.
-func interceptionEntryHost(entry string) string {
-	entry = strings.TrimSpace(entry)
-	for _, scheme := range []string{"http://", "https://"} {
-		if len(entry) >= len(scheme) && strings.EqualFold(entry[:len(scheme)], scheme) {
-			entry = entry[len(scheme):]
-			break
-		}
-	}
-	return componentMITMHost(entry)
-}
-
-// loadRenderedProxyConfig loads a run's rendered proxy config with its
-// control-plane hop (URL and CA) set to this deployment's current pair BEFORE
-// the strict loader validates it. A config rendered before the TLS hop names
-// an http control plane the loader now refuses, and every reader here (revive,
-// extend) hands the proxy the current pair anyway. Only those two fields change,
-// on the raw JSON object: every other field, an unknown one included, still
-// meets the loader as written, and the run id and the per-run MITM CA are read
-// back exactly as rendered.
-func (s *Server) loadRenderedProxyConfig(raw []byte) (*proxy.Config, error) {
-	var fields map[string]json.RawMessage
-	if err := json.Unmarshal(raw, &fields); err != nil {
-		return nil, fmt.Errorf("parse config: %w", err)
-	}
-	if fields == nil {
-		return nil, errors.New("parse config: not a JSON object")
-	}
-	for k, v := range map[string]string{"control_plane_url": s.cfg.ControlPlaneURL, "control_plane_ca_pem": s.cfg.ControlPlaneCAPEM} {
-		b, err := json.Marshal(v)
-		if err != nil {
-			return nil, err
-		}
-		fields[k] = b
-	}
-	b, err := json.Marshal(fields)
-	if err != nil {
-		return nil, err
-	}
-	return proxy.LoadConfigBytes(b)
 }
 
 // reloseRun is the fail-closed arm after a claim: the run's proxy is gone (or

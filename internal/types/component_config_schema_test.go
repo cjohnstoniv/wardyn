@@ -68,6 +68,7 @@ func TestComponentConfigSchemaRefusals(t *testing.T) {
 		{"min above max", `{"schema_version":1,"fields":[{"id":"a","kind":"integer","label":"A","min":5,"max":1,"bind":{"target":"config","key":"A_KEY"}}]}`, "min is above max"},
 		{"integer default fractional", `{"schema_version":1,"fields":[{"id":"a","kind":"integer","label":"A","default":1.5,"bind":{"target":"config","key":"A_KEY"}}]}`, "whole number"},
 		{"two fields one key", `{"schema_version":1,"fields":[{"id":"a","kind":"string","label":"A","bind":{"target":"config","key":"K"}},{"id":"b","kind":"string","label":"B","bind":{"target":"config","key":"K"}}]}`, "fed by two fields"},
+		{"one key on a config and a secret field", `{"schema_version":1,"fields":[{"id":"a","kind":"string","label":"A","bind":{"target":"config","key":"K"}},{"id":"b","kind":"secret_ref","label":"B","bind":{"target":"secret","key":"K"}}]}`, "cannot be both"},
 		{"duplicate id", `{"schema_version":1,"fields":[{"id":"a","kind":"string","label":"A","bind":{"target":"config","key":"K"}},{"id":"a","kind":"string","label":"B","bind":{"target":"config","key":"J"}}]}`, "used twice"},
 		{"condition on a missing field", field(`,"visible_when":{"field":"ghost","equals":true}`), "not a field"},
 		{"condition on itself", field(`,"visible_when":{"field":"a","equals":"x"}`), "depend on itself"},

@@ -82,6 +82,16 @@ describe("the request doors send the body intentToWire built", () => {
     expect(/r\.Post\("([^"]+)", s\.handlePolicyPreview\)/.exec(routes)?.[1]).toBe("/runs/policy-preview");
   });
 
+  it("keeps the setup rows a preflight model_credential refusal carries, and none on another refusal", async () => {
+    const row = { id: "backend:CC2", kind: "backend", label: "Sandbox barrier", required_by: "x", status: "missing" };
+    fetchMock.mockResolvedValue(new Response(JSON.stringify({ error: "sign in", reason: "model_credential", provider: "p", setup_items: [row] }), { status: 422 }));
+    await expect(runs.preflightRunWire(body)).rejects.toMatchObject({ status: 422, reason: "model_credential", provider: "p", setupItems: [row] });
+    fetchMock.mockResolvedValue(new Response(JSON.stringify({ error: "off", reason: "model_provider_unavailable" }), { status: 422 }));
+    const other = await runs.preflightRunWire(body).catch((e: unknown) => e);
+    expect(other).toMatchObject({ status: 422, reason: "model_provider_unavailable" });
+    expect((other as { setupItems?: unknown }).setupItems).toBeUndefined();
+  });
+
   it("preserves Retry-After on a preview refusal for the bounded preview scheduler", async () => {
     fetchMock.mockResolvedValue(new Response(JSON.stringify({ error: "limited" }), { status: 429, headers: { "Retry-After": "3" } }));
     await expect(runs.previewRunPolicyWire(body)).rejects.toMatchObject({ status: 429, message: "limited", retryAfter: "3" });

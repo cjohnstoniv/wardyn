@@ -129,7 +129,7 @@ The step reads the server's policy preview for the draft ([the `access` block](s
 |---|---|
 | CLIs | Azure, GitHub and AWS cards, each named for the row your admin granted (`cli_not_granted` otherwise). **Google Cloud CLI** and **kubectl** are **Coming soon** |
 | GitHub CLI | Works only with this run's GitHub repositories (`cli_no_github_repo`). The proxy adds its token |
-| AWS CLI | Role credentials are issued into the sandbox, short-lived |
+| AWS CLI | Role credentials are issued into the sandbox, short-lived. On a run whose model provider is Bedrock, `AWS_REGION` and `AWS_DEFAULT_REGION` are the provider's region and win over the profile's; pass `--region` for another |
 | Organisation components | MCP servers and APIs your admin published, marked **From your organisation** |
 | **Add a secret** | One of your saved secrets as **Request header** (preferred), **Environment variable** or **File** |
 | **Allow a host** | One more host with no credential. Your organisation's ceiling still applies |
@@ -137,6 +137,9 @@ The step reads the server's policy preview for the draft ([the `access` block](s
 | **Custom component** | Hosts and a secret bundled for reuse. Disabled when your organisation does not let you define components |
 
 - Your admin can turn off environment-variable and file delivery (`resident_off`); use a request header then.
+- A repository whose token or key lane the run drops reads **Needs setup**, with "No credential is set up for this repository, so the run starts without one." (`repo_no_credential`) under it.
+- A background Claude Code run with no MCP server and no tool-approval hold still loads the repository's own `.mcp.json`. That traffic goes through the run's egress policy like any other.
+- Harnesses in one sandbox run as the same user, so each can read the others' MCP addresses. The rules that hold for a server are those of the least restricted harness that has it turned on.
 
 ## Review
 
@@ -212,7 +215,7 @@ The `wardyn template` commands are listed in [Run templates](sdk.md#run-template
 
 **Launch run** opens **Name this run**. **Title** is required; **Description** is optional.
 
-- The dialog checks the draft again (**Checking…**, then **Checked just now**). **Launch** stays off until it ends.
+- The dialog checks the draft again (**Checking…**, then **Checked just now**). **Launch** stays off until it ends. If the check fails or is rate-limited, **Launch** stays available and the launch itself refuses what the check would have.
 - A refusal shows the server's sentence, and what you typed stays.
 - A launch the run's Azure DevOps token refused adds a note. Either connect again with **Connect Azure DevOps**, after which the dialog checks once more, or read that your organisation restricts who can create personal access tokens.
 

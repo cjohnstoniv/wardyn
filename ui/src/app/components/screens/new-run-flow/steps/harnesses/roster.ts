@@ -24,17 +24,18 @@ export async function loadRoster(): Promise<Roster> {
 
 export const harnessName = (roster: Roster, id: string): string => roster.harnesses.find((h) => h.id === id)?.display ?? id;
 
-const sameSet = (a: readonly string[], b: readonly string[]) => a.length === b.length && [...a].sort().every((id, i) => id === [...b].sort()[i]);
+// The server picks the smallest declared set image that carries every chosen harness (smallestSetImage): a superset serves.
+const carriesAll = (set: readonly string[], ids: readonly string[]) => ids.every((id) => set.includes(id));
 
 /**
  * Why a row cannot join the harnesses `chosen`, or undefined when it can. A
- * second harness needs the whole combination in `sets`.
+ * second harness needs a declared set that carries the whole combination.
  */
 export function unavailableReason(row: SetupHarnessTool, chosen: readonly string[], roster: Roster): string | undefined {
   if (row.enabled === false) return NR_HARNESSES.NOT_ENABLED;
   if (row.installed === false) return NR_HARNESSES.NOT_INSTALLED(row.display);
   if (row.providers_ungranted) return NR_HARNESSES.NO_PROVIDER(row.display);
-  if (chosen.length > 0 && !roster.sets.some((s) => sameSet(s, [...chosen, row.id]))) {
+  if (chosen.length > 0 && !roster.sets.some((s) => carriesAll(s, [...chosen, row.id]))) {
     return NR_HARNESSES.NO_COMBINATION(chosen.map((id) => harnessName(roster, id)).join(", "), row.display);
   }
   return undefined;

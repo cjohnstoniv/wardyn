@@ -15,6 +15,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
+	"github.com/cjohnstoniv/wardyn/internal/ghscope"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -100,6 +101,9 @@ type componentAdmission struct {
 	awsCLI bool
 	// azureCLI: an Azure CLI row was admitted already.
 	azureCLI bool
+	// githubCLI: a GitHub CLI row was admitted already, and its door's host is
+	// in bounds.credentialed.
+	githubCLI bool
 	// harnesses are the request's included harness ids, which an MCP
 	// component's server may be turned on for.
 	harnesses []string
@@ -137,7 +141,7 @@ func (s *Server) applyRunComponents(r *http.Request, req createRunRequest, spec 
 ) (runComponents, *runRefusal) {
 	// One credential per host, for every run, before any component is looked
 	// at: the policy's own credentials and the deployment's (credentialHostRefusal).
-	if refusal := s.credentialHostRefusal(r, *spec); refusal != nil {
+	if refusal := s.credentialHostRefusal(r, *spec, req.Repo); refusal != nil {
 		return runComponents{}, refusal
 	}
 	if len(req.Components) == 0 {
@@ -146,7 +150,7 @@ func (s *Server) applyRunComponents(r *http.Request, req createRunRequest, spec 
 	// One capability snapshot and one listing of the caller's own secrets for
 	// the whole list, however many hosts and secrets it names.
 	r = r.WithContext(withOwnedSecretMemo(withCapBatch(r.Context())))
-	comps, refused := s.admitRunComponents(r, req.Components, *spec, ceiling, wsRefs, credentials, mcpIncludedHarnesses(req))
+	comps, refused := s.admitRunComponents(r, req.Components, *spec, req.Repo, ceiling, wsRefs, credentials, mcpIncludedHarnesses(req))
 	if refused != nil {
 		s.auditComponentRefusal(r, *refused)
 		return runComponents{}, refused.refusal
@@ -157,7 +161,7 @@ func (s *Server) applyRunComponents(r *http.Request, req createRunRequest, spec 
 
 // admitRunComponents decides every component before any is expanded, so a
 // refusal leaves the spec untouched.
-func (s *Server) admitRunComponents(r *http.Request, refs []types.ComponentRef, spec types.RunPolicySpec,
+func (s *Server) admitRunComponents(r *http.Request, refs []types.ComponentRef, spec types.RunPolicySpec, repo string,
 	ceiling governanceCeiling, wsRefs []types.Workspace, credentials bool, harnesses []string,
 ) (runComponents, *componentRefusal) {
 	ctx := r.Context()
@@ -196,7 +200,7 @@ func (s *Server) admitRunComponents(r *http.Request, refs []types.ComponentRef, 
 		return runComponents{}, &componentRefusal{refusal: runServerError("get site config", err)}
 	}
 	adm.settings, adm.site, adm.ceiling, adm.grants = componentSettings(sc), sc, ceiling, spec.EligibleGrants
-	adm.bounds = s.newComponentHostBounds(r, sc, spec, ceiling, wsRefs)
+	adm.bounds = s.newComponentHostBounds(r, sc, spec, repo, ceiling, wsRefs)
 
 	comps := runComponents{settings: adm.settings}
 	for i, ref := range refs {
@@ -418,6 +422,18 @@ func (s *Server) componentHostsBounded(r *http.Request, adm *componentAdmission,
 				fmt.Sprintf("secrets[%d].delivery.host: %q already has a credential on this run, and a host carries only one", si, sec.Delivery.Host),
 				"delivers a credential to a host that already has one on this run.")
 		}
+		adm.bounds.credentialed = append(adm.bounds.credentialed, d)
+	}
+	// A GitHub CLI row credentials its door's host. Every GitHub CLI row of the
+	// run shares that one door, so only the first adds the host.
+	if cli := def.CLI; cli != nil && cli.Kind == types.CLIKindGitHub && !adm.githubCLI {
+		d, err := types.ParseDestination(ghscope.APIHost)
+		if err != nil || adm.bounds.collides(d) {
+			return componentRefused(c, i, reasonComponentHostCollision,
+				fmt.Sprintf("cli: the GitHub CLI credentials %q, which already has a credential on this run, and a host carries only one", ghscope.APIHost),
+				"credentials a host that already has one on this run.")
+		}
+		adm.githubCLI = true
 		adm.bounds.credentialed = append(adm.bounds.credentialed, d)
 	}
 	return nil

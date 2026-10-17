@@ -5,10 +5,12 @@ package proxy
 
 import (
 	"bytes"
+	"context"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -226,5 +228,99 @@ func TestInternalHost_UnparseableCIDR_DropsWholeEntry(t *testing.T) {
 		nil, nil, "127.0.0.1:1")
 	if guard := p.vetHost("gateway.corp.internal"); !guard.Denied {
 		t.Fatalf("an entry carrying one unparseable CIDR must be dropped whole (fail closed), got %+v", guard)
+	}
+}
+
+// TestInternalHost_CGNATAnswer_DeclaredLiftsUndeclaredDenies is the component
+// tier of the remote-runner pin (internal/api TestInternalHostsOnRunnerDocker
+// is the live one): a CGNAT (RFC 6598) answer under a declared suffix is
+// reached and attributed to the declaration itself, with no approval; the same
+// range for a name no entry declares keeps builtin:private-ip.
+func TestInternalHost_CGNATAnswer_DeclaredLiftsUndeclaredDenies(t *testing.T) {
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) }))
+	defer up.Close()
+	res := fakeResolver{m: map[string][]net.IP{"svc.corp.internal": ips("100.64.0.10"), "svc.other.internal": ips("100.64.0.11")}}
+	p, buf := newInternalHostsProxy(t,
+		types.RunPolicySpec{AllowedDomains: []string{"svc.corp.internal", "svc.other.internal"}},
+		res, []types.InternalHost{{HostSuffix: "corp.internal"}}, nil, nil, upstreamAddr(up))
+
+	rec := httptest.NewRecorder()
+	p.ServeHTTP(rec, mustProxyReq(t, http.MethodGet, "http://svc.corp.internal/"))
+	if d := lastDecision(t, buf); rec.Code != http.StatusOK || d.Decision != egress.Allow || d.RuleSource != ruleSourceInternalHost || d.ApprovalID != nil {
+		t.Fatalf("declared: status %d, decision %+v; want 200 allow %s with no approval", rec.Code, d, ruleSourceInternalHost)
+	}
+	rec = httptest.NewRecorder()
+	p.ServeHTTP(rec, mustProxyReq(t, http.MethodGet, "http://svc.other.internal/"))
+	if d := lastDecision(t, buf); rec.Code != http.StatusForbidden || d.Decision != egress.Deny || d.RuleSource != "builtin:private-ip" {
+		t.Fatalf("undeclared: status %d, decision %+v; want 403 deny builtin:private-ip", rec.Code, d)
+	}
+}
+
+// TestInternalHost_ApprovalReleasedKeepsApprovalAttribution: a request to a
+// declared internal host that a first-use approval released is attributed to
+// that approval, not to the lift (proxy.go evaluate), so a decision row reading
+// site-config:internal-host always means the declaration alone allowed it.
+func TestInternalHost_ApprovalReleasedKeepsApprovalAttribution(t *testing.T) {
+	state := apState(types.ApprovalPending)
+	cp := approvalCPStub(state, nil, nil)
+	defer cp.Close()
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) }))
+	defer up.Close()
+	ap := newApprovalClient(cp.URL, newTokenSource("tok"), uuid.New(), cp.Client())
+	buf := &bytes.Buffer{}
+	p := newProxy(Options{
+		RunID:         uuid.New(),
+		Policy:        CompilePolicy(types.RunPolicySpec{AllowedDomains: []string{"known.test"}, FirstUseApproval: types.FirstUseDenyWithReview}),
+		Approval:      ap,
+		Sink:          &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 64)},
+		Resolver:      fakeResolver{m: map[string][]net.IP{"svc.corp.internal": ips("100.64.0.10")}},
+		Dial:          redirectDial(upstreamAddr(up)),
+		InternalHosts: []types.InternalHost{{HostSuffix: "corp.internal"}},
+	})
+
+	p.ServeHTTP(httptest.NewRecorder(), mustProxyReq(t, http.MethodGet, "http://svc.corp.internal/"))
+	pending := lastDecision(t, buf)
+	if pending.ApprovalID == nil {
+		t.Fatalf("first request = %+v, want a pending decision carrying its approval", pending)
+	}
+	state.Store(types.ApprovalApproved)
+	forcePollNow(ap, "svc.corp.internal")
+	rec := httptest.NewRecorder()
+	p.ServeHTTP(rec, mustProxyReq(t, http.MethodGet, "http://svc.corp.internal/"))
+	got := lastDecision(t, buf)
+	if rec.Code != http.StatusOK || got.RuleSource != "approval:"+pending.ApprovalID.String() || got.ApprovalID == nil || *got.ApprovalID != *pending.ApprovalID {
+		t.Fatalf("released: status %d, decision %+v; want 200 attributed to approval %s", rec.Code, got, pending.ApprovalID)
+	}
+}
+
+// TestInternalHost_DispatchedConfigVerdicts is the wire tier's proxy half: it boots
+// a proxy server from testdata/dispatched_internal_hosts.json, the config the
+// organisation's local-placement dispatch renders for a runner after the runner
+// wire encoding (generated and pinned by internal/api
+// TestInternalHostsDispatchWireConfig), and asserts the CGNAT verdicts.
+func TestInternalHost_DispatchedConfigVerdicts(t *testing.T) {
+	cfg, err := LoadConfig("testdata/dispatched_internal_hosts.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) }))
+	defer up.Close()
+	res := fakeResolver{m: map[string][]net.IP{"svc.corp.internal": ips("100.64.0.10"), "svc.other.internal": ips("100.64.0.11")}}
+	buf := &bytes.Buffer{}
+	srv, err := newServer(context.Background(), cfg, &http.Client{Timeout: time.Second}, buf, serverHooks{res: res, dial: redirectDial(upstreamAddr(up))})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = srv.Shutdown(context.Background()) })
+
+	rec := httptest.NewRecorder()
+	srv.proxy.ServeHTTP(rec, mustProxyReq(t, http.MethodGet, "http://svc.corp.internal/"))
+	if d := lastDecision(t, buf); rec.Code != http.StatusOK || d.Decision != egress.Allow || d.RuleSource != ruleSourceInternalHost || d.ApprovalID != nil {
+		t.Fatalf("declared: status %d, decision %+v; want 200 allow %s with no approval", rec.Code, d, ruleSourceInternalHost)
+	}
+	rec = httptest.NewRecorder()
+	srv.proxy.ServeHTTP(rec, mustProxyReq(t, http.MethodGet, "http://svc.other.internal/"))
+	if d := lastDecision(t, buf); rec.Code != http.StatusForbidden || d.Decision != egress.Deny || d.RuleSource != "builtin:private-ip" {
+		t.Fatalf("undeclared: status %d, decision %+v; want 403 deny builtin:private-ip", rec.Code, d)
 	}
 }

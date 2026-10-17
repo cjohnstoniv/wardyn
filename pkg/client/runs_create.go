@@ -164,19 +164,23 @@ type CreateRunRequest struct {
 	// request_field_unavailable, never ignores it.
 	AllowedImage string `json:"allowed_image,omitempty"`
 	// Placement is where the run's sandbox lives: "remote", the organisation's
-	// own executor (the default), or "local", a runner the person registered.
-	// Empty is "remote" until a single placement is eligible; "local" is
-	// refused with placement_unavailable until the runner lane is enabled.
+	// own executor, or "local", a runner the person registered. It narrows the
+	// chosen pool's runners to that kind; empty lets the pool decide, the
+	// person's own runners first when one has room. "local" is refused with
+	// placement_unavailable while the runner lane is not enabled.
 	Placement Placement `json:"placement,omitempty"`
-	// RunnerID names the runner for Placement "local"; with more than one
-	// runner online and none named the server answers 422 runner_ambiguous.
+	// RunnerID pins a Placement "local" run to one runner of the chosen pool
+	// (it needs Placement "local"); a runner that is not an eligible member
+	// answers runner_not_found. Left empty, the pool's deterministic selection
+	// picks the runner (never list order), so runner_ambiguous no longer arises.
 	RunnerID string `json:"runner_id,omitempty"`
 	// RunnerPoolID names the pool the run starts on (RunnerPoolChoice.ID).
 	// Choosing a pool grants no runner, credential or drive: it only narrows
-	// where the run may go. Empty keeps today's placement; once the server
-	// manages pools it applies the person's, then the organisation's, default.
-	// Accepted and validated; a server that cannot honour pools yet refuses it
-	// with request_field_unavailable, never ignores it.
+	// where the run may go. Empty applies the person's default pool, else the
+	// organisation's; the server never guesses a pool from what is eligible.
+	// A server that holds no runner pools (no runner wired, or a store that
+	// cannot hold them) answers 501 runner_pools_unavailable to a named pool,
+	// never ignores it.
 	RunnerPoolID string `json:"runner_pool_id,omitempty"`
 	// Resources is the CPU and memory this run asks for. A field set here beats
 	// the source policy's own; a field left out keeps the policy's, else the

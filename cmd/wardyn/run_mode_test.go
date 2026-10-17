@@ -40,8 +40,8 @@ func TestApplyRunModeFlags(t *testing.T) {
 			sdk.CreateRunRequest{ModeContract: sdk.RunModeContractV09, Experience: sdk.ExperienceInteractive, Tools: []sdk.IncludedTool{{ID: "claude-code", Kind: sdk.IncludedToolHarness}},
 				StartFolder: &sdk.StartFolder{Kind: sdk.StartFolderAttachment, Attachment: "drive", Subpath: "src/app"}}, ""},
 
-		{"a repositories choice alone is a 0.9 request, left for the server to refuse", sdk.CreateRunRequest{}, runModeFlags{noRepos: true},
-			sdk.CreateRunRequest{ModeContract: sdk.RunModeContractV09, NoRepositoriesOrDrives: true}, ""},
+		{"a repositories choice alone is refused: the mode is never inferred", sdk.CreateRunRequest{}, runModeFlags{noRepos: true}, sdk.CreateRunRequest{}, "never inferred"},
+		{"a start folder alone is refused: the mode is never inferred", sdk.CreateRunRequest{}, runModeFlags{startFolder: "image-default"}, sdk.CreateRunRequest{}, "never inferred"},
 		{"the mode is never inferred", sdk.CreateRunRequest{}, runModeFlags{command: "make"}, sdk.CreateRunRequest{}, "never inferred"},
 		{"no experience, a startup", sdk.CreateRunRequest{}, runModeFlags{startup: "none"}, sdk.CreateRunRequest{}, "never inferred"},
 		{"the older mode flags are replaced, not mixed", sdk.CreateRunRequest{Interactive: true}, runModeFlags{experience: "interactive"}, sdk.CreateRunRequest{}, "replaces"},

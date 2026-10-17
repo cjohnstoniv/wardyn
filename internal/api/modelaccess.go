@@ -131,14 +131,13 @@ const (
 // day; anything shorter is a notice that arrives after the fact.
 const modelAccessExpiringWindow = 24 * time.Hour
 
-// The action lines the states ship. DRAFT (M2 canon pending) — the frozen copy
+// The action lines the states ship — the frozen copy
 // is docs/design/workspace-providers-prompt.md §7.7
 // (MODEL_ACCESS_EXPIRING_ACTION, SIGN_IN_AWS), reproduced BYTE-EXACT here
 // because the console renders a server action line verbatim.
 const (
 	modelAccessExpiringAction = "Sign in again before %s"
-	// DRAFT (M2 canon pending)
-	modelAccessSignInAction = "Sign in to AWS"
+	modelAccessSignInAction   = "Sign in to AWS"
 	// modelAccessPinContradictedAction replaces "Sign in to AWS" for the one
 	// expired_signin the timestamp says nothing about: the session is live, and
 	// it is the wrong IDENTITY. It names both pairs because the person reading

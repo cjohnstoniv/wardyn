@@ -115,9 +115,8 @@ export const ACCESS_FIXTURES: FixtureBody[] = [
   { route: "access/add-builtin-swap", note: "A built-in item swaps the catalog for the manual Git form in the same dialog.", ...preferred },
   {
     route: "access/manual-github",
-    note: "Manual GitHub: repositories required, always brokered. The request carries a built-in ref; a server that cannot honour it yet refuses (request_field_unavailable).",
+    note: "Manual GitHub: repositories required, always brokered. The request carries a built-in ref, which the server accepts.",
     preview: withComponents([githubComponent({ id: "git_provider:github:app", reason: "inline" })]),
-    refusal: { status: 422, reason: NEW_RUN_REASON.REQUEST_FIELD_UNAVAILABLE, text: "components[0]: built-in github access is not available on this server yet, so the run was not created." },
   },
   { route: "access/manual-ado", note: "Manual Azure DevOps with repositories.", preview: withComponents([adoComponent({ reason: "inline" })]) },
   { route: "access/manual-ado-every-repo", note: "Manual Azure DevOps without repositories: 'Every repository you can reach in {org}'.", preview: withComponents([adoComponent({ reason: "inline", repos: [] })]) },

@@ -13,6 +13,14 @@ sandboxes inside the ceiling your admin set. There is nothing to install.
   [who-gets-in.md § Multi-user: who can change what](operations/who-gets-in.md#multi-user-who-can-change-what).
 - `GET /me` is the ground truth for your own role and your workspace root.
 
+## How long you stay signed in, and signing out
+
+- Your console session ends when your identity provider's sign-in expires, or after `WARDYN_OIDC_SESSION_TTL` if your operator set one. An operator may also send you back through sign-in sooner with `WARDYN_ROLE_STAMP_TTL`. The knobs are in [ENV.md](ENV.md#wardyn_oidc_session_ttl) and [ENV.md](ENV.md#wardyn_role_stamp_ttl).
+- When it lapses you sign in again. A terminal you had open closes: the server re-checks it every 30 seconds, and a lapse or a cut ends it.
+- **Sign out** clears your cookie and ends every console session you have, in every browser. Your personal API tokens and SSH keys keep working, and your runs keep running.
+- Signing out of Wardyn does not sign you out of your identity provider, and signing out at the identity provider does not end a Wardyn session. Wardyn has no front- or back-channel logout, so the session ends at its expiry, at your sign-out, or when an admin or SCIM deprovisioning cuts it.
+- A run's idle clock does not stop when your terminal closes. A lapse that closes your terminal leaves the run under its own idle and end limits, which [run lifetime](operations/run-lifetime.md#the-clocks-that-end-or-freeze-a-run) explains. A run with idle stop off never stops for inactivity.
+
 ## What you can and cannot do
 
 - The full matrix lives in
@@ -280,6 +288,7 @@ resolves your drive the same way, in a dry run too:
 - A shared template shows the names of what it uses (a secret's name, a workspace), never a value.
 - Readers of a shared template are not told who published it.
 - Your own templates are erased with the `run_setups` scope of an erasure.
+- Your stored preferences, such as the pool you default to, are erased with the `runner_pools` scope of an erasure and by a SCIM purge.
 
 ## Where your runs' audit lives
 

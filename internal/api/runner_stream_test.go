@@ -153,3 +153,13 @@ func TestRunnerStreamDefaultOffAndConfigFailureHaveNoAuthSideEffects(t *testing.
 		})
 	}
 }
+
+// A connecting runner is answered with the image registration would name for its architecture.
+func TestRunnerProxyImageFollowsRegistrationsAnswer(t *testing.T) {
+	s := New(Config{ProxyImage: "org/proxy:plain", ProxyImageByArch: map[string]string{"arm64": "org/proxy:arm"}})
+	for arch, want := range map[string]string{"arm64": "org/proxy:arm", "amd64": "org/proxy:plain", "": "org/proxy:plain"} {
+		if got := s.runnerProxyImage(types.Runner{Arch: arch}); got != want {
+			t.Errorf("arch %q: %q, want %q", arch, got, want)
+		}
+	}
+}

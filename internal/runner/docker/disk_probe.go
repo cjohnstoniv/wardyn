@@ -33,7 +33,7 @@ const (
 // engine that is the VM's own disk, which no path on this host names. It runs the proxy image's
 // -disk-free and never pulls: the caller makes the image present first.
 func (d *Driver) ProbeDiskFreeMiB(ctx context.Context) (int64, error) {
-	image := d.cfg.ProxyImage
+	image := d.proxyImage()
 	present, err := d.imagePresent(ctx, image)
 	if err != nil {
 		return 0, fmt.Errorf("docker: probe disk: %w", err)

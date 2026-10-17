@@ -124,7 +124,7 @@ func (b *Broker) mintGitPAT(ctx context.Context, caller *identity.Claims, spec t
 		JTI:       newJTI(),
 		ExpiresAt: time.Now().Add(ttlFor(spec)),
 		Token:     string(value),
-		Username:  gitPATUsername(sc.Host, sc.Username),
+		Username:  GitPATUsername(sc.Host, sc.Username),
 		Metadata:  map[string]string{"secret_name": sc.SecretName, "host": sc.Host, "secret_scope": row.Scope()},
 	}, nil
 }

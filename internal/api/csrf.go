@@ -36,7 +36,6 @@ import (
 // this guard; widening to it is its own change with its own threat model, and
 // this file deliberately does not pretend to cover it.
 
-// DRAFT (M2 canon pending)
 const (
 	// csrfRefusedBody is the one sentence both guards answer with. The
 	// LocalMode arm in http.go prefixes "local mode: " and otherwise says

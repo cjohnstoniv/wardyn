@@ -27,6 +27,10 @@ import (
 	"github.com/google/uuid"
 )
 
+// completionWatcherReadRetryDelay is the pause before the watcher's second read of its run: a pool or
+// connection error that has just happened would otherwise repeat at once.
+const completionWatcherReadRetryDelay = 250 * time.Millisecond
+
 // startCompletionWatcher launches the detached goroutine that blocks until the
 // agent process exits and then propagates its outcome to the run's durable
 // state + audit trail. Invariants it upholds:
@@ -67,7 +71,19 @@ func (s *Server) startCompletionWatcher(runID uuid.UUID, ref, agentExecID string
 		// worker owns the transition; Wait/reconcile must not race its CAS.
 		if s.cfg.Store != nil {
 			run, err := s.cfg.Store.GetRun(base, runID)
-			if err != nil || (run.Placement == types.PlacementLocal && run.RunnerID != nil) {
+			if err != nil { // one more read, after a short pause, before the 90 s lease sweep has to finish the run
+				select {
+				case <-time.After(completionWatcherReadRetryDelay):
+				case <-base.Done():
+				}
+				run, err = s.cfg.Store.GetRun(base, runID)
+			}
+			if err != nil {
+				slog.WarnContext(base, "wardynd: completion watcher not started; the lease sweep will finish the run",
+					slog.String("run_id", runID.String()), slog.Any("err", err))
+				return
+			}
+			if run.Placement == types.PlacementLocal && run.RunnerID != nil {
 				return
 			}
 		}
@@ -267,6 +283,7 @@ func (s *Server) revokeRunCascade(ctx context.Context, runID uuid.UUID) error {
 		data["proxy_config_error"] = perr.Error()
 	}
 	s.revokeRunPATs(ctx, runID, adoPATRevokeRunEnd)
+	s.kickRunResidentErase(ctx, runID)
 	if st, ok := s.cfg.Store.(store.RunPATStore); ok {
 		rows, err := st.ListUnrevokedRunPATs(ctx, store.RunPATFilter{RunID: runID})
 		if err != nil {
@@ -348,6 +365,9 @@ func (s *Server) cancelRunApprovals(ctx context.Context, runID uuid.UUID) error 
 // RUNNING->STOPPED, so the idle stop reaches the run's event feed and revokes
 // the run's Azure DevOps personal access tokens here.
 func (s *Server) CancelTerminalRunApprovals(ctx context.Context, runID uuid.UUID) {
+	// The reaper's CAS does not go through casRunState, so the idle stop is counted and frees its slot here.
+	s.metrics.runTerminal(types.RunStopped)
+	s.kickQueue()
 	s.runEvents.idleStopped(runID)
 	s.cancelRunApprovals(ctx, runID)
 	s.revokeRunPATs(ctx, runID, adoPATRevokeRunEnd)
@@ -662,7 +682,8 @@ func (s *Server) handleKillRun(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{
 			"id":     id,
 			"state":  types.RunKilled,
-			"errors": killData,
+			"errors": slices.Sorted(maps.Keys(killData)), // step names only; the text is in the run.revoke row
+			"reason": reasonInternalError,
 			"error":  "run marked KILLED but one or more teardown/revocation steps failed; the run may not be fully contained — retry the kill",
 		})
 		return

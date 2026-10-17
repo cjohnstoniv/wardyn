@@ -21,6 +21,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/testutil"
@@ -344,6 +345,45 @@ func TestPG_Devices_EveryAcceptedRowReChecksFromTheStoredRow(t *testing.T) {
 				t.Errorf("organisation chain broken (hash ok=%v, link ok=%v)", got[0].orgHashOK, got[0].linkOK)
 			}
 		})
+	}
+}
+
+// Behind a trusted proxy the TCP peer is recorded in device_origin, this
+// organisation's own annotation, so the device's claim still recomputes from
+// the stored row and the organisation's chain verifies.
+func TestPG_Devices_ProxiedIngestKeepsTheClaimReCheckable(t *testing.T) {
+	pool := runsPGPoolIsolated(t)
+	st := store.NewPG(pool)
+	ctx := audit.WithProxyPeer(context.Background(), "10.0.0.1:443")
+	d := federationDevice(t, st)
+	r1 := federationRow(t, pool, d, "", 1, "t", json.RawMessage(`{"s":"x"}`))
+	r2 := federationRow(t, pool, d, r1.RowHash, 2, "t", nil)
+	if res, err := st.IngestDeviceAudit(ctx, d.ID, testPeer, []types.FederatedAuditEvent{r1, r2}); err != nil || res.Accepted != 2 {
+		t.Fatalf("ingest: %+v %v", res, err)
+	}
+	got := storedFederated(t, pool, d.ID)
+	if len(got) != 2 {
+		t.Fatalf("stored %d rows, want 2", len(got))
+	}
+	for _, g := range got {
+		var stored struct {
+			ProxyPeer json.RawMessage `json:"proxy_peer"`
+			Origin    struct {
+				ProxyPeer string `json:"proxy_peer"`
+			} `json:"device_origin"`
+		}
+		if err := json.Unmarshal([]byte(g.data), &stored); err != nil {
+			t.Fatal(err)
+		}
+		if !g.deviceHashOK || !g.orgHashOK || !g.linkOK {
+			t.Errorf("seq %d: device claim ok=%v, org hash ok=%v, link ok=%v; data=%s", g.seq, g.deviceHashOK, g.orgHashOK, g.linkOK, g.data)
+		}
+		if stored.Origin.ProxyPeer != "10.0.0.1:443" || stored.ProxyPeer != nil {
+			t.Errorf("seq %d: want the peer in device_origin.proxy_peer only; data=%s", g.seq, g.data)
+		}
+	}
+	if status, err := st.VerifyAuditChain(context.Background()); err != nil || !status.OK {
+		t.Fatalf("organisation chain verify: %+v %v", status, err)
 	}
 }
 

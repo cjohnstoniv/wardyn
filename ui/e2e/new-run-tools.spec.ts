@@ -19,6 +19,9 @@ import { NR_TOOLS } from "../src/app/components/wardyn/copy/new-run/tools";
 import { SCENARIO_HARNESSES, SCENARIO_HARNESS_SETS } from "../src/app/lib/new-run-fixtures/scenarios/harnesses";
 import { SCENARIO_PREFLIGHT } from "../src/app/lib/new-run-fixtures/scenarios/preflight";
 import { SCENARIO_ACCESS, SETUP_ITEMS } from "../src/app/lib/new-run-fixtures/scenarios/tools";
+import { CLAUDE_ATTENDED, CLAUDE_UNGATED, MCP_DOCS, withFacts } from "../src/app/lib/new-run-fixtures/scenarios/tools-harness";
+import { MY_COMPONENTS } from "../src/app/components/wardyn/copy/components";
+import { MY_COMPONENTS as CATALOGUE, ORG_LINEAR } from "../src/app/lib/new-run-fixtures/scenarios/catalogue";
 
 const RUN_ID = "d4444444-4444-4444-8444-444444444444";
 const DOCUMENT = "api_version: wardyn/v1\nkind: Run\nintent:\n  shape: application\n  experience: background\n  workload:\n    kind: command\n    command: npm test\n  no_repositories_or_drives: true\n";
@@ -103,6 +106,42 @@ test.describe("New Run, step 5: setup items and blockers", () => {
     await expect(launch(page)).toBeEnabled();
   });
 
+  test("the all-clear is held back while the answer for a changed draft is out, then returns (FUG-L445)", async ({ page }) => {
+    await stub(page, false);
+    await openTools(page);
+    await expect(page.getByText(NR_TOOLS.SETUP_ALL_SET)).toBeVisible();
+
+    let release: () => void = () => {};
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    await page.route("**/api/v1/runs/policy-preview", async (route) => {
+      await held;
+      await route.fallback();
+    });
+    await press(page, NR_TOOLS.HOST_CARD_BUTTON);
+    const dialog = page.getByRole("dialog", { name: NR_TOOLS.HOST_CARD_TITLE });
+    await dialog.getByLabel(NR_TOOLS.HOST_LABEL).fill("pypi.org");
+    await dialog.getByRole("button", { name: NR_TOOLS.ADD_TO_RUN }).click();
+    await expect(dialog).toHaveCount(0);
+    // The earlier answer was about a different draft: it must not still read as "everything is set up".
+    await expect(page.getByText(NR_TOOLS.SETUP_ALL_SET)).toHaveCount(0);
+    release();
+    await expect(page.getByText(NR_TOOLS.SETUP_ALL_SET)).toBeVisible();
+  });
+
+  test("Add a secret with no saved secrets says so, and adds nothing (FR-0110)", async ({ page }) => {
+    await stub(page, false);
+    await page.route("**/api/v1/secrets", (route) => route.fulfill({ json: { names: [], mine: [] } }));
+    await openTools(page);
+    await press(page, NR_TOOLS.SECRET_CARD_BUTTON);
+    const dialog = page.getByRole("dialog", { name: NR_TOOLS.SECRET_CARD_TITLE });
+    await expect(dialog.getByText(NR_TOOLS.SECRET_NONE)).toBeVisible();
+    await expect(dialog.getByLabel(NR_TOOLS.SECRET_LABEL)).toBeDisabled();
+    await dialog.getByRole("button", { name: NR_TOOLS.ADD_TO_RUN }).click();
+    // Nothing was added: the dialog is still the one asking, and the host field never blamed the person.
+    await expect(dialog).toBeVisible();
+    await expect(dialog.getByText(NR_TOOLS.SECRET_ERR_HOST)).toHaveCount(0);
+  });
+
   test("the policy preview, the preflight and the create send one body", async ({ page }) => {
     const bodies = await stub(page, false);
     await openTools(page);
@@ -122,5 +161,124 @@ test.describe("New Run, step 5: setup items and blockers", () => {
     expect(JSON.stringify(rest)).toBe(JSON.stringify(JSON.parse(bodies.preview.at(-1) ?? "null")));
     expect(JSON.stringify(rest)).toBe(JSON.stringify(JSON.parse(bodies.preflight.at(-1) ?? "null")));
     expect(rest).toMatchObject({ mode_contract: "0.9", shape: "application", workload: { kind: "command", command: "npm test" } });
+  });
+});
+
+const ENV_CLAUDE = ["shape: environment", "experience: interactive", "no_repositories_or_drives: true", "tools:", "  - id: claude-code", "    kind: harness"];
+
+/** Like openTools, for a document of its own and the access facts the preview carries. */
+async function openToolsFor(page: Page, intentLines: string[], access: object) {
+  await stub(page, false);
+  await page.route("**/api/v1/runs/policy-preview", async (route) => {
+    const response = await route.fetch();
+    await route.fulfill({ response, json: { ...(await response.json()), access } });
+  });
+  await gotoConsole(page);
+  await navToRoute(page, "/runs/new");
+  await press(page, NR_START.DOC_YAML);
+  const text = ["api_version: wardyn/v1", "kind: Run", "intent:", ...intentLines.map((l) => `  ${l}`), ""].join("\n");
+  await page.getByRole("textbox", { name: NR_DOCUMENT.EDITOR_ARIA("YAML") }).fill(text);
+  await press(page, NR_DOCUMENT.CONTINUE_REVIEW);
+  await expect(page.getByRole("heading", { name: NR_REVIEW.TITLE })).toBeVisible();
+  await press(page, `${NR_REVIEW.CHANGE} ${NR_REVIEW.GROUP_ACCESS}`);
+  await press(page, NR_REVIEW.EDIT_TOOLS_ACCESS);
+  await expect(page.getByRole("heading", { name: NR_TOOLS.TITLE })).toBeVisible();
+}
+const card = (page: Page, name: string) => page.getByRole("region", { name, exact: true });
+
+test.describe("New Run, step 5: one teal action", () => {
+  test("a catalogue card's Add is an outline button; Review run is the one teal action (DR-0057)", async ({ page }) => {
+    await stub(page, false);
+    await page.route("**/api/v1/me/components", (route) => (route.request().method() === "GET" ? route.fulfill({ json: CATALOGUE }) : route.fallback()));
+    await openTools(page);
+    const add = page.getByRole("button", { name: `${NR_TOOLS.CARD_ADD} ${ORG_LINEAR.name}`, exact: true });
+    await expect(add).toBeVisible();
+    await expect(add).not.toHaveClass(/bg-primary/);
+    await expect(page.getByRole("button", { name: NR_TOOLS.REVIEW_RUN, exact: true })).toHaveClass(/bg-primary/);
+  });
+});
+
+test.describe("New Run, step 5: what an organisation component says of itself", () => {
+  test("an organisation card shows its description, and a credential is named by its kind (FUG-L374)", async ({ page }) => {
+    const description = "Search and update Linear issues from the run.";
+    await stub(page, false);
+    const catalogue = { ...CATALOGUE, org: CATALOGUE.org.map((o) => (o.id === ORG_LINEAR.id ? { ...o, description } : o)) };
+    await page.route("**/api/v1/me/components", (route) => (route.request().method() === "GET" ? route.fulfill({ json: catalogue }) : route.fallback()));
+    await openTools(page);
+    const linear = page.getByRole("listitem").filter({ has: page.getByRole("heading", { name: ORG_LINEAR.name, exact: true }) });
+    await expect(linear.getByText(description, { exact: true })).toBeVisible();
+    await expect(page.getByText("Your organisation's GitHub App", { exact: true }).first()).toBeVisible();
+  });
+});
+
+test.describe("New Run, step 5: the harness card", () => {
+  test("a harness that is only available is not labelled as starting with the run (DR-0230)", async ({ page }) => {
+    await openToolsFor(page, ENV_CLAUDE, withFacts(SCENARIO_ACCESS.app, [CLAUDE_UNGATED]));
+    await expect(card(page, "Claude Code").getByText(NR_TOOLS.SUB_AVAILABLE)).toBeVisible();
+    await expect(card(page, "Claude Code").getByText(NR_TOOLS.SUB_STARTS)).toHaveCount(0);
+  });
+
+  test("a tool the policy allows by name can take its own rule under a blocking default (DR-0223)", async ({ page }) => {
+    const refused = { effect: "allow", available: false, reason: "policy_stricter_tool" };
+    const fact = {
+      ...CLAUDE_ATTENDED,
+      policy_rules: [{ tool: "Read", effect: "allow", source: { kind: "policy" } }],
+      rule_effects: CLAUDE_ATTENDED.rule_effects.map((o) => (o.effect === "deny" ? o : { ...refused, effect: o.effect })),
+    };
+    await openToolsFor(page, ENV_CLAUDE, withFacts(SCENARIO_ACCESS.app, [fact]));
+    await card(page, "Claude Code").getByRole("button", { name: NR_TOOLS.ADD_RULE }).click();
+    const dialog = page.getByRole("dialog");
+    await dialog.getByLabel(NR_TOOLS.RULE_TOOL).fill("Read");
+    await expect(dialog.getByRole("radio", { name: NR_TOOLS.EFFECT_ALLOW })).toBeEnabled();
+    await dialog.getByLabel(NR_TOOLS.RULE_TOOL).fill("Bash");
+    await expect(dialog.getByRole("radio", { name: NR_TOOLS.EFFECT_ALLOW })).toBeDisabled();
+  });
+
+  test("a policy's locked rule row is read out as set by the policy, not only shown with a lock (FUG-L771)", async ({ page }) => {
+    const fact = { ...CLAUDE_ATTENDED, policy_rules: [{ tool: "Read", effect: "allow", source: { kind: "policy" } }] };
+    await openToolsFor(page, ENV_CLAUDE, withFacts(SCENARIO_ACCESS.app, [fact]));
+    const row = card(page, "Claude Code").locator("li[data-locked]").filter({ hasText: "Read" });
+    await expect(row).toContainText("Set by your organisation's policy");
+    await expect(row.getByText("Set by your organisation's policy")).toHaveClass(/sr-only/);
+  });
+
+  test("an inline MCP server's per-harness toggle changes the draft (DR-0250)", async ({ page }) => {
+    const row = { ...MCP_DOCS, id: "component:inline:0", source: { kind: "component", id: "inline:0", name: "Docs" } };
+    const lines = [...ENV_CLAUDE, "components:", "  - name: Docs", "    inline:", "      hosts: [docs.example.com]", "      mcp:", "        url: https://docs.example.com/mcp", "        transport: http"];
+    await openToolsFor(page, lines, withFacts(SCENARIO_ACCESS.app, [CLAUDE_UNGATED], [row]));
+    const box = card(page, "Claude Code").getByRole("checkbox", { name: "Docs" });
+    await expect(box).toBeChecked();
+    await box.click();
+    await expect(box).not.toBeChecked();
+  });
+});
+
+test.describe("New Run, step 5: the Add dialogs", () => {
+  test("a saved-secret read that fails says so and retries, and the dialog still adds without a token (DR-0252)", async ({ page }) => {
+    let reads = 0;
+    await page.route("**/api/v1/secrets*", (route) =>
+      ++reads === 1 ? route.fulfill({ status: 500, json: { error: "secrets are offline" } }) : route.fulfill({ json: { names: ["linear-token"], mine: [] } }),
+    );
+    await stub(page, false);
+    await openTools(page);
+    await press(page, NR_TOOLS.MCP_CARD_BUTTON);
+    const dialog = page.getByRole("dialog", { name: NR_TOOLS.MCP_CARD_TITLE });
+    await expect(dialog.getByRole("alert")).toContainText("secrets are offline");
+    await dialog.getByRole("button", { name: MY_COMPONENTS.RETRY, exact: true }).click();
+    await expect(dialog.getByRole("alert")).toHaveCount(0);
+    await expect(dialog.getByRole("option", { name: "linear-token" })).toHaveCount(1);
+  });
+
+  test("More options opens the full editor on what was typed and the save choice (DR-0251)", async ({ page }) => {
+    await stub(page, false);
+    await openTools(page);
+    await press(page, NR_TOOLS.CUSTOM_COMPONENT);
+    const dialog = page.getByRole("dialog", { name: NR_TOOLS.CUSTOM_COMPONENT });
+    await dialog.getByLabel(NR_TOOLS.CC_NAME).fill("Billing");
+    await dialog.getByLabel(NR_TOOLS.CC_HOSTS).fill("billing.acme.internal");
+    await dialog.getByLabel(NR_TOOLS.CC_SAVE).check();
+    await press(page, NR_TOOLS.CC_MORE_OPTIONS);
+    await expect(page.locator("#ccd-name")).toHaveValue("Billing");
+    await expect(page.locator("#ccd-hosts")).toHaveValue("billing.acme.internal");
   });
 });

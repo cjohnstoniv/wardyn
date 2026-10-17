@@ -26,6 +26,11 @@ type policyPreviewResponse struct {
 	Warnings         []string                  `json:"warnings"`
 	Pending          []policyPreviewPending    `json:"pending"`
 	RepositoryAccess []policyPreviewRepository `json:"repository_access"`
+	// ADOLaneDeclined is the run-level reason the per-person Azure DevOps
+	// credential would not be given to this run's sandbox (adoLaneDecline),
+	// decided by the resolver launch uses. Absent means no structural decline
+	// was reported; it is never set on a repository group.
+	ADOLaneDeclined string `json:"ado_lane_declined,omitempty"`
 	// Components is what the draft is given access to (componentFacts): absent
 	// for an exec draft with no Git provider or attached component.
 	Components []componentFact `json:"components,omitempty"`

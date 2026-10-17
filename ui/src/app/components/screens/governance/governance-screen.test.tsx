@@ -15,12 +15,12 @@
 //      keeps rule 1 true without inventing a modal,
 //   3. delete is TWO refusals: a pre-filled, count-bearing one the client can
 //      see, and a COUNT-FREE 409 for the race it cannot,
-//   4. no component in this directory renders a product string of its own.
+//   4. no component in this directory renders a product string of its own
+//      (governance-no-own-copy.test.ts).
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { cleanup, render, screen, within, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
-import { expectNoOwnCopy } from "../../../lib/test-fixtures";
 
 // The SafetyMeter (one per profile row, plus the editor's) debounces a
 // POST /policies/grade. Stub it so no test touches the network.
@@ -471,7 +471,7 @@ describe("GovernanceScreen — assignments and the resolved preview", () => {
     // The kind the segmented control names is the kind the search asked for.
     expect(directorySearchMock).toHaveBeenCalledWith("plat", "group");
 
-    await userEvent.click(screen.getByRole("combobox")); // the profile Select
+    await userEvent.click(screen.getByRole("combobox", { name: GOV.FIELD_PROFILE })); // the profile Select
     await userEvent.click(await screen.findByRole("option", { name: PLATFORM.name }));
     await userEvent.click(screen.getByRole("button", { name: GOV.ADD_CTA }));
 
@@ -587,24 +587,6 @@ describe("GovernanceScreen — assignments and the resolved preview", () => {
 // Postgres, every case asserted equal to a direct ResolveGovernanceProfile
 // call, plus the store's own governance_pg_test.go. Re-adding a client-side
 // table here would re-create exactly that second matcher.
-
-// THE canon pin: a component in this directory may render copy, never author
-// it. Anything a reader sees comes from governance-copy.ts (frozen §7) or the
-// modules §7.1 defers to — so a quoted or bare prose string in this source is a
-// canon break, not a style question.
-describe("Governance components render no copy of their own", () => {
-  // The vitest project root (ui/) is the resolve base: vite rewrites
-  // import.meta.url to a root-relative URL.
-  expectNoOwnCopy("src/app/components/screens/governance", [
-    "governance-screen.tsx",
-    "profile-editor.tsx",
-    "profile-rubric.tsx",
-    "profile-overlay.tsx",
-    "assignments.tsx",
-    "display.tsx",
-    "runner-credentials.tsx",
-  ]);
-});
 
 describe("GovernanceScreen — composed profiles", () => {
   const BASE = profile({ id: "pb", name: "Baseline" });
@@ -943,6 +925,22 @@ describe("GovernanceScreen — a 202 is submitted, never saved", () => {
     expect(getGovernanceMock).toHaveBeenCalled();
   });
 
+  it("a profile save held for approval shows the held change's notes under the deployment-ceiling heading", async () => {
+    const note = "this profile omits 1 denied domain(s) the deployment default denies (evil.example) — members under it are NOT walled from them";
+    updateProfileMock.mockRejectedValue(
+      new PendingChangeError({ ...HELD.change, diff: { changed: [], notes: [note] } }),
+    );
+    renderScreen();
+    await screen.findByText(GREENFIELD.name);
+
+    await userEvent.click(screen.getByRole("button", { name: `${GOV.EDIT} ${GREENFIELD.name}` }));
+    await userEvent.click(screen.getByRole("button", { name: GOV.SAVE }));
+
+    expect(await screen.findByText(CHANGES.SUBMITTED_TITLE)).toBeInTheDocument();
+    expect(screen.getByText(GOV.OMISSION_TITLE)).toBeInTheDocument();
+    expect(screen.getByText(note)).toBeInTheDocument();
+  });
+
   it("a profile delete held for approval closes the dialog and shows the note", async () => {
     deleteProfileMock.mockRejectedValue(HELD);
     renderScreen();
@@ -962,7 +960,7 @@ describe("GovernanceScreen — a 202 is submitted, never saved", () => {
     await screen.findByText(GOV.ASSIGN_TITLE);
 
     await userEvent.type(screen.getByRole("textbox", { name: PERM.FIELD_WHO }), "g1");
-    await userEvent.click(screen.getByRole("combobox"));
+    await userEvent.click(screen.getByRole("combobox", { name: GOV.FIELD_PROFILE }));
     await userEvent.click(await screen.findByRole("option", { name: PLATFORM.name }));
     await userEvent.click(screen.getByRole("button", { name: GOV.ADD_CTA }));
 

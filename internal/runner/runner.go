@@ -172,6 +172,9 @@ type ProxyConfig struct {
 	AzureARM *proxy.AzureARMGrant
 	// BrokeredPATGrantIDs is every git_pat grant id of the run while the PAT broker is on; the proxy refuses a raw mint of one.
 	BrokeredPATGrantIDs []uuid.UUID
+	// ResidentMints are the run's runner_resident ssh_key and git_pat grants, each Token its
+	// placeholder until the runner fills it; the proxy answers their mints (proxy.Config.ResidentMints).
+	ResidentMints []proxy.ResidentMint
 	// UpstreamProxyURL is the OPTIONAL corporate parent proxy the sidecar
 	// chains egress through; control-plane calls bypass it. Empty => direct dial.
 	UpstreamProxyURL string
@@ -432,6 +435,18 @@ var ErrReviveUnsupported = errors.New("runner: this substrate cannot replace a s
 // removed, the old proxy and did not start the new one.
 var ErrProxyReplaceFailed = errors.New("runner: the old proxy may be gone and the new one did not start")
 
+// Selftester is an OPTIONAL Runner capability: run a BYOI image's contract
+// check (agent-run --selftest) in a runner's sandbox as an execution of its
+// own, and return its exit code. It never becomes the sandbox's agent exec:
+// its output and exit stay off the run, and it spends no task generation.
+type Selftester interface {
+	Selftest(ctx context.Context, ref string) (int, error)
+}
+
+// ErrSelftestUnsupported is Selftester's answer from a router whose substrate
+// for ref has no selftest of its own.
+var ErrSelftestUnsupported = errors.New("runner: this substrate has no BYOI selftest of its own")
+
 // SandboxStarter is an OPTIONAL Runner capability: start a kept sandbox's
 // stopped agent again (revive after a reboot). Files survive; the main
 // process re-runs from the start. Never starts the proxy itself: the caller
@@ -492,6 +507,14 @@ var ErrActivityUnavailable = errors.New("runner: this substrate cannot report sa
 // as unknown, so trust the cache (fail-open).
 type ImageChecker interface {
 	ImagePresent(ctx context.Context, ref string) (bool, error) // present in the substrate's local image store right now
+}
+
+// ImageDescriber is an OPTIONAL Runner capability: a substrate with a local image store (docker)
+// says which image the store resolved ref to (registry digest, platform, and whether that digest
+// is a multi-arch index when the store can tell). It reads the local store only, never a registry.
+// An error means the store has no such image or cannot be read.
+type ImageDescriber interface {
+	DescribeImage(ctx context.Context, ref string) (string, error)
 }
 
 // ImageRemover is an OPTIONAL Runner capability: a substrate with a local

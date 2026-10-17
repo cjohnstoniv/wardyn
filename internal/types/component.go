@@ -75,9 +75,11 @@ const (
 // it reaches, the secrets it carries with how each is delivered, and plain
 // (non-secret) environment. It holds secret names, never values.
 type ComponentDefinition struct {
-	Hosts   []string          `json:"hosts"`
-	Secrets []ComponentSecret `json:"secrets,omitempty"`
-	Config  map[string]string `json:"config,omitempty"`
+	// Description is one plain line on the component's card, for the people who may add it.
+	Description string            `json:"description,omitempty"`
+	Hosts       []string          `json:"hosts"`
+	Secrets     []ComponentSecret `json:"secrets,omitempty"`
+	Config      map[string]string `json:"config,omitempty"`
 	// CLI marks an org row as a CLI credential card (azure, aws or github).
 	CLI *ComponentCLI `json:"cli,omitempty"`
 	// MCP makes the component a remote MCP server, which a run's harnesses
@@ -151,8 +153,10 @@ type ComponentRef struct {
 	// Access is read or write; empty reads as read.
 	Access string `json:"access,omitempty"`
 	// MCPHarnesses are the included harnesses (tools[].id) an MCP component's
-	// server is turned on for. Absent means every harness that can take it.
-	MCPHarnesses []string `json:"mcp_harnesses,omitempty"`
+	// server is turned on for. Absent (nil) means every harness that can take
+	// it; an explicit empty list means none. omitzero, not omitempty, so the
+	// empty list survives every encode (a queued replay, a saved intent, the SDK).
+	MCPHarnesses []string `json:"mcp_harnesses,omitzero"`
 }
 
 // The built-in Git provider components a ComponentRef may name.
@@ -197,7 +201,7 @@ type RunComponent struct {
 	// MCPHarnesses are the harnesses an MCP component's server was turned on
 	// for at launch. Not personal data: it survives an erasure, so a revive
 	// still knows which harness reached which server.
-	MCPHarnesses []string `json:"mcp_harnesses,omitempty"`
+	MCPHarnesses []string `json:"mcp_harnesses,omitzero"`
 }
 
 var (
@@ -221,6 +225,13 @@ var (
 // and every bound on the hosts themselves (deny lists, model hosts, hosts that
 // already carry a credential — compare with Destination).
 func (d ComponentDefinition) Validate(validHost func(string) error, personDefined bool) error {
+	var descErr error
+	validateConfigText("description", d.Description, MaxConfigDescriptionRunes, false, func(path, format string, a ...any) {
+		descErr = fmt.Errorf(path+": "+format, a...)
+	})
+	if descErr != nil {
+		return descErr
+	}
 	if err := validateComponentHosts(d.Hosts, validHost, personDefined); err != nil {
 		return err
 	}

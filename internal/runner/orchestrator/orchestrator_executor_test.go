@@ -91,3 +91,16 @@ func TestExecutorFactsCarryDiskWordAndKeep(t *testing.T) {
 		t.Errorf("k8s facts %+v, want eviction, no keep, no drives", fk)
 	}
 }
+
+// R2-0155: an executor whose probe fails answers unknown with its probe error, so placement can tell it
+// from one this deployment does not run (unknown, no error).
+func TestExecutorFactsCarryTheProbeError(t *testing.T) {
+	o := New(deadSubstrate{&fakeSubstrate{name: "dead"}}, &fakeSubstrate{name: "live", classes: []types.ConfinementClass{types.CC1}})
+	ctx := context.Background()
+	if f, ok := o.ExecutorFacts(ctx, "dead"); ok || f.ProbeErr == nil {
+		t.Errorf("an executor that cannot report: facts %+v ok %v, want unknown with the probe error", f, ok)
+	}
+	if f, ok := o.ExecutorFacts(ctx, "missing"); ok || f.ProbeErr != nil {
+		t.Errorf("an executor this deployment does not run: facts %+v ok %v", f, ok)
+	}
+}

@@ -156,7 +156,9 @@ func (s *Server) seedRequestWorkspace(ctx context.Context, spec *types.RunPolicy
 	spec.WorkspaceMounts = append(newMounts, spec.WorkspaceMounts...)
 	spec.WorkspaceRepos = append(newRepos, spec.WorkspaceRepos...)
 	if req.Repo == "" && len(newRepos) > 0 {
-		req.Repo = newRepos[0].Repo // run-row label only; the gate + wsRefs read WorkspaceRepos
+		// The run row's label, and the run's own repository for the per-person
+		// Azure DevOps lane: the same repository as WorkspaceRepos[0].
+		req.Repo = newRepos[0].Repo
 	}
 	// base_image replaces the old container-kind image resolution. An explicit
 	// user --image always wins (never silently overridden); "recommended"

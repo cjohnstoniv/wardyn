@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -494,4 +495,18 @@ func TestUnknownUserTypeRefusalRecordsTheTypeID(t *testing.T) {
 		}
 	}
 	t.Fatal("no authz.denied user_type_unknown row was recorded")
+}
+
+// A priority past the table's INT column is a 400 at the door, not a 500 at the write.
+func TestAssignmentPriorityMustFitTheColumn(t *testing.T) {
+	for _, p := range []int{math.MaxInt32 + 1, math.MinInt32 - 1} {
+		a := types.GovernanceAssignment{SubjectType: types.CapabilitySubjectAll, ProfileID: uuid.New(), Priority: p}
+		if err := validateGovernanceAssignment(&a); err == nil {
+			t.Errorf("priority %d accepted", p)
+		}
+	}
+	a := types.GovernanceAssignment{SubjectType: types.CapabilitySubjectAll, ProfileID: uuid.New(), Priority: math.MaxInt32}
+	if err := validateGovernanceAssignment(&a); err != nil {
+		t.Errorf("priority MaxInt32: %v", err)
+	}
 }

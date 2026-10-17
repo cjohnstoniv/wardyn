@@ -85,11 +85,11 @@ func classifyOpenAILLM(method, rest string) int {
 // isLLMHost reports whether host is a recognised model-API upstream (for honest opaque-tunnel coverage on
 // CONNECT traffic). A method, not a free function, so a configured internal gateway's host counts too.
 func (p *Proxy) isLLMHost(host string) bool {
-	h := strings.TrimSuffix(strings.ToLower(host), ".")
+	h := hostKey(host)
 	if h == anthropicHost || h == openaiHost {
 		return true
 	}
-	if _, ok := p.gatewayVendor[h]; ok {
+	if _, ok := p.gatewayVendorOf(h); ok {
 		return true
 	}
 	if _, ok := p.channelHosts[h]; ok {

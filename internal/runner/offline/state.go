@@ -44,6 +44,9 @@ type localRun struct {
 	ProxyExited *proxyExit `json:"proxy_exited,omitempty"`
 	// ContainmentPending holds a run whose proxy is not proven stopped (design K1 §3.1 Q2).
 	ContainmentPending *runnerwire.ContainmentPending `json:"containment_pending,omitempty"`
+	// OutputCapture records that the create handed the sandbox an output
+	// writer; a retirement that says the run had no output is refused when set.
+	OutputCapture bool `json:"output_capture,omitempty"`
 }
 
 // proxyExit is one ProxyExited obligation and the evidence that recorded it.

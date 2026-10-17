@@ -316,6 +316,33 @@ func (m *Manager) BeforeCreate(ctx context.Context, spec runner.SandboxSpec) err
 	return nil
 }
 
+// AdmitResident binds a runner_resident delivery to a run this runner may still create: online, not
+// revoked, a live initial lease and no creation intent yet (the Lease and BeforeCreate predicates).
+// Lock order: Resident calls this while holding its own mutex, so Resident.mu is always taken before
+// m.mu. The manager never calls into Resident; the revoke hook runs Revoked, which has released m.mu,
+// and only then the resident erase.
+func (m *Manager) AdmitResident(runID uuid.UUID) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if !m.online || m.state.Revoked {
+		return runner.ErrRunnerOffline
+	}
+	if _, exists := m.state.Runs[runID]; exists {
+		return errors.New("runner resident delivery after the run's creation intent")
+	}
+	if _, ok := m.pending[runID]; !ok || m.expired(runID) {
+		return errors.New("runner resident delivery requires a live initial lease")
+	}
+	return nil
+}
+
+// IsRevoked reports the durable revocation latch.
+func (m *Manager) IsRevoked() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.state.Revoked
+}
+
 // liveRuns counts the runs whose sandbox this runner still holds: created or being created, not failed,
 // retired, quarantined, exited or stopped. It errs low, so the backstop to the control plane's count
 // never refuses a run the control plane rightly placed. m.mu must be held.
@@ -342,6 +369,9 @@ func (m *Manager) Created(ctx context.Context, spec runner.SandboxSpec, localRef
 		return errors.New("runner creation has no matching durable intent")
 	}
 	r.Ref = localRef
+	// The dispatcher binds the output writer before Created, so a run whose
+	// create captured output says so here, before its sandbox is used.
+	r.OutputCapture = spec.ExecOutput != nil
 	m.state.Runs[spec.RunID] = r
 	m.publishActivity()
 	return m.save()
@@ -561,10 +591,14 @@ func (m *Manager) ObserveProxies(ctx context.Context) error {
 		return nil
 	}
 	m.lastObserved = m.now()
+	// Every unretired run is listed, held ones included, so the substrate's per-tick checks (the
+	// name-reuse list, identity sampling) keep covering them; only open runs take an obligation.
 	var ids []uuid.UUID
+	open := map[uuid.UUID]bool{}
 	for _, id := range m.runIDs() {
-		if r := m.state.Runs[id]; !r.Retired && r.Ref != "" && r.ProxyExited == nil && r.ProxyStoppedAt == nil {
+		if r := m.state.Runs[id]; !r.Retired && r.Ref != "" {
 			ids = append(ids, id)
+			open[id] = r.ProxyExited == nil && r.ProxyStoppedAt == nil
 		}
 	}
 	obs := m.observer
@@ -578,7 +612,7 @@ func (m *Manager) ObserveProxies(ctx context.Context) error {
 		errs = append(errs, err)
 	}
 	for id, o := range seen {
-		if o.Exited() || o == runner.ProxyPendingPastStart {
+		if open[id] && (o.Exited() || o == runner.ProxyPendingPastStart) {
 			errs = append(errs, m.ProxyExited(id, string(o)))
 		}
 	}
@@ -673,13 +707,14 @@ func (m *Manager) SinkRunIDs() []uuid.UUID {
 	return ids
 }
 
-// EvidenceRunIDs lists the runs holding a substrate evidence record, for the relay's fence replay.
+// EvidenceRunIDs lists the unretired runs holding a substrate evidence record, for the relay's
+// fence replay: a fence is dropped with the run's offline state at retirement.
 func (m *Manager) EvidenceRunIDs() []uuid.UUID {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	var ids []uuid.UUID
 	for _, id := range m.runIDs() {
-		if len(m.state.Runs[id].Substrate) > 0 {
+		if r := m.state.Runs[id]; len(r.Substrate) > 0 && !r.Retired {
 			ids = append(ids, id)
 		}
 	}

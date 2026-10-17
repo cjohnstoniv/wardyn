@@ -125,7 +125,8 @@ func (s *Server) runnerStreamCapabilities(ctx context.Context, id uuid.UUID) (pl
 	}, nil
 }
 
-// callerOwnsRunner is nil when id is a claimed runner of the signed-in person, else runner_not_found:
+// callerOwnsRunner is nil when id is a claimed runner of the signed-in person, or a claimed organization
+// runner in an organization pool they may use (orgRunnerPermitted), else runner_not_found:
 // another person's runner, a revoked or unclaimed one and an unknown id answer alike, before anything is
 // read from its stream, so no answer says whether it exists or is online.
 func (s *Server) callerOwnsRunner(ctx context.Context, id uuid.UUID) error {
@@ -143,10 +144,44 @@ func (s *Server) callerOwnsRunner(ctx context.Context, id uuid.UUID) error {
 		return notFound
 	case err != nil:
 		return err
+	case rn.OwnerKind == types.RunnerOwnerOrg && rn.State == types.RunnerClaimed:
+		permitted, err := s.orgRunnerPermitted(ctx, id)
+		if err != nil {
+			return err
+		}
+		if !permitted {
+			return notFound
+		}
 	case rn.Owner != owner || rn.State != types.RunnerClaimed:
 		return notFound
 	}
 	return nil
+}
+
+// orgRunnerPermitted reports whether an organization runner is a member of an organization pool the
+// caller may use (its use policy admits them): the only way a person reaches an org runner.
+func (s *Server) orgRunnerPermitted(ctx context.Context, id uuid.UUID) (bool, error) {
+	ps, ok := s.cfg.Store.(store.RunnerPoolStore)
+	if !ok {
+		return false, nil
+	}
+	rows, refusal := s.permittedPools(ctx, ps, true)
+	if refusal != nil {
+		return false, refusal.err
+	}
+	for _, row := range rows {
+		if row.Pool.Scope != types.RunnerPoolOrganization {
+			continue
+		}
+		members, err := ps.ListRunnerPoolMembers(ctx, row.Pool.ID)
+		if err != nil {
+			return false, err
+		}
+		if slices.ContainsFunc(members, func(m types.RunnerPoolMember) bool { return m.RunnerID != nil && *m.RunnerID == id }) {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // intersectCapabilities is what a run can count on while its placement is still

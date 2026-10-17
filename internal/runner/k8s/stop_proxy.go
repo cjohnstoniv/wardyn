@@ -148,6 +148,11 @@ func (d *Driver) ensureFence(runID uuid.UUID) error {
 	if err != nil {
 		return err
 	}
+	// A proxy with a persisted witness has had its IP refusal released (as ReplayFences skips it): a
+	// later containment path, StopSandbox after StopProxy, must not refuse a recycled IP again.
+	if p := ev.Pods[componentProxy]; p != nil && p.Witness != nil {
+		return nil
+	}
 	if d.cfg.Fence != nil {
 		d.cfg.Fence(runID, ev.Fence.ProxyIP)
 	}
@@ -162,6 +167,10 @@ func (d *Driver) ReplayFences(runIDs []uuid.UUID) error {
 		ev, err := d.loadEvidence(id)
 		if err != nil {
 			errs = append(errs, err)
+			continue
+		}
+		// A run whose proxy has a persisted witness is not replayed: its IP refusal ended there.
+		if p := ev.Pods[componentProxy]; p != nil && p.Witness != nil {
 			continue
 		}
 		if ev.Fence != nil && d.cfg.Fence != nil {
@@ -199,6 +208,15 @@ func (d *Driver) containPod(ctx context.Context, runID uuid.UUID, component, nam
 				// No object was ever held under the finalizer, so no process can be running.
 				return d.settled(ctx, runID, component)
 			}
+			// The held object vanished before runnerd's delete (a stripped finalizer). NotFound is
+			// not evidence: fence the run and start the delete bound from now, so the run becomes
+			// typed pending instead of erroring forever.
+			if err := d.ensureFence(runID); err != nil {
+				return false, err
+			}
+			if err := d.markDeleted(runID, component, name); err != nil {
+				return false, err
+			}
 		case gerr != nil:
 			return false, fmt.Errorf("k8s: read %s before delete: %w", name, gerr)
 		default:
@@ -219,15 +237,7 @@ func (d *Driver) containPod(ctx context.Context, runID uuid.UUID, component, nam
 			if err := d.clientset.CoreV1().Pods(d.cfg.Namespace).Delete(ctx, name, opts); err != nil && !isNotFound(err) {
 				return false, fmt.Errorf("k8s: delete %s: %w", name, err)
 			}
-			if _, err := d.mutate(runID, func(ev *runEvidence) (bool, error) {
-				p := ev.pod(component, name)
-				if p.DeleteAt != nil {
-					return false, nil
-				}
-				t := d.now().UTC()
-				p.DeleteAt = &t
-				return true, nil
-			}); err != nil {
+			if err := d.markDeleted(runID, component, name); err != nil {
 				return false, err
 			}
 			if _, err := d.closingList(ctx, runID, component); err != nil {
@@ -245,6 +255,20 @@ func (d *Driver) containPod(ctx context.Context, runID uuid.UUID, component, nam
 		return false, err
 	}
 	return d.settled(ctx, runID, component)
+}
+
+// markDeleted persists the pod's DeleteAt, once: the start of its evidence bound.
+func (d *Driver) markDeleted(runID uuid.UUID, component, name string) error {
+	_, err := d.mutate(runID, func(ev *runEvidence) (bool, error) {
+		p := ev.pod(component, name)
+		if p.DeleteAt != nil {
+			return false, nil
+		}
+		t := d.now().UTC()
+		p.DeleteAt = &t
+		return true, nil
+	})
+	return err
 }
 
 // settled finishes a pod that has completion evidence: for the proxy, its producer is settled.
@@ -387,12 +411,17 @@ func (d *Driver) checkOnce(ctx context.Context, runID uuid.UUID, component, name
 		return false, fmt.Errorf("%w: %s: %s", errTerminationUnknown, name, v.why)
 	}
 	w := newWitness(runID, pe, pod, v, post, ev.Record, d.now().UTC())
-	if _, err := d.mutate(runID, func(ev *runEvidence) (bool, error) {
+	saved, err := d.mutate(runID, func(ev *runEvidence) (bool, error) {
 		ev.Pods[component].Witness = w
 		return true, nil
-	}); err != nil {
+	})
+	if err != nil {
 		// A failed witness save stops the sequence: the patch never follows it (Codex R8).
 		return false, err
+	}
+	if component == componentProxy && saved.Fence != nil && d.cfg.Unfence != nil {
+		// The proxy's termination is now known, so its IP may go to another run's proxy.
+		d.cfg.Unfence(runID, saved.Fence.ProxyIP)
 	}
 	return d.removeFinalizer(ctx, runID, component, pod)
 }
@@ -531,20 +560,11 @@ func (d *Driver) AcceptNodeRecord(ctx context.Context, ref string, rec runner.No
 	if rec.FourEyes || ev.noCausalAssociation() || len(ev.Reuse) > 0 {
 		need = 2
 	}
-	humans := map[string]bool{}
-	for _, a := range rec.Approvers {
-		if !a.Human {
-			return refuseRecord("an admin token cannot make a node record")
-		}
-		who := strings.ToLower(strings.TrimSpace(a.Principal))
-		if e := strings.ToLower(strings.TrimSpace(a.Email)); e != "" {
-			who = e
-		}
-		if who != "" {
-			humans[who] = true
-		}
+	humans, err := distinctHumanApprovers(rec.Approvers)
+	if err != nil {
+		return err
 	}
-	if len(humans) < need {
+	if humans < need {
 		return refuseRecord(fmt.Sprintf("this record needs %d distinct human approvers", need))
 	}
 	switch rec.Attestation {
@@ -575,6 +595,33 @@ func (d *Driver) AcceptNodeRecord(ctx context.Context, ref string, rec runner.No
 		return true, nil
 	})
 	return err
+}
+
+// distinctHumanApprovers counts a node record's approvers as humans, or refuses an admin token. Two
+// approvers sharing a principal or an email are one human; a shared key counts once even when the
+// other key differs or is missing.
+func distinctHumanApprovers(approvers []runner.NodeRecordApprover) (int, error) {
+	humans := 0
+	principals, emails := map[string]bool{}, map[string]bool{}
+	for _, a := range approvers {
+		if !a.Human {
+			return 0, refuseRecord("an admin token cannot make a node record")
+		}
+		p, e := strings.ToLower(strings.TrimSpace(a.Principal)), strings.ToLower(strings.TrimSpace(a.Email))
+		if p == "" && e == "" {
+			continue
+		}
+		if !(p != "" && principals[p]) && !(e != "" && emails[e]) {
+			humans++
+		}
+		if p != "" {
+			principals[p] = true
+		}
+		if e != "" {
+			emails[e] = true
+		}
+	}
+	return humans, nil
 }
 
 // holderBound is precondition (ii): on a run that is not (u2) and has no latched ID, the post-bind

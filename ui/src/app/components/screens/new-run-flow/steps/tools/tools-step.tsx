@@ -153,7 +153,7 @@ export function ToolsStep({ go }: NewRunScreenProps) {
             }}
           />
           {/* Before the first answer there is nothing to say yet, not "Nothing else to set up". */}
-          {access && <SetupNeeded items={items} pending={pending} done={settled} intent={draft.intent} names={names} onDone={finish} />}
+          {access && <SetupNeeded items={items} pending={pending} done={settled} intent={draft.intent} names={names} answered={answered} onDone={finish} />}
         </>
       )}
     </StepShell>

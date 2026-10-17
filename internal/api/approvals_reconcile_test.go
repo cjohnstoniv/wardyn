@@ -261,3 +261,22 @@ func TestReconcileIgnoresACancelledVerdict(t *testing.T) {
 		t.Errorf("the heal wrote off a CANCELLED approval: approved=%v denied=%v", approved, denied)
 	}
 }
+
+// A second boot over a list that already holds the verdict writes and audits
+// nothing: the first boot's row is the one answer to "how did this get here".
+func TestReconcileLeavesAnAlreadyHeldVerdictAlone(t *testing.T) {
+	const host = "registry.npmjs.org"
+	f := newScopeFixture(t)
+	f.seedWorkspace(t, nil, nil)
+	rcSeedDecided(f, host, types.ApprovalApproved, time.Now().UTC())
+	if n, err := f.srv.ReconcileWorkspaceEgressDecisions(t.Context()); err != nil || n != 1 {
+		t.Fatalf("first reconcile = %d, %v; want 1, nil", n, err)
+	}
+	before := len(f.audit())
+	if n, err := f.srv.ReconcileWorkspaceEgressDecisions(t.Context()); err != nil || n != 0 {
+		t.Errorf("second reconcile = %d, %v; want 0, nil", n, err)
+	}
+	if got := len(f.audit()) - before; got != 0 {
+		t.Errorf("second reconcile wrote %d audit rows, want none", got)
+	}
+}

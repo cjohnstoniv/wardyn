@@ -208,10 +208,10 @@ func TestLaunchIntentOwnerOnly(t *testing.T) {
 	}
 }
 
-// DR-0121 (lead ruling 2026-10-12 ~05:25Z: the refusal stays at every door, no
-// setup item): Run again and a shared template both name an added secret the
-// caller does not hold. Preview, preflight and create refuse it with one
-// sentence; nothing relaxes create's check for a body that came from a document.
+// Run again and a shared template both name an added secret the caller does not
+// hold. Preview and create refuse it with one sentence, and nothing relaxes
+// create's check for a body that came from a document; Review lists the secret
+// as a setup item to add instead.
 func TestReplay_AddSecretsNeedsSetup(t *testing.T) {
 	srv, _ := ovMemberFixture(t)
 	cookie := ovCookie(t)
@@ -224,7 +224,7 @@ func TestReplay_AddSecretsNeedsSetup(t *testing.T) {
 
 	sameRefusal := func(name string, c *http.Cookie) {
 		var sentence string
-		for _, door := range []string{previewDoor, preflightDoor, "/api/v1/runs"} {
+		for _, door := range []string{previewDoor, "/api/v1/runs"} {
 			w := doSSO(t, srv, http.MethodPost, door, c, replay)
 			if w.Code != http.StatusUnprocessableEntity || errorReason(w) != reasonOverrideRefused {
 				t.Errorf("%s at %s = %d %s, want 422 %s", name, door, w.Code, w.Body.String(), reasonOverrideRefused)
@@ -240,6 +240,11 @@ func TestReplay_AddSecretsNeedsSetup(t *testing.T) {
 		}
 	}
 	sameRefusal("a shared template's second member", other)
+	var pf preflightResponse
+	if w := doSSO(t, srv, http.MethodPost, preflightDoor, other, replay); w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &pf) != nil ||
+		!slices.ContainsFunc(pf.SetupItems, func(it SetupItem) bool { return it.ID == "secret:my-key" && it.Status == "missing" }) {
+		t.Errorf("Review of a shared template for a member without the secret = %d %s, want 200 listing secret:my-key as missing", w.Code, w.Body.String())
+	}
 	memSecretsMu.Lock()
 	delete(srv.cfg.Secrets.(*memSecrets).owned[govMemberSub], "my-key")
 	memSecretsMu.Unlock()
@@ -272,5 +277,28 @@ func TestLaunchIntentWireTwin(t *testing.T) {
 		if !slices.Equal(tsKeys, goKeys) {
 			t.Errorf("%s: TS keys %v, Go %v", name, tsKeys, goKeys)
 		}
+	}
+}
+
+// A reference's explicit empty mcp_harnesses ("on for no harness") is kept in
+// the saved intent as [], and a reference that names none stays without the key.
+func TestLaunchIntent_KeepsAnEmptyMCPHarnessesList(t *testing.T) {
+	asked := mustJSON(createRunRequest{Components: []types.ComponentRef{
+		{Name: "off", Inline: &types.ComponentDefinition{Hosts: []string{"mcp.off.test"}}, MCPHarnesses: []string{}},
+		{Name: "default", Inline: &types.ComponentDefinition{Hosts: []string{"mcp.default.test"}}},
+	}})
+	li := launchIntentFor(asked)
+	if li.doc == nil {
+		t.Fatalf("no intent kept: %q %v", li.reason, li.refusals)
+	}
+	var refs []map[string]json.RawMessage
+	if err := json.Unmarshal(liIntent(t, li.doc)["components"], &refs); err != nil || len(refs) != 2 {
+		t.Fatalf("components = %v (%v)", refs, err)
+	}
+	if got := string(refs[0]["mcp_harnesses"]); got != "[]" {
+		t.Errorf("explicit none kept as %q, want []", got)
+	}
+	if _, ok := refs[1]["mcp_harnesses"]; ok {
+		t.Errorf("a reference with no list gained mcp_harnesses: %s", refs[1]["mcp_harnesses"])
 	}
 }

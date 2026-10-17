@@ -35,7 +35,9 @@ import (
 type rulesetFake struct {
 	rules     map[string]string
 	otherwise string
-	rulesets  map[int64]string
+	// page2 is a branch's second page of rules: its first page links to it.
+	page2    map[string]string
+	rulesets map[int64]string
 	// blockRules makes every rules/branches read hang until the CLIENT gives up,
 	// so a caller deadline can be exercised without a sleep.
 	blockRules bool
@@ -108,6 +110,13 @@ func newRulesetMinter(t *testing.T, f *rulesetFake) *githubMinter {
 				w.WriteHeader(http.StatusNotFound)
 				_, _ = w.Write([]byte(`{"message":"Not Found"}`))
 				return
+			}
+			if next, paged := f.page2[branch]; paged {
+				if r.URL.Query().Get("page") == "2" {
+					body = next
+				} else {
+					w.Header().Set("Link", `<http://`+r.Host+r.URL.Path+`?page=2>; rel="next"`)
+				}
 			}
 			_, _ = w.Write([]byte(body))
 		}
@@ -291,6 +300,20 @@ func TestVerifyRefRuleset_ReadFailureIsAnError(t *testing.T) {
 				t.Fatal("confined must be false on error")
 			}
 		})
+	}
+}
+
+// A branch's rules can run past one page: the verifier reads them all, so a rule
+// on a later page counts, and a list that never ends is an error.
+func TestVerifyRefRuleset_ReadsEveryPageOfRules(t *testing.T) {
+	f := &rulesetFake{
+		rules:    map[string]string{refProbeOutside: rulesNoDeletion, refProbeOutsideTwo: rulesConfining, refProbeOutsideNested: rulesConfining, refProbeInside: rulesNone},
+		page2:    map[string]string{refProbeOutside: `[{"type":"deletion","ruleset_id":1}]`},
+		rulesets: neverBypass(),
+	}
+	confined, detail, err := newRulesetMinter(t, f).VerifyRefRuleset(context.Background(), "acme/widgets")
+	if err != nil || !confined {
+		t.Errorf("confined = %v, %q, err %v; the deletion rule on page 2 must count", confined, detail, err)
 	}
 }
 

@@ -137,9 +137,13 @@ export const MINTED = {
   // #1508 (mock M-SVC v2, approved 2026-10-12): the State column and the toggle that adds the revoked rows.
   COL_STATE: "State",
   NONE_LIVE: "No token an admin created for someone else still works.",
-  INCLUDE_REVOKED: "Also show revoked tokens",
-  SHOWING_REVOKED: (n: number) => (n === 1 ? "Showing 1 revoked token as well." : `Showing ${n} revoked tokens as well.`),
+  INCLUDE_REVOKED: "Also show revoked and expired tokens",
+  SHOWING_REVOKED: (n: number) => (n === 1 ? "Showing 1 revoked or expired token as well." : `Showing ${n} revoked or expired tokens as well.`),
   SERVICE_IDENTITY: "Service identity:",
+  // FUG-L260: a token past its expiry that nobody revoked has nothing left to decide. Not a wire value: the
+  // console derives it from expires_at, so DISPOSITION keeps exactly the daemon's six.
+  EXPIRED: "Expired",
+  EXPIRED_SUB: "No longer works. Nothing to decide.",
   // The footnote's two command names render mono; the parts join into the sentence.
   FOOTNOTE: ["Invite the owner with ", "wardyn person invite", ", or move the token with ", "wardyn token move", ". The console does neither."],
 } as const;

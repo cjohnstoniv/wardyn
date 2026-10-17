@@ -8,6 +8,7 @@
 
 import { NR_REVIEW } from "../../../wardyn/copy/new-run/review";
 import { NR_RUN } from "../../../wardyn/copy/new-run/run";
+import { NR_TOOLS } from "../../../wardyn/copy/new-run/tools";
 import { NR_SHARED } from "../../../wardyn/copy/new-run/shared";
 import type { PolicyPreviewResult } from "../../../../lib/types/policy-preview";
 import type { ConfinementClass } from "../../../../lib/types/runs";
@@ -25,6 +26,9 @@ export interface PolicyRow {
   barrier?: ConfinementClass;
   detail?: string;
 }
+
+/** The tool default's effect in the canon's words: Hold and Run automatically as Review has them, Block it as the tool rules do. */
+const EFFECT_VALUE: Record<string, string> = { allow: NR_REVIEW.POLICY_AUTOMATIC, hold: NR_REVIEW.POLICY_HOLD, deny: NR_TOOLS.EFFECT_DENY };
 
 const joined = (...parts: (string | undefined)[]): string | undefined =>
   parts.filter((p): p is string => !!p).reduce<string | undefined>((all, p) => (all ? NR_SHARED.JOIN(all, p) : p), undefined);
@@ -52,7 +56,13 @@ export function changedRows(intent: RunIntent, base: RunIntent): Set<PolicyRowId
 
 const FILE_KEYS = ROW_KEYS.files;
 
-export function policyRows(draft: NewRunDraft, pre: ReviewPreflight | null, preview: PolicyPreviewResult | null): PolicyRow[] {
+export function policyRows(
+  draft: NewRunDraft,
+  pre: ReviewPreflight | null,
+  preview: PolicyPreviewResult | null,
+  /** A harness's display name; its id until the roster answers. */
+  harnessLabel: (id: string) => string = (id) => id,
+): PolicyRow[] {
   const { intent } = draft;
   const ctx = { draft, pre, preview };
   const access = pre?.access ?? preview?.access;
@@ -87,8 +97,16 @@ export function policyRows(draft: NewRunDraft, pre: ReviewPreflight | null, prev
   const names = joined(...(pre?.attachments ?? []).map((a) => a.name));
   rows.push({ id: "files", label: NR_REVIEW.POLICY_FILES, value: names ?? NR_REVIEW.WORK_NONE, detail: serverSource(ctx, { fields: ["workspace_mounts", "workspace_repos"] }) ?? draftSource(draft, FILE_KEYS, NR_REVIEW.PROV_ADDED) });
 
-  const effect = access?.harnesses[0]?.default;
-  const holds = effect ? effect.effective === "hold" : intent.tool_approvals === "hold";
-  rows.push({ id: "tools", label: NR_REVIEW.POLICY_TOOLS, value: holds ? NR_REVIEW.POLICY_HOLD : NR_REVIEW.POLICY_AUTOMATIC, detail: effect?.source.name });
+  // One value per distinct default across the included harnesses, so a mixed set is not summarised by its first.
+  // When they differ each says which harness it is for; when they agree it is one value and its source policy.
+  const defaults = (access?.harnesses ?? []).flatMap((h) => (h.default ? [{ harness: h.harness, default: h.default }] : []));
+  const effectOf = (d: { default: { effective: string } }) => EFFECT_VALUE[d.default.effective] ?? NR_REVIEW.POLICY_HOLD;
+  const effects = [...new Set(defaults.map(effectOf))];
+  const value = !defaults.length
+    ? intent.tool_approvals === "hold" ? NR_REVIEW.POLICY_HOLD : NR_REVIEW.POLICY_AUTOMATIC
+    : effects.length > 1
+      ? joined(...defaults.map((d) => NR_REVIEW.POLICY_TOOLS_OF(harnessLabel(d.harness), effectOf(d))))
+      : effects[0];
+  rows.push({ id: "tools", label: NR_REVIEW.POLICY_TOOLS, value, detail: effects.length === 1 ? defaults[0].default.source.name : undefined });
   return rows;
 }

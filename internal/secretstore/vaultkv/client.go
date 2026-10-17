@@ -63,6 +63,9 @@ type client struct {
 }
 
 // vaultError is a non-2xx answer. status 0 is a transport failure.
+// maxVaultResponse caps one Vault response body (16 MiB).
+const maxVaultResponse = 16 << 20
+
 type vaultError struct {
 	method, path string
 	status       int
@@ -291,9 +294,14 @@ func (c *client) once(ctx context.Context, method, path string, in, out any, aut
 		return 0, &vaultError{method: method, path: path, cause: err}
 	}
 	defer resp.Body.Close()
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	// Read one byte past the cap: a LIST of a large mount is legitimately big,
+	// and a truncated body must never reach the decoder as if it were whole.
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxVaultResponse+1))
 	if err != nil {
 		return 0, &vaultError{method: method, path: path, cause: err}
+	}
+	if len(raw) > maxVaultResponse {
+		return resp.StatusCode, fmt.Errorf("vault %s %s: response is over %d bytes", method, path, maxVaultResponse)
 	}
 	switch {
 	case resp.StatusCode == http.StatusNotFound && method == http.MethodGet:

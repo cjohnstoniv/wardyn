@@ -186,7 +186,7 @@ export function MintTokenDialog({
               )}
               <DialogFooter>
                 <Button type="button" variant="ghost" disabled={busy} onClick={() => onOpenChange(false)}>
-                  Cancel
+                  {RUNNER.CANCEL}
                 </Button>
                 <Button type="submit" disabled={busy || person.trim() === ""}>
                   {busy && <Loader2 className="size-3.5 animate-spin" />}

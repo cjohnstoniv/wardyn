@@ -44,4 +44,6 @@ export const REAUTH_RENEW = {
 // mock froze the body sentence but not the button under it.
 export const REAUTH_EXTRA = {
   GO_TO_RUNS: "Go to Runs",
+  // DR-0020: the dialog's body when the session ended because the person signed out in another tab.
+  SIGNED_OUT_ELSEWHERE: "You signed out in another tab. Sign in again and this page carries on — nothing here has been lost.",
 } as const;

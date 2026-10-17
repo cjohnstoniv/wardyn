@@ -212,6 +212,12 @@ func (s *Server) handleAttachTicket(w http.ResponseWriter, r *http.Request) {
 		writeErrorReason(w, http.StatusConflict, reasonAttachRunKept, "run has ended; cannot attach")
 		return
 	}
+	// The per-run session cap is also checked here, where the refusal can carry its reason; the
+	// WebSocket upgrade enforces it again, since slots can fill between the ticket and the upgrade.
+	if s.attachSlotsFull(run.ID) {
+		writeErrorReason(w, http.StatusServiceUnavailable, reasonAttachSessionCapReached, attachSessionCapMsg)
+		return
+	}
 	at, principal := actorFromRequest(r)
 	// DELIBERATELY isOperator — this role field means exactly "reaches runs its
 	// holder does not own" (attach.go's == oidc.RoleAdmin consume check), never

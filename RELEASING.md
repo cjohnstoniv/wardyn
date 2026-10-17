@@ -483,15 +483,16 @@ gh api -X PATCH repos/cjohnstoniv/wardyn/branches/main/protection/required_statu
     "trivy (wardynd)", "trivy (wardyn-proxy)", "trivy (agent-base)",
     "trivy (agent-codex-cli)", "trivy (agent-aws-sso)",
     "trivy (agent-vscode)", "trivy (agent-novnc)",
-    "trivy (wardynd-fips)", "trivy (wardyn-runnerd)"
+    "trivy (wardynd-fips)", "runner-units", "trivy (wardyn-runnerd)"
   ]
 }
 JSON
 ```
 
 - The first 24 contexts are the ones `main` requires today, read back on 2026-10-06 with the command below.
-- The last two, **`trivy (wardynd-fips)` and `trivy (wardyn-runnerd)`, are not required today**: their jobs run and report on every pull request, but neither blocks a merge until the owner runs this PATCH.
-- Run as written, the command drops nothing required now and adds those two.
+- The last three, **`trivy (wardynd-fips)`, `runner-units` and `trivy (wardyn-runnerd)`**, are not required today.
+- Their jobs report on every pull request, but a red one blocks no merge until the owner runs this PATCH.
+- Run as written, the command drops nothing that is required now and adds those three contexts.
 - The PATCH replaces the whole list, so read the live list back first: a context that is live and missing from this body would be dropped.
 
 - Every context in the list reports on every pull request, as skipped when the change cannot affect it ([docs/CI.md](docs/CI.md), "Incremental CI"), so each is an eligible context.
@@ -551,9 +552,10 @@ JSON
     provenance, publishes the Helm chart to `oci://ghcr.io/cjohnstoniv/charts`,
     - and uploads the SBOMs, notices, `install.sh`, the four `wardyn-<os>-<arch>`
       CLI binaries, the four `wardyn-runnerd-<os>-<arch>` runner binaries,
-      `wardyn-runner-units.tar.gz` and a cosign-signed `SHA256SUMS` to the Release —
+      `wardyn-runner-units.tar.gz`, `wardyn-runnerd.pkg` and a cosign-signed `SHA256SUMS` to the Release —
     - failing if any asset did not land (the required set is the `for want in …`
       list in `release.yml`'s "Assert every required asset actually landed").
+  - `wardyn-runnerd.pkg`, the macOS runner package, comes from the `runner-pkg` job and stays unsigned until the owner adds the `APPLE_DEVELOPER_ID_*` and `APPLE_NOTARY_*` secrets ([docs/CI.md](docs/CI.md)).
   - The supply-chain artifacts are no longer yours to remember; the demo videos
     in step 7 still are.
   - Each is a **multi-arch index** covering `linux/amd64` and `linux/arm64`

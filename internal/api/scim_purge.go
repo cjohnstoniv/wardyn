@@ -108,7 +108,9 @@ func (s *Server) finishPurge(ctx context.Context, st scimStore, id uuid.UUID, sl
 		return s.refuseUnproved(ctx, st, ident, forms.unproved)
 	}
 	forms = forms.destructive()
-	isEmail := func(t string) bool { return strings.Contains(t, "@") && !slices.Contains(forms.bound, t) }
+	isEmail := func(t string) bool {
+		return strings.Contains(t, "@") && !slices.Contains(forms.bound, t) && !slices.Contains(forms.named, t)
+	}
 	principals := slices.DeleteFunc(slices.Clone(forms.targets), isEmail)
 	emails := slices.DeleteFunc(slices.Clone(forms.targets), func(t string) bool { return !isEmail(t) })
 	keys := []store.JobKey{{Step: jobStepWorkspaces}, {Step: jobStepGrants}, {Step: jobStepRunners}, {Step: jobStepInvites}, {Step: jobStepSponsor}}
@@ -122,14 +124,19 @@ func (s *Server) finishPurge(ctx context.Context, st scimStore, id uuid.UUID, sl
 	if err != nil {
 		return err
 	}
+	// The owed rows are durable on the ledger, so a drain that cannot finish never holds the purge's steps.
+	if err := s.drainRefusalAudits(ctx, st, ident, store.JobKindPurge, jobs); err != nil {
+		slog.WarnContext(ctx, "api: an owed refusal row was not written and stays owed", slog.String("identity", id.String()), slog.Any("err", err))
+	}
 	steps := []error{
 		s.purgeStep(ctx, st, id, jobs, store.JobKey{Step: jobStepWorkspaces}, func() (map[string]int, error) {
 			return s.reassignWorkspaces(ctx, forms.targets)
 		}),
 		s.purgeStep(ctx, st, id, jobs, store.JobKey{Step: jobStepGrants}, func() (map[string]int, error) {
 			// An address another principal holds keeps its rows: it can be a recycled one, and those are the new holder's.
-			grants, assignments, kept, err := st.DeleteUserSubjectRows(ctx, id, principals, emails)
-			return map[string]int{"grants_deleted": int(grants), "assignments_deleted": int(assignments), "email_rows_kept": int(kept)}, err
+			n, err := st.DeleteUserSubjectRows(ctx, id, principals, emails)
+			return map[string]int{"grants_deleted": int(n.Grants), "assignments_deleted": int(n.Assignments), "email_rows_kept": int(n.Kept),
+				"pools_narrowed": int(n.PoolsNarrowed), "pools_emptied": int(n.PoolsEmptied)}, err
 		}),
 		s.purgeStep(ctx, st, id, jobs, store.JobKey{Step: jobStepRunners}, func() (map[string]int, error) {
 			return s.revokeLeaverRunners(ctx, principals)
@@ -159,6 +166,7 @@ func (s *Server) finishPurge(ctx context.Context, st scimStore, id uuid.UUID, sl
 
 // refuseUnproved stops a purge whose leaver's entra form c is not proved theirs. The refusal is held on the
 // ledger's audit step, where /scim/status lists it; a retry that finds it there writes no second denied row.
+// A row neither the store nor the audit spool accepted is owed (oweRefusalAudit) until a drain writes it.
 // No retry finishes it, so the refusal says what an admin does instead.
 func (s *Server) refuseUnproved(ctx context.Context, st scimStore, ident store.PrincipalIdentity, c string) error {
 	id := ident.ID
@@ -172,11 +180,15 @@ func (s *Server) refuseUnproved(ctx context.Context, st scimStore, ident store.P
 	if err != nil {
 		return err
 	}
-	if j, ok := jobByKey(jobs, key.Step, key.Target); !ok || j.LastError != refused.Error() {
-		s.recordAudit(ctx, s.auditEvent(nil, types.ActorSystem, scimActor, "person.deprovision", id.String(), "denied",
-			mustJSON(map[string]any{"kind": store.JobKindPurge, "reason": reasonOwnerAmbiguous, "unproved": c})))
+	if err := s.drainRefusalAudits(ctx, st, ident, store.JobKindPurge, jobs); err != nil {
+		return err
 	}
-	return errors.Join(refused, st.FailDeprovisionJob(ctx, id, store.JobKindPurge, key, refused))
+	var owed error
+	if j, ok := jobByKey(jobs, key.Step, key.Target); (!ok || j.LastError != refused.Error()) &&
+		!s.recordDeprovisionRefusal(ctx, ident, store.JobKindPurge, "denied", reasonOwnerAmbiguous, c) {
+		owed = oweRefusalAudit(ctx, st, id, store.JobKindPurge, store.JobKey{Step: store.JobStepRefusalAudit + "denied/" + reasonOwnerAmbiguous, Target: c})
+	}
+	return errors.Join(refused, owed, st.FailDeprovisionJob(ctx, id, store.JobKindPurge, key, refused))
 }
 
 // purgeStep runs fn unless the ledger already holds key done, and records the outcome.
@@ -222,9 +234,10 @@ func (s *Server) eraseForPurge(ctx context.Context, principal string) (map[strin
 
 // revokeLeaverRunners revokes every runner the owners hold through the runner revoke path, as DELETE
 // /runners/{id} does, and every registration token still redeemable for them, as DELETE
-// /runners/tokens/{id} does. A store without runners holds none.
+// /runners/tokens/{id} does, then clears the owners as the revoker of any runner and the minter of any
+// token for someone else. A store without runners holds none.
 func (s *Server) revokeLeaverRunners(ctx context.Context, owners []string) (map[string]int, error) {
-	detail := map[string]int{"runners_revoked": 0, "runner_tokens_revoked": 0}
+	detail := map[string]int{"runners_revoked": 0, "runner_tokens_revoked": 0, "runner_attribution_cleared": 0}
 	st, ok := s.cfg.Store.(store.PG)
 	if !ok {
 		return detail, nil
@@ -263,6 +276,11 @@ func (s *Server) revokeLeaverRunners(ctx context.Context, owners []string) (map[
 				mustJSON(map[string]any{"owner": t.Owner, "minted_by": t.MintedBy, "expires_at": t.ExpiresAt})))
 			detail["runner_tokens_revoked"]++
 		}
+		cleared, err := st.EraseRunnerAttributionOf(ctx, owner)
+		if err != nil {
+			return nil, err
+		}
+		detail["runner_attribution_cleared"] += cleared
 	}
 	return detail, nil
 }
@@ -308,7 +326,7 @@ func eraseLeaverSponsorships(ctx context.Context, st store.Store, principals []s
 		sponsored = append(sponsored, names...)
 	}
 	if len(sponsored) > 0 {
-		return nil, fmt.Errorf("%w: %s; hand each to another sponsor (PATCH /service-identities/{name}) or retire it (DELETE)",
+		return nil, fmt.Errorf("%w; hand each to another sponsor (PATCH /service-identities/{name}) or retire it (DELETE): %s",
 			errStillSponsoring, strings.Join(sponsored, ", "))
 	}
 	return detail, nil
@@ -435,8 +453,9 @@ func (s *Server) auditPurge(ctx context.Context, st scimStore, id uuid.UUID, for
 	key := store.JobKey{Step: store.JobStepAuditDeprovision}
 	data := map[string]any{
 		"kind": store.JobKindPurge, "credentials_erased": counts["credentials_erased"], "masks_fenced": counts["masks_fenced"], "components_erased": counts["components_erased"],
-		"templates_erased": counts["templates_erased"], "workspaces_reassigned": counts["workspaces_reassigned"], "grants_deleted": counts["grants_deleted"],
+		"runner_pools_deleted": counts["runner_pools_deleted"], "templates_erased": counts["templates_erased"], "workspaces_reassigned": counts["workspaces_reassigned"], "grants_deleted": counts["grants_deleted"],
 		"assignments_deleted": counts["assignments_deleted"], "email_rows_kept": counts["email_rows_kept"], "drives": drives,
+		"pools_narrowed": counts["pools_narrowed"], "pools_emptied": counts["pools_emptied"],
 		"granted_drives": granted,
 	}
 	if len(memberIDs) > 0 {
@@ -450,6 +469,19 @@ func (s *Server) auditPurge(ctx context.Context, st scimStore, id uuid.UUID, for
 		return errors.Join(err, st.FailDeprovisionJob(ctx, id, store.JobKindPurge, key, err))
 	}
 	return st.FinishDeprovisionJob(ctx, id, store.JobKindPurge, key, nil)
+}
+
+// drainOwedRefusals drains the refusal rows one identity's ledger of one kind still owes.
+func (s *Server) drainOwedRefusals(ctx context.Context, st scimStore, o store.PendingRefusalAudit) error {
+	ident, err := st.GetIdentity(ctx, o.IdentityID)
+	if err != nil {
+		return err
+	}
+	jobs, err := st.ListDeprovisionJobs(ctx, o.IdentityID, o.Kind)
+	if err != nil {
+		return err
+	}
+	return s.drainRefusalAudits(ctx, st, ident, o.Kind, jobs)
 }
 
 // SweepSCIMPurge is one tick of the purge sweeper, run on the elected sweeper leader: it purges every
@@ -504,6 +536,16 @@ func (s *Server) SweepSCIMPurge(ctx context.Context) error {
 			err = s.removeGroupMember(ctx, st, g, p.IdentityID, scimSweeperSlot, true)
 		}
 		errs = append(errs, err)
+	}
+	// An owed refusal row is drained whatever became of the person since: a reactivated person or a member
+	// added back is no longer leaver or mover work above (run last, so a row those resumes just drained or
+	// touched is not idle here and their resume is not held by this touch), but the row is owed all the same.
+	// TestSCIMSuspensionWritesAnOwedRefusalRowAfterTheReasonChanges and
+	// TestSCIMGroupRemovalWritesAnOwedRefusalRowAfterTheReasonChanges pin this loop-last order.
+	owed, err := st.PendingRefusalAudits(ctx, scimResumeIdle, scimSweepBatch)
+	errs = append(errs, err)
+	for _, o := range owed {
+		errs = append(errs, s.drainOwedRefusals(ctx, st, o))
 	}
 	return errors.Join(errs...)
 }

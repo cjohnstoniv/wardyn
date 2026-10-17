@@ -96,12 +96,15 @@ func sameRunnerAction(a, b types.RunnerPendingAction) bool {
 }
 
 // lockRunnerActionRun takes the shared order runner FOR SHARE → run FOR UPDATE
-// → execution FOR UPDATE. The owner comes from the stored claimed runner only.
-// A runner that is not claimed, or a run that is gone, is ErrNotFound; a run
-// bound to another runner, owner or placement is ErrRunnerActionRefused.
+// → execution FOR UPDATE. The action's owner is the run's creator: on a
+// person's runner that must be the stored owner, and an org runner (owner
+// empty) binds to whoever created the run. A runner that is not claimed, or a
+// run that is gone, is ErrNotFound; a run bound to another runner, owner or
+// placement is ErrRunnerActionRefused.
 func lockRunnerActionRun(ctx context.Context, tx pgx.Tx, runnerID, runID uuid.UUID) (string, types.AgentRun, uuid.UUID, error) {
-	var owner string
-	err := tx.QueryRow(ctx, `SELECT owner FROM runners WHERE id = $1 AND state = 'claimed' AND revoked_at IS NULL AND owner <> '' FOR SHARE`, runnerID).Scan(&owner)
+	var owner, ownerKind string
+	err := tx.QueryRow(ctx, `SELECT owner, owner_kind FROM runners WHERE id = $1 AND state = 'claimed' AND revoked_at IS NULL
+		AND (owner <> '' OR owner_kind = 'org') FOR SHARE`, runnerID).Scan(&owner, &ownerKind)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return "", types.AgentRun{}, uuid.Nil, ErrNotFound
 	}
@@ -112,9 +115,11 @@ func lockRunnerActionRun(ctx context.Context, tx pgx.Tx, runnerID, runID uuid.UU
 	if err != nil {
 		return "", types.AgentRun{}, uuid.Nil, err
 	}
-	if run.RunnerID == nil || *run.RunnerID != runnerID || run.CreatedBy != owner || run.Placement != types.PlacementLocal {
+	if run.RunnerID == nil || *run.RunnerID != runnerID || run.CreatedBy == "" || !runnerReportsOn(ownerKind, owner, run.CreatedBy) ||
+		run.Placement != types.PlacementLocal {
 		return "", types.AgentRun{}, uuid.Nil, ErrRunnerActionRefused
 	}
+	owner = run.CreatedBy
 	current, err := readRunnerExecution(ctx, tx, runID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return owner, run, uuid.Nil, nil
@@ -344,9 +349,16 @@ func (s PG) RecordRunnerActionResult(ctx context.Context, runnerID, runID, actio
 		return a, false, tx.Commit(ctx)
 	}
 	// A refusal changed nothing on the runner, so it closes the action even
-	// when the run has since moved on.
+	// when the run has since moved on. A retirement's kill or retire_run is
+	// held instead to the binding snapshot its run's cleared ref left.
 	if outcome != types.RunnerActionRefused && (run.SandboxRef != a.Ref || generation != a.Generation) {
-		return types.RunnerPendingAction{}, false, ErrRunnerActionRefused
+		bound, err := retirementBindsResultTx(ctx, tx, a)
+		if err != nil {
+			return types.RunnerPendingAction{}, false, err
+		}
+		if !bound {
+			return types.RunnerPendingAction{}, false, ErrRunnerActionRefused
+		}
 	}
 	a, err = scanAction(tx.QueryRow(ctx, `UPDATE runner_pending_actions SET applied_at = clock_timestamp(), outcome = $2, observed_at = $3
 		WHERE id = $1 AND applied_at IS NULL RETURNING `+actionCols, actionID, outcome, observedAt))
@@ -357,6 +369,9 @@ func (s PG) RecordRunnerActionResult(ctx context.Context, runnerID, runID, actio
 		if err := recordRunnerActionRefusalTx(ctx, tx, a, &runID, reason, prepare); err != nil {
 			return types.RunnerPendingAction{}, false, err
 		}
+	}
+	if err := settleRetirementResultTx(ctx, tx, a, outcome); err != nil {
+		return types.RunnerPendingAction{}, false, err
 	}
 	// A run that has since left the kept loss (killed, ended) has its own
 	// teardown record; the receipt still settles this exact action.

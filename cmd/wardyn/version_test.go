@@ -14,7 +14,7 @@ import (
 // releaseHeading matches a released CHANGELOG section heading — "## [0.4.0] — …".
 // The unreleased placeholder ("## [Unreleased]") does not match, so it may sit
 // above the newest release without confusing this.
-var releaseHeading = regexp.MustCompile(`(?m)^## \[(\d+\.\d+\.\d+)\]`)
+var releaseHeading = regexp.MustCompile(`(?m)^## \[(\d+\.\d+\.\d+(?:-rc\.\d+)?)\]`)
 
 // TestVersionMatchesChangelog pins `wardyn --version` to the newest released
 // CHANGELOG section. 0.3.1 shipped with version = "0.3.0" because nothing
@@ -64,8 +64,8 @@ func TestShippedVersionStringsAgree(t *testing.T) {
 		// names it. This is the command README's hero block and the installer's
 		// own header tell an operator to paste, so a stale tag here installs the
 		// PREVIOUS release while every machine-readable file says otherwise.
-		{"../../README.md", `releases/download/v(\d+\.\d+\.\d+)/install\.sh`},
-		{"../../install.sh", `releases/download/v(\d+\.\d+\.\d+)/install\.sh`},
+		{"../../README.md", `releases/download/v(\d+\.\d+\.\d+(?:-rc\.\d+)?)/install\.sh`},
+		{"../../install.sh", `releases/download/v(\d+\.\d+\.\d+(?:-rc\.\d+)?)/install\.sh`},
 		// values.yaml's readiness-probe note tells the operator which AppVersion
 		// the empty image.tag resolves to — the number they compare their own pin
 		// against before deciding to override the probe path.

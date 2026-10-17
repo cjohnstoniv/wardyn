@@ -4,7 +4,6 @@
 package api
 
 import (
-	"net/http"
 	"slices"
 	"strings"
 
@@ -23,20 +22,17 @@ import (
 //     sentence; launch still refuses at dispatch (the live provider row is
 //     re-read there), so no run row is created or changed by this check.
 //
-// scmSite is the snapshot resolveRunAutonomy read at the same door, and the
-// lane is resolved from it exactly as dispatch resolves it, so the answer is
-// the one dispatch will give. Zero values for a run not on the per-person lane
-// or with no list, which is every run on most installs.
-func (s *Server) adoStandingAtDoor(r *http.Request, spec types.RunPolicySpec, scmSite types.SiteConfig,
-	ceiling governanceCeiling,
+// lane is the run's lane as stepADOStanding resolved it from the snapshot
+// resolveRunAutonomy read at the same door, exactly as dispatch resolves it, so
+// the answer is the one dispatch will give. Zero values for a run not on the
+// per-person lane or with no list, which is every run on most installs.
+func adoStandingAtDoor(spec types.RunPolicySpec, lane adoEntraRun, ceiling governanceCeiling,
 ) (narrowed string, droppedCaps []adoscope.Capability, none bool) {
 	picked := spec.AzureDevOpsCapabilities
 	if len(picked) == 0 {
 		return "", nil, false
 	}
-	lane, on := resolveADOEntraRun(scmSite, repoLocatorsOf(spec.WorkspaceRepos),
-		runIdentitySubject(r.Context(), principalFromRequest(r)))
-	if !on {
+	if lane.rowID == "" {
 		return "", nil, false
 	}
 	bounded, permitted := lane.withPolicyCapabilities(picked, adoStandingFor(ceiling))

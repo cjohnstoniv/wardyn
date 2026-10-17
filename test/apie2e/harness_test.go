@@ -185,8 +185,8 @@ func (a approvalStore) CreateApproval(ctx context.Context, ar types.ApprovalRequ
 func (a approvalStore) GetApproval(ctx context.Context, id uuid.UUID) (types.ApprovalRequest, error) {
 	return store.NewPG(a.pool).GetApproval(ctx, id)
 }
-func (a approvalStore) ListApprovals(ctx context.Context, st types.ApprovalState) ([]types.ApprovalRequest, error) {
-	return store.NewPG(a.pool).ListApprovals(ctx, st)
+func (a approvalStore) ListExpiredPendingApprovals(ctx context.Context, now, cutoff time.Time, afterID uuid.UUID, limit int) ([]types.ApprovalRequest, error) {
+	return store.NewPG(a.pool).ListExpiredPendingApprovals(ctx, now, cutoff, afterID, limit)
 }
 func (a approvalStore) ListPendingApprovalsForRuns(ctx context.Context, runIDs []uuid.UUID) ([]types.ApprovalRequest, error) {
 	return store.NewPG(a.pool).ListPendingApprovalsForRuns(ctx, runIDs)

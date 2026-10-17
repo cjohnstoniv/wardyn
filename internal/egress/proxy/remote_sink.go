@@ -245,10 +245,11 @@ func (s *remoteSink) fitsLocked(need int64) bool {
 }
 
 // countRefusalLocked counts a want-of-credit refusal for Drops only when the
-// spool is genuinely full: a grant is held, exhausted, on a live session.
-// No grant yet, a disconnect, a drain, a stop or a close refuses uncounted.
+// spool is genuinely full: a grant is held and exhausted, during an outage too
+// (§6.2: the write loop forwards the total on the reconnect). No grant yet, a
+// drain, a stop or a close refuses uncounted.
 func (s *remoteSink) countRefusalLocked() {
-	if s.haveGrant && s.live && !s.draining && !s.stopped && !s.closed {
+	if s.haveGrant && !s.draining && !s.stopped && !s.closed {
 		s.refused++
 		s.cond.Broadcast()
 	}
@@ -266,6 +267,11 @@ func (s *remoteSink) reserve(ctx context.Context, need int64) (uuid.UUID, error)
 		s.cond.Wait()
 	}
 	if s.draining || s.stopped || s.closed || !s.fitsLocked(need) {
+		// A client that left refused nothing; a deadline that expired on an
+		// exhausted grant is the full spool.
+		if err := ctx.Err(); errors.Is(err, context.Canceled) {
+			return uuid.Nil, err
+		}
 		if !s.draining && !s.stopped && !s.closed {
 			s.countRefusalLocked()
 		}

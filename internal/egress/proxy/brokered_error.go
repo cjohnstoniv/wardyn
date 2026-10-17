@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/netip"
 	"strconv"
 	"strings"
 
@@ -128,7 +129,7 @@ func shapeOfVendor(vendor string) errShape {
 func (p *Proxy) gatewayVendorOf(host string) (vendor string, ok bool) {
 	h := strings.TrimSuffix(strings.ToLower(host), ".")
 	for v, u := range p.llmUpstreams {
-		if u.host != h {
+		if !sameHost(u.host, h) {
 			continue
 		}
 		if ok && vendor != v {
@@ -137,6 +138,18 @@ func (p *Proxy) gatewayVendorOf(host string) (vendor string, ok bool) {
 		vendor, ok = v, true
 	}
 	return vendor, ok
+}
+
+// sameHost compares two host names, as parsed addresses when both are IP
+// literals so that every spelling of one address (zero-compressed, mixed-case,
+// IPv4-mapped, bracketed) is the same host.
+func sameHost(a, b string) bool {
+	if a == b {
+		return true
+	}
+	x, xerr := netip.ParseAddr(strings.Trim(a, "[]"))
+	y, yerr := netip.ParseAddr(strings.Trim(b, "[]"))
+	return xerr == nil && yerr == nil && x.Unmap() == y.Unmap()
 }
 
 // gatewayFront is the vendor host a configured gateway stands for in an answer

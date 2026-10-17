@@ -151,7 +151,7 @@ func (s *Server) startQueuedRun(base context.Context, p store.PromotedRun) {
 // newQueuedStart reads the promoted run's queue row and builds the owner's context and the synthetic
 // request the replayed gates read: the owner's identity with the ceiling and capability memos a request
 // carries, so every read of the fold sees one answer. base survives a kill; prep is the context the
-// replay and the mint work on. On an unreadable row it still returns the start, so the caller can end
+// replay and the mint work on. On an unreadable row or authority it still returns the start, so the caller can end
 // the run.
 func newQueuedStart(base, prep context.Context, p store.PromotedRun) (*queuedStart, error) {
 	st := &queuedStart{run: p.Run, entry: p.Entry, base: base, daemon: base, prep: prep, cw: newQueueRefusalCapture()}
@@ -159,7 +159,10 @@ func newQueuedStart(base, prep context.Context, p store.PromotedRun) (*queuedSta
 		return st, err
 	}
 	var auth queueAuthority
-	_ = json.Unmarshal(p.Entry.Authority, &auth) //nolint:errcheck // an unreadable authority fails the owner checks
+	// An unreadable authority is the zero one, which the owner checks read as the admin token: end the run.
+	if err := json.Unmarshal(p.Entry.Authority, &auth); err != nil {
+		return st, err
+	}
 	return st, st.bind(auth)
 }
 

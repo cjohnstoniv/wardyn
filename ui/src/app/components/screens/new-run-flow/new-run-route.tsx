@@ -19,6 +19,7 @@ import { NEW_RUN_PATH, newRunHref, parseNewRunSearch, type NewRunFrom, type NewR
 import { initialDraft, type NewRunDraft, type NewRunOrigin, type RunIntent } from "./draft/run-intent";
 import { firstInvalidStep, localIssues } from "./lenses/local-issues";
 import { NEW_RUN_STEPS, type NewRunStep } from "./lenses/step-issues";
+import { usePendingLaunch, type PendingLaunch } from "./launch/use-launch-run";
 import { seedLoaders } from "./steps/shape/seed-loaders";
 import { AnnounceContext } from "./steps/step-shell";
 
@@ -31,6 +32,15 @@ export function useNewRunDraft(): NewRunDraft {
   return draft;
 }
 export const useNewRunDispatch = () => React.useContext(DispatchContext);
+
+// Whether a create is out lives with the route, not with Review: each screen is its own component, so
+// leaving Review and coming back would otherwise begin again with nothing pending and let a second run be made.
+const PendingLaunchContext = React.createContext<PendingLaunch | null>(null);
+export function useNewRunPendingLaunch(): PendingLaunch {
+  const pending = React.useContext(PendingLaunchContext);
+  if (!pending) throw new Error("useNewRunPendingLaunch outside NewRunRoute");
+  return pending;
+}
 
 export function NewRunDraftProvider({ owner, children }: { owner: string; children: React.ReactNode }) {
   const [draft, dispatch] = React.useReducer(draftReducer, owner, initialDraft);
@@ -234,14 +244,17 @@ function NewRunFlow({ loaders, screens }: { loaders: SeedLoaders; screens: Recor
 export function NewRunRoute({ loaders = seedLoaders, screens = NEW_RUN_SCREENS }: { loaders?: SeedLoaders; screens?: Record<NewRunScreenName, Screen> }) {
   const { principal, operatorResolved } = useRequestIdentity();
   const [message, setMessage] = React.useState("");
+  const pending = usePendingLaunch();
   return (
     <NewRunDraftProvider owner={operatorResolved ? principal : ""}>
-      <AnnounceContext.Provider value={setMessage}>
-        <React.Suspense fallback={null}>
-          <NewRunFlow loaders={loaders} screens={screens} />
-        </React.Suspense>
-        <div role="status" aria-live="polite" className="sr-only">{message}</div>
-      </AnnounceContext.Provider>
+      <PendingLaunchContext.Provider value={pending}>
+        <AnnounceContext.Provider value={setMessage}>
+          <React.Suspense fallback={null}>
+            <NewRunFlow loaders={loaders} screens={screens} />
+          </React.Suspense>
+          <div role="status" aria-live="polite" className="sr-only">{message}</div>
+        </AnnounceContext.Provider>
+      </PendingLaunchContext.Provider>
     </NewRunDraftProvider>
   );
 }

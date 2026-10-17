@@ -8,11 +8,13 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -37,6 +39,11 @@ type govCrudStore struct {
 	existing uuid.UUID
 }
 
+// DryRunGovernance runs nothing: a direct delete reads the row it removes for its audit row
+// (readDeleteAudit) through a database querier this fake has none of, so the row records no detail;
+// governance_delete_audit_pg_test pins what it records.
+func (s *govCrudStore) DryRunGovernance(context.Context, func(store.Querier) error) error { return nil }
+
 func (s *govCrudStore) ListGovernanceProfiles(context.Context) ([]types.GovernanceProfile, error) {
 	return s.profiles, s.listProfilesErr
 }
@@ -53,7 +60,7 @@ func (s *govCrudStore) UpsertGovernanceProfile(_ context.Context, p types.Govern
 // WriteGovernanceProfile is the composed-profile write: build decides the row from every stored
 // profile, as the real store does under its graph lock, and the row is then stored at id.
 func (s *govCrudStore) WriteGovernanceProfile(ctx context.Context, id uuid.UUID, build store.GovernanceProfileBuild) (types.GovernanceProfile, error) {
-	p, err := build(s.profiles)
+	p, err := build(s.profiles, s.assignments)
 	if err != nil {
 		return types.GovernanceProfile{}, err
 	}
@@ -351,5 +358,74 @@ func TestGovernanceCRUD_AssignmentDelete(t *testing.T) {
 	srv, _ := govCrudServer(t, &govCrudStore{})
 	if w := do(t, srv, http.MethodDelete, "/api/v1/governance/assignments/nope", adminToken, ""); w.Code != http.StatusBadRequest {
 		t.Errorf("DELETE with a bad id = %d, want 400", w.Code)
+	}
+}
+
+// composedUIAppsStore serves one assigned profile composed on a base: the base lists a UI app and
+// the overlay empties ui_apps, which resolves to the base's list together with deny_ui_apps.
+type composedUIAppsStore struct {
+	govCrudStore
+	base, leaf types.GovernanceProfile
+}
+
+func (s *composedUIAppsStore) ResolveGovernanceProfile(context.Context, []string, []string, string) (*types.GovernanceProfile, types.CapabilitySubjectType, error) {
+	return &s.leaf, types.CapabilitySubjectAll, nil
+}
+
+func (s *composedUIAppsStore) GetGovernanceProfileChain(context.Context, uuid.UUID) ([]types.GovernanceProfile, error) {
+	return []types.GovernanceProfile{s.leaf, s.base}, nil
+}
+
+// TestComposedUIAppsDenial_ReadSurfacesShowTheBasesListWithTheDenial pins what the two ceiling read
+// surfaces say about an overlay that empties ui_apps over a base that lists one: the base's list is
+// kept, and the denial is what narrows it (the admin view carries deny_ui_apps; a member's
+// /policies/default carries the list a run is clamped against).
+func TestComposedUIAppsDenial_ReadSurfacesShowTheBasesListWithTheDenial(t *testing.T) {
+	docs := []types.UIApp{{Name: "docs", Port: 8000}}
+	base := types.GovernanceProfile{ID: uuid.New(), Name: "base", Ceiling: types.RunPolicySpec{
+		AllowedDomains: []string{"pypi.org"}, MinConfinementClass: types.CC2, UIApps: docs}}
+	empty := []types.UIApp{}
+	domains := []string{"pypi.org"}
+	leaf := types.GovernanceProfile{ID: uuid.New(), Name: "leaf", BaseProfileID: &base.ID,
+		Overlay: &types.CeilingOverlay{AllowedDomains: &domains, UIApps: &empty}}
+	st := &composedUIAppsStore{base: base, leaf: leaf}
+	st.profiles = []types.GovernanceProfile{base, leaf}
+
+	h := newHarness(t)
+	w := do(t, New(baseTestConfig(h, st)), http.MethodGet, "/api/v1/governance", adminToken, "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET /governance = %d %s", w.Code, w.Body)
+	}
+	var got governanceResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	var seen bool
+	for _, p := range got.Profiles {
+		if p.ID != leaf.ID {
+			continue
+		}
+		seen = true
+		if !p.Effective.Limits.DenyUIApps || !slices.Equal(p.Effective.Ceiling.UIApps, docs) {
+			t.Errorf("effective view = ui_apps %+v, deny_ui_apps %v; want the base's list with the denial", p.Effective.Ceiling.UIApps, p.Effective.Limits.DenyUIApps)
+		}
+	}
+	if !seen {
+		t.Fatalf("the composed profile is not in the view: %s", w.Body)
+	}
+
+	cfg := baseTestConfig(newHarness(t), st)
+	cfg.OIDC = &oidc.Authenticator{}
+	cfg.DefaultPolicy = govDeployment()
+	w = doSSO(t, New(cfg), http.MethodGet, "/api/v1/policies/default", govSession(t, "sub-walled", []string{"eng"}, false), "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET /policies/default = %d %s", w.Code, w.Body)
+	}
+	var def defaultPolicyResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &def); err != nil {
+		t.Fatal(err)
+	}
+	if def.GovernanceProfileName != "leaf" || !slices.Equal(def.UIApps, docs) {
+		t.Errorf("/policies/default = profile %q, ui_apps %+v; want the composed profile and the base's list", def.GovernanceProfileName, def.UIApps)
 	}
 }

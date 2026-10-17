@@ -96,7 +96,7 @@ func TestServeArchEnvRefusedOnDocker(t *testing.T) {
 	t.Setenv(archEnv, "amd64")
 	cmd := newServeCommand(nil)
 	cmd.SetArgs([]string{"--org", "https://wardyn.example.com", "--state-dir", t.TempDir()})
-	if err := cmd.Execute(); err == nil || !strings.Contains(err.Error(), "--arch applies only to --substrate=k8s") {
+	if err := cmd.Execute(); err == nil || !strings.Contains(err.Error(), archEnv+" in the environment) applies only to --substrate=k8s") {
 		t.Fatalf("docker serve with %s = %v, want the k8s-only refusal", archEnv, err)
 	}
 }

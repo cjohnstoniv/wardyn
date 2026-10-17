@@ -282,9 +282,8 @@ type managedSettingsRun struct {
 // runner it could be bound to has the same gap.
 //
 // The run is read once the gate may have derived its hold and the tool lane has
-// settled, and through requestIsInteractive: preflight never runs the no-task
-// coercion, so the raw field would disagree with the launch about which lane a
-// task-less run takes.
+// settled, and through requestIsInteractive, so a task-less run takes the same
+// lane here as at launch whichever door coerced it.
 func (s *Server) managedSettingsUndeliveredWarning(ctx context.Context, f managedSettingsRun, bound *types.AgentRun) []string {
 	req := f.req
 	if req.TaskMode == "exec" {

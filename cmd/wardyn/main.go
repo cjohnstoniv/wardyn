@@ -129,7 +129,8 @@ func exitCodeFor(err error) int {
 // credential on the wire on every request (and on the attach WebSocket, which
 // inherits the same --url). Advisory only, never a refusal — a TLS-terminating
 // reverse proxy or a CI-internal topology is legitimate; WARDYN_CLI_ALLOW_PLAINTEXT
-// silences it.
+// silences it. `run ssh` and `sync` go further and refuse (refusePlainHTTPGateway),
+// whatever this variable says.
 //
 // ponytail: fourth inline loopback predicate in the tree (internal/api/http.go,
 // cmd/wardynd/main.go, internal/egress/proxy/policy.go) — all unexported and

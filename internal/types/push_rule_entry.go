@@ -233,6 +233,11 @@ func PushRuleEntryOfRemoteAt(provider, remote, basePath string) (host, org strin
 		return "", "", err
 	}
 	org = segs[0]
+	if provider == string(GitProviderGitHub) && len(segs) < 2 {
+		// A GitHub repository is always {owner}/{repository}: a lone segment names no repository, so
+		// the push would not land under the owner read here.
+		return "", "", fmt.Errorf("remote %q has no {owner}/{repository} path", remote)
+	}
 	if provider == string(GitProviderAzureDevOps) {
 		switch {
 		case h == "ssh.dev.azure.com" || h == azureLegacySSHHost:

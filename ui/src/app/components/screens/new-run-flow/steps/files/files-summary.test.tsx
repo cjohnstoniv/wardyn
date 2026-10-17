@@ -7,7 +7,7 @@ import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { FilesSummary, SUMMARY_DEBOUNCE_MS, summaryText, type SummaryFacts } from "./files-summary";
 
-const BASE: SummaryFacts = { size: "4", noExtra: false, chosen: true, startsName: "payments", keptDrives: [], life: { kind: "deleted" } };
+const BASE: SummaryFacts = { size: "4 GiB", noExtra: false, chosen: true, startsName: "payments", keptDrives: [], life: { kind: "deleted" } };
 
 describe("summaryText", () => {
   it("joins the main drive, where it starts, the kept drives and folders as one list, and the lifecycle", () => {

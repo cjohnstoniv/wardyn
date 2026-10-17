@@ -7,7 +7,7 @@
 // intents. A failed read throws the server's own sentence (HttpError).
 
 import { asJson, wfetch } from "../../../../../lib/api/core";
-import type { LaunchIntent, LaunchIntentList } from "../../../../../lib/new-run-fixtures/scenarios/templates";
+import type { LaunchIntent, LaunchIntentList } from "../../../../../lib/types/launch-intents";
 import type { Template, TemplateList } from "../../../../../lib/types/templates";
 
 export const templateSource = {

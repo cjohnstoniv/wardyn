@@ -89,6 +89,36 @@ func TestProxyExtraHostsFollowTheRelayTarget(t *testing.T) {
 	}
 }
 
+// TestRelayTargetInsideTheRunSubnetRefusesTheCreate: the fake daemon gives a run 10.88.0.0/16. A relay
+// target inside it would be routed onto the proxy's own bridge, so the create is refused before a
+// proxy exists and nothing is left behind; a target outside it, and host-gateway, are not affected.
+func TestRelayTargetInsideTheRunSubnetRefusesTheCreate(t *testing.T) {
+	for _, tc := range []struct {
+		target  string
+		refused bool
+	}{{"10.88.0.5", true}, {"10.89.0.5", false}, {"host-gateway", false}} {
+		f := newFakeDocker()
+		f.images["busybox:latest"] = true
+		d := newTestDriver(f)
+		d.cfg.ControlPlaneRelay = func(*url.URL) (string, error) { return tc.target, nil }
+		spec := testSpec()
+		spec.ProxyConfig.ControlPlaneURL = "https://wardynd.internal:8443"
+		_, err := d.CreateSandbox(context.Background(), spec)
+		if tc.refused {
+			if err == nil || !strings.Contains(err.Error(), "10.88.0.0/16") || !strings.Contains(err.Error(), "--relay-host-target") {
+				t.Fatalf("target %s: %v; want a refusal naming the run's subnet and the remedy", tc.target, err)
+			}
+			if c := f.containers[proxyContainerName(spec.RunID)]; c != nil && !c.removed {
+				t.Fatalf("target %s: a proxy was left behind by the refused create", tc.target)
+			}
+			continue
+		}
+		if err != nil {
+			t.Fatalf("target %s: %v", tc.target, err)
+		}
+	}
+}
+
 // TestProxyExtraHostsWithoutARelayAreUnchanged pins wardynd: no relay callback leaves the
 // proxy's hosts exactly the host-mode alias, as before.
 func TestProxyExtraHostsWithoutARelayAreUnchanged(t *testing.T) {

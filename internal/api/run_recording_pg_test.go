@@ -68,7 +68,7 @@ func TestPG_RecordingRequired_RefusesARunnerThatDoesNotRecord(t *testing.T) {
 		t.Fatal(err)
 	}
 	org.Recording = types.RecordingRequired
-	if err := e.pg.PutRunnerPoolOrgDefaults(context.Background(), org, "admin"); err != nil {
+	if _, _, err := e.pg.PutRunnerPoolOrgDefaults(context.Background(), org, "admin"); err != nil {
 		t.Fatal(err)
 	}
 	refusedOff("organisation requires")
@@ -77,8 +77,8 @@ func TestPG_RecordingRequired_RefusesARunnerThatDoesNotRecord(t *testing.T) {
 		t.Fatalf("organisation requires, runner records: %+v", r.body)
 	}
 
-	org.Recording = ""
-	if err := e.pg.PutRunnerPoolOrgDefaults(context.Background(), org, "admin"); err != nil {
+	org.Recording = types.RecordingPreferred
+	if _, _, err := e.pg.PutRunnerPoolOrgDefaults(context.Background(), org, "admin"); err != nil {
 		t.Fatal(err)
 	}
 	e.setRecords(id, false)
@@ -146,7 +146,7 @@ func (e *placementEnv) requireRecording(rec types.RecordingRequirement) {
 		e.t.Fatal(err)
 	}
 	org.Recording = rec
-	if err := e.pg.PutRunnerPoolOrgDefaults(context.Background(), org, "admin"); err != nil {
+	if _, _, err := e.pg.PutRunnerPoolOrgDefaults(context.Background(), org, "admin"); err != nil {
 		e.t.Fatal(err)
 	}
 }
@@ -215,7 +215,10 @@ func TestPG_RecordingRequired_HoldsARunWithNoPool(t *testing.T) {
 	t.Run("create", func(t *testing.T) {
 		wired := e.srv.cfg.Runner
 		e.srv.cfg.Runner = nil // pools place no run: every run is unpooled
-		t.Cleanup(func() { e.srv.cfg.Runner, e.srv.cfg.RecordingStore = wired, nil; e.requireRecording("") })
+		t.Cleanup(func() {
+			e.srv.cfg.Runner, e.srv.cfg.RecordingStore = wired, nil
+			e.requireRecording(types.RecordingPreferred)
+		})
 		local := createRunRequest{Agent: "claude-code", Placement: types.PlacementLocal, RunnerID: id.String()}
 		resolve := func(req createRunRequest) *runRefusal {
 			_, r := e.srv.resolvePlacement(ctx, placementInput{req: &req, reqCCOK: true, ceiling: ceiling})
@@ -269,7 +272,7 @@ func TestPG_RecordingRequired_HoldsARunWithNoPool(t *testing.T) {
 			if tc.required {
 				e.requireRecording(types.RecordingRequired)
 			} else {
-				e.requireRecording("")
+				e.requireRecording(types.RecordingPreferred)
 			}
 			run := starting()
 			var spec runner.SandboxSpec
@@ -322,4 +325,63 @@ func TestPG_QueuedRunWaitsForARecordingRunner(t *testing.T) {
 	e.runner.execFacts["alpha"] = f
 	e.sweep()
 	e.waitStarted(waiting.ID)
+}
+
+// TestPG_DefaultsWriteWithoutRecordingKeepsIt: a write of the organisation's defaults that leaves
+// recording out (the console's Make default, a CLI older than recording) keeps required; only a
+// write that names recording changes it. A pool update that leaves recording out keeps its own too.
+func TestPG_DefaultsWriteWithoutRecordingKeepsIt(t *testing.T) {
+	e := newPlacementEnv(t)
+	fs, err := recording.NewFSStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.srv.cfg.RecordingStore = fs
+	ci := e.createPool("CI jobs", types.RunnerPoolOrganization)
+	stored := func(when string, want types.RecordingRequirement) {
+		t.Helper()
+		d, err := e.pg.GetRunnerPoolOrgDefaults(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if d.Recording != want {
+			t.Fatalf("%s: stored recording = %q, want %q", when, d.Recording, want)
+		}
+	}
+	put := func(when, body string) {
+		t.Helper()
+		if w := e.admin(http.MethodPut, "/api/v1/runner-pool-defaults", body); w.Code != http.StatusOK {
+			t.Fatalf("%s = %d %s", when, w.Code, w.Body)
+		}
+	}
+	put("require recording", `{"recording":"required"}`)
+	put("make a pool the default", fmt.Sprintf(`{"pool_id":%q}`, ci.ID))
+	stored("make a pool the default", types.RecordingRequired)
+	put("clear the default", `{}`)
+	stored("clear the default", types.RecordingRequired)
+	put("lower recording", `{"recording":"preferred"}`)
+	stored("lower recording", types.RecordingPreferred)
+	put("require recording again", `{"recording":"required"}`)
+	put("lower recording with an empty value", `{"recording":""}`)
+	stored("lower recording with an empty value", types.RecordingPreferred)
+
+	// The keep is the store's, against the row it writes, not a read the handler made earlier.
+	put("require recording again", `{"recording":"required"}`)
+	_, got, err := e.pg.PutRunnerPoolOrgDefaults(context.Background(), types.RunnerPoolDefaults{}, "admin")
+	if err != nil || got.Recording != types.RecordingRequired {
+		t.Fatalf("store write without recording = %+v, %v; want required kept", got, err)
+	}
+	stored("store write without recording", types.RecordingRequired)
+
+	if w := e.admin(http.MethodPut, "/api/v1/runner-pools/"+ci.ID.String(),
+		fmt.Sprintf(`{"revision":%d,"recording":"required"}`, e.revision(ci.ID))); w.Code != http.StatusOK {
+		t.Fatalf("require recording on the pool = %d %s", w.Code, w.Body)
+	}
+	if w := e.admin(http.MethodPut, "/api/v1/runner-pools/"+ci.ID.String(),
+		fmt.Sprintf(`{"revision":%d,"name":"CI"}`, e.revision(ci.ID))); w.Code != http.StatusOK {
+		t.Fatalf("rename the pool = %d %s", w.Code, w.Body)
+	}
+	if p, err := e.pg.GetRunnerPool(context.Background(), ci.ID); err != nil || p.Recording != types.RecordingRequired {
+		t.Fatalf("pool after a rename = %+v, %v; want recording required", p.Recording, err)
+	}
 }

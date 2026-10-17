@@ -45,8 +45,6 @@ const azureApprovalLane = "azure_foundry"
 
 // The refusal bodies. Machine-facing (the caller is the proxy sidecar, which fails its boot closed on
 // any of them), but each names the one thing a person reading the run's failure could do about it.
-//
-// DRAFT (M2 canon pending)
 const (
 	azureResolveNotRecorded = "A model provider's Azure sign-in is injected only through the grant Wardyn authors when a run launches on " +
 		"that provider, which records whose sign-in the run uses; this grant carries no such record"
@@ -182,9 +180,8 @@ func (s *Server) resolveAzureFoundryInjection(w http.ResponseWriter, r *http.Req
 	}
 	// The ONE wire shape, forced whatever the grant authored.
 	value := formatInjectionValue("Bearer %s", []byte(access.AccessToken))
-	if s.cfg.MaskRegistry != nil {
-		s.cfg.MaskRegistry.Add(claims.RunID, []byte(access.AccessToken))
-		s.cfg.MaskRegistry.Add(claims.RunID, []byte(value))
+	if s.refuseUnmasked(w, r, claims, "injection.resolve", []byte(access.AccessToken), []byte(value)) {
+		return true
 	}
 	s.recordAudit(ctx, s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
 		"secret.read", name, "success", mustJSON(map[string]any{

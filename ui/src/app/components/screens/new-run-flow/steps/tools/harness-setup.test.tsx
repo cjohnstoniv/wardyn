@@ -77,9 +77,18 @@ describe("HarnessSetup", () => {
   });
 
   it("heads each harness with whether it starts with the run", () => {
-    show([CLAUDE_UNGATED, CODEX], { tools: [{ id: "claude-code", kind: "harness" }, { id: "codex-cli", kind: "harness" }] });
+    show([CLAUDE_UNGATED, CODEX], { tools: [{ id: "claude-code", kind: "harness" }, { id: "codex-cli", kind: "harness" }], startup: { kind: "harness", tool: "claude-code" } });
     expect(card("Claude Code").getByText(NR_TOOLS.SUB_STARTS)).toBeTruthy();
     expect(card("Codex CLI").getByText(NR_TOOLS.SUB_AVAILABLE)).toBeTruthy();
+  });
+
+  it.each([
+    ["no startup", {}],
+    ["a command startup", { startup: { kind: "command", command: "make test" } }],
+  ] as const)("starts no harness with %s (DR-0230)", (_name, over) => {
+    show([CLAUDE_UNGATED, CODEX], { tools: [{ id: "claude-code", kind: "harness" }, { id: "codex-cli", kind: "harness" }], ...over } as RunIntent);
+    expect(card("Claude Code").getByText(NR_TOOLS.SUB_AVAILABLE)).toBeTruthy();
+    expect(card("Claude Code").queryByText(NR_TOOLS.SUB_STARTS)).toBeNull();
   });
 
   describe("model provider", () => {
@@ -204,8 +213,12 @@ describe("HarnessSetup", () => {
   describe("tool rules", () => {
     it("shows the policy's rows locked, with no enforcement note, on any lane (A23 a)", () => {
       show([CLAUDE_GATED_LOCKED]);
-      const locked = () => screen.getAllByRole("listitem").filter((li) => li.hasAttribute("data-locked")).map((r) => r.textContent);
+      const locked = () => screen.getAllByRole("listitem").filter((li) => li.hasAttribute("data-locked")).map((r) => r.textContent?.replace(NR_TOOLS.ROW_LOCKED, ""));
       expect(locked()).toEqual(["WebFetchBlock it", "BashAsk first"]);
+      // A lock icon is all a sighted person sees; a screen reader hears who set the row.
+      for (const row of screen.getAllByRole("listitem").filter((li) => li.hasAttribute("data-locked"))) {
+        expect(row).toHaveTextContent("Set by your organisation's policy");
+      }
       cleanup();
       show([CLAUDE_UNGATED_LOCKED]);
       expect(locked()).toEqual(["WebFetchBlock it"]);
@@ -294,6 +307,43 @@ describe("HarnessSetup", () => {
       expect(draft().components).toEqual([{ id: "mcp-docs", mcp_harnesses: ["claude-code", "codex-cli"] }]);
       await userEvent.click(card("Claude Code").getByRole("checkbox", { name: "Docs" }));
       expect(draft().components).toEqual([{ id: "mcp-docs", mcp_harnesses: ["codex-cli"] }]);
+    });
+
+    it("writes an empty list, not an absent one, when the last harness is turned off", async () => {
+      const intent: RunIntent = { tools: [{ id: "claude-code", kind: "harness" }], components: [{ id: "mcp-docs", mcp_harnesses: ["claude-code"] }] };
+      show([CLAUDE_UNGATED], intent);
+      await userEvent.click(card("Claude Code").getByRole("checkbox", { name: "Docs" }));
+      expect(draft().components).toEqual([{ id: "mcp-docs", mcp_harnesses: [] }]);
+    });
+
+    describe("an inline server (DR-0250)", () => {
+      const INLINE_ROW = { ...MCP_DOCS, id: "component:inline:1", source: { kind: "component", id: "inline:1", name: "Docs" } } as typeof MCP_DOCS;
+      const inline = { name: "Docs", inline: { hosts: ["docs.example.com"], mcp: { url: "https://docs.example.com/mcp", transport: "http" } } };
+      const TWO = [{ id: "claude-code", kind: "harness" as const }, { id: "codex-cli", kind: "harness" as const }];
+
+      it("writes the harnesses to the inline reference at the server's place, and leaves the others alone", async () => {
+        const intent = { tools: TWO, components: [{ id: "other" }, inline] } as unknown as RunIntent;
+        show([CLAUDE_UNGATED, CODEX], intent, [INLINE_ROW]);
+        await userEvent.click(card("Codex CLI").getByRole("checkbox", { name: "Docs" }));
+        expect(draft().components).toEqual([{ id: "other" }, { ...inline, mcp_harnesses: ["claude-code", "codex-cli"] }]);
+        await userEvent.click(card("Claude Code").getByRole("checkbox", { name: "Docs" }));
+        expect(draft().components[1]).toMatchObject({ mcp_harnesses: ["codex-cli"] });
+      });
+
+      it("keeps an explicit empty binding", async () => {
+        const intent = { tools: TWO, components: [{ id: "other" }, inline] } as unknown as RunIntent;
+        show([CLAUDE_UNGATED, CODEX], intent, [INLINE_ROW]);
+        await userEvent.click(card("Claude Code").getByRole("checkbox", { name: "Docs" }));
+        expect(draft().components[1]).toMatchObject({ mcp_harnesses: [] });
+        expect(card("Claude Code").getByRole("checkbox", { name: "Docs" }).getAttribute("aria-checked")).toBe("false");
+      });
+
+      it("changes nothing when the server's place no longer holds that component", async () => {
+        const intent = { tools: TWO, components: [{ id: "other" }, { ...inline, name: "Renamed" }] } as unknown as RunIntent;
+        show([CLAUDE_UNGATED, CODEX], intent, [INLINE_ROW]);
+        await userEvent.click(card("Codex CLI").getByRole("checkbox", { name: "Docs" }));
+        expect(draft().components).toEqual(intent.components);
+      });
     });
 
     it("disables the toggle for a harness Wardyn cannot configure, with the reason", () => {

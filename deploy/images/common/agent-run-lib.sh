@@ -463,6 +463,14 @@ name_run_branch() {
 # clone is attempted only when the dest has no existing .git, so a
 # pre-populated / bind-mounted repo is never clobbered. Failure is a
 # governance signal, not fatal: log and continue.
+# ado_lane_hint — after a failed clone, says when the run was not given the
+# per-person Azure DevOps credential (WARDYN_ADO_LANE_DECLINED, a closed code
+# dispatch sets) and where the reason is. Silent when the variable is unset.
+ado_lane_hint() {
+    [[ -n "${WARDYN_ADO_LANE_DECLINED:-}" ]] || return 0
+    echo "agent-run: this run was not given an Azure DevOps credential (${WARDYN_ADO_LANE_DECLINED}); the run's Credentials panel and 'wardyn run get ${WARDYN_RUN_ID:-<run-id>}' say why" >&2
+}
+
 clone_one() {  # $1=url  $2=dest  $3=slug  $4=ref (optional: branch/tag/sha; "" = the remote's default branch)
     local url="$1" dest="$2" slug="$3" ref="${4:-}"
     [[ -n "$url" && -n "$dest" ]] || return 0
@@ -475,6 +483,7 @@ clone_one() {  # $1=url  $2=dest  $3=slug  $4=ref (optional: branch/tag/sha; "" 
             name_run_branch "$dest"
         else
             echo "agent-run: clone FAILED for ${dest} — the egress policy or credential broker may have blocked it (a governance signal); continuing" >&2
+            ado_lane_hint
         fi
         return 0
     fi
@@ -496,6 +505,7 @@ clone_one() {  # $1=url  $2=dest  $3=slug  $4=ref (optional: branch/tag/sha; "" 
         name_run_branch "$dest"
     else
         echo "agent-run: clone FAILED for ${dest} @ ${ref} — the ref may not exist, or the egress policy/credential broker may have blocked it (a governance signal); continuing" >&2
+        ado_lane_hint
     fi
 }
 

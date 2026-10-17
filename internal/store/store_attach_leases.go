@@ -134,7 +134,7 @@ func (s PG) ReserveAttachLease(ctx context.Context, runID, from uuid.UUID, taker
 	err := s.Pool.QueryRow(ctx, `
 		WITH old AS (
 			SELECT run_id, holder_id, replica, principal, source, since, epoch, expires_at FROM run_attach_leases
-			WHERE run_id = $1 AND expires_at > now() AND ($2::uuid = '00000000-0000-0000-0000-000000000000'::uuid OR holder_id = $2)
+			WHERE run_id = $1 AND expires_at > now() AND source <> '`+attachLeaseReserved+`' AND ($2::uuid = '00000000-0000-0000-0000-000000000000'::uuid OR holder_id = $2)
 			FOR UPDATE)
 		UPDATE run_attach_leases l SET holder_id = gen_random_uuid(), replica = $4, principal = $3, source = '`+attachLeaseReserved+`',
 			since = now(), expires_at = now() + $5::interval, epoch = l.epoch + 1

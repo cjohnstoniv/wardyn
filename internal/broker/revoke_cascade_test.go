@@ -90,6 +90,24 @@ func TestRevokeRun_AutoMintedGrant_EmitsRevokeAudit(t *testing.T) {
 	}
 }
 
+// The revoke row names the run under the deployment's trust domain, not a fixed one.
+func TestRevokeRun_NamesTheRunUnderTheConfiguredTrustDomain(t *testing.T) {
+	b, db, au, _ := newTestBroker(t)
+	b.WithTrustDomain("corp.example")
+	runID := uuid.New()
+	gid := seedGrant(db, runID, githubGrantSpec(t, false))
+	if _, err := b.MintForGrant(context.Background(), callerFor(runID), gid); err != nil {
+		t.Fatalf("MintForGrant: %v", err)
+	}
+	if err := b.RevokeRun(context.Background(), runID); err != nil {
+		t.Fatalf("RevokeRun: %v", err)
+	}
+	rows := au.byAction("credential.revoke")
+	if want := "spiffe://corp.example/agent-run/" + runID.String(); len(rows) != 1 || rows[0].Target != want {
+		t.Errorf("revoke rows = %+v, want one targeting %s", rows, want)
+	}
+}
+
 // TestRevokeRun_LeasedGitPAT_EmitsOneRevokePerMint is the second half:
 // under the B2 per-run lease the minted_jti burn is SKIPPED on re-mints, so
 // every jti after the first was invisible to a cascade reading that column.

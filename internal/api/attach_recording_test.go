@@ -486,3 +486,28 @@ func TestNewSessionRecorder_OversizeCastTruncatedNotLost(t *testing.T) {
 		t.Errorf("session.recording.write data = %s, want truncated:true — a short cast must not pass for a whole one", rec.Data)
 	}
 }
+
+// TestNewSessionRecorder_RecordsANotRecordedRun: the organisation records a console or SSH session it
+// opens on a run its runner did not record (or that started while it kept none): not_recorded is the
+// runner's terminal session only, as the run page and hybrid-laptops.md say.
+func TestNewSessionRecorder_RecordsANotRecordedRun(t *testing.T) {
+	for _, mark := range []types.RunNotRecorded{types.NotRecordedRunnerDeclined, types.NotRecordedOrgOff} {
+		store, err := recording.NewFSStore(t.TempDir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		srv := New(Config{RecordingStore: store, Audit: &recRecorder{}, AdminToken: adminToken})
+		run := types.AgentRun{ID: uuid.New(), NotRecorded: mark}
+		tee, finish := srv.newSessionRecorder(run, "attach", runner.AttachOptions{Cols: 80, Rows: 24})
+		if tee == nil {
+			t.Fatalf("%s: no recorder for an attach on a not-recorded run", mark)
+		}
+		_, _ = tee.Write([]byte("hello\r\n"))
+		finish(context.Background(), types.ActorHuman, "alice@example.com")
+		rc, err := store.OpenCast(context.Background(), recording.CastKey(run.ID.String(), "attach"))
+		if err != nil {
+			t.Fatalf("%s: the attach session was not stored: %v", mark, err)
+		}
+		_ = rc.Close()
+	}
+}

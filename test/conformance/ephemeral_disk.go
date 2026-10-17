@@ -148,11 +148,11 @@ func ephemeralCaseBudget(opts Options) time.Duration {
 	return time.Duration(len(ephemeralFillTargets))*ephemeralFillBudget(opts) + opts.timeout()
 }
 
-// testEphemeralDiskLimit is the ephemeral-disk enforcement gate. It runs ONLY on a
-// driver that declares EphemeralDiskEnforcement `eviction` — every other word
-// means something different (a docker filesystem quota refuses the write and
-// surfaces ENOSPC to the agent; `none` binds nothing), so this case skips them by
-// name instead of pretending one shape fits all.
+// testEphemeralDiskLimit is the ephemeral-disk enforcement gate. It runs on a
+// driver that declares EphemeralDiskEnforcement `eviction` (the sub-cases below)
+// or `filesystem` (testEphemeralDiskFilesystemQuota: the write is refused and the
+// run lives). Every other word binds nothing the agent can hit (`none`), so this
+// case skips it by name instead of pretending one shape fits all.
 //
 // Two sub-cases, and the second is the subtle one:
 //
@@ -181,12 +181,16 @@ func testEphemeralDiskLimit(t *testing.T, r runner.Runner, opts Options) {
 	if err != nil {
 		t.Fatalf("Capabilities: %v", err)
 	}
-	if caps.EphemeralDiskEnforcement != types.StorageEnforcementEviction {
-		t.Skipf("driver %q declares ephemeral-disk enforcement %q, not %q — this case asserts the eviction shape specifically",
-			r.Name(), caps.EphemeralDiskEnforcement, types.StorageEnforcementEviction)
-	}
 	if len(caps.ConfinementClasses) == 0 {
 		t.Skipf("driver %q declares no ConfinementClasses; no sandbox to fill", r.Name())
+	}
+	if caps.EphemeralDiskEnforcement == types.StorageEnforcementFilesystem {
+		testEphemeralDiskFilesystemQuota(t, r, opts, caps.ConfinementClasses[len(caps.ConfinementClasses)-1])
+		return
+	}
+	if caps.EphemeralDiskEnforcement != types.StorageEnforcementEviction {
+		t.Skipf("driver %q declares ephemeral-disk enforcement %q, not %q or %q — this case asserts those two shapes specifically",
+			r.Name(), caps.EphemeralDiskEnforcement, types.StorageEnforcementEviction, types.StorageEnforcementFilesystem)
 	}
 
 	newSandbox := func(t *testing.T, ctx context.Context, diskMiB int64) runner.Sandbox {
@@ -304,4 +308,57 @@ func fillAndExpectEviction(t *testing.T, r runner.Runner, opts Options,
 	// whichever comes first, its own budget or what the sub-run has left.
 	t.Errorf("after up to %s the run is state=%q message=%q; want RunFailed with \"Evicted\" — a %dMiB limit and a 256MiB write at %s means the kubelet should have killed the pod",
 		ephemeralEvictionBudget, last.State, last.Message, ephemeralDiskLimitMiB, target.path)
+}
+
+// testEphemeralDiskFilesystemQuota is the `filesystem` shape of the gate: a docker
+// daemon whose storage driver can enforce a per-container size (overlay2 on xfs
+// mounted with pquota, btrfs, zfs) refuses the write that crosses DiskMiB. The
+// agent sees the write fail, and the RUN LIVES — the opposite of the eviction
+// shape. A host that cannot enforce a quota declares `none` and never reaches
+// here, so this sub-case only ever runs on a self-hosted xfs+pquota daemon.
+//
+// It fills the workdir, the one target the substrate provides on the writable
+// layer the quota meters (/tmp is a tmpfs with its own cap). It reuses
+// ephemeralFillScriptFor, so the 90 and 91 codes keep the meaning the eviction
+// sub-cases give them.
+func testEphemeralDiskFilesystemQuota(t *testing.T, r runner.Runner, opts Options, class types.ConfinementClass) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), ephemeralFillBudget(opts))
+	defer cancel()
+
+	spec := minimalSpec(opts.image())
+	spec.ConfinementClass = class
+	spec.Resources = runner.Resources{DiskMiB: ephemeralDiskLimitMiB}
+	sb, err := r.CreateSandbox(ctx, spec)
+	if err != nil {
+		t.Fatalf("CreateSandbox with DiskMiB %d: %v", ephemeralDiskLimitMiB, err)
+	}
+	t.Cleanup(func() { _ = r.StopSandbox(context.Background(), sb.Ref) })
+
+	target := ephemeralFillTargets[1] // Workdir
+	if _, err := r.Exec(ctx, sb.Ref, []string{"sh", "-c", ephemeralFillScriptFor(target.path)}); err != nil {
+		t.Fatalf("Exec(fill %s): %v", target.path, err)
+	}
+	waitCtx, waitCancel := context.WithTimeout(ctx, opts.timeout())
+	code, err := r.Wait(waitCtx, sb.Ref)
+	waitCancel()
+	if err != nil {
+		t.Fatalf("Wait(fill %s): %v", target.path, err)
+	}
+	switch code {
+	case 90:
+		t.Skipf("sandbox image has no dd applet; cannot fill %s — an IMAGE contract, not a substrate verdict", target.path)
+	case 91:
+		t.Fatalf("could not open %s for writing (exit 91) — that directory is the SUBSTRATE's to provide as writable scratch for the agent's uid, so this is a substrate verdict", target.path)
+	case 0:
+		t.Fatalf("a 256MiB write at %s finished under a %dMiB limit: the %q enforcement the driver declares did not refuse it",
+			target.path, ephemeralDiskLimitMiB, types.StorageEnforcementFilesystem)
+	}
+	st, err := r.Status(ctx, sb.Ref)
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if st.State == types.RunFailed {
+		t.Errorf("the run is %q (%s) after its write was refused; a filesystem quota refuses the write and leaves the run alive", st.State, st.Message)
+	}
 }

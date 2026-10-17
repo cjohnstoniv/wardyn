@@ -8,6 +8,7 @@ package audit
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -17,6 +18,12 @@ import (
 type Recorder interface {
 	Record(ctx context.Context, ev types.AuditEvent) error
 }
+
+// ErrSpooled marks a Record whose store write failed while the event was kept
+// in the durable local spool, which drains it into the store once the store
+// answers. The error also wraps the store's own. A caller that must know its
+// event was accepted (not lost) treats ErrSpooled as accepted.
+var ErrSpooled = errors.New("audit: the store write failed and the event is held in the local spool")
 
 // Sink streams recorded events to an external destination. Sinks must not
 // block recording; failures are logged and retried, never silently dropped.

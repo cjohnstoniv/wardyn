@@ -87,11 +87,14 @@ type MainDriveApplied struct {
 	Soft bool `json:"soft"`
 }
 
-// AppliedResources is what a run's CPU and memory asked for and what it gets,
-// on preflight, the policy preview, the 201 and the run.create audit row.
+// AppliedResources is what a run's CPU, memory and process limit asked for and
+// what it gets, on preflight, the policy preview, the 201 and the run.create audit row.
 type AppliedResources struct {
 	CPUMillis AppliedAmount `json:"cpu_millis"`
 	MemoryMiB AppliedAmount `json:"memory_mib"`
+	// PidsLimit is the process limit: the run's policy asked, the ceiling bounded. Absent on a
+	// row written before the field existed. Source is governance or deployment, when Capped.
+	PidsLimit *AppliedAmount `json:"pids_limit,omitempty"`
 }
 
 // AppliedAmount is one field of AppliedResources. Source names the limit that
@@ -214,7 +217,8 @@ type PushRuleOverride struct {
 	// DevOps Server. Empty is the provider's public host.
 	Host string `json:"host,omitempty"`
 	// Org is the GitHub owner or the Azure DevOps organisation, in the
-	// canonical spelling types.CanonicalPushOrg accepts.
+	// canonical spelling types.CanonicalPushOrg accepts; for an Azure DevOps
+	// Server host it is the collection, in types.CanonicalPushCollection's.
 	Org                string   `json:"org"`
 	DenyPaths          []string `json:"deny_paths,omitempty"`
 	RequireReviewPaths []string `json:"require_review_paths,omitempty"`
@@ -406,6 +410,9 @@ type AgentSecretFact struct {
 type ManagedSettingsFact struct {
 	Path     string `json:"path"`
 	Document string `json:"document"`
+	// Harness names whose document this is: the started agent's, else the first harness of the set that
+	// brings one, so a run that starts one harness can carry another's document.
+	Harness string `json:"harness,omitempty"`
 	// Locked is the B-P2 variant that adds the managed-only locks; LockedBy is
 	// profile or organisation, and Profile names the profile.
 	Locked   bool   `json:"locked,omitempty"`

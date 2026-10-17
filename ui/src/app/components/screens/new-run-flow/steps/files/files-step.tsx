@@ -20,7 +20,7 @@ import { useK8sRunner } from "../../../../../lib/use-k8s-runner";
 import { intentToWire } from "../../draft/intent-to-wire";
 import type { RunAttachment } from "../../../../../lib/types/new-run-contract";
 import type { RunIntent } from "../../draft/run-intent";
-import { attachDrive, chooseNothing, mibToGibText, parseGiB, setStartsAtDrive, setStartSubpath } from "../../lenses/files-lens";
+import { attachDrive, chooseNothing, setStartsAtDrive, setStartSubpath } from "../../lenses/files-lens";
 import { stepIssues } from "../../lenses/local-issues";
 import { issue, type StepIssue } from "../../lenses/step-issues";
 import { useNewRunDispatch, useNewRunDraft, type NewRunScreenProps } from "../../new-run-route";
@@ -107,15 +107,16 @@ export function FilesStep({ go, createUserDrive }: NewRunScreenProps & Pick<AddD
   const noExtra = intent.no_repositories_or_drives === true;
   const start = items.find((i) => i.starts);
 
-  // Environment opens with the person's own drive when it can attach, once, and only while nothing is chosen (A18).
-  const preselected = React.useRef(false);
+  // Environment opens with the person's own drive when it can attach, once per draft, and only while nothing is
+  // chosen (A18). The draft remembers it, so removing the drive and coming back to the step does not undo that.
+  const preselected = draft.guided.drivePreselected === true;
   const legacy = drives.catalogue?.drives.find((d) => d.legacy && !d.unavailable_reason);
   const preselectId = !drives.reason ? legacy?.id : undefined;
   React.useEffect(() => {
-    if (preselected.current || !preselectId || intent.shape !== "environment" || !nothingChosen(intent)) return;
-    preselected.current = true;
+    if (preselected || !preselectId || intent.shape !== "environment" || !nothingChosen(intent)) return;
+    dispatch({ type: "guided", patch: { drivePreselected: true } });
     edit((i) => setStartsAtDrive(attachDrive(i, preselectId, preselectId), preselectId, preselectId));
-  }, [preselectId, intent, edit]);
+  }, [preselected, preselectId, intent, edit, dispatch]);
 
   const [expanded, setExpanded] = React.useState<readonly string[]>([]);
   const [dialog, setDialog] = React.useState<DialogOpen | null>(null);
@@ -134,8 +135,9 @@ export function FilesStep({ go, createUserDrive }: NewRunScreenProps & Pick<AddD
   const onSave: AddDialogProps["onSave"] = (apply, saved, mode) => {
     edit((i) => {
       const next = apply(i);
-      if (mode === "edit" || fileItems(next, src).some((x) => x.starts)) return next;
-      // The first thing added is where the run starts, until the person moves it.
+      if (fileItems(next, src).some((x) => x.starts)) return next;
+      // The first thing added is where the run starts, until the person moves it; an edit that moved the start
+      // away with its card (to another source) gives it to the edited card.
       const after = fileItems(next, src);
       const added = after.find((x) => x.key === saved.key);
       // A folder that cannot be a start brings its workspace's first folder, which can.
@@ -167,9 +169,8 @@ export function FilesStep({ go, createUserDrive }: NewRunScreenProps & Pick<AddD
     ...(sub.bad ? [{ ...issue("files", "starts_here_required"), focus: SUBFOLDER_ID }] : []),
   ];
   const keptNote = life.kind === "deleted" ? NR_FILES.NO_EXTRA_DELETED : life.kind === "kept" ? NR_FILES.NO_EXTRA_KEPT(life.grace) : undefined;
-  const sizeMib = parseGiB(size.text);
   // No size is no number: the summary asks for one, and the map names the drive alone.
-  const sizeText = sizeMib === undefined ? undefined : mibToGibText(sizeMib);
+  const sizeText = size.words;
   const settled = noExtra || (items.length > 0 && !!start);
   const empty = !noExtra && items.length === 0;
 

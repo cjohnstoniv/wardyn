@@ -278,6 +278,7 @@ describe("ExplainGrid — values by name", () => {
       { kind: "feature", value: "*", state: "everyone" },
       { kind: "feature", value: "ssh_key", state: "blocked" },
       { kind: "feature", value: "api_token", state: "everyone" },
+      { kind: "feature", value: "service_attach", state: "this_type" },
       { kind: "policy", value: "pol-1", state: "this_type" },
       { kind: "egress_host", value: "api.example.test", state: "blocked" },
     ]);
@@ -290,6 +291,7 @@ describe("ExplainGrid — values by name", () => {
     expect(within(await row("feature", "*")).getByText(EXPLAIN.SSH_AND_TOKENS)).toBeInTheDocument();
     expect(within(await row("feature", "ssh_key")).getByText(EXPLAIN.SSH_KEYS)).toBeInTheDocument();
     expect(within(await row("feature", "api_token")).getByText(EXPLAIN.API_TOKENS)).toBeInTheDocument();
+    expect(within(await row("feature", "service_attach")).getByText(EXPLAIN.SERVICE_ATTACH)).toBeInTheDocument();
     expect(await within(await row("policy", "pol-1")).findByText("Read-only research")).toBeInTheDocument();
     expect(within(await row("egress_host", "api.example.test")).getByText("api.example.test").className).toContain("font-mono");
   });

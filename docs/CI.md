@@ -78,7 +78,7 @@ A run's model credential is its owner's, and CI is no exception. So `ci-run.sh` 
   - It then launches on exactly that provider (`--model-provider`).
 
 * The CI principal is a **service identity**, `service:<name>`: automation that runs under its own name, with a named person as its sponsor.
-  * An admin creates it (`wardyn service-identity create --name ci --sponsor <principal>`); the sponsor mints its token in the console (Account, "Service identities I sponsor"), shown once, with an expiry of at most `90d`.
+  * An admin creates it (`wardyn service-identity create --name ci-bot --sponsor <principal>`); the sponsor mints its token in the console (Account, "Service identities I sponsor"), shown once, with an expiry of at most `90d`.
   * It stores its own model-provider credential once (`PUT /model-providers/{id}/credential`, with its own token) — see "[Provisioning the CI principal](#driving-an-existing-control-plane-instead)" below.
 * Its audit trail says "CI" and names its sponsor on every row, rather than one human's token paying for and being blamed for every pipeline run.
   * Scope it with `capModelProvider`/`capAgent` through the `user` subject `service:<name>`.
@@ -301,7 +301,7 @@ Wardyn's own [`ci.yml`](../.github/workflows/ci.yml) runs on every pull request 
 
 | Go-suite control | Where | Rule |
 |---|---|---|
-| `api` shards run only DSN-gated tests | `make test-report-pg-api`, [`scripts/pg-test-select.sh`](../scripts/pg-test-select.sh) | The unit run fails if a DSN-skipped test is outside the pick; every `pg` probe is picked |
+| `api` and `store` shards run only DSN-gated tests | `make test-report-pg-api`, `make test-report-pg-store`, [`scripts/pg-test-select.sh`](../scripts/pg-test-select.sh) | The unit run fails if a DSN-skipped test is outside the pick; every `pg` probe is picked |
 | Postgres shards write no coverage | `WARDYN_TEST_REPORT_COVER=0` | `build` unions `unit`, `docker`, `k8s` only |
 | Flaky Go test quarantine | [`test/go-quarantine.txt`](../test/go-quarantine.txt), `go test -skip` | Issue, owner, expiry within 14 days; expired or malformed fails the suite |
 
@@ -408,6 +408,7 @@ gh run list -R cjohnstoniv/wardyn --workflow ci.yml --status completed --limit 6
 - [`scripts/test-repo-guards.sh`](../scripts/test-repo-guards.sh) guard 18 keeps the skip set in step with `notify-new-lanes`. A skipped job reports `skipped`, so that job stays quiet.
 - A dispatched nightly has one concurrency group per ref and scope, so a second dispatch cancels the first. A scheduled run has its own group and is never cancelled.
 - `release.yml` has one group per ref and cancels nothing, so a dispatch and the tag push cannot publish at once.
+- `release.yml`'s `runner-pkg` job (macOS) builds `wardyn-runnerd.pkg` with [`scripts/build-runner-pkg.sh`](../scripts/build-runner-pkg.sh). Each signing step runs only when its `APPLE_DEVELOPER_ID_*` or `APPLE_NOTARY_*` secrets are set, and logs a skip line otherwise; [`scripts/test-runner-pkg.sh`](../scripts/test-runner-pkg.sh) covers the script on Linux.
 
 ### Incremental CI
 
@@ -570,8 +571,10 @@ Docker Hub rate-limited CI even after `docker/login-action`, so CI reads the Doc
 - [`deploy/base-images.txt`](../deploy/base-images.txt) lists them. Digest pins are the Dockerfile `FROM` pins, the compose pins and kind's node image. Tag pins (`tag ` lines), kept by hand, are images CI pulls by tag.
 - [`mirror-base-images.yml`](../.github/workflows/mirror-base-images.yml) copies each entry, digest unchanged, into `ghcr.io/cjohnstoniv/base-images`: on a list change on `main`, weekly, and on dispatch.
   - Dependabot cannot run it: add the bump's digest to the list on its branch, dispatch with `ref` set to that branch, then re-run the pull request's checks.
-- [`base-image-mirror/action.yml`](../.github/actions/base-image-mirror/action.yml) runs before a job builds or pulls. It adds a loopback mirror over the copy to dockerd's `registry-mirrors` by a `SIGHUP` reload, which leaves service containers running. It pulls digest pins under their `docker.io` names, so a pinned `FROM` resolves locally, and tag pins from GHCR, retagged `<name>:<tag>`.
-  - Anything the copy lacks, and any tag not listed, falls through to Docker Hub as before.
+- [`base-image-mirror/action.yml`](../.github/actions/base-image-mirror/action.yml) runs before a job builds or pulls, instead of a separate `mirror.gcr.io` step.
+  - It puts a loopback mirror over the copy, then `mirror.gcr.io`, in dockerd's `registry-mirrors`. One dockerd restart applies it (a `SIGHUP` reload resets the host-gateway address), and the job's service containers start again.
+  - It pulls digest pins under their `docker.io` names, so a pinned `FROM` resolves locally, and tag pins from GHCR, retagged `<name>:<tag>`.
+  - Anything the copy lacks, and any tag not listed, goes to `mirror.gcr.io`, then Docker Hub. If the loopback mirror does not start, `mirror.gcr.io` is still configured.
 - The Postgres service containers start before any step, so they name the copy directly and pull it with the job's `GITHUB_TOKEN` (`packages: read`).
 - Dockerfiles keep their `docker.io` `FROM` lines for Dependabot and release provenance.
 - Guard 17 in [`scripts/test-repo-guards.sh`](../scripts/test-repo-guards.sh) fails while a Docker Hub `FROM` pin is not listed.
@@ -603,7 +606,7 @@ wardyn audit <id> --json       # likewise
 
 ```sh
 # 1. An admin creates the service identity, naming its sponsor:
-#      wardyn service-identity create --name ci --sponsor <principal>
+#      wardyn service-identity create --name ci-bot --sponsor <principal>
 #    The sponsor signs in to the console and mints its token from Account,
 #    "Service identities I sponsor" — shown exactly once. Store it as the
 #    pipeline secret WARDYN_CI_TOKEN; export it as WARDYN_TOKEN for the calls

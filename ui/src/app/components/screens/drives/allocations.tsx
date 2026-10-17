@@ -64,6 +64,8 @@ import { Textarea } from "../../ui/textarea";
 import { Mono } from "../../wardyn/code-block";
 import { DirectoryCombobox } from "../../wardyn/directory-combobox";
 import { Field, Switch } from "../../wardyn/form-primitives";
+import { PreviewUserTypeField, usePreviewUserTypes } from "../../wardyn/preview-user-type-field";
+import { USER_TYPE_STANDARD } from "../../../lib/types/user-types";
 import { useOperator } from "../../wardyn/operator-context";
 import { Chip } from "../../wardyn/primitives";
 import { EmptyState, TruncatedNote } from "../../wardyn/states";
@@ -519,11 +521,13 @@ function DrivePreview() {
   const [claims, setClaims] = React.useState("");
   const [busy, setBusy] = React.useState(false);
   const [result, setResult] = React.useState<{ answer: UserDrivePreview } | { error: string } | null>(null);
+  const { userTypes, show: showUserType } = usePreviewUserTypes();
+  const [userType, setUserType] = React.useState(USER_TYPE_STANDARD);
 
   const run = async () => {
     setBusy(true);
     try {
-      setResult({ answer: await api.previewDrive(previewClaims(claims)) });
+      setResult({ answer: await api.previewDrive(previewClaims(claims, userType)) });
     } catch (e) {
       // The SAME thing the drive editor does with a refused save. The preview
       // runs the launch path's own gates now — the governance door's 403, the
@@ -546,21 +550,34 @@ function DrivePreview() {
       <div className="mt-4 grid gap-4 md:grid-cols-[1fr_auto]">
         {/* The People step's own field and hint, verbatim: the preview takes the
             claims a token would carry and has no label of its own (§7.3). */}
-        <Field label={PREVIEW.FIELD_CLAIMS} htmlFor="drive-preview-claims" hint={PREVIEW.FIELD_CLAIMS_HINT}>
-          <Textarea
-            id="drive-preview-claims"
-            value={claims}
-            // F4-F10 (Appendix A V8): `result` survived a claims edit, so the
-            // PREVIOUS group's resolved drive sat under new, unrun input as
-            // if it answered it.
-            onChange={(e) => {
-              setClaims(e.target.value);
-              setResult(null);
-            }}
-            className="font-mono"
-            rows={3}
-          />
-        </Field>
+        <div className="grid gap-4">
+          <Field label={PREVIEW.FIELD_CLAIMS} htmlFor="drive-preview-claims" hint={PREVIEW.FIELD_CLAIMS_HINT}>
+            <Textarea
+              id="drive-preview-claims"
+              value={claims}
+              // F4-F10 (Appendix A V8): `result` survived a claims edit, so the
+              // PREVIOUS group's resolved drive sat under new, unrun input as
+              // if it answered it.
+              onChange={(e) => {
+                setClaims(e.target.value);
+                setResult(null);
+              }}
+              className="font-mono"
+              rows={3}
+            />
+          </Field>
+          {showUserType && (
+            <PreviewUserTypeField
+              id="drive-preview-user-type"
+              value={userType}
+              userTypes={userTypes}
+              onChange={(id) => {
+                setUserType(id);
+                setResult(null);
+              }}
+            />
+          )}
+        </div>
         <div className="flex items-start">
           <Button variant="outline" onClick={run} disabled={busy || !claims.trim()}>
             {busy ? <Loader2 className="size-4 animate-spin" /> : null}

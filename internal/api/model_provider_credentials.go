@@ -82,7 +82,6 @@ var providerTypedKinds = map[types.ModelProviderKind]bool{
 	types.ModelProviderBedrockBearer: true, types.ModelProviderCustomEndpoint: true,
 }
 
-// DRAFT (M2 canon pending).
 const (
 	mpcNotFound = "no model provider %q is available to you"
 	mpcSignIn   = "%q is connected by signing in, not with a key"

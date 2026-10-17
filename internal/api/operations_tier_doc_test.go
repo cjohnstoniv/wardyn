@@ -61,6 +61,8 @@ var docTierRows = []struct{ route, token string }{
 	{"DELETE /api/v1/runner-pools/{id}", "the `/runner-pools` writes"},
 	{"PUT /api/v1/runner-pools/{id}/remote-runners/{rid}", "the `/runner-pools` writes"},
 	{"DELETE /api/v1/runner-pools/{id}/remote-runners/{rid}", "the `/runner-pools` writes"},
+	{"PUT /api/v1/runner-pools/{id}/runners/{runner}", "the `/runner-pools` writes"},
+	{"DELETE /api/v1/runner-pools/{id}/runners/{runner}", "the `/runner-pools` writes"},
 	{"PUT /api/v1/remote-runners/{rid}", "the `/runner-pools` writes"},
 	{"PUT /api/v1/runner-pool-defaults", "the `/runner-pools` writes"},
 	{"GET /api/v1/runner-pools/{id}/use-policy", "the `/runner-pools/{id}/use-policy` routes"},
@@ -188,6 +190,8 @@ var docTierRows = []struct{ route, token string }{
 	{"PUT /api/v1/branding/settings", "`PUT`/`DELETE /branding/settings`"},
 	{"DELETE /api/v1/branding/settings", "`PUT`/`DELETE /branding/settings`"},
 	{"DELETE /api/v1/tokens/{id}", "`GET`/`DELETE /tokens`"},
+	{"GET /api/v1/governance/credential-delivery", "`GET /governance/credential-delivery`"},
+	{"PUT /api/v1/governance/credential-delivery", "`PUT /governance/credential-delivery`"},
 	{"GET /api/v1/governance", "`/governance` profile and assignment routes"},
 	{"PUT /api/v1/governance/profiles/{id}", "`/governance` profile and assignment routes"},
 	{"DELETE /api/v1/governance/profiles/{id}", "`/governance` profile and assignment routes"},
@@ -202,6 +206,8 @@ var docTierRows = []struct{ route, token string }{
 	{"POST /api/v1/user-types", "the `/user-types` routes"},
 	{"PUT /api/v1/user-types/{id}", "the `/user-types` routes"},
 	{"DELETE /api/v1/user-types/{id}", "the `/user-types` routes"},
+	{"GET /api/v1/governance/egress-baseline", "the `/governance/egress-baseline` routes"},
+	{"PUT /api/v1/governance/egress-baseline", "the `/governance/egress-baseline` routes"},
 	{"GET /api/v1/key-domains", "the `/key-domains` routes"},
 	{"PUT /api/v1/key-domains/assignments/{subject_type}/{subject}", "the `/key-domains` routes"},
 	{"DELETE /api/v1/key-domains/assignments/{subject_type}/{subject}", "the `/key-domains` routes"},
@@ -231,6 +237,10 @@ var docTierRows = []struct{ route, token string }{
 	{"GET /api/v1/admin/devices/enrolment-tokens", "`GET /admin/devices/enrolment-tokens` and `DELETE /admin/devices/enrolment-tokens/{id}`"},
 	{"DELETE /api/v1/admin/devices/enrolment-tokens/{id}", "`GET /admin/devices/enrolment-tokens` and `DELETE /admin/devices/enrolment-tokens/{id}`"},
 	{"DELETE /api/v1/runners/{id}", "`DELETE /runners/{id}`"},
+	{"POST /api/v1/runners/org-tokens", "`POST /runners/org-tokens` and `POST /runners/{id}/claim-org`"},
+	{"POST /api/v1/runners/{id}/claim-org", "`POST /runners/org-tokens` and `POST /runners/{id}/claim-org`"},
+	{"PUT /api/v1/runners/{id}/trust", "`PUT /runners/{id}/trust`"},
+	{"PUT /api/v1/runners/{id}", "`PUT /runners/{id}`"},
 	{"GET /api/v1/runners", "`GET /runners` and `GET /runners/{id}`"},
 	{"GET /api/v1/runners/{id}", "`GET /runners` and `GET /runners/{id}`"},
 	{"GET /api/v1/runners/tokens", "`GET /runners/tokens` and `DELETE /runners/tokens/{id}`"},
@@ -271,15 +281,8 @@ var docTierRows = []struct{ route, token string }{
 //
 // Every other gated route the completeness check has surfaced is rowed in
 // docs/OPERATIONS.md and listed in docTierRows above. What stays here is
-// admitted debt: today the two egress-baseline routes, pending their
-// OPERATIONS.md row.
-var docTierUndocumented = map[string]string{
-	"GET /api/v1/governance/egress-baseline": "0.9 B-P1: the tier-table row and the Egress baseline section are the docs pass's (the OPERATIONS.md prose budget is its to move)",
-	"PUT /api/v1/governance/egress-baseline": "0.9 B-P1: as the GET above",
-	// 0.9 H12 (#1964): the credential delivery policy's tier row is the docs pass's.
-	"GET /api/v1/governance/credential-delivery": "0.9 H12: the tier-table row is the docs pass's (the OPERATIONS.md prose budget is its to move)",
-	"PUT /api/v1/governance/credential-delivery": "0.9 H12: as the GET above",
-}
+// admitted debt; there is none today.
+var docTierUndocumented = map[string]string{}
 
 // TestOperationsTierTableMatchesRouteMatrix pins the "What admin-only still
 // means" table — the section the doc's own intro sends a

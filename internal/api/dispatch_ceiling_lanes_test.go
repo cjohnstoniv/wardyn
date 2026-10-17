@@ -23,12 +23,14 @@ import (
 // performs to the governance escape store, so the whole lane can run for real.
 type scanLaneStore struct {
 	*govEscapeStore
+	cleared int // ClearSourceActiveRun calls: the fence released
 }
 
 func (s *scanLaneStore) ClaimSourceActiveRun(context.Context, uuid.UUID, uuid.UUID) error {
 	return nil
 }
 func (s *scanLaneStore) ClearSourceActiveRun(context.Context, uuid.UUID, uuid.UUID) error {
+	s.cleared++
 	return nil
 }
 func (s *scanLaneStore) SetSourceScanResultUnfenced(_ context.Context, _ uuid.UUID, _ []byte, st types.WorkspaceStatus, _ map[string]types.WorkspaceRequirement) (types.Source, error) {

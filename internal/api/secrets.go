@@ -441,6 +441,10 @@ func (s *Server) secretOwnerParam(w http.ResponseWriter, r *http.Request) (owner
 		s.denyMemberOwnerParam(w, r)
 		return "", false, false
 	}
+	if isSubjectName(q) {
+		writeErrorReason(w, http.StatusUnprocessableEntity, reasonReservedPrincipal, "owner: "+subjectNameReservedMsg)
+		return "", false, false
+	}
 	resolved, known, refusal, err := s.resolveSecretOwner(r.Context(), q)
 	if err != nil {
 		writeServerError(w, r, "resolve ?owner=", err)

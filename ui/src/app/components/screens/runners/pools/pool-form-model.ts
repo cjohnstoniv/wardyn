@@ -14,11 +14,11 @@ import { BARRIER_LABEL } from "../../../../lib/runner-pool-refusals";
 import { POOL_DRAWER, POOL_FORM, RES } from "../../../wardyn/copy/runner-pools";
 import { fmtDur } from "../resources";
 
-export type Unit = "minutes" | "hours" | "days";
+export type Unit = "seconds" | "minutes" | "hours" | "days";
 /** The unit words the form's selects show (the mock's option text). */
-export const UNIT_LABEL: Record<Unit, string> = { minutes: "minutes", hours: "hours", days: "days" };
-export const UNITS: Unit[] = ["minutes", "hours", "days"];
-const SECS: Record<Unit, number> = { minutes: 60, hours: 3600, days: 86400 };
+export const UNIT_LABEL: Record<Unit, string> = { seconds: "seconds", minutes: "minutes", hours: "hours", days: "days" };
+export const UNITS: Unit[] = ["seconds", "minutes", "hours", "days"];
+const SECS: Record<Unit, number> = { seconds: 1, minutes: 60, hours: 3600, days: 86400 };
 
 /** One run type's fields; every number is the text of its input. */
 export interface RtValues {
@@ -82,7 +82,7 @@ export const blankRt = (interactive: boolean): RtValues => ({
 const emptyRt = (): RtValues => ({ ...blankRt(false), lifeDn: "", lifeMn: "", idleDn: "", idleMn: "" });
 
 const toDu = (sec: number): [string, Unit] =>
-  sec % 86400 === 0 ? [String(sec / 86400), "days"] : sec % 3600 === 0 ? [String(sec / 3600), "hours"] : [String(Math.round(sec / 60)), "minutes"];
+  sec % 86400 === 0 ? [String(sec / 86400), "days"] : sec % 3600 === 0 ? [String(sec / 3600), "hours"] : sec % 60 === 0 ? [String(sec / 60), "minutes"] : [String(sec), "seconds"];
 
 const amountText = (a: RunnerPoolAmount | undefined, per: number) => ({ d: a ? String(a.default / per) : "", c: a ? String(a.cap / per) : "" });
 
@@ -173,8 +173,9 @@ export function validate(v: FormValues, loaded?: RunnerPoolLimits): FormErrors {
       const unl = x[`${pre}Unl`];
       const key = `${k}.${pre === "life" ? "life" : "idle"}`;
       if (!noEnd && !keepD && !(dsec >= 1)) e[key] = POOL_FORM.ERR_DUR_DEFAULT(title, what);
-      else if (!unl && !(msec >= 1)) e[key] = POOL_FORM.ERR_DUR_MAX(title, what, never);
-      else if (!unl && dsec > msec) e[key] = POOL_FORM.ERR_DUR_ORDER(title, what, fmtDur(Math.round(dsec)), fmtDur(Math.round(msec)));
+      // A Maximum error is also filed under `${key}.max` so the form marks that input, not the Default.
+      else if (!unl && !(msec >= 1)) e[key] = e[`${key}.max`] = POOL_FORM.ERR_DUR_MAX(title, what, never);
+      else if (!unl && dsec > msec) e[key] = e[`${key}.max`] = POOL_FORM.ERR_DUR_ORDER(title, what, fmtDur(Math.round(dsec)), fmtDur(Math.round(msec)));
     };
     dur("life", POOL_FORM.LIFETIME.toLowerCase(), POOL_FORM.NO_MAXIMUM);
     if (k === "it") dur("idle", POOL_FORM.IDLE.toLowerCase(), POOL_FORM.NEVER);
@@ -187,10 +188,10 @@ const amount = (d: string, c: string, per: number): RunnerPoolAmount | undefined
 
 
 /**
- * A duration's seconds as a save will send them. The form shows a duration in whole minutes, hours or days
- * and an unset default as 1 hour, so each of the default and the maximum the person did not touch goes back
- * as it was read from `from` (90 s stays 90 s, an idle stop that never stops by default stays default 0, a
- * 10 s maximum is not rounded to 0 minutes) and only a field they changed converts from what they typed.
+ * A duration's seconds as a save will send them. The form shows a duration exactly, in seconds, minutes, hours
+ * or days, and an unset default as 1 hour, so each of the default and the maximum the person did not touch goes
+ * back as it was read from `from` (an idle stop that never stops by default stays default 0) and only a field
+ * they changed converts from what they typed.
  */
 function durSecs(x: RtValues, pre: "life" | "idle", noEnd: boolean, from?: RtLimits) {
   const src = pre === "life" ? from?.lifetime : from?.idle;
@@ -198,11 +199,12 @@ function durSecs(x: RtValues, pre: "life" | "idle", noEnd: boolean, from?: RtLim
   const same = (a: "Dn" | "Mn", b: "Du" | "Mu") => !!o && x[`${pre}${a}`] === o[`${pre}${a}`] && x[`${pre}${b}`] === o[`${pre}${b}`];
   const unl = x[`${pre}Unl`];
   const keepD = !!src && same("Dn", "Du") && (src.default_sec > 0 || unl) && (pre !== "life" || x.lifeNoEnd === o?.lifeNoEnd);
-  const keepM = same("Mn", "Mu");
   const typed = (n: "Dn" | "Mn", u: "Du" | "Mu") => Math.round(num(x[`${pre}${n}`]) * SECS[x[`${pre}${u}`]]);
+  const dsec = keepD ? src.default_sec : noEnd ? 0 : typed("Dn", "Du");
+  const keepM = same("Mn", "Mu") && !!src?.max_sec;
   return {
     keepD,
-    dsec: keepD ? src.default_sec : noEnd ? 0 : typed("Dn", "Du"),
+    dsec,
     msec: (keepM && src?.max_sec) || typed("Mn", "Mu"),
   };
 }

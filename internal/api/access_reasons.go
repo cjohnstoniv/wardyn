@@ -3,6 +3,11 @@
 
 package api
 
+// reasonRepoNoCredential is a repository row's reason on the preview when create drops its token or key
+// lane: the run starts with no credential for it. A row reason only, never a refusal, so it has no
+// reasons.go entry (resident_off is the same).
+const reasonRepoNoCredential = "repo_no_credential"
+
 // accessSentences is the canon text behind every closed code step 5 shows:
 // the reason codes a row or a tool option carries, the delivery labels of
 // AccessCredential.delivery, and the lines for a host nothing lists. A
@@ -28,6 +33,7 @@ var accessSentences = map[string]string{
 	"cli_not_granted":            "Not turned on for you. Ask your admin.",
 	"cli_no_github_repo":         "GitHub CLI works only with this run's GitHub repositories. Add one on the Files step.",
 	"component_unavailable":      componentUnavailableRefusal,
+	reasonRepoNoCredential:       "No credential is set up for this repository, so the run starts without one.",
 	"resident_off":               "Your organisation has turned off environment-variable and file delivery. Use a request header.",
 
 	"delivery." + deliveryProxy:       "Proxy only",

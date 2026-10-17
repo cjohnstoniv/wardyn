@@ -4,12 +4,15 @@
 package livebus
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"log/slog"
 	"strings"
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 var w4CovRun = uuid.MustParse("cccccccc-0000-0000-0000-000000000001")
@@ -71,5 +74,22 @@ func TestW4CovPublishRefusesBeforeTouchingPostgres(t *testing.T) {
 	err = b.Publish(ctx, KindRunEvent, w4CovRun, strings.Repeat("x", maxPayload+1))
 	if err == nil || !strings.Contains(err.Error(), "too large") || !strings.Contains(err.Error(), KindRunEvent) {
 		t.Errorf("an oversize notice: %v", err)
+	}
+}
+
+func TestW4CovListenerFailureIsLogged(t *testing.T) {
+	var logs bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	pool, err := pgxpool.New(context.Background(), "postgres://u:p@127.0.0.1:1/db?connect_timeout=1") // lazy: no dial yet
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	New(pool, "replica-a").listenOnce(context.Background())
+	if out := logs.String(); !strings.Contains(out, "listener failed") || !strings.Contains(out, "step=connect") {
+		t.Errorf("log = %q, want the failed connect named", out)
 	}
 }

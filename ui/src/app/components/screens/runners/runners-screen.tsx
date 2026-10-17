@@ -131,15 +131,16 @@ export function RunnersScreen() {
     return () => clearTimeout(id);
   }, [search]);
 
-  const go = (next: Tab, pool?: string) => {
-    setParams(next === "pools" ? { tab: "pools", ...(pool ? { pool } : {}) } : {}, { replace: !pool });
+  // A tab change replaces the entry; opening a pool or a runner out of one adds an entry, so Back returns to where it was.
+  const go = (next: Tab, pool?: string, push = false) => {
+    setParams(next === "pools" ? { tab: "pools", ...(pool ? { pool } : {}) } : {}, { replace: !pool && !push });
   };
   const openPool = (id: string) => {
     setSelected(null);
     go("pools", id);
   };
   const openRunner = (kind: RunnerKind, id: string) => {
-    go("runners");
+    go("runners", undefined, true);
     setSelected({ kind, id });
   };
 

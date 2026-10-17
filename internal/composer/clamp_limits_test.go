@@ -48,6 +48,11 @@ func TestCapResources(t *testing.T) {
 	if changed || got != nil {
 		t.Errorf("nil = %+v changed=%v, want the deployment default left alone", got, changed)
 	}
+	// ... but with no floor above it, a maximum below the default also bounds a run that set no size.
+	got, changed = CapResources(nil, lim, types.ResourceLimits{})
+	if !changed || got == nil || *got != (types.ResourceLimits{CPUMillis: 500}) {
+		t.Errorf("nil under a 500 maximum, no floor = %+v changed=%v, want a fresh 500-CPU block with memory left unset", got, changed)
+	}
 	orig := &types.ResourceLimits{CPUMillis: 64000, MemoryMiB: 1 << 20, DiskMiB: 7}
 	got, changed = CapResources(orig, lim, floor)
 	if !changed || got.CPUMillis != 1000 || got.MemoryMiB != 4096 || got.DiskMiB != 7 {

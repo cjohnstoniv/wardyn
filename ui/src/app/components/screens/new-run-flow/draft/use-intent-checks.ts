@@ -293,7 +293,9 @@ export function useIntentChecks(params: Params) {
   // provider's sign-in door.
   const preflightRead: PreflightRead | null =
     preflightIsCurrent && (result !== null || isCredentialRefusal(error)) ? { generation: checked.generation, at: checked.at } : null;
-  const missing = (kind: string) => !!result?.setup_items?.some((row) => row.kind === kind && row.status === "missing");
+  // A credential refusal carries the setup rows resolved before it: its other blockers still hold Launch.
+  const refusalSetup = preflightIsCurrent && isCredentialRefusal(error) ? (error as HttpError).setupItems ?? [] : [];
+  const missing = (kind: string) => (result?.setup_items ?? refusalSetup).some((row) => row.kind === kind && row.status === "missing");
   const previewInScope = currentRead("preview");
   const previewIsCurrent = previewInScope && checks.preview.result !== null && !checks.preview.stale;
 
@@ -313,7 +315,7 @@ export function useIntentChecks(params: Params) {
     preflightFresh,
     preflightBlock: preflightFresh && (refused || (autoCheck.backendArm && missing("backend")) || (autoCheck.modelArm && missing("llm_access"))),
     preflightNotChecked: preflightIsCurrent && checked.status === 429,
-    preflightRefusal: preflightIsCurrent && isCredentialRefusal(error) && body !== null ? { body, provider: error instanceof HttpError ? error.provider : "" } : null,
+    preflightRefusal: preflightIsCurrent && isCredentialRefusal(error) && body !== null ? { body, provider: error instanceof HttpError ? error.provider : "", setupItems: refusalSetup } : null,
     preview: {
       result: previewInScope ? checks.preview.result as PolicyPreviewResult | null : null,
       error: previewInScope ? checks.preview.error : null,

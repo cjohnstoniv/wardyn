@@ -87,11 +87,13 @@ export interface SetupNeededProps {
   done: ReadonlySet<string>;
   intent: RunIntent;
   names?: HarnessNames;
+  /** The server has answered exactly this body. While it has not, the last all-clear is held, not claimed. Default true. */
+  answered?: boolean;
   /** A door finished: the item is Done and the server is asked again. */
   onDone: (id: string) => void;
 }
 
-export function SetupNeeded({ items, pending, done, intent, names, onDone }: SetupNeededProps) {
+export function SetupNeeded({ items, pending, done, intent, names, answered = true, onDone }: SetupNeededProps) {
   const headingId = React.useId();
   const announce = useAnnounce();
   const door = useModelAccessDoor();
@@ -133,7 +135,7 @@ export function SetupNeeded({ items, pending, done, intent, names, onDone }: Set
         <p className="text-sm text-muted-foreground">{NR_TOOLS.SETUP_BODY}</p>
       </div>
       {items.length === 0 ? (
-        <p className="flex items-center gap-2 text-sm text-muted-foreground"><Check aria-hidden className="size-4 text-success" />{NR_TOOLS.SETUP_ALL_SET}</p>
+        answered && <p className="flex items-center gap-2 text-sm text-muted-foreground"><Check aria-hidden className="size-4 text-success" />{NR_TOOLS.SETUP_ALL_SET}</p>
       ) : (
         <ul className="flex flex-col gap-2">
           {items.map((item) => {

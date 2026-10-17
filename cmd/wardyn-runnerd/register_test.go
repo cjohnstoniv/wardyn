@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -286,6 +287,33 @@ func TestRegisterSendsMeasuredProposals(t *testing.T) {
 	}
 	if sent, _, _, err := registerWith(t, "--total-disk", "100"); err != nil || sent.Limits.Total.DiskMiB != 100*1024 {
 		t.Fatalf("an unmeasured disk given = %+v, %v", sent.Limits, err)
+	}
+}
+
+// A missing token file is reported before the computer is measured (and so before any limit question).
+func TestRegisterReadsTheTokenFileBeforeMeasuring(t *testing.T) {
+	measured := false
+	measureHost = func(context.Context) (types.RunnerAmounts, error) { measured = true; return testHost, nil }
+	t.Cleanup(func() { measureHost = func(context.Context) (types.RunnerAmounts, error) { return testHost, nil } })
+	cmd := newRegisterCommand()
+	cmd.SetOut(&strings.Builder{})
+	cmd.SetIn(strings.NewReader(""))
+	root := t.TempDir()
+	cmd.SetArgs([]string{"--org", "https://org.example", "--token-file", filepath.Join(root, "missing"), "--state-dir", filepath.Join(root, "identity")})
+	if err := cmd.Execute(); err == nil || !strings.Contains(err.Error(), "open registration token file") || measured {
+		t.Fatalf("err = %v, measured = %v; want the token file refused before the host was measured", err, measured)
+	}
+}
+
+// A host that cannot be measured says why, beside the "not measured" figures.
+func TestRegisterSaysWhyTheHostWasNotMeasured(t *testing.T) {
+	measureHost = func(context.Context) (types.RunnerAmounts, error) {
+		return types.RunnerAmounts{}, errors.New("docker did not answer")
+	}
+	t.Cleanup(func() { measureHost = func(context.Context) (types.RunnerAmounts, error) { return testHost, nil } })
+	_, called, out, err := registerWith(t)
+	if err == nil || called || !strings.Contains(out, "measuring this computer failed: docker did not answer") {
+		t.Fatalf("an unmeasurable host = %v (sent %v)\n%s", err, called, out)
 	}
 }
 

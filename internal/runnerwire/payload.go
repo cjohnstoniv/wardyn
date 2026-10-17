@@ -41,6 +41,10 @@ type (
 		PingInterval time.Duration `json:"ping_interval"`
 		// LastSeq is the org's received cursor; the runner replays after it.
 		LastSeq uint64 `json:"last_seq"`
+		// ProxyImage is the egress-proxy image the organisation runs for this runner's architecture, so
+		// an upgraded organisation's image reaches the runner without a reinstall. Empty when the
+		// organisation names none; an older runner ignores the field.
+		ProxyImage string `json:"proxy_image,omitempty"`
 	}
 	// Reason is the payload of REVOKED and GOAWAY.
 	Reason struct {
@@ -105,6 +109,18 @@ type Caps struct {
 	// Arch is the Docker engine's CPU architecture ("amd64" or "arm64"), stored as the runner's arch;
 	// omitted when the engine could not be asked.
 	Arch string `json:"arch,omitempty"`
+	// BYOISelftest says the runner serves MethodSelftest; absent (an older
+	// runner) refuses a BYOI task run rather than skip its check.
+	BYOISelftest bool `json:"byoi_selftest,omitempty"`
+	// Retire says the runner settles a retire_run receipt that carries
+	// no_output (0.9.3 on). The org queues retire_run only to a runner that
+	// says so; an older runner keeps every run's output, as before.
+	Retire bool `json:"retire,omitempty"`
+	// Resident says the runner holds runner_resident credentials: it serves
+	// deliver_resident and fills a ResidentMints placeholder (0.9.3 on). The org
+	// reads and sends a resident value only for a runner that says so; an older
+	// runner's run with one is refused before any value is read.
+	Resident bool `json:"resident,omitempty"`
 }
 
 // Waiting is the `waiting` event's data.

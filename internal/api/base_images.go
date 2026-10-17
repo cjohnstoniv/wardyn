@@ -50,7 +50,7 @@ func validateBaseImageWrite(b types.BaseImageEntry) string {
 	return ""
 }
 
-// image400DotSegment — DRAFT (M2 canon pending). %s is the field name.
+// image400DotSegment — %s is the field name.
 const image400DotSegment = `%s is not an image reference — an image reference has no backslash and no "", "." or ".." path segment`
 
 // imageRefPathSafe reports whether an image ref has no backslash and no

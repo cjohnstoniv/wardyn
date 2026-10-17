@@ -166,7 +166,7 @@ describe("ruleSourceLabel", () => {
   // synchronously, before any approval row exists), and is labelled
   // distinctly rather than falling into the generic "Brokered" bucket every
   // other brokered:* source gets.
-  it("names each push_rules refusal distinctly, ahead of the generic 'Brokered' fallback — DRAFT strings, packet 7b", () => {
+  it("names each push_rules refusal distinctly, ahead of the generic 'Brokered' fallback — packet 7b", () => {
     expect(ruleSourceLabel("brokered:git:push-rules")).toEqual({
       label: "Push refused — a denied path",
       tone: "danger",

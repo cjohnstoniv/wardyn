@@ -387,11 +387,14 @@ func (d *Driver) ObserveProxies(ctx context.Context, runIDs []uuid.UUID) (map[uu
 	out := make(map[uuid.UUID]runner.ProxyObservation, len(runIDs))
 	var errs []error
 	for _, id := range runIDs {
-		p := byName[proxyPodName(id)]
-		if p == nil {
-			out[id] = runner.ProxyNotFound
-		} else {
+		if p := byName[proxyPodName(id)]; p != nil {
 			out[id] = d.classifyProxy(p)
+		} else if held, err := d.proxyCreated(id); err != nil {
+			errs = append(errs, err)
+		} else if held {
+			// NotFound speaks only for a proxy that was created: a run still inside CreateSandbox
+			// (its Ref stored before any pod exists) is left out, not reported gone.
+			out[id] = runner.ProxyNotFound
 		}
 		for comp, name := range map[string]string{componentProxy: proxyPodName(id), componentAgent: agentPodName(id)} {
 			pod := byName[name]
@@ -407,6 +410,16 @@ func (d *Driver) ObserveProxies(ctx context.Context, runIDs []uuid.UUID) (map[uu
 		}
 	}
 	return out, errors.Join(errs...)
+}
+
+// proxyCreated reports whether the run's evidence records a proxy pod UID from its create response.
+func (d *Driver) proxyCreated(runID uuid.UUID) (bool, error) {
+	ev, err := d.loadEvidence(runID)
+	if err != nil {
+		return false, err
+	}
+	pe := ev.Pods[componentProxy]
+	return pe != nil && pe.UID != "", nil
 }
 
 // tickNames lists each node name a run's unreleased pods hold, latching any reuse.

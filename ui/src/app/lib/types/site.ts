@@ -33,6 +33,8 @@ export interface EgressRedirect {
   // internal/api/site_config.go 400s a body setting both).
   token_integration_ref?: string;
   ecosystem?: string;
+  // A go row only: turn Go checksum-database verification off for runs through this mirror.
+  go_checksum_db_off?: boolean;
 }
 
 export interface RunnerSettings {

@@ -8,6 +8,8 @@
 // sentence in ado-pat-copy.ts fails here instead of shipping. MINTED_SETUP_REDIRECT
 // is the one line that is not in the mock (the plan review's finding F5).
 import { describe, it, expect } from "vitest";
+import { existsSync, readFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import { ADO_PAT, gettingStartedOwnChip } from "./ado-pat-copy";
 
 describe("ADO_PAT copy canon", () => {
@@ -153,5 +155,44 @@ describe("ADO_PAT remove canon", () => {
     expect(ADO_PAT.OWN_REMOVE_FAILED_TOAST("wardyn-live-test")).toBe(
       "Couldn't remove your token for wardyn-live-test. It's still stored in Wardyn. Try again.",
     );
+  });
+});
+
+// The owner-approved Azure DevOps decline sentence, character for character,
+// for every reason code the server writes, and the server's own copy of each
+// phrase (internal/api/runs_dispatch_ado_inject.go): the run's audit row, the
+// doors' warnings and `wardyn run get` carry the server's characters, the
+// Credentials panel these.
+describe("ADO_PAT lane decline canon", () => {
+  const canon: Record<string, string> = {
+    no_person: "This run was not given an Azure DevOps credential: no signed-in person started it.",
+    row_not_admitted: "This run was not given an Azure DevOps credential: no Azure DevOps provider admits its repository.",
+    lane_not_allowed:
+      "This run was not given an Azure DevOps credential: its Azure DevOps provider does not allow the per-person lane.",
+    credential_source:
+      "This run was not given an Azure DevOps credential: its Azure DevOps provider does not use each person's own credential.",
+    org_unparsed: "This run was not given an Azure DevOps credential: its repository address names no organisation.",
+    server_address:
+      "This run was not given an Azure DevOps credential: its repository is not under the provider's Azure DevOps Server address.",
+    cross_repo_conflict:
+      "This run was not given an Azure DevOps credential: its repositories span more than one Azure DevOps organisation.",
+    site_config_unreadable: "This run was not given an Azure DevOps credential: the provider settings could not be read.",
+  };
+
+  it("one sentence per reason code", () => {
+    expect(Object.keys(ADO_PAT.LANE_DECLINE_REASON).sort()).toEqual(Object.keys(canon).sort());
+    for (const [code, sentence] of Object.entries(canon)) {
+      expect(ADO_PAT.LANE_DECLINED(ADO_PAT.LANE_DECLINE_REASON[code])).toBe(sentence);
+    }
+  });
+
+  it("the server writes the same characters", () => {
+    let root = resolve(process.cwd());
+    while (!existsSync(join(root, "go.mod"))) root = dirname(root);
+    const go = readFileSync(join(root, "internal/api/runs_dispatch_ado_inject.go"), "utf8");
+    expect(go).toContain('const adoLaneDeclinePrefix = "This run was not given an Azure DevOps credential: "');
+    for (const phrase of Object.values(ADO_PAT.LANE_DECLINE_REASON)) {
+      expect(go).toContain(`"${phrase}",`);
+    }
   });
 });

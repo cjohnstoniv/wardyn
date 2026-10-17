@@ -3,9 +3,10 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, renderHook, screen } from "@testing-library/react";
 
+import { wfetch } from "../../lib/api/core";
 import {
   OperatorProvider,
   useCanMutate,
@@ -169,5 +170,24 @@ describe("useCanMutate — operator, or the member who owns this row", () => {
       </OperatorProvider>,
     );
     expect(screen.getByText("canMutate:false")).toBeInTheDocument();
+  });
+
+  // DR-0034 / L1: a draft write names the confirmed person, never a placeholder.
+  describe("expected principal on a draft write", () => {
+    afterEach(() => vi.unstubAllGlobals());
+    const sent = async () => {
+      const fetchMock = vi.fn<typeof fetch>(async () => new Response("{}", { status: 200 }));
+      vi.stubGlobal("fetch", fetchMock);
+      await wfetch("/runs", { method: "POST", asPerson: true });
+      return (fetchMock.mock.calls[0]![1]!.headers as Headers).get("X-Wardyn-Expected-Principal");
+    };
+    it("sends the principal once /me has resolved", async () => {
+      render(<OperatorProvider operator={true} operatorResolved={true} principal="a@example.com"><span /></OperatorProvider>);
+      expect(await sent()).toBe("a%40example.com");
+    });
+    it.each(["unknown", "…"])("sends nothing for the %s placeholder while /me is unresolved", async (placeholder) => {
+      render(<OperatorProvider operator={true} operatorResolved={false} principal={placeholder}><span /></OperatorProvider>);
+      expect(await sent()).toBeNull();
+    });
   });
 });

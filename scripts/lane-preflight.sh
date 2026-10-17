@@ -119,10 +119,22 @@ if [ "${candidate}" = 1 ]; then
   # probes), not the package's whole suite. A throwaway tmpfs postgres:17, as ci-parity-local.sh, with
   # the pool guard on, superuser asserted and -p 1. Exit 1 with "no PG tests found" means none to run;
   # any other selector failure fails the step.
+  #
+  # The internal/api set is ~510 s, so it runs only when a NON-test file of internal/api or of
+  # internal/store changed (store is what api's handlers sit on, so a store change runs api's PG tests,
+  # which a package-local list never did). A change confined to api test files leaves its PG tests to
+  # hosted CI; every other changed package keeps its own PG tests.
+  # go_pkgs holds import paths by now (the go list above), so match the directory as a path segment.
+  pg_pkgs=()
+  for p in "${go_pkgs[@]}"; do
+    [[ "${p}" =~ /internal/api(/|$) ]] || pg_pkgs+=("${p}")
+  done
+  api_src=$(grep -E '^internal/(api|store)(/.*)?\.go$' <<<"${changed}" | grep -v '_test\.go$' || true)
+  [ -z "${api_src}" ] || pg_pkgs+=("./internal/api/...")
   pg_re=""
-  if [ "${#go_pkgs[@]}" -gt 0 ]; then
+  if [ "${#pg_pkgs[@]}" -gt 0 ]; then
     sel_err=$(mktemp)
-    if pg_re=$("${G[@]}" scripts/pg-test-select.sh "${go_pkgs[@]}" 2>"${sel_err}"); then
+    if pg_re=$("${G[@]}" scripts/pg-test-select.sh "${pg_pkgs[@]}" 2>"${sel_err}"); then
       :
     elif grep -q 'no PG tests found' "${sel_err}"; then
       pg_re=""
@@ -140,12 +152,12 @@ if [ "${candidate}" = 1 ]; then
     # The image restarts its server once after initdb: ready is the second "ready to accept connections".
     step "4 wait for postgres" timeout 90 awk '/ready to accept connections/ { if (++n == 2) exit }' < <(docker logs -f "${name}" 2>&1)
     port=$(docker port "${name}" 5432/tcp | head -1 | sed 's/.*://')
-    step "4 Postgres-gated tests (${#go_pkgs[@]} packages)" "${G[@]}" env \
+    step "4 Postgres-gated tests (${#pg_pkgs[@]} packages)" "${G[@]}" env \
       WARDYN_TEST_PG="postgres://postgres:wardyn@localhost:${port}/wardyn?sslmode=disable" \
       WARDYN_TEST_PG_SUPERUSER=1 WARDYN_TEST_POOL_GUARD=1 \
-      go test -p 1 -count=1 -timeout 30m -run "${pg_re}" "${go_pkgs[@]}"
+      go test -p 1 -count=1 -timeout 30m -run "${pg_re}" "${pg_pkgs[@]}"
   else
-    log "[candidate] 4 Postgres-gated tests: no changed package has any, skipped"
+    log "[candidate] 4 Postgres-gated tests: no changed package has any (internal/api only runs on a non-test api or store change), skipped"
   fi
 
   # vitest files that read outside ui/ (Go sources, docs, the repo root): ci.yml's discovery, verbatim.

@@ -5,6 +5,7 @@ package approval_test
 
 import (
 	"errors"
+	"slices"
 	"testing"
 	"time"
 
@@ -111,5 +112,37 @@ func TestExpireStale_RunWaitAndEndBindBeforeTheDeploymentCutoff(t *testing.T) {
 		if got.State != want {
 			t.Errorf("approval %s state = %s, want %s", id, got.State, want)
 		}
+	}
+}
+
+// TestExpireStale_PagesTheStaleSet: the sweep reads the stale rows in bounded keyset pages and never
+// the fleet's whole pending list, and a fresh row stays pending.
+func TestExpireStale_PagesTheStaleSet(t *testing.T) {
+	ctx := t.Context()
+	stale := time.Now().UTC().Add(-2 * time.Hour)
+	f := &fakeStore{}
+	const total = 600
+	for range total {
+		if _, err := f.CreateApproval(ctx, types.ApprovalRequest{
+			ID: uuid.New(), RunID: uuid.New(), Kind: types.ApprovalEgressDomain,
+			State: types.ApprovalPending, RequestedAt: stale,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	fresh, _ := f.CreateApproval(ctx, types.ApprovalRequest{
+		ID: uuid.New(), RunID: uuid.New(), Kind: types.ApprovalEgressDomain,
+		State: types.ApprovalPending, RequestedAt: time.Now().UTC(),
+	})
+
+	n, err := approval.ExpireStale(ctx, f, time.Hour)
+	if err != nil || n != total {
+		t.Fatalf("ExpireStale = %d, %v; want %d, nil", n, err, total)
+	}
+	if f.listAllCalls != 0 || len(f.pageSizes) < 3 || slices.Max(f.pageSizes) > 256 {
+		t.Fatalf("fleet reads = %d, page sizes = %v; want no fleet read and pages of at most 256", f.listAllCalls, f.pageSizes)
+	}
+	if got, _ := f.GetApproval(ctx, fresh.ID); got.State != types.ApprovalPending {
+		t.Fatalf("fresh approval is %s, want it left pending", got.State)
 	}
 }

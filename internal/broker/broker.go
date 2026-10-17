@@ -304,6 +304,9 @@ type Broker struct {
 	// confinement (see envRequireRefRuleset). Read once at construction so a
 	// garbage value fails at BOOT rather than mid-mint.
 	requireRefRuleset bool
+	// trustDomain is the SPIFFE trust domain the run's identity is issued under, for
+	// the actor a synthesized claim set or a revoke row names.
+	trustDomain string
 }
 
 // envRequireRefRuleset opts IN to refusing a github_token mint whose repo is not
@@ -337,9 +340,18 @@ const refRulesetProbeTimeout = 15 * time.Second
 // minted; a nil minter on a github_token grant fails closed.
 func New(db TxBeginner, secrets secretstore.Store, rec audit.Recorder, idp identity.Provider, gh GitHubMinter) *Broker {
 	return &Broker{
-		db: db, secrets: secrets, audit: rec, identity: idp, github: gh,
+		db: db, secrets: secrets, audit: rec, identity: idp, github: gh, trustDomain: defaultTrustDomain,
 		requireRefRuleset: cliutil.EnvBool(envRequireRefRuleset, false),
 	}
+}
+
+// WithTrustDomain sets the SPIFFE trust domain the broker names runs under in audit rows (an empty
+// one keeps the default). Call before the Broker is used.
+func (b *Broker) WithTrustDomain(td string) *Broker {
+	if td != "" {
+		b.trustDomain = td
+	}
+	return b
 }
 
 // WithMaskRegistry attaches a secret-mask Registry to the Broker. After a

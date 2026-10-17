@@ -11,7 +11,8 @@ import { NR_DOCUMENT } from "../../../wardyn/copy/new-run/document";
 import { NR_FILES } from "../../../wardyn/copy/new-run/files";
 import { NR_HARNESSES } from "../../../wardyn/copy/new-run/harnesses";
 import { NR_REVIEW } from "../../../wardyn/copy/new-run/review";
-import { NR_SHARED } from "../../../wardyn/copy/new-run/shared";
+import { NR_RUN } from "../../../wardyn/copy/new-run/run";
+import { NR_SHAPE } from "../../../wardyn/copy/new-run/shape";
 import { NR_TEMPLATES } from "../../../wardyn/copy/new-run/templates";
 import type { SetupItem } from "../../../../lib/types/preflight";
 import type { TemplateSetupNeed } from "../../../../lib/types/templates";
@@ -40,23 +41,17 @@ export function locationOfHome(home: FieldHome | undefined): NewRunLocation | un
   return home === "document" ? { screen: "document", format: "yaml" } : { screen: "step", step: home };
 }
 
-const HOME_LABEL: Record<FieldHome, string> = {
-  shape: NR_SHARED.STEP_SHAPE, run: NR_SHARED.STEP_RUN, harnesses: NR_SHARED.STEP_HARNESSES, files: NR_SHARED.STEP_FILES,
-  tools: NR_SHARED.STEP_TOOLS, document: NR_DOCUMENT.TITLE, review: "", excluded: "",
-};
-
-// TODO(E1d follow-up): the canon has no sentence for the "" codes. Such a blocker links under the name of the
-// screen that fixes it, which is canon text, until the sentences land.
+/** Every local issue code has a sentence of its own. */
 const ISSUE_TEXT: Record<StepIssueCode, string> = {
-  shape_required: "",
-  harness_required: "",
+  shape_required: NR_SHAPE.SHAPE_REQUIRED,
+  harness_required: NR_HARNESSES.HARNESS_REQUIRED,
   task_required: NR_HARNESSES.TASK_ERROR,
-  command_required: "",
-  pool_required: "",
+  command_required: NR_RUN.COMMAND_REQUIRED,
+  pool_required: NR_RUN.POOL_HELP,
   main_drive_size_required: NR_FILES.SIZE_ERROR,
   files_choice_required: NR_FILES.CHOOSE_FILES,
-  starts_here_required: "",
-  doc_invalid: "",
+  starts_here_required: NR_FILES.STARTS_HERE_REQUIRED,
+  doc_invalid: NR_DOCUMENT.DOC_INVALID,
 };
 
 /** "inline_policy.model_provider" as "Model provider": the field named, not a sentence about it. */
@@ -88,7 +83,7 @@ export interface BlockerInput {
 export function buildBlockers(input: BlockerInput): Blocker[] {
   const out: Blocker[] = [];
   for (const i of input.issues) {
-    out.push({ id: `local:${i.code}`, kind: "local", text: ISSUE_TEXT[i.code] || HOME_LABEL[i.home], to: locationOfHome(i.home) });
+    out.push({ id: `local:${i.code}`, kind: "local", text: ISSUE_TEXT[i.code], to: locationOfHome(i.home) });
   }
   for (const path of input.unsupported) {
     out.push({ id: `unsupported:${path}`, kind: "unsupported", text: NR_REVIEW.BLOCKER_UNSUPPORTED(path), to: locationOfHome(homeOfPath(path) ?? "document"), field: path });

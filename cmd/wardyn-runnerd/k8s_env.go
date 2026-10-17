@@ -177,6 +177,9 @@ func checkSubstrateFlags(substrate string, changed func(string) bool) error {
 	case "docker":
 		for _, f := range k8sServeFlags {
 			if changed(f) {
+				if f == "arch" {
+					return fmt.Errorf("--arch (or %s in the environment) applies only to --substrate=k8s", archEnv)
+				}
 				return fmt.Errorf("--%s applies only to --substrate=k8s", f)
 			}
 		}

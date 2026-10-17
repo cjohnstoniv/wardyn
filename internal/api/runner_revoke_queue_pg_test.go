@@ -159,9 +159,9 @@ func TestPG_ARunWaitingForARevokedRunnerIsEndedOnce(t *testing.T) {
 	}
 	var wg sync.WaitGroup
 	for range 8 {
-		wg.Go(func() { e.srv.endQueuedRunsOfRevokedRunners(ctx) })
+		wg.Go(func() { _ = e.srv.endQueuedRunsOfRevokedRunners(ctx) })
 	}
-	wg.Go(func() { _, _ = e.srv.endQueuedRunsPinnedTo(ctx, e.personP, a) })
+	wg.Go(func() { _, _ = e.srv.endQueuedRunsPinnedTo(ctx, types.Runner{Owner: e.personP}, a) })
 	wg.Wait()
 	if applied, err := e.srv.endRunQueuedForRevokedRunner(ctx, expired); applied || err != nil || e.run(expired).State != types.RunFailed {
 		t.Errorf("the run its deadline ended was ended again (applied %v, %v): now %s", applied, err, e.run(expired).State)

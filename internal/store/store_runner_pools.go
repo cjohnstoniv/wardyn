@@ -51,7 +51,7 @@ type RunnerPoolStore interface {
 	DeleteRunnerPoolUsePolicy(ctx context.Context, id uuid.UUID) error
 
 	GetRunnerPoolOrgDefaults(ctx context.Context) (types.RunnerPoolDefaults, error)
-	PutRunnerPoolOrgDefaults(ctx context.Context, d types.RunnerPoolDefaults, by string) error
+	PutRunnerPoolOrgDefaults(ctx context.Context, d types.RunnerPoolDefaults, by string) (before, after types.RunnerPoolDefaults, err error)
 	BootstrapRunnerPools(ctx context.Context, executors []string, name string) (*types.RunnerPool, *types.RunnerPoolDefaults, error)
 }
 
@@ -74,8 +74,9 @@ var (
 
 // RunnerPoolsMax bounds the organisation's live pools and RunnerPoolsPerOwnerMax one person's, so a
 // person's catalogue read is bounded and no person's pools can crowd the organisation's out of it.
-// RunnerPoolsOversightMax bounds the oversight read, which lists the organisation's pools and then the
-// caller's own before anyone else's, so neither can drop out of it.
+// RunnerPoolsOversightMax bounds the oversight list, which lists the organisation's pools and then the
+// caller's own before anyone else's, so neither can drop out of it. The read takes one more row, so the
+// list can say that more exist.
 const (
 	RunnerPoolsMax          = 200
 	RunnerPoolsPerOwnerMax  = 10
@@ -206,7 +207,7 @@ func (s PG) ListRunnerPoolCatalogue(ctx context.Context, owner string, all bool)
 		ORDER BY CASE WHEN p.owner IS NULL THEN 0 WHEN p.owner = $1 THEN 1 ELSE 2 END, lower(p.name), p.id LIMIT $2`
 	limit := RunnerPoolsMax + RunnerPoolsPerOwnerMax
 	if all {
-		limit = RunnerPoolsOversightMax
+		limit = RunnerPoolsOversightMax + 1
 	}
 	return collect(ctx, s.Pool, "list", "runner pools", q, []any{owner, limit, all}, func(row pgx.Row) (RunnerPoolCatalogueRow, error) {
 		var r RunnerPoolCatalogueRow
@@ -375,7 +376,8 @@ func deleteRunnerPoolQ(ctx context.Context, q Querier, id uuid.UUID) (RunnerPool
 // DeleteRunnerPoolsByOwner is a person's erasure of their pools: each live pool owner holds is deleted
 // as DeleteRunnerPool deletes one, and then every pool of theirs, the tombstones included, forgets them
 // (owner and created_by cleared). It holds the lock every create takes, so a pool the person creates
-// meanwhile is either deleted here or made after it. Returns the deletions, in pool id order.
+// meanwhile is either deleted here or made after it. The person's stored preferences are deleted in the
+// same transaction. Returns the deletions, in pool id order.
 func (s PG) DeleteRunnerPoolsByOwner(ctx context.Context, owner string) ([]RunnerPoolDeletion, error) {
 	var out []RunnerPoolDeletion
 	err := s.inTx(ctx, func(q Querier) error {
@@ -399,7 +401,11 @@ func (s PG) DeleteRunnerPoolsByOwner(ctx context.Context, owner string) ([]Runne
 			}
 			out = append(out, d)
 		}
-		_, err = q.Exec(ctx, `UPDATE runner_pools SET owner = NULL, created_by = '' WHERE owner = $1 AND state = 'deleted'`, owner)
+		if _, err = q.Exec(ctx, `UPDATE runner_pools SET owner = NULL, created_by = '' WHERE owner = $1 AND state = 'deleted'`, owner); err != nil {
+			return err
+		}
+		// The person's stored preferences (their default pool among them) go with their pools.
+		_, err = q.Exec(ctx, `DELETE FROM principal_prefs WHERE principal = $1`, owner)
 		return err
 	})
 	return out, err
@@ -408,7 +414,7 @@ func (s PG) DeleteRunnerPoolsByOwner(ctx context.Context, owner string) ([]Runne
 // clearOrgDefaultSlotsQ clears the organisation default when it names pool id and records the
 // defaults before and after on out; it records nothing when it did not name it.
 func clearOrgDefaultSlotsQ(ctx context.Context, q Querier, id uuid.UUID, out *RunnerPoolDeletion) error {
-	before, err := scanOrgDefaults(q.QueryRow(ctx, `SELECT pool_id, barrier, recording FROM runner_pool_org_defaults FOR UPDATE`))
+	before, err := scanOrgDefaults(q.QueryRow(ctx, `SELECT pool_id, barrier, recording, revision FROM runner_pool_org_defaults FOR UPDATE`))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil
 	}
@@ -418,7 +424,7 @@ func clearOrgDefaultSlotsQ(ctx context.Context, q Querier, id uuid.UUID, out *Ru
 	if before.PoolID == nil || *before.PoolID != id {
 		return nil
 	}
-	if _, err := q.Exec(ctx, `UPDATE runner_pool_org_defaults SET pool_id = NULL, updated_by = 'system', updated_at = now()`); err != nil {
+	if _, err := q.Exec(ctx, `UPDATE runner_pool_org_defaults SET pool_id = NULL, updated_by = 'system', updated_at = now(), revision = revision + 1`); err != nil {
 		return err
 	}
 	after := before
@@ -621,7 +627,7 @@ func (s PG) AddOwnRunnerToPool(ctx context.Context, id, runnerID uuid.UUID, owne
 		err = q.QueryRow(ctx, `
 			INSERT INTO runner_pool_members (pool_id, runner_id)
 			SELECT p.id, r.id FROM runner_pools p, runners r
-			WHERE p.id = $1 AND r.id = $2 AND p.owner = $3 AND r.owner = $3 AND r.state = 'claimed' AND r.org_url_sha256 = $4
+			WHERE p.id = $1 AND r.id = $2 AND p.owner = $3 AND r.owner = $3 AND r.owner_kind = 'person' AND r.state = 'claimed' AND r.org_url_sha256 = $4
 			ON CONFLICT DO NOTHING RETURNING pool_id, kind, added_at`, id, runnerID, owner, orgURLSHA256).Scan(&m.PoolID, &m.Kind, &m.AddedAt)
 		if err == nil {
 			added = true
@@ -740,22 +746,46 @@ func DeleteRunnerPoolUsePolicyQ(ctx context.Context, q Querier, id uuid.UUID) er
 
 // GetRunnerPoolOrgDefaults reads the organisation's defaults; the zero value when none were written.
 func (s PG) GetRunnerPoolOrgDefaults(ctx context.Context) (types.RunnerPoolDefaults, error) {
-	d, err := scanOrgDefaults(s.Pool.QueryRow(ctx, `SELECT pool_id, barrier, recording FROM runner_pool_org_defaults`))
+	d, err := scanOrgDefaults(s.Pool.QueryRow(ctx, `SELECT pool_id, barrier, recording, revision FROM runner_pool_org_defaults`))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return types.RunnerPoolDefaults{}, nil
 	}
 	return d, err
 }
 
-// PutRunnerPoolOrgDefaults replaces the organisation's defaults. The caller has checked the pool; a
-// default only names one, and the resolver refuses a name that has since gone or been switched off.
-func (s PG) PutRunnerPoolOrgDefaults(ctx context.Context, d types.RunnerPoolDefaults, by string) error {
-	_, err := s.Pool.Exec(ctx, `
+// PutRunnerPoolOrgDefaults replaces the organisation's defaults and returns what they were and what it
+// wrote, both in one transaction under a row lock so two concurrent writes each see the other's result
+// as their before. An empty Recording keeps the stored one, decided against the locked row; preferred
+// lowers it. Every write bumps the revision. d.Revision, when set, is the revision the writer read: a
+// different one is ErrRunnerPoolStale, checked under the row lock, and zero writes unconditionally (a
+// writer that read no row, or one that does not say). The caller has checked the pool's state; a
+// default only names one, and the resolver refuses a name that has since been switched off. A pool
+// deleted between that check and this write is ErrNotFound: the pool row is locked first, as a delete
+// locks it before it clears the default.
+func (s PG) PutRunnerPoolOrgDefaults(ctx context.Context, d types.RunnerPoolDefaults, by string) (before, after types.RunnerPoolDefaults, err error) {
+	err = s.inTx(ctx, func(q Querier) error {
+		if d.PoolID != nil {
+			if _, err := livePoolForUpdate(ctx, q, *d.PoolID); err != nil {
+				return err
+			}
+		}
+		var err error
+		if before, err = scanOrgDefaults(q.QueryRow(ctx, `SELECT pool_id, barrier, recording, revision FROM runner_pool_org_defaults FOR UPDATE`)); err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			return err
+		}
+		if d.Revision != 0 && d.Revision != before.Revision {
+			return ErrRunnerPoolStale
+		}
+		after, err = scanOrgDefaults(q.QueryRow(ctx, `
 		INSERT INTO runner_pool_org_defaults (pool_id, barrier, recording, updated_by) VALUES ($1,$2,$3,$4)
 		ON CONFLICT (singleton) DO UPDATE SET pool_id = EXCLUDED.pool_id, barrier = EXCLUDED.barrier,
-		       recording = EXCLUDED.recording, updated_by = EXCLUDED.updated_by, updated_at = now()`,
-		d.PoolID, string(d.Barrier), string(d.Recording), by)
-	return err
+		       recording = COALESCE(NULLIF(EXCLUDED.recording, ''), runner_pool_org_defaults.recording),
+		       updated_by = EXCLUDED.updated_by, updated_at = now(), revision = runner_pool_org_defaults.revision + 1
+		RETURNING pool_id, barrier, recording, revision`,
+			d.PoolID, string(d.Barrier), string(d.Recording), by))
+		return err
+	})
+	return before, after, err
 }
 
 // BootstrapRunnerPools is the one-time upgrade step: when this deployment has configured remote-hosted
@@ -793,8 +823,9 @@ func (s PG) BootstrapRunnerPools(ctx context.Context, executors []string, name s
 		}
 		d, err := scanOrgDefaults(q.QueryRow(ctx, `
 			INSERT INTO runner_pool_org_defaults (pool_id, updated_by) VALUES ($1, 'system')
-			ON CONFLICT (singleton) DO UPDATE SET pool_id = EXCLUDED.pool_id, updated_by = 'system', updated_at = now()
-			RETURNING pool_id, barrier, recording`, p.ID))
+			ON CONFLICT (singleton) DO UPDATE SET pool_id = EXCLUDED.pool_id, updated_by = 'system', updated_at = now(),
+			       revision = runner_pool_org_defaults.revision + 1
+			RETURNING pool_id, barrier, recording, revision`, p.ID))
 		if err != nil {
 			return err
 		}
@@ -807,7 +838,7 @@ func (s PG) BootstrapRunnerPools(ctx context.Context, executors []string, name s
 func scanOrgDefaults(row pgx.Row) (types.RunnerPoolDefaults, error) {
 	var d types.RunnerPoolDefaults
 	var barrier, recording string
-	err := row.Scan(&d.PoolID, &barrier, &recording)
+	err := row.Scan(&d.PoolID, &barrier, &recording, &d.Revision)
 	d.Barrier, d.Recording = types.ConfinementClass(barrier), types.RecordingRequirement(recording)
 	return d, err
 }

@@ -6,7 +6,6 @@ package runnerio
 import (
 	"context"
 	"errors"
-	"os"
 	"path/filepath"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
@@ -15,6 +14,9 @@ import (
 
 // OutputSettled reads producer completion and durable byte acknowledgement.
 // It never closes a producer, advances its cursor or forgets retained output.
+// ErrOutputUnrecoverable means no buffer: never captured, or already gone.
+// The caller tells the two apart from its own record of the create (the
+// offline manager's OutputCapture) and the org's no_output receipt.
 func (s *Server) OutputSettled(ctx context.Context, id uuid.UUID, ref string) (int64, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return 0, false, err
@@ -59,11 +61,17 @@ func (s *Server) EraseOutput(id uuid.UUID) error {
 	b := s.outputs[id]
 	delete(s.outputs, id)
 	s.mu.Unlock()
+	unlock := func() {}
 	if b != nil {
 		b.mu.Lock()
+		unlock = b.mu.Unlock
 		b.stopped = errOutputErased
 		b.notify()
-		b.mu.Unlock()
 	}
-	return os.RemoveAll(filepath.Join(s.dir, id.String()))
+	tomb, err := s.entombOutputDir(filepath.Join(s.dir, id.String()))
+	unlock()
+	if err != nil || tomb == "" {
+		return err
+	}
+	return removeAll(tomb)
 }

@@ -9,6 +9,7 @@ package pg
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"sync"
@@ -316,4 +317,145 @@ func TestPG_ProviderPurgesAndErasesNeverDeadlock(t *testing.T) {
 		}()
 	}
 	wg.Wait()
+}
+
+// waitLockWaiters returns once n sessions of the test database are waiting on a lock.
+func waitLockWaiters(t *testing.T, pool *pgxpool.Pool, n int) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		var waiting int
+		if err := pool.QueryRow(t.Context(), `SELECT count(*) FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock'`).Scan(&waiting); err != nil {
+			t.Fatal(err)
+		}
+		if waiting >= n {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("fewer than %d sessions waited on a lock", n)
+}
+
+// A store-mode fenced Put, an erase and a provider delete take the counter row and the row's advisory
+// lock in one order. The delete holds the counter row shared; the erase queues for it exclusively;
+// a Put that took the advisory lock before the counter row would sit between them and close the
+// cycle (40P01), so it must wait for the counter row before taking the advisory lock.
+func TestPG_StoreModeFencedPutEraseAndProviderDeleteDoNotDeadlock(t *testing.T) {
+	_, base, _ := newPGStore(t)
+	s := mixedStore(t, base, mustIdentity(t), false, newMemExt("vaultkv"), true)
+	owner := "gen-ext-dead-" + uuid.NewString()
+	uid := uuid.NewString()
+	name := types.ModelProviderSecretPrefix + uid + "-key"
+	began := beginFor(t, s, owner)
+
+	del, err := holdPool(t).Begin(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = del.Rollback(context.WithoutCancel(t.Context())) }()
+	if _, err := del.Exec(t.Context(), `INSERT INTO secret_owner_generations (owned_by) VALUES ($1) ON CONFLICT (owned_by) DO NOTHING`, owner); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := del.Exec(t.Context(), `SELECT 1 FROM secret_owner_generations WHERE owned_by=$1 FOR SHARE`, owner); err != nil {
+		t.Fatal(err)
+	}
+	erased := make(chan error, 1)
+	go func() { _, err := secretstore.EraseOwner(context.Background(), s, owner); erased <- err }()
+	waitLockWaiters(t, base, 1) // the erase queues for the counter row behind the delete
+	put := make(chan error, 1)
+	go func() { put <- s.For(owner).Put(began, name, []byte("external-value-00")) }()
+	waitLockWaiters(t, base, 2) // the Put reaches whichever lock it takes first and waits there
+	deleted := make(chan error, 1)
+	go func() { _, err := s.deleteLocked(t.Context(), del, owner, name); deleted <- err }()
+
+	select {
+	case err := <-deleted:
+		if err != nil {
+			t.Fatalf("the provider delete: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the provider delete never got the row's lock")
+	}
+	if err := del.Commit(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-erased; err != nil {
+		t.Fatalf("the erase: %v", err)
+	}
+	if err := <-put; !errors.Is(err, secretstore.ErrGenerationChanged) {
+		t.Fatalf("the Put that began before the erase = %v, want ErrGenerationChanged", err)
+	}
+}
+
+// A provider removal writes no history, but it deletes an owner's old history for the provider, so it
+// locks that owner's counter row like an edit: an owner known only by their history is waited for.
+func TestPG_RemovalOnlyPurgeLocksAnOwnerKnownByTheirHistory(t *testing.T) {
+	s, pool, _ := newPGStore(t)
+	x := "gen-removal-" + uuid.NewString()
+	removedUID := uuid.NewString()
+	if _, err := pool.Exec(t.Context(), `INSERT INTO provider_connection_changes (owner, provider_id, provider_uid, reason, changed_at, new_destination)
+		VALUES ($1, $2, 'older', 'destination_changed', now(), 'https://old.example.test')`, x, "prov-"+removedUID); err != nil {
+		t.Fatal(err)
+	}
+	erase, release := holdCounter(t, s, x)
+	defer release()
+	tx, err := beginReadCommitted(t.Context(), holdPool(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(context.WithoutCancel(t.Context())) }()
+	recorded := make(chan error, 1)
+	go func() { recorded <- recordProviderChanges(purgeCtx(removalOf(removedUID)), tx) }()
+	select {
+	case err := <-recorded:
+		t.Fatalf("a removal-only purge did not wait for the owner's counter row: %v", err)
+	case <-time.After(300 * time.Millisecond):
+	}
+	if err := erase.Commit(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-recorded; err != nil {
+		t.Fatal(err)
+	}
+}
+
+// The purge deletes a provider's old history only for the owners it locked. History that lands for an
+// owner the purge did not lock, between its choosing owners and its delete, is left to that owner's own
+// erase: deleting it unlocked is what the erase's ordering cannot see.
+func TestPG_ProviderPurgeLeavesTheHistoryOfAnOwnerItDidNotLock(t *testing.T) {
+	s, pool, _ := newPGStore(t)
+	a, b := "gen-keep-a-"+uuid.NewString(), "gen-keep-b-"+uuid.NewString()
+	oldUID := uuid.NewString()
+	putProviderKey(t, s, a, oldUID)
+	third, release := holdCounter(t, s, a)
+	defer release()
+	tx, err := beginReadCommitted(t.Context(), holdPool(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(context.WithoutCancel(t.Context())) }()
+	recorded := make(chan error, 1)
+	go func() { recorded <- recordProviderChanges(purgeCtx(editOf(oldUID, "uid-2")), tx) }()
+	select {
+	case err := <-recorded:
+		t.Fatalf("the purge did not wait for the owner's counter row: %v", err)
+	case <-time.After(300 * time.Millisecond):
+	}
+	// History for the same provider lands for an owner nothing has locked, while the purge waits.
+	if _, err := pool.Exec(t.Context(), `INSERT INTO provider_connection_changes (owner, provider_id, provider_uid, reason, changed_at, new_destination)
+		VALUES ($1, $2, 'older', 'destination_changed', now(), 'https://old.example.test')`, b, "prov-"+oldUID); err != nil {
+		t.Fatal(err)
+	}
+	if err := third.Rollback(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-recorded; err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if n := historyRows(t, s, b); n != 1 {
+		t.Fatalf("the unlocked owner has %d history rows after the purge, want the 1 that landed", n)
+	}
 }

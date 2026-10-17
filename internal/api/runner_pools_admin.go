@@ -30,6 +30,9 @@ const noOrgUserPoolDefaultMsg = "There is no organization default for user pools
 // personalBarrierDefaultMsg refuses a person's own defaults naming a barrier.
 const personalBarrierDefaultMsg = "barrier is an organisation setting; an admin sets it"
 
+// personalRevisionDefaultMsg refuses a person's own defaults naming a revision.
+const personalRevisionDefaultMsg = "revision belongs to the organization's default; a personal default has none"
+
 // livePool reads an organization pool for an administrator's write; ok=false: the 404 or 500 is
 // written. A person's user pool is the 404 an unknown id gets: no administrator writes one.
 func (s *Server) livePool(w http.ResponseWriter, r *http.Request, ps store.RunnerPoolStore) (types.RunnerPool, bool) {
@@ -381,6 +384,10 @@ func defaultsView(d types.RunnerPoolDefaults, rows []store.RunnerPoolCatalogueRo
 	return d
 }
 
+// orgDefaultStaleMsg answers a write of the organisation's defaults that names a revision another
+// administrator's write has since passed.
+const orgDefaultStaleMsg = "The organization's default pool changed since you read it. Reload it and try again."
+
 func (s *Server) handleGetOrgRunnerPoolDefaults(w http.ResponseWriter, r *http.Request) {
 	ps, ok := s.runnerPoolStore(w)
 	if !ok {
@@ -404,7 +411,12 @@ func (s *Server) handlePutOrgRunnerPoolDefaults(w http.ResponseWriter, r *http.R
 		return
 	}
 	var d types.RunnerPoolDefaults
-	if !decodeStrict(w, r, &d) {
+	present, msg := decodeStrictKeys(w, r, &d)
+	if present == nil && msg == "" {
+		return
+	}
+	if msg != "" {
+		writeErrorReason(w, http.StatusBadRequest, reasonInvalidRequestBody, msg)
 		return
 	}
 	if err := d.Validate(); err != nil {
@@ -418,14 +430,25 @@ func (s *Server) handlePutOrgRunnerPoolDefaults(w http.ResponseWriter, r *http.R
 	if !ok || !checkDefaultPool(w, d, rows, true) {
 		return
 	}
-	before, err := ps.GetRunnerPoolOrgDefaults(r.Context())
-	if err == nil {
-		err = ps.PutRunnerPoolOrgDefaults(r.Context(), d, principalFromRequest(r))
+	// A body that leaves recording out keeps the stored setting (the store writes an empty one as a
+	// keep): a writer that edits only the pool or the barrier (the console's Pools tab, a CLI older
+	// than recording) never lowers required. One that names it empty lowers it, as preferred.
+	if present["recording"] && d.Recording == "" {
+		d.Recording = types.RecordingPreferred
+	}
+	before, saved, err := ps.PutRunnerPoolOrgDefaults(r.Context(), d, principalFromRequest(r))
+	if errors.Is(err, store.ErrNotFound) {
+		writePoolNotFound(w)
+		return
+	}
+	if errors.Is(err, store.ErrRunnerPoolStale) {
+		writeErrorReason(w, http.StatusConflict, string(runnerpool.ReasonStale), orgDefaultStaleMsg)
+		return
 	}
 	if err != nil {
 		writeServerError(w, r, "write organisation runner pool defaults", err)
 		return
 	}
-	s.auditPool(r, auditPoolDefaultSet, "organisation", map[string]any{"before": before, "after": d})
-	writeJSON(w, http.StatusOK, d)
+	s.auditPool(r, auditPoolDefaultSet, "organisation", map[string]any{"before": before, "after": saved})
+	writeJSON(w, http.StatusOK, saved)
 }

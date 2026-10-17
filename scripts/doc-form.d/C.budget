@@ -5,7 +5,9 @@
 # docs/CI.md 7354 adds 249 over 7105 (0.9.2 CS1): the "Docker Hub base-image mirror" section (list, mirror workflow, action, service credentials, guard 17, self-test, gaps).
 # docs/CI.md 7416 adds 62 over 7354 (0.9.2 CS2): the Go-suite controls table (api PG selection, no PG coverage, Go test quarantine).
 # docs/CI.md 7565 adds 149 over 7416 (0.9.2 CS3): the nightly scope and release concurrency section; measured on the merged tree.
-docs/CI.md=7574 share=35 # +9 (0.9.3 A1): WARDYN_TRUSTED_CA_PATH for image-script tests; +16: the ci-parity-local.sh line; +5 before it: the runner-units job row (#1968).
+# docs/CI.md (0.9.3 PKG side): +33 (0.9.3 PKG): the runner-pkg job bullet. +9 (0.9.3 A1): WARDYN_TRUSTED_CA_PATH for image-script tests; +16: the ci-parity-local.sh line; +5 before it: the runner-units job row (#1968).
+# docs/CI.md 7639 = 7606 + 33 (PKG), measured at the wave-B merge.
+docs/CI.md=7639 share=35 # +32 (0.9.3 CI): the mirror action restarts dockerd once and keeps mirror.gcr.io behind it, replacing the per-job gcr step; +9 (0.9.3 A1): WARDYN_TRUSTED_CA_PATH for image-script tests; +16: the ci-parity-local.sh line; +5 before it: the runner-units job row (#1968).
 # docs/ci-jobs-as-runs.md 2175 adds 84 over 2091 (G-090-cleanup slice F, docs rows that contradict the code): measured; the lead re-measures at merge.
 # docs/ci-jobs-as-runs.md 2360 adds 185 over 2175 (G-090-cleanup slice F r1 fix: the CI recipe as a service identity): measured; the lead re-measures at merge.
 docs/ci-jobs-as-runs.md=2360 share=35

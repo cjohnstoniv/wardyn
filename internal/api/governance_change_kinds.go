@@ -274,6 +274,12 @@ func (s *Server) holdProfileWrite(w http.ResponseWriter, r *http.Request, id uui
 		p.before, beforeStored = before, &before.profileDiffStored
 	}
 	p.changed = changedPaths(beforeStored, after.profileDiffStored)
+	// The notes a direct write returns as warnings (writeGovernanceProfile), kept with the change so the
+	// proposer and the approver read what the person who saved it directly would have.
+	if !row.Composed() {
+		p.notes = governanceOmissionWarnings(row.Ceiling, s.cfg.DefaultPolicy, row.Limits)
+	}
+	p.notes = append(p.notes, h.res.AdminWarnings...)
 	s.proposeGovernanceChange(w, r, p)
 }
 
@@ -319,7 +325,7 @@ func applyProfileChange(s *Server, r *http.Request, q store.Querier, ch types.Go
 		return govApplied{}, writeRefusal(http.StatusBadRequest, reasonGovernanceProfileRequestInvalid, "%s", msg)
 	}
 	var effective *ResolvedProfile
-	saved, err := store.WriteGovernanceProfileQ(ctx, q, id, func(all []types.GovernanceProfile) (types.GovernanceProfile, error) {
+	saved, err := store.WriteGovernanceProfileQ(ctx, q, id, func(all []types.GovernanceProfile, _ []types.GovernanceAssignment) (types.GovernanceProfile, error) {
 		base, _, _ := composedFrom(all, id, req.comp)
 		if computeETag(profileBaseState(all, id, base)) != ch.BaseHash {
 			return types.GovernanceProfile{}, store.ErrGovernanceChangeStale
@@ -391,6 +397,16 @@ func assignmentWriteAuditData(saved types.GovernanceAssignment) map[string]any {
 		"profile_id":   saved.ProfileID,
 		"priority":     saved.Priority,
 	}
+}
+
+// readDeleteAudit reads, with the readers a held delete uses, the row a direct delete is about to
+// remove and returns the fields its audit row carries: the delete alone would name only an id.
+func (s *Server) readDeleteAudit(ctx context.Context, read func(q store.Querier) (map[string]any, error)) (data map[string]any, err error) {
+	err = s.cfg.Store.DryRunGovernance(ctx, func(q store.Querier) (err error) {
+		data, err = read(q)
+		return err
+	})
+	return data, err
 }
 
 type assignmentProfileView struct {
@@ -640,27 +656,20 @@ func (s *Server) checkUserTypeSubject(ctx context.Context, q store.Querier, subj
 	return err
 }
 
-// assignmentsSnapshotKey carries the governance assignments a profile write read before its
-// transaction opened. The write runs its exemption proof inside that transaction, so reading the
-// assignments there would take a second pool connection while the write holds one.
+// assignmentsSnapshotKey carries the governance assignments a profile write's transaction read under
+// the graph lock, which every assignment write takes too: the exemption proof judges a rename on the
+// assignments the write commits beside.
 type assignmentsSnapshotKey struct{}
 
-type assignmentsSnapshot struct {
-	all []types.GovernanceAssignment
-	err error
+// withGovernanceAssignments carries all for a later renameMaySelect on the returned context.
+func withGovernanceAssignments(ctx context.Context, all []types.GovernanceAssignment) context.Context {
+	return context.WithValue(ctx, assignmentsSnapshotKey{}, all)
 }
 
-// withGovernanceAssignments reads the assignments once, outside any transaction, for a later
-// renameMaySelect on the returned context. A read error is carried too, so the rename is held.
-func (s *Server) withGovernanceAssignments(ctx context.Context) context.Context {
-	all, err := s.cfg.Store.ListGovernanceAssignments(ctx)
-	return context.WithValue(ctx, assignmentsSnapshotKey{}, assignmentsSnapshot{all: all, err: err})
-}
-
-// governanceAssignmentsFor is the snapshot withGovernanceAssignments took, or a fresh read.
+// governanceAssignmentsFor is the snapshot withGovernanceAssignments carries, or a fresh read.
 func governanceAssignmentsFor(ctx context.Context, s *Server) ([]types.GovernanceAssignment, error) {
-	if snap, ok := ctx.Value(assignmentsSnapshotKey{}).(assignmentsSnapshot); ok {
-		return snap.all, snap.err
+	if all, ok := ctx.Value(assignmentsSnapshotKey{}).([]types.GovernanceAssignment); ok {
+		return all, nil
 	}
 	return s.cfg.Store.ListGovernanceAssignments(ctx)
 }

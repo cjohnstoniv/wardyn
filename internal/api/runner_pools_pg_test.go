@@ -630,3 +630,83 @@ func TestPG_RunnerPoolUpdateNamingTheNextRevisionWritesNoFalseAuditRow(t *testin
 		t.Errorf("%d update audit rows for a request that wrote nothing", n)
 	}
 }
+
+// A write landing between the pool read and the store call: the request names the revision it read,
+// the pre-check passes, and the store's own revision check refuses it, with no update audit row.
+func TestPG_RunnerPoolUpdateLosingTheRaceToTheStoreIsStale(t *testing.T) {
+	e := newPoolEnv(t, false)
+	pool := e.createPool("Provided", types.RunnerPoolOrganization)
+	other := "Other"
+	e.srv.cfg.Store = &racingPoolRead{PG: e.pg, after: func() {
+		if _, err := e.pg.UpdateRunnerPool(context.Background(), pool.ID, 1, &other, nil, nil, nil); err != nil {
+			t.Error(err)
+		}
+	}}
+	w := e.admin(http.MethodPut, "/api/v1/runner-pools/"+pool.ID.String(), `{"revision":1,"name":"Renamed"}`)
+	if w.Code != http.StatusConflict || wireReason(t, w) != string(runnerpool.ReasonStale) {
+		t.Errorf("update that lost the race = %d %s, want 409 runner_pool_stale", w.Code, w.Body)
+	}
+	if n := len(e.audits(auditPoolUpdate)); n != 0 {
+		t.Errorf("%d update audit rows for a request that wrote nothing", n)
+	}
+	if got, err := e.pg.GetRunnerPool(context.Background(), pool.ID); err != nil || got.Name != "Other" {
+		t.Errorf("pool = %+v, %v; want the other admin's rename kept", got, err)
+	}
+}
+
+// racingDefaultsWrite runs before the organisation default write, the way a pool delete lands between
+// the handler's check and the store call.
+type racingDefaultsWrite struct {
+	store.PG
+	before func()
+}
+
+func (r *racingDefaultsWrite) PutRunnerPoolOrgDefaults(ctx context.Context, d types.RunnerPoolDefaults, by string) (before, after types.RunnerPoolDefaults, err error) {
+	r.before()
+	return r.PG.PutRunnerPoolOrgDefaults(ctx, d, by)
+}
+
+// A default naming a pool that was deleted after the check answers the one pool_not_found, writes
+// nothing and leaves no audit row; a write that lands records the defaults it replaced.
+func TestPG_OrgDefaultNamingAPoolDeletedAfterTheCheckIs404(t *testing.T) {
+	e := newPoolEnv(t, false)
+	pool := e.createPool("Provided", types.RunnerPoolOrganization)
+	e.srv.cfg.Store = &racingDefaultsWrite{PG: e.pg, before: func() {
+		if _, err := e.pg.DeleteRunnerPool(context.Background(), pool.ID); err != nil {
+			t.Error(err)
+		}
+	}}
+	w := e.admin(http.MethodPut, "/api/v1/runner-pool-defaults", fmt.Sprintf(`{"pool_id":%q}`, pool.ID))
+	if w.Code != http.StatusNotFound || wireReason(t, w) != string(runnerpool.ReasonNotFound) {
+		t.Fatalf("default naming a pool deleted after the check = %d %s, want 404 %s", w.Code, w.Body, runnerpool.ReasonNotFound)
+	}
+	if n := len(e.audits(auditPoolDefaultSet)); n != 0 {
+		t.Errorf("%d default.set audit rows for a write that landed nothing", n)
+	}
+	if got, _ := e.pg.GetRunnerPoolOrgDefaults(context.Background()); got.PoolID != nil {
+		t.Errorf("the refused write named %v", got.PoolID)
+	}
+}
+
+// The oversight list stops at the cap and says that more exist; under the cap it says nothing.
+func TestPG_RunnerPoolsOversightListSaysWhenItIsTruncated(t *testing.T) {
+	e := newPoolEnv(t, false)
+	e.createPool("Laptops", types.RunnerPoolUser)
+	list := func() (*httptest.ResponseRecorder, int) {
+		w := e.call(e.alice, http.MethodGet, "/api/v1/runner-pools", "")
+		if w.Code != http.StatusOK {
+			t.Fatalf("list = %d %s", w.Code, w.Body)
+		}
+		return w, len(decodeJSON[client.RunnerPoolList](t, w).Pools)
+	}
+	if w, _ := list(); w.Header().Get("X-Wardyn-Truncated") != "" {
+		t.Fatal("a list under the cap says it is truncated")
+	}
+	if _, err := e.pool.Exec(context.Background(), `INSERT INTO runner_pools (id, name, scope, owner)
+		SELECT gen_random_uuid(), 'bulk-' || g, 'user', 'sub-bulk-' || g FROM generate_series(1, $1::int) g`, store.RunnerPoolsOversightMax); err != nil {
+		t.Fatal(err)
+	}
+	if w, n := list(); w.Header().Get("X-Wardyn-Truncated") != "true" || n != store.RunnerPoolsOversightMax {
+		t.Fatalf("over the cap: %d pools, truncated %q", n, w.Header().Get("X-Wardyn-Truncated"))
+	}
+}

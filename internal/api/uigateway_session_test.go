@@ -315,7 +315,7 @@ func TestUIGateway_RevokedSessionIsRefusedOnTheNextConnection(t *testing.T) {
 			rec.Code, rec.Body.String())
 	}
 	if !strings.Contains(rec.Body.String(), uiSessionNoLongerAuthorizedMsg) {
-		t.Fatalf("refusal body %q does not carry the DRAFT string", rec.Body.String())
+		t.Fatalf("refusal body %q does not carry the constant string", rec.Body.String())
 	}
 }
 
@@ -335,7 +335,7 @@ func TestUIGateway_UnverifiableRevocationFailsClosed(t *testing.T) {
 		t.Fatalf("unreadable revocation store: %d %s, want 503", rec.Code, rec.Body.String())
 	}
 	if !strings.Contains(rec.Body.String(), uiSessionUnverifiableMsg) {
-		t.Fatalf("refusal body %q does not carry the DRAFT string", rec.Body.String())
+		t.Fatalf("refusal body %q does not carry the constant string", rec.Body.String())
 	}
 }
 
@@ -359,7 +359,7 @@ func TestUIGateway_OffboardedOwnerIsRefusedOnTheNextConnection(t *testing.T) {
 			rec.Code, rec.Body.String())
 	}
 	if !strings.Contains(rec.Body.String(), uiSessionNoLongerAuthorizedMsg) {
-		t.Fatalf("refusal body %q does not carry the DRAFT string", rec.Body.String())
+		t.Fatalf("refusal body %q does not carry the constant string", rec.Body.String())
 	}
 }
 
@@ -553,7 +553,7 @@ func TestUIGateway_PooledConnectionIsReassertedOnAnInterval(t *testing.T) {
 			rec.Code, rec.Body.String())
 	}
 	if !strings.Contains(rec.Body.String(), uiSessionNoLongerAuthorizedMsg) {
-		t.Fatalf("refusal body %q does not carry the DRAFT string", rec.Body.String())
+		t.Fatalf("refusal body %q does not carry the constant string", rec.Body.String())
 	}
 	if got := atomic.LoadInt32(&dials); got != opened {
 		t.Fatalf("a refused request still dialed the sandbox (%d → %d)", opened, got)
@@ -617,7 +617,7 @@ func TestUIGateway_ReassertRefusesWhenTheRunCannotBeLoaded(t *testing.T) {
 			rec.Code, rec.Body.String())
 	}
 	if !strings.Contains(rec.Body.String(), uiSessionUnverifiableMsg) {
-		t.Fatalf("refusal body %q does not carry the DRAFT string", rec.Body.String())
+		t.Fatalf("refusal body %q does not carry the constant string", rec.Body.String())
 	}
 }
 

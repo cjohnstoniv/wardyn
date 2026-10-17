@@ -179,3 +179,37 @@ func TestRunFileReadsStdin(t *testing.T) {
 		t.Errorf("creates = %d", n)
 	}
 }
+
+// TestRunFileTakesMaxWait: --max-wait stands beside --file and sets the request's max_wait_sec.
+func TestRunFileTakesMaxWait(t *testing.T) {
+	rig := runFileRig(t)
+	if _, err := rig.run(t, "run", "--file", writeTemplateFile(t, "run.yaml", runDocYAML), "--max-wait", "5m"); err != nil {
+		t.Fatal(err)
+	}
+	var req sdk.CreateRunRequest
+	if err := json.Unmarshal([]byte(rig.sent(runsPath)[0]), &req); err != nil {
+		t.Fatal(err)
+	}
+	if req.MaxWaitSec == nil || *req.MaxWaitSec != 300 {
+		t.Errorf("max_wait_sec = %v, want 300", req.MaxWaitSec)
+	}
+}
+
+// TestRunFileLegacyInteractiveGetsTheWaitRefusalAndTheAttachHint: a document carrying
+// interactive: true is handled as --interactive is.
+func TestRunFileLegacyInteractiveGetsTheWaitRefusalAndTheAttachHint(t *testing.T) {
+	doc := "api_version: wardyn/v1\nkind: Run\nintent:\n  interactive: true\n"
+	file := writeTemplateFile(t, "run.yaml", doc)
+	rig := runFileRig(t)
+	_, err := rig.run(t, "run", "--file", file, "--wait")
+	if err == nil || !strings.Contains(err.Error(), "mutually exclusive") {
+		t.Fatalf("--file with interactive: true and --wait = %v, want the refusal", err)
+	}
+	if n := len(rig.sent(runsPath)); n != 0 {
+		t.Errorf("a refused combination created %d run(s)", n)
+	}
+	out, err := rig.run(t, "run", "--file", file)
+	if err != nil || !strings.Contains(out, "wardyn run attach") {
+		t.Errorf("out = %q, %v; want the attach hint", out, err)
+	}
+}

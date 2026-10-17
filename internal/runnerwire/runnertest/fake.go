@@ -5,6 +5,7 @@ package runnertest
 
 import (
 	"context"
+	"errors"
 	"io"
 	"sync"
 	"time"
@@ -22,6 +23,10 @@ import (
 type Fake struct {
 	Support  substrate.ClassSupport
 	ExitCode int // the agent's exit code, and an exec's
+	// RecoverHold, when set, holds RecoverOutput's bytes back until it is closed (or the call's context ends).
+	RecoverHold chan struct{}
+	// stderrWriters counts the stderr-line goroutines still running, so a test can see them end.
+	stderrWriters sync.WaitGroup
 
 	mu         sync.Mutex
 	sandboxes  map[string]uuid.UUID // local ref -> run id
@@ -188,8 +193,15 @@ func (f *Fake) ProbeDrive(_ context.Context, m types.DriveMount) (runner.DrivePr
 // CanManageDrives is unavailable: the fake has no ReclaimDrive, and "can manage" must never describe a substrate that cannot delete.
 func (f *Fake) CanManageDrives(context.Context) error { return runner.ErrDriveLifecycleUnavailable }
 
-func (f *Fake) RecoverOutput(_ context.Context, ref string, w io.Writer) error {
+func (f *Fake) RecoverOutput(ctx context.Context, ref string, w io.Writer) error {
 	f.note("recover_output", ref)
+	if f.RecoverHold != nil {
+		select {
+		case <-f.RecoverHold:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
 	_, err := io.WriteString(w, "recovered "+ref)
 	return err
 }
@@ -255,17 +267,25 @@ func (f *Fake) ExecStream(_ context.Context, ref string, spec runner.ExecSpec) (
 	}
 	inR, inW := io.Pipe()
 	outR, outW := io.Pipe()
-	errR, errW := io.Pipe()
 	done := make(chan struct{})
 	go func() {
 		_, _ = io.Copy(outW, inR)
 		_ = outW.Close()
 		close(done)
 	}()
-	go func() {
-		_, _ = io.WriteString(errW, "argv:"+spec.Argv[0]+"\n")
-		_ = errW.Close()
-	}()
+	// A TTY merges stderr into stdout: no stderr pipe, so no writer waits on a reader that is not there.
+	// Close closes every pipe this session owns, which also ends a stderr write nobody read.
+	var errR *io.PipeReader
+	if !spec.TTY {
+		var errW *io.PipeWriter
+		errR, errW = io.Pipe()
+		f.stderrWriters.Add(1)
+		go func() {
+			defer f.stderrWriters.Done()
+			_, _ = io.WriteString(errW, "argv:"+spec.Argv[0]+"\n")
+			_ = errW.Close()
+		}()
+	}
 	sess := &runner.ExecSession{
 		Stdin:  inW,
 		Stdout: outR,
@@ -275,10 +295,16 @@ func (f *Fake) ExecStream(_ context.Context, ref string, spec runner.ExecSpec) (
 			f.mu.Unlock()
 			return nil
 		},
-		Wait:  func() (int, error) { <-done; return f.ExitCode, nil },
-		Close: func() error { _ = inW.Close(); return outR.Close() },
+		Wait: func() (int, error) { <-done; return f.ExitCode, nil },
+		Close: func() error {
+			err := errors.Join(inW.Close(), outR.Close())
+			if errR != nil {
+				err = errors.Join(err, errR.Close())
+			}
+			return err
+		},
 	}
-	if !spec.TTY {
+	if errR != nil {
 		sess.Stderr = errR
 	}
 	return sess, nil
