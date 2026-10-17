@@ -9,6 +9,7 @@ import (
 	"maps"
 	"net/http"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -274,6 +275,23 @@ func TestKindTargets_DrivesKeepRemoteWhenThePoolHasIt(t *testing.T) {
 		if !slices.Equal(got, tc.want) {
 			t.Errorf("%s: kinds %v, want %v", tc.name, got, tc.want)
 		}
+	}
+}
+
+// A pin naming the person's own runner on a run with drives in a mixed pool is refused in the pool's
+// vocabulary, never dropped for the remote-hosted kind; a pin on a remote-hosted runner is not touched.
+func TestKindTargets_APinOnTheOwnRunnerOfADriveRunIsRefused(t *testing.T) {
+	s := &Server{}
+	laptop := uuid.New()
+	own := poolTarget{id: laptop.String(), runnerID: &laptop}
+	remote := poolTarget{id: "alpha", executor: "alpha"}
+	pool := types.RunnerPool{Name: "Mixed", Scope: types.RunnerPoolUser}
+	_, refusal := s.kindTargets(context.Background(), placementInput{req: &createRunRequest{RunnerID: own.id}, drives: true}, pool, []poolTarget{own, remote})
+	if refusal == nil || refusal.body.Reason != string(placement.ReasonPlacementCapability) || !strings.Contains(refusal.body.Error, "carries a drive") || !strings.Contains(refusal.body.Error, "Mixed") {
+		t.Fatalf("pinned own runner with drives = %+v, want a placement_capability refusal naming the drive and the pool", refusal)
+	}
+	if kinds, refusal := s.kindTargets(context.Background(), placementInput{req: &createRunRequest{RunnerID: "alpha"}, drives: true}, pool, []poolTarget{own, remote}); refusal != nil || len(kinds) != 1 {
+		t.Fatalf("pin on the remote-hosted runner = %v, %+v; want it kept", kinds, refusal)
 	}
 }
 

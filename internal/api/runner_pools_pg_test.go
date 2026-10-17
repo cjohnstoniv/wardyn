@@ -630,3 +630,26 @@ func TestPG_RunnerPoolUpdateNamingTheNextRevisionWritesNoFalseAuditRow(t *testin
 		t.Errorf("%d update audit rows for a request that wrote nothing", n)
 	}
 }
+
+// A write landing between the pool read and the store call: the request names the revision it read,
+// the pre-check passes, and the store's own revision check refuses it, with no update audit row.
+func TestPG_RunnerPoolUpdateLosingTheRaceToTheStoreIsStale(t *testing.T) {
+	e := newPoolEnv(t, false)
+	pool := e.createPool("Provided", types.RunnerPoolOrganization)
+	other := "Other"
+	e.srv.cfg.Store = &racingPoolRead{PG: e.pg, after: func() {
+		if _, err := e.pg.UpdateRunnerPool(context.Background(), pool.ID, 1, &other, nil, nil); err != nil {
+			t.Error(err)
+		}
+	}}
+	w := e.admin(http.MethodPut, "/api/v1/runner-pools/"+pool.ID.String(), `{"revision":1,"name":"Renamed"}`)
+	if w.Code != http.StatusConflict || wireReason(t, w) != string(runnerpool.ReasonStale) {
+		t.Errorf("update that lost the race = %d %s, want 409 runner_pool_stale", w.Code, w.Body)
+	}
+	if n := len(e.audits(auditPoolUpdate)); n != 0 {
+		t.Errorf("%d update audit rows for a request that wrote nothing", n)
+	}
+	if got, err := e.pg.GetRunnerPool(context.Background(), pool.ID); err != nil || got.Name != "Other" {
+		t.Errorf("pool = %+v, %v; want the other admin's rename kept", got, err)
+	}
+}
