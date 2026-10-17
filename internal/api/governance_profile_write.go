@@ -574,11 +574,18 @@ func (s *Server) handleDeleteGovernanceProfile(w http.ResponseWriter, r *http.Re
 		s.holdProfileDelete(w, r, id)
 		return
 	}
-	if s.writeProfileDeleteError(w, r, s.cfg.Store.DeleteGovernanceProfile(r.Context(), id)) {
+	data, err := s.readDeleteAudit(r.Context(), func(q store.Querier) (map[string]any, error) {
+		row, err := store.GetGovernanceProfileQ(r.Context(), q, id, false)
+		return map[string]any{"name": row.Name}, err
+	})
+	if err == nil {
+		err = s.cfg.Store.DeleteGovernanceProfile(r.Context(), id)
+	}
+	if s.writeProfileDeleteError(w, r, err) {
 		return
 	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
-		"governance.profile.delete", id.String(), "success", nil))
+		"governance.profile.delete", id.String(), "success", mustJSON(data)))
 	if mode == govBypass {
 		s.recordGovernanceBypass(r, govKindProfile, id.String(), "success", nil)
 	}
