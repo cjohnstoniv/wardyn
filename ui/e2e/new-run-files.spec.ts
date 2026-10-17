@@ -15,6 +15,8 @@
 // from the body it was sent, so the mount map follows what the person chose.
 import type { Page } from "@playwright/test";
 import { test, expect, gotoConsole, navToRoute } from "./fixtures";
+import { NR_DOCUMENT } from "../src/app/components/wardyn/copy/new-run/document";
+import { NR_REVIEW } from "../src/app/components/wardyn/copy/new-run/review";
 import { NR_FILES } from "../src/app/components/wardyn/copy/new-run/files";
 import { NR_SHAPE } from "../src/app/components/wardyn/copy/new-run/shape";
 import { NR_SHARED } from "../src/app/components/wardyn/copy/new-run/shared";
@@ -292,6 +294,30 @@ test.describe("New Run, Files: repositories", () => {
     await expect(noExtra(page)).toHaveCount(0);
     await expect.poll(() => last(sent).no_repositories_or_drives).toBeUndefined();
     await expect.poll(() => last(sent).workspaces?.[0].repos).toEqual([{ repo: REPOS[1].repo }]);
+  });
+});
+
+test.describe("New Run, Files: an unnamed workspace start (DR-0253)", () => {
+  test("with one of two repositories cloned and no repository named, the run starts in that one", async ({ page }) => {
+    await stub(page, { branches: ["main"] });
+    const intent = {
+      shape: "environment", experience: "interactive",
+      workspaces: [{ workspace_id: WS_ID, repos: [{ repo: REPOS[1].repo }] }],
+      start_folder: { kind: "attachment", attachment: WS_ID },
+    };
+    await page.route("**/api/v1/templates/import", (route) =>
+      route.fulfill({ json: { document: { api_version: "wardyn/v1", kind: "Run", intent }, diagnostics: [] } }),
+    );
+    await gotoConsole(page);
+    await navToRoute(page, "/runs/new");
+    await press(page, NR_START.DOC_YAML);
+    await page.getByRole("textbox", { name: NR_DOCUMENT.EDITOR_ARIA("YAML") }).fill("api_version: wardyn/v1\nkind: Run\nintent:\n  shape: environment\n");
+    await press(page, NR_DOCUMENT.CONTINUE_REVIEW);
+    await expect(page.getByRole("heading", { name: NR_REVIEW.TITLE })).toBeVisible();
+    await press(page, `${NR_REVIEW.CHANGE} ${NR_REVIEW.GROUP_WORK}`);
+    await press(page, NR_REVIEW.EDIT_FILES);
+    await expect(page.getByRole("heading", { name: NR_FILES.TITLE })).toBeVisible();
+    await expect(cards(page).filter({ hasText: "docs" })).toContainText(NR_FILES.STARTS_HERE);
   });
 });
 
