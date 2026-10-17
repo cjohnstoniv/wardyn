@@ -275,7 +275,7 @@ func (h setupHost) preflight(cmd *cobra.Command, o setupOptions) (setupPlan, err
 		}
 	}
 	if !o.noService {
-		if err := h.checkServiceManager(cmd.Context(), plan.paths); err != nil {
+		if err := h.checkServiceManager(cmd.Context(), &plan.paths); err != nil {
 			return setupPlan{}, err
 		}
 	} else if installed := paths.installedService(); installed != "" {

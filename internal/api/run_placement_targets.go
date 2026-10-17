@@ -270,7 +270,7 @@ func (s *Server) runnerFacts(id uuid.UUID) (runner.TargetFacts, bool) {
 }
 
 // executorFacts is one configured executor's classes. A lone driver that is not an orchestrator is its
-// own and only executor, so its own capabilities are its facts.
+// own and only executor, so its own capabilities are its facts, and a failed read is its ProbeErr.
 func (s *Server) executorFacts(ctx context.Context, executor string) (runner.TargetFacts, bool) {
 	if ti, ok := s.targetInspector(); ok {
 		return ti.ExecutorFacts(ctx, executor)
@@ -280,7 +280,7 @@ func (s *Server) executorFacts(ctx context.Context, executor string) (runner.Tar
 	}
 	caps, err := s.cfg.Runner.Capabilities(ctx)
 	if err != nil {
-		return runner.TargetFacts{}, false
+		return runner.TargetFacts{ProbeErr: err}, false
 	}
 	_, keeps := s.cfg.Runner.(runner.SandboxEnder)
 	return runner.TargetFacts{Classes: caps.ConfinementClasses, EphemeralDiskEnforcement: caps.EphemeralDiskEnforcement,

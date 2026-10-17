@@ -111,6 +111,17 @@ for gone in .config/systemd/user/wardyn-runnerd.service .config/wardyn/runnerd.e
 done
 [ -e "$H/.config/wardyn/runner/runner.json" ] || fail "uninstall removed the runner identity"
 
+# A unit setup put under a custom XDG_CONFIG_HOME, because the user manager searches it, goes too.
+X="$WORK/home-xdg"
+mkdir -p "$X/xdg/systemd/user" "$X/.local/share/wardyn/bin"
+: >"$X/xdg/systemd/user/wardyn-runnerd.service"; : >"$X/.local/share/wardyn/bin/wardyn-runnerd"
+export STUB_LOG="$X/stub.log"
+set +e
+OUT="$(HOME="$X" XDG_CONFIG_HOME="$X/xdg" PATH="$BIN:$PATH" env -u XDG_DATA_HOME bash "$INSTALL" --uninstall 2>&1)"
+RC=$?
+set -e
+[ "$RC" -eq 0 ] && [ ! -e "$X/xdg/systemd/user/wardyn-runnerd.service" ] || fail "uninstall left the unit under XDG_CONFIG_HOME (rc=$RC): $OUT"
+
 stub uname 'echo Darwin'
 M="$WORK/home-mac"
 mkdir -p "$M/Library/LaunchAgents" "$M/Library/Application Support/wardyn/bin"

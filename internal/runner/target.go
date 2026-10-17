@@ -31,11 +31,15 @@ type TargetFacts struct {
 	// Records: the target records a run its organisation asks it to (Capabilities.SessionRecording,
 	// and for a self-hosted runner one that takes the per-run SandboxSpec.Record).
 	Records bool
+	// ProbeErr comes only with a false answer: a configured executor whose probe failed. It might
+	// enforce the run, so a caller with no other candidate cannot decide admission and answers that
+	// it is unavailable, not that the target is offline.
+	ProbeErr error
 }
 
 // TargetInspector answers per-target facts. The false answer means the facts are
-// unknown (offline, nothing advertised yet, probe failed): a caller refuses on it
-// and never reads it as zero or as everything.
+// unknown (offline, nothing advertised yet, probe failed: then ProbeErr says why): a
+// caller refuses on it and never reads it as zero or as everything.
 type TargetInspector interface {
 	RunnerFacts(runnerID string) (TargetFacts, bool)
 	ExecutorFacts(ctx context.Context, executor string) (TargetFacts, bool)

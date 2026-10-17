@@ -22,16 +22,22 @@ type pendingCall struct {
 	onEvent   func(Event)
 
 	mu         sync.Mutex
+	stopped    bool // the caller returned: nobody drains events any more
 	events     []Event
 	eventBytes int
 }
 
-// queue holds an event for the caller's goroutine; false when the call takes none.
+// queue holds an event for the caller's goroutine; false when the call takes none. An event for a
+// caller that already returned is dropped (reported taken), never queued for nobody.
 func (c *pendingCall) queue(ev Event) (bool, error) {
 	if c.onEvent == nil {
 		return false, nil
 	}
 	c.mu.Lock()
+	if c.stopped {
+		c.mu.Unlock()
+		return true, nil
+	}
 	if c.eventBytes+len(ev.Data)+64 > MaxControlFrame {
 		c.mu.Unlock()
 		return false, fmt.Errorf("%w: call event queue exceeds its bound", ErrBadFrame)
@@ -55,6 +61,13 @@ func (c *pendingCall) drain() {
 	for _, ev := range evs {
 		c.onEvent(ev)
 	}
+}
+
+// stop drops the queued events once the caller has returned, and every later one.
+func (c *pendingCall) stop() {
+	c.mu.Lock()
+	c.stopped, c.events, c.eventBytes = true, nil, 0
+	c.mu.Unlock()
 }
 
 // CallOption tunes one Call.
@@ -96,7 +109,8 @@ func (p *Peer) Call(ctx context.Context, method string, args, result any, opts .
 	p.mu.Unlock()
 	// The entry stays until the REPLY removes it (onReply), also for a call
 	// whose caller gave up: the runner still answers, and a REPLY for an id
-	// that is not pending is a protocol error.
+	// that is not pending is a protocol error. Across a resume, the entries
+	// the peer can no longer answer are retired (retireUnanswerable).
 	defer func() {
 		p.mu.Lock()
 		var orphans []uint32
@@ -109,12 +123,18 @@ func (p *Peer) Call(ctx context.Context, method string, args, result any, opts .
 			p.resetParked(orphans)
 		}
 	}()
-	if err := p.send(ctx, Frame{Type: TypeCall, Stream: id, Payload: body}); err != nil {
+	if seq, err := p.sendFrame(ctx, Frame{Type: TypeCall, Stream: id, Payload: body}); err != nil {
 		p.mu.Lock()
-		// A failed write may already be in the replay buffer. Preserve the id
-		// so its eventual reply is discarded after resume, never misdelivered.
-		pc.abandoned = true
+		if seq == 0 {
+			// Never sequenced, so never in the replay buffer: nothing can answer it.
+			delete(p.calls, id)
+		} else {
+			// A failed write may already be in the replay buffer. Preserve the id
+			// so its eventual reply is discarded after resume, never misdelivered.
+			pc.abandoned = true
+		}
 		p.mu.Unlock()
+		pc.stop()
 		return err
 	}
 	finish := func(rep Reply) error {
@@ -138,11 +158,12 @@ func (p *Peer) Call(ctx context.Context, method string, args, result any, opts .
 		case <-ctx.Done():
 			p.mu.Lock()
 			// The tombstone: this entry stays in p.calls until the runner's REPLY
-			// removes it. Bound: one small entry per call this side cancelled and
-			// the runner never answers, so the org drives it, it is per session,
-			// Resume carries only bounded tombstones, otherwise starts fresh.
+			// removes it; the runner answers every CALL it received on a live link.
+			// A resume carries it, and the resumed peer retires it once that REPLY
+			// can no longer come (retireUnanswerable). Its events are dropped.
 			pc.abandoned = true
 			p.mu.Unlock()
+			pc.stop()
 			_ = p.send(p.ctx, Frame{Type: TypeReset, Stream: id, Payload: EncodeReset(ResetCancelled)})
 			return ctx.Err()
 		case <-p.done:
@@ -235,8 +256,13 @@ func (p *Peer) onCall(f Frame) error {
 			}
 		}
 		b, merr := Marshal(rep)
+		if merr == nil && len(b) > MaxControlFrame {
+			merr = fmt.Errorf("%d bytes, over the %d-byte frame limit", len(b), MaxControlFrame)
+		}
 		if merr != nil {
-			return
+			// A REPLY that cannot be sent still answers the call, so the caller fails now
+			// instead of at its deadline and its tombstone clears.
+			b, _ = Marshal(Reply{Error: &Error{Code: CodeInternal, Message: "the runner's reply could not be sent: " + merr.Error()}})
 		}
 		_ = p.send(p.ctx, Frame{Type: TypeReply, Stream: f.Stream, Payload: b})
 	}()

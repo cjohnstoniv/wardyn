@@ -241,19 +241,120 @@ func (f *setupFixture) read(path string) string {
 
 // An unreachable systemd user manager is reported as unreachable, not as one that searches another directory.
 func TestCheckServiceManagerNamesAnUnreachableManager(t *testing.T) {
-	p := setupPaths{unitFile: "/h/.config/systemd/user/wardyn-runnerd.service"}
+	var p setupPaths
 	answer := func(out string, err error) setupHost {
-		return setupHost{goos: "linux", run: func(context.Context, string, ...string) ([]byte, error) { return []byte(out), err }}
+		return setupHost{goos: "linux", home: "/h", run: func(context.Context, string, ...string) ([]byte, error) { return []byte(out), err }}
 	}
-	if err := answer("Failed to connect to bus\n", errors.New("exit status 1")).checkServiceManager(context.Background(), p); err == nil || !strings.Contains(err.Error(), "did not answer") || strings.Contains(err.Error(), "does not search") {
+	if err := answer("Failed to connect to bus\n", errors.New("exit status 1")).checkServiceManager(context.Background(), &p); err == nil || !strings.Contains(err.Error(), "did not answer") || strings.Contains(err.Error(), "does not search") {
 		t.Errorf("unreachable manager: %v", err)
 	}
-	if err := answer("/etc/systemd/user\n", nil).checkServiceManager(context.Background(), p); err == nil || !strings.Contains(err.Error(), "does not search /h/.config/systemd/user") {
+	if err := answer("/etc/systemd/user\n", nil).checkServiceManager(context.Background(), &p); err == nil || !strings.Contains(err.Error(), "does not search /h/.config/systemd/user") {
 		t.Errorf("manager that does not search the unit directory: %v", err)
 	}
-	if err := answer("/h/.config/systemd/user /etc/systemd/user\n", nil).checkServiceManager(context.Background(), p); err != nil {
-		t.Errorf("manager that searches it: %v", err)
+	if err := answer("/h/.config/systemd/user /etc/systemd/user\n", nil).checkServiceManager(context.Background(), &p); err != nil || p.unitFile != "/h/.config/systemd/user/wardyn-runnerd.service" {
+		t.Errorf("manager that searches it: %v, unit at %q", err, p.unitFile)
 	}
+}
+
+// The unit goes where the systemd user manager looks, whatever the shell's XDG_CONFIG_HOME: the manager's
+// own UnitPath decides, a unit already in one of its directories is rewritten in place, and a rerun keeps
+// the place (DR-0158).
+func TestSetupPutsTheUnitWhereTheUserManagerLooks(t *testing.T) {
+	for name, tc := range map[string]struct {
+		searched []string // the manager's user configuration directories, in UnitPath order
+		existing string   // where a unit is already installed, "" for none
+		want     string
+	}{
+		"only the custom XDG directory":               {searched: []string{"xdg"}, want: "xdg"},
+		"only HOME though the shell sets XDG":         {searched: []string{"home"}, want: "home"},
+		"both with the unit already in the later one": {searched: []string{"xdg", "home"}, existing: "home", want: "home"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newSetupFixture(t, "linux")
+			f.host.xdgConfig = filepath.Join(filepath.Dir(f.host.home), "xdg")
+			dirs := map[string]string{"home": filepath.Join(f.host.home, ".config", "systemd", "user"), "xdg": filepath.Join(f.host.xdgConfig, "systemd", "user")}
+			var unitPath []string
+			for _, s := range tc.searched {
+				unitPath = append(unitPath, dirs[s])
+			}
+			unitPath = append(unitPath, "/etc/systemd/user")
+			run := f.host.run
+			f.host.run = func(ctx context.Context, name string, args ...string) ([]byte, error) {
+				if name == "systemctl" && slices.Contains(args, "UnitPath") {
+					return []byte(strings.Join(unitPath, " ") + "\n"), nil
+				}
+				return run(ctx, name, args...)
+			}
+			if tc.existing != "" {
+				if err := os.MkdirAll(dirs[tc.existing], 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(dirs[tc.existing], serviceUnit), []byte("old"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for _, o := range []setupOptions{{tokenFile: f.tokenFile}, {}} {
+				if _, err := f.run(o); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if n := f.count("POST /api/v1/runners/register"); n != 1 {
+				t.Errorf("registered %d times", n)
+			}
+			for key, dir := range dirs {
+				b, err := os.ReadFile(filepath.Join(dir, serviceUnit))
+				switch {
+				case key == tc.want && (err != nil || !strings.Contains(string(b), "\nExecStart=")):
+					t.Errorf("no rendered unit in %s: %v %q", dir, err, b)
+				case key != tc.want && err == nil:
+					t.Errorf("a unit was written to %s too, which the manager was not to load", dir)
+				}
+			}
+			if _, err := os.Stat(filepath.Join(f.host.home, ".config", "wardyn", "runnerd.env")); err != nil {
+				t.Errorf("the env file is not where the unit's EnvironmentFile looks: %v", err)
+			}
+		})
+	}
+}
+
+// The identity setup uses is the one the service's own record names; without a record, the one root that
+// holds one ($HOME when neither does); two with no record are refused before anything is stopped, written
+// or registered (DR-0163).
+func TestSetupKeepsTheRecordedIdentityAndRefusesTwo(t *testing.T) {
+	f := newSetupFixture(t, "linux")
+	f.host.xdgConfig = filepath.Join(filepath.Dir(f.host.home), "xdg")
+	homeDir, xdgDir := filepath.Join(f.host.home, ".config", "wardyn", "runner"), filepath.Join(f.host.xdgConfig, "wardyn", "runner")
+	put := func(path, text string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(text), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	stateDir := func(what, want string) {
+		t.Helper()
+		if p, err := f.host.paths(); err != nil || p.stateDir != want {
+			t.Errorf("%s: state dir %q, %v; want %q", what, p.stateDir, err, want)
+		}
+	}
+	stateDir("fresh, XDG set in the shell only", homeDir)
+	put(filepath.Join(xdgDir, "runner.json"), "{}")
+	stateDir("one identity, under XDG", xdgDir)
+	put(filepath.Join(homeDir, "runner.json"), "{}")
+	_, err := f.run(setupOptions{tokenFile: f.tokenFile})
+	if err == nil || !strings.Contains(err.Error(), "two runner identities are on this computer, in "+homeDir+" and in "+xdgDir) {
+		t.Fatalf("two identities and no record: %v", err)
+	}
+	if len(f.calls)+len(f.commands)+len(f.events) != 0 {
+		t.Errorf("a refused setup still acted: calls %v, commands %v, steps %v", f.calls, f.commands, f.events)
+	}
+	envFile := filepath.Join(f.host.home, ".config", "wardyn", "runnerd.env")
+	put(envFile, "WARDYN_RUNNER_ORG_URL="+f.org+"\nWARDYN_RUNNER_STATE_DIR="+xdgDir+"\n")
+	stateDir("two identities, the service records XDG", xdgDir)
+	put(envFile, "WARDYN_RUNNER_STATE_DIR="+homeDir+"\n")
+	stateDir("two identities, the service records HOME", homeDir)
 }
 
 // A binary path with a space, a quote or a systemd specifier stays one ExecStart argument.

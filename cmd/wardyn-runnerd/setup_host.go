@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"strings"
 
 	runnerunits "github.com/cjohnstoniv/wardyn/deploy/runner"
@@ -78,9 +79,12 @@ type setupPaths struct{ installed, stateDir, envFile, unitFile, plistFile, logFi
 
 func (p setupPaths) identity() string { return filepath.Join(p.stateDir, "runner.json") }
 
-// paths follows install.sh: the binary under the data directory; on Linux the unit and env file under
-// $HOME/.config, because the systemd user manager never sees a login shell's XDG_CONFIG_HOME, with the
-// identity in the XDG directory only when an earlier install already registered there.
+// paths: the binary under the data directory; on Linux the env file under $HOME/.config, where the unit's
+// EnvironmentFile looks, and the unit where checkServiceManager finds the user manager looks. The identity
+// is the one the service's own record (the env file an earlier setup wrote) names; without one, the one of
+// $HOME/.config/wardyn/runner and $XDG_CONFIG_HOME/wardyn/runner that holds an identity ($HOME when
+// neither does). Both holding one with no record is refused before anything is stopped or written: setup
+// never guesses which identity the service runs.
 func (h setupHost) paths() (setupPaths, error) {
 	switch h.goos {
 	case "linux":
@@ -88,13 +92,21 @@ func (h setupHost) paths() (setupPaths, error) {
 		cfg := filepath.Join(h.home, ".config")
 		p := setupPaths{installed: filepath.Join(data, "bin", "wardyn-runnerd"), stateDir: filepath.Join(cfg, "wardyn", "runner"),
 			envFile: filepath.Join(cfg, "wardyn", "runnerd.env"), unitFile: filepath.Join(cfg, "systemd", "user", serviceUnit)}
-		if h.xdgConfig != "" {
-			xdg := filepath.Join(h.xdgConfig, "wardyn", "runner")
-			if _, err := os.Stat(p.identity()); err != nil {
-				if _, err := os.Stat(filepath.Join(xdg, "runner.json")); err == nil {
-					p.stateDir = xdg
-				}
-			}
+		holds := func(dir string) bool { _, err := os.Stat(filepath.Join(dir, "runner.json")); return err == nil }
+		if dir := p.setting("WARDYN_RUNNER_STATE_DIR"); filepath.IsAbs(dir) && holds(dir) {
+			p.stateDir = dir
+			return p, nil
+		}
+		if h.xdgConfig == "" {
+			return p, nil
+		}
+		switch xdg := filepath.Join(h.xdgConfig, "wardyn", "runner"); {
+		case holds(xdg) && holds(p.stateDir) && xdg != p.stateDir:
+			return setupPaths{}, fmt.Errorf("two runner identities are on this computer, in %s and in %s, and no earlier setup recorded "+
+				"which one the service runs: move the one this computer should not use out of the way and run setup again "+
+				"(nothing was changed and no token was spent)", p.stateDir, xdg)
+		case holds(xdg):
+			p.stateDir = xdg
 		}
 		return p, nil
 	case "darwin":
@@ -105,8 +117,12 @@ func (h setupHost) paths() (setupPaths, error) {
 	return setupPaths{}, fmt.Errorf("unsupported OS: %s", h.goos)
 }
 
-// checkServiceManager refuses, before the token is spent, a Linux user manager that would not find the unit.
-func (h setupHost) checkServiceManager(ctx context.Context, p setupPaths) error {
+// checkServiceManager sets the unit's place on Linux from the user manager's own search path, never from
+// the shell's environment, which the manager need not share: of the user configuration directories
+// $XDG_CONFIG_HOME/systemd/user and $HOME/.config/systemd/user, the first in UnitPath that already holds
+// the unit (the one the manager loads, rewritten in place), else the first in UnitPath. A manager that
+// searches neither is refused before the token is spent.
+func (h setupHost) checkServiceManager(ctx context.Context, p *setupPaths) error {
 	if h.goos != "linux" {
 		return nil
 	}
@@ -117,10 +133,26 @@ func (h setupHost) checkServiceManager(ctx context.Context, p setupPaths) error 
 		}
 		return fmt.Errorf("the systemd user manager did not answer (%w), so setup cannot start the service: no token was spent", err)
 	}
-	dir := filepath.Dir(p.unitFile)
-	if !strings.Contains(" "+strings.TrimSpace(string(out))+" ", " "+dir+" ") {
-		return fmt.Errorf("the systemd user manager does not search %s for units, so it could not find the service: no token was spent", dir)
+	candidates := []string{filepath.Join(h.home, ".config", "systemd", "user")}
+	if xdg := filepath.Join(h.xdgConfig, "systemd", "user"); h.xdgConfig != "" && xdg != candidates[0] {
+		candidates = append([]string{xdg}, candidates...)
 	}
+	dir := ""
+	for _, d := range strings.Fields(string(out)) {
+		if !slices.Contains(candidates, d) {
+			continue
+		}
+		if _, err := os.Stat(filepath.Join(d, serviceUnit)); err == nil {
+			dir = d
+			break
+		}
+		dir = cmp.Or(dir, d)
+	}
+	if dir == "" {
+		return fmt.Errorf("the systemd user manager does not search %s for units, so it could not find the service: run setup with "+
+			"XDG_CONFIG_HOME set as the user manager has it (systemctl --user show-environment): no token was spent", strings.Join(candidates, " or "))
+	}
+	p.unitFile = filepath.Join(dir, serviceUnit)
 	return nil
 }
 
@@ -315,33 +347,33 @@ func (p setupPlan) pinMarker() string {
 // setup run again without --proxy-image or --trusted-ca-file keeps them. An unmarked release image
 // of this project is what a setup before 0.9.3 derived, not a pin, and is dropped.
 func (p setupPaths) keptPins() (image, caFile string) {
-	// The source is the one the service actually uses: a Linux unit's environment file, or on macOS the
-	// LaunchAgent once one is installed. The environment file --no-service writes there is read only while no
-	// LaunchAgent exists, so an older one never outranks a newer plist (or mixes with it).
-	var plist []byte
-	if p.plistFile != "" {
-		plist, _ = os.ReadFile(p.plistFile)
+	image = p.setting("WARDYN_PROXY_IMAGE")
+	if tag, ok := strings.CutPrefix(image, releaseProxyRepo+":"); ok && releaseVersion.MatchString(tag) && p.setting("WARDYN_PROXY_IMAGE_PINNED") != "1" {
+		image = ""
 	}
-	read := func(key string) string {
-		if plist != nil {
+	return image, p.setting("WARDYN_TRUSTED_CA_FILE")
+}
+
+// setting is the value an earlier setup wrote for key into the service definition, "" when there is none.
+// The source is the one the service actually uses: a Linux unit's environment file, or on macOS the
+// LaunchAgent once one is installed. The environment file --no-service writes there is read only while no
+// LaunchAgent exists, so an older one never outranks a newer plist (or mixes with it).
+func (p setupPaths) setting(key string) string {
+	if p.plistFile != "" {
+		if plist, err := os.ReadFile(p.plistFile); err == nil {
 			if m := regexp.MustCompile(`<key>` + key + `</key>\s*<string>([^<]*)</string>`).FindSubmatch(plist); m != nil {
 				return html.UnescapeString(strings.TrimSpace(string(m[1])))
 			}
 			return ""
 		}
-		b, _ := os.ReadFile(p.noServiceEnvFile())
-		for _, line := range strings.Split(string(b), "\n") {
-			if v, ok := strings.CutPrefix(line, key+"="); ok {
-				return shellUnquote(strings.TrimSpace(v))
-			}
+	}
+	b, _ := os.ReadFile(p.noServiceEnvFile())
+	for _, line := range strings.Split(string(b), "\n") {
+		if v, ok := strings.CutPrefix(line, key+"="); ok {
+			return shellUnquote(strings.TrimSpace(v))
 		}
-		return ""
 	}
-	image = read("WARDYN_PROXY_IMAGE")
-	if tag, ok := strings.CutPrefix(image, releaseProxyRepo+":"); ok && releaseVersion.MatchString(tag) && read("WARDYN_PROXY_IMAGE_PINNED") != "1" {
-		image = ""
-	}
-	return image, read("WARDYN_TRUSTED_CA_FILE")
+	return ""
 }
 
 // plistComment is the template's documentation, which is not written into the user's LaunchAgents.

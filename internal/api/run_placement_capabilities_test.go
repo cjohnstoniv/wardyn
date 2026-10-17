@@ -558,3 +558,31 @@ func TestDenyPlacements_SourceScanDoor(t *testing.T) {
 		t.Errorf("scan under a local-only denial: %v", err)
 	}
 }
+
+// R2-0155: a lone driver whose capabilities cannot be read is its own executor with a probe error, not an
+// executor that is merely offline; a name this deployment does not run carries none.
+func TestExecutorFactsLoneDriverKeepsTheProbeError(t *testing.T) {
+	down := errors.New("daemon down")
+	if facts, known := capsServer(&fakeRunner{capsErr: down}).executorFacts(context.Background(), "fake"); known || !errors.Is(facts.ProbeErr, down) {
+		t.Errorf("unreadable lone driver: facts %+v known %v, want unknown with the probe error", facts, known)
+	}
+	if facts, known := capsServer(&fakeRunner{}).executorFacts(context.Background(), "other"); known || facts.ProbeErr != nil {
+		t.Errorf("an executor this deployment does not run: facts %+v known %v", facts, known)
+	}
+}
+
+// R2-0155: the placement refusal is replaced by the 503 only when a candidate's probe failed, and the
+// error names that executor.
+func TestProbeFailureNamesTheUnreadableExecutor(t *testing.T) {
+	kinds := map[types.Placement][]poolTarget{types.PlacementRemote: {
+		{id: "alpha", executor: "alpha", offline: true},
+		{id: "beta", executor: "beta", offline: true, facts: runner.TargetFacts{ProbeErr: errors.New("daemon down")}},
+	}}
+	if err := probeFailure(kinds); err == nil || !strings.Contains(err.Error(), "executor beta: daemon down") {
+		t.Errorf("probeFailure = %v, want beta's probe error", err)
+	}
+	kinds[types.PlacementRemote][1].facts.ProbeErr = nil
+	if err := probeFailure(kinds); err != nil {
+		t.Errorf("offline candidates only: probeFailure = %v, want none", err)
+	}
+}

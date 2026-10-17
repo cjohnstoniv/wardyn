@@ -81,6 +81,8 @@ func (s *Server) revokeRunnerAndAnswer(w http.ResponseWriter, r *http.Request, i
 		writeErrorReason(w, http.StatusNotImplemented, reasonRunnerRegistrationUnavailable, msgRunnerRevokeUnavailable)
 		return
 	case rev.Runner.ID == uuid.Nil:
+		// Also a lock held past the revoke's lock timeout (store.ErrRunnerBusy): writeServerError answers
+		// it through writeLockRefused, 503 lock_unavailable with Retry-After.
 		writeServerError(w, r, "revoke runner", err)
 		return
 	}

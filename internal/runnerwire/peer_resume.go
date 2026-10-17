@@ -13,6 +13,8 @@ import (
 // Start runs a peer and writes the resume replay before any normal writes.
 // Reading runs concurrently so two full replay buffers cannot deadlock each
 // other. A fresh session passes zero against its new, empty replay buffer.
+// Holding the write lock through the replay is what the peer's
+// retireUnanswerable relies on: nothing else, not even a PONG, leaves first.
 func (p *Peer) Start(ctx context.Context, lastSeq uint64) error {
 	p.wmu.Lock()
 	defer p.wmu.Unlock()
@@ -25,6 +27,7 @@ func (p *Peer) Start(ctx context.Context, lastSeq uint64) error {
 	if err := p.replay.Ack(lastSeq); err != nil {
 		return err
 	}
+	p.retire = unanswerable(p.cfg.AbandonedCalls, frames)
 	go func() { _ = p.Run(ctx) }()
 	// Keepalive runs before the replay, so a replay write that stops moving
 	// fails the link like any other.
@@ -36,6 +39,51 @@ func (p *Peer) Start(ctx context.Context, lastSeq uint64) error {
 		}
 	}
 	return nil
+}
+
+// unanswerable is the carried calls whose REPLY can now only be in the peer's
+// replay: their CALL reached it before the link dropped (it is not among the
+// frames replayed now), and a link drop ends every call a peer is serving, so
+// an answer it had not sequenced by then is never sent. A carried call whose
+// CALL is replayed now is served on this link and keeps its tombstone until
+// its REPLY.
+func unanswerable(carried []uint32, replayed []Frame) []uint32 {
+	resent := map[uint32]bool{}
+	for _, f := range replayed {
+		if f.Type == TypeCall {
+			resent[f.Stream] = true
+		}
+	}
+	var out []uint32
+	for _, id := range carried {
+		if !resent[id] {
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
+// retireUnanswerable drops the unanswerable calls at the first PONG on a
+// resumed link. The PONG answers a PING read on this link, and the peer writes
+// its whole replay before anything else (Start), so every REPLY it still owed
+// has been handled by now; a later one would be a protocol error anyway. Only
+// the read loop touches retire.
+func (p *Peer) retireUnanswerable() {
+	if len(p.retire) == 0 {
+		return
+	}
+	var orphans []uint32
+	p.mu.Lock()
+	for _, id := range p.retire {
+		if pc := p.calls[id]; pc != nil && pc.abandoned {
+			delete(p.calls, id)
+			orphans = append(orphans, p.byCall[id]...)
+			delete(p.byCall, id)
+		}
+	}
+	p.mu.Unlock()
+	p.retire = nil
+	p.resetParked(orphans)
 }
 
 // ResumeConfig snapshots an ended connection after its read loop stops. Byte
