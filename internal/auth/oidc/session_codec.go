@@ -78,7 +78,9 @@ func (a *Authenticator) encodeSession(sess Session) (*http.Cookie, error) {
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
 		Secure:   a.cfg.SecureCookies, // true only under TLS (direct or terminated); false over plain HTTP
-		Expires:  sess.Expiry,
+	}
+	if !a.cfg.BrowserSessionCookie {
+		cookie.Expires = sess.Expiry
 	}
 	return cookie, nil
 }

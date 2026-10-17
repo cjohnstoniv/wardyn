@@ -457,6 +457,9 @@ func validateBootPosture(f *bootFlags, posture tlsPosture) error {
 	if err := validateOIDCSessionTTL(*f.oidcSessionTTL); err != nil {
 		return err
 	}
+	if err := f.sessionLife.validate(); err != nil {
+		return err
+	}
 	if *f.oidcIssuer != "" {
 		// The same parse buildOptionalFeatures repeats after migrations: an operator who skipped
 		// `wardyn setup status --pre-upgrade` must be refused before the database is migrated.
