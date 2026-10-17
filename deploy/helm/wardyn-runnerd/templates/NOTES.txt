@@ -14,3 +14,5 @@ while a verb is missing. To see exactly what the chart would apply:
 
 The ClusterRole lets runnerd list every Node in the cluster (names, addresses, labels, taints, images), and the
 runs-namespace Role adds pods: patch to the control-plane chart's verbs.
+
+With apiServer.peers empty, runnerd's egress on TCP 443 and 6443 is open to any destination, including the pod network; set apiServer.peers to the control plane's address range to close it.

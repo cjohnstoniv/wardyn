@@ -53,7 +53,7 @@ val "$out" 'select(.kind == "NetworkPolicy") | .spec.egress[] | select(.ports[0]
   | grep -qx '10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,100.64.0.0/10,169.254.0.0/16' \
   || die "the default organisation egress no longer excludes the private ranges pods use"
 grep -q 'cidr: 203.0.113.0/24' <<<"$(render --set 'egress.orgCIDRs[0]=203.0.113.0/24')" || die "egress.orgCIDRs did not render"
-ok "NetworkPolicy: proxy-only ingress, one cluster-wide peer, private ranges excluded"
+ok "NetworkPolicy: proxy-only ingress, DNS the only cluster-wide peer, private ranges excluded"
 
 # Helm sorts kinds into its install order, the same order install and upgrade apply them in.
 first_deploy="$(grep -n '^kind: Deployment$' <<<"$out" | head -1 | cut -d: -f1)"
