@@ -19,3 +19,5 @@ The ClusterRole lets runnerd list every Node in the cluster (names, addresses, l
 runs-namespace Role adds pods: patch to the control-plane chart's verbs.
 
 With apiServer.peers empty, runnerd's egress on TCP 443 and 6443 is open to any destination, including the pod network; set apiServer.peers to the control plane's address range to close it.
+
+The API server's own addresses join the proxy hard deny through helm lookup, which needs get on endpointslices in default for whoever installs. Under helm template or Argo CD that lookup is empty: set egress.hardDenyCIDRs and apiServer.peers yourself.

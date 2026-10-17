@@ -747,24 +747,42 @@ func (r *Resident) value(ctx context.Context, run, grant uuid.UUID, sandbox bool
 	return v, nil
 }
 
-// fillJSON replaces every placeholder string in one JSON value.
+// fillJSON replaces every placeholder string in one JSON value. A match whose
+// opening quote is escaped (`\"` inside a longer string) is not a whole string
+// and stays as it is.
 func (r *Resident) fillJSON(ctx context.Context, run uuid.UUID, raw []byte) ([]byte, error) {
 	var err error
-	out := residentToken.ReplaceAllFunc(raw, func(m []byte) []byte {
-		grant, ok := placement.ResidentGrantID(string(bytes.Trim(m, `"`)))
+	var out []byte
+	last := 0
+	for _, loc := range residentToken.FindAllIndex(raw, -1) {
+		if quoteEscaped(raw, loc[0]) {
+			continue
+		}
+		grant, ok := placement.ResidentGrantID(string(bytes.Trim(raw[loc[0]:loc[1]], `"`)))
 		if !ok || err != nil {
 			err = errors.Join(err, runnerwire.Refuse("malformed resident placeholder"))
-			return m
+			continue
 		}
 		v, verr := r.value(ctx, run, grant, false)
 		if verr != nil {
 			err = verr
-			return m
+			continue
 		}
 		enc, _ := json.Marshal(v)
-		return enc
-	})
-	return out, err
+		out = append(append(out, raw[last:loc[0]]...), enc...)
+		last = loc[1]
+	}
+	return append(out, raw[last:]...), err
+}
+
+// quoteEscaped reports whether the quote at raw[i] follows an odd number of backslashes.
+func quoteEscaped(raw []byte, i int) bool {
+	n := 0
+	for i > 0 && raw[i-1] == '\\' {
+		n++
+		i--
+	}
+	return n%2 == 1
 }
 
 // fillProxyFields fills placeholders in a proxy configuration object, only

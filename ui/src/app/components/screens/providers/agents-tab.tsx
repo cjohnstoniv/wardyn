@@ -39,6 +39,7 @@ import { AvailabilityControl } from "../../wardyn/availability-control";
 import { Field, fieldHintId, Switch } from "../../wardyn/form-primitives";
 import { Chip, OperatorOnlyHint } from "../../wardyn/primitives";
 import { SavedElsewhereBanner } from "../../wardyn/saved-elsewhere-banner";
+import { useDiscardReload } from "../../wardyn/use-discard-reload";
 import { EmptyState, TableSkeleton } from "../../wardyn/states";
 
 // The two catalog agents whose model credential folds to a coarse
@@ -295,6 +296,8 @@ export function AgentsTab({
   }, []);
   React.useEffect(load, [load]);
 
+  const discard = useDiscardReload(load);
+
   const agents = draft?.agents ?? [];
   // #217 — see providers-screen.tsx's own changedLines/useUnsavedGuard pair.
   const changedLines = React.useMemo(() => readableDiff(original, draft), [original, draft]);
@@ -424,7 +427,7 @@ export function AgentsTab({
           above the rows rather than replacing them, so an edit typed
           moments before the 412 is still readable. #217: Copy my changes
           before Discard mine and reload — there is no "Save over theirs" arm. */}
-      {savedElsewhere && <SavedElsewhereBanner documentText={JSON.stringify(draft, null, 2)} onDiscard={load} />}
+      {savedElsewhere && <SavedElsewhereBanner documentText={JSON.stringify(draft, null, 2)} onDiscard={discard} />}
       {saveError && (
         <div className="rounded-lg border border-danger/30 bg-danger-subtle p-3 text-body text-danger">
           <b className="font-semibold">{PROVIDERS.SAVE_REFUSED_TITLE}</b>

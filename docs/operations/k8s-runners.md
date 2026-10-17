@@ -265,7 +265,8 @@ A revoked runner whose runnerd never returns leaves objects behind. Select them 
 
 - Runnerd writes a hard deny into every proxy: the `svc` suffix and the cluster domain, the relay ClusterIP, runnerd's pod IP, `apiServer.peers` and `egress.hardDenyCIDRs`.
 - The chart adds the apiserver's own addresses, read from the `kubernetes` Service's EndpointSlice at `helm install` and `helm upgrade`.
-  - A render without cluster access, such as `helm template`, adds none; list them in `egress.hardDenyCIDRs` then.
+  - The read is Helm's `lookup` of the `kubernetes` EndpointSlice in `default`, so the installing identity needs `get` on `endpointslices` in `default`.
+  - A render without cluster access adds none: `helm template`, and a GitOps tool such as Argo CD that renders with it, give an empty entry. Set `egress.hardDenyCIDRs` and `apiServer.peers` there.
 - The deny is checked on the name and every resolved address before the `internal_hosts` lift, so declaring a host does not help.
 - A run therefore cannot reach any in-cluster service, such as an artifact registry or a model gateway. Reach such a service by an external name or address outside the deny set, or host it outside the cluster.
 - Set `egress.hardDenyCIDRs` to the cluster's pod and service CIDRs.

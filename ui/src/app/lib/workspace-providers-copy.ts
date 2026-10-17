@@ -386,9 +386,9 @@ export const ADO_ENTRA_EDITOR = {
   // and optionally also go into the sandbox (runner_resident_sandbox, which needs the first). Off by default.
   RUNNER_TOGGLE: "Allow tokens to be held on a person's own runner",
   RUNNER_TOGGLE_HINT:
-    "Off by default. On, a token Wardyn creates for a run on a self-hosted runner stays in that runner's keystore for the run, where your runner credentials settings and posture requirements allow it.",
+    "Off by default. Saved and audited, but this release does not hold Azure DevOps tokens on a runner yet, so a run that needs one there is refused.",
   SANDBOX_TOGGLE: "Also put the token in the sandbox",
-  SANDBOX_TOGGLE_HINT: "The agent can then use the token past the REST gate and the capability holds. Needs the switch above.",
+  SANDBOX_TOGGLE_HINT: "Needs the switch above, and takes effect with it.",
   CEILING_TITLE: "What runs may ever do",
   CEILING_LEAD:
     "The ceiling. Unchecking one here removes it everywhere — from the default profile below, from a member's own saved policy, and from what a person can ever approve mid-run.",
