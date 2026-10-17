@@ -301,7 +301,7 @@ Wardyn's own [`ci.yml`](../.github/workflows/ci.yml) runs on every pull request 
 
 | Go-suite control | Where | Rule |
 |---|---|---|
-| `api` shards run only DSN-gated tests | `make test-report-pg-api`, [`scripts/pg-test-select.sh`](../scripts/pg-test-select.sh) | The unit run fails if a DSN-skipped test is outside the pick; every `pg` probe is picked |
+| `api` and `store` shards run only DSN-gated tests | `make test-report-pg-api`, `make test-report-pg-store`, [`scripts/pg-test-select.sh`](../scripts/pg-test-select.sh) | The unit run fails if a DSN-skipped test is outside the pick; every `pg` probe is picked |
 | Postgres shards write no coverage | `WARDYN_TEST_REPORT_COVER=0` | `build` unions `unit`, `docker`, `k8s` only |
 | Flaky Go test quarantine | [`test/go-quarantine.txt`](../test/go-quarantine.txt), `go test -skip` | Issue, owner, expiry within 14 days; expired or malformed fails the suite |
 

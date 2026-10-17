@@ -93,6 +93,8 @@ package fixture
 import (
 	"os"
 	"testing"
+
+	"fixture/pgtestutil"
 )
 
 var testfloor = struct{ Mark func(*testing.T, string) }{func(*testing.T, string) {}}
@@ -105,6 +107,9 @@ func pgOpen(t *testing.T) {
 
 func helper(t *testing.T) { pgOpen(t) }
 
+// An export_test.go alias: a var, not a func, that a test reaches the gate through.
+var Alias = helper
+
 type fx struct{}
 
 func (fx) viaMethod(t *testing.T) { helper(t) }
@@ -115,14 +120,34 @@ func TestPlain(t *testing.T)     {}
 func TestDirect(t *testing.T)    { pgOpen(t) }
 func TestViaHelper(t *testing.T) { helper(t) }
 func TestViaMethod(t *testing.T) { fx{}.viaMethod(t) }
+func TestViaAlias(t *testing.T)  { Alias(t) }
+func TestCrossPkg(t *testing.T)  { pgtestutil.Open2(t) }
 func TestProbe(t *testing.T) {
 	testfloor.Mark(t, "pg")
 }
 GO
+# A gate that lives in a helper package (no _test.go file), reached through a second helper.
+mkdir "${tmp}/s/pgtestutil"
+cat > "${tmp}/s/pgtestutil/pgtestutil.go" <<'GO'
+package pgtestutil
+
+import (
+	"os"
+	"testing"
+)
+
+func Open(t *testing.T) {
+	if os.Getenv("WARDYN_TEST_PG") == "" {
+		t.Skip("WARDYN_TEST_PG not set")
+	}
+}
+
+func Open2(t *testing.T) { Open(t) }
+GO
 got="$(cd "${tmp}/s" && "${REPO_ROOT}/scripts/pg-test-select.sh" ./...)" || fail "selector failed on the fixture"
-want='^(TestDirect|TestProbe|TestViaHelper|TestViaMethod)$'
+want='^(TestCrossPkg|TestDirect|TestProbe|TestViaAlias|TestViaHelper|TestViaMethod)$'
 [ "${got}" = "${want}" ] || fail "selector picked ${got}, want ${want}"
-ok "selector: direct, helper, method and probe tests selected; plain and comment-only not"
+ok "selector: direct, helper, method, alias, cross-package and probe tests selected; plain and comment-only not"
 
 # The guard: a unit run (DSN unset) where TestHidden skipped naming WARDYN_TEST_PG, but the selector
 # cannot see how it reaches the gate, must fail; one the selector does see must pass.
@@ -141,4 +166,14 @@ glog="$(cd "${tmp}/s" && "${REPO_ROOT}/scripts/pg-test-select.sh" --guard "${tmp
   && fail "guard passed a PG-skipping test outside the selection"
 grep -q "fixture TestHidden" <<<"${glog}" || fail "guard did not name TestHidden: ${glog}"
 ok "guard: a test that skips for WARDYN_TEST_PG outside the selection fails, naming it"
+# The shard package lists: api by default, store on request, anything else refused; the store shard
+# is the old whole-package list, so a package dropped from it would silently lose its PG tests.
+sel="${REPO_ROOT}/scripts/pg-test-select.sh"
+[ "$("${sel}" --packages)" = "$("${sel}" --packages api)" ] || fail "--packages without a set is not api"
+grep -q 'test/apie2e' <<<"$("${sel}" --packages api)" || fail "api set lost test/apie2e"
+for p in internal/store internal/db internal/secretstore internal/broker internal/recording cmd/wardynd internal/notify internal/livebus; do
+  grep -qF "./${p}/..." <<<"$("${sel}" --packages store)" || fail "store set lost ${p}"
+done
+"${sel}" --packages nope >/dev/null 2>&1 && fail "--packages accepted an unknown set"
+ok "selector: --packages names the api and store shard lists, refuses others"
 echo "test-test-report: PASS"
